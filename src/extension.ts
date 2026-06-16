@@ -333,17 +333,17 @@ class Dashboard {
 <body><main class="shell">
   <div class="top"><h1>Codex Bridge</h1><button id="refresh">새로고침</button></div>
   <div id="status" class="card"></div>
-  <h2>고정 계약 (매 턴 자동 주입 · 한 줄 = 한 항목)</h2>
+  <h2>고정 계약 — 매 턴 AI에 자동 주입</h2>
   <div class="card">
     <div class="muted">Claude Code 지침 — 매 턴 UserPromptSubmit 훅으로 주입</div>
     <textarea id="cClaude" rows="4" placeholder="예) 추측하지 말고 파일을 직접 읽어라&#10;예) 테스트 통과 전 완료 보고 금지"></textarea>
-    <label class="ck"><input type="checkbox" id="ckClaude"> [계약점검] 체크리스트로 강제 — 각 항목에 준수/위반+근거 (해제 시 규약만 주입)</label>
+    <label class="ck"><input type="checkbox" id="ckClaude"> 체크리스트 강제 — 위 각 줄(규칙)마다 AI가 [준수/위반+근거]를 답에 달게 함 (해제 시 규칙 텍스트만 주입)</label>
     <div class="muted" style="margin-top:12px">Codex 규약 — 브릿지 ask마다 prepend</div>
     <textarea id="cCodex" rows="4" placeholder="예) 검증 결과 첫 줄에 통과/실패&#10;예) 변경한 파일 경로를 명시"></textarea>
-    <label class="ck"><input type="checkbox" id="ckCodex"> [계약점검] 체크리스트로 강제 — 각 항목에 준수/위반+근거 (해제 시 규약만 주입)</label>
+    <label class="ck"><input type="checkbox" id="ckCodex"> 체크리스트 강제 — 위 각 줄(규칙)마다 AI가 [준수/위반+근거]를 답에 달게 함 (해제 시 규칙 텍스트만 주입)</label>
     <label class="ck verify"><input type="checkbox" id="ckVerify"> 🔁 검증 모드 — 구현(파일 변경) 후 Codex 자동 검증→보고를 Stop 훅이 강제 (해제 시 2트랙 미발동)</label>
     <div class="row"><button id="saveC">저장</button><span id="savedAt" class="muted"></span></div>
-    <div class="muted">한 줄 = 한 항목. 비우면 주입 안 함.</div>
+    <div class="muted">입력 방법: 규칙을 <b>한 줄에 하나씩</b> 쓰고 Enter로 줄을 나눕니다. 각 줄이 개별 규칙이 되어 매 턴 주입됩니다(글자수 무관). 칸을 비우면 그쪽은 주입하지 않습니다.</div>
   </div>
   <h2>연결된 세션 최근 대화</h2>
   <div id="conv"></div>
