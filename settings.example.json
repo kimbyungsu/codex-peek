@@ -1,0 +1,23 @@
+{
+  "_comment": "Claude Code ~/.claude/settings.json 의 hooks 블록에 아래를 병합하세요. <HOME>은 실제 홈 경로로 바꾸세요(예: C:/Users/이름). 기존 다른 훅은 보존하세요.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "node <HOME>/.codex-bridge/contract-inject.js" }]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "node <HOME>/.codex-bridge/codex-guard.js" }]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "node <HOME>/.codex-bridge/verify-guard.js" }]
+      }
+    ]
+  }
+}

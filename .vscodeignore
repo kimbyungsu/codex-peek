@@ -6,3 +6,5 @@ package-lock.json
 out/**/*.map
 *.vsix
 .gitignore
+bridge/**
+settings.example.json
