@@ -39,6 +39,22 @@ function currentWorkspace(): string | null {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
 }
 
+// '지금 Claude가 실제 도는 폴더'(훅이 active.json에 기록). 대시보드/상태바는 VS Code 첫 폴더가 아니라
+// 이걸 우선해, 보여주는 세션이 검증이 실제 가는 세션과 일치하게 한다. 없으면 VS Code 폴더로 폴백.
+function activeWorkspace(): string | null {
+  try {
+    const o = JSON.parse(fs.readFileSync(path.join(HOME, ".codex-bridge", "active.json"), "utf8"));
+    // 신선도 가드: 오래된 active(지난 작업/다른 세션 잔재)는 무시하고 VS Code 폴더로 폴백.
+    // 6시간 = 한 작업 세션 동안 유효로 보는 보수적 기본값.
+    const ts = o && o.ts ? Date.parse(o.ts) : NaN;
+    const fresh = Number.isFinite(ts) && Date.now() - ts < 6 * 60 * 60 * 1000;
+    if (fresh && o && typeof o.workspace === "string" && o.workspace.trim()) return o.workspace;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 function loadLinks(): { bySession: Record<string, any>; byWorkspace: Record<string, any> } {
   try {
     const o = JSON.parse(fs.readFileSync(LINKS_FILE, "utf8"));
@@ -203,7 +219,7 @@ function toTurns(msgs: Array<{ role: string; text: string }>): Turn[] {
 }
 
 function computeState(turnsN: number): BridgeState {
-  const ws = currentWorkspace();
+  const ws = activeWorkspace() ?? currentWorkspace();
   const links = loadLinks();
   const link = workspaceLink(links, ws);
   const linkedId: string | null = link?.codexSession ?? null;
@@ -242,7 +258,7 @@ function computeState(turnsN: number): BridgeState {
 }
 
 function relink(id: string): void {
-  const ws = currentWorkspace();
+  const ws = activeWorkspace() ?? currentWorkspace();
   if (!ws) return;
   let o: any = {};
   try {
@@ -351,6 +367,7 @@ class Dashboard {
   .link.on .st{color:var(--vscode-charts-green);font-weight:600}
   .statusline{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:2px 0 4px;font-size:12px}
   .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid currentColor}
+  .wschip{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:6px;font-size:11px;font-weight:600;border:1px solid var(--vscode-charts-orange);color:var(--vscode-charts-orange)}
   .b-off{color:var(--vscode-descriptionForeground)}
   .b-code{color:var(--vscode-charts-blue)}
   .b-plancode{color:var(--vscode-charts-purple)}
@@ -408,7 +425,7 @@ class Dashboard {
   </div>
   <h2>🔍 Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
   <div id="conv"></div>
-  <h2>🔗 다른 Codex 세션에 연결 <span class="sub2">첫 발화로 식별</span></h2>
+  <h2>🔗 Codex 세션 연결 <span class="sub2" id="cwsLabel">첫 발화로 식별</span></h2>
   <div id="cands"></div>
 </main>
 <script nonce="${nonce}">
@@ -447,6 +464,7 @@ class Dashboard {
     const vm = (d.contract && d.contract.verifyMode) || "off";
     const vmTxt = {off:"검증 꺼짐", code:"코드 변경 시 검증", plancode:"플랜+코드 검증", always:"모든 턴 검증"}[vm] || vm;
     st.appendChild(el("span","badge b-"+vm, "🔁 " + vmTxt));
+    if (d.workspace) st.appendChild(el("span","wschip", "📁 " + d.workspace));
     if (!d.workspace) st.appendChild(el("span","muted","· 워크스페이스가 열려있지 않음"));
     else if (linked) {
       st.appendChild(el("span","muted","· " + (d.linkedSnippet || "(주제 미상)")));
@@ -454,6 +472,7 @@ class Dashboard {
     } else {
       st.appendChild(el("span","muted","· 아래에서 Codex 세션을 골라 연결 (미연결 시 ask는 보고만)"));
     }
+    const cws = $("cwsLabel"); if (cws) cws.textContent = d.workspace ? ("선택 시 → " + d.workspace + " 에 연결") : "열린 워크스페이스 없음";
     const conv = $("conv"); conv.replaceChildren();
     if (!d.linkedId) conv.appendChild(el("div","card muted","아직 연결된 Codex 세션이 없어요. 아래에서 세션을 연결하면, 구현↔검증으로 실제 주고받은 대화가 여기에 그대로 표시됩니다(눈으로 검증 확인)."));
     else if (!d.turns.length) conv.appendChild(el("div","card muted","연결됨 — 아직 주고받은 대화가 없습니다(또는 세션 파일을 못 찾음)."));
@@ -489,7 +508,63 @@ function getNonce(): string {
   return t;
 }
 
+function readTextSafe(f: string): string {
+  try {
+    return fs.readFileSync(f, "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+// '사용자가 실제 쓰는 codex' 실행파일 경로를 정한다.
+//  1) 설정 codexBridge.codexPath (직접 지정) — 최우선
+//  2) 설치된 Codex 제공 확장(openai.chatgpt 등) 내부의 codex 실행파일 — vscode API로 위치 확인
+//     (포터블/설치형·버전 폴더 변경에 안 깨짐). 우리 확장(codex-bridge/usage)은 제외.
+// 못 찾으면 undefined → 브릿지가 PATH 의 codex 로 폴백.
+function resolveCodexPathForBridge(): string | undefined {
+  const configured = vscode.workspace.getConfiguration("codexBridge").get<string>("codexPath", "").trim();
+  if (configured && fs.existsSync(configured)) return configured;
+  const exe = process.platform === "win32" ? "codex.exe" : "codex";
+  for (const ext of vscode.extensions.all) {
+    const id = ext.id.toLowerCase();
+    if (!/chatgpt|codex/.test(id) || /codex-bridge|codex-usage/.test(id)) continue; // 형제 codex만
+    const binRoot = path.join(ext.extensionPath, "bin");
+    try {
+      for (const plat of fs.readdirSync(binRoot)) {
+        const cand = path.join(binRoot, plat, exe);
+        if (fs.existsSync(cand)) return cand;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return undefined;
+}
+
+// 위 결과를 ~/.codex-bridge/codex-bin.txt 에 기록(브릿지 훅이 읽음). 확장 활성화·설정변경마다 갱신.
+// → 자동추적: 버전업/포터블↔설치형 전환에도 항상 현재 위치. 못 찾으면 파일을 지워 PATH 폴백.
+function syncCodexBin(): void {
+  const f = path.join(HOME, ".codex-bridge", "codex-bin.txt");
+  const found = resolveCodexPathForBridge();
+  try {
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    if (found) {
+      if (readTextSafe(f) !== found) fs.writeFileSync(f, found, "utf8");
+    } else if (fs.existsSync(f)) {
+      fs.rmSync(f, { force: true });
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
+  syncCodexBin(); // 브릿지가 쓸 codex 경로를 최신 확장 기준으로 기록
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("codexBridge.codexPath")) syncCodexBin();
+    }),
+  );
   const turnsN = () => Math.max(1, vscode.workspace.getConfiguration("codexBridge").get<number>("recentTurns", 5));
   const dashboard = new Dashboard(context.extensionUri, turnsN);
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 950);
@@ -497,7 +572,7 @@ export function activate(context: vscode.ExtensionContext): void {
   status.name = "Codex Bridge";
 
   const render = () => {
-    const ws = currentWorkspace();
+    const ws = activeWorkspace() ?? currentWorkspace();
     const link = workspaceLink(loadLinks(), ws);
     if (!ws) {
       status.text = "$(plug) Codex";

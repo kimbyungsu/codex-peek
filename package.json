@@ -2,7 +2,7 @@
   "name": "codex-bridge",
   "displayName": "Codex Bridge",
   "description": "Claude↔Codex 브릿지 연결 상태를 상태바·호버·대시보드로 보여줍니다. 연결된 Codex 세션의 최근 대화 확인과 다른 세션으로 갈아끼우기를 지원합니다. (~/.codex-bridge/links.json 기반, 읽기/연결변경)",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "publisher": "local",
   "license": "MIT",
   "repository": {
@@ -38,6 +38,11 @@
           "default": 5,
           "minimum": 1,
           "description": "대시보드에서 연결된 세션의 최근 N턴을 표시합니다."
+        },
+        "codexBridge.codexPath": {
+          "type": "string",
+          "default": "",
+          "description": "Codex 실행 파일 경로를 직접 지정합니다. 비우면 설치된 Codex 확장(openai.chatgpt 등)에서 자동으로 찾고, 그것도 없으면 PATH의 codex를 사용합니다. (자동 추적 — 확장 버전이 올라가도 따라감)"
         }
       }
     }

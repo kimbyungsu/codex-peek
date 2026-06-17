@@ -68,23 +68,38 @@ function lookupWorkspace(links, ws) {
   return null;
 }
 
-function findCodexBin() {
-  if (process.env.CODEX_BIN && fs.existsSync(process.env.CODEX_BIN)) return process.env.CODEX_BIN;
-  const exe = process.platform === "win32" ? "codex.exe" : "codex";
-  const extDir = path.join(HOME, ".vscode", "extensions");
+// 경로 하나를 실행형으로 포장: .js 런처면 node로 실행, 네이티브면 그대로 exec.
+function wrapCodexPath(p, how) {
+  if (/\.js$/i.test(p)) return { file: process.execPath, args: [p], how };
+  if (/\.(cmd|bat)$/i.test(p)) return { file: p, args: [], how, shell: true }; // win 셰임(.cmd/.bat)은 셸 경유 필요
+  return { file: p, args: [], how };
+}
+
+// codex-peek 확장이 기록해 둔 codex 실행 경로. 확장이 vscode API로 '사용자가 실제 쓰는 codex'
+// (설정 지정값 또는 설치된 Codex 확장 내부)를 활성화 때마다 찾아 적는다.
+// → 포터블/설치형·버전 폴더 변경과 무관하게 항상 현재 위치(자동추적 = 범용성·편의성의 핵심).
+function readPinnedCodex() {
   try {
-    for (const d of fs.readdirSync(extDir).filter((x) => x.startsWith("openai.chatgpt-")).sort().reverse()) {
-      const binDir = path.join(extDir, d, "bin");
-      if (!fs.existsSync(binDir)) continue;
-      for (const plat of fs.readdirSync(binDir)) {
-        const cand = path.join(binDir, plat, exe);
-        if (fs.existsSync(cand)) return cand;
-      }
-    }
+    const p = fs.readFileSync(path.join(BRIDGE_DIR, "codex-bin.txt"), "utf8").trim();
+    if (p && fs.existsSync(p)) return p;
   } catch {
     /* ignore */
   }
-  return exe;
+  return null;
+}
+
+// codex 실행 방법 해석. 반환 { file, args, how, shell? } → spawn(file, [...args, ...], { shell, input }).
+// 우선순위(전부 override·doctor 표시 가능):
+//   1) CODEX_BIN(env)       — 비-VSCode/CLI 에서 직접 지정
+//   2) codex-bin.txt(확장)  — 사용자 설정값 또는 자동탐색 결과(포터블/설치형·버전 무관)
+//   3) PATH 의 codex         — CLI 설치 표준(win은 셸로 .cmd/PATHEXT 해석; 프롬프트는 stdin이라 따옴표 안전)
+// 경로를 직접 뒤지지 않는다 — 위치 추적은 확장이 vscode API로 담당(설치형태/버전에 안 깨짐).
+function resolveCodex() {
+  const isWin = process.platform === "win32";
+  if (process.env.CODEX_BIN && fs.existsSync(process.env.CODEX_BIN)) return wrapCodexPath(process.env.CODEX_BIN, "CODEX_BIN");
+  const pinned = readPinnedCodex();
+  if (pinned) return wrapCodexPath(pinned, "vscode-ext");
+  return { file: "codex", args: [], how: "PATH", shell: isWin };
 }
 
 function loadLinks() {
@@ -100,12 +115,18 @@ function saveLinks(links) {
 }
 
 // 연결 조회: 세션id 우선, 없으면 워크스페이스 폴백.
+// 워크스페이스 링크를 우선한다(대시보드가 기록하는 것 = 사용자 명시 선택). bySession은 폴백.
+// 과거엔 bySession을 우선해서, 한 번 --allow-new로 만들어진 세션이 박히면 대시보드로 다시
+// 연결해도 안 먹고 엉뚱한 세션으로 검증이 가는 버그가 있었다 → 대시보드와 브릿지가 같은 기준을 보게 통일.
 function resolveLink(links) {
-  const cid = claudeId();
   const ws = workspace();
-  if (cid && links.bySession[cid]) return { ...links.bySession[cid], via: "session" };
   const wsLink = lookupWorkspace(links, ws);
-  if (wsLink) return { ...wsLink, via: "workspace" };
+  if (wsLink) return { ...wsLink, via: wsLink.via === "ui" ? "workspace·UI지정" : "workspace" };
+  // bySession 폴백은 '그 항목의 워크스페이스가 현재와 같을 때만'. 다른 워크스페이스의 stale 링크가
+  // byWorkspace 미스 시 새어드는 교차오염(검증이 엉뚱한 세션으로 감)을 막는다. (Codex 검증 #4)
+  const cid = claudeId();
+  const sLink = cid ? links.bySession[cid] : null;
+  if (sLink && normWs(sLink.workspace || "") === normWs(ws)) return { ...sLink, via: "session(폴백)" };
   return null;
 }
 function recordLink(links, codexSession) {
@@ -248,14 +269,17 @@ function indexedSessions() {
 
 // codex exec 실행(헤드리스). stdin 닫음(멈춤 방지), 최종 메시지는 -o 파일에서 회수.
 function runCodex(extraArgs, prompt) {
-  const bin = findCodexBin();
+  const inv = resolveCodex();
   const outFile = path.join(os.tmpdir(), `codex_bridge_${process.pid}_${Date.now()}.txt`);
-  const args = ["exec", "--skip-git-repo-check", "-o", outFile, ...extraArgs, prompt];
-  const r = spawnSync(bin, args, {
-    stdio: ["ignore", "ignore", "pipe"],
+  // 프롬프트는 인자가 아니라 stdin으로 전달 → 따옴표/줄바꿈/셸(.cmd) 무관하게 안전(범용).
+  const codexArgs = [...inv.args, "exec", "--skip-git-repo-check", "-o", outFile, ...extraArgs];
+  const r = spawnSync(inv.file, codexArgs, {
+    input: prompt,
+    stdio: ["pipe", "ignore", "pipe"],
     timeout: 1000 * 60 * 8,
     windowsHide: true,
     encoding: "utf8",
+    shell: !!inv.shell,
   });
   let answer = "";
   try {
@@ -268,7 +292,18 @@ function runCodex(extraArgs, prompt) {
   } catch {
     /* ignore */
   }
-  return { answer, error: r.error, stderr: (r.stderr || "").toString() };
+  // 종료코드 nonzero는 -o 파일이 남아도 실패로 본다(부분/오류 출력이 성공처럼 소비되지 않게).
+  const badExit = typeof r.status === "number" && r.status !== 0;
+  // 실패 시 "무엇으로 어떻게 실패했는지"를 붙인다 — 다음 세션이 추측으로 헤매지 않게.
+  let diag = "";
+  if (r.error || !answer || badExit) {
+    diag =
+      `\n[브릿지 진단] codex 실행방식=${inv.how} · file=${path.basename(inv.file)}` +
+      (inv.args.length ? ` · launcher=${path.basename(inv.args[0])}` : "") +
+      `\n  spawn=${r.error ? r.error.code || r.error.message : "ok"} · exit=${r.status} · signal=${r.signal || "-"}` +
+      `\n  (자세한 점검: node "${__filename}" doctor)`;
+  }
+  return { answer, error: r.error, status: r.status, stderr: (r.stderr || "").toString() + diag };
 }
 
 function die(msg, code = 1) {
@@ -293,8 +328,8 @@ function cmdAsk(rest) {
           `→ 새로 시작하려면: ask --allow-new "..."  /  다른 세션에 붙이려면: link <id>`,
       );
     }
-    const { answer, error, stderr } = runCodex(["resume", link.codexSession], withContract(prompt));
-    if (error || !answer) die(`Codex resume 실패: ${error?.message || ""}\n${stderr.slice(-500)}`);
+    const { answer, error, status, stderr } = runCodex(["resume", link.codexSession], withContract(prompt));
+    if (error || !answer || (typeof status === "number" && status !== 0)) die(`Codex resume 실패: ${error?.message || ""}\n${stderr.slice(-500)}`);
     process.stdout.write(`# 연결 세션 ${link.codexSession} (${link.via})\n\n${answer}\n`);
     return;
   }
@@ -314,8 +349,8 @@ function cmdAsk(rest) {
 
   // --allow-new: 새 세션 생성 + 연결 기록.
   const since = Date.now() - 2000;
-  const { answer, error, stderr } = runCodex([], withContract(prompt));
-  if (error || !answer) die(`Codex 새 세션 실패: ${error?.message || ""}\n${stderr.slice(-500)}`);
+  const { answer, error, status, stderr } = runCodex([], withContract(prompt));
+  if (error || !answer || (typeof status === "number" && status !== 0)) die(`Codex 새 세션 실패: ${error?.message || ""}\n${stderr.slice(-500)}`);
   const newFile = newestRolloutSince(since);
   const m = newFile && newFile.match(UUID_RE);
   if (m) {
@@ -377,6 +412,36 @@ function cmdFind() {
   process.stdout.write('\n연결 바꾸기: node codex-bridge.js link <id>\n');
 }
 
+// 점검: codex를 실제로 실행 가능한지 + 연결/검증 상태를 한눈에. 검증이 안 될 때 추측 대신 이걸 본다.
+function cmdDoctor() {
+  const inv = resolveCodex();
+  const runnable = inv.shell ? null : fs.existsSync(inv.file) && (!inv.args.length || fs.existsSync(inv.args[0]));
+  process.stdout.write("=== codex-bridge doctor ===\n");
+  process.stdout.write(`codex 실행방식 : ${inv.how}\n`);
+  process.stdout.write(`실행 명령      : ${inv.file}${inv.args.length ? " " + inv.args.join(" ") : ""}${inv.shell ? "   (PATH 셸 해석)" : ""}\n`);
+  process.stdout.write(`실행 가능?     : ${inv.shell ? "PATH 의존(런타임 확인)" : runnable ? "예" : "아니오  ← 검증 불가의 직접 원인"}\n`);
+  let c = null;
+  try {
+    c = loadContract();
+  } catch {
+    /* ignore */
+  }
+  process.stdout.write(`검증 모드      : ${c ? c.verifyMode : "(계약 로드 실패)"}\n`);
+  process.stdout.write(`Claude 세션    : ${claudeId() || "(env 없음)"}\n`);
+  process.stdout.write(`워크스페이스   : ${workspace()}\n`);
+  const links = loadLinks();
+  const link = resolveLink(links);
+  if (link) {
+    const file = findRolloutById(link.codexSession);
+    process.stdout.write(`연결           : Codex ${link.codexSession} (${link.via}) · 세션파일 ${file ? "있음" : "없음(삭제됨?)"}\n`);
+  } else {
+    process.stdout.write(`연결           : 없음 (ask=보고만 / 첫 소통=ask --allow-new)\n`);
+  }
+  if (!inv.shell && !runnable) {
+    process.stdout.write(`\n해결: CODEX_BIN 환경변수에 codex 실행파일 또는 bin/codex.js 경로를 지정하세요.\n`);
+  }
+}
+
 function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   switch (cmd) {
@@ -388,13 +453,15 @@ function main() {
       return cmdStatus();
     case "find":
       return cmdFind();
+    case "doctor":
+      return cmdDoctor();
     default:
       process.stdout.write(
-        "codex-bridge: ask | link | status | find\n" +
+        "codex-bridge: ask | link | status | find | doctor\n" +
           '  node codex-bridge.js ask "<프롬프트>"\n' +
           '  node codex-bridge.js ask --allow-new "<프롬프트>"\n' +
           "  node codex-bridge.js link <id> | link --last\n" +
-          "  node codex-bridge.js status | find\n",
+          "  node codex-bridge.js status | find | doctor\n",
       );
   }
 }
