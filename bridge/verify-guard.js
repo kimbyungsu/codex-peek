@@ -22,7 +22,7 @@ process.stdin.on("end", () => {
   } catch {
     process.exit(0);
   }
-  if (!c.verify) process.exit(0); // 검증 모드 off
+  if (c.verifyMode === "off") process.exit(0); // 검증 모드 off
   if (j.stop_hook_active) process.exit(0); // 재진입 → 통과(루프 방지)
 
   const tp = j.transcript_path;
@@ -51,8 +51,9 @@ process.stdin.on("end", () => {
     }
   }
 
-  // 마지막 사람 발화 이후: 파일 변경(edited)과 브릿지 검증(verified) 여부.
+  // 마지막 사람 발화 이후: 파일 변경(edited)·플랜 확정(planned)·브릿지 검증(verified) 여부.
   let edited = false;
+  let planned = false;
   let verified = false;
   for (let i = lastUser + 1; i < lines.length; i++) {
     let o;
@@ -66,6 +67,7 @@ process.stdin.on("end", () => {
       if (!b || b.type !== "tool_use") continue;
       const n = b.name || "";
       if (/^(Write|Edit|MultiEdit|NotebookEdit)$/.test(n)) edited = true;
+      if (n === "ExitPlanMode") planned = true; // 플랜 확정 신호(추론 없이 결정적)
       if (n === "Bash") {
         const cmd = (b.input && b.input.command) || "";
         if (/codex-bridge/.test(cmd) && /\bask\b/.test(cmd)) verified = true;
@@ -73,12 +75,19 @@ process.stdin.on("end", () => {
     }
   }
 
-  if (edited && !verified) {
+  // 모드별 트리거: always=모든 턴 / plancode=플랜확정 or 코드변경 / code=코드변경.
+  const needVerify =
+    c.verifyMode === "always" ? true :
+    c.verifyMode === "plancode" ? (edited || planned) :
+    edited;
+
+  if (needVerify && !verified) {
+    const what = planned && !edited ? "플랜을 확정했는데" : edited ? "파일을 변경했는데" : "이번 턴에";
     process.stdout.write(
       JSON.stringify({
         decision: "block",
         reason:
-          `[검증 모드] 이번 턴에 파일을 변경했는데 Codex 검증을 받지 않았다. ` +
+          `[검증 모드:${c.verifyMode}] ${what} Codex 검증을 받지 않았다. ` +
           `종료하지 말고 지금 \`node ${BRIDGE} ask "<무엇을 검증할지>"\` 로 Codex 검증을 받아라. ` +
           `그 결과(통과/실패+근거)를 사용자에게 보고한 뒤 종료하라. (연결 없으면 보고만 됨 — 그 사실을 보고하라)`,
       }),

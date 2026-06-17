@@ -11,7 +11,7 @@ process.stdin.on("end", () => {
     const c = loadContract();
     const rules = buildInjection(c.claude, "Claude Code", c.claudeChecklist);
     if (rules) parts.push(rules);
-    if (c.verify) parts.push(buildVerifyDirective());
+    if (c.verifyMode && c.verifyMode !== "off") parts.push(buildVerifyDirective(c.verifyMode));
   } catch {
     parts = [];
   }

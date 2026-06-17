@@ -21,9 +21,17 @@ function loadContract() {
     // 체크리스트 강제: 기본 true(기존 동작 보존). 해제 시 규약만 주입.
     claudeChecklist: o.claudeChecklist !== false,
     codexChecklist: o.codexChecklist !== false,
-    // 검증 모드(구현→Codex 자동검증→보고): 기본 false(opt-in).
-    verify: o.verify === true,
+    // 검증 모드: off=꺼짐 / code=코드변경 시 / plancode=플랜확정(ExitPlanMode)+코드변경 시 / always=모든 턴.
+    // 기본 off(opt-in). 구버전 verify:true는 code로 마이그레이션.
+    verifyMode: normVerifyMode(o),
   };
+}
+
+const VERIFY_MODES = ["off", "code", "plancode", "always"];
+function normVerifyMode(o) {
+  if (o && VERIFY_MODES.includes(o.verifyMode)) return o.verifyMode;
+  if (o && o.verify === true) return "code"; // 레거시 호환
+  return "off";
 }
 
 // rules(문자열 배열) → 매 턴 주입 텍스트. checklist=false면 규약만, true면 [계약점검] 강제.
@@ -47,14 +55,18 @@ function buildInjection(rules, who, checklist) {
   ].join("\n");
 }
 
-// 검증 모드 ON일 때 Claude(구현모델)에게 매 턴 주입하는 2트랙 지시.
-function buildVerifyDirective() {
+// 검증 모드 ON일 때 Claude(구현모델)에게 매 턴 주입하는 2트랙 지시. 모드별로 트리거 조건을 명시.
+function buildVerifyDirective(mode) {
+  const cond =
+    mode === "always" ? "이번 턴(모든 응답)" :
+    mode === "plancode" ? "이번 턴에 플랜을 확정(ExitPlanMode)했거나 파일을 생성/수정했다면" :
+    "이번 턴에 파일을 생성/수정했다면"; // code
   return [
-    `[검증 모드 ON · 구현→검증 2트랙 · 사람이 턴을 중계하지 않음]`,
-    `이번 턴에 파일을 생성/수정했다면, 사용자에게 완료를 보고하기 전에 반드시`,
+    `[검증 모드 ON(${mode}) · 구현→검증 2트랙 · 사람이 턴을 중계하지 않음]`,
+    `${cond}, 사용자에게 완료를 보고하기 전에 반드시`,
     `\`node ${BRIDGE} ask "<무엇을 검증할지>"\` 로 Codex 검증을 받고,`,
     `그 결과(통과/실패+근거)를 요약·반영해서 보고하라. 검증을 건너뛴 완료 보고 금지.`,
   ].join("\n");
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, CONTRACT_FILE, BRIDGE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, BRIDGE };

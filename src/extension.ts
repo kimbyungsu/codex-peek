@@ -48,12 +48,20 @@ function loadLinks(): { bySession: Record<string, any>; byWorkspace: Record<stri
   }
 }
 
+type VerifyMode = "off" | "code" | "plancode" | "always";
+const VERIFY_MODES: VerifyMode[] = ["off", "code", "plancode", "always"];
+function normVerifyMode(o: any): VerifyMode {
+  if (o && VERIFY_MODES.includes(o.verifyMode)) return o.verifyMode;
+  if (o && o.verify === true) return "code"; // 레거시 verify:true → code 마이그레이션
+  return "off";
+}
+
 interface Contract {
   claude: string[];
   codex: string[];
   claudeChecklist: boolean;
   codexChecklist: boolean;
-  verify: boolean;
+  verifyMode: VerifyMode;
 }
 
 function loadContract(): Contract {
@@ -64,10 +72,10 @@ function loadContract(): Contract {
       codex: Array.isArray(o.codex) ? o.codex : [],
       claudeChecklist: o.claudeChecklist !== false,
       codexChecklist: o.codexChecklist !== false,
-      verify: o.verify === true,
+      verifyMode: normVerifyMode(o),
     };
   } catch {
-    return { claude: [], codex: [], claudeChecklist: true, codexChecklist: true, verify: false };
+    return { claude: [], codex: [], claudeChecklist: true, codexChecklist: true, verifyMode: "off" };
   }
 }
 
@@ -281,7 +289,7 @@ class Dashboard {
             codex: Array.isArray(m.codex) ? m.codex : [],
             claudeChecklist: !!m.claudeChecklist,
             codexChecklist: !!m.codexChecklist,
-            verify: !!m.verify,
+            verifyMode: normVerifyMode({ verifyMode: m.verifyMode }),
           });
           this.post();
         }
@@ -341,7 +349,14 @@ class Dashboard {
     <div class="muted" style="margin-top:12px">Codex 규약 — 브릿지 ask마다 prepend</div>
     <textarea id="cCodex" rows="4" placeholder="예) 검증 결과 첫 줄에 통과/실패&#10;예) 변경한 파일 경로를 명시"></textarea>
     <label class="ck"><input type="checkbox" id="ckCodex"> 체크리스트 강제 — 위 각 줄(규칙)마다 AI가 [준수/위반+근거]를 답에 달게 함 (해제 시 규칙 텍스트만 주입)</label>
-    <label class="ck verify"><input type="checkbox" id="ckVerify"> 🔁 검증 모드 — 구현(파일 변경) 후 Codex 자동 검증→보고를 Stop 훅이 강제 (해제 시 2트랙 미발동)</label>
+    <label class="ck verify">🔁 검증 모드 — Codex 자동 검증→보고를 Stop 훅이 강제 (트리거는 transcript 신호만 사용, 추가 추론 없음)
+      <select id="selVerify" style="margin-left:8px">
+        <option value="off">꺼짐</option>
+        <option value="code">코드 변경 시</option>
+        <option value="plancode">플랜 확정(ExitPlanMode) + 코드 변경 시</option>
+        <option value="always">모든 턴</option>
+      </select>
+    </label>
     <div class="row"><button id="saveC">저장</button><span id="savedAt" class="muted"></span></div>
     <div class="muted">입력 방법: 규칙을 <b>한 줄에 하나씩</b> 쓰고 Enter로 줄을 나눕니다. 각 줄이 개별 규칙이 되어 매 턴 주입됩니다(글자수 무관). 칸을 비우면 그쪽은 주입하지 않습니다.</div>
   </div>
@@ -363,7 +378,7 @@ class Dashboard {
     const toLines = (s) => s.split("\\n").map((x) => x.trim()).filter(Boolean);
     vscode.postMessage({type:"saveContract",
       claude: toLines($("cClaude").value), codex: toLines($("cCodex").value),
-      claudeChecklist: $("ckClaude").checked, codexChecklist: $("ckCodex").checked, verify: $("ckVerify").checked});
+      claudeChecklist: $("ckClaude").checked, codexChecklist: $("ckCodex").checked, verifyMode: $("selVerify").value});
     $("savedAt").textContent = "저장됨 ✓ (다음 턴부터 적용)";
   });
   window.addEventListener("message", (ev) => {
@@ -374,7 +389,7 @@ class Dashboard {
       if (document.activeElement !== $("cCodex")) $("cCodex").value = (d.contract.codex||[]).join("\\n");
       $("ckClaude").checked = d.contract.claudeChecklist !== false;
       $("ckCodex").checked = d.contract.codexChecklist !== false;
-      $("ckVerify").checked = d.contract.verify === true;
+      $("selVerify").value = d.contract.verifyMode || "off";
     }
     const st = $("status"); st.replaceChildren();
     if (!d.workspace) { st.appendChild(el("div","muted","워크스페이스가 열려있지 않습니다.")); }
