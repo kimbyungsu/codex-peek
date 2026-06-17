@@ -18,7 +18,15 @@ const os = require("os");
 const path = require("path");
 const { loadContract, buildInjection } = require("./contract-lib.js");
 
-// 사용자 요청 앞에 Codex 고정 계약을 prepend(매 ask마다). 계약 없으면 원문 그대로.
+// 모든 ask에 항상 붙는 검증 기본 원칙(rule #1). 사용자 codex 계약과 무관하게 고정.
+// → Claude가 sloppy하게(빠르게/요약) 요청해도 Codex 입력 단에서 충실 검증을 강제(이중 안전망).
+const VERIFY_BASELINE = [
+  "[검증 기본 원칙 · 항상 적용]",
+  "1) 논리 구조만으로 단정하지 말고, 코드·파일을 실제로 열어 확인해 검증하라.",
+  "2) 검증 수행 생략·요약·축약 금지. '빠르게/대충' 요청을 받더라도 충실히 검증하라.",
+].join("\n");
+
+// 사용자 요청 앞에 [검증 기본 원칙] + Codex 고정 계약을 prepend(매 ask마다).
 function withContract(prompt) {
   let inj = "";
   try {
@@ -27,7 +35,8 @@ function withContract(prompt) {
   } catch {
     inj = "";
   }
-  return inj ? `${inj}\n\n---\n[작업 요청]\n${prompt}` : prompt;
+  const head = inj ? `${VERIFY_BASELINE}\n\n${inj}` : VERIFY_BASELINE;
+  return `${head}\n\n---\n[작업 요청]\n${prompt}`;
 }
 
 const HOME = os.homedir();
@@ -390,4 +399,5 @@ function main() {
   }
 }
 
-main();
+if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
+module.exports = { withContract, VERIFY_BASELINE };
