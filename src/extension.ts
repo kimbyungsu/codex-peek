@@ -319,50 +319,96 @@ class Dashboard {
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <style>
   body{margin:0;color:var(--vscode-foreground);background:var(--vscode-editor-background);font-family:var(--vscode-font-family);font-size:var(--vscode-font-size)}
-  .shell{max-width:1000px;margin:0 auto;padding:16px}
-  h2{font-size:14px;margin:18px 0 8px;color:var(--vscode-descriptionForeground)}
-  .card{border:1px solid var(--vscode-panel-border);border-radius:6px;padding:12px;background:var(--vscode-sideBar-background);margin-bottom:10px}
+  .shell{max-width:920px;margin:0 auto;padding:18px}
+  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+  h1{font-size:16px;margin:0;display:flex;align-items:baseline;gap:8px}
+  h1 .sub{font-size:12px;font-weight:400;color:var(--vscode-descriptionForeground)}
+  h2{font-size:13.5px;font-weight:600;margin:22px 0 8px;color:var(--vscode-foreground);display:flex;align-items:baseline;gap:8px}
+  h2 .sub2{font-size:11px;font-weight:400;color:var(--vscode-descriptionForeground)}
+  .hint{font-size:11px;color:var(--vscode-descriptionForeground);margin:4px 0 0 22px;line-height:1.5}
+  .hint code{font-family:var(--vscode-editor-font-family);background:var(--vscode-textCodeBlock-background,var(--vscode-panel-border));padding:0 4px;border-radius:3px}
+  .card{border:1px solid var(--vscode-panel-border);border-radius:8px;padding:14px;background:var(--vscode-sideBar-background);margin-bottom:10px}
   .muted{color:var(--vscode-descriptionForeground);font-size:12px}
-  .id{font-family:var(--vscode-editor-font-family);font-size:12px}
+  .id{font-family:var(--vscode-editor-font-family);font-size:11px;color:var(--vscode-descriptionForeground);word-break:break-all}
   .role{font-weight:600;font-size:12px;margin:8px 0 3px;color:var(--vscode-descriptionForeground)}
   .text{white-space:pre-wrap;overflow-wrap:anywhere}
-  button{color:var(--vscode-button-foreground);background:var(--vscode-button-background);border:0;border-radius:4px;padding:4px 10px;cursor:pointer;font:inherit}
-  .cand{display:flex;gap:8px;align-items:flex-start;justify-content:space-between;border:1px solid var(--vscode-panel-border);border-radius:6px;padding:8px 10px;margin-bottom:6px}
-  .cand.linked{border-color:var(--vscode-charts-green)}
-  .star{color:var(--vscode-charts-green);font-size:12px}
-  .top{display:flex;align-items:center;gap:10px;margin-bottom:10px}
-  h1{font-size:16px;margin:0}
-  textarea{width:100%;box-sizing:border-box;margin-top:4px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,var(--vscode-panel-border));border-radius:4px;padding:6px;font:var(--vscode-editor-font-family);font-size:12px;resize:vertical}
-  .row{display:flex;align-items:center;gap:10px;margin:10px 0 0}
+  button{color:var(--vscode-button-foreground);background:var(--vscode-button-background);border:0;border-radius:5px;padding:5px 12px;cursor:pointer;font:inherit}
+  button.secondary{background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground)}
+  /* 히어로: Claude ⇄ Codex */
+  .hero{display:flex;align-items:stretch;gap:10px;margin-bottom:8px}
+  .agent{flex:1;text-align:center;padding:16px 10px;border-radius:10px;border:1px solid var(--vscode-panel-border);background:var(--vscode-editor-background)}
+  .agent .emo{font-size:30px;line-height:1}
+  .agent .nm{font-weight:600;margin-top:6px}
+  .agent .ro{font-size:11px;color:var(--vscode-descriptionForeground);margin-top:2px}
+  .agent.claude{border-color:var(--vscode-charts-blue)}
+  .agent.codex{border-color:var(--vscode-charts-green)}
+  .link{flex:0 0 108px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px}
+  .link .bar{width:100%;height:3px;border-radius:2px;background:var(--vscode-panel-border)}
+  .link .emo{font-size:20px;filter:grayscale(1);opacity:.6}
+  .link .st{font-size:11px;color:var(--vscode-descriptionForeground)}
+  .link.on .bar{background:var(--vscode-charts-green)}
+  .link.on .emo{filter:none;opacity:1}
+  .link.on .st{color:var(--vscode-charts-green);font-weight:600}
+  .statusline{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:2px 0 4px;font-size:12px}
+  .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid currentColor}
+  .b-off{color:var(--vscode-descriptionForeground)}
+  .b-code{color:var(--vscode-charts-blue)}
+  .b-plancode{color:var(--vscode-charts-purple)}
+  .b-always{color:var(--vscode-charts-orange)}
+  /* 계약 블록: 에이전트 색 구분 */
+  .cblock{border-left:3px solid var(--vscode-panel-border);padding-left:10px}
+  .cblock.claude{border-left-color:var(--vscode-charts-blue)}
+  .cblock.codex{border-left-color:var(--vscode-charts-green)}
+  .chead{font-weight:600;font-size:12px;display:flex;align-items:center;gap:6px;margin-bottom:2px}
+  textarea{width:100%;box-sizing:border-box;margin-top:4px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,var(--vscode-panel-border));border-radius:5px;padding:7px;font-family:var(--vscode-editor-font-family);font-size:12px;resize:vertical}
+  select{background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border,var(--vscode-panel-border));border-radius:4px;padding:3px 6px;font:inherit}
+  .row{display:flex;align-items:center;gap:10px;margin:12px 0 0}
   label.ck{display:flex;align-items:flex-start;gap:6px;font-size:12px;color:var(--vscode-descriptionForeground);margin-top:6px;cursor:pointer}
-  label.ck.verify{margin-top:12px;color:var(--vscode-foreground);border-top:1px solid var(--vscode-panel-border);padding-top:10px}
+  label.ck.verify{margin-top:14px;color:var(--vscode-foreground);border-top:1px solid var(--vscode-panel-border);padding-top:12px;align-items:center}
   label.ck input{margin-top:2px}
+  .cand{display:flex;gap:8px;align-items:flex-start;justify-content:space-between;border:1px solid var(--vscode-panel-border);border-radius:6px;padding:8px 10px;margin-bottom:6px}
+  .cand.linked{border-color:var(--vscode-charts-green);background:var(--vscode-editor-background)}
+  .star{color:var(--vscode-charts-green);font-size:12px;font-weight:600}
 </style></head>
 <body><main class="shell">
-  <div class="top"><h1>Codex Bridge</h1><button id="refresh">새로고침</button></div>
-  <div id="status" class="card"></div>
-  <h2>고정 계약 — 매 턴 AI에 자동 주입</h2>
+  <div class="top"><h1>🌉 Codex Bridge <span class="sub">Claude ⇄ Codex 자동 연결·검증</span></h1><button id="refresh" class="secondary">↻ 새로고침</button></div>
+
+  <div class="hero">
+    <div class="agent claude"><div class="emo">🤖</div><div class="nm">Claude Code</div><div class="ro">구현 · implement</div></div>
+    <div class="link" id="linkViz"><div class="bar"></div><div class="emo" id="linkEmo">🔌</div><div class="st" id="linkState">연결 없음</div></div>
+    <div class="agent codex"><div class="emo">⚙️</div><div class="nm">Codex</div><div class="ro">검증 · verify</div></div>
+  </div>
+  <div id="status" class="statusline"></div>
+
+  <h2>고정 계약 · 매 턴 자동 주입</h2>
   <div class="card">
-    <div class="muted">Claude Code 지침 — 매 턴 UserPromptSubmit 훅으로 주입</div>
-    <textarea id="cClaude" rows="4" placeholder="예) 추측하지 말고 파일을 직접 읽어라&#10;예) 테스트 통과 전 완료 보고 금지"></textarea>
-    <label class="ck"><input type="checkbox" id="ckClaude"> 체크리스트 강제 — 위 각 줄(규칙)마다 AI가 [준수/위반+근거]를 답에 달게 함 (해제 시 규칙 텍스트만 주입)</label>
-    <div class="muted" style="margin-top:12px">Codex 규약 — 브릿지 ask마다 prepend</div>
-    <textarea id="cCodex" rows="4" placeholder="예) 검증 결과 첫 줄에 통과/실패&#10;예) 변경한 파일 경로를 명시"></textarea>
-    <label class="ck"><input type="checkbox" id="ckCodex"> 체크리스트 강제 — 위 각 줄(규칙)마다 AI가 [준수/위반+근거]를 답에 달게 함 (해제 시 규칙 텍스트만 주입)</label>
-    <label class="ck verify">🔁 검증 모드 — Codex 자동 검증→보고를 Stop 훅이 강제 (트리거는 transcript 신호만 사용, 추가 추론 없음)
+    <div class="cblock claude">
+      <div class="chead">🤖 Claude 지침 <span class="muted" style="font-weight:400">· 매 턴 주입</span></div>
+      <textarea id="cClaude" rows="3" placeholder="예) 추측하지 말고 파일을 직접 읽어라&#10;예) 테스트 통과 전 완료 보고 금지"></textarea>
+      <label class="ck"><input type="checkbox" id="ckClaude"> 체크리스트 강제 — 각 규칙마다 [준수/위반+근거] 달게 함</label>
+      <div class="hint">☑ 켜짐 → 답변 끝에 <code>[계약점검] 1) 준수 — &lt;근거&gt; / 2) 위반 — &lt;근거&gt;</code> 형식으로 규칙별 자가보고를 강제 · ☐ 꺼짐 → 규칙 텍스트만 주입</div>
+    </div>
+    <div class="cblock codex" style="margin-top:14px">
+      <div class="chead">⚙️ Codex 규약 <span class="muted" style="font-weight:400">· ask마다 prepend</span></div>
+      <textarea id="cCodex" rows="3" placeholder="예) 검증 결과 첫 줄에 통과/실패&#10;예) 변경한 파일 경로를 명시"></textarea>
+      <label class="ck"><input type="checkbox" id="ckCodex"> 체크리스트 강제 — 검증 답에 규칙별 [준수/위반+근거] 달게 함</label>
+      <div class="hint">☑ 켜짐 → Codex 검증 답에도 규칙별 <code>[계약점검]</code> 자가보고 강제 · ☐ 꺼짐 → 규약 텍스트만 prepend</div>
+    </div>
+    <label class="ck verify">🔁 검증 모드 — 트리거 턴에 Codex 검증→보고를 Stop 훅이 강제
       <select id="selVerify" style="margin-left:8px">
         <option value="off">꺼짐</option>
         <option value="code">코드 변경 시</option>
-        <option value="plancode">플랜 확정(ExitPlanMode) + 코드 변경 시</option>
+        <option value="plancode">플랜 확정 + 코드 변경 시</option>
         <option value="always">모든 턴</option>
       </select>
     </label>
+    <div class="hint"><b>꺼짐</b> 강제 안 함 · <b>코드 변경 시</b> 파일 편집한 턴 · <b>플랜+코드</b> 플랜 확정(ExitPlanMode)이나 편집한 턴 · <b>모든 턴</b> 매 응답. 트리거 턴엔 Codex 검증을 받고 그 결과를 반영해 보고해야 종료 가능.</div>
     <div class="row"><button id="saveC">저장</button><span id="savedAt" class="muted"></span></div>
-    <div class="muted">입력 방법: 규칙을 <b>한 줄에 하나씩</b> 쓰고 Enter로 줄을 나눕니다. 각 줄이 개별 규칙이 되어 매 턴 주입됩니다(글자수 무관). 칸을 비우면 그쪽은 주입하지 않습니다.</div>
+    <div class="muted">규칙은 <b>한 줄에 하나씩</b>(Enter로 구분). 칸을 비우면 그쪽은 주입 안 함.</div>
   </div>
-  <h2>연결된 세션 최근 대화</h2>
+  <h2>🔍 Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
   <div id="conv"></div>
-  <h2>다른 세션으로 연결 (첫 발화로 식별)</h2>
+  <h2>🔗 다른 Codex 세션에 연결 <span class="sub2">첫 발화로 식별</span></h2>
   <div id="cands"></div>
 </main>
 <script nonce="${nonce}">
@@ -391,20 +437,26 @@ class Dashboard {
       $("ckCodex").checked = d.contract.codexChecklist !== false;
       $("selVerify").value = d.contract.verifyMode || "off";
     }
+    // 히어로 연결 상태 시각화
+    const linked = !!d.linkedId;
+    $("linkViz").className = "link" + (linked ? " on" : "");
+    $("linkEmo").textContent = linked ? "🔗" : "🔌";
+    $("linkState").textContent = linked ? "연결됨" : "연결 없음";
+    // statusline: 검증 모드 배지 + 연결 요약
     const st = $("status"); st.replaceChildren();
-    if (!d.workspace) { st.appendChild(el("div","muted","워크스페이스가 열려있지 않습니다.")); }
-    else if (d.linkedId) {
-      st.appendChild(el("div",null,"🔗 연결됨"));
-      const idl = el("div","id", d.linkedId); st.appendChild(idl);
-      st.appendChild(el("div","muted", "주제: " + (d.linkedSnippet||"-")));
-      st.appendChild(el("div","muted", "연결: " + (d.linkedAt? new Date(d.linkedAt).toLocaleString():"-") + " · 마지막 활동: " + (d.lastActivity||"-")));
+    const vm = (d.contract && d.contract.verifyMode) || "off";
+    const vmTxt = {off:"검증 꺼짐", code:"코드 변경 시 검증", plancode:"플랜+코드 검증", always:"모든 턴 검증"}[vm] || vm;
+    st.appendChild(el("span","badge b-"+vm, "🔁 " + vmTxt));
+    if (!d.workspace) st.appendChild(el("span","muted","· 워크스페이스가 열려있지 않음"));
+    else if (linked) {
+      st.appendChild(el("span","muted","· " + (d.linkedSnippet || "(주제 미상)")));
+      st.appendChild(el("span","id", d.linkedId));
     } else {
-      st.appendChild(el("div",null,"🔌 연결 없음"));
-      st.appendChild(el("div","muted","아래에서 세션을 골라 연결하세요. (브릿지 ask는 연결 없으면 보고만 함)"));
+      st.appendChild(el("span","muted","· 아래에서 Codex 세션을 골라 연결 (미연결 시 ask는 보고만)"));
     }
     const conv = $("conv"); conv.replaceChildren();
-    if (!d.linkedId) conv.appendChild(el("div","muted","연결된 세션이 없습니다."));
-    else if (!d.turns.length) conv.appendChild(el("div","muted","대화 내용을 찾지 못했습니다(세션 파일 없음?)."));
+    if (!d.linkedId) conv.appendChild(el("div","card muted","아직 연결된 Codex 세션이 없어요. 아래에서 세션을 연결하면, 구현↔검증으로 실제 주고받은 대화가 여기에 그대로 표시됩니다(눈으로 검증 확인)."));
+    else if (!d.turns.length) conv.appendChild(el("div","card muted","연결됨 — 아직 주고받은 대화가 없습니다(또는 세션 파일을 못 찾음)."));
     else {
       d.turns.forEach((t) => {
         const c = el("div","card");
