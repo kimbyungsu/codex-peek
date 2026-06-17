@@ -4,17 +4,37 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const crypto = require("crypto");
 
-const CONTRACT_FILE = path.join(os.homedir(), ".codex-bridge", "contract.json");
-const BRIDGE = path.join(os.homedir(), ".codex-bridge", "codex-bridge.js");
+const BRIDGE_DIR = path.join(os.homedir(), ".codex-bridge");
+const CONTRACT_FILE = path.join(BRIDGE_DIR, "contract.json"); // 전역 기본값(상속 시드 · 레거시 호환)
+const CONTRACTS_DIR = path.join(BRIDGE_DIR, "contracts"); // 프로젝트별 계약 파일들
+const BRIDGE = path.join(BRIDGE_DIR, "codex-bridge.js");
 
-function loadContract() {
-  let o = {};
-  try {
-    o = JSON.parse(fs.readFileSync(CONTRACT_FILE, "utf8"));
-  } catch {
-    o = {};
-  }
+// 워크스페이스 정규화 — 확장(src/extension.ts)·브릿지(codex-bridge.js)와 반드시 동일 규칙이어야 함.
+function normWs(p) {
+  return path.normalize(p || "").replace(/[\\/]+$/, "").toLowerCase();
+}
+// 프로젝트별 계약 파일 경로. 키 = normWs의 sha1 앞 16자(파일명 안전·플랫폼 무관). 확장 contractFileFor와 동일.
+function contractFileFor(ws) {
+  const key = crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16);
+  return path.join(CONTRACTS_DIR, key + ".json");
+}
+// 호출 측(contract-inject·verify-guard·codex-bridge)이 도는 Claude 작업 폴더.
+function currentWs() {
+  return process.env.CLAUDE_PROJECT_DIR || process.cwd();
+}
+
+// 프로젝트별 계약을 읽는다. 미설정이면 전역 기본값(CONTRACT_FILE)을 상속. ws 미지정 시 현재 폴더 기준.
+function loadContract(ws) {
+  const read = (p) => {
+    try {
+      return JSON.parse(fs.readFileSync(p, "utf8"));
+    } catch {
+      return null;
+    }
+  };
+  const o = read(contractFileFor(ws || currentWs())) || read(CONTRACT_FILE) || {};
   return {
     claude: Array.isArray(o.claude) ? o.claude : [],
     codex: Array.isArray(o.codex) ? o.codex : [],
@@ -72,4 +92,4 @@ function buildVerifyDirective(mode) {
   ].join("\n");
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, BRIDGE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, BRIDGE };

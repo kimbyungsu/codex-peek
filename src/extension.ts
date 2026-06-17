@@ -2,12 +2,19 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import * as crypto from "crypto";
 
 const HOME = os.homedir();
 const CODEX_HOME = process.env.CODEX_HOME || path.join(HOME, ".codex");
 const SESSIONS_DIR = path.join(CODEX_HOME, "sessions");
 const LINKS_FILE = path.join(HOME, ".codex-bridge", "links.json");
-const CONTRACT_FILE = path.join(HOME, ".codex-bridge", "contract.json");
+const CONTRACT_FILE = path.join(HOME, ".codex-bridge", "contract.json"); // 전역 기본값(상속 시드)
+const CONTRACTS_DIR = path.join(HOME, ".codex-bridge", "contracts"); // 프로젝트별 계약
+// 프로젝트별 계약 파일. 키=normWs의 sha1 앞16자 — bridge/contract-lib.js의 contractFileFor와 반드시 동일 규칙.
+function contractFileFor(ws: string): string {
+  const key = crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16);
+  return path.join(CONTRACTS_DIR, key + ".json");
+}
 const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
 
 interface Turn {
@@ -55,6 +62,16 @@ function activeWorkspace(): string | null {
   return null;
 }
 
+// 이 대시보드 창이 다룰 워크스페이스. 핵심: 창마다 '자기 폴더'를 봐서 여러 VS Code 창이 안 섞이게 한다.
+// 멀티루트(한 창에 폴더 여러 개)일 때만, 활성 Claude 폴더가 이 창의 폴더 중 하나면 그걸 고른다.
+function dashboardWorkspace(): string | null {
+  const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+  if (!folders.length) return activeWorkspace(); // 폴더 없이 열린 경우만 active 폴백
+  const active = activeWorkspace();
+  if (active && folders.some((f) => normWs(f) === normWs(active))) return active;
+  return folders[0];
+}
+
 function loadLinks(): { bySession: Record<string, any>; byWorkspace: Record<string, any> } {
   try {
     const o = JSON.parse(fs.readFileSync(LINKS_FILE, "utf8"));
@@ -80,24 +97,30 @@ interface Contract {
   verifyMode: VerifyMode;
 }
 
-function loadContract(): Contract {
-  try {
-    const o = JSON.parse(fs.readFileSync(CONTRACT_FILE, "utf8"));
-    return {
-      claude: Array.isArray(o.claude) ? o.claude : [],
-      codex: Array.isArray(o.codex) ? o.codex : [],
-      claudeChecklist: o.claudeChecklist !== false,
-      codexChecklist: o.codexChecklist !== false,
-      verifyMode: normVerifyMode(o),
-    };
-  } catch {
-    return { claude: [], codex: [], claudeChecklist: true, codexChecklist: true, verifyMode: "off" };
-  }
+function loadContract(ws?: string | null): Contract {
+  const read = (p: string): any | null => {
+    try {
+      return JSON.parse(fs.readFileSync(p, "utf8"));
+    } catch {
+      return null;
+    }
+  };
+  // 1) 프로젝트별 계약 → 2) 전역 기본값(상속) → 3) 빈 기본값
+  const o = (ws ? read(contractFileFor(ws)) : null) ?? read(CONTRACT_FILE) ?? {};
+  return {
+    claude: Array.isArray(o.claude) ? o.claude : [],
+    codex: Array.isArray(o.codex) ? o.codex : [],
+    claudeChecklist: o.claudeChecklist !== false,
+    codexChecklist: o.codexChecklist !== false,
+    verifyMode: normVerifyMode(o),
+  };
 }
 
-function saveContract(c: Contract): void {
-  fs.mkdirSync(path.dirname(CONTRACT_FILE), { recursive: true });
-  fs.writeFileSync(CONTRACT_FILE, JSON.stringify({ ...c, updatedAt: new Date().toISOString() }, null, 2), "utf8");
+function saveContract(ws: string | null, c: Contract): void {
+  // 프로젝트별 파일에 저장(전역 기본값은 다른 미설정 프로젝트의 시드로 보존). ws 없으면 전역에 저장.
+  const file = ws ? contractFileFor(ws) : CONTRACT_FILE;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ ...c, workspace: ws || undefined, updatedAt: new Date().toISOString() }, null, 2), "utf8");
 }
 
 function workspaceLink(links: ReturnType<typeof loadLinks>, ws: string | null): any | null {
@@ -219,7 +242,7 @@ function toTurns(msgs: Array<{ role: string; text: string }>): Turn[] {
 }
 
 function computeState(turnsN: number): BridgeState {
-  const ws = activeWorkspace() ?? currentWorkspace();
+  const ws = dashboardWorkspace();
   const links = loadLinks();
   const link = workspaceLink(links, ws);
   const linkedId: string | null = link?.codexSession ?? null;
@@ -253,12 +276,12 @@ function computeState(turnsN: number): BridgeState {
     lastActivity,
     turns,
     candidates,
-    contract: loadContract(),
+    contract: loadContract(ws),
   };
 }
 
 function relink(id: string): void {
-  const ws = activeWorkspace() ?? currentWorkspace();
+  const ws = dashboardWorkspace();
   if (!ws) return;
   let o: any = {};
   try {
@@ -300,7 +323,7 @@ class Dashboard {
           vscode.commands.executeCommand("codexBridge.refresh");
         }
         if (m?.type === "saveContract") {
-          saveContract({
+          saveContract(dashboardWorkspace(), {
             claude: Array.isArray(m.claude) ? m.claude : [],
             codex: Array.isArray(m.codex) ? m.codex : [],
             claudeChecklist: !!m.claudeChecklist,
@@ -572,7 +595,7 @@ export function activate(context: vscode.ExtensionContext): void {
   status.name = "Codex Bridge";
 
   const render = () => {
-    const ws = activeWorkspace() ?? currentWorkspace();
+    const ws = dashboardWorkspace();
     const link = workspaceLink(loadLinks(), ws);
     if (!ws) {
       status.text = "$(plug) Codex";
