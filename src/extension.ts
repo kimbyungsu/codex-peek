@@ -66,7 +66,7 @@ function activeWorkspace(): string | null {
 // 멀티루트(한 창에 폴더 여러 개)일 때만, 활성 Claude 폴더가 이 창의 폴더 중 하나면 그걸 고른다.
 function dashboardWorkspace(): string | null {
   const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
-  if (!folders.length) return activeWorkspace(); // 폴더 없이 열린 경우만 active 폴백
+  if (!folders.length) return null; // 폴더 없는 빈 창 = 프로젝트 없음 → 아무것도 안 봄(전역 active 누수 차단)
   const active = activeWorkspace();
   if (active && folders.some((f) => normWs(f) === normWs(active))) return active;
   return folders[0];

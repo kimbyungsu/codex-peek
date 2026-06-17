@@ -11,20 +11,23 @@ const { loadContract, buildInjection, buildVerifyDirective } = require("./contra
 let input = "";
 process.stdin.on("data", (d) => (input += d));
 process.stdin.on("end", () => {
-  // 활성 작업 폴더 기록(브릿지 workspace()와 동일 기준: CLAUDE_PROJECT_DIR || hook.cwd || cwd).
+  let hook = {};
   try {
-    let hook = {};
-    try {
-      hook = JSON.parse(input);
-    } catch {
-      /* ignore */
-    }
+    hook = JSON.parse(input);
+  } catch {
+    /* ignore */
+  }
+  // 이 턴의 작업 폴더 — active.json 기록과 계약 로드에 '동일하게' 적용해 둘의 키가 어긋나지 않게 한다.
+  const ws = process.env.CLAUDE_PROJECT_DIR || hook.cwd || process.cwd();
+
+  // 활성 작업 폴더 기록 → 대시보드가 VS Code 첫 폴더가 아니라 이 폴더를 따라가게.
+  try {
     const f = path.join(os.homedir(), ".codex-bridge", "active.json");
     fs.mkdirSync(path.dirname(f), { recursive: true });
     fs.writeFileSync(
       f,
       JSON.stringify({
-        workspace: process.env.CLAUDE_PROJECT_DIR || hook.cwd || process.cwd(),
+        workspace: ws,
         claudeSession: hook.session_id || process.env.CLAUDE_CODE_SESSION_ID || "",
         ts: new Date().toISOString(),
       }),
@@ -36,7 +39,7 @@ process.stdin.on("end", () => {
 
   let parts = [];
   try {
-    const c = loadContract();
+    const c = loadContract(ws);
     const rules = buildInjection(c.claude, "Claude Code", c.claudeChecklist);
     if (rules) parts.push(rules);
     if (c.verifyMode && c.verifyMode !== "off") parts.push(buildVerifyDirective(c.verifyMode));

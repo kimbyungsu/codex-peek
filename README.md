@@ -117,7 +117,7 @@ mkdir -p ~/.codex-bridge
 cp bridge/*.js ~/.codex-bridge/
 ```
 
-`contract.example.json` 을 참고해 `~/.codex-bridge/contract.json` 을 만들거나, 대시보드에서 작성합니다.
+`contract.example.json` 을 참고해 `~/.codex-bridge/contract.json`(**전역 기본값**)을 만들거나, 대시보드에서 작성합니다. 대시보드에서 저장하면 **프로젝트별 파일**(`~/.codex-bridge/contracts/<키>.json`)로 갈라지고, 아직 설정 안 한 프로젝트는 이 전역 기본값을 상속합니다.
 
 ### 2) 훅 등록
 `settings.example.json` 의 `hooks` 블록을 Claude Code `~/.claude/settings.json` 에 병합합니다.
@@ -158,8 +158,8 @@ node ~/.codex-bridge/codex-bridge.js doctor                  # 지금 어떤 cod
 ---
 
 ## 읽기 전용·안전 원칙
-- 대화 내용(`~/.codex/sessions`)은 **읽기만** 합니다. 쓰는 것은 `links.json`·`contract.json`(연결/계약)뿐.
-- `links.json`(세션 id·로컬 경로)·`contract.json`(개인 규약)은 런타임 데이터로 **저장소에서 제외**됩니다(`.gitignore`).
+- 대화 내용(`~/.codex/sessions`)은 **읽기만** 합니다. 쓰는 것은 `links.json`(연결)·계약 파일(`contract.json` 전역 기본값 + 프로젝트별 `contracts/<키>.json`)뿐.
+- `links.json`(세션 id·로컬 경로)·계약 파일들(`contract.json`·`contracts/`)은 런타임 데이터라 저장소에 포함되지 않습니다.
 - 검증 모드는 opt-in이며 Stop 훅 강제는 1회로 제한되어 작업이 멈추는 사고를 내지 않습니다.
 
 ## 라이선스

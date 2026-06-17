@@ -16,9 +16,11 @@ process.stdin.on("end", () => {
   } catch {
     process.exit(0);
   }
+  // 계약(verifyMode)을 이 턴의 작업 폴더 기준으로 로드 — contract-inject와 동일 해석(프로젝트별).
+  const ws = process.env.CLAUDE_PROJECT_DIR || j.cwd || process.cwd();
   let c;
   try {
-    c = loadContract();
+    c = loadContract(ws);
   } catch {
     process.exit(0);
   }
