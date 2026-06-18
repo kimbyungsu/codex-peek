@@ -36,6 +36,8 @@ interface BridgeState {
   turns: Turn[];
   candidates: Candidate[];
   contract: Contract;
+  baseDirective: { verifyBaseline: string; transmit: string; rejudge: string; overridden: boolean };
+  baseAvailable: boolean;
 }
 
 function normWs(p: string): string {
@@ -241,6 +243,31 @@ function toTurns(msgs: Array<{ role: string; text: string }>): Turn[] {
   return turns;
 }
 
+// 런타임 브릿지 라이브러리(단일 출처)를 불러 기본 지침 기본값/오버라이드 로직을 재사용한다.
+// 확장이 자체 복제하지 않고 ~/.codex-bridge/contract-lib.js 를 그대로 쓴다(드리프트 방지).
+function bridgeLib(): any | null {
+  try {
+    return require(path.join(HOME, ".codex-bridge", "contract-lib.js"));
+  } catch {
+    return null;
+  }
+}
+function loadBaseDirectiveSafe(): { verifyBaseline: string; transmit: string; rejudge: string; overridden: boolean } {
+  try {
+    const lib = bridgeLib();
+    if (lib && typeof lib.loadBaseDirective === "function") {
+      const cur = lib.loadBaseDirective();
+      const def = lib.BASE_DEFAULTS || {};
+      const overridden =
+        cur.verifyBaseline !== def.verifyBaseline || cur.transmit !== def.transmit || cur.rejudge !== def.rejudge;
+      return { verifyBaseline: cur.verifyBaseline || "", transmit: cur.transmit || "", rejudge: cur.rejudge || "", overridden };
+    }
+  } catch {
+    /* ignore */
+  }
+  return { verifyBaseline: "", transmit: "", rejudge: "", overridden: false };
+}
+
 function computeState(turnsN: number): BridgeState {
   const ws = dashboardWorkspace();
   const links = loadLinks();
@@ -277,6 +304,8 @@ function computeState(turnsN: number): BridgeState {
     turns,
     candidates,
     contract: loadContract(ws),
+    baseDirective: loadBaseDirectiveSafe(),
+    baseAvailable: bridgeLib() !== null,
   };
 }
 
@@ -330,6 +359,22 @@ class Dashboard {
             codexChecklist: !!m.codexChecklist,
             verifyMode: normVerifyMode({ verifyMode: m.verifyMode }),
           });
+          this.post();
+        }
+        if (m?.type === "saveBase") {
+          try {
+            bridgeLib()?.saveBaseDirective?.({ verifyBaseline: m.verifyBaseline, transmit: m.transmit, rejudge: m.rejudge });
+          } catch {
+            /* ignore */
+          }
+          this.post();
+        }
+        if (m?.type === "resetBase") {
+          try {
+            bridgeLib()?.resetBaseDirective?.();
+          } catch {
+            /* ignore */
+          }
           this.post();
         }
         if (m?.type === "refresh") this.post();
@@ -409,43 +454,73 @@ class Dashboard {
   .cand{display:flex;gap:8px;align-items:flex-start;justify-content:space-between;border:1px solid var(--vscode-panel-border);border-radius:6px;padding:8px 10px;margin-bottom:6px}
   .cand.linked{border-color:var(--vscode-charts-green);background:var(--vscode-editor-background)}
   .star{color:var(--vscode-charts-green);font-size:12px;font-weight:600}
+  /* 모노그램 에이전트(이모지 대신) */
+  .mono{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;margin:0 auto 2px;color:#fff;letter-spacing:.5px}
+  .mono.c{background:var(--vscode-charts-blue)}
+  .mono.x{background:var(--vscode-charts-green)}
+  /* 검증 모드 세그먼트 토글 */
+  .seg{display:inline-flex;border:1px solid var(--vscode-panel-border);border-radius:7px;overflow:hidden;margin-left:8px;vertical-align:middle}
+  .seg button{background:transparent;color:var(--vscode-foreground);border:0;border-right:1px solid var(--vscode-panel-border);padding:4px 11px;font-size:11px;cursor:pointer;border-radius:0}
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--vscode-charts-orange);color:#fff;font-weight:700}
+  /* 검증 대화: 사용자=오른쪽 말풍선 / Codex=왼쪽 전폭 카드 */
+  .turn{margin-bottom:14px}
+  .umsg{margin:0 0 7px auto;max-width:82%;width:fit-content;background:var(--vscode-charts-blue);color:#fff;padding:7px 12px;border-radius:13px 13px 4px 13px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
+  .vmsg{border:1px solid var(--vscode-panel-border);border-left:3px solid var(--vscode-charts-green);border-radius:4px 13px 13px 13px;padding:9px 13px;background:var(--vscode-sideBar-background)}
+  .vmsg.fail{border-left-color:var(--vscode-charts-red)}
+  .vhead{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+  .vname{font-size:11px;font-weight:600;color:var(--vscode-charts-green)}
+  .vchip{font-size:11px;font-weight:700;padding:1px 9px;border-radius:999px;border:1px solid currentColor}
+  .vchip.pass{color:var(--vscode-charts-green)}
+  .vchip.fail{color:var(--vscode-charts-red)}
+  .vbody{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.55}
+  .vbody.clip{max-height:170px;overflow:hidden;-webkit-mask-image:linear-gradient(180deg,#000 72%,transparent)}
+  .more{margin-top:7px;font-size:11px;color:var(--vscode-textLink-foreground);background:none;border:0;padding:0;cursor:pointer}
 </style></head>
 <body><main class="shell">
   <div class="top"><h1>🌉 Codex Bridge <span class="sub">Claude ⇄ Codex 자동 연결·검증</span></h1><button id="refresh" class="secondary">↻ 새로고침</button></div>
 
   <div class="hero">
-    <div class="agent claude"><div class="emo">🤖</div><div class="nm">Claude Code</div><div class="ro">구현 · implement</div></div>
+    <div class="agent claude"><div class="mono c">C</div><div class="nm">Claude</div><div class="ro">구현 · implement</div></div>
     <div class="link" id="linkViz"><div class="bar"></div><div class="emo" id="linkEmo">🔌</div><div class="st" id="linkState">연결 없음</div></div>
-    <div class="agent codex"><div class="emo">⚙️</div><div class="nm">Codex</div><div class="ro">검증 · verify</div></div>
+    <div class="agent codex"><div class="mono x">Cx</div><div class="nm">Codex</div><div class="ro">검증 · verify</div></div>
   </div>
   <div id="status" class="statusline"></div>
 
   <h2>고정 계약 · 매 턴 자동 주입</h2>
   <div class="card">
     <div class="cblock claude">
-      <div class="chead">🤖 Claude 지침 <span class="muted" style="font-weight:400">· 매 턴 주입</span></div>
+      <div class="chead">Claude 지침 <span class="muted" style="font-weight:400">· 매 턴 주입</span></div>
       <textarea id="cClaude" rows="3" placeholder="예) 추측하지 말고 파일을 직접 읽어라&#10;예) 테스트 통과 전 완료 보고 금지"></textarea>
       <label class="ck"><input type="checkbox" id="ckClaude"> 체크리스트 강제 — 각 규칙마다 [준수/위반+근거] 달게 함</label>
       <div class="hint">☑ 켜짐 → 답변 끝에 <code>[계약점검] 1) 준수 — &lt;근거&gt; / 2) 위반 — &lt;근거&gt;</code> 형식으로 규칙별 자가보고를 강제 · ☐ 꺼짐 → 규칙 텍스트만 주입</div>
     </div>
     <div class="cblock codex" style="margin-top:14px">
-      <div class="chead">⚙️ Codex 규약 <span class="muted" style="font-weight:400">· ask마다 prepend</span></div>
-      <textarea id="cCodex" rows="3" placeholder="예) 검증 결과 첫 줄에 통과/실패&#10;예) 변경한 파일 경로를 명시"></textarea>
+      <div class="chead">Codex 규약 <span class="muted" style="font-weight:400">· ask마다 prepend</span></div>
+      <textarea id="cCodex" rows="3" placeholder="예) 변경 함수의 경계값·호출부 영향까지 점검&#10;예) 근거에 파일 경로·라인 명시"></textarea>
       <label class="ck"><input type="checkbox" id="ckCodex"> 체크리스트 강제 — 검증 답에 규칙별 [준수/위반+근거] 달게 함</label>
       <div class="hint">☑ 켜짐 → Codex 검증 답에도 규칙별 <code>[계약점검]</code> 자가보고 강제 · ☐ 꺼짐 → 규약 텍스트만 prepend</div>
     </div>
     <label class="ck verify">🔁 검증 모드 — 트리거 턴에 Codex 검증→보고를 Stop 훅이 강제
-      <select id="selVerify" style="margin-left:8px">
-        <option value="off">꺼짐</option>
-        <option value="code">코드 변경 시</option>
-        <option value="plancode">플랜 확정 + 코드 변경 시</option>
-        <option value="always">모든 턴</option>
-      </select>
+      <span class="seg" id="segVerify">
+        <button type="button" data-vm="off">꺼짐</button><button type="button" data-vm="code">코드</button><button type="button" data-vm="plancode">플랜+코드</button><button type="button" data-vm="always">모든 턴</button>
+      </span>
     </label>
     <div class="hint"><b>꺼짐</b> 강제 안 함 · <b>코드 변경 시</b> 파일 편집한 턴 · <b>플랜+코드</b> 플랜 확정(ExitPlanMode)이나 편집한 턴 · <b>모든 턴</b> 매 응답. 트리거 턴엔 Codex 검증을 받고 그 결과를 반영해 보고해야 종료 가능.</div>
     <div class="row"><button id="saveC">저장</button><span id="savedAt" class="muted"></span></div>
     <div class="muted">규칙은 <b>한 줄에 하나씩</b>(Enter로 구분). 칸을 비우면 그쪽은 주입 안 함.</div>
   </div>
+  <details class="card" style="margin-top:10px">
+    <summary style="cursor:pointer;font-weight:600;font-size:13px">🔒 기본 지침 <span class="muted" style="font-weight:400">· 하네스 최소 동작 보장용 고정 규약 (커스텀 계약 아님)</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
+    <div class="hint" style="margin:8px 0 0 0">위 <b>고정 계약</b>(사용자가 작성)과 달리, 이건 하네스가 정상 동작하는 데 필요한 <b>최소 권장 기본 규약</b>입니다. 평소엔 손댈 필요 없고, 열어보거나 원하면 수정할 수 있어요. 잘못 고쳐도 <b>기본값 복원</b>으로 한 번에 되돌아갑니다.</div>
+    <div class="chead" style="margin-top:12px">검증모델에게(Codex) — 매 검증 요청 앞에 붙는 원칙</div>
+    <textarea id="bVerify" rows="5"></textarea>
+    <div class="chead" style="margin-top:12px">전달 원칙 — 검증을 요청할 때</div>
+    <textarea id="bTransmit" rows="4"></textarea>
+    <div class="chead" style="margin-top:12px">재판단 원칙 — 검증 답을 받은 뒤</div>
+    <textarea id="bRejudge" rows="5"></textarea>
+    <div class="row"><button id="saveB">기본 지침 저장</button><button id="resetB" class="secondary">기본값 복원</button><span id="savedB" class="muted"></span></div>
+  </details>
   <h2>🔍 Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
   <div id="conv"></div>
   <h2>🔗 Codex 세션 연결 <span class="sub2" id="cwsLabel">첫 발화로 식별</span></h2>
@@ -456,6 +531,9 @@ class Dashboard {
   const $ = (id) => document.getElementById(id);
   document.getElementById("refresh").addEventListener("click", () => vscode.postMessage({type:"refresh"}));
   function el(tag, cls, text){ const e=document.createElement(tag); if(cls)e.className=cls; if(text!=null)e.textContent=text; return e; }
+  let curVM = "off";
+  function setSeg(v){ curVM = v; const s=$("segVerify"); if(s) s.querySelectorAll("button").forEach((b)=>b.classList.toggle("on", b.getAttribute("data-vm")===v)); }
+  $("segVerify").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-vm]"); if(b) setSeg(b.getAttribute("data-vm")); });
   $("cands").addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-relink]");
     if (b) vscode.postMessage({type:"relink", id:b.getAttribute("data-relink")});
@@ -464,9 +542,14 @@ class Dashboard {
     const toLines = (s) => s.split("\\n").map((x) => x.trim()).filter(Boolean);
     vscode.postMessage({type:"saveContract",
       claude: toLines($("cClaude").value), codex: toLines($("cCodex").value),
-      claudeChecklist: $("ckClaude").checked, codexChecklist: $("ckCodex").checked, verifyMode: $("selVerify").value});
+      claudeChecklist: $("ckClaude").checked, codexChecklist: $("ckCodex").checked, verifyMode: curVM});
     $("savedAt").textContent = "저장됨 ✓ (다음 턴부터 적용)";
   });
+  $("saveB").addEventListener("click", () => {
+    vscode.postMessage({type:"saveBase", verifyBaseline:$("bVerify").value, transmit:$("bTransmit").value, rejudge:$("bRejudge").value});
+    $("savedB").textContent = "저장됨 ✓ (다음 턴부터 적용)";
+  });
+  $("resetB").addEventListener("click", () => { vscode.postMessage({type:"resetBase"}); $("savedB").textContent = "기본값으로 복원됨 ✓"; });
   window.addEventListener("message", (ev) => {
     if (ev.data?.type !== "data") return;
     const d = ev.data.data;
@@ -475,8 +558,19 @@ class Dashboard {
       if (document.activeElement !== $("cCodex")) $("cCodex").value = (d.contract.codex||[]).join("\\n");
       $("ckClaude").checked = d.contract.claudeChecklist !== false;
       $("ckCodex").checked = d.contract.codexChecklist !== false;
-      $("selVerify").value = d.contract.verifyMode || "off";
+      setSeg(d.contract.verifyMode || "off");
     }
+    if (d.baseDirective){
+      if (document.activeElement !== $("bVerify")) $("bVerify").value = d.baseDirective.verifyBaseline||"";
+      if (document.activeElement !== $("bTransmit")) $("bTransmit").value = d.baseDirective.transmit||"";
+      if (document.activeElement !== $("bRejudge")) $("bRejudge").value = d.baseDirective.rejudge||"";
+      const ov=$("baseOv"); if(ov) ov.textContent = d.baseDirective.overridden ? "· (수정됨)" : "· (기본값)";
+    }
+    // 런타임 라이브러리 없으면 저장/복원이 무효 → 거짓 성공 방지: 버튼 비활성 + 경고(점2 수정).
+    const baseOk = d.baseAvailable !== false;
+    if ($("saveB")) $("saveB").disabled = !baseOk;
+    if ($("resetB")) $("resetB").disabled = !baseOk;
+    if (!baseOk){ const ov=$("baseOv"); if(ov) ov.textContent = "· ⚠ 런타임 라이브러리를 찾을 수 없어 편집 불가"; const sb=$("savedB"); if(sb) sb.textContent=""; }
     // 히어로 연결 상태 시각화
     const linked = !!d.linkedId;
     $("linkViz").className = "link" + (linked ? " on" : "");
@@ -501,10 +595,28 @@ class Dashboard {
     else if (!d.turns.length) conv.appendChild(el("div","card muted","연결됨 — 아직 주고받은 대화가 없습니다(또는 세션 파일을 못 찾음)."));
     else {
       d.turns.forEach((t) => {
-        const c = el("div","card");
-        if (t.user){ c.appendChild(el("div","role","👤 사용자")); c.appendChild(el("div","text", t.user)); }
-        if (t.assistant.length){ c.appendChild(el("div","role","🤖 Codex")); c.appendChild(el("div","text", t.assistant.join("\\n\\n"))); }
-        conv.appendChild(c);
+        const wrap = el("div","turn");
+        if (t.user) wrap.appendChild(el("div","umsg", t.user));
+        let body=null, more=null;
+        if (t.assistant.length){
+          const txt = t.assistant.join("\\n\\n");
+          const first = txt.split("\\n")[0] || "";
+          const pass = /통과/.test(first) && /검증/.test(first);
+          const fail = /실패/.test(first) && /검증/.test(first);
+          const v = el("div", "vmsg" + (fail ? " fail" : ""));
+          const head = el("div","vhead");
+          head.appendChild(el("span","vname","Codex"));
+          if (pass || fail) head.appendChild(el("span","vchip " + (pass?"pass":"fail"), pass?"검증 통과":"검증 실패"));
+          v.appendChild(head);
+          body = el("div","vbody clip", txt);
+          v.appendChild(body);
+          more = el("button","more","펼치기 ▾");
+          more.addEventListener("click", () => { const clipped = body.classList.toggle("clip"); more.textContent = clipped ? "펼치기 ▾" : "접기 ▴"; });
+          v.appendChild(more);
+          wrap.appendChild(v);
+        }
+        conv.appendChild(wrap);
+        if (body && more && body.scrollHeight <= body.clientHeight + 2){ body.classList.remove("clip"); more.style.display = "none"; }
       });
     }
     const cs = $("cands"); cs.replaceChildren();

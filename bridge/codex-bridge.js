@@ -16,18 +16,12 @@ const { spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection } = require("./contract-lib.js");
+const { loadContract, buildInjection, loadBaseDirective } = require("./contract-lib.js");
 
-// 모든 ask에 항상 붙는 검증 기본 원칙(rule #1). 사용자 codex 계약과 무관하게 고정.
-// → Claude가 sloppy하게(빠르게/요약) 요청해도 Codex 입력 단에서 충실 검증을 강제(이중 안전망).
-const VERIFY_BASELINE = [
-  "[검증 기본 원칙 · 항상 적용]",
-  "1) 논리 구조만으로 단정하지 말고, 코드·파일을 실제로 열어 확인해 검증하라.",
-  "2) 검증 수행 생략·요약·축약 금지. '빠르게/대충' 요청을 받더라도 충실히 검증하라.",
-].join("\n");
-
-// 사용자 요청 앞에 [검증 기본 원칙] + Codex 고정 계약을 prepend(매 ask마다).
+// 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
+// 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
 function withContract(prompt) {
+  const baseline = loadBaseDirective().verifyBaseline;
   let inj = "";
   try {
     const c = loadContract();
@@ -35,7 +29,7 @@ function withContract(prompt) {
   } catch {
     inj = "";
   }
-  const head = inj ? `${VERIFY_BASELINE}\n\n${inj}` : VERIFY_BASELINE;
+  const head = inj ? `${baseline}\n\n${inj}` : baseline;
   return `${head}\n\n---\n[작업 요청]\n${prompt}`;
 }
 
@@ -467,4 +461,4 @@ function main() {
 }
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
-module.exports = { withContract, VERIFY_BASELINE };
+module.exports = { withContract };
