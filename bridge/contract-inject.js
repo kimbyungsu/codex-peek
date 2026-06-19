@@ -13,7 +13,7 @@ process.stdin.on("data", (d) => (input += d));
 process.stdin.on("end", () => {
   let hook = {};
   try {
-    hook = JSON.parse(input);
+    hook = JSON.parse(input) || {}; // "null" 등으로 파싱돼도 객체 유지(hook.cwd 크래시 방지)
   } catch {
     /* ignore */
   }
@@ -29,6 +29,9 @@ process.stdin.on("end", () => {
       JSON.stringify({
         workspace: ws,
         claudeSession: hook.session_id || process.env.CLAUDE_CODE_SESSION_ID || "",
+        // §5.3: 플랜 모드 감지·라이브표시용. Claude Code UserPromptSubmit 입력의 permission_mode
+        // ("plan"이면 플랜 모드). 문서 예시는 "default"라 실제 값은 실로그로 확인(빈값=미노출).
+        permissionMode: (hook && typeof hook.permission_mode === "string") ? hook.permission_mode : "",
         ts: new Date().toISOString(),
       }),
       "utf8",
