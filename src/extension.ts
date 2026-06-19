@@ -437,8 +437,13 @@ class Dashboard {
   .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
   h1{font-size:16px;margin:0;display:flex;align-items:baseline;gap:8px}
   h1 .sub{font-size:12px;font-weight:400;color:var(--vscode-descriptionForeground)}
-  h2{font-size:13.5px;font-weight:600;margin:22px 0 8px;color:var(--vscode-foreground);display:flex;align-items:baseline;gap:8px}
-  h2 .sub2{font-size:11px;font-weight:400;color:var(--vscode-descriptionForeground)}
+  h2{font-size:15px;font-weight:700;margin:26px 0 10px;color:var(--vscode-foreground);display:flex;align-items:center;gap:9px;letter-spacing:.2px}
+  h2 .sub2{font-size:11px;font-weight:400;color:var(--vscode-descriptionForeground);letter-spacing:0}
+  /* 역할별 섹션 헤더 마커 — 파랑=Claude, 초록=Codex/검증, 회색=기본지침/연결 */
+  h2.sec::before{content:"";width:4px;height:17px;border-radius:2px;background:var(--vscode-panel-border);flex:none}
+  h2.sec.claude::before{background:var(--vscode-charts-blue)}
+  h2.sec.codex::before{background:var(--vscode-charts-green)}
+  h2.sec.base::before{background:var(--vscode-descriptionForeground)}
   .hint{font-size:11px;color:var(--vscode-descriptionForeground);margin:4px 0 0 22px;line-height:1.5}
   .hint code{font-family:var(--vscode-editor-font-family);background:var(--vscode-textCodeBlock-background,var(--vscode-panel-border));padding:0 4px;border-radius:3px}
   .card{border:1px solid var(--vscode-panel-border);border-radius:8px;padding:14px;background:var(--vscode-sideBar-background);margin-bottom:10px}
@@ -474,7 +479,7 @@ class Dashboard {
   .cblock{border-left:3px solid var(--vscode-panel-border);padding-left:10px}
   .cblock.claude{border-left-color:var(--vscode-charts-blue)}
   .cblock.codex{border-left-color:var(--vscode-charts-green)}
-  .chead{font-weight:600;font-size:12px;display:flex;align-items:center;gap:6px;margin-bottom:2px}
+  .chead{font-weight:700;font-size:13px;display:flex;align-items:center;gap:6px;margin-bottom:3px}
   textarea{width:100%;box-sizing:border-box;margin-top:4px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,var(--vscode-panel-border));border-radius:5px;padding:7px;font-family:var(--vscode-editor-font-family);font-size:12px;resize:vertical}
   select{background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border,var(--vscode-panel-border));border-radius:4px;padding:3px 6px;font:inherit}
   .row{display:flex;align-items:center;gap:10px;margin:12px 0 0}
@@ -493,6 +498,14 @@ class Dashboard {
   .seg button{background:transparent;color:var(--vscode-foreground);border:0;border-right:1px solid var(--vscode-panel-border);padding:4px 11px;font-size:11px;cursor:pointer;border-radius:0}
   .seg button:last-child{border-right:0}
   .seg button.on{background:var(--vscode-charts-orange);color:#fff;font-weight:700}
+  /* 검증 시 적용되는 지침 요약(수신자별) */
+  .applybox{margin-top:14px;border-top:1px dashed var(--vscode-panel-border);padding-top:11px}
+  .applybox .ahead{font-size:11px;font-weight:600;color:var(--vscode-descriptionForeground);margin-bottom:8px}
+  .arow{display:flex;align-items:flex-start;gap:8px;font-size:11.5px;margin:6px 0;line-height:1.5}
+  .arow em{font-style:normal;color:var(--vscode-descriptionForeground);font-size:10.5px}
+  .who{flex:none;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;border:1px solid currentColor}
+  .who.claude{color:var(--vscode-charts-blue)}
+  .who.codex{color:var(--vscode-charts-green)}
   /* 검증 대화: 사용자=오른쪽 말풍선 / Codex=왼쪽 전폭 카드 */
   .turn{margin-bottom:14px}
   .umsg{margin:0 0 7px auto;max-width:82%;width:fit-content;background:var(--vscode-charts-blue);color:#fff;padding:7px 12px;border-radius:13px 13px 4px 13px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
@@ -520,7 +533,7 @@ class Dashboard {
   </div>
   <div id="status" class="statusline"></div>
 
-  <h2>사용자 계약 <span class="sub2">Claude 행동규칙 — 검증 모드와 별개로 적용</span></h2>
+  <h2 class="sec claude">사용자 계약 <span class="sub2">Claude에게 줄 행동규칙 — 검증과 별개로 적용</span></h2>
   <div class="card">
     <div class="cblock claude">
       <div class="chead">Claude 지침</div>
@@ -533,29 +546,34 @@ class Dashboard {
         <button type="button" data-im="off">꺼짐</button><button type="button" data-im="plan">플랜 모드</button><button type="button" data-im="always">항상</button>
       </span>
     </label>
-    <div class="hint"><b>꺼짐</b> 주입 안 함 · <b>플랜 모드</b> Claude Code 플랜 모드(shift+tab)일 때만 <span id="planNow"></span> · <b>항상</b> 매 턴. ※"코드 변경 시"가 없는 이유: 코드 변경은 턴이 <i>끝나야</i> 아는 신호라 턴 <i>시작</i> 주입엔 못 씀. <b>검증 모드와 무관한 별도 축.</b></div>
+    <div class="hint"><b>꺼짐</b> 주입 안 함 · <b>플랜 모드</b> Claude Code 플랜 모드(shift+tab)일 때만 <span id="planNow"></span> · <b>항상</b> 매 턴. ※"코드 변경 시"가 없는 이유: 코드 변경은 턴이 <i>끝나야</i> 아는 신호라 턴 <i>시작</i> 주입엔 못 씀. <b>검증과 무관한 별도 축.</b></div>
   </div>
 
-  <h2>검증 모드 <span class="sub2">Codex 왕복 — 끄면 'Codex 검증'만 안 함(사용자 계약은 별개)</span></h2>
+  <h2 class="sec codex">검증 <span class="sub2">Codex 왕복 — 끄면 'Codex 검증'만 안 함(사용자 계약은 별개)</span></h2>
   <div class="card">
-    <label class="ck verify">🔁 검증 모드 — 트리거 턴에 Codex 검증→보고를 Stop 훅이 강제
+    <div class="cblock codex">
+      <div class="chead">Codex 규약 <span class="muted" style="font-weight:400">· Codex에게 물어볼 때마다 붙음</span></div>
+      <textarea id="cCodex" rows="3" placeholder="예) 변경 함수의 경계값·호출부 영향까지 점검&#10;예) 근거에 파일 경로·라인 명시"></textarea>
+      <label class="ck"><input type="checkbox" id="ckCodex"> 체크리스트 강제 — 검증 답에 규칙별 [준수/위반+근거] 달게 함</label>
+      <div class="hint">☑ 켜짐 → Codex 검증 답에도 규칙별 <code>[계약점검]</code> 자가보고 강제 · ☐ 꺼짐 → 규약 텍스트만 prepend</div>
+    </div>
+    <label class="ck verify">🔁 검증 모드 — <b>언제</b> Codex 검증→보고를 강제할지
       <span class="seg" id="segVerify">
         <button type="button" data-vm="off">꺼짐</button><button type="button" data-vm="code">코드 변경 시</button><button type="button" data-vm="plancode">플랜 확정/코드 변경</button><button type="button" data-vm="always">모든 턴</button>
       </span>
     </label>
     <div class="hint"><b>꺼짐</b> 강제 안 함 · <b>코드 변경 시</b> 파일 편집한 턴 · <b>플랜 확정/코드 변경</b> ExitPlanMode(플랜 확정)이나 파일 편집한 턴 · <b>모든 턴</b> 매 응답. 트리거 턴엔 Codex 검증을 받고 그 결과를 반영해 보고해야 종료 가능.</div>
-    <div class="cblock codex" style="margin-top:14px">
-      <div class="chead">Codex 규약 <span class="muted" style="font-weight:400">· 검증 ask마다 prepend</span></div>
-      <textarea id="cCodex" rows="3" placeholder="예) 변경 함수의 경계값·호출부 영향까지 점검&#10;예) 근거에 파일 경로·라인 명시"></textarea>
-      <label class="ck"><input type="checkbox" id="ckCodex"> 체크리스트 강제 — 검증 답에 규칙별 [준수/위반+근거] 달게 함</label>
-      <div class="hint">☑ 켜짐 → Codex 검증 답에도 규칙별 <code>[계약점검]</code> 자가보고 강제 · ☐ 꺼짐 → 규약 텍스트만 prepend</div>
+    <div class="applybox">
+      <div class="ahead">이 검증에 함께 쓰이는 지침 <span class="muted" style="font-weight:400">· 내용은 아래 🔒 기본 지침에서 수정</span></div>
+      <div class="arow"><span class="who codex">Codex에게</span><span>검증 기본원칙 + 위 Codex 규약 <em>· Codex에게 물어볼 때마다</em></span></div>
+      <div class="arow"><span class="who claude">Claude에게</span><span>전달·재판단 원칙 <em>· 검증 모드를 켰을 때만</em></span></div>
     </div>
   </div>
   <div class="row"><button id="saveC">저장</button><span id="savedAt" class="muted">· 사용자 계약 + 검증 모드 함께 저장</span></div>
   <div class="muted">규칙은 <b>한 줄에 하나씩</b>(Enter로 구분). 칸을 비우면 그쪽은 주입 안 함.</div>
   <details class="card" style="margin-top:10px">
     <summary style="cursor:pointer;font-weight:600;font-size:13px">🔒 기본 지침 <span class="muted" style="font-weight:400">· 하네스 최소 동작 보장용 고정 규약 (커스텀 계약 아님)</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
-    <div class="hint" style="margin:8px 0 0 0">위 <b>고정 계약</b>(사용자가 작성)과 달리, 이건 하네스가 정상 동작하는 데 필요한 <b>최소 권장 기본 규약</b>입니다. 평소엔 손댈 필요 없고, 열어보거나 원하면 수정할 수 있어요. 잘못 고쳐도 <b>기본값 복원</b>으로 한 번에 되돌아갑니다.</div>
+    <div class="hint" style="margin:8px 0 0 0">위 <b>사용자 계약</b>(직접 작성)과 달리, 이건 하네스가 정상 동작하는 데 필요한 <b>최소 권장 기본 규약</b>입니다. 평소엔 손댈 필요 없고, 열어보거나 원하면 수정할 수 있어요. 잘못 고쳐도 <b>기본값 복원</b>으로 한 번에 되돌아갑니다.</div>
     <div class="chead" style="margin-top:12px">검증 기본원칙 <span class="muted" style="font-weight:400">→ Codex에게 · 매 검증 ask마다(검증모드 무관)</span></div>
     <textarea id="bVerify" rows="5"></textarea>
     <div class="chead" style="margin-top:12px">전달 원칙 <span class="muted" style="font-weight:400">→ Claude에게 · 검증 모드 ON일 때만</span></div>
@@ -564,9 +582,9 @@ class Dashboard {
     <textarea id="bRejudge" rows="5"></textarea>
     <div class="row"><button id="saveB">기본 지침 저장</button><button id="resetB" class="secondary">기본값 복원</button><span id="savedB" class="muted"></span></div>
   </details>
-  <h2>🔍 Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
+  <h2 class="sec codex">🔍 Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
   <div id="conv"></div>
-  <h2>🔗 Codex 세션 연결 <span class="sub2" id="cwsLabel">첫 발화로 식별</span></h2>
+  <h2 class="sec base">🔗 Codex 세션 연결 <span class="sub2" id="cwsLabel">첫 발화로 식별</span></h2>
   <div id="cands"></div>
 </main>
 <script nonce="${nonce}">
