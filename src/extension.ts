@@ -433,11 +433,11 @@ class Dashboard {
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <style>
   body{margin:0;color:var(--vscode-foreground);background:var(--vscode-editor-background);font-family:var(--vscode-font-family);font-size:var(--vscode-font-size)}
-  .shell{max-width:920px;margin:0 auto;padding:18px}
-  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
-  h1{font-size:16px;margin:0;display:flex;align-items:baseline;gap:8px}
+  .shell{max-width:960px;margin:0 auto;padding:28px 26px 40px}
+  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
+  h1{font-size:18px;margin:0;display:flex;align-items:baseline;gap:8px}
   h1 .sub{font-size:12px;font-weight:400;color:var(--vscode-descriptionForeground)}
-  h2{font-size:15px;font-weight:700;margin:26px 0 10px;color:var(--vscode-foreground);display:flex;align-items:center;gap:9px;letter-spacing:.2px}
+  h2{font-size:15px;font-weight:700;margin:40px 0 14px;color:var(--vscode-foreground);display:flex;align-items:center;gap:9px;letter-spacing:.2px}
   h2 .sub2{font-size:11px;font-weight:400;color:var(--vscode-descriptionForeground);letter-spacing:0}
   /* 역할별 섹션 헤더 마커 — 파랑=Claude, 초록=Codex/검증, 회색=기본지침/연결 */
   h2.sec::before{content:"";width:4px;height:17px;border-radius:2px;background:var(--vscode-panel-border);flex:none}
@@ -446,7 +446,7 @@ class Dashboard {
   h2.sec.base::before{background:var(--vscode-descriptionForeground)}
   .hint{font-size:11px;color:var(--vscode-descriptionForeground);margin:4px 0 0 22px;line-height:1.5}
   .hint code{font-family:var(--vscode-editor-font-family);background:var(--vscode-textCodeBlock-background,var(--vscode-panel-border));padding:0 4px;border-radius:3px}
-  .card{border:1px solid var(--vscode-panel-border);border-radius:8px;padding:14px;background:var(--vscode-sideBar-background);margin-bottom:10px}
+  .card{border:1px solid var(--vscode-panel-border);border-radius:8px;padding:17px 18px;background:var(--vscode-sideBar-background);margin-bottom:14px}
   .muted{color:var(--vscode-descriptionForeground);font-size:12px}
   .id{font-family:var(--vscode-editor-font-family);font-size:11px;color:var(--vscode-descriptionForeground);word-break:break-all}
   .role{font-weight:600;font-size:12px;margin:8px 0 3px;color:var(--vscode-descriptionForeground)}
@@ -454,7 +454,7 @@ class Dashboard {
   button{color:var(--vscode-button-foreground);background:var(--vscode-button-background);border:0;border-radius:5px;padding:5px 12px;cursor:pointer;font:inherit}
   button.secondary{background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground)}
   /* 히어로: Claude ⇄ Codex */
-  .hero{display:flex;align-items:stretch;gap:10px;margin-bottom:8px}
+  .hero{display:flex;align-items:stretch;gap:10px;margin-bottom:16px}
   .agent{flex:1;text-align:center;padding:16px 10px;border-radius:10px;border:1px solid var(--vscode-panel-border);background:var(--vscode-editor-background)}
   .agent .emo{font-size:30px;line-height:1}
   .agent .nm{font-weight:600;margin-top:6px}
@@ -484,7 +484,7 @@ class Dashboard {
   select{background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border,var(--vscode-panel-border));border-radius:4px;padding:3px 6px;font:inherit}
   .row{display:flex;align-items:center;gap:10px;margin:12px 0 0}
   label.ck{display:flex;align-items:flex-start;gap:6px;font-size:12px;color:var(--vscode-descriptionForeground);margin-top:6px;cursor:pointer}
-  label.ck.verify{margin-top:14px;color:var(--vscode-foreground);border-top:1px solid var(--vscode-panel-border);padding-top:12px;align-items:center}
+  label.ck.verify{margin-top:14px;color:var(--vscode-foreground);border-top:1px solid var(--vscode-panel-border);padding-top:12px;align-items:center;flex-wrap:wrap}
   label.ck input{margin-top:2px}
   .cand{display:flex;gap:8px;align-items:flex-start;justify-content:space-between;border:1px solid var(--vscode-panel-border);border-radius:6px;padding:8px 10px;margin-bottom:6px}
   .cand.linked{border-color:var(--vscode-charts-green);background:var(--vscode-editor-background)}
@@ -494,7 +494,7 @@ class Dashboard {
   .mono.c{background:var(--vscode-charts-blue)}
   .mono.x{background:var(--vscode-charts-green)}
   /* 검증 모드 세그먼트 토글 */
-  .seg{display:inline-flex;border:1px solid var(--vscode-panel-border);border-radius:7px;overflow:hidden;margin-left:8px;vertical-align:middle}
+  .seg{display:inline-flex;flex-wrap:wrap;max-width:100%;border:1px solid var(--vscode-panel-border);border-radius:7px;overflow:hidden;margin-left:8px;vertical-align:middle}
   .seg button{background:transparent;color:var(--vscode-foreground);border:0;border-right:1px solid var(--vscode-panel-border);padding:4px 11px;font-size:11px;cursor:pointer;border-radius:0}
   .seg button:last-child{border-right:0}
   .seg button.on{background:var(--vscode-charts-orange);color:#fff;font-weight:700}
@@ -516,7 +516,7 @@ class Dashboard {
   @keyframes savedflash{0%,15%{color:var(--vscode-charts-green);font-weight:700}100%{color:var(--vscode-descriptionForeground);font-weight:400}}
   button:active{transform:translateY(1px)}
   /* 한눈에 보기: Claude↔Codex 흐름 지도 */
-  .flowmap{margin:2px 0 16px}
+  .flowmap{margin:8px 0 26px}
   .fmtitle{font-size:12.5px;font-weight:700;margin-bottom:11px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
   .flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap}
   .fnode{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border:1px solid var(--vscode-panel-border);border-radius:9px;padding:9px 13px;background:var(--vscode-editor-background);text-align:center;font-size:11.5px;font-weight:600;min-width:72px}
