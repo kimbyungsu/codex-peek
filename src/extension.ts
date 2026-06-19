@@ -670,13 +670,24 @@ class Dashboard {
     const b = ev.target.closest("[data-relink]");
     if (b) vscode.postMessage({type:"relink", id:b.getAttribute("data-relink")});
   });
+  let pendingScroll;  // 대기 중 스크롤 타이머(연속 저장 시 취소용)
   $("saveC").addEventListener("click", () => {
+    clearTimeout(pendingScroll);  // 직전 저장의 대기 스크롤 취소
     const toLines = (s) => s.split("\\n").map((x) => x.trim()).filter(Boolean);
+    const imCh = curIM!==appIM, vmCh = curVM!==appVM;  // 저장 전 캡처: 도안(넣는 시점/검증 모드)에 영향 주는 변경인가
     vscode.postMessage({type:"saveContract",
       claude: toLines($("cClaude").value), codex: toLines($("cCodex").value),
       claudeChecklist: $("ckClaude").checked, codexChecklist: $("ckCodex").checked, verifyMode: curVM, claudeInjectMode: curIM});
     flashSaved($("savedAt"));
-    const fm=$("fmSection"); if(fm) fm.scrollIntoView({behavior:"smooth", block:"start"});  // 저장 시 도안(지도/패널)으로 스크롤 → 직후 렌더에서 바뀐 곳이 깜빡
+    // 넣는 시점/검증 모드가 바뀐 저장만: ack(✓)를 본 뒤(500ms) 도안으로 올라가며 바뀐 곳을 다시 펄스.
+    // (규칙 텍스트·체크리스트는 도안을 안 바꾸므로 스크롤 안 함 — 보여줄 변화가 없음.)
+    if((imCh || vmCh) && appVM !== null){  // appVM=null = 첫 렌더 전(초기화 미완) → 헛스크롤 방지
+      pendingScroll = setTimeout(() => {
+        const fm=$("fmSection"); if(fm) fm.scrollIntoView({behavior:"smooth", block:"start"});
+        if(imCh) flashNode($("faInject"));
+        if(vmCh){ flashNode($("faVerify")); flashNode($("sbTransmit")); flashNode($("sbVerify")); flashNode($("sbRejudge")); }
+      }, 500);
+    }
   });
   $("saveB").addEventListener("click", () => {
     vscode.postMessage({type:"saveBase", verifyBaseline:$("bVerify").value, transmit:$("bTransmit").value, rejudge:$("bRejudge").value});
