@@ -43,8 +43,14 @@ process.stdin.on("end", () => {
   let parts = [];
   try {
     const c = loadContract(ws);
-    const rules = buildInjection(c.claude, "Claude Code", c.claudeChecklist);
-    if (rules) parts.push(rules);
+    // 사용자 계약 주입 게이트: off=안 함 / plan=플랜 모드(permission_mode==="plan")일 때만 / always=매 턴.
+    // (검증모드 directive는 이 게이트와 무관한 별도 축.)
+    const planActive = hook.permission_mode === "plan";
+    const injectClaude = c.claudeInjectMode === "always" || (c.claudeInjectMode === "plan" && planActive);
+    if (injectClaude) {
+      const rules = buildInjection(c.claude, "Claude Code", c.claudeChecklist);
+      if (rules) parts.push(rules);
+    }
     if (c.verifyMode && c.verifyMode !== "off") parts.push(buildVerifyDirective(c.verifyMode));
   } catch {
     parts = [];

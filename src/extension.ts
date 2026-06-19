@@ -38,6 +38,7 @@ interface BridgeState {
   contract: Contract;
   baseDirective: { verifyBaseline: string; transmit: string; rejudge: string; overridden: boolean };
   baseAvailable: boolean;
+  permissionMode: string;
 }
 
 function normWs(p: string): string {
@@ -62,6 +63,22 @@ function activeWorkspace(): string | null {
     /* ignore */
   }
   return null;
+}
+
+// 지금 Claude가 플랜 모드인지(훅이 active.json에 기록한 permissionMode). 오래된 값은 무시(6h).
+function activePermissionMode(ws: string | null): string {
+  try {
+    const o = JSON.parse(fs.readFileSync(path.join(HOME, ".codex-bridge", "active.json"), "utf8"));
+    const ts = o && o.ts ? Date.parse(o.ts) : NaN;
+    const fresh = Number.isFinite(ts) && Date.now() - ts < 6 * 60 * 60 * 1000;
+    // 이 창의 워크스페이스와 active 기록이 같을 때만 — 다른 창의 플랜 상태가 새어 보이지 않게(창 격리).
+    if (fresh && ws && o && typeof o.workspace === "string" && normWs(o.workspace) === normWs(ws) && typeof o.permissionMode === "string") {
+      return o.permissionMode;
+    }
+  } catch {
+    /* ignore */
+  }
+  return "";
 }
 
 // 이 대시보드 창이 다룰 워크스페이스. 핵심: 창마다 '자기 폴더'를 봐서 여러 VS Code 창이 안 섞이게 한다.
@@ -91,12 +108,22 @@ function normVerifyMode(o: any): VerifyMode {
   return "off";
 }
 
+// 사용자 계약(Claude 행동규칙) 주입 시점. off=주입 안 함 / plan=Claude Code 플랜 모드일 때만 / always=매 턴.
+// 코드모드 없음(코드 변경은 사후 신호라 턴 시작 주입 불가 — verify-guard가 Stop에서 판정). 기본 always=무회귀.
+type InjectMode = "off" | "plan" | "always";
+const INJECT_MODES: InjectMode[] = ["off", "plan", "always"];
+function normInjectMode(o: any): InjectMode {
+  if (o && INJECT_MODES.includes(o.claudeInjectMode)) return o.claudeInjectMode;
+  return "always";
+}
+
 interface Contract {
   claude: string[];
   codex: string[];
   claudeChecklist: boolean;
   codexChecklist: boolean;
   verifyMode: VerifyMode;
+  claudeInjectMode: InjectMode;
 }
 
 function loadContract(ws?: string | null): Contract {
@@ -115,6 +142,7 @@ function loadContract(ws?: string | null): Contract {
     claudeChecklist: o.claudeChecklist !== false,
     codexChecklist: o.codexChecklist !== false,
     verifyMode: normVerifyMode(o),
+    claudeInjectMode: normInjectMode(o),
   };
 }
 
@@ -306,6 +334,7 @@ function computeState(turnsN: number): BridgeState {
     contract: loadContract(ws),
     baseDirective: loadBaseDirectiveSafe(),
     baseAvailable: bridgeLib() !== null,
+    permissionMode: activePermissionMode(ws),
   };
 }
 
@@ -358,6 +387,7 @@ class Dashboard {
             claudeChecklist: !!m.claudeChecklist,
             codexChecklist: !!m.codexChecklist,
             verifyMode: normVerifyMode({ verifyMode: m.verifyMode }),
+            claudeInjectMode: normInjectMode({ claudeInjectMode: m.claudeInjectMode }),
           });
           this.post();
         }
@@ -476,6 +506,9 @@ class Dashboard {
   .vbody{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.55}
   .vbody.clip{max-height:170px;overflow:hidden;-webkit-mask-image:linear-gradient(180deg,#000 72%,transparent)}
   .more{margin-top:7px;font-size:11px;color:var(--vscode-textLink-foreground);background:none;border:0;padding:0;cursor:pointer}
+  .flash{animation:savedflash 1.3s ease-out}
+  @keyframes savedflash{0%,15%{color:var(--vscode-charts-green);font-weight:700}100%{color:var(--vscode-descriptionForeground);font-weight:400}}
+  button:active{transform:translateY(1px)}
 </style></head>
 <body><main class="shell">
   <div class="top"><h1>🌉 Codex Bridge <span class="sub">Claude ⇄ Codex 자동 연결·검증</span></h1><button id="refresh" class="secondary">↻ 새로고침</button></div>
@@ -487,37 +520,47 @@ class Dashboard {
   </div>
   <div id="status" class="statusline"></div>
 
-  <h2>고정 계약 · 매 턴 자동 주입</h2>
+  <h2>사용자 계약 <span class="sub2">Claude 행동규칙 — 검증 모드와 별개로 적용</span></h2>
   <div class="card">
     <div class="cblock claude">
-      <div class="chead">Claude 지침 <span class="muted" style="font-weight:400">· 매 턴 주입</span></div>
+      <div class="chead">Claude 지침</div>
       <textarea id="cClaude" rows="3" placeholder="예) 추측하지 말고 파일을 직접 읽어라&#10;예) 테스트 통과 전 완료 보고 금지"></textarea>
       <label class="ck"><input type="checkbox" id="ckClaude"> 체크리스트 강제 — 각 규칙마다 [준수/위반+근거] 달게 함</label>
       <div class="hint">☑ 켜짐 → 답변 끝에 <code>[계약점검] 1) 준수 — &lt;근거&gt; / 2) 위반 — &lt;근거&gt;</code> 형식으로 규칙별 자가보고를 강제 · ☐ 꺼짐 → 규칙 텍스트만 주입</div>
     </div>
+    <label class="ck verify">🧩 주입 시점 — 이 규칙을 <b>언제</b> Claude에 넣을지
+      <span class="seg" id="segInject">
+        <button type="button" data-im="off">꺼짐</button><button type="button" data-im="plan">플랜 모드</button><button type="button" data-im="always">항상</button>
+      </span>
+    </label>
+    <div class="hint"><b>꺼짐</b> 주입 안 함 · <b>플랜 모드</b> Claude Code 플랜 모드(shift+tab)일 때만 <span id="planNow"></span> · <b>항상</b> 매 턴. ※"코드 변경 시"가 없는 이유: 코드 변경은 턴이 <i>끝나야</i> 아는 신호라 턴 <i>시작</i> 주입엔 못 씀. <b>검증 모드와 무관한 별도 축.</b></div>
+  </div>
+
+  <h2>검증 모드 <span class="sub2">Codex 왕복 — 끄면 'Codex 검증'만 안 함(사용자 계약은 별개)</span></h2>
+  <div class="card">
+    <label class="ck verify">🔁 검증 모드 — 트리거 턴에 Codex 검증→보고를 Stop 훅이 강제
+      <span class="seg" id="segVerify">
+        <button type="button" data-vm="off">꺼짐</button><button type="button" data-vm="code">코드 변경 시</button><button type="button" data-vm="plancode">플랜 확정/코드 변경</button><button type="button" data-vm="always">모든 턴</button>
+      </span>
+    </label>
+    <div class="hint"><b>꺼짐</b> 강제 안 함 · <b>코드 변경 시</b> 파일 편집한 턴 · <b>플랜 확정/코드 변경</b> ExitPlanMode(플랜 확정)이나 파일 편집한 턴 · <b>모든 턴</b> 매 응답. 트리거 턴엔 Codex 검증을 받고 그 결과를 반영해 보고해야 종료 가능.</div>
     <div class="cblock codex" style="margin-top:14px">
-      <div class="chead">Codex 규약 <span class="muted" style="font-weight:400">· ask마다 prepend</span></div>
+      <div class="chead">Codex 규약 <span class="muted" style="font-weight:400">· 검증 ask마다 prepend</span></div>
       <textarea id="cCodex" rows="3" placeholder="예) 변경 함수의 경계값·호출부 영향까지 점검&#10;예) 근거에 파일 경로·라인 명시"></textarea>
       <label class="ck"><input type="checkbox" id="ckCodex"> 체크리스트 강제 — 검증 답에 규칙별 [준수/위반+근거] 달게 함</label>
       <div class="hint">☑ 켜짐 → Codex 검증 답에도 규칙별 <code>[계약점검]</code> 자가보고 강제 · ☐ 꺼짐 → 규약 텍스트만 prepend</div>
     </div>
-    <label class="ck verify">🔁 검증 모드 — 트리거 턴에 Codex 검증→보고를 Stop 훅이 강제
-      <span class="seg" id="segVerify">
-        <button type="button" data-vm="off">꺼짐</button><button type="button" data-vm="code">코드</button><button type="button" data-vm="plancode">플랜+코드</button><button type="button" data-vm="always">모든 턴</button>
-      </span>
-    </label>
-    <div class="hint"><b>꺼짐</b> 강제 안 함 · <b>코드 변경 시</b> 파일 편집한 턴 · <b>플랜+코드</b> 플랜 확정(ExitPlanMode)이나 편집한 턴 · <b>모든 턴</b> 매 응답. 트리거 턴엔 Codex 검증을 받고 그 결과를 반영해 보고해야 종료 가능.</div>
-    <div class="row"><button id="saveC">저장</button><span id="savedAt" class="muted"></span></div>
-    <div class="muted">규칙은 <b>한 줄에 하나씩</b>(Enter로 구분). 칸을 비우면 그쪽은 주입 안 함.</div>
   </div>
+  <div class="row"><button id="saveC">저장</button><span id="savedAt" class="muted">· 사용자 계약 + 검증 모드 함께 저장</span></div>
+  <div class="muted">규칙은 <b>한 줄에 하나씩</b>(Enter로 구분). 칸을 비우면 그쪽은 주입 안 함.</div>
   <details class="card" style="margin-top:10px">
     <summary style="cursor:pointer;font-weight:600;font-size:13px">🔒 기본 지침 <span class="muted" style="font-weight:400">· 하네스 최소 동작 보장용 고정 규약 (커스텀 계약 아님)</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
     <div class="hint" style="margin:8px 0 0 0">위 <b>고정 계약</b>(사용자가 작성)과 달리, 이건 하네스가 정상 동작하는 데 필요한 <b>최소 권장 기본 규약</b>입니다. 평소엔 손댈 필요 없고, 열어보거나 원하면 수정할 수 있어요. 잘못 고쳐도 <b>기본값 복원</b>으로 한 번에 되돌아갑니다.</div>
-    <div class="chead" style="margin-top:12px">검증모델에게(Codex) — 매 검증 요청 앞에 붙는 원칙</div>
+    <div class="chead" style="margin-top:12px">검증 기본원칙 <span class="muted" style="font-weight:400">→ Codex에게 · 매 검증 ask마다(검증모드 무관)</span></div>
     <textarea id="bVerify" rows="5"></textarea>
-    <div class="chead" style="margin-top:12px">전달 원칙 — 검증을 요청할 때</div>
+    <div class="chead" style="margin-top:12px">전달 원칙 <span class="muted" style="font-weight:400">→ Claude에게 · 검증 모드 ON일 때만</span></div>
     <textarea id="bTransmit" rows="4"></textarea>
-    <div class="chead" style="margin-top:12px">재판단 원칙 — 검증 답을 받은 뒤</div>
+    <div class="chead" style="margin-top:12px">재판단 원칙 <span class="muted" style="font-weight:400">→ Claude에게 · 검증 모드 ON일 때만</span></div>
     <textarea id="bRejudge" rows="5"></textarea>
     <div class="row"><button id="saveB">기본 지침 저장</button><button id="resetB" class="secondary">기본값 복원</button><span id="savedB" class="muted"></span></div>
   </details>
@@ -534,6 +577,10 @@ class Dashboard {
   let curVM = "off";
   function setSeg(v){ curVM = v; const s=$("segVerify"); if(s) s.querySelectorAll("button").forEach((b)=>b.classList.toggle("on", b.getAttribute("data-vm")===v)); }
   $("segVerify").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-vm]"); if(b) setSeg(b.getAttribute("data-vm")); });
+  let curIM = "always";
+  function setSegInject(v){ curIM = v; const s=$("segInject"); if(s) s.querySelectorAll("button").forEach((b)=>b.classList.toggle("on", b.getAttribute("data-im")===v)); }
+  $("segInject").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-im]"); if(b) setSegInject(b.getAttribute("data-im")); });
+  function flashSaved(node, msg){ if(!node) return; node.textContent = msg || "저장됨 ✓ (다음 턴부터 적용)"; node.classList.remove("flash"); void node.offsetWidth; node.classList.add("flash"); }
   $("cands").addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-relink]");
     if (b) vscode.postMessage({type:"relink", id:b.getAttribute("data-relink")});
@@ -542,14 +589,14 @@ class Dashboard {
     const toLines = (s) => s.split("\\n").map((x) => x.trim()).filter(Boolean);
     vscode.postMessage({type:"saveContract",
       claude: toLines($("cClaude").value), codex: toLines($("cCodex").value),
-      claudeChecklist: $("ckClaude").checked, codexChecklist: $("ckCodex").checked, verifyMode: curVM});
-    $("savedAt").textContent = "저장됨 ✓ (다음 턴부터 적용)";
+      claudeChecklist: $("ckClaude").checked, codexChecklist: $("ckCodex").checked, verifyMode: curVM, claudeInjectMode: curIM});
+    flashSaved($("savedAt"));
   });
   $("saveB").addEventListener("click", () => {
     vscode.postMessage({type:"saveBase", verifyBaseline:$("bVerify").value, transmit:$("bTransmit").value, rejudge:$("bRejudge").value});
-    $("savedB").textContent = "저장됨 ✓ (다음 턴부터 적용)";
+    flashSaved($("savedB"));
   });
-  $("resetB").addEventListener("click", () => { vscode.postMessage({type:"resetBase"}); $("savedB").textContent = "기본값으로 복원됨 ✓"; });
+  $("resetB").addEventListener("click", () => { vscode.postMessage({type:"resetBase"}); flashSaved($("savedB"), "기본값으로 복원됨 ✓"); });
   window.addEventListener("message", (ev) => {
     if (ev.data?.type !== "data") return;
     const d = ev.data.data;
@@ -559,7 +606,11 @@ class Dashboard {
       $("ckClaude").checked = d.contract.claudeChecklist !== false;
       $("ckCodex").checked = d.contract.codexChecklist !== false;
       setSeg(d.contract.verifyMode || "off");
+      setSegInject(d.contract.claudeInjectMode || "always");
     }
+    // ④ 플랜 라이브표시: 지금 플랜 모드인가(active.json permissionMode)
+    const pn = $("planNow");
+    if (pn) pn.textContent = d.permissionMode === "plan" ? "— 지금 플랜 모드 ✓" : (d.permissionMode ? "— 지금 일반" : "");
     if (d.baseDirective){
       if (document.activeElement !== $("bVerify")) $("bVerify").value = d.baseDirective.verifyBaseline||"";
       if (document.activeElement !== $("bTransmit")) $("bTransmit").value = d.baseDirective.transmit||"";

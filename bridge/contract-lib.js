@@ -45,6 +45,8 @@ function loadContract(ws) {
     // 검증 모드: off=꺼짐 / code=코드변경 시 / plancode=플랜확정(ExitPlanMode)+코드변경 시 / always=모든 턴.
     // 기본 off(opt-in). 구버전 verify:true는 code로 마이그레이션.
     verifyMode: normVerifyMode(o),
+    // 사용자 계약 주입 시점: off / plan(플랜 모드일 때만) / always(기본·무회귀). 확장과 동일 규칙.
+    claudeInjectMode: normInjectMode(o),
   };
 }
 
@@ -53,6 +55,12 @@ function normVerifyMode(o) {
   if (o && VERIFY_MODES.includes(o.verifyMode)) return o.verifyMode;
   if (o && o.verify === true) return "code"; // 레거시 호환
   return "off";
+}
+
+const INJECT_MODES = ["off", "plan", "always"];
+function normInjectMode(o) {
+  if (o && INJECT_MODES.includes(o.claudeInjectMode)) return o.claudeInjectMode;
+  return "always"; // 기본=항상(무회귀). 누락 시 기존 동작 유지.
 }
 
 // rules(문자열 배열) → 매 턴 주입 텍스트. checklist=false면 규약만, true면 [계약점검] 강제.
