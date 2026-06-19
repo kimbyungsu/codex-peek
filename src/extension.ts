@@ -547,6 +547,9 @@ class Dashboard {
   .nowitem .why{font-size:10px;color:var(--vscode-descriptionForeground);margin-left:5px}
   .nowitem.off{opacity:.45}
   .dirtyhint{font-size:11px;color:var(--vscode-charts-orange);font-weight:600;margin-top:9px}
+  /* 저장 시 바뀐 지점 펄스(배경 깜빡) */
+  .flashpulse{animation:flashpulse 1.5s ease-out}
+  @keyframes flashpulse{0%,22%{background:var(--vscode-charts-orange);color:#fff;border-radius:5px}100%{background:transparent}}
 </style></head>
 <body><main class="shell">
   <div class="top"><h1>🌉 Codex Bridge <span class="sub">Claude ⇄ Codex 자동 연결·검증</span></h1><button id="refresh" class="secondary">↻ 새로고침</button></div>
@@ -558,7 +561,7 @@ class Dashboard {
   </div>
   <div id="status" class="statusline"></div>
 
-  <section class="flowmap">
+  <section class="flowmap" id="fmSection">
     <div class="fmtitle">🗺 한눈에 보기 <span class="muted" style="font-weight:400">· 누구에게 · 뭐가 · 언제 들어가나 (지금 <b>저장된</b> 설정 기준 — 저장하면 바뀐 곳이 깜빡여요)</span></div>
     <div class="flow">
       <div class="fnode rule">Claude<br>규칙</div>
@@ -640,12 +643,15 @@ class Dashboard {
   let curVM = "off", curIM = "always";
   let appVM = null, appIM = null;
   let curPerm = "";   // 지금 Claude Code 권한 모드(active.json) — plan 게이트 표시용
+  let shownVM, shownIM, shownPerm;   // 마지막으로 그린 상태 — watcher 중복 렌더가 진행 중 깜빡임을 지우지 않게
   function lblIM(im){ return im==="off"?"꺼짐":im==="plan"?"플랜 때만":"항상"; }
   function lblVM(vm){ return vm==="off"?"안 함":vm==="code"?"코드 변경 시":vm==="plancode"?"플랜·코드 시":"모든 턴"; }
-  function flashNode(n){ if(!n) return; n.classList.remove("flash"); void n.offsetWidth; n.classList.add("flash"); }
+  function flashNode(n){ if(!n) return; n.classList.remove("flashpulse"); void n.offsetWidth; n.classList.add("flashpulse"); }
   function setNow(node, on, label, why){ if(!node) return; node.className="nowitem "+(on?"on":"off"); node.textContent=(on?"✓ ":"✗ ")+label; node.appendChild(el("span","why",why)); }
   // 저장된 상태(appVM/appIM)로 지도 화살표 + '지금 받는 것'을 그린다. prev와 다른 항목은 깜빡.
   function renderApplied(prevVM, prevIM){
+    if(shownVM===appVM && shownIM===appIM && shownPerm===curPerm) return;  // 변화 없으면 DOM 안 건드림 → 진행 중 깜빡임 보존
+    shownVM=appVM; shownIM=appIM; shownPerm=curPerm;
     const inj=$("faInject"), ver=$("faVerify");
     if(inj){ inj.className="farrow"+(appIM!=="off"?"":" off"); const v=$("faInjectVal"); if(v) v.textContent=lblIM(appIM); }
     if(ver){ ver.className="farrow"+(appVM!=="off"?"":" off"); const v=$("faVerifyVal"); if(v) v.textContent=lblVM(appVM); }
@@ -673,8 +679,8 @@ class Dashboard {
     vscode.postMessage({type:"saveContract",
       claude: toLines($("cClaude").value), codex: toLines($("cCodex").value),
       claudeChecklist: $("ckClaude").checked, codexChecklist: $("ckCodex").checked, verifyMode: curVM, claudeInjectMode: curIM});
-    const pVM=appVM, pIM=appIM; appVM=curVM; appIM=curIM; renderApplied(pVM, pIM); markDirty();  // 저장 순간 지도·'지금 받는 것' 갱신 + 바뀐 곳 깜빡
     flashSaved($("savedAt"));
+    const fm=$("fmSection"); if(fm) fm.scrollIntoView({behavior:"smooth", block:"start"});  // 저장 시 도안(지도/패널)으로 스크롤 → 직후 렌더에서 바뀐 곳이 깜빡
   });
   $("saveB").addEventListener("click", () => {
     vscode.postMessage({type:"saveBase", verifyBaseline:$("bVerify").value, transmit:$("bTransmit").value, rejudge:$("bRejudge").value});
@@ -697,7 +703,7 @@ class Dashboard {
       // 사용자가 저장 안 한 토글 변경을 들고 있으면(dirty) 폼 선택을 보존, 아니면 저장값으로 동기화.
       const dirty = !first && ((curVM!==pVM)||(curIM!==pIM));
       if(first || !dirty){ curVM=appVM; curIM=appIM; highlightSeg("segVerify","data-vm",curVM); highlightSeg("segInject","data-im",curIM); }
-      renderApplied(undefined, undefined);
+      renderApplied(first?undefined:pVM, first?undefined:pIM);  // 저장/변경 반영 후 바뀐 축을 깜빡(첫 렌더는 깜빡 없음)
       markDirty();
     }
     // ④ 플랜 라이브표시: 지금 플랜 모드인가(active.json permissionMode)
