@@ -537,15 +537,17 @@ class Dashboard {
   .to{font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:999px;border:1px solid currentColor}
   .to.claude{color:var(--vscode-charts-blue)}
   .to.codex{color:var(--vscode-charts-green)}
-  /* 지금 받는 것 (저장된 상태 기준) */
-  .nowbox{display:flex;gap:12px;flex-wrap:wrap;margin-top:11px}
-  .nowcol{flex:1 1 240px;min-width:210px;border:1px solid var(--vscode-panel-border);border-radius:8px;padding:10px 13px;background:var(--vscode-editor-background)}
-  .nowcol.claude{border-left:3px solid var(--vscode-charts-blue)}
-  .nowcol.codex{border-left:3px solid var(--vscode-charts-green)}
-  .nowhead{font-size:11.5px;font-weight:700;margin-bottom:8px}
-  .nowitem{font-size:11.5px;margin:6px 0;line-height:1.45}
-  .nowitem .why{font-size:10px;color:var(--vscode-descriptionForeground);margin-left:5px}
-  .nowitem.off{opacity:.45}
+  /* 검증 토글 직하: '단계별 기본 원칙' 연결 패널 */
+  .stagebox{margin-top:13px;border-top:1px dashed var(--vscode-panel-border);padding-top:11px}
+  .sbhead{font-size:11px;font-weight:600;margin-bottom:9px}
+  .sbrow{font-size:11.5px;margin:7px 0;line-height:1.5;display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}
+  .sbrow.off{opacity:.42}
+  .sbmark{font-weight:700;width:11px;display:inline-block}
+  .sbrow.on .sbmark{color:var(--vscode-charts-green)}
+  .sbwhy{font-size:10px;color:var(--vscode-descriptionForeground)}
+  .who2{font-size:9.5px;font-weight:700;padding:1px 7px;border-radius:999px;border:1px solid currentColor}
+  .who2.claude{color:var(--vscode-charts-blue)}
+  .who2.codex{color:var(--vscode-charts-green)}
   .dirtyhint{font-size:11px;color:var(--vscode-charts-orange);font-weight:600;margin-top:9px}
   /* 저장 시 바뀐 지점 펄스(배경 깜빡) */
   .flashpulse{animation:flashpulse 1.5s ease-out}
@@ -569,17 +571,6 @@ class Dashboard {
       <div class="fnode actor claude"><span class="mono c">C</span>Claude<small>구현</small></div>
       <div class="farrow off" id="faVerify"><span class="lbl">검증 맡김<br><b id="faVerifyVal">안 함</b></span><span class="ln"></span></div>
       <div class="fnode actor codex"><span class="mono x">Cx</span>Codex<small>검증</small></div>
-    </div>
-    <div class="nowbox">
-      <div class="nowcol claude">
-        <div class="nowhead">🧑 Claude 가 지금 받는 것</div>
-        <div class="nowitem" id="niCRule">· Claude 규칙</div>
-        <div class="nowitem" id="niCVer">· 전달·재판단 원칙</div>
-      </div>
-      <div class="nowcol codex">
-        <div class="nowhead">🔍 Codex 가 지금 받는 것</div>
-        <div class="nowitem" id="niX">· 기본 검증원칙 + Codex 규칙</div>
-      </div>
     </div>
     <div class="dirtyhint" id="dirtyHint" style="display:none">● 토글을 바꿨어요 — <b>저장</b>해야 실제로 적용됩니다</div>
   </section>
@@ -614,19 +605,25 @@ class Dashboard {
       </span>
     </label>
     <div class="hint"><b>꺼짐</b> 강제 안 함 · <b>코드 변경 시</b> 파일 편집한 턴 · <b>플랜 확정/코드 변경</b> ExitPlanMode(플랜 확정)이나 파일 편집한 턴 · <b>모든 턴</b> 매 응답. 트리거 턴엔 Codex 검증을 받고 그 결과를 반영해 보고해야 종료 가능.</div>
+    <div class="stagebox" id="stageBox">
+      <div class="sbhead">↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요 <span class="muted" style="font-weight:400">· 지금 검증: <b id="sbState">—</b> · 내용은 아래 🔒 단계별 기본 원칙에서</span></div>
+      <div class="sbrow" id="sbTransmit"><span class="sbmark"></span><b>① Claude→Codex 넘길 때</b> · 전달 원칙 <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
+      <div class="sbrow" id="sbVerify"><span class="sbmark"></span><b>② Codex가 검증할 때</b> · 검증 기본원칙 + Codex 규칙 <span class="who2 codex">Codex</span> <span class="sbwhy"></span></div>
+      <div class="sbrow" id="sbRejudge"><span class="sbmark"></span><b>③ Codex 답을 되짚을 때</b> · 재판단 원칙 <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
+    </div>
   </div>
   <div class="row"><button id="saveC">저장</button><span id="savedAt" class="muted">· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장</span></div>
   <div class="muted">규칙은 <b>한 줄에 하나씩</b>(Enter로 구분). 칸을 비우면 그쪽은 주입 안 함.</div>
   <details class="card" style="margin-top:10px">
-    <summary style="cursor:pointer;font-weight:600;font-size:13px">🔒 기본 검증원칙 <span class="muted" style="font-weight:400">· 검증이 굴러가기 위한 기본 규칙 (직접 쓴 규칙 아님)</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
-    <div class="hint" style="margin:8px 0 0 0">위 <b>Claude·Codex 규칙</b>(직접 작성)과 달리, 이건 검증이 정상 동작하는 데 필요한 <b>기본 권장 규칙</b>입니다. 평소엔 손댈 필요 없고, 열어보거나 원하면 수정할 수 있어요. 잘못 고쳐도 <b>기본값 복원</b>으로 한 번에 되돌아갑니다.</div>
-    <div class="chead" style="margin-top:12px">검증 기본원칙 <span class="muted" style="font-weight:400">→ Codex에게 · 매 검증 ask마다(검증모드 무관)</span></div>
-    <textarea id="bVerify" rows="5"></textarea>
-    <div class="chead" style="margin-top:12px">전달 원칙 <span class="muted" style="font-weight:400">→ Claude에게 · 검증 모드 ON일 때만</span></div>
+    <summary style="cursor:pointer;font-weight:600;font-size:13px">🔒 단계별 기본 원칙 <span class="muted" style="font-weight:400">· 검증 흐름 3단계의 기본값 (직접 쓴 규칙 아님)</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
+    <div class="hint" style="margin:8px 0 0 0">위 <b>Claude·Codex 규칙</b>(네가 쓰는 것)과 달리, 이건 검증이 제대로 굴러가게 하는 <b>흐름 단계별 기본값</b>입니다. 평소엔 손댈 필요 없고, 잘못 고쳐도 <b>기본값 복원</b>으로 되돌아갑니다.</div>
+    <div class="chead" style="margin-top:12px">① 전달 원칙 <span class="muted" style="font-weight:400">→ Claude에게 · Claude가 Codex에 넘길 때 · 검증 ON일 때만</span></div>
     <textarea id="bTransmit" rows="4"></textarea>
-    <div class="chead" style="margin-top:12px">재판단 원칙 <span class="muted" style="font-weight:400">→ Claude에게 · 검증 모드 ON일 때만</span></div>
+    <div class="chead" style="margin-top:12px">② 검증 기본원칙 <span class="muted" style="font-weight:400">→ Codex에게 · Codex가 검증할 때 · 물어볼 때마다</span></div>
+    <textarea id="bVerify" rows="5"></textarea>
+    <div class="chead" style="margin-top:12px">③ 재판단 원칙 <span class="muted" style="font-weight:400">→ Claude에게 · Codex 답을 되짚을 때 · 검증 ON일 때만</span></div>
     <textarea id="bRejudge" rows="5"></textarea>
-    <div class="row"><button id="saveB">기본 검증원칙 저장</button><button id="resetB" class="secondary">기본값 복원</button><span id="savedB" class="muted"></span></div>
+    <div class="row"><button id="saveB">단계별 기본 원칙 저장</button><button id="resetB" class="secondary">기본값 복원</button><span id="savedB" class="muted"></span></div>
   </details>
   <h2 class="sec codex">🔍 Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
   <div id="conv"></div>
@@ -647,7 +644,7 @@ class Dashboard {
   function lblIM(im){ return im==="off"?"꺼짐":im==="plan"?"플랜 때만":"항상"; }
   function lblVM(vm){ return vm==="off"?"안 함":vm==="code"?"코드 변경 시":vm==="plancode"?"플랜·코드 시":"모든 턴"; }
   function flashNode(n){ if(!n) return; n.classList.remove("flashpulse"); void n.offsetWidth; n.classList.add("flashpulse"); }
-  function setNow(node, on, label, why){ if(!node) return; node.className="nowitem "+(on?"on":"off"); node.textContent=(on?"✓ ":"✗ ")+label; node.appendChild(el("span","why",why)); }
+  function setStage(node, on, why){ if(!node) return; node.classList.toggle("off", !on); node.classList.toggle("on", on); const m=node.querySelector(".sbmark"); if(m) m.textContent=on?"✓":"✗"; const w=node.querySelector(".sbwhy"); if(w) w.textContent=why; }
   // 저장된 상태(appVM/appIM)로 지도 화살표 + '지금 받는 것'을 그린다. prev와 다른 항목은 깜빡.
   function renderApplied(prevVM, prevIM){
     if(shownVM===appVM && shownIM===appIM && shownPerm===curPerm) return;  // 변화 없으면 DOM 안 건드림 → 진행 중 깜빡임 보존
@@ -655,15 +652,14 @@ class Dashboard {
     const inj=$("faInject"), ver=$("faVerify");
     if(inj){ inj.className="farrow"+(appIM!=="off"?"":" off"); const v=$("faInjectVal"); if(v) v.textContent=lblIM(appIM); }
     if(ver){ ver.className="farrow"+(appVM!=="off"?"":" off"); const v=$("faVerifyVal"); if(v) v.textContent=lblVM(appVM); }
-    const ruleOn = appIM==="always" || (appIM==="plan" && curPerm==="plan");
-    const ruleWhy = appIM==="off" ? "넣는 시점 꺼짐 → 안 들어감"
-      : appIM==="always" ? "매 턴 들어감"
-      : (curPerm==="plan" ? "플랜 모드 — 지금 들어감" : "플랜 모드일 때만 (지금은 일반 → 대기)");
-    setNow($("niCRule"), ruleOn, "Claude 규칙", ruleWhy);
-    setNow($("niCVer"), appVM!=="off", "전달·재판단 원칙", appVM==="off"?"검증 꺼짐 → 안 들어감":"검증 켜짐 → 매 턴 들어감");
-    setNow($("niX"), appVM!=="off", "기본 검증원칙 + Codex 규칙", appVM==="off"?"검증 꺼짐 → 자동 검증 없음 (수동 ask 땐 들어감)":"검증할 때 들어감");
-    if(prevIM!=null && prevIM!==appIM){ flashNode(inj); flashNode($("niCRule")); }
-    if(prevVM!=null && prevVM!==appVM){ flashNode(ver); flashNode($("niCVer")); flashNode($("niX")); }
+    // 검증 토글 직하 단계 패널: 검증 ON이면 ①③ 켜짐, ②는 검증할 때. OFF면 ①③ 꺼짐, ②는 수동 ask 때만.
+    const von = appVM!=="off";
+    const st=$("sbState"); if(st) st.textContent = von ? lblVM(appVM) : "꺼짐";
+    setStage($("sbTransmit"), von, von?"검증 켜짐 → 적용":"검증 꺼짐 → 안 들어감");
+    setStage($("sbVerify"), von, von?"검증할 때 적용":"자동 검증 없음 (수동 ask 땐 들어감)");
+    setStage($("sbRejudge"), von, von?"검증 켜짐 → 적용":"검증 꺼짐 → 안 들어감");
+    if(prevIM!=null && prevIM!==appIM){ flashNode(inj); }
+    if(prevVM!=null && prevVM!==appVM){ flashNode(ver); flashNode($("sbTransmit")); flashNode($("sbVerify")); flashNode($("sbRejudge")); }
   }
   function highlightSeg(segId, attr, v){ const s=$(segId); if(s) s.querySelectorAll("button").forEach((b)=>b.classList.toggle("on", b.getAttribute(attr)===v)); }
   function markDirty(){ const d=$("dirtyHint"); if(d) d.style.display = ((curVM!==appVM)||(curIM!==appIM)) ? "" : "none"; }
