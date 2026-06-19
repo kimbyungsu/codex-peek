@@ -527,6 +527,28 @@ class Dashboard {
   .flash{animation:savedflash 1.3s ease-out}
   @keyframes savedflash{0%,15%{color:var(--vscode-charts-green);font-weight:700}100%{color:var(--vscode-descriptionForeground);font-weight:400}}
   button:active{transform:translateY(1px)}
+  /* 한눈에 보기: Claude↔Codex 흐름 지도 */
+  .flowmap{margin:2px 0 16px}
+  .fmtitle{font-size:12.5px;font-weight:700;margin-bottom:11px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+  .flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap}
+  .fnode{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border:1px solid var(--vscode-panel-border);border-radius:9px;padding:9px 13px;background:var(--vscode-editor-background);text-align:center;font-size:11.5px;font-weight:600;min-width:72px}
+  .fnode small{font-weight:400;color:var(--vscode-descriptionForeground);font-size:10px}
+  .fnode.rule{border-style:dashed}
+  .fnode.actor.claude{border-color:var(--vscode-charts-blue)}
+  .fnode.actor.codex{border-color:var(--vscode-charts-green)}
+  .fnode .mono{width:26px;height:26px;border-radius:7px;font-size:11px;margin:0 0 1px}
+  .farrow{flex:1 1 78px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;min-width:78px;padding:0 5px 10px}
+  .farrow .lbl{font-size:10px;line-height:1.35;text-align:center;color:var(--vscode-foreground);margin-bottom:4px}
+  .farrow .ln{width:100%;height:0;border-top:2px solid var(--vscode-charts-orange);position:relative}
+  .farrow .ln::after{content:"▶";position:absolute;right:-3px;top:-8px;color:var(--vscode-charts-orange);font-size:10px;line-height:1}
+  .farrow.off .lbl{color:var(--vscode-descriptionForeground)}
+  .farrow.off .ln{border-top-color:var(--vscode-panel-border);border-top-style:dashed}
+  .farrow.off .ln::after{color:var(--vscode-panel-border)}
+  .flowback{margin-top:10px;font-size:10.5px;color:var(--vscode-descriptionForeground);line-height:1.55;border-top:1px dashed var(--vscode-panel-border);padding-top:9px}
+  /* 카드 수신자 라벨 */
+  .to{font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:999px;border:1px solid currentColor}
+  .to.claude{color:var(--vscode-charts-blue)}
+  .to.codex{color:var(--vscode-charts-green)}
 </style></head>
 <body><main class="shell">
   <div class="top"><h1>🌉 Codex Bridge <span class="sub">Claude ⇄ Codex 자동 연결·검증</span></h1><button id="refresh" class="secondary">↻ 새로고침</button></div>
@@ -538,15 +560,27 @@ class Dashboard {
   </div>
   <div id="status" class="statusline"></div>
 
-  <h2 class="sec claude">사용자 계약 <span class="sub2">Claude에게 줄 행동규칙 — 검증과 별개로 적용</span></h2>
+  <section class="flowmap">
+    <div class="fmtitle">🗺 한눈에 보기 <span class="muted" style="font-weight:400">· 누구에게 · 뭐가 · 언제 들어가나 (아래 토글을 바꾸면 화살표가 켜졌다 꺼졌다 함)</span></div>
+    <div class="flow">
+      <div class="fnode rule">Claude<br>규칙</div>
+      <div class="farrow" id="faInject"><span class="lbl">넣는 시점<br><b id="faInjectVal">항상</b></span><span class="ln"></span></div>
+      <div class="fnode actor claude"><span class="mono c">C</span>Claude<small>구현</small></div>
+      <div class="farrow off" id="faVerify"><span class="lbl">검증 맡김<br><b id="faVerifyVal">안 함</b></span><span class="ln"></span></div>
+      <div class="fnode actor codex"><span class="mono x">Cx</span>Codex<small>검증</small></div>
+    </div>
+    <div class="flowback">↩ <b>Codex</b>에게 검증을 맡길 땐 <b>기본 검증원칙 + Codex 규칙</b>이 함께 전달되고, 검증 결과를 받아 <b>Claude</b>가 보고에 반영하도록 요구돼요. 검증을 켜면 <b>전달·재판단 원칙</b>도 <b>Claude</b>에 매 턴 들어갑니다.</div>
+  </section>
+
+  <h2 class="sec claude">Claude 규칙 <span class="to claude">→ 🧑 Claude에게</span> <span class="sub2">Claude가 지킬 행동규칙 — 검증과 별개</span></h2>
   <div class="card">
     <div class="cblock claude">
-      <div class="chead">Claude 지침</div>
+      <div class="chead">규칙 <span class="muted" style="font-weight:400">· 한 줄에 하나</span></div>
       <textarea id="cClaude" rows="3" placeholder="예) 추측하지 말고 파일을 직접 읽어라&#10;예) 테스트 통과 전 완료 보고 금지"></textarea>
       <label class="ck"><input type="checkbox" id="ckClaude"> 체크리스트 강제 — 각 규칙마다 [준수/위반+근거] 달게 함</label>
       <div class="hint">☑ 켜짐 → 답변 끝에 <code>[계약점검] 1) 준수 — &lt;근거&gt; / 2) 위반 — &lt;근거&gt;</code> 형식으로 규칙별 자가보고를 강제 · ☐ 꺼짐 → 규칙 텍스트만 주입</div>
     </div>
-    <label class="ck verify">🧩 주입 시점 — 이 규칙을 <b>언제</b> Claude에 넣을지
+    <label class="ck verify">🧩 넣는 시점 — 이 규칙을 <b>언제</b> Claude에 넣을지
       <span class="seg" id="segInject">
         <button type="button" data-im="off">꺼짐</button><button type="button" data-im="plan">플랜 모드</button><button type="button" data-im="always">항상</button>
       </span>
@@ -554,13 +588,13 @@ class Dashboard {
     <div class="hint"><b>꺼짐</b> 주입 안 함 · <b>플랜 모드</b> Claude Code 플랜 모드(shift+tab)일 때만 <span id="planNow"></span> · <b>항상</b> 매 턴. ※"코드 변경 시"가 없는 이유: 코드 변경은 턴이 <i>끝나야</i> 아는 신호라 턴 <i>시작</i> 주입엔 못 씀. <b>검증과 무관한 별도 축.</b></div>
   </div>
 
-  <h2 class="sec codex">검증 <span class="sub2">Codex 왕복 — 끄면 'Codex 검증'만 안 함(사용자 계약은 별개)</span></h2>
+  <h2 class="sec codex">검증 <span class="to codex">→ 🔍 Codex</span> <span class="sub2">Codex에게 검증받기 — 끄면 검증만 안 함(Claude 규칙은 별개)</span></h2>
   <div class="card">
     <div class="cblock codex">
-      <div class="chead">Codex 규약 <span class="muted" style="font-weight:400">· Codex에게 물어볼 때마다 붙음</span></div>
+      <div class="chead">Codex 규칙 <span class="muted" style="font-weight:400">· Codex에게 물어볼 때마다 붙음</span></div>
       <textarea id="cCodex" rows="3" placeholder="예) 변경 함수의 경계값·호출부 영향까지 점검&#10;예) 근거에 파일 경로·라인 명시"></textarea>
       <label class="ck"><input type="checkbox" id="ckCodex"> 체크리스트 강제 — 검증 답에 규칙별 [준수/위반+근거] 달게 함</label>
-      <div class="hint">☑ 켜짐 → Codex 검증 답에도 규칙별 <code>[계약점검]</code> 자가보고 강제 · ☐ 꺼짐 → 규약 텍스트만 prepend</div>
+      <div class="hint">☑ 켜짐 → Codex 검증 답에도 규칙별 <code>[계약점검]</code> 자가보고 강제 · ☐ 꺼짐 → 규칙 텍스트만 붙음</div>
     </div>
     <label class="ck verify">🔁 검증 모드 — <b>언제</b> Codex 검증→보고를 강제할지
       <span class="seg" id="segVerify">
@@ -569,23 +603,23 @@ class Dashboard {
     </label>
     <div class="hint"><b>꺼짐</b> 강제 안 함 · <b>코드 변경 시</b> 파일 편집한 턴 · <b>플랜 확정/코드 변경</b> ExitPlanMode(플랜 확정)이나 파일 편집한 턴 · <b>모든 턴</b> 매 응답. 트리거 턴엔 Codex 검증을 받고 그 결과를 반영해 보고해야 종료 가능.</div>
     <div class="applybox" id="applyBox">
-      <div class="ahead">검증 모드에 따라 <b>지금</b> 적용되는 지침 <span class="muted" style="font-weight:400">· 위 토글을 바꾸면 즉시 반영 · 내용은 아래 🔒 기본 지침에서 수정</span></div>
-      <div class="arow" id="arowCodex"><span class="who codex">Codex에게</span><span>검증 기본원칙 + 위 Codex 규약 <em class="stat"></em></span></div>
+      <div class="ahead">검증 모드에 따라 <b>지금</b> 적용되는 지침 <span class="muted" style="font-weight:400">· 위 토글을 바꾸면 즉시 반영 · 내용은 아래 🔒 기본 검증원칙에서 수정</span></div>
+      <div class="arow" id="arowCodex"><span class="who codex">Codex에게</span><span>기본 검증원칙 + 위 Codex 규칙 <em class="stat"></em></span></div>
       <div class="arow" id="arowClaude"><span class="who claude">Claude에게</span><span>전달·재판단 원칙 <em class="stat"></em></span></div>
     </div>
   </div>
-  <div class="row"><button id="saveC">저장</button><span id="savedAt" class="muted">· 사용자 계약 + 검증 모드 함께 저장</span></div>
+  <div class="row"><button id="saveC">저장</button><span id="savedAt" class="muted">· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장</span></div>
   <div class="muted">규칙은 <b>한 줄에 하나씩</b>(Enter로 구분). 칸을 비우면 그쪽은 주입 안 함.</div>
   <details class="card" style="margin-top:10px">
-    <summary style="cursor:pointer;font-weight:600;font-size:13px">🔒 기본 지침 <span class="muted" style="font-weight:400">· 하네스 최소 동작 보장용 고정 규약 (커스텀 계약 아님)</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
-    <div class="hint" style="margin:8px 0 0 0">위 <b>사용자 계약</b>(직접 작성)과 달리, 이건 하네스가 정상 동작하는 데 필요한 <b>최소 권장 기본 규약</b>입니다. 평소엔 손댈 필요 없고, 열어보거나 원하면 수정할 수 있어요. 잘못 고쳐도 <b>기본값 복원</b>으로 한 번에 되돌아갑니다.</div>
+    <summary style="cursor:pointer;font-weight:600;font-size:13px">🔒 기본 검증원칙 <span class="muted" style="font-weight:400">· 검증이 굴러가기 위한 기본 규칙 (직접 쓴 규칙 아님)</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
+    <div class="hint" style="margin:8px 0 0 0">위 <b>Claude·Codex 규칙</b>(직접 작성)과 달리, 이건 검증이 정상 동작하는 데 필요한 <b>기본 권장 규칙</b>입니다. 평소엔 손댈 필요 없고, 열어보거나 원하면 수정할 수 있어요. 잘못 고쳐도 <b>기본값 복원</b>으로 한 번에 되돌아갑니다.</div>
     <div class="chead" style="margin-top:12px">검증 기본원칙 <span class="muted" style="font-weight:400">→ Codex에게 · 매 검증 ask마다(검증모드 무관)</span></div>
     <textarea id="bVerify" rows="5"></textarea>
     <div class="chead" style="margin-top:12px">전달 원칙 <span class="muted" style="font-weight:400">→ Claude에게 · 검증 모드 ON일 때만</span></div>
     <textarea id="bTransmit" rows="4"></textarea>
     <div class="chead" style="margin-top:12px">재판단 원칙 <span class="muted" style="font-weight:400">→ Claude에게 · 검증 모드 ON일 때만</span></div>
     <textarea id="bRejudge" rows="5"></textarea>
-    <div class="row"><button id="saveB">기본 지침 저장</button><button id="resetB" class="secondary">기본값 복원</button><span id="savedB" class="muted"></span></div>
+    <div class="row"><button id="saveB">기본 검증원칙 저장</button><button id="resetB" class="secondary">기본값 복원</button><span id="savedB" class="muted"></span></div>
   </details>
   <h2 class="sec codex">🔍 Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
   <div id="conv"></div>
@@ -607,10 +641,18 @@ class Dashboard {
     if(cx){ cx.className = "arow " + (on?"on":"off"); const s=cx.querySelector(".stat"); if(s) s.textContent = on ? "✓ 검증할 때 적용" : "✗ 자동 검증 안 함 (수동 ask 때만)"; }
     if(cl){ cl.className = "arow " + (on?"on":"off"); const s=cl.querySelector(".stat"); if(s) s.textContent = on ? "✓ 매 턴 주입 중" : "✗ 지금 꺼짐 — 주입 안 됨"; }
   }
-  function setSeg(v){ curVM = v; const s=$("segVerify"); if(s) s.querySelectorAll("button").forEach((b)=>b.classList.toggle("on", b.getAttribute("data-vm")===v)); updateApply(v); }
+  // 흐름 지도 화살표: 토글 상태(curIM/curVM)에 따라 켜짐/회색 + 라벨 갱신.
+  function lblIM(im){ return im==="off"?"꺼짐":im==="plan"?"플랜 때만":"항상"; }
+  function lblVM(vm){ return vm==="off"?"안 함":vm==="code"?"코드 변경 시":vm==="plancode"?"플랜·코드 시":"모든 턴"; }
+  function updateFlow(){
+    const inj=$("faInject"), ver=$("faVerify");
+    if(inj){ inj.className="farrow"+(curIM!=="off"?"":" off"); const v=$("faInjectVal"); if(v) v.textContent=lblIM(curIM); }
+    if(ver){ ver.className="farrow"+(curVM!=="off"?"":" off"); const v=$("faVerifyVal"); if(v) v.textContent=lblVM(curVM); }
+  }
+  function setSeg(v){ curVM = v; const s=$("segVerify"); if(s) s.querySelectorAll("button").forEach((b)=>b.classList.toggle("on", b.getAttribute("data-vm")===v)); updateApply(v); updateFlow(); }
   $("segVerify").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-vm]"); if(b) setSeg(b.getAttribute("data-vm")); });
   let curIM = "always";
-  function setSegInject(v){ curIM = v; const s=$("segInject"); if(s) s.querySelectorAll("button").forEach((b)=>b.classList.toggle("on", b.getAttribute("data-im")===v)); }
+  function setSegInject(v){ curIM = v; const s=$("segInject"); if(s) s.querySelectorAll("button").forEach((b)=>b.classList.toggle("on", b.getAttribute("data-im")===v)); updateFlow(); }
   $("segInject").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-im]"); if(b) setSegInject(b.getAttribute("data-im")); });
   function flashSaved(node, msg){ if(!node) return; node.textContent = msg || "저장됨 ✓ (다음 턴부터 적용)"; node.classList.remove("flash"); void node.offsetWidth; node.classList.add("flash"); }
   $("cands").addEventListener("click", (ev) => {
