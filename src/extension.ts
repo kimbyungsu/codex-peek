@@ -499,18 +499,6 @@ class Dashboard {
   .seg button:last-child{border-right:0}
   .seg button.on{background:var(--vscode-charts-orange);color:#fff;font-weight:700}
   /* 검증 시 적용되는 지침 요약(수신자별) */
-  .applybox{margin-top:14px;border-top:1px dashed var(--vscode-panel-border);padding-top:11px}
-  .applybox .ahead{font-size:11px;font-weight:600;color:var(--vscode-descriptionForeground);margin-bottom:8px}
-  .arow{display:flex;align-items:flex-start;gap:8px;font-size:11.5px;margin:6px 0;line-height:1.5}
-  .arow em{font-style:normal;color:var(--vscode-descriptionForeground);font-size:10.5px}
-  .arow .stat{font-style:normal;font-size:10.5px;font-weight:700;margin-left:2px}
-  .arow.on .stat{color:var(--vscode-charts-green)}
-  .arow.off{opacity:.5}
-  .arow.off .stat{color:var(--vscode-descriptionForeground)}
-  .arow.off .who{filter:grayscale(.65)}
-  .who{flex:none;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;border:1px solid currentColor}
-  .who.claude{color:var(--vscode-charts-blue)}
-  .who.codex{color:var(--vscode-charts-green)}
   /* 검증 대화: 사용자=오른쪽 말풍선 / Codex=왼쪽 전폭 카드 */
   .turn{margin-bottom:14px}
   .umsg{margin:0 0 7px auto;max-width:82%;width:fit-content;background:var(--vscode-charts-blue);color:#fff;padding:7px 12px;border-radius:13px 13px 4px 13px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
@@ -549,6 +537,16 @@ class Dashboard {
   .to{font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:999px;border:1px solid currentColor}
   .to.claude{color:var(--vscode-charts-blue)}
   .to.codex{color:var(--vscode-charts-green)}
+  /* 지금 받는 것 (저장된 상태 기준) */
+  .nowbox{display:flex;gap:12px;flex-wrap:wrap;margin-top:11px}
+  .nowcol{flex:1 1 240px;min-width:210px;border:1px solid var(--vscode-panel-border);border-radius:8px;padding:10px 13px;background:var(--vscode-editor-background)}
+  .nowcol.claude{border-left:3px solid var(--vscode-charts-blue)}
+  .nowcol.codex{border-left:3px solid var(--vscode-charts-green)}
+  .nowhead{font-size:11.5px;font-weight:700;margin-bottom:8px}
+  .nowitem{font-size:11.5px;margin:6px 0;line-height:1.45}
+  .nowitem .why{font-size:10px;color:var(--vscode-descriptionForeground);margin-left:5px}
+  .nowitem.off{opacity:.45}
+  .dirtyhint{font-size:11px;color:var(--vscode-charts-orange);font-weight:600;margin-top:9px}
 </style></head>
 <body><main class="shell">
   <div class="top"><h1>🌉 Codex Bridge <span class="sub">Claude ⇄ Codex 자동 연결·검증</span></h1><button id="refresh" class="secondary">↻ 새로고침</button></div>
@@ -561,7 +559,7 @@ class Dashboard {
   <div id="status" class="statusline"></div>
 
   <section class="flowmap">
-    <div class="fmtitle">🗺 한눈에 보기 <span class="muted" style="font-weight:400">· 누구에게 · 뭐가 · 언제 들어가나 (아래 토글을 바꾸면 화살표가 켜졌다 꺼졌다 함)</span></div>
+    <div class="fmtitle">🗺 한눈에 보기 <span class="muted" style="font-weight:400">· 누구에게 · 뭐가 · 언제 들어가나 (지금 <b>저장된</b> 설정 기준 — 저장하면 바뀐 곳이 깜빡여요)</span></div>
     <div class="flow">
       <div class="fnode rule">Claude<br>규칙</div>
       <div class="farrow" id="faInject"><span class="lbl">넣는 시점<br><b id="faInjectVal">항상</b></span><span class="ln"></span></div>
@@ -569,7 +567,18 @@ class Dashboard {
       <div class="farrow off" id="faVerify"><span class="lbl">검증 맡김<br><b id="faVerifyVal">안 함</b></span><span class="ln"></span></div>
       <div class="fnode actor codex"><span class="mono x">Cx</span>Codex<small>검증</small></div>
     </div>
-    <div class="flowback">↩ <b>Codex</b>에게 검증을 맡길 땐 <b>기본 검증원칙 + Codex 규칙</b>이 함께 전달되고, 검증 결과를 받아 <b>Claude</b>가 보고에 반영하도록 요구돼요. 검증을 켜면 <b>전달·재판단 원칙</b>도 <b>Claude</b>에 매 턴 들어갑니다.</div>
+    <div class="nowbox">
+      <div class="nowcol claude">
+        <div class="nowhead">🧑 Claude 가 지금 받는 것</div>
+        <div class="nowitem" id="niCRule">· Claude 규칙</div>
+        <div class="nowitem" id="niCVer">· 전달·재판단 원칙</div>
+      </div>
+      <div class="nowcol codex">
+        <div class="nowhead">🔍 Codex 가 지금 받는 것</div>
+        <div class="nowitem" id="niX">· 기본 검증원칙 + Codex 규칙</div>
+      </div>
+    </div>
+    <div class="dirtyhint" id="dirtyHint" style="display:none">● 토글을 바꿨어요 — <b>저장</b>해야 실제로 적용됩니다</div>
   </section>
 
   <h2 class="sec claude">Claude 규칙 <span class="to claude">→ 🧑 Claude에게</span> <span class="sub2">Claude가 지킬 행동규칙 — 검증과 별개</span></h2>
@@ -602,11 +611,6 @@ class Dashboard {
       </span>
     </label>
     <div class="hint"><b>꺼짐</b> 강제 안 함 · <b>코드 변경 시</b> 파일 편집한 턴 · <b>플랜 확정/코드 변경</b> ExitPlanMode(플랜 확정)이나 파일 편집한 턴 · <b>모든 턴</b> 매 응답. 트리거 턴엔 Codex 검증을 받고 그 결과를 반영해 보고해야 종료 가능.</div>
-    <div class="applybox" id="applyBox">
-      <div class="ahead">검증 모드에 따라 <b>지금</b> 적용되는 지침 <span class="muted" style="font-weight:400">· 위 토글을 바꾸면 즉시 반영 · 내용은 아래 🔒 기본 검증원칙에서 수정</span></div>
-      <div class="arow" id="arowCodex"><span class="who codex">Codex에게</span><span>기본 검증원칙 + 위 Codex 규칙 <em class="stat"></em></span></div>
-      <div class="arow" id="arowClaude"><span class="who claude">Claude에게</span><span>전달·재판단 원칙 <em class="stat"></em></span></div>
-    </div>
   </div>
   <div class="row"><button id="saveC">저장</button><span id="savedAt" class="muted">· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장</span></div>
   <div class="muted">규칙은 <b>한 줄에 하나씩</b>(Enter로 구분). 칸을 비우면 그쪽은 주입 안 함.</div>
@@ -631,29 +635,34 @@ class Dashboard {
   const $ = (id) => document.getElementById(id);
   document.getElementById("refresh").addEventListener("click", () => vscode.postMessage({type:"refresh"}));
   function el(tag, cls, text){ const e=document.createElement(tag); if(cls)e.className=cls; if(text!=null)e.textContent=text; return e; }
-  let curVM = "off";
-  // 검증 토글에 따라 "지금 무엇이 주입되는지"를 applybox에 라이브로 반영.
-  // Codex 규약/검증 기본원칙 = Codex에게 물을 때마다(off면 자동 검증 안 함 → 수동 ask 때만).
-  // 전달·재판단 = 검증 모드 != off면 매 턴 Claude에 주입(off면 주입 안 됨).
-  function updateApply(vm){
-    const on = !!vm && vm !== "off";
-    const cx = $("arowCodex"), cl = $("arowClaude");
-    if(cx){ cx.className = "arow " + (on?"on":"off"); const s=cx.querySelector(".stat"); if(s) s.textContent = on ? "✓ 검증할 때 적용" : "✗ 자동 검증 안 함 (수동 ask 때만)"; }
-    if(cl){ cl.className = "arow " + (on?"on":"off"); const s=cl.querySelector(".stat"); if(s) s.textContent = on ? "✓ 매 턴 주입 중" : "✗ 지금 꺼짐 — 주입 안 됨"; }
-  }
-  // 흐름 지도 화살표: 토글 상태(curIM/curVM)에 따라 켜짐/회색 + 라벨 갱신.
+  // 폼에서 고른 값(curVM/curIM, 저장 시 전송) vs 저장돼 실제 적용 중인 값(appVM/appIM, 지도·'지금 받는 것'에 표시).
+  // 지도/패널은 "저장된 것"만 보여주고(거짓 미리보기 방지), 저장하는 순간 바뀐 곳을 깜빡인다.
+  let curVM = "off", curIM = "always";
+  let appVM = null, appIM = null;
+  let curPerm = "";   // 지금 Claude Code 권한 모드(active.json) — plan 게이트 표시용
   function lblIM(im){ return im==="off"?"꺼짐":im==="plan"?"플랜 때만":"항상"; }
   function lblVM(vm){ return vm==="off"?"안 함":vm==="code"?"코드 변경 시":vm==="plancode"?"플랜·코드 시":"모든 턴"; }
-  function updateFlow(){
+  function flashNode(n){ if(!n) return; n.classList.remove("flash"); void n.offsetWidth; n.classList.add("flash"); }
+  function setNow(node, on, label, why){ if(!node) return; node.className="nowitem "+(on?"on":"off"); node.textContent=(on?"✓ ":"✗ ")+label; node.appendChild(el("span","why",why)); }
+  // 저장된 상태(appVM/appIM)로 지도 화살표 + '지금 받는 것'을 그린다. prev와 다른 항목은 깜빡.
+  function renderApplied(prevVM, prevIM){
     const inj=$("faInject"), ver=$("faVerify");
-    if(inj){ inj.className="farrow"+(curIM!=="off"?"":" off"); const v=$("faInjectVal"); if(v) v.textContent=lblIM(curIM); }
-    if(ver){ ver.className="farrow"+(curVM!=="off"?"":" off"); const v=$("faVerifyVal"); if(v) v.textContent=lblVM(curVM); }
+    if(inj){ inj.className="farrow"+(appIM!=="off"?"":" off"); const v=$("faInjectVal"); if(v) v.textContent=lblIM(appIM); }
+    if(ver){ ver.className="farrow"+(appVM!=="off"?"":" off"); const v=$("faVerifyVal"); if(v) v.textContent=lblVM(appVM); }
+    const ruleOn = appIM==="always" || (appIM==="plan" && curPerm==="plan");
+    const ruleWhy = appIM==="off" ? "넣는 시점 꺼짐 → 안 들어감"
+      : appIM==="always" ? "매 턴 들어감"
+      : (curPerm==="plan" ? "플랜 모드 — 지금 들어감" : "플랜 모드일 때만 (지금은 일반 → 대기)");
+    setNow($("niCRule"), ruleOn, "Claude 규칙", ruleWhy);
+    setNow($("niCVer"), appVM!=="off", "전달·재판단 원칙", appVM==="off"?"검증 꺼짐 → 안 들어감":"검증 켜짐 → 매 턴 들어감");
+    setNow($("niX"), appVM!=="off", "기본 검증원칙 + Codex 규칙", appVM==="off"?"검증 꺼짐 → 자동 검증 없음 (수동 ask 땐 들어감)":"검증할 때 들어감");
+    if(prevIM!=null && prevIM!==appIM){ flashNode(inj); flashNode($("niCRule")); }
+    if(prevVM!=null && prevVM!==appVM){ flashNode(ver); flashNode($("niCVer")); flashNode($("niX")); }
   }
-  function setSeg(v){ curVM = v; const s=$("segVerify"); if(s) s.querySelectorAll("button").forEach((b)=>b.classList.toggle("on", b.getAttribute("data-vm")===v)); updateApply(v); updateFlow(); }
-  $("segVerify").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-vm]"); if(b) setSeg(b.getAttribute("data-vm")); });
-  let curIM = "always";
-  function setSegInject(v){ curIM = v; const s=$("segInject"); if(s) s.querySelectorAll("button").forEach((b)=>b.classList.toggle("on", b.getAttribute("data-im")===v)); updateFlow(); }
-  $("segInject").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-im]"); if(b) setSegInject(b.getAttribute("data-im")); });
+  function highlightSeg(segId, attr, v){ const s=$(segId); if(s) s.querySelectorAll("button").forEach((b)=>b.classList.toggle("on", b.getAttribute(attr)===v)); }
+  function markDirty(){ const d=$("dirtyHint"); if(d) d.style.display = ((curVM!==appVM)||(curIM!==appIM)) ? "" : "none"; }
+  $("segVerify").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-vm]"); if(b){ curVM=b.getAttribute("data-vm"); highlightSeg("segVerify","data-vm",curVM); markDirty(); } });
+  $("segInject").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-im]"); if(b){ curIM=b.getAttribute("data-im"); highlightSeg("segInject","data-im",curIM); markDirty(); } });
   function flashSaved(node, msg){ if(!node) return; node.textContent = msg || "저장됨 ✓ (다음 턴부터 적용)"; node.classList.remove("flash"); void node.offsetWidth; node.classList.add("flash"); }
   $("cands").addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-relink]");
@@ -664,6 +673,7 @@ class Dashboard {
     vscode.postMessage({type:"saveContract",
       claude: toLines($("cClaude").value), codex: toLines($("cCodex").value),
       claudeChecklist: $("ckClaude").checked, codexChecklist: $("ckCodex").checked, verifyMode: curVM, claudeInjectMode: curIM});
+    const pVM=appVM, pIM=appIM; appVM=curVM; appIM=curIM; renderApplied(pVM, pIM); markDirty();  // 저장 순간 지도·'지금 받는 것' 갱신 + 바뀐 곳 깜빡
     flashSaved($("savedAt"));
   });
   $("saveB").addEventListener("click", () => {
@@ -674,13 +684,21 @@ class Dashboard {
   window.addEventListener("message", (ev) => {
     if (ev.data?.type !== "data") return;
     const d = ev.data.data;
+    curPerm = d.permissionMode || "";   // renderApplied의 plan 게이트 표시에 사용
     if (d.contract){
       if (document.activeElement !== $("cClaude")) $("cClaude").value = (d.contract.claude||[]).join("\\n");
       if (document.activeElement !== $("cCodex")) $("cCodex").value = (d.contract.codex||[]).join("\\n");
       $("ckClaude").checked = d.contract.claudeChecklist !== false;
       $("ckCodex").checked = d.contract.codexChecklist !== false;
-      setSeg(d.contract.verifyMode || "off");
-      setSegInject(d.contract.claudeInjectMode || "always");
+      const first = (appVM===null);
+      const pVM=appVM, pIM=appIM;
+      appVM = d.contract.verifyMode || "off";
+      appIM = d.contract.claudeInjectMode || "always";
+      // 사용자가 저장 안 한 토글 변경을 들고 있으면(dirty) 폼 선택을 보존, 아니면 저장값으로 동기화.
+      const dirty = !first && ((curVM!==pVM)||(curIM!==pIM));
+      if(first || !dirty){ curVM=appVM; curIM=appIM; highlightSeg("segVerify","data-vm",curVM); highlightSeg("segInject","data-im",curIM); }
+      renderApplied(undefined, undefined);
+      markDirty();
     }
     // ④ 플랜 라이브표시: 지금 플랜 모드인가(active.json permissionMode)
     const pn = $("planNow");
