@@ -503,6 +503,11 @@ class Dashboard {
   .applybox .ahead{font-size:11px;font-weight:600;color:var(--vscode-descriptionForeground);margin-bottom:8px}
   .arow{display:flex;align-items:flex-start;gap:8px;font-size:11.5px;margin:6px 0;line-height:1.5}
   .arow em{font-style:normal;color:var(--vscode-descriptionForeground);font-size:10.5px}
+  .arow .stat{font-style:normal;font-size:10.5px;font-weight:700;margin-left:2px}
+  .arow.on .stat{color:var(--vscode-charts-green)}
+  .arow.off{opacity:.5}
+  .arow.off .stat{color:var(--vscode-descriptionForeground)}
+  .arow.off .who{filter:grayscale(.65)}
   .who{flex:none;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;border:1px solid currentColor}
   .who.claude{color:var(--vscode-charts-blue)}
   .who.codex{color:var(--vscode-charts-green)}
@@ -563,10 +568,10 @@ class Dashboard {
       </span>
     </label>
     <div class="hint"><b>꺼짐</b> 강제 안 함 · <b>코드 변경 시</b> 파일 편집한 턴 · <b>플랜 확정/코드 변경</b> ExitPlanMode(플랜 확정)이나 파일 편집한 턴 · <b>모든 턴</b> 매 응답. 트리거 턴엔 Codex 검증을 받고 그 결과를 반영해 보고해야 종료 가능.</div>
-    <div class="applybox">
-      <div class="ahead">이 검증에 함께 쓰이는 지침 <span class="muted" style="font-weight:400">· 내용은 아래 🔒 기본 지침에서 수정</span></div>
-      <div class="arow"><span class="who codex">Codex에게</span><span>검증 기본원칙 + 위 Codex 규약 <em>· Codex에게 물어볼 때마다</em></span></div>
-      <div class="arow"><span class="who claude">Claude에게</span><span>전달·재판단 원칙 <em>· 검증 모드를 켰을 때만</em></span></div>
+    <div class="applybox" id="applyBox">
+      <div class="ahead">검증 모드에 따라 <b>지금</b> 적용되는 지침 <span class="muted" style="font-weight:400">· 위 토글을 바꾸면 즉시 반영 · 내용은 아래 🔒 기본 지침에서 수정</span></div>
+      <div class="arow" id="arowCodex"><span class="who codex">Codex에게</span><span>검증 기본원칙 + 위 Codex 규약 <em class="stat"></em></span></div>
+      <div class="arow" id="arowClaude"><span class="who claude">Claude에게</span><span>전달·재판단 원칙 <em class="stat"></em></span></div>
     </div>
   </div>
   <div class="row"><button id="saveC">저장</button><span id="savedAt" class="muted">· 사용자 계약 + 검증 모드 함께 저장</span></div>
@@ -593,7 +598,16 @@ class Dashboard {
   document.getElementById("refresh").addEventListener("click", () => vscode.postMessage({type:"refresh"}));
   function el(tag, cls, text){ const e=document.createElement(tag); if(cls)e.className=cls; if(text!=null)e.textContent=text; return e; }
   let curVM = "off";
-  function setSeg(v){ curVM = v; const s=$("segVerify"); if(s) s.querySelectorAll("button").forEach((b)=>b.classList.toggle("on", b.getAttribute("data-vm")===v)); }
+  // 검증 토글에 따라 "지금 무엇이 주입되는지"를 applybox에 라이브로 반영.
+  // Codex 규약/검증 기본원칙 = Codex에게 물을 때마다(off면 자동 검증 안 함 → 수동 ask 때만).
+  // 전달·재판단 = 검증 모드 != off면 매 턴 Claude에 주입(off면 주입 안 됨).
+  function updateApply(vm){
+    const on = !!vm && vm !== "off";
+    const cx = $("arowCodex"), cl = $("arowClaude");
+    if(cx){ cx.className = "arow " + (on?"on":"off"); const s=cx.querySelector(".stat"); if(s) s.textContent = on ? "✓ 검증할 때 적용" : "✗ 자동 검증 안 함 (수동 ask 때만)"; }
+    if(cl){ cl.className = "arow " + (on?"on":"off"); const s=cl.querySelector(".stat"); if(s) s.textContent = on ? "✓ 매 턴 주입 중" : "✗ 지금 꺼짐 — 주입 안 됨"; }
+  }
+  function setSeg(v){ curVM = v; const s=$("segVerify"); if(s) s.querySelectorAll("button").forEach((b)=>b.classList.toggle("on", b.getAttribute("data-vm")===v)); updateApply(v); }
   $("segVerify").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-vm]"); if(b) setSeg(b.getAttribute("data-vm")); });
   let curIM = "always";
   function setSegInject(v){ curIM = v; const s=$("segInject"); if(s) s.querySelectorAll("button").forEach((b)=>b.classList.toggle("on", b.getAttribute("data-im")===v)); }
