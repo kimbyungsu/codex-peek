@@ -578,8 +578,8 @@ class Dashboard {
   <h2 class="sec claude">Claude 규칙 <span class="to claude">→ 🧑 Claude에게</span> <span class="sub2">Claude가 지킬 행동규칙 — 검증과 별개</span></h2>
   <div class="card">
     <div class="cblock claude">
-      <div class="chead">규칙 <span class="muted" style="font-weight:400">· 한 줄에 하나</span></div>
-      <textarea id="cClaude" rows="3" placeholder="예) 추측하지 말고 파일을 직접 읽어라&#10;예) 테스트 통과 전 완료 보고 금지"></textarea>
+      <div class="chead">규칙 <span class="muted" style="font-weight:400">· 기본 원칙 말고, 이 프로젝트에만 필요한 것 · 한 줄에 하나</span></div>
+      <textarea id="cClaude" rows="3" placeholder="예) 이 레포에선 ○○ 라이브러리·패턴 쓰지 마라&#10;예) 보고는 기술용어 빼고 예시로 정리해라&#10;예) 플랜 모드로 쓸 때: 영향받는 호출부·마이그레이션 순서를 플랜에 포함해라"></textarea>
       <label class="ck"><input type="checkbox" id="ckClaude"> 체크리스트 강제 — 각 규칙마다 [준수/위반+근거] 달게 함</label>
       <div class="hint">☑ 켜짐 → 답변 끝에 <code>[계약점검] 1) 준수 — &lt;근거&gt; / 2) 위반 — &lt;근거&gt;</code> 형식으로 규칙별 자가보고를 강제 · ☐ 꺼짐 → 규칙 텍스트만 주입</div>
     </div>
@@ -594,8 +594,8 @@ class Dashboard {
   <h2 class="sec codex">검증 <span class="to codex">→ 🔍 Codex</span> <span class="sub2">Codex에게 검증받기 — 끄면 검증만 안 함(Claude 규칙은 별개)</span></h2>
   <div class="card">
     <div class="cblock codex">
-      <div class="chead">Codex 규칙 <span class="muted" style="font-weight:400">· Codex에게 물어볼 때마다 붙음</span></div>
-      <textarea id="cCodex" rows="3" placeholder="예) 변경 함수의 경계값·호출부 영향까지 점검&#10;예) 근거에 파일 경로·라인 명시"></textarea>
+      <div class="chead">Codex 규칙 <span class="muted" style="font-weight:400">· 기본 검증원칙 말고, 이 프로젝트에서 특히 볼 것 · 물어볼 때마다 붙음</span></div>
+      <textarea id="cCodex" rows="3" placeholder="예) 동시성·레이스 컨디션을 중점으로 봐라&#10;예) 결제·정산은 중복 청구·반올림 오차·롤백까지 확인해라&#10;예) 단순 포맷·스타일 지적은 검증에서 빼라"></textarea>
       <label class="ck"><input type="checkbox" id="ckCodex"> 체크리스트 강제 — 검증 답에 규칙별 [준수/위반+근거] 달게 함</label>
       <div class="hint">☑ 켜짐 → Codex 검증 답에도 규칙별 <code>[계약점검]</code> 자가보고 강제 · ☐ 꺼짐 → 규칙 텍스트만 붙음</div>
     </div>
