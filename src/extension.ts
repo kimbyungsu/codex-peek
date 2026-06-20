@@ -594,7 +594,7 @@ class Dashboard {
   <h2 class="sec codex">검증 <span class="to codex">→ 🔍 Codex</span> <span class="sub2">Codex에게 검증받기 — 끄면 검증만 안 함(Claude 규칙은 별개)</span></h2>
   <div class="card">
     <div class="cblock codex">
-      <div class="chead">Codex 규칙 <span class="muted" style="font-weight:400">· 기본 검증원칙 말고, 이 프로젝트에서 특히 볼 것 · 물어볼 때마다 붙음</span></div>
+      <div class="chead">Codex 규칙 <span class="muted" style="font-weight:400">· 기본 검증원칙 말고, 이 프로젝트에서 특히 볼 것 · Codex 검증 때마다 붙음</span></div>
       <textarea id="cCodex" rows="3" placeholder="예) 동시성·레이스 컨디션을 중점으로 봐라&#10;예) 결제·정산은 중복 청구·반올림 오차·롤백까지 확인해라&#10;예) 단순 포맷·스타일 지적은 검증에서 빼라"></textarea>
       <label class="ck"><input type="checkbox" id="ckCodex"> 체크리스트 강제 — 검증 답에 규칙별 [준수/위반+근거] 달게 함</label>
       <div class="hint">☑ 켜짐 → Codex 검증 답에도 규칙별 <code>[계약점검]</code> 자가보고 강제 · ☐ 꺼짐 → 규칙 텍스트만 붙음</div>
@@ -606,7 +606,7 @@ class Dashboard {
     </label>
     <div class="hint"><b>꺼짐</b> 강제 안 함 · <b>코드 변경 시</b> 파일 편집한 턴 · <b>플랜 확정/코드 변경</b> ExitPlanMode(플랜 확정)이나 파일 편집한 턴 · <b>모든 턴</b> 매 응답. 트리거 턴엔 Codex 검증을 받고 그 결과를 반영해 보고해야 종료 가능.</div>
     <div class="stagebox" id="stageBox">
-      <div class="sbhead">↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요 <span class="muted" style="font-weight:400">· 지금 검증: <b id="sbState">—</b> · 내용은 아래 🔒 단계별 기본 원칙에서</span></div>
+      <div class="sbhead">↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요 <span class="muted" style="font-weight:400">· 지금 검증: <b id="sbState">—</b> · 내용은 아래 ⚙️ 단계별 기본 원칙에서</span></div>
       <div class="sbrow" id="sbTransmit"><span class="sbmark"></span><b>① Claude→Codex 넘길 때</b> · 전달 원칙 <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
       <div class="sbrow" id="sbVerify"><span class="sbmark"></span><b>② Codex가 검증할 때</b> · 검증 기본원칙 + Codex 규칙 <span class="who2 codex">Codex</span> <span class="sbwhy"></span></div>
       <div class="sbrow" id="sbRejudge"><span class="sbmark"></span><b>③ Codex 답을 되짚을 때</b> · 재판단 원칙 <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
@@ -615,11 +615,11 @@ class Dashboard {
   <div class="row"><button id="saveC">저장</button><span id="savedAt" class="muted">· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장</span></div>
   <div class="muted">규칙은 <b>한 줄에 하나씩</b>(Enter로 구분). 칸을 비우면 그쪽은 주입 안 함.</div>
   <details class="card" style="margin-top:10px">
-    <summary style="cursor:pointer;font-weight:600;font-size:13px">🔒 단계별 기본 원칙 <span class="muted" style="font-weight:400">· 검증 흐름 3단계의 기본값 (직접 쓴 규칙 아님)</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
+    <summary style="cursor:pointer;font-weight:600;font-size:13px">⚙️ 단계별 기본 원칙 <span class="muted" style="font-weight:400">· 검증 흐름 3단계의 기본값 (미리 들어있는 기본값 · 필요할 때만 편집)</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
     <div class="hint" style="margin:8px 0 0 0">위 <b>Claude·Codex 규칙</b>(네가 쓰는 것)과 달리, 이건 검증이 제대로 굴러가게 하는 <b>흐름 단계별 기본값</b>입니다. 평소엔 손댈 필요 없고, 잘못 고쳐도 <b>기본값 복원</b>으로 되돌아갑니다.</div>
     <div class="chead" style="margin-top:12px">① 전달 원칙 <span class="muted" style="font-weight:400">→ Claude에게 · Claude가 Codex에 넘길 때 · 검증 ON일 때만</span></div>
     <textarea id="bTransmit" rows="4"></textarea>
-    <div class="chead" style="margin-top:12px">② 검증 기본원칙 <span class="muted" style="font-weight:400">→ Codex에게 · Codex가 검증할 때 · 물어볼 때마다</span></div>
+    <div class="chead" style="margin-top:12px">② 검증 기본원칙 <span class="muted" style="font-weight:400">→ Codex에게 · Codex 검증 때마다</span></div>
     <textarea id="bVerify" rows="5"></textarea>
     <div class="chead" style="margin-top:12px">③ 재판단 원칙 <span class="muted" style="font-weight:400">→ Claude에게 · Codex 답을 되짚을 때 · 검증 ON일 때만</span></div>
     <textarea id="bRejudge" rows="5"></textarea>
