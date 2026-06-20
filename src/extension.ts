@@ -970,6 +970,7 @@ function syncCodexHome(onDone: (changed: boolean) => void): void {
     cp.stderr?.on("data", (d) => (out += d.toString()));
     cp.on("error", () => finish(false));
     cp.on("close", () => {
+      // ⚠ 세션찾기 고장 시 1순위 점검: codex 업데이트로 'codex doctor' 출력 형식이 바뀌면 이 파싱이 깨진다.
       const m = out.match(/^\s*CODEX_HOME\s+([^\r\n]+?)\s*\(dir\)\s*$/m);
       const home = m ? m[1].trim() : "";
       let changed = false;

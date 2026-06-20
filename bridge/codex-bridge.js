@@ -120,6 +120,7 @@ function detectCodexHome() {
   });
   const out = (r.stdout || "") + "\n" + (r.stderr || "");
   // 줄 단위 앵커: 'CODEX_HOME  <경로> (dir)' 한 줄만 잡음(줄바꿈·다른 (dir) 줄 오탐 방지).
+  // ⚠ 세션찾기 고장 시 1순위 점검: codex 업데이트로 doctor 출력 형식이 바뀌면 이 정규식이 안 맞아 home 탐지가 깨진다.
   const m = out.match(/^\s*CODEX_HOME\s+([^\r\n]+?)\s*\(dir\)\s*$/m);
   const home = m ? m[1].trim() : "";
   const f = path.join(BRIDGE_DIR, "codex-home.txt");
@@ -138,7 +139,7 @@ function detectCodexHome() {
 function cmdDetectHome() {
   const { home, ok } = detectCodexHome();
   if (ok) process.stdout.write(`codex home 탐지·기록: ${home}\n  sessions = ${path.join(home, "sessions")}\n`);
-  else process.stderr.write(`codex home 탐지 실패(doctor 파싱 안 됨). 현재 폴백 = ${CODEX_HOME}\n`);
+  else process.stderr.write(`codex home 탐지 실패: 'codex doctor'에서 CODEX_HOME 줄을 못 읽음.\n  → codex 업데이트로 출력 형식이 바뀌었을 수 있음(detectCodexHome 정규식 확인). 현재 폴백 = ${CODEX_HOME}\n`);
 }
 
 function loadLinks() {
@@ -468,6 +469,9 @@ function cmdDoctor() {
   process.stdout.write(`검증 모드      : ${c ? c.verifyMode : "(계약 로드 실패)"}\n`);
   process.stdout.write(`Claude 세션    : ${claudeId() || "(env 없음)"}\n`);
   process.stdout.write(`워크스페이스   : ${workspace()}\n`);
+  const homeSrc = process.env.CODEX_HOME ? "env CODEX_HOME" : readPinnedHome() ? "codex-home.txt(자동탐지)" : "기본 ~/.codex";
+  process.stdout.write(`Codex home     : ${CODEX_HOME}  (출처: ${homeSrc})\n`);
+  process.stdout.write(`세션 폴더      : ${SESSIONS_DIR} · ${fs.existsSync(SESSIONS_DIR) ? "있음" : "없음 ← 세션 안 보이면 1순위 의심"}\n`);
   const links = loadLinks();
   const link = resolveLink(links);
   if (link) {
@@ -478,6 +482,13 @@ function cmdDoctor() {
   }
   if (!inv.shell && !runnable) {
     process.stdout.write(`\n해결: CODEX_BIN 환경변수에 codex 실행파일 또는 bin/codex.js 경로를 지정하세요.\n`);
+  }
+  if (!fs.existsSync(SESSIONS_DIR)) {
+    process.stdout.write(
+      `\n⚠ 세션 폴더가 없음. 세션 목록/연결/검증/삭제가 안 되면 1차 의심:\n` +
+        `  codex 업데이트로 'codex doctor'의 CODEX_HOME 출력 형식이 바뀌어 home 자동탐지가 깨졌을 수 있음.\n` +
+        `  → 'node codex-bridge.js detect-home' 재실행. 그래도 실패면 detectCodexHome()의 파싱 규칙(정규식) 확인.\n`,
+    );
   }
 }
 
