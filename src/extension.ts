@@ -39,6 +39,7 @@ interface BridgeState {
   baseDirective: { verifyBaseline: string; transmit: string; rejudge: string; overridden: boolean };
   baseAvailable: boolean;
   permissionMode: string;
+  codexReady: boolean;
 }
 
 function normWs(p: string): string {
@@ -335,6 +336,7 @@ function computeState(turnsN: number): BridgeState {
     baseDirective: loadBaseDirectiveSafe(),
     baseAvailable: bridgeLib() !== null,
     permissionMode: activePermissionMode(ws),
+    codexReady: !!resolveCodexPathForBridge(),
   };
 }
 
@@ -500,9 +502,19 @@ class Dashboard {
   .mono.x{background:var(--vscode-charts-green)}
   /* 검증 모드 세그먼트 토글 */
   .seg{display:inline-flex;flex-wrap:wrap;max-width:100%;border:1px solid var(--vscode-panel-border);border-radius:7px;overflow:hidden;margin-left:8px;vertical-align:middle}
-  .seg button{background:transparent;color:var(--vscode-foreground);border:0;border-right:1px solid var(--vscode-panel-border);padding:4px 11px;font-size:11px;cursor:pointer;border-radius:0}
+  .seg button{background:transparent;color:var(--vscode-foreground);border:0;border-right:1px solid var(--vscode-panel-border);padding:5px 11px;font-size:11px;cursor:pointer;border-radius:0;display:inline-flex;flex-direction:column;align-items:center;gap:1px;line-height:1.25}
+  .seg button small{font-size:9px;font-weight:400;opacity:.72}
   .seg button:last-child{border-right:0}
   .seg button.on{background:var(--vscode-charts-orange);color:#fff;font-weight:700}
+  .seg button.on small{opacity:.92}
+  .nowbadge{font-size:10px;font-weight:700;padding:1px 8px;border-radius:999px;border:1px solid var(--vscode-charts-purple);color:var(--vscode-charts-purple)}
+  /* 온보딩 배너 */
+  .onboard{border:1px solid var(--vscode-charts-orange);border-radius:9px;padding:12px 15px;margin:0 0 16px;background:var(--vscode-editor-background)}
+  .obtitle{font-size:12.5px;font-weight:700;margin-bottom:9px}
+  .obstep{font-size:11.5px;margin:6px 0;line-height:1.5}
+  .obstep .k{font-weight:700;margin-right:5px}
+  .obstep.done{color:var(--vscode-charts-green)}
+  .obstep .where{color:var(--vscode-descriptionForeground);font-size:10.5px}
   /* 검증 시 적용되는 지침 요약(수신자별) */
   /* 검증 대화: 사용자=오른쪽 말풍선 / Codex=왼쪽 전폭 카드 */
   .turn{margin-bottom:14px}
@@ -568,6 +580,13 @@ class Dashboard {
   </div>
   <div id="status" class="statusline"></div>
 
+  <section class="onboard" id="onboard" style="display:none">
+    <div class="obtitle">🚀 시작하기 <span class="muted" style="font-weight:400">· 이 3가지가 되면 매 턴 자동 검증</span></div>
+    <div class="obstep" id="ob1"></div>
+    <div class="obstep" id="ob2"></div>
+    <div class="obstep" id="ob3"></div>
+  </section>
+
   <section class="flowmap" id="fmSection">
     <div class="fmtitle">🗺 한눈에 보기 <span class="muted" style="font-weight:400">· 누구에게 · 뭐가 · 언제 들어가나 (지금 <b>저장된</b> 설정 기준 — 저장하면 바뀐 곳이 깜빡여요)</span></div>
     <div class="flow">
@@ -589,12 +608,12 @@ class Dashboard {
       <label class="ck"><input type="checkbox" id="ckClaude"> 체크리스트 강제 — 각 규칙마다 [준수/위반+근거] 달게 함</label>
       <div class="hint">☑ 켜짐 → 답변 끝에 <code>[계약점검] 1) 준수 — &lt;근거&gt; / 2) 위반 — &lt;근거&gt;</code> 형식으로 규칙별 자가보고를 강제 · ☐ 꺼짐 → 규칙 텍스트만 주입</div>
     </div>
-    <label class="ck verify">🧩 넣는 시점 — 이 규칙을 <b>언제</b> Claude에 넣을지
+    <label class="ck verify">🧩 넣는 시점 — 이 규칙을 <b>언제</b> Claude에 넣을지 <span id="planNow" class="nowbadge" style="display:none"></span>
       <span class="seg" id="segInject">
-        <button type="button" data-im="off">꺼짐</button><button type="button" data-im="plan">플랜 모드</button><button type="button" data-im="always">항상</button>
+        <button type="button" data-im="off">꺼짐<small>안 넣음</small></button><button type="button" data-im="plan">플랜 모드<small>플랜 때만</small></button><button type="button" data-im="always">항상<small>매 턴</small></button>
       </span>
     </label>
-    <div class="hint">옵션 뜻 — <b>꺼짐</b>: 안 넣음 · <b>플랜 모드</b>: 플랜 모드(shift+tab) 때만 <span id="planNow"></span> · <b>항상</b>: 매 턴 &nbsp; <span class="ic" title="'코드 변경 시'가 없는 이유: 코드 변경은 턴이 끝나야 아는 신호라, 턴 시작에 넣는 이 축에선 못 씁니다. 검증 모드와 무관한 별도 축이에요.">ⓘ '코드 변경 시'가 없는 이유</span></div>
+    <div class="hint"><span class="ic" title="'코드 변경 시'가 없는 이유: 코드 변경은 턴이 끝나야 아는 신호라, 턴 시작에 넣는 이 축에선 못 씁니다. 검증 모드와 무관한 별도 축이에요.">ⓘ '코드 변경 시'가 없는 이유</span></div>
   </div>
 
   <h2 class="sec codex">검증 <span class="to codex">→ 🔍 Codex</span> <span class="sub2">Codex에게 검증받기 — 끄면 검증만 안 함(Claude 규칙은 별개)</span></h2>
@@ -608,10 +627,10 @@ class Dashboard {
     </div>
     <label class="ck verify">🔁 검증 모드 — <b>언제</b> Codex 검증→보고를 강제할지
       <span class="seg" id="segVerify">
-        <button type="button" data-vm="off">꺼짐</button><button type="button" data-vm="code">코드 변경 시</button><button type="button" data-vm="plancode">플랜 확정/코드 변경</button><button type="button" data-vm="always">모든 턴</button>
+        <button type="button" data-vm="off">꺼짐<small>강제 안 함</small></button><button type="button" data-vm="code">코드 변경 시<small>편집한 턴</small></button><button type="button" data-vm="plancode">플랜 확정/코드 변경<small>플랜·편집 턴</small></button><button type="button" data-vm="always">모든 턴<small>매 응답</small></button>
       </span>
     </label>
-    <div class="hint">옵션 뜻 — <b>꺼짐</b>: 강제 안 함 · <b>코드 변경 시</b>: 파일 편집한 턴 · <b>플랜 확정/코드 변경</b>: 플랜 확정(ExitPlanMode) 또는 편집한 턴 · <b>모든 턴</b>: 매 응답 &nbsp; <span class="ic" title="트리거에 걸린 턴에는 Codex 검증을 받고, 그 결과를 반영해 보고해야 턴을 끝낼 수 있습니다.">ⓘ 트리거 턴이란</span></div>
+    <div class="hint"><span class="ic" title="트리거에 걸린 턴에는 Codex 검증을 받고, 그 결과를 반영해 보고해야 턴을 끝낼 수 있습니다.">ⓘ 트리거 턴이란</span></div>
     <div class="stagebox" id="stageBox">
       <div class="sbhead">↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요 <span class="muted" style="font-weight:400">· 지금 검증: <b id="sbState">—</b> · 내용은 아래 ⚙️ 단계별 기본 원칙에서</span></div>
       <div class="sbrow" id="sbTransmit"><span class="sbmark"></span><b>① Claude→Codex 넘길 때</b> · 전달 원칙 <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
@@ -721,7 +740,18 @@ class Dashboard {
     }
     // ④ 플랜 라이브표시: 지금 플랜 모드인가(active.json permissionMode)
     const pn = $("planNow");
-    if (pn) pn.textContent = d.permissionMode === "plan" ? "— 지금 플랜 모드 ✓" : (d.permissionMode ? "— 지금 일반" : "");
+    if (pn){ if(d.permissionMode==="plan"){ pn.textContent="지금: 플랜 모드 ✓"; pn.style.display=""; } else if(d.permissionMode){ pn.textContent="지금: 일반"; pn.style.display=""; } else { pn.style.display="none"; } }
+    // 온보딩: ① codex 준비 ② 연결 ③ 검증 켜기 — 셋 다 되면 배너 숨김
+    (function(){
+      const ob=$("onboard"); if(!ob) return;
+      const codexReady = !!d.codexReady, linked = !!d.linkedId;
+      const vOn = !!(d.contract && d.contract.verifyMode && d.contract.verifyMode!=="off");
+      const set=(id,done,text,where)=>{ const e=$(id); if(!e) return; e.className="obstep "+(done?"done":"todo"); e.innerHTML='<span class="k">'+(done?"✓":"○")+'</span>'+text+(where?' <span class="where">'+where+'</span>':''); };
+      set("ob1", codexReady, codexReady?"Codex 준비됨":"Codex 확장/경로 미확인", codexReady?"":"— 설치돼 있으면 보통 자동 동작 · 안 되면 설정에서 codexBridge.codexPath 지정 (PATH의 codex로도 동작 가능)");
+      set("ob2", linked, linked?"Codex 세션 연결됨":"Codex 세션 미연결", linked?"":"— 아래 '🔗 Codex 세션 연결'에서 선택 (없으면 첫 검증 때 새 세션)");
+      set("ob3", vOn, vOn?("검증 켜짐 ("+d.contract.verifyMode+")"):"검증 꺼짐", vOn?"":"— 위 '🔁 검증 모드'에서 켜기");
+      ob.style.display = (linked && vOn) ? "none" : "";   // 연결+검증ON이면 사실상 동작 중(codex readiness 함의) → 숨김
+    })();
     if (d.baseDirective){
       if (document.activeElement !== $("bVerify")) $("bVerify").value = d.baseDirective.verifyBaseline||"";
       if (document.activeElement !== $("bTransmit")) $("bTransmit").value = d.baseDirective.transmit||"";
