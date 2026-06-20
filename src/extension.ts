@@ -1049,7 +1049,7 @@ class Dashboard {
     // (규칙 텍스트·체크리스트는 도안을 안 바꾸므로 스크롤 안 함 — 보여줄 변화가 없음.)
     if((imCh || vmCh) && appVM !== null){  // appVM=null = 첫 렌더 전(초기화 미완) → 헛스크롤 방지
       pendingScroll = setTimeout(() => {
-        const fm=$("fmSection"); if(fm) fm.scrollIntoView({behavior:"smooth", block:"start"});
+        const fm=$("fmSection"); if(fm) fm.scrollIntoView({behavior:"smooth", block:"center"});  // 흐름지도가 페이지 중간에 있어 상단('start')이 아니라 중앙 정렬이 자연스러움(온보딩 이동과 동일)
         if(imCh) flashNode($("faInject"));
         if(vmCh){ flashNode($("faVerify")); flashNode($("sbTransmit")); flashNode($("sbVerify")); flashNode($("sbRejudge")); }
       }, 500);
