@@ -740,7 +740,13 @@ class Dashboard {
     }
     // ④ 플랜 라이브표시: 지금 플랜 모드인가(active.json permissionMode)
     const pn = $("planNow");
-    if (pn){ if(d.permissionMode==="plan"){ pn.textContent="지금: 플랜 모드 ✓"; pn.style.display=""; } else if(d.permissionMode){ pn.textContent="지금: 일반"; pn.style.display=""; } else { pn.style.display="none"; } }
+    if (pn){
+      // 배지는 '넣는 시점=플랜 모드'(저장값)일 때만 의미 → 그때만 표시. 지금 플랜 모드냐에 따라 적용 중/대기.
+      if((d.contract && d.contract.claudeInjectMode)==="plan"){
+        pn.style.display="";
+        pn.textContent = d.permissionMode==="plan" ? "지금 플랜 모드예요 ✓" : "지금은 플랜 모드 아니에요";
+      } else { pn.style.display="none"; }
+    }
     // 온보딩: ① codex 준비 ② 연결 ③ 검증 켜기 — 셋 다 되면 배너 숨김
     (function(){
       const ob=$("onboard"); if(!ob) return;
