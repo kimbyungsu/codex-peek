@@ -446,6 +446,11 @@ class Dashboard {
   h2.sec.base::before{background:var(--vscode-descriptionForeground)}
   .hint{font-size:11px;color:var(--vscode-descriptionForeground);margin:4px 0 0 22px;line-height:1.5}
   .hint code{font-family:var(--vscode-editor-font-family);background:var(--vscode-textCodeBlock-background,var(--vscode-panel-border));padding:0 4px;border-radius:3px}
+  .hint .ic{cursor:help;border-bottom:1px dotted currentColor;white-space:nowrap}
+  /* 규칙 입력 메타 칩(선택·형식·비움) */
+  .rulemeta{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+  .rchip{font-size:10px;color:var(--vscode-descriptionForeground);border:1px solid var(--vscode-panel-border);border-radius:999px;padding:1px 8px;white-space:nowrap}
+  .rchip.opt{color:var(--vscode-charts-blue);border-color:var(--vscode-charts-blue);font-weight:700}
   .card{border:1px solid var(--vscode-panel-border);border-radius:8px;padding:17px 18px;background:var(--vscode-sideBar-background);margin-bottom:14px}
   .muted{color:var(--vscode-descriptionForeground);font-size:12px}
   .id{font-family:var(--vscode-editor-font-family);font-size:11px;color:var(--vscode-descriptionForeground);word-break:break-all}
@@ -578,8 +583,9 @@ class Dashboard {
   <h2 class="sec claude">Claude 규칙 <span class="to claude">→ 🧑 Claude에게</span> <span class="sub2">Claude가 지킬 행동규칙 — 검증과 별개</span></h2>
   <div class="card">
     <div class="cblock claude">
-      <div class="chead">규칙 <span class="muted" style="font-weight:400">· 기본 원칙 말고, 이 프로젝트에만 필요한 것 · 한 줄에 하나</span></div>
+      <div class="chead">규칙 <span class="muted" style="font-weight:400">· 기본 원칙 말고, 이 프로젝트에만 필요한 것</span></div>
       <textarea id="cClaude" rows="3" placeholder="예) 이 레포에선 ○○ 라이브러리·패턴 쓰지 마라&#10;예) 보고는 기술용어 빼고 예시로 정리해라&#10;예) 플랜 모드로 쓸 때: 영향받는 호출부·마이그레이션 순서를 플랜에 포함해라"></textarea>
+      <div class="rulemeta"><span class="rchip opt">선택</span><span class="rchip">⏎ 한 줄 = 규칙 1개</span><span class="rchip">∅ 비우면 이 칸의 규칙만 안 붙음</span></div>
       <label class="ck"><input type="checkbox" id="ckClaude"> 체크리스트 강제 — 각 규칙마다 [준수/위반+근거] 달게 함</label>
       <div class="hint">☑ 켜짐 → 답변 끝에 <code>[계약점검] 1) 준수 — &lt;근거&gt; / 2) 위반 — &lt;근거&gt;</code> 형식으로 규칙별 자가보고를 강제 · ☐ 꺼짐 → 규칙 텍스트만 주입</div>
     </div>
@@ -588,7 +594,7 @@ class Dashboard {
         <button type="button" data-im="off">꺼짐</button><button type="button" data-im="plan">플랜 모드</button><button type="button" data-im="always">항상</button>
       </span>
     </label>
-    <div class="hint"><b>꺼짐</b> 주입 안 함 · <b>플랜 모드</b> Claude Code 플랜 모드(shift+tab)일 때만 <span id="planNow"></span> · <b>항상</b> 매 턴. ※"코드 변경 시"가 없는 이유: 코드 변경은 턴이 <i>끝나야</i> 아는 신호라 턴 <i>시작</i> 주입엔 못 씀. <b>검증과 무관한 별도 축.</b></div>
+    <div class="hint">옵션 뜻 — <b>꺼짐</b>: 안 넣음 · <b>플랜 모드</b>: 플랜 모드(shift+tab) 때만 <span id="planNow"></span> · <b>항상</b>: 매 턴 &nbsp; <span class="ic" title="'코드 변경 시'가 없는 이유: 코드 변경은 턴이 끝나야 아는 신호라, 턴 시작에 넣는 이 축에선 못 씁니다. 검증 모드와 무관한 별도 축이에요.">ⓘ '코드 변경 시'가 없는 이유</span></div>
   </div>
 
   <h2 class="sec codex">검증 <span class="to codex">→ 🔍 Codex</span> <span class="sub2">Codex에게 검증받기 — 끄면 검증만 안 함(Claude 규칙은 별개)</span></h2>
@@ -596,6 +602,7 @@ class Dashboard {
     <div class="cblock codex">
       <div class="chead">Codex 규칙 <span class="muted" style="font-weight:400">· 기본 검증원칙 말고, 이 프로젝트에서 특히 볼 것 · Codex 검증 때마다 붙음</span></div>
       <textarea id="cCodex" rows="3" placeholder="예) 동시성·레이스 컨디션을 중점으로 봐라&#10;예) 결제·정산은 중복 청구·반올림 오차·롤백까지 확인해라&#10;예) 단순 포맷·스타일 지적은 검증에서 빼라"></textarea>
+      <div class="rulemeta"><span class="rchip opt">선택</span><span class="rchip">⏎ 한 줄 = 규칙 1개</span><span class="rchip">∅ 비우면 이 칸의 규칙만 안 붙음</span></div>
       <label class="ck"><input type="checkbox" id="ckCodex"> 체크리스트 강제 — 검증 답에 규칙별 [준수/위반+근거] 달게 함</label>
       <div class="hint">☑ 켜짐 → Codex 검증 답에도 규칙별 <code>[계약점검]</code> 자가보고 강제 · ☐ 꺼짐 → 규칙 텍스트만 붙음</div>
     </div>
@@ -604,7 +611,7 @@ class Dashboard {
         <button type="button" data-vm="off">꺼짐</button><button type="button" data-vm="code">코드 변경 시</button><button type="button" data-vm="plancode">플랜 확정/코드 변경</button><button type="button" data-vm="always">모든 턴</button>
       </span>
     </label>
-    <div class="hint"><b>꺼짐</b> 강제 안 함 · <b>코드 변경 시</b> 파일 편집한 턴 · <b>플랜 확정/코드 변경</b> ExitPlanMode(플랜 확정)이나 파일 편집한 턴 · <b>모든 턴</b> 매 응답. 트리거 턴엔 Codex 검증을 받고 그 결과를 반영해 보고해야 종료 가능.</div>
+    <div class="hint">옵션 뜻 — <b>꺼짐</b>: 강제 안 함 · <b>코드 변경 시</b>: 파일 편집한 턴 · <b>플랜 확정/코드 변경</b>: 플랜 확정(ExitPlanMode) 또는 편집한 턴 · <b>모든 턴</b>: 매 응답 &nbsp; <span class="ic" title="트리거에 걸린 턴에는 Codex 검증을 받고, 그 결과를 반영해 보고해야 턴을 끝낼 수 있습니다.">ⓘ 트리거 턴이란</span></div>
     <div class="stagebox" id="stageBox">
       <div class="sbhead">↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요 <span class="muted" style="font-weight:400">· 지금 검증: <b id="sbState">—</b> · 내용은 아래 ⚙️ 단계별 기본 원칙에서</span></div>
       <div class="sbrow" id="sbTransmit"><span class="sbmark"></span><b>① Claude→Codex 넘길 때</b> · 전달 원칙 <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
@@ -613,7 +620,6 @@ class Dashboard {
     </div>
   </div>
   <div class="row"><button id="saveC">저장</button><span id="savedAt" class="muted">· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장</span></div>
-  <div class="muted">규칙은 <b>한 줄에 하나씩</b>(Enter로 구분). 칸을 비우면 그쪽은 주입 안 함.</div>
   <details class="card" style="margin-top:10px">
     <summary style="cursor:pointer;font-weight:600;font-size:13px">⚙️ 단계별 기본 원칙 <span class="muted" style="font-weight:400">· 검증 흐름 3단계의 기본값 (미리 들어있는 기본값 · 필요할 때만 편집)</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
     <div class="hint" style="margin:8px 0 0 0">위 <b>Claude·Codex 규칙</b>(네가 쓰는 것)과 달리, 이건 검증이 제대로 굴러가게 하는 <b>흐름 단계별 기본값</b>입니다. 평소엔 손댈 필요 없고, 잘못 고쳐도 <b>기본값 복원</b>으로 되돌아갑니다.</div>
