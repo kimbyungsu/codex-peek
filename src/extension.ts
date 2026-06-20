@@ -46,6 +46,11 @@ interface BridgeState {
   permissionMode: string;
   codexReady: boolean;
   onboardDismissed: boolean;
+  modelCurrent: string;   // 연결 세션 rollout 마지막 turn_context의 모델 (보기)
+  effortCurrent: string;  // 〃 생각강도 코드(low/medium/high)
+  modelPref: string;      // 저장된 선택 모델 ("" = 코덱스 기본값)
+  reasoningPref: string;  // 저장된 선택 생각강도 ("" = 기본)
+  knownModels: string[];  // datalist 추천 — 이 세션이 실제 써본 모델들(하드코딩 회피)
 }
 
 function normWs(p: string): string {
@@ -98,12 +103,13 @@ function dashboardWorkspace(): string | null {
   return folders[0];
 }
 
-function loadLinks(): { bySession: Record<string, any>; byWorkspace: Record<string, any> } {
+function loadLinks(): { bySession: Record<string, any>; byWorkspace: Record<string, any>; modelPrefs: Record<string, any> } {
   try {
     const o = JSON.parse(fs.readFileSync(LINKS_FILE, "utf8"));
-    return { bySession: o.bySession || {}, byWorkspace: o.byWorkspace || {} };
+    // modelPrefs를 보존해야 대시보드가 저장된 모델/생각강도 선택을 다시 읽어 표시한다(누락 시 picker가 늘 빈 값).
+    return { bySession: o.bySession || {}, byWorkspace: o.byWorkspace || {}, modelPrefs: o.modelPrefs || {} };
   } catch {
-    return { bySession: {}, byWorkspace: {} };
+    return { bySession: {}, byWorkspace: {}, modelPrefs: {} };
   }
 }
 
@@ -260,6 +266,27 @@ function firstSnippet(file: string): string {
   return "(내용 미상)";
 }
 
+// rollout의 turn_context에서 '현재(마지막) 모델·생각강도'와 '이 세션이 써본 모델 목록'을 뽑는다.
+// readMessages는 turn_context를 버리므로 별도 파서 필요(item4 보기). 마지막 turn_context 값 = 현재값.
+function sessionModelMeta(file: string): { model: string; effort: string; models: string[] } {
+  const models = new Set<string>();
+  let model = "", effort = "";
+  let content: string;
+  try { content = fs.readFileSync(file, "utf8"); } catch { return { model, effort, models: [] }; }
+  for (const line of content.split("\n")) {
+    const s = line.trim();
+    if (!s || s[0] !== "{") continue;
+    let o: any;
+    try { o = JSON.parse(s); } catch { continue; }
+    if ((o.type || o.payload?.type) !== "turn_context") continue;
+    const p = o.payload || o;
+    if (p.model) { model = p.model; models.add(p.model); }
+    const e = p.effort || p.reasoning_effort;
+    if (e) effort = e;
+  }
+  return { model, effort, models: [...models] };
+}
+
 function toTurns(msgs: Array<{ role: string; text: string }>): Turn[] {
   const turns: Turn[] = [];
   let cur: Turn | null = null;
@@ -311,10 +338,12 @@ function computeState(turnsN: number): BridgeState {
 
   let turns: Turn[] = [];
   let lastActivity: string | null = null;
+  let modelMeta: { model: string; effort: string; models: string[] } = { model: "", effort: "", models: [] };
   if (linkedId) {
     const file = findRolloutById(linkedId);
     if (file) {
       turns = toTurns(readMessages(file)).slice(-Math.max(1, turnsN));
+      modelMeta = sessionModelMeta(file);
       try {
         lastActivity = new Date(fs.statSync(file).mtimeMs).toLocaleString();
       } catch {
@@ -322,6 +351,7 @@ function computeState(turnsN: number): BridgeState {
       }
     }
   }
+  const pref: any = links.modelPrefs[normWs(ws || "")] || {};
 
   const hid = hiddenSessions();
   const mkCand = (r: { id: string; file: string; mtime: number }): Candidate => ({
@@ -351,6 +381,11 @@ function computeState(turnsN: number): BridgeState {
     permissionMode: activePermissionMode(ws),
     codexReady: !!resolveCodexPathForBridge(),
     onboardDismissed: fs.existsSync(path.join(HOME, ".codex-bridge", "onboard-dismissed")),
+    modelCurrent: modelMeta.model,
+    effortCurrent: modelMeta.effort,
+    modelPref: typeof pref.model === "string" ? pref.model : "",
+    reasoningPref: typeof pref.reasoning === "string" ? pref.reasoning : "",
+    knownModels: modelMeta.models,
   };
 }
 
@@ -387,6 +422,27 @@ function unlinkSession(id: string, ws: string): void {
   o.byWorkspace = o.byWorkspace || {};
   for (const k of Object.keys(o.bySession)) if (o.bySession[k]?.codexSession === id && normWs(o.bySession[k].workspace || "") === n) delete o.bySession[k];
   for (const k of Object.keys(o.byWorkspace)) if (normWs(k) === n && o.byWorkspace[k]?.codexSession === id) delete o.byWorkspace[k];
+  try {
+    fs.mkdirSync(path.dirname(LINKS_FILE), { recursive: true });
+    fs.writeFileSync(LINKS_FILE, JSON.stringify(o, null, 2), "utf8");
+  } catch {
+    /* ignore */
+  }
+}
+
+// 모델/생각강도 선택 저장(프로젝트별) — links.json modelPrefs[normWs]={model,reasoning}. 빈 값은 항목 삭제(=코덱스 기본값).
+// 브릿지(modelArgs)가 이걸 읽어 매 ask마다 -c로 재적용한다(호출별이라 세션에 안 박힘).
+function setModelPref(ws: string, model: string, reasoning: string): void {
+  const n = normWs(ws);
+  if (!n) return;
+  let o: any = {};
+  try { o = JSON.parse(fs.readFileSync(LINKS_FILE, "utf8")); } catch { o = {}; }
+  o.modelPrefs = o.modelPrefs || {};
+  const cur: any = {};
+  if (model && model.trim()) cur.model = model.trim();
+  if (reasoning && reasoning.trim()) cur.reasoning = reasoning.trim();
+  if (Object.keys(cur).length) o.modelPrefs[n] = cur;
+  else delete o.modelPrefs[n];
   try {
     fs.mkdirSync(path.dirname(LINKS_FILE), { recursive: true });
     fs.writeFileSync(LINKS_FILE, JSON.stringify(o, null, 2), "utf8");
@@ -454,6 +510,10 @@ class Dashboard {
         }
         if (m?.type === "restoreSession" && m.id) {
           setSessionHidden(String(m.id), false);
+          this.post();
+        }
+        if (m?.type === "saveModelPref") {
+          setModelPref(dashboardWorkspace() || "", String(m.model || ""), String(m.reasoning || ""));
           this.post();
         }
         if (m?.type === "saveContract") {
@@ -598,6 +658,11 @@ class Dashboard {
   .seg button:last-child{border-right:0}
   .seg button.on{background:var(--vscode-charts-orange);color:#fff;font-weight:700}
   .seg button.on small{opacity:.92}
+  .mcard{border:1px solid var(--vscode-panel-border);border-radius:8px;padding:12px 14px;background:var(--vscode-editor-background)}
+  .mrow{display:flex;align-items:center;gap:8px;margin-top:10px}
+  .mlbl{min-width:60px;color:var(--vscode-descriptionForeground);font-size:12px}
+  #mModel{flex:1;max-width:280px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,var(--vscode-panel-border));border-radius:5px;padding:5px 8px;font:inherit}
+  #segReason{margin-left:0}
   .nowbadge{font-size:10px;font-weight:700;padding:1px 8px;border-radius:999px;border:1px solid var(--vscode-charts-purple);color:var(--vscode-charts-purple)}
   /* 온보딩 배너 */
   .onboard{border:1px solid var(--vscode-charts-orange);border-radius:9px;padding:12px 15px;margin:0 0 18px;background:var(--vscode-editor-background)}
@@ -764,6 +829,21 @@ class Dashboard {
   <h2 class="sec base">🔗 Codex 세션 연결 <span class="sub2" id="cwsLabel">첫 발화로 식별</span></h2>
   <div id="cands"></div>
   <div id="hiddenWrap"></div>
+  <h2 class="sec base">🧠 코덱스 두뇌 설정 <span class="sub2">이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)</span></h2>
+  <div class="mcard">
+    <div class="muted">지금 쓰는 값(최근 기록): <b id="mCur">—</b></div>
+    <div class="mrow"><span class="mlbl">모델</span>
+      <input id="mModel" list="mModelList" placeholder="(코덱스 기본값 그대로)" autocomplete="off" />
+      <datalist id="mModelList"></datalist>
+    </div>
+    <div class="mrow"><span class="mlbl">생각강도</span>
+      <span id="segReason" class="seg">
+        <button data-rs="">기본</button><button data-rs="low">낮음</button><button data-rs="medium">보통</button><button data-rs="high">높음</button>
+      </span>
+    </div>
+    <div class="row" style="margin-top:10px"><button id="saveModel">두뇌 설정 저장</button><span id="savedModel" class="muted"></span></div>
+    <div class="muted" style="margin-top:6px">선택은 <b>다음 코덱스 응답부터</b> 적용 · 비우면 코덱스 기본값 · 코덱스에 말 걸 때마다 자동으로 다시 실어줌</div>
+  </div>
 </main>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
@@ -775,6 +855,8 @@ class Dashboard {
   let curVM = "off", curIM = "always";
   let appVM = null, appIM = null;
   let curPerm = "";   // 지금 Claude Code 권한 모드(active.json) — plan 게이트 표시용
+  let curRS = "";     // 두뇌 설정 폼에서 고른 생각강도("" = 기본). 모델은 입력칸 값 직접 사용.
+  let appRS = null, appModel = null;  // 저장돼 적용 중인 두뇌 설정(미저장 편집 보존용 dirty 비교 기준)
   let shownVM, shownIM, shownPerm;   // 마지막으로 그린 상태 — watcher 중복 렌더가 진행 중 깜빡임을 지우지 않게
   function lblIM(im){ return im==="off"?"꺼짐":im==="plan"?"플랜 때만":"항상"; }
   function lblVM(vm){ return vm==="off"?"안 함":vm==="code"?"코드 변경 시":vm==="plancode"?"플랜·코드 시":"모든 턴"; }
@@ -800,6 +882,11 @@ class Dashboard {
   function markDirty(){ const d=$("dirtyHint"); if(d) d.style.display = ((curVM!==appVM)||(curIM!==appIM)) ? "" : "none"; }
   $("segVerify").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-vm]"); if(b){ curVM=b.getAttribute("data-vm"); highlightSeg("segVerify","data-vm",curVM); markDirty(); } });
   $("segInject").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-im]"); if(b){ curIM=b.getAttribute("data-im"); highlightSeg("segInject","data-im",curIM); markDirty(); } });
+  $("segReason").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-rs]"); if(b){ curRS=b.getAttribute("data-rs"); highlightSeg("segReason","data-rs",curRS); } });
+  $("saveModel").addEventListener("click", () => {
+    vscode.postMessage({type:"saveModelPref", model: $("mModel").value.trim(), reasoning: curRS});
+    flashSaved($("savedModel"), "저장됨 ✓ (다음 코덱스 응답부터 적용)");
+  });
   function flashSaved(node, msg){ if(!node) return; node.textContent = msg || "저장됨 ✓ (다음 턴부터 적용)"; node.classList.remove("flash"); void node.offsetWidth; node.classList.add("flash"); }
   $("cands").addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-relink]");
@@ -994,6 +1081,15 @@ class Dashboard {
       d.hiddenCandidates.forEach((c) => box.appendChild(mkRow(c, true)));
       hw.appendChild(tg); hw.appendChild(box);
     }
+    // 두뇌 설정(모델·생각강도): 현재값 보기 + 저장된 선택 반영(미저장 편집은 보존)
+    const effLabel=(e)=>({low:"낮음",medium:"보통",high:"높음"})[e]||(e||"미상");
+    $("mCur").textContent = d.linkedId ? ((d.modelCurrent||"미상")+" · 생각강도 "+effLabel(d.effortCurrent)) : "연결된 세션 없음";
+    const dl=$("mModelList"); dl.replaceChildren();
+    (d.knownModels||[]).forEach((mm)=>{ const o=document.createElement("option"); o.value=mm; dl.appendChild(o); });
+    const firstM=(appModel===null), pRS=appRS, pModel=appModel;
+    appRS=d.reasoningPref||""; appModel=d.modelPref||"";
+    const mDirty=!firstM && ((curRS!==pRS) || ($("mModel").value!==(pModel||"")));
+    if(firstM || !mDirty){ curRS=appRS; highlightSeg("segReason","data-rs",curRS); if(document.activeElement!==$("mModel")) $("mModel").value=appModel; }
   });
 </script></body></html>`;
   }

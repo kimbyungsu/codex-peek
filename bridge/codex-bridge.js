@@ -181,6 +181,19 @@ function recordLink(links, codexSession) {
   saveLinks(links);
 }
 
+// ── 모델/생각강도 선택(프로젝트별) — links.json modelPrefs[normWs] = {model, reasoning} ──
+// 런타임 검증(2026-06-20): 모델/생각강도는 세션에 고정 저장되지 않고 '호출별'이라, 매 resume/새세션
+// 호출마다 -c로 다시 실어야 적용된다. 값은 TOML 파싱 실패 시 raw 문자열로 쓰여 따옴표 없이 model=gpt-5.5 안전.
+function modelPrefFor(links, ws) {
+  return (links.modelPrefs && links.modelPrefs[normWs(ws)]) || {};
+}
+function modelArgs(pref) {
+  const a = [];
+  if (pref && typeof pref.model === "string" && pref.model.trim()) a.push("-c", `model=${pref.model.trim()}`);
+  if (pref && typeof pref.reasoning === "string" && pref.reasoning.trim()) a.push("-c", `model_reasoning_effort=${pref.reasoning.trim()}`);
+  return a;
+}
+
 // sessions 폴더에서 특정 uuid의 rollout 파일 경로 찾기.
 function findRolloutById(uuid) {
   let found = null;
@@ -372,6 +385,7 @@ function cmdAsk(rest) {
 
   const links = loadLinks();
   const link = resolveLink(links);
+  const mArgs = modelArgs(modelPrefFor(links, workspace())); // 선택한 모델/생각강도를 매 호출 -c로 재적용(호출별이라 필수)
 
   if (link) {
     const file = findRolloutById(link.codexSession);
@@ -382,7 +396,7 @@ function cmdAsk(rest) {
           `→ 새로 시작하려면: ask --allow-new "..."  /  다른 세션에 붙이려면: link <id>`,
       );
     }
-    const { answer, error, status, stderr } = runCodex(["resume", link.codexSession], withContract(prompt));
+    const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs], withContract(prompt));
     if (error || !answer || (typeof status === "number" && status !== 0)) die(`Codex resume 실패: ${error?.message || ""}\n${stderr.slice(-500)}`);
     process.stdout.write(`# 연결 세션 ${link.codexSession} (${link.via})\n\n${answer}\n`);
     return;
@@ -415,7 +429,7 @@ function cmdAsk(rest) {
 
   // --allow-new: 새 세션 생성 + 연결 기록.
   const since = Date.now() - 2000;
-  const { answer, error, status, stderr } = runCodex([], withContract(prompt));
+  const { answer, error, status, stderr } = runCodex([...mArgs], withContract(prompt));
   if (error || !answer || (typeof status === "number" && status !== 0)) {
     // 응답은 실패했지만 세션 파일이 생겼을 수 있음 → 폭증 방지 플래그를 걸어 다음 자동 생성을 막고 종료.
     if (newestRolloutSince(since)) {
@@ -457,6 +471,36 @@ function cmdLink(rest) {
   process.stdout.write(
     `✅ 연결됨: Claude(${claudeId() || "?"}) + ${workspace()}  →  Codex ${id}\n` +
       (file ? `   세션 파일: ${path.basename(file)}\n` : `   ⚠️ 해당 세션 rollout 파일이 안 보임(추후 resume 시 실패할 수 있음)\n`),
+  );
+}
+
+// 모델/생각강도 선택 보기·설정·해제(프로젝트별). 대시보드가 links.json을 직접 쓰지만, CLI로도 점검/테스트 가능.
+function cmdPref(rest) {
+  const links = loadLinks();
+  const ws = workspace();
+  const key = normWs(ws);
+  links.modelPrefs = links.modelPrefs || {};
+  if (rest[0] === "set") {
+    const cur = links.modelPrefs[key] || {};
+    for (const kv of rest.slice(1)) {
+      const i = kv.indexOf("=");
+      if (i < 0) continue;
+      const k = kv.slice(0, i).trim();
+      const v = kv.slice(i + 1).trim();
+      if (k === "model") cur.model = v;
+      else if (k === "reasoning") cur.reasoning = v;
+    }
+    links.modelPrefs[key] = cur;
+    saveLinks(links);
+  } else if (rest[0] === "clear") {
+    delete links.modelPrefs[key];
+    saveLinks(links);
+  }
+  const pref = links.modelPrefs[key] || {};
+  process.stdout.write(
+    `워크스페이스: ${ws}\n` +
+      `선택값: model=${pref.model || "(기본)"} · 생각강도=${pref.reasoning || "(기본)"}\n` +
+      `다음 ask 주입 인자: ${modelArgs(pref).join(" ") || "(없음 — codex config 기본값 사용)"}\n`,
   );
 }
 
@@ -546,13 +590,16 @@ function main() {
       return cmdDoctor();
     case "detect-home":
       return cmdDetectHome();
+    case "pref":
+      return cmdPref(rest);
     default:
       process.stdout.write(
-        "codex-bridge: ask | link | status | find | doctor | detect-home\n" +
+        "codex-bridge: ask | link | status | find | doctor | detect-home | pref\n" +
           '  node codex-bridge.js ask "<프롬프트>"\n' +
           '  node codex-bridge.js ask --allow-new "<프롬프트>"\n' +
           "  node codex-bridge.js link <id> | link --last\n" +
-          "  node codex-bridge.js status | find | doctor | detect-home\n",
+          "  node codex-bridge.js status | find | doctor | detect-home\n" +
+          "  node codex-bridge.js pref [set model=<m> reasoning=<low|medium|high> | clear]\n",
       );
   }
 }
