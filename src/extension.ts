@@ -613,7 +613,7 @@ class Dashboard {
         <button type="button" data-im="off">꺼짐<small>안 넣음</small></button><button type="button" data-im="plan">플랜 모드<small>플랜 때만</small></button><button type="button" data-im="always">항상<small>매 턴</small></button>
       </span>
     </label>
-    <div class="hint"><span class="ic" title="'코드 변경 시'가 없는 이유: 코드 변경은 턴이 끝나야 아는 신호라, 턴 시작에 넣는 이 축에선 못 씁니다. 검증 모드와 무관한 별도 축이에요.">ⓘ '코드 변경 시'가 없는 이유</span></div>
+    <div class="hint"><span class="ic" title="플랜 모드 = Claude Code에서 shift+Tab으로 켜는 '계획 먼저 세우기' 모드. '플랜 모드'를 고르면 그 모드로 일할 때만 이 규칙이 들어갑니다.">ⓘ 플랜 모드란?</span> · <span class="ic" title="'코드 변경 시'가 없는 이유: 코드 변경은 턴이 끝나야 아는 신호라, 턴 시작에 넣는 이 축에선 못 씁니다. 검증 모드와 무관한 별도 축이에요.">ⓘ '코드 변경 시'가 없는 이유</span></div>
   </div>
 
   <h2 class="sec codex">검증 <span class="to codex">→ 🔍 Codex</span> <span class="sub2">Codex에게 검증받기 — 끄면 검증만 안 함(Claude 규칙은 별개)</span></h2>
@@ -630,7 +630,7 @@ class Dashboard {
         <button type="button" data-vm="off">꺼짐<small>강제 안 함</small></button><button type="button" data-vm="code">코드 변경 시<small>편집한 턴</small></button><button type="button" data-vm="plancode">플랜 확정/코드 변경<small>플랜·편집 턴</small></button><button type="button" data-vm="always">모든 턴<small>매 응답</small></button>
       </span>
     </label>
-    <div class="hint"><span class="ic" title="트리거에 걸린 턴에는 Codex 검증을 받고, 그 결과를 반영해 보고해야 턴을 끝낼 수 있습니다.">ⓘ 트리거 턴이란</span></div>
+    <div class="hint"><span class="ic" title="플랜 확정 = 플랜 모드(shift+Tab)에서 세운 계획을 확정·제출하는 그 턴(ExitPlanMode). 플랜 모드 '내내'가 아니라 확정하는 '순간'이에요. '플랜 확정/코드 변경'은 이 플랜 확정 턴이거나 파일을 바꾼 턴에 검증을 강제합니다.">ⓘ '플랜 확정'이 뭐야?</span> · <span class="ic" title="트리거에 걸린 턴에는 Codex 검증을 받고, 그 결과를 반영해 보고해야 턴을 끝낼 수 있습니다.">ⓘ 트리거 턴이란</span></div>
     <div class="stagebox" id="stageBox">
       <div class="sbhead">↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요 <span class="muted" style="font-weight:400">· 지금 검증: <b id="sbState">—</b> · 내용은 아래 ⚙️ 단계별 기본 원칙에서</span></div>
       <div class="sbrow" id="sbTransmit"><span class="sbmark"></span><b>① Claude→Codex 넘길 때</b> · 전달 원칙 <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
@@ -741,7 +741,7 @@ class Dashboard {
     // ④ 플랜 라이브표시: 지금 플랜 모드인가(active.json permissionMode)
     const pn = $("planNow");
     if (pn){
-      // 배지는 '넣는 시점=플랜 모드'(저장값)일 때만 의미 → 그때만 표시. 지금 플랜 모드냐에 따라 적용 중/대기.
+      // 배지는 '넣는 시점=플랜 모드'(저장값)일 때만 표시. 텍스트는 지금 Claude Code가 플랜 모드인지 여부만 알림.
       if((d.contract && d.contract.claudeInjectMode)==="plan"){
         pn.style.display="";
         pn.textContent = d.permissionMode==="plan" ? "지금 플랜 모드예요 ✓" : "지금은 플랜 모드 아니에요";
