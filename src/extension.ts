@@ -800,7 +800,6 @@ class Dashboard {
   button:active{transform:translateY(1px)}
   /* 한눈에 보기: Claude↔Codex 흐름 지도 */
   .flowmap{margin:8px 0 26px}
-  .fmtitle{font-size:12.5px;font-weight:700;margin-bottom:11px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
   .flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap}
   .fnode{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border:1px solid var(--vscode-panel-border);border-radius:9px;padding:9px 13px;background:var(--vscode-editor-background);text-align:center;font-size:11.5px;font-weight:600;min-width:72px}
   .fnode small{font-weight:400;color:var(--vscode-descriptionForeground);font-size:10px}
@@ -815,7 +814,11 @@ class Dashboard {
   .farrow.off .lbl{color:var(--vscode-descriptionForeground)}
   .farrow.off .ln{border-top-color:var(--vscode-panel-border);border-top-style:dashed}
   .farrow.off .ln::after{color:var(--vscode-panel-border)}
-  .flowback{margin-top:10px;font-size:10.5px;color:var(--vscode-descriptionForeground);line-height:1.55;border-top:1px dashed var(--vscode-panel-border);padding-top:9px}
+  /* 흐름 지도를 다른 섹션과 같은 카드로 통일 */
+  .flowmap.card{margin:0 0 14px;padding:15px 16px}
+  /* 단계별 기본 원칙 = 사용자 규칙과 구별되는 '고정 기준'(좌측 강조 + 옅은 배경 + 배지) */
+  .card.baseline{border-left:3px solid var(--vscode-charts-purple);background:var(--vscode-textBlockQuote-background,var(--vscode-sideBar-background))}
+  .fixedbadge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;border:1px solid var(--vscode-charts-purple);color:var(--vscode-charts-purple);margin-left:2px;white-space:nowrap}
   /* 카드 수신자 라벨 */
   .to{font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:999px;border:1px solid currentColor}
   .to.claude{color:var(--vscode-charts-blue)}
@@ -859,18 +862,6 @@ class Dashboard {
   </div>
   <div id="status" class="statusline"></div>
 
-  <section class="flowmap" id="fmSection">
-    <div class="fmtitle">🗺 한눈에 보기 <span class="muted" style="font-weight:400">· 누구에게 · 뭐가 · 언제 들어가나 (지금 <b>저장된</b> 설정 기준 — 저장하면 바뀐 곳이 깜빡여요)</span></div>
-    <div class="flow">
-      <div class="fnode rule">Claude<br>규칙</div>
-      <div class="farrow" id="faInject"><span class="lbl">넣는 시점<br><b id="faInjectVal">항상</b></span><span class="ln"></span></div>
-      <div class="fnode actor claude"><span class="mono c">C</span>Claude<small>구현</small></div>
-      <div class="farrow off" id="faVerify"><span class="lbl">검증 맡김<br><b id="faVerifyVal">안 함</b></span><span class="ln"></span></div>
-      <div class="fnode actor codex"><span class="mono x">Cx</span>Codex<small>검증</small></div>
-    </div>
-    <div class="dirtyhint" id="dirtyHint" style="display:none">● 토글을 바꿨어요 — <b>저장</b>해야 실제로 적용됩니다</div>
-  </section>
-
   <h2 class="sec claude">Claude 규칙 <span class="to claude">→ 🧑 Claude에게</span> <span class="sub2">Claude가 지킬 행동규칙 — 검증과 별개</span></h2>
   <div class="card">
     <div class="cblock claude">
@@ -911,8 +902,21 @@ class Dashboard {
     </div>
   </div>
   <div class="row"><button id="saveC">저장</button><span id="savedAt" class="muted">· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장</span></div>
-  <details class="card" style="margin-top:10px">
-    <summary style="cursor:pointer;font-weight:600;font-size:13px">⚙️ 단계별 기본 원칙 <span class="muted" style="font-weight:400">· 검증 흐름 3단계의 기본값 (미리 들어있는 기본값 · 필요할 때만 편집)</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
+
+  <h2 class="sec">한눈에 보기 <span class="sub2">누구에게 · 뭐가 · 언제 들어가나 — 지금 저장된 설정 기준 (저장하면 바뀐 곳이 깜빡여요)</span></h2>
+  <section class="flowmap card" id="fmSection">
+    <div class="flow">
+      <div class="fnode rule">Claude<br>규칙</div>
+      <div class="farrow" id="faInject"><span class="lbl">넣는 시점<br><b id="faInjectVal">항상</b></span><span class="ln"></span></div>
+      <div class="fnode actor claude"><span class="mono c">C</span>Claude<small>구현</small></div>
+      <div class="farrow off" id="faVerify"><span class="lbl">검증 맡김<br><b id="faVerifyVal">안 함</b></span><span class="ln"></span></div>
+      <div class="fnode actor codex"><span class="mono x">Cx</span>Codex<small>검증</small></div>
+    </div>
+    <div class="dirtyhint" id="dirtyHint" style="display:none">● 토글을 바꿨어요 — <b>저장</b>해야 실제로 적용됩니다</div>
+  </section>
+
+  <details class="card baseline" style="margin-top:10px">
+    <summary style="cursor:pointer;font-weight:600;font-size:13px">⚙️ 단계별 기본 원칙 <span class="fixedbadge">고정 기준 · 기본값 내장</span> <span class="muted" style="font-weight:400">· 검증 흐름 3단계의 기본값 (필요할 때만 편집)</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
     <div class="hint" style="margin:8px 0 0 0">위 <b>Claude·Codex 규칙</b>(네가 쓰는 것)과 달리, 이건 검증이 제대로 굴러가게 하는 <b>흐름 단계별 기본값</b>입니다. 평소엔 손댈 필요 없고, 잘못 고쳐도 <b>기본값 복원</b>으로 되돌아갑니다.</div>
     <div class="chead" style="margin-top:12px">① 전달 원칙 <span class="muted" style="font-weight:400">→ Claude에게 · Claude가 Codex에 넘길 때 · 검증 ON일 때만</span></div>
     <textarea id="bTransmit" rows="4"></textarea>
