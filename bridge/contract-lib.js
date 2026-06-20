@@ -153,7 +153,7 @@ function buildVerifyDirective(mode) {
   const b = loadBaseDirective();
   return [
     `[검증 모드 ON(${mode}) · 구현→검증 2트랙 · 사람이 턴을 중계하지 않음]`,
-    `${cond}, 사용자에게 완료를 보고하기 전에 반드시 \`node ${BRIDGE} ask "..."\` 로 Codex 검증을 받아라.`,
+    `${cond}, 사용자에게 완료를 보고하기 전에 반드시 \`node ${BRIDGE} ask --allow-new "..."\` 로 Codex 검증을 받아라. (연결된 Codex 세션이 있으면 그 세션으로 이어가고, 없으면 새 세션을 만들어 연결한다.)`,
     b.transmit,
     b.rejudge,
   ].join("\n");

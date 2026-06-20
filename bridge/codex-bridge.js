@@ -387,17 +387,41 @@ function cmdAsk(rest) {
     );
   }
 
+  // 폭증 방지: 직전 --allow-new가 세션을 만들고도 연결 기록에 실패했으면, 또 만들지 않는다(수동 link 유도).
+  const wsKey = normWs(workspace());
+  if (links.autoNewFailed && links.autoNewFailed[wsKey]) {
+    die(
+      `⚠️ 직전에 새 Codex 세션을 만들었지만 연결 기록에 실패했습니다(세션id 식별 실패).\n` +
+        `   무한 생성 방지를 위해 자동 생성을 멈춥니다.\n` +
+        `   - 만든 세션 연결: node codex-bridge.js find  →  node codex-bridge.js link <id>\n` +
+        `   - 폴더 탐지 점검: node codex-bridge.js doctor`,
+      3,
+    );
+  }
+
   // --allow-new: 새 세션 생성 + 연결 기록.
   const since = Date.now() - 2000;
   const { answer, error, status, stderr } = runCodex([], withContract(prompt));
-  if (error || !answer || (typeof status === "number" && status !== 0)) die(`Codex 새 세션 실패: ${error?.message || ""}\n${stderr.slice(-500)}`);
+  if (error || !answer || (typeof status === "number" && status !== 0)) {
+    // 응답은 실패했지만 세션 파일이 생겼을 수 있음 → 폭증 방지 플래그를 걸어 다음 자동 생성을 막고 종료.
+    if (newestRolloutSince(since)) {
+      links.autoNewFailed = links.autoNewFailed || {};
+      links.autoNewFailed[wsKey] = true;
+      saveLinks(links);
+    }
+    die(`Codex 새 세션 실패: ${error?.message || ""}\n${stderr.slice(-500)}\n(세션 파일이 생겼다면 'find'→'link <id>'로 연결하세요.)`);
+  }
   const newFile = newestRolloutSince(since);
   const m = newFile && newFile.match(UUID_RE);
   if (m) {
-    recordLink(links, m[1]);
+    if (links.autoNewFailed) delete links.autoNewFailed[wsKey]; // 성공 → 폭증방지 플래그 해제
+    recordLink(links, m[1]); // saveLinks 포함(플래그 해제도 함께 영속)
     process.stdout.write(`# 새 Codex 세션 생성·연결: ${m[1]}\n\n${answer}\n`);
   } else {
-    process.stdout.write(`# 새 세션 생성됨(세션id 식별 실패 — 다음 호출은 워크스페이스 폴백 의존)\n\n${answer}\n`);
+    links.autoNewFailed = links.autoNewFailed || {};
+    links.autoNewFailed[wsKey] = true;
+    saveLinks(links); // 다음 자동 생성 차단 플래그 저장
+    process.stdout.write(`# 새 세션 생성됨(세션id 식별 실패) — 폭증 방지로 다음 자동 생성은 멈춥니다. 'find'로 찾아 'link <id>' 하세요.\n\n${answer}\n`);
   }
 }
 
@@ -414,6 +438,7 @@ function cmdLink(rest) {
     die('사용법: link <codex-session-id> | link --last   (후보: find)', 2);
   }
   const file = findRolloutById(id);
+  if (links.autoNewFailed) delete links.autoNewFailed[normWs(workspace())]; // 수동 연결됨 → 폭증방지 플래그 해제
   recordLink(links, id);
   process.stdout.write(
     `✅ 연결됨: Claude(${claudeId() || "?"}) + ${workspace()}  →  Codex ${id}\n` +
