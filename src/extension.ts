@@ -40,6 +40,7 @@ interface BridgeState {
   baseAvailable: boolean;
   permissionMode: string;
   codexReady: boolean;
+  onboardDismissed: boolean;
 }
 
 function normWs(p: string): string {
@@ -337,6 +338,7 @@ function computeState(turnsN: number): BridgeState {
     baseAvailable: bridgeLib() !== null,
     permissionMode: activePermissionMode(ws),
     codexReady: !!resolveCodexPathForBridge(),
+    onboardDismissed: fs.existsSync(path.join(HOME, ".codex-bridge", "onboard-dismissed")),
   };
 }
 
@@ -408,6 +410,17 @@ class Dashboard {
             /* ignore */
           }
           this.post();
+        }
+        if (m?.type === "dismissOnboard") {
+          try { fs.mkdirSync(path.join(HOME, ".codex-bridge"), { recursive: true }); fs.writeFileSync(path.join(HOME, ".codex-bridge", "onboard-dismissed"), "1", "utf8"); } catch { /* ignore */ }
+          this.post();
+        }
+        if (m?.type === "showOnboard") {
+          try { fs.rmSync(path.join(HOME, ".codex-bridge", "onboard-dismissed"), { force: true }); } catch { /* ignore */ }
+          this.post();
+        }
+        if (m?.type === "openSettings") {
+          vscode.commands.executeCommand("workbench.action.openSettings", "codexBridge.codexPath");
         }
         if (m?.type === "refresh") this.post();
       });
@@ -509,12 +522,24 @@ class Dashboard {
   .seg button.on small{opacity:.92}
   .nowbadge{font-size:10px;font-weight:700;padding:1px 8px;border-radius:999px;border:1px solid var(--vscode-charts-purple);color:var(--vscode-charts-purple)}
   /* 온보딩 배너 */
-  .onboard{border:1px solid var(--vscode-charts-orange);border-radius:9px;padding:12px 15px;margin:0 0 16px;background:var(--vscode-editor-background)}
-  .obtitle{font-size:12.5px;font-weight:700;margin-bottom:9px}
-  .obstep{font-size:11.5px;margin:6px 0;line-height:1.5}
-  .obstep .k{font-weight:700;margin-right:5px}
+  .onboard{border:1px solid var(--vscode-charts-orange);border-radius:9px;padding:12px 15px;margin:0 0 18px;background:var(--vscode-editor-background)}
+  .onboard.complete{border-color:var(--vscode-charts-green)}
+  .onboard.incomplete{animation:obpulse 2.4s ease-in-out infinite}
+  @keyframes obpulse{0%,100%{box-shadow:0 0 0 0 transparent}50%{box-shadow:0 0 0 3px color-mix(in srgb,var(--vscode-charts-orange) 35%,transparent)}}
+  @media (prefers-reduced-motion: reduce){ .onboard.incomplete{animation:none} }
+  .obhead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}
+  #obTitle{font-size:12.5px;font-weight:700}
+  .obclose{font-size:10.5px;padding:3px 9px}
+  .obstep{font-size:11.5px;margin:7px 0;line-height:1.5;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .obstep .k{font-weight:700}
   .obstep.done{color:var(--vscode-charts-green)}
   .obstep .where{color:var(--vscode-descriptionForeground);font-size:10.5px}
+  .obgo{font-size:10px;padding:2px 9px;margin-left:2px}
+  .obdone{font-size:12px;font-weight:600;color:var(--vscode-charts-green)}
+  .obreopen{font-size:11px;background:none;color:var(--vscode-textLink-foreground);border:0;padding:0;cursor:pointer}
+  /* 이동 시 대상 강조 */
+  .glow{animation:glowpulse 1.8s ease-out}
+  @keyframes glowpulse{0%,28%{box-shadow:0 0 0 3px var(--vscode-charts-orange);border-radius:8px}100%{box-shadow:0 0 0 0 transparent}}
   /* 검증 시 적용되는 지침 요약(수신자별) */
   /* 검증 대화: 사용자=오른쪽 말풍선 / Codex=왼쪽 전폭 카드 */
   .turn{margin-bottom:14px}
@@ -571,6 +596,19 @@ class Dashboard {
   @keyframes flashpulse{0%,22%{background:var(--vscode-charts-orange);color:#fff;border-radius:5px}100%{background:transparent}}
 </style></head>
 <body><main class="shell">
+  <section class="onboard" id="onboard" style="display:none">
+    <button type="button" id="obReopen" class="obreopen" style="display:none">🚀 시작하기 다시 보기</button>
+    <div id="obMain">
+      <div class="obhead"><span id="obTitle">🚀 시작하기</span><button type="button" id="obClose" class="obclose secondary" style="display:none">끄기 ✕</button></div>
+      <div id="obSteps">
+        <div class="obstep" id="ob1"></div>
+        <div class="obstep" id="ob2"></div>
+        <div class="obstep" id="ob3"></div>
+      </div>
+      <div id="obDone" class="obdone" style="display:none">✅ 준비 끝 — 이제 매 턴 자동으로 검증됩니다.</div>
+    </div>
+  </section>
+
   <div class="top"><h1>🌉 Codex Bridge <span class="sub">Claude ⇄ Codex 자동 연결·검증</span></h1><button id="refresh" class="secondary">↻ 새로고침</button></div>
 
   <div class="hero">
@@ -579,13 +617,6 @@ class Dashboard {
     <div class="agent codex"><div class="mono x">Cx</div><div class="nm">Codex</div><div class="ro">검증 · verify</div></div>
   </div>
   <div id="status" class="statusline"></div>
-
-  <section class="onboard" id="onboard" style="display:none">
-    <div class="obtitle">🚀 시작하기 <span class="muted" style="font-weight:400">· 이 3가지가 되면 매 턴 자동 검증</span></div>
-    <div class="obstep" id="ob1"></div>
-    <div class="obstep" id="ob2"></div>
-    <div class="obstep" id="ob3"></div>
-  </section>
 
   <section class="flowmap" id="fmSection">
     <div class="fmtitle">🗺 한눈에 보기 <span class="muted" style="font-weight:400">· 누구에게 · 뭐가 · 언제 들어가나 (지금 <b>저장된</b> 설정 기준 — 저장하면 바뀐 곳이 깜빡여요)</span></div>
@@ -630,7 +661,7 @@ class Dashboard {
         <button type="button" data-vm="off">꺼짐<small>강제 안 함</small></button><button type="button" data-vm="code">코드 변경 시<small>편집한 턴</small></button><button type="button" data-vm="plancode">플랜 확정/코드 변경<small>플랜·편집 턴</small></button><button type="button" data-vm="always">모든 턴<small>매 응답</small></button>
       </span>
     </label>
-    <div class="hint"><span class="ic" title="플랜 확정 = 플랜 모드(shift+Tab)에서 세운 계획을 확정·제출하는 그 턴(ExitPlanMode). 플랜 모드 '내내'가 아니라 확정하는 '순간'이에요. '플랜 확정/코드 변경'은 이 플랜 확정 턴이거나 파일을 바꾼 턴에 검증을 강제합니다.">ⓘ '플랜 확정'이 뭐야?</span> · <span class="ic" title="트리거에 걸린 턴에는 Codex 검증을 받고, 그 결과를 반영해 보고해야 턴을 끝낼 수 있습니다.">ⓘ 트리거 턴이란</span></div>
+    <div class="hint"><span class="ic" title="플랜 확정 = 플랜 모드(shift+Tab)에서 세운 계획을 확정·제출하는 그 턴(ExitPlanMode). 플랜 모드 '내내'가 아니라 확정하는 '순간'이에요. '플랜 확정/코드 변경'은 이 플랜 확정 턴이거나 파일을 바꾼 턴에 검증을 강제합니다.">ⓘ '플랜 확정'이 뭐야?</span> · <span class="ic" title="검증이 필요한 턴은 선택한 모드가 정해요. 모든 턴=매 답변, 코드 변경 시=파일을 만든/고친 턴, 플랜 확정/코드 변경=플랜을 확정했거나 파일을 고친 턴. 그 턴엔 Codex 검증 결과를 반영해 보고해야 끝낼 수 있어요.">ⓘ 언제 검증되나?</span></div>
     <div class="stagebox" id="stageBox">
       <div class="sbhead">↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요 <span class="muted" style="font-weight:400">· 지금 검증: <b id="sbState">—</b> · 내용은 아래 ⚙️ 단계별 기본 원칙에서</span></div>
       <div class="sbrow" id="sbTransmit"><span class="sbmark"></span><b>① Claude→Codex 넘길 때</b> · 전달 원칙 <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
@@ -695,6 +726,15 @@ class Dashboard {
     const b = ev.target.closest("[data-relink]");
     if (b) vscode.postMessage({type:"relink", id:b.getAttribute("data-relink")});
   });
+  // 온보딩: '이동' 버튼=대상 스크롤+강조, 끄기=기억 dismiss, 다시 보기=복원
+  $("onboard").addEventListener("click", (ev) => {
+    const g = ev.target.closest("[data-go]");
+    if (g) { const t=$(g.getAttribute("data-go")); if(t){ clearTimeout(pendingScroll); t.scrollIntoView({behavior:"smooth",block:"center"}); t.classList.remove("glow"); void t.offsetWidth; t.classList.add("glow"); } return; }
+    const c = ev.target.closest("[data-cmd]");
+    if (c) { vscode.postMessage({type:c.getAttribute("data-cmd")}); return; }
+    if (ev.target.closest("#obClose")) { vscode.postMessage({type:"dismissOnboard"}); return; }
+    if (ev.target.closest("#obReopen")) { vscode.postMessage({type:"showOnboard"}); return; }
+  });
   let pendingScroll;  // 대기 중 스크롤 타이머(연속 저장 시 취소용)
   $("saveC").addEventListener("click", () => {
     clearTimeout(pendingScroll);  // 직전 저장의 대기 스크롤 취소
@@ -747,16 +787,35 @@ class Dashboard {
         pn.textContent = d.permissionMode==="plan" ? "지금 플랜 모드예요 ✓" : "지금은 플랜 모드 아니에요";
       } else { pn.style.display="none"; }
     }
-    // 온보딩: ① codex 준비 ② 연결 ③ 검증 켜기 — 셋 다 되면 배너 숨김
+    // 온보딩: 미완료=설명 단계(이동 버튼·은은한 펄스) / 완료=축하+끄기 / 끄고 완료=다시보기 링크만.
+    // 미완료(연결 끊김·검증 꺼짐)면 끄기 여부와 무관하게 단계가 다시 보여 '고장'을 숨기지 않음.
     (function(){
       const ob=$("onboard"); if(!ob) return;
       const codexReady = !!d.codexReady, linked = !!d.linkedId;
       const vOn = !!(d.contract && d.contract.verifyMode && d.contract.verifyMode!=="off");
-      const set=(id,done,text,where)=>{ const e=$(id); if(!e) return; e.className="obstep "+(done?"done":"todo"); e.innerHTML='<span class="k">'+(done?"✓":"○")+'</span>'+text+(where?' <span class="where">'+where+'</span>':''); };
-      set("ob1", codexReady, codexReady?"Codex 준비됨":"Codex 확장/경로 미확인", codexReady?"":"— 설치돼 있으면 보통 자동 동작 · 안 되면 설정에서 codexBridge.codexPath 지정 (PATH의 codex로도 동작 가능)");
-      set("ob2", linked, linked?"Codex 세션 연결됨":"Codex 세션 미연결", linked?"":"— 아래 '🔗 Codex 세션 연결'에서 선택 (없으면 첫 검증 때 새 세션)");
-      set("ob3", vOn, vOn?("검증 켜짐 ("+d.contract.verifyMode+")"):"검증 꺼짐", vOn?"":"— 위 '🔁 검증 모드'에서 켜기");
-      ob.style.display = (linked && vOn) ? "none" : "";   // 연결+검증ON이면 사실상 동작 중(codex readiness 함의) → 숨김
+      const allDone = linked && vOn;            // codex 준비는 연결로 함의됨
+      const dismissed = !!d.onboardDismissed;
+      ob.style.display = "";
+      if (allDone && dismissed){                // 완료 + 사용자가 끔 → 작은 '다시 보기' 링크만
+        ob.className = "onboard"; $("obReopen").style.display = ""; $("obMain").style.display = "none";
+        return;
+      }
+      $("obReopen").style.display = "none"; $("obMain").style.display = "";
+      ob.className = "onboard " + (allDone ? "complete" : "incomplete");
+      $("obTitle").textContent = allDone ? "🎉 준비 끝" : "🚀 시작하기 — 3가지면 매 턴 자동 검증";
+      $("obClose").style.display = allDone ? "" : "none";
+      $("obSteps").style.display = allDone ? "none" : "";
+      $("obDone").style.display = allDone ? "" : "none";
+      if (!allDone){
+        const step=(id,done,text,btn,where)=>{ const e=$(id); if(!e) return;
+          e.className="obstep "+(done?"done":"todo");
+          let b="";
+          if(!done && btn){ if(btn.go) b=' <button type="button" class="obgo secondary" data-go="'+btn.go+'">이동 ›</button>'; else if(btn.cmd) b=' <button type="button" class="obgo secondary" data-cmd="'+btn.cmd+'">설정 ›</button>'; }
+          e.innerHTML='<span class="k">'+(done?"✓":"○")+'</span>'+text+(where?' <span class="where">'+where+'</span>':'')+b; };
+        step("ob1", codexReady, codexReady?"Codex 준비됨":"Codex 확장/경로 미확인", {cmd:"openSettings"}, codexReady?"":"설치돼 있으면 보통 자동 · 안 되면 경로 지정");
+        step("ob2", linked, linked?"Codex 세션 연결됨":"Codex 세션 미연결", {go:"cands"}, linked?"":"연결할 세션 고르기");
+        step("ob3", vOn, vOn?("검증 켜짐 ("+d.contract.verifyMode+")"):"검증 꺼짐", {go:"segVerify"}, vOn?"":"검증 모드 켜고 저장");
+      }
     })();
     if (d.baseDirective){
       if (document.activeElement !== $("bVerify")) $("bVerify").value = d.baseDirective.verifyBaseline||"";
