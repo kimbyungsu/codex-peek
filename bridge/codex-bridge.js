@@ -331,6 +331,9 @@ function runCodex(extraArgs, prompt) {
     windowsHide: true,
     encoding: "utf8",
     shell: !!inv.shell,
+    // 무거운 검증(코덱스가 파일을 많이 읽으면 stderr가 커짐)에서 기본 1MB를 넘으면 Windows가 ENOBUFS로
+    // spawn을 죽여 검증이 결과 없이 실패한다 → 천장을 크게 올려 출력량 때문에 검증이 깨지지 않게 한다.
+    maxBuffer: 1024 * 1024 * 256,
   });
   let answer = "";
   try {
