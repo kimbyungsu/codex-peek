@@ -50,7 +50,8 @@ interface BridgeState {
   effortCurrent: string;  // 〃 생각강도 코드(low/medium/high)
   modelPref: string;      // 저장된 선택 모델 ("" = 코덱스 기본값)
   reasoningPref: string;  // 저장된 선택 생각강도 ("" = 기본)
-  knownModels: string[];  // datalist 추천 — 이 세션이 실제 써본 모델들(하드코딩 회피)
+  knownModels: string[];  // 이 세션이 써본 모델들(캐시 없을 때 폴백 추천)
+  availModels: AvailModel[]; // 계정 캐시(models_cache.json)의 모델·모델별 생각강도 — 하드코딩 대신 계정 실제 목록
 }
 
 function normWs(p: string): string {
@@ -287,6 +288,29 @@ function sessionModelMeta(file: string): { model: string; effort: string; models
   return { model, effort, models: [...models] };
 }
 
+// 코덱스가 '계정별'로 서버에서 받아 캐시하는 모델·생각강도 목록(CODEX_HOME/models_cache.json).
+// 계정 등급마다 모델/생각강도(xhigh·pro 등)가 달라 하드코딩 불가 → 이 캐시를 읽어 계정 실제 목록을 쓴다.
+// (visibility:"hide"=codex-auto-review 같은 내부용 제외)
+interface AvailModel { slug: string; name: string; defaultLevel: string; levels: Array<{ effort: string; description: string }>; }
+function readModelsCache(): AvailModel[] {
+  try {
+    const o = JSON.parse(fs.readFileSync(path.join(CODEX_HOME, "models_cache.json"), "utf8"));
+    const models: any[] = Array.isArray(o?.models) ? o.models : [];
+    return models
+      .filter((m) => m && m.slug && m.visibility !== "hide")
+      .map((m) => ({
+        slug: String(m.slug),
+        name: String(m.display_name || m.slug),
+        defaultLevel: String(m.default_reasoning_level || ""),
+        levels: Array.isArray(m.supported_reasoning_levels)
+          ? m.supported_reasoning_levels.filter((x: any) => x && x.effort).map((x: any) => ({ effort: String(x.effort), description: String(x.description || "") }))
+          : [],
+      }));
+  } catch {
+    return [];
+  }
+}
+
 function toTurns(msgs: Array<{ role: string; text: string }>): Turn[] {
   const turns: Turn[] = [];
   let cur: Turn | null = null;
@@ -386,6 +410,7 @@ function computeState(turnsN: number): BridgeState {
     modelPref: typeof pref.model === "string" ? pref.model : "",
     reasoningPref: typeof pref.reasoning === "string" ? pref.reasoning : "",
     knownModels: modelMeta.models,
+    availModels: readModelsCache(),
   };
 }
 
@@ -837,9 +862,7 @@ class Dashboard {
       <datalist id="mModelList"></datalist>
     </div>
     <div class="mrow"><span class="mlbl">생각강도</span>
-      <span id="segReason" class="seg">
-        <button data-rs="">기본</button><button data-rs="low">낮음</button><button data-rs="medium">보통</button><button data-rs="high">높음</button>
-      </span>
+      <span id="segReason" class="seg"></span>
     </div>
     <div class="row" style="margin-top:10px"><button id="saveModel">두뇌 설정 저장</button><span id="savedModel" class="muted"></span></div>
     <div class="muted" style="margin-top:6px">선택은 <b>다음 코덱스 응답부터</b> 적용 · 비우면 코덱스 기본값 · 코덱스에 말 걸 때마다 자동으로 다시 실어줌</div>
@@ -857,6 +880,27 @@ class Dashboard {
   let curPerm = "";   // 지금 Claude Code 권한 모드(active.json) — plan 게이트 표시용
   let curRS = "";     // 두뇌 설정 폼에서 고른 생각강도("" = 기본). 모델은 입력칸 값 직접 사용.
   let appRS = null, appModel = null;  // 저장돼 적용 중인 두뇌 설정(미저장 편집 보존용 dirty 비교 기준)
+  let AVAIL = [];     // 계정 캐시 모델·모델별 생각강도(서버에서 받은 것 — 하드코딩 아님)
+  const RSKO = {minimal:"최소", low:"낮음", medium:"보통", high:"높음", xhigh:"매우높음", pro:"프로"}; // 표시 라벨(없는 값은 원문)
+  // 선택한 모델이 지원하는 생각강도만 버튼으로(계정·모델별로 다름). 모델 미선택이면 가능한 값 합집합.
+  function renderReasonButtons(slug){
+    const seg=$("segReason"); if(!seg) return; seg.replaceChildren();
+    let levels=[]; const m=AVAIL.find((x)=>x.slug===slug);
+    if(m) levels=m.levels;
+    else { const u=new Map(); AVAIL.forEach((x)=>x.levels.forEach((l)=>u.set(l.effort,l.description))); levels=[...u].map(([effort,description])=>({effort,description})); }
+    const cacheOk = AVAIL.length>0;
+    if(!levels.length) levels=["low","medium","high"].map((e)=>({effort:e,description:""})); // 캐시/레벨 전무 폴백
+    // 저장된 선택이 목록에 없을 때: 캐시 정상 & 그 모델이 진짜 안 받으면 기본으로 리셋(모델 전환).
+    // 그 외(캐시 실패·커스텀/미매칭 모델)엔 저장값을 raw 버튼으로 보존해 절대 잃지 않게 한다.
+    if(curRS && !levels.some((l)=>l.effort===curRS)){
+      if(cacheOk && m) curRS="";
+      else levels=[...levels,{effort:curRS,description:"저장된 값(현재 목록에 없음)"}];
+    }
+    const mk=(rs,label,desc)=>{const b=document.createElement("button");b.setAttribute("data-rs",rs);b.textContent=label;if(desc)b.title=desc;return b;};
+    seg.appendChild(mk("","기본"));
+    levels.forEach((l)=> seg.appendChild(mk(l.effort, RSKO[l.effort]||l.effort, l.description)));
+    highlightSeg("segReason","data-rs",curRS);
+  }
   let shownVM, shownIM, shownPerm;   // 마지막으로 그린 상태 — watcher 중복 렌더가 진행 중 깜빡임을 지우지 않게
   function lblIM(im){ return im==="off"?"꺼짐":im==="plan"?"플랜 때만":"항상"; }
   function lblVM(vm){ return vm==="off"?"안 함":vm==="code"?"코드 변경 시":vm==="plancode"?"플랜·코드 시":"모든 턴"; }
@@ -883,6 +927,7 @@ class Dashboard {
   $("segVerify").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-vm]"); if(b){ curVM=b.getAttribute("data-vm"); highlightSeg("segVerify","data-vm",curVM); markDirty(); } });
   $("segInject").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-im]"); if(b){ curIM=b.getAttribute("data-im"); highlightSeg("segInject","data-im",curIM); markDirty(); } });
   $("segReason").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-rs]"); if(b){ curRS=b.getAttribute("data-rs"); highlightSeg("segReason","data-rs",curRS); } });
+  $("mModel").addEventListener("input", ()=> renderReasonButtons($("mModel").value.trim()));  // 모델 바꾸면 그 모델의 생각강도로 버튼 교체
   $("saveModel").addEventListener("click", () => {
     vscode.postMessage({type:"saveModelPref", model: $("mModel").value.trim(), reasoning: curRS});
     flashSaved($("savedModel"), "저장됨 ✓ (다음 코덱스 응답부터 적용)");
@@ -1081,15 +1126,19 @@ class Dashboard {
       d.hiddenCandidates.forEach((c) => box.appendChild(mkRow(c, true)));
       hw.appendChild(tg); hw.appendChild(box);
     }
-    // 두뇌 설정(모델·생각강도): 현재값 보기 + 저장된 선택 반영(미저장 편집은 보존)
-    const effLabel=(e)=>({low:"낮음",medium:"보통",high:"높음"})[e]||(e||"미상");
-    $("mCur").textContent = d.linkedId ? ((d.modelCurrent||"미상")+" · 생각강도 "+effLabel(d.effortCurrent)) : "연결된 세션 없음";
+    // 두뇌 설정(모델·생각강도): 현재값 보기 + 저장된 선택 반영(미저장 편집은 보존). 옵션은 계정 캐시 기반.
+    AVAIL = d.availModels || [];
+    const nameOf=(slug)=>{ const m=AVAIL.find((x)=>x.slug===slug); return m?m.name:(slug||""); };
+    const effLabel=(e)=>RSKO[e]||(e||"미상");
+    $("mCur").textContent = d.linkedId ? ((nameOf(d.modelCurrent)||"미상")+" · 생각강도 "+effLabel(d.effortCurrent)) : "연결된 세션 없음";
     const dl=$("mModelList"); dl.replaceChildren();
-    (d.knownModels||[]).forEach((mm)=>{ const o=document.createElement("option"); o.value=mm; dl.appendChild(o); });
+    const opts = AVAIL.length ? AVAIL.map((m)=>({v:m.slug,t:m.name})) : (d.knownModels||[]).map((s)=>({v:s,t:s}));
+    opts.forEach(({v,t})=>{ const o=document.createElement("option"); o.value=v; if(t&&t!==v) o.textContent=t; dl.appendChild(o); });
     const firstM=(appModel===null), pRS=appRS, pModel=appModel;
     appRS=d.reasoningPref||""; appModel=d.modelPref||"";
     const mDirty=!firstM && ((curRS!==pRS) || ($("mModel").value!==(pModel||"")));
-    if(firstM || !mDirty){ curRS=appRS; highlightSeg("segReason","data-rs",curRS); if(document.activeElement!==$("mModel")) $("mModel").value=appModel; }
+    if(firstM || !mDirty){ curRS=appRS; if(document.activeElement!==$("mModel")) $("mModel").value=appModel; }
+    renderReasonButtons($("mModel").value.trim());  // 현재 모델 기준 생각강도 버튼(내부에서 curRS 하이라이트/검증)
   });
 </script></body></html>`;
   }
