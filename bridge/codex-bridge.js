@@ -34,10 +34,21 @@ function withContract(prompt) {
 }
 
 const HOME = os.homedir();
-const CODEX_HOME = process.env.CODEX_HOME || path.join(HOME, ".codex");
+const BRIDGE_DIR = path.join(HOME, ".codex-bridge");
+// codex가 실제 쓰는 home을 확장이 'codex doctor'로 탐지해 적어둔 값(바이너리 codex-bin.txt 대칭).
+// → CODEX_HOME 미설정/비표준 home·다중설치에서도 세션 폴더를 정확히 찾는다(V11). 없으면 ~/.codex 폴백.
+function readPinnedHome() {
+  try {
+    const p = fs.readFileSync(path.join(BRIDGE_DIR, "codex-home.txt"), "utf8").trim();
+    if (p && fs.existsSync(p)) return p;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+const CODEX_HOME = process.env.CODEX_HOME || readPinnedHome() || path.join(HOME, ".codex");
 const SESSIONS_DIR = path.join(CODEX_HOME, "sessions");
 const INDEX_FILE = path.join(CODEX_HOME, "session_index.jsonl");
-const BRIDGE_DIR = path.join(HOME, ".codex-bridge");
 const LINKS_FILE = path.join(BRIDGE_DIR, "links.json");
 const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
 
@@ -94,6 +105,40 @@ function resolveCodex() {
   const pinned = readPinnedCodex();
   if (pinned) return wrapCodexPath(pinned, "vscode-ext");
   return { file: "codex", args: [], how: "PATH", shell: isWin };
+}
+
+// codex가 실제 쓰는 home을 'codex doctor'로 탐지해 codex-home.txt에 기록(바이너리 자동추적 대칭).
+// doctor 출력의 "CODEX_HOME   <경로> (dir)" 줄을 파싱. sessions = home/sessions.
+function detectCodexHome() {
+  const inv = resolveCodex();
+  const r = spawnSync(inv.file, [...inv.args, "doctor"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 1000 * 30,
+    windowsHide: true,
+    encoding: "utf8",
+    shell: !!inv.shell,
+  });
+  const out = (r.stdout || "") + "\n" + (r.stderr || "");
+  // 줄 단위 앵커: 'CODEX_HOME  <경로> (dir)' 한 줄만 잡음(줄바꿈·다른 (dir) 줄 오탐 방지).
+  const m = out.match(/^\s*CODEX_HOME\s+([^\r\n]+?)\s*\(dir\)\s*$/m);
+  const home = m ? m[1].trim() : "";
+  const f = path.join(BRIDGE_DIR, "codex-home.txt");
+  let ok = false;
+  try {
+    if (home && fs.existsSync(home)) {
+      fs.mkdirSync(BRIDGE_DIR, { recursive: true });
+      fs.writeFileSync(f, home, "utf8");
+      ok = true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return { home, ok };
+}
+function cmdDetectHome() {
+  const { home, ok } = detectCodexHome();
+  if (ok) process.stdout.write(`codex home 탐지·기록: ${home}\n  sessions = ${path.join(home, "sessions")}\n`);
+  else process.stderr.write(`codex home 탐지 실패(doctor 파싱 안 됨). 현재 폴백 = ${CODEX_HOME}\n`);
 }
 
 function loadLinks() {
@@ -449,13 +494,15 @@ function main() {
       return cmdFind();
     case "doctor":
       return cmdDoctor();
+    case "detect-home":
+      return cmdDetectHome();
     default:
       process.stdout.write(
-        "codex-bridge: ask | link | status | find | doctor\n" +
+        "codex-bridge: ask | link | status | find | doctor | detect-home\n" +
           '  node codex-bridge.js ask "<프롬프트>"\n' +
           '  node codex-bridge.js ask --allow-new "<프롬프트>"\n' +
           "  node codex-bridge.js link <id> | link --last\n" +
-          "  node codex-bridge.js status | find | doctor\n",
+          "  node codex-bridge.js status | find | doctor | detect-home\n",
       );
   }
 }
