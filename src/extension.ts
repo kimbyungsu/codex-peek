@@ -3,10 +3,14 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as crypto from "crypto";
+import { spawn } from "child_process";
 
 const HOME = os.homedir();
-const CODEX_HOME = process.env.CODEX_HOME || path.join(HOME, ".codex");
-const SESSIONS_DIR = path.join(CODEX_HOME, "sessions");
+// V11: codex가 실제 쓰는 home. env → 확장이 'codex doctor'로 적어둔 codex-home.txt → ~/.codex 폴백.
+// (syncCodexHome이 활성화 때 갱신하므로 let)
+const PINNED_HOME = readTextSafe(path.join(HOME, ".codex-bridge", "codex-home.txt"));
+let CODEX_HOME = process.env.CODEX_HOME || (PINNED_HOME && fs.existsSync(PINNED_HOME) ? PINNED_HOME : "") || path.join(HOME, ".codex");
+let SESSIONS_DIR = path.join(CODEX_HOME, "sessions");
 const LINKS_FILE = path.join(HOME, ".codex-bridge", "links.json");
 const CONTRACT_FILE = path.join(HOME, ".codex-bridge", "contract.json"); // 전역 기본값(상속 시드)
 const CONTRACTS_DIR = path.join(HOME, ".codex-bridge", "contracts"); // 프로젝트별 계약
@@ -950,6 +954,42 @@ function syncCodexBin(): void {
   }
 }
 
+// V11: codex가 실제 쓰는 home을 'codex doctor'로 1회 탐지 → codex-home.txt 기록 + 메모리 SESSIONS_DIR 갱신.
+// 브릿지(codex-home.txt 읽음)와 대시보드가 같은 세션 폴더를 보게 한다. 못 찾으면(또는 PATH-only codex) 스킵·폴백.
+function syncCodexHome(onDone: (changed: boolean) => void): void {
+  let done = false;
+  const finish = (c: boolean) => { if (done) return; done = true; onDone(c); };
+  const codex = resolveCodexPathForBridge();
+  if (!codex) { finish(false); return; }
+  if (/\.js$/i.test(codex)) { finish(false); return; } // .js codex는 node 래핑 필요 — 확장(electron)에선 스킵, 브릿지 detect-home가 처리
+  const useShell = /\.(cmd|bat)$/i.test(codex);
+  let out = "";
+  try {
+    const cp = spawn(codex, ["doctor"], { windowsHide: true, shell: useShell });
+    cp.stdout?.on("data", (d) => (out += d.toString()));
+    cp.stderr?.on("data", (d) => (out += d.toString()));
+    cp.on("error", () => finish(false));
+    cp.on("close", () => {
+      const m = out.match(/^\s*CODEX_HOME\s+([^\r\n]+?)\s*\(dir\)\s*$/m);
+      const home = m ? m[1].trim() : "";
+      let changed = false;
+      try {
+        if (home && fs.existsSync(home)) {
+          const f = path.join(HOME, ".codex-bridge", "codex-home.txt");
+          fs.mkdirSync(path.dirname(f), { recursive: true });
+          if (readTextSafe(f) !== home) fs.writeFileSync(f, home, "utf8");
+          if (CODEX_HOME !== home) { CODEX_HOME = home; SESSIONS_DIR = path.join(home, "sessions"); changed = true; }
+        }
+      } catch {
+        /* ignore */
+      }
+      finish(changed);
+    });
+  } catch {
+    finish(false);
+  }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   syncCodexBin(); // 브릿지가 쓸 codex 경로를 최신 확장 기준으로 기록
   context.subscriptions.push(
@@ -1011,6 +1051,14 @@ export function activate(context: vscode.ExtensionContext): void {
   } catch {
     /* ignore */
   }
+
+  // V11: 활성화 시 codex home 1회 자동탐지 → 세션 폴더 갱신. 폴더가 바뀌었으면 그 폴더도 감시 추가 + 새로고침.
+  syncCodexHome((changed) => {
+    if (changed) {
+      try { if (fs.existsSync(SESSIONS_DIR)) watchers.push(fs.watch(SESSIONS_DIR, { recursive: true }, () => scheduleRender())); } catch { /* ignore */ }
+    }
+    scheduleRender();
+  });
 
   context.subscriptions.push(
     status,
