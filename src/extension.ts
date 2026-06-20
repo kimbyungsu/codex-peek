@@ -39,6 +39,7 @@ interface BridgeState {
   lastActivity: string | null;
   turns: Turn[];
   candidates: Candidate[];
+  hiddenCandidates: Candidate[];
   contract: Contract;
   baseDirective: { verifyBaseline: string; transmit: string; rejudge: string; overridden: boolean };
   baseAvailable: boolean;
@@ -322,21 +323,28 @@ function computeState(turnsN: number): BridgeState {
     }
   }
 
-  const candidates: Candidate[] = recentRollouts(12).map((r) => ({
+  const hid = hiddenSessions();
+  const mkCand = (r: { id: string; file: string; mtime: number }): Candidate => ({
     id: r.id,
     when: r.mtime ? new Date(r.mtime).toLocaleString() : "",
     snippet: firstSnippet(r.file),
     linked: r.id === linkedId,
-  }));
+  });
+  // 전체 스캔 후 '숨김 제외 → 상위 N'. walk()는 limit과 무관하게 이미 전수 순회하므로 limit만 키워도 비용 동일.
+  // 이렇게 해야 브릿지(find/ask: 전수→숨김제외→slice)와 일치하고, 오래된 숨김 세션도 복원 목록에 남는다.
+  const allRoll = recentRollouts(99999);
+  const candidates: Candidate[] = allRoll.filter((r) => !hid.has(r.id)).slice(0, 12).map(mkCand);
+  const hiddenCandidates: Candidate[] = allRoll.filter((r) => hid.has(r.id)).slice(0, 50).map(mkCand);
 
   return {
     workspace: ws,
     linkedId,
-    linkedSnippet: linkedId ? candidates.find((c) => c.id === linkedId)?.snippet ?? "" : "",
+    linkedSnippet: linkedId ? (candidates.find((c) => c.id === linkedId)?.snippet ?? hiddenCandidates.find((c) => c.id === linkedId)?.snippet ?? "") : "",
     linkedAt: link?.linkedAt ?? null,
     lastActivity,
     turns,
     candidates,
+    hiddenCandidates,
     contract: loadContract(ws),
     baseDirective: loadBaseDirectiveSafe(),
     baseAvailable: bridgeLib() !== null,
@@ -344,6 +352,47 @@ function computeState(turnsN: number): BridgeState {
     codexReady: !!resolveCodexPathForBridge(),
     onboardDismissed: fs.existsSync(path.join(HOME, ".codex-bridge", "onboard-dismissed")),
   };
+}
+
+// 숨긴 세션 메타(원본 rollout 안 건드림 — §5.1). ~/.codex-bridge/sessions-meta.json (id→{state}).
+const SESSIONS_META = path.join(HOME, ".codex-bridge", "sessions-meta.json");
+function hiddenSessions(): Set<string> {
+  try {
+    const o = JSON.parse(fs.readFileSync(SESSIONS_META, "utf8"));
+    return new Set(Object.keys(o).filter((k) => o[k] && (o[k].state === "hidden" || o[k] === "hidden")));
+  } catch {
+    return new Set();
+  }
+}
+function setSessionHidden(id: string, hidden: boolean): void {
+  let o: any = {};
+  try { o = JSON.parse(fs.readFileSync(SESSIONS_META, "utf8")); } catch { o = {}; }
+  if (hidden) o[id] = { state: "hidden" };
+  else delete o[id];
+  try {
+    fs.mkdirSync(path.dirname(SESSIONS_META), { recursive: true });
+    fs.writeFileSync(SESSIONS_META, JSON.stringify(o, null, 2), "utf8");
+  } catch {
+    /* ignore */
+  }
+}
+// 연결 해제(삭제 ≠ 해제): '이 워크스페이스'의 링크만 제거(프로젝트별 분리 — 같은 codex 세션을
+// 쓰는 타 워크스페이스 링크는 보존). byWorkspace는 키=normWs, bySession은 .workspace로 스코프. 원본은 안 건드림.
+function unlinkSession(id: string, ws: string): void {
+  const n = normWs(ws);
+  if (!n) return;
+  let o: any = {};
+  try { o = JSON.parse(fs.readFileSync(LINKS_FILE, "utf8")); } catch { o = {}; }
+  o.bySession = o.bySession || {};
+  o.byWorkspace = o.byWorkspace || {};
+  for (const k of Object.keys(o.bySession)) if (o.bySession[k]?.codexSession === id && normWs(o.bySession[k].workspace || "") === n) delete o.bySession[k];
+  for (const k of Object.keys(o.byWorkspace)) if (normWs(k) === n && o.byWorkspace[k]?.codexSession === id) delete o.byWorkspace[k];
+  try {
+    fs.mkdirSync(path.dirname(LINKS_FILE), { recursive: true });
+    fs.writeFileSync(LINKS_FILE, JSON.stringify(o, null, 2), "utf8");
+  } catch {
+    /* ignore */
+  }
 }
 
 function relink(id: string): void {
@@ -387,6 +436,25 @@ class Dashboard {
           relink(String(m.id));
           this.post();
           vscode.commands.executeCommand("codexBridge.refresh");
+        }
+        if (m?.type === "hideSession" && m.id) {
+          const id = String(m.id);
+          const ws = dashboardWorkspace();
+          const linked = !!ws && workspaceLink(loadLinks(), ws)?.codexSession === id;
+          const warn = linked ? "이 세션은 지금 이 프로젝트에 연결돼 있습니다. 숨기면 이 프로젝트의 연결만 해제됩니다(다른 프로젝트 연결은 유지).\n\n" : "";
+          vscode.window
+            .showWarningMessage(`${warn}이 Codex 세션을 목록에서 숨길까요?\n(${id.slice(0, 8)}… · 원본 파일은 지우지 않으며 '숨긴 세션 보기'에서 복원 가능)`, { modal: true }, "숨기기")
+            .then((pick) => {
+              if (pick !== "숨기기") return;
+              if (linked && ws) unlinkSession(id, ws);
+              setSessionHidden(id, true);
+              this.post();
+              vscode.commands.executeCommand("codexBridge.refresh");
+            });
+        }
+        if (m?.type === "restoreSession" && m.id) {
+          setSessionHidden(String(m.id), false);
+          this.post();
         }
         if (m?.type === "saveContract") {
           saveContract(dashboardWorkspace(), {
@@ -513,6 +581,12 @@ class Dashboard {
   .cand{display:flex;gap:8px;align-items:flex-start;justify-content:space-between;border:1px solid var(--vscode-panel-border);border-radius:6px;padding:8px 10px;margin-bottom:6px}
   .cand.linked{border-color:var(--vscode-charts-green);background:var(--vscode-editor-background)}
   .star{color:var(--vscode-charts-green);font-size:12px;font-weight:600}
+  .cacts{display:flex;gap:6px;align-items:center;flex-shrink:0}
+  button.del{padding:2px 9px;line-height:1.5;opacity:.75}
+  button.del:hover{opacity:1}
+  .linklike{background:none;border:none;color:var(--vscode-textLink-foreground);cursor:pointer;padding:6px 0;font-size:12px;text-align:left}
+  .linklike:hover{text-decoration:underline}
+  #hiddenList{margin-top:4px}
   /* 모노그램 에이전트(이모지 대신) */
   .mono{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;margin:0 auto 2px;color:#fff;letter-spacing:.5px}
   .mono.c{background:var(--vscode-charts-blue)}
@@ -689,6 +763,7 @@ class Dashboard {
   <div id="conv"></div>
   <h2 class="sec base">🔗 Codex 세션 연결 <span class="sub2" id="cwsLabel">첫 발화로 식별</span></h2>
   <div id="cands"></div>
+  <div id="hiddenWrap"></div>
 </main>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
@@ -728,7 +803,17 @@ class Dashboard {
   function flashSaved(node, msg){ if(!node) return; node.textContent = msg || "저장됨 ✓ (다음 턴부터 적용)"; node.classList.remove("flash"); void node.offsetWidth; node.classList.add("flash"); }
   $("cands").addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-relink]");
-    if (b) vscode.postMessage({type:"relink", id:b.getAttribute("data-relink")});
+    if (b) { vscode.postMessage({type:"relink", id:b.getAttribute("data-relink")}); return; }
+    const x = ev.target.closest("[data-del]");
+    if (x) { vscode.postMessage({type:"hideSession", id:x.getAttribute("data-del")}); return; }
+  });
+  $("hiddenWrap").addEventListener("click", (ev) => {
+    const t = ev.target.closest("#hiddenToggle");
+    if (t) { const box=$("hiddenList"); const open=box.style.display==="none"; box.style.display=open?"":"none"; t.textContent = open ? "숨긴 세션 접기" : "숨긴 세션 " + box.children.length + "개 보기"; return; }
+    const r = ev.target.closest("[data-restore]");
+    if (r) { vscode.postMessage({type:"restoreSession", id:r.getAttribute("data-restore")}); return; }
+    const x = ev.target.closest("[data-del]");
+    if (x) { vscode.postMessage({type:"hideSession", id:x.getAttribute("data-del")}); return; }
   });
   // 온보딩: '이동' 버튼=대상 스크롤+강조, 끄기=기억 dismiss, 다시 보기=복원
   $("onboard").addEventListener("click", (ev) => {
@@ -880,8 +965,7 @@ class Dashboard {
         if (body && more && body.scrollHeight <= body.clientHeight + 2){ body.classList.remove("clip"); more.style.display = "none"; }
       });
     }
-    const cs = $("cands"); cs.replaceChildren();
-    d.candidates.forEach((c) => {
+    const mkRow = (c, hidden) => {
       const row = el("div","cand" + (c.linked?" linked":""));
       const left = el("div");
       const idline = el("div","id", c.id + (c.linked?"  ":""));
@@ -889,9 +973,27 @@ class Dashboard {
       left.appendChild(idline);
       left.appendChild(el("div","muted", c.when + " · " + c.snippet));
       row.appendChild(left);
-      if (!c.linked){ const b=el("button",null,"연결"); b.setAttribute("data-relink", c.id); row.appendChild(b); }
-      cs.appendChild(row);
-    });
+      const acts = el("div","cacts");
+      if (hidden){
+        const r=el("button","secondary","복원"); r.setAttribute("data-restore", c.id); acts.appendChild(r);
+      } else {
+        if (!c.linked){ const b=el("button",null,"연결"); b.setAttribute("data-relink", c.id); acts.appendChild(b); }
+        const x=el("button","secondary del","🗑"); x.title="목록에서 숨기기 (원본 파일은 보존 · 복원 가능)"; x.setAttribute("data-del", c.id); acts.appendChild(x);
+      }
+      row.appendChild(acts);
+      return row;
+    };
+    const cs = $("cands"); cs.replaceChildren();
+    d.candidates.forEach((c) => cs.appendChild(mkRow(c, false)));
+    // 숨긴 세션: 접힌 채로, 개수 토글로 펼침 (원본은 지우지 않음)
+    const hw = $("hiddenWrap"); hw.replaceChildren();
+    if (d.hiddenCandidates && d.hiddenCandidates.length){
+      const n = d.hiddenCandidates.length;
+      const tg = el("button","linklike","숨긴 세션 " + n + "개 보기"); tg.id="hiddenToggle";
+      const box = el("div"); box.id="hiddenList"; box.style.display="none";
+      d.hiddenCandidates.forEach((c) => box.appendChild(mkRow(c, true)));
+      hw.appendChild(tg); hw.appendChild(box);
+    }
   });
 </script></body></html>`;
   }

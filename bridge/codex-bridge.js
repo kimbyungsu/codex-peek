@@ -258,6 +258,16 @@ function firstUserSnippet(file) {
 }
 
 // 최근 rollout(헤드리스 포함) 목록 — 최신 수정순.
+// 숨긴 세션(대시보드 후보에서 제외). ~/.codex-bridge/sessions-meta.json (id→{state}). 원본 rollout은 안 건드림(§5.1).
+function hiddenSessions() {
+  try {
+    const o = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, "sessions-meta.json"), "utf8"));
+    return new Set(Object.keys(o).filter((k) => o[k] && (o[k].state === "hidden" || o[k] === "hidden")));
+  } catch {
+    return new Set();
+  }
+}
+
 function recentRollouts(limit) {
   const out = [];
   const walk = (d, depth) => {
@@ -285,7 +295,8 @@ function recentRollouts(limit) {
     }
   };
   walk(SESSIONS_DIR, 0);
-  return out.sort((a, b) => b.mtime - a.mtime).slice(0, limit);
+  const hidden = hiddenSessions();
+  return out.filter((r) => !hidden.has(r.id)).sort((a, b) => b.mtime - a.mtime).slice(0, limit);
 }
 
 function indexedSessions() {
