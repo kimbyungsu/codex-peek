@@ -52,6 +52,7 @@ interface BridgeState {
   reasoningPref: string;  // 저장된 선택 생각강도 ("" = 기본)
   knownModels: string[];  // 이 세션이 써본 모델들(캐시 없을 때 폴백 추천)
   availModels: AvailModel[]; // 계정 캐시(models_cache.json)의 모델·모델별 생각강도 — 하드코딩 대신 계정 실제 목록
+  modelsCacheNote: string;   // 계정 캐시 못 읽을 때 사용자에게 보여줄 이유("" = 정상)
 }
 
 function normWs(p: string): string {
@@ -390,6 +391,15 @@ function computeState(turnsN: number): BridgeState {
   const candidates: Candidate[] = allRoll.filter((r) => !hid.has(r.id)).slice(0, 12).map(mkCand);
   const hiddenCandidates: Candidate[] = allRoll.filter((r) => hid.has(r.id)).slice(0, 50).map(mkCand);
 
+  // 모델·생각강도 옵션은 계정 캐시에서 온다. 못 읽으면 '왜'를 알려줄 진단 문구(빈 문자열=정상).
+  const availModels = readModelsCache();
+  let modelsCacheNote = "";
+  if (!availModels.length) {
+    modelsCacheNote = fs.existsSync(path.join(CODEX_HOME, "models_cache.json"))
+      ? "계정 모델 목록을 읽었지만 표시할 모델이 없어 기본값으로 보여줘요(코덱스 갱신/버전 확인)."
+      : "계정 모델 목록 파일을 못 찾아 기본값으로 보여줘요 — 코덱스가 아직 목록을 안 받았거나 폴더 위치(CODEX_HOME)가 바뀐 경우예요.";
+  }
+
   return {
     workspace: ws,
     linkedId,
@@ -410,7 +420,8 @@ function computeState(turnsN: number): BridgeState {
     modelPref: typeof pref.model === "string" ? pref.model : "",
     reasoningPref: typeof pref.reasoning === "string" ? pref.reasoning : "",
     knownModels: modelMeta.models,
-    availModels: readModelsCache(),
+    availModels,
+    modelsCacheNote,
   };
 }
 
@@ -447,6 +458,46 @@ function unlinkSession(id: string, ws: string): void {
   o.byWorkspace = o.byWorkspace || {};
   for (const k of Object.keys(o.bySession)) if (o.bySession[k]?.codexSession === id && normWs(o.bySession[k].workspace || "") === n) delete o.bySession[k];
   for (const k of Object.keys(o.byWorkspace)) if (normWs(k) === n && o.byWorkspace[k]?.codexSession === id) delete o.byWorkspace[k];
+  try {
+    fs.mkdirSync(path.dirname(LINKS_FILE), { recursive: true });
+    fs.writeFileSync(LINKS_FILE, JSON.stringify(o, null, 2), "utf8");
+  } catch {
+    /* ignore */
+  }
+}
+
+// 영구 삭제: rollout 원본 파일을 지운다(되돌릴 수 없음). 코덱스 내부 state db의 잔여 항목은 코덱스가 정리한다
+// (우리가 코덱스 내부 db를 건드리는 건 위험). 삭제된 세션 resume 시 코덱스가 "no rollout found"로 곱게 실패함을
+// 런타임 확인(2026-06-20) — 다른 세션·find 스캔은 안 깨짐.
+// 성공여부를 반환: 파일 없음=이미 목표달성(true), 삭제 예외(잠김/권한)=false → 호출부가 메타를 함부로 안 지우게.
+function purgeRollout(id: string): boolean {
+  try {
+    const f = findRolloutById(id);
+    if (!f) return true;
+    fs.unlinkSync(f);
+    return true;
+  } catch {
+    return false;
+  }
+}
+// 이 codex 세션을 가리키는 워크스페이스 키들(영구삭제 전 '몇 개 프로젝트가 쓰는지' 경고용).
+function workspacesLinking(id: string): string[] {
+  try {
+    const o = JSON.parse(fs.readFileSync(LINKS_FILE, "utf8"));
+    return Object.keys(o.byWorkspace || {}).filter((k) => o.byWorkspace[k]?.codexSession === id);
+  } catch {
+    return [];
+  }
+}
+// 영구삭제용 전역 해제: 파일이 전역으로 사라지므로 이 세션을 가리키는 '모든' 링크를 제거(타 워크스페이스 dangling 방지).
+// (hide의 unlinkSession은 워크스페이스 한정 — delete와 정책이 다름.)
+function unlinkSessionEverywhere(id: string): void {
+  let o: any = {};
+  try { o = JSON.parse(fs.readFileSync(LINKS_FILE, "utf8")); } catch { o = {}; }
+  o.bySession = o.bySession || {};
+  o.byWorkspace = o.byWorkspace || {};
+  for (const k of Object.keys(o.bySession)) if (o.bySession[k]?.codexSession === id) delete o.bySession[k];
+  for (const k of Object.keys(o.byWorkspace)) if (o.byWorkspace[k]?.codexSession === id) delete o.byWorkspace[k];
   try {
     fs.mkdirSync(path.dirname(LINKS_FILE), { recursive: true });
     fs.writeFileSync(LINKS_FILE, JSON.stringify(o, null, 2), "utf8");
@@ -536,6 +587,28 @@ class Dashboard {
         if (m?.type === "restoreSession" && m.id) {
           setSessionHidden(String(m.id), false);
           this.post();
+        }
+        if (m?.type === "purgeSession" && m.id) {
+          const id = String(m.id);
+          const others = workspacesLinking(id); // 이 세션을 연결한 모든 프로젝트(파일은 전역 자원)
+          const warn = others.length > 1
+            ? `이 세션은 ${others.length}개 프로젝트에서 연결해 쓰고 있어요. 삭제하면 그 프로젝트들에서도 사라집니다.\n\n`
+            : others.length === 1
+              ? "이 세션은 한 프로젝트에 연결돼 있어요. 삭제하면 그 연결도 해제됩니다.\n\n"
+              : "";
+          vscode.window
+            .showWarningMessage(`${warn}이 Codex 세션을 영구 삭제할까요?\n(${id.slice(0, 8)}… · 대화 원본 파일이 지워지며 되돌릴 수 없습니다)`, { modal: true }, "영구 삭제")
+            .then((pick) => {
+              if (pick !== "영구 삭제") return;
+              if (!purgeRollout(id)) { // 삭제 실패(잠김/권한) → 메타 그대로 두고 알림(거짓 삭제 방지)
+                vscode.window.showErrorMessage("세션 파일을 삭제하지 못했어요(파일 잠김/권한?). 목록은 그대로 둡니다.");
+                return;
+              }
+              unlinkSessionEverywhere(id); // 파일이 전역 삭제됐으니 모든 워크스페이스 링크 제거(dangling 방지)
+              setSessionHidden(id, false); // 사라진 세션의 숨김 메타 정리
+              this.post();
+              vscode.commands.executeCommand("codexBridge.refresh");
+            });
         }
         if (m?.type === "saveModelPref") {
           setModelPref(dashboardWorkspace() || "", String(m.model || ""), String(m.reasoning || ""));
@@ -849,14 +922,10 @@ class Dashboard {
     <textarea id="bRejudge" rows="5"></textarea>
     <div class="row"><button id="saveB">단계별 기본 원칙 저장</button><button id="resetB" class="secondary">기본값 복원</button><span id="savedB" class="muted"></span></div>
   </details>
-  <h2 class="sec codex">🔍 Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
-  <div id="conv"></div>
-  <h2 class="sec base">🔗 Codex 세션 연결 <span class="sub2" id="cwsLabel">첫 발화로 식별</span></h2>
-  <div id="cands"></div>
-  <div id="hiddenWrap"></div>
   <h2 class="sec base">🧠 코덱스 두뇌 설정 <span class="sub2">이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)</span></h2>
   <div class="mcard">
     <div class="muted">지금 쓰는 값(최근 기록): <b id="mCur">—</b></div>
+    <div id="mCacheWarn" class="hint" style="display:none;margin:6px 0 0 0"></div>
     <div class="mrow"><span class="mlbl">모델</span>
       <input id="mModel" list="mModelList" placeholder="(코덱스 기본값 그대로)" autocomplete="off" />
       <datalist id="mModelList"></datalist>
@@ -867,6 +936,11 @@ class Dashboard {
     <div class="row" style="margin-top:10px"><button id="saveModel">두뇌 설정 저장</button><span id="savedModel" class="muted"></span></div>
     <div class="muted" style="margin-top:6px">선택은 <b>다음 코덱스 응답부터</b> 적용 · 비우면 코덱스 기본값 · 코덱스에 말 걸 때마다 자동으로 다시 실어줌</div>
   </div>
+  <h2 class="sec codex">🔍 Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
+  <div id="conv"></div>
+  <h2 class="sec base">🔗 Codex 세션 연결 <span class="sub2" id="cwsLabel">첫 발화로 식별</span></h2>
+  <div id="cands"></div>
+  <div id="hiddenWrap"></div>
 </main>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
@@ -944,6 +1018,8 @@ class Dashboard {
     if (t) { const box=$("hiddenList"); const open=box.style.display==="none"; box.style.display=open?"":"none"; t.textContent = open ? "숨긴 세션 접기" : "숨긴 세션 " + box.children.length + "개 보기"; return; }
     const r = ev.target.closest("[data-restore]");
     if (r) { vscode.postMessage({type:"restoreSession", id:r.getAttribute("data-restore")}); return; }
+    const p = ev.target.closest("[data-purge]");
+    if (p) { vscode.postMessage({type:"purgeSession", id:p.getAttribute("data-purge")}); return; }
     const x = ev.target.closest("[data-del]");
     if (x) { vscode.postMessage({type:"hideSession", id:x.getAttribute("data-del")}); return; }
   });
@@ -1108,6 +1184,7 @@ class Dashboard {
       const acts = el("div","cacts");
       if (hidden){
         const r=el("button","secondary","복원"); r.setAttribute("data-restore", c.id); acts.appendChild(r);
+        const p=el("button","secondary del","삭제"); p.title="영구 삭제 (대화 파일이 지워지며 되돌릴 수 없음)"; p.setAttribute("data-purge", c.id); acts.appendChild(p);
       } else {
         if (!c.linked){ const b=el("button",null,"연결"); b.setAttribute("data-relink", c.id); acts.appendChild(b); }
         const x=el("button","secondary del","🗑"); x.title="목록에서 숨기기 (원본 파일은 보존 · 복원 가능)"; x.setAttribute("data-del", c.id); acts.appendChild(x);
@@ -1128,6 +1205,7 @@ class Dashboard {
     }
     // 두뇌 설정(모델·생각강도): 현재값 보기 + 저장된 선택 반영(미저장 편집은 보존). 옵션은 계정 캐시 기반.
     AVAIL = d.availModels || [];
+    const cw=$("mCacheWarn"); if(cw){ cw.textContent=d.modelsCacheNote||""; cw.style.display=d.modelsCacheNote?"":"none"; }
     const nameOf=(slug)=>{ const m=AVAIL.find((x)=>x.slug===slug); return m?m.name:(slug||""); };
     const effLabel=(e)=>RSKO[e]||(e||"미상");
     $("mCur").textContent = d.linkedId ? ((nameOf(d.modelCurrent)||"미상")+" · 생각강도 "+effLabel(d.effortCurrent)) : "연결된 세션 없음";
