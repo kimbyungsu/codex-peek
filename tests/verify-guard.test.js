@@ -47,6 +47,13 @@ function runGuard(sb, over = {}) {
   });
 }
 function blocked(r) { try { return JSON.parse((r.stdout || "").trim()).decision === "block"; } catch { return false; } }
+// env에 CLAUDE_CODE_SESSION_ID를 주지 않는 변형 — reader의 폴백(j.session_id→transcript sessionId) 검증용.
+function runGuardNoEnvSession(sb, over = {}) {
+  const stdin = Object.assign({ transcript_path: sb.transcriptPath, cwd: sb.ws, session_id: sb.session, stop_hook_active: false }, over);
+  const env = Object.assign({}, process.env, { CODEX_BRIDGE_HOME: sb.bridgeDir, CLAUDE_PROJECT_DIR: sb.ws });
+  delete env.CLAUDE_CODE_SESSION_ID;
+  return cp.spawnSync(process.execPath, [GUARD], { input: JSON.stringify(stdin), encoding: "utf8", timeout: 30000, env });
+}
 function clean(sb) { try { fs.rmSync(sb.dir, { recursive: true, force: true }); } catch {} }
 
 // 1) 검증 모드 off → 절대 차단 안 함
@@ -213,6 +220,26 @@ function clean(sb) { try { fs.rmSync(sb.dir, { recursive: true, force: true }); 
   ].join("\n"));
   putProof(sb, { ts: TFRESH }); // proof는 있으나 턴 경계를 못 잡음
   ok(blocked(runGuard(sb)), "timestamp 전무면 stale 오인 막으려 차단");
+  clean(sb);
+})();
+
+// 16) env에 CLAUDE_CODE_SESSION_ID 없음 → j.session_id 폴백으로 proof 찾음 (D)
+(function () {
+  console.log("[16] env 세션 없음 → j.session_id 폴백");
+  const sb = setup("jsess", "always");
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]);
+  putProof(sb, { ts: TFRESH });
+  ok(!blocked(runGuardNoEnvSession(sb)), "env 없어도 j.session_id로 proof 찾아 통과");
+  clean(sb);
+})();
+
+// 17) env·j.session_id 둘 다 없음 → transcript sessionId 폴백 (D)
+(function () {
+  console.log("[17] env·j.session_id 없음 → transcript sessionId 폴백");
+  const sb = setup("txsess", "always");
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]); // 줄마다 sessionId=sb.session
+  putProof(sb, { ts: TFRESH });
+  ok(!blocked(runGuardNoEnvSession(sb, { session_id: undefined })), "transcript sessionId로 proof 찾아 통과");
   clean(sb);
 })();
 
