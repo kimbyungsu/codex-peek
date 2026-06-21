@@ -330,6 +330,22 @@ if (GIT_OK) {
     ok(!blocked(runGuard(sb)), "변경 없으면 code 모드에서 통과");
     clean(sb);
   })();
+
+  // 24) rm -r dir: 부모 폴더째 삭제 → 존재하는 조상(ws) mtime으로 감지
+  (function () {
+    console.log("[24] rm -r 폴더째 삭제도 감지 (조상 dir 탐색)");
+    const sb = gitSetup("v2rmr", "code");
+    const sub = path.join(sb.ws, "sub");
+    fs.mkdirSync(sub);
+    fs.writeFileSync(path.join(sub, "inner.txt"), "x");
+    cp.execSync("git add -A", { cwd: sb.ws, stdio: "ignore" });
+    cp.execSync("git commit -m init", { cwd: sb.ws, stdio: "ignore" });
+    fs.utimesSync(sb.ws, T_OLD, T_OLD);
+    fs.rmSync(sub, { recursive: true, force: true }); // sub 폴더째 삭제 → ws mtime now
+    putTx(sb, [human(T_USER, sb.session)]);
+    ok(blocked(runGuard(sb)), "폴더째 삭제도 조상 dir mtime으로 트리거→차단");
+    clean(sb);
+  })();
 } else {
   console.log("[18-23] git 없음 → V2 테스트 건너뜀");
 }

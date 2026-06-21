@@ -13,7 +13,8 @@ const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs");
 // V2: 도구(Write/Edit) 외 Bash 경유 변경(sed -i·cat>·생성기 등)도 감지하기 위해, git 저장소에서
 // '지금 바뀐 파일들'의 최신 수정시각(mtime)을 본다. 키워드/정규식 나열(취약·안티패턴) 대신 실제 변경을 본다.
 // 반환: null=비-git/실패(→도구 감지로 폴백), 0=변경 파일 없음, >0=가장 최근에 바뀐 파일의 mtime(ms).
-// 삭제만 한 변경은 mtime으로 못 잡음(파일이 사라짐) — 알려진 한계(생성/수정은 잡음).
+// 삭제(rm·git rm·rm -r)는 파일이 사라져 stat 불가 → 존재하는 가장 가까운 조상 디렉터리 mtime으로 삭제 시각 근사
+// (삭제 시 그 디렉터리 mtime이 갱신됨). gitignore된 파일·git status 타임아웃은 잡지 못함(도구 감지로 폴백).
 function gitChangedMaxMtime(ws) {
   let out;
   try {
@@ -32,18 +33,20 @@ function gitChangedMaxMtime(ws) {
     const arrow = p.indexOf(" -> ");
     if (arrow >= 0) p = p.slice(arrow + 4); // 이름변경 "old -> new" → 현재 파일(new)
     const full = path.join(ws, p);
+    let m = 0;
     try {
-      const st = fs.statSync(full);
-      if (st.mtimeMs > max) max = st.mtimeMs;
+      m = fs.statSync(full).mtimeMs;
     } catch {
-      // 삭제(rm·git rm 등)로 파일이 사라짐 → 부모 디렉터리 mtime으로 삭제 시각을 근사(삭제 시 부모 dir mtime 갱신).
-      try {
-        const dst = fs.statSync(path.dirname(full));
-        if (dst.mtimeMs > max) max = dst.mtimeMs;
-      } catch {
-        /* 부모도 없음(상위 디렉터리째 삭제 등) → 건너뜀 */
+      // 삭제로 파일(또는 상위 폴더째 rm -r) 사라짐 → 존재하는 가장 가까운 조상 디렉터리 mtime으로 삭제 시각 근사.
+      let d = path.dirname(full);
+      for (let i = 0; i < 64; i++) {
+        try { m = fs.statSync(d).mtimeMs; break; } catch { /* 더 위로 */ }
+        const up = path.dirname(d);
+        if (up === d) break; // 루트 도달
+        d = up;
       }
     }
+    if (m > max) max = m;
   }
   return max;
 }
