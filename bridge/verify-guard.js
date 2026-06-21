@@ -84,7 +84,9 @@ function bumpAttempts(session, turnTs) {
   if (!session) return 1; // 세션키 없으면 카운트 불가 → 1로 취급(최소 1회는 차단되도록)
   let a = { ts: 0, count: 0 };
   try { a = JSON.parse(fs.readFileSync(attemptsPath(session), "utf8")); } catch { /* 없음=새로 */ }
-  if (!(Number(a.ts) >= turnTs && turnTs > 0)) a = { ts: turnTs, count: 0 }; // 이전 턴이거나 ts 불명 → 리셋
+  // 유효 발화시각이고 저장된 게 이전 턴이면 리셋. turnTs<=0(턴 경계 불명)이면 리셋하지 않고 '누적'해서라도
+  // MAX로 바운드한다 — 매번 리셋하면 count가 1에 머물러 MAX에 영영 도달 못 해 무한 차단되기 때문.
+  if (turnTs > 0 && Number(a.ts) < turnTs) a = { ts: turnTs, count: 0 };
   a.count = (Number(a.count) || 0) + 1;
   atomicWrite(attemptsPath(session), JSON.stringify(a)); // atomicWrite가 ATTEMPTS_DIR 자동 생성
   return a.count;

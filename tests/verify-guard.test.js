@@ -392,5 +392,20 @@ if (GIT_OK) {
   clean(sb);
 })();
 
+// 28) 발화 timestamp 없음(턴 경계 불명)이어도 재검증 루프는 바운드(MAX 후 통과) — 무한 차단 방지
+(function () {
+  console.log("[28] timestamp 없어도 루프는 바운드(무한차단 방지)");
+  const sb = setup("v4nots", "always");
+  fs.writeFileSync(sb.transcriptPath, [
+    JSON.stringify({ type: "user", sessionId: sb.session, message: { content: [{ type: "text", text: "해줘" }] } }),
+    JSON.stringify({ type: "assistant", sessionId: sb.session, message: { content: [{ type: "tool_use", name: "Write", input: {} }] } }),
+  ].join("\n"));
+  const results = [];
+  for (let i = 0; i < 5; i++) results.push(blocked(runGuard(sb, { stop_hook_active: i > 0 })));
+  ok(results.includes(false), "유한 횟수 차단 후 통과함(무한 차단 아님)");
+  ok(results.includes(true), "적어도 한 번은 차단(검증 강제는 함)");
+  clean(sb);
+})();
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
