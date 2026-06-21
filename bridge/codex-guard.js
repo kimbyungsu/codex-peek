@@ -26,7 +26,7 @@ process.stdin.on("end", () => {
   if (direct && !isBridge) {
     process.stderr.write(
       "⛔ Codex 직접 호출이 차단되었습니다. Codex 소통은 브릿지만 사용하세요.\n" +
-        `   node ${BRIDGE} ask "..."\n` +
+        `   node "${BRIDGE}" ask "..."\n` +
         "   (연결 없으면 보고만 함 / 첫 소통은 ask --allow-new)\n",
     );
     process.exit(2);

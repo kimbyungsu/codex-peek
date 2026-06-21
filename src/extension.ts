@@ -6,14 +6,17 @@ import * as crypto from "crypto";
 import { spawn } from "child_process";
 
 const HOME = os.homedir();
+// 자체 namespace 폴더. CODEX_BRIDGE_HOME으로 override(확장 호스트≠훅 home 환경 대비 — 브릿지·훅과 동일 규칙).
+// ★확장의 모든 자체파일 경로는 이 BRIDGE_DIR 한 곳에서만 파생(override 누락 방지).
+const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(HOME, ".codex-bridge");
 // V11: codex가 실제 쓰는 home. env → 확장이 'codex doctor'로 적어둔 codex-home.txt → ~/.codex 폴백.
 // (syncCodexHome이 활성화 때 갱신하므로 let)
-const PINNED_HOME = readTextSafe(path.join(HOME, ".codex-bridge", "codex-home.txt"));
+const PINNED_HOME = readTextSafe(path.join(BRIDGE_DIR, "codex-home.txt"));
 let CODEX_HOME = process.env.CODEX_HOME || (PINNED_HOME && fs.existsSync(PINNED_HOME) ? PINNED_HOME : "") || path.join(HOME, ".codex");
 let SESSIONS_DIR = path.join(CODEX_HOME, "sessions");
-const LINKS_FILE = path.join(HOME, ".codex-bridge", "links.json");
-const CONTRACT_FILE = path.join(HOME, ".codex-bridge", "contract.json"); // 전역 기본값(상속 시드)
-const CONTRACTS_DIR = path.join(HOME, ".codex-bridge", "contracts"); // 프로젝트별 계약
+const LINKS_FILE = path.join(BRIDGE_DIR, "links.json");
+const CONTRACT_FILE = path.join(BRIDGE_DIR, "contract.json"); // 전역 기본값(상속 시드)
+const CONTRACTS_DIR = path.join(BRIDGE_DIR, "contracts"); // 프로젝트별 계약
 // 원자적 저장: 임시파일에 쓴 뒤 rename으로만 교체 → 읽는 쪽은 옛/새 파일만 보고 반쪽(손상) 파일은 못 본다
 // (다중 창 동시쓰기 손상 방지). ⚠ 직접쓰기 폴백 금지 — Windows에선 대상이 동시 읽기로 잠깐 열려 있으면 rename이
 // 실패하는데, 그때 직접쓰기로 폴백하면 그게 반쪽파일 손상의 원인이 된다(검증 확인). rename 짧게 재시도, 끝내
@@ -87,7 +90,7 @@ function currentWorkspace(): string | null {
 // 이걸 우선해, 보여주는 세션이 검증이 실제 가는 세션과 일치하게 한다. 없으면 VS Code 폴더로 폴백.
 function activeWorkspace(): string | null {
   try {
-    const o = JSON.parse(fs.readFileSync(path.join(HOME, ".codex-bridge", "active.json"), "utf8"));
+    const o = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR,"active.json"), "utf8"));
     // 신선도 가드: 오래된 active(지난 작업/다른 세션 잔재)는 무시하고 VS Code 폴더로 폴백.
     // 6시간 = 한 작업 세션 동안 유효로 보는 보수적 기본값.
     const ts = o && o.ts ? Date.parse(o.ts) : NaN;
@@ -102,7 +105,7 @@ function activeWorkspace(): string | null {
 // 지금 Claude가 플랜 모드인지(훅이 active.json에 기록한 permissionMode). 오래된 값은 무시(6h).
 function activePermissionMode(ws: string | null): string {
   try {
-    const o = JSON.parse(fs.readFileSync(path.join(HOME, ".codex-bridge", "active.json"), "utf8"));
+    const o = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR,"active.json"), "utf8"));
     const ts = o && o.ts ? Date.parse(o.ts) : NaN;
     const fresh = Number.isFinite(ts) && Date.now() - ts < 6 * 60 * 60 * 1000;
     // 이 창의 워크스페이스와 active 기록이 같을 때만 — 다른 창의 플랜 상태가 새어 보이지 않게(창 격리).
@@ -353,7 +356,7 @@ function toTurns(msgs: Array<{ role: string; text: string }>): Turn[] {
 // 확장이 자체 복제하지 않고 ~/.codex-bridge/contract-lib.js 를 그대로 쓴다(드리프트 방지).
 function bridgeLib(): any | null {
   try {
-    return require(path.join(HOME, ".codex-bridge", "contract-lib.js"));
+    return require(path.join(BRIDGE_DIR,"contract-lib.js"));
   } catch {
     return null;
   }
@@ -433,7 +436,7 @@ function computeState(turnsN: number): BridgeState {
     baseAvailable: bridgeLib() !== null,
     permissionMode: activePermissionMode(ws),
     codexReady: !!resolveCodexPathForBridge(),
-    onboardDismissed: fs.existsSync(path.join(HOME, ".codex-bridge", "onboard-dismissed")),
+    onboardDismissed: fs.existsSync(path.join(BRIDGE_DIR,"onboard-dismissed")),
     modelCurrent: modelMeta.model,
     effortCurrent: modelMeta.effort,
     modelPref: typeof pref.model === "string" ? pref.model : "",
@@ -445,7 +448,7 @@ function computeState(turnsN: number): BridgeState {
 }
 
 // 숨긴 세션 메타(원본 rollout 안 건드림 — §5.1). ~/.codex-bridge/sessions-meta.json (id→{state}).
-const SESSIONS_META = path.join(HOME, ".codex-bridge", "sessions-meta.json");
+const SESSIONS_META = path.join(BRIDGE_DIR,"sessions-meta.json");
 function hiddenSessions(): Set<string> {
   try {
     const o = JSON.parse(fs.readFileSync(SESSIONS_META, "utf8"));
@@ -665,11 +668,11 @@ class Dashboard {
           this.panel?.webview.postMessage({ type: "saveResult", target: "base", ok });
         }
         if (m?.type === "dismissOnboard") {
-          try { fs.mkdirSync(path.join(HOME, ".codex-bridge"), { recursive: true }); fs.writeFileSync(path.join(HOME, ".codex-bridge", "onboard-dismissed"), "1", "utf8"); } catch { /* ignore */ }
+          try { fs.mkdirSync(BRIDGE_DIR, { recursive: true }); fs.writeFileSync(path.join(BRIDGE_DIR,"onboard-dismissed"), "1", "utf8"); } catch { /* ignore */ }
           this.post();
         }
         if (m?.type === "showOnboard") {
-          try { fs.rmSync(path.join(HOME, ".codex-bridge", "onboard-dismissed"), { force: true }); } catch { /* ignore */ }
+          try { fs.rmSync(path.join(BRIDGE_DIR,"onboard-dismissed"), { force: true }); } catch { /* ignore */ }
           this.post();
         }
         if (m?.type === "openSettings") {
@@ -1304,7 +1307,7 @@ function resolveCodexPathForBridge(): string | undefined {
 // 위 결과를 ~/.codex-bridge/codex-bin.txt 에 기록(브릿지 훅이 읽음). 확장 활성화·설정변경마다 갱신.
 // → 자동추적: 버전업/포터블↔설치형 전환에도 항상 현재 위치. 못 찾으면 파일을 지워 PATH 폴백.
 function syncCodexBin(): void {
-  const f = path.join(HOME, ".codex-bridge", "codex-bin.txt");
+  const f = path.join(BRIDGE_DIR,"codex-bin.txt");
   const found = resolveCodexPathForBridge();
   try {
     fs.mkdirSync(path.dirname(f), { recursive: true });
@@ -1340,7 +1343,7 @@ function syncCodexHome(onDone: (changed: boolean) => void): void {
       let changed = false;
       try {
         if (home && fs.existsSync(home)) {
-          const f = path.join(HOME, ".codex-bridge", "codex-home.txt");
+          const f = path.join(BRIDGE_DIR,"codex-home.txt");
           // 파일이 이미 같거나(=공유 상태 일치) 새로 쓰기 성공한 경우에만 메모리 home 갱신. 쓰기 실패 시
           // 메모리만 새 home으로 바꾸면 확장은 새 home·브릿지는 옛 home을 봐 '확장·브릿지 일치'가 깨진다 → 갱신 보류.
           const persisted = readTextSafe(f) === home || atomicWrite(f, home);

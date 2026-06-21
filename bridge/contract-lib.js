@@ -6,7 +6,8 @@ const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 
-const BRIDGE_DIR = path.join(os.homedir(), ".codex-bridge");
+// CODEX_BRIDGE_HOME override(확장 호스트≠훅 home 환경 대비). 미설정이면 ~/.codex-bridge. 확장·codex-bridge.js와 동일 규칙.
+const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(os.homedir(), ".codex-bridge");
 const CONTRACT_FILE = path.join(BRIDGE_DIR, "contract.json"); // 전역 기본값(상속 시드 · 레거시 호환)
 const CONTRACTS_DIR = path.join(BRIDGE_DIR, "contracts"); // 프로젝트별 계약 파일들
 const BRIDGE = path.join(BRIDGE_DIR, "codex-bridge.js");
@@ -178,10 +179,10 @@ function buildVerifyDirective(mode) {
   const b = loadBaseDirective();
   return [
     `[검증 모드 ON(${mode}) · 구현→검증 2트랙 · 사람이 턴을 중계하지 않음]`,
-    `${cond}, 사용자에게 완료를 보고하기 전에 반드시 \`node ${BRIDGE} ask --allow-new "..."\` 로 Codex 검증을 받아라. (연결된 Codex 세션이 있으면 그 세션으로 이어가고, 없으면 새 세션을 만들어 연결한다.)`,
+    `${cond}, 사용자에게 완료를 보고하기 전에 반드시 \`node "${BRIDGE}" ask --allow-new "..."\` 로 Codex 검증을 받아라. (연결된 Codex 세션이 있으면 그 세션으로 이어가고, 없으면 새 세션을 만들어 연결한다.) [경로에 공백이 있어도 되도록 따옴표로 감쌌음]`,
     b.transmit,
     b.rejudge,
   ].join("\n");
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, BRIDGE, BASE_DEFAULTS, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, atomicWrite };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, atomicWrite };

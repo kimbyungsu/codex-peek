@@ -90,7 +90,7 @@ process.stdin.on("end", () => {
         decision: "block",
         reason:
           `[검증 모드:${c.verifyMode}] ${what} Codex 검증을 받지 않았다. ` +
-          `종료하지 말고 지금 \`node ${BRIDGE} ask "<무엇을 검증할지>"\` 로 Codex 검증을 받아라. ` +
+          `종료하지 말고 지금 \`node "${BRIDGE}" ask "<무엇을 검증할지>"\` 로 Codex 검증을 받아라. ` +
           `그 결과(통과/실패+근거)를 사용자에게 보고한 뒤 종료하라. (연결 없으면 보고만 됨 — 그 사실을 보고하라)`,
       }),
     );

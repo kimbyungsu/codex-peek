@@ -155,6 +155,8 @@ code --install-extension codex-bridge-*.vsix --force
 
 `~/.codex-bridge/codex-bridge.js` 는 Codex와 실제로 대화하는 **엔진**입니다. 평소엔 **확장·훅이 자동으로 호출**하므로 직접 칠 필요가 없고, 아래는 **수동 연결·상태 확인·문제 진단**용입니다.
 
+> 💡 **홈 경로에 공백이 있으면**(예: `C:/Users/First Last`) 경로를 따옴표로 감싸세요 — `node "$HOME/.codex-bridge/codex-bridge.js" doctor`. `node`가 PATH에 없으면 node를 절대경로로(예: `"C:/Program Files/nodejs/node.exe"`). `CODEX_BRIDGE_HOME`을 설정하면 `.codex-bridge` 위치를 옮길 수 있습니다(그땐 훅 명령 경로도 그에 맞추세요).
+
 ```bash
 node ~/.codex-bridge/codex-bridge.js ask "<프롬프트>"        # 연결 세션에 보내고 답 받기(없으면 보고)
 node ~/.codex-bridge/codex-bridge.js ask --allow-new "<...>" # 첫 소통: 새 세션 생성+연결

@@ -35,7 +35,9 @@ function withContract(prompt) {
 }
 
 const HOME = os.homedir();
-const BRIDGE_DIR = path.join(HOME, ".codex-bridge");
+// 자체 namespace 폴더. CODEX_BRIDGE_HOME으로 override 가능(WSL/Remote/Container·포터블에서 확장 호스트와 훅이
+// 같은 폴더를 보도록 명시 고정). 미설정이면 ~/.codex-bridge. ★모든 자체파일 경로는 이 BRIDGE_DIR 한 곳에서만 파생.
+const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(HOME, ".codex-bridge");
 // codex가 실제 쓰는 home을 확장이 'codex doctor'로 탐지해 적어둔 값(바이너리 codex-bin.txt 대칭).
 // → CODEX_HOME 미설정/비표준 home·다중설치에서도 세션 폴더를 정확히 찾는다(V11). 없으면 ~/.codex 폴백.
 function readPinnedHome() {
@@ -65,7 +67,7 @@ function workspace() {
 // 지금 Claude 대화가 '실제로' 도는 폴더 — contract-inject 훅이 매 턴 active.json에 기록. 엉뚱 폴더 방어용.
 function readActive() {
   try {
-    return JSON.parse(fs.readFileSync(path.join(os.homedir(), ".codex-bridge", "active.json"), "utf8"));
+    return JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, "active.json"), "utf8"));
   } catch {
     return null;
   }
@@ -584,6 +586,12 @@ function cmdDoctor() {
   process.stdout.write(`검증 모드      : ${c ? c.verifyMode : "(계약 로드 실패)"}\n`);
   process.stdout.write(`Claude 세션    : ${claudeId() || "(env 없음)"}\n`);
   process.stdout.write(`워크스페이스   : ${workspace()}\n`);
+  // 자체 폴더(브릿지 home) 진단: 확장과 훅이 같은 폴더를 보는지의 핵심. 훅이 active.json을 다른 BRIDGE_DIR에 쓰면
+  // 여기서 '활성 대화기록 없음'으로 드러난다(=확장↔훅 home 불일치 or 훅 미동작).
+  const bridgeSrc = process.env.CODEX_BRIDGE_HOME ? "env CODEX_BRIDGE_HOME" : "기본 ~/.codex-bridge";
+  const active = readActive();
+  process.stdout.write(`브릿지 폴더    : ${BRIDGE_DIR}  (출처: ${bridgeSrc})\n`);
+  process.stdout.write(`활성 대화기록  : ${active ? `있음 (대화폴더: ${active.workspace || "?"})` : "없음 ← 훅 미동작이거나 확장↔훅이 다른 폴더를 봄(CODEX_BRIDGE_HOME 일치 확인)"}\n`);
   const homeSrc = process.env.CODEX_HOME ? "env CODEX_HOME" : readPinnedHome() ? "codex-home.txt(자동탐지)" : "기본 ~/.codex";
   process.stdout.write(`Codex home     : ${CODEX_HOME}  (출처: ${homeSrc})\n`);
   process.stdout.write(`세션 폴더      : ${SESSIONS_DIR} · ${fs.existsSync(SESSIONS_DIR) ? "있음" : "없음 ← 세션 안 보이면 1순위 의심"}\n`);

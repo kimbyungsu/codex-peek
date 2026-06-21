@@ -1,22 +1,22 @@
 {
-  "_comment": "Claude Code ~/.claude/settings.json 의 hooks 블록에 아래를 병합하세요. <HOME>은 실제 홈 경로로 바꾸세요(예: C:/Users/이름). 기존 다른 훅은 보존하세요.",
+  "_comment": "Claude Code ~/.claude/settings.json 의 hooks 블록에 아래를 병합하세요. <HOME>은 실제 홈 경로로 바꾸세요(예: C:/Users/이름). 경로는 따옴표로 감싸져 있어 공백 있는 홈(예: C:/Users/First Last)도 안전합니다. node가 PATH에 없으면 node를 절대경로로 바꾸세요(예: \"C:/Program Files/nodejs/node.exe\"). 기존 다른 훅은 보존하세요. CODEX_BRIDGE_HOME 환경변수로 .codex-bridge 위치를 옮긴 경우 경로도 그에 맞추세요.",
   "hooks": {
     "UserPromptSubmit": [
       {
         "matcher": "",
-        "hooks": [{ "type": "command", "command": "node <HOME>/.codex-bridge/contract-inject.js" }]
+        "hooks": [{ "type": "command", "command": "node \"<HOME>/.codex-bridge/contract-inject.js\"" }]
       }
     ],
     "PreToolUse": [
       {
         "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "node <HOME>/.codex-bridge/codex-guard.js" }]
+        "hooks": [{ "type": "command", "command": "node \"<HOME>/.codex-bridge/codex-guard.js\"" }]
       }
     ],
     "Stop": [
       {
         "matcher": "",
-        "hooks": [{ "type": "command", "command": "node <HOME>/.codex-bridge/verify-guard.js" }]
+        "hooks": [{ "type": "command", "command": "node \"<HOME>/.codex-bridge/verify-guard.js\"" }]
       }
     ]
   }
