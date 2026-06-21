@@ -407,17 +407,19 @@ if (GIT_OK) {
   clean(sb);
 })();
 
-// 29) 세션 키가 전혀 없음(env·j.session_id·transcript sessionId 모두 결손) → 카운터 불가 →
-//     재진입은 옛 안전밸브로 통과(무한 차단 방지). 첫 회는 차단.
+// 29) 세션 키가 전혀 없음(env·j.session_id·transcript sessionId 모두 결손)이어도 transcript 경로 해시를
+//     카운터 키로 써서 MAX로 바운드된다(유한 차단 후 통과 — 무한 차단 없음, stop_hook_active 의존 최소화).
 (function () {
-  console.log("[29] 세션키 전무 → 재진입 통과(무한차단 방지)");
+  console.log("[29] 세션키 전무여도 transcript 키로 바운드");
   const sb = setup("v4nosess", "always");
   fs.writeFileSync(sb.transcriptPath, [
     JSON.stringify({ type: "user", timestamp: T0, message: { content: [{ type: "text", text: "해줘" }] } }), // sessionId 없음
     JSON.stringify({ type: "assistant", timestamp: TWRITE, message: { content: [{ type: "tool_use", name: "Write", input: {} }] } }),
   ].join("\n"));
-  ok(blocked(runGuardNoEnvSession(sb, { session_id: undefined })), "세션키 없어도 첫 회는 차단");
-  ok(!blocked(runGuardNoEnvSession(sb, { session_id: undefined, stop_hook_active: true })), "세션키 없으면 재진입은 통과(무한차단 방지)");
+  const results = [];
+  for (let i = 0; i < 5; i++) results.push(blocked(runGuardNoEnvSession(sb, { session_id: undefined, stop_hook_active: i > 0 })));
+  ok(results.includes(false), "유한 차단 후 통과함(무한 차단 아님)");
+  ok(results.includes(true), "적어도 한 번은 차단(enforce)");
   clean(sb);
 })();
 

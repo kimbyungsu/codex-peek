@@ -7,6 +7,7 @@
 const fs = require("fs");
 const path = require("path");
 const cp = require("child_process");
+const crypto = require("crypto");
 const { loadContract, BRIDGE, BRIDGE_DIR, atomicWrite } = require("./contract-lib.js");
 const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs");
 const ATTEMPTS_DIR = path.join(BRIDGE_DIR, "verify-attempts"); // V4: 한 턴 재검증 강제 횟수(무한정지 방지 바운드)
@@ -184,6 +185,9 @@ process.stdin.on("end", () => {
   const claudeSession = process.env.CLAUDE_CODE_SESSION_ID || j.session_id || sessionIdFromTx || "";
   const sinceTs = Math.max(lastUserTs, lastActionTs, fsChangeTs);
   const verified = checkProof(claudeSession, sinceTs);
+  // 재검증 카운터 키: 세션키가 있으면 그것, 없으면 transcript 경로 해시(이 시점 tp는 반드시 존재 — 위에서 검사).
+  // → 세션키 결손 환경에서도 카운터가 동작해 MAX로 바운드(stop_hook_active 의존을 최소화).
+  const attemptKey = claudeSession || ("tx-" + crypto.createHash("sha1").update(String(tp)).digest("hex").slice(0, 16));
 
   // 모드별 트리거: always=모든 턴 / plancode=플랜확정 or 변경 / code=변경. (변경=도구 또는 Bash 경유 실제 파일변경)
   const needVerify =
@@ -193,16 +197,16 @@ process.stdin.on("end", () => {
 
   // 검증 불필요 또는 검증됨 → 통과 + 이번 턴 재검증 카운터 리셋.
   if (!needVerify || verified) {
-    clearAttempts(claudeSession);
+    clearAttempts(attemptKey);
     process.exit(0);
   }
 
   // 검증 필요 + 미검증 → 재검증 강제. 단 무한정지 방지로 한 턴 MAX_ATTEMPTS회까지만 차단(V4).
   // 재진입(stop_hook_active)이어도 검증을 다시 확인하므로 '다시 멈추기'로 바이패스되지 않는다.
   // 카운터를 못 믿는 경우(세션키 없음/저장 실패=null)엔 옛 안전밸브로 폴백: 재진입이면 통과(무한 차단 방지).
-  const n = bumpAttempts(claudeSession, lastUserTs);
+  const n = bumpAttempts(attemptKey, lastUserTs);
   if (n === null) {
-    if (j.stop_hook_active) process.exit(0); // 카운트 불가 + 재진입 → 통과(무한 차단 방지)
+    if (j.stop_hook_active) process.exit(0); // 저장 실패 등 카운트 불가 + 재진입 → 통과(무한 차단 방지)
   } else if (n > MAX_ATTEMPTS) {
     // 충분히 강제했으나 여전히 미검증(예: Codex 미응답·연결 없음) → 무한정지 방지로 종료 허용.
     process.stderr.write(`[verify-guard] 검증을 ${MAX_ATTEMPTS}회 강제했으나 완료되지 않음 — 무한정지 방지로 종료를 허용합니다.\n`);
