@@ -569,6 +569,30 @@ function cmdFind() {
   process.stdout.write('\n연결 바꾸기: node codex-bridge.js link <id>\n');
 }
 
+// 진단 전용(doctor에서만 호출): CODEX_HOME 하위에서 '실제 rollout이 떨어진 폴더'를 관찰한다(archived_sessions 제외).
+// SESSIONS_DIR(=CODEX_HOME/sessions) 가정이 어긋났는지(미래 codex layout 변경 등) '진단'만 — 자동 전환은 안 한다
+// (archived 등 오탐 위험). 비용 제한 위해 깊이 제한. 없으면 null.
+function observeRolloutDir() {
+  let best = null, bestMt = 0;
+  const walk = (d, depth) => {
+    if (depth > 7) return;
+    let items;
+    try { items = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const it of items) {
+      if (it.isDirectory()) {
+        if (it.name === "archived_sessions") continue; // active 세션 아님 → 오탐 제외
+        walk(path.join(d, it.name), depth + 1);
+      } else if (it.isFile() && /^rollout-.*\.jsonl$/.test(it.name)) {
+        let mt = 0;
+        try { mt = fs.statSync(path.join(d, it.name)).mtimeMs; } catch { /* ignore */ }
+        if (mt > bestMt) { bestMt = mt; best = d; }
+      }
+    }
+  };
+  walk(CODEX_HOME, 0);
+  return best;
+}
+
 // 점검: codex를 실제로 실행 가능한지 + 연결/검증 상태를 한눈에. 검증이 안 될 때 추측 대신 이걸 본다.
 function cmdDoctor() {
   const inv = resolveCodex();
@@ -612,6 +636,21 @@ function cmdDoctor() {
         `  codex 업데이트로 'codex doctor'의 CODEX_HOME 출력 형식이 바뀌어 home 자동탐지가 깨졌을 수 있음.\n` +
         `  → 'node codex-bridge.js detect-home' 재실행. 그래도 실패면 detectCodexHome()의 파싱 규칙(정규식) 확인.\n`,
     );
+  }
+  // layout 변경 진단: 세션 폴더가 없거나 비었는데 CODEX_HOME 하위 다른 곳에 rollout이 있으면 알린다(자동 전환은 안 함).
+  if (!fs.existsSync(SESSIONS_DIR) || !newestRolloutSince(0)) {
+    const obs = observeRolloutDir();
+    // 'obs가 SESSIONS_DIR 하위인가'를 path.relative로 경계 있게 판정(단순 prefix는 sessions_backup·sessions2 형제를
+    // 하위로 오판). rel이 ""(같음)이거나 ".."로 시작 안 하고 절대경로 아니면 하위 → 그 경우만 알림 억제.
+    const rel = obs ? path.relative(normWs(SESSIONS_DIR), normWs(obs)) : "..";
+    const underSessions = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+    if (obs && !underSessions) {
+      process.stdout.write(
+        `\n↪ 단, CODEX_HOME 하위 다른 곳에 rollout이 있음:\n   ${obs}\n` +
+          `   → codex가 세션 위치를 바꿨을 수 있음(layout 변경). 이 경로 기준으로 CODEX_HOME/세션 폴더 해석을 점검하세요.\n` +
+          `   (자동 전환은 하지 않음 — archived 등 오탐 방지. 필요 시 CODEX_HOME을 위 경로의 상위로 맞추세요.)\n`,
+      );
+    }
   }
 }
 
