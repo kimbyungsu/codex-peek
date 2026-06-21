@@ -8,7 +8,7 @@ const fs = require("fs");
 const path = require("path");
 const cp = require("child_process");
 const crypto = require("crypto");
-const { loadContract, BRIDGE, BRIDGE_DIR, atomicWrite } = require("./contract-lib.js");
+const { loadContract, BRIDGE, BRIDGE_DIR, atomicWrite, appendIntegrityEvent } = require("./contract-lib.js");
 const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs");
 const ATTEMPTS_DIR = path.join(BRIDGE_DIR, "verify-attempts"); // V4: 한 턴 재검증 강제 횟수(무한정지 방지 바운드)
 const MAX_ATTEMPTS = 3; // 한 턴에 검증을 강제(차단)하는 최대 횟수. 그 후엔 무한정지 방지로 종료 허용.
@@ -209,7 +209,18 @@ process.stdin.on("end", () => {
     if (j.stop_hook_active) process.exit(0); // 저장 실패 등 카운트 불가 + 재진입 → 통과(무한 차단 방지)
   } else if (n > MAX_ATTEMPTS) {
     // 충분히 강제했으나 여전히 미검증(예: Codex 미응답·연결 없음) → 무한정지 방지로 종료 허용.
+    // 단 '침묵'으로 넘기지 않는다: 무결성 이벤트로 기록해 확장이 상태바 빨강 + 대시보드로 사용자에게 보인다(결정2 가시화 1단계).
     process.stderr.write(`[verify-guard] 검증을 ${MAX_ATTEMPTS}회 강제했으나 완료되지 않음 — 무한정지 방지로 종료를 허용합니다.\n`);
+    try {
+      appendIntegrityEvent({
+        ts: new Date().toISOString(),
+        session: claudeSession || "",
+        workspace: ws,
+        kind: "verify-incomplete",
+        severity: "error",
+        detail: `검증 모드:${c.verifyMode} — ${MAX_ATTEMPTS}회 강제했으나 검증이 완료되지 않은 채 이 턴이 종료됨(이 턴 결과는 미검증).`,
+      });
+    } catch { /* 이벤트 기록 실패는 종료를 막지 않음 */ }
     clearAttempts(attemptKey); // 카운터 키와 일치(세션키 없을 때 no-op 방지)
     process.exit(0);
   }

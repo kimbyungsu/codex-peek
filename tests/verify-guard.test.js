@@ -423,5 +423,22 @@ if (GIT_OK) {
   clean(sb);
 })();
 
+// 30) MAX 소진(검증 미완 종료) 시 무결성 이벤트 기록 — '침묵'이 아니라 사용자 가시화 채널에 남김
+(function () {
+  console.log("[30] MAX 소진 시 verify-incomplete 무결성 이벤트 기록");
+  const sb = setup("intev", "always");
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]); // 변경 있음·proof 없음
+  runGuard(sb); // 1회차 차단
+  runGuard(sb, { stop_hook_active: true }); // 2
+  runGuard(sb, { stop_hook_active: true }); // 3
+  runGuard(sb, { stop_hook_active: true }); // 4회차 = MAX 초과 → 종료 허용 + 이벤트
+  let events = [];
+  try { events = (JSON.parse(fs.readFileSync(path.join(sb.bridgeDir, "integrity.json"), "utf8")).events) || []; } catch {}
+  const inc = events.find((e) => e.kind === "verify-incomplete" && e.severity === "error");
+  ok(!!inc, "verify-incomplete error 이벤트가 기록됨");
+  ok(!!inc && inc.session === sb.session && !inc.ack, "이벤트에 세션 기록 + 미확인(ack=false)");
+  clean(sb);
+})();
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

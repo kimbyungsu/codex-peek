@@ -17,6 +17,7 @@ let SESSIONS_DIR = path.join(CODEX_HOME, "sessions");
 const LINKS_FILE = path.join(BRIDGE_DIR, "links.json");
 const CONTRACT_FILE = path.join(BRIDGE_DIR, "contract.json"); // 전역 기본값(상속 시드)
 const CONTRACTS_DIR = path.join(BRIDGE_DIR, "contracts"); // 프로젝트별 계약
+const INTEGRITY_FILE = path.join(BRIDGE_DIR, "integrity.json"); // 무결성 신호(브릿지 기록 → 상태바 빨강·대시보드로 가시화)
 // 원자적 저장: 임시파일에 쓴 뒤 rename으로만 교체 → 읽는 쪽은 옛/새 파일만 보고 반쪽(손상) 파일은 못 본다
 // (다중 창 동시쓰기 손상 방지). ⚠ 직접쓰기 폴백 금지 — Windows에선 대상이 동시 읽기로 잠깐 열려 있으면 rename이
 // 실패하는데, 그때 직접쓰기로 폴백하면 그게 반쪽파일 손상의 원인이 된다(검증 확인). rename 짧게 재시도, 끝내
@@ -75,6 +76,7 @@ interface BridgeState {
   knownModels: string[];  // 이 세션이 써본 모델들(캐시 없을 때 폴백 추천)
   availModels: AvailModel[]; // 계정 캐시(models_cache.json)의 모델·모델별 생각강도 — 하드코딩 대신 계정 실제 목록
   modelsCacheNote: string;   // 계정 캐시 못 읽을 때 사용자에게 보여줄 이유("" = 정상)
+  integrity: IntegrityEvent[]; // 무결성 신호(검증 미완 등) — 미확인 error는 상태바 빨강 + 대시보드 경보
 }
 
 function normWs(p: string): string {
@@ -377,6 +379,19 @@ function loadBaseDirectiveSafe(): { verifyBaseline: string; transmit: string; re
   return { verifyBaseline: "", transmit: "", rejudge: "", overridden: false };
 }
 
+// 무결성 신호: 브릿지(verify-guard)가 '검증 미완' 등을 integrity.json에 기록 → 여기서 읽어 상태바/대시보드로 가시화.
+// 단순 게이트(차단)로 끝내지 않고 사람에게 보이게 하는 채널의 소비자 쪽. 포맷은 contract-lib과 공유.
+interface IntegrityEvent { id: string; ts?: string; kind?: string; severity?: string; detail?: string; ack?: boolean; session?: string; workspace?: string }
+function readIntegrity(): IntegrityEvent[] {
+  try { const d = JSON.parse(fs.readFileSync(INTEGRITY_FILE, "utf8")); return Array.isArray(d.events) ? d.events : []; } catch { return []; }
+}
+function ackIntegrity(ids: string[] | "all"): boolean {
+  const events = readIntegrity();
+  const set = ids === "all" ? null : new Set(ids);
+  for (const e of events) { if (!set || set.has(e.id)) e.ack = true; }
+  return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events }));
+}
+
 function computeState(turnsN: number): BridgeState {
   const ws = dashboardWorkspace();
   const links = loadLinks();
@@ -444,6 +459,7 @@ function computeState(turnsN: number): BridgeState {
     knownModels: modelMeta.models,
     availModels,
     modelsCacheNote,
+    integrity: readIntegrity(),
   };
 }
 
@@ -569,6 +585,7 @@ function relink(id: string): void {
 
 class Dashboard {
   private panel?: vscode.WebviewPanel;
+  public onChange?: () => void; // 상태바 등 외부 갱신 콜백(예: 무결성 ack 후 상태바 즉시 새로고침 — watcher 지연에 안 기댐)
   constructor(private readonly uri: vscode.Uri, private readonly turnsN: () => number) {}
 
   show(): void {
@@ -678,6 +695,13 @@ class Dashboard {
         if (m?.type === "openSettings") {
           vscode.commands.executeCommand("workbench.action.openSettings", "codexBridge.codexPath");
         }
+        if (m?.type === "ackIntegrity") {
+          // 무결성 경보 확인(해제). id 배열이면 그것만, 없으면 전체.
+          const ok = ackIntegrity(Array.isArray(m.ids) && m.ids.length ? m.ids : "all");
+          if (!ok) vscode.window.showErrorMessage("무결성 경보 확인 저장 실패 — 파일이 잠겨 있을 수 있어요. 잠시 후 다시 시도해 주세요.");
+          this.post();
+          this.onChange?.(); // 상태바도 즉시 갱신(watcher 지연/누락에 안 기댐) → 빨강 경보 바로 해제
+        }
         if (m?.type === "refresh") this.post();
       });
       this.panel.onDidDispose(() => (this.panel = undefined));
@@ -745,6 +769,12 @@ class Dashboard {
   .link.on .emo{filter:none;opacity:1}
   .link.on .st{color:var(--vscode-charts-green);font-weight:600}
   .statusline{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:2px 0 4px;font-size:12px}
+  .integrity{border:1px solid var(--vscode-inputValidation-errorBorder,#d44);border-left:4px solid var(--vscode-inputValidation-errorBorder,#d44);background:var(--vscode-inputValidation-errorBackground,rgba(212,68,68,0.12));border-radius:8px;padding:12px 14px;margin:4px 0 14px}
+  .integrity .ih{display:flex;align-items:center;justify-content:space-between;gap:10px;font-weight:700}
+  .integrity ul{margin:8px 0 0;padding-left:18px}
+  .integrity li{font-size:12px;margin:3px 0;color:var(--vscode-foreground)}
+  .integrity .when{color:var(--vscode-descriptionForeground);font-size:11px}
+  .integrity button{cursor:pointer}
   .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid currentColor}
   .wschip{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:6px;font-size:11px;font-weight:600;border:1px solid var(--vscode-charts-orange);color:var(--vscode-charts-orange)}
   .b-off{color:var(--vscode-descriptionForeground)}
@@ -887,6 +917,8 @@ class Dashboard {
     <div class="agent codex"><div class="mono x">Cx</div><div class="nm">Codex</div><div class="ro">검증 · verify</div></div>
   </div>
   <div id="status" class="statusline"></div>
+
+  <div id="integrityBanner" class="integrity" style="display:none"></div>
 
   <h2 class="sec claude">Claude 규칙 <span class="to claude">→ 🧑 Claude에게</span> <span class="sub2">Claude가 지킬 행동규칙 — 검증과 별개</span></h2>
   <div class="card">
@@ -1186,6 +1218,29 @@ class Dashboard {
       st.appendChild(el("span","muted","· 아래에서 Codex 세션을 골라 연결 (미연결 시 ask는 보고만)"));
     }
     const cws = $("cwsLabel"); if (cws) cws.textContent = d.workspace ? ("선택 시 → " + d.workspace + " 에 연결") : "열린 워크스페이스 없음";
+
+    // 무결성 경보 배너: 미확인 error 이벤트(예: 검증 미완)를 빨강으로 보이고 '확인함'으로 해제.
+    const ib = $("integrityBanner");
+    if (ib) {
+      const ierrs = (d.integrity||[]).filter(function(e){return e && !e.ack && e.severity==="error";});
+      if (!ierrs.length) { ib.style.display="none"; ib.replaceChildren(); }
+      else {
+        ib.replaceChildren();
+        const ih = el("div","ih");
+        ih.appendChild(el("span", null, "⚠️ 검증 무결성 경보 — 미확인 " + ierrs.length + "건 (검증 없이 끝난 턴이 있어요)"));
+        const ack = el("button","secondary","확인함 ✓");
+        ack.addEventListener("click", function(){ vscode.postMessage({type:"ackIntegrity"}); });
+        ih.appendChild(ack); ib.appendChild(ih);
+        const ul = el("ul");
+        ierrs.slice(-5).forEach(function(e){
+          const li = el("li", null, (e.detail || e.kind || "검증 미완"));
+          if (e.ts) li.appendChild(el("span","when","  ("+new Date(e.ts).toLocaleString()+")"));
+          ul.appendChild(li);
+        });
+        ib.appendChild(ul); ib.style.display="";
+      }
+    }
+
     const conv = $("conv"); conv.replaceChildren();
     if (!d.linkedId) conv.appendChild(el("div","card muted","아직 연결된 Codex 세션이 없어요. 아래에서 세션을 연결하면, 구현↔검증으로 실제 주고받은 대화가 여기에 그대로 표시됩니다(눈으로 검증 확인)."));
     else if (!d.turns.length) conv.appendChild(el("div","card muted","연결됨 — 아직 주고받은 대화가 없습니다(또는 세션 파일을 못 찾음)."));
@@ -1382,12 +1437,28 @@ export function activate(context: vscode.ExtensionContext): void {
   status.command = "codexBridge.openDashboard";
   status.name = "Codex Bridge";
 
+  // 무결성 경보 펄스: 새 error 이벤트가 '늘었을 때만' 잠깐(6회 ~3초) 빨강↔주황 토글 후 빨강 지속.
+  // 끝없는 점멸(피로) 대신 '신규 시 짧은 펄스 + 미확인 동안 지속 빨강'. 확인(ack)하면 사라짐.
+  let lastErrCount = 0;
+  let pulseTimer: NodeJS.Timeout | undefined;
+  const pulseIfNew = (count: number) => {
+    if (count <= lastErrCount) { lastErrCount = count; return; }
+    lastErrCount = count;
+    let n = 0;
+    if (pulseTimer) clearInterval(pulseTimer);
+    pulseTimer = setInterval(() => {
+      status.backgroundColor = new vscode.ThemeColor(n % 2 ? "statusBarItem.warningBackground" : "statusBarItem.errorBackground");
+      if (++n >= 6) { if (pulseTimer) clearInterval(pulseTimer); pulseTimer = undefined; status.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground"); }
+    }, 500);
+  };
+
   const render = () => {
     const ws = dashboardWorkspace();
     const link = workspaceLink(loadLinks(), ws);
     if (!ws) {
       status.text = "$(plug) Codex";
       status.tooltip = "워크스페이스 없음";
+      status.backgroundColor = undefined; // 무결성 빨강 등 이전 색 잔존 방지(아래 무결성 분기가 다시 칠할 수 있음)
     } else if (link?.codexSession) {
       const file = findRolloutById(link.codexSession);
       const snip = file ? firstSnippet(file) : "";
@@ -1406,6 +1477,23 @@ export function activate(context: vscode.ExtensionContext): void {
       status.tooltip = "연결된 Codex 세션 없음 · 클릭 → 대시보드에서 연결";
       status.backgroundColor = undefined;
     }
+
+    // 무결성 경보(미확인 error)는 위 연결 상태를 덮어써 '검증 미완'을 빨강으로 알린다(침묵 금지). 확인하면 사라짐.
+    const errs = readIntegrity().filter((e) => !e.ack && e.severity === "error");
+    if (errs.length) {
+      status.text = `$(alert) Codex 검증 미완 ${errs.length}`;
+      status.tooltip = new vscode.MarkdownString(
+        `**⚠️ 검증 무결성 경보 — 미확인 ${errs.length}건**\n\n` +
+          errs.slice(-3).map((e) => `- ${e.detail || e.kind || "검증 미완"}`).join("\n\n") +
+          `\n\n이 턴 결과가 '검증 없이' 종료됐을 수 있어요.\n\n클릭 → 대시보드에서 확인`,
+      );
+      status.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
+      pulseIfNew(errs.length);
+    } else {
+      // 경보 없음(확인됨/해결) → 펄스 타이머도 정리해야 빨강이 다시 칠해지지 않음(ack 즉시 해제).
+      if (pulseTimer) { clearInterval(pulseTimer); pulseTimer = undefined; }
+      lastErrCount = 0;
+    }
     status.show();
   };
 
@@ -1417,6 +1505,7 @@ export function activate(context: vscode.ExtensionContext): void {
       dashboard.post();
     }, 800);
   };
+  dashboard.onChange = render; // 대시보드 변경(예: 무결성 ack) 시 상태바를 즉시 render(디바운스 없이 바로 반영, watcher 비의존)
 
   const watchers: fs.FSWatcher[] = [];
   try {
@@ -1446,7 +1535,7 @@ export function activate(context: vscode.ExtensionContext): void {
       render();
       dashboard.post();
     }),
-    { dispose: () => watchers.forEach((w) => w.close()) },
+    { dispose: () => { watchers.forEach((w) => w.close()); if (debounce) clearTimeout(debounce); if (pulseTimer) clearInterval(pulseTimer); } },
   );
 
   render();
