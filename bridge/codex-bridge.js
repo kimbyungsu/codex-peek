@@ -72,14 +72,14 @@ function workspace() {
 // 검증 증명 기록 — 실제로 Codex가 성공(exit 0·비어있지 않은 응답)했을 때만 호출한다(cmdAsk의 성공 분기들).
 // 한 Claude 세션당 1파일(최신 성공만 보존). verify-guard가 '이번 사용자 발화 이후 ts + workspace 일치'로 검증 인정.
 // → 명령 문자열만 보던 V1 구멍(echo·실패·미연결도 통과)을 닫는다. claudeSession 미설정(수동 실행)이면 _nosession에 기록(무해).
-function writeProof(codexSession, answer) {
+function writeProof(codexSession, answer, ws) {
   // claudeSession: env 우선, 없으면 active.json(contract-inject가 hook.session_id로 기록) 폴백 →
   // verify-guard의 reader 키(env‖j.session_id‖transcript)와 같은 대화 id로 수렴(환경별 env 결측 대비).
   const cs = claudeId() || ((readActive() || {}).claudeSession) || "";
   const proof = {
     v: 1,
     claudeSession: cs,
-    workspace: workspace(),
+    workspace: ws || workspace(), // V9: cmdAsk의 ws 스냅샷과 동일(인자 없으면 폴백)
     ts: nowIso(),
     codexSession: codexSession || "",
     exit: 0,
@@ -434,7 +434,7 @@ function cmdAsk(rest) {
     }
     const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs], withContract(prompt, ws));
     if (error || !answer || (typeof status === "number" && status !== 0)) die(`Codex resume 실패: ${error?.message || ""}\n${stderr.slice(-500)}`);
-    writeProof(link.codexSession, answer); // 실제 성공 → 검증 증명 기록(verify-guard가 인정)
+    writeProof(link.codexSession, answer, ws); // 실제 성공 → 검증 증명 기록(verify-guard가 인정)
     process.stdout.write(`# 연결 세션 ${link.codexSession} (${link.via})\n\n${answer}\n`);
     return;
   }
@@ -505,13 +505,13 @@ function cmdAsk(rest) {
   if (m) {
     if (links.autoNewFailed) delete links.autoNewFailed[wsKey]; // 성공 → 폭증방지 플래그 해제
     recordLink(links, m[1]); // saveLinks 포함(플래그 해제도 함께 영속)
-    writeProof(m[1], answer); // 실제 성공 → 검증 증명 기록
+    writeProof(m[1], answer, ws); // 실제 성공 → 검증 증명 기록
     process.stdout.write(`# 새 Codex 세션 생성·연결: ${m[1]}\n\n${answer}\n`);
   } else {
     links.autoNewFailed = links.autoNewFailed || {};
     links.autoNewFailed[wsKey] = true;
     saveLinks(links); // 다음 자동 생성 차단 플래그 저장
-    writeProof("", answer); // Codex는 성공 응답함(세션id만 미식별) → 검증은 인정
+    writeProof("", answer, ws); // Codex는 성공 응답함(세션id만 미식별) → 검증은 인정
     process.stdout.write(`# 새 세션 생성됨(세션id 식별 실패) — 폭증 방지로 다음 자동 생성은 멈춥니다. 'find'로 찾아 'link <id>' 하세요.\n\n${answer}\n`);
   }
 }
