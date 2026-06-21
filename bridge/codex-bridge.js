@@ -21,11 +21,13 @@ const { loadContract, buildInjection, loadBaseDirective, atomicWrite } = require
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
-function withContract(prompt) {
+function withContract(prompt, ws) {
   const baseline = loadBaseDirective().verifyBaseline;
   let inj = "";
   try {
-    const c = loadContract();
+    // V9: Codex 계약도 이 ask의 워크스페이스로 '명시' 로드(인자 없으면 workspace()로 폴백). cmdAsk가
+    // 링크·proof·폭증가드와 같은 ws 스냅샷을 넘겨, codex 계약이 다른 cwd로 새는 잠재 위험을 없앤다.
+    const c = loadContract(ws || workspace());
     inj = buildInjection(c.codex, "Codex", c.codexChecklist);
   } catch {
     inj = "";
@@ -418,7 +420,8 @@ function cmdAsk(rest) {
 
   const links = loadLinks();
   const link = resolveLink(links);
-  const mArgs = modelArgs(modelPrefFor(links, workspace())); // 선택한 모델/생각강도를 매 호출 -c로 재적용(호출별이라 필수)
+  const ws = workspace(); // V9: 이 ask 전체가 '하나의 워크스페이스 스냅샷'을 공유(modelPref·가드·proof·codex계약 일관)
+  const mArgs = modelArgs(modelPrefFor(links, ws)); // 선택한 모델/생각강도를 매 호출 -c로 재적용(호출별이라 필수)
 
   if (link) {
     const file = findRolloutById(link.codexSession);
@@ -429,7 +432,7 @@ function cmdAsk(rest) {
           `→ 새로 시작하려면: ask --allow-new "..."  /  다른 세션에 붙이려면: link <id>`,
       );
     }
-    const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs], withContract(prompt));
+    const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs], withContract(prompt, ws));
     if (error || !answer || (typeof status === "number" && status !== 0)) die(`Codex resume 실패: ${error?.message || ""}\n${stderr.slice(-500)}`);
     writeProof(link.codexSession, answer); // 실제 성공 → 검증 증명 기록(verify-guard가 인정)
     process.stdout.write(`# 연결 세션 ${link.codexSession} (${link.via})\n\n${answer}\n`);
@@ -453,7 +456,7 @@ function cmdAsk(rest) {
   // 다르면 십중팔구 엉뚱한 폴더(터미널 cwd)에서 돌린 것 → 조용히 새 세션을 만들어 목록을 오염시키지 말고 막는다.
   // 정상 흐름(대화 폴더에서 실행)은 here==active.workspace라 안 막힘. 정말 여기 만들려면 --force-new.
   // (NFC 정규화로 한글 등 경로의 NFC/NFD 차이로 인한 오탐 방지 — 전역 normWs는 건드리지 않음.)
-  const here = workspace();
+  const here = ws;
   const active = readActive();
   const myClaude = claudeId();
   const sameWs = (a, b) => normWs(a) === normWs(b); // normWs가 이미 NFC 정규화하므로 단순 비교로 충분
@@ -474,7 +477,7 @@ function cmdAsk(rest) {
   }
 
   // 폭증 방지: 직전 --allow-new가 세션을 만들고도 연결 기록에 실패했으면, 또 만들지 않는다(수동 link 유도).
-  const wsKey = normWs(workspace());
+  const wsKey = normWs(ws);
   if (links.autoNewFailed && links.autoNewFailed[wsKey]) {
     die(
       `⚠️ 직전에 새 Codex 세션을 만들었지만 연결 기록에 실패했습니다(세션id 식별 실패).\n` +
@@ -487,7 +490,7 @@ function cmdAsk(rest) {
 
   // --allow-new: 새 세션 생성 + 연결 기록.
   const since = Date.now() - 2000;
-  const { answer, error, status, stderr } = runCodex([...mArgs], withContract(prompt));
+  const { answer, error, status, stderr } = runCodex([...mArgs], withContract(prompt, ws));
   if (error || !answer || (typeof status === "number" && status !== 0)) {
     // 응답은 실패했지만 세션 파일이 생겼을 수 있음 → 폭증 방지 플래그를 걸어 다음 자동 생성을 막고 종료.
     if (newestRolloutSince(since)) {
