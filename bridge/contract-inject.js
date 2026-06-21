@@ -6,7 +6,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildVerifyDirective } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildVerifyDirective, atomicWrite } = require("./contract-lib.js");
 
 let input = "";
 process.stdin.on("data", (d) => (input += d));
@@ -23,8 +23,7 @@ process.stdin.on("end", () => {
   // 활성 작업 폴더 기록 → 대시보드가 VS Code 첫 폴더가 아니라 이 폴더를 따라가게.
   try {
     const f = path.join(os.homedir(), ".codex-bridge", "active.json");
-    fs.mkdirSync(path.dirname(f), { recursive: true });
-    fs.writeFileSync(
+    atomicWrite(
       f,
       JSON.stringify({
         workspace: ws,
@@ -34,7 +33,6 @@ process.stdin.on("end", () => {
         permissionMode: (hook && typeof hook.permission_mode === "string") ? hook.permission_mode : "",
         ts: new Date().toISOString(),
       }),
-      "utf8",
     );
   } catch {
     /* ignore */

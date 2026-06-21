@@ -12,6 +12,27 @@ const CONTRACTS_DIR = path.join(BRIDGE_DIR, "contracts"); // 프로젝트별 계
 const BRIDGE = path.join(BRIDGE_DIR, "codex-bridge.js");
 const BASE_DIRECTIVE_FILE = path.join(BRIDGE_DIR, "base-directive.json"); // 기본 지침 사용자 오버라이드(없으면 코드 기본값)
 
+// 원자적 저장: 임시파일에 쓴 뒤 rename으로만 교체. 읽는 쪽은 '옛 파일' 또는 '새 파일'만 보고 반쪽(손상)
+// 파일은 절대 못 본다(다중 창/프로세스 동시쓰기 대비). ⚠ 직접쓰기 폴백은 두지 않는다 — Windows에선 대상이
+// 동시 읽기로 잠깐 열려 있으면 rename이 실패하는데, 그때 직접쓰기로 폴백하면 그게 바로 반쪽파일 손상의 원인이
+// 된다(검증으로 확인). 대신 rename을 짧게 재시도하고, 끝내 실패하면 옛 파일(valid)을 그대로 두고 포기한다(손상 0 우선).
+// (lost-update race 자체는 막지 않음 — 파일 잠금이 필요한 별도 문제. 여기 목적은 '손상 방지'.)
+function atomicWrite(file, data) {
+  const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(tmp, data, "utf8");
+    for (let i = 0; i < 12; i++) {
+      try { fs.renameSync(tmp, file); return true; } catch {
+        try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15); } catch { /* sync backoff best-effort */ }
+      }
+    }
+  } catch { /* mkdir/tmp 쓰기 실패(권한·디스크 등) */ }
+  try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+  try { process.stderr.write(`[codex-bridge] atomicWrite: 저장 실패(손상 방지로 옛 파일 유지): ${file}\n`); } catch { /* ignore */ }
+  return false;
+}
+
 // 워크스페이스 정규화 — 확장(src/extension.ts)·브릿지(codex-bridge.js)와 반드시 동일 규칙이어야 함.
 function normWs(p) {
   return path.normalize(p || "").replace(/[\\/]+$/, "").toLowerCase();
@@ -135,13 +156,16 @@ function saveBaseDirective(obj) {
   }
   fs.mkdirSync(BRIDGE_DIR, { recursive: true });
   if (Object.keys(out).length === 0) {
-    try { fs.unlinkSync(BASE_DIRECTIVE_FILE); } catch { /* ignore */ }
-  } else {
-    fs.writeFileSync(BASE_DIRECTIVE_FILE, JSON.stringify(out, null, 2), "utf8");
+    // 전부 기본값이면 오버라이드 파일을 지움 = 초기화. 이미 없으면(ENOENT) 그것도 성공(원하는 상태).
+    try { fs.unlinkSync(BASE_DIRECTIVE_FILE); } catch (e) { if (e && e.code !== "ENOENT") return false; }
+    return true;
   }
+  return atomicWrite(BASE_DIRECTIVE_FILE, JSON.stringify(out, null, 2));
 }
 function resetBaseDirective() {
-  try { fs.unlinkSync(BASE_DIRECTIVE_FILE); } catch { /* ignore */ }
+  // 오버라이드 파일 삭제 = 기본값 복원. 이미 없으면(ENOENT) 그것도 성공(원하는 상태). 권한 오류만 false.
+  try { fs.unlinkSync(BASE_DIRECTIVE_FILE); } catch (e) { if (e && e.code !== "ENOENT") return false; }
+  return true;
 }
 
 // 검증 모드 ON일 때 Claude(구현모델)에게 매 턴 주입하는 2트랙 지시. 전달원칙·재판단은 기본 지침에서 로드(오버라이드 가능).
@@ -159,4 +183,4 @@ function buildVerifyDirective(mode) {
   ].join("\n");
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, BRIDGE, BASE_DEFAULTS, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, BRIDGE, BASE_DEFAULTS, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, atomicWrite };

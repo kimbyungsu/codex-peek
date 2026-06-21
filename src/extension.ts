@@ -14,6 +14,25 @@ let SESSIONS_DIR = path.join(CODEX_HOME, "sessions");
 const LINKS_FILE = path.join(HOME, ".codex-bridge", "links.json");
 const CONTRACT_FILE = path.join(HOME, ".codex-bridge", "contract.json"); // 전역 기본값(상속 시드)
 const CONTRACTS_DIR = path.join(HOME, ".codex-bridge", "contracts"); // 프로젝트별 계약
+// 원자적 저장: 임시파일에 쓴 뒤 rename으로만 교체 → 읽는 쪽은 옛/새 파일만 보고 반쪽(손상) 파일은 못 본다
+// (다중 창 동시쓰기 손상 방지). ⚠ 직접쓰기 폴백 금지 — Windows에선 대상이 동시 읽기로 잠깐 열려 있으면 rename이
+// 실패하는데, 그때 직접쓰기로 폴백하면 그게 반쪽파일 손상의 원인이 된다(검증 확인). rename 짧게 재시도, 끝내
+// 실패하면 옛 파일(valid) 유지하고 포기(손상 0 우선). 브릿지 contract-lib.atomicWrite와 동일 규칙.
+function atomicWrite(file: string, data: string): boolean {
+  const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(tmp, data, "utf8");
+    for (let i = 0; i < 12; i++) {
+      try { fs.renameSync(tmp, file); return true; } catch {
+        try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15); } catch { /* sync backoff best-effort */ }
+      }
+    }
+  } catch { /* mkdir/tmp 쓰기 실패(권한·디스크 등) */ }
+  try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+  try { console.error(`[codex-bridge] atomicWrite: 저장 실패(손상 방지로 옛 파일 유지): ${file}`); } catch { /* ignore */ }
+  return false;
+}
 // 프로젝트별 계약 파일. 키=normWs의 sha1 앞16자 — bridge/contract-lib.js의 contractFileFor와 반드시 동일 규칙.
 function contractFileFor(ws: string): string {
   const key = crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16);
@@ -161,11 +180,10 @@ function loadContract(ws?: string | null): Contract {
   };
 }
 
-function saveContract(ws: string | null, c: Contract): void {
+function saveContract(ws: string | null, c: Contract): boolean {
   // 프로젝트별 파일에 저장(전역 기본값은 다른 미설정 프로젝트의 시드로 보존). ws 없으면 전역에 저장.
   const file = ws ? contractFileFor(ws) : CONTRACT_FILE;
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ ...c, workspace: ws || undefined, updatedAt: new Date().toISOString() }, null, 2), "utf8");
+  return atomicWrite(file, JSON.stringify({ ...c, workspace: ws || undefined, updatedAt: new Date().toISOString() }, null, 2));
 }
 
 function workspaceLink(links: ReturnType<typeof loadLinks>, ws: string | null): any | null {
@@ -442,7 +460,7 @@ function setSessionHidden(id: string, hidden: boolean): void {
   else delete o[id];
   try {
     fs.mkdirSync(path.dirname(SESSIONS_META), { recursive: true });
-    fs.writeFileSync(SESSIONS_META, JSON.stringify(o, null, 2), "utf8");
+    atomicWrite(SESSIONS_META, JSON.stringify(o, null, 2));
   } catch {
     /* ignore */
   }
@@ -460,7 +478,7 @@ function unlinkSession(id: string, ws: string): void {
   for (const k of Object.keys(o.byWorkspace)) if (normWs(k) === n && o.byWorkspace[k]?.codexSession === id) delete o.byWorkspace[k];
   try {
     fs.mkdirSync(path.dirname(LINKS_FILE), { recursive: true });
-    fs.writeFileSync(LINKS_FILE, JSON.stringify(o, null, 2), "utf8");
+    atomicWrite(LINKS_FILE, JSON.stringify(o, null, 2));
   } catch {
     /* ignore */
   }
@@ -500,7 +518,7 @@ function unlinkSessionEverywhere(id: string): void {
   for (const k of Object.keys(o.byWorkspace)) if (o.byWorkspace[k]?.codexSession === id) delete o.byWorkspace[k];
   try {
     fs.mkdirSync(path.dirname(LINKS_FILE), { recursive: true });
-    fs.writeFileSync(LINKS_FILE, JSON.stringify(o, null, 2), "utf8");
+    atomicWrite(LINKS_FILE, JSON.stringify(o, null, 2));
   } catch {
     /* ignore */
   }
@@ -508,9 +526,9 @@ function unlinkSessionEverywhere(id: string): void {
 
 // 모델/생각강도 선택 저장(프로젝트별) — links.json modelPrefs[normWs]={model,reasoning}. 빈 값은 항목 삭제(=코덱스 기본값).
 // 브릿지(modelArgs)가 이걸 읽어 매 ask마다 -c로 재적용한다(호출별이라 세션에 안 박힘).
-function setModelPref(ws: string, model: string, reasoning: string): void {
+function setModelPref(ws: string, model: string, reasoning: string): boolean {
   const n = normWs(ws);
-  if (!n) return;
+  if (!n) return false;
   let o: any = {};
   try { o = JSON.parse(fs.readFileSync(LINKS_FILE, "utf8")); } catch { o = {}; }
   o.modelPrefs = o.modelPrefs || {};
@@ -519,12 +537,7 @@ function setModelPref(ws: string, model: string, reasoning: string): void {
   if (reasoning && reasoning.trim()) cur.reasoning = reasoning.trim();
   if (Object.keys(cur).length) o.modelPrefs[n] = cur;
   else delete o.modelPrefs[n];
-  try {
-    fs.mkdirSync(path.dirname(LINKS_FILE), { recursive: true });
-    fs.writeFileSync(LINKS_FILE, JSON.stringify(o, null, 2), "utf8");
-  } catch {
-    /* ignore */
-  }
+  return atomicWrite(LINKS_FILE, JSON.stringify(o, null, 2));
 }
 
 function relink(id: string): void {
@@ -547,8 +560,7 @@ function relink(id: string): void {
     if (normWs(k) === n) delete o.byWorkspace[k];
   }
   o.byWorkspace[n] = { codexSession: id, workspace: ws, linkedAt: new Date().toISOString(), via: "ui" };
-  fs.mkdirSync(path.dirname(LINKS_FILE), { recursive: true });
-  fs.writeFileSync(LINKS_FILE, JSON.stringify(o, null, 2), "utf8");
+  atomicWrite(LINKS_FILE, JSON.stringify(o, null, 2));
 }
 
 class Dashboard {
@@ -611,11 +623,13 @@ class Dashboard {
             });
         }
         if (m?.type === "saveModelPref") {
-          setModelPref(dashboardWorkspace() || "", String(m.model || ""), String(m.reasoning || ""));
+          const ok = setModelPref(dashboardWorkspace() || "", String(m.model || ""), String(m.reasoning || ""));
+          if (!ok) vscode.window.showErrorMessage("두뇌 설정 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 저장해 주세요.");
           this.post();
+          this.panel?.webview.postMessage({ type: "saveResult", target: "model", ok });
         }
         if (m?.type === "saveContract") {
-          saveContract(dashboardWorkspace(), {
+          const ok = saveContract(dashboardWorkspace(), {
             claude: Array.isArray(m.claude) ? m.claude : [],
             codex: Array.isArray(m.codex) ? m.codex : [],
             claudeChecklist: !!m.claudeChecklist,
@@ -623,23 +637,31 @@ class Dashboard {
             verifyMode: normVerifyMode({ verifyMode: m.verifyMode }),
             claudeInjectMode: normInjectMode({ claudeInjectMode: m.claudeInjectMode }),
           });
+          if (!ok) vscode.window.showErrorMessage("설정 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 저장해 주세요(기존 설정은 그대로 유지됩니다).");
           this.post();
+          this.panel?.webview.postMessage({ type: "saveResult", target: "contract", ok });
         }
         if (m?.type === "saveBase") {
+          let ok = false;
           try {
-            bridgeLib()?.saveBaseDirective?.({ verifyBaseline: m.verifyBaseline, transmit: m.transmit, rejudge: m.rejudge });
+            ok = bridgeLib()?.saveBaseDirective?.({ verifyBaseline: m.verifyBaseline, transmit: m.transmit, rejudge: m.rejudge }) === true;
           } catch {
-            /* ignore */
+            ok = false;
           }
+          if (!ok) vscode.window.showErrorMessage("단계별 기본 원칙 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 시도해 주세요.");
           this.post();
+          this.panel?.webview.postMessage({ type: "saveResult", target: "base", ok });
         }
         if (m?.type === "resetBase") {
+          let ok = false;
           try {
-            bridgeLib()?.resetBaseDirective?.();
+            ok = bridgeLib()?.resetBaseDirective?.() === true;
           } catch {
-            /* ignore */
+            ok = false;
           }
+          if (!ok) vscode.window.showErrorMessage("기본값 복원 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 시도해 주세요.");
           this.post();
+          this.panel?.webview.postMessage({ type: "saveResult", target: "base", ok });
         }
         if (m?.type === "dismissOnboard") {
           try { fs.mkdirSync(path.join(HOME, ".codex-bridge"), { recursive: true }); fs.writeFileSync(path.join(HOME, ".codex-bridge", "onboard-dismissed"), "1", "utf8"); } catch { /* ignore */ }
@@ -1007,8 +1029,8 @@ class Dashboard {
   $("segReason").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-rs]"); if(b){ curRS=b.getAttribute("data-rs"); highlightSeg("segReason","data-rs",curRS); } });
   $("mModel").addEventListener("input", ()=> renderReasonButtons($("mModel").value.trim()));  // 모델 바꾸면 그 모델의 생각강도로 버튼 교체
   $("saveModel").addEventListener("click", () => {
+    pendingSave = {target:"model"};  // 성공 플래시는 saveResult(ok) 받을 때
     vscode.postMessage({type:"saveModelPref", model: $("mModel").value.trim(), reasoning: curRS});
-    flashSaved($("savedModel"), "저장됨 ✓ (다음 코덱스 응답부터 적용)");
   });
   function flashSaved(node, msg){ if(!node) return; node.textContent = msg || "저장됨 ✓ (다음 턴부터 적용)"; node.classList.remove("flash"); void node.offsetWidth; node.classList.add("flash"); }
   $("cands").addEventListener("click", (ev) => {
@@ -1037,30 +1059,42 @@ class Dashboard {
     if (ev.target.closest("#obReopen")) { vscode.postMessage({type:"showOnboard"}); return; }
   });
   let pendingScroll;  // 대기 중 스크롤 타이머(연속 저장 시 취소용)
+  let pendingSave = null;  // 저장 요청의 의도(성공 시 어떤 피드백을 줄지) — saveResult(ok) 받을 때 사용
   $("saveC").addEventListener("click", () => {
     clearTimeout(pendingScroll);  // 직전 저장의 대기 스크롤 취소
     const toLines = (s) => s.split("\\n").map((x) => x.trim()).filter(Boolean);
-    const imCh = curIM!==appIM, vmCh = curVM!==appVM;  // 저장 전 캡처: 도안(넣는 시점/검증 모드)에 영향 주는 변경인가
+    const imCh = curIM!==appIM, vmCh = curVM!==appVM;  // 도안(넣는 시점/검증 모드)에 영향 주는 변경인가 — 성공 시 펄스용
+    pendingSave = {target:"contract", imCh, vmCh};
     vscode.postMessage({type:"saveContract",
       claude: toLines($("cClaude").value), codex: toLines($("cCodex").value),
       claudeChecklist: $("ckClaude").checked, codexChecklist: $("ckCodex").checked, verifyMode: curVM, claudeInjectMode: curIM});
-    flashSaved($("savedAt"));
-    // 넣는 시점/검증 모드가 바뀐 저장만: ack(✓)를 본 뒤(500ms) 도안으로 올라가며 바뀐 곳을 다시 펄스.
-    // (규칙 텍스트·체크리스트는 도안을 안 바꾸므로 스크롤 안 함 — 보여줄 변화가 없음.)
-    if((imCh || vmCh) && appVM !== null){  // appVM=null = 첫 렌더 전(초기화 미완) → 헛스크롤 방지
-      pendingScroll = setTimeout(() => {
-        const fm=$("fmSection"); if(fm) fm.scrollIntoView({behavior:"smooth", block:"center"});  // 흐름지도가 페이지 중간에 있어 상단('start')이 아니라 중앙 정렬이 자연스러움(온보딩 이동과 동일)
-        if(imCh) flashNode($("faInject"));
-        if(vmCh){ flashNode($("faVerify")); flashNode($("sbTransmit")); flashNode($("sbVerify")); flashNode($("sbRejudge")); }
-      }, 500);
-    }
+    // 성공 플래시·스크롤은 saveResult(ok)에서 (저장 실패 시 거짓 성공 방지)
   });
   $("saveB").addEventListener("click", () => {
+    pendingSave = {target:"base"};
     vscode.postMessage({type:"saveBase", verifyBaseline:$("bVerify").value, transmit:$("bTransmit").value, rejudge:$("bRejudge").value});
-    flashSaved($("savedB"));
   });
-  $("resetB").addEventListener("click", () => { vscode.postMessage({type:"resetBase"}); flashSaved($("savedB"), "기본값으로 복원됨 ✓"); });
+  $("resetB").addEventListener("click", () => { pendingSave = {target:"base", msg:"기본값으로 복원됨 ✓"}; vscode.postMessage({type:"resetBase"}); });
   window.addEventListener("message", (ev) => {
+    if (ev.data?.type === "saveResult") {
+      // 저장 성공 피드백은 '확장이 실제 저장에 성공했다고 알려줄 때'만 — 클릭 즉시가 아니라(거짓 성공 방지).
+      const ps = pendingSave; pendingSave = null;
+      if (!ev.data.ok) return; // 실패: 네이티브 에러 토스트가 알린다. 성공 플래시·스크롤은 하지 않음.
+      if (ev.data.target === "model") flashSaved($("savedModel"), "저장됨 ✓ (다음 코덱스 응답부터 적용)");
+      else if (ev.data.target === "base") flashSaved($("savedB"), ps && ps.msg);
+      else if (ev.data.target === "contract") {
+        flashSaved($("savedAt"));
+        if (ps && (ps.imCh || ps.vmCh) && appVM !== null) {  // 넣는시점/검증모드가 바뀐 저장만 도안으로 스크롤+펄스
+          clearTimeout(pendingScroll);
+          pendingScroll = setTimeout(() => {
+            const fm = $("fmSection"); if (fm) fm.scrollIntoView({ behavior: "smooth", block: "center" });
+            if (ps.imCh) flashNode($("faInject"));
+            if (ps.vmCh) { flashNode($("faVerify")); flashNode($("sbTransmit")); flashNode($("sbVerify")); flashNode($("sbRejudge")); }
+          }, 60);
+        }
+      }
+      return;
+    }
     if (ev.data?.type !== "data") return;
     const d = ev.data.data;
     curPerm = d.permissionMode || "";   // renderApplied의 plan 게이트 표시에 사용
@@ -1274,7 +1308,7 @@ function syncCodexBin(): void {
   try {
     fs.mkdirSync(path.dirname(f), { recursive: true });
     if (found) {
-      if (readTextSafe(f) !== found) fs.writeFileSync(f, found, "utf8");
+      if (readTextSafe(f) !== found) atomicWrite(f, found);
     } else if (fs.existsSync(f)) {
       fs.rmSync(f, { force: true });
     }
@@ -1307,7 +1341,7 @@ function syncCodexHome(onDone: (changed: boolean) => void): void {
         if (home && fs.existsSync(home)) {
           const f = path.join(HOME, ".codex-bridge", "codex-home.txt");
           fs.mkdirSync(path.dirname(f), { recursive: true });
-          if (readTextSafe(f) !== home) fs.writeFileSync(f, home, "utf8");
+          if (readTextSafe(f) !== home) atomicWrite(f, home);
           if (CODEX_HOME !== home) { CODEX_HOME = home; SESSIONS_DIR = path.join(home, "sessions"); changed = true; }
         }
       } catch {

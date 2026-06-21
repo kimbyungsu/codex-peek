@@ -17,7 +17,7 @@ const { spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, loadBaseDirective } = require("./contract-lib.js");
+const { loadContract, buildInjection, loadBaseDirective, atomicWrite } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -136,8 +136,7 @@ function detectCodexHome() {
   let ok = false;
   try {
     if (home && fs.existsSync(home)) {
-      fs.mkdirSync(BRIDGE_DIR, { recursive: true });
-      fs.writeFileSync(f, home, "utf8");
+      atomicWrite(f, home);
       ok = true;
     }
   } catch {
@@ -159,8 +158,7 @@ function loadLinks() {
   }
 }
 function saveLinks(links) {
-  fs.mkdirSync(BRIDGE_DIR, { recursive: true });
-  fs.writeFileSync(LINKS_FILE, JSON.stringify(links, null, 2), "utf8");
+  atomicWrite(LINKS_FILE, JSON.stringify(links, null, 2));
 }
 
 // 연결 조회: 세션id 우선, 없으면 워크스페이스 폴백.
