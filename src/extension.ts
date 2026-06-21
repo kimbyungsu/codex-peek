@@ -807,6 +807,7 @@ class Dashboard {
   .link.on .st{color:var(--vscode-charts-green);font-weight:600}
   .statusline{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:2px 0 4px;font-size:12px}
   .integrity{border:1px solid var(--vscode-inputValidation-errorBorder,#d44);border-left:4px solid var(--vscode-inputValidation-errorBorder,#d44);background:var(--vscode-inputValidation-errorBackground,rgba(212,68,68,0.12));border-radius:8px;padding:12px 14px;margin:4px 0 14px}
+  .integrity.warn{border-color:var(--vscode-inputValidation-warningBorder,#c90);border-left-color:var(--vscode-inputValidation-warningBorder,#c90);background:var(--vscode-inputValidation-warningBackground,rgba(204,153,0,0.12))}
   .integrity .ih{display:flex;align-items:center;justify-content:space-between;gap:10px;font-weight:700}
   .integrity ul{margin:8px 0 0;padding-left:18px}
   .integrity li{font-size:12px;margin:3px 0;color:var(--vscode-foreground)}
@@ -1277,18 +1278,23 @@ class Dashboard {
     // 무결성 경보 배너: 미확인 error 이벤트(예: 검증 미완)를 빨강으로 보이고 '확인함'으로 해제.
     const ib = $("integrityBanner");
     if (ib) {
-      const ierrs = (d.integrity||[]).filter(function(e){return e && !e.ack && e.severity==="error";});
-      if (!ierrs.length) { ib.style.display="none"; ib.replaceChildren(); }
+      const iev = (d.integrity||[]).filter(function(e){return e && !e.ack && (e.severity==="error"||e.severity==="warning");});
+      if (!iev.length) { ib.style.display="none"; ib.replaceChildren(); ib.className="integrity"; }
       else {
+        const nerr = iev.filter(function(e){return e.severity==="error";}).length;
+        const nwarn = iev.length - nerr;
         ib.replaceChildren();
+        ib.className = "integrity" + (nerr ? " err" : " warn"); // 빨강(미완) 있으면 빨강 테두리, 아니면 노랑(의심)
         const ih = el("div","ih");
-        ih.appendChild(el("span", null, "⚠️ 검증 무결성 경보 — 미확인 " + ierrs.length + "건 (검증 없이 끝난 턴이 있어요)"));
+        const head = nerr ? ("⚠️ 검증 무결성 경보 — 검증 미완 " + nerr + "건" + (nwarn ? " · 근거 의심 " + nwarn + "건" : ""))
+                          : ("🟡 검증 근거 의심 — " + nwarn + "건 (검증 답의 근거가 실제 파일/라인과 안 맞음)");
+        ih.appendChild(el("span", null, head));
         const ack = el("button","secondary","확인함 ✓");
         ack.addEventListener("click", function(){ vscode.postMessage({type:"ackIntegrity"}); });
         ih.appendChild(ack); ib.appendChild(ih);
         const ul = el("ul");
-        ierrs.slice(-5).forEach(function(e){
-          const li = el("li", null, (e.detail || e.kind || "검증 미완"));
+        iev.slice(-6).forEach(function(e){
+          const li = el("li", null, (e.severity==="error"?"🔴 ":"🟡 ") + (e.detail || e.kind || "무결성 신호"));
           if (e.ts) li.appendChild(el("span","when","  ("+new Date(e.ts).toLocaleString()+")"));
           ul.appendChild(li);
         });
@@ -1563,8 +1569,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
     // 검증 진행 흐름: 진행 중이면 메인 항목을 숨기고 [🧑Claude] ▶▶검증중 [🔍Codex] 3개 항목으로 단계별(글자)색을 보인다.
     const live = computeLiveStage(link?.codexSession ?? null);
-    const errs = readIntegrity().filter((e) => !e.ack && e.severity === "error");
-    const flowActive = !!live && !errs.length && ["claude", "codex-req", "codex-gen", "rejudge"].includes(live.key);
+    const allIg = readIntegrity();
+    const errs = allIg.filter((e) => !e.ack && e.severity === "error");
+    const warns = allIg.filter((e) => !e.ack && e.severity === "warning");
+    // 우선순위 error > warning > flow: 미확인 경보(빨강/노랑)가 있으면 상태바는 그걸 보인다(무결성 가시화 우선).
+    // 진행 flow는 대시보드 스트립엔 계속 보이므로 상태바에서 양보해도 사용자가 진행을 못 보는 건 아님.
+    const flowActive = !!live && !errs.length && !warns.length && ["claude", "codex-req", "codex-gen", "rejudge"].includes(live.key);
     if (flowActive && live) {
       if (pulseTimer) { clearInterval(pulseTimer); pulseTimer = undefined; } lastErrCount = 0;
       status.hide(); // 흐름 표시 중엔 메인 1줄 대신 3박스
@@ -1579,12 +1589,12 @@ export function activate(context: vscode.ExtensionContext): void {
       fArrow.color = c;
       fArrow.tooltip = new vscode.MarkdownString(`**검증 진행 — ${live.label}**${live.round ? ` (라운드 ${live.round})` : ""}\n\n클릭 → 대시보드`);
       fClaude.show(); fArrow.show(); fCodex.show();
-      return; // 흐름은 error 없을 때만 — 아래 메인/무결성 분기 스킵
+      return; // 흐름은 미확인 경보(error/warning)가 없을 때만 — 아래 메인/무결성 분기 스킵
     }
     flowHide();
     status.color = undefined; // 메인 항목 글자색 잔존 방지
 
-    // 무결성 경보(미확인 error)는 연결 상태를 덮어써 '검증 미완'을 빨강으로 알린다(침묵 금지). 확인하면 사라짐.
+    // 무결성 경보: error(검증 미완)=빨강 우선, 없으면 warning(근거 의심=결정2-2)=노랑. 확인하면 사라짐. (errs·warns는 위에서 계산)
     if (errs.length) {
       status.text = `$(alert) Codex 검증 미완 ${errs.length}`;
       status.tooltip = new vscode.MarkdownString(
@@ -1594,6 +1604,17 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       status.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
       pulseIfNew(errs.length);
+    } else if (warns.length) {
+      // 결정2-2: 검증 답이 든 근거(파일:라인)가 실제와 안 맞음 = '의심'(노랑). 빨강(미완)보다 약함, 펄스 없음.
+      if (pulseTimer) { clearInterval(pulseTimer); pulseTimer = undefined; }
+      lastErrCount = 0;
+      status.text = `$(warning) Codex 근거 의심 ${warns.length}`;
+      status.tooltip = new vscode.MarkdownString(
+        `**🟡 검증 근거 의심 — 미확인 ${warns.length}건**\n\n` +
+          warns.slice(-3).map((e) => `- ${e.detail || e.kind || "근거 불일치"}`).join("\n\n") +
+          `\n\n검증 답이 든 근거가 실제 파일/라인과 안 맞아요.\n\n클릭 → 대시보드에서 확인`,
+      );
+      status.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
     } else {
       // 경보 없음(확인됨/해결) → 펄스 타이머도 정리해야 빨강이 다시 칠해지지 않음(ack 즉시 해제).
       if (pulseTimer) { clearInterval(pulseTimer); pulseTimer = undefined; }

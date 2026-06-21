@@ -17,7 +17,7 @@ const { spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, loadBaseDirective, atomicWrite, readPhase, writePhase } = require("./contract-lib.js");
+const { loadContract, buildInjection, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -89,6 +89,81 @@ function writeProof(codexSession, answer, ws) {
   };
   const key = (cs || "_nosession").replace(/[^0-9a-zA-Z._-]/g, "_"); // 파일명 안전(UUID는 본래 안전)
   atomicWrite(path.join(PROOFS_DIR, key + ".json"), JSON.stringify(proof)); // atomicWrite가 PROOFS_DIR 자동 생성
+}
+
+// 결정2-2단계: Codex 답의 인용 근거(파일:라인)를 보수적으로 점검. 거짓경보(cry-wolf) 회피 최우선 —
+// 경로를 '자신 있게' 한 실제 파일로 해석할 수 있을 때만(절대존재 / ws 상대존재 / ws내 basename 유일) 평가하고,
+// 라인이 파일 줄수를 '명백히 초과'할 때만 불일치로 본다. 해석 불가·모호·범위 내는 건너뜀(안 띄움). '코덱스가
+// 실제로 안 열었나'(rollout 대조)는 fuzzy라 보류. → 불일치가 있으면 노랑(warning) 무결성 이벤트.
+function findByBasename(root, base, maxDepth, maxFiles) {
+  const hits = [];
+  let count = 0;
+  const walk = (d, depth) => {
+    if (depth > maxDepth || count > maxFiles || hits.length > 1) return;
+    let items;
+    try { items = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const it of items) {
+      if (hits.length > 1) return;
+      const n = it.name;
+      if (it.isDirectory()) {
+        if (n === "node_modules" || n === ".git" || n === "out" || n.startsWith(".")) continue;
+        walk(path.join(d, n), depth + 1);
+      } else if (it.isFile()) {
+        count++;
+        if (n === base) hits.push(path.join(d, n));
+      }
+    }
+  };
+  walk(root, 0);
+  return hits;
+}
+function resolveCitedPath(raw, ws) {
+  let p = String(raw).replace(/\\/g, "/");
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(p)) return null; // URL(https:// 등)은 로컬 파일 아님 → 건너뜀(cry-wolf 방지)
+  const mnt = p.match(/^\/mnt\/([a-zA-Z])\/(.*)$/); // /mnt/d/... → d:/...
+  if (mnt) p = mnt[1] + ":/" + mnt[2];
+  try { if (path.isAbsolute(p) && fs.existsSync(p) && fs.statSync(p).isFile()) return p; } catch { /* */ }
+  try { const c = path.join(ws, p); if (fs.existsSync(c) && fs.statSync(c).isFile()) return c; } catch { /* */ }
+  const hits = findByBasename(ws, path.basename(p), 6, 5000);
+  return hits.length === 1 ? hits[0] : null; // 유일할 때만(모호하면 skip — cry-wolf 방지)
+}
+function checkCitedEvidence(answer, ws) {
+  const text = String(answer || "");
+  // 마크다운 링크 (경로.확장자:라인[-라인]). 경로엔 드라이브 콜론(D:/...)·유니코드도 허용해야 하므로 괄호/공백만 제외.
+  // '.확장자:숫자)'로 끝을 고정해 (3:00)·(텍스트:5) 같은 비-파일 인용은 거른다.
+  const re = /\(([^()\s]+\.[A-Za-z0-9]+):(\d+)(?:-\d+)?\)/g;
+  const seen = new Set();
+  const mism = [];
+  let m;
+  while ((m = re.exec(text))) {
+    const rawPath = m[1];
+    const line = parseInt(m[2], 10);
+    if (!line) continue;
+    const k = rawPath + ":" + line;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    const file = resolveCitedPath(rawPath, ws || workspace());
+    if (!file) continue; // 해석 불가/모호 → 건너뜀
+    let count = 0;
+    try { count = fs.readFileSync(file, "utf8").split(/\n/).length; } catch { continue; }
+    if (line > count) mism.push(`${path.basename(rawPath)}:${line}(실제 ${count}줄)`);
+  }
+  return mism;
+}
+function flagEvidence(answer, ws) {
+  try {
+    const mism = checkCitedEvidence(answer, ws);
+    if (mism.length) {
+      appendIntegrityEvent({
+        ts: nowIso(),
+        session: claudeId() || ((readActive() || {}).claudeSession) || "",
+        workspace: ws,
+        kind: "evidence-mismatch",
+        severity: "warning", // 노랑 — '의심'이지 '검증 미완(빨강)'은 아님
+        detail: `검증 답의 인용 근거 ${mism.length}개가 실제 파일/라인과 불일치(존재하지 않는 줄): ${mism.slice(0, 3).join(" / ")}`,
+      });
+    }
+  } catch { /* best-effort — 점검 실패가 검증 흐름을 막지 않음 */ }
 }
 // 지금 Claude 대화가 '실제로' 도는 폴더 — contract-inject 훅이 매 턴 active.json에 기록. 엉뚱 폴더 방어용.
 function readActive() {
@@ -441,6 +516,7 @@ function cmdAsk(rest) {
     }
     try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
     writeProof(link.codexSession, answer, ws); // 실제 성공 → 검증 증명 기록(verify-guard가 인정)
+    flagEvidence(answer, ws); // 결정2-2: 인용 근거(파일:라인) 존재성 점검 → 불일치면 노랑 이벤트
     process.stdout.write(`# 연결 세션 ${link.codexSession} (${link.via})\n\n${answer}\n`);
     return;
   }
@@ -515,12 +591,14 @@ function cmdAsk(rest) {
     if (links.autoNewFailed) delete links.autoNewFailed[wsKey]; // 성공 → 폭증방지 플래그 해제
     recordLink(links, m[1]); // saveLinks 포함(플래그 해제도 함께 영속)
     writeProof(m[1], answer, ws); // 실제 성공 → 검증 증명 기록
+    flagEvidence(answer, ws); // 결정2-2: 인용 근거 점검
     process.stdout.write(`# 새 Codex 세션 생성·연결: ${m[1]}\n\n${answer}\n`);
   } else {
     links.autoNewFailed = links.autoNewFailed || {};
     links.autoNewFailed[wsKey] = true;
     saveLinks(links); // 다음 자동 생성 차단 플래그 저장
     writeProof("", answer, ws); // Codex는 성공 응답함(세션id만 미식별) → 검증은 인정
+    flagEvidence(answer, ws); // 결정2-2: 인용 근거 점검
     process.stdout.write(`# 새 세션 생성됨(세션id 식별 실패) — 폭증 방지로 다음 자동 생성은 멈춥니다. 'find'로 찾아 'link <id>' 하세요.\n\n${answer}\n`);
   }
 }
@@ -723,4 +801,4 @@ function main() {
 }
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
-module.exports = { withContract };
+module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence };
