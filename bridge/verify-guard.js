@@ -210,7 +210,7 @@ process.stdin.on("end", () => {
   } else if (n > MAX_ATTEMPTS) {
     // 충분히 강제했으나 여전히 미검증(예: Codex 미응답·연결 없음) → 무한정지 방지로 종료 허용.
     process.stderr.write(`[verify-guard] 검증을 ${MAX_ATTEMPTS}회 강제했으나 완료되지 않음 — 무한정지 방지로 종료를 허용합니다.\n`);
-    clearAttempts(claudeSession);
+    clearAttempts(attemptKey); // 카운터 키와 일치(세션키 없을 때 no-op 방지)
     process.exit(0);
   }
   const what = planned && !editedReal ? "플랜을 확정했는데" : editedReal ? "파일을 변경했는데" : "이번 턴에";
