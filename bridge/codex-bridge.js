@@ -7,6 +7,7 @@
 // 사용:
 //   node codex-bridge.js ask "<프롬프트>"          연결된 세션에 보내고 답 받기 (없으면 보고)
 //   node codex-bridge.js ask --allow-new "<...>"   연결 없을 때 새 세션 생성+연결 후 보내기 (첫 소통)
+//   node codex-bridge.js ask --force-new "<...>"   엉뚱 폴더 방어를 무릅쓰고 '이 폴더'에 새 세션 강제(--allow-new 함의)
 //   node codex-bridge.js link <codex-session-id>   현재 Claude 세션을 기존 Codex 세션에 연결
 //   node codex-bridge.js link --last               가장 최근(인덱스된) Codex 세션에 연결
 //   node codex-bridge.js status                    현재 연결 상태
@@ -60,6 +61,14 @@ function claudeId() {
 }
 function workspace() {
   return process.env.CLAUDE_PROJECT_DIR || process.cwd();
+}
+// 지금 Claude 대화가 '실제로' 도는 폴더 — contract-inject 훅이 매 턴 active.json에 기록. 엉뚱 폴더 방어용.
+function readActive() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(os.homedir(), ".codex-bridge", "active.json"), "utf8"));
+  } catch {
+    return null;
+  }
 }
 // 워크스페이스 키 정규화(대소문자/구분자/끝슬래시 차이 흡수) — 브릿지·확장 일치용.
 function normWs(p) {
@@ -379,8 +388,9 @@ function die(msg, code = 1) {
 }
 
 function cmdAsk(rest) {
-  const allowNew = rest.includes("--allow-new");
-  const prompt = rest.filter((x) => x !== "--allow-new").join(" ").trim();
+  const forceNew = rest.includes("--force-new"); // 엉뚱 폴더 방어를 무릅쓰고 '이 폴더'에 새 세션 강제
+  const allowNew = rest.includes("--allow-new") || forceNew;
+  const prompt = rest.filter((x) => x !== "--allow-new" && x !== "--force-new").join(" ").trim();
   if (!prompt) die('사용법: ask "<프롬프트>"', 2);
 
   const links = loadLinks();
@@ -411,6 +421,30 @@ function cmdAsk(rest) {
         `   - 가장 최근에 연결:   node codex-bridge.js link --last\n` +
         `   - 새로 시작(첫 소통): node codex-bridge.js ask --allow-new "..."\n` +
         `※ 새 세션을 임의로 만들지 않았습니다.`,
+      3,
+    );
+  }
+
+  // 엉뚱 폴더 방어: 새 세션을 만들기 '직전', 지금 실행 폴더가 실제 Claude 대화가 도는 폴더(active.json)와
+  // 다르면 십중팔구 엉뚱한 폴더(터미널 cwd)에서 돌린 것 → 조용히 새 세션을 만들어 목록을 오염시키지 말고 막는다.
+  // 정상 흐름(대화 폴더에서 실행)은 here==active.workspace라 안 막힘. 정말 여기 만들려면 --force-new.
+  // (NFC 정규화로 한글 등 경로의 NFC/NFD 차이로 인한 오탐 방지 — 전역 normWs는 건드리지 않음.)
+  const here = workspace();
+  const active = readActive();
+  const myClaude = claudeId();
+  const sameWs = (a, b) => normWs(a).normalize("NFC") === normWs(b).normalize("NFC");
+  // active.json은 전역 1개 파일이라 멀티 창에선 '마지막에 프롬프트 넣은 대화'가 덮어쓴다. 그래서 workspace만 보고
+  // 막으면 다른 창/오래된 active로 정상 폴더를 오탐 차단할 수 있다. → active가 '바로 이 Claude 대화'의 것일 때만
+  // (active.claudeSession == 현재 CLAUDE_CODE_SESSION_ID) 강한 차단. 불일치/세션id 없음/active 없음이면 차단 안 함(오탐 방지).
+  const activeIsThisConv = active && active.claudeSession && myClaude && active.claudeSession === myClaude;
+  if (!forceNew && activeIsThisConv && active.workspace && !sameWs(active.workspace, here)) {
+    die(
+      `⚠️ 새 Codex 세션을 만들 '이 폴더'가 지금 이 Claude 대화가 도는 폴더와 다릅니다.\n` +
+        `   - 이 폴더(실행 위치): ${here}\n` +
+        `   - 이 대화의 폴더:     ${active.workspace}\n` +
+        `   엉뚱한 폴더에서 돌렸을 가능성이 큽니다. 새 세션을 만들지 않았습니다.\n` +
+        `   → 그 대화 폴더에서 실행하거나, CLAUDE_PROJECT_DIR을 그 폴더로 설정하세요.\n` +
+        `   → 정말 '${here}'에 새 세션을 만들려면: ask --force-new "..."`,
       3,
     );
   }
@@ -597,6 +631,7 @@ function main() {
         "codex-bridge: ask | link | status | find | doctor | detect-home | pref\n" +
           '  node codex-bridge.js ask "<프롬프트>"\n' +
           '  node codex-bridge.js ask --allow-new "<프롬프트>"\n' +
+          '  node codex-bridge.js ask --force-new "<프롬프트>"  (엉뚱 폴더 방어 무시, 이 폴더에 새 세션 강제)\n' +
           "  node codex-bridge.js link <id> | link --last\n" +
           "  node codex-bridge.js status | find | doctor | detect-home\n" +
           "  node codex-bridge.js pref [set model=<m> reasoning=<low|medium|high> | clear]\n",
