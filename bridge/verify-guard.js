@@ -80,15 +80,17 @@ function checkProof(claudeSession, sinceTs) {
 function attemptsPath(session) { return path.join(ATTEMPTS_DIR, session.replace(/[^0-9a-zA-Z._-]/g, "_") + ".json"); }
 function clearAttempts(session) { if (!session) return; try { fs.unlinkSync(attemptsPath(session)); } catch { /* 없으면 무시 */ } }
 // 이번 턴 차단 횟수를 1 올려 반환. turnTs(이번 사용자 발화 시각)가 저장된 것보다 새로우면 이전 턴 카운터로 보고 리셋.
+// 반환: 이번 턴 차단 횟수(>=1), 또는 null = 카운터 추적 불가(세션키 없음 또는 저장 실패).
+// null이면 호출부가 옛 안전밸브(재진입=통과)로 폴백 → 카운터를 못 믿는 경우에도 무한 차단이 없게 한다.
 function bumpAttempts(session, turnTs) {
-  if (!session) return 1; // 세션키 없으면 카운트 불가 → 1로 취급(최소 1회는 차단되도록)
+  if (!session) return null; // 세션키 없음 → 카운트 불가
   let a = { ts: 0, count: 0 };
   try { a = JSON.parse(fs.readFileSync(attemptsPath(session), "utf8")); } catch { /* 없음=새로 */ }
   // 유효 발화시각이고 저장된 게 이전 턴이면 리셋. turnTs<=0(턴 경계 불명)이면 리셋하지 않고 '누적'해서라도
   // MAX로 바운드한다 — 매번 리셋하면 count가 1에 머물러 MAX에 영영 도달 못 해 무한 차단되기 때문.
   if (turnTs > 0 && Number(a.ts) < turnTs) a = { ts: turnTs, count: 0 };
   a.count = (Number(a.count) || 0) + 1;
-  atomicWrite(attemptsPath(session), JSON.stringify(a)); // atomicWrite가 ATTEMPTS_DIR 자동 생성
+  if (!atomicWrite(attemptsPath(session), JSON.stringify(a))) return null; // 저장 실패 → 카운터 신뢰 불가
   return a.count;
 }
 
@@ -197,19 +199,23 @@ process.stdin.on("end", () => {
 
   // 검증 필요 + 미검증 → 재검증 강제. 단 무한정지 방지로 한 턴 MAX_ATTEMPTS회까지만 차단(V4).
   // 재진입(stop_hook_active)이어도 검증을 다시 확인하므로 '다시 멈추기'로 바이패스되지 않는다.
+  // 카운터를 못 믿는 경우(세션키 없음/저장 실패=null)엔 옛 안전밸브로 폴백: 재진입이면 통과(무한 차단 방지).
   const n = bumpAttempts(claudeSession, lastUserTs);
-  if (n > MAX_ATTEMPTS) {
+  if (n === null) {
+    if (j.stop_hook_active) process.exit(0); // 카운트 불가 + 재진입 → 통과(무한 차단 방지)
+  } else if (n > MAX_ATTEMPTS) {
     // 충분히 강제했으나 여전히 미검증(예: Codex 미응답·연결 없음) → 무한정지 방지로 종료 허용.
     process.stderr.write(`[verify-guard] 검증을 ${MAX_ATTEMPTS}회 강제했으나 완료되지 않음 — 무한정지 방지로 종료를 허용합니다.\n`);
     clearAttempts(claudeSession);
     process.exit(0);
   }
   const what = planned && !editedReal ? "플랜을 확정했는데" : editedReal ? "파일을 변경했는데" : "이번 턴에";
+  const shown = n === null ? "?" : n;
   process.stdout.write(
     JSON.stringify({
       decision: "block",
       reason:
-        `[검증 모드:${c.verifyMode} · ${n}/${MAX_ATTEMPTS}회] ${what} 이번 턴에 Codex 검증의 '성공 응답'이 없다. ` +
+        `[검증 모드:${c.verifyMode} · ${shown}/${MAX_ATTEMPTS}회] ${what} 이번 턴에 Codex 검증의 '성공 응답'이 없다. ` +
         `종료하지 말고 지금 \`node "${BRIDGE}" ask "<무엇을 검증할지>"\` 로 Codex 검증을 받아라 ` +
         `(빈 명령·실패·미연결은 인정되지 않는다 — 실제 응답이 와야 검증으로 친다). ` +
         `그 결과(통과/실패+근거)를 사용자에게 보고한 뒤 종료하라. (연결이 없어 보고만 된다면 그 사실을 보고하라. ${MAX_ATTEMPTS}회 후엔 종료가 허용된다)`,

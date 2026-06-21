@@ -407,5 +407,19 @@ if (GIT_OK) {
   clean(sb);
 })();
 
+// 29) 세션 키가 전혀 없음(env·j.session_id·transcript sessionId 모두 결손) → 카운터 불가 →
+//     재진입은 옛 안전밸브로 통과(무한 차단 방지). 첫 회는 차단.
+(function () {
+  console.log("[29] 세션키 전무 → 재진입 통과(무한차단 방지)");
+  const sb = setup("v4nosess", "always");
+  fs.writeFileSync(sb.transcriptPath, [
+    JSON.stringify({ type: "user", timestamp: T0, message: { content: [{ type: "text", text: "해줘" }] } }), // sessionId 없음
+    JSON.stringify({ type: "assistant", timestamp: TWRITE, message: { content: [{ type: "tool_use", name: "Write", input: {} }] } }),
+  ].join("\n"));
+  ok(blocked(runGuardNoEnvSession(sb, { session_id: undefined })), "세션키 없어도 첫 회는 차단");
+  ok(!blocked(runGuardNoEnvSession(sb, { session_id: undefined, stop_hook_active: true })), "세션키 없으면 재진입은 통과(무한차단 방지)");
+  clean(sb);
+})();
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
