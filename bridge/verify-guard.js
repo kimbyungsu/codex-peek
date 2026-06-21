@@ -7,8 +7,10 @@
 const fs = require("fs");
 const path = require("path");
 const cp = require("child_process");
-const { loadContract, BRIDGE, BRIDGE_DIR } = require("./contract-lib.js");
+const { loadContract, BRIDGE, BRIDGE_DIR, atomicWrite } = require("./contract-lib.js");
 const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs");
+const ATTEMPTS_DIR = path.join(BRIDGE_DIR, "verify-attempts"); // V4: 한 턴 재검증 강제 횟수(무한정지 방지 바운드)
+const MAX_ATTEMPTS = 3; // 한 턴에 검증을 강제(차단)하는 최대 횟수. 그 후엔 무한정지 방지로 종료 허용.
 
 // V2: 도구(Write/Edit) 외 Bash 경유 변경(sed -i·cat>·생성기 등)도 감지하기 위해, git 저장소에서
 // '지금 바뀐 파일들'의 최신 수정시각(mtime)을 본다. 키워드/정규식 나열(취약·안티패턴) 대신 실제 변경을 본다.
@@ -73,6 +75,21 @@ function checkProof(claudeSession, sinceTs) {
   return pts >= sinceTs; // 이번 사용자 발화 + 마지막 변경 이후에 성공한 검증만 인정(이전 턴·변경 전 proof는 거름)
 }
 
+// V4: 한 턴 재검증 강제 횟수 관리. 옛 코드는 stop_hook_active면 무조건 통과(1회 리마인더) → 다시 멈추면 바이패스.
+// 이제 재진입에서도 검증을 재확인하되, 무한정지 방지로 한 턴 MAX_ATTEMPTS회까지만 차단한다(카운터로 바운드).
+function attemptsPath(session) { return path.join(ATTEMPTS_DIR, session.replace(/[^0-9a-zA-Z._-]/g, "_") + ".json"); }
+function clearAttempts(session) { if (!session) return; try { fs.unlinkSync(attemptsPath(session)); } catch { /* 없으면 무시 */ } }
+// 이번 턴 차단 횟수를 1 올려 반환. turnTs(이번 사용자 발화 시각)가 저장된 것보다 새로우면 이전 턴 카운터로 보고 리셋.
+function bumpAttempts(session, turnTs) {
+  if (!session) return 1; // 세션키 없으면 카운트 불가 → 1로 취급(최소 1회는 차단되도록)
+  let a = { ts: 0, count: 0 };
+  try { a = JSON.parse(fs.readFileSync(attemptsPath(session), "utf8")); } catch { /* 없음=새로 */ }
+  if (!(Number(a.ts) >= turnTs && turnTs > 0)) a = { ts: turnTs, count: 0 }; // 이전 턴이거나 ts 불명 → 리셋
+  a.count = (Number(a.count) || 0) + 1;
+  atomicWrite(attemptsPath(session), JSON.stringify(a)); // atomicWrite가 ATTEMPTS_DIR 자동 생성
+  return a.count;
+}
+
 let input = "";
 process.stdin.on("data", (d) => (input += d));
 process.stdin.on("end", () => {
@@ -91,7 +108,7 @@ process.stdin.on("end", () => {
     process.exit(0);
   }
   if (c.verifyMode === "off") process.exit(0); // 검증 모드 off
-  if (j.stop_hook_active) process.exit(0); // 재진입 → 통과(루프 방지)
+  // (옛 코드: 재진입(stop_hook_active)이면 무조건 통과 → '다시 멈추기'로 검증 바이패스 가능했음. V4: 아래 카운터로 바운드.)
 
   const tp = j.transcript_path;
   if (!tp || !fs.existsSync(tp)) process.exit(0);
@@ -170,18 +187,31 @@ process.stdin.on("end", () => {
     c.verifyMode === "plancode" ? (editedReal || planned) :
     editedReal;
 
-  if (needVerify && !verified) {
-    const what = planned && !editedReal ? "플랜을 확정했는데" : editedReal ? "파일을 변경했는데" : "이번 턴에";
-    process.stdout.write(
-      JSON.stringify({
-        decision: "block",
-        reason:
-          `[검증 모드:${c.verifyMode}] ${what} 이번 턴에 Codex 검증의 '성공 응답'이 없다. ` +
-          `종료하지 말고 지금 \`node "${BRIDGE}" ask "<무엇을 검증할지>"\` 로 Codex 검증을 받아라 ` +
-          `(빈 명령·실패·미연결은 인정되지 않는다 — 실제 응답이 와야 검증으로 친다). ` +
-          `그 결과(통과/실패+근거)를 사용자에게 보고한 뒤 종료하라. (연결이 없어 보고만 된다면 그 사실을 보고하라)`,
-      }),
-    );
+  // 검증 불필요 또는 검증됨 → 통과 + 이번 턴 재검증 카운터 리셋.
+  if (!needVerify || verified) {
+    clearAttempts(claudeSession);
+    process.exit(0);
   }
+
+  // 검증 필요 + 미검증 → 재검증 강제. 단 무한정지 방지로 한 턴 MAX_ATTEMPTS회까지만 차단(V4).
+  // 재진입(stop_hook_active)이어도 검증을 다시 확인하므로 '다시 멈추기'로 바이패스되지 않는다.
+  const n = bumpAttempts(claudeSession, lastUserTs);
+  if (n > MAX_ATTEMPTS) {
+    // 충분히 강제했으나 여전히 미검증(예: Codex 미응답·연결 없음) → 무한정지 방지로 종료 허용.
+    process.stderr.write(`[verify-guard] 검증을 ${MAX_ATTEMPTS}회 강제했으나 완료되지 않음 — 무한정지 방지로 종료를 허용합니다.\n`);
+    clearAttempts(claudeSession);
+    process.exit(0);
+  }
+  const what = planned && !editedReal ? "플랜을 확정했는데" : editedReal ? "파일을 변경했는데" : "이번 턴에";
+  process.stdout.write(
+    JSON.stringify({
+      decision: "block",
+      reason:
+        `[검증 모드:${c.verifyMode} · ${n}/${MAX_ATTEMPTS}회] ${what} 이번 턴에 Codex 검증의 '성공 응답'이 없다. ` +
+        `종료하지 말고 지금 \`node "${BRIDGE}" ask "<무엇을 검증할지>"\` 로 Codex 검증을 받아라 ` +
+        `(빈 명령·실패·미연결은 인정되지 않는다 — 실제 응답이 와야 검증으로 친다). ` +
+        `그 결과(통과/실패+근거)를 사용자에게 보고한 뒤 종료하라. (연결이 없어 보고만 된다면 그 사실을 보고하라. ${MAX_ATTEMPTS}회 후엔 종료가 허용된다)`,
+    }),
+  );
   process.exit(0);
 });

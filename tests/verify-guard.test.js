@@ -19,6 +19,8 @@ const TMID = "2026-06-21T10:00:03.000Z";   // 검증 시점(중간)
 const TFRESH = "2026-06-21T10:00:05.000Z"; // 이번 턴 안의 성공 검증
 const TLATE = "2026-06-21T10:00:10.000Z";  // 검증 후의 추가 수정
 const TSTALE = "2026-06-21T09:00:00.000Z"; // 이전 턴(발화 이전)의 검증
+const T_NEXT = "2026-06-21T11:00:00.000Z";       // 다음 턴의 사용자 발화
+const T_NEXT_EDIT = "2026-06-21T11:00:01.000Z";  // 다음 턴의 변경
 
 function setup(name, verifyMode) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vg_" + name + "_"));
@@ -115,12 +117,12 @@ function clean(sb) { try { fs.rmSync(sb.dir, { recursive: true, force: true }); 
   clean(sb);
 })();
 
-// 7) always + proof 없음 + stop_hook_active → 통과(무한루프 방지)
+// 7) always + proof 없음 + stop_hook_active(재진입) → 이제도 차단 (V4: 옛 코드는 재진입을 무조건 통과시켜 바이패스됐음)
 (function () {
-  console.log("[7] stop_hook_active 재진입");
+  console.log("[7] 재진입도 검증 재확인(V4 — 바이패스 방지)");
   const sb = setup("reentry", "always");
   putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]);
-  ok(!blocked(runGuard(sb, { stop_hook_active: true })), "재진입은 통과");
+  ok(blocked(runGuard(sb, { stop_hook_active: true })), "재진입도 미검증이면 차단");
   clean(sb);
 })();
 
@@ -347,8 +349,48 @@ if (GIT_OK) {
     clean(sb);
   })();
 } else {
-  console.log("[18-23] git 없음 → V2 테스트 건너뜀");
+  console.log("[18-24] git 없음 → V2 테스트 건너뜀");
 }
+
+// ── V4: 재검증 루프(무한정지 방지 바운드) ──
+// 25) 재진입을 반복해도 검증 전엔 계속 차단, MAX 후엔 통과 (옛 코드: 재진입 1회면 통과=바이패스)
+(function () {
+  console.log("[25] 재진입 반복 차단 → MAX 후 통과 (V4)");
+  const sb = setup("v4loop", "always");
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]); // 변경, proof 없음
+  ok(blocked(runGuard(sb, { stop_hook_active: false })), "1회차 차단");
+  ok(blocked(runGuard(sb, { stop_hook_active: true })), "2회차(재진입) 차단");
+  ok(blocked(runGuard(sb, { stop_hook_active: true })), "3회차 차단");
+  ok(!blocked(runGuard(sb, { stop_hook_active: true })), "4회차(>MAX=3) 통과(무한정지 방지)");
+  clean(sb);
+})();
+
+// 26) 루프 도중 검증되면 즉시 통과 + 카운터 리셋
+(function () {
+  console.log("[26] 검증되면 즉시 통과 + 카운터 리셋");
+  const sb = setup("v4clear", "always");
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]);
+  ok(blocked(runGuard(sb)), "처음엔 차단(count 1)");
+  putProof(sb, { ts: TFRESH }); // 이제 검증됨
+  ok(!blocked(runGuard(sb, { stop_hook_active: true })), "검증되면 통과");
+  const attFile = path.join(sb.bridgeDir, "verify-attempts", sb.session + ".json");
+  ok(!fs.existsSync(attFile), "통과 시 카운터 파일 삭제(리셋)");
+  clean(sb);
+})();
+
+// 27) 새 턴이면 카운터 리셋 — 이전 턴에 MAX 소진했어도 새 발화면 다시 강제
+(function () {
+  console.log("[27] 새 턴이면 카운터 리셋");
+  const sb = setup("v4turn", "always");
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]);
+  // 이전 턴에서 MAX 소진(3회 차단 후 통과)
+  runGuard(sb); runGuard(sb, { stop_hook_active: true }); runGuard(sb, { stop_hook_active: true });
+  runGuard(sb, { stop_hook_active: true }); // 4회차=통과(소진)
+  // 새 턴: 더 나중 발화 추가
+  putTx(sb, [human(T0, sb.session), human(T_NEXT, sb.session), tool(T_NEXT_EDIT, sb.session, "Write")]);
+  ok(blocked(runGuard(sb, { stop_hook_active: true })), "새 턴이면 카운터 리셋되어 다시 차단");
+  clean(sb);
+})();
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
