@@ -31,11 +31,18 @@ function gitChangedMaxMtime(ws) {
     let p = line.slice(3); // "XY " 다음이 경로
     const arrow = p.indexOf(" -> ");
     if (arrow >= 0) p = p.slice(arrow + 4); // 이름변경 "old -> new" → 현재 파일(new)
+    const full = path.join(ws, p);
     try {
-      const st = fs.statSync(path.join(ws, p));
+      const st = fs.statSync(full);
       if (st.mtimeMs > max) max = st.mtimeMs;
     } catch {
-      /* 삭제됨 등 → stat 불가, 건너뜀 */
+      // 삭제(rm·git rm 등)로 파일이 사라짐 → 부모 디렉터리 mtime으로 삭제 시각을 근사(삭제 시 부모 dir mtime 갱신).
+      try {
+        const dst = fs.statSync(path.dirname(full));
+        if (dst.mtimeMs > max) max = dst.mtimeMs;
+      } catch {
+        /* 부모도 없음(상위 디렉터리째 삭제 등) → 건너뜀 */
+      }
     }
   }
   return max;

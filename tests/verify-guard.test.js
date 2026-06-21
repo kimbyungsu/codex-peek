@@ -302,8 +302,36 @@ if (GIT_OK) {
     ok(blocked(runGuard(sb)), "변경 이전 proof는 인정 안 함→차단");
     clean(sb);
   })();
+  // 22) Bash 삭제(추적 파일 rm)도 감지 — 부모 dir mtime (V2 삭제 보강)
+  (function () {
+    console.log("[22] Bash 삭제도 감지 (V2 삭제 보강)");
+    const sb = gitSetup("v2del", "code");
+    const f = path.join(sb.ws, "tracked.txt");
+    fs.writeFileSync(f, "x");
+    cp.execSync("git add -A", { cwd: sb.ws, stdio: "ignore" });
+    cp.execSync("git commit -m init", { cwd: sb.ws, stdio: "ignore" }); // 추적·클린 상태
+    fs.utimesSync(sb.ws, T_OLD, T_OLD); // 이번 턴 전에는 dir가 오래됐다고 가정
+    fs.unlinkSync(f); // 이번 턴 삭제 → 부모(ws) dir mtime → now
+    putTx(sb, [human(T_USER, sb.session)]); // 도구 tool_use 없음
+    ok(blocked(runGuard(sb)), "추적 파일 삭제도 트리거→proof 없으면 차단");
+    clean(sb);
+  })();
+
+  // 23) 대조: 클린 상태(이번 턴 변경 전혀 없음) → 차단 안 함
+  (function () {
+    console.log("[23] 클린 상태(변경 없음)는 차단 안 함");
+    const sb = gitSetup("v2clean", "code");
+    const f = path.join(sb.ws, "tracked.txt");
+    fs.writeFileSync(f, "x");
+    cp.execSync("git add -A", { cwd: sb.ws, stdio: "ignore" });
+    cp.execSync("git commit -m init", { cwd: sb.ws, stdio: "ignore" });
+    fs.utimesSync(sb.ws, T_OLD, T_OLD); // dir도 오래됨, 작업트리 클린
+    putTx(sb, [human(T_USER, sb.session)]);
+    ok(!blocked(runGuard(sb)), "변경 없으면 code 모드에서 통과");
+    clean(sb);
+  })();
 } else {
-  console.log("[18-21] git 없음 → V2 테스트 건너뜀");
+  console.log("[18-23] git 없음 → V2 테스트 건너뜀");
 }
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
