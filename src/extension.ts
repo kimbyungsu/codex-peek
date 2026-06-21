@@ -18,6 +18,8 @@ const LINKS_FILE = path.join(BRIDGE_DIR, "links.json");
 const CONTRACT_FILE = path.join(BRIDGE_DIR, "contract.json"); // 전역 기본값(상속 시드)
 const CONTRACTS_DIR = path.join(BRIDGE_DIR, "contracts"); // 프로젝트별 계약
 const INTEGRITY_FILE = path.join(BRIDGE_DIR, "integrity.json"); // 무결성 신호(브릿지 기록 → 상태바 빨강·대시보드로 가시화)
+const PHASE_FILE = path.join(BRIDGE_DIR, "phase.json"); // 검증 파이프라인 라이브 단계(훅/브릿지 기록 → 상태바·진행 스트립)
+const PHASE_STALE_MS = 15 * 60 * 1000; // 이보다 오래된 phase는 '대기'로 — 코덱스 ask 최대 8분 + 여유
 // 원자적 저장: 임시파일에 쓴 뒤 rename으로만 교체 → 읽는 쪽은 옛/새 파일만 보고 반쪽(손상) 파일은 못 본다
 // (다중 창 동시쓰기 손상 방지). ⚠ 직접쓰기 폴백 금지 — Windows에선 대상이 동시 읽기로 잠깐 열려 있으면 rename이
 // 실패하는데, 그때 직접쓰기로 폴백하면 그게 반쪽파일 손상의 원인이 된다(검증 확인). rename 짧게 재시도, 끝내
@@ -77,6 +79,7 @@ interface BridgeState {
   availModels: AvailModel[]; // 계정 캐시(models_cache.json)의 모델·모델별 생각강도 — 하드코딩 대신 계정 실제 목록
   modelsCacheNote: string;   // 계정 캐시 못 읽을 때 사용자에게 보여줄 이유("" = 정상)
   integrity: IntegrityEvent[]; // 무결성 신호(검증 미완 등) — 미확인 error는 상태바 빨강 + 대시보드 경보
+  live: LiveStage | null;      // 검증 파이프라인 라이브 단계(없으면 대기) — 상태바·진행 스트립
 }
 
 function normWs(p: string): string {
@@ -392,6 +395,37 @@ function ackIntegrity(ids: string[] | "all"): boolean {
   return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events }));
 }
 
+// 검증 파이프라인 라이브 단계: 훅/브릿지가 phase.json에 기록한 단계 + 코덱스 rollout 성장 + staleness로
+// 사용자에게 진행을 보여준다(토큰 스트림 아님, 파일변화 기반). 단계: 대기/Claude작업중/검증요청됨/Codex생성중/반영중/완료/미완.
+interface LiveStage { key: string; label: string; icon: string; spin: boolean; round: number }
+function readPhaseRaw(): { phase?: string; round?: number; session?: string; workspace?: string; ts?: string } {
+  try { return JSON.parse(fs.readFileSync(PHASE_FILE, "utf8")) || {}; } catch { return {}; }
+}
+// 연결 세션 rollout이 '최근 쓰인' 상태인가(mtime 최근 N초) → 코덱스가 지금 답을 쓰는 중으로 추정.
+// (정확히 size 증가가 아니라 recent-mtime 근사 — 브릿지가 동기로 막혀 있어도 파일 갱신으로 감지하는 게 목적.)
+function linkedRolloutRecentlyWritten(linkedId: string | null, withinMs = 12000): boolean {
+  if (!linkedId) return false;
+  try { const f = findRolloutById(linkedId); if (!f) return false; return Date.now() - fs.statSync(f).mtimeMs < withinMs; } catch { return false; }
+}
+function computeLiveStage(linkedId: string | null): LiveStage | null {
+  const p = readPhaseRaw();
+  if (!p.phase) return null;
+  const ts = Date.parse(p.ts || "");
+  if (!Number.isFinite(ts) || Date.now() - ts > PHASE_STALE_MS) return null; // 오래됨 → 대기(표시 안 함)
+  const round = Number(p.round) || 0;
+  switch (p.phase) {
+    case "claude-working": return { key: "claude", label: "Claude 작업중", icon: "$(pencil)", spin: false, round };
+    case "codex-verifying":
+      return linkedRolloutRecentlyWritten(linkedId)
+        ? { key: "codex-gen", label: "Codex 생성중", icon: "$(sync~spin)", spin: true, round }
+        : { key: "codex-req", label: "코덱스에 검증 요청", icon: "$(sync~spin)", spin: true, round };
+    case "rejudging": return { key: "rejudge", label: "검증 답 반영중", icon: "$(pencil)", spin: false, round };
+    case "done": return { key: "done", label: "검증 완료", icon: "$(check)", spin: false, round };
+    case "incomplete": return { key: "incomplete", label: "검증 미완", icon: "$(alert)", spin: false, round };
+    default: return null;
+  }
+}
+
 function computeState(turnsN: number): BridgeState {
   const ws = dashboardWorkspace();
   const links = loadLinks();
@@ -460,6 +494,7 @@ function computeState(turnsN: number): BridgeState {
     availModels,
     modelsCacheNote,
     integrity: readIntegrity(),
+    live: computeLiveStage(linkedId),
   };
 }
 
@@ -775,6 +810,15 @@ class Dashboard {
   .integrity li{font-size:12px;margin:3px 0;color:var(--vscode-foreground)}
   .integrity .when{color:var(--vscode-descriptionForeground);font-size:11px}
   .integrity button{cursor:pointer}
+  .livestrip{border:1px solid var(--vscode-panel-border);border-radius:8px;padding:11px 14px;margin:4px 0 14px;background:var(--vscode-sideBar-background)}
+  .lsflow{display:flex;align-items:center;justify-content:center;gap:12px}
+  .lsbox{padding:5px 12px;border-radius:6px;border:1px solid var(--vscode-panel-border);font-weight:700;font-size:12px;opacity:.5;transition:all .25s}
+  .lsbox.on{opacity:1;border-color:var(--vscode-focusBorder);background:var(--vscode-inputOption-activeBackground,rgba(80,140,255,.18))}
+  .lsarrow{font-weight:800;letter-spacing:1px;color:var(--vscode-descriptionForeground);min-width:64px;text-align:center}
+  .lsarrow.tocodex{color:#3a9}.lsarrow.toclaude{color:#a73}
+  .lsstage{text-align:center;margin-top:8px;font-size:12px}
+  .lschip{display:inline-block;padding:3px 11px;border-radius:999px;font-weight:600;border:1px solid currentColor}
+  .lschip.codex-gen,.lschip.codex-req{color:#3a9}.lschip.rejudge{color:#a73}.lschip.claude{color:#58f}.lschip.incomplete{color:#d44}.lschip.done{color:#3a9}
   .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid currentColor}
   .wschip{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:6px;font-size:11px;font-weight:600;border:1px solid var(--vscode-charts-orange);color:var(--vscode-charts-orange)}
   .b-off{color:var(--vscode-descriptionForeground)}
@@ -919,6 +963,15 @@ class Dashboard {
   <div id="status" class="statusline"></div>
 
   <div id="integrityBanner" class="integrity" style="display:none"></div>
+
+  <div id="liveStrip" class="livestrip" style="display:none">
+    <div class="lsflow">
+      <span class="lsbox claude" id="lsClaude">🧑 Claude</span>
+      <span class="lsarrow" id="lsArrow">⟷</span>
+      <span class="lsbox codex" id="lsCodex">🔍 Codex</span>
+    </div>
+    <div class="lsstage" id="lsStage"></div>
+  </div>
 
   <h2 class="sec claude">Claude 규칙 <span class="to claude">→ 🧑 Claude에게</span> <span class="sub2">Claude가 지킬 행동규칙 — 검증과 별개</span></h2>
   <div class="card">
@@ -1241,6 +1294,24 @@ class Dashboard {
       }
     }
 
+    // 검증 진행 스트립: 라이브 단계가 있으면 [Claude]⟷[Codex] 방향+활성 박스+단계칩. (완료/대기면 숨김)
+    const ls = $("liveStrip");
+    if (ls) {
+      const lv = d.live;
+      if (!lv || lv.key === "done") { ls.style.display="none"; }
+      else {
+        const toCodex = (lv.key === "codex-req" || lv.key === "codex-gen");
+        const toClaude = (lv.key === "rejudge");
+        $("lsArrow").textContent = toCodex ? "▶▶▶ 검증중" : toClaude ? "반영중 ◀◀◀" : "⟷";
+        $("lsArrow").className = "lsarrow " + (toCodex ? "tocodex" : toClaude ? "toclaude" : "");
+        $("lsClaude").className = "lsbox claude" + ((lv.key==="claude"||toClaude) ? " on" : "");
+        $("lsCodex").className = "lsbox codex" + (toCodex ? " on" : "");
+        const sg = $("lsStage"); sg.replaceChildren();
+        sg.appendChild(el("span","lschip "+lv.key, lv.label + (lv.round>1 ? " · "+lv.round+"라운드" : "")));
+        ls.style.display="";
+      }
+    }
+
     const conv = $("conv"); conv.replaceChildren();
     if (!d.linkedId) conv.appendChild(el("div","card muted","아직 연결된 Codex 세션이 없어요. 아래에서 세션을 연결하면, 구현↔검증으로 실제 주고받은 대화가 여기에 그대로 표시됩니다(눈으로 검증 확인)."));
     else if (!d.turns.length) conv.appendChild(el("div","card muted","연결됨 — 아직 주고받은 대화가 없습니다(또는 세션 파일을 못 찾음)."));
@@ -1478,7 +1549,14 @@ export function activate(context: vscode.ExtensionContext): void {
       status.backgroundColor = undefined;
     }
 
-    // 무결성 경보(미확인 error)는 위 연결 상태를 덮어써 '검증 미완'을 빨강으로 알린다(침묵 금지). 확인하면 사라짐.
+    // 검증 파이프라인 라이브 단계: 진행 중인 단계가 있으면 상태바 텍스트를 그 단계+스피너로 덮는다(색은 안 바꿈 — 무결성 빨강이 우선).
+    const live = computeLiveStage(link?.codexSession ?? null);
+    if (live && ["claude", "codex-req", "codex-gen", "rejudge"].includes(live.key)) {
+      status.text = `${live.icon} ${live.label}${live.round > 1 ? ` ·${live.round}R` : ""}`;
+      status.tooltip = new vscode.MarkdownString(`**검증 진행 — ${live.label}**${live.round ? ` (라운드 ${live.round})` : ""}\n\n클릭 → 대시보드`);
+    }
+
+    // 무결성 경보(미확인 error)는 위 연결 상태/진행을 덮어써 '검증 미완'을 빨강으로 알린다(침묵 금지). 확인하면 사라짐.
     const errs = readIntegrity().filter((e) => !e.ack && e.severity === "error");
     if (errs.length) {
       status.text = `$(alert) Codex 검증 미완 ${errs.length}`;

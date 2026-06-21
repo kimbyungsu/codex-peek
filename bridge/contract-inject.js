@@ -6,7 +6,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildVerifyDirective, atomicWrite, BRIDGE_DIR } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildVerifyDirective, atomicWrite, BRIDGE_DIR, writePhase } = require("./contract-lib.js");
 
 let input = "";
 process.stdin.on("data", (d) => (input += d));
@@ -37,6 +37,15 @@ process.stdin.on("end", () => {
   } catch {
     /* ignore */
   }
+
+  // 라이브 진행: 턴 시작 = 'Claude 작업중' + 라운드 0 리셋(이 턴의 ask 횟수는 codex-bridge가 증가시킴).
+  try {
+    writePhase("claude-working", {
+      round: 0,
+      session: hook.session_id || process.env.CLAUDE_CODE_SESSION_ID || "",
+      workspace: ws,
+    });
+  } catch { /* 진행표시는 best-effort — 실패해도 훅 동작 막지 않음 */ }
 
   let parts = [];
   try {

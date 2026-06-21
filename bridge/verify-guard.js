@@ -8,7 +8,7 @@ const fs = require("fs");
 const path = require("path");
 const cp = require("child_process");
 const crypto = require("crypto");
-const { loadContract, BRIDGE, BRIDGE_DIR, atomicWrite, appendIntegrityEvent } = require("./contract-lib.js");
+const { loadContract, BRIDGE, BRIDGE_DIR, atomicWrite, appendIntegrityEvent, writePhase } = require("./contract-lib.js");
 const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs");
 const ATTEMPTS_DIR = path.join(BRIDGE_DIR, "verify-attempts"); // V4: 한 턴 재검증 강제 횟수(무한정지 방지 바운드)
 const MAX_ATTEMPTS = 3; // 한 턴에 검증을 강제(차단)하는 최대 횟수. 그 후엔 무한정지 방지로 종료 허용.
@@ -112,7 +112,11 @@ process.stdin.on("end", () => {
   } catch {
     process.exit(0);
   }
-  if (c.verifyMode === "off") process.exit(0); // 검증 모드 off
+  if (c.verifyMode === "off") {
+    // 검증 모드 off라도 진행 phase는 정리해야 'Claude 작업중'이 다음 턴/15분까지 잔존하지 않음(라이브 오표시 방지).
+    try { writePhase("done", { session: process.env.CLAUDE_CODE_SESSION_ID || j.session_id || "", workspace: ws }); } catch { /* best-effort */ }
+    process.exit(0);
+  }
   // (옛 코드: 재진입(stop_hook_active)이면 무조건 통과 → '다시 멈추기'로 검증 바이패스 가능했음. V4: 아래 카운터로 바운드.)
 
   const tp = j.transcript_path;
@@ -198,6 +202,7 @@ process.stdin.on("end", () => {
   // 검증 불필요 또는 검증됨 → 통과 + 이번 턴 재검증 카운터 리셋.
   if (!needVerify || verified) {
     clearAttempts(attemptKey);
+    try { writePhase("done", { session: claudeSession, workspace: ws }); } catch { /* 진행표시 best-effort */ } // 턴 정상 종료(완료)
     process.exit(0);
   }
 
@@ -221,6 +226,7 @@ process.stdin.on("end", () => {
         detail: `검증 모드:${c.verifyMode} — ${MAX_ATTEMPTS}회 강제했으나 검증이 완료되지 않은 채 이 턴이 종료됨(이 턴 결과는 미검증).`,
       });
     } catch { /* 이벤트 기록 실패는 종료를 막지 않음 */ }
+    try { writePhase("incomplete", { session: claudeSession, workspace: ws }); } catch { /* best-effort */ } // 검증 미완 종료
     clearAttempts(attemptKey); // 카운터 키와 일치(세션키 없을 때 no-op 방지)
     process.exit(0);
   }

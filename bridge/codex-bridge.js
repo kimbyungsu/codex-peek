@@ -17,7 +17,7 @@ const { spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, loadBaseDirective, atomicWrite } = require("./contract-lib.js");
+const { loadContract, buildInjection, loadBaseDirective, atomicWrite, readPhase, writePhase } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -433,8 +433,13 @@ function cmdAsk(rest) {
           `→ 새로 시작하려면: ask --allow-new "..."  /  다른 세션에 붙이려면: link <id>`,
       );
     }
+    try { writePhase("codex-verifying", { round: (readPhase().round || 0) + 1, session: claudeId(), workspace: ws }); } catch { /* 진행표시 best-effort */ }
     const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs], withContract(prompt, ws));
-    if (error || !answer || (typeof status === "number" && status !== 0)) die(`Codex resume 실패: ${error?.message || ""}\n${stderr.slice(-500)}`);
+    if (error || !answer || (typeof status === "number" && status !== 0)) {
+      try { writePhase("claude-working", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // ask 실패 → 진행표시 codex-verifying 잔존 방지(Claude로 복귀)
+      die(`Codex resume 실패: ${error?.message || ""}\n${stderr.slice(-500)}`);
+    }
+    try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
     writeProof(link.codexSession, answer, ws); // 실제 성공 → 검증 증명 기록(verify-guard가 인정)
     process.stdout.write(`# 연결 세션 ${link.codexSession} (${link.via})\n\n${answer}\n`);
     return;
@@ -491,6 +496,7 @@ function cmdAsk(rest) {
 
   // --allow-new: 새 세션 생성 + 연결 기록.
   const since = Date.now() - 2000;
+  try { writePhase("codex-verifying", { round: (readPhase().round || 0) + 1, session: claudeId(), workspace: ws }); } catch { /* 진행표시 best-effort */ }
   const { answer, error, status, stderr } = runCodex([...mArgs], withContract(prompt, ws));
   if (error || !answer || (typeof status === "number" && status !== 0)) {
     // 응답은 실패했지만 세션 파일이 생겼을 수 있음 → 폭증 방지 플래그를 걸어 다음 자동 생성을 막고 종료.
@@ -499,8 +505,10 @@ function cmdAsk(rest) {
       links.autoNewFailed[wsKey] = true;
       saveLinks(links);
     }
+    try { writePhase("claude-working", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // ask 실패 → 진행표시 정리(Claude로 복귀)
     die(`Codex 새 세션 실패: ${error?.message || ""}\n${stderr.slice(-500)}\n(세션 파일이 생겼다면 'find'→'link <id>'로 연결하세요.)`);
   }
+  try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
   const newFile = newestRolloutSince(since);
   const m = newFile && newFile.match(UUID_RE);
   if (m) {

@@ -440,5 +440,31 @@ if (GIT_OK) {
   clean(sb);
 })();
 
+// 31) 검증 통과(정상 종료) 시 phase=done 기록 (라이브 진행)
+(function () {
+  console.log("[31] 통과 시 phase=done");
+  const sb = setup("phdone", "always");
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]);
+  putProof(sb, { ts: TFRESH }); // 검증됨
+  runGuard(sb); // 통과
+  let ph = {};
+  try { ph = JSON.parse(fs.readFileSync(path.join(sb.bridgeDir, "phase.json"), "utf8")); } catch {}
+  ok(ph.phase === "done", "통과 시 phase=done 기록");
+  clean(sb);
+})();
+
+// 32) MAX 소진(검증 미완 종료) 시 phase=incomplete 기록
+(function () {
+  console.log("[32] MAX 소진 시 phase=incomplete");
+  const sb = setup("phinc", "always");
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]);
+  runGuard(sb); runGuard(sb, { stop_hook_active: true }); runGuard(sb, { stop_hook_active: true });
+  runGuard(sb, { stop_hook_active: true }); // 4회차 = 소진
+  let ph = {};
+  try { ph = JSON.parse(fs.readFileSync(path.join(sb.bridgeDir, "phase.json"), "utf8")); } catch {}
+  ok(ph.phase === "incomplete", "MAX 소진 시 phase=incomplete 기록");
+  clean(sb);
+})();
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
