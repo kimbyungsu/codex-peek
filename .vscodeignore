@@ -8,3 +8,7 @@ out/**/*.map
 .gitignore
 bridge/**
 settings.example.json
+tests/**
+install.js
+install.sh
+install.cmd
