@@ -53,6 +53,9 @@ const CODEX_HOME = process.env.CODEX_HOME || readPinnedHome() || path.join(HOME,
 const SESSIONS_DIR = path.join(CODEX_HOME, "sessions");
 const INDEX_FILE = path.join(CODEX_HOME, "session_index.jsonl");
 const LINKS_FILE = path.join(BRIDGE_DIR, "links.json");
+// 검증 증명 폴더 — 실제로 Codex가 성공 응답했을 때만 기록(아래 writeProof). verify-guard가 이걸 읽어
+// '명령 문자열을 쳤는가'가 아니라 '진짜 성공한 검증이 이번 턴에 있었는가'를 본다(V1: 흉내/실패/미연결 통과 차단).
+const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs");
 const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
 
 function nowIso() {
@@ -63,6 +66,26 @@ function claudeId() {
 }
 function workspace() {
   return process.env.CLAUDE_PROJECT_DIR || process.cwd();
+}
+// 검증 증명 기록 — 실제로 Codex가 성공(exit 0·비어있지 않은 응답)했을 때만 호출한다(cmdAsk의 성공 분기들).
+// 한 Claude 세션당 1파일(최신 성공만 보존). verify-guard가 '이번 사용자 발화 이후 ts + workspace 일치'로 검증 인정.
+// → 명령 문자열만 보던 V1 구멍(echo·실패·미연결도 통과)을 닫는다. claudeSession 미설정(수동 실행)이면 _nosession에 기록(무해).
+function writeProof(codexSession, answer) {
+  // claudeSession: env 우선, 없으면 active.json(contract-inject가 hook.session_id로 기록) 폴백 →
+  // verify-guard의 reader 키(env‖j.session_id‖transcript)와 같은 대화 id로 수렴(환경별 env 결측 대비).
+  const cs = claudeId() || ((readActive() || {}).claudeSession) || "";
+  const proof = {
+    v: 1,
+    claudeSession: cs,
+    workspace: workspace(),
+    ts: nowIso(),
+    codexSession: codexSession || "",
+    exit: 0,
+    status: "success",
+    answerChars: (answer || "").length,
+  };
+  const key = (cs || "_nosession").replace(/[^0-9a-zA-Z._-]/g, "_"); // 파일명 안전(UUID는 본래 안전)
+  atomicWrite(path.join(PROOFS_DIR, key + ".json"), JSON.stringify(proof)); // atomicWrite가 PROOFS_DIR 자동 생성
 }
 // 지금 Claude 대화가 '실제로' 도는 폴더 — contract-inject 훅이 매 턴 active.json에 기록. 엉뚱 폴더 방어용.
 function readActive() {
@@ -408,6 +431,7 @@ function cmdAsk(rest) {
     }
     const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs], withContract(prompt));
     if (error || !answer || (typeof status === "number" && status !== 0)) die(`Codex resume 실패: ${error?.message || ""}\n${stderr.slice(-500)}`);
+    writeProof(link.codexSession, answer); // 실제 성공 → 검증 증명 기록(verify-guard가 인정)
     process.stdout.write(`# 연결 세션 ${link.codexSession} (${link.via})\n\n${answer}\n`);
     return;
   }
@@ -478,11 +502,13 @@ function cmdAsk(rest) {
   if (m) {
     if (links.autoNewFailed) delete links.autoNewFailed[wsKey]; // 성공 → 폭증방지 플래그 해제
     recordLink(links, m[1]); // saveLinks 포함(플래그 해제도 함께 영속)
+    writeProof(m[1], answer); // 실제 성공 → 검증 증명 기록
     process.stdout.write(`# 새 Codex 세션 생성·연결: ${m[1]}\n\n${answer}\n`);
   } else {
     links.autoNewFailed = links.autoNewFailed || {};
     links.autoNewFailed[wsKey] = true;
     saveLinks(links); // 다음 자동 생성 차단 플래그 저장
+    writeProof("", answer); // Codex는 성공 응답함(세션id만 미식별) → 검증은 인정
     process.stdout.write(`# 새 세션 생성됨(세션id 식별 실패) — 폭증 방지로 다음 자동 생성은 멈춥니다. 'find'로 찾아 'link <id>' 하세요.\n\n${answer}\n`);
   }
 }

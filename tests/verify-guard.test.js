@@ -1,0 +1,220 @@
+"use strict";
+/*
+ * verify-guard.js 검증 증명(proof) 판정 테스트 (프레임워크 없음 — node tests/verify-guard.test.js).
+ * V1 수정 검증: '명령 문자열을 쳤는가'가 아니라 '브릿지가 실제 성공 응답을 기록한 proof가 이번 턴에 있는가'.
+ * 임시 폴더에 CODEX_BRIDGE_HOME(계약·proof)·가짜 transcript를 만들어 verify-guard에 stdin으로 먹인다.
+ */
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const cp = require("child_process");
+
+const GUARD = path.join(__dirname, "..", "bridge", "verify-guard.js");
+let pass = 0, fail = 0;
+function ok(c, m) { if (c) { pass++; console.log("  ✅ " + m); } else { fail++; console.log("  ❌ " + m); } }
+
+const T0 = "2026-06-21T10:00:00.000Z";   // 사용자 발화(이번 턴 시작)
+const TWRITE = "2026-06-21T10:00:01.000Z"; // 그 뒤 파일 수정
+const TMID = "2026-06-21T10:00:03.000Z";   // 검증 시점(중간)
+const TFRESH = "2026-06-21T10:00:05.000Z"; // 이번 턴 안의 성공 검증
+const TLATE = "2026-06-21T10:00:10.000Z";  // 검증 후의 추가 수정
+const TSTALE = "2026-06-21T09:00:00.000Z"; // 이전 턴(발화 이전)의 검증
+
+function setup(name, verifyMode) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vg_" + name + "_"));
+  const bridgeDir = path.join(dir, ".codex-bridge");
+  const ws = path.join(dir, "ws");
+  fs.mkdirSync(bridgeDir, { recursive: true });
+  fs.mkdirSync(ws, { recursive: true });
+  fs.writeFileSync(path.join(bridgeDir, "contract.json"), JSON.stringify({ verifyMode }));
+  return { dir, bridgeDir, ws, session: "sess-" + name, transcriptPath: path.join(dir, "tx.jsonl") };
+}
+const human = (ts, sid) => ({ type: "user", sessionId: sid, timestamp: ts, message: { content: [{ type: "text", text: "해줘" }] } });
+const tool = (ts, sid, name) => ({ type: "assistant", sessionId: sid, timestamp: ts, message: { content: [{ type: "tool_use", name, input: {} }] } });
+const bash = (ts, sid, cmd) => ({ type: "assistant", sessionId: sid, timestamp: ts, message: { content: [{ type: "tool_use", name: "Bash", input: { command: cmd } }] } });
+function putTx(sb, entries) { fs.writeFileSync(sb.transcriptPath, entries.map((e) => JSON.stringify(e)).join("\n")); }
+function putProof(sb, { ts, ws, status = "success", exit = 0, sessionKey, answerChars = 120 } = {}) {
+  const dir = path.join(sb.bridgeDir, "proofs");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, (sessionKey || sb.session) + ".json"),
+    JSON.stringify({ v: 1, claudeSession: sb.session, workspace: ws || sb.ws, ts, codexSession: "x", exit, status, answerChars }));
+}
+function runGuard(sb, over = {}) {
+  const stdin = Object.assign({ transcript_path: sb.transcriptPath, cwd: sb.ws, session_id: sb.session, stop_hook_active: false }, over);
+  return cp.spawnSync(process.execPath, [GUARD], {
+    input: JSON.stringify(stdin), encoding: "utf8", timeout: 30000,
+    env: Object.assign({}, process.env, { CODEX_BRIDGE_HOME: sb.bridgeDir, CLAUDE_CODE_SESSION_ID: sb.session, CLAUDE_PROJECT_DIR: sb.ws }),
+  });
+}
+function blocked(r) { try { return JSON.parse((r.stdout || "").trim()).decision === "block"; } catch { return false; } }
+function clean(sb) { try { fs.rmSync(sb.dir, { recursive: true, force: true }); } catch {} }
+
+// 1) 검증 모드 off → 절대 차단 안 함
+(function () {
+  console.log("[1] off 모드");
+  const sb = setup("off", "off");
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]);
+  ok(!blocked(runGuard(sb)), "off=통과(차단 안 함)");
+  clean(sb);
+})();
+
+// 2) always + 수정 + proof 없음 → 차단
+(function () {
+  console.log("[2] always + proof 없음");
+  const sb = setup("noproof", "always");
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]);
+  ok(blocked(runGuard(sb)), "proof 없으면 차단");
+  clean(sb);
+})();
+
+// 3) always + 수정 + 신선한 성공 proof → 통과
+(function () {
+  console.log("[3] always + 신선한 성공 proof");
+  const sb = setup("fresh", "always");
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]);
+  putProof(sb, { ts: TFRESH });
+  ok(!blocked(runGuard(sb)), "신선 proof면 통과");
+  clean(sb);
+})();
+
+// 4) always + 수정 + 이전 턴 proof(발화 이전) → 차단 (V1 핵심)
+(function () {
+  console.log("[4] 이전 턴 proof는 거름 (V1)");
+  const sb = setup("stale", "always");
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]);
+  putProof(sb, { ts: TSTALE });
+  ok(blocked(runGuard(sb)), "stale proof는 인정 안 함→차단");
+  clean(sb);
+})();
+
+// 5) always + 수정 + 기록된 workspace가 달라도 같은 세션·턴이면 인정 → 통과
+//    (브릿지 cwd vs 훅 env 차이로 workspace가 어긋날 수 있어 게이트에서 제외 — 격리는 세션 키가 보장)
+(function () {
+  console.log("[5] workspace 달라도 같은 세션·턴이면 인정(게이트 아님)");
+  const sb = setup("wsmiss", "always");
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]);
+  putProof(sb, { ts: TFRESH, ws: path.join(sb.dir, "other-ws") });
+  ok(!blocked(runGuard(sb)), "ws 기록이 달라도 같은 세션·턴이면 통과");
+  clean(sb);
+})();
+
+// 6) always + 수정 + status=fail proof → 차단
+(function () {
+  console.log("[6] 실패 proof는 거름");
+  const sb = setup("failp", "always");
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]);
+  putProof(sb, { ts: TFRESH, status: "fail", exit: 1 });
+  ok(blocked(runGuard(sb)), "status!=success 차단");
+  clean(sb);
+})();
+
+// 7) always + proof 없음 + stop_hook_active → 통과(무한루프 방지)
+(function () {
+  console.log("[7] stop_hook_active 재진입");
+  const sb = setup("reentry", "always");
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]);
+  ok(!blocked(runGuard(sb, { stop_hook_active: true })), "재진입은 통과");
+  clean(sb);
+})();
+
+// 8) V1 핵심: 가짜 'echo codex-bridge ask' 명령 + proof 없음 → 차단 (옛 코드는 통과시켰음)
+(function () {
+  console.log("[8] 가짜 echo codex-bridge ask + proof 없음 (V1 핵심)");
+  const sb = setup("fake", "always");
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write"), bash(TWRITE, sb.session, "echo codex-bridge ask hi")]);
+  ok(blocked(runGuard(sb)), "명령 문자열만으론 인정 안 함→차단");
+  clean(sb);
+})();
+
+// 9) code 모드 + Write + proof 유무
+(function () {
+  console.log("[9] code 모드");
+  const a = setup("code1", "code");
+  putTx(a, [human(T0, a.session), tool(TWRITE, a.session, "Write")]);
+  ok(blocked(runGuard(a)), "code+수정+proof없음=차단");
+  clean(a);
+  const b = setup("code2", "code");
+  putTx(b, [human(T0, b.session), tool(TWRITE, b.session, "Write")]);
+  putProof(b, { ts: TFRESH });
+  ok(!blocked(runGuard(b)), "code+수정+신선proof=통과");
+  clean(b);
+})();
+
+// 10) plancode 모드 + ExitPlanMode + proof 유무
+(function () {
+  console.log("[10] plancode 모드(플랜 확정)");
+  const a = setup("plan1", "plancode");
+  putTx(a, [human(T0, a.session), tool(TWRITE, a.session, "ExitPlanMode")]);
+  ok(blocked(runGuard(a)), "plancode+플랜확정+proof없음=차단");
+  clean(a);
+  const b = setup("plan2", "plancode");
+  putTx(b, [human(T0, b.session), tool(TWRITE, b.session, "ExitPlanMode")]);
+  putProof(b, { ts: TFRESH });
+  ok(!blocked(runGuard(b)), "plancode+플랜확정+신선proof=통과");
+  clean(b);
+})();
+
+// 11) always + 수정 없음 → 그래도 차단(모든 턴 검증), 신선 proof면 통과
+(function () {
+  console.log("[11] always는 수정 없어도 검증 필요");
+  const a = setup("alw1", "always");
+  putTx(a, [human(T0, a.session)]); // 아무 도구도 안 씀
+  ok(blocked(runGuard(a)), "always+무수정+proof없음=차단");
+  clean(a);
+  const b = setup("alw2", "always");
+  putTx(b, [human(T0, b.session)]);
+  putProof(b, { ts: TFRESH });
+  ok(!blocked(runGuard(b)), "always+무수정+신선proof=통과");
+  clean(b);
+})();
+
+// 12) proof가 '다른 세션' 것만 있음 → 이 세션엔 없음 → 차단
+(function () {
+  console.log("[12] 다른 세션 proof만 존재");
+  const sb = setup("othersess", "always");
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]);
+  putProof(sb, { ts: TFRESH, sessionKey: "someone-else" });
+  ok(blocked(runGuard(sb)), "다른 세션 proof는 이 세션 검증 아님→차단");
+  clean(sb);
+})();
+
+// 13) 빈 응답 proof(answerChars=0) → 차단 (F3: 응답 존재 증명)
+(function () {
+  console.log("[13] 빈 응답 proof는 거름 (F3)");
+  const sb = setup("emptyans", "always");
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]);
+  putProof(sb, { ts: TFRESH, answerChars: 0 });
+  ok(blocked(runGuard(sb)), "answerChars=0 차단");
+  clean(sb);
+})();
+
+// 14) 검증 후 또 수정 → 재검증 강제 (F4: 검증=최종상태)
+(function () {
+  console.log("[14] 검증 후 추가 수정은 재검증 강제 (F4)");
+  const a = setup("editafter", "always");
+  putTx(a, [human(T0, a.session), tool(TWRITE, a.session, "Write"), tool(TLATE, a.session, "Write")]); // 마지막 수정=TLATE
+  putProof(a, { ts: TMID }); // 검증은 마지막 수정 이전
+  ok(blocked(runGuard(a)), "마지막 수정 이전 proof는 인정 안 함→차단");
+  clean(a);
+  const b = setup("editafter2", "always");
+  putTx(b, [human(T0, b.session), tool(TWRITE, b.session, "Write"), tool(TLATE, b.session, "Write")]);
+  putProof(b, { ts: "2026-06-21T10:00:20.000Z" }); // 마지막 수정 이후
+  ok(!blocked(runGuard(b)), "마지막 수정 이후 proof면 통과");
+  clean(b);
+})();
+
+// 15) 사용자 발화·수정 모두 timestamp 없음 → 턴 경계 불명 → 보수적 차단 (F6)
+(function () {
+  console.log("[15] timestamp 전무 → 보수적 차단 (F6)");
+  const sb = setup("nots", "always");
+  fs.writeFileSync(sb.transcriptPath, [
+    JSON.stringify({ type: "user", sessionId: sb.session, message: { content: [{ type: "text", text: "해줘" }] } }),
+    JSON.stringify({ type: "assistant", sessionId: sb.session, message: { content: [{ type: "tool_use", name: "Write", input: {} }] } }),
+  ].join("\n"));
+  putProof(sb, { ts: TFRESH }); // proof는 있으나 턴 경계를 못 잡음
+  ok(blocked(runGuard(sb)), "timestamp 전무면 stale 오인 막으려 차단");
+  clean(sb);
+})();
+
+console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
+process.exit(fail ? 1 : 0);

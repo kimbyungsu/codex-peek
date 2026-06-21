@@ -5,7 +5,31 @@
 // - stop_hook_active(이미 한 번 막아 재진입) → 통과(무한루프 방지)
 // - 변경 있음 + 브릿지 ask 없음 → block(검증 지시), 그 외 통과
 const fs = require("fs");
-const { loadContract, BRIDGE } = require("./contract-lib.js");
+const path = require("path");
+const { loadContract, BRIDGE, BRIDGE_DIR } = require("./contract-lib.js");
+const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs");
+
+// 이번 턴에 '진짜로 성공한 Codex 검증'이 있었는지 = 브릿지(codex-bridge ask)가 성공 시 남긴 proof로 판정.
+// 명령 문자열(echo도 통과)이 아니라 실제 성공(status/exit)과 '이번 사용자 발화 이후' 시각을 본다(V1).
+// 식별 키 = claudeSession(대화당 유일 UUID, 파일명) + ts(이번 턴). workspace는 게이트에 쓰지 않는다 —
+// 브릿지는 cwd 기반, Stop 훅은 훅 env 기반이라 둘이 달라질 수 있어(예: 하위 폴더 실행) 멀쩡한 검증을
+// 거짓 차단하기 때문. 대화별 격리는 세션 키가 이미 보장(다른 세션 proof는 파일이 다름). 기록용 workspace는 proof에 남김.
+function checkProof(claudeSession, sinceTs) {
+  if (!claudeSession) return false;
+  if (!Number.isFinite(sinceTs) || sinceTs <= 0) return false; // 턴 경계 확정 못하면 보수적 미인정(1회 차단→재진입 통과)
+  const key = claudeSession.replace(/[^0-9a-zA-Z._-]/g, "_");
+  let p;
+  try {
+    p = JSON.parse(fs.readFileSync(path.join(PROOFS_DIR, key + ".json"), "utf8"));
+  } catch {
+    return false; // proof 없음 = 이번 턴 성공 검증 없음
+  }
+  if (!p || p.status !== "success" || p.exit !== 0) return false;
+  if (!(Number(p.answerChars) > 0)) return false; // 실제 응답이 있었는지(빈 응답·malformed proof 거름) — V1 '응답 존재'
+  const pts = Date.parse(p.ts || "");
+  if (!Number.isFinite(pts)) return false;
+  return pts >= sinceTs; // 이번 사용자 발화 + 마지막 변경 이후에 성공한 검증만 인정(이전 턴·변경 전 proof는 거름)
+}
 
 let input = "";
 process.stdin.on("data", (d) => (input += d));
@@ -36,8 +60,11 @@ process.stdin.on("end", () => {
     process.exit(0);
   }
 
-  // 마지막 '사람' user 메시지 위치(도구 결과 user는 제외).
+  // 마지막 '사람' user 메시지 위치 + 그 시각(이번 턴 경계). 도구 결과 user는 제외.
+  // sessionId도 같이 줍는다(CLAUDE_CODE_SESSION_ID env가 없을 때 proof 키 폴백).
   let lastUser = -1;
+  let lastUserTs = 0;
+  let sessionIdFromTx = "";
   for (let i = 0; i < lines.length; i++) {
     let o;
     try {
@@ -45,18 +72,24 @@ process.stdin.on("end", () => {
     } catch {
       continue;
     }
+    if (o.sessionId && !sessionIdFromTx) sessionIdFromTx = o.sessionId;
     if (o.type === "user" && o.message) {
       const ct = o.message.content;
       const isToolResult = Array.isArray(ct) && ct.some((x) => x && x.type === "tool_result");
       const isHuman = typeof ct === "string" || (Array.isArray(ct) && ct.some((x) => x && x.type === "text"));
-      if (isHuman && !isToolResult) lastUser = i;
+      if (isHuman && !isToolResult) {
+        lastUser = i;
+        const t = Date.parse(o.timestamp || "");
+        if (Number.isFinite(t)) lastUserTs = t;
+      }
     }
   }
 
-  // 마지막 사람 발화 이후: 파일 변경(edited)·플랜 확정(planned)·브릿지 검증(verified) 여부.
+  // 마지막 사람 발화 이후: 파일 변경(edited)·플랜 확정(planned) + '마지막 변경/플랜 시각'(lastActionTs).
+  // 검증 여부는 명령이 아니라 proof로 판정(아래). 검증은 마지막 변경 '이후'여야 '검증=최종상태'가 보장된다.
   let edited = false;
   let planned = false;
-  let verified = false;
+  let lastActionTs = 0;
   for (let i = lastUser + 1; i < lines.length; i++) {
     let o;
     try {
@@ -65,17 +98,23 @@ process.stdin.on("end", () => {
       continue;
     }
     if (o.type !== "assistant" || !o.message || !Array.isArray(o.message.content)) continue;
+    const ots = Date.parse(o.timestamp || "");
     for (const b of o.message.content) {
       if (!b || b.type !== "tool_use") continue;
       const n = b.name || "";
-      if (/^(Write|Edit|MultiEdit|NotebookEdit)$/.test(n)) edited = true;
+      const isEdit = /^(Write|Edit|MultiEdit|NotebookEdit)$/.test(n);
+      if (isEdit) edited = true;
       if (n === "ExitPlanMode") planned = true; // 플랜 확정 신호(추론 없이 결정적)
-      if (n === "Bash") {
-        const cmd = (b.input && b.input.command) || "";
-        if (/codex-bridge/.test(cmd) && /\bask\b/.test(cmd)) verified = true;
-      }
+      if ((isEdit || n === "ExitPlanMode") && Number.isFinite(ots)) lastActionTs = Math.max(lastActionTs, ots);
     }
   }
+
+  // 검증 인정 = '명령을 쳤는가'가 아니라 '브릿지가 실제 Codex 성공 응답을 기록(proof)했는가'(V1).
+  // claudeSession은 env 우선(브릿지가 proof 쓸 때 쓰는 값과 동일) → 훅 입력 → transcript 순으로 폴백.
+  // proof는 '사용자 발화 이후' + '마지막 변경 이후'여야 인정 → 검증 후 또 고치면(rejudge) 재검증 강제.
+  const claudeSession = process.env.CLAUDE_CODE_SESSION_ID || j.session_id || sessionIdFromTx || "";
+  const sinceTs = Math.max(lastUserTs, lastActionTs);
+  const verified = checkProof(claudeSession, sinceTs);
 
   // 모드별 트리거: always=모든 턴 / plancode=플랜확정 or 코드변경 / code=코드변경.
   const needVerify =
@@ -89,9 +128,10 @@ process.stdin.on("end", () => {
       JSON.stringify({
         decision: "block",
         reason:
-          `[검증 모드:${c.verifyMode}] ${what} Codex 검증을 받지 않았다. ` +
-          `종료하지 말고 지금 \`node "${BRIDGE}" ask "<무엇을 검증할지>"\` 로 Codex 검증을 받아라. ` +
-          `그 결과(통과/실패+근거)를 사용자에게 보고한 뒤 종료하라. (연결 없으면 보고만 됨 — 그 사실을 보고하라)`,
+          `[검증 모드:${c.verifyMode}] ${what} 이번 턴에 Codex 검증의 '성공 응답'이 없다. ` +
+          `종료하지 말고 지금 \`node "${BRIDGE}" ask "<무엇을 검증할지>"\` 로 Codex 검증을 받아라 ` +
+          `(빈 명령·실패·미연결은 인정되지 않는다 — 실제 응답이 와야 검증으로 친다). ` +
+          `그 결과(통과/실패+근거)를 사용자에게 보고한 뒤 종료하라. (연결이 없어 보고만 된다면 그 사실을 보고하라)`,
       }),
     );
   }

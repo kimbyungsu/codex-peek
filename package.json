@@ -56,7 +56,8 @@
     "lint": "tsc --noEmit -p ./",
     "clean:vsix": "node -e \"const fs=require('fs');fs.readdirSync('.').filter(f=>/^codex-bridge-.*\\.vsix$/.test(f)).forEach(f=>fs.unlinkSync(f))\"",
     "package": "npm run compile && npm run clean:vsix && vsce package --allow-missing-repository",
-    "setup": "node install.js"
+    "setup": "node install.js",
+    "test": "node tests/install.test.js && node tests/verify-guard.test.js"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
