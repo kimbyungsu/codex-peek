@@ -1045,8 +1045,7 @@ class Dashboard {
     <div class="muted">지금 쓰는 값(최근 기록): <b id="mCur">—</b></div>
     <div id="mCacheWarn" class="hint" style="display:none;margin:6px 0 0 0"></div>
     <div class="mrow"><span class="mlbl">모델</span>
-      <input id="mModel" list="mModelList" placeholder="(코덱스 기본값 그대로)" autocomplete="off" />
-      <datalist id="mModelList"></datalist>
+      <select id="mModel" title="이 프로젝트에서 코덱스가 쓸 모델 — 계정에서 받은 목록(없으면 기본값)"></select>
     </div>
     <div class="mrow"><span class="mlbl">생각강도</span>
       <span id="segReason" class="seg"></span>
@@ -1119,7 +1118,7 @@ class Dashboard {
   $("segVerify").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-vm]"); if(b){ curVM=b.getAttribute("data-vm"); highlightSeg("segVerify","data-vm",curVM); markDirty(); } });
   $("segInject").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-im]"); if(b){ curIM=b.getAttribute("data-im"); highlightSeg("segInject","data-im",curIM); markDirty(); } });
   $("segReason").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-rs]"); if(b){ curRS=b.getAttribute("data-rs"); highlightSeg("segReason","data-rs",curRS); } });
-  $("mModel").addEventListener("input", ()=> renderReasonButtons($("mModel").value.trim()));  // 모델 바꾸면 그 모델의 생각강도로 버튼 교체
+  $("mModel").addEventListener("change", ()=> renderReasonButtons($("mModel").value.trim()));  // 모델 바꾸면 그 모델의 생각강도로 버튼 교체(select=change)
   $("saveModel").addEventListener("click", () => {
     pendingSave = {target:"model"};  // 성공 플래시는 saveResult(ok) 받을 때
     vscode.postMessage({type:"saveModelPref", model: $("mModel").value.trim(), reasoning: curRS});
@@ -1385,13 +1384,23 @@ class Dashboard {
     const nameOf=(slug)=>{ const m=AVAIL.find((x)=>x.slug===slug); return m?m.name:(slug||""); };
     const effLabel=(e)=>RSKO[e]||(e||"미상");
     $("mCur").textContent = d.linkedId ? ((nameOf(d.modelCurrent)||"미상")+" · 생각강도 "+effLabel(d.effortCurrent)) : "연결된 세션 없음";
-    const dl=$("mModelList"); dl.replaceChildren();
+    // 모델 선택 = <select> 드롭다운(항상 전체 목록). 옛 <input list=datalist>는 입력값으로 후보를 필터해서
+    // 저장된 모델이 채워지면 그 모델만 보이는 버그가 있었음 → select로 교체(전체가 늘 보임).
+    const sel=$("mModel");
+    const prevModelVal = sel.value; // ★ replaceChildren가 select 값을 ""로 리셋하므로, dirty 비교·복원용으로 먼저 보관
+    sel.replaceChildren();
+    const addOpt=(v,t)=>{ const o=document.createElement("option"); o.value=v; o.textContent=t; sel.appendChild(o); };
+    addOpt("", "(코덱스 기본값)");
     const opts = AVAIL.length ? AVAIL.map((m)=>({v:m.slug,t:m.name})) : (d.knownModels||[]).map((s)=>({v:s,t:s}));
-    opts.forEach(({v,t})=>{ const o=document.createElement("option"); o.value=v; if(t&&t!==v) o.textContent=t; dl.appendChild(o); });
+    opts.forEach(({v,t})=> addOpt(v, (t&&t!==v) ? (t+" ("+v+")") : v));
+    const savedM = d.modelPref||"";
+    if(savedM && !opts.some((o)=>o.v===savedM)) addOpt(savedM, savedM+" (저장된 값 · 현재 목록에 없음)"); // 목록 밖 저장값 보존(조용히 안 바뀌게)
     const firstM=(appModel===null), pRS=appRS, pModel=appModel;
     appRS=d.reasoningPref||""; appModel=d.modelPref||"";
-    const mDirty=!firstM && ((curRS!==pRS) || ($("mModel").value!==(pModel||"")));
-    if(firstM || !mDirty){ curRS=appRS; if(document.activeElement!==$("mModel")) $("mModel").value=appModel; }
+    // dirty 비교는 'replaceChildren 전 값(prevModelVal)'으로 — 안 그러면 select가 ""로 리셋돼 늘 dirty 오판.
+    const mDirty=!firstM && ((curRS!==pRS) || (prevModelVal!==(pModel||"")));
+    if(firstM || !mDirty){ curRS=appRS; sel.value=appModel; } // 편집 중 아니면 저장값 표시(복원)
+    else { sel.value=prevModelVal; } // 편집 중이면 사용자가 고르던 값 되돌림(replaceChildren 리셋 보정)
     renderReasonButtons($("mModel").value.trim());  // 현재 모델 기준 생각강도 버튼(내부에서 curRS 하이라이트/검증)
   });
 </script></body></html>`;
