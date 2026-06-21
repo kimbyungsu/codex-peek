@@ -6,8 +6,40 @@
 // - 변경 있음 + 브릿지 ask 없음 → block(검증 지시), 그 외 통과
 const fs = require("fs");
 const path = require("path");
+const cp = require("child_process");
 const { loadContract, BRIDGE, BRIDGE_DIR } = require("./contract-lib.js");
 const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs");
+
+// V2: 도구(Write/Edit) 외 Bash 경유 변경(sed -i·cat>·생성기 등)도 감지하기 위해, git 저장소에서
+// '지금 바뀐 파일들'의 최신 수정시각(mtime)을 본다. 키워드/정규식 나열(취약·안티패턴) 대신 실제 변경을 본다.
+// 반환: null=비-git/실패(→도구 감지로 폴백), 0=변경 파일 없음, >0=가장 최근에 바뀐 파일의 mtime(ms).
+// 삭제만 한 변경은 mtime으로 못 잡음(파일이 사라짐) — 알려진 한계(생성/수정은 잡음).
+function gitChangedMaxMtime(ws) {
+  let out;
+  try {
+    const r = cp.spawnSync("git", ["-C", ws, "--no-optional-locks", "-c", "core.quotepath=false", "status", "--porcelain"], {
+      encoding: "utf8", timeout: 10000, maxBuffer: 1024 * 1024 * 64,
+    });
+    if (!r || r.status !== 0 || typeof r.stdout !== "string") return null; // 비-git/실패 → 폴백
+    out = r.stdout;
+  } catch {
+    return null;
+  }
+  let max = 0;
+  for (const line of out.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let p = line.slice(3); // "XY " 다음이 경로
+    const arrow = p.indexOf(" -> ");
+    if (arrow >= 0) p = p.slice(arrow + 4); // 이름변경 "old -> new" → 현재 파일(new)
+    try {
+      const st = fs.statSync(path.join(ws, p));
+      if (st.mtimeMs > max) max = st.mtimeMs;
+    } catch {
+      /* 삭제됨 등 → stat 불가, 건너뜀 */
+    }
+  }
+  return max;
+}
 
 // 이번 턴에 '진짜로 성공한 Codex 검증'이 있었는지 = 브릿지(codex-bridge ask)가 성공 시 남긴 proof로 판정.
 // 명령 문자열(echo도 통과)이 아니라 실제 성공(status/exit)과 '이번 사용자 발화 이후' 시각을 본다(V1).
@@ -109,21 +141,27 @@ process.stdin.on("end", () => {
     }
   }
 
+  // V2: 실제 작업트리 변경(도구 외 Bash 경유 포함)도 감지. git이면 '이번 턴에 바뀐 파일'의 최신 mtime을 본다.
+  // fsChangeTs = 사용자 발화 이후에 바뀐 파일이 있으면 그 최신 시각(없거나 비-git이면 0).
+  const gitMax = gitChangedMaxMtime(ws);
+  const fsChangeTs = gitMax && gitMax > lastUserTs ? gitMax : 0;
+  const editedReal = edited || fsChangeTs > 0; // 도구 편집 또는 파일시스템 변경(Bash 포함)
+
   // 검증 인정 = '명령을 쳤는가'가 아니라 '브릿지가 실제 Codex 성공 응답을 기록(proof)했는가'(V1).
   // claudeSession은 env 우선(브릿지가 proof 쓸 때 쓰는 값과 동일) → 훅 입력 → transcript 순으로 폴백.
-  // proof는 '사용자 발화 이후' + '마지막 변경 이후'여야 인정 → 검증 후 또 고치면(rejudge) 재검증 강제.
+  // proof는 '사용자 발화 + 마지막 변경(도구·Bash 모두)' 이후여야 인정 → 검증 후 또 고치면(rejudge) 재검증 강제.
   const claudeSession = process.env.CLAUDE_CODE_SESSION_ID || j.session_id || sessionIdFromTx || "";
-  const sinceTs = Math.max(lastUserTs, lastActionTs);
+  const sinceTs = Math.max(lastUserTs, lastActionTs, fsChangeTs);
   const verified = checkProof(claudeSession, sinceTs);
 
-  // 모드별 트리거: always=모든 턴 / plancode=플랜확정 or 코드변경 / code=코드변경.
+  // 모드별 트리거: always=모든 턴 / plancode=플랜확정 or 변경 / code=변경. (변경=도구 또는 Bash 경유 실제 파일변경)
   const needVerify =
     c.verifyMode === "always" ? true :
-    c.verifyMode === "plancode" ? (edited || planned) :
-    edited;
+    c.verifyMode === "plancode" ? (editedReal || planned) :
+    editedReal;
 
   if (needVerify && !verified) {
-    const what = planned && !edited ? "플랜을 확정했는데" : edited ? "파일을 변경했는데" : "이번 턴에";
+    const what = planned && !editedReal ? "플랜을 확정했는데" : editedReal ? "파일을 변경했는데" : "이번 턴에";
     process.stdout.write(
       JSON.stringify({
         decision: "block",

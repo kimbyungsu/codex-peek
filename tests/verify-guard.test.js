@@ -243,5 +243,68 @@ function clean(sb) { try { fs.rmSync(sb.dir, { recursive: true, force: true }); 
   clean(sb);
 })();
 
+// ── V2: git 저장소에서 Bash 경유(도구 아님) 파일 변경도 감지 ──
+let GIT_OK = true;
+try { cp.execSync("git --version", { stdio: "ignore" }); } catch { GIT_OK = false; }
+function gitSetup(name, verifyMode) {
+  const sb = setup(name, verifyMode);
+  cp.execSync("git init", { cwd: sb.ws, stdio: "ignore" });
+  cp.execSync("git config user.email t@t.t", { cwd: sb.ws, stdio: "ignore" });
+  cp.execSync("git config user.name t", { cwd: sb.ws, stdio: "ignore" });
+  return sb;
+}
+const NOW = Date.now();
+const T_USER = new Date(NOW - 3600_000).toISOString(); // 1시간 전(이번 턴 시작)
+const T_OLD = new Date(NOW - 7200_000);                 // 2시간 전(이전 턴 변경)
+const T_PROOF_OK = new Date(NOW + 5000).toISOString();  // 변경 직후(검증)
+
+if (GIT_OK) {
+  // 18) code 모드 + 도구 편집 없음 + Bash로 새 파일(이번 턴) → 차단 (V2 핵심: 옛 코드는 통과시켰음)
+  (function () {
+    console.log("[18] code 모드 + Bash 변경(도구 아님) → 차단 (V2)");
+    const sb = gitSetup("v2mod", "code");
+    putTx(sb, [human(T_USER, sb.session)]); // Write/Edit 도구 tool_use 없음
+    fs.writeFileSync(path.join(sb.ws, "f.txt"), "bash가 만든 변경"); // mtime≈now > T_USER
+    ok(blocked(runGuard(sb)), "Bash 변경이 검증 트리거 → proof 없으면 차단");
+    clean(sb);
+  })();
+
+  // 19) code 모드 + 이전 턴부터 더럽던 파일(이번 턴 변경 없음) → 차단 안 함(오탐 방지)
+  (function () {
+    console.log("[19] 이전 턴부터 더럽던 파일은 이번 턴 변경 아님 → 통과");
+    const sb = gitSetup("v2old", "code");
+    putTx(sb, [human(T_USER, sb.session)]);
+    const f = path.join(sb.ws, "old.txt");
+    fs.writeFileSync(f, "old");
+    fs.utimesSync(f, T_OLD, T_OLD); // mtime을 발화 이전으로
+    ok(!blocked(runGuard(sb)), "이번 턴에 안 바뀐 파일은 트리거 안 함");
+    clean(sb);
+  })();
+
+  // 20) code 모드 + Bash 변경 + 변경 이후 성공 proof → 통과
+  (function () {
+    console.log("[20] Bash 변경 + 변경 이후 proof → 통과");
+    const sb = gitSetup("v2proof", "code");
+    putTx(sb, [human(T_USER, sb.session)]);
+    fs.writeFileSync(path.join(sb.ws, "f.txt"), "변경");
+    putProof(sb, { ts: T_PROOF_OK });
+    ok(!blocked(runGuard(sb)), "변경 이후 성공 proof면 통과");
+    clean(sb);
+  })();
+
+  // 21) code 모드 + Bash 변경 + 변경 '이전' proof → 차단 (검증 후 Bash 재수정 = 재검증 강제)
+  (function () {
+    console.log("[21] Bash 변경 후의 proof 아니면 차단(검증 후 재수정)");
+    const sb = gitSetup("v2stale", "code");
+    putTx(sb, [human(T_USER, sb.session)]);
+    fs.writeFileSync(path.join(sb.ws, "f.txt"), "변경"); // mtime≈now
+    putProof(sb, { ts: new Date(NOW - 1800_000).toISOString() }); // 30분 전(변경보다 이전)
+    ok(blocked(runGuard(sb)), "변경 이전 proof는 인정 안 함→차단");
+    clean(sb);
+  })();
+} else {
+  console.log("[18-21] git 없음 → V2 테스트 건너뜀");
+}
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
