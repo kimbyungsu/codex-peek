@@ -26,7 +26,8 @@ function withContract(prompt, ws) {
   let inj = "";
   try {
     // V9: Codex 계약도 이 ask의 워크스페이스로 '명시' 로드(인자 없으면 workspace()로 폴백). cmdAsk가
-    // 링크·proof·폭증가드와 같은 ws 스냅샷을 넘겨, codex 계약이 다른 cwd로 새는 잠재 위험을 없앤다.
+    // modelPref·가드·proof·withContract에 같은 ws 스냅샷을 넘겨 codex 계약이 다른 cwd로 새는 잠재 위험을 없앤다.
+    // (resolveLink/recordLink는 내부 workspace() 사용 — 동기 프로세스 내 동일 값이라 동작 일치, V9 범위 밖.)
     const c = loadContract(ws || workspace());
     inj = buildInjection(c.codex, "Codex", c.codexChecklist);
   } catch {
@@ -70,7 +71,7 @@ function workspace() {
   return process.env.CLAUDE_PROJECT_DIR || process.cwd();
 }
 // 검증 증명 기록 — 실제로 Codex가 성공(exit 0·비어있지 않은 응답)했을 때만 호출한다(cmdAsk의 성공 분기들).
-// 한 Claude 세션당 1파일(최신 성공만 보존). verify-guard가 '이번 사용자 발화 이후 ts + workspace 일치'로 검증 인정.
+// 한 Claude 세션당 1파일(최신 성공만 보존). verify-guard는 '이번 사용자 발화/변경 이후 ts + status/exit/answerChars'로 인정(workspace는 V1에서 게이트 제외 — 같은 세션 키로 격리).
 // → 명령 문자열만 보던 V1 구멍(echo·실패·미연결도 통과)을 닫는다. claudeSession 미설정(수동 실행)이면 _nosession에 기록(무해).
 function writeProof(codexSession, answer, ws) {
   // claudeSession: env 우선, 없으면 active.json(contract-inject가 hook.session_id로 기록) 폴백 →
