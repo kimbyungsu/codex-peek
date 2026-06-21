@@ -1328,11 +1328,17 @@ function syncCodexHome(onDone: (changed: boolean) => void): void {
   const finish = (c: boolean) => { if (done) return; done = true; onDone(c); };
   const codex = resolveCodexPathForBridge();
   if (!codex) { finish(false); return; }
-  if (/\.js$/i.test(codex)) { finish(false); return; } // .js codex는 node 래핑 필요 — 확장(electron)에선 스킵, 브릿지 detect-home가 처리
-  const useShell = /\.(cmd|bat)$/i.test(codex);
+  // .js codex는 node 래핑 필요. 확장은 electron이라 process.execPath가 node가 아님(Code.exe) →
+  // ELECTRON_RUN_AS_NODE=1로 electron을 node처럼 띄워 codex.js doctor 실행(VS Code 확장 표준 기법, node PATH 불요).
+  const isJs = /\.js$/i.test(codex);
+  const useShell = !isJs && /\.(cmd|bat)$/i.test(codex);
+  const file = isJs ? process.execPath : codex;
+  const args = isJs ? [codex, "doctor"] : ["doctor"];
+  const opts: any = { windowsHide: true, shell: useShell };
+  if (isJs) opts.env = { ...process.env, ELECTRON_RUN_AS_NODE: "1" };
   let out = "";
   try {
-    const cp = spawn(codex, ["doctor"], { windowsHide: true, shell: useShell });
+    const cp = spawn(file, args, opts);
     cp.stdout?.on("data", (d) => (out += d.toString()));
     cp.stderr?.on("data", (d) => (out += d.toString()));
     cp.on("error", () => finish(false));
