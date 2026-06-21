@@ -397,7 +397,7 @@ function ackIntegrity(ids: string[] | "all"): boolean {
 
 // 검증 파이프라인 라이브 단계: 훅/브릿지가 phase.json에 기록한 단계 + 코덱스 rollout 성장 + staleness로
 // 사용자에게 진행을 보여준다(토큰 스트림 아님, 파일변화 기반). 단계: 대기/Claude작업중/검증요청됨/Codex생성중/반영중/완료/미완.
-interface LiveStage { key: string; label: string; icon: string; spin: boolean; round: number }
+interface LiveStage { key: string; label: string; icon: string; spin: boolean; round: number; color: string }
 function readPhaseRaw(): { phase?: string; round?: number; session?: string; workspace?: string; ts?: string } {
   try { return JSON.parse(fs.readFileSync(PHASE_FILE, "utf8")) || {}; } catch { return {}; }
 }
@@ -413,15 +413,17 @@ function computeLiveStage(linkedId: string | null): LiveStage | null {
   const ts = Date.parse(p.ts || "");
   if (!Number.isFinite(ts) || Date.now() - ts > PHASE_STALE_MS) return null; // 오래됨 → 대기(표시 안 함)
   const round = Number(p.round) || 0;
+  // color = 상태바 '글자색'(status.color, 임의 ThemeColor 가능). 배경색은 VS Code가 error/warning만 허용하므로
+  // 단계별 다색은 글자색으로 표현하고, 빨강 배경은 무결성 경보 전용으로 둔다.
   switch (p.phase) {
-    case "claude-working": return { key: "claude", label: "Claude 작업중", icon: "$(pencil)", spin: false, round };
+    case "claude-working": return { key: "claude", label: "Claude 작업중", icon: "$(pencil)", spin: false, round, color: "charts.blue" };
     case "codex-verifying":
       return linkedRolloutRecentlyWritten(linkedId)
-        ? { key: "codex-gen", label: "Codex 생성중", icon: "$(sync~spin)", spin: true, round }
-        : { key: "codex-req", label: "코덱스에 검증 요청", icon: "$(sync~spin)", spin: true, round };
-    case "rejudging": return { key: "rejudge", label: "검증 답 반영중", icon: "$(pencil)", spin: false, round };
-    case "done": return { key: "done", label: "검증 완료", icon: "$(check)", spin: false, round };
-    case "incomplete": return { key: "incomplete", label: "검증 미완", icon: "$(alert)", spin: false, round };
+        ? { key: "codex-gen", label: "Codex 생성중", icon: "$(sync~spin)", spin: true, round, color: "charts.green" }
+        : { key: "codex-req", label: "코덱스에 검증 요청", icon: "$(sync~spin)", spin: true, round, color: "charts.yellow" };
+    case "rejudging": return { key: "rejudge", label: "검증 답 반영중", icon: "$(pencil)", spin: false, round, color: "charts.orange" };
+    case "done": return { key: "done", label: "검증 완료", icon: "$(check)", spin: false, round, color: "charts.green" };
+    case "incomplete": return { key: "incomplete", label: "검증 미완", icon: "$(alert)", spin: false, round, color: "charts.red" };
     default: return null;
   }
 }
@@ -1508,6 +1510,16 @@ export function activate(context: vscode.ExtensionContext): void {
   status.command = "codexBridge.openDashboard";
   status.name = "Codex Bridge";
 
+  // 검증 진행 '흐름' = [🧑Claude] ▶▶검증중 [🔍Codex] 를 인접한 3개 항목으로 표현. 상태바 항목 1개는 색이 1개뿐이라,
+  // 박스별 색을 주려면 항목을 나눠야 한다(우선순위 953>952>951이라 왼→오 인접 배치). 진행 중에만 보이고 평소 숨김.
+  // 배경 '채움색'은 VS Code가 error/warning만 허용 → 단계 구분은 '글자색'으로(빨강 배경은 무결성 경보 전용).
+  const fClaude = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 953);
+  const fArrow = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 952);
+  const fCodex = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 951);
+  for (const it of [fClaude, fArrow, fCodex]) { it.command = "codexBridge.openDashboard"; it.name = "Codex Bridge 검증 진행"; }
+  const flowHide = () => { fClaude.hide(); fArrow.hide(); fCodex.hide(); };
+  context.subscriptions.push(fClaude, fArrow, fCodex);
+
   // 무결성 경보 펄스: 새 error 이벤트가 '늘었을 때만' 잠깐(6회 ~3초) 빨강↔주황 토글 후 빨강 지속.
   // 끝없는 점멸(피로) 대신 '신규 시 짧은 펄스 + 미확인 동안 지속 빨강'. 확인(ack)하면 사라짐.
   let lastErrCount = 0;
@@ -1549,15 +1561,30 @@ export function activate(context: vscode.ExtensionContext): void {
       status.backgroundColor = undefined;
     }
 
-    // 검증 파이프라인 라이브 단계: 진행 중인 단계가 있으면 상태바 텍스트를 그 단계+스피너로 덮는다(색은 안 바꿈 — 무결성 빨강이 우선).
+    // 검증 진행 흐름: 진행 중이면 메인 항목을 숨기고 [🧑Claude] ▶▶검증중 [🔍Codex] 3개 항목으로 단계별(글자)색을 보인다.
     const live = computeLiveStage(link?.codexSession ?? null);
-    if (live && ["claude", "codex-req", "codex-gen", "rejudge"].includes(live.key)) {
-      status.text = `${live.icon} ${live.label}${live.round > 1 ? ` ·${live.round}R` : ""}`;
-      status.tooltip = new vscode.MarkdownString(`**검증 진행 — ${live.label}**${live.round ? ` (라운드 ${live.round})` : ""}\n\n클릭 → 대시보드`);
-    }
-
-    // 무결성 경보(미확인 error)는 위 연결 상태/진행을 덮어써 '검증 미완'을 빨강으로 알린다(침묵 금지). 확인하면 사라짐.
     const errs = readIntegrity().filter((e) => !e.ack && e.severity === "error");
+    const flowActive = !!live && !errs.length && ["claude", "codex-req", "codex-gen", "rejudge"].includes(live.key);
+    if (flowActive && live) {
+      if (pulseTimer) { clearInterval(pulseTimer); pulseTimer = undefined; } lastErrCount = 0;
+      status.hide(); // 흐름 표시 중엔 메인 1줄 대신 3박스
+      const toCodex = live.key === "codex-req" || live.key === "codex-gen";
+      const toClaude = live.key === "rejudge";
+      const c = new vscode.ThemeColor(live.color);
+      fClaude.text = "$(person) Claude";
+      fClaude.color = (toClaude || live.key === "claude") ? c : undefined; // 활성 쪽만 색
+      fCodex.text = "$(search) Codex";
+      fCodex.color = toCodex ? c : undefined;
+      fArrow.text = (toCodex ? "$(arrow-right) 검증중 $(arrow-right)" : toClaude ? "$(arrow-left) 반영중 $(arrow-left)" : "$(sync~spin) 작업중") + (live.round > 1 ? ` ·${live.round}R` : "");
+      fArrow.color = c;
+      fArrow.tooltip = new vscode.MarkdownString(`**검증 진행 — ${live.label}**${live.round ? ` (라운드 ${live.round})` : ""}\n\n클릭 → 대시보드`);
+      fClaude.show(); fArrow.show(); fCodex.show();
+      return; // 흐름은 error 없을 때만 — 아래 메인/무결성 분기 스킵
+    }
+    flowHide();
+    status.color = undefined; // 메인 항목 글자색 잔존 방지
+
+    // 무결성 경보(미확인 error)는 연결 상태를 덮어써 '검증 미완'을 빨강으로 알린다(침묵 금지). 확인하면 사라짐.
     if (errs.length) {
       status.text = `$(alert) Codex 검증 미완 ${errs.length}`;
       status.tooltip = new vscode.MarkdownString(
