@@ -35,7 +35,8 @@ function atomicWrite(file, data) {
 
 // 워크스페이스 정규화 — 확장(src/extension.ts)·브릿지(codex-bridge.js)와 반드시 동일 규칙이어야 함.
 function normWs(p) {
-  return path.normalize(p || "").replace(/[\\/]+$/, "").toLowerCase();
+  // NFC: 환경별 유니코드 폼(NFC/NFD) 차이로 같은 경로가 다른 키 되는 것 방지. 브릿지·확장 3카피 '동일 규칙'이어야 함.
+  return path.normalize(p || "").replace(/[\\/]+$/, "").toLowerCase().normalize("NFC");
 }
 // 프로젝트별 계약 파일 경로. 키 = normWs의 sha1 앞 16자(파일명 안전·플랫폼 무관). 확장 contractFileFor와 동일.
 function contractFileFor(ws) {

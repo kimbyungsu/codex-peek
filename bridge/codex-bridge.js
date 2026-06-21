@@ -72,7 +72,8 @@ function readActive() {
 }
 // 워크스페이스 키 정규화(대소문자/구분자/끝슬래시 차이 흡수) — 브릿지·확장 일치용.
 function normWs(p) {
-  return path.normalize(p || "").replace(/[\\/]+$/, "").toLowerCase();
+  // NFC: 환경별 유니코드 폼(NFC/NFD) 차이로 같은 경로가 다른 키 되는 것 방지. 브릿지·확장 3카피 '동일 규칙'이어야 함.
+  return path.normalize(p || "").replace(/[\\/]+$/, "").toLowerCase().normalize("NFC");
 }
 function lookupWorkspace(links, ws) {
   const n = normWs(ws);
@@ -136,8 +137,7 @@ function detectCodexHome() {
   let ok = false;
   try {
     if (home && fs.existsSync(home)) {
-      atomicWrite(f, home);
-      ok = true;
+      ok = atomicWrite(f, home); // 저장 성공 여부를 그대로 — 거짓 성공 방지(doctor/탐지 신뢰성)
     }
   } catch {
     /* ignore */
@@ -430,7 +430,7 @@ function cmdAsk(rest) {
   const here = workspace();
   const active = readActive();
   const myClaude = claudeId();
-  const sameWs = (a, b) => normWs(a).normalize("NFC") === normWs(b).normalize("NFC");
+  const sameWs = (a, b) => normWs(a) === normWs(b); // normWs가 이미 NFC 정규화하므로 단순 비교로 충분
   // active.json은 전역 1개 파일이라 멀티 창에선 '마지막에 프롬프트 넣은 대화'가 덮어쓴다. 그래서 workspace만 보고
   // 막으면 다른 창/오래된 active로 정상 폴더를 오탐 차단할 수 있다. → active가 '바로 이 Claude 대화'의 것일 때만
   // (active.claudeSession == 현재 CLAUDE_CODE_SESSION_ID) 강한 차단. 불일치/세션id 없음/active 없음이면 차단 안 함(오탐 방지).

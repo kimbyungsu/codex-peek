@@ -75,7 +75,8 @@ interface BridgeState {
 }
 
 function normWs(p: string): string {
-  return path.normalize(p || "").replace(/[\\/]+$/, "").toLowerCase();
+  // NFC: 환경별 유니코드 폼(NFC/NFD) 차이로 같은 경로가 다른 키 되는 것 방지. 브릿지·확장 3카피 '동일 규칙'이어야 함.
+  return path.normalize(p || "").replace(/[\\/]+$/, "").toLowerCase().normalize("NFC");
 }
 
 function currentWorkspace(): string | null {
@@ -1340,9 +1341,14 @@ function syncCodexHome(onDone: (changed: boolean) => void): void {
       try {
         if (home && fs.existsSync(home)) {
           const f = path.join(HOME, ".codex-bridge", "codex-home.txt");
-          fs.mkdirSync(path.dirname(f), { recursive: true });
-          if (readTextSafe(f) !== home) atomicWrite(f, home);
-          if (CODEX_HOME !== home) { CODEX_HOME = home; SESSIONS_DIR = path.join(home, "sessions"); changed = true; }
+          // 파일이 이미 같거나(=공유 상태 일치) 새로 쓰기 성공한 경우에만 메모리 home 갱신. 쓰기 실패 시
+          // 메모리만 새 home으로 바꾸면 확장은 새 home·브릿지는 옛 home을 봐 '확장·브릿지 일치'가 깨진다 → 갱신 보류.
+          const persisted = readTextSafe(f) === home || atomicWrite(f, home);
+          if (persisted) {
+            if (CODEX_HOME !== home) { CODEX_HOME = home; SESSIONS_DIR = path.join(home, "sessions"); changed = true; }
+          } else {
+            console.error("[codex-bridge] codex-home.txt 기록 실패 — home 갱신 보류(확장·브릿지 일치 유지, 다음 활성화 때 재시도).");
+          }
         }
       } catch {
         /* ignore */
