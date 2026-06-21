@@ -1,0 +1,17 @@
+# 줄끝 정규화 — 크로스플랫폼(설치기 래퍼가 OS별로 깨지지 않도록)
+* text=auto
+
+# 셸 스크립트는 반드시 LF (CRLF면 mac/linux에서 'bad interpreter'로 실패)
+*.sh text eol=lf
+
+# Windows 배치는 CRLF
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# node/JS·JSON·MD는 LF로 통일
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+
+# 바이너리(확장 패키지)는 정규화 금지
+*.vsix binary
