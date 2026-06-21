@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" font-family="Segoe UI, Apple SD Gothic Neo, Malgun Gothic, sans-serif">
+  <rect x="0" y="0" width="960" height="560" rx="14" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="32" y="44" font-size="24" font-weight="700" fill="#1f2328">🌉 Codex Bridge</text>
+  <text x="32" y="70" font-size="14" fill="#57606a">Claude(구현) ↔ Codex(검증) 하네스 — 사람이 답을 옮기지 않는 구현→검증 루프</text>
+
+  <!-- Row 1: architecture -->
+  <g>
+    <!-- Claude box -->
+    <rect x="32" y="100" width="248" height="104" rx="10" fill="#ffffff" stroke="#4493f8" stroke-width="2"/>
+    <text x="48" y="132" font-size="16" font-weight="700" fill="#0969da">🧑 Claude Code</text>
+    <text x="48" y="156" font-size="12.5" fill="#57606a">구현 에이전트</text>
+    <text x="48" y="178" font-size="12.5" fill="#57606a">파일 편집 · 작업 · 재판단</text>
+
+    <!-- Bridge box -->
+    <rect x="356" y="100" width="248" height="104" rx="10" fill="#ffffff" stroke="#8250df" stroke-width="2"/>
+    <text x="372" y="132" font-size="16" font-weight="700" fill="#8250df">🌉 브릿지 + 훅 3종</text>
+    <text x="372" y="154" font-size="11.5" fill="#57606a">contract-inject · codex-guard</text>
+    <text x="372" y="171" font-size="11.5" fill="#57606a">verify-guard (Stop 훅 = 검증 강제)</text>
+    <text x="372" y="191" font-size="11.5" fill="#57606a">~/.codex-bridge · 세션 링크 영속</text>
+
+    <!-- Codex box -->
+    <rect x="680" y="100" width="248" height="104" rx="10" fill="#ffffff" stroke="#2ea043" stroke-width="2"/>
+    <text x="696" y="132" font-size="16" font-weight="700" fill="#1a7f37">🔍 Codex</text>
+    <text x="696" y="156" font-size="12.5" fill="#57606a">검증 에이전트</text>
+    <text x="696" y="178" font-size="12.5" fill="#57606a">코드 직접 읽고 통과/실패+근거</text>
+
+    <!-- arrows forward -->
+    <line x1="280" y1="138" x2="356" y2="138" stroke="#8250df" stroke-width="2" marker-end="url(#ah)"/>
+    <text x="290" y="130" font-size="11" fill="#8250df">ask</text>
+    <line x1="604" y1="138" x2="680" y2="138" stroke="#2ea043" stroke-width="2" marker-end="url(#ag)"/>
+    <text x="612" y="130" font-size="11" fill="#1a7f37">exec resume</text>
+    <!-- return arrow -->
+    <path d="M 804 204 L 804 232 L 156 232 L 156 204" fill="none" stroke="#1a7f37" stroke-width="2" marker-end="url(#ag)"/>
+    <text x="400" y="226" font-size="11.5" fill="#1a7f37">검증 답 + 근거(파일:라인) — 사람이 중계하지 않음</text>
+  </g>
+
+  <!-- Row 2: live pipeline -->
+  <text x="32" y="280" font-size="14" font-weight="700" fill="#1f2328">⏱ 검증 파이프라인 (상태바·대시보드에 라이브 표시)</text>
+  <g font-size="12" font-weight="600">
+    <rect x="32" y="296" width="150" height="40" rx="8" fill="#ddf4ff" stroke="#4493f8"/>
+    <text x="50" y="321" fill="#0969da">🧑 Claude 작업중</text>
+    <rect x="206" y="296" width="150" height="40" rx="8" fill="#fff8c5" stroke="#d4a72c"/>
+    <text x="224" y="321" fill="#9a6700">📤 검증 요청</text>
+    <rect x="380" y="296" width="150" height="40" rx="8" fill="#dafbe1" stroke="#2ea043"/>
+    <text x="398" y="321" fill="#1a7f37">🔍 Codex 생성중</text>
+    <rect x="554" y="296" width="150" height="40" rx="8" fill="#fff1e5" stroke="#bc4c00"/>
+    <text x="572" y="321" fill="#bc4c00">🧑 반영중</text>
+    <rect x="728" y="296" width="120" height="40" rx="8" fill="#dafbe1" stroke="#2ea043"/>
+    <text x="746" y="321" fill="#1a7f37">✅ 완료</text>
+    <line x1="182" y1="316" x2="206" y2="316" stroke="#8c959f" stroke-width="1.5" marker-end="url(#as)"/>
+    <line x1="356" y1="316" x2="380" y2="316" stroke="#8c959f" stroke-width="1.5" marker-end="url(#as)"/>
+    <line x1="530" y1="316" x2="554" y2="316" stroke="#8c959f" stroke-width="1.5" marker-end="url(#as)"/>
+    <line x1="704" y1="316" x2="728" y2="316" stroke="#8c959f" stroke-width="1.5" marker-end="url(#as)"/>
+  </g>
+  <text x="32" y="360" font-size="11.5" fill="#57606a">상태바: [🧑 Claude] ▶▶검증중 [🔍 Codex] — 단계별 글자색 · 코덱스 답 파일이 자라면 ‘생성중’ 라이브 감지</text>
+
+  <!-- Row 3: trust layers -->
+  <text x="32" y="404" font-size="14" font-weight="700" fill="#1f2328">🛡 검증이 ‘흉내’가 아님을 보장하는 층</text>
+  <g font-size="12">
+    <rect x="32" y="420" width="290" height="56" rx="8" fill="#ffffff" stroke="#2ea043"/>
+    <text x="46" y="442" font-weight="700" fill="#1a7f37">✅ 검증 증명 (V1)</text>
+    <text x="46" y="462" fill="#57606a" font-size="11">명령 문자열이 아니라 ‘실제 성공 응답’만 인정</text>
+    <rect x="338" y="420" width="290" height="56" rx="8" fill="#ffffff" stroke="#8250df"/>
+    <text x="352" y="442" font-weight="700" fill="#8250df">🔎 변경 감지 (V2)</text>
+    <text x="352" y="462" fill="#57606a" font-size="11">Bash 편집(sed·생성기)도 검증 트리거(git)</text>
+    <rect x="644" y="420" width="284" height="56" rx="8" fill="#ffffff" stroke="#0969da"/>
+    <text x="658" y="442" font-weight="700" fill="#0969da">🔁 재검증 루프 (V4)</text>
+    <text x="658" y="462" fill="#57606a" font-size="11">검증 후 또 고치면 다시 검증(=최종상태)</text>
+
+    <rect x="32" y="486" width="290" height="56" rx="8" fill="#ffffff" stroke="#d4a72c"/>
+    <text x="46" y="508" font-weight="700" fill="#9a6700">🟡 근거 점검 (결정2)</text>
+    <text x="46" y="528" fill="#57606a" font-size="11">인용 ‘파일:라인’이 실제 존재하는지 — 노랑</text>
+    <rect x="338" y="486" width="290" height="56" rx="8" fill="#ffffff" stroke="#cf222e"/>
+    <text x="352" y="508" font-weight="700" fill="#cf222e">🔴 검증 미완 경보</text>
+    <text x="352" y="528" fill="#57606a" font-size="11">검증 없이 끝난 턴 = 상태바 빨강(침묵 금지)</text>
+    <rect x="644" y="486" width="284" height="56" rx="8" fill="#ffffff" stroke="#57606a"/>
+    <text x="658" y="508" font-weight="700" fill="#1f2328">📦 한방 설치 · 격리</text>
+    <text x="658" y="528" fill="#57606a" font-size="11">install.js — 훅 자동 병합 · 타인 훅 보존</text>
+  </g>
+
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8250df"/></marker>
+    <marker id="ag" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#1a7f37"/></marker>
+    <marker id="as" markerWidth="8" markerHeight="8" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#8c959f"/></marker>
+  </defs>
+</svg>
