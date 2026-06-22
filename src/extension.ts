@@ -535,23 +535,40 @@ function setSessionHidden(id: string, hidden: boolean): void {
     /* ignore */
   }
 }
-// 연결 해제(삭제 ≠ 해제): '이 워크스페이스'의 링크만 제거(프로젝트별 분리 — 같은 codex 세션을
-// 쓰는 타 워크스페이스 링크는 보존). byWorkspace는 키=normWs, bySession은 .workspace로 스코프. 원본은 안 건드림.
-function unlinkSession(id: string, ws: string): void {
-  const n = normWs(ws);
-  if (!n) return;
+// links.json 쓰기 단일 관문: 모든 쓰기(연결/해제/모델선택/relink)가 이걸 통과한다. 최신본을 읽어 mutate로
+// '내 부분'만 바꾸고, 쓰기 직전 파일이 그새 바뀌었으면(다른 창·브릿지가 저장) 최신본으로 다시 적용해 재시도한다
+// (낙관적 동시성). atomicWrite(temp+rename)와 합쳐, 마지막 글쓴이가 남의 변경을 통째로 덮어쓰는 lost-update를
+// 크게 줄인다. ⚠ 완전한 lock은 아님 — 재읽기↔쓰기 사이 미세 경쟁 창은 남는다(문서화된 한계).
+function readLinksRaw(): string { try { return fs.readFileSync(LINKS_FILE, "utf8"); } catch { return ""; } }
+function updateLinks(mutate: (o: any) => void, retries = 4): boolean {
+  for (let i = 0; i <= retries; i++) {
+    const before = readLinksRaw();
+    let o: any = {};
+    try { o = before ? JSON.parse(before) : {}; } catch { o = {}; }
+    o.bySession = o.bySession || {};
+    o.byWorkspace = o.byWorkspace || {};
+    mutate(o);
+    if (readLinksRaw() !== before) continue; // 그새 누가 저장함 → 최신본으로 재적용(재시도)
+    return atomicWrite(LINKS_FILE, JSON.stringify(o, null, 2));
+  }
+  // 재시도 소진(계속 경합) — 최신본에 한 번 더 적용해 best-effort 저장(드롭보다 나음)
   let o: any = {};
-  try { o = JSON.parse(fs.readFileSync(LINKS_FILE, "utf8")); } catch { o = {}; }
+  try { o = JSON.parse(readLinksRaw()); } catch { o = {}; }
   o.bySession = o.bySession || {};
   o.byWorkspace = o.byWorkspace || {};
-  for (const k of Object.keys(o.bySession)) if (o.bySession[k]?.codexSession === id && normWs(o.bySession[k].workspace || "") === n) delete o.bySession[k];
-  for (const k of Object.keys(o.byWorkspace)) if (normWs(k) === n && o.byWorkspace[k]?.codexSession === id) delete o.byWorkspace[k];
-  try {
-    fs.mkdirSync(path.dirname(LINKS_FILE), { recursive: true });
-    atomicWrite(LINKS_FILE, JSON.stringify(o, null, 2));
-  } catch {
-    /* ignore */
-  }
+  mutate(o);
+  return atomicWrite(LINKS_FILE, JSON.stringify(o, null, 2));
+}
+
+// 연결 해제(삭제 ≠ 해제): '이 워크스페이스'의 링크만 제거(프로젝트별 분리 — 같은 codex 세션을
+// 쓰는 타 워크스페이스 링크는 보존). byWorkspace는 키=normWs, bySession은 .workspace로 스코프. 원본은 안 건드림.
+function unlinkSession(id: string, ws: string): boolean {
+  const n = normWs(ws);
+  if (!n) return false;
+  return updateLinks((o) => {
+    for (const k of Object.keys(o.bySession)) if (o.bySession[k]?.codexSession === id && normWs(o.bySession[k].workspace || "") === n) delete o.bySession[k];
+    for (const k of Object.keys(o.byWorkspace)) if (normWs(k) === n && o.byWorkspace[k]?.codexSession === id) delete o.byWorkspace[k];
+  });
 }
 
 // 영구 삭제: rollout 원본 파일을 지운다(되돌릴 수 없음). 코덱스 내부 state db의 잔여 항목은 코덱스가 정리한다
@@ -579,19 +596,11 @@ function workspacesLinking(id: string): string[] {
 }
 // 영구삭제용 전역 해제: 파일이 전역으로 사라지므로 이 세션을 가리키는 '모든' 링크를 제거(타 워크스페이스 dangling 방지).
 // (hide의 unlinkSession은 워크스페이스 한정 — delete와 정책이 다름.)
-function unlinkSessionEverywhere(id: string): void {
-  let o: any = {};
-  try { o = JSON.parse(fs.readFileSync(LINKS_FILE, "utf8")); } catch { o = {}; }
-  o.bySession = o.bySession || {};
-  o.byWorkspace = o.byWorkspace || {};
-  for (const k of Object.keys(o.bySession)) if (o.bySession[k]?.codexSession === id) delete o.bySession[k];
-  for (const k of Object.keys(o.byWorkspace)) if (o.byWorkspace[k]?.codexSession === id) delete o.byWorkspace[k];
-  try {
-    fs.mkdirSync(path.dirname(LINKS_FILE), { recursive: true });
-    atomicWrite(LINKS_FILE, JSON.stringify(o, null, 2));
-  } catch {
-    /* ignore */
-  }
+function unlinkSessionEverywhere(id: string): boolean {
+  return updateLinks((o) => {
+    for (const k of Object.keys(o.bySession)) if (o.bySession[k]?.codexSession === id) delete o.bySession[k];
+    for (const k of Object.keys(o.byWorkspace)) if (o.byWorkspace[k]?.codexSession === id) delete o.byWorkspace[k];
+  });
 }
 
 // 모델/생각강도 선택 저장(프로젝트별) — links.json modelPrefs[normWs]={model,reasoning}. 빈 값은 항목 삭제(=코덱스 기본값).
@@ -599,38 +608,30 @@ function unlinkSessionEverywhere(id: string): void {
 function setModelPref(ws: string, model: string, reasoning: string): boolean {
   const n = normWs(ws);
   if (!n) return false;
-  let o: any = {};
-  try { o = JSON.parse(fs.readFileSync(LINKS_FILE, "utf8")); } catch { o = {}; }
-  o.modelPrefs = o.modelPrefs || {};
-  const cur: any = {};
-  if (model && model.trim()) cur.model = model.trim();
-  if (reasoning && reasoning.trim()) cur.reasoning = reasoning.trim();
-  if (Object.keys(cur).length) o.modelPrefs[n] = cur;
-  else delete o.modelPrefs[n];
-  return atomicWrite(LINKS_FILE, JSON.stringify(o, null, 2));
+  return updateLinks((o) => {
+    o.modelPrefs = o.modelPrefs || {};
+    const cur: any = {};
+    if (model && model.trim()) cur.model = model.trim();
+    if (reasoning && reasoning.trim()) cur.reasoning = reasoning.trim();
+    if (Object.keys(cur).length) o.modelPrefs[n] = cur;
+    else delete o.modelPrefs[n];
+  });
 }
 
-function relink(id: string): void {
+function relink(id: string): boolean {
   const ws = dashboardWorkspace();
-  if (!ws) return;
-  let o: any = {};
-  try {
-    o = JSON.parse(fs.readFileSync(LINKS_FILE, "utf8"));
-  } catch {
-    o = {};
-  }
-  o.bySession = o.bySession || {};
-  o.byWorkspace = o.byWorkspace || {};
+  if (!ws) return false;
   const n = normWs(ws);
-  // 이 워크스페이스의 세션 고정/옛 워크스페이스 키 정리 → UI 선택을 우선시.
-  for (const k of Object.keys(o.bySession)) {
-    if (o.bySession[k] && normWs(o.bySession[k].workspace || "") === n) delete o.bySession[k];
-  }
-  for (const k of Object.keys(o.byWorkspace)) {
-    if (normWs(k) === n) delete o.byWorkspace[k];
-  }
-  o.byWorkspace[n] = { codexSession: id, workspace: ws, linkedAt: new Date().toISOString(), via: "ui" };
-  atomicWrite(LINKS_FILE, JSON.stringify(o, null, 2));
+  return updateLinks((o) => {
+    // 이 워크스페이스의 세션 고정/옛 워크스페이스 키 정리 → UI 선택을 우선시.
+    for (const k of Object.keys(o.bySession)) {
+      if (o.bySession[k] && normWs(o.bySession[k].workspace || "") === n) delete o.bySession[k];
+    }
+    for (const k of Object.keys(o.byWorkspace)) {
+      if (normWs(k) === n) delete o.byWorkspace[k];
+    }
+    o.byWorkspace[n] = { codexSession: id, workspace: ws, linkedAt: new Date().toISOString(), via: "ui" };
+  });
 }
 
 class Dashboard {
@@ -648,7 +649,7 @@ class Dashboard {
       this.panel.webview.html = this.html(this.panel.webview);
       this.panel.webview.onDidReceiveMessage((m) => {
         if (m?.type === "relink" && m.id) {
-          relink(String(m.id));
+          if (!relink(String(m.id))) { vscode.window.showErrorMessage("연결 저장에 실패했어요(파일 잠김/권한?). 잠시 후 다시 시도하세요."); return; }
           this.post();
           vscode.commands.executeCommand("codexBridge.refresh");
         }
@@ -661,7 +662,7 @@ class Dashboard {
             .showWarningMessage(`${warn}이 Codex 세션을 목록에서 숨길까요?\n(${id.slice(0, 8)}… · 원본 파일은 지우지 않으며 '숨긴 세션 보기'에서 복원 가능)`, { modal: true }, "숨기기")
             .then((pick) => {
               if (pick !== "숨기기") return;
-              if (linked && ws) unlinkSession(id, ws);
+              if (linked && ws && !unlinkSession(id, ws)) { vscode.window.showErrorMessage("연결 해제 저장에 실패했어요(파일 잠김/권한?). 숨김을 보류합니다."); return; }
               setSessionHidden(id, true);
               this.post();
               vscode.commands.executeCommand("codexBridge.refresh");
@@ -687,7 +688,9 @@ class Dashboard {
                 vscode.window.showErrorMessage("세션 파일을 삭제하지 못했어요(파일 잠김/권한?). 목록은 그대로 둡니다.");
                 return;
               }
-              unlinkSessionEverywhere(id); // 파일이 전역 삭제됐으니 모든 워크스페이스 링크 제거(dangling 방지)
+              // 파일이 전역 삭제됐으니 모든 워크스페이스 링크 제거(dangling 방지). 파일은 이미 사라졌으므로
+              // 링크 정리 저장이 실패해도 되돌릴 수 없다 → 경고만 하고 진행(남은 링크는 resume 시 곱게 실패).
+              if (!unlinkSessionEverywhere(id)) vscode.window.showWarningMessage("세션은 삭제됐지만 연결 기록 정리에 실패했어요(파일 잠김/권한?). 남은 연결은 다음에 정리됩니다.");
               setSessionHidden(id, false); // 사라진 세션의 숨김 메타 정리
               this.post();
               vscode.commands.executeCommand("codexBridge.refresh");

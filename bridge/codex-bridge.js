@@ -261,7 +261,28 @@ function loadLinks() {
   }
 }
 function saveLinks(links) {
-  atomicWrite(LINKS_FILE, JSON.stringify(links, null, 2));
+  return atomicWrite(LINKS_FILE, JSON.stringify(links, null, 2));
+}
+// links.json 쓰기 단일 관문(CAS+재시도): 최신본을 읽어 mutate로 '내 부분'만 바꾸고, 쓰기 직전 파일이 그새
+// 바뀌었으면(확장·다른 ask 프로세스가 저장) 최신본으로 다시 적용해 재시도한다 → 마지막 글쓴이가 남의 변경을
+// 통째로 덮어쓰는 lost-update를 크게 줄인다. ⚠ 완전한 lock은 아님(재읽기↔쓰기 사이 미세 경쟁 잔존 — 문서화된 한계).
+function readLinksRaw() { try { return fs.readFileSync(LINKS_FILE, "utf8"); } catch { return ""; } }
+function updateLinks(mutate, retries = 4) {
+  for (let i = 0; i <= retries; i++) {
+    const before = readLinksRaw();
+    let o; try { o = before ? JSON.parse(before) : {}; } catch { o = {}; }
+    o.bySession = o.bySession || {};
+    o.byWorkspace = o.byWorkspace || {};
+    mutate(o);
+    if (readLinksRaw() !== before) continue; // 그새 누가 저장함 → 최신본으로 재적용(재시도)
+    return saveLinks(o);
+  }
+  // 재시도 소진(계속 경합) — 최신본에 한 번 더 적용해 best-effort 저장(드롭보다 나음)
+  let o; try { o = JSON.parse(readLinksRaw()); } catch { o = {}; }
+  o.bySession = o.bySession || {};
+  o.byWorkspace = o.byWorkspace || {};
+  mutate(o);
+  return saveLinks(o);
 }
 
 // 연결 조회: 세션id 우선, 없으면 워크스페이스 폴백.
@@ -279,16 +300,22 @@ function resolveLink(links) {
   if (sLink && normWs(sLink.workspace || "") === normWs(ws)) return { ...sLink, via: "session(폴백)" };
   return null;
 }
-function recordLink(links, codexSession) {
-  const entry = { codexSession, workspace: workspace(), claudeSession: claudeId(), linkedAt: nowIso() };
-  if (claudeId()) links.bySession[claudeId()] = entry;
-  // 정규화 키로 저장 + 동일 워크스페이스의 옛 키(대소문자 다름 등) 정리.
-  const nk = normWs(workspace());
-  for (const k of Object.keys(links.byWorkspace)) {
-    if (normWs(k) === nk) delete links.byWorkspace[k];
-  }
-  links.byWorkspace[nk] = entry;
-  saveLinks(links);
+// 연결 기록은 CAS 관문(updateLinks)을 통과 — ask 도중 확장/다른 프로세스가 links.json을 바꿔도
+// 그 변경을 덮어쓰지 않는다. 연결 성공이므로 이 워크스페이스의 autoNewFailed 폭증방지 플래그도 함께 해제한다.
+function recordLink(codexSession) {
+  const wsNow = workspace();
+  const claude = claudeId();
+  const nk = normWs(wsNow);
+  const entry = { codexSession, workspace: wsNow, claudeSession: claude, linkedAt: nowIso() };
+  return updateLinks((links) => {
+    if (claude) links.bySession[claude] = entry;
+    // 정규화 키로 저장 + 동일 워크스페이스의 옛 키(대소문자 다름 등) 정리.
+    for (const k of Object.keys(links.byWorkspace)) {
+      if (normWs(k) === nk) delete links.byWorkspace[k];
+    }
+    links.byWorkspace[nk] = entry;
+    if (links.autoNewFailed) delete links.autoNewFailed[nk]; // 연결됨 → 폭증방지 플래그 해제(호출부 중복 제거)
+  });
 }
 
 // ── 모델/생각강도 선택(프로젝트별) — links.json modelPrefs[normWs] = {model, reasoning} ──
@@ -559,8 +586,10 @@ function cmdAsk(rest) {
   }
 
   // 폭증 방지: 직전 --allow-new가 세션을 만들고도 연결 기록에 실패했으면, 또 만들지 않는다(수동 link 유도).
+  // 게이트는 시작 시점 스냅샷이 아니라 '지금' 상태로 본다 — 그새 다른 창이 수동 연결로 플래그를 해제했을 수 있음.
   const wsKey = normWs(ws);
-  if (links.autoNewFailed && links.autoNewFailed[wsKey]) {
+  const freshAutoFail = (loadLinks() || {}).autoNewFailed;
+  if (freshAutoFail && freshAutoFail[wsKey]) {
     die(
       `⚠️ 직전에 새 Codex 세션을 만들었지만 연결 기록에 실패했습니다(세션id 식별 실패).\n` +
         `   무한 생성 방지를 위해 자동 생성을 멈춥니다.\n` +
@@ -577,9 +606,7 @@ function cmdAsk(rest) {
   if (error || !answer || (typeof status === "number" && status !== 0)) {
     // 응답은 실패했지만 세션 파일이 생겼을 수 있음 → 폭증 방지 플래그를 걸어 다음 자동 생성을 막고 종료.
     if (newestRolloutSince(since)) {
-      links.autoNewFailed = links.autoNewFailed || {};
-      links.autoNewFailed[wsKey] = true;
-      saveLinks(links);
+      updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; });
     }
     try { writePhase("claude-working", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // ask 실패 → 진행표시 정리(Claude로 복귀)
     die(`Codex 새 세션 실패: ${error?.message || ""}\n${stderr.slice(-500)}\n(세션 파일이 생겼다면 'find'→'link <id>'로 연결하세요.)`);
@@ -588,15 +615,17 @@ function cmdAsk(rest) {
   const newFile = newestRolloutSince(since);
   const m = newFile && newFile.match(UUID_RE);
   if (m) {
-    if (links.autoNewFailed) delete links.autoNewFailed[wsKey]; // 성공 → 폭증방지 플래그 해제
-    recordLink(links, m[1]); // saveLinks 포함(플래그 해제도 함께 영속)
+    const ok = recordLink(m[1]); // CAS 저장 + autoNewFailed[wsKey] 해제 포함
     writeProof(m[1], answer, ws); // 실제 성공 → 검증 증명 기록
     flagEvidence(answer, ws); // 결정2-2: 인용 근거 점검
-    process.stdout.write(`# 새 Codex 세션 생성·연결: ${m[1]}\n\n${answer}\n`);
+    // 머리말도 실패를 반영 — stdout만 보는 호출자가 성공으로 오해하지 않게(stderr 경고와 함께).
+    const head = ok
+      ? `# 새 Codex 세션 생성·연결: ${m[1]}`
+      : `# 새 Codex 세션 생성됨(${m[1]}) — ⚠️ 연결 기록 저장 실패(권한/잠금?), 'node codex-bridge.js link ${m[1]}'로 다시 연결하세요`;
+    process.stdout.write(`${head}\n\n${answer}\n`);
+    if (!ok) process.stderr.write(`⚠️ 연결 기록 저장 실패(권한/잠금?) — 세션 ${m[1]}은 생성됨. 'node codex-bridge.js link ${m[1]}'로 다시 연결하세요.\n`);
   } else {
-    links.autoNewFailed = links.autoNewFailed || {};
-    links.autoNewFailed[wsKey] = true;
-    saveLinks(links); // 다음 자동 생성 차단 플래그 저장
+    updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; }); // 다음 자동 생성 차단 플래그
     writeProof("", answer, ws); // Codex는 성공 응답함(세션id만 미식별) → 검증은 인정
     flagEvidence(answer, ws); // 결정2-2: 인용 근거 점검
     process.stdout.write(`# 새 세션 생성됨(세션id 식별 실패) — 폭증 방지로 다음 자동 생성은 멈춥니다. 'find'로 찾아 'link <id>' 하세요.\n\n${answer}\n`);
@@ -604,7 +633,6 @@ function cmdAsk(rest) {
 }
 
 function cmdLink(rest) {
-  const links = loadLinks();
   let id;
   if (rest[0] === "--last") {
     const rec = recentRollouts(1);
@@ -616,37 +644,38 @@ function cmdLink(rest) {
     die('사용법: link <codex-session-id> | link --last   (후보: find)', 2);
   }
   const file = findRolloutById(id);
-  if (links.autoNewFailed) delete links.autoNewFailed[normWs(workspace())]; // 수동 연결됨 → 폭증방지 플래그 해제
-  recordLink(links, id);
+  const ok = recordLink(id); // CAS 저장 + autoNewFailed 해제 포함(수동 연결도 동일 관문)
   process.stdout.write(
-    `✅ 연결됨: Claude(${claudeId() || "?"}) + ${workspace()}  →  Codex ${id}\n` +
+    (ok ? `✅ 연결됨` : `⚠️ 연결 기록 저장 실패(권한/잠금?) — 다시 시도하세요`) +
+      `: Claude(${claudeId() || "?"}) + ${workspace()}  →  Codex ${id}\n` +
       (file ? `   세션 파일: ${path.basename(file)}\n` : `   ⚠️ 해당 세션 rollout 파일이 안 보임(추후 resume 시 실패할 수 있음)\n`),
   );
 }
 
 // 모델/생각강도 선택 보기·설정·해제(프로젝트별). 대시보드가 links.json을 직접 쓰지만, CLI로도 점검/테스트 가능.
 function cmdPref(rest) {
-  const links = loadLinks();
   const ws = workspace();
   const key = normWs(ws);
-  links.modelPrefs = links.modelPrefs || {};
+  let ok = true;
   if (rest[0] === "set") {
-    const cur = links.modelPrefs[key] || {};
-    for (const kv of rest.slice(1)) {
-      const i = kv.indexOf("=");
-      if (i < 0) continue;
-      const k = kv.slice(0, i).trim();
-      const v = kv.slice(i + 1).trim();
-      if (k === "model") cur.model = v;
-      else if (k === "reasoning") cur.reasoning = v;
-    }
-    links.modelPrefs[key] = cur;
-    saveLinks(links);
+    ok = updateLinks((o) => {
+      o.modelPrefs = o.modelPrefs || {};
+      const cur = o.modelPrefs[key] || {};
+      for (const kv of rest.slice(1)) {
+        const i = kv.indexOf("=");
+        if (i < 0) continue;
+        const k = kv.slice(0, i).trim();
+        const v = kv.slice(i + 1).trim();
+        if (k === "model") cur.model = v;
+        else if (k === "reasoning") cur.reasoning = v;
+      }
+      o.modelPrefs[key] = cur;
+    });
   } else if (rest[0] === "clear") {
-    delete links.modelPrefs[key];
-    saveLinks(links);
+    ok = updateLinks((o) => { if (o.modelPrefs) delete o.modelPrefs[key]; });
   }
-  const pref = links.modelPrefs[key] || {};
+  if (!ok) process.stderr.write(`⚠️ 모델 선택 저장 실패(권한/잠금?) — 다시 시도하세요.\n`);
+  const pref = (loadLinks().modelPrefs || {})[key] || {};
   process.stdout.write(
     `워크스페이스: ${ws}\n` +
       `선택값: model=${pref.model || "(기본)"} · 생각강도=${pref.reasoning || "(기본)"}\n` +
@@ -801,4 +830,4 @@ function main() {
 }
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
-module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence };
+module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, updateLinks, loadLinks, saveLinks, LINKS_FILE };
