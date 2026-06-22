@@ -203,17 +203,41 @@ function copyBridge(dryRun) {
   log(`✅ 브릿지 파일 ${BRIDGE_SCRIPTS.length}개 → ${BRIDGE_DIR}${dryRun ? "  (미리보기 — 복사 안 함)" : ""}`);
 }
 
+// .vsix 후보 중 '우리 확장(codex-bridge-*)'만 골라 최신 버전을 고른다(순수함수 = 테스트 가능).
+//  - codex-bridge- 접두로 거르지 않으면 잔재 codex-peek-*.vsix가 사전순으로 뽑히는 버그.
+//  - 문자열 정렬은 0.1.9를 0.1.18보다 뒤로 봐 최신을 못 고른다 → semver 숫자 비교.
+//  - preferVersion(package.json version) 정확 일치 파일이 있으면 그걸 최우선.
+function pickVsix(files, preferVersion) {
+  const ours = (files || []).filter((f) => /^codex-bridge-.*\.vsix$/i.test(f));
+  if (!ours.length) return null;
+  if (preferVersion) { const exact = `codex-bridge-${preferVersion}.vsix`; if (ours.includes(exact)) return exact; }
+  const ver = (f) => { const m = f.match(/^codex-bridge-(\d+)\.(\d+)\.(\d+)/); return m ? [+m[1], +m[2], +m[3]] : [0, 0, 0]; };
+  return ours.slice().sort((a, b) => {
+    const va = ver(a), vb = ver(b);
+    for (let i = 0; i < 3; i++) if (va[i] !== vb[i]) return va[i] - vb[i];
+    return a < b ? -1 : a > b ? 1 : 0; // 동률이면 이름순(안정)
+  }).pop();
+}
+// code 설치 명령 문자열 조립(순수함수). ⚠ bare 명령(code)을 따옴표로 감싸면 Windows cmd에서 PATHEXT(.cmd)
+// 해석이 깨져 9009로 실패한다(재현 확인). 그래서 경로/공백 있는 실행파일만 따옴표, bare 이름은 그대로.
+// vsix 경로는 공백 있어도 되게 항상 따옴표.
+function buildInstallCmd(codeCli, vsixPath) {
+  const codeTok = /[\\/\s]/.test(String(codeCli)) ? q(fwd(codeCli)) : String(codeCli);
+  return `${codeTok} --install-extension ${q(fwd(vsixPath))} --force`;
+}
 function tryInstallVsix(dryRun) {
-  let vsix = null;
-  try {
-    vsix = fs.readdirSync(__dirname).filter((f) => /\.vsix$/i.test(f)).sort().pop() || null;
-  } catch { /* ignore */ }
-  if (!vsix) { log("ℹ️  확장 VSIX를 못 찾음 — 확장은 수동 설치하세요(또는 마켓플레이스)."); return; }
+  let files = [];
+  try { files = fs.readdirSync(__dirname); } catch { /* ignore */ }
+  let version = "";
+  try { version = (require(path.join(__dirname, "package.json")).version) || ""; } catch { /* ignore */ }
+  const vsix = pickVsix(files, version);
+  if (!vsix) { log("ℹ️  확장 VSIX(codex-bridge-*.vsix)를 못 찾음 — 확장은 수동 설치하세요(또는 마켓플레이스)."); return; }
   const vsixPath = path.join(__dirname, vsix);
   const codeCli = process.env.CODE_CLI || "code";
-  if (dryRun) { log(`ℹ️  (미리보기) 확장 설치 예정: ${codeCli} --install-extension ${vsix} --force`); return; }
+  const cmd = buildInstallCmd(codeCli, vsixPath);
+  if (dryRun) { log(`ℹ️  (미리보기) 확장 설치 예정: ${cmd}`); return; }
   let r;
-  try { r = cp.spawnSync(q(fwd(codeCli)) + ` --install-extension ${q(fwd(vsixPath))} --force`, { shell: true, encoding: "utf8", timeout: 120000 }); }
+  try { r = cp.spawnSync(cmd, { shell: true, encoding: "utf8", timeout: 120000 }); }
   catch { r = null; }
   if (r && r.status === 0) { log(`✅ 확장 설치: ${vsix}`); }
   else {
@@ -340,11 +364,16 @@ function cmdHelp() {
 }
 
 // ── 진입점 ────────────────────────────────────────────
-const argv = process.argv.slice(2);
-const has = (f) => argv.includes(f);
-const cmd = argv.find((a) => !a.startsWith("-")) || "install";
+// CLI로 직접 실행할 때만 동작. require("./install.js") 시엔 순수함수만 노출(테스트용).
+if (require.main === module) {
+  const argv = process.argv.slice(2);
+  const has = (f) => argv.includes(f);
+  const cmd = argv.find((a) => !a.startsWith("-")) || "install";
 
-if (has("--help") || has("-h") || cmd === "help") cmdHelp();
-else if (cmd === "uninstall") cmdUninstall(has("--purge"));
-else if (cmd === "status" || cmd === "doctor") runDoctor();
-else cmdInstall(has("--dry-run") || has("-n"));
+  if (has("--help") || has("-h") || cmd === "help") cmdHelp();
+  else if (cmd === "uninstall") cmdUninstall(has("--purge"));
+  else if (cmd === "status" || cmd === "doctor") runDoctor();
+  else cmdInstall(has("--dry-run") || has("-n"));
+}
+
+module.exports = { pickVsix, buildInstallCmd };
