@@ -1,0 +1,50 @@
+name: CI
+
+# 왜 Windows도 도는가: 이 프로젝트는 .cmd/PATHEXT, 공백 포함 경로, 셸 통한 node 실행,
+# rename 재시도 등 Windows에서만 깨지는 코드가 많다(설치기 9009 버그가 그 예).
+# 그래서 Ubuntu 단독이 아니라 Windows+Ubuntu 양쪽에서 lint+test를 돌린다.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read # 최소권한 — 코드 읽기만 필요(checkout/test/패키징)
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false # 한쪽 OS가 깨져도 다른 쪽 결과는 끝까지 본다
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint # tsc --noEmit (타입 점검)
+      - run: npm test # install/install-pick/verify-guard/withcontract/evidence/models
+
+  package:
+    name: package (vsix)
+    needs: test # 양쪽 OS 테스트가 통과해야 패키징
+    runs-on: ubuntu-latest # 패키징은 한 OS에서만 충분
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run package # compile + clean:vsix + vsce package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: "*.vsix"
+          if-no-files-found: error # 빌드물이 안 나오면 실패로 처리
