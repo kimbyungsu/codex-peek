@@ -388,6 +388,13 @@ interface IntegrityEvent { id: string; ts?: string; kind?: string; severity?: st
 function readIntegrity(): IntegrityEvent[] {
   try { const d = JSON.parse(fs.readFileSync(INTEGRITY_FILE, "utf8")); return Array.isArray(d.events) ? d.events : []; } catch { return []; }
 }
+// 창 격리: integrity.json도 모든 창이 공유하는 한 파일이라, 필터 없이 보이면 '다른 창'의 검증 미완/근거의심
+// 경보가 내 상태바·대시보드에 새어 보인다(phase와 같은 누수). 이 창 워크스페이스 것만 보여준다(표시 전용 — ack는
+// id로 처리하므로 원본 목록은 안 건드림). 모든 appendIntegrityEvent 기록부가 workspace를 넣음.
+function readVisibleIntegrity(ws: string | null): IntegrityEvent[] {
+  if (!ws) return []; // 폴더 없는 빈 창 → 전역 경보 누수 차단
+  return readIntegrity().filter((e) => !e.workspace || normWs(e.workspace) === normWs(ws));
+}
 function ackIntegrity(ids: string[] | "all"): boolean {
   const events = readIntegrity();
   const set = ids === "all" ? null : new Set(ids);
@@ -410,6 +417,12 @@ function linkedRolloutRecentlyWritten(linkedId: string | null, withinMs = 12000)
 function computeLiveStage(linkedId: string | null): LiveStage | null {
   const p = readPhaseRaw();
   if (!p.phase) return null;
+  // 창 격리: phase.json은 모든 VS Code 창이 공유하는 한 파일이라, 필터 없이 읽으면 '다른 창'의
+  // 검증 진행이 이 창에 새어 보인다(대표 UI 신뢰 문제). 이 창의 워크스페이스 것만 보인다.
+  // (activePermissionMode의 누수 차단과 같은 normWs 비교 패턴.) 모든 writePhase 기록부가 workspace를 넣음.
+  const ws = dashboardWorkspace();
+  if (!ws) return null; // 폴더 없는 빈 창 = 프로젝트 없음 → 진행 표시 안 함(전역 누수 차단)
+  if (p.workspace && normWs(p.workspace) !== normWs(ws)) return null; // 다른 창의 진행은 숨김
   const ts = Date.parse(p.ts || "");
   if (!Number.isFinite(ts) || Date.now() - ts > PHASE_STALE_MS) return null; // 오래됨 → 대기(표시 안 함)
   const round = Number(p.round) || 0;
@@ -495,7 +508,7 @@ function computeState(turnsN: number): BridgeState {
     knownModels: modelMeta.models,
     availModels,
     modelsCacheNote,
-    integrity: readIntegrity(),
+    integrity: readVisibleIntegrity(ws),
     live: computeLiveStage(linkedId),
   };
 }
@@ -1289,7 +1302,7 @@ class Dashboard {
                           : ("🟡 검증 근거 의심 — " + nwarn + "건 (검증 답의 근거가 실제 파일/라인과 안 맞음)");
         ih.appendChild(el("span", null, head));
         const ack = el("button","secondary","확인함 ✓");
-        ack.addEventListener("click", function(){ vscode.postMessage({type:"ackIntegrity"}); });
+        ack.addEventListener("click", function(){ vscode.postMessage({type:"ackIntegrity", ids: iev.map(function(e){return e.id;})}); }); // 보이는(이 창) 경보만 확인 — 다른 창 것 안 지움
         ih.appendChild(ack); ib.appendChild(ih);
         const ul = el("ul");
         iev.slice(-6).forEach(function(e){
@@ -1578,7 +1591,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     // 검증 진행 흐름: 진행 중이면 메인 항목을 숨기고 [🧑Claude] ▶▶검증중 [🔍Codex] 3개 항목으로 단계별(글자)색을 보인다.
     const live = computeLiveStage(link?.codexSession ?? null);
-    const allIg = readIntegrity();
+    const allIg = readVisibleIntegrity(dashboardWorkspace());
     const errs = allIg.filter((e) => !e.ack && e.severity === "error");
     const warns = allIg.filter((e) => !e.ack && e.severity === "warning");
     // 우선순위 error > warning > flow: 미확인 경보(빨강/노랑)가 있으면 상태바는 그걸 보인다(무결성 가시화 우선).
