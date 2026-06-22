@@ -150,7 +150,50 @@ function checkCitedEvidence(answer, ws) {
   }
   return mism;
 }
-function flagEvidence(answer, ws) {
+// 인용된 파일 중 '실재(resolve)하는' 것들의 basename 집합. 모호/해석불가는 제외(cry-wolf 방지).
+function citedResolvedBasenames(answer, ws) {
+  const text = String(answer || "");
+  const re = /\(([^()\s]+\.[A-Za-z0-9]+):(\d+)(?:-\d+)?\)/g;
+  const out = new Set();
+  let m;
+  while ((m = re.exec(text))) {
+    const file = resolveCitedPath(m[1], ws || workspace());
+    if (file) out.add(path.basename(file));
+  }
+  return out;
+}
+// 결정2-3: 인용한 (실재) 파일 중, '이 검증 세션' rollout의 도구 명령/출력 어디에도 basename이 안 나타난 것.
+// = '이 검증에서 그 파일을 다룬 흔적을 확인 못함'(코덱스는 셸 명령으로 파일을 읽으므로 명령문/출력에 파일명이 남는다).
+// 보수적: rollout을 못 읽거나·도구활동 자체가 없으면(이전 턴 맥락 등) 판단 보류(빈 배열) — 단정/오탐 방지.
+function citedFilesUnseen(answer, ws, sessionId) {
+  if (!sessionId) return [];
+  let file;
+  try { file = findRolloutById(sessionId); } catch { return []; }
+  if (!file) return [];
+  const remaining = citedResolvedBasenames(answer, ws);
+  if (!remaining.size) return [];
+  try { if (fs.statSync(file).size > 16 * 1024 * 1024) return []; } catch { return []; } // 비정상적으로 큰 rollout은 비용·신뢰 모두 보류
+  let lines;
+  try { lines = fs.readFileSync(file, "utf8").split(/\r?\n/); } catch { return []; }
+  let hadTool = false;
+  for (const ln of lines) {
+    if (!ln) continue;
+    let o; try { o = JSON.parse(ln); } catch { continue; }
+    const p = o && typeof o.payload === "object" && o.payload ? o.payload : null;
+    if (!p) continue;
+    const t = p.type;
+    if (t === "function_call" || t === "custom_tool_call") hadTool = true;
+    if (t === "function_call" || t === "function_call_output" || t === "custom_tool_call" || t === "custom_tool_call_output") {
+      const out = typeof p.output === "string" ? p.output : p.output ? JSON.stringify(p.output) : "";
+      const hay = String(p.arguments || "") + "\n" + out + "\n" + String(p.input || "");
+      for (const bn of [...remaining]) if (hay.includes(bn)) remaining.delete(bn);
+      if (!remaining.size) break;
+    }
+  }
+  if (!hadTool) return []; // 도구활동 없음 → 이전 턴 맥락 등으로 답했을 수 있음 → 경보 안 함
+  return [...remaining];
+}
+function flagEvidence(answer, ws, sessionId) {
   try {
     const mism = checkCitedEvidence(answer, ws);
     if (mism.length) {
@@ -161,6 +204,17 @@ function flagEvidence(answer, ws) {
         kind: "evidence-mismatch",
         severity: "warning", // 노랑 — '의심'이지 '검증 미완(빨강)'은 아님
         detail: `검증 답의 인용 근거 ${mism.length}개가 실제 파일/라인과 불일치(존재하지 않는 줄): ${mism.slice(0, 3).join(" / ")}`,
+      });
+    }
+    const unseen = citedFilesUnseen(answer, ws, sessionId);
+    if (unseen.length) {
+      appendIntegrityEvent({
+        ts: nowIso(),
+        session: claudeId() || ((readActive() || {}).claudeSession) || "",
+        workspace: ws,
+        kind: "evidence-unseen",
+        severity: "warning", // 노랑(의심) — '안 읽음' 단정이 아니라 '기록에서 다룬 흔적 미확인'
+        detail: `검증 답이 인용한 파일 ${unseen.length}개를 이 검증 기록에서 다룬 흔적을 확인하지 못했습니다(이전 턴에서 봤거나 기록 형식 차이일 수 있음 — '안 읽음' 단정 아님): ${unseen.slice(0, 3).join(" / ")}`,
       });
     }
   } catch { /* best-effort — 점검 실패가 검증 흐름을 막지 않음 */ }
@@ -556,7 +610,7 @@ function cmdAsk(rest) {
     }
     try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
     writeProof(link.codexSession, answer, ws); // 실제 성공 → 검증 증명 기록(verify-guard가 인정)
-    flagEvidence(answer, ws); // 결정2-2: 인용 근거(파일:라인) 존재성 점검 → 불일치면 노랑 이벤트
+    flagEvidence(answer, ws, link.codexSession); // 결정2: 인용 근거 존재성 + 이 세션에서 다룬 흔적 점검 → 불일치/미확인이면 노랑
     process.stdout.write(`# 연결 세션 ${link.codexSession} (${link.via})\n\n${answer}\n`);
     return;
   }
@@ -630,7 +684,7 @@ function cmdAsk(rest) {
   if (m) {
     const ok = recordLink(m[1]); // CAS 저장 + autoNewFailed[wsKey] 해제 포함
     writeProof(m[1], answer, ws); // 실제 성공 → 검증 증명 기록
-    flagEvidence(answer, ws); // 결정2-2: 인용 근거 점검
+    flagEvidence(answer, ws, m[1]); // 결정2: 인용 근거 존재성 + 이 세션에서 다룬 흔적 점검
     // 머리말도 실패를 반영 — stdout만 보는 호출자가 성공으로 오해하지 않게(stderr 경고와 함께).
     const head = ok
       ? `# 새 Codex 세션 생성·연결: ${m[1]}`
@@ -640,7 +694,7 @@ function cmdAsk(rest) {
   } else {
     updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; }); // 다음 자동 생성 차단 플래그
     writeProof("", answer, ws); // Codex는 성공 응답함(세션id만 미식별) → 검증은 인정
-    flagEvidence(answer, ws); // 결정2-2: 인용 근거 점검
+    flagEvidence(answer, ws, ""); // 세션id 미식별 → 존재성 점검만(다룬-흔적 점검은 rollout 못 찾아 자동 보류)
     process.stdout.write(`# 새 세션 생성됨(세션id 식별 실패) — 폭증 방지로 다음 자동 생성은 멈춥니다. 'find'로 찾아 'link <id>' 하세요.\n\n${answer}\n`);
   }
 }
@@ -843,4 +897,4 @@ function main() {
 }
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
-module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, updateLinks, loadLinks, saveLinks, LINKS_FILE, verifyTimeoutMin };
+module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, updateLinks, loadLinks, saveLinks, LINKS_FILE, verifyTimeoutMin, citedResolvedBasenames, citedFilesUnseen };
