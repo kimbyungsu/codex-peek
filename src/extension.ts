@@ -80,6 +80,7 @@ interface BridgeState {
   modelsCacheNote: string;   // 계정 캐시 못 읽을 때 사용자에게 보여줄 이유("" = 정상)
   integrity: IntegrityEvent[]; // 무결성 신호(검증 미완 등) — 미확인 error는 상태바 빨강 + 대시보드 경보
   live: LiveStage | null;      // 검증 파이프라인 라이브 단계(없으면 대기) — 상태바·진행 스트립
+  verifyTimeoutMin: number;    // 검증(codex) 대기시간(분) — 저장값 또는 기본 8. 브릿지 verifyTimeoutMin과 같은 규칙.
 }
 
 function normWs(p: string): string {
@@ -133,13 +134,13 @@ function dashboardWorkspace(): string | null {
   return folders[0];
 }
 
-function loadLinks(): { bySession: Record<string, any>; byWorkspace: Record<string, any>; modelPrefs: Record<string, any> } {
+function loadLinks(): { bySession: Record<string, any>; byWorkspace: Record<string, any>; modelPrefs: Record<string, any>; settings: Record<string, any> } {
   try {
     const o = JSON.parse(fs.readFileSync(LINKS_FILE, "utf8"));
-    // modelPrefs를 보존해야 대시보드가 저장된 모델/생각강도 선택을 다시 읽어 표시한다(누락 시 picker가 늘 빈 값).
-    return { bySession: o.bySession || {}, byWorkspace: o.byWorkspace || {}, modelPrefs: o.modelPrefs || {} };
+    // modelPrefs/settings를 보존해야 대시보드가 저장값(모델·생각강도·검증 대기시간)을 다시 읽어 표시한다.
+    return { bySession: o.bySession || {}, byWorkspace: o.byWorkspace || {}, modelPrefs: o.modelPrefs || {}, settings: o.settings || {} };
   } catch {
-    return { bySession: {}, byWorkspace: {}, modelPrefs: {} };
+    return { bySession: {}, byWorkspace: {}, modelPrefs: {}, settings: {} };
   }
 }
 
@@ -510,7 +511,20 @@ function computeState(turnsN: number): BridgeState {
     modelsCacheNote,
     integrity: readVisibleIntegrity(ws),
     live: computeLiveStage(linkedId),
+    verifyTimeoutMin: clampVerifyTimeout(links.settings?.verifyTimeoutMin),
   };
+}
+
+// 검증 대기시간(분) 정규화 — 브릿지 verifyTimeoutMin과 동일 규칙(1~60, 기본 8). 잘못된 값은 기본으로.
+const VERIFY_TIMEOUT_DEFAULT = 8;
+function clampVerifyTimeout(v: any): number {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return VERIFY_TIMEOUT_DEFAULT;
+  return Math.max(1, Math.min(60, Math.round(n)));
+}
+function setVerifyTimeout(min: number): boolean {
+  const v = clampVerifyTimeout(min);
+  return updateLinks((o) => { o.settings = o.settings || {}; o.settings.verifyTimeoutMin = v; });
 }
 
 // 숨긴 세션 메타(원본 rollout 안 건드림 — §5.1). ~/.codex-bridge/sessions-meta.json (id→{state}).
@@ -701,6 +715,12 @@ class Dashboard {
           if (!ok) vscode.window.showErrorMessage("두뇌 설정 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 저장해 주세요.");
           this.post();
           this.panel?.webview.postMessage({ type: "saveResult", target: "model", ok });
+        }
+        if (m?.type === "saveVerifyTimeout") {
+          const ok = setVerifyTimeout(Number(m.min));
+          if (!ok) vscode.window.showErrorMessage("검증 대기시간 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 시도해 주세요.");
+          this.post();
+          this.panel?.webview.postMessage({ type: "saveResult", target: "timeout", ok });
         }
         if (m?.type === "saveContract") {
           const ok = saveContract(dashboardWorkspace(), {
@@ -1069,6 +1089,14 @@ class Dashboard {
     <div class="row" style="margin-top:10px"><button id="saveModel">두뇌 설정 저장</button><span id="savedModel" class="muted"></span></div>
     <div class="muted" style="margin-top:6px">선택은 <b>다음 코덱스 응답부터</b> 적용 · 비우면 코덱스 기본값 · 코덱스에 말 걸 때마다 자동으로 다시 실어줌</div>
   </div>
+  <div class="mcard" style="margin-top:10px">
+    <div class="mrow"><span class="mlbl">검증 대기시간</span>
+      <input id="vtMin" type="number" min="1" max="60" step="1" style="width:64px" title="코덱스 검증이 이 시간을 넘기면 실패로 처리합니다. 깊은 추론이 길어지면 늘리세요(1~60분).">
+      <span class="muted">분 · 기본 8 · 전역(모든 프로젝트 공통)</span>
+      <button id="saveVT" class="secondary">저장</button><span id="savedVT" class="muted"></span>
+    </div>
+    <div class="muted" style="margin-top:4px">코덱스가 답하는 데 이 시간보다 오래 걸리면 검증이 실패로 끝나요. 추론이 8분을 넘는 경우가 있으면 늘려 두세요.</div>
+  </div>
   <h2 class="sec codex">🔍 Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
   <div id="conv"></div>
   <h2 class="sec base">🔗 Codex 세션 연결 <span class="sub2" id="cwsLabel">첫 발화로 식별</span></h2>
@@ -1139,6 +1167,14 @@ class Dashboard {
     pendingSave = {target:"model"};  // 성공 플래시는 saveResult(ok) 받을 때
     vscode.postMessage({type:"saveModelPref", model: $("mModel").value.trim(), reasoning: curRS});
   });
+  $("saveVT").addEventListener("click", () => {
+    let n = parseInt($("vtMin").value, 10);
+    if (!Number.isFinite(n)) n = 8;
+    n = Math.max(1, Math.min(60, n));  // 1~60분(브릿지와 같은 규칙) — 잘못된 입력은 보정
+    $("vtMin").value = n;
+    pendingSave = {target:"timeout"};
+    vscode.postMessage({type:"saveVerifyTimeout", min: n});
+  });
   function flashSaved(node, msg){ if(!node) return; node.textContent = msg || "저장됨 ✓ (다음 턴부터 적용)"; node.classList.remove("flash"); void node.offsetWidth; node.classList.add("flash"); }
   $("cands").addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-relink]");
@@ -1188,6 +1224,7 @@ class Dashboard {
       const ps = pendingSave; pendingSave = null;
       if (!ev.data.ok) return; // 실패: 네이티브 에러 토스트가 알린다. 성공 플래시·스크롤은 하지 않음.
       if (ev.data.target === "model") flashSaved($("savedModel"), "저장됨 ✓ (다음 코덱스 응답부터 적용)");
+      else if (ev.data.target === "timeout") flashSaved($("savedVT"), "저장됨 ✓ (다음 검증부터 적용)");
       else if (ev.data.target === "base") flashSaved($("savedB"), ps && ps.msg);
       else if (ev.data.target === "contract") {
         flashSaved($("savedAt"));
@@ -1418,6 +1455,7 @@ class Dashboard {
     if(firstM || !mDirty){ curRS=appRS; sel.value=appModel; } // 편집 중 아니면 저장값 표시(복원)
     else { sel.value=prevModelVal; } // 편집 중이면 사용자가 고르던 값 되돌림(replaceChildren 리셋 보정)
     renderReasonButtons($("mModel").value.trim());  // 현재 모델 기준 생각강도 버튼(내부에서 curRS 하이라이트/검증)
+    const vt=$("vtMin"); if(vt && document.activeElement!==vt) vt.value = d.verifyTimeoutMin || 8; // 편집 중이 아니면 저장값 표시
   });
 </script></body></html>`;
   }

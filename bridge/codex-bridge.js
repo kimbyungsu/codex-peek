@@ -469,6 +469,18 @@ function indexedSessions() {
 }
 
 // codex exec 실행(헤드리스). stdin 닫음(멈춤 방지), 최종 메시지는 -o 파일에서 회수.
+// 검증(codex exec) 대기시간(분). 깊은 추론이 기본 8분을 넘는 경우가 있어 사용자가 늘릴 수 있게 한다.
+// 우선순위: 환경변수 CODEX_BRIDGE_VERIFY_TIMEOUT_MIN > links.json settings.verifyTimeoutMin > 기본 8.
+// 1~60분으로 제한 — 너무 짧으면 정상 검증을 실패 처리하고, 너무 길면 한 턴이 무한정 묶인다.
+function verifyTimeoutMin() {
+  const env = Number(process.env.CODEX_BRIDGE_VERIFY_TIMEOUT_MIN);
+  let min = Number.isFinite(env) && env > 0 ? env : NaN;
+  if (!Number.isFinite(min)) {
+    try { const s = (loadLinks() || {}).settings; const v = Number(s && s.verifyTimeoutMin); if (Number.isFinite(v) && v > 0) min = v; } catch { /* 기본값 */ }
+  }
+  if (!Number.isFinite(min)) min = 8;
+  return Math.max(1, Math.min(60, Math.round(min))); // 정수 분으로 통일(UI 보정과 일치 — 수동 편집의 소수도 반올림)
+}
 function runCodex(extraArgs, prompt) {
   const inv = resolveCodex();
   const outFile = path.join(os.tmpdir(), `codex_bridge_${process.pid}_${Date.now()}.txt`);
@@ -477,7 +489,7 @@ function runCodex(extraArgs, prompt) {
   const r = spawnSync(inv.file, codexArgs, {
     input: prompt,
     stdio: ["pipe", "ignore", "pipe"],
-    timeout: 1000 * 60 * 8,
+    timeout: verifyTimeoutMin() * 60 * 1000,
     windowsHide: true,
     encoding: "utf8",
     shell: !!inv.shell,
@@ -830,4 +842,4 @@ function main() {
 }
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
-module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, updateLinks, loadLinks, saveLinks, LINKS_FILE };
+module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, updateLinks, loadLinks, saveLinks, LINKS_FILE, verifyTimeoutMin };
