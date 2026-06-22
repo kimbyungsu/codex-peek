@@ -16,6 +16,8 @@ install.sh
 install.cmd
 docs/ROADMAP.md
 docs/*.svg
+docs/feat_*.png
+docs/_*.png
 .github/**
 SECURITY.md
 PRIVACY.md
