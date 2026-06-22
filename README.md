@@ -3,6 +3,8 @@
 Claude Code ↔ Codex(OpenAI) 를 **하나의 작업 흐름으로 잇는** 도구 모음입니다.
 사람이 두 에이전트 사이에서 답을 복사·전달하지 않아도, **세션을 고정**하고 **고정 계약(규약)을 매 턴 주입**하며, 원하면 **구현→검증 2트랙**을 하니스가 강제합니다.
 
+> **경로 표기**: 이 문서의 `~/.codex`·`~/.codex-bridge`·`~/.claude`는 모두 **기본값**입니다. `~/.codex`(코덱스 홈)는 `$CODEX_HOME` 또는 자동 탐지해 기억한 경로가 **없을 때만** 쓰는 기본값이고, `~/.codex-bridge`·`~/.claude`는 각각 `$CODEX_BRIDGE_HOME`·`$CLAUDE_CONFIG_DIR`이 없을 때의 기본값입니다. 정확한 경로·데이터 목록은 [PRIVACY.md](PRIVACY.md) 참고.
+
 세 부분으로 구성됩니다.
 
 | 구성 | 위치(런타임) | 역할 |
@@ -182,10 +184,15 @@ node ~/.codex-bridge/codex-bridge.js doctor                  # 지금 어떤 cod
 ---
 
 ## 읽기 전용·안전 원칙
-- 대화 내용(`~/.codex/sessions`)은 평소엔 **읽기만** 합니다. **단 하나의 예외**: 대시보드에서 숨긴 세션을 **‘영구삭제’로 명시 확인**(확인 모달·공유 세션 경고)하면 그 Codex rollout 파일을 삭제합니다(사용자가 직접 누른 경우만). 그 외에는 원본 rollout을 옮기거나 지우지 않습니다.
-- **일반 런타임 상태**는 모두 자체 폴더(`~/.codex-bridge/`)에 씁니다: `links.json`(연결)·계약(`contract.json` 전역 + `contracts/<키>.json` 프로젝트별)·`active.json`(현재 폴더)·`proofs/`(검증 증명)·`integrity.json`(무결성 경보)·`phase.json`(진행 단계)·`base-directive.json`(기본 지침 오버라이드). 모두 런타임 데이터라 저장소에 포함되지 않습니다.
+- 대화 내용(코덱스 홈, 기본 `~/.codex` 아래 `sessions`)은 평소엔 **읽기만** 합니다. **단 하나의 예외**: 대시보드에서 숨긴 세션을 **‘영구삭제’로 명시 확인**(확인 모달·공유 세션 경고)하면 그 Codex rollout 파일을 삭제합니다(사용자가 직접 누른 경우만). 그 외에는 원본 rollout을 옮기거나 지우지 않습니다.
+- **일반 런타임 상태**는 모두 자체 폴더(브릿지 홈, 기본 `~/.codex-bridge`)에 씁니다: `links.json`(연결)·계약(`contract.json` 전역 + `contracts/<키>.json` 프로젝트별)·`active.json`(현재 폴더)·`proofs/`(검증 증명)·`integrity.json`(무결성 경보)·`phase.json`(진행 단계)·`base-directive.json`(기본 지침 오버라이드). 모두 런타임 데이터라 저장소에 포함되지 않습니다. (경로는 `$CODEX_HOME`·`$CODEX_BRIDGE_HOME`로 바뀔 수 있음 — [PRIVACY.md](PRIVACY.md) 참고.)
 - **외부 전송 없음**: codex 호출은 사용자의 codex CLI를 로컬에서 실행할 뿐, 별도 서버로 데이터를 보내지 않습니다.
 - 검증 모드는 opt-in이며 Stop 훅 강제는 한 턴에 상한(기본 3회)까지만 반복하고 그 뒤 통과시켜(+무결성 경보 기록) 작업이 멈추는 사고를 내지 않습니다.
+
+### 자세한 정책 문서
+- [SECURITY.md](SECURITY.md) — 보안 경계인 것 / 아닌 것, 설치기가 바꾸는 것, 신고 방법
+- [PRIVACY.md](PRIVACY.md) — 정확히 어떤 파일을 읽고 쓰는지, 외부 전송 없음, 데이터 삭제
+- [COMPATIBILITY.md](COMPATIBILITY.md) — 지원 OS·Node·VS Code 범위, 코덱스 업데이트로 깨질 수 있는 지점, 진단
 
 ## 라이선스
 MIT — `LICENSE` 참조.

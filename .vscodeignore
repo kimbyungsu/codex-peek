@@ -17,3 +17,6 @@ install.cmd
 docs/ROADMAP.md
 docs/*.svg
 .github/**
+SECURITY.md
+PRIVACY.md
+COMPATIBILITY.md
