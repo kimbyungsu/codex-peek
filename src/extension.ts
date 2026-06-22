@@ -803,10 +803,14 @@ class Dashboard {
   body{margin:0;color:var(--vscode-foreground);background:var(--vscode-editor-background);font-family:var(--vscode-font-family);font-size:var(--vscode-font-size)}
   .shell{max-width:960px;margin:0 auto;padding:28px 26px 40px}
   .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
-  h1{font-size:18px;margin:0;display:flex;align-items:baseline;gap:8px}
+  h1{font-size:18px;margin:0;display:flex;align-items:center;gap:9px}
   h1 .sub{font-size:12px;font-weight:400;color:var(--vscode-descriptionForeground)}
-  h2{font-size:15px;font-weight:700;margin:40px 0 14px;color:var(--vscode-foreground);display:flex;align-items:center;gap:9px;letter-spacing:.2px}
+  /* 워드마크: 파랑(Claude)→초록(Codex) 그라데이션 사각 — 이모지 대신 */
+  .brand{width:20px;height:20px;border-radius:6px;background:linear-gradient(135deg,var(--vscode-charts-blue),var(--vscode-charts-green));flex:none}
+  h2{font-size:15px;font-weight:700;margin:34px 0 13px;color:var(--vscode-foreground);display:flex;align-items:center;gap:9px;letter-spacing:.2px}
   h2 .sub2{font-size:11px;font-weight:400;color:var(--vscode-descriptionForeground);letter-spacing:0}
+  /* 섹션 경계: 위쪽 구분선으로 '여기서 새 기능 시작'을 한눈에 */
+  h2.sec{border-top:1px solid var(--vscode-panel-border);padding-top:20px}
   /* 역할별 섹션 헤더 마커 — 파랑=Claude, 초록=Codex/검증, 회색=기본지침/연결 */
   h2.sec::before{content:"";width:4px;height:17px;border-radius:2px;background:var(--vscode-panel-border);flex:none}
   h2.sec.claude::before{background:var(--vscode-charts-blue)}
@@ -836,10 +840,10 @@ class Dashboard {
   .agent.codex{border-color:var(--vscode-charts-green)}
   .link{flex:0 0 108px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px}
   .link .bar{width:100%;height:3px;border-radius:2px;background:var(--vscode-panel-border)}
-  .link .emo{font-size:20px;filter:grayscale(1);opacity:.6}
+  .link .emo{font-size:11px;line-height:1;color:var(--vscode-panel-border)}
   .link .st{font-size:11px;color:var(--vscode-descriptionForeground)}
   .link.on .bar{background:var(--vscode-charts-green)}
-  .link.on .emo{filter:none;opacity:1}
+  .link.on .emo{color:var(--vscode-charts-green)}
   .link.on .st{color:var(--vscode-charts-green);font-weight:600}
   .statusline{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:2px 0 4px;font-size:12px}
   .integrity{border:1px solid var(--vscode-inputValidation-errorBorder,#d44);border-left:4px solid var(--vscode-inputValidation-errorBorder,#d44);background:var(--vscode-inputValidation-errorBackground,rgba(212,68,68,0.12));border-radius:8px;padding:12px 14px;margin:4px 0 14px}
@@ -849,6 +853,10 @@ class Dashboard {
   .integrity li{font-size:12px;margin:3px 0;color:var(--vscode-foreground)}
   .integrity .when{color:var(--vscode-descriptionForeground);font-size:11px}
   .integrity button{cursor:pointer}
+  /* 심각도 색점(이모지 대신) — 빨강=검증미완, 주황=근거의심 */
+  .sevdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:middle;flex:none}
+  .sevdot.err{background:var(--vscode-charts-red)}
+  .sevdot.warn{background:var(--vscode-charts-orange)}
   .livestrip{border:1px solid var(--vscode-panel-border);border-radius:8px;padding:11px 14px;margin:4px 0 14px;background:var(--vscode-sideBar-background)}
   .lsflow{display:flex;align-items:center;justify-content:center;gap:12px}
   .lsbox{padding:5px 12px;border-radius:6px;border:1px solid var(--vscode-panel-border);font-weight:700;font-size:12px;opacity:.5;transition:all .25s}
@@ -980,23 +988,23 @@ class Dashboard {
 </style></head>
 <body><main class="shell">
   <section class="onboard" id="onboard" style="display:none">
-    <button type="button" id="obReopen" class="obreopen" style="display:none">🚀 시작하기 다시 보기</button>
+    <button type="button" id="obReopen" class="obreopen" style="display:none">시작하기 다시 보기</button>
     <div id="obMain">
-      <div class="obhead"><span id="obTitle">🚀 시작하기</span><button type="button" id="obClose" class="obclose secondary" style="display:none">끄기 ✕</button></div>
+      <div class="obhead"><span id="obTitle">시작하기</span><button type="button" id="obClose" class="obclose secondary" style="display:none">끄기 ✕</button></div>
       <div id="obSteps">
         <div class="obstep" id="ob1"></div>
         <div class="obstep" id="ob2"></div>
         <div class="obstep" id="ob3"></div>
       </div>
-      <div id="obDone" class="obdone" style="display:none">✅ 준비 끝 — 이제 매 턴 자동으로 검증됩니다.</div>
+      <div id="obDone" class="obdone" style="display:none">준비 끝 ✓ — 이제 매 턴 자동으로 검증됩니다.</div>
     </div>
   </section>
 
-  <div class="top"><h1>🌉 Codex Bridge <span class="sub">Claude ⇄ Codex 자동 연결·검증</span></h1><button id="refresh" class="secondary">↻ 새로고침</button></div>
+  <div class="top"><h1><span class="brand"></span>Codex Bridge <span class="sub">Claude ⇄ Codex 자동 연결·검증</span></h1><button id="refresh" class="secondary">↻ 새로고침</button></div>
 
   <div class="hero">
     <div class="agent claude"><div class="mono c">C</div><div class="nm">Claude</div><div class="ro">구현 · implement</div></div>
-    <div class="link" id="linkViz"><div class="bar"></div><div class="emo" id="linkEmo">🔌</div><div class="st" id="linkState">연결 없음</div></div>
+    <div class="link" id="linkViz"><div class="bar"></div><div class="emo" id="linkEmo">●</div><div class="st" id="linkState">연결 없음</div></div>
     <div class="agent codex"><div class="mono x">Cx</div><div class="nm">Codex</div><div class="ro">검증 · verify</div></div>
   </div>
   <div id="status" class="statusline"></div>
@@ -1005,14 +1013,14 @@ class Dashboard {
 
   <div id="liveStrip" class="livestrip" style="display:none">
     <div class="lsflow">
-      <span class="lsbox claude" id="lsClaude">🧑 Claude</span>
+      <span class="lsbox claude" id="lsClaude">Claude</span>
       <span class="lsarrow" id="lsArrow">⟷</span>
-      <span class="lsbox codex" id="lsCodex">🔍 Codex</span>
+      <span class="lsbox codex" id="lsCodex">Codex</span>
     </div>
     <div class="lsstage" id="lsStage"></div>
   </div>
 
-  <h2 class="sec claude">Claude 규칙 <span class="to claude">→ 🧑 Claude에게</span> <span class="sub2">Claude가 지킬 행동규칙 — 검증과 별개</span></h2>
+  <h2 class="sec claude">Claude 규칙 <span class="to claude">→ Claude에게</span> <span class="sub2">Claude가 지킬 행동규칙 — 검증과 별개</span></h2>
   <div class="card">
     <div class="cblock claude">
       <div class="chead">규칙 <span class="muted" style="font-weight:400">· 기본 원칙 말고, 이 프로젝트에만 필요한 것</span></div>
@@ -1021,7 +1029,7 @@ class Dashboard {
       <label class="ck"><input type="checkbox" id="ckClaude"> 체크리스트 강제 — 각 규칙마다 [준수/위반+근거] 달게 함</label>
       <div class="hint">☑ 켜짐 → 답변 끝에 <code>[계약점검] 1) 준수 — &lt;근거&gt; / 2) 위반 — &lt;근거&gt;</code> 형식으로 규칙별 자가보고를 강제 · ☐ 꺼짐 → 규칙 텍스트만 주입</div>
     </div>
-    <label class="ck verify">🧩 넣는 시점 — 이 규칙을 <b>언제</b> Claude에 넣을지 <span id="planNow" class="nowbadge" style="display:none"></span>
+    <label class="ck verify">넣는 시점 — 이 규칙을 <b>언제</b> Claude에 넣을지 <span id="planNow" class="nowbadge" style="display:none"></span>
       <span class="seg" id="segInject">
         <button type="button" data-im="off">꺼짐<small>안 넣음</small></button><button type="button" data-im="plan">플랜 모드<small>플랜 때만</small></button><button type="button" data-im="always">항상<small>매 턴</small></button>
       </span>
@@ -1029,7 +1037,7 @@ class Dashboard {
     <div class="hint"><span class="ic" title="플랜 모드 = Claude Code에서 shift+Tab으로 켜는 '계획 먼저 세우기' 모드. '플랜 모드'를 고르면 그 모드로 일할 때만 이 규칙이 들어갑니다.">ⓘ 플랜 모드란?</span> · <span class="ic" title="'코드 변경 시'가 없는 이유: 코드 변경은 턴이 끝나야 아는 신호라, 턴 시작에 넣는 이 축에선 못 씁니다. 검증 모드와 무관한 별도 축이에요.">ⓘ '코드 변경 시'가 없는 이유</span></div>
   </div>
 
-  <h2 class="sec codex">검증 <span class="to codex">→ 🔍 Codex</span> <span class="sub2">Codex에게 검증받기 — 끄면 검증만 안 함(Claude 규칙은 별개)</span></h2>
+  <h2 class="sec codex">검증 <span class="to codex">→ Codex</span> <span class="sub2">Codex에게 검증받기 — 끄면 검증만 안 함(Claude 규칙은 별개)</span></h2>
   <div class="card">
     <div class="cblock codex">
       <div class="chead">Codex 규칙 <span class="muted" style="font-weight:400">· 기본 검증원칙 말고, 이 프로젝트에서 특히 볼 것 · Codex 검증 때마다 붙음</span></div>
@@ -1038,14 +1046,14 @@ class Dashboard {
       <label class="ck"><input type="checkbox" id="ckCodex"> 체크리스트 강제 — 검증 답에 규칙별 [준수/위반+근거] 달게 함</label>
       <div class="hint">☑ 켜짐 → Codex 검증 답에도 규칙별 <code>[계약점검]</code> 자가보고 강제 · ☐ 꺼짐 → 규칙 텍스트만 붙음</div>
     </div>
-    <label class="ck verify">🔁 검증 모드 — <b>언제</b> Codex 검증→보고를 강제할지
+    <label class="ck verify">검증 모드 — <b>언제</b> Codex 검증→보고를 강제할지
       <span class="seg" id="segVerify">
         <button type="button" data-vm="off">꺼짐<small>강제 안 함</small></button><button type="button" data-vm="code">코드 변경 시<small>편집한 턴</small></button><button type="button" data-vm="plancode">플랜 확정/코드 변경<small>플랜·편집 턴</small></button><button type="button" data-vm="always">모든 턴<small>매 응답</small></button>
       </span>
     </label>
     <div class="hint"><span class="ic" title="플랜 확정 = 플랜 모드(shift+Tab)에서 세운 계획을 확정·제출하는 그 턴(ExitPlanMode). 플랜 모드 '내내'가 아니라 확정하는 '순간'이에요. '플랜 확정/코드 변경'은 이 플랜 확정 턴이거나 파일을 바꾼 턴에 검증을 강제합니다.">ⓘ '플랜 확정'이 뭐야?</span> · <span class="ic" title="검증이 필요한 턴은 선택한 모드가 정해요. 모든 턴=매 답변, 코드 변경 시=파일을 만든/고친 턴, 플랜 확정/코드 변경=플랜을 확정했거나 파일을 고친 턴. 그 턴엔 Codex 검증 결과를 반영해 보고해야 끝낼 수 있어요.">ⓘ 언제 검증되나?</span></div>
     <div class="stagebox" id="stageBox">
-      <div class="sbhead">↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요 <span class="muted" style="font-weight:400">· 지금 검증: <b id="sbState">—</b> · 내용은 아래 ⚙️ 단계별 기본 원칙에서</span></div>
+      <div class="sbhead">↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요 <span class="muted" style="font-weight:400">· 지금 검증: <b id="sbState">—</b> · 내용은 아래 단계별 기본 원칙에서</span></div>
       <div class="sbrow" id="sbTransmit"><span class="sbmark"></span><b>① Claude→Codex 넘길 때</b> · 전달 원칙 <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
       <div class="sbrow" id="sbVerify"><span class="sbmark"></span><b>② Codex가 검증할 때</b> · 검증 기본원칙 + Codex 규칙 <span class="who2 codex">Codex</span> <span class="sbwhy"></span></div>
       <div class="sbrow" id="sbRejudge"><span class="sbmark"></span><b>③ Codex 답을 되짚을 때</b> · 재판단 원칙 <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
@@ -1066,7 +1074,7 @@ class Dashboard {
   </section>
 
   <details class="card baseline" style="margin-top:10px">
-    <summary style="cursor:pointer;font-weight:600;font-size:13px">⚙️ 단계별 기본 원칙 <span class="fixedbadge">고정 기준 · 기본값 내장</span> <span class="muted" style="font-weight:400">· 검증 흐름 3단계의 기본값 (필요할 때만 편집)</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
+    <summary style="cursor:pointer;font-weight:600;font-size:13px">단계별 기본 원칙 <span class="fixedbadge">고정 기준 · 기본값 내장</span> <span class="muted" style="font-weight:400">· 검증 흐름 3단계의 기본값 (필요할 때만 편집)</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
     <div class="hint" style="margin:8px 0 0 0">위 <b>Claude·Codex 규칙</b>(네가 쓰는 것)과 달리, 이건 검증이 제대로 굴러가게 하는 <b>흐름 단계별 기본값</b>입니다. 평소엔 손댈 필요 없고, 잘못 고쳐도 <b>기본값 복원</b>으로 되돌아갑니다.</div>
     <div class="chead" style="margin-top:12px">① 전달 원칙 <span class="muted" style="font-weight:400">→ Claude에게 · Claude가 Codex에 넘길 때 · 검증 ON일 때만</span></div>
     <textarea id="bTransmit" rows="4"></textarea>
@@ -1076,7 +1084,7 @@ class Dashboard {
     <textarea id="bRejudge" rows="5"></textarea>
     <div class="row"><button id="saveB">단계별 기본 원칙 저장</button><button id="resetB" class="secondary">기본값 복원</button><span id="savedB" class="muted"></span></div>
   </details>
-  <h2 class="sec base">🧠 코덱스 두뇌 설정 <span class="sub2">이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)</span></h2>
+  <h2 class="sec base">코덱스 두뇌 설정 <span class="sub2">이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)</span></h2>
   <div class="mcard">
     <div class="muted">지금 쓰는 값(최근 기록): <b id="mCur">—</b></div>
     <div id="mCacheWarn" class="hint" style="display:none;margin:6px 0 0 0"></div>
@@ -1089,17 +1097,18 @@ class Dashboard {
     <div class="row" style="margin-top:10px"><button id="saveModel">두뇌 설정 저장</button><span id="savedModel" class="muted"></span></div>
     <div class="muted" style="margin-top:6px">선택은 <b>다음 코덱스 응답부터</b> 적용 · 비우면 코덱스 기본값 · 코덱스에 말 걸 때마다 자동으로 다시 실어줌</div>
   </div>
-  <div class="mcard" style="margin-top:10px">
-    <div class="mrow"><span class="mlbl">검증 대기시간</span>
-      <input id="vtMin" type="number" min="1" max="60" step="1" style="width:64px" title="코덱스 검증이 이 시간을 넘기면 실패로 처리합니다. 깊은 추론이 길어지면 늘리세요(1~60분).">
-      <span class="muted">분 · 기본 8 · 전역(모든 프로젝트 공통)</span>
-      <button id="saveVT" class="secondary">저장</button><span id="savedVT" class="muted"></span>
+  <h2 class="sec base">검증 대기시간 <span class="sub2">코덱스 검증을 기다리는 한도 — 추론이 길면 늘리세요 (전역·모든 프로젝트 공통)</span></h2>
+  <div class="mcard">
+    <div class="mrow"><span class="mlbl">대기시간</span>
+      <input id="vtMin" type="number" min="1" max="60" step="1" style="width:72px" title="코덱스 검증이 이 시간을 넘기면 실패로 처리합니다. 깊은 추론이 길어지면 늘리세요(1~60분).">
+      <span class="muted">분 · 기본 8</span>
     </div>
-    <div class="muted" style="margin-top:4px">코덱스가 답하는 데 이 시간보다 오래 걸리면 검증이 실패로 끝나요. 추론이 8분을 넘는 경우가 있으면 늘려 두세요.</div>
+    <div class="row" style="margin-top:10px"><button id="saveVT">대기시간 저장</button><span id="savedVT" class="muted"></span></div>
+    <div class="muted" style="margin-top:6px">코덱스가 답하는 데 이 시간보다 오래 걸리면 검증이 실패로 끝나요. 추론이 8분을 넘는 경우가 있으면 늘려 두세요.</div>
   </div>
-  <h2 class="sec codex">🔍 Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
+  <h2 class="sec codex">Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
   <div id="conv"></div>
-  <h2 class="sec base">🔗 Codex 세션 연결 <span class="sub2" id="cwsLabel">첫 발화로 식별</span></h2>
+  <h2 class="sec base">Codex 세션 연결 <span class="sub2" id="cwsLabel">첫 발화로 식별</span></h2>
   <div id="cands"></div>
   <div id="hiddenWrap"></div>
 </main>
@@ -1281,7 +1290,7 @@ class Dashboard {
       }
       $("obReopen").style.display = "none"; $("obMain").style.display = "";
       ob.className = "onboard " + (allDone ? "complete" : "incomplete");
-      $("obTitle").textContent = allDone ? "🎉 준비 끝" : "🚀 시작하기 — 3가지면 매 턴 자동 검증";
+      $("obTitle").textContent = allDone ? "준비 끝 ✓" : "시작하기 — 3가지면 매 턴 자동 검증";
       $("obClose").style.display = allDone ? "" : "none";
       $("obSteps").style.display = allDone ? "none" : "";
       $("obDone").style.display = allDone ? "" : "none";
@@ -1310,14 +1319,14 @@ class Dashboard {
     // 히어로 연결 상태 시각화
     const linked = !!d.linkedId;
     $("linkViz").className = "link" + (linked ? " on" : "");
-    $("linkEmo").textContent = linked ? "🔗" : "🔌";
+    $("linkEmo").textContent = "●"; // 색은 .link.on .emo가 처리(연결=초록/미연결=회색)
     $("linkState").textContent = linked ? "연결됨" : "연결 없음";
     // statusline: 검증 모드 배지 + 연결 요약
     const st = $("status"); st.replaceChildren();
     const vm = (d.contract && d.contract.verifyMode) || "off";
     const vmTxt = {off:"검증 꺼짐", code:"코드 변경 시 검증", plancode:"플랜+코드 검증", always:"모든 턴 검증"}[vm] || vm;
-    st.appendChild(el("span","badge b-"+vm, "🔁 " + vmTxt));
-    if (d.workspace) st.appendChild(el("span","wschip", "📁 " + d.workspace));
+    st.appendChild(el("span","badge b-"+vm, vmTxt));
+    if (d.workspace) st.appendChild(el("span","wschip", d.workspace));
     if (!d.workspace) st.appendChild(el("span","muted","· 워크스페이스가 열려있지 않음"));
     else if (linked) {
       st.appendChild(el("span","muted","· " + (d.linkedSnippet || "(주제 미상)")));
@@ -1338,15 +1347,17 @@ class Dashboard {
         ib.replaceChildren();
         ib.className = "integrity" + (nerr ? " err" : " warn"); // 빨강(미완) 있으면 빨강 테두리, 아니면 노랑(의심)
         const ih = el("div","ih");
-        const head = nerr ? ("⚠️ 검증 무결성 경보 — 검증 미완 " + nerr + "건" + (nwarn ? " · 근거 의심 " + nwarn + "건" : ""))
-                          : ("🟡 검증 근거 의심 — " + nwarn + "건 (검증 답의 근거가 실제 파일/라인과 안 맞음)");
+        const head = nerr ? ("검증 무결성 경보 — 검증 미완 " + nerr + "건" + (nwarn ? " · 근거 의심 " + nwarn + "건" : ""))
+                          : ("검증 근거 의심 — " + nwarn + "건 (검증 답의 근거가 실제 파일/라인과 안 맞음)");
         ih.appendChild(el("span", null, head));
         const ack = el("button","secondary","확인함 ✓");
         ack.addEventListener("click", function(){ vscode.postMessage({type:"ackIntegrity", ids: iev.map(function(e){return e.id;})}); }); // 보이는(이 창) 경보만 확인 — 다른 창 것 안 지움
         ih.appendChild(ack); ib.appendChild(ih);
         const ul = el("ul");
         iev.slice(-6).forEach(function(e){
-          const li = el("li", null, (e.severity==="error"?"🔴 ":"🟡 ") + (e.detail || e.kind || "무결성 신호"));
+          const li = el("li");
+          li.appendChild(el("span","sevdot " + (e.severity==="error"?"err":"warn")));
+          li.appendChild(document.createTextNode(e.detail || e.kind || "무결성 신호"));
           if (e.ts) li.appendChild(el("span","when","  ("+new Date(e.ts).toLocaleString()+")"));
           ul.appendChild(li);
         });
@@ -1415,7 +1426,7 @@ class Dashboard {
         const p=el("button","secondary del","삭제"); p.title="영구 삭제 (대화 파일이 지워지며 되돌릴 수 없음)"; p.setAttribute("data-purge", c.id); acts.appendChild(p);
       } else {
         if (!c.linked){ const b=el("button",null,"연결"); b.setAttribute("data-relink", c.id); acts.appendChild(b); }
-        const x=el("button","secondary del","🗑"); x.title="목록에서 숨기기 (원본 파일은 보존 · 복원 가능)"; x.setAttribute("data-del", c.id); acts.appendChild(x);
+        const x=el("button","secondary del","숨김"); x.title="목록에서 숨기기 (원본 파일은 보존 · 복원 가능)"; x.setAttribute("data-del", c.id); acts.appendChild(x);
       }
       row.appendChild(acts);
       return row;

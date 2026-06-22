@@ -230,7 +230,20 @@ function tryInstallVsix(dryRun) {
   try { files = fs.readdirSync(__dirname); } catch { /* ignore */ }
   let version = "";
   try { version = (require(path.join(__dirname, "package.json")).version) || ""; } catch { /* ignore */ }
-  const vsix = pickVsix(files, version);
+  let vsix = pickVsix(files, version);
+  if (!vsix && !dryRun) {
+    // 신규 클론엔 vsix가 없다(*.vsix는 git 제외) → '한방 설치'가 되도록 직접 빌드(npm run package).
+    log("ℹ️  VSIX가 없어 빌드합니다 (npm run package)…");
+    let b;
+    try { b = cp.spawnSync("npm run package", { cwd: __dirname, shell: true, encoding: "utf8", timeout: 300000, stdio: "inherit" }); }
+    catch { b = null; }
+    if (!b || b.status !== 0) {
+      log("ℹ️  VSIX 빌드 실패 — 'npm install' 후 'npm run package'를 수동 실행하거나 확장을 수동 설치하세요.");
+      return;
+    }
+    try { files = fs.readdirSync(__dirname); } catch { /* ignore */ }
+    vsix = pickVsix(files, version);
+  }
   if (!vsix) { log("ℹ️  확장 VSIX(codex-bridge-*.vsix)를 못 찾음 — 확장은 수동 설치하세요(또는 마켓플레이스)."); return; }
   const vsixPath = path.join(__dirname, vsix);
   const codeCli = process.env.CODE_CLI || "code";
