@@ -17,7 +17,7 @@ const { spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent } = require("./contract-lib.js");
+const { loadContract, buildInjection, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, maybeCleanupState } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -533,6 +533,7 @@ function cmdAsk(rest) {
   const prompt = rest.filter((x) => x !== "--allow-new" && x !== "--force-new").join(" ").trim();
   if (!prompt) die('사용법: ask "<프롬프트>"', 2);
 
+  try { maybeCleanupState(); } catch { /* 오래된 상태파일 정리 best-effort(Stop 훅 미설치 환경 대비) — 하루 1회 */ }
   const links = loadLinks();
   const link = resolveLink(links);
   const ws = workspace(); // V9: 이 ask 전체가 '하나의 워크스페이스 스냅샷'을 공유(modelPref·가드·proof·codex계약 일관)

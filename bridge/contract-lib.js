@@ -14,6 +14,39 @@ const BRIDGE = path.join(BRIDGE_DIR, "codex-bridge.js");
 const BASE_DIRECTIVE_FILE = path.join(BRIDGE_DIR, "base-directive.json"); // 기본 지침 사용자 오버라이드(없으면 코드 기본값)
 const INTEGRITY_FILE = path.join(BRIDGE_DIR, "integrity.json"); // 무결성 신호 채널(브릿지/verify-guard 기록 → 확장이 상태바/대시보드로 가시화). BRIDGE_DIR 직하(확장 fs.watch 안정).
 const PHASE_FILE = path.join(BRIDGE_DIR, "phase.json"); // 검증 파이프라인 현재 단계(라이브 진행 표시). 훅/브릿지가 경계에서 기록 → 확장이 읽어 상태바·진행 스트립에 표시.
+const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs"); // 검증 증명(세션별). 시간 지나면 쌓이므로 TTL 정리 대상.
+const ATTEMPTS_DIR = path.join(BRIDGE_DIR, "verify-attempts"); // 한 턴 재검증 횟수(세션별, 단명). TTL 정리 대상.
+const CLEANUP_MARKER = path.join(BRIDGE_DIR, ".last-cleanup"); // 마지막 정리 시각(파일 mtime) — 하루 한 번 가드.
+const PROOF_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90일 — 검증 증명은 오래 보존(연결/재방문 가능성).
+const ATTEMPTS_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7일 — 재검증 카운터는 한 턴 단명이라 짧게.
+
+// 오래된 상태파일 정리. 보수적 TTL + 파일 수정시각(mtime) 기준 — 진행 중/최근 세션 파일은 mtime이 새거라
+// 절대 안 지워진다(연결·active 세션을 따로 대조할 필요 없음). now를 인자로 받아 테스트에서 결정적으로 동작.
+function cleanupOldState(now) {
+  let removed = 0;
+  const sweep = (dir, ttl) => {
+    let names;
+    try { names = fs.readdirSync(dir); } catch { return; } // 폴더 없음 = 정리할 것 없음
+    for (const n of names) {
+      if (!n.endsWith(".json")) continue; // 우리가 만든 상태파일만(.last-cleanup 등 비-json은 건드리지 않음)
+      const f = path.join(dir, n);
+      try { if (now - fs.statSync(f).mtimeMs > ttl) { fs.unlinkSync(f); removed++; } } catch { /* 잠김/사라짐 → 건너뜀 */ }
+    }
+  };
+  sweep(PROOFS_DIR, PROOF_TTL_MS);
+  sweep(ATTEMPTS_DIR, ATTEMPTS_TTL_MS);
+  return removed;
+}
+// 하루 한 번만 best-effort 정리(마커 파일 mtime으로 가드). 훅/브릿지가 매 턴 불러도 실제 청소는 하루 1회.
+function maybeCleanupState() {
+  try {
+    if (Date.now() - fs.statSync(CLEANUP_MARKER).mtimeMs < 24 * 60 * 60 * 1000) return 0; // 24h 안 지났으면 skip
+  } catch { /* 마커 없음 = 처음 → 진행 */ }
+  let removed = 0;
+  try { removed = cleanupOldState(Date.now()); } catch { /* 정리 실패가 훅/검증 흐름을 막지 않음 */ }
+  try { fs.mkdirSync(BRIDGE_DIR, { recursive: true }); fs.writeFileSync(CLEANUP_MARKER, new Date().toISOString(), "utf8"); } catch { /* ignore */ }
+  return removed;
+}
 
 // 원자적 저장: 임시파일에 쓴 뒤 rename으로만 교체. 읽는 쪽은 '옛 파일' 또는 '새 파일'만 보고 반쪽(손상)
 // 파일은 절대 못 본다(다중 창/프로세스 동시쓰기 대비). ⚠ 직접쓰기 폴백은 두지 않는다 — Windows에선 대상이
@@ -224,4 +257,4 @@ function buildVerifyDirective(mode) {
   ].join("\n");
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, PHASE_FILE, readPhase, writePhase };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, cleanupOldState, maybeCleanupState };

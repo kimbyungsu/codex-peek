@@ -57,7 +57,7 @@
     "clean:vsix": "node -e \"const fs=require('fs');fs.readdirSync('.').filter(f=>/^codex-bridge-.*\\.vsix$/.test(f)).forEach(f=>fs.unlinkSync(f))\"",
     "package": "npm run compile && npm run clean:vsix && vsce package --allow-missing-repository",
     "setup": "node install.js",
-    "test": "node tests/install.test.js && node tests/install-pick.test.js && node tests/verify-guard.test.js && node tests/withcontract.test.js && node tests/evidence.test.js && node tests/models.test.js && node tests/links-cas.test.js && node tests/verify-timeout.test.js"
+    "test": "node tests/install.test.js && node tests/install-pick.test.js && node tests/verify-guard.test.js && node tests/withcontract.test.js && node tests/evidence.test.js && node tests/models.test.js && node tests/links-cas.test.js && node tests/verify-timeout.test.js && node tests/cleanup.test.js"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
