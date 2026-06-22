@@ -1,6 +1,7 @@
 node_modules/
 out/
 *.vsix
+*.log
 
 # 런타임/개인 데이터 (절대 커밋 금지)
 bridge/links.json

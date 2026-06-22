@@ -1,5 +1,7 @@
 .vscode/**
 src/**
+**/*.log
+scripts/**
 node_modules/**
 tsconfig.json
 package-lock.json
@@ -12,3 +14,5 @@ tests/**
 install.js
 install.sh
 install.cmd
+docs/ROADMAP.md
+docs/*.svg
