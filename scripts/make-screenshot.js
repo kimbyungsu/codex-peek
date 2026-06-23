@@ -96,6 +96,18 @@ const body = `<main class="shell">
     </div>
   </section>
 
+  <details class="card baseline" open style="margin-top:10px">
+    <summary style="cursor:pointer;font-weight:600;font-size:13px">단계별 기본 원칙 <span class="fixedbadge">고정 기준 · 기본값 내장</span> <span class="muted" style="font-weight:400">· 검증 흐름 3단계의 기본값 (필요할 때만 편집)</span></summary>
+    <div class="hint" style="margin:8px 0 0 0">위 Claude·Codex 규칙(네가 쓰는 것)과 달리, 이건 검증이 제대로 굴러가게 하는 흐름 단계별 기본값임. 평소엔 손댈 필요 없고, 잘못 고쳐도 '기본값 복원'으로 되돌아감.</div>
+    <div class="chead" style="margin-top:12px">① 전달 원칙 <span class="muted" style="font-weight:400">→ Claude에게 · Claude가 Codex에 넘길 때 · 검증 ON일 때만</span></div>
+    <textarea rows="3">'여기만 봐라 / 이렇게 해라' 식 좁은 명령 금지. 내가 뭘 했고·왜 했고·어떤 근거를 봤고·어디가 불안한지를 주고, 내 결론은 '내 주장'으로 표시해 검증모델이 공격하게 하라.</textarea>
+    <div class="chead" style="margin-top:12px">② 검증 기본원칙 <span class="muted" style="font-weight:400">→ Codex에게 · Codex 검증 때마다</span></div>
+    <textarea rows="3">지정한 파일·범위는 시작점일 뿐 한계가 아니다. 필요하면 범위를 스스로 넓혀 반례를 찾으라. 통과/실패를 명확히 적고 근거는 파일·라인으로.</textarea>
+    <div class="chead" style="margin-top:12px">③ 재판단 원칙 <span class="muted" style="font-weight:400">→ Claude에게 · Codex 답을 되짚을 때 · 검증 ON일 때만</span></div>
+    <textarea rows="3">검증모델 답을 그대로 옮기지 마라. 항목별로 [수용/반박/보류] + 근거(파일·라인) + 사유. 짧은 '동의/이견없음'으로 뭉개지 말 것.</textarea>
+    <div class="row"><button>단계별 기본 원칙 저장</button><button class="secondary">기본값 복원</button></div>
+  </details>
+
   <h2 class="sec base">코덱스 두뇌 설정 <span class="sub2">이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)</span></h2>
   <div class="mcard">
     <div class="muted">지금 쓰는 값(최근 기록): <b>GPT-5.5 · 생각강도 높음</b></div>
@@ -136,11 +148,29 @@ const png = path.join(docs, "dashboard.png");
 const fileUrl = "file:///" + htmlFile.replace(/\\/g, "/");
 const r = spawnSync(EDGE, [
   "--headless=new", "--disable-gpu", "--hide-scrollbars",
-  "--force-device-scale-factor=3", "--window-size=980,2120",
+  "--force-device-scale-factor=3", "--window-size=980,3400",
   "--default-background-color=1f1f1fff",
   `--screenshot=${png}`, fileUrl,
 ], { encoding: "utf8", timeout: 60000 });
 if (r.error) throw r.error;
 try { fs.unlinkSync(htmlFile); } catch {}
 const ok = fs.existsSync(png) && fs.statSync(png).size > 0;
+
+// 5) 아래 배경색(#1f1f1f) 빈 행 자동 트림 — 창을 넉넉히(3400) 잡고 남는 여백을 잘라 정확한 높이로.
+//    이렇게 해야 섹션이 추가돼 길어져도 '하단 잘림'이나 '과한 여백' 없이 한 명령으로 끝난다(Windows/PowerShell).
+if (ok) {
+  const pf = png.replace(/\\/g, "/");
+  const ps = [
+    "Add-Type -AssemblyName System.Drawing",
+    `$f='${pf}'`,
+    "$b=New-Object System.Drawing.Bitmap $f; $W=$b.Width; $H=$b.Height; $bot=0",
+    "for($y=$H-1;$y -ge 0;$y-=2){$fnd=$false;for($x=0;$x -lt $W;$x+=20){$p=$b.GetPixel($x,$y);if([math]::Abs($p.R-31)-gt 14 -or [math]::Abs($p.G-31)-gt 14 -or [math]::Abs($p.B-31)-gt 14){$fnd=$true;break}};if($fnd){$bot=$y;break}}",
+    "$ch=[math]::Min($H,$bot+60); $c=New-Object System.Drawing.Bitmap $W,$ch; $g=[System.Drawing.Graphics]::FromImage($c)",
+    "$g.DrawImage($b,(New-Object System.Drawing.Rectangle 0,0,$W,$ch),(New-Object System.Drawing.Rectangle 0,0,$W,$ch),[System.Drawing.GraphicsUnit]::Pixel)",
+    "$b.Dispose(); $c.Save($f,[System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $c.Dispose(); Write-Output ('trim ' + $W + 'x' + $ch)",
+  ].join("; ");
+  const t = spawnSync("powershell", ["-NoProfile", "-Command", ps], { encoding: "utf8", timeout: 60000 });
+  if (t.stdout && t.stdout.trim()) console.log("  " + t.stdout.trim());
+  else if (t.stderr) console.log("  (트림 건너뜀: " + String(t.stderr).slice(0, 120) + ")");
+}
 console.log(ok ? `OK → ${png} (${Math.round(fs.statSync(png).size / 1024)}KB)` : "FAILED: PNG 생성 안 됨\n" + (r.stderr || ""));
