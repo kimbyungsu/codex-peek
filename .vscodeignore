@@ -18,6 +18,7 @@ docs/ROADMAP.md
 docs/*.svg
 docs/feat_*.png
 docs/_*.png
+docs/*.html
 .github/**
 SECURITY.md
 PRIVACY.md

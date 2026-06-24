@@ -96,6 +96,22 @@ function bumpAttempts(session, turnTs) {
   return a.count;
 }
 
+// 시스템이 transcript의 'user' 슬롯에 주입하는 '비-발화' 이벤트를 구조 표식으로 식별한다. 본문 텍스트 매칭(취약:
+// 사용자가 같은 문구를 붙여넣으면 오제외, 포맷이 바뀌면 누락)이 아니라 실측한 구조 필드로만 판정한다.
+//   - Stop 훅 차단 피드백      : isMeta === true
+//   - 대화 압축 요약(이어가기)  : isCompactSummary === true
+//   - 백그라운드 작업완료 알림  : origin.kind === "task-notification"  (진짜 사용자 발화엔 origin이 없다)
+// 이들이 '마지막 사람 발화'로 잡히면 그 시각이 proof보다 뒤가 돼 checkProof가 영영 false → 무한 차단 +
+// turnTs가 밀려 재검증 카운터까지 리셋되던 버그의 원인이었다. (ide_opened_file 등 구조 표식이 없는 주입은
+// 실측상 진짜 발화와 구조가 동일해 여기서 못 거른다 — 단 차단마다 누적되진 않아 무한 차단은 만들지 않는다.)
+function isInjectedUserEvent(o) {
+  if (!o || typeof o !== "object") return false;
+  if (o.isMeta === true) return true;
+  if (o.isCompactSummary === true) return true;
+  if (o.origin && o.origin.kind === "task-notification") return true;
+  return false;
+}
+
 let input = "";
 process.stdin.on("data", (d) => (input += d));
 process.stdin.on("end", () => {
@@ -142,7 +158,9 @@ process.stdin.on("end", () => {
       continue;
     }
     if (o.sessionId && !sessionIdFromTx) sessionIdFromTx = o.sessionId;
-    if (o.type === "user" && o.message) {
+    // 진짜 사람 발화만 '턴 경계'로 본다. 시스템 주입 이벤트(차단 피드백·작업완료 알림·압축 요약)는 구조 표식으로
+    // 제외한다(isInjectedUserEvent — 본문 텍스트가 아니라 구조 필드 기준이라 사용자가 같은 문구를 붙여넣어도 오제외 없음).
+    if (o.type === "user" && o.message && !isInjectedUserEvent(o)) {
       const ct = o.message.content;
       const isToolResult = Array.isArray(ct) && ct.some((x) => x && x.type === "tool_result");
       const isHuman = typeof ct === "string" || (Array.isArray(ct) && ct.some((x) => x && x.type === "text"));

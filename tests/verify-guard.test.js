@@ -466,5 +466,77 @@ if (GIT_OK) {
   clean(sb);
 })();
 
+// ── 버그수정 회귀: 시스템이 'user'로 주입하는 메타 이벤트(백그라운드 작업완료 알림·Stop훅 피드백)를
+//    '사람 발화'로 오인하면, proof보다 뒤 시각으로 들어와 checkProof가 영영 false → 무한 차단(turnTs까지 밀려 카운터 리셋)됐다.
+//    이제 lastUser 탐색에서 이것들을 구조 표식으로 제외한다(작업완료 알림=origin.kind, Stop훅 피드백=isMeta, 압축요약=isCompactSummary).
+// fixture는 실측 구조 표식을 그대로 반영(제외는 본문 텍스트가 아니라 구조 필드 기준): 작업알림=origin.kind, 피드백=isMeta, 요약=isCompactSummary.
+const taskNotif = (ts, sid) => ({ type: "user", sessionId: sid, timestamp: ts, origin: { kind: "task-notification" }, message: { content: [{ type: "text", text: "<task-notification> <task-id>abc</task-id> completed" }] } });
+const stopFeedback = (ts, sid) => ({ type: "user", isMeta: true, sessionId: sid, timestamp: ts, message: { content: [{ type: "text", text: "Stop hook feedback: [검증 모드:always · 1/3회] 이번 턴에 Codex 검증의 '성공 응답'이 없다." }] } });
+const compactSummary = (ts, sid) => ({ type: "user", isCompactSummary: true, sessionId: sid, timestamp: ts, message: { content: [{ type: "text", text: "This session is being continued from a previous conversation..." }] } });
+
+// 33) 신선 proof '뒤'에 시스템 주입 user 이벤트가 와도 → 통과(그 이벤트는 lastUser가 아님)
+(function () {
+  console.log("[33] 시스템 주입 user 이벤트는 '사람 발화'로 안 셈 (무한 차단 버그 회귀 방지)");
+  // 33a: proof 뒤 task-notification(메타 아님, origin.kind로 식별)
+  const a = setup("inj_notif", "always");
+  putTx(a, [human(T0, a.session), tool(TWRITE, a.session, "Write"), taskNotif(TLATE, a.session)]);
+  putProof(a, { ts: TFRESH }); // proof(T0~TWRITE 이후)는 알림(TLATE)보다 앞
+  ok(!blocked(runGuard(a)), "proof 뒤 task-notification은 lastUser가 아니라 통과");
+  clean(a);
+  // 33b: proof 뒤 Stop훅 피드백(isMeta)
+  const b = setup("inj_stop", "always");
+  putTx(b, [human(T0, b.session), tool(TWRITE, b.session, "Write"), stopFeedback(TLATE, b.session)]);
+  putProof(b, { ts: TFRESH });
+  ok(!blocked(runGuard(b)), "proof 뒤 Stop훅 피드백(isMeta)은 lastUser가 아니라 통과");
+  clean(b);
+  // 33c: 대조 — proof 뒤 '진짜 사람 발화'면 여전히 차단(과잉 제외가 아님)
+  const c = setup("inj_real", "always");
+  putTx(c, [human(T0, c.session), tool(TWRITE, c.session, "Write"), human(TLATE, c.session)]);
+  putProof(c, { ts: TFRESH }); // proof는 두 번째 사람 발화(TLATE)보다 앞
+  ok(blocked(runGuard(c)), "proof 뒤 진짜 사람 발화는 재검증 필요 → 차단(정상)");
+  clean(c);
+  // 33d: 사용자가 'Stop hook feedback…' 텍스트를 직접 붙여넣음(메타 아님) → 진짜 발화로 차단(오제외 방지).
+  //      Stop훅 피드백 제외는 본문 매칭이 아니라 isMeta로만 하므로, 같은 문구의 '사람 발화'는 살아있어야 한다.
+  const d = setup("inj_paste", "always");
+  putTx(d, [human(T0, d.session), tool(TWRITE, d.session, "Write"),
+    { type: "user", sessionId: d.session, timestamp: TLATE, message: { content: [{ type: "text", text: "Stop hook feedback: 이거 왜 떠? 설명해줘" }] } }]);
+  putProof(d, { ts: TFRESH });
+  ok(blocked(runGuard(d)), "사용자가 붙여넣은 'Stop hook feedback…'(메타 아님)은 진짜 발화 → 차단(오제외 방지)");
+  clean(d);
+  // 33e: 사용자가 '<task-notification>…' 텍스트를 직접 붙여넣음(origin 없음) → 진짜 발화로 차단.
+  //      작업알림 제외는 본문이 아니라 구조 필드 origin.kind 기준이므로, 같은 문구의 '사람 발화'는 살아있어야 한다.
+  const e = setup("inj_paste2", "always");
+  putTx(e, [human(T0, e.session), tool(TWRITE, e.session, "Write"),
+    { type: "user", sessionId: e.session, timestamp: TLATE, message: { content: [{ type: "text", text: "<task-notification> 이거 뭔지 설명해줘" }] } }]);
+  putProof(e, { ts: TFRESH });
+  ok(blocked(runGuard(e)), "사용자가 붙여넣은 '<task-notification>…'(origin 없음)은 진짜 발화 → 차단(구조 판정)");
+  clean(e);
+  // 33f: proof 뒤 대화 압축 요약(isCompactSummary)도 lastUser가 아님 → 통과
+  const f = setup("inj_compact", "always");
+  putTx(f, [human(T0, f.session), tool(TWRITE, f.session, "Write"), compactSummary(TLATE, f.session)]);
+  putProof(f, { ts: TFRESH });
+  ok(!blocked(runGuard(f)), "proof 뒤 압축 요약(isCompactSummary)은 lastUser가 아니라 통과");
+  clean(f);
+})();
+
+// 34) 무한 차단 시나리오 직접 재현: 진짜 사람 발화 후 변경·신선 proof가 있는데,
+//     그 뒤로 Stop훅 피드백이 '여러 번' 쌓여도(=옛 버그의 누적) 매번 통과해야 한다.
+(function () {
+  console.log("[34] Stop훅 피드백이 누적돼도 신선 proof면 매번 통과 (옛 무한루프 재현 방지)");
+  const sb = setup("inj_loop", "always");
+  const entries = [human(T0, sb.session), tool(TWRITE, sb.session, "Write")];
+  putProof(sb, { ts: TFRESH });
+  // 피드백을 점점 더 늦은 시각으로 누적(옛 코드라면 매번 lastUser가 밀려 영영 차단)
+  const feeds = ["2026-06-21T10:00:06.000Z", "2026-06-21T10:00:07.000Z", "2026-06-21T10:00:08.000Z"];
+  let allPass = true;
+  for (const ft of feeds) {
+    entries.push(stopFeedback(ft, sb.session));
+    putTx(sb, entries);
+    if (blocked(runGuard(sb, { stop_hook_active: true }))) allPass = false;
+  }
+  ok(allPass, "피드백 3회 누적돼도 신선 proof로 매번 통과(무한루프 안 생김)");
+  clean(sb);
+})();
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

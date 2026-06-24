@@ -1,6 +1,6 @@
 // install.js의 pickVsix / buildInstallCmd 회귀 테스트.
 // 자동설치가 빗나간 두 버그(잘못된 vsix 선택 / bare code 따옴표)를 고정한다.
-const { pickVsix, buildInstallCmd } = require("../install.js");
+const { pickVsix, currentVsix, buildInstallCmd } = require("../install.js");
 
 let pass = 0, fail = 0;
 const ck = (n, c) => { (c ? pass++ : fail++); console.log((c ? "  ✅ " : "  ❌ ") + n); };
@@ -18,6 +18,13 @@ ck("bare 'code'는 따옴표 안 씌움(Windows PATHEXT 9009 방지)", buildInst
 ck("vsix 경로는 공백 있어도 항상 따옴표", /--install-extension "C:\/path with space\/x\.vsix" --force$/.test(buildInstallCmd("code", "C:/path with space/x.vsix")));
 ck("절대경로 code(공백 포함)는 따옴표", buildInstallCmd("C:/Program Files/x/code.cmd", "C:/x.vsix") === '"C:/Program Files/x/code.cmd" --install-extension "C:/x.vsix" --force');
 ck("백슬래시 경로도 슬래시로 통일(셸 안전)", buildInstallCmd("code", "C:\\a\\x.vsix") === 'code --install-extension "C:/a/x.vsix" --force');
+
+console.log("[3] currentVsix — 현재 버전과 정확히 일치하는 vsix만 인정(옛 vsix 설치 사고 방지)");
+ck("옛 vsix만 있고 현재 버전 없으면 null(→빌드 유도)", currentVsix(["codex-bridge-0.1.20.vsix"], "0.1.28") === null);
+ck("현재 버전 vsix 있으면 그걸 반환", currentVsix(["codex-bridge-0.1.28.vsix"], "0.1.28") === "codex-bridge-0.1.28.vsix");
+ck("옛것+현재것 섞여도 현재 버전 반환", currentVsix(["codex-bridge-0.1.20.vsix", "codex-bridge-0.1.28.vsix"], "0.1.28") === "codex-bridge-0.1.28.vsix");
+ck("vsix 전무면 null", currentVsix([], "0.1.28") === null);
+ck("version 비면 폴백 유지(하위호환, 최신 반환)", currentVsix(["codex-bridge-0.1.20.vsix"], "") === "codex-bridge-0.1.20.vsix");
 
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
 process.exit(fail ? 1 : 0);

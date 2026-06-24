@@ -218,6 +218,17 @@ function pickVsix(files, preferVersion) {
     return a < b ? -1 : a > b ? 1 : 0; // 동률이면 이름순(안정)
   }).pop();
 }
+// 설치용: '현재 package.json 버전과 정확히 일치하는 vsix'만 인정한다(순수함수 = 테스트 가능).
+//  - pickVsix는 정확 일치가 없으면 '남은 것 중 최신'으로 폴백한다. 그걸 설치에 그대로 쓰면, 버전을 올린 뒤
+//    옛 vsix만 남았을 때 '옛 버전을 설치'하는 사고가 난다(실제 발생). 그래서 설치 직전엔 현재 버전 vsix가
+//    준비됐는지를 따로 본다. 없으면(신규 클론=vsix 전무 / 옛 vsix만 잔존) 빌드해야 한다.
+//  - version이 비면(메타 못 읽음) 폴백 동작 유지(pickVsix 결과 그대로) — 하위호환.
+function currentVsix(files, version) {
+  const picked = pickVsix(files, version);
+  if (!picked) return null;
+  if (version && picked !== `codex-bridge-${version}.vsix`) return null;
+  return picked;
+}
 // code 설치 명령 문자열 조립(순수함수). ⚠ bare 명령(code)을 따옴표로 감싸면 Windows cmd에서 PATHEXT(.cmd)
 // 해석이 깨져 9009로 실패한다(재현 확인). 그래서 경로/공백 있는 실행파일만 따옴표, bare 이름은 그대로.
 // vsix 경로는 공백 있어도 되게 항상 따옴표.
@@ -230,10 +241,14 @@ function tryInstallVsix(dryRun) {
   try { files = fs.readdirSync(__dirname); } catch { /* ignore */ }
   let version = "";
   try { version = (require(path.join(__dirname, "package.json")).version) || ""; } catch { /* ignore */ }
-  let vsix = pickVsix(files, version);
+  let vsix = currentVsix(files, version);
   if (!vsix && !dryRun) {
-    // 신규 클론엔 vsix가 없다(*.vsix는 git 제외) → '한방 설치'가 되도록 직접 빌드(npm run package).
-    log("ℹ️  VSIX가 없어 빌드합니다 (npm run package)…");
+    // 신규 클론엔 vsix가 없고(*.vsix는 git 제외), 버전을 올린 뒤엔 옛 vsix만 남을 수 있다. 둘 다 '현재 버전
+    // vsix 없음' → 직접 빌드(npm run package; clean:vsix가 옛 vsix도 지움)해 옛 버전을 설치하는 사고를 막는다.
+    const stale = pickVsix(files, version);
+    log(stale
+      ? `ℹ️  남은 VSIX(${stale})가 현재 버전(${version})과 달라 새로 빌드합니다 (npm run package)…`
+      : "ℹ️  VSIX가 없어 빌드합니다 (npm run package)…");
     let b;
     try { b = cp.spawnSync("npm run package", { cwd: __dirname, shell: true, encoding: "utf8", timeout: 300000, stdio: "inherit" }); }
     catch { b = null; }
@@ -242,9 +257,17 @@ function tryInstallVsix(dryRun) {
       return;
     }
     try { files = fs.readdirSync(__dirname); } catch { /* ignore */ }
-    vsix = pickVsix(files, version);
+    vsix = currentVsix(files, version);
   }
-  if (!vsix) { log("ℹ️  확장 VSIX(codex-bridge-*.vsix)를 못 찾음 — 확장은 수동 설치하세요(또는 마켓플레이스)."); return; }
+  if (!vsix) {
+    // dryRun이라 빌드를 안 했는데 옛 vsix만 있는 경우: 실제 설치 땐 빌드됨을 안내(옛 걸 설치하는 것처럼 보이지 않게).
+    if (dryRun) {
+      const stale = pickVsix(files, version);
+      if (stale) { log(`ℹ️  (미리보기) 현재 버전(${version}) VSIX가 없어 실제 설치 땐 빌드 후 설치됩니다 (지금 남은 건 ${stale}).`); return; }
+    }
+    log("ℹ️  확장 VSIX(codex-bridge-*.vsix)를 못 찾음 — 확장은 수동 설치하세요(또는 마켓플레이스).");
+    return;
+  }
   const vsixPath = path.join(__dirname, vsix);
   const codeCli = process.env.CODE_CLI || "code";
   const cmd = buildInstallCmd(codeCli, vsixPath);
@@ -389,4 +412,4 @@ if (require.main === module) {
   else cmdInstall(has("--dry-run") || has("-n"));
 }
 
-module.exports = { pickVsix, buildInstallCmd };
+module.exports = { pickVsix, currentVsix, buildInstallCmd };
