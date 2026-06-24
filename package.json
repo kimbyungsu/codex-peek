@@ -2,7 +2,7 @@
   "name": "codex-bridge",
   "displayName": "Codex Bridge",
   "description": "Claude↔Codex 브릿지 연결 상태를 상태바·호버·대시보드로 보여줍니다. 연결된 Codex 세션의 최근 대화 확인과 다른 세션으로 갈아끼우기를 지원합니다. (~/.codex-bridge/links.json 기반, 읽기/연결변경)",
-  "version": "0.1.20",
+  "version": "0.1.28",
   "publisher": "local",
   "license": "MIT",
   "repository": {
@@ -57,7 +57,7 @@
     "clean:vsix": "node -e \"const fs=require('fs');fs.readdirSync('.').filter(f=>/^codex-bridge-.*\\.vsix$/.test(f)).forEach(f=>fs.unlinkSync(f))\"",
     "package": "npm run compile && npm run clean:vsix && vsce package --allow-missing-repository",
     "setup": "node install.js",
-    "test": "node tests/install.test.js && node tests/install-pick.test.js && node tests/verify-guard.test.js && node tests/withcontract.test.js && node tests/evidence.test.js && node tests/models.test.js && node tests/links-cas.test.js && node tests/verify-timeout.test.js && node tests/cleanup.test.js && node tests/evidence-unseen.test.js"
+    "test": "node tests/install.test.js && node tests/install-pick.test.js && node tests/verify-guard.test.js && node tests/withcontract.test.js && node tests/evidence.test.js && node tests/models.test.js && node tests/links-cas.test.js && node tests/verify-timeout.test.js && node tests/cleanup.test.js && node tests/evidence-unseen.test.js && node tests/verdict.test.js && node tests/verdict-supersede.test.js && node tests/base-directive.test.js && node tests/format-for-claude.test.js"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

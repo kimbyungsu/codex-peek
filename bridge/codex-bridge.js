@@ -17,7 +17,7 @@ const { spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, maybeCleanupState } = require("./contract-lib.js");
+const { loadContract, buildInjection, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -217,6 +217,29 @@ function flagEvidence(answer, ws, sessionId) {
         detail: `검증 답이 인용한 파일 ${unseen.length}개를 이 검증 기록에서 다룬 흔적을 확인하지 못했습니다(이전 턴에서 봤거나 기록 형식 차이일 수 있음 — '안 읽음' 단정 아님): ${unseen.slice(0, 3).join(" / ")}`,
       });
     }
+  } catch { /* best-effort — 점검 실패가 검증 흐름을 막지 않음 */ }
+}
+// 비-깨끗한 결론을 사용자에게 '가시화'(노랑). 자동 차단 안 함(설계 경계 결론: 품질은 강제 말고 가시화).
+// 핵심: verdict는 '최신 상태'다. 새 검증 결과가 나오면 같은 세션의 직전 verdict-nonclean을 먼저 대체(supersede)한다 →
+// 실패→수정→재검증 통과로 해소되면 노랑도 사라진다(반복 검증이 무조건 노랑을 남기는 cry-wolf 방지). 그 뒤 실패/보류일 때만 새로 띄움.
+// '통과'·'통과(보완)'·결론 미상(null)은 새 노랑을 만들지 않는다(굿하트 '통과 도장' 안 만들기). answer=마지막 메시지(-o).
+function flagVerdict(answer, ws) {
+  try {
+    const v = extractVerdict(answer);
+    if (!v) return; // 결론 표지 못 찾음 → 상태 불명, 직전 신호도 함부로 안 건드림
+    const session = claudeId() || ((readActive() || {}).claudeSession) || "";
+    supersedeIntegrity(session, "verdict-nonclean"); // 새 결과가 직전 비-깨끗 신호를 대체(통과면 그대로 해소)
+    if (v !== "fail" && v !== "inconclusive") return; // 통과·통과(보완) → 새 노랑 없음(직전 것은 이미 supersede로 정리)
+    appendIntegrityEvent({
+      ts: nowIso(),
+      session,
+      workspace: ws,
+      kind: "verdict-nonclean",
+      severity: "warning", // 노랑 — '검증 미완(빨강)'이 아니라 'Codex 결론이 깨끗한 통과가 아님'
+      detail: v === "fail"
+        ? "Codex 결론이 '검증 실패'입니다 — 통과가 아닙니다. 대시보드 대화에서 결론과 근거를 확인하세요."
+        : "Codex 결론이 '통과'가 아닙니다(보류·불가·정보 부족 등 — 결론을 못 냄). 대시보드 대화에서 결론을 확인하세요.",
+    });
   } catch { /* best-effort — 점검 실패가 검증 흐름을 막지 않음 */ }
 }
 // 지금 Claude 대화가 '실제로' 도는 폴더 — contract-inject 훅이 매 턴 active.json에 기록. 엉뚱 폴더 방어용.
@@ -611,7 +634,8 @@ function cmdAsk(rest) {
     try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
     writeProof(link.codexSession, answer, ws); // 실제 성공 → 검증 증명 기록(verify-guard가 인정)
     flagEvidence(answer, ws, link.codexSession); // 결정2: 인용 근거 존재성 + 이 세션에서 다룬 흔적 점검 → 불일치/미확인이면 노랑
-    process.stdout.write(`# 연결 세션 ${link.codexSession} (${link.via})\n\n${answer}\n`);
+    flagVerdict(answer, ws); // 비-깨끗한 결론(실패/불가/보류)이면 노랑 가시화(자동 차단 X)
+    process.stdout.write(`# 연결 세션 ${link.codexSession} (${link.via})\n\n${formatForClaude(answer)}\n`);
     return;
   }
 
@@ -685,17 +709,19 @@ function cmdAsk(rest) {
     const ok = recordLink(m[1]); // CAS 저장 + autoNewFailed[wsKey] 해제 포함
     writeProof(m[1], answer, ws); // 실제 성공 → 검증 증명 기록
     flagEvidence(answer, ws, m[1]); // 결정2: 인용 근거 존재성 + 이 세션에서 다룬 흔적 점검
+    flagVerdict(answer, ws); // 비-깨끗한 결론(실패/불가/보류)이면 노랑 가시화(자동 차단 X)
     // 머리말도 실패를 반영 — stdout만 보는 호출자가 성공으로 오해하지 않게(stderr 경고와 함께).
     const head = ok
       ? `# 새 Codex 세션 생성·연결: ${m[1]}`
       : `# 새 Codex 세션 생성됨(${m[1]}) — ⚠️ 연결 기록 저장 실패(권한/잠금?), 'node codex-bridge.js link ${m[1]}'로 다시 연결하세요`;
-    process.stdout.write(`${head}\n\n${answer}\n`);
+    process.stdout.write(`${head}\n\n${formatForClaude(answer)}\n`);
     if (!ok) process.stderr.write(`⚠️ 연결 기록 저장 실패(권한/잠금?) — 세션 ${m[1]}은 생성됨. 'node codex-bridge.js link ${m[1]}'로 다시 연결하세요.\n`);
   } else {
     updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; }); // 다음 자동 생성 차단 플래그
     writeProof("", answer, ws); // Codex는 성공 응답함(세션id만 미식별) → 검증은 인정
     flagEvidence(answer, ws, ""); // 세션id 미식별 → 존재성 점검만(다룬-흔적 점검은 rollout 못 찾아 자동 보류)
-    process.stdout.write(`# 새 세션 생성됨(세션id 식별 실패) — 폭증 방지로 다음 자동 생성은 멈춥니다. 'find'로 찾아 'link <id>' 하세요.\n\n${answer}\n`);
+    flagVerdict(answer, ws); // 비-깨끗한 결론(실패/불가/보류)이면 노랑 가시화(자동 차단 X)
+    process.stdout.write(`# 새 세션 생성됨(세션id 식별 실패) — 폭증 방지로 다음 자동 생성은 멈춥니다. 'find'로 찾아 'link <id>' 하세요.\n\n${formatForClaude(answer)}\n`);
   }
 }
 
@@ -897,4 +923,4 @@ function main() {
 }
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
-module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, updateLinks, loadLinks, saveLinks, LINKS_FILE, verifyTimeoutMin, citedResolvedBasenames, citedFilesUnseen };
+module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, updateLinks, loadLinks, saveLinks, LINKS_FILE, verifyTimeoutMin, citedResolvedBasenames, citedFilesUnseen };

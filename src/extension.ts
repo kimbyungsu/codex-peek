@@ -49,6 +49,7 @@ const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/
 interface Turn {
   user: string | null;
   assistant: string[];
+  verdict?: "pass" | "pass-notes" | "fail" | "inconclusive" | null; // 호스트에서 extractVerdict로 계산(대시보드 표시용)
 }
 interface Candidate {
   id: string;
@@ -340,6 +341,24 @@ function readModelsCache(): AvailModel[] {
   }
 }
 
+// Codex 답에서 '결론(verdict)'을 보수적으로 분류 — bridge/contract-lib.js의 동명 함수와 로직이 반드시 동일해야 한다(한쪽만 고치지 말 것).
+// '첫 줄'이 아니라 '검증'이 든 줄을 모두 훑어 마지막 결론 줄로 판정한다 — codex exec 한 턴은 작업 narration이
+// 앞에 깔리고 진짜 결론은 마지막 메시지에 오므로, 첫 줄만 보면 거의 빗나간다(그린불 오작동의 근본 원인).
+// 반환(4단계): pass(깨끗한 통과) | pass-notes(통과지만 보완·정정·추가의견 있음) | inconclusive(보류·불가·정보부족=통과 못 함) | fail | null.
+function extractVerdict(text: string): "pass" | "pass-notes" | "fail" | "inconclusive" | null {
+  if (!text) return null;
+  let v: "pass" | "pass-notes" | "fail" | "inconclusive" | null = null;
+  for (const ln of String(text).split(/\r?\n/)) {
+    // '결론 선언 줄'만: '검증'으로 시작 + (콜론이거나 곧바로 결론어). 콜론형("검증: …")은 무조건 선언(정보부족·판단보류 포괄).
+    // 서두("검증 요청으로…")·본문("…이 검증에서 실패…","(검증 아님)")은 배제. 우선순위: 실패>보류·불가>통과+보완>통과.
+    if (!/^[\s#>*\-]*검증\s*(?:[:：]|통과|실패|불가|보류|판단|조건부|보완|정보)/.test(ln)) continue;
+    if (/실패/.test(ln)) v = "fail";
+    else if (/불가|보류|정보\s*부족/.test(ln)) v = "inconclusive";
+    else if (/통과/.test(ln) && /보완|조건부|정정|추가|미세|단서/.test(ln)) v = "pass-notes";
+    else if (/통과/.test(ln)) v = "pass";
+  }
+  return v;
+}
 function toTurns(msgs: Array<{ role: string; text: string }>): Turn[] {
   const turns: Turn[] = [];
   let cur: Turn | null = null;
@@ -355,6 +374,7 @@ function toTurns(msgs: Array<{ role: string; text: string }>): Turn[] {
       cur.assistant.push(m.text);
     }
   }
+  for (const t of turns) t.verdict = extractVerdict(t.assistant.join("\n\n")); // 첫 줄 추측 아닌 '마지막 결론'으로 판정
   return turns;
 }
 
@@ -746,6 +766,19 @@ class Dashboard {
           this.post();
           this.panel?.webview.postMessage({ type: "saveResult", target: "base", ok });
         }
+        if (m?.type === "baseEditWarn") {
+          // 편집 시작(필드 첫 포커스) 시점 informed-consent 경고. 필드별 다른 메시지(합의된 설계):
+          //  - verifyBaseline(검증 기본원칙) → Codex 검증 '꼼꼼함' + 결과 표시 둘 다 정함('표시만 영향' 아님)
+          //  - transmit/rejudge(전달/재판단) → Claude의 검증 흐름
+          // webview는 포커스를 안 건드림(blur/refocus 없음) → 편집/저장 흐름 보존. 숨겨 강제주입 대신 공개·동의.
+          const isVerify = m.field === "verify";
+          const msg = isVerify
+            ? "'검증 기본원칙'은 Codex가 어떻게 검증할지(파일을 직접 열고·빠뜨리지 말고·범위를 넓혀 보라)와 결론을 쓰는 형식을 함께 정합니다.\n\n줄이거나 바꾸면 Codex 검증이 느슨해질 수 있고, 대시보드의 'Codex 검증 대화' 영역에 뜨는 통과/보완/보류/실패 색 표시와 결론·근거 경고가 동작하지 않을 수 있어요.\n\n그래도 변경하시겠습니까?"
+            : "이 원칙은 Claude가 검증을 주고받고(전달) 결과를 다시 판단하는(재판단) 흐름에 직접 관여합니다.\n\n줄이거나 바꾸면 검증의 완전한 동작을 보장하지 못할 수 있어요.\n\n그래도 변경하시겠습니까?";
+          vscode.window.showWarningMessage(msg, { modal: true }, "변경").then((pick) => {
+            this.panel?.webview.postMessage({ type: "baseEditWarnResult", field: m.field, ok: pick === "변경" });
+          });
+        }
         if (m?.type === "resetBase") {
           let ok = false;
           try {
@@ -932,13 +965,18 @@ class Dashboard {
   /* 검증 대화: 사용자=오른쪽 말풍선 / Codex=왼쪽 전폭 카드 */
   .turn{margin-bottom:14px}
   .umsg{margin:0 0 7px auto;max-width:82%;width:fit-content;background:var(--vscode-charts-blue);color:#fff;padding:7px 12px;border-radius:13px 13px 4px 13px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
-  .vmsg{border:1px solid var(--vscode-panel-border);border-left:3px solid var(--vscode-charts-green);border-radius:4px 13px 13px 13px;padding:9px 13px;background:var(--vscode-sideBar-background)}
+  .vmsg{border:1px solid var(--vscode-panel-border);border-left:3px solid var(--vscode-panel-border);border-radius:4px 13px 13px 13px;padding:9px 13px;background:var(--vscode-sideBar-background)}
+  .vmsg.pass{border-left-color:var(--vscode-charts-green)}
+  .vmsg.notes{border-left-color:var(--vscode-charts-yellow)}
   .vmsg.fail{border-left-color:var(--vscode-charts-red)}
+  .vmsg.inconc{border-left-color:var(--vscode-charts-orange)}
   .vhead{display:flex;align-items:center;gap:8px;margin-bottom:5px}
-  .vname{font-size:11px;font-weight:600;color:var(--vscode-charts-green)}
+  .vname{font-size:11px;font-weight:600;color:var(--vscode-descriptionForeground)}
   .vchip{font-size:11px;font-weight:700;padding:1px 9px;border-radius:999px;border:1px solid currentColor}
   .vchip.pass{color:var(--vscode-charts-green)}
+  .vchip.notes{color:var(--vscode-charts-yellow)}
   .vchip.fail{color:var(--vscode-charts-red)}
+  .vchip.inconc{color:var(--vscode-charts-orange)}
   .vbody{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.55}
   .vbody.clip{max-height:170px;overflow:hidden;-webkit-mask-image:linear-gradient(180deg,#000 72%,transparent)}
   .more{margin-top:7px;font-size:11px;color:var(--vscode-textLink-foreground);background:none;border:0;padding:0;cursor:pointer}
@@ -1073,7 +1111,7 @@ class Dashboard {
     <div class="dirtyhint" id="dirtyHint" style="display:none">● 토글을 바꿨어요 — <b>저장</b>해야 실제로 적용됩니다</div>
   </section>
 
-  <details class="card baseline" style="margin-top:10px">
+  <details class="card baseline" id="baseDetails" style="margin-top:10px">
     <summary style="cursor:pointer;font-weight:600;font-size:13px">단계별 기본 원칙 <span class="fixedbadge">고정 기준 · 기본값 내장</span> <span class="muted" style="font-weight:400">· 검증 흐름 3단계의 기본값 (필요할 때만 편집)</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
     <div class="hint" style="margin:8px 0 0 0">위 <b>Claude·Codex 규칙</b>(네가 쓰는 것)과 달리, 이건 검증이 제대로 굴러가게 하는 <b>흐름 단계별 기본값</b>입니다. 평소엔 손댈 필요 없고, 잘못 고쳐도 <b>기본값 복원</b>으로 되돌아갑니다.</div>
     <div class="chead" style="margin-top:12px">① 전달 원칙 <span class="muted" style="font-weight:400">→ Claude에게 · Claude가 Codex에 넘길 때 · 검증 ON일 때만</span></div>
@@ -1227,11 +1265,36 @@ class Dashboard {
     vscode.postMessage({type:"saveBase", verifyBaseline:$("bVerify").value, transmit:$("bTransmit").value, rejudge:$("bRejudge").value});
   });
   $("resetB").addEventListener("click", () => { pendingSave = {target:"base", msg:"기본값으로 복원됨 ✓"}; vscode.postMessage({type:"resetBase"}); });
+  // 기본 원칙 편집 '시작'(필드 첫 포커스) 시점 경고 — 필드별 다른 메시지(전달/재판단 vs 검증 기본원칙).
+  // ⚠️ textarea 포커스는 절대 안 건드린다: blur()/재focus() 없음. 모달(modal:true)이 편집을 막고 포커스는 자연스럽게 유지되므로,
+  // render의 '포커스 중이면 저장값으로 안 덮어씀' 가드(아래)와 충돌하지 않는다 → 편집/저장 보존(0.1.23 blur 버그의 교훈).
+  var baseWarned = {}, baseWarnPending = false, baseDirty = {}, contractDirty = {};
+  [["bTransmit","transmit"],["bVerify","verify"],["bRejudge","rejudge"]].forEach(function(pr){
+    var elx = $(pr[0]); if(!elx) return;
+    // 편집 시작 = dirty → 저장 전까지 render가 이 칸을 저장값으로 덮지 않는다(포커스가 잠깐 빠져도 편집 보존). 저장 성공 시 해제.
+    elx.addEventListener("input", function(){ baseDirty[pr[1]] = true; });
+    elx.addEventListener("focus", function(){
+      if(baseWarned[pr[1]] || baseWarnPending) return;
+      baseWarnPending = true; // blur 안 함 — 포커스 유지
+      vscode.postMessage({type:"baseEditWarn", field:pr[1]});
+    });
+  });
+  [["cClaude","claude"],["cCodex","codex"]].forEach(function(pr){ // 계약 카드도 같은 race → 동일 보호
+    var elx = $(pr[0]); if(!elx) return;
+    elx.addEventListener("input", function(){ contractDirty[pr[1]] = true; });
+  });
   window.addEventListener("message", (ev) => {
+    if (ev.data?.type === "baseEditWarnResult") {
+      baseWarnPending = false;
+      if (ev.data.ok) baseWarned[ev.data.field] = true; // 승인 → 그 필드 재경고 안 함. 포커스/편집값 안 건드림
+      return; // 취소면 baseWarned 안 세팅(다음 포커스에 재경고). 포커스/편집값 안 건드림
+    }
     if (ev.data?.type === "saveResult") {
       // 저장 성공 피드백은 '확장이 실제 저장에 성공했다고 알려줄 때'만 — 클릭 즉시가 아니라(거짓 성공 방지).
       const ps = pendingSave; pendingSave = null;
       if (!ev.data.ok) return; // 실패: 네이티브 에러 토스트가 알린다. 성공 플래시·스크롤은 하지 않음.
+      if (ev.data.target === "base") baseDirty = {}; // 저장 성공 → dirty 해제(저장값=표시값이 됐으니 render 동기화 재개)
+      else if (ev.data.target === "contract") contractDirty = {};
       if (ev.data.target === "model") flashSaved($("savedModel"), "저장됨 ✓ (다음 코덱스 응답부터 적용)");
       else if (ev.data.target === "timeout") flashSaved($("savedVT"), "저장됨 ✓ (다음 검증부터 적용)");
       else if (ev.data.target === "base") flashSaved($("savedB"), ps && ps.msg);
@@ -1252,8 +1315,8 @@ class Dashboard {
     const d = ev.data.data;
     curPerm = d.permissionMode || "";   // renderApplied의 plan 게이트 표시에 사용
     if (d.contract){
-      if (document.activeElement !== $("cClaude")) $("cClaude").value = (d.contract.claude||[]).join("\\n");
-      if (document.activeElement !== $("cCodex")) $("cCodex").value = (d.contract.codex||[]).join("\\n");
+      if (document.activeElement !== $("cClaude") && !contractDirty.claude) $("cClaude").value = (d.contract.claude||[]).join("\\n");
+      if (document.activeElement !== $("cCodex") && !contractDirty.codex) $("cCodex").value = (d.contract.codex||[]).join("\\n");
       $("ckClaude").checked = d.contract.claudeChecklist !== false;
       $("ckCodex").checked = d.contract.codexChecklist !== false;
       const first = (appVM===null);
@@ -1306,9 +1369,9 @@ class Dashboard {
       }
     })();
     if (d.baseDirective){
-      if (document.activeElement !== $("bVerify")) $("bVerify").value = d.baseDirective.verifyBaseline||"";
-      if (document.activeElement !== $("bTransmit")) $("bTransmit").value = d.baseDirective.transmit||"";
-      if (document.activeElement !== $("bRejudge")) $("bRejudge").value = d.baseDirective.rejudge||"";
+      if (document.activeElement !== $("bVerify") && !baseDirty.verify) $("bVerify").value = d.baseDirective.verifyBaseline||"";
+      if (document.activeElement !== $("bTransmit") && !baseDirty.transmit) $("bTransmit").value = d.baseDirective.transmit||"";
+      if (document.activeElement !== $("bRejudge") && !baseDirty.rejudge) $("bRejudge").value = d.baseDirective.rejudge||"";
       const ov=$("baseOv"); if(ov) ov.textContent = d.baseDirective.overridden ? "· (수정됨)" : "· (기본값)";
     }
     // 런타임 라이브러리 없으면 저장/복원이 무효 → 거짓 성공 방지: 버튼 비활성 + 경고(점2 수정).
@@ -1343,12 +1406,18 @@ class Dashboard {
       if (!iev.length) { ib.style.display="none"; ib.replaceChildren(); ib.className="integrity"; }
       else {
         const nerr = iev.filter(function(e){return e.severity==="error";}).length;
-        const nwarn = iev.length - nerr;
+        const warnEvs = iev.filter(function(e){return e.severity==="warning";});
+        const nVerdict = warnEvs.filter(function(e){return e.kind==="verdict-nonclean";}).length;
+        const nEvid = warnEvs.length - nVerdict; // 근거(evidence-*) 계열
+        const warnParts = [];
+        if (nVerdict) warnParts.push("Codex 결론 주의 " + nVerdict + "건"); // 통과 아님(실패/불가/보류)
+        if (nEvid) warnParts.push("근거 의심 " + nEvid + "건"); // 인용 근거가 파일/라인과 안 맞음
+        const warnStr = warnParts.join(" · ");
         ib.replaceChildren();
-        ib.className = "integrity" + (nerr ? " err" : " warn"); // 빨강(미완) 있으면 빨강 테두리, 아니면 노랑(의심)
+        ib.className = "integrity" + (nerr ? " err" : " warn"); // 빨강(미완) 있으면 빨강 테두리, 아니면 노랑
         const ih = el("div","ih");
-        const head = nerr ? ("검증 무결성 경보 — 검증 미완 " + nerr + "건" + (nwarn ? " · 근거 의심 " + nwarn + "건" : ""))
-                          : ("검증 근거 의심 — " + nwarn + "건 (검증 답의 근거가 실제 파일/라인과 안 맞음)");
+        const head = nerr ? ("검증 무결성 경보 — 검증 미완 " + nerr + "건" + (warnStr ? " · " + warnStr : ""))
+                          : ("검증 무결성 경보 — " + warnStr);
         ih.appendChild(el("span", null, head));
         const ack = el("button","secondary","확인함 ✓");
         ack.addEventListener("click", function(){ vscode.postMessage({type:"ackIntegrity", ids: iev.map(function(e){return e.id;})}); }); // 보이는(이 창) 경보만 확인 — 다른 창 것 안 지움
@@ -1393,13 +1462,14 @@ class Dashboard {
         let body=null, more=null;
         if (t.assistant.length){
           const txt = t.assistant.join("\\n\\n");
-          const first = txt.split("\\n")[0] || "";
-          const pass = /통과/.test(first) && /검증/.test(first);
-          const fail = /실패/.test(first) && /검증/.test(first);
-          const v = el("div", "vmsg" + (fail ? " fail" : ""));
+          const vd = t.verdict || null; // 호스트가 extractVerdict로 계산해 넘긴 '마지막 결론'(첫 줄 추측 아님)
+          // 4단계: 통과(초록)/통과·보완(노랑)/결론 보류(주황)/실패(빨강). '통과·보완'은 보류와 분리(엄연히 통과).
+          const vmap = {"pass":["pass","검증 통과"],"pass-notes":["notes","통과·보완"],"inconclusive":["inconc","결론 보류"],"fail":["fail","검증 실패"]};
+          const vinfo = vd ? vmap[vd] : null;
+          const v = el("div", "vmsg" + (vinfo ? " " + vinfo[0] : ""));
           const head = el("div","vhead");
           head.appendChild(el("span","vname","Codex"));
-          if (pass || fail) head.appendChild(el("span","vchip " + (pass?"pass":"fail"), pass?"검증 통과":"검증 실패"));
+          if (vinfo) head.appendChild(el("span","vchip " + vinfo[0], vinfo[1]));
           v.appendChild(head);
           body = el("div","vbody clip", txt);
           v.appendChild(body);
@@ -1679,14 +1749,20 @@ export function activate(context: vscode.ExtensionContext): void {
       status.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
       pulseIfNew(errs.length);
     } else if (warns.length) {
-      // 결정2-2: 검증 답이 든 근거(파일:라인)가 실제와 안 맞음 = '의심'(노랑). 빨강(미완)보다 약함, 펄스 없음.
+      // 노랑 경고 2종: verdict-nonclean(Codex 결론이 통과 아님) + evidence-*(인용 근거 의심). 빨강(미완)보다 약함, 펄스 없음.
       if (pulseTimer) { clearInterval(pulseTimer); pulseTimer = undefined; }
       lastErrCount = 0;
-      status.text = `$(warning) Codex 근거 의심 ${warns.length}`;
+      const nVerdict = warns.filter((e) => e.kind === "verdict-nonclean").length;
+      const nEvid = warns.length - nVerdict;
+      const label = nVerdict && nEvid ? "Codex 주의" : nVerdict ? "Codex 결론 주의" : "Codex 근거 의심";
+      const tipHead = nVerdict && nEvid ? `결론 주의 ${nVerdict}건 · 근거 의심 ${nEvid}건`
+                    : nVerdict ? `Codex 결론이 통과가 아님 — ${nVerdict}건`
+                    : `검증 근거 의심 — ${nEvid}건`;
+      status.text = `$(warning) ${label} ${warns.length}`;
       status.tooltip = new vscode.MarkdownString(
-        `**🟡 검증 근거 의심 — 미확인 ${warns.length}건**\n\n` +
-          warns.slice(-3).map((e) => `- ${e.detail || e.kind || "근거 불일치"}`).join("\n\n") +
-          `\n\n검증 답이 든 근거가 실제 파일/라인과 안 맞아요.\n\n클릭 → 대시보드에서 확인`,
+        `**🟡 ${tipHead}**\n\n` +
+          warns.slice(-3).map((e) => `- ${e.detail || e.kind || "주의"}`).join("\n\n") +
+          `\n\n클릭 → 대시보드에서 확인`,
       );
       status.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
     } else {

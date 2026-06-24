@@ -94,6 +94,16 @@ function ackIntegrityEvents(ids) {
   for (const e of events) { if (!set || set.has(e.id)) e.ack = true; }
   return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events }));
 }
+// 같은 세션의 직전 특정 kind 신호를 '새 결과가 나왔으니' 대체(supersede)한다. verdict는 누적이 아니라 '최신 상태'다 —
+// 한 턴에 실패→수정→통과로 해소되면 직전 실패/보류 노랑도 사라져야 한다(반복 검증이 무조건 노랑을 남기는 cry-wolf 방지).
+// 미확인(ack 안 됨) + 같은 session + 같은 kind인 것만 제거한다(확인한 것·다른 세션·다른 kind는 보존). 세션 미상이면 안 건드림.
+function supersedeIntegrity(session, kind) {
+  if (!session) return false; // 세션 모르면 섣불리 안 지움 — 다른 대화의 신호를 잘못 지우지 않게
+  const events = readIntegrityEvents();
+  const kept = events.filter((e) => !(!e.ack && e.kind === kind && e.session === session));
+  if (kept.length === events.length) return true; // 지울 것 없음(무변경 성공)
+  return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: kept }));
+}
 
 // ── 검증 파이프라인 라이브 단계 ───────────────────────
 // phase ∈ claude-working | codex-verifying | rejudging | done | incomplete. 확장이 이걸 + 코덱스 rollout 성장 +
@@ -189,7 +199,7 @@ const BASE_DEFAULTS = {
     "1) 논리 구조만으로 단정하지 말고, 코드·파일을 실제로 열어 확인해 검증하라.",
     "2) 검증 수행 생략·요약·축약 금지. '빠르게/대충' 요청을 받더라도 충실히 검증하라.",
     "3) 요청자가 지정한 파일·범위는 '시작점'일 뿐 한계가 아니다. 요청자의 결론을 전제로 받아들이지 말고, 필요하면 호출부·테스트·문서·배포 경로까지 범위를 스스로 넓혀 반례를 찾으라.",
-    "4) 첫 줄에 결론(검증: 통과/실패)을 쓰되, 그 전에 직접 연 파일을 기준으로 독립 점검하고 본문에 항목별 근거(경로·라인)를 달라.",
+    "4) 본문에 검토 내용·항목별 근거(경로·라인)·보완/정정/추가 확인 사항·실패 사유를 '먼저' 상세히 작성하라(본문 축약 금지). 판정 결론은 반드시 '맨 마지막 한 줄'에만 다음 4가지 중 정확히 하나로 출력하라: '검증: 통과'(보완·주의·수정 항목 없음) / '검증: 통과(보완)'(통과지만 보완·정정·추가 의견 있음) / '검증: 보류'(정보 부족·불가 등으로 결론 못 냄) / '검증: 실패'. 마지막 줄 외에는 '검증:'으로 시작하는 줄을 쓰지 마라(근거를 먼저 적고 결론을 마지막에 두어야 결론이 그 근거에 맞춰진다 — 성급한 머리말 오라벨 방지).",
   ].join("\n"),
   // 구현모델(Claude)에게 — 검증모델에 '전달'할 때의 원칙.
   transmit: [
@@ -257,4 +267,59 @@ function buildVerifyDirective(mode) {
   ].join("\n");
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, cleanupOldState, maybeCleanupState };
+// Codex 답에서 '결론(verdict)'을 보수적으로 분류한다. '첫 줄'이 아니라 '검증'을 포함한 줄을 모두 훑어
+// 마지막 결론 줄로 판정한다 — codex exec 한 턴은 파일 읽는 작업 narration이 앞에 깔리고 진짜 결론은
+// 마지막 메시지에 오므로, 첫 줄만 보면 거의 빗나간다(대시보드 그린불 오작동의 근본 원인). 마지막-우선이라
+// 앞쪽 서두의 우연한 '통과/실패' 언급은 진짜 결론 줄이 덮어쓴다.
+// 반환(4단계): "pass"(깨끗한 통과) | "pass-notes"(통과지만 보완·정정·추가의견 있음 — 엄연히 통과) |
+//   "inconclusive"(보류·불가·정보부족 = 통과 못 함) | "fail"(실패) | null(결론 표지 못 찾음 → 중립, 경고 안 함).
+// '통과·보완'을 '보류/불가'와 분리한다 — 통과인데 챙길 게 있는 것과 통과 못 한 것은 다르다(사용자 지적 반영).
+// ⚠️ src/extension.ts의 동명 함수(대시보드 표시용 TS 사본)와 로직이 반드시 동일해야 한다. 한쪽만 고치지 말 것.
+// '결론 선언 줄' 정규식: (마크다운 기호/공백 뒤) '검증'으로 시작 + (콜론이거나 곧바로 결론어).
+// 콜론형("검증: …")은 무조건 선언으로 인정(정보 부족·판단 보류 등 포괄). 콜론 없으면 결론어가 와야 함.
+// → 서두("검증 요청으로…": 콜론X·요청은 결론어X)·본문("…이 검증에서 실패…", "(검증 아님)": 검증으로 시작X)을 배제.
+// 이 정규식은 '후보 줄' 필터일 뿐 — 최종 판정은 아래 분류 분기가 결정한다("검증: 설명문"처럼 판정어 없으면 null).
+// formatForClaude는 이 정규식을 직접 안 쓰고 extractVerdict(줄)!==null로 '판정 분류되는 줄'만 떼어내 더 보수적이다.
+const VERDICT_DECL_RE = /^[\s#>*\-]*검증\s*(?:[:：]|통과|실패|불가|보류|판단|조건부|보완|정보)/;
+function extractVerdict(text) {
+  if (!text) return null;
+  let v = null;
+  for (const ln of String(text).split(/\r?\n/)) {
+    if (!VERDICT_DECL_RE.test(ln)) continue;
+    // 선언 줄 확정 → 줄 전체로 4단계 분류. 우선순위: 실패 > 보류·불가 > 통과+보완(통과·보완) > 깨끗한 통과.
+    if (/실패/.test(ln)) v = "fail";
+    else if (/불가|보류|정보\s*부족/.test(ln)) v = "inconclusive"; // 통과 없는 보류·불가·정보부족 = 통과 못 함
+    else if (/통과/.test(ln) && /보완|조건부|정정|추가|미세|단서/.test(ln)) v = "pass-notes"; // 통과지만 보완·추가의견
+    else if (/통과/.test(ln)) v = "pass"; // 깨끗한 통과
+  }
+  return v;
+}
+
+// verdict 코드 → Claude '처리 의무' 문장(색 라벨이 아니라 다음 행동). pass도 '단, 본문 우선' 단서로 Codex 오라벨(P2) 전파를 줄인다.
+const VERDICT_ACTION = {
+  pass: "조치 없음 — 단, 본문에 보완·주의·수정 항목이 보이면 선언 결론보다 본문 항목을 우선 처리하라.",
+  "pass-notes": "보완 의견 있음 — 본문의 보완·정정·추가 항목을 각각 [수용/반박/보류]로 최종 보고에서 처리하라.",
+  inconclusive: "추가 확인 필요 — 판단 보류 사유와 다음 확인 지점을 보고하라.",
+  fail: "수정 필요 — 실패 사유를 반영해 고친 뒤 재검증하라.",
+};
+// P1b: Claude 소비용 stdout 재배치. 대시보드/proof/rollout은 원문(answer) 그대로 쓰고, Claude에게 주는 것만 바꾼다.
+// findings-first(P1a)로 받은 답에서 '마지막 검증: 선언 줄'을 본문에서 떼어, 라벨 대신 '처리 의무' footer로 옮긴다.
+// → Claude가 '통과(보완)'의 '통과'에 앵커링해 보완을 건너뛰는 것 방지(가시성 색칩은 사람용 대시보드가 담당).
+// 떼어낸 원문 줄을 footer에 그대로 보여줘 '정확한 결론 인용'(재판단 원칙)도 보존. 게이트가 아니라 nudge.
+function formatForClaude(answer) {
+  const text = String(answer || "");
+  const action = VERDICT_ACTION[extractVerdict(text)];
+  if (!action) return text; // 결론 표지 못 찾음(null) → 원문 그대로(나서서 자르지 않음)
+  const lines = text.split(/\r?\n/);
+  // '판정으로 분류되는 줄'만 선언으로 본다 = 그 줄 하나로 extractVerdict가 non-null. VERDICT_DECL_RE 단독 매칭보다 보수적 —
+  // "검증: 이 함수는 A 경로에서만 호출됨"처럼 검증:로 시작해도 판정어(통과/실패/보류/불가…)가 없는 설명 줄은 본문에 보존한다.
+  // extractVerdict(전체)와 같은 기준이라 '판정에 쓰인 줄 = 제거되는 줄'로 일관(footer엔 마지막 선언 원문 보존). 대시보드는 rollout 원문이라 손실 없음.
+  const isDecl = (l) => extractVerdict(l) !== null;
+  let verdictLine = "";
+  for (const l of lines) if (isDecl(l)) verdictLine = l.trim(); // 마지막 판정 선언 줄(extractVerdict 전체 결과를 만든 그 줄)
+  // 판정 선언 줄만 제거하고 끝의 빈 줄만 정돈한다. 전역 공백/개행 정규화는 하지 않는다(md hard break·코드블록·의도적 공백 보존).
+  const body = lines.filter((l) => !isDecl(l)).join("\n").trimEnd();
+  return `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
+}
+
+module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude };
