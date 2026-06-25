@@ -2,7 +2,7 @@
   "name": "codex-bridge",
   "displayName": "Codex Bridge",
   "description": "Claude↔Codex 브릿지 연결 상태를 상태바·호버·대시보드로 보여줍니다. 연결된 Codex 세션의 최근 대화 확인과 다른 세션으로 갈아끼우기를 지원합니다. (~/.codex-bridge/links.json 기반, 읽기/연결변경)",
-  "version": "0.1.29",
+  "version": "0.1.30",
   "publisher": "local",
   "license": "MIT",
   "repository": {

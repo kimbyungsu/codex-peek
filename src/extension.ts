@@ -422,6 +422,17 @@ function ackIntegrity(ids: string[] | "all"): boolean {
   for (const e of events) { if (!set || set.has(e.id)) e.ack = true; }
   return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events }));
 }
+// 무결성 경보 툴팁: 상태바 '바로 위'에 뜨는 '인터랙티브 호버'(MarkdownString+command 링크) — 마우스를 올려 링크 클릭 가능.
+// 평범한 문자열 툴팁과 달리 호버 안으로 진입 가능(VS Code #126753 fixed; 상태바 항목에 command가 있어야 마크다운 호버가 뜸 — 충족).
+// isTrusted는 우리 두 커맨드로만 좁힌다(임의 command: 링크 실행 방지). $(icon)은 supportThemeIcons로 렌더.
+function alertTooltip(headMd: string): vscode.MarkdownString {
+  const md = new vscode.MarkdownString(
+    headMd + `\n\n---\n\n[$(check) **확인함** — 이 창 경고 읽음](command:codexBridge.ackHere)\n\n[$(dashboard) **대시보드 열기**](command:codexBridge.openDashboard)`,
+  );
+  md.isTrusted = { enabledCommands: ["codexBridge.ackHere", "codexBridge.openDashboard"] };
+  md.supportThemeIcons = true;
+  return md;
+}
 
 // 검증 파이프라인 라이브 단계: 훅/브릿지가 phase.json에 기록한 단계 + 코덱스 rollout 성장 + staleness로
 // 사용자에게 진행을 보여준다(토큰 스트림 아님, 파일변화 기반). 단계: 대기/Claude작업중/검증요청됨/Codex생성중/반영중/완료/미완.
@@ -1657,7 +1668,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const turnsN = () => Math.max(1, vscode.workspace.getConfiguration("codexBridge").get<number>("recentTurns", 5));
   const dashboard = new Dashboard(context.extensionUri, turnsN);
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 950);
-  status.command = "codexBridge.openDashboard";
+  status.command = "codexBridge.openDashboard"; // 클릭=대시보드. 확인/대시보드 선택은 호버 툴팁의 클릭 링크로(상태바 '바로 위')
   status.name = "Codex Bridge";
 
   // 검증 진행 '흐름' = [🧑Claude] ▶▶검증중 [🔍Codex] 를 인접한 3개 항목으로 표현. 상태바 항목 1개는 색이 1개뿐이라,
@@ -1741,10 +1752,10 @@ export function activate(context: vscode.ExtensionContext): void {
     // 무결성 경보: error(검증 미완)=빨강 우선, 없으면 warning(근거 의심=결정2-2)=노랑. 확인하면 사라짐. (errs·warns는 위에서 계산)
     if (errs.length) {
       status.text = `$(alert) Codex 검증 미완 ${errs.length}`;
-      status.tooltip = new vscode.MarkdownString(
+      status.tooltip = alertTooltip(
         `**⚠️ 검증 무결성 경보 — 미확인 ${errs.length}건**\n\n` +
           errs.slice(-3).map((e) => `- ${e.detail || e.kind || "검증 미완"}`).join("\n\n") +
-          `\n\n이 턴 결과가 '검증 없이' 종료됐을 수 있어요.\n\n클릭 → 대시보드에서 확인`,
+          `\n\n이 턴 결과가 '검증 없이' 종료됐을 수 있어요.`,
       );
       status.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
       pulseIfNew(errs.length);
@@ -1759,10 +1770,9 @@ export function activate(context: vscode.ExtensionContext): void {
                     : nVerdict ? `Codex 결론이 통과가 아님 — ${nVerdict}건`
                     : `검증 근거 의심 — ${nEvid}건`;
       status.text = `$(warning) ${label} ${warns.length}`;
-      status.tooltip = new vscode.MarkdownString(
+      status.tooltip = alertTooltip(
         `**🟡 ${tipHead}**\n\n` +
-          warns.slice(-3).map((e) => `- ${e.detail || e.kind || "주의"}`).join("\n\n") +
-          `\n\n클릭 → 대시보드에서 확인`,
+          warns.slice(-3).map((e) => `- ${e.detail || e.kind || "주의"}`).join("\n\n"),
       );
       status.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
     } else {
@@ -1807,6 +1817,18 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     status,
     vscode.commands.registerCommand("codexBridge.openDashboard", () => dashboard.show()),
+    // 상태바 '확인함' — 호버 툴팁의 클릭 링크(command:codexBridge.ackHere)에서 호출. 이 창에 보이는 미확인 경보만 읽음 처리.
+    // ★ 호출 '시점'에 경보 재읽기(렌더 시점 값 재사용 금지) ★ 이 창 id만(다른 창 보존) ★ 실패 정직 보고 ★ 직후 즉시 갱신.
+    vscode.commands.registerCommand("codexBridge.ackHere", () => {
+      const unacked = readVisibleIntegrity(dashboardWorkspace()).filter(
+        (e) => !e.ack && (e.severity === "error" || e.severity === "warning"),
+      );
+      if (!unacked.length) return; // 이미 확인됨/없음(다른 데서 ack) → 무동작
+      const ok = ackIntegrity(unacked.map((e) => e.id));
+      if (!ok) { vscode.window.showErrorMessage("경고 확인 처리 저장 실패(파일 잠김/권한?) — 잠시 후 다시 시도하세요."); return; }
+      render();
+      dashboard.post();
+    }),
     vscode.commands.registerCommand("codexBridge.refresh", () => {
       render();
       dashboard.post();
