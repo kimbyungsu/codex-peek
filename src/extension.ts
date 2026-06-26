@@ -1163,6 +1163,10 @@ class Dashboard {
 </main>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
+  // 펼친 Codex 답변 키 모음 — postMessage 재렌더(작업/검증/반영 상태·파일·주기 변화)에도 펼침을 유지한다.
+  // 모듈 레벨이라 이 webview가 사는 동안 유지되고, 대시보드를 닫았다 다시 열면 새 webview라 리셋(=기본 접힘).
+  const expandedConv = new Set();
+  function convKey(t){ var s=(t.user||"")+"|||"+((t.assistant||[]).join("~")); var h=0; for(var i=0;i<s.length;i++){ h=(h*31+s.charCodeAt(i))|0; } return "c"+h; }
   const $ = (id) => document.getElementById(id);
   document.getElementById("refresh").addEventListener("click", () => vscode.postMessage({type:"refresh"}));
   function el(tag, cls, text){ const e=document.createElement(tag); if(cls)e.className=cls; if(text!=null)e.textContent=text; return e; }
@@ -1470,7 +1474,7 @@ class Dashboard {
       d.turns.forEach((t) => {
         const wrap = el("div","turn");
         if (t.user) wrap.appendChild(el("div","umsg", t.user));
-        let body=null, more=null;
+        let body=null, more=null, ckey=null;
         if (t.assistant.length){
           const txt = t.assistant.join("\\n\\n");
           const vd = t.verdict || null; // 호스트가 extractVerdict로 계산해 넘긴 '마지막 결론'(첫 줄 추측 아님)
@@ -1482,15 +1486,21 @@ class Dashboard {
           head.appendChild(el("span","vname","Codex"));
           if (vinfo) head.appendChild(el("span","vchip " + vinfo[0], vinfo[1]));
           v.appendChild(head);
+          ckey = convKey(t); // 내용 기반 안정 키(완료된 답변은 내용 불변 → 재렌더돼도 같은 키로 매칭)
           body = el("div","vbody clip", txt);
           v.appendChild(body);
           more = el("button","more","펼치기 ▾");
-          more.addEventListener("click", () => { const clipped = body.classList.toggle("clip"); more.textContent = clipped ? "펼치기 ▾" : "접기 ▴"; });
+          more.addEventListener("click", () => {
+            const clipped = body.classList.toggle("clip");
+            more.textContent = clipped ? "펼치기 ▾" : "접기 ▴";
+            if (clipped) expandedConv.delete(ckey); else expandedConv.add(ckey); // 펼침/접힘을 기억(다시 접기 전까지 유지)
+          });
           v.appendChild(more);
           wrap.appendChild(v);
         }
         conv.appendChild(wrap);
         if (body && more && body.scrollHeight <= body.clientHeight + 2){ body.classList.remove("clip"); more.style.display = "none"; }
+        else if (body && more && expandedConv.has(ckey)){ body.classList.remove("clip"); more.textContent = "접기 ▴"; } // 사용자가 펼쳐둔 긴 답변은 재렌더 후에도 펼친 채 유지
       });
     }
     const mkRow = (c, hidden) => {
