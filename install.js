@@ -218,10 +218,10 @@ function pickVsix(files, preferVersion) {
     return a < b ? -1 : a > b ? 1 : 0; // 동률이면 이름순(안정)
   }).pop();
 }
-// 설치용: '현재 package.json 버전과 정확히 일치하는 vsix'만 인정한다(순수함수 = 테스트 가능).
-//  - pickVsix는 정확 일치가 없으면 '남은 것 중 최신'으로 폴백한다. 그걸 설치에 그대로 쓰면, 버전을 올린 뒤
-//    옛 vsix만 남았을 때 '옛 버전을 설치'하는 사고가 난다(실제 발생). 그래서 설치 직전엔 현재 버전 vsix가
-//    준비됐는지를 따로 본다. 없으면(신규 클론=vsix 전무 / 옛 vsix만 잔존) 빌드해야 한다.
+// '현재 package.json 버전과 정확히 일치하는 vsix'만 인정한다(순수함수 = 테스트 가능).
+//  - 설치는 항상 새로 빌드하므로(tryInstallVsix 참고), 이 함수는 '방금 빌드한 현재 버전 vsix'를 집거나,
+//    빌드 실패 시 폴백으로 기존 현재 버전 vsix를 찾는 데 쓴다. pickVsix의 '최신으로 폴백'을 그대로 쓰면 버전
+//    올린 뒤 옛 vsix를 잡는 사고가 나므로, 파일명이 codex-bridge-(현재버전).vsix와 정확히 일치할 때만 인정한다.
 //  - version이 비면(메타 못 읽음) 폴백 동작 유지(pickVsix 결과 그대로) — 하위호환.
 function currentVsix(files, version) {
   const picked = pickVsix(files, version);
@@ -241,37 +241,42 @@ function tryInstallVsix(dryRun) {
   try { files = fs.readdirSync(__dirname); } catch { /* ignore */ }
   let version = "";
   try { version = (require(path.join(__dirname, "package.json")).version) || ""; } catch { /* ignore */ }
-  let vsix = currentVsix(files, version);
-  if (!vsix && !dryRun) {
-    // 신규 클론엔 vsix가 없고(*.vsix는 git 제외), 버전을 올린 뒤엔 옛 vsix만 남을 수 있다. 둘 다 '현재 버전
-    // vsix 없음' → 직접 빌드(npm run package; clean:vsix가 옛 vsix도 지움)해 옛 버전을 설치하는 사고를 막는다.
-    const stale = pickVsix(files, version);
-    log(stale
-      ? `ℹ️  남은 VSIX(${stale})가 현재 버전(${version})과 달라 새로 빌드합니다 (npm run package)…`
-      : "ℹ️  VSIX가 없어 빌드합니다 (npm run package)…");
-    let b;
-    try { b = cp.spawnSync("npm run package", { cwd: __dirname, shell: true, encoding: "utf8", timeout: 300000, stdio: "inherit" }); }
-    catch { b = null; }
-    if (!b || b.status !== 0) {
-      log("ℹ️  VSIX 빌드 실패 — 'npm install' 후 'npm run package'를 수동 실행하거나 확장을 수동 설치하세요.");
-      return;
-    }
-    try { files = fs.readdirSync(__dirname); } catch { /* ignore */ }
-    vsix = currentVsix(files, version);
+  // ★ 실제 설치는 '항상' 현재 소스로 새로 빌드한다. 캐시된 vsix를 재사용하면 (1) 버전 올린 뒤 옛 vsix만 남거나
+  //   (2) 버전은 같은데 옛 소스로 빌드된 stale vsix가 남았을 때 'git pull && install'이 옛 확장을 깔았다(둘 다 실제 발생).
+  //   currentVsix(버전명 일치)만으론 (2)를 못 거르므로 캐시 재사용 자체를 버린다. npm run package = compile &&
+  //   clean:vsix && vsce package 라 십수 초에 항상 최신을 보장. 빌드 도구가 없을 때(빌드 실패)만 기존 vsix로 폴백.
+  let vsix = null;
+  if (dryRun) {
+    const cur = currentVsix(files, version);
+    log("ℹ️  (미리보기) 실제 설치 시 현재 소스로 새로 빌드(npm run package) 후 설치합니다" +
+      (cur ? ` (현재 ${cur}가 있어도 최신 보장 위해 재빌드).` : " (현재 버전 VSIX 없음 → 빌드로 생성)."));
+    return;
+  }
+  log("ℹ️  현재 소스로 확장을 새로 빌드합니다 (npm run package)…");
+  let b;
+  try { b = cp.spawnSync("npm run package", { cwd: __dirname, shell: true, encoding: "utf8", timeout: 300000, stdio: "inherit" }); }
+  catch { b = null; }
+  // npm run package는 성공이든 실패든 clean:vsix로 기존 VSIX를 이미 지웠을 수 있다(예: compile·clean은 됐는데 vsce 실패).
+  // 그래서 빌드 결과와 무관하게 디렉터리를 '다시' 읽어 실제 '남아있는' VSIX로만 판단한다(삭제된 파일을 가리키지 않게).
+  try { files = fs.readdirSync(__dirname); } catch { /* ignore */ }
+  vsix = currentVsix(files, version);
+  if (!(b && b.status === 0)) {
+    // 빌드 실패(빌드 도구 미설치 / vsce 실패 등): 현재 버전 VSIX가 '실제로' 남아있으면 폴백(경고), 없으면 안내 후 종료.
+    if (vsix) log(`⚠️  빌드 실패 — 남아있는 ${vsix}로 설치합니다(최신 소스가 아닐 수 있음). 'npm install' 후 재시도를 권장합니다.`);
+    else { log("ℹ️  VSIX 빌드 실패 + 설치할 VSIX 없음(clean:vsix로 삭제됐을 수 있음) — 'npm install' 후 다시 실행하거나 확장을 수동 설치하세요."); return; }
   }
   if (!vsix) {
-    // dryRun이라 빌드를 안 했는데 옛 vsix만 있는 경우: 실제 설치 땐 빌드됨을 안내(옛 걸 설치하는 것처럼 보이지 않게).
-    if (dryRun) {
-      const stale = pickVsix(files, version);
-      if (stale) { log(`ℹ️  (미리보기) 현재 버전(${version}) VSIX가 없어 실제 설치 땐 빌드 후 설치됩니다 (지금 남은 건 ${stale}).`); return; }
-    }
     log("ℹ️  확장 VSIX(codex-bridge-*.vsix)를 못 찾음 — 확장은 수동 설치하세요(또는 마켓플레이스).");
     return;
   }
   const vsixPath = path.join(__dirname, vsix);
+  if (!fs.existsSync(vsixPath)) {
+    // 최종 안전장치: 설치 직전 파일이 실제로 있는지 확인(빌드 산출물/폴백 불일치 방어 — 없는 파일로 code 설치 시도 방지).
+    log(`ℹ️  설치할 VSIX 파일이 실제로 없습니다(${vsix}) — 'npm install' 후 다시 실행하세요.`);
+    return;
+  }
   const codeCli = process.env.CODE_CLI || "code";
   const cmd = buildInstallCmd(codeCli, vsixPath);
-  if (dryRun) { log(`ℹ️  (미리보기) 확장 설치 예정: ${cmd}`); return; }
   let r;
   try { r = cp.spawnSync(cmd, { shell: true, encoding: "utf8", timeout: 120000 }); }
   catch { r = null; }
