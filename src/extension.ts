@@ -1423,9 +1423,11 @@ class Dashboard {
         const nerr = iev.filter(function(e){return e.severity==="error";}).length;
         const warnEvs = iev.filter(function(e){return e.severity==="warning";});
         const nVerdict = warnEvs.filter(function(e){return e.kind==="verdict-nonclean";}).length;
-        const nEvid = warnEvs.length - nVerdict; // 근거(evidence-*) 계열
+        const nMissing = warnEvs.filter(function(e){return e.kind==="verdict-missing";}).length; // 판정 표지 누락(통과 아님과 구분)
+        const nEvid = warnEvs.length - nVerdict - nMissing; // 근거(evidence-*) 계열
         const warnParts = [];
         if (nVerdict) warnParts.push("Codex 결론 주의 " + nVerdict + "건"); // 통과 아님(실패/불가/보류)
+        if (nMissing) warnParts.push("판정 표지 없음 " + nMissing + "건"); // 마지막 '검증:' 줄 없음 → 색 표시 빔
         if (nEvid) warnParts.push("근거 의심 " + nEvid + "건"); // 인용 근거가 파일/라인과 안 맞음
         const warnStr = warnParts.join(" · ");
         ib.replaceChildren();
@@ -1770,15 +1772,22 @@ export function activate(context: vscode.ExtensionContext): void {
       status.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
       pulseIfNew(errs.length);
     } else if (warns.length) {
-      // 노랑 경고 2종: verdict-nonclean(Codex 결론이 통과 아님) + evidence-*(인용 근거 의심). 빨강(미완)보다 약함, 펄스 없음.
+      // 노랑 경고 3종: verdict-nonclean(결론이 통과 아님) + verdict-missing(판정 표지 없음) + evidence-*(인용 근거 의심). 빨강(미완)보다 약함, 펄스 없음.
       if (pulseTimer) { clearInterval(pulseTimer); pulseTimer = undefined; }
       lastErrCount = 0;
       const nVerdict = warns.filter((e) => e.kind === "verdict-nonclean").length;
-      const nEvid = warns.length - nVerdict;
-      const label = nVerdict && nEvid ? "Codex 주의" : nVerdict ? "Codex 결론 주의" : "Codex 근거 의심";
-      const tipHead = nVerdict && nEvid ? `결론 주의 ${nVerdict}건 · 근거 의심 ${nEvid}건`
-                    : nVerdict ? `Codex 결론이 통과가 아님 — ${nVerdict}건`
-                    : `검증 근거 의심 — ${nEvid}건`;
+      const nMissing = warns.filter((e) => e.kind === "verdict-missing").length; // 표지 누락 — '통과 아님'과 다름
+      const nEvid = warns.length - nVerdict - nMissing;
+      const kinds = [nVerdict > 0, nMissing > 0, nEvid > 0].filter(Boolean).length;
+      const label = kinds > 1 ? "Codex 주의"
+                  : nVerdict ? "Codex 결론 주의"
+                  : nMissing ? "Codex 표지 없음"
+                  : "Codex 근거 의심";
+      const parts: string[] = [];
+      if (nVerdict) parts.push(`결론 주의 ${nVerdict}건`);
+      if (nMissing) parts.push(`판정 표지 없음 ${nMissing}건`);
+      if (nEvid) parts.push(`근거 의심 ${nEvid}건`);
+      const tipHead = parts.join(" · ");
       status.text = `$(warning) ${label} ${warns.length}`;
       status.tooltip = alertTooltip(
         `**🟡 ${tipHead}**\n\n` +

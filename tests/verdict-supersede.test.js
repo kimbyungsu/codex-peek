@@ -10,6 +10,7 @@ const cl = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
 const { flagVerdict } = require(path.join(__dirname, "..", "bridge", "codex-bridge.js"));
 const INTEGRITY = path.join(process.env.CODEX_BRIDGE_HOME, "integrity.json");
 function unackedVerdict() { try { return (JSON.parse(fs.readFileSync(INTEGRITY, "utf8")).events || []).filter((e) => e.kind === "verdict-nonclean" && !e.ack); } catch { return []; } }
+function unackedKind(kind) { try { return (JSON.parse(fs.readFileSync(INTEGRITY, "utf8")).events || []).filter((e) => e.kind === kind && !e.ack); } catch { return []; } }
 function resetIg() { fs.mkdirSync(path.dirname(INTEGRITY), { recursive: true }); fs.writeFileSync(INTEGRITY, JSON.stringify({ events: [] })); }
 
 let pass = 0, fail = 0;
@@ -37,7 +38,7 @@ ok(unackedVerdict().length === 1, "실패 두 번 → 누적 아니라 최신 1�
 console.log("[결론 미상(null)은 직전 신호 안 건드림]");
 resetIg();
 flagVerdict("검증: 실패\n\nX", "/ws");
-flagVerdict("코드를 봤습니다(결론 표지 없음)", "/ws"); // null → supersede/추가 안 함
+flagVerdict("코드를 봤습니다(결론 표지 없음)", "/ws"); // null → verdict-nonclean은 supersede/추가 안 함(verdict-missing은 별도로 추가됨 — 아래 표지 누락 케이스에서 검증)
 ok(unackedVerdict().length === 1, "결론 못 읽은 답은 직전 실패 노랑을 함부로 지우지 않음");
 
 console.log("[supersedeIntegrity 정밀] 다른 세션·다른 kind·ack된 것은 보존");
@@ -54,6 +55,33 @@ ok(after.some((e) => e.id === "x0"), "ack된 것은 보존(supersede 대상 아�
 ok(after.some((e) => e.id === "x2"), "같은 세션 다른 kind(근거) 보존");
 ok(after.some((e) => e.id === "x3"), "다른 세션(S2) 보존");
 ok(cl.supersedeIntegrity("", "verdict-nonclean") === false, "세션 미상이면 안 건드림(false)");
+
+console.log("[표지 누락 가시화] 답은 있는데 마지막 '검증:' 줄 없음 → verdict-missing 노랑, verdict-nonclean 0");
+resetIg();
+flagVerdict("코드를 봤습니다. 별 문제 없어 보입니다(판정 줄 없음)", "/ws");
+ok(unackedKind("verdict-missing").length === 1, "표지 없는 답 → verdict-missing 1건");
+ok(unackedKind("verdict-nonclean").length === 0, "표지 없는 답은 verdict-nonclean(통과 아님 노랑)을 만들지 않음");
+
+console.log("[격리] 표지 누락은 직전 실패 노랑을 지우지 않는다(별도 kind)");
+resetIg();
+flagVerdict("검증: 실패\n\nX", "/ws");
+flagVerdict("표지 없는 후속 답", "/ws");
+ok(unackedKind("verdict-nonclean").length === 1, "직전 실패 노랑 유지(verdict-missing이 안 건드림)");
+ok(unackedKind("verdict-missing").length === 1, "표지 누락도 별도 1건으로 가시화");
+
+console.log("[정리] 표지 누락 뒤 정상 판정 도착 → 표지 누락 노랑 사라짐(supersede)");
+resetIg();
+flagVerdict("표지 없는 답", "/ws");
+ok(unackedKind("verdict-missing").length === 1, "먼저 표지 누락 1건");
+flagVerdict("검증: 통과\n\n다 확인", "/ws");
+ok(unackedKind("verdict-missing").length === 0, "정상 판정 도착 → 표지 누락 supersede됨");
+
+console.log("[빈 답 보호] 빈/공백 답은 직전 표지 누락을 지우지 않는다(supersede 전 return)");
+resetIg();
+flagVerdict("표지 없는 답", "/ws");
+ok(unackedKind("verdict-missing").length === 1, "표지 누락 1건 생성");
+flagVerdict("   ", "/ws");
+ok(unackedKind("verdict-missing").length === 1, "빈/공백 답이 와도 직전 표지 누락 유지(supersede 안 함)");
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
