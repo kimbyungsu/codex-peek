@@ -43,6 +43,19 @@ const outNone = withContract("MY_PROMPT", wsNone);
 ok(typeof outNone === "string" && outNone.includes("MY_PROMPT"), "계약 없어도 baseline+프롬프트 반환");
 ok(!outNone.includes("V9_MARKER_A") && !outNone.includes("V9_MARKER_B"), "다른 프로젝트 계약이 새지 않음");
 
+console.log("[4] 전역 contract.json이 있어도 미설정 ws엔 상속 안 됨(계약=프로젝트 전용)");
+fs.writeFileSync(path.join(dir, "contract.json"), JSON.stringify({ codex: ["GLOBAL_LEAK_MARKER"], verifyMode: "always" }));
+const wsFresh = path.join(dir, "projFresh");
+const outFresh = withContract("MY_PROMPT", wsFresh);
+ok(!outFresh.includes("GLOBAL_LEAK_MARKER"), "전역 계약 규칙이 미설정 프로젝트에 새지 않음(상속 제거)");
+
+console.log("[5] 빈 칸 프로젝트는 규칙 0·규칙 있는 프로젝트는 자기 규칙 — 프로젝트별 독립(A빈칸/B규칙 분리)");
+const wsEmpty = path.join(dir, "projEmpty");
+fs.writeFileSync(contractFileFor(wsEmpty), JSON.stringify({ codex: [], verifyMode: "off" }));
+const outEmpty = withContract("MY_PROMPT", wsEmpty);
+ok(!outEmpty.includes("V9_MARKER_") && !outEmpty.includes("GLOBAL_LEAK_MARKER"), "빈 계약 프로젝트 → 사용자 codex 규칙 0(baseline만)");
+ok(withContract("MY_PROMPT", wsB).includes("V9_MARKER_B"), "동시에 wsB(규칙 있음)는 자기 규칙 그대로 주입 — A빈칸·B규칙 독립 적용");
+
 try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

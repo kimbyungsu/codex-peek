@@ -8,7 +8,7 @@ const crypto = require("crypto");
 
 // CODEX_BRIDGE_HOME override(확장 호스트≠훅 home 환경 대비). 미설정이면 ~/.codex-bridge. 확장·codex-bridge.js와 동일 규칙.
 const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(os.homedir(), ".codex-bridge");
-const CONTRACT_FILE = path.join(BRIDGE_DIR, "contract.json"); // 전역 기본값(상속 시드 · 레거시 호환)
+const CONTRACT_FILE = path.join(BRIDGE_DIR, "contract.json"); // 레거시 전역 계약 — 더 이상 프로젝트에 상속 안 함(ws=null 저장 폴백/구버전 호환만)
 const CONTRACTS_DIR = path.join(BRIDGE_DIR, "contracts"); // 프로젝트별 계약 파일들
 const BRIDGE = path.join(BRIDGE_DIR, "codex-bridge.js");
 const BASE_DIRECTIVE_FILE = path.join(BRIDGE_DIR, "base-directive.json"); // 기본 지침 사용자 오버라이드(없으면 코드 기본값)
@@ -131,7 +131,8 @@ function currentWs() {
   return process.env.CLAUDE_PROJECT_DIR || process.cwd();
 }
 
-// 프로젝트별 계약을 읽는다. 미설정이면 전역 기본값(CONTRACT_FILE)을 상속. ws 미지정 시 현재 폴더 기준.
+// 프로젝트별 계약을 읽는다. ★전역 상속 없음★ — 계약은 프로젝트 전용(최신성: 비우면 주입 0·바꾸면 그 프로젝트만 유지).
+// 파일 없으면 빈 계약. ws 미지정 시 현재 폴더 기준. (전역 기본값/상속/복원은 별개 층인 base-directive.json만 — §5.3 2공간 분리.)
 function loadContract(ws) {
   const read = (p) => {
     try {
@@ -140,7 +141,7 @@ function loadContract(ws) {
       return null;
     }
   };
-  const o = read(contractFileFor(ws || currentWs())) || read(CONTRACT_FILE) || {};
+  const o = read(contractFileFor(ws || currentWs())) || {}; // CONTRACT_FILE(전역) 폴백 제거 — 미설정 프로젝트는 빈 계약(상속 X)
   return {
     claude: Array.isArray(o.claude) ? o.claude : [],
     codex: Array.isArray(o.codex) ? o.codex : [],

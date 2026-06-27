@@ -8,6 +8,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const cp = require("child_process");
+const crypto = require("crypto");
 
 const GUARD = path.join(__dirname, "..", "bridge", "verify-guard.js");
 let pass = 0, fail = 0;
@@ -22,13 +23,21 @@ const TSTALE = "2026-06-21T09:00:00.000Z"; // 이전 턴(발화 이전)의 검�
 const T_NEXT = "2026-06-21T11:00:00.000Z";       // 다음 턴의 사용자 발화
 const T_NEXT_EDIT = "2026-06-21T11:00:01.000Z";  // 다음 턴의 변경
 
+// 계약은 프로젝트 전용(전역 상속 없음)이므로, 검증모드를 '그 ws의 계약 파일'에 쓴다(브릿지 contractFileFor와 동일 sha1(normWs) 키).
+function normWs(p) { return path.normalize(p || "").replace(/[\\/]+$/, "").toLowerCase().normalize("NFC"); }
+function contractFileForIn(bridgeDir, ws) {
+  const key = crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16);
+  return path.join(bridgeDir, "contracts", key + ".json");
+}
 function setup(name, verifyMode) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vg_" + name + "_"));
   const bridgeDir = path.join(dir, ".codex-bridge");
   const ws = path.join(dir, "ws");
   fs.mkdirSync(bridgeDir, { recursive: true });
   fs.mkdirSync(ws, { recursive: true });
-  fs.writeFileSync(path.join(bridgeDir, "contract.json"), JSON.stringify({ verifyMode }));
+  const cf = contractFileForIn(bridgeDir, ws); // 전역 contract.json이 아니라 '이 ws의' 계약 파일에 기록(상속 제거 후 정합)
+  fs.mkdirSync(path.dirname(cf), { recursive: true });
+  fs.writeFileSync(cf, JSON.stringify({ verifyMode }));
   return { dir, bridgeDir, ws, session: "sess-" + name, transcriptPath: path.join(dir, "tx.jsonl") };
 }
 const human = (ts, sid) => ({ type: "user", sessionId: sid, timestamp: ts, message: { content: [{ type: "text", text: "해줘" }] } });
