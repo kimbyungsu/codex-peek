@@ -79,6 +79,7 @@ interface BridgeState {
   knownModels: string[];  // 이 세션이 써본 모델들(캐시 없을 때 폴백 추천)
   availModels: AvailModel[]; // 계정 캐시(models_cache.json)의 모델·모델별 생각강도 — 하드코딩 대신 계정 실제 목록
   modelsCacheNote: string;   // 계정 캐시 못 읽을 때 사용자에게 보여줄 이유("" = 정상)
+  sessionDiag: { home: string; source: string; sessionsDir: string; sessionsExists: boolean; codexBin: string } | null; // 세션 후보 0개일 때만 진단(지금 어디를 보는지·codex·출처). null=세션 있음(정상)
   integrity: IntegrityEvent[]; // 무결성 신호(검증 미완 등) — 미확인 error는 상태바 빨강 + 대시보드 경보
   live: LiveStage | null;      // 검증 파이프라인 라이브 단계(없으면 대기) — 상태바·진행 스트립
   verifyTimeoutMin: number;    // 검증(codex) 대기시간(분) — 저장값 또는 기본 8. 브릿지 verifyTimeoutMin과 같은 규칙.
@@ -519,6 +520,19 @@ function computeState(turnsN: number): BridgeState {
       : "계정 모델 목록 파일을 못 찾아 기본값으로 보여줘요 — 코덱스가 아직 목록을 안 받았거나 폴더 위치(CODEX_HOME)가 바뀐 경우예요.";
   }
 
+  // 세션 후보가 0개(연결할 세션이 안 뜸)면 '지금 어느 home/sessions를 보는지·codex·출처'를 노출 → 침묵 실패를 자가진단 가능하게.
+  let sessionDiag: BridgeState["sessionDiag"] = null;
+  if (!candidates.length && !hiddenCandidates.length) {
+    let sessionsExists = false;
+    try { sessionsExists = fs.existsSync(SESSIONS_DIR); } catch { /* ignore */ }
+    const envHome = (process.env.CODEX_HOME || "").trim();
+    const fileHome = readTextSafe(path.join(BRIDGE_DIR, "codex-home.txt")).trim();
+    const source = envHome && envHome === CODEX_HOME ? "환경변수 CODEX_HOME"
+      : fileHome && fileHome === CODEX_HOME ? "자동탐지(codex-home.txt)"
+      : "기본값 ~/.codex";
+    sessionDiag = { home: CODEX_HOME, source, sessionsDir: SESSIONS_DIR, sessionsExists, codexBin: resolveCodexPathForBridge() || "설정·형제확장에서 못 찾음 → PATH의 codex 시도" };
+  }
+
   return {
     workspace: ws,
     linkedId,
@@ -541,6 +555,7 @@ function computeState(turnsN: number): BridgeState {
     knownModels: modelMeta.models,
     availModels,
     modelsCacheNote,
+    sessionDiag,
     integrity: readVisibleIntegrity(ws),
     live: computeLiveStage(linkedId),
     verifyTimeoutMin: clampVerifyTimeout(links.settings?.verifyTimeoutMin),
@@ -1379,7 +1394,7 @@ class Dashboard {
           let b="";
           if(!done && btn){ if(btn.go) b=' <button type="button" class="obgo secondary" data-go="'+btn.go+'">이동 ›</button>'; else if(btn.cmd) b=' <button type="button" class="obgo secondary" data-cmd="'+btn.cmd+'">설정 ›</button>'; }
           e.innerHTML='<span class="k">'+(done?"✓":"○")+'</span>'+text+(where?' <span class="where">'+where+'</span>':'')+b; };
-        step("ob1", codexReady, codexReady?"Codex 준비됨":"Codex 확장/경로 미확인", {cmd:"openSettings"}, codexReady?"":"설치돼 있으면 보통 자동 · 안 되면 경로 지정");
+        step("ob1", codexReady, codexReady?"Codex 준비됨":"Codex 경로 미고정 — PATH의 codex로 시도", {cmd:"openSettings"}, codexReady?"":"openai.chatgpt 확장이 있으면 보통 자동 · standalone CLI면 PATH로 동작(안 뜨면 codexBridge.codexPath 지정)");
         step("ob2", linked, linked?"Codex 세션 연결됨":"Codex 세션 미연결", {go:"cands"}, linked?"":"연결할 세션 고르기");
         step("ob3", vOn, vOn?("검증 켜짐 ("+d.contract.verifyMode+")"):"검증 꺼짐", {go:"segVerify"}, vOn?"":"검증 모드 켜고 저장");
       }
@@ -1527,6 +1542,18 @@ class Dashboard {
     };
     const cs = $("cands"); cs.replaceChildren();
     d.candidates.forEach((c) => cs.appendChild(mkRow(c, false)));
+    if (!d.candidates.length && d.sessionDiag) {
+      const g = d.sessionDiag;
+      const box = el("div","card");
+      box.style.cssText = "border-left:3px solid var(--vscode-inputValidation-warningBorder,#c90);background:var(--vscode-inputValidation-warningBackground,rgba(204,153,0,0.12));font-size:12px;line-height:1.7";
+      box.appendChild(el("div","", "⚠ 찾은 Codex 세션이 없습니다 — 지금 이 위치를 보고 있어요:"));
+      const line = (label,val,note) => { const r=el("div"); r.appendChild(el("span","muted",label)); r.appendChild(el("code","",val)); if(note) r.appendChild(el("span","muted"," "+note)); box.appendChild(r); };
+      line("세션 폴더: ", g.sessionsDir, g.sessionsExists ? "(있음·비어있음)" : "(폴더 없음)");
+      line("Codex home: ", g.home, "(출처: "+g.source+")");
+      line("codex 실행파일: ", g.codexBin, "");
+      box.appendChild(el("div","muted","여기에 당신의 Codex 대화가 없다면, codex가 세션을 다른 곳에 저장하는 것입니다. 터미널에서 'codex doctor'의 CODEX_HOME과 위 경로를 비교해, 다르면 설정 codexBridge.codexPath(또는 환경변수 CODEX_HOME)로 맞춰 주세요."));
+      cs.appendChild(box);
+    }
     // 숨긴 세션: 접힌 채로, 개수 토글로 펼침 (원본은 지우지 않음)
     const hw = $("hiddenWrap"); hw.replaceChildren();
     if (d.hiddenCandidates && d.hiddenCandidates.length){
@@ -1629,22 +1656,28 @@ function syncCodexHome(onDone: (changed: boolean) => void): void {
   let done = false;
   const finish = (c: boolean) => { if (done) return; done = true; onDone(c); };
   const codex = resolveCodexPathForBridge();
-  if (!codex) { finish(false); return; }
+  // [갭 수정] 설정·형제확장에서 codex를 못 찾아도 PATH의 codex로 doctor 시도(브릿지 resolveCodex의 PATH 폴백과 대칭).
+  // → standalone codex CLI(확장 없이 PATH 설치) 사용자도 home(세션폴더)을 자동 탐지한다. PATH에도 없으면 spawn 실패→finish(false).
+  const usePath = !codex;
   // .js codex는 node 래핑 필요. 확장은 electron이라 process.execPath가 node가 아님(Code.exe) →
   // ELECTRON_RUN_AS_NODE=1로 electron을 node처럼 띄워 codex.js doctor 실행(VS Code 확장 표준 기법, node PATH 불요).
-  const isJs = /\.js$/i.test(codex);
-  const useShell = !isJs && /\.(cmd|bat)$/i.test(codex);
-  const file = isJs ? process.execPath : codex;
-  const args = isJs ? [codex, "doctor"] : ["doctor"];
+  const isJs = !usePath && /\.js$/i.test(codex);
+  const useShell = usePath || (!isJs && /\.(cmd|bat)$/i.test(codex)); // PATH codex는 win .cmd/PATHEXT 해석 위해 shell 경유
+  const file = usePath ? "codex" : (isJs ? process.execPath : codex);
+  const args = !usePath && isJs ? [codex, "doctor"] : ["doctor"];
   const opts: any = { windowsHide: true, shell: useShell };
-  if (isJs) opts.env = { ...process.env, ELECTRON_RUN_AS_NODE: "1" };
+  if (!usePath && isJs) opts.env = { ...process.env, ELECTRON_RUN_AS_NODE: "1" };
   let out = "";
   try {
     const cp = spawn(file, args, opts);
+    // [보완] timeout/kill — PATH의 임의 codex doctor가 멈춰도 finish가 불려 렌더가 지연되지 않게(브릿지 detectCodexHome 30초와 대칭).
+    const killer = setTimeout(() => { try { cp.kill(); } catch { /* ignore */ } finish(false); }, 30000);
     cp.stdout?.on("data", (d) => (out += d.toString()));
     cp.stderr?.on("data", (d) => (out += d.toString()));
-    cp.on("error", () => finish(false));
+    cp.on("error", () => { clearTimeout(killer); finish(false); });
     cp.on("close", () => {
+      clearTimeout(killer);
+      if (done) return; // timeout이 먼저 finish(false)했으면 close 본문(파싱·home 기록·watcher 갱신)은 건너뜀(경합 방어 — finish의 done 가드 밖이라 별도 필요)
       // ⚠ 세션찾기 고장 시 1순위 점검: codex 업데이트로 'codex doctor' 출력 형식이 바뀌면 이 파싱이 깨진다.
       const m = out.match(/^\s*CODEX_HOME\s+([^\r\n]+?)\s*\(dir\)\s*$/m);
       const home = m ? m[1].trim() : "";
