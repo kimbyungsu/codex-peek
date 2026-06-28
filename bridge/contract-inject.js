@@ -38,6 +38,22 @@ process.stdin.on("end", () => {
     /* ignore */
   }
 
+  // 환경 적응(확장의 CLAUDE_HOME 해석용 — 이슈#1 CODEX_HOME 자동탐지와 '동일하게'): 확장 호스트는 CLAUDE_CONFIG_DIR을 못 볼 수
+  // 있으나(특히 *nix GUI 실행), 이 훅은 Claude 프로세스에서 실제 transcript_path를 받는다. 거기서 Claude 설정폴더(= projects의 부모)를
+  // 도출해 claude-home.txt(codex-home.txt 대칭)에 적어 둔다. 확장은 env → 이 파일 → ~/.claude 순으로 해석한다. 전부 best-effort.
+  try {
+    const tp = (hook && typeof hook.transcript_path === "string") ? hook.transcript_path : "";
+    if (tp) {
+      const projectsDir = path.dirname(path.dirname(tp)); // <CLAUDE_HOME>/projects/<proj>/<id>.jsonl → <CLAUDE_HOME>/projects
+      if (path.basename(projectsDir) === "projects") { // 구조 확인(엉뚱한 경로 기록 방지)
+        const claudeHome = path.dirname(projectsDir);   // <CLAUDE_HOME>
+        const chf = path.join(BRIDGE_DIR, "claude-home.txt");
+        let prev = ""; try { prev = fs.readFileSync(chf, "utf8").trim(); } catch { /* 최초엔 없음 */ }
+        if (claudeHome && claudeHome !== prev) atomicWrite(chf, claudeHome); // 변경 시에만(churn 방지)
+      }
+    }
+  } catch { /* best-effort — 훅 동작 막지 않음 */ }
+
   // 라이브 진행: 턴 시작 = 'Claude 작업중' + 라운드 0 리셋(이 턴의 ask 횟수는 codex-bridge가 증가시킴).
   try {
     writePhase("claude-working", {

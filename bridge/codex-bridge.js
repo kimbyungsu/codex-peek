@@ -13,7 +13,7 @@
 //   node codex-bridge.js status                    현재 연결 상태
 //   node codex-bridge.js find                       연결 후보(인덱스된 Codex 세션) 목록
 
-const { spawnSync } = require("child_process");
+const { spawnSync, spawn } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -219,10 +219,10 @@ function flagEvidence(answer, ws, sessionId) {
     }
   } catch { /* best-effort — 점검 실패가 검증 흐름을 막지 않음 */ }
 }
-// 비-깨끗한 결론을 사용자에게 '가시화'(노랑). 자동 차단 안 함(설계 경계 결론: 품질은 강제 말고 가시화).
+// 비-깨끗한 결론을 사용자에게 '가시화'(실패=빨강·보류·불가=노랑). 자동 차단 안 함(설계 경계 결론: 품질은 강제 말고 가시화).
 // 핵심: verdict는 '최신 상태'다. 새 검증 결과가 나오면 같은 세션의 직전 verdict-nonclean을 먼저 대체(supersede)한다 →
-// 실패→수정→재검증 통과로 해소되면 노랑도 사라진다(반복 검증이 무조건 노랑을 남기는 cry-wolf 방지). 그 뒤 실패/보류일 때만 새로 띄움.
-// '통과'·'통과(보완)'은 새 노랑을 만들지 않는다(굿하트 '통과 도장' 안 만들기). 단 답은 있는데 마지막 판정 줄이 없으면(null)
+// 실패→수정→재검증 통과로 해소되면 그 경보도 사라진다(반복 검증이 무조건 경보를 남기는 cry-wolf 방지). 그 뒤 실패(빨강)·보류·불가(노랑)일 때만 새로 띄움.
+// '통과'·'통과(보완)'은 새 경보를 만들지 않는다(굿하트 '통과 도장' 안 만들기). 단 답은 있는데 마지막 판정 줄이 없으면(null)
 // verdict-missing 노랑으로 '표지 누락'을 가시화한다(대시보드 색 분류 입력이 비기 때문). 빈/공백 답은 아무 신호도 안 건드린다. answer=마지막 메시지(-o).
 function flagVerdict(answer, ws) {
   try {
@@ -232,7 +232,7 @@ function flagVerdict(answer, ws) {
     supersedeIntegrity(session, "verdict-missing"); // 새 답 도착 → 직전 '표지 누락' 신호는 갱신 대상(최신 1건만 유지)
     const v = extractVerdict(text);
     if (!v) {
-      // 답은 있는데 마지막 '검증:' 판정 줄이 없음 → 형식 위반 가시화. 별도 kind로 격리해 verdict-nonclean(실패/보류 노랑)은 안 건드린다.
+      // 답은 있는데 마지막 '검증:' 판정 줄이 없음 → 형식 위반 가시화. 별도 kind로 격리해 verdict-nonclean(실패 빨강·보류 노랑)은 안 건드린다.
       appendIntegrityEvent({
         ts: nowIso(),
         session,
@@ -241,16 +241,18 @@ function flagVerdict(answer, ws) {
         severity: "warning", // 노랑 — '통과 아님'이 아니라 '판정 표지가 없어 색 표시가 빔'
         detail: "Codex 답에 마지막 '검증: 통과/통과(보완)/보류/실패' 판정 줄이 없습니다 — 대시보드 색 표시가 비고, 결론을 직접 확인해야 합니다.",
       });
-      return; // verdict-nonclean(직전 실패/보류 노랑)은 유지
+      return; // verdict-nonclean(직전 실패 빨강·보류 노랑)은 유지
     }
     supersedeIntegrity(session, "verdict-nonclean"); // 정상 판정 → 직전 비-깨끗 신호를 대체(통과면 그대로 해소)
-    if (v !== "fail" && v !== "inconclusive") return; // 통과·통과(보완) → 새 노랑 없음(직전 것은 이미 supersede로 정리)
+    if (v !== "fail" && v !== "inconclusive") return; // 통과·통과(보완) → 새 경보 없음(직전 것은 이미 supersede로 정리)
     appendIntegrityEvent({
       ts: nowIso(),
       session,
       workspace: ws,
       kind: "verdict-nonclean",
-      severity: "warning", // 노랑 — '검증 미완(빨강)'이 아니라 'Codex 결론이 깨끗한 통과가 아님'
+      // 실패=빨강(error) — 대시보드 칩(실패=빨강)과 일치, '고쳐야 함'의 명확한 신호. 보류·불가=노랑(warning) — '검토하라'.
+      // 빨강이어도 kind는 verdict-nonclean이라 재검증 통과 시 supersede로 자동 해소(검증 미완 빨강과 달리 ack 안 해도 사라짐).
+      severity: v === "fail" ? "error" : "warning",
       detail: v === "fail"
         ? "Codex 결론이 '검증 실패'입니다 — 통과가 아닙니다. 대시보드 대화에서 결론과 근거를 확인하세요."
         : "Codex 결론이 '통과'가 아닙니다(보류·불가·정보 부족 등 — 결론을 못 냄). 대시보드 대화에서 결론을 확인하세요.",
@@ -474,6 +476,40 @@ function newestRolloutSince(sinceMs) {
   return best?.full || null;
 }
 
+// since 이후 rollout 중 '이 워크스페이스(session_meta.cwd 일치)'의 최신 → 즉시연결 시 동시 다른 폴더 세션을
+// 잘못 링크하지 않게 한다(race 방어). cwd를 못 읽는 rollout은 제외(엉뚱 링크보다 미검출이 안전 — 폴백이 받아줌).
+function newestRolloutSinceForWs(sinceMs, ws) {
+  const want = normWs(ws || "");
+  if (!want) return null;
+  let best = null;
+  const walk = (d, depth) => {
+    if (depth > 6) return;
+    let items;
+    try { items = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const it of items) {
+      const full = path.join(d, it.name);
+      if (it.isDirectory()) { walk(full, depth + 1); continue; }
+      if (!(it.isFile() && /^rollout-.*\.jsonl$/.test(it.name))) continue;
+      let m;
+      try { m = fs.statSync(full).mtimeMs; } catch { continue; }
+      if (m < sinceMs || (best && m <= best.m)) continue;
+      let cwd = "";
+      try {
+        const fd = fs.openSync(full, "r");
+        const buf = Buffer.alloc(8192);
+        const n = fs.readSync(fd, buf, 0, 8192, 0);
+        fs.closeSync(fd);
+        const line = buf.toString("utf8", 0, n).split(/\r?\n/)[0];
+        const o = JSON.parse(line);
+        cwd = (o.payload && o.payload.cwd) || o.cwd || "";
+      } catch { continue; } // 첫 줄(session_meta) 못 읽으면 제외
+      if (normWs(cwd) === want) best = { full, m };
+    }
+  };
+  walk(SESSIONS_DIR, 0);
+  return best ? best.full : null;
+}
+
 // 세션 식별용: 그 세션의 첫 '실제' 사용자 발화를 짧게 뽑는다.
 function firstUserSnippet(file) {
   try {
@@ -614,12 +650,61 @@ function runCodex(extraArgs, prompt) {
   return { answer, error: r.error, status: r.status, stderr: (r.stderr || "").toString() + diag };
 }
 
+// 새 세션 전용 비동기 실행 — 답을 기다리는 동안 rollout이 생기는 '즉시' onDetect(sessionId)를 호출(생성 즉시 연결).
+// resume 경로는 기존 동기 runCodex 그대로(무위험). 반환 shape은 runCodex와 동일(+detected). cwd 일치 rollout만 조기 감지(race 방어).
+function runCodexNewSessionAsync(extraArgs, prompt, sinceMs, ws, onDetect) {
+  const inv = resolveCodex();
+  const outFile = path.join(os.tmpdir(), `codex_bridge_${process.pid}_${Date.now()}.txt`);
+  const codexArgs = [...inv.args, "exec", "--skip-git-repo-check", "-o", outFile, ...extraArgs];
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(inv.file, codexArgs, { stdio: ["pipe", "ignore", "pipe"], windowsHide: true, shell: !!inv.shell });
+    } catch (e) {
+      return resolve({ answer: "", error: e, status: null, stderr: "", detected: null });
+    }
+    let stderr = "";
+    let detected = null;
+    let timedOut = false;
+    let done = false;
+    const detect = () => {
+      try {
+        const f = newestRolloutSinceForWs(sinceMs, ws); // cwd 일치만(동시 다른 폴더 세션 오링크 방지)
+        const mm = f && f.match(UUID_RE);
+        if (mm) { detected = mm[1]; try { onDetect && onDetect(mm[1]); } catch { /* 다음 폴서 재시도 */ } } // onDetect 자체 멱등(연결 성공시만 멈춤) → recordLink 재시도 허용
+      } catch { /* ignore */ }
+    };
+    if (child.stderr) child.stderr.on("data", (d) => { if (stderr.length < 4 * 1024 * 1024) stderr += d.toString(); });
+    try { child.stdin.write(prompt); child.stdin.end(); } catch { /* ignore */ }
+    const poll = setInterval(detect, 700);                                  // 답 도중 rollout 생기면 즉시 링크
+    const killer = setTimeout(() => { timedOut = true; try { child.kill(); } catch { /* ignore */ } }, verifyTimeoutMin() * 60 * 1000);
+    const finish = (status, err) => {
+      if (done) return; done = true;
+      clearInterval(poll); clearTimeout(killer);
+      detect();                                                              // 마지막 한 번 더(폴링이 놓쳤을 수도)
+      let answer = "";
+      try { answer = fs.readFileSync(outFile, "utf8").trim(); } catch { /* ignore */ }
+      try { fs.unlinkSync(outFile); } catch { /* ignore */ }
+      let diag = "";
+      const badExit = typeof status === "number" && status !== 0;
+      if (err || !answer || badExit || timedOut) {
+        diag = `\n[브릿지 진단] codex 실행방식=${inv.how} · file=${path.basename(inv.file)}` +
+          `\n  spawn=${err ? err.code || err.message : "ok"} · exit=${status} · timeout=${timedOut}` +
+          `\n  (자세한 점검: node "${__filename}" doctor)`;
+      }
+      resolve({ answer, error: err || (timedOut ? new Error("timeout") : null), status, stderr: stderr + diag, detected });
+    };
+    child.on("error", (err) => finish(null, err));
+    child.on("close", (code) => finish(code, null));
+  });
+}
+
 function die(msg, code = 1) {
   process.stderr.write(msg + "\n");
   process.exit(code);
 }
 
-function cmdAsk(rest) {
+async function cmdAsk(rest) {
   const forceNew = rest.includes("--force-new"); // 엉뚱 폴더 방어를 무릅쓰고 '이 폴더'에 새 세션 강제
   const allowNew = rest.includes("--allow-new") || forceNew;
   const prompt = rest.filter((x) => x !== "--allow-new" && x !== "--force-new").join(" ").trim();
@@ -649,7 +734,7 @@ function cmdAsk(rest) {
     try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
     writeProof(link.codexSession, answer, ws); // 실제 성공 → 검증 증명 기록(verify-guard가 인정)
     flagEvidence(answer, ws, link.codexSession); // 결정2: 인용 근거 존재성 + 이 세션에서 다룬 흔적 점검 → 불일치/미확인이면 노랑
-    flagVerdict(answer, ws); // 비-깨끗한 결론(실패/불가/보류)이면 노랑, 답에 판정 줄이 없으면 표지 누락 노랑 가시화(자동 차단 X)
+    flagVerdict(answer, ws); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 답에 판정 줄이 없으면 표지 누락 노랑 가시화(자동 차단 X)
     process.stdout.write(`# 연결 세션 ${link.codexSession} (${link.via})\n\n${formatForClaude(answer)}\n`);
     return;
   }
@@ -705,37 +790,40 @@ function cmdAsk(rest) {
     );
   }
 
-  // --allow-new: 새 세션 생성 + 연결 기록.
+  // --allow-new: 새 세션 생성 + '생성 즉시' 연결(답을 기다리는 동안 rollout 뜨면 바로 link → 8분 답 끝까지 안 기다림).
   const since = Date.now() - 2000;
   try { writePhase("codex-verifying", { round: (readPhase().round || 0) + 1, session: claudeId(), workspace: ws }); } catch { /* 진행표시 best-effort */ }
-  const { answer, error, status, stderr } = runCodex([...mArgs], withContract(prompt, ws));
+  let earlyLinked = null;
+  // recordLink가 '성공(true)'일 때만 earlyLinked 확정 → 저장 실패(CAS/잠금/권한)면 미연결로 두고 다음 폴/최종 단계서 재시도.
+  // detected(세션 발견)와 linked(저장 성공)를 분리해 "즉시연결" 거짓보고를 막는다(Codex 지적).
+  const onDetect = (id) => { if (earlyLinked) return; try { if (recordLink(id)) earlyLinked = id; } catch { /* 다음 폴/최종 단계서 재시도 */ } };
+  const { answer, error, status, stderr } = await runCodexNewSessionAsync([...mArgs], withContract(prompt, ws), since, ws, onDetect);
+  // cwd 일치 우선, 못 찾으면 원래 방식(무회귀) — 최종 식별용 폴백.
+  const resolveNew = () => { const f = newestRolloutSinceForWs(since, ws) || newestRolloutSince(since); const mm = f && f.match(UUID_RE); return mm ? mm[1] : ""; };
   if (error || !answer || (typeof status === "number" && status !== 0)) {
-    // 응답은 실패했지만 세션 파일이 생겼을 수 있음 → 폭증 방지 플래그를 걸어 다음 자동 생성을 막고 종료.
-    if (newestRolloutSince(since)) {
-      updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; });
+    // 실패: 이미 '생성 즉시 연결'됐으면 고아 아님 → autoNewFailed 안 검(다음 시도는 그 세션 resume). 미연결일 때만 폭증방지/식별 시도.
+    if (!earlyLinked) {
+      const nid = resolveNew();
+      if (nid && recordLink(nid)) earlyLinked = nid; // 실패해도 세션이 생겼으면 연결(고아 방지)
+      else if (nid) updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; });
     }
     try { writePhase("claude-working", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // ask 실패 → 진행표시 정리(Claude로 복귀)
-    die(`Codex 새 세션 실패: ${error?.message || ""}\n${stderr.slice(-500)}\n(세션 파일이 생겼다면 'find'→'link <id>'로 연결하세요.)`);
+    die(`Codex 새 세션 ${earlyLinked ? `(연결됨 ${earlyLinked}) ` : ""}실패: ${error?.message || ""}\n${stderr.slice(-500)}\n${earlyLinked ? "(세션은 연결됐으니 다시 검증하면 그 세션을 이어갑니다.)" : "(세션 파일이 생겼다면 'find'→'link <id>'로 연결하세요.)"}`);
   }
   try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
-  const newFile = newestRolloutSince(since);
-  const m = newFile && newFile.match(UUID_RE);
-  if (m) {
-    const ok = recordLink(m[1]); // CAS 저장 + autoNewFailed[wsKey] 해제 포함
-    writeProof(m[1], answer, ws); // 실제 성공 → 검증 증명 기록
-    flagEvidence(answer, ws, m[1]); // 결정2: 인용 근거 존재성 + 이 세션에서 다룬 흔적 점검
-    flagVerdict(answer, ws); // 비-깨끗한 결론(실패/불가/보류)이면 노랑, 답에 판정 줄이 없으면 표지 누락 노랑 가시화(자동 차단 X)
-    // 머리말도 실패를 반영 — stdout만 보는 호출자가 성공으로 오해하지 않게(stderr 경고와 함께).
-    const head = ok
-      ? `# 새 Codex 세션 생성·연결: ${m[1]}`
-      : `# 새 Codex 세션 생성됨(${m[1]}) — ⚠️ 연결 기록 저장 실패(권한/잠금?), 'node codex-bridge.js link ${m[1]}'로 다시 연결하세요`;
+  let id = earlyLinked;
+  if (!id) { const nid = resolveNew(); if (nid && recordLink(nid)) id = nid; } // 즉시연결 못했으면 지금 찾아 연결
+  if (id) {
+    writeProof(id, answer, ws); // 실제 성공 → 검증 증명 기록
+    flagEvidence(answer, ws, id); // 결정2: 인용 근거 존재성 + 이 세션에서 다룬 흔적 점검
+    flagVerdict(answer, ws); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 표지 누락도 노랑 가시화(자동 차단 X)
+    const head = earlyLinked ? `# 새 Codex 세션 생성·즉시연결: ${id}` : `# 새 Codex 세션 생성·연결: ${id}`;
     process.stdout.write(`${head}\n\n${formatForClaude(answer)}\n`);
-    if (!ok) process.stderr.write(`⚠️ 연결 기록 저장 실패(권한/잠금?) — 세션 ${m[1]}은 생성됨. 'node codex-bridge.js link ${m[1]}'로 다시 연결하세요.\n`);
   } else {
     updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; }); // 다음 자동 생성 차단 플래그
     writeProof("", answer, ws); // Codex는 성공 응답함(세션id만 미식별) → 검증은 인정
     flagEvidence(answer, ws, ""); // 세션id 미식별 → 존재성 점검만(다룬-흔적 점검은 rollout 못 찾아 자동 보류)
-    flagVerdict(answer, ws); // 비-깨끗한 결론(실패/불가/보류)이면 노랑, 답에 판정 줄이 없으면 표지 누락 노랑 가시화(자동 차단 X)
+    flagVerdict(answer, ws);
     process.stdout.write(`# 새 세션 생성됨(세션id 식별 실패) — 폭증 방지로 다음 자동 생성은 멈춥니다. 'find'로 찾아 'link <id>' 하세요.\n\n${formatForClaude(answer)}\n`);
   }
 }
@@ -910,8 +998,11 @@ function cmdDoctor() {
 function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   switch (cmd) {
-    case "ask":
-      return cmdAsk(rest);
+    case "ask": {
+      const p = cmdAsk(rest); // 새 세션 경로는 async(즉시연결). resume는 동기 흐름이라 즉시 resolve.
+      if (p && typeof p.then === "function") p.catch((e) => die("ask 오류: " + (e && e.message ? e.message : String(e))));
+      return p;
+    }
     case "link":
       return cmdLink(rest);
     case "status":
@@ -938,4 +1029,4 @@ function main() {
 }
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
-module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, updateLinks, loadLinks, saveLinks, LINKS_FILE, verifyTimeoutMin, citedResolvedBasenames, citedFilesUnseen };
+module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, updateLinks, loadLinks, saveLinks, LINKS_FILE, verifyTimeoutMin, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs };

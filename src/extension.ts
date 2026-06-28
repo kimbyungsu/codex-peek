@@ -83,6 +83,7 @@ interface BridgeState {
   integrity: IntegrityEvent[]; // 무결성 신호(검증 미완 등) — 미확인 error는 상태바 빨강 + 대시보드 경보
   live: LiveStage | null;      // 검증 파이프라인 라이브 단계(없으면 대기) — 상태바·진행 스트립
   verifyTimeoutMin: number;    // 검증(codex) 대기시간(분) — 저장값 또는 기본 8. 브릿지 verifyTimeoutMin과 같은 규칙.
+  // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
 }
 
 function normWs(p: string): string {
@@ -424,6 +425,63 @@ function ackIntegrity(ids: string[] | "all"): boolean {
   for (const e of events) { if (!set || set.has(e.id)) e.ack = true; }
   return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events }));
 }
+// 모델 '계열'(별칭·전체ID 공통) — drift는 계열로 비교(opus↔claude-opus-4-8 동일, haiku≠opus만 어긋남).
+function modelFamily(m: string): string {
+  const s = (m || "").toLowerCase();
+  if (s.includes("haiku")) return "haiku";
+  if (s.includes("sonnet")) return "sonnet";
+  if (s.includes("opus")) return "opus";
+  if (s.includes("fable")) return "fable";
+  return "";
+}
+// 두뇌 drift(모델 계열/추론 어긋남)를 integrity 채널에 reconcile → 기존 상태바·배너·확인(ack) 파이프라인 재사용.
+// 안정 sig로 같은 drift는 재발행 안 함(확인 후 sig 안 바뀌면 안 다시 뜸), 해소된 미확인 신호는 제거. kind="brain-drift".
+function syncBrainDrift(ws: string | null, drifts: { sig: string; detail: string }[]): void {
+  if (!ws) return;
+  const KIND = "brain-drift";
+  const events = readIntegrity() as any[];
+  const wsMatch = (e: any) => !e.workspace || normWs(e.workspace) === normWs(ws);
+  const curSigs = new Set(drifts.map((d) => d.sig));
+  // 이 ws의 brain-drift 중 '현재도 유효한 sig'만 보존(ack·id 유지) → 해소/구식 제거. 타 kind·타 ws는 보존.
+  const kept = events.filter((e) => e.kind !== KIND || !wsMatch(e) || curSigs.has(e.sig));
+  const present = new Set(kept.filter((e) => e.kind === KIND && wsMatch(e)).map((e) => e.sig));
+  for (const d of drifts) {
+    if (present.has(d.sig)) continue; // 이미 기록됨(ack 유지) → 재발행 안 함
+    kept.push({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, ack: false, ts: new Date().toISOString(), session: "", workspace: ws, kind: KIND, severity: "warning", detail: d.detail, sig: d.sig });
+  }
+  if (kept.length !== events.length || kept.some((e, i) => e !== events[i])) atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: kept.slice(-50) }));
+}
+let lastDriftSync = 0;
+// 두뇌 drift 계산 + integrity 동기화 — computeState(대시보드)·상태바 render() 양쪽에서 호출(대시보드를 안 열어도 상태바에 뜨게).
+// 잦은 render에서 트랜스크립트 과다 read를 막기 위해 1.5s throttle. (Claude=모델 어긋남만 / Codex=모델·생각강도)
+function syncBrainDriftFor(ws: string | null): void {
+  if (!ws) return;
+  const now = Date.now();
+  if (now - lastDriftSync < 1500) return;
+  lastDriftSync = now;
+  try {
+    // 두뇌 drift는 '설정값 vs 최근 실제값' 불일치만 본다. ⚠ Claude의 실제 런타임 '생각강도'는 어디에도 기록되지 않아 비교가 불가능 →
+    // Claude는 '모델' 어긋남만 본다(생각강도는 탐지 안 함). 생각강도 비교는 그 값이 rollout에 기록되는 Codex에서만 한다.
+    // (예전 cc-effort-invalid='settings.json effortLevel 값이 목록 밖이면 무효' 검사는 제거: opus는 max를 실제 지원하고 max는 세션 중 정상
+    //  작동하는데 '무시됨'으로 거짓 경고했고, 모델별 허용 effort 표를 하드코딩해야 고쳐지는 데다 사용자가 원한 '실제값 비교'도 아니었다.)
+    const cbModel = readClaudeSettingsModel();      // Claude 설정 모델(별칭 가능, 예: opus[1m])
+    const claudeCur = readClaudeModels();           // Claude 대화기록의 최근 응답 모델(정식 ID, 예: claude-opus-4-8)
+    const links = loadLinks();
+    const pref: any = links.modelPrefs[normWs(ws)] || {};
+    const link = workspaceLink(links, ws);
+    let mModel = "", mEffort = "";
+    if (link && link.codexSession) { const f = findRolloutById(link.codexSession); if (f) { const sm = sessionModelMeta(f); mModel = sm.model; mEffort = sm.effort; } }
+    const bd: { sig: string; detail: string }[] = [];
+    // Claude: 별칭(opus)↔정식ID(claude-opus-4-8)는 namespace가 달라 modelFamily 계열로 비교(둘 다 알 때만 → 빈값 오탐 방지).
+    const cf = modelFamily(cbModel), cfc = modelFamily(claudeCur);
+    if (cf && cfc && cf !== cfc) bd.push({ sig: `cc-model:${cf}!${cfc}`, detail: `Claude: 설정한 모델은 '${cf}'인데 최근 답한 모델은 '${cfc}'예요. 고른 모델이 아직 안 먹었을 수 있어요(앱에서 모델을 다시 선택).` });
+    // Codex: pref와 rollout이 같은 slug 어휘라 정규화 raw 비교(modelFamily는 Claude 계열 전용이라 gpt-*를 ""로 떨궈 영영 못 잡음).
+    const xm = (pref.model || "").trim().toLowerCase(), xmc = (mModel || "").trim().toLowerCase();
+    if (xm && xmc && xm !== xmc) bd.push({ sig: `cx-model:${xm}!${xmc}`, detail: `코덱스: 설정한 모델은 '${pref.model}'인데 최근 답한 모델은 '${mModel}'예요. 바꾼 게 다음 답부터 반영될 수 있어요.` });
+    if (pref.reasoning && mEffort && pref.reasoning !== mEffort) bd.push({ sig: `cx-effort:${pref.reasoning}!${mEffort}`, detail: `코덱스: 설정한 생각강도는 '${pref.reasoning}'인데 최근 답은 '${mEffort}'였어요. 바꾼 게 다음 답부터 반영될 수 있어요.` });
+    syncBrainDrift(ws, bd);
+  } catch { /* best-effort */ }
+}
 // 무결성 경보 툴팁: 상태바 '바로 위'에 뜨는 '인터랙티브 호버'(MarkdownString+command 링크) — 마우스를 올려 링크 클릭 가능.
 // 평범한 문자열 툴팁과 달리 호버 안으로 진입 가능(VS Code #126753 fixed; 상태바 항목에 command가 있어야 마크다운 호버가 뜸 — 충족).
 // isTrusted는 우리 두 커맨드로만 좁힌다(임의 command: 링크 실행 방지). $(icon)은 supportThemeIcons로 렌더.
@@ -532,6 +590,10 @@ function computeState(turnsN: number): BridgeState {
       : "기본값 ~/.codex";
     sessionDiag = { home: CODEX_HOME, source, sessionsDir: SESSIONS_DIR, sessionsExists, codexBin: resolveCodexPathForBridge() || "설정·형제확장에서 못 찾음 → PATH의 codex 시도" };
   }
+
+  // 두뇌 drift를 integrity로 동기화(상태바/배너) — syncBrainDriftFor가 settings/transcript/rollout을 직접 읽어 계산한다.
+  // 대시보드(computeState)·상태바 render() 양쪽에서 같은 함수를 호출하므로, 대시보드를 안 열어도 상태바에 drift가 뜬다.
+  syncBrainDriftFor(ws);
 
   return {
     workspace: ws,
@@ -677,6 +739,79 @@ function setModelPref(ws: string, model: string, reasoning: string): boolean {
     if (Object.keys(cur).length) o.modelPrefs[n] = cur;
     else delete o.modelPrefs[n];
   });
+}
+
+// ── Claude Code 설정 모델 읽기 — Claude 설정 폴더(기본 ~/.claude, 공식 env CLAUDE_CONFIG_DIR로 이전 가능) ──
+// 모델 어긋남 경고(cc-model)에만 쓴다. 생각강도(effortLevel/env)는 읽지 않는다 — Claude의 '실제' 런타임 생각강도가
+// 어디에도 기록되지 않아 '설정 vs 실제' 비교가 불가능하기 때문(예전 '무효값' 검사는 opus의 max를 오탐해 제거).
+// settings.json은 '읽기만' 한다 — 두뇌설정 카드를 없앤 뒤로 이 확장은 사용자의 model/effort를 절대 쓰지 않는다(앱 /model·/effort가 담당).
+// 환경 적응(이슈#1의 CODEX_HOME 자동탐지와 '동일하게'): Claude 설정/세션 폴더는 공식 env CLAUDE_CONFIG_DIR로 옮길 수 있다.
+//   공식 env-vars 문서상 이 값은 'Config directory' 전체(= settings.json + projects)이며 기본값이 ~/.claude다.
+//   ★확장 호스트가 CLAUDE_CONFIG_DIR을 못 볼 수 있어(특히 *nix GUI 실행) env에만 의존하지 않는다 — contract-inject 훅이 Claude
+//    프로세스에서 받은 실제 transcript_path로 도출해 적어둔 claude-home.txt(codex-home.txt 대칭)를 신뢰 폴백 소스로 쓴다.
+//   해석 순서: env CLAUDE_CONFIG_DIR → claude-home.txt(훅 자동탐지) → ~/.claude. env·훅 둘 다 없으면 ~/.claude(무회귀).
+//   못 찾으면 settings 읽기가 ""→cc-model 비교 스킵(조용히 off·오탐 0). 옛 위치 stale을 억지로 읽지 않는다(false drift 회피).
+// ★매 호출 재해석(런타임 적응): 확장 시작 뒤 contract-inject 훅이 claude-home.txt를 처음 기록해도 다음 render부터 즉시 반영(reload 불필요).
+//   BRIDGE_DIR는 이미 watch되어(links.json과 같은 폴더) claude-home.txt가 써지면 render가 돌고, 아래 reads가 claudeHome()을 새로 읽는다.
+//   Codex의 syncCodexHome 런타임 갱신과 같은 목적 — 정적 const였으면 활성화 시점 값에 고정되는 갭(Codex 지적)을 피한다.
+function claudeHome(): string {
+  const pinned = readTextSafe(path.join(BRIDGE_DIR, "claude-home.txt"));
+  return process.env.CLAUDE_CONFIG_DIR || (pinned && fs.existsSync(pinned) ? pinned : "") || path.join(HOME, ".claude");
+}
+function claudeSettingsFile(): string { return path.join(claudeHome(), "settings.json"); }
+
+function readClaudeSettingsModel(): string {
+  try {
+    const j = JSON.parse(fs.readFileSync(claudeSettingsFile(), "utf8"));
+    return j && typeof j === "object" && typeof j.model === "string" ? j.model : "";
+  } catch { return ""; }
+}
+
+// Claude 모델은 코덱스 models_cache 같은 목록 소스가 없다. 대신 Claude 설정폴더/projects 트랜스크립트의 assistant
+// message.model에서 '실제 쓰인 모델'을 읽는다(codex-usage-monitor와 동일 방식 — 하드코딩 없음·업데이트 자동반영).
+// 성능: 최근 수정 파일 일부만, 각 파일의 마지막 128KB(tail)만 읽어 마지막 모델을 뽑는다(전체 동기 파싱 회피).
+// 트랜스크립트도 CLAUDE_CONFIG_DIR로 이동되므로 claudeHome()에서 파생(이전 환경에서도 '최근 응답 모델'을 찾는다·매 호출 재해석).
+function claudeProjectsDir(): string { return path.join(claudeHome(), "projects"); }
+function lastModelInFile(f: string): string {
+  try {
+    const size = fs.statSync(f).size;
+    const len = Math.min(size, 131072); // 마지막 128KB
+    const fd = fs.openSync(f, "r");
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    fs.closeSync(fd);
+    const lines = buf.toString("utf8").split(/\r?\n/);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const s = lines[i]; if (!s || s[0] !== "{") continue;
+      let o: any; try { o = JSON.parse(s); } catch { continue; }
+      if (o && o.message && typeof o.message.model === "string" && o.message.model) return o.message.model;
+    }
+  } catch { /* ignore */ }
+  return "";
+}
+// '최근 응답 모델'(가장 최근 수정 트랜스크립트의 마지막 model) 한 개만 반환 — picker는 별칭 기반이라 이 값은 표시/계열-drift용.
+function readClaudeModels(): string {
+  const files: { f: string; m: number }[] = [];
+  const walk = (d: string, depth: number) => {
+    if (depth > 4) return;
+    let items: fs.Dirent[];
+    try { items = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const it of items) {
+      const full = path.join(d, it.name);
+      if (it.isDirectory()) walk(full, depth + 1);
+      else if (it.isFile() && it.name.endsWith(".jsonl") && !it.name.startsWith("agent-")) {
+        try { files.push({ f: full, m: fs.statSync(full).mtimeMs }); } catch { /* ignore */ }
+      }
+    }
+  };
+  try { walk(claudeProjectsDir(), 0); } catch { /* ignore */ }
+  files.sort((a, b) => b.m - a.m);
+  const recent = files.slice(0, 25); // bounded: 최근 25개 파일만
+  for (let i = 0; i < recent.length; i++) {
+    const mdl = lastModelInFile(recent[i].f);
+    if (mdl) return mdl; // 최근 수정순 '첫 모델 있는' 파일 = 최근 응답 모델(빈/유저전용/파싱불가 건너뜀)
+  }
+  return "";
 }
 
 function relink(id: string): boolean {
@@ -1153,6 +1288,7 @@ class Dashboard {
   <div class="mcard">
     <div class="muted">지금 쓰는 값(최근 기록): <b id="mCur">—</b></div>
     <div id="mCacheWarn" class="hint" style="display:none;margin:6px 0 0 0"></div>
+    <!-- 코덱스 모델/생각강도 어긋남 인라인 경고(#mDrift) 제거: 두뇌 drift는 무결성 채널(상태바/배너+확인) 단일 경로로 일원화. (ack 불가·정책상이 중복 해소) -->
     <div class="mrow"><span class="mlbl">모델</span>
       <select id="mModel" title="이 프로젝트에서 코덱스가 쓸 모델 — 계정에서 받은 목록(없으면 기본값)"></select>
     </div>
@@ -1162,6 +1298,7 @@ class Dashboard {
     <div class="row" style="margin-top:10px"><button id="saveModel">두뇌 설정 저장</button><span id="savedModel" class="muted"></span></div>
     <div class="muted" style="margin-top:6px">선택은 <b>다음 코덱스 응답부터</b> 적용 · 비우면 코덱스 기본값 · 코덱스에 말 걸 때마다 자동으로 다시 실어줌</div>
   </div>
+  <!-- Claude Code 두뇌 관리 카드 제거: 앱 /model·/effort가 이미 settings.json에 영속하고 모델별 effort도 정확히 다룬다(카드는 중복·충돌·effort표 부정확이었음). 모델 계열/추론 어긋남은 상태바 drift 경고로 표시(computeState의 syncBrainDrift). -->
   <h2 class="sec base">검증 대기시간 <span class="sub2">코덱스 검증을 기다리는 한도 — 추론이 길면 늘리세요 (전역·모든 프로젝트 공통)</span></h2>
   <div class="mcard">
     <div class="mrow"><span class="mlbl">대기시간</span>
@@ -1193,8 +1330,9 @@ class Dashboard {
   let curPerm = "";   // 지금 Claude Code 권한 모드(active.json) — plan 게이트 표시용
   let curRS = "";     // 두뇌 설정 폼에서 고른 생각강도("" = 기본). 모델은 입력칸 값 직접 사용.
   let appRS = null, appModel = null;  // 저장돼 적용 중인 두뇌 설정(미저장 편집 보존용 dirty 비교 기준)
+  // (Claude 두뇌 카드 관련 webview 변수·헬퍼 제거됨 — 카드 폐기. 어긋남은 상태바 drift 경고로.)
   let AVAIL = [];     // 계정 캐시 모델·모델별 생각강도(서버에서 받은 것 — 하드코딩 아님)
-  const RSKO = {minimal:"최소", low:"낮음", medium:"보통", high:"높음", xhigh:"매우높음", pro:"프로"}; // 표시 라벨(없는 값은 원문)
+  const RSKO = {minimal:"최소", low:"낮음", medium:"보통", high:"높음", xhigh:"매우높음", pro:"프로"}; // 표시 라벨(코덱스 카드 전용·없는 값은 원문). Claude 카드는 영문 원값 사용(아래 별도)
   // 선택한 모델이 지원하는 생각강도만 버튼으로(계정·모델별로 다름). 모델 미선택이면 가능한 값 합집합.
   function renderReasonButtons(slug){
     const seg=$("segReason"); if(!seg) return; seg.replaceChildren();
@@ -1245,6 +1383,7 @@ class Dashboard {
     pendingSave = {target:"model"};  // 성공 플래시는 saveResult(ok) 받을 때
     vscode.postMessage({type:"saveModelPref", model: $("mModel").value.trim(), reasoning: curRS});
   });
+  // (Claude 두뇌 관리 카드 제거됨 — effort 버튼·모델 select 핸들러 삭제. 모델/추론 어긋남은 상태바 drift 경고로.)
   $("saveVT").addEventListener("click", () => {
     let n = parseInt($("vtMin").value, 10);
     if (!Number.isFinite(n)) n = 8;
@@ -1436,21 +1575,28 @@ class Dashboard {
       const iev = (d.integrity||[]).filter(function(e){return e && !e.ack && (e.severity==="error"||e.severity==="warning");});
       if (!iev.length) { ib.style.display="none"; ib.replaceChildren(); ib.className="integrity"; }
       else {
-        const nerr = iev.filter(function(e){return e.severity==="error";}).length;
+        const errEvs = iev.filter(function(e){return e.severity==="error";});
+        const nFail = errEvs.filter(function(e){return e.kind==="verdict-nonclean";}).length; // Codex 결론 '실패' = 빨강(대시보드 칩과 일치)
+        const nIncomplete = errEvs.length - nFail; // 검증 미완 — 검증 자체가 안 일어난 미검증 턴(빨강·ack 필요)
         const warnEvs = iev.filter(function(e){return e.severity==="warning";});
-        const nVerdict = warnEvs.filter(function(e){return e.kind==="verdict-nonclean";}).length;
+        const nVerdict = warnEvs.filter(function(e){return e.kind==="verdict-nonclean";}).length; // 보류·불가(실패는 빨강으로 분리)
         const nMissing = warnEvs.filter(function(e){return e.kind==="verdict-missing";}).length; // 판정 표지 누락(통과 아님과 구분)
-        const nEvid = warnEvs.length - nVerdict - nMissing; // 근거(evidence-*) 계열
+        const nDrift = warnEvs.filter(function(e){return e.kind==="brain-drift";}).length; // 두뇌 설정(모델/추론) 어긋남 — 검증과 별개 라벨
+        const nEvid = warnEvs.length - nVerdict - nMissing - nDrift; // 근거(evidence-*) 계열
+        const errParts = [];
+        if (nFail) errParts.push("검증 실패 " + nFail + "건"); // 빨강 — Codex 결론이 통과 아님(실패)
+        if (nIncomplete) errParts.push("검증 미완 " + nIncomplete + "건"); // 빨강 — 검증 자체가 안 일어남
         const warnParts = [];
-        if (nVerdict) warnParts.push("Codex 결론 주의 " + nVerdict + "건"); // 통과 아님(실패/불가/보류)
+        if (nVerdict) warnParts.push("Codex 보류·불가 " + nVerdict + "건"); // 노랑 — 통과도 실패도 아닌 보류/불가/정보부족
         if (nMissing) warnParts.push("판정 표지 없음 " + nMissing + "건"); // 마지막 '검증:' 줄 없음 → 색 표시 빔
         if (nEvid) warnParts.push("근거 의심 " + nEvid + "건"); // 인용 근거가 파일/라인과 안 맞음
+        if (nDrift) warnParts.push("두뇌 설정 어긋남 " + nDrift + "건"); // 모델/추론 계열 불일치(설정 미적용 가능 — 검증과 무관)
+        const errStr = errParts.join(" · ");
         const warnStr = warnParts.join(" · ");
         ib.replaceChildren();
-        ib.className = "integrity" + (nerr ? " err" : " warn"); // 빨강(미완) 있으면 빨강 테두리, 아니면 노랑
+        ib.className = "integrity" + (errEvs.length ? " err" : " warn"); // 빨강(실패/미완) 있으면 빨강 테두리, 아니면 노랑
         const ih = el("div","ih");
-        const head = nerr ? ("검증 무결성 경보 — 검증 미완 " + nerr + "건" + (warnStr ? " · " + warnStr : ""))
-                          : ("검증 무결성 경보 — " + warnStr);
+        const head = "검증 무결성 경보 — " + [errStr, warnStr].filter(Boolean).join(" · "); // 빨강·노랑 라벨을 순서대로(빨강 먼저)
         ih.appendChild(el("span", null, head));
         const ack = el("button","secondary","확인함 ✓");
         ack.addEventListener("click", function(){ vscode.postMessage({type:"ackIntegrity", ids: iev.map(function(e){return e.id;})}); }); // 보이는(이 창) 경보만 확인 — 다른 창 것 안 지움
@@ -1588,6 +1734,8 @@ class Dashboard {
     else { sel.value=prevModelVal; } // 편집 중이면 사용자가 고르던 값 되돌림(replaceChildren 리셋 보정)
     renderReasonButtons($("mModel").value.trim());  // 현재 모델 기준 생각강도 버튼(내부에서 curRS 하이라이트/검증)
     const vt=$("vtMin"); if(vt && document.activeElement!==vt) vt.value = d.verifyTimeoutMin || 8; // 편집 중이 아니면 저장값 표시
+    // (코덱스 드리프트 인라인 경고 제거됨 — 모델/생각강도 어긋남은 상태바/배너 무결성 경고(brain-drift, 확인 가능)로 일원화. computeState의 syncBrainDriftFor가 cx-model/cx-effort 계산.)
+    // (Claude 두뇌 카드 렌더도 제거됨 — 동일하게 상태바 drift(무결성 채널)로 이동.)
   });
 </script></body></html>`;
   }
@@ -1770,6 +1918,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
     // 검증 진행 흐름: 진행 중이면 메인 항목을 숨기고 [🧑Claude] ▶▶검증중 [🔍Codex] 3개 항목으로 단계별(글자)색을 보인다.
     const live = computeLiveStage(link?.codexSession ?? null);
+    // 두뇌 drift를 상태바 갱신 경로에서도 계산 → 대시보드를 열지 않아도 drift 경고가 상태바에 뜬다(throttle 내장). 그 뒤 integrity를 읽는다.
+    syncBrainDriftFor(dashboardWorkspace());
     const allIg = readVisibleIntegrity(dashboardWorkspace());
     const errs = allIg.filter((e) => !e.ack && e.severity === "error");
     const warns = allIg.filter((e) => !e.ack && e.severity === "warning");
@@ -1795,32 +1945,43 @@ export function activate(context: vscode.ExtensionContext): void {
     flowHide();
     status.color = undefined; // 메인 항목 글자색 잔존 방지
 
-    // 무결성 경보: error(검증 미완)=빨강 우선, 없으면 warning(근거 의심=결정2-2)=노랑. 확인하면 사라짐. (errs·warns는 위에서 계산)
+    // 무결성 경보: error(검증 실패=verdict-nonclean / 검증 미완=verify-incomplete)=빨강 우선. 빨강이 있어도 함께 있는 노랑 건수를 같이 보여 '둘 다' 인지되게 한다.
     if (errs.length) {
-      status.text = `$(alert) Codex 검증 미완 ${errs.length}`;
+      const nFail = errs.filter((e) => e.kind === "verdict-nonclean").length; // Codex 결론 '실패'(빨강·재검증 통과 시 자동 해소)
+      const nIncomplete = errs.length - nFail;                                // 검증 미완(검증 자체가 안 일어남·ack 필요)
+      const label = nFail && nIncomplete ? "Codex 검증 문제"
+                  : nFail ? "Codex 검증 실패"
+                  : "Codex 검증 미완";
+      const warnTail = warns.length ? ` · 🟡${warns.length}` : ""; // 같이 뜬 노랑(두뇌 어긋남·근거 의심 등)도 건수로 노출
+      status.text = `$(alert) ${label} ${errs.length}${warnTail}`;
+      const lines = [...errs, ...warns].slice(-4).map((e) => `- ${e.severity === "error" ? "🔴" : "🟡"} ${e.detail || e.kind || "경보"}`);
       status.tooltip = alertTooltip(
-        `**⚠️ 검증 무결성 경보 — 미확인 ${errs.length}건**\n\n` +
-          errs.slice(-3).map((e) => `- ${e.detail || e.kind || "검증 미완"}`).join("\n\n") +
-          `\n\n이 턴 결과가 '검증 없이' 종료됐을 수 있어요.`,
+        `**🔴 빨강 ${errs.length}건${warns.length ? " · 🟡 노랑 " + warns.length + "건" : ""}**\n\n` +
+          lines.join("\n\n") +
+          (nFail ? `\n\n검증 실패: 고쳐서 다시 검증해 통과하면 빨강이 사라집니다.` : ``) +
+          (nIncomplete ? `\n\n검증 미완: 이 턴이 '검증 없이' 종료됐을 수 있어요(확인 필요).` : ``),
       );
       status.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
       pulseIfNew(errs.length);
     } else if (warns.length) {
-      // 노랑 경고 3종: verdict-nonclean(결론이 통과 아님) + verdict-missing(판정 표지 없음) + evidence-*(인용 근거 의심). 빨강(미완)보다 약함, 펄스 없음.
+      // 노랑 경고: verdict-nonclean(보류·불가 — 실패는 빨강으로 분리됨) + verdict-missing(판정 표지 없음) + evidence-*(인용 근거 의심) + brain-drift(두뇌 어긋남). 빨강(실패/미완)보다 약함, 펄스 없음.
       if (pulseTimer) { clearInterval(pulseTimer); pulseTimer = undefined; }
       lastErrCount = 0;
       const nVerdict = warns.filter((e) => e.kind === "verdict-nonclean").length;
       const nMissing = warns.filter((e) => e.kind === "verdict-missing").length; // 표지 누락 — '통과 아님'과 다름
-      const nEvid = warns.length - nVerdict - nMissing;
-      const kinds = [nVerdict > 0, nMissing > 0, nEvid > 0].filter(Boolean).length;
+      const nDrift = warns.filter((e) => e.kind === "brain-drift").length; // 두뇌 설정 어긋남 — 검증 근거와 무관(배너와 동일 분리)
+      const nEvid = warns.length - nVerdict - nMissing - nDrift;
+      const kinds = [nVerdict > 0, nMissing > 0, nEvid > 0, nDrift > 0].filter(Boolean).length;
       const label = kinds > 1 ? "Codex 주의"
-                  : nVerdict ? "Codex 결론 주의"
+                  : nVerdict ? "Codex 보류·불가"
                   : nMissing ? "Codex 표지 없음"
+                  : nDrift ? "두뇌 설정 어긋남"
                   : "Codex 근거 의심";
       const parts: string[] = [];
-      if (nVerdict) parts.push(`결론 주의 ${nVerdict}건`);
+      if (nVerdict) parts.push(`보류·불가 ${nVerdict}건`);
       if (nMissing) parts.push(`판정 표지 없음 ${nMissing}건`);
       if (nEvid) parts.push(`근거 의심 ${nEvid}건`);
+      if (nDrift) parts.push(`두뇌 설정 어긋남 ${nDrift}건`);
       const tipHead = parts.join(" · ");
       status.text = `$(warning) ${label} ${warns.length}`;
       status.tooltip = alertTooltip(
@@ -1858,6 +2019,13 @@ export function activate(context: vscode.ExtensionContext): void {
   } catch {
     /* ignore */
   }
+  // 두뇌 drift 입력원 감시 ①: Claude settings.json — 앱 /model·/effort가 즉시 다시 쓰므로, 바뀌면 즉시 render로 drift 반영.
+  // 상위 폴더(CLAUDE_HOME = CLAUDE_CONFIG_DIR 또는 ~/.claude) 비재귀 watch + 파일명 필터: 원자적 rename 교체에도 견딤(파일 직접 watch는 교체 후 끊긴다). Codex 소스(links/rollout)는 위 watch가 이미 담당.
+  try {
+    watchers.push(fs.watch(path.dirname(claudeSettingsFile()), (_e, fn) => { if (!fn || fn === "settings.json") scheduleRender(); }));
+  } catch {
+    /* ignore */
+  }
 
   // V11: 활성화 시 codex home 1회 자동탐지 → 세션 폴더 갱신. 폴더가 바뀌었으면 그 폴더도 감시 추가 + 새로고침.
   syncCodexHome((changed) => {
@@ -1867,8 +2035,13 @@ export function activate(context: vscode.ExtensionContext): void {
     scheduleRender();
   });
 
+  // 두뇌 drift 입력원 감시 ②: 트랜스크립트(CLAUDE_HOME/projects/**/*.jsonl, CLAUDE_CONFIG_DIR일 수 있음)는 응답마다 잦게 append돼 재귀 watch가 과하다 →
+  // 15s 주기 폴링으로 '최근 응답 모델' 변화와 drift 해소(적용되면 사라짐)를 따라잡는다. render는 syncBrainDriftFor 1.5s throttle로 비용 한정(폴링 1회=최대 drift 1회).
+  const driftPoll = setInterval(() => { render(); dashboard.post(); }, 15000);
+
   context.subscriptions.push(
     status,
+    { dispose: () => clearInterval(driftPoll) },
     vscode.commands.registerCommand("codexBridge.openDashboard", () => dashboard.show()),
     // 상태바 '확인함' — 호버 툴팁의 클릭 링크(command:codexBridge.ackHere)에서 호출. 이 창에 보이는 미확인 경보만 읽음 처리.
     // ★ 호출 '시점'에 경보 재읽기(렌더 시점 값 재사용 금지) ★ 이 창 id만(다른 창 보존) ★ 실패 정직 보고 ★ 직후 즉시 갱신.

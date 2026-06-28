@@ -1,6 +1,6 @@
 /*
- * flagVerdict supersede 테스트 — 새 검증 결과가 같은 세션의 직전 '비-깨끗 결론' 노랑을 대체(누적 cry-wolf 방지).
- * 사용자 시나리오: 실패→수정→재검증 통과면 노랑이 사라져야 한다(무조건 노랑 = 버그였음).
+ * flagVerdict supersede 테스트 — 새 검증 결과가 같은 세션의 직전 '비-깨끗 결론' 경보를 대체(누적 cry-wolf 방지).
+ * 사용자 시나리오: 실패→수정→재검증 통과면 그 경보가 사라져야 한다(무조건 잔존 = 버그였음). 실패=빨강(error)·보류·불가=노랑(warning).
  */
 const os = require("os"), path = require("path"), fs = require("fs");
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vs_"));
@@ -17,11 +17,11 @@ let pass = 0, fail = 0;
 function ok(c, m) { if (c) { pass++; console.log("  ✅ " + m); } else { fail++; console.log("  ❌ " + m); } }
 
 resetIg();
-console.log("[사용자 시나리오] 실패 → 재검증 통과 = 노랑 사라짐");
+console.log("[사용자 시나리오] 실패 → 재검증 통과 = 경보 사라짐");
 flagVerdict("검증: 실패\n\n- 문제 X", "/ws");
 ok(unackedVerdict().length === 1, "실패 → verdict-nonclean 1건 뜸");
 flagVerdict("검증: 통과\n\n- 다 고침", "/ws");
-ok(unackedVerdict().length === 0, "이후 통과 → 직전 실패 노랑이 supersede로 사라짐(cry-wolf 해소)");
+ok(unackedVerdict().length === 0, "이후 통과 → 직전 실패(빨강)가 supersede로 사라짐(cry-wolf 해소)");
 
 console.log("[통과(보완)도 통과라 직전 비-깨끗을 해소]");
 flagVerdict("검증: 보류\n\n- 정보부족", "/ws");
@@ -35,11 +35,22 @@ flagVerdict("검증: 실패\n\n첫째", "/ws");
 flagVerdict("검증: 실패\n\n둘째", "/ws");
 ok(unackedVerdict().length === 1, "실패 두 번 → 누적 아니라 최신 1건만");
 
+console.log("[실패=빨강(error) / 보류·불가=노랑(warning) — 사용자 요청: 실패는 빨강 분리]");
+resetIg();
+flagVerdict("검증: 실패\n\nX", "/ws");
+ok(unackedVerdict()[0] && unackedVerdict()[0].severity === "error", "실패 → verdict-nonclean severity=error(빨강, 대시보드 칩과 일치)");
+resetIg();
+flagVerdict("검증: 보류\n\n정보부족", "/ws");
+ok(unackedVerdict()[0] && unackedVerdict()[0].severity === "warning", "보류 → severity=warning(노랑)");
+resetIg();
+flagVerdict("검증: 불가\n\n못 봄", "/ws");
+ok(unackedVerdict()[0] && unackedVerdict()[0].severity === "warning", "불가도 → severity=warning(노랑)");
+
 console.log("[결론 미상(null)은 직전 신호 안 건드림]");
 resetIg();
 flagVerdict("검증: 실패\n\nX", "/ws");
 flagVerdict("코드를 봤습니다(결론 표지 없음)", "/ws"); // null → verdict-nonclean은 supersede/추가 안 함(verdict-missing은 별도로 추가됨 — 아래 표지 누락 케이스에서 검증)
-ok(unackedVerdict().length === 1, "결론 못 읽은 답은 직전 실패 노랑을 함부로 지우지 않음");
+ok(unackedVerdict().length === 1, "결론 못 읽은 답은 직전 실패(빨강)를 함부로 지우지 않음");
 
 console.log("[supersedeIntegrity 정밀] 다른 세션·다른 kind·ack된 것은 보존");
 fs.writeFileSync(INTEGRITY, JSON.stringify({ events: [
@@ -60,13 +71,13 @@ console.log("[표지 누락 가시화] 답은 있는데 마지막 '검증:' 줄 
 resetIg();
 flagVerdict("코드를 봤습니다. 별 문제 없어 보입니다(판정 줄 없음)", "/ws");
 ok(unackedKind("verdict-missing").length === 1, "표지 없는 답 → verdict-missing 1건");
-ok(unackedKind("verdict-nonclean").length === 0, "표지 없는 답은 verdict-nonclean(통과 아님 노랑)을 만들지 않음");
+ok(unackedKind("verdict-nonclean").length === 0, "표지 없는 답은 verdict-nonclean(통과 아님 경보)을 만들지 않음");
 
-console.log("[격리] 표지 누락은 직전 실패 노랑을 지우지 않는다(별도 kind)");
+console.log("[격리] 표지 누락은 직전 실패(빨강)를 지우지 않는다(별도 kind)");
 resetIg();
 flagVerdict("검증: 실패\n\nX", "/ws");
 flagVerdict("표지 없는 후속 답", "/ws");
-ok(unackedKind("verdict-nonclean").length === 1, "직전 실패 노랑 유지(verdict-missing이 안 건드림)");
+ok(unackedKind("verdict-nonclean").length === 1, "직전 실패(빨강) 유지(verdict-missing이 안 건드림)");
 ok(unackedKind("verdict-missing").length === 1, "표지 누락도 별도 1건으로 가시화");
 
 console.log("[정리] 표지 누락 뒤 정상 판정 도착 → 표지 누락 노랑 사라짐(supersede)");
