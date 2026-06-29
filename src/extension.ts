@@ -20,6 +20,7 @@ const CONTRACTS_DIR = path.join(BRIDGE_DIR, "contracts"); // 프로젝트별 계
 const INTEGRITY_FILE = path.join(BRIDGE_DIR, "integrity.json"); // 무결성 신호(브릿지 기록 → 상태바 빨강·대시보드로 가시화)
 const PHASE_FILE = path.join(BRIDGE_DIR, "phase.json"); // 검증 파이프라인 라이브 단계(훅/브릿지 기록 → 상태바·진행 스트립)
 const PHASE_STALE_MS = 15 * 60 * 1000; // 이보다 오래된 phase는 '대기'로 — 코덱스 ask 최대 8분 + 여유
+const DRIFT_FRESH_MS = 24 * 60 * 60 * 1000; // 두뇌 drift '최근 실제값' 신선도(24h). 이보다 오래된 답/세션은 stale로 보고 경고 안 함 — 옛 모델 기록(예: 몇 주 전 다른 모델 사용)이 거짓 drift 내는 것 방지.
 // 원자적 저장: 임시파일에 쓴 뒤 rename으로만 교체 → 읽는 쪽은 옛/새 파일만 보고 반쪽(손상) 파일은 못 본다
 // (다중 창 동시쓰기 손상 방지). ⚠ 직접쓰기 폴백 금지 — Windows에선 대상이 동시 읽기로 잠깐 열려 있으면 rename이
 // 실패하는데, 그때 직접쓰기로 폴백하면 그게 반쪽파일 손상의 원인이 된다(검증 확인). rename 짧게 재시도, 끝내
@@ -302,11 +303,16 @@ function firstSnippet(file: string): string {
 
 // rollout의 turn_context에서 '현재(마지막) 모델·생각강도'와 '이 세션이 써본 모델 목록'을 뽑는다.
 // readMessages는 turn_context를 버리므로 별도 파서 필요(item4 보기). 마지막 turn_context 값 = 현재값.
-function sessionModelMeta(file: string): { model: string; effort: string; models: string[] } {
+// ★wsFilter: 한 코덱스 세션이 여러 워크스페이스에 공유될 수 있고(폴더마다 다른 모델/생각강도 pref), turn_context엔
+//   그 ask가 돈 폴더(cwd)가 기록된다. wsFilter를 주면 '그 폴더에서 나온 turn'만으로 현재 model/effort를 잡는다 →
+//   형제 폴더 ask가 만든 값과 비교돼 거짓 두뇌-drift가 뜨는 것을 막는다. 일치 turn 0개면 model/effort=""(호출측 가드가 경고 억제).
+//   단 models(이 세션이 써본 모델 목록·knownModels 표시용)는 필터와 무관하게 전부 모은다.
+function sessionModelMeta(file: string, wsFilter?: string | null): { model: string; effort: string; models: string[]; ts: string } {
   const models = new Set<string>();
-  let model = "", effort = "";
+  let model = "", effort = "", ts = "";
+  const want = wsFilter ? normWs(wsFilter) : null;
   let content: string;
-  try { content = fs.readFileSync(file, "utf8"); } catch { return { model, effort, models: [] }; }
+  try { content = fs.readFileSync(file, "utf8"); } catch { return { model, effort, models: [], ts }; }
   for (const line of content.split("\n")) {
     const s = line.trim();
     if (!s || s[0] !== "{") continue;
@@ -314,11 +320,14 @@ function sessionModelMeta(file: string): { model: string; effort: string; models
     try { o = JSON.parse(s); } catch { continue; }
     if ((o.type || o.payload?.type) !== "turn_context") continue;
     const p = o.payload || o;
-    if (p.model) { model = p.model; models.add(p.model); }
+    if (p.model) models.add(p.model);                          // models=세션이 써본 전체(필터 무관)
+    if (want && normWs(p.cwd || "") !== want) continue;        // 현재값은 '이 폴더(cwd)' turn만 반영
+    if (p.model) model = p.model;
     const e = p.effort || p.reasoning_effort;
     if (e) effort = e;
+    if (o.timestamp) ts = o.timestamp;                         // 이 폴더(cwd) 마지막 turn 시각 — drift 신선도(파일 mtime보다 엄밀, 외부 touch 무관)
   }
-  return { model, effort, models: [...models] };
+  return { model, effort, models: [...models], ts };
 }
 
 // 코덱스가 '계정별'로 서버에서 받아 캐시하는 모델·생각강도 목록(CODEX_HOME/models_cache.json).
@@ -464,13 +473,25 @@ function syncBrainDriftFor(ws: string | null): void {
     // Claude는 '모델' 어긋남만 본다(생각강도는 탐지 안 함). 생각강도 비교는 그 값이 rollout에 기록되는 Codex에서만 한다.
     // (예전 cc-effort-invalid='settings.json effortLevel 값이 목록 밖이면 무효' 검사는 제거: opus는 max를 실제 지원하고 max는 세션 중 정상
     //  작동하는데 '무시됨'으로 거짓 경고했고, 모델별 허용 effort 표를 하드코딩해야 고쳐지는 데다 사용자가 원한 '실제값 비교'도 아니었다.)
-    const cbModel = readClaudeSettingsModel();      // Claude 설정 모델(별칭 가능, 예: opus[1m])
-    const claudeCur = readClaudeModels();           // Claude 대화기록의 최근 응답 모델(정식 ID, 예: claude-opus-4-8)
+    // ★워크스페이스 격리(cwd 필터): 이 경고는 '이 폴더(ws)의 설정 vs 이 폴더의 실제 답'이어야 한다. 한 코덱스 세션·전역 Claude 기록이
+    //  여러 폴더에 공유되므로, '최근 실제값'을 ws(cwd)로 걸러 형제 폴더의 답이 이 폴더 경고로 새지 않게 한다(거짓 두뇌-drift 차단).
+    const cbModel = readClaudeSettingsModel();      // Claude 설정 모델(전역 settings.json·별칭 가능, 예: opus[1m])
+    const claudeCur = readClaudeModels(ws);         // 이 폴더(ws)에서 Claude가 최근 답한 모델(정식 ID, 예: claude-opus-4-8)
     const links = loadLinks();
     const pref: any = links.modelPrefs[normWs(ws)] || {};
     const link = workspaceLink(links, ws);
     let mModel = "", mEffort = "";
-    if (link && link.codexSession) { const f = findRolloutById(link.codexSession); if (f) { const sm = sessionModelMeta(f); mModel = sm.model; mEffort = sm.effort; } }
+    // 연결된 코덱스 rollout의 '이 폴더 마지막 turn'이 오래됐으면(stale) 비교하지 않는다 — 옛 세션의 마지막 모델/생각강도가
+    // 거짓 drift를 내는 것 방지(cc의 신선도 정책과 대칭). 신선도는 파일 mtime이 아니라 rollout 내부 turn 시각(sm.ts)으로 판정
+    // → 파일이 외부 요인으로 touch돼도 stale 세션이 fresh처럼 보이지 않음. 지금 검증에 쓰는 세션이면 turn이 신선해 정상 비교.
+    if (link && link.codexSession) {
+      const f = findRolloutById(link.codexSession);
+      if (f) {
+        const sm = sessionModelMeta(f, ws); // ws 필터=이 폴더 turn의 최근값만
+        const t = Date.parse(sm.ts || "");
+        if (Number.isFinite(t) && Date.now() - t < DRIFT_FRESH_MS) { mModel = sm.model; mEffort = sm.effort; }
+      }
+    }
     const bd: { sig: string; detail: string }[] = [];
     // Claude: 별칭(opus)↔정식ID(claude-opus-4-8)는 namespace가 달라 modelFamily 계열로 비교(둘 다 알 때만 → 빈값 오탐 방지).
     const cf = modelFamily(cbModel), cfc = modelFamily(claudeCur);
@@ -546,7 +567,7 @@ function computeState(turnsN: number): BridgeState {
     const file = findRolloutById(linkedId);
     if (file) {
       turns = toTurns(readMessages(file)).slice(-Math.max(1, turnsN));
-      modelMeta = sessionModelMeta(file);
+      modelMeta = sessionModelMeta(file, ws); // '지금 쓰는 값' 표시도 이 폴더(cwd) 기준 — drift 경고와 일관(공유 세션서 형제 폴더 값 안 새게)
       try {
         lastActivity = new Date(fs.statSync(file).mtimeMs).toLocaleString();
       } catch {
@@ -772,7 +793,15 @@ function readClaudeSettingsModel(): string {
 // 성능: 최근 수정 파일 일부만, 각 파일의 마지막 128KB(tail)만 읽어 마지막 모델을 뽑는다(전체 동기 파싱 회피).
 // 트랜스크립트도 CLAUDE_CONFIG_DIR로 이동되므로 claudeHome()에서 파생(이전 환경에서도 '최근 응답 모델'을 찾는다·매 호출 재해석).
 function claudeProjectsDir(): string { return path.join(claudeHome(), "projects"); }
-function lastModelInFile(f: string): string {
+// wsFilter 지정 시: cwd가 그 워크스페이스인 entry의 모델만 본다(Claude 대화기록도 entry마다 cwd 기록).
+// → cc-model 어긋남이 '다른 프로젝트의 최근 답'과 비교돼 교차-프로젝트 거짓경고 나는 것을 막는다.
+// strict: cwd가 없거나 안 맞으면 배제(sessionModelMeta와 동일 규칙) — 거짓경고 0이 목표라, cwd 없는 entry가 타 프로젝트
+//   파일에서 새어드는 누수를 막는다(현재 Claude 기록은 응답 entry 전부 cwd 보유 → 무손실). "<synthetic>"(합성 메시지)은 스킵.
+// maxAgeMs 지정 시: 마지막 모델 entry의 timestamp가 그보다 오래됐으면 stale로 보고 빈값 반환
+//   (옛 답의 모델이 '최근 답'으로 잡혀 거짓 drift 내는 것 방지). timestamp 없는 entry는 검사 불가라 그대로 인정(과잉 억제 회피).
+function lastModelInFile(f: string, wsFilter?: string | null, maxAgeMs?: number): string {
+  const want = wsFilter ? normWs(wsFilter) : null;
+  const now = Date.now();
   try {
     const size = fs.statSync(f).size;
     const len = Math.min(size, 131072); // 마지막 128KB
@@ -784,13 +813,52 @@ function lastModelInFile(f: string): string {
     for (let i = lines.length - 1; i >= 0; i--) {
       const s = lines[i]; if (!s || s[0] !== "{") continue;
       let o: any; try { o = JSON.parse(s); } catch { continue; }
-      if (o && o.message && typeof o.message.model === "string" && o.message.model) return o.message.model;
+      if (want && normWs((o && o.cwd) || "") !== want) continue; // 이 폴더 entry만(cwd 없거나 불일치 배제=strict)
+      const m = o && o.message && o.message.model;
+      if (typeof m === "string" && m && m !== "<synthetic>") {
+        if (maxAgeMs) { const ts = Date.parse((o && o.timestamp) || ""); if (Number.isFinite(ts) && now - ts > maxAgeMs) return ""; } // 마지막 답이 오래됨 → stale
+        return m;
+      }
     }
   } catch { /* ignore */ }
   return "";
 }
+// 세션 id(=transcript 파일명)로 그 대화의 .jsonl 경로를 찾는다 — cc-model 1순위('지금 이 대화'의 실제 모델)용. 못 찾으면 undefined.
+function findTranscriptBySession(sid: string): string | undefined {
+  const target = sid + ".jsonl";
+  let found: string | undefined;
+  const walk = (d: string, depth: number) => {
+    if (found || depth > 4) return;
+    let items: fs.Dirent[];
+    try { items = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const it of items) {
+      if (found) break;
+      const full = path.join(d, it.name);
+      if (it.isDirectory()) walk(full, depth + 1);
+      else if (it.isFile() && it.name === target) found = full;
+    }
+  };
+  try { walk(claudeProjectsDir(), 0); } catch { /* ignore */ }
+  return found;
+}
 // '최근 응답 모델'(가장 최근 수정 트랜스크립트의 마지막 model) 한 개만 반환 — picker는 별칭 기반이라 이 값은 표시/계열-drift용.
-function readClaudeModels(): string {
+// wsFilter 지정 시: 그 워크스페이스(cwd)에서 나온 응답 모델만 본다(cc-model 어긋남을 '이 프로젝트' 기준으로).
+// 전역 프로젝트 폴더 전체를 최근순으로 훑되 lastModelInFile이 cwd로 거른다 → 다른 프로젝트의 최근 모델이 새지 않음.
+function readClaudeModels(wsFilter?: string | null): string {
+  // 1순위: '지금 이 대화'의 transcript. active.json이 신선하고 이 ws의 것이면 그 세션 파일을 직접 읽어 현재 모델을 본다
+  //   (현재 진행 중인 대화 = 가장 정확. 신선도 검사 불필요 — 지금 쓰는 모델이라). 이로써 같은 프로젝트의 '옛 다른 모델 답'을 건너뛴다.
+  try {
+    const a = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, "active.json"), "utf8"));
+    const sid = a && typeof a.claudeSession === "string" ? a.claudeSession : "";
+    const aw = a && typeof a.workspace === "string" ? a.workspace : "";
+    const ats = a ? Date.parse(a.ts || "") : NaN;
+    const fresh = Number.isFinite(ats) && Date.now() - ats < DRIFT_FRESH_MS; // 옛 세션의 stale active로 옛 대화를 읽지 않게
+    if (sid && fresh && (!wsFilter || normWs(aw) === normWs(wsFilter))) {
+      const cur = findTranscriptBySession(sid);
+      if (cur) { const m = lastModelInFile(cur); if (m) return m; }
+    }
+  } catch { /* active 없음/파싱 실패 → 폴백 */ }
+  // 2순위(폴백): 이 ws의 최근 transcript를 훑되, 마지막 답이 너무 오래된(DRIFT_FRESH_MS 밖) 파일은 stale로 제외.
   const files: { f: string; m: number }[] = [];
   const walk = (d: string, depth: number) => {
     if (depth > 4) return;
@@ -806,10 +874,10 @@ function readClaudeModels(): string {
   };
   try { walk(claudeProjectsDir(), 0); } catch { /* ignore */ }
   files.sort((a, b) => b.m - a.m);
-  const recent = files.slice(0, 25); // bounded: 최근 25개 파일만
+  const recent = files.slice(0, 40); // bounded: 최근 40개 파일(ws 필터 시 이 프로젝트 트랜스크립트가 창 밖으로 밀릴 여지를 줄임)
   for (let i = 0; i < recent.length; i++) {
-    const mdl = lastModelInFile(recent[i].f);
-    if (mdl) return mdl; // 최근 수정순 '첫 모델 있는' 파일 = 최근 응답 모델(빈/유저전용/파싱불가 건너뜀)
+    const mdl = lastModelInFile(recent[i].f, wsFilter, DRIFT_FRESH_MS); // stale(오래된 마지막 답) 파일 제외
+    if (mdl) return mdl; // 최근 수정순 '첫 모델 있는'(wsFilter면 그 폴더 cwd) 파일 = 최근 응답 모델
   }
   return "";
 }
@@ -997,20 +1065,24 @@ class Dashboard {
 <style>
   body{margin:0;color:var(--vscode-foreground);background:var(--vscode-editor-background);font-family:var(--vscode-font-family);font-size:var(--vscode-font-size)}
   .shell{max-width:960px;margin:0 auto;padding:28px 26px 40px}
-  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
-  h1{font-size:18px;margin:0;display:flex;align-items:center;gap:9px}
+  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;padding-bottom:16px;border-bottom:1px solid var(--vscode-panel-border)}
+  h1{font-size:20px;font-weight:800;margin:0;display:flex;align-items:center;gap:11px;letter-spacing:.2px}
   h1 .sub{font-size:12px;font-weight:400;color:var(--vscode-descriptionForeground)}
   /* 워드마크: 파랑(Claude)→초록(Codex) 그라데이션 사각 — 이모지 대신 */
-  .brand{width:20px;height:20px;border-radius:6px;background:linear-gradient(135deg,var(--vscode-charts-blue),var(--vscode-charts-green));flex:none}
-  h2{font-size:15px;font-weight:700;margin:34px 0 13px;color:var(--vscode-foreground);display:flex;align-items:center;gap:9px;letter-spacing:.2px}
+  .brand{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,var(--vscode-charts-blue),var(--vscode-charts-green));flex:none;box-shadow:0 2px 8px color-mix(in srgb,var(--vscode-charts-blue) 32%,transparent)}
+  h2{font-size:15.5px;font-weight:800;margin:28px 0 11px;color:var(--vscode-foreground);display:flex;align-items:center;gap:9px;letter-spacing:.2px}
   h2 .sub2{font-size:11px;font-weight:400;color:var(--vscode-descriptionForeground);letter-spacing:0}
-  /* 섹션 경계: 위쪽 구분선으로 '여기서 새 기능 시작'을 한눈에 */
-  h2.sec{border-top:1px solid var(--vscode-panel-border);padding-top:20px}
-  /* 역할별 섹션 헤더 마커 — 파랑=Claude, 초록=Codex/검증, 회색=기본지침/연결 */
-  h2.sec::before{content:"";width:4px;height:17px;border-radius:2px;background:var(--vscode-panel-border);flex:none}
-  h2.sec.claude::before{background:var(--vscode-charts-blue)}
-  h2.sec.codex::before{background:var(--vscode-charts-green)}
-  h2.sec.base::before{background:var(--vscode-descriptionForeground)}
+  /* 섹션 헤더: 의미색 틴트 배경 + 두꺼운 좌측 악센트로 또렷하게(파랑=Claude · 초록=Codex/검증 · 보라=공통/기본). */
+  h2.sec{--accent:var(--vscode-charts-purple);margin:34px 0 12px;padding:11px 16px;border:1px solid color-mix(in srgb,var(--accent) 28%,var(--vscode-panel-border));border-left:5px solid var(--accent);border-radius:10px;background:color-mix(in srgb,var(--accent) 11%,var(--vscode-sideBar-background));box-shadow:0 1px 2px rgba(0,0,0,.06);flex-wrap:wrap}
+  h2.sec.claude{--accent:var(--vscode-charts-blue)}
+  h2.sec.codex{--accent:var(--vscode-charts-green)}
+  h2.sec.base{--accent:var(--vscode-charts-purple)}
+  /* 제목 카드색을 섹션마다 '서로 다르게' — 같은 색이 반복(겹침)되지 않게. 단 한눈에 보기↔단계별 기본원칙만 같은 보라 허용. 차분한 7색(파랑·초록·보라·주황·청록·노랑·로즈). */
+  h2.sec.accent-orange{--accent:var(--vscode-charts-orange)}
+  h2.sec.accent-yellow{--accent:var(--vscode-charts-yellow,#d7ba7d)}
+  h2.sec.accent-teal{--accent:#4ec9b0}
+  h2.sec.accent-rose{--accent:#d18fb0}
+  h2.sec::before{display:none}
   .hint{font-size:11px;color:var(--vscode-descriptionForeground);margin:4px 0 0 22px;line-height:1.5}
   .hint code{font-family:var(--vscode-editor-font-family);background:var(--vscode-textCodeBlock-background,var(--vscode-panel-border));padding:0 4px;border-radius:3px}
   .hint .ic{cursor:help;border-bottom:1px dotted currentColor;white-space:nowrap}
@@ -1018,7 +1090,7 @@ class Dashboard {
   .rulemeta{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
   .rchip{font-size:10px;color:var(--vscode-descriptionForeground);border:1px solid var(--vscode-panel-border);border-radius:999px;padding:1px 8px;white-space:nowrap}
   .rchip.opt{color:var(--vscode-charts-blue);border-color:var(--vscode-charts-blue);font-weight:700}
-  .card{border:1px solid var(--vscode-panel-border);border-radius:8px;padding:17px 18px;background:var(--vscode-sideBar-background);margin-bottom:14px}
+  .card{border:1px solid var(--vscode-panel-border);border-radius:10px;padding:16px 18px;background:var(--vscode-sideBar-background);margin-bottom:18px;box-shadow:0 1px 3px rgba(0,0,0,.07)}
   .muted{color:var(--vscode-descriptionForeground);font-size:12px}
   .id{font-family:var(--vscode-editor-font-family);font-size:11px;color:var(--vscode-descriptionForeground);word-break:break-all}
   .role{font-weight:600;font-size:12px;margin:8px 0 3px;color:var(--vscode-descriptionForeground)}
@@ -1027,12 +1099,12 @@ class Dashboard {
   button.secondary{background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground)}
   /* 히어로: Claude ⇄ Codex */
   .hero{display:flex;align-items:stretch;gap:10px;margin-bottom:16px}
-  .agent{flex:1;text-align:center;padding:16px 10px;border-radius:10px;border:1px solid var(--vscode-panel-border);background:var(--vscode-editor-background)}
+  .agent{flex:1;text-align:center;padding:16px 10px;border-radius:11px;border:1px solid var(--vscode-panel-border);background:var(--vscode-editor-background);box-shadow:0 1px 3px rgba(0,0,0,.07)}
   .agent .emo{font-size:30px;line-height:1}
-  .agent .nm{font-weight:600;margin-top:6px}
+  .agent .nm{font-weight:700;margin-top:6px}
   .agent .ro{font-size:11px;color:var(--vscode-descriptionForeground);margin-top:2px}
-  .agent.claude{border-color:var(--vscode-charts-blue)}
-  .agent.codex{border-color:var(--vscode-charts-green)}
+  .agent.claude{border-color:var(--vscode-charts-blue);background:color-mix(in srgb,var(--vscode-charts-blue) 6%,var(--vscode-editor-background))}
+  .agent.codex{border-color:var(--vscode-charts-green);background:color-mix(in srgb,var(--vscode-charts-green) 6%,var(--vscode-editor-background))}
   .link{flex:0 0 108px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px}
   .link .bar{width:100%;height:3px;border-radius:2px;background:var(--vscode-panel-border)}
   .link .emo{font-size:11px;line-height:1;color:var(--vscode-panel-border)}
@@ -1098,7 +1170,7 @@ class Dashboard {
   .seg button:last-child{border-right:0}
   .seg button.on{background:var(--vscode-charts-orange);color:#fff;font-weight:700}
   .seg button.on small{opacity:.92}
-  .mcard{border:1px solid var(--vscode-panel-border);border-radius:8px;padding:12px 14px;background:var(--vscode-editor-background)}
+  .mcard{border:1px solid var(--vscode-panel-border);border-radius:10px;padding:14px 16px;background:var(--vscode-editor-background);box-shadow:0 1px 3px rgba(0,0,0,.07)}
   .mrow{display:flex;align-items:center;gap:8px;margin-top:10px}
   .mlbl{min-width:60px;color:var(--vscode-descriptionForeground);font-size:12px}
   #mModel{flex:1;max-width:280px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,var(--vscode-panel-border));border-radius:5px;padding:5px 8px;font:inherit}
@@ -1284,7 +1356,7 @@ class Dashboard {
     <textarea id="bRejudge" rows="5"></textarea>
     <div class="row"><button id="saveB">단계별 기본 원칙 저장</button><button id="resetB" class="secondary">기본값 복원</button><span id="savedB" class="muted"></span></div>
   </details>
-  <h2 class="sec base">코덱스 두뇌 설정 <span class="sub2">이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)</span></h2>
+  <h2 class="sec base accent-orange">코덱스 두뇌 설정 <span class="sub2">이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)</span></h2>
   <div class="mcard">
     <div class="muted">지금 쓰는 값(최근 기록): <b id="mCur">—</b></div>
     <div id="mCacheWarn" class="hint" style="display:none;margin:6px 0 0 0"></div>
@@ -1299,7 +1371,7 @@ class Dashboard {
     <div class="muted" style="margin-top:6px">선택은 <b>다음 코덱스 응답부터</b> 적용 · 비우면 코덱스 기본값 · 코덱스에 말 걸 때마다 자동으로 다시 실어줌</div>
   </div>
   <!-- Claude Code 두뇌 관리 카드 제거: 앱 /model·/effort가 이미 settings.json에 영속하고 모델별 effort도 정확히 다룬다(카드는 중복·충돌·effort표 부정확이었음). 모델 계열/추론 어긋남은 상태바 drift 경고로 표시(computeState의 syncBrainDrift). -->
-  <h2 class="sec base">검증 대기시간 <span class="sub2">코덱스 검증을 기다리는 한도 — 추론이 길면 늘리세요 (전역·모든 프로젝트 공통)</span></h2>
+  <h2 class="sec base accent-teal">검증 대기시간 <span class="sub2">코덱스 검증을 기다리는 한도 — 추론이 길면 늘리세요 (전역·모든 프로젝트 공통)</span></h2>
   <div class="mcard">
     <div class="mrow"><span class="mlbl">대기시간</span>
       <input id="vtMin" type="number" min="1" max="60" step="1" style="width:72px" title="코덱스 검증이 이 시간을 넘기면 실패로 처리합니다. 깊은 추론이 길어지면 늘리세요(1~60분).">
@@ -1308,9 +1380,9 @@ class Dashboard {
     <div class="row" style="margin-top:10px"><button id="saveVT">대기시간 저장</button><span id="savedVT" class="muted"></span></div>
     <div class="muted" style="margin-top:6px">코덱스가 답하는 데 이 시간보다 오래 걸리면 검증이 실패로 끝나요. 추론이 8분을 넘는 경우가 있으면 늘려 두세요.</div>
   </div>
-  <h2 class="sec codex">Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
+  <h2 class="sec base accent-yellow">Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
   <div id="conv"></div>
-  <h2 class="sec base">Codex 세션 연결 <span class="sub2" id="cwsLabel">첫 발화로 식별</span></h2>
+  <h2 class="sec base accent-rose">Codex 세션 연결 <span class="sub2" id="cwsLabel">첫 발화로 식별</span></h2>
   <div id="cands"></div>
   <div id="hiddenWrap"></div>
 </main>

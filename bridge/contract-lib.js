@@ -16,9 +16,11 @@ const INTEGRITY_FILE = path.join(BRIDGE_DIR, "integrity.json"); // 무결성 신
 const PHASE_FILE = path.join(BRIDGE_DIR, "phase.json"); // 검증 파이프라인 현재 단계(라이브 진행 표시). 훅/브릿지가 경계에서 기록 → 확장이 읽어 상태바·진행 스트립에 표시.
 const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs"); // 검증 증명(세션별). 시간 지나면 쌓이므로 TTL 정리 대상.
 const ATTEMPTS_DIR = path.join(BRIDGE_DIR, "verify-attempts"); // 한 턴 재검증 횟수(세션별, 단명). TTL 정리 대상.
+const ACTIVE_DIR = path.join(BRIDGE_DIR, "active"); // 세션별 active(연 폴더 앵커, active/<claudeSession>.json). 멀티창에서 단일 active.json이 덮이는 레이스 방지. TTL 정리 대상.
 const CLEANUP_MARKER = path.join(BRIDGE_DIR, ".last-cleanup"); // 마지막 정리 시각(파일 mtime) — 하루 한 번 가드.
 const PROOF_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90일 — 검증 증명은 오래 보존(연결/재방문 가능성).
 const ATTEMPTS_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7일 — 재검증 카운터는 한 턴 단명이라 짧게.
+const ACTIVE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30일 — 휴면 후 재개 대비 길게. 만료돼도 active.json/cwd로 폴백(무해).
 
 // 오래된 상태파일 정리. 보수적 TTL + 파일 수정시각(mtime) 기준 — 진행 중/최근 세션 파일은 mtime이 새거라
 // 절대 안 지워진다(연결·active 세션을 따로 대조할 필요 없음). now를 인자로 받아 테스트에서 결정적으로 동작.
@@ -35,6 +37,7 @@ function cleanupOldState(now) {
   };
   sweep(PROOFS_DIR, PROOF_TTL_MS);
   sweep(ATTEMPTS_DIR, ATTEMPTS_TTL_MS);
+  sweep(ACTIVE_DIR, ACTIVE_TTL_MS); // 세션별 active도 오래된 것 정리(휴면 종료된 대화)
   return removed;
 }
 // 하루 한 번만 best-effort 정리(마커 파일 mtime으로 가드). 훅/브릿지가 매 턴 불러도 실제 청소는 하루 1회.
@@ -126,9 +129,37 @@ function contractFileFor(ws) {
   const key = crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16);
   return path.join(CONTRACTS_DIR, key + ".json");
 }
-// 호출 측(contract-inject·verify-guard·codex-bridge)이 도는 Claude 작업 폴더.
+// 호출 측(contract-inject·verify-guard·codex-bridge)이 도는 Claude 작업 폴더(=execCwd, 실제 실행 위치).
 function currentWs() {
   return process.env.CLAUDE_PROJECT_DIR || process.cwd();
+}
+// ★configWs: '이 대화가 연 폴더'(설정 기준). 사용자가 VS Code에서 연 폴더에 건 계약·두뇌설정·링크가, 작업이
+// 외부/다른 cwd에서 돌아도 일관 적용되게 한다. 해석 우선순위:
+//  1) CLAUDE_PROJECT_DIR(명시 override)
+//  2) 세션별 active(active/<claudeSession>.json) — 다른 창이 단일 active.json을 덮어써도 '이 대화'의 연 폴더를 직접 읽음(멀티창 레이스 없음)
+//  3) 레거시 단일 active.json — claudeSession==이 세션일 때만(멀티창 오집 방지)
+//  4) 폴백 cwd(무회귀).
+// 세션ID 일치가 핵심 가드 — 멀티창에서 다른 대화의 active를 잘못 집지 않는다. opts로 훅(session_id·cwd) 주입 가능(verify-guard용).
+function configWs(opts) {
+  opts = opts || {};
+  if (process.env.CLAUDE_PROJECT_DIR) return process.env.CLAUDE_PROJECT_DIR;
+  const sid = opts.sessionId || process.env.CLAUDE_CODE_SESSION_ID || "";
+  if (sid) {
+    // 2순위: 세션별 active. 파일명=sid이지만 내용 claudeSession도 한 번 더 확인(손상/오기록 방어). 파일명은 traversal 방지로 안전 문자만.
+    const safe = String(sid).replace(/[^a-zA-Z0-9_-]/g, "");
+    if (safe) {
+      try {
+        const a = JSON.parse(fs.readFileSync(path.join(ACTIVE_DIR, safe + ".json"), "utf8"));
+        if (a && a.claudeSession === sid && typeof a.workspace === "string" && a.workspace.trim()) return a.workspace;
+      } catch { /* 세션별 파일 없음/불일치 → 레거시/폴백 */ }
+    }
+    // 3순위: 레거시 단일 active.json — 이 세션 것일 때만(claudeSession 일치). 멀티창 오집 방지.
+    try {
+      const a = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, "active.json"), "utf8"));
+      if (a && a.claudeSession === sid && typeof a.workspace === "string" && a.workspace.trim()) return a.workspace;
+    } catch { /* active 없음/파싱불가 → 폴백 */ }
+  }
+  return opts.cwd || process.cwd();
 }
 
 // 프로젝트별 계약을 읽는다. ★전역 상속 없음★ — 계약은 프로젝트 전용(최신성: 비우면 주입 0·바꾸면 그 프로젝트만 유지).
@@ -324,4 +355,4 @@ function formatForClaude(answer) {
   return `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude };

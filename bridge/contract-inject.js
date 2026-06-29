@@ -6,7 +6,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildVerifyDirective, atomicWrite, BRIDGE_DIR, writePhase } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildVerifyDirective, atomicWrite, BRIDGE_DIR, ACTIVE_DIR, writePhase } = require("./contract-lib.js");
 
 let input = "";
 process.stdin.on("data", (d) => (input += d));
@@ -20,22 +20,25 @@ process.stdin.on("end", () => {
   // 이 턴의 작업 폴더 — active.json 기록과 계약 로드에 '동일하게' 적용해 둘의 키가 어긋나지 않게 한다.
   const ws = process.env.CLAUDE_PROJECT_DIR || hook.cwd || process.cwd();
 
-  // 활성 작업 폴더 기록 → 대시보드가 VS Code 첫 폴더가 아니라 이 폴더를 따라가게.
-  try {
-    const f = path.join(BRIDGE_DIR, "active.json");
-    atomicWrite(
-      f,
-      JSON.stringify({
-        workspace: ws,
-        claudeSession: hook.session_id || process.env.CLAUDE_CODE_SESSION_ID || "",
-        // §5.3: 플랜 모드 감지·라이브표시용. Claude Code UserPromptSubmit 입력의 permission_mode
-        // ("plan"이면 플랜 모드). 문서 예시는 "default"라 실제 값은 실로그로 확인(빈값=미노출).
-        permissionMode: (hook && typeof hook.permission_mode === "string") ? hook.permission_mode : "",
-        ts: new Date().toISOString(),
-      }),
-    );
-  } catch {
-    /* ignore */
+  // 활성 작업 폴더 기록 → 대시보드/configWs가 VS Code 첫 폴더가 아니라 이 폴더(연 폴더)를 따라가게.
+  const sid = hook.session_id || process.env.CLAUDE_CODE_SESSION_ID || "";
+  const activePayload = JSON.stringify({
+    workspace: ws,
+    claudeSession: sid,
+    // §5.3: 플랜 모드 감지·라이브표시용. Claude Code UserPromptSubmit 입력의 permission_mode
+    // ("plan"이면 플랜 모드). 문서 예시는 "default"라 실제 값은 실로그로 확인(빈값=미노출).
+    permissionMode: (hook && typeof hook.permission_mode === "string") ? hook.permission_mode : "",
+    ts: new Date().toISOString(),
+  });
+  // (1) 레거시 단일 active.json — 확장(activeWorkspace)·세션ID 없는 폴백 경로가 읽음.
+  try { atomicWrite(path.join(BRIDGE_DIR, "active.json"), activePayload); } catch { /* ignore */ }
+  // (2) 세션별 active(active/<claudeSession>.json) — configWs가 1순위로 읽어, 다른 창이 단일 active.json을
+  //     덮어써도 '이 대화'의 연 폴더를 레이스 없이 얻는다. 파일명은 traversal 방지로 안전 문자만.
+  if (sid) {
+    try {
+      const safe = String(sid).replace(/[^a-zA-Z0-9_-]/g, "");
+      if (safe) atomicWrite(path.join(ACTIVE_DIR, safe + ".json"), activePayload);
+    } catch { /* ignore */ }
   }
 
   // 환경 적응(확장의 CLAUDE_HOME 해석용 — 이슈#1 CODEX_HOME 자동탐지와 '동일하게'): 확장 호스트는 CLAUDE_CONFIG_DIR을 못 볼 수

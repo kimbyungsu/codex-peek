@@ -7,7 +7,7 @@ const path = require("path");
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clean_"));
 process.env.CODEX_BRIDGE_HOME = dir;
-const { cleanupOldState, maybeCleanupState, PROOFS_DIR, ATTEMPTS_DIR } = require("../bridge/contract-lib.js");
+const { cleanupOldState, maybeCleanupState, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR } = require("../bridge/contract-lib.js");
 
 let pass = 0, fail = 0;
 const ck = (n, c) => { (c ? pass++ : fail++); console.log((c ? "  ✅ " : "  ❌ ") + n); };
@@ -29,13 +29,17 @@ const newProof = mk(PROOFS_DIR, "new.json", 1);      // 1일 → 보존
 const oldAtt = mk(ATTEMPTS_DIR, "old.json", 10);     // 10일 > 7일 → 삭제
 const newAtt = mk(ATTEMPTS_DIR, "new.json", 1);      // 1일 → 보존
 const nonJson = mk(PROOFS_DIR, "keep.txt", 200);     // 비-json → 안 건드림
+const oldActive = mk(ACTIVE_DIR, "sess-old.json", 40); // 40일 > 30일 → 삭제
+const newActive = mk(ACTIVE_DIR, "sess-new.json", 1);  // 1일 → 보존
 const removed = cleanupOldState(Date.now());
 ck("오래된 proof(100일>90일) 삭제", !exists(oldProof));
 ck("최근 proof(1일) 보존", exists(newProof));
 ck("오래된 attempt(10일>7일) 삭제", !exists(oldAtt));
 ck("최근 attempt(1일) 보존", exists(newAtt));
+ck("오래된 active(40일>30일) 삭제", !exists(oldActive));
+ck("최근 active(1일) 보존", exists(newActive));
 ck("비-json 파일은 안 건드림", exists(nonJson));
-ck("삭제 카운트 2", removed === 2);
+ck("삭제 카운트 3", removed === 3);
 
 console.log("[2] maybeCleanupState — 하루 한 번 가드");
 const oldA = mk(PROOFS_DIR, "old2.json", 100);

@@ -17,7 +17,7 @@ const { spawnSync, spawn } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude } = require("./contract-lib.js");
+const { loadContract, buildInjection, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -25,10 +25,10 @@ function withContract(prompt, ws) {
   const baseline = loadBaseDirective().verifyBaseline;
   let inj = "";
   try {
-    // V9: Codex 계약도 이 ask의 워크스페이스로 '명시' 로드(인자 없으면 workspace()로 폴백). cmdAsk가
-    // modelPref·가드·proof·withContract에 같은 ws 스냅샷을 넘겨 codex 계약이 다른 cwd로 새는 잠재 위험을 없앤다.
-    // (resolveLink/recordLink는 내부 workspace() 사용 — 동기 프로세스 내 동일 값이라 동작 일치, V9 범위 밖.)
-    const c = loadContract(ws || workspace());
+    // 계약은 '연 폴더(configWs)' 기준으로 로드 — cmdAsk가 modelPref·proof·라벨·withContract에 같은 configWs 스냅샷(ws)을
+    // 넘겨, 작업 cwd가 외부 폴더로 흔들려도 사용자가 연 폴더에 건 계약이 일관 적용된다(인자 없으면 configWs()로 폴백).
+    // (resolveLink/recordLink도 configWs 기준 — 세션은 작업 cwd가 아니라 이 대화의 연 폴더에 묶인다.)
+    const c = loadContract(ws || configWs());
     inj = buildInjection(c.codex, "Codex", c.codexChecklist);
   } catch {
     inj = "";
@@ -67,9 +67,7 @@ function nowIso() {
 function claudeId() {
   return process.env.CLAUDE_CODE_SESSION_ID || "";
 }
-function workspace() {
-  return process.env.CLAUDE_PROJECT_DIR || process.cwd();
-}
+// (구 workspace()=CLAUDE_PROJECT_DIR||cwd 제거: configWs(연 폴더, 설정 기준)와 process.cwd()(execCwd, 실행 기준)로 분리됨.)
 // 검증 증명 기록 — 실제로 Codex가 성공(exit 0·비어있지 않은 응답)했을 때만 호출한다(cmdAsk의 성공 분기들).
 // 한 Claude 세션당 1파일(최신 성공만 보존). verify-guard는 '이번 사용자 발화/변경 이후 ts + status/exit/answerChars'로 인정(workspace는 V1에서 게이트 제외 — 같은 세션 키로 격리).
 // → 명령 문자열만 보던 V1 구멍(echo·실패·미연결도 통과)을 닫는다. claudeSession 미설정(수동 실행)이면 _nosession에 기록(무해).
@@ -80,7 +78,7 @@ function writeProof(codexSession, answer, ws) {
   const proof = {
     v: 1,
     claudeSession: cs,
-    workspace: ws || workspace(), // V9: cmdAsk의 ws 스냅샷과 동일(인자 없으면 폴백)
+    workspace: ws || configWs(), // 라벨=연 폴더(인자 없으면 폴백). cmdAsk의 ws 스냅샷과 동일
     ts: nowIso(),
     codexSession: codexSession || "",
     exit: 0,
@@ -142,7 +140,7 @@ function checkCitedEvidence(answer, ws) {
     const k = rawPath + ":" + line;
     if (seen.has(k)) continue;
     seen.add(k);
-    const file = resolveCitedPath(rawPath, ws || workspace());
+    const file = resolveCitedPath(rawPath, ws || process.cwd());
     if (!file) continue; // 해석 불가/모호 → 건너뜀
     let count = 0;
     try { count = fs.readFileSync(file, "utf8").split(/\n/).length; } catch { continue; }
@@ -157,7 +155,7 @@ function citedResolvedBasenames(answer, ws) {
   const out = new Set();
   let m;
   while ((m = re.exec(text))) {
-    const file = resolveCitedPath(m[1], ws || workspace());
+    const file = resolveCitedPath(m[1], ws || process.cwd());
     if (file) out.add(path.basename(file));
   }
   return out;
@@ -193,9 +191,12 @@ function citedFilesUnseen(answer, ws, sessionId) {
   if (!hadTool) return []; // 도구활동 없음 → 이전 턴 맥락 등으로 답했을 수 있음 → 경보 안 함
   return [...remaining];
 }
-function flagEvidence(answer, ws, sessionId) {
+// ws=configWs(이벤트 workspace 라벨 — 대시보드 귀속), execCwd=실제 실행 폴더(인용 상대경로 해석 기준).
+// 분리 이유: 코덱스 답의 '(경로:라인)' 인용은 코덱스가 돈 폴더(execCwd) 기준 상대경로라, 라벨용 연 폴더로 해석하면 오탐.
+function flagEvidence(answer, ws, sessionId, execCwd) {
+  const pathWs = execCwd || ws; // 경로 해석은 실행 폴더 기준(미지정 시 ws로 폴백=무회귀)
   try {
-    const mism = checkCitedEvidence(answer, ws);
+    const mism = checkCitedEvidence(answer, pathWs);
     if (mism.length) {
       appendIntegrityEvent({
         ts: nowIso(),
@@ -206,7 +207,7 @@ function flagEvidence(answer, ws, sessionId) {
         detail: `검증 답의 인용 근거 ${mism.length}개가 실제 파일/라인과 불일치(존재하지 않는 줄): ${mism.slice(0, 3).join(" / ")}`,
       });
     }
-    const unseen = citedFilesUnseen(answer, ws, sessionId);
+    const unseen = citedFilesUnseen(answer, pathWs, sessionId);
     if (unseen.length) {
       appendIntegrityEvent({
         ts: nowIso(),
@@ -384,7 +385,7 @@ function updateLinks(mutate, retries = 4) {
 // 과거엔 bySession을 우선해서, 한 번 --allow-new로 만들어진 세션이 박히면 대시보드로 다시
 // 연결해도 안 먹고 엉뚱한 세션으로 검증이 가는 버그가 있었다 → 대시보드와 브릿지가 같은 기준을 보게 통일.
 function resolveLink(links) {
-  const ws = workspace();
+  const ws = configWs(); // 링크 해석 기준 = 연 폴더(작업 cwd가 흔들려도 이 대화의 세션을 찾음)
   const wsLink = lookupWorkspace(links, ws);
   if (wsLink) return { ...wsLink, via: wsLink.via === "ui" ? "workspace·UI지정" : "workspace" };
   // bySession 폴백은 '그 항목의 워크스페이스가 현재와 같을 때만'. 다른 워크스페이스의 stale 링크가
@@ -397,7 +398,7 @@ function resolveLink(links) {
 // 연결 기록은 CAS 관문(updateLinks)을 통과 — ask 도중 확장/다른 프로세스가 links.json을 바꿔도
 // 그 변경을 덮어쓰지 않는다. 연결 성공이므로 이 워크스페이스의 autoNewFailed 폭증방지 플래그도 함께 해제한다.
 function recordLink(codexSession) {
-  const wsNow = workspace();
+  const wsNow = configWs(); // 링크 기록 기준 = 연 폴더(세션은 작업 cwd가 아니라 이 대화의 연 폴더에 묶인다)
   const claude = claudeId();
   const nk = normWs(wsNow);
   const entry = { codexSession, workspace: wsNow, claudeSession: claude, linkedAt: nowIso() };
@@ -713,8 +714,11 @@ async function cmdAsk(rest) {
   try { maybeCleanupState(); } catch { /* 오래된 상태파일 정리 best-effort(Stop 훅 미설치 환경 대비) — 하루 1회 */ }
   const links = loadLinks();
   const link = resolveLink(links);
-  const ws = workspace(); // V9: 이 ask 전체가 '하나의 워크스페이스 스냅샷'을 공유(modelPref·가드·proof·codex계약 일관)
-  const mArgs = modelArgs(modelPrefFor(links, ws)); // 선택한 모델/생각강도를 매 호출 -c로 재적용(호출별이라 필수)
+  // configWs/execCwd 분리: 설정 기준(계약·생각강도·링크·proof·이벤트 라벨)은 '연 폴더'(ws), 코덱스 실행·새세션 탐지·인용
+  // 근거 경로 해석은 '작업 폴더'(exec=실제 실행 cwd). 사용자가 연 폴더에 건 설정이 외부 폴더 작업에도 일관 적용되게 한다.
+  const ws = configWs();        // 연 폴더(설정 기준)
+  const exec = process.cwd();   // 작업 폴더(실행/탐지/근거경로 기준) — 코덱스 spawn은 cwd 미지정이라 실제로 여기서 돈다
+  const mArgs = modelArgs(modelPrefFor(links, ws)); // 선택한 모델/생각강도를 매 호출 -c로 재적용(연 폴더 pref → 작업이 어디든 일관)
 
   if (link) {
     const file = findRolloutById(link.codexSession);
@@ -733,7 +737,7 @@ async function cmdAsk(rest) {
     }
     try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
     writeProof(link.codexSession, answer, ws); // 실제 성공 → 검증 증명 기록(verify-guard가 인정)
-    flagEvidence(answer, ws, link.codexSession); // 결정2: 인용 근거 존재성 + 이 세션에서 다룬 흔적 점검 → 불일치/미확인이면 노랑
+    flagEvidence(answer, ws, link.codexSession, exec); // 결정2: 인용 근거 존재성+다룬 흔적 점검(경로해석=작업폴더 exec). 라벨=연 폴더 ws
     flagVerdict(answer, ws); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 답에 판정 줄이 없으면 표지 누락 노랑 가시화(자동 차단 X)
     process.stdout.write(`# 연결 세션 ${link.codexSession} (${link.via})\n\n${formatForClaude(answer)}\n`);
     return;
@@ -752,10 +756,10 @@ async function cmdAsk(rest) {
     );
   }
 
-  // 엉뚱 폴더 방어: 새 세션을 만들기 '직전', 지금 실행 폴더가 실제 Claude 대화가 도는 폴더(active.json)와
-  // 다르면 십중팔구 엉뚱한 폴더(터미널 cwd)에서 돌린 것 → 조용히 새 세션을 만들어 목록을 오염시키지 말고 막는다.
-  // 정상 흐름(대화 폴더에서 실행)은 here==active.workspace라 안 막힘. 정말 여기 만들려면 --force-new.
-  // (NFC 정규화로 한글 등 경로의 NFC/NFD 차이로 인한 오탐 방지 — 전역 normWs는 건드리지 않음.)
+  // 엉뚱 폴더 방어(레거시): 원래는 '엉뚱한 cwd에서 새 세션 만들어 목록 오염'을 막던 차단이었다.
+  // 이제 ws=configWs(연 폴더)·recordLink도 configWs라 새 세션은 항상 '이 대화의 연 폴더'에 묶인다 → 고아 세션이 원천적으로 안 생긴다.
+  // 그래서 here(=configWs)는 activeIsThisConv일 때 active.workspace와 같아 이 차단은 사실상 no-op(configWs 앵커가 목적을 흡수).
+  // (남겨둔 이유: CLAUDE_PROJECT_DIR 명시 override 등 폴백 경로의 안전망. --force-new로 우회.)
   const here = ws;
   const active = readActive();
   const myClaude = claudeId();
@@ -797,9 +801,9 @@ async function cmdAsk(rest) {
   // recordLink가 '성공(true)'일 때만 earlyLinked 확정 → 저장 실패(CAS/잠금/권한)면 미연결로 두고 다음 폴/최종 단계서 재시도.
   // detected(세션 발견)와 linked(저장 성공)를 분리해 "즉시연결" 거짓보고를 막는다(Codex 지적).
   const onDetect = (id) => { if (earlyLinked) return; try { if (recordLink(id)) earlyLinked = id; } catch { /* 다음 폴/최종 단계서 재시도 */ } };
-  const { answer, error, status, stderr } = await runCodexNewSessionAsync([...mArgs], withContract(prompt, ws), since, ws, onDetect);
+  const { answer, error, status, stderr } = await runCodexNewSessionAsync([...mArgs], withContract(prompt, ws), since, exec, onDetect); // 탐지=작업폴더(코덱스 session_meta.cwd와 일치)
   // cwd 일치 우선, 못 찾으면 원래 방식(무회귀) — 최종 식별용 폴백.
-  const resolveNew = () => { const f = newestRolloutSinceForWs(since, ws) || newestRolloutSince(since); const mm = f && f.match(UUID_RE); return mm ? mm[1] : ""; };
+  const resolveNew = () => { const f = newestRolloutSinceForWs(since, exec) || newestRolloutSince(since); const mm = f && f.match(UUID_RE); return mm ? mm[1] : ""; }; // 탐지=작업폴더
   if (error || !answer || (typeof status === "number" && status !== 0)) {
     // 실패: 이미 '생성 즉시 연결'됐으면 고아 아님 → autoNewFailed 안 검(다음 시도는 그 세션 resume). 미연결일 때만 폭증방지/식별 시도.
     if (!earlyLinked) {
@@ -815,14 +819,14 @@ async function cmdAsk(rest) {
   if (!id) { const nid = resolveNew(); if (nid && recordLink(nid)) id = nid; } // 즉시연결 못했으면 지금 찾아 연결
   if (id) {
     writeProof(id, answer, ws); // 실제 성공 → 검증 증명 기록
-    flagEvidence(answer, ws, id); // 결정2: 인용 근거 존재성 + 이 세션에서 다룬 흔적 점검
+    flagEvidence(answer, ws, id, exec); // 결정2: 인용 근거 존재성+다룬 흔적(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
     flagVerdict(answer, ws); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 표지 누락도 노랑 가시화(자동 차단 X)
     const head = earlyLinked ? `# 새 Codex 세션 생성·즉시연결: ${id}` : `# 새 Codex 세션 생성·연결: ${id}`;
     process.stdout.write(`${head}\n\n${formatForClaude(answer)}\n`);
   } else {
     updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; }); // 다음 자동 생성 차단 플래그
     writeProof("", answer, ws); // Codex는 성공 응답함(세션id만 미식별) → 검증은 인정
-    flagEvidence(answer, ws, ""); // 세션id 미식별 → 존재성 점검만(다룬-흔적 점검은 rollout 못 찾아 자동 보류)
+    flagEvidence(answer, ws, "", exec); // 세션id 미식별 → 존재성 점검만(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
     flagVerdict(answer, ws);
     process.stdout.write(`# 새 세션 생성됨(세션id 식별 실패) — 폭증 방지로 다음 자동 생성은 멈춥니다. 'find'로 찾아 'link <id>' 하세요.\n\n${formatForClaude(answer)}\n`);
   }
@@ -843,14 +847,14 @@ function cmdLink(rest) {
   const ok = recordLink(id); // CAS 저장 + autoNewFailed 해제 포함(수동 연결도 동일 관문)
   process.stdout.write(
     (ok ? `✅ 연결됨` : `⚠️ 연결 기록 저장 실패(권한/잠금?) — 다시 시도하세요`) +
-      `: Claude(${claudeId() || "?"}) + ${workspace()}  →  Codex ${id}\n` +
+      `: Claude(${claudeId() || "?"}) + ${configWs()}  →  Codex ${id}\n` +
       (file ? `   세션 파일: ${path.basename(file)}\n` : `   ⚠️ 해당 세션 rollout 파일이 안 보임(추후 resume 시 실패할 수 있음)\n`),
   );
 }
 
 // 모델/생각강도 선택 보기·설정·해제(프로젝트별). 대시보드가 links.json을 직접 쓰지만, CLI로도 점검/테스트 가능.
 function cmdPref(rest) {
-  const ws = workspace();
+  const ws = configWs(); // 설정 저장 기준 = 연 폴더(ask가 configWs로 읽으므로 CLI 저장도 같은 키여야 일치). 대시보드(연 폴더 저장)와도 정합.
   const key = normWs(ws);
   let ok = true;
   if (rest[0] === "set") {
@@ -882,7 +886,9 @@ function cmdPref(rest) {
 function cmdStatus() {
   const links = loadLinks();
   const link = resolveLink(links);
-  process.stdout.write(`Claude 세션: ${claudeId() || "(env 없음)"}\n워크스페이스: ${workspace()}\n`);
+  { const cfg = configWs(), ex = process.cwd();
+    process.stdout.write(`Claude 세션: ${claudeId() || "(env 없음)"}\n워크스페이스(설정 기준): ${cfg}\n` +
+      (normWs(cfg) !== normWs(ex) ? `실행 폴더(작업 cwd): ${ex}\n` : "")); }
   if (!link) {
     process.stdout.write("연결: 없음 (ask 하면 보고만 함, 또는 link/--allow-new)\n");
     return;
@@ -944,13 +950,14 @@ function cmdDoctor() {
   process.stdout.write(`실행 가능?     : ${inv.shell ? "PATH 의존(런타임 확인)" : runnable ? "예" : "아니오  ← 검증 불가의 직접 원인"}\n`);
   let c = null;
   try {
-    c = loadContract();
+    c = loadContract(configWs());
   } catch {
     /* ignore */
   }
   process.stdout.write(`검증 모드      : ${c ? c.verifyMode : "(계약 로드 실패)"}\n`);
   process.stdout.write(`Claude 세션    : ${claudeId() || "(env 없음)"}\n`);
-  process.stdout.write(`워크스페이스   : ${workspace()}\n`);
+  process.stdout.write(`워크스페이스   : ${configWs()} (설정 기준=연 폴더)\n`);
+  process.stdout.write(`실행 폴더(cwd) : ${process.cwd()}\n`);
   // 자체 폴더(브릿지 home) 진단: 확장과 훅이 같은 폴더를 보는지의 핵심. 훅이 active.json을 다른 BRIDGE_DIR에 쓰면
   // 여기서 '활성 대화기록 없음'으로 드러난다(=확장↔훅 home 불일치 or 훅 미동작).
   const bridgeSrc = process.env.CODEX_BRIDGE_HOME ? "env CODEX_BRIDGE_HOME" : "기본 ~/.codex-bridge";

@@ -21,7 +21,7 @@ const css = m[1];
 const theme = `:root{
   --vscode-foreground:#cccccc; --vscode-editor-background:#1f1f1f; --vscode-editor-foreground:#cccccc;
   --vscode-panel-border:#3c3c3c; --vscode-descriptionForeground:#9d9d9d; --vscode-sideBar-background:#181818;
-  --vscode-charts-blue:#3794ff; --vscode-charts-purple:#b180d7; --vscode-charts-green:#89d185; --vscode-charts-orange:#d18616;
+  --vscode-charts-blue:#3794ff; --vscode-charts-purple:#b180d7; --vscode-charts-green:#89d185; --vscode-charts-orange:#d18616; --vscode-charts-yellow:#d7ba7d;
   --vscode-input-background:#2a2a2a; --vscode-input-foreground:#cccccc; --vscode-input-border:#3c3c3c;
   --vscode-button-background:#0078d4; --vscode-button-foreground:#ffffff;
   --vscode-button-secondaryBackground:#3a3d41; --vscode-button-secondaryForeground:#ffffff;
@@ -108,7 +108,7 @@ const body = `<main class="shell">
     <div class="row"><button>단계별 기본 원칙 저장</button><button class="secondary">기본값 복원</button></div>
   </details>
 
-  <h2 class="sec base">코덱스 두뇌 설정 <span class="sub2">이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)</span></h2>
+  <h2 class="sec base accent-orange">코덱스 두뇌 설정 <span class="sub2">이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)</span></h2>
   <div class="mcard">
     <div class="muted">지금 쓰는 값(최근 기록): <b>GPT-5.5 · 생각강도 높음</b></div>
     <div class="mrow"><span class="mlbl">모델</span>
@@ -120,20 +120,20 @@ const body = `<main class="shell">
     <div class="row" style="margin-top:10px"><button>두뇌 설정 저장</button></div>
   </div>
 
-  <h2 class="sec base">검증 대기시간 <span class="sub2">코덱스 검증을 기다리는 한도 — 추론이 길면 늘리세요 (전역·모든 프로젝트 공통)</span></h2>
+  <h2 class="sec base accent-teal">검증 대기시간 <span class="sub2">코덱스 검증을 기다리는 한도 — 추론이 길면 늘리세요 (전역·모든 프로젝트 공통)</span></h2>
   <div class="mcard">
     <div class="mrow"><span class="mlbl">대기시간</span><input type="number" value="20" style="width:72px"> <span class="muted">분 · 기본 8</span></div>
     <div class="row" style="margin-top:10px"><button>대기시간 저장</button></div>
     <div class="muted" style="margin-top:6px">코덱스가 답하는 데 이 시간보다 오래 걸리면 검증이 실패로 끝나요. 추론이 8분을 넘는 경우가 있으면 늘려 두세요.</div>
   </div>
 
-  <h2 class="sec codex">Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
+  <h2 class="sec base accent-yellow">Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
   <div class="turn">
     <div class="umsg">src/payment.ts 의 applyDiscount() 변경 검증해줘 — 음수 할인율 방어 포함</div>
     <div class="vmsg"><div class="vhead"><span class="vname">Codex</span><span class="vchip pass">검증 통과</span></div><div class="vbody">검증: 통과 — applyDiscount()는 rate&lt;0 이면 0으로 클램프함(payment.ts:42). 다만 rate&gt;1(100% 초과)은 미검사 → 상한 클램프 권장.</div></div>
   </div>
 
-  <h2 class="sec base">Codex 세션 연결 <span class="sub2">첫 발화로 식별</span></h2>
+  <h2 class="sec base accent-rose">Codex 세션 연결 <span class="sub2">첫 발화로 식별</span></h2>
   <div class="cand linked"><div><div class="id">019b…a2f <span class="star">★ 연결됨</span></div><div class="muted">2026-06-22 · 결제 모듈 리팩터 검증</div></div></div>
   <div class="cand"><div><div class="id">019a…7c1</div><div class="muted">2026-06-21 · 인증 토큰 만료 처리</div></div><button>연결</button></div>
 </main>`;
