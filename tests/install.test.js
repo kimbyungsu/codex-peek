@@ -291,5 +291,57 @@ function cleanup(sb) { try { fs.rmSync(sb.dir, { recursive: true, force: true })
   cleanup(sb);
 })();
 
+// ── code CLI 자동탐지(포터블/무설치형 VS Code 대응) — 순수함수 단위검사 ──
+(function codeCliDetection() {
+  console.log("[code CLI 자동탐지] 포터블 VS Code도 PATH 없이 찾는다");
+  const { candidateCodeClis, findRootUpwards } = require(INSTALL);
+  const isWin = process.platform === "win32";
+  const bin = isWin ? "code.cmd" : "code";
+  const sep = path.sep;
+
+  // (1) VSCODE_CWD(설치 루트)에서 bin/code(.cmd) 후보가 1순위로 나온다(포터블 핵심 시나리오).
+  const root = isWin ? "C:\\PortableVSCode\\VSCode-x64" : "/opt/portable-vscode";
+  const c1 = candidateCodeClis({ VSCODE_CWD: root });
+  ok(c1[0] === path.join(root, "bin", bin), "VSCODE_CWD → <root>/bin/" + bin + " 가 1순위 후보");
+
+  // (2) VSCODE_GIT_ASKPASS_NODE(Code 실행파일)에서도 루트를 역추적한다.
+  const exe = isWin ? "C:\\VSX\\Code.exe" : "/opt/vsx/code";
+  const c2 = candidateCodeClis({ VSCODE_GIT_ASKPASS_NODE: exe });
+  ok(c2.includes(path.join(path.dirname(exe), "bin", bin)), "VSCODE_GIT_ASKPASS_NODE → dirname/bin/" + bin + " 후보 포함");
+
+  // (3) 환경변수 전무여도 OS 표준 위치 후보가 채워진다(빈 목록이면 자동탐지 불가).
+  const c3 = candidateCodeClis({});
+  ok(c3.length > 0 && c3.every((p) => p.endsWith(sep + "bin" + sep + bin) || p.endsWith("/bin/" + bin) || p.includes("code")), "환경변수 없어도 OS 표준 후보 존재");
+
+  // (4) 중복 제거(같은 루트가 VSCODE_CWD·ASKPASS 양쪽서 와도 한 번만).
+  const c4 = candidateCodeClis({ VSCODE_CWD: root, VSCODE_GIT_ASKPASS_NODE: path.join(root, isWin ? "Code.exe" : "code") });
+  const target = path.join(root, "bin", bin);
+  ok(c4.filter((p) => p === target).length === 1, "동일 루트 중복 후보는 1개로 합쳐짐");
+
+  // (5) findRootUpwards: 실제 임시 트리에서 …/<root>/data/x/y/tool 로부터 <root>/bin/<bin> 을 찾는다.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cbcode_"));
+  const fakeRoot = path.join(tmp, "VSCode-portable");
+  fs.mkdirSync(path.join(fakeRoot, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(fakeRoot, "bin", bin), "#!/bin/sh\n");
+  const deep = path.join(fakeRoot, "data", "extensions", "anthropic.claude-code", "native", "claude" + (isWin ? ".exe" : ""));
+  fs.mkdirSync(path.dirname(deep), { recursive: true });
+  fs.writeFileSync(deep, "x");
+  ok(findRootUpwards(deep, bin) === path.join(fakeRoot, "bin", bin), "findRootUpwards: 깊은 실행파일 경로에서 설치 루트의 bin/code 역추적");
+  ok(findRootUpwards(path.join(tmp, "nope", "x"), bin) === null, "findRootUpwards: 없으면 null(무한루프/오탐 없음)");
+  fs.rmSync(tmp, { recursive: true, force: true });
+
+  // (6) ★우선순위 잠금(Codex 지적): 현재 VS Code 신호(VSCODE_CWD)가 PATH의 'code'보다 먼저,
+  //     OS 표준위치는 PATH 'code'보다 뒤 — 여러 VS Code 설치 시 '지금 띄운 그 VS Code'에 설치되게.
+  const { codeCliPriority, vscodeSignalClis, standardCodeClis } = require(INSTALL);
+  const pri = codeCliPriority({ VSCODE_CWD: root });
+  const iSignal = pri.indexOf(path.join(root, "bin", bin));
+  const iPath = pri.indexOf("code");
+  ok(iSignal >= 0 && iPath >= 0 && iSignal < iPath, "우선순위: 현재 VS Code(VSCODE_CWD) 후보가 PATH 'code'보다 앞");
+  const std = standardCodeClis();
+  const iStd = std.length ? pri.indexOf(std[0]) : -1;
+  ok(iStd > iPath, "우선순위: OS 표준위치는 PATH 'code'보다 뒤");
+  ok(vscodeSignalClis({}).length === 0, "신호 없으면(외부 터미널) 신호후보 0개 → PATH/표준으로 폴백");
+})();
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

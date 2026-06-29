@@ -25,7 +25,8 @@
  *   CODEX_BRIDGE_HOME  브릿지 운영 폴더            (기본 ~/.codex-bridge)
  *   CLAUDE_CONFIG_DIR  Claude 설정 폴더            (기본 ~/.claude)
  *   CODEX_BRIDGE_NODE  훅이 쓸 node 실행파일       (기본 지금 이 설치기를 돌린 node)
- *   CODE_CLI           VS Code CLI(code) 경로      (기본 PATH의 code)
+ *   CODE_CLI           VS Code CLI(code) 경로      (미지정 시 PATH의 code → 환경변수/표준위치 자동탐지)
+ *                      ※ 포터블/무설치형 VS Code(PATH에 code 없음)도 VSCODE_CWD 등으로 자동탐지. 그래도 못 찾으면 이 변수로 지정.
  */
 
 const fs = require("fs");
@@ -236,6 +237,86 @@ function buildInstallCmd(codeCli, vsixPath) {
   const codeTok = /[\\/\s]/.test(String(codeCli)) ? q(fwd(codeCli)) : String(codeCli);
   return `${codeTok} --install-extension ${q(fwd(vsixPath))} --force`;
 }
+// 주어진 파일 경로에서 위로 올라가며 'bin/<binName>'을 찾는다(예: …/<root>/data/extensions/…/claude.exe → <root>/bin/code.cmd).
+// VS Code 포터블/무설치형은 표준 위치에 없으므로, 실행 중인 도구의 경로에서 설치 루트를 역추적하는 신호로 쓴다.
+function findRootUpwards(startPath, binName) {
+  let d = path.dirname(String(startPath || ""));
+  for (let i = 0; i < 12 && d; i++) {
+    const cand = path.join(d, "bin", binName);
+    if (fs.existsSync(cand)) return cand;
+    const up = path.dirname(d);
+    if (up === d) break; // 루트 도달
+    d = up;
+  }
+  return null;
+}
+// (A) '지금 실행 중인 VS Code'의 code 후보 — VS Code가 심는 환경변수/실행 중 바이너리 경로에서 설치 루트를 역추적.
+// ★ "어떤 OS든 3줄 설치"가 깨지던 원인: PATH에 code 없는 포터블 VS Code. 이 신호가 있으면 PATH의 다른 code보다 먼저 써야
+//   '사용자가 지금 띄운 그 VS Code'에 확장이 깔린다(여러 VS Code 설치 시 엉뚱한 곳에 설치 방지 — Codex 지적 반영).
+function vscodeSignalClis(env) {
+  env = env || process.env;
+  const bin = process.platform === "win32" ? "code.cmd" : "code";
+  const list = [];
+  const fromRoot = (root) => { if (root) list.push(path.join(root, "bin", bin)); };
+  fromRoot(env.VSCODE_CWD);                                                  // 설치 루트(포터블 포함)
+  if (env.VSCODE_GIT_ASKPASS_NODE) fromRoot(path.dirname(env.VSCODE_GIT_ASKPASS_NODE)); // Code 실행파일 → 그 폴더가 루트
+  if (env.CLAUDE_CODE_EXECPATH) { const up = findRootUpwards(env.CLAUDE_CODE_EXECPATH, bin); if (up) list.push(up); } // …/<root>/data/…/claude.exe
+  return [...new Set(list)];
+}
+// (B) OS 표준 설치 위치 후보(설치형 VS Code / Insiders / Flatpak 등). PATH의 code보다 뒤에 시도.
+function standardCodeClis() {
+  const isWin = process.platform === "win32";
+  const isMac = process.platform === "darwin";
+  const bin = isWin ? "code.cmd" : "code";
+  const list = [];
+  const fromRoot = (root) => { if (root) list.push(path.join(root, "bin", bin)); };
+  if (isWin) {
+    // 환경변수가 없어도 동작하도록 표준 기본값으로 폴백(LOCALAPPDATA→홈/AppData/Local, ProgramFiles→C:\Program Files).
+    const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+    const progFiles = process.env.ProgramFiles || "C:\\Program Files";
+    const progFiles86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+    fromRoot(path.join(localAppData, "Programs", "Microsoft VS Code"));
+    fromRoot(path.join(progFiles, "Microsoft VS Code"));
+    fromRoot(path.join(progFiles86, "Microsoft VS Code"));
+    fromRoot(path.join(localAppData, "Programs", "Microsoft VS Code Insiders"));
+  } else if (isMac) {
+    list.push("/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code");
+    list.push(path.join(os.homedir(), "Applications", "Visual Studio Code.app", "Contents", "Resources", "app", "bin", "code"));
+    list.push("/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code");
+  } else {
+    list.push("/usr/bin/code", "/usr/local/bin/code", "/usr/share/code/bin/code", "/snap/bin/code");
+    list.push("/usr/bin/code-insiders", "/snap/bin/code-insiders");                         // Insiders
+    list.push("/var/lib/flatpak/exports/bin/com.visualstudio.code");                        // Flatpak(system)
+    list.push(path.join(os.homedir(), ".local", "share", "flatpak", "exports", "bin", "com.visualstudio.code")); // Flatpak(user)
+  }
+  return [...new Set(list)];
+}
+// 전체 우선순위(순수함수 — 테스트로 잠금): 현재 VS Code 신호 → PATH의 'code' → OS 표준위치.
+// (CODE_CLI 명시는 resolveCodeCli에서 이보다 먼저 단락처리.) 'code'는 PATH 해석용 bare 토큰(존재검사 없이 --version으로 확인).
+function codeCliPriority(env) {
+  return [...new Set([...vscodeSignalClis(env), "code", ...standardCodeClis()])];
+}
+// 하위호환: 신호+표준 후보(‘code’ 제외) — 기존 호출/테스트용.
+function candidateCodeClis(env) {
+  return [...new Set([...vscodeSignalClis(env), ...standardCodeClis()])];
+}
+// 실제로 동작하는 code 실행파일인지 확인(--version 시도). 경로/공백 있으면 따옴표, bare 이름은 그대로(PATHEXT 해석 위해).
+function codeCliWorks(tok) {
+  if (!tok) return false;
+  const t = /[\\/\s]/.test(String(tok)) ? q(fwd(tok)) : String(tok);
+  try { const r = cp.spawnSync(`${t} --version`, { shell: true, encoding: "utf8", timeout: 30000 }); return !!(r && r.status === 0); }
+  catch { return false; }
+}
+// 쓸 code CLI를 결정: ① CODE_CLI 명시(그대로 신뢰 — 자동탐지 안 함; 테스트가 가짜값으로 자동설치 무력화하는 계약 유지)
+// ② codeCliPriority 순서대로 — 현재 VS Code 신호(존재+동작) → PATH 'code'(동작) → OS 표준(존재+동작). 못 찾으면 null.
+function resolveCodeCli() {
+  if (process.env.CODE_CLI) return process.env.CODE_CLI;
+  for (const tok of codeCliPriority()) {
+    if (tok === "code") { if (codeCliWorks("code")) return "code"; }      // PATH bare — 존재검사 없이 --version
+    else if (fs.existsSync(tok) && codeCliWorks(tok)) return tok;          // 경로 후보 — 실제 존재+동작
+  }
+  return null;
+}
 function tryInstallVsix(dryRun) {
   let files = [];
   try { files = fs.readdirSync(__dirname); } catch { /* ignore */ }
@@ -250,6 +331,8 @@ function tryInstallVsix(dryRun) {
     const cur = currentVsix(files, version);
     log("ℹ️  (미리보기) 실제 설치 시 현재 소스로 새로 빌드(npm run package) 후 설치합니다" +
       (cur ? ` (현재 ${cur}가 있어도 최신 보장 위해 재빌드).` : " (현재 버전 VSIX 없음 → 빌드로 생성)."));
+    const detected = resolveCodeCli();
+    log(detected ? `ℹ️  (미리보기) 확장 설치에 쓸 VS Code CLI: ${detected}` : "ℹ️  (미리보기) VS Code CLI(code)를 못 찾음 — CODE_CLI 지정 또는 수동 설치 필요.");
     return;
   }
   log("ℹ️  현재 소스로 확장을 새로 빌드합니다 (npm run package)…");
@@ -275,16 +358,23 @@ function tryInstallVsix(dryRun) {
     log(`ℹ️  설치할 VSIX 파일이 실제로 없습니다(${vsix}) — 'npm install' 후 다시 실행하세요.`);
     return;
   }
-  const codeCli = process.env.CODE_CLI || "code";
+  const codeCli = resolveCodeCli();
+  if (!codeCli) {
+    // PATH에도 없고 표준 위치/환경변수 역추적으로도 못 찾음(아주 비표준 포터블 위치 등).
+    log("ℹ️  VS Code CLI(code)를 못 찾아 확장 자동 설치를 건너뜁니다.");
+    log(`   수동: VS Code에서 '확장: VSIX에서 설치'로 ${vsixPath} 선택`);
+    log("   또는 환경변수 CODE_CLI 에 code(.cmd) 실행파일 경로 지정 후 재시도.");
+    return;
+  }
   const cmd = buildInstallCmd(codeCli, vsixPath);
   let r;
   try { r = cp.spawnSync(cmd, { shell: true, encoding: "utf8", timeout: 120000 }); }
   catch { r = null; }
-  if (r && r.status === 0) { log(`✅ 확장 설치: ${vsix}`); }
+  if (r && r.status === 0) { log(`✅ 확장 설치: ${vsix}  (code: ${codeCli})`); }
   else {
-    log("ℹ️  확장 자동 설치 실패(code CLI 없음/무설치형 VS Code일 수 있음).");
+    log(`ℹ️  확장 자동 설치 실패(code: ${codeCli}).`);
     log(`   수동: VS Code에서 '확장: VSIX에서 설치'로 ${vsixPath} 선택`);
-    log("   또는 환경변수 CODE_CLI 에 code 실행파일 경로 지정 후 재시도.");
+    log("   또는 환경변수 CODE_CLI 에 code(.cmd) 실행파일 경로 지정 후 재시도.");
   }
 }
 
@@ -417,4 +507,4 @@ if (require.main === module) {
   else cmdInstall(has("--dry-run") || has("-n"));
 }
 
-module.exports = { pickVsix, currentVsix, buildInstallCmd };
+module.exports = { pickVsix, currentVsix, buildInstallCmd, candidateCodeClis, findRootUpwards, vscodeSignalClis, standardCodeClis, codeCliPriority };
