@@ -1,10 +1,11 @@
 // 문서/README용 '기능별' 대시보드 스크린샷 생성기.
 //  - src/extension.ts 의 <style>(실제 CSS) 추출 + Dark+ 테마 주입(make-screenshot.js 와 동일 방식)
-//  - 섹션을 하나씩 .shell 에 넣어 Edge 헤드리스로 캡처 → docs/feat_<key>.png (raw)
-//  - 이후 PowerShell trim 으로 아래 여백 잘라 타이트하게 만든다.
+//  - 섹션을 하나씩 .shell 에 넣어 Edge 헤드리스로 캡처 → docs/feat_<key>.png
+//  - 내장 PowerShell trim 으로 아래 여백을 잘라 타이트하게(한 명령으로 끝 — make-screenshot.js 와 동일).
 // ⚠ 주의: 아래 SECTIONS 마크업은 src/extension.ts html() 본문의 '샘플 복제'다(자동 추출 아님).
 //   웹뷰 구조/클래스가 바뀌면 여기 SECTIONS 도 같이 갱신해야 실제 화면과 일치한다(CSS는 자동 추출이라 무방).
-// 사용: node scripts/make-feature-shots.js  →  docs/_featraw_*.png
+//   ⚠ 결과 파일명(feat_<key>.png)은 README·소개글이 CDN으로 참조하므로 바꾸지 말 것(덮어쓰기만).
+// 사용: node scripts/make-feature-shots.js  →  docs/feat_*.png
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
@@ -21,7 +22,7 @@ const css = m[1];
 const theme = `:root{
   --vscode-foreground:#cccccc; --vscode-editor-background:#1f1f1f; --vscode-editor-foreground:#cccccc;
   --vscode-panel-border:#3c3c3c; --vscode-descriptionForeground:#9d9d9d; --vscode-sideBar-background:#181818;
-  --vscode-charts-blue:#3794ff; --vscode-charts-purple:#b180d7; --vscode-charts-green:#89d185; --vscode-charts-orange:#d18616;
+  --vscode-charts-blue:#3794ff; --vscode-charts-purple:#b180d7; --vscode-charts-green:#89d185; --vscode-charts-orange:#d18616; --vscode-charts-yellow:#d7ba7d;
   --vscode-input-background:#2a2a2a; --vscode-input-foreground:#cccccc; --vscode-input-border:#3c3c3c;
   --vscode-button-background:#0078d4; --vscode-button-foreground:#ffffff;
   --vscode-button-secondaryBackground:#3a3d41; --vscode-button-secondaryForeground:#ffffff;
@@ -88,7 +89,7 @@ const SECTIONS = {
     </div>
   </section>`,
 
-  brain: `<h2 class="sec base" style="margin-top:6px">코덱스 두뇌 설정 <span class="sub2">이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)</span></h2>
+  brain: `<h2 class="sec base accent-orange" style="margin-top:6px">코덱스 두뇌 설정 <span class="sub2">이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)</span></h2>
   <div class="mcard">
     <div class="muted">지금 쓰는 값(최근 기록): <b>GPT-5.5 · 생각강도 높음</b></div>
     <div class="mrow"><span class="mlbl">모델</span><select><option>GPT-5.5 (gpt-5.5)</option><option>GPT-5.4 (gpt-5.4)</option></select></div>
@@ -96,31 +97,48 @@ const SECTIONS = {
     <div class="row" style="margin-top:10px"><button>두뇌 설정 저장</button></div>
   </div>`,
 
-  timeout: `<h2 class="sec base" style="margin-top:6px">검증 대기시간 <span class="sub2">코덱스 검증을 기다리는 한도 — 추론이 길면 늘리세요 (전역·모든 프로젝트 공통)</span></h2>
+  timeout: `<h2 class="sec base accent-teal" style="margin-top:6px">검증 대기시간 <span class="sub2">코덱스 검증을 기다리는 한도 — 추론이 길면 늘리세요 (전역·모든 프로젝트 공통)</span></h2>
   <div class="mcard">
     <div class="mrow"><span class="mlbl">대기시간</span><input type="number" value="20" style="width:72px"> <span class="muted">분 · 기본 8</span></div>
     <div class="row" style="margin-top:10px"><button>대기시간 저장</button></div>
     <div class="muted" style="margin-top:6px">코덱스가 답하는 데 이 시간보다 오래 걸리면 검증이 실패로 끝나요. 추론이 8분을 넘는 경우가 있으면 늘려 두세요.</div>
   </div>`,
 
-  conv: `<h2 class="sec codex" style="margin-top:6px">Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
+  conv: `<h2 class="sec base accent-yellow" style="margin-top:6px">Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
   <div class="turn">
     <div class="umsg">src/payment.ts 의 applyDiscount() 변경 검증해줘 — 음수 할인율 방어 포함</div>
     <div class="vmsg"><div class="vhead"><span class="vname">Codex</span><span class="vchip pass">검증 통과</span></div><div class="vbody">검증: 통과 — applyDiscount()는 rate&lt;0 이면 0으로 클램프함(payment.ts:42). 다만 rate&gt;1(100% 초과)은 미검사 → 상한 클램프 권장.</div></div>
   </div>`,
 
-  link: `<h2 class="sec base" style="margin-top:6px">Codex 세션 연결 <span class="sub2">첫 발화로 식별</span></h2>
+  link: `<h2 class="sec base accent-rose" style="margin-top:6px">Codex 세션 연결 <span class="sub2">첫 발화로 식별</span></h2>
   <div class="cand linked"><div><div class="id">019b…a2f <span class="star">★ 연결됨</span></div><div class="muted">2026-06-22 · 결제 모듈 리팩터 검증</div></div></div>
   <div class="cand"><div><div class="id">019a…7c1</div><div class="muted">2026-06-21 · 인증 토큰 만료 처리</div></div><button>연결</button></div>`,
 };
 
 const EDGE = "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe";
+// 아래 배경(#1f1f1f) 빈 행 자동 트림 — 창을 넉넉히 잡고 남는 하단 여백을 잘라 정확한 높이로(make-screenshot.js와 동일 방식).
+//   ⚠ 파일명 유지: 결과는 docs/feat_<key>.png 로 '그대로' 덮어쓴다(README·소개글이 이 파일명을 CDN으로 참조 → 이름 바뀌면 깨짐).
+function trimBottom(pngPath) {
+  const pf = pngPath.replace(/\\/g, "/");
+  const ps = [
+    "Add-Type -AssemblyName System.Drawing",
+    `$f='${pf}'`,
+    "$b=New-Object System.Drawing.Bitmap $f; $W=$b.Width; $H=$b.Height; $bot=0",
+    "for($y=$H-1;$y -ge 0;$y-=2){$fnd=$false;for($x=0;$x -lt $W;$x+=20){$p=$b.GetPixel($x,$y);if([math]::Abs($p.R-31)-gt 14 -or [math]::Abs($p.G-31)-gt 14 -or [math]::Abs($p.B-31)-gt 14){$fnd=$true;break}};if($fnd){$bot=$y;break}}",
+    "$ch=[math]::Min($H,$bot+50); $c=New-Object System.Drawing.Bitmap $W,$ch; $g=[System.Drawing.Graphics]::FromImage($c)",
+    "$g.DrawImage($b,(New-Object System.Drawing.Rectangle 0,0,$W,$ch),(New-Object System.Drawing.Rectangle 0,0,$W,$ch),[System.Drawing.GraphicsUnit]::Pixel)",
+    "$b.Dispose(); $c.Save($f,[System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $c.Dispose(); Write-Output ('trim ' + $W + 'x' + $ch)",
+  ].join("; ");
+  const t = spawnSync("powershell", ["-NoProfile", "-Command", ps], { encoding: "utf8", timeout: 60000 });
+  return (t.stdout && t.stdout.trim()) ? t.stdout.trim() : ("(트림 건너뜀: " + String(t.stderr || "").slice(0, 100) + ")");
+}
+
 let okAll = true;
 for (const [key, inner] of Object.entries(SECTIONS)) {
   const html = `<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><style>${theme}\n${css}\n.shell{padding:18px 22px}</style></head><body><main class="shell">${inner}</main></body></html>`;
   const htmlFile = path.join(docs, `_feat_${key}.html`);
   fs.writeFileSync(htmlFile, html, "utf8");
-  const png = path.join(docs, `_featraw_${key}.png`);
+  const png = path.join(docs, `feat_${key}.png`); // 파일명 유지(기존 게시글이 참조) — 덮어쓰기
   const r = spawnSync(EDGE, [
     "--headless=new", "--disable-gpu", "--hide-scrollbars",
     "--force-device-scale-factor=3", "--window-size=980,940",
@@ -129,7 +147,8 @@ for (const [key, inner] of Object.entries(SECTIONS)) {
   ], { encoding: "utf8", timeout: 60000 });
   try { fs.unlinkSync(htmlFile); } catch {}
   const ok = fs.existsSync(png) && fs.statSync(png).size > 0;
+  const tr = ok ? trimBottom(png) : "";
   okAll = okAll && ok;
-  console.log(`${ok ? "OK" : "FAIL"} ${key} → ${png}`);
+  console.log(`${ok ? "OK" : "FAIL"} ${key} → ${png}  ${tr}`);
 }
-console.log(okAll ? "ALL OK (raw) — 이후 PowerShell trim 필요" : "일부 실패");
+console.log(okAll ? "ALL OK → docs/feat_*.png (트림까지 완료)" : "일부 실패");
