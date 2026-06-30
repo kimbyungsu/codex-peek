@@ -138,13 +138,14 @@ function dashboardWorkspace(): string | null {
   return folders[0];
 }
 
-function loadLinks(): { bySession: Record<string, any>; byWorkspace: Record<string, any>; modelPrefs: Record<string, any>; settings: Record<string, any> } {
+function loadLinks(): { bySession: Record<string, any>; byWorkspace: Record<string, any>; modelPrefs: Record<string, any>; settings: Record<string, any>; autoNewFailed: Record<string, any> } {
   try {
     const o = JSON.parse(fs.readFileSync(LINKS_FILE, "utf8"));
     // modelPrefs/settings를 보존해야 대시보드가 저장값(모델·생각강도·검증 대기시간)을 다시 읽어 표시한다.
-    return { bySession: o.bySession || {}, byWorkspace: o.byWorkspace || {}, modelPrefs: o.modelPrefs || {}, settings: o.settings || {} };
+    // autoNewFailed = 자동 새 세션 생성이 막힌 폴더(연속 실패 폭증방지) — session-missing 안내를 '시도' vs '멈춤'으로 분기하는 데 쓴다.
+    return { bySession: o.bySession || {}, byWorkspace: o.byWorkspace || {}, modelPrefs: o.modelPrefs || {}, settings: o.settings || {}, autoNewFailed: o.autoNewFailed || {} };
   } catch {
-    return { bySession: {}, byWorkspace: {}, modelPrefs: {}, settings: {} };
+    return { bySession: {}, byWorkspace: {}, modelPrefs: {}, settings: {}, autoNewFailed: {} };
   }
 }
 
@@ -417,7 +418,7 @@ function loadBaseDirectiveSafe(): { verifyBaseline: string; transmit: string; re
 
 // 무결성 신호: 브릿지(verify-guard)가 '검증 미완' 등을 integrity.json에 기록 → 여기서 읽어 상태바/대시보드로 가시화.
 // 단순 게이트(차단)로 끝내지 않고 사람에게 보이게 하는 채널의 소비자 쪽. 포맷은 contract-lib과 공유.
-interface IntegrityEvent { id: string; ts?: string; kind?: string; severity?: string; detail?: string; ack?: boolean; session?: string; workspace?: string }
+interface IntegrityEvent { id: string; ts?: string; kind?: string; severity?: string; detail?: string; ack?: boolean; session?: string; workspace?: string; sig?: string }
 function readIntegrity(): IntegrityEvent[] {
   try { const d = JSON.parse(fs.readFileSync(INTEGRITY_FILE, "utf8")); return Array.isArray(d.events) ? d.events : []; } catch { return []; }
 }
@@ -501,6 +502,33 @@ function syncBrainDriftFor(ws: string | null): void {
     if (xm && xmc && xm !== xmc) bd.push({ sig: `cx-model:${xm}!${xmc}`, detail: `코덱스: 설정한 모델은 '${pref.model}'인데 최근 답한 모델은 '${mModel}'예요. 바꾼 게 다음 답부터 반영될 수 있어요.` });
     if (pref.reasoning && mEffort && pref.reasoning !== mEffort) bd.push({ sig: `cx-effort:${pref.reasoning}!${mEffort}`, detail: `코덱스: 설정한 생각강도는 '${pref.reasoning}'인데 최근 답은 '${mEffort}'였어요. 바꾼 게 다음 답부터 반영될 수 있어요.` });
     syncBrainDrift(ws, bd);
+  } catch { /* best-effort */ }
+}
+// '연결된 Codex 세션 없음'을 빨강(error) 무결성 경보로 reconcile한다. brain-drift와 같은 '상태 reconcile' 패턴(sig 없는 단일 kind):
+// 연결 없으면 1건 유지(없으면 추가), 연결 생기면 제거. ★다른 빨강(verify-incomplete 등)과 달리 ack로는 안 사라진다 —
+// ackHere/배너 '확인함'이 이 kind를 제외하므로, 오직 '연결'(수동 link 또는 자동 새 세션 생성·연결)로만 해소된다.
+// 이 함수는 session-missing만 건드린다(타 kind·타 ws 보존) → 기존 빨강의 ack 동작은 그대로.
+function syncSessionMissing(ws: string | null): void {
+  if (!ws) return;
+  try {
+    const KIND = "session-missing";
+    const events = readIntegrity() as any[];
+    const wsMatch = (e: any) => !e.workspace || normWs(e.workspace) === normWs(ws);
+    const links = loadLinks();
+    const hasLink = !!(workspaceLink(links, ws) || {}).codexSession; // 이 폴더에 연결 고정된 Codex 세션이 있나
+    const blocked = !hasLink && !!(links.autoNewFailed || {})[normWs(ws)]; // 자동 새 세션 생성이 막힌 상태(연속 실패 폭증방지) → '시도' 대신 '멈춤' 안내
+    const sig = blocked ? "session-missing:blocked" : "session-missing:normal";
+    const detail = blocked
+      ? "현재 연결된 Codex 세션이 없고, 자동 생성이 멈춰 있습니다. 'Codex 세션 연결'에서 수동으로 연결하세요. 계속되면 개발자에게 문의해 주세요."
+      : "현재 연결된 Codex 세션이 없습니다. 'Codex 세션 연결'에서 수동으로 연결하거나, 검증을 계속 진행하면 새 세션 생성·연결을 자동으로 시도합니다.";
+    // 연결 있으면 이 ws의 session-missing 전부 제거. 없으면 '현재 sig + 미확인'만 보존(상태가 정상↔막힘으로 바뀌어 sig가 다르거나 ack된 건 제거 → 아래서 새 detail로 재생성).
+    // ★ack된 것·옛 sig를 제거+재생성하므로 (1)외부 ack-all로 ack돼도 (2)정상↔막힘 전환에도 연결 없는 한 항상 '최신 detail의 빨강'이 유지된다('연결로만 해소' + detail 자동 갱신).
+    const kept = events.filter((e) => e.kind !== KIND || !wsMatch(e) || (!hasLink && e.sig === sig && !e.ack));
+    const present = kept.some((e) => e.kind === KIND && wsMatch(e)); // 살아남은(현재 sig·미확인) session-missing이 있나
+    if (!hasLink && !present) {
+      kept.push({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, ack: false, ts: new Date().toISOString(), session: "", workspace: ws, kind: KIND, severity: "error", detail, sig });
+    }
+    if (kept.length !== events.length || kept.some((e, i) => e !== events[i])) atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: kept.slice(-50) }));
   } catch { /* best-effort */ }
 }
 // 무결성 경보 툴팁: 상태바 '바로 위'에 뜨는 '인터랙티브 호버'(MarkdownString+command 링크) — 마우스를 올려 링크 클릭 가능.
@@ -615,6 +643,7 @@ function computeState(turnsN: number): BridgeState {
   // 두뇌 drift를 integrity로 동기화(상태바/배너) — syncBrainDriftFor가 settings/transcript/rollout을 직접 읽어 계산한다.
   // 대시보드(computeState)·상태바 render() 양쪽에서 같은 함수를 호출하므로, 대시보드를 안 열어도 상태바에 drift가 뜬다.
   syncBrainDriftFor(ws);
+  syncSessionMissing(ws);
 
   return {
     workspace: ws,
@@ -1033,7 +1062,7 @@ class Dashboard {
         }
         if (m?.type === "ackIntegrity") {
           // 무결성 경보 확인(해제). id 배열이면 그것만, 없으면 전체.
-          const ok = ackIntegrity(Array.isArray(m.ids) && m.ids.length ? m.ids : "all");
+          const ok = ackIntegrity(Array.isArray(m.ids) ? m.ids : "all"); // 빈 배열([])은 그대로 → no-op. 배너가 session-missing만 빼 []를 보낼 때 'all'로 변질돼 전체(다른 빨강 포함)가 ack되던 회귀 방지.
           if (!ok) vscode.window.showErrorMessage("무결성 경보 확인 저장 실패 — 파일이 잠겨 있을 수 있어요. 잠시 후 다시 시도해 주세요.");
           this.post();
           this.onChange?.(); // 상태바도 즉시 갱신(watcher 지연/누락에 안 기댐) → 빨강 경보 바로 해제
@@ -1649,7 +1678,8 @@ class Dashboard {
       else {
         const errEvs = iev.filter(function(e){return e.severity==="error";});
         const nFail = errEvs.filter(function(e){return e.kind==="verdict-nonclean";}).length; // Codex 결론 '실패' = 빨강(대시보드 칩과 일치)
-        const nIncomplete = errEvs.length - nFail; // 검증 미완 — 검증 자체가 안 일어난 미검증 턴(빨강·ack 필요)
+        const nSession = errEvs.filter(function(e){return e.kind==="session-missing";}).length; // 연결 세션 없음 = 빨강(ack 아닌 '연결'로만 해소)
+        const nIncomplete = errEvs.length - nFail - nSession; // 검증 미완 — 검증 자체가 안 일어난 미검증 턴(빨강·ack 필요)
         const warnEvs = iev.filter(function(e){return e.severity==="warning";});
         const nVerdict = warnEvs.filter(function(e){return e.kind==="verdict-nonclean";}).length; // 보류·불가(실패는 빨강으로 분리)
         const nMissing = warnEvs.filter(function(e){return e.kind==="verdict-missing";}).length; // 판정 표지 누락(통과 아님과 구분)
@@ -1657,6 +1687,7 @@ class Dashboard {
         const nEvid = warnEvs.length - nVerdict - nMissing - nDrift; // 근거(evidence-*) 계열
         const errParts = [];
         if (nFail) errParts.push("검증 실패 " + nFail + "건"); // 빨강 — Codex 결론이 통과 아님(실패)
+        if (nSession) errParts.push("Codex 세션 없음 " + nSession + "건"); // 빨강 — 연결된 세션 없음(연결되면 자동 사라짐·확인함으론 안 사라짐)
         if (nIncomplete) errParts.push("검증 미완 " + nIncomplete + "건"); // 빨강 — 검증 자체가 안 일어남
         const warnParts = [];
         if (nVerdict) warnParts.push("Codex 보류·불가 " + nVerdict + "건"); // 노랑 — 통과도 실패도 아닌 보류/불가/정보부족
@@ -1670,9 +1701,21 @@ class Dashboard {
         const ih = el("div","ih");
         const head = "검증 무결성 경보 — " + [errStr, warnStr].filter(Boolean).join(" · "); // 빨강·노랑 라벨을 순서대로(빨강 먼저)
         ih.appendChild(el("span", null, head));
-        const ack = el("button","secondary","확인함 ✓");
-        ack.addEventListener("click", function(){ vscode.postMessage({type:"ackIntegrity", ids: iev.map(function(e){return e.id;})}); }); // 보이는(이 창) 경보만 확인 — 다른 창 것 안 지움
-        ih.appendChild(ack); ib.appendChild(ih);
+        const ackable = iev.filter(function(e){return e.kind!=="session-missing";}); // session-missing은 ack 대상 아님 — '연결'로만 해소
+        if (ackable.length) {
+          const ack = el("button","secondary","확인함 ✓");
+          ack.addEventListener("click", function(){ vscode.postMessage({type:"ackIntegrity", ids: ackable.map(function(e){return e.id;})}); }); // 보이는(이 창) ack 가능 경보만 확인 — 다른 창 것 안 지움
+          ih.appendChild(ack);
+        } else {
+          ih.appendChild(el("span","muted","연결하면 사라져요 (확인으론 안 닫혀요)")); // session-missing만 — '확인함'은 무효라 버튼 대신 안내 문구
+        }
+        if (iev.some(function(e){return e.sig==="session-missing:blocked";})) { // 자동 생성이 멈춤 → GitHub 이슈로 안내(클릭 시 외부 브라우저)
+          const gh = el("a","muted","🔗 GitHub에 문제 신고");
+          gh.setAttribute("href","https://github.com/kimbyungsu/codex-peek/issues");
+          gh.style.marginLeft = "8px";
+          ih.appendChild(gh);
+        }
+        ib.appendChild(ih);
         const ul = el("ul");
         iev.slice(-6).forEach(function(e){
           const li = el("li");
@@ -1947,31 +1990,57 @@ export function activate(context: vscode.ExtensionContext): void {
   const flowHide = () => { fClaude.hide(); fArrow.hide(); fCodex.hide(); };
   context.subscriptions.push(fClaude, fArrow, fCodex);
 
-  // 무결성 경보 펄스: 새 error 이벤트가 '늘었을 때만' 잠깐(6회 ~3초) 빨강↔주황 토글 후 빨강 지속.
-  // 끝없는 점멸(피로) 대신 '신규 시 짧은 펄스 + 미확인 동안 지속 빨강'. 확인(ack)하면 사라짐.
+  // 무결성 경보: 미확인 동안 '지속 빨강', 확인(ack)하면 사라짐. (새 경보 직후 점멸은 그 반복 setter가 호버를 닫는 부작용이 있어 제거했다 —
+  // 아래 pulseIfNew/pulseTimer/lastErrCount는 호환용으로 남았으나 점멸하지 않는다.)
   let lastErrCount = 0;
+  let lastRenderKey = ""; // 멱등 가드: 직전 '최종 표시 모델' 키. 같으면 render가 상태바/flow setter를 한 번도 안 불러 $setEntry RPC가 안 나가고 호버가 닫히지 않는다.
   let pulseTimer: NodeJS.Timeout | undefined;
-  const pulseIfNew = (count: number) => {
-    if (count <= lastErrCount) { lastErrCount = count; return; }
-    lastErrCount = count;
-    let n = 0;
-    if (pulseTimer) clearInterval(pulseTimer);
-    pulseTimer = setInterval(() => {
-      status.backgroundColor = new vscode.ThemeColor(n % 2 ? "statusBarItem.warningBackground" : "statusBarItem.errorBackground");
-      if (++n >= 6) { if (pulseTimer) clearInterval(pulseTimer); pulseTimer = undefined; status.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground"); }
-    }, 500);
-  };
+  // pulse(새 경보 직후 500ms 간격 backgroundColor 점멸)는 제거했다 — 그 반복 setter가 render 멱등 가드를 '우회'해 $setEntry RPC를 일으켜,
+  // 새 경보가 막 떴을 때 호버를 읽으려 하면 금세 닫히던 원인이었다(Codex 검증). 빨강 배경은 error 분기에서 '단일'로 설정(점멸 없이도 미확인 동안 지속 빨강).
+  const pulseIfNew = (count: number) => { lastErrCount = count; };
 
   const render = () => {
     const ws = dashboardWorkspace();
     const link = workspaceLink(loadLinks(), ws);
+    const file = link?.codexSession ? findRolloutById(link.codexSession) : null;
+    const snip = file ? firstSnippet(file) : "";
+    // 검증 진행 흐름: 진행 중이면 메인 항목을 숨기고 [🧑Claude] ▶▶검증중 [🔍Codex] 3개 항목으로 단계별(글자)색을 보인다.
+    const live = computeLiveStage(link?.codexSession ?? null);
+    // 두뇌 drift/세션없음을 상태바 갱신 경로에서도 계산(부수효과 — 항상 수행) → 대시보드를 안 열어도 경고가 상태바에 뜬다. 그 뒤 integrity를 읽는다.
+    syncBrainDriftFor(ws);
+    syncSessionMissing(ws);
+    const allIg = readVisibleIntegrity(ws);
+    const errs = allIg.filter((e) => !e.ack && e.severity === "error");
+    const warns = allIg.filter((e) => !e.ack && e.severity === "warning");
+    // 우선순위 error > warning > flow: 미확인 경보(빨강/노랑)가 있으면 상태바는 그걸 보인다(무결성 가시화 우선). 진행 flow는 대시보드 스트립엔 계속 보임.
+    const flowActive = !!live && !errs.length && !warns.length && ["claude", "codex-req", "codex-gen", "rejudge"].includes(live.key);
+
+    // ★멱등 가드: 상태바/flow에 '실제로 반영될 최종 표시 모델'이 직전과 같으면 setter를 한 번도 호출하지 않는다 → VS Code $setEntry RPC가 안 나가
+    // 호버가 닫히지 않는다(render는 BRIDGE_DIR watch·15초 poll로 자주 돌지만 표시가 같으면 무시).
+    // ★키는 '입력 상태 전부'가 아니라 '지금 상태바를 잡는 mode의 표시 요소'만 담는다. 예: 경보(error/warning)가 떠 있으면 연결/스니펫/flow는
+    //   화면에 안 보이므로 키에서 제외 → 경보 툴팁을 읽는 중 phase.json(live)·링크 변화로 호버가 닫히지 않는다. pulse(별도 타이머)는 키 밖.
+    const mode = (flowActive && live) ? "flow" : errs.length ? "error" : warns.length ? "warning" : !ws ? "noWs" : link?.codexSession ? "linked" : "unlinked";
+    const key = JSON.stringify({
+      mode,
+      // error/warning mode: 실제 tooltip 줄은 [...errs,...warns].slice(-4), label은 kind 집합으로 결정 → 그 표시 요소만 담는다.
+      alert: (mode === "error" || mode === "warning")
+        // 실제 노출 줄에 맞춘다: error 분기 tooltip은 [...errs,...warns].slice(-4), warning 분기 tooltip은 warns.slice(-3).
+        ? { l: (mode === "error" ? [...errs, ...warns].slice(-4) : warns.slice(-3)).map((x) => `${x.severity}|${x.kind}|${x.detail || ""}|${x.sig || ""}`),
+            ne: errs.length, nw: warns.length,
+            ek: errs.map((x) => x.kind).sort().join(","), wk: warns.map((x) => x.kind).sort().join(","),
+            blocked: errs.some((x) => x.sig === "session-missing:blocked") }
+        : null,
+      flow: (mode === "flow" && live) ? `${live.key}|${live.round}|${live.label}|${live.color}` : null,
+      link: mode === "linked" ? `${link?.codexSession || ""}|${link?.linkedAt || ""}|${!!file}|${snip}` : null,
+    });
+    if (key === lastRenderKey) return; // 표시 동일 → status/flow 갱신 전체 skip(불필요 RPC·호버 닫힘 방지)
+    lastRenderKey = key;
+
     if (!ws) {
       status.text = "$(plug) Codex";
       status.tooltip = "워크스페이스 없음";
       status.backgroundColor = undefined; // 무결성 빨강 등 이전 색 잔존 방지(아래 무결성 분기가 다시 칠할 수 있음)
     } else if (link?.codexSession) {
-      const file = findRolloutById(link.codexSession);
-      const snip = file ? firstSnippet(file) : "";
       status.text = `$(link) Codex: ${(snip || link.codexSession).slice(0, 14)}`;
       status.tooltip = new vscode.MarkdownString(
         `**Codex Bridge — 연결됨**\n\n` +
@@ -1987,17 +2056,6 @@ export function activate(context: vscode.ExtensionContext): void {
       status.tooltip = "연결된 Codex 세션 없음 · 클릭 → 대시보드에서 연결";
       status.backgroundColor = undefined;
     }
-
-    // 검증 진행 흐름: 진행 중이면 메인 항목을 숨기고 [🧑Claude] ▶▶검증중 [🔍Codex] 3개 항목으로 단계별(글자)색을 보인다.
-    const live = computeLiveStage(link?.codexSession ?? null);
-    // 두뇌 drift를 상태바 갱신 경로에서도 계산 → 대시보드를 열지 않아도 drift 경고가 상태바에 뜬다(throttle 내장). 그 뒤 integrity를 읽는다.
-    syncBrainDriftFor(dashboardWorkspace());
-    const allIg = readVisibleIntegrity(dashboardWorkspace());
-    const errs = allIg.filter((e) => !e.ack && e.severity === "error");
-    const warns = allIg.filter((e) => !e.ack && e.severity === "warning");
-    // 우선순위 error > warning > flow: 미확인 경보(빨강/노랑)가 있으면 상태바는 그걸 보인다(무결성 가시화 우선).
-    // 진행 flow는 대시보드 스트립엔 계속 보이므로 상태바에서 양보해도 사용자가 진행을 못 보는 건 아님.
-    const flowActive = !!live && !errs.length && !warns.length && ["claude", "codex-req", "codex-gen", "rejudge"].includes(live.key);
     if (flowActive && live) {
       if (pulseTimer) { clearInterval(pulseTimer); pulseTimer = undefined; } lastErrCount = 0;
       status.hide(); // 흐름 표시 중엔 메인 1줄 대신 3박스
@@ -2020,9 +2078,12 @@ export function activate(context: vscode.ExtensionContext): void {
     // 무결성 경보: error(검증 실패=verdict-nonclean / 검증 미완=verify-incomplete)=빨강 우선. 빨강이 있어도 함께 있는 노랑 건수를 같이 보여 '둘 다' 인지되게 한다.
     if (errs.length) {
       const nFail = errs.filter((e) => e.kind === "verdict-nonclean").length; // Codex 결론 '실패'(빨강·재검증 통과 시 자동 해소)
-      const nIncomplete = errs.length - nFail;                                // 검증 미완(검증 자체가 안 일어남·ack 필요)
-      const label = nFail && nIncomplete ? "Codex 검증 문제"
+      const nSession = errs.filter((e) => e.kind === "session-missing").length; // 연결 세션 없음(빨강·연결되면 자동 해소, ack 아님)
+      const nIncomplete = errs.length - nFail - nSession;                       // 검증 미완(검증 자체가 안 일어남·ack 필요)
+      const ekinds = [nFail > 0, nSession > 0, nIncomplete > 0].filter(Boolean).length;
+      const label = ekinds > 1 ? "Codex 검증 문제"
                   : nFail ? "Codex 검증 실패"
+                  : nSession ? "Codex 세션 없음"
                   : "Codex 검증 미완";
       const warnTail = warns.length ? ` · 🟡${warns.length}` : ""; // 같이 뜬 노랑(두뇌 어긋남·근거 의심 등)도 건수로 노출
       status.text = `$(alert) ${label} ${errs.length}${warnTail}`;
@@ -2031,6 +2092,8 @@ export function activate(context: vscode.ExtensionContext): void {
         `**🔴 빨강 ${errs.length}건${warns.length ? " · 🟡 노랑 " + warns.length + "건" : ""}**\n\n` +
           lines.join("\n\n") +
           (nFail ? `\n\n검증 실패: 고쳐서 다시 검증해 통과하면 빨강이 사라집니다.` : ``) +
+          (nSession ? `\n\nCodex 세션 없음: 'Codex 세션 연결'에서 수동 연결하거나, 검증을 계속 진행하면 자동 연결을 시도해요(연결되면 사라짐 · '확인함'으론 안 닫힘).` : ``) +
+          (errs.some((e) => e.sig === "session-missing:blocked") ? `\n\n자동 생성이 멈춰 있어요 — 계속되면 [GitHub에 문제 신고](https://github.com/kimbyungsu/codex-peek/issues)` : ``) +
           (nIncomplete ? `\n\n검증 미완: 이 턴이 '검증 없이' 종료됐을 수 있어요(확인 필요).` : ``),
       );
       status.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
@@ -2119,7 +2182,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // ★ 호출 '시점'에 경보 재읽기(렌더 시점 값 재사용 금지) ★ 이 창 id만(다른 창 보존) ★ 실패 정직 보고 ★ 직후 즉시 갱신.
     vscode.commands.registerCommand("codexBridge.ackHere", () => {
       const unacked = readVisibleIntegrity(dashboardWorkspace()).filter(
-        (e) => !e.ack && (e.severity === "error" || e.severity === "warning"),
+        (e) => !e.ack && (e.severity === "error" || e.severity === "warning") && e.kind !== "session-missing", // session-missing은 ack 제외 — '연결'로만 해소
       );
       if (!unacked.length) return; // 이미 확인됨/없음(다른 데서 ack) → 무동작
       const ok = ackIntegrity(unacked.map((e) => e.id));
