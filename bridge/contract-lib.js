@@ -90,6 +90,19 @@ function appendIntegrityEvent(ev) {
   events.push(Object.assign({ id, ack: false }, ev));
   return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: events.slice(-50) })); // 최근 50건 상한
 }
+
+// ── 검증 통계 누적(append-only) — 대시보드 탭2 통계 재료 ──
+// integrity는 '최신 상태'(통과는 안 남고 supersede로 지움)라 통계가 안 된다. 그래서 검증 1건당 1줄을 별도 로그에 쌓는다.
+// 원문(prompt/answer)은 저장하지 않고 메타만: ts/workspace/세션/verdict/answerChars. 토큰은 집계 시 rollout/transcript에서 별도로 읽는다.
+const STATS_DIR = path.join(BRIDGE_DIR, "stats");
+const VERDICTS_FILE = path.join(STATS_DIR, "verdicts.jsonl");
+function appendVerdict(ev) {
+  try {
+    fs.mkdirSync(STATS_DIR, { recursive: true });
+    fs.appendFileSync(VERDICTS_FILE, JSON.stringify(ev) + "\n", "utf8");
+    return true;
+  } catch { return false; } // best-effort — 통계 실패가 검증 흐름을 막지 않음
+}
 // ids="all"이면 전체, 배열이면 그 id들만 ack 처리(확인함). 확장이 호출.
 function ackIntegrityEvents(ids) {
   const events = readIntegrityEvents();
@@ -355,4 +368,4 @@ function formatForClaude(answer) {
   return `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, STATS_DIR, VERDICTS_FILE };

@@ -17,7 +17,7 @@ const { spawnSync, spawn } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs } = require("./contract-lib.js");
+const { loadContract, buildInjection, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs, appendVerdict } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -225,13 +225,15 @@ function flagEvidence(answer, ws, sessionId, execCwd) {
 // 실패→수정→재검증 통과로 해소되면 그 경보도 사라진다(반복 검증이 무조건 경보를 남기는 cry-wolf 방지). 그 뒤 실패(빨강)·보류·불가(노랑)일 때만 새로 띄움.
 // '통과'·'통과(보완)'은 새 경보를 만들지 않는다(굿하트 '통과 도장' 안 만들기). 단 답은 있는데 마지막 판정 줄이 없으면(null)
 // verdict-missing 노랑으로 '표지 누락'을 가시화한다(대시보드 색 분류 입력이 비기 때문). 빈/공백 답은 아무 신호도 안 건드린다. answer=마지막 메시지(-o).
-function flagVerdict(answer, ws) {
+function flagVerdict(answer, ws, codexSession) {
   try {
     const text = String(answer || "");
     if (!text.trim()) return; // 빈/공백 답 → 직전 신호(표지 누락 포함)도 함부로 안 건드림(supersede도 안 함)
     const session = claudeId() || ((readActive() || {}).claudeSession) || "";
     supersedeIntegrity(session, "verdict-missing"); // 새 답 도착 → 직전 '표지 누락' 신호는 갱신 대상(최신 1건만 유지)
     const v = extractVerdict(text);
+    // 통계 누적(append-only, stats/verdicts.jsonl) — 대시보드 탭2 재료. 원문 저장 안 함(메타만). best-effort.
+    try { appendVerdict({ ts: nowIso(), workspace: ws, claudeSession: session, codexSession: codexSession || "", verdict: v || "unparsed", answerChars: text.length }); } catch { /* 통계 실패가 검증 흐름을 막지 않음 */ }
     if (!v) {
       // 답은 있는데 마지막 '검증:' 판정 줄이 없음 → 형식 위반 가시화. 별도 kind로 격리해 verdict-nonclean(실패 빨강·보류 노랑)은 안 건드린다.
       appendIntegrityEvent({
@@ -738,7 +740,7 @@ async function cmdAsk(rest) {
     try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
     writeProof(link.codexSession, answer, ws); // 실제 성공 → 검증 증명 기록(verify-guard가 인정)
     flagEvidence(answer, ws, link.codexSession, exec); // 결정2: 인용 근거 존재성+다룬 흔적 점검(경로해석=작업폴더 exec). 라벨=연 폴더 ws
-    flagVerdict(answer, ws); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 답에 판정 줄이 없으면 표지 누락 노랑 가시화(자동 차단 X)
+    flagVerdict(answer, ws, link.codexSession); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 답에 판정 줄이 없으면 표지 누락 노랑 가시화(자동 차단 X)
     process.stdout.write(`# 연결 세션 ${link.codexSession} (${link.via})\n\n${formatForClaude(answer)}\n`);
     return;
   }
@@ -820,14 +822,14 @@ async function cmdAsk(rest) {
   if (id) {
     writeProof(id, answer, ws); // 실제 성공 → 검증 증명 기록
     flagEvidence(answer, ws, id, exec); // 결정2: 인용 근거 존재성+다룬 흔적(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
-    flagVerdict(answer, ws); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 표지 누락도 노랑 가시화(자동 차단 X)
+    flagVerdict(answer, ws, id); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 표지 누락도 노랑 가시화(자동 차단 X)
     const head = earlyLinked ? `# 새 Codex 세션 생성·즉시연결: ${id}` : `# 새 Codex 세션 생성·연결: ${id}`;
     process.stdout.write(`${head}\n\n${formatForClaude(answer)}\n`);
   } else {
     updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; }); // 다음 자동 생성 차단 플래그
     writeProof("", answer, ws); // Codex는 성공 응답함(세션id만 미식별) → 검증은 인정
     flagEvidence(answer, ws, "", exec); // 세션id 미식별 → 존재성 점검만(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
-    flagVerdict(answer, ws);
+    flagVerdict(answer, ws, "");
     process.stdout.write(`# 새 세션 생성됨(세션id 식별 실패) — 폭증 방지로 다음 자동 생성은 멈춥니다. 'find'로 찾아 'link <id>' 하세요.\n\n${formatForClaude(answer)}\n`);
   }
 }
