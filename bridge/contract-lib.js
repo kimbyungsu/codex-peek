@@ -93,13 +93,34 @@ function appendIntegrityEvent(ev) {
 
 // ── 검증 통계 누적(append-only) — 대시보드 탭2 통계 재료 ──
 // integrity는 '최신 상태'(통과는 안 남고 supersede로 지움)라 통계가 안 된다. 그래서 검증 1건당 1줄을 별도 로그에 쌓는다.
-// 원문(prompt/answer)은 저장하지 않고 메타만: ts/workspace/세션/verdict/answerChars. 토큰은 집계 시 rollout/transcript에서 별도로 읽는다.
+// 원문(prompt/answer)은 저장하지 않고 메타만: ts/workspace/세션/verdict/answerChars + model/mode/codexTokens(검증 시점 모델·검증모드·이 검증 1회 토큰, flagVerdict가 append 시 채움). 과거 기록엔 이 필드들이 없을 수 있다('미상').
 const STATS_DIR = path.join(BRIDGE_DIR, "stats");
 const VERDICTS_FILE = path.join(STATS_DIR, "verdicts.jsonl");
+// 검증 기록부 리텐션 — 60일 넘은 유효 줄과 깨진 JSON 줄을 정리해 무한 증가를 막는다(흐름 최대 창 28일 + 여유). best-effort.
+// 깨진 JSON만 제거하고, ts가 이상(NaN)이거나 미래인 줄은 보존(집계측 computeVerifyStats가 별도로 걸러냄). 동시 append 유실은 드물고 통계만 영향 → 허용.
+function trimVerdicts(maxDays = 60) {
+  try {
+    const raw = fs.readFileSync(VERDICTS_FILE, "utf8");
+    const cutoff = Date.now() - maxDays * 24 * 60 * 60 * 1000;
+    const nonEmpty = [], kept = [];
+    for (const ln of raw.split(/\r?\n/)) {
+      if (!ln.trim()) continue;
+      nonEmpty.push(ln);
+      let o; try { o = JSON.parse(ln); } catch { continue; } // 깨진/반쪽 줄 → kept 제외
+      const ts = Date.parse(o.ts);
+      if (Number.isFinite(ts) && ts < cutoff) continue; // 60일 초과(유효 ts) → kept 제외. NaN/미래는 보존(집계측 computeVerifyStats가 별도로 거름)
+      kept.push(ln);
+    }
+    if (kept.length === nonEmpty.length) return kept.length; // 제거할 깨진·오래된 줄 없음 → rewrite 안 함(평소 read만 — IO·여러 창 동시 덮어쓰기 위험 최소화)
+    fs.writeFileSync(VERDICTS_FILE, kept.length ? kept.join("\n") + "\n" : "", "utf8");
+    return kept.length;
+  } catch { return -1; } // 파일 없음 등 — best-effort(검증 흐름 안 막음)
+}
 function appendVerdict(ev) {
   try {
     fs.mkdirSync(STATS_DIR, { recursive: true });
     fs.appendFileSync(VERDICTS_FILE, JSON.stringify(ev) + "\n", "utf8");
+    trimVerdicts(60); // 추가 후 오래된·깨진 줄 정리(검증당 1회, 파일 작아 부담 적음)
     return true;
   } catch { return false; } // best-effort — 통계 실패가 검증 흐름을 막지 않음
 }
@@ -368,4 +389,4 @@ function formatForClaude(answer) {
   return `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, STATS_DIR, VERDICTS_FILE };

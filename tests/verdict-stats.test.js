@@ -32,5 +32,21 @@ let threw = false;
 try { cl.appendVerdict(undefined); } catch { threw = true; }
 ok(!threw, "appendVerdict(undefined)도 throw 안 함(best-effort)");
 
+console.log("[trim] 60일 넘은 줄·깨진 줄 정리(무한 증가 방지)");
+const NOW = Date.now();
+const recent = JSON.stringify({ ts: new Date(NOW - 5 * 864e5).toISOString(), workspace: "/ws", verdict: "pass" });
+const old90 = JSON.stringify({ ts: new Date(NOW - 90 * 864e5).toISOString(), workspace: "/ws", verdict: "fail" });
+fs.writeFileSync(VF, recent + "\n" + old90 + "\n" + '{"broken' + "\n", "utf8");
+cl.trimVerdicts(60);
+ok(lines().length === 1 && lines()[0].verdict === "pass", "60일내 1줄만 남고 90일·깨진 줄 제거");
+fs.writeFileSync(VF, recent + "\n", "utf8");
+ok(cl.trimVerdicts(60) === 1 && lines().length === 1, "최근 줄은 보존(반환값=보존 줄 수)");
+const future = JSON.stringify({ ts: new Date(NOW + 3 * 864e5).toISOString(), workspace: "/ws", verdict: "pass" });
+const nan = JSON.stringify({ ts: "not-a-date", workspace: "/ws", verdict: "pass" });
+fs.writeFileSync(VF, recent + "\n" + future + "\n" + nan + "\n", "utf8");
+ok(cl.trimVerdicts(60) === 3 && lines().length === 3, "미래·NaN ts는 보존(집계측이 별도로 거름)");
+fs.rmSync(VF);
+ok(cl.trimVerdicts(60) === -1, "파일 없으면 -1(throw 안 함, best-effort)");
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

@@ -220,20 +220,61 @@ function flagEvidence(answer, ws, sessionId, execCwd) {
     }
   } catch { /* best-effort — 점검 실패가 검증 흐름을 막지 않음 */ }
 }
+// rollout 끝에서 '마지막 turn의 모델 + 그 turn 1회 토큰(last_token_usage)'을 읽는다 — 검증 1건의 모델·비용 기록용.
+// usage-monitor 구조: type==='turn_context'의 payload.model, payload.type==='token_count'의 info.last_token_usage. 파일 끝 256KB만(검증=보통 마지막 1턴). 못 찾으면 빈/ null(통계는 '미상').
+function readLastTurnTail(file, bytes) {
+  let raw = "";
+  const fd = fs.openSync(file, "r");
+  try {
+    const sz = fs.fstatSync(fd).size;
+    const start = Math.max(0, sz - bytes);
+    const len = Math.min(sz, bytes);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, start);
+    raw = buf.toString("utf8");
+  } finally { fs.closeSync(fd); }
+  let model = "", effort = "", last = null;
+  for (const ln of raw.split(/\n/)) {
+    if (!ln.trim()) continue;
+    let o; try { o = JSON.parse(ln); } catch { continue; }
+    if (o && o.type === "turn_context" && o.payload) {
+      const m = o.payload.model || (o.payload.collaboration_mode && o.payload.collaboration_mode.settings && o.payload.collaboration_mode.settings.model);
+      if (m) model = String(m); // 뒤로 갈수록 최신 turn 모델
+      const ef = o.payload.effort || (o.payload.collaboration_mode && o.payload.collaboration_mode.settings && o.payload.collaboration_mode.settings.reasoning_effort);
+      if (ef) effort = String(ef); // 추론강도(low/medium/high/xhigh) — turn_context.effort 또는 collaboration_mode.settings.reasoning_effort
+    } else if (o && o.payload && o.payload.type === "token_count" && o.payload.info && o.payload.info.last_token_usage) {
+      last = o.payload.info.last_token_usage; // 마지막 token_count의 1회 사용량
+    }
+  }
+  const n = (x) => (typeof x === "number" && isFinite(x) ? x : 0);
+  const g = (s, c) => n(last[s] != null ? last[s] : last[c]); // snake 우선, camel 폴백
+  const tokens = last ? { input: g("input_tokens", "inputTokens"), cachedInput: g("cached_input_tokens", "cachedInputTokens"), output: g("output_tokens", "outputTokens"), reasoning: g("reasoning_output_tokens", "reasoningOutputTokens"), total: g("total_tokens", "totalTokens") } : null;
+  return { model: model, effort: effort, tokens: tokens };
+}
+function parseLastTurn(file) {
+  try {
+    let r = readLastTurnTail(file, 256 * 1024);
+    if (!r.model || !r.tokens) { const big = readLastTurnTail(file, 2 * 1024 * 1024); r = { model: r.model || big.model, effort: r.effort || big.effort, tokens: r.tokens || big.tokens }; } // 끝 256KB에 모델·토큰이 안 잡히면 더 크게 재시도(누락 줄임)
+    return r;
+  } catch { return { model: "", effort: "", tokens: null }; }
+}
 // 비-깨끗한 결론을 사용자에게 '가시화'(실패=빨강·보류·불가=노랑). 자동 차단 안 함(설계 경계 결론: 품질은 강제 말고 가시화).
 // 핵심: verdict는 '최신 상태'다. 새 검증 결과가 나오면 같은 세션의 직전 verdict-nonclean을 먼저 대체(supersede)한다 →
 // 실패→수정→재검증 통과로 해소되면 그 경보도 사라진다(반복 검증이 무조건 경보를 남기는 cry-wolf 방지). 그 뒤 실패(빨강)·보류·불가(노랑)일 때만 새로 띄움.
 // '통과'·'통과(보완)'은 새 경보를 만들지 않는다(굿하트 '통과 도장' 안 만들기). 단 답은 있는데 마지막 판정 줄이 없으면(null)
 // verdict-missing 노랑으로 '표지 누락'을 가시화한다(대시보드 색 분류 입력이 비기 때문). 빈/공백 답은 아무 신호도 안 건드린다. answer=마지막 메시지(-o).
-function flagVerdict(answer, ws, codexSession) {
+function flagVerdict(answer, ws, codexSession, modeSnapshot) {
   try {
     const text = String(answer || "");
     if (!text.trim()) return; // 빈/공백 답 → 직전 신호(표지 누락 포함)도 함부로 안 건드림(supersede도 안 함)
     const session = claudeId() || ((readActive() || {}).claudeSession) || "";
     supersedeIntegrity(session, "verdict-missing"); // 새 답 도착 → 직전 '표지 누락' 신호는 갱신 대상(최신 1건만 유지)
     const v = extractVerdict(text);
+    // 2순위: 모델·검증모드·이 검증 1회 토큰 수집(모델별/모드별 통계 재료). 못 읽으면 빈값/null → 통계에서 '미상' 처리. 과거 기록엔 이 필드들이 없다.
+    let model = "", mode = modeSnapshot || "", codexTok = null, effort = ""; // mode는 cmdAsk 시작 시점 스냅샷(검증 중 사용자가 바꿔도 trigger 모드 보존)
+    try { if (codexSession) { const f = findRolloutById(codexSession); if (f) { const lt = parseLastTurn(f); model = lt.model; effort = lt.effort || ""; codexTok = lt.tokens; } } } catch { /* rollout 파싱 best-effort */ }
     // 통계 누적(append-only, stats/verdicts.jsonl) — 대시보드 탭2 재료. 원문 저장 안 함(메타만). best-effort.
-    try { appendVerdict({ ts: nowIso(), workspace: ws, claudeSession: session, codexSession: codexSession || "", verdict: v || "unparsed", answerChars: text.length }); } catch { /* 통계 실패가 검증 흐름을 막지 않음 */ }
+    try { appendVerdict({ ts: nowIso(), workspace: ws, claudeSession: session, codexSession: codexSession || "", verdict: v || "unparsed", answerChars: text.length, model: model, mode: mode, effort: effort, codexTokens: codexTok }); } catch { /* 통계 실패가 검증 흐름을 막지 않음 */ }
     if (!v) {
       // 답은 있는데 마지막 '검증:' 판정 줄이 없음 → 형식 위반 가시화. 별도 kind로 격리해 verdict-nonclean(실패 빨강·보류 노랑)은 안 건드린다.
       appendIntegrityEvent({
@@ -719,6 +760,7 @@ async function cmdAsk(rest) {
   // configWs/execCwd 분리: 설정 기준(계약·생각강도·링크·proof·이벤트 라벨)은 '연 폴더'(ws), 코덱스 실행·새세션 탐지·인용
   // 근거 경로 해석은 '작업 폴더'(exec=실제 실행 cwd). 사용자가 연 폴더에 건 설정이 외부 폴더 작업에도 일관 적용되게 한다.
   const ws = configWs();        // 연 폴더(설정 기준)
+  const modeSnap = (loadContract(ws) || {}).verifyMode || ""; // 검증 트리거 모드 스냅샷(검증 중 사용자가 바꿔도 오염 안 되게) → flagVerdict로 전달
   const exec = process.cwd();   // 작업 폴더(실행/탐지/근거경로 기준) — 코덱스 spawn은 cwd 미지정이라 실제로 여기서 돈다
   const mArgs = modelArgs(modelPrefFor(links, ws)); // 선택한 모델/생각강도를 매 호출 -c로 재적용(연 폴더 pref → 작업이 어디든 일관)
 
@@ -740,7 +782,7 @@ async function cmdAsk(rest) {
     try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
     writeProof(link.codexSession, answer, ws); // 실제 성공 → 검증 증명 기록(verify-guard가 인정)
     flagEvidence(answer, ws, link.codexSession, exec); // 결정2: 인용 근거 존재성+다룬 흔적 점검(경로해석=작업폴더 exec). 라벨=연 폴더 ws
-    flagVerdict(answer, ws, link.codexSession); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 답에 판정 줄이 없으면 표지 누락 노랑 가시화(자동 차단 X)
+    flagVerdict(answer, ws, link.codexSession, modeSnap); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 답에 판정 줄이 없으면 표지 누락 노랑 가시화(자동 차단 X)
     process.stdout.write(`# 연결 세션 ${link.codexSession} (${link.via})\n\n${formatForClaude(answer)}\n`);
     return;
   }
@@ -822,14 +864,14 @@ async function cmdAsk(rest) {
   if (id) {
     writeProof(id, answer, ws); // 실제 성공 → 검증 증명 기록
     flagEvidence(answer, ws, id, exec); // 결정2: 인용 근거 존재성+다룬 흔적(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
-    flagVerdict(answer, ws, id); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 표지 누락도 노랑 가시화(자동 차단 X)
+    flagVerdict(answer, ws, id, modeSnap); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 표지 누락도 노랑 가시화(자동 차단 X)
     const head = earlyLinked ? `# 새 Codex 세션 생성·즉시연결: ${id}` : `# 새 Codex 세션 생성·연결: ${id}`;
     process.stdout.write(`${head}\n\n${formatForClaude(answer)}\n`);
   } else {
     updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; }); // 다음 자동 생성 차단 플래그
     writeProof("", answer, ws); // Codex는 성공 응답함(세션id만 미식별) → 검증은 인정
     flagEvidence(answer, ws, "", exec); // 세션id 미식별 → 존재성 점검만(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
-    flagVerdict(answer, ws, "");
+    flagVerdict(answer, ws, "", modeSnap);
     process.stdout.write(`# 새 세션 생성됨(세션id 식별 실패) — 폭증 방지로 다음 자동 생성은 멈춥니다. 'find'로 찾아 'link <id>' 하세요.\n\n${formatForClaude(answer)}\n`);
   }
 }
@@ -1038,4 +1080,4 @@ function main() {
 }
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
-module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, updateLinks, loadLinks, saveLinks, LINKS_FILE, verifyTimeoutMin, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs };
+module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, updateLinks, loadLinks, saveLinks, LINKS_FILE, verifyTimeoutMin, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, parseLastTurn };

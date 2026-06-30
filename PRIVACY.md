@@ -16,6 +16,7 @@
 - **Claude 설정(`settings.json`)의 모델** — 설정한 모델과 위 최근 응답 모델이 다른지("두뇌 설정 어긋남") 비교하려고 `model` 값을 **읽기만** 합니다(이 확장은 당신의 모델/생각강도를 절대 바꾸지 않습니다).
 - **Claude 홈 경로 탐지** — 훅이 받은 `transcript_path`에서 Claude 설정 폴더를 도출해 브릿지 홈의 `claude-home.txt`에 기억합니다(확장이 `CLAUDE_CONFIG_DIR`을 직접 못 보는 환경 대응 — 코덱스의 `codex-home.txt`와 대칭).
 - **검증 답변이 인용한 파일** — 코덱스 답변에 나온 `파일:줄` 근거가 실제로 존재하는지 확인하려고 그 로컬 파일을 열어 **줄 수만** 셉니다(내용을 어디로 보내지 않음).
+- **검증 통계용 사용량** — 검증 통계 탭이 (a) 이 폴더 Claude 대화기록의 `message.usage`(입력·출력·캐시 토큰)와 `cwd`·`isSidechain`·`timestamp`를 읽어 **이 폴더 28일 토큰·턴수**를, (b) 연결 코덱스 세션 rollout의 `token_count`(`last_token_usage`/`total_token_usage`)와 `turn_context`(모델·추론강도)를 읽어 **검증 토큰·모델·강도**를 집계합니다. 모두 **로컬 집계**이고 수치만 씁니다(대화 원문 아님).
 - **작업 폴더의 git 상태** — 완료 시점에 실제 변경이 있었는지 보려고 `git status`(작업트리 변경 목록)를 읽습니다.
 - **현재 작업 맥락** — Claude Code 훅이 주는 작업 폴더·세션 ID(`CLAUDE_PROJECT_DIR`, `CLAUDE_CODE_SESSION_ID`).
 
@@ -36,6 +37,7 @@
 | `codex-bin.txt`, `codex-home.txt` | 코덱스 실행 경로·홈 경로(자동 탐지 결과 기억). 못 찾으면 지웁니다. |
 | `claude-home.txt` | Claude 설정 폴더(`CLAUDE_CONFIG_DIR`/기본 `~/.claude`) 자동 탐지 결과 — `contract-inject` 훅이 받은 `transcript_path`에서 도출해 기록(확장이 env를 직접 못 보는 환경 대응). |
 | `onboard-dismissed` | 첫 안내를 닫았는지 표시(닫으면 생성, 다시 보기 누르면 삭제) |
+| `stats/verdicts.jsonl` | 검증 통계 탭의 재료 — 검증 1건당 한 줄 **메타만**(시각·작업 폴더·세션 id·판정[통과/통과보완/보류/실패/표지없음]·모델·검증모드·추론강도·이 검증 1회 코덱스 토큰·답변 글자 수). **프롬프트/답 원문은 저장하지 않음.** 60일 지난 줄은 자동 정리 |
 
 ## 쓰는 데이터 — ② 브릿지 홈 밖에서 일어나는 일 (정직하게)
 

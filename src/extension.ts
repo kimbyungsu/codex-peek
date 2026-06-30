@@ -4,6 +4,7 @@ import * as os from "os";
 import * as path from "path";
 import * as crypto from "crypto";
 import { spawn } from "child_process";
+import { computeVerifyStats, VerifyStats, CodexTokens, parseSessionTokens, ClaudeTokens, sumClaudeUsage, computeProjectStats, ProjectStat } from "./verify-stats";
 
 const HOME = os.homedir();
 // 자체 namespace 폴더. CODEX_BRIDGE_HOME으로 override(확장 호스트≠훅 home 환경 대비 — 브릿지·훅과 동일 규칙).
@@ -85,6 +86,10 @@ interface BridgeState {
   integrity: IntegrityEvent[]; // 무결성 신호(검증 미완 등) — 미확인 error는 상태바 빨강 + 대시보드 경보
   live: LiveStage | null;      // 검증 파이프라인 라이브 단계(없으면 대기) — 상태바·진행 스트립
   verifyTimeoutMin: number;    // 검증(codex) 대기시간(분) — 저장값 또는 기본 8. 브릿지 verifyTimeoutMin과 같은 규칙.
+  verifyStats: VerifyStats;    // 탭2 검증 통계(기간별 분포·전환·히트맵) — verify-stats.ts computeVerifyStats 결과
+  codexTokens: CodexTokens | null; // 연결 코덱스 세션 누적 토큰(없으면 null) — 검증 비용 카드
+  claudeTokens: ClaudeTokens;      // 이 폴더 클로드 대화기록 28일 토큰 + 턴수 — 작업 비용(코덱스 검증 비용과 분리)
+  projectStats: Record<string, ProjectStat>; // 프로젝트별 비교(3c) — 모든 폴더 28일 검증 분포(전체 group-by, 이 폴더 통계와 별개)
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
 }
 
@@ -431,64 +436,13 @@ function readVisibleIntegrity(ws: string | null): IntegrityEvent[] {
   return readIntegrity().filter((e) => !e.workspace || normWs(e.workspace) === normWs(ws));
 }
 
-// ── 탭2 검증 통계 집계 — verdicts.jsonl(append-only)을 읽어 기간별 verdict 분포·검증횟수·전환·활동 히트맵을 낸다 ──
-// 기간 정책: 즉각성 7일(week) / 추이 14일(twoWeek + daily14 일별) / 흐름 28일(month + heatmap 요일×시간). 깨진 줄은 skip(여러 창 동시 append 대비). 이 ws(프로젝트)만.
-interface VerifyBucket { pass: number; passNotes: number; inconclusive: number; fail: number; unparsed: number; total: number }
-function emptyVB(): VerifyBucket { return { pass: 0, passNotes: 0, inconclusive: 0, fail: 0, unparsed: 0, total: 0 }; }
-function bumpVB(b: VerifyBucket, v: string): void {
-  b.total++;
-  if (v === "pass") b.pass++;
-  else if (v === "pass-notes") b.passNotes++;
-  else if (v === "inconclusive") b.inconclusive++;
-  else if (v === "fail") b.fail++;
-  else b.unparsed++;
-}
+// ── 탭2 검증 통계: verdicts.jsonl(append-only)을 읽어 기간별 분포·전환·히트맵으로 집계 ──
+// 순수 집계는 verify-stats.ts의 computeVerifyStats로 분리(extension·테스트가 '같은 함수'를 쓴다 — 미러 복제 제거). 여기선 파일을 읽어 넘기기만 한다.
 function readVerifyStats(ws: string | null, now = Date.now()) {
-  const DAY = 24 * 60 * 60 * 1000;
-  const d7 = now - 7 * DAY, d14 = now - 14 * DAY, d28 = now - 28 * DAY;
-  const out = {
-    week: emptyVB(),                                                              // 즉각성: 최근 7일 합계
-    twoWeek: emptyVB(),                                                           // 추이: 최근 14일 합계
-    month: emptyVB(),                                                             // 흐름: 최근 28일 합계
-    daily14: Array.from({ length: 14 }, () => emptyVB()),                         // 추이: 14일 일별
-    heatmap: Array.from({ length: 7 }, () => new Array(24).fill(0)) as number[][], // 흐름: 4주 요일(월=0)×시간
-    resolved7: 0,                                                                 // 최근 7일 '실패/보류 뒤 통과' 전환 근사(같은 세션·14일내 직전 unclean→pass). '잡은 문제 수'가 아님 — UI 라벨도 이 톤으로
-  };
-  let raw: string;
-  try { raw = fs.readFileSync(VERDICTS_FILE, "utf8"); } catch { return out; } // 아직 검증 기록 없음
-  const events: { ts: number; v: string; session: string }[] = [];
-  let seq = 0;
-  for (const ln of raw.split(/\r?\n/)) {
-    if (!ln.trim()) continue;
-    let o: any; try { o = JSON.parse(ln); } catch { continue; } // 깨진/반쪽 줄 skip(여러 창 동시 append 대비)
-    if (ws && (!o.workspace || normWs(o.workspace) !== normWs(ws))) continue; // 이 프로젝트(폴더)만 — workspace 없는 구버전/깨진 줄도 제외
-    const ts = Date.parse(o.ts);
-    if (!Number.isFinite(ts) || ts > now) continue; // 미래 timestamp(시계 꼬임·수동편집·타 PC) 제외 — 안 그러면 합계엔 들고 일별엔 빠져 불일치
-    // 전환 추적용 세션 키: Claude 세션 우선 → 없으면 Codex 세션 → 둘 다 비면 고유키(seq). 빈 세션 다발이 한 그룹으로 묶여 과대계상되는 것 차단.
-    const session = String(o.claudeSession || o.codexSession || ("__u" + seq));
-    events.push({ ts, v: String(o.verdict || "unparsed"), session });
-    seq++;
-  }
-  events.sort((a, b) => a.ts - b.ts);
-  const prevUncleanTsBySession: Record<string, number> = {}; // 세션별 직전 fail/inconclusive의 시각(0=없음/직전 통과)
-  for (const e of events) {
-    if (e.ts >= d7) bumpVB(out.week, e.v);
-    if (e.ts >= d14) {
-      bumpVB(out.twoWeek, e.v);
-      const idx = Math.floor((e.ts - d14) / DAY);
-      if (idx >= 0 && idx < 14) bumpVB(out.daily14[idx], e.v);
-    }
-    if (e.ts >= d28) {
-      bumpVB(out.month, e.v);
-      const dt = new Date(e.ts);
-      out.heatmap[(dt.getDay() + 6) % 7][dt.getHours()]++;
-    }
-    // 같은 세션에서 '실패/보류 뒤 통과'로 바뀐 전환만(최근 7일). 직전 unclean이 14일 이내일 때만 — 오래된 무관 실패가 이번 통과에 붙는 것 방지. '잡은 문제 수'가 아닌 전환 근사.
-    const pts = prevUncleanTsBySession[e.session] || 0;
-    if (e.ts >= d7 && (e.v === "pass" || e.v === "pass-notes") && pts && (e.ts - pts) <= 14 * DAY) out.resolved7++;
-    prevUncleanTsBySession[e.session] = (e.v === "fail" || e.v === "inconclusive") ? e.ts : 0;
-  }
-  return out;
+  if (!ws) return computeVerifyStats("", now, ws, normWs); // 폴더 없는 빈 창 → 다른 폴더 통계 누수 차단(readVisibleIntegrity와 같은 정책 — 프로젝트별 원칙)
+  let raw = "";
+  try { raw = fs.readFileSync(VERDICTS_FILE, "utf8"); } catch { /* 아직 검증 기록 없음 → 빈 통계 */ }
+  return computeVerifyStats(raw, now, ws, normWs);
 }
 function ackIntegrity(ids: string[] | "all"): boolean {
   const events = readIntegrity();
@@ -643,6 +597,27 @@ function computeLiveStage(linkedId: string | null): LiveStage | null {
   }
 }
 
+// 연결 코덱스 세션 rollout에서 누적 토큰(마지막 token_count의 total_token_usage)을 읽는다. usage-monitor와 같은 token_count 구조.
+// 파일 끝 256KB만 읽어(rollout 끝에 최신 token_count가 있음) 마지막 total_token_usage를 잡는다. 한 세션 누적값 — 그 세션이 여러 폴더를 오갔다면 합산이다(폴더별 정밀 분해는 turn별 delta+cwd 필요, 다음 정밀화).
+// rollout 파일 끝 일부(bytes)만 읽어 문자열로 — token_count는 끝 근처라 전체를 안 읽는다(대용량 rollout 대비).
+function readTail(file: string, bytes: number): string {
+  const fd = fs.openSync(file, "r");
+  try {
+    const sz = fs.fstatSync(fd).size;
+    const start = Math.max(0, sz - bytes);
+    const len = Math.min(sz, bytes);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, start);
+    return buf.toString("utf8");
+  } finally { fs.closeSync(fd); }
+}
+function readSessionTokens(file: string): CodexTokens | null {
+  try {
+    let tk = parseSessionTokens(readTail(file, 256 * 1024));
+    if (!tk) tk = parseSessionTokens(readTail(file, 2 * 1024 * 1024)); // 끝 256KB에 token_count 없으면(뒤에 큰 메시지가 쌓인 경우) 더 크게 재시도
+    return tk;
+  } catch { return null; }
+}
 function computeState(turnsN: number): BridgeState {
   const ws = dashboardWorkspace();
   const links = loadLinks();
@@ -652,11 +627,13 @@ function computeState(turnsN: number): BridgeState {
   let turns: Turn[] = [];
   let lastActivity: string | null = null;
   let modelMeta: { model: string; effort: string; models: string[] } = { model: "", effort: "", models: [] };
+  let codexTokens: CodexTokens | null = null;
   if (linkedId) {
     const file = findRolloutById(linkedId);
     if (file) {
       turns = toTurns(readMessages(file)).slice(-Math.max(1, turnsN));
       modelMeta = sessionModelMeta(file, ws); // '지금 쓰는 값' 표시도 이 폴더(cwd) 기준 — drift 경고와 일관(공유 세션서 형제 폴더 값 안 새게)
+      codexTokens = readSessionTokens(file); // 연결 세션 누적 토큰(검증 비용 카드)
       try {
         lastActivity = new Date(fs.statSync(file).mtimeMs).toLocaleString();
       } catch {
@@ -732,6 +709,10 @@ function computeState(turnsN: number): BridgeState {
     integrity: readVisibleIntegrity(ws),
     live: computeLiveStage(linkedId),
     verifyTimeoutMin: clampVerifyTimeout(links.settings?.verifyTimeoutMin),
+    verifyStats: readVerifyStats(ws), // 탭2 검증 통계(기간별 분포·전환·히트맵) — 이 폴더(ws) 기준
+    codexTokens,                      // 연결 코덱스 세션 누적 토큰(검증 비용 카드)
+    claudeTokens: readClaudeTokens(ws), // 이 폴더 클로드 작업 토큰(28일) — 코덱스와 분리
+    projectStats: readProjectStats(),   // 프로젝트별 비교(전체 폴더 28일)
   };
 }
 
@@ -972,6 +953,41 @@ function readClaudeModels(wsFilter?: string | null): string {
   return "";
 }
 
+// 이 폴더(ws)의 클로드 대화기록에서 최근 28일 토큰을 합한다 — 코덱스 토큰(검증 비용)과 분리한 '작업 비용'. cwd 필터(다른 폴더 제외)·사이드체인 제외는 sumClaudeUsage가 담당. !ws면 빈(프로젝트별 원칙).
+function readClaudeTokens(ws: string | null, now = Date.now()): ClaudeTokens {
+  const acc: ClaudeTokens = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, total: 0, turns: 0 };
+  if (!ws) return acc;
+  const files: { f: string; m: number }[] = [];
+  const walk = (d: string, depth: number) => {
+    if (depth > 4) return;
+    let items: fs.Dirent[];
+    try { items = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const it of items) {
+      const full = path.join(d, it.name);
+      if (it.isDirectory()) walk(full, depth + 1);
+      else if (it.isFile() && it.name.endsWith(".jsonl") && !it.name.startsWith("agent-")) {
+        try { files.push({ f: full, m: fs.statSync(full).mtimeMs }); } catch { /* ignore */ }
+      }
+    }
+  };
+  try { walk(claudeProjectsDir(), 0); } catch { /* ignore */ }
+  const cutoff = now - 28 * 24 * 60 * 60 * 1000;
+  for (const fl of files.sort((a, b) => b.m - a.m).slice(0, 120)) { // 최근 수정 120개로 bounded(다른 프로젝트가 최근목록을 채워 이 폴더 transcript가 밀릴 여지 줄임)
+    if (fl.m < cutoff) continue; // 28일 안에 수정된 transcript만(오래된 파일 스캔 회피)
+    let raw: string; try { raw = fs.readFileSync(fl.f, "utf8"); } catch { continue; }
+    const t = sumClaudeUsage(raw.split(/\n/), now, ws, normWs);
+    acc.input += t.input; acc.output += t.output; acc.cacheRead += t.cacheRead; acc.cacheCreate += t.cacheCreate; acc.total += t.total; acc.turns += t.turns;
+  }
+  return acc;
+}
+
+// 프로젝트별 비교(3c) — ws 필터 없이 모든 폴더의 28일 검증 분포. '이 폴더 통계'와 별개 섹션. 연 폴더 규칙과 무관(전체 group-by가 목적).
+function readProjectStats(now = Date.now()): Record<string, ProjectStat> {
+  let raw = "";
+  try { raw = fs.readFileSync(VERDICTS_FILE, "utf8"); } catch { /* 아직 검증 기록 없음 */ }
+  return computeProjectStats(raw, now, normWs);
+}
+
 function relink(id: string): boolean {
   const ws = dashboardWorkspace();
   if (!ws) return false;
@@ -1182,6 +1198,56 @@ class Dashboard {
   .rchip.opt{color:var(--vscode-charts-blue);border-color:var(--vscode-charts-blue);font-weight:700}
   .card{border:1px solid var(--vscode-panel-border);border-radius:10px;padding:16px 18px;background:var(--vscode-sideBar-background);margin-bottom:18px;box-shadow:0 1px 3px rgba(0,0,0,.07)}
   .muted{color:var(--vscode-descriptionForeground);font-size:12px}
+  .tabbar{display:inline-flex;gap:3px;margin:4px 0 18px;padding:3px;background:var(--vscode-editorWidget-background);border:1px solid var(--vscode-panel-border);border-radius:10px}
+  .tabbtn{background:none;border:none;color:var(--vscode-descriptionForeground);padding:8px 18px;cursor:pointer;font-size:13px;border-radius:7px;font-weight:600;display:flex;align-items:center;gap:6px;transition:background .12s}
+  .tabbtn:hover{color:var(--vscode-foreground)}
+  .tabbtn.active{color:#fff;background:var(--vscode-charts-blue);box-shadow:0 1px 5px color-mix(in srgb,var(--vscode-charts-blue) 45%,transparent)}
+  .tab-panel{display:none}
+  .tab-panel.active{display:block}
+  .stat-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin:6px 0 14px}
+  .stat-card{border:1px solid var(--vscode-panel-border);border-left:5px solid var(--accent,var(--vscode-charts-blue));border-radius:10px;padding:14px 16px;background:color-mix(in srgb,var(--accent,var(--vscode-charts-blue)) 7%,var(--vscode-editor-background))}
+  .stat-card.s-blue{--accent:var(--vscode-charts-blue)}
+  .stat-card.s-green{--accent:var(--vscode-charts-green)}
+  .stat-card.s-orange{--accent:var(--vscode-charts-orange)}
+  .stat-card.s-purple{--accent:var(--vscode-charts-purple)}
+  .stat-num{font-size:26px;font-weight:800;color:var(--accent,var(--vscode-charts-blue));line-height:1.1}
+  .stat-lbl{font-size:11px;color:var(--vscode-descriptionForeground);margin-top:5px}
+  .stat-chart{display:flex;gap:22px;align-items:center;flex-wrap:wrap;margin:10px 0 14px;padding:14px 16px;border:1px solid var(--vscode-panel-border);border-radius:10px;background:var(--vscode-editor-background)}
+  .chart-h{font-size:14px;font-weight:800;color:var(--vscode-foreground);margin:4px 0 14px;padding:6px 12px 6px 13px;border-left:4px solid var(--vscode-charts-blue);background:color-mix(in srgb,var(--vscode-charts-blue) 9%,var(--vscode-editorWidget-background));border-radius:0 7px 7px 0;line-height:1.45}
+  .chart-h .muted{font-weight:400;font-size:11px}
+  .donut-wrap{position:relative;width:140px;height:140px}
+  .donut-center{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;color:var(--vscode-foreground);pointer-events:none}
+  .legend{display:flex;flex-direction:column;gap:7px}
+  .leg-item{font-size:12px;color:var(--vscode-descriptionForeground);display:flex;align-items:center;gap:8px}
+  .leg-dot{width:11px;height:11px;border-radius:3px;flex:none}
+  .leg-item b{color:var(--vscode-foreground);font-variant-numeric:tabular-nums}
+  .chart-box.wide{flex:1 1 100%;min-width:240px}
+  .trend-bars{display:flex;gap:3px;align-items:flex-end;height:84px;margin-top:4px}
+  .tbar{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0}
+  .tbar-stack{width:100%;max-width:22px;height:66px;display:flex;flex-direction:column;justify-content:flex-end;background:var(--vscode-editorWidget-background);border-radius:3px;overflow:hidden}
+  .tseg{width:100%}
+  .tseg.tpass{background:var(--vscode-charts-green)}
+  .tseg.tfail{background:var(--vscode-charts-orange)}
+  .tbar-lbl{font-size:9px;color:var(--vscode-descriptionForeground);white-space:nowrap}
+  .heatmap{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+  .heat-row{display:flex;gap:2px;align-items:center}
+  .heat-day{font-size:10px;color:var(--vscode-descriptionForeground);width:18px;flex:none;text-align:center}
+  .heat-cell{flex:1;aspect-ratio:1;border-radius:2px;min-width:0;border:1px solid color-mix(in srgb,var(--vscode-panel-border) 50%,transparent)}
+  .heat-legend{display:flex;align-items:center;gap:4px;margin-top:9px;font-size:10px;color:var(--vscode-descriptionForeground)}
+  .heat-legend .hl{width:15px;height:15px;border-radius:3px;border:1px solid color-mix(in srgb,var(--vscode-panel-border) 50%,transparent)}
+  .heat-legend .hl-t{margin:0 4px}
+  .heat-head{margin-bottom:3px}
+  .heat-hh{flex:1;min-width:0;font-size:9px;color:var(--vscode-descriptionForeground);text-align:left;line-height:1}
+  #donutLegend{flex:1;min-width:210px}
+  .vrow{display:flex;align-items:center;gap:8px;font-size:12px;margin:6px 0}
+  .vlbl{width:78px;flex:none;color:var(--vscode-foreground)}
+  .vbar{flex:1;height:15px;background:var(--vscode-editorWidget-background);border-radius:4px;overflow:hidden}
+  .vbar-fill{display:block;height:100%;border-radius:4px}
+  .vnum{width:62px;text-align:right;flex:none;font-variant-numeric:tabular-nums;color:var(--vscode-foreground);font-weight:600;white-space:nowrap}
+  .vmiss{margin-top:8px;padding-top:8px;border-top:1px dashed var(--vscode-panel-border)}
+  .vmiss-note{flex:1;font-size:11px;color:var(--vscode-descriptionForeground)}
+  .vlbl-wide{width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .vnum-wide{width:auto;min-width:86px;padding-left:8px;white-space:nowrap}
   .id{font-family:var(--vscode-editor-font-family);font-size:11px;color:var(--vscode-descriptionForeground);word-break:break-all}
   .role{font-weight:600;font-size:12px;margin:8px 0 3px;color:var(--vscode-descriptionForeground)}
   .text{white-space:pre-wrap;overflow-wrap:anywhere}
@@ -1349,6 +1415,11 @@ class Dashboard {
   @keyframes flashpulse{0%,22%{background:var(--vscode-charts-orange);color:#fff;border-radius:5px}100%{background:transparent}}
 </style></head>
 <body><main class="shell">
+  <nav class="tabbar">
+    <button type="button" class="tabbtn active" data-tab="main">📋 현황</button>
+    <button type="button" class="tabbtn" data-tab="stats">📊 검증 통계</button>
+  </nav>
+  <div id="tab-main" class="tab-panel active">
   <section class="onboard" id="onboard" style="display:none">
     <button type="button" id="obReopen" class="obreopen" style="display:none">시작하기 다시 보기</button>
     <div id="obMain">
@@ -1475,6 +1546,66 @@ class Dashboard {
   <h2 class="sec base accent-rose">Codex 세션 연결 <span class="sub2" id="cwsLabel">첫 발화로 식별</span></h2>
   <div id="cands"></div>
   <div id="hiddenWrap"></div>
+  </div><!-- /tab-main -->
+  <section id="tab-stats" class="tab-panel">
+    <h2 class="sec base accent-yellow">검증 통계 <span class="sub2">이 폴더에서 코덱스 검증이 어떻게 흘러왔는지 — 최근 흐름·통과율·막고 풀린 전환</span></h2>
+    <div id="statsEmpty" class="muted" style="display:none">아직 이 폴더에 검증 기록이 없어요. 검증이 쌓이면 여기에 통계가 보여요.</div>
+    <div id="statsBody" class="card" style="display:none">
+      <div class="stat-cards">
+        <div class="stat-card s-blue"><div class="stat-num" id="st7total">–</div><div class="stat-lbl">최근 7일 검증</div></div>
+        <div class="stat-card s-green"><div class="stat-num" id="st7pass">–</div><div class="stat-lbl">완전통과율 (7일)</div></div>
+        <div class="stat-card s-orange"><div class="stat-num" id="st7touch">–</div><div class="stat-lbl">보완이상 비율 (7일)</div></div>
+        <div class="stat-card s-purple"><div class="stat-num" id="st7res">–</div><div class="stat-lbl">실패·보류→통과 전환 (7일)</div></div>
+      </div>
+      <div class="stat-chart">
+        <div class="chart-box">
+          <h3 class="chart-h">최근 28일 검증 결과 분포</h3>
+          <div class="donut-wrap"><svg id="donut" viewBox="0 0 120 120" width="140" height="140" aria-label="검증 결과 분포"></svg><div id="donutTotal" class="donut-center"></div></div>
+        </div>
+        <div id="donutLegend" class="legend"></div>
+      </div>
+      <div class="stat-chart">
+        <div class="chart-box wide">
+          <h3 class="chart-h">최근 14일 검증 추이 <span class="muted">(아래부터 완전통과·통과보완·보류·실패·표지누락 5색, 높이=24시간 구간별 검증량)</span></h3>
+          <div id="trendBars" class="trend-bars"></div>
+        </div>
+      </div>
+      <div class="stat-chart">
+        <div class="chart-box wide">
+          <h3 class="chart-h">검증 활동 <span class="muted">(최근 4주 · 세로 요일 / 가로 0~23시 · 색이 진할수록 그 시간대 검증이 많음 — 아래 범례)</span></h3>
+          <div id="heat" class="heatmap"></div>
+        </div>
+      </div>
+      <div class="stat-chart">
+        <div class="chart-box wide">
+          <h3 class="chart-h">연결된 코덱스 세션 토큰 <span class="muted">(이 검증 대화 세션의 누적 사용량 · 참고)</span></h3>
+          <div id="tokCards" class="stat-cards"></div>
+          <p class="muted" id="tokNote"></p>
+        </div>
+        <div class="chart-box wide">
+          <h3 class="chart-h">클로드 작업 토큰 <span class="muted">(이 폴더 · 최근 28일 · 검증과 별개인 작업 비용)</span></h3>
+          <div id="claudeTokCards" class="stat-cards"></div>
+        </div>
+      </div>
+      <div class="stat-chart">
+        <div class="chart-box wide">
+          <h3 class="chart-h">모델·추론강도별 검증 토큰 <span class="muted">(최근 28일 · 이 검증 1회분 합 · rollout 마지막 턴 기준 근사)</span></h3>
+          <div id="byModelBars"></div>
+        </div>
+        <div class="chart-box wide">
+          <h3 class="chart-h">검증모드별 <span class="muted">(최근 28일 · 검증을 띄운 모드 플랜/코드/올웨이즈)</span></h3>
+          <div id="byModeBars"></div>
+        </div>
+      </div>
+      <div class="stat-chart">
+        <div class="chart-box wide">
+          <h3 class="chart-h">프로젝트별 검증 비교 <span class="muted">(최근 28일 · 모든 폴더 · 이 폴더 통계와 별개 · 막대=검증 건수, 완전통과율 병기)</span></h3>
+          <div id="projectBars"></div>
+        </div>
+      </div>
+      <p class="muted" id="statsNote"></p>
+    </div>
+  </section>
 </main>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
@@ -1597,6 +1728,164 @@ class Dashboard {
     vscode.postMessage({type:"saveBase", verifyBaseline:$("bVerify").value, transmit:$("bTransmit").value, rejudge:$("bRejudge").value});
   });
   $("resetB").addEventListener("click", () => { pendingSave = {target:"base", msg:"기본값으로 복원됨 ✓"}; vscode.postMessage({type:"resetBase"}); });
+  // 탭 토글(현황 / 검증 통계) — 클릭한 버튼·패널만 active
+  document.querySelectorAll(".tabbtn").forEach(function(b){
+    b.addEventListener("click", function(){
+      var t = b.getAttribute("data-tab");
+      document.querySelectorAll(".tabbtn").forEach(function(x){ x.classList.toggle("active", x===b); });
+      document.querySelectorAll(".tab-panel").forEach(function(p){ p.classList.toggle("active", p.id===("tab-"+t)); });
+    });
+  });
+  // 탭2 통계 렌더 — 빈 기록이면 안내, 아니면 KPI 카드 + 도넛(28일 분포) + 추이 막대(14일·24h 슬롯) + 히트맵(4주 요일×시간)
+  function fmtTok(n){ return n>=1000 ? (n/1000).toFixed(1)+"k" : String(n); }
+  function modeLabel(m){ return ({off:"꺼짐", code:"코드 변경 시", plancode:"플랜·코드 변경", always:"모든 턴"})[m] || m; } // 검증모드 코드→한국어(미상 등은 원본)
+  // 모델별·검증모드별 토큰 막대 — 이름이 외부 데이터(rollout 모델명 등)라 createElement/textContent로만 조립(XSS 안전). 길이=토큰÷최대.
+  function renderBars(wrapId, obj, labelFn){
+    var wrap = $(wrapId); if(!wrap) return;
+    while(wrap.firstChild) wrap.removeChild(wrap.firstChild);
+    var entries = Object.keys(obj||{}).map(function(k){ return { k:k, count:obj[k].count, tokens:obj[k].tokens }; });
+    entries.sort(function(a,b){ var au=a.k.indexOf("미상")>=0?1:0, bu=b.k.indexOf("미상")>=0?1:0; if(au!==bu) return au-bu; return b.tokens-a.tokens || b.count-a.count; }); // (미상)은 맨 아래(설명은 없이 정렬만)
+    if(!entries.length){ var d=document.createElement("div"); d.className="muted"; d.textContent="아직 기록이 없어요 — 검증이 더 쌓이면 보여요."; wrap.appendChild(d); return; }
+    var maxT=1; entries.forEach(function(e){ if(e.tokens>maxT) maxT=e.tokens; });
+    entries.forEach(function(e){
+      var row=document.createElement("div"); row.className="vrow";
+      var lbl=document.createElement("span"); lbl.className="vlbl vlbl-wide"; lbl.title=e.k; lbl.textContent=labelFn ? labelFn(e.k) : e.k;
+      var bar=document.createElement("span"); bar.className="vbar";
+      var fill=document.createElement("span"); fill.className="vbar-fill";
+      if(e.tokens>0){ fill.style.width=Math.round(e.tokens/maxT*100)+"%"; fill.style.minWidth="3px"; fill.style.background="var(--vscode-charts-blue)"; }
+      bar.appendChild(fill);
+      var num=document.createElement("b"); num.className="vnum vnum-wide"; num.textContent=fmtTok(e.tokens)+" · "+e.count+"건";
+      row.appendChild(lbl); row.appendChild(bar); row.appendChild(num); wrap.appendChild(row);
+    });
+  }
+  function renderStats(vs){
+    if(!vs) return;
+    var emptyEl = $("statsEmpty"), bodyEl = $("statsBody");
+    if(!emptyEl || !bodyEl) return;
+    if(vs.month.total === 0){ emptyEl.style.display="block"; bodyEl.style.display="none"; return; }
+    emptyEl.style.display="none"; bodyEl.style.display="block";
+    // ② KPI — 통과(보완)을 통과와 분리. 분모 jw = 판정 표지 있는 것만(표지없음 제외)
+    var w = vs.week, jw = w.pass + w.passNotes + w.inconclusive + w.fail;
+    var pct = function(n,d){ return d>0 ? Math.round(n/d*100)+"%" : "–"; };
+    $("st7total").textContent = w.total;
+    $("st7pass").textContent = pct(w.pass, jw);                                 // 완전통과율(깨끗한 통과만)
+    $("st7touch").textContent = pct(w.passNotes + w.inconclusive + w.fail, jw); // 보완이상 비율(검증이 그냥 통과시키지 않은 비율)
+    $("st7res").textContent = vs.resolved7;
+    // ③ 도넛(최근 28일, 판정 표지 있는 것만) + 우측 가로막대. 색 계약: 통과=초록/보완=노랑/보류=주황/실패=빨강
+    var m = vs.month, R=50, CX=60, CY=60, C=2*Math.PI*R;
+    var segs = [
+      {n:m.pass, c:"var(--vscode-charts-green)", lbl:"완전통과"},
+      {n:m.passNotes, c:"var(--vscode-charts-yellow,#d7ba7d)", lbl:"통과(보완)"},
+      {n:m.inconclusive, c:"var(--vscode-charts-orange)", lbl:"보류"},
+      {n:m.fail, c:"var(--vscode-charts-red)", lbl:"실패"}
+    ];
+    var judged = m.pass + m.passNotes + m.inconclusive + m.fail; // 도넛 분모 = 표지 있는 것만(표지없음 제외)
+    var svg="", off=0;
+    if(judged>0){
+      segs.forEach(function(s){
+        if(s.n<=0) return;
+        var frac=s.n/judged;
+        if(frac>=0.999){ svg += '<circle cx="'+CX+'" cy="'+CY+'" r="'+R+'" fill="none" stroke="'+s.c+'" stroke-width="16"/>'; }
+        else { svg += '<circle cx="'+CX+'" cy="'+CY+'" r="'+R+'" fill="none" stroke="'+s.c+'" stroke-width="16" stroke-dasharray="'+(frac*C).toFixed(2)+' '+C.toFixed(2)+'" stroke-dashoffset="'+(-off*C).toFixed(2)+'" transform="rotate(-90 '+CX+' '+CY+')"/>'; }
+        off += frac;
+      });
+    } else { svg = '<circle cx="'+CX+'" cy="'+CY+'" r="'+R+'" fill="none" stroke="var(--vscode-panel-border)" stroke-width="16"/>'; }
+    $("donut").innerHTML = svg;
+    $("donutTotal").textContent = judged;
+    // 우측 가로막대(범례 겸) — 도넛 좌측 쏠림 해소. 길이 = 전체 판정 대비 비율(도넛과 같은 judged 분모, 상대량 아님). 0건은 색 막대 안 그림.
+    var bars = segs.map(function(s){
+      var wp = judged>0 ? Math.round(s.n/judged*100) : 0;
+      var fill = s.n>0 ? 'width:'+wp+'%;min-width:3px;background:'+s.c : 'width:0';
+      var pctTxt = judged>0 ? (s.n>0 && wp===0 ? ' · <1%' : ' · '+wp+'%') : ''; // 1건이 0%로 반올림되면 <1%로 정직 표기
+      return '<div class="vrow"><span class="leg-dot" style="background:'+s.c+'"></span><span class="vlbl">'+s.lbl+'</span><span class="vbar"><span class="vbar-fill" style="'+fill+'"></span></span><b class="vnum">'+s.n+pctTxt+'</b></div>';
+    }).join("");
+    if(m.unparsed>0){ // 표지없음 = 판정표지 누락(형식). 도넛/분모서 빼고 따로 설명
+      bars += '<div class="vrow vmiss"><span class="leg-dot" style="background:var(--vscode-descriptionForeground)"></span><span class="vlbl">판정표지 누락</span><span class="vmiss-note">코덱스가 답은 했지만 \\'통과/실패\\' 결론 줄을 안 적은 답 — 통과율 계산엔 안 넣어요</span><b class="vnum">'+m.unparsed+'</b></div>'; }
+    $("donutLegend").innerHTML = bars;
+    // ④ 추이 막대 — 최근 14일, verdict 5색 세분 스택(아래부터 통과→보완→보류→실패→표지없음). 값은 전부 숫자·내부 상수라 innerHTML 안전
+    var d14 = vs.daily14, maxd = 1;
+    d14.forEach(function(b){ if(b.total>maxd) maxd=b.total; });
+    var sc = [["pass","var(--vscode-charts-green)"],["passNotes","var(--vscode-charts-yellow,#d7ba7d)"],["inconclusive","var(--vscode-charts-orange)"],["fail","var(--vscode-charts-red)"],["unparsed","var(--vscode-descriptionForeground)"]];
+    $("trendBars").innerHTML = d14.map(function(b,i){
+      var ago=13-i, lbl=ago===0?"최근":(ago+"d");
+      var tt=ago===0?"최근 24시간":(ago+"일 전 24시간 구간");
+      var stack = sc.map(function(x){ var h=b[x[0]]?(b[x[0]]/maxd*100):0; return h>0?'<div class="tseg" style="height:'+h.toFixed(1)+'%;background:'+x[1]+'"></div>':""; }).reverse().join("");
+      return '<div class="tbar" title="'+tt+' · 검증 '+b.total+'건(통과 '+b.pass+'/보완 '+b.passNotes+'/보류 '+b.inconclusive+'/실패 '+b.fail+'/표지없음 '+b.unparsed+')">'+
+        '<div class="tbar-stack">'+stack+'</div><div class="tbar-lbl">'+(ago%2===0?lbl:"")+'</div></div>';
+    }).join("");
+    // ⑤ 히트맵 — 시간 헤더(0~23, 6시간마다 숫자) + 요일×시간 농도
+    var hm = vs.heatmap, maxh=1;
+    hm.forEach(function(r){ r.forEach(function(v){ if(v>maxh) maxh=v; }); });
+    var days=["월","화","수","목","금","토","일"];
+    // 적음→많음 5단계 색(0=없음, 1~4=비율 구간). usage-monitor식 농도 단계 + 범례로 '뭐가 많은지' 명확히.
+    var heatColors=['var(--vscode-editorWidget-background)','color-mix(in srgb,var(--vscode-charts-blue) 22%,var(--vscode-editor-background))','color-mix(in srgb,var(--vscode-charts-blue) 45%,var(--vscode-editor-background))','color-mix(in srgb,var(--vscode-charts-blue) 68%,var(--vscode-editor-background))','color-mix(in srgb,var(--vscode-charts-blue) 92%,var(--vscode-editor-background))'];
+    function heatLv(v){ if(v<=0) return 0; var r=v/maxh; return r<=0.25?1:(r<=0.5?2:(r<=0.75?3:4)); }
+    var head='<div class="heat-row heat-head"><span class="heat-day"></span>';
+    for(var hh=0; hh<24; hh++){ head += '<span class="heat-hh">'+(hh%6===0?hh+"시":"")+'</span>'; }
+    head += '</div>';
+    var hhtml=head;
+    for(var dd=0; dd<7; dd++){
+      hhtml += '<div class="heat-row"><span class="heat-day">'+days[dd]+'</span>';
+      for(var hx=0; hx<24; hx++){
+        var v=hm[dd][hx];
+        hhtml += '<span class="heat-cell" style="background:'+heatColors[heatLv(v)]+'" title="'+days[dd]+'요일 '+hx+'시 · '+v+'건"></span>';
+      }
+      hhtml += '</div>';
+    }
+    var leg='<div class="heat-legend"><span class="hl-t">적음</span>';
+    for(var li=0; li<5; li++){ leg += '<span class="hl" style="background:'+heatColors[li]+'"></span>'; }
+    leg += '<span class="hl-t">많음</span></div>';
+    $("heat").innerHTML = hhtml + leg;
+    $("statsNote").textContent = "완전통과=깨끗이 통과 · 통과(보완)=통과지만 보완의견(재판단 적용 잦음) · 보류=판단 보류 · 실패=수정 필요 · 판정표지 누락=코덱스가 답은 했지만 '통과/실패' 결론 줄을 안 적은 경우(통과율 계산에선 빼요). 보완이상 비율=검증이 그냥 통과시키지 않은 비율. 도넛·가로막대=28일, 막대=14일, 히트맵=4주.";
+    renderBars("byModelBars", vs.byModel); // 모델별 28일 토큰(외부 모델명 textContent 안전)
+    renderBars("byModeBars", vs.byMode, modeLabel); // 검증모드별 28일 토큰(모드 코드→한국어 라벨)
+  }
+  // 토큰 카드 — 연결 코덱스 세션 누적(외부 데이터가 들어와도 안전하게 createElement/textContent로만 조립)
+  function renderTokens(tk){
+    var wrap = $("tokCards"), note = $("tokNote");
+    if(!wrap) return;
+    while(wrap.firstChild) wrap.removeChild(wrap.firstChild);
+    if(!tk || !tk.total){ if(note) note.textContent = "연결된 코덱스 세션이 없거나 토큰 기록을 아직 못 읽었어요."; return; }
+    var fmt = function(n){ return n>=1000 ? (n/1000).toFixed(1)+"k" : String(n); };
+    [["총 토큰",tk.total,"s-blue"],["입력",tk.input,"s-green"],["출력",tk.output,"s-orange"],["캐시 입력(재사용)",tk.cachedInput,"s-purple"]].forEach(function(c){
+      var card=document.createElement("div"); card.className="stat-card "+c[2];
+      var num=document.createElement("div"); num.className="stat-num"; num.textContent=fmt(c[1]);
+      var lbl=document.createElement("div"); lbl.className="stat-lbl"; lbl.textContent=c[0];
+      card.appendChild(num); card.appendChild(lbl); wrap.appendChild(card);
+    });
+    if(note) note.textContent = "이 폴더에 연결된 코덱스 세션이 지금까지 쓴 누적 토큰. 그 세션이 여러 폴더를 오갔다면 합산값이에요.";
+  }
+  // 클로드 작업 토큰 — 이 폴더 28일(코덱스 검증 비용과 분리). 숫자만이라 안전하나 토큰 패턴 통일로 createElement/textContent.
+  function renderClaudeTokens(ct){
+    var wrap = $("claudeTokCards"); if(!wrap) return;
+    while(wrap.firstChild) wrap.removeChild(wrap.firstChild);
+    if(!ct || !ct.total){ var d=document.createElement("div"); d.className="muted"; d.textContent="이 폴더의 최근 28일 클로드 토큰 기록이 없어요."; wrap.appendChild(d); return; }
+    [["턴수",ct.turns,"s-blue",true],["총 토큰",ct.total,"s-green",false],["입력",ct.input,"s-orange",false],["출력",ct.output,"s-purple",false]].forEach(function(c){
+      var card=document.createElement("div"); card.className="stat-card "+c[2];
+      var num=document.createElement("div"); num.className="stat-num"; num.textContent=c[3]?String(c[1]):fmtTok(c[1]); // 턴수는 그대로, 토큰은 k 단위
+      var lbl=document.createElement("div"); lbl.className="stat-lbl"; lbl.textContent=c[0];
+      card.appendChild(num); card.appendChild(lbl); wrap.appendChild(card);
+    });
+  }
+  // 프로젝트별 비교(3c) — 폴더명(basename)·검증건수 막대·완전통과율 병기. 폴더명은 외부 데이터라 textContent.
+  function renderProjects(ps){
+    var wrap = $("projectBars"); if(!wrap) return;
+    while(wrap.firstChild) wrap.removeChild(wrap.firstChild);
+    var rows = Object.keys(ps||{}).map(function(k){ var p=ps[k]; var judged=p.pass+p.passNotes+p.inconclusive+p.fail; return { k:k, count:p.count, judged:judged, passRate: judged? Math.round(p.pass/judged*100):0 }; });
+    rows.sort(function(a,b){ return b.count-a.count; });
+    if(!rows.length){ var d=document.createElement("div"); d.className="muted"; d.textContent="아직 검증 기록이 없어요."; wrap.appendChild(d); return; }
+    var maxC=1; rows.forEach(function(r){ if(r.count>maxC) maxC=r.count; });
+    rows.forEach(function(r){
+      var name = String(r.k).replace(/\\\\/g, "/").split("/").filter(Boolean).pop() || r.k; // backslash(Windows)도 slash로 바꿔 폴더명만
+      var row=document.createElement("div"); row.className="vrow";
+      var lbl=document.createElement("span"); lbl.className="vlbl vlbl-wide"; lbl.title=r.k; lbl.textContent=name;
+      var bar=document.createElement("span"); bar.className="vbar";
+      var fill=document.createElement("span"); fill.className="vbar-fill"; if(r.count>0){ fill.style.width=Math.round(r.count/maxC*100)+"%"; fill.style.minWidth="3px"; fill.style.background="var(--vscode-charts-green)"; }
+      bar.appendChild(fill);
+      var num=document.createElement("b"); num.className="vnum vnum-wide"; num.textContent=r.count+"건 · 완전통과 "+(r.judged? r.passRate+"%":"–"); // 판정표지 있는 게 없으면 비율 대신 –
+      row.appendChild(lbl); row.appendChild(bar); row.appendChild(num); wrap.appendChild(row);
+    });
+  }
   // 기본 원칙 편집 '시작'(필드 첫 포커스) 시점 경고 — 필드별 다른 메시지(전달/재판단 vs 검증 기본원칙).
   // ⚠️ textarea 포커스는 절대 안 건드린다: blur()/재focus() 없음. 모달(modal:true)이 편집을 막고 포커스는 자연스럽게 유지되므로,
   // render의 '포커스 중이면 저장값으로 안 덮어씀' 가드(아래)와 충돌하지 않는다 → 편집/저장 보존(0.1.23 blur 버그의 교훈).
@@ -1645,6 +1934,10 @@ class Dashboard {
     }
     if (ev.data?.type !== "data") return;
     const d = ev.data.data;
+    renderStats(d.verifyStats);          // 탭2 검증 통계 갱신(현황 탭과 같은 data 푸시에 함께 반영)
+    renderTokens(d.codexTokens);         // 토큰 카드 갱신(연결 코덱스 세션 누적)
+    renderClaudeTokens(d.claudeTokens);  // 클로드 작업 토큰+턴수(이 폴더 28일)
+    renderProjects(d.projectStats);      // 프로젝트별 비교(전체 폴더 28일)
     curPerm = d.permissionMode || "";   // renderApplied의 plan 게이트 표시에 사용
     if (d.contract){
       if (document.activeElement !== $("cClaude") && !contractDirty.claude) $("cClaude").value = (d.contract.claude||[]).join("\\n");
@@ -2212,6 +2505,14 @@ export function activate(context: vscode.ExtensionContext): void {
   }
   try {
     if (fs.existsSync(SESSIONS_DIR)) watchers.push(fs.watch(SESSIONS_DIR, { recursive: true }, () => scheduleRender()));
+  } catch {
+    /* ignore */
+  }
+  // 검증 통계 감시: BRIDGE_DIR 비재귀 watch는 하위 stats/를 못 잡으므로 별도. verdicts.jsonl 변경(검증 추가·리텐션) 시 통계 탭 즉시 갱신.
+  try {
+    const statsDir = path.dirname(VERDICTS_FILE); // BRIDGE_DIR/stats
+    fs.mkdirSync(statsDir, { recursive: true });
+    watchers.push(fs.watch(statsDir, () => scheduleRender()));
   } catch {
     /* ignore */
   }

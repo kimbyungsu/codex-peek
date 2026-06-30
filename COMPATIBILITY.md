@@ -17,6 +17,7 @@
 - 3개 훅 지점: 입력 시(UserPromptSubmit), Bash 실행 전(PreToolUse), 완료 시(Stop)
 - 훅에 전달되는 값: 작업 폴더·세션 ID·대화기록 경로(`CLAUDE_PROJECT_DIR`, `CLAUDE_CODE_SESSION_ID`, `transcript_path`), 그리고 훅 입력 JSON
 - 이 인터페이스가 바뀌면: 계약 주입·검증 가드가 영향을 받습니다.
+- 검증 통계 탭은 대화기록 줄의 `message.usage`(토큰)·`cwd`·`isSidechain`·`timestamp`도 읽습니다 — 이 형식이 바뀌면 Claude 토큰·턴수 통계가 영향받습니다(검증 자체는 무관).
 
 ## Codex에 기대는 것 (가장 깨지기 쉬운 부분)
 
@@ -25,6 +26,7 @@
 - **세션 기록 위치/형식** — 코덱스 홈(`$CODEX_HOME`, 기본 `~/.codex`) 아래 `sessions/`의 `rollout-*.jsonl`. 파일명 규칙·폴더 구조·JSON 줄 형식이 바뀌면 세션 목록·최근 대화 표시가 깨질 수 있습니다.
 - **홈 경로 탐지** — `codex doctor` 출력의 `CODEX_HOME  <경로> (dir)` 줄을 정규식으로 읽습니다. 이 출력 문구가 바뀌면 자동 탐지가 실패합니다(그때는 `CODEX_HOME` 환경변수로 직접 지정 가능).
 - **실행 명령** — `codex exec` / `codex exec resume`. 명령 체계가 바뀌면 검증 요청이 실패합니다.
+- **통계용 토큰·모델 필드** — 검증 통계 탭은 rollout `turn_context`의 `model`·`effort`(또는 `collaboration_mode.settings.reasoning_effort`)와 `token_count.info`의 `last_token_usage`·`total_token_usage`에 의존합니다. 이 필드명/구조가 바뀌면 모델·추론강도·토큰 통계가 비거나 ‘미상’이 됩니다(통계만 영향, 검증 자체는 무관).
 
 ### 깨졌을 때 진단
 
