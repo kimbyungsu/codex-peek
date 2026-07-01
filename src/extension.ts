@@ -1853,18 +1853,18 @@ class Dashboard {
   });
   // 탭2 통계 렌더 — 빈 기록이면 안내, 아니면 KPI 카드 + 도넛(28일 분포) + 추이 막대(14일·24h 슬롯) + 히트맵(4주 요일×시간)
   function fmtTok(n){ return n>=1000 ? (n/1000).toFixed(1)+"k" : String(n); }
-  function modeLabel(m){ return (UI_EN ? {off:"off", code:"on code change", plancode:"plan·code", always:"every turn"} : {off:"꺼짐", code:"코드 변경 시", plancode:"플랜·코드 변경", always:"모든 턴"})[m] || m; } // 검증모드 코드→한국어(미상 등은 원본)
+  function modeLabel(m){ if(m==="(unknown)") return T("(미상)","(unknown)"); return (UI_EN ? {off:"off", code:"on code change", plancode:"plan·code", always:"every turn"} : {off:"꺼짐", code:"코드 변경 시", plancode:"플랜·코드 변경", always:"모든 턴"})[m] || m; } // 검증모드 코드→한국어(미상 등은 원본)
   // 모델별·검증모드별 토큰 막대 — 이름이 외부 데이터(rollout 모델명 등)라 createElement/textContent로만 조립(XSS 안전). 길이=토큰÷최대.
   function renderBars(wrapId, obj, labelFn){
     var wrap = $(wrapId); if(!wrap) return;
     while(wrap.firstChild) wrap.removeChild(wrap.firstChild);
     var entries = Object.keys(obj||{}).map(function(k){ return { k:k, count:obj[k].count, tokens:obj[k].tokens }; });
-    entries.sort(function(a,b){ var au=a.k.indexOf("미상")>=0?1:0, bu=b.k.indexOf("미상")>=0?1:0; if(au!==bu) return au-bu; return b.tokens-a.tokens || b.count-a.count; }); // (미상)은 맨 아래(설명은 없이 정렬만)
+    entries.sort(function(a,b){ var au=a.k.indexOf("(unknown)")>=0?1:0, bu=b.k.indexOf("(unknown)")>=0?1:0; if(au!==bu) return au-bu; return b.tokens-a.tokens || b.count-a.count; }); // (미상)은 맨 아래(설명은 없이 정렬만)
     if(!entries.length){ var d=document.createElement("div"); d.className="muted"; d.textContent=T("아직 기록이 없어요 — 검증이 더 쌓이면 보여요.","No records yet — they appear as verifications accumulate."); wrap.appendChild(d); return; }
     var maxT=1; entries.forEach(function(e){ if(e.tokens>maxT) maxT=e.tokens; });
     entries.forEach(function(e){
       var row=document.createElement("div"); row.className="vrow";
-      var lbl=document.createElement("span"); lbl.className="vlbl vlbl-wide"; lbl.title=e.k; lbl.textContent=labelFn ? labelFn(e.k) : e.k;
+      var lbl=document.createElement("span"); lbl.className="vlbl vlbl-wide"; lbl.title=e.k; var shown=labelFn ? labelFn(e.k) : e.k; if(shown.indexOf("(unknown)")>=0) shown=shown.split("(unknown)").join(T("(미상)","(unknown)")); lbl.textContent=shown;
       var bar=document.createElement("span"); bar.className="vbar";
       var fill=document.createElement("span"); fill.className="vbar-fill";
       if(e.tokens>0){ fill.style.width=Math.round(e.tokens/maxT*100)+"%"; fill.style.minWidth="3px"; fill.style.background="var(--vscode-charts-blue)"; }
@@ -1991,7 +1991,7 @@ class Dashboard {
     if(!rows.length){ var d=document.createElement("div"); d.className="muted"; d.textContent=T("아직 검증 기록이 없어요.","No verification records yet."); wrap.appendChild(d); return; }
     var maxC=1; rows.forEach(function(r){ if(r.count>maxC) maxC=r.count; });
     rows.forEach(function(r){
-      var name = String(r.k).replace(/\\\\/g, "/").split("/").filter(Boolean).pop() || r.k; // backslash(Windows)도 slash로 바꿔 폴더명만
+      var name = String(r.k).replace(/\\\\/g, "/").split("/").filter(Boolean).pop() || r.k; if(name==="(unknown)") name=T("(미상)","(unknown)"); // backslash(Windows)도 slash로 바꿔 폴더명만
       var row=document.createElement("div"); row.className="vrow";
       var lbl=document.createElement("span"); lbl.className="vlbl vlbl-wide"; lbl.title=r.k; lbl.textContent=name;
       var bar=document.createElement("span"); bar.className="vbar";
@@ -2524,6 +2524,8 @@ export function activate(context: vscode.ExtensionContext): void {
     const mode = (flowActive && live) ? "flow" : errs.length ? "error" : warns.length ? "warning" : !ws ? "noWs" : link?.codexSession ? "linked" : "unlinked";
     const key = JSON.stringify({
       mode,
+      // ★언어도 표시 요소다 — 없으면 언어 전환 후 상태바가 '표시 동일'로 오판돼 갱신을 스킵, 옛 언어 텍스트가 잔존한다(사용자 실측 버그).
+      lang: loadLangExt(),
       // error/warning mode: 실제 tooltip 줄은 [...errs,...warns].slice(-4), label은 kind 집합으로 결정 → 그 표시 요소만 담는다.
       alert: (mode === "error" || mode === "warning")
         // 실제 노출 줄에 맞춘다: error 분기 tooltip은 [...errs,...warns].slice(-4), warning 분기 tooltip은 warns.slice(-3).

@@ -61,10 +61,10 @@ export function computeVerifyStats(raw: string, now: number, ws: string | null, 
       bumpVB(out.month, e.v);
       const dt = new Date(e.ts);
       out.heatmap[(dt.getDay() + 6) % 7][dt.getHours()]++;
-      const mk = e.model ? (e.model + (e.effort ? " · " + e.effort : "")) : "(미상)"; // 모델+추론강도별 28일 건수·토큰
+      const mk = e.model ? (e.model + (e.effort ? " · " + e.effort : "")) : "(unknown)"; // 모델+추론강도별 28일 건수·토큰
       if (!out.byModel[mk]) out.byModel[mk] = { count: 0, tokens: 0 };
       out.byModel[mk].count++; out.byModel[mk].tokens += e.tok;
-      const md = e.mode || "(미상)"; // 검증모드별 28일 건수·토큰
+      const md = e.mode || "(unknown)"; // 검증모드별 28일 건수·토큰
       if (!out.byMode[md]) out.byMode[md] = { count: 0, tokens: 0 };
       out.byMode[md].count++; out.byMode[md].tokens += e.tok;
     }
@@ -130,7 +130,7 @@ export function computeProjectStats(raw: string, now: number, normWs: (p: string
     let o: any; try { o = JSON.parse(ln); } catch { continue; }
     const ts = Date.parse(o.ts);
     if (!Number.isFinite(ts) || ts < d28 || ts > now) continue;
-    const w = o.workspace ? normWs(String(o.workspace)) : "(미상)";
+    const w = o.workspace ? normWs(String(o.workspace)) : "(unknown)";
     if (!out[w]) out[w] = { count: 0, pass: 0, passNotes: 0, inconclusive: 0, fail: 0, unparsed: 0 };
     const p = out[w]; p.count++;
     const v = String(o.verdict || "unparsed");

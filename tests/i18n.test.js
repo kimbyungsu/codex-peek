@@ -94,6 +94,19 @@ ok(/Standing Rules/.test(L.buildInjection(["rule"], "Claude Code", false, "en"))
 const initLang = (uiLang) => (String(uiLang || "").toLowerCase().startsWith("ko") ? "ko" : "en");
 ok(initLang("ko") === "ko" && initLang("ko-KR") === "ko", "첫실행: ko/ko-KR → ko");
 ok(initLang("en-US") === "en" && initLang("ja") === "en" && initLang("") === "en", "첫실행: 비한국어(en-US/ja/빈값) → en");
+// (a-2) 언어 영속(마지막 설정 유지): 한 번 저장한 언어는 재로드·프로젝트 전환과 무관하게 유지(전역 파일 단일 소스).
+L.saveLang("en");
+ok(L.loadLang() === "en" && L.loadContract("D:\\Brand\\New\\Project").claude.length === 0, "영속: en 저장 후 '신규 프로젝트'를 열어도 전역 언어는 en 유지(언어는 프로젝트별이 아님)");
+ok(/[0-9a-f]{16}\.en\.json$/.test(L.contractFileFor("D:\\Brand\\New\\Project")), "신규 프로젝트도 현재 전역 언어(en) 슬롯 파일을 씀");
+L.saveLang("ko");
+ok(L.loadLang() === "ko", "영속: ko로 되돌리면 ko 유지");
+// (a-3) 첫 실행 초기화는 '파일 없을 때만' — 이미 설정된 언어를 절대 안 덮음(확장 ensureLangInitialized 미러).
+const initIfMissing = (exists, cur, uiLang) => (exists ? cur : (String(uiLang||"").toLowerCase().startsWith("ko") ? "ko" : "en"));
+ok(initIfMissing(true, "en", "ko-KR") === "en", "초기화: 파일 존재(en 설정) → VS Code가 한국어여도 안 덮음(마지막 설정 승리)");
+ok(initIfMissing(false, null, "ko-KR") === "ko" && initIfMissing(false, null, "en-US") === "en", "초기화: 파일 없을 때만 UI 언어로(ko*→ko, 그 외→en)");
+// (a-4) 상태바 멱등 가드 key에 언어 포함 미러 — 언어만 바뀌어도 key가 달라져 재렌더(옛 언어 잔존 버그 방지).
+const sbKey = (mode, lang) => JSON.stringify({ mode, lang });
+ok(sbKey("linked", "ko") !== sbKey("linked", "en"), "상태바 key: 표시상태 동일해도 언어가 다르면 key 상이 → 갱신 스킵 안 함");
 // (b) '반대 슬롯에만 규칙 있음' 안내: 현재 슬롯 기준 반대 언어 파일에 claude/codex 규칙이 있으면 true.
 const hasRules = (o) => (Array.isArray(o.claude) && o.claude.length > 0) || (Array.isArray(o.codex) && o.codex.length > 0);
 ok(hasRules({ claude: ["r"] }) && hasRules({ codex: ["r"] }) && !hasRules({ claude: [], codex: [] }) && !hasRules({}), "슬롯 규칙 유무 판정(claude/codex 규칙만, 모드 기본값 무시)");
