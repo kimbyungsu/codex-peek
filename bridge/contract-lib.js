@@ -11,7 +11,8 @@ const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(os.homedir(), ".co
 const CONTRACT_FILE = path.join(BRIDGE_DIR, "contract.json"); // 레거시 전역 계약 — 더 이상 프로젝트에 상속 안 함(ws=null 저장 폴백/구버전 호환만)
 const CONTRACTS_DIR = path.join(BRIDGE_DIR, "contracts"); // 프로젝트별 계약 파일들
 const BRIDGE = path.join(BRIDGE_DIR, "codex-bridge.js");
-const BASE_DIRECTIVE_FILE = path.join(BRIDGE_DIR, "base-directive.json"); // 기본 지침 사용자 오버라이드(없으면 코드 기본값)
+const BASE_DIRECTIVE_FILE = path.join(BRIDGE_DIR, "base-directive.json"); // 기본 지침 사용자 오버라이드(없으면 코드 기본값) — 한국어 슬롯(레거시 그대로). 영어는 base-directive.en.json
+const LANG_FILE = path.join(BRIDGE_DIR, "language.json"); // 전역 언어 설정({lang:"ko"|"en"}). 없으면 ko — 기존 사용자 무회귀. 대시보드 토글이 쓰고 확장·브릿지·훅이 읽음.
 const INTEGRITY_FILE = path.join(BRIDGE_DIR, "integrity.json"); // 무결성 신호 채널(브릿지/verify-guard 기록 → 확장이 상태바/대시보드로 가시화). BRIDGE_DIR 직하(확장 fs.watch 안정).
 const PHASE_FILE = path.join(BRIDGE_DIR, "phase.json"); // 검증 파이프라인 현재 단계(라이브 진행 표시). 훅/브릿지가 경계에서 기록 → 확장이 읽어 상태바·진행 스트립에 표시.
 const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs"); // 검증 증명(세션별). 시간 지나면 쌓이므로 TTL 정리 대상.
@@ -70,6 +71,22 @@ function atomicWrite(file, data) {
   try { fs.unlinkSync(tmp); } catch { /* ignore */ }
   try { process.stderr.write(`[codex-bridge] atomicWrite: 저장 실패(손상 방지로 옛 파일 유지): ${file}\n`); } catch { /* ignore */ }
   return false;
+}
+
+// ── 전역 언어(ko/en) ──────────────────────────────────
+// 언어는 '전역' 하나 — 프로젝트/창이 바뀌어도 유지(사용자 결정). UI 문자열·주입 지침(기본지침·검증 directive)의
+// 언어를 함께 정한다(v1은 묶음). 규칙/기본지침 '내용'은 언어별 파일 슬롯으로 분리 저장(ko=레거시 파일 그대로).
+const LANGS = ["ko", "en"];
+function loadLang() {
+  try {
+    const o = JSON.parse(fs.readFileSync(LANG_FILE, "utf8"));
+    if (o && LANGS.includes(o.lang)) return o.lang;
+  } catch { /* 파일 없음/손상 → 기본 ko(기존 사용자 무회귀) */ }
+  return "ko";
+}
+function saveLang(lang) {
+  if (!LANGS.includes(lang)) return false;
+  return atomicWrite(LANG_FILE, JSON.stringify({ lang }));
 }
 
 // ── 무결성 신호 채널 ──────────────────────────────────
@@ -159,9 +176,12 @@ function normWs(p) {
   return path.normalize(p || "").replace(/[\\/]+$/, "").toLowerCase().normalize("NFC");
 }
 // 프로젝트별 계약 파일 경로. 키 = normWs의 sha1 앞 16자(파일명 안전·플랫폼 무관). 확장 contractFileFor와 동일.
-function contractFileFor(ws) {
+// 언어 슬롯: ko = 레거시 <키>.json '그대로'(기존 사용자 규칙 무회귀·마이그레이션 불필요) / en = <키>.en.json.
+// → 언어를 나눠도 기존 파일을 재명명/이동하지 않는다(비파괴). lang 미지정 시 전역 언어(loadLang()).
+function contractFileFor(ws, lang) {
   const key = crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16);
-  return path.join(CONTRACTS_DIR, key + ".json");
+  const l = LANGS.includes(lang) ? lang : loadLang();
+  return path.join(CONTRACTS_DIR, key + (l === "ko" ? "" : "." + l) + ".json");
 }
 // 호출 측(contract-inject·verify-guard·codex-bridge)이 도는 Claude 작업 폴더(=execCwd, 실제 실행 위치).
 function currentWs() {
@@ -198,7 +218,7 @@ function configWs(opts) {
 
 // 프로젝트별 계약을 읽는다. ★전역 상속 없음★ — 계약은 프로젝트 전용(최신성: 비우면 주입 0·바꾸면 그 프로젝트만 유지).
 // 파일 없으면 빈 계약. ws 미지정 시 현재 폴더 기준. (전역 기본값/상속/복원은 별개 층인 base-directive.json만 — §5.3 2공간 분리.)
-function loadContract(ws) {
+function loadContract(ws, lang) {
   const read = (p) => {
     try {
       return JSON.parse(fs.readFileSync(p, "utf8"));
@@ -206,7 +226,7 @@ function loadContract(ws) {
       return null;
     }
   };
-  const o = read(contractFileFor(ws || currentWs())) || {}; // CONTRACT_FILE(전역) 폴백 제거 — 미설정 프로젝트는 빈 계약(상속 X)
+  const o = read(contractFileFor(ws || currentWs(), lang)) || {}; // CONTRACT_FILE(전역) 폴백 제거 — 미설정 프로젝트는 빈 계약(상속 X). lang=언어 슬롯(ko=레거시 파일)
   return {
     claude: Array.isArray(o.claude) ? o.claude : [],
     codex: Array.isArray(o.codex) ? o.codex : [],
@@ -235,16 +255,29 @@ function normInjectMode(o) {
 }
 
 // rules(문자열 배열) → 매 턴 주입 텍스트. checklist=false면 규약만, true면 [계약점검] 강제.
-// 비어 있으면 "" 반환(주입 비용 0).
-function buildInjection(rules, who, checklist) {
+// 비어 있으면 "" 반환(주입 비용 0). lang: 주입 지시문 언어(규칙 '내용'은 사용자가 쓴 그대로).
+function buildInjection(rules, who, checklist, lang) {
   const r = (rules || []).map((s) => String(s).trim()).filter(Boolean);
   if (!r.length) return "";
   const json = JSON.stringify({ rules: r.map((t, i) => ({ n: i + 1, r: t })) });
+  const en = (LANGS.includes(lang) ? lang : loadLang()) === "en";
   if (!checklist) {
     // 체크 해제: 규약/지침만 상수로 주입 (TODO 강제 없음).
-    return [`[고정 규약 · ${who} · 매 턴 적용되는 상수 — 무시·생략 금지]`, json].join("\n");
+    return en
+      ? [`[Standing Rules · ${who} · constants applied every turn — do not ignore or omit]`, json].join("\n")
+      : [`[고정 규약 · ${who} · 매 턴 적용되는 상수 — 무시·생략 금지]`, json].join("\n");
   }
   // 체크: TODO 리스트로 펼쳐 각 항목 준수/위반+근거 강제.
+  if (en) {
+    return [
+      `[Standing Contract · ${who} · constants applied every turn — do not ignore or omit]`,
+      json,
+      `Instruction: this response MUST include the [Contract Check] block below. Do not skip items.`,
+      `[Contract Check]`,
+      ...r.map((_, i) => `- ${i + 1}) <complies|violated|n/a> — <one-line reason>`),
+      `The rules are constants. If you violated one, do not hide it — mark it 'violated' and state why.`,
+    ].join("\n");
+  }
   return [
     `[고정 계약 · ${who} · 매 턴 적용되는 상수 — 무시·생략 금지]`,
     json,
@@ -287,45 +320,97 @@ const BASE_DEFAULTS = {
   ].join("\n"),
 };
 
-// 기본 지침 로드: 오버라이드 파일의 비지 않은 항목만 기본값을 대체.
-function loadBaseDirective() {
+// 영문 기본 지침 — 한국어 캐논의 '동등 품질' 영어판(직역 아님). 출력 형식(findings-first / verdict-last ·
+// 4단계 판정 문자열)은 아래 extractVerdict의 영어 문법과 반드시 일치해야 한다(지침이 시키는 형식 = 판독기가 읽는 형식).
+const BASE_DEFAULTS_EN = {
+  verifyBaseline: [
+    "[Verification Baseline · always applies]",
+    "1) Do not conclude from logical structure alone — actually open and inspect the code/files to verify.",
+    "2) Never skip, summarize, or abbreviate the verification work. Even if asked to be 'quick/rough', verify thoroughly.",
+    "3) The files/scope given by the requester are a starting point, not a boundary. Do not accept the requester's conclusion as a premise; widen the scope yourself — call sites, tests, docs, deployment paths — to hunt for counterexamples.",
+    "4) Write the review details FIRST in the body: per-item evidence (path·line), supplements/corrections/follow-ups, and failure reasons (do not abbreviate the body). Output the verdict only as the VERY LAST line, as exactly one of: 'Verdict: pass' (no supplements/cautions/fixes) / 'Verdict: pass (notes)' (passes, but with supplements/corrections/additional opinions) / 'Verdict: inconclusive' (cannot conclude — insufficient information etc.) / 'Verdict: fail'. Do not write any other line starting with 'Verdict:' (writing evidence first and the conclusion last keeps the conclusion anchored to the evidence — prevents premature mislabeling).",
+    "5) Judge by REAL impact. Malfunctions, spec mismatches, regression risks, wording that could mislead users/operations, and structures that look small but will grow into defects when repeated or extended are not minor — catch them. Conversely, do not block a pass over taste, formatting, or micro-wording that changes no outcome, behavior, or next decision.",
+  ].join("\n"),
+  transmit: [
+    "[Transmission Principles] When handing work to the verifier model:",
+    "- Verification targets are not only code changes — any 'conclusion' you will report to the user (design judgments, adequacy opinions, proposed wording) must be thrown to the verifier as 'my claim' to be attacked, even without an implementation. (The ask trigger itself in code/plancode modes still follows code/plan criteria.)",
+    "- Do not summarize or omit the verification request. Include concrete file paths and checkpoints so the verifier opens the originals itself.",
+    "- No narrow orders like 'look only here / do it this way'. Instead, state what you did, why, what evidence you saw, and where you feel uncertain; mark your conclusion as 'my claim' so the verifier can attack it.",
+    "- Present files/lines only as starting points; leave scope expansion to the verifier's judgment.",
+  ].join("\n"),
+  rejudge: [
+    "[Re-judgment] Do not copy the verifier's answer verbatim. Re-judge item by item:",
+    "- Split the verifier's points into items; attach [accept/rebut/hold] + evidence (file·line) + reasoning to each.",
+    "- Accepted items must carry evidence you checked yourself (file·line). Do not blur with a short 'agree/no objection' (rebut/hold are themselves proof of re-judgment).",
+    "- Evidence must be facts directly verifiable in code/files (paths, lines, actual output/behavior), not logical conjecture. If you disagree with the verifier, state why.",
+    "- Report completion only after reflecting a verification whose verdict is 'pass' or 'pass (notes)'. Never package one example, one branch, a few tests, or an added specific as a 'full resolution' — that alone is not completion.",
+    "- If you modified anything after verification (including applying the verifier's advice), re-verify the final state before reporting/committing. The verified state is the shipped state.",
+  ].join("\n"),
+};
+
+// 언어별 기본값/오버라이드 파일 선택. ko=레거시 base-directive.json 그대로(기존 사용자 오버라이드 보존), en=base-directive.en.json.
+function baseDefaultsFor(lang) {
+  return (LANGS.includes(lang) ? lang : loadLang()) === "en" ? BASE_DEFAULTS_EN : BASE_DEFAULTS;
+}
+function baseDirectiveFileFor(lang) {
+  const l = LANGS.includes(lang) ? lang : loadLang();
+  return l === "ko" ? BASE_DIRECTIVE_FILE : path.join(BRIDGE_DIR, `base-directive.${l}.json`);
+}
+// 기본 지침 로드: 오버라이드 파일의 비지 않은 항목만 기본값을 대체. lang=언어 슬롯(오버라이드·기본값 모두 그 언어 것).
+function loadBaseDirective(lang) {
   let o = {};
   try {
-    o = JSON.parse(fs.readFileSync(BASE_DIRECTIVE_FILE, "utf8"));
+    o = JSON.parse(fs.readFileSync(baseDirectiveFileFor(lang), "utf8"));
   } catch {
     o = {};
   }
-  const pick = (k) => (o && typeof o[k] === "string" && o[k].trim() ? o[k] : BASE_DEFAULTS[k]);
+  const D = baseDefaultsFor(lang);
+  const pick = (k) => (o && typeof o[k] === "string" && o[k].trim() ? o[k] : D[k]);
   return { verifyBaseline: pick("verifyBaseline"), transmit: pick("transmit"), rejudge: pick("rejudge") };
 }
 // 기본값과 같은 항목은 저장하지 않음(빈 오버라이드=기본값). 전부 기본이면 파일 삭제(=초기화).
-function saveBaseDirective(obj) {
+function saveBaseDirective(obj, lang) {
+  const D = baseDefaultsFor(lang);
+  const file = baseDirectiveFileFor(lang);
   const out = {};
   for (const k of ["verifyBaseline", "transmit", "rejudge"]) {
     const v = obj && typeof obj[k] === "string" ? obj[k] : "";
-    if (v.trim() && v.trim() !== BASE_DEFAULTS[k].trim()) out[k] = v;
+    if (v.trim() && v.trim() !== D[k].trim()) out[k] = v;
   }
   fs.mkdirSync(BRIDGE_DIR, { recursive: true });
   if (Object.keys(out).length === 0) {
     // 전부 기본값이면 오버라이드 파일을 지움 = 초기화. 이미 없으면(ENOENT) 그것도 성공(원하는 상태).
-    try { fs.unlinkSync(BASE_DIRECTIVE_FILE); } catch (e) { if (e && e.code !== "ENOENT") return false; }
+    try { fs.unlinkSync(file); } catch (e) { if (e && e.code !== "ENOENT") return false; }
     return true;
   }
-  return atomicWrite(BASE_DIRECTIVE_FILE, JSON.stringify(out, null, 2));
+  return atomicWrite(file, JSON.stringify(out, null, 2));
 }
-function resetBaseDirective() {
+function resetBaseDirective(lang) {
   // 오버라이드 파일 삭제 = 기본값 복원. 이미 없으면(ENOENT) 그것도 성공(원하는 상태). 권한 오류만 false.
-  try { fs.unlinkSync(BASE_DIRECTIVE_FILE); } catch (e) { if (e && e.code !== "ENOENT") return false; }
+  try { fs.unlinkSync(baseDirectiveFileFor(lang)); } catch (e) { if (e && e.code !== "ENOENT") return false; }
   return true;
 }
 
 // 검증 모드 ON일 때 Claude(구현모델)에게 매 턴 주입하는 2트랙 지시. 전달원칙·재판단은 기본 지침에서 로드(오버라이드 가능).
-function buildVerifyDirective(mode) {
+function buildVerifyDirective(mode, lang) {
+  const l = LANGS.includes(lang) ? lang : loadLang();
+  const b = loadBaseDirective(l);
+  if (l === "en") {
+    const cond =
+      mode === "always" ? "This turn (every response)" :
+      mode === "plancode" ? "If this turn confirmed a plan (ExitPlanMode) or created/modified files" :
+      "If this turn created/modified files"; // code
+    return [
+      `[Verify Mode ON(${mode}) · implement→verify two-track · no human relays between the models]`,
+      `${cond}, you MUST get Codex verification via \`node "${BRIDGE}" ask --allow-new "..."\` before reporting completion to the user. (If a Codex session is linked, it continues that session; otherwise it creates and links a new one.) [path is quoted so spaces are safe]`,
+      b.transmit,
+      b.rejudge,
+    ].join("\n");
+  }
   const cond =
     mode === "always" ? "이번 턴(모든 응답)" :
     mode === "plancode" ? "이번 턴에 플랜을 확정(ExitPlanMode)했거나 파일을 생성/수정했다면" :
     "이번 턴에 파일을 생성/수정했다면"; // code
-  const b = loadBaseDirective();
   return [
     `[검증 모드 ON(${mode}) · 구현→검증 2트랙 · 사람이 턴을 중계하지 않음]`,
     `${cond}, 사용자에게 완료를 보고하기 전에 반드시 \`node "${BRIDGE}" ask --allow-new "..."\` 로 Codex 검증을 받아라. (연결된 Codex 세션이 있으면 그 세션으로 이어가고, 없으면 새 세션을 만들어 연결한다.) [경로에 공백이 있어도 되도록 따옴표로 감쌌음]`,
@@ -348,16 +433,42 @@ function buildVerifyDirective(mode) {
 // 이 정규식은 '후보 줄' 필터일 뿐 — 최종 판정은 아래 분류 분기가 결정한다("검증: 설명문"처럼 판정어 없으면 null).
 // formatForClaude는 이 정규식을 직접 안 쓰고 extractVerdict(줄)!==null로 '판정 분류되는 줄'만 떼어내 더 보수적이다.
 const VERDICT_DECL_RE = /^[\s#>*\-]*검증\s*(?:[:：]|통과|실패|불가|보류|판단|조건부|보완|정보)/;
+// 영어 선언 줄: 'Verdict:' 콜론형만(영문 기본지침이 시키는 정확한 형식). 'Verification passed locally, but…' 같은
+// 본문 설명문이 판정으로 오인되지 않게 게이트를 좁게 유지(Codex 검증 반례 반영). 판독은 언어 설정과 무관하게
+// '항상' 한/영 둘 다 받는다(혼용 세션·전환 직후 안전).
+// 분류는 '단어 스캔'이 아니라 '콜론 바로 뒤 선언값'을 앵커로 한다 — "Verdict: pass - no tests fail"의 뒤쪽
+// fail이 선언값(pass)을 덮어쓰지 못하게(Codex 검증 반례 반영). pass 뒤 나머지에 보완어가 있으면 pass-notes.
+const VERDICT_DECL_RE_EN = /^[\s#>*\-]*verdict\s*[:：]\s*(pass(?:ed|es)?|fail(?:ed|s)?|inconclusive)\b(.*)$/i;
+// 한국어 분류는 기존 로직 그대로(무회귀) — 그 줄이 한국어 선언일 때 한국어 단어로만(교차 오염 방지:
+// 판정줄 속 우연한 영단어 fail-safe·minor 등이 오분류를 못 낸다).
+function classifyVerdictKo(ln) {
+  if (/실패/.test(ln)) return "fail";
+  if (/불가|보류|정보\s*부족/.test(ln)) return "inconclusive"; // 통과 없는 보류·불가·정보부족 = 통과 못 함
+  if (/통과/.test(ln) && /보완|조건부|정정|추가|미세|단서/.test(ln)) return "pass-notes"; // 통과지만 보완·추가의견
+  if (/통과/.test(ln)) return "pass"; // 깨끗한 통과
+  return null;
+}
+function classifyVerdictEn(ln) {
+  const m = VERDICT_DECL_RE_EN.exec(ln);
+  if (!m) return null;
+  const declared = m[1].toLowerCase();
+  if (declared.startsWith("fail")) return "fail";
+  if (declared === "inconclusive") return "inconclusive";
+  // 선언값 pass — 나머지(선언값 뒤 텍스트)에 보완어가 있으면 pass-notes. 'Verdict: pass (notes)' 형식 포함.
+  const rest = m[2] || "";
+  if (/\bnotes?\b|\bcaveats?\b|\bminor\b|\bconditional\b|\breservations?\b|\bremarks?\b|\bsupplements?\b/i.test(rest)) return "pass-notes";
+  return "pass";
+}
 function extractVerdict(text) {
   if (!text) return null;
   let v = null;
   for (const ln of String(text).split(/\r?\n/)) {
-    if (!VERDICT_DECL_RE.test(ln)) continue;
-    // 선언 줄 확정 → 줄 전체로 4단계 분류. 우선순위: 실패 > 보류·불가 > 통과+보완(통과·보완) > 깨끗한 통과.
-    if (/실패/.test(ln)) v = "fail";
-    else if (/불가|보류|정보\s*부족/.test(ln)) v = "inconclusive"; // 통과 없는 보류·불가·정보부족 = 통과 못 함
-    else if (/통과/.test(ln) && /보완|조건부|정정|추가|미세|단서/.test(ln)) v = "pass-notes"; // 통과지만 보완·추가의견
-    else if (/통과/.test(ln)) v = "pass"; // 깨끗한 통과
+    // 선언 줄 확정 → 그 언어의 규칙으로만 분류. KO 우선순위: 실패 > 보류·불가 > 통과+보완 > 통과(기존 그대로).
+    // EN: 콜론 뒤 선언값 앵커. 마지막 선언이 이김(마지막 줄 결론 원칙).
+    let r = null;
+    if (VERDICT_DECL_RE.test(ln)) r = classifyVerdictKo(ln);
+    else r = classifyVerdictEn(ln);
+    if (r) v = r;
   }
   return v;
 }
@@ -369,13 +480,20 @@ const VERDICT_ACTION = {
   inconclusive: "추가 확인 필요 — 판단 보류 사유와 다음 확인 지점을 보고하라.",
   fail: "수정 필요 — 실패 사유를 반영해 고친 뒤 재검증하라.",
 };
+const VERDICT_ACTION_EN = {
+  pass: "No action — but if the body contains supplement/caution/fix items, prioritize those body items over the declared verdict.",
+  "pass-notes": "Supplements present — handle each supplement/correction/addition from the body as [accept/rebut/hold] in the final report.",
+  inconclusive: "Further verification needed — report the reason for the hold and the next checkpoints.",
+  fail: "Fix required — address the failure reasons, then re-verify.",
+};
 // P1b: Claude 소비용 stdout 재배치. 대시보드/proof/rollout은 원문(answer) 그대로 쓰고, Claude에게 주는 것만 바꾼다.
 // findings-first(P1a)로 받은 답에서 '마지막 검증: 선언 줄'을 본문에서 떼어, 라벨 대신 '처리 의무' footer로 옮긴다.
 // → Claude가 '통과(보완)'의 '통과'에 앵커링해 보완을 건너뛰는 것 방지(가시성 색칩은 사람용 대시보드가 담당).
 // 떼어낸 원문 줄을 footer에 그대로 보여줘 '정확한 결론 인용'(재판단 원칙)도 보존. 게이트가 아니라 nudge.
-function formatForClaude(answer) {
+function formatForClaude(answer, lang) {
   const text = String(answer || "");
-  const action = VERDICT_ACTION[extractVerdict(text)];
+  const en = (LANGS.includes(lang) ? lang : loadLang()) === "en";
+  const action = (en ? VERDICT_ACTION_EN : VERDICT_ACTION)[extractVerdict(text)];
   if (!action) return text; // 결론 표지 못 찾음(null) → 원문 그대로(나서서 자르지 않음)
   const lines = text.split(/\r?\n/);
   // '판정으로 분류되는 줄'만 선언으로 본다 = 그 줄 하나로 extractVerdict가 non-null. VERDICT_DECL_RE 단독 매칭보다 보수적 —
@@ -386,7 +504,9 @@ function formatForClaude(answer) {
   for (const l of lines) if (isDecl(l)) verdictLine = l.trim(); // 마지막 판정 선언 줄(extractVerdict 전체 결과를 만든 그 줄)
   // 판정 선언 줄만 제거하고 끝의 빈 줄만 정돈한다. 전역 공백/개행 정규화는 하지 않는다(md hard break·코드블록·의도적 공백 보존).
   const body = lines.filter((l) => !isDecl(l)).join("\n").trimEnd();
-  return `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
+  return en
+    ? `${body}\n\n---\n[Claude handling note — next action, not a color label]\nCodex declared: ${verdictLine || "(no verdict line)"}\nObligation: ${action}`
+    : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, STATS_DIR, VERDICTS_FILE };

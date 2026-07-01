@@ -17,24 +17,28 @@ const { spawnSync, spawn } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs, appendVerdict } = require("./contract-lib.js");
+const { loadContract, buildInjection, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs, appendVerdict, loadLang } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
-function withContract(prompt, ws) {
-  const baseline = loadBaseDirective().verifyBaseline;
+// 호출 시점 전역 언어의 문자열 선택(무결성 detail·CLI 안내 등). ask 본문 흐름은 langSnap 사용.
+function tB(ko, en) { return loadLang() === "en" ? en : ko; }
+function withContract(prompt, ws, lang) {
+  // lang: 언어 스냅샷(cmdAsk의 langSnap) — 미지정 시 전역 언어. 주입(기본지침·계약 지시문)과 헤더/footer 언어를 한 스냅샷으로 일관.
+  const baseline = loadBaseDirective(lang).verifyBaseline;
   let inj = "";
   try {
     // 계약은 '연 폴더(configWs)' 기준으로 로드 — cmdAsk가 modelPref·proof·라벨·withContract에 같은 configWs 스냅샷(ws)을
     // 넘겨, 작업 cwd가 외부 폴더로 흔들려도 사용자가 연 폴더에 건 계약이 일관 적용된다(인자 없으면 configWs()로 폴백).
     // (resolveLink/recordLink도 configWs 기준 — 세션은 작업 cwd가 아니라 이 대화의 연 폴더에 묶인다.)
-    const c = loadContract(ws || configWs());
-    inj = buildInjection(c.codex, "Codex", c.codexChecklist);
+    const c = loadContract(ws || configWs(), lang);
+    inj = buildInjection(c.codex, "Codex", c.codexChecklist, lang);
   } catch {
     inj = "";
   }
   const head = inj ? `${baseline}\n\n${inj}` : baseline;
-  return `${head}\n\n---\n[작업 요청]\n${prompt}`;
+  const reqLabel = (lang || loadLang()) === "en" ? "[Work Request]" : "[작업 요청]";
+  return `${head}\n\n---\n${reqLabel}\n${prompt}`;
 }
 
 const HOME = os.homedir();
@@ -204,7 +208,7 @@ function flagEvidence(answer, ws, sessionId, execCwd) {
         workspace: ws,
         kind: "evidence-mismatch",
         severity: "warning", // 노랑 — '의심'이지 '검증 미완(빨강)'은 아님
-        detail: `검증 답의 인용 근거 ${mism.length}개가 실제 파일/라인과 불일치(존재하지 않는 줄): ${mism.slice(0, 3).join(" / ")}`,
+        detail: tB(`검증 답의 인용 근거 ${mism.length}개가 실제 파일/라인과 불일치(존재하지 않는 줄): ${mism.slice(0, 3).join(" / ")}`, `${mism.length} cited evidence item(s) do not match real files/lines (nonexistent lines): ${mism.slice(0, 3).join(" / ")}`),
       });
     }
     const unseen = citedFilesUnseen(answer, pathWs, sessionId);
@@ -215,7 +219,7 @@ function flagEvidence(answer, ws, sessionId, execCwd) {
         workspace: ws,
         kind: "evidence-unseen",
         severity: "warning", // 노랑(의심) — '안 읽음' 단정이 아니라 '기록에서 다룬 흔적 미확인'
-        detail: `검증 답이 인용한 파일 ${unseen.length}개를 이 검증 기록에서 다룬 흔적을 확인하지 못했습니다(이전 턴에서 봤거나 기록 형식 차이일 수 있음 — '안 읽음' 단정 아님): ${unseen.slice(0, 3).join(" / ")}`,
+        detail: tB(`검증 답이 인용한 파일 ${unseen.length}개를 이 검증 기록에서 다룬 흔적을 확인하지 못했습니다(이전 턴에서 봤거나 기록 형식 차이일 수 있음 — '안 읽음' 단정 아님): ${unseen.slice(0, 3).join(" / ")}`, `${unseen.length} cited file(s) show no trace of being handled in this verification log (may be from an earlier turn or a log-format difference — not asserting 'unread'): ${unseen.slice(0, 3).join(" / ")}`),
       });
     }
   } catch { /* best-effort — 점검 실패가 검증 흐름을 막지 않음 */ }
@@ -283,7 +287,7 @@ function flagVerdict(answer, ws, codexSession, modeSnapshot) {
         workspace: ws,
         kind: "verdict-missing",
         severity: "warning", // 노랑 — '통과 아님'이 아니라 '판정 표지가 없어 색 표시가 빔'
-        detail: "Codex 답에 마지막 '검증: 통과/통과(보완)/보류/실패' 판정 줄이 없습니다 — 대시보드 색 표시가 비고, 결론을 직접 확인해야 합니다.",
+        detail: tB("Codex 답에 마지막 '검증: 통과/통과(보완)/보류/실패' 판정 줄이 없습니다 — 대시보드 색 표시가 비고, 결론을 직접 확인해야 합니다.", "Codex's answer has no final verdict line ('Verdict: pass/pass (notes)/inconclusive/fail') — the dashboard chip stays empty; check the conclusion yourself."),
       });
       return; // verdict-nonclean(직전 실패 빨강·보류 노랑)은 유지
     }
@@ -298,8 +302,8 @@ function flagVerdict(answer, ws, codexSession, modeSnapshot) {
       // 빨강이어도 kind는 verdict-nonclean이라 재검증 통과 시 supersede로 자동 해소(검증 미완 빨강과 달리 ack 안 해도 사라짐).
       severity: v === "fail" ? "error" : "warning",
       detail: v === "fail"
-        ? "Codex 결론이 '검증 실패'입니다 — 통과가 아닙니다. 대시보드 대화에서 결론과 근거를 확인하세요."
-        : "Codex 결론이 '통과'가 아닙니다(보류·불가·정보 부족 등 — 결론을 못 냄). 대시보드 대화에서 결론을 확인하세요.",
+        ? tB("Codex 결론이 '검증 실패'입니다 — 통과가 아닙니다. 대시보드 대화에서 결론과 근거를 확인하세요.", "Codex's verdict is FAIL — not a pass. Check the conclusion and evidence in the dashboard conversation.")
+        : tB("Codex 결론이 '통과'가 아닙니다(보류·불가·정보 부족 등 — 결론을 못 냄). 대시보드 대화에서 결론을 확인하세요.", "Codex's verdict is not a pass (hold/unable/insufficient info — no conclusion). Check the conclusion in the dashboard conversation."),
     });
   } catch { /* best-effort — 점검 실패가 검증 흐름을 막지 않음 */ }
 }
@@ -430,12 +434,12 @@ function updateLinks(mutate, retries = 4) {
 function resolveLink(links) {
   const ws = configWs(); // 링크 해석 기준 = 연 폴더(작업 cwd가 흔들려도 이 대화의 세션을 찾음)
   const wsLink = lookupWorkspace(links, ws);
-  if (wsLink) return { ...wsLink, via: wsLink.via === "ui" ? "workspace·UI지정" : "workspace" };
+  if (wsLink) return { ...wsLink, via: wsLink.via === "ui" ? tB("workspace·UI지정","workspace·UI-set") : "workspace" };
   // bySession 폴백은 '그 항목의 워크스페이스가 현재와 같을 때만'. 다른 워크스페이스의 stale 링크가
   // byWorkspace 미스 시 새어드는 교차오염(검증이 엉뚱한 세션으로 감)을 막는다. (Codex 검증 #4)
   const cid = claudeId();
   const sLink = cid ? links.bySession[cid] : null;
-  if (sLink && normWs(sLink.workspace || "") === normWs(ws)) return { ...sLink, via: "session(폴백)" };
+  if (sLink && normWs(sLink.workspace || "") === normWs(ws)) return { ...sLink, via: tB("session(폴백)","session (fallback)") };
   return null;
 }
 // 연결 기록은 CAS 관문(updateLinks)을 통과 — ask 도중 확장/다른 프로세스가 links.json을 바꿔도
@@ -576,7 +580,7 @@ function firstUserSnippet(file) {
   } catch {
     /* ignore */
   }
-  return "(내용 미상)";
+  return tB("(내용 미상)","(content unknown)");
 }
 
 // 최근 rollout(헤드리스 포함) 목록 — 최신 수정순.
@@ -686,10 +690,10 @@ function runCodex(extraArgs, prompt) {
   let diag = "";
   if (r.error || !answer || badExit) {
     diag =
-      `\n[브릿지 진단] codex 실행방식=${inv.how} · file=${path.basename(inv.file)}` +
+      tB(`\n[브릿지 진단] codex 실행방식=`, `\n[bridge diagnostics] codex invocation=`) + `${inv.how} · file=${path.basename(inv.file)}` +
       (inv.args.length ? ` · launcher=${path.basename(inv.args[0])}` : "") +
       `\n  spawn=${r.error ? r.error.code || r.error.message : "ok"} · exit=${r.status} · signal=${r.signal || "-"}` +
-      `\n  (자세한 점검: node "${__filename}" doctor)`;
+      tB(`\n  (자세한 점검: node "${__filename}" doctor)`, `\n  (details: node "${__filename}" doctor)`);
   }
   return { answer, error: r.error, status: r.status, stderr: (r.stderr || "").toString() + diag };
 }
@@ -732,9 +736,9 @@ function runCodexNewSessionAsync(extraArgs, prompt, sinceMs, ws, onDetect) {
       let diag = "";
       const badExit = typeof status === "number" && status !== 0;
       if (err || !answer || badExit || timedOut) {
-        diag = `\n[브릿지 진단] codex 실행방식=${inv.how} · file=${path.basename(inv.file)}` +
+        diag = tB(`\n[브릿지 진단] codex 실행방식=`, `\n[bridge diagnostics] codex invocation=`) + `${inv.how} · file=${path.basename(inv.file)}` +
           `\n  spawn=${err ? err.code || err.message : "ok"} · exit=${status} · timeout=${timedOut}` +
-          `\n  (자세한 점검: node "${__filename}" doctor)`;
+          tB(`\n  (자세한 점검: node "${__filename}" doctor)`, `\n  (details: node "${__filename}" doctor)`);
       }
       resolve({ answer, error: err || (timedOut ? new Error("timeout") : null), status, stderr: stderr + diag, detected });
     };
@@ -761,6 +765,7 @@ async function cmdAsk(rest) {
   // 근거 경로 해석은 '작업 폴더'(exec=실제 실행 cwd). 사용자가 연 폴더에 건 설정이 외부 폴더 작업에도 일관 적용되게 한다.
   const ws = configWs();        // 연 폴더(설정 기준)
   const modeSnap = (loadContract(ws) || {}).verifyMode || ""; // 검증 트리거 모드 스냅샷(검증 중 사용자가 바꿔도 오염 안 되게) → flagVerdict로 전달
+  const langSnap = loadLang(); // 언어 스냅샷 — ask 실행 중(수 분) 언어를 바꿔도 주입 언어와 헤더/footer 언어가 엇갈리지 않게(modeSnap과 동일 원칙)
   const exec = process.cwd();   // 작업 폴더(실행/탐지/근거경로 기준) — 코덱스 spawn은 cwd 미지정이라 실제로 여기서 돈다
   const mArgs = modelArgs(modelPrefFor(links, ws)); // 선택한 모델/생각강도를 매 호출 -c로 재적용(연 폴더 pref → 작업이 어디든 일관)
 
@@ -769,21 +774,21 @@ async function cmdAsk(rest) {
     if (!file) {
       // 연결은 있으나 세션이 사라짐 → 보고만, 새로 안 만듦.
       die(
-        `⚠️ 연결된 Codex 세션(${link.codexSession})을 찾을 수 없습니다(삭제됨?).\n` +
-          `→ 새로 시작하려면: ask --allow-new "..."  /  다른 세션에 붙이려면: link <id>`,
+        tB(`⚠️ 연결된 Codex 세션(${link.codexSession})을 찾을 수 없습니다(삭제됨?).\n→ 새로 시작하려면: ask --allow-new "..."  /  다른 세션에 붙이려면: link <id>`,
+           `⚠️ Linked Codex session (${link.codexSession}) not found (deleted?).\n→ To start fresh: ask --allow-new "..."  /  to attach another: link <id>`),
       );
     }
     try { writePhase("codex-verifying", { round: (readPhase().round || 0) + 1, session: claudeId(), workspace: ws }); } catch { /* 진행표시 best-effort */ }
-    const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs], withContract(prompt, ws));
+    const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs], withContract(prompt, ws, langSnap));
     if (error || !answer || (typeof status === "number" && status !== 0)) {
       try { writePhase("claude-working", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // ask 실패 → 진행표시 codex-verifying 잔존 방지(Claude로 복귀)
-      die(`Codex resume 실패: ${error?.message || ""}\n${stderr.slice(-500)}`);
+      die(tB(`Codex resume 실패: `,`Codex resume failed: `) + `${error?.message || ""}\n${stderr.slice(-500)}`);
     }
     try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
     writeProof(link.codexSession, answer, ws); // 실제 성공 → 검증 증명 기록(verify-guard가 인정)
     flagEvidence(answer, ws, link.codexSession, exec); // 결정2: 인용 근거 존재성+다룬 흔적 점검(경로해석=작업폴더 exec). 라벨=연 폴더 ws
     flagVerdict(answer, ws, link.codexSession, modeSnap); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 답에 판정 줄이 없으면 표지 누락 노랑 가시화(자동 차단 X)
-    process.stdout.write(`# 연결 세션 ${link.codexSession} (${link.via})\n\n${formatForClaude(answer)}\n`);
+    process.stdout.write(`${langSnap === "en" ? "# Linked session" : "# 연결 세션"} ${link.codexSession} (${link.via})\n\n${formatForClaude(answer, langSnap)}\n`);
     return;
   }
 
@@ -791,11 +796,8 @@ async function cmdAsk(rest) {
   if (!allowNew) {
     // (나) 정책: 보고만 하고 멈춤. 멋대로 새 세션 안 만듦.
     die(
-      `🔌 이 Claude 세션/워크스페이스에 연결된 Codex 세션이 없습니다.\n` +
-        `   - 기존 세션에 연결:   node codex-bridge.js link <codex-session-id>   (목록: find)\n` +
-        `   - 가장 최근에 연결:   node codex-bridge.js link --last\n` +
-        `   - 새로 시작(첫 소통): node codex-bridge.js ask --allow-new "..."\n` +
-        `※ 새 세션을 임의로 만들지 않았습니다.`,
+      tB(`🔌 이 Claude 세션/워크스페이스에 연결된 Codex 세션이 없습니다.\n   - 기존 세션에 연결:   node codex-bridge.js link <codex-session-id>   (목록: find)\n   - 가장 최근에 연결:   node codex-bridge.js link --last\n   - 새로 시작(첫 소통): node codex-bridge.js ask --allow-new "..."\n※ 새 세션을 임의로 만들지 않았습니다.`,
+         `🔌 No Codex session is linked to this Claude session/workspace.\n   - Link an existing session:  node codex-bridge.js link <codex-session-id>   (list: find)\n   - Link the most recent:      node codex-bridge.js link --last\n   - Start fresh (first contact): node codex-bridge.js ask --allow-new "..."\n※ No new session was created on its own.`),
       3,
     );
   }
@@ -814,12 +816,10 @@ async function cmdAsk(rest) {
   const activeIsThisConv = active && active.claudeSession && myClaude && active.claudeSession === myClaude;
   if (!forceNew && activeIsThisConv && active.workspace && !sameWs(active.workspace, here)) {
     die(
-      `⚠️ 새 Codex 세션을 만들 '이 폴더'가 지금 이 Claude 대화가 도는 폴더와 다릅니다.\n` +
-        `   - 이 폴더(실행 위치): ${here}\n` +
-        `   - 이 대화의 폴더:     ${active.workspace}\n` +
-        `   엉뚱한 폴더에서 돌렸을 가능성이 큽니다. 새 세션을 만들지 않았습니다.\n` +
-        `   → 그 대화 폴더에서 실행하거나, CLAUDE_PROJECT_DIR을 그 폴더로 설정하세요.\n` +
-        `   → 정말 '${here}'에 새 세션을 만들려면: ask --force-new "..."`,
+      tB(
+        `⚠️ 새 Codex 세션을 만들 '이 폴더'가 지금 이 Claude 대화가 도는 폴더와 다릅니다.\n   - 이 폴더(실행 위치): ${here}\n   - 이 대화의 폴더:     ${active.workspace}\n   엉뚱한 폴더에서 돌렸을 가능성이 큽니다. 새 세션을 만들지 않았습니다.\n   → 그 대화 폴더에서 실행하거나, CLAUDE_PROJECT_DIR을 그 폴더로 설정하세요.\n   → 정말 '${here}'에 새 세션을 만들려면: ask --force-new "..."`,
+        `⚠️ The folder for the new Codex session differs from this Claude conversation's folder.\n   - this folder (exec cwd): ${here}\n   - conversation folder:    ${active.workspace}\n   This looks like a wrong-folder run. No new session was created.\n   → Run from that conversation folder, or set CLAUDE_PROJECT_DIR to it.\n   → To really create one in '${here}': ask --force-new "..."`,
+      ),
       3,
     );
   }
@@ -830,10 +830,8 @@ async function cmdAsk(rest) {
   const freshAutoFail = (loadLinks() || {}).autoNewFailed;
   if (freshAutoFail && freshAutoFail[wsKey]) {
     die(
-      `⚠️ 직전에 새 Codex 세션을 만들었지만 연결 기록에 실패했습니다(세션id 식별 실패).\n` +
-        `   무한 생성 방지를 위해 자동 생성을 멈춥니다.\n` +
-        `   - 만든 세션 연결: node codex-bridge.js find  →  node codex-bridge.js link <id>\n` +
-        `   - 폴더 탐지 점검: node codex-bridge.js doctor`,
+      tB(`⚠️ 직전에 새 Codex 세션을 만들었지만 연결 기록에 실패했습니다(세션id 식별 실패).\n   무한 생성 방지를 위해 자동 생성을 멈춥니다.\n   - 만든 세션 연결: node codex-bridge.js find  →  node codex-bridge.js link <id>\n   - 폴더 탐지 점검: node codex-bridge.js doctor`,
+         `⚠️ A new Codex session was just created but linking failed (session id unresolved).\n   Auto-creation is paused to prevent runaway session creation.\n   - Link the created session: node codex-bridge.js find  →  node codex-bridge.js link <id>\n   - Check folder detection:  node codex-bridge.js doctor`),
       3,
     );
   }
@@ -845,7 +843,7 @@ async function cmdAsk(rest) {
   // recordLink가 '성공(true)'일 때만 earlyLinked 확정 → 저장 실패(CAS/잠금/권한)면 미연결로 두고 다음 폴/최종 단계서 재시도.
   // detected(세션 발견)와 linked(저장 성공)를 분리해 "즉시연결" 거짓보고를 막는다(Codex 지적).
   const onDetect = (id) => { if (earlyLinked) return; try { if (recordLink(id)) earlyLinked = id; } catch { /* 다음 폴/최종 단계서 재시도 */ } };
-  const { answer, error, status, stderr } = await runCodexNewSessionAsync([...mArgs], withContract(prompt, ws), since, exec, onDetect); // 탐지=작업폴더(코덱스 session_meta.cwd와 일치)
+  const { answer, error, status, stderr } = await runCodexNewSessionAsync([...mArgs], withContract(prompt, ws, langSnap), since, exec, onDetect); // 탐지=작업폴더(코덱스 session_meta.cwd와 일치)
   // cwd 일치 우선, 못 찾으면 원래 방식(무회귀) — 최종 식별용 폴백.
   const resolveNew = () => { const f = newestRolloutSinceForWs(since, exec) || newestRolloutSince(since); const mm = f && f.match(UUID_RE); return mm ? mm[1] : ""; }; // 탐지=작업폴더
   if (error || !answer || (typeof status === "number" && status !== 0)) {
@@ -856,7 +854,7 @@ async function cmdAsk(rest) {
       else if (nid) updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; });
     }
     try { writePhase("claude-working", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // ask 실패 → 진행표시 정리(Claude로 복귀)
-    die(`Codex 새 세션 ${earlyLinked ? `(연결됨 ${earlyLinked}) ` : ""}실패: ${error?.message || ""}\n${stderr.slice(-500)}\n${earlyLinked ? "(세션은 연결됐으니 다시 검증하면 그 세션을 이어갑니다.)" : "(세션 파일이 생겼다면 'find'→'link <id>'로 연결하세요.)"}`);
+    die(tB(`Codex 새 세션 ${earlyLinked ? `(연결됨 ${earlyLinked}) ` : ""}실패: `, `Codex new session ${earlyLinked ? `(linked ${earlyLinked}) ` : ""}failed: `) + `${error?.message || ""}\n${stderr.slice(-500)}\n` + (earlyLinked ? tB("(세션은 연결됐으니 다시 검증하면 그 세션을 이어갑니다.)", "(the session is linked — re-verifying continues it.)") : tB("(세션 파일이 생겼다면 'find'→'link <id>'로 연결하세요.)", "(if a session file appeared, link it via 'find' → 'link <id>'.)")));
   }
   try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
   let id = earlyLinked;
@@ -865,14 +863,17 @@ async function cmdAsk(rest) {
     writeProof(id, answer, ws); // 실제 성공 → 검증 증명 기록
     flagEvidence(answer, ws, id, exec); // 결정2: 인용 근거 존재성+다룬 흔적(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
     flagVerdict(answer, ws, id, modeSnap); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 표지 누락도 노랑 가시화(자동 차단 X)
-    const head = earlyLinked ? `# 새 Codex 세션 생성·즉시연결: ${id}` : `# 새 Codex 세션 생성·연결: ${id}`;
-    process.stdout.write(`${head}\n\n${formatForClaude(answer)}\n`);
+    const en = langSnap === "en";
+    const head = earlyLinked
+      ? (en ? `# New Codex session created·linked immediately: ${id}` : `# 새 Codex 세션 생성·즉시연결: ${id}`)
+      : (en ? `# New Codex session created·linked: ${id}` : `# 새 Codex 세션 생성·연결: ${id}`);
+    process.stdout.write(`${head}\n\n${formatForClaude(answer, langSnap)}\n`);
   } else {
     updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; }); // 다음 자동 생성 차단 플래그
     writeProof("", answer, ws); // Codex는 성공 응답함(세션id만 미식별) → 검증은 인정
     flagEvidence(answer, ws, "", exec); // 세션id 미식별 → 존재성 점검만(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
     flagVerdict(answer, ws, "", modeSnap);
-    process.stdout.write(`# 새 세션 생성됨(세션id 식별 실패) — 폭증 방지로 다음 자동 생성은 멈춥니다. 'find'로 찾아 'link <id>' 하세요.\n\n${formatForClaude(answer)}\n`);
+    process.stdout.write(`${langSnap === "en" ? "# New session created (session id unresolved) — auto-creation is paused to avoid session sprawl. Use 'find' then 'link <id>'." : "# 새 세션 생성됨(세션id 식별 실패) — 폭증 방지로 다음 자동 생성은 멈춥니다. 'find'로 찾아 'link <id>' 하세요."}\n\n${formatForClaude(answer, langSnap)}\n`);
   }
 }
 
@@ -1051,7 +1052,7 @@ function main() {
   switch (cmd) {
     case "ask": {
       const p = cmdAsk(rest); // 새 세션 경로는 async(즉시연결). resume는 동기 흐름이라 즉시 resolve.
-      if (p && typeof p.then === "function") p.catch((e) => die("ask 오류: " + (e && e.message ? e.message : String(e))));
+      if (p && typeof p.then === "function") p.catch((e) => die(tB("ask 오류: ", "ask error: ") + (e && e.message ? e.message : String(e))));
       return p;
     }
     case "link":

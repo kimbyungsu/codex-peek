@@ -8,7 +8,7 @@ const fs = require("fs");
 const path = require("path");
 const cp = require("child_process");
 const crypto = require("crypto");
-const { loadContract, BRIDGE, BRIDGE_DIR, atomicWrite, appendIntegrityEvent, writePhase, maybeCleanupState } = require("./contract-lib.js");
+const { loadContract, BRIDGE, BRIDGE_DIR, atomicWrite, appendIntegrityEvent, writePhase, maybeCleanupState, loadLang } = require("./contract-lib.js");
 try { maybeCleanupState(); } catch { /* 오래된 상태파일 정리는 best-effort — 검증 흐름 방해 금지 */ } // 매 턴 끝(Stop 훅)에 들르되 실제 청소는 하루 1회
 const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs");
 const ATTEMPTS_DIR = path.join(BRIDGE_DIR, "verify-attempts"); // V4: 한 턴 재검증 강제 횟수(무한정지 방지 바운드)
@@ -242,23 +242,32 @@ process.stdin.on("end", () => {
         workspace: ws,
         kind: "verify-incomplete",
         severity: "error",
-        detail: `검증 모드:${c.verifyMode} — ${MAX_ATTEMPTS}회 강제했으나 검증이 완료되지 않은 채 이 턴이 종료됨(이 턴 결과는 미검증).`,
+        detail: loadLang() === "en"
+          ? `Verify mode:${c.verifyMode} — forced ${MAX_ATTEMPTS} times, but this turn ended without a completed verification (this turn's result is UNVERIFIED).`
+          : `검증 모드:${c.verifyMode} — ${MAX_ATTEMPTS}회 강제했으나 검증이 완료되지 않은 채 이 턴이 종료됨(이 턴 결과는 미검증).`,
       });
     } catch { /* 이벤트 기록 실패는 종료를 막지 않음 */ }
     try { writePhase("incomplete", { session: claudeSession, workspace: ws }); } catch { /* best-effort */ } // 검증 미완 종료
     clearAttempts(attemptKey); // 카운터 키와 일치(세션키 없을 때 no-op 방지)
     process.exit(0);
   }
-  const what = planned && !editedReal ? "플랜을 확정했는데" : editedReal ? "파일을 변경했는데" : "이번 턴에";
   const shown = n === null ? "?" : n;
+  const en = loadLang() === "en"; // 차단 사유는 Claude(모델)가 읽는 지시문 — 전역 언어를 따른다
+  const what = en
+    ? (planned && !editedReal ? "You confirmed a plan, but" : editedReal ? "You modified files, but" : "In this turn,")
+    : (planned && !editedReal ? "플랜을 확정했는데" : editedReal ? "파일을 변경했는데" : "이번 턴에");
   process.stdout.write(
     JSON.stringify({
       decision: "block",
-      reason:
-        `[검증 모드:${c.verifyMode} · ${shown}/${MAX_ATTEMPTS}회] ${what} 이번 턴에 Codex 검증의 '성공 응답'이 없다. ` +
-        `종료하지 말고 지금 \`node "${BRIDGE}" ask "<무엇을 검증할지>"\` 로 Codex 검증을 받아라 ` +
-        `(빈 명령·실패·미연결은 인정되지 않는다 — 실제 응답이 와야 검증으로 친다). ` +
-        `그 결과(통과/실패+근거)를 사용자에게 보고한 뒤 종료하라. (연결이 없어 보고만 된다면 그 사실을 보고하라. ${MAX_ATTEMPTS}회 후엔 종료가 허용된다)`,
+      reason: en
+        ? `[Verify mode:${c.verifyMode} · attempt ${shown}/${MAX_ATTEMPTS}] ${what} there is no successful Codex verification response this turn. ` +
+          `Do not finish — get Codex verification NOW via \`node "${BRIDGE}" ask "<what to verify>"\` ` +
+          `(an empty command, a failure, or no link does not count — an actual response must come back). ` +
+          `Report the result (pass/fail + evidence) to the user, then finish. (If there is no link and only a report is possible, report that fact. After ${MAX_ATTEMPTS} attempts, finishing is allowed.)`
+        : `[검증 모드:${c.verifyMode} · ${shown}/${MAX_ATTEMPTS}회] ${what} 이번 턴에 Codex 검증의 '성공 응답'이 없다. ` +
+          `종료하지 말고 지금 \`node "${BRIDGE}" ask "<무엇을 검증할지>"\` 로 Codex 검증을 받아라 ` +
+          `(빈 명령·실패·미연결은 인정되지 않는다 — 실제 응답이 와야 검증으로 친다). ` +
+          `그 결과(통과/실패+근거)를 사용자에게 보고한 뒤 종료하라. (연결이 없어 보고만 된다면 그 사실을 보고하라. ${MAX_ATTEMPTS}회 후엔 종료가 허용된다)`,
     }),
   );
   process.exit(0);

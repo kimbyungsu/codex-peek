@@ -42,10 +42,42 @@ function atomicWrite(file: string, data: string): boolean {
   try { console.error(`[codex-bridge] atomicWrite: 저장 실패(손상 방지로 옛 파일 유지): ${file}`); } catch { /* ignore */ }
   return false;
 }
+// ── 전역 언어(ko/en) — bridge/contract-lib.js의 loadLang/saveLang과 동일 규칙(같은 language.json 공유) ──
+// 언어는 전역 하나(프로젝트/창 바뀌어도 유지). ko 기본 = 기존 사용자 무회귀. 브릿지가 구버전이어도 확장 자체 리더로 동작.
+const LANG_FILE = path.join(BRIDGE_DIR, "language.json");
+const LANGS = ["ko", "en"] as const;
+type Lang = (typeof LANGS)[number];
+function loadLangExt(): Lang {
+  try {
+    const o = JSON.parse(fs.readFileSync(LANG_FILE, "utf8"));
+    if (o && (LANGS as readonly string[]).includes(o.lang)) return o.lang as Lang;
+  } catch { /* 없음/손상 → ko */ }
+  return "ko";
+}
+function saveLangExt(lang: Lang): boolean {
+  if (!(LANGS as readonly string[]).includes(lang)) return false;
+  return atomicWrite(LANG_FILE, JSON.stringify({ lang }));
+}
+// 확장 호스트(상태바·라이브 라벨·무결성 detail 등)용 — 호출 시점 전역 언어. (웹뷰는 생성 시 고정된 T()를 씀.)
+function tE(ko: string, en: string): string {
+  return loadLangExt() === "en" ? en : ko;
+}
+// 첫 실행 초기화: language.json이 없으면 VS Code UI 언어로 정해 '저장'까지 한다(auto를 동적으로 계속 해석하지 않고
+// 첫 실행 값 고정 — 프로젝트/창 이동 시 예측 가능, Codex 검증 권고). 이미 있으면 손대지 않음.
+function ensureLangInitialized(): void {
+  try {
+    if (fs.existsSync(LANG_FILE)) return;
+    const uiLang = String(vscode.env.language || "").toLowerCase();
+    saveLangExt(uiLang.startsWith("ko") ? "ko" : "en");
+  } catch { /* best-effort — 실패 시 loadLangExt 기본 ko */ }
+}
+
 // 프로젝트별 계약 파일. 키=normWs의 sha1 앞16자 — bridge/contract-lib.js의 contractFileFor와 반드시 동일 규칙.
-function contractFileFor(ws: string): string {
+// 언어 슬롯: ko=레거시 <키>.json 그대로(기존 규칙 무회귀·비파괴) / en=<키>.en.json. 브릿지와 동일.
+function contractFileFor(ws: string, lang?: Lang): string {
   const key = crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16);
-  return path.join(CONTRACTS_DIR, key + ".json");
+  const l = lang || loadLangExt();
+  return path.join(CONTRACTS_DIR, key + (l === "ko" ? "" : "." + l) + ".json");
 }
 const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
 
@@ -70,6 +102,8 @@ interface BridgeState {
   candidates: Candidate[];
   hiddenCandidates: Candidate[];
   contract: Contract;
+  lang: Lang;              // 전역 언어(ko/en)
+  otherSlotRules: boolean; // 반대 언어 슬롯에만 규칙 있음(빈칸 안내)
   baseDirective: { verifyBaseline: string; transmit: string; rejudge: string; overridden: boolean };
   baseAvailable: boolean;
   permissionMode: string;
@@ -181,7 +215,7 @@ interface Contract {
   claudeInjectMode: InjectMode;
 }
 
-function loadContract(ws?: string | null): Contract {
+function loadContract(ws?: string | null, lang?: Lang): Contract {
   const read = (p: string): any | null => {
     try {
       return JSON.parse(fs.readFileSync(p, "utf8"));
@@ -191,7 +225,8 @@ function loadContract(ws?: string | null): Contract {
   };
   // 계약은 프로젝트 전용 — 실제 ws는 그 프로젝트 파일만 읽는다(★전역 상속 없음★, 없으면 빈 계약·주입 0).
   // ws=null(폴더 없는 창)만 레거시 전역(CONTRACT_FILE)을 '그 창의 저장소'로 읽음(saveContract(null)과 대칭 — '저장했는데 사라짐' 방지). 프로젝트엔 절대 상속 안 됨(프로젝트는 항상 ws 있음).
-  const o = (ws ? read(contractFileFor(ws)) : read(CONTRACT_FILE)) ?? {};
+  // lang: 언어 슬롯(ko=레거시 파일). 미지정 시 전역 언어.
+  const o = (ws ? read(contractFileFor(ws, lang)) : read(CONTRACT_FILE)) ?? {};
   return {
     claude: Array.isArray(o.claude) ? o.claude : [],
     codex: Array.isArray(o.codex) ? o.codex : [],
@@ -202,10 +237,25 @@ function loadContract(ws?: string | null): Contract {
   };
 }
 
-function saveContract(ws: string | null, c: Contract): boolean {
+function saveContract(ws: string | null, c: Contract, lang?: Lang): boolean {
   // 프로젝트별 파일에 저장(계약은 프로젝트 전용·상속 없음). ws 없으면(폴더 없는 창) 레거시 전역 파일에 저장.
-  const file = ws ? contractFileFor(ws) : CONTRACT_FILE;
+  // lang: 언어 슬롯 — 현재 언어의 파일에만 저장(다른 언어 슬롯 안 건드림).
+  const file = ws ? contractFileFor(ws, lang) : CONTRACT_FILE;
   return atomicWrite(file, JSON.stringify({ ...c, workspace: ws || undefined, updatedAt: new Date().toISOString() }, null, 2));
+}
+
+// '다른 언어 슬롯에만 규칙이 있음' 안내용 — 현재 슬롯이 비었는데 반대 슬롯에 규칙이 있으면 그 사실을 알려
+// "언어 바꿨더니 규칙이 사라졌다" 오해를 막는다(Codex 검증 권고). 규칙 유무만 본다(verifyMode 기본값은 무시).
+function otherSlotHasRules(ws: string | null): boolean {
+  if (!ws) return false;
+  const cur = loadLangExt();
+  const other: Lang = cur === "ko" ? "en" : "ko";
+  try {
+    const o = JSON.parse(fs.readFileSync(contractFileFor(ws, other), "utf8"));
+    return (Array.isArray(o.claude) && o.claude.length > 0) || (Array.isArray(o.codex) && o.codex.length > 0);
+  } catch {
+    return false;
+  }
 }
 
 function workspaceLink(links: ReturnType<typeof loadLinks>, ws: string | null): any | null {
@@ -305,7 +355,7 @@ function firstSnippet(file: string): string {
   for (const m of readMessages(file)) {
     if (m.role === "user") return m.text.replace(/\s+/g, " ").slice(0, 70);
   }
-  return "(내용 미상)";
+  return tE("(내용 미상)","(content unknown)");
 }
 
 // rollout의 turn_context에서 '현재(마지막) 모델·생각강도'와 '이 세션이 써본 모델 목록'을 뽑는다.
@@ -366,15 +416,34 @@ function readModelsCache(): AvailModel[] {
 // 반환(4단계): pass(깨끗한 통과) | pass-notes(통과지만 보완·정정·추가의견 있음) | inconclusive(보류·불가·정보부족=통과 못 함) | fail | null.
 function extractVerdict(text: string): "pass" | "pass-notes" | "fail" | "inconclusive" | null {
   if (!text) return null;
-  let v: "pass" | "pass-notes" | "fail" | "inconclusive" | null = null;
+  type V = "pass" | "pass-notes" | "fail" | "inconclusive" | null;
+  let v: V = null;
+  // 분류는 '그 줄이 매칭된 언어의 단어들로만'(교차 오염 방지 — 한국어 판정줄 속 fail-safe·minor 등 우연한 영단어가 오분류 못 내게).
+  const ko = (ln: string): V => {
+    if (/실패/.test(ln)) return "fail";
+    if (/불가|보류|정보\s*부족/.test(ln)) return "inconclusive";
+    if (/통과/.test(ln) && /보완|조건부|정정|추가|미세|단서/.test(ln)) return "pass-notes";
+    if (/통과/.test(ln)) return "pass";
+    return null;
+  };
+  // 영어: 'Verdict:' 콜론형만 + '콜론 뒤 선언값' 앵커(단어 스캔 금지 — "Verdict: pass - no tests fail"의 뒤쪽 fail이
+  // 선언값 pass를 덮어쓰지 못하게. 'Verification passed…' 설명문은 선언으로 안 봄). 브릿지 classifyVerdictEn과 동일.
+  const en = (ln: string): V => {
+    const m = /^[\s#>*\-]*verdict\s*[:：]\s*(pass(?:ed|es)?|fail(?:ed|s)?|inconclusive)\b(.*)$/i.exec(ln);
+    if (!m) return null;
+    const declared = m[1].toLowerCase();
+    if (declared.startsWith("fail")) return "fail";
+    if (declared === "inconclusive") return "inconclusive";
+    if (/\bnotes?\b|\bcaveats?\b|\bminor\b|\bconditional\b|\breservations?\b|\bremarks?\b|\bsupplements?\b/i.test(m[2] || "")) return "pass-notes";
+    return "pass";
+  };
   for (const ln of String(text).split(/\r?\n/)) {
-    // '결론 선언 줄'만: '검증'으로 시작 + (콜론이거나 곧바로 결론어). 콜론형("검증: …")은 무조건 선언(정보부족·판단보류 포괄).
-    // 서두("검증 요청으로…")·본문("…이 검증에서 실패…","(검증 아님)")은 배제. 우선순위: 실패>보류·불가>통과+보완>통과.
-    if (!/^[\s#>*\-]*검증\s*(?:[:：]|통과|실패|불가|보류|판단|조건부|보완|정보)/.test(ln)) continue;
-    if (/실패/.test(ln)) v = "fail";
-    else if (/불가|보류|정보\s*부족/.test(ln)) v = "inconclusive";
-    else if (/통과/.test(ln) && /보완|조건부|정정|추가|미세|단서/.test(ln)) v = "pass-notes";
-    else if (/통과/.test(ln)) v = "pass";
+    // '결론 선언 줄'만: 한국어='검증'+콜론/결론어(기존 그대로), 영어='Verdict:' 콜론형(영문 기본지침 형식과 일치).
+    // 서두·본문 부연은 배제. KO 우선순위: 실패>보류·불가>통과+보완>통과. 마지막 선언이 이김. 판독은 언어 설정과 무관하게 항상 양언어.
+    let r: V = null;
+    if (/^[\s#>*\-]*검증\s*(?:[:：]|통과|실패|불가|보류|판단|조건부|보완|정보)/.test(ln)) r = ko(ln);
+    else r = en(ln);
+    if (r) v = r;
   }
   return v;
 }
@@ -411,7 +480,9 @@ function loadBaseDirectiveSafe(): { verifyBaseline: string; transmit: string; re
     const lib = bridgeLib();
     if (lib && typeof lib.loadBaseDirective === "function") {
       const cur = lib.loadBaseDirective();
-      const def = lib.BASE_DEFAULTS || {};
+      // '수정됨' 배지 비교 기준도 현재 전역 언어의 기본값이어야 한다 — en 모드에서 한국어 기본값과 비교하면
+      // 오버라이드가 없어도 전부 '수정됨'으로 오탐(Codex 검증 반영). 구 런타임(lang 이전)엔 baseDefaultsFor가 없어 폴백.
+      const def = (typeof lib.baseDefaultsFor === "function" ? lib.baseDefaultsFor() : lib.BASE_DEFAULTS) || {};
       const overridden =
         cur.verifyBaseline !== def.verifyBaseline || cur.transmit !== def.transmit || cur.rejudge !== def.rejudge;
       return { verifyBaseline: cur.verifyBaseline || "", transmit: cur.transmit || "", rejudge: cur.rejudge || "", overridden };
@@ -511,11 +582,11 @@ function syncBrainDriftFor(ws: string | null): void {
     const bd: { sig: string; detail: string }[] = [];
     // Claude: 별칭(opus)↔정식ID(claude-opus-4-8)는 namespace가 달라 modelFamily 계열로 비교(둘 다 알 때만 → 빈값 오탐 방지).
     const cf = modelFamily(cbModel), cfc = modelFamily(claudeCur);
-    if (cf && cfc && cf !== cfc) bd.push({ sig: `cc-model:${cf}!${cfc}`, detail: `Claude: 설정한 모델은 '${cf}'인데 최근 답한 모델은 '${cfc}'예요. 고른 모델이 아직 안 먹었을 수 있어요(앱에서 모델을 다시 선택).` });
+    if (cf && cfc && cf !== cfc) bd.push({ sig: `cc-model:${cf}!${cfc}`, detail: tE(`Claude: 설정한 모델은 '${cf}'인데 최근 답한 모델은 '${cfc}'예요. 고른 모델이 아직 안 먹었을 수 있어요(앱에서 모델을 다시 선택).`, `Claude: configured model is '${cf}' but the latest answer used '${cfc}'. Your selection may not have taken effect yet (re-select the model in the app).`) });
     // Codex: pref와 rollout이 같은 slug 어휘라 정규화 raw 비교(modelFamily는 Claude 계열 전용이라 gpt-*를 ""로 떨궈 영영 못 잡음).
     const xm = (pref.model || "").trim().toLowerCase(), xmc = (mModel || "").trim().toLowerCase();
-    if (xm && xmc && xm !== xmc) bd.push({ sig: `cx-model:${xm}!${xmc}`, detail: `코덱스: 설정한 모델은 '${pref.model}'인데 최근 답한 모델은 '${mModel}'예요. 바꾼 게 다음 답부터 반영될 수 있어요.` });
-    if (pref.reasoning && mEffort && pref.reasoning !== mEffort) bd.push({ sig: `cx-effort:${pref.reasoning}!${mEffort}`, detail: `코덱스: 설정한 생각강도는 '${pref.reasoning}'인데 최근 답은 '${mEffort}'였어요. 바꾼 게 다음 답부터 반영될 수 있어요.` });
+    if (xm && xmc && xm !== xmc) bd.push({ sig: `cx-model:${xm}!${xmc}`, detail: tE(`코덱스: 설정한 모델은 '${pref.model}'인데 최근 답한 모델은 '${mModel}'예요. 바꾼 게 다음 답부터 반영될 수 있어요.`, `Codex: configured model is '${pref.model}' but the latest answer used '${mModel}'. The change may apply from the next answer.`) });
+    if (pref.reasoning && mEffort && pref.reasoning !== mEffort) bd.push({ sig: `cx-effort:${pref.reasoning}!${mEffort}`, detail: tE(`코덱스: 설정한 생각강도는 '${pref.reasoning}'인데 최근 답은 '${mEffort}'였어요. 바꾼 게 다음 답부터 반영될 수 있어요.`, `Codex: configured reasoning is '${pref.reasoning}' but the latest answer used '${mEffort}'. The change may apply from the next answer.`) });
     syncBrainDrift(ws, bd);
   } catch { /* best-effort */ }
 }
@@ -534,8 +605,8 @@ function syncSessionMissing(ws: string | null): void {
     const blocked = !hasLink && !!(links.autoNewFailed || {})[normWs(ws)]; // 자동 새 세션 생성이 막힌 상태(연속 실패 폭증방지) → '시도' 대신 '멈춤' 안내
     const sig = blocked ? "session-missing:blocked" : "session-missing:normal";
     const detail = blocked
-      ? "현재 연결된 Codex 세션이 없고, 자동 생성이 멈춰 있습니다. 'Codex 세션 연결'에서 수동으로 연결하세요. 계속되면 개발자에게 문의해 주세요."
-      : "현재 연결된 Codex 세션이 없습니다. 'Codex 세션 연결'에서 수동으로 연결하거나, 검증을 계속 진행하면 새 세션 생성·연결을 자동으로 시도합니다.";
+      ? tE("현재 연결된 Codex 세션이 없고, 자동 생성이 멈춰 있습니다. 'Codex 세션 연결'에서 수동으로 연결하세요. 계속되면 개발자에게 문의해 주세요.","No Codex session is linked and auto-creation is paused. Link one manually under 'Codex Session Link'. If this persists, please report it.")
+      : tE("현재 연결된 Codex 세션이 없습니다. 'Codex 세션 연결'에서 수동으로 연결하거나, 검증을 계속 진행하면 새 세션 생성·연결을 자동으로 시도합니다.","No Codex session is linked. Link one manually under 'Codex Session Link', or keep verifying and a new session will be created and linked automatically.");
     // 연결 있으면 이 ws의 session-missing 전부 제거. 없으면 '현재 sig + 미확인'만 보존(상태가 정상↔막힘으로 바뀌어 sig가 다르거나 ack된 건 제거 → 아래서 새 detail로 재생성).
     // ★ack된 것·옛 sig를 제거+재생성하므로 (1)외부 ack-all로 ack돼도 (2)정상↔막힘 전환에도 연결 없는 한 항상 '최신 detail의 빨강'이 유지된다('연결로만 해소' + detail 자동 갱신).
     const kept = events.filter((e) => e.kind !== KIND || !wsMatch(e) || (!hasLink && e.sig === sig && !e.ack));
@@ -551,7 +622,7 @@ function syncSessionMissing(ws: string | null): void {
 // isTrusted는 우리 두 커맨드로만 좁힌다(임의 command: 링크 실행 방지). $(icon)은 supportThemeIcons로 렌더.
 function alertTooltip(headMd: string): vscode.MarkdownString {
   const md = new vscode.MarkdownString(
-    headMd + `\n\n---\n\n[$(check) **확인함** — 이 창 경고 읽음](command:codexBridge.ackHere)\n\n[$(dashboard) **대시보드 열기**](command:codexBridge.openDashboard)`,
+    headMd + tE(`\n\n---\n\n[$(check) **확인함** — 이 창 경고 읽음](command:codexBridge.ackHere)\n\n[$(dashboard) **대시보드 열기**]`,`\n\n---\n\n[$(check) **Acknowledge** — read this window's alerts](command:codexBridge.ackHere)\n\n[$(dashboard) **Open dashboard**]`) + `(command:codexBridge.openDashboard)`,
   );
   md.isTrusted = { enabledCommands: ["codexBridge.ackHere", "codexBridge.openDashboard"] };
   md.supportThemeIcons = true;
@@ -585,14 +656,14 @@ function computeLiveStage(linkedId: string | null): LiveStage | null {
   // color = 상태바 '글자색'(status.color, 임의 ThemeColor 가능). 배경색은 VS Code가 error/warning만 허용하므로
   // 단계별 다색은 글자색으로 표현하고, 빨강 배경은 무결성 경보 전용으로 둔다.
   switch (p.phase) {
-    case "claude-working": return { key: "claude", label: "Claude 작업중", icon: "$(pencil)", spin: false, round, color: "charts.blue" };
+    case "claude-working": return { key: "claude", label: tE("Claude 작업중","Claude working"), icon: "$(pencil)", spin: false, round, color: "charts.blue" };
     case "codex-verifying":
       return linkedRolloutRecentlyWritten(linkedId)
-        ? { key: "codex-gen", label: "Codex 생성중", icon: "$(sync~spin)", spin: true, round, color: "charts.green" }
-        : { key: "codex-req", label: "코덱스에 검증 요청", icon: "$(sync~spin)", spin: true, round, color: "charts.yellow" };
-    case "rejudging": return { key: "rejudge", label: "검증 답 반영중", icon: "$(pencil)", spin: false, round, color: "charts.orange" };
-    case "done": return { key: "done", label: "검증 완료", icon: "$(check)", spin: false, round, color: "charts.green" };
-    case "incomplete": return { key: "incomplete", label: "검증 미완", icon: "$(alert)", spin: false, round, color: "charts.red" };
+        ? { key: "codex-gen", label: tE("Codex 생성중","Codex generating"), icon: "$(sync~spin)", spin: true, round, color: "charts.green" }
+        : { key: "codex-req", label: tE("코덱스에 검증 요청","verify requested to Codex"), icon: "$(sync~spin)", spin: true, round, color: "charts.yellow" };
+    case "rejudging": return { key: "rejudge", label: tE("검증 답 반영중","applying verify answer"), icon: "$(pencil)", spin: false, round, color: "charts.orange" };
+    case "done": return { key: "done", label: tE("검증 완료","verify done"), icon: "$(check)", spin: false, round, color: "charts.green" };
+    case "incomplete": return { key: "incomplete", label: tE("검증 미완","unverified"), icon: "$(alert)", spin: false, round, color: "charts.red" };
     default: return null;
   }
 }
@@ -661,8 +732,8 @@ function computeState(turnsN: number): BridgeState {
   let modelsCacheNote = "";
   if (!availModels.length) {
     modelsCacheNote = fs.existsSync(path.join(CODEX_HOME, "models_cache.json"))
-      ? "계정 모델 목록을 읽었지만 표시할 모델이 없어 기본값으로 보여줘요(코덱스 갱신/버전 확인)."
-      : "계정 모델 목록 파일을 못 찾아 기본값으로 보여줘요 — 코덱스가 아직 목록을 안 받았거나 폴더 위치(CODEX_HOME)가 바뀐 경우예요.";
+      ? tE("계정 모델 목록을 읽었지만 표시할 모델이 없어 기본값으로 보여줘요(코덱스 갱신/버전 확인).","Read the account model list but found none to show — falling back to defaults (check Codex update/version).")
+      : tE("계정 모델 목록 파일을 못 찾아 기본값으로 보여줘요 — 코덱스가 아직 목록을 안 받았거나 폴더 위치(CODEX_HOME)가 바뀐 경우예요.","Model list file not found — showing defaults. Codex may not have fetched it yet, or CODEX_HOME moved.");
   }
 
   // 세션 후보가 0개(연결할 세션이 안 뜸)면 '지금 어느 home/sessions를 보는지·codex·출처'를 노출 → 침묵 실패를 자가진단 가능하게.
@@ -672,10 +743,10 @@ function computeState(turnsN: number): BridgeState {
     try { sessionsExists = fs.existsSync(SESSIONS_DIR); } catch { /* ignore */ }
     const envHome = (process.env.CODEX_HOME || "").trim();
     const fileHome = readTextSafe(path.join(BRIDGE_DIR, "codex-home.txt")).trim();
-    const source = envHome && envHome === CODEX_HOME ? "환경변수 CODEX_HOME"
-      : fileHome && fileHome === CODEX_HOME ? "자동탐지(codex-home.txt)"
-      : "기본값 ~/.codex";
-    sessionDiag = { home: CODEX_HOME, source, sessionsDir: SESSIONS_DIR, sessionsExists, codexBin: resolveCodexPathForBridge() || "설정·형제확장에서 못 찾음 → PATH의 codex 시도" };
+    const source = envHome && envHome === CODEX_HOME ? tE("환경변수 CODEX_HOME","env CODEX_HOME")
+      : fileHome && fileHome === CODEX_HOME ? tE("자동탐지(codex-home.txt)","auto-detected (codex-home.txt)")
+      : tE("기본값 ~/.codex","default ~/.codex");
+    sessionDiag = { home: CODEX_HOME, source, sessionsDir: SESSIONS_DIR, sessionsExists, codexBin: resolveCodexPathForBridge() || tE("설정·형제확장에서 못 찾음 → PATH의 codex 시도", "not found via setting/sibling extension → trying codex on PATH") };
   }
 
   // 두뇌 drift를 integrity로 동기화(상태바/배너) — syncBrainDriftFor가 settings/transcript/rollout을 직접 읽어 계산한다.
@@ -693,6 +764,8 @@ function computeState(turnsN: number): BridgeState {
     candidates,
     hiddenCandidates,
     contract: loadContract(ws),
+    lang: loadLangExt(),                 // 전역 언어(ko/en) — 탭바 토글 상태 + UI 문자열 선택
+    otherSlotRules: otherSlotHasRules(ws), // 반대 언어 슬롯에만 규칙 있음 → '사라진 게 아님' 안내
     baseDirective: loadBaseDirectiveSafe(),
     baseAvailable: bridgeLib() !== null,
     permissionMode: activePermissionMode(ws),
@@ -1018,8 +1091,14 @@ class Dashboard {
       });
       this.panel.webview.html = this.html(this.panel.webview);
       this.panel.webview.onDidReceiveMessage((m) => {
+        if (m?.type === "setLang" && (m.lang === "ko" || m.lang === "en")) {
+          // 전역 언어 저장(language.json) — 브릿지·훅·다른 창이 같은 파일을 읽는다(BRIDGE_DIR watch로 자동 재렌더).
+          if (!saveLangExt(m.lang)) { vscode.window.showErrorMessage(tE("언어 설정 저장에 실패했어요(파일 잠김/권한?).","Failed to save language setting (file locked/permission?).")); return; }
+          this.post();
+          vscode.commands.executeCommand("codexBridge.refresh");
+        }
         if (m?.type === "relink" && m.id) {
-          if (!relink(String(m.id))) { vscode.window.showErrorMessage("연결 저장에 실패했어요(파일 잠김/권한?). 잠시 후 다시 시도하세요."); return; }
+          if (!relink(String(m.id))) { vscode.window.showErrorMessage(tE("연결 저장에 실패했어요(파일 잠김/권한?). 잠시 후 다시 시도하세요.","Failed to save the link (file locked/permission?). Try again shortly.")); return; }
           this.post();
           vscode.commands.executeCommand("codexBridge.refresh");
         }
@@ -1027,12 +1106,12 @@ class Dashboard {
           const id = String(m.id);
           const ws = dashboardWorkspace();
           const linked = !!ws && workspaceLink(loadLinks(), ws)?.codexSession === id;
-          const warn = linked ? "이 세션은 지금 이 프로젝트에 연결돼 있습니다. 숨기면 이 프로젝트의 연결만 해제됩니다(다른 프로젝트 연결은 유지).\n\n" : "";
+          const warn = linked ? tE("이 세션은 지금 이 프로젝트에 연결돼 있습니다. 숨기면 이 프로젝트의 연결만 해제됩니다(다른 프로젝트 연결은 유지).\n\n","This session is linked to this project. Hiding it only unlinks it here (links in other projects are kept).\n\n") : "";
           vscode.window
-            .showWarningMessage(`${warn}이 Codex 세션을 목록에서 숨길까요?\n(${id.slice(0, 8)}… · 원본 파일은 지우지 않으며 '숨긴 세션 보기'에서 복원 가능)`, { modal: true }, "숨기기")
+            .showWarningMessage(warn + tE(`이 Codex 세션을 목록에서 숨길까요?\n`,`Hide this Codex session from the list?\n`) + `(${id.slice(0, 8)}…` + tE(` · 원본 파일은 지우지 않으며 '숨긴 세션 보기'에서 복원 가능)`,` · file is kept; restorable under hidden sessions)`), { modal: true }, tE("숨기기","Hide"))
             .then((pick) => {
-              if (pick !== "숨기기") return;
-              if (linked && ws && !unlinkSession(id, ws)) { vscode.window.showErrorMessage("연결 해제 저장에 실패했어요(파일 잠김/권한?). 숨김을 보류합니다."); return; }
+              if (pick !== tE("숨기기","Hide")) return;
+              if (linked && ws && !unlinkSession(id, ws)) { vscode.window.showErrorMessage(tE("연결 해제 저장에 실패했어요(파일 잠김/권한?). 숨김을 보류합니다.","Failed to save the unlink (file locked/permission?). Hide postponed.")); return; }
               setSessionHidden(id, true);
               this.post();
               vscode.commands.executeCommand("codexBridge.refresh");
@@ -1046,21 +1125,21 @@ class Dashboard {
           const id = String(m.id);
           const others = workspacesLinking(id); // 이 세션을 연결한 모든 프로젝트(파일은 전역 자원)
           const warn = others.length > 1
-            ? `이 세션은 ${others.length}개 프로젝트에서 연결해 쓰고 있어요. 삭제하면 그 프로젝트들에서도 사라집니다.\n\n`
+            ? tE(`이 세션은 ${others.length}개 프로젝트에서 연결해 쓰고 있어요. 삭제하면 그 프로젝트들에서도 사라집니다.\n\n`,`This session is linked in ${others.length} projects. Deleting removes it from those too.\n\n`)
             : others.length === 1
-              ? "이 세션은 한 프로젝트에 연결돼 있어요. 삭제하면 그 연결도 해제됩니다.\n\n"
+              ? tE("이 세션은 한 프로젝트에 연결돼 있어요. 삭제하면 그 연결도 해제됩니다.\n\n","This session is linked in one project. Deleting also unlinks it.\n\n")
               : "";
           vscode.window
-            .showWarningMessage(`${warn}이 Codex 세션을 영구 삭제할까요?\n(${id.slice(0, 8)}… · 대화 원본 파일이 지워지며 되돌릴 수 없습니다)`, { modal: true }, "영구 삭제")
+            .showWarningMessage(warn + tE(`이 Codex 세션을 영구 삭제할까요?\n`,`Permanently delete this Codex session?\n`) + `(${id.slice(0, 8)}…` + tE(` · 대화 원본 파일이 지워지며 되돌릴 수 없습니다)`,` · the conversation file is removed; this cannot be undone)`), { modal: true }, tE("영구 삭제","Delete permanently"))
             .then((pick) => {
-              if (pick !== "영구 삭제") return;
+              if (pick !== tE("영구 삭제","Delete permanently")) return;
               if (!purgeRollout(id)) { // 삭제 실패(잠김/권한) → 메타 그대로 두고 알림(거짓 삭제 방지)
-                vscode.window.showErrorMessage("세션 파일을 삭제하지 못했어요(파일 잠김/권한?). 목록은 그대로 둡니다.");
+                vscode.window.showErrorMessage(tE("세션 파일을 삭제하지 못했어요(파일 잠김/권한?). 목록은 그대로 둡니다.","Could not delete the session file (locked/permission?). The list is unchanged."));
                 return;
               }
               // 파일이 전역 삭제됐으니 모든 워크스페이스 링크 제거(dangling 방지). 파일은 이미 사라졌으므로
               // 링크 정리 저장이 실패해도 되돌릴 수 없다 → 경고만 하고 진행(남은 링크는 resume 시 곱게 실패).
-              if (!unlinkSessionEverywhere(id)) vscode.window.showWarningMessage("세션은 삭제됐지만 연결 기록 정리에 실패했어요(파일 잠김/권한?). 남은 연결은 다음에 정리됩니다.");
+              if (!unlinkSessionEverywhere(id)) vscode.window.showWarningMessage(tE("세션은 삭제됐지만 연결 기록 정리에 실패했어요(파일 잠김/권한?). 남은 연결은 다음에 정리됩니다.","Session deleted, but link records could not be cleaned (locked/permission?). Remaining links will be cleaned later."));
               setSessionHidden(id, false); // 사라진 세션의 숨김 메타 정리
               this.post();
               vscode.commands.executeCommand("codexBridge.refresh");
@@ -1068,17 +1147,19 @@ class Dashboard {
         }
         if (m?.type === "saveModelPref") {
           const ok = setModelPref(dashboardWorkspace() || "", String(m.model || ""), String(m.reasoning || ""));
-          if (!ok) vscode.window.showErrorMessage("두뇌 설정 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 저장해 주세요.");
+          if (!ok) vscode.window.showErrorMessage(tE("두뇌 설정 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 저장해 주세요.","Failed to save brain settings — file locked or inaccessible. Try again shortly."));
           this.post();
           this.panel?.webview.postMessage({ type: "saveResult", target: "model", ok });
         }
         if (m?.type === "saveVerifyTimeout") {
           const ok = setVerifyTimeout(Number(m.min));
-          if (!ok) vscode.window.showErrorMessage("검증 대기시간 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 시도해 주세요.");
+          if (!ok) vscode.window.showErrorMessage(tE("검증 대기시간 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 시도해 주세요.","Failed to save verify timeout — file locked or inaccessible. Try again shortly."));
           this.post();
           this.panel?.webview.postMessage({ type: "saveResult", target: "timeout", ok });
         }
         if (m?.type === "saveContract") {
+          // lang = 웹뷰가 '화면에 렌더했던 언어'(보던 슬롯) — 저장 도중 전역 언어가 바뀌었어도 보던 슬롯에 저장(오염 방지).
+          const slotLang: Lang | undefined = m.lang === "ko" || m.lang === "en" ? m.lang : undefined;
           const ok = saveContract(dashboardWorkspace(), {
             claude: Array.isArray(m.claude) ? m.claude : [],
             codex: Array.isArray(m.codex) ? m.codex : [],
@@ -1086,19 +1167,21 @@ class Dashboard {
             codexChecklist: !!m.codexChecklist,
             verifyMode: normVerifyMode({ verifyMode: m.verifyMode }),
             claudeInjectMode: normInjectMode({ claudeInjectMode: m.claudeInjectMode }),
-          });
-          if (!ok) vscode.window.showErrorMessage("설정 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 저장해 주세요(기존 설정은 그대로 유지됩니다).");
+          }, slotLang);
+          if (!ok) vscode.window.showErrorMessage(tE("설정 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 저장해 주세요(기존 설정은 그대로 유지됩니다).","Failed to save settings — file locked or inaccessible. Try again shortly (existing settings are kept)."));
           this.post();
           this.panel?.webview.postMessage({ type: "saveResult", target: "contract", ok });
         }
         if (m?.type === "saveBase") {
           let ok = false;
           try {
-            ok = bridgeLib()?.saveBaseDirective?.({ verifyBaseline: m.verifyBaseline, transmit: m.transmit, rejudge: m.rejudge }) === true;
+            // lang = 보던 슬롯(계약 저장과 동일 원리). 구 런타임 lib은 2번째 인자를 무시(=기존 동작·무해).
+            const slotLang = m.lang === "ko" || m.lang === "en" ? m.lang : undefined;
+            ok = bridgeLib()?.saveBaseDirective?.({ verifyBaseline: m.verifyBaseline, transmit: m.transmit, rejudge: m.rejudge }, slotLang) === true;
           } catch {
             ok = false;
           }
-          if (!ok) vscode.window.showErrorMessage("단계별 기본 원칙 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 시도해 주세요.");
+          if (!ok) vscode.window.showErrorMessage(tE("단계별 기본 원칙 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 시도해 주세요.","Failed to save stage baselines — file locked or inaccessible. Try again shortly."));
           this.post();
           this.panel?.webview.postMessage({ type: "saveResult", target: "base", ok });
         }
@@ -1109,20 +1192,22 @@ class Dashboard {
           // webview는 포커스를 안 건드림(blur/refocus 없음) → 편집/저장 흐름 보존. 숨겨 강제주입 대신 공개·동의.
           const isVerify = m.field === "verify";
           const msg = isVerify
-            ? "'검증 기본원칙'은 Codex가 어떻게 검증할지(파일을 직접 열고·빠뜨리지 말고·범위를 넓혀 보라)와 결론을 쓰는 형식을 함께 정합니다.\n\n줄이거나 바꾸면 Codex 검증이 느슨해질 수 있고, 대시보드의 'Codex 검증 대화' 영역에 뜨는 통과/보완/보류/실패 색 표시와 결론·근거 경고가 동작하지 않을 수 있어요.\n\n그래도 변경하시겠습니까?"
-            : "이 원칙은 Claude가 검증을 주고받고(전달) 결과를 다시 판단하는(재판단) 흐름에 직접 관여합니다.\n\n줄이거나 바꾸면 검증의 완전한 동작을 보장하지 못할 수 있어요.\n\n그래도 변경하시겠습니까?";
-          vscode.window.showWarningMessage(msg, { modal: true }, "변경").then((pick) => {
-            this.panel?.webview.postMessage({ type: "baseEditWarnResult", field: m.field, ok: pick === "변경" });
+            ? tE("'검증 기본원칙'은 Codex가 어떻게 검증할지(파일을 직접 열고·빠뜨리지 말고·범위를 넓혀 보라)와 결론을 쓰는 형식을 함께 정합니다.\n\n줄이거나 바꾸면 Codex 검증이 느슨해질 수 있고, 대시보드의 'Codex 검증 대화' 영역에 뜨는 통과/보완/보류/실패 색 표시와 결론·근거 경고가 동작하지 않을 수 있어요.\n\n그래도 변경하시겠습니까?","The verification baseline defines how Codex verifies (open files, skip nothing, widen scope) AND the verdict format.\n\nWeakening it can loosen verification, and the pass/notes/hold/fail chips and evidence alerts in the dashboard may stop working.\n\nChange it anyway?")
+            : tE("이 원칙은 Claude가 검증을 주고받고(전달) 결과를 다시 판단하는(재판단) 흐름에 직접 관여합니다.\n\n줄이거나 바꾸면 검증의 완전한 동작을 보장하지 못할 수 있어요.\n\n그래도 변경하시겠습니까?","This principle directly drives how Claude hands off verification (transmission) and re-judges the result.\n\nWeakening it may break the full verification behavior.\n\nChange it anyway?");
+          vscode.window.showWarningMessage(msg, { modal: true }, tE("변경","Change")).then((pick) => {
+            this.panel?.webview.postMessage({ type: "baseEditWarnResult", field: m.field, ok: pick === tE("변경","Change") });
           });
         }
         if (m?.type === "resetBase") {
           let ok = false;
           try {
-            ok = bridgeLib()?.resetBaseDirective?.() === true;
+            // lang = 보던 슬롯 — 그 언어의 오버라이드만 기본값 복원(다른 언어 오버라이드 보존).
+            const slotLang = m.lang === "ko" || m.lang === "en" ? m.lang : undefined;
+            ok = bridgeLib()?.resetBaseDirective?.(slotLang) === true;
           } catch {
             ok = false;
           }
-          if (!ok) vscode.window.showErrorMessage("기본값 복원 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 시도해 주세요.");
+          if (!ok) vscode.window.showErrorMessage(tE("기본값 복원 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 시도해 주세요.","Failed to restore defaults — file locked or inaccessible. Try again shortly."));
           this.post();
           this.panel?.webview.postMessage({ type: "saveResult", target: "base", ok });
         }
@@ -1140,7 +1225,7 @@ class Dashboard {
         if (m?.type === "ackIntegrity") {
           // 무결성 경보 확인(해제). id 배열이면 그것만, 없으면 전체.
           const ok = ackIntegrity(Array.isArray(m.ids) ? m.ids : "all"); // 빈 배열([])은 그대로 → no-op. 배너가 session-missing만 빼 []를 보낼 때 'all'로 변질돼 전체(다른 빨강 포함)가 ack되던 회귀 방지.
-          if (!ok) vscode.window.showErrorMessage("무결성 경보 확인 저장 실패 — 파일이 잠겨 있을 수 있어요. 잠시 후 다시 시도해 주세요.");
+          if (!ok) vscode.window.showErrorMessage(tE("무결성 경보 확인 저장 실패 — 파일이 잠겨 있을 수 있어요. 잠시 후 다시 시도해 주세요.","Failed to save alert acknowledgement — the file may be locked. Try again shortly."));
           this.post();
           this.onChange?.(); // 상태바도 즉시 갱신(watcher 지연/누락에 안 기댐) → 빨강 경보 바로 해제
         }
@@ -1154,10 +1239,19 @@ class Dashboard {
   }
 
   post(): void {
+    // 언어가 바뀌었으면(이 창 토글이든 다른 창이든 — BRIDGE_DIR watch로 post가 불림) 웹뷰 HTML을 새 언어로 재생성.
+    // 정적 라벨은 html() 생성 시 t(ko,en)로 박히므로 재생성이 전환 방법이다(전환은 드묾 — 펼침 상태 리셋 수용).
+    if (this.panel && this.htmlLang !== loadLangExt()) this.panel.webview.html = this.html(this.panel.webview);
     this.panel?.webview.postMessage({ type: "data", data: computeState(this.turnsN()) });
   }
+  private htmlLang: Lang | null = null; // 현재 웹뷰 HTML이 렌더된 언어(재생성 판단)
 
   private html(webview: vscode.Webview): string {
+    // UI 언어: 정적 라벨은 t(ko,en)으로 생성 시 결정, 동적(JS) 라벨은 주입되는 EN 상수+t()로 동일 언어 유지.
+    const uiLang = loadLangExt();
+    this.htmlLang = uiLang;
+    const EN = uiLang === "en";
+    const t = (ko: string, en: string): string => (EN ? en : ko);
     const nonce = getNonce();
     const csp = [
       "default-src 'none'",
@@ -1198,7 +1292,11 @@ class Dashboard {
   .rchip.opt{color:var(--vscode-charts-blue);border-color:var(--vscode-charts-blue);font-weight:700}
   .card{border:1px solid var(--vscode-panel-border);border-radius:10px;padding:16px 18px;background:var(--vscode-sideBar-background);margin-bottom:18px;box-shadow:0 1px 3px rgba(0,0,0,.07)}
   .muted{color:var(--vscode-descriptionForeground);font-size:12px}
-  .tabbar{display:inline-flex;gap:3px;margin:4px 0 18px;padding:3px;background:var(--vscode-editorWidget-background);border:1px solid var(--vscode-panel-border);border-radius:10px}
+  .tabbar{display:flex;align-items:center;gap:3px;margin:4px 0 18px;padding:3px;background:var(--vscode-editorWidget-background);border:1px solid var(--vscode-panel-border);border-radius:10px}
+  .langseg{margin-left:auto;display:inline-flex;gap:2px;padding:2px;border:1px solid var(--vscode-panel-border);border-radius:8px}
+  .langbtn{background:none;border:none;color:var(--vscode-descriptionForeground);padding:5px 12px;cursor:pointer;font-size:12px;border-radius:6px;font-weight:600}
+  .langbtn:hover{color:var(--vscode-foreground)}
+  .langbtn.on{color:#fff;background:var(--vscode-charts-purple)}
   .tabbtn{background:none;border:none;color:var(--vscode-descriptionForeground);padding:8px 18px;cursor:pointer;font-size:13px;border-radius:7px;font-weight:600;display:flex;align-items:center;gap:6px;transition:background .12s}
   .tabbtn:hover{color:var(--vscode-foreground)}
   .tabbtn.active{color:#fff;background:var(--vscode-charts-blue);box-shadow:0 1px 5px color-mix(in srgb,var(--vscode-charts-blue) 45%,transparent)}
@@ -1416,29 +1514,33 @@ class Dashboard {
 </style></head>
 <body><main class="shell">
   <nav class="tabbar">
-    <button type="button" class="tabbtn active" data-tab="main">📋 현황</button>
-    <button type="button" class="tabbtn" data-tab="stats">📊 검증 통계</button>
+    <button type="button" class="tabbtn active" data-tab="main">${t("📋 현황", "📋 Status")}</button>
+    <button type="button" class="tabbtn" data-tab="stats">${t("📊 검증 통계", "📊 Verify Stats")}</button>
+    <span class="langseg" title="${t("전역 언어 — UI·주입 지침·규칙 슬롯의 언어(모든 프로젝트 공통)", "Global language — UI · injected directives · rule slots (shared by all projects)")}">
+      <button type="button" class="langbtn" id="langKo" data-lang="ko">한국어</button>
+      <button type="button" class="langbtn" id="langEn" data-lang="en">English</button>
+    </span>
   </nav>
   <div id="tab-main" class="tab-panel active">
   <section class="onboard" id="onboard" style="display:none">
-    <button type="button" id="obReopen" class="obreopen" style="display:none">시작하기 다시 보기</button>
+    <button type="button" id="obReopen" class="obreopen" style="display:none">${t("시작하기 다시 보기", "Show Getting Started again")}</button>
     <div id="obMain">
-      <div class="obhead"><span id="obTitle">시작하기</span><button type="button" id="obClose" class="obclose secondary" style="display:none">끄기 ✕</button></div>
+      <div class="obhead"><span id="obTitle">${t("시작하기", "Getting started")}</span><button type="button" id="obClose" class="obclose secondary" style="display:none">${t("끄기 ✕", "Dismiss ✕")}</button></div>
       <div id="obSteps">
         <div class="obstep" id="ob1"></div>
         <div class="obstep" id="ob2"></div>
         <div class="obstep" id="ob3"></div>
       </div>
-      <div id="obDone" class="obdone" style="display:none">준비 끝 ✓ — 이제 매 턴 자동으로 검증됩니다.</div>
+      <div id="obDone" class="obdone" style="display:none">${t("준비 끝 ✓ — 이제 매 턴 자동으로 검증됩니다.", "All set ✓ — every turn is now verified automatically.")}</div>
     </div>
   </section>
 
-  <div class="top"><h1><span class="brand"></span>Codex Bridge <span class="sub">Claude ⇄ Codex 자동 연결·검증</span></h1><button id="refresh" class="secondary">↻ 새로고침</button></div>
+  <div class="top"><h1><span class="brand"></span>Codex Bridge <span class="sub">${t("Claude ⇄ Codex 자동 연결·검증", "Claude ⇄ Codex auto link & verify")}</span></h1><button id="refresh" class="secondary">${t("↻ 새로고침", "↻ Refresh")}</button></div>
 
   <div class="hero">
-    <div class="agent claude"><div class="mono c">C</div><div class="nm">Claude</div><div class="ro">구현 · implement</div></div>
-    <div class="link" id="linkViz"><div class="bar"></div><div class="emo" id="linkEmo">●</div><div class="st" id="linkState">연결 없음</div></div>
-    <div class="agent codex"><div class="mono x">Cx</div><div class="nm">Codex</div><div class="ro">검증 · verify</div></div>
+    <div class="agent claude"><div class="mono c">C</div><div class="nm">Claude</div><div class="ro">${t("구현 · implement", "implement")}</div></div>
+    <div class="link" id="linkViz"><div class="bar"></div><div class="emo" id="linkEmo">●</div><div class="st" id="linkState">${t("연결 없음", "Not linked")}</div></div>
+    <div class="agent codex"><div class="mono x">Cx</div><div class="nm">Codex</div><div class="ro">${t("검증 · verify", "verify")}</div></div>
   </div>
   <div id="status" class="statusline"></div>
 
@@ -1453,153 +1555,154 @@ class Dashboard {
     <div class="lsstage" id="lsStage"></div>
   </div>
 
-  <h2 class="sec claude">Claude 규칙 <span class="to claude">→ Claude에게</span> <span class="sub2">Claude가 지킬 행동규칙 — 검증과 별개</span></h2>
+  <h2 class="sec claude">${t("Claude 규칙", "Claude Rules")} <span class="to claude">${t("→ Claude에게", "→ to Claude")}</span> <span class="sub2">${t("Claude가 지킬 행동규칙 — 검증과 별개", "Behavior rules Claude must follow — separate from verification")}</span></h2>
   <div class="card">
+    <div class="hint" id="slotNote" style="display:none;border-left:3px solid var(--vscode-charts-purple);padding-left:10px"></div>
     <div class="cblock claude">
-      <div class="chead">규칙 <span class="muted" style="font-weight:400">· 기본 원칙 말고, 이 프로젝트에만 필요한 것</span></div>
-      <textarea id="cClaude" rows="3" placeholder="예) 이 레포에선 ○○ 라이브러리·패턴 쓰지 마라&#10;예) 보고는 기술용어 빼고 예시로 정리해라&#10;예) 플랜 모드로 쓸 때: 영향받는 호출부·마이그레이션 순서를 플랜에 포함해라"></textarea>
-      <div class="rulemeta"><span class="rchip opt">선택</span><span class="rchip">⏎ 한 줄 = 규칙 1개</span><span class="rchip">∅ 비우면 이 칸의 규칙만 안 붙음</span></div>
-      <label class="ck"><input type="checkbox" id="ckClaude"> 체크리스트 강제 — 각 규칙마다 [준수/위반+근거] 달게 함</label>
-      <div class="hint">☑ 켜짐 → 답변 끝에 <code>[계약점검] 1) 준수 — &lt;근거&gt; / 2) 위반 — &lt;근거&gt;</code> 형식으로 규칙별 자가보고를 강제 · ☐ 꺼짐 → 규칙 텍스트만 주입</div>
+      <div class="chead">${t("규칙", "Rules")} <span class="muted" style="font-weight:400">${t("· 기본 원칙 말고, 이 프로젝트에만 필요한 것", "· not the baseline — only what this project needs")}</span></div>
+      <textarea id="cClaude" rows="3" placeholder="${t("예) 이 레포에선 ○○ 라이브러리·패턴 쓰지 마라&#10;예) 보고는 기술용어 빼고 예시로 정리해라&#10;예) 플랜 모드로 쓸 때: 영향받는 호출부·마이그레이션 순서를 플랜에 포함해라", "e.g.) Do not use the ○○ library/pattern in this repo&#10;e.g.) Report with examples, not jargon&#10;e.g.) In plan mode: include affected call sites & migration order in the plan")}"></textarea>
+      <div class="rulemeta"><span class="rchip opt">${t("선택", "optional")}</span><span class="rchip">${t("⏎ 한 줄 = 규칙 1개", "⏎ one line = one rule")}</span><span class="rchip">${t("∅ 비우면 이 칸의 규칙만 안 붙음", "∅ empty = this box injects nothing")}</span></div>
+      <label class="ck"><input type="checkbox" id="ckClaude"> ${t("체크리스트 강제 — 각 규칙마다 [준수/위반+근거] 달게 함", "Enforce checklist — require [complies/violated + reason] per rule")}</label>
+      <div class="hint">${t("☑ 켜짐 → 답변 끝에 <code>[계약점검] 1) 준수 — &lt;근거&gt; / 2) 위반 — &lt;근거&gt;</code> 형식으로 규칙별 자가보고를 강제 · ☐ 꺼짐 → 규칙 텍스트만 주입", "☑ on → forces a per-rule self-report block <code>[Contract Check] 1) complies — &lt;reason&gt;</code> at the end of each answer · ☐ off → injects rule text only")}</div>
     </div>
-    <label class="ck verify">넣는 시점 — 이 규칙을 <b>언제</b> Claude에 넣을지 <span id="planNow" class="nowbadge" style="display:none"></span>
+    <label class="ck verify">${t("넣는 시점 — 이 규칙을 <b>언제</b> Claude에 넣을지", "Injection timing — <b>when</b> to inject these rules into Claude")} <span id="planNow" class="nowbadge" style="display:none"></span>
       <span class="seg" id="segInject">
-        <button type="button" data-im="off">꺼짐<small>안 넣음</small></button><button type="button" data-im="plan">플랜 모드<small>플랜 때만</small></button><button type="button" data-im="always">항상<small>매 턴</small></button>
+        <button type="button" data-im="off">${t("꺼짐<small>안 넣음</small>", "Off<small>never</small>")}</button><button type="button" data-im="plan">${t("플랜 모드<small>플랜 때만</small>", "Plan mode<small>plan only</small>")}</button><button type="button" data-im="always">${t("항상<small>매 턴</small>", "Always<small>every turn</small>")}</button>
       </span>
     </label>
-    <div class="hint"><span class="ic" title="플랜 모드 = Claude Code에서 shift+Tab으로 켜는 '계획 먼저 세우기' 모드. '플랜 모드'를 고르면 그 모드로 일할 때만 이 규칙이 들어갑니다.">ⓘ 플랜 모드란?</span> · <span class="ic" title="'코드 변경 시'가 없는 이유: 코드 변경은 턴이 끝나야 아는 신호라, 턴 시작에 넣는 이 축에선 못 씁니다. 검증 모드와 무관한 별도 축이에요.">ⓘ '코드 변경 시'가 없는 이유</span></div>
+    <div class="hint"><span class="ic" title="${t("플랜 모드 = Claude Code에서 shift+Tab으로 켜는 '계획 먼저 세우기' 모드. '플랜 모드'를 고르면 그 모드로 일할 때만 이 규칙이 들어갑니다.", "Plan mode = Claude Code's plan-first mode (shift+Tab). Choosing 'Plan mode' injects these rules only while working in that mode.")}">ⓘ ${t("플랜 모드란?", "What is plan mode?")}</span> · <span class="ic" title="${t("'코드 변경 시'가 없는 이유: 코드 변경은 턴이 끝나야 아는 신호라, 턴 시작에 넣는 이 축에선 못 씁니다. 검증 모드와 무관한 별도 축이에요.", "Why no 'on code change' here: code changes are only known when a turn ends, so a turn-start injection can't use it. This axis is independent of verify mode.")}">ⓘ ${t("'코드 변경 시'가 없는 이유", "Why no 'on code change'?")}</span></div>
   </div>
 
-  <h2 class="sec codex">검증 <span class="to codex">→ Codex</span> <span class="sub2">Codex에게 검증받기 — 끄면 검증만 안 함(Claude 규칙은 별개)</span></h2>
+  <h2 class="sec codex">${t("검증", "Verification")} <span class="to codex">→ Codex</span> <span class="sub2">${t("Codex에게 검증받기 — 끄면 검증만 안 함(Claude 규칙은 별개)", "Get verified by Codex — turning this off only disables verification (Claude rules are separate)")}</span></h2>
   <div class="card">
     <div class="cblock codex">
-      <div class="chead">Codex 규칙 <span class="muted" style="font-weight:400">· 기본 검증원칙 말고, 이 프로젝트에서 특히 볼 것 · Codex 검증 때마다 붙음</span></div>
-      <textarea id="cCodex" rows="3" placeholder="예) 동시성·레이스 컨디션을 중점으로 봐라&#10;예) 결제·정산은 중복 청구·반올림 오차·롤백까지 확인해라&#10;예) 단순 포맷·스타일 지적은 검증에서 빼라"></textarea>
-      <div class="rulemeta"><span class="rchip opt">선택</span><span class="rchip">⏎ 한 줄 = 규칙 1개</span><span class="rchip">∅ 비우면 이 칸의 규칙만 안 붙음</span></div>
-      <label class="ck"><input type="checkbox" id="ckCodex"> 체크리스트 강제 — 검증 답에 규칙별 [준수/위반+근거] 달게 함</label>
-      <div class="hint">☑ 켜짐 → Codex 검증 답에도 규칙별 <code>[계약점검]</code> 자가보고 강제 · ☐ 꺼짐 → 규칙 텍스트만 붙음</div>
+      <div class="chead">${t("Codex 규칙", "Codex Rules")} <span class="muted" style="font-weight:400">${t("· 기본 검증원칙 말고, 이 프로젝트에서 특히 볼 것 · Codex 검증 때마다 붙음", "· not the baseline — what to focus on in this project · attached to every Codex verification")}</span></div>
+      <textarea id="cCodex" rows="3" placeholder="${t("예) 동시성·레이스 컨디션을 중점으로 봐라&#10;예) 결제·정산은 중복 청구·반올림 오차·롤백까지 확인해라&#10;예) 단순 포맷·스타일 지적은 검증에서 빼라", "e.g.) Focus on concurrency & race conditions&#10;e.g.) For payments: check double-charging, rounding, rollback&#10;e.g.) Exclude pure formatting/style nits from verification")}"></textarea>
+      <div class="rulemeta"><span class="rchip opt">${t("선택", "optional")}</span><span class="rchip">${t("⏎ 한 줄 = 규칙 1개", "⏎ one line = one rule")}</span><span class="rchip">${t("∅ 비우면 이 칸의 규칙만 안 붙음", "∅ empty = this box injects nothing")}</span></div>
+      <label class="ck"><input type="checkbox" id="ckCodex"> ${t("체크리스트 강제 — 검증 답에 규칙별 [준수/위반+근거] 달게 함", "Enforce checklist — require [complies/violated + reason] per rule in verification answers")}</label>
+      <div class="hint">${t("☑ 켜짐 → Codex 검증 답에도 규칙별 <code>[계약점검]</code> 자가보고 강제 · ☐ 꺼짐 → 규칙 텍스트만 붙음", "☑ on → Codex answers must include a per-rule <code>[Contract Check]</code> self-report · ☐ off → rule text only")}</div>
     </div>
-    <label class="ck verify">검증 모드 — <b>언제</b> Codex 검증→보고를 강제할지
+    <label class="ck verify">${t("검증 모드 — <b>언제</b> Codex 검증→보고를 강제할지", "Verify mode — <b>when</b> to force the Codex verify→report loop")}
       <span class="seg" id="segVerify">
-        <button type="button" data-vm="off">꺼짐<small>강제 안 함</small></button><button type="button" data-vm="code">코드 변경 시<small>편집한 턴</small></button><button type="button" data-vm="plancode">플랜 확정/코드 변경<small>플랜·편집 턴</small></button><button type="button" data-vm="always">모든 턴<small>매 응답</small></button>
+        <button type="button" data-vm="off">${t("꺼짐<small>강제 안 함</small>", "Off<small>not forced</small>")}</button><button type="button" data-vm="code">${t("코드 변경 시<small>편집한 턴</small>", "On code change<small>edited turns</small>")}</button><button type="button" data-vm="plancode">${t("플랜 확정/코드 변경<small>플랜·편집 턴</small>", "Plan confirm/code<small>plan·edit turns</small>")}</button><button type="button" data-vm="always">${t("모든 턴<small>매 응답</small>", "Every turn<small>all replies</small>")}</button>
       </span>
     </label>
-    <div class="hint"><span class="ic" title="플랜 확정 = 플랜 모드(shift+Tab)에서 세운 계획을 확정·제출하는 그 턴(ExitPlanMode). 플랜 모드 '내내'가 아니라 확정하는 '순간'이에요. '플랜 확정/코드 변경'은 이 플랜 확정 턴이거나 파일을 바꾼 턴에 검증을 강제합니다.">ⓘ '플랜 확정'이 뭐야?</span> · <span class="ic" title="검증이 필요한 턴은 선택한 모드가 정해요. 모든 턴=매 답변, 코드 변경 시=파일을 만든/고친 턴, 플랜 확정/코드 변경=플랜을 확정했거나 파일을 고친 턴. 그 턴엔 Codex 검증 결과를 반영해 보고해야 끝낼 수 있어요.">ⓘ 언제 검증되나?</span></div>
+    <div class="hint"><span class="ic" title="${t("플랜 확정 = 플랜 모드(shift+Tab)에서 세운 계획을 확정·제출하는 그 턴(ExitPlanMode). 플랜 모드 '내내'가 아니라 확정하는 '순간'이에요. '플랜 확정/코드 변경'은 이 플랜 확정 턴이거나 파일을 바꾼 턴에 검증을 강제합니다.", "Plan confirm = the turn that submits the plan (ExitPlanMode) — the moment of confirming, not the whole plan mode. 'Plan confirm/code' forces verification on that turn or on file-changing turns.")}">ⓘ ${t("'플랜 확정'이 뭐야?", "What is 'plan confirm'?")}</span> · <span class="ic" title="${t("검증이 필요한 턴은 선택한 모드가 정해요. 모든 턴=매 답변, 코드 변경 시=파일을 만든/고친 턴, 플랜 확정/코드 변경=플랜을 확정했거나 파일을 고친 턴. 그 턴엔 Codex 검증 결과를 반영해 보고해야 끝낼 수 있어요.", "The selected mode decides which turns require verification. Every turn = all replies; on code change = turns that create/modify files; plan confirm/code = plan-confirm or file-changing turns. Those turns can only finish after reporting with Codex verification.")}">ⓘ ${t("언제 검증되나?", "When is it verified?")}</span></div>
     <div class="stagebox" id="stageBox">
-      <div class="sbhead">↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요 <span class="muted" style="font-weight:400">· 지금 검증: <b id="sbState">—</b> · 내용은 아래 단계별 기본 원칙에서</span></div>
-      <div class="sbrow" id="sbTransmit"><span class="sbmark"></span><b>① Claude→Codex 넘길 때</b> · 전달 원칙 <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
-      <div class="sbrow" id="sbVerify"><span class="sbmark"></span><b>② Codex가 검증할 때</b> · 검증 기본원칙 + Codex 규칙 <span class="who2 codex">Codex</span> <span class="sbwhy"></span></div>
-      <div class="sbrow" id="sbRejudge"><span class="sbmark"></span><b>③ Codex 답을 되짚을 때</b> · 재판단 원칙 <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
+      <div class="sbhead">${t("↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요", "↑ With verification on, the <b>stage baselines</b> apply at each step of the flow")} <span class="muted" style="font-weight:400">${t("· 지금 검증:", "· verify now:")} <b id="sbState">—</b> ${t("· 내용은 아래 단계별 기본 원칙에서", "· see Stage Baselines below for the text")}</span></div>
+      <div class="sbrow" id="sbTransmit"><span class="sbmark"></span><b>${t("① Claude→Codex 넘길 때", "① When Claude hands off to Codex")}</b> ${t("· 전달 원칙", "· transmission principles")} <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
+      <div class="sbrow" id="sbVerify"><span class="sbmark"></span><b>${t("② Codex가 검증할 때", "② When Codex verifies")}</b> ${t("· 검증 기본원칙 + Codex 규칙", "· verification baseline + Codex rules")} <span class="who2 codex">Codex</span> <span class="sbwhy"></span></div>
+      <div class="sbrow" id="sbRejudge"><span class="sbmark"></span><b>${t("③ Codex 답을 되짚을 때", "③ When re-judging Codex's answer")}</b> ${t("· 재판단 원칙", "· re-judgment principles")} <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
     </div>
   </div>
-  <div class="row"><button id="saveC">저장</button><span id="savedAt" class="muted">· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장</span></div>
+  <div class="row"><button id="saveC">${t("저장", "Save")}</button><span id="savedAt" class="muted">${t("· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장", "· saves the Claude rules, Codex rules and verify mode together")}</span></div>
 
-  <h2 class="sec">한눈에 보기 <span class="sub2">누구에게 · 뭐가 · 언제 들어가나 — 지금 저장된 설정 기준 (저장하면 바뀐 곳이 깜빡여요)</span></h2>
+  <h2 class="sec">${t("한눈에 보기", "At a Glance")} <span class="sub2">${t("누구에게 · 뭐가 · 언제 들어가나 — 지금 저장된 설정 기준 (저장하면 바뀐 곳이 깜빡여요)", "who gets what, and when — based on saved settings (changes flash on save)")}</span></h2>
   <section class="flowmap card" id="fmSection">
     <div class="flow">
-      <div class="fnode rule">Claude<br>규칙</div>
-      <div class="farrow" id="faInject"><span class="lbl">넣는 시점<br><b id="faInjectVal">항상</b></span><span class="ln"></span></div>
-      <div class="fnode actor claude"><span class="mono c">C</span>Claude<small>구현</small></div>
-      <div class="farrow off" id="faVerify"><span class="lbl">검증 맡김<br><b id="faVerifyVal">안 함</b></span><span class="ln"></span></div>
-      <div class="fnode actor codex"><span class="mono x">Cx</span>Codex<small>검증</small></div>
+      <div class="fnode rule">${t("Claude<br>규칙", "Claude<br>rules")}</div>
+      <div class="farrow" id="faInject"><span class="lbl">${t("넣는 시점", "inject when")}<br><b id="faInjectVal">${t("항상", "always")}</b></span><span class="ln"></span></div>
+      <div class="fnode actor claude"><span class="mono c">C</span>Claude<small>${t("구현", "implement")}</small></div>
+      <div class="farrow off" id="faVerify"><span class="lbl">${t("검증 맡김", "verify when")}<br><b id="faVerifyVal">${t("안 함", "off")}</b></span><span class="ln"></span></div>
+      <div class="fnode actor codex"><span class="mono x">Cx</span>Codex<small>${t("검증", "verify")}</small></div>
     </div>
-    <div class="dirtyhint" id="dirtyHint" style="display:none">● 토글을 바꿨어요 — <b>저장</b>해야 실제로 적용됩니다</div>
+    <div class="dirtyhint" id="dirtyHint" style="display:none">${t("● 토글을 바꿨어요 — <b>저장</b>해야 실제로 적용됩니다", "● Toggles changed — press <b>Save</b> to actually apply")}</div>
   </section>
 
   <details class="card baseline" id="baseDetails" style="margin-top:10px">
-    <summary style="cursor:pointer;font-weight:600;font-size:13px">단계별 기본 원칙 <span class="fixedbadge">고정 기준 · 기본값 내장</span> <span class="muted" style="font-weight:400">· 검증 흐름 3단계의 기본값 (필요할 때만 편집)</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
-    <div style="margin:8px 0 0 0;font-size:12px;line-height:1.55;border-left:3px solid var(--vscode-inputValidation-warningBorder,#c90);background:var(--vscode-inputValidation-warningBackground,rgba(204,153,0,0.12));border-radius:6px;padding:9px 12px">⚠ <b>전역 공통값입니다.</b> 위 <b>Claude·Codex 규칙</b>(프로젝트마다 따로 적용)과 달리, 이건 하네스의 기본 동작을 보장하는 <b>전역 기준</b>이라 <b>여기서 고쳐 저장하면 모든 프로젝트에 공통으로 적용</b>됩니다. 평소엔 손댈 필요 없고, 잘못 고쳐도 아래 <b>기본값 복원</b>으로 되돌아갑니다.</div>
-    <div class="chead" style="margin-top:12px">① 전달 원칙 <span class="muted" style="font-weight:400">→ Claude에게 · Claude가 Codex에 넘길 때 · 검증 ON일 때만</span></div>
+    <summary style="cursor:pointer;font-weight:600;font-size:13px">${t("단계별 기본 원칙", "Stage Baselines")} <span class="fixedbadge">${t("고정 기준 · 기본값 내장", "fixed baseline · defaults built-in")}</span> <span class="muted" style="font-weight:400">${t("· 검증 흐름 3단계의 기본값 (필요할 때만 편집)", "· defaults for the 3 verification stages (edit only if needed)")}</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
+    <div style="margin:8px 0 0 0;font-size:12px;line-height:1.55;border-left:3px solid var(--vscode-inputValidation-warningBorder,#c90);background:var(--vscode-inputValidation-warningBackground,rgba(204,153,0,0.12));border-radius:6px;padding:9px 12px">${t("⚠ <b>전역 공통값입니다.</b> 위 <b>Claude·Codex 규칙</b>(프로젝트마다 따로 적용)과 달리, 이건 하네스의 기본 동작을 보장하는 <b>전역 기준</b>이라 <b>여기서 고쳐 저장하면 모든 프로젝트에 공통으로 적용</b>됩니다. 평소엔 손댈 필요 없고, 잘못 고쳐도 아래 <b>기본값 복원</b>으로 되돌아갑니다.", "⚠ <b>This is a global value.</b> Unlike the <b>Claude/Codex rules</b> above (per-project), this is the <b>global baseline</b> that guarantees the harness's core behavior — <b>editing and saving here applies to every project</b>. Normally you never need to touch it, and <b>Restore defaults</b> below always brings it back.")}</div>
+    <div class="chead" style="margin-top:12px">${t("① 전달 원칙", "① Transmission principles")} <span class="muted" style="font-weight:400">${t("→ Claude에게 · Claude가 Codex에 넘길 때 · 검증 ON일 때만", "→ to Claude · when handing off to Codex · only while verify is ON")}</span></div>
     <textarea id="bTransmit" rows="4"></textarea>
-    <div class="chead" style="margin-top:12px">② 검증 기본원칙 <span class="muted" style="font-weight:400">→ Codex에게 · Codex 검증 때마다</span></div>
+    <div class="chead" style="margin-top:12px">${t("② 검증 기본원칙", "② Verification baseline")} <span class="muted" style="font-weight:400">${t("→ Codex에게 · Codex 검증 때마다", "→ to Codex · on every Codex verification")}</span></div>
     <textarea id="bVerify" rows="5"></textarea>
-    <div class="chead" style="margin-top:12px">③ 재판단 원칙 <span class="muted" style="font-weight:400">→ Claude에게 · Codex 답을 되짚을 때 · 검증 ON일 때만</span></div>
+    <div class="chead" style="margin-top:12px">${t("③ 재판단 원칙", "③ Re-judgment principles")} <span class="muted" style="font-weight:400">${t("→ Claude에게 · Codex 답을 되짚을 때 · 검증 ON일 때만", "→ to Claude · when re-judging Codex's answer · only while verify is ON")}</span></div>
     <textarea id="bRejudge" rows="5"></textarea>
-    <div class="row"><button id="saveB">단계별 기본 원칙 저장</button><button id="resetB" class="secondary">기본값 복원</button><span id="savedB" class="muted"></span></div>
+    <div class="row"><button id="saveB">${t("단계별 기본 원칙 저장", "Save stage baselines")}</button><button id="resetB" class="secondary">${t("기본값 복원", "Restore defaults")}</button><span id="savedB" class="muted"></span></div>
   </details>
-  <h2 class="sec base accent-orange">코덱스 두뇌 설정 <span class="sub2">이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)</span></h2>
+  <h2 class="sec base accent-orange">${t("코덱스 두뇌 설정", "Codex Brain Settings")} <span class="sub2">${t("이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)", "model & reasoning effort Codex uses in this project (applies to the ongoing session too)")}</span></h2>
   <div class="mcard">
-    <div class="muted">지금 쓰는 값(최근 기록): <b id="mCur">—</b></div>
+    <div class="muted">${t("지금 쓰는 값(최근 기록):", "Current values (latest record):")} <b id="mCur">—</b></div>
     <div id="mCacheWarn" class="hint" style="display:none;margin:6px 0 0 0"></div>
     <!-- 코덱스 모델/생각강도 어긋남 인라인 경고(#mDrift) 제거: 두뇌 drift는 무결성 채널(상태바/배너+확인) 단일 경로로 일원화. (ack 불가·정책상이 중복 해소) -->
-    <div class="mrow"><span class="mlbl">모델</span>
-      <select id="mModel" title="이 프로젝트에서 코덱스가 쓸 모델 — 계정에서 받은 목록(없으면 기본값)"></select>
+    <div class="mrow"><span class="mlbl">${t("모델", "Model")}</span>
+      <select id="mModel" title="${t("이 프로젝트에서 코덱스가 쓸 모델 — 계정에서 받은 목록(없으면 기본값)", "Model Codex uses in this project — list comes from your account (default if empty)")}"></select>
     </div>
-    <div class="mrow"><span class="mlbl">생각강도</span>
+    <div class="mrow"><span class="mlbl">${t("생각강도", "Reasoning")}</span>
       <span id="segReason" class="seg"></span>
     </div>
-    <div class="row" style="margin-top:10px"><button id="saveModel">두뇌 설정 저장</button><span id="savedModel" class="muted"></span></div>
-    <div class="muted" style="margin-top:6px">선택은 <b>다음 코덱스 응답부터</b> 적용 · 비우면 코덱스 기본값 · 코덱스에 말 걸 때마다 자동으로 다시 실어줌</div>
+    <div class="row" style="margin-top:10px"><button id="saveModel">${t("두뇌 설정 저장", "Save brain settings")}</button><span id="savedModel" class="muted"></span></div>
+    <div class="muted" style="margin-top:6px">${t("선택은 <b>다음 코덱스 응답부터</b> 적용 · 비우면 코덱스 기본값 · 코덱스에 말 걸 때마다 자동으로 다시 실어줌", "Applies from the <b>next Codex response</b> · empty = Codex default · re-sent automatically on every Codex call")}</div>
   </div>
   <!-- Claude Code 두뇌 관리 카드 제거: 앱 /model·/effort가 이미 settings.json에 영속하고 모델별 effort도 정확히 다룬다(카드는 중복·충돌·effort표 부정확이었음). 모델 계열/추론 어긋남은 상태바 drift 경고로 표시(computeState의 syncBrainDrift). -->
-  <h2 class="sec base accent-teal">검증 대기시간 <span class="sub2">코덱스 검증을 기다리는 한도 — 추론이 길면 늘리세요 (전역·모든 프로젝트 공통)</span></h2>
+  <h2 class="sec base accent-teal">${t("검증 대기시간", "Verify Timeout")} <span class="sub2">${t("코덱스 검증을 기다리는 한도 — 추론이 길면 늘리세요 (전역·모든 프로젝트 공통)", "how long to wait for Codex verification — raise it for long reasoning (global, all projects)")}</span></h2>
   <div class="mcard">
-    <div class="mrow"><span class="mlbl">대기시간</span>
-      <input id="vtMin" type="number" min="1" max="60" step="1" style="width:72px" title="코덱스 검증이 이 시간을 넘기면 실패로 처리합니다. 깊은 추론이 길어지면 늘리세요(1~60분).">
-      <span class="muted">분 · 기본 8</span>
+    <div class="mrow"><span class="mlbl">${t("대기시간", "Timeout")}</span>
+      <input id="vtMin" type="number" min="1" max="60" step="1" style="width:72px" title="${t("코덱스 검증이 이 시간을 넘기면 실패로 처리합니다. 깊은 추론이 길어지면 늘리세요(1~60분).", "Verification longer than this is treated as failed. Raise it for deep reasoning (1–60 min).")}">
+      <span class="muted">${t("분 · 기본 8", "min · default 8")}</span>
     </div>
-    <div class="row" style="margin-top:10px"><button id="saveVT">대기시간 저장</button><span id="savedVT" class="muted"></span></div>
-    <div class="muted" style="margin-top:6px">코덱스가 답하는 데 이 시간보다 오래 걸리면 검증이 실패로 끝나요. 추론이 8분을 넘는 경우가 있으면 늘려 두세요.</div>
+    <div class="row" style="margin-top:10px"><button id="saveVT">${t("대기시간 저장", "Save timeout")}</button><span id="savedVT" class="muted"></span></div>
+    <div class="muted" style="margin-top:6px">${t("코덱스가 답하는 데 이 시간보다 오래 걸리면 검증이 실패로 끝나요. 추론이 8분을 넘는 경우가 있으면 늘려 두세요.", "If Codex takes longer than this, the verification ends as failed. Raise it if reasoning ever exceeds 8 minutes.")}</div>
   </div>
-  <h2 class="sec base accent-yellow">Codex 검증 대화 <span class="sub2">실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인</span></h2>
+  <h2 class="sec base accent-yellow">${t("Codex 검증 대화", "Codex Verify Conversation")} <span class="sub2">${t("실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인", "the actual exchange — see for yourself that verification really happened")}</span></h2>
   <div id="conv"></div>
-  <h2 class="sec base accent-rose">Codex 세션 연결 <span class="sub2" id="cwsLabel">첫 발화로 식별</span></h2>
+  <h2 class="sec base accent-rose">${t("Codex 세션 연결", "Codex Session Link")} <span class="sub2" id="cwsLabel">${t("첫 발화로 식별", "identified by first message")}</span></h2>
   <div id="cands"></div>
   <div id="hiddenWrap"></div>
   </div><!-- /tab-main -->
   <section id="tab-stats" class="tab-panel">
-    <h2 class="sec base accent-yellow">검증 통계 <span class="sub2">이 폴더에서 코덱스 검증이 어떻게 흘러왔는지 — 최근 흐름·통과율·막고 풀린 전환</span></h2>
-    <div id="statsEmpty" class="muted" style="display:none">아직 이 폴더에 검증 기록이 없어요. 검증이 쌓이면 여기에 통계가 보여요.</div>
+    <h2 class="sec base accent-yellow">${t("검증 통계", "Verify Stats")} <span class="sub2">${t("이 폴더에서 코덱스 검증이 어떻게 흘러왔는지 — 최근 흐름·통과율·막고 풀린 전환", "how Codex verification has gone in this folder — recent flow · pass rate · fail→pass turnarounds")}</span></h2>
+    <div id="statsEmpty" class="muted" style="display:none">${t("아직 이 폴더에 검증 기록이 없어요. 검증이 쌓이면 여기에 통계가 보여요.", "No verification records in this folder yet. Stats appear here as verifications accumulate.")}</div>
     <div id="statsBody" class="card" style="display:none">
       <div class="stat-cards">
-        <div class="stat-card s-blue"><div class="stat-num" id="st7total">–</div><div class="stat-lbl">최근 7일 검증</div></div>
-        <div class="stat-card s-green"><div class="stat-num" id="st7pass">–</div><div class="stat-lbl">완전통과율 (7일)</div></div>
-        <div class="stat-card s-orange"><div class="stat-num" id="st7touch">–</div><div class="stat-lbl">보완이상 비율 (7일)</div></div>
-        <div class="stat-card s-purple"><div class="stat-num" id="st7res">–</div><div class="stat-lbl">실패·보류→통과 전환 (7일)</div></div>
+        <div class="stat-card s-blue"><div class="stat-num" id="st7total">–</div><div class="stat-lbl">${t("최근 7일 검증", "verifications (7d)")}</div></div>
+        <div class="stat-card s-green"><div class="stat-num" id="st7pass">–</div><div class="stat-lbl">${t("완전통과율 (7일)", "clean pass rate (7d)")}</div></div>
+        <div class="stat-card s-orange"><div class="stat-num" id="st7touch">–</div><div class="stat-lbl">${t("보완이상 비율 (7일)", "notes-or-worse (7d)")}</div></div>
+        <div class="stat-card s-purple"><div class="stat-num" id="st7res">–</div><div class="stat-lbl">${t("실패·보류→통과 전환 (7일)", "fail/hold→pass turnarounds (7d)")}</div></div>
       </div>
       <div class="stat-chart">
         <div class="chart-box">
-          <h3 class="chart-h">최근 28일 검증 결과 분포</h3>
-          <div class="donut-wrap"><svg id="donut" viewBox="0 0 120 120" width="140" height="140" aria-label="검증 결과 분포"></svg><div id="donutTotal" class="donut-center"></div></div>
+          <h3 class="chart-h">${t("최근 28일 검증 결과 분포", "Verdict distribution (28d)")}</h3>
+          <div class="donut-wrap"><svg id="donut" viewBox="0 0 120 120" width="140" height="140" aria-label="${t("검증 결과 분포", "verdict distribution")}"></svg><div id="donutTotal" class="donut-center"></div></div>
         </div>
         <div id="donutLegend" class="legend"></div>
       </div>
       <div class="stat-chart">
         <div class="chart-box wide">
-          <h3 class="chart-h">최근 14일 검증 추이 <span class="muted">(아래부터 완전통과·통과보완·보류·실패·표지누락 5색, 높이=24시간 구간별 검증량)</span></h3>
+          <h3 class="chart-h">${t("최근 14일 검증 추이", "14-day trend")} <span class="muted">${t("(아래부터 완전통과·통과보완·보류·실패·표지누락 5색, 높이=24시간 구간별 검증량)", "(bottom-up: pass·pass(notes)·hold·fail·no-verdict, height = verifications per 24h window)")}</span></h3>
           <div id="trendBars" class="trend-bars"></div>
         </div>
       </div>
       <div class="stat-chart">
         <div class="chart-box wide">
-          <h3 class="chart-h">검증 활동 <span class="muted">(최근 4주 · 세로 요일 / 가로 0~23시 · 색이 진할수록 그 시간대 검증이 많음 — 아래 범례)</span></h3>
+          <h3 class="chart-h">${t("검증 활동", "Verification activity")} <span class="muted">${t("(최근 4주 · 세로 요일 / 가로 0~23시 · 색이 진할수록 그 시간대 검증이 많음 — 아래 범례)", "(last 4 weeks · rows = weekday, columns = hour 0–23 · darker = more verifications — legend below)")}</span></h3>
           <div id="heat" class="heatmap"></div>
         </div>
       </div>
       <div class="stat-chart">
         <div class="chart-box wide">
-          <h3 class="chart-h">연결된 코덱스 세션 토큰 <span class="muted">(이 검증 대화 세션의 누적 사용량 · 참고)</span></h3>
+          <h3 class="chart-h">${t("연결된 코덱스 세션 토큰", "Linked Codex session tokens")} <span class="muted">${t("(이 검증 대화 세션의 누적 사용량 · 참고)", "(cumulative usage of the linked verify session · reference)")}</span></h3>
           <div id="tokCards" class="stat-cards"></div>
           <p class="muted" id="tokNote"></p>
         </div>
         <div class="chart-box wide">
-          <h3 class="chart-h">클로드 작업 토큰 <span class="muted">(이 폴더 · 최근 28일 · 검증과 별개인 작업 비용)</span></h3>
+          <h3 class="chart-h">${t("클로드 작업 토큰", "Claude work tokens")} <span class="muted">${t("(이 폴더 · 최근 28일 · 검증과 별개인 작업 비용)", "(this folder · last 28d · work cost, separate from verification)")}</span></h3>
           <div id="claudeTokCards" class="stat-cards"></div>
         </div>
       </div>
       <div class="stat-chart">
         <div class="chart-box wide">
-          <h3 class="chart-h">모델·추론강도별 검증 토큰 <span class="muted">(최근 28일 · 이 검증 1회분 합 · rollout 마지막 턴 기준 근사)</span></h3>
+          <h3 class="chart-h">${t("모델·추론강도별 검증 토큰", "Verify tokens by model·effort")} <span class="muted">${t("(최근 28일 · 이 검증 1회분 합 · rollout 마지막 턴 기준 근사)", "(28d · per-verification token sums · approx. from last rollout turn)")}</span></h3>
           <div id="byModelBars"></div>
         </div>
         <div class="chart-box wide">
-          <h3 class="chart-h">검증모드별 <span class="muted">(최근 28일 · 검증을 띄운 모드 플랜/코드/올웨이즈)</span></h3>
+          <h3 class="chart-h">${t("검증모드별", "By verify mode")} <span class="muted">${t("(최근 28일 · 검증을 띄운 모드 플랜/코드/올웨이즈)", "(28d · which mode triggered the verification)")}</span></h3>
           <div id="byModeBars"></div>
         </div>
       </div>
       <div class="stat-chart">
         <div class="chart-box wide">
-          <h3 class="chart-h">프로젝트별 검증 비교 <span class="muted">(최근 28일 · 모든 폴더 · 이 폴더 통계와 별개 · 막대=검증 건수, 완전통과율 병기)</span></h3>
+          <h3 class="chart-h">${t("프로젝트별 검증 비교", "Per-project comparison")} <span class="muted">${t("(최근 28일 · 모든 폴더 · 이 폴더 통계와 별개 · 막대=검증 건수, 완전통과율 병기)", "(28d · all folders · separate from this folder's stats · bar = count, clean-pass % alongside)")}</span></h3>
           <div id="projectBars"></div>
         </div>
       </div>
@@ -1614,18 +1717,22 @@ class Dashboard {
   const expandedConv = new Set();
   function convKey(t){ var s=(t.user||"")+"|||"+((t.assistant||[]).join("~")); var h=0; for(var i=0;i<s.length;i++){ h=(h*31+s.charCodeAt(i))|0; } return "c"+h; }
   const $ = (id) => document.getElementById(id);
+  // UI 언어(웹뷰 생성 시 고정 — 전환 시 확장이 HTML을 재생성). 동적 문자열은 T(ko,en)으로 정적 라벨과 같은 언어 유지.
+  const UI_EN = ${EN};
+  function T(ko, en){ return UI_EN ? en : ko; }
   document.getElementById("refresh").addEventListener("click", () => vscode.postMessage({type:"refresh"}));
   function el(tag, cls, text){ const e=document.createElement(tag); if(cls)e.className=cls; if(text!=null)e.textContent=text; return e; }
   // 폼에서 고른 값(curVM/curIM, 저장 시 전송) vs 저장돼 실제 적용 중인 값(appVM/appIM, 지도·'지금 받는 것'에 표시).
   // 지도/패널은 "저장된 것"만 보여주고(거짓 미리보기 방지), 저장하는 순간 바뀐 곳을 깜빡인다.
   let curVM = "off", curIM = "always";
   let appVM = null, appIM = null;
+  let appCkC = null, appCkX = null; // 체크박스 '마지막 적용값'(hold 판정용 — 미저장 체크 변경이 언어 전환에 덮이지 않게)
   let curPerm = "";   // 지금 Claude Code 권한 모드(active.json) — plan 게이트 표시용
   let curRS = "";     // 두뇌 설정 폼에서 고른 생각강도("" = 기본). 모델은 입력칸 값 직접 사용.
   let appRS = null, appModel = null;  // 저장돼 적용 중인 두뇌 설정(미저장 편집 보존용 dirty 비교 기준)
   // (Claude 두뇌 카드 관련 webview 변수·헬퍼 제거됨 — 카드 폐기. 어긋남은 상태바 drift 경고로.)
   let AVAIL = [];     // 계정 캐시 모델·모델별 생각강도(서버에서 받은 것 — 하드코딩 아님)
-  const RSKO = {minimal:"최소", low:"낮음", medium:"보통", high:"높음", xhigh:"매우높음", pro:"프로"}; // 표시 라벨(코덱스 카드 전용·없는 값은 원문). Claude 카드는 영문 원값 사용(아래 별도)
+  const RSKO = UI_EN ? {} : {minimal:"최소", low:"낮음", medium:"보통", high:"높음", xhigh:"매우높음", pro:"프로"}; // 표시 라벨(코덱스 카드 전용·없는 값은 원문). Claude 카드는 영문 원값 사용(아래 별도)
   // 선택한 모델이 지원하는 생각강도만 버튼으로(계정·모델별로 다름). 모델 미선택이면 가능한 값 합집합.
   function renderReasonButtons(slug){
     const seg=$("segReason"); if(!seg) return; seg.replaceChildren();
@@ -1638,16 +1745,16 @@ class Dashboard {
     // 그 외(캐시 실패·커스텀/미매칭 모델)엔 저장값을 raw 버튼으로 보존해 절대 잃지 않게 한다.
     if(curRS && !levels.some((l)=>l.effort===curRS)){
       if(cacheOk && m) curRS="";
-      else levels=[...levels,{effort:curRS,description:"저장된 값(현재 목록에 없음)"}];
+      else levels=[...levels,{effort:curRS,description:T("저장된 값(현재 목록에 없음)","saved value (not in current list)")}];
     }
     const mk=(rs,label,desc)=>{const b=document.createElement("button");b.setAttribute("data-rs",rs);b.textContent=label;if(desc)b.title=desc;return b;};
-    seg.appendChild(mk("","기본"));
+    seg.appendChild(mk("",T("기본","default")));
     levels.forEach((l)=> seg.appendChild(mk(l.effort, RSKO[l.effort]||l.effort, l.description)));
     highlightSeg("segReason","data-rs",curRS);
   }
   let shownVM, shownIM, shownPerm;   // 마지막으로 그린 상태 — watcher 중복 렌더가 진행 중 깜빡임을 지우지 않게
-  function lblIM(im){ return im==="off"?"꺼짐":im==="plan"?"플랜 때만":"항상"; }
-  function lblVM(vm){ return vm==="off"?"안 함":vm==="code"?"코드 변경 시":vm==="plancode"?"플랜·코드 시":"모든 턴"; }
+  function lblIM(im){ return im==="off"?T("꺼짐","off"):im==="plan"?T("플랜 때만","plan only"):T("항상","always"); }
+  function lblVM(vm){ return vm==="off"?T("안 함","off"):vm==="code"?T("코드 변경 시","on code change"):vm==="plancode"?T("플랜·코드 시","plan·code"):T("모든 턴","every turn"); }
   function flashNode(n){ if(!n) return; n.classList.remove("flashpulse"); void n.offsetWidth; n.classList.add("flashpulse"); }
   function setStage(node, on, why){ if(!node) return; node.classList.toggle("off", !on); node.classList.toggle("on", on); const m=node.querySelector(".sbmark"); if(m) m.textContent=on?"✓":"✗"; const w=node.querySelector(".sbwhy"); if(w) w.textContent=why; }
   // 저장된 상태(appVM/appIM)로 지도 화살표 + '지금 받는 것'을 그린다. prev와 다른 항목은 깜빡.
@@ -1659,10 +1766,10 @@ class Dashboard {
     if(ver){ ver.className="farrow"+(appVM!=="off"?"":" off"); const v=$("faVerifyVal"); if(v) v.textContent=lblVM(appVM); }
     // 검증 토글 직하 단계 패널: 검증 ON이면 ①③ 켜짐, ②는 검증할 때. OFF면 ①③ 꺼짐, ②는 수동 ask 때만.
     const von = appVM!=="off";
-    const st=$("sbState"); if(st) st.textContent = von ? lblVM(appVM) : "꺼짐";
-    setStage($("sbTransmit"), von, von?"검증 켜짐 → 적용":"검증 꺼짐 → 안 들어감");
-    setStage($("sbVerify"), von, von?"검증할 때 적용":"자동 검증 없음 (수동 ask 땐 들어감)");
-    setStage($("sbRejudge"), von, von?"검증 켜짐 → 적용":"검증 꺼짐 → 안 들어감");
+    const st=$("sbState"); if(st) st.textContent = von ? lblVM(appVM) : T("꺼짐","off");
+    setStage($("sbTransmit"), von, von?T("검증 켜짐 → 적용","verify on → applied"):T("검증 꺼짐 → 안 들어감","verify off → not injected"));
+    setStage($("sbVerify"), von, von?T("검증할 때 적용","applied when verifying"):T("자동 검증 없음 (수동 ask 땐 들어감)","no auto verify (still applied on manual ask)"));
+    setStage($("sbRejudge"), von, von?T("검증 켜짐 → 적용","verify on → applied"):T("검증 꺼짐 → 안 들어감","verify off → not injected"));
     if(prevIM!=null && prevIM!==appIM){ flashNode(inj); }
     if(prevVM!=null && prevVM!==appVM){ flashNode(ver); flashNode($("sbTransmit")); flashNode($("sbVerify")); flashNode($("sbRejudge")); }
   }
@@ -1685,7 +1792,7 @@ class Dashboard {
     pendingSave = {target:"timeout"};
     vscode.postMessage({type:"saveVerifyTimeout", min: n});
   });
-  function flashSaved(node, msg){ if(!node) return; node.textContent = msg || "저장됨 ✓ (다음 턴부터 적용)"; node.classList.remove("flash"); void node.offsetWidth; node.classList.add("flash"); }
+  function flashSaved(node, msg){ if(!node) return; node.textContent = msg || T("저장됨 ✓ (다음 턴부터 적용)","Saved ✓ (applies from next turn)"); node.classList.remove("flash"); void node.offsetWidth; node.classList.add("flash"); }
   $("cands").addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-relink]");
     if (b) { vscode.postMessage({type:"relink", id:b.getAttribute("data-relink")}); return; }
@@ -1694,7 +1801,7 @@ class Dashboard {
   });
   $("hiddenWrap").addEventListener("click", (ev) => {
     const t = ev.target.closest("#hiddenToggle");
-    if (t) { const box=$("hiddenList"); const open=box.style.display==="none"; box.style.display=open?"":"none"; t.textContent = open ? "숨긴 세션 접기" : "숨긴 세션 " + box.children.length + "개 보기"; return; }
+    if (t) { const box=$("hiddenList"); const open=box.style.display==="none"; box.style.display=open?"":"none"; t.textContent = open ? T("숨긴 세션 접기","Hide hidden sessions") : T("숨긴 세션 "+box.children.length+"개 보기", "Show "+box.children.length+" hidden sessions"); return; }
     const r = ev.target.closest("[data-restore]");
     if (r) { vscode.postMessage({type:"restoreSession", id:r.getAttribute("data-restore")}); return; }
     const p = ev.target.closest("[data-purge]");
@@ -1713,21 +1820,25 @@ class Dashboard {
   });
   let pendingScroll;  // 대기 중 스크롤 타이머(연속 저장 시 취소용)
   let pendingSave = null;  // 저장 요청의 의도(성공 시 어떤 피드백을 줄지) — saveResult(ok) 받을 때 사용
+  // '화면에 렌더된 언어' 추적 — 저장은 항상 '보던 슬롯'으로 간다(전역 언어가 그 사이 바뀌어도, 이 창이든 다른 창이든).
+  // 편집 중(dirty) 언어가 바뀌면 그 카드는 옛 언어 화면 그대로 '동결'(hold)되고, 저장하면 옛(보던) 슬롯에 저장된다
+  // → 한국어 편집분이 영어 칸에 저장되는 슬롯 오염 차단(Codex 검증 반례 반영).
+  let renderedLangC = null, renderedLangB = null;
   $("saveC").addEventListener("click", () => {
     clearTimeout(pendingScroll);  // 직전 저장의 대기 스크롤 취소
     const toLines = (s) => s.split("\\n").map((x) => x.trim()).filter(Boolean);
     const imCh = curIM!==appIM, vmCh = curVM!==appVM;  // 도안(넣는 시점/검증 모드)에 영향 주는 변경인가 — 성공 시 펄스용
     pendingSave = {target:"contract", imCh, vmCh};
-    vscode.postMessage({type:"saveContract",
+    vscode.postMessage({type:"saveContract", lang: renderedLangC || undefined,
       claude: toLines($("cClaude").value), codex: toLines($("cCodex").value),
       claudeChecklist: $("ckClaude").checked, codexChecklist: $("ckCodex").checked, verifyMode: curVM, claudeInjectMode: curIM});
     // 성공 플래시·스크롤은 saveResult(ok)에서 (저장 실패 시 거짓 성공 방지)
   });
   $("saveB").addEventListener("click", () => {
     pendingSave = {target:"base"};
-    vscode.postMessage({type:"saveBase", verifyBaseline:$("bVerify").value, transmit:$("bTransmit").value, rejudge:$("bRejudge").value});
+    vscode.postMessage({type:"saveBase", lang: renderedLangB || undefined, verifyBaseline:$("bVerify").value, transmit:$("bTransmit").value, rejudge:$("bRejudge").value});
   });
-  $("resetB").addEventListener("click", () => { pendingSave = {target:"base", msg:"기본값으로 복원됨 ✓"}; vscode.postMessage({type:"resetBase"}); });
+  $("resetB").addEventListener("click", () => { pendingSave = {target:"base", msg:T("기본값으로 복원됨 ✓","Restored to defaults ✓")}; vscode.postMessage({type:"resetBase", lang: renderedLangB || undefined}); });
   // 탭 토글(현황 / 검증 통계) — 클릭한 버튼·패널만 active
   document.querySelectorAll(".tabbtn").forEach(function(b){
     b.addEventListener("click", function(){
@@ -1736,16 +1847,20 @@ class Dashboard {
       document.querySelectorAll(".tab-panel").forEach(function(p){ p.classList.toggle("active", p.id===("tab-"+t)); });
     });
   });
+  // 언어 토글(전역 ko/en) — 저장은 확장이 language.json에(모든 창이 파일 watch로 따라옴). 표시는 state로 되돌아와 확정.
+  document.querySelectorAll(".langbtn").forEach(function(b){
+    b.addEventListener("click", function(){ vscode.postMessage({type:"setLang", lang: b.getAttribute("data-lang")}); });
+  });
   // 탭2 통계 렌더 — 빈 기록이면 안내, 아니면 KPI 카드 + 도넛(28일 분포) + 추이 막대(14일·24h 슬롯) + 히트맵(4주 요일×시간)
   function fmtTok(n){ return n>=1000 ? (n/1000).toFixed(1)+"k" : String(n); }
-  function modeLabel(m){ return ({off:"꺼짐", code:"코드 변경 시", plancode:"플랜·코드 변경", always:"모든 턴"})[m] || m; } // 검증모드 코드→한국어(미상 등은 원본)
+  function modeLabel(m){ return (UI_EN ? {off:"off", code:"on code change", plancode:"plan·code", always:"every turn"} : {off:"꺼짐", code:"코드 변경 시", plancode:"플랜·코드 변경", always:"모든 턴"})[m] || m; } // 검증모드 코드→한국어(미상 등은 원본)
   // 모델별·검증모드별 토큰 막대 — 이름이 외부 데이터(rollout 모델명 등)라 createElement/textContent로만 조립(XSS 안전). 길이=토큰÷최대.
   function renderBars(wrapId, obj, labelFn){
     var wrap = $(wrapId); if(!wrap) return;
     while(wrap.firstChild) wrap.removeChild(wrap.firstChild);
     var entries = Object.keys(obj||{}).map(function(k){ return { k:k, count:obj[k].count, tokens:obj[k].tokens }; });
     entries.sort(function(a,b){ var au=a.k.indexOf("미상")>=0?1:0, bu=b.k.indexOf("미상")>=0?1:0; if(au!==bu) return au-bu; return b.tokens-a.tokens || b.count-a.count; }); // (미상)은 맨 아래(설명은 없이 정렬만)
-    if(!entries.length){ var d=document.createElement("div"); d.className="muted"; d.textContent="아직 기록이 없어요 — 검증이 더 쌓이면 보여요."; wrap.appendChild(d); return; }
+    if(!entries.length){ var d=document.createElement("div"); d.className="muted"; d.textContent=T("아직 기록이 없어요 — 검증이 더 쌓이면 보여요.","No records yet — they appear as verifications accumulate."); wrap.appendChild(d); return; }
     var maxT=1; entries.forEach(function(e){ if(e.tokens>maxT) maxT=e.tokens; });
     entries.forEach(function(e){
       var row=document.createElement("div"); row.className="vrow";
@@ -1754,7 +1869,7 @@ class Dashboard {
       var fill=document.createElement("span"); fill.className="vbar-fill";
       if(e.tokens>0){ fill.style.width=Math.round(e.tokens/maxT*100)+"%"; fill.style.minWidth="3px"; fill.style.background="var(--vscode-charts-blue)"; }
       bar.appendChild(fill);
-      var num=document.createElement("b"); num.className="vnum vnum-wide"; num.textContent=fmtTok(e.tokens)+" · "+e.count+"건";
+      var num=document.createElement("b"); num.className="vnum vnum-wide"; num.textContent=fmtTok(e.tokens)+" · "+e.count+T("건","");
       row.appendChild(lbl); row.appendChild(bar); row.appendChild(num); wrap.appendChild(row);
     });
   }
@@ -1774,10 +1889,10 @@ class Dashboard {
     // ③ 도넛(최근 28일, 판정 표지 있는 것만) + 우측 가로막대. 색 계약: 통과=초록/보완=노랑/보류=주황/실패=빨강
     var m = vs.month, R=50, CX=60, CY=60, C=2*Math.PI*R;
     var segs = [
-      {n:m.pass, c:"var(--vscode-charts-green)", lbl:"완전통과"},
-      {n:m.passNotes, c:"var(--vscode-charts-yellow,#d7ba7d)", lbl:"통과(보완)"},
-      {n:m.inconclusive, c:"var(--vscode-charts-orange)", lbl:"보류"},
-      {n:m.fail, c:"var(--vscode-charts-red)", lbl:"실패"}
+      {n:m.pass, c:"var(--vscode-charts-green)", lbl:T("완전통과","pass")},
+      {n:m.passNotes, c:"var(--vscode-charts-yellow,#d7ba7d)", lbl:T("통과(보완)","pass (notes)")},
+      {n:m.inconclusive, c:"var(--vscode-charts-orange)", lbl:T("보류","hold")},
+      {n:m.fail, c:"var(--vscode-charts-red)", lbl:T("실패","fail")}
     ];
     var judged = m.pass + m.passNotes + m.inconclusive + m.fail; // 도넛 분모 = 표지 있는 것만(표지없음 제외)
     var svg="", off=0;
@@ -1800,43 +1915,43 @@ class Dashboard {
       return '<div class="vrow"><span class="leg-dot" style="background:'+s.c+'"></span><span class="vlbl">'+s.lbl+'</span><span class="vbar"><span class="vbar-fill" style="'+fill+'"></span></span><b class="vnum">'+s.n+pctTxt+'</b></div>';
     }).join("");
     if(m.unparsed>0){ // 표지없음 = 판정표지 누락(형식). 도넛/분모서 빼고 따로 설명
-      bars += '<div class="vrow vmiss"><span class="leg-dot" style="background:var(--vscode-descriptionForeground)"></span><span class="vlbl">판정표지 누락</span><span class="vmiss-note">코덱스가 답은 했지만 \\'통과/실패\\' 결론 줄을 안 적은 답 — 통과율 계산엔 안 넣어요</span><b class="vnum">'+m.unparsed+'</b></div>'; }
+      bars += '<div class="vrow vmiss"><span class="leg-dot" style="background:var(--vscode-descriptionForeground)"></span><span class="vlbl">'+T("판정표지 누락","no verdict line")+'</span><span class="vmiss-note">'+T("코덱스가 답은 했지만 \\'통과/실패\\' 결론 줄을 안 적은 답 — 통과율 계산엔 안 넣어요","Codex answered but wrote no verdict line — excluded from pass-rate math")+'</span><b class="vnum">'+m.unparsed+'</b></div>'; }
     $("donutLegend").innerHTML = bars;
     // ④ 추이 막대 — 최근 14일, verdict 5색 세분 스택(아래부터 통과→보완→보류→실패→표지없음). 값은 전부 숫자·내부 상수라 innerHTML 안전
     var d14 = vs.daily14, maxd = 1;
     d14.forEach(function(b){ if(b.total>maxd) maxd=b.total; });
     var sc = [["pass","var(--vscode-charts-green)"],["passNotes","var(--vscode-charts-yellow,#d7ba7d)"],["inconclusive","var(--vscode-charts-orange)"],["fail","var(--vscode-charts-red)"],["unparsed","var(--vscode-descriptionForeground)"]];
     $("trendBars").innerHTML = d14.map(function(b,i){
-      var ago=13-i, lbl=ago===0?"최근":(ago+"d");
-      var tt=ago===0?"최근 24시간":(ago+"일 전 24시간 구간");
+      var ago=13-i, lbl=ago===0?T("최근","now"):(ago+"d");
+      var tt=ago===0?T("최근 24시간","last 24h"):(ago+T("일 전 24시간 구간","d ago, 24h window"));
       var stack = sc.map(function(x){ var h=b[x[0]]?(b[x[0]]/maxd*100):0; return h>0?'<div class="tseg" style="height:'+h.toFixed(1)+'%;background:'+x[1]+'"></div>':""; }).reverse().join("");
-      return '<div class="tbar" title="'+tt+' · 검증 '+b.total+'건(통과 '+b.pass+'/보완 '+b.passNotes+'/보류 '+b.inconclusive+'/실패 '+b.fail+'/표지없음 '+b.unparsed+')">'+
+      return '<div class="tbar" title="'+tt+T(' · 검증 '+b.total+'건(통과 '+b.pass+'/보완 '+b.passNotes+'/보류 '+b.inconclusive+'/실패 '+b.fail+'/표지없음 '+b.unparsed+')', ' · '+b.total+' verifications (pass '+b.pass+'/notes '+b.passNotes+'/hold '+b.inconclusive+'/fail '+b.fail+'/no-verdict '+b.unparsed+')')+'">'+
         '<div class="tbar-stack">'+stack+'</div><div class="tbar-lbl">'+(ago%2===0?lbl:"")+'</div></div>';
     }).join("");
     // ⑤ 히트맵 — 시간 헤더(0~23, 6시간마다 숫자) + 요일×시간 농도
     var hm = vs.heatmap, maxh=1;
     hm.forEach(function(r){ r.forEach(function(v){ if(v>maxh) maxh=v; }); });
-    var days=["월","화","수","목","금","토","일"];
+    var days=UI_EN?["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]:["월","화","수","목","금","토","일"];
     // 적음→많음 5단계 색(0=없음, 1~4=비율 구간). usage-monitor식 농도 단계 + 범례로 '뭐가 많은지' 명확히.
     var heatColors=['var(--vscode-editorWidget-background)','color-mix(in srgb,var(--vscode-charts-blue) 22%,var(--vscode-editor-background))','color-mix(in srgb,var(--vscode-charts-blue) 45%,var(--vscode-editor-background))','color-mix(in srgb,var(--vscode-charts-blue) 68%,var(--vscode-editor-background))','color-mix(in srgb,var(--vscode-charts-blue) 92%,var(--vscode-editor-background))'];
     function heatLv(v){ if(v<=0) return 0; var r=v/maxh; return r<=0.25?1:(r<=0.5?2:(r<=0.75?3:4)); }
     var head='<div class="heat-row heat-head"><span class="heat-day"></span>';
-    for(var hh=0; hh<24; hh++){ head += '<span class="heat-hh">'+(hh%6===0?hh+"시":"")+'</span>'; }
+    for(var hh=0; hh<24; hh++){ head += '<span class="heat-hh">'+(hh%6===0?hh+T("시",""):"")+'</span>'; }
     head += '</div>';
     var hhtml=head;
     for(var dd=0; dd<7; dd++){
       hhtml += '<div class="heat-row"><span class="heat-day">'+days[dd]+'</span>';
       for(var hx=0; hx<24; hx++){
         var v=hm[dd][hx];
-        hhtml += '<span class="heat-cell" style="background:'+heatColors[heatLv(v)]+'" title="'+days[dd]+'요일 '+hx+'시 · '+v+'건"></span>';
+        hhtml += '<span class="heat-cell" style="background:'+heatColors[heatLv(v)]+'" title="'+T(days[dd]+'요일 '+hx+'시 · '+v+'건', days[dd]+' '+hx+':00 · '+v)+'"></span>';
       }
       hhtml += '</div>';
     }
-    var leg='<div class="heat-legend"><span class="hl-t">적음</span>';
+    var leg='<div class="heat-legend"><span class="hl-t">'+T("적음","less")+'</span>';
     for(var li=0; li<5; li++){ leg += '<span class="hl" style="background:'+heatColors[li]+'"></span>'; }
-    leg += '<span class="hl-t">많음</span></div>';
+    leg += '<span class="hl-t">'+T("많음","more")+'</span></div>';
     $("heat").innerHTML = hhtml + leg;
-    $("statsNote").textContent = "완전통과=깨끗이 통과 · 통과(보완)=통과지만 보완의견(재판단 적용 잦음) · 보류=판단 보류 · 실패=수정 필요 · 판정표지 누락=코덱스가 답은 했지만 '통과/실패' 결론 줄을 안 적은 경우(통과율 계산에선 빼요). 보완이상 비율=검증이 그냥 통과시키지 않은 비율. 도넛·가로막대=28일, 막대=14일, 히트맵=4주.";
+    $("statsNote").textContent = T("완전통과=깨끗이 통과 · 통과(보완)=통과지만 보완의견(재판단 적용 잦음) · 보류=판단 보류 · 실패=수정 필요 · 판정표지 누락=코덱스가 답은 했지만 '통과/실패' 결론 줄을 안 적은 경우(통과율 계산에선 빼요). 보완이상 비율=검증이 그냥 통과시키지 않은 비율. 도넛·가로막대=28일, 막대=14일, 히트맵=4주.", "pass = clean pass · pass (notes) = passed with supplements (often re-judged) · hold = no conclusion · fail = fix required · no verdict line = Codex answered without a verdict line (excluded from pass rate). notes-or-worse = share not passed cleanly. Donut/bars = 28d, trend = 14d, heatmap = 4 weeks.");
     renderBars("byModelBars", vs.byModel); // 모델별 28일 토큰(외부 모델명 textContent 안전)
     renderBars("byModeBars", vs.byMode, modeLabel); // 검증모드별 28일 토큰(모드 코드→한국어 라벨)
   }
@@ -1845,22 +1960,22 @@ class Dashboard {
     var wrap = $("tokCards"), note = $("tokNote");
     if(!wrap) return;
     while(wrap.firstChild) wrap.removeChild(wrap.firstChild);
-    if(!tk || !tk.total){ if(note) note.textContent = "연결된 코덱스 세션이 없거나 토큰 기록을 아직 못 읽었어요."; return; }
+    if(!tk || !tk.total){ if(note) note.textContent = T("연결된 코덱스 세션이 없거나 토큰 기록을 아직 못 읽었어요.","No linked Codex session, or token records could not be read yet."); return; }
     var fmt = function(n){ return n>=1000 ? (n/1000).toFixed(1)+"k" : String(n); };
-    [["총 토큰",tk.total,"s-blue"],["입력",tk.input,"s-green"],["출력",tk.output,"s-orange"],["캐시 입력(재사용)",tk.cachedInput,"s-purple"]].forEach(function(c){
+    [[T("총 토큰","total"),tk.total,"s-blue"],[T("입력","input"),tk.input,"s-green"],[T("출력","output"),tk.output,"s-orange"],[T("캐시 입력(재사용)","cached input (reused)"),tk.cachedInput,"s-purple"]].forEach(function(c){
       var card=document.createElement("div"); card.className="stat-card "+c[2];
       var num=document.createElement("div"); num.className="stat-num"; num.textContent=fmt(c[1]);
       var lbl=document.createElement("div"); lbl.className="stat-lbl"; lbl.textContent=c[0];
       card.appendChild(num); card.appendChild(lbl); wrap.appendChild(card);
     });
-    if(note) note.textContent = "이 폴더에 연결된 코덱스 세션이 지금까지 쓴 누적 토큰. 그 세션이 여러 폴더를 오갔다면 합산값이에요.";
+    if(note) note.textContent = T("이 폴더에 연결된 코덱스 세션이 지금까지 쓴 누적 토큰. 그 세션이 여러 폴더를 오갔다면 합산값이에요.","Cumulative tokens used by the Codex session linked to this folder. If the session moved across folders, this is the combined total.");
   }
   // 클로드 작업 토큰 — 이 폴더 28일(코덱스 검증 비용과 분리). 숫자만이라 안전하나 토큰 패턴 통일로 createElement/textContent.
   function renderClaudeTokens(ct){
     var wrap = $("claudeTokCards"); if(!wrap) return;
     while(wrap.firstChild) wrap.removeChild(wrap.firstChild);
-    if(!ct || !ct.total){ var d=document.createElement("div"); d.className="muted"; d.textContent="이 폴더의 최근 28일 클로드 토큰 기록이 없어요."; wrap.appendChild(d); return; }
-    [["턴수",ct.turns,"s-blue",true],["총 토큰",ct.total,"s-green",false],["입력",ct.input,"s-orange",false],["출력",ct.output,"s-purple",false]].forEach(function(c){
+    if(!ct || !ct.total){ var d=document.createElement("div"); d.className="muted"; d.textContent=T("이 폴더의 최근 28일 클로드 토큰 기록이 없어요.","No Claude token records for this folder in the last 28 days."); wrap.appendChild(d); return; }
+    [[T("턴수","turns"),ct.turns,"s-blue",true],[T("총 토큰","total"),ct.total,"s-green",false],[T("입력","input"),ct.input,"s-orange",false],[T("출력","output"),ct.output,"s-purple",false]].forEach(function(c){
       var card=document.createElement("div"); card.className="stat-card "+c[2];
       var num=document.createElement("div"); num.className="stat-num"; num.textContent=c[3]?String(c[1]):fmtTok(c[1]); // 턴수는 그대로, 토큰은 k 단위
       var lbl=document.createElement("div"); lbl.className="stat-lbl"; lbl.textContent=c[0];
@@ -1873,7 +1988,7 @@ class Dashboard {
     while(wrap.firstChild) wrap.removeChild(wrap.firstChild);
     var rows = Object.keys(ps||{}).map(function(k){ var p=ps[k]; var judged=p.pass+p.passNotes+p.inconclusive+p.fail; return { k:k, count:p.count, judged:judged, passRate: judged? Math.round(p.pass/judged*100):0 }; });
     rows.sort(function(a,b){ return b.count-a.count; });
-    if(!rows.length){ var d=document.createElement("div"); d.className="muted"; d.textContent="아직 검증 기록이 없어요."; wrap.appendChild(d); return; }
+    if(!rows.length){ var d=document.createElement("div"); d.className="muted"; d.textContent=T("아직 검증 기록이 없어요.","No verification records yet."); wrap.appendChild(d); return; }
     var maxC=1; rows.forEach(function(r){ if(r.count>maxC) maxC=r.count; });
     rows.forEach(function(r){
       var name = String(r.k).replace(/\\\\/g, "/").split("/").filter(Boolean).pop() || r.k; // backslash(Windows)도 slash로 바꿔 폴더명만
@@ -1882,7 +1997,7 @@ class Dashboard {
       var bar=document.createElement("span"); bar.className="vbar";
       var fill=document.createElement("span"); fill.className="vbar-fill"; if(r.count>0){ fill.style.width=Math.round(r.count/maxC*100)+"%"; fill.style.minWidth="3px"; fill.style.background="var(--vscode-charts-green)"; }
       bar.appendChild(fill);
-      var num=document.createElement("b"); num.className="vnum vnum-wide"; num.textContent=r.count+"건 · 완전통과 "+(r.judged? r.passRate+"%":"–"); // 판정표지 있는 게 없으면 비율 대신 –
+      var num=document.createElement("b"); num.className="vnum vnum-wide"; num.textContent=T(r.count+"건 · 완전통과 "+(r.judged? r.passRate+"%":"–"), r.count+" · clean pass "+(r.judged? r.passRate+"%":"–")); // 판정표지 있는 게 없으면 비율 대신 –
       row.appendChild(lbl); row.appendChild(bar); row.appendChild(num); wrap.appendChild(row);
     });
   }
@@ -1916,8 +2031,8 @@ class Dashboard {
       if (!ev.data.ok) return; // 실패: 네이티브 에러 토스트가 알린다. 성공 플래시·스크롤은 하지 않음.
       if (ev.data.target === "base") baseDirty = {}; // 저장 성공 → dirty 해제(저장값=표시값이 됐으니 render 동기화 재개)
       else if (ev.data.target === "contract") contractDirty = {};
-      if (ev.data.target === "model") flashSaved($("savedModel"), "저장됨 ✓ (다음 코덱스 응답부터 적용)");
-      else if (ev.data.target === "timeout") flashSaved($("savedVT"), "저장됨 ✓ (다음 검증부터 적용)");
+      if (ev.data.target === "model") flashSaved($("savedModel"), T("저장됨 ✓ (다음 코덱스 응답부터 적용)","Saved ✓ (from next Codex response)"));
+      else if (ev.data.target === "timeout") flashSaved($("savedVT"), T("저장됨 ✓ (다음 검증부터 적용)","Saved ✓ (from next verification)"));
       else if (ev.data.target === "base") flashSaved($("savedB"), ps && ps.msg);
       else if (ev.data.target === "contract") {
         flashSaved($("savedAt"));
@@ -1939,11 +2054,37 @@ class Dashboard {
     renderClaudeTokens(d.claudeTokens);  // 클로드 작업 토큰+턴수(이 폴더 28일)
     renderProjects(d.projectStats);      // 프로젝트별 비교(전체 폴더 28일)
     curPerm = d.permissionMode || "";   // renderApplied의 plan 게이트 표시에 사용
-    if (d.contract){
+    // 언어 토글 표시(전역 ko/en) + '반대 슬롯에만 규칙 있음' 안내(언어 바꿨더니 규칙 사라졌다는 오해 방지)
+    if (d.lang){
+      var lk=$("langKo"), le=$("langEn");
+      if (lk && le){ lk.classList.toggle("on", d.lang==="ko"); le.classList.toggle("on", d.lang==="en"); }
+      var sn=$("slotNote");
+      if (sn){
+        if (d.otherSlotRules){
+          sn.style.display="block";
+          sn.textContent = d.lang==="en"
+            ? "This project has rules saved in the Korean slot only — the English slot is empty (nothing was lost; switch back to 한국어 to see them)."
+            : "이 프로젝트엔 English 슬롯에만 규칙이 있어요 — 한국어 슬롯은 비어 있습니다(사라진 게 아니에요. English로 바꾸면 보입니다).";
+        } else sn.style.display="none";
+      }
+    }
+    // 언어 전환 hold: 계약 카드가 편집 중(dirty·포커스)인데 렌더 언어와 전역 언어가 갈리면, 카드 갱신을 통째로
+    // 멈춰 '보던 슬롯' 화면을 유지한다(부분 갱신으로 ko 편집분+en 저장값이 섞여 저장되는 혼합 오염 방지).
+    // 저장하면 renderedLangC(보던 슬롯)로 저장되고, state 왕복 후 dirty가 풀리며 새 언어 슬롯으로 자연 전환.
+    const langChangedC = renderedLangC !== null && d.lang && d.lang !== renderedLangC;
+    // '카드에 저장 안 한 변경'은 textarea(dirty·포커스)만이 아니라 세그(curVM/curIM≠app*)·체크박스(appCk*와 다름)도 포함
+    // — 세그만 바꾸고 언어 전환→저장 시 en 슬롯에 ko 화면의 모드가 저장되는 잔여 오염 차단(Codex 검증 반례 반영).
+    const segDirtyC = (appVM!==null && curVM!==appVM) || (appIM!==null && curIM!==appIM);
+    const ckDirtyC = (appCkC!==null && $("ckClaude").checked!==appCkC) || (appCkX!==null && $("ckCodex").checked!==appCkX);
+    const holdC = langChangedC && (contractDirty.claude || contractDirty.codex || segDirtyC || ckDirtyC ||
+      document.activeElement === $("cClaude") || document.activeElement === $("cCodex"));
+    if (d.contract && !holdC){
+      if (d.lang) renderedLangC = d.lang; // 이 푸시로 카드가 이 언어 슬롯 값으로 렌더됨
       if (document.activeElement !== $("cClaude") && !contractDirty.claude) $("cClaude").value = (d.contract.claude||[]).join("\\n");
       if (document.activeElement !== $("cCodex") && !contractDirty.codex) $("cCodex").value = (d.contract.codex||[]).join("\\n");
       $("ckClaude").checked = d.contract.claudeChecklist !== false;
       $("ckCodex").checked = d.contract.codexChecklist !== false;
+      appCkC = $("ckClaude").checked; appCkX = $("ckCodex").checked; // 체크박스 '마지막 적용값'(appVM 패턴) — hold 판정 기준
       const first = (appVM===null);
       const pVM=appVM, pIM=appIM;
       appVM = d.contract.verifyMode || "off";
@@ -1958,9 +2099,10 @@ class Dashboard {
     const pn = $("planNow");
     if (pn){
       // 배지는 '넣는 시점=플랜 모드'(저장값)일 때만 표시. 텍스트는 지금 Claude Code가 플랜 모드인지 여부만 알림.
-      if((d.contract && d.contract.claudeInjectMode)==="plan"){
+      // hold 중엔 새 언어 슬롯 값 대신 화면 기준(appIM)으로 — 카드 동결과 파생 표시의 일관 유지(Codex 보완 반영).
+      if((holdC ? appIM : (d.contract && d.contract.claudeInjectMode))==="plan"){
         pn.style.display="";
-        pn.textContent = d.permissionMode==="plan" ? "지금 플랜 모드예요 ✓" : "지금은 플랜 모드 아니에요";
+        pn.textContent = d.permissionMode==="plan" ? T("지금 플랜 모드예요 ✓","Plan mode is on now ✓") : T("지금은 플랜 모드 아니에요","Not in plan mode right now");
       } else { pn.style.display="none"; }
     }
     // 온보딩: 미완료=설명 단계(이동 버튼·은은한 펄스) / 완료=축하+끄기 / 끄고 완료=다시보기 링크만.
@@ -1968,7 +2110,7 @@ class Dashboard {
     (function(){
       const ob=$("onboard"); if(!ob) return;
       const codexReady = !!d.codexReady, linked = !!d.linkedId;
-      const vOn = !!(d.contract && d.contract.verifyMode && d.contract.verifyMode!=="off");
+      const vOn = holdC ? !!(appVM && appVM!=="off") : !!(d.contract && d.contract.verifyMode && d.contract.verifyMode!=="off"); // hold 중엔 화면 기준(appVM) — 파생 표시 일관
       const allDone = linked && vOn;            // codex 준비는 연결로 함의됨
       const dismissed = !!d.onboardDismissed;
       ob.style.display = "";
@@ -1978,7 +2120,7 @@ class Dashboard {
       }
       $("obReopen").style.display = "none"; $("obMain").style.display = "";
       ob.className = "onboard " + (allDone ? "complete" : "incomplete");
-      $("obTitle").textContent = allDone ? "준비 끝 ✓" : "시작하기 — 3가지면 매 턴 자동 검증";
+      $("obTitle").textContent = allDone ? T("준비 끝 ✓","All set ✓") : T("시작하기 — 3가지면 매 턴 자동 검증","Getting started — 3 steps to auto-verify every turn");
       $("obClose").style.display = allDone ? "" : "none";
       $("obSteps").style.display = allDone ? "none" : "";
       $("obDone").style.display = allDone ? "" : "none";
@@ -1986,43 +2128,48 @@ class Dashboard {
         const step=(id,done,text,btn,where)=>{ const e=$(id); if(!e) return;
           e.className="obstep "+(done?"done":"todo");
           let b="";
-          if(!done && btn){ if(btn.go) b=' <button type="button" class="obgo secondary" data-go="'+btn.go+'">이동 ›</button>'; else if(btn.cmd) b=' <button type="button" class="obgo secondary" data-cmd="'+btn.cmd+'">설정 ›</button>'; }
+          if(!done && btn){ if(btn.go) b=' <button type="button" class="obgo secondary" data-go="'+btn.go+'">'+T("이동 ›","Go ›")+'</button>'; else if(btn.cmd) b=' <button type="button" class="obgo secondary" data-cmd="'+btn.cmd+'">'+T("설정 ›","Settings ›")+'</button>'; }
           e.innerHTML='<span class="k">'+(done?"✓":"○")+'</span>'+text+(where?' <span class="where">'+where+'</span>':'')+b; };
-        step("ob1", codexReady, codexReady?"Codex 준비됨":"Codex 경로 미고정 — PATH의 codex로 시도", {cmd:"openSettings"}, codexReady?"":"openai.chatgpt 확장이 있으면 보통 자동 · standalone CLI면 PATH로 동작(안 뜨면 codexBridge.codexPath 지정)");
-        step("ob2", linked, linked?"Codex 세션 연결됨":"Codex 세션 미연결", {go:"cands"}, linked?"":"연결할 세션 고르기");
-        step("ob3", vOn, vOn?("검증 켜짐 ("+d.contract.verifyMode+")"):"검증 꺼짐", {go:"segVerify"}, vOn?"":"검증 모드 켜고 저장");
+        step("ob1", codexReady, codexReady?T("Codex 준비됨","Codex ready"):T("Codex 경로 미고정 — PATH의 codex로 시도","Codex path not pinned — trying codex on PATH"), {cmd:"openSettings"}, codexReady?"":T("openai.chatgpt 확장이 있으면 보통 자동 · standalone CLI면 PATH로 동작(안 뜨면 codexBridge.codexPath 지정)","usually automatic with the openai.chatgpt extension · standalone CLI works via PATH (set codexBridge.codexPath if not detected)"));
+        step("ob2", linked, linked?T("Codex 세션 연결됨","Codex session linked"):T("Codex 세션 미연결","No Codex session linked"), {go:"cands"}, linked?"":T("연결할 세션 고르기","pick a session to link"));
+        step("ob3", vOn, vOn?(T("검증 켜짐 (","verify on (")+((d.contract&&d.contract.verifyMode)||appVM)+")"):T("검증 꺼짐","verify off"), {go:"segVerify"}, vOn?"":T("검증 모드 켜고 저장","turn on a verify mode and save"));
       }
     })();
-    if (d.baseDirective){
+    // 기본지침도 언어 전환 hold(계약 카드와 동일 원리) — 편집 중 언어가 바뀌면 보던 언어 화면 유지, 저장은 보던 슬롯으로.
+    const langChangedB = renderedLangB !== null && d.lang && d.lang !== renderedLangB;
+    const holdB = langChangedB && (baseDirty.verify || baseDirty.transmit || baseDirty.rejudge ||
+      document.activeElement === $("bVerify") || document.activeElement === $("bTransmit") || document.activeElement === $("bRejudge"));
+    if (d.baseDirective && !holdB){
+      if (d.lang) renderedLangB = d.lang;
       if (document.activeElement !== $("bVerify") && !baseDirty.verify) $("bVerify").value = d.baseDirective.verifyBaseline||"";
       if (document.activeElement !== $("bTransmit") && !baseDirty.transmit) $("bTransmit").value = d.baseDirective.transmit||"";
       if (document.activeElement !== $("bRejudge") && !baseDirty.rejudge) $("bRejudge").value = d.baseDirective.rejudge||"";
-      const ov=$("baseOv"); if(ov) ov.textContent = d.baseDirective.overridden ? "· (수정됨)" : "· (기본값)";
+      const ov=$("baseOv"); if(ov) ov.textContent = d.baseDirective.overridden ? T("· (수정됨)","· (modified)") : T("· (기본값)","· (defaults)");
     }
     // 런타임 라이브러리 없으면 저장/복원이 무효 → 거짓 성공 방지: 버튼 비활성 + 경고(점2 수정).
     const baseOk = d.baseAvailable !== false;
     if ($("saveB")) $("saveB").disabled = !baseOk;
     if ($("resetB")) $("resetB").disabled = !baseOk;
-    if (!baseOk){ const ov=$("baseOv"); if(ov) ov.textContent = "· ⚠ 런타임 라이브러리를 찾을 수 없어 편집 불가"; const sb=$("savedB"); if(sb) sb.textContent=""; }
+    if (!baseOk){ const ov=$("baseOv"); if(ov) ov.textContent = T("· ⚠ 런타임 라이브러리를 찾을 수 없어 편집 불가","· ⚠ runtime library not found — editing disabled"); const sb=$("savedB"); if(sb) sb.textContent=""; }
     // 히어로 연결 상태 시각화
     const linked = !!d.linkedId;
     $("linkViz").className = "link" + (linked ? " on" : "");
     $("linkEmo").textContent = "●"; // 색은 .link.on .emo가 처리(연결=초록/미연결=회색)
-    $("linkState").textContent = linked ? "연결됨" : "연결 없음";
+    $("linkState").textContent = linked ? T("연결됨","Linked") : T("연결 없음","Not linked");
     // statusline: 검증 모드 배지 + 연결 요약
     const st = $("status"); st.replaceChildren();
     const vm = (d.contract && d.contract.verifyMode) || "off";
-    const vmTxt = {off:"검증 꺼짐", code:"코드 변경 시 검증", plancode:"플랜+코드 검증", always:"모든 턴 검증"}[vm] || vm;
+    const vmTxt = (UI_EN ? {off:"verify off", code:"verify on code change", plancode:"verify on plan+code", always:"verify every turn"} : {off:"검증 꺼짐", code:"코드 변경 시 검증", plancode:"플랜+코드 검증", always:"모든 턴 검증"})[vm] || vm;
     st.appendChild(el("span","badge b-"+vm, vmTxt));
     if (d.workspace) st.appendChild(el("span","wschip", d.workspace));
-    if (!d.workspace) st.appendChild(el("span","muted","· 워크스페이스가 열려있지 않음"));
+    if (!d.workspace) st.appendChild(el("span","muted",T("· 워크스페이스가 열려있지 않음","· no workspace open")));
     else if (linked) {
-      st.appendChild(el("span","muted","· " + (d.linkedSnippet || "(주제 미상)")));
+      st.appendChild(el("span","muted","· " + (d.linkedSnippet || T("(주제 미상)","(topic unknown)"))));
       st.appendChild(el("span","id", d.linkedId));
     } else {
-      st.appendChild(el("span","muted","· 아래에서 Codex 세션을 골라 연결 (미연결 시 ask는 보고만)"));
+      st.appendChild(el("span","muted",T("· 아래에서 Codex 세션을 골라 연결 (미연결 시 ask는 보고만)","· pick a Codex session below to link (unlinked ask only reports)")));
     }
-    const cws = $("cwsLabel"); if (cws) cws.textContent = d.workspace ? ("선택 시 → " + d.workspace + " 에 연결") : "열린 워크스페이스 없음";
+    const cws = $("cwsLabel"); if (cws) cws.textContent = d.workspace ? (T("선택 시 → ","on select → links to ") + d.workspace + T(" 에 연결","")) : T("열린 워크스페이스 없음","no workspace open");
 
     // 무결성 경보 배너: 미확인 error 이벤트(예: 검증 미완)를 빨강으로 보이고 '확인함'으로 해제.
     const ib = $("integrityBanner");
@@ -2040,31 +2187,31 @@ class Dashboard {
         const nDrift = warnEvs.filter(function(e){return e.kind==="brain-drift";}).length; // 두뇌 설정(모델/추론) 어긋남 — 검증과 별개 라벨
         const nEvid = warnEvs.length - nVerdict - nMissing - nDrift; // 근거(evidence-*) 계열
         const errParts = [];
-        if (nFail) errParts.push("검증 실패 " + nFail + "건"); // 빨강 — Codex 결론이 통과 아님(실패)
-        if (nSession) errParts.push("Codex 세션 없음 " + nSession + "건"); // 빨강 — 연결된 세션 없음(연결되면 자동 사라짐·확인함으론 안 사라짐)
-        if (nIncomplete) errParts.push("검증 미완 " + nIncomplete + "건"); // 빨강 — 검증 자체가 안 일어남
+        if (nFail) errParts.push(T("검증 실패 "+nFail+"건","verify failed "+nFail)); // 빨강 — Codex 결론이 통과 아님(실패)
+        if (nSession) errParts.push(T("Codex 세션 없음 "+nSession+"건","no Codex session "+nSession)); // 빨강 — 연결된 세션 없음(연결되면 자동 사라짐·확인함으론 안 사라짐)
+        if (nIncomplete) errParts.push(T("검증 미완 "+nIncomplete+"건","unverified "+nIncomplete)); // 빨강 — 검증 자체가 안 일어남
         const warnParts = [];
-        if (nVerdict) warnParts.push("Codex 보류·불가 " + nVerdict + "건"); // 노랑 — 통과도 실패도 아닌 보류/불가/정보부족
-        if (nMissing) warnParts.push("판정 표지 없음 " + nMissing + "건"); // 마지막 '검증:' 줄 없음 → 색 표시 빔
-        if (nEvid) warnParts.push("근거 의심 " + nEvid + "건"); // 인용 근거가 파일/라인과 안 맞음
-        if (nDrift) warnParts.push("두뇌 설정 어긋남 " + nDrift + "건"); // 모델/추론 계열 불일치(설정 미적용 가능 — 검증과 무관)
+        if (nVerdict) warnParts.push(T("Codex 보류·불가 "+nVerdict+"건","Codex hold/unable "+nVerdict)); // 노랑 — 통과도 실패도 아닌 보류/불가/정보부족
+        if (nMissing) warnParts.push(T("판정 표지 없음 "+nMissing+"건","no verdict line "+nMissing)); // 마지막 '검증:' 줄 없음 → 색 표시 빔
+        if (nEvid) warnParts.push(T("근거 의심 "+nEvid+"건","evidence doubt "+nEvid)); // 인용 근거가 파일/라인과 안 맞음
+        if (nDrift) warnParts.push(T("두뇌 설정 어긋남 "+nDrift+"건","brain setting drift "+nDrift)); // 모델/추론 계열 불일치(설정 미적용 가능 — 검증과 무관)
         const errStr = errParts.join(" · ");
         const warnStr = warnParts.join(" · ");
         ib.replaceChildren();
         ib.className = "integrity" + (errEvs.length ? " err" : " warn"); // 빨강(실패/미완) 있으면 빨강 테두리, 아니면 노랑
         const ih = el("div","ih");
-        const head = "검증 무결성 경보 — " + [errStr, warnStr].filter(Boolean).join(" · "); // 빨강·노랑 라벨을 순서대로(빨강 먼저)
+        const head = T("검증 무결성 경보 — ","Verification integrity alert — ") + [errStr, warnStr].filter(Boolean).join(" · "); // 빨강·노랑 라벨을 순서대로(빨강 먼저)
         ih.appendChild(el("span", null, head));
         const ackable = iev.filter(function(e){return e.kind!=="session-missing";}); // session-missing은 ack 대상 아님 — '연결'로만 해소
         if (ackable.length) {
-          const ack = el("button","secondary","확인함 ✓");
+          const ack = el("button","secondary",T("확인함 ✓","Acknowledged ✓"));
           ack.addEventListener("click", function(){ vscode.postMessage({type:"ackIntegrity", ids: ackable.map(function(e){return e.id;})}); }); // 보이는(이 창) ack 가능 경보만 확인 — 다른 창 것 안 지움
           ih.appendChild(ack);
         } else {
-          ih.appendChild(el("span","muted","연결하면 사라져요 (확인으론 안 닫혀요)")); // session-missing만 — '확인함'은 무효라 버튼 대신 안내 문구
+          ih.appendChild(el("span","muted",T("연결하면 사라져요 (확인으론 안 닫혀요)","clears when you link (cannot be dismissed)"))); // session-missing만 — '확인함'은 무효라 버튼 대신 안내 문구
         }
         if (iev.some(function(e){return e.sig==="session-missing:blocked";})) { // 자동 생성이 멈춤 → GitHub 이슈로 안내(클릭 시 외부 브라우저)
-          const gh = el("a","muted","🔗 GitHub에 문제 신고");
+          const gh = el("a","muted",T("🔗 GitHub에 문제 신고","🔗 Report on GitHub"));
           gh.setAttribute("href","https://github.com/kimbyungsu/codex-peek/issues");
           gh.style.marginLeft = "8px";
           ih.appendChild(gh);
@@ -2074,7 +2221,7 @@ class Dashboard {
         iev.slice(-6).forEach(function(e){
           const li = el("li");
           li.appendChild(el("span","sevdot " + (e.severity==="error"?"err":"warn")));
-          li.appendChild(document.createTextNode(e.detail || e.kind || "무결성 신호"));
+          li.appendChild(document.createTextNode(e.detail || e.kind || T("무결성 신호","integrity signal")));
           if (e.ts) li.appendChild(el("span","when","  ("+new Date(e.ts).toLocaleString()+")"));
           ul.appendChild(li);
         });
@@ -2090,19 +2237,19 @@ class Dashboard {
       else {
         const toCodex = (lv.key === "codex-req" || lv.key === "codex-gen");
         const toClaude = (lv.key === "rejudge");
-        $("lsArrow").textContent = toCodex ? "▶▶▶ 검증중" : toClaude ? "반영중 ◀◀◀" : "⟷";
+        $("lsArrow").textContent = toCodex ? T("▶▶▶ 검증중","▶▶▶ verifying") : toClaude ? T("반영중 ◀◀◀","applying ◀◀◀") : "⟷";
         $("lsArrow").className = "lsarrow " + (toCodex ? "tocodex" : toClaude ? "toclaude" : "");
         $("lsClaude").className = "lsbox claude" + ((lv.key==="claude"||toClaude) ? " on" : "");
         $("lsCodex").className = "lsbox codex" + (toCodex ? " on" : "");
         const sg = $("lsStage"); sg.replaceChildren();
-        sg.appendChild(el("span","lschip "+lv.key, lv.label + (lv.round>1 ? " · "+lv.round+"라운드" : "")));
+        sg.appendChild(el("span","lschip "+lv.key, lv.label + (lv.round>1 ? T(" · "+lv.round+"라운드"," · round "+lv.round) : "")));
         ls.style.display="";
       }
     }
 
     const conv = $("conv"); conv.replaceChildren();
-    if (!d.linkedId) conv.appendChild(el("div","card muted","아직 연결된 Codex 세션이 없어요. 아래에서 세션을 연결하면, 구현↔검증으로 실제 주고받은 대화가 여기에 그대로 표시됩니다(눈으로 검증 확인)."));
-    else if (!d.turns.length) conv.appendChild(el("div","card muted","연결됨 — 아직 주고받은 대화가 없습니다(또는 세션 파일을 못 찾음)."));
+    if (!d.linkedId) conv.appendChild(el("div","card muted",T("아직 연결된 Codex 세션이 없어요. 아래에서 세션을 연결하면, 구현↔검증으로 실제 주고받은 대화가 여기에 그대로 표시됩니다(눈으로 검증 확인).","No Codex session linked yet. Link one below and the actual implement↔verify exchange shows here (verify with your own eyes).")));
+    else if (!d.turns.length) conv.appendChild(el("div","card muted",T("연결됨 — 아직 주고받은 대화가 없습니다(또는 세션 파일을 못 찾음).","Linked — no exchange yet (or the session file was not found).")));
     else {
       d.turns.forEach((t) => {
         const wrap = el("div","turn");
@@ -2112,7 +2259,7 @@ class Dashboard {
           const txt = t.assistant.join("\\n\\n");
           const vd = t.verdict || null; // 호스트가 extractVerdict로 계산해 넘긴 '마지막 결론'(첫 줄 추측 아님)
           // 4단계: 통과(초록)/통과·보완(노랑)/결론 보류(주황)/실패(빨강). '통과·보완'은 보류와 분리(엄연히 통과).
-          const vmap = {"pass":["pass","검증 통과"],"pass-notes":["notes","통과·보완"],"inconclusive":["inconc","결론 보류"],"fail":["fail","검증 실패"]};
+          const vmap = UI_EN ? {"pass":["pass","verified: pass"],"pass-notes":["notes","pass (notes)"],"inconclusive":["inconc","inconclusive"],"fail":["fail","verify failed"]} : {"pass":["pass","검증 통과"],"pass-notes":["notes","통과·보완"],"inconclusive":["inconc","결론 보류"],"fail":["fail","검증 실패"]};
           const vinfo = vd ? vmap[vd] : null;
           const v = el("div", "vmsg" + (vinfo ? " " + vinfo[0] : ""));
           const head = el("div","vhead");
@@ -2122,10 +2269,10 @@ class Dashboard {
           ckey = convKey(t); // 내용 기반 안정 키(완료된 답변은 내용 불변 → 재렌더돼도 같은 키로 매칭)
           body = el("div","vbody clip", txt);
           v.appendChild(body);
-          more = el("button","more","펼치기 ▾");
+          more = el("button","more",T("펼치기 ▾","Expand ▾"));
           more.addEventListener("click", () => {
             const clipped = body.classList.toggle("clip");
-            more.textContent = clipped ? "펼치기 ▾" : "접기 ▴";
+            more.textContent = clipped ? T("펼치기 ▾","Expand ▾") : T("접기 ▴","Collapse ▴");
             if (clipped) expandedConv.delete(ckey); else expandedConv.add(ckey); // 펼침/접힘을 기억(다시 접기 전까지 유지)
           });
           v.appendChild(more);
@@ -2133,24 +2280,24 @@ class Dashboard {
         }
         conv.appendChild(wrap);
         if (body && more && body.scrollHeight <= body.clientHeight + 2){ body.classList.remove("clip"); more.style.display = "none"; }
-        else if (body && more && expandedConv.has(ckey)){ body.classList.remove("clip"); more.textContent = "접기 ▴"; } // 사용자가 펼쳐둔 긴 답변은 재렌더 후에도 펼친 채 유지
+        else if (body && more && expandedConv.has(ckey)){ body.classList.remove("clip"); more.textContent = T("접기 ▴","Collapse ▴"); } // 사용자가 펼쳐둔 긴 답변은 재렌더 후에도 펼친 채 유지
       });
     }
     const mkRow = (c, hidden) => {
       const row = el("div","cand" + (c.linked?" linked":""));
       const left = el("div");
       const idline = el("div","id", c.id + (c.linked?"  ":""));
-      if (c.linked) idline.appendChild(el("span","star","★연결됨"));
+      if (c.linked) idline.appendChild(el("span","star",T("★연결됨","★linked")));
       left.appendChild(idline);
       left.appendChild(el("div","muted", c.when + " · " + c.snippet));
       row.appendChild(left);
       const acts = el("div","cacts");
       if (hidden){
-        const r=el("button","secondary","복원"); r.setAttribute("data-restore", c.id); acts.appendChild(r);
-        const p=el("button","secondary del","삭제"); p.title="영구 삭제 (대화 파일이 지워지며 되돌릴 수 없음)"; p.setAttribute("data-purge", c.id); acts.appendChild(p);
+        const r=el("button","secondary",T("복원","Restore")); r.setAttribute("data-restore", c.id); acts.appendChild(r);
+        const p=el("button","secondary del",T("삭제","Delete")); p.title=T("영구 삭제 (대화 파일이 지워지며 되돌릴 수 없음)","Permanently delete (removes the conversation file · irreversible)"); p.setAttribute("data-purge", c.id); acts.appendChild(p);
       } else {
-        if (!c.linked){ const b=el("button",null,"연결"); b.setAttribute("data-relink", c.id); acts.appendChild(b); }
-        const x=el("button","secondary del","숨김"); x.title="목록에서 숨기기 (원본 파일은 보존 · 복원 가능)"; x.setAttribute("data-del", c.id); acts.appendChild(x);
+        if (!c.linked){ const b=el("button",null,T("연결","Link")); b.setAttribute("data-relink", c.id); acts.appendChild(b); }
+        const x=el("button","secondary del",T("숨김","Hide")); x.title=T("목록에서 숨기기 (원본 파일은 보존 · 복원 가능)","Hide from list (file preserved · restorable)"); x.setAttribute("data-del", c.id); acts.appendChild(x);
       }
       row.appendChild(acts);
       return row;
@@ -2161,19 +2308,19 @@ class Dashboard {
       const g = d.sessionDiag;
       const box = el("div","card");
       box.style.cssText = "border-left:3px solid var(--vscode-inputValidation-warningBorder,#c90);background:var(--vscode-inputValidation-warningBackground,rgba(204,153,0,0.12));font-size:12px;line-height:1.7";
-      box.appendChild(el("div","", "⚠ 찾은 Codex 세션이 없습니다 — 지금 이 위치를 보고 있어요:"));
+      box.appendChild(el("div","", T("⚠ 찾은 Codex 세션이 없습니다 — 지금 이 위치를 보고 있어요:","⚠ No Codex sessions found — currently looking at:")));
       const line = (label,val,note) => { const r=el("div"); r.appendChild(el("span","muted",label)); r.appendChild(el("code","",val)); if(note) r.appendChild(el("span","muted"," "+note)); box.appendChild(r); };
-      line("세션 폴더: ", g.sessionsDir, g.sessionsExists ? "(있음·비어있음)" : "(폴더 없음)");
-      line("Codex home: ", g.home, "(출처: "+g.source+")");
-      line("codex 실행파일: ", g.codexBin, "");
-      box.appendChild(el("div","muted","여기에 당신의 Codex 대화가 없다면, codex가 세션을 다른 곳에 저장하는 것입니다. 터미널에서 'codex doctor'의 CODEX_HOME과 위 경로를 비교해, 다르면 설정 codexBridge.codexPath(또는 환경변수 CODEX_HOME)로 맞춰 주세요."));
+      line(T("세션 폴더: ","sessions dir: "), g.sessionsDir, g.sessionsExists ? T("(있음·비어있음)","(exists · empty)") : T("(폴더 없음)","(missing)"));
+      line("Codex home: ", g.home, T("(출처: ","(source: ")+g.source+")");
+      line(T("codex 실행파일: ","codex binary: "), g.codexBin, "");
+      box.appendChild(el("div","muted",T("여기에 당신의 Codex 대화가 없다면, codex가 세션을 다른 곳에 저장하는 것입니다. 터미널에서 'codex doctor'의 CODEX_HOME과 위 경로를 비교해, 다르면 설정 codexBridge.codexPath(또는 환경변수 CODEX_HOME)로 맞춰 주세요.","If your Codex conversations are not here, codex stores sessions elsewhere. Compare CODEX_HOME from codex doctor in a terminal with the path above; if different, set codexBridge.codexPath (or the CODEX_HOME env var).")));
       cs.appendChild(box);
     }
     // 숨긴 세션: 접힌 채로, 개수 토글로 펼침 (원본은 지우지 않음)
     const hw = $("hiddenWrap"); hw.replaceChildren();
     if (d.hiddenCandidates && d.hiddenCandidates.length){
       const n = d.hiddenCandidates.length;
-      const tg = el("button","linklike","숨긴 세션 " + n + "개 보기"); tg.id="hiddenToggle";
+      const tg = el("button","linklike",T("숨긴 세션 "+n+"개 보기","Show "+n+" hidden sessions")); tg.id="hiddenToggle";
       const box = el("div"); box.id="hiddenList"; box.style.display="none";
       d.hiddenCandidates.forEach((c) => box.appendChild(mkRow(c, true)));
       hw.appendChild(tg); hw.appendChild(box);
@@ -2182,19 +2329,19 @@ class Dashboard {
     AVAIL = d.availModels || [];
     const cw=$("mCacheWarn"); if(cw){ cw.textContent=d.modelsCacheNote||""; cw.style.display=d.modelsCacheNote?"":"none"; }
     const nameOf=(slug)=>{ const m=AVAIL.find((x)=>x.slug===slug); return m?m.name:(slug||""); };
-    const effLabel=(e)=>RSKO[e]||(e||"미상");
-    $("mCur").textContent = d.linkedId ? ((nameOf(d.modelCurrent)||"미상")+" · 생각강도 "+effLabel(d.effortCurrent)) : "연결된 세션 없음";
+    const effLabel=(e)=>RSKO[e]||(e||T("미상","unknown"));
+    $("mCur").textContent = d.linkedId ? ((nameOf(d.modelCurrent)||T("미상","unknown"))+T(" · 생각강도 "," · reasoning ")+effLabel(d.effortCurrent)) : T("연결된 세션 없음","no linked session");
     // 모델 선택 = <select> 드롭다운(항상 전체 목록). 옛 <input list=datalist>는 입력값으로 후보를 필터해서
     // 저장된 모델이 채워지면 그 모델만 보이는 버그가 있었음 → select로 교체(전체가 늘 보임).
     const sel=$("mModel");
     const prevModelVal = sel.value; // ★ replaceChildren가 select 값을 ""로 리셋하므로, dirty 비교·복원용으로 먼저 보관
     sel.replaceChildren();
     const addOpt=(v,t)=>{ const o=document.createElement("option"); o.value=v; o.textContent=t; sel.appendChild(o); };
-    addOpt("", "(코덱스 기본값)");
+    addOpt("", T("(코덱스 기본값)","(Codex default)"));
     const opts = AVAIL.length ? AVAIL.map((m)=>({v:m.slug,t:m.name})) : (d.knownModels||[]).map((s)=>({v:s,t:s}));
     opts.forEach(({v,t})=> addOpt(v, (t&&t!==v) ? (t+" ("+v+")") : v));
     const savedM = d.modelPref||"";
-    if(savedM && !opts.some((o)=>o.v===savedM)) addOpt(savedM, savedM+" (저장된 값 · 현재 목록에 없음)"); // 목록 밖 저장값 보존(조용히 안 바뀌게)
+    if(savedM && !opts.some((o)=>o.v===savedM)) addOpt(savedM, savedM+T(" (저장된 값 · 현재 목록에 없음)"," (saved · not in current list)")); // 목록 밖 저장값 보존(조용히 안 바뀌게)
     const firstM=(appModel===null), pRS=appRS, pModel=appModel;
     appRS=d.reasoningPref||""; appModel=d.modelPref||"";
     // dirty 비교는 'replaceChildren 전 값(prevModelVal)'으로 — 안 그러면 select가 ""로 리셋돼 늘 dirty 오판.
@@ -2323,6 +2470,7 @@ function syncCodexHome(onDone: (changed: boolean) => void): void {
 
 export function activate(context: vscode.ExtensionContext): void {
   syncCodexBin(); // 브릿지가 쓸 codex 경로를 최신 확장 기준으로 기록
+  ensureLangInitialized(); // 첫 실행: language.json 없으면 VS Code UI 언어로 초기값 저장(이후엔 대시보드 토글이 정본)
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("codexBridge.codexPath")) syncCodexBin();
@@ -2340,7 +2488,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const fClaude = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 953);
   const fArrow = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 952);
   const fCodex = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 951);
-  for (const it of [fClaude, fArrow, fCodex]) { it.command = "codexBridge.openDashboard"; it.name = "Codex Bridge 검증 진행"; }
+  for (const it of [fClaude, fArrow, fCodex]) { it.command = "codexBridge.openDashboard"; it.name = tE("Codex Bridge 검증 진행","Codex Bridge verify progress"); }
   const flowHide = () => { fClaude.hide(); fArrow.hide(); fCodex.hide(); };
   context.subscriptions.push(fClaude, fArrow, fCodex);
 
@@ -2392,22 +2540,22 @@ export function activate(context: vscode.ExtensionContext): void {
 
     if (!ws) {
       status.text = "$(plug) Codex";
-      status.tooltip = "워크스페이스 없음";
+      status.tooltip = tE("워크스페이스 없음","no workspace");
       status.backgroundColor = undefined; // 무결성 빨강 등 이전 색 잔존 방지(아래 무결성 분기가 다시 칠할 수 있음)
     } else if (link?.codexSession) {
       status.text = `$(link) Codex: ${(snip || link.codexSession).slice(0, 14)}`;
       status.tooltip = new vscode.MarkdownString(
-        `**Codex Bridge — 연결됨**\n\n` +
-          `세션: \`${link.codexSession}\`\n\n` +
-          `주제: ${snip || "-"}\n\n` +
-          `연결: ${link.linkedAt ? new Date(link.linkedAt).toLocaleString() : "-"}\n\n` +
-          (file ? "" : "⚠️ 세션 파일을 찾을 수 없음\n\n") +
-          `클릭 → 대시보드`,
+        tE(`**Codex Bridge — 연결됨**\n\n`,`**Codex Bridge — linked**\n\n`) +
+          tE(`세션: `,`session: `) + `\`${link.codexSession}\`\n\n` +
+          tE(`주제: `,`topic: `) + `${snip || "-"}\n\n` +
+          tE(`연결: `,`linked: `) + `${link.linkedAt ? new Date(link.linkedAt).toLocaleString() : "-"}\n\n` +
+          (file ? "" : tE("⚠️ 세션 파일을 찾을 수 없음\n\n","⚠️ session file not found\n\n")) +
+          tE(`클릭 → 대시보드`,`click → dashboard`),
       );
       status.backgroundColor = file ? undefined : new vscode.ThemeColor("statusBarItem.warningBackground");
     } else {
-      status.text = "$(plug) Codex: 미연결";
-      status.tooltip = "연결된 Codex 세션 없음 · 클릭 → 대시보드에서 연결";
+      status.text = "$(plug) " + tE("Codex: 미연결","Codex: not linked");
+      status.tooltip = tE("연결된 Codex 세션 없음 · 클릭 → 대시보드에서 연결","No linked Codex session · click → link in dashboard");
       status.backgroundColor = undefined;
     }
     if (flowActive && live) {
@@ -2420,9 +2568,9 @@ export function activate(context: vscode.ExtensionContext): void {
       fClaude.color = (toClaude || live.key === "claude") ? c : undefined; // 활성 쪽만 색
       fCodex.text = "$(search) Codex";
       fCodex.color = toCodex ? c : undefined;
-      fArrow.text = (toCodex ? "$(arrow-right) 검증중 $(arrow-right)" : toClaude ? "$(arrow-left) 반영중 $(arrow-left)" : "$(sync~spin) 작업중") + (live.round > 1 ? ` ·${live.round}R` : "");
+      fArrow.text = (toCodex ? "$(arrow-right) " + tE("검증중","verifying") + " $(arrow-right)" : toClaude ? "$(arrow-left) " + tE("반영중","applying") + " $(arrow-left)" : "$(sync~spin) " + tE("작업중","working")) + (live.round > 1 ? ` ·${live.round}R` : "");
       fArrow.color = c;
-      fArrow.tooltip = new vscode.MarkdownString(`**검증 진행 — ${live.label}**${live.round ? ` (라운드 ${live.round})` : ""}\n\n클릭 → 대시보드`);
+      fArrow.tooltip = new vscode.MarkdownString(tE(`**검증 진행 — `,`**verify progress — `) + `${live.label}**` + `${live.round ? tE(` (라운드 ${live.round})`,` (round ${live.round})`) : ""}` + tE(`\n\n클릭 → 대시보드`,`\n\nclick → dashboard`));
       fClaude.show(); fArrow.show(); fCodex.show();
       return; // 흐름은 미확인 경보(error/warning)가 없을 때만 — 아래 메인/무결성 분기 스킵
     }
@@ -2435,20 +2583,20 @@ export function activate(context: vscode.ExtensionContext): void {
       const nSession = errs.filter((e) => e.kind === "session-missing").length; // 연결 세션 없음(빨강·연결되면 자동 해소, ack 아님)
       const nIncomplete = errs.length - nFail - nSession;                       // 검증 미완(검증 자체가 안 일어남·ack 필요)
       const ekinds = [nFail > 0, nSession > 0, nIncomplete > 0].filter(Boolean).length;
-      const label = ekinds > 1 ? "Codex 검증 문제"
-                  : nFail ? "Codex 검증 실패"
-                  : nSession ? "Codex 세션 없음"
-                  : "Codex 검증 미완";
+      const label = ekinds > 1 ? tE("Codex 검증 문제","Codex verify issues")
+                  : nFail ? tE("Codex 검증 실패","Codex verify failed")
+                  : nSession ? tE("Codex 세션 없음","no Codex session")
+                  : tE("Codex 검증 미완","Codex verify incomplete");
       const warnTail = warns.length ? ` · 🟡${warns.length}` : ""; // 같이 뜬 노랑(두뇌 어긋남·근거 의심 등)도 건수로 노출
       status.text = `$(alert) ${label} ${errs.length}${warnTail}`;
-      const lines = [...errs, ...warns].slice(-4).map((e) => `- ${e.severity === "error" ? "🔴" : "🟡"} ${e.detail || e.kind || "경보"}`);
+      const lines = [...errs, ...warns].slice(-4).map((e) => `- ${e.severity === "error" ? "🔴" : "🟡"} ${e.detail || e.kind || tE("경보","alert")}`);
       status.tooltip = alertTooltip(
-        `**🔴 빨강 ${errs.length}건${warns.length ? " · 🟡 노랑 " + warns.length + "건" : ""}**\n\n` +
+        tE(`**🔴 빨강 ${errs.length}건${warns.length ? " · 🟡 노랑 " + warns.length + "건" : ""}**\n\n`, `**🔴 red ${errs.length}${warns.length ? " · 🟡 yellow " + warns.length : ""}**\n\n`) +
           lines.join("\n\n") +
-          (nFail ? `\n\n검증 실패: 고쳐서 다시 검증해 통과하면 빨강이 사라집니다.` : ``) +
-          (nSession ? `\n\nCodex 세션 없음: 'Codex 세션 연결'에서 수동 연결하거나, 검증을 계속 진행하면 자동 연결을 시도해요(연결되면 사라짐 · '확인함'으론 안 닫힘).` : ``) +
-          (errs.some((e) => e.sig === "session-missing:blocked") ? `\n\n자동 생성이 멈춰 있어요 — 계속되면 [GitHub에 문제 신고](https://github.com/kimbyungsu/codex-peek/issues)` : ``) +
-          (nIncomplete ? `\n\n검증 미완: 이 턴이 '검증 없이' 종료됐을 수 있어요(확인 필요).` : ``),
+          (nFail ? tE(`\n\n검증 실패: 고쳐서 다시 검증해 통과하면 빨강이 사라집니다.`,`\n\nVerify failed: fix, re-verify to pass, and the red clears.`) : ``) +
+          (nSession ? tE(`\n\nCodex 세션 없음: 'Codex 세션 연결'에서 수동 연결하거나, 검증을 계속 진행하면 자동 연결을 시도해요(연결되면 사라짐 · '확인함'으론 안 닫힘).`,`\n\nNo Codex session: link manually under 'Codex Session Link', or keep verifying for auto-link (clears when linked · cannot be dismissed).`) : ``) +
+          (errs.some((e) => e.sig === "session-missing:blocked") ? tE(`\n\n자동 생성이 멈춰 있어요 — 계속되면 `,`\n\nAuto-creation is paused — if it persists, `) + `[${tE("GitHub에 문제 신고","report on GitHub")}](https://github.com/kimbyungsu/codex-peek/issues)` : ``) +
+          (nIncomplete ? tE(`\n\n검증 미완: 이 턴이 '검증 없이' 종료됐을 수 있어요(확인 필요).`,`\n\nUnverified: this turn may have ended WITHOUT verification (needs review).`) : ``),
       );
       status.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
       pulseIfNew(errs.length);
@@ -2461,21 +2609,21 @@ export function activate(context: vscode.ExtensionContext): void {
       const nDrift = warns.filter((e) => e.kind === "brain-drift").length; // 두뇌 설정 어긋남 — 검증 근거와 무관(배너와 동일 분리)
       const nEvid = warns.length - nVerdict - nMissing - nDrift;
       const kinds = [nVerdict > 0, nMissing > 0, nEvid > 0, nDrift > 0].filter(Boolean).length;
-      const label = kinds > 1 ? "Codex 주의"
-                  : nVerdict ? "Codex 보류·불가"
-                  : nMissing ? "Codex 표지 없음"
-                  : nDrift ? "두뇌 설정 어긋남"
-                  : "Codex 근거 의심";
+      const label = kinds > 1 ? tE("Codex 주의","Codex warnings")
+                  : nVerdict ? tE("Codex 보류·불가","Codex hold/unable")
+                  : nMissing ? tE("Codex 표지 없음","Codex no verdict line")
+                  : nDrift ? tE("두뇌 설정 어긋남","brain setting drift")
+                  : tE("Codex 근거 의심","Codex evidence doubt");
       const parts: string[] = [];
-      if (nVerdict) parts.push(`보류·불가 ${nVerdict}건`);
-      if (nMissing) parts.push(`판정 표지 없음 ${nMissing}건`);
-      if (nEvid) parts.push(`근거 의심 ${nEvid}건`);
-      if (nDrift) parts.push(`두뇌 설정 어긋남 ${nDrift}건`);
+      if (nVerdict) parts.push(tE(`보류·불가 ${nVerdict}건`,`hold/unable ${nVerdict}`));
+      if (nMissing) parts.push(tE(`판정 표지 없음 ${nMissing}건`,`no verdict line ${nMissing}`));
+      if (nEvid) parts.push(tE(`근거 의심 ${nEvid}건`,`evidence doubt ${nEvid}`));
+      if (nDrift) parts.push(tE(`두뇌 설정 어긋남 ${nDrift}건`,`brain drift ${nDrift}`));
       const tipHead = parts.join(" · ");
       status.text = `$(warning) ${label} ${warns.length}`;
       status.tooltip = alertTooltip(
         `**🟡 ${tipHead}**\n\n` +
-          warns.slice(-3).map((e) => `- ${e.detail || e.kind || "주의"}`).join("\n\n"),
+          warns.slice(-3).map((e) => `- ${e.detail || e.kind || tE("주의","warning")}`).join("\n\n"),
       );
       status.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
     } else {
@@ -2548,7 +2696,7 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       if (!unacked.length) return; // 이미 확인됨/없음(다른 데서 ack) → 무동작
       const ok = ackIntegrity(unacked.map((e) => e.id));
-      if (!ok) { vscode.window.showErrorMessage("경고 확인 처리 저장 실패(파일 잠김/권한?) — 잠시 후 다시 시도하세요."); return; }
+      if (!ok) { vscode.window.showErrorMessage(tE("경고 확인 처리 저장 실패(파일 잠김/권한?) — 잠시 후 다시 시도하세요.","Failed to save acknowledgement (file locked/permission?) — try again shortly.")); return; }
       render();
       dashboard.post();
     }),

@@ -3,7 +3,7 @@
 // Codex 소통은 반드시 codex-bridge.js를 거치게 강제(브릿지는 codex를 내부 spawn으로 부르므로
 // 이 후크가 보는 Bash 명령엔 'codex exec'가 안 나타나 → 차단되지 않음).
 // PreToolUse 규약: exit 2 = 해당 도구 호출 차단(이유는 stderr로 Claude에 전달).
-const { BRIDGE } = require("./contract-lib.js"); // 안내 경로를 os.homedir() 기반으로(PC 무관)
+const { BRIDGE, loadLang } = require("./contract-lib.js"); // 안내 경로를 os.homedir() 기반으로(PC 무관) + 차단문 언어(전역)
 
 let input = "";
 process.stdin.setEncoding("utf8");
@@ -24,10 +24,12 @@ process.stdin.on("end", () => {
     /codex-ask(\.js)?\b/i.test(cmd); // 구버전 사이드도어
 
   if (direct && !isBridge) {
+    // 차단 사유는 stderr로 Claude(모델)에 전달됨 — 전역 언어를 따른다.
+    const en = loadLang() === "en";
     process.stderr.write(
-      "⛔ Codex 직접 호출이 차단되었습니다. Codex 소통은 브릿지만 사용하세요.\n" +
+      (en ? "⛔ Direct Codex calls are blocked. Talk to Codex only through the bridge.\n" : "⛔ Codex 직접 호출이 차단되었습니다. Codex 소통은 브릿지만 사용하세요.\n") +
         `   node "${BRIDGE}" ask "..."\n` +
-        "   (연결 없으면 보고만 함 / 첫 소통은 ask --allow-new)\n",
+        (en ? "   (unlinked = report only / first contact: ask --allow-new)\n" : "   (연결 없으면 보고만 함 / 첫 소통은 ask --allow-new)\n"),
     );
     process.exit(2);
   }
