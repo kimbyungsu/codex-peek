@@ -91,7 +91,9 @@ ok(lastCtxForWs(shared, "D:\\B").effort === "high", "cwd필터: B의 최근 effo
 ok(cxEffortDrift("xhigh", lastCtxForWs(shared, "D:\\A").effort) === false, "★버그수정: A는 pref=xhigh·실제=xhigh → 드리프트 없음(세션 전역 마지막 high와 비교 안 함)");
 ok(cxEffortDrift("xhigh", lastCtxForWs(shared, "D:\\C").effort) === false, "cwd필터: C는 이 세션 turn 0개 → effort='' → 가드(&& mEffort)로 경고 억제");
 ok(lastCtxForWs(shared, "D:\\B").models.join() === "gpt-5.5", "models(knownModels)는 cwd 필터와 무관하게 세션 전체 수집");
-ok(lastCtxForWs(shared, "d:/a").effort === "xhigh", "cwd필터: 대소문자/슬래시 달라도 normWs로 같은 폴더 매칭");
+ok(lastCtxForWs(shared, "D:\\a").effort === "xhigh", "cwd필터: 대소문자 달라도 normWs로 같은 폴더 매칭(toLowerCase, 전 OS)");
+// 슬래시(/)↔백슬래시(\) 통일은 path.normalize의 Windows 전용 동작 → Windows에서만 검증(리눅스 cwd는 '/'만 쓰므로 무관). 이 분리로 리눅스 CI 실패 해소.
+if (path.sep === "\\") ok(lastCtxForWs(shared, "d:/a").effort === "xhigh", "cwd필터(Win): 슬래시 달라도 normWs로 같은 폴더 매칭");
 
 // cc-model 미러: lastModelInFile(f, ws) — cwd==ws인 entry의 모델만, "<synthetic>" 스킵.
 function lastModelForWs(entries, ws) {
