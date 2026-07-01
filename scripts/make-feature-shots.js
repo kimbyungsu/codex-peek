@@ -22,7 +22,8 @@ const css = m[1];
 const theme = `:root{
   --vscode-foreground:#cccccc; --vscode-editor-background:#1f1f1f; --vscode-editor-foreground:#cccccc;
   --vscode-panel-border:#3c3c3c; --vscode-descriptionForeground:#9d9d9d; --vscode-sideBar-background:#181818;
-  --vscode-charts-blue:#3794ff; --vscode-charts-purple:#b180d7; --vscode-charts-green:#89d185; --vscode-charts-orange:#d18616; --vscode-charts-yellow:#d7ba7d;
+  --vscode-charts-blue:#3794ff; --vscode-charts-purple:#b180d7; --vscode-charts-green:#89d185; --vscode-charts-orange:#d18616; --vscode-charts-yellow:#d7ba7d; --vscode-charts-red:#f14c4c;
+  --vscode-editorWidget-background:#252526;
   --vscode-input-background:#2a2a2a; --vscode-input-foreground:#cccccc; --vscode-input-border:#3c3c3c;
   --vscode-button-background:#0078d4; --vscode-button-foreground:#ffffff;
   --vscode-button-secondaryBackground:#3a3d41; --vscode-button-secondaryForeground:#ffffff;
@@ -113,6 +114,56 @@ const SECTIONS = {
   link: `<h2 class="sec base accent-rose" style="margin-top:6px">Codex 세션 연결 <span class="sub2">첫 발화로 식별</span></h2>
   <div class="cand linked"><div><div class="id">019b…a2f <span class="star">★ 연결됨</span></div><div class="muted">2026-06-22 · 결제 모듈 리팩터 검증</div></div></div>
   <div class="cand"><div><div class="id">019a…7c1</div><div class="muted">2026-06-21 · 인증 토큰 만료 처리</div></div><button>연결</button></div>`,
+
+  // 검증 통계 탭(탭2). 차트(도넛·추이·히트맵)는 런타임 JS가 그리므로, 여기선 '샘플 데이터 + 동일 렌더 로직'을
+  // 인라인 <script>로 넣어 Edge가 실제로 그리게 한다(빈 차트 방지). 렌더 규칙은 extension.ts renderStats와 동일하게 맞춤.
+  stats: `<h2 class="sec base accent-yellow" style="margin-top:6px">검증 통계 <span class="sub2">이 폴더에서 코덱스 검증이 어떻게 흘러왔는지 — 최근 흐름·통과율·막고 풀린 전환</span></h2>
+  <div class="card">
+    <div class="stat-cards">
+      <div class="stat-card s-blue"><div class="stat-num" id="st7total">–</div><div class="stat-lbl">최근 7일 검증</div></div>
+      <div class="stat-card s-green"><div class="stat-num" id="st7pass">–</div><div class="stat-lbl">완전통과율 (7일)</div></div>
+      <div class="stat-card s-orange"><div class="stat-num" id="st7touch">–</div><div class="stat-lbl">보완이상 비율 (7일)</div></div>
+      <div class="stat-card s-purple"><div class="stat-num" id="st7res">–</div><div class="stat-lbl">실패·보류→통과 전환 (7일)</div></div>
+    </div>
+    <div class="stat-chart">
+      <div class="chart-box"><h3 class="chart-h">최근 28일 검증 결과 분포</h3><div class="donut-wrap"><svg id="donut" viewBox="0 0 120 120" width="140" height="140"></svg><div id="donutTotal" class="donut-center"></div></div></div>
+      <div id="donutLegend" class="legend"></div>
+    </div>
+    <div class="stat-chart"><div class="chart-box wide"><h3 class="chart-h">최근 14일 검증 추이 <span class="muted">(아래부터 완전통과·통과보완·보류·실패·표지누락 5색, 높이=24시간 구간별 검증량)</span></h3><div id="trendBars" class="trend-bars"></div></div></div>
+    <div class="stat-chart"><div class="chart-box wide"><h3 class="chart-h">검증 활동 <span class="muted">(최근 4주 · 세로 요일 / 가로 0~23시 · 색이 진할수록 그 시간대 검증이 많음 — 아래 범례)</span></h3><div id="heat" class="heatmap"></div></div></div>
+  </div>
+  <script>
+  (function(){
+    var $=function(id){return document.getElementById(id);};
+    var w={total:17,pass:10,passNotes:3,inconclusive:1,fail:2};
+    var m={pass:30,passNotes:9,inconclusive:3,fail:4,unparsed:2};
+    var jw=w.pass+w.passNotes+w.inconclusive+w.fail;
+    var pct=function(n,d){return d>0?Math.round(n/d*100)+"%":"–";};
+    $("st7total").textContent=w.total; $("st7pass").textContent=pct(w.pass,jw);
+    $("st7touch").textContent=pct(w.passNotes+w.inconclusive+w.fail,jw); $("st7res").textContent=4;
+    var R=50,CX=60,CY=60,C=2*Math.PI*R;
+    var segs=[{n:m.pass,c:"var(--vscode-charts-green)",lbl:"완전통과"},{n:m.passNotes,c:"var(--vscode-charts-yellow,#d7ba7d)",lbl:"통과(보완)"},{n:m.inconclusive,c:"var(--vscode-charts-orange)",lbl:"보류"},{n:m.fail,c:"var(--vscode-charts-red)",lbl:"실패"}];
+    var judged=m.pass+m.passNotes+m.inconclusive+m.fail,svg="",off=0;
+    segs.forEach(function(s){ if(s.n<=0)return; var frac=s.n/judged; svg+='<circle cx="'+CX+'" cy="'+CY+'" r="'+R+'" fill="none" stroke="'+s.c+'" stroke-width="16" stroke-dasharray="'+(frac*C).toFixed(2)+' '+C.toFixed(2)+'" stroke-dashoffset="'+(-off*C).toFixed(2)+'" transform="rotate(-90 '+CX+' '+CY+')"/>'; off+=frac; });
+    $("donut").innerHTML=svg; $("donutTotal").textContent=judged;
+    var bars=segs.map(function(s){ var wp=Math.round(s.n/judged*100); return '<div class="vrow"><span class="leg-dot" style="background:'+s.c+'"></span><span class="vlbl">'+s.lbl+'</span><span class="vbar"><span class="vbar-fill" style="width:'+wp+'%;min-width:3px;background:'+s.c+'"></span></span><b class="vnum">'+s.n+' · '+wp+'%</b></div>'; }).join("");
+    bars+='<div class="vrow vmiss"><span class="leg-dot" style="background:var(--vscode-descriptionForeground)"></span><span class="vlbl">판정표지 누락</span><span class="vmiss-note">코덱스가 답은 했지만 결론 줄을 안 적은 답 — 통과율 계산엔 안 넣어요</span><b class="vnum">'+m.unparsed+'</b></div>';
+    $("donutLegend").innerHTML=bars;
+    var d14=[[1,1,0,1,0],[2,0,0,0,0],[0,0,0,0,0],[3,1,0,0,1],[2,0,1,0,0],[1,1,0,1,0],[0,0,0,0,0],[4,1,0,0,0],[3,0,1,1,0],[2,2,0,0,0],[1,0,0,0,0],[3,1,0,1,0],[2,1,0,0,0],[4,2,1,0,0]].map(function(a){return{pass:a[0],passNotes:a[1],inconclusive:a[2],fail:a[3],unparsed:a[4],total:a[0]+a[1]+a[2]+a[3]+a[4]};});
+    var maxd=1; d14.forEach(function(b){if(b.total>maxd)maxd=b.total;});
+    var sc=[["pass","var(--vscode-charts-green)"],["passNotes","var(--vscode-charts-yellow,#d7ba7d)"],["inconclusive","var(--vscode-charts-orange)"],["fail","var(--vscode-charts-red)"],["unparsed","var(--vscode-descriptionForeground)"]];
+    $("trendBars").innerHTML=d14.map(function(b,i){ var ago=13-i,lbl=ago===0?"최근":(ago+"d"); var stack=sc.map(function(x){var h=b[x[0]]?(b[x[0]]/maxd*100):0; return h>0?'<div class="tseg" style="height:'+h.toFixed(1)+'%;background:'+x[1]+'"></div>':"";}).reverse().join(""); return '<div class="tbar"><div class="tbar-stack">'+stack+'</div><div class="tbar-lbl">'+(ago%2===0?lbl:"")+'</div></div>'; }).join("");
+    var days=["월","화","수","목","금","토","일"];
+    var heatColors=['var(--vscode-editorWidget-background)','color-mix(in srgb,var(--vscode-charts-blue) 22%,var(--vscode-editor-background))','color-mix(in srgb,var(--vscode-charts-blue) 45%,var(--vscode-editor-background))','color-mix(in srgb,var(--vscode-charts-blue) 68%,var(--vscode-editor-background))','color-mix(in srgb,var(--vscode-charts-blue) 92%,var(--vscode-editor-background))'];
+    var hm=[]; for(var dd=0;dd<7;dd++){ var row=[]; for(var hx=0;hx<24;hx++){ var base=0; if(dd<5&&hx>=10&&hx<=19)base=((hx>=13&&hx<=17)?4:2)-Math.floor(dd*0.4); else if(hx>=20&&hx<=23)base=1; else if(dd>=5&&hx>=14&&hx<=18)base=2; row.push(base<0?0:base); } hm.push(row); }
+    var maxh=1; hm.forEach(function(r){r.forEach(function(v){if(v>maxh)maxh=v;});});
+    function heatLv(v){ if(v<=0)return 0; var r=v/maxh; return r<=0.25?1:(r<=0.5?2:(r<=0.75?3:4)); }
+    var head='<div class="heat-row heat-head"><span class="heat-day"></span>'; for(var hh=0;hh<24;hh++){head+='<span class="heat-hh">'+(hh%6===0?hh+"시":"")+'</span>';} head+='</div>';
+    var hhtml=head; for(var d2=0;d2<7;d2++){ hhtml+='<div class="heat-row"><span class="heat-day">'+days[d2]+'</span>'; for(var h2=0;h2<24;h2++){ hhtml+='<span class="heat-cell" style="background:'+heatColors[heatLv(hm[d2][h2])]+'"></span>'; } hhtml+='</div>'; }
+    var leg='<div class="heat-legend"><span class="hl-t">적음</span>'; for(var li=0;li<5;li++){leg+='<span class="hl" style="background:'+heatColors[li]+'"></span>';} leg+='<span class="hl-t">많음</span></div>';
+    $("heat").innerHTML=hhtml+leg;
+  })();
+  </script>`,
 };
 
 const EDGE = "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe";
@@ -139,9 +190,10 @@ for (const [key, inner] of Object.entries(SECTIONS)) {
   const htmlFile = path.join(docs, `_feat_${key}.html`);
   fs.writeFileSync(htmlFile, html, "utf8");
   const png = path.join(docs, `feat_${key}.png`); // 파일명 유지(기존 게시글이 참조) — 덮어쓰기
+  const winH = key === "stats" ? 2400 : 940; // 통계 탭은 차트가 많아 세로가 김 → 창을 크게(트림이 남는 여백 자름)
   const r = spawnSync(EDGE, [
     "--headless=new", "--disable-gpu", "--hide-scrollbars",
-    "--force-device-scale-factor=3", "--window-size=980,940",
+    "--force-device-scale-factor=3", `--window-size=980,${winH}`,
     "--default-background-color=1f1f1fff",
     `--screenshot=${png}`, "file:///" + htmlFile.replace(/\\/g, "/"),
   ], { encoding: "utf8", timeout: 60000 });
