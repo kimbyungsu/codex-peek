@@ -131,6 +131,17 @@ const SECTIONS = {
     </div>
     <div class="stat-chart"><div class="chart-box wide"><h3 class="chart-h">최근 14일 검증 추이 <span class="muted">(아래부터 완전통과·통과보완·보류·실패·표지누락 5색, 높이=24시간 구간별 검증량)</span></h3><div id="trendBars" class="trend-bars"></div></div></div>
     <div class="stat-chart"><div class="chart-box wide"><h3 class="chart-h">검증 활동 <span class="muted">(최근 4주 · 세로 요일 / 가로 0~23시 · 색이 진할수록 그 시간대 검증이 많음 — 아래 범례)</span></h3><div id="heat" class="heatmap"></div></div></div>
+    <div class="stat-chart">
+      <div class="chart-box wide"><h3 class="chart-h">연결된 코덱스 세션 토큰 <span class="muted">(이 검증 대화 세션의 누적 사용량 · 참고)</span></h3><div id="tokCards" class="stat-cards"></div><p class="muted" id="tokNote"></p></div>
+      <div class="chart-box wide"><h3 class="chart-h">클로드 작업 토큰 <span class="muted">(이 폴더 · 최근 28일 · 검증과 별개인 작업 비용)</span></h3><div id="claudeTokCards" class="stat-cards"></div></div>
+    </div>
+    <div class="stat-chart">
+      <div class="chart-box wide"><h3 class="chart-h">모델·추론강도별 검증 토큰 <span class="muted">(최근 28일 · 이 검증 1회분 합 · rollout 마지막 턴 기준 근사)</span></h3><div id="byModelBars"></div></div>
+      <div class="chart-box wide"><h3 class="chart-h">검증모드별 <span class="muted">(최근 28일 · 검증을 띄운 모드 플랜/코드/올웨이즈)</span></h3><div id="byModeBars"></div></div>
+    </div>
+    <div class="stat-chart">
+      <div class="chart-box wide"><h3 class="chart-h">프로젝트별 검증 비교 <span class="muted">(최근 28일 · 모든 폴더 · 이 폴더 통계와 별개 · 막대=검증 건수, 완전통과율 병기)</span></h3><div id="projectBars"></div></div>
+    </div>
   </div>
   <script>
   (function(){
@@ -162,6 +173,20 @@ const SECTIONS = {
     var hhtml=head; for(var d2=0;d2<7;d2++){ hhtml+='<div class="heat-row"><span class="heat-day">'+days[d2]+'</span>'; for(var h2=0;h2<24;h2++){ hhtml+='<span class="heat-cell" style="background:'+heatColors[heatLv(hm[d2][h2])]+'"></span>'; } hhtml+='</div>'; }
     var leg='<div class="heat-legend"><span class="hl-t">적음</span>'; for(var li=0;li<5;li++){leg+='<span class="hl" style="background:'+heatColors[li]+'"></span>';} leg+='<span class="hl-t">많음</span></div>';
     $("heat").innerHTML=hhtml+leg;
+    // 하단: 토큰/모델·모드/프로젝트 — extension.ts renderTokens/renderClaudeTokens/renderBars/renderProjects와 동일 구조
+    var fmtTok=function(n){return n>=1000?(n/1000).toFixed(1)+"k":String(n);};
+    var modeLabel=function(mm){return ({off:"꺼짐",code:"코드 변경 시",plancode:"플랜·코드 변경",always:"모든 턴"})[mm]||mm;};
+    function card(wrap,label,val,cls){var c=document.createElement("div");c.className="stat-card "+cls;var n=document.createElement("div");n.className="stat-num";n.textContent=val;var l=document.createElement("div");l.className="stat-lbl";l.textContent=label;c.appendChild(n);c.appendChild(l);wrap.appendChild(c);}
+    var tk={total:512400,input:418900,output:63200,cachedInput:387500};
+    [["총 토큰",fmtTok(tk.total),"s-blue"],["입력",fmtTok(tk.input),"s-green"],["출력",fmtTok(tk.output),"s-orange"],["캐시 입력(재사용)",fmtTok(tk.cachedInput),"s-purple"]].forEach(function(c){card($("tokCards"),c[0],c[1],c[2]);});
+    $("tokNote").textContent="이 폴더에 연결된 코덱스 세션이 지금까지 쓴 누적 토큰. 그 세션이 여러 폴더를 오갔다면 합산값이에요.";
+    var ct={turns:186,total:3120000,input:2680000,output:214000};
+    [["턴수",String(ct.turns),"s-blue"],["총 토큰",fmtTok(ct.total),"s-green"],["입력",fmtTok(ct.input),"s-orange"],["출력",fmtTok(ct.output),"s-purple"]].forEach(function(c){card($("claudeTokCards"),c[0],c[1],c[2]);});
+    function renderBars(wrapId,obj,labelFn){var wrap=$(wrapId);var entries=Object.keys(obj).map(function(k){return{k:k,count:obj[k].count,tokens:obj[k].tokens};});entries.sort(function(a,b){return b.tokens-a.tokens||b.count-a.count;});var maxT=1;entries.forEach(function(e){if(e.tokens>maxT)maxT=e.tokens;});entries.forEach(function(e){var row=document.createElement("div");row.className="vrow";var lbl=document.createElement("span");lbl.className="vlbl vlbl-wide";lbl.textContent=labelFn?labelFn(e.k):e.k;var bar=document.createElement("span");bar.className="vbar";var fill=document.createElement("span");fill.className="vbar-fill";fill.style.width=Math.round(e.tokens/maxT*100)+"%";fill.style.minWidth="3px";fill.style.background="var(--vscode-charts-blue)";bar.appendChild(fill);var num=document.createElement("b");num.className="vnum vnum-wide";num.textContent=fmtTok(e.tokens)+" · "+e.count+"건";row.appendChild(lbl);row.appendChild(bar);row.appendChild(num);wrap.appendChild(row);});}
+    renderBars("byModelBars",{"gpt-5.5 · high":{count:38,tokens:824000},"gpt-5.5 · xhigh":{count:6,tokens:198000},"gpt-5.4 · high":{count:4,tokens:71000}});
+    renderBars("byModeBars",{always:{count:31,tokens:690000},code:{count:14,tokens:342000},plancode:{count:3,tokens:61000}},modeLabel);
+    var ps={"D:/codex-peek":{count:48,pass:30,passNotes:9,inconclusive:3,fail:4},"D:/tg-chat-engine":{count:22,pass:15,passNotes:4,inconclusive:1,fail:2},"D:/master001":{count:9,pass:6,passNotes:1,inconclusive:1,fail:1}};
+    (function(){var wrap=$("projectBars");var rows=Object.keys(ps).map(function(k){var p=ps[k];var judged=p.pass+p.passNotes+p.inconclusive+p.fail;return{k:k,count:p.count,judged:judged,passRate:judged?Math.round(p.pass/judged*100):0};});rows.sort(function(a,b){return b.count-a.count;});var maxC=1;rows.forEach(function(r){if(r.count>maxC)maxC=r.count;});rows.forEach(function(r){var name=String(r.k).replace(/\\\\/g,"/").split("/").filter(Boolean).pop()||r.k;var row=document.createElement("div");row.className="vrow";var lbl=document.createElement("span");lbl.className="vlbl vlbl-wide";lbl.textContent=name;var bar=document.createElement("span");bar.className="vbar";var fill=document.createElement("span");fill.className="vbar-fill";fill.style.width=Math.round(r.count/maxC*100)+"%";fill.style.minWidth="3px";fill.style.background="var(--vscode-charts-green)";bar.appendChild(fill);var num=document.createElement("b");num.className="vnum vnum-wide";num.textContent=r.count+"건 · 완전통과 "+(r.judged?r.passRate+"%":"–");row.appendChild(lbl);row.appendChild(bar);row.appendChild(num);wrap.appendChild(row);});})();
   })();
   </script>`,
 };
