@@ -1,6 +1,6 @@
-# Codex Bridge
+# Claude Code ↔ Codex Bridge
 
-Claude Code ↔ Codex(OpenAI) 를 **하나의 작업 흐름으로 잇는** 도구 모음입니다.
+Claude Code ↔ Codex(OpenAI) 를 **하나의 작업 흐름으로 잇는** 도구 모음입니다. *(마켓플레이스용 영문 소개: [docs/README.en.md](docs/README.en.md))*
 사람이 두 에이전트 사이에서 답을 복사·전달하지 않아도, **세션을 고정**하고 **고정 계약(규약)을 매 턴 주입**하며, 원하면 **구현→검증 2트랙**을 하니스가 강제합니다.
 
 > **경로 표기**: 이 문서의 `~/.codex`·`~/.codex-bridge`·`~/.claude`는 모두 **기본값**입니다. `~/.codex`(코덱스 홈)는 `$CODEX_HOME` 또는 자동 탐지해 기억한 경로가 **없을 때만** 쓰는 기본값이고, `~/.codex-bridge`·`~/.claude`는 각각 `$CODEX_BRIDGE_HOME`·`$CLAUDE_CONFIG_DIR`이 없을 때의 기본값입니다. 정확한 경로·데이터 목록은 [PRIVACY.md](PRIVACY.md) 참고.

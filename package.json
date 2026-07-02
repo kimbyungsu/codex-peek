@@ -1,8 +1,16 @@
 {
   "name": "codex-bridge",
-  "displayName": "Codex Bridge",
-  "description": "Claude↔Codex 브릿지 연결 상태를 상태바·호버·대시보드로 보여줍니다. 연결된 Codex 세션의 최근 대화 확인과 다른 세션으로 갈아끼우기를 지원합니다. (~/.codex-bridge/links.json 기반, 읽기/연결변경)",
-  "version": "0.1.71",
+  "displayName": "Claude Code ↔ Codex Bridge",
+  "description": "Bridge Claude Code (implementation) and OpenAI Codex (verification) into one enforced workflow — session pinning, per-turn contract injection, verify loop with proof, live status & stats. 클로드 코드↔코덱스 검증 브릿지.",
+  "version": "0.1.72",
+  "keywords": [
+    "claude code",
+    "claude",
+    "codex",
+    "openai",
+    "verification",
+    "ai pair"
+  ],
   "publisher": "kimbyungsu",
   "license": "MIT",
   "repository": {
@@ -60,7 +68,7 @@
     "watch": "tsc -watch -p ./",
     "lint": "tsc --noEmit -p ./",
     "clean:vsix": "node -e \"const fs=require('fs');fs.readdirSync('.').filter(f=>/^codex-bridge-.*\\.vsix$/.test(f)).forEach(f=>fs.unlinkSync(f))\"",
-    "package": "npm run compile && npm run clean:vsix && vsce package --allow-missing-repository",
+    "package": "npm run compile && npm run clean:vsix && vsce package --allow-missing-repository --readme-path docs/README.en.md",
     "setup": "node install.js",
     "test": "tsc -p ./ && node tests/install.test.js && node tests/install-pick.test.js && node tests/verify-guard.test.js && node tests/withcontract.test.js && node tests/evidence.test.js && node tests/models.test.js && node tests/links-cas.test.js && node tests/verify-timeout.test.js && node tests/cleanup.test.js && node tests/evidence-unseen.test.js && node tests/verdict.test.js && node tests/verdict-supersede.test.js && node tests/base-directive.test.js && node tests/format-for-claude.test.js && node tests/claude-brain.test.js && node tests/immediate-link.test.js && node tests/brain-drift.test.js && node tests/claude-config-dir.test.js && node tests/configws.test.js && node tests/session-missing.test.js && node tests/verdict-stats.test.js && node tests/verify-stats-agg.test.js && node tests/verify-tokens.test.js && node tests/verify-lastturn.test.js && node tests/i18n.test.js && node tests/integrity-i18n.test.js && node tests/net-args.test.js && node tests/hook-setup.test.js && node tests/uninstall.test.js"
   },
