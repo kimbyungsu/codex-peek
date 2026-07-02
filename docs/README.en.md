@@ -2,7 +2,7 @@
 
 Connect **Claude Code** (implementation) and **OpenAI Codex** (verification) into one workflow — no human copy-pasting between the two AIs. Pin a Codex session, inject your fixed rules every turn, and (opt-in) let the harness **force** an implement → verify loop with real proof.
 
-![Dashboard](https://raw.githubusercontent.com/kimbyungsu/codex-peek/main/docs/dashboard.png)
+![Dashboard](https://raw.githubusercontent.com/kimbyungsu/codex-peek/main/docs/dashboard.en.png)
 
 ## What it does
 
