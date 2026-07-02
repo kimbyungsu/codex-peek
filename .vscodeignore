@@ -8,7 +8,7 @@ package-lock.json
 out/**/*.map
 *.vsix
 .gitignore
-bridge/**
+bridge/contract.example.json
 settings.example.json
 tests/**
 install.js

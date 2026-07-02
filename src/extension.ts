@@ -5,6 +5,7 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { spawn } from "child_process";
 import { computeVerifyStats, VerifyStats, CodexTokens, parseSessionTokens, ClaudeTokens, sumClaudeUsage, computeProjectStats, ProjectStat } from "./verify-stats";
+import * as hookSetup from "./hook-setup";
 import { localizeIntegrityDetail } from "./integrity-i18n";
 
 const HOME = os.homedir();
@@ -2495,9 +2496,134 @@ function syncCodexHome(onDone: (changed: boolean) => void): void {
   }
 }
 
+// ── 마켓 설치 경로: 브릿지 엔진 자동 배치 + 훅 1클릭 설치(설치 → 첫 알림 1클릭 → 완결) ──
+// 브릿지 배치 stamp: 확장이 배치했다는 표식. 레포 install.js(수동/개발 흐름)는 이 stamp를 지워 '수동 모드'로 표시 →
+// 확장이 개발자의 최신 수동본을 옛 번들본으로 덮지 않는다. stamp가 있으면 확장 버전이 바뀔 때만 재배치(업그레이드).
+const BRIDGE_STAMP = path.join(BRIDGE_DIR, ".bridge-deployed-by.json");
+function deployBridgeRuntime(context: vscode.ExtensionContext): boolean {
+  try {
+    const src = path.join(context.extensionPath, "bridge");
+    if (!fs.existsSync(src)) return false; // 번들에 bridge 없음(구버전 vsix) → 아무것도 안 함
+    const ver = String((context.extension.packageJSON as any)?.version || "");
+    const absent = hookSetup.BRIDGE_SCRIPTS.filter((f) => !fs.existsSync(path.join(BRIDGE_DIR, f)));
+    let stamp: any = null;
+    try { stamp = JSON.parse(fs.readFileSync(BRIDGE_STAMP, "utf8")); } catch { /* 없음/깨짐 = 수동 or 최초 */ }
+    // 흐름 구분(Codex 실패 반영): ①stamp 있음=확장 관리 모드 → 버전 다르거나 파일 누락 시 전체 재배치.
+    // ②stamp 없음+전부 없음=마켓 fresh → 전체 배치+관리 모드 전환. ③stamp 없음+일부만 없음=손상된 수동 설치 →
+    //   누락분만 채우고 stamp는 안 씀(수동 모드 유지 — 개발자가 고친 나머지 파일을 번들로 덮지 않음).
+    // ④stamp 없음+전부 있음=정상 수동 설치 → 절대 안 덮음.
+    let targets: string[];
+    let writeStamp: boolean;
+    if (stamp) {
+      if (absent.length === 0 && stamp.version === ver) return false; // 같은 버전 배치됨 → 스킵
+      targets = hookSetup.BRIDGE_SCRIPTS; writeStamp = true;          // 업그레이드/복구: 전체 재배치
+    } else if (absent.length === hookSetup.BRIDGE_SCRIPTS.length) {
+      targets = hookSetup.BRIDGE_SCRIPTS; writeStamp = true;          // 마켓 fresh 설치
+    } else if (absent.length > 0) {
+      targets = absent; writeStamp = false;                            // 손상 수동 설치: 누락분만 보충(수동 모드 유지)
+    } else {
+      return false;                                                    // 정상 수동 설치 존중
+    }
+    let allOk = true;
+    for (const f of targets) {
+      const body = fs.readFileSync(path.join(src, f), "utf8");
+      if (!hookSetup.atomicWriteFile(path.join(BRIDGE_DIR, f), body)) allOk = false; // 실행 중 훅과의 충돌 최소화(tmp+rename)
+    }
+    // stamp는 '전부 성공'일 때만 — 일부 실패 상태를 최신으로 표시하면 다음 활성화가 스킵해 낡은 런타임이 방치됨(Codex 지적).
+    // stamp 쓰기 자체도 실패하면 false 반환(관리 모드 표식 없이 파일만 있는 상태 = 다음 활성화가 '수동'으로 오인 — 드물지만 성공으로 위장하지 않음).
+    if (writeStamp && allOk) {
+      if (!hookSetup.atomicWriteFile(BRIDGE_STAMP, JSON.stringify({ version: ver, ts: new Date().toISOString() }) + "\n")) return false;
+    }
+    return allOk;
+  } catch { return false; } // best-effort — 배치 실패가 확장 활성화를 막지 않음
+}
+
+// 훅이 쓸 node 실행 파일 후보: env → 기존 우리 훅의 토큰(이미 동작 중인 표기 재사용) → PATH의 node(where/which로 절대경로) → 관례형 "node".
+// ★확장 호스트 process.execPath는 Code.exe라 후보에 넣지 않는다(Codex 지적).
+function nodeTokenCandidates(): Array<string | undefined> {
+  const cands: Array<string | undefined> = [process.env.CODEX_BRIDGE_NODE];
+  try { // 기존 settings.json에 우리 훅이 하나라도 있으면 그 명령의 node 토큰을 재사용(이미 그 환경에서 동작 중인 표기)
+    const s = JSON.parse(fs.readFileSync(claudeSettingsFile(), "utf8"));
+    for (const ev of Object.keys(s.hooks || {})) {
+      const arr = Array.isArray(s.hooks[ev]) ? s.hooks[ev] : [];
+      for (const g of arr) for (const e of (g && Array.isArray(g.hooks) ? g.hooks : [])) {
+        if (e && typeof e.command === "string" && hookSetup.isOurHookCmd(e.command)) {
+          const m = e.command.match(/^("[^"]+"|\S+)/); if (m) cands.push(m[1]);
+        }
+      }
+    }
+  } catch { /* settings 없음/깨짐 → 다음 후보 */ }
+  try { // PATH의 node 절대경로(where/which)
+    const cmd = process.platform === "win32" ? "where node" : "which node";
+    const r = spawn_sync_where(cmd);
+    if (r) cands.push(r);
+  } catch { /* ignore */ }
+  cands.push("node");
+  return cands;
+}
+function spawn_sync_where(cmd: string): string | undefined {
+  try {
+    const r = require("child_process").spawnSync(cmd, { shell: true, encoding: "utf8", timeout: 15000 });
+    const first = String(r.stdout || "").split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean)[0];
+    return r.status === 0 && first ? first : undefined;
+  } catch { return undefined; }
+}
+
+// 훅 설치 흐름(동의 1클릭): 무엇을 바꾸는지·백업 위치·훅 3줄을 보여주고, [설치]를 눌러야만 병합한다.
+async function runHookInstallFlow(): Promise<void> {
+  const settingsFile = claudeSettingsFile();
+  let tok = hookSetup.resolveNodeToken(nodeTokenCandidates());
+  if (!tok) {
+    const input = await vscode.window.showInputBox({
+      prompt: tE("훅을 실행할 node 실행 파일 경로를 입력하세요 (예: C:\\Program Files\\nodejs\\node.exe)", "Enter the path to the node executable for hooks (e.g. /usr/local/bin/node)"),
+      ignoreFocusOut: true,
+    });
+    if (!input) return;
+    tok = hookSetup.resolveNodeToken([input]);
+    if (!tok) { void vscode.window.showErrorMessage(tE("그 경로의 node를 셸에서 실행하지 못했습니다 — 경로를 확인해 주세요.", "Could not run node at that path from a shell — please check the path.")); return; }
+  }
+  const cmds = hookSetup.OUR_HOOKS.map((h) => "· " + hookSetup.hookCommand(tok!.token, BRIDGE_DIR, h.script)).join("\n");
+  const detail = tE(
+    `바꾸는 파일: ${settingsFile}\n(수정 전 같은 폴더에 settings.json.bak.<시각> 백업을 먼저 만듭니다. 기존 다른 훅은 보존됩니다.)\n\n등록되는 검증 훅 3줄:\n${cmds}\n\n설치 후 Claude Code 새 세션부터 적용됩니다.`,
+    `File to change: ${settingsFile}\n(A settings.json.bak.<time> backup is created first. Other existing hooks are preserved.)\n\nHooks to register:\n${cmds}\n\nTakes effect from the next Claude Code session.`,
+  );
+  const yes = tE("설치", "Install");
+  const pick = await vscode.window.showInformationMessage(tE("Claude Code 검증 훅 설치", "Install Claude Code verification hooks"), { modal: true, detail }, yes);
+  if (pick !== yes) return;
+  const res = hookSetup.installHooks(settingsFile, BRIDGE_DIR, tok.token);
+  if (res.ok) {
+    // '확장이 설치했다' 표식 — 확장 제거(vscode:uninstall) 시 이 표식이 있을 때만 훅을 자동 정리(레포 install.js 설치분은 안 건드림).
+    try { fs.writeFileSync(path.join(BRIDGE_DIR, "hooks-installed-by-extension"), new Date().toISOString(), "utf8"); } catch { /* best-effort */ }
+    void vscode.window.showInformationMessage(tE(`검증 훅 설치 완료 — Claude Code 새 세션부터 적용됩니다.${res.backup ? ` (백업: ${res.backup})` : ""}`, `Hooks installed — takes effect from the next Claude Code session.${res.backup ? ` (backup: ${res.backup})` : ""}`));
+  } else {
+    void vscode.window.showErrorMessage(tE(`검증 훅 설치 실패: ${res.reason || "알 수 없는 이유"}`, `Hook install failed: ${res.reason || "unknown reason"}`));
+  }
+}
+
+// 활성화 시: 훅 미등록이면 알림 1회(다시 묻지 않음 선택 가능). 명령 codexBridge.installHooks로 언제든 다시 실행 가능.
+const HOOKS_PROMPT_DISMISSED = path.join(BRIDGE_DIR, "hooks-prompt-dismissed");
+async function maybeOfferHookSetup(): Promise<void> {
+  try {
+    const st = hookSetup.detectHooks(claudeSettingsFile());
+    if (st.installed) return;
+    if (fs.existsSync(HOOKS_PROMPT_DISMISSED)) return;
+    const review = tE("설치 내용 보기", "Review & install");
+    const never = tE("다시 묻지 않음", "Don't ask again");
+    const pick = await vscode.window.showInformationMessage(
+      tE("Codex Bridge: 검증 훅이 아직 등록되지 않았습니다 — Claude Code가 검증을 부르려면 훅 3개가 필요합니다.", "Codex Bridge: verification hooks are not registered yet — Claude Code needs 3 hooks to run verification."),
+      review, never,
+    );
+    if (pick === never) { try { fs.writeFileSync(HOOKS_PROMPT_DISMISSED, new Date().toISOString(), "utf8"); } catch { /* ignore */ } return; }
+    if (pick === review) await runHookInstallFlow();
+  } catch { /* best-effort — 제안 실패가 활성화를 막지 않음 */ }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
+  deployBridgeRuntime(context); // 마켓 설치: 번들 브릿지를 ~/.codex-bridge에 자동 배치(레포 수동 설치는 stamp 없음 → 존중)
   syncCodexBin(); // 브릿지가 쓸 codex 경로를 최신 확장 기준으로 기록
   ensureLangInitialized(); // 첫 실행: language.json 없으면 VS Code UI 언어로 초기값 저장(이후엔 대시보드 토글이 정본)
+  context.subscriptions.push(vscode.commands.registerCommand("codexBridge.installHooks", () => { void runHookInstallFlow(); }));
+  void maybeOfferHookSetup(); // 훅 미등록 감지 → 동의 1클릭 설치 제안(비동기, 활성화 안 막음)
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("codexBridge.codexPath")) syncCodexBin();

@@ -200,6 +200,8 @@ function copyBridge(dryRun) {
   if (!dryRun) {
     fs.mkdirSync(BRIDGE_DIR, { recursive: true });
     for (const f of BRIDGE_SCRIPTS) fs.copyFileSync(path.join(SRC_BRIDGE, f), path.join(BRIDGE_DIR, f));
+    // 확장 자동배치 stamp 제거 = '수동(레포) 설치 모드' 표시 — 확장이 개발자의 최신 수동본을 옛 번들본으로 덮지 않게 한다(src/extension.ts deployBridgeRuntime 대칭).
+    try { fs.unlinkSync(path.join(BRIDGE_DIR, ".bridge-deployed-by.json")); } catch { /* 없으면 무시 */ }
   }
   log(`✅ 브릿지 파일 ${BRIDGE_SCRIPTS.length}개 → ${BRIDGE_DIR}${dryRun ? "  (미리보기 — 복사 안 함)" : ""}`);
 }
@@ -507,4 +509,4 @@ if (require.main === module) {
   else cmdInstall(has("--dry-run") || has("-n"));
 }
 
-module.exports = { pickVsix, currentVsix, buildInstallCmd, candidateCodeClis, findRootUpwards, vscodeSignalClis, standardCodeClis, codeCliPriority };
+module.exports = { pickVsix, currentVsix, buildInstallCmd, candidateCodeClis, findRootUpwards, vscodeSignalClis, standardCodeClis, codeCliPriority, OUR_HOOKS, BRIDGE_SCRIPTS, isOurHookCmd }; // 뒤 3개: hook-setup.ts와의 규칙 패리티 테스트용
