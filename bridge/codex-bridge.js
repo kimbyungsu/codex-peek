@@ -8,6 +8,7 @@
 //   node codex-bridge.js ask "<프롬프트>"          연결된 세션에 보내고 답 받기 (없으면 보고)
 //   node codex-bridge.js ask --allow-new "<...>"   연결 없을 때 새 세션 생성+연결 후 보내기 (첫 소통)
 //   node codex-bridge.js ask --force-new "<...>"   엉뚱 폴더 방어를 무릅쓰고 '이 폴더'에 새 세션 강제(--allow-new 함의)
+//   node codex-bridge.js ask --net "<...>"          이 1회만 검증자 네트워크 허용(파일 읽기전용 유지) — 원격(GitHub 등) 직접 확인용
 //   node codex-bridge.js link <codex-session-id>   현재 Claude 세션을 기존 Codex 세션에 연결
 //   node codex-bridge.js link --last               가장 최근(인덱스된) Codex 세션에 연결
 //   node codex-bridge.js status                    현재 연결 상태
@@ -489,6 +490,26 @@ function modelArgs(pref) {
   return a;
 }
 
+// ask --net 옵트인: 이 검증 1회에 한해 '파일 읽기전용 유지 + 외부 통신 허용' 권한 프로필을 -c 오버라이드로 주입.
+// config.toml은 건드리지 않음(전역 기본은 현행 통신 차단 유지 — 검증자 안전설계). 기본 read-only 샌드박스는 죽은 프록시
+// (127.0.0.1:9)를 하위 셸에 심어 통신을 끊는데, 이 프로필이 그걸 대체한다(0.118 실측: 프록시 해제·git ls-remote 성공·쓰기 여전히 거부).
+// 도메인 allowlist(network.domains)는 Windows에서 미집행 실측(예: example.com 직결 성공)이라 넣지 않는다 — 거짓 안전감 방지.
+// 즉 --net = "그 1회, 파일은 못 쓰지만 인터넷 전체가 열린다"가 정직한 계약.
+function netArgs() {
+  return [
+    "-c", "default_permissions=netverify",
+    "-c", 'permissions.netverify.extends=":read-only"',
+    "-c", "permissions.netverify.network.enabled=true",
+    "-c", "permissions.netverify.network.mode=limited",
+  ];
+}
+// --net일 때 프롬프트 끝에 붙는 안내 — 검증자가 통신 가능함을 알고, Windows 인증서 함정(schannel)을 우회하게 한다(실측: openssl 백엔드는 성공).
+function netNote(lang) {
+  return lang === "en"
+    ? "\n\n[Network enabled for this request (opt-in) — outbound access is allowed; filesystem stays read-only. On Windows, if git/curl fail with schannel certificate errors (SEC_E_NO_CREDENTIALS), retry with `git -c http.sslBackend=openssl ...` or use Python/Node HTTP.]"
+    : "\n\n[이 요청은 네트워크 허용(옵트인) — 외부 통신 가능, 파일은 여전히 읽기전용. Windows에서 git/curl이 schannel 인증서 오류(SEC_E_NO_CREDENTIALS)를 내면 `git -c http.sslBackend=openssl ...`로 재시도하거나 Python/Node HTTP를 사용하라.]";
+}
+
 // sessions 폴더에서 특정 uuid의 rollout 파일 경로 찾기.
 function findRolloutById(uuid) {
   let found = null;
@@ -776,7 +797,8 @@ function die(msg, code = 1) {
 async function cmdAsk(rest) {
   const forceNew = rest.includes("--force-new"); // 엉뚱 폴더 방어를 무릅쓰고 '이 폴더'에 새 세션 강제
   const allowNew = rest.includes("--allow-new") || forceNew;
-  const prompt = rest.filter((x) => x !== "--allow-new" && x !== "--force-new").join(" ").trim();
+  const net = rest.includes("--net"); // 이 1회만 네트워크 허용(파일 읽기전용 유지) — netArgs 주석 참조
+  const prompt = rest.filter((x) => x !== "--allow-new" && x !== "--force-new" && x !== "--net").join(" ").trim();
   if (!prompt) die('사용법: ask "<프롬프트>"', 2);
 
   try { maybeCleanupState(); } catch { /* 오래된 상태파일 정리 best-effort(Stop 훅 미설치 환경 대비) — 하루 1회 */ }
@@ -800,7 +822,7 @@ async function cmdAsk(rest) {
       );
     }
     try { writePhase("codex-verifying", { round: (readPhase().round || 0) + 1, session: claudeId(), workspace: ws }); } catch { /* 진행표시 best-effort */ }
-    const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs], withContract(prompt, ws, langSnap));
+    const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs, ...(net ? netArgs() : [])], withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap));
     if (error || !answer || (typeof status === "number" && status !== 0)) {
       try { writePhase("claude-working", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // ask 실패 → 진행표시 codex-verifying 잔존 방지(Claude로 복귀)
       die(tB(`Codex resume 실패: `,`Codex resume failed: `) + `${error?.message || ""}\n${stderr.slice(-500)}`);
@@ -864,7 +886,7 @@ async function cmdAsk(rest) {
   // recordLink가 '성공(true)'일 때만 earlyLinked 확정 → 저장 실패(CAS/잠금/권한)면 미연결로 두고 다음 폴/최종 단계서 재시도.
   // detected(세션 발견)와 linked(저장 성공)를 분리해 "즉시연결" 거짓보고를 막는다(Codex 지적).
   const onDetect = (id) => { if (earlyLinked) return; try { if (recordLink(id)) earlyLinked = id; } catch { /* 다음 폴/최종 단계서 재시도 */ } };
-  const { answer, error, status, stderr } = await runCodexNewSessionAsync([...mArgs], withContract(prompt, ws, langSnap), since, exec, onDetect); // 탐지=작업폴더(코덱스 session_meta.cwd와 일치)
+  const { answer, error, status, stderr } = await runCodexNewSessionAsync([...mArgs, ...(net ? netArgs() : [])], withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap), since, exec, onDetect); // 탐지=작업폴더(코덱스 session_meta.cwd와 일치)
   // cwd 일치 우선, 못 찾으면 원래 방식(무회귀) — 최종 식별용 폴백.
   const resolveNew = () => { const f = newestRolloutSinceForWs(since, exec) || newestRolloutSince(since); const mm = f && f.match(UUID_RE); return mm ? mm[1] : ""; }; // 탐지=작업폴더
   if (error || !answer || (typeof status === "number" && status !== 0)) {
@@ -1094,6 +1116,7 @@ function main() {
           '  node codex-bridge.js ask "<프롬프트>"\n' +
           '  node codex-bridge.js ask --allow-new "<프롬프트>"\n' +
           '  node codex-bridge.js ask --force-new "<프롬프트>"  (엉뚱 폴더 방어 무시, 이 폴더에 새 세션 강제)\n' +
+          '  node codex-bridge.js ask --net "<프롬프트>"        (이 1회만 네트워크 허용 — 파일은 읽기전용 유지, 원격 확인용)\n' +
           "  node codex-bridge.js link <id> | link --last\n" +
           "  node codex-bridge.js status | find | doctor | detect-home\n" +
           "  node codex-bridge.js pref [set model=<m> reasoning=<low|medium|high> | clear]\n",
@@ -1102,4 +1125,4 @@ function main() {
 }
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
-module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, updateLinks, loadLinks, saveLinks, LINKS_FILE, verifyTimeoutMin, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, parseLastTurn };
+module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, updateLinks, loadLinks, saveLinks, LINKS_FILE, verifyTimeoutMin, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, parseLastTurn, netArgs, netNote };
