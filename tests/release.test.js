@@ -34,6 +34,10 @@ a = parseArgs(["--publish-only", "codex-bridge-0.1.75.vsix"]);
 ok(a.publishOnly && a.publishOnlyPath === "codex-bridge-0.1.75.vsix", "--publish-only <경로>");
 a = parseArgs(["--publish-only", "--no-push"]);
 ok(a.publishOnly && a.publishOnlyPath === null, "--publish-only 뒤 플래그는 경로로 안 오인");
+threw = false; try { parseArgs(["--version"]); } catch { threw = true; }
+ok(threw, "--version 단독(값 없음)은 에러 — 조용히 patch로 안 빠짐");
+threw = false; try { parseArgs(["--version", "--minor"]); } catch { threw = true; }
+ok(threw, "--version 뒤가 플래그여도 에러");
 
 console.log("[publishGate] 마켓 자동 게시는 'push까지 된 완전 배포'일 때만(반쪽 배포 방지)");
 ok(publishGate(true, true) === true, "push O + PAT O → 게시");

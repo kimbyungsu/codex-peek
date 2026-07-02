@@ -39,6 +39,7 @@ function dirtyTracked(porcelain) {
 function parseArgs(args) {
   const kind = args.includes("--major") ? "major" : args.includes("--minor") ? "minor" : "patch";
   const vi = args.indexOf("--version");
+  if (vi >= 0 && (!args[vi + 1] || args[vi + 1].startsWith("--"))) throw new Error("--version 뒤에 버전을 지정하세요 (예: --version 0.2.0)"); // 단독 --version이 조용히 patch로 빠지는 것 방지
   const poi = args.indexOf("--publish-only");
   const poArg = poi >= 0 && args[poi + 1] && !args[poi + 1].startsWith("--") ? args[poi + 1] : null;
   return {
