@@ -199,6 +199,18 @@ node ~/.codex-bridge/codex-bridge.js doctor                  # 지금 어떤 cod
 
 ---
 
+## 배포 (관리자용)
+
+한 명령이 **버전 올림 → 전체 테스트 → vsix 빌드(+이 PC 설치) → 깃헙 push → 마켓 게시/안내**까지 처리합니다(조수·기억·PC와 무관하게 저장소에 박힌 절차):
+
+```bash
+npm run release              # patch 버전 올림(0.1.74→0.1.75) 후 전 과정
+npm run release -- --minor   # 0.2.0 식으로 올림 (--major, --version 1.2.3 도 가능)
+```
+
+- 커밋 안 된 변경이 있으면 **시작 전 중단**(무엇이 배포되는지 명확하게), 중간 실패 시 버전 파일 원복.
+- 마켓 게시: 환경변수 `VSCE_PAT`(마켓 publish 권한 토큰)가 있으면 자동, 없으면 업로드할 vsix 경로를 안내(관리 페이지 ⋮ → Update에 드래그 1회). 마켓은 같은 버전 재업로드를 거부하므로 버전은 스크립트가 매번 올립니다.
+
 ## 읽기 전용·안전 원칙
 - 대화 내용(코덱스 홈, 기본 `~/.codex` 아래 `sessions`)은 평소엔 **읽기만** 합니다. **단 하나의 예외**: 대시보드에서 숨긴 세션을 **‘영구삭제’로 명시 확인**(확인 모달·공유 세션 경고)하면 그 Codex rollout 파일을 삭제합니다(사용자가 직접 누른 경우만). 그 외에는 원본 rollout을 옮기거나 지우지 않습니다.
 - **일반 런타임 상태**는 모두 자체 폴더(브릿지 홈, 기본 `~/.codex-bridge`)에 씁니다: `links.json`(연결)·계약(`contracts/<키>.json` 프로젝트별 · `contract.json`은 레거시 전역 폴백·상속 안 함)·`active.json`(현재 폴더)·`proofs/`(검증 증명)·`integrity.json`(무결성 경보)·`phase.json`(진행 단계)·`base-directive.json`(기본 지침 오버라이드)·`stats/verdicts.jsonl`(검증 통계 메타 — 프롬프트/답 원문 미저장·60일 자동정리). 모두 런타임 데이터라 저장소에 포함되지 않습니다. (경로는 `$CODEX_HOME`·`$CODEX_BRIDGE_HOME`로 바뀔 수 있음 — [PRIVACY.md](PRIVACY.md) 참고.)
