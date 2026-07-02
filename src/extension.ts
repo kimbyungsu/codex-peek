@@ -355,7 +355,7 @@ function readMessages(file: string): Array<{ role: "user" | "assistant"; text: s
 // 안 걷으면 상태바/호버/후보 목록의 '주제'가 항상 "[검증 기본 원칙 …" 머리말로 보인다(사용자 실측). 마커가 없으면(비-브릿지
 // 세션·일반 대화) 원문 그대로. lastIndexOf = 지침 텍스트 내부에 우연히 같은 문구가 있어도 마지막(실제 구분자)을 취함.
 function stripInjectedPreamble(text: string): string {
-  for (const marker of ["\n[작업 요청]\n", "\n[Work Request]\n"]) {
+  for (const marker of ["\n---\n[작업 요청]\n", "\n---\n[Work Request]\n"]) {
     const i = text.lastIndexOf(marker);
     if (i >= 0) return text.slice(i + marker.length);
   }
