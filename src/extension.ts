@@ -5,6 +5,7 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { spawn } from "child_process";
 import { computeVerifyStats, VerifyStats, CodexTokens, parseSessionTokens, ClaudeTokens, sumClaudeUsage, computeProjectStats, ProjectStat } from "./verify-stats";
+import { localizeIntegrityDetail } from "./integrity-i18n";
 
 const HOME = os.homedir();
 // 자체 namespace 폴더. CODEX_BRIDGE_HOME으로 override(확장 호스트≠훅 home 환경 대비 — 브릿지·훅과 동일 규칙).
@@ -505,7 +506,7 @@ function loadBaseDirectiveSafe(): { verifyBaseline: string; transmit: string; re
 
 // 무결성 신호: 브릿지(verify-guard)가 '검증 미완' 등을 integrity.json에 기록 → 여기서 읽어 상태바/대시보드로 가시화.
 // 단순 게이트(차단)로 끝내지 않고 사람에게 보이게 하는 채널의 소비자 쪽. 포맷은 contract-lib과 공유.
-interface IntegrityEvent { id: string; ts?: string; kind?: string; severity?: string; detail?: string; ack?: boolean; session?: string; workspace?: string; sig?: string }
+interface IntegrityEvent { id: string; ts?: string; kind?: string; severity?: string; detail?: string; detailKo?: string; detailEn?: string; ack?: boolean; session?: string; workspace?: string; sig?: string }
 function readIntegrity(): IntegrityEvent[] {
   try { const d = JSON.parse(fs.readFileSync(INTEGRITY_FILE, "utf8")); return Array.isArray(d.events) ? d.events : []; } catch { return []; }
 }
@@ -514,7 +515,12 @@ function readIntegrity(): IntegrityEvent[] {
 // id로 처리하므로 원본 목록은 안 건드림). 모든 appendIntegrityEvent 기록부가 workspace를 넣음.
 function readVisibleIntegrity(ws: string | null): IntegrityEvent[] {
   if (!ws) return []; // 폴더 없는 빈 창 → 전역 경보 누수 차단
-  return readIntegrity().filter((e) => !e.workspace || normWs(e.workspace) === normWs(ws));
+  // detail은 '기록 시점 언어'로 저장된 데이터 — 표시 소비자(상태바 툴팁·대시보드 배너)가 모두 이 함수를 거치므로,
+  // 여기 한 곳에서 현재 언어로 현지화한 '복사본'을 준다(원본 integrity.json은 안 건드림 — ack는 id로 처리라 무관).
+  const en = loadLangExt() === "en";
+  return readIntegrity()
+    .filter((e) => !e.workspace || normWs(e.workspace) === normWs(ws))
+    .map((e) => ({ ...e, detail: localizeIntegrityDetail(e, en) }));
 }
 
 // ── 탭2 검증 통계: verdicts.jsonl(append-only)을 읽어 기간별 분포·전환·히트맵으로 집계 ──
@@ -542,7 +548,7 @@ function modelFamily(m: string): string {
 }
 // 두뇌 drift(모델 계열/추론 어긋남)를 integrity 채널에 reconcile → 기존 상태바·배너·확인(ack) 파이프라인 재사용.
 // 안정 sig로 같은 drift는 재발행 안 함(확인 후 sig 안 바뀌면 안 다시 뜸), 해소된 미확인 신호는 제거. kind="brain-drift".
-function syncBrainDrift(ws: string | null, drifts: { sig: string; detail: string }[]): void {
+function syncBrainDrift(ws: string | null, drifts: { sig: string; detail: string; detailKo?: string; detailEn?: string }[]): void {
   if (!ws) return;
   const KIND = "brain-drift";
   const events = readIntegrity() as any[];
@@ -553,7 +559,7 @@ function syncBrainDrift(ws: string | null, drifts: { sig: string; detail: string
   const present = new Set(kept.filter((e) => e.kind === KIND && wsMatch(e)).map((e) => e.sig));
   for (const d of drifts) {
     if (present.has(d.sig)) continue; // 이미 기록됨(ack 유지) → 재발행 안 함
-    kept.push({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, ack: false, ts: new Date().toISOString(), session: "", workspace: ws, kind: KIND, severity: "warning", detail: d.detail, sig: d.sig });
+    kept.push({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, ack: false, ts: new Date().toISOString(), session: "", workspace: ws, kind: KIND, severity: "warning", detail: d.detail, detailKo: d.detailKo, detailEn: d.detailEn, sig: d.sig });
   }
   if (kept.length !== events.length || kept.some((e, i) => e !== events[i])) atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: kept.slice(-50) }));
 }
@@ -589,14 +595,16 @@ function syncBrainDriftFor(ws: string | null): void {
         if (Number.isFinite(t) && Date.now() - t < DRIFT_FRESH_MS) { mModel = sm.model; mEffort = sm.effort; }
       }
     }
-    const bd: { sig: string; detail: string }[] = [];
+    // detailKo/detailEn 동시 저장 — 표시(readVisibleIntegrity)가 '그때그때 현재 언어'를 고른다(기록 시점 언어 고정 방지). detail은 구버전 판독 폴백.
+    const bd: { sig: string; detail: string; detailKo: string; detailEn: string }[] = [];
+    const bothD = (sig: string, ko: string, en: string) => bd.push({ sig, detail: tE(ko, en), detailKo: ko, detailEn: en });
     // Claude: 별칭(opus)↔정식ID(claude-opus-4-8)는 namespace가 달라 modelFamily 계열로 비교(둘 다 알 때만 → 빈값 오탐 방지).
     const cf = modelFamily(cbModel), cfc = modelFamily(claudeCur);
-    if (cf && cfc && cf !== cfc) bd.push({ sig: `cc-model:${cf}!${cfc}`, detail: tE(`Claude: 설정한 모델은 '${cf}'인데 최근 답한 모델은 '${cfc}'예요. 고른 모델이 아직 안 먹었을 수 있어요(앱에서 모델을 다시 선택).`, `Claude: configured model is '${cf}' but the latest answer used '${cfc}'. Your selection may not have taken effect yet (re-select the model in the app).`) });
+    if (cf && cfc && cf !== cfc) bothD(`cc-model:${cf}!${cfc}`, `Claude: 설정한 모델은 '${cf}'인데 최근 답한 모델은 '${cfc}'예요. 고른 모델이 아직 안 먹었을 수 있어요(앱에서 모델을 다시 선택).`, `Claude: configured model is '${cf}' but the latest answer used '${cfc}'. Your selection may not have taken effect yet (re-select the model in the app).`);
     // Codex: pref와 rollout이 같은 slug 어휘라 정규화 raw 비교(modelFamily는 Claude 계열 전용이라 gpt-*를 ""로 떨궈 영영 못 잡음).
     const xm = (pref.model || "").trim().toLowerCase(), xmc = (mModel || "").trim().toLowerCase();
-    if (xm && xmc && xm !== xmc) bd.push({ sig: `cx-model:${xm}!${xmc}`, detail: tE(`코덱스: 설정한 모델은 '${pref.model}'인데 최근 답한 모델은 '${mModel}'예요. 바꾼 게 다음 답부터 반영될 수 있어요.`, `Codex: configured model is '${pref.model}' but the latest answer used '${mModel}'. The change may apply from the next answer.`) });
-    if (pref.reasoning && mEffort && pref.reasoning !== mEffort) bd.push({ sig: `cx-effort:${pref.reasoning}!${mEffort}`, detail: tE(`코덱스: 설정한 생각강도는 '${pref.reasoning}'인데 최근 답은 '${mEffort}'였어요. 바꾼 게 다음 답부터 반영될 수 있어요.`, `Codex: configured reasoning is '${pref.reasoning}' but the latest answer used '${mEffort}'. The change may apply from the next answer.`) });
+    if (xm && xmc && xm !== xmc) bothD(`cx-model:${xm}!${xmc}`, `코덱스: 설정한 모델은 '${pref.model}'인데 최근 답한 모델은 '${mModel}'예요. 바꾼 게 다음 답부터 반영될 수 있어요.`, `Codex: configured model is '${pref.model}' but the latest answer used '${mModel}'. The change may apply from the next answer.`);
+    if (pref.reasoning && mEffort && pref.reasoning !== mEffort) bothD(`cx-effort:${pref.reasoning}!${mEffort}`, `코덱스: 설정한 생각강도는 '${pref.reasoning}'인데 최근 답은 '${mEffort}'였어요. 바꾼 게 다음 답부터 반영될 수 있어요.`, `Codex: configured reasoning is '${pref.reasoning}' but the latest answer used '${mEffort}'. The change may apply from the next answer.`);
     syncBrainDrift(ws, bd);
   } catch { /* best-effort */ }
 }
@@ -614,15 +622,20 @@ function syncSessionMissing(ws: string | null): void {
     const hasLink = !!(workspaceLink(links, ws) || {}).codexSession; // 이 폴더에 연결 고정된 Codex 세션이 있나
     const blocked = !hasLink && !!(links.autoNewFailed || {})[normWs(ws)]; // 자동 새 세션 생성이 막힌 상태(연속 실패 폭증방지) → '시도' 대신 '멈춤' 안내
     const sig = blocked ? "session-missing:blocked" : "session-missing:normal";
-    const detail = blocked
-      ? tE("현재 연결된 Codex 세션이 없고, 자동 생성이 멈춰 있습니다. 'Codex 세션 연결'에서 수동으로 연결하세요. 계속되면 개발자에게 문의해 주세요.","No Codex session is linked and auto-creation is paused. Link one manually under 'Codex Session Link'. If this persists, please report it.")
-      : tE("현재 연결된 Codex 세션이 없습니다. 'Codex 세션 연결'에서 수동으로 연결하거나, 검증을 계속 진행하면 새 세션 생성·연결을 자동으로 시도합니다.","No Codex session is linked. Link one manually under 'Codex Session Link', or keep verifying and a new session will be created and linked automatically.");
+    // detailKo/detailEn 동시 저장(표시는 readVisibleIntegrity가 현재 언어 선택) — 문구는 integrity-i18n.ts STATIC과 자구 일치 유지.
+    const dKo = blocked
+      ? "현재 연결된 Codex 세션이 없고, 자동 생성이 멈춰 있습니다. 'Codex 세션 연결'에서 수동으로 연결하세요. 계속되면 개발자에게 문의해 주세요."
+      : "현재 연결된 Codex 세션이 없습니다. 'Codex 세션 연결'에서 수동으로 연결하거나, 검증을 계속 진행하면 새 세션 생성·연결을 자동으로 시도합니다.";
+    const dEn = blocked
+      ? "No Codex session is linked and auto-creation is paused. Link one manually under 'Codex Session Link'. If this persists, please report it."
+      : "No Codex session is linked. Link one manually under 'Codex Session Link', or keep verifying and a new session will be created and linked automatically.";
+    const detail = tE(dKo, dEn);
     // 연결 있으면 이 ws의 session-missing 전부 제거. 없으면 '현재 sig + 미확인'만 보존(상태가 정상↔막힘으로 바뀌어 sig가 다르거나 ack된 건 제거 → 아래서 새 detail로 재생성).
     // ★ack된 것·옛 sig를 제거+재생성하므로 (1)외부 ack-all로 ack돼도 (2)정상↔막힘 전환에도 연결 없는 한 항상 '최신 detail의 빨강'이 유지된다('연결로만 해소' + detail 자동 갱신).
     const kept = events.filter((e) => e.kind !== KIND || !wsMatch(e) || (!hasLink && e.sig === sig && !e.ack));
     const present = kept.some((e) => e.kind === KIND && wsMatch(e)); // 살아남은(현재 sig·미확인) session-missing이 있나
     if (!hasLink && !present) {
-      kept.push({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, ack: false, ts: new Date().toISOString(), session: "", workspace: ws, kind: KIND, severity: "error", detail, sig });
+      kept.push({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, ack: false, ts: new Date().toISOString(), session: "", workspace: ws, kind: KIND, severity: "error", detail, detailKo: dKo, detailEn: dEn, sig });
     }
     if (kept.length !== events.length || kept.some((e, i) => e !== events[i])) atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: kept.slice(-50) }));
   } catch { /* best-effort */ }
@@ -1055,10 +1068,11 @@ function readClaudeTokens(ws: string | null, now = Date.now()): ClaudeTokens {
   };
   try { walk(claudeProjectsDir(), 0); } catch { /* ignore */ }
   const cutoff = now - 28 * 24 * 60 * 60 * 1000;
+  const seenReq = new Set<string>(); // 파일 간 공유 — resume/fork로 복사된 줄의 requestId/턴 uuid 중복 합산 방지
   for (const fl of files.sort((a, b) => b.m - a.m).slice(0, 120)) { // 최근 수정 120개로 bounded(다른 프로젝트가 최근목록을 채워 이 폴더 transcript가 밀릴 여지 줄임)
     if (fl.m < cutoff) continue; // 28일 안에 수정된 transcript만(오래된 파일 스캔 회피)
     let raw: string; try { raw = fs.readFileSync(fl.f, "utf8"); } catch { continue; }
-    const t = sumClaudeUsage(raw.split(/\n/), now, ws, normWs);
+    const t = sumClaudeUsage(raw.split(/\n/), now, ws, normWs, seenReq);
     acc.input += t.input; acc.output += t.output; acc.cacheRead += t.cacheRead; acc.cacheCreate += t.cacheCreate; acc.total += t.total; acc.turns += t.turns;
   }
   return acc;
@@ -1698,6 +1712,7 @@ class Dashboard {
         <div class="chart-box wide">
           <h3 class="chart-h">${t("클로드 작업 토큰", "Claude work tokens")} <span class="muted">${t("(이 폴더 · 최근 28일 · 검증과 별개인 작업 비용)", "(this folder · last 28d · work cost, separate from verification)")}</span></h3>
           <div id="claudeTokCards" class="stat-cards"></div>
+          <p class="muted" id="claudeTokNote"></p>
         </div>
       </div>
       <div class="stat-chart">
@@ -1978,19 +1993,21 @@ class Dashboard {
       var lbl=document.createElement("div"); lbl.className="stat-lbl"; lbl.textContent=c[0];
       card.appendChild(num); card.appendChild(lbl); wrap.appendChild(card);
     });
-    if(note) note.textContent = T("이 폴더에 연결된 코덱스 세션이 지금까지 쓴 누적 토큰. 그 세션이 여러 폴더를 오갔다면 합산값이에요.","Cumulative tokens used by the Codex session linked to this folder. If the session moved across folders, this is the combined total.");
+    if(note) note.textContent = T("이 폴더에 연결된 코덱스 세션이 지금까지 쓴 누적 토큰. 그 세션이 여러 폴더를 오갔다면 합산값이에요. '입력'에는 캐시 재사용분이 포함돼요(별도 카드는 그중 캐시 몫).","Cumulative tokens used by the Codex session linked to this folder. If the session moved across folders, this is the combined total. 'input' includes cached reuse (the separate card shows the cached share of it).");
   }
   // 클로드 작업 토큰 — 이 폴더 28일(코덱스 검증 비용과 분리). 숫자만이라 안전하나 토큰 패턴 통일로 createElement/textContent.
+  // 캐시 읽기/생성을 카드로 노출 — '총 토큰' 대부분이 캐시 재사용이라, 안 보이면 총량이 비정상으로 커 보인다(실측 사용자 오해).
   function renderClaudeTokens(ct){
-    var wrap = $("claudeTokCards"); if(!wrap) return;
+    var wrap = $("claudeTokCards"), note = $("claudeTokNote"); if(!wrap) return;
     while(wrap.firstChild) wrap.removeChild(wrap.firstChild);
-    if(!ct || !ct.total){ var d=document.createElement("div"); d.className="muted"; d.textContent=T("이 폴더의 최근 28일 클로드 토큰 기록이 없어요.","No Claude token records for this folder in the last 28 days."); wrap.appendChild(d); return; }
-    [[T("턴수","turns"),ct.turns,"s-blue",true],[T("총 토큰","total"),ct.total,"s-green",false],[T("입력","input"),ct.input,"s-orange",false],[T("출력","output"),ct.output,"s-purple",false]].forEach(function(c){
+    if(!ct || !ct.total){ var d=document.createElement("div"); d.className="muted"; d.textContent=T("이 폴더의 최근 28일 클로드 토큰 기록이 없어요.","No Claude token records for this folder in the last 28 days."); wrap.appendChild(d); if(note) note.textContent=""; return; }
+    [[T("사용자 턴수","user turns"),ct.turns,"s-blue",true],[T("총 토큰","total"),ct.total,"s-green",false],[T("입력","input"),ct.input,"s-orange",false],[T("출력","output"),ct.output,"s-purple",false],[T("캐시 읽기(재사용)","cache read (reused)"),ct.cacheRead,"s-blue",false],[T("캐시 생성","cache write"),ct.cacheCreate,"s-green",false]].forEach(function(c){
       var card=document.createElement("div"); card.className="stat-card "+c[2];
       var num=document.createElement("div"); num.className="stat-num"; num.textContent=c[3]?String(c[1]):fmtTok(c[1]); // 턴수는 그대로, 토큰은 k 단위
       var lbl=document.createElement("div"); lbl.className="stat-lbl"; lbl.textContent=c[0];
       card.appendChild(num); card.appendChild(lbl); wrap.appendChild(card);
     });
+    if(note) note.textContent = T("턴수는 사용자가 보낸 질문 수예요(도구 왕복·시스템 줄은 안 셈). 총 토큰 = 입력+출력+캐시 — 대부분은 매 응답마다 이전 맥락을 다시 읽는 '캐시 읽기'라 실제 비용 체감보다 커 보여요(캐시는 단가가 훨씬 낮음).","Turns = questions you sent (tool round-trips and system lines are not counted). Total = input + output + cache — mostly 'cache read' (prior context re-read on every response), so it looks larger than the felt cost (cached tokens are much cheaper).");
   }
   // 프로젝트별 비교(3c) — 폴더명(basename)·검증건수 막대·완전통과율 병기. 폴더명은 외부 데이터라 textContent.
   function renderProjects(ps){

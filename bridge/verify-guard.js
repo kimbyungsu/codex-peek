@@ -242,9 +242,12 @@ process.stdin.on("end", () => {
         workspace: ws,
         kind: "verify-incomplete",
         severity: "error",
+        // detailKo/detailEn 동시 저장 — 확장 표시부가 현재 언어를 고름. detail은 구버전 판독 폴백.
         detail: loadLang() === "en"
           ? `Verify mode:${c.verifyMode} — forced ${MAX_ATTEMPTS} times, but this turn ended without a completed verification (this turn's result is UNVERIFIED).`
           : `검증 모드:${c.verifyMode} — ${MAX_ATTEMPTS}회 강제했으나 검증이 완료되지 않은 채 이 턴이 종료됨(이 턴 결과는 미검증).`,
+        detailKo: `검증 모드:${c.verifyMode} — ${MAX_ATTEMPTS}회 강제했으나 검증이 완료되지 않은 채 이 턴이 종료됨(이 턴 결과는 미검증).`,
+        detailEn: `Verify mode:${c.verifyMode} — forced ${MAX_ATTEMPTS} times, but this turn ended without a completed verification (this turn's result is UNVERIFIED).`,
       });
     } catch { /* 이벤트 기록 실패는 종료를 막지 않음 */ }
     try { writePhase("incomplete", { session: claudeSession, workspace: ws }); } catch { /* best-effort */ } // 검증 미완 종료

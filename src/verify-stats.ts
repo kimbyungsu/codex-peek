@@ -97,25 +97,47 @@ export function parseSessionTokens(rawTail: string): CodexTokens | null {
 
 // ── 클로드 토큰 — transcript 줄들에서 28일 내 + 이 폴더(cwd) message.usage를 합(코덱스 토큰과 분리). 사이드체인(서브에이전트)은 제외 ──
 // 줄 구조: obj.message.usage.{input_tokens,output_tokens,cache_read_input_tokens,cache_creation_input_tokens 또는 cache_creation.ephemeral_5m/1h}, obj.timestamp, obj.cwd, obj.isSidechain.
+// ★usage 중복 방어: 한 API 응답이 transcript에 여러 줄(content 블록별)로 쪼개져도 각 줄이 '같은 usage'를 통째로 들고 있다(실측: 요청 3263개가
+//   최대 7줄로 쪼개지고 그중 3260개가 전 줄 동일 usage → 줄 단위 합산은 ~2.3배 과대). requestId당 마지막 usage 1개만 합산한다.
+// ★턴수: '사용자가 실제로 보낸 질문 수'만 센다(type:"user" 중 도구결과·메타·시스템주입 제외). 예전 'usage 있는 응답 줄 수'는
+//   도구 왕복마다 1씩 늘어 사용자 체감 턴(질문 몇 번)과 수십 배 어긋났다(실측: 질문 430개가 10706으로 표시).
 export type ClaudeTokens = { input: number; output: number; cacheRead: number; cacheCreate: number; total: number; turns: number };
-export function sumClaudeUsage(lines: string[], now: number, ws: string | null, normWs: (p: string) => string): ClaudeTokens {
+// seenReq(선택): 호출측이 여러 파일에 걸쳐 공유하는 requestId 집합 — resume/fork로 이전 기록 줄이 새 파일에 복사돼도 파일 간 중복 합산 방지.
+export function sumClaudeUsage(lines: string[], now: number, ws: string | null, normWs: (p: string) => string, seenReq?: Set<string>): ClaudeTokens {
   const d28 = now - 28 * 24 * 60 * 60 * 1000;
   const n = (x: any) => (typeof x === "number" && isFinite(x) ? x : 0);
+  type U = { input: number; output: number; cacheRead: number; cacheCreate: number };
+  const readU = (u: any): U => ({
+    input: n(u.input_tokens),
+    output: n(u.output_tokens),
+    cacheRead: n(u.cache_read_input_tokens),
+    cacheCreate: n(u.cache_creation_input_tokens) || (n(u.cache_creation && u.cache_creation.ephemeral_5m_input_tokens) + n(u.cache_creation && u.cache_creation.ephemeral_1h_input_tokens)),
+  });
+  const byReq: Record<string, U> = {}; // requestId → 마지막 usage(같은 요청의 쪼개진 줄들은 동일 usage — 마지막이 최종)
   let input = 0, output = 0, cacheRead = 0, cacheCreate = 0, turns = 0;
   for (const ln of lines) {
-    if (!ln || !ln.trim() || ln.indexOf("usage") < 0) continue; // 빠른 사전 필터
+    if (!ln || !ln.trim()) continue;
+    if (ln.indexOf("usage") < 0 && !/"type"\s*:\s*"user"/.test(ln)) continue; // 빠른 사전 필터(usage 합산용 + 턴수용) — 직렬화 공백 변형도 허용(Codex 보완 수용)
     let o: any; try { o = JSON.parse(ln); } catch { continue; }
     if (o.isSidechain) continue; // 서브에이전트(사이드체인) 제외 — 메인 대화 비용만
     if (ws && (!o.cwd || normWs(String(o.cwd)) !== normWs(ws))) continue; // 이 폴더(cwd)만 — cwd 없는 줄도 제외(프로젝트별 누수 차단, verdict 통계의 workspace 정책과 동일)
-    const u = o.message && o.message.usage;
-    if (!u) continue;
     const ts = Date.parse(o.timestamp);
     if (!Number.isFinite(ts) || ts < d28 || ts > now) continue; // 28일 내만
-    turns++; // usage 있는 응답 = 한 턴(근사)
-    input += n(u.input_tokens);
-    output += n(u.output_tokens);
-    cacheRead += n(u.cache_read_input_tokens);
-    cacheCreate += n(u.cache_creation_input_tokens) || (n(u.cache_creation && u.cache_creation.ephemeral_5m_input_tokens) + n(u.cache_creation && u.cache_creation.ephemeral_1h_input_tokens));
+    // 턴수 — 사용자가 직접 보낸 질문만: 도구 결과 반환(type:"user"지만 tool_result)·메타 줄·시스템 주입(origin.kind: 태스크 알림 등)은 제외
+    if (o.type === "user" && o.message && !o.isMeta && !(o.origin && o.origin.kind)) {
+      const c = o.message.content;
+      const isToolResult = Array.isArray(c) && c.some((x: any) => x && x.type === "tool_result");
+      const uk = o.uuid ? "u:" + String(o.uuid) : ""; // 파일 간 중복(resume/fork 복사 줄) 방지 — requestId와 같은 집합에 접두사로 격리
+      if (!isToolResult && !(seenReq && uk && seenReq.has(uk))) { turns++; if (seenReq && uk) seenReq.add(uk); }
+    }
+    const u = o.message && o.message.usage;
+    if (!u) continue;
+    if (o.requestId) byReq[String(o.requestId)] = readU(u); // 같은 요청의 쪼개진 줄은 덮어쓰기(마지막 승리) → 1회만 합산
+    else { const v = readU(u); input += v.input; output += v.output; cacheRead += v.cacheRead; cacheCreate += v.cacheCreate; }
+  }
+  for (const k of Object.keys(byReq)) {
+    if (seenReq) { if (seenReq.has(k)) continue; seenReq.add(k); } // 파일 간 중복(resume/fork 복사 줄) 방지
+    const v = byReq[k]; input += v.input; output += v.output; cacheRead += v.cacheRead; cacheCreate += v.cacheCreate;
   }
   return { input, output, cacheRead, cacheCreate, total: input + output + cacheRead + cacheCreate, turns };
 }

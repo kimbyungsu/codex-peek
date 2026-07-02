@@ -46,12 +46,43 @@ const cl = [
 const rcl = sumClaudeUsage(cl, NOW, "/ws", normWs);
 ok(rcl.input === 300 && rcl.output === 130 && rcl.cacheRead === 20 && rcl.cacheCreate === 10, "이 폴더 28일 메인 usage만 합(다른폴더·28일밖·사이드체인 제외)");
 ok(rcl.total === 460, "총 = input+output+cacheRead+cacheCreate");
-ok(rcl.turns === 2, "메인 usage 응답 2개 = 2턴(3b, 다른폴더·28일밖·사이드체인 제외)");
 ok(sumClaudeUsage([], NOW, "/ws", normWs).total === 0, "빈 → 0");
 const rcl2 = sumClaudeUsage([JSON.stringify({ timestamp: cago(1), cwd: "/ws", message: { usage: { cache_creation: { ephemeral_5m_input_tokens: 7, ephemeral_1h_input_tokens: 3 } } } })], NOW, "/ws", normWs);
 ok(rcl2.cacheCreate === 10, "cache_creation ephemeral 5m+1h 폴백");
 ok(sumClaudeUsage([JSON.stringify({ timestamp: cago(2), message: { usage: { input_tokens: 777 } } })], NOW, "/ws", normWs).total === 0, "ws 지정 시 cwd 없는 줄은 제외(프로젝트별 누수 차단)");
 ok(sumClaudeUsage([JSON.stringify({ timestamp: cago(2), message: { usage: { input_tokens: 5 } } })], NOW, null, normWs).total === 5, "ws=null이면 cwd 없어도 포함");
+
+console.log("[requestId 중복 방어] 한 API 응답이 여러 줄로 쪼개져 같은 usage를 반복해도 1회만 합산");
+const dup = [
+  JSON.stringify({ timestamp: cago(1), cwd: "/ws", requestId: "req_A", message: { usage: { input_tokens: 100, output_tokens: 10 } } }),
+  JSON.stringify({ timestamp: cago(1), cwd: "/ws", requestId: "req_A", message: { usage: { input_tokens: 100, output_tokens: 10 } } }), // 같은 요청 쪼개진 줄(동일 usage)
+  JSON.stringify({ timestamp: cago(1), cwd: "/ws", requestId: "req_A", message: { usage: { input_tokens: 100, output_tokens: 12 } } }), // 같은 요청의 갱신된 usage → 마지막 승리
+  JSON.stringify({ timestamp: cago(1), cwd: "/ws", requestId: "req_B", message: { usage: { input_tokens: 5, output_tokens: 5 } } }),   // 다른 요청은 별도 합산
+  JSON.stringify({ timestamp: cago(1), cwd: "/ws", message: { usage: { input_tokens: 3 } } }),                                          // requestId 없는 줄은 그대로 합산
+];
+const rdup = sumClaudeUsage(dup, NOW, "/ws", normWs);
+ok(rdup.input === 108 && rdup.output === 17, "req_A 1회(마지막 usage)+req_B+무ID줄 = input 100+5+3, output 12+5");
+
+console.log("[턴수] '사용자가 보낸 질문'만 — 도구결과·메타·시스템주입·사이드체인 제외");
+const tl = [
+  JSON.stringify({ timestamp: cago(1), cwd: "/ws", type: "user", uuid: "u1", message: { role: "user", content: "질문 1" } }),                                    // 문자열 content = 진짜 질문
+  JSON.stringify({ timestamp: cago(1), cwd: "/ws", type: "user", uuid: "u2", message: { role: "user", content: [{ type: "text", text: "질문 2" }] } }),          // text 배열도 질문
+  JSON.stringify({ timestamp: cago(1), cwd: "/ws", type: "user", uuid: "u3", message: { role: "user", content: [{ type: "tool_result", content: "결과" }] } }),  // 도구 결과 반환 줄 제외
+  JSON.stringify({ timestamp: cago(1), cwd: "/ws", type: "user", uuid: "u4", isMeta: true, message: { role: "user", content: "메타 줄" } }),                     // 메타 제외
+  JSON.stringify({ timestamp: cago(1), cwd: "/ws", type: "user", uuid: "u5", origin: { kind: "task-notification" }, message: { role: "user", content: "알림" } }), // 시스템 주입 제외
+  JSON.stringify({ timestamp: cago(1), cwd: "/ws", type: "user", uuid: "u6", isSidechain: true, message: { role: "user", content: "서브에이전트" } }),            // 사이드체인 제외
+  JSON.stringify({ timestamp: cago(1), cwd: "/other", type: "user", uuid: "u7", message: { role: "user", content: "다른 폴더" } }),                              // 다른 폴더 제외
+  JSON.stringify({ timestamp: cago(1), cwd: "/ws", type: "assistant", requestId: "rq", message: { usage: { input_tokens: 1 } } }),                               // 응답 줄은 턴 아님
+];
+ok(sumClaudeUsage(tl, NOW, "/ws", normWs).turns === 2, "질문 2개만 턴으로(도구결과·메타·주입·사이드체인·타폴더·응답 제외)");
+ok(sumClaudeUsage([JSON.stringify({ timestamp: cago(1), cwd: "/ws", type: "user", uuid: "u8", message: { role: "user", content: "질문" } }).replace('"type":"user"', '"type": "user"')], NOW, "/ws", normWs).turns === 1, '직렬화 공백 변형("type": "user")도 턴 인식(사전 필터가 안 거름)');
+
+console.log("[파일 간 중복(seenReq)] resume/fork로 복사된 줄이 두 파일에 있어도 1회만");
+const seen = new Set();
+const fileA = [JSON.stringify({ timestamp: cago(1), cwd: "/ws", type: "user", uuid: "uX", message: { role: "user", content: "질문" } }), JSON.stringify({ timestamp: cago(1), cwd: "/ws", requestId: "req_C", message: { usage: { input_tokens: 50, output_tokens: 5 } } })];
+const a1 = sumClaudeUsage(fileA, NOW, "/ws", normWs, seen);
+const a2 = sumClaudeUsage(fileA, NOW, "/ws", normWs, seen); // 같은 줄이 복사된 두 번째 파일
+ok(a1.input === 50 && a1.turns === 1 && a2.input === 0 && a2.turns === 0, "두 번째 파일의 동일 requestId·턴 uuid는 0으로(공유 seen)");
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
