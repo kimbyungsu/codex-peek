@@ -24,6 +24,15 @@ console.log("[netNote] 검증자에게 주는 안내 — 양언어 + Windows 인
 ok(/읽기전용/.test(netNote("ko")) && /sslBackend=openssl/.test(netNote("ko")), "KO: 읽기전용 유지 + openssl 힌트");
 ok(/read-only/.test(netNote("en")) && /sslBackend=openssl/.test(netNote("en")), "EN: read-only + openssl 힌트");
 
+console.log("[지시문] 매 턴 주입되는 검증 지시가 구현모델에게 --net의 존재·사용 기준을 양언어로 알리는지");
+const { buildVerifyDirective } = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
+for (const m of ["always", "plancode", "code"]) {
+  const ko = buildVerifyDirective(m, "ko"), en = buildVerifyDirective(m, "en");
+  ok(/\[원격 확인\]/.test(ko) && /ask.*--net|--net.*ask|`--net`/.test(ko) && /읽기 전용/.test(ko), `KO(${m}): [원격 확인] 단락 + --net + 읽기전용 유지 명시`);
+  ok(/\[Remote checks\]/.test(en) && /`--net`/.test(en) && /read-only/.test(en), `EN(${m}): [Remote checks] + --net + read-only 명시`);
+  ok(/로컬 파일로 충분한 검증엔 --net을 쓰지 마라/.test(ko) && /Do not use --net when local files suffice/.test(en), `양언어(${m}): 남용 금지 기준 포함`);
+}
+
 console.log("[배선] cmdAsk가 --net을 인식하고 resume·새세션 양쪽에 주입하는지(소스 검사)");
 const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
 ok(/const net = rest\.includes\("--net"\)/.test(src), "--net 플래그 파싱");

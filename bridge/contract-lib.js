@@ -403,6 +403,7 @@ function buildVerifyDirective(mode, lang) {
     return [
       `[Verify Mode ON(${mode}) · implement→verify two-track · no human relays between the models]`,
       `${cond}, you MUST get Codex verification via \`node "${BRIDGE}" ask --allow-new "..."\` before reporting completion to the user. (If a Codex session is linked, it continues that session; otherwise it creates and links a new one.) [path is quoted so spaces are safe]`,
+      `[Remote checks] The verifier runs with network blocked by default (read-only sandbox). If the verification itself must confirm remote state (e.g., GitHub push/CI/remote refs, registries, live URLs), add \`--net\` to that one ask — that single run allows outbound network while files stay read-only. Do not use --net when local files suffice.`,
       b.transmit,
       b.rejudge,
     ].join("\n");
@@ -414,6 +415,7 @@ function buildVerifyDirective(mode, lang) {
   return [
     `[검증 모드 ON(${mode}) · 구현→검증 2트랙 · 사람이 턴을 중계하지 않음]`,
     `${cond}, 사용자에게 완료를 보고하기 전에 반드시 \`node "${BRIDGE}" ask --allow-new "..."\` 로 Codex 검증을 받아라. (연결된 Codex 세션이 있으면 그 세션으로 이어가고, 없으면 새 세션을 만들어 연결한다.) [경로에 공백이 있어도 되도록 따옴표로 감쌌음]`,
+    `[원격 확인] 검증자는 기본적으로 네트워크가 차단된 채(읽기 전용 샌드박스) 돈다. 검증 자체가 원격 상태 확인을 요구하면(예: GitHub 푸시/CI/원격 ref, 패키지 저장소, 라이브 URL) 그 1회의 ask에 \`--net\`을 붙여라 — 그 실행만 외부 통신이 허용되고 파일은 여전히 읽기 전용이다. 로컬 파일로 충분한 검증엔 --net을 쓰지 마라.`,
     b.transmit,
     b.rejudge,
   ].join("\n");
