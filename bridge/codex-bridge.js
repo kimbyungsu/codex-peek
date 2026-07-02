@@ -571,9 +571,14 @@ function firstUserSnippet(file) {
         continue;
       }
       if (o.type === "response_item" && o.payload?.type === "message" && o.payload.role === "user") {
-        const t = (o.payload.content || []).map((c) => (typeof c?.text === "string" ? c.text : "")).join("").trim();
+        let t = (o.payload.content || []).map((c) => (typeof c?.text === "string" ? c.text : "")).join("").trim();
         if (t && !/^<(environment_context|user_instructions|system)/i.test(t)) {
-          return t.replace(/\s+/g, " ").slice(0, 70);
+          // 주제 표시용: withContract가 붙인 지침 보일러플레이트를 걷어내고 '실제 요청 본문'만(확장 stripInjectedPreamble과 동일 규칙).
+          for (const marker of ["\n[작업 요청]\n", "\n[Work Request]\n"]) {
+            const i = t.lastIndexOf(marker);
+            if (i >= 0) { t = t.slice(i + marker.length); break; }
+          }
+          return t.replace(/\s+/g, " ").trim().slice(0, 70);
         }
       }
     }

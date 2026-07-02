@@ -351,9 +351,19 @@ function readMessages(file: string): Array<{ role: "user" | "assistant"; text: s
   return out;
 }
 
+// 주제 추출용: 브릿지(withContract)가 매 ask 앞에 붙이는 지침 보일러플레이트를 걷어내고 '실제 요청 본문'만 남긴다.
+// 안 걷으면 상태바/호버/후보 목록의 '주제'가 항상 "[검증 기본 원칙 …" 머리말로 보인다(사용자 실측). 마커가 없으면(비-브릿지
+// 세션·일반 대화) 원문 그대로. lastIndexOf = 지침 텍스트 내부에 우연히 같은 문구가 있어도 마지막(실제 구분자)을 취함.
+function stripInjectedPreamble(text: string): string {
+  for (const marker of ["\n[작업 요청]\n", "\n[Work Request]\n"]) {
+    const i = text.lastIndexOf(marker);
+    if (i >= 0) return text.slice(i + marker.length);
+  }
+  return text;
+}
 function firstSnippet(file: string): string {
   for (const m of readMessages(file)) {
-    if (m.role === "user") return m.text.replace(/\s+/g, " ").slice(0, 70);
+    if (m.role === "user") return stripInjectedPreamble(m.text).replace(/\s+/g, " ").trim().slice(0, 70);
   }
   return tE("(내용 미상)","(content unknown)");
 }

@@ -115,4 +115,11 @@ const koFile = L.contractFileFor(WS, "ko"), enFile = L.contractFileFor(WS, "en")
 ok(hasRules(JSON.parse(fs.readFileSync(koFile, "utf8"))), "실파일: ko 슬롯 규칙 존재 → en 모드에서 안내 조건 성립");
 ok(fs.existsSync(enFile), "(전제) en 슬롯 파일도 위 테스트에서 생성됨");
 
+// ── 9) 주제(snippet) 보일러플레이트 제거 미러 — 상태바/호버/후보 목록의 '주제'가 주입 지침 머리말로 보이지 않게 ──
+const strip = (text) => { for (const mk of ["\n[작업 요청]\n", "\n[Work Request]\n"]) { const i = text.lastIndexOf(mk); if (i >= 0) return text.slice(i + mk.length); } return text; };
+ok(strip("[검증 기본 원칙 · 항상 적용]\n1) …지침…\n\n---\n[작업 요청]\n결제 모듈 리팩터 검증해줘") === "결제 모듈 리팩터 검증해줘", "주제: KO 지침 보일러플레이트 제거 → 실제 요청만");
+ok(strip("[Verification Baseline · always applies]\n1) …\n\n---\n[Work Request]\nverify the payment refactor") === "verify the payment refactor", "주제: EN 보일러플레이트 제거");
+ok(strip("그냥 일반 대화 첫 문장") === "그냥 일반 대화 첫 문장", "주제: 마커 없으면(비-브릿지 세션) 원문 그대로");
+ok(strip("지침에 [작업 요청] 단어가 줄 중간에 있어도\n---\n[작업 요청]\n진짜 본문") === "진짜 본문", "주제: lastIndexOf라 마지막 구분자 기준(내부 우연 문구 무시)");
+
 console.log("i18n: " + n + " assertions passed");
