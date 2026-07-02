@@ -35,6 +35,25 @@ function dirtyTracked(porcelain) {
   return String(porcelain || "").split(/\r?\n/).filter((l) => l.trim() && !l.startsWith("??")).map((l) => l.slice(3).trim());
 }
 
+// ── 인자 해석(순수 — 테스트 대상) ──
+function parseArgs(args) {
+  const kind = args.includes("--major") ? "major" : args.includes("--minor") ? "minor" : "patch";
+  const vi = args.indexOf("--version");
+  const poi = args.indexOf("--publish-only");
+  const poArg = poi >= 0 && args[poi + 1] && !args[poi + 1].startsWith("--") ? args[poi + 1] : null;
+  return {
+    kind,
+    explicit: vi >= 0 ? args[vi + 1] : null,
+    doInstall: !args.includes("--no-install"),
+    doPush: !args.includes("--no-push"),
+    publishOnly: poi >= 0,
+    publishOnlyPath: poArg, // 없으면 현재 버전 vsix 자동 선택
+  };
+}
+
+// ── 마켓 게시 조건(순수 — 테스트 대상): push까지 된 '완전 배포'일 때만 자동 게시 — --no-push인데 마켓만 앞서가는 반쪽 배포 방지(Codex 지적) ──
+function publishGate(doPush, hasPat) { return !!(doPush && hasPat); }
+
 function run(cmd, opts = {}) {
   const r = spawnSync(cmd, { shell: true, stdio: "inherit", cwd: ROOT, timeout: opts.timeout || 600000 });
   if (r.status !== 0) throw new Error(`실패: ${cmd} (exit ${r.status})`);
@@ -45,12 +64,19 @@ function runOut(cmd) {
 }
 
 function main() {
-  const args = process.argv.slice(2);
-  const kind = args.includes("--major") ? "major" : args.includes("--minor") ? "minor" : "patch";
-  const vi = args.indexOf("--version");
-  const explicit = vi >= 0 ? args[vi + 1] : null;
-  const doInstall = !args.includes("--no-install");
-  const doPush = !args.includes("--no-push");
+  const { kind, explicit, doInstall, doPush, publishOnly, publishOnlyPath } = parseArgs(process.argv.slice(2));
+
+  // ── publish-only 모드: 버전·빌드·커밋 없이 '이미 만든 vsix'만 마켓 게시(푸시 후 마켓만 실패했을 때의 재시도 경로 — 버전 중복 증가 방지) ──
+  if (publishOnly) {
+    if (!process.env.VSCE_PAT) { console.error("❌ --publish-only는 VSCE_PAT 환경변수가 필요합니다(마켓 publish 권한 토큰)."); process.exit(1); }
+    const cur = JSON.parse(fs.readFileSync(PKG, "utf8")).version;
+    const vsix = publishOnlyPath ? path.resolve(publishOnlyPath) : path.join(ROOT, `codex-bridge-${cur}.vsix`);
+    if (!fs.existsSync(vsix)) { console.error(`❌ vsix가 없습니다: ${vsix}\n   (경로 지정: npm run release -- --publish-only <vsix경로>)`); process.exit(1); }
+    console.log(`▶ 마켓 게시만 재시도: ${vsix}`);
+    run(`npx vsce publish --packagePath "${vsix}"`);
+    console.log("✅ 마켓 게시 완료(심사 후 공개)");
+    return;
+  }
 
   // 0) 작업트리 점검 — 추적 파일 변경이 남아 있으면 중단(무엇이 배포되는지 명확하게)
   const st = runOut("git status --porcelain");
@@ -84,26 +110,44 @@ function main() {
     // 4) 버전 커밋 + push(깃헙 최신화 — 깃헙 3줄 설치도 이걸로 최신)
     run(`git add "${PKG}" "${LOCK}"`);
     run(`git commit -m "chore(release): v${to}"`);
-    if (doPush) { console.log("▶ 깃헙 push"); run("git push origin main"); }
+    if (doPush) {
+      console.log("▶ 깃헙 push");
+      try { run("git push origin main"); }
+      catch (e) {
+        console.error(`❌ push 실패(버전 커밋은 로컬에 있음): ${e.message}`);
+        console.error(`   → 네트워크 확인 후: git push origin main`);
+        console.error(`   → 그다음 마켓 게시: npm run release -- --publish-only "${vsix}"  (또는 관리 페이지에 드래그)`);
+        process.exit(1);
+      }
+    }
 
-    // 5) 마켓 — VSCE_PAT 있으면 자동 게시, 없으면 업로드 경로 안내
-    if (process.env.VSCE_PAT) {
+    // 5) 마켓 — 'push까지 된 완전 배포'일 때만 자동 게시(--no-push면 마켓도 건너뜀 — 마켓만 앞서가는 반쪽 배포 방지)
+    if (publishGate(doPush, !!process.env.VSCE_PAT)) {
       console.log("▶ 마켓 자동 게시(vsce publish)");
-      run(`npx vsce publish --packagePath "${vsix}"`);
+      try { run(`npx vsce publish --packagePath "${vsix}"`); }
+      catch (e) {
+        console.error(`❌ 마켓 게시만 실패 — 깃헙은 v${to}로 이미 반영됨(재실행하면 버전이 또 올라가니 재실행 금지).`);
+        console.error(`   → 게시만 재시도: npm run release -- --publish-only "${vsix}"`);
+        console.error(`   → 또는 관리 페이지 ⋮ → Update 에 위 vsix 드래그`);
+        process.exit(1);
+      }
       console.log(`✅ 배포 완료: v${to} — 깃헙 + 마켓 모두 반영(마켓 심사 후 공개)`);
     } else {
       console.log(`✅ 배포 준비 완료: v${to}`);
       console.log(`   깃헙: ${doPush ? "push 완료" : "push 생략(--no-push)"}`);
-      console.log(`   마켓: 아래 파일을 관리 페이지 ⋮ → Update 에 드래그하세요`);
-      console.log(`   ${vsix}`);
-      console.log(`   (드래그도 없애려면: 마켓 publish 권한 PAT를 발급해 환경변수 VSCE_PAT로 두면 자동 게시)`);
+      if (!doPush && process.env.VSCE_PAT) console.log(`   마켓: --no-push라 자동 게시도 건너뜀(반쪽 배포 방지) — push 후: npm run release -- --publish-only "${vsix}"`);
+      else {
+        console.log(`   마켓: 아래 파일을 관리 페이지 ⋮ → Update 에 드래그하세요`);
+        console.log(`   ${vsix}`);
+        console.log(`   (드래그도 없애려면: 마켓 publish 권한 PAT를 발급해 환경변수 VSCE_PAT로 두면 자동 게시)`);
+      }
     }
   } catch (e) {
-    // 실패 시 버전 파일 원복(반쪽 배포 방지) — 이미 커밋된 뒤 실패(푸시 등)면 사용자가 상태를 보고 판단하도록 그대로 둠
-    const committed = runOut("git status --porcelain").out.split(/\r?\n/).some((l) => /package(-lock)?\.json/.test(l));
-    if (committed) {
+    // bump~커밋 사이 실패: 버전 파일이 아직 미커밋(작업트리에 남음)이면 원복. push/publish 실패는 위에서 각자 정확한 재시도 안내 후 종료.
+    const stillDirty = runOut("git status --porcelain").out.split(/\r?\n/).some((l) => /package(-lock)?\.json/.test(l));
+    if (stillDirty) {
       spawnSync(`git checkout -- "${PKG}" "${LOCK}"`, { shell: true, cwd: ROOT });
-      console.error(`❌ 배포 중단(버전 파일 원복): ${e.message}`);
+      console.error(`❌ 배포 중단(버전 파일 원복 — 아무것도 반영 안 됨): ${e.message}`);
     } else {
       console.error(`❌ 배포 중단(버전 커밋은 이미 됨 — git log 확인 후 수동 정리): ${e.message}`);
     }
@@ -111,5 +155,5 @@ function main() {
   }
 }
 
-module.exports = { nextVersion, dirtyTracked };
+module.exports = { nextVersion, dirtyTracked, parseArgs, publishGate };
 if (require.main === module) main();
