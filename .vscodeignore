@@ -16,6 +16,7 @@ install.sh
 install.cmd
 docs/ROADMAP.md
 docs/README.en.md
+docs/logo.png
 README.md
 docs/*.svg
 docs/feat_*.png
