@@ -2,7 +2,7 @@
   "name": "codex-bridge",
   "displayName": "Claude Code ↔ Codex Bridge",
   "description": "Bridge Claude Code (implementation) and OpenAI Codex (verification) into one enforced workflow — session pinning, per-turn contract injection, verify loop with proof, live status & stats. 클로드 코드↔코덱스 검증 브릿지.",
-  "version": "0.1.73",
+  "version": "0.1.74",
   "icon": "docs/icon.png",
   "keywords": [
     "claude code",
