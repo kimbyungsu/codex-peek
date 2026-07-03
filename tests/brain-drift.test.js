@@ -141,7 +141,8 @@ ok(lastModelFresh([{ cwd: "D:\\A", model: "claude-opus-4-8", timestamp: freshTs 
 ok(lastModelFresh([{ cwd: "D:\\A", model: "claude-fable-5" }], "D:\\A", NOW, DRIFT_FRESH_MS) === "claude-fable-5", "신선도: timestamp 없으면 검사 불가 → 인정(과잉 억제 회피)");
 ok(lastModelFresh([{ cwd: "D:\\A", model: "claude-fable-5", timestamp: oldTs }], "D:\\A", NOW, 0) === "claude-fable-5", "신선도: maxAgeMs 미지정(1순위 경로)이면 옛 답도 인정");
 
-// readClaudeModels 1순위 미러: active.json이 신선+이 ws의 세션이면 '현재 대화' 모델을 옛 기록보다 우선.
+// currentTranscriptForWs(구 readClaudeModels) 1순위 미러: active가 신선+이 ws의 세션이면 '현재 대화'를 옛 기록보다 우선.
+// (v0.1.77: intent/actual을 같은 대화에서 읽도록 재구성 — 이 선택 규칙 자체는 동일 사양 유지. intent 해석은 brain-intent.test.js가 정본 import로 검증.)
 function ccPrimary(active, now, curModel, wsFilter) {
   const ats = Date.parse((active && active.ts) || "");
   const afresh = Number.isFinite(ats) && now - ats < DRIFT_FRESH_MS;

@@ -7,6 +7,7 @@ import { spawn } from "child_process";
 import { computeVerifyStats, VerifyStats, CodexTokens, parseSessionTokens, ClaudeTokens, sumClaudeUsage, computeProjectStats, ProjectStat } from "./verify-stats";
 import * as hookSetup from "./hook-setup";
 import { localizeIntegrityDetail } from "./integrity-i18n";
+import { parseLastModelCommand, parseLastAssistantModel, parseSessionStartTs, resolveCcIntent } from "./brain-intent";
 
 const HOME = os.homedir();
 // 자체 namespace 폴더. CODEX_BRIDGE_HOME으로 override(확장 호스트≠훅 home 환경 대비 — 브릿지·훅과 동일 규칙).
@@ -573,14 +574,26 @@ function syncBrainDriftFor(ws: string | null): void {
   if (now - lastDriftSync < 1500) return;
   lastDriftSync = now;
   try {
-    // 두뇌 drift는 '설정값 vs 최근 실제값' 불일치만 본다. ⚠ Claude의 실제 런타임 '생각강도'는 어디에도 기록되지 않아 비교가 불가능 →
+    // 두뇌 drift는 '의도한 값 vs 최근 실제값' 불일치만 본다. ⚠ Claude의 실제 런타임 '생각강도'는 어디에도 기록되지 않아 비교가 불가능 →
     // Claude는 '모델' 어긋남만 본다(생각강도는 탐지 안 함). 생각강도 비교는 그 값이 rollout에 기록되는 Codex에서만 한다.
-    // (예전 cc-effort-invalid='settings.json effortLevel 값이 목록 밖이면 무효' 검사는 제거: opus는 max를 실제 지원하고 max는 세션 중 정상
-    //  작동하는데 '무시됨'으로 거짓 경고했고, 모델별 허용 effort 표를 하드코딩해야 고쳐지는 데다 사용자가 원한 '실제값 비교'도 아니었다.)
-    // ★워크스페이스 격리(cwd 필터): 이 경고는 '이 폴더(ws)의 설정 vs 이 폴더의 실제 답'이어야 한다. 한 코덱스 세션·전역 Claude 기록이
-    //  여러 폴더에 공유되므로, '최근 실제값'을 ws(cwd)로 걸러 형제 폴더의 답이 이 폴더 경고로 새지 않게 한다(거짓 두뇌-drift 차단).
-    const cbModel = readClaudeSettingsModel();      // Claude 설정 모델(전역 settings.json·별칭 가능, 예: opus[1m])
-    const claudeCur = readClaudeModels(ws);         // 이 폴더(ws)에서 Claude가 최근 답한 모델(정식 ID, 예: claude-opus-4-8)
+    // ★프로젝트별 의도(intent): Claude Code의 /model은 '전역' settings.json에 저장돼, 다른 프로젝트 창의 /model이 이 폴더의
+    //  '설정값'을 바꿔버린다(P1=fable·P2=opus 동시 사용 시 P2에 구조적 거짓경고 — 사용자 실측 2026-07-04). 그래서 설정 파일이 아니라
+    //  '이 폴더의 현재 대화 자신이 기록한 마지막 /model'을 의도로 삼고, 없으면 '대화 시작 전에 정해져 있던 설정'만 인정한다
+    //  (대화 도중 바뀐 전역 설정은 다른 창 소행일 수 있어 비교 skip — 과소경고는 허용, 거짓경고는 불허).
+    // ★워크스페이스 격리(cwd 필터): intent·actual 모두 '이 폴더의 같은 대화'에서 읽는다(형제 폴더의 답/선택이 새지 않게).
+    const ccT = ws ? currentTranscriptForWs(ws) : null;      // 이 폴더의 현재(또는 최근) 대화 transcript
+    let claudeCur = "", cbModel = "";                        // 실제 답 모델 / 이 폴더 기준 '의도한' 모델
+    if (ccT) {
+      const scan = scanCcTranscript(ccT, ws);                // 증분 스캔 — 이 대화의 /model 기록 + 실제 답 모델(둘 다 cwd strict)
+      claudeCur = scan.actual && Date.now() - scan.actual.ts < DRIFT_FRESH_MS ? scan.actual.model : ""; // 신선한 답만(옛 답 거짓 drift 차단)
+      let settingsMtime: number | null = null, sessionStart: number | null = null;
+      if (!scan.cmd) {                                       // ② 폴백 준비: '대화 시작 전 설정'인지 판정할 재료
+        try { settingsMtime = fs.statSync(claudeSettingsFile()).mtimeMs; } catch { settingsMtime = null; }
+        try { sessionStart = parseSessionStartTs(readHead(ccT, 65536)); } catch { sessionStart = null; }
+      }
+      const intent = resolveCcIntent(scan.cmd ? scan.cmd.model : null, readClaudeSettingsModel(), settingsMtime, sessionStart);
+      cbModel = intent ? intent.model : "";                  // ③ 의도 산출 불가 → 빈값 → 아래 cf&&cfc 가드로 비교 skip
+    }
     const links = loadLinks();
     const pref: any = links.modelPrefs[normWs(ws)] || {};
     const link = workspaceLink(links, ws);
@@ -703,6 +716,17 @@ function readTail(file: string, bytes: number): string {
     const len = Math.min(sz, bytes);
     const buf = Buffer.alloc(len);
     fs.readSync(fd, buf, 0, len, start);
+    return buf.toString("utf8");
+  } finally { fs.closeSync(fd); }
+}
+// 파일 머리 일부만 — transcript '대화 시작 시각'(첫 timestamp) 산출용(readTail의 대칭).
+function readHead(file: string, bytes: number): string {
+  const fd = fs.openSync(file, "r");
+  try {
+    const sz = fs.fstatSync(fd).size;
+    const len = Math.min(sz, bytes);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, 0);
     return buf.toString("utf8");
   } finally { fs.closeSync(fd); }
 }
@@ -1009,24 +1033,33 @@ function findTranscriptBySession(sid: string): string | undefined {
   try { walk(claudeProjectsDir(), 0); } catch { /* ignore */ }
   return found;
 }
-// '최근 응답 모델'(가장 최근 수정 트랜스크립트의 마지막 model) 한 개만 반환 — picker는 별칭 기반이라 이 값은 표시/계열-drift용.
-// wsFilter 지정 시: 그 워크스페이스(cwd)에서 나온 응답 모델만 본다(cc-model 어긋남을 '이 프로젝트' 기준으로).
-// 전역 프로젝트 폴더 전체를 최근순으로 훑되 lastModelInFile이 cwd로 거른다 → 다른 프로젝트의 최근 모델이 새지 않음.
-function readClaudeModels(wsFilter?: string | null): string {
-  // 1순위: '지금 이 대화'의 transcript. active.json이 신선하고 이 ws의 것이면 그 세션 파일을 직접 읽어 현재 모델을 본다
-  //   (현재 진행 중인 대화 = 가장 정확. 신선도 검사 불필요 — 지금 쓰는 모델이라). 이로써 같은 프로젝트의 '옛 다른 모델 답'을 건너뛴다.
+// 이 ws의 '현재(또는 가장 최근) 대화' transcript 파일을 찾는다 — cc-model drift의 intent/actual을 '같은 대화'에서 읽기 위한 단일 소스.
+// 1순위: 세션별 active(BRIDGE_DIR/active/<sid>.json — 여러 창 동시 사용 대비) + 레거시 active.json 중
+//   workspace==ws && 신선(24h)한 것들에서 '가장 최근' 세션 → 그 transcript. (기존 전역 active.json 단독 1순위는
+//   다른 창이 마지막에 덮어쓰면 이 ws의 현재 대화를 놓쳤다 — 세션별 파일 스캔으로 보강, Codex 보완 수용.)
+// 2순위(폴백): 이 ws(cwd)의 최근 답이 있는(신선) 최근 수정 transcript.
+function currentTranscriptForWs(ws: string): string | null {
+  const want = normWs(ws);
+  let bestSid = "", bestTs = 0;
+  const consider = (a: any) => {
+    if (!a || typeof a.claudeSession !== "string" || !a.claudeSession) return;
+    if (normWs(String(a.workspace || "")) !== want) return;
+    const ts = Date.parse(a.ts || "");
+    if (!Number.isFinite(ts) || Date.now() - ts >= DRIFT_FRESH_MS) return; // stale active로 옛 대화를 읽지 않게
+    if (ts > bestTs) { bestTs = ts; bestSid = a.claudeSession; }
+  };
+  try { consider(JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, "active.json"), "utf8"))); } catch { /* 없음/파싱 실패 */ }
   try {
-    const a = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, "active.json"), "utf8"));
-    const sid = a && typeof a.claudeSession === "string" ? a.claudeSession : "";
-    const aw = a && typeof a.workspace === "string" ? a.workspace : "";
-    const ats = a ? Date.parse(a.ts || "") : NaN;
-    const fresh = Number.isFinite(ats) && Date.now() - ats < DRIFT_FRESH_MS; // 옛 세션의 stale active로 옛 대화를 읽지 않게
-    if (sid && fresh && (!wsFilter || normWs(aw) === normWs(wsFilter))) {
-      const cur = findTranscriptBySession(sid);
-      if (cur) { const m = lastModelInFile(cur); if (m) return m; }
+    for (const n of fs.readdirSync(path.join(BRIDGE_DIR, "active"))) {
+      if (!n.endsWith(".json")) continue;
+      try { consider(JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, "active", n), "utf8"))); } catch { /* 개별 파일 무시 */ }
     }
-  } catch { /* active 없음/파싱 실패 → 폴백 */ }
-  // 2순위(폴백): 이 ws의 최근 transcript를 훑되, 마지막 답이 너무 오래된(DRIFT_FRESH_MS 밖) 파일은 stale로 제외.
+  } catch { /* active/ 폴더 없음 */ }
+  if (bestSid) {
+    const cur = findTranscriptBySession(bestSid);
+    if (cur) return cur;
+  }
+  // 폴백: 이 ws의 최근 transcript(마지막 답이 신선한 것만 — lastModelInFile의 cwd strict+신선도 재사용)
   const files: { f: string; m: number }[] = [];
   const walk = (d: string, depth: number) => {
     if (depth > 4) return;
@@ -1042,12 +1075,40 @@ function readClaudeModels(wsFilter?: string | null): string {
   };
   try { walk(claudeProjectsDir(), 0); } catch { /* ignore */ }
   files.sort((a, b) => b.m - a.m);
-  const recent = files.slice(0, 40); // bounded: 최근 40개 파일(ws 필터 시 이 프로젝트 트랜스크립트가 창 밖으로 밀릴 여지를 줄임)
-  for (let i = 0; i < recent.length; i++) {
-    const mdl = lastModelInFile(recent[i].f, wsFilter, DRIFT_FRESH_MS); // stale(오래된 마지막 답) 파일 제외
-    if (mdl) return mdl; // 최근 수정순 '첫 모델 있는'(wsFilter면 그 폴더 cwd) 파일 = 최근 응답 모델
+  for (const fl of files.slice(0, 40)) { // bounded: 최근 40개(이 프로젝트 파일이 창 밖으로 밀릴 여지 줄임)
+    if (lastModelInFile(fl.f, ws, DRIFT_FRESH_MS)) return fl.f;
   }
-  return "";
+  return null;
+}
+// ── cc-drift용 transcript 증분 스캐너 — 이 대화의 '마지막 /model 확정 기록'과 '마지막 실제 답 모델'을 함께 추적 ──
+// 왜 증분인가(실측): 활성 세션 transcript는 100MB+로 자라고 대형 도구 출력이 꼬리를 채워, 고정 꼬리창(4MB·128KB)으로는
+// 몇 시간 전 /model이나 직전 답 모델도 창 밖으로 밀린다(과소경고 과다). transcript는 append-only이므로:
+// 첫 스캔은 꼬리 INITIAL_BACKFILL만 백필하고, 이후엔 '자란 부분만' 읽어 이전 지식과 병합(새 조각에서 찾으면 갱신, 없으면 유지).
+// 한계(정직): 첫 스캔 시점에 이미 백필 창 밖이던 /model은 못 본다 → settings 폴백은 '대화 시작 전 설정'만 인정하므로
+// 거짓경고 없이 과소경고로 수렴. 파일 교체/축소(resume 새 파일 등)는 size 감소로 감지해 전체 재백필.
+const CC_SCAN_BACKFILL = 16 * 1024 * 1024; // 첫 스캔 백필 꼬리(1회성)
+let ccScanCache: { file: string; size: number; cmd: { model: string; ts: number } | null; actual: { model: string; ts: number } | null } | null = null;
+function readRange(file: string, from: number, to: number): string {
+  const fd = fs.openSync(file, "r");
+  try {
+    const len = Math.max(0, to - from);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, from);
+    return buf.toString("utf8");
+  } finally { fs.closeSync(fd); }
+}
+function scanCcTranscript(f: string, ws: string): { cmd: { model: string; ts: number } | null; actual: { model: string; ts: number } | null } {
+  try {
+    const st = fs.statSync(f);
+    const base = ccScanCache && ccScanCache.file === f && st.size >= ccScanCache.size ? ccScanCache : null;
+    if (base && st.size === base.size) return { cmd: base.cmd, actual: base.actual }; // 무변화 — 재스캔 없음
+    const from = base ? base.size : Math.max(0, st.size - CC_SCAN_BACKFILL);
+    const chunk = readRange(f, from, st.size); // 경계에 걸린 첫 줄은 JSON.parse 실패로 자연 skip(파서가 처리)
+    const cmd = parseLastModelCommand(chunk, ws, normWs) || (base ? base.cmd : null);       // 새 조각 우선, 없으면 이전 지식
+    const actual = parseLastAssistantModel(chunk, ws, normWs) || (base ? base.actual : null);
+    ccScanCache = { file: f, size: st.size, cmd, actual };
+    return { cmd, actual };
+  } catch { return { cmd: null, actual: null }; }
 }
 
 // 이 폴더(ws)의 클로드 대화기록에서 최근 28일 토큰을 합한다 — 코덱스 토큰(검증 비용)과 분리한 '작업 비용'. cwd 필터(다른 폴더 제외)·사이드체인 제외는 sumClaudeUsage가 담당. !ws면 빈(프로젝트별 원칙).
