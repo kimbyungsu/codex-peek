@@ -1100,11 +1100,14 @@ function readRange(file: string, from: number, to: number): string {
 function scanCcTranscript(f: string, ws: string): { cmd: { model: string; ts: number } | null; actual: { model: string; ts: number } | null } {
   try {
     const st = fs.statSync(f);
-    const base = ccScanCache && ccScanCache.file === f && st.size >= ccScanCache.size ? ccScanCache : null;
+    let base = ccScanCache && ccScanCache.file === f && st.size >= ccScanCache.size ? ccScanCache : null;
     if (base && st.size === base.size) return { cmd: base.cmd, actual: base.actual }; // 무변화 — 재스캔 없음
+    // ★갭 상한(Codex 보완 수용): 오래 잠든 창이 깨어나 델타가 백필 창보다 크면, 건너뛴 구간에 더 새로운 /model·답이
+    // 있을 수 있어 '이전 지식'을 최신으로 오인하면 거짓경고가 된다 → 지식을 버리고 꼬리 백필로 재시작(+큰 Buffer 방지 겸용).
+    if (base && st.size - base.size > CC_SCAN_BACKFILL) base = null;
     const from = base ? base.size : Math.max(0, st.size - CC_SCAN_BACKFILL);
     const chunk = readRange(f, from, st.size); // 경계에 걸린 첫 줄은 JSON.parse 실패로 자연 skip(파서가 처리)
-    const cmd = parseLastModelCommand(chunk, ws, normWs) || (base ? base.cmd : null);       // 새 조각 우선, 없으면 이전 지식
+    const cmd = parseLastModelCommand(chunk, ws, normWs) || (base ? base.cmd : null);       // 새 조각 우선, 없으면 이전 지식(갭 없음 보장 하에서만 유효)
     const actual = parseLastAssistantModel(chunk, ws, normWs) || (base ? base.actual : null);
     ccScanCache = { file: f, size: st.size, cmd, actual };
     return { cmd, actual };

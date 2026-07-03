@@ -83,5 +83,12 @@ ok(p2 && fam(p2.model) === "opus" && fam("claude-opus-4-8") === "opus", "P2: int
 const p1 = resolveCcIntent("claude-fable-5[1m]", "claude-fable-5[1m]", T1, T0);
 ok(p1 && fam(p1.model) === "fable" && fam(p1.model) !== fam("claude-opus-4-8"), "진짜 drift(고른 fable≠답 opus)는 여전히 잡힘");
 
+console.log("[배선·안전장치] extension.ts 증분 스캐너 계약(소스 검사)");
+const fs2 = require("fs");
+const extSrc = fs2.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
+ok(/st\.size - base\.size > CC_SCAN_BACKFILL\) base = null/.test(extSrc), "갭 상한: 델타>백필창이면 이전 지식 폐기(놓친 구간의 더 새로운 기록을 옛 지식으로 오인→거짓경고 방지)");
+ok(/scan\.actual && Date\.now\(\) - scan\.actual\.ts < DRIFT_FRESH_MS/.test(extSrc), "actual은 신선도(24h) 통과분만 채택");
+ok(/parseLastModelCommand\(chunk, ws, normWs\) \|\| \(base \? base\.cmd : null\)/.test(extSrc), "병합 규칙: 새 조각 우선, 없으면 이전 지식(연속 스캔 보장 하)");
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
