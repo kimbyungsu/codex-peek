@@ -110,6 +110,12 @@ console.log("[pruneIntentMap] 30일 지난 프로젝트 귀속 정리");
 const pm = pruneIntentMap({ a: { model: "x", ts: N - 1000 }, b: { model: "y", ts: N - 31 * 864e5 }, c: { ts: "bad" } }, N);
 ok(pm.a && !pm.b && !pm.c, "신선 유지·만료 제거·손상 항목 제거");
 
+console.log("[배선 계약] TTL 읽기 적용 + 즉시성(소스 검사 — Codex 실패 지적 2건 잠금)");
+const fs3 = require("fs");
+const extSrc2 = fs3.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
+ok(/readCcIntentFor[\s\S]{0,600}pruneIntentMap\(\{ v:/.test(extSrc2), "읽기에서도 TTL 적용(pruneIntentMap 동일 기준) — 낡은 귀속이 영구 의도로 남는 것 차단");
+ok(/writeCcIntentFor\(ws, cur\);\s*\n\s*lastDriftSync = 0/.test(extSrc2), "귀속 기록 성공 시 drift throttle 리셋 — 전환 몇 초 내 경고 보장");
+
 console.log("[배선·안전장치] extension.ts 증분 스캐너 계약(소스 검사)");
 const fs2 = require("fs");
 const extSrc = fs2.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");

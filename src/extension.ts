@@ -1105,7 +1105,11 @@ function readCcIntentFor(ws: string): { model: string; ts: number } | null {
   try {
     const j = JSON.parse(fs.readFileSync(CC_INTENT_FILE, "utf8"));
     const v = j && j.byWorkspace && j.byWorkspace[normWs(ws)];
-    return v && typeof v.model === "string" && v.model && typeof v.ts === "number" ? { model: v.model, ts: v.ts } : null;
+    if (!(v && typeof v.model === "string" && v.model && typeof v.ts === "number")) return null;
+    // TTL을 읽기에서도 적용(쓰기 때만 prune하면 이후 write가 없는 프로젝트의 낡은 귀속이 영구히 의도로 남아
+    // 장기 거짓경고가 됨 — Codex 지적). 판정은 pruneIntentMap과 동일 기준(단일 정본) — 만료면 없는 것으로.
+    const kept = pruneIntentMap({ v: { model: v.model, ts: v.ts } }, Date.now());
+    return kept.v ? { model: kept.v.model, ts: kept.v.ts } : null;
   } catch { return null; }
 }
 function writeCcIntentFor(ws: string, model: string): void {
@@ -1123,8 +1127,11 @@ function maybeAttributeSettingsChange(): void {
   let mtime = Date.now();
   try { mtime = fs.statSync(claudeSettingsFile()).mtimeMs; } catch { /* 이벤트 시각으로 대체 */ }
   const ws = dashboardWorkspace();
-  if (!ws) return;
-  if (shouldAttributeSettingsChange(mtime, focusStartMs, focusEndMs, Date.now(), prev, cur)) writeCcIntentFor(ws, cur);
+  if (!ws) return; // 폴더 없는 빈 창 — 귀속할 프로젝트가 없음
+  if (shouldAttributeSettingsChange(mtime, focusStartMs, focusEndMs, Date.now(), prev, cur)) {
+    writeCcIntentFor(ws, cur);
+    lastDriftSync = 0; // drift 1.5s throttle 해제 — 다음 render(디바운스 ~0.8s)에서 즉시 재계산 = '전환 몇 초 내 경고' 보장(Codex 지적 수용)
+  }
 }
 
 function scanCcTranscript(f: string, ws: string): { cmd: { model: string; ts: number } | null; actual: { model: string; ts: number } | null } {
