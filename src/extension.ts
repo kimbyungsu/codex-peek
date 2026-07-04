@@ -7,7 +7,7 @@ import { spawn } from "child_process";
 import { computeVerifyStats, VerifyStats, CodexTokens, parseSessionTokens, ClaudeTokens, sumClaudeUsage, computeProjectStats, ProjectStat } from "./verify-stats";
 import * as hookSetup from "./hook-setup";
 import { localizeIntegrityDetail } from "./integrity-i18n";
-import { parseLastModelCommand, parseLastAssistantModel, parseSessionStartTs, resolveCcIntent } from "./brain-intent";
+import { parseLastModelCommand, parseLastAssistantModel, parseSessionStartTs, resolveCcIntent, modelFamily } from "./brain-intent";
 
 const HOME = os.homedir();
 // 자체 namespace 폴더. CODEX_BRIDGE_HOME으로 override(확장 호스트≠훅 home 환경 대비 — 브릿지·훅과 동일 규칙).
@@ -539,15 +539,7 @@ function ackIntegrity(ids: string[] | "all"): boolean {
   for (const e of events) { if (!set || set.has(e.id)) e.ack = true; }
   return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events }));
 }
-// 모델 '계열'(별칭·전체ID 공통) — drift는 계열로 비교(opus↔claude-opus-4-8 동일, haiku≠opus만 어긋남).
-function modelFamily(m: string): string {
-  const s = (m || "").toLowerCase();
-  if (s.includes("haiku")) return "haiku";
-  if (s.includes("sonnet")) return "sonnet";
-  if (s.includes("opus")) return "opus";
-  if (s.includes("fable")) return "fable";
-  return "";
-}
+// 모델 '계열' 판정(modelFamily)은 brain-intent.ts로 이동 — 확장·intent 격자·테스트가 같은 정본을 import(사본 드리프트 방지).
 // 두뇌 drift(모델 계열/추론 어긋남)를 integrity 채널에 reconcile → 기존 상태바·배너·확인(ack) 파이프라인 재사용.
 // 안정 sig로 같은 drift는 재발행 안 함(확인 후 sig 안 바뀌면 안 다시 뜸), 해소된 미확인 신호는 제거. kind="brain-drift".
 function syncBrainDrift(ws: string | null, drifts: { sig: string; detail: string; detailKo?: string; detailEn?: string }[]): void {
@@ -586,12 +578,13 @@ function syncBrainDriftFor(ws: string | null): void {
     if (ccT) {
       const scan = scanCcTranscript(ccT, ws);                // 증분 스캔 — 이 대화의 /model 기록 + 실제 답 모델(둘 다 cwd strict)
       claudeCur = scan.actual && Date.now() - scan.actual.ts < DRIFT_FRESH_MS ? scan.actual.model : ""; // 신선한 답만(옛 답 거짓 drift 차단)
+      // settingsMtime은 cmd 유무와 무관하게 항상 읽는다 — cmd가 있어도 'cmd 이후 다른 계열로 설정 변경'(UI 피커/타 창) 가드에 필요(Codex 보완 수용).
       let settingsMtime: number | null = null, sessionStart: number | null = null;
-      if (!scan.cmd) {                                       // ② 폴백 준비: '대화 시작 전 설정'인지 판정할 재료
-        try { settingsMtime = fs.statSync(claudeSettingsFile()).mtimeMs; } catch { settingsMtime = null; }
+      try { settingsMtime = fs.statSync(claudeSettingsFile()).mtimeMs; } catch { settingsMtime = null; }
+      if (!scan.cmd) {                                       // ② 폴백 재료: '대화 시작 전 설정'인지 판정(시작시각은 폴백에만 필요)
         try { sessionStart = parseSessionStartTs(readHead(ccT, 65536)); } catch { sessionStart = null; }
       }
-      const intent = resolveCcIntent(scan.cmd ? scan.cmd.model : null, readClaudeSettingsModel(), settingsMtime, sessionStart);
+      const intent = resolveCcIntent(scan.cmd ? scan.cmd.model : null, scan.cmd ? scan.cmd.ts : null, readClaudeSettingsModel(), settingsMtime, sessionStart);
       cbModel = intent ? intent.model : "";                  // ③ 의도 산출 불가 → 빈값 → 아래 cf&&cfc 가드로 비교 skip
     }
     const links = loadLinks();

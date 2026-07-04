@@ -9,6 +9,17 @@
 
 export type ModelCmd = { model: string; ts: number };
 
+// 모델 '계열'(별칭·전체ID 공통) — drift는 계열로 비교(opus↔claude-opus-4-8 동일, haiku≠opus만 어긋남).
+// extension.ts에서 이동(단일 정본 — 확장·테스트가 같은 함수를 import, 사본 드리프트 방지).
+export function modelFamily(m: string): string {
+  const s = (m || "").toLowerCase();
+  if (s.includes("haiku")) return "haiku";
+  if (s.includes("sonnet")) return "sonnet";
+  if (s.includes("opus")) return "opus";
+  if (s.includes("fable")) return "fable";
+  return "";
+}
+
 // transcript 꼬리 텍스트에서 '마지막 /model 확정 기록'을 찾는다.
 // 신뢰 소스는 stdout형 엔트리 하나뿐: content가 정확히 '<local-command-stdout>Set model to <모델></local-command-stdout>'
 // 로 시작하는 type:user 엔트리(실데이터 확인 — [1m] 접미가 붙기도, 탈락하기도 함 → 계열 비교라 무해).
@@ -72,21 +83,38 @@ export function parseLastAssistantModel(text: string, ws: string, normWs: (p: st
   return null;
 }
 
-// 의도 결정: ① 이 대화의 마지막 /model(cmdModel) ② 없으면 '대화 시작 전에 정해져 있던' 전역 설정만
+// 의도 결정: ① 이 대화의 마지막 /model(cmdModel) — 단 'cmd 유효성 가드' 통과 시에만(아래)
+//           ② 없으면 '대화 시작 전에 정해져 있던' 전역 설정만
 //   (settingsMtime <= sessionStart — 대화 도중 바뀐 설정은 다른 창의 /model일 수 있어 이 대화의 의도로 귀속 불가)
 // ③ 둘 다 아니면 null → cc-model 비교 자체를 skip(거짓경고 0 우선).
+// ★cmd 유효성 가드(사용자 실측 후속, 2026-07-04): 모델 전환에는 transcript에 기록되는 터미널 /model 외에
+//   'UI 피커'(Claude Code 패널의 Switch model)도 있는데, 이는 전역 settings.json만 바꾸고 기록을 안 남긴다.
+//   옛 /model(fable) 기록이 남은 채 UI로 opus를 고르고 opus 답이 오면 'fable 의도 vs opus 답' 거짓경고가 나므로:
+//   settings 계열이 cmd와 같으면 → cmd 유효(터미널 /model 자신이 settings도 곧바로 쓰므로 일치가 정상 — 실측 +8s).
+//   계열이 다르고 settings가 cmd '이후' 갱신 → 누군가(이 창 UI든 타 창이든) 바꿈 = 귀속 불가 → skip.
+//   계열이 다른데 settings가 cmd보다 오래됨 → cmd가 최신 의도 → 유효. settings 빈값/읽기실패 → 반대 신호 없음 → 유효.
 export function resolveCcIntent(
   cmdModel: string | null,
+  cmdTs: number | null,
   settingsModel: string,
   settingsMtimeMs: number | null,
   sessionStartTs: number | null,
 ): { model: string; source: "command" | "settings" } | null {
-  if (cmdModel && cmdModel.trim()) return { model: cmdModel.trim(), source: "command" };
+  const cmd = cmdModel && cmdModel.trim() ? cmdModel.trim() : "";
+  const set = (settingsModel || "").trim();
+  if (cmd) {
+    if (!set || modelFamily(set) === modelFamily(cmd)) return { model: cmd, source: "command" };
+    if (
+      typeof settingsMtimeMs === "number" && Number.isFinite(settingsMtimeMs) &&
+      typeof cmdTs === "number" && Number.isFinite(cmdTs) && settingsMtimeMs > cmdTs
+    ) return null; // cmd 이후 다른 계열로 설정 변경 — 이 창 UI 피커/타 창 구별 불가 → 비교 skip
+    return { model: cmd, source: "command" };
+  }
   if (
-    settingsModel && settingsModel.trim() &&
+    set &&
     typeof settingsMtimeMs === "number" && Number.isFinite(settingsMtimeMs) &&
     typeof sessionStartTs === "number" && Number.isFinite(sessionStartTs) &&
     settingsMtimeMs <= sessionStartTs
-  ) return { model: settingsModel.trim(), source: "settings" };
+  ) return { model: set, source: "settings" };
   return null;
 }
