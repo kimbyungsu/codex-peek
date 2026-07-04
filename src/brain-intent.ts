@@ -83,33 +83,31 @@ export function parseLastAssistantModel(text: string, ws: string, normWs: (p: st
   return null;
 }
 
-// 의도 결정: ① 이 대화의 마지막 /model(cmdModel) — 단 'cmd 유효성 가드' 통과 시에만(아래)
-//           ② 없으면 '대화 시작 전에 정해져 있던' 전역 설정만
-//   (settingsMtime <= sessionStart — 대화 도중 바뀐 설정은 다른 창의 /model일 수 있어 이 대화의 의도로 귀속 불가)
-// ③ 둘 다 아니면 null → cc-model 비교 자체를 skip(거짓경고 0 우선).
-// ★cmd 유효성 가드(사용자 실측 후속, 2026-07-04): 모델 전환에는 transcript에 기록되는 터미널 /model 외에
-//   'UI 피커'(Claude Code 패널의 Switch model)도 있는데, 이는 전역 settings.json만 바꾸고 기록을 안 남긴다.
-//   옛 /model(fable) 기록이 남은 채 UI로 opus를 고르고 opus 답이 오면 'fable 의도 vs opus 답' 거짓경고가 나므로:
-//   settings 계열이 cmd와 같으면 → cmd 유효(터미널 /model 자신이 settings도 곧바로 쓰므로 일치가 정상 — 실측 +8s).
-//   계열이 다르고 settings가 cmd '이후' 갱신 → 누군가(이 창 UI든 타 창이든) 바꿈 = 귀속 불가 → skip.
-//   계열이 다른데 settings가 cmd보다 오래됨 → cmd가 최신 의도 → 유효. settings 빈값/읽기실패 → 반대 신호 없음 → 유효.
+// 의도 결정 v3(포커스 귀속, 2026-07-04 사용자 실측 반영):
+//   후보 = ① 이 대화의 마지막 터미널 /model 기록(cmd) ② 이 프로젝트에 '포커스 귀속'된 설정 변경(attr — 아래 shouldAttribute
+//   가 기록한 것: UI 피커/터미널 어느 쪽이든 '그 순간 이 창이 포커스였던' 변경) → 둘 중 **시각이 더 최신인 쪽** 승리.
+//   둘 다 없으면 ③ '대화 시작 전에 정해져 있던' 전역 설정만(settingsMtime <= sessionStart), 아니면 null=비교 skip.
+// v0.1.78의 '계열 불일치+mtime → skip' 가드는 폐기 — 귀속(attr)이 생겨 구별이 가능해졌고, 그 가드는 '타 창이 설정을
+//   바꾼 뒤 이 창 새 턴이 전역값으로 침묵 전환되는' 진짜 drift(사용자 실측)까지 억제했다. 이제: 변경이 이 창 귀속이면
+//   attr이 최신 의도(즉시 경고 UX 복원), 타 창 귀속이면 이 ws는 자기 의도 유지(침묵 전환 시 진짜 경고), 귀속 없는
+//   변경(비포커스·외부 편집·구버전 시절)은 cmd/폴백 규칙대로 — 과도기(귀속 도입 전 UI 전환)엔 한 번 애매할 수 있음(README 명시).
 export function resolveCcIntent(
   cmdModel: string | null,
   cmdTs: number | null,
+  attrModel: string | null,
+  attrTs: number | null,
   settingsModel: string,
   settingsMtimeMs: number | null,
   sessionStartTs: number | null,
-): { model: string; source: "command" | "settings" } | null {
+): { model: string; source: "command" | "attributed" | "settings" } | null {
   const cmd = cmdModel && cmdModel.trim() ? cmdModel.trim() : "";
+  const attr = attrModel && attrModel.trim() ? attrModel.trim() : "";
+  const cTs = typeof cmdTs === "number" && Number.isFinite(cmdTs) ? cmdTs : 0;
+  const aTs = typeof attrTs === "number" && Number.isFinite(attrTs) ? attrTs : 0;
+  if (cmd && attr) return aTs >= cTs ? { model: attr, source: "attributed" } : { model: cmd, source: "command" };
+  if (cmd) return { model: cmd, source: "command" };
+  if (attr) return { model: attr, source: "attributed" };
   const set = (settingsModel || "").trim();
-  if (cmd) {
-    if (!set || modelFamily(set) === modelFamily(cmd)) return { model: cmd, source: "command" };
-    if (
-      typeof settingsMtimeMs === "number" && Number.isFinite(settingsMtimeMs) &&
-      typeof cmdTs === "number" && Number.isFinite(cmdTs) && settingsMtimeMs > cmdTs
-    ) return null; // cmd 이후 다른 계열로 설정 변경 — 이 창 UI 피커/타 창 구별 불가 → 비교 skip
-    return { model: cmd, source: "command" };
-  }
   if (
     set &&
     typeof settingsMtimeMs === "number" && Number.isFinite(settingsMtimeMs) &&
@@ -117,4 +115,38 @@ export function resolveCcIntent(
     settingsMtimeMs <= sessionStartTs
   ) return { model: set, source: "settings" };
   return null;
+}
+
+// ── 포커스 귀속 판정(순수) — '이 설정 변경을 이 창(프로젝트)의 선택으로 볼 것인가' ──
+// 원리: UI 피커/터미널 조작은 그 순간 OS 포커스를 가진 창에서만 가능하다. 각 창의 확장은 자기 포커스 구간
+// (focusStartMs~focusEndMs, 진행 중이면 focusEndMs=null)을 알므로, 설정 파일의 변경 시각(settingsMtimeMs)이
+// '이 창이 포커스였던 구간' 안(+감시 지연 여유 graceMs)에 들어야만 귀속한다.
+// → 변경 직후 사용자가 다른 창으로 이동해 이벤트가 늦게 와도(내 구간 안) 잡고, 반대로 변경 '후'에 포커스를 받은
+//   창(focusStart > 변경 시각)이 자기 것으로 오귀속하는 race는 차단(Codex 보완 수용). 모델 값이 실제로 안 변했으면 기록 안 함.
+export function shouldAttributeSettingsChange(
+  settingsMtimeMs: number,
+  focusStartMs: number | null,
+  focusEndMs: number | null, // null=지금도 포커스 중
+  nowMs: number,
+  prevModel: string,
+  newModel: string,
+  graceMs = 2000,
+): boolean {
+  if (!newModel || !newModel.trim()) return false;
+  if ((prevModel || "").trim() === newModel.trim()) return false; // 값 무변화(다른 키 변경·중복 이벤트) → 기록 안 함
+  if (typeof focusStartMs !== "number" || !Number.isFinite(focusStartMs)) return false; // 포커스 이력 없음
+  if (!Number.isFinite(settingsMtimeMs)) return false;
+  if (settingsMtimeMs < focusStartMs) return false; // 변경이 내 포커스 시작 '전' — 다른 창에서 바꾼 뒤 내가 포커스 받음 → 오귀속 차단
+  const end = typeof focusEndMs === "number" && Number.isFinite(focusEndMs) ? focusEndMs : nowMs;
+  return settingsMtimeMs <= end + graceMs; // 내 포커스 구간(+지연 여유) 안의 변경만 내 것
+}
+
+// cc-intent 맵 정리 — 오래된 프로젝트 귀속 제거(active/ 30일 정리와 동형). 원본을 바꾸지 않고 새 맵 반환.
+export function pruneIntentMap<T extends { ts: number }>(map: Record<string, T>, nowMs: number, ttlMs = 30 * 24 * 60 * 60 * 1000): Record<string, T> {
+  const out: Record<string, T> = {};
+  for (const k of Object.keys(map || {})) {
+    const v = map[k];
+    if (v && typeof v.ts === "number" && Number.isFinite(v.ts) && nowMs - v.ts <= ttlMs) out[k] = v;
+  }
+  return out;
 }

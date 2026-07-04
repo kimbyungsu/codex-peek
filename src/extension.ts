@@ -7,7 +7,7 @@ import { spawn } from "child_process";
 import { computeVerifyStats, VerifyStats, CodexTokens, parseSessionTokens, ClaudeTokens, sumClaudeUsage, computeProjectStats, ProjectStat } from "./verify-stats";
 import * as hookSetup from "./hook-setup";
 import { localizeIntegrityDetail } from "./integrity-i18n";
-import { parseLastModelCommand, parseLastAssistantModel, parseSessionStartTs, resolveCcIntent, modelFamily } from "./brain-intent";
+import { parseLastModelCommand, parseLastAssistantModel, parseSessionStartTs, resolveCcIntent, modelFamily, shouldAttributeSettingsChange, pruneIntentMap } from "./brain-intent";
 
 const HOME = os.homedir();
 // 자체 namespace 폴더. CODEX_BRIDGE_HOME으로 override(확장 호스트≠훅 home 환경 대비 — 브릿지·훅과 동일 규칙).
@@ -578,14 +578,18 @@ function syncBrainDriftFor(ws: string | null): void {
     if (ccT) {
       const scan = scanCcTranscript(ccT, ws);                // 증분 스캔 — 이 대화의 /model 기록 + 실제 답 모델(둘 다 cwd strict)
       claudeCur = scan.actual && Date.now() - scan.actual.ts < DRIFT_FRESH_MS ? scan.actual.model : ""; // 신선한 답만(옛 답 거짓 drift 차단)
-      // settingsMtime은 cmd 유무와 무관하게 항상 읽는다 — cmd가 있어도 'cmd 이후 다른 계열로 설정 변경'(UI 피커/타 창) 가드에 필요(Codex 보완 수용).
+      const attr = readCcIntentFor(ws);                      // 이 프로젝트에 '포커스 귀속'된 선택(UI 피커 포함) — cmd와 최신 ts 승리
       let settingsMtime: number | null = null, sessionStart: number | null = null;
-      try { settingsMtime = fs.statSync(claudeSettingsFile()).mtimeMs; } catch { settingsMtime = null; }
-      if (!scan.cmd) {                                       // ② 폴백 재료: '대화 시작 전 설정'인지 판정(시작시각은 폴백에만 필요)
+      if (!scan.cmd && !attr) {                              // 폴백 재료: '대화 시작 전 설정'인지 판정(후보가 전무할 때만 필요)
+        try { settingsMtime = fs.statSync(claudeSettingsFile()).mtimeMs; } catch { settingsMtime = null; }
         try { sessionStart = parseSessionStartTs(readHead(ccT, 65536)); } catch { sessionStart = null; }
       }
-      const intent = resolveCcIntent(scan.cmd ? scan.cmd.model : null, scan.cmd ? scan.cmd.ts : null, readClaudeSettingsModel(), settingsMtime, sessionStart);
-      cbModel = intent ? intent.model : "";                  // ③ 의도 산출 불가 → 빈값 → 아래 cf&&cfc 가드로 비교 skip
+      const intent = resolveCcIntent(
+        scan.cmd ? scan.cmd.model : null, scan.cmd ? scan.cmd.ts : null,
+        attr ? attr.model : null, attr ? attr.ts : null,
+        readClaudeSettingsModel(), settingsMtime, sessionStart,
+      );
+      cbModel = intent ? intent.model : "";                  // 의도 산출 불가 → 빈값 → 아래 cf&&cfc 가드로 비교 skip
     }
     const links = loadLinks();
     const pref: any = links.modelPrefs[normWs(ws)] || {};
@@ -1090,6 +1094,39 @@ function readRange(file: string, from: number, to: number): string {
     return buf.toString("utf8");
   } finally { fs.closeSync(fd); }
 }
+// ── 포커스 귀속 상태·기록(cc-intent.json) — 'UI 피커/터미널로 이 창에서 고른 모델'을 프로젝트 단위로 영속 ──
+// 각 창의 확장은 자기 포커스 구간만 알면 된다: 설정 변경 시각이 내 포커스 구간 안이면 내 프로젝트의 선택(양쪽 창이
+// 같은 변경 이벤트를 받아도 포커스였던 창만 기록 → 자연 배타). 판정 자체는 brain-intent.shouldAttributeSettingsChange(순수).
+const CC_INTENT_FILE = path.join(BRIDGE_DIR, "cc-intent.json");
+let focusStartMs: number | null = null; // 이 창이 포커스를 얻은 시각(비포커스로 시작했으면 null)
+let focusEndMs: number | null = null;   // 포커스를 잃은 시각(null=지금 포커스 중이거나 이력 없음)
+let lastSeenSettingsModel = "";         // 직전 관찰한 설정 모델(활성화 시 초기화 — 초기값 자체는 귀속하지 않음)
+function readCcIntentFor(ws: string): { model: string; ts: number } | null {
+  try {
+    const j = JSON.parse(fs.readFileSync(CC_INTENT_FILE, "utf8"));
+    const v = j && j.byWorkspace && j.byWorkspace[normWs(ws)];
+    return v && typeof v.model === "string" && v.model && typeof v.ts === "number" ? { model: v.model, ts: v.ts } : null;
+  } catch { return null; }
+}
+function writeCcIntentFor(ws: string, model: string): void {
+  let map: Record<string, { model: string; ts: number }> = {};
+  try { const j = JSON.parse(fs.readFileSync(CC_INTENT_FILE, "utf8")); if (j && j.byWorkspace) map = j.byWorkspace; } catch { /* 첫 기록 */ }
+  map[normWs(ws)] = { model, ts: Date.now() };
+  atomicWrite(CC_INTENT_FILE, JSON.stringify({ byWorkspace: pruneIntentMap(map, Date.now()) })); // 30일 지난 프로젝트 귀속 정리
+}
+// settings.json 변경 이벤트에서 호출 — 모델이 실제로 바뀌었고 변경 시각이 내 포커스 구간 안이면 이 프로젝트의 선택으로 기록.
+function maybeAttributeSettingsChange(): void {
+  const cur = readClaudeSettingsModel();
+  const prev = lastSeenSettingsModel;
+  lastSeenSettingsModel = cur; // 귀속 여부와 무관하게 관찰값은 갱신(중복 이벤트 재귀속 방지)
+  if (!cur || cur === prev) return;
+  let mtime = Date.now();
+  try { mtime = fs.statSync(claudeSettingsFile()).mtimeMs; } catch { /* 이벤트 시각으로 대체 */ }
+  const ws = dashboardWorkspace();
+  if (!ws) return;
+  if (shouldAttributeSettingsChange(mtime, focusStartMs, focusEndMs, Date.now(), prev, cur)) writeCcIntentFor(ws, cur);
+}
+
 function scanCcTranscript(f: string, ws: string): { cmd: { model: string; ts: number } | null; actual: { model: string; ts: number } | null } {
   try {
     const st = fs.statSync(f);
@@ -2679,6 +2716,14 @@ export function activate(context: vscode.ExtensionContext): void {
   deployBridgeRuntime(context); // 마켓 설치: 번들 브릿지를 ~/.codex-bridge에 자동 배치(레포 수동 설치는 stamp 없음 → 존중)
   syncCodexBin(); // 브릿지가 쓸 codex 경로를 최신 확장 기준으로 기록
   ensureLangInitialized(); // 첫 실행: language.json 없으면 VS Code UI 언어로 초기값 저장(이후엔 대시보드 토글이 정본)
+  // ★포커스 귀속 초기화: 지금 포커스 상태와 현재 설정 모델을 관찰값으로만 기록(활성화 시점 값 자체는 귀속하지 않음 —
+  //   '변경' 이벤트에서만 귀속). 이후 포커스 변화를 추적해 '설정 변경이 내 포커스 구간에서 일어났나'를 판정한다.
+  if (vscode.window.state.focused) { focusStartMs = Date.now(); focusEndMs = null; }
+  lastSeenSettingsModel = readClaudeSettingsModel();
+  context.subscriptions.push(vscode.window.onDidChangeWindowState((e) => {
+    if (e.focused) { focusStartMs = Date.now(); focusEndMs = null; }
+    else if (focusStartMs !== null && focusEndMs === null) focusEndMs = Date.now();
+  }));
   context.subscriptions.push(vscode.commands.registerCommand("codexBridge.installHooks", () => { void runHookInstallFlow(); }));
   void maybeOfferHookSetup(); // 훅 미등록 감지 → 동의 1클릭 설치 제안(비동기, 활성화 안 막음)
   context.subscriptions.push(
@@ -2878,8 +2923,14 @@ export function activate(context: vscode.ExtensionContext): void {
   }
   // 두뇌 drift 입력원 감시 ①: Claude settings.json — 앱 /model·/effort가 즉시 다시 쓰므로, 바뀌면 즉시 render로 drift 반영.
   // 상위 폴더(CLAUDE_HOME = CLAUDE_CONFIG_DIR 또는 ~/.claude) 비재귀 watch + 파일명 필터: 원자적 rename 교체에도 견딤(파일 직접 watch는 교체 후 끊긴다). Codex 소스(links/rollout)는 위 watch가 이미 담당.
+  // ★포커스 귀속: 모델 값이 실제로 바뀐 변경이 '이 창 포커스 구간'에서 일어났으면 이 프로젝트의 선택으로 기록(cc-intent.json)
+  //   → 이 창에선 몇 초 내 즉시 경고(구버전 UX 복원), 타 창엔 영향 없음. 기록 후 render가 새 intent로 재계산.
   try {
-    watchers.push(fs.watch(path.dirname(claudeSettingsFile()), (_e, fn) => { if (!fn || fn === "settings.json") scheduleRender(); }));
+    watchers.push(fs.watch(path.dirname(claudeSettingsFile()), (_e, fn) => {
+      if (fn && fn !== "settings.json") return;
+      try { maybeAttributeSettingsChange(); } catch { /* 귀속 실패가 render를 막지 않음 */ }
+      scheduleRender();
+    }));
   } catch {
     /* ignore */
   }

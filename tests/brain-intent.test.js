@@ -6,7 +6,7 @@
  * ※ out/brain-intent.js는 npm test의 tsc 단계 산출물.
  */
 const path = require("path");
-const { parseLastModelCommand, parseLastAssistantModel, parseSessionStartTs, resolveCcIntent, modelFamily } = require(path.join(__dirname, "..", "out", "brain-intent.js"));
+const { parseLastModelCommand, parseLastAssistantModel, parseSessionStartTs, resolveCcIntent, modelFamily, shouldAttributeSettingsChange, pruneIntentMap } = require(path.join(__dirname, "..", "out", "brain-intent.js"));
 function normWs(p) { return String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase(); }
 let pass = 0, fail = 0;
 function ok(c, m) { if (c) { pass++; console.log("  ✅ " + m); } else { fail++; console.log("  ❌ " + m); } }
@@ -66,32 +66,49 @@ console.log("[modelFamily 정본] 확장·격자·테스트가 같은 함수 imp
 ok(modelFamily("opus[1m]") === "opus" && modelFamily("claude-opus-4-8") === "opus", "계열: 별칭↔정식ID 동일");
 ok(modelFamily("claude-fable-5[1m]") === "fable" && modelFamily("") === "" && modelFamily("gpt-5.5") === "", "계열: fable/빈값/비-Claude");
 
-console.log("[resolveCcIntent] ①이 대화의 /model(유효성 가드) → ②대화 시작 前 설정만 → ③skip(거짓경고 0)");
+console.log("[resolveCcIntent v3] 후보(①/model ②포커스 귀속) 최신 ts 승리 → ③대화 시작 前 설정 → ④skip");
 const T0 = Date.parse("2026-07-01T00:00:00Z"), T1 = Date.parse("2026-07-02T00:00:00Z"), T2 = Date.parse("2026-07-03T00:00:00Z");
-// (cmdModel, cmdTs, settingsModel, settingsMtimeMs, sessionStartTs)
-let it = resolveCcIntent("claude-fable-5", T1, "claude-fable-5[1m]", T2, T0);
-ok(it && it.model === "claude-fable-5" && it.source === "command", "① cmd와 설정이 같은 계열 → cmd 유효(mtime이 더 최신이어도 — 터미널 /model 자신이 설정을 씀·실측 +8s)");
-ok(resolveCcIntent("claude-fable-5", T1, "opus[1m]", T2, T0) === null, "①가드: cmd(fable) 이후 다른 계열(opus)로 설정 변경 → skip — UI 피커/타 창 귀속 불가(거짓경고 차단)");
-it = resolveCcIntent("claude-opus-4-8[1m]", T1, "claude-fable-5", T0, null);
-ok(it && it.source === "command" && it.model === "claude-opus-4-8[1m]", "①가드: 설정이 cmd보다 오래됨 → cmd가 최신 의도로 유효");
-it = resolveCcIntent("claude-fable-5", T1, "", null, null);
-ok(it && it.source === "command", "①가드: 설정 빈값/읽기 실패 → 반대 신호 없음 → cmd 유효");
-it = resolveCcIntent(null, null, "opus[1m]", T0, T1);
-ok(it && it.model === "opus[1m]" && it.source === "settings", "② 설정 mtime<=대화시작 → 그 대화의 기본값으로 인정");
-ok(resolveCcIntent(null, null, "opus[1m]", T1, T0) === null, "② 설정이 대화 도중 변경(mtime>시작) → skip — P1의 /model이 P2 설정을 바꾼 실측 케이스 차단");
-ok(resolveCcIntent(null, null, "opus[1m]", null, T0) === null, "② mtime 산출 실패 → skip(추측 비교 금지)");
-ok(resolveCcIntent(null, null, "opus[1m]", T0, null) === null, "② 시작시각 산출 실패 → skip(birthtime 대체 안 함)");
-ok(resolveCcIntent(null, null, "", T0, T1) === null, "③ 설정 자체가 빈값 → skip");
-ok(resolveCcIntent("  ", null, "opus", T0, T1) && resolveCcIntent("  ", null, "opus", T0, T1).source === "settings", "공백뿐인 cmd는 없는 것으로(설정 폴백)");
+// (cmdModel, cmdTs, attrModel, attrTs, settingsModel, settingsMtimeMs, sessionStartTs)
+let it = resolveCcIntent("claude-fable-5", T1, "claude-opus-4-8[1m]", T2, "x", null, null);
+ok(it && it.source === "attributed" && it.model === "claude-opus-4-8[1m]", "attr(UI 피커 귀속)이 cmd보다 최신 → attr 승리(전환 즉시 경고 UX의 근거)");
+it = resolveCcIntent("claude-fable-5", T2, "claude-opus-4-8[1m]", T1, "x", null, null);
+ok(it && it.source === "command" && it.model === "claude-fable-5", "cmd(/model)가 attr보다 최신 → cmd 승리");
+it = resolveCcIntent("claude-fable-5", T1, null, null, "opus[1m]", T2, T0);
+ok(it && it.source === "command" && it.model === "claude-fable-5", "attr 없음 → cmd가 의도(타 창이 설정을 나중에 바꿔도 이 ws 의도 유지 — 침묵 전환 시 진짜 경고 가능, v0.1.78 가드 폐기)");
+it = resolveCcIntent(null, null, "claude-opus-4-8[1m]", T1, "x", null, null);
+ok(it && it.source === "attributed", "cmd 없음 → attr 단독 의도(UI 피커만 쓰는 사용자)");
+it = resolveCcIntent(null, null, null, null, "opus[1m]", T0, T1);
+ok(it && it.model === "opus[1m]" && it.source === "settings", "③ 후보 전무+설정 mtime<=대화시작 → 그 대화의 기본값으로 인정");
+ok(resolveCcIntent(null, null, null, null, "opus[1m]", T1, T0) === null, "③ 설정이 대화 도중 변경(귀속 없음: 비포커스·외부 편집·구버전) → skip");
+ok(resolveCcIntent(null, null, null, null, "opus[1m]", null, T0) === null, "③ mtime 산출 실패 → skip(추측 비교 금지)");
+ok(resolveCcIntent(null, null, null, null, "opus[1m]", T0, null) === null, "③ 시작시각 산출 실패 → skip(birthtime 대체 안 함)");
+ok(resolveCcIntent(null, null, null, null, "", T0, T1) === null, "④ 설정 자체가 빈값 → skip");
+ok(resolveCcIntent("  ", null, "  ", null, "opus", T0, T1).source === "settings", "공백뿐인 cmd/attr는 없는 것으로(설정 폴백)");
 
-console.log("[사용자 시나리오 종합] 실측 3건 — 거짓경고 0 유지");
-// P2: 자기 대화에 /model opus 기록, 전역 설정은 P1이 fable로 바꿈(mtime 최신) → 계열 불일치+이후 변경 → skip(과소경고 감수, 거짓경고 0)
-ok(resolveCcIntent("claude-opus-4-8[1m]", T1, "claude-fable-5[1m]", T2, T0) === null, "P2: 타 창이 설정 바꿈 → 귀속 불가 skip(경고도 거짓경고도 없음)");
-// 진짜 drift: 이 대화에서 /model fable 직후(설정도 fable로 같이 써짐) 답이 계속 opus
-const p1 = resolveCcIntent("claude-fable-5[1m]", T1, "claude-fable-5[1m]", T1, T0);
-ok(p1 && modelFamily(p1.model) === "fable" && modelFamily(p1.model) !== modelFamily("claude-opus-4-8"), "진짜 drift(고른 fable≠답 opus)는 여전히 잡힘");
-// UI 피커 시나리오(실측): 옛 /model fable 기록 잔존 + UI로 opus 전환(설정만 opus, 기록 없음) → opus 답이 와도 거짓경고 없음
-ok(resolveCcIntent("claude-fable-5", T0, "claude-opus-4-8[1m]", T1, null) === null, "UI 피커 전환 후: 옛 fable 기록을 의도로 오인하지 않음(skip — 다음 답이 opus여도 거짓경고 없음)");
+console.log("[사용자 실측 시나리오 종합]");
+// (1) 침묵 전환 감지: P2 의도=fable(/model 또는 귀속), P1이 전역을 opus로 바꿈(P2엔 귀속 없음) → P2 의도 유지 → 새 답이 opus로 오면 경고
+const p2 = resolveCcIntent("claude-fable-5", T1, null, null, "claude-opus-4-8[1m]", T2, T0);
+ok(p2 && modelFamily(p2.model) === "fable" && modelFamily(p2.model) !== modelFamily("claude-opus-4-8"), "P2 침묵 전환: 의도 fable 유지 → opus 답에서 진짜 경고(v0.1.78이 죽이던 것 복원)");
+// (2) 이 창 UI 전환 즉시 경고: 귀속(opus, 최신) vs 최근 답(fable) → 어긋남 → 답 오기 전에도 경고
+const ui = resolveCcIntent("claude-fable-5", T0, "claude-opus-4-8[1m]", T2, "x", null, null);
+ok(ui && modelFamily(ui.model) === "opus" && modelFamily(ui.model) !== modelFamily("claude-fable-5"), "이 창 UI 전환: 귀속이 의도 → 옛 fable 답과 어긋나 즉시 경고(구버전 UX 복원)");
+// (3) 타 창 전환은 이 창 무반응: 이 창 의도(fable)==이 창 답(fable), 전역만 opus
+const iso = resolveCcIntent("claude-fable-5", T1, null, null, "claude-opus-4-8[1m]", T2, T0);
+ok(iso && modelFamily(iso.model) === modelFamily("claude-fable-5[1m]"), "타 창 전환: 이 창 의도·답 일치 → 경고 없음(분리 유지)");
+
+console.log("[shouldAttributeSettingsChange] '이 변경은 내 창의 조작인가' — 포커스 구간 판정");
+const N = 1000000; // now
+ok(shouldAttributeSettingsChange(N - 100, N - 5000, null, N, "fable", "opus") === true, "포커스 중 변경 → 귀속");
+ok(shouldAttributeSettingsChange(N - 100, N - 5000, N - 200, N, "fable", "opus") === true, "변경 직후 포커스 잃음(지연 여유 2s 내) → 귀속");
+ok(shouldAttributeSettingsChange(N - 100, N - 5000, N - 4000, N, "fable", "opus") === false, "포커스 잃고 한참 뒤 변경 → 비귀속(타 창 조작)");
+ok(shouldAttributeSettingsChange(N - 100, N - 50, null, N, "fable", "opus") === false, "변경이 내 포커스 시작 '전' → 비귀속(변경 후 포커스 받은 창의 오귀속 차단 — Codex race 보완)");
+ok(shouldAttributeSettingsChange(N - 100, null, null, N, "fable", "opus") === false, "포커스 이력 없음 → 비귀속");
+ok(shouldAttributeSettingsChange(N - 100, N - 5000, null, N, "opus", "opus") === false, "모델 값 무변화(다른 키 변경·중복 이벤트) → 기록 안 함");
+ok(shouldAttributeSettingsChange(N - 100, N - 5000, null, N, "fable", "") === false, "새 값 빈값 → 기록 안 함");
+
+console.log("[pruneIntentMap] 30일 지난 프로젝트 귀속 정리");
+const pm = pruneIntentMap({ a: { model: "x", ts: N - 1000 }, b: { model: "y", ts: N - 31 * 864e5 }, c: { ts: "bad" } }, N);
+ok(pm.a && !pm.b && !pm.c, "신선 유지·만료 제거·손상 항목 제거");
 
 console.log("[배선·안전장치] extension.ts 증분 스캐너 계약(소스 검사)");
 const fs2 = require("fs");
