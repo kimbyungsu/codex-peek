@@ -1035,7 +1035,7 @@ function findTranscriptBySession(sid: string): string | undefined {
 }
 // 이 ws의 '현재(또는 가장 최근) 대화' transcript 파일을 찾는다 — cc-model drift의 intent/actual을 '같은 대화'에서 읽기 위한 단일 소스.
 // 1순위: 세션별 active(BRIDGE_DIR/active/<sid>.json — 여러 창 동시 사용 대비) + 레거시 active.json 중
-//   workspace==ws && 신선(24h)한 것들에서 '가장 최근' 세션 → 그 transcript. (기존 전역 active.json 단독 1순위는
+//   workspace==ws && 신선(DRIFT_FRESH_MS)한 것들에서 '가장 최근' 세션 → 그 transcript. (기존 전역 active.json 단독 1순위는
 //   다른 창이 마지막에 덮어쓰면 이 ws의 현재 대화를 놓쳤다 — 세션별 파일 스캔으로 보강, Codex 보완 수용.)
 // 2순위(폴백): 이 ws(cwd)의 최근 답이 있는(신선) 최근 수정 transcript.
 function currentTranscriptForWs(ws: string): string | null {
