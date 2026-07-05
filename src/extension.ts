@@ -9,6 +9,7 @@ import * as hookSetup from "./hook-setup";
 import { localizeIntegrityDetail } from "./integrity-i18n";
 import { parseLastModelCommand, parseLastAssistantModel, parseSessionStartTs, resolveCcIntent, modelFamily, shouldAttributeSettingsChange, pruneIntentMap } from "./brain-intent";
 import { parseGitLog, suggest as scopeSuggest, ScopeSuggestion } from "./scope-ledger";
+import { maskKey, isPlausibleKey, mergeDeepseekConfig } from "./deepseek-config";
 
 const HOME = os.homedir();
 // 자체 namespace 폴더. CODEX_BRIDGE_HOME으로 override(확장 호스트≠훅 home 환경 대비 — 브릿지·훅과 동일 규칙).
@@ -132,6 +133,7 @@ interface BridgeState {
   claudeTokens: ClaudeTokens;      // 이 폴더 클로드 대화기록 28일 토큰 + 턴수 — 작업 비용(코덱스 검증 비용과 분리)
   projectStats: Record<string, ProjectStat>; // 프로젝트별 비교(3c) — 모든 폴더 28일 검증 분포(전체 group-by, 이 폴더 통계와 별개)
   scope: ScopeState | null; // 범위 장부(L0) 후보 — scoutMode=on(3트랙)일 때만 계산(advisory·로컬 git만·외부전송 0). null=2트랙
+  deepseek: { hasKey: boolean; masked: string; model: string }; // 고급설정 탭 표시용 — 키 원문은 절대 웹뷰로 안 보냄(마스킹만)
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
 }
 
@@ -848,6 +850,7 @@ function computeState(turnsN: number): BridgeState {
     claudeTokens: readClaudeTokens(ws), // 이 폴더 클로드 작업 토큰(28일) — 코덱스와 분리
     projectStats: readProjectStats(),   // 프로젝트별 비교(전체 폴더 28일)
     scope: readScopeState(ws),          // 범위 장부 후보(3트랙에서만 — 내부에서 scoutMode 확인·캐시)
+    deepseek: readDeepseekView(),       // 고급설정 탭 — 키 유무·마스킹(원문 미노출)
   };
 }
 
@@ -1220,6 +1223,15 @@ function readScopeState(ws: string | null): ScopeState | null {
   } catch { return { seeds: [], suggestion: null, note: "error" }; }
 }
 
+// ── DeepSeek 설정(고급 탐색 키) — 런타임 홈 deepseek.json. 웹뷰에는 마스킹만, 원문은 절대 안 보냄 ──
+const DEEPSEEK_FILE = path.join(BRIDGE_DIR, "deepseek.json");
+function readDeepseekRaw(): any { try { return JSON.parse(fs.readFileSync(DEEPSEEK_FILE, "utf8")); } catch { return {}; } }
+function readDeepseekView(): { hasKey: boolean; masked: string; model: string } {
+  const j = readDeepseekRaw();
+  const key = typeof j.apiKey === "string" ? j.apiKey : "";
+  return { hasKey: !!key.trim(), masked: maskKey(key), model: typeof j.model === "string" && j.model ? j.model : "deepseek-v4-flash" };
+}
+
 // 이 폴더(ws)의 클로드 대화기록에서 최근 28일 토큰을 합한다 — 코덱스 토큰(검증 비용)과 분리한 '작업 비용'. cwd 필터(다른 폴더 제외)·사이드체인 제외는 sumClaudeUsage가 담당. !ws면 빈(프로젝트별 원칙).
 function readClaudeTokens(ws: string | null, now = Date.now()): ClaudeTokens {
   const acc: ClaudeTokens = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, total: 0, turns: 0 };
@@ -1365,8 +1377,24 @@ class Dashboard {
             scoutMode: normScoutMode({ scoutMode: m.scoutMode }),
           }, slotLang);
           if (!ok) vscode.window.showErrorMessage(tE("설정 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 저장해 주세요(기존 설정은 그대로 유지됩니다).","Failed to save settings — file locked or inaccessible. Try again shortly (existing settings are kept)."));
+          // 3트랙 저장인데 DeepSeek 키가 없으면 안내(차단 아님 — 기초 탐색은 키 없이 동작): 기대치 설정용 1회성 토스트.
+          if (ok && normScoutMode({ scoutMode: m.scoutMode }) === "on" && !readDeepseekView().hasKey) {
+            vscode.window.showInformationMessage(tE(
+              "3트랙이 켜졌어요. 지금은 키 없이 되는 '기초 탐색'(함께 변경 통계·증거 수집)까지 동작합니다 — LLM 영향지도(고급 단계)까지 쓰려면 대시보드 '고급설정' 탭에 DeepSeek API 키를 입력하세요.",
+              "3-track is on. Without a key it runs 'basic scouting' (co-change stats · evidence gathering) — to unlock the LLM impact-map stage, add a DeepSeek API key in the dashboard's Advanced tab."));
+          }
           this.post();
           this.panel?.webview.postMessage({ type: "saveResult", target: "contract", ok });
+        }
+        if (m?.type === "saveDeepseekKey") {
+          // 키 저장/삭제 — 원문은 이 핸들러에서 파일로만 가고, 상태(post)로는 마스킹만 나감. 빈 입력=키 삭제(모델·주소 설정은 보존).
+          const key = typeof m.key === "string" ? m.key.trim() : "";
+          let ok = false;
+          try { ok = atomicWrite(DEEPSEEK_FILE, JSON.stringify(mergeDeepseekConfig(readDeepseekRaw(), key), null, 2)); } catch { ok = false; }
+          if (!ok) vscode.window.showErrorMessage(tE("DeepSeek 키 저장 실패 — 파일 접근이 막혔어요. 잠시 후 다시 시도하세요.","Failed to save the DeepSeek key — file inaccessible. Try again shortly."));
+          else if (key && !isPlausibleKey(key)) vscode.window.showWarningMessage(tE("저장은 됐지만 키 형식이 일반적이지 않아요(sk-…). 오타가 아닌지 확인하세요.","Saved, but the key format looks unusual (sk-…). Double-check for typos."));
+          this.post();
+          this.panel?.webview.postMessage({ type: "saveResult", target: "deepseek", ok });
         }
         if (m?.type === "saveBase") {
           let ok = false;
@@ -1712,6 +1740,7 @@ class Dashboard {
   <nav class="tabbar">
     <button type="button" class="tabbtn active" data-tab="main">${t("📋 현황", "📋 Status")}</button>
     <button type="button" class="tabbtn" data-tab="stats">${t("📊 검증 통계", "📊 Verify Stats")}</button>
+    <button type="button" class="tabbtn" data-tab="adv">${t("⚙️ 고급설정", "⚙️ Advanced")}</button>
     <span class="langseg" title="${t("전역 언어 — UI·주입 지침·규칙 슬롯의 언어(모든 프로젝트 공통)", "Global language — UI · injected directives · rule slots (shared by all projects)")}">
       <button type="button" class="langbtn" id="langKo" data-lang="ko">한국어</button>
       <button type="button" class="langbtn" id="langEn" data-lang="en">English</button>
@@ -1913,6 +1942,19 @@ class Dashboard {
       <p class="muted" id="statsNote"></p>
     </div>
   </section>
+  <section id="tab-adv" class="tab-panel">
+    <h2 class="sec base accent-yellow">${t("고급설정", "Advanced Settings")} <span class="sub2">${t("탐색(3트랙) 고급 단계용 — 전역 설정(모든 프로젝트 공통)", "for the advanced scouting stage (3-track) — global (shared by all projects)")}</span></h2>
+    <div class="card">
+      <div class="chead">${t("DeepSeek API 키", "DeepSeek API key")} <span class="muted" style="font-weight:400">${t("· 3트랙(탐색)의 'LLM 영향지도' 단계에 필요 — 없어도 기초 탐색(변경 통계·증거 수집)은 동작해요", "· needed for 3-track's 'LLM impact map' stage — basic scouting (co-change stats · evidence) works without it")}</span></div>
+      <div class="hint">${t("키는 이 컴퓨터의 브릿지 홈(<code>~/.codex-bridge/deepseek.json</code>)에만 저장되고 저장소(GitHub)에는 절대 들어가지 않아요. 현재 버전은 이 키로 아무것도 전송하지 않습니다 — LLM 지도 단계가 켜지는 버전부터 사용됩니다(그때 PRIVACY에 전송 내용이 명시돼요).", "The key is stored only in this machine's bridge home (<code>~/.codex-bridge/deepseek.json</code>) and never enters the repo (GitHub). The current version sends nothing with it — it activates with the LLM-map stage (transmissions will be documented in PRIVACY then).")}</div>
+      <div class="row" style="margin-top:8px">
+        <input type="password" id="dsKey" placeholder="sk-..." style="flex:1;min-width:220px" autocomplete="off" />
+        <button id="dsSave">${t("저장", "Save")}</button>
+        <button id="dsClear" class="secondary">${t("키 삭제", "Remove key")}</button>
+      </div>
+      <div class="hint" id="dsState" style="margin-top:6px"></div>
+    </div>
+  </section>
 </main>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
@@ -2052,6 +2094,9 @@ class Dashboard {
       document.querySelectorAll(".tab-panel").forEach(function(p){ p.classList.toggle("active", p.id===("tab-"+t)); });
     });
   });
+  // 고급설정: DeepSeek 키 저장/삭제 — 원문은 저장 메시지로만 나가고, 표시는 state의 마스킹만.
+  $("dsSave").addEventListener("click", ()=>{ const v=$("dsKey").value.trim(); if(!v){ return; } pendingSave={target:"deepseek", msg:T("키 저장됨 ✓","Key saved ✓")}; vscode.postMessage({type:"saveDeepseekKey", key:v}); $("dsKey").value=""; });
+  $("dsClear").addEventListener("click", ()=>{ pendingSave={target:"deepseek", msg:T("키 삭제됨 ✓","Key removed ✓")}; vscode.postMessage({type:"saveDeepseekKey", key:""}); $("dsKey").value=""; });
   // 언어 토글(전역 ko/en) — 저장은 확장이 language.json에(모든 창이 파일 watch로 따라옴). 표시는 state로 되돌아와 확정.
   document.querySelectorAll(".langbtn").forEach(function(b){
     b.addEventListener("click", function(){ vscode.postMessage({type:"setLang", lang: b.getAttribute("data-lang")}); });
@@ -2238,7 +2283,8 @@ class Dashboard {
       if (!ev.data.ok) return; // 실패: 네이티브 에러 토스트가 알린다. 성공 플래시·스크롤은 하지 않음.
       if (ev.data.target === "base") baseDirty = {}; // 저장 성공 → dirty 해제(저장값=표시값이 됐으니 render 동기화 재개)
       else if (ev.data.target === "contract") contractDirty = {};
-      if (ev.data.target === "model") flashSaved($("savedModel"), T("저장됨 ✓ (다음 코덱스 응답부터 적용)","Saved ✓ (from next Codex response)"));
+      if (ev.data.target === "deepseek") flashSaved($("dsState"), ps && ps.msg);
+      else if (ev.data.target === "model") flashSaved($("savedModel"), T("저장됨 ✓ (다음 코덱스 응답부터 적용)","Saved ✓ (from next Codex response)"));
       else if (ev.data.target === "timeout") flashSaved($("savedVT"), T("저장됨 ✓ (다음 검증부터 적용)","Saved ✓ (from next verification)"));
       else if (ev.data.target === "base") flashSaved($("savedB"), ps && ps.msg);
       else if (ev.data.target === "contract") {
@@ -2322,6 +2368,10 @@ class Dashboard {
       while(box.firstChild) box.removeChild(box.firstChild);
       const add=(txt,cls)=>{const el=document.createElement("div"); el.className=cls||"sbrow"; el.textContent=txt; box.appendChild(el); return el;};
       add(T("범위 장부(관찰) — 지금 변경과 '과거에 함께 바뀐' 파일 후보","Scope ledger (advisory) — files that historically changed together with your current changes"),"sbhead");
+      // 고급 단계(LLM 지도) 키 안내 — 키 없으면 '기초 탐색만 동작 중'을 카드 안에서 상시 고지(사용자 아이디어: 기대치 설정)
+      if(d.deepseek && !d.deepseek.hasKey){
+        add(T("ⓘ 지금은 기초 탐색(변경 통계·증거 수집)만 동작 중 — 'LLM 영향지도' 단계는 ⚙️ 고급설정 탭에 DeepSeek API 키를 넣으면 열려요.","ⓘ Basic scouting only (co-change stats · evidence) — add a DeepSeek API key in the ⚙️ Advanced tab to unlock the LLM impact-map stage."),"muted");
+      }
       const sc=d.scope;
       if(!sc){ add(T("계산 대기 — 3트랙 저장 후 자동 갱신됩니다.","Pending — refreshes automatically after saving 3-track."),"muted"); return; }
       if(sc.note==="no-git"){ add(T("git 저장소가 아니어서 이력 채굴을 할 수 없어요.","Not a git repository — history mining unavailable."),"muted"); return; }
@@ -2337,6 +2387,14 @@ class Dashboard {
         s.candidates.forEach(c=>{ add("• "+c.file+"  ("+T("함께 변경 ","co-changed ")+c.n+T("회","×")+")"); });
       }
       add(T("⚠ 이 장부가 못 보는 것: 처음 생기는 결합·실행해봐야 아는 동작·의미적 연쇄 — 후보가 없다고 영향이 없는 게 아니에요. (관찰 단계: 아무것도 막거나 강제하지 않음 · 전부 로컬 git, 외부 전송 없음)","⚠ What this ledger cannot see: first-time couplings, behaviors only running reveals, semantic chains — no candidates ≠ no impact. (Advisory: blocks/forces nothing · all local git, nothing sent anywhere)"),"muted");
+    })();
+    // ⑥ 고급설정 탭 — DeepSeek 키 상태(마스킹만 수신·원문 없음). 저장 직후엔 saveResult 플래시가 먼저 보이고,
+    // 다음 상태 푸시(post)가 이 최신 상태 문구로 자연 교체한다(둘 다 같은 노드 — 경합 무해).
+    (function(){
+      const st=$("dsState"); if(!st) return;
+      st.textContent = d.deepseek && d.deepseek.hasKey
+        ? T("등록됨: ","Registered: ") + d.deepseek.masked + T(" · 모델: "," · model: ") + d.deepseek.model
+        : T("등록된 키 없음 — 3트랙의 LLM 영향지도 단계가 잠겨 있어요(기초 탐색은 키 없이 동작).","No key registered — the LLM impact-map stage of 3-track is locked (basic scouting works without it).");
     })();
     // 온보딩: 미완료=설명 단계(이동 버튼·은은한 펄스) / 완료=축하+끄기 / 끄고 완료=다시보기 링크만.
     // 미완료(연결 끊김·검증 꺼짐)면 끄기 여부와 무관하게 단계가 다시 보여 '고장'을 숨기지 않음.
