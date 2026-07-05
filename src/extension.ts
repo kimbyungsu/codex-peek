@@ -8,6 +8,7 @@ import { computeVerifyStats, VerifyStats, CodexTokens, parseSessionTokens, Claud
 import * as hookSetup from "./hook-setup";
 import { localizeIntegrityDetail } from "./integrity-i18n";
 import { parseLastModelCommand, parseLastAssistantModel, parseSessionStartTs, resolveCcIntent, modelFamily, shouldAttributeSettingsChange, pruneIntentMap } from "./brain-intent";
+import { parseGitLog, suggest as scopeSuggest, ScopeSuggestion } from "./scope-ledger";
 
 const HOME = os.homedir();
 // 자체 namespace 폴더. CODEX_BRIDGE_HOME으로 override(확장 호스트≠훅 home 환경 대비 — 브릿지·훅과 동일 규칙).
@@ -130,6 +131,7 @@ interface BridgeState {
   codexTokens: CodexTokens | null; // 연결 코덱스 세션 누적 토큰(없으면 null) — 검증 비용 카드
   claudeTokens: ClaudeTokens;      // 이 폴더 클로드 대화기록 28일 토큰 + 턴수 — 작업 비용(코덱스 검증 비용과 분리)
   projectStats: Record<string, ProjectStat>; // 프로젝트별 비교(3c) — 모든 폴더 28일 검증 분포(전체 group-by, 이 폴더 통계와 별개)
+  scope: ScopeState | null; // 범위 장부(L0) 후보 — scoutMode=on(3트랙)일 때만 계산(advisory·로컬 git만·외부전송 0). null=2트랙
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
 }
 
@@ -212,6 +214,15 @@ function normInjectMode(o: any): InjectMode {
   return "always";
 }
 
+// 트랙: off=2트랙(구현↔검증, 기본) / on=3트랙(탐색 leg — 범위 장부 advisory, SCOPE-LEDGER.md).
+// 프로젝트별 계약 파일에 저장(검증 모드와 동일 철학: 프로젝트별 분리·고정). 브릿지 contract-lib과 normalize 동형.
+type ScoutMode = "off" | "on";
+const SCOUT_MODES: ScoutMode[] = ["off", "on"];
+function normScoutMode(o: any): ScoutMode {
+  if (o && SCOUT_MODES.includes(o.scoutMode)) return o.scoutMode;
+  return "off"; // 기본=2트랙(무회귀)
+}
+
 interface Contract {
   claude: string[];
   codex: string[];
@@ -219,6 +230,7 @@ interface Contract {
   codexChecklist: boolean;
   verifyMode: VerifyMode;
   claudeInjectMode: InjectMode;
+  scoutMode: ScoutMode;
 }
 
 function loadContract(ws?: string | null, lang?: Lang): Contract {
@@ -240,6 +252,7 @@ function loadContract(ws?: string | null, lang?: Lang): Contract {
     codexChecklist: o.codexChecklist !== false,
     verifyMode: normVerifyMode(o),
     claudeInjectMode: normInjectMode(o),
+    scoutMode: normScoutMode(o),
   };
 }
 
@@ -834,6 +847,7 @@ function computeState(turnsN: number): BridgeState {
     codexTokens,                      // 연결 코덱스 세션 누적 토큰(검증 비용 카드)
     claudeTokens: readClaudeTokens(ws), // 이 폴더 클로드 작업 토큰(28일) — 코덱스와 분리
     projectStats: readProjectStats(),   // 프로젝트별 비교(전체 폴더 28일)
+    scope: readScopeState(ws),          // 범위 장부 후보(3트랙에서만 — 내부에서 scoutMode 확인·캐시)
   };
 }
 
@@ -1154,6 +1168,44 @@ function scanCcTranscript(f: string, ws: string): { cmd: { model: string; ts: nu
   } catch { return { cmd: null, actual: null }; }
 }
 
+// ── 범위 장부(L0) 상태 — scoutMode=on(3트랙)일 때만, 이 프로젝트 git 이력에서 '함께 변경' 후보를 채굴(SCOPE-LEDGER.md S1 advisory) ──
+// 전부 로컬 git 조회(외부 전송 0). seed=지금 작업트리의 변경 파일(git status). 비-git 폴더·git 실패는 정직하게 사유 표시.
+// 캐시: ws+HEAD+변경목록이 같으면 재채굴 안 함(렌더마다 git log 300커밋을 다시 읽지 않게).
+type ScopeState = { seeds: string[]; suggestion: ScopeSuggestion | null; note: "" | "no-git" | "no-changes" | "error" };
+let scopeCache: { key: string; val: ScopeState } | null = null;
+function runGit(ws: string, args: string[]): { ok: boolean; out: string } {
+  try {
+    const r = require("child_process").spawnSync("git", ["-C", ws, ...args], { encoding: "utf8", timeout: 15000, windowsHide: true });
+    return { ok: r.status === 0 && !r.error, out: String(r.stdout || "") };
+  } catch { return { ok: false, out: "" }; }
+}
+function readScopeState(ws: string | null): ScopeState | null {
+  if (!ws) return null;
+  try {
+    if (loadContract(ws).scoutMode !== "on") return null; // 2트랙(기본) — 계산 자체를 안 함(무회귀·비용 0)
+    const head = runGit(ws, ["rev-parse", "HEAD"]);
+    if (!head.ok) { return { seeds: [], suggestion: null, note: "no-git" }; }
+    const st = runGit(ws, ["status", "--porcelain"]);
+    const seeds = st.out.split(/\r?\n/)
+      .map((l) => l.slice(3).trim().replace(/^.* -> /, "")) // rename 표기는 새 경로
+      .filter((p) => p && !/\/$/.test(p))
+      .slice(0, 8); // seed 상한 — 대량 변경 시 상위 일부만(후보 폭발 방지)
+    const key = `${normWs(ws)}|${head.out.trim()}|${seeds.join(",")}`;
+    if (scopeCache && scopeCache.key === key) return scopeCache.val;
+    let val: ScopeState;
+    if (!seeds.length) {
+      val = { seeds: [], suggestion: null, note: "no-changes" }; // 변경 없음 — seed가 없으니 지도도 없음(정직)
+    } else {
+      const log = runGit(ws, ["log", "--no-merges", "--first-parent", "--pretty=format:%H|%ct|%s", "--name-only", "-n", "300"]);
+      val = log.ok
+        ? { seeds, suggestion: scopeSuggest(parseGitLog(log.out), seeds), note: "" }
+        : { seeds, suggestion: null, note: "error" };
+    }
+    scopeCache = { key, val };
+    return val;
+  } catch { return { seeds: [], suggestion: null, note: "error" }; }
+}
+
 // 이 폴더(ws)의 클로드 대화기록에서 최근 28일 토큰을 합한다 — 코덱스 토큰(검증 비용)과 분리한 '작업 비용'. cwd 필터(다른 폴더 제외)·사이드체인 제외는 sumClaudeUsage가 담당. !ws면 빈(프로젝트별 원칙).
 function readClaudeTokens(ws: string | null, now = Date.now()): ClaudeTokens {
   const acc: ClaudeTokens = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, total: 0, turns: 0 };
@@ -1296,6 +1348,7 @@ class Dashboard {
             codexChecklist: !!m.codexChecklist,
             verifyMode: normVerifyMode({ verifyMode: m.verifyMode }),
             claudeInjectMode: normInjectMode({ claudeInjectMode: m.claudeInjectMode }),
+            scoutMode: normScoutMode({ scoutMode: m.scoutMode }),
           }, slotLang);
           if (!ok) vscode.window.showErrorMessage(tE("설정 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 저장해 주세요(기존 설정은 그대로 유지됩니다).","Failed to save settings — file locked or inaccessible. Try again shortly (existing settings are kept)."));
           this.post();
@@ -1717,6 +1770,13 @@ class Dashboard {
       </span>
     </label>
     <div class="hint"><span class="ic" title="${t("플랜 확정 = 플랜 모드(shift+Tab)에서 세운 계획을 확정·제출하는 그 턴(ExitPlanMode). 플랜 모드 '내내'가 아니라 확정하는 '순간'이에요. '플랜 확정/코드 변경'은 이 플랜 확정 턴이거나 파일을 바꾼 턴에 검증을 강제합니다.", "Plan confirm = the turn that submits the plan (ExitPlanMode) — the moment of confirming, not the whole plan mode. 'Plan confirm/code' forces verification on that turn or on file-changing turns.")}">ⓘ ${t("'플랜 확정'이 뭐야?", "What is 'plan confirm'?")}</span> · <span class="ic" title="${t("검증이 필요한 턴은 선택한 모드가 정해요. 모든 턴=매 답변, 코드 변경 시=파일을 만든/고친 턴, 플랜 확정/코드 변경=플랜을 확정했거나 파일을 고친 턴. 그 턴엔 Codex 검증 결과를 반영해 보고해야 끝낼 수 있어요.", "The selected mode decides which turns require verification. Every turn = all replies; on code change = turns that create/modify files; plan confirm/code = plan-confirm or file-changing turns. Those turns can only finish after reporting with Codex verification.")}">ⓘ ${t("언제 검증되나?", "When is it verified?")}</span></div>
+    <label class="ck verify">${t("트랙 — 구현·검증 흐름에 <b>탐색(범위 장부)</b>을 더할지", "Track — add <b>scouting (scope ledger)</b> to the implement·verify flow")}
+      <span class="seg" id="segScout">
+        <button type="button" data-sm="off">${t("2트랙<small>구현↔검증 (기본)</small>", "2-track<small>implement↔verify (default)</small>")}</button><button type="button" data-sm="on">${t("3트랙<small>+범위 장부 (관찰)</small>", "3-track<small>+scope ledger (advisory)</small>")}</button>
+      </span>
+    </label>
+    <div class="hint"><span class="ic" title="${t("범위 장부 = '이 파일을 건드리면 과거에 무엇이 함께 바뀌었나'를 이 프로젝트의 git 이력에서 통계로 보여주는 참고 카드예요. 지금은 관찰(advisory) 단계 — 아무것도 막거나 강제하지 않고, 외부로 아무것도 보내지 않아요(전부 로컬 git 조회). 데이터가 적은 영역은 추측 대신 '데이터 없음'으로 정직하게 표시합니다. 이 설정도 프로젝트별로 저장돼요.", "Scope ledger = a reference card showing 'when this file changed before, what changed with it' from this project's git history. Currently advisory — it blocks/forces nothing and sends nothing anywhere (all local git). Sparse areas honestly say 'no data' instead of guessing. This setting is saved per project.")}">ⓘ ${t("범위 장부란?", "What is the scope ledger?")}</span></div>
+    <div id="scoutBox" class="stagebox" style="display:none"></div>
     <div class="stagebox" id="stageBox">
       <div class="sbhead">${t("↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요", "↑ With verification on, the <b>stage baselines</b> apply at each step of the flow")} <span class="muted" style="font-weight:400">${t("· 지금 검증:", "· verify now:")} <b id="sbState">—</b> ${t("· 내용은 아래 단계별 기본 원칙에서", "· see Stage Baselines below for the text")}</span></div>
       <div class="sbrow" id="sbTransmit"><span class="sbmark"></span><b>${t("① Claude→Codex 넘길 때", "① When Claude hands off to Codex")}</b> ${t("· 전달 원칙", "· transmission principles")} <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
@@ -1854,8 +1914,8 @@ class Dashboard {
   function el(tag, cls, text){ const e=document.createElement(tag); if(cls)e.className=cls; if(text!=null)e.textContent=text; return e; }
   // 폼에서 고른 값(curVM/curIM, 저장 시 전송) vs 저장돼 실제 적용 중인 값(appVM/appIM, 지도·'지금 받는 것'에 표시).
   // 지도/패널은 "저장된 것"만 보여주고(거짓 미리보기 방지), 저장하는 순간 바뀐 곳을 깜빡인다.
-  let curVM = "off", curIM = "always";
-  let appVM = null, appIM = null;
+  let curVM = "off", curIM = "always", curSM = "off";
+  let appVM = null, appIM = null, appSM = null;
   let appCkC = null, appCkX = null; // 체크박스 '마지막 적용값'(hold 판정용 — 미저장 체크 변경이 언어 전환에 덮이지 않게)
   let curPerm = "";   // 지금 Claude Code 권한 모드(active.json) — plan 게이트 표시용
   let curRS = "";     // 두뇌 설정 폼에서 고른 생각강도("" = 기본). 모델은 입력칸 값 직접 사용.
@@ -1904,8 +1964,9 @@ class Dashboard {
     if(prevVM!=null && prevVM!==appVM){ flashNode(ver); flashNode($("sbTransmit")); flashNode($("sbVerify")); flashNode($("sbRejudge")); }
   }
   function highlightSeg(segId, attr, v){ const s=$(segId); if(s) s.querySelectorAll("button").forEach((b)=>b.classList.toggle("on", b.getAttribute(attr)===v)); }
-  function markDirty(){ const d=$("dirtyHint"); if(d) d.style.display = ((curVM!==appVM)||(curIM!==appIM)) ? "" : "none"; }
+  function markDirty(){ const d=$("dirtyHint"); if(d) d.style.display = ((curVM!==appVM)||(curIM!==appIM)||(curSM!==appSM)) ? "" : "none"; }
   $("segVerify").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-vm]"); if(b){ curVM=b.getAttribute("data-vm"); highlightSeg("segVerify","data-vm",curVM); markDirty(); } });
+  $("segScout").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-sm]"); if(b){ curSM=b.getAttribute("data-sm"); highlightSeg("segScout","data-sm",curSM); markDirty(); } });
   $("segInject").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-im]"); if(b){ curIM=b.getAttribute("data-im"); highlightSeg("segInject","data-im",curIM); markDirty(); } });
   $("segReason").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-rs]"); if(b){ curRS=b.getAttribute("data-rs"); highlightSeg("segReason","data-rs",curRS); } });
   $("mModel").addEventListener("change", ()=> renderReasonButtons($("mModel").value.trim()));  // 모델 바꾸면 그 모델의 생각강도로 버튼 교체(select=change)
@@ -1961,7 +2022,7 @@ class Dashboard {
     pendingSave = {target:"contract", imCh, vmCh};
     vscode.postMessage({type:"saveContract", lang: renderedLangC || undefined,
       claude: toLines($("cClaude").value), codex: toLines($("cCodex").value),
-      claudeChecklist: $("ckClaude").checked, codexChecklist: $("ckCodex").checked, verifyMode: curVM, claudeInjectMode: curIM});
+      claudeChecklist: $("ckClaude").checked, codexChecklist: $("ckCodex").checked, verifyMode: curVM, claudeInjectMode: curIM, scoutMode: curSM});
     // 성공 플래시·스크롤은 saveResult(ok)에서 (저장 실패 시 거짓 성공 방지)
   });
   $("saveB").addEventListener("click", () => {
@@ -2206,7 +2267,7 @@ class Dashboard {
     const langChangedC = renderedLangC !== null && d.lang && d.lang !== renderedLangC;
     // '카드에 저장 안 한 변경'은 textarea(dirty·포커스)만이 아니라 세그(curVM/curIM≠app*)·체크박스(appCk*와 다름)도 포함
     // — 세그만 바꾸고 언어 전환→저장 시 en 슬롯에 ko 화면의 모드가 저장되는 잔여 오염 차단(Codex 검증 반례 반영).
-    const segDirtyC = (appVM!==null && curVM!==appVM) || (appIM!==null && curIM!==appIM);
+    const segDirtyC = (appVM!==null && curVM!==appVM) || (appIM!==null && curIM!==appIM) || (appSM!==null && curSM!==appSM);
     const ckDirtyC = (appCkC!==null && $("ckClaude").checked!==appCkC) || (appCkX!==null && $("ckCodex").checked!==appCkX);
     const holdC = langChangedC && (contractDirty.claude || contractDirty.codex || segDirtyC || ckDirtyC ||
       document.activeElement === $("cClaude") || document.activeElement === $("cCodex"));
@@ -2218,12 +2279,13 @@ class Dashboard {
       $("ckCodex").checked = d.contract.codexChecklist !== false;
       appCkC = $("ckClaude").checked; appCkX = $("ckCodex").checked; // 체크박스 '마지막 적용값'(appVM 패턴) — hold 판정 기준
       const first = (appVM===null);
-      const pVM=appVM, pIM=appIM;
+      const pVM=appVM, pIM=appIM, pSM=appSM;
       appVM = d.contract.verifyMode || "off";
       appIM = d.contract.claudeInjectMode || "always";
+      appSM = d.contract.scoutMode || "off";
       // 사용자가 저장 안 한 토글 변경을 들고 있으면(dirty) 폼 선택을 보존, 아니면 저장값으로 동기화.
-      const dirty = !first && ((curVM!==pVM)||(curIM!==pIM));
-      if(first || !dirty){ curVM=appVM; curIM=appIM; highlightSeg("segVerify","data-vm",curVM); highlightSeg("segInject","data-im",curIM); }
+      const dirty = !first && ((curVM!==pVM)||(curIM!==pIM)||(curSM!==pSM));
+      if(first || !dirty){ curVM=appVM; curIM=appIM; curSM=appSM; highlightSeg("segVerify","data-vm",curVM); highlightSeg("segInject","data-im",curIM); highlightSeg("segScout","data-sm",curSM); }
       renderApplied(first?undefined:pVM, first?undefined:pIM);  // 저장/변경 반영 후 바뀐 축을 깜빡(첫 렌더는 깜빡 없음)
       markDirty();
     }
@@ -2237,6 +2299,31 @@ class Dashboard {
         pn.textContent = d.permissionMode==="plan" ? T("지금 플랜 모드예요 ✓","Plan mode is on now ✓") : T("지금은 플랜 모드 아니에요","Not in plan mode right now");
       } else { pn.style.display="none"; }
     }
+    // ⑤ 범위 장부 카드(3트랙 advisory) — 저장값 기준 표시. '데이터 없음/비-git/변경 없음'을 추측 없이 정직 표기(필수 안전장치).
+    (function(){
+      const box=$("scoutBox"); if(!box) return;
+      const on = (holdC ? appSM : (d.contract && d.contract.scoutMode)) === "on";
+      if(!on){ box.style.display="none"; return; }
+      box.style.display="";
+      while(box.firstChild) box.removeChild(box.firstChild);
+      const add=(txt,cls)=>{const el=document.createElement("div"); el.className=cls||"sbrow"; el.textContent=txt; box.appendChild(el); return el;};
+      add(T("범위 장부(관찰) — 지금 변경과 '과거에 함께 바뀐' 파일 후보","Scope ledger (advisory) — files that historically changed together with your current changes"),"sbhead");
+      const sc=d.scope;
+      if(!sc){ add(T("계산 대기 — 3트랙 저장 후 자동 갱신됩니다.","Pending — refreshes automatically after saving 3-track."),"muted"); return; }
+      if(sc.note==="no-git"){ add(T("git 저장소가 아니어서 이력 채굴을 할 수 없어요.","Not a git repository — history mining unavailable."),"muted"); return; }
+      if(sc.note==="no-changes"){ add(T("지금 작업트리에 변경이 없어요 — 파일을 바꾸면 여기에 후보가 떠요.","No working-tree changes yet — candidates appear once files change."),"muted"); return; }
+      if(sc.note==="error"||!sc.suggestion){ add(T("git 조회 실패 — 잠시 후 다시 시도돼요.","git query failed — will retry shortly."),"muted"); return; }
+      add(T("변경 중(seed): ","Changing (seed): ")+sc.seeds.join(", "),"muted");
+      const s=sc.suggestion;
+      if(s.sparse){
+        add(T("데이터 없음 — 이 파일들은 과거 이력 표본이 부족해(관측 "+s.seedObservations+"회 < 3) 추측 대신 침묵합니다. 신생 영역이면 정상이에요.","No data — history sample too small for these files (seen "+s.seedObservations+"× < 3); the ledger stays silent instead of guessing. Normal for new areas."));
+      } else if(!s.candidates.length){
+        add(T("문턱(함께 변경 3회)을 넘는 후보가 없어요.","No candidates above the threshold (co-changed 3×)."));
+      } else {
+        s.candidates.forEach(c=>{ add("• "+c.file+"  ("+T("함께 변경 ","co-changed ")+c.n+T("회","×")+")"); });
+      }
+      add(T("⚠ 이 장부가 못 보는 것: 처음 생기는 결합·실행해봐야 아는 동작·의미적 연쇄 — 후보가 없다고 영향이 없는 게 아니에요. (관찰 단계: 아무것도 막거나 강제하지 않음 · 전부 로컬 git, 외부 전송 없음)","⚠ What this ledger cannot see: first-time couplings, behaviors only running reveals, semantic chains — no candidates ≠ no impact. (Advisory: blocks/forces nothing · all local git, nothing sent anywhere)"),"muted");
+    })();
     // 온보딩: 미완료=설명 단계(이동 버튼·은은한 펄스) / 완료=축하+끄기 / 끄고 완료=다시보기 링크만.
     // 미완료(연결 끊김·검증 꺼짐)면 끄기 여부와 무관하게 단계가 다시 보여 '고장'을 숨기지 않음.
     (function(){

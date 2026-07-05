@@ -238,6 +238,9 @@ function loadContract(ws, lang) {
     verifyMode: normVerifyMode(o),
     // 사용자 계약 주입 시점: off / plan(플랜 모드일 때만) / always(기본·무회귀). 확장과 동일 규칙.
     claudeInjectMode: normInjectMode(o),
+    // 트랙: off=2트랙(구현↔검증, 기본·무회귀) / on=3트랙(탐색 leg 켬 — 범위 장부 advisory. SCOPE-LEDGER.md).
+    // 브릿지는 아직 미사용(확장 대시보드 전용)이나 스키마 정합을 위해 양쪽 normalize(한쪽만 빠지면 동작 갈림 — SCOUT-TRACK 교훈).
+    scoutMode: normScoutMode(o),
   };
 }
 
@@ -252,6 +255,12 @@ const INJECT_MODES = ["off", "plan", "always"];
 function normInjectMode(o) {
   if (o && INJECT_MODES.includes(o.claudeInjectMode)) return o.claudeInjectMode;
   return "always"; // 기본=항상(무회귀). 누락 시 기존 동작 유지.
+}
+
+const SCOUT_MODES = ["off", "on"];
+function normScoutMode(o) {
+  if (o && SCOUT_MODES.includes(o.scoutMode)) return o.scoutMode;
+  return "off"; // 기본=2트랙(무회귀 — 미설정 프로젝트는 기존과 100% 동일)
 }
 
 // rules(문자열 배열) → 매 턴 주입 텍스트. checklist=false면 규약만, true면 [계약점검] 강제.
@@ -511,4 +520,4 @@ function formatForClaude(answer, lang) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, SCOUT_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, STATS_DIR, VERDICTS_FILE };
