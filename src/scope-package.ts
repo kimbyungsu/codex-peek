@@ -92,6 +92,7 @@ export function buildPackage(input: {
       "실행해봐야 드러나는 동작(OS별 차이·타이밍·권한)은 담기지 않는다",
       "의미적 연쇄(코드에 글자로 안 남는 규칙)는 MAP에 없으면 없다" + (input.mapContent ? "" : " — 이 저장소는 아직 MAP이 없다"),
       "grep은 문자열 일치만 — 리네임·간접 호출·동적 키는 놓칠 수 있다",
+      "역참조 grep은 git이 추적(tracked)하는 파일만 본다 — 새(untracked) 파일의 내용과 그 안의 참조는 이 꾸러미에 빠질 수 있다(새 파일 중심 변경이면 과소보고 가능)",
     ],
   };
 }
@@ -115,6 +116,6 @@ export function renderPackageMarkdown(p: ScopePackage): string {
   if (p.map) L.push(`\n## 7. stable MAP(확정 지식층)\n${p.map}`);
   if (p.meta.truncations.length) L.push(`\n## 절단 고지\n${p.meta.truncations.map((t) => `- ${t}`).join("\n")}`);
   L.push(`\n## ⚠ 이 꾸러미가 못 보는 것\n${p.blindSpots.map((b) => `- ${b}`).join("\n")}`);
-  L.push(`\n---\n[탐색자 지시] 위 자료만 근거로 '영향범위 지도'를 작성하라 — ①직접 영향 후보 ②간접 영향 후보 ③반드시 확인할 테스트/동작 ④문서/설정/UI 영향 ⑤범위 밖으로 봐도 되는 것 ⑥각 항목에 확인필요도 high/medium/low(high 최대 5·전체 최대 10). 최종 통과/실패 판정 금지 · 수정 지시 금지 · 확인할 경로만.`);
+  L.push(`\n---\n[탐색자 지시] 위 자료만 근거로 '영향범위 지도'를 작성하라 — ①직접 영향 후보 ②간접 영향 후보 ③반드시 확인할 테스트/동작 ④문서/설정/UI 영향 ⑤범위 밖으로 봐도 되는 것 ⑥MAP patch 후보(stable MAP에 추가/수정할 의미 결합 — 제안일 뿐, 자동 반영 아님). 각 항목(①~④)에 확인필요도 high/medium/low를 달아라(high 최대 5·전체 후보 최대 10). 최종 통과/실패 판정 금지 · 수정 지시 금지 · 확인할 경로만.`);
   return L.join("\n");
 }

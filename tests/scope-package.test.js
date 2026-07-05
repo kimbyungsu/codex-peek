@@ -44,7 +44,9 @@ ok(/## 1\. 지금 바뀌는 파일/.test(md) && /## 3\./.test(md) && /## 4\./.te
 ok(/`writeProof` → bridge\/verify-guard\.js/.test(md), "토큰 역참조가 파일채널 결합(writeProof→verify-guard)을 드러냄");
 ok(/함께 변경 4회/.test(md), "co-change 통계 표기");
 ok(/판정 금지/.test(md) && /수정 지시 금지/.test(md) && /high 최대 5/.test(md), "탐색자 지시: 판정·수정 금지 + high/전체 상한(SCOUT-TRACK §5)");
+ok(/⑥MAP patch 후보/.test(md) && /제안일 뿐/.test(md), "지시 6항목에 MAP patch 후보 포함(§5 스키마 완전 일치 — reconcile 축 누락 방지)");
 ok(/이 꾸러미가 못 보는 것/.test(md), "정직성 각주 섹션 필수 포함");
+ok(/untracked/.test(md), "각주에 'tracked 한정 grep — 새 파일 참조 누락 가능' 명시(과소보고 위험 은폐 금지)");
 const mdSparse = renderPackageMarkdown(buildPackage({ ...base, diffText: "d", recentFailures: [], coChange: { candidates: [], seedObservations: 1, sparse: true } }));
 ok(/표본 부족.*침묵/.test(mdSparse), "co-change 표본 부족 → '침묵' 정직 표기");
 
