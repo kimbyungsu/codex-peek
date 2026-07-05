@@ -120,7 +120,8 @@ console.log("[배선·안전장치] extension.ts 증분 스캐너 계약(소스 
 const fs2 = require("fs");
 const extSrc = fs2.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
 ok(/st\.size - base\.size > CC_SCAN_BACKFILL\) base = null/.test(extSrc), "갭 상한: 델타>백필창이면 이전 지식 폐기(놓친 구간의 더 새로운 기록을 옛 지식으로 오인→거짓경고 방지)");
-ok(/scan\.actual && Date\.now\(\) - scan\.actual\.ts < DRIFT_FRESH_MS/.test(extSrc), "actual은 신선도(24h) 통과분만 채택");
+ok(/scan\.actual && Date\.now\(\) - scan\.actual\.ts < DRIFT_FRESH_MS/.test(extSrc), "actual은 신선도(DRIFT_FRESH_MS=7일) 통과분만 채택");
+ok(/const DRIFT_FRESH_MS = 7 \* 24 \* 60 \* 60 \* 1000/.test(extSrc), "신선도 창=7일(사용자 결정 2026-07-05: 병행 개발 3일+ 텀 — 24h는 과잉 억제)");
 ok(/parseLastModelCommand\(chunk, ws, normWs\) \|\| \(base \? base\.cmd : null\)/.test(extSrc), "병합 규칙: 새 조각 우선, 없으면 이전 지식(연속 스캔 보장 하)");
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);

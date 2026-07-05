@@ -25,7 +25,10 @@ const INTEGRITY_FILE = path.join(BRIDGE_DIR, "integrity.json"); // 무결성 신
 const PHASE_FILE = path.join(BRIDGE_DIR, "phase.json"); // 검증 파이프라인 라이브 단계(훅/브릿지 기록 → 상태바·진행 스트립)
 const VERDICTS_FILE = path.join(BRIDGE_DIR, "stats", "verdicts.jsonl"); // 검증 통계 누적(append-only, 브릿지가 flagVerdict에서 기록) → 탭2 집계 소스.
 const PHASE_STALE_MS = 15 * 60 * 1000; // 이보다 오래된 phase는 '대기'로 — 코덱스 ask 최대 8분 + 여유
-const DRIFT_FRESH_MS = 24 * 60 * 60 * 1000; // 두뇌 drift '최근 실제값' 신선도(24h). 이보다 오래된 답/세션은 stale로 보고 경고 안 함 — 옛 모델 기록(예: 몇 주 전 다른 모델 사용)이 거짓 drift 내는 것 방지.
+// 두뇌 drift '최근 실제값' 신선도(7일). 이보다 오래된 답/세션은 stale로 보고 경고 안 함 — 옛 모델 기록(예: 몇 주 전 다른 모델 사용)이 거짓 drift 내는 것 방지.
+// 24h→7일 확장(사용자 결정 2026-07-05): 여러 프로젝트 병행 개발에선 3일+ 텀이 일상이라, 24h는 하루만 쉬어도 모든 프로젝트의
+// 즉시 경고를 전멸시키는 과잉 억제였다(실측: 마지막 답 32~34h 시점에 cc·cx 경고 전부 침묵). 원래 차단 대상이던 19일급 옛 기록은 7일 창에서도 여전히 제외.
+const DRIFT_FRESH_MS = 7 * 24 * 60 * 60 * 1000;
 // 원자적 저장: 임시파일에 쓴 뒤 rename으로만 교체 → 읽는 쪽은 옛/새 파일만 보고 반쪽(손상) 파일은 못 본다
 // (다중 창 동시쓰기 손상 방지). ⚠ 직접쓰기 폴백 금지 — Windows에선 대상이 동시 읽기로 잠깐 열려 있으면 rename이
 // 실패하는데, 그때 직접쓰기로 폴백하면 그게 반쪽파일 손상의 원인이 된다(검증 확인). rename 짧게 재시도, 끝내
