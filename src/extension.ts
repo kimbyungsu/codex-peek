@@ -1173,6 +1173,7 @@ function scanCcTranscript(f: string, ws: string): { cmd: { model: string; ts: nu
 // 캐시: ws+HEAD+변경목록이 같으면 재채굴 안 함(렌더마다 git log 300커밋을 다시 읽지 않게).
 type ScopeState = { seeds: string[]; suggestion: ScopeSuggestion | null; note: "" | "no-git" | "no-changes" | "error" };
 let scopeCache: { key: string; val: ScopeState } | null = null;
+let lastScopeCheck = 0; // 시간 스로틀 — 렌더 경로에서 동기 git(rev-parse/status)조차 5s에 1회만(Codex 보완: 큰 repo·느린 git 호스트 블로킹 방지)
 function runGit(ws: string, args: string[]): { ok: boolean; out: string } {
   try {
     const r = require("child_process").spawnSync("git", ["-C", ws, ...args], { encoding: "utf8", timeout: 15000, windowsHide: true });
@@ -1183,13 +1184,22 @@ function readScopeState(ws: string | null): ScopeState | null {
   if (!ws) return null;
   try {
     if (loadContract(ws).scoutMode !== "on") return null; // 2트랙(기본) — 계산 자체를 안 함(무회귀·비용 0)
+    const now = Date.now();
+    if (now - lastScopeCheck < 5000 && scopeCache) return scopeCache.val; // 5s 스로틀(변경 직후 최대 5s 지연은 advisory 카드라 무해)
+    lastScopeCheck = now;
     const head = runGit(ws, ["rev-parse", "HEAD"]);
     if (!head.ok) { return { seeds: [], suggestion: null, note: "no-git" }; }
-    const st = runGit(ws, ["status", "--porcelain"]);
-    const seeds = st.out.split(/\r?\n/)
-      .map((l) => l.slice(3).trim().replace(/^.* -> /, "")) // rename 표기는 새 경로
-      .filter((p) => p && !/\/$/.test(p))
-      .slice(0, 8); // seed 상한 — 대량 변경 시 상위 일부만(후보 폭발 방지)
+    // -z: NUL 구분 — 공백·한글·따옴표 경로가 C-quote로 감싸져 깨지는 것 방지(Codex 보완). rename(R)은 "XY new\0old\0" — old 토큰은 건너뜀.
+    const st = runGit(ws, ["status", "--porcelain", "-z"]);
+    const toks = st.out.split("\0").filter(Boolean);
+    const seeds: string[] = [];
+    for (let i = 0; i < toks.length && seeds.length < 8; i++) { // seed 상한 — 대량 변경 시 상위 일부만(후보 폭발 방지)
+      const t = toks[i];
+      const status = t.slice(0, 2);
+      const p = t.slice(3);
+      if (/[RC]/.test(status[0])) i++; // 다음 토큰은 옛 경로 — 소비만
+      if (p && !/\/$/.test(p)) seeds.push(p);
+    }
     const key = `${normWs(ws)}|${head.out.trim()}|${seeds.join(",")}`;
     if (scopeCache && scopeCache.key === key) return scopeCache.val;
     let val: ScopeState;
