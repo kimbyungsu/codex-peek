@@ -1185,19 +1185,23 @@ function readScopeState(ws: string | null): ScopeState | null {
   try {
     if (loadContract(ws).scoutMode !== "on") return null; // 2트랙(기본) — 계산 자체를 안 함(무회귀·비용 0)
     const now = Date.now();
-    if (now - lastScopeCheck < 5000 && scopeCache) return scopeCache.val; // 5s 스로틀(변경 직후 최대 5s 지연은 advisory 카드라 무해)
+    // 5s 스로틀 — 단 캐시가 '같은 프로젝트(ws)' 것일 때만 재사용(다른 프로젝트의 후보를 보여주는 오도 차단 — Codex 실패 지적).
+    // 시간 내 ws가 다르면 스로틀을 무시하고 새로 계산한다(프로젝트별 분리가 지연보다 우선).
+    const sameWs = !!(scopeCache && scopeCache.key.startsWith(normWs(ws) + "|"));
+    if (now - lastScopeCheck < 5000 && sameWs) return scopeCache!.val;
     lastScopeCheck = now;
     const head = runGit(ws, ["rev-parse", "HEAD"]);
     if (!head.ok) { return { seeds: [], suggestion: null, note: "no-git" }; }
-    // -z: NUL 구분 — 공백·한글·따옴표 경로가 C-quote로 감싸져 깨지는 것 방지(Codex 보완). rename(R)은 "XY new\0old\0" — old 토큰은 건너뜀.
+    // -z: NUL 구분 — 공백·한글·따옴표 경로가 C-quote로 감싸져 깨지는 것 방지. rename/copy는 "XY new\0old\0" — old 토큰은 소비만.
     const st = runGit(ws, ["status", "--porcelain", "-z"]);
+    if (!st.ok) return { seeds: [], suggestion: null, note: "error" }; // 실패를 '변경 없음'으로 오도하지 않음(Codex 지적)
     const toks = st.out.split("\0").filter(Boolean);
     const seeds: string[] = [];
     for (let i = 0; i < toks.length && seeds.length < 8; i++) { // seed 상한 — 대량 변경 시 상위 일부만(후보 폭발 방지)
       const t = toks[i];
       const status = t.slice(0, 2);
       const p = t.slice(3);
-      if (/[RC]/.test(status[0])) i++; // 다음 토큰은 옛 경로 — 소비만
+      if (/[RC]/.test(status)) i++; // R/C가 어느 자리(index/worktree)에 있든 다음 토큰=옛 경로 — 소비만(Codex 지적: status[0]만 보면 불완전)
       if (p && !/\/$/.test(p)) seeds.push(p);
     }
     const key = `${normWs(ws)}|${head.out.trim()}|${seeds.join(",")}`;
