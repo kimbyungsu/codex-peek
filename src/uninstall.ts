@@ -1,6 +1,6 @@
 // ── vscode:uninstall 훅 — 확장이 '완전 제거'된 뒤(다음 VS Code 재시작 시점) VS Code가 이 스크립트를 실행한다 ──
 // vscode API 없음(순수 node·UI 불가). 원칙: '확장이 설치한 것만' 정리한다(표식 기반) —
-//  · hooks-installed-by-extension 표식이 있으면: settings.json에서 우리 훅 3개만 제거(타인 훅 보존·백업 생성).
+//  · hooks-installed-by-extension 표식이 있으면: settings.json에서 우리 훅 4개만 제거(타인 훅 보존·백업 생성).
 //  · .bridge-deployed-by.json(확장 자동배치 stamp)이 있으면: 브릿지 스크립트 5개+stamp 삭제.
 //  · 표식이 없으면(레포 install.js 설치) 아무것도 안 건드림 — CLI 하네스는 install.js uninstall이 담당.
 //  · 사용자 데이터(links.json·contracts/·stats/·proofs/ 등)는 항상 보존 — 완전 삭제는 PRIVACY 안내대로 폴더 삭제.

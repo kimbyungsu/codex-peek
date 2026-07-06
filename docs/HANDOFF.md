@@ -138,7 +138,20 @@
    (제안·동봉·확인·반박 횟수)+최근 사건 타임라인+확정 장부 열람. 개입은 선택: 고정/해제/차단해제=즉시(가역),
    차단·내보내기=모달 동의(내보내기는 신뢰 차선만·중복 방지·exported 이벤트 기록). 이벤트 적재는 배포 런타임
    bridgeLib().appendLedgerEvent 재사용(낡은 런타임이면 정직 에러 — install.js 안내). 승인/기각 핸들러 제거.
-   `scope-reconcile.js` CLI는 번호 기반 대안 경로로 존치(테스트 유지). **남은 로드맵: ⑥플랜 게이트 실험(PreToolUse 실험 선행).**
+   `scope-reconcile.js` CLI는 번호 기반 대안 경로로 존치(테스트 유지).
+   **⑥ 구현 2026-07-07(플랜 게이트 — 실험 장치)**: 공식 문서 확인 결과 차단(exit 2=stderr 피드백)·페이로드는 명시,
+   **ExitPlanMode가 PreToolUse에 잡히는지는 미명시**(전용 훅 요청 이슈 존재) → 관측 실험으로 판정.
+   (a) `bridge/scout-gate.js` — PreToolUse:ExitPlanMode 훅: 항상 관측 로그(도구명·입력 키 이름만 — 플랜 본문 저장 안 함,
+   scout-gate-log/), 게이트는 계약 scoutGate="plan"일 때만(기본 off — 사전등록 60% vs 실측 48.1% 미달), 지도 없음/낡음이면
+   차단+생성 지시, **세션당 2회 상한 후 통과**(무한 잠금 방지), 모든 오류 fail-open. (b) `scripts/scope-gate.js` on|off|status
+   (ko·en 계약 슬롯 동시 갱신). (c) 훅 4개 체계: 같은 이벤트 다중 훅에서 병합이 앞 훅을 지우던 함정 발견 →
+   mergeHooks/installHooks를 **이벤트 단위 정리**로 재구조화(install.js·hook-setup.ts 동일 수정·회귀 테스트 잠금),
+   isOurHookCmd·BRIDGE_SCRIPTS(7개)·훅 문구(4개) 갱신. (d) 확장 saveContract가 미지 필드(scoutGate)를 보존 병합하도록
+   수정(대시보드 저장이 게이트 설정을 지우던 문제). 테스트 `tests/scout-gate.test.js`(22단언).
+   **실험 절차(다음 사람/세션)**: ① `node install.js`(훅 4개 등록) 후 **새 Claude Code 세션** ② 플랜 모드 진입→플랜 확정 시도
+   ③ 브릿지 홈 `scout-gate-log/<wsKey>.jsonl`에 tool:"ExitPlanMode" 줄이 찍혔는지 확인 — **찍힘=가로채기 가능 확정**(게이트
+   `scope-gate.js on`으로 실험 계속), 안 찍힘=PreToolUse가 ExitPlanMode를 안 잡는 것(전용 훅 이슈 추적·Stop 게이트 대안 검토).
+   결과를 이 문단에 기록할 것.
 4. (관찰 항목) 한 폴더 다중 프로그램 구분 — 권장 관행은 프로그램별 폴더 분리, 보강 후보는 seed 클러스터 자동 좁힘.
 
 ## 6.5 아직 구현 안 된 설계 요지 (레포 밖 설계 원본의 알맹이 — 이 요지만으로 이어갈 수 있게)

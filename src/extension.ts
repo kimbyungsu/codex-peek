@@ -268,7 +268,11 @@ function saveContract(ws: string | null, c: Contract, lang?: Lang): boolean {
   // 프로젝트별 파일에 저장(계약은 프로젝트 전용·상속 없음). ws 없으면(폴더 없는 창) 레거시 전역 파일에 저장.
   // lang: 언어 슬롯 — 현재 언어의 파일에만 저장(다른 언어 슬롯 안 건드림).
   const file = ws ? contractFileFor(ws, lang) : CONTRACT_FILE;
-  return atomicWrite(file, JSON.stringify({ ...c, workspace: ws || undefined, updatedAt: new Date().toISOString() }, null, 2));
+  // 대시보드가 모르는 확장 필드(scoutGate 등 — CLI/훅이 쓰는 실험 설정)는 보존 병합: 고정 스키마로 덮어쓰면
+  // 대시보드 저장 한 번에 게이트 설정이 지워진다(scoutGate 추가 때 발견 — 기존 파일 값 위에 c를 얹는다).
+  let keep: any = {};
+  try { const prev = JSON.parse(fs.readFileSync(file, "utf8")); if (prev && typeof prev === "object" && !Array.isArray(prev)) keep = prev; } catch { /* 새 파일 */ }
+  return atomicWrite(file, JSON.stringify({ ...keep, ...c, workspace: ws || undefined, updatedAt: new Date().toISOString() }, null, 2));
 }
 
 // '다른 언어 슬롯에만 규칙이 있음' 안내용 — 현재 슬롯이 비었는데 반대 슬롯에 규칙이 있으면 그 사실을 알려
@@ -3279,7 +3283,7 @@ function spawn_sync_where(cmd: string): string | undefined {
   } catch { return undefined; }
 }
 
-// 훅 설치 흐름(동의 1클릭): 무엇을 바꾸는지·백업 위치·훅 3줄을 보여주고, [설치]를 눌러야만 병합한다.
+// 훅 설치 흐름(동의 1클릭): 무엇을 바꾸는지·백업 위치·훅 4줄을 보여주고, [설치]를 눌러야만 병합한다.
 async function runHookInstallFlow(): Promise<void> {
   const settingsFile = claudeSettingsFile();
   let tok = hookSetup.resolveNodeToken(nodeTokenCandidates());
@@ -3294,7 +3298,7 @@ async function runHookInstallFlow(): Promise<void> {
   }
   const cmds = hookSetup.OUR_HOOKS.map((h) => "· " + hookSetup.hookCommand(tok!.token, BRIDGE_DIR, h.script)).join("\n");
   const detail = tE(
-    `바꾸는 파일: ${settingsFile}\n(수정 전 같은 폴더에 settings.json.bak.<시각> 백업을 먼저 만듭니다. 기존 다른 훅은 보존됩니다.)\n\n등록되는 검증 훅 3줄:\n${cmds}\n\n설치 후 Claude Code 새 세션부터 적용됩니다.`,
+    `바꾸는 파일: ${settingsFile}\n(수정 전 같은 폴더에 settings.json.bak.<시각> 백업을 먼저 만듭니다. 기존 다른 훅은 보존됩니다.)\n\n등록되는 훅 4줄(검증 3 + 탐색 게이트 1 — 게이트는 기본 꺼짐·관측만):\n${cmds}\n\n설치 후 Claude Code 새 세션부터 적용됩니다.`,
     `File to change: ${settingsFile}\n(A settings.json.bak.<time> backup is created first. Other existing hooks are preserved.)\n\nHooks to register:\n${cmds}\n\nTakes effect from the next Claude Code session.`,
   );
   const yes = tE("설치", "Install");
@@ -3320,7 +3324,7 @@ async function maybeOfferHookSetup(): Promise<void> {
     const review = tE("설치 내용 보기", "Review & install");
     const never = tE("다시 묻지 않음", "Don't ask again");
     const pick = await vscode.window.showInformationMessage(
-      tE("Codex Bridge: 검증 훅이 아직 등록되지 않았습니다 — Claude Code가 검증을 부르려면 훅 3개가 필요합니다.", "Codex Bridge: verification hooks are not registered yet — Claude Code needs 3 hooks to run verification."),
+      tE("Codex Bridge: 검증 훅이 아직 등록되지 않았습니다 — Claude Code가 검증을 부르려면 훅 4개가 필요합니다.", "Codex Bridge: verification hooks are not registered yet — Claude Code needs 4 hooks to run verification."),
       review, never,
     );
     if (pick === never) { try { fs.writeFileSync(HOOKS_PROMPT_DISMISSED, new Date().toISOString(), "utf8"); } catch { /* ignore */ } return; }

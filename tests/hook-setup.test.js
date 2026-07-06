@@ -1,6 +1,6 @@
 /*
  * hook-setup(src/hook-setup.ts → out/hook-setup.js) — 마켓 설치 경로의 '훅 1클릭 설치' 정본 로직.
- * install.js와 같은 규칙(훅 3개·명령 표기·우리훅 식별·타인 훅 보존)을 이 테스트로 고정.
+ * install.js와 같은 규칙(훅 4개·명령 표기·우리훅 식별·타인 훅 보존)을 이 테스트로 고정.
  * ※ out/hook-setup.js는 npm test의 tsc 단계 산출물.
  */
 const os = require("os"), path = require("path"), fs = require("fs");
@@ -19,7 +19,7 @@ ok(hs.isOurHookCmd("node contract-inject.js; echo x"), "복합 명령 매칭");
 
 console.log("[detectHooks] 파일 없음/깨짐/부분/완비");
 let st = hs.detectHooks(SET);
-ok(!st.installed && st.missing.length === 3 && st.unreadable === null, "파일 없음 → 미설치·3개 누락");
+ok(!st.installed && st.missing.length === 4 && st.unreadable === null, "파일 없음 → 미설치·4개 누락(scout-gate 포함)");
 fs.writeFileSync(SET, "{broken", "utf8");
 st = hs.detectHooks(SET);
 ok(!st.installed && st.unreadable !== null, "JSON 깨짐 → unreadable 표시");

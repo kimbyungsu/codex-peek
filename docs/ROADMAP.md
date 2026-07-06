@@ -11,7 +11,7 @@
 Claude Code = 구현 에이전트, Codex CLI = 검증 에이전트로 묶는 **개인용 멀티에이전트 작업-규율 하네스**.
 3층 구조:
 - **브릿지 엔진** `~/.codex-bridge/codex-bridge.js` — Claude↔Codex 세션을 영속 링크(`links.json`), `codex exec resume`로 연결 세션에 질문, `link`/`status`/`find`/`doctor`.
-- **Claude 훅 3종** — `contract-inject`(UserPromptSubmit: 계약 매 턴 주입) · `verify-guard`(Stop: 검증 없이 종료 차단) · `codex-guard`(PreToolUse: raw codex 직접호출 차단).
+- **Claude 훅 4종** — `contract-inject`(UserPromptSubmit: 계약 매 턴 주입) · `verify-guard`(Stop: 검증 없이 종료 차단) · `codex-guard`(PreToolUse:Bash — raw codex 직접호출 차단) · `scout-gate`(PreToolUse:ExitPlanMode — 플랜 확정 전 지도 preflight, 실험·기본 꺼짐).
 - **VS Code 확장** `src/extension.ts` — 상태바·호버·대시보드(연결/최근대화/계약 편집/검증모드/연결 변경).
 
 ---

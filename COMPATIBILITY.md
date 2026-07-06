@@ -14,7 +14,7 @@
 
 ## Claude Code에 기대는 것
 
-- 3개 훅 지점: 입력 시(UserPromptSubmit), Bash 실행 전(PreToolUse), 완료 시(Stop)
+- 4개 훅 지점: 입력 시(UserPromptSubmit), Bash 실행 전(PreToolUse:Bash), 플랜 확정 전(PreToolUse:ExitPlanMode — 실험·기본 꺼짐), 완료 시(Stop)
 - 훅에 전달되는 값: 작업 폴더·세션 ID·대화기록 경로(`CLAUDE_PROJECT_DIR`, `CLAUDE_CODE_SESSION_ID`, `transcript_path`), 그리고 훅 입력 JSON
 - 이 인터페이스가 바뀌면: 계약 주입·검증 가드가 영향을 받습니다.
 - 검증 통계 탭은 대화기록 줄의 `message.usage`(토큰)·`cwd`·`isSidechain`·`timestamp`도 읽습니다 — 이 형식이 바뀌면 Claude 토큰·턴수 통계가 영향받습니다(검증 자체는 무관).

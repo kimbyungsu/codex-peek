@@ -1,14 +1,15 @@
 // ── 훅 1클릭 설치(마켓 설치 경로)의 정본 로직 — vscode 의존 없음(테스트가 out/hook-setup.js를 직접 실행) ──
-// 레포 한방 설치기 install.js와 '같은 규칙'을 쓴다(훅 3개·명령 표기(node "경로", 슬래시 통일)·우리훅 식별 regex·병합 시 타인 훅 보존).
+// 레포 한방 설치기 install.js와 '같은 규칙'을 쓴다(훅 4개·명령 표기(node "경로", 슬래시 통일)·우리훅 식별 regex·병합 시 타인 훅 보존).
 // 한쪽 규칙을 바꾸면 반드시 같이 바꿀 것: install.js(OUR_HOOKS·isOurHookCmd·hookCommand·mergeHooks) ↔ 이 파일.
 import * as fs from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
 
-export const BRIDGE_SCRIPTS = ["contract-lib.js", "codex-bridge.js", "contract-inject.js", "verify-guard.js", "codex-guard.js", "deepseek-bridge.js"];
+export const BRIDGE_SCRIPTS = ["contract-lib.js", "codex-bridge.js", "contract-inject.js", "verify-guard.js", "codex-guard.js", "deepseek-bridge.js", "scout-gate.js"];
 export const OUR_HOOKS = [
   { event: "UserPromptSubmit", matcher: "", script: "contract-inject.js" },
   { event: "PreToolUse", matcher: "Bash", script: "codex-guard.js" },
+  { event: "PreToolUse", matcher: "ExitPlanMode", script: "scout-gate.js" }, // ⑥ 실험 — 기본 off(계약 scoutGate)·fail-open·관측 로그
   { event: "Stop", matcher: "", script: "verify-guard.js" },
 ];
 
@@ -17,7 +18,7 @@ const q = (s: string) => '"' + s + '"';
 
 // 명령 하나가 "우리 훅"인가 — install.js isOurHookCmd와 동일 regex(경로 경계 매칭, 부분문자열 오탐 방지).
 export function isOurHookCmd(cmd: unknown): boolean {
-  return /(^|[\\/\s"'])(contract-inject|codex-guard|verify-guard)\.js(?=$|["'\s;,&|)])/.test(String(cmd || ""));
+  return /(^|[\\/\s"'])(contract-inject|codex-guard|verify-guard|scout-gate)\.js(?=$|["'\s;,&|)])/.test(String(cmd || ""));
 }
 
 // 훅 명령 문자열 — install.js hookCommand와 동일 표기(node토큰 + "브릿지경로/스크립트", 슬래시 통일).
@@ -45,7 +46,7 @@ export function resolveNodeToken(candidates: Array<string | undefined | null>): 
   return null;
 }
 
-// settings.json에서 우리 훅 3개가 다 걸려 있는지 감지. 파일 없음=미설치, JSON 깨짐=unreadable(설치 제안은 하되 자동병합은 거부됨).
+// settings.json에서 우리 훅 4개가 다 걸려 있는지 감지. 파일 없음=미설치, JSON 깨짐=unreadable(설치 제안은 하되 자동병합은 거부됨).
 export interface HooksStatus { installed: boolean; missing: string[]; unreadable: string | null }
 export function detectHooks(settingsFile: string): HooksStatus {
   let raw: string | null = null;
@@ -86,7 +87,7 @@ export function atomicWriteFile(file: string, data: string): boolean {
   return false;
 }
 
-// 훅 3개를 settings.json에 병합 — install.js mergeHooks와 동일 의미(우리 옛 엔트리 제거→새로 추가, 타인 훅·그룹 보존).
+// 훅 4개를 settings.json에 병합 — install.js mergeHooks와 동일 의미(우리 옛 엔트리 제거→새로 추가, 타인 훅·그룹 보존).
 // 백업: 기존 파일이 있으면 settings.json.bak.<시각> 사본을 먼저 남긴다(README·install.js와 동일 관례).
 export interface InstallResult { ok: boolean; backup?: string; reason?: string }
 export function installHooks(settingsFile: string, bridgeDir: string, nodeToken: string): InstallResult {
@@ -107,8 +108,12 @@ export function installHooks(settingsFile: string, bridgeDir: string, nodeToken:
   }
 
   settings.hooks = settings.hooks && typeof settings.hooks === "object" && !Array.isArray(settings.hooks) ? settings.hooks : {};
-  for (const h of OUR_HOOKS) {
-    const arr: any[] = Array.isArray(settings.hooks[h.event]) ? settings.hooks[h.event] : [];
+  // ⚠ 이벤트 단위로 1회만 정리 — 훅별로 정리하면 같은 이벤트(PreToolUse)에 우리 훅이 2개일 때
+  // 두 번째 순회가 첫 번째로 추가한 우리 훅을 지운다(scout-gate 추가 때 발견 — install.js mergeHooks와 동일 수정).
+  const byEvent = new Map<string, typeof OUR_HOOKS[number][]>();
+  for (const h of OUR_HOOKS) { if (!byEvent.has(h.event)) byEvent.set(h.event, []); byEvent.get(h.event)!.push(h); }
+  for (const [event, ours] of byEvent) {
+    const arr: any[] = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : [];
     const cleaned: any[] = [];
     for (const g of arr) {
       if (g && Array.isArray(g.hooks)) {
@@ -116,8 +121,8 @@ export function installHooks(settingsFile: string, bridgeDir: string, nodeToken:
         if (kept.length) cleaned.push(Object.assign({}, g, { hooks: kept })); // 우리 것만 있던 그룹은 통째 제거
       } else if (g) cleaned.push(g); // 예상 밖 형식 그룹은 그대로 보존(손실 방지)
     }
-    cleaned.push({ matcher: h.matcher, hooks: [{ type: "command", command: hookCommand(nodeToken, bridgeDir, h.script) }] });
-    settings.hooks[h.event] = cleaned;
+    for (const h of ours) cleaned.push({ matcher: h.matcher, hooks: [{ type: "command", command: hookCommand(nodeToken, bridgeDir, h.script) }] });
+    settings.hooks[event] = cleaned;
   }
   if (!atomicWriteFile(settingsFile, JSON.stringify(settings, null, 2) + "\n")) return { ok: false, reason: "settings.json 쓰기에 실패했습니다(잠금/권한). 백업은 남아 있습니다.", backup };
   return { ok: true, backup };

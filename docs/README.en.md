@@ -12,7 +12,7 @@ Connect **Claude Code** (implementation) and **OpenAI Codex** (verification) int
 - **Live visualization** — status bar flow (`[Claude] ▶▶ verifying [Codex]`), red/yellow integrity alerts (turn ended unverified, verdict failed, cited file:line doesn't exist, model/effort drift), and a dashboard showing the *actual* verification conversation with 4-color verdict chips (pass / pass-with-notes / hold / fail).
 - **Verification statistics tab** — verdict distribution (donut + bars, 28 days), 14-day trend, weekday×hour activity heatmap, tokens per model·reasoning-effort·verify-mode, Claude work tokens + turns, per-project comparison. All local, metadata only (no prompt/answer bodies stored).
 - **Track selector (2-track default / 3-track advisory)** — 3-track adds a **scope ledger** card: for the files you're changing right now, it mines *this project's own git history* for "what historically changed together" candidates. Purely local git queries (nothing sent anywhere — no GitHub/remote account needed; a never-pushed repo works identically), blocks/forces nothing, saved per project, and when the sample is too small it honestly says "no data" instead of guessing. **Prerequisite: it reads local git *commit history* — in folders without git, or projects that rarely commit, "no data" is the normal, honest state (not a bug).**
-- **One-click setup, clean uninstall** — the extension deploys its bridge engine into its own folder automatically. Claude Code hooks are registered **only after you review and consent** (you see the exact file, backup path, and the 3 hook lines first; other hooks are preserved). Uninstalling the extension removes only what it installed — your links, contracts, and stats are kept.
+- **One-click setup, clean uninstall** — the extension deploys its bridge engine into its own folder automatically. Claude Code hooks are registered **only after you review and consent** (you see the exact file, backup path, and the 4 hook lines first; other hooks are preserved). Uninstalling the extension removes only what it installed — your links, contracts, and stats are kept.
 
 ## Requirements
 
@@ -22,7 +22,7 @@ Connect **Claude Code** (implementation) and **OpenAI Codex** (verification) int
 ## Getting started
 
 1. Install this extension.
-2. A notification appears if verification hooks aren't registered — click **Review & install**, check what will change (file, backup, 3 hook lines), then click **Install**. (Command palette: `Codex Bridge: Claude Code 검증 훅 설치` any time.)
+2. A notification appears if verification hooks aren't registered — click **Review & install**, check what will change (file, backup, 4 hook lines), then click **Install**. (Command palette: `Codex Bridge: Claude Code 검증 훅 설치` any time.)
 3. Click the status bar item to open the dashboard: link a Codex session, write your contract, pick a verify mode.
 4. Verification takes effect from the next Claude Code session.
 

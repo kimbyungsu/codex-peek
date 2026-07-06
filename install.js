@@ -4,8 +4,8 @@
  * codex-bridge 한방 설치기 (풀 자동, 크로스플랫폼 node 코어)
  *
  * 하는 일 (상황으로):
- *  - 브릿지 실행파일(5개 .js)을 사용자 홈의 운영 폴더로 복사한다.
- *  - Claude Code 설정(settings.json)에 "코덱스 검증 훅" 3개를 끼워 넣는다.
+ *  - 브릿지 실행파일(bridge/*.js 전체)을 사용자 홈의 운영 폴더로 복사한다.
+ *  - Claude Code 설정(settings.json)에 "코덱스 검증 훅" 4개를 끼워 넣는다.
  *    이때 사용자가 이미 쓰던 다른 훅(memento 등)은 절대 건드리지 않고,
  *    우리 옛 훅만 찾아 새 형태로 교체한다(중복 누적 방지·업그레이드).
  *  - 설정을 고치기 전에 항상 타임스탬프 백업을 남긴다.
@@ -49,16 +49,18 @@ const BRIDGE_SCRIPTS = [
   "verify-guard.js",
   "codex-guard.js",
   "deepseek-bridge.js",
+  "scout-gate.js",
 ];
 
 // 우리가 settings.json에 심는 훅. event → {matcher, script}
 const OUR_HOOKS = [
   { event: "UserPromptSubmit", matcher: "", script: "contract-inject.js" },
   { event: "PreToolUse", matcher: "Bash", script: "codex-guard.js" },
+  { event: "PreToolUse", matcher: "ExitPlanMode", script: "scout-gate.js" }, // ⑥ 실험 — 기본 off(계약 scoutGate)·fail-open·관측 로그
   { event: "Stop", matcher: "", script: "verify-guard.js" },
 ];
 // "우리 훅"을 식별하는 파일명(경로·따옴표·node표기 무관하게 basename으로 매칭).
-const OUR_SCRIPT_NAMES = ["contract-inject.js", "codex-guard.js", "verify-guard.js"];
+const OUR_SCRIPT_NAMES = ["contract-inject.js", "codex-guard.js", "verify-guard.js", "scout-gate.js"];
 
 // ── 유틸 ──────────────────────────────────────────────
 function log(s) { process.stdout.write(s + "\n"); }
@@ -112,7 +114,7 @@ function hookCommand(script) {
 // 예: ".../contract-inject.js"는 매칭, "mycontract-inject.js.bak"이나 인자 속 우연 일치는 비매칭.
 // 후행 경계엔 셸 구분자(; & | ) , )도 포함 — `node verify-guard.js; echo x` 같은 복합 명령도 식별.
 function isOurHookCmd(cmd) {
-  return /(^|[\\/\s"'])(contract-inject|codex-guard|verify-guard)\.js(?=$|["'\s;,&|)])/.test(String(cmd || ""));
+  return /(^|[\\/\s"'])(contract-inject|codex-guard|verify-guard|scout-gate)\.js(?=$|["'\s;,&|)])/.test(String(cmd || ""));
 }
 // 그룹에서 '우리 hook 엔트리'만 제거. 같은 그룹에 타인 hook이 섞여 있어도 그건 보존.
 // group.hooks가 배열이 아니면(예상 못한 형식) 건드리지 않고 그대로 보존(손실 방지).
@@ -139,13 +141,17 @@ function checkHooksShape(settings) {
 }
 
 // 설정에 우리 훅 병합: 타인 훅(같은 그룹 내 포함) 보존, 우리 옛 엔트리만 제거 후 새 명령 그룹 추가.
+// ⚠ 이벤트 단위로 1회만 정리 — 훅별로 정리하면 같은 이벤트(PreToolUse)에 우리 훅이 2개일 때
+// 두 번째 순회가 첫 번째로 추가한 우리 훅을 지운다(scout-gate 추가 때 발견된 함정 — hook-setup.ts와 동일 수정).
 function mergeHooks(settings) {
   settings.hooks = (settings.hooks && typeof settings.hooks === "object" && !Array.isArray(settings.hooks)) ? settings.hooks : {};
-  for (const { event, matcher, script } of OUR_HOOKS) {
+  const byEvent = new Map();
+  for (const h of OUR_HOOKS) { if (!byEvent.has(h.event)) byEvent.set(h.event, []); byEvent.get(h.event).push(h); }
+  for (const [event, ours] of byEvent) {
     const arr = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : [];
     const cleaned = [];
     for (const g of arr) { const { group } = stripOurFromGroup(g); if (group) cleaned.push(group); }
-    cleaned.push({ matcher, hooks: [{ type: "command", command: hookCommand(script) }] });
+    for (const { matcher, script } of ours) cleaned.push({ matcher, hooks: [{ type: "command", command: hookCommand(script) }] });
     settings.hooks[event] = cleaned;
   }
   return settings;
@@ -436,7 +442,7 @@ function cmdInstall(dryRun) {
     if (s.existed) { const bak = backupSettings(); log(`🗂  설정 백업: ${bak}`); }
     const ok = atomicWrite(SETTINGS, out);
     if (!ok) { log(`❌ 설정 저장 실패 — 원본은 그대로 보존됨: ${SETTINGS}`); process.exit(1); }
-    log("✅ 훅 병합 완료(타인 훅 보존): UserPromptSubmit / PreToolUse:Bash / Stop");
+    log("✅ 훅 병합 완료(타인 훅 보존): UserPromptSubmit / PreToolUse:Bash / PreToolUse:ExitPlanMode / Stop");
   }
 
   // 5) 확장 + 점검
