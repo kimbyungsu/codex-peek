@@ -6,6 +6,7 @@
  * 상태(승인/기각 서명 + 마지막 목록 스냅샷)는 브릿지 홈 map-reconcile/<wsKey>.json.
  * 번호는 '마지막 list가 보여준 목록' 기준으로 고정(스냅샷) — list와 approve 사이에 지도가 갱신돼
  * 새 제안이 끼어도 사용자가 본 번호와 다른 항목이 승인되는 사고가 없다(Codex 지적 반영).
+ * 계산·형식(제안 서명·승인 줄·뼈대)은 out/map-ledger.js 공유 모듈이 단일 출처 — 대시보드 카드와 형식 동일.
  *
  * 사용: node scripts/scope-reconcile.js <repo> [list]           — 대기 중 제안 목록(번호 스냅샷 고정)
  *       node scripts/scope-reconcile.js <repo> approve <n...>   — 마지막 list의 n번을 MAP.md에 추가(확정층 승격)
@@ -15,6 +16,7 @@ const fs = require("fs");
 const path = require("path");
 const { listMaps, wsKeyFor } = require("./scout-store.js");
 const { atomicWrite } = require(path.join(__dirname, "..", "bridge", "contract-lib.js")); // 확정층·상태 쓰기는 원자적으로(반쪽 파일 방지)
+const { normSig, computePending, appendApproved } = require(path.join(__dirname, "..", "out", "map-ledger.js")); // npm test의 tsc 산출물(단일 형식 출처)
 
 const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(require("os").homedir(), ".codex-bridge");
 const STATE_DIR = path.join(BRIDGE_DIR, "map-reconcile");
@@ -30,8 +32,6 @@ if ((cmd === "approve" || cmd === "reject") && nums.some((n) => !Number.isIntege
 }
 const repo = path.resolve(repoArg);
 
-const norm = (t) => String(t).replace(/\s+/g, " ").trim().toLowerCase(); // 제안 서명(공백 요동 무시)
-
 function loadState() {
   try { return JSON.parse(fs.readFileSync(path.join(STATE_DIR, wsKeyFor(repo) + ".json"), "utf8")); } catch { return { approved: [], rejected: [] }; }
 }
@@ -44,32 +44,25 @@ function mapFile() {
   return path.join(repo, "docs", "MAP.md");
 }
 
-// 제안 수집: 최근 지도들(보관 정책=최근 10장)의 meta.mapPatches 합집합 — 승인/기각 서명·확정층 기존 문구 제외.
+// 제안 수집: 최근 지도들(보관 정책=최근 10장)의 meta.mapPatches 합집합 — 계산은 공유 모듈(computePending).
 function pendingProposals(st) {
-  const done = new Set([...st.approved, ...st.rejected].map((e) => e.sig));
   let mapNow = "";
-  try { mapNow = norm(fs.readFileSync(mapFile(), "utf8")); } catch { /* 확정층 아직 없음 */ }
-  const all = new Map(); // sig → {text, from}
+  try { mapNow = fs.readFileSync(mapFile(), "utf8"); } catch { /* 확정층 아직 없음 */ }
+  const sources = [];
   for (const m of listMaps(repo, 10)) {
     let meta = {};
     try { meta = JSON.parse(fs.readFileSync(m.file.replace(/\.md$/, ".json"), "utf8")); } catch { continue; }
-    for (const t of Array.isArray(meta.mapPatches) ? meta.mapPatches : []) {
-      if (typeof t !== "string" || !t.trim()) continue;
-      const sig = norm(t);
-      if (done.has(sig) || all.has(sig)) continue;
-      if (mapNow && mapNow.includes(sig)) continue; // 이미 확정층에 같은 문구 존재
-      all.set(sig, { text: t.trim(), from: `${meta.arm || "?"} 지도 ${meta.ts || m.base}` });
-    }
+    sources.push({ patches: meta.mapPatches, from: `${meta.arm || "?"} 지도 ${meta.ts || m.base}` });
   }
-  return [...all.values()].sort((a, b) => a.text.localeCompare(b.text));
+  return computePending(sources, [...(st.approved || []), ...(st.rejected || [])].map((e) => e.sig), mapNow);
 }
 
 const st = loadState();
 const proposals = pendingProposals(st);
-const bySig = new Map(proposals.map((p) => [norm(p.text), p]));
+const bySig = new Map(proposals.map((p) => [p.sig, p]));
 
 if (cmd === "list") {
-  st.lastList = proposals.map((p) => norm(p.text)); // 번호 스냅샷 고정 — approve/reject는 이 목록 기준
+  st.lastList = proposals.map((p) => p.sig); // 번호 스냅샷 고정 — approve/reject는 이 목록 기준
   if (!saveState(st)) { console.error("목록 스냅샷 저장 실패 — 번호 기준을 고정할 수 없어 중단(권한/디스크 확인)"); process.exit(1); }
   if (!proposals.length) { console.log("대기 중 제안 없음 (지도의 ⑥ MAP patch 후보가 비었거나 모두 처리됨)"); process.exit(0); }
   console.log(`대기 중 제안 ${proposals.length}건 — approve/reject <번호>로 처리 (번호는 이 목록 기준 고정 · 확정층: ${path.relative(repo, mapFile())})`);
@@ -91,20 +84,20 @@ for (const n of nums) {
 const now = new Date().toISOString();
 if (cmd === "approve") {
   const f = mapFile();
+  fs.mkdirSync(path.dirname(f), { recursive: true });
   let cur = "";
-  try { cur = fs.readFileSync(f, "utf8"); } catch { cur = "# MAP — 확정 지식층(stable)\n\n한쪽을 바꾸면 다른 쪽도 봐야 하는 '의미 결합' 장부. 탐색자 꾸러미가 신뢰 입력으로 읽는다.\n승격 경로는 scope-reconcile approve뿐(제안 자동 반영 없음).\n\n## 확정 결합(승인분)\n"; }
-  if (!/## 확정 결합\(승인분\)/.test(cur)) cur += "\n## 확정 결합(승인분)\n";
+  try { cur = fs.readFileSync(f, "utf8"); } catch { /* 없으면 공유 모듈이 뼈대 생성 */ }
+  const next = appendApproved(cur, picked, now);
   for (const p of picked) {
-    cur += `- ${p.text}  <!-- 승인 ${now.slice(0, 10)} · 출처: ${p.from} -->\n`;
-    st.approved.push({ sig: norm(p.text), ts: now });
+    st.approved.push({ sig: p.sig, ts: now, text: p.text, from: p.from }); // text·from 보존 — 대시보드 이력이 원문을 보여줌
     console.log(`승인 → 확정층: ${p.text}`);
   }
-  if (!atomicWrite(f, cur)) { console.error("확정층 기록 실패 — 상태 미변경(다시 시도하라)"); process.exit(1); }
+  if (!atomicWrite(f, next)) { console.error("확정층 기록 실패 — 상태 미변경(다시 시도하라)"); process.exit(1); }
   console.log(`확정층 기록: ${f}`);
   if (!saveState(st)) { console.error("⚠ 확정층에는 기록됐으나 승인 상태 저장 실패 — 재목록 방지는 확정층 문구 대조가 대신 막아주지만, 권한/디스크를 확인하라"); process.exit(1); }
 } else {
   for (const p of picked) {
-    st.rejected.push({ sig: norm(p.text), ts: now });
+    st.rejected.push({ sig: p.sig, ts: now, text: p.text, from: p.from }); // 기각도 원문 보존(무엇을 정정했는지 이력)
     console.log(`기각(다시 안 보임): ${p.text}`);
   }
   if (!saveState(st)) { console.error("기각 상태 저장 실패 — 기각이 반영되지 않았다(다시 시도하라)"); process.exit(1); }

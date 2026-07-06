@@ -113,8 +113,10 @@
 3. **(진행 중) stable MAP 2층** — 1차 단위 구현 완료 2026-07-07: `extractMapPatches`(⑥ 제안 파서) → 러너가 meta.mapPatches로
    제안층 저장 → `scripts/scope-reconcile.js`(list/approve/reject — approve만이 확정층 MAP.md 승격 경로, 승인/기각 서명은
    브릿지 홈 map-reconcile/). 확정층(docs/MAP.md)은 꾸러미 collectCommon이 이미 신뢰 입력으로 읽음. 테스트
-   `tests/map-reconcile.test.js`(15단언). **남은 것**: 대시보드 제안함 노출(승인 UI — CLI가 현재 유일 경로임을 카드에 고지),
-   실사용 제안 축적 후 첫 승인 사이클 관찰.
+   `tests/map-reconcile.test.js`(25단언). **대시보드 'MAP 장부' 카드 완료 2026-07-07**: 대기·승인·기각 카운터 칩 +
+   대기 제안 목록(출처 표기)과 [승인]/[기각] 버튼(모달 동의, sig 기준이라 번호 밀림 원천 차단) + 승인/기각 이력 +
+   확정 장부 열람. 계산·형식은 `src/map-ledger.ts` 공유 모듈이 단일 출처(CLI `scope-reconcile.js`도 out/map-ledger.js
+   require — 형식 두 벌 금지). **남은 것**: 실사용 제안 축적 후 첫 승인 사이클 관찰.
 4. (관찰 항목) 한 폴더 다중 프로그램 구분 — 권장 관행은 프로그램별 폴더 분리, 보강 후보는 seed 클러스터 자동 좁힘.
 
 ## 6.5 아직 구현 안 된 설계 요지 (레포 밖 설계 원본의 알맹이 — 이 요지만으로 이어갈 수 있게)
