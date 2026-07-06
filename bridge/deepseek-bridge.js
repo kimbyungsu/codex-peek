@@ -86,7 +86,7 @@ async function callChat(cfg, body, timeoutMs, opts) {
   } finally { clearTimeout(timer); }
 }
 
-const NO_KEY_MSG = "DeepSeek 키 없음 — 대시보드 ⚙️고급설정 탭에서 입력하거나 DEEPSEEK_API_KEY env 설정(LLM 지도 단계만 잠김 — 기초 탐색은 무관)";
+const NO_KEY_MSG = "DeepSeek 키 없음 — 잠기는 건 'DeepSeek 비교 팔'뿐입니다(기초 탐색과 무료 self 팔 지도는 키 없이 동작: node scripts/scope-scout-self.js <repo>). 키 등록: 대시보드 ⚙️고급설정 탭 또는 DEEPSEEK_API_KEY env";
 
 async function main() {
   const cmd = process.argv[2];

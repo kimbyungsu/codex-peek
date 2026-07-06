@@ -1222,7 +1222,7 @@ function scanCcTranscript(f: string, ws: string): { cmd: { model: string; ts: nu
 // ── 범위 장부(L0) 상태 — scoutMode=on(3트랙)일 때만, 이 프로젝트 git 이력에서 '함께 변경' 후보를 채굴(SCOPE-LEDGER.md S1 advisory) ──
 // 전부 로컬 git 조회(외부 전송 0). seed=지금 작업트리의 변경 파일(git status). 비-git 폴더·git 실패는 정직하게 사유 표시.
 // 캐시: ws+HEAD+변경목록이 같으면 재채굴 안 함(렌더마다 git log 300커밋을 다시 읽지 않게).
-type ScopeState = { seeds: string[]; suggestion: ScopeSuggestion | null; note: "" | "no-git" | "no-changes" | "error" };
+type ScopeState = { seeds: string[]; suggestion: ScopeSuggestion | null; note: "" | "no-git" | "no-changes" | "error"; checkedAt: string; logCount: number }; // checkedAt/logCount: '지금 뭘 확인했나' 상태 요약용(침묵을 상태로 번역 — 사용자 지적)
 let scopeCache: { key: string; val: ScopeState } | null = null;
 let lastScopeCheck = 0; // 시간 스로틀 — 렌더 경로에서 동기 git(rev-parse/status)조차 5s에 1회만(Codex 보완: 큰 repo·느린 git 호스트 블로킹 방지)
 function runGit(ws: string, args: string[]): { ok: boolean; out: string } {
@@ -1243,11 +1243,12 @@ function readScopeState(ws: string | null): ScopeState | null {
     const sameWs = !!(scopeCache && scopeCache.key.startsWith(normWs(ws) + "|"));
     if (now - lastScopeCheck < 5000 && sameWs) return scopeCache!.val;
     lastScopeCheck = now;
+    const checkedAt = new Date(now).toISOString(); // 이번 채굴 시각 — 캐시 반환 시엔 원래 값 유지(='최근 채굴')
     const head = runGit(ws, ["rev-parse", "HEAD"]);
-    if (!head.ok) { return { seeds: [], suggestion: null, note: "no-git" }; }
+    if (!head.ok) { return { seeds: [], suggestion: null, note: "no-git", checkedAt, logCount: 0 }; }
     // -z: NUL 구분 — 공백·한글·따옴표 경로가 C-quote로 감싸져 깨지는 것 방지. rename/copy는 "XY new\0old\0" — old 토큰은 소비만.
     const st = runGit(ws, ["status", "--porcelain", "-z"]);
-    if (!st.ok) return { seeds: [], suggestion: null, note: "error" }; // 실패를 '변경 없음'으로 오도하지 않음(Codex 지적)
+    if (!st.ok) return { seeds: [], suggestion: null, note: "error", checkedAt, logCount: 0 }; // 실패를 '변경 없음'으로 오도하지 않음(Codex 지적)
     const toks = st.out.split("\0").filter(Boolean);
     const seeds: string[] = [];
     for (let i = 0; i < toks.length && seeds.length < 8; i++) { // seed 상한 — 대량 변경 시 상위 일부만(후보 폭발 방지)
@@ -1261,16 +1262,19 @@ function readScopeState(ws: string | null): ScopeState | null {
     if (scopeCache && scopeCache.key === key) return scopeCache.val;
     let val: ScopeState;
     if (!seeds.length) {
-      val = { seeds: [], suggestion: null, note: "no-changes" }; // 변경 없음 — seed가 없으니 지도도 없음(정직)
+      val = { seeds: [], suggestion: null, note: "no-changes", checkedAt, logCount: 0 }; // 변경 없음 — seed가 없으니 지도도 없음(정직)
     } else {
       const log = runGit(ws, ["log", "--no-merges", "--first-parent", "--pretty=format:%H|%ct|%s", "--name-only", "-n", "300"]);
-      val = log.ok
-        ? { seeds, suggestion: scopeSuggest(parseGitLog(log.out), seeds), note: "" }
-        : { seeds, suggestion: null, note: "error" };
+      if (log.ok) {
+        const commits = parseGitLog(log.out);
+        val = { seeds, suggestion: scopeSuggest(commits, seeds), note: "", checkedAt, logCount: commits.length };
+      } else {
+        val = { seeds, suggestion: null, note: "error", checkedAt, logCount: 0 };
+      }
     }
     scopeCache = { key, val };
     return val;
-  } catch { return { seeds: [], suggestion: null, note: "error" }; }
+  } catch { return { seeds: [], suggestion: null, note: "error", checkedAt: new Date().toISOString(), logCount: 0 }; }
 }
 
 // ── 영향지도 게시판(3트랙) — 러너(scope-scout-self/-deepseek)가 브릿지 홈 scouts/<wsKey>/에 보관한 지도를 읽는다 ──
@@ -1924,6 +1928,7 @@ class Dashboard {
       </span>
     </label>
     <div class="hint"><span class="ic" title="${t("범위 장부 = '이 파일을 건드리면 과거에 무엇이 함께 바뀌었나'를 이 프로젝트의 git 이력에서 통계로 보여주는 참고 카드예요. 지금은 관찰(advisory) 단계 — 아무것도 막거나 강제하지 않고, 외부로 아무것도 보내지 않아요(전부 로컬 git 조회). 데이터가 적은 영역은 추측 대신 '데이터 없음'으로 정직하게 표시합니다. 이 설정도 프로젝트별로 저장돼요.", "Scope ledger = a reference card showing 'when this file changed before, what changed with it' from this project's git history. Currently advisory — it blocks/forces nothing and sends nothing anywhere (all local git). Sparse areas honestly say 'no data' instead of guessing. This setting is saved per project.")}">ⓘ ${t("범위 장부란?", "What is the scope ledger?")}</span></div>
+    <div id="scoutApiLine" class="muted" style="display:none;font-size:11.5px;margin:4px 0 0 2px"></div>
     <div id="scoutBox" class="stagebox" style="display:none"></div>
     <div class="stagebox" id="stageBox">
       <div class="sbhead">${t("↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요", "↑ With verification on, the <b>stage baselines</b> apply at each step of the flow")} <span class="muted" style="font-weight:400">${t("· 지금 검증:", "· verify now:")} <b id="sbState">—</b> ${t("· 내용은 아래 단계별 기본 원칙에서", "· see Stage Baselines below for the text")}</span></div>
@@ -2483,11 +2488,42 @@ class Dashboard {
     (function(){
       const box=$("scoutBox"); if(!box) return;
       const on = (holdC ? appSM : (d.contract && d.contract.scoutMode)) === "on";
+      // 세그먼트 바로 아래 DeepSeek 연결 줄(사용자 요청) — 키 등록 여부 + '실제로 동작했다'는 증거(마지막 DeepSeek 팔 성공 기록).
+      // 확장이 직접 신호를 쏘지 않는 원칙 유지 — 표시 근거는 게시판 메타(그 시점 통신 성공의 증거)뿐.
+      (function(){
+        const api=$("scoutApiLine"); if(!api) return;
+        if(!on){ api.style.display="none"; return; }
+        api.style.display="";
+        if(d.deepseek && d.deepseek.hasKey){
+          const ds=((d.scoutMaps&&d.scoutMaps.items)||[]).find(x=>x&&x.arm==="deepseek"&&x.ts);
+          api.textContent=T("DeepSeek 비교 팔: 키 등록됨("+d.deepseek.masked+")","DeepSeek comparison arm: key registered ("+d.deepseek.masked+")")
+            + (ds? T(" · 마지막 성공 통신 "+new Date(ds.ts).toLocaleString()," · last successful call "+new Date(ds.ts).toLocaleString())
+                 : T(" · 이 프로젝트에선 아직 실행 기록 없음"," · no runs recorded in this project yet"));
+        } else {
+          api.textContent=T("DeepSeek 비교 팔: 키 없음 — 무료 self 팔·기초 탐색만 동작해요(⚙️ 고급설정에서 등록 가능).","DeepSeek comparison arm: no key — free self arm & basic scouting only (register in ⚙️ Advanced).");
+        }
+        // 비-git 폴더면 위 문구가 '동작'을 약속하지 않게 기준을 명시(아래 상태 요약과 일관 — Codex 보완).
+        if(d.scope && d.scope.note==="no-git") api.textContent += T(" ※ 이 폴더는 git 이력이 없어 탐색 기능 전반이 불가 — git 프로젝트 기준 안내예요."," ※ This folder has no git history, so scouting features are unavailable here — this note applies to git projects.");
+      })();
       if(!on){ box.style.display="none"; return; }
       box.style.display="";
       while(box.firstChild) box.removeChild(box.firstChild);
       const add=(txt,cls)=>{const el=document.createElement("div"); el.className=cls||"sbrow"; el.textContent=txt; box.appendChild(el); return el;};
       add(T("범위 장부(관찰) — 지금 변경과 '과거에 함께 바뀐' 파일 후보","Scope ledger (advisory) — files that historically changed together with your current changes"),"sbhead");
+      // 탐색 상태 요약 1줄(사용자 지적: 침묵을 상태로 번역) — 지금 무엇이 돌고/안 돌고 있고, 다음 행동이 뭔지.
+      (function(){
+        const sc=d.scope; let line;
+        if(!sc) line=T("지금: 계산 대기 — 3트랙 저장 직후 자동 시작돼요.","Now: pending — starts right after saving 3-track.");
+        else if(sc.note==="no-git") line=T("지금: 대기 — 이 폴더는 이력(git)이 없어 기초 탐색·지도 생성이 불가해요.","Now: idle — this folder has no history (git), so basic scouting and maps are unavailable.");
+        else if(sc.note==="error") line=T("지금: 이력 조회 실패 — 잠시 후 자동 재시도돼요.","Now: history query failed — retries shortly.");
+        else if(sc.note==="no-changes") line=T("지금: 대기 — 작업트리에 변경이 없어요. 파일이 바뀌면 기초 탐색이 자동으로 후보를 찾고, 지도는 수동 명령으로 만들어요.","Now: idle — no working-tree changes. Basic scouting runs automatically once files change; maps are made by manual command.");
+        else {
+          const when = sc.checkedAt ? new Date(sc.checkedAt).toLocaleTimeString() : "?";
+          const cand = (sc.suggestion && sc.suggestion.candidates) ? sc.suggestion.candidates.length : 0;
+          line=T("지금: 기초 탐색 동작 중 — 최근 채굴 "+when+" (이력 "+sc.logCount+"건 검토 · 후보 "+cand+"개) · 지도는 수동 명령 대기.","Now: basic scouting active — last mined "+when+" ("+sc.logCount+" commits reviewed · "+cand+" candidates) · maps await a manual command.");
+        }
+        const el=add(line,"muted"); el.style.fontWeight="600";
+      })();
       // 키 안내 — 키 없으면 'DeepSeek 비교 팔만 비활성'(기초 탐색+무료 self 팔 지도는 무키 동작)을 카드 안에서 상시 고지(기대치 설정)
       if(d.deepseek && !d.deepseek.hasKey){
         add(T("ⓘ 키 없이도 기초 탐색(변경 통계·증거 수집) + 무료 self 팔 지도(수동 명령)까지 가능해요 — DeepSeek API 키는 '비교용 두 번째 탐색 팔'만 엽니다(⚙️ 고급설정 탭).","ⓘ Without any key you get basic scouting (co-change stats · evidence) plus free self-arm maps (manual command) — a DeepSeek API key only unlocks the second, comparison scout arm (⚙️ Advanced tab)."),"muted");
@@ -2514,6 +2550,7 @@ class Dashboard {
       const box=$("scoutBox"); if(!box || box.style.display==="none") return; // 3트랙 카드가 보일 때만 이어붙임
       const add=(txt,cls)=>{const el=document.createElement("div"); el.className=cls||"sbrow"; el.textContent=txt; box.appendChild(el); return el;};
       add(T("영향지도 게시판 — 탐색자(분리 AI)가 보낸 최근 지도","Impact-map board — recent maps from the scout (separate AI)"),"sbhead");
+      add(T("ⓘ 영향지도 = 지금 바꾸는 것이 어디까지 영향을 주는지 탐색 AI가 정리한 확인 목록(직접·간접 영향 후보, 확인할 테스트, 범위 밖으로 봐도 되는 것). 생성되면 이 게시판에 도착해요.","ⓘ Impact map = a checklist from the scout AI of how far your current change reaches (direct/indirect impact candidates, tests to check, safely out-of-scope). New maps land on this board."),"muted");
       const sm=d.scoutMaps;
       if(!sm || !sm.count){
         const nonGit = d.scope && d.scope.note==="no-git";
@@ -3106,14 +3143,26 @@ export function activate(context: vscode.ExtensionContext): void {
     // ★키는 '입력 상태 전부'가 아니라 '지금 상태바를 잡는 mode의 표시 요소'만 담는다. 예: 경보(error/warning)가 떠 있으면 연결/스니펫/flow는
     //   화면에 안 보이므로 키에서 제외 → 경보 툴팁을 읽는 중 phase.json(live)·링크 변화로 호버가 닫히지 않는다. pulse(별도 타이머)는 키 밖.
     const mode = (flowActive && live) ? "flow" : errs.length ? "error" : warns.length ? "warning" : !ws ? "noWs" : link?.codexSession ? "linked" : "unlinked";
-    // 탐색(3트랙) 상태 줄 — 상태바 툴팁 표시용(사용자 요청 2026-07-06: 지금 무엇이 켜져 있고 뭐가 나가는지).
-    // 2트랙이면 빈 문자열(기존 표시 무변화=무회귀). 지도 수는 게시판 리더의 5s 캐시를 재사용해 렌더 경로 비용 최소.
+    // 탐색(3트랙) 상태 줄 — 상태바만으로 '지금 어떤 흐름이 돌고 탐색 타이밍인지' 판단 가능해야(사용자 요청 2026-07-06).
+    // 2트랙이면 빈 문자열(기존 표시 무변화=무회귀). 내부 리더는 전부 5s 캐시 재사용 — 렌더 경로 비용 최소.
     const scoutSb = (() => {
       if (!ws || (mode !== "linked" && mode !== "unlinked")) return "";
       try {
         if (loadContract(ws).scoutMode !== "on") return "";
-        const n = readScoutMaps(ws)?.count ?? 0;
-        return tE(`탐색: 3트랙 켜짐 · 지도 ${n}장 (생성·전송은 수동 실행 시에만)`, `scouting: 3-track on · ${n} map(s) (generated/sent only on manual runs)`);
+        const sc = readScopeState(ws);
+        const maps = readScoutMaps(ws);
+        const stale = computeScoutMapStale(ws, sc, maps);
+        const scout = !sc ? tE("대기", "idle")
+          : sc.note === "no-git" ? tE("이력 없음 — 기초 탐색·지도 불가(비-git 폴더)", "no history — scouting/maps unavailable (non-git folder)")
+          : sc.note === "no-changes" ? tE("대기(변경 없음)", "idle (no changes)")
+          : sc.note === "error" ? tE("이력 조회 실패", "history query failed")
+          : tE(`기초 탐색 동작 중 — 후보 ${sc.suggestion?.candidates.length ?? 0}개`, `basic scouting active — ${sc.suggestion?.candidates.length ?? 0} candidate(s)`);
+        const n = maps?.count ?? 0;
+        const last = maps?.latest?.ts ? new Date(maps.latest.ts).toLocaleString() : "";
+        const mapsTxt = n
+          ? tE(` · 지도 ${n}장(마지막 ${last || "?"}${stale ? ` · 이후 파일 ${stale}개 더 바뀜 = 지도 낡음` : ""})`, ` · ${n} map(s) (last ${last || "?"}${stale ? `, ${stale} file(s) changed since = map stale` : ""})`)
+          : tE(" · 지도 없음 — 수동 명령으로 생성", " · no maps — generate via manual command");
+        return tE("탐색(3트랙): ", "scouting (3-track): ") + scout + mapsTxt;
       } catch { return ""; }
     })();
     const key = JSON.stringify({
@@ -3140,7 +3189,8 @@ export function activate(context: vscode.ExtensionContext): void {
       status.tooltip = tE("워크스페이스 없음","no workspace");
       status.backgroundColor = undefined; // 무결성 빨강 등 이전 색 잔존 방지(아래 무결성 분기가 다시 칠할 수 있음)
     } else if (link?.codexSession) {
-      status.text = `$(link) Codex: ${(snip || link.codexSession).slice(0, 14)}`;
+      // $(telescope) 접미 = 3트랙 탐색 켜짐 신호 — 대시보드를 안 열어도 상태바만으로 인지(툴팁에 상세 흐름).
+      status.text = `$(link) Codex: ${(snip || link.codexSession).slice(0, 14)}` + (scoutSb ? " $(telescope)" : "");
       status.tooltip = new vscode.MarkdownString(
         tE(`**Codex Bridge — 연결됨**\n\n`,`**Codex Bridge — linked**\n\n`) +
           tE(`세션: `,`session: `) + `\`${link.codexSession}\`\n\n` +
@@ -3152,7 +3202,7 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       status.backgroundColor = file ? undefined : new vscode.ThemeColor("statusBarItem.warningBackground");
     } else {
-      status.text = "$(plug) " + tE("Codex: 미연결","Codex: not linked");
+      status.text = "$(plug) " + tE("Codex: 미연결","Codex: not linked") + (scoutSb ? " $(telescope)" : "");
       status.tooltip = tE("연결된 Codex 세션 없음 · 클릭 → 대시보드에서 연결","No linked Codex session · click → link in dashboard") + (scoutSb ? " · " + scoutSb : "");
       status.backgroundColor = undefined;
     }

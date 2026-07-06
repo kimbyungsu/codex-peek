@@ -59,7 +59,7 @@ ok(/const scoutMaps = readScoutMaps\(ws\)/.test(ext) && /^\s*scoutMaps,/m.test(e
 ok(/scoutMode !== "on"\) return null; \/\/ 2트랙 — 게시판/.test(ext), "2트랙이면 게시판 계산 자체를 안 함(무회귀)");
 ok(/영향지도 게시판/.test(ext) && /Impact-map board/.test(ext), "게시판 카드 양언어");
 ok(/아직 지도가 없어요/.test(ext) && /No maps yet/.test(ext) && /git 저장소가 아니라 지도를 만들 수 없어요/.test(ext), "빈 게시판·비-git 정직 안내(양언어)");
-ok(/탐색: 3트랙 켜짐 · 지도/.test(ext) && /scouting: 3-track on/.test(ext), "상태바 툴팁 탐색 줄 양언어");
+ok(/탐색\(3트랙\): /.test(ext) && /scouting \(3-track\): /.test(ext), "상태바 툴팁 탐색 줄 양언어");
 ok(/scout: scoutSb \|\| null/.test(ext), "탐색 상태가 상태바 갱신 키에 포함(낡은 지도 수 잔존 방지)");
 ok(!/scoutMaps[^\n]*\.text[^\n]*innerHTML|innerHTML[^\n]*scoutMaps/.test(ext), "지도 본문은 textContent로만(HTML 주입 없음)");
 const privacy = fs.readFileSync(path.join(__dirname, "..", "PRIVACY.md"), "utf8");
@@ -73,6 +73,15 @@ ok(/"탐색자", "Scout"/.test(ext) && /"영향지도", "impact map"/.test(ext) 
 ok(/shownSM===appSM/.test(ext) && /appSM==="on"/.test(ext), "탐색 토글이 지도 렌더 가드에 포함(저장 반영 시 갱신)");
 ok(/scoutMapStale: computeScoutMapStale\(ws, scope, scoutMaps\)/.test(ext) && /최신 지도 생성 이후 파일 /.test(ext) && /file\(s\) changed after the latest map/.test(ext), "낡은 지도 배지(신선도) — 계산+게시판 표기 양언어");
 ok(/키 없이도 기초 탐색/.test(ext) && /무료 self 팔/.test(ext) && !/LLM 영향지도 단계가 잠겨/.test(ext) && !/LLM impact-map stage of 3-track is locked/.test(ext), "무키 문구 정정 — self 팔이 무키로 지도 가능함을 반영(과소 안내 제거)");
+
+console.log("[탐색 가시성] 상태 요약 줄·세그먼트 연결 표시·상태바 신호(침묵을 상태로 번역 — 사용자 지적)");
+ok(/checkedAt: string; logCount: number/.test(ext) && /지금: 기초 탐색 동작 중 — 최근 채굴 /.test(ext) && /basic scouting active — last mined /.test(ext), "탐색 상태 요약 줄(채굴 시각·검토 건수·후보 수) 양언어");
+ok(/지금: 대기 — 이 폴더는 이력\(git\)이 없어/.test(ext) && /지금: 대기 — 작업트리에 변경이 없어요/.test(ext), "대기 상태도 사유와 다음 행동을 명시(비-git·변경 없음)");
+ok(/id="scoutApiLine"/.test(ext) && /x\.arm==="deepseek"/.test(ext) && /마지막 성공 통신 /.test(ext) && /last successful call /.test(ext), "세그먼트 아래 DeepSeek 연결 줄 — 키 상태+마지막 성공 증거(deepseek 팔만 필터)");
+ok(/ⓘ 영향지도 = /.test(ext) && /Impact map = a checklist/.test(ext), "'영향지도란?' 설명 양언어(게시판 상단)");
+ok(/\$\(telescope\)/.test(ext) && /기초 탐색 동작 중 — 후보 /.test(ext) && /지도 낡음/.test(ext) && /map stale/.test(ext), "상태바: 3트랙 아이콘 신호 + 툴팁에 흐름 요약(탐색 상태·지도 수·낡음)");
+const bridgeSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "deepseek-bridge.js"), "utf8");
+ok(/잠기는 건 'DeepSeek 비교 팔'뿐/.test(bridgeSrc) && !/LLM 지도 단계만 잠김/.test(bridgeSrc), "CLI 무키 안내도 정정(5번째 지점 — Codex 지적)");
 ok(/registerWebviewPanelSerializer\("codexBridge"/.test(ext) && /dashboard\.revive\(panel\)/.test(ext), "리로드 복원 탭 되살리기 등록(미등록=영구 빈 화면 — 사용자 실측)");
 ok(/revive\(panel: vscode\.WebviewPanel\)/.test(ext) && /pendingRevive/.test(ext), "복원 탭이 새 패널과 같은 배선(html·리스너·post)을 탐");
 const pj = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
