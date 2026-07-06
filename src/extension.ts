@@ -2502,7 +2502,7 @@ class Dashboard {
         s.textContent=T("최신 지도 펼쳐보기 ("+(sm.latest.arm==="deepseek"?"DeepSeek":"self")+")","Open latest map ("+(sm.latest.arm==="deepseek"?"DeepSeek":"self")+")");
         const pre=document.createElement("pre");
         pre.style.cssText="white-space:pre-wrap;max-height:340px;overflow:auto;font-size:11px";
-        pre.textContent=sm.latest.text + (sm.latest.truncated?T("\n… (길어서 접힘 — 전문은 브릿지 홈 scouts 폴더 파일)","\n… (truncated — full text in the bridge home scouts folder)"):"");
+        pre.textContent=sm.latest.text + (sm.latest.truncated?T("\\n… (길어서 접힘 — 전문은 브릿지 홈 scouts 폴더 파일)","\\n… (truncated — full text in the bridge home scouts folder)"):""); // ★백슬래시 두 겹 필수: 이 스크립트는 바깥 템플릿 안이라 한 겹이면 HTML 생성 시 실제 개행으로 변환돼 웹뷰 JS 전체가 문법 오류로 죽는다(2026-07-06 실사고 — tests/webview-syntax가 검출)
         det.appendChild(s); det.appendChild(pre); box.appendChild(det);
       }
       add(T("ⓘ 이 게시판은 열람 전용 — 지도 생성·전송은 당신이 명령을 실행할 때만 일어나요(자동 없음). 프로젝트별 최근 10장 보관.","ⓘ Read-only board — maps are generated/sent only when you run the command (nothing automatic). Last 10 kept per project."),"muted");
