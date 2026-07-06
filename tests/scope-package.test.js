@@ -55,5 +55,13 @@ const mdDrop = renderPackageMarkdown(buildPackage({ ...base, diffText: "d", rece
 ok(/제외된 편재 토큰.*test, node/.test(mdDrop), "제외 목록이 꾸러미에 표기(은폐 없음)");
 ok(!/`test` →/.test(mdDrop), "제외 토큰은 역참조 목록에 없음");
 
+console.log("[collectPackage 통합] 드라이버가 이 저장소에서 완전한 꾸러미 형태를 반환(CI 얕은 클론에서도 구조 유지)");
+const { collectPackage } = require(path.join(__dirname, "..", "scripts", "scope-package.js"));
+const live = collectPackage(path.join(__dirname, ".."));
+ok(!!live && typeof live.meta.head === "string" && live.meta.head.length >= 7, "git head 수집");
+ok(Array.isArray(live.seeds) && Array.isArray(live.tokenHits) && Array.isArray(live.droppedTokens) && Array.isArray(live.tests), "구조 키 전부 배열");
+ok(live.blindSpots.length >= 5, "정직성 각주 5종 유지");
+ok(live.tests.some((t) => /npm test/.test(t)), "테스트 체인 발견");
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

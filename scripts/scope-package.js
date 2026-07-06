@@ -12,13 +12,14 @@ const { spawnSync } = require("child_process");
 const { extractDiffTokens, buildPackage, renderPackageMarkdown, PKG_DEFAULTS } = require(path.join(__dirname, "..", "out", "scope-package.js"));
 const { parseGitLog, suggest } = require(path.join(__dirname, "..", "out", "scope-ledger.js"));
 
-const repo = process.argv[2];
-const asJson = process.argv.includes("--json");
-if (!repo) { console.error("사용: node scripts/scope-package.js <repo경로> [--json]"); process.exit(2); }
-const git = (args) => { const r = spawnSync("git", ["-C", repo, ...args], { encoding: "utf8", timeout: 30000, windowsHide: true }); return r.status === 0 && !r.error ? String(r.stdout || "") : null; };
-
-const head = (git(["rev-parse", "HEAD"]) || "").trim();
-if (!head) { console.error("git 저장소가 아니거나 git 실패"); process.exit(1); }
+// 수집 본체 — self/DeepSeek 팔 러너가 require해서 재사용(Phase 2). CLI 실행은 하단 main 가드.
+function collectPackage(repo) {
+  // safe.directory: 저장소 소유자가 실행 계정과 다른 환경(검증 샌드박스·CI·공유 폴더)에서 git이 'dubious ownership'으로
+  // 거부하면 수집기 전체가 죽는다(Codex 실패 재현) → 이 저장소에 한해 신뢰 지시(전역 설정은 안 건드림).
+  const safe = "safe.directory=" + String(repo).replace(/\\/g, "/");
+  const git = (args) => { const r = spawnSync("git", ["-c", safe, "-C", repo, ...args], { encoding: "utf8", timeout: 30000, windowsHide: true }); return r.status === 0 && !r.error ? String(r.stdout || "") : null; };
+  const head = (git(["rev-parse", "HEAD"]) || "").trim();
+  if (!head) return null; // git 저장소 아님/실패
 
 // seeds: 작업트리 변경(-z, rename은 새 경로)
 const stz = git(["status", "--porcelain", "-z"]) || "";
@@ -82,5 +83,16 @@ for (const c of ["docs/MAP.md", "MAP.md"]) {
   try { mapContent = fs.readFileSync(path.join(repo, c), "utf8"); break; } catch { /* 다음 후보 */ }
 }
 
-const pkg = buildPackage({ repo, head, seeds, diffText, tokenHits, droppedTokens, coChange, tests, recentFailures, mapContent });
-process.stdout.write(asJson ? JSON.stringify(pkg, null, 2) : renderPackageMarkdown(pkg));
+  return buildPackage({ repo, head, seeds, diffText, tokenHits, droppedTokens, coChange, tests, recentFailures, mapContent });
+}
+
+module.exports = { collectPackage };
+
+if (require.main === module) {
+  const repo = process.argv[2];
+  const asJson = process.argv.includes("--json");
+  if (!repo) { console.error("사용: node scripts/scope-package.js <repo경로> [--json]"); process.exit(2); }
+  const pkg = collectPackage(repo);
+  if (!pkg) { console.error("git 저장소가 아니거나 git 실패"); process.exit(1); }
+  process.stdout.write(asJson ? JSON.stringify(pkg, null, 2) : renderPackageMarkdown(pkg));
+}

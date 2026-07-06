@@ -13,7 +13,7 @@ const repo = process.argv[2];
 const maxEvals = Number(process.argv[3] || 40);
 if (!repo) { console.error("사용: node scripts/scope-retro.js <repo경로> [평가건수]"); process.exit(2); }
 
-const r = spawnSync("git", ["-C", repo, "log", "--no-merges", "--first-parent", "--pretty=format:%H|%ct|%s", "--name-only", "-n", "500"], { encoding: "utf8", timeout: 30000 });
+const r = spawnSync("git", ["-c", "safe.directory=" + String(repo).replace(/\\/g, "/"), "-C", repo, "log", "--no-merges", "--first-parent", "--pretty=format:%H|%ct|%s", "--name-only", "-n", "500"], { encoding: "utf8", timeout: 30000 }); // safe.directory: 소유자 불일치 환경에서 dubious ownership 거부 방지
 if (r.status !== 0 || r.error) { console.error("git log 실패:", r.error?.message || r.stderr); process.exit(1); }
 const commits = parseGitLog(r.stdout);
 const res = retroEvaluate(commits, { maxEvals });

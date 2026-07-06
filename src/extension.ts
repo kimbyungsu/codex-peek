@@ -1179,7 +1179,9 @@ let scopeCache: { key: string; val: ScopeState } | null = null;
 let lastScopeCheck = 0; // 시간 스로틀 — 렌더 경로에서 동기 git(rev-parse/status)조차 5s에 1회만(Codex 보완: 큰 repo·느린 git 호스트 블로킹 방지)
 function runGit(ws: string, args: string[]): { ok: boolean; out: string } {
   try {
-    const r = require("child_process").spawnSync("git", ["-C", ws, ...args], { encoding: "utf8", timeout: 15000, windowsHide: true });
+    // safe.directory: 소유자 불일치 환경(공유 폴더·다른 계정 소유 저장소)에서 git의 dubious ownership 거부로
+    // 범위 장부가 통째로 'no-git' 오판되는 것 방지 — 이 저장소에 한해 신뢰 지시(전역 설정 무접촉).
+    const r = require("child_process").spawnSync("git", ["-c", "safe.directory=" + String(ws).replace(/\\/g, "/"), "-C", ws, ...args], { encoding: "utf8", timeout: 15000, windowsHide: true });
     return { ok: r.status === 0 && !r.error, out: String(r.stdout || "") };
   } catch { return { ok: false, out: "" }; }
 }
