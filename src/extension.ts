@@ -1327,13 +1327,25 @@ class Dashboard {
   public onChange?: () => void; // 상태바 등 외부 갱신 콜백(예: 무결성 ack 후 상태바 즉시 새로고침 — watcher 지연에 안 기댐)
   constructor(private readonly uri: vscode.Uri, private readonly turnsN: () => number) {}
 
+  // 창 리로드로 복원된 웹뷰 탭 되살리기(activate의 serializer가 호출). 되살림이 없으면 복원 탭은 스크립트/데이터가
+  // 없는 영구 빈 화면으로 남는다(사용자 실측 2026-07-06 — "리로드 후 아무 반응 없음"). 이미 산 패널이 있으면 복원 탭은 닫음.
+  revive(panel: vscode.WebviewPanel): void {
+    if (this.panel) { try { panel.dispose(); } catch { /* 이미 닫힘 */ } return; }
+    this.pendingRevive = panel;
+    this.show(); // 아래 생성 분기가 복원 탭을 채택해 같은 배선(html·리스너·post)을 태운다
+  }
+  private pendingRevive?: vscode.WebviewPanel;
+
   show(): void {
     if (!this.panel) {
-      this.panel = vscode.window.createWebviewPanel("codexBridge", "Codex Bridge", vscode.ViewColumn.Beside, {
+      const revived = this.pendingRevive;
+      this.pendingRevive = undefined;
+      this.panel = revived ?? vscode.window.createWebviewPanel("codexBridge", "Codex Bridge", vscode.ViewColumn.Beside, {
         enableScripts: true,
         retainContextWhenHidden: true,
         localResourceRoots: [this.uri],
       });
+      if (revived) this.panel.webview.options = { enableScripts: true, localResourceRoots: [this.uri] }; // 복원 탭에도 동일 권한
       this.panel.webview.html = this.html(this.panel.webview);
       this.panel.webview.onDidReceiveMessage((m) => {
         if (m?.type === "setLang" && (m.lang === "ko" || m.lang === "en")) {
@@ -1741,6 +1753,7 @@ class Dashboard {
   .fnode.rule{border-style:dashed}
   .fnode.actor.claude{border-color:var(--vscode-charts-blue)}
   .fnode.actor.codex{border-color:var(--vscode-charts-green)}
+  .fnode.actor.scout{border-color:var(--vscode-charts-purple)} /* 탐색자(3트랙) — 켜졌을 때만 표시 */
   .fnode .mono{width:26px;height:26px;border-radius:7px;font-size:11px;margin:0 0 1px}
   .farrow{flex:1 1 78px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;min-width:78px;padding:0 5px 10px}
   .farrow .lbl{font-size:10px;line-height:1.35;text-align:center;color:var(--vscode-foreground);margin-bottom:4px}
@@ -1875,6 +1888,8 @@ class Dashboard {
       <div class="fnode actor claude"><span class="mono c">C</span>Claude<small>${t("구현", "implement")}</small></div>
       <div class="farrow off" id="faVerify"><span class="lbl">${t("검증 맡김", "verify when")}<br><b id="faVerifyVal">${t("안 함", "off")}</b></span><span class="ln"></span></div>
       <div class="fnode actor codex"><span class="mono x">Cx</span>Codex<small>${t("검증", "verify")}</small></div>
+      <div class="farrow off" id="faScout" style="display:none"><span class="lbl">${t("탐색(3트랙)", "scouting (3-track)")}<br><b id="faScoutVal">${t("꺼짐", "off")}</b></span><span class="ln"></span></div>
+      <div class="fnode actor scout" id="fnScout" style="display:none"><span class="mono s">S</span>${t("탐색자", "Scout")}<small>${t("영향지도", "impact map")}</small></div>
     </div>
     <div class="dirtyhint" id="dirtyHint" style="display:none">${t("● 토글을 바꿨어요 — <b>저장</b>해야 실제로 적용됩니다", "● Toggles changed — press <b>Save</b> to actually apply")}</div>
   </section>
@@ -2036,18 +2051,23 @@ class Dashboard {
     levels.forEach((l)=> seg.appendChild(mk(l.effort, RSKO[l.effort]||l.effort, l.description)));
     highlightSeg("segReason","data-rs",curRS);
   }
-  let shownVM, shownIM, shownPerm;   // 마지막으로 그린 상태 — watcher 중복 렌더가 진행 중 깜빡임을 지우지 않게
+  let shownVM, shownIM, shownPerm, shownSM;   // 마지막으로 그린 상태 — watcher 중복 렌더가 진행 중 깜빡임을 지우지 않게
   function lblIM(im){ return im==="off"?T("꺼짐","off"):im==="plan"?T("플랜 때만","plan only"):T("항상","always"); }
   function lblVM(vm){ return vm==="off"?T("안 함","off"):vm==="code"?T("코드 변경 시","on code change"):vm==="plancode"?T("플랜·코드 시","plan·code"):T("모든 턴","every turn"); }
   function flashNode(n){ if(!n) return; n.classList.remove("flashpulse"); void n.offsetWidth; n.classList.add("flashpulse"); }
   function setStage(node, on, why){ if(!node) return; node.classList.toggle("off", !on); node.classList.toggle("on", on); const m=node.querySelector(".sbmark"); if(m) m.textContent=on?"✓":"✗"; const w=node.querySelector(".sbwhy"); if(w) w.textContent=why; }
   // 저장된 상태(appVM/appIM)로 지도 화살표 + '지금 받는 것'을 그린다. prev와 다른 항목은 깜빡.
   function renderApplied(prevVM, prevIM){
-    if(shownVM===appVM && shownIM===appIM && shownPerm===curPerm) return;  // 변화 없으면 DOM 안 건드림 → 진행 중 깜빡임 보존
-    shownVM=appVM; shownIM=appIM; shownPerm=curPerm;
+    if(shownVM===appVM && shownIM===appIM && shownPerm===curPerm && shownSM===appSM) return;  // 변화 없으면 DOM 안 건드림 → 진행 중 깜빡임 보존
+    shownVM=appVM; shownIM=appIM; shownPerm=curPerm; shownSM=appSM;
     const inj=$("faInject"), ver=$("faVerify");
     if(inj){ inj.className="farrow"+(appIM!=="off"?"":" off"); const v=$("faInjectVal"); if(v) v.textContent=lblIM(appIM); }
     if(ver){ ver.className="farrow"+(appVM!=="off"?"":" off"); const v=$("faVerifyVal"); if(v) v.textContent=lblVM(appVM); }
+    // 탐색자(3트랙) 노드 — 켜졌을 때만 지도에 등장(2트랙=기존 모습 그대로). 화살표 라벨로 '수동 실행'임을 못박음.
+    const scA=$("faScout"), scN=$("fnScout");
+    const son = appSM==="on";
+    if(scA){ scA.style.display = son?"":"none"; scA.className="farrow"+(son?"":" off"); const v=$("faScoutVal"); if(v) v.textContent = son?T("켜짐 · 지도는 수동 실행","on · maps via manual runs"):T("꺼짐","off"); }
+    if(scN) scN.style.display = son?"":"none";
     // 검증 토글 직하 단계 패널: 검증 ON이면 ①③ 켜짐, ②는 검증할 때. OFF면 ①③ 꺼짐, ②는 수동 ask 때만.
     const von = appVM!=="off";
     const st=$("sbState"); if(st) st.textContent = von ? lblVM(appVM) : T("꺼짐","off");
@@ -2970,6 +2990,12 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   const turnsN = () => Math.max(1, vscode.workspace.getConfiguration("codexBridge").get<number>("recentTurns", 5));
   const dashboard = new Dashboard(context.extensionUri, turnsN);
+  // 창 리로드로 복원되는 대시보드 탭 되살리기 — 미등록이면 복원 탭이 스크립트 없는 영구 빈 화면(사용자 실측 2026-07-06).
+  context.subscriptions.push(
+    vscode.window.registerWebviewPanelSerializer("codexBridge", {
+      deserializeWebviewPanel: async (panel) => { dashboard.revive(panel); },
+    }),
+  );
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 950);
   status.command = "codexBridge.openDashboard"; // 클릭=대시보드. 확인/대시보드 선택은 호버 툴팁의 클릭 링크로(상태바 '바로 위')
   status.name = "Codex Bridge";

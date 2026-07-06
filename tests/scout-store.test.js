@@ -65,6 +65,15 @@ ok(!/scoutMaps[^\n]*\.text[^\n]*innerHTML|innerHTML[^\n]*scoutMaps/.test(ext), "
 const privacy = fs.readFileSync(path.join(__dirname, "..", "PRIVACY.md"), "utf8");
 ok(/scouts\/<키>/.test(privacy) && /최근 10장만 유지/.test(privacy), "PRIVACY에 scouts 보관함 행 명시");
 
+console.log("[한눈에 보기·복원] 흐름 지도 탐색자 노드(3트랙에서만) + 리로드 복원 탭 되살리기(소스 계약)");
+ok(/id="fnScout" style="display:none"/.test(ext) && /id="faScout" style="display:none"/.test(ext), "탐색자 노드·화살표는 기본 숨김(2트랙=기존 지도 그대로)");
+ok(/"탐색자", "Scout"/.test(ext) && /"영향지도", "impact map"/.test(ext) && /켜짐 · 지도는 수동 실행","on · maps via manual runs"/.test(ext), "흐름 지도 탐색자 표기 양언어 + '수동 실행' 명시");
+ok(/shownSM===appSM/.test(ext) && /appSM==="on"/.test(ext), "탐색 토글이 지도 렌더 가드에 포함(저장 반영 시 갱신)");
+ok(/registerWebviewPanelSerializer\("codexBridge"/.test(ext) && /dashboard\.revive\(panel\)/.test(ext), "리로드 복원 탭 되살리기 등록(미등록=영구 빈 화면 — 사용자 실측)");
+ok(/revive\(panel: vscode\.WebviewPanel\)/.test(ext) && /pendingRevive/.test(ext), "복원 탭이 새 패널과 같은 배선(html·리스너·post)을 탐");
+const pj = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
+ok(pj.activationEvents.includes("onWebviewPanel:codexBridge"), "복원 탭이 확장을 깨우는 activation event 선언(Codex 지적 — serializer만으론 불완전)");
+
 try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* 임시 폴더 정리 실패는 무해 */ }
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
