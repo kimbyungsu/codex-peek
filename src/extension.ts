@@ -345,7 +345,29 @@ function isInjected(t: string): boolean {
   return /^<(environment_context|user_instructions|system)/i.test(s) || s.startsWith("# AGENTS.md");
 }
 
+// ── 판독 캐시 — 상태 계산(computeState)이 워처 폭주(검증 턴마다 브릿지 파일 변경)와 결합해 확장 호스트를 포화시키는 것 방지.
+// 실측(2026-07-06): 이 폴더의 Claude 대화기록·연결 Codex rollout이 커지자 상태 계산 1회가 5.2s 동기 블로킹 —
+// 브릿지 파일이 5s보다 자주 바뀌는 활성 세션에선 호스트가 상시 포화돼 대시보드가 데이터를 영영 못 받았다(사용자 실측 '아무 반응 없음').
+// 전략: 무거운 '파일 전체 판독'은 mtime+size 키 메모(정확 무효화 — 저장 직후 낡은 화면 없음), 28일 집계만 짧은 TTL.
+const readCache = new Map<string, { at: number; val: any }>();
+function cachedRead<T>(key: string, ttlMs: number, fn: () => T): T {
+  const now = Date.now();
+  const hit = readCache.get(key);
+  if (hit && now - hit.at < ttlMs) return hit.val as T;
+  const val = fn();
+  readCache.set(key, { at: now, val });
+  if (readCache.size > 300) { const cut = now - 10 * 60 * 1000; for (const [k, v] of readCache) if (v.at < cut) readCache.delete(k); } // 무한 성장 방지
+  return val;
+}
+function fileCacheKey(file: string): string {
+  try { const st = fs.statSync(file); return file + "|" + st.mtimeMs + "|" + st.size; } catch { return file + "|na"; }
+}
+
 function readMessages(file: string): Array<{ role: "user" | "assistant"; text: string }> {
+  // rollout 전체 파싱은 파일이 크면 수백 ms — mtime+size 키라 파일이 바뀌면 즉시 새로 읽고, 안 바뀌면 재사용.
+  return cachedRead("msgs|" + fileCacheKey(file), 5 * 60 * 1000, () => readMessagesUncached(file));
+}
+function readMessagesUncached(file: string): Array<{ role: "user" | "assistant"; text: string }> {
   const out: Array<{ role: "user" | "assistant"; text: string }> = [];
   let content: string;
   try {
@@ -397,6 +419,10 @@ function firstSnippet(file: string): string {
 //   형제 폴더 ask가 만든 값과 비교돼 거짓 두뇌-drift가 뜨는 것을 막는다. 일치 turn 0개면 model/effort=""(호출측 가드가 경고 억제).
 //   단 models(이 세션이 써본 모델 목록·knownModels 표시용)는 필터와 무관하게 전부 모은다.
 function sessionModelMeta(file: string, wsFilter?: string | null): { model: string; effort: string; models: string[]; ts: string } {
+  // rollout 전체 파싱(파일이 크면 수백 ms) — mtime+size 키 메모(파일이 바뀌면 즉시 새로 읽음).
+  return cachedRead("smm|" + (wsFilter ? normWs(wsFilter) : "") + "|" + fileCacheKey(file), 5 * 60 * 1000, () => sessionModelMetaUncached(file, wsFilter));
+}
+function sessionModelMetaUncached(file: string, wsFilter?: string | null): { model: string; effort: string; models: string[]; ts: string } {
   const models = new Set<string>();
   let model = "", effort = "", ts = "";
   const want = wsFilter ? normWs(wsFilter) : null;
@@ -1271,7 +1297,12 @@ function readDeepseekView(): { hasKey: boolean; masked: string; model: string } 
 }
 
 // 이 폴더(ws)의 클로드 대화기록에서 최근 28일 토큰을 합한다 — 코덱스 토큰(검증 비용)과 분리한 '작업 비용'. cwd 필터(다른 폴더 제외)·사이드체인 제외는 sumClaudeUsage가 담당. !ws면 빈(프로젝트별 원칙).
+// 60s TTL: 28일 통계라 초 단위 신선도가 무의미한데, 대화기록이 커지면 이 집계 혼자 1s+를 먹어(실측 34%)
+// 워처 폭주 시 호스트 포화의 주범이 된다. TTL 안에서는 마지막 값 재사용.
 function readClaudeTokens(ws: string | null, now = Date.now()): ClaudeTokens {
+  return cachedRead("cctok|" + (ws ? normWs(ws) : ""), 60 * 1000, () => readClaudeTokensUncached(ws, now));
+}
+function readClaudeTokensUncached(ws: string | null, now = Date.now()): ClaudeTokens {
   const acc: ClaudeTokens = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, total: 0, turns: 0 };
   if (!ws) return acc;
   const files: { f: string; m: number }[] = [];
