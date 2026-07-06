@@ -8,7 +8,7 @@ const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { collectPackage } = require("./scope-package.js");
-const { saveMap } = require("./scout-store.js");
+const { saveMap, markLive, clearLive } = require("./scout-store.js");
 const { renderPackageMarkdown } = require(path.join(__dirname, "..", "out", "scope-package.js"));
 
 const repo = process.argv[2];
@@ -23,13 +23,17 @@ const md = renderPackageMarkdown(pkg);
 // 탐색 전용 1회 호출 — 파일 탐색 도구 전면 차단(꾸러미 밖을 못 보게 = DeepSeek 팔과 동일 시야).
 const DENY = "Bash,Read,Grep,Glob,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,TodoWrite,KillShell,TaskOutput";
 const preface = "너는 '탐색자'다. 아래 꾸러미가 유일한 근거다 — 도구는 차단되어 있고, 꾸러미 밖 추측으로 파일을 지어내지 마라. 꾸러미 끝의 [탐색자 지시] 형식을 정확히 따르라.\n\n";
-const r = spawnSync("claude", ["-p", "--output-format", "text", "--disallowedTools", DENY], {
-  input: preface + md,
-  encoding: "utf8",
-  timeout: 8 * 60 * 1000,
-  windowsHide: true,
-  shell: process.platform === "win32", // npm 전역 셔틀(claude.cmd) 대응
-});
+markLive(repo, "self"); // 상태바 '지도 생성중…' 신호 — 탐색자 호출 동안만(finally에서 해제)
+let r;
+try {
+  r = spawnSync("claude", ["-p", "--output-format", "text", "--disallowedTools", DENY], {
+    input: preface + md,
+    encoding: "utf8",
+    timeout: 8 * 60 * 1000,
+    windowsHide: true,
+    shell: process.platform === "win32", // npm 전역 셔틀(claude.cmd) 대응
+  });
+} finally { clearLive(repo); }
 if (r.error || r.status !== 0 || !String(r.stdout || "").trim()) {
   console.error("self 탐색 호출 실패:", r.error?.message || `exit=${r.status}`, String(r.stderr || "").slice(-300));
   process.exit(1);

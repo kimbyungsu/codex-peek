@@ -56,4 +56,14 @@ function listMaps(repo, limit) {
   });
 }
 
-module.exports = { normWs, wsKeyFor, saveMap, listMaps, pruneDir, SCOUTS_DIR, KEEP_PER_WS };
+// ── '지도 생성중' 라이브 신호 — 상태바가 실제 도는 동안만 '생성중'을 표시(거짓 신호 방지: 평시엔 파일 없음).
+// 러너가 탐색자 호출 직전 mark, finally에서 clear. 비정상 종료로 잔존해도 읽는 쪽 TTL이 걸러낸다.
+const LIVE_DIR = path.join(BRIDGE_DIR, "scout-live");
+function markLive(repo, arm) {
+  try { fs.mkdirSync(LIVE_DIR, { recursive: true }); fs.writeFileSync(path.join(LIVE_DIR, wsKeyFor(repo) + ".json"), JSON.stringify({ arm, startedAt: new Date().toISOString() })); } catch { /* 표시용 — 실패 무해 */ }
+}
+function clearLive(repo) {
+  try { fs.unlinkSync(path.join(LIVE_DIR, wsKeyFor(repo) + ".json")); } catch { /* 이미 없음 */ }
+}
+
+module.exports = { normWs, wsKeyFor, saveMap, listMaps, pruneDir, markLive, clearLive, LIVE_DIR, SCOUTS_DIR, KEEP_PER_WS };

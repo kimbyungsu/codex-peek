@@ -135,6 +135,7 @@ interface BridgeState {
   scope: ScopeState | null; // 범위 장부(L0) 후보 — scoutMode=on(3트랙)일 때만 계산(advisory·로컬 git만·외부전송 0). null=2트랙
   scoutMaps: ScoutMapsView | null; // 영향지도 게시판 — 러너가 브릿지 홈 scouts/에 보관한 지도 목록+최신 본문(3트랙에서만). null=2트랙
   scoutMapStale: number | null;    // 낡은 지도 배지 — 최신 지도 생성 후 더 바뀐 seed 파일 수(판단 불가면 null·경고 아님)
+  scoutLive: { arm: string; startedAt: string } | null; // 지도 생성중(러너 실행 동안만 — TTL로 잔존 걸러냄)
   deepseek: { hasKey: boolean; masked: string; model: string }; // 고급설정 탭 표시용 — 키 원문은 절대 웹뷰로 안 보냄(마스킹만)
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
 }
@@ -883,6 +884,7 @@ function computeState(turnsN: number): BridgeState {
     scope,                              // 범위 장부 후보(3트랙에서만 — 내부에서 scoutMode 확인·캐시)
     scoutMaps,                          // 영향지도 게시판(3트랙에서만 — 러너가 보관한 지도 읽기 전용)
     scoutMapStale: computeScoutMapStale(ws, scope, scoutMaps), // 낡은 지도 배지 — 최신 지도 생성 후 더 바뀐 seed 파일 수(경고 아님·게시판 표기)
+    scoutLive: readScoutLive(ws),       // 지도 생성중 신호(러너 실행 동안만 — 카드 '지금:'과 상태바 라벨)
     deepseek: readDeepseekView(),       // 고급설정 탭 — 키 유무·마스킹(원문 미노출)
   };
 }
@@ -1317,6 +1319,20 @@ function readScoutMaps(ws: string | null): ScoutMapsView | null {
     const val: ScoutMapsView = { count: bases.length, items, latest };
     scoutMapsCache = { key: normWs(ws), at: now, val };
     return val;
+  } catch { return null; }
+}
+
+// ── '지도 생성중' 라이브 신호 판독 — 러너가 탐색자 호출 동안만 scout-live/<wsKey>.json을 남긴다(scripts/scout-store.js).
+// TTL 10분: 러너 자체 타임아웃(self 8분)에서 유도한 상한+여유 — 비정상 종료로 파일이 잔존해도 영구 '생성중' 거짓 방지.
+const SCOUT_LIVE_TTL_MS = 10 * 60 * 1000;
+function readScoutLive(ws: string | null): { arm: string; startedAt: string } | null {
+  if (!ws) return null;
+  try {
+    const f = path.join(BRIDGE_DIR, "scout-live", crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16) + ".json");
+    const j = JSON.parse(fs.readFileSync(f, "utf8"));
+    const at = Date.parse(j.startedAt || "") || 0;
+    if (!at || Date.now() - at > SCOUT_LIVE_TTL_MS) return null;
+    return { arm: typeof j.arm === "string" ? j.arm : "?", startedAt: j.startedAt };
   } catch { return null; }
 }
 
@@ -2078,7 +2094,7 @@ class Dashboard {
     <h2 class="sec base accent-yellow">${t("고급설정", "Advanced Settings")} <span class="sub2">${t("탐색(3트랙) 고급 단계용 — 전역 설정(모든 프로젝트 공통)", "for the advanced scouting stage (3-track) — global (shared by all projects)")}</span></h2>
     <div class="card">
       <div class="chead">${t("DeepSeek API 키", "DeepSeek API key")} <span class="muted" style="font-weight:400">${t("· 3트랙의 'DeepSeek 비교 팔'(두 번째 탐색자)에만 필요 — 키 없이도 기초 탐색과 무료 self 팔 영향지도는 동작해요", "· only needed for 3-track's DeepSeek comparison arm (second scout) — basic scouting and free self-arm impact maps work without it")}</span></div>
-      <div class="hint">${t("키는 이 컴퓨터의 브릿지 홈(<code>~/.codex-bridge/deepseek.json</code>)에만 저장되고 저장소(GitHub)에는 절대 들어가지 않아요. 지금은 <b>지도 생성을 직접 실행할 때만</b> 전송돼요(대시보드를 보거나 3트랙을 켜두는 것만으로는 전송 없음). <b>키 등록은 자동 탐색 동의로 간주돼요</b> — 자동 지도 기능이 도입되면 하네스가 필요하다고 판단할 때(예: 지도가 없거나 낡았고 변경이 있을 때) 이 키로 호출이 자동 실행될 수 있어요. 그 발동 조건과 전송·제외 내용은 PRIVACY에 먼저 명시돼요.", "The key is stored only in this machine's bridge home (<code>~/.codex-bridge/deepseek.json</code>) and never enters the repo (GitHub). Today it is used <b>only when you explicitly run map generation</b> (viewing the dashboard or keeping 3-track on sends nothing). <b>Registering the key counts as consent to automatic scouting</b> — once auto-maps land, the harness may call this key when it judges it necessary (e.g., map missing/stale with pending changes). Trigger conditions and what is sent/excluded are documented in PRIVACY first.")}</div>
+      <div class="hint">${t("키는 이 컴퓨터의 브릿지 홈(<code>~/.codex-bridge/deepseek.json</code>)에만 저장되고 저장소(GitHub)에는 절대 들어가지 않아요. 전송은 <b>지도 생성이 실행될 때만</b> 일어나요 — 당신이 직접 실행하거나, <b>키 등록=동의 모델</b>에 따라 3트랙 자동 지시를 받은 Claude가 실행(조건: 지도가 없거나 낡았을 때 그 상태에 1회 지시 — 확장·훅 자체는 전송하지 않음). 대시보드를 보는 것만으로는 전송 없음. 발동 조건과 전송·제외 내용은 PRIVACY에 명시돼 있어요.", "The key is stored only in this machine's bridge home (<code>~/.codex-bridge/deepseek.json</code>) and never enters the repo (GitHub). Transmission happens <b>only when map generation runs</b> — you run it directly, or under the <b>key-registration=consent model</b> Claude runs it on the 3-track auto-directive (issued once per missing/stale-map state — the extension/hooks themselves never transmit). Viewing the dashboard sends nothing. Trigger conditions and what is sent/excluded are documented in PRIVACY.")}</div>
       <div class="row" style="margin-top:8px">
         <input type="password" id="dsKey" placeholder="sk-..." style="flex:1;min-width:220px" autocomplete="off" />
         <button id="dsSave">${t("저장", "Save")}</button>
@@ -2531,7 +2547,8 @@ class Dashboard {
       // 탐색 상태 요약 1줄(사용자 지적: 침묵을 상태로 번역) — 지금 무엇이 돌고/안 돌고 있고, 다음 행동이 뭔지.
       (function(){
         const sc=d.scope; let line;
-        if(!sc) line=T("지금: 계산 대기 — 3트랙 저장 직후 자동 시작돼요.","Now: pending — starts right after saving 3-track.");
+        if(d.scoutLive) line=T("지금: 지도 생성 중… ("+(d.scoutLive.arm==="deepseek"?"DeepSeek":"self")+" 팔 — 끝나면 아래 게시판에 도착)","Now: generating a map… ("+(d.scoutLive.arm==="deepseek"?"DeepSeek":"self")+" arm — lands on the board below when done)");
+        else if(!sc) line=T("지금: 계산 대기 — 3트랙 저장 직후 자동 시작돼요.","Now: pending — starts right after saving 3-track.");
         else if(sc.note==="no-git") line=T("지금: 이력(git) 없는 폴더 — 함께변경 통계는 불가 · 지도는 '무이력 모드'(최근 수정 파일 기준)로 수동 생성 가능해요.","Now: no-history (non-git) folder — co-change stats unavailable · maps still work in 'historyless mode' (based on recently modified files), via manual command.");
         else if(sc.note==="error") line=T("지금: 이력 조회 실패 — 잠시 후 자동 재시도돼요.","Now: history query failed — retries shortly.");
         else if(sc.note==="no-changes") line=T("지금: 대기 — 작업트리에 변경이 없어요. 파일이 바뀌면 기초 탐색이 자동으로 후보를 찾고, 지도는 수동 명령으로 만들어요.","Now: idle — no working-tree changes. Basic scouting runs automatically once files change; maps are made by manual command.");
@@ -2595,7 +2612,7 @@ class Dashboard {
         pre.textContent=sm.latest.text + (sm.latest.truncated?T("\\n… (길어서 접힘 — 전문은 브릿지 홈 scouts 폴더 파일)","\\n… (truncated — full text in the bridge home scouts folder)"):""); // ★백슬래시 두 겹 필수: 이 스크립트는 바깥 템플릿 안이라 한 겹이면 HTML 생성 시 실제 개행으로 변환돼 웹뷰 JS 전체가 문법 오류로 죽는다(2026-07-06 실사고 — tests/webview-syntax가 검출)
         det.appendChild(s); det.appendChild(pre); box.appendChild(det);
       }
-      add(T("ⓘ 이 게시판은 열람 전용 — 지도 생성·전송은 당신이 명령을 실행할 때만 일어나요(자동 없음). 프로젝트별 최근 10장 보관.","ⓘ Read-only board — maps are generated/sent only when you run the command (nothing automatic). Last 10 kept per project."),"muted");
+      add(T("ⓘ 이 게시판은 열람 전용(보는 것만으로는 아무것도 전송 안 됨) — 지도 생성·전송은 명령이 실행될 때만: 당신이 직접, 또는 3트랙 자동 지시를 받은 Claude가(같은 상태엔 1회 지시). 프로젝트별 최근 10장 보관.","ⓘ Read-only board (viewing sends nothing) — maps are generated/sent only when the command runs: by you directly, or by Claude on the 3-track auto-directive (issued once per state). Last 10 kept per project."),"muted");
     });
     // ⑥ 고급설정 탭 — DeepSeek 키 상태(마스킹만 수신·원문 없음). 저장 직후엔 saveResult 플래시가 먼저 보이고,
     // 다음 상태 푸시(post)가 이 최신 상태 문구로 자연 교체한다(둘 다 같은 노드 — 경합 무해).
@@ -3182,6 +3199,8 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!ws || (mode !== "linked" && mode !== "unlinked")) return "";
       try {
         if (loadContract(ws).scoutMode !== "on") return "";
+        const live = readScoutLive(ws);
+        if (live) return tE(`탐색(3트랙): 지도 생성중… (${live.arm === "deepseek" ? "DeepSeek" : "self"} 팔 · ${new Date(live.startedAt).toLocaleTimeString()} 시작)`, `scouting (3-track): generating map… (${live.arm === "deepseek" ? "DeepSeek" : "self"} arm · started ${new Date(live.startedAt).toLocaleTimeString()})`);
         const sc = readScopeState(ws);
         const maps = readScoutMaps(ws);
         const stale = computeScoutMapStale(ws, sc, maps);
@@ -3223,7 +3242,9 @@ export function activate(context: vscode.ExtensionContext): void {
       status.backgroundColor = undefined; // 무결성 빨강 등 이전 색 잔존 방지(아래 무결성 분기가 다시 칠할 수 있음)
     } else if (link?.codexSession) {
       // $(telescope) 접미 = 3트랙 탐색 켜짐 신호 — 대시보드를 안 열어도 상태바만으로 인지(툴팁에 상세 흐름).
-      status.text = `$(link) Codex: ${(snip || link.codexSession).slice(0, 14)}` + (scoutSb ? " $(telescope)" : "");
+      // 지도 생성이 실제 도는 동안만 '탐색중' 라벨(회전 아이콘) — 평시엔 아이콘만(거짓 신호 방지: 늑대소년 회피).
+      const scoutBusy = scoutSb.includes(tE("지도 생성중…", "generating map…"));
+      status.text = `$(link) Codex: ${(snip || link.codexSession).slice(0, 14)}` + (scoutBusy ? " $(sync~spin) " + tE("탐색중", "scouting") : scoutSb ? " $(telescope)" : "");
       status.tooltip = new vscode.MarkdownString(
         tE(`**Codex Bridge — 연결됨**\n\n`,`**Codex Bridge — linked**\n\n`) +
           tE(`세션: `,`session: `) + `\`${link.codexSession}\`\n\n` +
@@ -3235,7 +3256,7 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       status.backgroundColor = file ? undefined : new vscode.ThemeColor("statusBarItem.warningBackground");
     } else {
-      status.text = "$(plug) " + tE("Codex: 미연결","Codex: not linked") + (scoutSb ? " $(telescope)" : "");
+      status.text = "$(plug) " + tE("Codex: 미연결","Codex: not linked") + (scoutSb.includes(tE("지도 생성중…", "generating map…")) ? " $(sync~spin) " + tE("탐색중", "scouting") : scoutSb ? " $(telescope)" : "");
       status.tooltip = tE("연결된 Codex 세션 없음 · 클릭 → 대시보드에서 연결","No linked Codex session · click → link in dashboard") + (scoutSb ? " · " + scoutSb : "");
       status.backgroundColor = undefined;
     }

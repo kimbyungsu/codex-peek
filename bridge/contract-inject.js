@@ -6,7 +6,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildVerifyDirective, atomicWrite, BRIDGE_DIR, ACTIVE_DIR, writePhase } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, atomicWrite, BRIDGE_DIR, ACTIVE_DIR, writePhase } = require("./contract-lib.js");
 
 let input = "";
 process.stdin.on("data", (d) => (input += d));
@@ -78,6 +78,8 @@ process.stdin.on("end", () => {
       if (rules) parts.push(rules);
     }
     if (c.verifyMode && c.verifyMode !== "off") parts.push(buildVerifyDirective(c.verifyMode));
+    // 탐색(3트랙) 자동 지시 — 지도 없음/낡음일 때 그 상태에 1회만(상태 서명 기반·advisory). 실패해도 훅을 막지 않음.
+    try { const sd = buildScoutDirective(ws, c); if (sd) parts.push(sd); } catch { /* advisory */ }
   } catch {
     parts = [];
   }

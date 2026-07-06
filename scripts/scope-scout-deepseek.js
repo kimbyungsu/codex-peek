@@ -8,7 +8,7 @@
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { collectPackage } = require("./scope-package.js");
-const { saveMap } = require("./scout-store.js");
+const { saveMap, markLive, clearLive } = require("./scout-store.js");
 const { renderPackageMarkdown } = require(path.join(__dirname, "..", "out", "scope-package.js"));
 
 const repo = process.argv[2];
@@ -24,7 +24,11 @@ const md = renderPackageMarkdown(pkg);
 const bridge = path.join(__dirname, "..", "bridge", "deepseek-bridge.js");
 const args = [bridge, "map"];
 if (outFile) args.push("--out", outFile);
-const r = spawnSync(process.execPath, args, { input: md, encoding: "utf8", timeout: 5 * 60 * 1000, windowsHide: true });
+markLive(repo, "deepseek"); // 상태바 '지도 생성중…' 신호 — 전송·수신 동안만(finally에서 해제)
+let r;
+try {
+  r = spawnSync(process.execPath, args, { input: md, encoding: "utf8", timeout: 5 * 60 * 1000, windowsHide: true });
+} finally { clearLive(repo); }
 if (r.stderr) process.stderr.write(r.stderr); // usage/오류 안내 그대로 전달(키 원문은 브릿지가 애초에 안 찍음)
 if (r.error || r.status !== 0) { console.error("DeepSeek 탐색 호출 실패:", (r.error && r.error.message) || `exit=${r.status}`); process.exit(1); }
 // 대시보드 '영향지도 게시판'용 보관 — 브릿지가 stderr로 알려준 사용량 메타([usage] in=.. out=.. (모델))를 함께 기록.

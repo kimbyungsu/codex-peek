@@ -263,6 +263,48 @@ function normScoutMode(o) {
   return "off"; // 기본=2트랙(무회귀 — 미설정 프로젝트는 기존과 100% 동일)
 }
 
+// ── 탐색(3트랙) 자동 지시(지시 주입형 — 사용자 승인 2026-07-06) ──
+// 원리: 하네스는 '지도가 없거나 낡았다'는 사실을 매 턴 판정해 구현 Claude에게 갱신 '지시'만 넣는다(실행·전송은
+// Claude가 수행 — 확장/훅의 무전송 원칙 불변). 재지시 억제는 시간이 아니라 '상태 서명'(지도 없음 | 최신 지도 이름):
+// 같은 상태엔 딱 1회만 지시하고, 지도가 갱신되면 서명이 바뀌어 다음 낡음에 다시 1회(시간 상수 0 — 24h/15분류 재발 방지).
+const SCOUTS_DIR = path.join(BRIDGE_DIR, "scouts");           // 지도 보관함(scripts/scout-store.js와 동일 규칙)
+const SCOUT_ADVICE_DIR = path.join(BRIDGE_DIR, "scout-advice"); // 상태 서명 기억(프로젝트별 1파일)
+function wsKeyFor(ws) { // 계약 키·지도 보관함 키와 반드시 동일 규칙(sha1(normWs) 앞 16자)
+  return crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16);
+}
+// 최신 지도 상태: no-map(없음) / fresh(신선) / stale(지도 자신의 seed 파일이 지도 생성 후 더 바뀜 — 낡음)
+function scoutMapStatus(ws) {
+  const dir = path.join(SCOUTS_DIR, wsKeyFor(ws));
+  let bases = [];
+  try { bases = fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)).sort().reverse(); } catch { /* 보관함 없음 */ }
+  if (!bases.length) return { state: "no-map", base: null, staleCount: 0 };
+  let meta = {};
+  try { meta = JSON.parse(fs.readFileSync(path.join(dir, bases[0] + ".json"), "utf8")); } catch { /* 메타 없음 — 낡음 판정 불가 → fresh 취급(과잉 지시 방지) */ }
+  const ts = Date.parse(meta.ts || "") || 0;
+  let staleCount = 0;
+  const seeds = Array.isArray(meta.seedFiles) ? meta.seedFiles.slice(0, 8) : [];
+  for (const s of seeds) { try { if (fs.statSync(path.join(ws, s)).mtimeMs > ts) staleCount++; } catch { /* 삭제된 seed — 제외 */ } }
+  return { state: ts && staleCount > 0 ? "stale" : "fresh", base: bases[0], staleCount };
+}
+// 3트랙이고 지도가 없/낡았으며 이 상태에 아직 지시한 적 없으면 지시문 반환, 아니면 null. c=이미 로드된 계약(중복 로드 방지).
+function buildScoutDirective(ws, c) {
+  if (!ws || normScoutMode(c) !== "on") return null;
+  const st = scoutMapStatus(ws);
+  if (st.state === "fresh") return null;
+  const sig = st.state === "no-map" ? "no-map" : "stale:" + st.base;
+  const f = path.join(SCOUT_ADVICE_DIR, wsKeyFor(ws) + ".json");
+  try { const prev = JSON.parse(fs.readFileSync(f, "utf8")); if (prev && prev.sig === sig) return null; } catch { /* 첫 지시 */ }
+  try { atomicWrite(f, JSON.stringify({ sig, ts: new Date().toISOString() })); } catch { /* 기억 실패 시 다음 턴 재지시 — 무해 */ }
+  let hasKey = false;
+  try { const j = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, "deepseek.json"), "utf8")); hasKey = !!(j && typeof j.apiKey === "string" && j.apiKey.trim()); } catch { /* 키 없음 */ }
+  const why = st.state === "no-map"
+    ? "이 프로젝트에 영향지도가 아직 없다"
+    : "최신 지도 생성 이후 그 지도의 근거 파일 " + st.staleCount + "개가 더 바뀌어 지도가 낡았다";
+  return "[탐색(3트랙) 자동 지시 · 이 상태에 1회만] " + why + ". 이번 턴이 파일 변경을 동반하면 결론 전에 영향지도를 갱신하라 — codex-peek 소스 저장소에서 `node scripts/scope-scout-self.js \"" + ws + "\"` 실행(무료 self 팔 우선"
+    + (hasKey ? " · 비교가 필요하다고 판단되면 scope-scout-deepseek.js 사용 가능 — 키 등록=자동 호출 동의됨" : "")
+    + "). 사소한 턴(질문·문서 한 줄)이면 스킵해도 된다 — 지도는 참고용이며 아무것도 막지 않는다.";
+}
+
 // rules(문자열 배열) → 매 턴 주입 텍스트. checklist=false면 규약만, true면 [계약점검] 강제.
 // 비어 있으면 "" 반환(주입 비용 0). lang: 주입 지시문 언어(규칙 '내용'은 사용자가 쓴 그대로).
 function buildInjection(rules, who, checklist, lang) {
@@ -520,4 +562,4 @@ function formatForClaude(answer, lang) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, VERIFY_MODES, SCOUT_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, STATS_DIR, VERDICTS_FILE };

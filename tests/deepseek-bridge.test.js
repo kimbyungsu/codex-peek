@@ -40,7 +40,7 @@ const hookSetupSrc = fs.readFileSync(path.join(__dirname, "..", "src", "hook-set
 ok(/deepseek-bridge\.js/.test(installSrc) && /deepseek-bridge\.js/.test(hookSetupSrc), "BRIDGE_SCRIPTS 양쪽(install.js·hook-setup.ts)에 deepseek-bridge.js 포함(설치 시 브릿지 홈 배치)");
 const extSrc = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
 ok(!/아무것도 전송하지 않습니다/.test(extSrc) && !/sends nothing with it/.test(extSrc), "고급설정 문구에서 '전송 없음' 단정 제거(이제 수동 실행 경로가 실재)");
-ok(/직접 실행할 때만/.test(extSrc) && /only when you explicitly run/.test(extSrc), "전송 조건(직접 실행 시에만)을 양언어로 명시");
+ok(/지도 생성이 실행될 때만/.test(extSrc) && /only when map generation runs/.test(extSrc) && /키 등록=동의 모델/.test(extSrc), "전송 조건(생성 실행 시에만 — 직접 또는 자동 지시·동의 모델)을 양언어로 명시");
 const readmeKo = fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8");
 const readmeEn = fs.readFileSync(path.join(__dirname, "..", "docs", "README.en.md"), "utf8");
 ok(!/\*\*외부 전송 없음\*\*/.test(readmeKo) && /유일한 예외/.test(readmeKo), "README(ko): 절대 표현 제거 + 예외 1건 명시");
