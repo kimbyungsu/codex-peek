@@ -126,7 +126,13 @@
    verified>inferred, pinned은 차선 오버라이드·꾸러미 선별 selectForPackage 씨앗 교집합 우선)+`contract-lib.js`
    appendLedgerEvent(map-ledger-events/<wsKey>.jsonl·상한 2000 정직 고지)+러너 proposed 적재+`scope-package.js`
    ledgerForPackage(동봉分 attached 적재 — 자기강화 차단 재료)+렌더 §7.5(확인됨/미검증/틀림판명 3차선).
-   ⚠ confirmed/refuted/user_dispute 이벤트는 스키마만 — 배선(검증 답변·발화 감지)은 ④단계.
+   **④ 구현 2026-07-07**: (a) `codex-bridge.js flagLedgerConfirms` — 통과류 판정 + 장부 항목의 서로 다른 경로 2개 이상이
+   '실존 확인된 인용'(citedResolvedBasenames)에 등장 + 다룬 흔적 미확인(unseen) 목록에 없음 + basename 8자 이상일 때만
+   confirmed 적재(텍스트 메아리 무효 — 자기강화 차단). 반박/차단/대체 이력 있으면 제외. refuted 자동 추출은 안 함(기계 판정
+   불안정 — 정직 한계). (b) `scripts/scope-ledger-note.js` — 사용자 발화 기록 CLI(dispute/confirm/pin/ban/unpin/unban,
+   유일 매칭만·모호하면 중단). **Claude 사용 관행**: 사용자가 장부 지식을 확정 어조로 정정/확인하는 발화를 하면 이 CLI로
+   기록하라(--why에 발화 요지). 흔들림("맞나? 헷갈리네")·농담·가정법은 기록 금지(tg wavering-hold). 테스트
+   `tests/ledger-signals.test.js`(18단언 — 패리티·보수 규칙·CLI). **남은 로드맵: ⑤카드 역할 전환 ⑥플랜 게이트 실험.**
 4. (관찰 항목) 한 폴더 다중 프로그램 구분 — 권장 관행은 프로그램별 폴더 분리, 보강 후보는 seed 클러스터 자동 좁힘.
 
 ## 6.5 아직 구현 안 된 설계 요지 (레포 밖 설계 원본의 알맹이 — 이 요지만으로 이어갈 수 있게)

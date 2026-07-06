@@ -18,7 +18,7 @@ const { spawnSync, spawn } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs, appendVerdict, loadLang } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -232,6 +232,43 @@ function flagEvidence(answer, ws, sessionId, execCwd) {
       });
     }
   } catch { /* best-effort — 점검 실패가 검증 흐름을 막지 않음 */ }
+}
+// 관측 장부 확인 신호(로드맵 ④ — 보수적) — 통과류 판정에서, 장부 항목이 말하는 결합의 '서로 다른 경로 2개 이상'이
+// 실존 확인된 인용((파일:라인)이 실제로 해석됨)에 등장하고, 세션 기록상 '다룬 흔적 미확인' 목록에 없을 때만
+// confirmed 1건을 적재한다. 텍스트 메아리(항목 문구가 답에 보임)로는 확인 안 됨 — 자기강화 순환 차단.
+// 반박(refuted) 자동 추출은 하지 않음(기계 판정 불안정 — 발화 기록 CLI가 담당). 실패가 검증 흐름을 절대 막지 않음.
+function flagLedgerConfirms(answer, ws, sessionId, execCwd) {
+  try {
+    const verdict = extractVerdict(answer);
+    if (verdict !== "pass" && verdict !== "pass-notes") return;
+    const raw = readLedgerEventsText(ws);
+    if (!raw || !raw.trim()) return;
+    // 원시 이벤트에서 sig→text 최소 집계(배포 사본은 out/ 유도기를 require 못 함). 제외는 보수적으로:
+    // 반박/차단/대체/묘비 이력이 한 번이라도 있으면 확인 대상에서 뺀다(unban 등 순계산은 유도기 몫 — 여기선 과소확인 감수).
+    const texts = new Map(); const dead = new Set();
+    for (const ln of raw.split(/\r?\n/)) {
+      if (!ln.trim()) continue;
+      let o; try { o = JSON.parse(ln); } catch { continue; }
+      if (!o || !o.sig) continue;
+      if (o.text && !texts.has(o.sig)) texts.set(o.sig, o.text);
+      if (o.type === "user_dispute" || o.type === "refuted" || o.type === "banned" || o.type === "superseded" || o.type === "tombstone") dead.add(o.sig);
+    }
+    if (!texts.size) return;
+    const cited = new Set([...citedResolvedBasenames(answer, execCwd || ws)].map((b) => b.toLowerCase()));
+    // 라인 실재까지 요구(보수 강화 — Codex 보완 반영): 라인 번호가 실제 범위를 벗어난 인용이 하나라도 있는 파일은
+    // 그 파일 전체를 확인 근거에서 제외(파일만 실재하는 헛인용이 결합 확인으로 승격되는 것 차단).
+    for (const m of checkCitedEvidence(answer, execCwd || ws)) cited.delete(String(m).split(":")[0].toLowerCase());
+    if (cited.size < 2) return;
+    const unseen = new Set(citedFilesUnseen(answer, execCwd || ws, sessionId).map((b) => b.toLowerCase()));
+    const now = nowIso();
+    for (const [sig, text] of texts) {
+      if (dead.has(sig)) continue;
+      // basename 8자 미만은 우연 일치 위험(index.ts류) → 제외(지도 채점기의 8자 규칙과 동일 근거)
+      const bns = [...new Set(ledgerPathsFromText(text).map((p) => path.basename(p)))].filter((b) => b.length >= 8);
+      const hit = bns.filter((b) => cited.has(b) && !unseen.has(b));
+      if (hit.length >= 2) appendLedgerEvent(ws, { ts: now, type: "confirmed", sig, from: `verify ${sessionId || "?"} ${verdict} — 실존 인용: ${hit.slice(0, 3).join(", ")}` });
+    }
+  } catch { /* best-effort — 장부 실패가 검증 흐름을 막지 않음 */ }
 }
 // rollout 끝에서 '마지막 turn의 모델 + 그 turn 1회 토큰(last_token_usage)'을 읽는다 — 검증 1건의 모델·비용 기록용.
 // usage-monitor 구조: type==='turn_context'의 payload.model, payload.type==='token_count'의 info.last_token_usage. 파일 끝 256KB만(검증=보통 마지막 1턴). 못 찾으면 빈/ null(통계는 '미상').
@@ -832,6 +869,7 @@ async function cmdAsk(rest) {
     try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
     writeProof(link.codexSession, answer, ws); // 실제 성공 → 검증 증명 기록(verify-guard가 인정)
     flagEvidence(answer, ws, link.codexSession, exec); // 결정2: 인용 근거 존재성+다룬 흔적 점검(경로해석=작업폴더 exec). 라벨=연 폴더 ws
+    flagLedgerConfirms(answer, ws, link.codexSession, exec); // 로드맵 ④: 통과류 답의 실존 인용으로 장부 confirmed 적재(보수적)
     flagVerdict(answer, ws, link.codexSession, modeSnap); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 답에 판정 줄이 없으면 표지 누락 노랑 가시화(자동 차단 X)
     process.stdout.write(`${langSnap === "en" ? "# Linked session" : "# 연결 세션"} ${link.codexSession} (${link.via})\n\n${formatForClaude(answer, langSnap)}\n`);
     return;
@@ -907,6 +945,7 @@ async function cmdAsk(rest) {
   if (id) {
     writeProof(id, answer, ws); // 실제 성공 → 검증 증명 기록
     flagEvidence(answer, ws, id, exec); // 결정2: 인용 근거 존재성+다룬 흔적(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
+    flagLedgerConfirms(answer, ws, id, exec); // 로드맵 ④: 장부 confirmed(보수적)
     flagVerdict(answer, ws, id, modeSnap); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 표지 누락도 노랑 가시화(자동 차단 X)
     const en = langSnap === "en";
     const head = earlyLinked
@@ -917,6 +956,7 @@ async function cmdAsk(rest) {
     updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; }); // 다음 자동 생성 차단 플래그
     writeProof("", answer, ws); // Codex는 성공 응답함(세션id만 미식별) → 검증은 인정
     flagEvidence(answer, ws, "", exec); // 세션id 미식별 → 존재성 점검만(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
+    flagLedgerConfirms(answer, ws, "", exec); // 로드맵 ④: 세션 미식별 시에도 실존 인용 기준으로만(다룬 흔적 검사는 자동 보류)
     flagVerdict(answer, ws, "", modeSnap);
     process.stdout.write(`${langSnap === "en" ? "# New session created (session id unresolved) — auto-creation is paused to avoid session sprawl. Use 'find' then 'link <id>'." : "# 새 세션 생성됨(세션id 식별 실패) — 폭증 방지로 다음 자동 생성은 멈춥니다. 'find'로 찾아 'link <id>' 하세요."}\n\n${formatForClaude(answer, langSnap)}\n`);
   }
@@ -1127,4 +1167,4 @@ function main() {
 }
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
-module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, updateLinks, loadLinks, saveLinks, LINKS_FILE, verifyTimeoutMin, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, parseLastTurn, netArgs, netNote };
+module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, saveLinks, LINKS_FILE, verifyTimeoutMin, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, parseLastTurn, netArgs, netNote };
