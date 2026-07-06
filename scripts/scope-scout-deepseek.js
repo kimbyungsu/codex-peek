@@ -9,7 +9,7 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 const { collectPackage } = require("./scope-package.js");
 const { saveMap, markLive, clearLive } = require("./scout-store.js");
-const { extractMapHighlights, extractMapPatches } = require(path.join(__dirname, "..", "bridge", "contract-lib.js")); // 지도 high 구조화(Phase 3) — 저장 시 메타에 동봉
+const { extractMapHighlights, extractMapPatches, appendLedgerEvent, ledgerSig } = require(path.join(__dirname, "..", "bridge", "contract-lib.js")); // 지도 high 구조화(Phase 3) — 저장 시 메타에 동봉
 const { renderPackageMarkdown } = require(path.join(__dirname, "..", "out", "scope-package.js"));
 
 const repo = process.argv[2];
@@ -36,4 +36,6 @@ if (r.error || r.status !== 0) { console.error("DeepSeek 탐색 호출 실패:",
 const um = String(r.stderr || "").match(/\[usage\] in=(\d+) out=(\d+)(?: \((.+?)\))?/);
 const meta = um ? { usageIn: Number(um[1]), usageOut: Number(um[2]), model: um[3] || null } : {};
 try { console.error("지도 보관(게시판): " + saveMap(repo, "deepseek", r.stdout.trim(), { ...meta, highlights: extractMapHighlights(r.stdout), mapPatches: extractMapPatches(r.stdout), basis: pkg.basisNote || (pkg.historyless ? "" : "git-status"), seedFiles: pkg.seeds })); } catch (e) { console.error("지도 보관 실패(게시판에만 영향): " + (e && e.message)); }
+// 관측 장부: 지도가 낸 6번(MAP patch) 제안을 사실로 적재 — 상태 전이는 out/ledger-events.js가 유도(로드맵 1단계)
+try { const now = new Date().toISOString(); for (const t of extractMapPatches(r.stdout)) appendLedgerEvent(repo, { ts: now, type: "proposed", sig: ledgerSig(t), text: t, from: "deepseek 지도 " + now }); } catch { /* 장부 실패가 지도 출력 흐름을 막지 않음 */ }
 process.stdout.write(r.stdout);

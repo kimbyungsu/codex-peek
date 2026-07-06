@@ -74,6 +74,8 @@ export function extractDiffTokens(diffText: string, opts?: Partial<typeof PKG_DE
 
 // 꾸러미 스키마 — 드라이버가 결정론 수집한 원자료를 받아 조립(이 함수 자체는 순수).
 export type TokenHit = { token: string; files: string[]; truncated: boolean };
+// 관측 장부 선별분 — 구조만 요구(text 있는 항목 배열 3차선). 유도·선별은 out/ledger-events.js selectForPackage.
+export type LedgerSection = { trusted: { text: string }[]; reference: { text: string }[]; disputed: { text: string }[] };
 export type ScopePackage = {
   meta: { repo: string; head: string; generatedBy: string; caps: typeof PKG_DEFAULTS; truncations: string[] };
   seeds: string[];                 // 지금 바뀌는 파일들(작업트리) — '무엇을 바꾸는가'
@@ -84,6 +86,7 @@ export type ScopePackage = {
   tests: string[];                 // 이 저장소의 테스트 목록(실행 후보)
   recentFailures: { ts?: string; kind?: string; detail?: string }[]; // 최근 검증 실패/미완(무결성 기록)
   map: string | null;              // stable MAP(있으면 — 의미 결합의 확정층)
+  ledger: LedgerSection | null;    // 관측 장부 선별분(신뢰/미검증/틀림판명 — 자동 축적, 판정 기준 아님). null=장부 없음/전부 빈 차선
   historyless: boolean;            // 무이력(비-git) 모드 여부 — 렌더 라벨·각주가 달라짐
   basisNote: string;               // 변경 간주 기준(무이력 계단 표기 — 빈 문자열이면 미표기)
   blindSpots: string[];            // ★이 꾸러미가 못 보는 것 — 탐색자·소비자에게 강제로 전달되는 정직성 각주
@@ -95,6 +98,7 @@ export function buildPackage(input: {
   tokenHits: TokenHit[]; droppedTokens?: string[]; coChange: ScopeSuggestion | null;
   tests: string[]; recentFailures: { ts?: string; kind?: string; detail?: string }[];
   mapContent: string | null;
+  ledger?: LedgerSection | null; // 관측 장부 선별분(드라이버가 out/ledger-events.js로 유도·선별해 전달)
   sensitiveExcluded?: string[]; // redactSensitiveDiff가 제외한 민감 범주 파일(경로만) — 은폐 금지, 고지로 표기
   historyless?: boolean;        // 무이력(비-git) 모드 — '최근 수정 파일'을 변경으로 간주한 축소 꾸러미(전후 비교·함께변경 통계 없음)
   basisNote?: string;           // '무엇을 기준으로 변경을 간주했나'(무이력 계단: 세션 편집/마지막 지도 이후/최근 수정 순) — 1절 아래 표기
@@ -118,6 +122,7 @@ export function buildPackage(input: {
     tests: input.tests,
     recentFailures: failures,
     map,
+    ledger: input.ledger && (input.ledger.trusted.length || input.ledger.reference.length || input.ledger.disputed.length) ? input.ledger : null,
     historyless: !!input.historyless,
     basisNote: input.basisNote || "",
     blindSpots: [
@@ -154,6 +159,13 @@ export function renderPackageMarkdown(p: ScopePackage): string {
   L.push(`\n## 5. 이 저장소의 테스트\n${p.tests.length ? p.tests.map((t) => `- ${t}`).join("\n") : "(발견된 테스트 없음)"}`);
   L.push(`\n## 6. 최근 검증 실패/미완 기록\n${p.recentFailures.length ? p.recentFailures.map((f) => `- [${f.ts || "?"}] ${f.kind || ""}: ${(f.detail || "").slice(0, 160)}`).join("\n") : "(없음)"}`);
   if (p.map) L.push(`\n## 7. stable MAP(확정 지식층)\n${p.map}`);
+  if (p.ledger) {
+    // 관측 장부 — 자동 축적된 결합 지식을 신뢰 등급별로 구분 동봉(confidence band 철학: 재료를 왜곡하지 않고 확신도만 라벨).
+    L.push(`\n## 7.5 자동 관측 장부 (제안→검증으로 축적 — 참고자료, 판정 기준 아님)`);
+    if (p.ledger.trusted.length) L.push(`확인됨(검증/사람 고정 — 신뢰 입력):\n${p.ledger.trusted.map((e) => `- ${e.text}`).join("\n")}`);
+    if (p.ledger.reference.length) L.push(`미검증 제안(참고만 — 아직 확인 안 됨):\n${p.ledger.reference.map((e) => `- ${e.text}`).join("\n")}`);
+    if (p.ledger.disputed.length) L.push(`틀림 판명(이미 반박된 결합 — 같은 결론을 다시 내지 마라):\n${p.ledger.disputed.map((e) => `- ${e.text}`).join("\n")}`);
+  }
   if (p.meta.truncations.length) L.push(`\n## 절단 고지\n${p.meta.truncations.map((t) => `- ${t}`).join("\n")}`);
   L.push(`\n## ⚠ 이 꾸러미가 못 보는 것\n${p.blindSpots.map((b) => `- ${b}`).join("\n")}`);
   L.push(`\n---\n[탐색자 지시] 위 자료만 근거로 '영향범위 지도'를 작성하라 — ①직접 영향 후보 ②간접 영향 후보 ③반드시 확인할 테스트/동작 ④문서/설정/UI 영향 ⑤범위 밖으로 봐도 되는 것 ⑥MAP patch 후보(stable MAP에 추가/수정할 의미 결합 — 제안일 뿐, 자동 반영 아님). 각 항목(①~④)에 확인필요도 high/medium/low를 달아라(high 최대 5·전체 후보 최대 10). 최종 통과/실패 판정 금지 · 수정 지시 금지 · 확인할 경로만.`);

@@ -117,6 +117,16 @@
    대기 제안 목록(출처 표기)과 [승인]/[기각] 버튼(모달 동의, sig 기준이라 번호 밀림 원천 차단) + 승인/기각 이력 +
    확정 장부 열람. 계산·형식은 `src/map-ledger.ts` 공유 모듈이 단일 출처(CLI `scope-reconcile.js`도 out/map-ledger.js
    require — 형식 두 벌 금지). **남은 것**: 실사용 제안 축적 후 첫 승인 사이클 관찰.
+   **방향 전환 합의 2026-07-07(사용자+양 모델)**: 건별 수동 승인은 실사용 불가 판정 — memento(assertionStatus 4단계·재통합)+
+   tg-chat-engine(삭제 금지·disputed 상태 전이·supersedes·learning_events '이벤트 먼저 정책 나중') 패턴으로 **자동 관측 장부**로 전환.
+   3층: ①관측 장부(자동) ②오버라이드(pin/ban) ③docs/MAP.md(명시 내보내기만). 로드맵: ①이벤트 적재→②약한 전이→③꾸러미
+   신뢰 차선→④발화 기반 강등(보수적)→⑤카드 역할 전환→⑥플랜 게이트 실험(PreToolUse:ExitPlanMode 가능 여부 실험 선행 —
+   미확정. 강제 게이트 기본 off: 사전등록 60% vs 실측 48.1% 미달, 사용자 명시 선택만).
+   **①②③ 구현 2026-07-07**: `src/ledger-events.ts`(이벤트 파싱·약한 전이 derive — banned>superseded>tombstone>disputed>
+   verified>inferred, pinned은 차선 오버라이드·꾸러미 선별 selectForPackage 씨앗 교집합 우선)+`contract-lib.js`
+   appendLedgerEvent(map-ledger-events/<wsKey>.jsonl·상한 2000 정직 고지)+러너 proposed 적재+`scope-package.js`
+   ledgerForPackage(동봉分 attached 적재 — 자기강화 차단 재료)+렌더 §7.5(확인됨/미검증/틀림판명 3차선).
+   ⚠ confirmed/refuted/user_dispute 이벤트는 스키마만 — 배선(검증 답변·발화 감지)은 ④단계.
 4. (관찰 항목) 한 폴더 다중 프로그램 구분 — 권장 관행은 프로그램별 폴더 분리, 보강 후보는 seed 클러스터 자동 좁힘.
 
 ## 6.5 아직 구현 안 된 설계 요지 (레포 밖 설계 원본의 알맹이 — 이 요지만으로 이어갈 수 있게)

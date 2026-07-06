@@ -11,6 +11,25 @@ const os = require("os");
 const { spawnSync } = require("child_process");
 const { extractDiffTokens, buildPackage, renderPackageMarkdown, redactSensitiveDiff, isSensitivePath, PKG_DEFAULTS } = require(path.join(__dirname, "..", "out", "scope-package.js"));
 const { parseGitLog, suggest } = require(path.join(__dirname, "..", "out", "scope-ledger.js"));
+const { parseEventsJsonl, deriveLedger, selectForPackage } = require(path.join(__dirname, "..", "out", "ledger-events.js"));
+const { readLedgerEventsText, appendLedgerEvent } = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
+
+// 관측 장부 선별 — 이벤트(append-only)에서 상태를 유도해 씨앗 관련·신뢰 차선 위주로 꾸러미에 동봉할 몫만 고른다.
+// 장부가 없거나 읽기 실패면 null(주입 0) — 장부 문제가 꾸러미 생성을 막지 않는다.
+// 동봉된 항목은 'attached' 이벤트로 적재 — 이후 지도/검증이 이 항목을 되읊어도 '주입분 메아리'를
+// 강화 신호에서 제외할 수 있게(자기강화 순환 차단의 재료 — 판정은 확인 신호 배선 단계에서).
+function ledgerForPackage(repo, seeds) {
+  try {
+    const raw = readLedgerEventsText(repo);
+    if (!raw.trim()) return null;
+    const sel = selectForPackage(deriveLedger(parseEventsJsonl(raw).events), seeds || []);
+    try {
+      const now = new Date().toISOString();
+      for (const e of [].concat(sel.trusted, sel.reference, sel.disputed)) appendLedgerEvent(repo, { ts: now, type: "attached", sig: e.sig, from: "package" });
+    } catch { /* 적재 실패 무해 */ }
+    return sel;
+  } catch { return null; }
+}
 
 // 수집 본체 — self/DeepSeek 팔 러너가 require해서 재사용(Phase 2). CLI 실행은 하단 main 가드.
 function collectPackage(repo) {
@@ -58,7 +77,7 @@ for (const { token } of tokens) {
 const logOut = git(["log", "--no-merges", "--first-parent", "--pretty=format:%H|%ct|%s", "--name-only", "-n", "300"]);
 const coChange = logOut ? suggest(parseGitLog(logOut), seeds) : null;
 
-  return buildPackage({ repo, head, seeds, diffText, tokenHits, droppedTokens, coChange, ...collectCommon(repo), sensitiveExcluded });
+  return buildPackage({ repo, head, seeds, diffText, tokenHits, droppedTokens, coChange, ...collectCommon(repo), ledger: ledgerForPackage(repo, seeds), sensitiveExcluded });
 }
 
 // 공용 수집(테스트 목록·최근 검증 실패·stable MAP) — git 경로와 무이력 경로가 공유.
@@ -227,7 +246,7 @@ function collectPackageHistoryless(repo) {
     if (hits.length > PKG_DEFAULTS.maxGrepFilesPerToken) { droppedTokens.push(token); continue; }
     tokenHits.push({ token, files: hits, truncated: false });
   }
-  const pkg = buildPackage({ repo, head: "0000000", seeds: seeds.map((s) => s.rel), diffText: excerpts, tokenHits, droppedTokens, coChange: null, ...collectCommon(repo), sensitiveExcluded: [], historyless: true, basisNote });
+  const pkg = buildPackage({ repo, head: "0000000", seeds: seeds.map((s) => s.rel), diffText: excerpts, tokenHits, droppedTokens, coChange: null, ...collectCommon(repo), ledger: ledgerForPackage(repo, seeds.map((s) => s.rel)), sensitiveExcluded: [], historyless: true, basisNote });
   if (basisTrunc) pkg.meta.truncations.push(basisTrunc);
   if (scanNote) pkg.meta.truncations.push(scanNote); // 커버리지 축소는 정직 고지(침묵 절단 금지)
   if (capped) pkg.meta.truncations.push(`파일 탐색이 상한(파일 ${HL.maxScanFiles}개·깊이 ${HL.maxDepth})에 도달 — 일부 파일은 목록에서 빠졌을 수 있음`);

@@ -9,7 +9,7 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 const { collectPackage } = require("./scope-package.js");
 const { saveMap, markLive, clearLive } = require("./scout-store.js");
-const { extractMapHighlights, extractMapPatches } = require(path.join(__dirname, "..", "bridge", "contract-lib.js")); // 지도 high 구조화(Phase 3) — 저장 시 메타에 동봉
+const { extractMapHighlights, extractMapPatches, appendLedgerEvent, ledgerSig } = require(path.join(__dirname, "..", "bridge", "contract-lib.js")); // 지도 high 구조화(Phase 3) — 저장 시 메타에 동봉
 const { renderPackageMarkdown } = require(path.join(__dirname, "..", "out", "scope-package.js"));
 
 const repo = process.argv[2];
@@ -44,4 +44,6 @@ if (outFile) fs.writeFileSync(outFile, map);
 // 대시보드 '영향지도 게시판'용 보관(브릿지 홈 scouts/ — 프로젝트별 최근 10장). stderr로 알림(stdout=지도 본문 유지).
 // 메타에 basis·seedFiles 기록 — 물때표(다음 지도의 기준)와 무이력 낡음 배지의 재료(멀티 세션 오인 방지 — Codex 보완).
 try { console.error("지도 보관(게시판): " + saveMap(repo, "self", map, { highlights: extractMapHighlights(map), mapPatches: extractMapPatches(map), basis: pkg.basisNote || (pkg.historyless ? "" : "git-status"), seedFiles: pkg.seeds })); } catch (e) { console.error("지도 보관 실패(게시판에만 영향): " + (e && e.message)); }
+// 관측 장부: 지도가 낸 ⑥(MAP patch) 제안을 사실로 적재 — 상태 전이는 out/ledger-events.js가 유도(로드맵 ①단계)
+try { const now = new Date().toISOString(); for (const t of extractMapPatches(map)) appendLedgerEvent(repo, { ts: now, type: "proposed", sig: ledgerSig(t), text: t, from: "self 지도 " + now }); } catch { /* 장부 실패가 지도 출력 흐름을 막지 않음 */ }
 process.stdout.write(map + "\n");

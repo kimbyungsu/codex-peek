@@ -365,6 +365,31 @@ function extractMapPatches(mapText) {
   }
   return out;
 }
+// ── 관측 장부 이벤트(append-only) — 제안/동봉/확인/반박/오버라이드를 사실로만 적재(상태는 out/ledger-events.js가 유도) ──
+// ⚠ ledgerSig는 src/map-ledger.ts normSig와 반드시 동일 규칙(공백 요동만 무시) — 한쪽만 바꾸면 같은 항목이 두 개가 된다
+//   (배포 사본은 out/을 require 못 해 복사 유지 — tests/ledger-events.test.js 패리티 단언이 고정).
+function ledgerSig(t) { return String(t || "").replace(/\s+/g, " ").trim().toLowerCase(); }
+const LEDGER_EVENTS_DIR = path.join(BRIDGE_DIR, "map-ledger-events");
+function ledgerEventsFileFor(ws) { return path.join(LEDGER_EVENTS_DIR, wsKeyFor(ws) + ".jsonl"); }
+const LEDGER_EVENTS_CAP = 2000;   // 보존 상한(감사 추적 vs 무한 증가의 절충 — 정직 고지: 이보다 오래된 이벤트는 잘림)
+const LEDGER_EVENTS_TRIM_AT = 2400; // 히스테리시스 — 매 append마다 rewrite하지 않게
+function appendLedgerEvent(ws, ev) {
+  try {
+    if (!ws || !ev || !ev.sig || !ev.type) return false;
+    fs.mkdirSync(LEDGER_EVENTS_DIR, { recursive: true });
+    const f = ledgerEventsFileFor(ws);
+    fs.appendFileSync(f, JSON.stringify(ev) + "\n", "utf8");
+    try {
+      const lines = fs.readFileSync(f, "utf8").split(/\r?\n/).filter(Boolean);
+      if (lines.length > LEDGER_EVENTS_TRIM_AT) atomicWrite(f, lines.slice(-LEDGER_EVENTS_CAP).join("\n") + "\n");
+    } catch { /* 트림 실패 — 다음 append에서 재시도(적재 자체는 성공) */ }
+    return true;
+  } catch { return false; } // best-effort — 장부 실패가 본 흐름(지도 저장·검증)을 막지 않음
+}
+function readLedgerEventsText(ws) {
+  try { return fs.readFileSync(ledgerEventsFileFor(ws), "utf8"); } catch { return ""; }
+}
+
 // 검증 요청(ask)에 동봉할 지도 블록. 3트랙 프로젝트 + 지도 존재 + high 항목 있을 때만(그 외 null — 주입 비용 0·무회귀).
 // 낡은 지도는 버리지 않고 '낡음' 라벨로 정직 고지(시간 상수 0 — scoutMapStatus의 seed mtime 판정 재사용).
 function buildScoutAttach(ws, c, lang) {
@@ -651,4 +676,4 @@ function formatForClaude(answer, lang) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, extractMapHighlights, extractMapPatches, buildScoutAttach, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, extractMapHighlights, extractMapPatches, buildScoutAttach, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, STATS_DIR, VERDICTS_FILE };
