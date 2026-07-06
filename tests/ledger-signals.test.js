@@ -82,6 +82,14 @@ ok(pin.status === 0 && /신뢰|trusted/.test(pin.stdout), "pin → 차선 truste
 const badCmd = run("erase", "x");
 ok(badCmd.status === 2, "미지 명령 거부");
 
+console.log("[5] 대시보드 배선(소스 검사) — 승인 큐 제거·관측 개입(ledgerAct)·런타임 재사용(⑤ 역할 전환 잠금)");
+const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
+ok(ext.includes('m?.type === "ledgerAct"'), "ledgerAct 핸들러 존재(고정/차단/해제/내보내기)");
+ok(!ext.includes('"mapApprove"') && !ext.includes('"mapReject"'), "승인 큐 메시지 타입(\"mapApprove\"/\"mapReject\") 잔재 없음 — 필드명 mapApproved(확정층 줄 수)와 구분");
+ok(ext.includes("lib?.appendLedgerEvent") || ext.includes("lib.appendLedgerEvent"), "이벤트 적재는 배포 런타임(contract-lib) 재사용 — 형식 복사 없음");
+ok(/act === "export"[\s\S]{0,400}lane !== "trusted"/.test(ext), "내보내기는 신뢰 차선만(게이트 소스 잠금)");
+ok(/record\("exported"[\s\S]{0,300}기록됐지만/.test(ext), "export의 이벤트 적재 실패 문구는 '장부 파일은 기록됐다'는 사실을 말함(거짓 '무반영' 금지 — Codex 반례 잠금)");
+
 try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 무해 */ }
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

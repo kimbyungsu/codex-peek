@@ -10,7 +10,8 @@ import { localizeIntegrityDetail } from "./integrity-i18n";
 import { parseLastModelCommand, parseLastAssistantModel, parseSessionStartTs, resolveCcIntent, modelFamily, shouldAttributeSettingsChange, pruneIntentMap } from "./brain-intent";
 import { parseGitLog, suggest as scopeSuggest, ScopeSuggestion } from "./scope-ledger";
 import { maskKey, isPlausibleKey, mergeDeepseekConfig } from "./deepseek-config";
-import { computePending, appendApproved, parseApprovedFromMap, PendingItem } from "./map-ledger";
+import { appendApproved, parseApprovedFromMap, normSig } from "./map-ledger";
+import { parseEventsJsonl, deriveLedger } from "./ledger-events";
 
 const HOME = os.homedir();
 // 자체 namespace 폴더. CODEX_BRIDGE_HOME으로 override(확장 호스트≠훅 home 환경 대비 — 브릿지·훅과 동일 규칙).
@@ -1325,55 +1326,67 @@ function readScoutMaps(ws: string | null): ScoutMapsView | null {
   } catch { return null; }
 }
 
-// ── MAP 장부(stable 2층) 판독 — 제안층(지도 ⑥ 후보)·승인/기각 이력·확정층(MAP.md) 요약. 3트랙에서만.
-// 계산·형식은 src/map-ledger.ts 공유 모듈(CLI scope-reconcile.js와 단일 출처) — 여기는 파일 읽기+조립만.
-type LedgerHist = { text: string; ts: string; from: string };
+// ── MAP 장부 판독(⑤ 역할 전환) — 관측 장부(이벤트→유도)가 1차 재료: 무엇이 쌓였고(제안)·반영됐고(동봉/확인)·
+// 정정됐는지(반박/차단)를 타임라인+신분으로 보여준다. 사람 개입(고정/차단/내보내기)은 선택 — 승인 큐 아님.
+// 유도·형식은 out(ledger-events·map-ledger) 공유 모듈 — 여기는 파일 읽기+조립만.
+type ObservedEntry = {
+  sig: string; text: string; status: string; pinned: boolean; lane: string; from: string; lastTs: string;
+  n: { proposed: number; attached: number; confirmed: number; disputed: number }; // 사건 요약(무엇을 근거로 이 신분인가)
+  inMap: boolean; // 확정 장부(MAP.md)에 이미 내보내졌나(중복 내보내기 방지)
+};
+type LedgerTimelineItem = { ts: string; type: string; text: string; from: string };
 type MapLedgerView = {
-  pending: PendingItem[];                 // 쌓여 있는 제안(대기)
-  approved: LedgerHist[];                 // 승인 이력(최신순 — 무엇을 장부에 올렸나)
-  rejected: LedgerHist[];                 // 기각 이력(최신순 — 무엇을 정정/걸렀나)
-  mapRel: string;                         // 확정층 파일(프로젝트 상대 경로)
-  mapExists: boolean;
-  mapApproved: number;                    // 확정층의 승인 줄 수
-  mapTotalItems: number;                  // 확정층의 전체 항목 수(손으로 쓴 항목 포함 — 정직 표기)
-  mapText: string; mapTruncated: boolean; // 확정층 열람(상한 캡)
+  entries: ObservedEntry[];        // 최신순 상위 N — 신분 배지·개입 버튼 재료
+  timeline: LedgerTimelineItem[];  // 최근 사건 흐름(최신 먼저)
+  counts: { trusted: number; reference: number; disputed: number; excluded: number };
+  dropped: number;                 // 깨진/미지 이벤트 줄 수(침묵 삼킴 금지 — 정직 표기)
+  mapRel: string; mapExists: boolean; mapApproved: number; mapTotalItems: number;
+  mapText: string; mapTruncated: boolean;
 };
 const MAP_LEDGER_TEXT_CAP = 8000;
-let mapLedgerBump = 0; // 승인/기각 직후 캐시 즉시 무효화(키에 포함 — TTL만으론 버튼 반응이 최대 5초 늦음)
-function mapLedgerStateFile(ws: string): string {
-  return path.join(BRIDGE_DIR, "map-reconcile", crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16) + ".json");
+const LEDGER_ENTRIES_CAP_UI = 12;  // 카드에 보이는 항목 상한(전체는 이벤트 파일이 원본)
+const LEDGER_TIMELINE_CAP_UI = 20; // 타임라인 상한
+let mapLedgerBump = 0; // 개입(고정/차단/내보내기) 직후 캐시 즉시 무효화(키에 포함 — TTL만으론 버튼 반응이 최대 5초 늦음)
+function ledgerEventsFileExt(ws: string): string { // contract-lib ledgerEventsFileFor와 동일 규칙(wsKey 3카피 규약)
+  return path.join(BRIDGE_DIR, "map-ledger-events", crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16) + ".jsonl");
 }
 function mapLedgerFile(ws: string): string { // CLI mapFile()과 동일 순서: 기존 docs/MAP.md > 기존 MAP.md > 신설 docs/MAP.md
   for (const c of ["docs/MAP.md", "MAP.md"]) { if (fs.existsSync(path.join(ws, c))) return path.join(ws, c); }
   return path.join(ws, "docs", "MAP.md");
 }
 function readMapLedgerUncached(ws: string): MapLedgerView {
-  let st: any = {};
-  try { st = JSON.parse(fs.readFileSync(mapLedgerStateFile(ws), "utf8")); } catch { /* 이력 없음 */ }
-  const hist = (a: any): LedgerHist[] => (Array.isArray(a) ? a : [])
-    .map((e: any) => ({ text: typeof e?.text === "string" ? e.text : String(e?.sig || ""), ts: typeof e?.ts === "string" ? e.ts : "", from: typeof e?.from === "string" ? e.from : "" }))
-    .filter((e) => e.text).reverse(); // 최신이 위로
+  let raw = "";
+  try { raw = fs.readFileSync(ledgerEventsFileExt(ws), "utf8"); } catch { /* 장부 아직 없음 */ }
+  const parsed = parseEventsJsonl(raw);
+  const derived = deriveLedger(parsed.events);
   const mapF = mapLedgerFile(ws);
   let mapMd = ""; let mapExists = false;
   try { mapMd = fs.readFileSync(mapF, "utf8"); mapExists = true; } catch { /* 확정층 아직 없음 */ }
-  const dir = path.join(BRIDGE_DIR, "scouts", crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16));
-  const sources: Array<{ patches: unknown; from: string }> = [];
-  try {
-    const bases = fs.readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5)).sort().reverse().slice(0, 10);
-    for (const b of bases) {
-      try {
-        const m = JSON.parse(fs.readFileSync(path.join(dir, b + ".json"), "utf8"));
-        sources.push({ patches: m.mapPatches, from: `${m.arm || "?"} 지도 ${m.ts || b}` });
-      } catch { /* 깨진 메타 — 그 지도만 제외 */ }
-    }
-  } catch { /* 지도 없음 */ }
-  const done = ([] as any[]).concat(st.approved || [], st.rejected || []).map((e: any) => String(e?.sig || "")).filter(Boolean);
-  const parsed = parseApprovedFromMap(mapMd);
+  const mapNow = normSig(mapMd);
+  const entries: ObservedEntry[] = derived.slice(0, LEDGER_ENTRIES_CAP_UI).map((e) => ({
+    sig: e.sig, text: e.text || e.sig, status: e.status, pinned: e.pinned, lane: e.lane, from: e.from, lastTs: e.lastTs,
+    n: {
+      proposed: e.counts.proposed || 0, attached: e.counts.attached || 0,
+      confirmed: (e.counts.confirmed || 0) + (e.counts.user_confirm || 0),
+      disputed: (e.counts.refuted || 0) + (e.counts.user_dispute || 0),
+    },
+    inMap: !!(mapNow && mapNow.includes(e.sig)),
+  }));
+  const textOf = new Map(derived.map((e) => [e.sig, e.text || e.sig]));
+  const timeline: LedgerTimelineItem[] = parsed.events.slice(-LEDGER_TIMELINE_CAP_UI).reverse()
+    .map((ev) => ({ ts: ev.ts || "", type: ev.type, text: (textOf.get(ev.sig) || ev.text || ev.sig).slice(0, 90), from: (ev.from || "").slice(0, 80) }));
+  const counts = { trusted: 0, reference: 0, disputed: 0, excluded: 0 };
+  for (const e of derived) {
+    if (e.lane === "trusted") counts.trusted++;
+    else if (e.lane === "reference") counts.reference++;
+    if (e.status === "disputed") counts.disputed++;
+    if (e.status === "banned" || e.status === "superseded" || e.status === "tombstone") counts.excluded++;
+  }
+  const mp = parseApprovedFromMap(mapMd);
   return {
-    pending: computePending(sources, done, mapMd),
-    approved: hist(st.approved), rejected: hist(st.rejected),
+    entries, timeline, counts, dropped: parsed.dropped,
     mapRel: path.relative(ws, mapF).replace(/\\/g, "/"), mapExists,
-    mapApproved: parsed.approved.length, mapTotalItems: parsed.totalItems,
+    mapApproved: mp.approved.length, mapTotalItems: mp.totalItems,
     mapText: mapMd.slice(0, MAP_LEDGER_TEXT_CAP), mapTruncated: mapMd.length > MAP_LEDGER_TEXT_CAP,
   };
 }
@@ -1579,40 +1592,55 @@ class Dashboard {
           this.post();
           this.panel?.webview.postMessage({ type: "saveResult", target: "contract", ok });
         }
-        if ((m?.type === "mapApprove" || m?.type === "mapReject") && m.sig) {
-          // MAP 장부 승인/기각 — 서명(sig) 기준이라 목록 갱신·번호 밀림 문제가 원천적으로 없다(버튼이 그 제안 자체를 가리킴).
-          // 승인=프로젝트 파일(MAP.md) 변경이므로 모달 동의 후에만. 형식·계산은 CLI와 공유(src/map-ledger.ts 단일 출처).
+        if (m?.type === "ledgerAct" && m.sig) {
+          // MAP 장부 개입(⑤ 역할 전환) — 승인 큐가 아니라 선택적 오버라이드: 고정/차단(+해제)은 관측 장부 이벤트로,
+          // 내보내기는 확정 장부(MAP.md) 명시 기록으로. sig 기준이라 목록 갱신·번호 밀림 오작동이 원천적으로 없다.
+          // 이벤트 적재는 배포 런타임(contract-lib)의 appendLedgerEvent 재사용 — 형식 단일 출처(복사 없음).
           const ws = dashboardWorkspace();
           if (!ws) return;
-          const isApprove = m.type === "mapApprove";
+          const act = String(m.act || "");
+          const lib = bridgeLib();
+          if (typeof lib?.appendLedgerEvent !== "function") { vscode.window.showErrorMessage(tE("브릿지 런타임이 낡아 장부 개입을 기록할 수 없어요 — 저장소에서 node install.js 실행 후 창을 리로드하세요.","Bridge runtime is outdated for ledger actions — run node install.js in the repo, then reload the window.")); return; }
           const cur = readMapLedgerUncached(ws);
-          const item = cur.pending.find((p) => p.sig === String(m.sig));
-          if (!item) { vscode.window.showWarningMessage(tE("그 제안은 이미 처리됐거나 지도 정리로 사라졌어요 — 목록을 새로고침합니다.","That proposal was already handled or pruned — refreshing the list.")); mapLedgerBump++; this.post(); return; }
-          const q = isApprove
-            ? tE(`이 발견을 확정 장부(${cur.mapRel})에 올릴까요?\n\n"${item.text}"\n\n(장부는 이후 탐색 자료에 신뢰 입력으로 포함됩니다)`,`Promote this finding to the stable ledger (${cur.mapRel})?\n\n"${item.text}"\n\n(The ledger feeds future scout packages as trusted input)`)
-            : tE(`이 제안을 기각할까요? 다시 목록에 뜨지 않습니다.\n\n"${item.text}"`,`Reject this proposal? It won't be listed again.\n\n"${item.text}"`);
-          vscode.window.showWarningMessage(q, { modal: true }, isApprove ? tE("승인","Approve") : tE("기각","Reject")).then((pick) => {
-            if (pick !== (isApprove ? tE("승인","Approve") : tE("기각","Reject"))) return;
-            const now = new Date().toISOString();
-            let st: any = {};
-            try { st = JSON.parse(fs.readFileSync(mapLedgerStateFile(ws), "utf8")); } catch { st = {}; }
-            if (!Array.isArray(st.approved)) st.approved = [];
-            if (!Array.isArray(st.rejected)) st.rejected = [];
-            if (isApprove) {
+          const item = cur.entries.find((p) => p.sig === String(m.sig));
+          if (!item) { vscode.window.showWarningMessage(tE("그 항목을 장부에서 찾지 못했어요 — 목록을 새로고침합니다.","Could not find that entry in the ledger — refreshing.")); mapLedgerBump++; this.post(); return; }
+          const record = (type: string, fromNote: string, failMsg?: string): boolean => {
+            // failMsg: 경로별 정확한 사실 고지 — export처럼 '이미 다른 파일은 변경된 뒤'의 실패는 기본 문구("아무것도
+            // 반영 안 됨")가 거짓이 되므로 호출부가 실제 상태를 말하는 문구를 넘긴다(Codex 반례 반영).
+            const okA = lib.appendLedgerEvent(ws, { ts: new Date().toISOString(), type, sig: item.sig, text: item.text, from: fromNote }) === true;
+            if (!okA) vscode.window.showErrorMessage(failMsg || tE("장부 기록에 실패했어요(권한/디스크?) — 아무것도 반영되지 않았습니다.","Failed to write the ledger (permission/disk?) — nothing was applied."));
+            return okA;
+          };
+          const done = () => { mapLedgerBump++; this.post(); };
+          if (act === "pin" || act === "unpin" || act === "unban") {
+            // 가역·장부 내부 기록만 → 모달 없이 즉시(작업 흐름 방해 최소화)
+            if (record(act === "pin" ? "pinned" : act === "unpin" ? "unpinned" : "unbanned", tE("대시보드 개입","dashboard action"))) done();
+            return;
+          }
+          if (act === "ban") {
+            vscode.window.showWarningMessage(tE(`이 지식을 차단할까요? 탐색 자료에서 제외됩니다(기록은 지워지지 않고 남습니다 — 해제 가능).\n\n"${item.text}"`,`Ban this knowledge? It will be excluded from scout packages (the record is kept, not deleted — reversible).\n\n"${item.text}"`), { modal: true }, tE("차단","Ban")).then((pick) => {
+              if (pick !== tE("차단","Ban")) return;
+              if (record("banned", tE("대시보드 차단","dashboard ban"))) done();
+            });
+            return;
+          }
+          if (act === "export") {
+            if (item.lane !== "trusted") { vscode.window.showWarningMessage(tE("내보내기는 신뢰 차선(검증됨/고정) 항목만 가능해요.","Only trusted-lane entries (verified/pinned) can be exported.")); return; }
+            if (item.inMap) { vscode.window.showInformationMessage(tE("이미 확정 장부에 같은 문구가 있어요 — 중복 기록하지 않았습니다.","The stable ledger already contains this text — no duplicate written.")); return; }
+            vscode.window.showWarningMessage(tE(`이 지식을 확정 장부(${cur.mapRel})에 기록할까요? 저장소 파일이 변경됩니다.\n\n"${item.text}"`,`Export this knowledge to the stable ledger (${cur.mapRel})? A repository file will be modified.\n\n"${item.text}"`), { modal: true }, tE("내보내기","Export")).then((pick) => {
+              if (pick !== tE("내보내기","Export")) return;
+              const now = new Date().toISOString();
               const f = mapLedgerFile(ws);
               let md = "";
               try { md = fs.readFileSync(f, "utf8"); } catch { /* 없으면 공유 모듈이 뼈대 생성 */ }
               try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { /* atomicWrite가 재시도 */ }
-              if (!atomicWrite(f, appendApproved(md, [item], now))) { vscode.window.showErrorMessage(tE("확정 장부 기록에 실패했어요(파일 잠김/권한?) — 아무것도 변경되지 않았습니다.","Failed to write the stable ledger (locked/permission?) — nothing was changed.")); return; }
-              st.approved.push({ sig: item.sig, ts: now, text: item.text, from: item.from });
-              if (!atomicWrite(mapLedgerStateFile(ws), JSON.stringify(st, null, 2))) vscode.window.showWarningMessage(tE("장부에는 올라갔지만 이력 저장에 실패했어요 — 재목록 방지는 장부 문구 대조가 대신 막아줍니다.","Written to the ledger, but saving the history failed — re-listing is still prevented by the ledger text match."));
-            } else {
-              st.rejected.push({ sig: item.sig, ts: now, text: item.text, from: item.from });
-              if (!atomicWrite(mapLedgerStateFile(ws), JSON.stringify(st, null, 2))) { vscode.window.showErrorMessage(tE("기각 저장에 실패했어요(파일 잠김/권한?) — 기각이 반영되지 않았습니다.","Failed to save the rejection (locked/permission?) — it was not applied.")); return; }
-            }
-            mapLedgerBump++; // 캐시 즉시 무효화 — 버튼 반응이 다음 상태 푸시에 바로 보이게
-            this.post();
-          });
+              if (!atomicWrite(f, appendApproved(md, [{ text: item.text, from: item.from || tE("관측 장부","observed ledger") }], now))) { vscode.window.showErrorMessage(tE("확정 장부 기록에 실패했어요(파일 잠김/권한?) — 아무것도 변경되지 않았습니다.","Failed to write the stable ledger (locked/permission?) — nothing was changed.")); return; }
+              record("exported", tE("대시보드 내보내기 → ","dashboard export → ") + cur.mapRel,
+                tE("확정 장부 파일에는 기록됐지만 관측 이벤트 적재는 실패했어요(권한/디스크?) — 재내보내기는 확정 장부 중복 대조가 막아줍니다.","Written to the stable ledger file, but recording the observed event failed (permission/disk?) — duplicate export is still prevented by the ledger text match."));
+              done();
+            });
+            return;
+          }
         }
         if (m?.type === "saveDeepseekKey") {
           // 키 저장/삭제 — 원문은 이 핸들러에서 파일로만 가고, 상태(post)로는 마스킹만 나감. 빈 입력=키 삭제(모델·주소 설정은 보존).
@@ -1895,6 +1923,10 @@ class Dashboard {
   .mlrow .mltxt{flex:1;min-width:0} .mlrow .mltxt .t{font-size:12px;word-break:break-all} .mlrow .mltxt .f{font-size:10px;opacity:.6;margin-top:2px}
   .mlrow button{padding:3px 10px;font-size:11px;flex-shrink:0}
   .mhist{font-size:11px;padding:3px 0;word-break:break-all} .mhist .w{opacity:.6;font-size:10px}
+  .mlb{display:inline-block;padding:1px 7px;border-radius:8px;font-size:10px;font-weight:700;border:1px solid var(--vscode-panel-border);vertical-align:middle}
+  .mlb.ok{color:var(--vscode-charts-green);border-color:var(--vscode-charts-green)}
+  .mlb.hot{color:var(--vscode-charts-orange);border-color:var(--vscode-charts-orange)}
+  .mlb.no{opacity:.6}
   .mcard{border:1px solid var(--vscode-panel-border);border-radius:10px;padding:14px 16px;background:var(--vscode-editor-background);box-shadow:0 1px 3px rgba(0,0,0,.07)}
   .mrow{display:flex;align-items:center;gap:8px;margin-top:10px}
   .mlbl{min-width:60px;color:var(--vscode-descriptionForeground);font-size:12px}
@@ -2725,55 +2757,66 @@ class Dashboard {
       }
       add(T("ⓘ 이 게시판은 열람 전용(보는 것만으로는 아무것도 전송 안 됨) — 지도 생성·전송은 명령이 실행될 때만: 당신이 직접, 또는 3트랙 자동 지시를 받은 Claude가(같은 상태엔 1회 지시). 프로젝트별 최근 10장 보관.","ⓘ Read-only board (viewing sends nothing) — maps are generated/sent only when the command runs: by you directly, or by Claude on the 3-track auto-directive (issued once per state). Last 10 kept per project."),"muted");
     });
-    // ⑤-3 MAP 장부(확정 지식층) — 무엇이 쌓였고(대기), 무엇을 장부에 올렸고(승인), 무엇을 정정/걸렀는지(기각)를 한 카드에.
-    // 승인/기각 버튼은 서명(sig)을 그대로 보냄 — 목록이 갱신돼도 번호 밀림류 오승인이 원천적으로 없음.
+    // ⑤-3 MAP 장부(자동 관측 기억 — 역할 전환 2026-07-07) — 승인 큐가 아니라 관측 패널:
+    // 무엇을 봤고(제안)·반영했고(동봉/확인)·정정했는지(반박/차단)를 신분·타임라인으로 보여주고,
+    // 사람 개입(고정/차단/내보내기)은 선택. 버튼은 서명(sig)을 그대로 보냄 — 번호 밀림류 오작동 원천 차단.
     safe(function(){
       const box=$("scoutBox"); if(!box || box.style.display==="none") return;
       const ml=d.mapLedger; if(!ml) return;
       const card=document.createElement("div");
-      card.className="mled"+(ml.pending.length?"":" calm");
+      card.className="mled"+(ml.counts.disputed?"":" calm"); // 틀림판명이 쌓이면 주황(살펴볼 것), 평시 초록
       const h=document.createElement("div"); h.className="sbhead";
-      h.textContent=T("MAP 장부 — 확정 지식층(사람 승인제)","MAP ledger — stable knowledge (human-approved)");
+      h.textContent=T("MAP 장부 — 자동 관측 기억(개입은 선택)","MAP ledger — self-maintaining memory (intervention optional)");
       card.appendChild(h);
       const info=document.createElement("div"); info.className="muted";
-      info.textContent=T("정찰 지도가 제안한 '기억할 결합'(⑥)이 여기 쌓입니다. 당신이 승인한 것만 장부("+ml.mapRel+")에 오르고, 장부는 다음 탐색 자료에 신뢰 입력으로 들어갑니다 — 자동 반영은 없습니다.","Findings proposed by scout maps (section ⑥) pile up here. Only what you approve enters the ledger ("+ml.mapRel+"), which feeds future scout packages as trusted input — nothing is auto-applied.");
+      info.textContent=T("정찰의 발견이 자동으로 쌓이고, 검증이 확인하면 신뢰로 승격되고, 반박되면 스스로 강등됩니다 — 클릭 없이 굴러갑니다. 원하실 때만 고정(신뢰 강제)/차단(제외)/장부("+ml.mapRel+") 내보내기로 개입하세요.","Scout findings accumulate automatically, get promoted on verification and demoted on dispute — no clicking required. Intervene only when you want: pin (force-trust), ban (exclude), or export to "+ml.mapRel+".");
       card.appendChild(info);
       const chips=document.createElement("div"); chips.className="mledchips";
       const chip=(n,label,cls)=>{const c=document.createElement("div");c.className="mchip "+(cls||"");const b=document.createElement("b");b.textContent=String(n);const s=document.createElement("span");s.textContent=label;c.appendChild(b);c.appendChild(s);chips.appendChild(c);};
-      chip(ml.pending.length,T("쌓인 제안","pending"),ml.pending.length?"hot":"");
-      chip(ml.approved.length,T("승인(장부에 올림)","approved"),"ok");
-      chip(ml.rejected.length,T("기각(걸러냄)","rejected"),"no");
+      chip(ml.counts.trusted,T("신뢰(자동 반영)","trusted"),"ok");
+      chip(ml.counts.reference,T("미검증(참고)","unverified"),"");
+      chip(ml.counts.disputed,T("틀림 판명","disputed"),ml.counts.disputed?"hot":"no");
+      if(ml.counts.excluded) chip(ml.counts.excluded,T("제외(차단·대체)","excluded"),"no");
       card.appendChild(chips);
-      if(!ml.pending.length){
+      if(ml.dropped) { const w=document.createElement("div"); w.className="muted"; w.textContent=T("ⓘ 판독 불가 기록 "+ml.dropped+"줄은 건너뜀(집계에 안 섞임)","ⓘ "+ml.dropped+" unreadable record line(s) skipped (not counted)"); card.appendChild(w); }
+      if(!ml.entries.length){
         const e=document.createElement("div"); e.className="muted";
-        e.textContent=T("대기 중 제안 없음 — 새 정찰 지도가 ⑥ 후보를 내면 여기 쌓여요.","No pending proposals — new scout maps with section-⑥ candidates will pile up here.");
+        e.textContent=T("장부가 비어 있어요 — 정찰 지도가 '기억할 결합'(⑥)을 제안하면 자동으로 쌓입니다.","The ledger is empty — it fills automatically when scout maps propose section-⑥ couplings.");
         card.appendChild(e);
       }
-      ml.pending.forEach(p=>{
+      const STATUS_LABEL={inferred:[T("추정","inferred"),""],verified:[T("검증됨","verified"),"ok"],disputed:[T("틀림판명","disputed"),"hot"],banned:[T("차단됨","banned"),"no"],superseded:[T("대체됨","superseded"),"no"],tombstone:[T("소멸","gone"),"no"]};
+      ml.entries.forEach(p=>{
         const row=document.createElement("div"); row.className="mlrow";
         const tx=document.createElement("div"); tx.className="mltxt";
-        const t1=document.createElement("div"); t1.className="t"; t1.textContent=p.text;
-        const t2=document.createElement("div"); t2.className="f"; t2.textContent=T("출처: ","from: ")+p.from;
+        const t1=document.createElement("div"); t1.className="t";
+        const badge=document.createElement("span"); const sl=STATUS_LABEL[p.status]||[p.status,""];
+        badge.className="mlb "+sl[1]; badge.textContent=sl[0]+(p.pinned?T("·고정","·pinned"):"");
+        t1.appendChild(badge); t1.appendChild(document.createTextNode(" "+p.text));
+        const t2=document.createElement("div"); t2.className="f";
+        t2.textContent=T("제안 "+p.n.proposed+" · 동봉 "+p.n.attached+" · 확인 "+p.n.confirmed+" · 반박 "+p.n.disputed+(p.from?" · 출처: "+p.from:""),"proposed "+p.n.proposed+" · attached "+p.n.attached+" · confirmed "+p.n.confirmed+" · disputed "+p.n.disputed+(p.from?" · from: "+p.from:""));
         tx.appendChild(t1); tx.appendChild(t2); row.appendChild(tx);
-        const ap=document.createElement("button"); ap.textContent=T("승인","Approve");
-        ap.onclick=function(){ vscode.postMessage({type:"mapApprove",sig:p.sig}); };
-        const rj=document.createElement("button"); rj.className="secondary"; rj.textContent=T("기각","Reject");
-        rj.onclick=function(){ vscode.postMessage({type:"mapReject",sig:p.sig}); };
-        row.appendChild(ap); row.appendChild(rj); card.appendChild(row);
+        const btn=(label,act,cls)=>{const b=document.createElement("button"); if(cls)b.className=cls; b.textContent=label; b.onclick=function(){ vscode.postMessage({type:"ledgerAct",act:act,sig:p.sig}); }; row.appendChild(b);};
+        if(p.status==="banned"){ btn(T("차단 해제","Unban"),"unban","secondary"); }
+        else {
+          btn(p.pinned?T("고정 해제","Unpin"):T("고정","Pin"),p.pinned?"unpin":"pin","secondary");
+          btn(T("차단","Ban"),"ban","secondary");
+          if(p.lane==="trusted"&&!p.inMap) btn(T("장부로","Export"),"export","");
+        }
+        card.appendChild(row);
       });
-      const hist=(title,arr,mark)=>{
-        if(!arr.length) return;
+      if(ml.timeline.length){
         const det=document.createElement("details"); const s=document.createElement("summary");
-        s.textContent=title+" ("+arr.length+")"; det.appendChild(s);
-        arr.forEach(e=>{const r=document.createElement("div"); r.className="mhist";
-          r.textContent=mark+" "+e.text;
+        s.textContent=T("최근 사건 타임라인 ("+ml.timeline.length+")","Recent events ("+ml.timeline.length+")");
+        det.appendChild(s);
+        const ICON={proposed:"✚",attached:"▶",confirmed:"✔",user_confirm:"✔",refuted:"✖",user_dispute:"✖",pinned:"📌",unpinned:"📌",banned:"🚫",unbanned:"🚫",superseded:"↷",tombstone:"†",exported:"📤"};
+        const NAME={proposed:T("정찰 제안","proposed"),attached:T("자료에 동봉","attached to package"),confirmed:T("검증이 확인","verified confirm"),user_confirm:T("사용자 확인","user confirm"),refuted:T("검증이 반박","verify refute"),user_dispute:T("사용자 정정","user dispute"),pinned:T("고정","pinned"),unpinned:T("고정 해제","unpinned"),banned:T("차단","banned"),unbanned:T("차단 해제","unbanned"),superseded:T("대체됨","superseded"),tombstone:T("소멸","gone"),exported:T("장부로 내보냄","exported")};
+        ml.timeline.forEach(e=>{const r=document.createElement("div"); r.className="mhist";
+          r.textContent=(ICON[e.type]||"·")+" "+(NAME[e.type]||e.type)+" — "+e.text;
           const w=document.createElement("div"); w.className="w";
-          w.textContent=(e.ts?new Date(e.ts).toLocaleString():"?")+(e.from?T(" · 출처: "," · from: ")+e.from:"");
+          w.textContent=(e.ts?new Date(e.ts).toLocaleString():"?")+(e.from?" · "+e.from:"");
           r.appendChild(w); det.appendChild(r);});
         card.appendChild(det);
-      };
-      hist(T("승인 이력 — 장부에 올린 것","Approved — promoted to the ledger"),ml.approved,"✔");
-      hist(T("기각 이력 — 정정/걸러낸 것","Rejected — corrected/filtered out"),ml.rejected,"✖");
+      }
       if(ml.mapExists){
         const det=document.createElement("details"); const s=document.createElement("summary");
         s.textContent=T("확정 장부 열람 ("+ml.mapRel+" · 승인 "+ml.mapApproved+"건/전체 항목 "+ml.mapTotalItems+"건)","Open ledger ("+ml.mapRel+" · "+ml.mapApproved+" approved / "+ml.mapTotalItems+" items)");
