@@ -133,6 +133,7 @@ interface BridgeState {
   claudeTokens: ClaudeTokens;      // 이 폴더 클로드 대화기록 28일 토큰 + 턴수 — 작업 비용(코덱스 검증 비용과 분리)
   projectStats: Record<string, ProjectStat>; // 프로젝트별 비교(3c) — 모든 폴더 28일 검증 분포(전체 group-by, 이 폴더 통계와 별개)
   scope: ScopeState | null; // 범위 장부(L0) 후보 — scoutMode=on(3트랙)일 때만 계산(advisory·로컬 git만·외부전송 0). null=2트랙
+  scoutMaps: ScoutMapsView | null; // 영향지도 게시판 — 러너가 브릿지 홈 scouts/에 보관한 지도 목록+최신 본문(3트랙에서만). null=2트랙
   deepseek: { hasKey: boolean; masked: string; model: string }; // 고급설정 탭 표시용 — 키 원문은 절대 웹뷰로 안 보냄(마스킹만)
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
 }
@@ -850,6 +851,7 @@ function computeState(turnsN: number): BridgeState {
     claudeTokens: readClaudeTokens(ws), // 이 폴더 클로드 작업 토큰(28일) — 코덱스와 분리
     projectStats: readProjectStats(),   // 프로젝트별 비교(전체 폴더 28일)
     scope: readScopeState(ws),          // 범위 장부 후보(3트랙에서만 — 내부에서 scoutMode 확인·캐시)
+    scoutMaps: readScoutMaps(ws),       // 영향지도 게시판(3트랙에서만 — 러너가 보관한 지도 읽기 전용)
     deepseek: readDeepseekView(),       // 고급설정 탭 — 키 유무·마스킹(원문 미노출)
   };
 }
@@ -1223,6 +1225,40 @@ function readScopeState(ws: string | null): ScopeState | null {
     scopeCache = { key, val };
     return val;
   } catch { return { seeds: [], suggestion: null, note: "error" }; }
+}
+
+// ── 영향지도 게시판(3트랙) — 러너(scope-scout-self/-deepseek)가 브릿지 홈 scouts/<wsKey>/에 보관한 지도를 읽는다 ──
+// wsKey = sha1(normWs) 앞 16자(계약 키·scripts/scout-store.js와 동일 규칙 — 한쪽만 바꾸면 게시판이 빈다).
+// 읽기 전용 표시일 뿐 — 확장은 지도를 생성·전송하지 않는다(생성은 사용자의 수동 스크립트 실행. PRIVACY와 일치).
+type ScoutMapItem = { ts: string | null; arm: string; model: string | null; usageIn: number | null; usageOut: number | null };
+type ScoutMapsView = { count: number; items: ScoutMapItem[]; latest: { arm: string; ts: string | null; text: string; truncated: boolean } | null };
+const SCOUT_MAP_TEXT_CAP = 12000; // 웹뷰로 보내는 최신 지도 본문 상한(게시판은 열람용 — 전문은 scouts/ 파일)
+let scoutMapsCache: { key: string; at: number; val: ScoutMapsView | null } | null = null;
+function readScoutMaps(ws: string | null): ScoutMapsView | null {
+  if (!ws) return null;
+  try {
+    if (loadContract(ws).scoutMode !== "on") return null; // 2트랙 — 게시판 자체를 안 보임(무회귀)
+    const now = Date.now();
+    if (scoutMapsCache && scoutMapsCache.key === normWs(ws) && now - scoutMapsCache.at < 5000) return scoutMapsCache.val;
+    const dir = path.join(BRIDGE_DIR, "scouts", crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16));
+    let bases: string[] = [];
+    try { bases = fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)).sort().reverse(); } catch { /* 지도 없음 */ }
+    const items: ScoutMapItem[] = bases.slice(0, 5).map((b) => {
+      let m: any = {};
+      try { m = JSON.parse(fs.readFileSync(path.join(dir, b + ".json"), "utf8")); } catch { /* 메타 없음 — 지도는 그대로 노출 */ }
+      return { ts: typeof m.ts === "string" ? m.ts : null, arm: typeof m.arm === "string" ? m.arm : (b.split("-").pop() || "?"), model: typeof m.model === "string" ? m.model : null, usageIn: Number.isFinite(m.usageIn) ? m.usageIn : null, usageOut: Number.isFinite(m.usageOut) ? m.usageOut : null };
+    });
+    let latest: ScoutMapsView["latest"] = null;
+    if (bases.length) {
+      try {
+        const raw = fs.readFileSync(path.join(dir, bases[0] + ".md"), "utf8");
+        latest = { arm: items[0]?.arm || "?", ts: items[0]?.ts || null, text: raw.slice(0, SCOUT_MAP_TEXT_CAP), truncated: raw.length > SCOUT_MAP_TEXT_CAP };
+      } catch { /* 방금 지워졌을 수 있음 — 목록만 */ }
+    }
+    const val: ScoutMapsView = { count: bases.length, items, latest };
+    scoutMapsCache = { key: normWs(ws), at: now, val };
+    return val;
+  } catch { return null; }
 }
 
 // ── DeepSeek 설정(고급 탐색 키) — 런타임 홈 deepseek.json. 웹뷰에는 마스킹만, 원문은 절대 안 보냄 ──
@@ -2390,6 +2426,36 @@ class Dashboard {
       }
       add(T("⚠ 이 장부가 못 보는 것: 처음 생기는 결합·실행해봐야 아는 동작·의미적 연쇄 — 후보가 없다고 영향이 없는 게 아니에요. (관찰 단계: 아무것도 막거나 강제하지 않음 · 전부 로컬 git, 외부 전송 없음)","⚠ What this ledger cannot see: first-time couplings, behaviors only running reveals, semantic chains — no candidates ≠ no impact. (Advisory: blocks/forces nothing · all local git, nothing sent anywhere)"),"muted");
     })();
+    // ⑤-2 영향지도 게시판(3트랙 LLM 탐색 결과) — 러너가 보관한 지도를 읽기 전용으로 게시(사용자 결정 2026-07-06:
+    // AI 역할의 시각적 확인). 확장은 지도를 생성·전송하지 않는다 — 빈 게시판엔 생성 명령을 정직하게 안내.
+    (function(){
+      const box=$("scoutBox"); if(!box || box.style.display==="none") return; // 3트랙 카드가 보일 때만 이어붙임
+      const add=(txt,cls)=>{const el=document.createElement("div"); el.className=cls||"sbrow"; el.textContent=txt; box.appendChild(el); return el;};
+      add(T("영향지도 게시판 — 탐색자(분리 AI)가 보낸 최근 지도","Impact-map board — recent maps from the scout (separate AI)"),"sbhead");
+      const sm=d.scoutMaps;
+      if(!sm || !sm.count){
+        const nonGit = d.scope && d.scope.note==="no-git";
+        add(nonGit
+          ? T("이 폴더는 git 저장소가 아니라 지도를 만들 수 없어요(지도는 git 프로젝트에서 생성).","This folder is not a git repository — maps can only be generated in git projects.")
+          : T("아직 지도가 없어요 — 생성은 codex-peek 소스 저장소 폴더의 터미널에서: node scripts/scope-scout-self.js <프로젝트경로> (무료 팔) 또는 scope-scout-deepseek.js (DeepSeek 팔). 마켓 설치본에는 이 스크립트가 안 들어 있어요(현 단계는 수동·개발자 플로우). 생성되면 몇 초 뒤 여기 자동으로 떠요.","No maps yet — generate from a terminal in the codex-peek source repo: node scripts/scope-scout-self.js <repo> (free arm) or scope-scout-deepseek.js (DeepSeek arm). These scripts are not bundled in the marketplace build (manual/developer flow for now). New maps appear here a few seconds after generation."),"muted");
+        return;
+      }
+      sm.items.forEach(it=>{
+        const when = it.ts ? new Date(it.ts).toLocaleString() : "?";
+        const usage = (it.usageIn!=null && it.usageOut!=null) ? T(" · 보냄 "," · sent ")+it.usageIn+T("·받음 ","·got ")+it.usageOut+T("토큰"," tokens") : "";
+        add("• ["+when+"] "+(it.arm==="deepseek"?"DeepSeek":"self")+(it.model?" ("+it.model+")":"")+usage,"muted");
+      });
+      if(sm.latest){
+        const det=document.createElement("details");
+        const s=document.createElement("summary");
+        s.textContent=T("최신 지도 펼쳐보기 ("+(sm.latest.arm==="deepseek"?"DeepSeek":"self")+")","Open latest map ("+(sm.latest.arm==="deepseek"?"DeepSeek":"self")+")");
+        const pre=document.createElement("pre");
+        pre.style.cssText="white-space:pre-wrap;max-height:340px;overflow:auto;font-size:11px";
+        pre.textContent=sm.latest.text + (sm.latest.truncated?T("\n… (길어서 접힘 — 전문은 브릿지 홈 scouts 폴더 파일)","\n… (truncated — full text in the bridge home scouts folder)"):"");
+        det.appendChild(s); det.appendChild(pre); box.appendChild(det);
+      }
+      add(T("ⓘ 이 게시판은 열람 전용 — 지도 생성·전송은 당신이 명령을 실행할 때만 일어나요(자동 없음). 프로젝트별 최근 10장 보관.","ⓘ Read-only board — maps are generated/sent only when you run the command (nothing automatic). Last 10 kept per project."),"muted");
+    })();
     // ⑥ 고급설정 탭 — DeepSeek 키 상태(마스킹만 수신·원문 없음). 저장 직후엔 saveResult 플래시가 먼저 보이고,
     // 다음 상태 푸시(post)가 이 최신 상태 문구로 자연 교체한다(둘 다 같은 노드 — 경합 무해).
     (function(){
@@ -2948,6 +3014,16 @@ export function activate(context: vscode.ExtensionContext): void {
     // ★키는 '입력 상태 전부'가 아니라 '지금 상태바를 잡는 mode의 표시 요소'만 담는다. 예: 경보(error/warning)가 떠 있으면 연결/스니펫/flow는
     //   화면에 안 보이므로 키에서 제외 → 경보 툴팁을 읽는 중 phase.json(live)·링크 변화로 호버가 닫히지 않는다. pulse(별도 타이머)는 키 밖.
     const mode = (flowActive && live) ? "flow" : errs.length ? "error" : warns.length ? "warning" : !ws ? "noWs" : link?.codexSession ? "linked" : "unlinked";
+    // 탐색(3트랙) 상태 줄 — 상태바 툴팁 표시용(사용자 요청 2026-07-06: 지금 무엇이 켜져 있고 뭐가 나가는지).
+    // 2트랙이면 빈 문자열(기존 표시 무변화=무회귀). 지도 수는 게시판 리더의 5s 캐시를 재사용해 렌더 경로 비용 최소.
+    const scoutSb = (() => {
+      if (!ws || (mode !== "linked" && mode !== "unlinked")) return "";
+      try {
+        if (loadContract(ws).scoutMode !== "on") return "";
+        const n = readScoutMaps(ws)?.count ?? 0;
+        return tE(`탐색: 3트랙 켜짐 · 지도 ${n}장 (생성·전송은 수동 실행 시에만)`, `scouting: 3-track on · ${n} map(s) (generated/sent only on manual runs)`);
+      } catch { return ""; }
+    })();
     const key = JSON.stringify({
       mode,
       // ★언어도 표시 요소다 — 없으면 언어 전환 후 상태바가 '표시 동일'로 오판돼 갱신을 스킵, 옛 언어 텍스트가 잔존한다(사용자 실측 버그).
@@ -2962,6 +3038,7 @@ export function activate(context: vscode.ExtensionContext): void {
         : null,
       flow: (mode === "flow" && live) ? `${live.key}|${live.round}|${live.label}|${live.color}` : null,
       link: mode === "linked" ? `${link?.codexSession || ""}|${link?.linkedAt || ""}|${!!file}|${snip}` : null,
+      scout: scoutSb || null, // 3트랙 상태·지도 수도 표시 요소 — 빠지면 지도 추가 후 툴팁이 낡은 수를 유지
     });
     if (key === lastRenderKey) return; // 표시 동일 → status/flow 갱신 전체 skip(불필요 RPC·호버 닫힘 방지)
     lastRenderKey = key;
@@ -2978,12 +3055,13 @@ export function activate(context: vscode.ExtensionContext): void {
           tE(`주제: `,`topic: `) + `${snip || "-"}\n\n` +
           tE(`연결: `,`linked: `) + `${link.linkedAt ? new Date(link.linkedAt).toLocaleString() : "-"}\n\n` +
           (file ? "" : tE("⚠️ 세션 파일을 찾을 수 없음\n\n","⚠️ session file not found\n\n")) +
+          (scoutSb ? scoutSb + "\n\n" : "") +
           tE(`클릭 → 대시보드`,`click → dashboard`),
       );
       status.backgroundColor = file ? undefined : new vscode.ThemeColor("statusBarItem.warningBackground");
     } else {
       status.text = "$(plug) " + tE("Codex: 미연결","Codex: not linked");
-      status.tooltip = tE("연결된 Codex 세션 없음 · 클릭 → 대시보드에서 연결","No linked Codex session · click → link in dashboard");
+      status.tooltip = tE("연결된 Codex 세션 없음 · 클릭 → 대시보드에서 연결","No linked Codex session · click → link in dashboard") + (scoutSb ? " · " + scoutSb : "");
       status.backgroundColor = undefined;
     }
     if (flowActive && live) {

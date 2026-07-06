@@ -8,6 +8,7 @@ const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { collectPackage } = require("./scope-package.js");
+const { saveMap } = require("./scout-store.js");
 const { renderPackageMarkdown } = require(path.join(__dirname, "..", "out", "scope-package.js"));
 
 const repo = process.argv[2];
@@ -35,4 +36,6 @@ if (r.error || r.status !== 0 || !String(r.stdout || "").trim()) {
 }
 const map = r.stdout.trim();
 if (outFile) fs.writeFileSync(outFile, map);
+// 대시보드 '영향지도 게시판'용 보관(브릿지 홈 scouts/ — 프로젝트별 최근 10장). stderr로 알림(stdout=지도 본문 유지).
+try { console.error("지도 보관(게시판): " + saveMap(repo, "self", map, {})); } catch (e) { console.error("지도 보관 실패(게시판에만 영향): " + (e && e.message)); }
 process.stdout.write(map + "\n");

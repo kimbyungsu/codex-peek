@@ -8,6 +8,7 @@
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { collectPackage } = require("./scope-package.js");
+const { saveMap } = require("./scout-store.js");
 const { renderPackageMarkdown } = require(path.join(__dirname, "..", "out", "scope-package.js"));
 
 const repo = process.argv[2];
@@ -26,4 +27,8 @@ if (outFile) args.push("--out", outFile);
 const r = spawnSync(process.execPath, args, { input: md, encoding: "utf8", timeout: 5 * 60 * 1000, windowsHide: true });
 if (r.stderr) process.stderr.write(r.stderr); // usage/오류 안내 그대로 전달(키 원문은 브릿지가 애초에 안 찍음)
 if (r.error || r.status !== 0) { console.error("DeepSeek 탐색 호출 실패:", (r.error && r.error.message) || `exit=${r.status}`); process.exit(1); }
+// 대시보드 '영향지도 게시판'용 보관 — 브릿지가 stderr로 알려준 사용량 메타([usage] in=.. out=.. (모델))를 함께 기록.
+const um = String(r.stderr || "").match(/\[usage\] in=(\d+) out=(\d+)(?: \((.+?)\))?/);
+const meta = um ? { usageIn: Number(um[1]), usageOut: Number(um[2]), model: um[3] || null } : {};
+try { console.error("지도 보관(게시판): " + saveMap(repo, "deepseek", r.stdout.trim(), meta)); } catch (e) { console.error("지도 보관 실패(게시판에만 영향): " + (e && e.message)); }
 process.stdout.write(r.stdout);
