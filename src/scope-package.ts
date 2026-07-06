@@ -84,6 +84,7 @@ export type ScopePackage = {
   tests: string[];                 // 이 저장소의 테스트 목록(실행 후보)
   recentFailures: { ts?: string; kind?: string; detail?: string }[]; // 최근 검증 실패/미완(무결성 기록)
   map: string | null;              // stable MAP(있으면 — 의미 결합의 확정층)
+  historyless: boolean;            // 무이력(비-git) 모드 여부 — 렌더 라벨·각주가 달라짐
   blindSpots: string[];            // ★이 꾸러미가 못 보는 것 — 탐색자·소비자에게 강제로 전달되는 정직성 각주
 };
 
@@ -94,6 +95,7 @@ export function buildPackage(input: {
   tests: string[]; recentFailures: { ts?: string; kind?: string; detail?: string }[];
   mapContent: string | null;
   sensitiveExcluded?: string[]; // redactSensitiveDiff가 제외한 민감 범주 파일(경로만) — 은폐 금지, 고지로 표기
+  historyless?: boolean;        // 무이력(비-git) 모드 — '최근 수정 파일'을 변경으로 간주한 축소 꾸러미(전후 비교·함께변경 통계 없음)
 }, opts?: Partial<typeof PKG_DEFAULTS>): ScopePackage {
   const o = { ...PKG_DEFAULTS, ...(opts || {}) };
   const truncations: string[] = [];
@@ -114,7 +116,13 @@ export function buildPackage(input: {
     tests: input.tests,
     recentFailures: failures,
     map,
+    historyless: !!input.historyless,
     blindSpots: [
+      ...(input.historyless ? [
+        "이 폴더는 변경 이력(git)이 없다 — '최근 수정된 파일'을 변경으로 간주했으므로 실제 작업 범위와 다를 수 있다",
+        "전후 비교(diff)가 없다 — 파일의 지금 내용 발췌만 있고 '무엇이 어떻게 바뀌었는지'는 모른다",
+        "과거 '함께 변경' 통계가 없다 — 이력 자체가 없어 원리상 불가",
+      ] : []),
       "처음 생기는 결합(이력·참조 어디에도 아직 없음)은 이 꾸러미에 없다",
       "실행해봐야 드러나는 동작(OS별 차이·타이밍·권한)은 담기지 않는다",
       "의미적 연쇄(코드에 글자로 안 남는 규칙)는 MAP에 없으면 없다" + (input.mapContent ? "" : " — 이 저장소는 아직 MAP이 없다"),
@@ -127,9 +135,11 @@ export function buildPackage(input: {
 // LLM/self 탐색자에게 먹일 마크다운 렌더 — 판정·수정 지시 금지, '확인할 경로' 제안만 요구(§5 스키마와 짝).
 export function renderPackageMarkdown(p: ScopePackage): string {
   const L: string[] = [];
-  L.push(`# 영향범위 자료 꾸러미 (결정론 수집 — ${p.meta.repo} @ ${p.meta.head.slice(0, 7)})`);
-  L.push(`\n## 1. 지금 바뀌는 파일(seed)\n${p.seeds.length ? p.seeds.map((s) => `- ${s}`).join("\n") : "(작업트리 변경 없음)"}`);
-  L.push(`\n## 2. 변경 내용(diff)\n\`\`\`diff\n${p.diff || "(없음)"}\n\`\`\``);
+  L.push(`# 영향범위 자료 꾸러미 (결정론 수집 — ${p.meta.repo} @ ${p.meta.head.slice(0, 7)})${p.historyless ? " [무이력 모드 — 비-git]" : ""}`);
+  L.push(`\n## 1. ${p.historyless ? "최근 수정된 파일(변경으로 간주 — 이력 없음)" : "지금 바뀌는 파일(seed)"}\n${p.seeds.length ? p.seeds.map((s) => `- ${s}`).join("\n") : "(변경 없음)"}`);
+  L.push(p.historyless
+    ? `\n## 2. 최근 수정 파일 발췌 (전후 비교 불가 — 지금 내용의 앞부분만)\n\`\`\`\n${p.diff || "(없음)"}\n\`\`\``
+    : `\n## 2. 변경 내용(diff)\n\`\`\`diff\n${p.diff || "(없음)"}\n\`\`\``);
   L.push(`\n## 3. 바뀐 식별자를 참조하는 다른 파일들 (문자열 일치 — 파일채널/사본 결합 후보)`);
   if (p.tokenHits.length) for (const h of p.tokenHits) L.push(`- \`${h.token}\` → ${h.files.join(", ")}${h.truncated ? " (…더 있음)" : ""}`);
   else L.push("(seed 밖에서 참조되는 바뀐 식별자 없음)");

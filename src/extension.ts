@@ -2502,8 +2502,8 @@ class Dashboard {
         } else {
           api.textContent=T("DeepSeek 비교 팔: 키 없음 — 무료 self 팔·기초 탐색만 동작해요(⚙️ 고급설정에서 등록 가능).","DeepSeek comparison arm: no key — free self arm & basic scouting only (register in ⚙️ Advanced).");
         }
-        // 비-git 폴더면 위 문구가 '동작'을 약속하지 않게 기준을 명시(아래 상태 요약과 일관 — Codex 보완).
-        if(d.scope && d.scope.note==="no-git") api.textContent += T(" ※ 이 폴더는 git 이력이 없어 탐색 기능 전반이 불가 — git 프로젝트 기준 안내예요."," ※ This folder has no git history, so scouting features are unavailable here — this note applies to git projects.");
+        // 비-git 폴더면 기준을 명시(아래 상태 요약과 일관): 통계만 불가, 지도는 무이력 모드로 가능.
+        if(d.scope && d.scope.note==="no-git") api.textContent += T(" ※ 이 폴더는 git 이력이 없어 함께변경 통계만 불가 — 지도는 무이력 모드로 가능해요."," ※ This folder has no git history, so only co-change stats are unavailable — maps still work via historyless mode.");
       })();
       if(!on){ box.style.display="none"; return; }
       box.style.display="";
@@ -2514,7 +2514,7 @@ class Dashboard {
       (function(){
         const sc=d.scope; let line;
         if(!sc) line=T("지금: 계산 대기 — 3트랙 저장 직후 자동 시작돼요.","Now: pending — starts right after saving 3-track.");
-        else if(sc.note==="no-git") line=T("지금: 대기 — 이 폴더는 이력(git)이 없어 기초 탐색·지도 생성이 불가해요.","Now: idle — this folder has no history (git), so basic scouting and maps are unavailable.");
+        else if(sc.note==="no-git") line=T("지금: 이력(git) 없는 폴더 — 함께변경 통계는 불가 · 지도는 '무이력 모드'(최근 수정 파일 기준)로 수동 생성 가능해요.","Now: no-history (non-git) folder — co-change stats unavailable · maps still work in 'historyless mode' (based on recently modified files), via manual command.");
         else if(sc.note==="error") line=T("지금: 이력 조회 실패 — 잠시 후 자동 재시도돼요.","Now: history query failed — retries shortly.");
         else if(sc.note==="no-changes") line=T("지금: 대기 — 작업트리에 변경이 없어요. 파일이 바뀌면 기초 탐색이 자동으로 후보를 찾고, 지도는 수동 명령으로 만들어요.","Now: idle — no working-tree changes. Basic scouting runs automatically once files change; maps are made by manual command.");
         else {
@@ -2555,7 +2555,7 @@ class Dashboard {
       if(!sm || !sm.count){
         const nonGit = d.scope && d.scope.note==="no-git";
         add(nonGit
-          ? T("이 폴더는 git 저장소가 아니라 지도를 만들 수 없어요(지도는 git 프로젝트에서 생성).","This folder is not a git repository — maps can only be generated in git projects.")
+          ? T("아직 지도가 없어요 — 이력(git)이 없는 폴더는 '무이력 모드'(최근 수정 파일 기준·전후 비교 없음)로 지도를 만들어요. 생성은 codex-peek 소스 저장소 폴더의 터미널에서: node scripts/scope-scout-self.js <이 폴더 경로>. 생성되면 몇 초 뒤 여기 자동으로 떠요.","No maps yet — folders without git history use 'historyless mode' (based on recently modified files, no before/after diff). Generate from a terminal in the codex-peek source repo: node scripts/scope-scout-self.js <this folder>. New maps appear here a few seconds after generation.")
           : T("아직 지도가 없어요 — 생성은 codex-peek 소스 저장소 폴더의 터미널에서: node scripts/scope-scout-self.js <프로젝트경로> (무료 팔) 또는 scope-scout-deepseek.js (DeepSeek 팔). 마켓 설치본에는 이 스크립트가 안 들어 있어요(현 단계는 수동·개발자 플로우). 생성되면 몇 초 뒤 여기 자동으로 떠요.","No maps yet — generate from a terminal in the codex-peek source repo: node scripts/scope-scout-self.js <repo> (free arm) or scope-scout-deepseek.js (DeepSeek arm). These scripts are not bundled in the marketplace build (manual/developer flow for now). New maps appear here a few seconds after generation."),"muted");
         return;
       }
@@ -3153,7 +3153,7 @@ export function activate(context: vscode.ExtensionContext): void {
         const maps = readScoutMaps(ws);
         const stale = computeScoutMapStale(ws, sc, maps);
         const scout = !sc ? tE("대기", "idle")
-          : sc.note === "no-git" ? tE("이력 없음 — 기초 탐색·지도 불가(비-git 폴더)", "no history — scouting/maps unavailable (non-git folder)")
+          : sc.note === "no-git" ? tE("이력 없음 — 통계 불가 · 지도는 무이력 모드(수동)", "no history — stats unavailable · maps via historyless mode (manual)")
           : sc.note === "no-changes" ? tE("대기(변경 없음)", "idle (no changes)")
           : sc.note === "error" ? tE("이력 조회 실패", "history query failed")
           : tE(`기초 탐색 동작 중 — 후보 ${sc.suggestion?.candidates.length ?? 0}개`, `basic scouting active — ${sc.suggestion?.candidates.length ?? 0} candidate(s)`);
