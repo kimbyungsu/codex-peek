@@ -305,6 +305,71 @@ function buildScoutDirective(ws, c) {
     + "). 사소한 턴(질문·문서 한 줄)이면 스킵해도 된다 — 지도는 참고용이며 아무것도 막지 않는다.";
 }
 
+// ── Phase 3: 지도 high 항목 구조화 + 검증 요청 동봉 ──────────────
+// 탐색자 지도는 LLM 자유서식 텍스트 — '확인필요도 high' 항목만 관대하게 구조화한다.
+// 구획 규칙: ①~④만 '확인 후보'(⑤범위밖·⑥MAP patch는 high 표기가 있어도 제외 — ⑥은 stable MAP 단계의 입력).
+function extractMapHighlights(mapText) {
+  const lines = String(mapText || "").split(/\r?\n/);
+  // 구획 표기(①~⑩)가 있는 지도면 ①~④ '진입 후'에만 추출(진입 전·⑤⑥·미지 구획 전부 제외 — Codex 반례 잠금).
+  // 구획 표기가 아예 없는 자유서식 지도는 전체 허용으로 관대 폴백(놓쳐도 '동봉 없음'으로 퇴화할 뿐 잘못된 강제 없음).
+  const sectioned = lines.some((l) => /[①②③④⑤⑥⑦⑧⑨⑩]/.test(l));
+  const out = []; const seen = new Set();
+  let allowed = !sectioned;
+  for (const raw of lines) {
+    const line = raw.replace(/`/g, "").trim().slice(0, 500); // 줄 상한 — 초장문 줄의 파서 비용 상수화(모든 ask 앞단 급소)
+    if (!line) continue;
+    if (sectioned) {
+      // 제외 표기 우선 — 한 줄에 ①과 ⑤가 같이 오는 기형에서도 제외가 이긴다(Codex 반례 잠금). 제외 구획 줄 자체도 건너뜀.
+      if (/[⑤⑥⑦⑧⑨⑩]/.test(line) || /범위 *밖|MAP\s*patch|out\s*of\s*scope/i.test(line)) { allowed = false; continue; }
+      if (/[①②③④]/.test(line)) allowed = true;
+    } else if (/범위 *밖|MAP\s*patch|out\s*of\s*scope/i.test(line)) continue; // 자유서식: 그 줄만 제외(전체 허용 폴백 유지 — 비활성 고착 없음)
+    if (!allowed || !/\bhigh\b/i.test(line)) continue;
+    // 경로 토큰: 공백류 분할 후 토큰별 검사 — 백트래킹 정규식 제거(긴 줄 초선형 지연 실측 → 토큰 상한 200자로 비용 고정).
+    for (const tok of line.split(/[\s,;|"'<>{}()[\]—·↔]+/)) {
+      // 한글 조사 등 비경로 문자를 양끝에서 제거("src/a.ts를 확인" → "src/a.ts") + 끝 문장부호 제거
+      const t = tok.replace(/^[^A-Za-z0-9_.\\/-]+|[^A-Za-z0-9_.\\/-]+$/g, "").replace(/[.,;:]+$/, "");
+      if (!t || t.length > 200 || !/^[A-Za-z0-9_.\\/-]+$/.test(t)) continue;
+      const hasSep = /[\\/]/.test(t);
+      if (!hasSep && !/\.[A-Za-z][A-Za-z0-9]{0,7}$/.test(t)) continue; // 단일 파일명은 확장자에 글자 필수(0.1.86류 버전 오인 방지)
+      if (hasSep && !/[A-Za-z]/.test(t.split(/[\\/]/).pop() || "")) continue; // 경로꼴이라도 마지막 구획에 글자 없으면(1/2 등) 제외
+      const key = t.replace(/\\/g, "/").toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ path: t, note: line.replace(/^[-*#\s①②③④]+/, "").slice(0, 120) });
+      if (out.length >= 8) return out; // 지시 스펙(high 최대 5)+여유 — 동봉 비용 상한
+    }
+  }
+  return out;
+}
+// 검증 요청(ask)에 동봉할 지도 블록. 3트랙 프로젝트 + 지도 존재 + high 항목 있을 때만(그 외 null — 주입 비용 0·무회귀).
+// 낡은 지도는 버리지 않고 '낡음' 라벨로 정직 고지(시간 상수 0 — scoutMapStatus의 seed mtime 판정 재사용).
+function buildScoutAttach(ws, c, lang) {
+  if (!ws || normScoutMode(c) !== "on") return null;
+  const st = scoutMapStatus(ws);
+  if (st.state === "no-map" || !st.base) return null;
+  const dir = path.join(SCOUTS_DIR, wsKeyFor(ws));
+  let md = "", meta = {};
+  try { md = fs.readFileSync(path.join(dir, st.base + ".md"), "utf8"); } catch { return null; }
+  try { meta = JSON.parse(fs.readFileSync(path.join(dir, st.base + ".json"), "utf8")); } catch { /* 메타 없어도 지도는 사용 가능 */ }
+  // 저장된 구조화 계층 우선 — 단 항목 검증(깨진 메타 [null]류가 아래 i.path 접근을 못 깨게). 유효분 없으면 md 재파싱 폴백.
+  const valid = (a) => (Array.isArray(a) ? a.filter((i) => i && typeof i.path === "string" && i.path.trim()) : []);
+  let items = valid(meta.highlights);
+  if (!items.length) items = valid(extractMapHighlights(md));
+  items = items.slice(0, 8);
+  if (!items.length) return null;
+  const en = (LANGS.includes(lang) ? lang : loadLang()) === "en";
+  const staleNote = st.state === "stale"
+    ? (en ? ` · STALE: ${st.staleCount} basis file(s) changed since` : ` · 낡음: 생성 후 근거 파일 ${st.staleCount}개 변경`)
+    : "";
+  const head = en
+    ? `[Scout impact map · reference — not a verdict rule] The latest impact map of this project (created ${meta.ts || "?"}, ${meta.arm || "?"} arm${staleNote}) flagged these high-priority paths:`
+    : `[탐색 지도 · 참고 — 판정 기준 아님] 이 프로젝트 최신 영향지도(생성 ${meta.ts || "?"} · ${meta.arm || "?"} 팔${staleNote})가 꼽은 확인필요도 high 경로:`;
+  const tail = en
+    ? `While verifying, check whether these paths were considered; if a path above is impacted but unaddressed, point it out. The map is a scout LLM's advisory opinion — use it as a checklist source only.`
+    : `검증 시 위 경로들이 고려/영향받았는지 확인하고, 영향을 받는데 다뤄지지 않은 경로가 있으면 지적하라. 지도는 탐색자(LLM)의 참고 의견이다 — 확인 목록으로만 쓰고 판정 기준은 바꾸지 마라.`;
+  return [head, ...items.map((i) => `- ${i.path}${i.note && String(i.note) !== i.path ? ` — ${String(i.note).slice(0, 120)}` : ""}`), tail].join("\n");
+}
+
 // rules(문자열 배열) → 매 턴 주입 텍스트. checklist=false면 규약만, true면 [계약점검] 강제.
 // 비어 있으면 "" 반환(주입 비용 0). lang: 주입 지시문 언어(규칙 '내용'은 사용자가 쓴 그대로).
 function buildInjection(rules, who, checklist, lang) {
@@ -562,4 +627,4 @@ function formatForClaude(answer, lang) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, extractMapHighlights, buildScoutAttach, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, STATS_DIR, VERDICTS_FILE };
