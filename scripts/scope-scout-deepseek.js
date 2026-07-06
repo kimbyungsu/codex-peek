@@ -30,5 +30,5 @@ if (r.error || r.status !== 0) { console.error("DeepSeek 탐색 호출 실패:",
 // 대시보드 '영향지도 게시판'용 보관 — 브릿지가 stderr로 알려준 사용량 메타([usage] in=.. out=.. (모델))를 함께 기록.
 const um = String(r.stderr || "").match(/\[usage\] in=(\d+) out=(\d+)(?: \((.+?)\))?/);
 const meta = um ? { usageIn: Number(um[1]), usageOut: Number(um[2]), model: um[3] || null } : {};
-try { console.error("지도 보관(게시판): " + saveMap(repo, "deepseek", r.stdout.trim(), meta)); } catch (e) { console.error("지도 보관 실패(게시판에만 영향): " + (e && e.message)); }
+try { console.error("지도 보관(게시판): " + saveMap(repo, "deepseek", r.stdout.trim(), { ...meta, basis: pkg.basisNote || (pkg.historyless ? "" : "git-status"), seedFiles: pkg.seeds })); } catch (e) { console.error("지도 보관 실패(게시판에만 영향): " + (e && e.message)); }
 process.stdout.write(r.stdout);

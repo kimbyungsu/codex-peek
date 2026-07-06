@@ -888,14 +888,18 @@ function computeState(turnsN: number): BridgeState {
 }
 
 // 최신 지도가 '지금 변경 중인 파일들'보다 오래됐는지 — 지도 생성 시각과 seed 파일 수정 시각의 단순 비교(≤8개 stat, 저비용).
+// seed 출처: git 프로젝트=지금 작업트리 변경(scope.seeds) / 무이력(비-git)=그 지도가 근거로 삼았던 파일(지도 메타 seedFiles —
+// 멀티 세션에서 남의 작업을 내 지도가 덮은 걸로 오인하지 않게 지도 자신의 근거만 검사. Codex 보완).
 // advisory 철학(D3): 막거나 경고 승격하지 않고 게시판에 신선도만 정직 표기. 판단 불가(시각 없음 등)면 null=표기 안 함.
 function computeScoutMapStale(ws: string | null, scope: ScopeState | null, maps: ScoutMapsView | null): number | null {
   try {
-    if (!ws || !maps?.latest?.ts || !scope?.seeds?.length) return null;
+    if (!ws || !maps?.latest?.ts) return null;
+    const seeds = scope?.seeds?.length ? scope.seeds : (maps.latest.seedFiles || []);
+    if (!seeds.length) return null;
     const mapAt = Date.parse(maps.latest.ts);
     if (!Number.isFinite(mapAt)) return null;
     let n = 0;
-    for (const s of scope.seeds) {
+    for (const s of seeds.slice(0, 8)) {
       try { if (fs.statSync(path.join(ws, s)).mtimeMs > mapAt) n++; } catch { /* 삭제된 seed 등 — 셈에서 제외 */ }
     }
     return n;
@@ -1281,7 +1285,7 @@ function readScopeState(ws: string | null): ScopeState | null {
 // wsKey = sha1(normWs) 앞 16자(계약 키·scripts/scout-store.js와 동일 규칙 — 한쪽만 바꾸면 게시판이 빈다).
 // 읽기 전용 표시일 뿐 — 확장은 지도를 생성·전송하지 않는다(생성은 사용자의 수동 스크립트 실행. PRIVACY와 일치).
 type ScoutMapItem = { ts: string | null; arm: string; model: string | null; usageIn: number | null; usageOut: number | null };
-type ScoutMapsView = { count: number; items: ScoutMapItem[]; latest: { arm: string; ts: string | null; text: string; truncated: boolean } | null };
+type ScoutMapsView = { count: number; items: ScoutMapItem[]; latest: { arm: string; ts: string | null; text: string; truncated: boolean; seedFiles: string[] } | null };
 const SCOUT_MAP_TEXT_CAP = 12000; // 웹뷰로 보내는 최신 지도 본문 상한(게시판은 열람용 — 전문은 scouts/ 파일)
 let scoutMapsCache: { key: string; at: number; val: ScoutMapsView | null } | null = null;
 function readScoutMaps(ws: string | null): ScoutMapsView | null {
@@ -1302,7 +1306,12 @@ function readScoutMaps(ws: string | null): ScoutMapsView | null {
     if (bases.length) {
       try {
         const raw = fs.readFileSync(path.join(dir, bases[0] + ".md"), "utf8");
-        latest = { arm: items[0]?.arm || "?", ts: items[0]?.ts || null, text: raw.slice(0, SCOUT_MAP_TEXT_CAP), truncated: raw.length > SCOUT_MAP_TEXT_CAP };
+        let seedFiles: string[] = [];
+        try {
+          const m0 = JSON.parse(fs.readFileSync(path.join(dir, bases[0] + ".json"), "utf8"));
+          if (Array.isArray(m0.seedFiles)) seedFiles = m0.seedFiles.filter((s: any) => typeof s === "string");
+        } catch { /* 메타 없음 — 낡음 배지만 비활성 */ }
+        latest = { arm: items[0]?.arm || "?", ts: items[0]?.ts || null, text: raw.slice(0, SCOUT_MAP_TEXT_CAP), truncated: raw.length > SCOUT_MAP_TEXT_CAP, seedFiles };
       } catch { /* 방금 지워졌을 수 있음 — 목록만 */ }
     }
     const val: ScoutMapsView = { count: bases.length, items, latest };
@@ -1561,6 +1570,8 @@ class Dashboard {
         if (m?.type === "refresh") this.post();
       });
       this.panel.onDidDispose(() => (this.panel = undefined));
+      // 재표시 즉시 최신화 — 컨텍스트 미유지 복원 패널이 가려졌다 돌아올 때 15s poll을 기다리지 않게(조사 합의 보강).
+      this.panel.onDidChangeViewState((e) => { if (e.webviewPanel.visible) this.post(); });
     } else {
       this.panel.reveal(vscode.ViewColumn.Beside);
     }
@@ -1571,7 +1582,9 @@ class Dashboard {
     // 언어가 바뀌었으면(이 창 토글이든 다른 창이든 — BRIDGE_DIR watch로 post가 불림) 웹뷰 HTML을 새 언어로 재생성.
     // 정적 라벨은 html() 생성 시 t(ko,en)로 박히므로 재생성이 전환 방법이다(전환은 드묾 — 펼침 상태 리셋 수용).
     if (this.panel && this.htmlLang !== loadLangExt()) this.panel.webview.html = this.html(this.panel.webview);
-    this.panel?.webview.postMessage({ type: "data", data: computeState(this.turnsN()) });
+    // 전달 실패 관측(fire-and-forget 보완): postMessage가 false(미배달 — 웹뷰 파괴/숨김)를 돌려주면 로그로 남긴다.
+    const sent = this.panel?.webview.postMessage({ type: "data", data: computeState(this.turnsN()) });
+    if (sent && typeof (sent as Thenable<boolean>).then === "function") (sent as Thenable<boolean>).then((ok) => { if (!ok) console.warn("codex-bridge: dashboard data post dropped (webview hidden/destroyed)"); });
   }
   private htmlLang: Lang | null = null; // 현재 웹뷰 HTML이 렌더된 언어(재생성 판단)
 
@@ -2065,7 +2078,7 @@ class Dashboard {
     <h2 class="sec base accent-yellow">${t("고급설정", "Advanced Settings")} <span class="sub2">${t("탐색(3트랙) 고급 단계용 — 전역 설정(모든 프로젝트 공통)", "for the advanced scouting stage (3-track) — global (shared by all projects)")}</span></h2>
     <div class="card">
       <div class="chead">${t("DeepSeek API 키", "DeepSeek API key")} <span class="muted" style="font-weight:400">${t("· 3트랙의 'DeepSeek 비교 팔'(두 번째 탐색자)에만 필요 — 키 없이도 기초 탐색과 무료 self 팔 영향지도는 동작해요", "· only needed for 3-track's DeepSeek comparison arm (second scout) — basic scouting and free self-arm impact maps work without it")}</span></div>
-      <div class="hint">${t("키는 이 컴퓨터의 브릿지 홈(<code>~/.codex-bridge/deepseek.json</code>)에만 저장되고 저장소(GitHub)에는 절대 들어가지 않아요. 이 키로의 전송은 <b>LLM 지도 생성을 직접 실행할 때만</b> 일어나요(현재는 수동 스크립트 — 대시보드를 보거나 3트랙을 켜두는 것만으로는 아무것도 전송되지 않음). 무엇을 보내고 무엇을 자동 제외하는지는 PRIVACY 문서에 명시돼 있어요.", "The key is stored only in this machine's bridge home (<code>~/.codex-bridge/deepseek.json</code>) and never enters the repo (GitHub). It is used <b>only when you explicitly run LLM map generation</b> (currently a manual script — viewing the dashboard or keeping 3-track on sends nothing). What is sent and what is auto-excluded is documented in PRIVACY.")}</div>
+      <div class="hint">${t("키는 이 컴퓨터의 브릿지 홈(<code>~/.codex-bridge/deepseek.json</code>)에만 저장되고 저장소(GitHub)에는 절대 들어가지 않아요. 지금은 <b>지도 생성을 직접 실행할 때만</b> 전송돼요(대시보드를 보거나 3트랙을 켜두는 것만으로는 전송 없음). <b>키 등록은 자동 탐색 동의로 간주돼요</b> — 자동 지도 기능이 도입되면 하네스가 필요하다고 판단할 때(예: 지도가 없거나 낡았고 변경이 있을 때) 이 키로 호출이 자동 실행될 수 있어요. 그 발동 조건과 전송·제외 내용은 PRIVACY에 먼저 명시돼요.", "The key is stored only in this machine's bridge home (<code>~/.codex-bridge/deepseek.json</code>) and never enters the repo (GitHub). Today it is used <b>only when you explicitly run map generation</b> (viewing the dashboard or keeping 3-track on sends nothing). <b>Registering the key counts as consent to automatic scouting</b> — once auto-maps land, the harness may call this key when it judges it necessary (e.g., map missing/stale with pending changes). Trigger conditions and what is sent/excluded are documented in PRIVACY first.")}</div>
       <div class="row" style="margin-top:8px">
         <input type="password" id="dsKey" placeholder="sk-..." style="flex:1;min-width:220px" autocomplete="off" />
         <button id="dsSave">${t("저장", "Save")}</button>
@@ -2427,10 +2440,13 @@ class Dashboard {
     }
     if (ev.data?.type !== "data") return;
     const d = ev.data.data;
-    renderStats(d.verifyStats);          // 탭2 검증 통계 갱신(현황 탭과 같은 data 푸시에 함께 반영)
-    renderTokens(d.codexTokens);         // 토큰 카드 갱신(연결 코덱스 세션 누적)
-    renderClaudeTokens(d.claudeTokens);  // 클로드 작업 토큰+턴수(이 폴더 28일)
-    renderProjects(d.projectStats);      // 프로젝트별 비교(전체 폴더 28일)
+    // 구획 격리(safe): 렌더 구획 하나가 특정 데이터 형상에서 예외를 던져도 아래 구획(특히 연결·대화)이 계속
+    // 갱신되게 한다 — '한 구획 예외 → 이후 전 구획 영구 미갱신'이 복원 탭 낡음의 유력 경로(3요원 조사 합의).
+    const safe=(fn)=>{ try{ fn(); }catch(e){ /* 구획 실패는 그 구획만 — 다음 push에서 재시도됨 */ } };
+    safe(()=>renderStats(d.verifyStats));          // 탭2 검증 통계 갱신(현황 탭과 같은 data 푸시에 함께 반영)
+    safe(()=>renderTokens(d.codexTokens));         // 토큰 카드 갱신(연결 코덱스 세션 누적)
+    safe(()=>renderClaudeTokens(d.claudeTokens));  // 클로드 작업 토큰+턴수(이 폴더 28일)
+    safe(()=>renderProjects(d.projectStats));      // 프로젝트별 비교(전체 폴더 28일)
     curPerm = d.permissionMode || "";   // renderApplied의 plan 게이트 표시에 사용
     // 언어 토글 표시(전역 ko/en) + '반대 슬롯에만 규칙 있음' 안내(언어 바꿨더니 규칙 사라졌다는 오해 방지)
     if (d.lang){
@@ -2456,6 +2472,7 @@ class Dashboard {
     const ckDirtyC = (appCkC!==null && $("ckClaude").checked!==appCkC) || (appCkX!==null && $("ckCodex").checked!==appCkX);
     const holdC = langChangedC && (contractDirty.claude || contractDirty.codex || segDirtyC || ckDirtyC ||
       document.activeElement === $("cClaude") || document.activeElement === $("cCodex"));
+    safe(function(){
     if (d.contract && !holdC){
       if (d.lang) renderedLangC = d.lang; // 이 푸시로 카드가 이 언어 슬롯 값으로 렌더됨
       if (document.activeElement !== $("cClaude") && !contractDirty.claude) $("cClaude").value = (d.contract.claude||[]).join("\\n");
@@ -2474,6 +2491,7 @@ class Dashboard {
       renderApplied(first?undefined:pVM, first?undefined:pIM);  // 저장/변경 반영 후 바뀐 축을 깜빡(첫 렌더는 깜빡 없음)
       markDirty();
     }
+    });
     // ④ 플랜 라이브표시: 지금 플랜 모드인가(active.json permissionMode)
     const pn = $("planNow");
     if (pn){
@@ -2485,7 +2503,7 @@ class Dashboard {
       } else { pn.style.display="none"; }
     }
     // ⑤ 범위 장부 카드(3트랙 advisory) — 저장값 기준 표시. '데이터 없음/비-git/변경 없음'을 추측 없이 정직 표기(필수 안전장치).
-    (function(){
+    safe(function(){
       const box=$("scoutBox"); if(!box) return;
       const on = (holdC ? appSM : (d.contract && d.contract.scoutMode)) === "on";
       // 세그먼트 바로 아래 DeepSeek 연결 줄(사용자 요청) — 키 등록 여부 + '실제로 동작했다'는 증거(마지막 DeepSeek 팔 성공 기록).
@@ -2543,10 +2561,10 @@ class Dashboard {
         s.candidates.forEach(c=>{ add("• "+c.file+"  ("+T("함께 변경 ","co-changed ")+c.n+T("회","×")+")"); });
       }
       add(T("⚠ 이 장부가 못 보는 것: 처음 생기는 결합·실행해봐야 아는 동작·의미적 연쇄 — 후보가 없다고 영향이 없는 게 아니에요. (관찰 단계: 아무것도 막거나 강제하지 않음 · 전부 로컬 git, 외부 전송 없음)","⚠ What this ledger cannot see: first-time couplings, behaviors only running reveals, semantic chains — no candidates ≠ no impact. (Advisory: blocks/forces nothing · all local git, nothing sent anywhere)"),"muted");
-    })();
+    });
     // ⑤-2 영향지도 게시판(3트랙 LLM 탐색 결과) — 러너가 보관한 지도를 읽기 전용으로 게시(사용자 결정 2026-07-06:
     // AI 역할의 시각적 확인). 확장은 지도를 생성·전송하지 않는다 — 빈 게시판엔 생성 명령을 정직하게 안내.
-    (function(){
+    safe(function(){
       const box=$("scoutBox"); if(!box || box.style.display==="none") return; // 3트랙 카드가 보일 때만 이어붙임
       const add=(txt,cls)=>{const el=document.createElement("div"); el.className=cls||"sbrow"; el.textContent=txt; box.appendChild(el); return el;};
       add(T("영향지도 게시판 — 탐색자(분리 AI)가 보낸 최근 지도","Impact-map board — recent maps from the scout (separate AI)"),"sbhead");
@@ -2578,18 +2596,18 @@ class Dashboard {
         det.appendChild(s); det.appendChild(pre); box.appendChild(det);
       }
       add(T("ⓘ 이 게시판은 열람 전용 — 지도 생성·전송은 당신이 명령을 실행할 때만 일어나요(자동 없음). 프로젝트별 최근 10장 보관.","ⓘ Read-only board — maps are generated/sent only when you run the command (nothing automatic). Last 10 kept per project."),"muted");
-    })();
+    });
     // ⑥ 고급설정 탭 — DeepSeek 키 상태(마스킹만 수신·원문 없음). 저장 직후엔 saveResult 플래시가 먼저 보이고,
     // 다음 상태 푸시(post)가 이 최신 상태 문구로 자연 교체한다(둘 다 같은 노드 — 경합 무해).
-    (function(){
+    safe(function(){
       const st=$("dsState"); if(!st) return;
       st.textContent = d.deepseek && d.deepseek.hasKey
         ? T("등록됨: ","Registered: ") + d.deepseek.masked + T(" · 모델: "," · model: ") + d.deepseek.model
         : T("등록된 키 없음 — 잠기는 건 DeepSeek 비교 팔뿐(기초 탐색·무료 self 팔 지도는 키 없이 동작).","No key registered — only the DeepSeek comparison arm is locked (basic scouting and free self-arm maps work without it).");
-    })();
+    });
     // 온보딩: 미완료=설명 단계(이동 버튼·은은한 펄스) / 완료=축하+끄기 / 끄고 완료=다시보기 링크만.
     // 미완료(연결 끊김·검증 꺼짐)면 끄기 여부와 무관하게 단계가 다시 보여 '고장'을 숨기지 않음.
-    (function(){
+    safe(function(){
       const ob=$("onboard"); if(!ob) return;
       const codexReady = !!d.codexReady, linked = !!d.linkedId;
       const vOn = holdC ? !!(appVM && appVM!=="off") : !!(d.contract && d.contract.verifyMode && d.contract.verifyMode!=="off"); // hold 중엔 화면 기준(appVM) — 파생 표시 일관
@@ -2616,8 +2634,9 @@ class Dashboard {
         step("ob2", linked, linked?T("Codex 세션 연결됨","Codex session linked"):T("Codex 세션 미연결","No Codex session linked"), {go:"cands"}, linked?"":T("연결할 세션 고르기","pick a session to link"));
         step("ob3", vOn, vOn?(T("검증 켜짐 (","verify on (")+((d.contract&&d.contract.verifyMode)||appVM)+")"):T("검증 꺼짐","verify off"), {go:"segVerify"}, vOn?"":T("검증 모드 켜고 저장","turn on a verify mode and save"));
       }
-    })();
+    });
     // 기본지침도 언어 전환 hold(계약 카드와 동일 원리) — 편집 중 언어가 바뀌면 보던 언어 화면 유지, 저장은 보던 슬롯으로.
+    safe(function(){
     const langChangedB = renderedLangB !== null && d.lang && d.lang !== renderedLangB;
     const holdB = langChangedB && (baseDirty.verify || baseDirty.transmit || baseDirty.rejudge ||
       document.activeElement === $("bVerify") || document.activeElement === $("bTransmit") || document.activeElement === $("bRejudge"));
@@ -2633,6 +2652,7 @@ class Dashboard {
     if ($("saveB")) $("saveB").disabled = !baseOk;
     if ($("resetB")) $("resetB").disabled = !baseOk;
     if (!baseOk){ const ov=$("baseOv"); if(ov) ov.textContent = T("· ⚠ 런타임 라이브러리를 찾을 수 없어 편집 불가","· ⚠ runtime library not found — editing disabled"); const sb=$("savedB"); if(sb) sb.textContent=""; }
+    });
     // 히어로 연결 상태 시각화
     const linked = !!d.linkedId;
     $("linkViz").className = "link" + (linked ? " on" : "");
@@ -2654,6 +2674,7 @@ class Dashboard {
     const cws = $("cwsLabel"); if (cws) cws.textContent = d.workspace ? (T("선택 시 → ","on select → links to ") + d.workspace + T(" 에 연결","")) : T("열린 워크스페이스 없음","no workspace open");
 
     // 무결성 경보 배너: 미확인 error 이벤트(예: 검증 미완)를 빨강으로 보이고 '확인함'으로 해제.
+    safe(function(){
     const ib = $("integrityBanner");
     if (ib) {
       const iev = (d.integrity||[]).filter(function(e){return e && !e.ack && (e.severity==="error"||e.severity==="warning");});
@@ -2710,8 +2731,10 @@ class Dashboard {
         ib.appendChild(ul); ib.style.display="";
       }
     }
+    });
 
     // 검증 진행 스트립: 라이브 단계가 있으면 [Claude]⟷[Codex] 방향+활성 박스+단계칩. (완료/대기면 숨김)
+    safe(function(){
     const ls = $("liveStrip");
     if (ls) {
       const lv = d.live;
@@ -2728,6 +2751,7 @@ class Dashboard {
         ls.style.display="";
       }
     }
+    });
 
     const conv = $("conv"); conv.replaceChildren();
     if (!d.linkedId) conv.appendChild(el("div","card muted",T("아직 연결된 Codex 세션이 없어요. 아래에서 세션을 연결하면, 구현↔검증으로 실제 주고받은 대화가 여기에 그대로 표시됩니다(눈으로 검증 확인).","No Codex session linked yet. Link one below and the actual implement↔verify exchange shows here (verify with your own eyes).")));
@@ -2835,6 +2859,9 @@ class Dashboard {
     // (코덱스 드리프트 인라인 경고 제거됨 — 모델/생각강도 어긋남은 상태바/배너 무결성 경고(brain-drift, 확인 가능)로 일원화. computeState의 syncBrainDriftFor가 cx-model/cx-effort 계산.)
     // (Claude 두뇌 카드 렌더도 제거됨 — 동일하게 상태바 drift(무결성 채널)로 이동.)
   });
+  // 부팅 자가 치유(3요원 조사 합의): 이 화면은 원래 스스로 데이터를 요청하지 않아(push 전용), 초기 post가 어떤 이유로든
+  // 유실되면 다음 poll까지 빈/낡은 화면이 남았다. 로드 직후 1회 refresh를 보내 어떤 경로로 살아난 패널이든 즉시 당겨온다.
+  vscode.postMessage({type:"refresh"});
 </script></body></html>`;
   }
 }
@@ -3096,7 +3123,13 @@ export function activate(context: vscode.ExtensionContext): void {
   // 창 리로드로 복원되는 대시보드 탭 되살리기 — 미등록이면 복원 탭이 스크립트 없는 영구 빈 화면(사용자 실측 2026-07-06).
   context.subscriptions.push(
     vscode.window.registerWebviewPanelSerializer("codexBridge", {
-      deserializeWebviewPanel: async (panel) => { dashboard.revive(panel); },
+      deserializeWebviewPanel: async (panel) => {
+        // 복원 실패는 조용히 삼켜지면 '죽은 탭'이 남는다 — 실패를 가시화하고 탭을 닫아 혼란 방지(조사 합의 보강).
+        try { dashboard.revive(panel); } catch (e) {
+          try { panel.dispose(); } catch { /* 이미 닫힘 */ }
+          vscode.window.showWarningMessage(tE("대시보드 복원에 실패했어요 — 상태바에서 새로 열어주세요.", "Failed to restore the dashboard — open it again from the status bar."));
+        }
+      },
     }),
   );
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 950);

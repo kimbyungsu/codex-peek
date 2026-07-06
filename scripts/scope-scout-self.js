@@ -37,5 +37,6 @@ if (r.error || r.status !== 0 || !String(r.stdout || "").trim()) {
 const map = r.stdout.trim();
 if (outFile) fs.writeFileSync(outFile, map);
 // 대시보드 '영향지도 게시판'용 보관(브릿지 홈 scouts/ — 프로젝트별 최근 10장). stderr로 알림(stdout=지도 본문 유지).
-try { console.error("지도 보관(게시판): " + saveMap(repo, "self", map, {})); } catch (e) { console.error("지도 보관 실패(게시판에만 영향): " + (e && e.message)); }
+// 메타에 basis·seedFiles 기록 — 물때표(다음 지도의 기준)와 무이력 낡음 배지의 재료(멀티 세션 오인 방지 — Codex 보완).
+try { console.error("지도 보관(게시판): " + saveMap(repo, "self", map, { basis: pkg.basisNote || (pkg.historyless ? "" : "git-status"), seedFiles: pkg.seeds })); } catch (e) { console.error("지도 보관 실패(게시판에만 영향): " + (e && e.message)); }
 process.stdout.write(map + "\n");

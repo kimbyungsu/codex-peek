@@ -85,6 +85,7 @@ export type ScopePackage = {
   recentFailures: { ts?: string; kind?: string; detail?: string }[]; // 최근 검증 실패/미완(무결성 기록)
   map: string | null;              // stable MAP(있으면 — 의미 결합의 확정층)
   historyless: boolean;            // 무이력(비-git) 모드 여부 — 렌더 라벨·각주가 달라짐
+  basisNote: string;               // 변경 간주 기준(무이력 계단 표기 — 빈 문자열이면 미표기)
   blindSpots: string[];            // ★이 꾸러미가 못 보는 것 — 탐색자·소비자에게 강제로 전달되는 정직성 각주
 };
 
@@ -96,6 +97,7 @@ export function buildPackage(input: {
   mapContent: string | null;
   sensitiveExcluded?: string[]; // redactSensitiveDiff가 제외한 민감 범주 파일(경로만) — 은폐 금지, 고지로 표기
   historyless?: boolean;        // 무이력(비-git) 모드 — '최근 수정 파일'을 변경으로 간주한 축소 꾸러미(전후 비교·함께변경 통계 없음)
+  basisNote?: string;           // '무엇을 기준으로 변경을 간주했나'(무이력 계단: 세션 편집/마지막 지도 이후/최근 수정 순) — 1절 아래 표기
 }, opts?: Partial<typeof PKG_DEFAULTS>): ScopePackage {
   const o = { ...PKG_DEFAULTS, ...(opts || {}) };
   const truncations: string[] = [];
@@ -117,9 +119,10 @@ export function buildPackage(input: {
     recentFailures: failures,
     map,
     historyless: !!input.historyless,
+    basisNote: input.basisNote || "",
     blindSpots: [
       ...(input.historyless ? [
-        "이 폴더는 변경 이력(git)이 없다 — '최근 수정된 파일'을 변경으로 간주했으므로 실제 작업 범위와 다를 수 있다",
+        "이 폴더는 변경 이력(git)이 없다 — 1절의 '간주 기준'은 근사이며 실제 작업 범위와 다를 수 있다",
         "전후 비교(diff)가 없다 — 파일의 지금 내용 발췌만 있고 '무엇이 어떻게 바뀌었는지'는 모른다",
         "과거 '함께 변경' 통계가 없다 — 이력 자체가 없어 원리상 불가",
       ] : []),
@@ -136,7 +139,7 @@ export function buildPackage(input: {
 export function renderPackageMarkdown(p: ScopePackage): string {
   const L: string[] = [];
   L.push(`# 영향범위 자료 꾸러미 (결정론 수집 — ${p.meta.repo} @ ${p.meta.head.slice(0, 7)})${p.historyless ? " [무이력 모드 — 비-git]" : ""}`);
-  L.push(`\n## 1. ${p.historyless ? "최근 수정된 파일(변경으로 간주 — 이력 없음)" : "지금 바뀌는 파일(seed)"}\n${p.seeds.length ? p.seeds.map((s) => `- ${s}`).join("\n") : "(변경 없음)"}`);
+  L.push(`\n## 1. ${p.historyless ? "변경으로 간주한 파일(이력 없음)" : "지금 바뀌는 파일(seed)"}\n${p.seeds.length ? p.seeds.map((s) => `- ${s}`).join("\n") : "(변경 없음)"}${p.basisNote ? `\n(간주 기준: ${p.basisNote})` : ""}`);
   L.push(p.historyless
     ? `\n## 2. 최근 수정 파일 발췌 (전후 비교 불가 — 지금 내용의 앞부분만)\n\`\`\`\n${p.diff || "(없음)"}\n\`\`\``
     : `\n## 2. 변경 내용(diff)\n\`\`\`diff\n${p.diff || "(없음)"}\n\`\`\``);

@@ -93,10 +93,10 @@ function collectCommon(repo) {
   return { tests, recentFailures, mapContent };
 }
 
-// ── 무이력(비-git) 모드 1단계 — 사용자 결정 2026-07-06: git이 없는 프로젝트도 지도를 만들 수 있어야 한다.
-// 대체 규칙: seeds='최근 24시간 내 수정된 파일'(이력이 없어 근사 — 각주로 정직 고지), diff 대신 '지금 내용 발췌',
-// 역참조는 git grep 대신 Node 스캔(SCOUT-TRACK §4.1의 설계된 폴백). 함께변경 통계는 원리상 불가(null).
-const HL = { windowMs: 24 * 3600 * 1000, maxSeeds: 8, excerptChars: 4000, maxScanFiles: 1500, maxFileBytes: 512 * 1024, maxDepth: 6, scanBudgetBytes: 16 * 1024 * 1024 };
+// ── 무이력(비-git) 모드 — 사용자 결정 2026-07-06: git이 없는 프로젝트도 지도를 만들 수 있어야 한다.
+// 대체 규칙: seeds=작업 신호 계단(물때표[마지막 지도 이후 수정] 우선 → 첫 지도면 세션 편집 파일 → 최근 수정 상위 N —
+// 시간 창 상수 없음), diff 대신 '지금 내용 발췌', 역참조는 git grep 대신 Node 스캔(§4.1의 설계된 폴백). 함께변경 통계는 원리상 불가(null).
+const HL = { maxSeeds: 8, excerptChars: 4000, maxScanFiles: 1500, maxFileBytes: 512 * 1024, maxDepth: 6, scanBudgetBytes: 16 * 1024 * 1024, transcriptTailBytes: 8 * 1024 * 1024, maxTranscripts: 6 };
 const SKIP_DIRS = new Set([".git", "node_modules", "dist", "build", "vendor", "out", ".vscode", ".idea", "__pycache__", ".venv", "venv"]);
 const BIN_RE = /\.(png|jpe?g|gif|webp|ico|pdf|zip|gz|7z|rar|exe|dll|vsix|woff2?|ttf|otf|mp3|mp4|mov|iso|bin|class|pyc|jar|db|sqlite)$/i;
 
@@ -121,10 +121,86 @@ function walkFiles(root) {
   return { files: out, capped };
 }
 
+// Claude Code 대화 기록에서 '이 폴더 하위를 편집한 도구 호출' 파일 경로를 뽑는다 — 작업 흐름 그 자체(1순위 신호).
+// 한계(정직 고지): 터미널(Bash) 편집·외부 프로그램 저장은 안 잡힘, 대형 기록은 끝부분(tail)만 읽음.
+function collectSessionEditedFiles(repo) {
+  const home = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+  const rnorm = path.normalize(repo).replace(/[\\/]+$/, "").toLowerCase();
+  const jsonls = [];
+  try {
+    const walk = (d, depth) => {
+      if (depth > 3) return;
+      for (const it of fs.readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, it.name);
+        if (it.isDirectory()) walk(full, depth + 1);
+        else if (it.name.endsWith(".jsonl") && !it.name.startsWith("agent-")) { try { jsonls.push({ f: full, m: fs.statSync(full).mtimeMs }); } catch { /* skip */ } }
+      }
+    };
+    walk(path.join(home, "projects"), 0);
+  } catch { return []; }
+  jsonls.sort((a, b) => b.m - a.m);
+  const out = new Set();
+  for (const { f } of jsonls.slice(0, HL.maxTranscripts)) { // 최근 기록 몇 개만 — 다른 프로젝트 기록은 cwd로 걸러짐
+    let raw = "";
+    try {
+      const st = fs.statSync(f);
+      const start = Math.max(0, st.size - HL.transcriptTailBytes);
+      const fd = fs.openSync(f, "r");
+      const buf = Buffer.alloc(st.size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      fs.closeSync(fd);
+      raw = buf.toString("utf8");
+    } catch { continue; }
+    for (const line of raw.split("\n")) {
+      if (!line.includes('"file_path"')) continue; // 싼 사전 필터(대부분 줄 스킵)
+      let o; try { o = JSON.parse(line.trim()); } catch { continue; } // tail 절단 줄은 무시
+      const cwd = path.normalize(String(o.cwd || "")).replace(/[\\/]+$/, "").toLowerCase();
+      if (!cwd || (cwd !== rnorm && !cwd.startsWith(rnorm + path.sep))) continue;
+      const content = o.message && Array.isArray(o.message.content) ? o.message.content : [];
+      for (const c of content) {
+        if (!c || c.type !== "tool_use" || !/^(Write|Edit|MultiEdit|NotebookEdit)$/.test(c.name || "")) continue;
+        const fp = c.input && typeof c.input.file_path === "string" ? c.input.file_path : "";
+        if (!fp) continue;
+        const fnorm = path.normalize(fp).replace(/[\\/]+$/, "");
+        if (!fnorm.toLowerCase().startsWith(rnorm + path.sep)) continue;
+        out.add(path.relative(repo, fnorm).replace(/\\/g, "/"));
+      }
+    }
+  }
+  return [...out];
+}
+
 function collectPackageHistoryless(repo) {
   const { files, capped } = walkFiles(repo);
-  const now = Date.now();
-  const seeds = files.filter((f) => now - f.mtime < HL.windowMs).sort((a, b) => b.mtime - a.mtime).slice(0, HL.maxSeeds);
+  // seeds 계단 — 시간 창 없음(사용자 지적: '최근 24h'는 두뇌설정 15분 사건과 같은 맹목 상수·개발 흐름과 직결):
+  // ①물때표(마지막 지도 이후 수정 — 지도마다 기준 자동 갱신·세션/외부 편집 모두 포착, 세션 편집 파일은 정렬 우선)
+  // → ②(첫 지도) Claude 세션이 실제 편집한 파일 → ③(신호 전무) 최근 수정 '상위 N개'. 어느 계단인지 꾸러미 1절에 명시(basisNote).
+  const byRel = new Map(files.map((f) => [f.rel.toLowerCase(), f]));
+  let seeds = [];
+  let basisNote = "";
+  let basisTrunc = null;
+  const sessionSet = new Set(collectSessionEditedFiles(repo).map((r) => r.toLowerCase()));
+  let lastMapTs = 0;
+  try { const l = require("./scout-store.js").listMaps(repo, 1); if (l.length && l[0].ts) lastMapTs = Date.parse(l[0].ts) || 0; } catch { /* 보관함 없음 */ }
+  if (lastMapTs) {
+    // 물때표가 항상 우선 기준 — 세션 편집 신호는 시각이 없어(대화 기록에 경로만) 이것만 믿으면 옛 편집 파일이
+    // 물때표를 영구 우회하고, 외부 편집기·터미널로 고친 새 파일이 빠진다(Codex 반례). mtime>물때표가 전 편집 경로를
+    // 포착하고, 세션 편집 파일은 정렬 우선순위(작업 흐름 힌트)로만 쓴다.
+    seeds = files.filter((f) => f.mtime > lastMapTs);
+    basisNote = seeds.length
+      ? "마지막 영향지도 생성 이후 수정된 파일(물때표" + (seeds.some((f) => sessionSet.has(f.rel.toLowerCase())) ? " · Claude 세션 편집 파일 우선" : "") + ")"
+      : "마지막 영향지도 이후 수정된 파일 없음";
+    seeds.sort((a, b) => (Number(sessionSet.has(b.rel.toLowerCase())) - Number(sessionSet.has(a.rel.toLowerCase()))) || b.mtime - a.mtime);
+  } else if (sessionSet.size) {
+    seeds = files.filter((f) => sessionSet.has(f.rel.toLowerCase()));
+    basisNote = "Claude 세션이 이 폴더에서 실제 편집한 파일(대화 기록의 편집 도구 호출 — 첫 지도라 물때표 없음)";
+    basisTrunc = "세션 편집 신호는 대화 기록 끝부분(파일당 8MB·최근 기록 6개)만 검토 — 그 이전/터미널 편집은 누락 가능";
+    seeds.sort((a, b) => b.mtime - a.mtime);
+  } else {
+    seeds = files.slice().sort((a, b) => b.mtime - a.mtime);
+    basisNote = "최근 수정 순 상위(첫 지도 — 세션·지도 기준 없음)";
+  }
+  seeds = seeds.slice(0, HL.maxSeeds);
   // '변경 내용' 대체 = 지금 내용 앞부분 발췌(전후 비교 불가 — 렌더/각주가 정직 고지)
   const excerpts = seeds.map((f) => {
     let t = "";
@@ -151,7 +227,8 @@ function collectPackageHistoryless(repo) {
     if (hits.length > PKG_DEFAULTS.maxGrepFilesPerToken) { droppedTokens.push(token); continue; }
     tokenHits.push({ token, files: hits, truncated: false });
   }
-  const pkg = buildPackage({ repo, head: "0000000", seeds: seeds.map((s) => s.rel), diffText: excerpts, tokenHits, droppedTokens, coChange: null, ...collectCommon(repo), sensitiveExcluded: [], historyless: true });
+  const pkg = buildPackage({ repo, head: "0000000", seeds: seeds.map((s) => s.rel), diffText: excerpts, tokenHits, droppedTokens, coChange: null, ...collectCommon(repo), sensitiveExcluded: [], historyless: true, basisNote });
+  if (basisTrunc) pkg.meta.truncations.push(basisTrunc);
   if (scanNote) pkg.meta.truncations.push(scanNote); // 커버리지 축소는 정직 고지(침묵 절단 금지)
   if (capped) pkg.meta.truncations.push(`파일 탐색이 상한(파일 ${HL.maxScanFiles}개·깊이 ${HL.maxDepth})에 도달 — 일부 파일은 목록에서 빠졌을 수 있음`);
   return pkg;
