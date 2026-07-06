@@ -16,10 +16,16 @@ process.env.CODEX_BRIDGE_HOME = tmpHome;
 const store = require(path.join(__dirname, "..", "scripts", "scout-store.js"));
 
 console.log("[wsKey] 계약 키 규칙과 동형(sha1(normWs) 앞16자) — 어긋나면 게시판이 빈다");
-const sample = "D:\\어떤 프로젝트\\Repo\\";
+// 네이티브 구분자로 구성(CI 리눅스에서 역슬래시는 구분자가 아님 — Windows 표기 동치는 win32에서만 성립하는 성질).
+const sample = ["D:", "어떤 프로젝트", "Repo"].join(path.sep) + path.sep;
 const expected = crypto.createHash("sha1").update(path.normalize(sample).replace(/[\\/]+$/, "").toLowerCase().normalize("NFC")).digest("hex").slice(0, 16);
 ok(store.wsKeyFor(sample) === expected, "정규화(끝 구분자·대소문자·NFC) 후 sha1 앞16자");
-ok(store.wsKeyFor("d:/어떤 프로젝트/repo") === expected, "슬래시 방향·대소문자 달라도 같은 키(같은 프로젝트=같은 게시판)");
+ok(store.wsKeyFor(["d:", "어떤 프로젝트", "repo"].join(path.sep)) === expected, "끝 구분자·대소문자 달라도 같은 키(같은 프로젝트=같은 게시판)");
+if (process.platform === "win32") {
+  ok(store.wsKeyFor("d:/어떤 프로젝트/repo") === expected, "win32: 슬래시/역슬래시 표기가 같은 키로 수렴(확장 fsPath↔러너 인자 불일치 방지)");
+} else {
+  ok(store.wsKeyFor("d:/어떤 프로젝트/repo/") === store.wsKeyFor("D:/어떤 프로젝트/repo"), "POSIX: 슬래시 표기끼리 끝 구분자·대소문자 동치(역슬래시 동치는 win32 전용 성질)");
+}
 
 console.log("[saveMap/listMaps] md+json 쌍 저장 · 메타 보존 · 새것부터 나열");
 const repo = "D:/데모/저장소";
