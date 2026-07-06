@@ -26,6 +26,31 @@ const STOP = new Set([
   "console", "length", "push", "slice", "split", "join", "trim", "replace", "includes", "filter", "some", "every", "forEach",
   "self", "none", "elif", "print", "import", "from", "pass", "lambda", // python 흔한 것
 ]);
+// 외부 전송 안전장치(SCOUT-TRACK §3.2) — 꾸러미가 탐색자(외부 API 포함)에게 나가기 전에, 민감 '범주'
+// 경로의 diff 섹션을 통째로 제외한다. 특정 파일명이 아니라 범주 패턴(비밀값을 담는 파일 종류)이며,
+// 과잉 제외가 안전한 방향(제외 사실은 buildPackage가 꾸러미에 정직 표기). 경로만 남고 내용은 안 나감.
+const SENSITIVE_PATH_RE = /(^|\/)\.(env[^/]*|netrc|npmrc|pgpass|htpasswd)$|(^|[/._-])(secrets?|credentials?|tokens?|api[_-]?keys?|passwords?|passwd)([/._-]|$)|\.(pem|key|p12|pfx|jks|keystore|der|p8|ppk)$|(^|\/)id_(rsa|dsa|ecdsa|ed25519)|(^|\/)(node_modules|dist|build|vendor)\//i;
+export function isSensitivePath(p: string): boolean {
+  return SENSITIVE_PATH_RE.test(String(p || "").replace(/\\/g, "/"));
+}
+export function redactSensitiveDiff(diffText: string): { text: string; excluded: string[] } {
+  const parts = String(diffText || "").split(/^(?=diff --git )/m); // 파일 섹션 단위(첫 조각은 헤더 이전 잔여)
+  const kept: string[] = [];
+  const excluded: string[] = [];
+  for (const part of parts) {
+    const m = part.match(/^diff --git (.+?)\r?\n/);
+    if (m) {
+      // git은 특수문자 경로를 따옴표 헤더("a/…")로 낸다 — 따옴표/비따옴표 모두에서 경로 조각을 뽑아 검사.
+      // 공백 경로의 비따옴표 헤더는 조각으로 갈라질 수 있으나, 조각 하나라도 민감이면 제외(과잉 제외가 안전한 방향).
+      const raw = m[1].match(/"[^"]+"|\S+/g) || [];
+      const paths = raw.map((s) => s.replace(/^"|"$/g, "").replace(/^[ab]\//, ""));
+      if (paths.some((p) => isSensitivePath(p))) { excluded.push(paths[paths.length - 1] || m[1]); continue; }
+    }
+    kept.push(part);
+  }
+  return { text: kept.join(""), excluded: Array.from(new Set(excluded)) };
+}
+
 export type DiffToken = { token: string; count: number };
 export function extractDiffTokens(diffText: string, opts?: Partial<typeof PKG_DEFAULTS>): DiffToken[] {
   const o = { ...PKG_DEFAULTS, ...(opts || {}) };
@@ -68,9 +93,11 @@ export function buildPackage(input: {
   tokenHits: TokenHit[]; droppedTokens?: string[]; coChange: ScopeSuggestion | null;
   tests: string[]; recentFailures: { ts?: string; kind?: string; detail?: string }[];
   mapContent: string | null;
+  sensitiveExcluded?: string[]; // redactSensitiveDiff가 제외한 민감 범주 파일(경로만) — 은폐 금지, 고지로 표기
 }, opts?: Partial<typeof PKG_DEFAULTS>): ScopePackage {
   const o = { ...PKG_DEFAULTS, ...(opts || {}) };
   const truncations: string[] = [];
+  if (input.sensitiveExcluded && input.sensitiveExcluded.length) truncations.push(`민감 범주 파일 diff 제외(외부 전송 안전): ${input.sensitiveExcluded.join(", ")}`);
   let diff = String(input.diffText || "");
   if (diff.length > o.maxDiffChars) { diff = diff.slice(0, o.maxDiffChars); truncations.push(`diff ${input.diffText.length}→${o.maxDiffChars}자로 절단`); }
   let map = input.mapContent;

@@ -5,7 +5,7 @@
  * ※ out/*.js는 npm test의 tsc 산출물.
  */
 const path = require("path");
-const { extractDiffTokens, buildPackage, renderPackageMarkdown, PKG_DEFAULTS } = require(path.join(__dirname, "..", "out", "scope-package.js"));
+const { extractDiffTokens, buildPackage, renderPackageMarkdown, redactSensitiveDiff, isSensitivePath, PKG_DEFAULTS } = require(path.join(__dirname, "..", "out", "scope-package.js"));
 let pass = 0, fail = 0;
 function ok(c, m) { if (c) { pass++; console.log("  ✅ " + m); } else { fail++; console.log("  ❌ " + m); } }
 
@@ -54,6 +54,28 @@ console.log("[편재 토큰 제외] 어디에나 있는 말은 결합 증거가 
 const mdDrop = renderPackageMarkdown(buildPackage({ ...base, diffText: "d", recentFailures: [], droppedTokens: ["test", "node"] }));
 ok(/제외된 편재 토큰.*test, node/.test(mdDrop), "제외 목록이 꾸러미에 표기(은폐 없음)");
 ok(!/`test` →/.test(mdDrop), "제외 토큰은 역참조 목록에 없음");
+
+console.log("[민감 범주 diff 제외] 꾸러미는 외부 탐색자까지 가므로 비밀값 파일 섹션은 통째로 빠져야 함(§3.2) + 정직 고지");
+const secretDiff = [
+  "diff --git a/src/app.ts b/src/app.ts", "index 111..222 100644", "--- a/src/app.ts", "+++ b/src/app.ts", "@@ -1 +1 @@", "+const appLogic = 1;",
+  "diff --git a/.env b/.env", "index 333..444 100644", "--- a/.env", "+++ b/.env", "@@ -1 +1 @@", "+API_SECRET=realvalue",
+  "diff --git a/config/credentials.json b/config/credentials.json", "--- a/config/credentials.json", "+++ b/config/credentials.json", "+{\"pw\":1}",
+  "diff --git a/certs/server.key b/certs/server.key", "--- a/certs/server.key", "+++ b/certs/server.key", "+PRIVATE",
+].join("\n") + "\n";
+const red = redactSensitiveDiff(secretDiff);
+ok(/appLogic/.test(red.text) && !/realvalue/.test(red.text) && !/PRIVATE/.test(red.text) && !/"pw"/.test(red.text), "일반 파일 유지 · .env/credentials/.key 내용 전부 제외");
+ok(red.excluded.length === 3 && red.excluded.includes(".env"), "제외 목록에 경로만 남음(내용 아님)");
+ok(isSensitivePath("secrets/prod.yaml") && isSensitivePath("id_rsa") && isSensitivePath("node_modules/x/a.js"), "범주 패턴: secrets 디렉터리·SSH 개인키·vendor류");
+ok(isSensitivePath(".envrc") && isSensitivePath(".npmrc") && isSensitivePath("cfg/.env.production") && isSensitivePath("apple/AuthKey.p8"), "범주 보강: .envrc/.npmrc/.env.*/.p8 (Codex 지적 반영)");
+ok(!isSensitivePath("src/tokenizer.ts") && !isSensitivePath("src/scope-package.ts") && !isSensitivePath("hotkeys.json") && !isSensitivePath("src/environment.ts"), "경계 오탐 없음(tokenizer·hotkeys·environment 등 도메인 파일은 유지)");
+const quoted = 'diff --git "a/\\353\\271\\204\\353\\260\\200/secrets.txt" "b/\\353\\271\\204\\353\\260\\200/secrets.txt"\n--- x\n+++ y\n+HIDDEN\ndiff --git a/src/ok.ts b/src/ok.ts\n+keepMe\n';
+const redQ = redactSensitiveDiff(quoted);
+ok(!/HIDDEN/.test(redQ.text) && /keepMe/.test(redQ.text) && redQ.excluded.length === 1, "따옴표(특수문자 경로) 헤더도 제외 — 비ASCII 경로의 민감 파일 누락 방지");
+const pSens = buildPackage({ ...base, diffText: "d", recentFailures: [], sensitiveExcluded: [".env", "certs/server.key"] });
+ok(pSens.meta.truncations.some((t) => /민감 범주.*\.env/.test(t)), "제외 사실이 꾸러미 고지에 표기(은폐 금지)");
+ok(/민감 범주 파일 diff 제외/.test(renderPackageMarkdown(pSens)), "렌더에도 고지 노출(탐색자가 빠진 부분을 인지)");
+const drvSrc = require("fs").readFileSync(path.join(__dirname, "..", "scripts", "scope-package.js"), "utf8");
+ok(/redactSensitiveDiff\(raw\)/.test(drvSrc) && drvSrc.indexOf("redactSensitiveDiff(raw)") < drvSrc.indexOf("extractDiffTokens(diffText)"), "드라이버가 토큰 추출 '전'에 제외(비밀값이 역참조 씨앗으로 새지 않음)");
 
 console.log("[collectPackage 통합] 드라이버가 이 저장소에서 완전한 꾸러미 형태를 반환(CI 얕은 클론에서도 구조 유지)");
 const { collectPackage } = require(path.join(__dirname, "..", "scripts", "scope-package.js"));

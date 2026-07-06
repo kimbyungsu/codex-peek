@@ -9,7 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const { spawnSync } = require("child_process");
-const { extractDiffTokens, buildPackage, renderPackageMarkdown, PKG_DEFAULTS } = require(path.join(__dirname, "..", "out", "scope-package.js"));
+const { extractDiffTokens, buildPackage, renderPackageMarkdown, redactSensitiveDiff, PKG_DEFAULTS } = require(path.join(__dirname, "..", "out", "scope-package.js"));
 const { parseGitLog, suggest } = require(path.join(__dirname, "..", "out", "scope-ledger.js"));
 
 // 수집 본체 — self/DeepSeek 팔 러너가 require해서 재사용(Phase 2). CLI 실행은 하단 main 가드.
@@ -32,7 +32,10 @@ for (let i = 0; i < toks.length; i++) {
 }
 
 // diff: unstaged+staged 합본(untracked 새 파일 내용은 diff에 안 나오나 seed 목록에는 있음 — 정직 한계로 꾸러미 각주가 커버)
-const diffText = (git(["diff"]) || "") + "\n" + (git(["diff", "--cached"]) || "");
+// 민감 범주(env/키/토큰류) 파일 섹션은 여기서 제외 — 꾸러미는 외부 탐색자(API)까지 가므로, 토큰 추출 '전'에 잘라
+// 비밀값 파편이 역참조 씨앗으로도 새지 않게 한다(§3.2). 제외 목록은 꾸러미에 정직 표기.
+const raw = (git(["diff"]) || "") + "\n" + (git(["diff", "--cached"]) || "");
+const { text: diffText, excluded: sensitiveExcluded } = redactSensitiveDiff(raw);
 
 // 바뀐 식별자 → 저장소 역참조(git grep -l, tracked 한정) — seed 파일 자신은 제외
 const tokens = extractDiffTokens(diffText);
@@ -83,7 +86,7 @@ for (const c of ["docs/MAP.md", "MAP.md"]) {
   try { mapContent = fs.readFileSync(path.join(repo, c), "utf8"); break; } catch { /* 다음 후보 */ }
 }
 
-  return buildPackage({ repo, head, seeds, diffText, tokenHits, droppedTokens, coChange, tests, recentFailures, mapContent });
+  return buildPackage({ repo, head, seeds, diffText, tokenHits, droppedTokens, coChange, tests, recentFailures, mapContent, sensitiveExcluded });
 }
 
 module.exports = { collectPackage };

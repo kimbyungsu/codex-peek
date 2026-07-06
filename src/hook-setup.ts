@@ -5,7 +5,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
 
-export const BRIDGE_SCRIPTS = ["contract-lib.js", "codex-bridge.js", "contract-inject.js", "verify-guard.js", "codex-guard.js"];
+export const BRIDGE_SCRIPTS = ["contract-lib.js", "codex-bridge.js", "contract-inject.js", "verify-guard.js", "codex-guard.js", "deepseek-bridge.js"];
 export const OUR_HOOKS = [
   { event: "UserPromptSubmit", matcher: "", script: "contract-inject.js" },
   { event: "PreToolUse", matcher: "Bash", script: "codex-guard.js" },

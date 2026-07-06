@@ -48,6 +48,7 @@ const BRIDGE_SCRIPTS = [
   "contract-inject.js",
   "verify-guard.js",
   "codex-guard.js",
+  "deepseek-bridge.js",
 ];
 
 // 우리가 settings.json에 심는 훅. event → {matcher, script}
