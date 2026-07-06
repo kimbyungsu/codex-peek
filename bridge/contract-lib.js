@@ -341,6 +341,30 @@ function extractMapHighlights(mapText) {
   }
   return out;
 }
+// 지도의 ⑥(MAP patch 후보 — stable MAP 제안층) 항목 추출. ⑥ 헤더(또는 'MAP patch' 문구) 이후의 내용 줄을
+// 다음 구획 헤더까지 수집한다. 제안은 자유서식 의미 결합("a ↔ b — 이유")이라 텍스트 그대로 보존(구조 강제 없음).
+function extractMapPatches(mapText) {
+  const out = []; const seen = new Set();
+  let inPatch = false;
+  for (const raw of String(mapText || "").split(/\r?\n/)) {
+    const line = raw.replace(/`/g, "").trim().slice(0, 200); // 줄 상한 — 파서 비용 상수화
+    if (!line) continue;
+    // 구획 판정 순서(Codex 반례 잠금): 다른 구획 표기가 있으면(⑥·'MAP patch'와 혼합돼도) 종료가 이긴다.
+    if (/[①②③④⑤⑦⑧⑨⑩]/.test(line)) { inPatch = false; continue; }
+    if (/⑥/.test(line)) { inPatch = true; continue; } // ⑥ 헤더 — 항목은 다음 줄부터
+    // 자유서식 헤더('MAP patch'로 시작하는 비-불릿 줄)만 인정 — ⑥ 안의 내용 줄에 'MAP patch' 문구가 있어도 항목으로 보존
+    if (!inPatch && /^[#>\s]*MAP\s*patch/i.test(line)) { inPatch = true; continue; }
+    if (!inPatch) continue;
+    const text = line.replace(/^[-*#\s]+/, "").trim();
+    if (!text || /^\(.*없음.*\)$|^none$/i.test(text)) continue; // "(없음)"류 자리표시는 제안 아님
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+    if (out.length >= 10) break; // 제안층 상한 — 한 지도가 장부를 도배하지 못하게
+  }
+  return out;
+}
 // 검증 요청(ask)에 동봉할 지도 블록. 3트랙 프로젝트 + 지도 존재 + high 항목 있을 때만(그 외 null — 주입 비용 0·무회귀).
 // 낡은 지도는 버리지 않고 '낡음' 라벨로 정직 고지(시간 상수 0 — scoutMapStatus의 seed mtime 판정 재사용).
 function buildScoutAttach(ws, c, lang) {
@@ -627,4 +651,4 @@ function formatForClaude(answer, lang) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, extractMapHighlights, buildScoutAttach, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, extractMapHighlights, extractMapPatches, buildScoutAttach, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, STATS_DIR, VERDICTS_FILE };
