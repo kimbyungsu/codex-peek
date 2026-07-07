@@ -20,6 +20,18 @@ export function modelFamily(m: string): string {
   return "";
 }
 
+// 경과 시간 라벨 — '두뇌 실제 답' 평시 정보 표시용(피커 표시 결함 실사고 2026-07-08: UI 표기 두 곳이 서로 달라
+// 사용자가 믿을 정본 표시처가 필요). 음수(시계 왜곡)는 '방금 전'으로 흡수 — 정보 표시라 경고 승격 없음.
+export function ageLabel(ageMs: number, en: boolean): string {
+  const m = Math.floor(Math.max(0, ageMs) / 60000);
+  if (m < 1) return en ? "just now" : "방금 전";
+  if (m < 60) return en ? `${m}m ago` : `${m}분 전`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return en ? `${h}h ago` : `${h}시간 전`;
+  const d = Math.floor(h / 24);
+  return en ? `${d}d ago` : `${d}일 전`;
+}
+
 // transcript 꼬리 텍스트에서 '마지막 /model 확정 기록'을 찾는다.
 // 신뢰 소스는 stdout형 엔트리 하나뿐: content가 정확히 '<local-command-stdout>Set model to <모델></local-command-stdout>'
 // 로 시작하는 type:user 엔트리(실데이터 확인 — [1m] 접미가 붙기도, 탈락하기도 함 → 계열 비교라 무해).

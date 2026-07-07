@@ -7,7 +7,7 @@ import { spawn } from "child_process";
 import { computeVerifyStats, VerifyStats, CodexTokens, parseSessionTokens, ClaudeTokens, sumClaudeUsage, computeProjectStats, ProjectStat } from "./verify-stats";
 import * as hookSetup from "./hook-setup";
 import { localizeIntegrityDetail } from "./integrity-i18n";
-import { parseLastModelCommand, parseLastAssistantModel, parseSessionStartTs, resolveCcIntent, modelFamily, shouldAttributeSettingsChange, pruneIntentMap } from "./brain-intent";
+import { parseLastModelCommand, parseLastAssistantModel, parseSessionStartTs, resolveCcIntent, modelFamily, shouldAttributeSettingsChange, pruneIntentMap, ageLabel } from "./brain-intent";
 import { parseGitLog, suggest as scopeSuggest, ScopeSuggestion } from "./scope-ledger";
 import { maskKey, isPlausibleKey, mergeDeepseekConfig } from "./deepseek-config";
 import { appendApproved, parseApprovedFromMap, normSig } from "./map-ledger";
@@ -141,6 +141,7 @@ interface BridgeState {
   deepseek: { hasKey: boolean; masked: string; model: string }; // 고급설정 탭 표시용 — 키 원문은 절대 웹뷰로 안 보냄(마스킹만)
   mapLedger: MapLedgerView | null; // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만). null=2트랙
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
+  brainActual: { cc: string; cx: string }; // 두뇌 '실제 답'(대화 기록 실측) 표시 문구 — 경고 아닌 평시 정보(피커 표시 결함 실사고 2026-07-08). 기록 없으면 '기록 없음' 문구
 }
 
 function normWs(p: string): string {
@@ -673,6 +674,36 @@ function syncBrainDriftFor(ws: string | null): void {
     syncBrainDrift(ws, bd);
   } catch { /* best-effort */ }
 }
+// 두뇌 '실제 답' 평시 정보 문구 — 결정 실험(2026-07-08)의 산물: 앱 UI 두 곳(빠른메뉴 줄 라벨 vs 모델 피커 체크마크)이
+// 서로 다르게 보이는 표시 결함이 실측됐고, 그때 사용자가 믿을 정본은 '답변마다 대화 기록에 찍히는 실제 모델'이었다.
+// 그 정본을 경고가 아닌 상시 정보로 노출한다(어긋남 판정은 기존 drift 경고가 담당 — 여기는 판정 없이 사실만).
+// 소스는 drift 계산과 동일(scanCcTranscript/sessionModelMeta — cwd 필터·증분 캐시)이라 경고와 값이 어긋날 수 없다.
+function brainActualTexts(ws: string | null): { cc: string; cx: string; sig: string } {
+  const none = tE("기록 없음", "no record");
+  let cc = none, cx = none, sig = "|";
+  if (!ws) return { cc, cx, sig };
+  try {
+    const ccT = currentTranscriptForWs(ws);
+    const a = ccT ? scanCcTranscript(ccT, ws).actual : null;
+    if (a && a.model) {
+      cc = `${modelFamily(a.model) || a.model} · ${ageLabel(Date.now() - a.ts, loadLangExt() === "en")}`;
+      sig = a.model + sig;
+    }
+  } catch { /* best-effort — 정보 표시라 실패는 '기록 없음'으로 */ }
+  try {
+    const link = workspaceLink(loadLinks(), ws);
+    const f = link?.codexSession ? findRolloutById(link.codexSession) : undefined;
+    if (f) {
+      const sm = sessionModelMeta(f, ws);
+      const t = Date.parse(sm.ts || "");
+      if (sm.model && Number.isFinite(t)) {
+        cx = `${sm.model}${sm.effort ? `(${sm.effort})` : ""} · ${ageLabel(Date.now() - t, loadLangExt() === "en")}`;
+        sig = sig + sm.model + "|" + (sm.effort || "");
+      }
+    }
+  } catch { /* best-effort */ }
+  return { cc, cx, sig };
+}
 // '연결된 Codex 세션 없음'을 빨강(error) 무결성 경보로 reconcile한다. brain-drift와 같은 '상태 reconcile' 패턴(sig 없는 단일 kind):
 // 연결 없으면 1건 유지(없으면 추가), 연결 생기면 제거. ★다른 빨강(verify-incomplete 등)과 달리 ack로는 안 사라진다 —
 // ackHere/배너 '확인함'이 이 kind를 제외하므로, 오직 '연결'(수동 link 또는 자동 새 세션 생성·연결)로만 해소된다.
@@ -894,6 +925,7 @@ function computeState(turnsN: number): BridgeState {
     scoutLive: readScoutLive(ws),       // 지도 생성중 신호(러너 실행 동안만 — 카드 '지금:'과 상태바 라벨)
     mapLedger: readMapLedger(ws),       // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만)
     deepseek: readDeepseekView(),       // 고급설정 탭 — 키 유무·마스킹(원문 미노출)
+    brainActual: (({ cc, cx }) => ({ cc, cx }))(brainActualTexts(ws)), // 두뇌 '실제 답' 정보 문구(히어로) — sig는 상태바 전용이라 제외
   };
 }
 
@@ -2052,9 +2084,9 @@ class Dashboard {
   <div class="top"><h1><span class="brand"></span>Codex Bridge <span class="sub">${t("Claude ⇄ Codex 자동 연결·검증", "Claude ⇄ Codex auto link & verify")}</span></h1><button id="refresh" class="secondary">${t("↻ 새로고침", "↻ Refresh")}</button></div>
 
   <div class="hero">
-    <div class="agent claude"><div class="mono c">C</div><div class="nm">Claude</div><div class="ro">${t("구현 · implement", "implement")}</div></div>
+    <div class="agent claude"><div class="mono c">C</div><div class="nm">Claude</div><div class="ro">${t("구현 · implement", "implement")}</div><div class="ro" id="ccActualRo" title="${t("대화 기록에 답변마다 찍히는 실제 모델 — 앱 표기(피커 체크 등)가 어긋나 보여도 이것이 정본", "the model stamped on each answer in the conversation log — trust this even when app UI labels disagree")}"></div></div>
     <div class="link" id="linkViz"><div class="bar"></div><div class="emo" id="linkEmo">●</div><div class="st" id="linkState">${t("연결 없음", "Not linked")}</div></div>
-    <div class="agent codex"><div class="mono x">Cx</div><div class="nm">Codex</div><div class="ro">${t("검증 · verify", "verify")}</div></div>
+    <div class="agent codex"><div class="mono x">Cx</div><div class="nm">Codex</div><div class="ro">${t("검증 · verify", "verify")}</div><div class="ro" id="cxActualRo" title="${t("연결된 검증 세션 기록의 최근 실제 모델·생각강도", "latest actual model & effort from the linked verify session log")}"></div></div>
     <div class="agent scout" id="heroScout" style="display:none"><div class="mono s">S</div><div class="nm">${t("탐색자", "Scout")}</div><div class="ro">${t("영향지도 · 3트랙", "impact map · 3-track")}</div></div>
   </div>
   <div id="status" class="statusline"></div>
@@ -2896,6 +2928,10 @@ class Dashboard {
     $("linkViz").className = "link" + (linked ? " on" : "");
     $("linkEmo").textContent = "●"; // 색은 .link.on .emo가 처리(연결=초록/미연결=회색)
     $("linkState").textContent = linked ? T("연결됨","Linked") : T("연결 없음","Not linked");
+    // 두뇌 '실제 답' 정보 줄 — 표시 문구는 확장이 완성해 보냄(웹뷰는 그대로 게시). 없어도 렌더는 계속(널 가드).
+    var baCc = $("ccActualRo"), baCx = $("cxActualRo"), baD = d.brainActual || {};
+    if (baCc) baCc.textContent = baD.cc ? T("실제 답: ","actual: ") + baD.cc : "";
+    if (baCx) baCx.textContent = baD.cx ? T("실제 답: ","actual: ") + baD.cx : "";
     // statusline: 검증 모드 배지 + 연결 요약
     const st = $("status"); st.replaceChildren();
     const vm = (d.contract && d.contract.verifyMode) || "off";
@@ -3438,6 +3474,11 @@ export function activate(context: vscode.ExtensionContext): void {
         return tE("탐색(3트랙): ", "scouting (3-track): ") + scout + mapsTxt;
       } catch { return ""; }
     })();
+    // 두뇌 '실제 답' 정보 줄(연결/미연결 툴팁 공용) — 앱 UI 표기가 서로 어긋나도 믿을 정본(대화 기록 실측).
+    const ba = (mode === "linked" || mode === "unlinked") ? brainActualTexts(ws) : { cc: "", cx: "", sig: "" };
+    const baLine = (mode === "linked" || mode === "unlinked")
+      ? tE(`두뇌 실제 답 — Claude: ${ba.cc} · Codex: ${ba.cx}`, `actual answers — Claude: ${ba.cc} · Codex: ${ba.cx}`)
+      : "";
     const key = JSON.stringify({
       mode,
       // ★언어도 표시 요소다 — 없으면 언어 전환 후 상태바가 '표시 동일'로 오판돼 갱신을 스킵, 옛 언어 텍스트가 잔존한다(사용자 실측 버그).
@@ -3453,6 +3494,9 @@ export function activate(context: vscode.ExtensionContext): void {
       flow: (mode === "flow" && live) ? `${live.key}|${live.round}|${live.label}|${live.color}` : null,
       link: mode === "linked" ? `${link?.codexSession || ""}|${link?.linkedAt || ""}|${!!file}|${snip}` : null,
       scout: scoutSb || null, // 3트랙 상태·지도 수도 표시 요소 — 빠지면 지도 추가 후 툴팁이 낡은 수를 유지
+      // 실제 답은 '모델 정체'만 키에 담는다(sig) — 경과 시간까지 담으면 매분 키가 바뀌어 열려 있는 호버가 분마다 닫힌다
+      // (멱등 가드의 존재 이유). 대가: 툴팁의 '분 전' 표기는 다른 상태 변화가 있을 때 갱신(모델이 바뀌면 항상 즉시 갱신).
+      ba: ba.sig || null,
     });
     if (key === lastRenderKey) return; // 표시 동일 → status/flow 갱신 전체 skip(불필요 RPC·호버 닫힘 방지)
     lastRenderKey = key;
@@ -3473,12 +3517,13 @@ export function activate(context: vscode.ExtensionContext): void {
           tE(`연결: `,`linked: `) + `${link.linkedAt ? new Date(link.linkedAt).toLocaleString() : "-"}\n\n` +
           (file ? "" : tE("⚠️ 세션 파일을 찾을 수 없음\n\n","⚠️ session file not found\n\n")) +
           (scoutSb ? scoutSb + "\n\n" : "") +
+          (baLine ? baLine + "\n\n" : "") +
           tE(`클릭 → 대시보드`,`click → dashboard`),
       );
       status.backgroundColor = file ? undefined : new vscode.ThemeColor("statusBarItem.warningBackground");
     } else {
       status.text = "$(plug) " + tE("Codex: 미연결","Codex: not linked") + (scoutSb.includes(tE("지도 생성중…", "generating map…")) ? " $(sync~spin) " + tE("탐색중", "scouting") : scoutSb ? " $(telescope)" : "");
-      status.tooltip = tE("연결된 Codex 세션 없음 · 클릭 → 대시보드에서 연결","No linked Codex session · click → link in dashboard") + (scoutSb ? " · " + scoutSb : "");
+      status.tooltip = tE("연결된 Codex 세션 없음 · 클릭 → 대시보드에서 연결","No linked Codex session · click → link in dashboard") + (scoutSb ? " · " + scoutSb : "") + (baLine ? " · " + baLine : "");
       status.backgroundColor = undefined;
     }
     if (flowActive && live) {
