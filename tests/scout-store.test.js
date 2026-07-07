@@ -73,6 +73,8 @@ ok(/const safe=\(fn\)=>\{ try\{ fn\(\); \}catch/.test(ext) && (ext.match(/safe\(
 ok(/onDidChangeViewState\(\(e\) => \{ if \(e\.webviewPanel\.visible\) this\.post\(\); \}\)/.test(ext), "재표시 즉시 최신화(15s poll 대기 제거)");
 ok(/대시보드 복원에 실패했어요/.test(ext) && /Failed to restore the dashboard/.test(ext), "복원 실패 가시화+죽은 탭 정리(침묵 삼킴 제거)");
 ok(/dashboard data post dropped/.test(ext), "전달 실패(미배달) 관측 로그");
+ok((ext.match(/try \{ render\(\); \} catch/g) || []).length >= 4, "render(상태바)·post(대시보드) 예외 격리 4곳 — 상태바만 갱신되고 대시보드가 영구 미갱신되는 결합 차단(사용자 실측 2026-07-07)");
+ok(!/\n\s*render\(\);\s*\n\s*dashboard\.post\(\)/.test(ext), "비격리 결합(render(); 직후 dashboard.post())이 소스에 잔존하지 않음 — 재도입 회귀 탐지");
 
 console.log("[seeds 계단] 시간 창 제거 — 작업 신호 기반(소스 계약)");
 const drvSrc3 = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-package.js"), "utf8");

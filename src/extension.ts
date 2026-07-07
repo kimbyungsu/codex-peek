@@ -3561,7 +3561,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const scheduleRender = () => {
     if (debounce) clearTimeout(debounce);
     debounce = setTimeout(() => {
-      render();
+      // render(상태바)와 post(대시보드 전송)를 예외 격리 — render 후반부가 던지면 '상태바엔 새 경고가 떴는데
+      // 대시보드만 조용히 영구 미갱신'이 된다(사용자 실측 2026-07-07: 두뇌 경고가 상태바에만 뜸). 한쪽 실패가 다른쪽을 못 막게.
+      try { render(); } catch (e) { console.warn("codex-bridge: status render failed", e); }
       dashboard.post();
     }, 800);
   };
@@ -3611,7 +3613,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // 두뇌 drift 입력원 감시 ②: 트랜스크립트(CLAUDE_HOME/projects/**/*.jsonl, CLAUDE_CONFIG_DIR일 수 있음)는 응답마다 잦게 append돼 재귀 watch가 과하다 →
   // 15s 주기 폴링으로 '최근 응답 모델' 변화와 drift 해소(적용되면 사라짐)를 따라잡는다. render는 syncBrainDriftFor 1.5s throttle로 비용 한정(폴링 1회=최대 drift 1회).
-  const driftPoll = setInterval(() => { render(); dashboard.post(); }, 15000);
+  const driftPoll = setInterval(() => { try { render(); } catch (e) { console.warn("codex-bridge: status render failed", e); } dashboard.post(); }, 15000); // render 예외가 post를 못 막게 격리(위 scheduleRender와 동일 원칙)
 
   context.subscriptions.push(
     status,
@@ -3626,11 +3628,11 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!unacked.length) return; // 이미 확인됨/없음(다른 데서 ack) → 무동작
       const ok = ackIntegrity(unacked.map((e) => e.id));
       if (!ok) { vscode.window.showErrorMessage(tE("경고 확인 처리 저장 실패(파일 잠김/권한?) — 잠시 후 다시 시도하세요.","Failed to save acknowledgement (file locked/permission?) — try again shortly.")); return; }
-      render();
+      try { render(); } catch (e) { console.warn("codex-bridge: status render failed", e); }
       dashboard.post();
     }),
     vscode.commands.registerCommand("codexBridge.refresh", () => {
-      render();
+      try { render(); } catch (e) { console.warn("codex-bridge: status render failed", e); }
       dashboard.post();
     }),
     { dispose: () => { watchers.forEach((w) => w.close()); if (debounce) clearTimeout(debounce); if (pulseTimer) clearInterval(pulseTimer); } },
