@@ -494,7 +494,7 @@ const BASE_DEFAULTS = {
   transmit: [
     "[전달 원칙] 검증모델에게 검증을 맡길 때:",
     "- 검증 대상은 코드 변경만이 아니다 — 설계 판단·적절성 의견·제안 문구 등 사용자에게 보고할 '결론'이면, 구현이 없어도 '내 주장'으로 검증모델에 던져 공격받아라. (단 code/plancode 모드의 ask 트리거 자체는 코드·플랜 기준 그대로.)",
-    "- 검증 요청과 받을 응답을 요약/생략하지 마라. 관련 파일 경로·확인 지점을 구체적으로 적어 검증모델이 원본을 직접 열게 하고 답변 축약으로 판정 표지누락을 유도하지 마라.", // 사용자 문안(2026-07-08) + '판정' 보강 — 축약 요청('N문장 이내로' 류)이 표지없음 경보를 오염시킨 실사고 재발 방지
+    "- 검증 요청을 요약/생략하지 마라. 관련 파일 경로·확인 지점을 구체적으로 적어 검증모델이 원본을 직접 열게 하고 받을 답변도 축약하도록 지시하지 마라. (판정 표지누락 유도)", // 사용자 v2 문안(2026-07-08) 원문 그대로 — 축약 요청('N문장 이내로' 류)이 표지없음 경보를 오염시킨 실사고 재발 방지
     "- '여기만 봐라 / 이렇게 해라' 식 좁은 명령을 하지 마라. 대신 내가 무엇을 했고·왜 했고·어떤 근거를 봤고·어디가 불안한지를 주고, 내 결론은 '내 주장'으로 표시해 검증모델이 공격하게 하라.",
     "- 파일·라인은 시작점으로만 제시하고, 검토 범위 확장은 검증모델의 판단에 맡겨라.",
   ].join("\n"),
@@ -523,7 +523,7 @@ const BASE_DEFAULTS_EN = {
   transmit: [
     "[Transmission Principles] When handing work to the verifier model:",
     "- Verification targets are not only code changes — any 'conclusion' you will report to the user (design judgments, adequacy opinions, proposed wording) must be thrown to the verifier as 'my claim' to be attacked, even without an implementation. (The ask trigger itself in code/plancode modes still follows code/plan criteria.)",
-    "- Do not summarize or omit the verification request, and do not ask for a summarized or abbreviated verifier reply. Include concrete file paths and checkpoints so the verifier opens the originals itself, and never induce verdict-line omission by constraining the reply length.",
+    "- Do not summarize or omit the verification request. Include concrete file paths and checkpoints so the verifier opens the originals itself, and do not instruct the verifier to abbreviate its reply (which can induce verdict-line omission).",
     "- No narrow orders like 'look only here / do it this way'. Instead, state what you did, why, what evidence you saw, and where you feel uncertain; mark your conclusion as 'my claim' so the verifier can attack it.",
     "- Present files/lines only as starting points; leave scope expansion to the verifier's judgment.",
   ].join("\n"),

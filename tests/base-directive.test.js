@@ -16,8 +16,8 @@ console.log("[기본값] 오버라이드 없으면 기본값 로드");
 ok(cl.loadBaseDirective().verifyBaseline === def.verifyBaseline, "오버라이드 없음 → 기본 verifyBaseline");
 
 console.log("[전달 원칙 — 응답 축약 금지] 축약 요청('N문장 이내로' 류)이 판정 표지누락 경보를 오염시킨 실사고(2026-07-08) 재발 방지 계약");
-ok(/검증 요청과 받을 응답을 요약\/생략하지 마라/.test(def.transmit) && /답변 축약으로 판정 표지누락을 유도하지 마라/.test(def.transmit), "ko: 금지 대상에 '받을 응답' 포함 + 판정 표지누락 인과 명시(사용자 문안)");
-ok(/do not ask for a summarized or abbreviated verifier reply/.test(cl.BASE_DEFAULTS_EN.transmit) && /never induce verdict-line omission by constraining the reply length/.test(cl.BASE_DEFAULTS_EN.transmit), "en: 동등 품질 대응(축약 요청 금지 + 판정 줄 누락 유도 금지)");
+ok(/받을 답변도 축약하도록 지시하지 마라/.test(def.transmit) && /판정 표지누락 유도/.test(def.transmit), "ko: 답변 축약 '지시' 금지 + 판정 표지누락 인과 부연(사용자 v2 문안)");
+ok(/do not instruct the verifier to abbreviate its reply/.test(cl.BASE_DEFAULTS_EN.transmit) && /which can induce verdict-line omission/.test(cl.BASE_DEFAULTS_EN.transmit), "en: 동등 품질 대응(축약 지시 금지 + 판정 줄 누락 인과 부연)");
 
 console.log("[저장 영속] 바꾼 verifyBaseline이 실제로 저장·로드됨 (증상이 브릿지 탓 아님 증명)");
 const CUSTOM = "검증 기본원칙 커스텀: 내 규칙대로 검증하라";
