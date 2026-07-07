@@ -1727,9 +1727,14 @@ class Dashboard {
   post(): void {
     // 언어가 바뀌었으면(이 창 토글이든 다른 창이든 — BRIDGE_DIR watch로 post가 불림) 웹뷰 HTML을 새 언어로 재생성.
     // 정적 라벨은 html() 생성 시 t(ko,en)로 박히므로 재생성이 전환 방법이다(전환은 드묾 — 펼침 상태 리셋 수용).
-    if (this.panel && this.htmlLang !== loadLangExt()) this.panel.webview.html = this.html(this.panel.webview);
+    // 언어 전환 시 HTML 재생성도 격리 — post()는 어떤 경로에서도 호출자(저장 핸들러 등)의 흐름을 끊지 않는다.
+    try { if (this.panel && this.htmlLang !== loadLangExt()) this.panel.webview.html = this.html(this.panel.webview); } catch (e) { console.warn("codex-bridge: dashboard html regen failed", e); }
+    // 상태 계산 예외가 호출자(저장 핸들러 등)의 후속 처리 — 특히 saveResult(성공 플래시) — 를 중단시키지 않게 격리.
+    // (Codex 지적: 저장 성공 후 post가 던지면 '저장됐는데 피드백 없음' — 사용자에겐 누락으로 보임)
+    let state: BridgeState;
+    try { state = computeState(this.turnsN()); } catch (e) { console.warn("codex-bridge: state compute failed — dashboard push skipped", e); return; }
     // 전달 실패 관측(fire-and-forget 보완): postMessage가 false(미배달 — 웹뷰 파괴/숨김)를 돌려주면 로그로 남긴다.
-    const sent = this.panel?.webview.postMessage({ type: "data", data: computeState(this.turnsN()) });
+    const sent = this.panel?.webview.postMessage({ type: "data", data: state });
     if (sent && typeof (sent as Thenable<boolean>).then === "function") (sent as Thenable<boolean>).then((ok) => { if (!ok) console.warn("codex-bridge: dashboard data post dropped (webview hidden/destroyed)"); });
   }
   private htmlLang: Lang | null = null; // 현재 웹뷰 HTML이 렌더된 언어(재생성 판단)
