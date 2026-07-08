@@ -31,7 +31,7 @@ ok(/deepseek: readDeepseekView\(\)/.test(src) && /hasKey: boolean; masked: strin
 ok(!/apiKey[^\n]*postMessage|postMessage[^\n]*apiKey/.test(src), "postMessage 경로에 apiKey 원문 없음");
 ok(/saveDeepseekKey/.test(src) && /mergeDeepseekConfig\(readDeepseekRaw\(\), key\)/.test(src), "저장 핸들러가 병합 정본 사용");
 ok(/scoutMode: m\.scoutMode \}\) === "on" && !readDeepseekView\(\)\.hasKey/.test(src), "3트랙 저장+키 없음 → 안내 토스트(차단 아님)");
-ok(/키 없이도 변경 감지\(변경 통계·증거 수집\) \+ 무료 self 팔 지도/.test(src), "scoutBox 상시 고지(키 없을 때 기대치 설정 — self 팔 무키 가능·개명 '변경 감지' 반영)");
+ok(/키 없이도 변경 감지 \+ self 팔 지도\(별도 과금 없음/.test(src), "scoutBox 상시 고지(키 없을 때 기대치 — '무료' 단독 표기 금지·쓰던 Claude 사용량 범위 명시)");
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

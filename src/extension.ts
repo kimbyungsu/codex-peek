@@ -697,20 +697,31 @@ h1{font-size:16px} h2{font-size:13px;margin:6px 0} .sub{color:var(--vscode-descr
 <h1>${tE("정찰(3트랙) — 구조와 흐름", "Recon (3-track) — structure & flow")}</h1>
 <div class="sub">${tE("구현↔검증(2트랙)에 더해지는 세 번째 축. 아래 4단계는 왼쪽에서 오른쪽으로 흐르고, 승인 없이도 전부 자동으로 굴러갑니다 — 👤 단계만 '원할 때' 쓰는 선택입니다.", "The third axis added to implement↔verify (2-track). The 4 steps flow left to right and run automatically without approvals — only the 👤 step is optional, used when you want it.")}</div>
 <div class="flow">
-${card("#3ca89a", "⚙", "변경 감지", "Change sensing", [[tE("무엇", "what"), tE("지금 바뀌는 파일 + 과거에 함께 바뀐 통계", "files changing now + historical co-change stats")], [tE("누가", "who"), tE("기계(확장) — 자동", "machine (extension) — automatic")], [tE("비용", "cost"), tE("0 · LLM 없음 · 전부 로컬", "0 · no LLM · all local")], [tE("저장", "store"), tE("표시만(대시보드)", "display only (dashboard)")]])}
+${card("#3ca89a", "⚙", "변경 감지", "Change sensing", [[tE("무엇", "what"), tE("지금 고치는 파일 + 예전에 같이 바뀌던 파일 힌트", "files you're editing + hints of files that changed together before")],[tE("누가", "who"), tE("기계(확장) — 자동", "machine (extension) — automatic")], [tE("비용", "cost"), tE("0 · LLM 없음 · 전부 로컬", "0 · no LLM · all local")], [tE("저장", "store"), tE("표시만(대시보드)", "display only (dashboard)")]])}
 <div class="arrow">→</div>
-${card("#9a6cdc", "⚡", "영향지도", "Impact map", [[tE("무엇", "what"), tE("이 변경이 어디까지 번질지 미리보기(확인 목록)", "a preview/checklist of how far the change reaches")], [tE("누가", "who"), tE("정찰 LLM — 직접 또는 자동 지시로 실행", "scout LLM — run directly or via auto-directive")], [tE("비용", "cost"), tE("self 팔 무료 · DeepSeek 팔은 키 등록 시(=동의)", "self arm free · DeepSeek arm only with a key (=consent)")], [tE("저장", "store"), tE("보관함(최근 10장) → 영향지도 카드", "archive (last 10) → impact-map card")]])}
+${card("#9a6cdc", "⚡", "영향지도", "Impact map", [[tE("무엇", "what"), tE("이 변경이 어디까지 번질지 미리보기(확인 목록)", "a preview/checklist of how far the change reaches")], [tE("누가", "who"), tE("정찰 LLM — 직접 또는 자동 지시로 실행", "scout LLM — run directly or via auto-directive")], [tE("비용", "cost"), tE("self 팔=별도 과금 없음(쓰시던 Claude 사용량 범위) · DeepSeek 팔은 키 등록 시(=동의)", "self arm = no separate billing (within the Claude usage you already have) · DeepSeek arm only with a key (=consent)")], [tE("저장", "store"), tE("보관함(최근 10장) → 영향지도 카드", "archive (last 10) → impact-map card")]])}
 <div class="arrow">→</div>
 ${card("#3ca89a", "⚙", "관찰 일지", "Field journal", [[tE("무엇", "what"), tE("지도의 제안이 검증을 지나며 맞음/틀림으로 자동 분류", "map suggestions auto-classified right/wrong through verification")], [tE("누가", "who"), tE("자동 — 검증 대화에 편승(추가 LLM 호출 0)", "automatic — rides the verify chat (0 extra LLM calls)")], [tE("신분", "states"), tE("미검증 → 신뢰(검증 확인) / 틀림 판명(반박·발화)", "unverified → trusted (confirmed) / disputed (refuted/spoken)")], [tE("개입", "override"), tE("선택: 고정·차단·내보내기", "optional: pin · ban · export")]])}
 <div class="arrow">→</div>
 ${card("#d9a441", "👤", "확정 교범", "Field manual", [[tE("무엇", "what"), tE("도장 찍은 결합만 저장소 문서(docs/MAP.md)로", "only stamped couplings become repo docs (docs/MAP.md)")], [tE("누가", "who"), tE("사람 — 원할 때만(선택)", "human — only when you want (optional)")], [tE("효과", "effect"), tE("다음 정찰·검증의 확정 지식 입력", "trusted input for future recon & verification")], [tE("없으면?", "if absent"), tE("아무 문제 없음 — ①~③은 그대로 자동", "totally fine — ①–③ keep running automatically")]])}
 </div>
 <div class="vrel">${tE("<b>검증(2트랙)과의 관계</b> — 구현 Claude가 코드를 바꾸면 Codex가 검증합니다(기존 2트랙). 정찰은 그 앞뒤에 붙습니다: 바꾸기 전 ②가 '어디를 확인해야 하나'를 주고, 검증이 끝나면 그 결과가 ③에 자동으로 쌓여 다음 ②가 더 똑똑해집니다.", "<b>Relation to verification (2-track)</b> — Claude implements, Codex verifies (the existing 2 tracks). Recon wraps around it: before a change, ② tells you what to check; after verification, results accrue into ③ so the next ② gets smarter.")}</div>
+<h1 style="margin-top:20px">${tE("프로젝트 유형별 — 기대할 수 있는 실효성", "By project type — what to realistically expect")}</h1>
+<div class="sub">${tE("유형은 구조로 판단하세요(이름이 아니라). '참고 실측'은 이 도구를 만들며 그 유형에서 실제 운용해 확인한 사례입니다.", "Judge by structure, not by name. 'Reference run' notes where this tool was actually operated on that shape during development.")}</div>
+<div class="types" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;margin:12px 0">
+${card("#c95f6e", "🕸", "대형 서비스(그물형)", "Large service (web-like)", [[tE("구조", "shape"), tE("수많은 부품이 신경망처럼 얽혀 변경 하나가 멀리 번짐", "many parts intertwined — one change ripples far")], [tE("기대", "expect"), tE("최대 효과 — 번짐 예측(②)·과거 힌트(①)의 가치가 가장 큼", "highest value — ripple preview (②) & history hints (①) shine")], [tE("참고 실측", "reference run"), tE("대형 Python 챗봇 서비스에서 지도 생성·씨앗 추출 확인", "map generation & seeding verified on a large Python chat service")]])}
+${card("#5b8dd9", "🧩", "라이브러리·모듈형", "Library / modular", [[tE("구조", "shape"), tE("부품 경계가 뚜렷 — 영향이 대체로 국소적", "clear part boundaries — impact mostly local")], [tE("기대", "expect"), tE("중간~높음 — '한쪽이 쓰고 다른 쪽이 읽는' 파일 짝·사본 동기화 놓침을 잘 잡음", "medium-high — catches writer/reader file pairs & copy-sync misses well")], [tE("참고 실측", "reference run"), tE("이 도구 자신(확장+브릿지+스크립트)이 이 형태로 상시 운용 중", "this tool itself (extension+bridge+scripts) runs on this shape daily")]])}
+${card("#3ca89a", "📝", "문서·메모 폴더", "Docs / notes folder", [[tE("구조", "shape"), tE("변경 기록(버전 관리) 없음", "no change history (version control)")], [tE("기대", "expect"), tE("제한적 — 과거 힌트(①) 불가, 최근 수정 기준 지도(②)와 일지(③)만", "limited — no history hints (①); maps from recent edits (②) + journal (③) only")], [tE("참고 실측", "reference run"), tE("메모 폴더에서 무이력 지도 생성 확인", "historyless maps verified on a notes folder")]])}
+${card("#d9a441", "🌱", "신생 프로젝트", "Young project", [[tE("구조", "shape"), tE("기록이 아직 얕음", "history still shallow")], [tE("기대", "expect"), tE("점증 — 처음엔 ①이 조용하고(표본 부족) ②③부터 가치, 기록이 쌓일수록 상승", "grows over time — ① quiet at first (few samples); value starts at ②③ and rises as records accrue")], [tE("참고 실측", "reference run"), tE("아직 별도 실증 없음(원리상 위 유형들의 초기 상태와 동일)", "no separate run yet (in principle the early state of the types above)")]])}
+</div>
+<div class="sub">${tE("공통 한계(정직): 처음 생기는 결합은 어떤 기록에도 없어 못 봅니다 · 실행해봐야 드러나는 동작(타이밍·권한·OS 차이)은 안 담깁니다 · AI 정찰(⚡)을 한 번도 실행하지 않으면 ②③④는 비어 있습니다.", "Honest common limits: first-ever couplings exist in no record and can't be seen · behaviors only running reveals (timing, permissions, OS differences) aren't captured · if AI recon (⚡) never runs, ②③④ stay empty.")}</div>
 <div class="faq">
 <b>${tE("Q. 내가 일일이 승인해야 하나요?", "Q. Do I have to approve things one by one?")}</b>
 ${tE("아니요. 적재·승격·강등은 전부 자동입니다. 👤 단계(확정 교범 내보내기)와 고정/차단만 선택 개입이고, 안 써도 아무것도 멈추지 않습니다.", "No. Accrual, promotion and demotion are fully automatic. Only the 👤 step (exporting to the manual) and pin/ban are optional — skipping them stops nothing.")}
 <b>${tE("Q. 언제 비용(LLM 호출)이 나가나요?", "Q. When does an LLM call (cost) happen?")}</b>
-${tE("⚡ 단계(영향지도 생성)뿐입니다 — self 팔은 무료 경로, DeepSeek 팔은 키를 등록했을 때만. ⚙ 단계들은 LLM 없이 돌고, 상태바 호버에 '지금 실행 중인 LLM 호출' 여부가 항상 표시됩니다.", "Only the ⚡ step (map generation) — the self arm is the free path; the DeepSeek arm only with a registered key. ⚙ steps run without LLM, and the status-bar hover always shows whether an LLM call is running.")}
+${tE("⚡ 단계(영향지도 생성)뿐입니다 — self 팔은 별도 과금 없이 쓰시던 Claude로 실행되고(Claude 사용량 범위), DeepSeek 팔은 키를 등록했을 때만. ⚙ 단계들은 LLM 없이 돌고, 상태바 호버에 '지금 실행 중인 LLM 호출' 여부가 항상 표시됩니다.", "Only the ⚡ step (map generation) — the self arm adds no separate billing and runs on the Claude you already use (within your Claude usage); the DeepSeek arm only with a registered key. ⚙ steps run without LLM, and the status-bar hover always shows whether an LLM call is running.")}
+<b>${tE("Q. AI 정찰(⚡)을 한 번도 실행하지 않으면 어떻게 되나요?", "Q. What if the AI recon (⚡) never runs?")}</b>
+${tE("①(변경 감지)의 힌트만 동작하고, ②③④는 계속 비어 있습니다 — 이 축의 실질 성과는 AI 정찰 실행에서 나옵니다. 즉 3트랙을 켜기만 하고 정찰을 안 돌리면 얻는 것이 거의 없습니다.", "Only ①'s hints work; ②③④ stay empty — this axis delivers real value through AI recon runs. Turning 3-track on without ever running recon yields very little.")}
 <b>${tE("Q. 데이터는 어디로 가나요?", "Q. Where does data go?")}</b>
 ${tE("전부 이 컴퓨터의 브릿지 홈에 남습니다. 유일한 외부 전송은 DeepSeek 팔 '실행 순간'의 증거 꾸러미이며, 민감 범주 파일은 내용도 이름도 가려집니다(PRIVACY.md).", "Everything stays in the bridge home on this machine. The only external transfer is the evidence package at the moment the DeepSeek arm runs — sensitive-category files are excluded by content and by name (PRIVACY.md).")}
 </div>
@@ -886,7 +897,7 @@ function computeState(turnsN: number): BridgeState {
     }
   }
   const pref: any = links.modelPrefs[normWs(ws || "")] || {};
-  const scope = readScopeState(ws);       // 3트랙 기초 탐색(내부에서 scoutMode 확인·캐시)
+  const scope = readScopeState(ws);       // 3트랙 변경 감지(내부에서 scoutMode 확인·캐시)
   const scoutMaps = readScoutMaps(ws);    // 3트랙 지도 게시판(읽기 전용)
 
   const hid = hiddenSessions();
@@ -1666,11 +1677,11 @@ class Dashboard {
             scoutMode: normScoutMode({ scoutMode: m.scoutMode }),
           }, slotLang);
           if (!ok) vscode.window.showErrorMessage(tE("설정 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 저장해 주세요(기존 설정은 그대로 유지됩니다).","Failed to save settings — file locked or inaccessible. Try again shortly (existing settings are kept)."));
-          // 3트랙 저장인데 DeepSeek 키가 없으면 안내(차단 아님 — 기초 탐색은 키 없이 동작): 기대치 설정용 1회성 토스트.
+          // 3트랙 저장인데 DeepSeek 키가 없으면 안내(차단 아님 — 변경 감지·self 팔은 키 없이 동작): 기대치 설정용 1회성 토스트.
           if (ok && normScoutMode({ scoutMode: m.scoutMode }) === "on" && !readDeepseekView().hasKey) {
             vscode.window.showInformationMessage(tE(
-              "3트랙(정찰)이 켜졌어요. 키 없이도 ①변경 감지(함께 변경 통계)와 무료 self 팔 ②영향지도(직접/자동 지시 실행)까지 동작합니다 — DeepSeek API 키는 '비교용 두 번째 정찰 팔'을 열 때만 필요해요(대시보드 ⚙️ 고급설정 탭).",
-              "3-track is on. Without any key you get change sensing (co-change stats) plus free self-arm impact maps (direct/auto-directive runs) — a DeepSeek API key is only needed to unlock the second, comparison scout arm (dashboard ⚙️ Advanced tab)."));
+              "3트랙(정찰)이 켜졌어요. 키 없이도 ①변경 감지와 self 팔 ②영향지도(별도 과금 없음 — 쓰시던 Claude로 실행)까지 동작합니다 — DeepSeek API 키는 '비교용 두 번째 정찰 팔'을 열 때만 필요해요(대시보드 ⚙️ 고급설정 탭).",
+              "3-track (recon) is on. Without any key you get ① change sensing and ② self-arm impact maps (no separate billing — runs on the Claude you already use) — a DeepSeek API key is only needed to unlock the second, comparison scout arm (dashboard ⚙️ Advanced tab)."));
           }
           this.post();
           this.panel?.webview.postMessage({ type: "saveResult", target: "contract", ok });
@@ -2187,7 +2198,7 @@ class Dashboard {
         <button type="button" data-sm="off">${t("2트랙<small>구현↔검증 (기본)</small>", "2-track<small>implement↔verify (default)</small>")}</button><button type="button" data-sm="on">${t("3트랙<small>+정찰 (관찰)</small>", "3-track<small>+recon (advisory)</small>")}</button>
       </span>
     </label>
-    <div class="hint"><span class="ic" title="${t("정찰(3트랙) = 4단계 흐름 — ①변경 감지(기계·LLM 없음): 지금 바뀌는 파일+과거에 함께 바뀐 통계 ②영향지도(정찰 LLM 호출): 이 변경이 어디까지 번질지 미리보기 ③관찰 일지(자동·추가 LLM 없음): 검증을 지나며 맞은 것/틀린 것이 저절로 쌓임 ④확정 교범(👤 선택): 원할 때만 도장 찍어 저장소 문서로 — 안 써도 ①~③은 자동. 관찰(advisory) 단계 — 아무것도 막거나 강제하지 않고, 외부 전송은 ②의 DeepSeek 팔 실행 시에만(키 등록=동의). 이 설정은 프로젝트별 저장.", "Recon (3-track) = a 4-step flow — ① change sensing (machine, no LLM): files changing now + historical co-change stats ② impact map (scout LLM call): preview how far this change reaches ③ field journal (auto, no extra LLM): right/wrong accrues by itself through verification ④ field manual (👤 optional): stamp items into repo docs only when you want — ①–③ run without it. Advisory — blocks/forces nothing; external transfer only when ②'s DeepSeek arm runs (key registration = consent). Saved per project.")}">ⓘ ${t("정찰이란? (4단계 흐름)", "What is recon? (the 4-step flow)")}</span></div>
+    <div class="hint"><span class="ic" title="${t("정찰(3트랙) = 4단계 흐름 — ①변경 감지(기계·AI 없음): 지금 고치는 파일+예전에 같이 바뀌던 파일 힌트 ②영향지도(정찰 AI 호출): 이 변경이 어디까지 번질지 미리보기 ③관찰 일지(자동·추가 LLM 없음): 검증을 지나며 맞은 것/틀린 것이 저절로 쌓임 ④확정 교범(👤 선택): 원할 때만 도장 찍어 저장소 문서로 — 안 써도 ①~③은 자동. 관찰(advisory) 단계 — 아무것도 막거나 강제하지 않고, 외부 전송은 ②의 DeepSeek 팔 실행 시에만(키 등록=동의). 이 설정은 프로젝트별 저장.", "Recon (3-track) = a 4-step flow — ① change sensing (machine, no AI): files you're editing + hints of files that changed together before ② impact map (scout AI call): preview how far this change reaches ③ field journal (auto, no extra LLM): right/wrong accrues by itself through verification ④ field manual (👤 optional): stamp items into repo docs only when you want — ①–③ run without it. Advisory — blocks/forces nothing; external transfer only when ②'s DeepSeek arm runs (key registration = consent). Saved per project.")}">ⓘ ${t("정찰이란? (4단계 흐름)", "What is recon? (the 4-step flow)")}</span></div>
     <div id="scoutApiLine" class="muted" style="display:none;font-size:11.5px;margin:4px 0 0 2px"></div>
     <div id="scoutBox" class="stagebox" style="display:none"></div>
     <div class="stagebox" id="stageBox">
@@ -2324,7 +2335,7 @@ class Dashboard {
   <section id="tab-adv" class="tab-panel">
     <h2 class="sec base accent-yellow">${t("고급설정", "Advanced Settings")} <span class="sub2">${t("정찰(3트랙) 고급 단계용 — 전역 설정(모든 프로젝트 공통)", "for the advanced recon stage (3-track) — global (shared by all projects)")}</span></h2>
     <div class="card">
-      <div class="chead">${t("DeepSeek API 키", "DeepSeek API key")} <span class="muted" style="font-weight:400">${t("· 3트랙의 'DeepSeek 비교 팔'(두 번째 탐색자)에만 필요 — 키 없이도 기초 탐색과 무료 self 팔 영향지도는 동작해요", "· only needed for 3-track's DeepSeek comparison arm (second scout) — basic scouting and free self-arm impact maps work without it")}</span></div>
+      <div class="chead">${t("DeepSeek API 키", "DeepSeek API key")} <span class="muted" style="font-weight:400">${t("· 3트랙의 'DeepSeek 비교 팔'(두 번째 정찰자)에만 필요 — 키 없이도 변경 감지와 self 팔 영향지도(별도 과금 없음)는 동작해요", "· only needed for 3-track's DeepSeek comparison arm (second scout) — change sensing and self-arm impact maps (no separate billing) work without it")}</span></div>
       <div class="hint">${t("키는 이 컴퓨터의 브릿지 홈(<code>~/.codex-bridge/deepseek.json</code>)에만 저장되고 저장소(GitHub)에는 절대 들어가지 않아요. 전송은 <b>지도 생성이 실행될 때만</b> 일어나요 — 당신이 직접 실행하거나, <b>키 등록=동의 모델</b>에 따라 3트랙 자동 지시를 받은 Claude가 실행(조건: 지도가 없거나 낡았을 때 그 상태에 1회 지시 — 확장·훅 자체는 전송하지 않음). 대시보드를 보는 것만으로는 전송 없음. 발동 조건과 전송·제외 내용은 PRIVACY에 명시돼 있어요.", "The key is stored only in this machine's bridge home (<code>~/.codex-bridge/deepseek.json</code>) and never enters the repo (GitHub). Transmission happens <b>only when map generation runs</b> — you run it directly, or under the <b>key-registration=consent model</b> Claude runs it on the 3-track auto-directive (issued once per missing/stale-map state — the extension/hooks themselves never transmit). Viewing the dashboard sends nothing. Trigger conditions and what is sent/excluded are documented in PRIVACY.")}</div>
       <div class="row" style="margin-top:8px">
         <input type="password" id="dsKey" placeholder="sk-..." style="flex:1;min-width:220px" autocomplete="off" />
@@ -2769,10 +2780,10 @@ class Dashboard {
             + (ds? T(" · 마지막 성공 통신 "+new Date(ds.ts).toLocaleString()," · last successful call "+new Date(ds.ts).toLocaleString())
                  : T(" · 이 프로젝트에선 아직 실행 기록 없음"," · no runs recorded in this project yet"));
         } else {
-          api.textContent=T("DeepSeek 비교 팔: 키 없음 — 무료 self 팔·기초 탐색만 동작해요(⚙️ 고급설정에서 등록 가능).","DeepSeek comparison arm: no key — free self arm & basic scouting only (register in ⚙️ Advanced).");
+          api.textContent=T("DeepSeek 비교 팔: 키 없음 — 변경 감지와 self 팔 지도(별도 과금 없음)만 동작해요(⚙️ 고급설정에서 등록 가능).","DeepSeek comparison arm: no key — change sensing & self-arm maps (no separate billing) only (register in ⚙️ Advanced).");
         }
         // 비-git 폴더면 기준을 명시(아래 상태 요약과 일관): 통계만 불가, 지도는 무이력 모드로 가능.
-        if(d.scope && d.scope.note==="no-git") api.textContent += T(" ※ 이 폴더는 git 이력이 없어 함께변경 통계만 불가 — 지도는 무이력 모드로 가능해요."," ※ This folder has no git history, so only co-change stats are unavailable — maps still work via historyless mode.");
+        if(d.scope && d.scope.note==="no-git") api.textContent += T(" ※ 이 폴더는 변경 기록(버전 관리)이 없어 '같이 바뀌던 파일' 힌트만 불가 — 지도는 최근 수정 기준으로 가능해요."," ※ This folder has no change history (version control), so only 'changed-together' hints are unavailable — maps still work from recent edits.");
       })();
       if(!on){ box.style.display="none"; return; }
       box.style.display="";
@@ -2788,35 +2799,43 @@ class Dashboard {
         [["#3ca89a","⚙"],["#9a6cdc","⚡"],["#3ca89a","⚙"],["#d9a441","👤"]].forEach(function(p,i){ const dot=document.createElement("span"); dot.textContent=p[1]; dot.style.cssText="color:"+p[0]+";font-size:10px"; strip.appendChild(dot); if(i<3){ const ar=document.createElement("span"); ar.textContent="→"; ar.style.cssText="color:var(--vscode-descriptionForeground);font-size:9px;margin:0 1px"; strip.appendChild(ar);} });
         det.firstChild.appendChild(strip);
         const inner=document.createElement("div");
-        const addIn=(txt,cls)=>{const el=document.createElement("div"); el.className=cls||"sbrow"; el.textContent=txt; inner.appendChild(el); return el;};
         const sc=d.scope, sm=d.scoutMaps, ml=d.mapLedger;
-        // 성격 프로필(요청 2 — 상태 나열이 아니라 '이 프로젝트 성격에서 무엇을 기대할 수 있나' 번역·실측 근거 표기)
+        // 단계 행 — 색 보더+이름 볼드+상태 분리(시안성: 화이트 텍스트 나열 지적 반영). 전부 textContent(이스케이프 지뢰 무관).
+        const addStep=(color,name,state)=>{const row=document.createElement("div"); row.style.cssText="background:var(--vscode-editorWidget-background);border:1px solid var(--vscode-panel-border);border-left:3px solid "+color+";border-radius:5px;padding:6px 9px;margin:5px 0;font-size:11.5px"; const nm=document.createElement("b"); nm.textContent=name; nm.style.color=color; const st=document.createElement("div"); st.className="muted"; st.style.marginTop="2px"; st.textContent=state; row.appendChild(nm); row.appendChild(st); inner.appendChild(row); return row;};
+        // 성격 프로필(요청 2) — '이 폴더에서 관측된 신호' 기준 판정 + 제품 개발 중 확인 사례는 '참고 실측'으로 분리(현재 폴더 판정처럼 안 읽히게)
         safe(function(){
           const nonGit = sc && sc.note==="no-git";
           const deepHist = sc && typeof sc.logCount==="number" && sc.logCount>=100;
           let kind, value;
-          if(nonGit){ kind=T("이력(git) 없는 폴더 — 메모·문서형","non-git folder — notes/docs style"); value=T("기대 효용: 통계는 원리상 불가하지만, 최근 수정 파일 기준 영향지도(무이력 모드)와 관찰 일지는 그대로 동작해요. (같은 형태 폴더에서 라이브 검증됨)","expect: stats impossible in principle, but historyless impact maps + the field journal work as-is. (verified live on a folder of this shape)"); }
-          else if(deepHist){ kind=T("이력 깊은 코드 프로젝트","code project with deep history"); value=T("기대 효용: 4단계 전부 유효 — 함께변경 통계·영향지도·관찰 일지·확정 교범. (대형 Python 서비스·모듈형 확장에서 실측 검증됨)","expect: all 4 steps effective — co-change stats, impact maps, journal, manual. (verified on a large Python service & a modular extension)"); }
-          else { kind=T("신생/커밋이 드문 프로젝트","young project / sparse commits"); value=T("기대 효용: 통계는 표본이 쌓일 때까지 침묵할 수 있어요 — 영향지도와 관찰 일지부터 가치가 나옵니다.","expect: stats may stay silent until samples accrue — impact maps & the journal deliver value first."); }
+          if(nonGit){ kind=T("변경 기록(버전 관리) 없는 일반 폴더 — 메모·문서형","plain folder without change history — notes/docs style"); value=T("기대: '같이 바뀌던 파일' 힌트는 계산할 수 없지만, 최근 수정 파일 기준의 영향지도와 관찰 일지는 그대로 동작해요. (참고 실측: 같은 형태 폴더에서 운용 확인)","expect: 'changed-together' hints can't be computed, but impact maps based on recently modified files + the journal work as-is. (reference run: verified on a folder of this shape)"); }
+          else if(deepHist){ kind=T("변경 기록이 깊이 쌓인 코드 프로젝트","code project with a deep change history"); value=T("기대: 4단계 전부 제값 — 과거 힌트·영향지도·관찰 일지·확정 문서. (참고 실측: 대형 서비스·모듈형 확장에서 운용 확인)","expect: all 4 steps at full value — history hints, impact maps, journal, manual. (reference runs: a large service & a modular extension)"); }
+          else { kind=T("이제 시작한(기록이 얕은) 프로젝트","young project (shallow history)"); value=T("기대: 과거 힌트는 기록이 쌓일 때까지 조용할 수 있어요 — 영향지도와 관찰 일지부터 가치가 나옵니다.","expect: history hints may stay quiet until records accrue — impact maps & the journal deliver value first."); }
           const tn = d.hasTestsDir===false ? T(" ※ 표준 테스트 폴더(tests/·test/) 미감지 — 지도의 '확인할 테스트' 절이 비어 나올 수 있어요(관행 밖 위치는 못 봅니다).","  ※ no standard tests/ folder detected — the map's 'tests to check' section may come back empty (non-standard layouts aren't scanned).") : "";
-          const el=addIn(T("이 프로젝트 성격: ","This project: ")+kind+" · "+value+tn,"muted"); el.style.fontWeight="600";
+          const boxEl=document.createElement("div"); boxEl.style.cssText="background:var(--vscode-editorWidget-background);border:1px solid var(--vscode-panel-border);border-radius:5px;padding:7px 9px;margin:6px 0;font-size:11.5px;font-weight:600";
+          boxEl.textContent=T("이 프로젝트 성격: ","This project: ")+kind+" · "+value+tn;
+          inner.appendChild(boxEl);
         });
-        addIn(T("흐름 — 기계가 모으고(⚙) → 정찰 LLM이 예측하고(⚡) → 경험이 자동으로 쌓이고(⚙) → 원할 때만 문서로 도장 찍습니다(👤·선택). 승인 없이도 전부 자동으로 굴러갑니다.","Flow — machine gathers (⚙) → scout LLM predicts (⚡) → experience accrues automatically (⚙) → stamp into docs only when you want (👤·optional). Everything runs without approvals."),"sbhead");
-        let s1;
-        if(!sc) s1=T("대기 — 3트랙 저장 직후 자동 시작","pending — starts after saving 3-track");
-        else if(sc.note==="no-git") s1=T("제한 — git 이력이 없어 통계 불가(지도는 무이력 모드로 가능)","limited — no git history for stats (maps still work, historyless)");
-        else if(sc.note==="error") s1=T("일시 불가 — 이력 조회 실패(자동 재시도)","temporarily unavailable — history query failed (auto-retry)");
-        else if(sc.suggestion && sc.suggestion.sparse) s1=T("제한 — 과거 표본 부족(추측 대신 침묵)","limited — sample too small (silent, no guessing)");
-        else s1=T("가능 — 변경·통계 자동 수집 중","working — changes & stats collected automatically");
-        addIn(T("① 변경 감지 ⚙ LLM 없음 · ","① Change sensing ⚙ no LLM · ")+s1,"muted");
-        let s2;
-        if(d.scoutLive) s2=T("호출 중 — "+(d.scoutLive.arm==="deepseek"?"DeepSeek":"self")+" 팔이 지도 생성 중","calling — "+(d.scoutLive.arm==="deepseek"?"DeepSeek":"self")+" arm generating");
-        else if(!sm || !sm.count) s2=T("아직 없음 — 아래 영향지도 카드의 명령으로 생성(무료 self 팔)","none yet — generate via the command in the impact-map card (free self arm)");
-        else s2=T("지도 "+sm.count+"장","maps: "+sm.count)+((typeof d.scoutMapStale==="number"&&d.scoutMapStale>0)?T(" · 최신 지도가 낡았을 수 있음(파일 "+d.scoutMapStale+"개 더 바뀜)"," · latest may be stale ("+d.scoutMapStale+" files changed since)"):T(" · 최신 지도 신선"," · latest fresh"))+(d.deepseek&&d.deepseek.hasKey?T(" · 비교 팔(DeepSeek) 사용 가능"," · comparison arm (DeepSeek) available"):"");
-        addIn(T("② 영향지도 ⚡ 정찰 LLM 호출 · ","② Impact map ⚡ scout LLM call · ")+s2,"muted");
+        addStep("#3ca89a", T("① 변경 감지 ⚙ 자동","① Change sensing ⚙ auto"), (function(){
+          if(!sc) return T("대기 — 3트랙 저장 직후 자동 시작","pending — starts after saving 3-track");
+          if(sc.note==="no-git") return T("제한 — 이 폴더엔 변경 기록(버전 관리)이 없어 '같이 바뀌던 파일' 힌트를 계산할 수 없어요(지도는 최근 수정 기준으로 가능)","limited — this folder has no change history, so 'changed-together' hints can't be computed (maps still work from recent edits)");
+          if(sc.note==="error") return T("일시 불가 — 기록 조회 실패(자동 재시도)","temporarily unavailable — history query failed (auto-retry)");
+          if(sc.suggestion && sc.suggestion.sparse) return T("제한 — 과거 기록 표본 부족(추측 대신 침묵)","limited — sample too small (silent, no guessing)");
+          return T("동작 중 — 지금 고치는 파일과 과거 힌트를 자동 수집","working — collecting current edits & history hints automatically");
+        })());
+        addStep("#9a6cdc", T("② 영향지도 ⚡ AI 호출","② Impact map ⚡ AI call"), (function(){
+          if(d.scoutLive) return T("호출 중 — "+(d.scoutLive.arm==="deepseek"?"DeepSeek":"self")+" 팔이 지도 생성 중","calling — "+(d.scoutLive.arm==="deepseek"?"DeepSeek":"self")+" arm generating");
+          if(!sm || !sm.count) return T("AI 정찰 보고서(영향지도)가 아직 없음 — 아래 영향지도 카드의 명령으로 생성","no AI recon report (impact map) yet — generate via the command in the impact-map card");
+          return T("지도 "+sm.count+"장","maps: "+sm.count)+((typeof d.scoutMapStale==="number"&&d.scoutMapStale>0)?T(" · 최신 지도가 낡았을 수 있음(파일 "+d.scoutMapStale+"개 더 바뀜)"," · latest may be stale ("+d.scoutMapStale+" files changed since)"):T(" · 최신 지도 신선"," · latest fresh"))+(d.deepseek&&d.deepseek.hasKey?T(" · 비교 팔(DeepSeek) 사용 가능"," · comparison arm (DeepSeek) available"):"");
+        })());
         const c=ml&&ml.counts;
-        addIn(T("③ 관찰 일지 ⚙ 추가 LLM 없음(검증 대화에 편승) · ","③ Field journal ⚙ no extra LLM (rides the verify chat) · ")+(c&&(c.trusted+c.reference+c.disputed)>0?T("신뢰 "+c.trusted+" · 미검증 "+c.reference+" · 틀림 판명 "+c.disputed,"trusted "+c.trusted+" · unverified "+c.reference+" · disputed "+c.disputed):T("비어 있음 — 지도가 생기면 씨앗이 자동으로 쌓여요","empty — seeds accrue automatically once maps exist")),"muted");
-        addIn(T("④ 확정 교범 👤 선택(내보내기할 때만 — 없어도 자동 동작) · ","④ Field manual 👤 optional (only when you export — everything runs without it) · ")+(ml&&ml.mapExists?T((ml.mapRel||"docs/MAP.md")+" 있음 — 승인 "+(ml.mapApproved||0)+"개",(ml.mapRel||"docs/MAP.md")+" exists — "+(ml.mapApproved||0)+" approved"):T("아직 없음 — 관찰 일지에서 '내보내기'로 승격하면 생성","none yet — created when you export from the journal")),"muted");
+        addStep("#3ca89a", T("③ 관찰 일지 ⚙ 자동","③ Field journal ⚙ auto"), (c&&(c.trusted+c.reference+c.disputed)>0?T("신뢰 "+c.trusted+" · 미검증 "+c.reference+" · 틀림 판명 "+c.disputed+" (검증 대화에 편승 — 추가 AI 호출 없음)","trusted "+c.trusted+" · unverified "+c.reference+" · disputed "+c.disputed+" (rides the verify chat — no extra AI calls)"):T("비어 있음 — 지도(②)가 생기면 그 예측이 여기서 자동 채점되며 쌓여요","empty — once a map (②) exists, its predictions get auto-graded and accrue here")));
+        addStep("#d9a441", T("④ 확정 교범 👤 선택","④ Field manual 👤 optional"), (ml&&ml.mapExists?T("확정 문서("+(ml.mapRel||"docs/MAP.md")+") 있음 — 도장 찍은 항목 "+(ml.mapApproved||0)+"개","manual ("+(ml.mapRel||"docs/MAP.md")+") exists — "+(ml.mapApproved||0)+" stamped items"):T("확정 문서("+((ml&&ml.mapRel)||"docs/MAP.md")+")가 아직 안 만들어졌어요 — 관찰 일지에서 '내보내기'를 누르는 순간 생성돼요(없어도 나머지 단계는 그대로 동작)","the manual ("+((ml&&ml.mapRel)||"docs/MAP.md")+") hasn't been created yet — it appears the moment you export from the journal (everything else runs without it)")));
+        // LLM 필수성 정직 고지(사용자 지적 2026-07-08: '한계 누락') — ②가 ③④의 유일한 자동 씨앗 원천이라는 구조적 사실.
+        safe(function(){
+          const warn=document.createElement("div"); warn.style.cssText="border:1px solid #9a6cdc;border-radius:5px;padding:7px 9px;margin:6px 0;font-size:11.5px";
+          warn.textContent=T("⚡ 알아두기: 이 축의 실질 성과는 'AI 정찰 실행(②)'에서 나와요 — 한 번도 실행하지 않으면 ①의 힌트만 동작하고 ②③④는 계속 비어 있습니다. self 팔은 별도 과금 없음(쓰시던 Claude로 실행 — Claude 사용량 범위), DeepSeek 팔은 선택입니다.","⚡ Note: this axis delivers real value through 'AI recon runs (②)' — if it never runs, only ①'s hints work and ②③④ stay empty. The self arm adds no separate billing (runs on the Claude you already use — within your Claude usage), the DeepSeek arm is optional.");
+          inner.appendChild(warn);
+        });
         det.appendChild(inner);
         box.appendChild(det);
         // 자세히 보기(새탭) — summary '밖'에 배치(토글 충돌 방지). 대시보드와 별개 정적 안내 탭.
@@ -2825,39 +2844,39 @@ class Dashboard {
         gb.addEventListener("click", function(){ vscode.postMessage({type:"openReconGuide"}); });
         box.appendChild(gb);
       });
-      add(T("변경 감지 ⚙ LLM 없음 — 지금 바뀌는 파일과 '과거에 함께 바뀐' 후보","Change sensing ⚙ no LLM — files changing now + historical co-change candidates"),"sbhead");
+      (function(){ const h=add(T("변경 감지 ⚙ 자동·AI 호출 없음 — 지금 고치는 파일 + 예전에 같이 바뀌곤 했던 파일 힌트","Change sensing ⚙ auto · no AI calls — files you're editing + hints that used to change with them"),"sbhead"); h.style.cssText="border-left:3px solid #3ca89a;padding-left:8px"; })();
       // 탐색 상태 요약 1줄(사용자 지적: 침묵을 상태로 번역) — 지금 무엇이 돌고/안 돌고 있고, 다음 행동이 뭔지.
       (function(){
         const sc=d.scope; let line;
         if(d.scoutLive) line=T("지금: 지도 생성 중… ("+(d.scoutLive.arm==="deepseek"?"DeepSeek":"self")+" 팔 — 끝나면 아래 게시판에 도착)","Now: generating a map… ("+(d.scoutLive.arm==="deepseek"?"DeepSeek":"self")+" arm — lands on the board below when done)");
         else if(!sc) line=T("지금: 계산 대기 — 3트랙 저장 직후 자동 시작돼요.","Now: pending — starts right after saving 3-track.");
-        else if(sc.note==="no-git") line=T("지금: 이력(git) 없는 폴더 — 함께변경 통계는 불가 · 지도는 '무이력 모드'(최근 수정 파일 기준)로 직접/자동 지시 실행 시 생성돼요.","Now: no-history (non-git) folder — co-change stats unavailable · maps still work in 'historyless mode' (based on recently modified files) on direct/auto-directive runs.");
-        else if(sc.note==="error") line=T("지금: 이력 조회 실패 — 잠시 후 자동 재시도돼요.","Now: history query failed — retries shortly.");
+        else if(sc.note==="no-git") line=T("지금: 이 폴더엔 변경 기록(버전 관리)이 없어요 — '같이 바뀌던 파일' 힌트는 계산 불가 · 지도는 최근 수정 파일 기준으로 직접/자동 지시 실행 시 생성돼요.","Now: this folder has no change history (version control) — 'changed-together' hints can't be computed · maps are generated from recent edits on direct/auto-directive runs.");
+        else if(sc.note==="error") line=T("지금: 변경 기록을 읽지 못했어요 — 잠시 후 자동 재시도돼요.","Now: couldn't read the change history — retries shortly.");
         else if(sc.note==="no-changes") line=T("지금: 대기 — 작업트리에 변경이 없어요. 파일이 바뀌면 변경 감지가 자동으로 후보를 찾고, 지도는 직접/자동 지시 실행으로 만들어져요.","Now: idle — no working-tree changes. Change sensing finds candidates automatically once files change; maps are made on direct/auto-directive runs.");
         else {
           const when = sc.checkedAt ? new Date(sc.checkedAt).toLocaleTimeString() : "?";
           const cand = (sc.suggestion && sc.suggestion.candidates) ? sc.suggestion.candidates.length : 0;
-          line=T("지금: 변경 감지 동작 중 — 최근 채굴 "+when+" (이력 "+sc.logCount+"건 검토 · 후보 "+cand+"개) · 지도는 직접/자동 지시 실행 대기.","Now: change sensing active — last mined "+when+" ("+sc.logCount+" commits reviewed · "+cand+" candidates) · maps await a direct/auto-directive run.");
+          line=T("지금: 변경 감지 동작 중 — 마지막 확인 "+when+" (과거 변경 "+sc.logCount+"건 검토 · 후보 "+cand+"개) · 지도는 직접/자동 지시 실행 대기.","Now: change sensing active — last checked "+when+" ("+sc.logCount+" past changes reviewed · "+cand+" candidates) · maps await a direct/auto-directive run.");
         }
         const el=add(line,"muted"); el.style.fontWeight="600";
       })();
-      // 키 안내 — 키 없으면 'DeepSeek 비교 팔만 비활성'(기초 탐색+무료 self 팔 지도는 무키 동작)을 카드 안에서 상시 고지(기대치 설정)
+      // 키 안내 — 키 없으면 'DeepSeek 비교 팔만 비활성'(변경 감지+self 팔 지도는 무키 동작)을 카드 안에서 상시 고지(기대치 설정)
       if(d.deepseek && !d.deepseek.hasKey){
-        add(T("ⓘ 키 없이도 변경 감지(변경 통계·증거 수집) + 무료 self 팔 지도(직접/자동 지시 실행)까지 가능해요 — DeepSeek API 키는 '비교용 두 번째 정찰 팔'만 엽니다(⚙️ 고급설정 탭).","ⓘ Without any key you get change sensing (co-change stats · evidence) plus free self-arm maps (direct/auto-directive runs) — a DeepSeek API key only unlocks the second, comparison scout arm (⚙️ Advanced tab)."),"muted");
+        add(T("ⓘ 키 없이도 변경 감지 + self 팔 지도(별도 과금 없음 — 쓰시던 Claude로 실행)까지 가능해요 — DeepSeek API 키는 '비교용 두 번째 정찰 팔'만 엽니다(⚙️ 고급설정 탭).","ⓘ Without any key you get change sensing plus self-arm maps (no separate billing — runs on the Claude you already use) — a DeepSeek API key only unlocks the second, comparison scout arm (⚙️ Advanced tab)."),"muted");
       }
       const sc=d.scope;
       if(!sc){ add(T("계산 대기 — 3트랙 저장 후 자동 갱신됩니다.","Pending — refreshes automatically after saving 3-track."),"muted"); return; }
-      if(sc.note==="no-git"){ add(T("git 저장소가 아니어서 이력 채굴을 할 수 없어요.","Not a git repository — history mining unavailable."),"muted"); return; }
+      if(sc.note==="no-git"){ add(T("이 폴더엔 변경 기록(버전 관리·git)이 없어서 '예전에 같이 바뀌던 파일' 힌트를 만들 수 없어요.","This folder has no change history (version control / git), so 'changed together before' hints can't be built."),"muted"); return; }
       if(sc.note==="no-changes"){ add(T("지금 작업트리에 변경이 없어요 — 파일을 바꾸면 여기에 후보가 떠요.","No working-tree changes yet — candidates appear once files change."),"muted"); return; }
-      if(sc.note==="error"||!sc.suggestion){ add(T("git 조회 실패 — 잠시 후 다시 시도돼요.","git query failed — will retry shortly."),"muted"); return; }
-      add(T("변경 중(seed): ","Changing (seed): ")+sc.seeds.join(", "),"muted");
+      if(sc.note==="error"||!sc.suggestion){ add(T("변경 기록을 읽지 못했어요 — 잠시 후 다시 시도돼요.","Couldn't read the change history — will retry shortly."),"muted"); return; }
+      add(T("지금 고치는 중: ","Editing now: ")+sc.seeds.join(", "),"muted");
       const s=sc.suggestion;
       if(s.sparse){
-        add(T("데이터 없음 — 이 파일들은 과거 이력 표본이 부족해(관측 "+s.seedObservations+"회 < 3) 추측 대신 침묵합니다. 신생 영역이면 정상이에요.","No data — history sample too small for these files (seen "+s.seedObservations+"× < 3); the ledger stays silent instead of guessing. Normal for new areas."));
+        add(T("데이터 없음 — 이 파일들은 과거에 바뀐 기록이 아직 적어서("+s.seedObservations+"회 < 3) 추측 대신 조용히 있어요. 새로 만든 영역이면 정상이에요.","No data — these files have too few past-change records ("+s.seedObservations+"× < 3), so we stay quiet instead of guessing. Normal for new areas."));
       } else if(!s.candidates.length){
         add(T("문턱(함께 변경 3회)을 넘는 후보가 없어요.","No candidates above the threshold (co-changed 3×)."));
       } else {
-        s.candidates.forEach(c=>{ add("• "+c.file+"  ("+T("함께 변경 ","co-changed ")+c.n+T("회","×")+")"); });
+        s.candidates.forEach(c=>{ add("• "+c.file+"  ("+T("예전에 같이 바뀜 ","changed together before ")+c.n+T("회","×")+")"); });
       }
       add(T("⚠ 이 장부가 못 보는 것: 처음 생기는 결합·실행해봐야 아는 동작·의미적 연쇄 — 후보가 없다고 영향이 없는 게 아니에요. (관찰 단계: 아무것도 막거나 강제하지 않음 · 전부 로컬 git, 외부 전송 없음)","⚠ What this ledger cannot see: first-time couplings, behaviors only running reveals, semantic chains — no candidates ≠ no impact. (Advisory: blocks/forces nothing · all local git, nothing sent anywhere)"),"muted");
     });
@@ -2866,14 +2885,14 @@ class Dashboard {
     safe(function(){
       const box=$("scoutBox"); if(!box || box.style.display==="none") return; // 3트랙 카드가 보일 때만 이어붙임
       const add=(txt,cls)=>{const el=document.createElement("div"); el.className=cls||"sbrow"; el.textContent=txt; box.appendChild(el); return el;};
-      add(T("영향지도(정찰 보고) ⚡ LLM 호출 — 탐색자(분리 AI)가 보낸 최근 지도","Impact maps (recon reports) ⚡ LLM call — recent maps from the scout (separate AI)"),"sbhead");
+      (function(){ const h=add(T("영향지도(정찰 보고) ⚡ AI 호출 — 정찰 AI가 보낸 최근 지도","Impact maps (recon reports) ⚡ AI call — recent maps from the scout AI"),"sbhead"); h.style.cssText="border-left:3px solid #9a6cdc;padding-left:8px"; })();
       add(T("ⓘ 영향지도 = 지금 바꾸는 것이 어디까지 영향을 주는지 탐색 AI가 정리한 확인 목록(직접·간접 영향 후보, 확인할 테스트, 범위 밖으로 봐도 되는 것). 생성되면 이 게시판에 도착해요.","ⓘ Impact map = a checklist from the scout AI of how far your current change reaches (direct/indirect impact candidates, tests to check, safely out-of-scope). New maps land on this board."),"muted");
       const sm=d.scoutMaps;
       if(!sm || !sm.count){
         const nonGit = d.scope && d.scope.note==="no-git";
         add(nonGit
-          ? T("아직 지도가 없어요 — 이력(git)이 없는 폴더는 '무이력 모드'(최근 수정 파일 기준·전후 비교 없음)로 지도를 만들어요. 생성은 codex-peek 소스 저장소 폴더의 터미널에서: node scripts/scope-scout-self.js <이 폴더 경로>. 생성되면 몇 초 뒤 여기 자동으로 떠요.","No maps yet — folders without git history use 'historyless mode' (based on recently modified files, no before/after diff). Generate from a terminal in the codex-peek source repo: node scripts/scope-scout-self.js <this folder>. New maps appear here a few seconds after generation.")
-          : T("아직 지도가 없어요 — 생성은 codex-peek 소스 저장소 폴더의 터미널에서: node scripts/scope-scout-self.js <프로젝트경로> (무료 팔) 또는 scope-scout-deepseek.js (DeepSeek 팔). 마켓 설치본에는 이 스크립트가 안 들어 있어요(현 단계는 수동·개발자 플로우). 생성되면 몇 초 뒤 여기 자동으로 떠요.","No maps yet — generate from a terminal in the codex-peek source repo: node scripts/scope-scout-self.js <repo> (free arm) or scope-scout-deepseek.js (DeepSeek arm). These scripts are not bundled in the marketplace build (manual/developer flow for now). New maps appear here a few seconds after generation."),"muted");
+          ? T("AI 정찰 보고서(영향지도)가 아직 없어요 — 변경 기록이 없는 폴더는 '최근 수정 파일 기준'(전후 비교 없음)으로 지도를 만들어요. 생성은 codex-peek 소스 저장소 폴더의 터미널에서: node scripts/scope-scout-self.js <이 폴더 경로>. 생성되면 몇 초 뒤 여기 자동으로 떠요.","No AI recon report (impact map) yet — folders without change history build maps from recently modified files (no before/after diff). Generate from a terminal in the codex-peek source repo: node scripts/scope-scout-self.js <this folder>. New maps appear here a few seconds after generation.")
+          : T("AI 정찰 보고서(영향지도)가 아직 없어요 — 생성은 codex-peek 소스 저장소 폴더의 터미널에서: node scripts/scope-scout-self.js <프로젝트경로> (별도 과금 없음 — 쓰시던 Claude로 실행) 또는 scope-scout-deepseek.js (DeepSeek 팔). 마켓 설치본에는 이 스크립트가 안 들어 있어요(현 단계는 수동·개발자 플로우). 생성되면 몇 초 뒤 여기 자동으로 떠요.","No AI recon report (impact map) yet — generate from a terminal in the codex-peek source repo: node scripts/scope-scout-self.js <repo> (no separate billing — runs on the Claude you already use) or scope-scout-deepseek.js (DeepSeek arm). These scripts are not bundled in the marketplace build (manual/developer flow for now). New maps appear here a few seconds after generation."),"muted");
         return;
       }
       // 낡은 지도 배지(신선도 — 경고 아님): 최신 지도 생성 이후 지금 변경 중인 파일이 더 바뀌었으면 정직 표기.
@@ -2970,7 +2989,7 @@ class Dashboard {
       const st=$("dsState"); if(!st) return;
       st.textContent = d.deepseek && d.deepseek.hasKey
         ? T("등록됨: ","Registered: ") + d.deepseek.masked + T(" · 모델: "," · model: ") + d.deepseek.model
-        : T("등록된 키 없음 — 잠기는 건 DeepSeek 비교 팔뿐(기초 탐색·무료 self 팔 지도는 키 없이 동작).","No key registered — only the DeepSeek comparison arm is locked (basic scouting and free self-arm maps work without it).");
+        : T("등록된 키 없음 — 잠기는 건 DeepSeek 비교 팔뿐(변경 감지·self 팔 지도[별도 과금 없음]는 키 없이 동작).","No key registered — only the DeepSeek comparison arm is locked (change sensing and self-arm maps [no separate billing] work without it).");
     });
     // 온보딩: 미완료=설명 단계(이동 버튼·은은한 펄스) / 완료=축하+끄기 / 끄고 완료=다시보기 링크만.
     // 미완료(연결 끊김·검증 꺼짐)면 끄기 여부와 무관하게 단계가 다시 보여 '고장'을 숨기지 않음.
@@ -3559,9 +3578,9 @@ export function activate(context: vscode.ExtensionContext): void {
         const maps = readScoutMaps(ws);
         const stale = computeScoutMapStale(ws, sc, maps);
         const scout = !sc ? tE("대기", "idle")
-          : sc.note === "no-git" ? tE("이력 없음 — 통계 불가 · 지도는 무이력 모드(수동)", "no history — stats unavailable · maps via historyless mode (manual)")
+          : sc.note === "no-git" ? tE("변경 기록 없음 — 힌트 불가 · 지도는 최근 수정 기준(직접/자동 지시 실행)", "no change history — hints unavailable · maps from recent edits (direct/auto-directive runs)")
           : sc.note === "no-changes" ? tE("대기(변경 없음)", "idle (no changes)")
-          : sc.note === "error" ? tE("이력 조회 실패", "history query failed")
+          : sc.note === "error" ? tE("변경 기록 읽기 실패", "couldn't read change history")
           : tE(`변경 감지 동작 중 — 후보 ${sc.suggestion?.candidates.length ?? 0}개`, `change sensing active — ${sc.suggestion?.candidates.length ?? 0} candidate(s)`);
         const n = maps?.count ?? 0;
         const last = maps?.latest?.ts ? new Date(maps.latest.ts).toLocaleString() : "";
