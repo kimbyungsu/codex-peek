@@ -42,7 +42,7 @@ if (r.error || r.status !== 0 || !String(r.stdout || "").trim()) {
   process.exit(1);
 }
 const map = r.stdout.trim();
-// 비용 영구 기록 — self 팔(claude -p text)은 토큰을 안 알려줘 usage는 null, 문자수(입력 꾸러미·출력 지도)만
+// 비용 장부 기록(60일 보존) — self 팔(claude -p text)은 토큰을 안 알려줘 usage는 null, 문자수(입력 꾸러미·출력 지도)만
 // 추정 재료로 기록(정직: 토큰 아님). 실측 토큰은 --output-format json 전환 시 후속(HANDOFF §6-12).
 try { appendScoutUsage({ ts: new Date().toISOString(), workspace: repo, arm: "self", model: null, usageIn: null, usageOut: null, pkgChars: (preface + md).length, mapChars: map.length }); } catch { /* 무해 */ }
 if (outFile) fs.writeFileSync(outFile, map);

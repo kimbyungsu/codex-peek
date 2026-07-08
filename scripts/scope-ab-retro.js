@@ -17,6 +17,7 @@ const repoArg = process.argv[2];
 const argN = process.argv.indexOf("--n");
 const N = argN > 0 ? Number(process.argv[argN + 1]) : 6;
 const NO_LLM = process.argv.includes("--no-llm");
+const NO_LEDGER = process.argv.includes("--no-ledger"); // 대조 실측(ablation) — 기억 주입만 끄고 동일 조건 측정(기억 효과 분리)
 const argArm = process.argv.indexOf("--arm");
 const ARM = argArm > 0 ? process.argv[argArm + 1] : "self";
 const argJson = process.argv.indexOf("--json");
@@ -102,6 +103,22 @@ try {
     delete require.cache[require.resolve("./scope-package.js")];
     const { collectPackage } = require("./scope-package.js");
     const pkg = collectPackage(wt);
+    // 관측 장부 주입(2026-07-09 재실측 개보수): worktree는 서랍 키(경로 해시)가 본 레포와 달라 일지가 '구조적으로
+    // 빈' 채 측정돼 왔다 — 실사용 꾸러미(§7.5)에는 본 레포 일지가 들어가므로 실측이 실사용보다 불리한 조건이었음.
+    // 본 레포 일지를 주입하되 '그 커밋 시각 이전' 이벤트만(시간 절단 — 그 커밋에서 파생된 확인 지식으로 그 커밋을
+    // 맞히는 순환·미래 누출 방지). attached 재적재는 안 함(실측이 실장부를 오염시키지 않게 — ledgerForPackage 미사용).
+    try {
+      if (NO_LEDGER) throw new Error("ablation"); // --no-ledger: 주입 생략(catch가 pkg.ledger=null — 기존 무기억 조건 재현)
+      const CLlib = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
+      const LE = require(path.join(__dirname, "..", "out", "ledger-events.js"));
+      const commitMs = Date.parse(git(repo, ["show", "-s", "--format=%cI", c.hash]).out.trim());
+      const evts = LE.parseEventsJsonl(CLlib.readLedgerEventsText(repo)).events.filter((e) => {
+        const t = Date.parse(e.ts || "");
+        return Number.isFinite(t) && Number.isFinite(commitMs) && t < commitMs;
+      });
+      pkg.ledger = evts.length ? LE.selectForPackage(LE.deriveLedger(evts), pkg.seeds || []) : null;
+      console.error(`  장부 주입: 커밋 시점 이전 이벤트 ${evts.length}건(시간 절단 — 순환 방지)`);
+    } catch { pkg.ledger = null; }
     const l12Files = [...new Set((pkg.tokenHits || []).flatMap((h) => h.files))];
     const s0Files = (pkg.coChange && !pkg.coChange.sparse ? pkg.coChange.candidates.map((i) => i.file) : []).filter(Boolean); // suggest()의 실제 형태: {candidates:[{file,..}], sparse}
 

@@ -25,4 +25,8 @@ assert.ok(/const\s+co\s*=\s*git\(\s*wt\s*,\s*\[\s*["']checkout["']/.test(src), "
 assert.ok(/!co\.ok\s*\|\|\s*!cl\.ok/.test(src), "checkout/clean 실패 게이트(!co.ok || !cl.ok)가 없음");
 assert.ok(src.includes('"-fdx"'), "clean이 -fdx가 아님(ignored 잔재가 다음 커밋 채점에 섞일 수 있음)");
 
-console.log("ab-retro invariants OK (repo 변이 금지 · candidates 형태 · 복원 실패 게이트)");
+// ④ 장부 주입(2026-07-09) — 실측도 실사용처럼 기억을 보되, 시간 절단·비오염
+assert.ok(/pkg\.ledger = evts\.length \? LE\.selectForPackage/.test(src) && /t < commitMs/.test(src), "본 레포 일지 주입+커밋 시각 이전 이벤트만(순환·미래 누출 방지)이 없음");
+assert.ok(src.includes("attached 재적재는 안 함") && !/ledgerForPackage\(repo/.test(src), "실측의 실장부 비오염(attached 미적재) 보장이 없음");
+
+console.log("ab-retro invariants OK (repo 변이 금지 · candidates 형태 · 복원 실패 게이트 · 장부 주입 시간절단)");

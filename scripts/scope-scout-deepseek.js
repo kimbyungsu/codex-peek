@@ -38,7 +38,7 @@ if (r.error || r.status !== 0) { console.error(tB("DeepSeek 탐색 호출 실패
 // 대시보드 '영향지도 게시판'용 보관 — 브릿지가 stderr로 알려준 사용량 메타([usage] in=.. out=.. (모델))를 함께 기록.
 const um = String(r.stderr || "").match(/\[usage\] in=(\d+) out=(\d+)(?: \((.+?)\))?/);
 const meta = um ? { usageIn: Number(um[1]), usageOut: Number(um[2]), model: um[3] || null } : {};
-// 비용 영구 기록 — 지도 메타는 최근 10장 프루닝으로 사라지므로 별도 장부에 누적(60일 · 사용자 비용 추정용)
+// 비용 장부 기록(60일 보존) — 지도 메타는 최근 10장 프루닝으로 사라지므로 별도 장부에 누적(60일 · 사용자 비용 추정용)
 try { appendScoutUsage({ ts: new Date().toISOString(), workspace: repo, arm: "deepseek", model: meta.model || null, usageIn: meta.usageIn ?? null, usageOut: meta.usageOut ?? null, pkgChars: md.length, mapChars: r.stdout.length }); } catch { /* 무해 */ }
 try { console.error(tB("지도 보관(게시판): ","Map archived (board): ") + saveMap(repo, "deepseek", r.stdout.trim(), { ...meta, ...scoutPromptSignature(lang), highlights: extractMapHighlights(r.stdout), mapPatches: extractMapPatches(r.stdout), basis: pkg.basisNote || (pkg.historyless ? "" : "git-status"), seedFiles: pkg.seeds })); } catch (e) { console.error(tB("지도 보관 실패(게시판에만 영향): ","Map archive failed (affects the board only): ") + (e && e.message)); }
 // 관측 장부: 지도가 낸 6번(MAP patch) 제안을 사실로 적재 — 상태 전이는 out/ledger-events.js가 유도(로드맵 1단계)
