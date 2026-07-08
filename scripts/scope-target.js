@@ -34,25 +34,32 @@ const usableGit = (p) => {
 };
 const gitLabel = (p) => usableGit(p) ? tB("git 저장소(이력 있음)","git repo (has history)") : hasGitDir(p) ? tB("git 폴더는 있으나 커밋 이력 없음(무이력 모드로 동작)","has a .git folder but no commit history (runs in historyless mode)") : tB("비-git(무이력 모드로 동작)","non-git (runs in historyless mode)");
 
-function writeBothSlots(mutate) {
-  const files = [contractFileFor(ws, "ko"), contractFileFor(ws, "en")];
-  let touched = 0;
-  for (const f of files) {
-    let o = null;
-    try { o = JSON.parse(fs.readFileSync(f, "utf8")); } catch { /* 이 슬롯 없음 */ }
-    if (!o) { if (f !== files[0]) continue; o = {}; } // en은 있을 때만(없는 슬롯 생성 금지 — scope-gate와 동일 규칙)
-    mutate(o);
-    if (!atomicWrite(f, JSON.stringify({ ...o, updatedAt: new Date().toISOString() }, null, 2))) {
-      console.error(tB(`저장 실패: ${f} (권한/디스크?)`,`Save failed: ${f} (permission/disk?)`)); process.exit(1);
-    }
-    touched++;
+// 현재 언어 슬롯에만 저장 — 언어 슬롯 분리 원칙(2026-07-09 사용자 결정: 한글/영문 생활권은 다른 사용자,
+// 규칙·기본지침과 동일 · API 키만 전역). 반대 슬롯 값이 다르면 고지(소실 오해 방지)하고 건드리지 않는다.
+function writeCurrentSlot(mutate) {
+  const f = contractFileFor(ws, loadLang());
+  let o = {};
+  try { o = JSON.parse(fs.readFileSync(f, "utf8")) || {}; } catch { /* 슬롯 파일 없으면 신설 */ }
+  mutate(o);
+  if (!atomicWrite(f, JSON.stringify({ ...o, updatedAt: new Date().toISOString() }, null, 2))) {
+    console.error(tB(`저장 실패: ${f} (권한/디스크?)`,`Save failed: ${f} (permission/disk?)`)); process.exit(1);
   }
-  return touched;
+}
+function noteOtherSlot() {
+  try {
+    const lang = loadLang();
+    const other = lang === "ko" ? "en" : "ko";
+    const oo = JSON.parse(fs.readFileSync(contractFileFor(ws, other), "utf8"));
+    const cur = (loadContract(ws).scoutRepo || "").trim() || tB("(지정 없음)","(not set)");
+    const ov = (oo.scoutRepo || "").trim() || tB("(지정 없음)","(not set)");
+    if (ov !== cur) console.log(tB(`ⓘ ${other} 언어 모드의 정찰 대상은 ${ov} 그대로입니다(언어별 분리 저장).`,`ⓘ The ${other}-language scout target stays ${ov} (settings are stored per language).`));
+  } catch { /* 반대 슬롯 없음 — 고지 불요 */ }
 }
 function setTarget(repoAbs) {
   if (!fs.existsSync(repoAbs) || !fs.statSync(repoAbs).isDirectory()) { console.error(tB(`대상이 존재하지 않거나 폴더가 아님: ${repoAbs}`,`Target does not exist or is not a folder: ${repoAbs}`)); process.exit(1); }
-  const n = writeBothSlots((o) => { o.scoutRepo = repoAbs; });
-  console.log(tB(`scoutRepo=${repoAbs} 저장(계약 파일 ${n}개 갱신).`,`scoutRepo=${repoAbs} saved (${n} contract file(s) updated).`));
+  writeCurrentSlot((o) => { o.scoutRepo = repoAbs; });
+  console.log(tB(`scoutRepo=${repoAbs} 저장(${loadLang()} 언어 슬롯 — 다른 언어 모드는 별도 설정).`,`scoutRepo=${repoAbs} saved (${loadLang()} language slot — other language modes keep their own setting).`));
+  noteOtherSlot();
   if (!usableGit(repoAbs)) console.log(tB("ⓘ 대상: " + gitLabel(repoAbs) + " — 정찰이 전후 비교 없는 축소 꾸러미로 동작합니다(정직 고지).","ⓘ Target: " + gitLabel(repoAbs) + " — recon will run on a reduced pack without before/after diffs (honest note)."));
   console.log(tB("ⓘ 이관: 기존에 세션 폴더 서랍에 쌓인 관찰 일지가 있으면 node scripts/scope-ledger-migrate.js로 옮길 수 있습니다(--dry 먼저).","ⓘ Migration: if a journal already accumulated under the session folder, move it with node scripts/scope-ledger-migrate.js (--dry first)."));
 }
@@ -64,8 +71,9 @@ if (cmd === "status") {
   process.exit(0);
 }
 if (cmd === "clear") {
-  const n = writeBothSlots((o) => { delete o.scoutRepo; });
-  console.log(tB(`scoutRepo 해제(계약 파일 ${n}개 갱신) — 정찰은 세션 폴더 기준으로 복귀.`,`scoutRepo cleared (${n} contract file(s) updated) — recon reverts to the session folder.`));
+  writeCurrentSlot((o) => { delete o.scoutRepo; });
+  console.log(tB(`scoutRepo 해제(${loadLang()} 언어 슬롯) — 정찰은 세션 폴더 기준으로 복귀.`,`scoutRepo cleared (${loadLang()} language slot) — recon reverts to the session folder.`));
+  noteOtherSlot();
   process.exit(0);
 }
 if (cmd === "set") {

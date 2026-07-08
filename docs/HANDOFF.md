@@ -68,7 +68,7 @@
   메타에 basis(간주 기준)·seedFiles(근거 파일 — 낡음 배지·물때표의 재료) 기록.
 - **자동 지시(지시 주입형)**: `bridge/contract-lib.js buildScoutDirective` — 3트랙 프로젝트에서 지도 없음/낡음이면
   턴 시작 훅(contract-inject)이 Claude에게 갱신 지시 주입. **재지시 억제 = 상태 서명(`no-map` | `stale:<최신 지도 파일명>`) 1회**(시간 상수 0).
-  동의 모델: **키 등록=DeepSeek 팔 자동 사용 동의**(PRIVACY에 명시). 확장·훅 자체는 어떤 전송도 하지 않음.
+  동의 모델: **키 등록=DeepSeek 팔 자동 사용 동의**(PRIVACY에 명시). 확장이 직접 하는 외부 요청은 3트랙 켤 때 연결 점검 1회뿐 — 지도 꾸러미 전송은 확장·훅이 직접 수행하지 않음(2026-07-09 정정: 연결 점검 도입으로 '어떤 전송도 없음'은 더 이상 사실 아님).
 - **가시화**: 대시보드 탐색 카드("지금:" 상태 요약·연결 줄·기초 탐색 통계·영향지도 게시판·낡음 배지) + 흐름 지도 둘째 줄
   (Claude→탐색자→게시판) + 히어로 탐색자 카드 + 상태바(망원경 아이콘·생성 도는 동안만 "탐색중" — scout-live 신호).
 - **검증 동봉(Phase 3 — 2026-07-07 구현)**: `contract-lib.js extractMapHighlights`(지도 MD에서 ①~④ 구획의 high만 구조화 —
@@ -190,7 +190,7 @@
    buildScoutAttach/scoutMapStatus 호출부·codex-bridge flagLedgerConfirms(장부 기록 대상만 — 인용 해석은 execCwd 유지)·
    scout-gate(신선도·지시 명령=대상, 관측 로그에 ws·target 병기)·extension 정찰 판독기 전부(scoutTargetFor — 3카피 패리티
    테스트 잠금)+카드에 대상 고지. CLI: `scripts/scope-target.js`(status/set/auto[직하위 1단계 유일 git 루트만 자동·복수는
-   나열]/clear — ko·en 슬롯 동시) · `scripts/scope-ledger-migrate.js`(서랍 이관 — dry 선행·복사 보존·ts+type+sig 중복
+   나열]/clear — ~~ko·en 슬롯 동시~~ **2026-07-09 개정: 현재 언어 슬롯만 저장**(§6-9)) · `scripts/scope-ledger-migrate.js`(서랍 이관 — dry 선행·복사 보존·ts+type+sig 중복
    스킵=멱등). 테스트 `tests/scout-target.test.js`(28단언 — 상대경로 무효·빈 .git 오판·기존 지정 잔존 반례 잠금 포함).
 4-4. **(후속 문서 정리)** README ko 본문 일부에 '함께-변경 통계·커밋 이력' 등 옛 표현 잔존(동작 오도 아님 —
    Codex 확인). UI는 '정찰 흐름' 사람 언어로 전거 완료(옛 용어 잔재는 테스트 부정 단언으로 잠김) — 문서만 후속.
@@ -207,6 +207,18 @@
    (deepseek-bridge.test.js 잔재 금지 단언). **후속 후보**: (a) reconcile 상태 파일 from을 중립 구조 {arm,ts}로 저장하고
    렌더 시 번역(Codex 보완안 — sig 식별 무관·언어 전환 시 이력 표기 혼재는 미관 문제) (b) scope-ledger-backfill.js(타 PC
    작성)가 아직 한글 전용 — tB 이중언어화 필요(cli-bilingual 테스트 대상에도 추가).
+9. ~~정찰 설정 언어 슬롯 분리~~ — **완료 2026-07-09(사용자 결정)**: 한글 모드와 영어 모드는 사실상 다른 사용자
+   (생활권 분리) — 정찰 부속 설정(scoutGate·scoutRepo)도 규칙·기본지침처럼 **현재 언어 슬롯에만** 저장.
+   scope-gate·scope-target의 양슬롯 동기화(writeBothSlots) 폐기, 대신 반대 슬롯 값이 다르면 ⓘ 고지(소실 오해
+   방지 — otherSlotHasRules 선례). **API 키(deepseek.json)만 전역 공유가 맞음(사용자 확정)**. 3트랙 선택
+   스위치(scoutMode)는 원래부터 대시보드가 슬롯별 저장이라 무변경. 잠금: scout-gate [5]·scout-target [5-1].
+   ⚠ 파생 원칙: 앞으로 '설정'은 언어 슬롯별, '전역'은 API 키·언어 자체뿐. 정찰 '데이터'(지도·일지·교범)는
+   프로젝트 단위·언어 무차원 유지(기억을 언어로 쪼개면 반쪽 학습 — 변경하려면 사용자 합의).
+10. **(다음 · 사용자 예고 2026-07-09) 검증 통계에 '3트랙 기여' 통계** — "2트랙이었으면 못 잡고 지나갔을 것"의
+   기록. 반사실은 직접 측정 불가 → 측정 가능한 대리 신호로: (a) 검증 실패/보류 답이 '동봉된 지도 경로'를 실제
+   지적에 인용한 사례 수(동봉 없었으면 그 지점을 안 봤을 개연) (b) 장부 신뢰분이 다음 꾸러미에 실려 재인용된
+   횟수 (c) 게이트 차단→지도 갱신→플랜 수정 사례(scout-gate-log에 이미 관측 기록 있음). 전부 기존 이벤트에서
+   유도 가능(추가 LLM 0). 사용자 지시로 ①(슬롯 분리)·②(정정 로직 분석) 이후 착수.
 
 ## 6.5 설계 요지와 남은 후보 (레포 밖 설계 원본의 알맹이 — 구현 여부는 각 항목에 표기)
 

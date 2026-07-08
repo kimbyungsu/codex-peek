@@ -95,6 +95,15 @@ runTg("set", repo); // 기존 지정 존재 상태 재현
 const autoStale = runTg("auto");
 ok(autoStale.status === 1 && /기존 지정이 남아 있습니다/.test(autoStale.stdout) && /clear/.test(autoStale.stdout), "ws가 이력 있는 git + 기존 지정 잔존 → 현 지정 표시+clear 안내(조용한 유지·오도 금지)");
 
+console.log("[5-1] 언어 슬롯 분리(2026-07-09 사용자 결정) — set/clear는 현재(ko) 슬롯만, en 슬롯 불가침 + 고지");
+fs.writeFileSync(CL.contractFileFor(ws, "en"), JSON.stringify({ scoutRepo: "D:/EnOnly/repo" }));
+const setKo = runTg("set", repo);
+ok(setKo.status === 0 && JSON.parse(fs.readFileSync(CL.contractFileFor(ws, "en"), "utf8")).scoutRepo === "D:/EnOnly/repo", "set — en 슬롯의 다른 지정을 안 건드림(한/영 생활권 분리 · API 키만 전역)");
+ok(/ⓘ/.test(setKo.stdout) && /EnOnly/.test(setKo.stdout), "반대 슬롯이 다른 값이면 고지(설정 소실 오해 방지)");
+ok(runTg("clear").status === 0 && JSON.parse(fs.readFileSync(CL.contractFileFor(ws, "en"), "utf8")).scoutRepo === "D:/EnOnly/repo", "clear — en 슬롯 보존");
+fs.rmSync(CL.contractFileFor(ws, "en")); // 이후 auto/migrate 단계는 en 슬롯 없는 원래 픽스처로
+runTg("set", repo); // [6]이 기대하는 지정 상태 복원
+
 console.log("[6] scope-ledger-migrate — dry 미기록·복사 보존·중복 스킵·멱등");
 CL.appendLedgerEvent(ws, { ts: "m1", type: "proposed", sig: "mig-a", text: "A ↔ B" });
 CL.appendLedgerEvent(ws, { ts: "m2", type: "proposed", sig: "mig-b", text: "C ↔ D" });

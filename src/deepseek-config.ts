@@ -1,6 +1,7 @@
 // ── DeepSeek 설정(고급 탐색용 키) — 순수 로직 (설계: SCOUT-TRACK §3.2, D4: env/파일 우선·대시보드 UI는 이번에 사용자 요청으로 추가) ──
 // 보안 원칙: 키는 런타임 홈(~/.codex-bridge/deepseek.json)에만 저장(레포 밖 — 커밋 불가 영역). 웹뷰에는 원문을 절대 되돌려주지
-// 않고 마스킹만 보낸다. 현재 버전은 이 키로 어떤 전송도 하지 않는다(LLM 지도 단계 미구현 — PRIVACY 명시).
+// 않고 마스킹만 보낸다. 이 키로 나가는 외부 요청은 둘뿐 — DeepSeek 지도 생성 실행 시 꾸러미 + 3트랙 켤 때
+// 연결 점검 1회(deepseek-bridge.js ping/map — PRIVACY '예외 둘' 명시). 그 외 어떤 경로도 이 키로 전송하지 않는다.
 // vscode/fs 의존 없음 — 파일 IO는 extension 책임. 테스트가 out/deepseek-config.js를 직접 import.
 
 export const DEEPSEEK_DEFAULTS = { model: "deepseek-v4-flash", baseUrl: "https://api.deepseek.com" };

@@ -42,9 +42,16 @@ const extSrc = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts")
 ok(!/아무것도 전송하지 않습니다/.test(extSrc) && !/sends nothing with it/.test(extSrc), "고급설정 문구에서 '전송 없음' 단정 제거(이제 수동 실행 경로가 실재)");
 ok(/지도 생성이 실행될 때만/.test(extSrc) && /only when map generation runs/.test(extSrc) && /키 등록=동의 모델/.test(extSrc), "꾸러미 전송 조건(생성 실행 시에만 — 직접 또는 자동 지시·동의 모델)을 양언어로 명시");
 ok(/연결 점검 1회/.test(extSrc) && /connection check/.test(extSrc) && !/유일한 외부 전송/.test(extSrc), "고급설정·가이드: 연결 점검 예외도 양언어 명시 + '유일한 전송' 잔재 0(예외 둘 체계 — Codex 반례 잠금 2026-07-09)");
+ok(!/실행 시에만\(키 등록=동의\)/.test(extSrc) && !/external transfer only when/.test(extSrc), "세그먼트 힌트: '실행 시에만' 단독 예외 문구 잔재 0(연결 점검 병기 — Codex 2차 반례 잠금)");
+const dsCfg = fs.readFileSync(path.join(__dirname, "..", "src", "deepseek-config.ts"), "utf8");
+ok(!/어떤 전송도 하지 않는다/.test(dsCfg) && /예외 둘/.test(dsCfg), "deepseek-config 주석: 구현 전 낡은 '무전송' 단정 정정(유지보수자 오도 방지)");
+const handoff = fs.readFileSync(path.join(__dirname, "..", "docs", "HANDOFF.md"), "utf8");
+const roadmap = fs.readFileSync(path.join(__dirname, "..", "docs", "ROADMAP.md"), "utf8");
+ok(!/어떤 전송도 하지 않음/.test(handoff) && !/예외 1건/.test(roadmap), "내부 문서(HANDOFF·ROADMAP)에도 '무전송·예외 1건' 계열 잔재 0(Codex 3차 반례 잠금)");
 const readmeKo = fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8");
 const readmeEn = fs.readFileSync(path.join(__dirname, "..", "docs", "README.en.md"), "utf8");
 ok(!/\*\*외부 전송 없음\*\*/.test(readmeKo) && /예외는 둘뿐/.test(readmeKo) && !/유일한 예외/.test(readmeKo), "README(ko): 절대 표현 제거 + 예외 둘(꾸러미·연결 점검) 명시, '유일한 예외' 잔재 0");
+ok(!/예외 1건/.test(readmeKo) && !/실행 시에만\(키 등록=동의/.test(readmeKo), "README(ko): '예외 1건'·'실행 시에만' 잔재 0");
 ok(/Two exceptions/.test(readmeEn) && /connection check/.test(readmeEn) && !/Single exception/.test(readmeEn), "README(en): 예외 둘 명시, 'Single exception' 잔재 0");
 const privacySrc = fs.readFileSync(path.join(__dirname, "..", "PRIVACY.md"), "utf8");
 ok(/나머지 예외 — DeepSeek 지도 생성/.test(privacySrc) && /안 보내는 것\(자동 제외\)/.test(privacySrc), "PRIVACY: 전송 내용·자동 제외 목록 명시(연결 점검 예외 추가로 '유일한→나머지' 개정 — 2026-07-09)");
