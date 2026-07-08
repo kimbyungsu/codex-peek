@@ -105,7 +105,8 @@ export function buildPackage(input: {
 }, opts?: Partial<typeof PKG_DEFAULTS>): ScopePackage {
   const o = { ...PKG_DEFAULTS, ...(opts || {}) };
   const truncations: string[] = [];
-  if (input.sensitiveExcluded && input.sensitiveExcluded.length) truncations.push(`민감 범주 파일 diff 제외(외부 전송 안전): ${input.sensitiveExcluded.join(", ")}`);
+  // 파일명도 생략 — 민감 범주는 이름 자체가 힌트(.env.bak-token-… 실측 2026-07-08 tg-chat-engine). 개수만 정직 고지.
+  if (input.sensitiveExcluded && input.sensitiveExcluded.length) truncations.push(`민감 범주 파일 ${input.sensitiveExcluded.length}개의 diff 제외(외부 전송 안전 — 파일명도 생략)`);
   let diff = String(input.diffText || "");
   if (diff.length > o.maxDiffChars) { diff = diff.slice(0, o.maxDiffChars); truncations.push(`diff ${input.diffText.length}→${o.maxDiffChars}자로 절단`); }
   let map = input.mapContent;
@@ -136,35 +137,54 @@ export function buildPackage(input: {
       "의미적 연쇄(코드에 글자로 안 남는 규칙)는 MAP에 없으면 없다" + (input.mapContent ? "" : " — 이 저장소는 아직 MAP이 없다"),
       "grep은 문자열 일치만 — 리네임·간접 호출·동적 키는 놓칠 수 있다",
       "역참조 grep은 git이 추적(tracked)하는 파일만 본다 — 새(untracked) 파일의 내용과 그 안의 참조는 이 꾸러미에 빠질 수 있다(새 파일 중심 변경이면 과소보고 가능)",
+      "테스트 발견은 node(package.json·tests 폴더 *.test.*)와 pytest(test_*.py 등) 관행만, 그것도 tests/·test/ 폴더 바로 아래만 본다 — 중첩 폴더(tests/unit/ 등)·그 외 생태계의 테스트는 못 볼 수 있다",
     ],
   };
 }
 
 // LLM/self 탐색자에게 먹일 마크다운 렌더 — 판정·수정 지시 금지, '확인할 경로' 제안만 요구(§5 스키마와 짝).
+// ⚠ 이 렌더가 외부(비교 팔)로 나가는 유일한 산출 — 민감 범주 '파일명'은 여기서 가린다(실측 2026-07-08:
+// tg-chat-engine에서 .env.bak-token-… 경로가 seed 목록에 그대로 노출). 내부 데이터(seedFiles 메타 등)는
+// 지도 신선도 판정에 실경로가 필요하고 로컬 전용이라 원형 유지 — 가림은 렌더 한 곳에서만.
 export function renderPackageMarkdown(p: ScopePackage): string {
   const L: string[] = [];
+  const maskList = (paths: string[]): { shown: string[]; hidden: number } => {
+    const shown: string[] = []; let hidden = 0;
+    for (const s of paths) { if (isSensitivePath(s)) hidden++; else shown.push(s); }
+    return { shown, hidden };
+  };
+  const HIDDEN = (n: number) => `[민감 범주 파일 ${n}개 — 이름 생략(전송 보호)]`;
+  // 자유 텍스트(장부 원문·확정 지식층·최근 실패 상세)에 박힌 민감 경로도 가린다 — 목록 마스킹만으론 장부를 타고
+  // 되돌아오는 경로가 남는다(Codex 반례 2026-07-08: 장부 text의 .env.bak-…가 렌더에 원문 노출). 경로꼴 토큰만 치환.
+  const maskText = (s: string): string =>
+    String(s || "").replace(/[A-Za-z0-9_.\\/-]{3,}/g, (t) => (isSensitivePath(t) ? "[민감 범주 — 이름 생략]" : t));
   L.push(`# 영향범위 자료 꾸러미 (결정론 수집 — ${p.meta.repo} @ ${p.meta.head.slice(0, 7)})${p.historyless ? " [무이력 모드 — 비-git]" : ""}`);
-  L.push(`\n## 1. ${p.historyless ? "변경으로 간주한 파일(이력 없음)" : "지금 바뀌는 파일(seed)"}\n${p.seeds.length ? p.seeds.map((s) => `- ${s}`).join("\n") : "(변경 없음)"}${p.basisNote ? `\n(간주 기준: ${p.basisNote})` : ""}`);
+  const seedM = maskList(p.seeds);
+  const seedLines = seedM.shown.map((s) => `- ${s}`).concat(seedM.hidden ? [`- ${HIDDEN(seedM.hidden)}`] : []);
+  L.push(`\n## 1. ${p.historyless ? "변경으로 간주한 파일(이력 없음)" : "지금 바뀌는 파일(seed)"}\n${seedLines.length ? seedLines.join("\n") : "(변경 없음)"}${p.basisNote ? `\n(간주 기준: ${p.basisNote})` : ""}`);
   L.push(p.historyless
     ? `\n## 2. 최근 수정 파일 발췌 (전후 비교 불가 — 지금 내용의 앞부분만)\n\`\`\`\n${p.diff || "(없음)"}\n\`\`\``
     : `\n## 2. 변경 내용(diff)\n\`\`\`diff\n${p.diff || "(없음)"}\n\`\`\``);
   L.push(`\n## 3. 바뀐 식별자를 참조하는 다른 파일들 (문자열 일치 — 파일채널/사본 결합 후보)`);
-  if (p.tokenHits.length) for (const h of p.tokenHits) L.push(`- \`${h.token}\` → ${h.files.join(", ")}${h.truncated ? " (…더 있음)" : ""}`);
+  if (p.tokenHits.length) for (const h of p.tokenHits) {
+    const m = maskList(h.files);
+    L.push(`- \`${h.token}\` → ${m.shown.concat(m.hidden ? [HIDDEN(m.hidden)] : []).join(", ")}${h.truncated ? " (…더 있음)" : ""}`);
+  }
   else L.push("(seed 밖에서 참조되는 바뀐 식별자 없음)");
-  if (p.droppedTokens.length) L.push(`\n(제외된 편재 토큰 — 참조가 너무 흔해 결합 증거가 안 됨: ${p.droppedTokens.join(", ")})`);
+  if (p.droppedTokens.length) L.push(`\n(제외된 편재 토큰 — 참조가 너무 흔해 결합 증거가 안 됨: ${maskText(p.droppedTokens.join(", "))})`);
   L.push(`\n## 4. 과거 '함께 변경' 통계 (이 저장소 git 이력)`);
   if (!p.coChange) L.push("(git 이력 없음)");
   else if (p.coChange.sparse) L.push(`(표본 부족 — seed 관측 ${p.coChange.seedObservations}회 <3 → 통계는 침묵. 신생 영역이면 정상)`);
-  else L.push(p.coChange.candidates.map((c) => `- ${c.file} (함께 변경 ${c.n}회)`).join("\n") || "(문턱 이상 후보 없음)");
+  else L.push(p.coChange.candidates.map((c) => `- ${isSensitivePath(c.file) ? HIDDEN(1) : c.file} (함께 변경 ${c.n}회)`).join("\n") || "(문턱 이상 후보 없음)");
   L.push(`\n## 5. 이 저장소의 테스트\n${p.tests.length ? p.tests.map((t) => `- ${t}`).join("\n") : "(발견된 테스트 없음)"}`);
-  L.push(`\n## 6. 최근 검증 실패/미완 기록\n${p.recentFailures.length ? p.recentFailures.map((f) => `- [${f.ts || "?"}] ${f.kind || ""}: ${(f.detail || "").slice(0, 160)}`).join("\n") : "(없음)"}`);
-  if (p.map) L.push(`\n## 7. stable MAP(확정 지식층)\n${p.map}`);
+  L.push(`\n## 6. 최근 검증 실패/미완 기록\n${p.recentFailures.length ? p.recentFailures.map((f) => `- [${f.ts || "?"}] ${f.kind || ""}: ${maskText((f.detail || "").slice(0, 160))}`).join("\n") : "(없음)"}`);
+  if (p.map) L.push(`\n## 7. stable MAP(확정 지식층)\n${maskText(p.map)}`);
   if (p.ledger) {
     // 관측 장부 — 자동 축적된 결합 지식을 신뢰 등급별로 구분 동봉(confidence band 철학: 재료를 왜곡하지 않고 확신도만 라벨).
     L.push(`\n## 7.5 자동 관측 장부 (제안→검증으로 축적 — 참고자료, 판정 기준 아님)`);
-    if (p.ledger.trusted.length) L.push(`확인됨(검증/사람 고정 — 신뢰 입력):\n${p.ledger.trusted.map((e) => `- ${e.text}`).join("\n")}`);
-    if (p.ledger.reference.length) L.push(`미검증 제안(참고만 — 아직 확인 안 됨):\n${p.ledger.reference.map((e) => `- ${e.text}`).join("\n")}`);
-    if (p.ledger.disputed.length) L.push(`틀림 판명(이미 반박된 결합 — 같은 결론을 다시 내지 마라):\n${p.ledger.disputed.map((e) => `- ${e.text}`).join("\n")}`);
+    if (p.ledger.trusted.length) L.push(`확인됨(검증/사람 고정 — 신뢰 입력):\n${p.ledger.trusted.map((e) => `- ${maskText(e.text)}`).join("\n")}`);
+    if (p.ledger.reference.length) L.push(`미검증 제안(참고만 — 아직 확인 안 됨):\n${p.ledger.reference.map((e) => `- ${maskText(e.text)}`).join("\n")}`);
+    if (p.ledger.disputed.length) L.push(`틀림 판명(이미 반박된 결합 — 같은 결론을 다시 내지 마라):\n${p.ledger.disputed.map((e) => `- ${maskText(e.text)}`).join("\n")}`);
   }
   if (p.meta.truncations.length) L.push(`\n## 절단 고지\n${p.meta.truncations.map((t) => `- ${t}`).join("\n")}`);
   L.push(`\n## ⚠ 이 꾸러미가 못 보는 것\n${p.blindSpots.map((b) => `- ${b}`).join("\n")}`);

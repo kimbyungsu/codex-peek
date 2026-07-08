@@ -82,16 +82,24 @@ const coChange = logOut ? suggest(parseGitLog(logOut), seeds) : null;
 
 // 공용 수집(테스트 목록·최근 검증 실패·stable MAP) — git 경로와 무이력 경로가 공유.
 function collectCommon(repo) {
-  // tests: package.json test 체인 + tests/*.test.* 글롭
+  // tests: node 관행(package.json test 체인 + tests/*.test.* 글롭) + pytest 관행(test_*.py·*_test.py·conftest/pytest.ini)
+  // — 대형 Python 서비스 실측(2026-07-08, tg-chat-engine)에서 pytest 테스트 다수를 '없음'으로 오보하던 결함.
+  // 생태계 무한 나열은 안 함(실사용 범위 node+python) — 그 외 관행은 blindSpots가 정직 고지.
   const tests = [];
   try {
     const pj = JSON.parse(fs.readFileSync(path.join(repo, "package.json"), "utf8"));
     if (pj.scripts && typeof pj.scripts.test === "string") tests.push("npm test  ← " + pj.scripts.test.slice(0, 200));
   } catch { /* package.json 없음 */ }
-  try {
-    const td = path.join(repo, "tests");
-    for (const f of fs.readdirSync(td)) if (/\.test\./.test(f)) tests.push("tests/" + f);
-  } catch { /* tests 폴더 없음 */ }
+  for (const dir of ["tests", "test"]) {
+    try {
+      const names = fs.readdirSync(path.join(repo, dir));
+      for (const f of names) if (/\.test\./.test(f) || /^test_.*\.py$/.test(f) || /_test\.py$/.test(f)) tests.push(dir + "/" + f);
+      if (names.includes("conftest.py")) tests.push("pytest  ← " + dir + "/conftest.py 실재");
+    } catch { /* 폴더 없음 */ }
+  }
+  try { if (fs.existsSync(path.join(repo, "pytest.ini"))) tests.push("pytest  ← pytest.ini 실재"); } catch { /* 무해 */ }
+  try { if (/\[tool\.pytest/.test(fs.readFileSync(path.join(repo, "pyproject.toml"), "utf8"))) tests.push("pytest  ← pyproject.toml [tool.pytest]"); } catch { /* 없음 */ }
+  if (tests.length > 40) { const n = tests.length; tests.length = 40; tests.push(`(…외 ${n - 40}개 — 상한 절단)`); }
 
   // 최근 검증 실패/미완(무결성 기록 — 이 repo(workspace) 것만)
   let recentFailures = [];

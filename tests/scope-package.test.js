@@ -74,8 +74,31 @@ const quoted = 'diff --git "a/\\353\\271\\204\\353\\260\\200/secrets.txt" "b/\\3
 const redQ = redactSensitiveDiff(quoted);
 ok(!/HIDDEN/.test(redQ.text) && /keepMe/.test(redQ.text) && redQ.excluded.length === 1, "따옴표(특수문자 경로) 헤더도 제외 — 비ASCII 경로의 민감 파일 누락 방지");
 const pSens = buildPackage({ ...base, diffText: "d", recentFailures: [], sensitiveExcluded: [".env", "certs/server.key"] });
-ok(pSens.meta.truncations.some((t) => /민감 범주.*\.env/.test(t)), "제외 사실이 꾸러미 고지에 표기(은폐 금지)");
-ok(/민감 범주 파일 diff 제외/.test(renderPackageMarkdown(pSens)), "렌더에도 고지 노출(탐색자가 빠진 부분을 인지)");
+ok(pSens.meta.truncations.some((t) => /민감 범주 파일 2개/.test(t) && !/\.env/.test(t)), "제외 사실은 '개수'로 고지 — 파일명 자체도 생략(이름이 곧 힌트인 실측 2026-07-08 반영, 은폐 아님)");
+ok(/민감 범주 파일 2개의 diff 제외/.test(renderPackageMarkdown(pSens)) && !/certs\/server\.key/.test(renderPackageMarkdown(pSens)), "렌더 고지에도 파일명 부재(탐색자는 '빠졌다'는 사실만 인지)");
+
+console.log("[민감 경로 렌더 가리기] 외부로 나가는 유일 산출(마크다운)에서 seed·역참조·통계의 민감 '파일명'까지 생략");
+const pLeak = buildPackage({
+  ...base, diffText: "d", recentFailures: [],
+  seeds: ["src/app.ts", ".env.bak-token-1781429433", ".env.bak-preactivate"],
+  tokenHits: [{ token: "appLogic", files: ["src/use.ts", ".env.bak-token-1781429433"], truncated: false }],
+  coChange: { sparse: false, seedObservations: 9, candidates: [{ file: "secrets/prod.yaml", n: 4 }, { file: "src/pair.ts", n: 3 }] },
+});
+const leakMd = renderPackageMarkdown(pLeak);
+ok(!/\.env\.bak/.test(leakMd) && !/secrets\/prod\.yaml/.test(leakMd), "민감 파일명이 렌더 어디에도 없음(seed·역참조·함께변경 — tg-chat-engine 실측 결함 잠금)");
+ok(/민감 범주 파일 2개 — 이름 생략\(전송 보호\)/.test(leakMd) && /src\/app\.ts/.test(leakMd), "seed: 일반 파일 유지 + 민감은 개수 표기(침묵 은폐 아님)");
+ok(/src\/use\.ts, \[민감 범주 파일 1개/.test(leakMd) && /src\/pair\.ts \(함께 변경 3회\)/.test(leakMd), "역참조·통계도 동일 규칙(일반 항목은 원형 유지)");
+ok(pLeak.seeds.includes(".env.bak-token-1781429433"), "내부 데이터(seeds)는 원형 유지 — 지도 신선도 판정용(가림은 렌더 한 곳)");
+// 자유 텍스트 되돌이 경로(Codex 반례 2026-07-08): 장부 원문·확정 지식층·최근 실패 상세를 타고 민감 경로가 재유입
+const pFree = buildPackage({
+  ...base, diffText: "d",
+  recentFailures: [{ ts: "t", kind: "verify-incomplete", detail: "실패 중 .env.bak-token-1781429433 참조" }],
+  mapContent: "## 확정\n- secrets/prod.yaml ↔ src/deploy.ts — 배포 결합",
+  ledger: { trusted: [{ text: ".env.bak-preactivate ↔ scripts/activate.js 결합" }], reference: [{ text: "src/ok.ts ↔ docs/OK.md" }], disputed: [] },
+});
+const freeMd = renderPackageMarkdown(pFree);
+ok(!/\.env\.bak/.test(freeMd) && !/secrets\/prod\.yaml/.test(freeMd), "장부 원문·확정 지식층·실패 상세의 민감 경로도 렌더에서 가림(되돌이 유입 차단)");
+ok(/\[민감 범주 — 이름 생략\] ↔ scripts\/activate\.js/.test(freeMd) && /src\/ok\.ts ↔ docs\/OK\.md/.test(freeMd), "치환은 민감 토큰만 — 문장 구조·일반 경로는 보존");
 const drvSrc = require("fs").readFileSync(path.join(__dirname, "..", "scripts", "scope-package.js"), "utf8");
 ok(/redactSensitiveDiff\(raw\)/.test(drvSrc) && drvSrc.indexOf("redactSensitiveDiff(raw)") < drvSrc.indexOf("extractDiffTokens(diffText)"), "드라이버가 토큰 추출 '전'에 제외(비밀값이 역참조 씨앗으로 새지 않음)");
 
@@ -109,6 +132,22 @@ ok(/if \(lastMapTs\) \{/.test(drvHl) && drvHl.indexOf("if (lastMapTs) {") < drvH
 try { require("fs").rmSync(tmpNg, { recursive: true, force: true }); } catch { /* 정리 실패 무해 */ }
 const drvSrc2 = require("fs").readFileSync(path.join(__dirname, "..", "scripts", "scope-package.js"), "utf8");
 ok(/파일 탐색이 상한/.test(drvSrc2) && /capped/.test(drvSrc2), "파일 탐색 상한 도달도 절단 고지(침묵 과소보고 방지 — Codex 보완)");
+
+console.log("[pytest 관행 발견] 대형 Python 서비스 실측(tg-chat-engine '테스트 없음' 오보 2026-07-08) 잠금");
+const tmpPy = require("fs").mkdtempSync(path.join(os2.tmpdir(), "pytest-"));
+require("fs").mkdirSync(path.join(tmpPy, "tests"));
+require("fs").writeFileSync(path.join(tmpPy, "tests", "test_acceptance.py"), "def test_a(): pass");
+require("fs").writeFileSync(path.join(tmpPy, "tests", "engine_test.py"), "def test_b(): pass");
+require("fs").writeFileSync(path.join(tmpPy, "tests", "conftest.py"), "");
+require("fs").writeFileSync(path.join(tmpPy, "tests", "helper.py"), "# 테스트 아님");
+require("fs").writeFileSync(path.join(tmpPy, "pytest.ini"), "[pytest]");
+require("fs").writeFileSync(path.join(tmpPy, "main.py"), "x = 1");
+const pyPkg = collectPkgHl(tmpPy); // 비-git이라 무이력 경로 — collectCommon(테스트 수집)은 git 경로와 공유
+ok(pyPkg.tests.includes("tests/test_acceptance.py") && pyPkg.tests.includes("tests/engine_test.py"), "pytest 파일명 관행(test_*.py·*_test.py) 발견");
+ok(pyPkg.tests.some((t) => /conftest\.py 실재/.test(t)) && pyPkg.tests.some((t) => /pytest\.ini 실재/.test(t)), "pytest 설정 실재 표기(conftest·pytest.ini)");
+ok(!pyPkg.tests.some((t) => /helper\.py/.test(t)), "테스트 아닌 .py는 미포함(관행 패턴만)");
+ok(pyPkg.blindSpots.some((b) => /그 외 생태계의 테스트는 못 볼 수 있다/.test(b)), "생태계 한계 각주(정직 고지 — 무한 나열 대신)");
+try { require("fs").rmSync(tmpPy, { recursive: true, force: true }); } catch { /* 무해 */ }
 
 console.log("[collectPackage 통합] 드라이버가 이 저장소에서 완전한 꾸러미 형태를 반환(CI 얕은 클론에서도 구조 유지)");
 const { collectPackage } = require(path.join(__dirname, "..", "scripts", "scope-package.js"));
