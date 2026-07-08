@@ -221,6 +221,12 @@
 6. (후보) 대시보드 게이트 토글 UI(현재 CLI만 — informed consent 문구에 실측 명중률 표기), 발화 기록(scope-ledger-note)
    흐름의 실사용 관찰.
 7. (관찰 항목) 한 폴더 다중 프로그램 구분 — 권장 관행은 프로그램별 폴더 분리, 보강 후보는 seed 클러스터 자동 좁힘.
+7-1. **(후속 후보 · 2026-07-09 사용자 관찰 "동봉 참고 블록이 늘 비슷하다" 분석 확정)** 동봉(buildScoutAttach) 개선
+   3건 — Codex 합의: (a) 관련성 정렬: 최신 지도 top8 고정 첨부 대신 '지금 바뀐 파일(git status)과의 교집합 우선'
+   재랭킹(selectForPackage 씨앗 교집합과 동일 문법) (b) 파서 소음 강화 필터: high에 '/arm'·'DeepSeek/scoutLiveNow/flow'
+   같은 비경로 토큰 잔존(extractMapHighlights 슬래시 관용성 — §6-2 알려진 소음) → 실존 파일 검증 or 토큰 규칙 강화
+   (c) cap 8 전 재랭킹(문서 순서라 하단 새 항목이 밀림). '비슷함'의 주성분은 정상(같은 지형 반복 작업+턴당 지도
+   1장 설계 — 지도 미갱신 사이 동봉은 동일), 부성분이 위 3건.
 8. ~~가이드 배선도 + 훅·CLI 이중언어화~~ — **완료 2026-07-09**(사용자 지시 2건): ① 정찰 구조 새탭에 960×470 SVG 전체
    배선도(생성·기억·개입 지점 노드 + 점선 피드백 2개, 전 텍스트 tE ko/en — recon-ui 8단언 잠금) ② 훅(buildScoutDirective
    en 변형·scout-gate tB)·CLI 5종(scope-target/gate/ledger-migrate/ledger-note/reconcile) 전 출력 tB(ko,en) —
