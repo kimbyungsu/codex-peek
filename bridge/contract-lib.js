@@ -435,7 +435,8 @@ function buildScoutDirective(ws, c) {
 // ── Phase 3: 지도 high 항목 구조화 + 검증 요청 동봉 ──────────────
 // 탐색자 지도는 LLM 자유서식 텍스트 — '확인필요도 high' 항목만 관대하게 구조화한다.
 // 구획 규칙: ①~④만 '확인 후보'(⑤범위밖·⑥MAP patch는 high 표기가 있어도 제외 — ⑥은 stable MAP 단계의 입력).
-function extractMapHighlights(mapText) {
+function extractMapHighlights(mapText, limit) {
+  const LIM = Number.isFinite(limit) && limit > 0 ? limit : 8; // 기본 8(기존 소비자 무회귀) — 동봉 재랭킹 경로만 후보군 확대
   const lines = String(mapText || "").split(/\r?\n/);
   // 구획 표기(①~⑩)가 있는 지도면 ①~④ '진입 후'에만 추출(진입 전·⑤⑥·미지 구획 전부 제외 — Codex 반례 잠금).
   // 구획 표기가 아예 없는 자유서식 지도는 전체 허용으로 관대 폴백(놓쳐도 '동봉 없음'으로 퇴화할 뿐 잘못된 강제 없음).
@@ -463,7 +464,7 @@ function extractMapHighlights(mapText) {
       if (seen.has(key)) continue;
       seen.add(key);
       out.push({ path: t, note: line.replace(/^[-*#\s①②③④]+/, "").slice(0, 120) });
-      if (out.length >= 8) return out; // 지시 스펙(high 최대 5)+여유 — 동봉 비용 상한
+      if (out.length >= LIM) return out; // 지시 스펙(high 최대 5)+여유 — 상한은 호출부 목적별(동봉 재랭킹은 24: 조기 컷이 재랭킹을 무효화하던 Codex 반례)
     }
   }
   return out;
@@ -575,6 +576,38 @@ function ledgerPathsFromText(text) {
 
 // 검증 요청(ask)에 동봉할 지도 블록. 3트랙 프로젝트 + 지도 존재 + high 항목 있을 때만(그 외 null — 주입 비용 0·무회귀).
 // 낡은 지도는 버리지 않고 '낡음' 라벨로 정직 고지(시간 상수 0 — scoutMapStatus의 seed mtime 판정 재사용).
+// 동봉 항목 재랭킹(§6-7-1 — 2026-07-09 사용자 관찰 "참고 블록이 늘 비슷하다" 개선): 순수 함수(테스트 가능).
+// (a) 지금 바뀐 파일과 겹치는 항목 우선(경로 꼬리 일치 또는 8자 이상 basename 일치 — 지도 채점기와 동일 보수 규칙)
+// (b) 실존 파일만(파서 소음 '/arm'류 제거 — 패턴 목록이 아니라 '실존'이라는 범주 규칙). 단 전멸하면 원본 유지(fail-open)
+// (c) 중복 경로 제거 후 상한 적용은 호출부에서 — 재랭킹이 cap보다 먼저라 하단 새 항목이 안 밀린다.
+function rankScoutItems(items, changedFiles, existsFn) {
+  const norm = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
+  const seen = new Set();
+  const deduped = [];
+  for (const i of items) { const k = norm(i.path); if (!seen.has(k)) { seen.add(k); deduped.push(i); } }
+  let pool = deduped;
+  if (typeof existsFn === "function") {
+    const existing = deduped.filter((i) => { try { return existsFn(i.path) === true; } catch { return false; } });
+    if (existing.length) pool = existing; // 전멸 시 원본 유지 — 실존 판정 실패가 동봉 자체를 죽이지 않게
+  }
+  const ch = (changedFiles || []).map(norm).filter(Boolean);
+  if (!ch.length) return pool;
+  const hits = ch.map((f) => ({ full: f, base: f.split("/").pop() || "" }));
+  const rel = (i) => {
+    const p = norm(i.path); const b = p.split("/").pop() || "";
+    return hits.some((h) => h.full.endsWith(p) || p.endsWith(h.full) || (b.length >= 8 && h.base === b));
+  };
+  return [...pool.filter(rel), ...pool.filter((i) => !rel(i))]; // 관련 우선·안정 정렬(원순서 보존)
+}
+// 정찰 대상의 '지금 바뀐 파일'(git status) — ask마다 1회·3초 상한·실패는 빈 배열(재정렬만 포기, 동봉은 유지).
+function changedFilesFor(repo) {
+  try {
+    const r = require("child_process").spawnSync("git", ["-c", "safe.directory=" + String(repo).replace(/\\/g, "/"), "-C", repo, "status", "--porcelain"], { encoding: "utf8", timeout: 3000, windowsHide: true });
+    if (r.status !== 0 || r.error) return [];
+    return String(r.stdout || "").split(/\r?\n/).map((l) => { const t = l.slice(3).trim(); const i = t.indexOf(" -> "); return i >= 0 ? t.slice(i + 4) : t; }).filter(Boolean).slice(0, 200); // rename 행(old -> new)은 새 경로만(Codex 보완)
+  } catch { return []; }
+}
+
 function buildScoutAttach(ws, c, lang) {
   if (!ws || normScoutMode(c) !== "on") return null;
   const target = resolveScoutRepo(ws, c).repo; // P1: 지도 조회도 정찰 대상 기준(세션 폴더가 비-git 부모여도 레포 지도를 씀)
@@ -586,8 +619,12 @@ function buildScoutAttach(ws, c, lang) {
   try { meta = JSON.parse(fs.readFileSync(path.join(dir, st.base + ".json"), "utf8")); } catch { /* 메타 없어도 지도는 사용 가능 */ }
   // 저장된 구조화 계층 우선 — 단 항목 검증(깨진 메타 [null]류가 아래 i.path 접근을 못 깨게). 유효분 없으면 md 재파싱 폴백.
   const valid = (a) => (Array.isArray(a) ? a.filter((i) => i && typeof i.path === "string" && i.path.trim()) : []);
-  let items = valid(meta.highlights);
-  if (!items.length) items = valid(extractMapHighlights(md));
+  // §6-7-1 재랭킹: 후보군은 지도 원문 재파싱(상한 24 — 저장 계층 meta.highlights는 8개 조기 컷이 박혀 있어
+  // 재랭킹 후보로 부족: 9번째 항목이 지금 바뀐 파일이어도 못 들어오던 Codex 반례). 파싱 0건이면 저장 계층 폴백.
+  let items = valid(extractMapHighlights(md, 24));
+  if (!items.length) items = valid(meta.highlights);
+  // 실존 필터(소음 제거) → 지금 바뀐 파일과의 교집합 우선 → 그 다음에야 동봉 상한 8(하단 새 항목 안 밀림)
+  items = rankScoutItems(items, changedFilesFor(target), (p) => { try { return fs.existsSync(path.join(target, p)); } catch { return false; } });
   items = items.slice(0, 8);
   if (!items.length) return null;
   const en = (LANGS.includes(lang) ? lang : loadLang()) === "en";
@@ -862,4 +899,4 @@ function formatForClaude(answer, lang) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };

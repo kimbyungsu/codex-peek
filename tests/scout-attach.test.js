@@ -12,6 +12,7 @@ process.env.CODEX_BRIDGE_HOME = dir;
 delete process.env.CLAUDE_PROJECT_DIR;
 
 const { extractMapHighlights, buildScoutAttach, wsKeyFor, contractFileFor } = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
+const CL = require(path.join(__dirname, "..", "bridge", "contract-lib.js")); // rankScoutItems 등 신규 API용 네임스페이스
 const { withContract } = require(path.join(__dirname, "..", "bridge", "codex-bridge.js"));
 
 let pass = 0, fail = 0;
@@ -94,10 +95,17 @@ ok(attStale && attStale.includes("낡음"), "낡은 지도 → 버리지 않고 
 const attEn = buildScoutAttach(ws, { scoutMode: "on" }, "en");
 ok(attEn && attEn.includes("Scout impact map") && attEn.includes("STALE"), "영문 스냅샷 → 영문 블록(한/영 쌍)");
 
-console.log("[4] 저장된 구조화 계층(meta.highlights) 우선");
+console.log("[4] 후보군 우선순위 개정(§6-7-1) — md 재파싱(상한 24) 우선·저장 계층(meta.highlights)은 폴백");
+// 이유(Codex 반례 2026-07-09): 저장 계층은 8개 조기 컷이 박혀 재랭킹 후보군으로 부족 — 9번째 항목이
+// 지금 바뀐 파일이어도 못 들어온다. md가 파싱되면 md가 정본, 파싱 0건일 때만 저장분.
 fs.writeFileSync(path.join(mapsDir, base + ".json"), JSON.stringify({ ts: "2026-07-07T00:00:00.000Z", arm: "self", seedFiles: [], highlights: [{ path: "STORED_MARK.ts", note: "저장분" }] }));
 const attStored = buildScoutAttach(ws, { scoutMode: "on" }, "ko");
-ok(attStored.includes("STORED_MARK.ts") && !attStored.includes("src/extension.ts"), "meta.highlights 있으면 md 재파싱 대신 저장분 사용");
+ok(!attStored.includes("STORED_MARK.ts") && attStored.includes("src/extension.ts"), "md 파싱 가능하면 md 재파싱이 정본(저장분 무시 — 조기 컷 반례 잠금)");
+const origMd4 = fs.readFileSync(path.join(mapsDir, base + ".md"), "utf8"); // [4b] 이후 케이스가 원본 md를 쓰므로 복원용 보관
+fs.writeFileSync(path.join(mapsDir, base + ".md"), "고유명사만 있는 자유 텍스트 — 경로 없음");
+const attFallback = buildScoutAttach(ws, { scoutMode: "on" }, "ko");
+ok(attFallback && attFallback.includes("STORED_MARK.ts"), "md 파싱 0건 → 저장 계층 폴백(동봉 존속)");
+fs.writeFileSync(path.join(mapsDir, base + ".md"), origMd4); // 원복 — 후속 케이스([4b] 깨진 메타 방어)가 md 재파싱을 전제
 
 console.log("[4b] 깨진 메타([null]) 방어 — 크래시 없이 md 재파싱 폴백");
 fs.writeFileSync(path.join(mapsDir, base + ".json"), JSON.stringify({ ts: "2026-07-07T00:00:00.000Z", arm: "self", seedFiles: [], highlights: [null, { note: "path 없음" }] }));
@@ -123,6 +131,56 @@ fs.writeFileSync(contractFileFor(ws2), JSON.stringify({ codex: [], verifyMode: "
 ok(!withContract("MY_PROMPT", ws2).includes("[탐색 지도"), "scoutMode 미설정(2트랙 기본) → 동봉 없음(무회귀)");
 
 try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 임시폴더 정리 실패 무해 */ }
+console.log("[재랭킹(§6-7-1 2026-07-09)] 실존 필터·교집합 우선·cap 전 정렬 — '늘 비슷한 잡동사니' 해소");
+{
+  const items = [
+    { path: "/arm", note: "소음" },
+    { path: "src/extension.ts", note: "n" },
+    { path: "tests/recon-ui.test.js", note: "n" },
+    { path: "SRC/extension.ts", note: "중복(대소문자)" },
+    { path: "bridge/contract-lib.js", note: "n" },
+  ];
+  const real = ["src/extension.ts", "tests/recon-ui.test.js", "bridge/contract-lib.js"];
+  const exists = (pp) => real.includes(String(pp).replace(/\\/g, "/"));
+  const r = CL.rankScoutItems(items, ["bridge/contract-lib.js"], exists);
+  ok(r.length === 3 && r[0].path === "bridge/contract-lib.js", "지금 바뀐 파일과 겹치는 항목이 맨 앞(교집합 우선·안정 정렬)");
+  ok(!r.some((i) => i.path === "/arm"), "실존하지 않는 파서 소음('/arm') 탈락 — 패턴 목록이 아니라 '실존' 범주 규칙");
+  ok(!r.some((i) => i.path === "SRC/extension.ts"), "대소문자 중복 제거(정규화 서명)");
+  const fo = CL.rankScoutItems([{ path: "/arm" }], ["x"], () => false);
+  ok(fo.length === 1 && fo[0].path === "/arm", "실존 판정 전멸 시 원본 유지(fail-open — 동봉 자체를 죽이지 않음)");
+  const noCh = CL.rankScoutItems(items, [], exists);
+  ok(noCh.length === 3 && noCh[0].path === "src/extension.ts", "바뀐 파일 없음 → 실존 필터만 적용·원순서 보존");
+  const base8 = CL.rankScoutItems([{ path: "a/verify-stats.ts" }], ["z/verify-stats.ts"], () => true);
+  ok(base8[0].path === "a/verify-stats.ts" && CL.rankScoutItems([{ path: "a/short.ts" }], ["z/short.ts"], () => true).length === 1, "8자 이상 basename 일치도 관련으로(지도 채점기와 동일 보수 규칙)");
+  ok(fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8").includes('indexOf(" -> ")'), "git status rename 행(old -> new)은 새 경로만 채택(Codex 보완 잠금)");
+  const clsrc3 = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
+  ok(/rankScoutItems\(items, changedFilesFor\(target\)/.test(clsrc3) && /items = items\.slice\(0, 8\)/.test(clsrc3.split("rankScoutItems(items, changedFilesFor")[1] || ""), "buildScoutAttach 배선 — 재랭킹이 상한 8보다 먼저(하단 새 항목 안 밀림)");
+  ok(/timeout: 3000/.test(clsrc3) && /return \[\];\s*\n\s*\}\s*catch \{ return \[\]; \}/.test(clsrc3) || /changedFilesFor/.test(clsrc3), "바뀐 파일 조회는 3초 상한·실패 시 빈 배열(재정렬만 포기 — ask 흐름 불침)");
+}
+
+console.log("[끝-끝(§6-7-1)] 문서 9번째 high가 지금 바뀐 파일이면 동봉 8개 안으로(조기 컷 무효화 반례 잠금)");
+{
+  const { spawnSync } = require("child_process");
+  const repo9 = path.join(dir, "rank-repo");
+  fs.mkdirSync(path.join(repo9, "src"), { recursive: true });
+  const g9 = (args) => spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "-C", repo9, ...args], { encoding: "utf8", windowsHide: true });
+  g9(["init", "-q"]);
+  const names = [];
+  for (let i = 1; i <= 9; i++) { const n = `src/module-number-${i}0.ts`; names.push(n); fs.writeFileSync(path.join(repo9, n), "export {};\n"); }
+  g9(["add", "-A"]); g9(["commit", "-q", "-m", "seed"]);
+  fs.appendFileSync(path.join(repo9, names[8]), "// changed\n"); // 9번째만 git status에 잡히게 수정
+  const mapMd9 = "## ① 직접 영향 후보\n" + names.map((n) => `- ${n} — high 확인 필요`).join("\n") + "\n## ⑤ 범위 밖\n- 없음\n";
+  const key9 = wsKeyFor(repo9);
+  const dir9 = path.join(dir, "scouts", key9);
+  fs.mkdirSync(dir9, { recursive: true });
+  fs.writeFileSync(path.join(dir9, "2026-07-09T00-00-00-000Z-00-self.md"), mapMd9);
+  fs.writeFileSync(path.join(dir9, "2026-07-09T00-00-00-000Z-00-self.json"), JSON.stringify({ ts: "2026-07-09", arm: "self", highlights: CL.extractMapHighlights(mapMd9), seedFiles: [] }));
+  const att9 = buildScoutAttach(repo9, { scoutMode: "on" });
+  ok(!!att9 && att9.includes(names[8]), "문서 9번째 high(지금 바뀐 파일)가 동봉에 포함 — 후보군 24 재파싱+재랭킹이 조기 컷을 이김");
+  const lines9 = att9.split("\n").filter((l) => l.startsWith("- "));
+  ok(lines9.length <= 8 && lines9[0].includes(names[8]), "동봉 상한 8 유지 + 바뀐 파일이 맨 앞(교집합 우선)");
+}
+
 console.log("[앵커링 방어(2026-07-09)] 동봉이 검증 시야를 좁히지 못하게 — 시작점≠한계 명시");
 {
   const clsrc2 = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
