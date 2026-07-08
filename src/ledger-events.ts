@@ -12,7 +12,7 @@
 
 export type LedgerEventType =
   | "proposed"      // 정찰 지도 ⑥이 제안함(태어남 — inferred)
-  | "attached"      // 검증 요청에 동봉됨(회수 주입 — 자기강화 제외 판정의 재료)
+  | "attached"      // 자료 꾸러미(다음 지도 생성 자료)에 재동봉됨 — 생산자: scope-package ledgerForPackage(검증 요청 동봉과는 별개 경로 — Codex 정정 2026-07-09)
   | "confirmed"     // 검증 답변이 실제로 이 결합을 확인함(추후 배선 — 스키마만 선행)
   | "refuted"       // 검증 답변이 반박함(추후 배선)
   | "user_confirm"  // 사용자 발화가 긍정함(보수적 감지 — 추후 배선)

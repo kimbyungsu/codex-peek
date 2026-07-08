@@ -1006,7 +1006,7 @@ function computeState(turnsN: number): BridgeState {
     // 정찰 프롬프트(§6-11): 태도층(편집 가능 슬롯)+형식층(잠금 — 지도를 읽는 기계 배선이라 읽기 전용 노출)
     scoutPrompt: (() => {
       try {
-        if (!ws || loadContract(ws).scoutMode !== "on") return null;
+        if (!ws) return null; // 트랙 무관 계산 — ④칸 표시 여부는 웹뷰가 저장된 트랙으로 결정(전환 직후 빈 칸 방지)
         const lib = bridgeLib();
         const b = lib?.loadScoutBaseline?.();
         if (!b || typeof b.text !== "string") return null;
@@ -1499,6 +1499,7 @@ type MapLedgerView = {
   entries: ObservedEntry[];        // 최신순 상위 N — 신분 배지·개입 버튼 재료
   timeline: LedgerTimelineItem[];  // 최근 사건 흐름(최신 먼저)
   counts: { trusted: number; reference: number; disputed: number; excluded: number };
+  impact: { proposed: number; attached: number; confirmed: number; disputedEv: number; rehabilitated: number; verifiedEntries: number }; // 3트랙 기여 관찰 신호(이벤트 합계 — 검증 통계 탭 카드 재료)
   dropped: number;                 // 깨진/미지 이벤트 줄 수(침묵 삼킴 금지 — 정직 표기)
   mapRel: string; mapExists: boolean; mapApproved: number; mapTotalItems: number;
   mapText: string; mapTruncated: boolean;
@@ -1538,7 +1539,14 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
   const timeline: LedgerTimelineItem[] = parsed.events.slice(-LEDGER_TIMELINE_CAP_UI).reverse()
     .map((ev) => ({ ts: ev.ts || "", type: ev.type, text: (textOf.get(ev.sig) || ev.text || ev.sig).slice(0, 90), from: (ev.from || "").slice(0, 80) }));
   const counts = { trusted: 0, reference: 0, disputed: 0, excluded: 0 };
+  const impact = { proposed: 0, attached: 0, confirmed: 0, disputedEv: 0, rehabilitated: 0, verifiedEntries: 0 };
   for (const e of derived) {
+    impact.proposed += e.counts.proposed || 0;
+    impact.attached += e.counts.attached || 0;
+    impact.confirmed += (e.counts.confirmed || 0) + (e.counts.user_confirm || 0);
+    impact.disputedEv += (e.counts.refuted || 0) + (e.counts.user_dispute || 0);
+    if ((e as { rehabilitated?: boolean }).rehabilitated) impact.rehabilitated++;
+    if (e.status === "verified") impact.verifiedEntries++;
     if (e.lane === "trusted") counts.trusted++;
     else if (e.lane === "reference") counts.reference++;
     if (e.status === "disputed") counts.disputed++;
@@ -1546,7 +1554,7 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
   }
   const mp = parseApprovedFromMap(mapMd);
   return {
-    entries, timeline, counts, dropped: parsed.dropped,
+    entries, timeline, counts, impact, dropped: parsed.dropped,
     mapRel: path.relative(ws, mapF).replace(/\\/g, "/"), mapExists,
     mapApproved: mp.approved.length, mapTotalItems: mp.totalItems,
     mapText: mapMd.slice(0, MAP_LEDGER_TEXT_CAP), mapTruncated: mapMd.length > MAP_LEDGER_TEXT_CAP,
@@ -1860,6 +1868,7 @@ class Dashboard {
             // lang = 보던 슬롯(계약 저장과 동일 원리). 구 런타임 lib은 2번째 인자를 무시(=기존 동작·무해).
             const slotLang = m.lang === "ko" || m.lang === "en" ? m.lang : undefined;
             ok = bridgeLib()?.saveBaseDirective?.({ verifyBaseline: m.verifyBaseline, transmit: m.transmit, rejudge: m.rejudge }, slotLang) === true;
+            if (ok && typeof m.scoutBaseline === "string") ok = bridgeLib()?.saveScoutBaseline?.(m.scoutBaseline, slotLang) === true; // ④ 정찰 칸(같은 패널 한 버튼 — 사용자 단순화 요청 2026-07-09)
           } catch {
             ok = false;
           }
@@ -1873,7 +1882,10 @@ class Dashboard {
           //  - transmit/rejudge(전달/재판단) → Claude의 검증 흐름
           // webview는 포커스를 안 건드림(blur/refocus 없음) → 편집/저장 흐름 보존. 숨겨 강제주입 대신 공개·동의.
           const isVerify = m.field === "verify";
-          const msg = isVerify
+          const isScout = m.field === "scout";
+          const msg = isScout
+            ? tE("'정찰 기본 원칙'은 정찰 AI가 영향지도를 그릴 때의 태도(자료 밖 추측 금지 등)를 정합니다 — 검증 흐름(전달·재판단)과는 별개예요.\n\n수정하면 이후 지도 기록에 '기본 프롬프트 아님' 서명이 남아, 나중에 명중률을 잴 때 기본 프롬프트 지도와 구분됩니다(자동으로 뭘 빼거나 막지는 않음). 지도 형식(①~⑥·high)은 여기서 못 바꿉니다 — 아래 잠금 구획 참조.\n\n그래도 변경하시겠습니까?","The scout baseline sets the scout AI's attitude when drawing impact maps (no guessing beyond the material, etc.) — separate from the verification flow.\n\nEditing marks later map records as 'non-default prompt' so future hit-rate measurements can keep them apart (nothing is auto-excluded or blocked). The map format (①~⑥ · high) cannot be changed here — see the locked section below.\n\nChange it anyway?")
+            : isVerify
             ? tE("'검증 기본원칙'은 Codex가 어떻게 검증할지(파일을 직접 열고·빠뜨리지 말고·범위를 넓혀 보라)와 결론을 쓰는 형식을 함께 정합니다.\n\n줄이거나 바꾸면 Codex 검증이 느슨해질 수 있고, 대시보드의 'Codex 검증 대화' 영역에 뜨는 통과/보완/보류/실패 색 표시와 결론·근거 경고가 동작하지 않을 수 있어요.\n\n그래도 변경하시겠습니까?","The verification baseline defines how Codex verifies (open files, skip nothing, widen scope) AND the verdict format.\n\nWeakening it can loosen verification, and the pass/notes/hold/fail chips and evidence alerts in the dashboard may stop working.\n\nChange it anyway?")
             : tE("이 원칙은 Claude가 검증을 주고받고(전달) 결과를 다시 판단하는(재판단) 흐름에 직접 관여합니다.\n\n줄이거나 바꾸면 검증의 완전한 동작을 보장하지 못할 수 있어요.\n\n그래도 변경하시겠습니까?","This principle directly drives how Claude hands off verification (transmission) and re-judges the result.\n\nWeakening it may break the full verification behavior.\n\nChange it anyway?");
           vscode.window.showWarningMessage(msg, { modal: true }, tE("변경","Change")).then((pick) => {
@@ -1886,6 +1898,8 @@ class Dashboard {
             // lang = 보던 슬롯 — 그 언어의 오버라이드만 기본값 복원(다른 언어 오버라이드 보존).
             const slotLang = m.lang === "ko" || m.lang === "en" ? m.lang : undefined;
             ok = bridgeLib()?.resetBaseDirective?.(slotLang) === true;
+            // ④ 정찰 칸은 '화면에 보였을 때만' 함께 복원 — 2트랙에선 안 보이는 정찰 설정을 조용히 지우지 않는다(Codex 반례 2026-07-09)
+            if (ok && m.scout === true) ok = bridgeLib()?.resetScoutBaseline?.(slotLang) !== false;
           } catch {
             ok = false;
           }
@@ -2328,6 +2342,7 @@ class Dashboard {
       <div class="sbrow" id="sbTransmit"><span class="sbmark"></span><b>${t("① Claude→Codex 넘길 때", "① When Claude hands off to Codex")}</b> ${t("· 전달 원칙", "· transmission principles")} <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
       <div class="sbrow" id="sbVerify"><span class="sbmark"></span><b>${t("② Codex가 검증할 때", "② When Codex verifies")}</b> ${t("· 검증 기본원칙 + Codex 규칙", "· verification baseline + Codex rules")} <span class="who2 codex">Codex</span> <span class="sbwhy"></span></div>
       <div class="sbrow" id="sbRejudge"><span class="sbmark"></span><b>${t("③ Codex 답을 되짚을 때", "③ When re-judging Codex's answer")}</b> ${t("· 재판단 원칙", "· re-judgment principles")} <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
+      <div class="sbrow" id="sbScout" style="display:none"><span class="sbmark"></span><b>${t("④ 정찰이 지도를 그릴 때", "④ When the scout draws a map")}</b> ${t("· 정찰 기본 원칙 (3트랙)", "· scout baseline (3-track)")} <span class="sbwhy"></span></div>
     </div>
   </div>
   <div class="row"><button id="saveC">${t("저장", "Save")}</button><span id="savedAt" class="muted">${t("· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장", "· saves the Claude rules, Codex rules and verify mode together")}</span></div>
@@ -2362,8 +2377,14 @@ class Dashboard {
     <textarea id="bVerify" rows="5"></textarea>
     <div class="chead" style="margin-top:12px">${t("③ 재판단 원칙", "③ Re-judgment principles")} <span class="muted" style="font-weight:400">${t("→ Claude에게 · Codex 답을 되짚을 때 · 검증 ON일 때만", "→ to Claude · when re-judging Codex's answer · only while verify is ON")}</span></div>
     <textarea id="bRejudge" rows="5"></textarea>
+    <div id="bScoutWrap" style="display:none">
+      <div class="chead" style="margin-top:12px">${t("④ 정찰 기본 원칙", "④ Scout baseline")} <span class="muted" style="font-weight:400">${t("→ 정찰 AI에게 · 지도를 그리기 직전 · 3트랙일 때만 (무료 팔·DeepSeek 팔 공통)", "→ to the scout AI · right before drawing a map · 3-track only (both arms)")}</span> <span id="bScoutOv" class="muted" style="font-weight:400"></span></div>
+      <textarea id="bScout" rows="3"></textarea>
+      <div class="muted" style="margin-top:2px">${t("수정하면 이후 지도 기록에 '기본 프롬프트 아님' 서명이 남아요 — 나중에 명중률을 잴 때 기본 프롬프트 지도와 섞이지 않게 구분하는 표시입니다(자동으로 뭘 빼거나 막지는 않아요).", "Editing marks later map records as 'non-default prompt' — a marker so future hit-rate measurements can keep them apart from default-prompt maps (nothing is auto-excluded or blocked).")}</div>
+      <div class="chead" style="margin-top:8px">${t("④-형식 계약", "④ Format contract")} <span class="fixedbadge">${t("잠금", "locked")}</span> <span class="muted" style="font-weight:400">${t("· 지도의 ①~⑥ 구획·high 표기는 기계가 그대로 읽는 배선이라 수정 불가 — 내용은 공개", "· the map's ①~⑥ sections and 'high' tags are machine-read wiring — not editable, shown for transparency")}</span></div>
+      <div id="bScoutFmt" class="muted" style="white-space:pre-wrap;font-size:11px;border:1px dashed var(--vscode-panel-border);padding:6px;border-radius:4px"></div>
+    </div>
     <div class="row"><button id="saveB">${t("단계별 기본 원칙 저장", "Save stage baselines")}</button><button id="resetB" class="secondary">${t("기본값 복원", "Restore defaults")}</button><span id="savedB" class="muted"></span></div>
-    <div class="muted" style="margin-top:4px">${t("ⓘ 정찰(3트랙)의 프롬프트는 정찰 카드의 '🧭 정찰에게 주는 지시'에서 보기/수정할 수 있어요(태도는 수정 가능 · 지도 형식은 잠금).", "ⓘ The scout (3-track) prompts live on the recon card under '🧭 instructions given to the scout' (attitude editable · map format locked).")}</div>
   </details>
   <h2 class="sec base accent-orange">${t("코덱스 두뇌 설정", "Codex Brain Settings")} <span class="sub2">${t("이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)", "model & reasoning effort Codex uses in this project (applies to the ongoing session too)")}</span></h2>
   <div class="mcard">
@@ -2404,6 +2425,16 @@ class Dashboard {
         <div class="stat-card s-green"><div class="stat-num" id="st7pass">–</div><div class="stat-lbl">${t("완전통과율 (7일)", "clean pass rate (7d)")}</div></div>
         <div class="stat-card s-orange"><div class="stat-num" id="st7touch">–</div><div class="stat-lbl">${t("보완이상 비율 (7일)", "notes-or-worse (7d)")}</div></div>
         <div class="stat-card s-purple"><div class="stat-num" id="st7res">–</div><div class="stat-lbl">${t("실패·보류→통과 전환 (7일)", "fail/hold→pass turnarounds (7d)")}</div></div>
+      </div>
+      <div id="scoutImpact" style="display:none">
+        <h3 class="chart-h" style="margin-top:12px">${t("3트랙 기여 — 정찰이 검증에 실제로 보탠 것 (관찰 신호 · 누적)", "3-track contribution — what recon actually fed into verification (observed signals · cumulative)")}</h3>
+        <div class="stat-cards">
+          <div class="stat-card s-blue"><div class="stat-num" id="siProposed">–</div><div class="stat-lbl">${t("지도가 발견해 기억에 올린 결합", "couplings maps discovered & remembered")}</div></div>
+          <div class="stat-card s-orange"><div class="stat-num" id="siAttached">–</div><div class="stat-lbl">${t("다음 지도 자료에 실려 재사용된 횟수", "times re-fed into the next map's material")}</div></div>
+          <div class="stat-card s-green"><div class="stat-num" id="siConfirmed">–</div><div class="stat-lbl">${t("검증·사용자가 실제 확인(신뢰 승격 재료)", "actually confirmed by verify/user")}</div></div>
+          <div class="stat-card s-purple"><div class="stat-num" id="siGuard">–</div><div class="stat-lbl">${t("틀림 판명(재실수 방지 각주행) · 복권", "judged wrong (mistake guard) · rehabilitated")}</div></div>
+        </div>
+        <div class="muted" style="font-size:11px">${t("ⓘ 정직 고지: 이건 '2트랙이었다면 놓쳤을 것'의 증명이 아니라, 정찰→검증→기억 루프가 실제로 돌았는지의 관찰 신호예요. '검증 지적이 동봉 지도를 짚었는지' 대조와 '게이트 차단→플랜 수정' 추적은 기록을 새로 심어야 해서 후속입니다.", "ⓘ Honest note: this doesn't prove 'what 2-track would have missed' — it observes whether the recon→verify→memory loop actually ran. Matching verify findings against attached maps, and gate-block→plan-change tracking, need new recording and come later.")}</div>
       </div>
       <div class="stat-chart">
         <div class="chart-box">
@@ -2606,9 +2637,10 @@ class Dashboard {
   });
   $("saveB").addEventListener("click", () => {
     pendingSave = {target:"base"};
-    vscode.postMessage({type:"saveBase", lang: renderedLangB || undefined, verifyBaseline:$("bVerify").value, transmit:$("bTransmit").value, rejudge:$("bRejudge").value});
+    var spVisible = $("bScoutWrap") && $("bScoutWrap").style.display !== "none";
+    vscode.postMessage({type:"saveBase", lang: renderedLangB || undefined, verifyBaseline:$("bVerify").value, transmit:$("bTransmit").value, rejudge:$("bRejudge").value, scoutBaseline: (spVisible && $("bScout")) ? $("bScout").value : null});
   });
-  $("resetB").addEventListener("click", () => { pendingSave = {target:"base", msg:T("기본값으로 복원됨 ✓","Restored to defaults ✓")}; vscode.postMessage({type:"resetBase", lang: renderedLangB || undefined}); });
+  $("resetB").addEventListener("click", () => { pendingSave = {target:"base", msg:T("기본값으로 복원됨 ✓","Restored to defaults ✓")}; vscode.postMessage({type:"resetBase", lang: renderedLangB || undefined, scout: !!($("bScoutWrap") && $("bScoutWrap").style.display !== "none")}); });
   // 탭 토글(현황 / 검증 통계) — 클릭한 버튼·패널만 active
   document.querySelectorAll(".tabbtn").forEach(function(b){
     b.addEventListener("click", function(){
@@ -2780,7 +2812,7 @@ class Dashboard {
   // ⚠️ textarea 포커스는 절대 안 건드린다: blur()/재focus() 없음. 모달(modal:true)이 편집을 막고 포커스는 자연스럽게 유지되므로,
   // render의 '포커스 중이면 저장값으로 안 덮어씀' 가드(아래)와 충돌하지 않는다 → 편집/저장 보존(0.1.23 blur 버그의 교훈).
   var baseWarned = {}, baseWarnPending = false, baseDirty = {}, contractDirty = {};
-  [["bTransmit","transmit"],["bVerify","verify"],["bRejudge","rejudge"]].forEach(function(pr){
+  [["bTransmit","transmit"],["bVerify","verify"],["bRejudge","rejudge"],["bScout","scout"]].forEach(function(pr){
     var elx = $(pr[0]); if(!elx) return;
     // 편집 시작 = dirty → 저장 전까지 render가 이 칸을 저장값으로 덮지 않는다(포커스가 잠깐 빠져도 편집 보존). 저장 성공 시 해제.
     elx.addEventListener("input", function(){ baseDirty[pr[1]] = true; });
@@ -2834,6 +2866,17 @@ class Dashboard {
     // 갱신되게 한다 — '한 구획 예외 → 이후 전 구획 영구 미갱신'이 복원 탭 낡음의 유력 경로(3요원 조사 합의).
     const safe=(fn)=>{ try{ fn(); }catch(e){ /* 구획 실패는 그 구획만 — 다음 push에서 재시도됨 */ } };
     safe(()=>renderStats(d.verifyStats));          // 탭2 검증 통계 갱신(현황 탭과 같은 data 푸시에 함께 반영)
+    safe(function(){ // 3트랙 기여(관찰 신호) — 일지 이벤트 합계(2026-07-09 사용자 요청 · §6-10 (b) 즉시분)
+      const el=$("scoutImpact"); if(!el) return;
+      const im=d.mapLedger && d.mapLedger.impact;
+      const on = !!(d.contract && d.contract.scoutMode === "on");
+      el.style.display = (on && im) ? "" : "none";
+      if(!on || !im) return;
+      $("siProposed").textContent=String(im.proposed);
+      $("siAttached").textContent=String(im.attached);
+      $("siConfirmed").textContent=String(im.confirmed);
+      $("siGuard").textContent=String(im.disputedEv)+" · "+String(im.rehabilitated);
+    });
     safe(()=>renderTokens(d.codexTokens));         // 토큰 카드 갱신(연결 코덱스 세션 누적)
     safe(()=>renderClaudeTokens(d.claudeTokens));  // 클로드 작업 토큰+턴수(이 폴더 28일)
     safe(()=>renderProjects(d.projectStats));      // 프로젝트별 비교(전체 폴더 28일)
@@ -3104,31 +3147,6 @@ class Dashboard {
         lines.forEach(function(tx){const p=document.createElement("div"); p.className="muted"; p.style.margin="4px 0"; p.textContent=tx; det.appendChild(p);});
         card.appendChild(det);
       });
-      // 정찰 프롬프트 노출(§6-11 P2·P5) — 태도층은 수정 가능, 형식층은 잠금(기계 배선) 표기와 함께 읽기 전용
-      safe(function(){
-        const sp=d.scoutPrompt; if(!sp) return;
-        const det=keyedDetails("scoutPrompt", T("🧭 정찰에게 주는 지시(프롬프트) 보기/수정","🧭 View/edit the instructions given to the scout"));
-        const h1=document.createElement("div"); h1.className="muted"; h1.style.margin="4px 0";
-        h1.textContent=T("① 태도(수정 가능 — 무료 팔·DeepSeek 팔 공통): 정찰 AI가 어떤 자세로 임할지. 2트랙의 '단계별 기본 원칙'과 같은 지위입니다.","① Attitude (editable — applies to both arms): how the scout AI should behave. Same status as the 2-track stage baselines.");
-        det.appendChild(h1);
-        const ta=document.createElement("textarea"); ta.id="spBase"; ta.rows=3; ta.style.width="100%";
-        det.appendChild(ta);
-        const row=document.createElement("div"); row.className="row";
-        const sb=document.createElement("button"); sb.id="spSave"; sb.textContent=T("정찰 기본 원칙 저장","Save scout baseline");
-        const rb=document.createElement("button"); rb.id="spReset"; rb.className="secondary"; rb.textContent=T("기본값 복원","Restore default");
-        const ov=document.createElement("span"); ov.id="spOv"; ov.className="muted"; ov.textContent=sp.overridden?T("· (수정됨 — 이후 지도는 사전등록 실측과 비교 불가로 표시)","· (modified — later maps are marked incomparable to the pre-registered measurement)"):T("· (기본값)","· (default)");
-        row.appendChild(sb); row.appendChild(rb); row.appendChild(ov); det.appendChild(row);
-        sb.addEventListener("click",function(){ pendingSave={target:"scoutBase"}; vscode.postMessage({type:"saveScoutBaseline", lang: renderedLangC || undefined, text: ta.value}); });
-        rb.addEventListener("click",function(){ pendingSave={target:"scoutBase", msg:T("기본값으로 복원됨 ✓","Restored to default ✓")}; vscode.postMessage({type:"resetScoutBaseline", lang: renderedLangC || undefined}); });
-        if(document.activeElement!==ta) ta.value=sp.baseline;
-        const h2=document.createElement("div"); h2.className="muted"; h2.style.margin="8px 0 4px 0";
-        h2.textContent=T("② 형식 계약(잠금 · 버전 "+sp.version+"): 지도의 ①~⑥ 구획과 high 표기는 기계가 그대로 읽는 배선이라 수정할 수 없어요 — 내용은 투명하게 공개합니다.","② Format contract (locked · version "+sp.version+"): the map's ①~⑥ sections and 'high' tags are wiring the machine reads verbatim, so it can't be edited — shown here for transparency.");
-        det.appendChild(h2);
-        const pre=document.createElement("div"); pre.className="muted"; pre.style.whiteSpace="pre-wrap"; pre.style.fontSize="11px"; pre.style.border="1px dashed var(--vscode-panel-border)"; pre.style.padding="6px"; pre.style.borderRadius="4px";
-        pre.textContent=sp.directive+"\\n\\n"+T("[자료 각주 전문 — 일지 3차선 취급 지시] ","[Material footnotes in full — how the 3 journal lanes are handled] ")+"\\n"+(sp.notes||[]).join("\\n");
-        det.appendChild(pre);
-        card.appendChild(det);
-      });
       if(!ml.entries.length){
         const e=document.createElement("div"); e.className="muted";
         e.textContent=T("장부가 비어 있어요 — 정찰 지도가 '기억할 결합'(⑥)을 제안하면 자동으로 쌓입니다.","The ledger is empty — it fills automatically when scout maps propose section-⑥ couplings.");
@@ -3218,8 +3236,8 @@ class Dashboard {
     // 기본지침도 언어 전환 hold(계약 카드와 동일 원리) — 편집 중 언어가 바뀌면 보던 언어 화면 유지, 저장은 보던 슬롯으로.
     safe(function(){
     const langChangedB = renderedLangB !== null && d.lang && d.lang !== renderedLangB;
-    const holdB = langChangedB && (baseDirty.verify || baseDirty.transmit || baseDirty.rejudge ||
-      document.activeElement === $("bVerify") || document.activeElement === $("bTransmit") || document.activeElement === $("bRejudge"));
+    const holdB = langChangedB && (baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout ||
+      document.activeElement === $("bVerify") || document.activeElement === $("bTransmit") || document.activeElement === $("bRejudge") || document.activeElement === $("bScout"));
     if (d.baseDirective && !holdB){
       if (d.lang) renderedLangB = d.lang;
       if (document.activeElement !== $("bVerify") && !baseDirty.verify) $("bVerify").value = d.baseDirective.verifyBaseline||"";
@@ -3227,6 +3245,17 @@ class Dashboard {
       if (document.activeElement !== $("bRejudge") && !baseDirty.rejudge) $("bRejudge").value = d.baseDirective.rejudge||"";
       const ov=$("baseOv"); if(ov) ov.textContent = d.baseDirective.overridden ? T("· (수정됨)","· (modified)") : T("· (기본값)","· (defaults)");
     }
+    // ④ 정찰 칸 — 3트랙(저장된 트랙)일 때만 등장. 사용자 단순화 요청(2026-07-09): 트랙에 따라 이 패널이 늘어난다.
+    safe(function(){
+      const wrap=$("bScoutWrap"), row=$("sbScout"); if(!wrap) return;
+      const on = !!(d.contract && d.contract.scoutMode === "on");
+      wrap.style.display = on ? "" : "none";
+      if (row) row.style.display = on ? "" : "none";
+      const sp=d.scoutPrompt; if(!sp) return;
+      if (!holdB && document.activeElement !== $("bScout") && !baseDirty.scout) $("bScout").value = sp.baseline||"";
+      const sov=$("bScoutOv"); if(sov) sov.textContent = sp.overridden ? T("· (수정됨 — 이후 지도는 실측과 비교 불가 표시)","· (modified — later maps marked incomparable to the measurement)") : T("· (기본값)","· (default)");
+      const fmt=$("bScoutFmt"); if(fmt) fmt.textContent = sp.directive+"\\n\\n"+(sp.notes||[]).join("\\n");
+    });
     // 런타임 라이브러리 없으면 저장/복원이 무효 → 거짓 성공 방지: 버튼 비활성 + 경고(점2 수정).
     const baseOk = d.baseAvailable !== false;
     if ($("saveB")) $("saveB").disabled = !baseOk;

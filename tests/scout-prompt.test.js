@@ -70,14 +70,28 @@ const fixedEnv = { ...process.env, SCOUT_PREFACE_FIXED: "1" };
 const fx = spawnSync(process.execPath, ["-e", "const b=require(process.argv[1]);console.log(b.buildMapRequest('pkg','m').messages[0].content.split('\\n')[0])", path.join(ROOT, "bridge", "deepseek-bridge.js")], { encoding: "utf8", windowsHide: true, env: fixedEnv });
 ok(/너는 '탐색자'다\. 아래 꾸러미가 유일한 근거다/.test(fx.stdout), "고정 스위치 실행 — 커스텀·언어 무시하고 기본 원문");
 
-console.log("[6] UI 노출(P2·P5 — 소스 계약)");
+console.log("[6] UI 노출 — 재배치(2026-07-09 사용자: 숨은그림 금지 — 단계별 기본 원칙이 트랙에 따라 ④칸 확장)");
 const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
-ok(/keyedDetails\("scoutPrompt"/.test(ext) && /spBase/.test(ext) && /spSave/.test(ext) && /spReset/.test(ext), "정찰 카드 — 프롬프트 패널(태도층 편집·저장·복원)");
-ok(/saveScoutBaseline/.test(ext) && /resetScoutBaseline/.test(ext), "저장/복원 메시지 배선");
-ok(/형식 계약\(잠금 · 버전/.test(ext) && /Format contract \(locked · version/.test(ext), "형식층은 잠금 표기와 함께 읽기 전용 노출(한/영)");
-ok(/notes: \[notes\.header, notes\.trusted, notes\.reference, notes\.disputed\]/.test(ext) && /각주 전문/.test(ext), "각주는 틀림 예시만이 아니라 3차선 전문 노출(설계 설명과 일치 — Codex 반례 잠금)");
-ok(/사전등록 실측과 비교 불가로 표시/.test(ext), "수정 상태 고지 — 수정본이면 '실측 비교 불가'를 상시 표시(저장 전 동의 모달 아님 — 정확 표현, Codex 보완)");
-ok(/정찰 카드의 '🧭 정찰에게 주는 지시'에서/.test(ext), "'단계별 기본 원칙' 패널에 위치 링크(P5)");
+ok(/bScoutWrap/.test(ext) && /④ 정찰 기본 원칙/.test(ext) && /④ Scout baseline/.test(ext), "단계별 기본 원칙 패널에 ④ 정찰 칸(한/영) — 별도 숨은 패널 아님");
+ok(!/keyedDetails\("scoutPrompt"/.test(ext) && !/spSave/.test(ext), "옛 일지 카드 속 접힘 패널 폐기(발견 불가 지적 해소 — 잔재 0)");
+ok(/wrap\.style\.display = on \? "" : "none"/.test(ext) && /d\.contract\.scoutMode === "on"\);\s*\n\s*wrap\.style\.display/.test(ext) && /sbScout/.test(ext), "④칸·단계 스트립 ④행은 3트랙(저장된 트랙)일 때만 등장");
+ok(/spVisible && \$\("bScout"\)/.test(ext) && /saveScoutBaseline\?\.\(m\.scoutBaseline, slotLang\)/.test(ext), "저장 버튼 하나로 ①~④ 함께 — 단 ④는 화면에 보일 때만 전송(숨은 값 덮어쓰기 금지)");
+ok(/m\.scout === true\) ok = bridgeLib\(\)\?\.resetScoutBaseline/.test(ext), "복원도 ④는 보일 때만 — 2트랙에서 안 보이는 정찰 설정을 조용히 안 지움(Codex 반례 잠금)");
+ok(/\[\["bTransmit","transmit"\],\["bVerify","verify"\],\["bRejudge","rejudge"\],\["bScout","scout"\]\]/.test(ext), "④칸도 편집 보존(dirty) 배선 — 렌더가 편집 중 값 안 덮음");
+ok(/④-형식 계약/.test(ext) && /bScoutFmt/.test(ext) && /기계가 그대로 읽는 배선/.test(ext), "형식 계약은 같은 패널에서 잠금 표기+읽기 전용 노출");
+ok(/notes: \[notes\.header, notes\.trusted, notes\.reference, notes\.disputed\]/.test(ext), "각주는 3차선 전문 노출(Codex 반례 잠금 유지)");
+ok(/기본 프롬프트 아님' 서명이 남아요/.test(ext), "수정 상태 고지 — 수정본 지도는 실측과 비교 불가(정직 고지)");
+ok(!/정찰 카드의 '🧭 정찰에게 주는 지시'에서/.test(ext), "옛 위치 링크 잔재 0(이제 그 자리에 실물이 있음)");
+
+console.log("[6-1] 검증 통계 — 3트랙 기여(관찰 신호) 카드(사용자 지적 2)");
+ok(/scoutImpact/.test(ext) && /siProposed/.test(ext) && /siAttached/.test(ext) && /siConfirmed/.test(ext) && /siGuard/.test(ext), "기여 카드 4지표(발견·재동봉·확인·재실수방지/복권)");
+ok(/다음 지도 자료에 실려 재사용된 횟수/.test(ext) && !/검증 자료에 실려 간 횟수/.test(ext), "attached 라벨 — 실제 의미(다음 지도 자료 재동봉)로 표기, '검증 자료' 과장 0(Codex 반례 잠금)");
+ok(/자동으로 뭘 빼거나 막지는 않아요/.test(ext), "④ 편집 경고 — 서명은 '구분 표시'임을 명시(자동 제외처럼 읽히던 문구 정정)");
+ok(/isScout/.test(ext) && /검증 흐름\(전달·재판단\)과는 별개/.test(ext), "④ 첫 편집 경고 모달 — 정찰 전용 문구(2트랙 전달/재판단용 문구 재사용 금지 — Codex 반례 잠금)");
+ok(/3트랙 기여 — 정찰이 검증에 실제로 보탠 것/.test(ext) && /3-track contribution/.test(ext), "카드 제목 한/영");
+ok(/'2트랙이었다면 놓쳤을 것'의 증명이 아니라/.test(ext), "정직 고지 — 반사실 증명이 아니라 루프 가동 관찰 신호임을 명시(§6-10)");
+ok(/impact\.proposed \+= e\.counts\.proposed/.test(ext) && /impact: \{ proposed/.test(ext), "집계는 일지 이벤트 합계(추가 LLM 0 · 카드 상한과 무관한 전 항목)");
+ok(/el\.style\.display = \(on && im\) \? "" : "none"/.test(ext), "2트랙에선 카드 숨김(무회귀)");
 
 console.log("[7] 실행 — en 홈에서 꾸러미 CLI 산출물의 지시가 영어(무이력 폴백 포함 끝-끝)");
 const wsEn = path.join(dir, "pkg-en");
