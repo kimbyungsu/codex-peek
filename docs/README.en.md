@@ -33,7 +33,7 @@ Connect **Claude Code** (implementation) and **OpenAI Codex** (verification) int
   ① change sensing (files changing now + historical co-change stats; formerly "scope ledger") ⚙ no LLM ·
   ② impact map (a scout AI previews how far the change reaches; formerly "impact-map board") ⚡ LLM call (free self arm / DeepSeek key) ·
   ③ field journal (right/wrong accrues automatically through verification; formerly "observed/MAP ledger") ⚙ no extra LLM ·
-  ④ field manual (only human-approved items become repo docs, docs/MAP.md) 👤 human.
+  ④ field manual (stamp items into repo docs, docs/MAP.md, only when you want — ①–③ keep running without it) 👤 optional.
   Accrual/promotion/demotion are fully automatic; manual controls (pin/ban/export) are optional overrides. The status-bar hover always shows whether an LLM call is running right now.
 - Codex session files are **read-only** (single exception: the "permanently delete" button you explicitly confirm).
 - `settings.json` is only modified after your consent, with a timestamped backup; other hooks are preserved.
