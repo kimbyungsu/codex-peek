@@ -111,10 +111,13 @@ try {
       const { renderPackageMarkdown } = require(path.join(__dirname, "..", "out", "scope-package.js"));
       const md = renderPackageMarkdown(pkg);
       if (ARM === "deepseek") {
-        const r = spawnSync(process.execPath, [path.join(__dirname, "..", "bridge", "deepseek-bridge.js"), "map"], { input: md, encoding: "utf8", timeout: 5 * 60 * 1000, windowsHide: true });
+        // SCOUT_PREFACE_FIXED=1 — 실측은 사용자 프롬프트 수정·언어를 타지 않는다(self 팔 고정 문구와 대칭 · §6-11 P4)
+        const r = spawnSync(process.execPath, [path.join(__dirname, "..", "bridge", "deepseek-bridge.js"), "map"], { input: md, encoding: "utf8", timeout: 5 * 60 * 1000, windowsHide: true, env: { ...process.env, SCOUT_PREFACE_FIXED: "1" } });
         mapText = r.status === 0 ? String(r.stdout || "") : "";
       } else {
         const DENY = "Bash,Read,Grep,Glob,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,TodoWrite,KillShell,TaskOutput";
+        // ⚠ 의도적 고정(§6-11): 실측 러너는 사전등록 결과(48.1%)와의 비교 안정성을 위해 '기본 프롬프트 원문'을
+        // 하드코딩 유지 — 사용자 편집(scout-baseline 슬롯)·언어 전환을 반영하지 않는다(반영하면 실측군이 오염됨).
         const preface = "너는 '탐색자'다. 아래 꾸러미가 유일한 근거다 — 도구는 차단되어 있고, 꾸러미 밖 추측으로 파일을 지어내지 마라. 꾸러미 끝의 [탐색자 지시] 형식을 정확히 따르라.\n\n";
         const r = spawnSync("claude", ["-p", "--output-format", "text", "--disallowedTools", DENY], { input: preface + md, encoding: "utf8", timeout: 8 * 60 * 1000, windowsHide: true, shell: process.platform === "win32" });
         mapText = r.status === 0 ? String(r.stdout || "") : "";

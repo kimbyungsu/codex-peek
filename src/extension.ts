@@ -12,6 +12,7 @@ import { parseGitLog, suggest as scopeSuggest, ScopeSuggestion } from "./scope-l
 import { maskKey, isPlausibleKey, mergeDeepseekConfig } from "./deepseek-config";
 import { appendApproved, parseApprovedFromMap, normSig } from "./map-ledger";
 import { parseEventsJsonl, deriveLedger } from "./ledger-events";
+import { scoutDirectiveText, scoutLedgerNotes } from "./scope-package";
 
 const HOME = os.homedir();
 // 자체 namespace 폴더. CODEX_BRIDGE_HOME으로 override(확장 호스트≠훅 home 환경 대비 — 브릿지·훅과 동일 규칙).
@@ -115,6 +116,7 @@ interface BridgeState {
   lang: Lang;              // 전역 언어(ko/en)
   otherSlotRules: boolean; // 반대 언어 슬롯에만 규칙 있음(빈칸 안내)
   baseDirective: { verifyBaseline: string; transmit: string; rejudge: string; overridden: boolean };
+  scoutPrompt: { baseline: string; overridden: boolean; directive: string; notes: string[]; version: string } | null; // §6-11 — 3트랙에서만(null=2트랙/판독 불가)
   baseAvailable: boolean;
   permissionMode: string;
   codexReady: boolean;
@@ -1001,6 +1003,18 @@ function computeState(turnsN: number): BridgeState {
     lang: loadLangExt(),                 // 전역 언어(ko/en) — 탭바 토글 상태 + UI 문자열 선택
     otherSlotRules: otherSlotHasRules(ws), // 반대 언어 슬롯에만 규칙 있음 → '사라진 게 아님' 안내
     baseDirective: loadBaseDirectiveSafe(),
+    // 정찰 프롬프트(§6-11): 태도층(편집 가능 슬롯)+형식층(잠금 — 지도를 읽는 기계 배선이라 읽기 전용 노출)
+    scoutPrompt: (() => {
+      try {
+        if (!ws || loadContract(ws).scoutMode !== "on") return null;
+        const lib = bridgeLib();
+        const b = lib?.loadScoutBaseline?.();
+        if (!b || typeof b.text !== "string") return null;
+        const lang = loadLangExt();
+        const notes = scoutLedgerNotes(lang);
+        return { baseline: b.text, overridden: !!b.overridden, directive: scoutDirectiveText(lang), notes: [notes.header, notes.trusted, notes.reference, notes.disputed], version: String(lib?.SCOUT_FORMAT_VERSION || "f1") };
+      } catch { return null; }
+    })(),
     baseAvailable: bridgeLib() !== null,
     permissionMode: activePermissionMode(ws),
     codexReady: !!resolveCodexPathForBridge(),
@@ -1828,6 +1842,18 @@ class Dashboard {
           this.post();
           this.panel?.webview.postMessage({ type: "saveResult", target: "deepseek", ok });
         }
+        if (m?.type === "saveScoutBaseline" || m?.type === "resetScoutBaseline") {
+          let ok = false;
+          try {
+            const slotLang = m.lang === "ko" || m.lang === "en" ? m.lang : undefined;
+            ok = m.type === "resetScoutBaseline"
+              ? bridgeLib()?.resetScoutBaseline?.(slotLang) === true
+              : bridgeLib()?.saveScoutBaseline?.(String(m.text || ""), slotLang) === true;
+          } catch { ok = false; }
+          if (!ok) vscode.window.showErrorMessage(tE("정찰 기본 원칙 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 시도해 주세요.","Failed to save the scout baseline — file locked or inaccessible. Try again shortly."));
+          this.post();
+          this.panel?.webview.postMessage({ type: "saveResult", target: "scoutBase", ok });
+        }
         if (m?.type === "saveBase") {
           let ok = false;
           try {
@@ -2337,6 +2363,7 @@ class Dashboard {
     <div class="chead" style="margin-top:12px">${t("③ 재판단 원칙", "③ Re-judgment principles")} <span class="muted" style="font-weight:400">${t("→ Claude에게 · Codex 답을 되짚을 때 · 검증 ON일 때만", "→ to Claude · when re-judging Codex's answer · only while verify is ON")}</span></div>
     <textarea id="bRejudge" rows="5"></textarea>
     <div class="row"><button id="saveB">${t("단계별 기본 원칙 저장", "Save stage baselines")}</button><button id="resetB" class="secondary">${t("기본값 복원", "Restore defaults")}</button><span id="savedB" class="muted"></span></div>
+    <div class="muted" style="margin-top:4px">${t("ⓘ 정찰(3트랙)의 프롬프트는 정찰 카드의 '🧭 정찰에게 주는 지시'에서 보기/수정할 수 있어요(태도는 수정 가능 · 지도 형식은 잠금).", "ⓘ The scout (3-track) prompts live on the recon card under '🧭 instructions given to the scout' (attitude editable · map format locked).")}</div>
   </details>
   <h2 class="sec base accent-orange">${t("코덱스 두뇌 설정", "Codex Brain Settings")} <span class="sub2">${t("이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)", "model & reasoning effort Codex uses in this project (applies to the ongoing session too)")}</span></h2>
   <div class="mcard">
@@ -3075,6 +3102,31 @@ class Dashboard {
           T("자동 주입 아니에요: 버튼을 누른 그 항목만, 누른 그 순간 1회 기록됩니다 — 뭔가가 계속 무단으로 쌓이지 않아요. 안 써도 나머지 단계는 그대로 동작합니다.","Not auto-injection: only the entry you click, once, at that moment — nothing keeps piling up on its own. Skip it entirely and everything else still works."),
         ];
         lines.forEach(function(tx){const p=document.createElement("div"); p.className="muted"; p.style.margin="4px 0"; p.textContent=tx; det.appendChild(p);});
+        card.appendChild(det);
+      });
+      // 정찰 프롬프트 노출(§6-11 P2·P5) — 태도층은 수정 가능, 형식층은 잠금(기계 배선) 표기와 함께 읽기 전용
+      safe(function(){
+        const sp=d.scoutPrompt; if(!sp) return;
+        const det=keyedDetails("scoutPrompt", T("🧭 정찰에게 주는 지시(프롬프트) 보기/수정","🧭 View/edit the instructions given to the scout"));
+        const h1=document.createElement("div"); h1.className="muted"; h1.style.margin="4px 0";
+        h1.textContent=T("① 태도(수정 가능 — 무료 팔·DeepSeek 팔 공통): 정찰 AI가 어떤 자세로 임할지. 2트랙의 '단계별 기본 원칙'과 같은 지위입니다.","① Attitude (editable — applies to both arms): how the scout AI should behave. Same status as the 2-track stage baselines.");
+        det.appendChild(h1);
+        const ta=document.createElement("textarea"); ta.id="spBase"; ta.rows=3; ta.style.width="100%";
+        det.appendChild(ta);
+        const row=document.createElement("div"); row.className="row";
+        const sb=document.createElement("button"); sb.id="spSave"; sb.textContent=T("정찰 기본 원칙 저장","Save scout baseline");
+        const rb=document.createElement("button"); rb.id="spReset"; rb.className="secondary"; rb.textContent=T("기본값 복원","Restore default");
+        const ov=document.createElement("span"); ov.id="spOv"; ov.className="muted"; ov.textContent=sp.overridden?T("· (수정됨 — 이후 지도는 사전등록 실측과 비교 불가로 표시)","· (modified — later maps are marked incomparable to the pre-registered measurement)"):T("· (기본값)","· (default)");
+        row.appendChild(sb); row.appendChild(rb); row.appendChild(ov); det.appendChild(row);
+        sb.addEventListener("click",function(){ pendingSave={target:"scoutBase"}; vscode.postMessage({type:"saveScoutBaseline", lang: renderedLangC || undefined, text: ta.value}); });
+        rb.addEventListener("click",function(){ pendingSave={target:"scoutBase", msg:T("기본값으로 복원됨 ✓","Restored to default ✓")}; vscode.postMessage({type:"resetScoutBaseline", lang: renderedLangC || undefined}); });
+        if(document.activeElement!==ta) ta.value=sp.baseline;
+        const h2=document.createElement("div"); h2.className="muted"; h2.style.margin="8px 0 4px 0";
+        h2.textContent=T("② 형식 계약(잠금 · 버전 "+sp.version+"): 지도의 ①~⑥ 구획과 high 표기는 기계가 그대로 읽는 배선이라 수정할 수 없어요 — 내용은 투명하게 공개합니다.","② Format contract (locked · version "+sp.version+"): the map's ①~⑥ sections and 'high' tags are wiring the machine reads verbatim, so it can't be edited — shown here for transparency.");
+        det.appendChild(h2);
+        const pre=document.createElement("div"); pre.className="muted"; pre.style.whiteSpace="pre-wrap"; pre.style.fontSize="11px"; pre.style.border="1px dashed var(--vscode-panel-border)"; pre.style.padding="6px"; pre.style.borderRadius="4px";
+        pre.textContent=sp.directive+"\\n\\n"+T("[자료 각주 전문 — 일지 3차선 취급 지시] ","[Material footnotes in full — how the 3 journal lanes are handled] ")+"\\n"+(sp.notes||[]).join("\\n");
+        det.appendChild(pre);
         card.appendChild(det);
       });
       if(!ml.entries.length){

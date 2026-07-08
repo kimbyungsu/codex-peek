@@ -274,6 +274,50 @@ function normScoutGate(o) {
   return "off";
 }
 
+// ── 정찰(3트랙) 프롬프트 — 태도층 슬롯 + 공용 preface + 서명(§6-11 P1·P4, 2026-07-09) ──
+// 태도층(편집 가능·언어 슬롯별)과 형식 계약([탐색자 지시] — scope-package가 단일 출처·잠금)을 분리한다.
+// preface 사본이 3벌(self 러너·deepseek-bridge·ab-retro)이던 것을 단일 출처화 — 단 ab-retro는 사전등록
+// 실측(48.1%)과의 비교 안정성을 위해 '고정 문구'를 유지한다(사용자 수정·언어 미반영 — 해당 파일 주석 참조).
+const SCOUT_FORMAT_VERSION = "f1"; // [탐색자 지시] 형식 계약 버전 — ①~⑥/high 구조가 바뀌면 올림(지도 메타 서명·통계 구분)
+const SCOUT_BASE_DEFAULTS = "너는 '탐색자'다. 아래 꾸러미가 유일한 근거다 — 꾸러미 밖 추측으로 파일을 지어내지 마라. 꾸러미 끝의 [탐색자 지시] 형식을 정확히 따르라.";
+const SCOUT_BASE_DEFAULTS_EN = "You are the 'scout'. The package below is your only evidence — do not invent files beyond it. Follow the [Scout directive] format at the end of the package exactly.";
+function scoutBaselineDefaultFor(lang) { return (LANGS.includes(lang) ? lang : loadLang()) === "en" ? SCOUT_BASE_DEFAULTS_EN : SCOUT_BASE_DEFAULTS; }
+function scoutBaselineFileFor(lang) {
+  const l = LANGS.includes(lang) ? lang : loadLang();
+  return path.join(BRIDGE_DIR, l === "ko" ? "scout-baseline.json" : ("scout-baseline." + l + ".json"));
+}
+function loadScoutBaseline(lang) {
+  let o = {};
+  try { o = JSON.parse(fs.readFileSync(scoutBaselineFileFor(lang), "utf8")); } catch { o = {}; }
+  const D = scoutBaselineDefaultFor(lang);
+  const text = o && typeof o.baseline === "string" && o.baseline.trim() ? o.baseline : D;
+  return { text, overridden: text.trim() !== D.trim() };
+}
+function saveScoutBaseline(text, lang) { // 기본값과 같으면 오버라이드 파일 삭제(=초기화) — saveBaseDirective와 동일 규칙
+  const D = scoutBaselineDefaultFor(lang);
+  const file = scoutBaselineFileFor(lang);
+  const v = typeof text === "string" ? text : "";
+  try { fs.mkdirSync(BRIDGE_DIR, { recursive: true }); } catch { /* 아래 쓰기에서 판정 */ }
+  if (!v.trim() || v.trim() === D.trim()) {
+    try { fs.unlinkSync(file); } catch (e) { if (e && e.code !== "ENOENT") return false; }
+    return true;
+  }
+  return atomicWrite(file, JSON.stringify({ baseline: v }, null, 2));
+}
+function resetScoutBaseline(lang) { return saveScoutBaseline("", lang); }
+// 두 팔 공용 preface — self 팔만 '도구 차단' 사실 문장을 덧붙임(API 모델은 도구가 원래 없어 그 문장이 성립 안 함 — D5 공정성 근거 유지).
+function buildScoutPreface(arm, lang) {
+  const en = (LANGS.includes(lang) ? lang : loadLang()) === "en";
+  const toolNote = arm === "self" ? (en ? " (Tools are blocked for this call.)" : " (이 호출에서 도구는 차단되어 있다.)") : "";
+  return loadScoutBaseline(lang).text + toolNote;
+}
+// 지도 메타 프롬프트 서명(P4) — 수정된 프롬프트로 만든 지도가 사전등록 실측(기본 프롬프트 48.1%)과 섞이지 않게 구분.
+function scoutPromptSignature(lang) {
+  const l = LANGS.includes(lang) ? lang : loadLang();
+  const b = loadScoutBaseline(l);
+  return { promptLang: l, baselineHash: crypto.createHash("sha1").update(b.text).digest("hex").slice(0, 12), baselineCustom: b.overridden, formatVersion: SCOUT_FORMAT_VERSION };
+}
+
 // ── 탐색(3트랙) 자동 지시(지시 주입형 — 사용자 승인 2026-07-06) ──
 // 원리: 하네스는 '지도가 없거나 낡았다'는 사실을 매 턴 판정해 구현 Claude에게 갱신 '지시'만 넣는다(실행·전송은
 // Claude가 수행 — 지도 꾸러미는 확장/훅이 직접 전송하지 않음. 단 3트랙 켤 때의 연결 점검 1회는 확장이 직접 트리거 — PRIVACY '예외 둘', 2026-07-09 정정). 재지시 억제는 시간이 아니라 '상태 서명'(지도 없음 | 최신 지도 이름):
@@ -789,4 +833,4 @@ function formatForClaude(answer, lang) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, STATS_DIR, VERDICTS_FILE };

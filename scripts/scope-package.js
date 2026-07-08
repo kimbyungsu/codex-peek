@@ -12,7 +12,7 @@ const { spawnSync } = require("child_process");
 const { extractDiffTokens, buildPackage, renderPackageMarkdown, redactSensitiveDiff, isSensitivePath, PKG_DEFAULTS } = require(path.join(__dirname, "..", "out", "scope-package.js"));
 const { parseGitLog, suggest } = require(path.join(__dirname, "..", "out", "scope-ledger.js"));
 const { parseEventsJsonl, deriveLedger, selectForPackage } = require(path.join(__dirname, "..", "out", "ledger-events.js"));
-const { readLedgerEventsText, appendLedgerEvent } = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
+const { readLedgerEventsText, appendLedgerEvent, loadLang } = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
 
 // 관측 장부 선별 — 이벤트(append-only)에서 상태를 유도해 씨앗 관련·신뢰 차선 위주로 꾸러미에 동봉할 몫만 고른다.
 // 장부가 없거나 읽기 실패면 null(주입 0) — 장부 문제가 꾸러미 생성을 막지 않는다.
@@ -269,5 +269,5 @@ if (require.main === module) {
   if (!repo) { console.error("사용: node scripts/scope-package.js <repo경로> [--json]"); process.exit(2); }
   const pkg = collectPackage(repo);
   if (!pkg) { console.error("git 저장소가 아니거나 git 실패"); process.exit(1); }
-  process.stdout.write(asJson ? JSON.stringify(pkg, null, 2) : renderPackageMarkdown(pkg));
+  process.stdout.write(asJson ? JSON.stringify(pkg, null, 2) : renderPackageMarkdown(pkg, loadLang()));
 }

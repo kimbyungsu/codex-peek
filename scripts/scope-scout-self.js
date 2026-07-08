@@ -9,7 +9,7 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 const { collectPackage } = require("./scope-package.js");
 const { saveMap, markLive, clearLive } = require("./scout-store.js");
-const { extractMapHighlights, extractMapPatches, appendLedgerEvent, ledgerSig } = require(path.join(__dirname, "..", "bridge", "contract-lib.js")); // 지도 high 구조화(Phase 3) — 저장 시 메타에 동봉
+const { extractMapHighlights, extractMapPatches, appendLedgerEvent, ledgerSig, buildScoutPreface, scoutPromptSignature, loadLang } = require(path.join(__dirname, "..", "bridge", "contract-lib.js")); // 지도 high 구조화(Phase 3) + 프롬프트 단일 출처(§6-11)
 const { renderPackageMarkdown } = require(path.join(__dirname, "..", "out", "scope-package.js"));
 
 const repo = process.argv[2];
@@ -19,11 +19,12 @@ if (!repo) { console.error("사용: node scripts/scope-scout-self.js <repo경로
 
 const pkg = collectPackage(repo);
 if (!pkg) { console.error("git 저장소가 아니거나 git 실패"); process.exit(1); }
-const md = renderPackageMarkdown(pkg);
+const lang = loadLang(); // 지도 '원문' 언어 — 전역 언어를 따름(§6-8 후속(c) 해소)
+const md = renderPackageMarkdown(pkg, lang);
 
 // 탐색 전용 1회 호출 — 파일 탐색 도구 전면 차단(꾸러미 밖을 못 보게 = DeepSeek 팔과 동일 시야).
 const DENY = "Bash,Read,Grep,Glob,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,TodoWrite,KillShell,TaskOutput";
-const preface = "너는 '탐색자'다. 아래 꾸러미가 유일한 근거다 — 도구는 차단되어 있고, 꾸러미 밖 추측으로 파일을 지어내지 마라. 꾸러미 끝의 [탐색자 지시] 형식을 정확히 따르라.\n\n";
+const preface = buildScoutPreface("self", lang) + "\n\n"; // 태도층 슬롯(사용자 편집 가능) + self 팔 도구 차단 각주 — 단일 출처(§6-11 P1)
 markLive(repo, "self"); // 상태바 '지도 생성중…' 신호 — 탐색자 호출 동안만(finally에서 해제)
 let r;
 try {
@@ -43,7 +44,7 @@ const map = r.stdout.trim();
 if (outFile) fs.writeFileSync(outFile, map);
 // 대시보드 '영향지도 게시판'용 보관(브릿지 홈 scouts/ — 프로젝트별 최근 10장). stderr로 알림(stdout=지도 본문 유지).
 // 메타에 basis·seedFiles 기록 — 물때표(다음 지도의 기준)와 무이력 낡음 배지의 재료(멀티 세션 오인 방지 — Codex 보완).
-try { console.error("지도 보관(게시판): " + saveMap(repo, "self", map, { highlights: extractMapHighlights(map), mapPatches: extractMapPatches(map), basis: pkg.basisNote || (pkg.historyless ? "" : "git-status"), seedFiles: pkg.seeds })); } catch (e) { console.error("지도 보관 실패(게시판에만 영향): " + (e && e.message)); }
+try { console.error("지도 보관(게시판): " + saveMap(repo, "self", map, { ...scoutPromptSignature(lang), highlights: extractMapHighlights(map), mapPatches: extractMapPatches(map), basis: pkg.basisNote || (pkg.historyless ? "" : "git-status"), seedFiles: pkg.seeds })); } catch (e) { console.error("지도 보관 실패(게시판에만 영향): " + (e && e.message)); }
 // 관측 장부: 지도가 낸 ⑥(MAP patch) 제안을 사실로 적재 — 상태 전이는 out/ledger-events.js가 유도(로드맵 ①단계)
 try { const now = new Date().toISOString(); for (const t of extractMapPatches(map)) appendLedgerEvent(repo, { ts: now, type: "proposed", sig: ledgerSig(t), text: t, from: "self 지도 " + now }); } catch { /* 장부 실패가 지도 출력 흐름을 막지 않음 */ }
 process.stdout.write(map + "\n");

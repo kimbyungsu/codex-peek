@@ -239,7 +239,8 @@
    붙을 뿐 이벤트化 안 됨 — contract-lib buildScoutAttach·proofs는 메타만) → 동봉 시점 기록 신설 필요.
    (c)는 차단은 scout-gate-log에 있으나 '이후 플랜 수정' 신호가 없음 → 보강 필요. 추가 LLM 0 원칙은 유지.
    사용자 지시로 ①(슬롯 분리)·②(정정 로직 분석) 이후 착수.
-11. **(제안 확정 · 사용자 승인 대기 2026-07-09) 정찰 프롬프트 노출 — 2트랙 '단계별 기본 원칙'과 대칭**.
+11. ~~정찰 프롬프트 노출~~ — **구현 완료 2026-07-09(사용자 "시작해")**: P1 태도층 슬롯(contract-lib loadScoutBaseline/save/reset — 언어 슬롯별·기본값 복원·두 팔 preface 단일 출처 buildScoutPreface, ab-retro만 실측 안정성 위해 고정) · P2 형식 계약 잠금 노출(정찰 카드 scoutPrompt 패널 — scope-package scoutDirectiveText/scoutLedgerNotes 단일 출처, 편집 개방은 미실시라 파괴 감지 신호는 아직 불요) · P3 프롬프트층 이중언어(지시·각주 en 변형+출력 언어 명시 — §6-8 후속(c) 해소, 본문 증거 라벨은 한국어 유지 정직 고지) · P4 지도 메타 프롬프트 서명(promptLang·baselineHash·baselineCustom·formatVersion=f1) · P5 정찰 카드 노출+원칙 패널 링크. 잠금 tests/scout-prompt.test.js(29단언 — 슬롯·preface·서명·이중언어·소스 계약·CLI 끝-끝). 원 제안 기록(아래)은 이력으로 유지.
+11-0. (이력 — 원 제안) 정찰 프롬프트 노출 — 2트랙 '단계별 기본 원칙'과 대칭.
    사용자 질문("3트랙도 프롬프트가 별도로 있나? 있다면 2트랙처럼 구현돼야 하지 않나")의 사실 확인: 있다,
    세 겹, 전부 하드코딩·비노출 — (1)역할 preface(scope-scout-self.js 26행 / deepseek-bridge.js buildMapRequest,
    두 벌) (2)형식 계약([탐색자 지시] — scope-package.ts, ①~⑥·high·판정 금지) (3)자료 취급 각주(§7.5).

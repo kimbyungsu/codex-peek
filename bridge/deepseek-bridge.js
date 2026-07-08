@@ -36,8 +36,14 @@ function resolveDeepseekConfig(env, fileJson) {
 // 지도 요청 본문(순수) — self 팔(scope-scout-self.js)과 같은 꾸러미·같은 지시 앞머리(D5 A/B 공정성).
 // 문구 차이는 '도구 차단' 언급 하나뿐: self 팔은 CLI 도구를 실제로 차단해야 해서 그 사실을 알리지만,
 // API 모델은 도구가 원래 없어 해당 문장이 성립하지 않는다(없는 것을 있다고 말하면 오히려 조건 불일치).
+// preface는 태도층 슬롯(contract-lib buildScoutPreface — 사용자 편집분·언어 반영)에서 읽음(§6-11 단일 출처화).
 function buildMapRequest(pkgMd, model) {
-  const preface = "너는 '탐색자'다. 아래 꾸러미가 유일한 근거다 — 꾸러미 밖 추측으로 파일을 지어내지 마라. 꾸러미 끝의 [탐색자 지시] 형식을 정확히 따르라.";
+  let preface = "너는 '탐색자'다. 아래 꾸러미가 유일한 근거다 — 꾸러미 밖 추측으로 파일을 지어내지 마라. 꾸러미 끝의 [탐색자 지시] 형식을 정확히 따르라.";
+  // SCOUT_PREFACE_FIXED=1: 실측 러너(ab-retro)용 — 사용자 수정·언어를 무시하고 위 '기본 문구 원문'을 그대로 쓴다
+  // (사전등록 실측(48.1%)과의 비교 안정성 — self 팔의 고정 프롬프트와 대칭. Codex 반례 2026-07-09).
+  if (process.env.SCOUT_PREFACE_FIXED !== "1") {
+    try { preface = require(path.join(__dirname, "contract-lib.js")).buildScoutPreface("deepseek"); } catch { /* 단독 배포 등 예외 시 기본 문구 폴백 — 지도 생성을 막지 않음 */ }
+  }
   return {
     model,
     messages: [{ role: "user", content: preface + "\n\n" + String(pkgMd || "") }],

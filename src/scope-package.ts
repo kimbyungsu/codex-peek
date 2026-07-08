@@ -146,7 +146,32 @@ export function buildPackage(input: {
 // ⚠ 이 렌더가 외부(비교 팔)로 나가는 유일한 산출 — 민감 범주 '파일명'은 여기서 가린다(실측 2026-07-08:
 // tg-chat-engine에서 .env.bak-token-… 경로가 seed 목록에 그대로 노출). 내부 데이터(seedFiles 메타 등)는
 // 지도 신선도 판정에 실경로가 필요하고 로컬 전용이라 원형 유지 — 가림은 렌더 한 곳에서만.
-export function renderPackageMarkdown(p: ScopePackage): string {
+// 프롬프트층 단일 출처(§6-11 P2) — [탐색자 지시]와 §7.5 각주는 지도를 읽는 기계 배선(extractMapHighlights/
+// extractMapPatches/일지 적재)이 그대로 소비하는 '형식 계약'이라 UI에는 읽기 전용으로만 노출된다.
+// ①~⑥ 기호·high/medium/low 표기는 언어 중립 불변(파서 계약) — 언어는 서술문만 바꾼다.
+export function scoutDirectiveText(lang?: string): string {
+  return lang === "en"
+    ? `[Scout directive] Using ONLY the material above, write an 'impact-scope map' — ①direct impact candidates ②indirect impact candidates ③tests/behaviors that must be checked ④docs/config/UI impact ⑤safely out of scope ⑥MAP patch candidates (semantic couplings to add/update in the stable MAP — proposals only, never auto-applied). Tag each of ①~④ with a confirmation-need of high/medium/low (max 5 high · max 10 candidates total). No pass/fail verdicts · no fix instructions · only paths to check. Write the map in English.`
+    : `[탐색자 지시] 위 자료만 근거로 '영향범위 지도'를 작성하라 — ①직접 영향 후보 ②간접 영향 후보 ③반드시 확인할 테스트/동작 ④문서/설정/UI 영향 ⑤범위 밖으로 봐도 되는 것 ⑥MAP patch 후보(stable MAP에 추가/수정할 의미 결합 — 제안일 뿐, 자동 반영 아님). 각 항목(①~④)에 확인필요도 high/medium/low를 달아라(high 최대 5·전체 후보 최대 10). 최종 통과/실패 판정 금지 · 수정 지시 금지 · 확인할 경로만. 지도는 한국어로 작성하라.`;
+}
+export function scoutLedgerNotes(lang?: string): { header: string; trusted: string; reference: string; disputed: string } {
+  return lang === "en"
+    ? {
+        header: "## 7.5 Auto-observed journal (accrues proposals→verification — reference material, not a verdict basis)",
+        trusted: "Confirmed (verified or human-pinned — trusted input):",
+        reference: "Unverified proposals (reference only — not yet confirmed):",
+        disputed: "Judged wrong (previously refuted couplings — no re-assertion without evidence): to re-propose, state what changed since the refutation (code change · new evidence) on that item:",
+      }
+    : {
+        header: "## 7.5 자동 관측 장부 (제안→검증으로 축적 — 참고자료, 판정 기준 아님)",
+        trusted: "확인됨(검증/사람 고정 — 신뢰 입력):",
+        reference: "미검증 제안(참고만 — 아직 확인 안 됨):",
+        disputed: "틀림 판명(과거에 반박된 결합 — 근거 없는 재주장 금지): 다시 제안하려면 반박 이후 무엇이 바뀌었는지(코드 변경·새 근거)를 그 항목에 명시하라:",
+      };
+}
+// lang: 프롬프트층(지시·각주)의 언어(§6-8 후속(c) — 지도 '원문' 언어가 이걸 따름). 본문 증거 라벨(섹션 제목 등)은
+// 아직 한국어 고정(모델 소비엔 무해·사람 열람용 전체 번역은 별도 결정) — 정직 고지.
+export function renderPackageMarkdown(p: ScopePackage, lang?: string): string {
   const L: string[] = [];
   const maskList = (paths: string[]): { shown: string[]; hidden: number } => {
     const shown: string[] = []; let hidden = 0;
@@ -181,13 +206,14 @@ export function renderPackageMarkdown(p: ScopePackage): string {
   if (p.map) L.push(`\n## 7. stable MAP(확정 지식층)\n${maskText(p.map)}`);
   if (p.ledger) {
     // 관측 장부 — 자동 축적된 결합 지식을 신뢰 등급별로 구분 동봉(confidence band 철학: 재료를 왜곡하지 않고 확신도만 라벨).
-    L.push(`\n## 7.5 자동 관측 장부 (제안→검증으로 축적 — 참고자료, 판정 기준 아님)`);
-    if (p.ledger.trusted.length) L.push(`확인됨(검증/사람 고정 — 신뢰 입력):\n${p.ledger.trusted.map((e) => `- ${maskText(e.text)}`).join("\n")}`);
-    if (p.ledger.reference.length) L.push(`미검증 제안(참고만 — 아직 확인 안 됨):\n${p.ledger.reference.map((e) => `- ${maskText(e.text)}`).join("\n")}`);
-    if (p.ledger.disputed.length) L.push(`틀림 판명(과거에 반박된 결합 — 근거 없는 재주장 금지): 다시 제안하려면 반박 이후 무엇이 바뀌었는지(코드 변경·새 근거)를 그 항목에 명시하라:\n${p.ledger.disputed.map((e) => `- ${maskText(e.text)}`).join("\n")}`);
+    const N = scoutLedgerNotes(lang);
+    L.push(`\n${N.header}`);
+    if (p.ledger.trusted.length) L.push(`${N.trusted}\n${p.ledger.trusted.map((e) => `- ${maskText(e.text)}`).join("\n")}`);
+    if (p.ledger.reference.length) L.push(`${N.reference}\n${p.ledger.reference.map((e) => `- ${maskText(e.text)}`).join("\n")}`);
+    if (p.ledger.disputed.length) L.push(`${N.disputed}\n${p.ledger.disputed.map((e) => `- ${maskText(e.text)}`).join("\n")}`);
   }
   if (p.meta.truncations.length) L.push(`\n## 절단 고지\n${p.meta.truncations.map((t) => `- ${t}`).join("\n")}`);
   L.push(`\n## ⚠ 이 꾸러미가 못 보는 것\n${p.blindSpots.map((b) => `- ${b}`).join("\n")}`);
-  L.push(`\n---\n[탐색자 지시] 위 자료만 근거로 '영향범위 지도'를 작성하라 — ①직접 영향 후보 ②간접 영향 후보 ③반드시 확인할 테스트/동작 ④문서/설정/UI 영향 ⑤범위 밖으로 봐도 되는 것 ⑥MAP patch 후보(stable MAP에 추가/수정할 의미 결합 — 제안일 뿐, 자동 반영 아님). 각 항목(①~④)에 확인필요도 high/medium/low를 달아라(high 최대 5·전체 후보 최대 10). 최종 통과/실패 판정 금지 · 수정 지시 금지 · 확인할 경로만.`);
+  L.push(`\n---\n${scoutDirectiveText(lang)}`);
   return L.join("\n");
 }
