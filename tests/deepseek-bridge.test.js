@@ -48,6 +48,8 @@ ok(!/어떤 전송도 하지 않는다/.test(dsCfg) && /예외 둘/.test(dsCfg),
 const handoff = fs.readFileSync(path.join(__dirname, "..", "docs", "HANDOFF.md"), "utf8");
 const roadmap = fs.readFileSync(path.join(__dirname, "..", "docs", "ROADMAP.md"), "utf8");
 ok(!/어떤 전송도 하지 않음/.test(handoff) && !/예외 1건/.test(roadmap), "내부 문서(HANDOFF·ROADMAP)에도 '무전송·예외 1건' 계열 잔재 0(Codex 3차 반례 잠금)");
+const clSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
+ok(!/무전송 원칙 불변/.test(clSrc) && /예외 둘/.test(clSrc), "contract-lib 주석: '무전송 원칙 불변' 잔재 0(예외 둘 체계 — Codex 4차 반례 잠금)");
 const readmeKo = fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8");
 const readmeEn = fs.readFileSync(path.join(__dirname, "..", "docs", "README.en.md"), "utf8");
 ok(!/\*\*외부 전송 없음\*\*/.test(readmeKo) && /예외는 둘뿐/.test(readmeKo) && !/유일한 예외/.test(readmeKo), "README(ko): 절대 표현 제거 + 예외 둘(꾸러미·연결 점검) 명시, '유일한 예외' 잔재 0");
