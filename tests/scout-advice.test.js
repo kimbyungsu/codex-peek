@@ -54,6 +54,56 @@ fs.writeFileSync(path.join(dir, metaFile2), JSON.stringify(meta2));
 const d3 = lib.buildScoutDirective(repo, cOn);
 ok(!!d3 && /scope-scout-deepseek\.js/.test(d3) && /키 등록=자동 호출 동의됨/.test(d3), "키 있으면 DeepSeek 팔 옵션+동의 근거 명시");
 
+console.log("[버킷 재알림 · 2026-07-08 점화 보수] 같은 지도라도 낡음 '정도'(1,2,4,8…)가 오르면 재지시, 하강·동일은 침묵");
+["b.md", "c.md", "d.md"].forEach((n) => fs.writeFileSync(path.join(repo, n), "seed"));
+store.saveMap(repo, "self", "# 지도4", { seedFiles: ["a.md", "b.md", "c.md", "d.md"] });
+const metaFile4 = fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort().reverse()[0];
+const meta4 = JSON.parse(fs.readFileSync(path.join(dir, metaFile4), "utf8"));
+meta4.ts = new Date(Date.now() - 3600 * 1000).toISOString();
+fs.writeFileSync(path.join(dir, metaFile4), JSON.stringify(meta4));
+// 시작 상태를 '전부 지도보다 오래됨'(낡음 0)으로 고정 — 씨앗 mtime을 지도 ts(1시간 전)보다 뒤로 두면 첫 판정부터 낡음 4가 돼버림
+const old = new Date(Date.now() - 7200 * 1000);
+["a.md", "b.md", "c.md", "d.md"].forEach((n) => fs.utimesSync(path.join(repo, n), old, old));
+ok(lib.scoutMapStatus(repo).state === "fresh", "시작 상태: 씨앗 전부 지도 이전 → fresh");
+const touch = (n) => fs.writeFileSync(path.join(repo, n), "갱신 " + Math.random());
+touch("a.md");
+ok(!!lib.buildScoutDirective(repo, cOn) && lib.scoutMapStatus(repo).staleCount === 1, "낡음 1(버킷1) — 새 지도 첫 지시");
+ok(lib.buildScoutDirective(repo, cOn) === null, "같은 정도(1) 재호출 → 침묵");
+touch("b.md");
+const dB2 = lib.buildScoutDirective(repo, cOn);
+ok(!!dB2 && /2개가 더 바뀌어/.test(dB2), "낡음 2(버킷2 상승) → 재지시 1회");
+touch("c.md");
+ok(lib.scoutMapStatus(repo).staleCount === 3 && lib.buildScoutDirective(repo, cOn) === null, "낡음 3(버킷2 유지) → 침묵(도배 방지)");
+touch("d.md");
+const dB4 = lib.buildScoutDirective(repo, cOn);
+ok(!!dB4 && /4개가 더 바뀌어/.test(dB4), "낡음 4(버킷4 상승) → 재지시 1회");
+fs.rmSync(path.join(repo, "c.md")); // seed 삭제 → staleCount 하강(4→3)
+ok(lib.scoutMapStatus(repo).staleCount === 3 && lib.buildScoutDirective(repo, cOn) === null, "하강(4→3, 버킷2≤최대4) → 재지시 없음(스팸 방지)");
+
+console.log("[구형 기억 마이그레이션] {sig:'stale:<base>'} 파일은 maxBucket=1로 해석 — 정도 진행 시 재지시");
+const adviceFile = path.join(tmpHome, "scout-advice", store.wsKeyFor(repo) + ".json");
+fs.writeFileSync(adviceFile, JSON.stringify({ sig: "stale:" + lib.scoutMapStatus(repo).base, ts: new Date().toISOString() }));
+const dMig = lib.buildScoutDirective(repo, cOn);
+ok(!!dMig && /3개가 더 바뀌어/.test(dMig), "구형 sig(=버킷1) + 현재 낡음 3(버킷2) → 재지시(마이그레이션 의도)");
+
+console.log("[레거시 지도 · seedFiles 기록 없음] fresh 오판 대신 '판정 불가' 상태 + 재생성 권고 1회(실사고 2026-07-08 잠금)");
+store.saveMap(repo, "self", "# 지도5", { seedFiles: ["a.md"] });
+const metaFile5 = fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort().reverse()[0];
+const meta5 = JSON.parse(fs.readFileSync(path.join(dir, metaFile5), "utf8"));
+delete meta5.seedFiles; // 구버전 러너가 만든 지도 재현(근거 기록 없음)
+fs.writeFileSync(path.join(dir, metaFile5), JSON.stringify(meta5));
+const stL = lib.scoutMapStatus(repo);
+ok(stL.state === "legacy-no-seeds", `근거 기록 없는 지도 → legacy-no-seeds(실제 ${stL.state}) — fresh 오판 금지`);
+const dL = lib.buildScoutDirective(repo, cOn);
+ok(!!dL && /판정할 수 없다/.test(dL) && /재생성 권고/.test(dL), "레거시 지시: 낡음 단정 없이 '판정 불가' 정직 문구");
+ok(lib.buildScoutDirective(repo, cOn) === null, "레거시 상태 재호출 → 침묵(상태당 1회)");
+meta5.seedFiles = []; // 최신 러너가 '변경 없는 작업트리'에서 만드는 정상 형식(Codex 반례 잠금 — 구버전 오판 금지)
+fs.writeFileSync(path.join(dir, metaFile5), JSON.stringify(meta5));
+ok(lib.scoutMapStatus(repo).state === "fresh", "명시적 seedFiles:[] → legacy 아님(fresh — 방금 만든 지도에 재생성 권고 반복 금지)");
+ok(lib.buildScoutDirective(repo, cOn) === null, "빈 근거 최신 지도 → 지시 없음");
+const gateSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "scout-gate.js"), "utf8");
+ok(/legacy-no-seeds/.test(gateSrc) && /구버전 지도/.test(gateSrc), "플랜 게이트도 레거시 문구 분기(낡음 거짓 단정 방지 — 소스 계약)");
+
 console.log("[생성중 신호] mark~clear 동안만 존재 + 러너 배선(소스 계약)");
 store.markLive(repo, "self");
 ok(fs.existsSync(path.join(store.LIVE_DIR, store.wsKeyFor(repo) + ".json")), "mark → 신호 파일 생성");

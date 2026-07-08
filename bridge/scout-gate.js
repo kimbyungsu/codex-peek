@@ -59,7 +59,9 @@ function main(raw) {
     process.exit(0);
   }
   try { fs.mkdirSync(ATTEMPTS_DIR, { recursive: true }); atomicWrite(af, JSON.stringify({ n: n + 1, ts: new Date().toISOString() })); } catch { /* 기록 실패해도 차단은 진행(다음 번 상한 계산만 보수적) */ }
-  const why = st.state === "no-map" ? "이 프로젝트에 영향지도가 아직 없다" : `최신 지도 생성 후 근거 파일 ${st.staleCount}개가 더 바뀌어 지도가 낡았다`;
+  const why = st.state === "no-map" ? "이 프로젝트에 영향지도가 아직 없다"
+    : st.state === "legacy-no-seeds" ? "최신 지도에 근거 파일 기록이 없어 신선도를 판정할 수 없다(구버전 지도 — 재생성 필요)"
+    : `최신 지도 생성 후 근거 파일 ${st.staleCount}개가 더 바뀌어 지도가 낡았다`;
   process.stderr.write(`[탐색 게이트 · plan 실험] 플랜 확정 전에 영향지도부터 — ${why}. codex-peek 소스 저장소에서 \`node scripts/scope-scout-self.js "${ws}"\` 실행 후 다시 플랜을 확정하라. (이 게이트는 세션당 ${BLOCKS_PER_SESSION}회까지만 막고 이후 통과 · 끄기: node scripts/scope-gate.js "${ws}" off)\n`);
   process.exit(2); // 차단 — stderr가 Claude에게 피드백됨(공식 문서 명시)
 }

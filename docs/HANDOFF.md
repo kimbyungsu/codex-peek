@@ -153,10 +153,30 @@
    **실험 절차(다음 사람/세션)**: ① `node install.js`(훅 4개 등록) 후 **새 Claude Code 세션** ② 플랜 모드 진입→플랜 확정 시도
    ③ 브릿지 홈 `scout-gate-log/<wsKey>.jsonl`에 tool:"ExitPlanMode" 줄이 찍혔는지 확인 — **찍힘=가로채기 가능 확정**(게이트
    `scope-gate.js on`으로 실험 계속), 안 찍힘=PreToolUse가 ExitPlanMode를 안 잡는 것(전용 훅 이슈 추적·Stop 게이트 대안 검토).
-   결과를 이 문단에 기록할 것.
-4. **(다음 1순위) 플랜 게이트 실세션 실험** — §6-3 ⑥의 사전등록 절차대로: 새 세션→플랜 확정 시도→브릿지 홈
-   `scout-gate-log/<wsKey>.jsonl`에 tool:"ExitPlanMode"가 찍히는지 판정 → 결과를 §6-3 ⑥ 문단에 기록.
-   (찍히면 `node scripts/scope-gate.js <repo> on`으로 게이트 실험 계속 / 안 찍히면 Stop 게이트 대안 검토.)
+   **판정(2026-07-08, 자연 데이터): 찍힘 — 가로채기 가능 확정.** 실세션의 플랜 확정 2건(2026-07-07T19:44:44Z ·
+   2026-07-07T21:10:30Z)이 `scout-gate-log/fff249c3aaa6cbb3.jsonl`에 기록됨(사용자가 거부한 ExitPlanMode도 훅이
+   먼저 돌아 기록 — PreToolUse 확정). 다음은 원하는 프로젝트에서 `scope-gate.js on` 게이트 실험.
+4. **(완료 2026-07-08) 플랜 게이트 실세션 실험** — 위 ⑥ 판정 참조(찍힘 확정). 남은 것: `scope-gate.js on` 상태의
+   차단·문구 실사용 관찰(레거시 지도면 '판정 불가·재생성 필요' 문구가 나가는지 — 아래 4-1의 legacy 상태 참조).
+4-1. **(완료 2026-07-08) 장부 점화 — '이벤트 0건' 구조 공백 진단·해소**. 진단(실측): 씨앗(proposed)의 유일한 자동
+   입구가 '지도 러너 실행'인데 러너가 안 돌고, 자동 지시는 같은 낡음 상태에 1회 후 영구 침묵, 실개발 레포(codex-peek)는
+   3트랙 계약조차 없어 대상 밖, confirmed 자동 적재는 장부가 비면 즉시 return(공회전) → 이벤트 0건. 조치 4종:
+   (a) **파서 위생**(contract-lib extractMapPatches 내부 — 러너·백필 공용 단일 기준): 경로 토큰 ≥1+최소 길이,
+   'yaml'·설명 부스러기 탈락 (b) **legacy-no-seeds 상태 신설**(scoutMapStatus): seedFiles 기록 없는 구버전 지도를
+   fresh로 오판하던 것 분리 — 자동 지시·플랜 게이트 모두 '판정 불가·재생성 권고' 정직 문구 (c) **버킷 재알림**
+   (buildScoutDirective): 같은 지도라도 낡음 정도가 2의 거듭제곱(1,2,4,8…) 상승 시 재지시(하강·동일은 침묵,
+   시간 상수 0, 구형 {sig} 기억은 maxBucket=1로 해석) (d) **씨앗 백필 CLI**(scripts/scope-ledger-backfill.js,
+   수동 1회·멱등·--dry): 기존 지도의 ⑥ 후보 소급 적재 — 라이브 29건 점화(codex-peek 13·에이전트활용 16,
+   deriveLedger 유도 정상). +codex-peek에 3트랙 계약 생성(ko·en 양 슬롯 — en 전환 시 유실 방지).
+   ⚠입구 전수(정정): proposed=러너·백필 / attached=꾸러미 빌더 / confirmed=검증 통과 자동(장부 비면 불가) /
+   pinned·banned·unpinned·unbanned·exported=**대시보드 개입 경로도 있음**(extension.ts ledgerAct) / user_dispute=발화 CLI.
+   ⚠남은 배치 한계(미해결·결정 필요): 세션 cwd≠개발 레포면 ask의 ws가 cwd를 따라가 지도 동봉·confirmed가
+   개발 레포 장부로 안 흐름 — 해법 후보(레포에서 세션 열기 관행 vs ws→git 루트 재해석)는 별도 결정.
+4-2. **(방향 확정 2026-07-08) Reconciler(정리자 — 통합·분할·확대·축소·폐기)는 점화·축적 '뒤'.** 외부 대화
+   제안(하네스 후보화→LLM 정리 제안→검증→이벤트 적재)은 타당하나 '다음 실험 전에 먼저'는 기각 — 전제(축적 잡음)가
+   실측(0건)과 어긋났음. R0(조작 표현)는 새 이벤트 타입 신설 없이 기존 조합(선택 A: 새 문장 proposed + 옛 문장
+   superseded / retire=tombstone / ban=banned)으로 표현 가능 — split만 향후 newSigs[] 검토. R1+(후보 생성기·
+   LLM 제안·scope-curate CLI)는 장부에 실데이터가 쌓인 뒤 착수.
 5. **(관찰) 관측 장부 실데이터 축적** — confirmed/user_dispute가 쌓이면: DERIVE_V1 임계(현재 최약 1회) 데이터 기반
    조정 + 장부 학습 반영 후 지도 명중률 재실측(ab-retro) → 60% 넘으면 게이트 기본 승격 재논의(사전등록 §4).
 6. (후보) 대시보드 게이트 토글 UI(현재 CLI만 — informed consent 문구에 실측 명중률 표기), 발화 기록(scope-ledger-note)

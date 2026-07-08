@@ -47,13 +47,20 @@ ok(r.status === 0, "3회차 → 통과(세션 상한 — 무한 잠금 방지)")
 r = runHook(undefined, "sess-B");
 ok(r.status === 2, "다른 세션은 상한 별도(다시 1회차부터)");
 
-console.log("[3] 신선한 지도 → 게이트 on이어도 통과");
+console.log("[3] 신선한 지도 → 게이트 on이어도 통과 (fresh는 '근거 파일 기록이 있고 그 후 안 바뀜'이 조건)");
 const scoutsDir = path.join(dir, "scouts", logFiles[0].replace(/\.jsonl$/, ""));
 fs.mkdirSync(scoutsDir, { recursive: true });
+fs.writeFileSync(path.join(ws, "seed-fresh.md"), "근거 파일");
 fs.writeFileSync(path.join(scoutsDir, "2026-07-07T00-00-00-000Z-00-self.md"), "지도");
-fs.writeFileSync(path.join(scoutsDir, "2026-07-07T00-00-00-000Z-00-self.json"), JSON.stringify({ ts: new Date().toISOString(), arm: "self", seedFiles: [] }));
+fs.writeFileSync(path.join(scoutsDir, "2026-07-07T00-00-00-000Z-00-self.json"), JSON.stringify({ ts: new Date(Date.now() + 60_000).toISOString(), arm: "self", seedFiles: ["seed-fresh.md"] }));
 r = runHook(undefined, "sess-C");
 ok(r.status === 0, "fresh 지도 → 통과");
+
+console.log("[3b] 레거시 지도(근거 기록 없음 — 2026-07-08 실사고 잠금) → fresh 오판 없이 차단 + '판정 불가' 정직 문구");
+fs.writeFileSync(path.join(scoutsDir, "2026-07-07T00-00-01-000Z-00-self.md"), "구버전 지도");
+fs.writeFileSync(path.join(scoutsDir, "2026-07-07T00-00-01-000Z-00-self.json"), JSON.stringify({ ts: new Date().toISOString(), arm: "self" })); // seedFiles 없음
+r = runHook(undefined, "sess-L");
+ok(r.status === 2 && /구버전 지도/.test(r.stderr) && !/낡았다/.test(r.stderr), "레거시 → 차단하되 '낡음' 거짓 단정 없이 재생성 필요 안내");
 
 console.log("[4] fail-open — 깨진 페이로드·비대상 도구는 절대 안 막음");
 ok(runHook("{broken json").status === 0, "깨진 stdin → exit 0");

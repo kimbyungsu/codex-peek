@@ -35,17 +35,23 @@ ok(patches.length === 2, `⑥ 항목 2건 추출(중복·자리표시 제외 —
 ok(patches[0].includes("proofs/"), "제안 텍스트 원문 보존(백틱 제거)");
 ok(!patches.some((t) => t.includes("수집 금지")), "다음 구획(②)에서 수집 중단");
 ok(extractMapPatches("① 직접\n- x.ts (high)").length === 0, "⑥ 없는 지도 → 빈 배열");
-const many = "⑥ MAP patch\n" + Array.from({ length: 15 }, (_, i) => `- 결합 ${i}`).join("\n");
+const many = "⑥ MAP patch\n" + Array.from({ length: 15 }, (_, i) => `- 결합 ${i}: src/f${i}.ts ↔ docs/MAP.md 동기화`).join("\n");
 ok(extractMapPatches(many).length === 10, "제안 상한 10(도배 방지)");
 
 console.log("[1b] 반례 잠금(Codex 지적) — ⑥ 안 'MAP patch' 문구 보존 · 혼합 구획 종료 우선 · 자유서식 헤더");
 const inner = extractMapPatches("⑥ MAP patch 후보\n- MAP patch naming ↔ docs/MAP.md — 이유");
 ok(inner.length === 1 && inner[0].includes("MAP patch naming"), "⑥ 안의 'MAP patch' 포함 항목이 헤더로 오인되지 않고 보존");
-const mixed = extractMapPatches("⑥ 후보 ⑦ 기타\n- lost ↔ item");
+const mixed = extractMapPatches("⑥ 후보 ⑦ 기타\n- lost ↔ item.ts 결합 제안");
 ok(mixed.length === 0, "⑥+⑦ 혼합 헤더 줄 → 종료(다른 구획)가 이김");
-const freeform = extractMapPatches("MAP patch 후보\n- free ↔ form");
+const freeform = extractMapPatches("MAP patch 후보\n- src/free.ts ↔ docs/form.md 동기");
 ok(freeform.length === 1 && freeform[0].includes("free"), "구획 표기 없는 'MAP patch' 헤더(비-불릿)로도 수집 시작");
-ok(extractMapPatches("- MAP patch 언급일 뿐인 불릿\n- not ↔ collected").length === 0, "불릿 줄의 'MAP patch' 언급은 헤더 아님(수집 시작 안 함)");
+ok(extractMapPatches("- MAP patch 언급일 뿐인 불릿\n- not ↔ collected.ts 후보줄").length === 0, "불릿 줄의 'MAP patch' 언급은 헤더 아님(수집 시작 안 함)");
+
+console.log("[1c] 씨앗 위생 필터(2026-07-08 백필 실사고 잠금) — 무경로·초단문 부스러기는 장부 씨앗이 못 됨");
+const dirty = extractMapPatches(["⑥ MAP patch 후보", "- yaml", "- blind spot**: 이 꾸러미엔 해당 파일 없음 — 실제 구현 완료 여부 미확인.", "- free ↔ form", "- **scoutMaps ↔ readScoutMaps**: src/extension.ts와 대시보드 결합", "- proofs/ 쓰기 ↔ verify-guard 읽기 — 검증 증명 채널"].join("\n"));
+ok(dirty.length === 2, `경로 토큰 없는 줄('yaml'·설명문·free↔form) 전부 탈락, 경로 든 결합만 생존(실제 ${dirty.length})`);
+ok(dirty.some((t) => t.includes("extension.ts")) && dirty.some((t) => t.includes("proofs/")), "생존분: 파일 경로 결합 + 디렉터리(끝 슬래시) 결합 — 둘 다 인정");
+ok(!dirty.some((t) => t.includes("**")), "마크다운 굵게 표기(**)는 씨앗 텍스트에서 정리됨");
 
 console.log("[2] reconcile CLI — list 선행 강제 → list → approve → 확정층 기록 → 재목록 제외");
 const repo = path.join(dir, "repo");

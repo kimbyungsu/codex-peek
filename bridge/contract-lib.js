@@ -283,6 +283,8 @@ function wsKeyFor(ws) { // 계약 키·지도 보관함 키와 반드시 동일 
   return crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16);
 }
 // 최신 지도 상태: no-map(없음) / fresh(신선) / stale(지도 자신의 seed 파일이 지도 생성 후 더 바뀜 — 낡음)
+// / legacy-no-seeds(메타는 있으나 근거 파일 기록이 없어 신선도 판정 자체가 불가 — seedFiles 기록 도입 前 구버전 지도.
+//   실사고 2026-07-08: codex-peek 7/6 지도가 이 케이스라 'fresh' 오판 → 자동 지시 영구 침묵 → 장부 점화 실패).
 function scoutMapStatus(ws) {
   const dir = path.join(SCOUTS_DIR, wsKeyFor(ws));
   let bases = [];
@@ -291,24 +293,47 @@ function scoutMapStatus(ws) {
   let meta = {};
   try { meta = JSON.parse(fs.readFileSync(path.join(dir, bases[0] + ".json"), "utf8")); } catch { /* 메타 없음 — 낡음 판정 불가 → fresh 취급(과잉 지시 방지) */ }
   const ts = Date.parse(meta.ts || "") || 0;
+  // legacy 판정은 '기록 자체가 없던 구버전'만 — seedFiles 속성 부재/비배열. 명시적 빈 배열([])은 최신 러너가
+  // '변경 없는 작업트리'에서 정상적으로 만들 수 있는 형식이라 legacy가 아니다(Codex 반례 2026-07-08: 빈 배열을
+  // 구버전으로 오판하면 방금 만든 지도에 '재생성 권고'를 반복하는 거짓 안내가 됨) → fresh 취급(판정 근거 없음=과잉 지시 방지).
+  if (ts && !Array.isArray(meta.seedFiles)) return { state: "legacy-no-seeds", base: bases[0], staleCount: 0 };
+  const seeds = (meta.seedFiles || []).slice(0, 8);
   let staleCount = 0;
-  const seeds = Array.isArray(meta.seedFiles) ? meta.seedFiles.slice(0, 8) : [];
   for (const s of seeds) { try { if (fs.statSync(path.join(ws, s)).mtimeMs > ts) staleCount++; } catch { /* 삭제된 seed — 제외 */ } }
   return { state: ts && staleCount > 0 ? "stale" : "fresh", base: bases[0], staleCount };
 }
 // 3트랙이고 지도가 없/낡았으며 이 상태에 아직 지시한 적 없으면 지시문 반환, 아니면 null. c=이미 로드된 계약(중복 로드 방지).
+// 재지시 정책(2026-07-08 점화 보수): 같은 지도라도 낡음 '정도'가 커지면(2의 거듭제곱 버킷 1,2,4,8… 상승) 다시 1회 지시.
+// 기억은 {state, base, maxBucket} — 버킷 하강(파일 삭제 등으로 staleCount 감소)은 재지시 안 함(스팸 방지·시간 상수 0).
+// 구버전 기억({sig:"stale:<base>"})은 maxBucket=1로 해석(정도 진행 시 재지시 — 마이그레이션 의도 그대로).
+function scoutBucket(n) { let b = 1; while (b * 2 <= n) b *= 2; return n > 0 ? b : 0; } // 1,2,4,8,… (n<1이면 0)
 function buildScoutDirective(ws, c) {
   if (!ws || normScoutMode(c) !== "on") return null;
   const st = scoutMapStatus(ws);
   if (st.state === "fresh") return null;
-  const sig = st.state === "no-map" ? "no-map" : "stale:" + st.base;
+  const bucket = st.state === "stale" ? scoutBucket(st.staleCount) : 0;
   const f = path.join(SCOUT_ADVICE_DIR, wsKeyFor(ws) + ".json");
-  try { const prev = JSON.parse(fs.readFileSync(f, "utf8")); if (prev && prev.sig === sig) return null; } catch { /* 첫 지시 */ }
-  try { atomicWrite(f, JSON.stringify({ sig, ts: new Date().toISOString() })); } catch { /* 기억 실패 시 다음 턴 재지시 — 무해 */ }
+  let prev = null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(f, "utf8"));
+    if (raw && typeof raw === "object") {
+      if (typeof raw.sig === "string") { // 구버전 형식 해석
+        prev = raw.sig === "no-map" ? { state: "no-map", base: null, maxBucket: 0 }
+          : raw.sig.startsWith("stale:") ? { state: "stale", base: raw.sig.slice(6), maxBucket: 1 }
+          : raw.sig.startsWith("legacy:") ? { state: "legacy-no-seeds", base: raw.sig.slice(7), maxBucket: 0 }
+          : null;
+      } else if (typeof raw.state === "string") prev = { state: raw.state, base: raw.base || null, maxBucket: (raw.maxBucket | 0) || 0 };
+    }
+  } catch { /* 첫 지시 */ }
+  if (prev && prev.state === st.state && prev.base === st.base && bucket <= prev.maxBucket) return null; // 같은 상태·정도 이하 → 침묵
+  if (prev && prev.state === st.state && prev.base === st.base && st.state !== "stale") return null;      // no-map/legacy는 상태당 1회
+  try { atomicWrite(f, JSON.stringify({ state: st.state, base: st.base, maxBucket: Math.max(bucket, prev && prev.base === st.base ? prev.maxBucket : 0), ts: new Date().toISOString() })); } catch { /* 기억 실패 시 다음 턴 재지시 — 무해 */ }
   let hasKey = false;
   try { const j = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, "deepseek.json"), "utf8")); hasKey = !!(j && typeof j.apiKey === "string" && j.apiKey.trim()); } catch { /* 키 없음 */ }
   const why = st.state === "no-map"
     ? "이 프로젝트에 영향지도가 아직 없다"
+    : st.state === "legacy-no-seeds"
+    ? "최신 지도에 근거 파일 기록이 없어 신선한지 낡았는지 판정할 수 없다(근거 기록 도입 전의 구버전 지도) — 재생성 권고"
     : "최신 지도 생성 이후 그 지도의 근거 파일 " + st.staleCount + "개가 더 바뀌어 지도가 낡았다";
   return "[탐색(3트랙) 자동 지시 · 이 상태에 1회만] " + why + ". 이번 턴이 파일 변경을 동반하면 결론 전에 영향지도를 갱신하라 — codex-peek 소스 저장소에서 `node scripts/scope-scout-self.js \"" + ws + "\"` 실행(무료 self 팔 우선"
     + (hasKey ? " · 비교가 필요하다고 판단되면 scope-scout-deepseek.js 사용 가능 — 키 등록=자동 호출 동의됨" : "")
@@ -353,6 +378,22 @@ function extractMapHighlights(mapText) {
 }
 // 지도의 ⑥(MAP patch 후보 — stable MAP 제안층) 항목 추출. ⑥ 헤더(또는 'MAP patch' 문구) 이후의 내용 줄을
 // 다음 구획 헤더까지 수집한다. 제안은 자유서식 의미 결합("a ↔ b — 이유")이라 텍스트 그대로 보존(구조 강제 없음).
+// 줄에 '경로 토큰'(구분자 있는 경로 또는 글자 확장자 파일명)이 하나라도 있는지 — 장부 씨앗 위생의 최소 기준.
+// extractMapHighlights의 토큰 규칙과 동일 취지(관대하되 'yaml'·'blind spot' 같은 무경로 부스러기는 결합 제안이 아님).
+function hasPathToken(line) {
+  for (const tok of String(line || "").split(/[\s,;|"'<>{}()[\]—·↔:]+/)) {
+    const t = tok.replace(/^[^A-Za-z0-9_.\\/-]+|[^A-Za-z0-9_.\\/-]+$/g, "").replace(/[.,;:]+$/, "");
+    if (!t || t.length > 200 || !/^[A-Za-z0-9_.\\/-]+$/.test(t)) continue;
+    const hasSep = /[\\/]/.test(t);
+    if (!hasSep && !/\.[A-Za-z][A-Za-z0-9]{0,7}$/.test(t)) continue; // 파일명은 글자 확장자 필수(0.1.86류 버전 오인 방지)
+    if (hasSep) {
+      const segs = t.split(/[\\/]/).filter(Boolean); // "proofs/" 같은 디렉터리 표기 — 끝 슬래시 뒤 빈 구획은 건너뛰고 실구획 검사
+      if (!segs.length || !/[A-Za-z]/.test(segs[segs.length - 1])) continue; // 마지막 실구획에 글자 없으면(1/2 등) 제외
+    }
+    return true;
+  }
+  return false;
+}
 function extractMapPatches(mapText) {
   const out = []; const seen = new Set();
   let inPatch = false;
@@ -365,8 +406,11 @@ function extractMapPatches(mapText) {
     // 자유서식 헤더('MAP patch'로 시작하는 비-불릿 줄)만 인정 — ⑥ 안의 내용 줄에 'MAP patch' 문구가 있어도 항목으로 보존
     if (!inPatch && /^[#>\s]*MAP\s*patch/i.test(line)) { inPatch = true; continue; }
     if (!inPatch) continue;
-    const text = line.replace(/^[-*#\s]+/, "").trim();
+    const text = line.replace(/^[-*#\s]+/, "").replace(/\*\*/g, "").trim();
     if (!text || /^\(.*없음.*\)$|^none$/i.test(text)) continue; // "(없음)"류 자리표시는 제안 아님
+    // 씨앗 위생(백필 도입 시 실측: 'yaml'·'blind spot'·근거 설명줄이 후보로 새던 결함) — 결합 제안의 최소 실체는
+    // '경로가 든 문장'. 경로 토큰 1개 이상 + 최소 길이. 러너·백필이 같은 이 함수를 쓰므로 기준은 단일.
+    if (text.length < 16 || !hasPathToken(text)) continue;
     const key = text.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
