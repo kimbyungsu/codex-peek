@@ -15,7 +15,8 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, scoutMapStatus, wsKeyFor, atomicWrite, resolveScoutRepo } = require("./contract-lib.js");
+const { loadContract, scoutMapStatus, wsKeyFor, atomicWrite, resolveScoutRepo, loadLang } = require("./contract-lib.js");
+const tB = (ko, en) => (loadLang() === "en" ? en : ko); // 훅 문구도 한/영 쌍(2026-07-09 사용자 지적)
 
 const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(os.homedir(), ".codex-bridge");
 const LOG_DIR = path.join(BRIDGE_DIR, "scout-gate-log");
@@ -58,14 +59,16 @@ function main(raw) {
   let n = 0;
   try { n = (JSON.parse(fs.readFileSync(af, "utf8")).n | 0) || 0; } catch { /* 첫 차단 */ }
   if (n >= BLOCKS_PER_SESSION) {
-    logObservation(ws, { ts: new Date().toISOString(), tool: toolName, passThrough: true, reason: "세션 차단 상한 도달 — 통과(무한 잠금 방지)" });
+    logObservation(ws, { ts: new Date().toISOString(), tool: toolName, passThrough: true, reason: tB("세션 차단 상한 도달 — 통과(무한 잠금 방지)", "session block cap reached — passing through (no hard-lock)") });
     process.exit(0);
   }
   try { fs.mkdirSync(ATTEMPTS_DIR, { recursive: true }); atomicWrite(af, JSON.stringify({ n: n + 1, ts: new Date().toISOString() })); } catch { /* 기록 실패해도 차단은 진행(다음 번 상한 계산만 보수적) */ }
-  const why = st.state === "no-map" ? "이 프로젝트에 영향지도가 아직 없다"
-    : st.state === "legacy-no-seeds" ? "최신 지도에 근거 파일 기록이 없어 신선도를 판정할 수 없다(구버전 지도 — 재생성 필요)"
-    : `최신 지도 생성 후 근거 파일 ${st.staleCount}개가 더 바뀌어 지도가 낡았다`;
-  process.stderr.write(`[탐색 게이트 · plan 실험] 플랜 확정 전에 영향지도부터 — ${why}. codex-peek 소스 저장소에서 \`node scripts/scope-scout-self.js "${target}"\` 실행 후 다시 플랜을 확정하라. (이 게이트는 세션당 ${BLOCKS_PER_SESSION}회까지만 막고 이후 통과 · 끄기: node scripts/scope-gate.js "${ws}" off)\n`);
+  const why = st.state === "no-map" ? tB("이 프로젝트에 영향지도가 아직 없다", "this project has no impact map yet")
+    : st.state === "legacy-no-seeds" ? tB("최신 지도에 근거 파일 기록이 없어 신선도를 판정할 수 없다(구버전 지도 — 재생성 필요)", "the latest map has no basis-file record, so freshness cannot be judged (legacy map — regeneration needed)")
+    : tB(`최신 지도 생성 후 근거 파일 ${st.staleCount}개가 더 바뀌어 지도가 낡았다`, `${st.staleCount} basis file(s) changed after the latest map — it is stale`);
+  process.stderr.write(tB(
+    `[탐색 게이트 · plan 실험] 플랜 확정 전에 영향지도부터 — ${why}. codex-peek 소스 저장소에서 \`node scripts/scope-scout-self.js "${target}"\` 실행 후 다시 플랜을 확정하라. (이 게이트는 세션당 ${BLOCKS_PER_SESSION}회까지만 막고 이후 통과 · 끄기: node scripts/scope-gate.js "${ws}" off)\n`,
+    `[Recon gate · plan experiment] Get an impact map before confirming the plan — ${why}. Run \`node scripts/scope-scout-self.js "${target}"\` from the codex-peek source repo, then confirm the plan again. (This gate blocks at most ${BLOCKS_PER_SESSION}× per session, then passes · turn off: node scripts/scope-gate.js "${ws}" off)\n`));
   process.exit(2); // 차단 — stderr가 Claude에게 피드백됨(공식 문서 명시)
 }
 

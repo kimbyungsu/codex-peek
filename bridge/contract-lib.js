@@ -347,11 +347,15 @@ function buildScoutDirective(ws, c) {
   try { atomicWrite(f, JSON.stringify({ state: st.state, base: st.base, maxBucket: Math.max(bucket, prev && prev.base === st.base ? prev.maxBucket : 0), ts: new Date().toISOString() })); } catch { /* 기억 실패 시 다음 턴 재지시 — 무해 */ }
   let hasKey = false;
   try { const j = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, "deepseek.json"), "utf8")); hasKey = !!(j && typeof j.apiKey === "string" && j.apiKey.trim()); } catch { /* 키 없음 */ }
+  const en = loadLang() === "en"; // 훅 주입문도 전역 언어 준수(한/영 쌍 규칙 — 2026-07-09 사용자 지적)
   const why = st.state === "no-map"
-    ? "이 프로젝트에 영향지도가 아직 없다"
+    ? (en ? "this project has no impact map yet" : "이 프로젝트에 영향지도가 아직 없다")
     : st.state === "legacy-no-seeds"
-    ? "최신 지도에 근거 파일 기록이 없어 신선한지 낡았는지 판정할 수 없다(근거 기록 도입 전의 구버전 지도) — 재생성 권고"
-    : "최신 지도 생성 이후 그 지도의 근거 파일 " + st.staleCount + "개가 더 바뀌어 지도가 낡았다";
+    ? (en ? "the latest map has no basis-file record, so freshness cannot be judged (map predates basis tracking) — regeneration recommended" : "최신 지도에 근거 파일 기록이 없어 신선한지 낡았는지 판정할 수 없다(근거 기록 도입 전의 구버전 지도) — 재생성 권고")
+    : (en ? st.staleCount + " basis file(s) of the latest map changed after it was generated — the map is stale" : "최신 지도 생성 이후 그 지도의 근거 파일 " + st.staleCount + "개가 더 바뀌어 지도가 낡았다");
+  if (en) return "[Recon (3-track) auto-directive · once per state] " + why + ". If this turn involves file changes, refresh the impact map before concluding — run `node scripts/scope-scout-self.js \"" + target + "\"` from the codex-peek source repo (free self arm first"
+    + (hasKey ? " · scope-scout-deepseek.js available if comparison seems useful — key registration = consent to auto calls" : "")
+    + "). Trivial turns (a question, a one-line doc edit) may skip — the map is advisory and blocks nothing.";
   return "[탐색(3트랙) 자동 지시 · 이 상태에 1회만] " + why + ". 이번 턴이 파일 변경을 동반하면 결론 전에 영향지도를 갱신하라 — codex-peek 소스 저장소에서 `node scripts/scope-scout-self.js \"" + target + "\"` 실행(무료 self 팔 우선"
     + (hasKey ? " · 비교가 필요하다고 판단되면 scope-scout-deepseek.js 사용 가능 — 키 등록=자동 호출 동의됨" : "")
     + "). 사소한 턴(질문·문서 한 줄)이면 스킵해도 된다 — 지도는 참고용이며 아무것도 막지 않는다.";

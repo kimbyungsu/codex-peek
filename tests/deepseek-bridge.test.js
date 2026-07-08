@@ -40,13 +40,14 @@ const hookSetupSrc = fs.readFileSync(path.join(__dirname, "..", "src", "hook-set
 ok(/deepseek-bridge\.js/.test(installSrc) && /deepseek-bridge\.js/.test(hookSetupSrc), "BRIDGE_SCRIPTS 양쪽(install.js·hook-setup.ts)에 deepseek-bridge.js 포함(설치 시 브릿지 홈 배치)");
 const extSrc = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
 ok(!/아무것도 전송하지 않습니다/.test(extSrc) && !/sends nothing with it/.test(extSrc), "고급설정 문구에서 '전송 없음' 단정 제거(이제 수동 실행 경로가 실재)");
-ok(/지도 생성이 실행될 때만/.test(extSrc) && /only when map generation runs/.test(extSrc) && /키 등록=동의 모델/.test(extSrc), "전송 조건(생성 실행 시에만 — 직접 또는 자동 지시·동의 모델)을 양언어로 명시");
+ok(/지도 생성이 실행될 때만/.test(extSrc) && /only when map generation runs/.test(extSrc) && /키 등록=동의 모델/.test(extSrc), "꾸러미 전송 조건(생성 실행 시에만 — 직접 또는 자동 지시·동의 모델)을 양언어로 명시");
+ok(/연결 점검 1회/.test(extSrc) && /connection check/.test(extSrc) && !/유일한 외부 전송/.test(extSrc), "고급설정·가이드: 연결 점검 예외도 양언어 명시 + '유일한 전송' 잔재 0(예외 둘 체계 — Codex 반례 잠금 2026-07-09)");
 const readmeKo = fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8");
 const readmeEn = fs.readFileSync(path.join(__dirname, "..", "docs", "README.en.md"), "utf8");
-ok(!/\*\*외부 전송 없음\*\*/.test(readmeKo) && /유일한 예외/.test(readmeKo), "README(ko): 절대 표현 제거 + 예외 1건 명시");
-ok(/Single exception/.test(readmeEn) && /DeepSeek/.test(readmeEn), "README(en): 예외 1건 명시");
+ok(!/\*\*외부 전송 없음\*\*/.test(readmeKo) && /예외는 둘뿐/.test(readmeKo) && !/유일한 예외/.test(readmeKo), "README(ko): 절대 표현 제거 + 예외 둘(꾸러미·연결 점검) 명시, '유일한 예외' 잔재 0");
+ok(/Two exceptions/.test(readmeEn) && /connection check/.test(readmeEn) && !/Single exception/.test(readmeEn), "README(en): 예외 둘 명시, 'Single exception' 잔재 0");
 const privacySrc = fs.readFileSync(path.join(__dirname, "..", "PRIVACY.md"), "utf8");
-ok(/유일한 예외 — DeepSeek 지도 생성/.test(privacySrc) && /안 보내는 것\(자동 제외\)/.test(privacySrc), "PRIVACY: 전송 내용·자동 제외 목록 명시");
+ok(/나머지 예외 — DeepSeek 지도 생성/.test(privacySrc) && /안 보내는 것\(자동 제외\)/.test(privacySrc), "PRIVACY: 전송 내용·자동 제외 목록 명시(연결 점검 예외 추가로 '유일한→나머지' 개정 — 2026-07-09)");
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

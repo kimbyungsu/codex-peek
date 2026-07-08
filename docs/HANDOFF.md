@@ -199,6 +199,14 @@
 6. (후보) 대시보드 게이트 토글 UI(현재 CLI만 — informed consent 문구에 실측 명중률 표기), 발화 기록(scope-ledger-note)
    흐름의 실사용 관찰.
 7. (관찰 항목) 한 폴더 다중 프로그램 구분 — 권장 관행은 프로그램별 폴더 분리, 보강 후보는 seed 클러스터 자동 좁힘.
+8. ~~가이드 배선도 + 훅·CLI 이중언어화~~ — **완료 2026-07-09**(사용자 지시 2건): ① 정찰 구조 새탭에 960×470 SVG 전체
+   배선도(생성·기억·개입 지점 노드 + 점선 피드백 2개, 전 텍스트 tE ko/en — recon-ui 8단언 잠금) ② 훅(buildScoutDirective
+   en 변형·scout-gate tB)·CLI 5종(scope-target/gate/ledger-migrate/ledger-note/reconcile) 전 출력 tB(ko,en) —
+   `tests/cli-bilingual.test.js`(21단언: en 홈 실행 4종·ko 기본 무회귀·줄 단위 '출력 호출+한글→tB 필수' 잠금). 같은 턴
+   Codex 반박 수용: 안내 표면(가이드 FAQ·고급설정·README ko/en)을 PRIVACY '예외 둘(꾸러미+연결 점검 1회)' 체계로 정합화
+   (deepseek-bridge.test.js 잔재 금지 단언). **후속 후보**: (a) reconcile 상태 파일 from을 중립 구조 {arm,ts}로 저장하고
+   렌더 시 번역(Codex 보완안 — sig 식별 무관·언어 전환 시 이력 표기 혼재는 미관 문제) (b) scope-ledger-backfill.js(타 PC
+   작성)가 아직 한글 전용 — tB 이중언어화 필요(cli-bilingual 테스트 대상에도 추가).
 
 ## 6.5 설계 요지와 남은 후보 (레포 밖 설계 원본의 알맹이 — 구현 여부는 각 항목에 표기)
 
