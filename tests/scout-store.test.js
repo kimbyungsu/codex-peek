@@ -57,9 +57,9 @@ console.log("[확장 배선] 게시판·상태바 줄(양언어)·읽기 전용 
 const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
 ok(/const scoutMaps = readScoutMaps\(ws\)/.test(ext) && /^\s*scoutMaps,/m.test(ext), "상태 payload에 게시판 데이터(3트랙에서만 — 낡음 계산과 공유)");
 ok(/scoutMode !== "on"\) return null; \/\/ 2트랙 — 게시판/.test(ext), "2트랙이면 게시판 계산 자체를 안 함(무회귀)");
-ok(/영향지도 게시판/.test(ext) && /Impact-map board/.test(ext), "게시판 카드 양언어");
+ok(/② 영향지도\(정찰 보고/.test(ext) && /Impact maps \(recon reports/.test(ext), "게시판 카드 양언어(개편 2026-07-08: 번호·정찰 보고·LLM 배지)");
 ok(/아직 지도가 없어요/.test(ext) && /No maps yet/.test(ext) && /이력\(git\)이 없는 폴더는 '무이력 모드'/.test(ext), "빈 게시판·비-git 정직 안내(양언어 — 비-git도 생성 명령 안내)");
-ok(/탐색\(3트랙\): /.test(ext) && /scouting \(3-track\): /.test(ext), "상태바 툴팁 탐색 줄 양언어");
+ok(/정찰\(3트랙\): /.test(ext) && /recon \(3-track\): /.test(ext) && !/탐색\(3트랙\): /.test(ext), "상태바 툴팁 정찰 줄 양언어(live·평시 접두 통일 — 옛 접두 잔재 없음)");
 ok(/scout: scoutSb \|\| null/.test(ext), "탐색 상태가 상태바 갱신 키에 포함(낡은 지도 수 잔존 방지)");
 ok(!/scoutMaps[^\n]*\.text[^\n]*innerHTML|innerHTML[^\n]*scoutMaps/.test(ext), "지도 본문은 textContent로만(HTML 주입 없음)");
 const privacy = fs.readFileSync(path.join(__dirname, "..", "PRIVACY.md"), "utf8");
@@ -86,18 +86,18 @@ console.log("[한눈에 보기·복원] 탐색 둘째 줄(검증과 별개 축) 
 ok(/id="scoutFlow" style="display:none/.test(ext) && /id="heroScout" style="display:none"/.test(ext), "탐색 줄·히어로 카드는 기본 숨김(2트랙=기존 모습 그대로)");
 ok(/증거 봉투 꾸림", "packs evidence"/.test(ext) && /지도 반환", "returns map"/.test(ext) && /영향지도<br>게시판/.test(ext), "둘째 줄 배선=Claude→탐색자→게시판(검증 후 탐색으로 오독되던 일렬 제거 — 사용자 지적 반영)");
 ok(!/Codex<small>\$\{t\("검증", "verify"\)\}<\/small>\s*<\/div>\s*<div class="farrow off" id="faScout"/.test(ext), "Codex 뒤 일렬 탐색자 배선이 남아있지 않음");
-ok(/"탐색자", "Scout"/.test(ext) && /"영향지도", "impact map"/.test(ext) && /켜짐 · 지도는 수동 실행","on · maps via manual runs"/.test(ext), "탐색자 표기 양언어 + '수동 실행' 명시");
+ok(/"정찰자", "Scout"/.test(ext) && /"영향지도 ⚡LLM", "impact map ⚡LLM"/.test(ext) && /켜짐 · 지도는 직접\/자동 지시 실행","on · maps run directly or via auto-directive"/.test(ext), "정찰자 표기 양언어(LLM 배지) + 실행 경로 정직 표기(직접/자동 지시 — '수동만' 거짓 제거)");
 ok(/shownSM===appSM/.test(ext) && /appSM==="on"/.test(ext), "탐색 토글이 지도 렌더 가드에 포함(저장 반영 시 갱신)");
 ok(/scoutMapStale: computeScoutMapStale\(ws, scope, scoutMaps\)/.test(ext) && /최신 지도 생성 이후 파일 /.test(ext) && /file\(s\) changed after the latest map/.test(ext), "낡은 지도 배지(신선도) — 계산+게시판 표기 양언어");
 ok(/키 없이도 기초 탐색/.test(ext) && /무료 self 팔/.test(ext) && !/LLM 영향지도 단계가 잠겨/.test(ext) && !/LLM impact-map stage of 3-track is locked/.test(ext), "무키 문구 정정 — self 팔이 무키로 지도 가능함을 반영(과소 안내 제거)");
 
 console.log("[탐색 가시성] 상태 요약 줄·세그먼트 연결 표시·상태바 신호(침묵을 상태로 번역 — 사용자 지적)");
-ok(/checkedAt: string; logCount: number/.test(ext) && /지금: 기초 탐색 동작 중 — 최근 채굴 /.test(ext) && /basic scouting active — last mined /.test(ext), "탐색 상태 요약 줄(채굴 시각·검토 건수·후보 수) 양언어");
+ok(/checkedAt: string; logCount: number/.test(ext) && /지금: ① 변경 감지 동작 중 — 최근 채굴 /.test(ext) && /① change sensing active — last mined /.test(ext), "탐색 상태 요약 줄(채굴 시각·검토 건수·후보 수) 양언어(개명: 변경 감지)");
 ok(/지금: 이력\(git\) 없는 폴더 — 함께변경 통계는 불가 · 지도는 '무이력 모드'/.test(ext) && /지금: 대기 — 작업트리에 변경이 없어요/.test(ext), "대기 상태도 사유와 다음 행동을 명시(비-git=무이력 모드 안내·변경 없음)");
 ok(/무이력 모드'\(최근 수정 파일 기준·전후 비교 없음\)/.test(ext) && /historyless mode/.test(ext) && /지도는 무이력 모드\(수동\)/.test(ext), "게시판·상태바·연결 줄이 '비-git=지도 불가' 거짓을 더 말하지 않음(무이력 모드 반영)");
 ok(/id="scoutApiLine"/.test(ext) && /x\.arm==="deepseek"/.test(ext) && /마지막 성공 통신 /.test(ext) && /last successful call /.test(ext), "세그먼트 아래 DeepSeek 연결 줄 — 키 상태+마지막 성공 증거(deepseek 팔만 필터)");
 ok(/ⓘ 영향지도 = /.test(ext) && /Impact map = a checklist/.test(ext), "'영향지도란?' 설명 양언어(게시판 상단)");
-ok(/\$\(telescope\)/.test(ext) && /기초 탐색 동작 중 — 후보 /.test(ext) && /지도 낡음/.test(ext) && /map stale/.test(ext), "상태바: 3트랙 아이콘 신호 + 툴팁에 흐름 요약(탐색 상태·지도 수·낡음)");
+ok(/\$\(telescope\)/.test(ext) && /변경 감지 동작 중 — 후보 /.test(ext) && /지도 낡음/.test(ext) && /map stale/.test(ext), "상태바: 3트랙 아이콘 신호 + 툴팁에 흐름 요약(변경 감지·지도 수·낡음)");
 const bridgeSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "deepseek-bridge.js"), "utf8");
 ok(/잠기는 건 'DeepSeek 비교 팔'뿐/.test(bridgeSrc) && !/LLM 지도 단계만 잠김/.test(bridgeSrc), "CLI 무키 안내도 정정(5번째 지점 — Codex 지적)");
 ok(/registerWebviewPanelSerializer\("codexBridge"/.test(ext) && /dashboard\.revive\(panel\)/.test(ext), "리로드 복원 탭 되살리기 등록(미등록=영구 빈 화면 — 사용자 실측)");

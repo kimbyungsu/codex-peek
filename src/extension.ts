@@ -1622,7 +1622,7 @@ class Dashboard {
           // 3트랙 저장인데 DeepSeek 키가 없으면 안내(차단 아님 — 기초 탐색은 키 없이 동작): 기대치 설정용 1회성 토스트.
           if (ok && normScoutMode({ scoutMode: m.scoutMode }) === "on" && !readDeepseekView().hasKey) {
             vscode.window.showInformationMessage(tE(
-              "3트랙이 켜졌어요. 키 없이도 기초 탐색(함께 변경 통계)과 무료 self 팔 영향지도(수동 명령)까지 동작합니다 — DeepSeek API 키는 '비교용 두 번째 탐색 팔'을 열 때만 필요해요(대시보드 ⚙️ 고급설정 탭).",
+              "3트랙(정찰)이 켜졌어요. 키 없이도 ①변경 감지(함께 변경 통계)와 무료 self 팔 ②영향지도(수동 명령)까지 동작합니다 — DeepSeek API 키는 '비교용 두 번째 정찰 팔'을 열 때만 필요해요(대시보드 ⚙️ 고급설정 탭).",
               "3-track is on. Without any key you get basic scouting (co-change stats) plus free self-arm impact maps (manual command) — a DeepSeek API key is only needed to unlock the second, comparison scout arm (dashboard ⚙️ Advanced tab)."));
           }
           this.post();
@@ -2135,12 +2135,12 @@ class Dashboard {
       </span>
     </label>
     <div class="hint"><span class="ic" title="${t("플랜 확정 = 플랜 모드(shift+Tab)에서 세운 계획을 확정·제출하는 그 턴(ExitPlanMode). 플랜 모드 '내내'가 아니라 확정하는 '순간'이에요. '플랜 확정/코드 변경'은 이 플랜 확정 턴이거나 파일을 바꾼 턴에 검증을 강제합니다.", "Plan confirm = the turn that submits the plan (ExitPlanMode) — the moment of confirming, not the whole plan mode. 'Plan confirm/code' forces verification on that turn or on file-changing turns.")}">ⓘ ${t("'플랜 확정'이 뭐야?", "What is 'plan confirm'?")}</span> · <span class="ic" title="${t("검증이 필요한 턴은 선택한 모드가 정해요. 모든 턴=매 답변, 코드 변경 시=파일을 만든/고친 턴, 플랜 확정/코드 변경=플랜을 확정했거나 파일을 고친 턴. 그 턴엔 Codex 검증 결과를 반영해 보고해야 끝낼 수 있어요.", "The selected mode decides which turns require verification. Every turn = all replies; on code change = turns that create/modify files; plan confirm/code = plan-confirm or file-changing turns. Those turns can only finish after reporting with Codex verification.")}">ⓘ ${t("언제 검증되나?", "When is it verified?")}</span></div>
-    <label class="ck verify">${t("트랙 — 구현·검증 흐름에 <b>탐색(범위 장부)</b>을 더할지", "Track — add <b>scouting (scope ledger)</b> to the implement·verify flow")}
+    <label class="ck verify">${t("트랙 — 구현·검증 흐름에 <b>정찰(영향 미리보기·관찰 일지)</b>을 더할지", "Track — add <b>recon (impact preview · field journal)</b> to the implement·verify flow")}
       <span class="seg" id="segScout">
-        <button type="button" data-sm="off">${t("2트랙<small>구현↔검증 (기본)</small>", "2-track<small>implement↔verify (default)</small>")}</button><button type="button" data-sm="on">${t("3트랙<small>+범위 장부 (관찰)</small>", "3-track<small>+scope ledger (advisory)</small>")}</button>
+        <button type="button" data-sm="off">${t("2트랙<small>구현↔검증 (기본)</small>", "2-track<small>implement↔verify (default)</small>")}</button><button type="button" data-sm="on">${t("3트랙<small>+정찰 (관찰)</small>", "3-track<small>+recon (advisory)</small>")}</button>
       </span>
     </label>
-    <div class="hint"><span class="ic" title="${t("범위 장부 = '이 파일을 건드리면 과거에 무엇이 함께 바뀌었나'를 이 프로젝트의 git 이력에서 통계로 보여주는 참고 카드예요. 지금은 관찰(advisory) 단계 — 아무것도 막거나 강제하지 않고, 외부로 아무것도 보내지 않아요(전부 로컬 git 조회). 데이터가 적은 영역은 추측 대신 '데이터 없음'으로 정직하게 표시합니다. 이 설정도 프로젝트별로 저장돼요.", "Scope ledger = a reference card showing 'when this file changed before, what changed with it' from this project's git history. Currently advisory — it blocks/forces nothing and sends nothing anywhere (all local git). Sparse areas honestly say 'no data' instead of guessing. This setting is saved per project.")}">ⓘ ${t("범위 장부란?", "What is the scope ledger?")}</span></div>
+    <div class="hint"><span class="ic" title="${t("정찰(3트랙) = 4단계 흐름 — ①변경 감지(기계·LLM 없음): 지금 바뀌는 파일+과거에 함께 바뀐 통계 ②영향지도(정찰 LLM 호출): 이 변경이 어디까지 번질지 미리보기 ③관찰 일지(자동·추가 LLM 없음): 검증을 지나며 맞은 것/틀린 것이 저절로 쌓임 ④확정 교범(사람 승인): 도장 찍은 것만 저장소 문서로. 관찰(advisory) 단계 — 아무것도 막거나 강제하지 않고, 외부 전송은 ②의 DeepSeek 팔 실행 시에만(키 등록=동의). 이 설정은 프로젝트별 저장.", "Recon (3-track) = a 4-step flow — ① change sensing (machine, no LLM): files changing now + historical co-change stats ② impact map (scout LLM call): preview how far this change reaches ③ field journal (auto, no extra LLM): right/wrong accrues by itself through verification ④ field manual (human approval): only stamped items become repo docs. Advisory — blocks/forces nothing; external transfer only when ②'s DeepSeek arm runs (key registration = consent). Saved per project.")}">ⓘ ${t("정찰이란? (4단계 흐름)", "What is recon? (the 4-step flow)")}</span></div>
     <div id="scoutApiLine" class="muted" style="display:none;font-size:11.5px;margin:4px 0 0 2px"></div>
     <div id="scoutBox" class="stagebox" style="display:none"></div>
     <div class="stagebox" id="stageBox">
@@ -2165,8 +2165,8 @@ class Dashboard {
          실제 흐름: Claude(하네스)가 증거 봉투를 꾸려 탐색자에게 보내고, 지도가 게시판(과 Claude)으로 돌아온다. -->
     <div class="flow" id="scoutFlow" style="display:none;margin-top:9px;border-top:1px dashed var(--vscode-panel-border);padding-top:9px">
       <div class="fnode actor claude"><span class="mono c">C</span>Claude<small>${t("증거 봉투 꾸림", "packs evidence")}</small></div>
-      <div class="farrow" id="faScout"><span class="lbl">${t("탐색(3트랙)", "scouting (3-track)")}<br><b id="faScoutVal">${t("수동 실행 시", "on manual runs")}</b></span><span class="ln"></span></div>
-      <div class="fnode actor scout" id="fnScout"><span class="mono s">S</span>${t("탐색자", "Scout")}<small>${t("영향지도", "impact map")}</small></div>
+      <div class="farrow" id="faScout"><span class="lbl">${t("정찰(3트랙)", "recon (3-track)")}<br><b id="faScoutVal">${t("직접/자동 지시 실행 시", "on direct/auto-directive runs")}</b></span><span class="ln"></span></div>
+      <div class="fnode actor scout" id="fnScout"><span class="mono s">S</span>${t("정찰자", "Scout")}<small>${t("영향지도 ⚡LLM", "impact map ⚡LLM")}</small></div>
       <div class="farrow"><span class="lbl">${t("지도 반환", "returns map")}<br><b>${t("게시판+Claude", "board + Claude")}</b></span><span class="ln"></span></div>
       <div class="fnode rule">${t("영향지도<br>게시판", "impact-map<br>board")}</div>
     </div>
@@ -2275,7 +2275,7 @@ class Dashboard {
     </div>
   </section>
   <section id="tab-adv" class="tab-panel">
-    <h2 class="sec base accent-yellow">${t("고급설정", "Advanced Settings")} <span class="sub2">${t("탐색(3트랙) 고급 단계용 — 전역 설정(모든 프로젝트 공통)", "for the advanced scouting stage (3-track) — global (shared by all projects)")}</span></h2>
+    <h2 class="sec base accent-yellow">${t("고급설정", "Advanced Settings")} <span class="sub2">${t("정찰(3트랙) 고급 단계용 — 전역 설정(모든 프로젝트 공통)", "for the advanced recon stage (3-track) — global (shared by all projects)")}</span></h2>
     <div class="card">
       <div class="chead">${t("DeepSeek API 키", "DeepSeek API key")} <span class="muted" style="font-weight:400">${t("· 3트랙의 'DeepSeek 비교 팔'(두 번째 탐색자)에만 필요 — 키 없이도 기초 탐색과 무료 self 팔 영향지도는 동작해요", "· only needed for 3-track's DeepSeek comparison arm (second scout) — basic scouting and free self-arm impact maps work without it")}</span></div>
       <div class="hint">${t("키는 이 컴퓨터의 브릿지 홈(<code>~/.codex-bridge/deepseek.json</code>)에만 저장되고 저장소(GitHub)에는 절대 들어가지 않아요. 전송은 <b>지도 생성이 실행될 때만</b> 일어나요 — 당신이 직접 실행하거나, <b>키 등록=동의 모델</b>에 따라 3트랙 자동 지시를 받은 Claude가 실행(조건: 지도가 없거나 낡았을 때 그 상태에 1회 지시 — 확장·훅 자체는 전송하지 않음). 대시보드를 보는 것만으로는 전송 없음. 발동 조건과 전송·제외 내용은 PRIVACY에 명시돼 있어요.", "The key is stored only in this machine's bridge home (<code>~/.codex-bridge/deepseek.json</code>) and never enters the repo (GitHub). Transmission happens <b>only when map generation runs</b> — you run it directly, or under the <b>key-registration=consent model</b> Claude runs it on the 3-track auto-directive (issued once per missing/stale-map state — the extension/hooks themselves never transmit). Viewing the dashboard sends nothing. Trigger conditions and what is sent/excluded are documented in PRIVACY.")}</div>
@@ -2342,12 +2342,12 @@ class Dashboard {
     const inj=$("faInject"), ver=$("faVerify");
     if(inj){ inj.className="farrow"+(appIM!=="off"?"":" off"); const v=$("faInjectVal"); if(v) v.textContent=lblIM(appIM); }
     if(ver){ ver.className="farrow"+(appVM!=="off"?"":" off"); const v=$("faVerifyVal"); if(v) v.textContent=lblVM(appVM); }
-    // 탐색(3트랙) 둘째 줄 + 상단 히어로 탐색자 카드 — 켜졌을 때만 등장(2트랙=기존 모습 그대로).
-    // 검증 흐름과 별개 축이라 별도 줄(일렬이면 '검증 후 탐색' 오독 — 사용자 지적 반영). 라벨로 '수동 실행' 못박음.
+    // 정찰(3트랙) 둘째 줄 + 상단 히어로 정찰자 카드 — 켜졌을 때만 등장(2트랙=기존 모습 그대로).
+    // 검증 흐름과 별개 축이라 별도 줄(일렬이면 '검증 후 정찰' 오독 — 사용자 지적 반영). 라벨은 실행 경로를 정직 표기(직접/자동 지시).
     const son = appSM==="on";
     const sf=$("scoutFlow"); if(sf) sf.style.display = son?"":"none";
     const hs=$("heroScout"); if(hs) hs.style.display = son?"":"none";
-    const sv=$("faScoutVal"); if(sv) sv.textContent = son?T("켜짐 · 지도는 수동 실행","on · maps via manual runs"):T("꺼짐","off");
+    const sv=$("faScoutVal"); if(sv) sv.textContent = son?T("켜짐 · 지도는 직접/자동 지시 실행","on · maps run directly or via auto-directive"):T("꺼짐","off");
     // 검증 토글 직하 단계 패널: 검증 ON이면 ①③ 켜짐, ②는 검증할 때. OFF면 ①③ 꺼짐, ②는 수동 ask 때만.
     const von = appVM!=="off";
     const st=$("sbState"); if(st) st.textContent = von ? lblVM(appVM) : T("꺼짐","off");
@@ -2727,7 +2727,28 @@ class Dashboard {
       box.style.display="";
       while(box.firstChild) box.removeChild(box.firstChild);
       const add=(txt,cls)=>{const el=document.createElement("div"); el.className=cls||"sbrow"; el.textContent=txt; box.appendChild(el); return el;};
-      add(T("범위 장부(관찰) — 지금 변경과 '과거에 함께 바뀐' 파일 후보","Scope ledger (advisory) — files that historically changed together with your current changes"),"sbhead");
+      // 정찰 흐름 통합 그룹(사용자 지적 2026-07-08: 용어 나열로는 역할이 안 그려짐 + LLM 여부 시각 구분 + 지금 기대 효용) —
+      // 4단계 각 행 = 이름·LLM 배지·지금 신호 기준 상태(가능/제한/불가+다음 행동). 새 수집 없음(전부 기존 state 신호).
+      safe(function(){
+        add(T("정찰 흐름 — 기계가 모으고(⚙) → 정찰 LLM이 예측하고(⚡) → 경험이 자동으로 쌓이고(⚙) → 사람이 확정합니다(👤)","Recon flow — machine gathers (⚙) → scout LLM predicts (⚡) → experience accrues automatically (⚙) → humans finalize (👤)"),"sbhead");
+        const sc=d.scope, sm=d.scoutMaps, ml=d.mapLedger;
+        let s1;
+        if(!sc) s1=T("대기 — 3트랙 저장 직후 자동 시작","pending — starts after saving 3-track");
+        else if(sc.note==="no-git") s1=T("제한 — git 이력이 없어 통계 불가(지도는 무이력 모드로 가능)","limited — no git history for stats (maps still work, historyless)");
+        else if(sc.note==="error") s1=T("일시 불가 — 이력 조회 실패(자동 재시도)","temporarily unavailable — history query failed (auto-retry)");
+        else if(sc.suggestion && sc.suggestion.sparse) s1=T("제한 — 과거 표본 부족(추측 대신 침묵)","limited — sample too small (silent, no guessing)");
+        else s1=T("가능 — 변경·통계 자동 수집 중","working — changes & stats collected automatically");
+        add(T("① 변경 감지 ⚙ LLM 없음 · ","① Change sensing ⚙ no LLM · ")+s1,"muted");
+        let s2;
+        if(d.scoutLive) s2=T("호출 중 — "+(d.scoutLive.arm==="deepseek"?"DeepSeek":"self")+" 팔이 지도 생성 중","calling — "+(d.scoutLive.arm==="deepseek"?"DeepSeek":"self")+" arm generating");
+        else if(!sm || !sm.count) s2=T("아직 없음 — 아래 ② 카드의 명령으로 생성(무료 self 팔)","none yet — generate via the command in card ② (free self arm)");
+        else s2=T("지도 "+sm.count+"장","maps: "+sm.count)+((typeof d.scoutMapStale==="number"&&d.scoutMapStale>0)?T(" · 최신 지도가 낡았을 수 있음(파일 "+d.scoutMapStale+"개 더 바뀜)"," · latest may be stale ("+d.scoutMapStale+" files changed since)"):T(" · 최신 지도 신선"," · latest fresh"))+(d.deepseek&&d.deepseek.hasKey?T(" · 비교 팔(DeepSeek) 사용 가능"," · comparison arm (DeepSeek) available"):"");
+        add(T("② 영향지도 ⚡ 정찰 LLM 호출 · ","② Impact map ⚡ scout LLM call · ")+s2,"muted");
+        const c=ml&&ml.counts;
+        add(T("③ 관찰 일지 ⚙ 추가 LLM 없음(검증 대화에 편승) · ","③ Field journal ⚙ no extra LLM (rides the verify chat) · ")+(c&&(c.trusted+c.reference+c.disputed)>0?T("신뢰 "+c.trusted+" · 미검증 "+c.reference+" · 틀림 판명 "+c.disputed,"trusted "+c.trusted+" · unverified "+c.reference+" · disputed "+c.disputed):T("비어 있음 — 지도가 생기면 씨앗이 자동으로 쌓여요","empty — seeds accrue automatically once maps exist")),"muted");
+        add(T("④ 확정 교범 👤 사람 승인 · ","④ Field manual 👤 human approval · ")+(ml&&ml.mapExists?T((ml.mapRel||"docs/MAP.md")+" 있음 — 승인 "+(ml.mapApproved||0)+"개",(ml.mapRel||"docs/MAP.md")+" exists — "+(ml.mapApproved||0)+" approved"):T("아직 없음 — ③에서 '내보내기'로 승격하면 생성","none yet — created when you export from ③")),"muted");
+      });
+      add(T("① 변경 감지(LLM 없음) — 지금 바뀌는 파일과 '과거에 함께 바뀐' 후보","① Change sensing (no LLM) — files changing now + historical co-change candidates"),"sbhead");
       // 탐색 상태 요약 1줄(사용자 지적: 침묵을 상태로 번역) — 지금 무엇이 돌고/안 돌고 있고, 다음 행동이 뭔지.
       (function(){
         const sc=d.scope; let line;
@@ -2739,7 +2760,7 @@ class Dashboard {
         else {
           const when = sc.checkedAt ? new Date(sc.checkedAt).toLocaleTimeString() : "?";
           const cand = (sc.suggestion && sc.suggestion.candidates) ? sc.suggestion.candidates.length : 0;
-          line=T("지금: 기초 탐색 동작 중 — 최근 채굴 "+when+" (이력 "+sc.logCount+"건 검토 · 후보 "+cand+"개) · 지도는 수동 명령 대기.","Now: basic scouting active — last mined "+when+" ("+sc.logCount+" commits reviewed · "+cand+" candidates) · maps await a manual command.");
+          line=T("지금: ① 변경 감지 동작 중 — 최근 채굴 "+when+" (이력 "+sc.logCount+"건 검토 · 후보 "+cand+"개) · ② 지도는 수동 명령 대기.","Now: ① change sensing active — last mined "+when+" ("+sc.logCount+" commits reviewed · "+cand+" candidates) · ② maps await a manual command.");
         }
         const el=add(line,"muted"); el.style.fontWeight="600";
       })();
@@ -2768,7 +2789,7 @@ class Dashboard {
     safe(function(){
       const box=$("scoutBox"); if(!box || box.style.display==="none") return; // 3트랙 카드가 보일 때만 이어붙임
       const add=(txt,cls)=>{const el=document.createElement("div"); el.className=cls||"sbrow"; el.textContent=txt; box.appendChild(el); return el;};
-      add(T("영향지도 게시판 — 탐색자(분리 AI)가 보낸 최근 지도","Impact-map board — recent maps from the scout (separate AI)"),"sbhead");
+      add(T("② 영향지도(정찰 보고 · ⚡LLM 호출) — 탐색자(분리 AI)가 보낸 최근 지도","② Impact maps (recon reports · ⚡LLM call) — recent maps from the scout (separate AI)"),"sbhead");
       add(T("ⓘ 영향지도 = 지금 바꾸는 것이 어디까지 영향을 주는지 탐색 AI가 정리한 확인 목록(직접·간접 영향 후보, 확인할 테스트, 범위 밖으로 봐도 되는 것). 생성되면 이 게시판에 도착해요.","ⓘ Impact map = a checklist from the scout AI of how far your current change reaches (direct/indirect impact candidates, tests to check, safely out-of-scope). New maps land on this board."),"muted");
       const sm=d.scoutMaps;
       if(!sm || !sm.count){
@@ -2807,10 +2828,10 @@ class Dashboard {
       const card=document.createElement("div");
       card.className="mled"+(ml.counts.disputed?"":" calm"); // 틀림판명이 쌓이면 주황(살펴볼 것), 평시 초록
       const h=document.createElement("div"); h.className="sbhead";
-      h.textContent=T("MAP 장부 — 자동 관측 기억(개입은 선택)","MAP ledger — self-maintaining memory (intervention optional)");
+      h.textContent=T("③ 관찰 일지(자동 기억 · ⚙추가 LLM 없음) — 개입은 선택","③ Field journal (auto memory · ⚙no extra LLM) — intervention optional");
       card.appendChild(h);
       const info=document.createElement("div"); info.className="muted";
-      info.textContent=T("정찰의 발견이 자동으로 쌓이고, 검증이 확인하면 신뢰로 승격되고, 반박되면 스스로 강등됩니다 — 클릭 없이 굴러갑니다. 원하실 때만 고정(신뢰 강제)/차단(제외)/장부("+ml.mapRel+") 내보내기로 개입하세요.","Scout findings accumulate automatically, get promoted on verification and demoted on dispute — no clicking required. Intervene only when you want: pin (force-trust), ban (exclude), or export to "+ml.mapRel+".");
+      info.textContent=T("정찰(②)의 발견이 자동으로 쌓이고, 검증이 확인하면 신뢰로 승격되고, 반박되면 스스로 강등됩니다 — 클릭 없이 굴러갑니다. 원하실 때만 고정(신뢰 강제)/차단(제외)/'④ 확정 교범("+ml.mapRel+")'으로 내보내기(승격)로 개입하세요.","Findings from recon (②) accumulate automatically, get promoted on verification and demoted on dispute — no clicking required. Intervene only when you want: pin (force-trust), ban (exclude), or export (promote) into the '④ field manual ("+ml.mapRel+")'.");
       card.appendChild(info);
       const chips=document.createElement("div"); chips.className="mledchips";
       const chip=(n,label,cls)=>{const c=document.createElement("div");c.className="mchip "+(cls||"");const b=document.createElement("b");b.textContent=String(n);const s=document.createElement("span");s.textContent=label;c.appendChild(b);c.appendChild(s);chips.appendChild(c);};
@@ -3457,7 +3478,7 @@ export function activate(context: vscode.ExtensionContext): void {
       try {
         if (loadContract(ws).scoutMode !== "on") return "";
         const live = readScoutLive(ws);
-        if (live) return tE(`탐색(3트랙): 지도 생성중… (${live.arm === "deepseek" ? "DeepSeek" : "self"} 팔 · ${new Date(live.startedAt).toLocaleTimeString()} 시작)`, `scouting (3-track): generating map… (${live.arm === "deepseek" ? "DeepSeek" : "self"} arm · started ${new Date(live.startedAt).toLocaleTimeString()})`);
+        if (live) return tE(`정찰(3트랙): 지도 생성중… (${live.arm === "deepseek" ? "DeepSeek" : "self"} 팔 · ${new Date(live.startedAt).toLocaleTimeString()} 시작)`, `recon (3-track): generating map… (${live.arm === "deepseek" ? "DeepSeek" : "self"} arm · started ${new Date(live.startedAt).toLocaleTimeString()})`);
         const sc = readScopeState(ws);
         const maps = readScoutMaps(ws);
         const stale = computeScoutMapStale(ws, sc, maps);
@@ -3465,19 +3486,27 @@ export function activate(context: vscode.ExtensionContext): void {
           : sc.note === "no-git" ? tE("이력 없음 — 통계 불가 · 지도는 무이력 모드(수동)", "no history — stats unavailable · maps via historyless mode (manual)")
           : sc.note === "no-changes" ? tE("대기(변경 없음)", "idle (no changes)")
           : sc.note === "error" ? tE("이력 조회 실패", "history query failed")
-          : tE(`기초 탐색 동작 중 — 후보 ${sc.suggestion?.candidates.length ?? 0}개`, `basic scouting active — ${sc.suggestion?.candidates.length ?? 0} candidate(s)`);
+          : tE(`변경 감지 동작 중 — 후보 ${sc.suggestion?.candidates.length ?? 0}개`, `change sensing active — ${sc.suggestion?.candidates.length ?? 0} candidate(s)`);
         const n = maps?.count ?? 0;
         const last = maps?.latest?.ts ? new Date(maps.latest.ts).toLocaleString() : "";
         const mapsTxt = n
           ? tE(` · 지도 ${n}장(마지막 ${last || "?"}${stale ? ` · 이후 파일 ${stale}개 더 바뀜 = 지도 낡음` : ""})`, ` · ${n} map(s) (last ${last || "?"}${stale ? `, ${stale} file(s) changed since = map stale` : ""})`)
           : tE(" · 지도 없음 — 수동 명령으로 생성", " · no maps — generate via manual command");
-        return tE("탐색(3트랙): ", "scouting (3-track): ") + scout + mapsTxt;
+        return tE("정찰(3트랙): ", "recon (3-track): ") + scout + mapsTxt;
       } catch { return ""; }
     })();
     // 두뇌 '실제 답' 정보 줄(연결/미연결 툴팁 공용) — 앱 UI 표기가 서로 어긋나도 믿을 정본(대화 기록 실측).
     const ba = (mode === "linked" || mode === "unlinked") ? brainActualTexts(ws) : { cc: "", cx: "", sig: "" };
     const baLine = (mode === "linked" || mode === "unlinked")
       ? tE(`두뇌 실제 답 — Claude: ${ba.cc} · Codex: ${ba.cx}`, `actual answers — Claude: ${ba.cc} · Codex: ${ba.cx}`)
+      : "";
+    // LLM 호출 여부 상시 줄(사용자 요청 2026-07-08: 대시보드 안 열어도 상태바에서 판단) — '지금 실행 중' live 신호만
+    // 말한다(다음 턴 지시·예약까지 단정 금지 — Codex 보완). 검증 중(flow 모드)은 3박스가 담당하므로 이 줄은 linked/unlinked 전용.
+    const scoutLiveNow = (mode === "linked" || mode === "unlinked") && ws ? readScoutLive(ws) : null;
+    const llmLine = (mode === "linked" || mode === "unlinked")
+      ? (scoutLiveNow
+        ? tE(`⚡ LLM 호출 중: 정찰 지도 생성(${scoutLiveNow.arm === "deepseek" ? "DeepSeek" : "self"} 팔)`, `⚡ LLM call in flight: recon map (${scoutLiveNow.arm === "deepseek" ? "DeepSeek" : "self"} arm)`)
+        : tE("지금 실행 중인 LLM 호출 없음 — 변경 감지는 LLM 없이 자동 · 관찰 일지는 추가 LLM 없이 자동 누적", "no LLM call running now — change sensing runs without LLM · the field journal accrues with no extra LLM"))
       : "";
     const key = JSON.stringify({
       mode,
@@ -3497,6 +3526,7 @@ export function activate(context: vscode.ExtensionContext): void {
       // 실제 답은 '모델 정체'만 키에 담는다(sig) — 경과 시간까지 담으면 매분 키가 바뀌어 열려 있는 호버가 분마다 닫힌다
       // (멱등 가드의 존재 이유). 대가: 툴팁의 '분 전' 표기는 다른 상태 변화가 있을 때 갱신(모델이 바뀌면 항상 즉시 갱신).
       ba: ba.sig || null,
+      llm: scoutLiveNow ? scoutLiveNow.arm : "none", // LLM 상시 줄의 상태 — 켜짐/꺼짐 전환 시 툴팁 즉시 갱신
     });
     if (key === lastRenderKey) return; // 표시 동일 → status/flow 갱신 전체 skip(불필요 RPC·호버 닫힘 방지)
     lastRenderKey = key;
@@ -3518,12 +3548,13 @@ export function activate(context: vscode.ExtensionContext): void {
           (file ? "" : tE("⚠️ 세션 파일을 찾을 수 없음\n\n","⚠️ session file not found\n\n")) +
           (scoutSb ? scoutSb + "\n\n" : "") +
           (baLine ? baLine + "\n\n" : "") +
+          (llmLine ? llmLine + "\n\n" : "") +
           tE(`클릭 → 대시보드`,`click → dashboard`),
       );
       status.backgroundColor = file ? undefined : new vscode.ThemeColor("statusBarItem.warningBackground");
     } else {
       status.text = "$(plug) " + tE("Codex: 미연결","Codex: not linked") + (scoutSb.includes(tE("지도 생성중…", "generating map…")) ? " $(sync~spin) " + tE("탐색중", "scouting") : scoutSb ? " $(telescope)" : "");
-      status.tooltip = tE("연결된 Codex 세션 없음 · 클릭 → 대시보드에서 연결","No linked Codex session · click → link in dashboard") + (scoutSb ? " · " + scoutSb : "") + (baLine ? " · " + baLine : "");
+      status.tooltip = tE("연결된 Codex 세션 없음 · 클릭 → 대시보드에서 연결","No linked Codex session · click → link in dashboard") + (scoutSb ? " · " + scoutSb : "") + (baLine ? " · " + baLine : "") + (llmLine ? " · " + llmLine : "");
       status.backgroundColor = undefined;
     }
     if (flowActive && live) {
@@ -3538,7 +3569,7 @@ export function activate(context: vscode.ExtensionContext): void {
       fCodex.color = toCodex ? c : undefined;
       fArrow.text = (toCodex ? "$(arrow-right) " + tE("검증중","verifying") + " $(arrow-right)" : toClaude ? "$(arrow-left) " + tE("반영중","applying") + " $(arrow-left)" : "$(sync~spin) " + tE("작업중","working")) + (live.round > 1 ? ` ·${live.round}R` : "");
       fArrow.color = c;
-      fArrow.tooltip = new vscode.MarkdownString(tE(`**검증 진행 — `,`**verify progress — `) + `${live.label}**` + `${live.round ? tE(` (라운드 ${live.round})`,` (round ${live.round})`) : ""}` + tE(`\n\n클릭 → 대시보드`,`\n\nclick → dashboard`));
+      fArrow.tooltip = new vscode.MarkdownString(tE(`**검증 진행 — `,`**verify progress — `) + `${live.label}**` + `${live.round ? tE(` (라운드 ${live.round})`,` (round ${live.round})`) : ""}` + tE(`\n\n⚡ LLM 호출 중: Codex 검증`,`\n\n⚡ LLM call in flight: Codex verification`) + tE(`\n\n클릭 → 대시보드`,`\n\nclick → dashboard`));
       fClaude.show(); fArrow.show(); fCodex.show();
       return; // 흐름은 미확인 경보(error/warning)가 없을 때만 — 아래 메인/무결성 분기 스킵
     }
