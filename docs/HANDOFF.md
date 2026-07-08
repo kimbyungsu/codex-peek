@@ -145,7 +145,7 @@
    tg-chat-engine(삭제 금지·disputed 상태 전이·supersedes·learning_events '이벤트 먼저 정책 나중') 패턴으로 **자동 관측 장부**로 전환.
    3층: ①관측 장부(자동) ②오버라이드(pin/ban) ③docs/MAP.md(명시 내보내기만). 로드맵: ①이벤트 적재→②약한 전이→③꾸러미
    신뢰 차선→④발화 기반 강등(보수적)→⑤카드 역할 전환→⑥플랜 게이트 실험(PreToolUse:ExitPlanMode 가능 여부 실험 선행 —
-   미확정. 강제 게이트 기본 off: 사전등록 60% vs 실측 48.1% 미달, 사용자 명시 선택만).
+   미확정. 강제 게이트 기본 off: 사전등록 60% vs 당시 실측 48.1% 미달, 사용자 명시 선택만 — **2026-07-09 재실측 70.5%로 재논의 발동, §4 말미·사용자 결정 대기**).
    **①②③ 구현 2026-07-07**: `src/ledger-events.ts`(이벤트 파싱·약한 전이 derive — banned>superseded>tombstone>disputed>
    verified>inferred, pinned은 차선 오버라이드·꾸러미 선별 selectForPackage 씨앗 교집합 우선)+`contract-lib.js`
    appendLedgerEvent(map-ledger-events/<wsKey>.jsonl·상한 2000 정직 고지)+러너 proposed 적재+`scope-package.js`
@@ -168,9 +168,12 @@
    **⑥ 구현 2026-07-07(플랜 게이트 — 실험 장치)**: 공식 문서 확인 결과 차단(exit 2=stderr 피드백)·페이로드는 명시,
    **ExitPlanMode가 PreToolUse에 잡히는지는 미명시**(전용 훅 요청 이슈 존재) → 관측 실험으로 판정.
    (a) `bridge/scout-gate.js` — PreToolUse:ExitPlanMode 훅: 항상 관측 로그(도구명·입력 키 이름만 — 플랜 본문 저장 안 함,
-   scout-gate-log/), 게이트는 계약 scoutGate="plan"일 때만(기본 off — 사전등록 60% vs 실측 48.1% 미달), 지도 없음/낡음이면
+   scout-gate-log/), 게이트는 계약 scoutGate="plan"일 때만(기본 off — 당시 실측 48.1% 미달 근거·2026-07-09 재실측 70.5%로 승격 재논의 대기[§4]), 지도 없음/낡음이면
    차단+생성 지시, **세션당 2회 상한 후 통과**(무한 잠금 방지), 모든 오류 fail-open. (b) `scripts/scope-gate.js` on|off|status
-   (ko·en 계약 슬롯 동시 갱신). (c) 훅 4개 체계: 같은 이벤트 다중 훅에서 병합이 앞 훅을 지우던 함정 발견 →
+   (~~ko·en 슬롯 동시~~ 2026-07-09부터 현재 언어 슬롯만 — §6-9). ⚠ **게이트 설정의 앵커 주의**(2026-07-09 실사고 —
+   검증모델도 혼동): 계약은 폴더별이라 '연 폴더'(Claude 세션 폴더) 계약이 적용된다 — 부모 폴더를 열고 작업하면
+   부모 계약(plan/on·scoutRepo=하위 레포)이 게이트를 지배하고, 하위 레포를 직접 워크스페이스로 열면 그 폴더의
+   별도 계약(기본 off)이 적용된다. 다른 PC에서 게이트 관찰을 이어가려면 '실제로 여는 폴더' 기준으로 scope-gate on. (c) 훅 4개 체계: 같은 이벤트 다중 훅에서 병합이 앞 훅을 지우던 함정 발견 →
    mergeHooks/installHooks를 **이벤트 단위 정리**로 재구조화(install.js·hook-setup.ts 동일 수정·회귀 테스트 잠금),
    isOurHookCmd·BRIDGE_SCRIPTS(7개)·훅 문구(4개) 갱신. (d) 확장 saveContract가 미지 필드(scoutGate)를 보존 병합하도록
    수정(대시보드 저장이 게이트 설정을 지우던 문제). 테스트 `tests/scout-gate.test.js`(22단언).
