@@ -60,10 +60,19 @@ CL.appendLedgerEvent(ws, { ts: "2026-07-07T00:01:00.000Z", type: "proposed", sig
 CB.flagLedgerConfirms("(a.ts:1) (b.ts:1)\n검증: 통과", ws, "", ws);
 ok(!eventsNow().some((e) => e.type === "confirmed" && e.sig === CL.ledgerSig(SHORT)), "8자 미만 basename만의 결합 → 확인 제외(index.ts류 오탐 방지)");
 
-console.log("[3] 반박/차단 이력 있는 항목은 확인 대상에서 제외(보수적)");
+console.log("[3] 반박 이력 항목에도 확인은 '기록'된다(복권 재료 — 2026-07-09) · 차단(ban)만 기록 제외");
 CL.appendLedgerEvent(ws, { ts: "2026-07-07T00:02:00.000Z", type: "user_dispute", sig, text: TEXT, from: "사용자 발화: 그 결합 아님" });
 CB.flagLedgerConfirms(PASS_ANSWER, ws, "", ws);
-ok(countType("confirmed") === 1, "반박된 항목 → confirmed 추가 없음(누계 1 유지)");
+ok(countType("confirmed") === 2, "반박된 항목에도 confirmed 기록(누계 2 — 문전 폐기 폐지, 승격은 유도기 복권 규칙이 판정)");
+const midEntry = LE.deriveLedger(LE.parseEventsJsonl(CL.readLedgerEventsText(ws)).events).find((x) => x.sig === sig);
+ok(midEntry && midEntry.status === "disputed", "검증 확인 1회로는 아직 disputed(복권은 기계 확인 2회부터 — 보수성 유지)");
+// ban 항목 텍스트는 PASS_ANSWER가 실제 인용하는 경로와 일치시켜 'dead가 아니면 확인됐을' 상황을 만든다(무효 단언 방지 — Codex 반례)
+CL.appendLedgerEvent(ws, { ts: "2026-07-07T00:03:00.000Z", type: "banned", sig: "ban-sig", text: "src/alpha-channel.ts ↔ lib/beta-consumer.ts (차단 대상)" });
+CB.flagLedgerConfirms(PASS_ANSWER, ws, "", ws);
+ok(!eventsNow().some((e) => e.type === "confirmed" && e.sig === "ban-sig"), "차단 중(사람 오버라이드) 항목은 기록 제외 — 인용이 일치해도");
+CL.appendLedgerEvent(ws, { ts: "2026-07-07T00:04:00.000Z", type: "unbanned", sig: "ban-sig" });
+CB.flagLedgerConfirms(PASS_ANSWER, ws, "", ws);
+ok(eventsNow().some((e) => e.type === "confirmed" && e.sig === "ban-sig"), "차단 해제(unban) 후엔 확인 기록 재개 — 순계산(차단 해제된 지식도 진화)");
 
 console.log("[4] 발화 기록 CLI — 유일 매칭만 기록·모호/무일치 중단·신분 즉시 보고");
 const CLI = path.join(__dirname, "..", "scripts", "scope-ledger-note.js");
@@ -74,13 +83,53 @@ const amb = run("confirm", ".ts");
 ok(amb.status === 1 && /좁혀라/.test(amb.stderr), "모호한 조각(2건 일치) → 중단+후보 표시");
 const none = run("confirm", "존재하지-않는-조각");
 ok(none.status === 1 && /일치 항목 없음/.test(none.stderr), "무일치 → 중단+현재 장부 표시");
-const conf = run("confirm", "beta-consumer", "--why", "사용자가 '그 결합 확실하다'고 확정 발화");
+const conf = run("confirm", "읽는 채널", "--why", "사용자가 '그 결합 확실하다'고 확정 발화");
 ok(conf.status === 0 && /기록됨: user_confirm/.test(conf.stdout), "유일 매칭 → user_confirm 기록");
-ok(/현재 신분: disputed/.test(conf.stdout), "신분 즉시 보고(반박 이력이 있어 disputed 유지 — 확인 1회로 안 뒤집힘·정직)");
-const pin = run("pin", "beta-consumer", "--why", "사용자 지시로 고정");
+ok(/현재 신분: verified/.test(conf.stdout), "사용자 재확인 → 즉시 복권(verified) 보고 — 사람 발화는 사람 반박과 동급(2026-07-09 복권 규칙)");
+const pin = run("pin", "읽는 채널", "--why", "사용자 지시로 고정");
 ok(pin.status === 0 && /신뢰|trusted/.test(pin.stdout), "pin → 차선 trusted(사람 오버라이드)");
 const badCmd = run("erase", "x");
 ok(badCmd.status === 2, "미지 명령 거부");
+
+console.log("[4-1] 트림 판정 보존 — 이벤트 상한 초과 시 오래된 '반박'이 잘려 틀림 딱지가 부활하는 결함 방지(2026-07-09)");
+const wsT = path.join(dir, "trim-ws");
+fs.mkdirSync(wsT, { recursive: true });
+const tf = CL.ledgerEventsFileFor(wsT);
+fs.mkdirSync(path.dirname(tf), { recursive: true });
+const oldLines = [JSON.stringify({ ts: "t0", type: "proposed", sig: "keep", text: "old-alpha.ts ↔ old-beta.ts" }), JSON.stringify({ ts: "t1", type: "user_dispute", sig: "keep", from: "사용자 정정" })];
+for (let i = 0; i < 2450; i++) oldLines.push(JSON.stringify({ ts: "t" + (i + 2), type: "proposed", sig: "keep", text: "old-alpha.ts ↔ old-beta.ts" }));
+fs.writeFileSync(tf, oldLines.join("\n") + "\n");
+CL.appendLedgerEvent(wsT, { ts: "tz", type: "proposed", sig: "keep", text: "old-alpha.ts ↔ old-beta.ts" });
+const trimmed = CL.readLedgerEventsText(wsT).split(/\r?\n/).filter(Boolean);
+ok(trimmed.length <= CL.LEDGER_EVENTS_CAP, "트림 후 총량은 상한(2000) 이내 — PRIVACY '약 2,000줄 보존' 고지 불침");
+ok(trimmed.some((l) => l.includes('"user_dispute"')), "가장 오래된 판정(반박) 이벤트가 트림에서 살아남음(판정 보존)");
+const afterTrim = LE.deriveLedger(LE.parseEventsJsonl(CL.readLedgerEventsText(wsT)).events).find((x) => x.sig === "keep");
+ok(afterTrim && afterTrim.status === "disputed", "트림 후에도 신분 disputed 유지 — 조용한 부활 없음");
+// 반대 방향(Codex 반례): 복권 증거(반박 이후 확인)도 트림에서 살아남아 복권이 유지된다
+const wsT3 = path.join(dir, "trim-ws3");
+fs.mkdirSync(wsT3, { recursive: true });
+const tf3 = CL.ledgerEventsFileFor(wsT3);
+const rehabLines = [
+  JSON.stringify({ ts: "t0", type: "proposed", sig: "rh", text: "rh-alpha.ts ↔ rh-beta.ts" }),
+  JSON.stringify({ ts: "t1", type: "user_dispute", sig: "rh" }),
+  JSON.stringify({ ts: "t2", type: "confirmed", sig: "rh" }),
+  JSON.stringify({ ts: "t3", type: "confirmed", sig: "rh" }),
+];
+for (let i = 0; i < 2450; i++) rehabLines.push(JSON.stringify({ ts: "t" + (i + 4), type: "proposed", sig: "rh", text: "rh-alpha.ts ↔ rh-beta.ts" }));
+fs.writeFileSync(tf3, rehabLines.join("\n") + "\n");
+CL.appendLedgerEvent(wsT3, { ts: "tz", type: "proposed", sig: "rh", text: "rh-alpha.ts ↔ rh-beta.ts" });
+const afterTrim3 = LE.deriveLedger(LE.parseEventsJsonl(CL.readLedgerEventsText(wsT3)).events).find((x) => x.sig === "rh");
+ok(afterTrim3 && afterTrim3.status === "verified" && afterTrim3.rehabilitated === true, "가장 오래된 자리의 '반박 이후 확인 2건'도 보존 → 트림 후 복권 유지(반박만 남고 증거만 잘리는 비대칭 없음)");
+// 극단: 판정 이벤트가 상한을 넘게 쌓여도 총량 상한은 지켜진다(판정도 최신순 — Codex 반례 잠금)
+const wsT2 = path.join(dir, "trim-ws2");
+fs.mkdirSync(wsT2, { recursive: true });
+const tf2 = CL.ledgerEventsFileFor(wsT2);
+const manyState = [];
+for (let i = 0; i < 2450; i++) manyState.push(JSON.stringify({ ts: "s" + i, type: "user_dispute", sig: "s" + i }));
+fs.writeFileSync(tf2, manyState.join("\n") + "\n");
+CL.appendLedgerEvent(wsT2, { ts: "sz", type: "proposed", sig: "s0", text: "x-alpha.ts ↔ x-beta.ts" });
+const trimmed2 = CL.readLedgerEventsText(wsT2).split(/\r?\n/).filter(Boolean);
+ok(trimmed2.length <= CL.LEDGER_EVENTS_CAP, "판정 이벤트만 2450건인 극단에서도 총량 ≤ 상한(판정도 최신순 컷)");
 
 console.log("[5] 대시보드 배선(소스 검사) — 승인 큐 제거·관측 개입(ledgerAct)·런타임 재사용(⑤ 역할 전환 잠금)");
 const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");

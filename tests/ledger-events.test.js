@@ -47,6 +47,19 @@ e = D([ev("proposed", "a", { text: "A" }), ev("user_dispute", "a"), ev("pinned",
 ok(e.status === "disputed" && e.pinned && e.lane === "trusted", "사람 고정(pin)은 반박보다 위 — 차선만 신뢰로(상태는 정직하게 disputed 유지)");
 e = D([ev("proposed", "a", { text: "A" }), ev("pinned", "a"), ev("unpinned", "a")])[0];
 ok(!e.pinned && e.lane === "reference", "고정 후 해제 → 순 계산(net)으로 원복");
+console.log("[2-1] 복권(rehab) — 반박 '이후' 확인만 인정: 사람 1회 / 검증 2회 · 차단은 복권 불가");
+e = D([ev("proposed", "r", { text: "R" }), ev("user_dispute", "r"), ev("confirmed", "r")])[0];
+ok(e.status === "disputed" && !e.rehabilitated, "반박 후 검증 확인 1회 → 아직 disputed(기계 확인은 2회 필요)");
+e = D([ev("proposed", "r", { text: "R" }), ev("user_dispute", "r"), ev("confirmed", "r"), ev("confirmed", "r")])[0];
+ok(e.status === "verified" && e.rehabilitated === true && e.lane === "trusted", "반박 후 검증 확인 2회 → 복권(verified·신뢰 차선·rehabilitated 표기)");
+e = D([ev("proposed", "r", { text: "R" }), ev("user_dispute", "r"), ev("user_confirm", "r")])[0];
+ok(e.status === "verified" && e.rehabilitated === true, "반박 후 사용자 재확인 1회 → 즉시 복권(사람 발화는 사람 반박과 동급)");
+e = D([ev("proposed", "r", { text: "R" }), ev("confirmed", "r"), ev("confirmed", "r"), ev("user_dispute", "r")])[0];
+ok(e.status === "disputed", "반박 '이전' 확인 2회는 복권에 안 침(이미 반박에게 진 증거) — 순서 기준");
+e = D([ev("proposed", "r", { text: "R" }), ev("user_dispute", "r"), ev("confirmed", "r"), ev("confirmed", "r"), ev("user_dispute", "r")])[0];
+ok(e.status === "disputed", "복권 후 재반박 → 카운터 리셋되어 다시 disputed(진동 허용 — 마지막 판정이 이김)");
+e = D([ev("proposed", "r", { text: "R" }), ev("banned", "r"), ev("user_confirm", "r"), ev("confirmed", "r"), ev("confirmed", "r")])[0];
+ok(e.status === "banned", "차단(사람 오버라이드)은 확인이 아무리 쌓여도 복권 불가(해제는 unban만)");
 e = D([ev("proposed", "a", { text: "A" }), ev("confirmed", "a"), ev("banned", "a"), ev("pinned", "a")])[0];
 ok(e.status === "banned" && e.lane === "excluded", "차단(ban)은 최우선 — 고정보다도 위(사람의 명시 제외)");
 e = D([ev("proposed", "a", { text: "A" }), ev("superseded", "a", { newSig: "b" })])[0];
@@ -89,7 +102,7 @@ console.log("[7] 렌더 동봉 — §7.5 3차선, 장부 없으면 구획 자체
 const base = { repo: "r", head: "abcdef0", seeds: ["s.ts"], diffText: "", tokenHits: [], coChange: null, tests: [], recentFailures: [], mapContent: null };
 const md1 = SP.renderPackageMarkdown(SP.buildPackage({ ...base, ledger: { trusted: [{ text: "T1 ↔ T2" }], reference: [{ text: "R1 ↔ R2" }], disputed: [{ text: "D1 ↔ D2" }] } }));
 ok(md1.includes("7.5 자동 관측 장부") && md1.includes("확인됨") && md1.includes("T1 ↔ T2"), "신뢰 차선 렌더");
-ok(md1.includes("미검증 제안") && md1.includes("틀림 판명") && md1.includes("다시 내지 마라"), "미검증·틀림판명 차선 렌더(재실수 방지 지시)");
+ok(md1.includes("미검증 제안") && md1.includes("틀림 판명") && md1.includes("반박 이후 무엇이 바뀌었는지") && !md1.includes("다시 내지 마라"), "틀림판명 각주 — 전면 금지가 아니라 '근거 있는 재주장 허용'(2026-07-09 사용자 결정: 지식 진화)");
 ok(md1.indexOf("판정 기준 아님") > 0, "advisory 명시");
 const md0 = SP.renderPackageMarkdown(SP.buildPackage({ ...base, ledger: null }));
 ok(!md0.includes("7.5"), "장부 없음 → 구획 없음");

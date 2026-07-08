@@ -184,7 +184,7 @@ export function renderPackageMarkdown(p: ScopePackage): string {
     L.push(`\n## 7.5 자동 관측 장부 (제안→검증으로 축적 — 참고자료, 판정 기준 아님)`);
     if (p.ledger.trusted.length) L.push(`확인됨(검증/사람 고정 — 신뢰 입력):\n${p.ledger.trusted.map((e) => `- ${maskText(e.text)}`).join("\n")}`);
     if (p.ledger.reference.length) L.push(`미검증 제안(참고만 — 아직 확인 안 됨):\n${p.ledger.reference.map((e) => `- ${maskText(e.text)}`).join("\n")}`);
-    if (p.ledger.disputed.length) L.push(`틀림 판명(이미 반박된 결합 — 같은 결론을 다시 내지 마라):\n${p.ledger.disputed.map((e) => `- ${maskText(e.text)}`).join("\n")}`);
+    if (p.ledger.disputed.length) L.push(`틀림 판명(과거에 반박된 결합 — 근거 없는 재주장 금지): 다시 제안하려면 반박 이후 무엇이 바뀌었는지(코드 변경·새 근거)를 그 항목에 명시하라:\n${p.ledger.disputed.map((e) => `- ${maskText(e.text)}`).join("\n")}`);
   }
   if (p.meta.truncations.length) L.push(`\n## 절단 고지\n${p.meta.truncations.map((t) => `- ${t}`).join("\n")}`);
   L.push(`\n## ⚠ 이 꾸러미가 못 보는 것\n${p.blindSpots.map((b) => `- ${b}`).join("\n")}`);

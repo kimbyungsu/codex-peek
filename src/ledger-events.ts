@@ -39,6 +39,7 @@ export type LedgerEntry = {
   lane: "trusted" | "reference" | "excluded"; // 꾸러미 회수 권한 차선(tg provenance lane)
   from: string;              // 최초 출처
   supersededBy?: string;
+  rehabilitated?: boolean;   // 반박 이후 재확인으로 복권됨(정직 표기 — 반박 이력은 counts에 그대로 남음)
 };
 
 // JSONL 원문 → 이벤트 배열(깨진 줄·미지 type은 건너뜀 — 진단용 dropped 카운트 동봉).
@@ -60,13 +61,18 @@ export function parseEventsJsonl(raw: string): { events: LedgerEvent[]; dropped:
 
 // v1 전이 임계 — 최약(1회)으로 시작. 근거: '이벤트 먼저, 정책 나중'(tg learning_events) — 임계 튜닝은
 // 실데이터 관측 후 별도 결정(마법 상수 고착 방지: 여기 한 곳에서만 정의하고 데이터 근거를 달아 갱신).
-export const DERIVE_V1 = { confirmToVerify: 1, disputeToDemote: 1 };
+// 복권(rehab — 2026-07-09 사용자 결정 "지식은 진화해야"): 마지막 반박 '이후'의 확인만 인정(이전 확인은 이미
+// 반박에게 진 증거) — 사람 재확인 1회는 사람 반박과 동급이라 즉시 복권, 기계(검증) 확인은 한 단계 약해 2회.
+export const DERIVE_V1 = { confirmToVerify: 1, disputeToDemote: 1, rehabUserConfirm: 1, rehabVerifyConfirm: 2 };
 
 // 이벤트 → 항목별 현재 상태(약한 전이). 우선순위(문서화된 결정, 위에서 아래로 먼저 매치):
 //   banned > superseded > tombstone > disputed > verified > inferred. pinned은 상태가 아니라 차선 오버라이드.
 // disputed가 verified보다 위인 이유: tg 정책 — 반박된 지식을 권위 차선에 두지 않는다(사람이 pin하면 예외).
+// 단 복권(2026-07-09): 마지막 반박 '이후' 사람 재확인 1회 또는 검증 확인 2회가 쌓이면 disputed를 verified로
+// 되돌린다(rehabilitated 표기 — 반박 이력은 counts에 남음). 차단·대체·소멸은 복권 대상 아님(선매치).
 export function deriveLedger(events: LedgerEvent[]): LedgerEntry[] {
   const m = new Map<string, LedgerEntry>();
+  const afterDispute = new Map<string, { verify: number; user: number }>(); // 마지막 반박 이후의 확인 수(복권 재료 — 이벤트 순서 기준)
   for (const e of events) {
     let it = m.get(e.sig);
     if (!it) {
@@ -78,6 +84,10 @@ export function deriveLedger(events: LedgerEvent[]): LedgerEntry[] {
     if (e.text && !it.text) it.text = e.text;
     if (e.from && !it.from) it.from = e.from;
     if (e.type === "superseded" && e.newSig) it.supersededBy = e.newSig;
+    // 복권 카운터: 반박이 오면 0으로 리셋(그 이전 확인은 무효) — '반박 이후에 다시 쌓인 확인'만 복권을 민다.
+    if (e.type === "user_dispute" || e.type === "refuted") afterDispute.set(e.sig, { verify: 0, user: 0 });
+    else if (e.type === "confirmed" && afterDispute.has(e.sig)) afterDispute.get(e.sig)!.verify++;
+    else if (e.type === "user_confirm" && afterDispute.has(e.sig)) afterDispute.get(e.sig)!.user++;
   }
   for (const it of m.values()) {
     const c = it.counts;
@@ -89,7 +99,12 @@ export function deriveLedger(events: LedgerEvent[]): LedgerEntry[] {
     if (banNet > 0) it.status = "banned";
     else if (c.superseded) it.status = "superseded";
     else if (c.tombstone) it.status = "tombstone";
-    else if (disputes >= DERIVE_V1.disputeToDemote) it.status = "disputed";
+    else if (disputes >= DERIVE_V1.disputeToDemote) {
+      // 복권 판정 — 반박 '이후'의 확인만 본다(사람 1회 또는 검증 2회). 차단(ban)·대체·소멸은 복권 대상 아님(위에서 선매치).
+      const r = afterDispute.get(it.sig) || { verify: 0, user: 0 };
+      if (r.user >= DERIVE_V1.rehabUserConfirm || r.verify >= DERIVE_V1.rehabVerifyConfirm) { it.status = "verified"; it.rehabilitated = true; }
+      else it.status = "disputed";
+    }
     else if (confirms >= DERIVE_V1.confirmToVerify) it.status = "verified";
     else it.status = "inferred";
     // 차선: 사람 고정 > 차단 > 상태. disputed는 excluded(단 '틀림 판명' 각주로는 노출 가능 — 선별기에서 결정).

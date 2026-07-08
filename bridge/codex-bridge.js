@@ -247,16 +247,21 @@ function flagLedgerConfirms(answer, ws, sessionId, execCwd) {
     try { target = resolveScoutRepo(ws, loadContract(ws)).repo; } catch { /* ws 유지(fail-open) */ }
     const raw = readLedgerEventsText(target);
     if (!raw || !raw.trim()) return;
-    // 원시 이벤트에서 sig→text 최소 집계(배포 사본은 out/ 유도기를 require 못 함). 제외는 보수적으로:
-    // 반박/차단/대체/묘비 이력이 한 번이라도 있으면 확인 대상에서 뺀다(unban 등 순계산은 유도기 몫 — 여기선 과소확인 감수).
-    const texts = new Map(); const dead = new Set();
+    // 원시 이벤트에서 sig→text 최소 집계(배포 사본은 out/ 유도기를 require 못 함).
+    // 제외는 '현재 차단 중'(banned-unbanned 순계산 — 해제된 차단은 되살림, Codex 반례 2026-07-09)·대체·소멸만.
+    // 반박 이력 항목에도 확인은 '기록'한다(2026-07-09 사용자 결정: 복권 재료를 문 앞에서 버리면 지식이 진화 못 함.
+    // 승격 여부는 유도기의 복권 규칙[반박 이후 확인만 인정]이 판정).
+    const texts = new Map(); const dead = new Set(); const banNet = new Map();
     for (const ln of raw.split(/\r?\n/)) {
       if (!ln.trim()) continue;
       let o; try { o = JSON.parse(ln); } catch { continue; }
       if (!o || !o.sig) continue;
       if (o.text && !texts.has(o.sig)) texts.set(o.sig, o.text);
-      if (o.type === "user_dispute" || o.type === "refuted" || o.type === "banned" || o.type === "superseded" || o.type === "tombstone") dead.add(o.sig);
+      if (o.type === "banned") banNet.set(o.sig, (banNet.get(o.sig) || 0) + 1);
+      else if (o.type === "unbanned") banNet.set(o.sig, (banNet.get(o.sig) || 0) - 1);
+      else if (o.type === "superseded" || o.type === "tombstone") dead.add(o.sig);
     }
+    for (const [s, n] of banNet) { if (n > 0) dead.add(s); }
     if (!texts.size) return;
     const cited = new Set([...citedResolvedBasenames(answer, execCwd || ws)].map((b) => b.toLowerCase()));
     // 라인 실재까지 요구(보수 강화 — Codex 보완 반영): 라인 번호가 실제 범위를 벗어난 인용이 하나라도 있는 파일은

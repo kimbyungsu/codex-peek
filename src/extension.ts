@@ -1476,6 +1476,7 @@ function readScoutMaps(ws: string | null): ScoutMapsView | null {
 // 유도·형식은 out(ledger-events·map-ledger) 공유 모듈 — 여기는 파일 읽기+조립만.
 type ObservedEntry = {
   sig: string; text: string; status: string; pinned: boolean; lane: string; from: string; lastTs: string;
+  rehabilitated?: boolean; // 반박 이후 재확인으로 복권됨 — verified와 구분 표기(왜 반박 수가 있는데 검증됨인지 즉답)
   n: { proposed: number; attached: number; confirmed: number; disputed: number }; // 사건 요약(무엇을 근거로 이 신분인가)
   inMap: boolean; // 확정 장부(MAP.md)에 이미 내보내졌나(중복 내보내기 방지)
 };
@@ -1511,6 +1512,7 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
   const mapNow = normSig(mapMd);
   const entries: ObservedEntry[] = derived.slice(0, LEDGER_ENTRIES_CAP_UI).map((e) => ({
     sig: e.sig, text: e.text || e.sig, status: e.status, pinned: e.pinned, lane: e.lane, from: e.from, lastTs: e.lastTs,
+    rehabilitated: !!(e as { rehabilitated?: boolean }).rehabilitated,
     n: {
       proposed: e.counts.proposed || 0, attached: e.counts.attached || 0,
       confirmed: (e.counts.confirmed || 0) + (e.counts.user_confirm || 0),
@@ -3086,7 +3088,8 @@ class Dashboard {
         const tx=document.createElement("div"); tx.className="mltxt";
         const t1=document.createElement("div"); t1.className="t";
         const badge=document.createElement("span"); const sl=STATUS_LABEL[p.status]||[p.status,""];
-        badge.className="mlb "+sl[1]; badge.textContent=sl[0]+(p.pinned?T("·고정","·pinned"):"");
+        badge.className="mlb "+sl[1]; badge.textContent=(p.rehabilitated?T("복권됨","rehabilitated"):sl[0])+(p.pinned?T("·고정","·pinned"):"");
+        if(p.rehabilitated) badge.title=T("반박된 적 있으나 그 뒤 재확인이 쌓여 신뢰로 복귀(반박 이력은 사건 수에 남음)","was disputed, later re-confirmed back to trusted (dispute history stays in counts)");
         t1.appendChild(badge); t1.appendChild(document.createTextNode(" "+p.text));
         const t2=document.createElement("div"); t2.className="f";
         t2.textContent=T("제안 "+p.n.proposed+" · 동봉 "+p.n.attached+" · 확인 "+p.n.confirmed+" · 반박 "+p.n.disputed+(p.from?" · 출처: "+p.from:""),"proposed "+p.n.proposed+" · attached "+p.n.attached+" · confirmed "+p.n.confirmed+" · disputed "+p.n.disputed+(p.from?" · from: "+p.from:""));

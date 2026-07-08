@@ -456,7 +456,30 @@ function appendLedgerEvent(ws, ev) {
     fs.appendFileSync(f, JSON.stringify(ev) + "\n", "utf8");
     try {
       const lines = fs.readFileSync(f, "utf8").split(/\r?\n/).filter(Boolean);
-      if (lines.length > LEDGER_EVENTS_TRIM_AT) atomicWrite(f, lines.slice(-LEDGER_EVENTS_CAP).join("\n") + "\n");
+      if (lines.length > LEDGER_EVENTS_TRIM_AT) {
+        // 판정·복권 증거를 '우선' 보존(2026-07-09 확정 결함 2건 방지): ①판정(반박·차단·고정·대체·소멸류)만 잘리고
+        // 재제안이 남으면 '틀림' 딱지가 부활 ②반대로 반박만 보존되고 복권 증거(사람 재확인·반박 이후 검증 확인)가
+        // 잘리면 복권이 조용히 풀림(Codex 반례) — 사람 재확인(user_confirm)은 판정군과 동급 보존, 기계 확인(confirmed)은
+        // '그 항목의 마지막 반박 이후'만 복권 증거로 보존(전부 보존하면 확인 홍수가 상한을 삼킴).
+        // 단 총량은 상한(2000)을 절대 넘지 않는다(PRIVACY '약 2,000줄 보존' 고지 불침 — 극단에선 보존군도 최신순).
+        const STATE = new Set(["user_dispute", "refuted", "banned", "unbanned", "pinned", "unpinned", "superseded", "tombstone", "user_confirm"]);
+        const parsedLines = lines.map((ln) => { try { return JSON.parse(ln); } catch { return null; } });
+        const lastDisputeIdx = new Map();
+        parsedLines.forEach((o, i) => { if (o && (o.type === "user_dispute" || o.type === "refuted")) lastDisputeIdx.set(o.sig, i); });
+        const isKeepFirst = parsedLines.map((o, i) => {
+          if (!o) return false;
+          if (STATE.has(o.type)) return true;
+          return o.type === "confirmed" && lastDisputeIdx.has(o.sig) && i > lastDisputeIdx.get(o.sig); // 복권 증거
+        });
+        let firstKeep = Math.min(isKeepFirst.filter(Boolean).length, LEDGER_EVENTS_CAP);
+        let othersKeep = LEDGER_EVENTS_CAP - firstKeep;
+        const kept = [];
+        for (let i = lines.length - 1; i >= 0; i--) {
+          if (isKeepFirst[i]) { if (firstKeep > 0) { kept.push(lines[i]); firstKeep--; } }
+          else if (othersKeep > 0) { kept.push(lines[i]); othersKeep--; }
+        }
+        atomicWrite(f, kept.reverse().join("\n") + "\n");
+      }
     } catch { /* 트림 실패 — 다음 append에서 재시도(적재 자체는 성공) */ }
     return true;
   } catch { return false; } // best-effort — 장부 실패가 본 흐름(지도 저장·검증)을 막지 않음
