@@ -48,5 +48,15 @@ ok(/Recon \(3-track\) at a glance/.test(readmeEn) && /formerly "scope ledger"/.t
 const privacy = fs.readFileSync(path.join(__dirname, "..", "PRIVACY.md"), "utf8");
 ok(/'② 영향지도'.*옛 표기 '영향지도 게시판'/.test(privacy) && /'③ 관찰 일지'.*옛 표기 '관측 장부/.test(privacy), "PRIVACY: 새 표기·옛 표기 별칭(혼선 방지 — Codex 보완)");
 
+console.log("[한눈 도해(2026-07-08 2차 — 커뮤니티 피드백: 구조가 안 읽힘·API 필요 여부 불명)] 항상 노출 그림 + 텍스트 벽 강등");
+ok(/className="rflow"/.test(ext) && /className="rnode"/.test(ext) && /className="rarw"/.test(ext), "정찰 4단계 도해(색 박스+화살표 — 검증 파이프라인과 같은 시각 문법) 항상 노출");
+ok(/파일이 바뀌면/.test(ext) && /검증을 지나며/.test(ext) && /원할 때만/.test(ext), "화살표에 '언제 넘어가는지' 라벨");
+ok(/className="rlife"/.test(ext) && /신설/.test(ext) && /승격/.test(ext) && /교체/.test(ext) && /폐기/.test(ext), "지식 수명주기 한 줄(신설→승격→교체→폐기) — '언제 뭘 반영하나' 즉답");
+ok(/지금 이대로\(키 없음\) = 기본 흐름 전부 동작/.test(ext) && /DeepSeek 키를 넣으면\(선택\) = 정찰만 분업/.test(ext), "API 비교 2박스 — 'DeepSeek 없인 못 쓰나?'에 첫 줄 즉답(과장 없는 문구 — Codex 정정)");
+ok(/className="rlchip"/.test(ext) && (ext.match(/\.rchip\{/g)||[]).length===1, "수명주기 칩은 .rlchip — 기존 .rchip(규칙 메타 칩) 전역 충돌 재발 잠금(정의 1개만)");
+ok(/aria-label/.test(ext), "칩 hover 설명에 aria-label 병기(접근성)");
+ok(/기본\(Claude\)이 더 정확했어요 — 필수 아님/.test(ext), "실측 근거로 '필수 아님' 정직 명시");
+ok(/keyedDetails\("senseDetail"/.test(ext) && /keyedDetails\("mapInfo"/.test(ext), "텍스트 벽(후보 목록·한계·ⓘ 설명) → 접힘 강등(첫 화면=그림 원칙)");
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

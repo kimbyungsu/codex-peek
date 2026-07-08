@@ -2044,6 +2044,18 @@ class Dashboard {
   .mlrow .mltxt{flex:1;min-width:0} .mlrow .mltxt .t{font-size:12px;word-break:break-all} .mlrow .mltxt .f{font-size:10px;opacity:.6;margin-top:2px}
   .mlrow button{padding:3px 10px;font-size:11px;flex-shrink:0}
   .mhist{font-size:11px;padding:3px 0;word-break:break-all} .mhist .w{opacity:.6;font-size:10px}
+  /* 정찰 한눈 도해 — 위쪽 검증 파이프라인과 같은 시각 문법(색 박스+화살표). 첫 화면=그림, 텍스트=접힘 원칙 */
+  .rflow{display:flex;align-items:stretch;gap:6px;flex-wrap:wrap;margin:8px 0 6px}
+  .rnode{flex:1;min-width:118px;border:1.5px solid var(--vscode-panel-border);border-radius:8px;padding:7px 9px;background:var(--vscode-editorWidget-background)}
+  .rnode b{display:block;font-size:12px}
+  .rbdg{display:inline-block;font-size:9px;font-weight:700;padding:0 6px;border-radius:7px;border:1px solid;margin:3px 0}
+  .rmini{font-size:10.5px;opacity:.8;line-height:1.35}
+  .rarw{align-self:center;font-size:10px;opacity:.65;white-space:nowrap}
+  .rlife{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:2px 0 8px}
+  .rlchip{font-size:10.5px;font-weight:700;border:1px solid var(--vscode-panel-border);border-radius:8px;padding:1px 8px;background:var(--vscode-editorWidget-background);cursor:help} /* ⚠ .rchip은 기존 규칙 메타 칩 전역 클래스 — 반드시 별도 이름(.mrow 충돌과 동일 유형 재발 방지) */
+  .rapi{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 10px}
+  .rapibox{flex:1;min-width:230px;border:1.5px solid;border-radius:8px;padding:7px 10px;background:var(--vscode-editorWidget-background)}
+  .rapibox b{display:block;font-size:11.5px;margin-bottom:2px}
   .mlb{display:inline-block;padding:1px 7px;border-radius:8px;font-size:10px;font-weight:700;border:1px solid var(--vscode-panel-border);vertical-align:middle}
   .mlb.ok{color:var(--vscode-charts-green);border-color:var(--vscode-charts-green)}
   .mlb.hot{color:var(--vscode-charts-orange);border-color:var(--vscode-charts-orange)}
@@ -2811,6 +2823,50 @@ class Dashboard {
       box.style.display="";
       while(box.firstChild) box.removeChild(box.firstChild);
       const add=(txt,cls)=>{const el=document.createElement("div"); el.className=cls||"sbrow"; el.textContent=txt; box.appendChild(el); return el;};
+      // ── 정찰 한눈 도해(항상 노출 — 2026-07-08 사용자 지적: 좋은 시각물이 접혀 있고 텍스트 벽이 첫 화면을 점령) ──
+      // 위쪽 검증 파이프라인 도해와 같은 시각 문법: 색 박스+화살표. 텍스트 상세는 전부 아래 접힘으로 강등.
+      safe(function(){
+        const sm=d.scoutMaps, ml=d.mapLedger, c=ml&&ml.counts;
+        const flow=document.createElement("div"); flow.className="rflow";
+        const node=(color,icon,name,badge,line)=>{const n=document.createElement("div"); n.className="rnode"; n.style.borderColor=color;
+          const t1=document.createElement("b"); t1.textContent=icon+" "+name; t1.style.color=color;
+          const b=document.createElement("span"); b.className="rbdg"; b.textContent=badge; b.style.borderColor=color; b.style.color=color;
+          const t2=document.createElement("div"); t2.className="rmini"; t2.textContent=line;
+          n.appendChild(t1); n.appendChild(b); n.appendChild(t2); flow.appendChild(n); return n;};
+        const arw=(label)=>{const a=document.createElement("div"); a.className="rarw"; a.textContent=label+" →"; flow.appendChild(a);};
+        node("#3ca89a","⚙",T("변경 감지","Sensing"),T("자동 · AI 없음","auto · no AI"),T("고치는 파일을 지켜봄","watches what you edit"));
+        arw(T("파일이 바뀌면","files change"));
+        node("#9a6cdc","⚡",T("영향지도","Impact map"),T("AI 1회","1 AI call"),(sm&&sm.count?T("지도 "+sm.count+"장","maps: "+sm.count):T("어디까지 번질지 보고서","'how far it reaches' report")));
+        arw(T("검증을 지나며","through verify"));
+        node("#3ca89a","⚙",T("관찰 일지","Journal"),T("자동 누적","auto-accrues"),(c&&(c.trusted+c.reference+c.disputed)>0?T("신뢰 "+c.trusted+"·미검증 "+c.reference+"·틀림 "+c.disputed,"✔"+c.trusted+"·?"+c.reference+"·✖"+c.disputed):T("맞은 예측이 지식으로","right predictions become knowledge")));
+        arw(T("원할 때만","when you want"));
+        node("#d9a441","👤",T("확정 교범","Manual"),T("선택","optional"),(ml&&ml.mapExists?T("도장 "+(ml.mapApproved||0)+"건","stamped: "+(ml.mapApproved||0)):T("도장 찍은 것만 문서로","stamped items → repo doc")));
+        box.appendChild(flow);
+        // 수명주기 한 줄 — 지식이 언제 신설/승격/교체/폐기되는지(커뮤니티 질문 1: '언제 뭘 반영하나')
+        const life=document.createElement("div"); life.className="rlife";
+        [["✚",T("신설","new"),T("정찰이 발견하면","scout finds it")],["✔",T("승격","promote"),T("검증이 맞다고 확인하면","verify confirms it")],["↷",T("교체","replace"),T("새 발견이 옛것을 대신하면","newer finding supersedes")],["✖",T("폐기","retire"),T("틀렸다고 판명/차단하면","disputed or banned")]].forEach(function(p){
+          const ch=document.createElement("span"); ch.className="rlchip"; ch.textContent=p[0]+" "+p[1];
+          ch.title=p[2]; ch.setAttribute("aria-label", p[1]+": "+p[2]); life.appendChild(ch); // title은 hover 한정 — aria-label 병기(접근성 보완)
+        });
+        const lt=document.createElement("span"); lt.className="muted"; lt.style.fontSize="10.5px";
+        lt.textContent=T("— 전부 자동 · 사람 개입(고정/차단/도장)은 선택","— all automatic · human touch (pin/ban/stamp) optional");
+        life.appendChild(lt); box.appendChild(life);
+        // API 한눈 비교(커뮤니티 질문 2: 'DeepSeek 없인 못 쓰나?') — 두 박스, 답이 첫 줄에.
+        const api=document.createElement("div"); api.className="rapi";
+        const apiBox=(color,head,lines)=>{const bx=document.createElement("div"); bx.className="rapibox"; bx.style.borderColor=color;
+          const h=document.createElement("b"); h.textContent=head; h.style.color=color; bx.appendChild(h);
+          lines.forEach(function(s){const dv=document.createElement("div"); dv.className="rmini"; dv.textContent=s; bx.appendChild(dv);});
+          api.appendChild(bx); return bx;};
+        apiBox("#3ca89a",
+          T("지금 이대로(키 없음) = 기본 흐름 전부 동작","As-is (no key) = the entire default flow works"),
+          [T("정찰 AI = 쓰시던 Claude가 겸임(별도 결제 없음)","scout AI = your existing Claude (no separate billing)"),
+           T("지도·일지·교범·자동 승격 전부 이 상태로 됩니다","maps, journal, manual, auto-promotion — all included")]);
+        apiBox("#9a6cdc",
+          T("DeepSeek 키를 넣으면(선택) = 정찰만 분업","Add a DeepSeek key (optional) = split the scouting"),
+          [T("정찰을 다른 AI에게 맡겨 관점 비교·Claude 사용량 절약","a second AI scouts — perspective compare · saves Claude usage"),
+           d.deepseek&&d.deepseek.hasKey?T("현재: 등록됨 — 비교 팔 사용 가능","now: registered — comparison arm ready"):T("실측(2026-07)에선 기본(Claude)이 더 정확했어요 — 필수 아님","in our 2026-07 test the default (Claude) was more accurate — not required")]);
+        box.appendChild(api);
+      });
       // 정찰 흐름 — 기본 접힘 details(사용자 지적 2026-07-08 2차: 나열 문구 1차 숨김·펼침 유지·번호는 여기서만).
       // 안: 성격 프로필(프로젝트 성격→기대 효용 번역)+4단계 요약+자세히 보기(새탭). 신호는 전부 기존 state(+가벼운 로컬 판독 1개).
       safe(function(){
@@ -2882,25 +2938,32 @@ class Dashboard {
         }
         const el=add(line,"muted"); el.style.fontWeight="600";
       })();
-      // 키 안내 — 키 없으면 'DeepSeek 비교 팔만 비활성'(변경 감지+self 팔 지도는 무키 동작)을 카드 안에서 상시 고지(기대치 설정)
-      if(d.deepseek && !d.deepseek.hasKey){
-        add(T("ⓘ 키 없이도 변경 감지 + self 팔 지도(별도 과금 없음 — 쓰시던 Claude로 실행)까지 가능해요 — DeepSeek API 키는 '비교용 두 번째 정찰 팔'만 엽니다(⚙️ 고급설정 탭).","ⓘ Without any key you get change sensing plus self-arm maps (no separate billing — runs on the Claude you already use) — a DeepSeek API key only unlocks the second, comparison scout arm (⚙️ Advanced tab)."),"muted");
-      }
-      const sc=d.scope;
-      if(!sc){ add(T("계산 대기 — 3트랙 저장 후 자동 갱신됩니다.","Pending — refreshes automatically after saving 3-track."),"muted"); return; }
-      if(sc.note==="no-git"){ add(T("이 폴더엔 변경 기록(버전 관리·git)이 없어서 '예전에 같이 바뀌던 파일' 힌트를 만들 수 없어요.","This folder has no change history (version control / git), so 'changed together before' hints can't be built."),"muted"); return; }
-      if(sc.note==="no-changes"){ add(T("지금 작업트리에 변경이 없어요 — 파일을 바꾸면 여기에 후보가 떠요.","No working-tree changes yet — candidates appear once files change."),"muted"); return; }
-      if(sc.note==="error"||!sc.suggestion){ add(T("변경 기록을 읽지 못했어요 — 잠시 후 다시 시도돼요.","Couldn't read the change history — will retry shortly."),"muted"); return; }
-      add(T("지금 고치는 중: ","Editing now: ")+sc.seeds.join(", "),"muted");
-      const s=sc.suggestion;
-      if(s.sparse){
-        add(T("데이터 없음 — 이 파일들은 과거에 바뀐 기록이 아직 적어서("+s.seedObservations+"회 < 3) 추측 대신 조용히 있어요. 새로 만든 영역이면 정상이에요.","No data — these files have too few past-change records ("+s.seedObservations+"× < 3), so we stay quiet instead of guessing. Normal for new areas."));
-      } else if(!s.candidates.length){
-        add(T("문턱(함께 변경 3회)을 넘는 후보가 없어요.","No candidates above the threshold (co-changed 3×)."));
-      } else {
-        s.candidates.forEach(c=>{ add("• "+c.file+"  ("+T("예전에 같이 바뀜 ","changed together before ")+c.n+T("회","×")+")"); });
-      }
-      add(T("⚠ 이 장부가 못 보는 것: 처음 생기는 결합·실행해봐야 아는 동작·의미적 연쇄 — 후보가 없다고 영향이 없는 게 아니에요. (관찰 단계: 아무것도 막거나 강제하지 않음 · 전부 로컬 git, 외부 전송 없음)","⚠ What this ledger cannot see: first-time couplings, behaviors only running reveals, semantic chains — no candidates ≠ no impact. (Advisory: blocks/forces nothing · all local git, nothing sent anywhere)"),"muted");
+      // 상세(후보 목록·키 안내·한계 고지)는 접힘으로 — 첫 화면은 위 도해+상태 1줄(2026-07-08 시안성 개편)
+      safe(function(){
+        const det=keyedDetails("senseDetail", T("자세히 — 후보 목록·키 안내·한계","Details — candidates · key note · limits"));
+        const addD=(txt,cls)=>{const el=document.createElement("div"); el.className=cls||"sbrow"; el.textContent=txt; det.appendChild(el); return el;};
+        if(d.deepseek && !d.deepseek.hasKey){
+          addD(T("ⓘ 키 없이도 변경 감지 + self 팔 지도(별도 과금 없음 — 쓰시던 Claude로 실행)까지 가능해요 — DeepSeek API 키는 '비교용 두 번째 정찰 팔'만 엽니다(⚙️ 고급설정 탭).","ⓘ Without any key you get change sensing plus self-arm maps (no separate billing — runs on the Claude you already use) — a DeepSeek API key only unlocks the second, comparison scout arm (⚙️ Advanced tab)."),"muted");
+        }
+        const sc=d.scope;
+        if(!sc){ addD(T("계산 대기 — 3트랙 저장 후 자동 갱신됩니다.","Pending — refreshes automatically after saving 3-track."),"muted"); }
+        else if(sc.note==="no-git"){ addD(T("이 폴더엔 변경 기록(버전 관리·git)이 없어서 '예전에 같이 바뀌던 파일' 힌트를 만들 수 없어요.","This folder has no change history (version control / git), so 'changed together before' hints can't be built."),"muted"); }
+        else if(sc.note==="no-changes"){ addD(T("지금 작업트리에 변경이 없어요 — 파일을 바꾸면 여기에 후보가 떠요.","No working-tree changes yet — candidates appear once files change."),"muted"); }
+        else if(sc.note==="error"||!sc.suggestion){ addD(T("변경 기록을 읽지 못했어요 — 잠시 후 다시 시도돼요.","Couldn't read the change history — will retry shortly."),"muted"); }
+        else {
+          addD(T("지금 고치는 중: ","Editing now: ")+sc.seeds.join(", "),"muted");
+          const s=sc.suggestion;
+          if(s.sparse){
+            addD(T("데이터 없음 — 이 파일들은 과거에 바뀐 기록이 아직 적어서("+s.seedObservations+"회 < 3) 추측 대신 조용히 있어요. 새로 만든 영역이면 정상이에요.","No data — these files have too few past-change records ("+s.seedObservations+"× < 3), so we stay quiet instead of guessing. Normal for new areas."));
+          } else if(!s.candidates.length){
+            addD(T("문턱(함께 변경 3회)을 넘는 후보가 없어요.","No candidates above the threshold (co-changed 3×)."));
+          } else {
+            s.candidates.forEach(c=>{ addD("• "+c.file+"  ("+T("예전에 같이 바뀜 ","changed together before ")+c.n+T("회","×")+")"); });
+          }
+        }
+        addD(T("⚠ 이 장부가 못 보는 것: 처음 생기는 결합·실행해봐야 아는 동작·의미적 연쇄 — 후보가 없다고 영향이 없는 게 아니에요. (관찰 단계: 아무것도 막거나 강제하지 않음 · 전부 로컬 git, 외부 전송 없음)","⚠ What this ledger cannot see: first-time couplings, behaviors only running reveals, semantic chains — no candidates ≠ no impact. (Advisory: blocks/forces nothing · all local git, nothing sent anywhere)"),"muted");
+        box.appendChild(det);
+      });
     });
     // ⑤-2 영향지도 게시판(3트랙 LLM 탐색 결과) — 러너가 보관한 지도를 읽기 전용으로 게시(사용자 결정 2026-07-06:
     // AI 역할의 시각적 확인). 확장은 지도를 생성·전송하지 않는다 — 빈 게시판엔 생성 명령을 정직하게 안내.
@@ -2908,7 +2971,12 @@ class Dashboard {
       const box=$("scoutBox"); if(!box || box.style.display==="none") return; // 3트랙 카드가 보일 때만 이어붙임
       const add=(txt,cls)=>{const el=document.createElement("div"); el.className=cls||"sbrow"; el.textContent=txt; box.appendChild(el); return el;};
       (function(){ const h=add(T("영향지도(정찰 보고) ⚡ AI 호출 — 정찰 AI가 보낸 최근 지도","Impact maps (recon reports) ⚡ AI call — recent maps from the scout AI"),"sbhead"); h.style.cssText="border-left:3px solid #9a6cdc;padding-left:8px"; })();
-      add(T("ⓘ 영향지도 = 지금 바꾸는 것이 어디까지 영향을 주는지 탐색 AI가 정리한 확인 목록(직접·간접 영향 후보, 확인할 테스트, 범위 밖으로 봐도 되는 것). 생성되면 이 게시판에 도착해요.","ⓘ Impact map = a checklist from the scout AI of how far your current change reaches (direct/indirect impact candidates, tests to check, safely out-of-scope). New maps land on this board."),"muted");
+      safe(function(){
+        const det=keyedDetails("mapInfo", T("ⓘ 영향지도가 뭐예요?","ⓘ What is an impact map?"));
+        const p=document.createElement("div"); p.className="muted";
+        p.textContent=T("ⓘ 영향지도 = 지금 바꾸는 것이 어디까지 영향을 주는지 탐색 AI가 정리한 확인 목록(직접·간접 영향 후보, 확인할 테스트, 범위 밖으로 봐도 되는 것). 생성되면 이 게시판에 도착해요.","ⓘ Impact map = a checklist from the scout AI of how far your current change reaches (direct/indirect impact candidates, tests to check, safely out-of-scope). New maps land on this board.");
+        det.appendChild(p); box.appendChild(det);
+      });
       const sm=d.scoutMaps;
       if(!sm || !sm.count){
         const nonGit = d.scope && d.scope.note==="no-git";
