@@ -123,5 +123,11 @@ fs.writeFileSync(contractFileFor(ws2), JSON.stringify({ codex: [], verifyMode: "
 ok(!withContract("MY_PROMPT", ws2).includes("[탐색 지도"), "scoutMode 미설정(2트랙 기본) → 동봉 없음(무회귀)");
 
 try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 임시폴더 정리 실패 무해 */ }
+console.log("[앵커링 방어(2026-07-09)] 동봉이 검증 시야를 좁히지 못하게 — 시작점≠한계 명시");
+{
+  const clsrc2 = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
+  ok(/이 목록은 시작점일 뿐 한계가 아니다: 목록 밖 반례 탐색을 줄이지 마라/.test(clsrc2) && /NOT a boundary: do not narrow your own search/.test(clsrc2), "동봉 tail에 '목록 밖 반례 탐색 유지' 지시(한/영 — 맹신 우려 방어)");
+}
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
