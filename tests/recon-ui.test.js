@@ -9,21 +9,21 @@ function ok(c, m) { if (c) { pass++; console.log("  ✅ " + m); } else { fail++;
 const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
 
 console.log("[정찰 흐름 접힘 그룹] 기본 접힘 + 펼침 유지 + 성격 프로필 + 4단계 요약(번호는 여기·가이드에만)");
-ok(/keyedDetails\("reconFlow", T\("▶ 정찰 흐름 펼쳐보기/.test(ext), "'▶ 정찰 흐름 펼쳐보기' — 나열 문구 1차 숨김(기본 접힘, 사용자 지적 3)");
+ok(!/keyedDetails\("reconFlow"/.test(ext), "옛 '정찰 흐름 펼쳐보기' 접힘 그룹 폐기(2026-07-09 사용자 지시 — 한눈 도해와 중복)");
 ok(/const openPanels = new Set\(\);/.test(ext) && /openPanels\.has\(key\)\) det\.open=true/.test(ext) && /det\.addEventListener\("toggle"/.test(ext), "펼침 유지: 재렌더에도 살아남는 기억 집합(자동 접힘 실버그 해법 — expandedConv 동형, 사용자 지적 4a)");
 ok(/keyedDetails\("map:"\+\(sm\.latest\.ts\|\|"\?"\)/.test(ext), "최신 지도 details도 동일 보존 — 키는 지도 시각(새 지도=기본 접힘·형제 분리, 사용자 지적 4b·Codex 보완)");
-ok(/이 프로젝트 성격: /.test(ext) && /변경 기록이 깊이 쌓인 코드 프로젝트/.test(ext) && /변경 기록\(버전 관리\) 없는 일반 폴더 — 메모·문서형/.test(ext) && /이제 시작한\(기록이 얕은\) 프로젝트/.test(ext) && /참고 실측: /.test(ext), "성격 프로필: 신호→성격 범주→기대 효용(사람 언어·'참고 실측' 분리 — Codex 보완)");
-ok(/표준 테스트 폴더\(tests\/·test\/\) 미감지/.test(ext) && /hasTestsDir/.test(ext), "테스트 각주는 '미감지'로 낮춰 표현(없음 단정 금지 — Codex 보완)");
-ok(/④ 확정 교범 👤 선택/.test(ext) && /가 아직 안 만들어졌어요 — 관찰 일지에서 '내보내기'를 누르는 순간 생성/.test(ext), "'아직 없음'의 대상 명명(확정 문서 경로) + 선택·자동 명시(사용자 지적 1)");
-ok(/AI 정찰 보고서\(영향지도\)가 아직 없음/.test(ext), "②의 '없음'도 대상 명명(Codex 보완)");
-ok(/한 번도 실행하지 않으면 ①의 힌트만 동작하고 ②③④는 계속 비어 있습니다/.test(ext) && /별도 과금 없음\(쓰시던 Claude로 실행/.test(ext), "LLM 필수성 정직 고지 + '무료' 단독 표기 금지(사용자 지적 2026-07-08·Codex 보완)");
-ok(/addStep=\(color,name,state\)/.test(ext) && /border-left:3px solid "\+color/.test(ext), "시안성: 단계 행=색 액센트 미니 카드(화이트 텍스트 나열 해소)");
+ok(/이 폴더는 변경 기록이 풍부해요/.test(ext) && /기록이 아직 얕아요/.test(ext) && /과거 변경 기록이 없어요/.test(ext) && !/이 프로젝트 성격: /.test(ext), "옛 '성격 프로필'을 환경 안내 1문장으로 재작성(전문용어·괄호 겹침 제거 — 사용자 지적 2)");
+ok(/tests 폴더가 안 보여서/.test(ext) && /hasTestsDir/.test(ext), "테스트 각주 유지 — 사람 말로('안 보여서'·없음 단정 금지)");
+ok(/확정 교범'이 뭐예요\?/.test(ext) && /자동 주입 아니에요/.test(ext) && /팀원·다른 PC 공유/.test(ext), "확정 교범 평문 설명(왜 도장을 찍나·일지와의 차이·자동 주입 아님 — 2026-07-09 지적 5)");
+ok(/AI 정찰 보고서\(영향지도\)가 아직 없어요/.test(ext), "②의 '없음'도 대상 명명(게시판 빈 상태 문구)");
+ok(/실질 효과는 '정찰 실행'에서 나와요/.test(ext) && /별도 과금 없음/.test(ext), "LLM 필수성 정직 고지 — 1문장 압축(도해 아래 상시 노출)");
+ok(!/addStep=\(color,name,state\)/.test(ext), "옛 단계 행(addStep) 폐기 — 역할은 항상 노출 도해(rflow 노드+실데이터)가 대체");
 ok(!/사람 승인/.test(ext) && !/human approval/.test(ext), "'사람 승인/human approval' 잔재 0 — 세그먼트 힌트 포함 전거(Codex 반례 잠금)");
 ok(!/수동 명령으로|수동 생성 가능|via manual command|made by manual command/.test(ext), "상태 요약·상태바의 '수동만' 잔재 0 — 직접/자동 지시 모델 유지(Codex 반례 잠금)");
-ok(/검증 대화에 편승 — 추가 AI 호출 없음/.test(ext) && /ml&&ml\.mapExists/.test(ext) && /mapApproved/.test(ext), "③ 정확 표현·④ 실신호 유지");
+ok(/추가 LLM 없음/.test(ext) && /ml&&ml\.mapExists/.test(ext) && /mapApproved/.test(ext) && /검증이 확인하면 신뢰로 승격/.test(ext), "③ 정확 표현·④ 실신호 유지(도해·일지 카드로 이관)");
 ok(/openReconGuide/.test(ext) && /codexBridgeReconGuide/.test(ext) && /enableScripts: false/.test(ext) && /default-src 'none'; style-src 'unsafe-inline'/.test(ext), "자세히 보기(새탭): 별개 viewType·스크립트 차단·좁은 CSP(사용자 지적 7·Codex 보완)");
 ok(/gb\.addEventListener\("click"/.test(ext) && !/summary.*appendChild\(gb\)/.test(ext), "가이드 버튼은 summary 밖(토글 충돌 방지 — Codex 보완)");
-ok(/det\.firstChild\.title=T\("변경 감지\(⚙자동\)/.test(ext), "접힘 상태 hover: 구조 한 줄 툴팁+색 배지 스트립(사용자 지적 7 전반)");
+ok(!/det\.firstChild\.title=T\("변경 감지\(⚙자동\)/.test(ext), "옛 접힘 hover 스트립 폐기(구획 자체 폐기에 따름)");
 
 console.log("[카드 개명] 번호 없는 이름+배지 — 번호 이중 순환 제거(사용자 지적 5·6)");
 ok(/변경 감지 ⚙ 자동·AI 호출 없음 — 지금 고치는 파일/.test(ext) && !/① 변경 감지\(LLM 없음\) — /.test(ext), "카드: '변경 감지'(번호 없음·사람 언어)");
@@ -57,6 +57,13 @@ ok(/className="rlchip"/.test(ext) && (ext.match(/\.rchip\{/g)||[]).length===1, "
 ok(/aria-label/.test(ext), "칩 hover 설명에 aria-label 병기(접근성)");
 ok(/기본\(Claude\)이 더 정확했어요 — 필수 아님/.test(ext), "실측 근거로 '필수 아님' 정직 명시");
 ok(/keyedDetails\("senseDetail"/.test(ext) && /keyedDetails\("mapInfo"/.test(ext), "텍스트 벽(후보 목록·한계·ⓘ 설명) → 접힘 강등(첫 화면=그림 원칙)");
+
+console.log("[3트랙 선택 안내(2026-07-09 지적 1)] 키 없음=경고 모달+이동 버튼 · 키 있음=실제 연결 점검");
+ok(/등록된 DeepSeek API 키가 없어요/.test(ext) && /3트랙의 효과가 미비할 수 있어요/.test(ext) && /등록하러 가기/.test(ext) && /알겠습니다/.test(ext), "키 없음 → 모달(효과 미비 경고는 '정찰 미실행' 사실 기준으로 정직화)+[등록하러 가기]/[알겠습니다]");
+ok(/switchTab/.test(ext) && /data-tab="'\+ev\.data\.tab/.test(ext), "'등록하러 가기' → 고급설정 탭 전환 배선(확장→웹뷰)");
+ok(/API 등록과 정상 연결이 확인되었습니다 — 3트랙이 정상 운용됩니다/.test(ext) && /deepseek-bridge\.js/.test(ext) && /연결 점검에 실패했어요/.test(ext), "키 있음 → 실제 ping 점검 후 정상/실패를 사실대로");
+ok(/📖 정찰 구조 자세히 보기/.test(ext) && !/gb\.className="secondary"/.test(ext), "'자세히 보기' 주 버튼 승격(경고가 참조하는 문서 — 눈에 띄게, 지적 3)");
+ok(/className="rsec"/.test(ext), "영향지도 게시판 섹션 카드화(간격·구획 — 지적 4)");
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

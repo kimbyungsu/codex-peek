@@ -1699,11 +1699,38 @@ class Dashboard {
             scoutMode: normScoutMode({ scoutMode: m.scoutMode }),
           }, slotLang);
           if (!ok) vscode.window.showErrorMessage(tE("설정 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 저장해 주세요(기존 설정은 그대로 유지됩니다).","Failed to save settings — file locked or inaccessible. Try again shortly (existing settings are kept)."));
-          // 3트랙 저장인데 DeepSeek 키가 없으면 안내(차단 아님 — 변경 감지·self 팔은 키 없이 동작): 기대치 설정용 1회성 토스트.
-          if (ok && normScoutMode({ scoutMode: m.scoutMode }) === "on" && !readDeepseekView().hasKey) {
-            vscode.window.showInformationMessage(tE(
-              "3트랙(정찰)이 켜졌어요. 키 없이도 ①변경 감지와 self 팔 ②영향지도(별도 과금 없음 — 쓰시던 Claude로 실행)까지 동작합니다 — DeepSeek API 키는 '비교용 두 번째 정찰 팔'을 열 때만 필요해요(대시보드 ⚙️ 고급설정 탭).",
-              "3-track (recon) is on. Without any key you get ① change sensing and ② self-arm impact maps (no separate billing — runs on the Claude you already use) — a DeepSeek API key is only needed to unlock the second, comparison scout arm (dashboard ⚙️ Advanced tab)."));
+          // 3트랙 선택 시 API 안내(2026-07-09 사용자 요청 — 기본원칙 경고와 같은 모달 형태):
+          //  키 없음 → 경고 모달 + [등록하러 가기(고급설정 이동)] / [알겠습니다]
+          //  키 있음 → 실제 연결 점검(ping 1회 — PRIVACY에 전송 지점으로 명시) 후 정상/실패를 사실대로.
+          // ⚠ 문구 정직성: 실측(D5)상 '키 없음=효과 미비'가 아니라 '정찰 미실행=효과 미비'가 사실 — 경고문은 그 사실 기준.
+          if (ok && normScoutMode({ scoutMode: m.scoutMode }) === "on") {
+            if (!readDeepseekView().hasKey) {
+              const go = tE("등록하러 가기", "Register key");
+              vscode.window.showWarningMessage(tE(
+                "3트랙(정찰)이 켜졌지만 등록된 DeepSeek API 키가 없어요.\n\n키 없이도 기본 정찰(쓰시던 Claude가 겸임 — 별도 결제 없음)은 전부 동작하지만, '비교용 두 번째 정찰 팔'은 잠겨 있어요. 그리고 어느 팔이든 정찰이 한 번도 실행되지 않으면 3트랙의 효과가 미비할 수 있어요.\n\n상세는 정찰 카드의 '정찰 구조 자세히 보기 (새탭)'에서 확인하세요.",
+                "3-track (recon) is on, but no DeepSeek API key is registered.\n\nWithout a key the default recon (your existing Claude doubles as scout — no separate billing) fully works, but the second comparison arm stays locked. And with either arm, if recon never actually runs, 3-track delivers little.\n\nSee 'Recon structure in detail (new tab)' on the recon card."),
+                { modal: true }, go, tE("알겠습니다", "Got it")).then((pick) => {
+                if (pick === go) this.panel?.webview.postMessage({ type: "switchTab", tab: "adv" });
+              });
+            } else {
+              // 연결 점검 — 배포된 브릿지의 ping을 실제 실행(전송 1회·키 원문은 헤더로만). 결과는 사실대로.
+              vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: tE("DeepSeek 연결 점검 중…", "Checking DeepSeek connection…") }, () => new Promise<void>((resolve) => {
+                try {
+                  const tok = hookSetup.resolveNodeToken(nodeTokenCandidates());
+                  if (!tok) { vscode.window.showWarningMessage(tE("연결 점검을 실행할 node를 찾지 못했어요 — 키는 등록돼 있고, 기본 정찰(Claude 겸임)은 계속 동작합니다.", "Couldn't find node to run the check — the key is registered and default recon (Claude) keeps working.")); resolve(); return; }
+                  const p = spawn(tok.token + " " + JSON.stringify(path.join(BRIDGE_DIR, "deepseek-bridge.js").replace(/\\/g, "/")) + " ping", { shell: true, timeout: 45000 });
+                  let out = "", err = "";
+                  p.stdout?.on("data", (d) => { out += d; });
+                  p.stderr?.on("data", (d) => { err += d; });
+                  p.on("close", (code) => {
+                    if (code === 0 && /^ok/m.test(out)) vscode.window.showInformationMessage(tE("API 등록과 정상 연결이 확인되었습니다 — 3트랙이 정상 운용됩니다(비교 팔 사용 가능).", "API key verified and connection OK — 3-track is fully operational (comparison arm available)."));
+                    else vscode.window.showWarningMessage(tE("키는 등록돼 있지만 연결 점검에 실패했어요(" + (err || out || "응답 없음").trim().slice(0, 120) + "). 기본 정찰(Claude 겸임)은 계속 동작합니다 — 키/네트워크를 확인하세요(⚙️ 고급설정).", "The key is registered but the connection check failed (" + (err || out || "no response").trim().slice(0, 120) + "). Default recon (Claude) keeps working — check the key/network (⚙️ Advanced)."));
+                    resolve();
+                  });
+                  p.on("error", () => { vscode.window.showWarningMessage(tE("연결 점검 실행 실패 — 키는 등록돼 있고, 기본 정찰은 계속 동작합니다.", "Failed to run the check — the key is registered and default recon keeps working.")); resolve(); });
+                } catch { resolve(); }
+              }));
+            }
           }
           this.post();
           this.panel?.webview.postMessage({ type: "saveResult", target: "contract", ok });
@@ -2056,6 +2083,8 @@ class Dashboard {
   .rapi{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 10px}
   .rapibox{flex:1;min-width:230px;border:1.5px solid;border-radius:8px;padding:7px 10px;background:var(--vscode-editorWidget-background)}
   .rapibox b{display:block;font-size:11.5px;margin-bottom:2px}
+  .rsec{border:1px solid var(--vscode-panel-border);border-radius:8px;padding:8px 11px;margin:10px 0;background:var(--vscode-editorWidget-background)}
+  .rsec>details{margin:6px 0}
   .mlb{display:inline-block;padding:1px 7px;border-radius:8px;font-size:10px;font-weight:700;border:1px solid var(--vscode-panel-border);vertical-align:middle}
   .mlb.ok{color:var(--vscode-charts-green);border-color:var(--vscode-charts-green)}
   .mlb.hot{color:var(--vscode-charts-orange);border-color:var(--vscode-charts-orange)}
@@ -2711,6 +2740,11 @@ class Dashboard {
       if (ev.data.ok) baseWarned[ev.data.field] = true; // 승인 → 그 필드 재경고 안 함. 포커스/편집값 안 건드림
       return; // 취소면 baseWarned 안 세팅(다음 포커스에 재경고). 포커스/편집값 안 건드림
     }
+    if (ev.data?.type === "switchTab" && ev.data.tab) {
+      // 확장 → 웹뷰 탭 전환(예: 3트랙 경고의 '등록하러 가기' → 고급설정) — 기존 탭 버튼 클릭과 동일 경로 재사용
+      safe(function(){ const btn=document.querySelector('.tabbtn[data-tab="'+ev.data.tab+'"]'); if(btn) btn.click(); });
+      return;
+    }
     if (ev.data?.type === "saveResult") {
       // 저장 성공 피드백은 '확장이 실제 저장에 성공했다고 알려줄 때'만 — 클릭 즉시가 아니라(거짓 성공 방지).
       const ps = pendingSave; pendingSave = null;
@@ -2828,7 +2862,7 @@ class Dashboard {
       safe(function(){
         const sm=d.scoutMaps, ml=d.mapLedger, c=ml&&ml.counts;
         const flow=document.createElement("div"); flow.className="rflow";
-        const node=(color,icon,name,badge,line)=>{const n=document.createElement("div"); n.className="rnode"; n.style.borderColor=color;
+        const node=(color,icon,name,badge,line,tip)=>{const n=document.createElement("div"); n.className="rnode"; n.style.borderColor=color; if(tip){n.title=tip; n.style.cursor="help";}
           const t1=document.createElement("b"); t1.textContent=icon+" "+name; t1.style.color=color;
           const b=document.createElement("span"); b.className="rbdg"; b.textContent=badge; b.style.borderColor=color; b.style.color=color;
           const t2=document.createElement("div"); t2.className="rmini"; t2.textContent=line;
@@ -2840,7 +2874,7 @@ class Dashboard {
         arw(T("검증을 지나며","through verify"));
         node("#3ca89a","⚙",T("관찰 일지","Journal"),T("자동 누적","auto-accrues"),(c&&(c.trusted+c.reference+c.disputed)>0?T("신뢰 "+c.trusted+"·미검증 "+c.reference+"·틀림 "+c.disputed,"✔"+c.trusted+"·?"+c.reference+"·✖"+c.disputed):T("맞은 예측이 지식으로","right predictions become knowledge")));
         arw(T("원할 때만","when you want"));
-        node("#d9a441","👤",T("확정 교범","Manual"),T("선택","optional"),(ml&&ml.mapExists?T("도장 "+(ml.mapApproved||0)+"건","stamped: "+(ml.mapApproved||0)):T("도장 찍은 것만 문서로","stamped items → repo doc")));
+        node("#d9a441","👤",T("확정 교범","Manual"),T("선택","optional"),(ml&&ml.mapExists?T("도장 "+(ml.mapApproved||0)+"건","stamped: "+(ml.mapApproved||0)):T("도장 찍은 것만 문서로","stamped items → repo doc")),T("확실해진 지식에 도장을 찍어 저장소 문서로 박제 — 팀·다른 PC와 공유되고, 다음 정찰이 확정 사실로 참고. 자동 주입 아님(누른 항목만 1회). 상세는 아래 관찰 일지 카드의 📕 설명","Stamp settled knowledge into a repo doc — shared with teammates/other PCs and treated as fact by future recon. Not auto-injection (only what you click, once). See 📕 in the journal card"));
         box.appendChild(flow);
         // 수명주기 한 줄 — 지식이 언제 신설/승격/교체/폐기되는지(커뮤니티 질문 1: '언제 뭘 반영하나')
         const life=document.createElement("div"); life.className="rlife";
@@ -2867,58 +2901,23 @@ class Dashboard {
            d.deepseek&&d.deepseek.hasKey?T("현재: 등록됨 — 비교 팔 사용 가능","now: registered — comparison arm ready"):T("실측(2026-07)에선 기본(Claude)이 더 정확했어요 — 필수 아님","in our 2026-07 test the default (Claude) was more accurate — not required")]);
         box.appendChild(api);
       });
-      // 정찰 흐름 — 기본 접힘 details(사용자 지적 2026-07-08 2차: 나열 문구 1차 숨김·펼침 유지·번호는 여기서만).
-      // 안: 성격 프로필(프로젝트 성격→기대 효용 번역)+4단계 요약+자세히 보기(새탭). 신호는 전부 기존 state(+가벼운 로컬 판독 1개).
+      // (2026-07-09 사용자 지시) '정찰 흐름 펼쳐보기' 접힘 그룹 폐기 — 위 한눈 도해와 내용 중복.
+      // 살릴 것만 밖으로: ①환경 안내 1줄(옛 '성격 프로필'을 사람 말로 재작성) ②LLM 필수성 정직 고지(짧게)
+      // ③'정찰 구조 자세히 보기' 버튼을 주 버튼으로 승격(경고 모달이 이 버튼을 참조 — 눈에 띄어야 함).
       safe(function(){
-        const det=keyedDetails("reconFlow", T("▶ 정찰 흐름 펼쳐보기 — 4단계가 어떻게 굴러가나","▶ Open the recon flow — how the 4 steps run"));
-        det.firstChild.title=T("변경 감지(⚙자동) → 영향지도(⚡정찰 LLM) → 관찰 일지(⚙자동) → 확정 교범(👤선택) — 승인 없이도 자동으로 굴러갑니다","change sensing (⚙auto) → impact map (⚡scout LLM) → field journal (⚙auto) → field manual (👤optional) — runs automatically, no approvals required");
-        // 접힌 상태에서도 구조 힌트가 보이게 — 4단계 색 점 스트립(텍스트 아님·장식 최소)
-        const strip=document.createElement("span"); strip.style.cssText="margin-left:8px;letter-spacing:2px";
-        [["#3ca89a","⚙"],["#9a6cdc","⚡"],["#3ca89a","⚙"],["#d9a441","👤"]].forEach(function(p,i){ const dot=document.createElement("span"); dot.textContent=p[1]; dot.style.cssText="color:"+p[0]+";font-size:10px"; strip.appendChild(dot); if(i<3){ const ar=document.createElement("span"); ar.textContent="→"; ar.style.cssText="color:var(--vscode-descriptionForeground);font-size:9px;margin:0 1px"; strip.appendChild(ar);} });
-        det.firstChild.appendChild(strip);
-        const inner=document.createElement("div");
-        const sc=d.scope, sm=d.scoutMaps, ml=d.mapLedger;
-        // 단계 행 — 색 보더+이름 볼드+상태 분리(시안성: 화이트 텍스트 나열 지적 반영). 전부 textContent(이스케이프 지뢰 무관).
-        const addStep=(color,name,state)=>{const row=document.createElement("div"); row.style.cssText="background:var(--vscode-editorWidget-background);border:1px solid var(--vscode-panel-border);border-left:3px solid "+color+";border-radius:5px;padding:6px 9px;margin:5px 0;font-size:11.5px"; const nm=document.createElement("b"); nm.textContent=name; nm.style.color=color; const st=document.createElement("div"); st.className="muted"; st.style.marginTop="2px"; st.textContent=state; row.appendChild(nm); row.appendChild(st); inner.appendChild(row); return row;};
-        // 성격 프로필(요청 2) — '이 폴더에서 관측된 신호' 기준 판정 + 제품 개발 중 확인 사례는 '참고 실측'으로 분리(현재 폴더 판정처럼 안 읽히게)
-        safe(function(){
-          const nonGit = sc && sc.note==="no-git";
-          const deepHist = sc && typeof sc.logCount==="number" && sc.logCount>=100;
-          let kind, value;
-          if(nonGit){ kind=T("변경 기록(버전 관리) 없는 일반 폴더 — 메모·문서형","plain folder without change history — notes/docs style"); value=T("기대: '같이 바뀌던 파일' 힌트는 계산할 수 없지만, 최근 수정 파일 기준의 영향지도와 관찰 일지는 그대로 동작해요. (참고 실측: 같은 형태 폴더에서 운용 확인)","expect: 'changed-together' hints can't be computed, but impact maps based on recently modified files + the journal work as-is. (reference run: verified on a folder of this shape)"); }
-          else if(deepHist){ kind=T("변경 기록이 깊이 쌓인 코드 프로젝트","code project with a deep change history"); value=T("기대: 4단계 전부 제값 — 과거 힌트·영향지도·관찰 일지·확정 문서. (참고 실측: 대형 서비스·모듈형 확장에서 운용 확인)","expect: all 4 steps at full value — history hints, impact maps, journal, manual. (reference runs: a large service & a modular extension)"); }
-          else { kind=T("이제 시작한(기록이 얕은) 프로젝트","young project (shallow history)"); value=T("기대: 과거 힌트는 기록이 쌓일 때까지 조용할 수 있어요 — 영향지도와 관찰 일지부터 가치가 나옵니다.","expect: history hints may stay quiet until records accrue — impact maps & the journal deliver value first."); }
-          const tn = d.hasTestsDir===false ? T(" ※ 표준 테스트 폴더(tests/·test/) 미감지 — 지도의 '확인할 테스트' 절이 비어 나올 수 있어요(관행 밖 위치는 못 봅니다).","  ※ no standard tests/ folder detected — the map's 'tests to check' section may come back empty (non-standard layouts aren't scanned).") : "";
-          const boxEl=document.createElement("div"); boxEl.style.cssText="background:var(--vscode-editorWidget-background);border:1px solid var(--vscode-panel-border);border-radius:5px;padding:7px 9px;margin:6px 0;font-size:11.5px;font-weight:600";
-          boxEl.textContent=T("이 프로젝트 성격: ","This project: ")+kind+" · "+value+tn;
-          inner.appendChild(boxEl);
-        });
-        addStep("#3ca89a", T("① 변경 감지 ⚙ 자동","① Change sensing ⚙ auto"), (function(){
-          if(!sc) return T("대기 — 3트랙 저장 직후 자동 시작","pending — starts after saving 3-track");
-          if(sc.note==="no-git") return T("제한 — 이 폴더엔 변경 기록(버전 관리)이 없어 '같이 바뀌던 파일' 힌트를 계산할 수 없어요(지도는 최근 수정 기준으로 가능)","limited — this folder has no change history, so 'changed-together' hints can't be computed (maps still work from recent edits)");
-          if(sc.note==="error") return T("일시 불가 — 기록 조회 실패(자동 재시도)","temporarily unavailable — history query failed (auto-retry)");
-          if(sc.suggestion && sc.suggestion.sparse) return T("제한 — 과거 기록 표본 부족(추측 대신 침묵)","limited — sample too small (silent, no guessing)");
-          return T("동작 중 — 지금 고치는 파일과 과거 힌트를 자동 수집","working — collecting current edits & history hints automatically");
-        })());
-        addStep("#9a6cdc", T("② 영향지도 ⚡ AI 호출","② Impact map ⚡ AI call"), (function(){
-          if(d.scoutLive) return T("호출 중 — "+(d.scoutLive.arm==="deepseek"?"DeepSeek":"self")+" 팔이 지도 생성 중","calling — "+(d.scoutLive.arm==="deepseek"?"DeepSeek":"self")+" arm generating");
-          if(!sm || !sm.count) return T("AI 정찰 보고서(영향지도)가 아직 없음 — 아래 영향지도 카드의 명령으로 생성","no AI recon report (impact map) yet — generate via the command in the impact-map card");
-          return T("지도 "+sm.count+"장","maps: "+sm.count)+((typeof d.scoutMapStale==="number"&&d.scoutMapStale>0)?T(" · 최신 지도가 낡았을 수 있음(파일 "+d.scoutMapStale+"개 더 바뀜)"," · latest may be stale ("+d.scoutMapStale+" files changed since)"):T(" · 최신 지도 신선"," · latest fresh"))+(d.deepseek&&d.deepseek.hasKey?T(" · 비교 팔(DeepSeek) 사용 가능"," · comparison arm (DeepSeek) available"):"");
-        })());
-        const c=ml&&ml.counts;
-        addStep("#3ca89a", T("③ 관찰 일지 ⚙ 자동","③ Field journal ⚙ auto"), (c&&(c.trusted+c.reference+c.disputed)>0?T("신뢰 "+c.trusted+" · 미검증 "+c.reference+" · 틀림 판명 "+c.disputed+" (검증 대화에 편승 — 추가 AI 호출 없음)","trusted "+c.trusted+" · unverified "+c.reference+" · disputed "+c.disputed+" (rides the verify chat — no extra AI calls)"):T("비어 있음 — 지도(②)가 생기면 그 예측이 여기서 자동 채점되며 쌓여요","empty — once a map (②) exists, its predictions get auto-graded and accrue here")));
-        addStep("#d9a441", T("④ 확정 교범 👤 선택","④ Field manual 👤 optional"), (ml&&ml.mapExists?T("확정 문서("+(ml.mapRel||"docs/MAP.md")+") 있음 — 도장 찍은 항목 "+(ml.mapApproved||0)+"개","manual ("+(ml.mapRel||"docs/MAP.md")+") exists — "+(ml.mapApproved||0)+" stamped items"):T("확정 문서("+((ml&&ml.mapRel)||"docs/MAP.md")+")가 아직 안 만들어졌어요 — 관찰 일지에서 '내보내기'를 누르는 순간 생성돼요(없어도 나머지 단계는 그대로 동작)","the manual ("+((ml&&ml.mapRel)||"docs/MAP.md")+") hasn't been created yet — it appears the moment you export from the journal (everything else runs without it)")));
-        // LLM 필수성 정직 고지(사용자 지적 2026-07-08: '한계 누락') — ②가 ③④의 유일한 자동 씨앗 원천이라는 구조적 사실.
-        safe(function(){
-          const warn=document.createElement("div"); warn.style.cssText="border:1px solid #9a6cdc;border-radius:5px;padding:7px 9px;margin:6px 0;font-size:11.5px";
-          warn.textContent=T("⚡ 알아두기: 이 축의 실질 성과는 'AI 정찰 실행(②)'에서 나와요 — 한 번도 실행하지 않으면 ①의 힌트만 동작하고 ②③④는 계속 비어 있습니다. self 팔은 별도 과금 없음(쓰시던 Claude로 실행 — Claude 사용량 범위), DeepSeek 팔은 선택입니다.","⚡ Note: this axis delivers real value through 'AI recon runs (②)' — if it never runs, only ①'s hints work and ②③④ stay empty. The self arm adds no separate billing (runs on the Claude you already use — within your Claude usage), the DeepSeek arm is optional.");
-          inner.appendChild(warn);
-        });
-        det.appendChild(inner);
-        box.appendChild(det);
-        // 자세히 보기(새탭) — summary '밖'에 배치(토글 충돌 방지). 대시보드와 별개 정적 안내 탭.
-        const gb=document.createElement("button"); gb.className="secondary"; gb.style.cssText="margin:4px 0 8px";
-        gb.textContent=T("정찰 구조 자세히 보기 (새탭)","Recon structure in detail (new tab)");
+        const sc=d.scope;
+        // 환경 안내 — "이 폴더에서 정찰이 얼마나 힘을 쓰나"를 한 문장으로(전문용어·괄호 겹침 제거)
+        let envLine;
+        if(sc && sc.note==="no-git") envLine=T("🏠 이 폴더는 과거 변경 기록이 없어요 — '예전에 같이 바뀌던 파일' 힌트는 못 쓰지만, 지도와 일지는 최근 수정 기준으로 잘 돌아가요.","🏠 This folder has no change history — 'changed-together' hints are unavailable, but maps & the journal work fine from recent edits.");
+        else if(sc && typeof sc.logCount==="number" && sc.logCount>=100) envLine=T("🏠 이 폴더는 변경 기록이 풍부해요 — 정찰이 제 성능을 낼 수 있는 환경입니다.","🏠 This folder has a rich change history — recon can perform at full strength here.");
+        else envLine=T("🏠 이 폴더는 기록이 아직 얕아요 — 과거 힌트는 조용할 수 있고, 지도부터 가치가 나옵니다.","🏠 This folder's history is still shallow — past hints may stay quiet; maps deliver value first.");
+        if(d.hasTestsDir===false) envLine += T(" (tests 폴더가 안 보여서 지도의 '확인할 테스트' 칸은 비어 나올 수 있어요.)"," (No tests/ folder found, so the map's 'tests to check' section may come back empty.)");
+        const env=add(envLine,"muted"); env.style.margin="0 0 6px";
+        // LLM 필수성 — 한 줄로 압축(정직 고지 유지)
+        add(T("⚡ 실질 효과는 '정찰 실행'에서 나와요 — 한 번도 안 돌리면 지도·일지·교범은 비어 있습니다(기본 팔은 별도 과금 없음).","⚡ Real value comes from recon actually running — if it never runs, maps/journal/manual stay empty (default arm adds no separate billing)."),"muted");
+        // 자세히 보기 — 주 버튼 승격(경고 모달·API 박스가 이 버튼을 참조)
+        const gb=document.createElement("button"); gb.style.cssText="margin:8px 0 10px;font-weight:700;padding:7px 16px";
+        gb.textContent=T("📖 정찰 구조 자세히 보기 (새탭)","📖 Recon structure in detail (new tab)");
         gb.addEventListener("click", function(){ vscode.postMessage({type:"openReconGuide"}); });
         box.appendChild(gb);
       });
@@ -2969,13 +2968,14 @@ class Dashboard {
     // AI 역할의 시각적 확인). 확장은 지도를 생성·전송하지 않는다 — 빈 게시판엔 생성 명령을 정직하게 안내.
     safe(function(){
       const box=$("scoutBox"); if(!box || box.style.display==="none") return; // 3트랙 카드가 보일 때만 이어붙임
-      const add=(txt,cls)=>{const el=document.createElement("div"); el.className=cls||"sbrow"; el.textContent=txt; box.appendChild(el); return el;};
-      (function(){ const h=add(T("영향지도(정찰 보고) ⚡ AI 호출 — 정찰 AI가 보낸 최근 지도","Impact maps (recon reports) ⚡ AI call — recent maps from the scout AI"),"sbhead"); h.style.cssText="border-left:3px solid #9a6cdc;padding-left:8px"; })();
+      const sec=document.createElement("div"); sec.className="rsec"; sec.style.borderLeft="3px solid #9a6cdc"; box.appendChild(sec); // 섹션 카드(디자인 분리 — 2026-07-09 지적 4)
+      const add=(txt,cls)=>{const el=document.createElement("div"); el.className=cls||"sbrow"; el.textContent=txt; sec.appendChild(el); return el;};
+      (function(){ const h=add(T("영향지도(정찰 보고) ⚡ AI 호출 — 정찰 AI가 보낸 최근 지도","Impact maps (recon reports) ⚡ AI call — recent maps from the scout AI"),"sbhead"); })();
       safe(function(){
         const det=keyedDetails("mapInfo", T("ⓘ 영향지도가 뭐예요?","ⓘ What is an impact map?"));
         const p=document.createElement("div"); p.className="muted";
         p.textContent=T("ⓘ 영향지도 = 지금 바꾸는 것이 어디까지 영향을 주는지 탐색 AI가 정리한 확인 목록(직접·간접 영향 후보, 확인할 테스트, 범위 밖으로 봐도 되는 것). 생성되면 이 게시판에 도착해요.","ⓘ Impact map = a checklist from the scout AI of how far your current change reaches (direct/indirect impact candidates, tests to check, safely out-of-scope). New maps land on this board.");
-        det.appendChild(p); box.appendChild(det);
+        det.appendChild(p); sec.appendChild(det);
       });
       const sm=d.scoutMaps;
       if(!sm || !sm.count){
@@ -3000,7 +3000,7 @@ class Dashboard {
         const pre=document.createElement("pre");
         pre.style.cssText="white-space:pre-wrap;max-height:340px;overflow:auto;font-size:11px";
         pre.textContent=sm.latest.text + (sm.latest.truncated?T("\\n… (길어서 접힘 — 전문은 브릿지 홈 scouts 폴더 파일)","\\n… (truncated — full text in the bridge home scouts folder)"):""); // ★백슬래시 두 겹 필수: 이 스크립트는 바깥 템플릿 안이라 한 겹이면 HTML 생성 시 실제 개행으로 변환돼 웹뷰 JS 전체가 문법 오류로 죽는다(2026-07-06 실사고 — tests/webview-syntax가 검출)
-        det.appendChild(pre); box.appendChild(det);
+        det.appendChild(pre); sec.appendChild(det);
       }
       add(T("ⓘ 이 게시판은 열람 전용(보는 것만으로는 아무것도 전송 안 됨) — 지도 생성·전송은 명령이 실행될 때만: 당신이 직접, 또는 3트랙 자동 지시를 받은 Claude가(같은 상태엔 1회 지시). 프로젝트별 최근 10장 보관.","ⓘ Read-only board (viewing sends nothing) — maps are generated/sent only when the command runs: by you directly, or by Claude on the 3-track auto-directive (issued once per state). Last 10 kept per project."),"muted");
     });
@@ -3033,6 +3033,17 @@ class Dashboard {
       if(ml.counts.excluded) chip(ml.counts.excluded,T("제외(차단·대체)","excluded"),"no");
       card.appendChild(chips);
       if(ml.dropped) { const w=document.createElement("div"); w.className="muted"; w.textContent=T("ⓘ 판독 불가 기록 "+ml.dropped+"줄은 건너뜀(집계에 안 섞임)","ⓘ "+ml.dropped+" unreadable record line(s) skipped (not counted)"); card.appendChild(w); }
+      // 확정 교범 설명(2026-07-09 지적 5: '이게 뭔지 모르겠다') — 왜 도장을 찍나·차이·자동 주입 아님을 평문으로
+      safe(function(){
+        const det=keyedDetails("manualInfo", T("📕 '확정 교범'이 뭐예요? — 도장 찍은 지식만 문서로","📕 What is the 'field manual'? — only stamped knowledge becomes a doc"));
+        const lines=[
+          T("일지(위 목록)는 이 컴퓨터에만 있는 자동 기억이에요. 그중 '이건 확실하다' 싶은 항목에 [교범에 기록] 도장을 찍으면 저장소 문서("+ml.mapRel+")에 한 줄로 박제됩니다.","The journal above is auto-memory on this PC only. Stamp an entry with [Export] and it gets engraved as one line in a repo doc ("+ml.mapRel+")."),
+          T("차이점: 일지=이 PC 전용·자동으로 변함 / 교범=저장소와 함께 이동(팀원·다른 PC 공유)·당신이 지우기 전엔 안 변함. 정찰 AI는 다음 지도를 그릴 때 교범을 '확정 사실'로 참고해요.","Difference: journal = this PC only, changes automatically / manual = travels with the repo (teammates, other PCs), never changes unless you edit it. The scout AI treats the manual as settled facts when drawing the next map."),
+          T("자동 주입 아니에요: 버튼을 누른 그 항목만, 누른 그 순간 1회 기록됩니다 — 뭔가가 계속 무단으로 쌓이지 않아요. 안 써도 나머지 단계는 그대로 동작합니다.","Not auto-injection: only the entry you click, once, at that moment — nothing keeps piling up on its own. Skip it entirely and everything else still works."),
+        ];
+        lines.forEach(function(tx){const p=document.createElement("div"); p.className="muted"; p.style.margin="4px 0"; p.textContent=tx; det.appendChild(p);});
+        card.appendChild(det);
+      });
       if(!ml.entries.length){
         const e=document.createElement("div"); e.className="muted";
         e.textContent=T("장부가 비어 있어요 — 정찰 지도가 '기억할 결합'(⑥)을 제안하면 자동으로 쌓입니다.","The ledger is empty — it fills automatically when scout maps propose section-⑥ couplings.");
