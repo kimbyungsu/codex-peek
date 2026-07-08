@@ -243,6 +243,7 @@ function loadContract(ws, lang) {
     // 브릿지는 아직 미사용(확장 대시보드 전용)이나 스키마 정합을 위해 양쪽 normalize(한쪽만 빠지면 동작 갈림 — SCOUT-TRACK 교훈).
     scoutMode: normScoutMode(o),
     scoutGate: normScoutGate(o), // 게이트(⑥ 실험) — off|plan. 확장 saveContract는 이 필드를 보존해야 함(스키마 정합)
+    scoutRepo: typeof o?.scoutRepo === "string" ? o.scoutRepo.trim() : "", // 정찰 대상 레포(P1 — cwd≠repo 해소). 빈 값=ws 그대로
   };
 }
 
@@ -282,6 +283,21 @@ const SCOUT_ADVICE_DIR = path.join(BRIDGE_DIR, "scout-advice"); // 상태 서명
 function wsKeyFor(ws) { // 계약 키·지도 보관함 키와 반드시 동일 규칙(sha1(normWs) 앞 16자)
   return crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16);
 }
+// ── 정찰 대상(scoutRepo) 해석(P1 — 세션 폴더≠개발 레포 해소) ──────────────
+// 계약의 scoutRepo(사용자 명시 지정)가 유효하면 정찰 계열(지도·꾸러미 대상·장부·확인신호·게이트)의 기준 경로가 된다.
+// 검증·연결·계약의 '연 폴더' 앵커는 불변 — 정찰 계열만 재해석. 무효(삭제·비존재)면 ws로 폴백(fail-open — 정찰이 죽지 않게).
+// git 여부는 여기서 판정하지 않음: 비-git 대상은 꾸러미 빌더가 무이력 모드로 정직 처리(기존 경로 그대로).
+function resolveScoutRepo(ws, c) {
+  try {
+    const raw = c && typeof c.scoutRepo === "string" ? c.scoutRepo.trim() : "";
+    if (!raw) return { repo: ws, source: "ws" };
+    if (!path.isAbsolute(raw)) return { repo: ws, source: "ws-fallback-invalid" }; // 상대경로 금지 — 훅·확장·CLI의 cwd가 제각각이라 기준이 흔들림(절대경로만 허용)
+    const abs = path.resolve(raw);
+    if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) return { repo: abs, source: "contract" };
+    return { repo: ws, source: "ws-fallback-invalid" }; // 지정값이 사라짐 — 정직 표시(소비자가 고지 가능)
+  } catch { return { repo: ws, source: "ws" }; }
+}
+
 // 최신 지도 상태: no-map(없음) / fresh(신선) / stale(지도 자신의 seed 파일이 지도 생성 후 더 바뀜 — 낡음)
 // / legacy-no-seeds(메타는 있으나 근거 파일 기록이 없어 신선도 판정 자체가 불가 — seedFiles 기록 도입 前 구버전 지도.
 //   실사고 2026-07-08: codex-peek 7/6 지도가 이 케이스라 'fresh' 오판 → 자동 지시 영구 침묵 → 장부 점화 실패).
@@ -309,10 +325,11 @@ function scoutMapStatus(ws) {
 function scoutBucket(n) { let b = 1; while (b * 2 <= n) b *= 2; return n > 0 ? b : 0; } // 1,2,4,8,… (n<1이면 0)
 function buildScoutDirective(ws, c) {
   if (!ws || normScoutMode(c) !== "on") return null;
-  const st = scoutMapStatus(ws);
+  const target = resolveScoutRepo(ws, c).repo; // P1: 정찰 계열은 계약 지정 대상 기준(지도 상태·재지시 기억·명령 경로 전부)
+  const st = scoutMapStatus(target);
   if (st.state === "fresh") return null;
   const bucket = st.state === "stale" ? scoutBucket(st.staleCount) : 0;
-  const f = path.join(SCOUT_ADVICE_DIR, wsKeyFor(ws) + ".json");
+  const f = path.join(SCOUT_ADVICE_DIR, wsKeyFor(target) + ".json");
   let prev = null;
   try {
     const raw = JSON.parse(fs.readFileSync(f, "utf8"));
@@ -335,7 +352,7 @@ function buildScoutDirective(ws, c) {
     : st.state === "legacy-no-seeds"
     ? "최신 지도에 근거 파일 기록이 없어 신선한지 낡았는지 판정할 수 없다(근거 기록 도입 전의 구버전 지도) — 재생성 권고"
     : "최신 지도 생성 이후 그 지도의 근거 파일 " + st.staleCount + "개가 더 바뀌어 지도가 낡았다";
-  return "[탐색(3트랙) 자동 지시 · 이 상태에 1회만] " + why + ". 이번 턴이 파일 변경을 동반하면 결론 전에 영향지도를 갱신하라 — codex-peek 소스 저장소에서 `node scripts/scope-scout-self.js \"" + ws + "\"` 실행(무료 self 팔 우선"
+  return "[탐색(3트랙) 자동 지시 · 이 상태에 1회만] " + why + ". 이번 턴이 파일 변경을 동반하면 결론 전에 영향지도를 갱신하라 — codex-peek 소스 저장소에서 `node scripts/scope-scout-self.js \"" + target + "\"` 실행(무료 self 팔 우선"
     + (hasKey ? " · 비교가 필요하다고 판단되면 scope-scout-deepseek.js 사용 가능 — 키 등록=자동 호출 동의됨" : "")
     + "). 사소한 턴(질문·문서 한 줄)이면 스킵해도 된다 — 지도는 참고용이며 아무것도 막지 않는다.";
 }
@@ -462,9 +479,10 @@ function ledgerPathsFromText(text) {
 // 낡은 지도는 버리지 않고 '낡음' 라벨로 정직 고지(시간 상수 0 — scoutMapStatus의 seed mtime 판정 재사용).
 function buildScoutAttach(ws, c, lang) {
   if (!ws || normScoutMode(c) !== "on") return null;
-  const st = scoutMapStatus(ws);
+  const target = resolveScoutRepo(ws, c).repo; // P1: 지도 조회도 정찰 대상 기준(세션 폴더가 비-git 부모여도 레포 지도를 씀)
+  const st = scoutMapStatus(target);
   if (st.state === "no-map" || !st.base) return null;
-  const dir = path.join(SCOUTS_DIR, wsKeyFor(ws));
+  const dir = path.join(SCOUTS_DIR, wsKeyFor(target));
   let md = "", meta = {};
   try { md = fs.readFileSync(path.join(dir, st.base + ".md"), "utf8"); } catch { return null; }
   try { meta = JSON.parse(fs.readFileSync(path.join(dir, st.base + ".json"), "utf8")); } catch { /* 메타 없어도 지도는 사용 가능 */ }
@@ -744,4 +762,4 @@ function formatForClaude(answer, lang) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, extractMapHighlights, extractMapPatches, buildScoutAttach, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, STATS_DIR, VERDICTS_FILE };

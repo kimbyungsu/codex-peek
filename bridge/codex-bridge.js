@@ -18,7 +18,7 @@ const { spawnSync, spawn } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -241,7 +241,11 @@ function flagLedgerConfirms(answer, ws, sessionId, execCwd) {
   try {
     const verdict = extractVerdict(answer);
     if (verdict !== "pass" && verdict !== "pass-notes") return;
-    const raw = readLedgerEventsText(ws);
+    // P1: 확인 신호는 '정찰 대상' 장부로 — 세션 폴더가 비-git 부모여도 개발 레포 장부에 쌓인다.
+    // (인용 경로 해석은 계속 execCwd 기준 — 실제 모델이 본 파일 기준. 장부 '기록 대상'만 재해석 — Codex 합의)
+    let target = ws;
+    try { target = resolveScoutRepo(ws, loadContract(ws)).repo; } catch { /* ws 유지(fail-open) */ }
+    const raw = readLedgerEventsText(target);
     if (!raw || !raw.trim()) return;
     // 원시 이벤트에서 sig→text 최소 집계(배포 사본은 out/ 유도기를 require 못 함). 제외는 보수적으로:
     // 반박/차단/대체/묘비 이력이 한 번이라도 있으면 확인 대상에서 뺀다(unban 등 순계산은 유도기 몫 — 여기선 과소확인 감수).
@@ -266,7 +270,7 @@ function flagLedgerConfirms(answer, ws, sessionId, execCwd) {
       // basename 8자 미만은 우연 일치 위험(index.ts류) → 제외(지도 채점기의 8자 규칙과 동일 근거)
       const bns = [...new Set(ledgerPathsFromText(text).map((p) => path.basename(p)))].filter((b) => b.length >= 8);
       const hit = bns.filter((b) => cited.has(b) && !unseen.has(b));
-      if (hit.length >= 2) appendLedgerEvent(ws, { ts: now, type: "confirmed", sig, from: `verify ${sessionId || "?"} ${verdict} — 실존 인용: ${hit.slice(0, 3).join(", ")}` });
+      if (hit.length >= 2) appendLedgerEvent(target, { ts: now, type: "confirmed", sig, from: `verify ${sessionId || "?"} ${verdict} — 실존 인용: ${hit.slice(0, 3).join(", ")}` });
     }
   } catch { /* best-effort — 장부 실패가 검증 흐름을 막지 않음 */ }
 }

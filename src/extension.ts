@@ -139,6 +139,7 @@ interface BridgeState {
   scoutMapStale: number | null;    // 낡은 지도 배지 — 최신 지도 생성 후 더 바뀐 seed 파일 수(판단 불가면 null·경고 아님)
   scoutLive: { arm: string; startedAt: string } | null; // 지도 생성중(러너 실행 동안만 — TTL로 잔존 걸러냄)
   deepseek: { hasKey: boolean; masked: string; model: string }; // 고급설정 탭 표시용 — 키 원문은 절대 웹뷰로 안 보냄(마스킹만)
+  scoutTarget: { repo: string; differs: boolean; invalid: boolean } | null; // P1 정찰 대상(계약 scoutRepo) — 카드 고지용. null=2트랙
   mapLedger: MapLedgerView | null; // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만). null=2트랙
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
   brainActual: { cc: string; cx: string }; // 두뇌 '실제 답'(대화 기록 실측) 표시 문구 — 경고 아닌 평시 정보(피커 표시 결함 실사고 2026-07-08). 기록 없으면 '기록 없음' 문구
@@ -241,6 +242,21 @@ interface Contract {
   verifyMode: VerifyMode;
   claudeInjectMode: InjectMode;
   scoutMode: ScoutMode;
+  scoutRepo?: string; // 정찰 대상 레포(P1 — 세션 폴더≠개발 레포 해소). 빈 값/부재=ws 그대로.
+  // ⚠ 대시보드 저장 페이로드는 이 필드를 만들지 않는다 — saveContract의 보존 병합(keep)이 CLI 설정값을 지킨다.
+}
+
+// 정찰 대상 해석 — ⚠ bridge/contract-lib.js resolveScoutRepo와 반드시 동일 규칙(3카피 규약 — 어긋나면 확장 카드와
+// 훅·러너가 서로 다른 서랍을 본다. tests/scout-target.test.js 패리티 단언이 고정). 검증·연결·계약 앵커는 불변.
+function scoutTargetFor(ws: string): { repo: string; source: string } {
+  try {
+    const raw = loadContract(ws).scoutRepo || "";
+    if (!raw) return { repo: ws, source: "ws" };
+    if (!path.isAbsolute(raw)) return { repo: ws, source: "ws-fallback-invalid" }; // 상대경로 금지 — contract-lib과 동일 규칙
+    const abs = path.resolve(raw);
+    if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) return { repo: abs, source: "contract" };
+    return { repo: ws, source: "ws-fallback-invalid" };
+  } catch { return { repo: ws, source: "ws" }; }
 }
 
 function loadContract(ws?: string | null, lang?: Lang): Contract {
@@ -263,6 +279,7 @@ function loadContract(ws?: string | null, lang?: Lang): Contract {
     verifyMode: normVerifyMode(o),
     claudeInjectMode: normInjectMode(o),
     scoutMode: normScoutMode(o),
+    scoutRepo: typeof o.scoutRepo === "string" ? o.scoutRepo.trim() : "",
   };
 }
 
@@ -977,6 +994,7 @@ function computeState(turnsN: number): BridgeState {
     scoutMaps,                          // 영향지도 게시판(3트랙에서만 — 러너가 보관한 지도 읽기 전용)
     scoutMapStale: computeScoutMapStale(ws, scope, scoutMaps), // 낡은 지도 배지 — 최신 지도 생성 후 더 바뀐 seed 파일 수(경고 아님·게시판 표기)
     scoutLive: readScoutLive(ws),       // 지도 생성중 신호(러너 실행 동안만 — 카드 '지금:'과 상태바 라벨)
+    scoutTarget: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const r = scoutTargetFor(ws); return { repo: r.repo, differs: normWs(r.repo) !== normWs(ws), invalid: r.source === "ws-fallback-invalid" }; } catch { return null; } })(),
     mapLedger: readMapLedger(ws),       // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만)
     deepseek: readDeepseekView(),       // 고급설정 탭 — 키 유무·마스킹(원문 미노출)
     brainActual: (({ cc, cx }) => ({ cc, cx }))(brainActualTexts(ws)), // 두뇌 '실제 답' 정보 문구(히어로) — sig는 상태바 전용이라 제외
@@ -993,13 +1011,14 @@ function computeState(turnsN: number): BridgeState {
 function computeScoutMapStale(ws: string | null, scope: ScopeState | null, maps: ScoutMapsView | null): number | null {
   try {
     if (!ws || !maps?.latest?.ts) return null;
+    const t = scoutTargetFor(ws).repo; // P1: seed 경로는 정찰 대상 기준(지도가 대상 레포에서 생성됨)
     const seeds = scope?.seeds?.length ? scope.seeds : (maps.latest.seedFiles || []);
     if (!seeds.length) return null;
     const mapAt = Date.parse(maps.latest.ts);
     if (!Number.isFinite(mapAt)) return null;
     let n = 0;
     for (const s of seeds.slice(0, 8)) {
-      try { if (fs.statSync(path.join(ws, s)).mtimeMs > mapAt) n++; } catch { /* 삭제된 seed 등 — 셈에서 제외 */ }
+      try { if (fs.statSync(path.join(t, s)).mtimeMs > mapAt) n++; } catch { /* 삭제된 seed 등 — 셈에서 제외 */ }
     }
     return n;
   } catch { return null; }
@@ -1340,17 +1359,18 @@ function readScopeState(ws: string | null): ScopeState | null {
   if (!ws) return null;
   try {
     if (loadContract(ws).scoutMode !== "on") return null; // 2트랙(기본) — 계산 자체를 안 함(무회귀·비용 0)
+    const t = scoutTargetFor(ws).repo; // P1: 변경 감지·통계는 정찰 대상 기준(세션 폴더가 비-git 부모여도 레포를 봄)
     const now = Date.now();
-    // 5s 스로틀 — 단 캐시가 '같은 프로젝트(ws)' 것일 때만 재사용(다른 프로젝트의 후보를 보여주는 오도 차단 — Codex 실패 지적).
-    // 시간 내 ws가 다르면 스로틀을 무시하고 새로 계산한다(프로젝트별 분리가 지연보다 우선).
-    const sameWs = !!(scopeCache && scopeCache.key.startsWith(normWs(ws) + "|"));
+    // 5s 스로틀 — 단 캐시가 '같은 프로젝트(대상)' 것일 때만 재사용(다른 프로젝트의 후보를 보여주는 오도 차단 — Codex 실패 지적).
+    // 시간 내 대상이 다르면 스로틀을 무시하고 새로 계산한다(프로젝트별 분리가 지연보다 우선).
+    const sameWs = !!(scopeCache && scopeCache.key.startsWith(normWs(t) + "|"));
     if (now - lastScopeCheck < 5000 && sameWs) return scopeCache!.val;
     lastScopeCheck = now;
     const checkedAt = new Date(now).toISOString(); // 이번 채굴 시각 — 캐시 반환 시엔 원래 값 유지(='최근 채굴')
-    const head = runGit(ws, ["rev-parse", "HEAD"]);
+    const head = runGit(t, ["rev-parse", "HEAD"]);
     if (!head.ok) { return { seeds: [], suggestion: null, note: "no-git", checkedAt, logCount: 0 }; }
     // -z: NUL 구분 — 공백·한글·따옴표 경로가 C-quote로 감싸져 깨지는 것 방지. rename/copy는 "XY new\0old\0" — old 토큰은 소비만.
-    const st = runGit(ws, ["status", "--porcelain", "-z"]);
+    const st = runGit(t, ["status", "--porcelain", "-z"]);
     if (!st.ok) return { seeds: [], suggestion: null, note: "error", checkedAt, logCount: 0 }; // 실패를 '변경 없음'으로 오도하지 않음(Codex 지적)
     const toks = st.out.split("\0").filter(Boolean);
     const seeds: string[] = [];
@@ -1361,13 +1381,13 @@ function readScopeState(ws: string | null): ScopeState | null {
       if (/[RC]/.test(status)) i++; // R/C가 어느 자리(index/worktree)에 있든 다음 토큰=옛 경로 — 소비만(Codex 지적: status[0]만 보면 불완전)
       if (p && !/\/$/.test(p)) seeds.push(p);
     }
-    const key = `${normWs(ws)}|${head.out.trim()}|${seeds.join(",")}`;
+    const key = `${normWs(t)}|${head.out.trim()}|${seeds.join(",")}`;
     if (scopeCache && scopeCache.key === key) return scopeCache.val;
     let val: ScopeState;
     if (!seeds.length) {
       val = { seeds: [], suggestion: null, note: "no-changes", checkedAt, logCount: 0 }; // 변경 없음 — seed가 없으니 지도도 없음(정직)
     } else {
-      const log = runGit(ws, ["log", "--no-merges", "--first-parent", "--pretty=format:%H|%ct|%s", "--name-only", "-n", "300"]);
+      const log = runGit(t, ["log", "--no-merges", "--first-parent", "--pretty=format:%H|%ct|%s", "--name-only", "-n", "300"]);
       if (log.ok) {
         const commits = parseGitLog(log.out);
         val = { seeds, suggestion: scopeSuggest(commits, seeds), note: "", checkedAt, logCount: commits.length };
@@ -1391,9 +1411,10 @@ function readScoutMaps(ws: string | null): ScoutMapsView | null {
   if (!ws) return null;
   try {
     if (loadContract(ws).scoutMode !== "on") return null; // 2트랙 — 게시판 자체를 안 보임(무회귀)
+    const t = scoutTargetFor(ws).repo; // P1: 게시판도 정찰 대상 서랍을 읽음
     const now = Date.now();
-    if (scoutMapsCache && scoutMapsCache.key === normWs(ws) && now - scoutMapsCache.at < 5000) return scoutMapsCache.val;
-    const dir = path.join(BRIDGE_DIR, "scouts", crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16));
+    if (scoutMapsCache && scoutMapsCache.key === normWs(t) && now - scoutMapsCache.at < 5000) return scoutMapsCache.val;
+    const dir = path.join(BRIDGE_DIR, "scouts", crypto.createHash("sha1").update(normWs(t)).digest("hex").slice(0, 16));
     let bases: string[] = [];
     try { bases = fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)).sort().reverse(); } catch { /* 지도 없음 */ }
     const items: ScoutMapItem[] = bases.slice(0, 5).map((b) => {
@@ -1414,7 +1435,7 @@ function readScoutMaps(ws: string | null): ScoutMapsView | null {
       } catch { /* 방금 지워졌을 수 있음 — 목록만 */ }
     }
     const val: ScoutMapsView = { count: bases.length, items, latest };
-    scoutMapsCache = { key: normWs(ws), at: now, val };
+    scoutMapsCache = { key: normWs(t), at: now, val };
     return val;
   } catch { return null; }
 }
@@ -1440,12 +1461,13 @@ const MAP_LEDGER_TEXT_CAP = 8000;
 const LEDGER_ENTRIES_CAP_UI = 12;  // 카드에 보이는 항목 상한(전체는 이벤트 파일이 원본)
 const LEDGER_TIMELINE_CAP_UI = 20; // 타임라인 상한
 let mapLedgerBump = 0; // 개입(고정/차단/내보내기) 직후 캐시 즉시 무효화(키에 포함 — TTL만으론 버튼 반응이 최대 5초 늦음)
-function ledgerEventsFileExt(ws: string): string { // contract-lib ledgerEventsFileFor와 동일 규칙(wsKey 3카피 규약)
-  return path.join(BRIDGE_DIR, "map-ledger-events", crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16) + ".jsonl");
+function ledgerEventsFileExt(ws: string): string { // contract-lib ledgerEventsFileFor와 동일 규칙(wsKey 3카피 규약). P1: 대상 기준
+  return path.join(BRIDGE_DIR, "map-ledger-events", crypto.createHash("sha1").update(normWs(scoutTargetFor(ws).repo)).digest("hex").slice(0, 16) + ".jsonl");
 }
-function mapLedgerFile(ws: string): string { // CLI mapFile()과 동일 순서: 기존 docs/MAP.md > 기존 MAP.md > 신설 docs/MAP.md
-  for (const c of ["docs/MAP.md", "MAP.md"]) { if (fs.existsSync(path.join(ws, c))) return path.join(ws, c); }
-  return path.join(ws, "docs", "MAP.md");
+function mapLedgerFile(ws: string): string { // CLI mapFile()과 동일 순서. P1: 확정층(MAP.md)은 정찰 대상 레포의 파일
+  const t = scoutTargetFor(ws).repo;
+  for (const c of ["docs/MAP.md", "MAP.md"]) { if (fs.existsSync(path.join(t, c))) return path.join(t, c); }
+  return path.join(t, "docs", "MAP.md");
 }
 function readMapLedgerUncached(ws: string): MapLedgerView {
   let raw = "";
@@ -1497,7 +1519,7 @@ const SCOUT_LIVE_TTL_MS = 10 * 60 * 1000;
 function readScoutLive(ws: string | null): { arm: string; startedAt: string } | null {
   if (!ws) return null;
   try {
-    const f = path.join(BRIDGE_DIR, "scout-live", crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16) + ".json");
+    const f = path.join(BRIDGE_DIR, "scout-live", crypto.createHash("sha1").update(normWs(scoutTargetFor(ws).repo)).digest("hex").slice(0, 16) + ".json"); // P1: 러너가 대상 경로로 신호를 남김
     const j = JSON.parse(fs.readFileSync(f, "utf8"));
     const at = Date.parse(j.startedAt || "") || 0;
     if (!at || Date.now() - at > SCOUT_LIVE_TTL_MS) return null;
@@ -1701,7 +1723,7 @@ class Dashboard {
           const record = (type: string, fromNote: string, failMsg?: string): boolean => {
             // failMsg: 경로별 정확한 사실 고지 — export처럼 '이미 다른 파일은 변경된 뒤'의 실패는 기본 문구("아무것도
             // 반영 안 됨")가 거짓이 되므로 호출부가 실제 상태를 말하는 문구를 넘긴다(Codex 반례 반영).
-            const okA = lib.appendLedgerEvent(ws, { ts: new Date().toISOString(), type, sig: item.sig, text: item.text, from: fromNote }) === true;
+            const okA = lib.appendLedgerEvent(scoutTargetFor(ws).repo, { ts: new Date().toISOString(), type, sig: item.sig, text: item.text, from: fromNote }) === true; // P1: 대상 장부에 기록
             if (!okA) vscode.window.showErrorMessage(failMsg || tE("장부 기록에 실패했어요(권한/디스크?) — 아무것도 반영되지 않았습니다.","Failed to write the ledger (permission/disk?) — nothing was applied."));
             return okA;
           };
@@ -2928,6 +2950,13 @@ class Dashboard {
       const info=document.createElement("div"); info.className="muted";
       info.textContent=T("영향지도의 발견이 자동으로 쌓이고, 검증이 확인하면 신뢰로 승격되고, 반박되면 스스로 강등됩니다 — 클릭 없이 굴러갑니다. 원하실 때만 고정(신뢰 강제)/차단(제외)/'확정 교범("+ml.mapRel+")'으로 내보내기(승격)로 개입하세요.","Impact-map findings accumulate automatically, get promoted on verification and demoted on dispute — no clicking required. Intervene only when you want: pin (force-trust), ban (exclude), or export (promote) into the 'field manual ("+ml.mapRel+")'.");
       card.appendChild(info);
+      if(d.scoutTarget && (d.scoutTarget.differs || d.scoutTarget.invalid)){
+        const tg=document.createElement("div"); tg.className="muted";
+        tg.textContent = d.scoutTarget.invalid
+          ? T("⚠ 계약에 지정된 정찰 대상 폴더를 찾을 수 없어 이 폴더 기준으로 동작 중 — node scripts/scope-target.js로 재지정하세요.","⚠ The configured scout target folder was not found — falling back to this folder. Re-set it via node scripts/scope-target.js.")
+          : T("정찰 대상: "+d.scoutTarget.repo+" (계약 지정 — 지도·일지·확인신호가 이 레포 기준으로 쌓임)","Scout target: "+d.scoutTarget.repo+" (set in contract — maps, journal and confirms accrue for this repo)");
+        card.appendChild(tg);
+      }
       const chips=document.createElement("div"); chips.className="mledchips";
       const chip=(n,label,cls)=>{const c=document.createElement("div");c.className="mchip "+(cls||"");const b=document.createElement("b");b.textContent=String(n);const s=document.createElement("span");s.textContent=label;c.appendChild(b);c.appendChild(s);chips.appendChild(c);};
       chip(ml.counts.trusted,T("신뢰(자동 반영)","trusted"),"ok");

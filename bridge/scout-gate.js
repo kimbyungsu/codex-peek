@@ -15,7 +15,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, scoutMapStatus, wsKeyFor, atomicWrite } = require("./contract-lib.js");
+const { loadContract, scoutMapStatus, wsKeyFor, atomicWrite, resolveScoutRepo } = require("./contract-lib.js");
 
 const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(os.homedir(), ".codex-bridge");
 const LOG_DIR = path.join(BRIDGE_DIR, "scout-gate-log");
@@ -40,14 +40,17 @@ function main(raw) {
   if (!ws) process.exit(0);
   const toolName = String(p.tool_name || "");
   const inputKeys = p.tool_input && typeof p.tool_input === "object" ? Object.keys(p.tool_input) : [];
-  // 실험 관측: 이 훅이 실제로 불렸다는 사실 자체가 1차 데이터(플랜 본문은 기록 안 함)
-  logObservation(ws, { ts: new Date().toISOString(), tool: toolName, inputKeys, session: String(p.session_id || "").slice(0, 12) });
+  // P1: 신선도·지시 경로는 '정찰 대상'(계약 scoutRepo — 세션 폴더≠개발 레포 해소) 기준. 계약 불명이면 ws 그대로.
+  let contract = {};
+  try { contract = loadContract(ws) || {}; } catch { /* 계약 불명 → 기본값 */ }
+  const target = (() => { try { return resolveScoutRepo(ws, contract).repo; } catch { return ws; } })();
+  // 실험 관측: 이 훅이 실제로 불렸다는 사실 자체가 1차 데이터(플랜 본문은 기록 안 함). 세션 폴더와 대상을 둘 다 남김.
+  logObservation(ws, { ts: new Date().toISOString(), tool: toolName, inputKeys, session: String(p.session_id || "").slice(0, 12), ...(target !== ws ? { target } : {}) });
   if (toolName !== "ExitPlanMode") process.exit(0); // matcher가 보장하지만 방어적으로
-  let gate = "off";
-  try { gate = (loadContract(ws) || {}).scoutGate || "off"; } catch { /* 계약 불명 → off */ }
+  const gate = contract.scoutGate || "off";
   if (gate !== "plan") process.exit(0);
   let st = { state: "fresh", staleCount: 0 };
-  try { st = scoutMapStatus(ws); } catch { process.exit(0); } // 판정 불가 → fail-open
+  try { st = scoutMapStatus(target); } catch { process.exit(0); } // 판정 불가 → fail-open
   if (st.state === "fresh") process.exit(0);
   // 세션당 차단 상한
   const session = String(p.session_id || "nosession");
@@ -62,7 +65,7 @@ function main(raw) {
   const why = st.state === "no-map" ? "이 프로젝트에 영향지도가 아직 없다"
     : st.state === "legacy-no-seeds" ? "최신 지도에 근거 파일 기록이 없어 신선도를 판정할 수 없다(구버전 지도 — 재생성 필요)"
     : `최신 지도 생성 후 근거 파일 ${st.staleCount}개가 더 바뀌어 지도가 낡았다`;
-  process.stderr.write(`[탐색 게이트 · plan 실험] 플랜 확정 전에 영향지도부터 — ${why}. codex-peek 소스 저장소에서 \`node scripts/scope-scout-self.js "${ws}"\` 실행 후 다시 플랜을 확정하라. (이 게이트는 세션당 ${BLOCKS_PER_SESSION}회까지만 막고 이후 통과 · 끄기: node scripts/scope-gate.js "${ws}" off)\n`);
+  process.stderr.write(`[탐색 게이트 · plan 실험] 플랜 확정 전에 영향지도부터 — ${why}. codex-peek 소스 저장소에서 \`node scripts/scope-scout-self.js "${target}"\` 실행 후 다시 플랜을 확정하라. (이 게이트는 세션당 ${BLOCKS_PER_SESSION}회까지만 막고 이후 통과 · 끄기: node scripts/scope-gate.js "${ws}" off)\n`);
   process.exit(2); // 차단 — stderr가 Claude에게 피드백됨(공식 문서 명시)
 }
 

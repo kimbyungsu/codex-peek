@@ -177,15 +177,21 @@
    deriveLedger 유도 정상). +codex-peek에 3트랙 계약 생성(ko·en 양 슬롯 — en 전환 시 유실 방지).
    ⚠입구 전수(정정): proposed=러너·백필 / attached=꾸러미 빌더 / confirmed=검증 통과 자동(장부 비면 불가) /
    pinned·banned·unpinned·unbanned·exported=**대시보드 개입 경로도 있음**(extension.ts ledgerAct) / user_dispute=발화 CLI.
-   ⚠남은 배치 한계(미해결·결정 필요): 세션 cwd≠개발 레포면 ask의 ws가 cwd를 따라가 지도 동봉·confirmed가
-   개발 레포 장부로 안 흐름 — 해법 후보(레포에서 세션 열기 관행 vs ws→git 루트 재해석)는 별도 결정.
+   ⚠남은 배치 한계였던 세션 cwd≠개발 레포 문제는 → **4-3에서 결정·구현(scoutRepo)로 종결**(2026-07-08).
 4-2. **(방향 확정 2026-07-08) Reconciler(정리자 — 통합·분할·확대·축소·폐기)는 점화·축적 '뒤'.** 외부 대화
    제안(하네스 후보화→LLM 정리 제안→검증→이벤트 적재)은 타당하나 '다음 실험 전에 먼저'는 기각 — 전제(축적 잡음)가
    실측(0건)과 어긋났음. R0(조작 표현)는 새 이벤트 타입 신설 없이 기존 조합(선택 A: 새 문장 proposed + 옛 문장
    superseded / retire=tombstone / ban=banned)으로 표현 가능 — split만 향후 newSigs[] 검토. R1+(후보 생성기·
    LLM 제안·scope-curate CLI)는 장부에 실데이터가 쌓인 뒤 착수.
-4-3. **(미해결 결정 — 2026-07-08 실측)** 세션 cwd≠개발 레포면 ask의 ws가 cwd를 따라가 지도 동봉·confirmed가 개발
-   레포 장부로 안 흐른다. 해법 후보: 레포에서 세션 열기 관행(임시 권장) vs ws→git 루트 재해석(재설계·별도 결정).
+4-3. **(결정·구현 2026-07-08 — P1)** 세션 cwd≠개발 레포 문제 종결: 계약에 **scoutRepo(정찰 대상) 명시 필드**.
+   결정 근거(사용자 승인+검증 합의): 관행 의존은 재발 위험, 전면 ws 재해석은 앵커 재설계 — 절충으로 **정찰 계열만**
+   (지도·꾸러미 대상·변경감지 통계·관찰 일지·confirmed·플랜 게이트·자동지시 경로) 대상을 따르고 검증·연결·계약 앵커는 불변.
+   구현: contract-lib `resolveScoutRepo`(절대경로·존재 검증·무효 시 ws 폴백 ws-fallback-invalid) + buildScoutDirective/
+   buildScoutAttach/scoutMapStatus 호출부·codex-bridge flagLedgerConfirms(장부 기록 대상만 — 인용 해석은 execCwd 유지)·
+   scout-gate(신선도·지시 명령=대상, 관측 로그에 ws·target 병기)·extension 정찰 판독기 전부(scoutTargetFor — 3카피 패리티
+   테스트 잠금)+카드에 대상 고지. CLI: `scripts/scope-target.js`(status/set/auto[직하위 1단계 유일 git 루트만 자동·복수는
+   나열]/clear — ko·en 슬롯 동시) · `scripts/scope-ledger-migrate.js`(서랍 이관 — dry 선행·복사 보존·ts+type+sig 중복
+   스킵=멱등). 테스트 `tests/scout-target.test.js`(28단언 — 상대경로 무효·빈 .git 오판·기존 지정 잔존 반례 잠금 포함).
 4-4. **(후속 문서 정리)** README ko 본문 일부에 '함께-변경 통계·커밋 이력' 등 옛 표현 잔존(동작 오도 아님 —
    Codex 확인). UI는 '정찰 흐름' 사람 언어로 전거 완료(옛 용어 잔재는 테스트 부정 단언으로 잠김) — 문서만 후속.
 5. **(관찰) 관측 장부 실데이터 축적** — confirmed/user_dispute가 쌓이면: DERIVE_V1 임계(현재 최약 1회) 데이터 기반
