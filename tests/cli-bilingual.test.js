@@ -45,7 +45,7 @@ const tgtKo = run(homeKo, [cli("scope-target.js"), wsKo, "status"]);
 ok(tgtKo.status === 0 && /정찰 대상:/.test(tgtKo.stdout), "scope-target status → 한국어 기본(정찰 대상)");
 
 console.log("[3] 소스 잠금 — tB/loadLang 한/영 쌍 패턴 유지(문구 단일화 회귀 방지)");
-for (const f of ["scope-target.js", "scope-gate.js", "scope-ledger-migrate.js", "scope-ledger-note.js", "scope-reconcile.js"]) {
+for (const f of ["scope-target.js", "scope-gate.js", "scope-ledger-migrate.js", "scope-ledger-note.js", "scope-reconcile.js", "scope-scout-self.js", "scope-scout-deepseek.js"]) {
   const s = fs.readFileSync(cli(f), "utf8");
   ok(/const tB = \(ko, en\) => \(loadLang\(\) === "en" \? en : ko\)/.test(s) && /loadLang/.test(s), `${f}: tB(ko,en) 헬퍼 + loadLang 연동`);
   const badLines = s.split(/\r?\n/).filter((l) => /(console\.(log|error)|process\.std(out|err)\.write)\(/.test(l) && /[가-힣]/.test(l) && !/tB\(/.test(l));

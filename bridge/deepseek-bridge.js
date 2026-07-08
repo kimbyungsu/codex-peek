@@ -101,6 +101,8 @@ async function main() {
     if (!cfg.apiKey) { console.error(NO_KEY_MSG); process.exit(1); }
     // ping의 목적은 키·주소·모델의 실응답 확인 — 본문 유무는 묻지 않는다(추론 모델은 짧은 상한에서 content가 비는 게 정상).
     const r = await callChat(cfg, { model: cfg.model, messages: [{ role: "user", content: "ping" }], max_tokens: 128, temperature: 0, stream: false }, 30000, { allowEmptyContent: true });
+    // 연결 점검도 과금 대상 호출 — 비용 장부에 기록(ws 무관 전역 · contract-lib은 같은 폴더 배포, 실패는 무해)
+    if (r.usage) { try { require(path.join(__dirname, "contract-lib.js")).appendScoutUsage({ ts: new Date().toISOString(), workspace: "", arm: "ping", model: r.model || cfg.model, usageIn: r.usage.prompt_tokens ?? null, usageOut: r.usage.completion_tokens ?? null }); } catch { /* 무해 */ } }
     console.log(`ok — ${r.model} 응답 수신(${r.content ? "본문" : r.reasoning ? "추론만(정상 — 상한 내)" : "빈 응답"})${r.usage ? ` tokens in=${r.usage.prompt_tokens} out=${r.usage.completion_tokens}` : ""}`);
     return;
   }

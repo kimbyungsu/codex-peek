@@ -134,6 +134,33 @@ function trimVerdicts(maxDays = 60) {
     return kept.length;
   } catch { return -1; } // 파일 없음 등 — best-effort(검증 흐름 안 막음)
 }
+// ── 정찰(3트랙) 비용 기록 — 2026-07-09 사용자 요구 "토큰·턴수를 투명하게, 비용 추정 가능하게" ──
+// 지도 메타(.json)는 프로젝트당 최근 10장만 남아 누적 비용 산출이 불가(실사고 감사) → verdicts와 동일한
+// append-only + 60일 트림 패턴의 별도 장부. 스키마: {ts, workspace, arm(self|deepseek|ping), model,
+// usageIn, usageOut(토큰 — self는 null: claude -p text 출력이 사용량을 안 줌), pkgChars, mapChars(문자수 — self 추정 재료)}.
+const SCOUT_USAGE_FILE = path.join(STATS_DIR, "scout-usage.jsonl");
+function trimScoutUsage(maxDays = 60) {
+  try {
+    const raw = fs.readFileSync(SCOUT_USAGE_FILE, "utf8");
+    const cut = Date.now() - maxDays * 24 * 60 * 60 * 1000;
+    const kept = [];
+    for (const ln of raw.split(/\r?\n/)) {
+      if (!ln.trim()) continue;
+      try { const o = JSON.parse(ln); const t = Date.parse(o.ts || ""); if (Number.isFinite(t) && t >= cut) kept.push(ln); } catch { /* 깨진 줄 폐기 */ }
+    }
+    fs.writeFileSync(SCOUT_USAGE_FILE, kept.length ? kept.join("\n") + "\n" : "", "utf8");
+  } catch { /* 파일 없음/잠김 — 다음 기회 */ }
+}
+function appendScoutUsage(ev) {
+  try {
+    if (!ev || !ev.arm) return false;
+    fs.mkdirSync(STATS_DIR, { recursive: true });
+    fs.appendFileSync(SCOUT_USAGE_FILE, JSON.stringify(ev) + "\n", "utf8");
+    trimScoutUsage(60);
+    return true;
+  } catch { return false; } // best-effort — 비용 기록 실패가 지도 생성 흐름을 막지 않음
+}
+
 function appendVerdict(ev) {
   try {
     fs.mkdirSync(STATS_DIR, { recursive: true });
@@ -833,4 +860,4 @@ function formatForClaude(answer, lang) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };

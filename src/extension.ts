@@ -4,7 +4,7 @@ import * as os from "os";
 import * as path from "path";
 import * as crypto from "crypto";
 import { spawn } from "child_process";
-import { computeVerifyStats, VerifyStats, CodexTokens, parseSessionTokens, ClaudeTokens, sumClaudeUsage, computeProjectStats, ProjectStat } from "./verify-stats";
+import { computeVerifyStats, VerifyStats, CodexTokens, parseSessionTokens, ClaudeTokens, sumClaudeUsage, computeProjectStats, ProjectStat, computeScoutCosts, ScoutCosts } from "./verify-stats";
 import * as hookSetup from "./hook-setup";
 import { localizeIntegrityDetail } from "./integrity-i18n";
 import { parseLastModelCommand, parseLastAssistantModel, parseSessionStartTs, resolveCcIntent, modelFamily, shouldAttributeSettingsChange, pruneIntentMap, ageLabel } from "./brain-intent";
@@ -133,6 +133,7 @@ interface BridgeState {
   live: LiveStage | null;      // 검증 파이프라인 라이브 단계(없으면 대기) — 상태바·진행 스트립
   verifyTimeoutMin: number;    // 검증(codex) 대기시간(분) — 저장값 또는 기본 8. 브릿지 verifyTimeoutMin과 같은 규칙.
   verifyStats: VerifyStats;    // 탭2 검증 통계(기간별 분포·전환·히트맵) — verify-stats.ts computeVerifyStats 결과
+  scoutCosts: ScoutCosts;      // 정찰(3트랙) 비용 28일 합계 — scout-usage.jsonl(지도 프루닝과 무관 · 60일 보존)
   codexTokens: CodexTokens | null; // 연결 코덱스 세션 누적 토큰(없으면 null) — 검증 비용 카드
   claudeTokens: ClaudeTokens;      // 이 폴더 클로드 대화기록 28일 토큰 + 턴수 — 작업 비용(코덱스 검증 비용과 분리)
   projectStats: Record<string, ProjectStat>; // 프로젝트별 비교(3c) — 모든 폴더 28일 검증 분포(전체 group-by, 이 폴더 통계와 별개)
@@ -153,9 +154,7 @@ function normWs(p: string): string {
   return path.normalize(p || "").replace(/[\\/]+$/, "").toLowerCase().normalize("NFC");
 }
 
-function currentWorkspace(): string | null {
-  return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
-}
+
 
 // '지금 Claude가 실제 도는 폴더'(훅이 active.json에 기록). 대시보드/상태바는 VS Code 첫 폴더가 아니라
 // 이걸 우선해, 보여주는 세션이 검증이 실제 가는 세션과 일치하게 한다. 없으면 VS Code 폴더로 폴백.
@@ -608,6 +607,14 @@ function readVerifyStats(ws: string | null, now = Date.now()) {
   try { raw = fs.readFileSync(VERDICTS_FILE, "utf8"); } catch { /* 아직 검증 기록 없음 → 빈 통계 */ }
   return computeVerifyStats(raw, now, ws, normWs);
 }
+// 정찰(3트랙) 비용 판독 — scout-usage.jsonl(러너·ping이 append) → 28일 팔별 합계. 프로젝트별 원칙 동일.
+function readScoutCosts(ws: string | null, now = Date.now()): ScoutCosts {
+  if (!ws) return computeScoutCosts("", now, "", normWs);
+  let raw = "";
+  try { raw = fs.readFileSync(path.join(BRIDGE_DIR, "stats", "scout-usage.jsonl"), "utf8"); } catch { /* 아직 기록 없음 */ }
+  // P1: 지도 기록의 workspace는 '정찰 대상' — 세션 폴더가 아니라 대상 레포 기준으로 걸러야 실측과 일치
+  return computeScoutCosts(raw, now, scoutTargetFor(ws).repo, normWs);
+}
 function ackIntegrity(ids: string[] | "all"): boolean {
   const events = readIntegrity();
   const set = ids === "all" ? null : new Set(ids);
@@ -720,7 +727,7 @@ ${card("#3ca89a", "⚙", "변경 감지", "Change sensing", [[tE("무엇", "what
 <div class="arrow">→</div>
 ${card("#9a6cdc", "⚡", "영향지도", "Impact map", [[tE("무엇", "what"), tE("이 변경이 어디까지 번질지 미리보기(확인 목록)", "a preview/checklist of how far the change reaches")], [tE("누가", "who"), tE("정찰 LLM — 직접 또는 자동 지시로 실행", "scout LLM — run directly or via auto-directive")], [tE("비용", "cost"), tE("self 팔=별도 과금 없음(쓰시던 Claude 사용량 범위) · DeepSeek 팔은 키 등록 시(=동의)", "self arm = no separate billing (within the Claude usage you already have) · DeepSeek arm only with a key (=consent)")], [tE("저장", "store"), tE("보관함(최근 10장) → 영향지도 카드", "archive (last 10) → impact-map card")]])}
 <div class="arrow">→</div>
-${card("#3ca89a", "⚙", "관찰 일지", "Field journal", [[tE("무엇", "what"), tE("지도의 제안이 검증을 지나며 맞음/틀림으로 자동 분류", "map suggestions auto-classified right/wrong through verification")], [tE("누가", "who"), tE("자동 — 검증 대화에 편승(추가 LLM 호출 0)", "automatic — rides the verify chat (0 extra LLM calls)")], [tE("신분", "states"), tE("미검증 → 신뢰(검증 확인) / 틀림 판명(반박·발화)", "unverified → trusted (confirmed) / disputed (refuted/spoken)")], [tE("개입", "override"), tE("선택: 고정·차단·내보내기", "optional: pin · ban · export")]])}
+${card("#3ca89a", "⚙", "관찰 일지", "Field journal", [[tE("무엇", "what"), tE("지도의 제안이 검증을 지나며 맞음/틀림으로 자동 분류", "map suggestions auto-classified right/wrong through verification")], [tE("누가", "who"), tE("자동 — 검증 대화에 편승(추가 LLM 호출 0)", "automatic — rides the verify chat (0 extra LLM calls)")], [tE("신분", "states"), tE("미검증 → 신뢰(검증 확인) / 틀림 판명 — 단 반박 뒤 재확인(사람 1회·검증 2회)이 쌓이면 복권", "unverified → trusted (confirmed) / disputed — rehabilitated if re-confirmed after (1 human / 2 verify)")], [tE("개입", "override"), tE("선택: 고정·차단·내보내기", "optional: pin · ban · export")]])}
 <div class="arrow">→</div>
 ${card("#d9a441", "👤", "확정 교범", "Field manual", [[tE("무엇", "what"), tE("도장 찍은 결합만 저장소 문서(docs/MAP.md)로", "only stamped couplings become repo docs (docs/MAP.md)")], [tE("누가", "who"), tE("사람 — 원할 때만(선택)", "human — only when you want (optional)")], [tE("효과", "effect"), tE("다음 정찰·검증의 확정 지식 입력", "trusted input for future recon & verification")], [tE("없으면?", "if absent"), tE("아무 문제 없음 — ①~③은 그대로 자동", "totally fine — ①–③ keep running automatically")]])}
 </div>
@@ -744,7 +751,7 @@ ${card("#d9a441", "👤", "확정 교범", "Field manual", [[tE("무엇", "what"
   <path class="ln" d="M 74 82 C 74 110 80 130 110 150" marker-end="url(#ah)"/>
   <rect class="bx" x="250" y="250" width="420" height="88" stroke="#3ca89a"/><text class="t1" x="262" y="270">${tE("📔 ③ 관찰 일지 — 자동 기억(이 PC)", "📔 ③ Field journal — auto memory (this PC)")}</text>
   <text class="t2" x="262" y="288">${tE("✚ 제안(지도가 발견) ▶ 동봉(자료에 실림) ✔ 확인(검증이 인정) ✖ 반박(틀림 판명)", "✚ proposed (map finds) ▶ attached (packed) ✔ confirmed (verify agrees) ✖ disputed")}</text>
-  <text class="t2" x="262" y="304">${tE("신분: 미검증(참고) → 신뢰(자동 반영) / 틀림 판명(제외·재실수 방지)", "states: unverified (reference) → trusted (auto-fed) / disputed (excluded)")}</text>
+  <text class="t2" x="262" y="304">${tE("신분: 미검증(참고) → 신뢰(자동 반영) / 틀림 판명(제외 — 반박 뒤 재확인 쌓이면 복권)", "states: unverified (reference) → trusted (auto-fed) / disputed (excluded — rehabilitated on later re-confirms)")}</text>
   <text class="t2" x="262" y="320">${tE("👤 개입(선택): 고정=신뢰 강제 · 차단=제외 — 안 눌러도 굴러감", "👤 optional: pin = force-trust · ban = exclude — runs fine untouched")}</text>
   <path class="ln" d="M 800 82 C 860 140 820 220 670 268" marker-end="url(#ah)"/><text class="lb" x="812" y="180">${tE("발견을 제안으로", "findings → proposals")}</text>
   <path class="ln" d="M 481 206 L 481 246" marker-end="url(#ah)"/><text class="lb" x="489" y="232">${tE("확인/반박", "confirm/refute")}</text>
@@ -755,7 +762,7 @@ ${card("#d9a441", "👤", "확정 교범", "Field manual", [[tE("무엇", "what"
   <path class="ln fb" d="M 250 300 C 120 340 150 120 342 80" marker-end="url(#ah)"/><text class="lb" x="128" y="238">${tE("신뢰분이 다음 꾸러미로", "trusted feeds next pack")}</text>
   <path class="ln fb" d="M 728 400 C 300 460 240 200 350 96" marker-end="url(#ah)"/><text class="lb" x="300" y="430">${tE("교범도 다음 꾸러미의 확정 사실로", "manual feeds next pack as settled fact")}</text>
 </svg>
-<div class="sub">${tE("한눈 요약: 지도(⚡ 1회)가 발견을 내고 → 검증이 그 발견을 채점하고 → 일지가 스스로 기억하고 → 확실해진 것만 당신이 도장 찍어 문서로 남깁니다. 사람 개입 지점은 👤 세 곳(고정·차단·도장)과 게이트 스위치뿐 — 전부 선택입니다.", "In one line: the map (one ⚡ call) makes findings → verification grades them → the journal remembers by itself → you stamp only what's proven into a doc. Human touchpoints are the three 👤 spots (pin · ban · stamp) plus the gate switch — all optional.")}</div>
+<div class="sub">${tE("한눈 요약: 지도(⚡ 1회)가 발견을 내고 → 검증이 그 발견을 채점하고 → 일지가 스스로 기억하고(틀림도 반박 뒤 재확인이 쌓이면 복권) → 확실해진 것만 당신이 도장 찍어 문서로 남깁니다. 사람 개입 지점은 👤 세 곳(고정·차단·도장)과 게이트 스위치, 그리고 원하면 '단계별 기본 원칙' ④칸의 정찰 태도 편집 — 전부 선택입니다.", "In one line: the map (one ⚡ call) makes findings → verification grades them → the journal remembers by itself (even 'wrong' entries rehabilitate on later re-confirms) → you stamp only what's proven into a doc. Human touchpoints are the three 👤 spots (pin · ban · stamp), the gate switch, and optionally editing the scout attitude in Stage Baselines slot ④ — all optional.")}</div>
 <h1 style="margin-top:20px">${tE("프로젝트 유형별 — 기대할 수 있는 실효성", "By project type — what to realistically expect")}</h1>
 <div class="sub">${tE("유형은 구조로 판단하세요(이름이 아니라). '참고 실측'은 이 도구를 만들며 그 유형에서 실제 운용해 확인한 사례입니다.", "Judge by structure, not by name. 'Reference run' notes where this tool was actually operated on that shape during development.")}</div>
 <div class="types" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;margin:12px 0">
@@ -1032,6 +1039,7 @@ function computeState(turnsN: number): BridgeState {
     live: computeLiveStage(linkedId),
     verifyTimeoutMin: clampVerifyTimeout(links.settings?.verifyTimeoutMin),
     verifyStats: readVerifyStats(ws), // 탭2 검증 통계(기간별 분포·전환·히트맵) — 이 폴더(ws) 기준
+    scoutCosts: readScoutCosts(ws),   // 정찰 비용(28일 · 팔별) — 사용자 비용 추정용 투명 기록(2026-07-09)
     codexTokens,                      // 연결 코덱스 세션 누적 토큰(검증 비용 카드)
     claudeTokens: readClaudeTokens(ws), // 이 폴더 클로드 작업 토큰(28일) — 코덱스와 분리
     projectStats: readProjectStats(),   // 프로젝트별 비교(전체 폴더 28일)
@@ -1850,18 +1858,6 @@ class Dashboard {
           this.post();
           this.panel?.webview.postMessage({ type: "saveResult", target: "deepseek", ok });
         }
-        if (m?.type === "saveScoutBaseline" || m?.type === "resetScoutBaseline") {
-          let ok = false;
-          try {
-            const slotLang = m.lang === "ko" || m.lang === "en" ? m.lang : undefined;
-            ok = m.type === "resetScoutBaseline"
-              ? bridgeLib()?.resetScoutBaseline?.(slotLang) === true
-              : bridgeLib()?.saveScoutBaseline?.(String(m.text || ""), slotLang) === true;
-          } catch { ok = false; }
-          if (!ok) vscode.window.showErrorMessage(tE("정찰 기본 원칙 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 시도해 주세요.","Failed to save the scout baseline — file locked or inaccessible. Try again shortly."));
-          this.post();
-          this.panel?.webview.postMessage({ type: "saveResult", target: "scoutBase", ok });
-        }
         if (m?.type === "saveBase") {
           let ok = false;
           try {
@@ -2435,6 +2431,9 @@ class Dashboard {
           <div class="stat-card s-purple"><div class="stat-num" id="siGuard">–</div><div class="stat-lbl">${t("틀림 판명(재실수 방지 각주행) · 복권", "judged wrong (mistake guard) · rehabilitated")}</div></div>
         </div>
         <div class="muted" style="font-size:11px">${t("ⓘ 정직 고지: 이건 '2트랙이었다면 놓쳤을 것'의 증명이 아니라, 정찰→검증→기억 루프가 실제로 돌았는지의 관찰 신호예요. '검증 지적이 동봉 지도를 짚었는지' 대조와 '게이트 차단→플랜 수정' 추적은 기록을 새로 심어야 해서 후속입니다.", "ⓘ Honest note: this doesn't prove 'what 2-track would have missed' — it observes whether the recon→verify→memory loop actually ran. Matching verify findings against attached maps, and gate-block→plan-change tracking, need new recording and come later.")}</div>
+        <h3 class="chart-h" style="margin-top:12px">${t("정찰(3트랙) 비용 — 최근 28일 표시 (장부는 60일 보존 · 지도 10장 보관과 무관)", "Recon (3-track) cost — last 28 days shown (log kept 60 days · independent of map pruning)")}</h3>
+        <div id="scoutCostRows"></div>
+        <div class="muted" style="font-size:11px">${t("ⓘ DeepSeek 팔·연결 점검은 응답이 알려준 실측 토큰(입력/출력)이고, 무료 팔(self)은 쓰시던 Claude 구독으로 돌아 별도 결제가 없으며 도구가 토큰 수를 알려주지 않아 자료·지도 '글자 수'만 기록해요(토큰 아님 — 대략 추정용).", "ⓘ DeepSeek arm & connection checks show real tokens (in/out) from the API response; the self arm runs on your existing Claude subscription (no separate billing) and the tool doesn't report tokens, so only character counts of package/map are recorded (not tokens — rough estimation only).")}</div>
       </div>
       <div class="stat-chart">
         <div class="chart-box">
@@ -2876,6 +2875,18 @@ class Dashboard {
       $("siAttached").textContent=String(im.attached);
       $("siConfirmed").textContent=String(im.confirmed);
       $("siGuard").textContent=String(im.disputedEv)+" · "+String(im.rehabilitated);
+      // 정찰 비용 행(28일 · 팔별) — 사용자 비용 추정용(2026-07-09). fmtTok는 renderStats 내부라 여기선 천단위 구분만.
+      const rows=$("scoutCostRows"); if(!rows) return;
+      while(rows.firstChild) rows.removeChild(rows.firstChild);
+      const sc=d.scoutCosts && d.scoutCosts.byArm ? d.scoutCosts.byArm : {};
+      const nf=function(n){ return Number(n||0).toLocaleString(); };
+      const addRow=function(label,val){ const r=document.createElement("div"); r.className="muted"; r.style.margin="2px 0"; r.textContent=label+" — "+val; rows.appendChild(r); };
+      const ds=sc["deepseek"];
+      addRow(T("DeepSeek 지도","DeepSeek maps"), ds ? T(ds.count+"건 · 입력 "+nf(ds.usageIn)+" tok · 출력 "+nf(ds.usageOut)+" tok", ds.count+" run(s) · in "+nf(ds.usageIn)+" tok · out "+nf(ds.usageOut)+" tok") : T("0건","0 runs"));
+      const pg=sc["ping"];
+      addRow(T("연결 점검(3트랙 켤 때 1회·전역)","Connection checks (once per 3-track enable · global)"), pg ? T(pg.count+"건 · 입력 "+nf(pg.usageIn)+" tok · 출력 "+nf(pg.usageOut)+" tok", pg.count+" check(s) · in "+nf(pg.usageIn)+" tok · out "+nf(pg.usageOut)+" tok") : T("0건","0 checks"));
+      const sf=sc["self"];
+      addRow(T("무료 팔(self) 지도 — 별도 결제 없음","Self-arm maps — no separate billing"), sf ? T(sf.count+"건 · 자료 "+nf(sf.pkgChars)+"자 · 지도 "+nf(sf.mapChars)+"자(토큰 아님)", sf.count+" run(s) · package "+nf(sf.pkgChars)+" chars · map "+nf(sf.mapChars)+" chars (not tokens)") : T("0건","0 runs"));
     });
     safe(()=>renderTokens(d.codexTokens));         // 토큰 카드 갱신(연결 코덱스 세션 누적)
     safe(()=>renderClaudeTokens(d.claudeTokens));  // 클로드 작업 토큰+턴수(이 폴더 28일)
@@ -3254,7 +3265,7 @@ class Dashboard {
       const sp=d.scoutPrompt; if(!sp) return;
       if (!holdB && document.activeElement !== $("bScout") && !baseDirty.scout) $("bScout").value = sp.baseline||"";
       const sov=$("bScoutOv"); if(sov) sov.textContent = sp.overridden ? T("· (수정됨 — 이후 지도는 실측과 비교 불가 표시)","· (modified — later maps marked incomparable to the measurement)") : T("· (기본값)","· (default)");
-      const fmt=$("bScoutFmt"); if(fmt) fmt.textContent = sp.directive+"\\n\\n"+(sp.notes||[]).join("\\n");
+      const fmt=$("bScoutFmt"); if(fmt) fmt.textContent = "["+T("형식 버전 ","format version ")+sp.version+"]\\n"+sp.directive+"\\n\\n"+(sp.notes||[]).join("\\n");
     });
     // 런타임 라이브러리 없으면 저장/복원이 무효 → 거짓 성공 방지: 버튼 비활성 + 경고(점2 수정).
     const baseOk = d.baseAvailable !== false;
@@ -3819,12 +3830,18 @@ export function activate(context: vscode.ExtensionContext): void {
       ? tE(`두뇌 실제 답 — Claude: ${ba.cc} · Codex: ${ba.cx}`, `actual answers — Claude: ${ba.cc} · Codex: ${ba.cx}`)
       : "";
     // LLM 호출 여부 상시 줄(사용자 요청 2026-07-08: 대시보드 안 열어도 상태바에서 판단) — '지금 실행 중' live 신호만
-    // 말한다(다음 턴 지시·예약까지 단정 금지 — Codex 보완). 검증 중(flow 모드)은 3박스가 담당하므로 이 줄은 linked/unlinked 전용.
-    const scoutLiveNow = (mode === "linked" || mode === "unlinked") && ws ? readScoutLive(ws) : null;
+    // 말한다(다음 턴 지시·예약까지 단정 금지 — Codex 보완).
+    // 게이트(감사 2026-07-09): 3트랙(scoutMode=on)일 때만 라이브를 읽는다 — 2트랙에서 잔존/수동 live 파일이
+    // 정찰 문구를 노출하는 비대칭 차단. flow 모드에서도 읽는 이유: 자동 지시 경로(Claude 턴 안 러너 실행)가
+    // 정찰의 '주 실행 경로'인데 그 동안 상태바가 flow 3박스로 바뀌어 표시가 전멸하던 실구멍(감사 B-A) — 3박스 툴팁에 병기.
+    const scoutOn = !!ws && (() => { try { return loadContract(ws).scoutMode === "on"; } catch { return false; } })();
+    const scoutLiveNow = scoutOn && ws && (mode === "linked" || mode === "unlinked" || mode === "flow") ? readScoutLive(ws) : null;
     const llmLine = (mode === "linked" || mode === "unlinked")
       ? (scoutLiveNow
         ? tE(`⚡ LLM 호출 중: 정찰 지도 생성(${scoutLiveNow.arm === "deepseek" ? "DeepSeek" : "self"} 팔)`, `⚡ LLM call in flight: recon map (${scoutLiveNow.arm === "deepseek" ? "DeepSeek" : "self"} arm)`)
-        : tE("지금 실행 중인 LLM 호출 없음 — 변경 감지는 LLM 없이 자동 · 관찰 일지는 추가 LLM 없이 자동 누적", "no LLM call running now — change sensing runs without LLM · the field journal accrues with no extra LLM"))
+        : scoutOn
+        ? tE("지금 실행 중인 LLM 호출 없음 — 변경 감지는 LLM 없이 자동 · 관찰 일지는 추가 LLM 없이 자동 누적", "no LLM call running now — change sensing runs without LLM · the field journal accrues with no extra LLM")
+        : tE("지금 실행 중인 LLM 호출 없음", "no LLM call running now")) // 2트랙: 정찰 기능(변경 감지·일지) 설명은 사실이 아니므로 뗌(감사 B-D)
       : "";
     const key = JSON.stringify({
       mode,
@@ -3844,7 +3861,7 @@ export function activate(context: vscode.ExtensionContext): void {
       // 실제 답은 '모델 정체'만 키에 담는다(sig) — 경과 시간까지 담으면 매분 키가 바뀌어 열려 있는 호버가 분마다 닫힌다
       // (멱등 가드의 존재 이유). 대가: 툴팁의 '분 전' 표기는 다른 상태 변화가 있을 때 갱신(모델이 바뀌면 항상 즉시 갱신).
       ba: ba.sig || null,
-      llm: scoutLiveNow ? scoutLiveNow.arm : "none", // LLM 상시 줄의 상태 — 켜짐/꺼짐 전환 시 툴팁 즉시 갱신
+      llm: scoutLiveNow ? scoutLiveNow.arm : "none", // LLM 상시 줄+flow 병기의 정찰 라이브 상태 — 켜짐/꺼짐 전환 시 즉시 갱신
     });
     if (key === lastRenderKey) return; // 표시 동일 → status/flow 갱신 전체 skip(불필요 RPC·호버 닫힘 방지)
     lastRenderKey = key;
@@ -3885,9 +3902,19 @@ export function activate(context: vscode.ExtensionContext): void {
       fClaude.color = (toClaude || live.key === "claude") ? c : undefined; // 활성 쪽만 색
       fCodex.text = "$(search) Codex";
       fCodex.color = toCodex ? c : undefined;
-      fArrow.text = (toCodex ? "$(arrow-right) " + tE("검증중","verifying") + " $(arrow-right)" : toClaude ? "$(arrow-left) " + tE("반영중","applying") + " $(arrow-left)" : "$(sync~spin) " + tE("작업중","working")) + (live.round > 1 ? ` ·${live.round}R` : "");
+      fArrow.text = (toCodex ? "$(arrow-right) " + tE("검증중","verifying") + " $(arrow-right)" : toClaude ? "$(arrow-left) " + tE("반영중","applying") + " $(arrow-left)" : "$(sync~spin) " + tE("작업중","working")) + (live.round > 1 ? ` ·${live.round}R` : "") + (scoutLiveNow ? " $(telescope)" : "");
       fArrow.color = c;
-      fArrow.tooltip = new vscode.MarkdownString(tE(`**검증 진행 — `,`**verify progress — `) + `${live.label}**` + `${live.round ? tE(` (라운드 ${live.round})`,` (round ${live.round})`) : ""}` + tE(`\n\n⚡ LLM 호출 중: Codex 검증`,`\n\n⚡ LLM call in flight: Codex verification`) + tE(`\n\n클릭 → 대시보드`,`\n\nclick → dashboard`));
+      // LLM 문구는 단계별 사실만(감사 B-B: 전 단계 'Codex 검증' 단정은 claude/rejudge 단계에서 거짓): Codex 호출
+      // 단계만 검증 LLM, claude/rejudge는 Claude 작업/반영. 정찰 러너가 이 턴 안에서 돌면(자동 지시 주 경로) 병기(감사 B-A).
+      const flowLlm = toCodex
+        ? tE(`\n\n⚡ LLM 호출 중: Codex 검증`,`\n\n⚡ LLM call in flight: Codex verification`)
+        : toClaude
+        ? tE(`\n\nClaude가 검증 답을 반영 중`,`\n\nClaude is applying the verdict`)
+        : tE(`\n\nClaude 작업 중`,`\n\nClaude working`);
+      const flowScout = scoutLiveNow
+        ? tE(`\n\n⚡ 정찰 지도 생성 중(${scoutLiveNow.arm === "deepseek" ? "DeepSeek" : "self"} 팔) — 이 턴 안에서 실행`,`\n\n⚡ recon map generating (${scoutLiveNow.arm === "deepseek" ? "DeepSeek" : "self"} arm) — running inside this turn`)
+        : "";
+      fArrow.tooltip = new vscode.MarkdownString(tE(`**검증 진행 — `,`**verify progress — `) + `${live.label}**` + `${live.round ? tE(` (라운드 ${live.round})`,` (round ${live.round})`) : ""}` + flowLlm + flowScout + tE(`\n\n클릭 → 대시보드`,`\n\nclick → dashboard`));
       fClaude.show(); fArrow.show(); fCodex.show();
       return; // 흐름은 미확인 경보(error/warning)가 없을 때만 — 아래 메인/무결성 분기 스킵
     }
@@ -3975,6 +4002,13 @@ export function activate(context: vscode.ExtensionContext): void {
   } catch {
     /* ignore */
   }
+  // 정찰 라이브 감시: scout-live/ 하위는 BRIDGE_DIR 비재귀 watch가 못 잡음 — '지도 생성중' 등장·해제가 15초 폴에
+  // 묶이던 지연 해소(감사 B-E). 폴더는 러너가 만들지만 워처 등록을 위해 선생성(무해).
+  try {
+    const liveDir = path.join(BRIDGE_DIR, "scout-live");
+    fs.mkdirSync(liveDir, { recursive: true });
+    watchers.push(fs.watch(liveDir, () => scheduleRender()));
+  } catch { /* 감시 실패 → 15초 폴 폴백(기존 동작) */ }
   // 검증 통계 감시: BRIDGE_DIR 비재귀 watch는 하위 stats/를 못 잡으므로 별도. verdicts.jsonl 변경(검증 추가·리텐션) 시 통계 탭 즉시 갱신.
   try {
     const statsDir = path.dirname(VERDICTS_FILE); // BRIDGE_DIR/stats

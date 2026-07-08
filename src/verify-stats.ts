@@ -24,6 +24,35 @@ export interface VerifyStats {
   byMode: Record<string, { count: number; tokens: number }>;  // 흐름 28일: 검증모드(플랜/코드/올웨이즈)별 건수·토큰
 }
 
+// 정찰(3트랙) 비용 집계 — scout-usage.jsonl(append-only) → 28일 팔별 합계. 렌더는 통계 탭 '정찰 토큰' 구획.
+// self 팔은 usage가 null(토큰 미제공) — 문자수 합계만 참(정직 표기는 렌더 몫). ping은 workspace가 비어 전역 합산.
+export type ScoutCosts = {
+  byArm: Record<string, { count: number; usageIn: number; usageOut: number; pkgChars: number; mapChars: number }>;
+  total: number; // 28일 기록 건수(전 팔)
+};
+export function computeScoutCosts(raw: string, now: number, ws: string, normWsFn: (s: string) => string): ScoutCosts {
+  const out: ScoutCosts = { byArm: {}, total: 0 };
+  const cut = now - 28 * 24 * 60 * 60 * 1000;
+  const wsN = normWsFn(ws || "");
+  for (const ln of String(raw || "").split(/\r?\n/)) {
+    if (!ln.trim()) continue;
+    let o: any; try { o = JSON.parse(ln); } catch { continue; }
+    const t = Date.parse(o?.ts || "");
+    if (!Number.isFinite(t) || t < cut) continue;
+    if (!o.arm) continue;
+    // ping은 프로젝트 무관(전역 1회 점검) — 항상 포함. 지도 기록은 이 폴더(정찰 대상) 것만.
+    if (o.arm !== "ping" && normWsFn(String(o.workspace || "")) !== wsN) continue;
+    const a = out.byArm[o.arm] || (out.byArm[o.arm] = { count: 0, usageIn: 0, usageOut: 0, pkgChars: 0, mapChars: 0 });
+    a.count++;
+    if (typeof o.usageIn === "number") a.usageIn += o.usageIn;
+    if (typeof o.usageOut === "number") a.usageOut += o.usageOut;
+    if (typeof o.pkgChars === "number") a.pkgChars += o.pkgChars;
+    if (typeof o.mapChars === "number") a.mapChars += o.mapChars;
+    out.total++;
+  }
+  return out;
+}
+
 export function computeVerifyStats(raw: string, now: number, ws: string | null, normWs: (p: string) => string): VerifyStats {
   const DAY = 24 * 60 * 60 * 1000;
   const d7 = now - 7 * DAY, d14 = now - 14 * DAY, d28 = now - 28 * DAY;
