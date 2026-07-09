@@ -139,10 +139,10 @@ interface BridgeState {
   projectStats: Record<string, ProjectStat>; // 프로젝트별 비교(3c) — 모든 폴더 28일 검증 분포(전체 group-by, 이 폴더 통계와 별개)
   scope: ScopeState | null; // 범위 장부(L0) 후보 — scoutMode=on(3트랙)일 때만 계산(advisory·로컬 git만·외부전송 0). null=2트랙
   scoutMaps: ScoutMapsView | null; // 영향지도 게시판 — 러너가 브릿지 홈 scouts/에 보관한 지도 목록+최신 본문(3트랙에서만). null=2트랙
-  scoutMapStale: number | null;    // 낡은 지도 배지 — 최신 지도 생성 후 더 바뀐 seed 파일 수(판단 불가면 null·경고 아님)
+  scoutMapStale: number | null;    // 낡은 지도 배지 — 지도 이후 변경 신호 수(seed 변경+새 커밋+작업트리 — 브릿지 scoutMapStatus 정합·판단 불가면 null·경고 아님)
   scoutLive: { arm: string; startedAt: string } | null; // 지도 생성중(러너 실행 동안만 — TTL로 잔존 걸러냄)
   deepseek: { hasKey: boolean; masked: string; model: string }; // 고급설정 탭 표시용 — 키 원문은 절대 웹뷰로 안 보냄(마스킹만)
-  scoutTarget: { repo: string; differs: boolean; invalid: boolean } | null; // P1 정찰 대상(계약 scoutRepo) — 카드 고지용. null=2트랙
+  scoutTarget: { repo: string; differs: boolean; invalid: boolean; configured: boolean; drift: { repo: string; sample: number; agree: number } | null } | null; // P1 정찰 대상 + 어긋남 자기진단(2026-07-10). null=2트랙
   scoutGate: { eff: string; raw: string | null } | null; // 실효 플랜 게이트(표시 전용 — 3트랙에서만, 계약에 저장 안 함). null=2트랙/ws 없음
   mapLedger: MapLedgerView | null; // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만). null=2트랙
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
@@ -261,6 +261,47 @@ function scoutTargetFor(ws: string): { repo: string; source: string } {
   } catch { return { repo: ws, source: "ws" }; }
 }
 
+// 정찰 대상 어긋남 자기진단 — bridge/contract-lib.js detectScoutTargetDrift와 동일 규칙(동형 규약 — 어긋나면
+// 지시 채널과 대시보드가 다른 답을 말한다. tests/scout-drift.test.js 소스 계약이 고정). 증거는 브릿지가 검증
+// 인용에서 수집한 파일을 읽기만 한다(수집 시 git root 검증됨 — 여기선 실존만 재확인).
+const DRIFT_MIN_OBS = 3, DRIFT_SHARE = 0.7;
+function scoutEvidenceFileExt(ws: string): string {
+  return path.join(BRIDGE_DIR, "scout-target-evidence", crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16) + ".json");
+}
+function detectScoutTargetDriftExt(target: string, ws: string): { drift: boolean; repo?: string; sample?: number; agree?: number } {
+  try {
+    const o = JSON.parse(fs.readFileSync(scoutEvidenceFileExt(ws), "utf8"));
+    const obs = (o && Array.isArray(o.obs) ? o.obs : []).filter((x: any) => x && Array.isArray(x.repos) && x.repos.length)
+      .filter((x: any) => { // 유일한 최다 레포가 있는 관측만(동률=모호 → 제외 — 정본 동형, Codex 반례 2026-07-10)
+        const s2 = x.repos.slice().sort((a: any, b: any) => ((b && b.n) | 0) - ((a && a.n) | 0));
+        return s2.length === 1 || ((s2[0] && s2[0].n) | 0) > ((s2[1] && s2[1].n) | 0);
+      });
+    if (obs.length < DRIFT_MIN_OBS) return { drift: false };
+    const tally = new Map<string, { n: number; display: string }>();
+    for (const ob of obs) {
+      const top = ob.repos.slice().sort((a: any, b: any) => ((b && b.n) | 0) - ((a && a.n) | 0))[0];
+      if (!top || typeof top.repo !== "string" || !top.repo) continue;
+      const k = normWs(top.repo);
+      const cur = tally.get(k) || { n: 0, display: top.repo };
+      cur.n++; tally.set(k, cur);
+    }
+    let bestK: string | null = null; let best: { n: number; display: string } | null = null;
+    for (const [k, v] of tally) if (!best || v.n > best.n) { bestK = k; best = v; }
+    if (!best || best.n / obs.length < DRIFT_SHARE) return { drift: false };
+    // git 정체성 비교(정본 동형 — Codex 반례: 대상=worktree 하위 폴더/모노레포 중첩 저장소 오탐):
+    // 대상의 git root와 같으면 일치, 대상 저장소 '안'의 중첩 저장소면 자동 교정 금지.
+    let tRoot: string | null = null;
+    try {
+      const rg = require("child_process").spawnSync("git", ["-c", "safe.directory=*", "-C", target, "rev-parse", "--show-toplevel"], { encoding: "utf8", timeout: 3000, windowsHide: true });
+      tRoot = rg.status === 0 && String(rg.stdout).trim() ? String(rg.stdout).trim() : null;
+    } catch { tRoot = null; }
+    if (bestK === normWs(target) || (tRoot && bestK === normWs(tRoot))) return { drift: false };
+    if (tRoot && bestK && (bestK + path.sep).startsWith(normWs(tRoot) + path.sep)) return { drift: false };
+    try { if (!fs.existsSync(best.display) || !fs.statSync(best.display).isDirectory()) return { drift: false }; } catch { return { drift: false }; }
+    return { drift: true, repo: best.display, sample: obs.length, agree: best.n };
+  } catch { return { drift: false }; }
+}
+
 function loadContract(ws?: string | null, lang?: Lang): Contract {
   const read = (p: string): any | null => {
     try {
@@ -295,6 +336,37 @@ function effectiveScoutGate(ws: string): { eff: "off" | "plan"; raw: "off" | "pl
   const raw: "off" | "plan" | null = o.scoutGate === "off" || o.scoutGate === "plan" ? o.scoutGate : null;
   if (normScoutMode(o) !== "on") return { eff: "off", raw };
   return { eff: raw ?? "plan", raw };
+}
+
+// 정찰 대상 지정(대시보드 원클릭·전환 모달 공용) — scripts/scope-target.js set과 동일 효과: 현재 언어 슬롯의
+// 프로젝트 계약 파일에 scoutRepo만 보존 병합(⚠ saveContract 재사용 금지 — 대시보드 저장 페이로드는 scoutRepo를
+// 모르는 스키마라 섞으면 오염, Codex 설계검증 2026-07-10). 반대 슬롯이 다른 값이면 고지(언어 슬롯 분리 원칙).
+async function setScoutTargetFromUi(ws: string | null, repo: string, slotLang?: Lang): Promise<void> {
+  if (!ws) { vscode.window.showWarningMessage(tE("폴더가 열려 있지 않아 설정할 수 없어요.", "No folder is open, so this cannot be set.")); return; }
+  try {
+    const abs = path.resolve(String(repo || "").trim());
+    if (!path.isAbsolute(abs) || !fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
+      vscode.window.showWarningMessage(tE("정찰 대상 폴더를 찾을 수 없어요: " + abs, "Scout target folder not found: " + abs)); return;
+    }
+    const lang: Lang = slotLang || loadLangExt(); // 호출측 렌더 슬롯 우선(저장 도중 언어 전환 경계에서 3트랙과 scoutRepo가 다른 슬롯에 갈리는 것 방지 — Codex 반례)
+    const file = contractFileFor(ws, lang);
+    let keep: any = {};
+    try { const prev = JSON.parse(fs.readFileSync(file, "utf8")); if (prev && typeof prev === "object" && !Array.isArray(prev)) keep = prev; } catch { /* 슬롯 파일 신설 */ }
+    if (!atomicWrite(file, JSON.stringify({ ...keep, scoutRepo: abs, workspace: ws, updatedAt: new Date().toISOString() }, null, 2))) {
+      vscode.window.showErrorMessage(tE("저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요.", "Save failed — file locked or inaccessible.")); return;
+    }
+    mapLedgerBump++;
+    let otherNote = "";
+    try {
+      const other: Lang = lang === "ko" ? "en" : "ko";
+      let ov = ""; // 반대 슬롯 파일이 없어도 '미설정'으로 취급해 고지(파일 부재=고지 생략이던 구멍 — Codex 반례: 신규 사용자가 가장 알아야 함)
+      try { const oo = JSON.parse(fs.readFileSync(contractFileFor(ws, other), "utf8")); ov = typeof oo?.scoutRepo === "string" ? oo.scoutRepo.trim() : ""; } catch { /* 미설정 */ }
+      if (normWs(ov || ws) !== normWs(abs)) otherNote = tE(" (ⓘ " + other + " 언어 모드는 별도 설정 — 언어별 분리 저장)", " (ⓘ the " + other + "-language mode keeps its own setting)");
+    } catch { /* 고지 실패 무해 */ }
+    vscode.window.showInformationMessage(tE("정찰 대상을 지정했어요: " + abs + " — 다음 지도·일지·확인신호부터 이 레포 기준으로 쌓입니다." + otherNote, "Scout target set: " + abs + " — maps, journal and confirms accrue for this repo from now on." + otherNote));
+  } catch (e) {
+    vscode.window.showErrorMessage(tE("정찰 대상 설정 실패: ", "Failed to set scout target: ") + String((e as Error)?.message || e));
+  }
 }
 
 function saveContract(ws: string | null, c: Contract, lang?: Lang): boolean {
@@ -1126,7 +1198,7 @@ function computeState(turnsN: number): BridgeState {
     scoutMaps,                          // 영향지도 게시판(3트랙에서만 — 러너가 보관한 지도 읽기 전용)
     scoutMapStale: computeScoutMapStale(ws, scope, scoutMaps), // 낡은 지도 배지 — 최신 지도 생성 후 더 바뀐 seed 파일 수(경고 아님·게시판 표기)
     scoutLive: readScoutLive(ws),       // 지도 생성중 신호(러너 실행 동안만 — 카드 '지금:'과 상태바 라벨)
-    scoutTarget: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const r = scoutTargetFor(ws); return { repo: r.repo, differs: normWs(r.repo) !== normWs(ws), invalid: r.source === "ws-fallback-invalid" }; } catch { return null; } })(),
+    scoutTarget: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const r = scoutTargetFor(ws); const dr = detectScoutTargetDriftExt(r.repo, ws); return { repo: r.repo, differs: normWs(r.repo) !== normWs(ws), invalid: r.source === "ws-fallback-invalid", configured: r.source === "contract", drift: dr.drift ? { repo: dr.repo as string, sample: dr.sample || 0, agree: dr.agree || 0 } : null }; } catch { return null; } })(),
     scoutGate: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; return effectiveScoutGate(ws); } catch { return null; } })(),
     mapLedger: readMapLedger(ws),       // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만)
     deepseek: readDeepseekView(),       // 고급설정 탭 — 키 유무·마스킹(원문 미노출)
@@ -1141,18 +1213,50 @@ function computeState(turnsN: number): BridgeState {
 // seed 출처: git 프로젝트=지금 작업트리 변경(scope.seeds) / 무이력(비-git)=그 지도가 근거로 삼았던 파일(지도 메타 seedFiles —
 // 멀티 세션에서 남의 작업을 내 지도가 덮은 걸로 오인하지 않게 지도 자신의 근거만 검사. Codex 보완).
 // advisory 철학(D3): 막거나 경고 승격하지 않고 게시판에 신선도만 정직 표기. 판단 불가(시각 없음 등)면 null=표기 안 함.
+// bridge/contract-lib.js scoutMapStatus의 신호 3종과 정합(2026-07-10 — 게이트·자동지시는 새 커밋 때문에 stale이라는데
+// 대시보드만 침묵하던 불일치를 Codex가 잡음): ①seed 변경(삭제=변경) ②메타 head 이후 새 커밋 ③seed 밖 dirty(mtime>지도).
 function computeScoutMapStale(ws: string | null, scope: ScopeState | null, maps: ScoutMapsView | null): number | null {
   try {
     if (!ws || !maps?.latest?.ts) return null;
     const t = scoutTargetFor(ws).repo; // P1: seed 경로는 정찰 대상 기준(지도가 대상 레포에서 생성됨)
-    const seeds = scope?.seeds?.length ? scope.seeds : (maps.latest.seedFiles || []);
-    if (!seeds.length) return null;
-    const mapAt = Date.parse(maps.latest.ts);
+    // seed 기준은 항상 '지도 메타의 seedFiles'(정본 scoutMapStatus 동형) — 현재 작업트리 seeds로 대체하면
+    // seedMissing 기준선이 다른 경로 집합에 적용돼 브릿지=fresh·대시보드=stale로 갈릴 수 있음(Codex 반례).
+    // 현재 작업트리 변경은 아래 dirty 단계가 담당. scope 인자는 서명 유지용(미사용).
+    void scope;
+    const seeds = (maps.latest.seedFiles || []).slice(0, 8);
+    const mapAt = Date.parse((maps.latest as { basisTs?: string }).basisTs || maps.latest.ts); // basisTs=꾸러미 수집 시점(정본 동형)
     if (!Number.isFinite(mapAt)) return null;
     let n = 0;
-    for (const s of seeds.slice(0, 8)) {
-      try { if (fs.statSync(path.join(t, s)).mtimeMs > mapAt) n++; } catch { /* 삭제된 seed 등 — 셈에서 제외 */ }
+    const seedSet = new Set<string>();
+    const missingAtMap = new Set(((maps.latest as { seedMissing?: string[] }).seedMissing) || []);
+    const hasBaseline = Array.isArray((maps.latest as { seedMissing?: string[] }).seedMissing);
+    for (const s of seeds) {
+      try { seedSet.add(normWs(path.join(t, s))); if (fs.statSync(path.join(t, s)).mtimeMs > mapAt) n++; }
+      catch { if (hasBaseline && !missingAtMap.has(s)) n++; /* 신형 메타만 '당시 존재 seed 소실'=변경(브릿지 정합 — 구형은 무회귀) */ }
     }
+    const sp = (args: string[]) => require("child_process").spawnSync("git", ["-c", "safe.directory=" + String(t).replace(/\\/g, "/"), "-C", t, ...args], { encoding: "utf8", timeout: 3000, windowsHide: true });
+    const head = (maps.latest as { head?: string }).head;
+    if (typeof head === "string" && /^[0-9a-f]{7,40}$/i.test(head)) {
+      try { const r = sp(["rev-list", "--count", head + "..HEAD"]); if (r.status === 0) n += Math.min(parseInt(String(r.stdout).trim(), 10) || 0, 999); } catch { /* 신호 0 */ }
+    }
+    try {
+      const r = sp(["status", "--porcelain", "-z"]);
+      if (r.status === 0) {
+        const toks = String(r.stdout || "").split("\0");
+        let seen = 0;
+        for (let i = 0; i < toks.length && seen < 200; i++) {
+          const tok = toks[i];
+          if (!tok || tok.length < 4) continue;
+          seen++;
+          const code = tok.slice(0, 2); const rel = tok.slice(3);
+          if (/[RC]/.test(code)) i++; // 양쪽 열 다 검사(정본 동형 — worktree rename " R" 반례)
+          const abs = path.join(t, rel);
+          if (seedSet.has(normWs(abs))) continue;
+          if (/D/.test(code)) { n++; continue; }
+          try { if (fs.statSync(abs).mtimeMs > mapAt) n++; } catch { n++; }
+        }
+      }
+    } catch { /* 신호 0 */ }
     return n;
   } catch { return null; }
 }
@@ -1537,7 +1641,7 @@ function readScopeState(ws: string | null): ScopeState | null {
 // wsKey = sha1(normWs) 앞 16자(계약 키·scripts/scout-store.js와 동일 규칙 — 한쪽만 바꾸면 게시판이 빈다).
 // 읽기 전용 표시일 뿐 — 확장은 지도를 생성·전송하지 않는다(생성은 사용자의 수동 스크립트 실행. PRIVACY와 일치).
 type ScoutMapItem = { ts: string | null; arm: string; model: string | null; usageIn: number | null; usageOut: number | null };
-type ScoutMapsView = { count: number; items: ScoutMapItem[]; latest: { arm: string; ts: string | null; text: string; truncated: boolean; seedFiles: string[] } | null };
+type ScoutMapsView = { count: number; items: ScoutMapItem[]; latest: { arm: string; ts: string | null; text: string; truncated: boolean; seedFiles: string[]; head?: string; seedMissing?: string[]; basisTs?: string } | null };
 const SCOUT_MAP_TEXT_CAP = 12000; // 웹뷰로 보내는 최신 지도 본문 상한(게시판은 열람용 — 전문은 scouts/ 파일)
 let scoutMapsCache: { key: string; at: number; val: ScoutMapsView | null } | null = null;
 function readScoutMaps(ws: string | null): ScoutMapsView | null {
@@ -1560,11 +1664,17 @@ function readScoutMaps(ws: string | null): ScoutMapsView | null {
       try {
         const raw = fs.readFileSync(path.join(dir, bases[0] + ".md"), "utf8");
         let seedFiles: string[] = [];
+        let head = "";
+        let seedMissing: string[] | undefined;
+        let basisTs = "";
         try {
           const m0 = JSON.parse(fs.readFileSync(path.join(dir, bases[0] + ".json"), "utf8"));
           if (Array.isArray(m0.seedFiles)) seedFiles = m0.seedFiles.filter((s: any) => typeof s === "string");
+          if (typeof m0.head === "string") head = m0.head; // 신선도 '새 커밋' 신호 재료(브릿지 정합 2026-07-10)
+          if (Array.isArray(m0.seedMissing)) seedMissing = m0.seedMissing.filter((x: any) => typeof x === "string");
+          if (typeof m0.basisTs === "string") basisTs = m0.basisTs;
         } catch { /* 메타 없음 — 낡음 배지만 비활성 */ }
-        latest = { arm: items[0]?.arm || "?", ts: items[0]?.ts || null, text: raw.slice(0, SCOUT_MAP_TEXT_CAP), truncated: raw.length > SCOUT_MAP_TEXT_CAP, seedFiles };
+        latest = { arm: items[0]?.arm || "?", ts: items[0]?.ts || null, text: raw.slice(0, SCOUT_MAP_TEXT_CAP), truncated: raw.length > SCOUT_MAP_TEXT_CAP, seedFiles, head, seedMissing, basisTs };
       } catch { /* 방금 지워졌을 수 있음 — 목록만 */ }
     }
     const val: ScoutMapsView = { count: bases.length, items, latest };
@@ -1776,6 +1886,7 @@ class Dashboard {
         }
         if (m?.type === "openReconGuide") openReconGuide(); // 정찰 구조 안내 — 대시보드와 별개의 정적 새탭(스크립트 없음)
         if (m?.type === "openScoutHealthReport") openScoutHealthReport(dashboardWorkspace()); // 건강 리포트 — 포화 대응 새탭(열 때 베이크·스크립트 없음)
+        if (m?.type === "setScoutTarget" && typeof m.repo === "string") setScoutTargetFromUi(dashboardWorkspace(), m.repo, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
         if (m?.type === "hideSession" && m.id) {
           const id = String(m.id);
           const ws = dashboardWorkspace();
@@ -1852,6 +1963,27 @@ class Dashboard {
           //  키 있음 → 실제 연결 점검(ping 1회 — PRIVACY에 전송 지점으로 명시) 후 정상/실패를 사실대로.
           // ⚠ 문구 정직성: 실측(D5)상 '키 없음=효과 미비'가 아니라 '정찰 미실행=효과 미비'가 사실 — 경고문은 그 사실 기준.
           if (ok && normScoutMode({ scoutMode: m.scoutMode }) === "on" && !prevScoutOn) {
+            // 대상 확인 스텝(2026-07-10 구조 해법 — 발원지 차단): 세션 폴더가 git이 아니고 대상 미지정이면,
+            // '정찰이 이 폴더만 본다'는 사실을 켜는 순간에 확인시키고 원클릭 지정 경로를 준다(고지-only 아님).
+            void (async () => {
+              const ws2 = dashboardWorkspace();
+              if (!ws2) return;
+              const modalLang: Lang = slotLang || loadLangExt(); // 방금 저장한 슬롯과 동일 기준(경계 갈림 방지 — Codex 반례)
+              const hasRepoSet = (() => { try { return !!String(JSON.parse(fs.readFileSync(contractFileFor(ws2, modalLang), "utf8"))?.scoutRepo || "").trim(); } catch { return false; } })();
+              // .git 폴더 존재가 아니라 rev-parse로 판독 — 하위 폴더를 연 진짜 git을 '기록 없음'으로 오보하거나
+              // 빈 .git을 정상으로 오인하던 실사고 계열(scope-target.js와 동일 정본 — Codex 반례 2026-07-10)
+              const wsIsGit = (() => { try { return require("child_process").spawnSync("git", ["-c", "safe.directory=*", "-C", ws2, "rev-parse", "HEAD"], { encoding: "utf8", timeout: 3000, windowsHide: true }).status === 0; } catch { return false; } })();
+              if (hasRepoSet || wsIsGit) return;
+              const pickBtn = tE("다른 폴더 지정…", "Choose another folder…");
+              const pick = await vscode.window.showWarningMessage(tE(
+                "정찰 대상 확인 — 이 폴더(" + ws2 + ")는 변경 기록(git)이 없어요.\n\n실제 개발이 다른 폴더(git 저장소)에서 이뤄진다면 그 폴더를 정찰 대상으로 지정해야 지도·일지·확인신호가 그 개발을 따라갑니다. 이 폴더에서 문서 작업만 한다면 그대로 두셔도 돼요(나중에 어긋남이 감지되면 설정 카드가 뜹니다).",
+                "Confirm scout target — this folder (" + ws2 + ") has no change history (git).\n\nIf development actually happens in another folder (a git repo), set it as the scout target so maps, journal and confirms follow that work. If you only edit documents here, leaving it is fine (a setup card appears later if a mismatch is detected)."),
+                { modal: true }, pickBtn, tE("이 폴더 그대로", "Keep this folder"));
+              if (pick === pickBtn) {
+                const sel = await vscode.window.showOpenDialog({ canSelectFiles: false, canSelectFolders: true, canSelectMany: false, openLabel: tE("정찰 대상으로 지정", "Set as scout target") });
+                if (sel && sel[0]) { await setScoutTargetFromUi(ws2, sel[0].fsPath, modalLang); this.post(); }
+              }
+            })().catch(() => { /* 확인 스텝 실패가 저장 흐름을 못 막음 */ });
             if (!readDeepseekView().hasKey) {
               const go = tE("등록하러 가기", "Register key");
               vscode.window.showWarningMessage(tE(
@@ -3198,7 +3330,7 @@ class Dashboard {
       }
       // 낡은 지도 배지(신선도 — 경고 아님): 최신 지도 생성 이후 지금 변경 중인 파일이 더 바뀌었으면 정직 표기.
       if(typeof d.scoutMapStale==="number" && d.scoutMapStale>0){
-        add(T("⏳ 최신 지도 생성 이후 파일 "+d.scoutMapStale+"개가 더 바뀌었어요 — 지도가 지금 상태보다 낡았을 수 있어요(재생성은 아래 명령 그대로).","⏳ "+d.scoutMapStale+" file(s) changed after the latest map was generated — it may be older than your current state (regenerate with the same command)."),"muted");
+        add(T("⏳ 최신 지도 이후 변경 신호 "+d.scoutMapStale+"건(파일 변경·새 커밋·작업트리) — 지도가 지금 상태보다 낡았을 수 있어요(재생성은 아래 명령 그대로).","⏳ "+d.scoutMapStale+" change signal(s) since the latest map (file edits · new commits · working tree) — it may be older than your current state (regenerate with the same command)."),"muted");
       }
       sm.items.forEach(it=>{
         const when = it.ts ? new Date(it.ts).toLocaleString() : "?";
@@ -3229,13 +3361,30 @@ class Dashboard {
       const info=document.createElement("div"); info.className="muted";
       info.textContent=T("영향지도의 발견이 자동으로 쌓이고, 검증이 확인하면 신뢰로 승격되고, 반박되면 스스로 강등됩니다 — 클릭 없이 굴러갑니다. 원하실 때만 고정(신뢰 강제)/차단(제외)/'확정 교범("+ml.mapRel+")'으로 내보내기(승격)로 개입하세요.","Impact-map findings accumulate automatically, get promoted on verification and demoted on dispute — no clicking required. Intervene only when you want: pin (force-trust), ban (exclude), or export (promote) into the 'field manual ("+ml.mapRel+")'.");
       card.appendChild(info);
-      if(d.scoutTarget && (d.scoutTarget.differs || d.scoutTarget.invalid)){
+      // 정찰 대상 — '상시' 표시(2026-07-10 구조 해법: 미지정=세션 폴더 폴백이 조용히 축을 눈 감기던 실사고 —
+      // differs/invalid일 때만 보이던 것을 항상 보이게. 어긋남 의심이면 문구가 아니라 '행동 카드'로).
+      if(d.scoutTarget){
         const tg=document.createElement("div"); tg.className="muted";
         tg.textContent = d.scoutTarget.invalid
           ? T("⚠ 계약에 지정된 정찰 대상 폴더를 찾을 수 없어 이 폴더 기준으로 동작 중 — node scripts/scope-target.js로 재지정하세요.","⚠ The configured scout target folder was not found — falling back to this folder. Re-set it via node scripts/scope-target.js.")
-          : T("정찰 대상: "+d.scoutTarget.repo+" (계약 지정 — 지도·일지·확인신호가 이 레포 기준으로 쌓임)","Scout target: "+d.scoutTarget.repo+" (set in contract — maps, journal and confirms accrue for this repo)");
+          : d.scoutTarget.configured
+          ? T("정찰 대상: "+d.scoutTarget.repo+" (계약 지정 — 지도·일지·확인신호가 이 레포 기준으로 쌓임)","Scout target: "+d.scoutTarget.repo+" (set in contract — maps, journal and confirms accrue for this repo)")
+          : T("정찰 대상: (미지정 — 이 폴더 기준) 실제 개발이 다른 폴더에서 이뤄지면 지도·일지가 그걸 못 봅니다. 어긋남이 감지되면 아래에 설정 카드가 떠요.","Scout target: (not set — this folder) If development actually happens in another folder, maps & journal won't see it. A setup card appears below when a mismatch is detected.");
         card.appendChild(tg);
       }
+      safe(function(){ // 대상 어긋남 자기진단 카드 — 고지가 아니라 원클릭 행동(2026-07-10 구조 해법)
+        const dr=d.scoutTarget && d.scoutTarget.drift; if(!dr) return;
+        const box2=document.createElement("div");
+        box2.style.cssText="margin:6px 0;padding:8px;border:1px solid var(--vscode-inputValidation-warningBorder,#d9a441);border-radius:6px";
+        const t1=document.createElement("div"); t1.style.fontWeight="600";
+        t1.textContent=T("⚠ 정찰이 보는 곳과 개발이 일어나는 곳이 다른 것 같아요","⚠ Recon seems to be watching a different place than where development happens");
+        const t2=document.createElement("div"); t2.className="muted";
+        t2.textContent=T("최근 검증 "+dr.sample+"회 중 "+dr.agree+"회가 주로 이 레포의 파일을 인용했어요: "+dr.repo+" — 정찰 대상을 이 레포로 지정하면 지도·일지·확인신호가 실제 개발을 따라갑니다.","In "+dr.agree+" of the last "+dr.sample+" verifications, citations mostly lived under: "+dr.repo+" — set it as the scout target so maps, journal and confirms follow the real development.");
+        const b=document.createElement("button"); b.style.cssText="margin-top:6px;font-weight:700";
+        b.textContent=T("정찰 대상을 이 레포로 설정","Set scout target to this repo");
+        b.addEventListener("click", function(){ vscode.postMessage({type:"setScoutTarget", repo: dr.repo, lang: d.lang}); });
+        box2.appendChild(t1); box2.appendChild(t2); box2.appendChild(b); card.appendChild(box2);
+      });
       const chips=document.createElement("div"); chips.className="mledchips";
       const chip=(n,label,cls)=>{const c=document.createElement("div");c.className="mchip "+(cls||"");const b=document.createElement("b");b.textContent=String(n);const s=document.createElement("span");s.textContent=label;c.appendChild(b);c.appendChild(s);chips.appendChild(c);};
       chip(ml.counts.trusted,T("신뢰(자동 반영)","trusted"),"ok");

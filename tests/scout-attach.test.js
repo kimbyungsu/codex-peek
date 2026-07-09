@@ -152,7 +152,8 @@ console.log("[재랭킹(§6-7-1 2026-07-09)] 실존 필터·교집합 우선·ca
   ok(noCh.length === 3 && noCh[0].path === "src/extension.ts", "바뀐 파일 없음 → 실존 필터만 적용·원순서 보존");
   const base8 = CL.rankScoutItems([{ path: "a/verify-stats.ts" }], ["z/verify-stats.ts"], () => true);
   ok(base8[0].path === "a/verify-stats.ts" && CL.rankScoutItems([{ path: "a/short.ts" }], ["z/short.ts"], () => true).length === 1, "8자 이상 basename 일치도 관련으로(지도 채점기와 동일 보수 규칙)");
-  ok(fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8").includes('indexOf(" -> ")'), "git status rename 행(old -> new)은 새 경로만 채택(Codex 보완 잠금)");
+  const clSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
+  ok(clSrc.includes('"--porcelain", "-z"') && /\[RC\]\/\.test\(code\)/.test(clSrc) && !/\[RC\]\/\.test\(code\[0\]\)/.test(clSrc), "git status는 -z 파싱(한글·공백 경로 따옴표 함정 해소) + rename(R/C)은 상태 두 열 다 검사해 새 경로만 채택(worktree rename 반례 — Codex 잠금)");
   const clsrc3 = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
   ok(/rankScoutItems\(items, changedFilesFor\(target\)/.test(clsrc3) && /items = items\.slice\(0, 8\)/.test(clsrc3.split("rankScoutItems(items, changedFilesFor")[1] || ""), "buildScoutAttach 배선 — 재랭킹이 상한 8보다 먼저(하단 새 항목 안 밀림)");
   ok(/timeout: 3000/.test(clsrc3) && /return \[\];\s*\n\s*\}\s*catch \{ return \[\]; \}/.test(clsrc3) || /changedFilesFor/.test(clsrc3), "바뀐 파일 조회는 3초 상한·실패 시 빈 배열(재정렬만 포기 — ask 흐름 불침)");

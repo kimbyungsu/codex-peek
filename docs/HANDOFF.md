@@ -213,6 +213,19 @@
    테스트 잠금)+카드에 대상 고지. CLI: `scripts/scope-target.js`(status/set/auto[직하위 1단계 유일 git 루트만 자동·복수는
    나열]/clear — ~~ko·en 슬롯 동시~~ **2026-07-09 개정: 현재 언어 슬롯만 저장**(§6-9)) · `scripts/scope-ledger-migrate.js`(서랍 이관 — dry 선행·복사 보존·ts+type+sig 중복
    스킵=멱등). 테스트 `tests/scout-target.test.js`(28단언 — 상대경로 무효·빈 .git 오판·기존 지정 잔존 반례 잠금 포함).
+   **(구조 보강 2026-07-10 — 어긋남 '자기진단')** 실사고: scoutRepo는 '아는 사용자의 수동 설정' 전제라, 미설정이면
+   정찰 축 전체가 조용히 세션 폴더를 봐 다른 환경 사용자가 그대로 재발(이 PC에서 실증 — 일지 정체·동봉 문구 동일).
+   사용자 제약(임시처방·고지-only 금지)에 따라 구조 부품 5종: ①증거 수집 collectScoutTargetEvidence(codex-bridge —
+   매 ask, 실존 인용 파일의 git root 귀속을 scout-target-evidence/<wsKey>.json 링버퍼 10건에, 판정 무관·3트랙만·
+   execCwd 기준[세션 폴더 기준이면 어긋난 상황에서 증거가 빈 값 — Codex 반례]) ②보수 판정 detectScoutTargetDrift
+   (관측≥3·같은 레포 최다 인용 ≥70%·실존·대상과 다름 — 표본 미달 무주장) ③자동 지시가 '신선도보다 우선'(Codex
+   반례: 엉뚱한 대상의 지도가 fresh면 조기 반환에 막혀 영영 침묵) — scope-target.js set 문법으로 에이전트가 스스로
+   교정(같은 제안 1회·advisedRepo 기억·언어 슬롯 효과 명시) ④대시보드: 대상 '상시' 표시(미지정 침묵 해소)+어긋남
+   행동 카드(원클릭 setScoutTarget — saveContract 스키마 오염 없이 전용 병합)+3트랙 켜는 순간 대상 확인 스텝(비-git
+   ws) ⑤신선도 사각 해소: scoutMapStatus가 seed 8개에 더해 meta.head 이후 새 커밋 수+seed 밖 dirty mtime을 stale
+   신호로(신호 3종 분리 표기 seedChanged/commitsAfter/dirtyChanged·비-git 무회귀·러너가 메타에 head 기록). 게이트
+   차단문도 drift 시 '대상 지정 먼저'(엉뚱한 레포 지도 생성 안내 금지). 테스트 tests/scout-drift.test.js. 남는 침묵
+   경로(정직): 인용이 아예 없는 검증·(path:line) 형식 밖 인용은 증거가 안 쌓임 — 관측되면 파서 폭 확장 후보.
 4-4. **(후속 문서 정리)** README ko 본문 일부에 '함께-변경 통계·커밋 이력' 등 옛 표현 잔존(동작 오도 아님 —
    Codex 확인). UI는 '정찰 흐름' 사람 언어로 전거 완료(옛 용어 잔재는 테스트 부정 단언으로 잠김) — 문서만 후속.
 4-5. **(방향 확정·v1 구현 2026-07-09) Scout Health — 전역 임계값을 프로젝트별 관찰 신호로 대체.** 사용자 결정:
@@ -249,6 +262,18 @@
    이후 무엇이 바뀌었는지(코드 변경·새 근거)를 명시하라"(재발견 봉쇄 해제·재실수 방지 유지).
    (c) **잔존**: tombstone은 스키마·UI 라벨만 있고 쓰는 곳 없음(파일 소멸 자동 감지 미배선) — P3 임계 튜닝 때.
    잠금: ledger-events [2-1] 복권 6단언 · ledger-signals [3] 기록 정책·[4-1] 트림 보존.
+   **(같은 날 추가 부품 2 — 2026-07-10)** ①**같은 요청 중복 전송 차단**(실사고: 호출 창이 자체 시간 상한으로 죽자
+   구현모델이 '전송 실패' 오판 재전송 → Codex 병렬 3중 검증): asks-inflight/<wsKey>-<지문>.json(해시·시각·pid·소유
+   토큰), wx 원자 선점 claimAskInflight → 살아있는 동일 요청이면 exit 3 거부("rollout/대시보드에서 읽어라" 행동
+   지시·--force-resend 탈출구) → 죽은 표식은 reclaimAskInflight(.reclaim 잠금[pid·token 기록] 아래 재판독 — 관측했던 죽은 레코드
+   그대로일 때만 회수: 늦은 회수자가 승자의 새 표식을 지우던 TOCTOU 차단·표식 판독 실패는 비ENOENT면
+   unreadable로 중단[fail-closed]·잔존 잠금은 자동 강제 해제 없음[동시 강제 해제가 이중 진입을 만드는
+   재귀 TOCTOU — 보수 차단, 탈출구는 --force-resend(잠금 미경유)·수동 삭제]·해제는 자기 토큰만),
+   표식 해제는 pid+token 일치만·TTL 90분(검증 대기 60분보다 큼·pid 생존이 1차), 청소는 .json만+판독불가는
+   mtime>TTL만. ②**신선도 기준 시점 계약**: 기준선(basisTs·seedMissing)은 수집기(scope-package
+   captureSeedBaseline)가 seed '확정 직후'(diff/grep/log 수집 전) 캡처해 pkg.meta로 — 러너는 전달만(사후
+   재조사는 수집~응답 사이 삭제/복원 오분류·Codex 반례). '없음'은 ENOENT만(접근 오류=seedMissing만 생략·basisTs는 항상 유지 — 삭제 판정만 불가),
+   scoutMapStatus·확장 배지는 mtime 비교를 basisTs||ts 기준으로. 잠금: tests/scout-drift.test.js [7][8][9].
 6. (후보) 대시보드 게이트 토글 UI(현재 CLI만 — informed consent 문구에 실측 명중률 표기), 발화 기록(scope-ledger-note)
    흐름의 실사용 관찰.
 7. (관찰 항목) 한 폴더 다중 프로그램 구분 — 권장 관행은 프로그램별 폴더 분리, 보강 후보는 seed 클러스터 자동 좁힘.

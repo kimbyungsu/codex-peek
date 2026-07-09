@@ -77,7 +77,7 @@ export type TokenHit = { token: string; files: string[]; truncated: boolean };
 // 관측 장부 선별분 — 구조만 요구(text 있는 항목 배열 3차선). 유도·선별은 out/ledger-events.js selectForPackage.
 export type LedgerSection = { trusted: { text: string }[]; reference: { text: string }[]; disputed: { text: string }[] };
 export type ScopePackage = {
-  meta: { repo: string; head: string; generatedBy: string; caps: typeof PKG_DEFAULTS; truncations: string[] };
+  meta: { repo: string; head: string; generatedBy: string; caps: typeof PKG_DEFAULTS; truncations: string[]; basisTs?: string; seedMissing?: string[] }; // 기준선 2필드는 수집 드라이버(scripts/scope-package.js)가 seed 확정 직후 주입 — 신선도 계약(2026-07-10)
   seeds: string[];                 // 지금 바뀌는 파일들(작업트리) — '무엇을 바꾸는가'
   diff: string;                    // 실제 변경 내용(상한 적용)
   tokenHits: TokenHit[];           // 바뀐 식별자를 참조하는 다른 파일들 — 파일채널·사본 결합의 결정론 후보

@@ -5,6 +5,7 @@
  * ⚠ 외부 전송 발생 지점: 꾸러미(민감 범주 diff는 빌더가 사전 제외)가 DeepSeek API로 전송된다 —
  *   PRIVACY.md '외부로 나가는 것' 참조. 키 없으면 정직한 안내 후 종료(게이트 아님).
  */
+const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { collectPackage } = require("./scope-package.js");
@@ -21,6 +22,11 @@ if (!repo) { console.error(tB("사용: node scripts/scope-scout-deepseek.js <rep
 const pkg = collectPackage(repo);
 if (!pkg) { console.error(tB("git 저장소가 아니거나 git 실패","Not a git repository, or git failed")); process.exit(1); }
 const lang = loadLang(); // 지도 '원문' 언어 — 전역 언어를 따름(preface는 브릿지 buildMapRequest가 같은 슬롯에서 읽음)
+// 신선도 기준선(basisTs·seedMissing)은 수집기(collectPackage)가 seed 확정 '직후' 캡처해 pkg.meta로 준다 —
+// 러너가 AI 응답 뒤 재조사하면 수집~응답 사이 삭제/복원이 오분류(Codex 반례 2026-07-10). 여기선 전달만.
+const baseline = pkg.meta && typeof pkg.meta.basisTs === "string"
+  ? { basisTs: pkg.meta.basisTs, ...(Array.isArray(pkg.meta.seedMissing) ? { seedMissing: pkg.meta.seedMissing } : {}) }
+  : {};
 const md = renderPackageMarkdown(pkg, lang);
 
 // 브릿지는 repo 정본을 직접 실행(개발용 스크립트 — 설치본(~/.codex-bridge)과의 버전 드리프트 회피).
@@ -40,7 +46,7 @@ const um = String(r.stderr || "").match(/\[usage\] in=(\d+) out=(\d+)(?: \((.+?)
 const meta = um ? { usageIn: Number(um[1]), usageOut: Number(um[2]), model: um[3] || null } : {};
 // 비용 장부 기록(60일 보존) — 지도 메타는 최근 10장 프루닝으로 사라지므로 별도 장부에 누적(60일 · 사용자 비용 추정용)
 try { appendScoutUsage({ ts: new Date().toISOString(), workspace: repo, arm: "deepseek", model: meta.model || null, usageIn: meta.usageIn ?? null, usageOut: meta.usageOut ?? null, pkgChars: md.length, mapChars: r.stdout.length }); } catch { /* 무해 */ }
-try { console.error(tB("지도 보관(게시판): ","Map archived (board): ") + saveMap(repo, "deepseek", r.stdout.trim(), { ...meta, ...scoutPromptSignature(lang), highlights: extractMapHighlights(r.stdout), mapPatches: extractMapPatches(r.stdout), basis: pkg.basisNote || (pkg.historyless ? "" : "git-status"), seedFiles: pkg.seeds })); } catch (e) { console.error(tB("지도 보관 실패(게시판에만 영향): ","Map archive failed (affects the board only): ") + (e && e.message)); }
+try { console.error(tB("지도 보관(게시판): ","Map archived (board): ") + saveMap(repo, "deepseek", r.stdout.trim(), { ...meta, ...scoutPromptSignature(lang), highlights: extractMapHighlights(r.stdout), mapPatches: extractMapPatches(r.stdout), basis: pkg.basisNote || (pkg.historyless ? "" : "git-status"), seedFiles: pkg.seeds, ...baseline, head: (pkg.meta && pkg.meta.head) || "" })); } catch (e) { console.error(tB("지도 보관 실패(게시판에만 영향): ","Map archive failed (affects the board only): ") + (e && e.message)); } // head=신선도 '새 커밋' 신호 재료(2026-07-10)
 // 관측 장부: 지도가 낸 6번(MAP patch) 제안을 사실로 적재 — 상태 전이는 out/ledger-events.js가 유도(로드맵 1단계)
 try { const now = new Date().toISOString(); for (const t of extractMapPatches(r.stdout)) appendLedgerEvent(repo, { ts: now, type: "proposed", sig: ledgerSig(t), text: t, from: "deepseek 지도 " + now }); } catch { /* 장부 실패가 지도 출력 흐름을 막지 않음 */ }
 process.stdout.write(r.stdout);

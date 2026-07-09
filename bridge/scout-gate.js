@@ -16,7 +16,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, scoutMapStatus, wsKeyFor, atomicWrite, resolveScoutRepo, loadLang, scoutHealthLine } = require("./contract-lib.js");
+const { loadContract, scoutMapStatus, wsKeyFor, atomicWrite, resolveScoutRepo, loadLang, scoutHealthLine, readScoutTargetEvidence, detectScoutTargetDrift } = require("./contract-lib.js");
 const tB = (ko, en) => (loadLang() === "en" ? en : ko); // 훅 문구도 한/영 쌍(2026-07-09 사용자 지적)
 
 const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(os.homedir(), ".codex-bridge");
@@ -67,14 +67,27 @@ function main(raw) {
   try { fs.mkdirSync(ATTEMPTS_DIR, { recursive: true }); atomicWrite(af, JSON.stringify({ n: n + 1, ts: new Date().toISOString() })); } catch { /* 기록 실패해도 차단은 진행(다음 번 상한 계산만 보수적) */ }
   const why = st.state === "no-map" ? tB("이 프로젝트에 영향지도가 아직 없다", "this project has no impact map yet")
     : st.state === "legacy-no-seeds" ? tB("최신 지도에 근거 파일 기록이 없어 신선도를 판정할 수 없다(구버전 지도 — 재생성 필요)", "the latest map has no basis-file record, so freshness cannot be judged (legacy map — regeneration needed)")
-    : tB(`최신 지도 생성 후 근거 파일 ${st.staleCount}개가 더 바뀌어 지도가 낡았다`, `${st.staleCount} basis file(s) changed after the latest map — it is stale`);
+    : tB(`최신 지도 이후 변경 신호 ${st.staleCount}건(근거 파일 ${st.seedChanged} · 새 커밋 ${st.commitsAfter} · 작업트리 ${st.dirtyChanged}) — 지도가 낡았다`, `${st.staleCount} change signal(s) since the latest map (basis ${st.seedChanged} · commits ${st.commitsAfter} · working tree ${st.dirtyChanged}) — it is stale`);
   // 프로젝트별 관찰 신호 동반(사용자 조건 '카드와 한 묶음' — 게이트가 전역 수치가 아니라 이 프로젝트의 장부를 근거로
   // 말하게 한다). 별도 try — 신호 계산 실패가 차단 문구 출력 자체를 막으면 안 됨.
   let healthTail = "";
   try { const hl = scoutHealthLine(target, loadLang() === "en"); if (hl) healthTail = hl + "\n"; } catch { /* 신호 실패 무해 */ }
+  // 대상 어긋남 의심이면 '엉뚱한 레포의 지도를 만들라'고 안내하면 안 된다(Codex 설계검증 2026-07-10) —
+  // 대상 지정을 먼저 시키고, 지도 명령도 의심 레포 기준으로 바꾼다. 진단 실패는 기존 안내 유지(fail-open).
+  let cmd = `node scripts/scope-scout-self.js "${target}"`;
+  let driftNote = "";
+  try {
+    const drift = detectScoutTargetDrift(target, readScoutTargetEvidence(ws));
+    if (drift.drift) {
+      driftNote = tB(
+        ` ⚠ 대상 어긋남 의심: 최근 검증 인용 다수가 ${drift.repo} 소속 — 먼저 \`node scripts/scope-target.js "${ws}" set "${drift.repo}"\` 로 정찰 대상을 지정하라(현재 언어 슬롯).`,
+        ` ⚠ Target mismatch suspected: recent verification citations mostly live under ${drift.repo} — first run \`node scripts/scope-target.js "${ws}" set "${drift.repo}"\` to set the scout target (current language slot).`);
+      cmd = `node scripts/scope-scout-self.js "${drift.repo}"`;
+    }
+  } catch { /* 자기진단 실패 — 기존 안내 유지 */ }
   process.stderr.write(tB(
-    `[탐색 게이트 · plan] 플랜 확정 전에 영향지도부터 — ${why}. codex-peek 소스 저장소에서 \`node scripts/scope-scout-self.js "${target}"\` 실행 후 다시 플랜을 확정하라. (이 게이트는 세션당 ${BLOCKS_PER_SESSION}회까지만 막고 이후 통과 · 끄기: node scripts/scope-gate.js "${ws}" off)\n`,
-    `[Recon gate · plan] Get an impact map before confirming the plan — ${why}. Run \`node scripts/scope-scout-self.js "${target}"\` from the codex-peek source repo, then confirm the plan again. (This gate blocks at most ${BLOCKS_PER_SESSION}× per session, then passes · turn off: node scripts/scope-gate.js "${ws}" off)\n`) + healthTail);
+    `[탐색 게이트 · plan] 플랜 확정 전에 영향지도부터 — ${why}.${driftNote} codex-peek 소스 저장소에서 \`${cmd}\` 실행 후 다시 플랜을 확정하라. (이 게이트는 세션당 ${BLOCKS_PER_SESSION}회까지만 막고 이후 통과 · 끄기: node scripts/scope-gate.js "${ws}" off)\n`,
+    `[Recon gate · plan] Get an impact map before confirming the plan — ${why}.${driftNote} Run \`${cmd}\` from the codex-peek source repo, then confirm the plan again. (This gate blocks at most ${BLOCKS_PER_SESSION}× per session, then passes · turn off: node scripts/scope-gate.js "${ws}" off)\n`) + healthTail);
   process.exit(2); // 차단 — stderr가 Claude에게 피드백됨(공식 문서 명시)
 }
 

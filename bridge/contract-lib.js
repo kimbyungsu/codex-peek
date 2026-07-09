@@ -375,25 +375,201 @@ function resolveScoutRepo(ws, c) {
   } catch { return { repo: ws, source: "ws" }; }
 }
 
-// 최신 지도 상태: no-map(없음) / fresh(신선) / stale(지도 자신의 seed 파일이 지도 생성 후 더 바뀜 — 낡음)
+// ── 정찰 대상 어긋남 자기진단(구조 해법 2026-07-10) ──────────────────────────
+// 배경(실사고): 세션 폴더≠개발 레포인데 scoutRepo 미설정이면 정찰 축 전체(지도·지시·장부·확인신호)가 조용히
+// 엉뚱한 폴더를 본다 — '설정을 아는 사용자'가 아니라 아무것도 모르는 사용자의 환경에서도 축이 스스로 어긋남을
+// 발견해야 한다(사용자 제약: 임시처방·고지-only 금지). 신호원 = 검증 답의 실파일 인용이 속한 git 레포(브릿지가
+// execCwd 기준으로 해석·수집 — ask 실행 폴더는 원인 그 자체라 신호원이 될 수 없음, Codex 설계검증 2026-07-10).
+const SCOUT_TARGET_EVIDENCE_DIR = path.join(BRIDGE_DIR, "scout-target-evidence");
+const EVIDENCE_KEEP = 10; // 최근 관측(ask 단위) 링버퍼 — 옛 습관이 새 판단을 지배하지 않게
+function scoutEvidenceFileFor(ws) { return path.join(SCOUT_TARGET_EVIDENCE_DIR, wsKeyFor(ws) + ".json"); }
+function readScoutTargetEvidence(ws) {
+  try { const o = JSON.parse(fs.readFileSync(scoutEvidenceFileFor(ws), "utf8")); return o && Array.isArray(o.obs) ? o : { obs: [] }; } catch { return { obs: [] }; }
+}
+function appendScoutTargetEvidence(ws, obs) { // obs={ts, repos:[{repo(절대경로 — 수집 시 git root 검증됨), n}]}
+  try {
+    if (!ws || !obs || !Array.isArray(obs.repos) || !obs.repos.length) return false;
+    const cur = readScoutTargetEvidence(ws);
+    const next = { ...cur, obs: cur.obs.concat([obs]).slice(-EVIDENCE_KEEP) };
+    fs.mkdirSync(SCOUT_TARGET_EVIDENCE_DIR, { recursive: true });
+    return atomicWrite(scoutEvidenceFileFor(ws), JSON.stringify(next));
+  } catch { return false; } // 수집 실패가 ask 흐름을 못 막음
+}
+// 대상 폴더의 git 최상위(없으면 null) — 판정의 'git 정체성 비교' 재료. safe.directory=* 는 이 읽기 조회 1회 한정.
+function gitTopLevelFor(dir) {
+  try {
+    const r = require("child_process").spawnSync("git", ["-c", "safe.directory=*", "-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8", timeout: 3000, windowsHide: true });
+    return r.status === 0 && String(r.stdout).trim() ? String(r.stdout).trim() : null;
+  } catch { return null; }
+}
+// 판정(보수 — 표본 미달은 무주장): ①'유일한 최다 레포'가 있는 관측 ≥3(공동 1위는 모호 → 관측째 제외 — Codex 반례:
+// 현재 1+타 1 동률 3회가 100% 점유로 오판) ②그중 ≥70%가 같은 레포 ③실존 ④경로 문자열이 아니라 git 정체성으로
+// 비교(Codex 반례: 대상=worktree 하위 폴더, 증거=그 루트 → 같은 저장소인데 drift 오판): 대상의 git root와 같으면
+// 일치, 대상이 git repo인데 증거가 그 '안'의 중첩 저장소면 자동 교정 금지(nested — 모노레포 오탐 방지),
+// 대상이 비-git 부모이고 증거가 다른 곳이면 원래 의도대로 drift. opts.targetRoot로 주입 가능(테스트·소비자 캐시).
+const DRIFT_MIN_OBS = 3, DRIFT_SHARE = 0.7;
+function detectScoutTargetDrift(target, evidence, opts) {
+  const o2 = opts || {};
+  const ex = o2.existsFn || ((p) => { try { return fs.existsSync(p) && fs.statSync(p).isDirectory(); } catch { return false; } });
+  const raw = (evidence && Array.isArray(evidence.obs) ? evidence.obs : []).filter((o) => o && Array.isArray(o.repos) && o.repos.length);
+  const obs = raw.filter((o) => { // 유일한 최다 레포가 있는 관측만(동률=모호 → 제외)
+    const sorted = o.repos.slice().sort((a, b) => ((b && b.n) | 0) - ((a && a.n) | 0));
+    return sorted.length === 1 || ((sorted[0] && sorted[0].n) | 0) > ((sorted[1] && sorted[1].n) | 0);
+  });
+  if (obs.length < DRIFT_MIN_OBS) return { drift: false, reason: "sample", sample: obs.length };
+  const tally = new Map();
+  for (const o of obs) {
+    const top = o.repos.slice().sort((a, b) => ((b && b.n) | 0) - ((a && a.n) | 0))[0];
+    if (!top || typeof top.repo !== "string" || !top.repo) continue;
+    const k = normWs(top.repo);
+    const cur = tally.get(k) || { n: 0, display: top.repo };
+    cur.n++; tally.set(k, cur);
+  }
+  let bestK = null, best = null;
+  for (const [k, v] of tally) if (!best || v.n > best.n) { bestK = k; best = v; }
+  if (!best) return { drift: false, reason: "sample", sample: obs.length };
+  const share = best.n / obs.length;
+  if (share < DRIFT_SHARE) return { drift: false, reason: "mixed", sample: obs.length };
+  const tRoot = o2.targetRoot !== undefined ? o2.targetRoot : gitTopLevelFor(target);
+  if (bestK === normWs(target) || (tRoot && bestK === normWs(tRoot))) return { drift: false, reason: "match", sample: obs.length };
+  if (tRoot && (bestK + path.sep).startsWith(normWs(tRoot) + path.sep)) return { drift: false, reason: "nested", sample: obs.length }; // 대상 저장소 안의 중첩 저장소 — 자동 교정 금지
+  if (!ex(best.display)) return { drift: false, reason: "gone", sample: obs.length };
+  return { drift: true, repo: best.display, share, sample: obs.length, agree: best.n };
+}
+
+// ── 같은 검증 요청 중복 전송 차단(2026-07-10 실사고) ──────────────────────────
+// 호출 창(도구)이 자체 시간 상한으로 죽자 구현모델이 '전송 실패'로 오판해 동일 프롬프트를 재전송 → Codex가 같은
+// 일을 병렬 3중 수행. 구조 방어: 같은 내용의 ask가 '살아있는 프로세스'에서 아직 진행 중이면 두 번째 전송을 거부
+// (--force-resend로만 강행). 판정 1차 기준은 pid 생존(정확) — TTL은 시계 이상·좀비 방어 보조. 판정은 순수 함수.
+const ASKS_INFLIGHT_DIR = path.join(BRIDGE_DIR, "asks-inflight");
+// TTL은 pid 생존 판정의 '보조'(좀비·pid 재사용 방어)일 뿐이며 검증 대기 최대치(60분)보다 커야 한다 —
+// Codex 반례: 30분이면 살아있는 정상 장기 검증의 후반이 무방비.
+const INFLIGHT_TTL_MS = 90 * 60 * 1000;
+// 파일은 ws+요청 지문별 1개(Codex 반례: ws당 1개면 A 진행→B 기록→A 재전송이 통과) — 다른 내용 병렬은 파일이 달라 자연 허용.
+function askInflightFileFor(ws, hash) { return path.join(ASKS_INFLIGHT_DIR, wsKeyFor(ws) + "-" + String(hash || "") + ".json"); }
+function askInflightGuard(rec, hash, nowMs, pidAlive) {
+  if (!rec || rec.hash !== hash) return { block: false, reason: "none" };
+  const alive = typeof pidAlive === "function" ? !!pidAlive(rec.pid) : false;
+  if (!alive) return { block: false, reason: "dead" }; // 진짜 실패(프로세스 사망) 후 재시도 허용 — pid 생존이 1차 기준
+  const age = nowMs - (Date.parse(rec.ts || "") || 0);
+  if (!(age >= 0 && age < INFLIGHT_TTL_MS)) return { block: false, reason: "stale" }; // 좀비/pid 재사용 방어(보조)
+  return { block: true, reason: "inflight", ts: rec.ts };
+}
+// 표식 선점(원자적 'wx' 생성 — 검사-후-기록 분리의 동시성 구멍 차단): 성공=선점, EEXIST=기존 레코드 반환.
+// 소유 토큰(난수) 기록 — 해제는 자기 것(pid+token 일치)만(Codex 반례: 먼저 끝난 프로세스가 강행 요청 표식을 지움).
+function claimAskInflight(ws, hash) {
+  const rec = { hash, ts: new Date().toISOString(), pid: process.pid, token: crypto.randomBytes(8).toString("hex") };
+  const f = askInflightFileFor(ws, hash);
+  try { fs.mkdirSync(ASKS_INFLIGHT_DIR, { recursive: true }); } catch { /* 아래 wx가 실패로 알려줌 */ }
+  try {
+    fs.writeFileSync(f, JSON.stringify(rec), { flag: "wx" });
+    // 기회적 청소 — .json만 대상(.reclaim 잠금 불침), 판독 실패 파일은 '쓰는 중'일 수 있어 mtime이 TTL보다
+    // 오래된 경우에만 삭제(형제 정상 표식을 open→write 사이에 읽고 지우던 Codex 반례).
+    try { for (const b of fs.readdirSync(ASKS_INFLIGHT_DIR)) { if (!b.endsWith(".json")) continue; const p2 = path.join(ASKS_INFLIGHT_DIR, b); try { const r2 = JSON.parse(fs.readFileSync(p2, "utf8")); if (!(Date.now() - (Date.parse(r2.ts || "") || 0) < INFLIGHT_TTL_MS)) fs.unlinkSync(p2); } catch { try { if (!(Date.now() - fs.statSync(p2).mtimeMs < INFLIGHT_TTL_MS)) fs.unlinkSync(p2); } catch { /* 무해 */ } } } } catch { /* 기회적 청소 실패 무해 */ }
+    return { claimed: true, rec };
+  } catch (e) {
+    if (e && e.code === "EEXIST") {
+      // 다른 프로세스가 막 쓰는 극히 짧은 구간의 불완전 JSON — 즉시 재시도 3회, 그래도 판독 불가면 rec:null
+      // (호출부는 null을 '진행 중'으로 보수 처리 — 죽은 표식처럼 덮어쓰면 동시 재시도 중복 구멍, Codex 반례).
+      for (let i = 0; i < 3; i++) { try { return { claimed: false, rec: JSON.parse(fs.readFileSync(f, "utf8")) }; } catch { /* 재시도 */ } }
+      return { claimed: false, rec: null };
+    }
+    return { claimed: true, rec }; // 표식 기록 실패(권한 등) — 가드만 비활성(ask 흐름 불침)
+  }
+}
+// 죽은/만료 표식 회수 — 무조건 삭제→재선점은 '늦은 회수자가 승자의 새 표식(W1)까지 지우는' TOCTOU(Codex 반례).
+// 절차: ①회수 잠금(.reclaim, wx — 잠금 승자만 진행, 잔존 잠금은 자동 해제 없이 차단[탈출구=--force-resend·수동 삭제]) ②잠금 아래 현재
+// 레코드 재판독 — '관측했던 죽은 레코드(pid+token) 그대로'일 때만 삭제(그 사이 새 선점자·제3 정상 선점자면 중단)
+// ③wx 재선점 ④잠금 해제. 진 쪽/중단 쪽은 호출부가 보수적으로 차단(--force-resend가 탈출구).
+function reclaimAskInflight(ws, hash, deadRec) {
+  const f = askInflightFileFor(ws, hash);
+  const lock = f + ".reclaim";
+  const myLock = { pid: process.pid, token: crypto.randomBytes(8).toString("hex"), ts: new Date().toISOString() };
+  // 잠금은 wx 1회 — stale 잠금의 '자동' 강제 해제는 두지 않는다(Codex 반례: read→unlink→wx로는 죽은 잠금을
+  // 두 회수자가 동시에 지우고 서로의 새 잠금까지 지워 임계 구역 이중 진입. 평면 파일시스템에서 원자적 소유권
+  // 이전이 불가하므로 보수 선택 — 잔존 잠금은 차단으로 남고, 탈출구는 --force-resend[잠금 미경유]·수동 삭제).
+  let locked = false;
+  try { fs.writeFileSync(lock, JSON.stringify(myLock), { flag: "wx" }); locked = true; }
+  catch { return { claimed: false, rec: null, reason: "lock-busy" }; }
+  try {
+    let cur = null;
+    try { cur = JSON.parse(fs.readFileSync(f, "utf8")); }
+    catch (e) {
+      // 판독 실패는 fail-closed(Codex 반례: EACCES류를 '사라짐'으로 오인해 삭제·재선점하면 중복 실행) —
+      // 진짜 사라짐(ENOENT)만 회수 계속(그 표식은 이미 해제된 것 — 바로 선점 시도).
+      if (!(e && e.code === "ENOENT")) return { claimed: false, rec: null, reason: "unreadable" };
+    }
+    if (cur && (!deadRec || cur.pid !== deadRec.pid || cur.token !== deadRec.token)) return { claimed: false, rec: cur, reason: "changed" }; // 새 선점자 보존
+    try { fs.unlinkSync(f); } catch { /* 이미 없음 */ }
+    return claimAskInflight(ws, hash);
+  } finally {
+    if (locked) { // 자기 잠금만 해제(토큰 일치 — 어떤 경위로든 주인이 바뀐 잠금을 옛 보유자가 지우는 것 방지)
+      try { const lr = JSON.parse(fs.readFileSync(lock, "utf8")); if (lr && lr.token === myLock.token) fs.unlinkSync(lock); } catch { /* 무해 */ }
+    }
+  }
+}
+function overwriteAskInflight(ws, hash) { // --force-resend '전용'(의식적 강행) — 죽은 표식 회수는 reclaim이 담당
+  const rec = { hash, ts: new Date().toISOString(), pid: process.pid, token: crypto.randomBytes(8).toString("hex") };
+  try { fs.mkdirSync(ASKS_INFLIGHT_DIR, { recursive: true }); atomicWrite(askInflightFileFor(ws, hash), JSON.stringify(rec)); } catch { /* 무해 */ }
+  return rec;
+}
+function clearAskInflight(ws, hash, token) {
+  if (!token) return; // 소유 토큰 필수 — 계약을 함수 차원에서 고정(pid 재사용 오삭제 방지, Codex 보완)
+  try {
+    const f = askInflightFileFor(ws, hash);
+    const r = JSON.parse(fs.readFileSync(f, "utf8"));
+    if (r && r.hash === hash && r.pid === process.pid && r.token === token) fs.unlinkSync(f); // 자기 표식만 해제
+  } catch { /* 이미 없음 */ }
+}
+
+// 최신 지도 상태: no-map(없음) / fresh(신선) / stale(지도 이후 변경 신호 — 낡음)
 // / legacy-no-seeds(메타는 있으나 근거 파일 기록이 없어 신선도 판정 자체가 불가 — seedFiles 기록 도입 前 구버전 지도.
 //   실사고 2026-07-08: codex-peek 7/6 지도가 이 케이스라 'fresh' 오판 → 자동 지시 영구 침묵 → 장부 점화 실패).
+// 변경 신호 3종(2026-07-10 신선도 사각 해소 — seed 8개만 보던 것을 확장. 사각의 실증: 대상을 바로잡아도
+// seed 밖 파일만 바뀌면 지시가 영영 침묵해 '일지가 늘 그대로'가 재발): ①seedChanged=지도 자신의 근거 파일(앞 8개)
+// 변경 ②commitsAfter=메타 head 이후 새 커밋 수(메타에 head가 기록된 신형 지도만) ③dirtyChanged=작업트리 변경
+// 파일 중 지도 ts 이후 mtime(seed 중복 제외). 비-git·git 실패·구형 메타는 해당 신호 0(무회귀·fail-open).
 function scoutMapStatus(ws) {
   const dir = path.join(SCOUTS_DIR, wsKeyFor(ws));
   let bases = [];
   try { bases = fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)).sort().reverse(); } catch { /* 보관함 없음 */ }
-  if (!bases.length) return { state: "no-map", base: null, staleCount: 0 };
+  if (!bases.length) return { state: "no-map", base: null, staleCount: 0, seedChanged: 0, commitsAfter: 0, dirtyChanged: 0 };
   let meta = {};
   try { meta = JSON.parse(fs.readFileSync(path.join(dir, bases[0] + ".json"), "utf8")); } catch { /* 메타 없음 — 낡음 판정 불가 → fresh 취급(과잉 지시 방지) */ }
-  const ts = Date.parse(meta.ts || "") || 0;
+  const ts = Date.parse(meta.basisTs || meta.ts || "") || 0; // basisTs=꾸러미 수집 시점(지도가 본 입력) — AI 응답 대기(수 분) 중 변경을 놓치지 않게(Codex 반례). 구형 메타는 ts 폴백
   // legacy 판정은 '기록 자체가 없던 구버전'만 — seedFiles 속성 부재/비배열. 명시적 빈 배열([])은 최신 러너가
   // '변경 없는 작업트리'에서 정상적으로 만들 수 있는 형식이라 legacy가 아니다(Codex 반례 2026-07-08: 빈 배열을
   // 구버전으로 오판하면 방금 만든 지도에 '재생성 권고'를 반복하는 거짓 안내가 됨) → fresh 취급(판정 근거 없음=과잉 지시 방지).
-  if (ts && !Array.isArray(meta.seedFiles)) return { state: "legacy-no-seeds", base: bases[0], staleCount: 0 };
+  if (ts && !Array.isArray(meta.seedFiles)) return { state: "legacy-no-seeds", base: bases[0], staleCount: 0, seedChanged: 0, commitsAfter: 0, dirtyChanged: 0 };
   const seeds = (meta.seedFiles || []).slice(0, 8);
-  let staleCount = 0;
-  for (const s of seeds) { try { if (fs.statSync(path.join(ws, s)).mtimeMs > ts) staleCount++; } catch { /* 삭제된 seed — 제외 */ } }
-  return { state: ts && staleCount > 0 ? "stale" : "fresh", base: bases[0], staleCount };
+  let seedChanged = 0;
+  // 삭제 판정 기준선: seedFiles에는 '지도 생성 당시 이미 삭제돼 있던 경로'(삭제 diff의 seed)도 들어간다 —
+  // 무조건 '없음=지도 뒤 삭제'로 세면 새 지도가 즉시 stale(Codex 반례). 신형 메타(seedMissing 기록)만
+  // '당시 존재했던 seed의 소실'을 변경으로 세고, 구형 메타는 옛 동작(제외 — 무회귀·과잉 지시 방지).
+  const missingAtMap = new Set(Array.isArray(meta.seedMissing) ? meta.seedMissing : null);
+  for (const s of seeds) {
+    try { if (fs.statSync(path.join(ws, s)).mtimeMs > ts) seedChanged++; }
+    catch { if (Array.isArray(meta.seedMissing) && !missingAtMap.has(s)) seedChanged++; }
+  }
+  let commitsAfter = 0;
+  if (ts && typeof meta.head === "string" && /^[0-9a-f]{7,40}$/i.test(meta.head)) {
+    try {
+      const r = require("child_process").spawnSync("git", ["-c", "safe.directory=" + String(ws).replace(/\\/g, "/"), "-C", ws, "rev-list", "--count", meta.head + "..HEAD"], { encoding: "utf8", timeout: 3000, windowsHide: true });
+      if (r.status === 0) commitsAfter = Math.min(parseInt(String(r.stdout).trim(), 10) || 0, 999);
+    } catch { /* git 없음/실패 — 신호 0 */ }
+  }
+  let dirtyChanged = 0;
+  if (ts) {
+    const seedSet = new Set(seeds.map((s) => { try { return normWs(path.join(ws, s)); } catch { return s; } }));
+    for (const e of changedEntriesFor(ws)) {
+      const abs = path.join(ws, e.rel);
+      if (seedSet.has(normWs(abs))) continue; // seed와 중복 카운트 방지
+      if (/D/.test(e.code)) { dirtyChanged++; continue; } // 삭제는 mtime이 없음 — 상태 코드로 판정(Codex 반례)
+      try { if (fs.statSync(abs).mtimeMs > ts) dirtyChanged++; } catch { dirtyChanged++; /* stat 실패(방금 사라짐 등)도 변경 신호 */ }
+    }
+  }
+  const staleCount = seedChanged + commitsAfter + dirtyChanged;
+  return { state: ts && staleCount > 0 ? "stale" : "fresh", base: bases[0], staleCount, seedChanged, commitsAfter, dirtyChanged };
 }
 // 3트랙이고 지도가 없/낡았으며 이 상태에 아직 지시한 적 없으면 지시문 반환, 아니면 null. c=이미 로드된 계약(중복 로드 방지).
 // 재지시 정책(2026-07-08 점화 보수): 같은 지도라도 낡음 '정도'가 커지면(2의 거듭제곱 버킷 1,2,4,8… 상승) 다시 1회 지시.
@@ -402,7 +578,23 @@ function scoutMapStatus(ws) {
 function scoutBucket(n) { let b = 1; while (b * 2 <= n) b *= 2; return n > 0 ? b : 0; } // 1,2,4,8,… (n<1이면 0)
 function buildScoutDirective(ws, c) {
   if (!ws || normScoutMode(c) !== "on") return null;
-  const target = resolveScoutRepo(ws, c).repo; // P1: 정찰 계열은 계약 지정 대상 기준(지도 상태·재지시 기억·명령 경로 전부)
+  const rs = resolveScoutRepo(ws, c); // P1: 정찰 계열은 계약 지정 대상 기준(지도 상태·재지시 기억·명령 경로 전부)
+  const target = rs.repo;
+  // ⓪ 대상 어긋남 자기진단이 신선도보다 '먼저'(Codex 설계검증 지적 2026-07-10: 엉뚱한 대상의 지도가 fresh면
+  // 아래 조기 반환에 막혀 어긋남 지시가 영영 안 나감). 같은 제안엔 1회만 — 기억은 증거 파일의 advisedRepo(ws 단위).
+  try {
+    const ev = readScoutTargetEvidence(ws);
+    const drift = detectScoutTargetDrift(target, ev);
+    if (drift.drift && String(ev.advisedRepo || "") !== normWs(drift.repo)) {
+      try { atomicWrite(scoutEvidenceFileFor(ws), JSON.stringify({ ...ev, advisedRepo: normWs(drift.repo), advisedTs: new Date().toISOString() })); } catch { /* 기억 실패 시 다음 턴 재제안 — 무해 */ }
+      const en2 = loadLang() === "en";
+      const cur = rs.source === "contract"
+        ? (en2 ? "the contract-set target " + target : "계약에 지정된 " + target)
+        : (en2 ? "unset, so the session folder (" + target + ") is being used" : "미지정이라 세션 폴더(" + target + ") 기준");
+      if (en2) return "[Recon (3-track) auto-directive · target mismatch suspected · this suggestion once] In the last " + drift.sample + " verification(s), " + drift.agree + " cited mostly files under " + drift.repo + ", but the scout target is " + cur + ". If " + drift.repo + " is the actual dev repo, run from the codex-peek source repo: `node scripts/scope-target.js \"" + ws + "\" set \"" + drift.repo + "\"` (this writes scoutRepo into this project's contract file for the current language slot — other language modes are configured separately), then `node scripts/scope-scout-self.js \"" + drift.repo + "\"` for a map. If not, ignore this (advisory — nothing is blocked).";
+      return "[탐색(3트랙) 자동 지시 · 대상 어긋남 의심 · 이 제안 1회만] 최근 검증 " + drift.sample + "회 중 " + drift.agree + "회가 " + drift.repo + " 소속 파일을 주로 인용했는데, 정찰 대상은 " + cur + "다. 실제 개발 레포가 " + drift.repo + " 가 맞으면 codex-peek 소스 저장소에서 `node scripts/scope-target.js \"" + ws + "\" set \"" + drift.repo + "\"` 를 실행해 대상을 지정하고(이 프로젝트 계약 파일의 현재 언어 슬롯에 scoutRepo가 저장됨 — 다른 언어 모드는 별도 설정), 이어서 `node scripts/scope-scout-self.js \"" + drift.repo + "\"` 로 지도를 받아라. 아니라면 무시해도 된다(참고용 — 아무것도 막지 않는다).";
+    }
+  } catch { /* 자기진단 실패가 기존 신선도 지시를 못 막음 */ }
   const st = scoutMapStatus(target);
   if (st.state === "fresh") return null;
   const bucket = st.state === "stale" ? scoutBucket(st.staleCount) : 0;
@@ -429,7 +621,7 @@ function buildScoutDirective(ws, c) {
     ? (en ? "this project has no impact map yet" : "이 프로젝트에 영향지도가 아직 없다")
     : st.state === "legacy-no-seeds"
     ? (en ? "the latest map has no basis-file record, so freshness cannot be judged (map predates basis tracking) — regeneration recommended" : "최신 지도에 근거 파일 기록이 없어 신선한지 낡았는지 판정할 수 없다(근거 기록 도입 전의 구버전 지도) — 재생성 권고")
-    : (en ? st.staleCount + " basis file(s) of the latest map changed after it was generated — the map is stale" : "최신 지도 생성 이후 그 지도의 근거 파일 " + st.staleCount + "개가 더 바뀌어 지도가 낡았다");
+    : (en ? st.staleCount + " change signal(s) since the latest map (basis files " + st.seedChanged + " · new commits " + st.commitsAfter + " · working tree " + st.dirtyChanged + ") — the map is stale" : "최신 지도 이후 변경 신호 " + st.staleCount + "건(근거 파일 " + st.seedChanged + " · 새 커밋 " + st.commitsAfter + " · 작업트리 " + st.dirtyChanged + ") — 지도가 낡았다");
   if (en) return "[Recon (3-track) auto-directive · once per state] " + why + ". If this turn involves file changes, refresh the impact map before concluding — run `node scripts/scope-scout-self.js \"" + target + "\"` from the codex-peek source repo (default Claude scout first — no separate billing"
     + (hasKey ? " · scope-scout-deepseek.js (DeepSeek scout) available if comparison seems useful — key registration = consent to auto calls" : "")
     + "). Trivial turns (a question, a one-line doc edit) may skip — the map is advisory and blocks nothing.";
@@ -605,14 +797,28 @@ function rankScoutItems(items, changedFiles, existsFn) {
   };
   return [...pool.filter(rel), ...pool.filter((i) => !rel(i))]; // 관련 우선·안정 정렬(원순서 보존)
 }
-// 정찰 대상의 '지금 바뀐 파일'(git status) — ask마다 1회·3초 상한·실패는 빈 배열(재정렬만 포기, 동봉은 유지).
-function changedFilesFor(repo) {
+// 정찰 대상의 '지금 바뀐 항목'(git status --porcelain -z) — 상태 코드 포함(-z: 한글·공백 경로가 따옴표로 감싸져
+// statSync가 실패하던 함정 해소 — Codex 반례 2026-07-10). rename(R/C)은 -z에서 '새경로\0옛경로' 2필드 — 새 경로만.
+function changedEntriesFor(repo) {
   try {
-    const r = require("child_process").spawnSync("git", ["-c", "safe.directory=" + String(repo).replace(/\\/g, "/"), "-C", repo, "status", "--porcelain"], { encoding: "utf8", timeout: 3000, windowsHide: true });
+    const r = require("child_process").spawnSync("git", ["-c", "safe.directory=" + String(repo).replace(/\\/g, "/"), "-C", repo, "status", "--porcelain", "-z"], { encoding: "utf8", timeout: 3000, windowsHide: true });
     if (r.status !== 0 || r.error) return [];
-    return String(r.stdout || "").split(/\r?\n/).map((l) => { const t = l.slice(3).trim(); const i = t.indexOf(" -> "); return i >= 0 ? t.slice(i + 4) : t; }).filter(Boolean).slice(0, 200); // rename 행(old -> new)은 새 경로만(Codex 보완)
+    const toks = String(r.stdout || "").split("\0");
+    const out = [];
+    for (let i = 0; i < toks.length && out.length < 200; i++) {
+      const t = toks[i];
+      if (!t || t.length < 4) continue;
+      const code = t.slice(0, 2);
+      const rel = t.slice(3);
+      if (!rel) continue;
+      out.push({ code, rel });
+      if (/[RC]/.test(code)) i++; // 다음 토큰은 옛 경로 — 소비 안 함(⚠양쪽 열 다 검사: worktree rename " R"을 code[0]만 보면 옛 경로가 가짜 항목이 됨 — Codex 반례 2026-07-10)
+    }
+    return out;
   } catch { return []; }
 }
+// 경로만 필요한 기존 소비자(재랭킹)용 — ask마다 1회·3초 상한·실패는 빈 배열(재정렬만 포기, 동봉은 유지).
+function changedFilesFor(repo) { return changedEntriesFor(repo).map((e) => e.rel); }
 
 function buildScoutAttach(ws, c, lang) {
   if (!ws || normScoutMode(c) !== "on") return null;
@@ -635,7 +841,7 @@ function buildScoutAttach(ws, c, lang) {
   if (!items.length) return null;
   const en = (LANGS.includes(lang) ? lang : loadLang()) === "en";
   const staleNote = st.state === "stale"
-    ? (en ? ` · STALE: ${st.staleCount} basis file(s) changed since` : ` · 낡음: 생성 후 근거 파일 ${st.staleCount}개 변경`)
+    ? (en ? ` · STALE: ${st.staleCount} change signal(s) since (basis ${st.seedChanged} · commits ${st.commitsAfter} · working tree ${st.dirtyChanged})` : ` · 낡음: 생성 후 변경 신호 ${st.staleCount}건(근거 ${st.seedChanged} · 커밋 ${st.commitsAfter} · 작업트리 ${st.dirtyChanged})`)
     : "";
   const head = en
     ? `[Scout impact map · reference — not a verdict rule] The latest impact map of this project (created ${meta.ts || "?"}, ${meta.arm === "deepseek" ? "DeepSeek scout" : "default Claude scout"}${staleNote}) flagged these high-priority paths:`
@@ -958,4 +1164,4 @@ function formatForClaude(answer, lang) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };

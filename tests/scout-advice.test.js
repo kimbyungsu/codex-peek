@@ -41,7 +41,7 @@ const meta = JSON.parse(fs.readFileSync(path.join(dir, metaFile), "utf8"));
 meta.ts = new Date(Date.now() - 3600 * 1000).toISOString();
 fs.writeFileSync(path.join(dir, metaFile), JSON.stringify(meta));
 const d2 = lib.buildScoutDirective(repo, cOn);
-ok(!!d2 && /낡았다/.test(d2) && /1개가 더 바뀌어/.test(d2), "낡음 감지: 지도 자신의 근거 파일 기준(멀티 세션 오인 없음)");
+ok(!!d2 && /낡았다/.test(d2) && /변경 신호 1건\(근거 파일 1/.test(d2), "낡음 감지: 지도 자신의 근거 파일 기준 + 신호 3종 분리 표기(2026-07-10 신선도 확장)");
 ok(lib.buildScoutDirective(repo, cOn) === null, "같은 낡음 서명 재호출 → 재지시 없음");
 
 console.log("[DeepSeek 동의 모델] 키 등록 시에만 비교 팔 언급");
@@ -71,20 +71,20 @@ ok(!!lib.buildScoutDirective(repo, cOn) && lib.scoutMapStatus(repo).staleCount =
 ok(lib.buildScoutDirective(repo, cOn) === null, "같은 정도(1) 재호출 → 침묵");
 touch("b.md");
 const dB2 = lib.buildScoutDirective(repo, cOn);
-ok(!!dB2 && /2개가 더 바뀌어/.test(dB2), "낡음 2(버킷2 상승) → 재지시 1회");
+ok(!!dB2 && /변경 신호 2건/.test(dB2), "낡음 2(버킷2 상승) → 재지시 1회");
 touch("c.md");
 ok(lib.scoutMapStatus(repo).staleCount === 3 && lib.buildScoutDirective(repo, cOn) === null, "낡음 3(버킷2 유지) → 침묵(도배 방지)");
 touch("d.md");
 const dB4 = lib.buildScoutDirective(repo, cOn);
-ok(!!dB4 && /4개가 더 바뀌어/.test(dB4), "낡음 4(버킷4 상승) → 재지시 1회");
-fs.rmSync(path.join(repo, "c.md")); // seed 삭제 → staleCount 하강(4→3)
+ok(!!dB4 && /변경 신호 4건/.test(dB4), "낡음 4(버킷4 상승) → 재지시 1회");
+fs.utimesSync(path.join(repo, "c.md"), old, old); // c.md mtime을 지도 이전으로 → staleCount 하강(4→3). ⚠삭제는 이제 '변경 신호'라 하강 시뮬레이션에 못 씀(2026-07-10 삭제 감지 — Codex 반례 수용)
 ok(lib.scoutMapStatus(repo).staleCount === 3 && lib.buildScoutDirective(repo, cOn) === null, "하강(4→3, 버킷2≤최대4) → 재지시 없음(스팸 방지)");
 
 console.log("[구형 기억 마이그레이션] {sig:'stale:<base>'} 파일은 maxBucket=1로 해석 — 정도 진행 시 재지시");
 const adviceFile = path.join(tmpHome, "scout-advice", store.wsKeyFor(repo) + ".json");
 fs.writeFileSync(adviceFile, JSON.stringify({ sig: "stale:" + lib.scoutMapStatus(repo).base, ts: new Date().toISOString() }));
 const dMig = lib.buildScoutDirective(repo, cOn);
-ok(!!dMig && /3개가 더 바뀌어/.test(dMig), "구형 sig(=버킷1) + 현재 낡음 3(버킷2) → 재지시(마이그레이션 의도)");
+ok(!!dMig && /변경 신호 3건/.test(dMig), "구형 sig(=버킷1) + 현재 낡음 3(버킷2) → 재지시(마이그레이션 의도)");
 
 console.log("[레거시 지도 · seedFiles 기록 없음] fresh 오판 대신 '판정 불가' 상태 + 재생성 권고 1회(실사고 2026-07-08 잠금)");
 store.saveMap(repo, "self", "# 지도5", { seedFiles: ["a.md"] });

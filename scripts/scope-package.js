@@ -49,6 +49,10 @@ for (let i = 0; i < toks.length; i++) {
   if (/[RC]/.test(status)) i++;
   if (p && !/\/$/.test(p)) seeds.push(p);
 }
+// 신선도 기준선 — seed '확정 직후' 캡처(러너가 AI 응답 뒤 재조사하면 diff 수집~응답 사이 삭제/복원이 오분류 —
+// Codex 반례 2026-07-10). basisTs=이 시점(이후 mtime 변경은 전부 신호), seedMissing='없음'을 ENOENT만으로 판정
+// (접근 오류를 없음으로 확정 금지 — 그 외 오류면 seedMissing만 생략·basisTs는 유지[삭제 판정만 불가]).
+const baseline = captureSeedBaseline(repo, seeds);
 
 // diff: unstaged+staged 합본(untracked 새 파일 내용은 diff에 안 나오나 seed 목록에는 있음 — 정직 한계로 꾸러미 각주가 커버)
 // 민감 범주(env/키/토큰류) 파일 섹션은 여기서 제외 — 꾸러미는 외부 탐색자(API)까지 가므로, 토큰 추출 '전'에 잘라
@@ -77,7 +81,23 @@ for (const { token } of tokens) {
 const logOut = git(["log", "--no-merges", "--first-parent", "--pretty=format:%H|%ct|%s", "--name-only", "-n", "300"]);
 const coChange = logOut ? suggest(parseGitLog(logOut), seeds) : null;
 
-  return buildPackage({ repo, head, seeds, diffText, tokenHits, droppedTokens, coChange, ...collectCommon(repo), ledger: ledgerForPackage(repo, seeds), sensitiveExcluded });
+  const pkg = buildPackage({ repo, head, seeds, diffText, tokenHits, droppedTokens, coChange, ...collectCommon(repo), ledger: ledgerForPackage(repo, seeds), sensitiveExcluded });
+  if (pkg && pkg.meta) Object.assign(pkg.meta, baseline); // 러너가 지도 메타로 그대로 저장(scoutMapStatus의 신선도 기준)
+  return pkg;
+}
+
+// 신선도 기준선 캡처 — seed 확정 직후 1회. 기준 시각(basisTs)은 stat 순회 '전' 확보해 항상 반환 —
+// 순회 오류로 시각까지 버리면 판독기가 저장 시각(ts)으로 폴백해 AI 응답 대기 중 변경이 fresh로 숨는다(Codex 반례).
+// '없음'은 ENOENT만, 그 외 오류(EACCES/ENOTDIR류)는 seedMissing만 생략(삭제 판정만 불가 — mtime 신호는 유지).
+function captureSeedBaseline(repo, seeds) {
+  const basisTs = new Date().toISOString();
+  try {
+    const missing = [];
+    for (const sd of (seeds || [])) {
+      try { fs.statSync(path.join(repo, sd)); } catch (e) { if (e && e.code === "ENOENT") missing.push(sd); else throw e; }
+    }
+    return { basisTs, seedMissing: missing };
+  } catch { return { basisTs }; }
 }
 
 // 공용 수집(테스트 목록·최근 검증 실패·stable MAP) — git 경로와 무이력 경로가 공유.
@@ -228,6 +248,7 @@ function collectPackageHistoryless(repo) {
     basisNote = "최근 수정 순 상위(첫 지도 — 세션·지도 기준 없음)";
   }
   seeds = seeds.slice(0, HL.maxSeeds);
+  const baseline = captureSeedBaseline(repo, seeds.map((f) => f.rel)); // seed 확정 직후(발췌·스캔 수집 전) — git 경로와 동일 계약
   // '변경 내용' 대체 = 지금 내용 앞부분 발췌(전후 비교 불가 — 렌더/각주가 정직 고지)
   const excerpts = seeds.map((f) => {
     let t = "";
@@ -255,13 +276,14 @@ function collectPackageHistoryless(repo) {
     tokenHits.push({ token, files: hits, truncated: false });
   }
   const pkg = buildPackage({ repo, head: "0000000", seeds: seeds.map((s) => s.rel), diffText: excerpts, tokenHits, droppedTokens, coChange: null, ...collectCommon(repo), ledger: ledgerForPackage(repo, seeds.map((s) => s.rel)), sensitiveExcluded: [], historyless: true, basisNote });
+  Object.assign(pkg.meta, baseline); // 신선도 기준선(basisTs·seedMissing) — 러너가 지도 메타로 저장
   if (basisTrunc) pkg.meta.truncations.push(basisTrunc);
   if (scanNote) pkg.meta.truncations.push(scanNote); // 커버리지 축소는 정직 고지(침묵 절단 금지)
   if (capped) pkg.meta.truncations.push(`파일 탐색이 상한(파일 ${HL.maxScanFiles}개·깊이 ${HL.maxDepth})에 도달 — 일부 파일은 목록에서 빠졌을 수 있음`);
   return pkg;
 }
 
-module.exports = { collectPackage };
+module.exports = { collectPackage, captureSeedBaseline };
 
 if (require.main === module) {
   const repo = process.argv[2];

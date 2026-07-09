@@ -88,7 +88,7 @@ ok(/증거 봉투 꾸림", "packs evidence"/.test(ext) && /지도 반환", "retu
 ok(!/Codex<small>\$\{t\("검증", "verify"\)\}<\/small>\s*<\/div>\s*<div class="farrow off" id="faScout"/.test(ext), "Codex 뒤 일렬 탐색자 배선이 남아있지 않음");
 ok(/"정찰자", "Scout"/.test(ext) && /"영향지도 ⚡LLM", "impact map ⚡LLM"/.test(ext) && /켜짐 · 지도는 직접\/자동 지시 실행","on · maps run directly or via auto-directive"/.test(ext), "정찰자 표기 양언어(LLM 배지) + 실행 경로 정직 표기(직접/자동 지시 — '수동만' 거짓 제거)");
 ok(/shownSM===appSM/.test(ext) && /appSM==="on"/.test(ext), "탐색 토글이 지도 렌더 가드에 포함(저장 반영 시 갱신)");
-ok(/scoutMapStale: computeScoutMapStale\(ws, scope, scoutMaps\)/.test(ext) && /최신 지도 생성 이후 파일 /.test(ext) && /file\(s\) changed after the latest map/.test(ext), "낡은 지도 배지(신선도) — 계산+게시판 표기 양언어");
+ok(/scoutMapStale: computeScoutMapStale\(ws, scope, scoutMaps\)/.test(ext) && /최신 지도 이후 변경 신호 /.test(ext) && /change signal\(s\) since the latest map/.test(ext), "낡은 지도 배지(신선도) — 계산+게시판 표기 양언어");
 ok(/키 없이도 변경 감지/.test(ext) && /별도 과금 없음/.test(ext) && !/무료 self/.test(ext) && !/free self/.test(ext) && !/기초 탐색/.test(ext) && !/basic scouting/.test(ext), "무키 문구 — '무료' 단독·'기초 탐색' 잔재 0(별도 과금 없음·쓰던 Claude 사용량 범위로 정직화)");
 
 console.log("[탐색 가시성] 상태 요약 줄·세그먼트 연결 표시·상태바 신호(침묵을 상태로 번역 — 사용자 지적)");

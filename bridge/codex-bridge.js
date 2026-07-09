@@ -8,6 +8,7 @@
 //   node codex-bridge.js ask "<프롬프트>"          연결된 세션에 보내고 답 받기 (없으면 보고)
 //   node codex-bridge.js ask --allow-new "<...>"   연결 없을 때 새 세션 생성+연결 후 보내기 (첫 소통)
 //   node codex-bridge.js ask --force-new "<...>"   엉뚱 폴더 방어를 무릅쓰고 '이 폴더'에 새 세션 강제(--allow-new 함의)
+//   node codex-bridge.js ask --force-resend "<...>" 같은 요청 진행 중 차단(중복 전송 가드)을 의식적으로 우회
 //   node codex-bridge.js ask --net "<...>"          이 1회만 검증자 네트워크 허용(파일 읽기전용 유지) — 원격(GitHub 등) 직접 확인용
 //   node codex-bridge.js link <codex-session-id>   현재 Claude 세션을 기존 Codex 세션에 연결
 //   node codex-bridge.js link --last               가장 최근(인덱스된) Codex 세션에 연결
@@ -15,10 +16,11 @@
 //   node codex-bridge.js find                       연결 후보(인덱스된 Codex 세션) 목록
 
 const { spawnSync, spawn } = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -278,6 +280,42 @@ function flagLedgerConfirms(answer, ws, sessionId, execCwd) {
       if (hit.length >= 2) appendLedgerEvent(target, { ts: now, type: "confirmed", sig, from: `verify ${sessionId || "?"} ${verdict} — 실존 인용: ${hit.slice(0, 3).join(", ")}` });
     }
   } catch { /* best-effort — 장부 실패가 검증 흐름을 막지 않음 */ }
+}
+// 정찰 대상 어긋남 자기진단의 '증거 수집'(구조 해법 2026-07-10 — buildScoutDirective의 detectScoutTargetDrift가 소비).
+// 이 답이 실존 인용한 파일들이 어느 git 레포 소속인지 관측 1건으로 적재. 판정과 무관(어긋남은 실패 답에서도 보인다),
+// 3트랙일 때만(2트랙 무회귀), 경로 해석은 execCwd 기준(세션 폴더 기준으로 풀면 어긋난 상황에서 증거 자체가 빈 값 —
+// Codex 설계검증 2026-07-10). git root 탐지는 rev-parse --show-toplevel(디렉터리별 캐시·3s·실패 skip).
+// safe.directory=* 는 이 발견 호출 1회 한정(레포 루트를 아직 모르는 단계라 특정 경로를 못 박음 — 읽기 전용 조회).
+function collectScoutTargetEvidence(answer, ws, execCwd) {
+  try {
+    const c = loadContract(ws);
+    if (!c || c.scoutMode !== "on") return;
+    const re = /\(([^()\s]+\.[A-Za-z0-9]+):(\d+)(?:-\d+)?\)/g; // citedResolvedBasenames와 동일 파서(같은 신호원)
+    const text = String(answer || "");
+    const files = new Set();
+    let m;
+    while ((m = re.exec(text)) && files.size < 40) { const f = resolveCitedPath(m[1], execCwd || ws); if (f) files.add(f); } // 파일 상한 40(비용 상수화 — Codex 보완)
+    if (!files.size) return;
+    const topCache = new Map(); const counts = new Map();
+    for (const f of files) {
+      const d = path.dirname(f);
+      let top = topCache.get(d);
+      if (top === undefined) {
+        if (topCache.size >= 12) continue; // 서로 다른 디렉터리 git 조회 상한(동기 3s 누적 방지 — Codex 보완)
+        try {
+          const r = spawnSync("git", ["-c", "safe.directory=*", "-C", d, "rev-parse", "--show-toplevel"], { encoding: "utf8", timeout: 3000, windowsHide: true });
+          top = r.status === 0 && String(r.stdout).trim() ? String(r.stdout).trim() : null;
+        } catch { top = null; }
+        topCache.set(d, top);
+      }
+      if (!top) continue; // git 밖 파일은 레포 증거가 아님
+      const k = normWs(top);
+      const cur = counts.get(k) || { repo: top, n: 0 };
+      cur.n++; counts.set(k, cur);
+    }
+    if (!counts.size) return;
+    appendScoutTargetEvidence(ws, { ts: nowIso(), repos: [...counts.values()].sort((a, b) => b.n - a.n).slice(0, 5) });
+  } catch { /* best-effort — 수집 실패가 검증 흐름을 막지 않음 */ }
 }
 // rollout 끝에서 '마지막 turn의 모델 + 그 turn 1회 토큰(last_token_usage)'을 읽는다 — 검증 1건의 모델·비용 기록용.
 // usage-monitor 구조: type==='turn_context'의 payload.model, payload.type==='token_count'의 info.last_token_usage. 파일 끝 256KB만(검증=보통 마지막 1턴). 못 찾으면 빈/ null(통계는 '미상').
@@ -846,7 +884,8 @@ async function cmdAsk(rest) {
   const forceNew = rest.includes("--force-new"); // 엉뚱 폴더 방어를 무릅쓰고 '이 폴더'에 새 세션 강제
   const allowNew = rest.includes("--allow-new") || forceNew;
   const net = rest.includes("--net"); // 이 1회만 네트워크 허용(파일 읽기전용 유지) — netArgs 주석 참조
-  const prompt = rest.filter((x) => x !== "--allow-new" && x !== "--force-new" && x !== "--net").join(" ").trim();
+  const forceResend = rest.includes("--force-resend"); // 중복 전송 차단(아래 가드)을 의식적으로 우회
+  const prompt = rest.filter((x) => x !== "--allow-new" && x !== "--force-new" && x !== "--net" && x !== "--force-resend").join(" ").trim();
   if (!prompt) die('사용법: ask "<프롬프트>"', 2);
 
   try { maybeCleanupState(); } catch { /* 오래된 상태파일 정리 best-effort(Stop 훅 미설치 환경 대비) — 하루 1회 */ }
@@ -855,6 +894,33 @@ async function cmdAsk(rest) {
   // configWs/execCwd 분리: 설정 기준(계약·생각강도·링크·proof·이벤트 라벨)은 '연 폴더'(ws), 코덱스 실행·새세션 탐지·인용
   // 근거 경로 해석은 '작업 폴더'(exec=실제 실행 cwd). 사용자가 연 폴더에 건 설정이 외부 폴더 작업에도 일관 적용되게 한다.
   const ws = configWs();        // 연 폴더(설정 기준)
+  // 같은 요청 중복 전송 차단(2026-07-10 실사고: 호출 창이 자체 시간 상한으로 죽자 '전송 실패' 오판 재전송 →
+  // Codex 병렬 3중 작업). 같은 내용이 살아있는 프로세스에서 진행 중이면 거부 — 답은 rollout/대시보드에서 확인하라.
+  const promptHash = crypto.createHash("sha1").update(prompt).digest("hex").slice(0, 16);
+  let inflightRec = null;
+  if (forceResend) {
+    inflightRec = overwriteAskInflight(ws, promptHash); // 의식적 강행 — 자기 소유 토큰으로 재선점
+  } else {
+    const cl = claimAskInflight(ws, promptHash); // 원자적 wx 선점(검사-후-기록 분리의 동시 통과 구멍 차단 — Codex 반례)
+    if (cl.claimed) inflightRec = cl.rec;
+    else {
+      const blockMsg = () => die(loadLang() === "en"
+        ? `⚠️ The same verification request is already in flight. Do NOT resend — wait for it to finish and read the answer in the dashboard verification chat (or the Codex rollout). If your capture window died, the answer still arrives there. Conscious override: --force-resend`
+        : `⚠️ 같은 검증 요청이 이미 진행 중입니다. 재전송하지 마세요 — 완료를 기다렸다가 대시보드 검증 대화(또는 Codex rollout)에서 답을 읽으면 됩니다. 호출 창이 죽었어도 답은 거기 도착합니다. 의식적 강행: --force-resend`, 3);
+      if (!cl.rec) blockMsg(); // 표식은 있는데 판독 불가(재시도 후에도) — 보수적 '진행 중' 처리(죽은 표식처럼 덮어쓰면 동시 재시도 중복 — Codex 반례)
+      const g = askInflightGuard(cl.rec, promptHash, Date.now(), (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } });
+      if (g.block) blockMsg();
+      // 죽은/만료 표식 회수 — 삭제 후 wx 재선점(동시 재시도 중 하나만 승자 — 단순 덮어쓰기는 둘 다 통과, Codex 반례).
+      const rc = reclaimAskInflight(ws, promptHash, cl.rec); // 관측했던 죽은 레코드를 넘겨 잠금 아래 재검증(TOCTOU 차단)
+      if (rc.claimed) inflightRec = rc.rec;
+      else {
+        const g2 = askInflightGuard(rc.rec, promptHash, Date.now(), (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } });
+        if (g2.block || !rc.rec) blockMsg(); // 경쟁 승자가 진행 중(또는 판독 불가) — 차단
+        inflightRec = overwriteAskInflight(ws, promptHash); // 극단(승자도 즉사) — 강행보다 좁은 창, 진행
+      }
+    }
+  }
+  process.on("exit", () => clearAskInflight(ws, promptHash, inflightRec && inflightRec.token)); // 자기 표식만 해제(SIGKILL 잔존은 pid 생존 검사가 무시)
   const modeSnap = (loadContract(ws) || {}).verifyMode || ""; // 검증 트리거 모드 스냅샷(검증 중 사용자가 바꿔도 오염 안 되게) → flagVerdict로 전달
   const langSnap = loadLang(); // 언어 스냅샷 — ask 실행 중(수 분) 언어를 바꿔도 주입 언어와 헤더/footer 언어가 엇갈리지 않게(modeSnap과 동일 원칙)
   const exec = process.cwd();   // 작업 폴더(실행/탐지/근거경로 기준) — 코덱스 spawn은 cwd 미지정이라 실제로 여기서 돈다
@@ -879,6 +945,7 @@ async function cmdAsk(rest) {
     writeProof(link.codexSession, answer, ws); // 실제 성공 → 검증 증명 기록(verify-guard가 인정)
     flagEvidence(answer, ws, link.codexSession, exec); // 결정2: 인용 근거 존재성+다룬 흔적 점검(경로해석=작업폴더 exec). 라벨=연 폴더 ws
     flagLedgerConfirms(answer, ws, link.codexSession, exec); // 로드맵 ④: 통과류 답의 실존 인용으로 장부 confirmed 적재(보수적)
+    collectScoutTargetEvidence(answer, ws, exec); // 정찰 대상 자기진단 증거(2026-07-10 — 판정 무관·3트랙만·실패 무해)
     flagVerdict(answer, ws, link.codexSession, modeSnap); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 답에 판정 줄이 없으면 표지 누락 노랑 가시화(자동 차단 X)
     process.stdout.write(`${langSnap === "en" ? "# Linked session" : "# 연결 세션"} ${link.codexSession} (${link.via})\n\n${formatForClaude(answer, langSnap)}\n`);
     return;
@@ -955,6 +1022,7 @@ async function cmdAsk(rest) {
     writeProof(id, answer, ws); // 실제 성공 → 검증 증명 기록
     flagEvidence(answer, ws, id, exec); // 결정2: 인용 근거 존재성+다룬 흔적(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
     flagLedgerConfirms(answer, ws, id, exec); // 로드맵 ④: 장부 confirmed(보수적)
+    collectScoutTargetEvidence(answer, ws, exec); // 정찰 대상 자기진단 증거(2026-07-10)
     flagVerdict(answer, ws, id, modeSnap); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 표지 누락도 노랑 가시화(자동 차단 X)
     const en = langSnap === "en";
     const head = earlyLinked
@@ -966,6 +1034,7 @@ async function cmdAsk(rest) {
     writeProof("", answer, ws); // Codex는 성공 응답함(세션id만 미식별) → 검증은 인정
     flagEvidence(answer, ws, "", exec); // 세션id 미식별 → 존재성 점검만(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
     flagLedgerConfirms(answer, ws, "", exec); // 로드맵 ④: 세션 미식별 시에도 실존 인용 기준으로만(다룬 흔적 검사는 자동 보류)
+    collectScoutTargetEvidence(answer, ws, exec); // 정찰 대상 자기진단 증거(2026-07-10)
     flagVerdict(answer, ws, "", modeSnap);
     process.stdout.write(`${langSnap === "en" ? "# New session created (session id unresolved) — auto-creation is paused to avoid session sprawl. Use 'find' then 'link <id>'." : "# 새 세션 생성됨(세션id 식별 실패) — 폭증 방지로 다음 자동 생성은 멈춥니다. 'find'로 찾아 'link <id>' 하세요."}\n\n${formatForClaude(answer, langSnap)}\n`);
   }
@@ -1168,6 +1237,7 @@ function main() {
           '  node codex-bridge.js ask --allow-new "<프롬프트>"\n' +
           '  node codex-bridge.js ask --force-new "<프롬프트>"  (엉뚱 폴더 방어 무시, 이 폴더에 새 세션 강제)\n' +
           '  node codex-bridge.js ask --net "<프롬프트>"        (이 1회만 네트워크 허용 — 파일은 읽기전용 유지, 원격 확인용)\n' +
+          '  node codex-bridge.js ask --force-resend "<프롬프트>" (같은 요청 진행 중 차단을 의식적으로 우회)\n' +
           "  node codex-bridge.js link <id> | link --last\n" +
           "  node codex-bridge.js status | find | doctor | detect-home\n" +
           "  node codex-bridge.js pref [set model=<m> reasoning=<low|medium|high> | clear]\n",
