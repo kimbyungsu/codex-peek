@@ -1,5 +1,5 @@
 /*
- * 탐색 게이트 훅(로드맵 ⑥ — 실험 단계) — PreToolUse:ExitPlanMode에 등록되어,
+ * 탐색 게이트 훅(로드맵 ⑥ — 2026-07-09 3트랙 기본 승격) — PreToolUse:ExitPlanMode에 등록되어,
  * "플랜을 확정하려는 순간"에 영향지도가 없거나 낡았으면 먼저 지도를 받으라고 1회 막는다(map preflight).
  *
  * ⚠ 실험 전제(정직): ExitPlanMode가 PreToolUse로 실제 가로채지는지는 공식 문서에 명시가 없다(전용 훅 요청
@@ -7,7 +7,8 @@
  * 찍히는지가 실험의 판정 근거다(HANDOFF §6 ⑥ 프로토콜). 찍히지 않으면 게이트는 조용히 무해하다.
  *
  * 안전 원칙:
- *  - 기본 꺼짐: 계약(scoutGate)이 "plan"일 때만 게이트 동작(사전등록 60% 미달 — 사용자 명시 선택만).
+ *  - 3트랙 기본 켜짐(2026-07-09 승격): 실효 게이트는 normScoutGate — scoutMode≠on이면 무조건 off(2트랙 무회귀),
+ *    3트랙 명시 off는 존중, 3트랙 미설정은 plan(근거: 재실측 70.5%>합격선 60% + 차단 문구에 프로젝트별 관찰 신호 동반).
  *  - fail-open: 어떤 오류에서도 exit 0(플랜 확정을 절대 잠그지 않음 — 게이트 실패가 작업을 막으면 안 됨).
  *  - 상한: 같은 세션에서 2회까지만 막고 이후 통과(경고 로그) — 지도 생성이 불가능한 환경에서 무한 차단 방지.
  *  - 로그는 내용이 아니라 형태만: tool_input의 '키 이름'만 기록(플랜 본문은 저장 안 함 — PRIVACY 참조).
@@ -15,7 +16,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, scoutMapStatus, wsKeyFor, atomicWrite, resolveScoutRepo, loadLang } = require("./contract-lib.js");
+const { loadContract, scoutMapStatus, wsKeyFor, atomicWrite, resolveScoutRepo, loadLang, scoutHealthLine } = require("./contract-lib.js");
 const tB = (ko, en) => (loadLang() === "en" ? en : ko); // 훅 문구도 한/영 쌍(2026-07-09 사용자 지적)
 
 const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(os.homedir(), ".codex-bridge");
@@ -48,6 +49,7 @@ function main(raw) {
   // 실험 관측: 이 훅이 실제로 불렸다는 사실 자체가 1차 데이터(플랜 본문은 기록 안 함). 세션 폴더와 대상을 둘 다 남김.
   logObservation(ws, { ts: new Date().toISOString(), tool: toolName, inputKeys, session: String(p.session_id || "").slice(0, 12), ...(target !== ws ? { target } : {}) });
   if (toolName !== "ExitPlanMode") process.exit(0); // matcher가 보장하지만 방어적으로
+  // loadContract가 normScoutGate로 정규화한 실효값 — 3트랙 기본 plan / 2트랙 무조건 off(명시 plan 잔재도 비활성).
   const gate = contract.scoutGate || "off";
   if (gate !== "plan") process.exit(0);
   let st = { state: "fresh", staleCount: 0 };
@@ -66,9 +68,13 @@ function main(raw) {
   const why = st.state === "no-map" ? tB("이 프로젝트에 영향지도가 아직 없다", "this project has no impact map yet")
     : st.state === "legacy-no-seeds" ? tB("최신 지도에 근거 파일 기록이 없어 신선도를 판정할 수 없다(구버전 지도 — 재생성 필요)", "the latest map has no basis-file record, so freshness cannot be judged (legacy map — regeneration needed)")
     : tB(`최신 지도 생성 후 근거 파일 ${st.staleCount}개가 더 바뀌어 지도가 낡았다`, `${st.staleCount} basis file(s) changed after the latest map — it is stale`);
+  // 프로젝트별 관찰 신호 동반(사용자 조건 '카드와 한 묶음' — 게이트가 전역 수치가 아니라 이 프로젝트의 장부를 근거로
+  // 말하게 한다). 별도 try — 신호 계산 실패가 차단 문구 출력 자체를 막으면 안 됨.
+  let healthTail = "";
+  try { const hl = scoutHealthLine(target, loadLang() === "en"); if (hl) healthTail = hl + "\n"; } catch { /* 신호 실패 무해 */ }
   process.stderr.write(tB(
-    `[탐색 게이트 · plan 실험] 플랜 확정 전에 영향지도부터 — ${why}. codex-peek 소스 저장소에서 \`node scripts/scope-scout-self.js "${target}"\` 실행 후 다시 플랜을 확정하라. (이 게이트는 세션당 ${BLOCKS_PER_SESSION}회까지만 막고 이후 통과 · 끄기: node scripts/scope-gate.js "${ws}" off)\n`,
-    `[Recon gate · plan experiment] Get an impact map before confirming the plan — ${why}. Run \`node scripts/scope-scout-self.js "${target}"\` from the codex-peek source repo, then confirm the plan again. (This gate blocks at most ${BLOCKS_PER_SESSION}× per session, then passes · turn off: node scripts/scope-gate.js "${ws}" off)\n`));
+    `[탐색 게이트 · plan] 플랜 확정 전에 영향지도부터 — ${why}. codex-peek 소스 저장소에서 \`node scripts/scope-scout-self.js "${target}"\` 실행 후 다시 플랜을 확정하라. (이 게이트는 세션당 ${BLOCKS_PER_SESSION}회까지만 막고 이후 통과 · 끄기: node scripts/scope-gate.js "${ws}" off)\n`,
+    `[Recon gate · plan] Get an impact map before confirming the plan — ${why}. Run \`node scripts/scope-scout-self.js "${target}"\` from the codex-peek source repo, then confirm the plan again. (This gate blocks at most ${BLOCKS_PER_SESSION}× per session, then passes · turn off: node scripts/scope-gate.js "${ws}" off)\n`) + healthTail);
   process.exit(2); // 차단 — stderr가 Claude에게 피드백됨(공식 문서 명시)
 }
 

@@ -293,12 +293,18 @@ function normScoutMode(o) {
   return "off"; // 기본=2트랙(무회귀 — 미설정 프로젝트는 기존과 100% 동일)
 }
 
-// 탐색 게이트(로드맵 ⑥ 실험) — "plan"=플랜 확정 전 지도 preflight를 훅이 요구(scout-gate.js).
-// 기본 off: 지도 명중률 실측(48.1%)이 사전등록 합격선(60%) 미달이라 강제 게이트는 사용자 명시 선택만.
+// 탐색 게이트 — "plan"=플랜 확정 전 지도 preflight를 훅이 요구(scout-gate.js).
+// 기본 승격(2026-07-09 사용자 결정): 3트랙(scoutMode on)에서는 미설정 기본이 "plan" — 재실측(관찰 일지 주입
+// ablation) 70.5%가 사전등록 합격선 60%를 처음 넘었고, 차단 문구에 프로젝트별 관찰 신호(scoutHealthLine)를
+// 함께 실어 전역 수치 맹신을 막는다(카드와 한 묶음 조건). 규칙 순서가 안전의 핵심:
+//   ① scoutMode≠on → 무조건 off(게이트는 지도 전제 — 2트랙은 명시 plan이 남아 있어도 비활성: 완전 무회귀)
+//   ② 3트랙에서 명시값(off|plan)은 그대로 존중(과거 CLI로 끈 프로젝트는 영원히 꺼짐)
+//   ③ 3트랙 + 미설정 → plan(승격). normalize 층 기본값이라 계약 파일에 쓰지 않는다(명시화 오염 방지).
 const SCOUT_GATES = ["off", "plan"];
 function normScoutGate(o) {
+  if (normScoutMode(o) !== "on") return "off";
   if (o && SCOUT_GATES.includes(o.scoutGate)) return o.scoutGate;
-  return "off";
+  return "plan";
 }
 
 // ── 정찰(3트랙) 프롬프트 — 태도층 슬롯 + 공용 preface + 서명(§6-11 P1·P4, 2026-07-09) ──
@@ -952,4 +958,4 @@ function formatForClaude(answer, lang) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };

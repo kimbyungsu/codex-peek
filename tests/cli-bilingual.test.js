@@ -28,7 +28,7 @@ const tgt = run(homeEn, [cli("scope-target.js"), ws, "status"]);
 ok(tgt.status === 0 && /Scout target:/.test(tgt.stdout) && /not set — session folder as-is/.test(tgt.stdout), "scope-target status → 영어(Scout target · not set)");
 ok(/historyless mode/.test(tgt.stdout) && !/정찰 대상/.test(tgt.stdout), "scope-target — git 라벨도 영어·한글 혼입 없음");
 const gate = run(homeEn, [cli("scope-gate.js"), ws, "status"]);
-ok(gate.status === 0 && /gate off — the hook only logs observations/.test(gate.stdout), "scope-gate status → 영어(gate off)");
+ok(gate.status === 0 && /inactive \(2-track/.test(gate.stdout), "scope-gate status → 영어(2트랙 비활성 — 기본 승격 후에도 2트랙은 게이트 없음)");
 const note = run(homeEn, [cli("scope-ledger-note.js"), ws, "list"]);
 ok(note.status === 0 && /Journal empty/.test(note.stdout), "scope-ledger-note list → 영어(Journal empty)");
 const rec = run(homeEn, [cli("scope-reconcile.js"), ws, "list"]);
@@ -40,7 +40,7 @@ console.log("[2] 실행 — 언어 파일 없으면 ko 기본(기존 사용자 �
 const wsKo = path.join(homeKo, "ws");
 fs.mkdirSync(wsKo, { recursive: true });
 const gateKo = run(homeKo, [cli("scope-gate.js"), wsKo, "status"]);
-ok(gateKo.status === 0 && /게이트 꺼짐/.test(gateKo.stdout), "scope-gate status → 한국어 기본(게이트 꺼짐)");
+ok(gateKo.status === 0 && /비활성\(2트랙/.test(gateKo.stdout), "scope-gate status → 한국어 기본(2트랙 비활성)");
 const tgtKo = run(homeKo, [cli("scope-target.js"), wsKo, "status"]);
 ok(tgtKo.status === 0 && /정찰 대상:/.test(tgtKo.stdout), "scope-target status → 한국어 기본(정찰 대상)");
 

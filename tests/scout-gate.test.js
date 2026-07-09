@@ -1,7 +1,7 @@
 "use strict";
 /*
- * 로드맵 ⑥(플랜 게이트 실험) 테스트 — scout-gate.js 훅(fail-open·기본 off·상한)·scope-gate CLI·
- * 다중 PreToolUse 병합 회귀(같은 이벤트에 우리 훅 2개 — 둘 다 남아야 함).
+ * 로드맵 ⑥(플랜 게이트) 테스트 — scout-gate.js 훅(fail-open·상한·2026-07-09 기본 승격: 3트랙 미설정=plan,
+ * 2트랙=무조건 off)·scope-gate CLI(실효/저장 구분)·다중 PreToolUse 병합 회귀(같은 이벤트에 우리 훅 2개 — 둘 다 남아야 함).
  * ⚠ ExitPlanMode가 실제로 PreToolUse에 잡히는지는 이 테스트가 증명 못 함(문서 미명시) — 그건 실세션 관측 로그가 판정.
  */
 const fs = require("fs");
@@ -12,7 +12,7 @@ const { spawnSync } = require("child_process");
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sg_"));
 process.env.CODEX_BRIDGE_HOME = dir;
 
-const { contractFileFor } = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
+const { contractFileFor, ledgerEventsFileFor, normScoutGate } = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
 
 let pass = 0, fail = 0;
 function ok(c, m) { if (c) { pass++; console.log("  ✅ " + m); } else { fail++; console.log("  ❌ " + m); } }
@@ -25,17 +25,33 @@ const runHook = (payload, session) => spawnSync(process.execPath, [HOOK], {
   encoding: "utf8", env: { ...process.env, CODEX_BRIDGE_HOME: dir, CLAUDE_PROJECT_DIR: ws },
 });
 
-console.log("[1] 기본 off — 게이트 미설정이면 아무것도 막지 않음 + 관측 로그는 남음(실험 근거)");
+console.log("[1] 2트랙 무회귀 — 계약 없음/2트랙이면 아무것도 막지 않음 + 관측 로그는 남음");
 let r = runHook();
-ok(r.status === 0, "scoutGate 미설정 → exit 0(통과)");
+ok(r.status === 0, "계약 없음(2트랙) → exit 0(통과)");
 const logDir = path.join(dir, "scout-gate-log");
 const logFiles = fs.readdirSync(logDir);
 const logRaw = fs.readFileSync(path.join(logDir, logFiles[0]), "utf8");
 ok(logRaw.includes('"tool":"ExitPlanMode"') && logRaw.includes('"inputKeys":["plan"]'), "관측 로그 — 도구명+입력 키 이름만");
 ok(!logRaw.includes('"..."'), "플랜 본문은 기록 안 함(내용이 아니라 형태만)");
+fs.mkdirSync(path.dirname(contractFileFor(ws)), { recursive: true });
+// Codex 사전검증 반례 잠금: 2트랙(scoutMode off)에 명시 plan 잔재가 있어도 게이트 비활성(게이트는 지도 전제 — 무회귀)
+fs.writeFileSync(contractFileFor(ws), JSON.stringify({ scoutMode: "off", scoutGate: "plan" }));
+ok(runHook(undefined, "sess-2t").status === 0, "scoutMode:off + scoutGate:plan 잔재 → 통과(2트랙 무회귀 — Codex 반례 잠금)");
+ok(normScoutGate({ scoutMode: "off", scoutGate: "plan" }) === "off" && normScoutGate({}) === "off", "normScoutGate — 2트랙은 명시 plan이어도 실효 off");
+
+console.log("[1b] 기본 승격(2026-07-09) — 3트랙 + 게이트 미설정 = plan(차단) · 명시 off는 존중 · 차단 문구에 관찰 신호 인용");
+ok(normScoutGate({ scoutMode: "on" }) === "plan" && normScoutGate({ scoutMode: "on", scoutGate: "off" }) === "off", "normScoutGate — 3트랙 미설정=plan(승격)·명시 off 존중");
+fs.writeFileSync(contractFileFor(ws), JSON.stringify({ scoutMode: "on" })); // scoutGate 미설정 — 승격 기본값 경로
+fs.mkdirSync(path.dirname(ledgerEventsFileFor(ws)), { recursive: true }); // 관찰 일지(항목 1개 — 표본 부족 줄) 준비
+fs.writeFileSync(ledgerEventsFileFor(ws), JSON.stringify({ ts: "t", type: "proposed", sig: "a", text: "src/a.ts ↔ docs/A.md" }) + "\n");
+r = runHook(undefined, "sess-P1");
+ok(r.status === 2 && /영향지도부터/.test(r.stderr), "3트랙 + 미설정 → 기본 plan으로 차단(승격 동작)");
+ok(/후보로만/.test(r.stderr), "차단 문구에 이 프로젝트의 관찰 신호 인용('카드와 한 묶음' 사용자 조건 — 표본 부족이면 부족 줄 그대로)");
+fs.writeFileSync(contractFileFor(ws), JSON.stringify({ scoutMode: "on", scoutGate: "off" }));
+ok(runHook(undefined, "sess-P2").status === 0, "3트랙 + 명시 off → 통과(사용자 선택 영원히 존중)");
+fs.rmSync(ledgerEventsFileFor(ws), { force: true }); // 이후 케이스는 신호 줄 없이(문구 단언 단순화)
 
 console.log("[2] 게이트 on + 지도 없음 → 차단(exit 2) + 지시 문구, 세션당 2회 후 통과");
-fs.mkdirSync(path.dirname(contractFileFor(ws)), { recursive: true });
 fs.writeFileSync(contractFileFor(ws), JSON.stringify({ scoutMode: "on", scoutGate: "plan" }));
 r = runHook(undefined, "sess-A");
 ok(r.status === 2 && /영향지도부터/.test(r.stderr) && /scope-scout-self/.test(r.stderr), "1회차 → 차단 + 지도 생성 지시");
@@ -70,14 +86,26 @@ ok(r.status === 0, "다른 도구(Edit) → exit 0(방어적)");
 console.log("[5] scope-gate CLI — status/on/off·언어 슬롯 갱신");
 const CLI = path.join(__dirname, "..", "scripts", "scope-gate.js");
 const runCli = (...a) => spawnSync(process.execPath, [CLI, ws, ...a], { encoding: "utf8", env: { ...process.env, CODEX_BRIDGE_HOME: dir } });
-ok(/scoutGate: plan/.test(runCli("status").stdout), "status — 현재 값 표시");
-ok(runCli("off").status === 0 && /scoutGate: off/.test(runCli("status").stdout), "off → 반영");
-fs.writeFileSync(contractFileFor(ws, "en"), JSON.stringify({ scoutMode: "on" }));
+ok(/scoutGate: plan \(명시 plan/.test(runCli("status").stdout), "status — 실효값+저장값(명시) 구분 표시");
+ok(runCli("off").status === 0 && /scoutGate: off \(명시 off/.test(runCli("status").stdout), "off → 반영(명시 off로 표시)");
+fs.writeFileSync(contractFileFor(ws, "en"), JSON.stringify({ scoutMode: "on", scoutGate: "off" })); // 명시 off — 승격 후에도 반대 슬롯 고지가 뜨는 조합(미설정이면 en도 실효 plan이라 고지 불요가 정상)
 ok(runCli("on").status === 0, "on — 성공");
 ok(JSON.parse(fs.readFileSync(contractFileFor(ws, "ko"), "utf8")).scoutGate === "plan", "현재 언어(ko) 슬롯 갱신");
-ok(JSON.parse(fs.readFileSync(contractFileFor(ws, "en"), "utf8")).scoutGate === undefined, "en 슬롯은 안 건드림 — 언어 슬롯 분리(2026-07-09 사용자 결정: 한/영 생활권 분리, API 키만 전역)");
+ok(JSON.parse(fs.readFileSync(contractFileFor(ws, "en"), "utf8")).scoutGate === "off", "en 슬롯은 안 건드림 — 언어 슬롯 분리(2026-07-09 사용자 결정: 한/영 생활권 분리, API 키만 전역)");
 ok(/ⓘ/.test(runCli("on").stdout), "반대 슬롯이 다른 값이면 고지(설정 소실 오해 방지)");
 ok(runCli("erase").status === 2, "미지 명령 거부");
+
+console.log("[5b] status 실효/저장 구분(승격 후 — Codex 사전검증 요구): 기본 plan vs 명시 vs 2트랙 비활성");
+const ws2 = path.join(dir, "proj2");
+fs.mkdirSync(ws2, { recursive: true });
+const runCli2 = (...a) => spawnSync(process.execPath, [CLI, ws2, ...a], { encoding: "utf8", env: { ...process.env, CODEX_BRIDGE_HOME: dir } });
+fs.writeFileSync(contractFileFor(ws2), JSON.stringify({ scoutMode: "on" }));
+let st = runCli2("status").stdout;
+ok(/scoutGate: plan \(미설정/.test(st) && /3트랙 기본/.test(st), "3트랙+미설정 → 실효 plan(3트랙 기본)·저장값 미설정으로 구분 표시");
+fs.writeFileSync(contractFileFor(ws2), JSON.stringify({ scoutMode: "off", scoutGate: "plan" }));
+st = runCli2("status").stdout;
+ok(/scoutGate: off \(명시 plan/.test(st) && /비활성\(2트랙/.test(st) && /3트랙을 켜면 적용/.test(st), "2트랙+명시 plan 잔재 → 실효 off·비활성 사유·잔재 거취 고지");
+ok(/ⓘ 이 프로젝트는 2트랙/.test(runCli2("on").stdout), "2트랙에서 on → 저장은 되나 비활성임을 고지");
 
 console.log("[6] 다중 PreToolUse 병합 회귀 — 같은 이벤트의 우리 훅 2개가 둘 다 남는다(설치기·확장 패리티)");
 const HS = require(path.join(__dirname, "..", "out", "hook-setup.js"));
@@ -96,6 +124,13 @@ ok(res2.ok && merged2.hooks.PreToolUse.filter((g) => g.hooks.some((e) => /scout-
 // install.js mergeHooks 패리티(소스 계약): 이벤트 단위 정리 구조가 양쪽에 존재
 const instSrc = fs.readFileSync(path.join(__dirname, "..", "install.js"), "utf8");
 ok(instSrc.includes("byEvent") && /ExitPlanMode/.test(instSrc), "install.js도 이벤트 단위 병합+scout-gate 등록(패리티)");
+
+console.log("[7] 승격 후 표면 잠금 — 사용자·설치자 표면의 게이트 문맥에 '기본 꺼짐/off' 잔재 0(Codex 3차 반례: SECURITY·COMPATIBILITY·ROADMAP·설치기·훅 정본까지 낡은 정책이 남았었음. HANDOFF는 역사 기록이라 제외)");
+for (const f of ["SECURITY.md", "COMPATIBILITY.md", "docs/ROADMAP.md", "README.md", "docs/README.en.md", "PRIVACY.md", "install.js", "src/hook-setup.ts", "bridge/scout-gate.js", "scripts/scope-gate.js"]) {
+  const bad = fs.readFileSync(path.join(__dirname, "..", f), "utf8").split(/\r?\n/)
+    .filter((ln) => /게이트|scout-gate|ExitPlanMode|[Pp]lan gate/.test(ln) && /기본 꺼짐|기본 off|opt-in, off|default(?::| is)? off/i.test(ln));
+  ok(bad.length === 0, f + " — 게이트 문맥 '기본 꺼짐/off' 잔재 0" + (bad.length ? " (발견: " + bad[0].trim().slice(0, 70) + "…)" : ""));
+}
 
 try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 무해 */ }
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);

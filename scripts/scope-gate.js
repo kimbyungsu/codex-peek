@@ -1,7 +1,8 @@
 /*
- * 탐색 게이트 스위치(로드맵 ⑥ 실험) — 프로젝트 계약의 scoutGate(off|plan)를 켜고 끈다.
+ * 탐색 게이트 스위치 — 프로젝트 계약의 scoutGate(off|plan)를 켜고 끈다.
  * "plan"이면 scout-gate.js 훅이 플랜 확정 직전에 지도 preflight를 요구(없음/낡음 → 세션당 2회까지 차단).
- * ⚠ 기본 off 이유(정직): 지도 명중률 실측 48.1% < 사전등록 합격선 60% — 강제는 사용자 명시 선택만.
+ * 기본 승격(2026-07-09): 3트랙(scoutMode on)은 미설정 기본이 plan — 재실측(관찰 일지 주입) 70.5% > 합격선 60%,
+ * 차단 문구에 프로젝트별 관찰 신호 동반. 2트랙은 항상 비활성(명시 plan이 있어도 — 게이트는 지도 전제·무회귀).
  * 언어 슬롯 분리(2026-07-09 사용자 결정): 한글 모드와 영어 모드는 사실상 다른 사용자 — 설정은 '현재 언어
  * 슬롯'에만 저장한다(규칙·기본지침과 동일 원칙 · API 키만 전역). 반대 슬롯에 다른 값이 있으면 고지만 한다.
  *
@@ -9,7 +10,7 @@
  */
 const fs = require("fs");
 const path = require("path");
-const { contractFileFor, loadContract, atomicWrite, normScoutGate, loadLang } = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
+const { contractFileFor, loadContract, atomicWrite, normScoutGate, normScoutMode, loadLang } = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
 const tB = (ko, en) => (loadLang() === "en" ? en : ko); // CLI 출력도 한/영 쌍(2026-07-09)
 
 const repoArg = process.argv[2];
@@ -22,10 +23,18 @@ const repo = path.resolve(repoArg);
 
 if (cmd === "status") {
   const c = loadContract(repo);
-  console.log(`scoutGate: ${normScoutGate(c)} (scoutMode: ${c.scoutMode || "off"})`);
-  console.log(normScoutGate(c) === "plan"
-    ? tB("→ 플랜 확정 전 지도 preflight 요구(없음/낡음 → 세션당 2회까지 차단 후 통과). 실험 관측 로그: 브릿지 홈 scout-gate-log/","→ requires a map preflight before plan confirmation (missing/stale → blocks up to 2×/session, then passes). Observation log: bridge home scout-gate-log/")
-    : tB("→ 게이트 꺼짐 — 훅은 관측 로그만 남기고 아무것도 막지 않음","→ gate off — the hook only logs observations and blocks nothing"));
+  const eff = normScoutGate(c); // 실효값(3트랙 미설정=plan 승격 · 2트랙=무조건 off)
+  let raw; // 저장값 — 실효와 구분해 보여줘야 '기본인지 내가 정했는지'가 안 헷갈림(Codex 지적)
+  try { raw = (JSON.parse(fs.readFileSync(contractFileFor(repo, loadLang()), "utf8")) || {}).scoutGate; } catch { /* 슬롯 파일 없음 */ }
+  const rawNote = raw === "plan" || raw === "off" ? tB(`명시 ${raw}`, `explicit ${raw}`) : tB("미설정", "not set");
+  console.log(`scoutGate: ${eff} (${rawNote} · scoutMode: ${c.scoutMode || "off"})`);
+  console.log(eff === "plan"
+    ? (raw === "plan"
+      ? tB("→ 켜짐(직접 설정) — 플랜 확정 전 지도 preflight 요구(없음/낡음 → 세션당 2회까지 차단 후 통과). 관측 로그: 브릿지 홈 scout-gate-log/","→ on (explicitly set) — requires a map preflight before plan confirmation (missing/stale → blocks up to 2×/session, then passes). Observation log: bridge home scout-gate-log/")
+      : tB("→ 켜짐(3트랙 기본 — 재실측 70.5%>60% 승격) — 플랜 확정 전 지도 preflight 요구(세션당 2회까지 차단 후 통과 · 차단 문구에 이 프로젝트의 관찰 신호 동반). 끄기: off","→ on (3-track default — promoted on re-measured 70.5%>60%) — requires a map preflight before plan confirmation (blocks up to 2×/session, then passes · block message carries this project's observation signal). Turn off: off"))
+    : (c.scoutMode !== "on"
+      ? tB(`→ 비활성(2트랙 — 게이트는 지도 전제라 3트랙에서만 동작${raw === "plan" ? " · 저장된 명시 plan은 3트랙을 켜면 적용됨" : ""})`, `→ inactive (2-track — the gate presupposes maps, so it only runs in 3-track${raw === "plan" ? " · the stored explicit plan applies once 3-track is on" : ""})`)
+      : tB("→ 꺼짐(직접 끄심) — 훅은 관측 로그만 남기고 아무것도 막지 않음. 켜기: on","→ off (explicitly turned off) — the hook only logs observations and blocks nothing. Turn on: on")));
   process.exit(0);
 }
 const target = cmd === "on" ? "plan" : "off";
@@ -38,7 +47,8 @@ if (!atomicWrite(f, JSON.stringify({ ...o, updatedAt: new Date().toISOString() }
   console.error(tB(`저장 실패: ${f} (권한/디스크?) — 게이트 설정이 반영되지 않았을 수 있음`,`Save failed: ${f} (permission/disk?) — the gate setting may not have been applied`));
   process.exit(1);
 }
-console.log(tB(`scoutGate=${target} 저장(${lang} 언어 슬롯 — 다른 언어 모드는 별도 설정). `,`scoutGate=${target} saved (${lang} language slot — other language modes keep their own setting). `) + (target === "plan" ? tB("⚠ 훅은 새 Claude 세션부터 동작 — 실험 절차는 docs/HANDOFF.md ⑥ 참조","⚠ the hook takes effect from the next Claude session — see docs/HANDOFF.md ⑥") : tB("게이트 꺼짐(관측 로그만 유지)","gate off (observation log only)")));
+console.log(tB(`scoutGate=${target} 저장(${lang} 언어 슬롯 — 다른 언어 모드는 별도 설정). `,`scoutGate=${target} saved (${lang} language slot — other language modes keep their own setting). `) + (target === "plan" ? tB("⚠ 훅은 새 Claude 세션부터 동작 — 상세는 docs/HANDOFF.md ⑥ 참조","⚠ the hook takes effect from the next Claude session — see docs/HANDOFF.md ⑥") : tB("게이트 꺼짐(관측 로그만 유지)","gate off (observation log only)")));
+if (normScoutMode(o) !== "on") console.log(tB("ⓘ 이 프로젝트는 2트랙(scoutMode off) — 게이트는 지도 전제라 3트랙을 켜기 전까지는 어떤 값이든 비활성입니다.","ⓘ This project is 2-track (scoutMode off) — the gate presupposes maps, so any value stays inactive until 3-track is on."));
 // 반대 슬롯이 다른 값이면 고지(설정이 '사라진' 게 아니라 언어별로 따로임을 알림 — 소실 오해 방지)
 try {
   const other = lang === "ko" ? "en" : "ko";

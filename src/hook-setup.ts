@@ -9,7 +9,7 @@ export const BRIDGE_SCRIPTS = ["contract-lib.js", "codex-bridge.js", "contract-i
 export const OUR_HOOKS = [
   { event: "UserPromptSubmit", matcher: "", script: "contract-inject.js" },
   { event: "PreToolUse", matcher: "Bash", script: "codex-guard.js" },
-  { event: "PreToolUse", matcher: "ExitPlanMode", script: "scout-gate.js" }, // ⑥ 실험 — 기본 off(계약 scoutGate)·fail-open·관측 로그
+  { event: "PreToolUse", matcher: "ExitPlanMode", script: "scout-gate.js" }, // ⑥ 지도 preflight — 3트랙 기본 켜짐(실효 scoutGate·2026-07-09 승격, 2트랙은 관측만)·fail-open·관측 로그
   { event: "Stop", matcher: "", script: "verify-guard.js" },
 ];
 
