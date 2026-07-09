@@ -695,7 +695,7 @@ function firstUserSnippet(file) {
       }
       if (o.type === "response_item" && o.payload?.type === "message" && o.payload.role === "user") {
         let t = (o.payload.content || []).map((c) => (typeof c?.text === "string" ? c.text : "")).join("").trim();
-        if (t && !/^<(environment_context|user_instructions|system)/i.test(t)) {
+        if (t && !/^<(environment_context|user_instructions|system|recommended_plugins>)/i.test(t)) { // recommended_plugins>=Codex 실행 런타임 주입(닫는 > 요구 — 정상 유사 문자열 보존·확장 isInjected와 동형, 2026-07-10 실사고)
           // 주제 표시용: withContract가 붙인 지침 보일러플레이트를 걷어내고 '실제 요청 본문'만(확장 stripInjectedPreamble과 동일 규칙).
           for (const marker of ["\n---\n[작업 요청]\n", "\n---\n[Work Request]\n"]) {
             const i = t.lastIndexOf(marker);
@@ -894,8 +894,8 @@ async function cmdAsk(rest) {
   // configWs/execCwd 분리: 설정 기준(계약·생각강도·링크·proof·이벤트 라벨)은 '연 폴더'(ws), 코덱스 실행·새세션 탐지·인용
   // 근거 경로 해석은 '작업 폴더'(exec=실제 실행 cwd). 사용자가 연 폴더에 건 설정이 외부 폴더 작업에도 일관 적용되게 한다.
   const ws = configWs();        // 연 폴더(설정 기준)
-  // 같은 요청 중복 전송 차단(2026-07-10 실사고: 호출 창이 자체 시간 상한으로 죽자 '전송 실패' 오판 재전송 →
-  // Codex 병렬 3중 작업). 같은 내용이 살아있는 프로세스에서 진행 중이면 거부 — 답은 rollout/대시보드에서 확인하라.
+  // 같은 요청 중복 전송 차단(2026-07-10 실사고: 첫 호출이 3분29초 만에 원인미상 비정상 종료되자 원인 확인 없이 '전송 실패' 오판 재전송 →
+  // 동일 요청 중복 실행 — 실측: rollout 같은 해시 2건). 같은 내용이 살아있는 프로세스에서 진행 중이면 거부 — 답은 rollout/대시보드에서 확인하라.
   const promptHash = crypto.createHash("sha1").update(prompt).digest("hex").slice(0, 16);
   let inflightRec = null;
   if (forceResend) {

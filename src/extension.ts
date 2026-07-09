@@ -456,7 +456,11 @@ function recentRollouts(limit: number): Array<{ id: string; file: string; mtime:
 
 function isInjected(t: string): boolean {
   const s = t.trimStart();
-  return /^<(environment_context|user_instructions|system)/i.test(s) || s.startsWith("# AGENTS.md");
+  // recommended_plugins: Codex '실행 런타임/호스트 계층'이 끼워 넣는 플러그인 추천 블록(우리 하네스가 보낸 게
+  // 아님 — CLI/레지스트리/상위 오케스트레이터 중 어느 부품인지는 rollout만으로 특정 불가). 목록에 없어 사용자
+  // 말풍선처럼 노출됐던 실사고(사용자 발견 2026-07-10). 닫는 '>'까지 요구해 <recommended_plugins_custom> 같은
+  // 정상 사용자 문자열은 보존(Codex 보완). bridge/codex-bridge.js 필터와 동형 유지.
+  return /^<(environment_context|user_instructions|system|recommended_plugins>)/i.test(s) || s.startsWith("# AGENTS.md");
 }
 
 // ── 판독 캐시 — 상태 계산(computeState)이 워처 폭주(검증 턴마다 브릿지 파일 변경)와 결합해 확장 호스트를 포화시키는 것 방지.

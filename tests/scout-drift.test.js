@@ -120,7 +120,7 @@ const priv = fs.readFileSync(path.join(__dirname, "..", "PRIVACY.md"), "utf8");
 ok(/scout-target-evidence/.test(priv) && /advisedRepo|마지막으로 제안한 레포/.test(priv), "PRIVACY에 새 로컬 저장소 명시 — 실제 저장 필드(제안 기억 포함)와 일치(Codex 반례: 과소 고지)");
 ok(/asks-inflight/.test(priv), "PRIVACY에 중복 전송 차단 표식 파일 명시(지문·시각·pid만)");
 
-console.log("[7] 같은 요청 중복 전송 차단(2026-07-10 실사고 — 호출 창 죽음→재전송→Codex 병렬 3중 작업)");
+console.log("[7] 같은 요청 중복 전송 차단(2026-07-10 실사고 — 원인미상 비정상 종료를 실패로 오판 재전송→동일 요청 중복 실행[실측: 같은 해시 2건])");
 const rec = { hash: "abcd", ts: new Date().toISOString(), pid: process.pid };
 ok(CL.askInflightGuard(null, "abcd", Date.now(), () => true).block === false, "표식 없음 → 통과");
 ok(CL.askInflightGuard(rec, "efgh", Date.now(), () => true).block === false, "다른 내용 지문 → 통과");
@@ -140,6 +140,12 @@ CL.clearAskInflight(ws, "hashA", c1.rec.token);
 ok(!fs.existsSync(CL.askInflightFileFor(ws, "hashA")), "자기 토큰 → 해제");
 ok(/--force-resend/.test(bridgeSrc) && /claimAskInflight\(ws, promptHash\)/.test(bridgeSrc) && /process\.on\("exit", \(\) => clearAskInflight/.test(bridgeSrc), "브릿지 배선 — wx 선점+의식적 강행 탈출구+자기 표식만 해제(소스 계약)");
 ok(/rollout/.test(bridgeSrc.slice(bridgeSrc.indexOf("같은 검증 요청이 이미 진행"), bridgeSrc.indexOf("같은 검증 요청이 이미 진행") + 400)), "차단 문구가 '재전송 말고 rollout/대시보드에서 읽어라'를 안내(행동 지시 — 고지-only 아님)");
+
+for (const f of ["bridge/codex-bridge.js", "bridge/contract-lib.js", "tests/scout-drift.test.js", "docs/HANDOFF.md"]) {
+  const src = fs.readFileSync(path.join(__dirname, "..", f), "utf8");
+  const banned = [["병렬 ", "3중"].join(""), ["자체 시간 상한", "으로 죽"].join("")]; // 조립 — 이 테스트 소스 자신이 스윕에 걸리지 않게
+  ok(banned.every((w) => !src.includes(w)), f + " — 사고 서사가 실측(3분29초 원인미상 종료·동일 해시 2건)과 다른 옛 표현 잔재 0(Codex 시간순 반증 잠금)");
+}
 
 console.log("[8] 죽은 표식 회수 — 잠금 아래 재검증(늦은 회수자가 승자의 새 표식을 지우던 TOCTOU — Codex 반례)");
 const deadRec = { hash: "hashD", ts: new Date().toISOString(), pid: 999999999, token: "deadtok" };
@@ -196,6 +202,19 @@ fs.writeFileSync(path.join(dScouts, "2026-07-09T00-00-02-000Z-00-self.md"), "지
 fs.writeFileSync(path.join(dScouts, "2026-07-09T00-00-02-000Z-00-self.json"), JSON.stringify({ ts: new Date(Date.now() + 3600 * 1000).toISOString(), basisTs: past, arm: "self", seedFiles: ["untracked-later.txt"], seedMissing: [] }));
 const stB = CL.scoutMapStatus(devRepo);
 ok(stB.state === "stale" && stB.seedChanged >= 1, "mtime 비교 기준=basisTs(지도가 본 입력 시점) — 저장 시각 ts로는 fresh였을 케이스가 stale(Codex 반례 잠금)");
+
+console.log("[10] Codex 런타임 주입 블록 필터 — recommended_plugins 노출 실사고(2026-07-10 사용자 발견) 잠금");
+const extFilterSrc = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
+const brFilterSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
+for (const [nm, src] of [["extension isInjected", extFilterSrc], ["bridge 주제 필터", brFilterSrc]]) {
+  const m = src.match(/\^<\(environment_context\|[^/]*\//); // 소스에서 실제 정규식 본문 추출 → '실행'으로 검증(존재 검사만으론 회귀 못 잡음 — Codex 보완)
+  ok(!!m, nm + " — 필터 정규식 존재");
+  const re = new RegExp(m[0].slice(0, -1), "i");
+  ok(re.test("<recommended_plugins>\nHere is a list…</recommended_plugins><environment_context>…"), nm + " — Codex 런타임 결합 블록(추천+환경, 사용자가 본 형태) 차단");
+  ok(re.test("<environment_context>\n<cwd>D:/x</cwd>"), nm + " — 환경 블록 단독도 차단(기존 동작 유지)");
+  ok(!re.test("<recommended_plugins_custom> 태그에 대해 질문"), nm + " — 유사 사용자 문자열 보존(닫는 > 경계 — Codex 보완)");
+  ok(!re.test("본문 중간에 <recommended_plugins> 태그를 인용한 정상 발화"), nm + " — 시작 앵커(^) — 본문 중간 인용은 보존");
+}
 
 try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 무해 */ }
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
