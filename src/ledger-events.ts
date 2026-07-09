@@ -117,6 +117,35 @@ export function deriveLedger(events: LedgerEvent[]): LedgerEntry[] {
   return [...m.values()].sort((a, b) => (b.lastTs || "").localeCompare(a.lastTs || ""));
 }
 
+// ── Scout Health(정찰 관찰 신호) — 전역 임계값 대신 '이 프로젝트의 장부'가 신뢰 판단 재료(사용자 결정 2026-07-09:
+// 임계값은 프로젝트 구조별로 의미가 달라 고정 불가 → 헬스 신호로 프로젝트 성향에 적응). v1은 advisory 전용 —
+// 어떤 자동 강제·게이트 기본값 변경도 없음. 용어 잠금: '정확도' 아님 — '관찰 신호'·'재사용 항목 중 확인 이력'
+// (attached는 다음 꾸러미 재동봉 사건이지 검증자 열람 인과가 아니고, 이벤트 선후도 검사하지 않으므로 '후'를
+// 주장하지 않는다)·반박은 '수동 기록 기준'(자동 추출 미배선).
+// 전부 entry(항목) 단위 — 이벤트 수 합산은 반복 사건 많은 한 항목에 끌린다(Codex 보완).
+export type ScoutHealth = {
+  entries: number;          // 전체 항목 수(표본 게이트의 1차 분모)
+  verified: number;         // 지금 신분이 '확인됨(verified)'인 항목 수(복권 포함 — pinned lane은 별개, 표시 라벨은 '확인 항목')
+  reusedDen: number;        // 재사용 이력(attached≥1)이 있는 항목 수 — 비율의 분모
+  reusedNum: number;        // 그중 확인 이력(confirmed/user_confirm≥1)도 있는 항목 수 ⚠순서 무주장 — '재사용 후'가 아님(이벤트 선후 미검사)
+  disputedEntries: number;  // 반박 이력(user_dispute/refuted≥1) 항목 수 — 수동 기록 기준
+  rehabilitated: number;    // 복권된 항목 수(분모는 disputedEntries — 이벤트 수 아님)
+};
+export const HEALTH_MIN_SAMPLE = 5; // 표본 게이트 — 미만이면 비율 표시 금지(범위 장부 sparse 철학·과신 방지). 지표별 분모에도 적용.
+export function computeScoutHealth(entries: LedgerEntry[]): ScoutHealth {
+  const h: ScoutHealth = { entries: entries.length, verified: 0, reusedDen: 0, reusedNum: 0, disputedEntries: 0, rehabilitated: 0 };
+  for (const e of entries) {
+    if (e.status === "verified") h.verified++;
+    if ((e.counts.attached || 0) > 0) {
+      h.reusedDen++;
+      if ((e.counts.confirmed || 0) + (e.counts.user_confirm || 0) > 0) h.reusedNum++;
+    }
+    if ((e.counts.user_dispute || 0) + (e.counts.refuted || 0) > 0) h.disputedEntries++;
+    if (e.rehabilitated) h.rehabilitated++;
+  }
+  return h;
+}
+
 // 항목 텍스트에서 경로꼴 토큰 추출(씨앗 교집합 판정용) — extractMapHighlights와 같은 보수 규칙의 축약판.
 export function extractPathsFromText(text: string): string[] {
   const out: string[] = [];

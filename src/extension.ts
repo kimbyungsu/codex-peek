@@ -11,7 +11,7 @@ import { parseLastModelCommand, parseLastAssistantModel, parseSessionStartTs, re
 import { parseGitLog, suggest as scopeSuggest, ScopeSuggestion } from "./scope-ledger";
 import { maskKey, isPlausibleKey, mergeDeepseekConfig } from "./deepseek-config";
 import { appendApproved, parseApprovedFromMap, normSig } from "./map-ledger";
-import { parseEventsJsonl, deriveLedger } from "./ledger-events";
+import { parseEventsJsonl, deriveLedger, computeScoutHealth } from "./ledger-events";
 import { scoutDirectiveText, scoutLedgerNotes } from "./scope-package";
 
 const HOME = os.homedir();
@@ -1508,6 +1508,7 @@ type MapLedgerView = {
   timeline: LedgerTimelineItem[];  // 최근 사건 흐름(최신 먼저)
   counts: { trusted: number; reference: number; disputed: number; excluded: number };
   impact: { proposed: number; attached: number; confirmed: number; disputedEv: number; rehabilitated: number; verifiedEntries: number }; // 3트랙 기여 관찰 신호(이벤트 합계 — 검증 통계 탭 카드 재료)
+  health: import("./ledger-events").ScoutHealth; // 프로젝트별 관찰 신호(entry 단위 — 전역 임계값 대체·advisory 전용, 사용자 결정 2026-07-09)
   dropped: number;                 // 깨진/미지 이벤트 줄 수(침묵 삼킴 금지 — 정직 표기)
   mapRel: string; mapExists: boolean; mapApproved: number; mapTotalItems: number;
   mapText: string; mapTruncated: boolean;
@@ -1562,7 +1563,7 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
   }
   const mp = parseApprovedFromMap(mapMd);
   return {
-    entries, timeline, counts, impact, dropped: parsed.dropped,
+    entries, timeline, counts, impact, health: computeScoutHealth(derived), dropped: parsed.dropped,
     mapRel: path.relative(ws, mapF).replace(/\\/g, "/"), mapExists,
     mapApproved: mp.approved.length, mapTotalItems: mp.totalItems,
     mapText: mapMd.slice(0, MAP_LEDGER_TEXT_CAP), mapTruncated: mapMd.length > MAP_LEDGER_TEXT_CAP,
@@ -3146,6 +3147,15 @@ class Dashboard {
       chip(ml.counts.disputed,T("틀림 판명","disputed"),ml.counts.disputed?"hot":"no");
       if(ml.counts.excluded) chip(ml.counts.excluded,T("제외(차단·대체)","excluded"),"no");
       card.appendChild(chips);
+      // 프로젝트별 관찰 신호 1줄 — 전역 임계값 대신 '이 폴더의 장부'가 신뢰 판단 재료(advisory·사용자 결정 2026-07-09).
+      safe(function(){
+        const h=ml.health; if(!h||!h.entries) return;
+        const line=document.createElement("div"); line.className="muted";
+        line.textContent = h.entries<5
+          ? T("관찰 신호: 표본 아직 작음(항목 "+h.entries+"건) — 비율 표시는 보류(과신 방지)","Observation signal: sample still small ("+h.entries+" items) — ratios withheld (avoids overconfidence)")
+          : T("관찰 신호(이 프로젝트): 확인 "+h.verified+"/"+h.entries+(h.reusedDen>=5?" · 재사용 항목 중 확인 이력 "+h.reusedNum+"/"+h.reusedDen:"")+" · 반박 "+h.disputedEntries+"건(수동 기록 기준) · 복권 "+h.rehabilitated+"건 — 보수 집계라 실제 유용성은 더 높을 수 있어요","Observation signal (this project): confirmed "+h.verified+"/"+h.entries+(h.reusedDen>=5?" · reused items with a confirm "+h.reusedNum+"/"+h.reusedDen:"")+" · disputed "+h.disputedEntries+" (manually recorded) · rehabilitated "+h.rehabilitated+" — conservative counting, real usefulness may be higher");
+        card.appendChild(line);
+      });
       if(ml.dropped) { const w=document.createElement("div"); w.className="muted"; w.textContent=T("ⓘ 판독 불가 기록 "+ml.dropped+"줄은 건너뜀(집계에 안 섞임)","ⓘ "+ml.dropped+" unreadable record line(s) skipped (not counted)"); card.appendChild(w); }
       // 확정 교범 설명(2026-07-09 지적 5: '이게 뭔지 모르겠다') — 왜 도장을 찍나·차이·자동 주입 아님을 평문으로
       safe(function(){

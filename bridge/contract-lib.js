@@ -639,7 +639,60 @@ function buildScoutAttach(ws, c, lang) {
   const tail = en
     ? `While verifying, check whether these paths were considered; if a path above is impacted but unaddressed, point it out. The map is a scout LLM's advisory opinion — use it as a checklist source only. This list is a starting point, NOT a boundary: do not narrow your own search for counterexamples outside it.`
     : `검증 시 위 경로들이 고려/영향받았는지 확인하고, 영향을 받는데 다뤄지지 않은 경로가 있으면 지적하라. 지도는 탐색자(LLM)의 참고 의견이다 — 확인 목록으로만 쓰고 판정 기준은 바꾸지 마라. 이 목록은 시작점일 뿐 한계가 아니다: 목록 밖 반례 탐색을 줄이지 마라.`;
-  return [head, ...items.map((i) => `- ${i.path}${i.note && String(i.note) !== i.path ? ` — ${String(i.note).slice(0, 120)}` : ""}`), tail].join("\n");
+  const health = scoutHealthLine(target, en); // 프로젝트별 관찰 신호(전역 임계값 대체 — 사용자 결정 2026-07-09) — 실패해도 지도 동봉 불침
+  return [head, ...items.map((i) => `- ${i.path}${i.note && String(i.note) !== i.path ? ` — ${String(i.note).slice(0, 120)}` : ""}`), tail, ...(health ? [health] : [])].join("\n");
+}
+
+// ── Scout Health 미니 집계(배포 사본 — 정본은 src/ledger-events.ts computeScoutHealth. out/을 require 못 하는
+// 배포 관례상 원시 JSONL을 직접 항목(entry) 단위로 집계하며, tests/scout-health.test.js가 정본과 패리티를 잠근다).
+// 용어 잠금: '정확도' 금지 — '관찰 신호'. attached는 '다음 꾸러미 재동봉' 사건(검증자 열람 인과 아님)이고 이벤트 선후도 안 보므로 순서('후')를 주장하지 않는 지표명만 쓴다.
+const HEALTH_EVENT_TYPES = new Set(["proposed", "attached", "confirmed", "refuted", "user_confirm", "user_dispute", "pinned", "unpinned", "banned", "unbanned", "superseded", "tombstone", "exported"]); // 정본 parseEventsJsonl의 allowlist와 동형 — 미지 타입이 표본 수를 부풀리지 못하게(Codex 반례)
+function computeScoutHealthMini(raw) {
+  const per = new Map(); // sig → {att, conf, disp, status 재료}
+  for (const ln of String(raw || "").split(/\r?\n/)) {
+    if (!ln.trim()) continue;
+    let o; try { o = JSON.parse(ln); } catch { continue; }
+    if (!o || !o.sig || !o.type || !HEALTH_EVENT_TYPES.has(o.type)) continue;
+    let e = per.get(o.sig);
+    if (!e) { e = { att: 0, conf: 0, disp: 0, ban: 0, unban: 0, sup: 0, tomb: 0, afterV: 0, afterU: 0, everDisp: false }; per.set(o.sig, e); }
+    if (o.type === "attached") e.att++;
+    else if (o.type === "confirmed") { e.conf++; if (e.everDisp) e.afterV++; }
+    else if (o.type === "user_confirm") { e.conf++; if (e.everDisp) e.afterU++; }
+    else if (o.type === "user_dispute" || o.type === "refuted") { e.disp++; e.everDisp = true; e.afterV = 0; e.afterU = 0; }
+    else if (o.type === "banned") e.ban++;
+    else if (o.type === "unbanned") e.unban++;
+    else if (o.type === "superseded") e.sup++;
+    else if (o.type === "tombstone") e.tomb++;
+  }
+  const h = { entries: per.size, verified: 0, reusedDen: 0, reusedNum: 0, disputedEntries: 0, rehabilitated: 0 };
+  for (const e of per.values()) {
+    const dead = (e.ban - e.unban) > 0 || e.sup > 0 || e.tomb > 0;
+    const rehab = e.everDisp && !dead && (e.afterU >= 1 || e.afterV >= 2); // DERIVE_V1 복권 규칙과 동형(패리티 테스트 잠금)
+    const verified = !dead && (e.everDisp ? rehab : e.conf >= 1);
+    if (verified) h.verified++;
+    if (e.att > 0) { h.reusedDen++; if (e.conf > 0) h.reusedNum++; }
+    if (e.everDisp) h.disputedEntries++;
+    if (rehab) h.rehabilitated++;
+  }
+  return h;
+}
+const HEALTH_MIN_SAMPLE = 5; // 정본(src/ledger-events.ts)과 동일 상수 — 표본 미만이면 비율 표시 금지(과신 방지)
+// 동봉용 1~2줄(bounded — 주입 비용 상한). 표본 부족이면 '근거 부족' 1줄, 충분하면 항목 수치+상시 한계 문구.
+function scoutHealthLine(target, en) {
+  try {
+    const h = computeScoutHealthMini(readLedgerEventsText(target));
+    if (!h.entries) return null; // 장부 없음 — 블록 자체 생략(비용 0)
+    if (h.entries < HEALTH_MIN_SAMPLE) {
+      return en
+        ? `[Scout observation signal] This project's journal is still small (${h.entries} item(s)) — treat the map strictly as candidates.`
+        : `[정찰 관찰 신호] 이 프로젝트의 관찰 일지가 아직 작음(항목 ${h.entries}건) — 지도는 후보로만 취급하라.`;
+    }
+    // 순서 무주장 문구(Codex 반례: 확인이 재동봉보다 먼저인 항목도 셈에 든다) — 인과를 암시하는 지표명 금지.
+    const ratio = h.reusedDen >= HEALTH_MIN_SAMPLE ? ` · ${en ? "reused items with a confirm on record" : "재사용 항목 중 확인 이력"} ${h.reusedNum}/${h.reusedDen}` : "";
+    return en
+      ? `[Scout observation signal — this project] confirmed items ${h.verified}/${h.entries}${ratio} · disputed ${h.disputedEntries} (manually recorded) · rehabilitated ${h.rehabilitated}. Counting is conservative (only survives strict evidence checks), so real usefulness may be higher — still, the map is a candidate list, not a safety guarantee: keep independent checks outside it.`
+      : `[정찰 관찰 신호 — 이 프로젝트 기준] 확인 항목 ${h.verified}/${h.entries}${ratio} · 반박 ${h.disputedEntries}건(수동 기록 기준) · 복권 ${h.rehabilitated}건. 집계는 보수적(엄격한 근거 검사를 통과한 것만)이라 실제 유용성은 더 높을 수 있음 — 그래도 지도는 후보 목록이지 안전 보장이 아니다: 지도 밖 독립 확인을 유지하라.`;
+  } catch { return null; /* 신호 실패가 지도 동봉을 막지 않음 */ }
 }
 
 // rules(문자열 배열) → 매 턴 주입 텍스트. checklist=false면 규약만, true면 [계약점검] 강제.
@@ -899,4 +952,4 @@ function formatForClaude(answer, lang) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
