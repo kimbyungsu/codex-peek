@@ -849,6 +849,14 @@ table{border-collapse:collapse;width:100%;font-size:11.5px} td{border-bottom:1px
 ${cards}
 <h2>${tE("플랜 게이트", "Plan gate")}</h2>
 <div class="sub">${gateLine} — ${tE("지도가 없거나 낡으면 플랜 확정 전에 먼저 지도를 요청(세션당 2회까지·이후 통과·fail-open). 차단 안내에는 위 관찰 신호가 함께 실립니다 — 전역 수치가 아니라 이 프로젝트의 장부가 근거. 켜고 끄기: node scripts/scope-gate.js &lt;프로젝트&gt; on|off (현재 언어 슬롯에만 저장 — 한/영 모드는 별도 설정)", "if the map is missing/stale, a map is requested before plan confirmation (up to 2×/session, then passes · fail-open). The block notice carries the observation signals above — this project's journal is the evidence, not a global number. Toggle: node scripts/scope-gate.js &lt;repo&gt; on|off (saved to the current language slot only — ko/en modes are configured separately)")}</div>
+<h2>${tE("이 신호는 어디서 생기고 어디에 반영되나 — 관찰 신호의 역할", "Where these signals come from and where they act — the role of observation signals")}</h2>
+<div class="grid">
+${stat("⚙", "1. 감지 (자동)", "1. Sensing (automatic)", "#3ca89a", "검증 대화의 확인·지도 재동봉·당신이 확정 어조로 기록한 정정/확인이 사건(제안·동봉·확인·반박)으로 잡혀요 — 추가 AI 호출 0", "confirms from verification chats, map re-attachments, and corrections you record with certainty become events (proposed·attached·confirmed·disputed) — zero extra AI calls")}
+${stat("📔", "2. 기록 (관찰 일지)", "2. Recording (field journal)", "#3ca89a", "이 프로젝트(정찰 대상) 전용 장부에 덧붙이기만 — 반박 이력도 지우지 않고 보존, 반박 뒤 재확인이 쌓이면 복권", "append-only, per project (scout target) — dispute history is never erased; re-confirms after a dispute can rehabilitate")}
+${stat("🩺", "3. 해석 (관찰 신호)", "3. Interpretation (observation signals)", "#9a6cdc", "장부를 항목 단위로 보수 집계 — 위 카드의 수치. 모든 프로젝트에 같은 합격선을 들이대는 전역 임계값이 없어요", "the journal is conservatively counted per item — the cards above. No global threshold that judges every project by the same bar")}
+${stat("📤", "4. 반영 (4곳)", "4. Application (4 places)", "#d9a441", "정찰 AI에게 보내는 지도 자료 꼬리 · 플랜 게이트 차단 안내 · 이 리포트(셋은 그 순간 장부에서 새로 계산) · 대시보드 관찰 일지 카드 1줄(몇 초 안의 짧은 캐시로 따라잡음)", "the tail of map material sent to the scout AI · the plan-gate block notice · this report (these three recompute from the journal at that moment) · the one-line dashboard signal (catches up within a few seconds via a short cache)")}
+</div>
+<div class="notice">${tE("<b>차별점 — 고정값이 아니라 따라가는 값</b>: 어떤 프로젝트는 파일이 촘촘히 얽혀 있고 어떤 프로젝트는 독립적이라, 하나의 합격 숫자를 박아두면 어딘가에선 반드시 틀립니다. 그래서 이 시스템은 숫자를 고정하지 않고, 그 프로젝트의 관찰 일지에서 매번 실시간으로 다시 계산합니다 — 정찰과 검증이 돌수록 그 프로젝트의 성격·개발 구조에 맞게 스스로 좁혀져요. 신호가 강제하는 것은 없고(advisory), 플랜 게이트조차 이 신호를 '근거 인용'으로만 싣습니다.", "<b>What makes this different — a tracking value, not a fixed one</b>: some projects are tightly coupled, others independent, so any single hard-coded pass number is wrong somewhere. This system fixes no number — it recomputes live from that project's own field journal every time, narrowing itself to the project's character and structure as recon & verification keep running. The signals enforce nothing (advisory); even the plan gate only quotes them as evidence.")}</div>
 <h2>${tE("최근 사건 흐름(최신 12건)", "Recent events (latest 12)")}</h2>
 ${tl ? `<table>${tl}</table>` : `<div class="sub">${tE("아직 기록된 사건이 없어요 — 정찰 지도가 결합을 제안하면 자동으로 쌓입니다.", "No events recorded yet — they accrue automatically once scout maps propose couplings.")}</div>`}
 ${ml.dropped ? `<div class="sub">${tE(`ⓘ 판독 불가 기록 ${ml.dropped}줄은 건너뜀(집계에 안 섞임)`, `ⓘ ${ml.dropped} unreadable record line(s) skipped (not counted)`)}</div>` : ""}
@@ -1826,6 +1834,9 @@ class Dashboard {
         if (m?.type === "saveContract") {
           // lang = 웹뷰가 '화면에 렌더했던 언어'(보던 슬롯) — 저장 도중 전역 언어가 바뀌었어도 보던 슬롯에 저장(오염 방지).
           const slotLang: Lang | undefined = m.lang === "ko" || m.lang === "en" ? m.lang : undefined;
+          // 저장 전 상태 — 3트랙 안내·연결 점검(ping)은 '꺼짐→켜짐 전환'에만(라벨 '켤 때 1회'와 실동작 일치.
+          // 2026-07-09 실측: 켜진 상태의 매 저장마다 ping이 나가 장부에 중복 기록 — 전환 게이트로 교정).
+          const prevScoutOn = (() => { try { return loadContract(dashboardWorkspace(), slotLang).scoutMode === "on"; } catch { return false; } })();
           const ok = saveContract(dashboardWorkspace(), {
             claude: Array.isArray(m.claude) ? m.claude : [],
             codex: Array.isArray(m.codex) ? m.codex : [],
@@ -1840,7 +1851,7 @@ class Dashboard {
           //  키 없음 → 경고 모달 + [등록하러 가기(고급설정 이동)] / [알겠습니다]
           //  키 있음 → 실제 연결 점검(ping 1회 — PRIVACY에 전송 지점으로 명시) 후 정상/실패를 사실대로.
           // ⚠ 문구 정직성: 실측(D5)상 '키 없음=효과 미비'가 아니라 '정찰 미실행=효과 미비'가 사실 — 경고문은 그 사실 기준.
-          if (ok && normScoutMode({ scoutMode: m.scoutMode }) === "on") {
+          if (ok && normScoutMode({ scoutMode: m.scoutMode }) === "on" && !prevScoutOn) {
             if (!readDeepseekView().hasKey) {
               const go = tE("등록하러 가기", "Register key");
               vscode.window.showWarningMessage(tE(
@@ -3244,7 +3255,7 @@ class Dashboard {
       // 건강 리포트 새탭 — 현황이 포화라 확장판(수치 뜻·게이트·타임라인)은 대시보드에 더 얹지 않고 새탭으로(2026-07-09).
       safe(function(){
         const rb=document.createElement("button"); rb.style.cssText="margin:4px 0 2px";
-        rb.textContent=T("🩺 건강 리포트 (새탭) — 수치의 뜻·게이트·사건 흐름","🩺 Health report (new tab) — what the numbers mean · gate · event flow");
+        rb.textContent=T("🩺 건강 리포트 (새탭) — 신호의 역할·수치의 뜻·게이트·사건 흐름","🩺 Health report (new tab) — role of the signals · what the numbers mean · gate · event flow");
         rb.addEventListener("click", function(){ vscode.postMessage({type:"openScoutHealthReport"}); });
         card.appendChild(rb);
       });
@@ -3364,6 +3375,9 @@ class Dashboard {
       const on = !!(d.contract && d.contract.scoutMode === "on");
       wrap.style.display = on ? "" : "none";
       if (row) row.style.display = on ? "" : "none";
+      // ①~③처럼 ✓ 표시(2026-07-09 사용자 지적: ④만 마크가 빈칸이었음 — setStage 미호출 누락).
+      // 이 줄은 3트랙일 때만 보이므로 보이는 순간 = 적용 중(정찰 기본 원칙은 검증 모드와 무관하게 지도 그릴 때 주입).
+      if (on) setStage(row, true, T("3트랙 켜짐 → 지도 그릴 때 적용(검증 모드와 무관)","3-track on → applied when maps are drawn (independent of verify mode)"));
       const sp=d.scoutPrompt; if(!sp) return;
       if (!holdB && document.activeElement !== $("bScout") && !baseDirty.scout) $("bScout").value = sp.baseline||"";
       const sov=$("bScoutOv"); if(sov) sov.textContent = sp.overridden ? T("· (수정됨 — 이후 지도는 실측과 비교 불가 표시)","· (modified — later maps marked incomparable to the measurement)") : T("· (기본값)","· (default)");
