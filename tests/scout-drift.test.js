@@ -244,6 +244,20 @@ for (const [nm, src] of [["extension isInjected", extFilterSrc], ["bridge 주제
   ok(!re.test("본문 중간에 <recommended_plugins> 태그를 인용한 정상 발화"), nm + " — 시작 앵커(^) — 본문 중간 인용은 보존");
 }
 
+console.log("[11] 논리 점검(2026-07-10) — 선별 자기고정 해소·⑥ 2경로 위생·경로:라인 추출");
+const LE2 = require(path.join(__dirname, "..", "out", "ledger-events.js"));
+const d11 = LE2.deriveLedger(LE2.parseEventsJsonl([
+  JSON.stringify({ ts: "2026-01-01T00:00:00Z", type: "proposed", sig: "s1", text: "src/alpha-file.ts ↔ docs/beta-doc.md" }),
+  JSON.stringify({ ts: "2026-01-05T00:00:00Z", type: "attached", sig: "s1" }),
+].join("\n")).events);
+ok(d11[0].lastTs === "2026-01-01T00:00:00Z" && d11[0].counts.attached === 1, "attached는 lastTs 미갱신 — 선별(최신순)이 자기 선별을 최신으로 만들던 고착 해소(재사용 지표 재료는 유지, 논리 점검 #7)");
+ok(CL.ledgerPathsFromText("src/alpha-file.ts:120 ↔ docs/beta-doc.md").length === 2, "경로:라인 표기도 경로로 추출 — ⑥ 위생과 추출기 불일치 해소(논리 점검 #6)");
+const p11 = CL.extractMapPatches("⑥ 기억할 결합(MAP patch 후보)\n- src/solo-only-file.ts 는 아주 아주 중요한 파일임\n- src/alpha-file.ts ↔ docs/beta-doc.md — 같이 움직임\n- proofs/ 쓰기 ↔ verify-guard 읽기 — 채널 결합");
+ok(p11.length === 2 && /alpha-file/.test(p11[0]) && /verify-guard/.test(p11[1]) && !p11.some((t) => /solo-only-file/.test(t)), "⑥ 위생 — 조각(단일 경로 서술)은 탈락·경로쌍과 채널 결합(↔)은 보존(원문까지 잠금 — 개수만 검사하던 공백 보완, Codex 지적)");
+ok(CL.ledgerPathsFromText(p11[0]).length === 2 && CL.ledgerPathsFromText(p11[1]).length === 0, "보존된 채널 결합은 추출 경로 0개 = 자동 확인 불가 — 이 분모 왜곡은 L1(자동확인 가능성 구분 상태)로 잔존함을 정직 기록");
+const p11b = CL.extractMapPatches("⑥ 기억할 결합(MAP patch 후보)\n- src/one-file.ts → 중요한 개념 흐름");
+ok(p11b.length === 1 && CL.ledgerPathsFromText(p11b[0]).length === 1, "결합 표기+경로 1개 항목도 보존됨(자동 확인 불가 잔존 범위는 경로 0뿐 아니라 <2 전체 — Codex 지적 잠금)");
+
 try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 무해 */ }
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

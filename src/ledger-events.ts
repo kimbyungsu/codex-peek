@@ -80,7 +80,9 @@ export function deriveLedger(events: LedgerEvent[]): LedgerEntry[] {
       m.set(e.sig, it);
     }
     it.counts[e.type] = (it.counts[e.type] || 0) + 1;
-    if (e.ts) it.lastTs = e.ts;
+    // attached(꾸러미 재동봉)는 최신성 갱신에서 제외 — 선별(lastTs 최신순)이 자기 선별을 다시 최신으로 만들어
+    // 같은 소수 항목이 상한을 영구 점유하던 자기고정(논리 점검 #7, 2026-07-10). 판정·제안·개입 이벤트만 최신성 기여.
+    if (e.ts && e.type !== "attached") it.lastTs = e.ts;
     if (e.text && !it.text) it.text = e.text;
     if (e.from && !it.from) it.from = e.from;
     if (e.type === "superseded" && e.newSig) it.supersededBy = e.newSig;
@@ -150,7 +152,8 @@ export function computeScoutHealth(entries: LedgerEntry[]): ScoutHealth {
 export function extractPathsFromText(text: string): string[] {
   const out: string[] = [];
   for (const tok of String(text || "").replace(/`/g, "").split(/[\s,;|"'<>{}()[\]—·↔]+/)) {
-    const t = tok.replace(/^[^A-Za-z0-9_.\\/-]+|[^A-Za-z0-9_.\\/-]+$/g, "").replace(/[.,;:]+$/, "");
+    const noLine = tok.replace(/:(\d+)(?:-\d+)?$/, ""); // 경로:라인 꼬리 제거(저장소 상대경로 계약) — contract-lib ledgerPathsFromText와 동형(논리 점검 #6)
+    const t = noLine.replace(/^[^A-Za-z0-9_.\\/-]+|[^A-Za-z0-9_.\\/-]+$/g, "").replace(/[.,;:]+$/, "");
     if (!t || t.length > 200 || !/^[A-Za-z0-9_.\\/-]+$/.test(t)) continue;
     const hasSep = /[\\/]/.test(t);
     if (!hasSep && !/\.[A-Za-z][A-Za-z0-9]{0,7}$/.test(t)) continue;

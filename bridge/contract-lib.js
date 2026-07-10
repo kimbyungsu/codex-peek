@@ -712,6 +712,11 @@ function extractMapPatches(mapText) {
     // 씨앗 위생(백필 도입 시 실측: 'yaml'·'blind spot'·근거 설명줄이 후보로 새던 결함) — 결합 제안의 최소 실체는
     // '경로가 든 문장'. 경로 토큰 1개 이상 + 최소 길이. 러너·백필이 같은 이 함수를 쓰므로 기준은 단일.
     if (text.length < 16 || !hasPathToken(text)) continue;
+    // ⑥은 '결합' 기록 — 결합 형태가 아닌 조각(단일 경로 서술·함수 표기·정규식 조각)은 씨앗 매칭·자동 확인이
+    // 원리상 불가능한데 선별 상한·건강 분모만 차지한다(논리 점검 #6 — 라이브 장부 실존). 위생 = 추출 가능한 경로
+    // 2개 이상 '또는' 결합 표기(↔/→) 존재 — 확장자 없는 채널 결합("proofs/ 쓰기 ↔ verify-guard 읽기")은 결합
+    // 표기로 살리고, 표기도 경로쌍도 없는 서술만 거른다(2경로 단독 요구는 정당한 결합 지식을 소실 — 테스트 반례).
+    if (ledgerPathsFromText(text).length < 2 && !/[↔→]/.test(text)) continue;
     const key = text.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -772,7 +777,10 @@ function readLedgerEventsText(ws) {
 function ledgerPathsFromText(text) {
   const out = [];
   for (const tok of String(text || "").replace(/`/g, "").split(/[\s,;|"'<>{}()[\]—·↔]+/)) {
-    const t = tok.replace(/^[^A-Za-z0-9_.\\/-]+|[^A-Za-z0-9_.\\/-]+$/g, "").replace(/[.,;:]+$/, "");
+    // 경로:라인 표기(src/a.ts:120)의 콜론 꼬리 제거 — ⑥ 후보 위생은 이 표기를 받는데 이 추출기가 못 읽어
+    // '경로 0개' 항목이 되던 불일치(논리 점검 #6, 2026-07-10). 계약은 저장소 상대경로(절대경로·조사 접미 미지원).
+    const noLine = tok.replace(/:(\d+)(?:-\d+)?$/, "");
+    const t = noLine.replace(/^[^A-Za-z0-9_.\\/-]+|[^A-Za-z0-9_.\\/-]+$/g, "").replace(/[.,;:]+$/, "");
     if (!t || t.length > 200 || !/^[A-Za-z0-9_.\\/-]+$/.test(t)) continue;
     const hasSep = /[\\/]/.test(t);
     if (!hasSep && !/\.[A-Za-z][A-Za-z0-9]{0,7}$/.test(t)) continue;
@@ -912,8 +920,8 @@ function scoutHealthLine(target, en) {
     // 순서 무주장 문구(Codex 반례: 확인이 재동봉보다 먼저인 항목도 셈에 든다) — 인과를 암시하는 지표명 금지.
     const ratio = h.reusedDen >= HEALTH_MIN_SAMPLE ? ` · ${en ? "reused items with a confirm on record" : "재사용 항목 중 확인 이력"} ${h.reusedNum}/${h.reusedDen}` : "";
     return en
-      ? `[Scout observation signal — this project] confirmed items ${h.verified}/${h.entries}${ratio} · disputed ${h.disputedEntries} (manually recorded) · rehabilitated ${h.rehabilitated}. Counting is conservative (only survives strict evidence checks), so real usefulness may be higher — still, the map is a candidate list, not a safety guarantee: keep independent checks outside it.`
-      : `[정찰 관찰 신호 — 이 프로젝트 기준] 확인 항목 ${h.verified}/${h.entries}${ratio} · 반박 ${h.disputedEntries}건(수동 기록 기준) · 복권 ${h.rehabilitated}건. 집계는 보수적(엄격한 근거 검사를 통과한 것만)이라 실제 유용성은 더 높을 수 있음 — 그래도 지도는 후보 목록이지 안전 보장이 아니다: 지도 밖 독립 확인을 유지하라.`;
+      ? `[Scout observation signal — this project] confirmed items ${h.verified}/${h.entries}${ratio} · disputed ${h.disputedEntries} (manually recorded) · rehabilitated ${h.rehabilitated}. Bias can go both ways (no automatic dispute extraction = disputes undercounted; map-attached exposure = confirms overcounted — logic audit 2026-07-10) — still, the map is a candidate list, not a safety guarantee: keep independent checks outside it.`
+      : `[정찰 관찰 신호 — 이 프로젝트 기준] 확인 항목 ${h.verified}/${h.entries}${ratio} · 반박 ${h.disputedEntries}건(수동 기록 기준) · 복권 ${h.rehabilitated}건. 집계 편향은 양방향일 수 있다(자동 반박이 없어 반박은 적게 잡히고, 지도에 실려 노출된 항목은 확인이 잘 잡힘 — 논리 점검 2026-07-10) — 지도는 후보 목록이지 안전 보장이 아니다: 지도 밖 독립 확인을 유지하라.`;
   } catch { return null; /* 신호 실패가 지도 동봉을 막지 않음 */ }
 }
 

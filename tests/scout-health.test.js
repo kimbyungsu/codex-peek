@@ -57,17 +57,17 @@ for (const f of ["bridge/contract-lib.js", "src/ledger-events.ts", "src/extensio
   const s = fs.readFileSync(path.join(__dirname, "..", f), "utf8");
   ok(!/재사용 후 확인/.test(s) && !/confirmed after reuse/.test(s), f + " — 순서 주장 문구 잔재 0(코드가 증명 못 하는 인과 '후' 금지 — 문서 포함, Codex 반례 잠금)");
 }
-ok(/보수적/.test(full) && /안전 보장이 아니다/.test(full) && /독립 확인/.test(full), "상시 한계 문구(보수 집계·후보일 뿐·독립 확인 유지)");
+ok(/양방향/.test(full) && /안전 보장이 아니다/.test(full) && /독립 확인/.test(full) && !/유용성은 더 높/.test(full), "상시 한계 문구 — 편향 양방향(반박 과소·노출 확인 과대) 정직화, '보수 단방향' 주장 제거(논리 점검 #8 잠금)");
 ok(!/정확도/.test(full) && !(/accuracy/.test(CL.scoutHealthLine(repo, true) || "")), "'정확도/accuracy' 용어 금지(관찰 신호로만)");
 const en = CL.scoutHealthLine(repo, true);
-ok(!!en && /Scout observation signal/.test(en) && /manually recorded/.test(en), "영문 동등 품질");
+ok(!!en && /Scout observation signal/.test(en) && /manually recorded/.test(en) && /both ways/.test(en) && !/usefulness may be higher/.test(en), "영문 동등 품질 — 양방향 편향 문구 포함·옛 단방향 주장 제거(Codex 반례 잠금)");
 
 console.log("[attach 배선] 지도 동봉 꼬리에 신호 줄 — 실패해도 지도 동봉 불침(소스 계약)");
 const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
 ok(/scoutHealthLine\(target, en\)/.test(src) && /health \? \[health\] : \[\]/.test(src), "buildScoutAttach가 target(정찰 대상) 기준으로 신호 줄 첨부");
 ok(/신호 실패가 지도 동봉을 막지 않음/.test(src), "실패 격리 주석·catch");
 const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
-ok(/health: computeScoutHealth\(derived\)/.test(ext) && /관찰 신호\(이 프로젝트\)/.test(ext) && /표본 아직 작음/.test(ext), "대시보드 관찰 일지 카드에 신호 1줄(표본 게이트 포함)");
+ok(/health: computeScoutHealth\(derived\)/.test(ext) && /관찰 신호\(이 프로젝트\)/.test(ext) && /표본 아직 작음/.test(ext) && /양방향일 수 있어요/.test(ext) && !/보수 집계라 실제 유용성/.test(ext), "대시보드 관찰 일지 카드에 신호 1줄(표본 게이트·양방향 편향 문구)");
 
 console.log("[건강 리포트 새탭] 대시보드 포화 대응(2026-07-09 사용자 지시) — 스크립트 없음·열 때 베이크·동적 데이터 esc");
 const repStart = ext.indexOf("function openScoutHealthReport");
@@ -82,7 +82,7 @@ ok(ext.includes('type:"openScoutHealthReport"') && ext.includes('m?.type === "op
 console.log("[역할 명시(2026-07-09 사용자 지적 2)] 리포트에 '어디서 생기고 어디에 반영되나' 구조 + '고정값 아님' 차별점");
 ok(rep.includes("관찰 신호의 역할") && rep.includes("role of observation signals"), "역할 섹션 제목(한/영 쌍)");
 ok(rep.includes("1. 감지") && rep.includes("2. 기록") && rep.includes("3. 해석") && rep.includes("4. 반영"), "감지→기록→해석→반영 4단 흐름 카드");
-ok(rep.includes("고정값이 아니라 따라가는 값") && rep.includes("a tracking value, not a fixed one"), "차별점 — 프로젝트 성격·구조 따라 실시간 재계산(전역 임계값 없음)");
+ok(rep.includes("고정값이 아니라 따라가는 값") && rep.includes("관측치") && !/스스로 좁혀/.test(rep), "차별점 — 관측치임을 명시(자기학습 제어 장치 과장 제거 — 논리 점검 #9 잠금)");
 ok(rep.includes("셋은 그 순간 장부에서 새로 계산") && rep.includes("짧은 캐시로 따라잡음") && !/넷 다 그 순간/.test(rep) && !/언어별로 따로 쌓/.test(rep), "반영 4곳 실시간성 정확 서술 — 대시보드 1줄은 5초 캐시 경유라 '넷 다 즉시' 과장 금지(Codex 반례 잠금) · 장부가 언어별 분리라는 과잉 주장 없음(일지는 프로젝트별 단일 — 언어 슬롯 분리는 설정 쪽)");
 ok(ext.includes("신호의 역할·수치의 뜻"), "대시보드 버튼 라벨에 '신호의 역할' 명시");
 
