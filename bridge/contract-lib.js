@@ -109,23 +109,24 @@ const INTEGRITY_LOCK = INTEGRITY_FILE + ".lock";
 // v2(Codex 반례 반영): stale 잠금 '자동 삭제'는 두 회수자가 서로의 새 잠금을 지워 이중 진입하는 TOCTOU라 제거 —
 // 잔존 잠금은 최대 ~600ms 대기 후 무잠금 진행(fail-open=종전 동작). 즉 이 잠금은 '정상 경합에서의 유실 방지'이지
 // 비정상 잔존까지 포함한 완전 해결이 아니다(정직 주장 하향). 해제는 토큰 소유권 일치 시에만(타 잠금 오삭제 방지).
-function withIntegrityLock(fn) {
+// 파일 잠금 일반형 — withIntegrityLock과 동일 규율(wx 선점·토큰 소유권·죽은 pid 즉시 degraded·자기 토큰만 해제·
+// 잔존 잠금 자동 삭제 없음[상호 삭제 TOCTOU]). '정상 경합에서의 유실 방지'이지 완전 해결 아님(같은 한계 고지).
+function withFileLock(lockPath, fn) {
   const token = process.pid + "-" + Math.random().toString(36).slice(2, 8);
   let locked = false;
   for (let i = 0; i < 40 && !locked; i++) {
-    try { fs.writeFileSync(INTEGRITY_LOCK, token, { flag: "wx" }); locked = true; }
+    try { fs.writeFileSync(lockPath, token, { flag: "wx" }); locked = true; }
     catch {
-      // 보유자 pid가 죽었으면 대기 없이 즉시 무잠금 진행(degraded) — 비정상 잔존 잠금이 매 호출 ~600ms 지연을
-      // 만들던 성능 회귀 차단(Codex 반례: 확장은 렌더당 2회 호출·15초 폴링 반복). 삭제는 안 함(상호 삭제 TOCTOU).
-      try { const pid = parseInt(String(fs.readFileSync(INTEGRITY_LOCK, "utf8")).split("-")[0], 10); if (pid) { try { process.kill(pid, 0); } catch { break; } } } catch { /* 판독 불가 — 재시도 */ }
+      try { const pid = parseInt(String(fs.readFileSync(lockPath, "utf8")).split("-")[0], 10); if (pid) { try { process.kill(pid, 0); } catch { break; } } } catch { /* 판독 불가 — 재시도 */ }
       try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15); } catch { /* SAB 불가 — 즉시 재시도 */ }
     }
   }
   try { return fn(); }
   finally {
-    if (locked) { try { if (fs.readFileSync(INTEGRITY_LOCK, "utf8") === token) fs.unlinkSync(INTEGRITY_LOCK); } catch { /* 무해 */ } }
+    if (locked) { try { if (fs.readFileSync(lockPath, "utf8") === token) fs.unlinkSync(lockPath); } catch { /* 무해 */ } }
   }
 }
+function withIntegrityLock(fn) { return withFileLock(INTEGRITY_LOCK, fn); }
 function appendIntegrityEvent(ev) {
   return withIntegrityLock(() => {
     const events = readIntegrityEvents();
@@ -571,47 +572,134 @@ function clearAskInflight(ws, hash, token) {
 // seed 밖 파일만 바뀌면 지시가 영영 침묵해 '일지가 늘 그대로'가 재발): ①seedChanged=지도 자신의 근거 파일(앞 8개)
 // 변경 ②commitsAfter=메타 head 이후 새 커밋 수(메타에 head가 기록된 신형 지도만) ③dirtyChanged=작업트리 변경
 // 파일 중 지도 ts 이후 mtime(seed 중복 제외). 비-git·git 실패·구형 메타는 해당 신호 0(무회귀·fail-open).
+// 비-git 대상의 유계 변경 스캔(L1-C: 비-git 비-seed 미탐 해소) — 수집기(scope-package)와 같은 제외 규칙,
+// 항목 상한·깊이 상한. '신호 존재'가 목적이라 changed가 상한(9)에 닿으면 조기 종료. complete=false는
+// '전수 확인 못 함'(상한 도달/판독 실패) — 이때 changed 0을 fresh로 단정하면 같은 미탐이 남으므로(Codex)
+// 호출자가 unknown으로 처리한다.
+const NONGIT_SKIP_DIRS = new Set([".git", "node_modules", "dist", "build", "vendor", "out", ".vscode", ".idea", "__pycache__", ".venv", "venv"]);
+function nonGitChangedSince(root, ts, skipAbs, capEntries = 1500, maxDepth = 6) {
+  let seen = 0, changed = 0, files = 0, complete = true;
+  const skip = skipAbs || new Set();
+  const walk = (dir, depth) => {
+    if (changed >= 9 || seen >= capEntries) { complete = false; return; }
+    let items;
+    try { items = fs.readdirSync(dir, { withFileTypes: true }); } catch { complete = false; return; }
+    for (const it of items) {
+      if (changed >= 9 || seen >= capEntries) { complete = false; return; }
+      seen++;
+      const abs = path.join(dir, it.name);
+      if (it.isDirectory()) {
+        if (depth < maxDepth && !NONGIT_SKIP_DIRS.has(it.name) && !it.name.startsWith(".")) walk(abs, depth + 1);
+        else if (depth >= maxDepth) complete = false; // 더 깊은 곳은 못 봤음
+        continue;
+      }
+      if (skip.has(normWs(abs))) continue; // seed 자신은 seedChanged가 담당(중복 카운트 방지)
+      files++;
+      try { if (fs.statSync(abs).mtimeMs > ts) changed++; } catch { complete = false; } // 판독 실패=전수 확인 실패(무시하면 다른 신호 0일 때 거짓 fresh — Codex #6)
+    }
+  };
+  walk(root, 0);
+  return { changed, complete, files }; // files=본 파일 수(비-git 삭제 감지용 유계 인벤토리)
+}
+// 지도 형식 계약(품질 최소선 — L1-C: '판독 가능한데 알맹이 없음' 지도가 게이트를 통과하던 결함).
+// 파싱 가능한 후보(high 항목 또는 ⑥ 후보)가 하나라도 있거나, 형식 구획 표기(①~⑥)가 보이면 유효.
+// '영향 없음'을 정직하게 쓴 지도도 구획 표기는 있으므로 invalid가 아니다. 읽기 실패는 판정하지 않는다(fail-open).
+function mapLooksValid(md) {
+  const s = String(md || "");
+  if (/[①②③④⑤⑥]/.test(s)) return true;
+  try { if (extractMapHighlights(s, 24).length > 0 || extractMapPatches(s).length > 0) return true; } catch { /* 파서 실패 → 아래 판정 */ }
+  return false;
+}
+// 상태: no-map | legacy-no-seeds | invalid(형식 계약 미충족) | unknown(전수 확인 불가 — fresh 단정 금지)
+//      | stale | fresh. 성분: seedChanged / commitsAfter / dirtyChanged / historyLost(기록 기준 커밋 소실).
 function scoutMapStatus(ws) {
   const dir = path.join(SCOUTS_DIR, wsKeyFor(ws));
   let bases = [];
   try { bases = fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)).sort().reverse(); } catch { /* 보관함 없음 */ }
-  if (!bases.length) return { state: "no-map", base: null, staleCount: 0, seedChanged: 0, commitsAfter: 0, dirtyChanged: 0 };
+  const zero = { staleCount: 0, seedChanged: 0, commitsAfter: 0, dirtyChanged: 0, historyLost: 0 };
+  if (!bases.length) return { state: "no-map", base: null, ...zero };
   let meta = {};
   try { meta = JSON.parse(fs.readFileSync(path.join(dir, bases[0] + ".json"), "utf8")); } catch { /* 메타 없음 — 낡음 판정 불가 → fresh 취급(과잉 지시 방지) */ }
+  // 품질(형식 계약): md가 '읽히는데' 형식 불명이면 invalid — fresh로 흘러 게이트·동봉이 빈 지도를 신뢰하는 것 차단.
+  try {
+    const md = fs.readFileSync(path.join(dir, bases[0] + ".md"), "utf8");
+    // 단 메타의 저장 계층(highlights·mapPatches)에 내용이 있으면 invalid 아님 — md 파싱 0건이어도 저장분 폴백으로
+    // 동봉이 존속하는 문서화된 경로(구형 지도 무회귀).
+    const metaHasContent = (Array.isArray(meta.highlights) && meta.highlights.some((i) => i && typeof i.path === "string" && i.path.trim()))
+      || (Array.isArray(meta.mapPatches) && meta.mapPatches.length > 0);
+    if (!mapLooksValid(md) && !metaHasContent) return { state: "invalid", base: bases[0], ...zero };
+  } catch { /* 읽기 실패 — 품질 판정 보류(fail-open: 아래 신선도 판정 계속) */ }
   const ts = Date.parse(meta.basisTs || meta.ts || "") || 0; // basisTs=꾸러미 수집 시점(지도가 본 입력) — AI 응답 대기(수 분) 중 변경을 놓치지 않게(Codex 반례). 구형 메타는 ts 폴백
   // legacy 판정은 '기록 자체가 없던 구버전'만 — seedFiles 속성 부재/비배열. 명시적 빈 배열([])은 최신 러너가
   // '변경 없는 작업트리'에서 정상적으로 만들 수 있는 형식이라 legacy가 아니다(Codex 반례 2026-07-08: 빈 배열을
   // 구버전으로 오판하면 방금 만든 지도에 '재생성 권고'를 반복하는 거짓 안내가 됨) → fresh 취급(판정 근거 없음=과잉 지시 방지).
-  if (ts && !Array.isArray(meta.seedFiles)) return { state: "legacy-no-seeds", base: bases[0], staleCount: 0, seedChanged: 0, commitsAfter: 0, dirtyChanged: 0 };
+  if (ts && !Array.isArray(meta.seedFiles)) return { state: "legacy-no-seeds", base: bases[0], ...zero };
   const seeds = (meta.seedFiles || []).slice(0, 8);
   let seedChanged = 0;
   // 삭제 판정 기준선: seedFiles에는 '지도 생성 당시 이미 삭제돼 있던 경로'(삭제 diff의 seed)도 들어간다 —
   // 무조건 '없음=지도 뒤 삭제'로 세면 새 지도가 즉시 stale(Codex 반례). 신형 메타(seedMissing 기록)만
   // '당시 존재했던 seed의 소실'을 변경으로 세고, 구형 메타는 옛 동작(제외 — 무회귀·과잉 지시 방지).
   const missingAtMap = new Set(Array.isArray(meta.seedMissing) ? meta.seedMissing : null);
+  const hashes = meta.seedHashes && typeof meta.seedHashes === "object" ? meta.seedHashes : {};
   for (const s of seeds) {
-    try { if (fs.statSync(path.join(ws, s)).mtimeMs > ts) seedChanged++; }
-    catch { if (Array.isArray(meta.seedMissing) && !missingAtMap.has(s)) seedChanged++; }
-  }
-  let commitsAfter = 0;
-  if (ts && typeof meta.head === "string" && /^[0-9a-f]{7,40}$/i.test(meta.head)) {
     try {
-      const r = require("child_process").spawnSync("git", ["-c", "safe.directory=" + String(ws).replace(/\\/g, "/"), "-C", ws, "rev-list", "--count", meta.head + "..HEAD"], { encoding: "utf8", timeout: 3000, windowsHide: true });
-      if (r.status === 0) commitsAfter = Math.min(parseInt(String(r.stdout).trim(), 10) || 0, 999);
+      const abs = path.join(ws, s);
+      const st0 = fs.statSync(abs);
+      if (st0.mtimeMs <= ts) continue;
+      // mtime이 새것이어도 내용 지문이 같으면 변경 아님(빌드 touch류 거짓 stale — L1-C). 지문은 예산(2MB) 이내
+      // '전체' 해시만 기록돼 있고, 해시 도중 파일이 또 바뀌면(전후 stat 불일치) 보수적으로 변경으로 센다.
+      if (typeof hashes[s] === "string" && st0.size <= 2 * 1024 * 1024) {
+        try {
+          const h = require("crypto").createHash("sha1").update(fs.readFileSync(abs)).digest("hex");
+          const st1 = fs.statSync(abs);
+          if (st1.size === st0.size && st1.mtimeMs === st0.mtimeMs && h === hashes[s]) continue;
+        } catch { /* 지문 비교 실패 → 변경으로 취급(보수) */ }
+      }
+      seedChanged++;
+    } catch { if (Array.isArray(meta.seedMissing) && !missingAtMap.has(s)) seedChanged++; }
+  }
+  let commitsAfter = 0, historyLost = 0;
+  const isGit = !!gitTopLevelFor(ws);
+  if (ts && isGit && typeof meta.head === "string" && /^[0-9a-f]{7,40}$/i.test(meta.head) && !/^0+$/.test(meta.head)) {
+    // 기록 기준 커밋의 '존재'부터 검사(L1-C: rev-list 실패를 0으로 삼키면 이력 재작성이 거짓 fresh).
+    // 무이력 지도(head=0000000)는 검사 대상 아님. git 자체 부재는 isGit에서 이미 걸러짐.
+    try {
+      const sd = "safe.directory=" + String(ws).replace(/\\/g, "/");
+      const ex = require("child_process").spawnSync("git", ["-c", sd, "-C", ws, "cat-file", "-e", meta.head + "^{commit}"], { encoding: "utf8", timeout: 3000, windowsHide: true });
+      if (ex.error) { /* git 실행 실패 — 신호 0(과잉 지시 방지) */ }
+      else if (ex.status !== 0) historyLost = 1; // 저장소는 살아 있는데 기준 커밋이 없음 — 이력 재작성/교체 의심
+      else {
+        const r = require("child_process").spawnSync("git", ["-c", sd, "-C", ws, "rev-list", "--count", meta.head + "..HEAD"], { encoding: "utf8", timeout: 3000, windowsHide: true });
+        if (r.status === 0) commitsAfter = Math.min(parseInt(String(r.stdout).trim(), 10) || 0, 999);
+      }
     } catch { /* git 없음/실패 — 신호 0 */ }
   }
   let dirtyChanged = 0;
+  let scanIncomplete = false;
   if (ts) {
-    const seedSet = new Set(seeds.map((s) => { try { return normWs(path.join(ws, s)); } catch { return s; } }));
-    for (const e of changedEntriesFor(ws)) {
-      const abs = path.join(ws, e.rel);
-      if (seedSet.has(normWs(abs))) continue; // seed와 중복 카운트 방지
-      if (/D/.test(e.code)) { dirtyChanged++; continue; } // 삭제는 mtime이 없음 — 상태 코드로 판정(Codex 반례)
-      try { if (fs.statSync(abs).mtimeMs > ts) dirtyChanged++; } catch { dirtyChanged++; /* stat 실패(방금 사라짐 등)도 변경 신호 */ }
+    if (isGit) {
+      const seedSet = new Set(seeds.map((s) => { try { return normWs(path.join(ws, s)); } catch { return s; } }));
+      for (const e of changedEntriesFor(ws)) {
+        const abs = path.join(ws, e.rel);
+        if (seedSet.has(normWs(abs))) continue; // seed와 중복 카운트 방지
+        if (/D/.test(e.code)) { dirtyChanged++; continue; } // 삭제는 mtime이 없음 — 상태 코드로 판정(Codex 반례)
+        try { if (fs.statSync(abs).mtimeMs > ts) dirtyChanged++; } catch { dirtyChanged++; /* stat 실패(방금 사라짐 등)도 변경 신호 */ }
+      }
+    } else {
+      // 비-git 대상: seed 8개 밖 변경이 영영 미탐이던 사각(L1-C) — 유계 스캔. seed 자신의 변경은 seedChanged가 담당.
+      const seedSet = new Set(seeds.map((s) => normWs(path.join(ws, s))));
+      const r = nonGitChangedSince(ws, ts, seedSet);
+      dirtyChanged = r.changed;
+      // 삭제 감지(Codex #6): 지도 생성 시 유계 인벤토리(nonGitFiles)가 있고 양쪽 스캔이 완전하면, 파일 수 감소=삭제 신호.
+      const inv = meta.nonGitFiles && typeof meta.nonGitFiles === "object" ? meta.nonGitFiles : null;
+      if (inv && inv.complete === true && r.complete && Number.isFinite(inv.n) && r.files < inv.n) dirtyChanged += (inv.n - r.files);
+      if (!r.complete && r.changed === 0) scanIncomplete = true; // 신호 0인데 전수 확인 못 함 — fresh 단정 금지
     }
   }
-  const staleCount = seedChanged + commitsAfter + dirtyChanged;
-  return { state: ts && staleCount > 0 ? "stale" : "fresh", base: bases[0], staleCount, seedChanged, commitsAfter, dirtyChanged };
+  const staleCount = seedChanged + commitsAfter + dirtyChanged + historyLost;
+  if (ts && staleCount > 0) return { state: "stale", base: bases[0], staleCount, seedChanged, commitsAfter, dirtyChanged, historyLost };
+  if (scanIncomplete) return { state: "unknown", base: bases[0], staleCount: 0, seedChanged, commitsAfter, dirtyChanged, historyLost };
+  return { state: "fresh", base: bases[0], staleCount: 0, seedChanged, commitsAfter, dirtyChanged, historyLost };
 }
 // 3트랙이고 지도가 없/낡았으며 이 상태에 아직 지시한 적 없으면 지시문 반환, 아니면 null. c=이미 로드된 계약(중복 로드 방지).
 // 재지시 정책(2026-07-08 점화 보수): 같은 지도라도 낡음 '정도'가 커지면(2의 거듭제곱 버킷 1,2,4,8… 상승) 다시 1회 지시.
@@ -649,31 +737,46 @@ function buildScoutDirective(ws, c) {
   } catch { /* 자기진단 실패가 기존 신선도 지시를 못 막음 */ }
   const st = scoutMapStatus(target);
   if (st.state === "fresh") return null;
-  const bucket = st.state === "stale" ? scoutBucket(st.staleCount) : 0;
+  // 재지시 버킷 v2(L1-C): staleCount 합산은 파일 수+커밋 수의 이질 단위 합산이라 폐기 — 성분별 버킷이
+  // '어느 하나라도' 상승하면 재지시. 기억 스키마 v2(buckets 성분별) — 구형 기억(maxBucket 합산)은 성분 배정이
+  // 불가능하므로 업그레이드 시 1회 재알림을 정직하게 허용(Codex 설계검증 합의).
+  const comp = st.state === "stale"
+    ? { seed: scoutBucket(st.seedChanged), commits: scoutBucket(st.commitsAfter), dirty: scoutBucket(st.dirtyChanged), history: scoutBucket(st.historyLost || 0) }
+    : { seed: 0, commits: 0, dirty: 0, history: 0 };
   const f = path.join(SCOUT_ADVICE_DIR, wsKeyFor(target) + ".json");
   let prev = null;
   try {
     const raw = JSON.parse(fs.readFileSync(f, "utf8"));
-    if (raw && typeof raw === "object") {
-      if (typeof raw.sig === "string") { // 구버전 형식 해석
-        prev = raw.sig === "no-map" ? { state: "no-map", base: null, maxBucket: 0 }
-          : raw.sig.startsWith("stale:") ? { state: "stale", base: raw.sig.slice(6), maxBucket: 1 }
-          : raw.sig.startsWith("legacy:") ? { state: "legacy-no-seeds", base: raw.sig.slice(7), maxBucket: 0 }
-          : null;
-      } else if (typeof raw.state === "string") prev = { state: raw.state, base: raw.base || null, maxBucket: (raw.maxBucket | 0) || 0 };
+    if (raw && typeof raw === "object" && typeof raw.state === "string") {
+      prev = { state: raw.state, base: raw.base || null, buckets: raw.buckets && typeof raw.buckets === "object" ? raw.buckets : null };
+    } else if (raw && typeof raw.sig === "string") { // v0 형식 — 성분 배정 불가(buckets=null → 1회 재알림)
+      prev = raw.sig === "no-map" ? { state: "no-map", base: null, buckets: null }
+        : raw.sig.startsWith("stale:") ? { state: "stale", base: raw.sig.slice(6), buckets: null }
+        : raw.sig.startsWith("legacy:") ? { state: "legacy-no-seeds", base: raw.sig.slice(7), buckets: null }
+        : null;
     }
   } catch { /* 첫 지시 */ }
-  if (prev && prev.state === st.state && prev.base === st.base && bucket <= prev.maxBucket) return null; // 같은 상태·정도 이하 → 침묵
-  if (prev && prev.state === st.state && prev.base === st.base && st.state !== "stale") return null;      // no-map/legacy는 상태당 1회
-  try { atomicWrite(f, JSON.stringify({ state: st.state, base: st.base, maxBucket: Math.max(bucket, prev && prev.base === st.base ? prev.maxBucket : 0), ts: new Date().toISOString() })); } catch { /* 기억 실패 시 다음 턴 재지시 — 무해 */ }
+  if (prev && prev.state === st.state && prev.base === st.base) {
+    if (st.state !== "stale") return null; // no-map/legacy/invalid/unknown은 상태당 1회
+    if (prev.buckets && ["seed", "commits", "dirty", "history"].every((k) => comp[k] <= ((prev.buckets[k] | 0) || 0))) return null; // 모든 성분이 정도 이하 → 침묵
+  }
+  const mergedBuckets = {};
+  for (const k of ["seed", "commits", "dirty", "history"]) mergedBuckets[k] = Math.max(comp[k], prev && prev.base === st.base && prev.buckets ? ((prev.buckets[k] | 0) || 0) : 0);
+  try { atomicWrite(f, JSON.stringify({ state: st.state, base: st.base, buckets: mergedBuckets, ts: new Date().toISOString() })); } catch { /* 기억 실패 시 다음 턴 재지시 — 무해 */ }
   let hasKey = false;
   try { const j = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, "deepseek.json"), "utf8")); hasKey = !!(j && typeof j.apiKey === "string" && j.apiKey.trim()); } catch { /* 키 없음 */ }
   const en = loadLang() === "en"; // 훅 주입문도 전역 언어 준수(한/영 쌍 규칙 — 2026-07-09 사용자 지적)
+  const staleWhyKo = "최신 지도 이후 변경 신호 " + st.staleCount + "건(근거 파일 " + st.seedChanged + " · 새 커밋 " + st.commitsAfter + " · 작업트리 " + st.dirtyChanged + (st.historyLost ? " · 기록 기준 커밋 소실(이력 재작성?) " + st.historyLost : "") + ") — 지도가 낡았다";
+  const staleWhyEn = st.staleCount + " change signal(s) since the latest map (basis files " + st.seedChanged + " · new commits " + st.commitsAfter + " · working tree " + st.dirtyChanged + (st.historyLost ? " · recorded base commit missing (history rewritten?) " + st.historyLost : "") + ") — the map is stale";
   const why = st.state === "no-map"
     ? (en ? "this project has no impact map yet" : "이 프로젝트에 영향지도가 아직 없다")
     : st.state === "legacy-no-seeds"
     ? (en ? "the latest map has no basis-file record, so freshness cannot be judged (map predates basis tracking) — regeneration recommended" : "최신 지도에 근거 파일 기록이 없어 신선한지 낡았는지 판정할 수 없다(근거 기록 도입 전의 구버전 지도) — 재생성 권고")
-    : (en ? st.staleCount + " change signal(s) since the latest map (basis files " + st.seedChanged + " · new commits " + st.commitsAfter + " · working tree " + st.dirtyChanged + ") — the map is stale" : "최신 지도 이후 변경 신호 " + st.staleCount + "건(근거 파일 " + st.seedChanged + " · 새 커밋 " + st.commitsAfter + " · 작업트리 " + st.dirtyChanged + ") — 지도가 낡았다");
+    : st.state === "invalid"
+    ? (en ? "the latest map file has no recognizable structure (no parsable items, no section markers) — regeneration needed" : "최신 지도 파일에서 형식을 알아볼 수 없다(파싱 가능한 항목·구획 표기 없음) — 재생성 필요")
+    : st.state === "unknown"
+    ? (en ? "freshness cannot be fully judged (non-git target too large to scan completely) — if you changed files here, refreshing the map is recommended" : "신선도를 전수 판정할 수 없다(비-git 대상이 커서 스캔 상한 도달) — 이 폴더의 파일을 바꿨다면 지도 갱신을 권고")
+    : (en ? staleWhyEn : staleWhyKo);
   if (en) return "[Recon (3-track) auto-directive · once per state] " + why + ". If this turn involves file changes, refresh the impact map before concluding — run `node scripts/scope-scout-self.js \"" + target + "\"` from the codex-peek source repo (default Claude scout first — no separate billing"
     + (hasKey ? " · scope-scout-deepseek.js (DeepSeek scout) available if comparison seems useful — key registration = consent to auto calls" : "")
     + "). Trivial turns (a question, a one-line doc edit) may skip — the map is advisory and blocks nothing.";
@@ -780,35 +883,94 @@ function appendLedgerEvent(ws, ev) {
     if (!ws || !ev || !ev.sig || !ev.type) return false;
     fs.mkdirSync(LEDGER_EVENTS_DIR, { recursive: true });
     const f = ledgerEventsFileFor(ws);
+    // 프로젝트별 장부 잠금(Codex 9차): append→read→trim→replace가 잠금 밖이면 트림 경계에서 타 프로세스의
+    // append가 유실된다(브릿지 확인기·꾸러미 빌더·러너 2종·CLI·확장이 서로 다른 프로세스로 기록). 규율은
+    // integrity 잠금과 동일(P1-② 검증됨) — '정상 경합 유실 방지'로 한정(죽은 pid=즉시 degraded).
+    return withFileLock(f + ".lock", () => {
     fs.appendFileSync(f, JSON.stringify(ev) + "\n", "utf8");
     try {
       const lines = fs.readFileSync(f, "utf8").split(/\r?\n/).filter(Boolean);
       if (lines.length > LEDGER_EVENTS_TRIM_AT) {
-        // 판정·복권 증거를 '우선' 보존(2026-07-09 확정 결함 2건 방지): ①판정(반박·차단·고정·대체·소멸류)만 잘리고
-        // 재제안이 남으면 '틀림' 딱지가 부활 ②반대로 반박만 보존되고 복권 증거(사람 재확인·반박 이후 검증 확인)가
-        // 잘리면 복권이 조용히 풀림(Codex 반례) — 사람 재확인(user_confirm)은 판정군과 동급 보존, 기계 확인(confirmed)은
-        // '그 항목의 마지막 반박 이후'만 복권 증거로 보존(전부 보존하면 확인 홍수가 상한을 삼킴).
-        // 단 총량은 상한(2000)을 절대 넘지 않는다(PRIVACY '약 2,000줄 보존' 고지 불침 — 극단에선 보존군도 최신순).
-        const STATE = new Set(["user_dispute", "refuted", "banned", "unbanned", "pinned", "unpinned", "superseded", "tombstone", "user_confirm"]);
+        // 재압축 유예(Codex 8차 #2): 마지막 압축 세대 이후 '새 이벤트'가 임계(TRIM_AT-CAP=400)만큼 쌓이기 전엔
+        // 재정리하지 않는다 — 상한 초과 극단에서 매 append마다 전량 파싱·재작성이 반복되는 비용 차단(문자열 검사만 — 파싱 없음).
+        {
+          let lastCompact = -1;
+          for (let i9 = lines.length - 1; i9 >= 0; i9--) { if (lines[i9].indexOf('"from":"trim-compact') >= 0) { lastCompact = i9; break; } }
+          if (lastCompact >= 0 && (lines.length - 1 - lastCompact) < (LEDGER_EVENTS_TRIM_AT - LEDGER_EVENTS_CAP)) return true;
+        }
+        // 판정·복권 증거를 '우선' 보존(2026-07-09 확정 결함 2건 방지) + 가역쌍은 '순계 압축'(Codex 5차 반례:
+        // ban/unban 2,401회 교대처럼 개수 기반 절단은 접두를 잘라 순계를 뒤집는다 — 개수 보존이 아니라 순계 보존이 계약).
+        // 총량은 상한(2000)을 절대 넘지 않는다(PRIVACY '약 2,000줄 보존' 고지 불침).
         const parsedLines = lines.map((ln) => { try { return JSON.parse(ln); } catch { return null; } });
+        // ① 가역쌍(banned/unbanned·pinned/unpinned·alias/unalias) 순계 압축 — 전량에서 순계·활성 간선을 계산해
+        //    압축 이벤트(from: trim-compact)로 대체. 원시 가역 이벤트는 트림에서 제거(순계는 압축본이 정확히 재현).
+        //    alias는 '전체 양수 간선'을 가중(n)과 함께 남긴다 — 우세 간선만 남기면 이후 unalias 의미가 바뀜(Codex 6차 #2).
+        const banN = new Map(), pinN = new Map(), aliasN = new Map();
+        for (const o of parsedLines) {
+          if (!o) continue;
+          if (o.type === "banned") banN.set(o.sig, (banN.get(o.sig) || 0) + (Number.isFinite(o.n) && o.n > 0 ? Math.floor(o.n) : 1));
+          else if (o.type === "unbanned") banN.set(o.sig, (banN.get(o.sig) || 0) - (Number.isFinite(o.n) && o.n > 0 ? Math.floor(o.n) : 1));
+          else if (o.type === "pinned") pinN.set(o.sig, (pinN.get(o.sig) || 0) + (Number.isFinite(o.n) && o.n > 0 ? Math.floor(o.n) : 1));
+          else if (o.type === "unpinned") pinN.set(o.sig, (pinN.get(o.sig) || 0) - (Number.isFinite(o.n) && o.n > 0 ? Math.floor(o.n) : 1));
+          else if ((o.type === "alias" || o.type === "unalias") && o.aliasSig) {
+            let per = aliasN.get(o.aliasSig);
+            if (!per) { per = new Map(); aliasN.set(o.aliasSig, per); }
+            per.set(o.sig, (per.get(o.sig) || 0) + (o.type === "alias" ? 1 : -1) * (Number.isFinite(o.n) && o.n > 0 ? Math.floor(o.n) : 1));
+          }
+        }
+        const compactTs = new Date().toISOString();
+        const compact = [];
+        for (const [s2, n] of banN) if (n !== 0) compact.push(JSON.stringify({ ts: compactTs, type: n > 0 ? "banned" : "unbanned", sig: s2, n: Math.abs(n), from: "trim-compact(순계 보존)" })); // 음수 순계도 보존 — 폐기하면 이후 반대 방향 1건의 의미가 달라짐(Codex 7차 #2)
+        for (const [s2, n] of pinN) if (n !== 0) compact.push(JSON.stringify({ ts: compactTs, type: n > 0 ? "pinned" : "unpinned", sig: s2, n: Math.abs(n), from: "trim-compact(순계 보존)" }));
+        for (const [child, per] of aliasN) {
+          for (const [par, n] of per) if (n !== 0) compact.push(JSON.stringify({ ts: compactTs, type: n > 0 ? "alias" : "unalias", sig: par, aliasSig: child, n: Math.abs(n), from: "trim-compact(순계 보존)" })); // 전체 간선(양·음수)+가중 — 열세/음수 간선을 버리면 이후 unalias/alias 의미가 바뀜(Codex 6·7차)
+        }
+        const REVERSIBLE = new Set(["banned", "unbanned", "pinned", "unpinned", "alias", "unalias"]);
+        // 압축 관련 sig의 '대표 원문'(첫 text 보유 비가역 이벤트) 예약(Codex 8차 #1): 간선·상태 압축본만 남고
+        // 항목 자체가 유도기에서 사라지는 소실 방지 — 유도기는 alias/unalias를 항목 생성에서 건너뛰므로
+        // 정체성은 원문 이벤트가 들고 있어야 한다.
+        const identitySigs = new Set();
+        for (const [s9, n9] of banN) if (n9 !== 0) identitySigs.add(s9);
+        for (const [s9, n9] of pinN) if (n9 !== 0) identitySigs.add(s9);
+        for (const [child9, per9] of aliasN) for (const [par9, n9] of per9) if (n9 !== 0) { identitySigs.add(child9); identitySigs.add(par9); }
+        const identityIdx = new Set();
+        { const seen9 = new Set(); for (let i9 = 0; i9 < parsedLines.length; i9++) { const o9 = parsedLines[i9]; if (!o9 || !o9.text || !o9.sig || seen9.has(o9.sig) || !identitySigs.has(o9.sig)) continue; if (o9.type === "alias" || o9.type === "unalias") continue; seen9.add(o9.sig); identityIdx.add(i9); } }
+        // ② 비가역 판정군 우선 보존 — 루트 해석은 '압축 전 전량'의 활성 간선으로(자식 반박↔부모 확인 복권 보존).
+        const STATE = new Set(["user_dispute", "superseded", "tombstone", "user_confirm"]);
+        const trimBest = new Map();
+        for (const [child, per] of aliasN) { const best = [...per.entries()].filter(([, n]) => n > 0).sort((a2, b2) => b2[1] - a2[1] || a2[0].localeCompare(b2[0]))[0]; if (best) trimBest.set(child, best[0]); }
+        const trimRoot = (sig) => { let cur = sig; const vis = new Set([cur]); for (;;) { const pp = trimBest.get(cur); if (!pp || pp === cur) return cur; if (vis.has(pp)) { let mn = pp, c3 = trimBest.get(pp); while (c3 !== pp) { if (c3 < mn) mn = c3; c3 = trimBest.get(c3); } return mn; } vis.add(pp); cur = pp; } };
+        // 경계·보존군 판정은 유도기 promotableDispute/promotableConfirm과 '완전 동형'(3·4차 반례 — 기록 전용
+        // 반박/확인 홍수가 실제 판정·복권 증거를 밀어내지 못하게).
+        const trimDispute = (o) => o.type === "user_dispute" || (o.type === "refuted" && (!o.grade || (o.cited === true && o.seen === "ok" && o.askId)));
+        const trimPromotable = (o) => o.type === "confirmed" && (!o.grade || ((o.grade === "claimed" ? o.cited === true : o.grade === "co-cited" && !o.echoed) && o.seen === "ok" && o.askId));
         const lastDisputeIdx = new Map();
-        parsedLines.forEach((o, i) => { if (o && (o.type === "user_dispute" || o.type === "refuted")) lastDisputeIdx.set(o.sig, i); });
+        parsedLines.forEach((o, i2) => { if (o && trimDispute(o)) lastDisputeIdx.set(trimRoot(o.sig), i2); });
         const isKeepFirst = parsedLines.map((o, i) => {
-          if (!o) return false;
+          if (!o || REVERSIBLE.has(o.type)) return false; // 가역쌍 원시 이벤트는 압축본이 대체
           if (STATE.has(o.type)) return true;
-          return o.type === "confirmed" && lastDisputeIdx.has(o.sig) && i > lastDisputeIdx.get(o.sig); // 복권 증거
+          if (o.type === "refuted") return trimDispute(o); // 강등 재료 반박만 우선 보존(기록 전용은 일반 최신 이벤트로)
+          return trimPromotable(o) && lastDisputeIdx.has(trimRoot(o.sig)) && i > lastDisputeIdx.get(trimRoot(o.sig)); // 복권 증거 — 승격 가능 종류만
         });
-        let firstKeep = Math.min(isKeepFirst.filter(Boolean).length, LEDGER_EVENTS_CAP);
-        let othersKeep = LEDGER_EVENTS_CAP - firstKeep;
+        const budget = Math.max(0, LEDGER_EVENTS_CAP - compact.length - identityIdx.size); // 압축본+대표 원문 자리 선확보. ⚠활성 상태가 상한을 넘는 극단에선 상한 예외(의미 보존 우선 — PRIVACY 고지)
+        let firstKeep = Math.min(isKeepFirst.filter(Boolean).length, budget);
+        let othersKeep = budget - firstKeep;
         const kept = [];
         for (let i = lines.length - 1; i >= 0; i--) {
+          const o = parsedLines[i];
+          if (identityIdx.has(i)) { kept.push(lines[i]); continue; } // 대표 원문 — 예산과 무관 보존
+          if (o && REVERSIBLE.has(o.type)) continue; // 압축본으로 대체됨
           if (isKeepFirst[i]) { if (firstKeep > 0) { kept.push(lines[i]); firstKeep--; } }
           else if (othersKeep > 0) { kept.push(lines[i]); othersKeep--; }
         }
-        atomicWrite(f, kept.reverse().join("\n") + "\n");
+        const out = kept.reverse().concat(compact);
+        // 무익 재작성 생략(Codex 7차 #4): 활성 상태가 상한을 넘는 극단에선 압축해도 줄지 않는다 — 매 append마다
+        // 같은 전량 재작성을 반복하는 낭비 차단(파일은 사람 개입 속도로만 성장 — 의미 보존 우선·PRIVACY 상한 예외 고지).
+        if (out.length < lines.length) atomicWrite(f, out.join("\n") + "\n");
       }
     } catch { /* 트림 실패 — 다음 append에서 재시도(적재 자체는 성공) */ }
     return true;
+    });
   } catch { return false; } // best-effort — 장부 실패가 본 흐름(지도 저장·검증)을 막지 않음
 }
 function readLedgerEventsText(ws) {
@@ -885,6 +1047,7 @@ function buildScoutAttach(ws, c, lang) {
   const target = resolveScoutRepo(ws, c).repo; // P1: 지도 조회도 정찰 대상 기준(세션 폴더가 비-git 부모여도 레포 지도를 씀)
   const st = scoutMapStatus(target);
   if (st.state === "no-map" || !st.base) return null;
+  if (st.state === "invalid") return null; // 형식 불명(빈/불량) 지도는 신뢰 입력으로 주입하지 않는다(L1-C 품질 — 게이트와 같은 판정 소비)
   const dir = path.join(SCOUTS_DIR, wsKeyFor(target));
   let md = "", meta = {};
   try { md = fs.readFileSync(path.join(dir, st.base + ".md"), "utf8"); } catch { return null; }
@@ -901,7 +1064,9 @@ function buildScoutAttach(ws, c, lang) {
   if (!items.length) return null;
   const en = (LANGS.includes(lang) ? lang : loadLang()) === "en";
   const staleNote = st.state === "stale"
-    ? (en ? ` · STALE: ${st.staleCount} change signal(s) since (basis ${st.seedChanged} · commits ${st.commitsAfter} · working tree ${st.dirtyChanged})` : ` · 낡음: 생성 후 변경 신호 ${st.staleCount}건(근거 ${st.seedChanged} · 커밋 ${st.commitsAfter} · 작업트리 ${st.dirtyChanged})`)
+    ? (en ? ` · STALE: ${st.staleCount} change signal(s) since (basis ${st.seedChanged} · commits ${st.commitsAfter} · working tree ${st.dirtyChanged}${st.historyLost ? ` · base commit missing ${st.historyLost}` : ""})` : ` · 낡음: 생성 후 변경 신호 ${st.staleCount}건(근거 ${st.seedChanged} · 커밋 ${st.commitsAfter} · 작업트리 ${st.dirtyChanged}${st.historyLost ? ` · 기록 기준 커밋 소실 ${st.historyLost}` : ""})`)
+    : st.state === "unknown"
+    ? (en ? ` · freshness not fully judged (non-git scan cap)` : ` · 신선도 전수 판정 불가(비-git 스캔 상한)`)
     : "";
   const head = en
     ? `[Scout impact map · reference — not a verdict rule] The latest impact map of this project (created ${meta.ts || "?"}, ${meta.arm === "deepseek" ? "DeepSeek scout" : "default Claude scout"}${staleNote}) flagged these high-priority paths:`
@@ -912,41 +1077,159 @@ function buildScoutAttach(ws, c, lang) {
     ? `While verifying, check whether these paths were considered; if a path above is impacted but unaddressed, point it out. The map is a scout LLM's advisory opinion — use it as a checklist source only. This list is a starting point, NOT a boundary: do not narrow your own search for counterexamples outside it.`
     : `검증 시 위 경로들이 고려/영향받았는지 확인하고, 영향을 받는데 다뤄지지 않은 경로가 있으면 지적하라. 지도는 탐색자(LLM)의 참고 의견이다 — 확인 목록으로만 쓰고 판정 기준은 바꾸지 마라. 이 목록은 시작점일 뿐 한계가 아니다: 목록 밖 반례 탐색을 줄이지 마라.`;
   const health = scoutHealthLine(target, en); // 프로젝트별 관찰 신호(전역 임계값 대체 — 사용자 결정 2026-07-09) — 실패해도 지도 동봉 불침
-  return [head, ...items.map((i) => `- ${i.path}${i.note && String(i.note) !== i.path ? ` — ${String(i.note).slice(0, 120)}` : ""}`), tail, ...(health ? [health] : [])].join("\n");
+  // 결합확인 표기 채널(L1-A claimed 등급) — 장부의 기계 확인 가능 후보 소수를 id와 함께 싣고, '실제로 확인/반박한
+  // 경우에만' 명시 표기를 요구. 공동 인용의 애매함(같은 답에 우연히 둘 다 등장)과 달리 표기는 기계 판정이 확실.
+  // 별도 try — 후보 계산 실패가 지도 동봉을 막지 않음.
+  let couplings = [];
+  try { couplings = ledgerCouplingCandidates(target, 3); } catch { couplings = []; }
+  const coupleBlock = couplings.length
+    ? (en
+      ? ["[Coupling check requests — reply markers]", ...couplings.map((cp) => `- (#${cp.id}) ${String(cp.text).slice(0, 200)}`), `Only if you actually verified one of these couplings during this verification, write \`결합확인 #id\` on its own line; if you actually found it wrong, write \`결합반박 #id\`. If you did not check it, write nothing about it (no guessing).`]
+      : ["[결합 확인 요청 — 답 표기]", ...couplings.map((cp) => `- (#${cp.id}) ${String(cp.text).slice(0, 200)}`), `이번 검증에서 위 결합을 '실제로 확인'한 경우에만 \`결합확인 #id\` 를 한 줄로 명시하고, '실제로 틀렸음을 확인'했다면 \`결합반박 #id\` 를 명시하라. 확인하지 않았다면 아무것도 쓰지 마라(추측 금지).`]).join("\n")
+    : "";
+  const text = [head, ...items.map((i) => `- ${i.path}${i.note && String(i.note) !== i.path ? ` — ${String(i.note).slice(0, 120)}` : ""}`), tail, ...(coupleBlock ? [coupleBlock] : []), ...(health ? [health] : [])].join("\n");
+  // envelope(L1-A): '이번 ask에 실제로 실린 것'의 스냅샷 — echo 판정은 전역 합집합이 아니라 '항목 단위'로
+  // (지도에서 A·B가 서로 다른 항목이면 그 결합이 노출된 게 아니다 — Codex 설계검증). 소비자는 flagLedgerConfirms.
+  return {
+    text,
+    mapItems: items.map((i) => ({ path: String(i.path), note: i.note ? String(i.note).slice(0, 120) : "" })),
+    couplings,
+  };
 }
 
 // ── Scout Health 미니 집계(배포 사본 — 정본은 src/ledger-events.ts computeScoutHealth. out/을 require 못 하는
 // 배포 관례상 원시 JSONL을 직접 항목(entry) 단위로 집계하며, tests/scout-health.test.js가 정본과 패리티를 잠근다).
 // 용어 잠금: '정확도' 금지 — '관찰 신호'. attached는 '다음 꾸러미 재동봉' 사건(검증자 열람 인과 아님)이고 이벤트 선후도 안 보므로 순서('후')를 주장하지 않는 지표명만 쓴다.
-const HEALTH_EVENT_TYPES = new Set(["proposed", "attached", "confirmed", "refuted", "user_confirm", "user_dispute", "pinned", "unpinned", "banned", "unbanned", "superseded", "tombstone", "exported"]); // 정본 parseEventsJsonl의 allowlist와 동형 — 미지 타입이 표본 수를 부풀리지 못하게(Codex 반례)
-function computeScoutHealthMini(raw) {
-  const per = new Map(); // sig → {att, conf, disp, status 재료}
+const HEALTH_EVENT_TYPES = new Set(["proposed", "attached", "confirmed", "refuted", "user_confirm", "user_dispute", "pinned", "unpinned", "banned", "unbanned", "superseded", "tombstone", "exported", "alias", "unalias"]); // 정본 parseEventsJsonl의 allowlist와 동형 — 미지 타입이 표본 수를 부풀리지 못하게(Codex 반례)
+// 기계 확인 '승격 가능' 판정(정본 promotableMachineAskIds와 동형): 명시 표기(claimed)거나 비-echoed 공동 인용,
+// 취급 흔적 검사 불가(seen=unknown)는 제외. 서로 다른 askId(구형은 ts)만 센다 — '서로 다른 ask 실행' 기준.
+// 기계 확인 '승격 가능' 판정(정본 promotableConfirm과 동형): claimed는 '실제 인용 동반(cited)'일 때만
+// (표식은 자기보고 — 단독 승격 금지), co-cited는 비-echoed만, seen=unknown 제외.
+// 가중 해석(정본 evWeight 동형) — 트림 순계 압축본(n>1)과 일반 이벤트(1)를 한 규칙으로.
+function evW(e) { return Number.isFinite(e.n) && e.n > 0 ? Math.floor(e.n) : 1; }
+function miniPromotableConfirm(e) {
+  if (e.type !== "confirmed") return false;
+  if (e.grade !== "claimed" && e.grade !== "co-cited") return false;
+  if (e.seen !== "ok" || !e.askId) return false; // 명시 요구(필드 누락 통과 금지 — Codex 2차 #7)
+  if (e.grade === "claimed") return e.cited === true;
+  return !e.echoed;
+}
+// 반박이 강등 재료인가(정본 promotableDispute 동형) — 표식 반박은 인용 동반만.
+function miniPromotableDispute(e) {
+  if (e.type === "user_dispute") return true;
+  if (e.type !== "refuted") return false;
+  if (!e.grade) return true;
+  return e.cited === true && e.seen === "ok" && !!e.askId; // 확인과 동일 명시 조건(부정이 더 약한 조건이면 안 됨)
+}
+function miniPromoteIds(confs) {
+  const ids = new Set();
+  for (const e of confs) if (miniPromotableConfirm(e)) ids.add(e.askId || e.ts || "");
+  ids.delete("");
+  return ids.size;
+}
+// 자동(기계) 확인 가능성 — 정본 autoConfirmEligible과 동형(확인기 flagLedgerConfirms의 증거 키와 같은 규칙).
+function miniAutoEligible(text) {
+  const bns = new Set(ledgerPathsFromText(String(text || "")).map((p) => p.split("/").pop() || "").filter((b) => b.length >= 8));
+  return bns.size >= 2;
+}
+// 공용 미니 집계 빌더 — 헬스(computeScoutHealthMini)와 동봉 결합 후보(ledgerCouplingCandidates)가 같은
+// 판정을 쓴다(두 벌이면 후보와 신호가 서로 다른 상태를 말하게 됨). 정본은 src/ledger-events.ts deriveLedger.
+function miniLedgerEntries(raw) {
+  const events = [];
   for (const ln of String(raw || "").split(/\r?\n/)) {
     if (!ln.trim()) continue;
     let o; try { o = JSON.parse(ln); } catch { continue; }
     if (!o || !o.sig || !o.type || !HEALTH_EVENT_TYPES.has(o.type)) continue;
-    let e = per.get(o.sig);
-    if (!e) { e = { att: 0, conf: 0, disp: 0, ban: 0, unban: 0, sup: 0, tomb: 0, afterV: 0, afterU: 0, everDisp: false }; per.set(o.sig, e); }
+    if ((o.type === "alias" || o.type === "unalias") && !(typeof o.aliasSig === "string" && o.aliasSig && o.aliasSig !== o.sig)) continue;
+    events.push(o);
+  }
+  // alias 순계(사람 승인 병합) — 정본 deriveLedger와 동형: S→P 우세 부모, 체인 10홉 상한.
+  const aliasNet = new Map();
+  for (const e of events) {
+    if (e.type !== "alias" && e.type !== "unalias") continue;
+    let per = aliasNet.get(e.aliasSig);
+    if (!per) { per = new Map(); aliasNet.set(e.aliasSig, per); }
+    per.set(e.sig, (per.get(e.sig) || 0) + (e.type === "alias" ? evW(e) : -evW(e)));
+  }
+  const parent = new Map();
+  for (const [s, per] of aliasNet) {
+    const best = [...per.entries()].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+    if (best) parent.set(s, best[0]);
+  }
+  // 방문 집합(정본 동형 — Codex 2차 반례: 정본만 고치면 대시보드=1항목·ask 동봉=2항목으로 갈라짐):
+  // 체인 길이 무관 병합, 순환은 고리 내 사전순 최소 sig가 결정적 루트.
+  const rootOf = (sig) => {
+    let cur = sig;
+    const visited = new Set([cur]);
+    for (;;) {
+      const p2 = parent.get(cur);
+      if (!p2 || p2 === cur) return cur;
+      if (visited.has(p2)) {
+        let mn = p2, c3 = parent.get(p2);
+        while (c3 !== p2) { if (c3 < mn) mn = c3; c3 = parent.get(c3); }
+        return mn;
+      }
+      visited.add(p2);
+      cur = p2;
+    }
+  };
+  const per = new Map(); // 루트 sig → 집계
+  const textFromRoot = new Set();
+  for (const o of events) {
+    if (o.type === "alias" || o.type === "unalias") continue;
+    const key = rootOf(o.sig);
+    let e = per.get(key);
+    if (!e) { e = { sig: key, att: 0, confAll: 0, userConf: 0, confs: [], after: [], afterU: 0, disp: 0, ban: 0, unban: 0, sup: 0, tomb: 0, everDisp: false, text: "", lastTs: o.ts || "" }; per.set(key, e); }
+    if (o.text) { if (o.sig === key && !textFromRoot.has(key)) { e.text = o.text; textFromRoot.add(key); } else if (!e.text) e.text = o.text; }
+    if (o.ts && o.type !== "attached") e.lastTs = o.ts; // 정본과 동형 — attached는 최신성 제외(자기고정 방지)
     if (o.type === "attached") e.att++;
-    else if (o.type === "confirmed") { e.conf++; if (e.everDisp) e.afterV++; }
-    else if (o.type === "user_confirm") { e.conf++; if (e.everDisp) e.afterU++; }
-    else if (o.type === "user_dispute" || o.type === "refuted") { e.disp++; e.everDisp = true; e.afterV = 0; e.afterU = 0; }
-    else if (o.type === "banned") e.ban++;
-    else if (o.type === "unbanned") e.unban++;
+    else if (o.type === "confirmed") { e.confAll++; e.confs.push(o); if (e.everDisp) e.after.push(o); }
+    else if (o.type === "user_confirm") { e.confAll++; e.userConf++; if (e.everDisp) e.afterU++; }
+    else if (o.type === "user_dispute" || o.type === "refuted") { e.refAny = true; if (miniPromotableDispute(o)) { e.disp++; e.everDisp = true; e.after = []; e.afterU = 0; } } // refAny=기록 기준(지표)·everDisp=강등 기준(상태) 분리 — Codex 2차 #5
+    else if (o.type === "banned") e.ban += evW(o);
+    else if (o.type === "unbanned") e.unban += evW(o);
     else if (o.type === "superseded") e.sup++;
     else if (o.type === "tombstone") e.tomb++;
   }
-  const h = { entries: per.size, verified: 0, reusedDen: 0, reusedNum: 0, disputedEntries: 0, rehabilitated: 0 };
+  const legacyRepeats = (confs) => new Set(confs.filter((e) => !e.grade).map((e) => e.ts || "")).size;
+  const out = [];
   for (const e of per.values()) {
-    const dead = (e.ban - e.unban) > 0 || e.sup > 0 || e.tomb > 0;
-    const rehab = e.everDisp && !dead && (e.afterU >= 1 || e.afterV >= 2); // DERIVE_V1 복권 규칙과 동형(패리티 테스트 잠금)
-    const verified = !dead && (e.everDisp ? rehab : e.conf >= 1);
-    if (verified) h.verified++;
-    if (e.att > 0) { h.reusedDen++; if (e.conf > 0) h.reusedNum++; }
-    if (e.everDisp) h.disputedEntries++;
-    if (rehab) h.rehabilitated++;
+    e.dead = (e.ban - e.unban) > 0 || e.sup > 0 || e.tomb > 0;
+    const machineOk = miniPromoteIds(e.confs) >= 2 || legacyRepeats(e.confs) >= 2; // DERIVE_V2와 동형(패리티 테스트 잠금)
+    e.rehab = e.everDisp && !e.dead && (e.afterU >= 1 || miniPromoteIds(e.after) >= 2 || legacyRepeats(e.after) >= 2);
+    e.verified = !e.dead && (e.everDisp ? e.rehab : (e.userConf >= 1 || machineOk));
+    e.autoEligible = miniAutoEligible(e.text);
+    e.machineEvidence = e.confs.some((x) => miniPromotableConfirm(x) || !x.grade); // 정본 동형 — 기계 지표 과대 표시 방지(Codex #7)
+    e.reinterpreted = !e.dead && !e.everDisp && !e.verified && e.confs.some((x) => !x.grade); // 구형(grade 없음) 확인이 있는 미승격만 — 정본 동형
+    out.push(e);
+  }
+  return out;
+}
+function computeScoutHealthMini(raw) {
+  const entries = miniLedgerEntries(raw);
+  const h = { entries: entries.length, verified: 0, reusedDen: 0, reusedNum: 0, autoDen: 0, autoNum: 0, disputedEntries: 0, rehabilitated: 0, reinterpreted: 0 };
+  for (const e of entries) {
+    if (e.verified) h.verified++;
+    if (e.att > 0) {
+      h.reusedDen++;
+      if (e.confAll > 0) h.reusedNum++;
+      if (e.autoEligible) { h.autoDen++; if (e.machineEvidence) h.autoNum++; } // 승격 가능 종류만(과대 표시 금지 — Codex #7)
+    }
+    if (e.refAny) h.disputedEntries++; // 라벨 '반박 이력'=기록 기준(정본 동형 — 강등 여부와 무관)
+    if (e.rehab) h.rehabilitated++;
+    if (e.reinterpreted) h.reinterpreted++;
   }
   return h;
+}
+// 결합확인 표기(claimed) 후보 — 동봉 블록에 id와 함께 실려, 답의 '결합확인 #id / 결합반박 #id'가 귀속된다.
+// 기계 확인 가능(autoEligible)하고 죽지 않은 항목만. 미확정(inferred) 우선(확인이 필요한 것부터), 반박 이력
+// 항목도 뒤순위로 포함(복권 재료를 문 앞에서 버리지 않기 — 2026-07-09 사용자 결정). id=sig sha1 앞 6자.
+function ledgerItemId(sig) { return require("crypto").createHash("sha1").update(String(sig)).digest("hex").slice(0, 6); }
+function ledgerCouplingCandidates(target, cap = 3) {
+  const entries = miniLedgerEntries(readLedgerEventsText(target)).filter((e) => e.autoEligible && !e.dead && e.text);
+  const rank = (e) => (e.verified ? 2 : e.everDisp ? 1 : 0); // inferred(0) 우선 — verified는 재확인 가치 낮음
+  entries.sort((a, b) => rank(a) - rank(b) || String(b.lastTs).localeCompare(String(a.lastTs)));
+  return entries.slice(0, cap).map((e) => ({ id: ledgerItemId(e.sig), sig: e.sig, text: e.text, paths: ledgerPathsFromText(e.text) }));
 }
 const HEALTH_MIN_SAMPLE = 5; // 정본(src/ledger-events.ts)과 동일 상수 — 표본 미만이면 비율 표시 금지(과신 방지)
 // 동봉용 1~2줄(bounded — 주입 비용 상한). 표본 부족이면 '근거 부족' 1줄, 충분하면 항목 수치+상시 한계 문구.
@@ -960,10 +1243,13 @@ function scoutHealthLine(target, en) {
         : `[정찰 관찰 신호] 이 프로젝트의 관찰 일지가 아직 작음(항목 ${h.entries}건) — 지도는 후보로만 취급하라.`;
     }
     // 순서 무주장 문구(Codex 반례: 확인이 재동봉보다 먼저인 항목도 셈에 든다) — 인과를 암시하는 지표명 금지.
+    // 지표 분리(L1-A): '확인 이력'(사람 포함 전체)과 '기계 확인'(기계 확인 가능 항목만 분모 — 경로<2 항목 섞으면 분모 왜곡)은 다른 지표.
     const ratio = h.reusedDen >= HEALTH_MIN_SAMPLE ? ` · ${en ? "reused items with a confirm on record" : "재사용 항목 중 확인 이력"} ${h.reusedNum}/${h.reusedDen}` : "";
+    const autoRatio = h.autoDen >= HEALTH_MIN_SAMPLE ? ` · ${en ? "machine-checkable reused items with a machine confirm" : "기계 확인 가능 재사용 항목 중 기계 확인"} ${h.autoNum}/${h.autoDen}` : "";
+    const reint = h.reinterpreted > 0 ? (en ? ` · ${h.reinterpreted} item(s) stepped down by the 2026-07 evidence-rule reinterpretation (recorded, not deleted)` : ` · 증거 규칙 재해석(2026-07)으로 내려온 항목 ${h.reinterpreted}건(삭제 아님 — 기록 유지)`) : "";
     return en
-      ? `[Scout observation signal — this project] confirmed items ${h.verified}/${h.entries}${ratio} · disputed ${h.disputedEntries} (manually recorded) · rehabilitated ${h.rehabilitated}. Bias can go both ways (no automatic dispute extraction = disputes undercounted; map-attached exposure = confirms overcounted — logic audit 2026-07-10) — still, the map is a candidate list, not a safety guarantee: keep independent checks outside it.`
-      : `[정찰 관찰 신호 — 이 프로젝트 기준] 확인 항목 ${h.verified}/${h.entries}${ratio} · 반박 ${h.disputedEntries}건(수동 기록 기준) · 복권 ${h.rehabilitated}건. 집계 편향은 양방향일 수 있다(자동 반박이 없어 반박은 적게 잡히고, 지도에 실려 노출된 항목은 확인이 잘 잡힘 — 논리 점검 2026-07-10) — 지도는 후보 목록이지 안전 보장이 아니다: 지도 밖 독립 확인을 유지하라.`;
+      ? `[Scout observation signal — this project] confirmed items ${h.verified}/${h.entries}${ratio}${autoRatio}${reint} · disputed ${h.disputedEntries} (manually recorded) · rehabilitated ${h.rehabilitated}. Bias can go both ways (no automatic dispute extraction = disputes undercounted; map-attached exposure = confirms overcounted — logic audit 2026-07-10) — still, the map is a candidate list, not a safety guarantee: keep independent checks outside it.`
+      : `[정찰 관찰 신호 — 이 프로젝트 기준] 확인 항목 ${h.verified}/${h.entries}${ratio}${autoRatio}${reint} · 반박 ${h.disputedEntries}건(수동 기록 기준) · 복권 ${h.rehabilitated}건. 집계 편향은 양방향일 수 있다(자동 반박이 없어 반박은 적게 잡히고, 지도에 실려 노출된 항목은 확인이 잘 잡힘 — 논리 점검 2026-07-10) — 지도는 후보 목록이지 안전 보장이 아니다: 지도 밖 독립 확인을 유지하라.`;
   } catch { return null; /* 신호 실패가 지도 동봉을 막지 않음 */ }
 }
 
@@ -1224,4 +1510,4 @@ function formatForClaude(answer, lang) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };

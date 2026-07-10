@@ -55,6 +55,12 @@ function main(raw) {
   let st = { state: "fresh", staleCount: 0 };
   try { st = scoutMapStatus(target); } catch { process.exit(0); } // 판정 불가 → fail-open
   if (st.state === "fresh") process.exit(0);
+  if (st.state === "unknown") {
+    // 전수 확인 불가(비-git 스캔 상한) — 낡음을 증명 못 했으므로 막지 않는다(fail-open 원칙). 단 fresh를
+    // 사칭하지 않도록 관측 기록에 남김(L1-C: 판정 불가와 신선을 구분 — 조용한 fresh 승격 금지).
+    logObservation(ws, { ts: new Date().toISOString(), tool: toolName, passThrough: true, reason: tB("신선도 판정 불가(스캔 상한) — 차단 없이 통과", "freshness unknown (scan cap) — passing without block") });
+    process.exit(0);
+  }
   // 세션당 차단 상한
   const session = String(p.session_id || "nosession");
   const af = path.join(ATTEMPTS_DIR, session.replace(/[^0-9A-Za-z._-]/g, "_").slice(0, 32) + ".json"); // 훅 입력을 경로에 쓰므로 정규화(경로 이탈 방지 — Codex 지적)
@@ -67,7 +73,8 @@ function main(raw) {
   try { fs.mkdirSync(ATTEMPTS_DIR, { recursive: true }); atomicWrite(af, JSON.stringify({ n: n + 1, ts: new Date().toISOString() })); } catch { /* 기록 실패해도 차단은 진행(다음 번 상한 계산만 보수적) */ }
   const why = st.state === "no-map" ? tB("이 프로젝트에 영향지도가 아직 없다", "this project has no impact map yet")
     : st.state === "legacy-no-seeds" ? tB("최신 지도에 근거 파일 기록이 없어 신선도를 판정할 수 없다(구버전 지도 — 재생성 필요)", "the latest map has no basis-file record, so freshness cannot be judged (legacy map — regeneration needed)")
-    : tB(`최신 지도 이후 변경 신호 ${st.staleCount}건(근거 파일 ${st.seedChanged} · 새 커밋 ${st.commitsAfter} · 작업트리 ${st.dirtyChanged}) — 지도가 낡았다`, `${st.staleCount} change signal(s) since the latest map (basis ${st.seedChanged} · commits ${st.commitsAfter} · working tree ${st.dirtyChanged}) — it is stale`);
+    : st.state === "invalid" ? tB("최신 지도 파일에서 형식을 알아볼 수 없다(파싱 가능한 항목·구획 표기 없음 — 빈/불량 지도는 신뢰 입력이 아님) — 재생성 필요", "the latest map file has no recognizable structure (no parsable items or section markers — an empty/broken map is not a trusted input) — regeneration needed")
+    : tB(`최신 지도 이후 변경 신호 ${st.staleCount}건(근거 파일 ${st.seedChanged} · 새 커밋 ${st.commitsAfter} · 작업트리 ${st.dirtyChanged}${st.historyLost ? ` · 기록 기준 커밋 소실 ${st.historyLost}` : ""}) — 지도가 낡았다`, `${st.staleCount} change signal(s) since the latest map (basis ${st.seedChanged} · commits ${st.commitsAfter} · working tree ${st.dirtyChanged}${st.historyLost ? ` · base commit missing ${st.historyLost}` : ""}) — it is stale`);
   // 프로젝트별 관찰 신호 동반(사용자 조건 '카드와 한 묶음' — 게이트가 전역 수치가 아니라 이 프로젝트의 장부를 근거로
   // 말하게 한다). 별도 try — 신호 계산 실패가 차단 문구 출력 자체를 막으면 안 됨.
   let healthTail = "";

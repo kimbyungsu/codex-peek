@@ -93,10 +93,24 @@ function captureSeedBaseline(repo, seeds) {
   const basisTs = new Date().toISOString();
   try {
     const missing = [];
+    const hashes = {};
     for (const sd of (seeds || [])) {
-      try { fs.statSync(path.join(repo, sd)); } catch (e) { if (e && e.code === "ENOENT") missing.push(sd); else throw e; }
+      try {
+        const abs = path.join(repo, sd);
+        const st0 = fs.statSync(abs);
+        // 내용 지문(L1-C: 빌드가 mtime만 바꾼 '거짓 stale' 판별용). 부분 해시 금지 — 앞부분만 해시하면 그 뒤만
+        // 바뀐 파일이 거짓 fresh(Codex 반례). 예산(2MB) 이내만 '전체' 해시, 초과는 미기록(신선도는 mtime 판정 유지).
+        // 해시 도중 파일이 바뀌면(전후 stat 불일치) 지문을 남기지 않는다(오염 지문 방지).
+        if (st0.size <= 2 * 1024 * 1024) {
+          try {
+            const h = require("crypto").createHash("sha1").update(fs.readFileSync(abs)).digest("hex");
+            const st1 = fs.statSync(abs);
+            if (st1.size === st0.size && st1.mtimeMs === st0.mtimeMs) hashes[sd] = h;
+          } catch { /* 지문 실패는 그 seed만 미기록(mtime 판정 유지) — 기준선 전체를 버리지 않음 */ }
+        }
+      } catch (e) { if (e && e.code === "ENOENT") missing.push(sd); else throw e; }
     }
-    return { basisTs, seedMissing: missing };
+    return { basisTs, seedMissing: missing, seedHashes: hashes };
   } catch { return { basisTs }; }
 }
 
@@ -262,6 +276,9 @@ function collectPackageHistoryless(repo) {
   }
   seeds = seeds.slice(0, HL.maxSeeds);
   const baseline = captureSeedBaseline(repo, seeds.map((f) => f.rel)); // seed 확정 직후(발췌·스캔 수집 전) — git 경로와 동일 계약
+  // 비-git 삭제 감지 기준선(L1-C·Codex 3차 #3): seed '확정 직후'(basisTs와 같은 시점)에 캡처 — 발췌·꾸러미 구성
+  // 뒤로 미루면 그 사이 삭제가 지도 입력엔 있는데 기준선엔 없어 저장 직후 삭제를 못 잡는다(기준선 시점 경쟁).
+  try { const { nonGitChangedSince, normWs } = require(path.join(__dirname, "..", "bridge", "contract-lib.js")); const seedAbs = new Set(seeds.map((f) => normWs(path.join(repo, f.rel)))); const inv = nonGitChangedSince(repo, Number.MAX_SAFE_INTEGER, seedAbs); baseline.nonGitFiles = { n: inv.files, complete: inv.complete }; } catch { /* 기준선 실패 — 삭제 감지만 비활성(무해) */ }
   // '변경 내용' 대체 = 지금 내용 앞부분 발췌(전후 비교 불가 — 렌더/각주가 정직 고지)
   const excerpts = seeds.map((f) => {
     let t = "";

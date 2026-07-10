@@ -317,12 +317,30 @@
    자동 긍정·수동 부정 비대칭+문구 정체성 분열로 방치 시 자주 인용되는 문구 쪽 편향.)** 즉시 수정 5(커밋 참조):
    ⑥위생(조각 차단 — 경로 2개 또는 결합 표기[↔/→] 요구+경로:라인 추출 동형. ⚠결합 표기만 있는 항목은 자동 확인 불가로 분모 왜곡 잔존 — L1)·선별 자기고정 해소(attached는 lastTs 미갱신)·한계 문구 '보수 단방향'
    주장 제거(편향 양방향: 자동 반박 없음=반박 과소·동봉 노출=확인 과대)·'스스로 좁혀짐' 과장 제거(관측치 명시).
-   **논리 백로그(구조급 — 설계 선행)**: L1=claim-provenance 설계 한 묶음: confirmed 인과 결여(공동 인용≠결합 확인 — 승격 횟수 상향 '단독'은 같은 편향
-   신호의 반복이라 해법 아님[Codex]: 독립 턴·독립 근거·claim 명시 판단 필요)+attached 노출 이력의 확인 판정
-   반영+unseen 세션 전체→턴 한정+자동확인 가능성 구분 상태(경로<2 항목의 분모 왜곡) / sig 정체성 재설계(경로쌍
-   '단독'이면 같은 두 파일의 상반된 관계가 합쳐짐 — 정렬 endpoint+방향·관계 종류·alias 집합, Reconciler·마이그레이션과
-   한 묶음) / 제어 안전성 묶음: 신선도 필요·충분조건 결함(비-git 비-seed 미탐·이력 재작성 거짓 fresh·mtime 거짓
-   stale·staleCount 이질 단위)+게이트 지도 품질 무검사(high 0개 지도도 통과 — 기본 켜짐이라 제어 직결). L2=버킷 억제가 변경 정체성 상실·co-change 조건부
+   **논리 백로그 L1 — 완료(2026-07-10 커밋 참조 · 설계 사전검증 1회 실패 후 Codex 대안 채택)**:
+   ⓐ claim-provenance: confirmed 이벤트에 증거 등급(grade claimed[답의 '결합확인 #id' 명시 표기 — 동봉된
+   후보 id만 인정·태생적 echoed]/co-cited[공동 인용]/부재=legacy)·echoed(동봉 '한 항목'이 그 쌍을 노출 —
+   전역 합집합 판정은 과도라 폐기)·askId(ask 실행 UUID — '독립 턴' 주장 아님)·seen(이번 턴 취급 흔적 삼상태)
+   기록. 승격 규칙 DERIVE_V2: 사람 확인 1회 / 승격 가능 기계 확인(claimed 또는 비-echoed co-cited·seen=ok)
+   서로 다른 askId 2회 / legacy는 서로 다른 시각 2회. seen=unknown·echoed co-cited는 기록만. unseen 검사는
+   {checked, unseen} 삼상태+rollout '마지막 사용자 메시지 이후'(턴 한정 — 세션 전체 인정 결함 봉합).
+   v1 확인 1건 승격은 폐기 — 기존 verified의 재해석 강등은 reinterpreted 표기+헬스/동봉 줄 고지(조용한 강등
+   금지). autoEligible(확인기와 동형: 고유 8자+ basename 2개)로 기계 지표 분모 분리(autoDen/autoNum).
+   검증 ask에 '결합 확인 요청' 동봉(후보 3·id — PRIVACY 고지). ⓑ sig 별칭: 자동 canonical 병합 폐기(endpoint+
+   방향만으로 합치면 '읽기 vs 삭제' 진릿값 혼합 — Codex) → computeAliasCandidates(같은 endpoint+방향의 다른
+   문구)가 후보 '제시'만, 병합은 사람 승인 alias/unalias 이벤트(scope-reconcile aliases/alias-approve/
+   alias-dismiss·트리머 우선 보존·체인 10홉·우세 부모). raw 소비자(확인기·트리머·이관 CLI) 무변경이라
+   마이그레이션 함정 없음. ⓒ 제어 안전성: scoutMapStatus가 공유 정본으로 확장 — invalid(md 형식 불명이고
+   메타 저장 계층도 빈 지도 — 게이트 차단·동봉 거부)·unknown(비-git 유계 스캔[1500항목·깊이6·조기종료]이
+   전수 확인 못 하고 신호 0 — fresh 사칭 금지·게이트는 기록 후 통과)·historyLost(cat-file -e로 기준 커밋
+   존재 검사 — rev-list 실패 삼킴 폐기·무이력 0000000 제외)·seed 내용 지문(전체 sha1·2MB 예산·전후 stat
+   안정성 — 부분 해시 금지)·재지시 버킷 성분별(합산 이질 단위 폐기·구형 기억은 1회 재알림). 확장 배지
+   computeScoutMapStale 동형 갱신. 장부 동시 쓰기 잠금(<키>.jsonl.lock — appendLedgerEvent의 append→트림→교체 전체 임계·규율은 P1-② integrity 잠금과 동일[withFileLock 일반화]·'정상 경합 유실 방지'로 한정[죽은 pid=즉시 degraded]). 잠금: tests/l1-provenance.test.js(60)+ledger-events(62)·ledger-signals(45)·
+   scout-gate([3c] invalid)·evidence-unseen(삼상태·턴 한정) 현행화.
+   **L1 정직한 잔여 한계**: claimed는 검증자 협조(표기)에 의존(비협조면 co-cited 경로만)하고 표기는 자기보고라 승격·강등 재료는 '행 단독+상충 없음+항목 경로 실제 인용(cited)+seen=ok'의 4중 조건(2차 왕복 — 무인용 표식 승격·부정문 오인식·상충 허용·즉시 강등 반례 봉합)·비-git unknown은
+   대형 폴더에서 상시 unknown일 수 있음(게이트는 막지 않음)·alias 후보는 endpoint+방향 동일 조건이라 서술형
+   문구(화살표 없음)는 후보로 안 잡힘(정확성 우선 — 병합 실기는 수동 alias로 보완).
+   L2(잔여)=버킷 억제가 변경 정체성 상실·co-change 조건부
    비율 부재·자기진단 다중 형제 레포 전제·MAP 승격이 장부 판정 무시(기존 P2와 동일 항목).
 6. (후보) 대시보드 게이트 토글 UI(현재 CLI만 — informed consent 문구에 실측 명중률 표기), 발화 기록(scope-ledger-note)
    흐름의 실사용 관찰.

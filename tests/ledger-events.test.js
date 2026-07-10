@@ -39,8 +39,26 @@ console.log("[2] 약한 상태 전이 — 우선순위(banned>superseded>tombsto
 const D = (lines) => LE.deriveLedger(LE.parseEventsJsonl(lines.join("\n")).events);
 let e = D([ev("proposed", "a", { text: "A ↔ B", from: "self 지도 T" })])[0];
 ok(e.status === "inferred" && e.lane === "reference", "제안만 → 추정됨(참고 차선)");
+e = D([ev("proposed", "a", { text: "A ↔ B" }), ev("confirmed", "a", { grade: "co-cited", askId: "k1", seen: "ok" })])[0];
+ok(e.status === "inferred" && e.reinterpreted !== true, "공동 인용 1회 → 아직 추정(공동 인용≠결합 확인 — L1-A v2. 신규 등급 이벤트라 재해석 표기 아님)");
+e = D([ev("proposed", "a", { text: "A ↔ B" }), ev("confirmed", "a", { grade: "co-cited", askId: "k1", seen: "ok" }), ev("confirmed", "a", { grade: "co-cited", askId: "k2", seen: "ok" })])[0];
+ok(e.status === "verified" && e.lane === "trusted", "비-echoed 공동 인용이 서로 다른 ask 2회 → 검증됨(신뢰 차선)");
+e = D([ev("proposed", "a", { text: "A ↔ B" }), ev("confirmed", "a", { grade: "co-cited", askId: "k1", seen: "ok" }), ev("confirmed", "a", { grade: "co-cited", askId: "k1", seen: "ok" })])[0];
+ok(e.status === "inferred", "같은 askId 반복은 1회로 셈(같은 요청 재실행 뻥튀기 차단)");
+e = D([ev("proposed", "a", { text: "A ↔ B" }), ev("confirmed", "a", { grade: "claimed", echoed: true, askId: "k1", cited: true, seen: "ok" }), ev("confirmed", "a", { grade: "claimed", echoed: true, askId: "k2", cited: true, seen: "ok" })])[0];
+ok(e.status === "verified", "명시 표기(claimed·인용 동반)는 태생적 echoed지만 서로 다른 ask 2회면 승격");
+e = D([ev("proposed", "a", { text: "A ↔ B" }), ev("confirmed", "a", { grade: "claimed", echoed: true, askId: "k1" }), ev("confirmed", "a", { grade: "claimed", echoed: true, askId: "k2" })])[0];
+ok(e.status === "inferred", "인용 미동반(cited 아님) 표기는 몇 번이어도 승격 재료 아님(자기보고 단독 배제 — Codex 반례)");
+e = D([ev("proposed", "a", { text: "A ↔ B" }), ev("confirmed", "a", { grade: "co-cited", echoed: true, askId: "k1", seen: "ok" }), ev("confirmed", "a", { grade: "co-cited", echoed: true, askId: "k2", seen: "ok" })])[0];
+ok(e.status === "inferred", "echoed 공동 인용은 몇 번이어도 승격 재료 아님(동봉이 유도한 인용 — 노출 관측만)");
+e = D([ev("proposed", "a", { text: "A ↔ B" }), ev("confirmed", "a", { grade: "co-cited", askId: "k1", seen: "unknown" }), ev("confirmed", "a", { grade: "co-cited", askId: "k2", seen: "unknown" })])[0];
+ok(e.status === "inferred", "seen=unknown(취급 흔적 검사 불가)은 승격 재료 아님(기록만)");
+e = D([ev("proposed", "a", { text: "A ↔ B" }), ev("user_confirm", "a")])[0];
+ok(e.status === "verified", "사람 확인 1회 → 즉시 검증(사람 결정 보존)");
+e = D([ev("proposed", "a", { text: "A ↔ B" }), ev("confirmed", "a"), JSON.stringify({ ts: "2026-07-07T01:00:00.000Z", type: "confirmed", sig: "a" })])[0];
+ok(e.status === "verified", "구형(grade 없음 legacy) 확인은 서로 다른 시각 2회면 유지(노출 미상 — 1회 단독 승격은 폐기)");
 e = D([ev("proposed", "a", { text: "A ↔ B" }), ev("confirmed", "a")])[0];
-ok(e.status === "verified" && e.lane === "trusted", "확인 1회 → 검증됨(신뢰 차선) — v1 최약 임계");
+ok(e.status === "inferred" && e.reinterpreted === true, "legacy 확인 1회 → v2 재해석 강등+reinterpreted 표기(조용한 강등 금지)");
 e = D([ev("proposed", "a", { text: "A" }), ev("confirmed", "a"), ev("user_dispute", "a")])[0];
 ok(e.status === "disputed" && e.lane === "excluded", "확인 있어도 반박 오면 강등(반박된 지식은 권위 차선 밖 — tg 정책)");
 e = D([ev("proposed", "a", { text: "A" }), ev("user_dispute", "a"), ev("pinned", "a")])[0];
@@ -48,10 +66,10 @@ ok(e.status === "disputed" && e.pinned && e.lane === "trusted", "사람 고정(p
 e = D([ev("proposed", "a", { text: "A" }), ev("pinned", "a"), ev("unpinned", "a")])[0];
 ok(!e.pinned && e.lane === "reference", "고정 후 해제 → 순 계산(net)으로 원복");
 console.log("[2-1] 복권(rehab) — 반박 '이후' 확인만 인정: 사람 1회 / 검증 2회 · 차단은 복권 불가");
-e = D([ev("proposed", "r", { text: "R" }), ev("user_dispute", "r"), ev("confirmed", "r")])[0];
-ok(e.status === "disputed" && !e.rehabilitated, "반박 후 검증 확인 1회 → 아직 disputed(기계 확인은 2회 필요)");
-e = D([ev("proposed", "r", { text: "R" }), ev("user_dispute", "r"), ev("confirmed", "r"), ev("confirmed", "r")])[0];
-ok(e.status === "verified" && e.rehabilitated === true && e.lane === "trusted", "반박 후 검증 확인 2회 → 복권(verified·신뢰 차선·rehabilitated 표기)");
+e = D([ev("proposed", "r", { text: "R" }), ev("user_dispute", "r"), ev("confirmed", "r", { grade: "co-cited", askId: "k1", seen: "ok" })])[0];
+ok(e.status === "disputed" && !e.rehabilitated, "반박 후 기계 확인 1회 → 아직 disputed(서로 다른 ask 2회 필요)");
+e = D([ev("proposed", "r", { text: "R" }), ev("user_dispute", "r"), ev("confirmed", "r", { grade: "co-cited", askId: "k1", seen: "ok" }), ev("confirmed", "r", { grade: "co-cited", askId: "k2", seen: "ok" })])[0];
+ok(e.status === "verified" && e.rehabilitated === true && e.lane === "trusted", "반박 후 서로 다른 ask 기계 확인 2회 → 복권(verified·신뢰 차선·rehabilitated 표기)");
 e = D([ev("proposed", "r", { text: "R" }), ev("user_dispute", "r"), ev("user_confirm", "r")])[0];
 ok(e.status === "verified" && e.rehabilitated === true, "반박 후 사용자 재확인 1회 → 즉시 복권(사람 발화는 사람 반박과 동급)");
 e = D([ev("proposed", "r", { text: "R" }), ev("confirmed", "r"), ev("confirmed", "r"), ev("user_dispute", "r")])[0];
@@ -68,7 +86,7 @@ e = D([ev("proposed", "a", { text: "A" }), ev("tombstone", "a")])[0];
 ok(e.status === "tombstone" && e.lane === "excluded", "묘비(파일 소멸) → 제외");
 
 console.log("[3] 꾸러미 선별 — 씨앗 교집합 우선·상한·틀림판명 차선(pin 제외)");
-const mk = (i, extra) => LE.deriveLedger(LE.parseEventsJsonl([ev("proposed", "s" + i, { text: extra }), ev("confirmed", "s" + i)].join("\n")).events)[0];
+const mk = (i, extra) => LE.deriveLedger(LE.parseEventsJsonl([ev("proposed", "s" + i, { text: extra }), ev("confirmed", "s" + i, { grade: "co-cited", askId: "p1", seen: "ok" }), ev("confirmed", "s" + i, { grade: "co-cited", askId: "p2", seen: "ok" })].join("\n")).events)[0];
 const entries = [];
 for (let i = 0; i < 12; i++) entries.push(mk(i, i === 11 ? "scripts/scope-package.js ↔ tests/scope-package.test.js — 결합" : "etc" + i + "/file" + i + ".ts ↔ other — 결합"));
 const sel = LE.selectForPackage(entries, ["scripts/scope-package.js"]);
@@ -78,6 +96,54 @@ const disputedEntry = D([ev("proposed", "d1", { text: "D ↔ X" }), ev("user_dis
 const pinnedDisputed = D([ev("proposed", "d2", { text: "D2 ↔ X" }), ev("user_dispute", "d2"), ev("pinned", "d2")])[0];
 const sel2 = LE.selectForPackage([disputedEntry, pinnedDisputed], []);
 ok(sel2.disputed.length === 1 && sel2.disputed[0].sig === "d1" && sel2.trusted.some((x) => x.sig === "d2"), "틀림판명 각주엔 비고정 반박분만 — 고정분은 신뢰 차선으로");
+
+console.log("[3-1] 별칭(alias) — 사람 승인 병합만·원장 보존·해제 가능(L1-B: 자동 canonical 병합 폐기)");
+{
+  const lines = [
+    ev("proposed", "p1", { text: "src/foo-module.ts ↔ tests/foo-module.test.js — 결합" }),
+    ev("proposed", "p2", { text: "결합: src/foo-module.ts 그리고 tests/foo-module.test.js (다른 문구)" }),
+    ev("confirmed", "p1", { grade: "co-cited", askId: "a1", seen: "ok" }),
+    ev("confirmed", "p2", { grade: "co-cited", askId: "a2", seen: "ok" }),
+  ];
+  let es = D(lines);
+  ok(es.length === 2 && es.every((x) => x.status === "inferred"), "병합 전 — 서로 다른 항목·확인 이력이 흩어져 각각 미승격(문구 요동이 이력을 쪼갬)");
+  const cands = LE.computeAliasCandidates(es);
+  ok(cands.length === 1 && cands[0].sigs.length === 2, "같은 endpoint+방향의 다른 문구 → 별칭 후보 1묶음(자동 '제시'만)");
+  es = D([...lines, ev("alias", "p1", { aliasSig: "p2" })]);
+  ok(es.length === 1 && es[0].sig === "p1" && (es[0].aliases || []).includes("p2"), "사람 승인 alias → 한 항목으로 병합(별칭 기록)");
+  ok(es[0].status === "verified", "병합 후 흩어졌던 확인(서로 다른 askId 2개)이 합산돼 승격 — 병합의 실익");
+  es = D([...lines, ev("alias", "p1", { aliasSig: "p2" }), ev("unalias", "p1", { aliasSig: "p2" })]);
+  ok(es.length === 2, "unalias(순계 0) → 병합 해제(원장 이벤트는 그대로 — 재해석일 뿐)");
+  ok(LE.parseEventsJsonl(ev("alias", "p1", {})).dropped === 1, "aliasSig 없는 alias는 불량(파싱 탈락)");
+  // 순환·초장 체인(Codex 실측 반례): 고정 홉 상한의 침묵 분열 폐기
+  {
+    const chain = [];
+    for (let i = 0; i <= 11; i++) chain.push(ev("proposed", "c" + i, { text: "chain " + i }));
+    for (let i = 0; i < 11; i++) chain.push(ev("alias", "c" + (i + 1), { aliasSig: "c" + i })); // c0→c1→…→c11
+    const es11 = D(chain);
+    ok(es11.length === 1 && es11[0].sig === "c11", `11홉 체인 → 한 항목으로 병합(실제 ${es11.length} — 고정 상한이면 둘로 분열)`);
+    const cyc = D([ev("proposed", "x1", { text: "X1" }), ev("proposed", "x2", { text: "X2" }), ev("alias", "x1", { aliasSig: "x2" }), ev("alias", "x2", { aliasSig: "x1" })]);
+    ok(cyc.length === 1 && cyc[0].sig === "x1", "순환(x1↔x2) → 고리 내 사전순 최소가 결정적 루트(병합 유지 — 침묵 무효화 아님)");
+  }
+}
+console.log("[3-1b] 표식 반박의 강등 재료 조건 — 인용 미동반(cited=false) refuted는 기록만");
+{
+  let es = D([ev("proposed", "q", { text: "src/q-module.ts ↔ tests/q-module.test.js" }), ev("user_confirm", "q"), ev("refuted", "q", { grade: "claimed", cited: false, askId: "r1", seen: "ok" })]);
+  ok(es[0].status === "verified" && (es[0].counts.refuted || 0) === 1, "근거 없는 표식 반박 → 기록은 남되(counts) 강등 안 됨");
+  es = D([ev("proposed", "q", { text: "src/q-module.ts ↔ tests/q-module.test.js" }), ev("user_confirm", "q"), ev("refuted", "q", { grade: "claimed", cited: true, askId: "r1", seen: "ok" })]);
+  ok(es[0].status === "disputed", "인용 동반 표식 반박 → 강등(구체 근거 흔적)");
+}
+console.log("[3-2] autoEligible — 실제 확인기와 동형 규칙(고유 8자+ basename 2개)·분모 왜곡 방지");
+{
+  ok(LE.autoConfirmEligible("src/foo-module.ts ↔ tests/foo-module.test.js") === true, "고유 긴 basename 2개 → 기계 확인 가능");
+  ok(LE.autoConfirmEligible("proofs/ 쓰기 ↔ verify-guard 읽기") === false, "경로꼴 2개 미만 → 불가(확인기와 동형)");
+  ok(LE.autoConfirmEligible("src/a.ts ↔ lib/a.ts — 같은 basename") === false, "basename이 같으면(8자 미만 포함) 확인기가 한 증거로만 봄 — 불가");
+  const h = LE.computeScoutHealth(D([
+    ev("proposed", "m1", { text: "src/foo-module.ts ↔ tests/foo-module.test.js" }), ev("attached", "m1"), ev("confirmed", "m1", { grade: "co-cited", askId: "x1", seen: "ok" }),
+    ev("proposed", "m2", { text: "개념 결합(경로 없음) ↔ 개념" }), ev("attached", "m2"),
+  ]));
+  ok(h.reusedDen === 2 && h.autoDen === 1 && h.autoNum === 1, "지표 분리 — 전체 재사용 분모 2 vs 기계확인가능 분모 1(경로<2 항목이 기계 지표 분모를 왜곡하지 않음)");
+}
 
 console.log("[4] 경로 추출 — 버전숫자 오인 없음(선별 교집합의 안전)");
 ok(LE.extractPathsFromText("0.1.86 버전 (high)").length === 0, "0.1.86 → 경로 아님");

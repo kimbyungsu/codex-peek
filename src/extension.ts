@@ -981,9 +981,11 @@ function openScoutHealthReport(ws: string | null): void {
     : `<div class="grid">
 ${stat(h.entries, "관찰 항목", "observed items", "#3ca89a", "일지에 쌓인 결합 항목 수(이벤트 반복은 1항목)", "coupling items in the journal (repeated events count once)")}
 ${stat(`${h.verified}/${h.entries}`, "확인 항목", "confirmed items", "#4a9e57", "검증을 통과해 신뢰로 승격된 항목", "items promoted to trusted via verification")}
-${stat(h.reusedDen >= HEALTH_MIN_SAMPLE ? `${h.reusedNum}/${h.reusedDen}` : "—", "재사용 항목 중 확인 이력", "reused items with a confirm", "#9a6cdc", h.reusedDen >= HEALTH_MIN_SAMPLE ? "지도에 다시 동봉된 항목 중 확인 기록이 있는 것(선후 무주장)" : `재사용 표본이 ${HEALTH_MIN_SAMPLE}건 미만이라 보류`, h.reusedDen >= HEALTH_MIN_SAMPLE ? "re-attached items that have a confirm on record (no order claim)" : `withheld — fewer than ${HEALTH_MIN_SAMPLE} reused samples`)}
-${stat(h.disputedEntries, "반박 이력", "disputed", "#d9a441", "수동 기록 기준 — 자동 반박 추출은 아직 없음", "manually recorded — no automatic dispute extraction yet")}
-${stat(h.rehabilitated, "복권", "rehabilitated", "#4a9e57", "반박 뒤 재확인(사람 1회/검증 2회)으로 신뢰 복귀", "back to trusted after re-confirms (1 human / 2 verify)")}
+${stat(h.reusedDen >= HEALTH_MIN_SAMPLE ? `${h.reusedNum}/${h.reusedDen}` : "—", "재사용 항목 중 확인 이력", "reused items with a confirm", "#9a6cdc", h.reusedDen >= HEALTH_MIN_SAMPLE ? "지도에 다시 동봉된 항목 중 확인 기록이 있는 것(선후 무주장 · 사람 확인 포함)" : `재사용 표본이 ${HEALTH_MIN_SAMPLE}건 미만이라 보류`, h.reusedDen >= HEALTH_MIN_SAMPLE ? "re-attached items that have a confirm on record (no order claim · incl. human confirms)" : `withheld — fewer than ${HEALTH_MIN_SAMPLE} reused samples`)}
+${stat(h.autoDen >= HEALTH_MIN_SAMPLE ? `${h.autoNum}/${h.autoDen}` : "—", "기계 확인 가능 재사용 항목 중 기계 확인", "machine-checkable reused w/ machine confirm", "#5b8def", h.autoDen >= HEALTH_MIN_SAMPLE ? "경로 2개 이상이라 자동 확인이 '원리상 가능'한 항목만 분모(사람 확인은 제외 — 별도 지표)" : `기계 확인 가능 표본이 ${HEALTH_MIN_SAMPLE}건 미만이라 보류`, h.autoDen >= HEALTH_MIN_SAMPLE ? "denominator = items machine-checkable in principle (2+ paths); human confirms excluded (separate metric)" : `withheld — fewer than ${HEALTH_MIN_SAMPLE} machine-checkable samples`)}
+${stat(h.disputedEntries, "반박 이력", "disputed", "#d9a441", "수동 기록+명시 표기('결합반박 #id') 기준", "manually recorded + explicit reply markers ('결합반박 #id')")}
+${stat(h.rehabilitated, "복권", "rehabilitated", "#4a9e57", "반박 뒤 재확인(사람 1회/서로 다른 ask 2회)으로 신뢰 복귀", "back to trusted after re-confirms (1 human / 2 distinct asks)")}
+${h.reinterpreted > 0 ? stat(h.reinterpreted, "재해석 강등", "reinterpreted", "#d9a441", "증거 규칙 v2(2026-07)로 '확인됨'에서 내려온 항목 — 삭제 아님(이력 보존)", "stepped down by the 2026-07 evidence rules — not deleted (history kept)") : ""}
 </div>`;
   const gateLine = gate.eff === "plan"
     ? (gate.raw === "plan" ? tE("켜짐(직접 설정)", "on (set by you)") : tE("켜짐(3트랙 기본 — 2026-07-09 승격: 재실측 70.5% &gt; 합격선 60%)", "on (3-track default — promoted 2026-07-09: re-measured 70.5% &gt; the 60% bar)"))
@@ -1351,33 +1353,86 @@ function computeScoutMapStale(ws: string | null, scope: ScopeState | null, maps:
     const seedSet = new Set<string>();
     const missingAtMap = new Set(((maps.latest as { seedMissing?: string[] }).seedMissing) || []);
     const hasBaseline = Array.isArray((maps.latest as { seedMissing?: string[] }).seedMissing);
+    const seedHashes = ((maps.latest as { seedHashes?: Record<string, string> }).seedHashes) || {};
     for (const s of seeds) {
-      try { seedSet.add(normWs(path.join(t, s))); if (fs.statSync(path.join(t, s)).mtimeMs > mapAt) n++; }
+      try {
+        const abs = path.join(t, s);
+        seedSet.add(normWs(abs));
+        const st0 = fs.statSync(abs);
+        if (st0.mtimeMs <= mapAt) continue;
+        // 내용 지문 동형(L1-C 정본 정합): mtime만 새것(빌드 touch류)은 변경 아님 — 예산 2MB 이내 전체 해시만.
+        if (typeof seedHashes[s] === "string" && st0.size <= 2 * 1024 * 1024) {
+          try {
+            const hh = require("crypto").createHash("sha1").update(fs.readFileSync(abs)).digest("hex");
+            const st1 = fs.statSync(abs);
+            if (st1.size === st0.size && st1.mtimeMs === st0.mtimeMs && hh === seedHashes[s]) continue;
+          } catch { /* 지문 비교 실패 → 변경으로 취급(보수) */ }
+        }
+        n++;
+      }
       catch { if (hasBaseline && !missingAtMap.has(s)) n++; /* 신형 메타만 '당시 존재 seed 소실'=변경(브릿지 정합 — 구형은 무회귀) */ }
     }
     const sp = (args: string[]) => require("child_process").spawnSync("git", ["-c", "safe.directory=" + String(t).replace(/\\/g, "/"), "-C", t, ...args], { encoding: "utf8", timeout: 3000, windowsHide: true });
+    const isGit = (() => { try { const r = sp(["rev-parse", "--is-inside-work-tree"]); return !r.error && r.status === 0; } catch { return false; } })();
     const head = (maps.latest as { head?: string }).head;
-    if (typeof head === "string" && /^[0-9a-f]{7,40}$/i.test(head)) {
-      try { const r = sp(["rev-list", "--count", head + "..HEAD"]); if (r.status === 0) n += Math.min(parseInt(String(r.stdout).trim(), 10) || 0, 999); } catch { /* 신호 0 */ }
+    if (isGit && typeof head === "string" && /^[0-9a-f]{7,40}$/i.test(head) && !/^0+$/.test(head)) {
+      // 기준 커밋 존재부터(정본 동형 — 이력 재작성이 거짓 fresh로 삼켜지지 않게). 무이력 지도(0000000)는 제외.
+      try {
+        const ex = sp(["cat-file", "-e", head + "^{commit}"]);
+        if (ex.error) { /* 신호 0 */ }
+        else if (ex.status !== 0) n++; // historyLost
+        else { const r = sp(["rev-list", "--count", head + "..HEAD"]); if (r.status === 0) n += Math.min(parseInt(String(r.stdout).trim(), 10) || 0, 999); }
+      } catch { /* 신호 0 */ }
     }
-    try {
-      const r = sp(["status", "--porcelain", "-z"]);
-      if (r.status === 0) {
-        const toks = String(r.stdout || "").split("\0");
-        let seen = 0;
-        for (let i = 0; i < toks.length && seen < 200; i++) {
-          const tok = toks[i];
-          if (!tok || tok.length < 4) continue;
-          seen++;
-          const code = tok.slice(0, 2); const rel = tok.slice(3);
-          if (/[RC]/.test(code)) i++; // 양쪽 열 다 검사(정본 동형 — worktree rename " R" 반례)
-          const abs = path.join(t, rel);
-          if (seedSet.has(normWs(abs))) continue;
-          if (/D/.test(code)) { n++; continue; }
-          try { if (fs.statSync(abs).mtimeMs > mapAt) n++; } catch { n++; }
+    if (isGit) {
+      try {
+        const r = sp(["status", "--porcelain", "-z"]);
+        if (r.status === 0) {
+          const toks = String(r.stdout || "").split("\0");
+          let seen = 0;
+          for (let i = 0; i < toks.length && seen < 200; i++) {
+            const tok = toks[i];
+            if (!tok || tok.length < 4) continue;
+            seen++;
+            const code = tok.slice(0, 2); const rel = tok.slice(3);
+            if (/[RC]/.test(code)) i++; // 양쪽 열 다 검사(정본 동형 — worktree rename " R" 반례)
+            const abs = path.join(t, rel);
+            if (seedSet.has(normWs(abs))) continue;
+            if (/D/.test(code)) { n++; continue; }
+            try { if (fs.statSync(abs).mtimeMs > mapAt) n++; } catch { n++; }
+          }
         }
-      }
-    } catch { /* 신호 0 */ }
+      } catch { /* 신호 0 */ }
+    } else {
+      // 비-git 대상: seed 밖 변경 유계 스캔(정본 nonGitChangedSince 동형 — L1-C 사각 해소). 상한 도달·신호 0이면
+      // '판단 불가'=null(advisory 배지는 무주장 — 정본의 unknown과 같은 태도).
+      const SKIP = new Set([".git", "node_modules", "dist", "build", "vendor", "out", ".vscode", ".idea", "__pycache__", ".venv", "venv"]);
+      let seen = 0, changed = 0, files = 0, complete = true;
+      const walk = (dir: string, depth: number) => {
+        if (changed >= 9 || seen >= 1500) { complete = false; return; }
+        let items: fs.Dirent[];
+        try { items = fs.readdirSync(dir, { withFileTypes: true }); } catch { complete = false; return; }
+        for (const it of items) {
+          if (changed >= 9 || seen >= 1500) { complete = false; return; }
+          seen++;
+          const abs = path.join(dir, it.name);
+          if (it.isDirectory()) {
+            if (depth < 6 && !SKIP.has(it.name) && !it.name.startsWith(".")) walk(abs, depth + 1);
+            else if (depth >= 6) complete = false;
+            continue;
+          }
+          if (seedSet.has(normWs(abs))) continue;
+          files++;
+          try { if (fs.statSync(abs).mtimeMs > mapAt) changed++; } catch { complete = false; } // 판독 실패=전수 확인 실패(정본 동형 — Codex #6)
+        }
+      };
+      walk(t, 0);
+      // 삭제 감지(정본 동형): 지도 생성 시 유계 인벤토리가 있고 양쪽 스캔이 완전하면 파일 수 감소=삭제 신호
+      const inv = (maps.latest as { nonGitFiles?: { n: number; complete: boolean } }).nonGitFiles;
+      if (inv && inv.complete === true && complete && Number.isFinite(inv.n) && files < inv.n) changed += (inv.n - files);
+      if (!complete && changed === 0 && n === 0) return null; // 전수 확인 못 했고 신호도 없음 — 무주장
+      n += changed;
+    }
     return n;
   } catch { return null; }
 }
@@ -1762,7 +1817,7 @@ function readScopeState(ws: string | null): ScopeState | null {
 // wsKey = sha1(normWs) 앞 16자(계약 키·scripts/scout-store.js와 동일 규칙 — 한쪽만 바꾸면 게시판이 빈다).
 // 읽기 전용 표시일 뿐 — 확장은 지도를 생성·전송하지 않는다(생성은 사용자의 수동 스크립트 실행. PRIVACY와 일치).
 type ScoutMapItem = { ts: string | null; arm: string; model: string | null; usageIn: number | null; usageOut: number | null };
-type ScoutMapsView = { count: number; items: ScoutMapItem[]; latest: { arm: string; ts: string | null; text: string; truncated: boolean; seedFiles: string[]; head?: string; seedMissing?: string[]; basisTs?: string } | null };
+type ScoutMapsView = { count: number; items: ScoutMapItem[]; latest: { arm: string; ts: string | null; text: string; truncated: boolean; seedFiles: string[]; head?: string; seedMissing?: string[]; basisTs?: string; seedHashes?: Record<string, string>; nonGitFiles?: { n: number; complete: boolean } } | null };
 const SCOUT_MAP_TEXT_CAP = 12000; // 웹뷰로 보내는 최신 지도 본문 상한(게시판은 열람용 — 전문은 scouts/ 파일)
 let scoutMapsCache: { key: string; at: number; val: ScoutMapsView | null } | null = null;
 function readScoutMaps(ws: string | null): ScoutMapsView | null {
@@ -1788,14 +1843,18 @@ function readScoutMaps(ws: string | null): ScoutMapsView | null {
         let head = "";
         let seedMissing: string[] | undefined;
         let basisTs = "";
+        let seedHashes: Record<string, string> | undefined;
+        let nonGitFiles: { n: number; complete: boolean } | undefined;
         try {
           const m0 = JSON.parse(fs.readFileSync(path.join(dir, bases[0] + ".json"), "utf8"));
           if (Array.isArray(m0.seedFiles)) seedFiles = m0.seedFiles.filter((s: any) => typeof s === "string");
           if (typeof m0.head === "string") head = m0.head; // 신선도 '새 커밋' 신호 재료(브릿지 정합 2026-07-10)
           if (Array.isArray(m0.seedMissing)) seedMissing = m0.seedMissing.filter((x: any) => typeof x === "string");
           if (typeof m0.basisTs === "string") basisTs = m0.basisTs;
+          if (m0.seedHashes && typeof m0.seedHashes === "object") seedHashes = m0.seedHashes;          // 내용 지문(L1-C — 끝단 판독까지 배선: Codex #2)
+          if (m0.nonGitFiles && typeof m0.nonGitFiles === "object") nonGitFiles = m0.nonGitFiles;      // 비-git 삭제 감지 기준선(Codex #6)
         } catch { /* 메타 없음 — 낡음 배지만 비활성 */ }
-        latest = { arm: items[0]?.arm || "?", ts: items[0]?.ts || null, text: raw.slice(0, SCOUT_MAP_TEXT_CAP), truncated: raw.length > SCOUT_MAP_TEXT_CAP, seedFiles, head, seedMissing, basisTs };
+        latest = { arm: items[0]?.arm || "?", ts: items[0]?.ts || null, text: raw.slice(0, SCOUT_MAP_TEXT_CAP), truncated: raw.length > SCOUT_MAP_TEXT_CAP, seedFiles, head, seedMissing, basisTs, seedHashes, nonGitFiles };
       } catch { /* 방금 지워졌을 수 있음 — 목록만 */ }
     }
     const val: ScoutMapsView = { count: bases.length, items, latest };
@@ -3549,7 +3608,7 @@ class Dashboard {
         const line=document.createElement("div"); line.className="muted";
         line.textContent = h.entries<5
           ? T("관찰 신호: 표본 아직 작음(항목 "+h.entries+"건) — 비율 표시는 보류(과신 방지)","Observation signal: sample still small ("+h.entries+" items) — ratios withheld (avoids overconfidence)")
-          : T("관찰 신호(이 프로젝트): 확인 "+h.verified+"/"+h.entries+(h.reusedDen>=5?" · 재사용 항목 중 확인 이력 "+h.reusedNum+"/"+h.reusedDen:"")+" · 반박 "+h.disputedEntries+"건(수동 기록 기준) · 복권 "+h.rehabilitated+"건 — 관측치이며 편향은 양방향일 수 있어요(자동 반박 없음=반박 과소·지도 동봉 노출=확인 과대)","Observation signal (this project): confirmed "+h.verified+"/"+h.entries+(h.reusedDen>=5?" · reused items with a confirm "+h.reusedNum+"/"+h.reusedDen:"")+" · disputed "+h.disputedEntries+" (manually recorded) · rehabilitated "+h.rehabilitated+" — observational; bias can go both ways (no auto-dispute = disputes undercounted · map-attached exposure = confirms overcounted)");
+          : T("관찰 신호(이 프로젝트): 확인 "+h.verified+"/"+h.entries+(h.reusedDen>=5?" · 재사용 항목 중 확인 이력 "+h.reusedNum+"/"+h.reusedDen:"")+(h.autoDen>=5?" · 기계 확인 가능 중 기계 확인 "+h.autoNum+"/"+h.autoDen:"")+(h.reinterpreted>0?" · 재해석 강등 "+h.reinterpreted+"건":"")+" · 반박 "+h.disputedEntries+"건(수동 기록 기준) · 복권 "+h.rehabilitated+"건 — 관측치이며 편향은 양방향일 수 있어요(자동 반박 없음=반박 과소·지도 동봉 노출=확인 과대)","Observation signal (this project): confirmed "+h.verified+"/"+h.entries+(h.reusedDen>=5?" · reused items with a confirm "+h.reusedNum+"/"+h.reusedDen:"")+(h.autoDen>=5?" · machine-checkable w/ machine confirm "+h.autoNum+"/"+h.autoDen:"")+(h.reinterpreted>0?" · reinterpreted "+h.reinterpreted:"")+" · disputed "+h.disputedEntries+" (manually recorded) · rehabilitated "+h.rehabilitated+" — observational; bias can go both ways (no auto-dispute = disputes undercounted · map-attached exposure = confirms overcounted)");
         card.appendChild(line);
       });
       // 건강 리포트 새탭 — 현황이 포화라 확장판(수치 뜻·게이트·타임라인)은 대시보드에 더 얹지 않고 새탭으로(2026-07-09).

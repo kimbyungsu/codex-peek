@@ -26,8 +26,10 @@ const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomi
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
 // 호출 시점 전역 언어의 문자열 선택(무결성 detail·CLI 안내 등). ask 본문 흐름은 langSnap 사용.
 function tB(ko, en) { return loadLang() === "en" ? en : ko; }
-function withContract(prompt, ws, lang) {
+function withContract(prompt, ws, lang, carrier) {
   // lang: 언어 스냅샷(cmdAsk의 langSnap) — 미지정 시 전역 언어. 주입(기본지침·계약 지시문)과 헤더/footer 언어를 한 스냅샷으로 일관.
+  // carrier(L1-A): 호출자가 준 객체에 '이번 ask에 실제로 실린 동봉 스냅샷'(mapItems·couplings)을 담아 준다 —
+  // 확인 판정(flagLedgerConfirms)이 '지금 다시 계산한 동봉'이 아니라 '전송된 그 동봉'으로 echo를 판정하게(Codex 설계검증).
   const baseline = loadBaseDirective(lang).verifyBaseline;
   let inj = "", scout = "", c = null;
   try {
@@ -40,7 +42,13 @@ function withContract(prompt, ws, lang) {
     inj = "";
   }
   // Phase 3 동봉은 별도 try — 새 기능(지도 동봉) 실패가 기존 계약 주입(inj)까지 지우지 않게(모든 ask의 급소 분리).
-  try { scout = (c && buildScoutAttach(ws || configWs(), c, lang)) || ""; } catch { scout = ""; }
+  try {
+    const att = c ? buildScoutAttach(ws || configWs(), c, lang) : null;
+    if (att && typeof att === "object") {
+      scout = att.text || "";
+      if (carrier && typeof carrier === "object") { carrier.mapItems = att.mapItems || []; carrier.couplings = att.couplings || []; }
+    } else scout = att || ""; // 구형 문자열 반환 호환(테스트 목·부분 배포)
+  } catch { scout = ""; }
   const head = [baseline, inj, scout].filter(Boolean).join("\n\n");
   const reqLabel = (lang || loadLang()) === "en" ? "[Work Request]" : "[작업 요청]";
   return `${head}\n\n---\n${reqLabel}\n${prompt}`;
@@ -169,21 +177,34 @@ function citedResolvedBasenames(answer, ws) {
   }
   return out;
 }
-// 결정2-3: 인용한 (실재) 파일 중, '이 검증 세션' rollout의 도구 명령/출력 어디에도 basename이 안 나타난 것.
-// = '이 검증에서 그 파일을 다룬 흔적을 확인 못함'(코덱스는 셸 명령으로 파일을 읽으므로 명령문/출력에 파일명이 남는다).
-// 보수적: rollout을 못 읽거나·도구활동 자체가 없으면(이전 턴 맥락 등) 판단 보류(빈 배열) — 단정/오탐 방지.
+// 결정2-3(L1-A 개정): 인용한 (실재) 파일 중, '이번 턴'(rollout 마지막 사용자 메시지 이후)의 도구 명령/출력
+// 어디에도 basename이 안 나타난 것. 세션 '전체' 스캔은 이전 턴에서 다룬 파일을 이번 확인의 근거로 인정하는
+// 결함(Codex 설계검증). 반환은 삼상태 — {checked:false}=검사 자체가 불가(세션 미식별·대형 기록·경계 미발견·
+// 도구활동 0)로, '미확인 파일 없음'(checked:true·unseen:[])과 구분된다. 판정 불가를 빈 배열로 돌려주면
+// 소비자가 확인 성공으로 오독해 승격으로 흐른다(같은 지적).
 function citedFilesUnseen(answer, ws, sessionId) {
-  if (!sessionId) return [];
+  const unknown = { checked: false, unseen: [] };
+  if (!sessionId) return unknown;
   let file;
-  try { file = findRolloutById(sessionId); } catch { return []; }
-  if (!file) return [];
+  try { file = findRolloutById(sessionId); } catch { return unknown; }
+  if (!file) return unknown;
   const remaining = citedResolvedBasenames(answer, ws);
-  if (!remaining.size) return [];
-  try { if (fs.statSync(file).size > 16 * 1024 * 1024) return []; } catch { return []; } // 비정상적으로 큰 rollout은 비용·신뢰 모두 보류
+  if (!remaining.size) return { checked: true, unseen: [] };
+  try { if (fs.statSync(file).size > 16 * 1024 * 1024) return unknown; } catch { return unknown; } // 비정상적으로 큰 rollout은 비용·신뢰 모두 보류
   let lines;
-  try { lines = fs.readFileSync(file, "utf8").split(/\r?\n/); } catch { return []; }
+  try { lines = fs.readFileSync(file, "utf8").split(/\r?\n/); } catch { return unknown; }
+  // 턴 경계: 마지막 '사용자 메시지'(response_item message user) 줄 — 그 이후만 이번 ask의 활동.
+  let lastUser = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (!ln || ln.indexOf('"message"') < 0) continue;
+    let o; try { o = JSON.parse(ln); } catch { continue; }
+    if (o && o.type === "response_item" && o.payload && o.payload.type === "message" && o.payload.role === "user") lastUser = i;
+  }
+  if (lastUser < 0) return unknown; // 경계 미발견 — 세션 전체를 근거로 쓰지 않는다(판단 보류)
   let hadTool = false;
-  for (const ln of lines) {
+  for (let i = lastUser + 1; i < lines.length; i++) {
+    const ln = lines[i];
     if (!ln) continue;
     let o; try { o = JSON.parse(ln); } catch { continue; }
     const p = o && typeof o.payload === "object" && o.payload ? o.payload : null;
@@ -197,8 +218,8 @@ function citedFilesUnseen(answer, ws, sessionId) {
       if (!remaining.size) break;
     }
   }
-  if (!hadTool) return []; // 도구활동 없음 → 이전 턴 맥락 등으로 답했을 수 있음 → 경보 안 함
-  return [...remaining];
+  if (!hadTool) return unknown; // 이번 턴 도구활동 없음 → 이전 턴 맥락 등으로 답했을 수 있음 → 판단 보류
+  return { checked: true, unseen: [...remaining] };
 }
 // ws=configWs(이벤트 workspace 라벨 — 대시보드 귀속), execCwd=실제 실행 폴더(인용 상대경로 해석 기준).
 // 분리 이유: 코덱스 답의 '(경로:라인)' 인용은 코덱스가 돈 폴더(execCwd) 기준 상대경로라, 라벨용 연 폴더로 해석하면 오탐.
@@ -219,7 +240,8 @@ function flagEvidence(answer, ws, sessionId, execCwd) {
         detailEn: `${mism.length} cited evidence item(s) do not match real files/lines (nonexistent lines): ${mism.slice(0, 3).join(" / ")}`,
       });
     }
-    const unseen = citedFilesUnseen(answer, pathWs, sessionId);
+    const seenChk = citedFilesUnseen(answer, pathWs, sessionId);
+    const unseen = seenChk.checked ? seenChk.unseen : []; // 판단 보류(checked=false)는 경보 안 함 — 종전과 동일한 보수성
     if (unseen.length) {
       appendIntegrityEvent({
         ts: nowIso(),
@@ -235,18 +257,62 @@ function flagEvidence(answer, ws, sessionId, execCwd) {
     }
   } catch { /* best-effort — 점검 실패가 검증 흐름을 막지 않음 */ }
 }
-// 관측 장부 확인 신호(로드맵 ④ — 보수적) — 통과류 판정에서, 장부 항목이 말하는 결합의 '서로 다른 경로 2개 이상'이
-// 실존 확인된 인용((파일:라인)이 실제로 해석됨)에 등장하고, 세션 기록상 '다룬 흔적 미확인' 목록에 없을 때만
-// confirmed 1건을 적재한다. 텍스트 메아리(항목 문구가 답에 보임)로는 확인 안 됨 — 자기강화 순환 차단.
-// 반박(refuted) 자동 추출은 하지 않음(기계 판정 불안정 — 발화 기록 CLI가 담당). 실패가 검증 흐름을 절대 막지 않음.
-function flagLedgerConfirms(answer, ws, sessionId, execCwd) {
+// 관측 장부 확인 신호(로드맵 ④ — L1-A v2) — 증거의 질을 이벤트에 남긴다(승격 판정은 유도기 DERIVE_V2):
+//  claimed  = 답의 '결합확인 #id' 명시 표기(동봉 결합 후보의 id — 기계 판정 확실. 동봉이 유도하므로 태생적 echoed)
+//  co-cited = 통과류 답 전체에서 항목의 서로 다른 경로 2개가 각각 실존 인용(약한 공동 인용 — 공동 인용≠결합 확인)
+//  echoed   = 이번 ask 동봉의 '한 항목 안에' 그 경로 쌍이 함께 노출됐음(항목 단위 — 전역 합집합은 과도[Codex])
+//  seen     = 이번 턴 취급 흔적 검사 삼상태("ok"/"unknown" — 판정 불가를 확인 성공으로 오독 금지)
+//  askId    = ask 실행 UUID('서로 다른 ask 실행' 판정 재료 — '독립 턴' 주장 아님)
+// 반박은 명시 표기('결합반박 #id')만 자동 적재(기계 추측 반박 없음 — 발화 기록 CLI는 별도).
+// 텍스트 메아리(항목 문구가 답에 보임)로는 확인 안 됨 — 자기강화 순환 차단. 실패가 검증 흐름을 절대 막지 않음.
+function flagLedgerConfirms(answer, ws, sessionId, execCwd, extra) {
   try {
+    const askId = extra && extra.askId ? String(extra.askId) : "";
+    const attach = extra && extra.attach && typeof extra.attach === "object" ? extra.attach : { mapItems: [], couplings: [] };
     const verdict = extractVerdict(answer);
-    if (verdict !== "pass" && verdict !== "pass-notes") return;
     // P1: 확인 신호는 '정찰 대상' 장부로 — 세션 폴더가 비-git 부모여도 개발 레포 장부에 쌓인다.
     // (인용 경로 해석은 계속 execCwd 기준 — 실제 모델이 본 파일 기준. 장부 '기록 대상'만 재해석 — Codex 합의)
     let target = ws;
     try { target = resolveScoutRepo(ws, loadContract(ws)).repo; } catch { /* ws 유지(fail-open) */ }
+    const now = nowIso();
+    const seenChk = citedFilesUnseen(answer, execCwd || ws, sessionId);
+    const seenState = seenChk.checked ? "ok" : "unknown";
+    const unseen = new Set((seenChk.checked ? seenChk.unseen : []).map((b) => b.toLowerCase()));
+    // 실존 인용 집합(라인 실재까지) — 표식(claimed)의 cited 판정과 공동 인용(co-cited) 둘 다의 재료.
+    const cited = new Set([...citedResolvedBasenames(answer, execCwd || ws)].map((b) => b.toLowerCase()));
+    for (const m of checkCitedEvidence(answer, execCwd || ws)) cited.delete(String(m).split(":")[0].toLowerCase());
+    const citedPairOk = (paths) => {
+      const bns = [...new Set((paths || []).map((p) => String(p).split("/").pop() || ""))].filter((b) => b.length >= 8);
+      return bns.filter((b) => cited.has(b.toLowerCase()) && !unseen.has(b.toLowerCase())).length >= 2;
+    };
+    // ① 명시 표기(claimed) — 표식은 검증자의 '자기보고'라 방어 3겹(Codex 반례 왕복):
+    //    ⑴ 행 단독만 인정(부정문 "…표기를 쓰지 않았다"·본문 예시 오인식 차단)
+    //    ⑵ 같은 id에 확인·반박이 함께 오면 상충 — 둘 다 거부
+    //    ⑶ 승격·강등 '재료'가 되려면 그 항목의 경로 2개가 답에서 실제 인용(라인 실재·미확인 아님)돼야 함(cited 필드
+    //       — 인용 0개 답의 표식만으로 verified/disputed가 움직이는 것 차단. 기록 자체는 남김: 자기보고도 사실).
+    //    id는 이번 ask에 실제 동봉된 결합 후보의 것만 인정(임의 id 날조 무시). 반박 표기는 실패 답에서도 유효.
+    const byId = new Map((attach.couplings || []).map((cp) => [String(cp.id), cp]));
+    if (byId.size) {
+      const marks = new Map(); // id → Set(kinds)
+      for (const line of String(answer || "").split(/\r?\n/)) {
+        const m = line.match(/^\s*결합(확인|반박)\s*#([0-9a-f]{6})\s*$/);
+        if (!m || !byId.has(m[2])) continue;
+        let set = marks.get(m[2]);
+        if (!set) { set = new Set(); marks.set(m[2], set); }
+        set.add(m[1] === "확인" ? "confirmed" : "refuted");
+      }
+      for (const [id, kinds] of marks) {
+        if (kinds.size > 1) continue; // 상충(확인+반박) — 자기모순 자기보고는 기록하지 않음
+        const kind = [...kinds][0];
+        const cp = byId.get(id);
+        // cited='그 답이 항목 경로 2개를 실제(라인 실재) 인용했다'는 사실 기록 — 승격은 유도기에서 cited && seen=ok
+        // 이중 게이트(promotableConfirm)로 판정되므로 여기서 seen을 겹쳐 걸지 않는다(기록의 의미를 순수하게).
+        const citedOk = citedPairOk(cp.paths);
+        appendLedgerEvent(target, { ts: now, type: kind, sig: cp.sig, grade: "claimed", echoed: true, askId, seen: seenState, cited: citedOk, from: `verify ${sessionId || "?"} ${verdict || "?"} — 명시 표기 #${id}${citedOk ? "" : " (인용 미동반 — 기록만)"}` });
+      }
+    }
+    // ② 공동 인용(co-cited) — 통과류 판정에서만.
+    if (verdict !== "pass" && verdict !== "pass-notes") return;
     const raw = readLedgerEventsText(target);
     if (!raw || !raw.trim()) return;
     // 원시 이벤트에서 sig→text 최소 집계(배포 사본은 out/ 유도기를 require 못 함).
@@ -265,19 +331,28 @@ function flagLedgerConfirms(answer, ws, sessionId, execCwd) {
     }
     for (const [s, n] of banNet) { if (n > 0) dead.add(s); }
     if (!texts.size) return;
-    const cited = new Set([...citedResolvedBasenames(answer, execCwd || ws)].map((b) => b.toLowerCase()));
-    // 라인 실재까지 요구(보수 강화 — Codex 보완 반영): 라인 번호가 실제 범위를 벗어난 인용이 하나라도 있는 파일은
-    // 그 파일 전체를 확인 근거에서 제외(파일만 실재하는 헛인용이 결합 확인으로 승격되는 것 차단).
-    for (const m of checkCitedEvidence(answer, execCwd || ws)) cited.delete(String(m).split(":")[0].toLowerCase());
+    // cited(라인 실재 인용)·unseen은 위에서 표식 판정과 함께 계산됨(같은 재료 공유).
     if (cited.size < 2) return;
-    const unseen = new Set(citedFilesUnseen(answer, execCwd || ws, sessionId).map((b) => b.toLowerCase()));
-    const now = nowIso();
+    // echo 판정용: 동봉 '항목 단위' basename 집합(경로+노트 안 경로들) — 전역 합집합 아님.
+    const itemSets = (attach.mapItems || []).map((it) => {
+      const bs = new Set();
+      for (const p of ledgerPathsFromText(String(it.path || "") + " " + String(it.note || ""))) { const b = p.split("/").pop() || ""; if (b) bs.add(b.toLowerCase()); }
+      return bs;
+    });
+    for (const cp of attach.couplings || []) {
+      const bs = new Set();
+      for (const p of cp.paths || []) { const b = String(p).split("/").pop() || ""; if (b) bs.add(b.toLowerCase()); }
+      if (bs.size) itemSets.push(bs); // 결합 후보 동봉 자체도 '그 쌍의 노출'
+    }
     for (const [sig, text] of texts) {
       if (dead.has(sig)) continue;
       // basename 8자 미만은 우연 일치 위험(index.ts류) → 제외(지도 채점기의 8자 규칙과 동일 근거)
       const bns = [...new Set(ledgerPathsFromText(text).map((p) => path.basename(p)))].filter((b) => b.length >= 8);
       const hit = bns.filter((b) => cited.has(b) && !unseen.has(b));
-      if (hit.length >= 2) appendLedgerEvent(target, { ts: now, type: "confirmed", sig, from: `verify ${sessionId || "?"} ${verdict} — 실존 인용: ${hit.slice(0, 3).join(", ")}` });
+      if (hit.length < 2) continue;
+      const lows = hit.map((b) => b.toLowerCase());
+      const echoed = itemSets.some((set) => lows.filter((b) => set.has(b)).length >= 2);
+      appendLedgerEvent(target, { ts: now, type: "confirmed", sig, grade: "co-cited", echoed, askId, seen: seenState, from: `verify ${sessionId || "?"} ${verdict} — 실존 인용: ${hit.slice(0, 3).join(", ")}` });
     }
   } catch { /* best-effort — 장부 실패가 검증 흐름을 막지 않음 */ }
 }
@@ -936,7 +1011,9 @@ async function cmdAsk(rest) {
       );
     }
     try { writePhase("codex-verifying", { round: (readPhase().round || 0) + 1, session: claudeId(), workspace: ws }); } catch { /* 진행표시 best-effort */ }
-    const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs, ...(net ? netArgs() : [])], withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap));
+    const askId = require("crypto").randomUUID(); // L1-A: '서로 다른 ask 실행' 판정 재료(지문·verdict ts는 재실행 구분에 부적합 — Codex)
+    const attCarrier = {};                        // L1-A: 이번 ask에 실제로 실린 동봉 스냅샷(재계산 아님)
+    const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs, ...(net ? netArgs() : [])], withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier));
     if (error || !answer || (typeof status === "number" && status !== 0)) {
       try { writePhase("claude-working", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // ask 실패 → 진행표시 codex-verifying 잔존 방지(Claude로 복귀)
       die(tB(`Codex resume 실패: `,`Codex resume failed: `) + `${error?.message || ""}\n${stderr.slice(-500)}`);
@@ -944,7 +1021,7 @@ async function cmdAsk(rest) {
     try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
     writeProof(link.codexSession, answer, ws); // 실제 성공 → 검증 증명 기록(verify-guard가 인정)
     flagEvidence(answer, ws, link.codexSession, exec); // 결정2: 인용 근거 존재성+다룬 흔적 점검(경로해석=작업폴더 exec). 라벨=연 폴더 ws
-    flagLedgerConfirms(answer, ws, link.codexSession, exec); // 로드맵 ④: 통과류 답의 실존 인용으로 장부 confirmed 적재(보수적)
+    flagLedgerConfirms(answer, ws, link.codexSession, exec, { askId, attach: attCarrier }); // 로드맵 ④ L1-A: 등급·echo·askId·seen을 이벤트에
     collectScoutTargetEvidence(answer, ws, exec); // 정찰 대상 자기진단 증거(2026-07-10 — 판정 무관·3트랙만·실패 무해)
     flagVerdict(answer, ws, link.codexSession, modeSnap); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 답에 판정 줄이 없으면 표지 누락 노랑 가시화(자동 차단 X)
     process.stdout.write(`${langSnap === "en" ? "# Linked session" : "# 연결 세션"} ${link.codexSession} (${link.via})\n\n${formatForClaude(answer, langSnap)}\n`);
@@ -1002,7 +1079,9 @@ async function cmdAsk(rest) {
   // recordLink가 '성공(true)'일 때만 earlyLinked 확정 → 저장 실패(CAS/잠금/권한)면 미연결로 두고 다음 폴/최종 단계서 재시도.
   // detected(세션 발견)와 linked(저장 성공)를 분리해 "즉시연결" 거짓보고를 막는다(Codex 지적).
   const onDetect = (id) => { if (earlyLinked) return; try { if (recordLink(id)) earlyLinked = id; } catch { /* 다음 폴/최종 단계서 재시도 */ } };
-  const { answer, error, status, stderr } = await runCodexNewSessionAsync([...mArgs, ...(net ? netArgs() : [])], withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap), since, exec, onDetect); // 탐지=작업폴더(코덱스 session_meta.cwd와 일치)
+  const askId = require("crypto").randomUUID(); // L1-A: '서로 다른 ask 실행' 판정 재료
+  const attCarrier = {};                        // L1-A: 이번 ask에 실제로 실린 동봉 스냅샷
+  const { answer, error, status, stderr } = await runCodexNewSessionAsync([...mArgs, ...(net ? netArgs() : [])], withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier), since, exec, onDetect); // 탐지=작업폴더(코덱스 session_meta.cwd와 일치)
   // cwd 일치 우선, 못 찾으면 원래 방식(무회귀) — 최종 식별용 폴백.
   const resolveNew = () => { const f = newestRolloutSinceForWs(since, exec) || newestRolloutSince(since); const mm = f && f.match(UUID_RE); return mm ? mm[1] : ""; }; // 탐지=작업폴더
   if (error || !answer || (typeof status === "number" && status !== 0)) {
@@ -1021,7 +1100,7 @@ async function cmdAsk(rest) {
   if (id) {
     writeProof(id, answer, ws); // 실제 성공 → 검증 증명 기록
     flagEvidence(answer, ws, id, exec); // 결정2: 인용 근거 존재성+다룬 흔적(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
-    flagLedgerConfirms(answer, ws, id, exec); // 로드맵 ④: 장부 confirmed(보수적)
+    flagLedgerConfirms(answer, ws, id, exec, { askId, attach: attCarrier }); // 로드맵 ④ L1-A: 등급·echo·askId·seen
     collectScoutTargetEvidence(answer, ws, exec); // 정찰 대상 자기진단 증거(2026-07-10)
     flagVerdict(answer, ws, id, modeSnap); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 표지 누락도 노랑 가시화(자동 차단 X)
     const en = langSnap === "en";
@@ -1033,7 +1112,7 @@ async function cmdAsk(rest) {
     updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; }); // 다음 자동 생성 차단 플래그
     writeProof("", answer, ws); // Codex는 성공 응답함(세션id만 미식별) → 검증은 인정
     flagEvidence(answer, ws, "", exec); // 세션id 미식별 → 존재성 점검만(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
-    flagLedgerConfirms(answer, ws, "", exec); // 로드맵 ④: 세션 미식별 시에도 실존 인용 기준으로만(다룬 흔적 검사는 자동 보류)
+    flagLedgerConfirms(answer, ws, "", exec, { askId, attach: attCarrier }); // 로드맵 ④ L1-A: 세션 미식별 → seen=unknown으로 기록만(승격 재료 아님)
     collectScoutTargetEvidence(answer, ws, exec); // 정찰 대상 자기진단 증거(2026-07-10)
     flagVerdict(answer, ws, "", modeSnap);
     process.stdout.write(`${langSnap === "en" ? "# New session created (session id unresolved) — auto-creation is paused to avoid session sprawl. Use 'find' then 'link <id>'." : "# 새 세션 생성됨(세션id 식별 실패) — 폭증 방지로 다음 자동 생성은 멈춥니다. 'find'로 찾아 'link <id>' 하세요."}\n\n${formatForClaude(answer, langSnap)}\n`);

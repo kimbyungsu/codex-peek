@@ -25,7 +25,7 @@ const lang = loadLang(); // 지도 '원문' 언어 — 전역 언어를 따름(p
 // 신선도 기준선(basisTs·seedMissing)은 수집기(collectPackage)가 seed 확정 '직후' 캡처해 pkg.meta로 준다 —
 // 러너가 AI 응답 뒤 재조사하면 수집~응답 사이 삭제/복원이 오분류(Codex 반례 2026-07-10). 여기선 전달만.
 const baseline = pkg.meta && typeof pkg.meta.basisTs === "string"
-  ? { basisTs: pkg.meta.basisTs, ...(Array.isArray(pkg.meta.seedMissing) ? { seedMissing: pkg.meta.seedMissing } : {}) }
+  ? { basisTs: pkg.meta.basisTs, ...(Array.isArray(pkg.meta.seedMissing) ? { seedMissing: pkg.meta.seedMissing } : {}), ...(pkg.meta.seedHashes && typeof pkg.meta.seedHashes === "object" ? { seedHashes: pkg.meta.seedHashes } : {}), ...(pkg.meta.nonGitFiles && typeof pkg.meta.nonGitFiles === "object" ? { nonGitFiles: pkg.meta.nonGitFiles } : {}) }
   : {};
 const md = renderPackageMarkdown(pkg, lang);
 

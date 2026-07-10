@@ -45,7 +45,7 @@ fs.writeFileSync(path.join(mapsDir, base + ".md"), "① 직접\n- `src/deep-alph
 fs.writeFileSync(path.join(mapsDir, base + ".json"), JSON.stringify({ ts: new Date(Date.now() + 60_000).toISOString(), arm: "self", seedFiles: ["seed.js"], highlights: [{ path: "src/deep-alpha.ts", note: "결합" }] }));
 const c = CL.loadContract(ws);
 ok(CL.buildScoutDirective(ws, c) === null, "대상 지도가 fresh → 자동지시 침묵(ws 서랍이 비어 있어도 no-map 오판 없음)");
-const att = CL.buildScoutAttach(ws, c, "ko");
+const att = (CL.buildScoutAttach(ws, c, "ko") || {}).text; // v2 envelope 계약 — 본문은 .text
 ok(!!att && att.includes("deep-alpha"), "검증 동봉 — 대상 서랍의 지도를 사용");
 
 console.log("[3] scout-gate — 신선도는 대상 기준·지시 명령도 대상 경로·로그에 ws/target 병기");

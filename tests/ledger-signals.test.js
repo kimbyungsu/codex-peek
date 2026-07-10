@@ -10,6 +10,7 @@ const { spawnSync } = require("child_process");
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ls_"));
 process.env.CODEX_BRIDGE_HOME = dir;
+process.env.CODEX_HOME = dir; // findRolloutById가 세션 픽스처(sessions/)를 보게 — require '전' 설정 필수(로드 시 해석)
 
 const CL = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
 const CB = require(path.join(__dirname, "..", "bridge", "codex-bridge.js"));
@@ -36,22 +37,114 @@ CL.appendLedgerEvent(ws, { ts: "2026-07-07T00:00:00.000Z", type: "proposed", sig
 const eventsNow = () => LE.parseEventsJsonl(CL.readLedgerEventsText(ws)).events;
 const countType = (t) => eventsNow().filter((e) => e.type === t).length;
 
-console.log("[1] confirmed 적재 — 통과 판정 + 두 경로 실존 인용일 때만");
+console.log("[1] confirmed 적재(L1-A v2) — 통과+두 경로 실존 인용이면 '기록', 승격은 증거의 질이 결정");
 const PASS_ANSWER = "검토 완료 — 근거: (src/alpha-channel.ts:2) 그리고 (lib/beta-consumer.ts:3)\n검증: 통과";
 CB.flagLedgerConfirms(PASS_ANSWER, ws, "", ws);
 ok(countType("confirmed") === 1, "두 경로 실존 인용 + 통과 → confirmed 1건");
-const derived = LE.deriveLedger(eventsNow()).find((e) => e.sig === sig);
-ok(derived.status === "verified" && derived.lane === "trusted", "유도 결과: 검증됨(신뢰 차선) 승격");
+{
+  const e1 = eventsNow().find((e) => e.type === "confirmed");
+  ok(e1.grade === "co-cited" && e1.seen === "unknown", "세션 미식별 → grade=co-cited·seen=unknown(취급 흔적 검사 불가를 이벤트에 정직 기록)");
+  const d1 = LE.deriveLedger(eventsNow()).find((e) => e.sig === sig);
+  ok(d1.status === "inferred", "seen=unknown은 승격 재료 아님 — 판정 불가가 확인 성공으로 흐르던 결함 봉합(Codex 설계검증)");
+}
+// 승격 경로(끝-끝): 세션 rollout에 '이번 턴' 취급 흔적을 만들어 seen=ok + 서로 다른 askId 2회 → verified
+{
+  const SESS = path.join(dir, "sessions");
+  fs.mkdirSync(SESS, { recursive: true });
+  const roll = (id) => fs.writeFileSync(path.join(SESS, `rollout-${id}.jsonl`), [
+    JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "검증 요청" }] } }),
+    JSON.stringify({ type: "response_item", payload: { type: "function_call", name: "shell", arguments: JSON.stringify({ command: "cat src/alpha-channel.ts lib/beta-consumer.ts" }) } }),
+  ].map((s) => s).join("\n"), "utf8");
+  roll("aaaa1111-e2e1"); roll("aaaa1111-e2e2");
+  CB.flagLedgerConfirms(PASS_ANSWER, ws, "aaaa1111-e2e1", ws, { askId: "ask-1", attach: { mapItems: [], couplings: [] } });
+  let d = LE.deriveLedger(eventsNow()).find((e) => e.sig === sig);
+  ok(d.status === "inferred", "seen=ok 공동 인용 1회(askId 1개) → 아직 미승격(공동 인용≠결합 확인)");
+  CB.flagLedgerConfirms(PASS_ANSWER, ws, "aaaa1111-e2e2", ws, { askId: "ask-2", attach: { mapItems: [], couplings: [] } });
+  d = LE.deriveLedger(eventsNow()).find((e) => e.sig === sig);
+  ok(d.status === "verified" && d.lane === "trusted", "서로 다른 ask 2회(비-echoed·seen=ok) → 검증됨 승격(끝-끝)");
+  const last = eventsNow().filter((e) => e.type === "confirmed").pop();
+  ok(last.seen === "ok" && last.askId === "ask-2" && last.echoed === false, "이벤트에 seen=ok·askId·echoed=false 기록");
+}
+console.log("[1-1] echo(항목 단위) — 동봉 '한 항목'이 그 경로 쌍을 노출했으면 echoed=true(승격 재료 아님)");
+{
+  const ws2 = path.join(dir, "proj-echo");
+  fs.mkdirSync(path.join(ws2, "src"), { recursive: true });
+  fs.mkdirSync(path.join(ws2, "lib"), { recursive: true });
+  fs.writeFileSync(path.join(ws2, "src", "alpha-channel.ts"), "l1\nl2\n");
+  fs.writeFileSync(path.join(ws2, "lib", "beta-consumer.ts"), "l1\nl2\nl3\n");
+  CL.appendLedgerEvent(ws2, { ts: "t", type: "proposed", sig: CL.ledgerSig(TEXT), text: TEXT, from: "self 지도 T" });
+  const attach = { mapItems: [{ path: "src/alpha-channel.ts", note: "lib/beta-consumer.ts와 결합" }], couplings: [] }; // 한 항목이 쌍을 함께 노출
+  CB.flagLedgerConfirms("근거: (src/alpha-channel.ts:1) (lib/beta-consumer.ts:2)\n검증: 통과", ws2, "", ws2, { askId: "e1", attach });
+  const e = LE.parseEventsJsonl(CL.readLedgerEventsText(ws2)).events.find((x) => x.type === "confirmed");
+  ok(e && e.echoed === true, "쌍을 노출한 동봉 항목 존재 → echoed=true");
+  const attach2 = { mapItems: [{ path: "src/alpha-channel.ts", note: "" }, { path: "lib/beta-consumer.ts", note: "" }], couplings: [] }; // 서로 다른 항목 — 쌍 노출 아님
+  CB.flagLedgerConfirms("근거: (src/alpha-channel.ts:1) (lib/beta-consumer.ts:2)\n검증: 통과", ws2, "", ws2, { askId: "e2", attach: attach2 });
+  const e2 = LE.parseEventsJsonl(CL.readLedgerEventsText(ws2)).events.filter((x) => x.type === "confirmed").pop();
+  ok(e2 && e2.echoed === false, "경로들이 서로 다른 항목에만 있으면 echoed=false — 전역 합집합 과도 판정 폐기(Codex)");
+}
+console.log("[1-2] 명시 표기(claimed) — 행 단독만·상충 거부·인용 미동반은 기록만(승격/강등 재료 아님) — Codex 반례 왕복");
+{
+  const ws3 = path.join(dir, "proj-claim");
+  fs.mkdirSync(path.join(ws3, "src"), { recursive: true });
+  fs.mkdirSync(path.join(ws3, "lib"), { recursive: true });
+  fs.writeFileSync(path.join(ws3, "src", "alpha-channel.ts"), "l1\nl2\n");
+  fs.writeFileSync(path.join(ws3, "lib", "beta-consumer.ts"), "l1\nl2\nl3\n");
+  const cpl = { id: "abc123", sig: "claim-sig", paths: ["src/alpha-channel.ts", "lib/beta-consumer.ts"] };
+  const cpl2 = { id: "def456", sig: "claim-sig-2", paths: ["src/alpha-channel.ts", "lib/beta-consumer.ts"] };
+  const cpl3 = { id: "aaa111", sig: "claim-sig-3", paths: ["src/alpha-channel.ts", "lib/beta-consumer.ts"] };
+  const attach = { mapItems: [], couplings: [cpl, cpl2, cpl3] };
+  const answer3 = [
+    "이 답은 결합확인 #abc123 를 본문 문장 안에 인용만 했다(행 단독 아님 — 무시돼야).",
+    "결합확인 #def456",             // 행 단독 — 유효(단 인용 미동반)
+    "결합확인 #aaa111",             // 행 단독 + 아래에서 상충
+    "결합반박 #aaa111",             // 상충 — 둘 다 거부
+    "결합확인 #ffffff",             // 동봉 안 된 id — 무시
+    "검증: 실패",
+  ].join("\n");
+  CB.flagLedgerConfirms(answer3, ws3, "", ws3, { askId: "c1", attach });
+  const evs = LE.parseEventsJsonl(CL.readLedgerEventsText(ws3)).events;
+  ok(!evs.some((x) => x.sig === "claim-sig"), "본문 속 표기(행 단독 아님) → 무시(부정문·예시 오인식 차단)");
+  const e2 = evs.find((x) => x.type === "confirmed" && x.sig === "claim-sig-2");
+  ok(!!e2 && e2.grade === "claimed" && e2.echoed === true && e2.cited === false, "행 단독 표기 → claimed 기록(실패 판정에서도) · 인용 미동반이라 cited=false");
+  ok(!evs.some((x) => x.sig === "claim-sig-3"), "같은 id에 확인+반박 상충 → 둘 다 거부(자기모순 자기보고)");
+  ok(!evs.some((x) => String(x.from || "").includes("ffffff")), "동봉 안 된 id(#ffffff)는 무시(임의 id 날조 차단)");
+  // cited=false claimed는 승격 재료 아님 — 유도 확인
+  CB.flagLedgerConfirms("결합확인 #def456\n검증: 실패", ws3, "", ws3, { askId: "c2", attach });
+  const d3 = LE.deriveLedger(evsNow3(ws3)).find((x) => x.sig === "claim-sig-2");
+  ok(d3 && d3.status === "inferred", "인용 미동반 표기 2회(서로 다른 askId) → 여전히 미승격(자기보고 단독 승격 차단)");
+  // 인용 동반 표기 + seen=ok(세션 rollout에 이번 턴 취급 흔적) → cited=true → 서로 다른 askId 2회에 승격
+  const SESS3 = path.join(dir, "sessions");
+  fs.mkdirSync(SESS3, { recursive: true });
+  const roll3 = (id) => fs.writeFileSync(path.join(SESS3, `rollout-${id}.jsonl`), [
+    JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "검증 요청" }] } }),
+    JSON.stringify({ type: "response_item", payload: { type: "function_call", name: "shell", arguments: JSON.stringify({ command: "cat src/alpha-channel.ts lib/beta-consumer.ts" }) } }),
+  ].join("\n"), "utf8");
+  roll3("cccc1111-cl03"); roll3("cccc1111-cl04"); roll3("cccc1111-cl05"); roll3("cccc1111-cl06");
+  const citedAns = "근거: (src/alpha-channel.ts:1) (lib/beta-consumer.ts:2)\n결합확인 #abc123\n검증: 통과";
+  CB.flagLedgerConfirms(citedAns, ws3, "cccc1111-cl03", ws3, { askId: "c3", attach });
+  CB.flagLedgerConfirms(citedAns, ws3, "cccc1111-cl04", ws3, { askId: "c4", attach });
+  const d4 = LE.deriveLedger(evsNow3(ws3)).find((x) => x.sig === "claim-sig");
+  ok(d4 && d4.status === "verified", "인용 동반(cited=true)·seen=ok 표기가 서로 다른 askId 2회 → 승격");
+  // 반박 표기: 인용 미동반이면 강등 재료 아님(기록만)
+  CB.flagLedgerConfirms("결합반박 #abc123\n검증: 실패", ws3, "cccc1111-cl05", ws3, { askId: "c5", attach });
+  const d5 = LE.deriveLedger(evsNow3(ws3)).find((x) => x.sig === "claim-sig");
+  ok(d5 && d5.status === "verified", "인용 미동반 반박 표기 → 강등 안 됨(근거 없는 자기보고 한 줄이 즉시 disputed 만들던 결함 봉합)");
+  CB.flagLedgerConfirms("근거: (src/alpha-channel.ts:1) (lib/beta-consumer.ts:2)\n결합반박 #abc123\n검증: 실패", ws3, "cccc1111-cl06", ws3, { askId: "c6", attach });
+  const d6 = LE.deriveLedger(evsNow3(ws3)).find((x) => x.sig === "claim-sig");
+  ok(d6 && d6.status === "disputed", "인용 동반 반박 표기 → 강등(구체 근거 흔적 요구 충족)");
+}
+function evsNow3(w) { return LE.parseEventsJsonl(CL.readLedgerEventsText(w)).events; }
 
 console.log("[2] 보수 규칙 — 다음 경우엔 적재 안 됨");
+const cBase = countType("confirmed"); // 앞 구획(승격 끝-끝)까지의 누계 기준 — 이후는 delta로 단언
 CB.flagLedgerConfirms("근거: (src/alpha-channel.ts:2) (lib/beta-consumer.ts:3)\n검증: 실패", ws, "", ws);
-ok(countType("confirmed") === 1, "실패 판정 → 추가 없음");
+ok(countType("confirmed") === cBase, "실패 판정 → 추가 없음");
 CB.flagLedgerConfirms("근거: (src/alpha-channel.ts:2)뿐\n검증: 통과", ws, "", ws);
-ok(countType("confirmed") === 1, "경로 1개만 인용 → 추가 없음(결합의 양쪽 요구)");
+ok(countType("confirmed") === cBase, "경로 1개만 인용 → 추가 없음(결합의 양쪽 요구)");
 CB.flagLedgerConfirms("본문에 src/alpha-channel.ts 와 lib/beta-consumer.ts 를 언급만(인용 형식·라인 없음)\n검증: 통과", ws, "", ws);
-ok(countType("confirmed") === 1, "텍스트 메아리(라인 인용 없음) → 추가 없음(자기강화 차단)");
+ok(countType("confirmed") === cBase, "텍스트 메아리(라인 인용 없음) → 추가 없음(자기강화 차단)");
 CB.flagLedgerConfirms("(src/alpha-channel.ts:999) (lib/beta-consumer.ts:3)\n검증: 통과", ws, "", ws);
-ok(countType("confirmed") === 1, "라인 초과 인용이 낀 파일은 확인 근거에서 제외 — 파일만 실재하는 헛인용 차단(보수 강화)");
+ok(countType("confirmed") === cBase, "라인 초과 인용이 낀 파일은 확인 근거에서 제외 — 파일만 실재하는 헛인용 차단(보수 강화)");
 // 짧은 basename(8자 미만)은 우연 일치 위험 → 제외
 fs.writeFileSync(path.join(ws, "a.ts"), "x\n");
 fs.writeFileSync(path.join(ws, "b.ts"), "x\n");
@@ -63,9 +156,9 @@ ok(!eventsNow().some((e) => e.type === "confirmed" && e.sig === CL.ledgerSig(SHO
 console.log("[3] 반박 이력 항목에도 확인은 '기록'된다(복권 재료 — 2026-07-09) · 차단(ban)만 기록 제외");
 CL.appendLedgerEvent(ws, { ts: "2026-07-07T00:02:00.000Z", type: "user_dispute", sig, text: TEXT, from: "사용자 발화: 그 결합 아님" });
 CB.flagLedgerConfirms(PASS_ANSWER, ws, "", ws);
-ok(countType("confirmed") === 2, "반박된 항목에도 confirmed 기록(누계 2 — 문전 폐기 폐지, 승격은 유도기 복권 규칙이 판정)");
+ok(countType("confirmed") === cBase + 1, "반박된 항목에도 confirmed 기록(문전 폐기 폐지 — 승격은 유도기 복권 규칙이 판정)");
 const midEntry = LE.deriveLedger(LE.parseEventsJsonl(CL.readLedgerEventsText(ws)).events).find((x) => x.sig === sig);
-ok(midEntry && midEntry.status === "disputed", "검증 확인 1회로는 아직 disputed(복권은 기계 확인 2회부터 — 보수성 유지)");
+ok(midEntry && midEntry.status === "disputed", "반박 후 확인 1회(그마저 seen=unknown)로는 disputed 유지 — 보수성");
 // ban 항목 텍스트는 PASS_ANSWER가 실제 인용하는 경로와 일치시켜 'dead가 아니면 확인됐을' 상황을 만든다(무효 단언 방지 — Codex 반례)
 CL.appendLedgerEvent(ws, { ts: "2026-07-07T00:03:00.000Z", type: "banned", sig: "ban-sig", text: "src/alpha-channel.ts ↔ lib/beta-consumer.ts (차단 대상)" });
 CB.flagLedgerConfirms(PASS_ANSWER, ws, "", ws);
