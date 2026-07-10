@@ -54,7 +54,10 @@ const clSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib
 ok(!/무전송 원칙 불변/.test(clSrc) && /예외 둘/.test(clSrc), "contract-lib 주석: '무전송 원칙 불변' 잔재 0(예외 둘 체계 — Codex 4차 반례 잠금)");
 const readmeKo = fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8");
 const readmeEn = fs.readFileSync(path.join(__dirname, "..", "docs", "README.en.md"), "utf8");
-ok(!/\*\*외부 전송 없음\*\*/.test(readmeKo) && /예외는 둘뿐/.test(readmeKo) && !/유일한 예외/.test(readmeKo), "README(ko): 절대 표현 제거 + 예외 둘(꾸러미·연결 점검) 명시, '유일한 예외' 잔재 0");
+ok(!/\*\*외부 전송 없음\*\*/.test(readmeKo) && /외부로 나가는 경로는 두 갈래/.test(readmeKo) && !/유일한 예외/.test(readmeKo) && !/예외는 둘뿐/.test(readmeKo), "README(ko): 절대 표현 제거 + 두 갈래 모델(DeepSeek 키 2종/기본 정찰 Claude CLI 경유 — 2026-07-10 정정), '키 없으면 전송 0' 단정 잔재 0");
+const extSrc2 = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
+ok(!/외부 전송은 DeepSeek 키 등록 시 둘뿐|외부 전송은 DeepSeek 키를 등록한 경우 둘뿐/.test(extSrc2) && !/External transfers only with a DeepSeek key|exactly two external transfers/.test(extSrc2), "확장 UI(가이드 새탭·트랙 툴팁)에도 옛 '키 없으면 전송 0' 모델 잔재 0(Codex 반례 잠금)");
+ok((readmeKo.match(/외부로 나가는 경로는 두 갈래|외부로 나가는 것은 정찰 관련뿐/g) || []).length >= 2, "README 안전 절·원칙 절이 같은 두 갈래 모델(문서 내 상충 잔재 0)");
 ok(!/예외 1건/.test(readmeKo) && !/실행 시에만\(키 등록=동의/.test(readmeKo), "README(ko): '예외 1건'·'실행 시에만' 잔재 0");
 ok(/Two exceptions/.test(readmeEn) && /connection check/.test(readmeEn) && !/Single exception/.test(readmeEn), "README(en): 예외 둘 명시, 'Single exception' 잔재 0");
 const privacySrc = fs.readFileSync(path.join(__dirname, "..", "PRIVACY.md"), "utf8");

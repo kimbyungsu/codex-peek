@@ -391,6 +391,7 @@ function appendScoutTargetEvidence(ws, obs) { // obs={ts, repos:[{repo(절대경
     if (!ws || !obs || !Array.isArray(obs.repos) || !obs.repos.length) return false;
     const cur = readScoutTargetEvidence(ws);
     const next = { ...cur, obs: cur.obs.concat([obs]).slice(-EVIDENCE_KEEP) };
+    delete next.advisedRepo; delete next.advisedTs; // 구형 단일 기억 필드 — 어떤 쓰기 경로든 정리(제안 재발 없는 프로젝트에 영구 잔존하던 Codex 반례)
     fs.mkdirSync(SCOUT_TARGET_EVIDENCE_DIR, { recursive: true });
     return atomicWrite(scoutEvidenceFileFor(ws), JSON.stringify(next));
   } catch { return false; } // 수집 실패가 ask 흐름을 못 막음
@@ -581,12 +582,21 @@ function buildScoutDirective(ws, c) {
   const rs = resolveScoutRepo(ws, c); // P1: 정찰 계열은 계약 지정 대상 기준(지도 상태·재지시 기억·명령 경로 전부)
   const target = rs.repo;
   // ⓪ 대상 어긋남 자기진단이 신선도보다 '먼저'(Codex 설계검증 지적 2026-07-10: 엉뚱한 대상의 지도가 fresh면
-  // 아래 조기 반환에 막혀 어긋남 지시가 영영 안 나감). 같은 제안엔 1회만 — 기억은 증거 파일의 advisedRepo(ws 단위).
+  // 아래 조기 반환에 막혀 어긋남 지시가 영영 안 나감). 같은 제안엔 1회만 — 기억은 증거 파일의 advisedKeys(언어|현재 대상|제안 대상 키·상한 20).
   try {
     const ev = readScoutTargetEvidence(ws);
     const drift = detectScoutTargetDrift(target, ev);
-    if (drift.drift && String(ev.advisedRepo || "") !== normWs(drift.repo)) {
-      try { atomicWrite(scoutEvidenceFileFor(ws), JSON.stringify({ ...ev, advisedRepo: normWs(drift.repo), advisedTs: new Date().toISOString() })); } catch { /* 기억 실패 시 다음 턴 재제안 — 무해 */ }
+    // 제안 1회 기억의 키 = 언어|현재 대상|제안 대상 — ws 단위 문자열 하나면 언어 슬롯 전환(같은 ws·다른 실효 대상)
+    // 상황에서 '예전에 같은 레포를 제안했다'는 이유로 영구 침묵(Codex 라이브 반례 2026-07-10). 구형 advisedRepo는 무시(1회 재제안 무해).
+    const adviseKey = loadLang() + "|" + normWs(target) + "|" + normWs(drift.repo || "");
+    const advised = ev.advisedKeys && typeof ev.advisedKeys === "object" ? ev.advisedKeys : {};
+    if (drift.drift && !advised[adviseKey]) {
+      // 상한 20키(오래된 시각부터 정리 — PRIVACY 고지와 일치)·구형 advisedRepo 필드는 쓰기 시 제거(이중 기억 방지)
+      const merged = { ...advised, [adviseKey]: new Date().toISOString() };
+      const keys = Object.keys(merged).sort((x, y) => (Date.parse(merged[x]) || 0) - (Date.parse(merged[y]) || 0));
+      for (const k of keys.slice(0, Math.max(0, keys.length - 20))) delete merged[k];
+      const next = { ...ev, advisedKeys: merged }; delete next.advisedRepo; delete next.advisedTs;
+      try { atomicWrite(scoutEvidenceFileFor(ws), JSON.stringify(next)); } catch { /* 기억 실패 시 다음 턴 재제안 — 무해 */ }
       const en2 = loadLang() === "en";
       const cur = rs.source === "contract"
         ? (en2 ? "the contract-set target " + target : "계약에 지정된 " + target)

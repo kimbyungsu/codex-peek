@@ -220,7 +220,7 @@
    execCwd 기준[세션 폴더 기준이면 어긋난 상황에서 증거가 빈 값 — Codex 반례]) ②보수 판정 detectScoutTargetDrift
    (관측≥3·같은 레포 최다 인용 ≥70%·실존·대상과 다름 — 표본 미달 무주장) ③자동 지시가 '신선도보다 우선'(Codex
    반례: 엉뚱한 대상의 지도가 fresh면 조기 반환에 막혀 영영 침묵) — scope-target.js set 문법으로 에이전트가 스스로
-   교정(같은 제안 1회·advisedRepo 기억·언어 슬롯 효과 명시) ④대시보드: 대상 '상시' 표시(미지정 침묵 해소)+어긋남
+   교정(같은 제안 1회 — 기억은 advisedKeys[언어|대상|제안 키·상한 20, 구형 advisedRepo는 쓰기 시 정리]·언어 슬롯 효과 명시) ④대시보드: 대상 '상시' 표시(미지정 침묵 해소)+어긋남
    행동 카드(원클릭 setScoutTarget — saveContract 스키마 오염 없이 전용 병합)+3트랙 켜는 순간 대상 확인 스텝(비-git
    ws) ⑤신선도 사각 해소: scoutMapStatus가 seed 8개에 더해 meta.head 이후 새 커밋 수+seed 밖 dirty mtime을 stale
    신호로(신호 3종 분리 표기 seedChanged/commitsAfter/dirtyChanged·비-git 무회귀·러너가 메타에 head 기록). 게이트
@@ -276,6 +276,22 @@
    captureSeedBaseline)가 seed '확정 직후'(diff/grep/log 수집 전) 캡처해 pkg.meta로 — 러너는 전달만(사후
    재조사는 수집~응답 사이 삭제/복원 오분류·Codex 반례). '없음'은 ENOENT만(접근 오류=seedMissing만 생략·basisTs는 항상 유지 — 삭제 판정만 불가),
    scoutMapStatus·확장 배지는 mtime 비교를 basisTs||ts 기준으로. 잠금: tests/scout-drift.test.js [7][8][9].
+   **(2026-07-10 양측 독립 전수 감사 — 사용자 지시로 구현모델 5감사단+Codex 독립 감사 교차 대조. 수정 완료분)**:
+   ①검증 카드 11시간 동결 — sessionModelMeta의 turn cwd 필터가 '검증이 돈 폴더≠세션 폴더'에서 전멸하던 것 →
+   verdicts.jsonl(브릿지 ws 귀속·model·effort) 최대-ts 병용 보정(한 곳 수정 — brainActual·drift·현재값 공유,
+   cwd 무필터 완화는 공유 세션 3쌍 누수라 금지) ②리로드 낡은 대시보드 — 복원 '입양' 폐기(dispose→같은 자리
+   새 생성)+ready 핸드셰이크+postedAt '마지막 갱신' 상시 표시+45초 끊김 배지+로딩 표지+정적 새탭 serializer
+   (가이드=재베이크·건강 리포트=닫기만[원 ws 저장 불가]) ③탐색자 카드 시각 — scout-usage 방식별 lastTs+카드
+   슬롯 ④'신뢰 0' — 서랍 전환 고지(prevDrawer·실인수 이관 명령·오염 경고)+캐시 키에 실효 대상 ⑤PRIVACY/README
+   ko·en — 기본 정찰의 Claude CLI 경유 전달 명시(키 없음=전송 0 단정 정정)+무이력 발췌(8개·4,000자) 고지
+   ⑥advisedKeys(언어|대상|제안 키잉·상한 20 — 언어 전환 영구 침묵 반례). 잠금: tests/dashboard-freshness.test.js.
+   **잔여 백로그(교차 합의 우선순위 — 다음 묶음)**: P1=①rollout 대용량 반복 파싱(92MB×3소비자·exthost 지연 기여
+   — 증분/tail 인덱스) ②integrity.json 동시 쓰기 유실(read-modify-write 3주체 — append-only/잠금)
+   ③recentFailures 귀속(꾸러미가 세션 ws의 검증 실패를 못 받음 — target·ws 병행 전달) ④언어 슬롯 scoutRepo
+   폴백(en 슬롯 미설정 시 축 회귀 — resolveScoutRepo 반대 슬롯 폴백 검토). P2=phase.json 전역 단일(다중 창
+   덮어씀·README 격리 과장)·confirmed 폴백 오염(기록만 생략)·otherSlotHasRules 거짓 문구·legacy 지도 확장/브릿지
+   서사 갈림·이관 원클릭(dry 모달). P3=scout-usage trim race·links CAS 잔여·verify-guard -z 백포트·기존 3태그
+   > 경계·inflight 청소 pid 검사.
 6. (후보) 대시보드 게이트 토글 UI(현재 CLI만 — informed consent 문구에 실측 명중률 표기), 발화 기록(scope-ledger-note)
    흐름의 실사용 관찰.
 7. (관찰 항목) 한 폴더 다중 프로그램 구분 — 권장 관행은 프로그램별 폴더 분리, 보강 후보는 seed 클러스터 자동 좁힘.
