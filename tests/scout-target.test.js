@@ -121,7 +121,7 @@ ok(/1건은 대상에 '같은 유형·같은 항목'이 다른 시각으로/.tes
 
 console.log("[7] 확장 패리티(소스 계약) — scoutTargetFor가 resolveScoutRepo와 동일 규칙 + 정찰 판독기들이 대상 사용");
 const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
-ok(/function scoutTargetFor[\s\S]{0,400}ws-fallback-invalid/.test(ext), "scoutTargetFor 존재 + 무효 폴백 규칙 동일");
+ok(/function scoutTargetFor[\s\S]{0,900}ws-fallback-invalid/.test(ext) && /function scoutTargetFor[\s\S]{0,900}contract-other-lang/.test(ext), "scoutTargetFor 존재 + 무효 폴백·언어 슬롯 폴백 규칙 동일(P1-④ 동형)");
 for (const fn of ["readScopeState", "readScoutMaps", "readMapLedgerUncached"]) ok(new RegExp(fn + "[\\s\\S]{0,700}scoutTargetFor").test(ext), fn + " — 대상 해석 사용");
 
 try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 무해 */ }

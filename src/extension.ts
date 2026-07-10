@@ -27,6 +27,28 @@ const LINKS_FILE = path.join(BRIDGE_DIR, "links.json");
 const CONTRACT_FILE = path.join(BRIDGE_DIR, "contract.json"); // 레거시 전역 계약(상속 안 함 · ws=null 저장 폴백만)
 const CONTRACTS_DIR = path.join(BRIDGE_DIR, "contracts"); // 프로젝트별 계약
 const INTEGRITY_FILE = path.join(BRIDGE_DIR, "integrity.json"); // 무결성 신호(브릿지 기록 → 상태바 빨강·대시보드로 가시화)
+// integrity 동시 쓰기 잠금 — bridge/contract-lib.js withIntegrityLock과 동형(P1-②, 감사 2026-07-10: 3주체
+// read-modify-write가 겹치면 먼저 추가된 경고가 통째로 유실). 잠금 실패=무잠금 진행(fail-open — 악화 아님).
+const INTEGRITY_LOCK = INTEGRITY_FILE + ".lock";
+// v2 — bridge withIntegrityLock과 동형: stale 자동 삭제 없음(이중 진입 TOCTOU — Codex 반례)·토큰 소유권 해제·
+// 잔존 시: 보유 pid 사망=즉시, 생존/판독불가=최대 ~600ms 후 무잠금 진행(정상 경합에서의 유실 방지가 목적이지 완전 해결 아님 — 정직 주장 하향).
+function withIntegrityLockExt<T>(fn: () => T): T {
+  const token = process.pid + "-" + Math.random().toString(36).slice(2, 8);
+  let locked = false;
+  for (let i = 0; i < 40 && !locked; i++) {
+    try { fs.writeFileSync(INTEGRITY_LOCK, token, { flag: "wx" }); locked = true; }
+    catch {
+      // 보유자 pid 사망 시 대기 없이 즉시 무잠금 진행(degraded) — 잔존 잠금이 렌더당 ~1.2초(2회 호출) 확장 호스트
+      // 지연을 만들던 성능 회귀 차단(Codex 반례). 삭제는 안 함(상호 삭제 TOCTOU) — bridge와 동형.
+      try { const pid = parseInt(String(fs.readFileSync(INTEGRITY_LOCK, "utf8")).split("-")[0], 10); if (pid) { try { process.kill(pid, 0); } catch { break; } } } catch { /* 판독 불가 — 재시도 */ }
+      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15); } catch { /* 즉시 재시도 */ }
+    }
+  }
+  try { return fn(); }
+  finally {
+    if (locked) { try { if (fs.readFileSync(INTEGRITY_LOCK, "utf8") === token) fs.unlinkSync(INTEGRITY_LOCK); } catch { /* 무해 */ } }
+  }
+}
 const PHASE_FILE = path.join(BRIDGE_DIR, "phase.json"); // 검증 파이프라인 라이브 단계(훅/브릿지 기록 → 상태바·진행 스트립)
 const VERDICTS_FILE = path.join(BRIDGE_DIR, "stats", "verdicts.jsonl"); // 검증 통계 누적(append-only, 브릿지가 flagVerdict에서 기록) → 탭2 집계 소스.
 const PHASE_STALE_MS = 15 * 60 * 1000; // 이보다 오래된 phase는 '대기'로 — 코덱스 ask 최대 8분 + 여유
@@ -142,7 +164,7 @@ interface BridgeState {
   scoutMapStale: number | null;    // 낡은 지도 배지 — 지도 이후 변경 신호 수(seed 변경+새 커밋+작업트리 — 브릿지 scoutMapStatus 정합·판단 불가면 null·경고 아님)
   scoutLive: { arm: string; startedAt: string } | null; // 지도 생성중(러너 실행 동안만 — TTL로 잔존 걸러냄)
   deepseek: { hasKey: boolean; masked: string; model: string }; // 고급설정 탭 표시용 — 키 원문은 절대 웹뷰로 안 보냄(마스킹만)
-  scoutTarget: { repo: string; differs: boolean; invalid: boolean; configured: boolean; drift: { repo: string; sample: number; agree: number } | null } | null; // P1 정찰 대상 + 어긋남 자기진단(2026-07-10). null=2트랙
+  scoutTarget: { repo: string; differs: boolean; invalid: boolean; configured: boolean; inherited: boolean; drift: { repo: string; sample: number; agree: number } | null } | null; // P1 정찰 대상 + 어긋남 자기진단(2026-07-10). null=2트랙
   scoutGate: { eff: string; raw: string | null } | null; // 실효 플랜 게이트(표시 전용 — 3트랙에서만, 계약에 저장 안 함). null=2트랙/ws 없음
   mapLedger: MapLedgerView | null; // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만). null=2트랙
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
@@ -252,11 +274,21 @@ interface Contract {
 // 훅·러너가 서로 다른 서랍을 본다. tests/scout-target.test.js 패리티 단언이 고정). 검증·연결·계약 앵커는 불변.
 function scoutTargetFor(ws: string): { repo: string; source: string } {
   try {
-    const raw = loadContract(ws).scoutRepo || "";
+    let raw = loadContract(ws).scoutRepo || "";
+    let source = "contract";
+    if (!raw) {
+      // 반대 언어 슬롯 폴백(P1-④) — scoutRepo는 언어 내용이 아니라 사실(개발 레포 위치). 현재 슬롯 명시값 우선,
+      // 비었을 때만 반대 슬롯을 빌림. bridge resolveScoutRepo와 동형(3카피 규약 — scout-target 패리티가 고정).
+      try {
+        const other: Lang = loadLangExt() === "en" ? "ko" : "en";
+        const oo = JSON.parse(fs.readFileSync(contractFileFor(ws, other), "utf8"));
+        if (oo && typeof oo.scoutRepo === "string" && oo.scoutRepo.trim()) { raw = oo.scoutRepo.trim(); source = "contract-other-lang"; }
+      } catch { /* 반대 슬롯 없음 */ }
+    }
     if (!raw) return { repo: ws, source: "ws" };
     if (!path.isAbsolute(raw)) return { repo: ws, source: "ws-fallback-invalid" }; // 상대경로 금지 — contract-lib과 동일 규칙
     const abs = path.resolve(raw);
-    if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) return { repo: abs, source: "contract" };
+    if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) return { repo: abs, source };
     return { repo: ws, source: "ws-fallback-invalid" };
   } catch { return { repo: ws, source: "ws" }; }
 }
@@ -361,9 +393,9 @@ async function setScoutTargetFromUi(ws: string | null, repo: string, slotLang?: 
       const other: Lang = lang === "ko" ? "en" : "ko";
       let ov = ""; // 반대 슬롯 파일이 없어도 '미설정'으로 취급해 고지(파일 부재=고지 생략이던 구멍 — Codex 반례: 신규 사용자가 가장 알아야 함)
       try { const oo = JSON.parse(fs.readFileSync(contractFileFor(ws, other), "utf8")); ov = typeof oo?.scoutRepo === "string" ? oo.scoutRepo.trim() : ""; } catch { /* 미설정 */ }
-      if (normWs(ov || ws) !== normWs(abs)) otherNote = tE(" (ⓘ " + other + " 언어 모드는 별도 설정 — 언어별 분리 저장)", " (ⓘ the " + other + "-language mode keeps its own setting)");
+      if (ov && normWs(ov) !== normWs(abs)) otherNote = tE(" (ⓘ " + other + " 언어 모드에는 다른 명시값이 있어 그대로 유지: " + ov + ")", " (ⓘ the " + other + "-language mode keeps its own explicit value: " + ov + ")"); // 미설정이면 상속 — 본문 고지가 담당(모순 문구 제거, Codex 반례)
     } catch { /* 고지 실패 무해 */ }
-    vscode.window.showInformationMessage(tE("정찰 대상을 지정했어요: " + abs + " — 다음 지도·일지·확인신호부터 이 레포 기준으로 쌓입니다. 기존 일지는 이 폴더 서랍에 보존됩니다(관찰 일지 카드의 안내 참조)." + otherNote, "Scout target set: " + abs + " — maps, journal and confirms accrue for this repo from now on. The existing journal stays preserved in this folder's drawer (see the note on the journal card)." + otherNote));
+    vscode.window.showInformationMessage(tE("정찰 대상을 지정했어요: " + abs + " — 다음 지도·일지·확인신호부터 이 레포 기준으로 쌓입니다. 기존 일지는 이 폴더 서랍에 보존됩니다(관찰 일지 카드의 안내 참조). ⓘ 다른 언어 모드는 별도 지정이 없으면 이 값을 상속합니다." + otherNote, "Scout target set: " + abs + " — maps, journal and confirms accrue for this repo from now on. The existing journal stays preserved in this folder's drawer (see the note on the journal card). ⓘ The other language mode inherits this value unless it sets its own." + otherNote));
   } catch (e) {
     vscode.window.showErrorMessage(tE("정찰 대상 설정 실패: ", "Failed to set scout target: ") + String((e as Error)?.message || e));
   }
@@ -737,15 +769,18 @@ function readScoutCosts(ws: string | null, now = Date.now()): ScoutCosts {
   return computeScoutCosts(raw, now, scoutTargetFor(ws).repo, normWs);
 }
 function ackIntegrity(ids: string[] | "all"): boolean {
+  return withIntegrityLockExt(() => {
   const events = readIntegrity();
   const set = ids === "all" ? null : new Set(ids);
   for (const e of events) { if (!set || set.has(e.id)) e.ack = true; }
   return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events }));
+  });
 }
 // 모델 '계열' 판정(modelFamily)은 brain-intent.ts로 이동 — 확장·intent 격자·테스트가 같은 정본을 import(사본 드리프트 방지).
 // 두뇌 drift(모델 계열/추론 어긋남)를 integrity 채널에 reconcile → 기존 상태바·배너·확인(ack) 파이프라인 재사용.
 // 안정 sig로 같은 drift는 재발행 안 함(확인 후 sig 안 바뀌면 안 다시 뜸), 해소된 미확인 신호는 제거. kind="brain-drift".
 function syncBrainDrift(ws: string | null, drifts: { sig: string; detail: string; detailKo?: string; detailEn?: string }[]): void {
+  withIntegrityLockExt(() => { // P1-② — read~write 한 임계(브릿지·훅과 겹칠 때 경고 유실 방지)
   if (!ws) return;
   const KIND = "brain-drift";
   const events = readIntegrity() as any[];
@@ -759,6 +794,7 @@ function syncBrainDrift(ws: string | null, drifts: { sig: string; detail: string
     kept.push({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, ack: false, ts: new Date().toISOString(), session: "", workspace: ws, kind: KIND, severity: "warning", detail: d.detail, detailKo: d.detailKo, detailEn: d.detailEn, sig: d.sig });
   }
   if (kept.length !== events.length || kept.some((e, i) => e !== events[i])) atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: kept.slice(-50) }));
+  });
 }
 let lastDriftSync = 0;
 // 두뇌 drift 계산 + integrity 동기화 — computeState(대시보드)·상태바 render() 양쪽에서 호출(대시보드를 안 열어도 상태바에 뜨게).
@@ -1028,6 +1064,7 @@ function scoutActualText(ws: string | null): string {
 function syncSessionMissing(ws: string | null): void {
   if (!ws) return;
   try {
+    withIntegrityLockExt(() => { // P1-② — read~write 한 임계(경고 유실 방지)
     const KIND = "session-missing";
     const events = readIntegrity() as any[];
     const wsMatch = (e: any) => !e.workspace || normWs(e.workspace) === normWs(ws);
@@ -1051,6 +1088,7 @@ function syncSessionMissing(ws: string | null): void {
       kept.push({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, ack: false, ts: new Date().toISOString(), session: "", workspace: ws, kind: KIND, severity: "error", detail, detailKo: dKo, detailEn: dEn, sig });
     }
     if (kept.length !== events.length || kept.some((e, i) => e !== events[i])) atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: kept.slice(-50) }));
+    });
   } catch { /* best-effort */ }
 }
 // 무결성 경보 툴팁: 상태바 '바로 위'에 뜨는 '인터랙티브 호버'(MarkdownString+command 링크) — 마우스를 올려 링크 클릭 가능.
@@ -1253,7 +1291,7 @@ function computeState(turnsN: number): BridgeState {
     scoutMaps,                          // 영향지도 게시판(3트랙에서만 — 러너가 보관한 지도 읽기 전용)
     scoutMapStale: computeScoutMapStale(ws, scope, scoutMaps), // 낡은 지도 배지 — 최신 지도 생성 후 더 바뀐 seed 파일 수(경고 아님·게시판 표기)
     scoutLive: readScoutLive(ws),       // 지도 생성중 신호(러너 실행 동안만 — 카드 '지금:'과 상태바 라벨)
-    scoutTarget: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const r = scoutTargetFor(ws); const dr = detectScoutTargetDriftExt(r.repo, ws); return { repo: r.repo, differs: normWs(r.repo) !== normWs(ws), invalid: r.source === "ws-fallback-invalid", configured: r.source === "contract", drift: dr.drift ? { repo: dr.repo as string, sample: dr.sample || 0, agree: dr.agree || 0 } : null }; } catch { return null; } })(),
+    scoutTarget: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const r = scoutTargetFor(ws); const dr = detectScoutTargetDriftExt(r.repo, ws); return { repo: r.repo, differs: normWs(r.repo) !== normWs(ws), invalid: r.source === "ws-fallback-invalid", configured: r.source === "contract" || r.source === "contract-other-lang", inherited: r.source === "contract-other-lang", drift: dr.drift ? { repo: dr.repo as string, sample: dr.sample || 0, agree: dr.agree || 0 } : null }; } catch { return null; } })(),
     scoutGate: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; return effectiveScoutGate(ws); } catch { return null; } })(),
     mapLedger: readMapLedger(ws),       // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만)
     deepseek: readDeepseekView(),       // 고급설정 탭 — 키 유무·마스킹(원문 미노출)
@@ -3446,7 +3484,7 @@ class Dashboard {
         tg.textContent = d.scoutTarget.invalid
           ? T("⚠ 계약에 지정된 정찰 대상 폴더를 찾을 수 없어 이 폴더 기준으로 동작 중 — node scripts/scope-target.js로 재지정하세요.","⚠ The configured scout target folder was not found — falling back to this folder. Re-set it via node scripts/scope-target.js.")
           : d.scoutTarget.configured
-          ? T("정찰 대상: "+d.scoutTarget.repo+" (계약 지정 — 지도·일지·확인신호가 이 레포 기준으로 쌓임)","Scout target: "+d.scoutTarget.repo+" (set in contract — maps, journal and confirms accrue for this repo)")
+          ? T("정찰 대상: "+d.scoutTarget.repo+(d.scoutTarget.inherited?" (반대 언어 슬롯에서 상속 — 지도·일지·확인신호가 이 레포 기준)":" (계약 지정 — 지도·일지·확인신호가 이 레포 기준으로 쌓임)"),"Scout target: "+d.scoutTarget.repo+(d.scoutTarget.inherited?" (inherited from the other language slot — maps, journal and confirms accrue for this repo)":" (set in contract — maps, journal and confirms accrue for this repo)"))
           : T("정찰 대상: (미지정 — 이 폴더 기준) 실제 개발이 다른 폴더에서 이뤄지면 지도·일지가 그걸 못 봅니다. 어긋남이 감지되면 아래에 설정 카드가 떠요.","Scout target: (not set — this folder) If development actually happens in another folder, maps & journal won't see it. A setup card appears below when a mismatch is detected.");
         card.appendChild(tg);
       }

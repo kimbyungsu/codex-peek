@@ -285,10 +285,11 @@
    슬롯 ④'신뢰 0' — 서랍 전환 고지(prevDrawer·실인수 이관 명령·오염 경고)+캐시 키에 실효 대상 ⑤PRIVACY/README
    ko·en — 기본 정찰의 Claude CLI 경유 전달 명시(키 없음=전송 0 단정 정정)+무이력 발췌(8개·4,000자) 고지
    ⑥advisedKeys(언어|대상|제안 키잉·상한 20 — 언어 전환 영구 침묵 반례). 잠금: tests/dashboard-freshness.test.js.
-   **잔여 백로그(교차 합의 우선순위 — 다음 묶음)**: P1=①rollout 대용량 반복 파싱(92MB×3소비자·exthost 지연 기여
-   — 증분/tail 인덱스) ②integrity.json 동시 쓰기 유실(read-modify-write 3주체 — append-only/잠금)
-   ③recentFailures 귀속(꾸러미가 세션 ws의 검증 실패를 못 받음 — target·ws 병행 전달) ④언어 슬롯 scoutRepo
-   폴백(en 슬롯 미설정 시 축 회귀 — resolveScoutRepo 반대 슬롯 폴백 검토). P2=phase.json 전역 단일(다중 창
+   **잔여 백로그(교차 합의 우선순위)**: P1-① rollout 대용량 반복 파싱(92MB×3소비자·exthost 지연 기여 — 증분/tail
+   인덱스)만 잔여. **P1-②③④ 완료(2026-07-10 커밋 참조)**: ②integrity 잠금(토큰 소유권·stale 자동 삭제 없음 —
+   '정상 경합 유실 방지'로 주장 한정, 완전 해결 아님) ③recentFailures 소유 ws 역추적(+scope-target set이
+   workspace 기록·INTEGRITY_FILE 경로 교정) ④scoutRepo 반대 슬롯 상속(현재 슬롯 명시값 우선·표면 4곳 상속
+   표기·clear 시 상속 재개 고지). P2=phase.json 전역 단일(다중 창
    덮어씀·README 격리 과장)·confirmed 폴백 오염(기록만 생략)·otherSlotHasRules 거짓 문구·legacy 지도 확장/브릿지
    서사 갈림·이관 원클릭(dry 모달). P3=scout-usage trim race·links CAS 잔여·verify-guard -z 백포트·기존 3태그
    > 경계·inflight 청소 pid 검사.

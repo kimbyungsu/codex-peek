@@ -102,11 +102,37 @@ function readIntegrityEvents() {
   }
 }
 // ev = { ts, session, workspace, kind, severity:"error"|"warning", detail }. id/ack는 자동 부여.
+// integrity.json 동시 쓰기 잠금(P1-② — read-modify-write 3주체[브릿지·훅·확장]가 겹치면 rename이 파일 손상은
+// 막아도 '먼저 추가된 경고'를 통째로 잃음, 감사 2026-07-10). 임계 구역이 수 ms라 짧은 재시도(최대 ~600ms)로 충분.
+// 잠금 실패 시 무잠금 진행(fail-open — 종전과 동일한 위험이지 악화 아님: 안전 판정 자료라 기록 자체를 버리진 않음).
+const INTEGRITY_LOCK = INTEGRITY_FILE + ".lock";
+// v2(Codex 반례 반영): stale 잠금 '자동 삭제'는 두 회수자가 서로의 새 잠금을 지워 이중 진입하는 TOCTOU라 제거 —
+// 잔존 잠금은 최대 ~600ms 대기 후 무잠금 진행(fail-open=종전 동작). 즉 이 잠금은 '정상 경합에서의 유실 방지'이지
+// 비정상 잔존까지 포함한 완전 해결이 아니다(정직 주장 하향). 해제는 토큰 소유권 일치 시에만(타 잠금 오삭제 방지).
+function withIntegrityLock(fn) {
+  const token = process.pid + "-" + Math.random().toString(36).slice(2, 8);
+  let locked = false;
+  for (let i = 0; i < 40 && !locked; i++) {
+    try { fs.writeFileSync(INTEGRITY_LOCK, token, { flag: "wx" }); locked = true; }
+    catch {
+      // 보유자 pid가 죽었으면 대기 없이 즉시 무잠금 진행(degraded) — 비정상 잔존 잠금이 매 호출 ~600ms 지연을
+      // 만들던 성능 회귀 차단(Codex 반례: 확장은 렌더당 2회 호출·15초 폴링 반복). 삭제는 안 함(상호 삭제 TOCTOU).
+      try { const pid = parseInt(String(fs.readFileSync(INTEGRITY_LOCK, "utf8")).split("-")[0], 10); if (pid) { try { process.kill(pid, 0); } catch { break; } } } catch { /* 판독 불가 — 재시도 */ }
+      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15); } catch { /* SAB 불가 — 즉시 재시도 */ }
+    }
+  }
+  try { return fn(); }
+  finally {
+    if (locked) { try { if (fs.readFileSync(INTEGRITY_LOCK, "utf8") === token) fs.unlinkSync(INTEGRITY_LOCK); } catch { /* 무해 */ } }
+  }
+}
 function appendIntegrityEvent(ev) {
-  const events = readIntegrityEvents();
-  const id = `${(ev && ev.ts) || ""}_${Math.random().toString(36).slice(2, 8)}`; // 일반 node(워크플로 아님)라 Math.random OK
-  events.push(Object.assign({ id, ack: false }, ev));
-  return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: events.slice(-50) })); // 최근 50건 상한
+  return withIntegrityLock(() => {
+    const events = readIntegrityEvents();
+    const id = `${(ev && ev.ts) || ""}_${Math.random().toString(36).slice(2, 8)}`; // 일반 node(워크플로 아님)라 Math.random OK
+    events.push(Object.assign({ id, ack: false }, ev));
+    return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: events.slice(-50) })); // 최근 50건 상한
+  });
 }
 
 // ── 검증 통계 누적(append-only) — 대시보드 탭2 통계 재료 ──
@@ -171,20 +197,24 @@ function appendVerdict(ev) {
 }
 // ids="all"이면 전체, 배열이면 그 id들만 ack 처리(확인함). 확장이 호출.
 function ackIntegrityEvents(ids) {
-  const events = readIntegrityEvents();
-  const set = ids === "all" || !ids ? null : new Set(ids);
-  for (const e of events) { if (!set || set.has(e.id)) e.ack = true; }
-  return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events }));
+  return withIntegrityLock(() => {
+    const events = readIntegrityEvents();
+    const set = ids === "all" || !ids ? null : new Set(ids);
+    for (const e of events) { if (!set || set.has(e.id)) e.ack = true; }
+    return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events }));
+  });
 }
 // 같은 세션의 직전 특정 kind 신호를 '새 결과가 나왔으니' 대체(supersede)한다. verdict는 누적이 아니라 '최신 상태'다 —
 // 한 턴에 실패→수정→통과로 해소되면 직전 실패/보류 노랑도 사라져야 한다(반복 검증이 무조건 노랑을 남기는 cry-wolf 방지).
 // 미확인(ack 안 됨) + 같은 session + 같은 kind인 것만 제거한다(확인한 것·다른 세션·다른 kind는 보존). 세션 미상이면 안 건드림.
 function supersedeIntegrity(session, kind) {
   if (!session) return false; // 세션 모르면 섣불리 안 지움 — 다른 대화의 신호를 잘못 지우지 않게
-  const events = readIntegrityEvents();
-  const kept = events.filter((e) => !(!e.ack && e.kind === kind && e.session === session));
-  if (kept.length === events.length) return true; // 지울 것 없음(무변경 성공)
-  return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: kept }));
+  return withIntegrityLock(() => {
+    const events = readIntegrityEvents();
+    const kept = events.filter((e) => !(!e.ack && e.kind === kind && e.session === session));
+    if (kept.length === events.length) return true; // 지울 것 없음(무변경 성공)
+    return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: kept }));
+  });
 }
 
 // ── 검증 파이프라인 라이브 단계 ───────────────────────
@@ -366,11 +396,22 @@ function wsKeyFor(ws) { // 계약 키·지도 보관함 키와 반드시 동일 
 // git 여부는 여기서 판정하지 않음: 비-git 대상은 꾸러미 빌더가 무이력 모드로 정직 처리(기존 경로 그대로).
 function resolveScoutRepo(ws, c) {
   try {
-    const raw = c && typeof c.scoutRepo === "string" ? c.scoutRepo.trim() : "";
+    let raw = c && typeof c.scoutRepo === "string" ? c.scoutRepo.trim() : "";
+    let source = "contract";
+    if (!raw) {
+      // 반대 언어 슬롯 폴백(P1-④, 2026-07-10 감사): scoutRepo는 언어 '내용'(규칙·지침)이 아니라 '사실'(개발 레포
+      // 위치)이라, ko에만 설정한 뒤 en으로 전환하면 정찰 축 전체가 세션 폴더로 조용히 회귀하던 결함. 현재 슬롯
+      // 명시값이 항상 우선이고, 현재 슬롯이 비었을 때만 반대 슬롯 값을 빌린다(언어 슬롯 분리 원칙과 양립).
+      try {
+        const other = loadLang() === "en" ? "ko" : "en";
+        const oo = JSON.parse(fs.readFileSync(contractFileFor(ws, other), "utf8"));
+        if (oo && typeof oo.scoutRepo === "string" && oo.scoutRepo.trim()) { raw = oo.scoutRepo.trim(); source = "contract-other-lang"; }
+      } catch { /* 반대 슬롯 없음 */ }
+    }
     if (!raw) return { repo: ws, source: "ws" };
     if (!path.isAbsolute(raw)) return { repo: ws, source: "ws-fallback-invalid" }; // 상대경로 금지 — 훅·확장·CLI의 cwd가 제각각이라 기준이 흔들림(절대경로만 허용)
     const abs = path.resolve(raw);
-    if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) return { repo: abs, source: "contract" };
+    if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) return { repo: abs, source };
     return { repo: ws, source: "ws-fallback-invalid" }; // 지정값이 사라짐 — 정직 표시(소비자가 고지 가능)
   } catch { return { repo: ws, source: "ws" }; }
 }
@@ -598,11 +639,12 @@ function buildScoutDirective(ws, c) {
       const next = { ...ev, advisedKeys: merged }; delete next.advisedRepo; delete next.advisedTs;
       try { atomicWrite(scoutEvidenceFileFor(ws), JSON.stringify(next)); } catch { /* 기억 실패 시 다음 턴 재제안 — 무해 */ }
       const en2 = loadLang() === "en";
-      const cur = rs.source === "contract"
-        ? (en2 ? "the contract-set target " + target : "계약에 지정된 " + target)
+      const inh = rs.source === "contract-other-lang";
+      const cur = rs.source === "contract" || inh
+        ? (en2 ? (inh ? "the target inherited from the other language slot: " + target : "the contract-set target " + target) : (inh ? "반대 언어 슬롯에서 상속된 " + target : "계약에 지정된 " + target))
         : (en2 ? "unset, so the session folder (" + target + ") is being used" : "미지정이라 세션 폴더(" + target + ") 기준");
-      if (en2) return "[Recon (3-track) auto-directive · target mismatch suspected · this suggestion once] In the last " + drift.sample + " verification(s), " + drift.agree + " cited mostly files under " + drift.repo + ", but the scout target is " + cur + ". If " + drift.repo + " is the actual dev repo, run from the codex-peek source repo: `node scripts/scope-target.js \"" + ws + "\" set \"" + drift.repo + "\"` (this writes scoutRepo into this project's contract file for the current language slot — other language modes are configured separately), then `node scripts/scope-scout-self.js \"" + drift.repo + "\"` for a map. If not, ignore this (advisory — nothing is blocked).";
-      return "[탐색(3트랙) 자동 지시 · 대상 어긋남 의심 · 이 제안 1회만] 최근 검증 " + drift.sample + "회 중 " + drift.agree + "회가 " + drift.repo + " 소속 파일을 주로 인용했는데, 정찰 대상은 " + cur + "다. 실제 개발 레포가 " + drift.repo + " 가 맞으면 codex-peek 소스 저장소에서 `node scripts/scope-target.js \"" + ws + "\" set \"" + drift.repo + "\"` 를 실행해 대상을 지정하고(이 프로젝트 계약 파일의 현재 언어 슬롯에 scoutRepo가 저장됨 — 다른 언어 모드는 별도 설정), 이어서 `node scripts/scope-scout-self.js \"" + drift.repo + "\"` 로 지도를 받아라. 아니라면 무시해도 된다(참고용 — 아무것도 막지 않는다).";
+      if (en2) return "[Recon (3-track) auto-directive · target mismatch suspected · this suggestion once] In the last " + drift.sample + " verification(s), " + drift.agree + " cited mostly files under " + drift.repo + ", but the scout target is " + cur + ". If " + drift.repo + " is the actual dev repo, run from the codex-peek source repo: `node scripts/scope-target.js \"" + ws + "\" set \"" + drift.repo + "\"` (this writes scoutRepo into this project's contract file for the current language slot — the other language mode inherits it unless it sets its own), then `node scripts/scope-scout-self.js \"" + drift.repo + "\"` for a map. If not, ignore this (advisory — nothing is blocked).";
+      return "[탐색(3트랙) 자동 지시 · 대상 어긋남 의심 · 이 제안 1회만] 최근 검증 " + drift.sample + "회 중 " + drift.agree + "회가 " + drift.repo + " 소속 파일을 주로 인용했는데, 정찰 대상은 " + cur + "다. 실제 개발 레포가 " + drift.repo + " 가 맞으면 codex-peek 소스 저장소에서 `node scripts/scope-target.js \"" + ws + "\" set \"" + drift.repo + "\"` 를 실행해 대상을 지정하고(이 프로젝트 계약 파일의 현재 언어 슬롯에 scoutRepo가 저장됨 — 다른 언어 모드는 별도 지정이 없으면 이 값을 상속), 이어서 `node scripts/scope-scout-self.js \"" + drift.repo + "\"` 로 지도를 받아라. 아니라면 무시해도 된다(참고용 — 아무것도 막지 않는다).";
     }
   } catch { /* 자기진단 실패가 기존 신선도 지시를 못 막음 */ }
   const st = scoutMapStatus(target);
@@ -1182,4 +1224,4 @@ function formatForClaude(answer, lang) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };

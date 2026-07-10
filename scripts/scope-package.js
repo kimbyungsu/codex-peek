@@ -12,7 +12,7 @@ const { spawnSync } = require("child_process");
 const { extractDiffTokens, buildPackage, renderPackageMarkdown, redactSensitiveDiff, isSensitivePath, PKG_DEFAULTS } = require(path.join(__dirname, "..", "out", "scope-package.js"));
 const { parseGitLog, suggest } = require(path.join(__dirname, "..", "out", "scope-ledger.js"));
 const { parseEventsJsonl, deriveLedger, selectForPackage } = require(path.join(__dirname, "..", "out", "ledger-events.js"));
-const { readLedgerEventsText, appendLedgerEvent, loadLang } = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
+const { readLedgerEventsText, appendLedgerEvent, loadLang, INTEGRITY_FILE, CONTRACTS_DIR } = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
 
 // 관측 장부 선별 — 이벤트(append-only)에서 상태를 유도해 씨앗 관련·신뢰 차선 위주로 꾸러미에 동봉할 몫만 고른다.
 // 장부가 없거나 읽기 실패면 null(주입 0) — 장부 문제가 꾸러미 생성을 막지 않는다.
@@ -121,13 +121,26 @@ function collectCommon(repo) {
   try { if (/\[tool\.pytest/.test(fs.readFileSync(path.join(repo, "pyproject.toml"), "utf8"))) tests.push("pytest  ← pyproject.toml [tool.pytest]"); } catch { /* 없음 */ }
   if (tests.length > 40) { const n = tests.length; tests.length = 40; tests.push(`(…외 ${n - 40}개 — 상한 절단)`); }
 
-  // 최근 검증 실패/미완(무결성 기록 — 이 repo(workspace) 것만)
+  // 최근 검증 실패/미완(무결성 기록) — 이 repo '소유' ws들의 것(P1-③ 귀속, 감사 2026-07-10): 실패는 '연 폴더(ws)'
+  // 소유로 기록되는데 종전 필터는 repo 키만 봐서, 세션 폴더≠개발 레포 구성에선 지도의 핵심 입력(최근 실패)이
+  // 영영 안 실렸다. 소유 ws = repo 자신 + 계약(scoutRepo)이 이 repo를 가리키는 모든 세션 폴더(계약 폴더 역추적).
+  // 경로도 os.homedir 하드코딩 → CODEX_BRIDGE_HOME 존중(INTEGRITY_FILE)으로 교정(테스트 격리·이식성).
   let recentFailures = [];
   try {
-    const j = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".codex-bridge", "integrity.json"), "utf8"));
+    const j = JSON.parse(fs.readFileSync(INTEGRITY_FILE, "utf8"));
     const norm = (p) => path.normalize(p || "").replace(/[\\/]+$/, "").toLowerCase();
+    const owners = new Set([norm(repo)]);
+    try {
+      for (const f of fs.readdirSync(CONTRACTS_DIR)) {
+        if (!f.endsWith(".json")) continue;
+        try {
+          const o = JSON.parse(fs.readFileSync(path.join(CONTRACTS_DIR, f), "utf8"));
+          if (o && typeof o.scoutRepo === "string" && o.scoutRepo.trim() && norm(o.scoutRepo) === norm(repo) && typeof o.workspace === "string" && o.workspace.trim()) owners.add(norm(o.workspace));
+        } catch { /* 깨진 계약 — 무시 */ }
+      }
+    } catch { /* contracts 폴더 없음 */ }
     recentFailures = (j.events || [])
-      .filter((e) => (!e.workspace || norm(e.workspace) === norm(repo)) && (e.kind === "verify-incomplete" || (e.kind === "verdict-nonclean" && e.severity === "error")))
+      .filter((e) => (e.workspace && owners.has(norm(e.workspace))) && (e.kind === "verify-incomplete" || (e.kind === "verdict-nonclean" && e.severity === "error"))) // 무귀속(workspace 없는 구버전) 이벤트는 제외 — 타 프로젝트 꾸러미 혼입 방지(과소 포함이 과대 혼입보다 안전·PRIVACY 고지와 정합, Codex 반례)
       .slice(-PKG_DEFAULTS.maxFailures)
       .map((e) => ({ ts: e.ts, kind: e.kind, detail: e.detail }));
   } catch { /* 없음 */ }

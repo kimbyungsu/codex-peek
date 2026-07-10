@@ -57,8 +57,8 @@ function noteOtherSlot() {
 }
 function setTarget(repoAbs) {
   if (!fs.existsSync(repoAbs) || !fs.statSync(repoAbs).isDirectory()) { console.error(tB(`대상이 존재하지 않거나 폴더가 아님: ${repoAbs}`,`Target does not exist or is not a folder: ${repoAbs}`)); process.exit(1); }
-  writeCurrentSlot((o) => { o.scoutRepo = repoAbs; });
-  console.log(tB(`scoutRepo=${repoAbs} 저장(${loadLang()} 언어 슬롯 — 다른 언어 모드는 별도 설정).`,`scoutRepo=${repoAbs} saved (${loadLang()} language slot — other language modes keep their own setting).`));
+  writeCurrentSlot((o) => { o.scoutRepo = repoAbs; if (!o.workspace) o.workspace = ws; }); // workspace 기록 — 소유 역추적(P1-③)의 필수 재료(미기록이면 이 ws의 검증 실패가 꾸러미에 영영 누락 — Codex 반례)
+  console.log(tB(`scoutRepo=${repoAbs} 저장(${loadLang()} 언어 슬롯). ⓘ 다른 언어 모드는 별도 지정이 없으면 이 값을 상속합니다(자기 슬롯에 set하면 독립).`,`scoutRepo=${repoAbs} saved (${loadLang()} language slot). ⓘ The other language mode inherits this value unless it sets its own (set in that slot to make it independent).`));
   noteOtherSlot();
   if (!usableGit(repoAbs)) console.log(tB("ⓘ 대상: " + gitLabel(repoAbs) + " — 정찰이 전후 비교 없는 축소 꾸러미로 동작합니다(정직 고지).","ⓘ Target: " + gitLabel(repoAbs) + " — recon will run on a reduced pack without before/after diffs (honest note)."));
   console.log(tB("ⓘ 이관: 기존에 세션 폴더 서랍에 쌓인 관찰 일지가 있으면 node scripts/scope-ledger-migrate.js로 옮길 수 있습니다(--dry 먼저).","ⓘ Migration: if a journal already accumulated under the session folder, move it with node scripts/scope-ledger-migrate.js (--dry first)."));
@@ -66,13 +66,17 @@ function setTarget(repoAbs) {
 
 if (cmd === "status") {
   const r = resolveScoutRepo(ws, loadContract(ws));
-  console.log(tB(`정찰 대상: ${r.repo}`,`Scout target: ${r.repo}`) + (r.source === "contract" ? tB(" (계약 지정)"," (set in contract)") : r.source === "ws-fallback-invalid" ? tB(" (⚠ 지정값 무효 — 폴더 사라짐, 세션 폴더로 폴백 중)"," (⚠ configured value invalid — folder missing, falling back to the session folder)") : tB(" (지정 없음 — 세션 폴더 그대로)"," (not set — session folder as-is)")));
+  console.log(tB(`정찰 대상: ${r.repo}`,`Scout target: ${r.repo}`) + (r.source === "contract" ? tB(" (계약 지정)"," (set in contract)") : r.source === "contract-other-lang" ? tB(" (반대 언어 슬롯에서 상속 — 이 슬롯에 set하면 독립)"," (inherited from the other language slot — set here to make it independent)") : r.source === "ws-fallback-invalid" ? tB(" (⚠ 지정값 무효 — 폴더 사라짐, 세션 폴더로 폴백 중)"," (⚠ configured value invalid — folder missing, falling back to the session folder)") : tB(" (지정 없음 — 세션 폴더 그대로)"," (not set — session folder as-is)")));
   console.log(tB("대상 git 여부: ","Target git status: ") + gitLabel(r.repo));
   process.exit(0);
 }
 if (cmd === "clear") {
   writeCurrentSlot((o) => { delete o.scoutRepo; });
-  console.log(tB(`scoutRepo 해제(${loadLang()} 언어 슬롯) — 정찰은 세션 폴더 기준으로 복귀.`,`scoutRepo cleared (${loadLang()} language slot) — recon reverts to the session folder.`));
+  console.log(tB(`scoutRepo 해제(${loadLang()} 언어 슬롯).`,`scoutRepo cleared (${loadLang()} language slot).`));
+  { const r2 = resolveScoutRepo(ws, loadContract(ws));
+    console.log(r2.source === "contract-other-lang"
+      ? tB(`ⓘ 반대 언어 슬롯의 지정(${r2.repo})을 상속 중 — 세션 폴더 기준으로 완전히 돌리려면 반대 슬롯도 clear.`,`ⓘ Now inheriting the other language slot's target (${r2.repo}) — clear that slot too to fully revert to the session folder.`)
+      : tB("정찰은 세션 폴더 기준으로 복귀.","Recon reverts to the session folder.")); }
   noteOtherSlot();
   process.exit(0);
 }
