@@ -285,8 +285,27 @@
    슬롯 ④'신뢰 0' — 서랍 전환 고지(prevDrawer·실인수 이관 명령·오염 경고)+캐시 키에 실효 대상 ⑤PRIVACY/README
    ko·en — 기본 정찰의 Claude CLI 경유 전달 명시(키 없음=전송 0 단정 정정)+무이력 발췌(8개·4,000자) 고지
    ⑥advisedKeys(언어|대상|제안 키잉·상한 20 — 언어 전환 영구 침묵 반례). 잠금: tests/dashboard-freshness.test.js.
-   **잔여 백로그(교차 합의 우선순위)**: P1-① rollout 대용량 반복 파싱(92MB×3소비자·exthost 지연 기여 — 증분/tail
-   인덱스)만 잔여. **P1-②③④ 완료(2026-07-10 커밋 참조)**: ②integrity 잠금(토큰 소유권·stale 자동 삭제 없음 —
+   **P1-① 완료(2026-07-10 커밋 참조)** — rollout 대용량 반복 파싱: src/rollout-scan.ts 신설(vscode-free 증분
+   판독 — 파일별 {offset·carry(원시 바이트)·anchor 머리 256B·offset 직전 경계 지문 64B·mtime} 상태로 자란
+   부분만 병합. append-only가 '정식 전제'이고 정체성 검사는 best-effort(증명 아님 — 표본 지문은 prefix 전체
+   동일성을 증명 못 함: 머리·경계 표본을 둘 다 보존한 중간 본문 재작성은 원리상 불가시[Codex 반례 왕복 2회로
+   주장 하향]): 축소=size / 같은 크기 재작성=mtime / 커진 재작성=anchor+경계 지문. EOF의 줄바꿈 없는 완결
+   JSON은 구식 파서 동등하게 소비).
+   대화+모델 메타는 '통합 누적기 한 스캔'(소비자별 tail은 같은 파일 이중 전량 판독 — Codex 실측 190MB
+   904+877ms → 963ms 1회), byCwd로 어떤 ws 질의도 추가 스캔 없음. 대화 보존은 '완전한 사용자 턴' 경계 상한
+   TURN_CAP=200(메시지 개수 절삭은 recentTurns 계약 파괴 — 라이브 400메시지=57턴+user:null 합성 턴 반례.
+   recentTurns는 UI maximum+코드 clamp 이중 잠금. 하드 상한 HARD_MSG_CAP=4000도 턴 단위 제거+단일 거대
+   턴은 내부 assistant 절삭 — 원시 개수 절삭은 userTurns 비동기화로 합성 턴 재발[Codex 반례]). 스니펫=머리
+   512KB→8MB→firstUser 폴백(절삭 무관 보존 필드 — readMessages 폴백은 절삭된 시야라 금지)+찾은 값 영구 메모.
+   라이브 실측: 181MB 첫 구축 963ms 1회 후 0.01ms/호출·상위 3파일 구식 동치(꼬리·메타) 확인+Codex 무작위
+   200열 퍼징 위반 0. 잠금: tests/rollout-scan.test.js(47단언). **정직한 잔여 한계**: 첫 구축(활성화 직후
+   1회)은 여전히 동기 ~1s(catchUp의 64MB 조각은 메모리 상한이지 시간 분할 아님 — 구식은 상태 계산마다 이
+   비용이었으므로 순감소), 절삭은 두 원인(200턴 초과·assistant 다량 턴의 HARD_MSG_CAP=4000 — 후자는 200턴
+   미만에서도 발생[Codex 실측 160턴×25→153턴]) — 설정 문구를 '최대 N턴'으로 정정하고 고지 표지 2종 분리
+   (turnsDropped=턴 통째 제거→요청 창 미달 시 고지 / firstTurnInnerDropped=선두 턴 내부 답변 생략→그 턴이
+   화면에 있는 동안 별도 문구 고지·턴이 밀려나면 리셋 — 단일 표지는 원인 오표기·창 찼을 때 침묵[Codex 반례
+   1턴+assistant 4,050]. 조용한 축소 금지).
+   **P1-②③④ 완료(2026-07-10 커밋 참조)**: ②integrity 잠금(토큰 소유권·stale 자동 삭제 없음 —
    '정상 경합 유실 방지'로 주장 한정, 완전 해결 아님) ③recentFailures 소유 ws 역추적(+scope-target set이
    workspace 기록·INTEGRITY_FILE 경로 교정) ④scoutRepo 반대 슬롯 상속(현재 슬롯 명시값 우선·표면 4곳 상속
    표기·clear 시 상속 재개 고지). P2=phase.json 전역 단일(다중 창

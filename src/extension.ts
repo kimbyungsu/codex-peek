@@ -12,6 +12,7 @@ import { parseGitLog, suggest as scopeSuggest, ScopeSuggestion } from "./scope-l
 import { maskKey, isPlausibleKey, mergeDeepseekConfig } from "./deepseek-config";
 import { appendApproved, parseApprovedFromMap, normSig } from "./map-ledger";
 import { parseEventsJsonl, deriveLedger, computeScoutHealth, HEALTH_MIN_SAMPLE } from "./ledger-events";
+import { catchUp, TailState, makeRolloutAcc, headFirstUserMessage, Msg, RolloutAcc, TURN_CAP } from "./rollout-scan";
 import { scoutDirectiveText, scoutLedgerNotes } from "./scope-package";
 
 const HOME = os.homedir();
@@ -132,6 +133,8 @@ interface BridgeState {
   linkedAt: string | null;
   lastActivity: string | null;
   turns: Turn[];
+  turnsTrimmed: boolean;      // 오래된 턴 '통째' 제거로 요청한 recentTurns를 못 채울 때만 true — 조용한 축소 금지(고지)
+  turnsInnerTrimmed: boolean; // 화면에 있는 '선두 턴 내부'의 오래된 답변이 생략됐을 때 true — 원인이 다르므로 별도 고지(Codex 반례)
   candidates: Candidate[];
   hiddenCandidates: Candidate[];
   contract: Contract;
@@ -506,43 +509,57 @@ function cachedRead<T>(key: string, ttlMs: number, fn: () => T): T {
   if (hit && now - hit.at < ttlMs) return hit.val as T;
   const val = fn();
   readCache.set(key, { at: now, val });
-  if (readCache.size > 300) { const cut = now - 10 * 60 * 1000; for (const [k, v] of readCache) if (v.at < cut) readCache.delete(k); } // 무한 성장 방지
+  if (readCache.size > 300) {
+    const cut = now - 10 * 60 * 1000;
+    for (const [k, v] of readCache) if (v.at < cut) readCache.delete(k);
+    // 전부 최근이어도 상한은 지킨다 — mtime+size가 키에 박혀 파일이 자랄 때마다 새 키가 쌓이는 구조라
+    // '10분 미만' 항목만으로 300을 넘을 수 있음(교차 감사 지적). 가장 오래된 것부터 절삭.
+    if (readCache.size > 300) {
+      const byAge = [...readCache.entries()].sort((a, b) => a[1].at - b[1].at);
+      for (let i = 0; i < byAge.length - 300; i++) readCache.delete(byAge[i][0]);
+    }
+  }
   return val;
 }
 function fileCacheKey(file: string): string {
   try { const st = fs.statSync(file); return file + "|" + st.mtimeMs + "|" + st.size; } catch { return file + "|na"; }
 }
 
-function readMessages(file: string): Array<{ role: "user" | "assistant"; text: string }> {
-  // rollout 전체 파싱은 파일이 크면 수백 ms — mtime+size 키라 파일이 바뀌면 즉시 새로 읽고, 안 바뀌면 재사용.
-  return cachedRead("msgs|" + fileCacheKey(file), 5 * 60 * 1000, () => readMessagesUncached(file));
-}
-function readMessagesUncached(file: string): Array<{ role: "user" | "assistant"; text: string }> {
-  const out: Array<{ role: "user" | "assistant"; text: string }> = [];
-  let content: string;
+// ── rollout 증분 판독(P1-①) — 전량 재파싱(181MB 실측 ~1s) 대신 자란 부분만 병합. 로직은 rollout-scan.ts(테스트 가능).
+function statInfoOf(file: string): { size: number; mtimeMs: number } { const st = fs.statSync(file); return { size: st.size, mtimeMs: st.mtimeMs }; }
+function readSliceOf(file: string, start: number, end: number): Buffer {
+  const fd = fs.openSync(file, "r");
   try {
-    content = fs.readFileSync(file, "utf8");
-  } catch {
-    return out;
-  }
-  for (const line of content.split("\n")) {
-    const s = line.trim();
-    if (!s || s[0] !== "{") continue;
-    let o: any;
-    try {
-      o = JSON.parse(s);
-    } catch {
-      continue;
+    const len = Math.max(0, end - start);
+    const buf = Buffer.allocUnsafe(len);
+    let got = 0;
+    while (got < len) {
+      const n = fs.readSync(fd, buf, got, len - got, start + got);
+      if (n <= 0) break;
+      got += n;
     }
-    if (o.type !== "response_item" || o.payload?.type !== "message") continue;
-    const role = o.payload.role;
-    if (role !== "user" && role !== "assistant") continue;
-    const text = (o.payload.content || []).map((c: any) => (typeof c?.text === "string" ? c.text : "")).join("").trim();
-    if (!text) continue;
-    if (role === "user" && isInjected(text)) continue;
-    out.push({ role, text });
+    return got === len ? buf : buf.subarray(0, got);
+  } finally { fs.closeSync(fd); }
+}
+// 통합 tail: 대화+모델 메타를 '한 번의 스캔'으로(소비자별 tail을 따로 들면 같은 파일을 두 번 전량
+// 판독 — Codex 실측 190MB에서 904+877ms). cwd별 값(byCwd)을 다 들고 있어 어떤 ws 질의도 추가 스캔 없음.
+// 연결 세션은 보통 1~2개라 맵이 작지만, 세션 교체가 쌓이면 무한 성장하므로 상한.
+const rolloutTails = new Map<string, TailState<RolloutAcc>>();
+const rolloutMk = makeRolloutAcc(isInjected, normWs);
+function rolloutAccFor(file: string): RolloutAcc {
+  // 반환 acc는 다음 호출에서 제자리 병합되는 살아있는 참조 — 동기 소비 전용(현재 소비처 전부 즉시 slice/순회).
+  try {
+    const st = catchUp(file, rolloutTails.get(file), rolloutMk.init, rolloutMk.merge, statInfoOf, readSliceOf);
+    rolloutTails.set(file, st);
+    if (rolloutTails.size > 20) { for (const k of rolloutTails.keys()) { if (k !== file) { rolloutTails.delete(k); break; } } }
+    return st.acc;
+  } catch {
+    rolloutTails.delete(file);
+    return rolloutMk.init();
   }
-  return out;
+}
+function readMessages(file: string): Msg[] {
+  return rolloutAccFor(file).msgs;
 }
 
 // 주제 추출용: 브릿지(withContract)가 매 ask 앞에 붙이는 지침 보일러플레이트를 걷어내고 '실제 요청 본문'만 남긴다.
@@ -555,11 +572,25 @@ function stripInjectedPreamble(text: string): string {
   }
   return text;
 }
+// 첫 사용자 메시지는 파일 '머리'에 있고 불변 — 전량 파싱이 후보 목록(12+50개 합산 수백 MB)을 잡아먹던
+// 최대 비용 지점(교차 감사 실측 1.6s). 머리 조각(512KB→8MB)에서 찾고, 그래도 미확정이면 통합 누적기의
+// firstUser 폴백(절삭 무관 보존 필드 — 8MB 밖 첫 메시지도 유실 없음. 라이브 상위 12파일은 전부 512KB 안).
+// 찾은 값은 경로별 영구 메모(이후 stat조차 없음). 못 찾은 경우만 mtime 키 캐시 — 새 세션에 첫 메시지가
+// 나중에 붙는 경우를 놓치지 않게.
+const snippetMemo = new Map<string, string>();
 function firstSnippet(file: string): string {
-  for (const m of readMessages(file)) {
-    if (m.role === "user") return stripInjectedPreamble(m.text).replace(/\s+/g, " ").trim().slice(0, 70);
-  }
-  return tE("(내용 미상)","(content unknown)");
+  const hit = snippetMemo.get(file);
+  if (hit !== undefined) return hit;
+  return cachedRead("snip|" + fileCacheKey(file), 5 * 60 * 1000, () => {
+    let t = headFirstUserMessage(file, isInjected, readSliceOf, statInfoOf);
+    if (t === null) t = headFirstUserMessage(file, isInjected, readSliceOf, statInfoOf, 8 * 1024 * 1024); // 희귀: 머리 512KB가 전부 비메시지 기록
+    if (t === null) t = rolloutAccFor(file).firstUser ?? ""; // 최후 폴백 — firstUser는 턴 절삭과 무관하게 보존되는 필드(readMessages 폴백은 절삭된 시야라 부정확 — Codex 반례)
+    if (t) {
+      const out = stripInjectedPreamble(t).replace(/\s+/g, " ").trim().slice(0, 70);
+      if (out) { snippetMemo.set(file, out); if (snippetMemo.size > 500) { const k = snippetMemo.keys().next().value; if (k !== undefined) snippetMemo.delete(k); } return out; }
+    }
+    return tE("(내용 미상)", "(content unknown)");
+  });
 }
 
 // rollout의 turn_context에서 '현재(마지막) 모델·생각강도'와 '이 세션이 써본 모델 목록'을 뽑는다.
@@ -569,7 +600,7 @@ function firstSnippet(file: string): string {
 //   형제 폴더 ask가 만든 값과 비교돼 거짓 두뇌-drift가 뜨는 것을 막는다. 일치 turn 0개면 model/effort=""(호출측 가드가 경고 억제).
 //   단 models(이 세션이 써본 모델 목록·knownModels 표시용)는 필터와 무관하게 전부 모은다.
 function sessionModelMeta(file: string, wsFilter?: string | null): { model: string; effort: string; models: string[]; ts: string } {
-  // rollout 전체 파싱(파일이 크면 수백 ms) — mtime+size 키 메모(파일이 바뀌면 즉시 새로 읽음).
+  // mtime+size 키 메모 — 파일이 바뀌면 즉시 새로 계산(밑은 증분 판독이라 미스여도 자란 부분만 읽음).
   // 키에 verdict 장부 상태 포함 — 아래 귀속 보정의 입력이 바뀌면 캐시도 즉시 무효(감사 지적 2026-07-10).
   return cachedRead("smm|" + (wsFilter ? normWs(wsFilter) : "") + "|" + fileCacheKey(file) + "|" + fileCacheKey(path.join(BRIDGE_DIR, "stats", "verdicts.jsonl")), 5 * 60 * 1000, () => sessionModelMetaUncached(file, wsFilter));
 }
@@ -595,36 +626,23 @@ function verdictActualFor(ws: string, codexSession: string): { model: string; ef
   } catch { return null; }
 }
 function sessionModelMetaUncached(file: string, wsFilter?: string | null): { model: string; effort: string; models: string[]; ts: string } {
-  const models = new Set<string>();
-  let model = "", effort = "", ts = "";
+  // 통합 tail(rolloutAccFor)에서 답한다 — 규칙(cwd 필터·마지막 값·models 전체 수집)은 기존 파서와 동형.
   const want = wsFilter ? normWs(wsFilter) : null;
-  let content: string;
-  try { content = fs.readFileSync(file, "utf8"); } catch { return { model, effort, models: [], ts }; }
-  for (const line of content.split("\n")) {
-    const s = line.trim();
-    if (!s || s[0] !== "{") continue;
-    let o: any;
-    try { o = JSON.parse(s); } catch { continue; }
-    if ((o.type || o.payload?.type) !== "turn_context") continue;
-    const p = o.payload || o;
-    if (p.model) models.add(p.model);                          // models=세션이 써본 전체(필터 무관)
-    if (want && normWs(p.cwd || "") !== want) continue;        // 현재값은 '이 폴더(cwd)' turn만 반영
-    if (p.model) model = p.model;
-    const e = p.effort || p.reasoning_effort;
-    if (e) effort = e;
-    if (o.timestamp) ts = o.timestamp;                         // 이 폴더(cwd) 마지막 turn 시각 — drift 신선도(파일 mtime보다 엄밀, 외부 touch 무관)
-  }
+  const acc = rolloutAccFor(file);
+  const v = want ? (acc.byCwd.get(want) || { model: "", effort: "", ts: "" }) : acc.last;
+  let model = v.model, effort = v.effort, ts = v.ts; // 이 폴더(cwd) 마지막 turn — drift 신선도(파일 mtime보다 엄밀)
+  const models = [...acc.models];
   // 귀속 보정(2026-07-10, 두 감사 일치): 이 ws 소유로 기록된 검증 장부 항목이 turn 기반 값보다 새로우면 그걸 채택 —
   // ask가 다른 폴더에서 돌아도(rollout cwd 어긋남) 검증 카드·drift·현재값이 실제 최신을 따라간다.
   // 세 소비처(brainActual·syncBrainDriftFor·modelCurrent)가 전부 이 함수를 지나므로 한 곳 보정으로 함께 해소.
   if (wsFilter) {
     try {
       const m = String(path.basename(file)).match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
-      const v = verdictActualFor(wsFilter, m ? m[1] : "");
-      if (v && (Date.parse(v.ts || "") || 0) > (Date.parse(ts || "") || 0)) { model = v.model; effort = v.effort || effort; ts = v.ts; }
+      const vd = verdictActualFor(wsFilter, m ? m[1] : "");
+      if (vd && (Date.parse(vd.ts || "") || 0) > (Date.parse(ts || "") || 0)) { model = vd.model; effort = vd.effort || effort; ts = vd.ts; }
     } catch { /* 보정 실패 — turn 기반 값 유지(무회귀) */ }
   }
-  return { model, effort, models: [...models], ts };
+  return { model, effort, models, ts };
 }
 
 // 코덱스가 '계정별'로 서버에서 받아 캐시하는 모델·생각강도 목록(CODEX_HOME/models_cache.json).
@@ -1181,13 +1199,21 @@ function computeState(turnsN: number): BridgeState {
   const linkedId: string | null = link?.codexSession ?? null;
 
   let turns: Turn[] = [];
+  let turnsTrimmed = false;
+  let turnsInnerTrimmed = false;
   let lastActivity: string | null = null;
   let modelMeta: { model: string; effort: string; models: string[] } = { model: "", effort: "", models: [] };
   let codexTokens: CodexTokens | null = null;
   if (linkedId) {
     const file = findRolloutById(linkedId);
     if (file) {
-      turns = toTurns(readMessages(file)).slice(-Math.max(1, turnsN));
+      const racc = rolloutAccFor(file);
+      const allTurns = toTurns(racc.msgs);
+      turns = allTurns.slice(-Math.max(1, turnsN));
+      // 두 원인을 구분 고지(단일 표지는 원인 오표기·창 찼을 때 침묵 — Codex 반례): ①턴 통째 제거는 요청 창을
+      // 못 채울 때만 ②선두 턴 내부 생략은 그 턴이 화면에 있을 때(표시=마지막 N턴이므로 전체≤N일 때 선두가 보임).
+      turnsTrimmed = racc.turnsDropped && allTurns.length < Math.max(1, turnsN);
+      turnsInnerTrimmed = racc.firstTurnInnerDropped && allTurns.length <= Math.max(1, turnsN);
       modelMeta = sessionModelMeta(file, ws); // '지금 쓰는 값' 표시도 이 폴더(cwd) 기준 — drift 경고와 일관(공유 세션서 형제 폴더 값 안 새게)
       codexTokens = readSessionTokens(file); // 연결 세션 누적 토큰(검증 비용 카드)
       try {
@@ -1248,6 +1274,8 @@ function computeState(turnsN: number): BridgeState {
     linkedAt: link?.linkedAt ?? null,
     lastActivity,
     turns,
+    turnsTrimmed,
+    turnsInnerTrimmed,
     candidates,
     hiddenCandidates,
     contract: loadContract(ws),
@@ -3770,6 +3798,8 @@ class Dashboard {
     if (!d.linkedId) conv.appendChild(el("div","card muted",T("아직 연결된 Codex 세션이 없어요. 아래에서 세션을 연결하면, 구현↔검증으로 실제 주고받은 대화가 여기에 그대로 표시됩니다(눈으로 검증 확인).","No Codex session linked yet. Link one below and the actual implement↔verify exchange shows here (verify with your own eyes).")));
     else if (!d.turns.length) conv.appendChild(el("div","card muted",T("연결됨 — 아직 주고받은 대화가 없습니다(또는 세션 파일을 못 찾음).","Linked — no exchange yet (or the session file was not found).")));
     else {
+      if (d.turnsTrimmed) conv.appendChild(el("div","card muted",T("대화가 매우 길어 오래된 턴 일부가 보관 상한(메시지 4,000개)으로 절삭됐습니다 — 설정한 턴 수보다 적게 보일 수 있고, 보존된 최근 턴은 아래에 전부 표시됩니다.","This conversation is very long, so some oldest turns were dropped by the retention cap (4,000 messages) — fewer turns than configured may appear; everything retained is shown below.")));
+      if (d.turnsInnerTrimmed) conv.appendChild(el("div","card muted",T("가장 오래된 표시 턴이 매우 길어, 그 턴 '내부'의 오래된 Codex 답변 일부가 보관 상한으로 생략됐습니다(사용자 메시지와 최신 답변은 보존).","The oldest visible turn is very long, so some of the oldest Codex replies inside that turn were omitted by the retention cap (the user message and latest replies are kept).")));
       d.turns.forEach((t) => {
         const wrap = el("div","turn");
         if (t.user) wrap.appendChild(el("div","umsg", t.user));
@@ -4131,7 +4161,8 @@ export function activate(context: vscode.ExtensionContext): void {
       if (e.affectsConfiguration("codexBridge.codexPath")) syncCodexBin();
     }),
   );
-  const turnsN = () => Math.max(1, vscode.workspace.getConfiguration("codexBridge").get<number>("recentTurns", 5));
+  // 상한 TURN_CAP: 증분 판독이 보존하는 '완전한 턴' 수 — 초과 표시 요청은 잘린 턴(user:null 합성)을 만들므로 잠금(설정 UI maximum과 동치·수기 편집 방어).
+  const turnsN = () => Math.min(TURN_CAP, Math.max(1, vscode.workspace.getConfiguration("codexBridge").get<number>("recentTurns", 5)));
   const dashboard = new Dashboard(context.extensionUri, turnsN);
   // 창 리로드로 복원되는 대시보드 탭 되살리기 — 미등록이면 복원 탭이 스크립트 없는 영구 빈 화면(사용자 실측 2026-07-06).
   context.subscriptions.push(
