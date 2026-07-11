@@ -465,8 +465,32 @@ targetId 계약: 생성 op(add_node/add_edge)=금지, split/merge=원본 targetI
   decisionLocks·provenance·lastSeenAt 제거)와 v1→v2 결정론 마이그레이터**(4차 지적 #3 — P1 bootstrap이 처음부터
   v2를 생성해야 세대 결속 성립).
 - **P1** 비차단 bootstrap 생명주기: 트리거 5종(재정의 포함)→**완료 시 의미 보강 자동 큐잉(1-33 — 사용자 명령
-  없이 usable까지 연속)**→detach 기동·inflight 선점·run-state(pid 검증)·
+  없이 usable까지 연속)**→detach 기동·자식 wx 선점(P1 설계검증: 부모 claim이 아니라 '선점자가 직접 작업' —
+  훅 부모는 spawn만, 자식이 run-state를 wx로 선점해 무거운 스캔은 정확히 1회)·run-state(pid 검증)·
+  **verify-guard의 project-map 예외는 P1에선 bootstrap run-state 지문 일치 기반(1-32 marker의 선행 형태 —
+  릴리스 dirty 중단에는 미적용)**·
   degraded 고지·2트랙 3중 게이트(writeCanonicalLocked의 mkdir 선행 부작용 수정 포함)·informed consent+PRIVACY 선갱신.
+  **P1 운영 복구 계약(검증 9차 확정)**: 잠금·상태 파일의 수동 rm 안내 금지 — 유일 공식 표면은
+  `scope-map <repo> force-unlock`(.funlock 하 재판독→격리[rename, 감사 흔적 보존]. .funlock은 childClaim과 forceUnlock이 '실제로
+  취득'하는 공용 mutex — 선점 전이·격리 작업 전체가 같은 잠금 아래 실행돼 검증→격리 사이에 새 잠금·상태가
+  생기지 않는다. 잔재 회수는 unlink가 아니라 고유 격리명으로의 원자 이동이며, 이동 성공자만 취득을 시도하고
+  이동해 온 파일을 재검증한다 — 오탈취는 즉시 원위치 복원+보고 후 물러나며, 복원 rename이 새 취득을
+  덮는 창은 '취득 직후 read-back'+'임계구역의 모든 상태 변경 직전 funlock 소유 재검증(fencing)'이
+  대부분 검출하며, funlock을 잃은 주체는 다음 상태 변경 '검증 시점'에 물러난다(검증 통과~쓰기의 시스템콜
+  간극은 아래 보장 수준 참조 — '차단'이 아니라 '검출·물러남'이 정확한 계약이다).
+  **보장 수준(명문)**: rs 기록(writeRs)도 같은 funlock 아래에서 runId 확인+교체를 수행한다. 파일시스템
+  프리미티브(wx·rename·unlink)만으로는 '검증과 쓰기'를 단일 원자 연산으로 묶을 수 없으므로, 검증 통과와
+  해당 쓰기 사이의 시스템콜 간극은 남는다 — 이는 저장 계층 fencing token이나 OS 배타 잠금 없이는 어떤
+  파일 기반 잠금(업계 표준 구현 포함)도 공유하는 한계이며, 본 설계는 그 간극의 발생 조건을 '복수의 수동
+  force-unlock이 stale 스냅샷으로 동시 실행되고 그 마이크로초 창에 선점이 겹치는 3자 경합'으로 좁히고,
+  발생 시에도 잃은 쪽은 다음 검증에서 물러난다. 다만 이는 정상 협력 경로의 수렴 성질이며, 명시 승인된 강제복구 경합에서는 stale 기록 가능성을 배제하지 않고 후속 상태 판독·복구(표면화→회수)로 수렴한다 — 저장 계층 보장이 아니다.
+  이 이상의 보장이 필요해지면 네이티브 OS 잠금 의존성 도입이 선행 조건이다(현 배포 모델에선 비채택)[정상 협력 경로에서 오격리 방지 — 예외 경합은
+  표면화·회수로 수렴]. 죽은 funlock 잔재는
+  force-unlock이 재확인 후 자체 회수하고, 손상 funlock은 --confirm-corrupt 승인 격리[탈출구]). 승인 사다리:
+  죽은 보유자(dead-valid)=즉시 / 손상(invalid)=`--confirm-corrupt`(활성 작업 부재를 운영자가 확인 — '정확히
+  1회' 계약의 책임이 이 승인 경로에서 운영자로 이전) / pid 판별 불가(owner-unverified)=`--confirm-owner-dead`
+  (OS 수준 프로세스 부재 확인 — 영구 정지 탈출구) / alive·unreadable=항상 거부. 손상 run-state는 수동
+  bootstrap도 자동 교체하지 않는다(활성 작업자 병존 차단). childClaim은 활성 funlock을 존중한다.
 - **P2** patch pipeline 구현(활성화는 P3b cutover와 동시 — 1-30): 로컬 prepared WAL+저장소 decisions/ 독립 파일(1-19)·CAS
   재설계(1-1)·②b·신설 op 스키마(§3)·patch/decision 계층 마이그레이션(op 변환표)·5상태 분류기·apply별 로컬
   스냅샷 보관(1-18 재료).

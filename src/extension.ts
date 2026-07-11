@@ -733,6 +733,20 @@ function bridgeLib(): any | null {
     return null;
   }
 }
+// P1: Project MAP 비차단 bootstrap 기동 — 배포 런타임(map-bootstrap.js) 경유. 2트랙 게이트는 모듈 내부
+// 최선행(scoutMode!=="on"→무동작)이라 여기선 존재·버전만 가드. 부재/구버전=정직한 degraded 고지(조용한 무시 금지).
+function trySpawnMapBootstrap(ws: string): void {
+  try {
+    const mb = require(path.join(BRIDGE_DIR, "map-bootstrap.js"));
+    if (typeof mb.maybeSpawnBootstrap !== "function") throw new Error("old-runtime");
+    // 동의 영속(1차 검증 #1): 모달 승인 경로에서만 이 함수가 호출되므로 여기서 표식 기록 — 이후 훅 자동 경로가 열린다.
+    const sig = typeof mb.parentSignals === "function" ? mb.parentSignals(ws) : null;
+    if (sig && typeof mb.grantConsent === "function") mb.grantConsent(sig.repo, "dashboard-toggle");
+    mb.maybeSpawnBootstrap(ws);
+  } catch {
+    vscode.window.showWarningMessage(tE("Project MAP 자동 생성 모듈이 아직 배포되지 않았어요(구버전 브릿지) — 브릿지 업데이트 후 다시 켜거나 수동으로: node scripts/scope-map.js <저장소> bootstrap. 그 외 3트랙 기능은 정상 동작합니다.", "The Project MAP auto-creation module is not deployed yet (old bridge runtime) — update the bridge and re-enable, or run manually: node scripts/scope-map.js <repo> bootstrap. All other 3-track features keep working."));
+  }
+}
 function loadBaseDirectiveSafe(): { verifyBaseline: string; transmit: string; rejudge: string; overridden: boolean } {
   try {
     const lib = bridgeLib();
@@ -2134,6 +2148,22 @@ class Dashboard {
           // 저장 전 상태 — 3트랙 안내·연결 점검(ping)은 '꺼짐→켜짐 전환'에만(라벨 '켤 때 1회'와 실동작 일치.
           // 2026-07-09 실측: 켜진 상태의 매 저장마다 ping이 나가 장부에 중복 기록 — 전환 게이트로 교정).
           const prevScoutOn = (() => { try { return loadContract(dashboardWorkspace(), slotLang).scoutMode === "on"; } catch { return false; } })();
+          const wantScoutOn = normScoutMode({ scoutMode: m.scoutMode }) === "on";
+          void (async () => {
+          // P1 informed consent(MAP-V2-DESIGN 1-23 — 설계검증: 동의가 자동 생성보다 앞서야 함): off→on 전환은
+          // 저장 전에 계속/취소 모달. 취소=설정 미저장+기동 0(사후 토스트는 동의가 아님).
+          if (wantScoutOn && !prevScoutOn) {
+            const goBtn = tE("켜고 계속", "Turn on & continue");
+            const pick0 = await vscode.window.showWarningMessage(tE(
+              "3트랙(정찰)을 켭니다 — 켜면 이 컴퓨터 안에서 다음이 자동으로 일어납니다:\n\n• 정찰 대상 저장소 안에 구조 지도 폴더(project-map/)가 만들어집니다(결정론 파일 스캔 — AI 호출·외부 전송 없음).\n• 지도가 없으면 대화를 막지 않고 백그라운드에서 생성됩니다.\n\n취소하면 설정은 저장되지 않습니다.",
+              "Turning on 3-track (recon) — with it on, the following happens on this machine automatically:\n\n• A structure-map folder (project-map/) is created inside the scout target repository (deterministic file scan — no AI calls, no network).\n• If no map exists, it is created in the background without blocking your conversation.\n\nCancel and nothing is saved."),
+              { modal: true }, goBtn);
+            if (pick0 !== goBtn) {
+              vscode.window.showInformationMessage(tE("취소됨 — 설정은 저장되지 않았습니다.", "Cancelled — settings were not saved."));
+              this.panel?.webview.postMessage({ type: "saveResult", target: "contract", ok: false });
+              return;
+            }
+          }
           const ok = saveContract(dashboardWorkspace(), {
             claude: Array.isArray(m.claude) ? m.claude : [],
             codex: Array.isArray(m.codex) ? m.codex : [],
@@ -2148,10 +2178,11 @@ class Dashboard {
           //  키 없음 → 경고 모달 + [등록하러 가기(고급설정 이동)] / [알겠습니다]
           //  키 있음 → 실제 연결 점검(ping 1회 — PRIVACY에 전송 지점으로 명시) 후 정상/실패를 사실대로.
           // ⚠ 문구 정직성: 실측(D5)상 '키 없음=효과 미비'가 아니라 '정찰 미실행=효과 미비'가 사실 — 경고문은 그 사실 기준.
-          if (ok && normScoutMode({ scoutMode: m.scoutMode }) === "on" && !prevScoutOn) {
+          if (ok && wantScoutOn && !prevScoutOn) {
             // 대상 확인 스텝(2026-07-10 구조 해법 — 발원지 차단): 세션 폴더가 git이 아니고 대상 미지정이면,
             // '정찰이 이 폴더만 본다'는 사실을 켜는 순간에 확인시키고 원클릭 지정 경로를 준다(고지-only 아님).
-            void (async () => {
+            // P1: MAP 기동은 이 스텝 완료 후(await 직렬화 — 새 대상을 고르기 전에 이전 폴더에 MAP 생성 방지).
+            await (async () => {
               const ws2 = dashboardWorkspace();
               if (!ws2) return;
               const modalLang: Lang = slotLang || loadLangExt(); // 방금 저장한 슬롯과 동일 기준(경계 갈림 방지 — Codex 반례)
@@ -2170,6 +2201,7 @@ class Dashboard {
                 if (sel && sel[0]) { await setScoutTargetFromUi(ws2, sel[0].fsPath, modalLang); this.post(); }
               }
             })().catch(() => { /* 확인 스텝 실패가 저장 흐름을 못 막음 */ });
+            { const wsB = dashboardWorkspace(); if (wsB) trySpawnMapBootstrap(wsB); } // P1: consent+대상 확정 후 비차단 기동(2트랙 게이트는 모듈 내부 최선행)
             if (!readDeepseekView().hasKey) {
               const go = tE("등록하러 가기", "Register key");
               vscode.window.showWarningMessage(tE(
@@ -2200,6 +2232,7 @@ class Dashboard {
           }
           this.post();
           this.panel?.webview.postMessage({ type: "saveResult", target: "contract", ok });
+          })();
         }
         if (m?.type === "ledgerAct" && m.sig) {
           // MAP 장부 개입(⑤ 역할 전환) — 승인 큐가 아니라 선택적 오버라이드: 고정/차단(+해제)은 관측 장부 이벤트로,

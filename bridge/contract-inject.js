@@ -80,6 +80,10 @@ process.stdin.on("end", () => {
     if (c.verifyMode && c.verifyMode !== "off") parts.push(buildVerifyDirective(c.verifyMode));
     // 탐색(3트랙) 자동 지시 — 지도 없음/낡음일 때 그 상태에 1회만(상태 서명 기반·advisory). 실패해도 훅을 막지 않음.
     try { const sd = buildScoutDirective(ws, c); if (sd) parts.push(sd); } catch { /* advisory */ }
+    // P1: Project MAP 비차단 bootstrap — 훅은 유계 신호+상태 고지(1회)+detach 기동만(실행·전수 판독 금지:
+    // MAP-V2-DESIGN 1-3). 2트랙 게이트는 hookTick 내부 최선행(scoutMode!=='on'→즉시 null — 파일 0·spawn 0).
+    // 구버전 브릿지(map-bootstrap.js 부재)·실패는 advisory(훅을 막지 않음).
+    try { const adv = require("./map-bootstrap.js").hookTick(ws); if (adv) parts.push(adv); } catch { /* advisory */ }
   } catch {
     parts = [];
   }

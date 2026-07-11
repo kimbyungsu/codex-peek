@@ -4,4 +4,4 @@
  * 사용: node scripts/scope-map.js <repo> [inventory|init|status|render|migrate]
  */
 const path = require("path");
-process.exit(require(path.join(__dirname, "..", "bridge", "map-runtime.js")).runCli(process.argv[2], process.argv[3]));
+process.exit(require(path.join(__dirname, "..", "bridge", "map-runtime.js")).runCli(process.argv[2], process.argv[3], process.argv.slice(4)));
