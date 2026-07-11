@@ -357,7 +357,7 @@
    topology는 관측 초안이며 기존 MAP.md 확정층 권위 불침. 다섯 편집 실동작 전부 후속(v1b: propose/approve/
    decisions.jsonl 배선·큐는 wsKey+branch 로컬·approve에 payload 사본+expectedMapHashAfter / v2: 승인 경로
    단일화 이관·adopt·refresh[rename/merge 제안]·신선도 판정기[verifiedHead·anchor 지문]·slice 동봉).
-   잠금: tests/project-map.test.js(94단언 — 구현 검증 9왕복[실패 8회 전부 수용] 반례: 빈 payload·복원 권한 상승·
+   잠금: tests/project-map.test.js(96단언 — 구현 검증 9왕복+마감 1왕복[실패 9회 전부 수용] 반례: 빈 payload·복원 권한 상승·
    approve=validatePatch 전체 통과 정규화 사본+patchId 결합+opHash 재계산·set_state 필드 CAS·집합 배열 전체
    정렬[anchor 전키·semanticUnreadable]·inventory 수치+문자열 배열 원소·주석 오탐·side-effect import·status
    표면+검증이 파생 계산보다 먼저·동시 init=병렬 프로세스 spawn[성공 정확히 1·잔존 잠금 0]·부재/손상/읽기실패

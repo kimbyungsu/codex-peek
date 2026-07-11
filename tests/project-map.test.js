@@ -225,6 +225,10 @@ console.log("[8] CLI 끝-끝 — init 1회성·draft 강제·status·render·수
   ok(inv.status === 0 && /동적 미상 1/.test(inv.stdout), "인벤토리 — 동적 require를 '미상'으로 정직 집계(조용한 오해석 금지)");
   ok(/외부\/별칭 1/.test(inv.stdout), "외부 패키지는 버리지 않고 셈(Codex 지적)");
   ok(/regex 스캔/.test(inv.stdout) && !/의미 해석/.test(inv.stdout), "명칭 하향 — '의미 해석'이 아니라 'regex 스캔'(파싱 보장 아님)");
+  {
+    const st = run("status");
+    ok(st.status === 0 && /topology 없음|No topology/.test(st.stdout), "부재 → status가 '없음' 안내+exit 0(3분기: absent — 마감 검증 지적: 문서가 테스트 범위 과장)");
+  }
   const init = run("init");
   ok(init.status === 0 && /draft topology 생성/.test(init.stdout) && /관측 초안/.test(init.stdout), "init — draft 생성+권위 불침 고지");
   const topo = JSON.parse(fs.readFileSync(path.join(repo, "project-map", "topology.json"), "utf8"));
@@ -276,6 +280,11 @@ console.log("[8] CLI 끝-끝 — init 1회성·draft 강제·status·render·수
   ok(stBad.status === 1 && /손상|corrupted/.test(stBad.stderr), "손상 topology → status가 '없음' 아닌 손상으로 구분+exit 1");
   ok(run("init").status === 1, "손상 상태에서도 init은 덮어쓰지 않음(파괴 금지 — 수동 확인 유도)");
   ok(run("render").status === 1, "손상 상태 render 중단(낡은/깨진 정본으로 뷰 재생성 금지)");
+  // 3분기의 세 번째: 비-ENOENT 읽기 실패(EISDIR — 파일 자리에 디렉터리) → 부재와 구분된 안내
+  fs.rmSync(path.join(repo, "project-map", "topology.json"));
+  fs.mkdirSync(path.join(repo, "project-map", "topology.json"));
+  const stDir = run("status");
+  ok(stDir.status === 1 && /읽기 실패|Failed to read/.test(stDir.stderr), "비-ENOENT 읽기 실패 → '없음' 아닌 읽기 실패 안내+exit 1(3분기: unreadable)");
   try { fs.rmSync(repo, { recursive: true, force: true }); } catch { /* 무해 */ }
 }
 
