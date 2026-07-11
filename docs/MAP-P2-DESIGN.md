@@ -124,10 +124,13 @@
 ```
 { schema: "map-decision-v2", decisionId, mapId, patchId, opHash,
   patch: 정규화 MapPatchV2 사본(localOrigin 없음 — 이식 가능),
-  actor: {kind:"auto"} | {kind:"verifier", resultFp} | {kind:"user-choice", cardId?}
+  actor: {kind:"auto"} | {kind:"verifier", resultFp} | {kind:"user-choice", cardId(필수 — 카드 ID=선택 레코드 ID 단일 식별자, 구현 6차)}
        | {kind:"user-choice-delegated", policyId},
   classification: "auto"|"verifier-resolved"|"intent-choice",
   resolution: {outcome:"applied", 해소 증거 참조(verifier resultFp | 선택 레코드 id | auto)},  ← 2차 #13
+  // 선택 결속(구현 6차 확정): intent-choice는 actor.cardId 필수·resolution.evidenceRef===actor.cardId·
+  // 정책 op면 patch.authorizationRefs[{kind:user-choice}]에 같은 ref 실존. verifier-resolved는
+  // verdictFp=actor.resultFp=resolution.evidenceRef 삼중 일치(대칭 계약).
   preCutover?: true,
   verification: VerificationBasis, evidenceFps: [{ref, contentHash}], verdict?: VerifierResultRef,
   audit: { ts, topologyBeforeHash, topologyAfterHash, mapMdAfterHash, authorityHashAfter,

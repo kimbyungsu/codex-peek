@@ -12,7 +12,7 @@
  * 생성 뷰(MAP.md)를 분리한다(같은 구조를 두 문서에 사람이 유지하면 한쪽이 반드시 낡는다 — HTML 미러 실증).
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PATCH_OPS = exports.EVIDENCE_KINDS = exports.ANCHOR_KINDS = exports.RELATIONS = exports.ROLES = exports.ENTITY_TYPES = exports.CONFIDENCES = exports.IMPLEMENTATIONS = exports.LIFECYCLES = exports.FRESHNESS_NOTE_V2 = exports.FRESHNESS_NOTE_V1_DEFAULT = exports.MAP_SCHEMA_VERSION = void 0;
+exports.PAYLOAD_KEYS_V2 = exports.READSET_RULES = exports.AUTHZ_KINDS = exports.PATCH_OPS_V2 = exports.POLICY_OPS_V2 = exports.PROPOSAL_ONLY_OPS_V2 = exports.TOPOLOGY_OPS_V2 = exports.FREE_FIELD_MAX_DEPTH = exports.PATCH_OPS = exports.EVIDENCE_KINDS = exports.ANCHOR_KINDS = exports.RELATIONS = exports.ROLES = exports.ENTITY_TYPES = exports.CONFIDENCES = exports.IMPLEMENTATIONS = exports.LIFECYCLES = exports.FRESHNESS_NOTE_V2 = exports.FRESHNESS_NOTE_V1_DEFAULT = exports.MAP_SCHEMA_VERSION = void 0;
 exports.validateTopology = validateTopology;
 exports.validateTopologyV1 = validateTopologyV1;
 exports.validateNode = validateNode;
@@ -30,6 +30,28 @@ exports.recoveryDecision = recoveryDecision;
 exports.dirtyFpFilter = dirtyFpFilter;
 exports.renderMapMd = renderMapMd;
 exports.mapMdMatches = mapMdMatches;
+exports.canonicalJsonOf = canonicalJsonOf;
+exports.deepShapeOk = deepShapeOk;
+exports.validatePatchBasis = validatePatchBasis;
+exports.isPolicyOpV2 = isPolicyOpV2;
+exports.isProposalOnlyOpV2 = isProposalOnlyOpV2;
+exports.validatePatchV2 = validatePatchV2;
+exports.validateIntentPolicy = validateIntentPolicy;
+exports.validatePolicyRevocation = validatePolicyRevocation;
+exports.effectivePolicyFrontier = effectivePolicyFrontier;
+exports.policyFrontierHashOf = policyFrontierHashOf;
+exports.validateDecisionV2 = validateDecisionV2;
+exports.canonicalPatchV2 = canonicalPatchV2;
+exports.opHashV2Of = opHashV2Of;
+exports.targetIdsOfPatch = targetIdsOfPatch;
+exports.adpOf = adpOf;
+exports.adpHashOf = adpHashOf;
+exports.decisionIndexHashOf = decisionIndexHashOf;
+exports.authorityHashOf = authorityHashOf;
+exports.decisionContextHashOf = decisionContextHashOf;
+exports.decisionIndexHashOfState = decisionIndexHashOfState;
+exports.effectiveConfidenceOf = effectiveConfidenceOf;
+exports.graphCoverageEffective = graphCoverageEffective;
 exports.MAP_SCHEMA_VERSION = 2; // v2(P0.5): mapId 세대 정체성·decisionLocks·provenance·description — MAP-V2-DESIGN.md §3
 // v1 기본 신선도 문구(마이그레이션이 정확 일치 시에만 v2 문구로 교체 — 임의 사용자 문구는 보존: P0.5 설계검증 #5)
 exports.FRESHNESS_NOTE_V1_DEFAULT = "신선도 판정 미지원(v1 — verifiedHead·내용 지문 판정기는 후속)";
@@ -771,5 +793,984 @@ function renderMapMd(t) {
 // 생성 뷰 수동 수정 탐지 — '전문' 비교(머리말 지문만 보면 본문 낙서를 놓침: 검증 반례).
 function mapMdMatches(md, t) {
     return String(md || "") === renderMapMd(t);
+}
+// ═══════════════════════════════════════════════════════════════════════════════
+// P2 patch pipeline 코어(순수) — 설계 정본 MAP-P2-DESIGN.md(사전검증 9차 확정)의 §C·§D·§E 구현.
+// v1 patch 계층(PATCH_OPS·validatePatch·validateDecision·policyTier)은 동결 — v2는 전부 신규 이름(§I).
+// fs·시계 없음: 파일 지문·현재 시각이 필요한 검사는 호출부(bridge/map-pipeline.js)가 값을 주입한다.
+// ═══════════════════════════════════════════════════════════════════════════════
+// ── 공용: canonical 직렬화·도메인 분리 해시(§E — 구분자는 실제 NUL 바이트) ──────────
+const sortKeysDeep = (v) => {
+    if (Array.isArray(v))
+        return v.map(sortKeysDeep);
+    if (v && typeof v === "object") {
+        const o = Object.create(null); // own "__proto__" 키 소실 방지(v1 canonical과 동일)
+        for (const k of Object.keys(v).sort())
+            o[k] = sortKeysDeep(v[k]);
+        return o;
+    }
+    return v;
+};
+function canonicalJsonOf(v) { return JSON.stringify(sortKeysDeep(v)); }
+// 무사망 계약(구현 1차 #1): 검증기가 통과시킨 값은 재귀 정규화(opHashOf·canonicalJsonOf)가 처리 가능해야
+// 한다 — 자유 확장을 허용하는 필드(predicateExpr 등)는 깊이·크기를 비재귀로 상한 검사한다.
+exports.FREE_FIELD_MAX_DEPTH = 16;
+function deepShapeOk(v, maxDepth) {
+    const stack = [{ v, d: 0 }];
+    let visited = 0;
+    while (stack.length) {
+        const { v: cur, d } = stack.pop();
+        if (++visited > 10000)
+            return false; // 항목 수 상한(폭 폭주)
+        if (d > maxDepth)
+            return false;
+        if (cur === null)
+            continue;
+        const ty = typeof cur;
+        if (ty === "object") {
+            const proto = Object.getPrototypeOf(cur);
+            if (!Array.isArray(cur) && proto !== Object.prototype && proto !== null)
+                return false; // plain object만(Date·Map 등 거부)
+            const vals = Array.isArray(cur) ? cur : Object.values(cur);
+            for (const x of vals)
+                stack.push({ v: x, d: d + 1 });
+        }
+        else if (ty === "string" || ty === "boolean")
+            continue;
+        else if (ty === "number") {
+            if (!Number.isFinite(cur))
+                return false;
+        } // NaN·Infinity 거부
+        else
+            return false; // bigint·symbol·undefined·function — JSON 비호환(2차 #1: 검증 통과 후 직렬화 사망 차단)
+    }
+    return true;
+}
+const NUL = "\u0000";
+function domHash(domain, body) {
+    return require("crypto").createHash("sha1").update(domain + NUL + body, "utf8").digest("hex");
+}
+// ── op 21종(정본 §3 — 기존 7 유지+개명 1+신설 10+정책 3) ──────────────────────────
+exports.TOPOLOGY_OPS_V2 = [
+    "add_node", "add_edge", "set_state", "add_anchor", "add_evidence", "add_condition", "change_relation",
+    "split_node", "split_edge", "merge_node", "merge_edge", "widen", "narrow", "supersede",
+    "change_steward", "change_authority", "rewrite_label",
+];
+// proposal-only(§C-2): apply 대상 아님 — classify까지만, 결론이 하나면 파생 set_state patch가 apply를 탄다.
+exports.PROPOSAL_ONLY_OPS_V2 = ["tombstone_candidate"];
+exports.POLICY_OPS_V2 = ["create_intent_policy", "supersede_intent_policy", "revoke_intent_policy"];
+exports.PATCH_OPS_V2 = [...exports.TOPOLOGY_OPS_V2, ...exports.PROPOSAL_ONLY_OPS_V2, ...exports.POLICY_OPS_V2];
+exports.AUTHZ_KINDS = ["user-choice", "intent-decision", "policy-ref"]; // 정책 op 전용 — EVIDENCE_KINDS와 별도(§C-1)
+exports.READSET_RULES = {
+    add_node: { T: "forbidden", E: "required", A: "forbidden", N: "required", P: "conditional", X: "forbidden" },
+    add_edge: { T: "required", E: "required", A: "required", N: "required", P: "conditional", X: "required" },
+    set_state: { T: "required", E: "required", A: "forbidden", N: "forbidden", P: "conditional", X: "required" },
+    add_anchor: { T: "required", E: "required", A: "forbidden", N: "optional", P: "conditional", X: "required" },
+    add_evidence: { T: "required", E: "required", A: "forbidden", N: "forbidden", P: "conditional", X: "required" },
+    add_condition: { T: "required", E: "required", A: "forbidden", N: "forbidden", P: "conditional", X: "required" },
+    change_relation: { T: "required", E: "required", A: "required", N: "required", P: "conditional", X: "required" },
+    tombstone_candidate: { T: "required", E: "required", A: "required", N: "required", P: "conditional", X: "required" },
+    split_node: { T: "required", E: "required", A: "required", N: "required", P: "conditional", X: "required" },
+    split_edge: { T: "required", E: "required", A: "required", N: "required", P: "conditional", X: "required" },
+    merge_node: { T: "required", E: "required", A: "required", N: "forbidden", P: "conditional", X: "required" },
+    merge_edge: { T: "required", E: "required", A: "required", N: "forbidden", P: "conditional", X: "required" },
+    widen: { T: "required", E: "required", A: "optional", N: "required", P: "conditional", X: "required" },
+    narrow: { T: "required", E: "required", A: "optional", N: "required", P: "conditional", X: "required" },
+    supersede: { T: "required", E: "required", A: "required", N: "required", P: "conditional", X: "required" },
+    change_steward: { T: "required", E: "required", A: "forbidden", N: "forbidden", P: "conditional", X: "required" },
+    change_authority: { T: "required", E: "required", A: "optional", N: "forbidden", P: "conditional", X: "required" },
+    rewrite_label: { T: "required", E: "required", A: "forbidden", N: "forbidden", P: "conditional", X: "required" },
+    create_intent_policy: { T: "forbidden", E: "forbidden", A: "forbidden", N: "required", P: "required", X: "forbidden" },
+    supersede_intent_policy: { T: "forbidden", E: "forbidden", A: "forbidden", N: "forbidden", P: "required", X: "forbidden" },
+    revoke_intent_policy: { T: "forbidden", E: "forbidden", A: "forbidden", N: "forbidden", P: "required", X: "forbidden" },
+};
+const PATCH_V2_KEYS = ["schema", "patchId", "mapId", "basis", "baseMapHash", "baseAuthorityHash", "baseDecisionContextHash", "baseDirtyFp", "operation", "targetId", "targetIds", "targetPolicyId", "targetPolicyIds", "payload", "readSet", "evidence", "authorizationRefs", "rationale", "detectedBy", "provider"];
+const READSET_KEYS = ["targets", "files", "adjacency", "negative", "policies", "decisionIndex"];
+exports.PAYLOAD_KEYS_V2 = {
+    add_node: ["node"], add_edge: ["edge"], set_state: ["to", "expect"], add_anchor: ["anchor"],
+    add_evidence: ["evidence"], add_condition: ["condition"], change_relation: ["to", "expect", "inverse"],
+    tombstone_candidate: ["expect"],
+    split_node: ["newNodes", "edgeReroute"], split_edge: ["newEdges"],
+    merge_node: ["survivorId", "absorbed", "alias"], merge_edge: ["survivorId", "absorbed"],
+    widen: ["additions", "expect"], narrow: ["removals", "expect", "retain"],
+    supersede: ["successorId", "expect"],
+    change_steward: ["to", "expect"], change_authority: ["to", "expect"], rewrite_label: ["to", "expect"],
+    create_intent_policy: ["policy"], supersede_intent_policy: ["policy"], revoke_intent_policy: ["revocation"],
+};
+const TARGET_SHAPE = {
+    add_node: "none", add_edge: "none", set_state: "targetId", add_anchor: "targetId",
+    add_evidence: "targetId", add_condition: "targetId", change_relation: "targetId",
+    tombstone_candidate: "targetId", split_node: "targetId", split_edge: "targetId",
+    merge_node: "targetIds", merge_edge: "targetIds", widen: "targetId", narrow: "targetId",
+    supersede: "targetId", change_steward: "targetId", change_authority: "targetId", rewrite_label: "targetId",
+    create_intent_policy: "none", supersede_intent_policy: "targetPolicyIds", revoke_intent_policy: "targetPolicyId",
+};
+// add_edge=생성 op — 대상 필드 금지(§C-1 원문). from/to의 T는 readSet.targets가 담당.
+const SHA1_RE = /^[0-9a-f]{40}$/;
+const OID_RE = /^[0-9a-f]{40}$|^[0-9a-f]{64}$/; // git OID: sha1 40 | sha256 64
+function isFp(v) { return typeof v === "string" && SHA1_RE.test(v); }
+function validatePatchBasis(b) {
+    const errs = [];
+    if (!b || typeof b !== "object")
+        return ["basis가 객체가 아님"];
+    const o = b;
+    if (o.kind === "git") {
+        unknownKeys(o, ["kind", "ref", "baseHead", "oidFormat"], "basis(git)", errs);
+        if (o.oidFormat !== "sha1" && o.oidFormat !== "sha256")
+            errs.push("basis: oidFormat은 sha1|sha256");
+        const oidLen = o.oidFormat === "sha256" ? 64 : 40;
+        if (typeof o.baseHead !== "string" || !new RegExp(`^[0-9a-f]{${oidLen}}$`).test(o.baseHead))
+            errs.push(`basis: baseHead는 ${String(o.oidFormat)} OID(${oidLen}hex) 전체여야`);
+        const r = o.ref;
+        if (!r || typeof r !== "object")
+            errs.push("basis: ref 필요({type:branch,name}|{type:detached,head})");
+        else if (r.type === "branch") {
+            unknownKeys(r, ["type", "name"], "basis.ref", errs);
+            if (typeof r.name !== "string" || !r.name)
+                errs.push("basis.ref: branch name 필요");
+        }
+        else if (r.type === "detached") {
+            unknownKeys(r, ["type", "head"], "basis.ref", errs);
+            if (typeof r.head !== "string" || !new RegExp("^[0-9a-f]{" + oidLen + "}$").test(r.head))
+                errs.push("basis.ref: detached head는 " + String(o.oidFormat) + " OID(" + oidLen + "hex)여야(1차 #4 — oidFormat 결속)");
+        }
+        else
+            errs.push("basis.ref.type은 branch|detached");
+    }
+    else if (o.kind === "historyless") {
+        unknownKeys(o, ["kind", "basisFp", "inventoryFp"], "basis(historyless)", errs);
+        if (!isFp(o.basisFp) || !isFp(o.inventoryFp))
+            errs.push("basis: basisFp·inventoryFp는 sha1 40hex");
+    }
+    else
+        errs.push("basis.kind는 git|historyless");
+    return errs;
+}
+function validateReadSetShape(rs, op, errs) {
+    if (!rs || typeof rs !== "object" || Array.isArray(rs)) {
+        errs.push("readSet: 객체여야");
+        return;
+    }
+    const o = rs;
+    unknownKeys(o, READSET_KEYS, "readSet", errs);
+    const rules = exports.READSET_RULES[op];
+    const cat = (name, present, shapeOk) => {
+        const rule = rules[name];
+        if (rule === "forbidden" && present)
+            errs.push(`readSet: ${name} 금지(op=${op} — §D)`);
+        if (rule === "required" && !present)
+            errs.push(`readSet: ${name} 필수(op=${op} — §D)`);
+        if (present && !shapeOk)
+            errs.push(`readSet: ${name} 형식 위반`);
+        // conditional(◐)의 필수 승격은 ②b(semantic — topology·frontier 입력 필요) 소관: 여기선 형식만.
+    };
+    // canonical read-set(2차 #3): 배열은 키 정렬·중복 금지 — 같은 의미의 patch가 순서로 다른 opHash를 갖지 않게.
+    const arrOkBy = (v, f, keyOf) => Array.isArray(v) && v.length > 0 && v.every((x) => x && typeof x === "object" && f(x))
+        && new Set(v.map(keyOf)).size === v.length
+        && v.every((x, i) => i === 0 || keyOf(v[i - 1]) <= keyOf(x));
+    const arrOk = arrOkBy; // (미사용 자리 유지)
+    cat("T", o.targets !== undefined, arrOkBy(o.targets, (x) => isUuid(x.id) && isFp(x.contentHash) && Object.keys(x).length === 2, (x) => String(x.id)));
+    cat("E", o.files !== undefined, arrOkBy(o.files, (x) => typeof x.ref === "string" && !!x.ref && isFp(x.contentHash) && Object.keys(x).length === 2, (x) => String(x.ref)));
+    cat("A", o.adjacency !== undefined, arrOkBy(o.adjacency, (x) => typeof x.key === "string" && !!x.key && isFp(x.hash) && Object.keys(x).length === 2, (x) => String(x.key)));
+    cat("N", o.negative !== undefined, arrOkBy(o.negative, (x) => typeof x.kind === "string" && !!x.kind && typeof x.key === "string" && isFp(x.fingerprint) && Object.keys(x).length === 3, (x) => String(x.kind) + "\u0000" + String(x.key)));
+    const pOk = (() => {
+        const p = o.policies;
+        if (p === undefined)
+            return true;
+        if (!p || typeof p !== "object" || Array.isArray(p))
+            return false;
+        const keys = Object.keys(p);
+        if (keys.some((k) => !["refs", "frontierHash", "revocationAbsent"].includes(k)))
+            return false;
+        if (!isFp(p.frontierHash))
+            return false;
+        if (!Array.isArray(p.refs) || !p.refs.every((r) => r && typeof r === "object" && isUuid(r.policyId) && isFp(r.policyFp) && Object.keys(r).length === 2))
+            return false;
+        const refIds = p.refs.map((r) => String(r.policyId));
+        if (new Set(refIds).size !== refIds.length || !refIds.every((x, i) => i === 0 || refIds[i - 1] <= x))
+            return false; // canonical(2차 #3)
+        if (p.revocationAbsent !== undefined && (!Array.isArray(p.revocationAbsent) || !p.revocationAbsent.every(isUuid) || new Set(p.revocationAbsent).size !== p.revocationAbsent.length || !p.revocationAbsent.every((x, i) => i === 0 || p.revocationAbsent[i - 1] <= x)))
+            return false;
+        return true;
+    })();
+    cat("P", o.policies !== undefined, pOk);
+    cat("X", o.decisionIndex !== undefined, arrOkBy(o.decisionIndex, (x) => isUuid(x.id) && isFp(x.indexFp) && Object.keys(x).length === 2, (x) => String(x.id)));
+}
+function isPolicyOpV2(op) { return exports.POLICY_OPS_V2.includes(op); }
+function isProposalOnlyOpV2(op) { return exports.PROPOSAL_ONLY_OPS_V2.includes(op); }
+function validatePatchV2(p) {
+    if (!p || typeof p !== "object")
+        return ["patch가 객체가 아님"];
+    const errs = [];
+    if (p.schema !== "map-patch-v2")
+        errs.push('schema는 "map-patch-v2"여야');
+    if (!isUuid(p.patchId))
+        errs.push("patchId는 UUID여야");
+    if (!isUuid(p.mapId))
+        errs.push("mapId는 UUID여야(세대 결속 — 1-31)");
+    errs.push(...validatePatchBasis(p.basis));
+    if (!isFp(p.baseMapHash))
+        errs.push("baseMapHash는 canonical sha1(40hex)이어야");
+    if (!isFp(p.baseAuthorityHash))
+        errs.push("baseAuthorityHash는 sha1(40hex)이어야");
+    if (!isFp(p.baseDecisionContextHash))
+        errs.push("baseDecisionContextHash는 sha1(40hex)이어야");
+    if (typeof p.baseDirtyFp !== "string")
+        errs.push("baseDirtyFp 누락(감사 메타 — project-map/** 제외 지문)");
+    if (!exports.PATCH_OPS_V2.includes(p.operation)) {
+        errs.push(`operation 불량 ${show(p.operation)}`);
+        return errs;
+    }
+    const op = p.operation;
+    if (typeof p.rationale !== "string" || !p.rationale.trim())
+        errs.push("rationale 필요");
+    unknownKeys(p, PATCH_V2_KEYS, "patch", errs);
+    optStr(p.detectedBy, "patch", "detectedBy", errs);
+    optStr(p.provider, "patch", "provider", errs);
+    // 증거 이층(§C-1·정본 22차): topology/proposal op=evidence 필수·authz 금지 / 정책 op=authz 필수·evidence 금지.
+    if (isPolicyOpV2(op)) {
+        if (p.evidence !== undefined)
+            errs.push("정책 op: evidence 금지(증거 이층 — authorizationRefs로. 촉발 사건 연결은 authz.note)");
+        if (!Array.isArray(p.authorizationRefs) || !p.authorizationRefs.length)
+            errs.push("정책 op: authorizationRefs 최소 1개");
+        else
+            for (const a of p.authorizationRefs) {
+                if (!a || typeof a !== "object" || !exports.AUTHZ_KINDS.includes(a.kind) || typeof a.ref !== "string" || !a.ref) {
+                    errs.push("authorizationRefs 항목 불량(kind∈user-choice|intent-decision|policy-ref·ref 필수)");
+                    break;
+                }
+                const keys = Object.keys(a);
+                if (keys.some((k) => !["kind", "ref", "note"].includes(k)) || (a.note !== undefined && typeof a.note !== "string")) {
+                    errs.push("authorizationRefs: 미지 필드/비문자열 note(무사망 — 1차 #1)");
+                    break;
+                }
+            }
+    }
+    else {
+        if (p.authorizationRefs !== undefined)
+            errs.push("topology op: authorizationRefs 금지(정책 op 전용 — 우회 차단)");
+        if (!Array.isArray(p.evidence) || !p.evidence.length)
+            errs.push("evidence 최소 1개 필요");
+        else {
+            for (const e of p.evidence)
+                if (validateEvidence(e, "x").length) {
+                    errs.push("evidence 항목 불량");
+                    break;
+                }
+            if (!p.evidence.some((e) => e && typeof e === "object" && (e.kind === "code" || e.kind === "test" || e.kind === "config")))
+                errs.push("code/test/config 계열 증거 최소 1개(자기확인 고리 차단)");
+        }
+    }
+    // 대상 필드 union(§C-1)
+    const shape = TARGET_SHAPE[op];
+    const has = { targetId: p.targetId !== undefined, targetIds: p.targetIds !== undefined, targetPolicyId: p.targetPolicyId !== undefined, targetPolicyIds: p.targetPolicyIds !== undefined };
+    for (const [k, v] of Object.entries(has))
+        if (v && k !== shape)
+            errs.push(`${op}: ${k} 금지(대상 형태=${shape})`);
+    if (shape === "targetId" && !isUuid(p.targetId))
+        errs.push(`${op}: targetId(UUID) 필요`);
+    const sortedArr = (v, key) => v.every((x, i) => i === 0 || key(v[i - 1]) <= key(x));
+    if (shape === "targetIds" && !(Array.isArray(p.targetIds) && p.targetIds.length >= 2 && p.targetIds.every(isUuid) && new Set(p.targetIds).size === p.targetIds.length && sortedArr(p.targetIds, String)))
+        errs.push(`${op}: targetIds(UUID 2+·중복 금지·정렬 — canonical patch 계약·2차 #3) 필요`);
+    if (shape === "targetPolicyId" && !isUuid(p.targetPolicyId))
+        errs.push(`${op}: targetPolicyId(UUID) 필요`);
+    if (shape === "targetPolicyIds" && !(Array.isArray(p.targetPolicyIds) && p.targetPolicyIds.length >= 1 && p.targetPolicyIds.every(isUuid) && new Set(p.targetPolicyIds).size === p.targetPolicyIds.length && sortedArr(p.targetPolicyIds, String)))
+        errs.push(`${op}: targetPolicyIds(UUID 1+·중복 금지·정렬) 필요`);
+    // payload 화이트리스트+op별 내용(§C-2 op별 의미의 스키마 가능 부분 — 완전성 검사는 ②b)
+    const pl = (p.payload && typeof p.payload === "object" && !Array.isArray(p.payload) ? p.payload : null);
+    if (!pl) {
+        errs.push("payload는 객체여야");
+        return errs;
+    }
+    unknownKeys(pl, exports.PAYLOAD_KEYS_V2[op], "payload", errs);
+    const canonState = (v) => JSON.stringify(Object.fromEntries(Object.entries(v || {}).sort()));
+    const nonEmptyStrArr = (v) => Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === "string" && x);
+    switch (op) {
+        case "set_state": {
+            if (!stateFieldsValid(pl.to) || !stateFieldsValid(pl.expect)) {
+                errs.push("set_state: to·expect가 상태 필드(enum)여야");
+                break;
+            }
+            const tk = Object.keys(pl.to).sort().join(",");
+            const ek = Object.keys(pl.expect).sort().join(",");
+            if (tk !== ek)
+                errs.push("set_state: to·expect 필드 집합 동일(필드 CAS)");
+            else if (canonState(pl.to) === canonState(pl.expect))
+                errs.push("set_state: to=expect(무의미 변경)");
+            break;
+        }
+        case "add_node": {
+            const e = validateNode(pl.node);
+            if (e.length)
+                errs.push("add_node: node 스키마 위반 — " + e[0]);
+            break;
+        }
+        case "add_edge": {
+            const e = validateEdge(pl.edge);
+            if (e.length)
+                errs.push("add_edge: edge 스키마 위반 — " + e[0]);
+            break;
+        }
+        case "add_anchor":
+            if (validateAnchor(pl.anchor, "x").length)
+                errs.push("add_anchor: anchor 불량");
+            break;
+        case "add_evidence":
+            if (validateEvidence(pl.evidence, "x").length)
+                errs.push("add_evidence: evidence 불량");
+            break;
+        case "add_condition":
+            if (typeof pl.condition !== "string" || !pl.condition.trim())
+                errs.push("add_condition: condition(비어있지 않은 문자열) 필요");
+            break;
+        case "change_relation":
+            if (!exports.RELATIONS.includes(pl.to) || !exports.RELATIONS.includes(pl.expect) || typeof pl.inverse !== "string" || !pl.inverse)
+                errs.push("change_relation: to·expect(관계 enum)·inverse 필요");
+            else if (pl.to === pl.expect)
+                errs.push("change_relation: to=expect(무의미 변경)");
+            break;
+        case "tombstone_candidate":
+            if (!stateFieldsValid(pl.expect))
+                errs.push("tombstone_candidate: expect(현 상태) 필요");
+            break;
+        case "split_node": {
+            const nn = pl.newNodes;
+            if (!Array.isArray(nn) || nn.length < 2)
+                errs.push("split_node: newNodes 2+ 필요");
+            else {
+                for (const n of nn) {
+                    const e = validateNode(n);
+                    if (e.length) {
+                        errs.push("split_node: newNodes 항목 스키마 위반 — " + e[0]);
+                        break;
+                    }
+                }
+                if (new Set(nn.map((n) => n && n.id)).size !== nn.length)
+                    errs.push("split_node: newNodes id 중복");
+            }
+            const rr = pl.edgeReroute;
+            if (!Array.isArray(rr) || !rr.every((r) => r && typeof r === "object" && isUuid(r.edgeId) && isUuid(r.to) && Object.keys(r).length === 2))
+                errs.push("split_node: edgeReroute[{edgeId,to}] 필요(빈 배열 허용 — 전수성은 ②b)");
+            else {
+                const eids = rr.map((r) => String(r.edgeId));
+                if (new Set(eids).size !== eids.length)
+                    errs.push("split_node: edgeReroute edgeId 중복 금지");
+                const nnIds = new Set((pl.newNodes || []).map((n) => n && n.id));
+                if (!rr.every((r) => nnIds.has(String(r.to))))
+                    errs.push("split_node: edgeReroute.to는 newNodes id여야(3차 판정)");
+            }
+            if (Array.isArray(pl.newNodes) && pl.newNodes.some((n) => n && n.id === p.targetId))
+                errs.push("split_node: newNodes id는 원본 targetId와 달라야");
+            break;
+        }
+        case "split_edge": {
+            const ne = pl.newEdges;
+            if (!Array.isArray(ne) || ne.length < 2)
+                errs.push("split_edge: newEdges 2+ 필요");
+            else {
+                for (const ed of ne) {
+                    const e = validateEdge(ed);
+                    if (e.length) {
+                        errs.push("split_edge: newEdges 항목 스키마 위반 — " + e[0]);
+                        break;
+                    }
+                }
+                if (new Set(ne.map((x) => x && x.id)).size !== ne.length)
+                    errs.push("split_edge: newEdges id 중복");
+                if (ne.some((x) => x && x.id === p.targetId))
+                    errs.push("split_edge: newEdges id는 원본 targetId와 달라야");
+            }
+            break;
+        }
+        case "merge_node":
+        case "merge_edge": {
+            if (!isUuid(pl.survivorId))
+                errs.push(`${op}: survivorId(UUID) 필요`);
+            else if (!(p.targetIds || []).includes(pl.survivorId))
+                errs.push(`${op}: survivorId는 targetIds에 포함돼야`);
+            const ab = pl.absorbed;
+            const AB_KEYS = ["id", "rerouteEdgesTo", "anchorsTo", "evidenceTo"]; // 재지향표 필드 확정(무사망 — 자유 확장 금지)
+            // envelope 내부 정합(3차 #3 — topology 불요 판정은 A1 소관): absorbed id 집합 = targetIds − survivor.
+            if (Array.isArray(ab) && Array.isArray(p.targetIds) && isUuid(pl.survivorId)) {
+                const abIds = ab.map((a) => String(a.id));
+                const want = p.targetIds.filter((t) => t !== pl.survivorId).sort();
+                if (new Set(abIds).size !== abIds.length || canonicalJsonOf([...abIds].sort()) !== canonicalJsonOf(want))
+                    errs.push(`${op}: absorbed id 집합은 targetIds−survivor와 정확히 일치해야(중복 금지)`);
+            }
+            if (!Array.isArray(ab) || !ab.length || !ab.every((a) => a && typeof a === "object" && isUuid(a.id) && Object.keys(a).every((k) => AB_KEYS.includes(k)) && ["rerouteEdgesTo", "anchorsTo", "evidenceTo"].every((k) => a[k] === undefined || isUuid(a[k]))) || !ab.every((a, i) => i === 0 || String(ab[i - 1].id) <= String(a.id)))
+                errs.push(`${op}: absorbed[{id, rerouteEdgesTo?, anchorsTo?, evidenceTo?}](전부 UUID·id 정렬) 필요`);
+            else if (ab.some((a) => a.id === pl.survivorId))
+                errs.push(`${op}: absorbed에 survivor 포함 금지`);
+            if (op === "merge_node" && pl.alias !== undefined && !nonEmptyStrArr(pl.alias))
+                errs.push("merge_node: alias는 비어있지 않은 문자열 배열이어야");
+            break;
+        }
+        case "widen":
+        case "narrow": {
+            const box = (op === "widen" ? pl.additions : pl.removals);
+            if (!box || typeof box !== "object" || Array.isArray(box)) {
+                errs.push(`${op}: ${op === "widen" ? "additions" : "removals"} 객체 필요`);
+                break;
+            }
+            const bk = Object.keys(box);
+            if (!bk.length || bk.some((k) => !["anchors", "conditions"].includes(k))) {
+                errs.push(`${op}: anchors|conditions만 허용·최소 1키`);
+                break;
+            }
+            if (box.anchors !== undefined && (!Array.isArray(box.anchors) || !box.anchors.length || box.anchors.some((a) => validateAnchor(a, "x").length)))
+                errs.push(`${op}: anchors 항목 불량`);
+            if (box.conditions !== undefined && !nonEmptyStrArr(box.conditions))
+                errs.push(`${op}: conditions 항목 불량`);
+            {
+                const ex = pl.expect;
+                const exKeysOk = ex && typeof ex === "object" && !Array.isArray(ex) && Object.keys(ex).length > 0 && Object.keys(ex).every((k) => ["anchors", "conditions"].includes(k));
+                const exCondOk = !ex || ex.conditions === undefined || (Array.isArray(ex.conditions) && ex.conditions.every((c) => typeof c === "string"));
+                const exAnchOk = !ex || ex.anchors === undefined || (Array.isArray(ex.anchors) && ex.anchors.every((a) => validateAnchor(a, "x").length === 0));
+                if (!exKeysOk || !exCondOk || !exAnchOk)
+                    errs.push(`${op}: expect는 {anchors?: Anchor[], conditions?: string[]}(최소 1필드 — 현 범위 CAS 자료·2차 #2)`);
+            }
+            if (op === "narrow" && pl.retain !== undefined && !nonEmptyStrArr(pl.retain))
+                errs.push("narrow: retain은 문자열 배열이어야");
+            break;
+        }
+        case "supersede":
+            if (!isUuid(pl.successorId))
+                errs.push("supersede: successorId(UUID) 필요");
+            else if (pl.successorId === p.targetId)
+                errs.push("supersede: 자기 자신 계승 금지");
+            if (!stateFieldsValid(pl.expect))
+                errs.push("supersede: expect(구 상태) 필요");
+            break;
+        case "change_steward":
+            if (typeof pl.to !== "string" || !pl.to)
+                errs.push("change_steward: to(문자열) 필요");
+            if (typeof pl.expect !== "string")
+                errs.push("change_steward: expect(현 steward — 빈 문자열=미지정) 필요");
+            if (pl.to === pl.expect)
+                errs.push("change_steward: to=expect(무의미 변경)");
+            break;
+        case "change_authority": {
+            const rolesOk = (v) => Array.isArray(v) && v.every((r) => exports.ROLES.includes(r)) && new Set(v).size === v.length;
+            if (!rolesOk(pl.to) || !rolesOk(pl.expect))
+                errs.push("change_authority: to·expect는 roles 배열(enum·중복 금지)이어야");
+            else if (canonicalJsonOf([...pl.to].sort()) === canonicalJsonOf([...pl.expect].sort()))
+                errs.push("change_authority: to=expect(무의미 변경)");
+            break;
+        }
+        case "rewrite_label": {
+            const shapeOk = (v) => { if (!v || typeof v !== "object" || Array.isArray(v))
+                return false; const ks = Object.keys(v); return ks.length > 0 && ks.every((k) => ["label", "description", "notes"].includes(k)) && ks.every((k) => typeof v[k] === "string"); };
+            if (!shapeOk(pl.to) || !shapeOk(pl.expect))
+                errs.push("rewrite_label: to·expect는 {label|description|notes} 문자열 필드 객체");
+            else {
+                const tk = Object.keys(pl.to).sort().join(",");
+                const ek = Object.keys(pl.expect).sort().join(",");
+                if (tk !== ek)
+                    errs.push("rewrite_label: to·expect 필드 집합 동일(필드 CAS)");
+                else if (canonicalJsonOf(pl.to) === canonicalJsonOf(pl.expect))
+                    errs.push("rewrite_label: to=expect(무의미 변경)");
+                else if (pl.to.notes !== undefined && Object.keys(pl.to).length > 1)
+                    errs.push("rewrite_label: notes(edge)와 label/description(node)은 혼용 금지");
+            }
+            break;
+        }
+        case "create_intent_policy":
+        case "supersede_intent_policy": {
+            const e = validateIntentPolicy(pl.policy);
+            if (e.length)
+                errs.push(`${op}: policy 사본 불량 — ` + e[0]);
+            else {
+                const pol = pl.policy;
+                if (op === "create_intent_policy" && pol.supersedesPolicyIds !== undefined)
+                    errs.push("create_intent_policy: supersedesPolicyIds 금지(supersede op로)");
+                if (op === "supersede_intent_policy") {
+                    if (!Array.isArray(pol.supersedesPolicyIds) || !pol.supersedesPolicyIds.length)
+                        errs.push("supersede_intent_policy: policy.supersedesPolicyIds 필수(복수 head 일괄 종결)");
+                    else if (canonicalJsonOf([...pol.supersedesPolicyIds].sort()) !== canonicalJsonOf([...(p.targetPolicyIds || [])].sort()))
+                        errs.push("supersede_intent_policy: targetPolicyIds와 policy.supersedesPolicyIds 불일치");
+                }
+                if (p.mapId !== pol.mapId)
+                    errs.push(`${op}: policy.mapId가 patch.mapId와 불일치(세대 결속)`);
+            }
+            break;
+        }
+        case "revoke_intent_policy": {
+            const e = validatePolicyRevocation(pl.revocation);
+            if (e.length)
+                errs.push("revoke_intent_policy: revocation 사본 불량 — " + e[0]);
+            else if (pl.revocation.targetPolicyId !== p.targetPolicyId)
+                errs.push("revoke_intent_policy: targetPolicyId 불일치");
+            break;
+        }
+    }
+    validateReadSetShape(p.readSet, op, errs);
+    // canonical 저장 계약(4차 #1·#3): patch '자체'가 canonical이어야 한다 — 해시만 정규화하면 decision 파일
+    // 지문·WAL expectedDecisionFileAfterHash가 생산자 배열 순서에 갈라진다(C-3 '정규화 사본' 위반).
+    // 정렬 위반은 canonical 자기 동일성 검사 하나로 전부 잡고, 중복은 정렬로 안 사라지므로 별도 거부
+    // (조용한 중복 제거는 위조·입력 오류 은닉 — fail-closed).
+    if (errs.length === 0) {
+        if (hasDupSetKeys(p))
+            errs.push("집합 배열에 중복 항목(canonical key 기준) — 거부(fail-closed·4차 #3)");
+        else if (canonicalJsonOf(p) !== canonicalJsonOf(canonicalPatchV2(p)))
+            errs.push("patch가 canonical 형태가 아님(집합 배열 정렬 위반 — canonicalPatchV2와 자기 동일해야: C-3 정규화 사본 계약)");
+    }
+    return errs;
+}
+// 집합 배열의 canonical key 중복 검사(canonicalPatchV2와 같은 키 함수 공유 — 4차 #3)
+function hasDupSetKeys(p) {
+    const dup = (arr, key) => Array.isArray(arr) && new Set(arr.map((x) => key(x))).size !== arr.length;
+    const pl = (p.payload || {});
+    const entDup = (ent) => {
+        if (!ent || typeof ent !== "object")
+            return false;
+        const e = ent;
+        return dup(e.roles, String) || dup(e.anchors, keyAnchor) || dup(e.conditions, String) || dup(e.evidence, keyEvidence) || dup(e.decisionLocks, canonicalJsonOf);
+    };
+    if (dup(p.evidence, keyEvidence))
+        return true;
+    if (dup(p.authorizationRefs, ((a) => [a.kind, a.ref, a.note || ""].join("\u0000"))))
+        return true;
+    if (entDup(pl.node) || entDup(pl.edge))
+        return true;
+    if (Array.isArray(pl.newNodes) && pl.newNodes.some(entDup))
+        return true;
+    if (Array.isArray(pl.newEdges) && pl.newEdges.some(entDup))
+        return true;
+    if (dup(pl.alias, String) || dup(pl.retain, String))
+        return true;
+    if (Array.isArray(pl.to) && dup(pl.to, String))
+        return true;
+    if (Array.isArray(pl.expect) && dup(pl.expect, String))
+        return true;
+    for (const box of ["additions", "removals", "expect"]) {
+        const b = pl[box];
+        if (b && typeof b === "object" && !Array.isArray(b)) {
+            if (dup(b.anchors, keyAnchor))
+                return true;
+            if (Array.isArray(b.conditions) && b.conditions.every((x) => typeof x === "string") && dup(b.conditions, String))
+                return true;
+        }
+    }
+    return false;
+}
+const POLICY_KEYS = ["policyId", "mapId", "scope", "scopeTarget", "predicateExpr", "predicateDescription", "chosenMeaning", "exclusions", "createdFromDecision", "verification", "supersedesPolicyIds", "active"];
+function validateIntentPolicy(pol) {
+    if (!pol || typeof pol !== "object")
+        return ["policy가 객체가 아님"];
+    const errs = [];
+    if (!isUuid(pol.policyId))
+        errs.push("policyId는 UUID여야");
+    if (!isUuid(pol.mapId))
+        errs.push("policy.mapId는 UUID여야");
+    if (!["project", "subgraph", "entity"].includes(pol.scope))
+        errs.push("scope는 project|subgraph|entity");
+    if (pol.scope !== "project") {
+        if (!Array.isArray(pol.scopeTarget) || !pol.scopeTarget.length || !pol.scopeTarget.every(isUuid))
+            errs.push("entity|subgraph scope: scopeTarget(UUID 목록) 필수(1-35)");
+    }
+    else if (pol.scopeTarget !== undefined)
+        errs.push("project scope: scopeTarget 금지");
+    const pe = pol.predicateExpr;
+    if (!pe || typeof pe !== "object" || Array.isArray(pe) || !Number.isInteger(pe.version) || pe.version < 1 || typeof pe.kind !== "string" || !pe.kind)
+        errs.push("predicateExpr{version≥1,kind,...} typed 필수(자유문장 금지 — 정본 22차)");
+    if (pe && !deepShapeOk(pe, exports.FREE_FIELD_MAX_DEPTH))
+        errs.push("predicateExpr: 깊이/크기 상한 초과(무사망 계약 — 1차 #1)");
+    if (typeof pol.predicateDescription !== "string" || !pol.predicateDescription.trim())
+        errs.push("predicateDescription 필요(사람용)");
+    if (typeof pol.chosenMeaning !== "string" || !pol.chosenMeaning.trim())
+        errs.push("chosenMeaning 필요");
+    if (pol.exclusions !== undefined && (!Array.isArray(pol.exclusions) || !pol.exclusions.every((x) => typeof x === "string" && x)))
+        errs.push("exclusions는 문자열 배열이어야");
+    // 집합 의미 배열=정렬·중복 거부(1차 #3 — v1 '집합 배열 전체 정렬' 선례: 파일 자체가 canonical이어야 frontier 해시가 의미 결정론)
+    const sortedSet = (v) => Array.isArray(v) && new Set(v).size === v.length && v.every((x, i) => i === 0 || String(v[i - 1]) <= String(x));
+    if (pol.scopeTarget !== undefined && !sortedSet(pol.scopeTarget))
+        errs.push("scopeTarget은 정렬·중복 없는 목록이어야(canonical 파일 계약)");
+    if (pol.exclusions !== undefined && !sortedSet(pol.exclusions))
+        errs.push("exclusions는 정렬·중복 없는 목록이어야");
+    if (pol.supersedesPolicyIds !== undefined && !sortedSet(pol.supersedesPolicyIds))
+        errs.push("supersedesPolicyIds는 정렬·중복 없는 목록이어야");
+    if (!isUuid(pol.createdFromDecision))
+        errs.push("createdFromDecision(decisionId UUID) 필수");
+    if (pol.supersedesPolicyIds !== undefined && (!Array.isArray(pol.supersedesPolicyIds) || !pol.supersedesPolicyIds.length || !pol.supersedesPolicyIds.every(isUuid) || pol.supersedesPolicyIds.includes(pol.policyId)))
+        errs.push("supersedesPolicyIds는 UUID 목록(자기 참조 금지)이어야");
+    if (pol.active !== true)
+        errs.push("active는 true여야(비활성 정책은 파일로 만들지 않음 — 철회는 revocation)");
+    errs.push(...validateVerificationBasis(pol.verification, "policy").map((e) => e)); // 기존 엄격 검증기 재사용(1차 #5)
+    unknownKeys(pol, POLICY_KEYS, "policy", errs);
+    return errs;
+}
+function validatePolicyRevocation(r) {
+    if (!r || typeof r !== "object")
+        return ["revocation이 객체가 아님"];
+    const errs = [];
+    if (!isUuid(r.revocationId))
+        errs.push("revocationId는 UUID여야");
+    if (!isUuid(r.targetPolicyId))
+        errs.push("targetPolicyId는 UUID여야");
+    if (typeof r.reason !== "string" || !r.reason.trim())
+        errs.push("reason 필요");
+    if (!isUuid(r.createdFromDecision))
+        errs.push("createdFromDecision 필수");
+    unknownKeys(r, ["revocationId", "targetPolicyId", "reason", "createdFromDecision"], "revocation", errs);
+    return errs;
+}
+// frontier 유효 leaf(1-35·17차): active AND 자기를 supersede하는 정책 부재(successor의 이후 철회와 무관 — 영구)
+// AND 자기 대상 revocation 부재. 부활은 새 create로만.
+function effectivePolicyFrontier(policies, revocations) {
+    const superseded = new Set();
+    for (const p of policies || [])
+        for (const sid of p.supersedesPolicyIds || [])
+            superseded.add(sid);
+    const revoked = new Set((revocations || []).map((r) => r.targetPolicyId));
+    return (policies || []).filter((p) => p.active === true && !superseded.has(p.policyId) && !revoked.has(p.policyId));
+}
+// pfh: 유효 frontier의 canonical 의미 필드 전체+모든 revocation 내용(파일 손상·변조도 캐시 무효화 — §3).
+function policyFrontierHashOf(policies, revocations) {
+    const frontier = effectivePolicyFrontier(policies, revocations).map((p) => canonicalJsonOf(p)).sort();
+    const revs = (revocations || []).map((r) => canonicalJsonOf(r)).sort();
+    return domHash("pfh", JSON.stringify({ frontier, revs }));
+}
+const DECISION_V2_KEYS = ["schema", "decisionId", "mapId", "patchId", "opHash", "patch", "actor", "classification", "resolution", "preCutover", "verification", "evidenceFps", "verdictFp", "audit"];
+const AUDIT_KEYS = ["ts", "topologyBeforeHash", "topologyAfterHash", "mapMdAfterHash", "authorityHashAfter", "expectedMapHashAfter", "walRef"];
+function validateDecisionV2(d) {
+    if (!d || typeof d !== "object")
+        return ["decision이 객체가 아님"];
+    const errs = [];
+    if (d.schema !== "map-decision-v2")
+        errs.push('schema는 "map-decision-v2"여야');
+    if (!isUuid(d.decisionId))
+        errs.push("decisionId는 UUID여야");
+    if (!isUuid(d.mapId))
+        errs.push("mapId는 UUID여야");
+    if (!isUuid(d.patchId))
+        errs.push("patchId는 UUID여야");
+    unknownKeys(d, DECISION_V2_KEYS, "decision", errs);
+    // patch 사본: v1 approve 계약 승계 — 전체 통과+patchId 결합+opHash 재계산(§C-3).
+    const pc = d.patch;
+    if (!pc || typeof pc !== "object")
+        errs.push("patch(정규화 사본) 필수");
+    else {
+        if (pc.localOrigin !== undefined)
+            errs.push("decision.patch에 localOrigin 금지(이식 가능성 — §C-1)");
+        const pe = validatePatchV2(pc);
+        if (pe.length)
+            errs.push("patch 사본이 유효하지 않음(재적용 불능) — " + pe[0]);
+        else {
+            if (pc.patchId !== d.patchId)
+                errs.push("patch.patchId≠decision.patchId(다른 patch 결합 금지)");
+            if (pc.mapId !== d.mapId)
+                errs.push("patch.mapId≠decision.mapId");
+            if (opHashV2Of(pc) !== d.opHash)
+                errs.push("opHash가 canonical patch 재계산 지문(opHashV2Of)과 불일치 — 3차 #2");
+            // 사본 canonical성은 validatePatchV2의 자기 동일성 검사가 보장(4차 #1 — 비정규 사본은 위에서 이미 거부)
+            if (isProposalOnlyOpV2(pc.operation))
+                errs.push("proposal-only op(tombstone_candidate)는 decision이 될 수 없음(§C-2 — 파생 set_state로)");
+        }
+    }
+    const a = d.actor;
+    if (!a || typeof a !== "object")
+        errs.push("actor 필수");
+    else if (a.kind === "auto") {
+        if (Object.keys(a).length !== 1)
+            errs.push("actor(auto): 추가 필드 금지");
+    }
+    else if (a.kind === "verifier") {
+        if (!isFp(a.resultFp) || Object.keys(a).length !== 2)
+            errs.push("actor(verifier): resultFp(sha1) 필요");
+    }
+    else if (a.kind === "user-choice") {
+        if (Object.keys(a).some((k) => !["kind", "cardId"].includes(k)) || typeof a.cardId !== "string" || !a.cardId)
+            errs.push("actor(user-choice): cardId(비어있지 않은 문자열) 필수(6차 — 단일 식별자)");
+    }
+    else if (a.kind === "user-choice-delegated") {
+        if (!isUuid(a.policyId) || Object.keys(a).length !== 2)
+            errs.push("actor(delegated): policyId(UUID) 필요");
+    }
+    else
+        errs.push("actor.kind 불량");
+    if (!["auto", "verifier-resolved", "intent-choice"].includes(d.classification))
+        errs.push("classification은 applied 도달 3종(auto|verifier-resolved|intent-choice)만(§C-3)");
+    // 정책 op='사용자 선택의 산물만 — 자동 생성 금지'(정본 §3 표·4차 #4): intent-choice+user-choice 강제
+    // (delegated는 '기존 정책의 위임 적용'이지 새 정책 생성·종결이 아님).
+    if (d.patch && isPolicyOpV2(d.patch.operation)) {
+        if (d.classification !== "intent-choice")
+            errs.push("정책 op decision: classification=intent-choice여야(자동 생성 금지 — 정본 §3)");
+        if (!a || a.kind !== "user-choice")
+            errs.push("정책 op decision: actor=user-choice여야(사용자 선택의 산물만)");
+    }
+    // 정책 artifact 귀속(5차 #1): 파일은 '이 decision과 같은 WAL 체인'의 산물 — createdFromDecision=decisionId.
+    if (d.patch && isPolicyOpV2(d.patch.operation)) {
+        const pl2 = (d.patch.payload || {});
+        const artCfd = d.patch.operation === "revoke_intent_policy"
+            ? pl2.revocation?.createdFromDecision
+            : pl2.policy?.createdFromDecision;
+        if (artCfd !== d.decisionId)
+            errs.push("정책 artifact의 createdFromDecision이 이 decisionId와 불일치(귀속 분리 금지 — 5차 #1)");
+    }
+    // 사용자 선택 결속(5차 #2 — verifier 삼중 결속과 대칭): 카드 ID=선택 레코드 ID 단일 식별자로 확정.
+    // intent-choice decision은 actor.cardId 필수·resolution.evidenceRef=cardId, 정책 op면 patch의
+    // authorizationRefs(user-choice)에 같은 ref가 실존해야 한다 — 문자열 actor만으로 '선택이 있었다' 주장 차단.
+    if (d.classification === "intent-choice" && a && a.kind === "user-choice") {
+        const cid = a.cardId;
+        if (typeof cid !== "string" || !cid)
+            errs.push("intent-choice: actor.cardId 필수(선택 레코드 식별자)");
+        else {
+            const r0 = d.resolution;
+            if (r0 && r0.evidenceRef !== cid)
+                errs.push("intent-choice: resolution.evidenceRef=actor.cardId여야(선택 결속)");
+            if (d.patch && isPolicyOpV2(d.patch.operation)) {
+                const az = (d.patch.authorizationRefs || []);
+                if (!az.some((x) => x.kind === "user-choice" && x.ref === cid))
+                    errs.push("정책 op: authorizationRefs(user-choice)에 actor.cardId와 같은 ref 필요(선택→정책 귀속)");
+            }
+        }
+    }
+    // classification↔actor 정합(§A 해소 증거의 기록 형태): verifier-resolved↔verifier, intent-choice↔user-choice 계열, auto↔auto|delegated(정책 위임 자동 적용 — 1-35 ②).
+    if (a && typeof a === "object") {
+        if (d.classification === "verifier-resolved" && a.kind !== "verifier")
+            errs.push("verifier-resolved는 actor=verifier여야(해소 증거 결속)");
+        if (d.classification === "intent-choice" && a.kind !== "user-choice")
+            errs.push("intent-choice는 actor=user-choice여야");
+        if (d.classification === "auto" && a.kind !== "auto" && a.kind !== "user-choice-delegated")
+            errs.push("auto는 actor=auto|user-choice-delegated여야");
+    }
+    const r = d.resolution;
+    if (!r || r.outcome !== "applied" || typeof r.evidenceRef !== "string" || !r.evidenceRef.trim() || Object.keys(r).length !== 2)
+        errs.push('resolution={outcome:"applied", evidenceRef(비어있지 않음)} 필수(decisions/=applied만 — §C-3)');
+    // verifier 해소 증거 결속(1차 #6): actor.resultFp=verdictFp=resolution.evidenceRef 삼중 일치
+    if (d.classification === "verifier-resolved" && a && a.kind === "verifier") {
+        const rf = a.resultFp;
+        if (d.verdictFp === undefined || d.verdictFp !== rf)
+            errs.push("verifier-resolved: verdictFp=actor.resultFp 필수(해소 증거 결속)");
+        if (r && r.evidenceRef !== rf)
+            errs.push("verifier-resolved: resolution.evidenceRef=actor.resultFp여야");
+    }
+    if (d.preCutover !== undefined && d.preCutover !== true)
+        errs.push("preCutover는 true만(부재=cutover 후)");
+    errs.push(...validateVerificationBasis(d.verification, "decision"));
+    if (!Array.isArray(d.evidenceFps) || !d.evidenceFps.every((f) => f && typeof f === "object" && typeof f.ref === "string" && !!f.ref && isFp(f.contentHash) && Object.keys(f).length === 2))
+        errs.push("evidenceFps[{ref,contentHash}] 필요(빈 배열=정책 op만 허용)");
+    else {
+        const refs = d.evidenceFps.map((f) => f.ref);
+        if (new Set(refs).size !== refs.length || !refs.every((x, i) => i === 0 || refs[i - 1] <= x))
+            errs.push("evidenceFps: ref 정렬·중복 금지(ref당 지문 1개 — canonical)");
+        if (d.patch && !isPolicyOpV2(d.patch.operation)) {
+            if (!d.evidenceFps.length)
+                errs.push("topology op decision: evidenceFps 최소 1개");
+            // 권위 결속(3차 #1): decision의 지문 대상 = patch가 근거로 든 파일 집합과 정확히 일치 —
+            // 무관 파일 지문이 ADP에 들어가 effectiveConfidence 검사 ④를 우회하는 오염 차단.
+            const want = [...new Set((d.patch.evidence || []).map((e) => e.ref))].sort();
+            if (canonicalJsonOf(refs) !== canonicalJsonOf(want))
+                errs.push("evidenceFps ref 집합이 patch.evidence ref 집합과 불일치(권위 오염 차단 — 3차 #1)");
+        }
+    }
+    if (d.verdictFp !== undefined && !isFp(d.verdictFp))
+        errs.push("verdictFp는 sha1이어야");
+    const au = d.audit;
+    if (!au || typeof au !== "object")
+        errs.push("audit 블록 필수");
+    else {
+        unknownKeys(au, AUDIT_KEYS, "audit", errs);
+        if (typeof au.ts !== "string" || !au.ts)
+            errs.push("audit.ts 필요");
+        for (const k of ["topologyBeforeHash", "topologyAfterHash", "mapMdAfterHash", "authorityHashAfter", "expectedMapHashAfter"])
+            if (!isFp(au[k]))
+                errs.push(`audit.${k}는 sha1이어야`);
+        if (typeof au.walRef !== "string" || !au.walRef)
+            errs.push("audit.walRef 필요");
+        // 감사 해시 내부 정합(2차 #4): topologyAfterHash=expectedMapHashAfter(같은 prospective topology의 실제/예상).
+        if (isFp(au.topologyAfterHash) && isFp(au.expectedMapHashAfter) && au.topologyAfterHash !== au.expectedMapHashAfter)
+            errs.push("audit: topologyAfterHash=expectedMapHashAfter여야(WAL 선계산·guard 참조 정합)");
+        // 정책 op는 topology 무변경(§F-2): before=after(=expected)까지 전부 동일 강제.
+        if (d.patch && isPolicyOpV2(d.patch.operation) && (au.topologyBeforeHash !== au.topologyAfterHash || au.topologyBeforeHash !== au.expectedMapHashAfter))
+            errs.push("정책 op: audit의 topology 3해시(before/after/expected) 전부 동일해야(무변경 계약)");
+    }
+    return errs;
+}
+// 대상 entity 추출(projection의 targetIds — 'op가 의미적으로 읽은 entity 전체'는 X의 정의이고,
+// projection.targetIds는 '변경 대상'만: 색인의 entity 귀속 판정 재료).
+// ── canonical patch(3차 #2 — '정규화 MapPatchV2 사본' 계약의 단일 고정점) ─────────────
+// 집합 의미 배열의 정렬 규칙을 한곳에 고정한다(개별 validator 산개 시 누락 확장 위험 — 검증자 권고).
+// v1 opHashOf는 동결 — v2 해시는 이 정규화를 지난 뒤 같은 깊은 정렬 직렬화를 쓴다.
+// predicateExpr 내부 배열은 정렬하지 않는다(DSL 연산자 순서 의미 가능 — P9 전 일괄 정렬 금지: 3차 판정).
+const keyAnchor = (a) => [a.kind, a.path, a.symbol || "", a.lineHint ?? ""].join("\u0000");
+const keyEvidence = (e) => [e.kind, e.ref, e.note || ""].join("\u0000");
+const sortBy = (arr, key) => arr === undefined ? undefined : [...arr].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+function canonicalEntitySets(ent) {
+    const out = { ...ent };
+    if (Array.isArray(out.roles))
+        out.roles = [...out.roles].sort();
+    if (Array.isArray(out.anchors))
+        out.anchors = sortBy(out.anchors, keyAnchor);
+    if (Array.isArray(out.conditions))
+        out.conditions = [...out.conditions].sort();
+    if (Array.isArray(out.evidence))
+        out.evidence = sortBy(out.evidence, keyEvidence);
+    if (Array.isArray(out.decisionLocks))
+        out.decisionLocks = sortBy(out.decisionLocks, (l) => canonicalJsonOf(l));
+    return out;
+}
+function canonicalPatchV2(p) {
+    const c = JSON.parse(JSON.stringify(p));
+    if (c.targetIds)
+        c.targetIds = [...c.targetIds].sort();
+    if (c.targetPolicyIds)
+        c.targetPolicyIds = [...c.targetPolicyIds].sort();
+    if (c.evidence)
+        c.evidence = sortBy(c.evidence, keyEvidence);
+    if (c.authorizationRefs)
+        c.authorizationRefs = sortBy(c.authorizationRefs, (a) => [a.kind, a.ref, a.note || ""].join("\u0000"));
+    const rs = c.readSet;
+    if (rs && typeof rs === "object") {
+        if (rs.targets)
+            rs.targets = sortBy(rs.targets, (x) => x.id);
+        if (rs.files)
+            rs.files = sortBy(rs.files, (x) => x.ref);
+        if (rs.adjacency)
+            rs.adjacency = sortBy(rs.adjacency, (x) => x.key);
+        if (rs.negative)
+            rs.negative = sortBy(rs.negative, (x) => x.kind + "\u0000" + x.key);
+        if (rs.decisionIndex)
+            rs.decisionIndex = sortBy(rs.decisionIndex, (x) => x.id);
+        if (rs.policies) {
+            rs.policies = { ...rs.policies, refs: sortBy(rs.policies.refs, (x) => x.policyId) };
+            if (rs.policies.revocationAbsent)
+                rs.policies.revocationAbsent = [...rs.policies.revocationAbsent].sort();
+        }
+    }
+    const pl = c.payload || {};
+    if (Array.isArray(pl.newNodes))
+        pl.newNodes = sortBy(pl.newNodes.map(canonicalEntitySets), (n) => n.id);
+    if (Array.isArray(pl.newEdges))
+        pl.newEdges = sortBy(pl.newEdges.map(canonicalEntitySets), (e) => e.id);
+    if (Array.isArray(pl.edgeReroute))
+        pl.edgeReroute = sortBy(pl.edgeReroute, (r) => r.edgeId);
+    if (Array.isArray(pl.absorbed))
+        pl.absorbed = sortBy(pl.absorbed, (a) => a.id);
+    if (Array.isArray(pl.alias))
+        pl.alias = [...pl.alias].sort();
+    if (Array.isArray(pl.retain))
+        pl.retain = [...pl.retain].sort();
+    if (Array.isArray(pl.to) && pl.to.every((x) => typeof x === "string"))
+        pl.to = [...pl.to].sort(); // change_authority roles(4차 #2)
+    if (Array.isArray(pl.expect) && pl.expect.every((x) => typeof x === "string"))
+        pl.expect = [...pl.expect].sort();
+    if (pl.node && typeof pl.node === "object")
+        pl.node = canonicalEntitySets(pl.node);
+    if (pl.edge && typeof pl.edge === "object")
+        pl.edge = canonicalEntitySets(pl.edge);
+    for (const box of ["additions", "removals", "expect"]) {
+        const b = pl[box];
+        if (b && typeof b === "object" && !Array.isArray(b)) {
+            if (Array.isArray(b.anchors))
+                b.anchors = sortBy(b.anchors, keyAnchor);
+            if (Array.isArray(b.conditions) && b.conditions.every((x) => typeof x === "string"))
+                b.conditions = [...b.conditions].sort();
+        }
+    }
+    const pol = pl.policy;
+    if (pol && typeof pol === "object") {
+        if (Array.isArray(pol.scopeTarget))
+            pol.scopeTarget = [...pol.scopeTarget].sort();
+        if (Array.isArray(pol.exclusions))
+            pol.exclusions = [...pol.exclusions].sort();
+        if (Array.isArray(pol.supersedesPolicyIds))
+            pol.supersedesPolicyIds = [...pol.supersedesPolicyIds].sort();
+    }
+    return c;
+}
+function opHashV2Of(p) { return opHashOf(canonicalPatchV2(p)); }
+function targetIdsOfPatch(p) {
+    const pl = (p.payload || {});
+    // 생성물 우선 수집(1차 #2: targetId 조기 반환이 split 생성물을 누락 — 생성 entity도 provenance 귀속 대상)
+    if (p.operation === "add_node") {
+        const n = pl.node;
+        return n && typeof n.id === "string" ? [n.id] : [];
+    }
+    if (p.operation === "add_edge") {
+        const e = pl.edge;
+        return e && typeof e.id === "string" ? [e.id] : [];
+    }
+    if (p.operation === "split_node") {
+        const nn = pl.newNodes || [];
+        return [p.targetId, ...nn.map((n) => n && n.id)].filter((x) => typeof x === "string");
+    }
+    if (p.operation === "split_edge") {
+        const ne = pl.newEdges || [];
+        return [p.targetId, ...ne.map((e) => e && e.id)].filter((x) => typeof x === "string");
+    }
+    if (p.targetIds)
+        return [...p.targetIds];
+    if (p.targetId)
+        return [p.targetId];
+    return [];
+}
+function adpOf(d) {
+    return {
+        decisionId: d.decisionId, mapId: d.mapId, patchId: d.patchId, opHash: d.opHash,
+        operation: d.patch.operation, targetIds: targetIdsOfPatch(d.patch).sort(),
+        verification: d.verification, evidenceFps: [...(d.evidenceFps || [])].sort((a, b) => (a.ref < b.ref ? -1 : 1)),
+        classification: d.classification, resolutionOutcome: d.resolution.outcome,
+        ...(d.verdictFp ? { verdictFp: d.verdictFp } : {}),
+    };
+}
+function adpHashOf(proj) { return domHash("adp", canonicalJsonOf(proj)); }
+// dih: mapId 소속 유효 applied decision(정책 op 제외 — §C-3)의 projection 지문 정렬 색인.
+function decisionIndexHashOf(projectionHashes) { return domHash("dih", JSON.stringify([...projectionHashes].sort())); }
+function authorityHashOf(mapHash, decisionIndexHash) { return domHash("ah", mapHash + NUL + decisionIndexHash); }
+function decisionContextHashOf(authorityHash, policyFrontierHash) { return domHash("dch", authorityHash + NUL + policyFrontierHash); }
+function decisionIndexHashOfState(idx) {
+    if (idx.st !== "ok")
+        return null;
+    return decisionIndexHashOf(idx.projections.map(adpHashOf));
+}
+// provenance 4검사(§E): ①decisionId 실존 ②같은 mapId ③해당 entity 변경 ④evidence 지문 정합.
+// ④는 파일 접근이 필요 — 순수 계층은 fileHashOf 주입(미제공=검사 생략 금지: fail-closed로 unknown).
+function effectiveConfidenceOf(entity, mapId, idx, fileHashOf) {
+    const stored = entity.state.confidence;
+    if (stored !== "confirmed")
+        return { confidence: stored }; // candidate/unknown은 어떤 경우에도 그대로(정본 §3 수식)
+    if (idx.st === "error")
+        return { confidence: "unknown", degraded: "decision 색인 판독 실패(" + idx.error + ") — confirmed 폴백 금지" };
+    if (idx.st === "none")
+        return { confidence: "unknown", degraded: "stored confirmed인데 decision 기록 부재(provenance dangling)" };
+    const pv = entity.provenance;
+    if (!pv || !pv.decisionId)
+        return { confidence: "unknown", degraded: "confirmed인데 provenance 부재" };
+    const proj = idx.projections.find((x) => x.decisionId === pv.decisionId);
+    if (!proj)
+        return { confidence: "unknown", degraded: "provenance decision 미실존(dangling)" };
+    if (proj.mapId !== mapId)
+        return { confidence: "unknown", degraded: "provenance decision의 mapId 불일치(세대 오염)" };
+    if (!proj.targetIds.includes(entity.id))
+        return { confidence: "unknown", degraded: "provenance decision이 이 entity를 변경하지 않음" };
+    if (canonicalJsonOf(pv.basis) !== canonicalJsonOf(proj.verification))
+        return { confidence: "unknown", degraded: "provenance basis가 decision 기록과 불일치" };
+    for (const f of proj.evidenceFps) {
+        const cur = fileHashOf(f.ref);
+        if (cur === null || cur !== f.contentHash)
+            return { confidence: "unknown", degraded: "evidence 지문이 현재 상태와 불일치(" + f.ref + ")" };
+    }
+    return { confidence: "confirmed" };
+}
+// authority-aware coverage(§E 소비 계약): stored 대신 effective를 집계. draft(색인 none+confirmed 0)는
+// graphCoverage와 결과 동일 — 렌더 바이트 동일 계약의 짝.
+function graphCoverageEffective(t, idx, fileHashOf) {
+    const zero = () => ({ confirmed: 0, candidate: 0, unknown: 0 });
+    const nodes = zero(), edges = zero();
+    let degradedCount = 0;
+    for (const n of t.nodes || []) {
+        const r = effectiveConfidenceOf(n, t.mapId, idx, fileHashOf);
+        nodes[r.confidence]++;
+        if (r.degraded)
+            degradedCount++;
+    }
+    for (const e of t.edges || []) {
+        const r = effectiveConfidenceOf(e, t.mapId, idx, fileHashOf);
+        edges[r.confidence]++;
+        if (r.degraded)
+            degradedCount++;
+    }
+    return { nodes, edges, degradedCount };
 }
 //# sourceMappingURL=project-map.js.map
