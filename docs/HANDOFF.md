@@ -342,6 +342,30 @@
    문구(화살표 없음)는 후보로 안 잡힘(정확성 우선 — 병합 실기는 수동 alias로 보완).
    L2(잔여)=버킷 억제가 변경 정체성 상실·co-change 조건부
    비율 부재·자기진단 다중 형제 레포 전제·MAP 승격이 장부 판정 무시(기존 P2와 동일 항목).
+5-9. **(2026-07-10 착수) Project MAP v1 — 'draft 전용 뼈대'**(사용자 제안 '프로젝트별 전체 구조도가 다섯
+   의미 편집[분할·확대·축소·소멸·재작성]의 공통 좌표계' + 외부 평가[모범: tg-chat-engine SIGNAL-WIRING-MAP.md]
+   + 설계 사전검증 3왕복 합의). 핵심 합의: 지도는 판단 '기준'이 아니라 '좌표계·제안 표면'(판단 근거는 코드·
+   테스트·설정 증거 — 지도 자신은 증거 불가[자기확인 고리 차단]) / 정본=typed graph(topology.json — 불투명
+   UUID·entityType·roles 다중·anchors[위치=증거·힌트]·상태 4차원 분리[lifecycle/implementation/confidence+
+   freshness는 저장 안 함]) / MAP.md=생성 뷰(지문 머리말·수동 수정 탐지·표시 번호는 렌더 파생) / canonical
+   직렬화+mapHash(CAS 근거 — revision은 표시용) / patch envelope 형식 확정(baseMapHash·baseHead·
+   baseDirtyFp[project-map/** 제외]·op별 payload[expect·inverse]·evidence 최소조건[code/test/config 1개+]) /
+   tier 정책기(제출자 불신 — tombstone·supersede 확정=human 고정) / 복구 3분기(base=적용·expectedAfter=보충·
+   else conflict) / fail-closed 잠금(withFileLockStrict — 정본은 fail-open 금지). 구현: src/project-map.ts+
+   scripts/scope-map.js(inventory[결정론·LLM 0·semanticCoverage 정직: regex 한계·동적 미상 집계]·init[1회성 —
+   재실행은 ID 재생성이라 거부]·status·render). **v1 경계(정직)**: adopt(정본 채택)·propose/approve 배선 없음 —
+   topology는 관측 초안이며 기존 MAP.md 확정층 권위 불침. 다섯 편집 실동작 전부 후속(v1b: propose/approve/
+   decisions.jsonl 배선·큐는 wsKey+branch 로컬·approve에 payload 사본+expectedMapHashAfter / v2: 승인 경로
+   단일화 이관·adopt·refresh[rename/merge 제안]·신선도 판정기[verifiedHead·anchor 지문]·slice 동봉).
+   잠금: tests/project-map.test.js(94단언 — 구현 검증 9왕복[실패 8회 전부 수용] 반례: 빈 payload·복원 권한 상승·
+   approve=validatePatch 전체 통과 정규화 사본+patchId 결합+opHash 재계산·set_state 필드 CAS·집합 배열 전체
+   정렬[anchor 전키·semanticUnreadable]·inventory 수치+문자열 배열 원소·주석 오탐·side-effect import·status
+   표면+검증이 파생 계산보다 먼저·동시 init=병렬 프로세스 spawn[성공 정확히 1·잔존 잠금 0]·부재/손상/읽기실패
+   3분기·외부 JSON 무사망 계약[nodes:{}·[null]·중첩 필드·{toString:null} 독성 객체·스칼라 타입]·스키마 밖 키
+   전면 거부[깊은 중첩 정크의 해시 RangeError·own __proto__ CAS 충돌 봉합, 직렬화기는 Object.create(null)
+   이중 방어]·targetId 계약[add_node/add_edge는 존재 금지]·decision action별 허용 필드). 사용자 결정 축
+   11개는 세션 기록 참조(데이터 모델·저장 위치·갱신
+   주기 등 — 외부 평가가 상당수 결정).
 6. (후보) 대시보드 게이트 토글 UI(현재 CLI만 — informed consent 문구에 실측 명중률 표기), 발화 기록(scope-ledger-note)
    흐름의 실사용 관찰.
 7. (관찰 항목) 한 폴더 다중 프로그램 구분 — 권장 관행은 프로그램별 폴더 분리, 보강 후보는 seed 클러스터 자동 좁힘.
