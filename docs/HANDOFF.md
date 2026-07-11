@@ -373,11 +373,11 @@
    고지, 실작업=detach 자식의 선점 ③선점 mutex=.funlock(childClaim·forceUnlock 공용 — wx+read-back+모든
    상태 변경 직전 fence+writeRs도 같은 잠금 아래 runId 확인·교체) ④잠금 판정 5상태(alive/dead-valid/invalid/
    unreadable/owner-unverified) — 회수·격리는 dead-valid만 무승인 ⑤강제 복구=scope-map <repo> force-unlock
-   (수동 rm 안내 전면 금지 — 원자 이동 격리·오탈취 즉시 복원·승인 사다리 --confirm-corrupt/--confirm-owner-dead)
+   (수동 rm 안내 전면 금지 — 원자 이동 격리·오탈취 시 즉시 원위치 복원을 시도하고 실패하면 격리 위치를 보고한 뒤 물러남·승인 사다리 --confirm-corrupt/--confirm-owner-dead)
    ⑥finishDone=withMapLock 단일 스냅샷 트랜잭션(세대 혼합 차단) ⑦exclude={이번 실행 산출물만}(created=생성
    지문 정확 일치 귀속·ensure=prev 승계) — verify-guard lazy 예외 ⑧보장 수준 명문(설계 §5 P1): 검증~쓰기
    시스템콜 간극은 파일 프리미티브의 한계로 계약화(Node 순정에 flock 없음 — Codex 15차 합의), 예외 경합은
-   표면화→회수로 수렴. 검증 17왕복(설계 8+구현 15왕복 30여 결함 수용, 15차 통과(보완)→17차 통과).
+   표면화→회수로 수렴. P1 구현 검증 17차(별도 사전 설계검증+1~15차 구현 검증 30여 결함 수용, 15차 통과(보완)→16~17차 문구 마감 통과). 참고: 커밋 f0f13cc 메시지의 '오탈취는 즉시 원위치 복원'은 위 표현이 정확하며, 변경 목록에 package.json(테스트 체인에 map-bootstrap.test.js 배선)이 누락됨 — 이 줄이 정정 기록.
    tests/map-bootstrap.test.js 149단언(전체 체인 1744/0). 다음: P2(patch pipeline — 활성화는 P3b cutover와 동시).
 6. (후보) 대시보드 게이트 토글 UI(현재 CLI만 — informed consent 문구에 실측 명중률 표기), 발화 기록(scope-ledger-note)
    흐름의 실사용 관찰.
