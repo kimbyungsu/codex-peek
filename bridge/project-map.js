@@ -52,6 +52,8 @@ exports.decisionContextHashOf = decisionContextHashOf;
 exports.decisionIndexHashOfState = decisionIndexHashOfState;
 exports.effectiveConfidenceOf = effectiveConfidenceOf;
 exports.graphCoverageEffective = graphCoverageEffective;
+exports.semanticValidateV2 = semanticValidateV2;
+exports.applyOperationV2 = applyOperationV2;
 exports.MAP_SCHEMA_VERSION = 2; // v2(P0.5): mapId 세대 정체성·decisionLocks·provenance·description — MAP-V2-DESIGN.md §3
 // v1 기본 신선도 문구(마이그레이션이 정확 일치 시에만 v2 문구로 교체 — 임의 사용자 문구는 보존: P0.5 설계검증 #5)
 exports.FRESHNESS_NOTE_V1_DEFAULT = "신선도 판정 미지원(v1 — verifiedHead·내용 지문 판정기는 후속)";
@@ -1189,7 +1191,7 @@ function validatePatchV2(p) {
             else if (!(p.targetIds || []).includes(pl.survivorId))
                 errs.push(`${op}: survivorId는 targetIds에 포함돼야`);
             const ab = pl.absorbed;
-            const AB_KEYS = ["id", "rerouteEdgesTo", "anchorsTo", "evidenceTo"]; // 재지향표 필드 확정(무사망 — 자유 확장 금지)
+            const AB_KEYS = op === "merge_node" ? ["id", "rerouteEdgesTo", "anchorsTo", "evidenceTo"] : ["id"]; // merge_edge는 재지향 필드 없음(적용기가 무시하던 불일치 제거 — 8차 #4)
             // envelope 내부 정합(3차 #3 — topology 불요 판정은 A1 소관): absorbed id 집합 = targetIds − survivor.
             if (Array.isArray(ab) && Array.isArray(p.targetIds) && isUuid(pl.survivorId)) {
                 const abIds = ab.map((a) => String(a.id));
@@ -1242,8 +1244,8 @@ function validatePatchV2(p) {
                 errs.push("supersede: expect(구 상태) 필요");
             break;
         case "change_steward":
-            if (typeof pl.to !== "string" || !pl.to)
-                errs.push("change_steward: to(문자열) 필요");
+            if (typeof pl.to !== "string")
+                errs.push("change_steward: to(문자열 — 빈 문자열=미지정 복원, inverse 재적용 가능성: 8차 #6) 필요");
             if (typeof pl.expect !== "string")
                 errs.push("change_steward: expect(현 steward — 빈 문자열=미지정) 필요");
             if (pl.to === pl.expect)
@@ -1772,5 +1774,615 @@ function graphCoverageEffective(t, idx, fileHashOf) {
             degradedCount++;
     }
     return { nodes, edges, degradedCount };
+}
+function findEntity(t, id) {
+    const n = (t.nodes || []).find((x) => x && x.id === id);
+    if (n)
+        return { kind: "node", ent: n };
+    const e = (t.edges || []).find((x) => x && x.id === id);
+    if (e)
+        return { kind: "edge", ent: e };
+    return null;
+}
+const anchorKeyOf = (a) => [a.kind, a.path, a.symbol || "", a.lineHint ?? ""].join("\u0000");
+const evidenceKeyOf = (e) => [e.kind, e.ref, e.note || ""].join("\u0000");
+function adjacentEdgeIds(t, nodeId) {
+    return (t.edges || []).filter((e) => e && (e.from === nodeId || e.to === nodeId)).map((e) => e.id).sort();
+}
+function semanticValidateV2(t, p, ctx) {
+    const errs = [];
+    if (p.mapId !== t.mapId)
+        return { disposition: "hard-reject", errors: ["mapId 불일치(세대 오염)"] }; // 8차 #7 — API로 구분(문자열 파싱 금지)
+    const pl = (p.payload || {});
+    const stateEq = (expect, cur) => Object.entries(expect).every(([k, v]) => cur[k] === v);
+    // 조건부 P 승격(§D ◐): 대상의 decisionLocks에 policy-ref가 있거나 적용 가능한 활성 정책이 있으면
+    // readSet.policies 필수. 미지원 predicate(자동 매칭 불가 kind)는 생략 허용이 아니라 실패(정본 1-35).
+    const targetIdsAll = targetIdsOfPatch(p);
+    const targets = targetIdsAll.map((id) => findEntity(t, id)).filter((x) => !!x);
+    if (!isPolicyOpV2(p.operation)) {
+        // 잠금 감지(8차 #5): 기존 대상뿐 아니라 '이 patch가 만드는' entity(payload 내 node/edge/newNodes/newEdges)의
+        // policy-ref도 포함 — findEntity는 현재 topology만 보므로 생성물 잠금이 새던 구멍.
+        const pl0 = (p.payload || {});
+        const created = [
+            ...(pl0.node ? [pl0.node] : []), ...(pl0.edge ? [pl0.edge] : []),
+            ...(pl0.newNodes || []), ...(pl0.newEdges || []),
+        ];
+        const hasLockRef = targets.some((x) => (x.ent.decisionLocks || []).some((l) => l.kind === "policy-ref"))
+            || created.some((e) => (e.decisionLocks || []).some((l) => l.kind === "policy-ref"));
+        // 적용 가능 정책 판정(8차 #5 — scope·opClass·exclusions 정확 비교):
+        //  scope: project=전부 / entity·subgraph=scopeTarget∩(대상∪생성물 id)≠∅. exclusions=대상 id 제외 목록.
+        //  opClass: patch.operation과 일치하거나 접두 부류(예: "merge"가 merge_node/merge_edge 커버).
+        //  미지원 kind는 'scope 밖이면 무시' 우선 — scope 판정은 kind 무관하게 가능하므로, scope 안일 때만 실패.
+        const involved = new Set([...targetIdsAll, ...created.map((e) => e.id)]);
+        const inScope = (pol) => {
+            if ((pol.exclusions || []).some((x) => involved.has(x)))
+                return false;
+            if (pol.scope === "project")
+                return true;
+            return (pol.scopeTarget || []).some((id) => involved.has(id));
+        };
+        const opMatches = (opClass) => typeof opClass === "string" && (opClass === p.operation || p.operation.startsWith(opClass + "_"));
+        let applicable = false;
+        if (ctx.frontier === undefined || ctx.frontier === null) {
+            // fail-closed(9차 #3): frontier 없이는 '적용 가능한 정책이 없다'를 판정할 수 없다 — 잠금 유무 무관 실패.
+            // A2b는 항상 '검증된 frontier'(빈 배열 포함)를 주입한다.
+            errs.push("frontier 미주입 — 정책 CAS 판정 불가(needs-investigation. 정책이 없는 레포도 빈 frontier를 명시 주입)");
+        }
+        else {
+            for (const pol of ctx.frontier) {
+                if (!inScope(pol))
+                    continue; // scope 밖=무시(미지원 kind여도 — 8차 #5)
+                // 지원 DSL 정확 고정(9차 #4): {version:1, kind:"op-class", opClass:string} 3필드 정확일 때만 자동
+                // 해석 — 다른 버전·여분 의미 필드(negate 등)는 임의 해석하지 않고 needs-investigation(1-35).
+                const pe = pol.predicateExpr;
+                const supported = pe && typeof pe === "object" && pe.version === 1 && pe.kind === "op-class"
+                    && typeof pe.opClass === "string" && Object.keys(pe).sort().join(",") === "kind,opClass,version";
+                if (supported) {
+                    if (opMatches(pe.opClass))
+                        applicable = true;
+                }
+                else
+                    errs.push(`미지원 predicate(${String(pe && pe.kind)}/v${String(pe && pe.version)}${pe && Object.keys(pe).length > 3 ? "+여분 필드" : ""}) — 자동 해석 금지(1-35)`);
+            }
+        }
+        if ((hasLockRef || applicable) && !p.readSet.policies)
+            errs.push("readSet.policies 필수 승격(◐ — 대상 잠금/적용 가능 정책 존재)");
+    }
+    switch (p.operation) {
+        case "add_node": {
+            const n = pl.node;
+            if (findEntity(t, n.id))
+                errs.push("add_node: id가 이미 존재");
+            break;
+        }
+        case "add_edge": {
+            const e = pl.edge;
+            if (findEntity(t, e.id))
+                errs.push("add_edge: id가 이미 존재");
+            if (!(t.nodes || []).some((x) => x.id === e.from))
+                errs.push("add_edge: from 노드 미실존");
+            if (!(t.nodes || []).some((x) => x.id === e.to))
+                errs.push("add_edge: to 노드 미실존");
+            if ((t.edges || []).some((x) => x.from === e.from && x.to === e.to && x.relation === e.relation))
+                errs.push("add_edge: 동일 (from,to,relation) edge 기존재");
+            break;
+        }
+        case "set_state":
+        case "tombstone_candidate": {
+            const tr = findEntity(t, p.targetId);
+            if (!tr) {
+                errs.push(`${p.operation}: targetId 미실존`);
+                break;
+            }
+            if (!stateEq(pl.expect, tr.ent.state))
+                errs.push(`${p.operation}: expect가 현재 상태와 불일치(필드 CAS)`);
+            break;
+        }
+        case "add_anchor": {
+            const tr = findEntity(t, p.targetId);
+            if (!tr) {
+                errs.push("add_anchor: targetId 미실존");
+                break;
+            }
+            if (tr.kind !== "node") {
+                errs.push("add_anchor: 대상은 node여야(edge에 anchors 없음)");
+                break;
+            }
+            const key = anchorKeyOf(pl.anchor);
+            if ((tr.ent.anchors || []).some((a) => anchorKeyOf(a) === key))
+                errs.push("add_anchor: 동일 anchor 기존재");
+            break;
+        }
+        case "add_evidence": {
+            const tr = findEntity(t, p.targetId);
+            if (!tr) {
+                errs.push("add_evidence: targetId 미실존");
+                break;
+            }
+            const key = evidenceKeyOf(pl.evidence);
+            if ((tr.ent.evidence || []).some((e) => evidenceKeyOf(e) === key))
+                errs.push("add_evidence: 동일 evidence 기존재");
+            break;
+        }
+        case "add_condition": {
+            const tr = findEntity(t, p.targetId);
+            if (!tr) {
+                errs.push("add_condition: targetId 미실존");
+                break;
+            }
+            if ((tr.ent.conditions || []).includes(pl.condition))
+                errs.push("add_condition: 동일 condition 기존재");
+            break;
+        }
+        case "change_relation": {
+            const tr = findEntity(t, p.targetId);
+            if (!tr || tr.kind !== "edge") {
+                errs.push("change_relation: 대상 edge 미실존");
+                break;
+            }
+            if (tr.ent.relation !== pl.expect)
+                errs.push("change_relation: expect가 현재 relation과 불일치");
+            const e = tr.ent;
+            if ((t.edges || []).some((x) => x.id !== e.id && x.from === e.from && x.to === e.to && x.relation === pl.to))
+                errs.push("change_relation: 변경 후와 동일한 edge 기존재(N 위반)");
+            break;
+        }
+        case "split_node": {
+            const tr = findEntity(t, p.targetId);
+            if (!tr || tr.kind !== "node") {
+                errs.push("split_node: 대상 node 미실존");
+                break;
+            }
+            const nn = pl.newNodes;
+            for (const n of nn)
+                if (findEntity(t, n.id))
+                    errs.push(`split_node: 신규 id 기존재(${n.id})`);
+            // edgeReroute 전수성(§C-2): 원본의 모든 인접 edge가 재지향표에 정확히 1회씩.
+            const adj = adjacentEdgeIds(t, p.targetId);
+            const rr = pl.edgeReroute.map((r) => r.edgeId).sort();
+            if (canonicalJsonOf(adj) !== canonicalJsonOf(rr))
+                errs.push("split_node: edgeReroute가 인접 edge 전수와 불일치(누락/과잉)");
+            // 구성요소 배분 보존(8차 #1 — 정본 §3 '구성요소 배분: anchors/evidence/conditions 분할표'):
+            // 원본의 각 집합은 newNodes에 합집합=원본·쌍별 서로소로 정확히 배분돼야 한다(무검사 소실 차단).
+            if (tr && tr.kind === "node") {
+                const distOk = (orig, parts, label) => {
+                    const all = parts.flat();
+                    if (new Set(all).size !== all.length)
+                        errs.push(`split_node: ${label} 중복 배분(서로소 위반)`);
+                    else if (canonicalJsonOf([...all].sort()) !== canonicalJsonOf([...orig].sort()))
+                        errs.push(`split_node: ${label} 배분이 원본과 불일치(소실/추가 금지 — 새 구성요소는 별도 widen으로)`);
+                };
+                distOk((tr.ent.anchors || []).map(anchorKeyOf), nn.map((n) => (n.anchors || []).map(anchorKeyOf)), "anchors");
+                distOk((tr.ent.evidence || []).map(evidenceKeyOf), nn.map((n) => (n.evidence || []).map(evidenceKeyOf)), "evidence");
+                distOk([...(tr.ent.conditions || [])], nn.map((n) => [...(n.conditions || [])]), "conditions");
+            }
+            break;
+        }
+        case "split_edge": {
+            const tr = findEntity(t, p.targetId);
+            if (!tr || tr.kind !== "edge") {
+                errs.push("split_edge: 대상 edge 미실존");
+                break;
+            }
+            const ne = pl.newEdges;
+            for (const e of ne) {
+                if (findEntity(t, e.id))
+                    errs.push(`split_edge: 신규 id 기존재(${e.id})`);
+                if (!(t.nodes || []).some((x) => x.id === e.from) || !(t.nodes || []).some((x) => x.id === e.to))
+                    errs.push("split_edge: 신규 edge endpoint 미실존");
+            }
+            if (tr && tr.kind === "edge") { // 배분 보존(8차 #1 — split_node와 동형)
+                const distOk = (orig, parts, label) => {
+                    const all = parts.flat();
+                    if (new Set(all).size !== all.length)
+                        errs.push(`split_edge: ${label} 중복 배분`);
+                    else if (canonicalJsonOf([...all].sort()) !== canonicalJsonOf([...orig].sort()))
+                        errs.push(`split_edge: ${label} 배분이 원본과 불일치`);
+                };
+                distOk([...(tr.ent.conditions || [])], ne.map((x) => [...(x.conditions || [])]), "conditions");
+                distOk((tr.ent.evidence || []).map(evidenceKeyOf), ne.map((x) => (x.evidence || []).map(evidenceKeyOf)), "evidence");
+            }
+            break;
+        }
+        case "merge_node":
+        case "merge_edge": {
+            const wantKind = p.operation === "merge_node" ? "node" : "edge";
+            for (const id of p.targetIds) {
+                const tr = findEntity(t, id);
+                if (!tr || tr.kind !== wantKind)
+                    errs.push(`${p.operation}: 대상 미실존/종류 불일치(${id})`);
+            }
+            const ab = pl.absorbed;
+            const absorbedIds = new Set(ab.map((a) => a.id));
+            // merge 충돌 사전 판정(9차 #2 — 자동 정리는 '의미 동형'에만, 비동형=needs-investigation):
+            if (p.operation === "merge_node") {
+                const survivor = pl.survivorId;
+                const destOf = (id) => { const a = ab.find((x) => x.id === id); return a ? (a.rerouteEdgesTo || survivor) : id; };
+                const semKey = (e) => canonicalJsonOf({ state: e.state, conditions: [...(e.conditions || [])].sort(), evidence: [...(e.evidence || [])].map(evidenceKeyOf).sort(), notes: e.notes || "", decisionLocks: [...(e.decisionLocks || [])].map((l) => canonicalJsonOf(l)).sort(), provenance: e.provenance || null });
+                const hasMeaning = (e) => !!((e.conditions && e.conditions.length) || (e.evidence && e.evidence.length) || e.notes || (e.decisionLocks && e.decisionLocks.length) || e.provenance);
+                // 검사 대상 한정(10차 — 적용기의 rerouted 판정과 동일 조건): 이번 merge에 '관여한'(endpoint가
+                // absorbed) edge만 시뮬레이션 — read-set 밖 기존 self·중복 edge의 상태로 유효 merge가 차단되지 않게.
+                const finalPos = new Map();
+                for (const e of (t.edges || [])) {
+                    const affected = absorbedIds.has(e.from) || absorbedIds.has(e.to);
+                    const f = absorbedIds.has(e.from) ? destOf(e.from) : e.from;
+                    const t2 = absorbedIds.has(e.to) ? destOf(e.to) : e.to;
+                    if (f === t2) { // self化 — '관여 edge'만 판정(무관 기존 self는 불간섭)
+                        if (affected && hasMeaning(e))
+                            errs.push(`merge_node: 내부 edge(${e.id})가 self가 되며 의미 필드를 보유 — 자동 폐기 금지(needs-investigation·9차 #2)`);
+                        continue;
+                    }
+                    const k = f + "\u0000" + t2 + "\u0000" + e.relation;
+                    const arr = finalPos.get(k) || [];
+                    arr.push({ e, affected });
+                    finalPos.set(k, arr);
+                }
+                for (const [, arr] of finalPos) {
+                    if (arr.length < 2 || !arr.some((x) => x.affected))
+                        continue; // 관여 edge 없는 그룹=무관 기존 중복(불간섭)
+                    const keys = new Set(arr.map((x) => semKey(x.e)));
+                    if (keys.size > 1)
+                        errs.push(`merge_node: 충돌 edge(${arr.map((x) => x.e.id).sort().join(",")})가 의미 비동형 — 자동 병합 금지(명시적 merge_edge로·1-13)`);
+                }
+            }
+            for (const a of ab)
+                for (const k of ["rerouteEdgesTo", "anchorsTo", "evidenceTo"]) {
+                    const dest = a[k];
+                    if (dest !== undefined) {
+                        if (absorbedIds.has(dest))
+                            errs.push(`${p.operation}: absorbed.${k}가 함께 소멸하는 entity를 가리킴(${dest}) — 최종 생존 node로만(8차 #2)`);
+                        const dr = findEntity(t, dest);
+                        if (!dr || dr.kind !== "node")
+                            errs.push(`${p.operation}: absorbed.${k} 대상 미실존(${dest})`);
+                    }
+                }
+            break;
+        }
+        case "widen":
+        case "narrow": {
+            const tr = findEntity(t, p.targetId);
+            if (!tr) {
+                errs.push(`${p.operation}: targetId 미실존`);
+                break;
+            }
+            const box = (p.operation === "widen" ? pl.additions : pl.removals);
+            const ex = pl.expect;
+            // expect=현 범위 CAS: 명시된 축의 현재 목록과 정확 일치.
+            if (ex.conditions !== undefined && canonicalJsonOf([...(tr.ent.conditions || [])].sort()) !== canonicalJsonOf([...ex.conditions].sort()))
+                errs.push(`${p.operation}: expect.conditions가 현재와 불일치`);
+            if (ex.anchors !== undefined) {
+                if (tr.kind !== "node")
+                    errs.push(`${p.operation}: anchors 축은 node 전용`);
+                else if (canonicalJsonOf((tr.ent.anchors || []).map(anchorKeyOf).sort()) !== canonicalJsonOf(ex.anchors.map(anchorKeyOf).sort()))
+                    errs.push(`${p.operation}: expect.anchors가 현재와 불일치`);
+            }
+            if (p.operation === "widen") {
+                for (const c of box.conditions || [])
+                    if ((tr.ent.conditions || []).includes(c))
+                        errs.push(`widen: 추가분이 이미 존재(${c}) — N 위반`);
+                if (box.anchors && tr.kind === "node")
+                    for (const a of box.anchors)
+                        if ((tr.ent.anchors || []).some((x) => anchorKeyOf(x) === anchorKeyOf(a)))
+                            errs.push("widen: 추가 anchor 기존재");
+            }
+            else {
+                for (const c of box.conditions || [])
+                    if (!(tr.ent.conditions || []).includes(c))
+                        errs.push(`narrow: 제거 대상 미존재(${c})`);
+                if (box.anchors && tr.kind === "node")
+                    for (const a of box.anchors)
+                        if (!(tr.ent.anchors || []).some((x) => anchorKeyOf(x) === anchorKeyOf(a)))
+                            errs.push("narrow: 제거 anchor 미존재");
+                for (const r of pl.retain || [])
+                    if (!(tr.ent.conditions || []).includes(r))
+                        errs.push(`narrow: retain 대상 미존재(${r})`);
+            }
+            break;
+        }
+        case "supersede": {
+            const tr = findEntity(t, p.targetId);
+            if (!tr) {
+                errs.push("supersede: targetId 미실존");
+                break;
+            }
+            const sr = findEntity(t, pl.successorId);
+            if (!sr)
+                errs.push("supersede: successor 미실존");
+            else if (tr && sr.kind !== tr.kind)
+                errs.push("supersede: 대상과 successor의 종류 불일치(node→node·edge→edge — 9차 #5)");
+            if (!stateEq(pl.expect, tr.ent.state))
+                errs.push("supersede: expect가 현재 상태와 불일치");
+            if (tr.ent.state.lifecycle === "superseded")
+                errs.push("supersede: 이미 superseded");
+            break;
+        }
+        case "change_steward": {
+            const tr = findEntity(t, p.targetId);
+            if (!tr || tr.kind !== "node") {
+                errs.push("change_steward: 대상 node 미실존");
+                break;
+            }
+            if ((tr.ent.steward || "") !== pl.expect)
+                errs.push("change_steward: expect가 현재 steward와 불일치");
+            break;
+        }
+        case "change_authority": {
+            const tr = findEntity(t, p.targetId);
+            if (!tr || tr.kind !== "node") {
+                errs.push("change_authority: 대상 node 미실존(§3 — node 한정)");
+                break;
+            }
+            if (canonicalJsonOf([...tr.ent.roles].sort()) !== canonicalJsonOf([...pl.expect].sort()))
+                errs.push("change_authority: expect가 현재 roles와 불일치");
+            break;
+        }
+        case "rewrite_label": {
+            const tr = findEntity(t, p.targetId);
+            if (!tr) {
+                errs.push("rewrite_label: targetId 미실존");
+                break;
+            }
+            const ex = pl.expect;
+            if (ex.notes !== undefined) {
+                if (tr.kind !== "edge")
+                    errs.push("rewrite_label: notes 축은 edge 전용");
+                else if ((tr.ent.notes || "") !== ex.notes)
+                    errs.push("rewrite_label: expect.notes가 현재와 불일치");
+            }
+            else {
+                if (tr.kind !== "node")
+                    errs.push("rewrite_label: label/description 축은 node 전용");
+                else {
+                    if (ex.label !== undefined && tr.ent.label !== ex.label)
+                        errs.push("rewrite_label: expect.label 불일치");
+                    if (ex.description !== undefined && (tr.ent.description || "") !== ex.description)
+                        errs.push("rewrite_label: expect.description 불일치");
+                }
+            }
+            break;
+        }
+        case "create_intent_policy":
+        case "supersede_intent_policy":
+        case "revoke_intent_policy":
+            break; // 정책 op의 의미 검사는 frontier 소관(F-2 ② — 파일 판독기 계층에서: 대상 policyFp·revocation 부재·frontier 해시)
+    }
+    return { disposition: errs.length ? "needs-investigation" : "ok", errors: errs }; // ②b 실패=needs-investigation(1-20)
+}
+// 순수 적용기(§C-2): 입력 불변·출력은 호출부가 validateTopology 전체 재검증. revision +1.
+// proposal-only(tombstone_candidate)·정책 op는 이 함수의 대상이 아니다 — 호출 시 오류 반환.
+// split의 원본 entity는 제거된다(분할=신규가 대체 — inverse가 merge/split 쌍이므로 복원 가능,
+// 이력은 decision이 보유. merge 흡수 제거와 대칭). supersede/tombstone은 lifecycle만(제거 없음 — §C-2).
+function applyOperationV2(t, p) {
+    if (isProposalOnlyOpV2(p.operation))
+        return { topo: null, changedIds: [], errors: ["proposal-only op는 적용 불가(파생 set_state로 — §C-2)"] };
+    if (isPolicyOpV2(p.operation))
+        return { topo: null, changedIds: [], errors: ["정책 op는 topology 적용기 대상 아님(F-2 — topology 무변경)"] };
+    const c = JSON.parse(JSON.stringify(t));
+    const pl = (p.payload || {});
+    const changed = [];
+    const node = (id) => (c.nodes || []).find((x) => x.id === id);
+    const edge = (id) => (c.edges || []).find((x) => x.id === id);
+    const ent = (id) => node(id) || edge(id);
+    switch (p.operation) {
+        case "add_node":
+            c.nodes.push(pl.node);
+            changed.push(pl.node.id);
+            break;
+        case "add_edge":
+            c.edges.push(pl.edge);
+            changed.push(pl.edge.id);
+            break;
+        case "set_state": {
+            const e = ent(p.targetId);
+            e.state = { ...e.state, ...pl.to };
+            changed.push(e.id);
+            break;
+        }
+        case "add_anchor": {
+            const n = node(p.targetId);
+            n.anchors = [...(n.anchors || []), pl.anchor];
+            changed.push(n.id);
+            break;
+        }
+        case "add_evidence": {
+            const e = ent(p.targetId);
+            e.evidence = [...(e.evidence || []), pl.evidence];
+            changed.push(e.id);
+            break;
+        }
+        case "add_condition": {
+            const e = ent(p.targetId);
+            e.conditions = [...(e.conditions || []), pl.condition];
+            changed.push(e.id);
+            break;
+        }
+        case "change_relation": {
+            const e = edge(p.targetId);
+            e.relation = pl.to;
+            changed.push(e.id);
+            break;
+        }
+        case "split_node": {
+            const origId = p.targetId;
+            c.nodes = c.nodes.filter((x) => x.id !== origId);
+            for (const n of pl.newNodes)
+                c.nodes.push(n);
+            for (const r of pl.edgeReroute) {
+                const e = edge(r.edgeId);
+                if (!e)
+                    continue;
+                if (e.from === origId)
+                    e.from = r.to;
+                if (e.to === origId)
+                    e.to = r.to;
+                changed.push(e.id);
+            }
+            changed.push(origId, ...pl.newNodes.map((n) => n.id));
+            break;
+        }
+        case "split_edge": {
+            const origId = p.targetId;
+            c.edges = c.edges.filter((x) => x.id !== origId);
+            for (const e of pl.newEdges)
+                c.edges.push(e);
+            changed.push(origId, ...pl.newEdges.map((e) => e.id));
+            break;
+        }
+        case "merge_node": {
+            const surv = node(pl.survivorId);
+            const rerouted = new Set();
+            for (const a of pl.absorbed) {
+                const dead = node(a.id);
+                if (!dead)
+                    continue;
+                const anchorDest = node(a.anchorsTo || surv.id);
+                const evDest = ent(a.evidenceTo || surv.id);
+                const edgeDest = a.rerouteEdgesTo || surv.id;
+                // 소지품 병합 — 자연 병합의 키 중복은 제거(입력 patch의 중복 거부와 별개: 두 노드가 같은 anchor를
+                // 정당하게 공유하던 경우의 합집합).
+                const aSeen = new Set((anchorDest.anchors || []).map(anchorKeyOf));
+                for (const x of dead.anchors || [])
+                    if (!aSeen.has(anchorKeyOf(x))) {
+                        anchorDest.anchors = [...(anchorDest.anchors || []), x];
+                        aSeen.add(anchorKeyOf(x));
+                    }
+                const eSeen = new Set((evDest.evidence || []).map(evidenceKeyOf));
+                for (const x of dead.evidence || [])
+                    if (!eSeen.has(evidenceKeyOf(x))) {
+                        evDest.evidence = [...(evDest.evidence || []), x];
+                        eSeen.add(evidenceKeyOf(x));
+                    }
+                if (a.anchorsTo)
+                    changed.push(a.anchorsTo); // 외부 destination도 변경 대상(8차 #4)
+                if (a.evidenceTo)
+                    changed.push(a.evidenceTo);
+                for (const e of c.edges) {
+                    if (e.from === a.id) {
+                        e.from = edgeDest;
+                        changed.push(e.id);
+                        rerouted.add(e.id);
+                    }
+                    if (e.to === a.id) {
+                        e.to = edgeDest;
+                        changed.push(e.id);
+                        rerouted.add(e.id);
+                    }
+                }
+                c.nodes = c.nodes.filter((x) => x.id !== a.id);
+                changed.push(a.id);
+            }
+            // 정리는 '이번 재지향으로 생긴' 충돌에만 한정(8차 #3)·생존자는 결정론(9차 #1 — 최소 id 고정.
+            // 비동형 충돌·의미 보유 self는 ②b가 사전 차단했으므로 여기 도달한 충돌은 의미 동형=어느 쪽이든 등가):
+            c.edges = c.edges.filter((e) => { if (rerouted.has(e.id) && e.from === e.to) {
+                changed.push(e.id);
+                return false;
+            } return true; });
+            const keyE = (e) => e.from + "\u0000" + e.to + "\u0000" + e.relation;
+            const groups = new Map();
+            for (const e of c.edges) {
+                const k = keyE(e);
+                const arr = groups.get(k) || [];
+                arr.push(e);
+                groups.set(k, arr);
+            }
+            const drop = new Set();
+            for (const [, arr] of groups) {
+                if (arr.length < 2 || !arr.some((e) => rerouted.has(e.id)))
+                    continue; // 재지향 관여 충돌만(무관 기존 중복 불간섭)
+                const survivorEdge = [...arr].sort((x, y) => (x.id < y.id ? -1 : 1))[0]; // 결정론: 최소 id
+                for (const e of arr)
+                    if (e.id !== survivorEdge.id) {
+                        drop.add(e.id);
+                        changed.push(e.id);
+                    }
+            }
+            c.edges = c.edges.filter((e) => !drop.has(e.id));
+            changed.push(surv.id);
+            break;
+        }
+        case "merge_edge": {
+            const surv = edge(pl.survivorId);
+            for (const a of pl.absorbed) {
+                const dead = edge(a.id);
+                if (!dead)
+                    continue;
+                const cSeen = new Set(surv.conditions || []);
+                for (const x of dead.conditions || [])
+                    if (!cSeen.has(x)) {
+                        surv.conditions = [...(surv.conditions || []), x];
+                        cSeen.add(x);
+                    }
+                const eSeen = new Set((surv.evidence || []).map(evidenceKeyOf));
+                for (const x of dead.evidence || [])
+                    if (!eSeen.has(evidenceKeyOf(x))) {
+                        surv.evidence = [...(surv.evidence || []), x];
+                        eSeen.add(evidenceKeyOf(x));
+                    }
+                c.edges = c.edges.filter((x) => x.id !== a.id);
+                changed.push(a.id);
+            }
+            changed.push(surv.id);
+            break;
+        }
+        case "widen":
+        case "narrow": {
+            const e = ent(p.targetId);
+            const box = (p.operation === "widen" ? pl.additions : pl.removals);
+            if (p.operation === "widen") {
+                if (box.conditions)
+                    e.conditions = [...(e.conditions || []), ...box.conditions];
+                if (box.anchors)
+                    e.anchors = [...(e.anchors || []), ...box.anchors];
+            }
+            else {
+                const retain = new Set(pl.retain || []);
+                if (box.conditions) {
+                    const rm = new Set(box.conditions.filter((x) => !retain.has(x)));
+                    e.conditions = (e.conditions || []).filter((x) => !rm.has(x));
+                }
+                if (box.anchors) {
+                    const rm = new Set(box.anchors.map(anchorKeyOf));
+                    e.anchors = (e.anchors || []).filter((x) => !rm.has(anchorKeyOf(x)));
+                }
+            }
+            changed.push(e.id);
+            break;
+        }
+        case "supersede": {
+            const e = ent(p.targetId);
+            e.state = { ...e.state, lifecycle: "superseded" };
+            changed.push(e.id);
+            break;
+        }
+        case "change_steward": {
+            const n = node(p.targetId);
+            if (pl.to === "")
+                delete n.steward;
+            else
+                n.steward = pl.to;
+            changed.push(n.id);
+            break;
+        }
+        case "change_authority": {
+            const n = node(p.targetId);
+            n.roles = [...pl.to];
+            changed.push(n.id);
+            break;
+        }
+        case "rewrite_label": {
+            const ex = pl.to;
+            const e = ent(p.targetId);
+            if (ex.notes !== undefined)
+                e.notes = ex.notes;
+            if (ex.label !== undefined)
+                e.label = ex.label;
+            if (ex.description !== undefined)
+                e.description = ex.description;
+            changed.push(e.id);
+            break;
+        }
+    }
+    c.revision = (c.revision || 0) + 1; // topology 변경 성공마다 정확히 1 증가(표시·감사 — CAS 불참: §C-2)
+    return { topo: c, changedIds: [...new Set(changed)].sort(), errors: [] };
 }
 //# sourceMappingURL=project-map.js.map

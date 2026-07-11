@@ -103,7 +103,7 @@
   revision·mapHash를 일절 건드리지 않는다(정책은 authorityHash 밖 — §3). 정책 전용 트랜잭션은
   §F-2(스냅샷·topology·MAP.md 단계 생략)를 탄다.
 - **entity 제거 규칙(2차 #12)**: supersede·(파생) tombstone은 entity를 제거하지 않는다 — lifecycle 상태
-  (superseded/tombstoned)로 남는다(v1 LIFECYCLES 그대로). **merge의 흡수 entity만 topology에서 제거**되고
+  (superseded/tombstoned)로 남는다(v1 LIFECYCLES 그대로). **merge의 흡수 entity와 split의 원본 entity만 topology에서 제거**되고(split 원본은 신규가 대체 — 구성요소는 ②b의 배분 보존[합집합=원본·서로소]이 소실을 차단하고 inverse=merge로 복원 가능. 구현 8차 개정)
   분할표(absorbed[])를 decision이 보유(inverse=split 재료).
 - **tombstone_candidate는 proposal-only op(2차 #11 — 정본 §3:441)**: apply 대상이 아니다. classify까지만
   진행하고(3층 사다리 1-27③), 결론이 하나면 **파생 set_state(lifecycle) patch를 새로 생성**해 그것이 apply
