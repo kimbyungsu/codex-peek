@@ -342,7 +342,7 @@
    문구(화살표 없음)는 후보로 안 잡힘(정확성 우선 — 병합 실기는 수동 alias로 보완).
    L2(잔여)=버킷 억제가 변경 정체성 상실·co-change 조건부
    비율 부재·자기진단 다중 형제 레포 전제·MAP 승격이 장부 판정 무시(기존 P2와 동일 항목).
-5-9. **(2026-07-10 착수) Project MAP v1 — 'draft 전용 뼈대'**(사용자 제안 '프로젝트별 전체 구조도가 다섯
+5-9. **(2026-07-10 착수·이하 v1 시점 역사 기록 — 현행은 끝의 [P0.5 갱신] 참조) Project MAP v1 — 'draft 전용 뼈대'**(사용자 제안 '프로젝트별 전체 구조도가 다섯
    의미 편집[분할·확대·축소·소멸·재작성]의 공통 좌표계' + 외부 평가[모범: tg-chat-engine SIGNAL-WIRING-MAP.md]
    + 설계 사전검증 3왕복 합의). 핵심 합의: 지도는 판단 '기준'이 아니라 '좌표계·제안 표면'(판단 근거는 코드·
    테스트·설정 증거 — 지도 자신은 증거 불가[자기확인 고리 차단]) / 정본=typed graph(topology.json — 불투명
@@ -366,6 +366,7 @@
    이중 방어]·targetId 계약[add_node/add_edge는 존재 금지]·decision action별 허용 필드). 사용자 결정 축
    11개는 세션 기록 참조(데이터 모델·저장 위치·갱신
    주기 등 — 외부 평가가 상당수 결정).
+   **[P0.5 갱신 2026-07-11] 스키마 v2+배포 런타임 완료**: MAP_SCHEMA_VERSION=2(mapId 세대·decisionLocks 합타입·provenance[VerificationBasis: git objectFormat sha1|sha256/historyless]·description·lastSeenAt 제거)·frozen v1 검증기·결정론 v1→v2 마이그레이터(mapId=v1 canonical 지문 유도)·bridge/map-runtime.js(CLI 본체 이관: inventory/init/status/render/migrate — VSIX 미포함이던 scripts/** 문제 해소)·bridge/project-map.js(out 산출물의 tracked 사본 — scripts/sync-map-core.js --write/--check/--watch-with-tsc가 신선도 잠금)·BRIDGE_SCRIPTS 9파일. 설계 정본=docs/MAP-V2-DESIGN.md(25왕복). 테스트 tests/project-map.test.js 153단언(v2 반례·마이그레이터·CLI migrate e2e·동시 migrate 변환 정확히 1·바이트 패리티·sync/watch 수명주기[onExit 1회·침묵 실패 금지]). 위 본문에서 v1 경계로 서술된 propose/approve 미배선은 여전히 사실이되 후속 명칭은 v1b가 아니라 P2다.
 6. (후보) 대시보드 게이트 토글 UI(현재 CLI만 — informed consent 문구에 실측 명중률 표기), 발화 기록(scope-ledger-note)
    흐름의 실사용 관찰.
 7. (관찰 항목) 한 폴더 다중 프로그램 구분 — 권장 관행은 프로그램별 폴더 분리, 보강 후보는 seed 클러스터 자동 좁힘.

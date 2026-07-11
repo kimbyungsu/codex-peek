@@ -50,6 +50,8 @@ const BRIDGE_SCRIPTS = [
   "codex-guard.js",
   "deepseek-bridge.js",
   "scout-gate.js",
+  "project-map.js", // P0.5: Project MAP 순수 코어(out/ 산출물 사본 — scripts/sync-map-core.js가 생성·훅 아님)
+  "map-runtime.js", // P0.5: Project MAP 런타임(수집기·draft·CLI 본체 — 훅 아님)
 ];
 
 // 우리가 settings.json에 심는 훅. event → {matcher, script}

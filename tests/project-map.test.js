@@ -1,6 +1,6 @@
 "use strict";
 /*
- * Project MAP v1(draft 전용 뼈대) — 설계 사전검증 3왕복 합의 잠금.
+ * Project MAP(스키마 v2 — P0.5) — 설계·구현 검증 반례 잠금.
  * 순수 계산(스키마 반례·canonical 결정성·정책기 tier·patch 형식·복구 3분기·dirtyFp 제외)+CLI 끝-끝(init 1회성·
  * 재실행 거부·render 지문·수동 수정 탐지)+fail-closed 잠금.
  */
@@ -17,7 +17,7 @@ const PM = require(path.join(__dirname, "..", "out", "project-map.js"));
 const CL = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
 
 const mkTopo = () => ({
-  schemaVersion: PM.MAP_SCHEMA_VERSION, draft: true, project: "t", createdAt: "2026-07-10T00:00:00Z", revision: 1,
+  schemaVersion: PM.MAP_SCHEMA_VERSION, mapId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", draft: true, project: "t", createdAt: "2026-07-10T00:00:00Z", revision: 1,
   nodes: [
     { id: "11111111-1111-4111-8111-111111111111", label: "core", entityType: "module", roles: ["producer"], state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" }, anchors: [{ kind: "code", path: "src/a.ts" }] },
     { id: "22222222-2222-4222-8222-222222222222", label: "store", entityType: "store", roles: ["storage"], state: { lifecycle: "active", implementation: "runtime", confidence: "confirmed" }, anchors: [] },
@@ -164,7 +164,7 @@ console.log("[4-1] 검증 2차 반례 — 빈 payload auto 통과·복원 권한
   ok(PM.opHashOf(JSON.parse('{"a":1,"__proto__":{"hidden":1}}')) !== PM.opHashOf({ a: 1 }), "own __proto__ 키가 지문에 반영 — 일반 {}에선 프로토타입 대입으로 소실돼 다른 JSON이 같은 CAS 지문(7차 반례)");
   ok(PM.validatePatch({ ...base, payload: { anchor: { kind: "code", path: "p" }, junk: { deep: 1 } } }).some((e) => /미지 필드/.test(e)), "payload 스키마 밖 키 → 거부(opHash 대상 깊은 정크 차단)");
   ok(PM.validatePatch({ ...base, payload: { anchor: { kind: "code", path: "p" } }, evidence: [{ kind: "code", ref: "r", note: {} }] }).some((e) => /evidence 항목 불량/.test(e)), "patch evidence.note:{} → 거부(공통 validateEvidence — 계약 갈림 봉합)");
-  ok(PM.validateDecision({ ...d, opHash: "b".repeat(40), payload: { x: 1 }, expectedMapHashAfter: "c".repeat(40), appliedRevision: "x" }).some((e) => /appliedRevision/.test(e)), "appliedRevision:'x' → 거부(선택 필드 타입 — v1b 배선 전 계약 닫기)");
+  ok(PM.validateDecision({ ...d, opHash: "b".repeat(40), payload: { x: 1 }, expectedMapHashAfter: "c".repeat(40), appliedRevision: "x" }).some((e) => /appliedRevision/.test(e)), "appliedRevision:'x' → 거부(선택 필드 타입 — P2 배선 전 계약 닫기)");
   // 8차 반례: add_node/add_edge의 targetId 우회 — 깊은 중첩 targetId가 검증을 통과해 approve의 opHashOf가 사망
   ok(PM.validatePatch({ ...base, operation: "add_node", payload: { node: mkTopo().nodes[0] } }).some((e) => /targetId 금지/.test(e)), "add_node에 targetId 존재 → 거부(대상 없는 연산 — 8차 반례)");
   ok(PM.validatePatch({ ...base, targetId: 42 }).some((e) => /targetId는 UUID여야/.test(e)), "targetId:42 → 타입 거부(전 연산 공통)");
@@ -288,6 +288,245 @@ console.log("[8] CLI 끝-끝 — init 1회성·draft 강제·status·render·수
   try { fs.rmSync(repo, { recursive: true, force: true }); } catch { /* 무해 */ }
 }
 
+console.log("[10] v2 스키마(P0.5) — mapId 세대·decisionLocks 합타입·provenance(VerificationBasis)·canonical 등록");
+{
+  const t = mkTopo(); delete t.mapId;
+  ok(PM.validateTopology(t).some((e) => /mapId는 UUID여야/.test(e)), "mapId 부재 → 거부(지도 세대 정체성 — 설계 1-31)");
+  const t2 = mkTopo(); t2.replacesMapId = "not-uuid";
+  ok(PM.validateTopology(t2).some((e) => /replacesMapId는 UUID여야/.test(e)), "replacesMapId 비UUID → 거부");
+  const t3 = mkTopo(); t3.replacesMapId = t3.mapId;
+  ok(PM.validateTopology(t3).some((e) => /자기 세대 대체 금지/.test(e)), "replacesMapId=자기 자신 → 거부");
+  const ok1 = mkTopo();
+  ok1.nodes[0].description = "설명";
+  ok1.nodes[0].decisionLocks = [{ kind: "literal", text: "runtime 판단 입력 사용 금지" }, { kind: "policy-ref", policyId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" }];
+  ok1.nodes[0].provenance = { basis: { kind: "git", objectFormat: "sha1", head: "a".repeat(40) }, decisionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" };
+  ok1.edges[0].decisionLocks = [{ kind: "literal", text: "관계 의미 변경은 검증 필수" }];
+  ok1.edges[0].provenance = { basis: { kind: "historyless", basisFp: "b".repeat(40), inventoryFp: "c".repeat(40) }, decisionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" };
+  ok(PM.validateTopology(ok1).length === 0, "정상 v2(신필드 전부) → 위반 0(git sha1·historyless 양쪽 basis)");
+  const ok2 = mkTopo(); ok2.nodes[0].provenance = { basis: { kind: "git", objectFormat: "sha256", head: "e".repeat(64) }, decisionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" };
+  ok(PM.validateTopology(ok2).length === 0, "git sha256(64hex) basis 통과 — objectFormat 결속(설계검증 #4: 40자 상한이 sha256 저장소 거부하던 것)");
+  const b1 = mkTopo(); b1.nodes[0].decisionLocks = [{ kind: "nope", x: 1 }];
+  ok(PM.validateTopology(b1).some((e) => /decisionLock kind 불량/.test(e)), "decisionLock 미지 kind → 거부");
+  const b2 = mkTopo(); b2.nodes[0].decisionLocks = [{ kind: "literal", text: " " }];
+  ok(PM.validateTopology(b2).some((e) => /text는 비어있지 않은 문자열이어야/.test(e)), "literal 빈 text → 거부");
+  const b3 = mkTopo(); b3.nodes[0].decisionLocks = [{ kind: "policy-ref", policyId: "x" }];
+  ok(PM.validateTopology(b3).some((e) => /policyId는 UUID여야/.test(e)), "policy-ref 비UUID → 거부");
+  const b4 = mkTopo(); b4.nodes[0].decisionLocks = [null];
+  ok(PM.validateTopology(b4).some((e) => /decisionLock 원소가 객체가 아님/.test(e)), "decisionLocks:[null] → 무사망 진단(기존 계약 동수준)");
+  const b5 = mkTopo(); b5.nodes[0].decisionLocks = [{ kind: "literal", text: "t", junk: 1 }];
+  ok(PM.validateTopology(b5).some((e) => /미지 필드/.test(e)), "decisionLock variant 밖 키 → 거부");
+  const b6 = mkTopo(); b6.nodes[0].provenance = { basis: { kind: "git", objectFormat: "sha1", head: "a".repeat(64) }, decisionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" };
+  ok(PM.validateTopology(b6).some((e) => /head는 40hex여야/.test(e)), "sha1인데 64hex head → 거부(format·길이 결속)");
+  const b7 = mkTopo(); b7.nodes[0].provenance = { basis: { kind: "git", objectFormat: "md5", head: "a".repeat(32) }, decisionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" };
+  ok(PM.validateTopology(b7).some((e) => /objectFormat 불량/.test(e)), "미지 objectFormat → 거부");
+  const b8 = mkTopo(); b8.nodes[0].provenance = { basis: { kind: "historyless", basisFp: "짧음", inventoryFp: "c".repeat(40) }, decisionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" };
+  ok(PM.validateTopology(b8).some((e) => /basisFp는 sha1 40hex여야/.test(e)), "historyless 지문 형식 위반 → 거부");
+  const b9 = mkTopo(); b9.nodes[0].provenance = { basis: { kind: { toString: null }, x: 1 }, decisionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" };
+  let r9v = null; try { r9v = PM.validateTopology(b9); } catch { /* 사망 시 실패 */ }
+  ok(Array.isArray(r9v) && r9v.some((e) => /basis kind 불량/.test(e)), "독성 객체 kind → 예외 없이 진단(무사망 계약 승계)");
+  // canonical: decisionLocks 집합 등록(역순 → 동일 지문)
+  const cA = mkTopo(); cA.nodes[0].decisionLocks = [{ kind: "policy-ref", policyId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" }, { kind: "literal", text: "a" }];
+  const cB = mkTopo(); cB.nodes[0].decisionLocks = [{ kind: "literal", text: "a" }, { kind: "policy-ref", policyId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" }];
+  ok(PM.mapHashOf(cA) === PM.mapHashOf(cB), "decisionLocks 순서 무관 동일 지문(canonical 등록 — 누락 시 CAS 거짓 충돌)");
+  const l1 = mkTopo(); l1.nodes[0].lastSeenAt = "2026-07-10T00:00:00Z";
+  ok(PM.validateTopology(l1).some((e) => /미지 필드/.test(e)), "v2에서 lastSeenAt → 미지 필드 거부(하네스 로컬로 이동 — 설계 1-2)");
+}
+
+console.log("[11] v1→v2 마이그레이터 — 결정론·frozen v1 검증·원본 불변·문구 교체");
+{
+  const mkV1 = () => ({
+    schemaVersion: 1, draft: true, project: "t", createdAt: "2026-07-10T00:00:00Z", revision: 1,
+    nodes: [
+      { id: "11111111-1111-4111-8111-111111111111", label: "core", entityType: "module", roles: ["producer"], state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" }, anchors: [{ kind: "code", path: "src/a.ts" }], lastSeenAt: "2026-07-10T01:00:00Z" },
+    ],
+    edges: [],
+    inventory: mkTopo().inventory,
+    freshnessNote: PM.FRESHNESS_NOTE_V1_DEFAULT,
+  });
+  const v1 = mkV1();
+  const before = JSON.stringify(v1);
+  const r1 = PM.migrateTopologyV1toV2(v1);
+  ok(r1.topo && r1.errors.length === 0, "정상 v1 → 변환 성공");
+  ok(JSON.stringify(v1) === before, "입력 v1 객체 불변(깊은 복사 — 원본 무변경 계약)");
+  ok(PM.validateTopology(r1.topo).length === 0, "변환 결과가 v2 검증 통과");
+  ok(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(r1.topo.mapId), "mapId 부여(UUID 형태)");
+  ok(!("lastSeenAt" in r1.topo.nodes[0]), "lastSeenAt 소거");
+  ok(r1.topo.freshnessNote === PM.FRESHNESS_NOTE_V2, "알려진 v1 기본 문구 → v2 문구 교체(#5)");
+  const r2 = PM.migrateTopologyV1toV2(mkV1());
+  ok(r2.topo && r2.topo.mapId === r1.topo.mapId && PM.canonicalSerialize(r2.topo) === PM.canonicalSerialize(r1.topo), "결정론 — 동일 v1 입력=동일 mapId·동일 canonical(clone·브랜치 갈림 방지: 설계검증 #2)");
+  const custom = mkV1(); custom.freshnessNote = "사용자 임의 문구";
+  const r3 = PM.migrateTopologyV1toV2(custom);
+  ok(r3.topo && r3.topo.freshnessNote === "사용자 임의 문구", "임의 사용자 문구는 보존");
+  ok(r3.topo.mapId !== r1.topo.mapId, "내용이 다르면 mapId도 다름(내용 지문 유도)");
+  const bad = mkV1(); bad.nodes = [null];
+  let rb = null; try { rb = PM.migrateTopologyV1toV2(bad); } catch { /* 사망 시 실패 */ }
+  ok(rb && rb.topo === null && rb.errors.some((e) => /객체가 아님/.test(e)), "malformed v1(nodes:[null]) → 무사망 진단+변환 거부(frozen v1 검증 — 설계검증 #3)");
+  const notV1 = mkTopo();
+  const rn = PM.migrateTopologyV1toV2(notV1);
+  ok(rn.topo === null && rn.errors.some((e) => /v1\(1\)만 마이그레이션 대상/.test(e)), "v2 입력 → 마이그레이션 거부");
+  const junkV1 = mkV1(); junkV1.mapId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const rj = PM.migrateTopologyV1toV2(junkV1);
+  ok(rj.topo === null && rj.errors.some((e) => /미지 필드/.test(e)), "v1에 v2 필드(mapId) 혼입 → frozen v1 검증이 거부(스키마 밖 키)");
+}
+
+console.log("[12] CLI migrate 끝-끝 — v1 파일 안내→변환→멱등·동시 migrate 변환 정확히 1");
+{
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "pmap_mig_"));
+  fs.mkdirSync(path.join(repo, "src"));
+  fs.writeFileSync(path.join(repo, "src", "a.js"), "module.exports = 1;\n");
+  const CLI = path.join(__dirname, "..", "scripts", "scope-map.js");
+  const run = (...a) => spawnSync(process.execPath, [CLI, repo, ...a], { encoding: "utf8", env: { ...process.env, CODEX_BRIDGE_HOME: home } });
+  // v1 topology를 직접 심는다(마이그레이션 대상 재현)
+  const v1 = {
+    schemaVersion: 1, draft: true, project: path.basename(repo), createdAt: "2026-07-10T00:00:00Z", revision: 1,
+    nodes: [{ id: "11111111-1111-4111-8111-111111111111", label: "src", entityType: "module", roles: [], state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" }, anchors: [{ kind: "code", path: "src/a.js" }], lastSeenAt: "2026-07-10T01:00:00Z" }],
+    edges: [], inventory: mkTopo().inventory, freshnessNote: PM.FRESHNESS_NOTE_V1_DEFAULT,
+  };
+  fs.mkdirSync(path.join(repo, "project-map"), { recursive: true });
+  fs.writeFileSync(path.join(repo, "project-map", "topology.json"), JSON.stringify(v1, null, 1));
+  const st1 = run("status");
+  ok(st1.status === 1 && /v1 topology 감지/.test(st1.stderr), "v1 파일 → status가 migrate 안내(v2 검증 오류로 오도하지 않음)");
+  ok(run("render").status === 1, "v1 파일 → render도 안내 후 중단");
+  const mg = run("migrate");
+  ok(mg.status === 0 && /v1→v2 변환 완료/.test(mg.stdout), "migrate 성공");
+  const after = JSON.parse(fs.readFileSync(path.join(repo, "project-map", "topology.json"), "utf8"));
+  ok(after.schemaVersion === PM.MAP_SCHEMA_VERSION && PM.validateTopology(after).length === 0 && !("lastSeenAt" in after.nodes[0]), "변환 결과 v2 유효·lastSeenAt 소거");
+  ok(fs.existsSync(path.join(repo, "project-map", "MAP.md")) && PM.mapMdMatches(fs.readFileSync(path.join(repo, "project-map", "MAP.md"), "utf8"), after), "MAP.md 재렌더·지문 일치");
+  const mg2 = run("migrate");
+  ok(mg2.status === 0 && /이미 v2/.test(mg2.stdout), "재migrate → 멱등(이미 v2)");
+  ok(run("status").status === 0, "변환 후 status 정상");
+  // 동시 migrate: v1로 되돌린 뒤 2프로세스 — '변환 완료'는 정확히 1회(경합은 raw 재검사로 중단, 후발은 이미 v2)
+  fs.writeFileSync(path.join(repo, "project-map", "topology.json"), JSON.stringify(v1, null, 1));
+  const { spawn } = require("child_process");
+  const runP = () => new Promise((res) => {
+    const c = spawn(process.execPath, [CLI, repo, "migrate"], { env: { ...process.env, CODEX_BRIDGE_HOME: home } });
+    let out = ""; c.stdout.on("data", (d) => out += d); c.stderr.on("data", (d) => out += d);
+    c.on("close", (code) => res({ code, out }));
+  });
+  Promise.all([runP(), runP()]).then((rs) => {
+    const converted = rs.filter((r) => /v1→v2 변환 완료|Migrated v1→v2/.test(r.out)).length;
+    ok(converted === 1, `동시 migrate 2회 → 변환 정확히 1(실제 ${converted}) — 잠금 안 raw 재검사`);
+    const fin = JSON.parse(fs.readFileSync(path.join(repo, "project-map", "topology.json"), "utf8"));
+    ok(fin.schemaVersion === PM.MAP_SCHEMA_VERSION && PM.validateTopology(fin).length === 0, "최종 파일 v2 유효(반쪽 쓰기 없음)");
+    try { fs.rmSync(repo, { recursive: true, force: true }); } catch { /* 무해 */ }
+    afterMigrateRace();
+  });
+}
+
+function afterMigrateRace() {
+console.log("[13] 배포 사본 패리티 — bridge/project-map.js == out/project-map.js(바이트)·--check 통과");
+{
+  const a = fs.readFileSync(path.join(__dirname, "..", "bridge", "project-map.js"), "utf8");
+  const b = fs.readFileSync(path.join(__dirname, "..", "out", "project-map.js"), "utf8");
+  ok(a === b, "바이트 패리티(생성물 신선도 — 머리주석 없음이 계약: 사전검증 #1)");
+  const chk = spawnSync(process.execPath, [path.join(__dirname, "..", "scripts", "sync-map-core.js"), "--check"], { encoding: "utf8" });
+  ok(chk.status === 0, "sync-map-core --check 통과(검사 모드는 파일을 고치지 않음)");
+  const pkg = fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8");
+  ok(/"watch":\s*"node scripts\/sync-map-core\.js --watch-with-tsc"/.test(pkg), "watch 스크립트가 sync 통합 모드(1차 검증 회귀 잠금: tsc만 돌리면 CLI가 낡은 bridge 사본을 실행)");
+  ok(/"compile":[^\n]*sync-map-core\.js --write/.test(pkg) && /"test":[^\n]*sync-map-core\.js --check/.test(pkg), "compile=--write·test=--check 체인 계약");
+}
+
+watchLifecycleTests().then(runConcurrentInit);
+
+async function watchLifecycleTests() {
+console.log("[14] sync/watch 수명주기 — 침묵 실패 금지·onExit 정확히 1회(3차 반례 잠금)");
+const SM = require(path.join(__dirname, "..", "scripts", "sync-map-core.js"));
+const { EventEmitter } = require("events");
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pmap_sync_"));
+const src = path.join(dir, "src.js"), dst = path.join(dir, "dst.js");
+{
+  fs.writeFileSync(src, "AAA");
+  const r1 = SM.syncOnce(src, dst);
+  ok(r1.st === "synced" && fs.readFileSync(dst, "utf8") === "AAA", "초기 synced+사본 일치");
+  ok(SM.syncOnce(src, dst).st === "same", "동일 내용 → same(무기록)");
+  ok(SM.syncOnce(path.join(dir, "none.js"), dst).st === "src-missing", "소스 부재 → src-missing");
+  const srcDir = path.join(dir, "srcdir"); fs.mkdirSync(srcDir);
+  ok(SM.syncOnce(srcDir, dst).st === "read-failed", "소스 읽기 실패(EISDIR) → read-failed(부재와 구분)");
+  const dstDir = path.join(dir, "dstdir"); fs.mkdirSync(dstDir);
+  const rd = SM.syncOnce(src, dstDir);
+  ok(rd.st === "read-failed", "대상 읽기 실패(EISDIR) → read-failed — 읽지 못한 기존 사본을 '부재'로 보고 덮지 않음(3차 반례)");
+  const badDst = path.join(dir, "no-such-dir", "x.js");
+  const rw = SM.syncOnce(src, badDst);
+  ok(rw.st === "write-failed", "쓰기 실패(tmp 생성 불가) → write-failed 표면화");
+  ok(!fs.readdirSync(dir).some((f) => f.endsWith(".tmp")), "tmp 생성 실패 경로 — .tmp 잔존 없음");
+  { // 4차 보완: renameSync'만' 실패 주입 — tmp 쓰기 성공 후 정리 분기를 직접 잠금
+    const dst2 = path.join(dir, "ren-fail.js");
+    const origRename = fs.renameSync;
+    fs.renameSync = (a, b) => { if (b === dst2) { const e = new Error("injected"); throw e; } return origRename(a, b); };
+    let rr;
+    try { rr = SM.syncOnce(src, dst2); } finally { fs.renameSync = origRename; }
+    ok(rr.st === "write-failed" && !fs.readdirSync(dir).some((f) => f.endsWith(".tmp")), "rename만 실패 → write-failed+.tmp 정리(생성 성공분 잔존 없음)");
+  }
+}
+const mkChild = () => { const c = new EventEmitter(); c.killCount = 0; c.kill = () => { c.killCount++; setTimeout(() => c.emit("exit", null, "SIGTERM"), 5); }; return c; };
+{ // 정상: 초기 sync→src 변경 갱신→자연 종료 코드 전파 1회
+  fs.writeFileSync(src, "B1"); try { fs.unlinkSync(dst); } catch { /* 무해 */ }
+  let exits = []; let spawned = 0; const child = mkChild();
+  const w = SM.startWatch({ src, dst, intervalMs: 25, log: () => {}, logErr: () => {}, spawnChild: () => { spawned++; return child; }, onExit: (c) => exits.push(c) });
+  await sleep(60);
+  ok(fs.readFileSync(dst, "utf8") === "B1" && spawned === 1, "초기 1회 sync+자식 1회 기동");
+  fs.writeFileSync(src, "B2");
+  await sleep(250);
+  ok(fs.readFileSync(dst, "utf8") === "B2", "src 변경 → 사본 자동 갱신(watch 실효 — 문자열 검사가 아님)");
+  child.emit("exit", 2, null); child.emit("exit", 0, null); // 중복 이벤트도 1회만
+  await sleep(20);
+  ok(exits.length === 1 && exits[0] === 2, "자연 종료 코드 2 → onExit(2) 정확히 1회");
+  fs.writeFileSync(src, "B3"); await sleep(120);
+  ok(fs.readFileSync(dst, "utf8") === "B2", "종료 후 watcher 해제(더 이상 동기화 없음)");
+  w.stop(); w.stop();
+  ok(child.killCount <= 1, "stop 반복 → kill 최대 1회");
+}
+{ // child error→exit 연쇄 = 1회
+  fs.writeFileSync(src, "C1");
+  let exits = []; const child = mkChild();
+  SM.startWatch({ src, dst, intervalMs: 25, log: () => {}, logErr: () => {}, spawnChild: () => child, onExit: (c) => exits.push(c) });
+  await sleep(30);
+  child.emit("error", new Error("spawn fail")); child.emit("exit", 1, null);
+  await sleep(20);
+  ok(exits.length === 1 && exits[0] === 1, "child error 후 exit 연쇄 → onExit 정확히 1회(멱등 finish — 3차 반례)");
+}
+{ // 시그널 종료 → 1(성공 위장 금지)
+  fs.writeFileSync(src, "D1");
+  let exits = []; const child = mkChild();
+  SM.startWatch({ src, dst, intervalMs: 25, log: () => {}, logErr: () => {}, spawnChild: () => child, onExit: (c) => exits.push(c) });
+  await sleep(30);
+  child.emit("exit", null, "SIGKILL");
+  await sleep(20);
+  ok(exits.length === 1 && exits[0] === 1, "시그널·null 코드 종료 → onExit(1) 1회");
+}
+{ // 4차 보완: code=null·signal=null 미상 종료도 1(성공 위장 금지)
+  fs.writeFileSync(src, "D2");
+  let exits = []; const child = mkChild();
+  SM.startWatch({ src, dst, intervalMs: 25, log: () => {}, logErr: () => {}, spawnChild: () => child, onExit: (c) => exits.push(c) });
+  await sleep(30);
+  child.emit("exit", null, null);
+  await sleep(20);
+  ok(exits.length === 1 && exits[0] === 1, "미상 종료(code·signal 모두 null) → onExit(1) 1회");
+}
+{ // 초기 fatal(src 읽기 실패) → 자식 미기동·onExit(1) 1회
+  const srcDir2 = path.join(dir, "srcdir2"); fs.mkdirSync(srcDir2);
+  let exits = []; let spawned = 0;
+  SM.startWatch({ src: srcDir2, dst, intervalMs: 25, log: () => {}, logErr: () => {}, spawnChild: () => { spawned++; return mkChild(); }, onExit: (c) => exits.push(c) });
+  await sleep(30);
+  ok(spawned === 0 && exits.length === 1 && exits[0] === 1, "초기 tick fatal → 자식 미기동+onExit(1) 1회");
+}
+{ // tick fatal → kill → 자식 exit 연쇄 = 1회
+  fs.writeFileSync(src, "E1"); try { fs.unlinkSync(dst); } catch { /* 무해 */ }
+  let exits = []; const child = mkChild();
+  SM.startWatch({ src, dst, intervalMs: 25, log: () => {}, logErr: () => {}, spawnChild: () => child, onExit: (c) => exits.push(c) });
+  await sleep(60);
+  fs.rmSync(dst); fs.mkdirSync(dst); // 대상을 디렉터리로 — 다음 tick의 read-failed 유발
+  fs.writeFileSync(src, "E2");
+  await sleep(300);
+  ok(exits.length === 1 && exits[0] === 1 && child.killCount >= 1, "tick fatal→kill→child exit 연쇄 → onExit(1) 정확히 1회");
+  fs.rmSync(dst, { recursive: true, force: true });
+}
+try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 무해 */ }
+}
+
+function runConcurrentInit() {
+
 console.log("[9] 동시 init(병렬 프로세스) — 성공 정확히 1·기존 topology 보존·잠금 잔존 0(2차 지적: 순차 재실행은 경합 검사가 아님)");
 {
   const repo2 = fs.mkdtempSync(path.join(os.tmpdir(), "pmap_race_"));
@@ -311,4 +550,6 @@ console.log("[9] 동시 init(병렬 프로세스) — 성공 정확히 1·기존
     console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
     process.exit(fail ? 1 : 0);
   });
+}
+}
 }

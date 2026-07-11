@@ -1,7 +1,7 @@
 /*
- * Project MAP v1 — 'draft 전용 뼈대'(2026-07-10 설계 사전검증 3왕복 합의).
+ * Project MAP 순수 코어(스키마 v2 — P0.5. v1 뼈대는 2026-07-10 설계 사전검증 3왕복 합의).
  * 목적: 다섯 의미 편집(분할·확대·축소·소멸·재작성)의 공통 '좌표계'가 될 프로젝트 구조 정본의 스키마·검증·
- * 직렬화·렌더·정책 계산(전부 순수 — vscode/fs 없음). ⚠v1 경계(정직): adopt(정본 채택)·propose/approve
+ * 직렬화·렌더·정책 계산(전부 순수 — vscode/fs 없음). ⚠현 경계(정직): adopt(정본 채택)·propose/apply
  * 배선 없음 — topology는 관측 초안(draft)이며 기존 MAP.md 확정층의 권위를 침범하지 않는다. 지도는 판단
  * '근거'가 아니라 좌표계다: 편집 제안의 근거는 코드·테스트·설정 증거(evidence)여야 하고 지도 자신은 증거가
  * 될 수 없다(자기확인 고리 차단 — 설계검증 합의).
@@ -11,7 +11,10 @@
  * 생성 뷰(MAP.md)를 분리한다(같은 구조를 두 문서에 사람이 유지하면 한쪽이 반드시 낡는다 — HTML 미러 실증).
  */
 
-export const MAP_SCHEMA_VERSION = 1;
+export const MAP_SCHEMA_VERSION = 2; // v2(P0.5): mapId 세대 정체성·decisionLocks·provenance·description — MAP-V2-DESIGN.md §3
+// v1 기본 신선도 문구(마이그레이션이 정확 일치 시에만 v2 문구로 교체 — 임의 사용자 문구는 보존: P0.5 설계검증 #5)
+export const FRESHNESS_NOTE_V1_DEFAULT = "신선도 판정 미지원(v1 — verifiedHead·내용 지문 판정기는 후속)";
+export const FRESHNESS_NOTE_V2 = "신선도 판정 미지원 — 유도 판정기는 후속(P4)"; // 버전 중립(v2가 스스로 v1이라 안내하던 반례 봉합)
 
 // ── enum(설계검증 합의 — 상태는 4차원 분리: 한 enum에 합치면 전환·집계가 왜곡) ──────────────
 export const LIFECYCLES = ["active", "deprecated", "superseded", "tombstoned"] as const;
@@ -33,6 +36,16 @@ export type Confidence = typeof CONFIDENCES[number];
 
 export type Anchor = { kind: typeof ANCHOR_KINDS[number]; path: string; symbol?: string; lineHint?: number }; // 위치=증거·힌트(정체성 아님)
 export type EvidenceRef = { kind: typeof EVIDENCE_KINDS[number]; ref: string; note?: string }; // ledger sig는 '한 종류·보조 연결'(단독 근거 금지)
+// v2 신설(설계 §3): 설계 잠금 — 문구와 정책 참조를 한 string[]에 섞지 않는다(소비자 추측 금지 — typed graph).
+// policy-ref는 effective frontier를 따라 해석(P9)·MAP.md에는 원시 참조만 표시.
+export type DecisionLock = { kind: "literal"; text: string } | { kind: "policy-ref"; policyId: string };
+// v2 신설: 저장소 공유 검증 기준(이식 가능한 값만 — 로컬 절대경로 금지). git은 objectFormat 결속(sha256 저장소의
+// 64자 OID를 40자 상한이 거부하던 반례 — P0.5 설계검증 #4), historyless는 sha1 40hex 지문 체계 고정.
+export type VerificationBasis =
+  | { kind: "git"; objectFormat: "sha1" | "sha256"; head: string }
+  | { kind: "historyless"; basisFp: string; inventoryFp: string };
+// v2 신설: 공유 provenance — 정본은 applied decision 레코드, 여기엔 참조만(evidence 지문은 decision이 보유).
+export type ProvenanceRef = { basis: VerificationBasis; decisionId: string };
 
 export type MapNode = {
   id: string;                     // 불투명·불변(UUID — kind/label 재분류에도 불변. 표시 번호는 렌더 시 파생: 저장 안 함)
@@ -44,9 +57,12 @@ export type MapNode = {
   steward?: string;               // 설계 책임(옵션) — 코드 위치(anchors)와 분리
   conditions?: string[];
   evidence?: EvidenceRef[];
-  lastSeenAt?: string;            // 인벤토리가 마지막으로 관측한 시각
-  lastVerifiedAt?: string;        // 검증이 마지막으로 확인한 시각(신선도 '유도' 재료 — v1 판정기 미지원)
+  lastVerifiedAt?: string;        // 검증이 마지막으로 확인한 시각(신선도 '유도' 재료 — 판정기는 P4)
   notes?: string;
+  description?: string;           // v2: 라벨과 분리된 서술
+  decisionLocks?: DecisionLock[]; // v2: 설계 잠금(merge 동형 비교·slice·사람용 뷰 재료)
+  provenance?: ProvenanceRef;     // v2: 마지막 확인의 공유 provenance(effectiveConfidence의 confirmed 권위 조건)
+  // v1의 lastSeenAt(고빈도 관측치)는 v2에서 제거 — 하네스 로컬 freshness 저장소로 이동(mapHash 자기 유발 무효화 방지)
 };
 
 export type MapEdge = {
@@ -58,6 +74,8 @@ export type MapEdge = {
   conditions?: string[];
   evidence?: EvidenceRef[];
   notes?: string;
+  decisionLocks?: DecisionLock[]; // v2
+  provenance?: ProvenanceRef;     // v2
 };
 
 // 인벤토리 완전성(설계검증 — '정규식은 실패하지 않고 조용히 틀린다'): 순회 완전성과 의미 해석 범위를 분리 기록.
@@ -81,14 +99,16 @@ export type InventoryCoverage = {
 
 export type Topology = {
   schemaVersion: number;
-  draft: boolean;                 // v1은 항상 true — 정본 채택(adopt)은 승인 경로 이관과 함께(후속)
+  mapId: string;                  // v2: 지도 세대 정체성(UUID) — patch·decision·바인딩·WAL이 결속(재생성=새 세대)
+  replacesMapId?: string;         // v2: 세대 전환 기록(자기 자신 금지)
+  draft: boolean;                 // 정본 채택(adopt)은 P3b cutover와 함께(후속)
   project: string;
   createdAt: string;
   revision: number;               // 표시용 순번 — 정체성·CAS 근거 아님(근거는 mapHash — 설계검증)
   nodes: MapNode[];
   edges: MapEdge[];
   inventory: InventoryCoverage;
-  freshnessNote: string;          // v1: '신선도 판정 미지원' 고정 문구(허위 신선 표시 방지)
+  freshnessNote: string;          // '신선도 판정 미지원' 고정 문구(허위 신선 표시 방지 — 판정기는 P4)
 };
 
 // ── 스키마 검증(불변식) ─────────────────────────────────────────────
@@ -109,25 +129,48 @@ function unknownKeys(v: object, allowed: readonly string[], who: string, errs: s
 function optStr(v: unknown, who: string, name: string, errs: string[]): void {
   if (v !== undefined && typeof v !== "string") errs.push(`${who}: ${name}는 문자열이어야`);
 }
-const TOPO_KEYS = ["schemaVersion", "draft", "project", "createdAt", "revision", "nodes", "edges", "inventory", "freshnessNote"] as const;
-const NODE_KEYS = ["id", "label", "entityType", "roles", "state", "anchors", "steward", "conditions", "evidence", "lastSeenAt", "lastVerifiedAt", "notes"] as const;
-const EDGE_KEYS = ["id", "from", "to", "relation", "state", "conditions", "evidence", "notes"] as const;
+const TOPO_KEYS = ["schemaVersion", "mapId", "replacesMapId", "draft", "project", "createdAt", "revision", "nodes", "edges", "inventory", "freshnessNote"] as const;
+const NODE_KEYS = ["id", "label", "entityType", "roles", "state", "anchors", "steward", "conditions", "evidence", "lastVerifiedAt", "notes", "description", "decisionLocks", "provenance"] as const;
+const EDGE_KEYS = ["id", "from", "to", "relation", "state", "conditions", "evidence", "notes", "decisionLocks", "provenance"] as const;
+// frozen v1 키셋 — 마이그레이터의 입력 검증 전용(v1 파일의 무사망 진단 계약을 v2 이후에도 보존: P0.5 설계검증 #3)
+const TOPO_KEYS_V1 = ["schemaVersion", "draft", "project", "createdAt", "revision", "nodes", "edges", "inventory", "freshnessNote"] as const;
+const NODE_KEYS_V1 = ["id", "label", "entityType", "roles", "state", "anchors", "steward", "conditions", "evidence", "lastSeenAt", "lastVerifiedAt", "notes"] as const;
+const EDGE_KEYS_V1 = ["id", "from", "to", "relation", "state", "conditions", "evidence", "notes"] as const;
+const LOCK_KEYS_LITERAL = ["kind", "text"] as const;
+const LOCK_KEYS_POLICY = ["kind", "policyId"] as const;
+const PROV_KEYS = ["basis", "decisionId"] as const;
+const BASIS_GIT_KEYS = ["kind", "objectFormat", "head"] as const;
+const BASIS_HL_KEYS = ["kind", "basisFp", "inventoryFp"] as const;
+// 스키마 사양 — v1(frozen)과 v2가 같은 강화 코어를 공유(계약 갈림 방지)
+type SchemaSpec = { version: number; topoKeys: readonly string[]; nodeKeys: readonly string[]; edgeKeys: readonly string[]; v2: boolean };
+const SPEC_V2: SchemaSpec = { version: 2, topoKeys: TOPO_KEYS, nodeKeys: NODE_KEYS, edgeKeys: EDGE_KEYS, v2: true };
+const SPEC_V1: SchemaSpec = { version: 1, topoKeys: TOPO_KEYS_V1, nodeKeys: NODE_KEYS_V1, edgeKeys: EDGE_KEYS_V1, v2: false };
 const STATE_KEYS = ["lifecycle", "implementation", "confidence"] as const;
 const ANCHOR_KEYS = ["kind", "path", "symbol", "lineHint"] as const;
 const EVIDENCE_KEYS = ["kind", "ref", "note"] as const;
 const INV_KEYS = ["scanComplete", "filesSeen", "policyExcluded", "depthCapped", "entryCapped", "unreadable", "semantic"] as const;
 const SEM_KEYS = ["supportedLangs", "scannedSupportedFiles", "unsupportedFiles", "dynamicUnknowns", "externalOrAliasSkipped", "semanticUnreadable", "parserNote"] as const;
-export function validateTopology(t: Topology): string[] {
+export function validateTopology(t: Topology): string[] { return validateTopologyWith(t, SPEC_V2); }
+// frozen v1 검증 — 마이그레이터 입력 전용(v1 파일도 '죽지 않고 진단' 계약 유지). 같은 강화 코어를 공유.
+export function validateTopologyV1(t: unknown): string[] { return validateTopologyWith(t as Topology, SPEC_V1); }
+function validateTopologyWith(t: Topology, spec: SchemaSpec): string[] {
   const errs: string[] = [];
   if (!t || typeof t !== "object") return ["topology가 객체가 아님"];
-  if (t.schemaVersion !== MAP_SCHEMA_VERSION) errs.push(`schemaVersion ${show(t.schemaVersion)} ≠ ${MAP_SCHEMA_VERSION}`);
-  if (t.draft !== true) errs.push("v1은 draft:true만 허용(정본 채택은 승인 경로 이관 후 — 설계검증 합의)");
+  if (t.schemaVersion !== spec.version) errs.push(`schemaVersion ${show(t.schemaVersion)} ≠ ${spec.version}`);
+  if (t.draft !== true) errs.push("draft:true만 허용(정본 채택은 P3b cutover 후 — 설계검증 합의)");
   // 루트 스칼라 타입(6차 반례: 비문자열 label 등이 검증을 통과한 뒤 렌더에서 사망 — 정본 스키마의 타입 계약)
   if (typeof t.project !== "string" || !t.project) errs.push("project는 비어있지 않은 문자열이어야");
   if (typeof t.createdAt !== "string" || !t.createdAt) errs.push("createdAt은 문자열이어야");
   if (!Number.isInteger(t.revision) || (t.revision as number) < 1) errs.push("revision은 1 이상 정수여야");
   if (t.freshnessNote !== undefined && typeof t.freshnessNote !== "string") errs.push("freshnessNote는 문자열이어야");
-  unknownKeys(t, TOPO_KEYS, "topology", errs);
+  if (spec.v2) {
+    if (!isUuid(t.mapId)) errs.push("mapId는 UUID여야(지도 세대 정체성 — patch·decision·바인딩·WAL 결속 키)");
+    if (t.replacesMapId !== undefined) {
+      if (!isUuid(t.replacesMapId)) errs.push("replacesMapId는 UUID여야");
+      else if (t.replacesMapId === t.mapId) errs.push("replacesMapId가 자기 자신(자기 세대 대체 금지)");
+    }
+  }
+  unknownKeys(t, spec.topoKeys, "topology", errs);
   // 외부 파일을 읽는 validator는 잘못된 형태에서 예외로 죽지 말고 진단으로 반환(3차 반례: nodes:{} → TypeError)
   if (!Array.isArray(t.nodes)) return [...errs, "nodes가 배열이 아님"];
   if (!Array.isArray(t.edges)) return [...errs, "edges가 배열이 아님"];
@@ -137,14 +180,14 @@ export function validateTopology(t: Topology): string[] {
     if (!n || typeof n !== "object") { errs.push("노드 원소가 객체가 아님(null 등)"); continue; }
     if (typeof n.id !== "string" || !n.id || ids.has(n.id)) errs.push(`노드 id 누락/중복: ${idOf(n.id)}`);
     if (typeof n.id === "string" && n.id) ids.add(n.id); // 중복 집계는 유효한 ID에만
-    errs.push(...validateNode(n));
+    errs.push(...validateNodeWith(n, spec));
   }
   const eids = new Set<string>();
   for (const e of t.edges || []) {
     if (!e || typeof e !== "object") { errs.push("엣지 원소가 객체가 아님(null 등)"); continue; }
     if (typeof e.id !== "string" || !e.id || eids.has(e.id) || ids.has(e.id as string)) errs.push(`엣지 id 누락/중복: ${idOf(e.id)}`);
     if (typeof e.id === "string" && e.id) eids.add(e.id);
-    errs.push(...validateEdge(e));
+    errs.push(...validateEdgeWith(e, spec));
     if (typeof e.from !== "string" || !ids.has(e.from)) errs.push(`엣지 ${idOf(e.id)}: from 참조 부재 ${show(e.from)}`);
     if (typeof e.to !== "string" || !ids.has(e.to)) errs.push(`엣지 ${idOf(e.id)}: to 참조 부재 ${show(e.to)}`);
   }
@@ -181,7 +224,8 @@ function fieldArr(v: unknown, who: string, name: string, errs: string[], require
 }
 // 문자열 UUID 검사 — {"toString":null} 같은 객체가 `v || ""`를 지나 RegExp.test의 String 변환에서 사망(6차 반례)
 const isUuid = (v: unknown): boolean => typeof v === "string" && UUID_RE.test(v);
-export function validateNode(n: MapNode): string[] {
+export function validateNode(n: MapNode): string[] { return validateNodeWith(n, SPEC_V2); }
+function validateNodeWith(n: MapNode, spec: SchemaSpec): string[] {
   if (!n || typeof n !== "object") return ["노드가 객체가 아님"];
   const errs: string[] = [];
   const who = `노드 ${idOf(n.id)}`;
@@ -197,12 +241,21 @@ export function validateNode(n: MapNode): string[] {
   if (evd) for (const e of evd as EvidenceRef[]) errs.push(...validateEvidence(e, who));
   const conds = fieldArr(n.conditions, who, "conditions", errs);
   if (conds) for (const c of conds) if (typeof c !== "string" || !c.trim()) errs.push(`${who}: condition 불량`);
-  optStr(n.steward, who, "steward", errs); optStr(n.lastSeenAt, who, "lastSeenAt", errs);
+  optStr(n.steward, who, "steward", errs);
   optStr(n.lastVerifiedAt, who, "lastVerifiedAt", errs); optStr(n.notes, who, "notes", errs);
-  unknownKeys(n, NODE_KEYS, who, errs);
+  if (spec.v2) {
+    optStr(n.description, who, "description", errs);
+    const locks = fieldArr(n.decisionLocks, who, "decisionLocks", errs);
+    if (locks) for (const l of locks as DecisionLock[]) errs.push(...validateDecisionLock(l, who));
+    if (n.provenance !== undefined) errs.push(...validateProvenance(n.provenance, who));
+  } else {
+    optStr((n as MapNode & { lastSeenAt?: unknown }).lastSeenAt, who, "lastSeenAt", errs); // v1 전용 필드
+  }
+  unknownKeys(n, spec.nodeKeys, who, errs);
   return errs;
 }
-export function validateEdge(e: MapEdge): string[] {
+export function validateEdge(e: MapEdge): string[] { return validateEdgeWith(e, SPEC_V2); }
+function validateEdgeWith(e: MapEdge, spec: SchemaSpec): string[] {
   if (!e || typeof e !== "object") return ["엣지가 객체가 아님"];
   const errs: string[] = [];
   const who = `엣지 ${idOf(e.id)}`;
@@ -216,7 +269,50 @@ export function validateEdge(e: MapEdge): string[] {
   const conds = fieldArr(e.conditions, who, "conditions", errs);
   if (conds) for (const c of conds) if (typeof c !== "string" || !c.trim()) errs.push(`${who}: condition 불량`);
   optStr(e.notes, who, "notes", errs);
-  unknownKeys(e, EDGE_KEYS, who, errs);
+  if (spec.v2) {
+    const locks = fieldArr(e.decisionLocks, who, "decisionLocks", errs);
+    if (locks) for (const l of locks as DecisionLock[]) errs.push(...validateDecisionLock(l, who));
+    if (e.provenance !== undefined) errs.push(...validateProvenance(e.provenance, who));
+  }
+  unknownKeys(e, spec.edgeKeys, who, errs);
+  return errs;
+}
+// v2 신설 필드 검증(설계 §3 — 외부 JSON 무사망 계약 동수준: 비객체·독성·미지 키 전부 진단)
+function validateDecisionLock(l: DecisionLock | null | undefined, who: string): string[] {
+  if (!l || typeof l !== "object") return [`${who}: decisionLock 원소가 객체가 아님`];
+  const errs: string[] = [];
+  if (l.kind === "literal") {
+    if (typeof l.text !== "string" || !l.text.trim()) errs.push(`${who}: decisionLock literal의 text는 비어있지 않은 문자열이어야`);
+    unknownKeys(l, LOCK_KEYS_LITERAL, `${who} decisionLock`, errs);
+  } else if (l.kind === "policy-ref") {
+    if (!isUuid((l as { policyId?: unknown }).policyId)) errs.push(`${who}: decisionLock policy-ref의 policyId는 UUID여야`);
+    unknownKeys(l, LOCK_KEYS_POLICY, `${who} decisionLock`, errs);
+  } else errs.push(`${who}: decisionLock kind 불량 ${show((l as { kind?: unknown }).kind)}(literal|policy-ref)`);
+  return errs;
+}
+function validateVerificationBasis(b: VerificationBasis | null | undefined, who: string): string[] {
+  if (!b || typeof b !== "object") return [`${who}: provenance.basis가 객체가 아님`];
+  const errs: string[] = [];
+  if (b.kind === "git") {
+    const g = b as { objectFormat?: unknown; head?: unknown };
+    if (g.objectFormat === "sha1") { if (typeof g.head !== "string" || !/^[0-9a-f]{40}$/i.test(g.head)) errs.push(`${who}: basis(git/sha1) head는 40hex여야`); }
+    else if (g.objectFormat === "sha256") { if (typeof g.head !== "string" || !/^[0-9a-f]{64}$/i.test(g.head)) errs.push(`${who}: basis(git/sha256) head는 64hex여야`); }
+    else errs.push(`${who}: basis objectFormat 불량 ${show(g.objectFormat)}(sha1|sha256 — 축약 해시 금지)`);
+    unknownKeys(b, BASIS_GIT_KEYS, `${who} basis`, errs);
+  } else if (b.kind === "historyless") {
+    const h = b as { basisFp?: unknown; inventoryFp?: unknown };
+    if (typeof h.basisFp !== "string" || !/^[0-9a-f]{40}$/i.test(h.basisFp)) errs.push(`${who}: basis(historyless) basisFp는 sha1 40hex여야`);
+    if (typeof h.inventoryFp !== "string" || !/^[0-9a-f]{40}$/i.test(h.inventoryFp)) errs.push(`${who}: basis(historyless) inventoryFp는 sha1 40hex여야`);
+    unknownKeys(b, BASIS_HL_KEYS, `${who} basis`, errs);
+  } else errs.push(`${who}: basis kind 불량 ${show((b as { kind?: unknown }).kind)}(git|historyless — sentinel 흉내 금지)`);
+  return errs;
+}
+function validateProvenance(p: ProvenanceRef | null | undefined, who: string): string[] {
+  if (!p || typeof p !== "object") return [`${who}: provenance가 객체가 아님`];
+  const errs: string[] = [];
+  errs.push(...validateVerificationBasis(p.basis, who));
+  if (!isUuid(p.decisionId)) errs.push(`${who}: provenance.decisionId는 UUID여야`);
+  unknownKeys(p, PROV_KEYS, `${who} provenance`, errs);
   return errs;
 }
 // anchor·evidence 원소의 전체 필드 타입(6차 지적: path·ref가 숫자 42여도 truthy로 통과 → 렌더/canonical에서 사망)
@@ -264,6 +360,7 @@ export function canonicalSerialize(t: Topology): string {
   // 집합 의미 배열은 '전부' canonical 정렬(검증 반례: conditions/evidence/policyExcluded 순서만 달라도 지문이
   // 갈라져 CAS 거짓 충돌 — 파일시스템 순회 순서는 플랫폼 의존). v1 스키마에 '순서가 의미 있는 배열'은 없음.
   const evKey = (e: EvidenceRef) => e.kind + "|" + e.ref + "|" + (e.note || "");
+  const lockKey = (l: DecisionLock) => l.kind + "|" + (l.kind === "literal" ? l.text : (l as { policyId: string }).policyId); // v2 집합 배열 — canonical 등록(누락 시 입력 순서가 지문에 남음)
   copy.nodes = [...(copy.nodes || [])].sort((a, b) => a.id.localeCompare(b.id));
   copy.edges = [...(copy.edges || [])].sort((a, b) => a.id.localeCompare(b.id));
   for (const n of copy.nodes) {
@@ -271,10 +368,12 @@ export function canonicalSerialize(t: Topology): string {
     if (n.anchors) n.anchors = [...n.anchors].sort((a, b) => (a.kind + "|" + a.path + "|" + (a.symbol || "") + "|" + (a.lineHint ?? "")).localeCompare(b.kind + "|" + b.path + "|" + (b.symbol || "") + "|" + (b.lineHint ?? ""))); // 전체 키(kind·lineHint 포함 — 부분 키는 입력 순서가 지문에 남음: 2차 반례)
     if (n.conditions) n.conditions = [...n.conditions].sort();
     if (n.evidence) n.evidence = [...n.evidence].sort((a, b) => evKey(a).localeCompare(evKey(b)));
+    if (n.decisionLocks) n.decisionLocks = [...n.decisionLocks].sort((a, b) => lockKey(a).localeCompare(lockKey(b)));
   }
   for (const e of copy.edges) {
     if (e.conditions) e.conditions = [...e.conditions].sort();
     if (e.evidence) e.evidence = [...e.evidence].sort((a, b) => evKey(a).localeCompare(evKey(b)));
+    if (e.decisionLocks) e.decisionLocks = [...e.decisionLocks].sort((a, b) => lockKey(a).localeCompare(lockKey(b)));
   }
   if (copy.inventory) {
     copy.inventory.policyExcluded = [...(copy.inventory.policyExcluded || [])].sort();
@@ -289,6 +388,32 @@ export function mapHashOf(t: Topology): string {
   return require("crypto").createHash("sha1").update(canonicalSerialize(t)).digest("hex");
 }
 
+// ── v1→v2 결정론 마이그레이터(P0.5 — 설계 §3) ──────────────────────────────
+// '결정론'=동일 v1 입력이면 어느 clone·브랜치에서 실행해도 동일 v2 출력(P0.5 설계검증 #2: 실사용 randomUUID는
+// 두 clone이 서로 다른 mapId 세대를 만들어 patch·decision·바인딩 결속이 갈라짐). mapId는 v1 canonical 내용
+// 지문+고정 네임스페이스에서 유도한다.
+export function deterministicMapIdFromV1(v1: Topology): string {
+  const hex: string = require("crypto").createHash("sha1")
+    .update("codex-bridge:project-map:v1->v2:" + canonicalSerialize(v1)).digest("hex");
+  return hex.slice(0, 8) + "-" + hex.slice(8, 12) + "-" + hex.slice(12, 16) + "-" + hex.slice(16, 20) + "-" + hex.slice(20, 32);
+}
+// 순서 계약(P0.5 설계검증 #3): schemaVersion===1 확인 → frozen v1 전체 검증(무사망 진단) → 변환 → v2 전체 검증.
+// 유효하지 않은 v1은 topo:null+진단으로 반환하고 입력을 한 바이트도 바꾸지 않는다(깊은 복사 후 변환).
+export function migrateTopologyV1toV2(t: unknown): { topo: Topology | null; errors: string[] } {
+  if (!t || typeof t !== "object") return { topo: null, errors: ["topology가 객체가 아님"] };
+  if ((t as Topology).schemaVersion !== 1) return { topo: null, errors: [`schemaVersion ${show((t as Topology).schemaVersion)} — v1(1)만 마이그레이션 대상`] };
+  const v1errs = validateTopologyV1(t);
+  if (v1errs.length) return { topo: null, errors: v1errs };
+  const mapId = deterministicMapIdFromV1(t as Topology);
+  const copy = JSON.parse(JSON.stringify(t)) as Topology & { nodes: Array<MapNode & { lastSeenAt?: string }> };
+  copy.schemaVersion = MAP_SCHEMA_VERSION;
+  copy.mapId = mapId;
+  for (const n of copy.nodes) delete n.lastSeenAt; // 고빈도 관측치 — v2에서 하네스 로컬로 이동(유실 무해: 설계 1-2)
+  if (copy.freshnessNote === FRESHNESS_NOTE_V1_DEFAULT) copy.freshnessNote = FRESHNESS_NOTE_V2; // 알려진 기본 문구만 교체·임의 문구 보존(#5)
+  const v2errs = validateTopology(copy);
+  return v2errs.length ? { topo: null, errors: v2errs.map((e) => "변환 결과 v2 위반 — " + e) } : { topo: copy, errors: [] };
+}
+
 // ── coverage 3분리(설계검증 — 파일/그래프/증거는 단위가 달라 한 비율로 못 합침) ─────────────
 export function graphCoverage(t: Topology): { nodes: Record<Confidence, number>; edges: Record<Confidence, number> } {
   const zero = (): Record<Confidence, number> => ({ confirmed: 0, candidate: 0, unknown: 0 });
@@ -298,7 +423,7 @@ export function graphCoverage(t: Topology): { nodes: Record<Confidence, number>;
   return { nodes, edges };
 }
 
-// ── patch envelope 형식(v1은 '형식+순수 계산'까지 — CLI 배선(propose/approve)은 v1b) ──────────
+// ── patch envelope 형식(형식+순수 계산까지 — CLI 배선(propose/apply)은 P2) ──────────
 // append-only: patch 자체는 불변, 상태는 decisions의 전이 이벤트로 유도. tier는 제출자 신뢰 안 함 — 정책기가 산출.
 export const PATCH_OPS = ["add_node", "add_edge", "set_state", "add_anchor", "add_evidence", "add_condition", "change_relation", "retire_candidate"] as const; // split/merge/change_owner는 스키마 예약(후속 — 대형 연산)
 export type PatchOp = typeof PATCH_OPS[number];
@@ -457,7 +582,7 @@ export function validateDecision(d: MapDecision): string[] {
     }
   }
   if (d.action === "applied" && !strTest(/^[0-9a-f]{40}$/, d.mapHashAfter)) errs.push("applied: mapHashAfter 필수");
-  // 선택 필드도 있으면 타입 강제(7차 지적: v1b 배선 전에 외부 레코드 계약을 닫는다)
+  // 선택 필드도 있으면 타입 강제(7차 지적: P2 배선 전에 외부 레코드 계약을 닫는다)
   if (d.opHash !== undefined && !strTest(/^[0-9a-f]{40}$/, d.opHash)) errs.push("opHash는 sha1(40자 hex)이어야");
   if (d.mapHashAfter !== undefined && !strTest(/^[0-9a-f]{40}$/, d.mapHashAfter)) errs.push("mapHashAfter는 sha1(40자 hex)이어야");
   if (d.appliedRevision !== undefined && (!Number.isInteger(d.appliedRevision) || d.appliedRevision < 1)) errs.push("appliedRevision은 1 이상 정수여야");
@@ -476,7 +601,7 @@ export function validateDecision(d: MapDecision): string[] {
 }
 
 // patch 사본의 정규화 지문 — 깊은 키 정렬 후 sha1(얕은 replacer는 중첩 키를 유실). approve validator와
-// 이후 CLI(v1b)가 '같은 함수'를 쓴다.
+// 이후 CLI(P2)가 '같은 함수'를 쓴다.
 export function opHashOf(payload: Record<string, unknown>): string {
   const sortKeys = (v: unknown): unknown => {
     if (Array.isArray(v)) return v.map(sortKeys);
