@@ -94,11 +94,19 @@ attached/confirmed/refuted/user_confirm/user_dispute/pinned/unpinned/banned/unba
 exported/alias/unalias. decisions는 기존 장부 JSONL에 넣지 않는다(EVENT_TYPES allowlist·트리머 보존군·헬스 동형
 3중 파손) — 별도 저장(§4 P2의 이층 구조).
 
-1-13. **merge류 자동 적용의 문턱은 '의미적 동형' 전체 증명(재검증 지적 #4).** anchors·edges·evidence가 같은
-대상을 지시하는 것만으로는 부족하다(같은 파일을 공유해도 읽기/쓰기 역할·제품 경계·steward·conditions·decision
-lock이 다른 두 기능축일 수 있음 — 자연어 자동 병합을 폐기했던 반례와 동일). **요건: entityType·roles·state·
-conditions·steward·decision lock·모든 입출력 edge의 의미적 동형까지 Verifier가 확인한 경우에만 verifier-resolved.
-그 외 merge류는 전부 intent-choice.** 실질적으로 자동 merge는 희귀 경로가 되는 것이 의도된 보수성이다.
+1-13. **merge류의 분기는 3단 — 동형 증명/조사/의도(사용자 후속 지적 2026-07-11 반영).** anchors·edges·evidence가
+같은 대상을 지시하는 것만으로는 부족하다(같은 파일을 공유해도 읽기/쓰기 역할·제품 경계·steward·conditions·
+decision lock이 다른 두 기능축일 수 있음 — 자연어 자동 병합을 폐기했던 반례와 동일). 판정 사다리:
+- **완전한 의미적 동형**(entityType·roles·state·conditions·steward·decisionLocks·모든 입출력 edge)을 Verifier가
+  확인 → verifier-resolved 자동 merge.
+- **동형 증명 실패 → needs-investigation**('자동 조건 미충족'과 '사용자가 제품 방향을 골라야 함'은 같은 뜻이
+  아니다 — 대부분은 근거 부족이거나 '지금은 별개 유지가 안전'일 뿐. 곧장 사용자를 부르면 MAP 정리 책임이 다시
+  사람에게 간다).
+- **조사 후에도 '하나의 기능'과 '별개 유지' 둘 다 타당한 제품 모델로 남고, 현재 구조 결정이 실제로 필요한
+  경우에만 → intent-choice.**
+- **현재 작업에 merge가 필요하지 않으면 → 별개 유지+resolved-noop 종결**(질문 없음. 15차 정정: unresolved는
+  '조사 상한 도달·결론 미도출'의 파킹 상태이므로 '결론이 난 no-op'을 거기 넣으면 건강도·정리 대상 집계가
+  오염된다 — proposal lifecycle의 정식 종결 resolved-noop으로).
 
 1-14. **intent-choice 채널 = 대시보드 웹뷰 버튼→확장→하네스 파일(기존 ledgerAct 패턴)+proposal/baseAuthorityHash(§3)
 결속.** 선택 후 base가 바뀌었으면: 선택 '의미'가 그대로면(read-set 동일) 자동 재기반, 의미가 달라진 경우에만
@@ -126,19 +134,33 @@ recovery-action 카드(운영 알림 — 의도 선택 아님)로 노출. dead-l
 recover 전담 — 자동 경로는 degraded 고지만(재시도 폭주 금지).
 
 1-19. **journal 이층 구조 고정 — authority-aware(11차 지적 반영).** **prepared WAL은 하네스 로컬**(지시 §3
-'적용 전 제안은 로컬'), **applied decision 로그는 저장소 공유**. 쓰기 계약: 둘 다 atomicWrite(tmp+rename),
-멱등 키=decisionId, 저장소 로그는 append-only+병합 시 decisionId 중복 제거.
+'적용 전 제안은 로컬'), **applied decision은 저장소 공유 — decision별 독립 파일
+`project-map/decisions/<decisionId>.json`(사용자 후속 지적 2026-07-11: 단일 JSONL append는 두 브랜치가 같은
+파일 끝에 각각 append하면 Git 텍스트 충돌이 실제로 발생 — 사용자가 로그 충돌을 손으로 풀게 되면 자동화 철학
+위반. 독립 파일이면 병렬 브랜치 충돌이 사실상 없고 decisionId=파일명이 자연 멱등 키. decisionIndexHash는
+파일 집합의 canonical 정렬로 생성하고 index 파일은 생성물로 취급).** 쓰기 계약: 둘 다 atomicWrite(tmp+rename),
+멱등 키=decisionId.
 **prepared WAL 필수 필드(자기완결 — 13차 지적: WAL만 남은 상태에서 재적용, topology 교체 후엔 before 지문
 포함 완전한 decision 보충이 가능해야 하며 pending 큐 참조로 대체 금지): ①정규화 patch 사본 전체+patchId+
 opHash(v1 approve 복구 계약 승계 — 사본 없으면 재적용 불능) ②PatchBasis·read-set·inverse/복구 정보
 ③topology before 내용 지문(교체 후엔 사후 계산 불가) ④decisionId·mapId·AuthorityDecisionProjection(canonical
-지문 포함) ⑤expectedMapHashAfter·expectedDecisionIndexHashAfter·expectedAuthorityHashAfter.** 적용 쓰기의 내구 상태는 5단(12차 지적 반영 — WAL만 / topology만 / topology+MAP.md / +decision / +marker)이며
+지문 포함) ⑤expectedMapHashAfter·expectedDecisionIndexHashAfter·expectedAuthorityHashAfter
+⑥**(정책 동반/정책 전용 시) tagged policy artifact(19차 확정 — 생성과 철회는 서로 다른 파일 종류이므로
+WAL이 종류를 자체 판별해야 자기완결):
+`{kind:"intent-policy", policyId, 정규화 IntentPolicy 사본, 예상 파일 지문, supersedesPolicyIds}` |
+`{kind:"policy-revocation", revocationId, targetPolicyId, 정규화 revocation 레코드 사본, 예상 파일 지문}`.**
+복구 튜플의 policy 검사도 artifact kind에 따라 정확한 파일 경로(.json vs .revoke.json)·내용·지문을 대조. 적용 쓰기의 내구 상태는 6단(12·15차 반영 — WAL만 / topology만 / topology+MAP.md / +decision / +policy 파일
+[정책 동반 시 — decision 보충과 동일 규칙으로 WAL 사본에서 보충] / +marker[decision 파일과 policy 파일의
+after 지문을 함께 결속])이며
 각 중단 지점의 복구 대응: **⓪topology만 원자 교체됨·MAP.md 이전/부재·decision 미기록(mapHash=expected인데
 색인·MAP.md가 이전 값인 상태) → WAL projection으로 expected authority 재계산→MAP.md 재렌더→동일
 decisionId/projection으로 decision 보충→marker 기록(한 체인으로 완결)** ①topology+MAP.md 기록·decision
 미기록 → decision 보충(projection 대조 후)→marker ②decision까지 기록·guard marker 미기록 → marker 보충
 ③같은 topology인데 decision 색인이 기대와 다름 → 재렌더+authorityHash 재검사 ④복구 대상 projection과 다른
-decision이 병합돼 있음 → read-set 재검증 또는 conflict. **복구 판정은 topology
+decision이 병합돼 있음 → read-set 재검증 또는 conflict. **policy-aware(16차 반영): 정책 동반 WAL이면 모든
+decision 보충 분기가 조건부 decision→policy→marker 체인으로 완결되고, 복구 판정 튜플에 (policyRequired,
+policyExists, 실제 policyFp=예상 policyFp)를 포함한다 — 'decision 있음·policy 없음' 중단이 ②(marker 보충)로
+오분류되지 않게. marker는 decision·policy 두 파일이 실존하고 예상 지문과 일치한 뒤에만 생성.** **복구 판정은 topology
 해시 단독 비교가 아니라 (mapHash, decision 존재·projection 일치, authorityHash) 튜플 비교** — v1
 recoveryDecision 3분기는 이 튜플 비교의 내핵으로 승계. CAS 재검사(⑥⑦⑧)는 잠금 안.
 
@@ -146,7 +168,7 @@ recoveryDecision 3분기는 이 튜플 비교의 내핵으로 승계. CAS 재검
 validatePatch(형식)와 분리된 이 단계의 실패가 needs-investigation의 정식 진입점.
 
 1-21. **상태 어휘 4계통 직교 분리(5차 지적 #3 반영).** ①bootstrap 생명주기(진행형은 하네스 로컬 run-state+pid
-생존 검증) ②freshness(항상 유도·비저장) ③**proposal lifecycle: proposed→classified→resolved|expired**(로컬
+생존 검증) ②freshness(항상 유도·비저장) ③**proposal lifecycle: proposed→classified→resolved|resolved-noop|expired**(로컬
 pending 파일의 상태 — 지시 §3 '적용 전 제안은 로컬'. detectedBy/provider 메타 보유. 멱등 키=patchId. 관찰
 장부의 proposed '이벤트'와는 별개 계통 — 혼동 금지) ④patch 결정 분류 5종(classified의 산출)+종결
 applied/stale-expired/unresolved. conflict는 결정 상태기 소관(공급자 충돌·topology↔검증 불일치)이지 신선도가
@@ -176,10 +198,16 @@ docs/MAP.md는 read-only 이관 소스로 동결(deprecated 배너), 기존 '불
 경제형/정밀형/자동형은 opt-in.
 
 1-27. **v1 정책 개정표(의도 문서화된 정책 변경 — 테스트는 '의도 개정'으로 재작성, 삭제 아님).**
-①change_relation: 코드 증거 명백 시 verifier-resolved(지시 명시) ②'명백한 supersede': verifier-resolved(유일한
-실질 하향) ③tombstone 확정: intent-choice 존치(자동은 tombstone_candidate 감지까지) ④tombstoned/superseded
-복원: intent-choice 존치 ⑤merge류: 1-13. 근거: 지시 §0(구 승인 흐름 명시 기각)+§7(재설계 선언)+선행 합의
-(2026-07-07 '건별 수동 승인 실사용 불가').
+①change_relation: 코드 증거 명백 시 verifier-resolved(지시 명시) ②'명백한 supersede': verifier-resolved
+③**tombstone 3층(사용자 후속 지시 2026-07-11로 재개정 — '모든 후보가 자동으로 사용자 카드로 가면 안 된다')**:
+  ⓐ observed-absent(코드에서 안 보임) = 결정론 관측 기록만, 질문 없음
+  ⓑ tombstone_candidate = **needs-investigation 선행**(삭제 커밋·호출부·테스트·설정·대체 존재를 시스템이 조사)
+  ⓒ 명시적 기존 정책(IntentPolicy 1-35)·삭제 커밋·호출부 0·테스트/설정 제거·대체 명시가 전부 갖춰져 결론이
+    하나 → verifier-resolved(질문 없음)
+  ⓓ deprecated/superseded/tombstoned가 모두 타당하게 남을 때만 → intent-choice
+④tombstoned/superseded 복원: intent-choice 존치 ⑤merge류: 1-13(3단 사다리). 근거: 지시 §0+§7+선행 합의
+(2026-07-07)+사용자 후속 지시(2026-07-11 — 본 항 ③의 완화는 v1 'tombstone 확정=항상 사람' 합의를 사용자가
+직접 두 번째로 개정한 결정).
 
 1-28. **blocked-conflict 해제 = 동일 evidence matrix 재검사 통과 시(재검증 지적 #9).** 파일 변경 감지는 재조사
 트리거일 뿐 해제 조건이 아니다. integrity 버스에 ack 불가 kind로 노출, 재검사에서 모순 소멸 확인 시에만 제거.
@@ -202,11 +230,78 @@ replacesMapId(또는 reset decision)로 기록한다.
 1-32. **verify-guard의 자동/수동 topology 변경 구분은 '산출물 일치'로 구현한다(3·4차 재검증 반영).** guard의
 관측 입력(git status 경로·mtime)으로는 변경 주체를 알 수 없다. **applied decision에 topology의 before/after
 내용 지문+생성 뷰(MAP.md) 지문을 기록하고, 현재 파일 내용이 그 기록 산출물과 정확히 일치할 때만 검증 트리거에서
-제외한다.** 자동·수동 변경이 섞이면(불일치) 전체를 검증 대상으로. **decision 로그 파일 자체는 자기 after-hash를
+제외한다.** 자동·수동 변경이 섞이면(불일치) 전체를 검증 대상으로. **marker 스키마(17·19·20차 정합 — 실제 합타입): `{decisionId, decisionFileAfterHash, policyArtifact: null |
+{kind: "intent-policy"|"policy-revocation", id, fileAfterHash}}`** — policyArtifact가 있으면 세 내부 필드는
+전부 필수(부분 상태 금지 불변식: kind 없이는 .json/.revoke.json 경로 판별 불가, 손상 marker가 정상 비정책
+marker로 오인되면 복구·guard가 구현마다 갈라짐). kind로 파일 종류·경로를 판별(decision op 재판독 불요). decision 저장 파일(1-19 개정: decision별
+독립 파일) 자체는 자기 after-hash를
 자기 레코드에 담을 수 없으므로(4차 지적 #4) 별도 계약: 로컬 WAL의 최근 applied marker(decisionId+로그 파일
 after 내용 지문)를 guard가 대조해 '이번 pipeline append분'만 제외하고, marker 불일치(수동 편집·혼합)는 검증
 대상.** 릴리스의 dirty-worktree 중단은 이와 무관한 별도 계약이며 이 구분으로 해소되지 않음(자동 생성물은 커밋
 전 릴리스 불가 — 정상 동작).
+
+1-33. **bootstrap 후 의미 보강 자동 연속성(사용자 후속 지적 2026-07-11 — 없으면 'MAP 파일 자동 생성'은 되지만
+'살아 있는 구조 MAP 자동 생성'이 아니게 됨).** bootstrap(결정론 draft) 완료 시 **동일 mapId에 semantic-enrichment
+작업을 자동 큐잉한다 — 사용자 별도 명령 없음.** 현재 선택된 provider가 없거나 미준비면 semantic-enrichment-pending
+으로 보존하고, **readiness가 성립하는 순간 자동 재개.** 기본 설정에서는 self typed adapter(1-26) 사용. 동일
+mapId+authorityHash에 대해 중복 보강 실행 금지(멱등). **draft 생성만으로 usable 상태를 선언하지 않는다** —
+usable-draft→usable 전이는 의미 보강+검증을 거친 confirmed subgraph가 생겨야 한다.
+
+1-34. **provider readiness 행렬과 라우터 규범 판정표(사용자 후속 지적 — P7/P8 구현자의 재해석 금지).**
+- `economyReady = DeepSeek 설정 존재 AND 설정 지문 일치 AND typed capability probe 통과`
+- `precisionReady = Codex binary/home 준비 AND session-role-registry 정상 AND (Scout 세션 연결 OR 고아 방지
+  계약(1-9)을 갖춘 1회 자동 생성 가능)`
+- `selfReady = Claude CLI 실행 가능 AND self typed adapter 배포됨`(15차 반영 — P5에서 성립. **P1~P4 동안
+  기본 self의 의미 보강 큐는 semantic-enrichment-pending 보존이 규범이고, P5 배포로 selfReady가 성립하는
+  순간 1-33의 자동 재개가 발동한다** — 큐잉(P1)과 실행 가능 시점(P5)의 Phase 간극을 이 계약이 잇는다.)
+- `autoReady = economyReady AND precisionReady` — 아니면 자동형 선택 불가(사유 표시).
+- **사용자가 선택한 모드를 조용히 다른 provider로 바꾸지 않는다. readiness 상실 시 degraded 상태+이유 표시.**
+- 라우터 규범 표(P8에서 재해석 불가): mapped corridor(1-6 node 소속 기준)→경제형 / topology delta→정밀형 /
+  경제형 결과의 스키마·근거·ID 실패→정밀형 승격 / 두 provider 충돌→**Verifier 역할 세션의 adjudication
+  (1-4의 부작용 없는 경로 — Scout 세션의 자기검증·모델 투표 금지)** / Verifier도 단일 결론 불가→
+  needs-investigation 또는 intent-choice.
+- **승격의 모드 경계(15차 반영): '경제형 실패→정밀형 승격'은 자동형에서만.** 사용자가 경제형을 명시 선택한
+  경우 실패는 승격이 아니라 needs-investigation 파킹+degraded 사유 표시('조용한 전환 금지'의 관철 — 승격도
+  전환이다). 정밀형 명시 선택의 실패도 동일(다른 provider로 조용히 대체하지 않음).
+
+1-35. **Intent Policy Memory — 사용자 철학의 재사용층(사용자 후속 지적: '사용자는 방향을 한 번 정하고, 하네스가
+그 철학을 이후 판단에 적용한다'의 실체. 없으면 같은 intent-choice 카드가 반복 생성돼 사람이 다시 MAP 관리자가 됨).**
+- intent-choice는 단일 patch 결정뿐 아니라 **재사용 가능한 프로젝트 정책(IntentPolicy)으로 저장할 수 있다**:
+  `{ policyId, mapId, scope: project|subgraph|entity(one-shot은 아래 — 파일로 저장하지 않음),
+  scopeTarget?(entity/subgraph면 대상 UUID 목록 필수), predicate(적용되는 구조 상황 — 결정론 매칭 가능해야 자동 적용, 아니면 매칭 자체를
+  needs-investigation으로), chosenMeaning, exclusions, createdFromDecision, VerificationBasis,
+  supersedesPolicyIds?: UUID[](17차: 복수 head 일괄 종결 — 단수면 충돌 정책 중 하나만 닫혀 같은 카드 반복),
+  active }`
+- **frontier 유효 leaf 규칙(17차 확정 — 결정론): 유효 정책 = active AND '자신을 supersede하는 정책이 존재하지
+  않음'(supersede는 successor의 이후 철회와 무관하게 영구 — inactive successor가 생겨도 옛 정책은 부활하지
+  않고, 부활은 새 create로만) AND '자신을 대상으로 한 revocation record 없음'.**
+- **scope 중첩 우선순위(17차 확정): 특이도 순 — entity > subgraph > project.** 더 구체적 scope의 유효 정책이
+  이긴다. 같은 특이도에서 chosenMeaning이 갈리면 frontier conflict → 정책 supersession intent-choice.
+- **intent-choice 카드 생성 전에**: ①적용 가능한 IntentPolicy 탐색 ②정확히 일치하는 활성 정책이 있으면 자동
+  적용(applied decision에 actor=user-choice의 위임 실행으로 기록·policyId 참조 — 감사 가능) ③동일 scope에서 유효한
+  정책들이 서로 다른 chosenMeaning을 내면 **'정책 supersession을 고르는 intent-choice' 단일 경로**(16차 확정 —
+  blocked-conflict는 코드 evidence 재검사로만 해제되는 상태라 정책 의미 충돌을 넣으면 영구 파킹됨. 사용자
+  선택이 새 immutable policy를 생성해 frontier를 갱신하는 것이 유일 종결) ④정책이 없을 때만 카드 제시.
+- 사용자 선택 UI에 적용 범위 선택 동반: '이번 항목에만' / '이 기능축에 같은 원칙' / '이 프로젝트에서 같은 상황에
+  계속'. **'이번 항목에만'(one-shot)은 정책 파일을 만들지 않는다(18차 확정)** — 그 선택의 applied decision만
+  남기고 재사용 탐색 대상이 아니다(파일로 남기면 active 유효 leaf로 남아 동일 조건 후속 patch에 반복 자동
+  적용되는 반례 — '이번만'의 의미 위반).
+- 저장 위치: `project-map/policies/<policyId>.json`(저장소 공유 — decision과 같은 이유). node/edge의
+  decisionLocks는 정책 참조 ID를 가질 수 있다(미래 node·전역 규칙에는 policy가, 특정 entity에는 lock이).
+- 정책 집합은 결정 '분류기'의 입력이지 권위 상태가 아니다 — authorityHash에 넣지 않고, 정책의 효과는 그것이
+  만들어낸 applied decision을 통해서만 권위에 반영된다(순환·이중 권위 방지).
+- **정책은 불변(immutable) 버전이다(15차 확정): 제자리 변경 금지 — 내용 변경은 supersedesPolicyIds로 새 파일.**
+  entity|subgraph scope는 **scopeTarget(대상 UUID 목록) 필수 필드**로 적용 범위를 typed로 확정한다(predicate
+  문구만으로 범위 확정 불가). decisionLocks가 policyId를 참조하므로 제자리 변경을 허용하면 같은 authorityHash
+  아래서 잠금 의미가 바뀐다 — 불변 버전이 이를 차단.
+- **CAS 결속(15·16차 확정): read-set에 ①분류 시 참조한 각 정책의 canonical 전체 내용 지문(policyFp)뿐 아니라
+  ②effective policy frontier — 참조 정책에 '활성 superseder가 없었음'이라는 음성 조건과, 같은 scope/predicate에
+  적용되는 정책 집합의 canonical 해시 — 를 함께 결속한다.** 정책이 불변 파일이므로 fp(A)만으로는 'B가 A를
+  supersede함'을 감지할 수 없다(16차 반례: A 파일 불변→fp 불변→폐기된 의미로 CAS 통과). frontier 해시가
+  바뀌면(새 정책 생성·supersede) 해당 pending patch는 read-set 파손으로 stale-expired/재검증.
+- **트랜잭션 결속(15차 확정): '계속 적용' 선택의 정책 파일 생성은 그 선택의 applied decision과 같은 WAL
+  체인이며, 1-19의 WAL 필드·내구 상태·marker에 정식 편입된다**(1-19 참조 — decision만 있고 policy 없음=같은
+  카드 재생성, policy만 있고 decision 없음=근거 없는 위임 정책이라는 분리 상태 금지).
 
 ## 2. 단일 정본 확정 (P0 결론)
 
@@ -275,19 +370,30 @@ after 내용 지문)를 guard가 대조해 '이번 pipeline append분'만 제외
   bootstrap이 처음부터 v2를 생성해야 세대 결속이 성립. P2에는 patch/decision 계층 마이그레이션만 남긴다.
 - pending의 구 op 변환표: retire_candidate→tombstone_candidate 개명 흡수, 변환 불가 pending은 stale-expired.
 
-**op 계약 — 기존 8 op 중 7 유지+retire_candidate 개명 1+신설 10 = 계 18(4차 지적 #3 정정):**
+**op 계약 — 기존 8 op 중 7 유지+retire_candidate 개명 1+신설 10+정책 op 3 = 계 21(17차 반영):**
+정책 op 3종(17차 지적 #1 — 정책 변경을 topology op의 부수효과로 숨기면 의미 단위 op·원자성·복구 원칙 위반):
+
+| op | 대상 | payload 핵심 | inverse | 분류 |
+|---|---|---|---|---|
+| create_intent_policy | (신규 policyId) | 정규화 IntentPolicy 사본 전체 | revoke_intent_policy | 사용자 선택의 산물만(intent-choice 경로의 산출 — 자동 생성 금지) |
+| supersede_intent_policy | 대상 policyId 복수 | 새 정책 사본+**supersedesPolicyIds: UUID[]**(복수 head 일괄 종결) | 이전 frontier 기록 복원 불가 — 새 create로만(감사용 이전 frontier 스냅샷 보존) | 사용자 선택의 산물만 |
+| revoke_intent_policy | 대상 policyId | **별도 불변 revocation 레코드 생성**(18차 확정): `project-map/policies/<revocationId>.revoke.json` = {revocationId(UUID), targetPolicyId, reason, createdFromDecision} — 기존 정책 파일 무변경(불변 계약 유지). WAL은 kind:policy-revocation artifact(1-19 ⑥), marker는 policyArtifact={kind:"policy-revocation", id:revocationId, fileAfterHash:revocation 파일 after 지문}(1-32 합타입 — 20차 정합), frontier 해시 계산에 revocation 파일 포함(관측 가능성) | 재활성 없음(부활은 새 create로만) | 사용자 선택의 산물만 |
+
+정책 op의 semantic validation=대상 policy 실존·불변성 검사. **정책 op decision은 decision 파일로 기록하되
+AuthorityDecisionProjection 색인에서 제외한다**(정책은 authorityHash 밖이라는 기존 확정과 정합 — 정책 변경의
+CAS 효과는 read-set의 frontier 해시를 통해서만 전파). policy-only WAL도 1-19의 6단 계약을 따른다.
 공통: evidence 최소조건(code/test/config ≥1)·rationale·inverse(또는 복구 정보)·origin 결속(1-1)·read-set(1-1).
 
 | op | 대상 | payload 핵심 | inverse | 기본 분류 |
 |---|---|---|---|---|
 | split_node | 원본 node | newNodes[](신규 UUID·label·구성요소 배분: anchors/evidence/conditions 분할표)·edgeReroute[](기존 edge→어느 신규 node로) | merge_node(분할표 보존) | verifier-resolved 가능 |
 | split_edge | 원본 edge | newEdges[](conditions 배분) | merge_edge | verifier-resolved 가능 |
-| merge_node | 원본 node 2+ | survivorId·absorbed[](anchors/evidence/edges 재지향표)·alias 기록 | split_node | intent-choice(1-13 동형 증명 시만 자동) |
-| merge_edge | 원본 edge 2+ | survivorId·absorbed[] | split_edge | intent-choice(동상) |
+| merge_node | 원본 node 2+ | survivorId·absorbed[](anchors/evidence/edges 재지향표)·alias 기록 | split_node | 1-13 3단 사다리: 동형 증명=verifier-resolved / 실패=needs-investigation 선행 / 양쪽 타당+구조 결정 필요 시만 intent-choice / 불필요=resolved-noop 종결 |
+| merge_edge | 원본 edge 2+ | survivorId·absorbed[] | split_edge | 1-13 3단 사다리(동상 — 불필요=resolved-noop) |
 | widen | node/edge | 확대분(anchors/conditions 추가)·expect(현 범위)·음성 조건 read-set(1-1) | narrow(추가분 제거) | verifier-resolved 가능 |
 | narrow | node/edge | 축소분(제거 대상)·expect·조건부 잔존 | widen | verifier-resolved 가능 |
 | supersede | 구 node/edge | successorId·expect(구 상태)·lifecycle→superseded | set_state 복원+관계 제거 | 명백 시 verifier-resolved |
-| tombstone_candidate | node/edge | expect·근거(호출부 소멸 등) — **topology 무변경 제안 전용 op(4차 지적 #2): 적용 형태는 intent-choice 카드 생성이며, 사용자 선택 시 set_state(lifecycle)로 실체화**(구 retire_candidate 흡수. topology에 후보 표시 필드를 두지 않는다 — 후보는 파이프라인 상태) | 카드 철회(topology 무변경) | **intent-choice 단일** — 감지·카드 생성(deterministic-system, detectedBy 기록)은 결정 상태가 아니라 파이프라인 lifecycle의 proposed 단계(4차 지적 #2: 한 patch가 auto이면서 intent-choice일 수 없음) |
+| tombstone_candidate | node/edge | expect·근거(호출부 소멸 등) — **topology 무변경 '조사 제안' op(4·15차 정합): 조사 결과 결론이 하나면 파생 set_state(lifecycle) patch로 실체화(verifier-resolved), 복수 의도가 남으면 intent-choice 카드 생성 후 선택 시 실체화**(구 retire_candidate 흡수. topology에 후보 표시 필드 없음 — 후보는 파이프라인 상태) | 카드/제안 철회(topology 무변경) | **1-27③ 3층**: 감지(proposed 단계·결정 상태 아님)→needs-investigation 선행→정책·증거로 결론 1개면 verifier-resolved·복수 타당 시만 intent-choice |
 | change_steward | node | to·expect(현 steward) | 역방향 | intent-choice(authority 경계) |
 | change_authority | **node 한정** | roles의 authority/gate 변경 to·expect(스키마상 edge에 역할 없음) | 역방향 | intent-choice |
 | rewrite_label | **node=label/description·edge=notes** | to·expect | 역방향 | 의미 불변 시 verifier-resolved·의미 변경이면 intent-choice |
@@ -313,9 +419,10 @@ targetId 계약: 생성 op(add_node/add_edge)=금지, split/merge=원본 targetI
 - **P0.5** 배포 가능한 공용 런타임(1-15): scope-map 계열의 bridge/ 승격 + **루트 스키마 v2(mapId·description·
   decisionLocks·provenance·lastSeenAt 제거)와 v1→v2 결정론 마이그레이터**(4차 지적 #3 — P1 bootstrap이 처음부터
   v2를 생성해야 세대 결속 성립).
-- **P1** 비차단 bootstrap 생명주기: 트리거 5종(재정의 포함)→detach 기동·inflight 선점·run-state(pid 검증)·
+- **P1** 비차단 bootstrap 생명주기: 트리거 5종(재정의 포함)→**완료 시 의미 보강 자동 큐잉(1-33 — 사용자 명령
+  없이 usable까지 연속)**→detach 기동·inflight 선점·run-state(pid 검증)·
   degraded 고지·2트랙 3중 게이트(writeCanonicalLocked의 mkdir 선행 부작용 수정 포함)·informed consent+PRIVACY 선갱신.
-- **P2** patch pipeline 구현(활성화는 P3와 동시 — 1-30): 로컬 prepared WAL+저장소 applied 로그(1-19)·CAS
+- **P2** patch pipeline 구현(활성화는 P3와 동시 — 1-30): 로컬 prepared WAL+저장소 decisions/ 독립 파일(1-19)·CAS
   재설계(1-1)·②b·신설 op 스키마(§3)·patch/decision 계층 마이그레이션(op 변환표)·5상태 분류기·apply별 로컬
   스냅샷 보관(1-18 재료).
 - **P3** 권위 전환+legacy 이관: 권위 marker·자동 적용 활성화·docs/MAP.md 동결·내보내기/approve 재배선(1-22)·
@@ -325,9 +432,11 @@ targetId 계약: 생성 op(add_node/add_edge)=금지, split/merge=원본 targetI
 - **P5** provider 공통 인터페이스: runScout→typed ScoutResult(무사망 계약)·self typed adapter(1-26)·deepseek
   probe(1-8).
 - **P6** Codex Scout 독립 세션: session-role-registry(1-9)·Scout 전용 진입점(1-4)·두뇌 설정 독립(매 호출 주입).
-- **P7** 모드 UI·readiness·Scout 세션 관리(segScout 확장 시 dirty/hold 연쇄 편입).
-- **P8** 결정론 라우터(1-6·후처리 승격·충돌→adjudicate)·라우팅 로그.
-- **P9** intent-choice 카드(1-14)·recovery-action 카드(1-18)·선택 후 자동 마무리.
+- **P7** 모드 UI·readiness 행렬(1-34 — economyReady/precisionReady/autoReady, 조용한 전환 금지)·Scout 세션
+  관리(segScout 확장 시 dirty/hold 연쇄 편입).
+- **P8** 결정론 라우터 — 1-34 규범 판정표 그대로(재해석 금지)·라우팅 로그.
+- **P9** intent-choice 카드(1-14)·**Intent Policy Memory(1-35 — 정책 탐색→자동 적용→카드는 최후)**·
+  recovery-action 카드(1-18)·선택 후 자동 마무리.
 - **P10** 통계·비용·건강도(scout-usage 확장·지표 분리).
 
 각 Phase: 설계→양모델 독립 검토→구현→전체 테스트→Codex 검증→재판단→수정→재검증→로컬 설치→로컬 커밋.
@@ -339,7 +448,8 @@ targetId 계약: 생성 op(add_node/add_edge)=금지, split/merge=원본 targetI
   ping 0·라우팅 0을 2트랙 끝단 테스트로 잠금.
 - 미설정 프로젝트=빈 계약=기존과 100% 동일 보장(하네스 상태는 계약 파일이 아닌 별도 서랍).
 - **verify-guard의 project-map/** 취급 계약: 1-32의 산출물 일치 계약을 따른다** — topology/MAP.md는 applied
-  decision의 기록 지문과 정확 일치 시만 제외, decision 로그는 로컬 WAL marker 대조로 이번 append분만 제외,
+  decision의 기록 지문과 정확 일치 시만 제외, decision·policy 파일은 로컬 WAL marker(양쪽 after 지문 결속 —
+  1-19 6단) 대조로 이번 생성분만 제외,
   혼합·불일치는 검증 대상. 릴리스의 dirty-worktree 중단은 별도 계약(이 구분의 적용 대상이 아님 — 1-32).
 - 기존 self/DeepSeek 팔·Impact Map 보관함·장부 이벤트 15종·트림 동형성·ledgerSig 패리티 쌍 보존.
 - Scout 실행이 Verifier 타임아웃 창을 잠식하지 않게 별도 타임아웃 키.
