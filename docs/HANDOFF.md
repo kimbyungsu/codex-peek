@@ -367,6 +367,18 @@
    11개는 세션 기록 참조(데이터 모델·저장 위치·갱신
    주기 등 — 외부 평가가 상당수 결정).
    **[P0.5 갱신 2026-07-11] 스키마 v2+배포 런타임 완료**: MAP_SCHEMA_VERSION=2(mapId 세대·decisionLocks 합타입·provenance[VerificationBasis: git objectFormat sha1|sha256/historyless]·description·lastSeenAt 제거)·frozen v1 검증기·결정론 v1→v2 마이그레이터(mapId=v1 canonical 지문 유도)·bridge/map-runtime.js(CLI 본체 이관: inventory/init/status/render/migrate — VSIX 미포함이던 scripts/** 문제 해소)·bridge/project-map.js(out 산출물의 tracked 사본 — scripts/sync-map-core.js --write/--check/--watch-with-tsc가 신선도 잠금)·BRIDGE_SCRIPTS 9파일. 설계 정본=docs/MAP-V2-DESIGN.md(25왕복). 테스트 tests/project-map.test.js 153단언(v2 반례·마이그레이터·CLI migrate e2e·동시 migrate 변환 정확히 1·바이트 패리티·sync/watch 수명주기[onExit 1회·침묵 실패 금지]). 위 본문에서 v1 경계로 서술된 propose/approve 미배선은 여전히 사실이되 후속 명칭은 v1b가 아니라 P2다.
+   **[P1 갱신 2026-07-12] 비차단 bootstrap 생명주기 완료(커밋 f0f13cc)**: bridge/map-bootstrap.js 신설 —
+   사용자 지시 없이 MAP 자동 생성·복구. ①동의 영속(consent-<repoKey>.json — 무동의 자동 생성 0, 대시보드
+   off→on 전환 시 저장 전 모달/CLI bootstrap=실행이 곧 동의) ②부모(hookTick)는 유계 신호만 읽고 ko/en 1회
+   고지, 실작업=detach 자식의 선점 ③선점 mutex=.funlock(childClaim·forceUnlock 공용 — wx+read-back+모든
+   상태 변경 직전 fence+writeRs도 같은 잠금 아래 runId 확인·교체) ④잠금 판정 5상태(alive/dead-valid/invalid/
+   unreadable/owner-unverified) — 회수·격리는 dead-valid만 무승인 ⑤강제 복구=scope-map <repo> force-unlock
+   (수동 rm 안내 전면 금지 — 원자 이동 격리·오탈취 즉시 복원·승인 사다리 --confirm-corrupt/--confirm-owner-dead)
+   ⑥finishDone=withMapLock 단일 스냅샷 트랜잭션(세대 혼합 차단) ⑦exclude={이번 실행 산출물만}(created=생성
+   지문 정확 일치 귀속·ensure=prev 승계) — verify-guard lazy 예외 ⑧보장 수준 명문(설계 §5 P1): 검증~쓰기
+   시스템콜 간극은 파일 프리미티브의 한계로 계약화(Node 순정에 flock 없음 — Codex 15차 합의), 예외 경합은
+   표면화→회수로 수렴. 검증 17왕복(설계 8+구현 15왕복 30여 결함 수용, 15차 통과(보완)→17차 통과).
+   tests/map-bootstrap.test.js 149단언(전체 체인 1744/0). 다음: P2(patch pipeline — 활성화는 P3b cutover와 동시).
 6. (후보) 대시보드 게이트 토글 UI(현재 CLI만 — informed consent 문구에 실측 명중률 표기), 발화 기록(scope-ledger-note)
    흐름의 실사용 관찰.
 7. (관찰 항목) 한 폴더 다중 프로그램 구분 — 권장 관행은 프로그램별 폴더 분리, 보강 후보는 seed 클러스터 자동 좁힘.
