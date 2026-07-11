@@ -1,0 +1,353 @@
+# Project MAP v2 — 설계 고정 문서 (P0)
+
+> 2026-07-11. 사용자 지시(3트랙 하네스와 Project MAP v1 연결 — 자동 생성·증거층 통합·공급자 3종·자율 반영·intent-choice)의
+> 구현 전 설계 고정본. **구현모델 독립 분석(8영역 병렬 정독)과 Codex 독립 분석(HEAD d8947a9 전체 코드)을 교차 대조**하고,
+> 고정 초안에 대한 Codex 재검증(15건 지적 — 전부 수용 반영)을 거쳤다. 이후 Phase에서 어긋나는 구현이 나오면 이 문서가 기준이다.
+
+## 0. 지시문 타당성 판정
+
+**대구조는 타당하다** — "사용자는 승인자가 아니라 의도 선택자"라는 철학, typed graph 유일 정본, 결정 상태 5종,
+provider 3모드, 결정론 라우팅은 현 코드베이스의 설계 교리(저장 enum 불신·유도 판정·후보 제시와 확정 분리·2트랙 무회귀)와
+정합한다. 단 **아래 §1의 수정 사항을 반영해야 논리적으로 실행 가능**하다. 수정 없이 문자 그대로 구현하면
+자기모순 파이프라인(CAS 상시 무효화·훅 턴 차단·검증 축 오염)이 된다.
+
+## 1. 지시문 수정 사항 (양측 교차 + 재검증 반영 확정)
+
+1-1. **CAS 재설계 — '낡은 스냅샷 감지+재기반'과 '경계 이탈 hard reject'의 이원 규칙.** 전역 baseDirtyFp
+완전일치는 기아(무관한 파일 저장 하나로 전체 pending 폐기)라 감사 메타로 강등한다. 판정 규칙(2·3차 재검증 반영):
+- **hard reject(재기반 금지)**: patch에 결속된 **origin identity**가 현재와 다르면 무조건 거부 — 지시 §9
+  '브랜치나 working tree가 바뀌면 거부'는 이 경계에만 적용된다. 큐 분리만으로는 직접 ID 적용·WAL 복구·장기
+  worker의 교차 적용을 못 막으므로 patch 자체에 origin을 결속한다. **비-git 지원이 명시 범위이므로 Git 전용
+  계약 금지 — 그리고 '로컬 실행 좌표'와 '공유 검증 기준'은 서로 다른 타입이다(5차 지적 #1). 세 타입 분리:**
+  - `ExecutionOrigin`(로컬 전용 — 절대경로 포함, 저장소에 절대 기록 금지):
+    `{kind:"git", worktreeReal, gitCommonReal}` | `{kind:"historyless", rootReal}`
+  - `PatchBasis`(CAS용 — patch·pending·WAL에 결속):
+    `{kind:"git", branch|detachedHead, baseHead}` | `{kind:"historyless", basisFp, inventoryFp}`
+  - `VerificationBasis`(저장소 공유 provenance — 이식 가능한 값만):
+    `{kind:"git", head}` | `{kind:"historyless", basisFp, inventoryFp}`
+  hard reject 경계=ExecutionOrigin 또는 PatchBasis의 branch/root 변경, 재기반 판정=같은 branch의 head 전진
+  +read-set(historyless는 basisFp/inventoryFp+read-set). 빈 문자열·sentinel 해시로 Git 계약을 흉내내는 것 금지.
+  applied decision에는 ExecutionOrigin의 절대경로를 저장하지 않는 portable projection만 기록.
+- **재기반 허용(같은 브랜치의 HEAD 전진·타 patch 적용으로 인한 mapHash 변경)**: patch의 **read-set**이
+  그대로면 새 base로 자동 재기반+재검증 후 적용, 깨졌으면 stale-expired(또는 needs-investigation).
+- **read-set은 op별 스키마로 정의한다**(파일 지문+expect만으로는 부족 — 재검증 지적): ①대상 entity의
+  revision/내용 지문 ②evidence/anchor 파일 내용 지문 ③**인접성 지문**(add_edge=from/to 노드 존재+동일 관계
+  부재+인접 edge 집합 해시, merge=전 입출력 edge·steward·decisionLocks 해시) ④**음성 조건**(widen/narrow의
+  '존재하지 않았음' 근거=관련 디렉터리 인벤토리 지문). 상세 표는 P2 설계에서 op별로 고정하되 이 4범주가 기준.
+- 재기반·재검증·CAS 재검사는 fail-closed 잠금 '안'에서.
+
+1-2. **휘발 관측치는 로컬, 검증 provenance는 공유.** anchor 내용 지문·stat 캐시·lastSeenAt 같은 고빈도 관측치는
+topology 밖 하네스 로컬 freshness 저장소(node UUID+anchor path 키)로 — mapHash 자기 유발 무효화 방지.
+**단 검증 기준은 캐시가 아니라 '어느 상태에서 확인됐나'라는 provenance다(재검증 지적 #3)** — clone·타
+개발자도 재현해야 하므로 **적용 decision 레코드와 node/edge provenance에 VerificationBasis(1-1의 저장소
+공유형 — git=head, historyless=basisFp/inventoryFp)+당시 evidence 내용 지문을 저장소 공유로 기록**한다
+(6차 정정: 'verifiedAtHead' 단일 필드명은 Git 전용이라 폐기 — §3의 tagged 구조가 정본). lastSeenAt는 스키마에서 제거(MAP_SCHEMA_VERSION 2, actor=migration).
+신선도 '판정'은 항상 읽기 시점 유도(비저장).
+
+1-3. **훅은 실행자가 아니다.** UserPromptSubmit 안에서 bootstrap·의미 보강·전수 검증 금지 — 유계·캐시 가능
+신호 판독(파일 존재·mapHash 앞자리·head 비교)+상태 고지+detach 기동(inflight 선점으로 창 간 1회)만.
+(근거 정정: '훅 예산 3초'라는 단일 계약은 없고 3000ms는 개별 git 하위 호출 timeout이라 연속 호출은 합산될 수
+있다 — 그래서 더더욱 훅 내 실행 금지가 결론이다.) 전수 검증은 비동기 refresh 경로로.
+
+1-4. **Scout·충돌 판정은 검증 부작용 밖의 별도 진입점.** ask 성공 경로의 부작용 5연쇄(writeProof/flagEvidence/
+flagLedgerConfirms/flagVerdict/verdict 통계)와 withContract 계약 주입·phase '검증중' 표시를 일절 호출하지 않는다
+(정찰 질의가 '검증 성공'으로 기록되는 무결성 구멍 차단). 공용 추출선: runCodex/runCodexNewSessionAsync/세션 탐지
+3함수/resolveCodex군/modelArgs/parseLastTurn(전부 역할 중립 실측). cmdAsk는 Verifier orchestrator로 잔류.
+
+1-5. **verifier-resolved의 증거 결속은 '내용 수준'까지.** 판정 표지+cited(실존 인용)+seen(이번 턴 취급)은
+필요조건일 뿐이다(cited는 '실존 파일을 인용했다'이지 '그 코드가 이 주장을 지지한다'가 아님 — 재검증 지적 #7).
+**요건: MAP 전용 typed 결과가 patchId/opHash/baseAuthorityHash(§3 권위 서명 — 9차 개정)에 결속되고,
+주장(claim)별로 근거 파일의 내용 지문(blob/content hash)+위치(symbol/line locator)+지지/반박 판정을 담아야 한다.** read-set 지문과 이 claim 결속이
+같은 재료를 공유한다. 판정 불가·표지 누락·결속 누락은 전부 needs-investigation.
+
+1-6. **라우팅의 mapped corridor 판정은 'node 소속'(node가 대표하는 디렉터리 경계 포함 여부) 기준.** v1 anchor
+밀도(디렉터리당 표본≤3)에서 anchor 일치 기준은 거의 전부를 topology delta로 오판해 정밀형 과호출을 만든다.
+anchor 일치 기준은 의미 보강으로 밀도가 오른 뒤에만 활성화.
+
+1-7. **'정확히 1회' init = map identity별 동시 1회.** 판정 근거는 레포 파일계 상태(fail-closed 잠금 안 존재
+재검사)이고 UI 전환·훅 폴백·scoutRepo 변경은 전부 '시도 트리거'일 뿐(전환 감지는 언어 슬롯별·창별 비원자라
+1회성 근거가 될 수 없음). topology 삭제 후 재시작은 새 identity로 재생성 허용.
+
+1-8. **DeepSeek typed JSON은 능력 검증 후에만.** 경제형 활성 조건에 'schema capability probe 통과' 추가.
+strict validator+크기 상한+bounded repair(1회)+실패 시 Codex 승격. readiness는 영속 상태 파일(설정 지문+ts)로
+기록하고 요청·응답에 설정 지문 에코(판정~호출 사이 설정 변경 TOCTOU 방지). ping은 typed readiness 증거가 아니다.
+
+1-9. **역할 배제는 '단일 role registry' 원자 트랜잭션(재검증 지적 #1).** 두 링크 파일의 상호 조회만으로는 동시
+기록 경합에서 둘 다 '미등재'로 보고 이중 등록된다(updateLinks는 best-effort CAS). **결정: 세션 역할의 정본은
+단일 session-role-registry(strict 잠금 하 갱신) 하나로 하고, links.json/scout-links.json은 각 축의 상세(모델
+선호 등)를 담는 종속 파일로 둔다. 등록·역할 변경(unlink→relink)은 registry 트랜잭션 안에서만. 종속 파일 쓰기
+실패 시 복구 계약(registry 선기록→종속 파일 실패=재시도 후 registry 항목에 dirty 표시·다음 판독이 재구성)을
+P6 구현에 포함(2차 재검증 부기).** 미등재 세션은
+link 시 role 지정 요구(기본 verifier=무회귀). 후보 목록은 숨김이 아니라 role 라벨 표시. 세션 탐지 함수에
+'제외 id 집합' 인자 추가. brainActual·drift·verdict 통계 귀속에서 scout 세션 제외. Scout 자동 생성은 무링크
+첫 실행 1회만+scout판 autoNewFailed+실패 시 폴백 고지.
+
+1-10. **needs-investigation의 결정론 종결.** ①read-set 불일치 → stale-expired 자동 정리 ②조사 에스컬레이션
+단수 상한(횟수 — 시간 아님) 도달 → 'unresolved 파킹'(대시보드 가시화·사용자 질문 아님).
+
+1-11. **'임의 시간 상수 금지'는 '근거 미기록 신규 판정 상수 금지'로 한정.** 신규 운영 파라미터(타임아웃·폴)는
+env>설정>기본+클램프 패턴(verifyTimeoutMin 전례). 판정 로직은 상태 서명·버킷 기반(시간 0). Scout 타임아웃은
+verify 전용 키를 공유하지 않는 별도 키.
+
+1-12. **이벤트 목록 정정 + decisions 분리.** rehabilitated는 이벤트가 아니라 유도 필드. 실명 15종 = proposed/
+attached/confirmed/refuted/user_confirm/user_dispute/pinned/unpinned/banned/unbanned/superseded/tombstone/
+exported/alias/unalias. decisions는 기존 장부 JSONL에 넣지 않는다(EVENT_TYPES allowlist·트리머 보존군·헬스 동형
+3중 파손) — 별도 저장(§4 P2의 이층 구조).
+
+1-13. **merge류 자동 적용의 문턱은 '의미적 동형' 전체 증명(재검증 지적 #4).** anchors·edges·evidence가 같은
+대상을 지시하는 것만으로는 부족하다(같은 파일을 공유해도 읽기/쓰기 역할·제품 경계·steward·conditions·decision
+lock이 다른 두 기능축일 수 있음 — 자연어 자동 병합을 폐기했던 반례와 동일). **요건: entityType·roles·state·
+conditions·steward·decision lock·모든 입출력 edge의 의미적 동형까지 Verifier가 확인한 경우에만 verifier-resolved.
+그 외 merge류는 전부 intent-choice.** 실질적으로 자동 merge는 희귀 경로가 되는 것이 의도된 보수성이다.
+
+1-14. **intent-choice 채널 = 대시보드 웹뷰 버튼→확장→하네스 파일(기존 ledgerAct 패턴)+proposal/baseAuthorityHash(§3)
+결속.** 선택 후 base가 바뀌었으면: 선택 '의미'가 그대로면(read-set 동일) 자동 재기반, 의미가 달라진 경우에만
+새 카드(무조건 재질문 금지의 유일한 예외).
+
+1-15. **배포 재료: v2 런타임은 bridge/ 배포 모듈(또는 out/)로 승격.** VSIX는 scripts/**·tests/**·install.js를
+제외하므로 scope-map.js 계열은 마켓 설치본에 없다. bridgeLib() require+typeof 가드+낡은 런타임 정직 에러 선례.
+(정정 — 재검증 지적 #12: **BRIDGE_SCRIPTS는 배포 파일 추가 시 갱신, OUR_HOOKS·isOurHookCmd는 '새 훅
+entrypoint를 Claude 설정에 등록할 때만' 갱신** — 세 목록의 일괄 쌍 갱신이 아니라 각자의 트리거가 다르다.
+hook-setup.ts와 install.js의 이중 유지 계약은 해당 목록을 실제로 바꾸는 경우에 적용.)
+
+1-16. **scoutMode(및 신설 provider 모드)의 반대 슬롯 폴백 — key 존재 여부 계약 포함(재검증 지적 #14).**
+'사실≠언어 내용'이므로 폴백을 도입하되, **현재 슬롯에 명시값(raw key 존재)이 있으면 그것이 항상 우선하고,
+key 자체가 없을 때만 반대 슬롯을 상속한다**(정규화된 off와 명시 off를 구분 — 명시 off를 반대 슬롯 on이 덮으면
+2트랙 회귀). loadContract가 미설정과 명시 off를 구분 없이 반환하는 현행 구조에 raw key 판독 경로를 추가한다.
+
+1-17. **트리거 ③ 재정의: '마지막 MAP 평가 시점의 해석된 대상(resolved repo)과 현재 해석의 불일치'.**
+ws별 last-resolved-repo를 하네스 로컬에 영속(계약 편집 이벤트는 감지 불가능하고 언어 토글로도 실효 대상이 바뀜).
+
+1-18. **손상 복구는 intent-choice가 아니라 recovery-action(재검증 지적 #6).** 파일 손상 복구는 제품 의도가
+아니라 운영 복구다. **결정: recover는 ①로컬 최신 유효 스냅샷(하네스 서랍의 topology 사본 — P2에서 apply마다
+보관) ②git 이력의 마지막 유효본(git 프로젝트 한정) 순으로 후보를 찾아 별도 파일로 복구하고 원본은 보존한다.
+비-git 프로젝트는 ①만 사용(bootstrap이 비-git도 지원하므로 복구도 git 전제 금지).** 복구 실행은 대시보드의
+recovery-action 카드(운영 알림 — 의도 선택 아님)로 노출. dead-lock 잔존 잠금 회수(토큰+pid 검사+원자 재선점)도
+recover 전담 — 자동 경로는 degraded 고지만(재시도 폭주 금지).
+
+1-19. **journal 이층 구조 고정 — authority-aware(11차 지적 반영).** **prepared WAL은 하네스 로컬**(지시 §3
+'적용 전 제안은 로컬'), **applied decision 로그는 저장소 공유**. 쓰기 계약: 둘 다 atomicWrite(tmp+rename),
+멱등 키=decisionId, 저장소 로그는 append-only+병합 시 decisionId 중복 제거.
+**prepared WAL 필수 필드(자기완결 — 13차 지적: WAL만 남은 상태에서 재적용, topology 교체 후엔 before 지문
+포함 완전한 decision 보충이 가능해야 하며 pending 큐 참조로 대체 금지): ①정규화 patch 사본 전체+patchId+
+opHash(v1 approve 복구 계약 승계 — 사본 없으면 재적용 불능) ②PatchBasis·read-set·inverse/복구 정보
+③topology before 내용 지문(교체 후엔 사후 계산 불가) ④decisionId·mapId·AuthorityDecisionProjection(canonical
+지문 포함) ⑤expectedMapHashAfter·expectedDecisionIndexHashAfter·expectedAuthorityHashAfter.** 적용 쓰기의 내구 상태는 5단(12차 지적 반영 — WAL만 / topology만 / topology+MAP.md / +decision / +marker)이며
+각 중단 지점의 복구 대응: **⓪topology만 원자 교체됨·MAP.md 이전/부재·decision 미기록(mapHash=expected인데
+색인·MAP.md가 이전 값인 상태) → WAL projection으로 expected authority 재계산→MAP.md 재렌더→동일
+decisionId/projection으로 decision 보충→marker 기록(한 체인으로 완결)** ①topology+MAP.md 기록·decision
+미기록 → decision 보충(projection 대조 후)→marker ②decision까지 기록·guard marker 미기록 → marker 보충
+③같은 topology인데 decision 색인이 기대와 다름 → 재렌더+authorityHash 재검사 ④복구 대상 projection과 다른
+decision이 병합돼 있음 → read-set 재검증 또는 conflict. **복구 판정은 topology
+해시 단독 비교가 아니라 (mapHash, decision 존재·projection 일치, authorityHash) 튜플 비교** — v1
+recoveryDecision 3분기는 이 튜플 비교의 내핵으로 승계. CAS 재검사(⑥⑦⑧)는 잠금 안.
+
+1-20. **'②b semantic validation' 단계 명시 신설** — targetId 실존+expect vs 현재값 대조(topology 입력).
+validatePatch(형식)와 분리된 이 단계의 실패가 needs-investigation의 정식 진입점.
+
+1-21. **상태 어휘 4계통 직교 분리(5차 지적 #3 반영).** ①bootstrap 생명주기(진행형은 하네스 로컬 run-state+pid
+생존 검증) ②freshness(항상 유도·비저장) ③**proposal lifecycle: proposed→classified→resolved|expired**(로컬
+pending 파일의 상태 — 지시 §3 '적용 전 제안은 로컬'. detectedBy/provider 메타 보유. 멱등 키=patchId. 관찰
+장부의 proposed '이벤트'와는 별개 계통 — 혼동 금지) ④patch 결정 분류 5종(classified의 산출)+종결
+applied/stale-expired/unresolved. conflict는 결정 상태기 소관(공급자 충돌·topology↔검증 불일치)이지 신선도가
+아니다. UI는 병기.
+
+1-22. **docs/MAP.md 재배선은 이미 확정된 사용자 정책 — 재승인 없음(재검증 지적 #11 수용, 초안 정정).**
+지시 §4가 'legacy는 migration source·신규 승격은 Project MAP 경로만'을 명시했으므로 **재배선 자체는 다시 묻지
+않는다.** P3에서: 대시보드 내보내기·scope-reconcile approve의 목적지를 Project MAP patch 제안으로 전환,
+docs/MAP.md는 read-only 이관 소스로 동결(deprecated 배너), 기존 '불변 약속' 문구 전면 개정, README '④ 확정
+교범' 서술 개정. **개별 항목의 이관 판정이 모호한 것만 intent-choice.** 사용자에게는 변경 사실을 '고지'한다
+(질문이 아니라).
+
+1-23. **PRIVACY/README ko·en 선갱신 의무.** 각 Phase 완료 조건에 해당 표면의 문서 개정 포함(PRIVACY 자기 규범:
+'조건이 바뀌면 문서를 먼저 갱신'). P1(자동 생성)·P5/P6(외부 전송) 착수 전 선갱신 + 3트랙 켤 때 'MAP을 레포에
+생성' 고지를 기존 대상 확인 모달에 결합(informed consent).
+
+1-24. **sig↔UUID 바인딩 테이블 신설.** 초기 자동 후보 키=endpointsKeyOf(경로쌍+방향), 후보 제시·확정 분리 유지.
+매핑 없는 기존 entry는 증거층에 그대로. legacy 판독 함수(ledgerSig·extractPathsFromText 패리티 쌍) 보존.
+
+1-25. **꾸러미 기억 주입(+25.0%p 실측) 보존.** 장부는 증거 입력으로 계속 주입(정본 역할만 topology로). 꾸러미
+형식 버전을 메타에 기록, P3/P4 후 ab-retro 재기준선 측정(사전등록 변경=사용자 합의 필요 항목).
+
+1-26. **탐색 방식 기본값=self(현행 무회귀)·라우터 미적용. 단 self에도 typed adapter를 제공한다(재검증 지적 #15).**
+기존 자유서식 self/DeepSeek 팔은 Impact Map 전용으로 무변경 존치하되, **runScout('self')는 typed ScoutResult를
+요구하는 별도 프롬프트(claude -p 스키마 강제)로 MAP patch 후보를 생성할 수 있다** — 기본 설정에서도 의미 보강이
+가능해야 최종 목표(자동 진화)가 성립하기 때문. typed 실패 시 needs-investigation(자유서식으로의 침묵 강등 금지).
+경제형/정밀형/자동형은 opt-in.
+
+1-27. **v1 정책 개정표(의도 문서화된 정책 변경 — 테스트는 '의도 개정'으로 재작성, 삭제 아님).**
+①change_relation: 코드 증거 명백 시 verifier-resolved(지시 명시) ②'명백한 supersede': verifier-resolved(유일한
+실질 하향) ③tombstone 확정: intent-choice 존치(자동은 tombstone_candidate 감지까지) ④tombstoned/superseded
+복원: intent-choice 존치 ⑤merge류: 1-13. 근거: 지시 §0(구 승인 흐름 명시 기각)+§7(재설계 선언)+선행 합의
+(2026-07-07 '건별 수동 승인 실사용 불가').
+
+1-28. **blocked-conflict 해제 = 동일 evidence matrix 재검사 통과 시(재검증 지적 #9).** 파일 변경 감지는 재조사
+트리거일 뿐 해제 조건이 아니다. integrity 버스에 ack 불가 kind로 노출, 재검사에서 모순 소멸 확인 시에만 제거.
+
+1-29. **identity 이원화(3차 재검증 반영): 물리 쓰기 잠금 키 = realpath(worktree)만**(같은 파일에 브랜치별
+잠금 2개가 생기면 checkout 직후 상호 배제가 깨짐 — 잠금은 물리 파일 단위), **큐·WAL·pending namespace =
+realpath+git-common-dir+branch(detached면 HEAD)**(브랜치 간 제안 혼입 방지). normWs만으로는 junction·symlink
+별칭이 다른 잠금을 만들므로 realpath 해석을 추가. 비-git 프로젝트는 realpath(폴더) 단일 identity.
+workspace는 부가 메타.
+
+1-30. **P2 구현과 활성화 분리(재검증 지적 #10).** P2에서 pipeline을 구현하되 **자동 적용 활성화는 P3의 권위
+marker(topology 정본 선언+legacy 쓰기 재배선)와 함께 켠다** — P2~P3 사이에 '새 pipeline은 적용을 시작했는데
+legacy 확정층 쓰기도 계속되는' 권위 우회 기간을 만들지 않는다.
+
+1-31. **지도 세대 정체성(3차 재검증 반영).** topology에 **mapId(UUID)**를 두고 patch·decision·sig↔UUID
+바인딩·WAL 레코드 전부에 mapId를 결속한다. topology 삭제 후 재생성은 새 mapId — 저장소의 applied decision
+로그·바인딩이 이전 세대를 참조하는 것을 새 지도가 자기 이력으로 오인하지 않게 하고, 세대 전환은
+replacesMapId(또는 reset decision)로 기록한다.
+
+1-32. **verify-guard의 자동/수동 topology 변경 구분은 '산출물 일치'로 구현한다(3·4차 재검증 반영).** guard의
+관측 입력(git status 경로·mtime)으로는 변경 주체를 알 수 없다. **applied decision에 topology의 before/after
+내용 지문+생성 뷰(MAP.md) 지문을 기록하고, 현재 파일 내용이 그 기록 산출물과 정확히 일치할 때만 검증 트리거에서
+제외한다.** 자동·수동 변경이 섞이면(불일치) 전체를 검증 대상으로. **decision 로그 파일 자체는 자기 after-hash를
+자기 레코드에 담을 수 없으므로(4차 지적 #4) 별도 계약: 로컬 WAL의 최근 applied marker(decisionId+로그 파일
+after 내용 지문)를 guard가 대조해 '이번 pipeline append분'만 제외하고, marker 불일치(수동 편집·혼합)는 검증
+대상.** 릴리스의 dirty-worktree 중단은 이와 무관한 별도 계약이며 이 구분으로 해소되지 않음(자동 생성물은 커밋
+전 릴리스 불가 — 정상 동작).
+
+## 2. 단일 정본 확정 (P0 결론)
+
+**현재 구조 지식 권위 4곳(전부 실측):**
+① `docs/MAP.md` 확정층 — scope-reconcile approve가 쓰고(실쓰기 195-203) 대시보드 export(extension.ts
+  2236-2252)가 append하며 collectCommon이 신뢰 입력으로 읽음(scope-package.js 164-166)
+② 관찰 장부 trusted lane 자연어 — §7.5 꾸러미 주입·couplings·scoutHealthLine(contract-lib 1245·1253)
+③ Impact Map ⑥ patch 후보 — extractMapPatches(860-889)
+④ `project-map/topology.json` — 현재 draft 전용·'확정층 권위 불침' 명문(v1 경계)
+
+**v2 권위 배치(고정):**
+- `topology.json` = 유일 구조 정본. 단 **부분 권위** — confirmed subgraph만 라우팅·게이트의 권위 입력.
+- 관찰 장부 = 증거·역사·반박·복권층(이벤트 15종·유도·트림 유지, 정본 역할만 회수).
+- Impact Map(scouts/) = 단기 영향 후보(무변경 유지).
+- `project-map/MAP.md` = 생성 뷰. `docs/MAP.md` = legacy 이관 소스(P3에서 동결·재배선 — 1-22).
+- 어휘 분리: "MAP 장부/확정 교범"(docs/MAP.md 축)과 "Project MAP"(topology 축)을 문서·UI에서 명확히 구분 표기.
+
+**정체성**: topology=불투명 UUID(불변), 장부=자연어 sig(legacy), 연결=sig↔UUID 바인딩(1-24).
+**잠금·큐 identity**: 1-29의 canonical identity. **pending 큐 네임스페이스 = canonical identity + mapId까지만
+(10차 지적 #2 — baseAuthorityHash를 네임스페이스 키로 쓰면 patch A 적용 후 같은 base의 patch B가 옛 hash
+칸에 고립돼 재기반 로직에 도달 불능). baseAuthorityHash는 각 patch의 메타(신선도·재기반 판정 재료)로만.**
+지시의 '브랜치·MAP hash별 분리'는 교차 오염 방지 의도이며 canonical identity(브랜치 포함)+mapId 분리로 충족.
+
+## 3. MAP_SCHEMA_VERSION 2 스키마와 typed operation 계약 (P0에서 고정)
+
+**v2 스키마 변경(3·4차 재검증 반영 — '연산이 참조하는 필드는 스키마에 실재해야 한다'):**
+- node 추가: `description?: string`(라벨과 분리된 서술), `decisionLocks?: string[]`(설계 금지·잠금 문구 —
+  merge 동형 비교·slice 동봉·사람용 뷰의 decision lock 표시 재료), `provenance?: { verifiedAtHead: string;
+  decisionId: string }`가 아니라 **`provenance?: { basis: VerificationBasis; decisionId: string }`**(5차 정정 —
+  1-1의 세 타입 중 저장소 공유용 VerificationBasis만 사용, 로컬 절대경로 유출 금지. 정본은 applied decision
+  레코드이고 여기엔 참조만, evidence 내용 지문은 decision 레코드가 보유). **참조 무결성 규칙(5차 지적 #2):
+  freshness/스키마 검증이 provenance 참조를 검사한다 — ①decisionId가 applied decision으로 실존 ②같은 mapId
+  ③해당 node/edge를 실제 변경·검증한 decision ④decision의 evidence 지문이 현재 basis와 정합. **강등은 '유도'다
+  (6차 지적 #1 확정): dangling(브랜치 병합·로그 손상·topology 단독 복사) 검사는 topology를 절대 직접 수정하지
+  않는다 — 판독 시점 유도(7차 정정: **강등은 저장값이 confirmed일 때만** — bootstrap candidate는 provenance가
+없는 것이 정상이므로 candidate/unknown은 그대로 통과, coverage의 3분 집계 의미 보존):
+`effectiveConfidence = storedConfidence !== "confirmed" ? storedConfidence : (provenance 유효 ? "confirmed" : "unknown")`
+  **소비 계약(8차 확장): 권위(confirmed subgraph·slice·라우터·게이트)뿐 아니라 사용자 표면(graphCoverage·
+  MAP.md 렌더·대시보드 confidence/coverage·건강도 통계)도 전부 effectiveConfidence를 소비한다** — 내부 제어와
+  표시가 다른 사실을 말하면 '거짓 정상 표시 금지' 위반. 렌더러·coverage 계산기는 topology 단독이 아니라
+  applied decision 색인(또는 사전 계산된 effective projection)을 함께 받는다. decision 로그 판독 실패 시
+  confirmed로 폴백하지 않고 effective unknown+degraded 사유 표시. 감사 표면에서 저장값을 보여줄 땐
+  'stored confirmed → effective unknown(provenance dangling)' 식으로 두 값을 명시 구분. 끝단 테스트 계약:
+  stored confirmed+dangling decision → 라우터 제외·coverage unknown·MAP.md unknown/경고.**
+  **권위 상태 서명(9차 지적 반영 — effective 상태는 topology 단독 함수가 아니므로 mapHash만으론 무효화 누락):**
+  `decisionIndexHash = hash(이 mapId 소속 유효 applied decision들의 AuthorityDecisionProjection canonical 색인)`,
+  `authorityHash = hash(mapHash + decisionIndexHash)`.
+  **AuthorityDecisionProjection(10차 지적 #1 — 해시 순환 차단): decision 레코드 중 effective confidence를
+  결정하는 권위 필드만 — decisionId·mapId·operation·대상 entity·VerificationBasis·evidence 내용 지문·판정
+  결과. 감사 필드(MAP.md 지문·topology before/after 지문·authorityHashAfter·timestamp·표시 메타·WAL/guard
+  marker)는 projection에서 제외** — 안 그러면 decision이 MAP.md 지문을 담고 MAP.md가 authorityHash를 담고
+  authorityHash가 decision을 담는 계산 불능 고정점이 생긴다. 쓰기 순서: ①projection으로 authorityHash 계산
+  ②그 값으로 MAP.md 렌더 ③MAP.md 지문을 decision의 '감사 필드'에 기록(색인 제외분이므로 순환 없음).
+  적용: effective projection·slice·coverage·MAP.md·라우팅 캐시 키=authorityHash / Verifier 결과·intent-choice
+  결속=baseAuthorityHash(기존 baseMapHash 결속을 대체) / patch read-set에 관련 entity의 decision 색인 지문
+  포함(관련 entity 한정 — 무관 append 격리) / MAP.md 머리말은 mapHash와 authorityHash를 구분 표시 / decision
+  로그 변경으로 authorityHash가 바뀌면 기존 산출물 재검사. (정본을 즉시 고치면 유일
+  쓰기 경로·CAS를 스스로 우회하고, 진단만 하고 소비처가 저장값을 읽으면 dangling이 권위로 남음 — 유도 소비가
+  유일한 정합 해법.) 저장된 confidence의 실제 정정은 별도 repair patch를 정상 pipeline으로. 이것이 confirmed의
+  권위 조건이다.**
+- edge 추가: `decisionLocks?: string[]`, `provenance?`(node와 동형). (edge에는 label/roles/authority가 원래
+  없고 v2에서도 추가하지 않는다 — authority는 node의 roles(authority/gate)로만 표현.)
+- node 제거: `lastSeenAt`(휘발 관측치 — 하네스 로컬 freshness 저장소로 이동, 1-2).
+- 루트 추가: `mapId: string(UUID)`, `replacesMapId?: string`(세대 전환 — 1-31).
+- **도입 시점(4차 지적 #3): 루트 스키마 v2(mapId 포함)와 v1→v2 결정론 마이그레이터는 P0.5로 선행** — P1
+  bootstrap이 처음부터 v2를 생성해야 세대 결속이 성립. P2에는 patch/decision 계층 마이그레이션만 남긴다.
+- pending의 구 op 변환표: retire_candidate→tombstone_candidate 개명 흡수, 변환 불가 pending은 stale-expired.
+
+**op 계약 — 기존 8 op 중 7 유지+retire_candidate 개명 1+신설 10 = 계 18(4차 지적 #3 정정):**
+공통: evidence 최소조건(code/test/config ≥1)·rationale·inverse(또는 복구 정보)·origin 결속(1-1)·read-set(1-1).
+
+| op | 대상 | payload 핵심 | inverse | 기본 분류 |
+|---|---|---|---|---|
+| split_node | 원본 node | newNodes[](신규 UUID·label·구성요소 배분: anchors/evidence/conditions 분할표)·edgeReroute[](기존 edge→어느 신규 node로) | merge_node(분할표 보존) | verifier-resolved 가능 |
+| split_edge | 원본 edge | newEdges[](conditions 배분) | merge_edge | verifier-resolved 가능 |
+| merge_node | 원본 node 2+ | survivorId·absorbed[](anchors/evidence/edges 재지향표)·alias 기록 | split_node | intent-choice(1-13 동형 증명 시만 자동) |
+| merge_edge | 원본 edge 2+ | survivorId·absorbed[] | split_edge | intent-choice(동상) |
+| widen | node/edge | 확대분(anchors/conditions 추가)·expect(현 범위)·음성 조건 read-set(1-1) | narrow(추가분 제거) | verifier-resolved 가능 |
+| narrow | node/edge | 축소분(제거 대상)·expect·조건부 잔존 | widen | verifier-resolved 가능 |
+| supersede | 구 node/edge | successorId·expect(구 상태)·lifecycle→superseded | set_state 복원+관계 제거 | 명백 시 verifier-resolved |
+| tombstone_candidate | node/edge | expect·근거(호출부 소멸 등) — **topology 무변경 제안 전용 op(4차 지적 #2): 적용 형태는 intent-choice 카드 생성이며, 사용자 선택 시 set_state(lifecycle)로 실체화**(구 retire_candidate 흡수. topology에 후보 표시 필드를 두지 않는다 — 후보는 파이프라인 상태) | 카드 철회(topology 무변경) | **intent-choice 단일** — 감지·카드 생성(deterministic-system, detectedBy 기록)은 결정 상태가 아니라 파이프라인 lifecycle의 proposed 단계(4차 지적 #2: 한 patch가 auto이면서 intent-choice일 수 없음) |
+| change_steward | node | to·expect(현 steward) | 역방향 | intent-choice(authority 경계) |
+| change_authority | **node 한정** | roles의 authority/gate 변경 to·expect(스키마상 edge에 역할 없음) | 역방향 | intent-choice |
+| rewrite_label | **node=label/description·edge=notes** | to·expect | 역방향 | 의미 불변 시 verifier-resolved·의미 변경이면 intent-choice |
+
+targetId 계약: 생성 op(add_node/add_edge)=금지, split/merge=원본 targetId(s)+신규 UUID 목록 동시(이분법 폐지),
+나머지=필수 UUID. 전 op payload는 PAYLOAD_KEYS 화이트리스트+무사망 진단 계약 동수준. 분류는 op 이름이 아니라
+(증거로 가능한 결론 수, 제품 의도 필요, 코드↔문서 충돌, 가역성, authority 경계) 입력의 신설 분류기 — 표의
+'기본 분류'는 출발점일 뿐 증거가 뒤집는다(지시 §7).
+
+## 4. 결정 상태 5종 (재설계 고정)
+
+| 상태 | 판정 주체 | 진입 | 종결 |
+|---|---|---|---|
+| auto | 결정론 코드 | 관측 사실(evidence/anchor 추가·명백 rename·재료 갱신) | 즉시 적용 |
+| verifier-resolved | Codex Verifier(typed·claim 결속 1-5) | 의미 판단 필요·결론 1개 | 자동 적용(decision actor=verifier) |
+| needs-investigation | 시스템 | 스키마 실패·근거 부족·②b 실패 | 상한 도달→unresolved 파킹 / read-set 파손→stale-expired |
+| intent-choice | 사용자(사람 언어 카드) | 복수 제품 의도 | 선택→자동 적용(의미 변화 시만 재카드) |
+| blocked-conflict | 시스템 | 코드·테스트·설정의 실제 모순 | evidence matrix 재검사 통과 시 해제(1-28) |
+
+## 5. Phase 재배열 (실행 순서 고정)
+
+- **P0** ✅ 이 문서(권한 충돌 분석·단일 정본 확정·op 계약·v1 개정표).
+- **P0.5** 배포 가능한 공용 런타임(1-15): scope-map 계열의 bridge/ 승격 + **루트 스키마 v2(mapId·description·
+  decisionLocks·provenance·lastSeenAt 제거)와 v1→v2 결정론 마이그레이터**(4차 지적 #3 — P1 bootstrap이 처음부터
+  v2를 생성해야 세대 결속 성립).
+- **P1** 비차단 bootstrap 생명주기: 트리거 5종(재정의 포함)→detach 기동·inflight 선점·run-state(pid 검증)·
+  degraded 고지·2트랙 3중 게이트(writeCanonicalLocked의 mkdir 선행 부작용 수정 포함)·informed consent+PRIVACY 선갱신.
+- **P2** patch pipeline 구현(활성화는 P3와 동시 — 1-30): 로컬 prepared WAL+저장소 applied 로그(1-19)·CAS
+  재설계(1-1)·②b·신설 op 스키마(§3)·patch/decision 계층 마이그레이션(op 변환표)·5상태 분류기·apply별 로컬
+  스냅샷 보관(1-18 재료).
+- **P3** 권위 전환+legacy 이관: 권위 marker·자동 적용 활성화·docs/MAP.md 동결·내보내기/approve 재배선(1-22)·
+  sig↔UUID 바인딩(1-24)·서사 표면 스윕.
+- **P4** freshness(로컬 재료 저장소+공유 provenance 1-2·유도 판정기·신선도 권위 단일화)·slice 동봉(buildScoutAttach
+  교체 — 이중 try 격리·echo 계약 이관).
+- **P5** provider 공통 인터페이스: runScout→typed ScoutResult(무사망 계약)·self typed adapter(1-26)·deepseek
+  probe(1-8).
+- **P6** Codex Scout 독립 세션: session-role-registry(1-9)·Scout 전용 진입점(1-4)·두뇌 설정 독립(매 호출 주입).
+- **P7** 모드 UI·readiness·Scout 세션 관리(segScout 확장 시 dirty/hold 연쇄 편입).
+- **P8** 결정론 라우터(1-6·후처리 승격·충돌→adjudicate)·라우팅 로그.
+- **P9** intent-choice 카드(1-14)·recovery-action 카드(1-18)·선택 후 자동 마무리.
+- **P10** 통계·비용·건강도(scout-usage 확장·지표 분리).
+
+각 Phase: 설계→양모델 독립 검토→구현→전체 테스트→Codex 검증→재판단→수정→재검증→로컬 설치→로컬 커밋.
+버전 bump 금지(=패키지 버전. MAP_SCHEMA_VERSION은 마이그레이터 동반 상향 허용)·push 금지·마켓 금지.
+
+## 6. 무회귀 계약 (2트랙·기존 축)
+
+- 모든 신규 진입점은 scoutMode 게이트 최선행(소스 null+표시 이중 게이트) — MAP 파일 생성 0·Scout 세션 생성 0·
+  ping 0·라우팅 0을 2트랙 끝단 테스트로 잠금.
+- 미설정 프로젝트=빈 계약=기존과 100% 동일 보장(하네스 상태는 계약 파일이 아닌 별도 서랍).
+- **verify-guard의 project-map/** 취급 계약: 1-32의 산출물 일치 계약을 따른다** — topology/MAP.md는 applied
+  decision의 기록 지문과 정확 일치 시만 제외, decision 로그는 로컬 WAL marker 대조로 이번 append분만 제외,
+  혼합·불일치는 검증 대상. 릴리스의 dirty-worktree 중단은 별도 계약(이 구분의 적용 대상이 아님 — 1-32).
+- 기존 self/DeepSeek 팔·Impact Map 보관함·장부 이벤트 15종·트림 동형성·ledgerSig 패리티 쌍 보존.
+- Scout 실행이 Verifier 타임아웃 창을 잠식하지 않게 별도 타임아웃 키.
+- 사전등록 실측(70.5%) 비교 가능성: 꾸러미 형식 버전 기록+재기준선 측정 계획(사용자 합의 항목).
+
+## 7. 사용자에게 남는 결정(제품 정책 — 구현이 묻지 않고 기록만)
+
+- topology 라벨·MAP.md 언어 정책(권고: 라벨 언어 중립, MAP.md 단일본 — 언어별 뷰는 대시보드).
+- ab-retro 재기준선 측정 시점(P3/P4 후 — 사전등록 변경 합의).
+- (고지 사항) P3에서 docs/MAP.md 내보내기·approve가 Project MAP 경로로 전환됨 — 지시로 이미 확정된 정책이며
+  재승인을 구하지 않는다(1-22).
