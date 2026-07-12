@@ -399,6 +399,20 @@
    비활성 계약 유지: 자동 트리거 0·수동 CLI 전용·권위 marker 부재(cutover는 P3b). 검증: 설계 11왕복+
    A1 7왕복+A2a 4왕복+A2b 12~24차(21차 통과(보완)→22차 통과→guard 배선 23차 실패 3건 수용→24차 통과).
    전체 체인 2052/0. 다음: P3a(정본 §5 순서 — P2 활성화 cutover는 P3b에서 한 번에).
+   **[P3a 갱신 2026-07-12] 권위 전환 준비 완료(설계 c39107b → 구현 caee38e)**:
+   상세 설계 docs/MAP-P3A-DESIGN.md(사전검증 12왕복·12차 통과(보완)) — 권위 판별(authority.json 정확 키·
+   cutover receipt=project-map/authority-history/ 전용 서랍·authorityObject 사본+재개·부재+이력=blocked)·
+   sig↔UUID 바인딩(1-24: 후보=하네스 홈 map-bindings/<nsKey>/<mapId>/ 결정론·확정=repo bindings.json 수동
+   CLI만·candidateFp=내용 지문이 곧 조회 키·sig 기본키·rebind 감사)·caseAware 매칭(2단 해소·case-exact
+   유일만 자동)·live 후보 서랍(.cand-global-lock 단일화·전 세대 backpressure·미처리 삭제 금지·card-refs
+   순서 계약)·promoteEntry 6분기(binding 미기록=1-24 분리·durable proposal·결정론 patchId=generationFp)·
+   proposeUnique(nsLock 임계구역 의미 키 유일성)·lookupBySig(prevFps+불변 (sig,entryFp,origin) 3요소 재개
+   판별)·REQUIRED_SURFACES 6표면/manifest 분리(P3b 전수 검사 재료). 구현 검증 1~8차(1차 9건→7차 2건 전부
+   수용→8차 통과): WAL barrier 정본 소비·GC 배선·내용 지문 재계산 신뢰 경계(entryFp/originalsFp/candidateFp
+   공식 재계산·writeBindings 전수 자기 검증)·live 합타입 엄격(오타=조용한 강등 금지)·origin canonical 전체
+   비교. tests/map-bindings.test.js 133단언·전체 체인 2185/0. **비활성 계약 유지: 라우팅 무변경·권위 marker
+   부재·기존 export/approve/reader 경로 100% 무접촉·CLI 5명령(scoutMode 게이트)은 수동 전용.**
+   다음: P4(freshness·공용 reader API — 정본 §5 순서. cutover는 P3b).
 6. (후보) 대시보드 게이트 토글 UI(현재 CLI만 — informed consent 문구에 실측 명중률 표기), 발화 기록(scope-ledger-note)
    흐름의 실사용 관찰.
 7. (관찰 항목) 한 폴더 다중 프로그램 구분 — 권장 관행은 프로그램별 폴더 분리, 보강 후보는 seed 클러스터 자동 좁힘.
