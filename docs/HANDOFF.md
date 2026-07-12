@@ -379,6 +379,22 @@
    시스템콜 간극은 파일 프리미티브의 한계로 계약화(Node 순정에 flock 없음 — Codex 15차 합의), 예외 경합은
    표면화→회수로 수렴. P1 구현 검증 17차(별도 사전 설계검증+1~15차 구현 검증 30여 결함 수용, 15차 통과(보완)→16~17차 문구 마감 통과). 참고: 커밋 f0f13cc 메시지의 '오탈취는 즉시 원위치 복원'은 위 표현이 정확하며, 변경 목록에 package.json(테스트 체인에 map-bootstrap.test.js 배선)이 누락됨 — 이 줄이 정정 기록.
    tests/map-bootstrap.test.js 149단언(전체 체인 1744/0). 다음: P2(patch pipeline — 활성화는 P3b cutover와 동시).
+   **[P2 갱신 2026-07-12] patch pipeline 전체 완료(설계 25756c6 → A1 79bbf7c → A2a d5a0360 → A2b 0a586ac)**:
+   상세 설계 docs/MAP-P2-DESIGN.md(사전검증 11왕복)가 정본 §5 P2 위임을 닫고, 구현 3단 —
+   A1(src/project-map.ts P2 코어: 21 op 스키마·PAYLOAD_KEYS_V2·READSET_RULES·validatePatchV2 증거 이층·
+   MapDecisionV2 applied만·이중 해시 adp/dih/ah/pfh/dch·effectiveConfidence, 115단언) ·
+   A2a(semanticValidateV2 → SemanticVerdict 3치+순수 적용기 applyOperationV2[입력 불변·revision+1·
+   split/merge 보존], 56단언) · A2b(bridge/map-pipeline.js 신설: propose/classify/apply=F-1 ⓪~⑪·F-2 정책
+   전용, 클레임 3대 분기 ⓐⓑⓑ′ⓒ[영수증 전체 검증·D/Pf/K 혼합 잔존=conflict], validateWalV2 자기완결
+   [kind↔op 동치·해시 DAG·audit 결속·P2=recovery inverse 전용 — patch inverse는 생산자·validator 동반
+   도입 시 확장], recoverWal 복구표 t1~t14/p0~p8·t6 선행, abortWal, recoverCorruption 스냅샷 결정론,
+   pipelineGc[dead nsLock 격리·보존 상한 CODEX_BRIDGE_MAP_GC_KEEP 기본 200 클램프 20~5000·오래된 순=
+   WAL 고정 decision.audit.ts 1차·decisionId 동률·비-git marker는 complete 정리 연동] + map-runtime.js
+   canonical writer 공통 barrier(잠금 안 재검사)·CLI 8명령(scoutMode 게이트 최선행·apply는 --pre-cutover
+   강제) + map-bootstrap.js P1 배선(barrier 게이트·자식 race 종결·recovery-pending 고지), 119단언).
+   비활성 계약 유지: 자동 트리거 0·수동 CLI 전용·권위 marker 부재(cutover는 P3b). 검증: 설계 11왕복+
+   A1 7왕복+A2a 4왕복+A2b 12~22차(21차 통과(보완)→22차 통과). 전체 체인 2034/0.
+   다음: P3a(정본 §5 순서 — P2 활성화 cutover는 P3b에서 한 번에).
 6. (후보) 대시보드 게이트 토글 UI(현재 CLI만 — informed consent 문구에 실측 명중률 표기), 발화 기록(scope-ledger-note)
    흐름의 실사용 관찰.
 7. (관찰 항목) 한 폴더 다중 프로그램 구분 — 권장 관행은 프로그램별 폴더 분리, 보강 후보는 seed 클러스터 자동 좁힘.
