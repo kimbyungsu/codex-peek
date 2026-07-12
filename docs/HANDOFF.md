@@ -392,9 +392,13 @@
    WAL 고정 decision.audit.ts 1차·decisionId 동률·비-git marker는 complete 정리 연동] + map-runtime.js
    canonical writer 공통 barrier(잠금 안 재검사)·CLI 8명령(scoutMode 게이트 최선행·apply는 --pre-cutover
    강제) + map-bootstrap.js P1 배선(barrier 게이트·자식 race 종결·recovery-pending 고지), 119단언).
+   + guard 배선(C-5·1-32 — 24차 마감): map-pipeline.guardExcludedFor(decisions/ 존재=1-32 산출물 일치
+   판정·부재=bootstrap-only P1 exclude 유지 / marker 정밀 합타입 전체 통과 시에만 신뢰[fail-open 금지] /
+   topology·MAP.md 쌍 제외 후보=topology transaction decision만[정책 감사 지문 오귀속 차단] / MAP.md
+   실존 필수[부재≠빈 파일])를 map-bootstrap.mapAutoExcluded 최선두에서 소비(verify-guard 무변경 경유).
    비활성 계약 유지: 자동 트리거 0·수동 CLI 전용·권위 marker 부재(cutover는 P3b). 검증: 설계 11왕복+
-   A1 7왕복+A2a 4왕복+A2b 12~22차(21차 통과(보완)→22차 통과). 전체 체인 2034/0.
-   다음: P3a(정본 §5 순서 — P2 활성화 cutover는 P3b에서 한 번에).
+   A1 7왕복+A2a 4왕복+A2b 12~24차(21차 통과(보완)→22차 통과→guard 배선 23차 실패 3건 수용→24차 통과).
+   전체 체인 2052/0. 다음: P3a(정본 §5 순서 — P2 활성화 cutover는 P3b에서 한 번에).
 6. (후보) 대시보드 게이트 토글 UI(현재 CLI만 — informed consent 문구에 실측 명중률 표기), 발화 기록(scope-ledger-note)
    흐름의 실사용 관찰.
 7. (관찰 항목) 한 폴더 다중 프로그램 구분 — 권장 관행은 프로그램별 폴더 분리, 보강 후보는 seed 클러스터 자동 좁힘.

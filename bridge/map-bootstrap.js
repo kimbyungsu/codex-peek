@@ -529,6 +529,12 @@ function runChild(repo, manual) {
 // 부재·불일치·실패=빈 집합(보수 — 자동물을 잘못 제외하는 거짓 음성 금지).
 function mapAutoExcluded(ws) {
   try {
+    // C-5 적용 조건 분리(P2 guard 배선): decisions/가 존재하는 mapId=1-32 산출물 일치 판정(marker 대조 —
+    // P1 run-state exclude 불사용) / bootstrap-only=아래 P1 exclude 유지. 실패·구버전 브릿지=P1 경로(보수).
+    try {
+      const g = require("./map-pipeline.js").guardExcludedFor(ws);
+      if (g && g.mode === "pipeline") return g.excluded;
+    } catch { /* P1 경로로 폴백 */ }
     const rs = readJson3(rsFileFor(ws));
     if (rs.st !== "ok" || rs.data.phase !== "done" || !rs.data.exclude || typeof rs.data.exclude !== "object") return new Set();
     const out = new Set();

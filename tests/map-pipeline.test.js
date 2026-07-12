@@ -595,6 +595,93 @@ function main() {
     delete process.env.CODEX_BRIDGE_MAP_GC_KEEP;
   }
 
+  console.log("[12] guard 배선(C-5·1-32) — 산출물 일치 제외·혼합=검증 대상·P1 exclude 분리");
+  {
+    const ws = mkRepo("guard");
+    setScoutOn(ws); MB.grantConsent(ws, "test");
+    const topo0 = initTopo(ws);
+    ok(MP.guardExcludedFor(ws).mode === "bootstrap-only", "decisions/ 부재=bootstrap-only(P1 exclude 유지)");
+    const { patch } = mkLivePatch(ws, "add_condition", { targetId: topo0.nodes[0].id, payload: { condition: "g1" } });
+    MP.proposePatch(ws, patch); MP.classifyPatch(ws, patch.mapId, patch.patchId);
+    const ap = MP.applyPatch(ws, patch.mapId, patch.patchId, { preCutover: true });
+    ok(ap.ok, "(전제) topology 적용");
+    const decRel = "project-map/decisions/" + ap.decisionId + ".json";
+    let g = MP.guardExcludedFor(ws);
+    ok(g.mode === "pipeline" && g.excluded.has(decRel), "적용 직후: decision 파일=marker 일치 제외");
+    ok(g.excluded.has("project-map/topology.json") && g.excluded.has("project-map/MAP.md"), "topology·MAP.md=최신 applied 지문 쌍 일치 제외(1-32)");
+    ok(MB.mapAutoExcluded(ws).has(decRel), "mapAutoExcluded가 pipeline 모드 소비(P1 exclude 미사용 — C-5 적용 조건 분리)");
+    // 수동 topology 편집(유효 JSON 유지) → topology·MAP.md 쌍 전체 검증 대상, decision 제외는 유지
+    const tp = path.join(ws, "project-map", "topology.json");
+    const tOrig = fs.readFileSync(tp, "utf8");
+    const tMod = JSON.parse(tOrig); tMod.nodes[0].label = tMod.nodes[0].label + " 수동";
+    fs.writeFileSync(tp, JSON.stringify(tMod, null, 1));
+    g = MP.guardExcludedFor(ws);
+    ok(!g.excluded.has("project-map/topology.json") && !g.excluded.has("project-map/MAP.md") && g.excluded.has(decRel), "수동 topology 편집=쌍 포함(검증 대상)·decision 제외 유지");
+    fs.writeFileSync(tp, tOrig);
+    // decision 파일 변조 → 그 marker 산출물 전부 검증 대상(유일 decision이면 latest 부재 → topology 쌍도 포함)
+    const dp = path.join(ws, decRel);
+    const dOrig = fs.readFileSync(dp, "utf8");
+    fs.writeFileSync(dp, dOrig + " ");
+    g = MP.guardExcludedFor(ws);
+    ok(g.mode === "pipeline" && g.excluded.size === 0, "decision 변조=전부 검증 대상(marker 불일치·latest 부재)");
+    fs.writeFileSync(dp, dOrig);
+    // 정책 적용 → 정책 파일 제외, 변조 시 포함(decision 제외는 유지)
+    const polG = { policyId: U(95), mapId: patch.mapId, scope: 'project', predicateExpr: { version: 1, kind: 'op-class', opClass: 'widen' }, predicateDescription: '확장 원칙', chosenMeaning: '유지', createdFromDecision: U(96), verification: { kind: 'historyless', basisFp: PM.mapHashOf(MR.readTopoExFor(ws).topo), inventoryFp: sha('invG') }, active: true };
+    const { patch: pg } = mkLivePatch(ws, 'create_intent_policy', { payload: { policy: polG }, evidence: undefined, authorizationRefs: [{ kind: 'user-choice', ref: 'card-g' }] });
+    MP.proposePatch(ws, pg); MP.classifyPatch(ws, pg.mapId, pg.patchId);
+    const apg = MP.applyPatch(ws, pg.mapId, pg.patchId, { preCutover: true, resolutionRef: 'card-g' });
+    ok(apg.ok, "(전제) 정책 적용");
+    const pfRel = "project-map/policies/" + U(95) + ".json";
+    g = MP.guardExcludedFor(ws);
+    ok(g.excluded.has(pfRel) && g.excluded.has("project-map/decisions/" + apg.decisionId + ".json"), "정책 파일+정책 decision=제외");
+    ok(g.excluded.has("project-map/topology.json"), "정책 op 후에도 topology 쌍 제외 유지(무변경 — 최신 decision의 after=현재)");
+    const pfp = path.join(ws, pfRel);
+    const pfOrig = fs.readFileSync(pfp, "utf8");
+    fs.writeFileSync(pfp, pfOrig + " ");
+    g = MP.guardExcludedFor(ws);
+    ok(!g.excluded.has(pfRel) && g.excluded.has(decRel), "정책 파일 변조=포함(검증 대상)·타 decision 제외 유지");
+    fs.writeFileSync(pfp, pfOrig);
+    // 23차 #1: marker 합타입 위반=fail-open 금지(그 marker 산출물 전부 검증 대상)
+    const mkDir = MP.dirsFor(ws, patch.mapId).markers;
+    const mkT = path.join(mkDir, ap.decisionId + '.json');
+    const mkTOrig = fs.readFileSync(mkT, 'utf8');
+    const mkTObj = JSON.parse(mkTOrig);
+    fs.writeFileSync(mkT, JSON.stringify({ decisionId: mkTObj.decisionId, decisionFileAfterHash: mkTObj.decisionFileAfterHash }, null, 1));
+    g = MP.guardExcludedFor(ws);
+    ok(!g.excluded.has(decRel) && !g.excluded.has('project-map/topology.json') && !g.excluded.has('project-map/MAP.md'), 'policyArtifact 키 누락 marker=전부 포함(23차 #1)');
+    fs.writeFileSync(mkT, mkTOrig);
+    const mkP = path.join(mkDir, apg.decisionId + '.json');
+    const mkPOrig = fs.readFileSync(mkP, 'utf8');
+    for (const bad of [{}, { kind: 'unknown', id: U(95), fileAfterHash: sha('z') }]) {
+      const o2 = JSON.parse(mkPOrig); o2.policyArtifact = bad;
+      fs.writeFileSync(mkP, JSON.stringify(o2, null, 1));
+      g = MP.guardExcludedFor(ws);
+      ok(!g.excluded.has(pfRel) && !g.excluded.has('project-map/decisions/' + apg.decisionId + '.json'), 'policyArtifact ' + (bad.kind || '{}') + '=합타입 위반 marker 전체 불신(23차 #1)');
+    }
+    fs.writeFileSync(mkP, mkPOrig);
+    // 23차 #3: MAP.md 부재≠빈 파일 — 삭제=검증 대상(topology writer는 파일을 항상 생성)
+    const mdP = path.join(ws, 'project-map', 'MAP.md');
+    const mdOrig = fs.readFileSync(mdP, 'utf8');
+    fs.unlinkSync(mdP);
+    g = MP.guardExcludedFor(ws);
+    ok(!g.excluded.has('project-map/topology.json') && !g.excluded.has('project-map/MAP.md') && g.excluded.has(decRel), 'MAP.md 삭제=쌍 포함(23차 #3)·decision 제외 유지');
+    fs.writeFileSync(mdP, mdOrig);
+    // 23차 #2: 첫 P2 decision이 policy-only — topology/MAP.md는 검증 대상(정책 감사 지문으로 오귀속 금지·P1 exclude도 비활성)
+    {
+      const ws2 = mkRepo('guardpol');
+      setScoutOn(ws2); MB.grantConsent(ws2, 'test');
+      initTopo(ws2);
+      const polO = { policyId: U(97), mapId: MR.readTopoExFor(ws2).topo.mapId, scope: 'project', predicateExpr: { version: 1, kind: 'op-class', opClass: 'narrow' }, predicateDescription: '축소 원칙', chosenMeaning: '유지', createdFromDecision: U(98), verification: { kind: 'historyless', basisFp: PM.mapHashOf(MR.readTopoExFor(ws2).topo), inventoryFp: sha('invO') }, active: true };
+      const { patch: po } = mkLivePatch(ws2, 'create_intent_policy', { payload: { policy: polO }, evidence: undefined, authorizationRefs: [{ kind: 'user-choice', ref: 'card-o' }] });
+      MP.proposePatch(ws2, po); MP.classifyPatch(ws2, po.mapId, po.patchId);
+      const apo = MP.applyPatch(ws2, po.mapId, po.patchId, { preCutover: true, resolutionRef: 'card-o' });
+      ok(apo.ok, '(전제) policy-only 적용');
+      const g2 = MP.guardExcludedFor(ws2);
+      ok(g2.mode === 'pipeline' && !g2.excluded.has('project-map/topology.json') && !g2.excluded.has('project-map/MAP.md'), '정책 decision만 존재=topology 쌍 미제외(오귀속 차단 — 23차 #2)');
+      ok(g2.excluded.has('project-map/decisions/' + apo.decisionId + '.json') && g2.excluded.has('project-map/policies/' + U(97) + '.json'), '정책 산출물 자체는 제외');
+    }
+  }
+
   console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
   try { fs.rmSync(process.env.CODEX_BRIDGE_HOME, { recursive: true, force: true }); } catch { /* 무해 */ }
   process.exit(fail ? 1 : 0);

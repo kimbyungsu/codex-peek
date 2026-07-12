@@ -909,7 +909,77 @@ function pipelineGcInLock(repo, mapId) {
   return { ok: true, removed, nsRecovered };
 }
 
+// ── verify-guard 소비(C-5·§6 1-32): 자동/수동 변경 구분은 '산출물 일치'로만 ───────────────────
+// 반환 {mode, excluded}: mode="pipeline"=decisions/가 존재하는 mapId(1-32 판정 — P1 exclude 불사용) /
+// "bootstrap-only"=decisions/ 부재(P1 run-state exclude 유지). 모든 실패=포함(빈 집합) — 자동물을 잘못
+// 제외하는 거짓 음성 금지. 읽기 전용·잠금 없음(guard는 훅 경로 — 관측이 파이프라인 상태를 바꾸지 않는다).
+function guardExcludedFor(repo) {
+  const excluded = new Set();
+  try {
+    const decDir = path.join(repo, "project-map", "decisions");
+    let hasDec = false;
+    try { hasDec = fs.readdirSync(decDir).some((f) => f.endsWith(".json")); } catch (e) { if (!(e && e.code === "ENOENT")) return { mode: "pipeline", excluded }; } // 판독 불가=1-32 모드의 빈 집합(전부 검증 대상)
+    if (!hasDec) return { mode: "bootstrap-only", excluded };
+    const rt = MR.readTopoExFor(repo);
+    if (rt.st !== "ok") return { mode: "pipeline", excluded };
+    const d = dirsFor(repo, rt.topo.mapId);
+    const HEX40 = /^[0-9a-f]{40}$/;
+    // marker는 정확 합타입 전체 통과 시에만 신뢰(23차 #1 — 1-32 '부분 상태 금지' 불변식): 키 집합 정확 일치·
+    // decisionId=UUID+파일명 결속·40hex 지문·policyArtifact=null 또는 {kind 열거형,id UUID,fileAfterHash 40hex}
+    // 정확 3키. 위반=이 marker가 가리키는 산출물 전부 검증 대상(fail-open 금지).
+    const markerOf = (fname) => {
+      const mk = readJson3(path.join(d.markers, fname));
+      if (mk.st !== "ok" || !mk.data || typeof mk.data !== "object" || Array.isArray(mk.data)) return null;
+      const m = mk.data;
+      if (Object.keys(m).sort().join(",") !== "decisionFileAfterHash,decisionId,policyArtifact") return null;
+      if (typeof m.decisionId !== "string" || !UUID_RE.test(m.decisionId) || fname !== m.decisionId + ".json") return null;
+      if (typeof m.decisionFileAfterHash !== "string" || !HEX40.test(m.decisionFileAfterHash)) return null;
+      if (m.policyArtifact !== null) {
+        const pa = m.policyArtifact;
+        if (!pa || typeof pa !== "object" || Array.isArray(pa)) return null;
+        if (Object.keys(pa).sort().join(",") !== "fileAfterHash,id,kind") return null;
+        if (pa.kind !== "intent-policy" && pa.kind !== "policy-revocation") return null;
+        if (typeof pa.id !== "string" || !UUID_RE.test(pa.id)) return null;
+        if (typeof pa.fileAfterHash !== "string" || !HEX40.test(pa.fileAfterHash)) return null;
+      }
+      return m;
+    };
+    let latest = null; // topology transaction decision만 후보(23차 #2 — 정책 op은 topology/MAP.md를 쓰지 않는 불변 트랜잭션(F-2)이라 그 감사 지문으로 topology를 귀속하면 수동 변경 세탁 통로가 된다)
+    for (const f of listJson(d.markers)) {
+      const m = markerOf(f);
+      if (m === null) continue; // 합타입 위반=이 marker 산출물 전부 포함(검증 대상)
+      const rel = "project-map/decisions/" + m.decisionId + ".json";
+      const D3 = fileSha3(path.join(repo, rel));
+      if (D3.st !== "ok" || D3.hash !== m.decisionFileAfterHash) continue; // 불일치(수동 편집·혼합)=검증 대상
+      excluded.add(rel);
+      if (m.policyArtifact) {
+        const pa = m.policyArtifact;
+        const rel2 = "project-map/policies/" + (pa.kind === "policy-revocation" ? pa.id + ".revoke.json" : pa.id + ".json");
+        const P3 = fileSha3(path.join(repo, rel2));
+        if (P3.st === "ok" && P3.hash === pa.fileAfterHash) excluded.add(rel2);
+      }
+      const dj = readJson3(path.join(repo, rel));
+      if (dj.st === "ok" && dj.data.audit && typeof dj.data.audit.ts === "string"
+        && dj.data.patch && !PM.isPolicyOpV2(dj.data.patch.operation)) { // topology 후보만(audit.ts 최신·동률 decisionId — GC와 동일 키)
+        const key = dj.data.audit.ts + m.decisionId;
+        if (!latest || key > latest.key) latest = { key, audit: dj.data.audit };
+      }
+    }
+    // topology/MAP.md: 최신 topology decision의 기록 지문과 '둘 다' 정확 일치 시에만 쌍으로 제외(혼합=검증 대상).
+    // topologyAfterHash=canonical mapHash(적용기 기록과 동일 함수). MAP.md는 실존 파일 일치 필수 — topology
+    // writer는 파일을 항상 생성하므로 부재=삭제됨=검증 대상(부재≠빈 파일, 23차 #3).
+    if (latest) {
+      let topoOk = false;
+      try { topoOk = PM.mapHashOf(rt.topo) === latest.audit.topologyAfterHash; } catch { topoOk = false; }
+      const M3 = fileSha3(path.join(repo, "project-map", "MAP.md"));
+      if (topoOk && M3.st === "ok" && M3.hash === latest.audit.mapMdAfterHash) { excluded.add("project-map/topology.json"); excluded.add("project-map/MAP.md"); }
+    }
+  } catch { /* 보수: 포함 */ }
+  return { mode: "pipeline", excluded };
+}
+
 module.exports = {
+  guardExcludedFor,
   canonicalIdentityFor, localOriginFor, patchBasisFor, pipeRootFor, dirsFor, ensureDirs,
   activePipelineWalFor, decisionIndexFor, policyStateFor, authorityOf,
   buildReadSetFor, readSetIntact, casCheck, entityHashOf,
