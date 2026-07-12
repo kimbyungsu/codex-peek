@@ -900,13 +900,24 @@ function pipelineGcInLock(repo, mapId) {
       try { fs.unlinkSync(path.join(d.markers, f2)); removed++; } catch { /* 무해 */ }
     }
   }
+  // P3a 바인딩 서랍 GC(구현 1차 #2 — lazy require: 로드 순환 회피. 구버전 '파일 부재'만 무시·그 외 예외=진단 표기)
+  let bindingsGcError = null;
+  try {
+    const MBx = require(path.join(__dirname, "map-bindings.js"));
+    const rg = MBx.gcBindingsInLock(repo);
+    nsRecovered += rg.lockRecovered; removed += rg.removed;
+    if (rg.error) bindingsGcError = rg.error; // 서랍 손상 진단(구현 3차 #4)
+  } catch (e) {
+    const notFound = e && e.code === "MODULE_NOT_FOUND" && String(e.message || "").includes("map-bindings");
+    if (!notFound) bindingsGcError = String(e && e.message || e); // 성공 위장 금지(구현 2차 #6)
+  }
   // orphan 스냅샷(WAL·complete 미참조) 정리
   const completeRef = new Set(listJson(d.walComplete).map((f) => f.replace(/\.json$/, "")));
   for (const f of listJson(d.snapshots)) {
     const did = f.replace(/\.json$/, "");
     if (!active.has(did) && !claimed.has(did) && !completeRef.has(did)) { try { fs.unlinkSync(path.join(d.snapshots, f)); removed++; } catch { /* 무해 */ } }
   }
-  return { ok: true, removed, nsRecovered };
+  return bindingsGcError ? { ok: false, removed, nsRecovered, bindingsGcError } : { ok: true, removed, nsRecovered }; // exit 계약도 실패로(구현 3차 #4)
 }
 
 // ── verify-guard 소비(C-5·§6 1-32): 자동/수동 변경 구분은 '산출물 일치'로만 ───────────────────
@@ -978,7 +989,74 @@ function guardExcludedFor(repo) {
   return { mode: "pipeline", excluded };
 }
 
+// ── P3a 확장 — promotion 의미 키 유일성(설계 MAP-P3A-DESIGN.md §E-W·8차 #1·9차 #1·10차 #3) ─────
+const PENDING_LIFECYCLES = ["proposed", "classified", "claimed", "resolved", "resolved-noop", "expired"];
+// pending 전수 스캔(잠금 없는 판독 — proposeUnique는 nsLock 안에서 호출). '손상'은 fail-closed(10차 #3):
+// JSON 실패·schema 불일치·미지 lifecycle·patch 부재/스키마 실패·파일명↔patchId 불일치·claimed인데 claim 불완전.
+function findPromotions(repo, mapId, key) {
+  const d = dirsFor(repo, mapId);
+  let files;
+  try { files = listJson(d.pending); } catch { return { st: "error", error: "pending 서랍 판독 불가 — fail-closed" }; }
+  const active = [], expired = [], resolved = [];
+  for (const f of files) {
+    const r = readJson3(path.join(d.pending, f));
+    if (r.st !== "ok") return { st: "error", error: "pending 손상(" + f + ": " + r.st + ") — fail-closed" };
+    const rec = r.data;
+    if (!rec || rec.schema !== "map-pending-v2" || !PENDING_LIFECYCLES.includes(rec.lifecycle) || !rec.patch)
+      return { st: "error", error: "pending 형식 위반(" + f + ") — fail-closed(미지 lifecycle 포함)" };
+    if (f !== rec.patch.patchId + ".json") return { st: "error", error: "pending 파일명↔patchId 불일치(" + f + ") — fail-closed" };
+    if (rec.lifecycle === "claimed" && !(rec.claim && Number.isInteger(rec.claim.pid) && typeof rec.claim.token === "string" && typeof rec.claim.decisionId === "string"))
+      return { st: "error", error: "claimed pending의 claim 불완전(" + f + ") — fail-closed" };
+    const pt = rec.patch;
+    if (PM.validatePatchV2(pt).length) return { st: "error", error: "pending patch 스키마 실패(" + f + ") — fail-closed" };
+    const isPromo = pt.mapId === mapId && pt.operation === "add_evidence" && pt.payload && pt.payload.evidence
+      && pt.payload.evidence.kind === "ledger" && pt.payload.evidence.ref === key.sig
+      && (!key.targetId || pt.targetId === key.targetId);
+    if (!isPromo) continue;
+    if (rec.lifecycle === "proposed" || rec.lifecycle === "classified" || rec.lifecycle === "claimed") active.push(pt.patchId);
+    else if (rec.lifecycle === "expired") expired.push(pt.patchId);
+    else resolved.push(pt.patchId);
+  }
+  return { st: "ok", active: active.sort(), expired: expired.sort(), resolved: resolved.sort() };
+}
+// 의미 키 검색·검증·수납을 '하나의 nsLock 임계구역'에서(8차 #1 — 검색·기록 분리 경합 봉합).
+// semanticKey를 신뢰하지 않는다(9차 #1): buildPatch() 결과에서 키를 재산출해 대조.
+function proposeUnique(repo, mapId, semanticKey, buildPatch) {
+  ensureDirs(repo, mapId);
+  const w = withNsLock(repo, mapId, () => {
+    const fp = findPromotions(repo, mapId, semanticKey);
+    if (fp.st !== "ok") return { st: "error", reason: fp.error };
+    if (fp.active.length > 1) return { st: "conflict", reason: "동일 의미 키 활성 pending 복수(" + fp.active.join(",") + ") — 수동 확인" };
+    if (fp.active.length === 1) return { st: "already-pending", patchId: fp.active[0] };
+    if (fp.resolved.length) return { st: "resolved-exists", patchId: fp.resolved[0] }; // 구현 1차 #7 — caller의 already-applied 검사가 선행됐으므로 여기 도달=evidence 부재=진단
+    let patch;
+    try { patch = buildPatch(); } catch (e) { return { st: "error", reason: "buildPatch 예외: " + String(e && e.message || e) }; }
+    const errs = PM.validatePatchV2(patch);
+    if (errs.length) return { st: "error", reason: "patch 스키마 실패: " + errs[0] };
+    if (patch.mapId !== mapId) return { st: "error", reason: "patch.mapId ≠ mapId" };
+    if (patch.operation !== "add_evidence") return { st: "error", reason: "promotion은 add_evidence만" };
+    const ev = patch.payload && patch.payload.evidence;
+    if (!ev || ev.kind !== "ledger") return { st: "error", reason: "payload.evidence.kind=ledger 필수" };
+    if (patch.targetId !== semanticKey.targetId || ev.ref !== semanticKey.sig)
+      return { st: "error", reason: "patch 재산출 의미 키 ≠ 검색 키(호출부 우회 차단 — 9차 #1)" };
+    const f = pendingFileFor(repo, mapId, patch.patchId);
+    if (fs.existsSync(f)) {
+      const cur = readJson3(f);
+      if (!(cur.st === "ok" && cur.data.patch && PM.opHashOf(cur.data.patch) === PM.opHashOf(patch))) return { st: "error", reason: "같은 patchId의 다른 내용 — 멱등 위장 금지" };
+      // 같은 내용의 기존 파일 — 활성이면 위 의미 키 검색이 이미 잡았으므로 여기 도달=expired|resolved(5차 #5)
+      if (cur.data.lifecycle === "expired") return { st: "retry-required", patchId: patch.patchId }; // 같은 생성 입력=같은 세대 — 입력 갱신 후 재제안
+      if (cur.data.lifecycle === "resolved" || cur.data.lifecycle === "resolved-noop") return { st: "resolved-exists", patchId: patch.patchId }; // 소비자가 evidence 실존으로 already-applied/진단 분기
+      return { st: "proposed", patchId: patch.patchId, idempotent: true };
+    }
+    const rec = { schema: "map-pending-v2", lifecycle: "proposed", patch, localOrigin: localOriginFor(repo), proposedAt: new Date().toISOString() };
+    if (!CL.atomicWrite(f, JSON.stringify(rec, null, 1))) return { st: "error", reason: "pending 기록 실패" };
+    return { st: "proposed", patchId: patch.patchId, patch }; // 기록한 그 patch를 반환(구현 2차 #2 — 재생성 금지)
+  });
+  return w.ok ? w.result : { st: "error", reason: w.error };
+}
+
 module.exports = {
+  findPromotions, proposeUnique,
   guardExcludedFor,
   canonicalIdentityFor, localOriginFor, patchBasisFor, pipeRootFor, dirsFor, ensureDirs,
   activePipelineWalFor, decisionIndexFor, policyStateFor, authorityOf,

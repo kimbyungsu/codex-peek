@@ -48,7 +48,9 @@
 | `<대상 저장소>/project-map/` (topology.json·MAP.md) | **Project MAP(draft)** — 프로젝트 구조 좌표계 초안. 생성 경로 2가지: ①`scope-map init`/`migrate`/`bootstrap` 같은 명시 명령 ②**3트랙(정찰)이 켜진 프로젝트에서 지도가 없으면 자동 생성**(켤 때 모달로 사전 동의를 받으며, 백그라운드에서 결정론 파일 스캔만 — **LLM 호출 없음·외부 전송 없음**. 2트랙(기본)에서는 어떤 경로로도 생성되지 않음). ⚠하네스 홈이 아니라 **대상 저장소 안** 파일이므로: 커밋·푸시하면 git 원격으로 전달되고, 변경분은 일반 diff와 같이 정찰 꾸러미에 포함될 수 있다(하네스 자체 서버 전송은 없음 — 기존 두 갈래 경로 그대로) |
 | `map-bootstrap/` (run-state·ws-*.json·advice-*.json) | Project MAP 자동 생성의 진행 상태(실행 pid·시작/완료 시각·결과)·워크스페이스별 마지막 정찰 대상 기록·고지 1회 서명. 하네스 홈 안(레포 무오염) |
 | `map-enrich-queue/<키>.json` | 지도 의미 보강 '대기표'(지도 세대 id·기준 지문 — 소비는 후속 단계·LLM 호출은 이 파일이 아니라 소비 시점에) |
+| `map-bindings/<식별 키>/<지도 세대>/` (candidates·live-candidates·card-refs) | **옛 확정 장부↔구조 지도 대응표(P3a)의 로컬 작업 서랍** — 옛 장부 훑기(legacy-scan)는 저장소를 읽기만 하고 후보를 여기에만 적습니다. 새 승인 대기(live-candidates)·보호 딱지(card-refs)도 로컬. 미처리 승인은 자동 삭제하지 않고(상한 도달 시 신규 접수만 보류) 종결분만 정리. 전부 하네스 홈 안(레포 무오염)·수동 명령 전용·LLM 호출 0·외부 전송 0 |
 | `map-pipeline/<식별 키>/<지도 세대>/` (pending·wal·wal-complete·wal-aborted·markers·snapshots) | **Project MAP 수정 파이프라인(P2)의 로컬 작업 서랍** — 지도 수정 '제안서'(pending), 적용 중단 대비 복구 장부(wal — 적용 직전 스냅샷을 참조로 결속), 완료 영수증(wal-complete), 산출물 표식(markers), 적용 직전 스냅샷. 완료 영수증·표식은 보존 상한(기본 200건·CODEX_BRIDGE_MAP_GC_KEEP로 조정) 안에서 정리 명령이 오래된 순으로 비웁니다. 전부 하네스 홈 안(레포 무오염)·**수동 명령으로만 생성**(자동 적용은 후속 단계 전환 전까지 없음)·LLM 호출 0·외부 전송 0 |
+| `<대상 저장소>/project-map/bindings.json`·`authority-history/` | **옛 장부↔지도 대응 확정본(P3a — binding-confirm을 직접 실행할 때만 생성)**과 **전환 영수증 서랍(후속 단계가 기록·P3a는 읽기만)**. ⚠대상 저장소 안 파일: 커밋·푸시하면 git 원격으로 전달됨(하네스 자체 전송 없음) |
 | `<대상 저장소>/project-map/decisions/`·`policies/` | **적용된 지도 수정의 결정 기록**(decision별 독립 파일)과 **사용자 의도 정책**(불변 버전 파일 — 생성 경로는 후속 단계). ⚠대상 저장소 안 파일: 커밋·푸시하면 git 원격으로 전달됨(하네스 자체 전송 없음). P2에서는 수동 명령으로만 생성 |
 | `phase.json` | 지금 검증이 어느 단계인지(라이브 진행 표시용) |
 | `verify-attempts/<세션>.json` | 검증 재시도 횟수 |

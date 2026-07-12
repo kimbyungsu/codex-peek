@@ -116,7 +116,8 @@ bindings.json  = { schema:"map-bindings-v1", mapId,
                 originals: [{text, date, from, entryFp}],
                 origin: {kind:"legacy-map", sourceRel, sourceFp}          ← 확정층 이관분(4차 #4)
                       | {kind:"live-approval", approvedAt(ISO), actionRef("export"|"approve")}, ← cutover 후 신규
-                  ← live의 entryFp=sha1(text NUL approvedAt NUL from)·date=approvedAt.slice(0,10)
+                  ← live의 entryFp=sha1(text NUL approvedAt NUL from NUL actionRef)·date=approvedAt.slice(0,10)
+                    (구현 5차 문서 정정 — 뒤 §C-2 live 서랍 계약과 동일 공식·이 블록이 누락했었음)
                 source:"user-confirmed", candidateFp(확정 당시 지문), ts(ISO — 사용자 행위 기록),
                 rebound: [ {prevTargetId, prevKind, prevCandidateFp, confirmedAt, reboundAt} ] } ] }
                 ← rebound는 정확 키 스키마·오래된 것 먼저 append·ts는 최신 확정 시각으로 갱신(2차 #9)

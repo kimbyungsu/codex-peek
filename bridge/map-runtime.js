@@ -327,7 +327,25 @@ function runCli(repoArg, cmdArg, extraArgs) {
     if (okAll) console.log(tB("이제 bootstrap을 다시 실행하라: node scripts/scope-map.js \"" + repo + "\" bootstrap", "Now re-run: node scripts/scope-map.js \"" + repo + "\" bootstrap"));
     return okAll ? 0 : 1;
   }
-  if (["propose", "classify", "apply", "recover", "abort", "gc", "pipeline-status", "recover-corruption"].includes(cmd)) {
+  if (["legacy-scan", "binding-confirm", "binding-rebind", "binding-list", "binding-discard"].includes(cmd)) {
+    // P3a 바인딩 CLI(§C-4·§D — 수동 전용·2트랙 게이트 최선행·repo 쓰기는 confirm/rebind의 bindings.json뿐)
+    const CL3 = require(path.join(__dirname, "contract-lib.js"));
+    if (CL3.normScoutMode(CL3.loadContract(repo)) !== "on") { console.error(tB("3트랙(정찰)이 꺼져 있음 — 바인딩 명령은 3트랙 프로젝트 전용(2트랙 무접촉 계약)", "3-track is off — binding commands are 3-track only (two-track no-touch contract)")); return 2; }
+    const MB = require(path.join(__dirname, "map-bindings.js"));
+    if (cmd === "legacy-scan") {
+      const r = MB.scanLegacy(repo);
+      console.log(JSON.stringify(r)); return r.ok ? 0 : 1;
+    }
+    if (cmd === "binding-list") { const r = MB.listBindings(repo); console.log(JSON.stringify(r, null, 1)); return r.ok ? 0 : 1; }
+    const fp = (extraArgs || []).find((x) => /^[0-9a-f]{40}$/i.test(x));
+    if (!fp) { console.error(tB("사용법: " + cmd + " <candidateFp(40hex)> [--target <uuid>]", "usage: " + cmd + " <candidateFp(40hex)> [--target <uuid>]")); return 2; }
+    const ti = (extraArgs || []).indexOf("--target");
+    const target = ti >= 0 ? (extraArgs || [])[ti + 1] : ((extraArgs || []).find((x) => x.startsWith("--target=")) || "").slice(9) || null;
+    if (cmd === "binding-confirm") { const r = MB.confirmBinding(repo, fp, { target }); console.log(JSON.stringify(r)); return r.ok ? 0 : 1; }
+    if (cmd === "binding-rebind") { const r = MB.rebindBinding(repo, fp, { target }); console.log(JSON.stringify(r)); return r.ok ? 0 : 1; }
+    if (cmd === "binding-discard") { const r = MB.discardCandidate(repo, fp); console.log(JSON.stringify(r)); return r.ok ? 0 : 1; }
+  }
+    if (["propose", "classify", "apply", "recover", "abort", "gc", "pipeline-status", "recover-corruption"].includes(cmd)) {
     // P2 pipeline CLI(§A 비활성 계약: 수동 전용·2트랙 게이트 최선행)
     const CL2 = require(path.join(__dirname, "contract-lib.js"));
     if (CL2.normScoutMode(CL2.loadContract(repo)) !== "on") { console.error(tB("3트랙(정찰)이 꺼져 있음 — pipeline 명령은 3트랙 프로젝트 전용(2트랙 무접촉 계약)", "3-track is off — pipeline commands are 3-track only (two-track no-touch contract)")); return 2; }
@@ -373,7 +391,7 @@ function runCli(repoArg, cmdArg, extraArgs) {
       return 0;
     }
   }
-  console.error(tB(`알 수 없는 명령: ${cmd} (inventory|init|status|render|migrate|bootstrap|force-unlock|propose|classify|apply|recover|abort|gc|pipeline-status)`, `Unknown command: ${cmd}`));
+  console.error(tB(`알 수 없는 명령: ${cmd} (inventory|init|status|render|migrate|bootstrap|force-unlock|propose|classify|apply|recover|abort|gc|pipeline-status|legacy-scan|binding-confirm|binding-rebind|binding-list|binding-discard)`, `Unknown command: ${cmd}`));
   return 2;
 }
 
