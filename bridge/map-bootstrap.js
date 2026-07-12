@@ -245,6 +245,10 @@ function maybeSpawnBootstrap(ws) {
   const changedFrom = noteResolvedRepo(ws, sig.repo);
   if (rsLiving(sig.rs)) return { spawned: false, reason: "running", repo: sig.repo };
   if (sig.rs.st === "ok" && !rsValid(sig.rs.data)) return { spawned: false, reason: "state-invalid", repo: sig.repo }; // 스키마 위반=자동 정지(2차 #1 — 매턴 헛spawn 차단)
+  { // P2 writer barrier(설계 §C): 활성 pipeline WAL 중 자동 생성·보강 경로 정지(헛기동 차단)
+    const b = require(path.join(__dirname, "map-runtime.js")).pipelineBarrier(sig.repo);
+    if (b.blocked) return { spawned: false, reason: b.reason, repo: sig.repo };
+  }
   if (sig.funlockActive) return { spawned: false, reason: "force-recovery-running", repo: sig.repo }; // 강제 복구 진행 중 — 침묵 보류(수동 주도 상황)
   if (sig.reclaimStuck) return { spawned: false, reason: "state-lock-blocked", repo: sig.repo, lock: sig.stuckLock, lockState: sig.stuckState }; // 잔존 잠금(경로+판정 동봉 — 고지가 대상·방법을 특정)
   const rsd = sig.rs.st === "ok" ? sig.rs.data : null;
@@ -298,6 +302,7 @@ function maybeNote(ws, r) {
     if (r.lockState === "dead-valid" && String(r.lock || "").endsWith(".funlock")) return tB("[Project MAP] 죽은 강제 복구 잔재가 남아 자동 경로를 멈췄다(" + r.lock + ") — " + fu + " 를 실행하면 재확인 후 자체 회수한다.", "[Project MAP] A dead force-recovery lock remains (" + r.lock + ") — run " + fu + "; it re-verifies and reclaims it automatically.");
     return tB("[Project MAP] 회수 잠금이 남아 자동 경로를 멈췄다(" + (r.lock || "") + ") — 직접 지우지 말고 " + manual + " 를 실행하라(보유자 사망을 재확인한 뒤 안전하게 회수한다).", "[Project MAP] A stale reclaim lock halted the auto path (" + (r.lock || "") + ") — do not delete it by hand; run " + manual + " (it re-verifies the holder is dead and reclaims safely).");
   }
+  if (r.reason === "pipeline-recovery-pending" || r.reason === "pipeline-wal-unreadable") return tB("[Project MAP] 지도 수정 파이프라인의 복구 대기 장부가 남아 자동 갱신을 보류한다 — 복구: node scripts/scope-map.js \"" + r.repo + "\" recover", "[Project MAP] A pending pipeline recovery journal is holding automatic updates — recover with: node scripts/scope-map.js \"" + r.repo + "\" recover");
   if (r.reason === "state-unreadable") return tB("[Project MAP] 진행 상태 파일을 읽을 수 없다 — 일시적일 수 있으니 잠시 후 재시도하라(지속되면 접근 권한 확인). 자동 경로는 그동안 정지한다.", "[Project MAP] The bootstrap state file cannot be read — this may be transient; retry shortly (check file permissions if it persists). The auto path stays halted meanwhile.");
   if (r.reason === "state-invalid") return tB("[Project MAP] 진행 상태 파일이 손상됐다 — 자동 경로 정지. 활성 자동 생성이 없음을 확인한 뒤 강제 복구: " + fu + " --confirm-corrupt, 이후 " + manual + " 로 재생성.", "[Project MAP] The bootstrap state file is corrupted — auto path halted. Confirm no active creation is running, then force-recover: " + fu + " --confirm-corrupt, and re-create with " + manual + ".");
   if (r.changedFrom) return tB("[Project MAP] 정찰 대상이 바뀌었다(이전: " + r.changedFrom + ") — 새 대상 기준으로 지도 상태를 재평가했다.", "[Project MAP] Scout target changed (was: " + r.changedFrom + ") — map state re-evaluated for the new target.");
@@ -428,6 +433,23 @@ function runChild(repo, manual) {
   if (!cl) return 3;
   const claim = cl.rec; // 선점 실패 = 타 자식 작업 중/손상(자동 경로 정지) — 스캔 전 종료
   const MR = require(path.join(__dirname, "map-runtime.js"));
+  { // 자식 race 종결(P2 §C — 부모 통과 직후 pipeline WAL 생성): 자기 runId CAS 하 rs를 prev로 복원
+    // (prev 없으면 삭제=absent 복귀)·attempts 불증가 — blocked 기록 시 부모 무조건 억제로 자동 재개 불가·
+    // 방치 시 dead running 회수 오염(두 반례 회피). 이후 부모 barrier가 보류하다 WAL 해소 시 자연 재개.
+    const b = MR.pipelineBarrier(repo);
+    if (b.blocked) {
+      const f = rsFileFor(repo);
+      const flB = f + ".funlock"; const tokB = crypto.randomBytes(8).toString("hex");
+      try { fs.writeFileSync(flB, JSON.stringify({ pid: process.pid, token: tokB }), { flag: "wx" }); } catch { return 3; }
+      try {
+        const cur = readJson3(f);
+        if (cur.st === "ok" && cur.data.runId === claim.runId) {
+          if (cl.prev) CL.atomicWrite(f, JSON.stringify(cl.prev)); else { try { fs.unlinkSync(f); } catch { /* 무해 */ } }
+        }
+      } finally { try { const h = readJson3(flB); if (h.st === "ok" && h.data.token === tokB) fs.unlinkSync(flB); } catch { /* 무해 */ } }
+      return 3;
+    }
+  }
   const basis0 = basisFor(repo);
   const TOPO = path.join(repo, "project-map", "topology.json");
   const VIEW = path.join(repo, "project-map", "MAP.md");
@@ -436,6 +458,7 @@ function runChild(repo, manual) {
   // topology 자체는 재기록하지 않는다(ensure가 사람 산출물을 건드리면 소급 exclude 문제 재발 — MAP.md만 복구).
   const finishDone = (excludeOf) => {
     const w = MR.withMapLock(repo, () => {
+      { const b = MR.pipelineBarrier(repo); if (b.blocked) return { err: "활성 pipeline WAL — recoverWal 선행(" + b.reason + ")" }; } // 잠금 안 재검사(12차 #4)
       let raw, st;
       try { st = fs.statSync(TOPO); raw = fs.readFileSync(TOPO, "utf8"); } catch { return { err: "topology 판독 실패" }; }
       let topo;

@@ -1466,7 +1466,7 @@ function adjacentEdgeIds(t: Topology, nodeId: string): string[] {
 export type SemanticVerdict = { disposition: "ok" | "hard-reject" | "needs-investigation"; errors: string[] };
 export function semanticValidateV2(
   t: Topology, p: MapPatchV2,
-  ctx: { frontier?: IntentPolicy[] | null },
+  ctx: { frontier?: IntentPolicy[] | null; policyIds?: Set<string> | string[]; revokedPolicyIds?: Set<string> | string[]; artifactIds?: Set<string> | string[] },
 ): SemanticVerdict {
   const errs: string[] = [];
   if (p.mapId !== t.mapId) return { disposition: "hard-reject", errors: ["mapId 불일치(세대 오염)"] }; // 8차 #7 — API로 구분(문자열 파싱 금지)
@@ -1714,8 +1714,32 @@ export function semanticValidateV2(
       }
       break;
     }
-    case "create_intent_policy": case "supersede_intent_policy": case "revoke_intent_policy":
-      break; // 정책 op의 의미 검사는 frontier 소관(F-2 ② — 파일 판독기 계층에서: 대상 policyFp·revocation 부재·frontier 해시)
+    case "create_intent_policy": case "supersede_intent_policy": case "revoke_intent_policy": {
+      // 정책 op ②b(12차 #6): 파일 판독기가 주입한 정책 상태로 의미 검사 — create=기존 policyId 부재
+      // (immutable 덮어쓰기 차단), supersede/revoke=대상 실존+revocation 부재. 미주입=판정 불가(fail-closed).
+      const ids = ctx.policyIds instanceof Set ? ctx.policyIds : new Set(ctx.policyIds || []); // 정책 실존만(13차 #7 — revocationId 혼입 금지)
+      const arts = ctx.artifactIds instanceof Set ? ctx.artifactIds : new Set(ctx.artifactIds || [...ids]); // 충돌 검사용 전체 artifact id
+      const revoked = ctx.revokedPolicyIds instanceof Set ? ctx.revokedPolicyIds : new Set(ctx.revokedPolicyIds || []);
+      if (ctx.policyIds === undefined) { errs.push("정책 상태 미주입 — 정책 op ②b 판정 불가(needs-investigation)"); break; }
+      if (p.operation === "create_intent_policy") {
+        const pid = ((pl.policy || {}) as IntentPolicy).policyId;
+        if (arts.has(pid)) errs.push("create_intent_policy: policyId 기존재(불변 파일 덮어쓰기 금지)");
+      } else if (p.operation === "supersede_intent_policy") {
+        const pol2 = (pl.policy || {}) as IntentPolicy;
+        if (arts.has(pol2.policyId)) errs.push("supersede_intent_policy: 새 policyId 기존재");
+        for (const tid of p.targetPolicyIds || []) {
+          if (!ids.has(tid)) errs.push(`supersede_intent_policy: 대상 정책 미실존(${tid})`);
+          if (revoked.has(tid)) errs.push(`supersede_intent_policy: 대상이 이미 revoke됨(${tid})`);
+        }
+      } else {
+        const tid = p.targetPolicyId as string;
+        if (!ids.has(tid)) errs.push("revoke_intent_policy: 대상 정책 미실존");
+        if (revoked.has(tid)) errs.push("revoke_intent_policy: 이미 revoke됨(중복 철회)");
+        const rid = ((pl.revocation || {}) as PolicyRevocation).revocationId;
+        if (arts.has(rid)) errs.push("revoke_intent_policy: revocationId가 기존 artifact와 충돌");
+      }
+      break;
+    }
   }
   return { disposition: errs.length ? "needs-investigation" : "ok", errors: errs }; // ②b 실패=needs-investigation(1-20)
 }

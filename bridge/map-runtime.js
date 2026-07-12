@@ -168,9 +168,22 @@ function readTopoEx(TOPO) {
 }
 // 정본 쓰기 — '검사와 쓰기를 한 잠금 안에서'(check-then-lock 경합 봉합). inLock이 잠금 안에서 현재 상태를
 // 재확인하고 topology를 반환(null=중단). 반환: {code:0|1} — 잠금 실패는 fail-closed로 1.
+// canonical writer 공통 barrier(P2 §C — 활성 pipeline WAL 중 topology·MAP.md·큐 쓰기 금지.
+// 판독 실패=fail-closed 차단. P2 내부 writer는 이 함수를 거치지 않고 자기 decisionId WAL만 우회).
+function pipelineBarrier(repo) {
+  try { require.resolve(path.join(__dirname, "map-pipeline.js")); } catch { return { blocked: false }; } // 파일 자체 부재(구버전)만 우회 — 판별을 resolve로(14차 #5)
+  try {
+    const MP = require(path.join(__dirname, "map-pipeline.js"));
+    const aw = MP.activePipelineWalFor(repo);
+    if (aw.st === "active") return { blocked: true, reason: "pipeline-recovery-pending", items: aw.items.map((x) => x.decisionId) };
+    if (aw.st === "unreadable") return { blocked: true, reason: "pipeline-wal-unreadable" };
+    return { blocked: false };
+  } catch { return { blocked: true, reason: "pipeline-barrier-error" }; } // resolve 통과 후 예외=전부 fail-closed(내부 의존성 누락 포함 — 14차 #5)
+}
 function writeCanonicalLocked(ctx, inLock) {
   fs.mkdirSync(path.dirname(ctx.LOCK), { recursive: true });
   const r = withFileLockStrict(ctx.LOCK, () => {
+    { const b = pipelineBarrier(ctx.repo); if (b.blocked) return { wrote: false, error: "활성 pipeline WAL(" + (b.items || []).join(",") + ") — recoverWal 선행(" + b.reason + ")" }; } // 잠금 '안' 쓰기 직전 재검사(12차 #4 — check-to-lock 창 봉합)
     const topo = inLock();
     if (!topo) return false;
     fs.mkdirSync(ctx.MAP_DIR, { recursive: true }); // 쓰기 확정 후에만 생성(P1 설계검증: 콜백 중단 경로가 무MAP repo에 빈 폴더를 양산하던 부작용)
@@ -314,7 +327,53 @@ function runCli(repoArg, cmdArg, extraArgs) {
     if (okAll) console.log(tB("이제 bootstrap을 다시 실행하라: node scripts/scope-map.js \"" + repo + "\" bootstrap", "Now re-run: node scripts/scope-map.js \"" + repo + "\" bootstrap"));
     return okAll ? 0 : 1;
   }
-  console.error(tB(`알 수 없는 명령: ${cmd} (inventory|init|status|render|migrate|bootstrap|force-unlock)`, `Unknown command: ${cmd} (inventory|init|status|render|migrate|bootstrap|force-unlock)`));
+  if (["propose", "classify", "apply", "recover", "abort", "gc", "pipeline-status", "recover-corruption"].includes(cmd)) {
+    // P2 pipeline CLI(§A 비활성 계약: 수동 전용·2트랙 게이트 최선행)
+    const CL2 = require(path.join(__dirname, "contract-lib.js"));
+    if (CL2.normScoutMode(CL2.loadContract(repo)) !== "on") { console.error(tB("3트랙(정찰)이 꺼져 있음 — pipeline 명령은 3트랙 프로젝트 전용(2트랙 무접촉 계약)", "3-track is off — pipeline commands are 3-track only (two-track no-touch contract)")); return 2; }
+    const MP = require(path.join(__dirname, "map-pipeline.js"));
+    const rt0 = readTopoExFor(repo);
+    const mapIdArgRaw = ((extraArgs || []).find((x) => x.startsWith("--map=")) || "").slice(6) || null;
+    const mapIdArg = mapIdArgRaw && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(mapIdArgRaw) ? mapIdArgRaw : null; // UUID 강제(경로 이탈 차단 — 13차 #8)
+    if (mapIdArgRaw && !mapIdArg) { console.error(tB("--map 값이 UUID가 아님", "--map must be a UUID")); return 2; }
+    const uuidOk = (v) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v));
+    const mapId = rt0.st === "ok" && uuidOk(rt0.topo.mapId) ? rt0.topo.mapId : mapIdArg; // parse만 되는 손상 topology의 mapId 경로 이탈 차단(14차 #6)
+    if (!mapId) { console.error(tB("mapId 확인 불가(topology " + rt0.st + ") — 인자로 mapId를 명시하라", "cannot resolve mapId (topology " + rt0.st + ") — pass mapId explicitly")); return 1; }
+    if (cmd === "propose") {
+      const file = (extraArgs || []).find((x) => x.endsWith(".json"));
+      if (!file) { console.error(tB("사용법: propose <patch.json>", "usage: propose <patch.json>")); return 2; }
+      let patch; try { patch = JSON.parse(require("fs").readFileSync(file, "utf8")); } catch { console.error(tB("patch 파일 판독 실패", "cannot read patch file")); return 1; }
+      const r = MP.proposePatch(repo, patch);
+      console.log(JSON.stringify(r)); return r.ok ? 0 : 1;
+    }
+    if (cmd === "classify") {
+      const pid = (extraArgs || []).find((x) => /^[0-9a-f-]{36}$/i.test(x));
+      if (!pid) { console.error("usage: classify <patchId>"); return 2; }
+      const r = MP.classifyPatch(repo, mapId, pid);
+      console.log(JSON.stringify(r)); return r.ok ? 0 : 1;
+    }
+    if (cmd === "apply") {
+      const pid = (extraArgs || []).find((x) => /^[0-9a-f-]{36}$/i.test(x));
+      if (!pid) { console.error("usage: apply <patchId> --pre-cutover"); return 2; }
+      const r = MP.applyPatch(repo, mapId, pid, { preCutover: (extraArgs || []).includes("--pre-cutover") });
+      console.log(JSON.stringify(r)); return r.ok ? 0 : 1;
+    }
+    if (cmd === "recover") { const r = MP.recoverWal(repo, mapId); console.log(JSON.stringify(r, null, 1)); return r.every((x) => x.verdict === "recovered" || x.verdict === "not-started") ? 0 : 1; }
+    if (cmd === "abort") {
+      const did = (extraArgs || []).find((x) => /^[0-9a-f-]{36}$/i.test(x));
+      if (!did) { console.error("usage: abort <decisionId>"); return 2; }
+      const r = MP.abortWal(repo, mapId, did); console.log(JSON.stringify(r)); return r.ok ? 0 : 1;
+    }
+    if (cmd === "gc") { const r = MP.pipelineGc(repo, mapId); console.log(JSON.stringify(r)); return r.ok ? 0 : 1; } // 성공 위장 금지(16차 #2)
+    if (cmd === "recover-corruption") { const r = MP.recoverCorruption(repo, mapId); console.log(JSON.stringify(r)); return r.ok ? 0 : 1; }
+    if (cmd === "pipeline-status") {
+      const aw = MP.activePipelineWalFor(repo);
+      const idx = MP.decisionIndexFor(repo, mapId);
+      console.log(JSON.stringify({ wal: aw.st, active: aw.st === "active" ? aw.items.map((x) => x.decisionId) : [], decisions: idx.st === "ok" ? idx.projections.length : idx.st }, null, 1));
+      return 0;
+    }
+  }
+  console.error(tB(`알 수 없는 명령: ${cmd} (inventory|init|status|render|migrate|bootstrap|force-unlock|propose|classify|apply|recover|abort|gc|pipeline-status)`, `Unknown command: ${cmd}`));
   return 2;
 }
 
@@ -365,4 +424,4 @@ function initTopologyForBootstrap(repo, opts) {
   return { st: "created", mapId: topo.mapId, topoFp: crypto.createHash("sha1").update(PM.canonicalSerialize(topo)).digest("hex"), mapMdFp: crypto.createHash("sha1").update(PM.renderMapMd(topo)).digest("hex") }; // 생성 지문(P1 5차: finish 시점 지문과 대조해야 사이 편집분을 자동물로 오귀속하지 않음
 }
 
-module.exports = { runCli, collectInventory, buildDraft, readTopoEx, readTopoExFor, renderFor, initTopologyForBootstrap, ctxFor, withMapLock, PM };
+module.exports = { runCli, collectInventory, buildDraft, readTopoEx, readTopoExFor, renderFor, initTopologyForBootstrap, ctxFor, withMapLock, pipelineBarrier, PM };

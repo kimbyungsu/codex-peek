@@ -116,6 +116,10 @@
   revoke_intent_policy(정본: 복원 불가·부활은 새 create로만 — ref=감사용 이전 frontier 스냅샷, 스냅샷
   파일이 아니라 WAL 내 frontier 기록)**. 정책 op의 recovery ref는 topology 스냅샷을 가리키지 않는다
   (topology 무변경 — F-2).
+  **P2 WAL validator 승인 범위(구현 20차 확정)**: A2b의 applyPatch는 recovery inverse만 기록하므로
+  validateWalV2는 `{kind:"recovery", ref, note}`만 승인한다 — patch inverse를 허용 키 검사로 열어두면
+  실행 불가 payload가 자기완결 WAL로 승인되는 통로가 된다. patch inverse는 이를 기록하는 생산자가
+  op별 payload validator·forward→inverse 허용표와 함께 도입될 때 승인 범위를 확장한다(위 계약 표 유지).
 - op별 의미(§3 표 준수): split_node edgeReroute[]=기존 전 edge 전수 매핑(누락=②b 실패), merge_node
   absorbed[]=anchors/evidence/edges 재지향 완전성, widen/narrow=anchors/conditions 추가/제거 목록+expect,
   rewrite_label=node label/description·edge notes만.
@@ -187,8 +191,8 @@ policyArtifact 합타입:
 
 ### C-5. guard marker — 로컬 `markers/<decisionId>.json`
 - `{decisionId, decisionFileAfterHash, policyArtifact: null | {kind, id, fileAfterHash}}`(1-32 합타입).
-- 수명: 생성=apply ⑨. 정리=`pipeline-gc` — git: 해당 파일이 HEAD에 존재+내용 일치 시 제거 / 비-git: 개수
-  상한(env>설정>기본 클램프) 초과분 오래된 것부터. **gc 제외: 활성 WAL이 참조하는 marker·스냅샷+claimed pending이 참조하는 wal-complete 항목과 그 marker(§B ⓑ·ⓑ′의 종결 재료 — 7차 반영).**
+- 수명: 생성=apply ⑨. 정리=`pipeline-gc`(보존 상한 CODEX_BRIDGE_MAP_GC_KEEP env>기본 200·클램프 20~5000. '오래된 순'=WAL 고정 decision.audit.ts 1차·decisionId 동률 — 구현 20차 확정) — git: 해당 파일이 HEAD에 존재+내용 일치 시 제거 / 비-git: 개수
+  상한(env>기본 클램프 — 별도 설정 계층 없음) 초과분 오래된 것부터. **gc 제외: 활성 WAL이 참조하는 marker·스냅샷+claimed pending이 참조하는 wal-complete 항목과 그 marker(§B ⓑ·ⓑ′의 종결 재료 — 7차 반영).**
 - verify-guard 소비(§6): decision·policy 경로 변경은 markers/ 일치 항목 있으면 이번 생성분 제외,
   불일치·혼합=검증 대상. topology/MAP.md는 1-32(decision의 before/after·MAP.md 지문 정확 일치)로 판정하되
   **적용 조건 분리: decisions/가 존재하는 mapId=1-32 판정 / bootstrap-only(decisions/ 부재)=P1 exclude 유지.**

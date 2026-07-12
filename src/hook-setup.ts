@@ -5,7 +5,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
 
-export const BRIDGE_SCRIPTS = ["contract-lib.js", "codex-bridge.js", "contract-inject.js", "verify-guard.js", "codex-guard.js", "deepseek-bridge.js", "scout-gate.js", "project-map.js", "map-runtime.js", "map-bootstrap.js"]; // 뒤 3개=P0.5/P1 Project MAP 런타임(훅 아님 — OUR_HOOKS·isOurHookCmd 불변: MAP-V2-DESIGN 1-15)
+export const BRIDGE_SCRIPTS = ["contract-lib.js", "codex-bridge.js", "contract-inject.js", "verify-guard.js", "codex-guard.js", "deepseek-bridge.js", "scout-gate.js", "project-map.js", "map-runtime.js", "map-bootstrap.js", "map-pipeline.js"]; // 뒤 3개=P0.5/P1 Project MAP 런타임(훅 아님 — OUR_HOOKS·isOurHookCmd 불변: MAP-V2-DESIGN 1-15)
 export const OUR_HOOKS = [
   { event: "UserPromptSubmit", matcher: "", script: "contract-inject.js" },
   { event: "PreToolUse", matcher: "Bash", script: "codex-guard.js" },
