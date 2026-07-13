@@ -6,7 +6,7 @@
  */
 const path = require("path");
 const fs = require("fs");
-const { netArgs, netNote } = require(path.join(__dirname, "..", "bridge", "codex-bridge.js"));
+const { netArgs, netNote, askRequest } = require(path.join(__dirname, "..", "bridge", "codex-bridge.js"));
 let pass = 0, fail = 0;
 function ok(c, m) { if (c) { pass++; console.log("  ✅ " + m); } else { fail++; console.log("  ❌ " + m); } }
 
@@ -36,7 +36,8 @@ for (const m of ["always", "plancode", "code"]) {
 console.log("[배선] cmdAsk가 --net을 인식하고 resume·새세션 양쪽에 주입하는지(소스 검사)");
 const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
 ok(/const net = rest\.includes\("--net"\)/.test(src), "--net 플래그 파싱");
-ok(/x !== "--net"/.test(src), "--net이 프롬프트 본문에서 제거됨");
+const parsed = askRequest(["--allow-new", "--net", "검증", "본문"]);
+ok(parsed.flags.includes("--net") && parsed.flags.includes("--allow-new") && parsed.prompt === "검증 본문", "--net과 제어 플래그가 프롬프트 본문에서 제거됨");
 ok((src.match(/net \? netArgs\(\) : \[\]/g) || []).length === 2, "resume + 새 세션 두 호출 모두 주입");
 ok((src.match(/net \? netNote\(langSnap\) : ""/g) || []).length === 2, "두 경로 모두 프롬프트에 netNote 첨부");
 

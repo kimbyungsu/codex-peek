@@ -13,7 +13,10 @@ import { maskKey, isPlausibleKey, mergeDeepseekConfig } from "./deepseek-config"
 import { appendApproved, parseApprovedFromMap, normSig } from "./map-ledger";
 import { parseEventsJsonl, deriveLedger, computeScoutHealth, HEALTH_MIN_SAMPLE } from "./ledger-events";
 import { catchUp, TailState, makeRolloutAcc, headFirstUserMessage, Msg, RolloutAcc, TURN_CAP } from "./rollout-scan";
+import { autoPinWriteAllowed, chooseImplementerAutoPin, resolvePromptProject } from "./implementer-auto-pin";
 import { scoutDirectiveText, scoutLedgerNotes } from "./scope-package";
+import { firstImplementerMetaFromHistory } from "./implementer-baseline";
+import { assessCodexHookHeartbeat, assessCodexHookTrust, CodexHookTrustCache } from "./codex-hook-health";
 
 const HOME = os.homedir();
 // 자체 namespace 폴더. CODEX_BRIDGE_HOME으로 override(확장 호스트≠훅 home 환경 대비 — 브릿지·훅과 동일 규칙).
@@ -24,6 +27,9 @@ const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(HOME, ".codex-brid
 const PINNED_HOME = readTextSafe(path.join(BRIDGE_DIR, "codex-home.txt"));
 let CODEX_HOME = process.env.CODEX_HOME || (PINNED_HOME && fs.existsSync(PINNED_HOME) ? PINNED_HOME : "") || path.join(HOME, ".codex");
 let SESSIONS_DIR = path.join(CODEX_HOME, "sessions");
+// Codex 사용자 훅의 위치는 doctor가 확정한 CODEX_HOME에 종속된다. 활성화 초기에 설치·판정을 먼저 시작하지 않도록 공유 gate를 둔다.
+let codexHomeReady: Promise<void> = Promise.resolve();
+let codexHomeIsReady = false;
 const LINKS_FILE = path.join(BRIDGE_DIR, "links.json");
 const CONTRACT_FILE = path.join(BRIDGE_DIR, "contract.json"); // 레거시 전역 계약(상속 안 함 · ws=null 저장 폴백만)
 const CONTRACTS_DIR = path.join(BRIDGE_DIR, "contracts"); // 프로젝트별 계약
@@ -31,6 +37,7 @@ const INTEGRITY_FILE = path.join(BRIDGE_DIR, "integrity.json"); // 무결성 신
 // integrity 동시 쓰기 잠금 — bridge/contract-lib.js withIntegrityLock과 동형(P1-②, 감사 2026-07-10: 3주체
 // read-modify-write가 겹치면 먼저 추가된 경고가 통째로 유실). 잠금 실패=무잠금 진행(fail-open — 악화 아님).
 const INTEGRITY_LOCK = INTEGRITY_FILE + ".lock";
+const ROLE_LOCK = LINKS_FILE + ".role.lock";
 // v2 — bridge withIntegrityLock과 동형: stale 자동 삭제 없음(이중 진입 TOCTOU — Codex 반례)·토큰 소유권 해제·
 // 잔존 시: 보유 pid 사망=즉시, 생존/판독불가=최대 ~600ms 후 무잠금 진행(정상 경합에서의 유실 방지가 목적이지 완전 해결 아님 — 정직 주장 하향).
 function withIntegrityLockExt<T>(fn: () => T): T {
@@ -52,7 +59,7 @@ function withIntegrityLockExt<T>(fn: () => T): T {
 }
 const PHASE_FILE = path.join(BRIDGE_DIR, "phase.json"); // 검증 파이프라인 라이브 단계(훅/브릿지 기록 → 상태바·진행 스트립)
 const VERDICTS_FILE = path.join(BRIDGE_DIR, "stats", "verdicts.jsonl"); // 검증 통계 누적(append-only, 브릿지가 flagVerdict에서 기록) → 탭2 집계 소스.
-const PHASE_STALE_MS = 15 * 60 * 1000; // 이보다 오래된 phase는 '대기'로 — 코덱스 ask 최대 8분 + 여유
+const PHASE_STALE_FLOOR_MS = 15 * 60 * 1000; // 실제 상한은 dashboard verifyTimeoutMin+5분. 기본값 시에도 과거 15분 무회귀.
 // 두뇌 drift '최근 실제값' 신선도(7일). 이보다 오래된 답/세션은 stale로 보고 경고 안 함 — 옛 모델 기록(예: 몇 주 전 다른 모델 사용)이 거짓 drift 내는 것 방지.
 // 24h→7일 확장(사용자 결정 2026-07-05): 여러 프로젝트 병행 개발에선 3일+ 텀이 일상이라, 24h는 하루만 쉬어도 모든 프로젝트의
 // 즉시 경고를 전멸시키는 과잉 억제였다(실측: 마지막 답 32~34h 시점에 cc·cx 경고 전부 침묵). 원래 차단 대상이던 19일급 옛 기록은 7일 창에서도 여전히 제외.
@@ -125,10 +132,15 @@ interface Candidate {
   when: string;
   snippet: string;
   linked: boolean;
+  implementer: boolean;
+  verifierSource: "claude" | "shared" | "dedicated" | "";
 }
 interface BridgeState {
   workspace: string | null;
   linkedId: string | null;
+  implementerId: string | null; // Codex↔Codex 모드의 구현 역할 세션(검증 linkedId와 반드시 다름)
+  claudeVerifierId: string | null; // C↔C 기본 상속의 원본. 현재 linkedId와 같으면 shared 상태.
+  verifierSource: "claude" | "shared" | "dedicated" | "none";
   linkedSnippet: string;
   linkedAt: string | null;
   lastActivity: string | null;
@@ -148,8 +160,14 @@ interface BridgeState {
   onboardDismissed: boolean;
   modelCurrent: string;   // 연결 세션 rollout 마지막 turn_context의 모델 (보기)
   effortCurrent: string;  // 〃 생각강도 코드(low/medium/high)
+  implementerModelCurrent: string;
+  implementerEffortCurrent: string;
+  implementerActualAge: string;
+  codexHookReady: boolean;
+  codexHookReason: CodexHookHealth["reason"];
   modelPref: string;      // 저장된 선택 모델 ("" = 코덱스 기본값)
   reasoningPref: string;  // 저장된 선택 생각강도 ("" = 기본)
+  modelPrefInherited: boolean; // C↔C 전용 pref가 없어 Claude 모드 검증 두뇌 설정을 상속 중
   knownModels: string[];  // 이 세션이 써본 모델들(캐시 없을 때 폴백 추천)
   availModels: AvailModel[]; // 계정 캐시(models_cache.json)의 모델·모델별 생각강도 — 하드코딩 대신 계정 실제 목록
   modelsCacheNote: string;   // 계정 캐시 못 읽을 때 사용자에게 보여줄 이유("" = 정상)
@@ -160,6 +178,7 @@ interface BridgeState {
   verifyStats: VerifyStats;    // 탭2 검증 통계(기간별 분포·전환·히트맵) — verify-stats.ts computeVerifyStats 결과
   scoutCosts: ScoutCosts;      // 정찰(3트랙) 비용 28일 합계 — scout-usage.jsonl(지도 프루닝과 무관 · 60일 보존)
   codexTokens: CodexTokens | null; // 연결 코덱스 세션 누적 토큰(없으면 null) — 검증 비용 카드
+  implementerTokens: CodexTokens | null; // Codex↔Codex 구현 세션 누적 토큰. Claude↔Codex에서는 null.
   claudeTokens: ClaudeTokens;      // 이 폴더 클로드 대화기록 28일 토큰 + 턴수 — 작업 비용(코덱스 검증 비용과 분리)
   projectStats: Record<string, ProjectStat>; // 프로젝트별 비교(3c) — 모든 폴더 28일 검증 분포(전체 group-by, 이 폴더 통계와 별개)
   scope: ScopeState | null; // 범위 장부(L0) 후보 — scoutMode=on(3트랙)일 때만 계산(advisory·로컬 git만·외부전송 0). null=2트랙
@@ -224,14 +243,14 @@ function dashboardWorkspace(): string | null {
   return folders[0];
 }
 
-function loadLinks(): { bySession: Record<string, any>; byWorkspace: Record<string, any>; modelPrefs: Record<string, any>; settings: Record<string, any>; autoNewFailed: Record<string, any> } {
+function loadLinks(): { bySession: Record<string, any>; byWorkspace: Record<string, any>; modelPrefs: Record<string, any>; codexCodexModelPrefs: Record<string, any>; settings: Record<string, any>; autoNewFailed: Record<string, any> } {
   try {
     const o = JSON.parse(fs.readFileSync(LINKS_FILE, "utf8"));
     // modelPrefs/settings를 보존해야 대시보드가 저장값(모델·생각강도·검증 대기시간)을 다시 읽어 표시한다.
     // autoNewFailed = 자동 새 세션 생성이 막힌 폴더(연속 실패 폭증방지) — session-missing 안내를 '시도' vs '멈춤'으로 분기하는 데 쓴다.
-    return { bySession: o.bySession || {}, byWorkspace: o.byWorkspace || {}, modelPrefs: o.modelPrefs || {}, settings: o.settings || {}, autoNewFailed: o.autoNewFailed || {} };
+    return { bySession: o.bySession || {}, byWorkspace: o.byWorkspace || {}, modelPrefs: o.modelPrefs || {}, codexCodexModelPrefs: o.codexCodexModelPrefs || {}, settings: o.settings || {}, autoNewFailed: o.autoNewFailed || {} };
   } catch {
-    return { bySession: {}, byWorkspace: {}, modelPrefs: {}, settings: {}, autoNewFailed: {} };
+    return { bySession: {}, byWorkspace: {}, modelPrefs: {}, codexCodexModelPrefs: {}, settings: {}, autoNewFailed: {} };
   }
 }
 
@@ -241,6 +260,25 @@ function normVerifyMode(o: any): VerifyMode {
   if (o && VERIFY_MODES.includes(o.verifyMode)) return o.verifyMode;
   if (o && o.verify === true) return "code"; // 레거시 verify:true → code 마이그레이션
   return "off";
+}
+function withRoleLockExt<T>(fn: () => T): T | null {
+  const token=process.pid+"-"+Math.random().toString(36).slice(2,8);let locked=false;
+  for(let i=0;i<200&&!locked;i++){
+    try{fs.writeFileSync(ROLE_LOCK,token,{flag:"wx"});locked=true;}
+    catch{
+      // 죽은 보유자여도 자동 삭제하지 않는다. stale 토큰을 읽은 뒤 다른 창이 새 잠금을 잡는 ABA 경합에서
+      // 그 새 잠금을 삭제할 수 있으므로 역할 변경은 fail-closed하고 사용자에게 재시도를 요구한다.
+      try{Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);}catch{/* retry */}
+    }
+  }
+  if(!locked)return null;
+  try{return fn();}finally{try{if(fs.readFileSync(ROLE_LOCK,"utf8")===token)fs.unlinkSync(ROLE_LOCK);}catch{/* harmless */}}
+}
+
+type HarnessMode = "claude-codex" | "codex-codex";
+const HARNESS_MODES: HarnessMode[] = ["claude-codex", "codex-codex"];
+function normHarnessMode(o: any): HarnessMode {
+  return o && HARNESS_MODES.includes(o.harnessMode) ? o.harnessMode : "claude-codex";
 }
 
 // 사용자 계약(Claude 행동규칙) 주입 시점. off=주입 안 함 / plan=Claude Code 플랜 모드일 때만 / always=매 턴.
@@ -262,12 +300,18 @@ function normScoutMode(o: any): ScoutMode {
 }
 
 interface Contract {
+  harnessMode: HarnessMode;
   claude: string[];
   codex: string[];
+  codexImplementer: string[];
+  codexVerifier: string[];
   claudeChecklist: boolean;
   codexChecklist: boolean;
+  codexImplementerChecklist: boolean;
+  codexVerifierChecklist: boolean;
   verifyMode: VerifyMode;
   claudeInjectMode: InjectMode;
+  codexInjectMode: InjectMode;
   scoutMode: ScoutMode;
   scoutRepo?: string; // 정찰 대상 레포(P1 — 세션 폴더≠개발 레포 해소). 빈 값/부재=ws 그대로.
   // ⚠ 대시보드 저장 페이로드는 이 필드를 만들지 않는다 — saveContract의 보존 병합(keep)이 CLI 설정값을 지킨다.
@@ -350,12 +394,18 @@ function loadContract(ws?: string | null, lang?: Lang): Contract {
   // lang: 언어 슬롯(ko=레거시 파일). 미지정 시 전역 언어.
   const o = (ws ? read(contractFileFor(ws, lang)) : read(CONTRACT_FILE)) ?? {};
   return {
+    harnessMode: normHarnessMode(o),
     claude: Array.isArray(o.claude) ? o.claude : [],
     codex: Array.isArray(o.codex) ? o.codex : [],
+    codexImplementer: Array.isArray(o.codexImplementer) ? o.codexImplementer : [],
+    codexVerifier: Array.isArray(o.codexVerifier) ? o.codexVerifier : (Array.isArray(o.codex) ? o.codex : []),
     claudeChecklist: o.claudeChecklist !== false,
     codexChecklist: o.codexChecklist !== false,
+    codexImplementerChecklist: o.codexImplementerChecklist !== false,
+    codexVerifierChecklist: o.codexVerifierChecklist !== false,
     verifyMode: normVerifyMode(o),
     claudeInjectMode: normInjectMode(o),
+    codexInjectMode: o && INJECT_MODES.includes(o.codexInjectMode) ? o.codexInjectMode : "always",
     scoutMode: normScoutMode(o),
     scoutRepo: typeof o.scoutRepo === "string" ? o.scoutRepo.trim() : "",
   };
@@ -423,7 +473,8 @@ function otherSlotHasRules(ws: string | null): boolean {
   const other: Lang = cur === "ko" ? "en" : "ko";
   try {
     const o = JSON.parse(fs.readFileSync(contractFileFor(ws, other), "utf8"));
-    return (Array.isArray(o.claude) && o.claude.length > 0) || (Array.isArray(o.codex) && o.codex.length > 0);
+    return (Array.isArray(o.claude) && o.claude.length > 0) || (Array.isArray(o.codex) && o.codex.length > 0) ||
+      (Array.isArray(o.codexImplementer) && o.codexImplementer.length > 0) || (Array.isArray(o.codexVerifier) && o.codexVerifier.length > 0);
   } catch {
     return false;
   }
@@ -487,6 +538,33 @@ function recentRollouts(limit: number): Array<{ id: string; file: string; mtime:
   };
   walk(SESSIONS_DIR, 0);
   return out.sort((a, b) => b.mtime - a.mtime).slice(0, limit);
+}
+
+const rolloutIdentityMemo = new Map<string, { source: string; threadSource: string }>();
+function rolloutSessionIdentity(file: string): { source: string; threadSource: string } | null {
+  const hit = rolloutIdentityMemo.get(file);
+  if (hit) return hit;
+  try {
+    const fd = fs.openSync(file, "r");
+    try {
+      const chunks: Buffer[] = [];
+      let pos = 0;
+      for (let n = 0; n < 16; n++) { // session_meta 첫 줄이 큰 base_instructions를 포함할 수 있어 최대 1MiB까지 확장
+        const buf = Buffer.alloc(64 * 1024);
+        const got = fs.readSync(fd, buf, 0, buf.length, pos);
+        if (got <= 0) break;
+        const part = buf.subarray(0, got), nl = part.indexOf(10);
+        chunks.push(nl >= 0 ? part.subarray(0, nl) : part);
+        pos += nl >= 0 ? nl : got;
+        if (nl >= 0) break;
+      }
+      const o = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      if (o?.type !== "session_meta") return null;
+      const identity = { source: String(o.payload?.source || ""), threadSource: String(o.payload?.thread_source || "") };
+      rolloutIdentityMemo.set(file, identity);
+      return identity;
+    } finally { fs.closeSync(fd); }
+  } catch { return null; }
 }
 
 function isInjected(t: string): boolean {
@@ -847,7 +925,7 @@ function syncBrainDriftFor(ws: string | null): void {
     const ccT = ws ? currentTranscriptForWs(ws) : null;      // 이 폴더의 현재(또는 최근) 대화 transcript
     let claudeCur = "", cbModel = "";                        // 실제 답 모델 / 이 폴더 기준 '의도한' 모델
     if (ccT) {
-      const scan = scanCcTranscript(ccT, ws);                // 증분 스캔 — 이 대화의 /model 기록 + 실제 답 모델(둘 다 cwd strict)
+      const scan = scanCcTranscriptForProject(ccT, ws);      // 논리 프로젝트+명시된 실제 작업 폴더의 /model·실제 답
       claudeCur = scan.actual && Date.now() - scan.actual.ts < DRIFT_FRESH_MS ? scan.actual.model : ""; // 신선한 답만(옛 답 거짓 drift 차단)
       const attr = readCcIntentFor(ws);                      // 이 프로젝트에 '포커스 귀속'된 선택(UI 피커 포함) — cmd와 최신 ts 승리
       let settingsMtime: number | null = null, sessionStart: number | null = null;
@@ -863,18 +941,49 @@ function syncBrainDriftFor(ws: string | null): void {
       cbModel = intent ? intent.model : "";                  // 의도 산출 불가 → 빈값 → 아래 cf&&cfc 가드로 비교 skip
     }
     const links = loadLinks();
-    const pref: any = links.modelPrefs[normWs(ws)] || {};
-    const link = workspaceLink(links, ws);
-    let mModel = "", mEffort = "";
+    const mode = loadContract(ws).harnessMode;
+    const pref: any = modelPrefForMode(links, ws, mode).pref;
+    const rawLink = workspaceLink(links, ws);
+    const link = verifierLinkForMode(rawLink, mode);
+    let mModel = "", mEffort = "", iModel = "", iEffort = "", iBaseModel = "", iBaseEffort = "";
     // 연결된 코덱스 rollout의 '이 폴더 마지막 turn'이 오래됐으면(stale) 비교하지 않는다 — 옛 세션의 마지막 모델/생각강도가
     // 거짓 drift를 내는 것 방지(cc의 신선도 정책과 대칭). 신선도는 파일 mtime이 아니라 rollout 내부 turn 시각(sm.ts)으로 판정
     // → 파일이 외부 요인으로 touch돼도 stale 세션이 fresh처럼 보이지 않음. 지금 검증에 쓰는 세션이면 turn이 신선해 정상 비교.
     if (link && link.codexSession) {
       const f = findRolloutById(link.codexSession);
       if (f) {
-        const sm = sessionModelMeta(f, ws); // ws 필터=이 폴더 turn의 최근값만
+        const sm = sessionModelMetaForProject(f, ws); // 논리 프로젝트와 계약에 지정된 실제 작업 폴더 중 최신값
         const t = Date.parse(sm.ts || "");
         if (Number.isFinite(t) && Date.now() - t < DRIFT_FRESH_MS) { mModel = sm.model; mEffort = sm.effort; }
+      }
+    }
+    if (rawLink && rawLink.implementerSession) {
+      const f = findRolloutById(rawLink.implementerSession);
+      if (f) {
+        const sm = sessionModelMetaForProject(f, ws), t = Date.parse(sm.ts || "");
+        if (Number.isFinite(t) && Date.now() - t < DRIFT_FRESH_MS) { iModel = sm.model; iEffort = sm.effort; }
+        let iSignalTs = Number.isFinite(t) ? t : 0;
+        const active = codexImplementerActiveMeta(rawLink.implementerSession, ws);
+        if (active && (Date.parse(active.ts) || 0) >= iSignalTs) {
+          if (active.model) iModel = active.model;
+          if (active.effort) iEffort = active.effort;
+          iSignalTs = Date.parse(active.ts) || iSignalTs;
+        }
+        const selected = sessionSelectedMetaForProject(f, ws);
+        if (selected && (Date.parse(selected.ts) || 0) >= iSignalTs && Date.now() - (Date.parse(selected.ts) || 0) < DRIFT_FRESH_MS) {
+          if (selected.model) iModel = selected.model;
+          if (selected.effort) iEffort = selected.effort;
+        }
+        const first = firstImplementerMetaForProject(rolloutAccFor(f).metaHistory, ws, Date.parse(rawLink.implementerLinkedAt || ""));
+        iBaseModel = first.model; iBaseEffort = first.effort;
+      }
+    }
+    // 공식 훅 입력에서 effort가 비어도 첫 실제 구현 응답의 turn_context를 기준선으로 1회 보충한다.
+    // 이후에는 절대 덮지 않아 모델·추론강도 변경이 drift로 남는다.
+    if (mode === "codex-codex" && rawLink?.implementerSession && ((!rawLink.implementerModel && iBaseModel) || (!rawLink.implementerEffort && iBaseEffort))) {
+      if (backfillImplementerBaseline(ws, rawLink.implementerSession, iBaseModel, iBaseEffort)) {
+        if (!rawLink.implementerModel) rawLink.implementerModel = iBaseModel;
+        if (!rawLink.implementerEffort) rawLink.implementerEffort = iBaseEffort;
       }
     }
     // detailKo/detailEn 동시 저장 — 표시(readVisibleIntegrity)가 '그때그때 현재 언어'를 고른다(기록 시점 언어 고정 방지). detail은 구버전 판독 폴백.
@@ -887,6 +996,10 @@ function syncBrainDriftFor(ws: string | null): void {
     const xm = (pref.model || "").trim().toLowerCase(), xmc = (mModel || "").trim().toLowerCase();
     if (xm && xmc && xm !== xmc) bothD(`cx-model:${xm}!${xmc}`, `코덱스: 설정한 모델은 '${pref.model}'인데 최근 답한 모델은 '${mModel}'예요. 바꾼 게 다음 답부터 반영될 수 있어요.`, `Codex: configured model is '${pref.model}' but the latest answer used '${mModel}'. The change may apply from the next answer.`);
     if (pref.reasoning && mEffort && pref.reasoning !== mEffort) bothD(`cx-effort:${pref.reasoning}!${mEffort}`, `코덱스: 설정한 생각강도는 '${pref.reasoning}'인데 최근 답은 '${mEffort}'였어요. 바꾼 게 다음 답부터 반영될 수 있어요.`, `Codex: configured reasoning is '${pref.reasoning}' but the latest answer used '${mEffort}'. The change may apply from the next answer.`);
+    const ie = String(rawLink?.implementerModel || "").trim().toLowerCase(), ia = String(iModel || "").trim().toLowerCase();
+    const ir = String(rawLink?.implementerEffort || "").trim().toLowerCase(), ira = String(iEffort || "").trim().toLowerCase();
+    if (mode === "codex-codex" && ie && ia && ie !== ia) bothD(`ci-model:${ie}!${ia}`, `구현 코덱스: 자동 고정 당시 모델은 '${rawLink.implementerModel}'인데 현재 세션 선택은 '${iModel}'이에요. 사용자가 의도한 변경인지 확인하세요.`, `Implementer Codex: the model at automatic pinning was '${rawLink.implementerModel}', but the current session selection is '${iModel}'. Confirm that the user intended this model change.`);
+    if (mode === "codex-codex" && ir && ira && ir !== ira) bothD(`ci-effort:${ir}!${ira}`, `구현 코덱스: 자동 고정 당시 생각강도는 '${rawLink.implementerEffort}'인데 현재 세션 선택은 '${iEffort}'예요. 사용자가 의도한 변경인지 확인하세요.`, `Implementer Codex: reasoning at automatic pinning was '${rawLink.implementerEffort}', but the current session selection is '${iEffort}'. Confirm that the user intended this reasoning change.`);
     syncBrainDrift(ws, bd);
   } catch { /* best-effort */ }
 }
@@ -1052,17 +1165,18 @@ function brainActualTexts(ws: string | null): { cc: string; cx: string; sig: str
   if (!ws) return { cc, cx, sig };
   try {
     const ccT = currentTranscriptForWs(ws);
-    const a = ccT ? scanCcTranscript(ccT, ws).actual : null;
+    const a = ccT ? scanCcTranscriptForProject(ccT, ws).actual : null;
     if (a && a.model) {
       cc = `${modelFamily(a.model) || a.model} · ${ageLabel(Date.now() - a.ts, loadLangExt() === "en")}`;
       sig = a.model + sig;
     }
   } catch { /* best-effort — 정보 표시라 실패는 '기록 없음'으로 */ }
   try {
-    const link = workspaceLink(loadLinks(), ws);
+    const links = loadLinks();
+    const link = verifierLinkForMode(workspaceLink(links, ws), loadContract(ws).harnessMode);
     const f = link?.codexSession ? findRolloutById(link.codexSession) : undefined;
     if (f) {
-      const sm = sessionModelMeta(f, ws);
+      const sm = sessionModelMetaForProject(f, ws);
       const t = Date.parse(sm.ts || "");
       if (sm.model && Number.isFinite(t)) {
         cx = `${sm.model}${sm.effort ? `(${sm.effort})` : ""} · ${ageLabel(Date.now() - t, loadLangExt() === "en")}`;
@@ -1103,14 +1217,26 @@ function syncSessionMissing(ws: string | null): void {
     const events = readIntegrity() as any[];
     const wsMatch = (e: any) => !e.workspace || normWs(e.workspace) === normWs(ws);
     const links = loadLinks();
-    const hasLink = !!(workspaceLink(links, ws) || {}).codexSession; // 이 폴더에 연결 고정된 Codex 세션이 있나
+    const wl = workspaceLink(links, ws) || {}, mode = loadContract(ws).harnessMode, ccMode = mode === "codex-codex";
+    const verifier = verifierLinkForMode(wl, mode);
+    const missingImpl = ccMode && !wl.implementerSession;
+    const roleConflict = ccMode && !!wl.implementerSession && verifier?.codexSession === wl.implementerSession;
+    const hasLink = !!verifier?.codexSession && !missingImpl && !roleConflict; // Codex↔Codex는 두 역할이 모두 있고 서로 달라야 준비됨
     const blocked = !hasLink && !!(links.autoNewFailed || {})[normWs(ws)]; // 자동 새 세션 생성이 막힌 상태(연속 실패 폭증방지) → '시도' 대신 '멈춤' 안내
-    const sig = blocked ? "session-missing:blocked" : "session-missing:normal";
+    const sig = roleConflict ? "session-missing:role-conflict" : missingImpl ? "session-missing:implementer" : blocked ? "session-missing:blocked" : "session-missing:normal";
     // detailKo/detailEn 동시 저장(표시는 readVisibleIntegrity가 현재 언어 선택) — 문구는 integrity-i18n.ts STATIC과 자구 일치 유지.
-    const dKo = blocked
+    const dKo = roleConflict
+      ? "Codex↔Codex의 현재 구현 세션과 상속된 검증 세션이 같습니다. 자기검증은 허용하지 않습니다. 기존의 다른 Codex 세션을 전용 검증 세션으로 선택하세요. 새 세션은 자동 생성하지 않습니다."
+      : missingImpl
+      ? "Codex↔Codex 모드인데 구현 Codex 세션이 아직 자동 고정되지 않았습니다. 이 프로젝트의 Codex 대화를 시작·재개하면 현재 보이는 그 세션을 구현자로 고정하고, SessionStart가 제공되지 않는 경우 첫 프롬프트에서 보조 고정합니다. 수동 구현 연결이나 다른 방으로의 우회 전달은 하지 않습니다."
+      : blocked
       ? "현재 연결된 Codex 세션이 없고, 자동 생성이 멈춰 있습니다. 'Codex 세션 연결'에서 수동으로 연결하세요. 계속되면 개발자에게 문의해 주세요."
       : "현재 연결된 Codex 세션이 없습니다. 'Codex 세션 연결'에서 수동으로 연결하거나, 검증을 계속 진행하면 새 세션 생성·연결을 자동으로 시도합니다.";
-    const dEn = blocked
+    const dEn = roleConflict
+      ? "The current Codex↔Codex implementer is also the inherited verifier. Self-verification is not allowed. Select a different existing Codex session as the dedicated verifier. No session is created automatically."
+      : missingImpl
+      ? "Codex↔Codex has not automatically pinned an implementer yet. Send a prompt in this project's visible Codex conversation to pin that exact session. There is no manual implementer link or hidden relay to another room."
+      : blocked
       ? "No Codex session is linked and auto-creation is paused. Link one manually under 'Codex Session Link'. If this persists, please report it."
       : "No Codex session is linked. Link one manually under 'Codex Session Link', or keep verifying and a new session will be created and linked automatically.";
     const detail = tE(dKo, dEn);
@@ -1159,12 +1285,14 @@ function computeLiveStage(linkedId: string | null): LiveStage | null {
   if (!ws) return null; // 폴더 없는 빈 창 = 프로젝트 없음 → 진행 표시 안 함(전역 누수 차단)
   if (p.workspace && normWs(p.workspace) !== normWs(ws)) return null; // 다른 창의 진행은 숨김
   const ts = Date.parse(p.ts || "");
-  if (!Number.isFinite(ts) || Date.now() - ts > PHASE_STALE_MS) return null; // 오래됨 → 대기(표시 안 함)
+  const phaseStaleMs = Math.max(PHASE_STALE_FLOOR_MS, clampVerifyTimeout(loadLinks().settings?.verifyTimeoutMin) * 60 * 1000 + 5 * 60 * 1000);
+  if (!Number.isFinite(ts) || Date.now() - ts > phaseStaleMs) return null; // 사용자 대기시간 안에는 진행 표시를 stale로 숨기지 않음
   const round = Number(p.round) || 0;
   // color = 상태바 '글자색'(status.color, 임의 ThemeColor 가능). 배경색은 VS Code가 error/warning만 허용하므로
   // 단계별 다색은 글자색으로 표현하고, 빨강 배경은 무결성 경보 전용으로 둔다.
   switch (p.phase) {
     case "claude-working": return { key: "claude", label: tE("Claude 작업중","Claude working"), icon: "$(pencil)", spin: false, round, color: "charts.blue" };
+    case "codex-implementing": return { key: "claude", label: tE("Codex 구현중","Codex implementing"), icon: "$(pencil)", spin: false, round, color: "charts.blue" };
     case "codex-verifying":
       return linkedRolloutRecentlyWritten(linkedId)
         ? { key: "codex-gen", label: tE("Codex 생성중","Codex generating"), icon: "$(sync~spin)", spin: true, round, color: "charts.green" }
@@ -1210,9 +1338,15 @@ function readSessionTokens(file: string): CodexTokens | null {
 }
 function computeState(turnsN: number): BridgeState {
   const ws = dashboardWorkspace();
+  syncCodexImplementerAutoPin(ws);
   const links = loadLinks();
-  const link = workspaceLink(links, ws);
+  const contract = loadContract(ws);
+  const rawLink = workspaceLink(links, ws);
+  const link = verifierLinkForMode(rawLink, contract.harnessMode);
   const linkedId: string | null = link?.codexSession ?? null;
+  const implementerId: string | null = contract.harnessMode === "codex-codex" ? (rawLink?.implementerSession ?? null) : null;
+  const hookHealth = codexHookHealth(ws, rawLink);
+  const prefState = modelPrefForMode(links, ws, contract.harnessMode);
 
   let turns: Turn[] = [];
   let turnsTrimmed = false;
@@ -1220,6 +1354,9 @@ function computeState(turnsN: number): BridgeState {
   let lastActivity: string | null = null;
   let modelMeta: { model: string; effort: string; models: string[] } = { model: "", effort: "", models: [] };
   let codexTokens: CodexTokens | null = null;
+  let implementerTokens: CodexTokens | null = null;
+  let implementerModelMeta: { model: string; effort: string; models: string[]; ts: string } = { model: "", effort: "", models: [], ts: "" };
+  let implementerActualAge = "";
   if (linkedId) {
     const file = findRolloutById(linkedId);
     if (file) {
@@ -1230,7 +1367,7 @@ function computeState(turnsN: number): BridgeState {
       // 못 채울 때만 ②선두 턴 내부 생략은 그 턴이 화면에 있을 때(표시=마지막 N턴이므로 전체≤N일 때 선두가 보임).
       turnsTrimmed = racc.turnsDropped && allTurns.length < Math.max(1, turnsN);
       turnsInnerTrimmed = racc.firstTurnInnerDropped && allTurns.length <= Math.max(1, turnsN);
-      modelMeta = sessionModelMeta(file, ws); // '지금 쓰는 값' 표시도 이 폴더(cwd) 기준 — drift 경고와 일관(공유 세션서 형제 폴더 값 안 새게)
+      modelMeta = sessionModelMetaForProject(file, ws); // 논리 프로젝트+명시된 실제 작업 폴더 기준 — drift 경고와 일관
       codexTokens = readSessionTokens(file); // 연결 세션 누적 토큰(검증 비용 카드)
       try {
         lastActivity = new Date(fs.statSync(file).mtimeMs).toLocaleString();
@@ -1239,7 +1376,16 @@ function computeState(turnsN: number): BridgeState {
       }
     }
   }
-  const pref: any = links.modelPrefs[normWs(ws || "")] || {};
+  if (implementerId) {
+    const file = findRolloutById(implementerId);
+    if (file) {
+      implementerTokens = readSessionTokens(file);
+      implementerModelMeta = sessionModelMetaForProject(file, ws);
+      const actualTs = Date.parse(implementerModelMeta.ts || "");
+      if (Number.isFinite(actualTs)) implementerActualAge = ageLabel(Date.now() - actualTs, loadLangExt() === "en");
+    }
+  }
+  const pref: any = prefState.pref;
   const scope = readScopeState(ws);       // 3트랙 변경 감지(내부에서 scoutMode 확인·캐시)
   const scoutMaps = readScoutMaps(ws);    // 3트랙 지도 게시판(읽기 전용)
 
@@ -1249,6 +1395,8 @@ function computeState(turnsN: number): BridgeState {
     when: r.mtime ? new Date(r.mtime).toLocaleString() : "",
     snippet: firstSnippet(r.file),
     linked: r.id === linkedId,
+    implementer: r.id === implementerId,
+    verifierSource: r.id === linkedId ? String(link?.verifierSource || "") as Candidate["verifierSource"] : "",
   });
   // 전체 스캔 후 '숨김 제외 → 상위 N'. walk()는 limit과 무관하게 이미 전수 순회하므로 limit만 키워도 비용 동일.
   // 이렇게 해야 브릿지(find/ask: 전수→숨김제외→slice)와 일치하고, 오래된 숨김 세션도 복원 목록에 남는다.
@@ -1282,10 +1430,14 @@ function computeState(turnsN: number): BridgeState {
   // 대시보드(computeState)·상태바 render() 양쪽에서 같은 함수를 호출하므로, 대시보드를 안 열어도 상태바에 drift가 뜬다.
   syncBrainDriftFor(ws);
   syncSessionMissing(ws);
+  syncCodexHookHealth(ws);
 
   return {
     workspace: ws,
     linkedId,
+    implementerId,
+    claudeVerifierId: rawLink?.codexSession ?? null,
+    verifierSource: (link?.verifierSource || "none") as BridgeState["verifierSource"],
     linkedSnippet: linkedId ? (candidates.find((c) => c.id === linkedId)?.snippet ?? hiddenCandidates.find((c) => c.id === linkedId)?.snippet ?? "") : "",
     linkedAt: link?.linkedAt ?? null,
     lastActivity,
@@ -1294,7 +1446,7 @@ function computeState(turnsN: number): BridgeState {
     turnsInnerTrimmed,
     candidates,
     hiddenCandidates,
-    contract: loadContract(ws),
+    contract,
     lang: loadLangExt(),                 // 전역 언어(ko/en) — 탭바 토글 상태 + UI 문자열 선택
     otherSlotRules: otherSlotHasRules(ws), // 반대 언어 슬롯에만 규칙 있음 → '사라진 게 아님' 안내
     baseDirective: loadBaseDirectiveSafe(),
@@ -1316,8 +1468,14 @@ function computeState(turnsN: number): BridgeState {
     onboardDismissed: fs.existsSync(path.join(BRIDGE_DIR,"onboard-dismissed")),
     modelCurrent: modelMeta.model,
     effortCurrent: modelMeta.effort,
+    implementerModelCurrent: implementerModelMeta.model,
+    implementerEffortCurrent: implementerModelMeta.effort,
+    implementerActualAge,
+    codexHookReady: hookHealth.ready,
+    codexHookReason: hookHealth.reason,
     modelPref: typeof pref.model === "string" ? pref.model : "",
     reasoningPref: typeof pref.reasoning === "string" ? pref.reasoning : "",
+    modelPrefInherited: prefState.inherited,
     knownModels: modelMeta.models,
     availModels,
     modelsCacheNote,
@@ -1329,6 +1487,7 @@ function computeState(turnsN: number): BridgeState {
     verifyStats: readVerifyStats(ws), // 탭2 검증 통계(기간별 분포·전환·히트맵) — 이 폴더(ws) 기준
     scoutCosts: readScoutCosts(ws),   // 정찰 비용(28일 · 정찰 방식별) — 사용자 비용 추정용 투명 기록(2026-07-09)
     codexTokens,                      // 연결 코덱스 세션 누적 토큰(검증 비용 카드)
+    implementerTokens,
     claudeTokens: readClaudeTokens(ws), // 이 폴더 클로드 작업 토큰(28일) — 코덱스와 분리
     projectStats: readProjectStats(),   // 프로젝트별 비교(전체 폴더 28일)
     scope,                              // 범위 장부 후보(3트랙에서만 — 내부에서 scoutMode 확인·캐시)
@@ -1515,10 +1674,296 @@ function updateLinks(mutate: (o: any) => void, retries = 4): boolean {
 function unlinkSession(id: string, ws: string): boolean {
   const n = normWs(ws);
   if (!n) return false;
-  return updateLinks((o) => {
+  return withRoleLockExt(() => updateLinks((o) => {
     for (const k of Object.keys(o.bySession)) if (o.bySession[k]?.codexSession === id && normWs(o.bySession[k].workspace || "") === n) delete o.bySession[k];
-    for (const k of Object.keys(o.byWorkspace)) if (normWs(k) === n && o.byWorkspace[k]?.codexSession === id) delete o.byWorkspace[k];
-  });
+    for (const k of Object.keys(o.byWorkspace)) if (normWs(k) === n) {
+      const cur=o.byWorkspace[k]; if(!cur)continue;
+      if(cur.codexSession===id){delete cur.codexSession;delete cur.linkedAt;}
+      if(cur.codexCodexSession===id){delete cur.codexCodexSession;delete cur.codexCodexLinkedAt;}
+      if(cur.implementerSession===id){delete cur.implementerSession;delete cur.implementerLinkedAt;delete cur.implementerLastSeenAt;delete cur.implementerRevision;delete cur.implementerEventAt;delete cur.implementerModel;delete cur.implementerEffort;}
+      if(!cur.codexSession&&!cur.codexCodexSession&&!cur.implementerSession)delete o.byWorkspace[k];
+    }
+  })) === true;
+}
+// C↔C의 '연결됨'은 세션 id 두 개만으로 충분하지 않다. 현재 구현 대화의 최신 turn과 같은
+// 현재 세션의 실제 lifecycle heartbeat가 있어야 플러그인 Stop 강제가 붙은 것으로 본다. 이 경보는 확인으로
+// 숨길 수 없고, 훅이 실제로 실행되거나 C↔C를 끌 때만 해소된다.
+function syncCodexHookHealth(ws: string | null): void {
+  if (!ws || !codexHomeIsReady) return; // doctor 전의 기본·옛 home으로 거짓 경보/캐시를 만들지 않는다.
+  try {
+    withIntegrityLockExt(() => {
+      const KIND = "codex-hook-missing";
+      const events = readIntegrity() as any[];
+      const wsMatch = (e: any) => !e.workspace || normWs(e.workspace) === normWs(ws);
+      const health = codexHookHealth(ws);
+      const problem = health.required && !health.ready && health.reason !== "implementer-missing";
+      const sig = `codex-hook:${health.reason}`;
+      const dKo = health.reason === "hooks-unverified"
+        ? "Codex Peek 훅의 신뢰 상태를 확인하지 못했습니다. 조회 전·시간 초과·app-server 오류를 정상으로 승인하지 않습니다. Codex 실행 상태를 확인하고 Codex 설정 → Hook에서 네 훅의 신뢰 여부를 검토하세요."
+        : health.reason === "hooks-untrusted"
+        ? "Codex Peek 플러그인은 발견됐지만 SessionStart·UserPromptSubmit·PostToolUse·Stop 네 훅이 모두 신뢰된 실행 상태가 아닙니다. Codex 설정 → Hook에서 실행 내용을 검토·신뢰하세요. SessionStart가 신뢰되면 Codex 대화를 시작·재개할 때 구현 연결이 자동 이동합니다."
+        : health.reason === "heartbeat-stale"
+        ? "Codex Peek 네 훅의 신뢰 상태는 확인됐지만 현재 구현 세션의 최신 턴에서 lifecycle 훅 실행이 확인되지 않았습니다. rollout 보조 감지는 초록 구현 연결만 옮기므로 '모든 턴 검증'을 정상으로 승인하지 않습니다. 사용하려는 Codex 대화를 다시 열거나 프롬프트를 보내 실제 훅 신호를 확인하세요."
+        : health.reason === "turn-unverifiable"
+        ? "Codex↔Codex 구현 세션의 최신 turn id를 읽지 못해 훅 생존을 검증할 수 없습니다. 비교 불능 상태를 정상으로 승인하지 않습니다. 플러그인·Codex 버전과 Codex 설정 → Hook의 신뢰 상태를 확인하세요."
+        : health.reason === "session-missing"
+        ? "Codex↔Codex 구현 세션 파일을 찾을 수 없어 훅 생존을 확인할 수 없습니다. 사용하려는 Codex 대화를 시작·재개하거나 프롬프트를 보내면 그 세션으로 구현 연결을 다시 고정합니다. 하네스가 새 세션을 임의 생성하지는 않습니다."
+        : "Codex Peek 네 훅의 신뢰 상태는 확인됐지만 현재 구현 세션에서 실제 lifecycle 훅 실행 기록이 없습니다. rollout 보조 감지는 초록 구현 연결만 옮기므로 '모든 턴 검증'을 정상으로 승인하지 않습니다. 사용하려는 Codex 대화를 다시 열거나 프롬프트를 보내 실제 훅 신호를 확인하세요.";
+      const dEn = health.reason === "hooks-unverified"
+        ? "The Codex Peek hook trust state could not be verified. Pre-query, timeout, and app-server errors are not approved as healthy. Check Codex and review all four hooks under Codex Settings → Hooks."
+        : health.reason === "hooks-untrusted"
+        ? "The Codex Peek plugin was discovered, but its SessionStart, UserPromptSubmit, PostToolUse, and Stop hooks are not all trusted and runnable. Review and trust them under Codex Settings → Hooks. Once SessionStart is trusted, starting or resuming a Codex conversation automatically pins it as the implementer."
+        : health.reason === "heartbeat-stale"
+        ? "All four Codex Peek hooks are trusted, but no lifecycle hook ran for the latest turn in the current implementer session. The rollout fallback moves only the green implementer link and does not approve 'verify every turn' as enforced. Reopen the Codex conversation or send a prompt to obtain a real hook signal."
+        : health.reason === "turn-unverifiable"
+        ? "The latest rollout turn id cannot be read, so implementer-hook liveness is unverifiable and is not approved as healthy. Check the plugin/Codex version and the trust state under Codex Settings → Hooks."
+        : health.reason === "session-missing"
+        ? "The Codex↔Codex implementer session file is missing, so hook liveness cannot be verified. Send a prompt in the Codex conversation you want to use to pin that session again. The harness does not create a new session on its own."
+        : "All four Codex Peek hooks are trusted, but no lifecycle execution exists for the current implementer session. The rollout fallback moves only the green implementer link and does not approve 'verify every turn' as enforced. Reopen the Codex conversation or send a prompt to obtain a real hook signal.";
+      const kept = events.filter((e) => e.kind !== KIND || !wsMatch(e) || (problem && e.sig === sig && !e.ack));
+      const present = kept.some((e) => e.kind === KIND && wsMatch(e));
+      if (problem && !present) kept.push({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, ack: false, ts: new Date().toISOString(), session: "", workspace: ws, kind: KIND, severity: "error", detail: tE(dKo, dEn), detailKo: dKo, detailEn: dEn, sig });
+      if (kept.length !== events.length || kept.some((e, i) => e !== events[i])) atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: kept.slice(-50) }));
+    });
+  } catch { /* best-effort */ }
+}
+
+// 대시보드 프로젝트와 실제 작업 저장소가 다를 수 있다(계약의 scoutRepo가 그 명시적 매핑).
+// 역할 연결은 프로젝트에 고정되고 작업 cwd만 달라지는 구조이므로, 두 위치에서 관측된 값 중 최신값을
+// 같은 프로젝트의 실제값으로 본다. 임의의 형제 폴더나 세션 전역 최신값은 섞지 않아 프로젝트 격리는 유지한다.
+function projectWorkspaceCandidates(ws: string | null): string[] {
+  if (!ws) return [];
+  const out = [ws];
+  try {
+    const mapped = String(scoutTargetFor(ws).repo || "").trim();
+    if (mapped && !out.some((x) => normWs(x) === normWs(mapped))) out.push(mapped);
+  } catch { /* 계약 판독 실패면 논리 프로젝트 폴더만 사용 */ }
+  return out;
+}
+function sessionModelMetaForProject(file: string, ws: string | null): { model: string; effort: string; models: string[]; ts: string } {
+  const metas = projectWorkspaceCandidates(ws).map((candidate) => sessionModelMeta(file, candidate));
+  let best = metas[0] || { model: "", effort: "", models: [], ts: "" };
+  for (const m of metas.slice(1)) {
+    if ((Date.parse(m.ts || "") || 0) > (Date.parse(best.ts || "") || 0)) best = m;
+  }
+  return { ...best, models: [...new Set(metas.flatMap((m) => m.models || []))] };
+}
+function sessionSelectedMetaForProject(file: string, ws: string | null): { model: string; effort: string; ts: string } {
+  if (!ws) return { model: "", effort: "", ts: "" };
+  const acc = rolloutAccFor(file);
+  const metas = projectWorkspaceCandidates(ws).map((candidate) => acc.selectedByCwd.get(normWs(candidate)) || { model: "", effort: "", ts: "" });
+  let best = metas[0] || { model: "", effort: "", ts: "" };
+  for (const m of metas.slice(1)) if ((Date.parse(m.ts || "") || 0) > (Date.parse(best.ts || "") || 0)) best = m;
+  return best;
+}
+function sessionTurnSignalForProject(file: string, ws: string | null): { turnId: string; ts: string } {
+  if (!ws) return { turnId: "", ts: "" };
+  const acc = rolloutAccFor(file);
+  const signals = projectWorkspaceCandidates(ws).map((candidate) => acc.turnByCwd.get(normWs(candidate)) || { turnId: "", ts: "" });
+  let best = signals[0] || { turnId: "", ts: "" };
+  for (const s of signals.slice(1)) if ((Date.parse(s.ts || "") || 0) > (Date.parse(best.ts || "") || 0)) best = s;
+  return best;
+}
+function knownCodexProjectRoots(ws: string): Array<{ project: string; roots: string[] }> {
+  const projects = new Map<string, string>();
+  projects.set(normWs(ws), ws);
+  try {
+    const links = loadLinks();
+    for (const [k, rec] of Object.entries(links.byWorkspace || {})) {
+      const logical = String((rec as any)?.workspace || k || "").trim();
+      if (logical) projects.set(normWs(logical), logical);
+    }
+  } catch { /* current ws remains */ }
+  try {
+    for (const ent of fs.readdirSync(CONTRACTS_DIR, { withFileTypes: true })) {
+      if (!ent.isFile() || !/\.json$/i.test(ent.name)) continue;
+      try {
+        const saved = JSON.parse(fs.readFileSync(path.join(CONTRACTS_DIR, ent.name), "utf8"));
+        const logical = typeof saved?.workspace === "string" ? saved.workspace.trim() : "";
+        if (logical) projects.set(normWs(logical), logical);
+      } catch { /* next contract */ }
+    }
+  } catch { /* no contracts yet */ }
+  const out: Array<{ project: string; roots: string[] }> = [];
+  for (const logical of projects.values()) {
+    const roots = [logical];
+    // 소유권 경계는 현재 운용 모드와 무관하다. 같은 저장소를 쓰는 Claude-Codex 프로젝트나 반대 언어 슬롯을
+    // 빼면 C-C 프로젝트 하나만 남아 '유일 containment'로 오판한다. 두 언어 슬롯의 유효한 절대 scoutRepo를 모두 포함한다.
+    for (const lang of ["ko", "en"] as Lang[]) {
+      try {
+        const saved = JSON.parse(fs.readFileSync(contractFileFor(logical, lang), "utf8"));
+        const raw = typeof saved?.scoutRepo === "string" ? saved.scoutRepo.trim() : "";
+        if (!raw || !path.isAbsolute(raw)) continue;
+        const abs = path.resolve(raw);
+        if (fs.existsSync(abs) && fs.statSync(abs).isDirectory() && !roots.some((r) => normWs(r) === normWs(abs))) roots.push(abs);
+      } catch { /* absent/invalid language slot */ }
+    }
+    out.push({ project: logical, roots });
+  }
+  return out;
+}
+function pathContains(root: string, child: string): boolean {
+  try { const rel = path.relative(path.resolve(root), path.resolve(child)); return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel)); }
+  catch { return false; }
+}
+function sessionPromptSignalForProject(file: string, ws: string | null, projects?: Array<{ project: string; roots: string[] }>): { turnId: string; ts: string; model: string; effort: string } {
+  if (!ws) return { turnId: "", ts: "", model: "", effort: "" };
+  const acc = rolloutAccFor(file);
+  const roots = projects || knownCodexProjectRoots(ws);
+  let best = { turnId: "", ts: "", model: "", effort: "" };
+  for (const [cwd, signal] of acc.promptByCwd) {
+    const owner = resolvePromptProject(cwd, roots, normWs, pathContains);
+    if (owner && normWs(owner) === normWs(ws) && (Date.parse(signal.ts || "") || 0) > (Date.parse(best.ts || "") || 0)) best = signal;
+  }
+  return best;
+}
+
+const implementerAutoPinChecked = new Map<string, number>();
+// UserPromptSubmit은 권위 경로지만, Codex/VS Code가 신뢰 변경 전부터 살아 있던 대화에서 이벤트를
+// 누락하는 경우에도 앱 rollout의 실제 사용자 제출을 보조 증거로 삼아 초록 역할 표시는 옮긴다.
+// 이 경로는 heartbeat를 위조하지 않는다. 따라서 Stop 강제 여부 경보는 실제 훅이 실행될 때까지 유지된다.
+function syncCodexImplementerAutoPin(ws: string | null): void {
+  if (!ws || loadContract(ws).harnessMode !== "codex-codex") return;
+  const key = normWs(ws), now = Date.now();
+  if (now - (implementerAutoPinChecked.get(key) || 0) < 300) return;
+  implementerAutoPinChecked.set(key, now);
+  try {
+    const before = workspaceLink(loadLinks(), ws) || {};
+    const projects = knownCodexProjectRoots(ws);
+    let currentPromptTs = "";
+    if (before.implementerSession) {
+      const currentFile = findRolloutById(String(before.implementerSession));
+      if (currentFile) currentPromptTs = sessionPromptSignalForProject(currentFile, ws, projects).ts;
+    }
+    const linkObservedTs = String(before.implementerLastSeenAt || before.implementerLinkedAt || "");
+    const waterline = Date.parse(currentPromptTs || "") || Date.parse(linkObservedTs) || 0;
+    const scan: Array<{ id: string; file: string; mtime: number; source: string; threadSource: string }> = [];
+    for (const r of recentRollouts(80)) {
+      if (waterline && r.mtime + 2000 < waterline) continue;
+      const identity = rolloutSessionIdentity(r.file);
+      if (!identity || identity.source !== "vscode" || identity.threadSource !== "user") continue; // 큰 exec/subagent rollout은 본문 파싱 전 제외
+      scan.push({ ...r, ...identity });
+      if (scan.length >= 16) break; // rolloutAcc 캐시(20)보다 작게 유지해 반복 전량 재파싱 thrash 방지
+    }
+    const candidates = scan.map((r) => {
+      const acc = rolloutAccFor(r.file);
+      const p = sessionPromptSignalForProject(r.file, ws, projects);
+      return { id: r.id, sessionSource: r.source || acc.sessionSource, threadSource: r.threadSource || acc.threadSource, turnId: p.turnId, promptTs: p.ts, model: p.model, effort: p.effort };
+    });
+    const best = chooseImplementerAutoPin(candidates, [String(before.codexSession || ""), String(before.codexCodexSession || "")]);
+    if (!best) return;
+    withRoleLockExt(() => updateLinks((o) => {
+      let curKey = key, cur: any = {};
+      for (const k of Object.keys(o.byWorkspace || {})) if (normWs(k) === key) { curKey = k; cur = o.byWorkspace[k] || {}; break; }
+      if (best.id === cur.codexSession || best.id === cur.codexCodexSession) return;
+      if (!autoPinWriteAllowed(String(before.implementerSession || ""), String(cur.implementerSession || ""), best.promptTs, currentPromptTs, String(cur.implementerLastSeenAt || cur.implementerLinkedAt || ""))) return;
+      const promptAt = Date.parse(best.promptTs || "") || 0;
+      const observed = Date.parse(String(cur.implementerLastSeenAt || cur.implementerLinkedAt || "")) || 0;
+      if (curKey !== key) delete o.byWorkspace[curKey];
+      if (cur.implementerSession === best.id) {
+        if (promptAt > observed) { cur.implementerLastSeenAt = best.promptTs; cur.implementerRevision = (Number(cur.implementerRevision) || 0) + 1; cur.implementerEventAt = promptAt; o.roleRevision = (Number(o.roleRevision) || 0) + 1; }
+      } else {
+        cur.implementerSession = best.id;
+        cur.implementerLinkedAt = best.promptTs;
+        cur.implementerLastSeenAt = best.promptTs;
+        cur.implementerRevision = (Number(cur.implementerRevision) || 0) + 1;
+        cur.implementerEventAt = promptAt;
+        o.roleRevision = (Number(o.roleRevision) || 0) + 1;
+        cur.implementerModel = best.model || "";
+        cur.implementerEffort = best.effort || "";
+        cur.implementerLinkSource = "rollout-user-prompt";
+      }
+      cur.workspace = ws;
+      o.byWorkspace[key] = cur;
+    }));
+  } catch { /* 보조 경로 실패는 실제 훅 경로와 경보 계산을 막지 않음 */ }
+}
+function firstImplementerMetaForProject(history: any[], ws: string | null, sinceMs: number): { model: string; effort: string; ts: string } {
+  if (!ws) return { model: "", effort: "", ts: "" };
+  const candidates = projectWorkspaceCandidates(ws)
+    .map((candidate) => firstImplementerMetaFromHistory(history, candidate, sinceMs, normWs))
+    .filter((m) => m.model || m.effort)
+    .sort((a, b) => (Date.parse(a.ts || "") || Number.MAX_SAFE_INTEGER) - (Date.parse(b.ts || "") || Number.MAX_SAFE_INTEGER));
+  return candidates[0] || { model: "", effort: "", ts: "" };
+}
+
+// UserPromptSubmit 훅은 답변 rollout보다 먼저 현재 세션의 선택 모델·추론강도를 기록한다.
+// 구현 역할은 이 앵커가 프로젝트와 세션을 모두 명시하므로, 응답 전에도 기준선 변경 경고를 낼 수 있다.
+function codexImplementerActiveMeta(sessionId: string, ws: string | null): { model: string; effort: string; ts: string } | null {
+  if (!sessionId || !ws) return null;
+  const o = readCodexActiveRecord(sessionId);
+  if (!o || normWs(String(o.workspace || "")) !== normWs(ws)) return null;
+  const ts = String(o.ts || ""), t = Date.parse(ts);
+  if (!Number.isFinite(t) || Date.now() - t >= DRIFT_FRESH_MS) return null;
+  return { model: String(o.model || ""), effort: String(o.effort || ""), ts };
+}
+function readCodexActiveRecord(sessionId: string): any | null {
+  const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, "");
+  if (!safe) return null;
+  try {
+    const o = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, "codex-active", safe + ".json"), "utf8"));
+    return o && o.codexSession === sessionId ? o : null;
+  } catch { return null; }
+}
+
+type CodexHookTrustSnapshot = { queried: boolean; found: boolean; ready: boolean; required: number; trusted: number; untrusted: number; disabled: number; missingEvents: string[]; statuses: string[]; pluginIds: string[]; error: string; checkedAt: number };
+const codexHookTrustCache = new CodexHookTrustCache<CodexHookTrustSnapshot>();
+function codexHookTrustCwd(ws:string):string {
+  const candidates=projectWorkspaceCandidates(ws);
+  return candidates.length>1?candidates[candidates.length-1]:ws;
+}
+function codexHookTrustForWorkspace(ws:string):CodexHookTrustSnapshot|null {
+  return codexHookTrustCache.getSnapshot(normWs(codexHookTrustCwd(ws)))||null;
+}
+type CodexHookHealth = { required: boolean; ready: boolean; reason: "not-required" | "healthy" | "implementer-missing" | "hooks-unverified" | "hooks-untrusted" | "session-missing" | "turn-unverifiable" | "heartbeat-missing" | "heartbeat-stale"; latestTurnId: string; heartbeatTurnId: string };
+function codexHookHealth(ws: string | null, rawLink?: any): CodexHookHealth {
+  if (!ws || loadContract(ws).harnessMode !== "codex-codex") return { required: false, ready: true, reason: "not-required", latestTurnId: "", heartbeatTurnId: "" };
+  const trust=assessCodexHookTrust(codexHookTrustForWorkspace(ws));
+  if(!trust.ready)return { required:true,ready:false,reason:trust.reason==="hooks-untrusted"?"hooks-untrusted":"hooks-unverified",latestTurnId:"",heartbeatTurnId:"" };
+  const link = rawLink || workspaceLink(loadLinks(), ws);
+  const sid = String(link?.implementerSession || "");
+  if (!sid) return { required: true, ready: false, reason: "implementer-missing", latestTurnId: "", heartbeatTurnId: "" };
+  const file = findRolloutById(sid);
+  if (!file) return { required: true, ready: false, reason: "session-missing", latestTurnId: "", heartbeatTurnId: "" };
+  const active = readCodexActiveRecord(sid);
+  const latest = sessionTurnSignalForProject(file, ws);
+  const assessed = assessCodexHookHeartbeat(active, latest.turnId, latest.ts);
+  return { required: true, ready: assessed.ready, reason: assessed.reason, latestTurnId: latest.turnId, heartbeatTurnId: assessed.heartbeatTurnId };
+}
+
+function verifierLinkForMode(raw: any, mode: HarnessMode): any | null {
+  if (!raw) return null;
+  const dedicated = mode === "codex-codex" && !!raw.codexCodexSession;
+  const id = dedicated ? raw.codexCodexSession : raw.codexSession;
+  if (!id) return null;
+  return {
+    ...raw,
+    codexSession: id,
+    linkedAt: dedicated ? (raw.codexCodexLinkedAt || raw.linkedAt) : raw.linkedAt,
+    verifierSource: mode === "codex-codex" ? (dedicated ? "dedicated" : "shared") : "claude",
+  };
+}
+
+function modelPrefForMode(links: ReturnType<typeof loadLinks>, ws: string | null, mode: HarnessMode): { pref: any; inherited: boolean } {
+  const key = normWs(ws || "");
+  const own = mode === "codex-codex" ? links.codexCodexModelPrefs[key] : links.modelPrefs[key];
+  if (own) return { pref: own, inherited: false };
+  return { pref: links.modelPrefs[key] || {}, inherited: mode === "codex-codex" };
+}
+
+function backfillImplementerBaseline(ws: string, sessionId: string, model: string, effort: string): boolean {
+  if (!ws || !sessionId || (!model && !effort)) return false;
+  const n = normWs(ws);
+  return withRoleLockExt(() => updateLinks((o) => {
+    for (const k of Object.keys(o.byWorkspace || {})) if (normWs(k) === n) {
+      const cur = o.byWorkspace[k] || {};
+      if (cur.implementerSession !== sessionId) return; // 역할이 바뀐 최신 상태를 옛 rollout이 덮지 않음
+      if (!cur.implementerModel && model) cur.implementerModel = model;
+      if (!cur.implementerEffort && effort) cur.implementerEffort = effort;
+      o.byWorkspace[k] = cur;
+      return;
+    }
+  })) === true;
 }
 
 // 영구 삭제: rollout 원본 파일을 지운다(되돌릴 수 없음). 코덱스 내부 state db의 잔여 항목은 코덱스가 정리한다
@@ -1539,7 +1984,7 @@ function purgeRollout(id: string): boolean {
 function workspacesLinking(id: string): string[] {
   try {
     const o = JSON.parse(fs.readFileSync(LINKS_FILE, "utf8"));
-    return Object.keys(o.byWorkspace || {}).filter((k) => o.byWorkspace[k]?.codexSession === id);
+    return Object.keys(o.byWorkspace || {}).filter((k) => o.byWorkspace[k]?.codexSession === id || o.byWorkspace[k]?.codexCodexSession === id || o.byWorkspace[k]?.implementerSession === id);
   } catch {
     return [];
   }
@@ -1547,25 +1992,38 @@ function workspacesLinking(id: string): string[] {
 // 영구삭제용 전역 해제: 파일이 전역으로 사라지므로 이 세션을 가리키는 '모든' 링크를 제거(타 워크스페이스 dangling 방지).
 // (hide의 unlinkSession은 워크스페이스 한정 — delete와 정책이 다름.)
 function unlinkSessionEverywhere(id: string): boolean {
-  return updateLinks((o) => {
+  return withRoleLockExt(() => updateLinks((o) => {
     for (const k of Object.keys(o.bySession)) if (o.bySession[k]?.codexSession === id) delete o.bySession[k];
-    for (const k of Object.keys(o.byWorkspace)) if (o.byWorkspace[k]?.codexSession === id) delete o.byWorkspace[k];
-  });
+    for (const k of Object.keys(o.byWorkspace)) {
+      const cur=o.byWorkspace[k]; if(!cur)continue;
+      if(cur.codexSession===id){delete cur.codexSession;delete cur.linkedAt;}
+      if(cur.codexCodexSession===id){delete cur.codexCodexSession;delete cur.codexCodexLinkedAt;}
+      if(cur.implementerSession===id){delete cur.implementerSession;delete cur.implementerLinkedAt;delete cur.implementerLastSeenAt;delete cur.implementerRevision;delete cur.implementerEventAt;delete cur.implementerModel;delete cur.implementerEffort;}
+      if(!cur.codexSession&&!cur.codexCodexSession&&!cur.implementerSession)delete o.byWorkspace[k];
+    }
+  })) === true;
 }
 
 // 모델/생각강도 선택 저장(프로젝트별) — links.json modelPrefs[normWs]={model,reasoning}. 빈 값은 항목 삭제(=코덱스 기본값).
 // 브릿지(modelArgs)가 이걸 읽어 매 ask마다 -c로 재적용한다(호출별이라 세션에 안 박힘).
-function setModelPref(ws: string, model: string, reasoning: string): boolean {
+function setModelPref(ws: string, mode: HarnessMode, model: string, reasoning: string): boolean {
   const n = normWs(ws);
   if (!n) return false;
   return updateLinks((o) => {
-    o.modelPrefs = o.modelPrefs || {};
+    const bucket = mode === "codex-codex" ? "codexCodexModelPrefs" : "modelPrefs";
+    o[bucket] = o[bucket] || {};
     const cur: any = {};
     if (model && model.trim()) cur.model = model.trim();
     if (reasoning && reasoning.trim()) cur.reasoning = reasoning.trim();
-    if (Object.keys(cur).length) o.modelPrefs[n] = cur;
-    else delete o.modelPrefs[n];
+    if (Object.keys(cur).length) o[bucket][n] = cur;
+    else delete o[bucket][n];
   });
+}
+
+function clearCodexCodexModelPref(ws: string): boolean {
+  const n = normWs(ws);
+  if (!n) return false;
+  return updateLinks((o) => { if (o.codexCodexModelPrefs) delete o.codexCodexModelPrefs[n]; });
 }
 
 // ── Claude Code 설정 모델 읽기 — Claude 설정 폴더(기본 ~/.claude, 공식 env CLAUDE_CONFIG_DIR로 이전 가능) ──
@@ -1690,7 +2148,7 @@ function currentTranscriptForWs(ws: string): string | null {
   try { walk(claudeProjectsDir(), 0); } catch { /* ignore */ }
   files.sort((a, b) => b.m - a.m);
   for (const fl of files.slice(0, 40)) { // bounded: 최근 40개(이 프로젝트 파일이 창 밖으로 밀릴 여지 줄임)
-    if (lastModelInFile(fl.f, ws, DRIFT_FRESH_MS)) return fl.f;
+    if (projectWorkspaceCandidates(ws).some((candidate) => lastModelInFile(fl.f, candidate, DRIFT_FRESH_MS))) return fl.f;
   }
   return null;
 }
@@ -1701,7 +2159,9 @@ function currentTranscriptForWs(ws: string): string | null {
 // 한계(정직): 첫 스캔 시점에 이미 백필 창 밖이던 /model은 못 본다 → settings 폴백은 '대화 시작 전 설정'만 인정하므로
 // 거짓경고 없이 과소경고로 수렴. 파일 교체/축소(resume 새 파일 등)는 size 감소로 감지해 전체 재백필.
 const CC_SCAN_BACKFILL = 16 * 1024 * 1024; // 첫 스캔 백필 꼬리(1회성)
-let ccScanCache: { file: string; size: number; cmd: { model: string; ts: number } | null; actual: { model: string; ts: number } | null } | null = null;
+type CcScan = { cmd: { model: string; ts: number } | null; actual: { model: string; ts: number } | null };
+type CcScanCache = CcScan & { file: string; workspace: string; size: number };
+const ccScanCache = new Map<string, CcScanCache>();
 function readRange(file: string, from: number, to: number): string {
   const fd = fs.openSync(file, "r");
   try {
@@ -1736,25 +2196,29 @@ function writeCcIntentFor(ws: string, model: string): void {
   atomicWrite(CC_INTENT_FILE, JSON.stringify({ byWorkspace: pruneIntentMap(map, Date.now()) })); // 30일 지난 프로젝트 귀속 정리
 }
 // settings.json 변경 이벤트에서 호출 — 모델이 실제로 바뀌었고 변경 시각이 내 포커스 구간 안이면 이 프로젝트의 선택으로 기록.
-function maybeAttributeSettingsChange(): void {
+function maybeAttributeSettingsChange(): boolean {
   const cur = readClaudeSettingsModel();
   const prev = lastSeenSettingsModel;
   lastSeenSettingsModel = cur; // 귀속 여부와 무관하게 관찰값은 갱신(중복 이벤트 재귀속 방지)
-  if (!cur || cur === prev) return;
+  if (!cur || cur === prev) return false;
   let mtime = Date.now();
   try { mtime = fs.statSync(claudeSettingsFile()).mtimeMs; } catch { /* 이벤트 시각으로 대체 */ }
   const ws = dashboardWorkspace();
-  if (!ws) return; // 폴더 없는 빈 창 — 귀속할 프로젝트가 없음
+  if (!ws) return false; // 폴더 없는 빈 창 — 귀속할 프로젝트가 없음
   if (shouldAttributeSettingsChange(mtime, focusStartMs, focusEndMs, Date.now(), prev, cur)) {
     writeCcIntentFor(ws, cur);
     lastDriftSync = 0; // drift 1.5s throttle 해제 — 다음 render(디바운스 ~0.8s)에서 즉시 재계산 = '전환 몇 초 내 경고' 보장(Codex 지적 수용)
+    return true;
   }
+  return false;
 }
 
-function scanCcTranscript(f: string, ws: string): { cmd: { model: string; ts: number } | null; actual: { model: string; ts: number } | null } {
+function scanCcTranscript(f: string, ws: string): CcScan {
   try {
     const st = fs.statSync(f);
-    let base = ccScanCache && ccScanCache.file === f && st.size >= ccScanCache.size ? ccScanCache : null;
+    const cacheKey = f + "|" + normWs(ws);
+    const cached = ccScanCache.get(cacheKey) || null;
+    let base = cached && cached.file === f && st.size >= cached.size ? cached : null;
     if (base && st.size === base.size) return { cmd: base.cmd, actual: base.actual }; // 무변화 — 재스캔 없음
     // ★갭 상한(Codex 보완 수용): 오래 잠든 창이 깨어나 델타가 백필 창보다 크면, 건너뛴 구간에 더 새로운 /model·답이
     // 있을 수 있어 '이전 지식'을 최신으로 오인하면 거짓경고가 된다 → 지식을 버리고 꼬리 백필로 재시작(+큰 Buffer 방지 겸용).
@@ -1763,9 +2227,20 @@ function scanCcTranscript(f: string, ws: string): { cmd: { model: string; ts: nu
     const chunk = readRange(f, from, st.size); // 경계에 걸린 첫 줄은 JSON.parse 실패로 자연 skip(파서가 처리)
     const cmd = parseLastModelCommand(chunk, ws, normWs) || (base ? base.cmd : null);       // 새 조각 우선, 없으면 이전 지식(갭 없음 보장 하에서만 유효)
     const actual = parseLastAssistantModel(chunk, ws, normWs) || (base ? base.actual : null);
-    ccScanCache = { file: f, size: st.size, cmd, actual };
+    ccScanCache.set(cacheKey, { file: f, workspace: normWs(ws), size: st.size, cmd, actual });
+    if (ccScanCache.size > 32) ccScanCache.delete(ccScanCache.keys().next().value as string);
     return { cmd, actual };
   } catch { return { cmd: null, actual: null }; }
+}
+
+function scanCcTranscriptForProject(f: string, ws: string): CcScan {
+  const scans = projectWorkspaceCandidates(ws).map((candidate) => scanCcTranscript(f, candidate));
+  const latest = <T extends { ts: number }>(items: Array<T | null>): T | null => {
+    let best: T | null = null;
+    for (const item of items) if (item && (!best || item.ts >= best.ts)) best = item;
+    return best;
+  };
+  return { cmd: latest(scans.map((s) => s.cmd)), actual: latest(scans.map((s) => s.actual)) };
 }
 
 // ── 범위 장부(L0) 상태 — scoutMode=on(3트랙)일 때만, 이 프로젝트 git 이력에서 '함께 변경' 후보를 채굴(SCOPE-LEDGER.md S1 advisory) ──
@@ -2039,20 +2514,41 @@ function readProjectStats(now = Date.now()): Record<string, ProjectStat> {
   return computeProjectStats(raw, now, normWs);
 }
 
-function relink(id: string): boolean {
+function relinkVerifier(id: string): boolean {
   const ws = dashboardWorkspace();
   if (!ws) return false;
   const n = normWs(ws);
-  return updateLinks((o) => {
-    // 이 워크스페이스의 세션 고정/옛 워크스페이스 키 정리 → UI 선택을 우선시.
-    for (const k of Object.keys(o.bySession)) {
+  const mode = loadContract(ws).harnessMode;
+  let conflict=false;
+  const result=withRoleLockExt(()=>updateLinks((o) => {
+    // Claude verifier를 바꿀 때만 세션별 레거시 링크를 정리한다. C↔C 전용 override는 Claude 링크를 보존한다.
+    if (mode !== "codex-codex") for (const k of Object.keys(o.bySession)) {
       if (o.bySession[k] && normWs(o.bySession[k].workspace || "") === n) delete o.bySession[k];
     }
+    let prev: any = {};
     for (const k of Object.keys(o.byWorkspace)) {
-      if (normWs(k) === n) delete o.byWorkspace[k];
+      if (normWs(k) === n) { prev = o.byWorkspace[k] || {}; if (k !== n) delete o.byWorkspace[k]; }
     }
-    o.byWorkspace[n] = { codexSession: id, workspace: ws, linkedAt: new Date().toISOString(), via: "ui" };
-  });
+    // 구현 세션은 현재 대화 훅만 자동 고정한다. 대시보드가 임의로 구현 역할을 바꾸는 경로는 없다.
+    if (prev.implementerSession === id) { conflict=true; return; }
+    o.byWorkspace[n] = mode === "codex-codex"
+      ? { ...prev, codexCodexSession: id, codexCodexLinkedAt: new Date().toISOString(), workspace: ws }
+      : { ...prev, codexSession: id, workspace: ws, linkedAt: new Date().toISOString(), via: "ui" };
+  }));
+  return result===true&&!conflict;
+}
+
+function clearCodexCodexVerifierOverride(): boolean {
+  const ws = dashboardWorkspace();
+  if (!ws) return false;
+  const n = normWs(ws);
+  return withRoleLockExt(() => updateLinks((o) => {
+    for (const k of Object.keys(o.byWorkspace || {})) if (normWs(k) === n) {
+      const cur = o.byWorkspace[k] || {};
+      delete cur.codexCodexSession; delete cur.codexCodexLinkedAt;
+      o.byWorkspace[k] = cur;
+    }
+  })) === true;
 }
 
 class Dashboard {
@@ -2079,10 +2575,22 @@ class Dashboard {
           this.post();
           vscode.commands.executeCommand("codexBridge.refresh");
         }
+        if (m?.type === "setHarnessMode" && (m.mode === "claude-codex" || m.mode === "codex-codex")) {
+          const slotLang: Lang | undefined = m.lang === "ko" || m.lang === "en" ? m.lang : undefined;
+          const prev = loadContract(dashboardWorkspace(), slotLang);
+          const ok = saveContract(dashboardWorkspace(), { ...prev, harnessMode: m.mode }, slotLang);
+          if (!ok) vscode.window.showErrorMessage(tE("운용 모드 저장 실패 — 기존 모드를 유지합니다.", "Failed to save harness mode — keeping the existing mode."));
+          else if(m.mode==="codex-codex") { vscode.window.showInformationMessage(tE("현재 보이는 Codex 대화를 시작·재개하면 구현 세션이 자동 고정됩니다. 목록 클릭이 실제 재개 이벤트를 만들지 않는 경우 첫 프롬프트가 보조 고정합니다. 검증 세션은 기본적으로 Claude 모드 연결을 공유하며, 원할 때만 아래에서 전용 검증 세션으로 교체하세요.","Starting or resuming the visible Codex conversation automatically pins it as the implementer. If a list click does not produce a real resume event, the first prompt is the fallback. The verifier shares the Claude-mode link by default; choose a dedicated verifier below only when wanted.")); void (async()=>{await codexHomeReady;await maybeOfferCodexHookSetup(this.uri.fsPath);})(); }
+          this.post(); vscode.commands.executeCommand("codexBridge.refresh");
+        }
         if (m?.type === "relink" && m.id) {
-          if (!relink(String(m.id))) { vscode.window.showErrorMessage(tE("연결 저장에 실패했어요(파일 잠김/권한?). 잠시 후 다시 시도하세요.","Failed to save the link (file locked/permission?). Try again shortly.")); return; }
+          if (!relinkVerifier(String(m.id))) { vscode.window.showErrorMessage(tE("검증 연결 저장에 실패했어요. 현재 구현 세션은 검증자로 선택할 수 없으며, 파일 잠금/권한도 확인하세요.","Failed to save the verifier link. The current implementer cannot also be the verifier; check file locks/permissions too.")); return; }
           this.post();
           vscode.commands.executeCommand("codexBridge.refresh");
+        }
+        if (m?.type === "clearCodexCodexVerifier") {
+          if (!clearCodexCodexVerifierOverride()) { vscode.window.showErrorMessage(tE("전용 검증 연결 해제에 실패했어요.","Failed to clear the dedicated verifier.")); return; }
+          this.post(); vscode.commands.executeCommand("codexBridge.refresh");
         }
         if (m?.type === "openReconGuide") openReconGuide(); // 정찰 구조 안내 — 대시보드와 별개의 정적 새탭(스크립트 없음)
         if (m?.type === "openScoutHealthReport") openScoutHealthReport(dashboardWorkspace()); // 건강 리포트 — 포화 대응 새탭(열 때 베이크·스크립트 없음)
@@ -2090,7 +2598,8 @@ class Dashboard {
         if (m?.type === "hideSession" && m.id) {
           const id = String(m.id);
           const ws = dashboardWorkspace();
-          const linked = !!ws && workspaceLink(loadLinks(), ws)?.codexSession === id;
+          const wl = ws ? workspaceLink(loadLinks(), ws) : null;
+          const linked = !!ws && (wl?.codexSession === id || wl?.codexCodexSession === id || wl?.implementerSession === id);
           const warn = linked ? tE("이 세션은 지금 이 프로젝트에 연결돼 있습니다. 숨기면 이 프로젝트의 연결만 해제됩니다(다른 프로젝트 연결은 유지).\n\n","This session is linked to this project. Hiding it only unlinks it here (links in other projects are kept).\n\n") : "";
           vscode.window
             .showWarningMessage(warn + tE(`이 Codex 세션을 목록에서 숨길까요?\n`,`Hide this Codex session from the list?\n`) + `(${id.slice(0, 8)}…` + tE(` · 원본 파일은 지우지 않으며 '숨긴 세션 보기'에서 복원 가능)`,` · file is kept; restorable under hidden sessions)`), { modal: true }, tE("숨기기","Hide"))
@@ -2131,10 +2640,20 @@ class Dashboard {
             });
         }
         if (m?.type === "saveModelPref") {
-          const ok = setModelPref(dashboardWorkspace() || "", String(m.model || ""), String(m.reasoning || ""));
+          const ws = dashboardWorkspace() || "";
+          const mode = loadContract(ws).harnessMode;
+          const ok = setModelPref(ws, mode, String(m.model || ""), String(m.reasoning || ""));
           if (!ok) vscode.window.showErrorMessage(tE("두뇌 설정 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 저장해 주세요.","Failed to save brain settings — file locked or inaccessible. Try again shortly."));
+          if (ok) lastDriftSync = 0; // 저장 직후 최근 실제 답과 즉시 재비교
           this.post();
+          if (ok) this.onChange?.(); // 상태바도 watcher/디바운스를 기다리지 않고 같은 실제값으로 즉시 경고
           this.panel?.webview.postMessage({ type: "saveResult", target: "model", ok });
+        }
+        if (m?.type === "clearCodexCodexModelPref") {
+          const ok = clearCodexCodexModelPref(dashboardWorkspace() || "");
+          if (!ok) vscode.window.showErrorMessage(tE("Claude 모드 두뇌 설정 상속 복원에 실패했어요.","Failed to restore inherited Claude-mode brain settings."));
+          if (ok) lastDriftSync = 0;
+          this.post();
         }
         if (m?.type === "saveVerifyTimeout") {
           const ok = setVerifyTimeout(Number(m.min));
@@ -2164,13 +2683,26 @@ class Dashboard {
               return;
             }
           }
-          const ok = saveContract(dashboardWorkspace(), {
+          const prevContract = loadContract(dashboardWorkspace(), slotLang);
+          const mode = normHarnessMode({ harnessMode: m.harnessMode || prevContract.harnessMode });
+          const rolePatch: Partial<Contract> = mode === "codex-codex" ? {
+            codexImplementer: Array.isArray(m.claude) ? m.claude : [],
+            codexVerifier: Array.isArray(m.codex) ? m.codex : [],
+            codexImplementerChecklist: !!m.claudeChecklist,
+            codexVerifierChecklist: !!m.codexChecklist,
+            codexInjectMode: normInjectMode({ claudeInjectMode: m.claudeInjectMode }),
+          } : {
             claude: Array.isArray(m.claude) ? m.claude : [],
             codex: Array.isArray(m.codex) ? m.codex : [],
             claudeChecklist: !!m.claudeChecklist,
             codexChecklist: !!m.codexChecklist,
-            verifyMode: normVerifyMode({ verifyMode: m.verifyMode }),
             claudeInjectMode: normInjectMode({ claudeInjectMode: m.claudeInjectMode }),
+          };
+          const ok = saveContract(dashboardWorkspace(), {
+            ...prevContract,
+            ...rolePatch,
+            harnessMode: mode,
+            verifyMode: normVerifyMode({ verifyMode: m.verifyMode }),
             scoutMode: normScoutMode({ scoutMode: m.scoutMode }),
           }, slotLang);
           if (!ok) vscode.window.showErrorMessage(tE("설정 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 저장해 주세요(기존 설정은 그대로 유지됩니다).","Failed to save settings — file locked or inaccessible. Try again shortly (existing settings are kept)."));
@@ -2350,6 +2882,9 @@ class Dashboard {
         if (m?.type === "openSettings") {
           vscode.commands.executeCommand("workbench.action.openSettings", "codexBridge.codexPath");
         }
+        if (m?.type === "installCodexHooks") {
+          void runCodexHookInstallFlow(this.uri.fsPath).then(() => this.post());
+        }
         if (m?.type === "ackIntegrity") {
           // 무결성 경보 확인(해제). id 배열이면 그것만, 없으면 전체.
           const ok = ackIntegrity(Array.isArray(m.ids) ? m.ids : "all"); // 빈 배열([])은 그대로 → no-op. 배너가 session-missing만 빼 []를 보낼 때 'all'로 변질돼 전체(다른 빨강 포함)가 ack되던 회귀 방지.
@@ -2436,6 +2971,10 @@ class Dashboard {
   .langbtn{background:none;border:none;color:var(--vscode-descriptionForeground);padding:5px 12px;cursor:pointer;font-size:12px;border-radius:6px;font-weight:600}
   .langbtn:hover{color:var(--vscode-foreground)}
   .langbtn.on{color:#fff;background:var(--vscode-charts-purple)}
+  .modebar{display:flex;align-items:center;gap:8px;margin:-5px 0 16px;padding:6px;border:1px solid var(--vscode-panel-border);border-radius:10px;background:var(--vscode-sideBar-background)}
+  .modebar .ml{font-size:10.5px;color:var(--vscode-descriptionForeground);padding-left:5px}
+  .modebtn{flex:1;background:transparent;border:1px solid transparent;color:var(--vscode-descriptionForeground);padding:7px 10px;border-radius:7px;font-weight:650;cursor:pointer}
+  .modebtn.on{background:var(--vscode-editor-background);border-color:var(--vscode-charts-blue);color:var(--vscode-foreground)}
   .tabbtn{background:none;border:none;color:var(--vscode-descriptionForeground);padding:8px 18px;cursor:pointer;font-size:13px;border-radius:7px;font-weight:600;display:flex;align-items:center;gap:6px;transition:background .12s}
   .tabbtn:hover{color:var(--vscode-foreground)}
   .tabbtn.active{color:#fff;background:var(--vscode-charts-blue);box-shadow:0 1px 5px color-mix(in srgb,var(--vscode-charts-blue) 45%,transparent)}
@@ -2505,6 +3044,8 @@ class Dashboard {
   .link.on .bar{background:var(--vscode-charts-green)}
   .link.on .emo{color:var(--vscode-charts-green)}
   .link.on .st{color:var(--vscode-charts-green);font-weight:600}
+  .link.on.shared .bar{background:var(--vscode-charts-purple)}
+  .link.on.shared .emo,.link.on.shared .st{color:var(--vscode-charts-purple)}
   .statusline{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:2px 0 4px;font-size:12px}
   .integrity{border:1px solid var(--vscode-inputValidation-errorBorder,#d44);border-left:4px solid var(--vscode-inputValidation-errorBorder,#d44);background:var(--vscode-inputValidation-errorBackground,rgba(212,68,68,0.12));border-radius:8px;padding:12px 14px;margin:4px 0 14px}
   .integrity.warn{border-color:var(--vscode-inputValidation-warningBorder,#c90);border-left-color:var(--vscode-inputValidation-warningBorder,#c90);background:var(--vscode-inputValidation-warningBackground,rgba(204,153,0,0.12))}
@@ -2545,6 +3086,8 @@ class Dashboard {
   label.ck input{margin-top:2px}
   .cand{display:flex;gap:8px;align-items:flex-start;justify-content:space-between;border:1px solid var(--vscode-panel-border);border-radius:6px;padding:8px 10px;margin-bottom:6px}
   .cand.linked{border-color:var(--vscode-charts-green);background:var(--vscode-editor-background)}
+  .cand.linked.shared{border-color:var(--vscode-charts-purple);box-shadow:inset 3px 0 0 var(--vscode-charts-purple)}
+  .modeinherit{border-left:3px solid var(--vscode-charts-purple);padding:8px 10px;margin:6px 0 10px;background:var(--vscode-editor-background);border-radius:5px;font-size:12px;line-height:1.55}
   .star{color:var(--vscode-charts-green);font-size:12px;font-weight:600}
   .cacts{display:flex;gap:6px;align-items:center;flex-shrink:0}
   button.del{padding:2px 9px;line-height:1.5;opacity:.75}
@@ -2695,6 +3238,7 @@ class Dashboard {
       <button type="button" class="langbtn" id="langEn" data-lang="en">English</button>
     </span>
   </nav>
+  <div class="modebar"><span class="ml">${t("운용", "Mode")}</span><button type="button" class="modebtn" id="modeClaude" data-mode="claude-codex">Claude Code ↔ Codex</button><button type="button" class="modebtn" id="modeCodex" data-mode="codex-codex">Codex ↔ Codex</button></div>
   <div id="tab-main" class="tab-panel active">
   <section class="onboard" id="onboard" style="display:none">
     <button type="button" id="obReopen" class="obreopen" style="display:none">${t("시작하기 다시 보기", "Show Getting Started again")}</button>
@@ -2704,15 +3248,16 @@ class Dashboard {
         <div class="obstep" id="ob1"></div>
         <div class="obstep" id="ob2"></div>
         <div class="obstep" id="ob3"></div>
+        <div class="obstep" id="ob4" style="display:none"></div>
       </div>
       <div id="obDone" class="obdone" style="display:none">${t("준비 끝 ✓ — 이제 매 턴 자동으로 검증됩니다.", "All set ✓ — every turn is now verified automatically.")}</div>
     </div>
   </section>
 
-  <div class="top"><h1><span class="brand"></span>Codex Bridge <span class="sub">${t("Claude ⇄ Codex 자동 연결·검증", "Claude ⇄ Codex auto link & verify")}</span></h1><button id="refresh" class="secondary">${t("↻ 새로고침", "↻ Refresh")}</button></div>
+  <div class="top"><h1><span class="brand"></span>Codex Bridge <span class="sub" id="heroTitle">${t("Claude ⇄ Codex 자동 연결·검증", "Claude ⇄ Codex auto link & verify")}</span></h1><button id="refresh" class="secondary">${t("↻ 새로고침", "↻ Refresh")}</button></div>
 
   <div class="hero">
-    <div class="agent claude"><div class="mono c">C</div><div class="nm">Claude</div><div class="ro">${t("구현 · implement", "implement")}</div><div class="ro" id="ccActualRo" title="${t("대화 기록에 답변마다 찍히는 실제 모델 — 앱 표기(피커 체크 등)가 어긋나 보여도 이것이 정본", "the model stamped on each answer in the conversation log — trust this even when app UI labels disagree")}"></div></div>
+    <div class="agent claude"><div class="mono c" id="implMono">C</div><div class="nm" id="implName">Claude</div><div class="ro">${t("구현 · implement", "implement")}</div><div class="ro" id="ccActualRo" title="${t("구현 세션 기록의 실제 모델", "actual model from the implementer session log")}"></div></div>
     <div class="link" id="linkViz"><div class="bar"></div><div class="emo" id="linkEmo">●</div><div class="st" id="linkState">${t("연결 없음", "Not linked")}</div></div>
     <div class="agent codex"><div class="mono x">Cx</div><div class="nm">Codex</div><div class="ro">${t("검증 · verify", "verify")}</div><div class="ro" id="cxActualRo" title="${t("연결된 검증 세션 기록의 최근 실제 모델·생각강도", "latest actual model & effort from the linked verify session log")}"></div></div>
     <div class="agent scout" id="heroScout" style="display:none"><div class="mono s">S</div><div class="nm">${t("탐색자", "Scout")}</div><div class="ro">${t("영향지도 · 3트랙", "impact map · 3-track")}</div><div class="ro" id="scoutActualRo" title="${t("마지막 정찰 실행(지도 생성) — 비용 장부 기준(지도 보관 10장 정리와 무관)", "last scout run (map generation) — from the usage ledger (independent of map pruning)")}"></div></div>
@@ -2731,7 +3276,7 @@ class Dashboard {
     <div class="lsstage" id="lsStage"></div>
   </div>
 
-  <h2 class="sec claude">${t("Claude 규칙", "Claude Rules")} <span class="to claude">${t("→ Claude에게", "→ to Claude")}</span> <span class="sub2">${t("Claude가 지킬 행동규칙 — 검증과 별개", "Behavior rules Claude must follow — separate from verification")}</span></h2>
+  <h2 class="sec claude"><span id="implRulesTitle">${t("Claude 규칙", "Claude Rules")}</span> <span class="to claude" id="implRulesTo">${t("→ Claude에게", "→ to Claude")}</span> <span class="sub2" id="implRulesDesc">${t("Claude가 지킬 행동규칙 — 검증과 별개", "Behavior rules Claude must follow — separate from verification")}</span></h2>
   <div class="card">
     <div class="hint" id="slotNote" style="display:none;border-left:3px solid var(--vscode-charts-purple);padding-left:10px"></div>
     <div class="cblock claude">
@@ -2741,15 +3286,15 @@ class Dashboard {
       <label class="ck"><input type="checkbox" id="ckClaude"> ${t("체크리스트 강제 — 각 규칙마다 [준수/위반+근거] 달게 함", "Enforce checklist — require [complies/violated + reason] per rule")}</label>
       <div class="hint">${t("☑ 켜짐 → 답변 끝에 <code>[계약점검] 1) 준수 — &lt;근거&gt; / 2) 위반 — &lt;근거&gt;</code> 형식으로 규칙별 자가보고를 강제 · ☐ 꺼짐 → 규칙 텍스트만 주입", "☑ on → forces a per-rule self-report block <code>[Contract Check] 1) complies — &lt;reason&gt;</code> at the end of each answer · ☐ off → injects rule text only")}</div>
     </div>
-    <label class="ck verify">${t("넣는 시점 — 이 규칙을 <b>언제</b> Claude에 넣을지", "Injection timing — <b>when</b> to inject these rules into Claude")} <span id="planNow" class="nowbadge" style="display:none"></span>
+    <label class="ck verify"><span id="injectTimingLabel">${t("넣는 시점 — 이 규칙을 <b>언제</b> Claude에 넣을지", "Injection timing — <b>when</b> to inject these rules into Claude")}</span> <span id="planNow" class="nowbadge" style="display:none"></span>
       <span class="seg" id="segInject">
         <button type="button" data-im="off">${t("꺼짐<small>안 넣음</small>", "Off<small>never</small>")}</button><button type="button" data-im="plan">${t("플랜 모드<small>플랜 때만</small>", "Plan mode<small>plan only</small>")}</button><button type="button" data-im="always">${t("항상<small>매 턴</small>", "Always<small>every turn</small>")}</button>
       </span>
     </label>
-    <div class="hint"><span class="ic" title="${t("플랜 모드 = Claude Code에서 shift+Tab으로 켜는 '계획 먼저 세우기' 모드. '플랜 모드'를 고르면 그 모드로 일할 때만 이 규칙이 들어갑니다.", "Plan mode = Claude Code's plan-first mode (shift+Tab). Choosing 'Plan mode' injects these rules only while working in that mode.")}">ⓘ ${t("플랜 모드란?", "What is plan mode?")}</span> · <span class="ic" title="${t("'코드 변경 시'가 없는 이유: 코드 변경은 턴이 끝나야 아는 신호라, 턴 시작에 넣는 이 축에선 못 씁니다. 검증 모드와 무관한 별도 축이에요.", "Why no 'on code change' here: code changes are only known when a turn ends, so a turn-start injection can't use it. This axis is independent of verify mode.")}">ⓘ ${t("'코드 변경 시'가 없는 이유", "Why no 'on code change'?")}</span></div>
+    <div class="hint"><span class="ic" id="planModeHelp" title="${t("플랜 모드 = Claude Code에서 shift+Tab으로 켜는 '계획 먼저 세우기' 모드. '플랜 모드'를 고르면 그 모드로 일할 때만 이 규칙이 들어갑니다.", "Plan mode = Claude Code's plan-first mode (shift+Tab). Choosing 'Plan mode' injects these rules only while working in that mode.")}">ⓘ ${t("플랜 모드란?", "What is plan mode?")}</span> · <span class="ic" title="${t("'코드 변경 시'가 없는 이유: 코드 변경은 턴이 끝나야 아는 신호라, 턴 시작에 넣는 이 축에선 못 씁니다. 검증 모드와 무관한 별도 축이에요.", "Why no 'on code change' here: code changes are only known when a turn ends, so a turn-start injection can't use it. This axis is independent of verify mode.")}">ⓘ ${t("'코드 변경 시'가 없는 이유", "Why no 'on code change'?")}</span></div>
   </div>
 
-  <h2 class="sec codex">${t("검증", "Verification")} <span class="to codex">→ Codex</span> <span class="sub2">${t("Codex에게 검증받기 — 끄면 검증만 안 함(Claude 규칙은 별개)", "Get verified by Codex — turning this off only disables verification (Claude rules are separate)")}</span></h2>
+  <h2 class="sec codex">${t("검증", "Verification")} <span class="to codex">→ Codex</span> <span class="sub2" id="verifyDesc">${t("Codex에게 검증받기 — 끄면 검증만 안 함(Claude 규칙은 별개)", "Get verified by Codex — turning this off only disables verification (Claude rules are separate)")}</span></h2>
   <div class="card">
     <div class="cblock codex">
       <div class="chead">${t("Codex 규칙", "Codex Rules")} <span class="muted" style="font-weight:400">${t("· 기본 검증원칙 말고, 이 프로젝트에서 특히 볼 것 · Codex 검증 때마다 붙음", "· not the baseline — what to focus on in this project · attached to every Codex verification")}</span></div>
@@ -2763,7 +3308,7 @@ class Dashboard {
         <button type="button" data-vm="off">${t("꺼짐<small>강제 안 함</small>", "Off<small>not forced</small>")}</button><button type="button" data-vm="code">${t("코드 변경 시<small>편집한 턴</small>", "On code change<small>edited turns</small>")}</button><button type="button" data-vm="plancode">${t("플랜 확정/코드 변경<small>플랜·편집 턴</small>", "Plan confirm/code<small>plan·edit turns</small>")}</button><button type="button" data-vm="always">${t("모든 턴<small>매 응답</small>", "Every turn<small>all replies</small>")}</button>
       </span>
     </label>
-    <div class="hint"><span class="ic" title="${t("플랜 확정 = 플랜 모드(shift+Tab)에서 세운 계획을 확정·제출하는 그 턴(ExitPlanMode). 플랜 모드 '내내'가 아니라 확정하는 '순간'이에요. '플랜 확정/코드 변경'은 이 플랜 확정 턴이거나 파일을 바꾼 턴에 검증을 강제합니다.", "Plan confirm = the turn that submits the plan (ExitPlanMode) — the moment of confirming, not the whole plan mode. 'Plan confirm/code' forces verification on that turn or on file-changing turns.")}">ⓘ ${t("'플랜 확정'이 뭐야?", "What is 'plan confirm'?")}</span> · <span class="ic" title="${t("검증이 필요한 턴은 선택한 모드가 정해요. 모든 턴=매 답변, 코드 변경 시=파일을 만든/고친 턴, 플랜 확정/코드 변경=플랜을 확정했거나 파일을 고친 턴. 그 턴엔 Codex 검증 결과를 반영해 보고해야 끝낼 수 있어요.", "The selected mode decides which turns require verification. Every turn = all replies; on code change = turns that create/modify files; plan confirm/code = plan-confirm or file-changing turns. Those turns can only finish after reporting with Codex verification.")}">ⓘ ${t("언제 검증되나?", "When is it verified?")}</span></div>
+    <div class="hint"><span class="ic" id="planConfirmHelp" title="${t("플랜 확정 = 플랜 모드(shift+Tab)에서 세운 계획을 확정·제출하는 그 턴(ExitPlanMode). 플랜 모드 '내내'가 아니라 확정하는 '순간'이에요. '플랜 확정/코드 변경'은 이 플랜 확정 턴이거나 파일을 바꾼 턴에 검증을 강제합니다.", "Plan confirm = the turn that submits the plan (ExitPlanMode) — the moment of confirming, not the whole plan mode. 'Plan confirm/code' forces verification on that turn or on file-changing turns.")}">ⓘ ${t("'플랜 확정'이 뭐야?", "What is 'plan confirm'?")}</span> · <span class="ic" title="${t("검증이 필요한 턴은 선택한 모드가 정해요. 모든 턴=매 답변, 코드 변경 시=파일을 만든/고친 턴, 플랜 확정/코드 변경=플랜을 확정했거나 파일을 고친 턴. 그 턴엔 Codex 검증 결과를 반영해 보고해야 끝낼 수 있어요.", "The selected mode decides which turns require verification. Every turn = all replies; on code change = turns that create/modify files; plan confirm/code = plan-confirm or file-changing turns. Those turns can only finish after reporting with Codex verification.")}">ⓘ ${t("언제 검증되나?", "When is it verified?")}</span></div>
     <label class="ck verify">${t("트랙 — 구현·검증 흐름에 <b>정찰(영향 미리보기·관찰 일지)</b>을 더할지", "Track — add <b>recon (impact preview · field journal)</b> to the implement·verify flow")}
       <span class="seg" id="segScout">
         <button type="button" data-sm="off">${t("2트랙<small>구현↔검증 (기본)</small>", "2-track<small>implement↔verify (default)</small>")}</button><button type="button" data-sm="on">${t("3트랙<small>+정찰 (관찰)</small>", "3-track<small>+recon (advisory)</small>")}</button>
@@ -2774,9 +3319,9 @@ class Dashboard {
     <div id="scoutBox" class="stagebox" style="display:none"></div>
     <div class="stagebox" id="stageBox">
       <div class="sbhead">${t("↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요", "↑ With verification on, the <b>stage baselines</b> apply at each step of the flow")} <span class="muted" style="font-weight:400">${t("· 지금 검증:", "· verify now:")} <b id="sbState">—</b> ${t("· 내용은 아래 단계별 기본 원칙에서", "· see Stage Baselines below for the text")}</span></div>
-      <div class="sbrow" id="sbTransmit"><span class="sbmark"></span><b>${t("① Claude→Codex 넘길 때", "① When Claude hands off to Codex")}</b> ${t("· 전달 원칙", "· transmission principles")} <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
+      <div class="sbrow" id="sbTransmit"><span class="sbmark"></span><b id="sbTransmitText">${t("① Claude→Codex 넘길 때", "① When Claude hands off to Codex")}</b> ${t("· 전달 원칙", "· transmission principles")} <span class="who2 claude" id="sbImplWho">Claude</span> <span class="sbwhy"></span></div>
       <div class="sbrow" id="sbVerify"><span class="sbmark"></span><b>${t("② Codex가 검증할 때", "② When Codex verifies")}</b> ${t("· 검증 기본원칙 + Codex 규칙", "· verification baseline + Codex rules")} <span class="who2 codex">Codex</span> <span class="sbwhy"></span></div>
-      <div class="sbrow" id="sbRejudge"><span class="sbmark"></span><b>${t("③ Codex 답을 되짚을 때", "③ When re-judging Codex's answer")}</b> ${t("· 재판단 원칙", "· re-judgment principles")} <span class="who2 claude">Claude</span> <span class="sbwhy"></span></div>
+      <div class="sbrow" id="sbRejudge"><span class="sbmark"></span><b>${t("③ Codex 답을 되짚을 때", "③ When re-judging Codex's answer")}</b> ${t("· 재판단 원칙", "· re-judgment principles")} <span class="who2 claude" id="sbRejudgeWho">Claude</span> <span class="sbwhy"></span></div>
       <div class="sbrow" id="sbScout" style="display:none"><span class="sbmark"></span><b>${t("④ 정찰이 지도를 그릴 때", "④ When the scout draws a map")}</b> ${t("· 정찰 기본 원칙 (3트랙)", "· scout baseline (3-track)")} <span class="sbwhy"></span></div>
     </div>
   </div>
@@ -2785,16 +3330,16 @@ class Dashboard {
   <h2 class="sec">${t("한눈에 보기", "At a Glance")} <span class="sub2">${t("누구에게 · 뭐가 · 언제 들어가나 — 지금 저장된 설정 기준 (저장하면 바뀐 곳이 깜빡여요)", "who gets what, and when — based on saved settings (changes flash on save)")}</span></h2>
   <section class="flowmap card" id="fmSection">
     <div class="flow">
-      <div class="fnode rule">${t("Claude<br>규칙", "Claude<br>rules")}</div>
+      <div class="fnode rule" id="flowImplRules">${t("Claude<br>규칙", "Claude<br>rules")}</div>
       <div class="farrow" id="faInject"><span class="lbl">${t("넣는 시점", "inject when")}<br><b id="faInjectVal">${t("항상", "always")}</b></span><span class="ln"></span></div>
-      <div class="fnode actor claude"><span class="mono c">C</span>Claude<small>${t("구현", "implement")}</small></div>
+      <div class="fnode actor claude"><span class="mono c" id="flowImplMono">C</span><span id="flowImplName">Claude</span><small>${t("구현", "implement")}</small></div>
       <div class="farrow off" id="faVerify"><span class="lbl">${t("검증 맡김", "verify when")}<br><b id="faVerifyVal">${t("안 함", "off")}</b></span><span class="ln"></span></div>
       <div class="fnode actor codex"><span class="mono x">Cx</span>Codex<small>${t("검증", "verify")}</small></div>
     </div>
     <!-- 탐색(3트랙) 줄 — 검증 흐름과 별개 축이라 둘째 줄로 분리(일렬로 붙이면 '검증 후 탐색'으로 오독 — 사용자 지적).
          실제 흐름: Claude(하네스)가 증거 봉투를 꾸려 탐색자에게 보내고, 지도가 게시판(과 Claude)으로 돌아온다. -->
     <div class="flow" id="scoutFlow" style="display:none;margin-top:9px;border-top:1px dashed var(--vscode-panel-border);padding-top:9px">
-      <div class="fnode actor claude"><span class="mono c">C</span>Claude<small>${t("증거 봉투 꾸림", "packs evidence")}</small></div>
+      <div class="fnode actor claude"><span class="mono c">C</span><span id="scoutImplName">Claude</span><small>${t("증거 봉투 꾸림", "packs evidence")}</small></div>
       <div class="farrow" id="faScout"><span class="lbl">${t("정찰(3트랙)", "recon (3-track)")}<br><b id="faScoutVal">${t("직접/자동 지시 실행 시", "on direct/auto-directive runs")}</b></span><span class="ln"></span></div>
       <div class="fnode actor scout" id="fnScout"><span class="mono s">S</span>${t("정찰자", "Scout")}<small>${t("영향지도 ⚡LLM", "impact map ⚡LLM")}</small></div>
       <div class="farrow"><span class="lbl">${t("지도 반환", "returns map")}<br><b>${t("게시판+Claude", "board + Claude")}</b></span><span class="ln"></span></div>
@@ -2805,12 +3350,12 @@ class Dashboard {
 
   <details class="card baseline" id="baseDetails" style="margin-top:10px">
     <summary style="cursor:pointer;font-weight:600;font-size:13px">${t("단계별 기본 원칙", "Stage Baselines")} <span class="fixedbadge">${t("고정 기준 · 기본값 내장", "fixed baseline · defaults built-in")}</span> <span class="muted" style="font-weight:400">${t("· 검증 흐름 3단계의 기본값 (필요할 때만 편집)", "· defaults for the 3 verification stages (edit only if needed)")}</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
-    <div style="margin:8px 0 0 0;font-size:12px;line-height:1.55;border-left:3px solid var(--vscode-inputValidation-warningBorder,#c90);background:var(--vscode-inputValidation-warningBackground,rgba(204,153,0,0.12));border-radius:6px;padding:9px 12px">${t("⚠ <b>전역 공통값입니다.</b> 위 <b>Claude·Codex 규칙</b>(프로젝트마다 따로 적용)과 달리, 이건 하네스의 기본 동작을 보장하는 <b>전역 기준</b>이라 <b>여기서 고쳐 저장하면 모든 프로젝트에 공통으로 적용</b>됩니다. 평소엔 손댈 필요 없고, 잘못 고쳐도 아래 <b>기본값 복원</b>으로 되돌아갑니다.", "⚠ <b>This is a global value.</b> Unlike the <b>Claude/Codex rules</b> above (per-project), this is the <b>global baseline</b> that guarantees the harness's core behavior — <b>editing and saving here applies to every project</b>. Normally you never need to touch it, and <b>Restore defaults</b> below always brings it back.")}</div>
-    <div class="chead" style="margin-top:12px">${t("① 전달 원칙", "① Transmission principles")} <span class="muted" style="font-weight:400">${t("→ Claude에게 · Claude가 Codex에 넘길 때 · 검증 ON일 때만", "→ to Claude · when handing off to Codex · only while verify is ON")}</span></div>
+    <div id="baseGlobalWarn" style="margin:8px 0 0 0;font-size:12px;line-height:1.55;border-left:3px solid var(--vscode-inputValidation-warningBorder,#c90);background:var(--vscode-inputValidation-warningBackground,rgba(204,153,0,0.12));border-radius:6px;padding:9px 12px">${t("⚠ <b>전역 공통값입니다.</b> 위 <b>Claude·Codex 규칙</b>(프로젝트마다 따로 적용)과 달리, 이건 하네스의 기본 동작을 보장하는 <b>전역 기준</b>이라 <b>여기서 고쳐 저장하면 모든 프로젝트에 공통으로 적용</b>됩니다. 평소엔 손댈 필요 없고, 잘못 고쳐도 아래 <b>기본값 복원</b>으로 되돌아갑니다.", "⚠ <b>This is a global value.</b> Unlike the <b>Claude/Codex rules</b> above (per-project), this is the <b>global baseline</b> that guarantees the harness's core behavior — <b>editing and saving here applies to every project</b>. Normally you never need to touch it, and <b>Restore defaults</b> below always brings it back.")}</div>
+    <div class="chead" style="margin-top:12px">${t("① 전달 원칙", "① Transmission principles")} <span class="muted" id="baseTransmitTo" style="font-weight:400">${t("→ Claude에게 · Claude가 Codex에 넘길 때 · 검증 ON일 때만", "→ to Claude · when handing off to Codex · only while verify is ON")}</span></div>
     <textarea id="bTransmit" rows="4"></textarea>
     <div class="chead" style="margin-top:12px">${t("② 검증 기본원칙", "② Verification baseline")} <span class="muted" style="font-weight:400">${t("→ Codex에게 · Codex 검증 때마다", "→ to Codex · on every Codex verification")}</span></div>
     <textarea id="bVerify" rows="5"></textarea>
-    <div class="chead" style="margin-top:12px">${t("③ 재판단 원칙", "③ Re-judgment principles")} <span class="muted" style="font-weight:400">${t("→ Claude에게 · Codex 답을 되짚을 때 · 검증 ON일 때만", "→ to Claude · when re-judging Codex's answer · only while verify is ON")}</span></div>
+    <div class="chead" style="margin-top:12px">${t("③ 재판단 원칙", "③ Re-judgment principles")} <span class="muted" id="baseRejudgeTo" style="font-weight:400">${t("→ Claude에게 · Codex 답을 되짚을 때 · 검증 ON일 때만", "→ to Claude · when re-judging Codex's answer · only while verify is ON")}</span></div>
     <textarea id="bRejudge" rows="5"></textarea>
     <div id="bScoutWrap" style="display:none">
       <div class="chead" style="margin-top:12px">${t("④ 정찰 기본 원칙", "④ Scout baseline")} <span class="muted" style="font-weight:400">${t("→ 정찰 AI에게 · 지도를 그리기 직전 · 3트랙일 때만 (기본 정찰·DeepSeek 정찰 공통)", "→ to the scout AI · right before drawing a map · 3-track only (both scouts)")}</span> <span id="bScoutOv" class="muted" style="font-weight:400"></span></div>
@@ -2821,9 +3366,10 @@ class Dashboard {
     </div>
     <div class="row"><button id="saveB">${t("단계별 기본 원칙 저장", "Save stage baselines")}</button><button id="resetB" class="secondary">${t("기본값 복원", "Restore defaults")}</button><span id="savedB" class="muted"></span></div>
   </details>
-  <h2 class="sec base accent-orange">${t("코덱스 두뇌 설정", "Codex Brain Settings")} <span class="sub2">${t("이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)", "model & reasoning effort Codex uses in this project (applies to the ongoing session too)")}</span></h2>
+  <h2 class="sec base accent-orange"><span id="brainTitle">${t("코덱스 두뇌 설정", "Codex Brain Settings")}</span> <span class="sub2" id="brainSub">${t("이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)", "model & reasoning effort Codex uses in this project (applies to the ongoing session too)")}</span></h2>
   <div class="mcard">
     <div class="muted">${t("지금 쓰는 값(최근 기록):", "Current values (latest record):")} <b id="mCur">—</b></div>
+    <div id="modelInheritance" class="modeinherit" style="display:none"><span id="modelInheritanceText"></span> <button type="button" id="resetModeModel" class="secondary" style="display:none;margin-left:6px">${t("Claude 모드 설정으로 되돌리기", "Return to Claude-mode settings")}</button></div>
     <div id="mCacheWarn" class="hint" style="display:none;margin:6px 0 0 0"></div>
     <!-- 코덱스 모델/생각강도 어긋남 인라인 경고(#mDrift) 제거: 두뇌 drift는 무결성 채널(상태바/배너+확인) 단일 경로로 일원화. (ack 불가·정책상이 중복 해소) -->
     <div class="mrow"><span class="mlbl">${t("모델", "Model")}</span>
@@ -2836,7 +3382,7 @@ class Dashboard {
     <div class="muted" style="margin-top:6px">${t("선택은 <b>다음 코덱스 응답부터</b> 적용 · 비우면 코덱스 기본값 · 코덱스에 말 걸 때마다 자동으로 다시 실어줌", "Applies from the <b>next Codex response</b> · empty = Codex default · re-sent automatically on every Codex call")}</div>
   </div>
   <!-- Claude Code 두뇌 관리 카드 제거: 앱 /model·/effort가 이미 settings.json에 영속하고 모델별 effort도 정확히 다룬다(카드는 중복·충돌·effort표 부정확이었음). 모델 계열/추론 어긋남은 상태바 drift 경고로 표시(computeState의 syncBrainDrift). -->
-  <h2 class="sec base accent-teal">${t("검증 대기시간", "Verify Timeout")} <span class="sub2">${t("코덱스 검증을 기다리는 한도 — 추론이 길면 늘리세요 (전역·모든 프로젝트 공통)", "how long to wait for Codex verification — raise it for long reasoning (global, all projects)")}</span></h2>
+  <h2 class="sec base accent-teal">${t("검증 대기시간", "Verify Timeout")} <span class="sub2">${t("실제 내구 검증 작업의 deadline — 입력한 시간 그대로 대기 (전역·모든 프로젝트 공통)", "the durable verification job's real deadline — waits exactly the configured duration (global, all projects)")}</span></h2>
   <div class="mcard">
     <div class="mrow"><span class="mlbl">${t("대기시간", "Timeout")}</span>
       <input id="vtMin" type="number" min="1" max="60" step="1" style="width:72px" title="${t("코덱스 검증이 이 시간을 넘기면 실패로 처리합니다. 깊은 추론이 길어지면 늘리세요(1~60분).", "Verification longer than this is treated as failed. Raise it for deep reasoning (1–60 min).")}">
@@ -2848,6 +3394,7 @@ class Dashboard {
   <h2 class="sec base accent-yellow">${t("Codex 검증 대화", "Codex Verify Conversation")} <span class="sub2">${t("실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인", "the actual exchange — see for yourself that verification really happened")}</span></h2>
   <div id="conv"></div>
   <h2 class="sec base accent-rose">${t("Codex 세션 연결", "Codex Session Link")} <span class="sub2" id="cwsLabel">${t("첫 발화로 식별", "identified by first message")}</span></h2>
+  <div id="verifierInheritance" class="modeinherit" style="display:none"><span id="verifierInheritanceText"></span> <button type="button" id="resetModeVerifier" class="secondary" style="display:none;margin-left:6px">${t("Claude 모드 검증 세션으로 되돌리기", "Return to Claude-mode verifier")}</button></div>
   <div id="cands"></div>
   <div id="hiddenWrap"></div>
   </div><!-- /tab-main -->
@@ -2900,7 +3447,7 @@ class Dashboard {
           <p class="muted" id="tokNote"></p>
         </div>
         <div class="chart-box wide">
-          <h3 class="chart-h">${t("클로드 작업 토큰", "Claude work tokens")} <span class="muted">${t("(이 폴더 · 최근 28일 · 검증과 별개인 작업 비용)", "(this folder · last 28d · work cost, separate from verification)")}</span></h3>
+          <h3 class="chart-h"><span id="workTokenTitle">${t("클로드 작업 토큰", "Claude work tokens")}</span> <span class="muted" id="workTokenSub">${t("(이 폴더 · 최근 28일 · 검증과 별개인 작업 비용)", "(this folder · last 28d · work cost, separate from verification)")}</span></h3>
           <div id="claudeTokCards" class="stat-cards"></div>
           <p class="muted" id="claudeTokNote"></p>
         </div>
@@ -2956,7 +3503,7 @@ class Dashboard {
   function el(tag, cls, text){ const e=document.createElement(tag); if(cls)e.className=cls; if(text!=null)e.textContent=text; return e; }
   // 폼에서 고른 값(curVM/curIM, 저장 시 전송) vs 저장돼 실제 적용 중인 값(appVM/appIM, 지도·'지금 받는 것'에 표시).
   // 지도/패널은 "저장된 것"만 보여주고(거짓 미리보기 방지), 저장하는 순간 바뀐 곳을 깜빡인다.
-  let curVM = "off", curIM = "always", curSM = "off";
+  let curVM = "off", curIM = "always", curSM = "off", harnessMode = "claude-codex";
   let appVM = null, appIM = null, appSM = null;
   let appCkC = null, appCkX = null; // 체크박스 '마지막 적용값'(hold 판정용 — 미저장 체크 변경이 언어 전환에 덮이지 않게)
   let curPerm = "";   // 지금 Claude Code 권한 모드(active.json) — plan 게이트 표시용
@@ -3022,6 +3569,8 @@ class Dashboard {
     pendingSave = {target:"model"};  // 성공 플래시는 saveResult(ok) 받을 때
     vscode.postMessage({type:"saveModelPref", model: $("mModel").value.trim(), reasoning: curRS});
   });
+  $("resetModeModel").addEventListener("click", () => vscode.postMessage({type:"clearCodexCodexModelPref"}));
+  $("resetModeVerifier").addEventListener("click", () => vscode.postMessage({type:"clearCodexCodexVerifier"}));
   // (Claude 두뇌 관리 카드 제거됨 — effort 버튼·모델 select 핸들러 삭제. 모델/추론 어긋남은 상태바 drift 경고로.)
   $("saveVT").addEventListener("click", () => {
     let n = parseInt($("vtMin").value, 10);
@@ -3068,7 +3617,7 @@ class Dashboard {
     const toLines = (s) => s.split("\\n").map((x) => x.trim()).filter(Boolean);
     const imCh = curIM!==appIM, vmCh = curVM!==appVM;  // 도안(넣는 시점/검증 모드)에 영향 주는 변경인가 — 성공 시 펄스용
     pendingSave = {target:"contract", imCh, vmCh};
-    vscode.postMessage({type:"saveContract", lang: renderedLangC || undefined,
+    vscode.postMessage({type:"saveContract", lang: renderedLangC || undefined, harnessMode:harnessMode,
       claude: toLines($("cClaude").value), codex: toLines($("cCodex").value),
       claudeChecklist: $("ckClaude").checked, codexChecklist: $("ckCodex").checked, verifyMode: curVM, claudeInjectMode: curIM, scoutMode: curSM});
     // 성공 플래시·스크롤은 saveResult(ok)에서 (저장 실패 시 거짓 성공 방지)
@@ -3093,6 +3642,9 @@ class Dashboard {
   // 언어 토글(전역 ko/en) — 저장은 확장이 language.json에(모든 창이 파일 watch로 따라옴). 표시는 state로 되돌아와 확정.
   document.querySelectorAll(".langbtn").forEach(function(b){
     b.addEventListener("click", function(){ vscode.postMessage({type:"setLang", lang: b.getAttribute("data-lang")}); });
+  });
+  document.querySelectorAll(".modebtn").forEach(function(b){
+    b.addEventListener("click", function(){ var m=b.getAttribute("data-mode"); if(m===harnessMode)return; vscode.postMessage({type:"setHarnessMode", mode:m, lang:renderedLangC||undefined}); });
   });
   // 탭2 통계 렌더 — 빈 기록이면 안내, 아니면 KPI 카드 + 도넛(28일 분포) + 추이 막대(14일·24h 슬롯) + 히트맵(4주 요일×시간)
   function fmtTok(n){ return n>=1000 ? (n/1000).toFixed(1)+"k" : String(n); }
@@ -3213,6 +3765,15 @@ class Dashboard {
     });
     if(note) note.textContent = T("이 폴더에 연결된 코덱스 세션이 지금까지 쓴 누적 토큰. 그 세션이 여러 폴더를 오갔다면 합산값이에요. '입력'에는 캐시 재사용분이 포함돼요(별도 카드는 그중 캐시 몫).","Cumulative tokens used by the Codex session linked to this folder. If the session moved across folders, this is the combined total. 'input' includes cached reuse (the separate card shows the cached share of it).");
   }
+  function renderCodexImplementerTokens(tk){
+    var wrap=$("claudeTokCards"), note=$("claudeTokNote"); if(!wrap)return;
+    while(wrap.firstChild)wrap.removeChild(wrap.firstChild);
+    if(!tk||!tk.total){var d=document.createElement("div");d.className="muted";d.textContent=T("연결된 코덱스 구현 세션이 없거나 토큰 기록을 아직 못 읽었어요.","No linked Codex implementer session, or token records could not be read yet.");wrap.appendChild(d);if(note)note.textContent="";return;}
+    [[T("총 토큰","total"),tk.total,"s-blue"],[T("입력","input"),tk.input,"s-green"],[T("출력","output"),tk.output,"s-orange"],[T("캐시 입력(재사용)","cached input (reused)"),tk.cachedInput,"s-purple"]].forEach(function(c){
+      var card=document.createElement("div");card.className="stat-card "+c[2];var num=document.createElement("div");num.className="stat-num";num.textContent=fmtTok(c[1]);var lbl=document.createElement("div");lbl.className="stat-lbl";lbl.textContent=c[0];card.appendChild(num);card.appendChild(lbl);wrap.appendChild(card);
+    });
+    if(note)note.textContent=T("이 프로젝트의 구현 역할로 고정된 Codex 세션 누적 토큰입니다. 검증 세션 토큰과 분리해 표시합니다.","Cumulative tokens of the Codex session pinned to the implementer role for this project, shown separately from verifier tokens.");
+  }
   // 클로드 작업 토큰 — 이 폴더 28일(코덱스 검증 비용과 분리). 숫자만이라 안전하나 토큰 패턴 통일로 createElement/textContent.
   // 캐시 읽기/생성을 카드로 노출 — '총 토큰' 대부분이 캐시 재사용이라, 안 보이면 총량이 비정상으로 커 보인다(실측 사용자 오해).
   function renderClaudeTokens(ct){
@@ -3312,6 +3873,31 @@ class Dashboard {
     }
     if (ev.data?.type !== "data") return;
     const d = ev.data.data;
+    safeTop(function(){
+      harnessMode=(d.contract&&d.contract.harnessMode)||"claude-codex"; var cc=harnessMode==="codex-codex";
+      var mc=$("modeClaude"),mx=$("modeCodex");if(mc&&mx){mc.classList.toggle("on",!cc);mx.classList.toggle("on",cc);}
+      $("heroTitle").textContent=cc?T("Codex ⇄ Codex 구현·검증","Codex ⇄ Codex implement & verify"):T("Claude ⇄ Codex 자동 연결·검증","Claude ⇄ Codex auto link & verify");
+      $("implMono").textContent=cc?"Cx":"C";$("implName").textContent=cc?"Codex":"Claude";$("lsClaude").textContent=cc?T("Codex 구현","Codex implementer"):"Claude";
+      $("implRulesTitle").textContent=cc?T("Codex 구현 규칙","Codex Implementer Rules"):T("Claude 규칙","Claude Rules");
+      $("implRulesTo").textContent=cc?T("→ 구현 Codex에게","→ to implementer Codex"):T("→ Claude에게","→ to Claude");
+      $("implRulesDesc").textContent=cc?T("구현 Codex가 지킬 행동규칙 — 검증 역할과 별개","Behavior rules for the implementer Codex — separate from the verifier role"):T("Claude가 지킬 행동규칙 — 검증과 별개","Behavior rules Claude must follow — separate from verification");
+      $("injectTimingLabel").innerHTML=cc?T("넣는 시점 — 이 규칙을 <b>언제</b> 구현 Codex에 넣을지","Injection timing — <b>when</b> to inject these rules into the implementer Codex"):T("넣는 시점 — 이 규칙을 <b>언제</b> Claude에 넣을지","Injection timing — <b>when</b> to inject these rules into Claude");
+      $("verifyDesc").textContent=cc?T("별도 Codex 세션에게 검증받기 — 구현·검증 세션은 서로 달라야 함","Verify through a separate Codex session — implementer and verifier sessions must differ"):T("Codex에게 검증받기 — 끄면 검증만 안 함(Claude 규칙은 별개)","Get verified by Codex — turning this off only disables verification (Claude rules are separate)");
+      $("sbTransmitText").textContent=cc?T("① 구현 Codex→검증 Codex 넘길 때","① When implementer Codex hands off to verifier Codex"):T("① Claude→Codex 넘길 때","① When Claude hands off to Codex");
+      $("sbImplWho").textContent=cc?T("구현 Codex","Implementer Codex"):"Claude";$("sbRejudgeWho").textContent=cc?T("구현 Codex","Implementer Codex"):"Claude";
+      $("flowImplRules").innerHTML=cc?T("Codex 구현<br>규칙","Codex implementer<br>rules"):T("Claude<br>규칙","Claude<br>rules");
+      $("flowImplMono").textContent=cc?"Cx":"C";$("flowImplName").textContent=cc?"Codex":"Claude";$("scoutImplName").textContent=cc?"Codex":"Claude";
+      $("workTokenTitle").textContent=cc?T("코덱스 구현작업 토큰","Codex implementation work tokens"):T("클로드 작업 토큰","Claude work tokens");
+      var ph=$("planModeHelp");if(ph)ph.title=cc?T("Codex 플랜 모드(permission mode=plan). '플랜 모드'를 고르면 그 모드의 구현 턴에만 규칙을 넣습니다.","Codex plan mode (permission mode=plan). Choosing Plan mode injects these rules only during implementer turns in that mode."):T("플랜 모드 = Claude Code에서 shift+Tab으로 켜는 '계획 먼저 세우기' 모드. '플랜 모드'를 고르면 그 모드로 일할 때만 이 규칙이 들어갑니다.","Plan mode = Claude Code's plan-first mode (shift+Tab). Choosing Plan mode injects these rules only while working in that mode.");
+      var pch=$("planConfirmHelp");if(pch)pch.title=cc?T("Codex↔Codex에서는 구현 세션이 permission mode=plan인 상태로 응답을 끝내는 Stop 턴을 플랜 게이트로 봅니다. ExitPlanMode 순간을 뜻하지 않습니다.","In Codex↔Codex, the plan gate is the implementer Stop turn while permission mode is plan; it is not an ExitPlanMode event."):T("플랜 확정 = 플랜 모드(shift+Tab)에서 세운 계획을 확정·제출하는 그 턴(ExitPlanMode). 플랜 모드 내내가 아니라 확정 순간입니다.","Plan confirm is the Claude Code turn that submits the plan (ExitPlanMode), not the whole time spent in plan mode.");
+      $("workTokenSub").textContent=cc?T("(연결된 구현 세션 누적 · 검증 세션과 분리)","(linked implementer session cumulative · separate from verifier)"):T("(이 폴더 · 최근 28일 · 검증과 별개인 작업 비용)","(this folder · last 28d · work cost, separate from verification)");
+      $("baseGlobalWarn").innerHTML=cc?T("⚠ <b>전역 공통값입니다.</b> 위 <b>Codex 구현·검증 규칙</b>은 프로젝트·언어·운용 모드별로 분리되지만, 단계별 기본 원칙은 두 운용 모드가 공유합니다.","⚠ <b>This is global.</b> The Codex implementer/verifier rules above are separated by project, language, and harness mode; stage baselines are shared by both harness modes."):T("⚠ <b>전역 공통값입니다.</b> 위 <b>Claude·Codex 규칙</b>은 프로젝트별이지만, 단계별 기본 원칙은 모든 프로젝트에 공통 적용됩니다.","⚠ <b>This is global.</b> The Claude/Codex rules above are per-project, while stage baselines apply to every project.");
+      $("baseTransmitTo").textContent=cc?T("→ 구현 Codex에게 · 검증 Codex에 넘길 때 · 검증 ON일 때만","→ to implementer Codex · when handing off to verifier Codex · verify ON only"):T("→ Claude에게 · Claude가 Codex에 넘길 때 · 검증 ON일 때만","→ to Claude · when handing off to Codex · verify ON only");
+      $("baseRejudgeTo").textContent=cc?T("→ 구현 Codex에게 · 검증 답을 되짚을 때 · 검증 ON일 때만","→ to implementer Codex · when re-judging the verifier answer · verify ON only"):T("→ Claude에게 · Codex 답을 되짚을 때 · 검증 ON일 때만","→ to Claude · when re-judging Codex's answer · verify ON only");
+      $("savedAt").textContent=cc?T("· 위 Codex 구현 규칙 · Codex 검증 규칙 · 검증 모드를 함께 저장","· saves Codex implementer rules, verifier rules, and verify mode together"):T("· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장","· saves Claude rules, Codex rules and verify mode together");
+      $("brainTitle").textContent=cc?T("검증 코덱스 두뇌 설정","Verifier Codex Brain Settings"):T("코덱스 두뇌 설정","Codex Brain Settings");
+      $("brainSub").textContent=cc?T("검증 역할 세션에 매 호출 적용 · 구현 역할 모델 변경은 별도 경고","applied to verifier calls · implementer model changes are warned separately"):T("이 프로젝트에서 코덱스가 쓰는 모델·생각강도","model & reasoning effort Codex uses in this project");
+    });
     // 신선도 스탬프(양 감사 합의 2026-07-10) — '마지막 갱신'을 상시 표시해 침묵 실패(낡은 화면)를 즉시 가시화.
     safeTop(function(){ lastDataAt = Date.now(); var fn=$("freshNote"); if(fn){ fn.style.color=""; fn.textContent = T("마지막 갱신 ","last update ") + new Date(d.postedAt || Date.now()).toLocaleTimeString(); } });
     // 구획 격리(safe): 렌더 구획 하나가 특정 데이터 형상에서 예외를 던져도 아래 구획(특히 연결·대화)이 계속
@@ -3341,8 +3927,8 @@ class Dashboard {
       const sf=sc["self"];
       addRow(T("기본 정찰(Claude) 지도 — 별도 결제 없음","Default-scout (Claude) maps — no separate billing"), sf ? T(sf.count+"건 · 자료 "+nf(sf.pkgChars)+"자 · 지도 "+nf(sf.mapChars)+"자(토큰 아님)", sf.count+" run(s) · package "+nf(sf.pkgChars)+" chars · map "+nf(sf.mapChars)+" chars (not tokens)") : T("0건","0 runs"));
     });
-    safe(()=>renderTokens(d.codexTokens));         // 토큰 카드 갱신(연결 코덱스 세션 누적)
-    safe(()=>renderClaudeTokens(d.claudeTokens));  // 클로드 작업 토큰+턴수(이 폴더 28일)
+    safe(()=>renderTokens(d.codexTokens));         // 토큰 카드 갱신(연결 검증 세션 누적)
+    safe(()=>{ if(d.contract&&d.contract.harnessMode==="codex-codex")renderCodexImplementerTokens(d.implementerTokens);else renderClaudeTokens(d.claudeTokens); });
     safe(()=>renderProjects(d.projectStats));      // 프로젝트별 비교(전체 폴더 28일)
     curPerm = d.permissionMode || "";   // renderApplied의 plan 게이트 표시에 사용
     // 언어 토글 표시(전역 ko/en) + '반대 슬롯에만 규칙 있음' 안내(언어 바꿨더니 규칙 사라졌다는 오해 방지)
@@ -3372,15 +3958,16 @@ class Dashboard {
     safe(function(){
     if (d.contract && !holdC){
       if (d.lang) renderedLangC = d.lang; // 이 푸시로 카드가 이 언어 슬롯 값으로 렌더됨
-      if (document.activeElement !== $("cClaude") && !contractDirty.claude) $("cClaude").value = (d.contract.claude||[]).join("\\n");
-      if (document.activeElement !== $("cCodex") && !contractDirty.codex) $("cCodex").value = (d.contract.codex||[]).join("\\n");
-      $("ckClaude").checked = d.contract.claudeChecklist !== false;
-      $("ckCodex").checked = d.contract.codexChecklist !== false;
+      const ccMode=d.contract.harnessMode==="codex-codex";
+      if (document.activeElement !== $("cClaude") && !contractDirty.claude) $("cClaude").value = (ccMode?(d.contract.codexImplementer||[]):(d.contract.claude||[])).join("\\n");
+      if (document.activeElement !== $("cCodex") && !contractDirty.codex) $("cCodex").value = (ccMode?(d.contract.codexVerifier||[]):(d.contract.codex||[])).join("\\n");
+      $("ckClaude").checked = ccMode ? d.contract.codexImplementerChecklist !== false : d.contract.claudeChecklist !== false;
+      $("ckCodex").checked = ccMode ? d.contract.codexVerifierChecklist !== false : d.contract.codexChecklist !== false;
       appCkC = $("ckClaude").checked; appCkX = $("ckCodex").checked; // 체크박스 '마지막 적용값'(appVM 패턴) — hold 판정 기준
       const first = (appVM===null);
       const pVM=appVM, pIM=appIM, pSM=appSM;
       appVM = d.contract.verifyMode || "off";
-      appIM = d.contract.claudeInjectMode || "always";
+      appIM = (ccMode ? d.contract.codexInjectMode : d.contract.claudeInjectMode) || "always";
       appSM = d.contract.scoutMode || "off";
       // 사용자가 저장 안 한 토글 변경을 들고 있으면(dirty) 폼 선택을 보존, 아니면 저장값으로 동기화.
       const dirty = !first && ((curVM!==pVM)||(curIM!==pIM)||(curSM!==pSM));
@@ -3394,7 +3981,7 @@ class Dashboard {
     if (pn){
       // 배지는 '넣는 시점=플랜 모드'(저장값)일 때만 표시. 텍스트는 지금 Claude Code가 플랜 모드인지 여부만 알림.
       // hold 중엔 새 언어 슬롯 값 대신 화면 기준(appIM)으로 — 카드 동결과 파생 표시의 일관 유지(Codex 보완 반영).
-      if((holdC ? appIM : (d.contract && d.contract.claudeInjectMode))==="plan"){
+      if((holdC ? appIM : (d.contract && (d.contract.harnessMode==="codex-codex"?d.contract.codexInjectMode:d.contract.claudeInjectMode)))==="plan"){
         pn.style.display="";
         pn.textContent = d.permissionMode==="plan" ? T("지금 플랜 모드예요 ✓","Plan mode is on now ✓") : T("지금은 플랜 모드 아니에요","Not in plan mode right now");
       } else { pn.style.display="none"; }
@@ -3723,9 +4310,11 @@ class Dashboard {
     // 미완료(연결 끊김·검증 꺼짐)면 끄기 여부와 무관하게 단계가 다시 보여 '고장'을 숨기지 않음.
     safe(function(){
       const ob=$("onboard"); if(!ob) return;
-      const codexReady = !!d.codexReady, linked = !!d.linkedId;
+      const ccMode = !!(d.contract&&d.contract.harnessMode==="codex-codex");
+      const codexReady = !!d.codexReady, linked = !!d.linkedId && (!ccMode || (!!d.implementerId && d.implementerId!==d.linkedId));
+      const hookReady = !ccMode || !!d.codexHookReady;
       const vOn = holdC ? !!(appVM && appVM!=="off") : !!(d.contract && d.contract.verifyMode && d.contract.verifyMode!=="off"); // hold 중엔 화면 기준(appVM) — 파생 표시 일관
-      const allDone = linked && vOn;            // codex 준비는 연결로 함의됨
+      const allDone = linked && vOn && hookReady; // C-C는 현재 구현 세션의 실제 hook heartbeat까지 있어야 준비 완료
       const dismissed = !!d.onboardDismissed;
       ob.style.display = "";
       if (allDone && dismissed){                // 완료 + 사용자가 끔 → 작은 '다시 보기' 링크만
@@ -3734,7 +4323,7 @@ class Dashboard {
       }
       $("obReopen").style.display = "none"; $("obMain").style.display = "";
       ob.className = "onboard " + (allDone ? "complete" : "incomplete");
-      $("obTitle").textContent = allDone ? T("준비 끝 ✓","All set ✓") : T("시작하기 — 3가지면 매 턴 자동 검증","Getting started — 3 steps to auto-verify every turn");
+      $("obTitle").textContent = allDone ? T("준비 끝 ✓","All set ✓") : (ccMode?T("시작하기 — 4가지면 매 턴 자동 검증","Getting started — 4 steps to auto-verify every turn"):T("시작하기 — 3가지면 매 턴 자동 검증","Getting started — 3 steps to auto-verify every turn"));
       $("obClose").style.display = allDone ? "" : "none";
       $("obSteps").style.display = allDone ? "none" : "";
       $("obDone").style.display = allDone ? "" : "none";
@@ -3747,6 +4336,7 @@ class Dashboard {
         step("ob1", codexReady, codexReady?T("Codex 준비됨","Codex ready"):T("Codex 경로 미고정 — PATH의 codex로 시도","Codex path not pinned — trying codex on PATH"), {cmd:"openSettings"}, codexReady?"":T("openai.chatgpt 확장이 있으면 보통 자동 · standalone CLI면 PATH로 동작(안 뜨면 codexBridge.codexPath 지정)","usually automatic with the openai.chatgpt extension · standalone CLI works via PATH (set codexBridge.codexPath if not detected)"));
         step("ob2", linked, linked?T("Codex 세션 연결됨","Codex session linked"):T("Codex 세션 미연결","No Codex session linked"), {go:"cands"}, linked?"":T("연결할 세션 고르기","pick a session to link"));
         step("ob3", vOn, vOn?(T("검증 켜짐 (","verify on (")+((d.contract&&d.contract.verifyMode)||appVM)+")"):T("검증 꺼짐","verify off"), {go:"segVerify"}, vOn?"":T("검증 모드 켜고 저장","turn on a verify mode and save"));
+        const ob4=$("ob4"); if(ob4){ ob4.style.display=ccMode?"":"none"; if(ccMode)step("ob4",hookReady,hookReady?T("현재 구현 세션에서 Codex 강제 훅 확인됨","Codex enforcement hook confirmed in the current implementer session"):T("Codex 강제 훅 미확인 — 이 상태에선 모든 턴 검증이 강제되지 않음","Codex enforcement hook not confirmed — verify-every-turn is not enforced"),{cmd:"installCodexHooks"},hookReady?"":T("플러그인 설치·네 훅 신뢰 → 사용할 대화 시작·재개 시 자동 고정","install the plugin and trust all four hooks → starting or resuming a conversation auto-pins it")); }
       }
     });
     // 기본지침도 언어 전환 hold(계약 카드와 동일 원리) — 편집 중 언어가 바뀌면 보던 언어 화면 유지, 저장은 보던 슬롯으로.
@@ -3782,14 +4372,16 @@ class Dashboard {
     if (!baseOk){ const ov=$("baseOv"); if(ov) ov.textContent = T("· ⚠ 런타임 라이브러리를 찾을 수 없어 편집 불가","· ⚠ runtime library not found — editing disabled"); const sb=$("savedB"); if(sb) sb.textContent=""; }
     });
     // 히어로 연결 상태 시각화
-    const linked = !!d.linkedId;
-    $("linkViz").className = "link" + (linked ? " on" : "");
+    const linked = !!d.linkedId && (!(d.contract&&d.contract.harnessMode==="codex-codex") || (!!d.implementerId && d.implementerId!==d.linkedId));
+    $("linkViz").className = "link" + (linked ? " on" : "") + (linked&&d.verifierSource==="shared"?" shared":"");
     $("linkEmo").textContent = "●"; // 색은 .link.on .emo가 처리(연결=초록/미연결=회색)
-    $("linkState").textContent = linked ? T("연결됨","Linked") : T("연결 없음","Not linked");
+    $("linkState").textContent = linked ? (d.verifierSource==="shared"?T("Claude 모드 검증 공유","Shared Claude-mode verifier"):d.verifierSource==="dedicated"?T("전용 검증 연결","Dedicated verifier"):T("연결됨","Linked")) : T("연결 없음","Not linked");
     // 두뇌 '실제 답' 정보 줄 — 표시 문구는 확장이 완성해 보냄(웹뷰는 그대로 게시). 없어도 렌더는 계속(널 가드).
     var baCc = $("ccActualRo"), baCx = $("cxActualRo"), baSc = $("scoutActualRo"), baD = d.brainActual || {};
     if (baSc) baSc.textContent = baD.scout || "";
-    if (baCc) baCc.textContent = baD.cc ? T("실제 답: ","actual: ") + baD.cc : "";
+    if (baCc) baCc.textContent = d.contract&&d.contract.harnessMode==="codex-codex"
+      ? (d.implementerId ? T("실제 답: ","actual: ") + ((d.implementerModelCurrent||T("미상","unknown"))+T(" · 생각강도 "," · reasoning ")+(d.implementerEffortCurrent||T("미상","unknown"))+(d.implementerActualAge?" · "+d.implementerActualAge:"")) : T("구현 세션 미연결","implementer session not linked"))
+      : (baD.cc ? T("실제 답: ","actual: ") + baD.cc : "");
     if (baCx) baCx.textContent = baD.cx ? T("실제 답: ","actual: ") + baD.cx : "";
     // statusline: 검증 모드 배지 + 연결 요약
     const st = $("status"); st.replaceChildren();
@@ -3804,7 +4396,21 @@ class Dashboard {
     } else {
       st.appendChild(el("span","muted",T("· 아래에서 Codex 세션을 골라 연결 (미연결 시 ask는 보고만)","· pick a Codex session below to link (unlinked ask only reports)")));
     }
-    const cws = $("cwsLabel"); if (cws) cws.textContent = d.workspace ? (T("선택 시 → ","on select → links to ") + d.workspace + T(" 에 연결","")) : T("열린 워크스페이스 없음","no workspace open");
+    const cws = $("cwsLabel"); if (cws) cws.textContent = d.workspace ? (T("검증 세션 선택 → ","verifier selection → ") + d.workspace + T(" 에 연결","")) : T("열린 워크스페이스 없음","no workspace open");
+    safe(function(){
+      const cc=d.contract&&d.contract.harnessMode==="codex-codex";
+      const vi=$("verifierInheritance"), vt=$("verifierInheritanceText"), vr=$("resetModeVerifier");
+      const mi=$("modelInheritance"), mt=$("modelInheritanceText"), mr=$("resetModeModel");
+      if(vi){vi.style.display=cc?"":"none";if(cc&&vt){
+        if(d.verifierSource==="dedicated")vt.textContent=T("Codex↔Codex 전용 검증 세션을 사용 중입니다. 구현 세션과는 다른 세션입니다.","Using a dedicated Codex↔Codex verifier, distinct from the implementer.");
+        else if(d.verifierSource==="shared")vt.textContent=T("Claude Code↔Codex와 동일한 검증 세션을 공유 중입니다(기본값). 원하면 아래에서 다른 기존 세션을 전용 검증자로 선택할 수 있습니다.","Sharing the same verifier as Claude Code↔Codex (default). You may choose another existing session below as a dedicated verifier.");
+        else vt.textContent=T("Claude 모드에 검증 세션이 없어 상속할 연결이 없습니다. 아래에서 기존 검증 세션을 선택하세요.","Claude mode has no verifier to inherit. Choose an existing verifier below.");
+      }if(vr)vr.style.display=cc&&d.verifierSource==="dedicated"?"":"none";}
+      if(mi){mi.style.display=cc?"":"none";if(cc&&mt)mt.textContent=d.modelPrefInherited
+        ? T("검증 모델·추론강도는 Claude 모드 설정을 상속 중입니다. 여기서 저장하면 Codex↔Codex 전용 설정으로 분리됩니다.","Verifier model and reasoning inherit the Claude-mode settings. Saving here creates a Codex↔Codex-specific override.")
+        : T("Codex↔Codex 전용 검증 모델·추론강도를 사용 중입니다.","Using Codex↔Codex-specific verifier model and reasoning settings.");
+      if(mr)mr.style.display=cc&&!d.modelPrefInherited?"":"none";}
+    });
 
     // 무결성 경보 배너: 미확인 error 이벤트(예: 검증 미완)를 빨강으로 보이고 '확인함'으로 해제.
     safe(function(){
@@ -3816,7 +4422,8 @@ class Dashboard {
         const errEvs = iev.filter(function(e){return e.severity==="error";});
         const nFail = errEvs.filter(function(e){return e.kind==="verdict-nonclean";}).length; // Codex 결론 '실패' = 빨강(대시보드 칩과 일치)
         const nSession = errEvs.filter(function(e){return e.kind==="session-missing";}).length; // 연결 세션 없음 = 빨강(ack 아닌 '연결'로만 해소)
-        const nIncomplete = errEvs.length - nFail - nSession; // 검증 미완 — 검증 자체가 안 일어난 미검증 턴(빨강·ack 필요)
+        const nHook = errEvs.filter(function(e){return e.kind==="codex-hook-missing";}).length; // C-C 구현 훅 미작동 = 빨강(heartbeat로만 해소)
+        const nIncomplete = errEvs.length - nFail - nSession - nHook; // 검증 미완 — 검증 자체가 안 일어난 미검증 턴(빨강·ack 필요)
         const warnEvs = iev.filter(function(e){return e.severity==="warning";});
         const nVerdict = warnEvs.filter(function(e){return e.kind==="verdict-nonclean";}).length; // 보류·불가(실패는 빨강으로 분리)
         const nMissing = warnEvs.filter(function(e){return e.kind==="verdict-missing";}).length; // 판정 표지 누락(통과 아님과 구분)
@@ -3825,6 +4432,7 @@ class Dashboard {
         const errParts = [];
         if (nFail) errParts.push(T("검증 실패 "+nFail+"건","verify failed "+nFail)); // 빨강 — Codex 결론이 통과 아님(실패)
         if (nSession) errParts.push(T("Codex 세션 없음 "+nSession+"건","no Codex session "+nSession)); // 빨강 — 연결된 세션 없음(연결되면 자동 사라짐·확인함으론 안 사라짐)
+        if (nHook) errParts.push(T("Codex 구현 훅 미작동 "+nHook+"건","Codex implementer hook inactive "+nHook));
         if (nIncomplete) errParts.push(T("검증 미완 "+nIncomplete+"건","unverified "+nIncomplete)); // 빨강 — 검증 자체가 안 일어남
         const warnParts = [];
         if (nVerdict) warnParts.push(T("Codex 보류·불가 "+nVerdict+"건","Codex hold/unable "+nVerdict)); // 노랑 — 통과도 실패도 아닌 보류/불가/정보부족
@@ -3838,13 +4446,13 @@ class Dashboard {
         const ih = el("div","ih");
         const head = T("검증 무결성 경보 — ","Verification integrity alert — ") + [errStr, warnStr].filter(Boolean).join(" · "); // 빨강·노랑 라벨을 순서대로(빨강 먼저)
         ih.appendChild(el("span", null, head));
-        const ackable = iev.filter(function(e){return e.kind!=="session-missing";}); // session-missing은 ack 대상 아님 — '연결'로만 해소
+        const ackable = iev.filter(function(e){return e.kind!=="session-missing"&&e.kind!=="codex-hook-missing";}); // 상태형 경보는 실제 복구로만 해소
         if (ackable.length) {
           const ack = el("button","secondary",T("확인함 ✓","Acknowledged ✓"));
           ack.addEventListener("click", function(){ vscode.postMessage({type:"ackIntegrity", ids: ackable.map(function(e){return e.id;})}); }); // 보이는(이 창) ack 가능 경보만 확인 — 다른 창 것 안 지움
           ih.appendChild(ack);
         } else {
-          ih.appendChild(el("span","muted",T("연결하면 사라져요 (확인으론 안 닫혀요)","clears when you link (cannot be dismissed)"))); // session-missing만 — '확인함'은 무효라 버튼 대신 안내 문구
+          ih.appendChild(el("span","muted",T("원인을 복구하면 사라져요 (확인으론 안 닫혀요)","clears when the underlying problem is fixed (cannot be dismissed)")));
         }
         if (iev.some(function(e){return e.sig==="session-missing:blocked";})) { // 자동 생성이 멈춤 → GitHub 이슈로 안내(클릭 시 외부 브라우저)
           const gh = el("a","muted",T("🔗 GitHub에 문제 신고","🔗 Report on GitHub"));
@@ -3925,10 +4533,11 @@ class Dashboard {
       });
     }
     const mkRow = (c, hidden) => {
-      const row = el("div","cand" + (c.linked?" linked":""));
+      const row = el("div","cand" + ((c.linked||c.implementer)?" linked":"") + (c.linked&&c.verifierSource==="shared"?" shared":""));
       const left = el("div");
-      const idline = el("div","id", c.id + (c.linked?"  ":""));
-      if (c.linked) idline.appendChild(el("span","star",T("★연결됨","★linked")));
+      const idline = el("div","id", c.id + ((c.linked||c.implementer)?"  ":""));
+      if (c.implementer) idline.appendChild(el("span","star",T("★구현 · 현재 대화 자동 고정","★implementer · current conversation auto-pinned")));
+      if (c.linked) idline.appendChild(el("span","star",c.verifierSource==="shared"?T("★검증 · Claude 모드와 동일","★verifier · same as Claude mode"):c.verifierSource==="dedicated"?T("★전용 검증","★dedicated verifier"):T("★검증","★verifier")));
       left.appendChild(idline);
       left.appendChild(el("div","muted", c.when + " · " + c.snippet));
       row.appendChild(left);
@@ -3937,7 +4546,9 @@ class Dashboard {
         const r=el("button","secondary",T("복원","Restore")); r.setAttribute("data-restore", c.id); acts.appendChild(r);
         const p=el("button","secondary del",T("삭제","Delete")); p.title=T("영구 삭제 (대화 파일이 지워지며 되돌릴 수 없음)","Permanently delete (removes the conversation file · irreversible)"); p.setAttribute("data-purge", c.id); acts.appendChild(p);
       } else {
-        if (!c.linked){ const b=el("button",null,T("연결","Link")); b.setAttribute("data-relink", c.id); acts.appendChild(b); }
+        if (harnessMode==="codex-codex"){
+          if(!c.linked&&!c.implementer){const bv=el("button","secondary",T("전용 검증으로 교체","Use as dedicated verifier"));bv.setAttribute("data-relink",c.id);acts.appendChild(bv);}
+        } else if (!c.linked){ const b=el("button",null,T("검증 연결","Link verifier")); b.setAttribute("data-relink", c.id); acts.appendChild(b); }
         const x=el("button","secondary del",T("숨김","Hide")); x.title=T("목록에서 숨기기 (원본 파일은 보존 · 복원 가능)","Hide from list (file preserved · restorable)"); x.setAttribute("data-del", c.id); acts.appendChild(x);
       }
       row.appendChild(acts);
@@ -4216,6 +4827,132 @@ async function runHookInstallFlow(): Promise<void> {
   }
 }
 
+function runCodexPluginCommand(extensionRoot: string, args: string[]): Promise<{code:number;out:string;err:string}> {
+  const codex=resolveCodexPathForBridge()||"codex";
+  const pi=require("../bridge/codex-plugin-install.js") as {buildCodexPluginSpawn:(p:string,a:string[])=>{file:string;args:string[];shell:false;windowsVerbatimArguments:boolean;env:Record<string,string>}};
+  return new Promise((resolve)=>{let out="",err="",done=false;const finish=(v:{code:number;out:string;err:string})=>{if(!done){done=true;resolve(v);}};const inv=pi.buildCodexPluginSpawn(codex,args);let c:ReturnType<typeof spawn>;try{c=spawn(inv.file,inv.args,{cwd:extensionRoot,windowsHide:true,shell:false,windowsVerbatimArguments:inv.windowsVerbatimArguments,env:{...process.env,...inv.env}});}catch(e){finish({code:1,out,err:String(e)});return;}c.stdout?.on("data",d=>{if(out.length<65536)out+=d.toString();});c.stderr?.on("data",d=>{if(err.length<65536)err+=d.toString();});c.on("error",e=>finish({code:1,out,err:String(e.message||e)}));c.on("close",code=>finish({code:typeof code==="number"?code:1,out,err}));});
+}
+type CodexPeekPluginState = { present: boolean; enabled: boolean; pluginId: string };
+async function codexPeekPluginState(extensionRoot: string): Promise<CodexPeekPluginState> {
+  const r=await runCodexPluginCommand(extensionRoot,["plugin","list","--json"]);
+  if(r.code!==0)return {present:false,enabled:false,pluginId:""};
+  const pi=require("../bridge/codex-plugin-install.js") as {codexPeekPluginState:(s:string)=>CodexPeekPluginState};
+  return pi.codexPeekPluginState(r.out);
+}
+type CodexUserHookStatus = { installed: boolean; missing: string[]; unreadable: string | null };
+function codexUserHooksFile(): string { return path.join(CODEX_HOME,"hooks.json"); }
+function codexUserHooksOwnerFile(): string { return path.join(BRIDGE_DIR,"codex-hooks-installed-by-extension"); }
+function codexUserHookStatus(): CodexUserHookStatus {
+  const pi=require("../bridge/codex-plugin-install.js") as {detectCodexPeekUserHooks:(f:string,b:string)=>CodexUserHookStatus};
+  return pi.detectCodexPeekUserHooks(codexUserHooksFile(),BRIDGE_DIR);
+}
+function codexUserHooksOwned(): boolean {
+  const pi=require("../bridge/codex-plugin-install.js") as {readCodexPeekHookOwner:(f:string,b:string)=>{ok:boolean;present:boolean;hookFiles:string[]};normRoot:(f:string)=>string};
+  const owner=pi.readCodexPeekHookOwner(codexUserHooksOwnerFile(),BRIDGE_DIR);
+  return owner.ok&&owner.present&&owner.hookFiles.some(f=>pi.normRoot(f)===pi.normRoot(codexUserHooksFile()));
+}
+function installCodexUserRuntimeHooks(): {ok:boolean;backup?:string;reason?:string} {
+  const tok=hookSetup.resolveNodeToken(nodeTokenCandidates());
+  if(!tok)return {ok:false,reason:tE("Codex 훅을 실행할 node 경로를 찾지 못했습니다.","Could not find a node executable for Codex hooks.")};
+  const pi=require("../bridge/codex-plugin-install.js") as {installCodexPeekOwnedUserHooks:(f:string,b:string,n:string,m:string)=>{ok:boolean;backup?:string;reason?:string}};
+  return pi.installCodexPeekOwnedUserHooks(codexUserHooksFile(),BRIDGE_DIR,tok.token,codexUserHooksOwnerFile());
+}
+function queryCodexPeekHookTrust(extensionRoot: string, projectCwd: string): Promise<CodexHookTrustSnapshot> {
+  const codex=resolveCodexPathForBridge()||"codex";
+  const pi=require("../bridge/codex-plugin-install.js") as {
+    buildCodexPluginSpawn:(p:string,a:string[])=>{file:string;args:string[];shell:false;windowsVerbatimArguments:boolean;env:Record<string,string>};
+    codexPeekHookTrustState:(o:any,f:string,b:string)=>Omit<CodexHookTrustSnapshot,"queried"|"error"|"checkedAt">;
+  };
+  return new Promise((resolve)=>{
+    let out="",err="",done=false,initialized=false;
+    const checkedAt=Date.now();
+    const fallback=(why:string):CodexHookTrustSnapshot=>({queried:false,found:false,ready:false,required:4,trusted:0,untrusted:0,disabled:0,missingEvents:[],statuses:[],pluginIds:[],error:why,checkedAt});
+    const inv=pi.buildCodexPluginSpawn(codex,["app-server","--stdio"]);
+    let c:ReturnType<typeof spawn>;
+    const finish=(v:CodexHookTrustSnapshot)=>{if(done)return;done=true;clearTimeout(timer);try{c.stdin?.end();}catch{}try{c.kill();}catch{}resolve(v);};
+    const timer=setTimeout(()=>finish(fallback(tE("Codex hooks/list 응답 시간 초과","Codex hooks/list timed out"))),10000);
+    const send=(o:any)=>{try{c.stdin?.write(JSON.stringify(o)+"\n");}catch(e){finish(fallback(String(e)));}};
+    try{c=spawn(inv.file,inv.args,{cwd:extensionRoot,windowsHide:true,shell:false,windowsVerbatimArguments:inv.windowsVerbatimArguments,env:{...process.env,...inv.env}});}catch(e){clearTimeout(timer);resolve(fallback(String(e)));return;}
+    c.stderr?.on("data",d=>{if(err.length<32768)err+=d.toString();});
+    c.stdout?.on("data",d=>{
+      out+=d.toString();
+      let nl:number;
+      while((nl=out.indexOf("\n"))>=0){
+        const line=out.slice(0,nl).trim();out=out.slice(nl+1);if(!line)continue;
+        let j:any;try{j=JSON.parse(line);}catch{continue;}
+        if(j.id===1&&!initialized){initialized=true;send({method:"initialized"});send({id:2,method:"hooks/list",params:{cwds:[projectCwd]}});}
+        else if(j.id===2){
+          if(j.error){finish(fallback(JSON.stringify(j.error)));return;}
+          const parsed=pi.codexPeekHookTrustState(j.result,codexUserHooksFile(),BRIDGE_DIR);
+          finish({...parsed,queried:true,error:"",checkedAt});
+          return;
+        }
+      }
+    });
+    c.on("error",e=>finish(fallback(String((e as any).message||e))));
+    c.on("close",code=>{if(!done)finish(fallback(err||`app-server exit ${code}`));});
+    send({id:1,method:"initialize",params:{clientInfo:{name:"codex-peek",title:"Codex Peek",version:String(contextVersionSafe())},capabilities:{experimentalApi:true,requestAttestation:false}}});
+  });
+}
+function contextVersionSafe():string { try{return String(require("../package.json").version||"0.0.0");}catch{return"0.0.0";} }
+function refreshCodexPeekHookTrust(extensionRoot:string,projectCwd:string,force=false):Promise<CodexHookTrustSnapshot>{
+  const key=normWs(projectCwd);
+  const running=codexHookTrustCache.getQuery(key);if(running)return running;
+  const cached=!force?codexHookTrustCache.getFresh(key,Date.now(),30000):undefined;if(cached)return Promise.resolve(cached);
+  codexHookTrustCache.markStarted(key,Date.now());
+  const query=queryCodexPeekHookTrust(extensionRoot,projectCwd).then(s=>{codexHookTrustCache.setSnapshot(key,s);return s;}).finally(()=>{codexHookTrustCache.clearQuery(key);});
+  codexHookTrustCache.setQuery(key,query);return query;
+}
+function dashboardCodexHookTrustCwd(extensionRoot:string):string { const ws=dashboardWorkspace();return ws?codexHookTrustCwd(ws):extensionRoot; }
+async function showCodexHookTrustWarning(state:CodexHookTrustSnapshot):Promise<void>{
+  const review=tE("신뢰 방법 보기","Show trust steps");
+  const status=!state.queried
+    ? tE(`신뢰 상태 조회 실패${state.error?`: ${state.error}`:""}`,`trust-state query failed${state.error?`: ${state.error}`:""}`)
+    : state.found
+    ? tE(`발견 ${state.required}개 중 신뢰 ${state.trusted}개 · 검토 필요 ${state.untrusted}개`,`found ${state.required}; trusted ${state.trusted}; review required ${state.untrusted}`)
+    : tE("Codex Peek 훅 정의를 찾지 못함","Codex Peek hook definitions were not discovered");
+  const hooksFile=codexUserHooksFile();
+  const pick=await vscode.window.showWarningMessage(tE(`Codex Peek 패키지는 설치됐지만 사용자 실행 훅은 아직 준비되지 않았습니다(${status}). Codex 설정 → Hook에서 ${hooksFile}의 SessionStart·UserPromptSubmit·PostToolUse·Stop 네 훅을 검토하고 신뢰하세요.`,`The Codex Peek package is installed, but its user-level runtime hooks are not ready (${status}). In Codex Settings → Hooks, review and trust the four SessionStart, UserPromptSubmit, PostToolUse, and Stop entries from ${hooksFile}.`),review);
+  if(pick===review)void vscode.window.showInformationMessage(tE(`Codex 설정 → Hook을 열어 ${hooksFile}에서 온 Codex Peek 네 명령을 확인한 뒤 신뢰하세요. 플러그인 번들 훅은 일부 Codex 버전에서 목록에만 나타나고 실행되지 않아 사용자 훅을 실행 권위로 사용합니다. 신뢰 후 사용할 Codex 대화를 시작·재개하면 구현 연결과 초록 표시가 자동 이동합니다.`,`Open Codex Settings → Hooks, inspect and trust the four Codex Peek commands sourced from ${hooksFile}. Some Codex versions list plugin-bundled hooks without executing them, so the user hooks are the runtime authority. Afterwards, starting or resuming a Codex conversation moves the implementer link and green marker automatically.`),{modal:true});
+}
+async function runCodexHookInstallFlow(extensionRoot: string): Promise<boolean> {
+  await codexHomeReady; // 대시보드·명령 팔레트·자동 제안 어느 입구든 실제 CODEX_HOME 확정이 중앙 선행조건이다.
+  const market=path.join(extensionRoot,".agents","plugins","marketplace.json");
+  if(!fs.existsSync(market)){void vscode.window.showErrorMessage(tE("Codex 훅 마켓플레이스 파일이 설치본에 없습니다. node install.js로 다시 설치하세요.","The Codex hook marketplace file is missing from this installation. Reinstall with node install.js."));return false;}
+  const existing=await codexPeekPluginState(extensionRoot);
+  const userHooks=codexUserHookStatus();
+  if(existing.present&&existing.enabled&&userHooks.installed&&codexUserHooksOwned()){const trust=await refreshCodexPeekHookTrust(extensionRoot,dashboardCodexHookTrustCwd(extensionRoot),true);if(trust.ready)void vscode.window.showInformationMessage(tE("Codex Peek 패키지와 네 사용자 훅이 모두 활성·신뢰 상태입니다. Codex 대화를 시작·재개하면 그 대화가 구현 세션으로 자동 고정됩니다.","The Codex Peek package and all four user hooks are enabled and trusted. Starting or resuming a Codex conversation auto-pins it as the implementer."));else await showCodexHookTrustWarning(trust);return trust.ready;}
+  if(existing.present&&!existing.enabled){void vscode.window.showWarningMessage(tE(`Codex Peek 플러그인(${existing.pluginId||"기존 설치"})이 설치되어 있지만 비활성화되어 있습니다. 기존 설치를 덮어쓰지 않습니다. Codex 설정 → 플러그인에서 활성화한 뒤 Hook에서 네 훅을 검토·신뢰하세요. 이후 사용하려는 Codex 대화를 시작·재개하면 구현 연결이 자동 이동합니다.`,`The Codex Peek plugin (${existing.pluginId||"existing install"}) is installed but disabled. The extension will not overwrite it. Enable it under Codex Settings → Plugins, then review/trust all four hooks under Hooks. Afterwards, starting or resuming the Codex conversation moves the implementer link automatically.`));return false;}
+  const yes=tE("설치","Install");
+  const pick=await vscode.window.showInformationMessage(tE("Codex 구현 훅 설치","Install Codex implementer hooks"),{modal:true,detail:tE(`로컬 마켓플레이스: ${extensionRoot}\n패키지: codex-peek@codex-peek-local\n실행 훅 파일: ${codexUserHooksFile()}\n\nCodex Peek 패키지를 설치·활성화하고, 기존 사용자 훅을 보존한 채 네 lifecycle 명령을 hooks.json에 병합합니다(기존 파일은 먼저 백업). 플러그인 번들 훅이 목록에만 보이고 실행되지 않는 Codex 버전에서도 이 사용자 훅 경로는 실제로 실행됩니다. 설치 후 Codex 설정 → Hook에서 네 훅을 별도로 검토·신뢰하세요.`,`Local marketplace: ${extensionRoot}\nPackage: codex-peek@codex-peek-local\nRuntime hook file: ${codexUserHooksFile()}\n\nThis installs/enables the Codex Peek package and merges four lifecycle commands into hooks.json while preserving existing user hooks and backing up the file first. This user-hook path executes even on Codex versions that list plugin-bundled hooks without running them. Afterwards, review and trust the four hooks separately under Codex Settings → Hooks.`)},yes);
+  if(pick!==yes)return false;
+  const pi=require("../bridge/codex-plugin-install.js") as {buildCodexPluginSpawn:(p:string,a:string[])=>{file:string;args:string[];shell:false;windowsVerbatimArguments:boolean;env:Record<string,string>};marketplaceStepOk:(a:number,l:number,s:string,n:string,r:string)=>boolean};
+  const result=await vscode.window.withProgress({location:vscode.ProgressLocation.Notification,title:tE("Codex Peek 구현 훅 설치 중…","Installing Codex Peek implementer hooks…"),cancellable:false},async()=>{
+    if(existing.present&&existing.enabled)return {marketResult:{code:0,out:"existing",err:""},pluginResult:{code:0,out:existing.pluginId,err:""}};
+    const marketResult=await runCodexPluginCommand(extensionRoot,["plugin","marketplace","add",extensionRoot,"--json"]);
+    let marketOk=marketResult.code===0;
+    if(!marketOk){const listed=await runCodexPluginCommand(extensionRoot,["plugin","marketplace","list","--json"]);marketOk=pi.marketplaceStepOk(marketResult.code,listed.code,listed.out,"codex-peek-local",extensionRoot);}
+    if(!marketOk)return {marketResult,pluginResult:null as {code:number;out:string;err:string}|null};
+    const pluginResult=await runCodexPluginCommand(extensionRoot,["plugin","add","codex-peek@codex-peek-local","--json"]);
+    return {marketResult,pluginResult};
+  });
+  if(result.pluginResult&&result.pluginResult.code===0){const installed=installCodexUserRuntimeHooks();if(!installed.ok){void vscode.window.showErrorMessage(tE(`Codex 사용자 훅 병합 실패: ${installed.reason||"알 수 없는 이유"}`,`Failed to merge Codex user hooks: ${installed.reason||"unknown reason"}`));return false;}const trust=await refreshCodexPeekHookTrust(extensionRoot,dashboardCodexHookTrustCwd(extensionRoot),true);if(trust.ready)void vscode.window.showInformationMessage(tE("Codex 구현 훅 설치·활성화·신뢰 확인 완료입니다. 시작·재개한 Codex 대화가 구현 세션으로 자동 고정됩니다.","Codex implementer hooks are installed, enabled, and trusted. A started or resumed Codex conversation is auto-pinned as the implementer."));else await showCodexHookTrustWarning(trust);return true;}
+  const why=result.pluginResult?(result.pluginResult.err||"종료코드 "+result.pluginResult.code):(result.marketResult.err||"마켓플레이스 등록·확인 실패");void vscode.window.showErrorMessage(tE(`Codex 구현 훅 설치 실패: ${why}`,`Failed to install Codex implementer hooks: ${why}`));return false;
+}
+
+let codexHookOfferShown=false;
+async function maybeOfferCodexHookSetup(extensionRoot:string):Promise<void>{
+  if(codexHookOfferShown)return;
+  // 활성화와 C-C 모드 선택이 동시에 들어와도 조회 await 전에 선점해 팝업·plugin add를 정확히 1회만 연다.
+  codexHookOfferShown=true;
+  let state:CodexPeekPluginState={present:false,enabled:false,pluginId:""};try{state=await codexPeekPluginState(extensionRoot);}catch{/* 아래 제안 */}
+  if(state.present&&state.enabled&&codexUserHookStatus().installed&&codexUserHooksOwned()){const trust=await refreshCodexPeekHookTrust(extensionRoot,dashboardCodexHookTrustCwd(extensionRoot),true);if(!trust.ready)await showCodexHookTrustWarning(trust);return;}
+  if(state.present&&!state.enabled){void vscode.window.showWarningMessage(tE(`Codex Peek 플러그인(${state.pluginId||"기존 설치"})이 설치되어 있지만 비활성화되어 있습니다. Codex 설정 → 플러그인에서 활성화한 뒤 Hook에서 네 훅을 검토·신뢰하세요. 이후 사용하려는 Codex 대화를 시작·재개하면 구현 연결이 자동 이동합니다.`,`The Codex Peek plugin (${state.pluginId||"existing install"}) is installed but disabled. Enable it under Codex Settings → Plugins, then review/trust all four hooks under Hooks. Afterwards, starting or resuming the Codex conversation moves the implementer link automatically.`));return;}
+  const review=tE("설치 내용 보기","Review & install"),later=tE("나중에","Later");
+  const pick=await vscode.window.showInformationMessage(tE("Codex Bridge: Codex↔Codex에서 매 턴 검증을 강제하려면 Codex Peek 패키지와 실제 실행되는 사용자 lifecycle 훅이 모두 필요합니다. 설치가 없거나, 플러그인 훅이 목록에만 잡히는 Codex 버전용 사용자 훅 보완이 아직 없습니다.","Codex Bridge: enforcing every Codex↔Codex turn requires both the Codex Peek package and executable user-level lifecycle hooks. The package is missing, or the user-hook runtime fallback for Codex versions that only list plugin hooks has not been installed."),review,later);
+  if(pick===review)await runCodexHookInstallFlow(extensionRoot);
+}
+
 // 활성화 시: 훅 미등록이면 알림 1회(다시 묻지 않음 선택 가능). 명령 codexBridge.installHooks로 언제든 다시 실행 가능.
 const HOOKS_PROMPT_DISMISSED = path.join(BRIDGE_DIR, "hooks-prompt-dismissed");
 async function maybeOfferHookSetup(): Promise<void> {
@@ -4235,6 +4972,9 @@ async function maybeOfferHookSetup(): Promise<void> {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  let markCodexHomeReady: (()=>void)|null=null;
+  codexHomeIsReady=false;
+  codexHomeReady=new Promise<void>((resolve)=>{markCodexHomeReady=resolve;});
   deployBridgeRuntime(context); // 마켓 설치: 번들 브릿지를 ~/.codex-bridge에 자동 배치(레포 수동 설치는 stamp 없음 → 존중)
   syncCodexBin(); // 브릿지가 쓸 codex 경로를 최신 확장 기준으로 기록
   ensureLangInitialized(); // 첫 실행: language.json 없으면 VS Code UI 언어로 초기값 저장(이후엔 대시보드 토글이 정본)
@@ -4247,7 +4987,7 @@ export function activate(context: vscode.ExtensionContext): void {
     else if (focusStartMs !== null && focusEndMs === null) focusEndMs = Date.now();
   }));
   context.subscriptions.push(vscode.commands.registerCommand("codexBridge.installHooks", () => { void runHookInstallFlow(); }));
-  void maybeOfferHookSetup(); // 훅 미등록 감지 → 동의 1클릭 설치 제안(비동기, 활성화 안 막음)
+  context.subscriptions.push(vscode.commands.registerCommand("codexBridge.installCodexHooks", () => { void (async()=>{await codexHomeReady;await runCodexHookInstallFlow(context.extensionUri.fsPath);})(); }));
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("codexBridge.codexPath")) syncCodexBin();
@@ -4305,7 +5045,15 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const render = () => {
     const ws = dashboardWorkspace();
-    const link = workspaceLink(loadLinks(), ws);
+    const hmode = ws ? loadContract(ws).harnessMode : "claude-codex";
+    if (ws && hmode === "codex-codex") {
+      syncCodexImplementerAutoPin(ws);
+      if(codexHomeIsReady){const beforeTrust=codexHookTrustForWorkspace(ws)?.checkedAt||0;
+      void refreshCodexPeekHookTrust(context.extensionUri.fsPath, codexHookTrustCwd(ws)).then((after)=>{if(after.checkedAt!==beforeTrust)scheduleRender();});}
+    }
+    const rawLink = workspaceLink(loadLinks(), ws);
+    const link = verifierLinkForMode(rawLink, hmode);
+    const fullyLinked = !!link?.codexSession && (hmode !== "codex-codex" || (!!rawLink?.implementerSession && rawLink.implementerSession !== link.codexSession));
     const file = link?.codexSession ? findRolloutById(link.codexSession) : null;
     const snip = file ? firstSnippet(file) : "";
     // 검증 진행 흐름: 진행 중이면 메인 항목을 숨기고 [🧑Claude] ▶▶검증중 [🔍Codex] 3개 항목으로 단계별(글자)색을 보인다.
@@ -4313,6 +5061,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // 두뇌 drift/세션없음을 상태바 갱신 경로에서도 계산(부수효과 — 항상 수행) → 대시보드를 안 열어도 경고가 상태바에 뜬다. 그 뒤 integrity를 읽는다.
     syncBrainDriftFor(ws);
     syncSessionMissing(ws);
+    syncCodexHookHealth(ws);
     const allIg = readVisibleIntegrity(ws);
     const errs = allIg.filter((e) => !e.ack && e.severity === "error");
     const warns = allIg.filter((e) => !e.ack && e.severity === "warning");
@@ -4323,7 +5072,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // 호버가 닫히지 않는다(render는 BRIDGE_DIR watch·15초 poll로 자주 돌지만 표시가 같으면 무시).
     // ★키는 '입력 상태 전부'가 아니라 '지금 상태바를 잡는 mode의 표시 요소'만 담는다. 예: 경보(error/warning)가 떠 있으면 연결/스니펫/flow는
     //   화면에 안 보이므로 키에서 제외 → 경보 툴팁을 읽는 중 phase.json(live)·링크 변화로 호버가 닫히지 않는다. pulse(별도 타이머)는 키 밖.
-    const mode = (flowActive && live) ? "flow" : errs.length ? "error" : warns.length ? "warning" : !ws ? "noWs" : link?.codexSession ? "linked" : "unlinked";
+    const mode = (flowActive && live) ? "flow" : errs.length ? "error" : warns.length ? "warning" : !ws ? "noWs" : fullyLinked ? "linked" : "unlinked";
     // 탐색(3트랙) 상태 줄 — 상태바만으로 '지금 어떤 흐름이 돌고 탐색 타이밍인지' 판단 가능해야(사용자 요청 2026-07-06).
     // 2트랙이면 빈 문자열(기존 표시 무변화=무회귀). 내부 리더는 전부 5s 캐시 재사용 — 렌더 경로 비용 최소.
     const scoutSb = (() => {
@@ -4350,8 +5099,10 @@ export function activate(context: vscode.ExtensionContext): void {
     })();
     // 두뇌 '실제 답' 정보 줄(연결/미연결 툴팁 공용) — 앱 UI 표기가 서로 어긋나도 믿을 정본(대화 기록 실측).
     const ba = (mode === "linked" || mode === "unlinked") ? brainActualTexts(ws) : { cc: "", cx: "", sig: "" };
+    let implActual = ba.cc;
+    if (hmode === "codex-codex" && rawLink?.implementerSession) { try { const f=findRolloutById(rawLink.implementerSession); if(f){const sm=sessionModelMetaForProject(f,ws);const at=Date.parse(sm.ts||"");implActual=(sm.model||tE("미상","unknown"))+" · "+(sm.effort||tE("미상","unknown"))+(Number.isFinite(at)?" · "+ageLabel(Date.now()-at,loadLangExt()==="en"):"");} } catch { /* 정보 줄만 */ } }
     const baLine = (mode === "linked" || mode === "unlinked")
-      ? tE(`두뇌 실제 답 — Claude: ${ba.cc} · Codex: ${ba.cx}`, `actual answers — Claude: ${ba.cc} · Codex: ${ba.cx}`)
+      ? (hmode === "codex-codex" ? tE(`두뇌 실제 답 — 구현 Codex: ${implActual} · 검증 Codex: ${ba.cx}`, `actual answers — implementer Codex: ${implActual} · verifier Codex: ${ba.cx}`) : tE(`두뇌 실제 답 — Claude: ${ba.cc} · Codex: ${ba.cx}`, `actual answers — Claude: ${ba.cc} · Codex: ${ba.cx}`))
       : "";
     // LLM 호출 여부 상시 줄(사용자 요청 2026-07-08: 대시보드 안 열어도 상태바에서 판단) — '지금 실행 중' live 신호만
     // 말한다(다음 턴 지시·예약까지 단정 금지 — Codex 보완).
@@ -4369,6 +5120,7 @@ export function activate(context: vscode.ExtensionContext): void {
       : "";
     const key = JSON.stringify({
       mode,
+      hmode,
       // ★언어도 표시 요소다 — 없으면 언어 전환 후 상태바가 '표시 동일'로 오판돼 갱신을 스킵, 옛 언어 텍스트가 잔존한다(사용자 실측 버그).
       lang: loadLangExt(),
       // error/warning mode: 실제 tooltip 줄은 [...errs,...warns].slice(-4), label은 kind 집합으로 결정 → 그 표시 요소만 담는다.
@@ -4422,7 +5174,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const toCodex = live.key === "codex-req" || live.key === "codex-gen";
       const toClaude = live.key === "rejudge";
       const c = new vscode.ThemeColor(live.color);
-      fClaude.text = "$(person) Claude";
+      fClaude.text = hmode === "codex-codex" ? "$(person) Codex" : "$(person) Claude";
       fClaude.color = (toClaude || live.key === "claude") ? c : undefined; // 활성 쪽만 색
       fCodex.text = "$(search) Codex";
       fCodex.color = toCodex ? c : undefined;
@@ -4434,8 +5186,8 @@ export function activate(context: vscode.ExtensionContext): void {
       const flowLlm = toCodex
         ? tE(`\n\n⚡ LLM 호출 중: Codex 검증`,`\n\n⚡ LLM call in flight: Codex verification`)
         : toClaude
-        ? tE(`\n\nClaude가 검증 답을 반영 중`,`\n\nClaude is applying the verdict`)
-        : tE(`\n\nClaude 작업 중`,`\n\nClaude working`);
+        ? (hmode === "codex-codex" ? tE(`\n\n구현 Codex가 검증 답을 반영 중`,`\n\nImplementer Codex is applying the verdict`) : tE(`\n\nClaude가 검증 답을 반영 중`,`\n\nClaude is applying the verdict`))
+        : (hmode === "codex-codex" ? tE(`\n\n구현 Codex 작업 중`,`\n\nImplementer Codex working`) : tE(`\n\nClaude 작업 중`,`\n\nClaude working`));
       const flowScout = scoutLiveNow
         ? tE(`\n\n⚡ 정찰 지도 생성 중(${scoutLiveNow.arm === "deepseek" ? "DeepSeek 정찰" : "기본 정찰 Claude"}) — 이 턴 안에서 실행`,`\n\n⚡ recon map generating (${scoutLiveNow.arm === "deepseek" ? "DeepSeek scout" : "default scout (Claude)"}) — running inside this turn`)
         : "";
@@ -4450,11 +5202,13 @@ export function activate(context: vscode.ExtensionContext): void {
     if (errs.length) {
       const nFail = errs.filter((e) => e.kind === "verdict-nonclean").length; // Codex 결론 '실패'(빨강·재검증 통과 시 자동 해소)
       const nSession = errs.filter((e) => e.kind === "session-missing").length; // 연결 세션 없음(빨강·연결되면 자동 해소, ack 아님)
-      const nIncomplete = errs.length - nFail - nSession;                       // 검증 미완(검증 자체가 안 일어남·ack 필요)
-      const ekinds = [nFail > 0, nSession > 0, nIncomplete > 0].filter(Boolean).length;
+      const nHook = errs.filter((e) => e.kind === "codex-hook-missing").length; // C-C 구현 훅 미작동(heartbeat로만 해소)
+      const nIncomplete = errs.length - nFail - nSession - nHook;               // 검증 미완(검증 자체가 안 일어남·ack 필요)
+      const ekinds = [nFail > 0, nSession > 0, nHook > 0, nIncomplete > 0].filter(Boolean).length;
       const label = ekinds > 1 ? tE("Codex 검증 문제","Codex verify issues")
                   : nFail ? tE("Codex 검증 실패","Codex verify failed")
                   : nSession ? tE("Codex 세션 없음","no Codex session")
+                  : nHook ? tE("Codex 구현 훅 미작동","Codex implementer hook inactive")
                   : tE("Codex 검증 미완","Codex verify incomplete");
       const warnTail = warns.length ? ` · 🟡${warns.length}` : ""; // 같이 뜬 노랑(두뇌 어긋남·근거 의심 등)도 건수로 노출
       status.text = `$(alert) ${label} ${errs.length}${warnTail}`;
@@ -4464,6 +5218,7 @@ export function activate(context: vscode.ExtensionContext): void {
           lines.join("\n\n") +
           (nFail ? tE(`\n\n검증 실패: 고쳐서 다시 검증해 통과하면 빨강이 사라집니다.`,`\n\nVerify failed: fix, re-verify to pass, and the red clears.`) : ``) +
           (nSession ? tE(`\n\nCodex 세션 없음: 'Codex 세션 연결'에서 수동 연결하거나, 검증을 계속 진행하면 자동 연결을 시도해요(연결되면 사라짐 · '확인함'으론 안 닫힘).`,`\n\nNo Codex session: link manually under 'Codex Session Link', or keep verifying for auto-link (clears when linked · cannot be dismissed).`) : ``) +
+          (nHook ? tE(`\n\nCodex 구현 훅 미작동: 플러그인을 설치·활성화하고 Codex 설정 → Hook에서 네 훅을 신뢰한 뒤, 사용하려는 Codex 대화를 다시 열거나 프롬프트를 보내 실제 lifecycle heartbeat를 확인하세요. 구현 연결과 초록 표시는 그 대화로 자동 이동합니다. 이 상태에서는 모든 턴 검증이 강제되지 않습니다.`,`\n\nCodex implementer hook inactive: install/enable the plugin, trust all four hooks under Codex Settings → Hooks, then reopen the Codex conversation or send a prompt and confirm a real lifecycle heartbeat. The implementer link and green marker move there automatically. Verify-every-turn is not enforced in this state.`) : ``) +
           (errs.some((e) => e.sig === "session-missing:blocked") ? tE(`\n\n자동 생성이 멈춰 있어요 — 계속되면 `,`\n\nAuto-creation is paused — if it persists, `) + `[${tE("GitHub에 문제 신고","report on GitHub")}](https://github.com/kimbyungsu/codex-peek/issues)` : ``) +
           (nIncomplete ? tE(`\n\n검증 미완: 이 턴이 '검증 없이' 종료됐을 수 있어요(확인 필요).`,`\n\nUnverified: this turn may have ended WITHOUT verification (needs review).`) : ``),
       );
@@ -4561,12 +5316,26 @@ export function activate(context: vscode.ExtensionContext): void {
     if (changed) {
       try { if (fs.existsSync(SESSIONS_DIR)) watchers.push(fs.watch(SESSIONS_DIR, { recursive: true }, () => scheduleRender())); } catch { /* ignore */ }
     }
-    scheduleRender();
+    codexHomeIsReady=true;codexHookTrustCache.reset();
+    const ready=markCodexHomeReady;markCodexHomeReady=null;ready?.();
+    void (async()=>{
+      const ws=dashboardWorkspace();
+      if(ws&&loadContract(ws).harnessMode==="codex-codex")try{await refreshCodexPeekHookTrust(context.extensionUri.fsPath,codexHookTrustCwd(ws),true);}catch{/* 아래 fail-closed render */}
+      scheduleRender();dashboard.post();
+      await maybeOfferHookSetup();await maybeOfferCodexHookSetup(context.extensionUri.fsPath);
+    })(); // 실제 CODEX_HOME 확정·pre-ready 캐시 폐기·강제 조회 뒤 사용자 hooks.json을 판정·제안한다.
   });
 
   // 두뇌 drift 입력원 감시 ②: 트랜스크립트(CLAUDE_HOME/projects/**/*.jsonl, CLAUDE_CONFIG_DIR일 수 있음)는 응답마다 잦게 append돼 재귀 watch가 과하다 →
   // 15s 주기 폴링으로 '최근 응답 모델' 변화와 drift 해소(적용되면 사라짐)를 따라잡는다. render는 syncBrainDriftFor 1.5s throttle로 비용 한정(폴링 1회=최대 drift 1회).
   const driftPoll = setInterval(() => { try { render(); } catch (e) { console.warn("codex-bridge: status render failed", e); } dashboard.post(); }, 15000); // render 예외가 post를 못 막게 격리(위 scheduleRender와 동일 원칙)
+  // settings.json은 Claude Code가 원자 교체할 때 Windows fs.watch 이벤트가 실제로 누락될 수 있다. 포커스된 창에서만
+  // 작은 설정 파일을 짧게 폴링해 변경을 프로젝트에 귀속하고, 잡힌 경우 즉시 경고를 다시 계산한다.
+  // 다른 VS Code 창은 OS 포커스가 없으므로 같은 전역 설정 변경을 자기 프로젝트로 오귀속하지 않는다.
+  const settingsPoll = setInterval(() => {
+    if (!vscode.window.state.focused) return;
+    try { if (maybeAttributeSettingsChange()) scheduleRender(); } catch { /* best-effort */ }
+  }, 750);
 
   context.subscriptions.push(
     status,
@@ -4576,7 +5345,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // ★ 호출 '시점'에 경보 재읽기(렌더 시점 값 재사용 금지) ★ 이 창 id만(다른 창 보존) ★ 실패 정직 보고 ★ 직후 즉시 갱신.
     vscode.commands.registerCommand("codexBridge.ackHere", () => {
       const unacked = readVisibleIntegrity(dashboardWorkspace()).filter(
-        (e) => !e.ack && (e.severity === "error" || e.severity === "warning") && e.kind !== "session-missing", // session-missing은 ack 제외 — '연결'로만 해소
+        (e) => !e.ack && (e.severity === "error" || e.severity === "warning") && e.kind !== "session-missing" && e.kind !== "codex-hook-missing", // 상태형 경보는 실제 복구로만 해소
       );
       if (!unacked.length) return; // 이미 확인됨/없음(다른 데서 ack) → 무동작
       const ok = ackIntegrity(unacked.map((e) => e.id));
@@ -4588,7 +5357,7 @@ export function activate(context: vscode.ExtensionContext): void {
       try { render(); } catch (e) { console.warn("codex-bridge: status render failed", e); }
       dashboard.post();
     }),
-    { dispose: () => { watchers.forEach((w) => w.close()); if (debounce) clearTimeout(debounce); if (pulseTimer) clearInterval(pulseTimer); } },
+    { dispose: () => { watchers.forEach((w) => w.close()); if (debounce) clearTimeout(debounce); if (pulseTimer) clearInterval(pulseTimer); clearInterval(settingsPoll); } },
   );
 
   render();

@@ -57,6 +57,12 @@ process.stdin.on("end", () => {
     }
   } catch { /* best-effort — 훅 동작 막지 않음 */ }
 
+  // 이 언어·프로젝트 슬롯이 Codex↔Codex 운용이면 Claude 훅은 역할을 빼앗지 않는다. active 경로 기록은
+  // 대시보드 폴더 추적 호환을 위해 위에서 유지하되, 규칙·검증·3트랙 실행 주체는 Codex 훅으로 넘긴다.
+  let contract;
+  try { contract = loadContract(ws); } catch { contract = null; }
+  if (contract && contract.harnessMode === "codex-codex") process.exit(0);
+
   // 라이브 진행: 턴 시작 = 'Claude 작업중' + 라운드 0 리셋(이 턴의 ask 횟수는 codex-bridge가 증가시킴).
   try {
     writePhase("claude-working", {
@@ -68,7 +74,7 @@ process.stdin.on("end", () => {
 
   let parts = [];
   try {
-    const c = loadContract(ws);
+    const c = contract || loadContract(ws);
     // 사용자 계약 주입 게이트: off=안 함 / plan=플랜 모드(permission_mode==="plan")일 때만 / always=매 턴.
     // (검증모드 directive는 이 게이트와 무관한 별도 축.)
     const planActive = hook.permission_mode === "plan";

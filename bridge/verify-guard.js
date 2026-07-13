@@ -8,7 +8,7 @@ const fs = require("fs");
 const path = require("path");
 const cp = require("child_process");
 const crypto = require("crypto");
-const { loadContract, BRIDGE, BRIDGE_DIR, atomicWrite, appendIntegrityEvent, writePhase, maybeCleanupState, loadLang } = require("./contract-lib.js");
+const { loadContract, BRIDGE, BRIDGE_DIR, atomicWrite, appendIntegrityEvent, writePhase, maybeCleanupState, loadLang, verifyTimeoutMin } = require("./contract-lib.js");
 try { maybeCleanupState(); } catch { /* 오래된 상태파일 정리는 best-effort — 검증 흐름 방해 금지 */ } // 매 턴 끝(Stop 훅)에 들르되 실제 청소는 하루 1회
 const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs");
 const ATTEMPTS_DIR = path.join(BRIDGE_DIR, "verify-attempts"); // V4: 한 턴 재검증 강제 횟수(무한정지 방지 바운드)
@@ -153,6 +153,7 @@ process.stdin.on("end", () => {
   } catch {
     process.exit(0);
   }
+  if (c.harnessMode === "codex-codex") process.exit(0); // 실행 주체는 Codex Stop 훅. Claude 훅 중복 개입 금지.
   if (c.verifyMode === "off") {
     // 검증 모드 off라도 진행 phase는 정리해야 'Claude 작업중'이 다음 턴/15분까지 잔존하지 않음(라이브 오표시 방지).
     try { writePhase("done", { session: process.env.CLAUDE_CODE_SESSION_ID || j.session_id || "", workspace: ws }); } catch { /* best-effort */ }
@@ -280,6 +281,7 @@ process.stdin.on("end", () => {
   }
   const shown = n === null ? "?" : n;
   const en = loadLang() === "en"; // 차단 사유는 Claude(모델)가 읽는 지시문 — 전역 언어를 따른다
+  const waitMin = verifyTimeoutMin(); // 대시보드 전역값 정본 — Claude↔Codex와 Codex↔Codex가 같은 deadline 사용
   const what = en
     ? (planned && !editedReal ? "You confirmed a plan, but" : editedReal ? "You modified files, but" : "In this turn,")
     : (planned && !editedReal ? "플랜을 확정했는데" : editedReal ? "파일을 변경했는데" : "이번 턴에");
@@ -288,11 +290,13 @@ process.stdin.on("end", () => {
       decision: "block",
       reason: en
         ? `[Verify mode:${c.verifyMode} · attempt ${shown}/${MAX_ATTEMPTS}] ${what} there is no successful Codex verification response this turn. ` +
-          `Do not finish — get Codex verification NOW via \`node "${BRIDGE}" ask "<what to verify>"\` ` +
-          `(an empty command, a failure, or no link does not count — an actual response must come back). ` +
+          `Do not finish — start exactly one durable verification via \`node "${BRIDGE}" ask-start --allow-new "<what to verify>"\`, then repeat \`node "${BRIDGE}" ask-wait <job-id>\` while pending. ` +
+          `The dashboard verification wait (${waitMin} min) is the actual deadline; never start a second job. (A linked verifier is resumed and a new session is created only when none is linked.) ` +
+          `(An empty command, a failure, or no link does not count — an actual response must come back). ` +
           `Report the result (pass/fail + evidence) to the user, then finish. (If there is no link and only a report is possible, report that fact. After ${MAX_ATTEMPTS} attempts, finishing is allowed.)`
         : `[검증 모드:${c.verifyMode} · ${shown}/${MAX_ATTEMPTS}회] ${what} 이번 턴에 Codex 검증의 '성공 응답'이 없다. ` +
-          `종료하지 말고 지금 \`node "${BRIDGE}" ask "<무엇을 검증할지>"\` 로 Codex 검증을 받아라 ` +
+          `종료하지 말고 지금 \`node "${BRIDGE}" ask-start --allow-new "<무엇을 검증할지>"\` 로 내구 검증을 정확히 1개 시작하고, pending이면 \`node "${BRIDGE}" ask-wait <job-id>\` 를 반복하라. ` +
+          `대시보드 검증 대기시간(${waitMin}분)이 실제 deadline이며 두 번째 job은 만들지 마라. (연결된 검증 세션은 이어가고 연결이 전혀 없을 때만 새 세션을 만든다.) ` +
           `(빈 명령·실패·미연결은 인정되지 않는다 — 실제 응답이 와야 검증으로 친다). ` +
           `그 결과(통과/실패+근거)를 사용자에게 보고한 뒤 종료하라. (연결이 없어 보고만 된다면 그 사실을 보고하라. ${MAX_ATTEMPTS}회 후엔 종료가 허용된다)`,
     }),

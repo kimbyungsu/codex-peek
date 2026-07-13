@@ -33,7 +33,8 @@ const readSlice = (f, s, e) => {
 const isInjected = (t) => t.startsWith("[검증 기본 원칙");
 const normWs = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
 const msgLine = (role, text) => JSON.stringify({ type: "response_item", payload: { type: "message", role, content: [{ type: "input_text", text }] } });
-const turnLine = (cwd, model, effort, ts) => JSON.stringify({ timestamp: ts, type: "turn_context", payload: { cwd, model, effort } });
+const turnLine = (cwd, model, effort, ts, turnId="turn-"+ts) => JSON.stringify({ timestamp: ts, type: "turn_context", payload: { cwd, model, effort, turn_id:turnId } });
+const settingsLine = (cwd, model, effort, ts) => JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "thread_settings_applied", thread_settings: { cwd, model, reasoning_effort: effort, collaboration_mode:{settings:{model,reasoning_effort:effort}} } } });
 const mk = RS.makeRolloutAcc(isInjected, normWs);
 const run = (prev, maxChunk) => RS.catchUp(F, prev, mk.init, mk.merge, statInfo, readSlice, maxChunk);
 // mtime 해상도(파일시스템에 따라 ms 이하 절사)가 같은 틱의 재작성을 가리지 않도록 명시적으로 밀어준다
@@ -41,9 +42,10 @@ const bumpMtime = () => { const t = new Date(Date.now() + 2000); fs.utimesSync(F
 
 console.log("[1] 증분=전량 동치 — 여러 바이트 문자(한국어)가 조각 경계에 걸려도 무부패(대화+메타 통합 스캔)");
 const lines = [
-  JSON.stringify({ type: "session_meta", payload: { id: "s1" } }),
+  JSON.stringify({ type: "session_meta", payload: { id: "s1", source: "vscode", thread_source: "user" } }),
   msgLine("user", "[검증 기본 원칙 …] 주입 머리말"),               // isInjected → 제외
   turnLine("D:\\proj\\A", "gpt-5.5", "xhigh", "2026-07-10T01:00:00Z"),
+  settingsLine("D:\\proj\\A", "gpt-5.6-sol", "high", "2026-07-10T01:30:00Z"), // 피커 선택 — 실제 turn_context와 분리
   msgLine("user", "첫 실제 요청 — 한국어 다국어 경계 테스트 문장입니다"),
   msgLine("assistant", "답변 한 줄 — 정상 판정과 근거를 담은 문장"),
   turnLine("D:\\proj\\B", "gpt-5.5-mini", "medium", "2026-07-10T02:00:00Z"), // 다른 cwd — byCwd로 분리
@@ -51,14 +53,19 @@ const lines = [
 ];
 fs.writeFileSync(F, lines.join("\n") + "\n");
 const whole = run(undefined, undefined).acc;
-const snap = (a) => JSON.stringify({ m: a.msgs, u: a.userTurns, mo: [...a.models].sort(), c: [...a.byCwd.entries()].sort(), l: a.last });
+const snap = (a) => JSON.stringify({ m: a.msgs, u: a.userTurns, mo: [...a.models].sort(), c: [...a.byCwd.entries()].sort(), l: a.last, sc:[...a.selectedByCwd.entries()].sort(), sl:a.selectedLast, tc:[...a.turnByCwd.entries()].sort(), tl:a.lastTurn, pc:[...a.promptByCwd.entries()].sort(), lp:a.lastPrompt, src:a.sessionSource, th:a.threadSource });
 for (const chunk of [7, 16, 33, 64]) {           // 홀수 포함 — UTF-8 경계가 반드시 문자 중간에 떨어지게
   const st = run(undefined, chunk);
   ok(snap(st.acc) === snap(whole), `조각 ${chunk}B 결과 = 전량 결과(대화 ${st.acc.msgs.length}건·메타 동일)`);
 }
 ok(whole.msgs.length === 3 && whole.msgs[0].text.startsWith("첫 실제 요청"), "주입 머리말 제외·순서 보존(기존 파서와 동일 규칙)");
 ok(whole.byCwd.get(normWs("D:\\proj\\A")).model === "gpt-5.5" && whole.byCwd.get(normWs("D:\\proj\\A")).ts === "2026-07-10T01:00:00Z", "byCwd — 이 폴더(cwd) turn만의 마지막 값(형제 폴더 값 안 샘)");
-ok(whole.last.model === "gpt-5.5-mini" && [...whole.models].sort().join(",") === "gpt-5.5,gpt-5.5-mini", "last=필터 없는 마지막 값·models=전체 수집(knownModels 표시용)");
+ok(whole.turnByCwd.get(normWs("D:\\proj\\B")).turnId === "turn-2026-07-10T02:00:00Z", "turn_context turn_id를 cwd별 hook 생존 대조 신호로 보존");
+ok(whole.promptByCwd.get(normWs("D:\\proj\\A")).turnId === "turn-2026-07-10T01:00:00Z" && whole.promptByCwd.get(normWs("D:\\proj\\A")).model === "gpt-5.5", "비주입 사용자 프롬프트를 직전 turn_context의 프로젝트·모델에 귀속");
+ok(whole.sessionSource === "vscode" && whole.threadSource === "user", "session_meta 출처를 보존해 앱 사용자 대화만 자동고정 가능");
+ok(whole.selectedByCwd.get(normWs("D:\\proj\\A")).model === "gpt-5.6-sol" && whole.selectedLast.effort === "high", "thread_settings_applied — 프롬프트 전 모델·추론 피커 현재값을 즉시 별도 보존");
+ok(whole.byCwd.get(normWs("D:\\proj\\A")).model === "gpt-5.5", "피커 선택값이 실제 답(turn_context) 표시를 덮지 않음");
+ok(whole.last.model === "gpt-5.5-mini" && [...whole.models].sort().join(",") === "gpt-5.5,gpt-5.5-mini,gpt-5.6-sol", "last=필터 없는 마지막 실제값·models=실제+선택 전체 수집(knownModels 표시용)");
 
 console.log("[2] 성장 증분 — 두 번째 호출은 '자란 바이트+정체성 표본(≤320B)'만 읽음");
 let st1 = run(undefined, undefined);

@@ -1,0 +1,24 @@
+{
+  "name": "codex-peek",
+  "version": "0.1.86",
+  "description": "Project-scoped Claude-Codex and Codex-Codex implementation/verification harness hooks.",
+  "author": {
+    "name": "kimbyungsu",
+    "url": "https://github.com/kimbyungsu"
+  },
+  "homepage": "https://github.com/kimbyungsu/codex-peek",
+  "repository": "https://github.com/kimbyungsu/codex-peek",
+  "license": "MIT",
+  "keywords": ["codex", "verification", "hooks", "harness"],
+  "interface": {
+    "displayName": "Codex Peek",
+    "shortDescription": "Project-scoped implementation and verification harness hooks",
+    "longDescription": "Adds Codex lifecycle hooks for Codex-Codex implementation and verification while preserving project, language, and shared 3-track boundaries.",
+    "developerName": "kimbyungsu",
+    "category": "Developer Tools",
+    "capabilities": ["Hooks", "Verification"],
+    "defaultPrompt": [
+      "Use the project-selected Codex Peek implementation and verification mode."
+    ]
+  }
+}

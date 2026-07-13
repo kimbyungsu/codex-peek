@@ -5,6 +5,7 @@
 const os = require("os"), path = require("path"), fs = require("fs");
 const hs = require(path.join(__dirname, "..", "out", "hook-setup.js"));
 const un = require(path.join(__dirname, "..", "out", "uninstall.js"));
+const pi = require(path.join(__dirname, "..", "bridge", "codex-plugin-install.js"));
 let pass = 0, fail = 0;
 function ok(c, m) { if (c) { pass++; console.log("  ✅ " + m); } else { fail++; console.log("  ❌ " + m); } }
 const mk = () => fs.mkdtempSync(path.join(os.tmpdir(), "uni_"));
@@ -73,6 +74,46 @@ ok(!res.hooksRemoved && !res.bridgeRemoved, "훅 정리 실패 → 브릿지 삭
 ok(fs.existsSync(path.join(BR3, "codex-bridge.js")) && fs.existsSync(path.join(BR3, ".bridge-deployed-by.json")), "브릿지 스크립트+stamp 보존(설정의 훅이 계속 동작)");
 ok(fs.existsSync(path.join(BR3, "hooks-installed-by-extension")), "훅 표식도 보존(재설치 시 재관리)");
 ok(fs.readFileSync(path.join(CL3, "settings.json"), "utf8") === "{broken", "깨진 설정은 안 건드림");
+
+console.log("[doUninstall] Codex 홈 변경 — 표식에 기록된 모든 hooks.json 정리");
+dir = mk();
+const BR4=path.join(dir,"bridge"),CL4=path.join(dir,"claude"),HOME_A=path.join(dir,"codex-a"),HOME_B=path.join(dir,"codex-b"),HOME_NOW=path.join(dir,"codex-now");
+fs.mkdirSync(BR4,{recursive:true});fs.mkdirSync(CL4,{recursive:true});
+const codexFlag=path.join(BR4,"codex-hooks-installed-by-extension");
+fs.writeFileSync(path.join(BR4,"codex-hook.js"),"// runtime","utf8");
+pi.installCodexPeekOwnedUserHooks(path.join(HOME_A,"hooks.json"),BR4,"node",codexFlag);
+pi.installCodexPeekOwnedUserHooks(path.join(HOME_B,"hooks.json"),BR4,"node",codexFlag);
+for(const f of hs.BRIDGE_SCRIPTS)fs.writeFileSync(path.join(BR4,f),"//x","utf8");
+fs.writeFileSync(path.join(BR4,".bridge-deployed-by.json"),'{"version":"x"}',"utf8");
+res=un.doUninstall(BR4,CL4,HOME_NOW);
+ok(res.codexHooksRemoved&&res.bridgeRemoved,"현재 홈과 달라도 기록된 Codex 훅과 브릿지 정리");
+ok(pi.detectCodexPeekUserHooks(path.join(HOME_A,"hooks.json"),BR4).missing.length===4&&pi.detectCodexPeekUserHooks(path.join(HOME_B,"hooks.json"),BR4).missing.length===4,"옛·새 Codex 홈 양쪽에서 우리 훅 제거");
+ok(!fs.existsSync(codexFlag),"모든 훅 제거 확인 뒤 Codex 소유 표식 제거");
+
+console.log("[doUninstall] Codex 소유 표식 손상 — 런타임 보존");
+dir=mk();const BR5=path.join(dir,"bridge"),CL5=path.join(dir,"claude");fs.mkdirSync(BR5,{recursive:true});fs.mkdirSync(CL5,{recursive:true});
+fs.writeFileSync(path.join(BR5,"codex-hooks-installed-by-extension"),"timestamp-only","utf8");for(const f of hs.BRIDGE_SCRIPTS)fs.writeFileSync(path.join(BR5,f),"//x","utf8");fs.writeFileSync(path.join(BR5,".bridge-deployed-by.json"),'{"version":"x"}',"utf8");
+res=un.doUninstall(BR5,CL5);
+ok(!res.codexHooksRemoved&&!res.bridgeRemoved,"손상된 표식은 실패로 닫고 브릿지를 남김");
+ok(fs.existsSync(path.join(BR5,"codex-hook.js"))&&fs.existsSync(path.join(BR5,"codex-hooks-installed-by-extension")),"실행 대상과 재관리 표식 보존");
+
+console.log("[doUninstall] 기록된 hooks.json이 이미 없으면 잔존 없음 확인 후 정리");
+dir=mk();const BR6=path.join(dir,"bridge"),CL6=path.join(dir,"claude"),HOME6=path.join(dir,"codex");fs.mkdirSync(BR6,{recursive:true});fs.mkdirSync(CL6,{recursive:true});const flag6=path.join(BR6,"codex-hooks-installed-by-extension");fs.writeFileSync(path.join(BR6,"codex-hook.js"),"// runtime","utf8");pi.installCodexPeekOwnedUserHooks(path.join(HOME6,"hooks.json"),BR6,"node",flag6);fs.unlinkSync(path.join(HOME6,"hooks.json"));for(const f of hs.BRIDGE_SCRIPTS)fs.writeFileSync(path.join(BR6,f),"//x","utf8");fs.writeFileSync(path.join(BR6,".bridge-deployed-by.json"),'{"version":"x"}',"utf8");
+res=un.doUninstall(BR6,CL6);
+ok(res.codexHooksRemoved&&res.bridgeRemoved,"removed 0이어도 실제 잔존 훅이 없을 때만 정리 성공");
+
+console.log("[doUninstall] 실제 제거와 후발 설치 경합 — 같은 owner lock 경계");
+dir=mk();const BR7=path.join(dir,"bridge"),CL7=path.join(dir,"claude"),HOME7=path.join(dir,"codex"),LATE7=path.join(dir,"late-codex","hooks.json");fs.mkdirSync(BR7,{recursive:true});fs.mkdirSync(CL7,{recursive:true});for(const f of hs.BRIDGE_SCRIPTS)fs.writeFileSync(path.join(BR7,f),"//x","utf8");fs.writeFileSync(path.join(BR7,".bridge-deployed-by.json"),'{"version":"x"}',"utf8");const flag7=path.join(BR7,"codex-hooks-installed-by-extension");pi.installCodexPeekOwnedUserHooks(path.join(HOME7,"hooks.json"),BR7,"node",flag7);
+const worker7=path.join(dir,"race-worker.js"),entered7=path.join(dir,"uninstall-entered"),release7=path.join(dir,"release"),attempt7=path.join(dir,"install-attempted"),doneUn7=path.join(dir,"uninstall-done"),doneIn7=path.join(dir,"install-done");
+fs.writeFileSync(worker7,`
+const fs=require("fs"),un=require(${JSON.stringify(path.join(__dirname,"..","out","uninstall.js"))}),pi=require(${JSON.stringify(path.join(__dirname,"..","bridge","codex-plugin-install.js"))});
+const [mode,br,cl,hook,entered,release,done]=process.argv.slice(2);let r;
+if(mode==="uninstall")r=un.doUninstall(br,cl,undefined,{onCodexOwnerLock(){fs.writeFileSync(entered,"1");while(!fs.existsSync(release))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);}});
+else{fs.writeFileSync(entered,"attempted");r=pi.installCodexPeekOwnedUserHooks(hook,br,"node",require("path").join(br,"codex-hooks-installed-by-extension"));}
+fs.writeFileSync(done,JSON.stringify(r));
+`);
+const waitForFile=(f,ms=10000)=>{const end=Date.now()+ms;while(Date.now()<end&&!fs.existsSync(f))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);return fs.existsSync(f);};
+require("child_process").spawn(process.execPath,[worker7,"uninstall",BR7,CL7,"-",entered7,release7,doneUn7],{stdio:"ignore"});ok(waitForFile(entered7),"실제 doUninstall이 owner lock 안에 진입");require("child_process").spawn(process.execPath,[worker7,"install",BR7,CL7,LATE7,attempt7,"-",doneIn7],{stdio:"ignore"});ok(waitForFile(attempt7),"후발 설치가 같은 lock을 시도");Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,120);ok(!fs.existsSync(doneIn7),"제거가 lock을 쥔 동안 후발 설치 완료 불가");fs.writeFileSync(release7,"1");ok(waitForFile(doneUn7)&&waitForFile(doneIn7),"제거 완료 후 후발 설치가 순서대로 종료");const actualUn=JSON.parse(fs.readFileSync(doneUn7)),actualIn=JSON.parse(fs.readFileSync(doneIn7));ok(actualUn.codexHooksRemoved&&actualUn.bridgeRemoved,"실제 uninstall이 훅 잔존 확인 후 runtime 삭제");ok(actualIn.ok===false&&!fs.existsSync(LATE7),"후발 설치는 runtime 부재로 거부되어 dangling hook 없음");
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

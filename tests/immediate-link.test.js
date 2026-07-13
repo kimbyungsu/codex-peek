@@ -10,9 +10,9 @@ process.env.CODEX_HOME = tmp; // SESSIONS_DIR = tmp/sessions (require 전에 설
 const { newestRolloutSinceForWs } = require("../bridge/codex-bridge.js");
 
 const BASE = 1700000000000; // 2023 — epoch 근처 mtime FS 엣지 회피
-function mkRollout(uuid, cwd, mtimeMs) {
+function mkRollout(uuid, cwd, mtimeMs, filler = "") {
   const f = path.join(sessions, `rollout-2026-06-28T00-00-00-${uuid}.jsonl`);
-  fs.writeFileSync(f, JSON.stringify({ type: "session_meta", payload: { cwd, id: uuid, timestamp: "t" } }) + "\n" +
+  fs.writeFileSync(f, JSON.stringify({ type: "session_meta", payload: { cwd, id: uuid, timestamp: "t", base_instructions: filler } }) + "\n" +
     JSON.stringify({ type: "turn_context", payload: {} }) + "\n");
   fs.utimesSync(f, mtimeMs / 1000, mtimeMs / 1000);
   return f;
@@ -21,6 +21,7 @@ const WS = "D:\\proj\\alpha", OTHER = "D:\\proj\\beta";
 mkRollout("11111111-1111-1111-1111-111111111111", WS, BASE + 2000);    // 같은 cwd, 오래됨
 mkRollout("22222222-2222-2222-2222-222222222222", WS, BASE + 5000);    // 같은 cwd, 최신 ← 정답
 mkRollout("33333333-3333-3333-3333-333333333333", OTHER, BASE + 9000); // 다른 cwd, 더 최신(무시돼야)
+mkRollout("55555555-5555-5555-5555-555555555555", WS, BASE + 7000, "x".repeat(20000)); // 현재 Codex처럼 첫 줄>8KB ← 정답
 // cwd 없는(깨진 메타) 파일도 무시돼야
 const broken = path.join(sessions, "rollout-2026-06-28T00-00-00-44444444-4444-4444-4444-444444444444.jsonl");
 fs.writeFileSync(broken, "not-json\n"); fs.utimesSync(broken, (BASE + 9999) / 1000, (BASE + 9999) / 1000);
@@ -28,11 +29,11 @@ fs.writeFileSync(broken, "not-json\n"); fs.utimesSync(broken, (BASE + 9999) / 10
 let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
 
 const r = newestRolloutSinceForWs(BASE + 1000, WS);
-ok(r && r.includes("22222222"), "cwd 일치 중 최신을 고름 (다른 cwd의 더 최신·깨진 메타는 무시)");
+ok(r && r.includes("55555555"), "cwd 일치 중 최신을 고름 (첫 줄>8KB도 완전 판독·다른 cwd의 더 최신은 무시)");
 ok(newestRolloutSinceForWs(BASE + 1000, "D:\\proj\\gamma") === null, "일치 cwd 없으면 null");
 ok(newestRolloutSinceForWs(BASE + 99999, WS) === null, "since 이후 없으면 null (오래된 것 안 집음)");
 ok(newestRolloutSinceForWs(BASE + 1000, "") === null, "빈 ws → null (엉뚱 링크 방지)");
 // 대소문자/슬래시 정규화(normWs)로 같은 폴더 인식
-ok((newestRolloutSinceForWs(BASE + 1000, "d:\\proj\\alpha") || "").includes("22222222"), "normWs로 대소문자 차이도 같은 cwd로 인식");
+ok((newestRolloutSinceForWs(BASE + 1000, "d:\\proj\\alpha") || "").includes("55555555"), "normWs로 대소문자 차이도 같은 cwd로 인식");
 
 console.log("immediate-link: " + n + " assertions passed");

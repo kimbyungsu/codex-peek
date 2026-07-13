@@ -85,6 +85,28 @@ function clean(sb) { try { fs.rmSync(sb.dir, { recursive: true, force: true }); 
   clean(sb);
 })();
 
+// 2b) 기본(Claude↔Codex) 모드의 두 진입점이 대시보드 임의값과 같은 내구 job 경로를 지시한다.
+(function () {
+  console.log("[2b] Claude↔Codex 검증 대기시간 — UserPrompt/Stop 모두 실제 deadline 경로 공유");
+  const sb = setup("claude_timeout", "always");
+  fs.writeFileSync(path.join(sb.bridgeDir,"links.json"),JSON.stringify({settings:{verifyTimeoutMin:23},byWorkspace:{},bySession:{}}));
+  putTx(sb, [human(T0, sb.session), tool(TWRITE, sb.session, "Write")]);
+  const rr=runGuard(sb), parsed=JSON.parse(rr.stdout.trim()), reason=String(parsed.reason||"");
+  ok(parsed.decision==="block", "기본 harnessMode(Claude↔Codex) Stop 훅 차단");
+  ok(/ask-start --allow-new/.test(reason)&&/ask-wait <job-id>/.test(reason), "Claude Stop도 ask-start 1회 + 같은 ask-wait 반복");
+  ok(/검증 대기시간\(23분\).*실제 deadline/.test(reason), "Claude Stop 문구에 사용자 23분 실제 deadline 표시");
+  ok(!/codex-bridge\.js[^`]* ask "</.test(reason), "옛 직접 ask 지시 제거");
+  const inject=path.join(__dirname,"..","bridge","contract-inject.js");
+  const ir=cp.spawnSync(process.execPath,[inject],{input:JSON.stringify({cwd:sb.ws,session_id:sb.session,permission_mode:"default"}),encoding:"utf8",env:{...process.env,CODEX_BRIDGE_HOME:sb.bridgeDir,CLAUDE_PROJECT_DIR:sb.ws,CLAUDE_CODE_SESSION_ID:sb.session}});
+  const ictx=JSON.parse(ir.stdout.trim()).hookSpecificOutput.additionalContext;
+  ok(/ask-start/.test(ictx)&&/ask-wait/.test(ictx)&&/검증 대기시간\(23분\)/.test(ictx), "Claude UserPrompt 주입도 같은 23분 내구 경로");
+  const koContract=contractFileForIn(sb.bridgeDir,sb.ws);fs.writeFileSync(koContract.replace(/\.json$/,".en.json"),JSON.stringify({verifyMode:"always"}));
+  fs.writeFileSync(path.join(sb.bridgeDir,"language.json"),JSON.stringify({lang:"en"}));
+  const er=JSON.parse(runGuard(sb).stdout.trim()).reason;
+  ok(/verification wait \(23 min\).*actual deadline/.test(er)&&/ask-start/.test(er)&&/ask-wait/.test(er), "영문 Claude Stop도 같은 23분 deadline");
+  clean(sb);
+})();
+
 // 3) always + 수정 + 신선한 성공 proof → 통과
 (function () {
   console.log("[3] always + 신선한 성공 proof");

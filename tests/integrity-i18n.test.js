@@ -35,6 +35,8 @@ ok(/설정한 모델은 'opus'/.test(L(bdc, false)), "cc-model sig → KO 재생
 const bdx = { kind: "brain-drift", severity: "warning", sig: "cx-effort:high!medium", detail: "옛 한국어" };
 ok(/configured reasoning is 'high'/.test(L(bdx, true)), "cx-effort sig → EN 재생성");
 ok(/Codex: configured model is 'gpt-5.5'/.test(L({ kind: "brain-drift", sig: "cx-model:gpt-5.5!gpt-5", detail: "x" }, true)), "cx-model sig → EN 재생성");
+ok(/Implementer Codex: the model at automatic pinning was 'gpt-5.6'/.test(L({ kind: "brain-drift", sig: "ci-model:gpt-5.6!gpt-5.7", detail: "x" }, true)), "ci-model sig → 구현 Codex EN 재생성");
+ok(/자동 고정 당시 생각강도는 'high'/.test(L({ kind: "brain-drift", sig: "ci-effort:high!xhigh", detail: "x" }, false)), "ci-effort sig → 구현 Codex KO 재생성");
 
 console.log("[② 과거 이벤트 — verify-incomplete] 저장 원문에서 모드·횟수를 되읽어 반대 언어 재생성(Codex 보완)");
 const viKo = { kind: "verify-incomplete", severity: "error", detail: "검증 모드:always — 3회 강제했으나 검증이 완료되지 않은 채 이 턴이 종료됨(이 턴 결과는 미검증)." };

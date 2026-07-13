@@ -51,7 +51,7 @@ function cleanup(sb) { try { fs.rmSync(sb.dir, { recursive: true, force: true })
   const sb = freshSandbox("fresh");
   const r = run(sb, []);
   ok(r.status === 0, "종료코드 0");
-  for (const f of ["contract-lib.js", "codex-bridge.js", "contract-inject.js", "verify-guard.js", "codex-guard.js"])
+  for (const f of ["contract-lib.js", "codex-bridge.js", "ask-job-worker.js", "codex-hook.js", "contract-inject.js", "verify-guard.js", "codex-guard.js"])
     ok(fs.existsSync(path.join(sb.bridgeDir, f)), "브릿지 파일 복사: " + f);
   ok(fs.existsSync(sb.settings), "settings.json 생성됨");
   const s = readJson(sb.settings);

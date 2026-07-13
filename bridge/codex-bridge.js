@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, verifyTimeoutMin, readCodexActive, withRoleLock } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -37,7 +37,9 @@ function withContract(prompt, ws, lang, carrier) {
     // 넘겨, 작업 cwd가 외부 폴더로 흔들려도 사용자가 연 폴더에 건 계약이 일관 적용된다(인자 없으면 configWs()로 폴백).
     // (resolveLink/recordLink도 configWs 기준 — 세션은 작업 cwd가 아니라 이 대화의 연 폴더에 묶인다.)
     c = loadContract(ws || configWs(), lang);
-    inj = buildInjection(c.codex, "Codex", c.codexChecklist, lang);
+    const verifierRules = c.harnessMode === "codex-codex" ? c.codexVerifier : c.codex;
+    const verifierChecklist = c.harnessMode === "codex-codex" ? c.codexVerifierChecklist : c.codexChecklist;
+    inj = buildInjection(verifierRules, c.harnessMode === "codex-codex" ? "Codex Verifier" : "Codex", verifierChecklist, lang);
   } catch {
     inj = "";
   }
@@ -73,6 +75,8 @@ const CODEX_HOME = process.env.CODEX_HOME || readPinnedHome() || path.join(HOME,
 const SESSIONS_DIR = path.join(CODEX_HOME, "sessions");
 const INDEX_FILE = path.join(CODEX_HOME, "session_index.jsonl");
 const LINKS_FILE = path.join(BRIDGE_DIR, "links.json");
+const ASK_JOBS_DIR = path.join(BRIDGE_DIR, "ask-jobs");
+const ASK_JOB_WORKER = path.join(__dirname, "ask-job-worker.js");
 // 검증 증명 폴더 — 실제로 Codex가 성공 응답했을 때만 기록(아래 writeProof). verify-guard가 이걸 읽어
 // '명령 문자열을 쳤는가'가 아니라 '진짜 성공한 검증이 이번 턴에 있었는가'를 본다(V1: 흉내/실패/미연결 통과 차단).
 const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs");
@@ -84,6 +88,13 @@ function nowIso() {
 function claudeId() {
   return process.env.CLAUDE_CODE_SESSION_ID || "";
 }
+function implementerId(ws) {
+  if (claudeId()) return claudeId();
+  const env = process.env.CODEX_THREAD_ID || "";
+  if (env) return env;
+  const a = readCodexActive();
+  return a && (!ws || normWs(a.workspace || "") === normWs(ws)) ? (a.codexSession || "") : "";
+}
 // (구 workspace()=CLAUDE_PROJECT_DIR||cwd 제거: configWs(연 폴더, 설정 기준)와 process.cwd()(execCwd, 실행 기준)로 분리됨.)
 // 검증 증명 기록 — 실제로 Codex가 성공(exit 0·비어있지 않은 응답)했을 때만 호출한다(cmdAsk의 성공 분기들).
 // 한 Claude 세션당 1파일(최신 성공만 보존). verify-guard는 '이번 사용자 발화/변경 이후 ts + status/exit/answerChars'로 인정(workspace는 V1에서 게이트 제외 — 같은 세션 키로 격리).
@@ -91,10 +102,12 @@ function claudeId() {
 function writeProof(codexSession, answer, ws) {
   // claudeSession: env 우선, 없으면 active.json(contract-inject가 hook.session_id로 기록) 폴백 →
   // verify-guard의 reader 키(env‖j.session_id‖transcript)와 같은 대화 id로 수렴(환경별 env 결측 대비).
-  const cs = claudeId() || ((readActive() || {}).claudeSession) || "";
+  const c = loadContract(ws);
+  const cs = c.harnessMode === "codex-codex" ? implementerId(ws) : (claudeId() || ((readActive() || {}).claudeSession) || "");
   const proof = {
     v: 1,
-    claudeSession: cs,
+    claudeSession: c.harnessMode === "codex-codex" ? "" : cs,
+    implementerSession: c.harnessMode === "codex-codex" ? cs : "",
     workspace: ws || configWs(), // 라벨=연 폴더(인자 없으면 폴백). cmdAsk의 ws 스냅샷과 동일
     ts: nowIso(),
     codexSession: codexSession || "",
@@ -609,15 +622,40 @@ function updateLinks(mutate, retries = 4) {
 // 워크스페이스 링크를 우선한다(대시보드가 기록하는 것 = 사용자 명시 선택). bySession은 폴백.
 // 과거엔 bySession을 우선해서, 한 번 --allow-new로 만들어진 세션이 박히면 대시보드로 다시
 // 연결해도 안 먹고 엉뚱한 세션으로 검증이 가는 버그가 있었다 → 대시보드와 브릿지가 같은 기준을 보게 통일.
-function resolveLink(links) {
-  const ws = configWs(); // 링크 해석 기준 = 연 폴더(작업 cwd가 흔들려도 이 대화의 세션을 찾음)
-  const wsLink = lookupWorkspace(links, ws);
-  if (wsLink) return { ...wsLink, via: wsLink.via === "ui" ? tB("workspace·UI지정","workspace·UI-set") : "workspace" };
+function harnessModeFor(ws) {
+  try { return loadContract(ws).harnessMode === "codex-codex" ? "codex-codex" : "claude-codex"; }
+  catch { return "claude-codex"; }
+}
+// C↔C 검증자는 전용 override가 있을 때만 분리한다. 없으면 Claude↔Codex의 codexSession을
+// 실시간 상속한다(복사 아님). 따라서 Claude 모드 연결 변경을 자동으로 따라가며, override 삭제 시 즉시 복귀한다.
+function verifierLinkForMode(raw, mode) {
+  if (!raw) return null;
+  const dedicated = mode === "codex-codex" && !!raw.codexCodexSession;
+  const id = dedicated ? raw.codexCodexSession : raw.codexSession;
+  if (!id) return null;
+  return {
+    ...raw,
+    codexSession: id,
+    linkedAt: dedicated ? (raw.codexCodexLinkedAt || raw.linkedAt) : raw.linkedAt,
+    verifierSource: mode === "codex-codex" ? (dedicated ? "dedicated" : "shared") : "claude",
+  };
+}
+function resolveLink(links, wsArg, modeArg) {
+  const ws = wsArg || configWs(); // 링크 해석 기준 = 연 폴더(작업 cwd가 흔들려도 이 대화의 세션을 찾음)
+  const mode = modeArg || harnessModeFor(ws);
+  const wsLink = verifierLinkForMode(lookupWorkspace(links, ws), mode);
+  if (wsLink) {
+    const source = wsLink.verifierSource === "shared" ? tB("Claude 모드와 공유","shared with Claude mode")
+      : wsLink.verifierSource === "dedicated" ? tB("C↔C 전용","C↔C dedicated")
+      : wsLink.via === "ui" ? tB("workspace·UI지정","workspace·UI-set") : "workspace";
+    return { ...wsLink, via: source };
+  }
   // bySession 폴백은 '그 항목의 워크스페이스가 현재와 같을 때만'. 다른 워크스페이스의 stale 링크가
   // byWorkspace 미스 시 새어드는 교차오염(검증이 엉뚱한 세션으로 감)을 막는다. (Codex 검증 #4)
   const cid = claudeId();
   const sLink = cid ? links.bySession[cid] : null;
-  if (sLink && normWs(sLink.workspace || "") === normWs(ws)) return { ...sLink, via: tB("session(폴백)","session (fallback)") };
+  const resolvedSession = sLink && normWs(sLink.workspace || "") === normWs(ws) ? verifierLinkForMode(sLink, mode) : null;
+  if (resolvedSession) return { ...resolvedSession, via: tB("session(폴백)","session (fallback)") };
   return null;
 }
 // 연결 기록은 CAS 관문(updateLinks)을 통과 — ask 도중 확장/다른 프로세스가 links.json을 바꿔도
@@ -626,23 +664,45 @@ function recordLink(codexSession) {
   const wsNow = configWs(); // 링크 기록 기준 = 연 폴더(세션은 작업 cwd가 아니라 이 대화의 연 폴더에 묶인다)
   const claude = claudeId();
   const nk = normWs(wsNow);
-  const entry = { codexSession, workspace: wsNow, claudeSession: claude, linkedAt: nowIso() };
-  return updateLinks((links) => {
-    if (claude) links.bySession[claude] = entry;
+  return withRoleLock(() => updateLinks((links) => {
+    let previous = {};
+    for (const k of Object.keys(links.byWorkspace)) if (normWs(k) === nk) previous = links.byWorkspace[k] || {};
+    const mode = harnessModeFor(wsNow);
+    // verifier 연결만 바꾸며 구현 역할·모델 기준선 등 같은 프로젝트의 다른 필드는 보존한다.
+    // C↔C에서 새로 고른/생성한 verifier는 전용 override이고, 기본 상태는 codexSession 상속이다.
+    const entry = mode === "codex-codex"
+      ? { ...previous, codexCodexSession: codexSession, codexCodexLinkedAt: nowIso(), workspace: wsNow }
+      : { ...previous, codexSession, workspace: wsNow, claudeSession: claude, linkedAt: nowIso() };
+    if (entry.implementerSession === codexSession) throw new Error("implementer-verifier-session-conflict");
+    if (mode !== "codex-codex" && claude) links.bySession[claude] = entry;
     // 정규화 키로 저장 + 동일 워크스페이스의 옛 키(대소문자 다름 등) 정리.
     for (const k of Object.keys(links.byWorkspace)) {
       if (normWs(k) === nk) delete links.byWorkspace[k];
     }
     links.byWorkspace[nk] = entry;
     if (links.autoNewFailed) delete links.autoNewFailed[nk]; // 연결됨 → 폭증방지 플래그 해제(호출부 중복 제거)
-  });
+  }));
+}
+function clearStaleVerifier(staleId, wsNow) {
+  const mode = harnessModeFor(wsNow);
+  withRoleLock(()=>updateLinks((o)=>{
+    if(mode!=="codex-codex")for(const k of Object.keys(o.bySession||{}))if(o.bySession[k]&&o.bySession[k].codexSession===staleId&&normWs(o.bySession[k].workspace||"")===normWs(wsNow))delete o.bySession[k];
+    for(const k of Object.keys(o.byWorkspace||{}))if(normWs(k)===normWs(wsNow)){
+      const cur=o.byWorkspace[k]||{};
+      if(mode==="codex-codex"&&cur.codexCodexSession===staleId){delete cur.codexCodexSession;delete cur.codexCodexLinkedAt;o.byWorkspace[k]=cur;}
+      else if(mode!=="codex-codex"&&cur.codexSession===staleId){delete cur.codexSession;delete cur.linkedAt;o.byWorkspace[k]=cur;}
+    }
+  }));
+  return resolveLink(loadLinks(),wsNow,mode);
 }
 
 // ── 모델/생각강도 선택(프로젝트별) — links.json modelPrefs[normWs] = {model, reasoning} ──
 // 런타임 검증(2026-06-20): 모델/생각강도는 세션에 고정 저장되지 않고 '호출별'이라, 매 resume/새세션
 // 호출마다 -c로 다시 실어야 적용된다. 값은 TOML 파싱 실패 시 raw 문자열로 쓰여 따옴표 없이 model=gpt-5.5 안전.
-function modelPrefFor(links, ws) {
-  return (links.modelPrefs && links.modelPrefs[normWs(ws)]) || {};
+function modelPrefFor(links, ws, mode) {
+  const key = normWs(ws);
+  if (mode === "codex-codex" && links.codexCodexModelPrefs && links.codexCodexModelPrefs[key]) return links.codexCodexModelPrefs[key];
+  return (links.modelPrefs && links.modelPrefs[key]) || {};
 }
 function modelArgs(pref) {
   const a = [];
@@ -722,6 +782,28 @@ function newestRolloutSince(sinceMs) {
   return best?.full || null;
 }
 
+// session_meta 첫 줄은 base_instructions가 함께 들어가 수십 KB가 될 수 있다. 고정 8KB 한 번만 읽으면 JSON이
+// 중간에서 잘려 모든 최신 Codex 세션의 cwd 탐지가 실패하고, 새 세션이 답을 마칠 때까지 링크되지 않는다
+// (2026-07-12 실사고: 그 사이 두 번째 --allow-new가 별도 고아 세션 생성). 줄바꿈까지 chunk로 읽되 1MiB에서
+// 진단 실패로 닫는다 — 엉뚱 cwd 링크보다 미검출이 안전하다.
+function readFirstJsonLine(file, maxBytes = 1024 * 1024) {
+  let fd = null;
+  try {
+    fd = fs.openSync(file, "r");
+    const chunks = []; let total = 0;
+    while (total < maxBytes) {
+      const buf = Buffer.alloc(Math.min(8192, maxBytes - total));
+      const n = fs.readSync(fd, buf, 0, buf.length, total);
+      if (!n) break;
+      const part = buf.subarray(0, n); const nl = part.indexOf(10);
+      if (nl >= 0) { chunks.push(part.subarray(0, nl)); return JSON.parse(Buffer.concat(chunks).toString("utf8").replace(/\r$/, "")); }
+      chunks.push(part); total += n;
+    }
+    return null;
+  } catch { return null; }
+  finally { if (fd !== null) try { fs.closeSync(fd); } catch { /* ignore */ } }
+}
+
 // since 이후 rollout 중 '이 워크스페이스(session_meta.cwd 일치)'의 최신 → 즉시연결 시 동시 다른 폴더 세션을
 // 잘못 링크하지 않게 한다(race 방어). cwd를 못 읽는 rollout은 제외(엉뚱 링크보다 미검출이 안전 — 폴백이 받아줌).
 function newestRolloutSinceForWs(sinceMs, ws) {
@@ -739,16 +821,9 @@ function newestRolloutSinceForWs(sinceMs, ws) {
       let m;
       try { m = fs.statSync(full).mtimeMs; } catch { continue; }
       if (m < sinceMs || (best && m <= best.m)) continue;
-      let cwd = "";
-      try {
-        const fd = fs.openSync(full, "r");
-        const buf = Buffer.alloc(8192);
-        const n = fs.readSync(fd, buf, 0, 8192, 0);
-        fs.closeSync(fd);
-        const line = buf.toString("utf8", 0, n).split(/\r?\n/)[0];
-        const o = JSON.parse(line);
-        cwd = (o.payload && o.payload.cwd) || o.cwd || "";
-      } catch { continue; } // 첫 줄(session_meta) 못 읽으면 제외
+      const o = readFirstJsonLine(full);
+      const cwd = o && ((o.payload && o.payload.cwd) || o.cwd || "");
+      if (!cwd) continue; // 첫 줄(session_meta) 못 읽으면 제외
       if (normWs(cwd) === want) best = { full, m };
     }
   };
@@ -848,17 +923,10 @@ function indexedSessions() {
 }
 
 // codex exec 실행(헤드리스). stdin 닫음(멈춤 방지), 최종 메시지는 -o 파일에서 회수.
-// 검증(codex exec) 대기시간(분). 깊은 추론이 기본 8분을 넘는 경우가 있어 사용자가 늘릴 수 있게 한다.
-// 우선순위: 환경변수 CODEX_BRIDGE_VERIFY_TIMEOUT_MIN > links.json settings.verifyTimeoutMin > 기본 8.
-// 1~60분으로 제한 — 너무 짧으면 정상 검증을 실패 처리하고, 너무 길면 한 턴이 무한정 묶인다.
-function verifyTimeoutMin() {
-  const env = Number(process.env.CODEX_BRIDGE_VERIFY_TIMEOUT_MIN);
-  let min = Number.isFinite(env) && env > 0 ? env : NaN;
-  if (!Number.isFinite(min)) {
-    try { const s = (loadLinks() || {}).settings; const v = Number(s && s.verifyTimeoutMin); if (Number.isFinite(v) && v > 0) min = v; } catch { /* 기본값 */ }
-  }
-  if (!Number.isFinite(min)) min = 8;
-  return Math.max(1, Math.min(60, Math.round(min))); // 정수 분으로 통일(UI 보정과 일치 — 수동 편집의 소수도 반올림)
+function minimumCallerTimeoutMs() {
+  const configured=verifyTimeoutMin()*60*1000;
+  const deadline=Date.parse(process.env.CODEX_BRIDGE_VERIFY_DEADLINE_AT||"");
+  return Number.isFinite(deadline)?Math.max(1,Math.min(configured,deadline-Date.now())):configured;
 }
 function runCodex(extraArgs, prompt) {
   const inv = resolveCodex();
@@ -868,7 +936,7 @@ function runCodex(extraArgs, prompt) {
   const r = spawnSync(inv.file, codexArgs, {
     input: prompt,
     stdio: ["pipe", "ignore", "pipe"],
-    timeout: verifyTimeoutMin() * 60 * 1000,
+    timeout: minimumCallerTimeoutMs(),
     windowsHide: true,
     encoding: "utf8",
     shell: !!inv.shell,
@@ -903,18 +971,24 @@ function runCodex(extraArgs, prompt) {
 
 // 새 세션 전용 비동기 실행 — 답을 기다리는 동안 rollout이 생기는 '즉시' onDetect(sessionId)를 호출(생성 즉시 연결).
 // resume 경로는 기존 동기 runCodex 그대로(무위험). 반환 shape은 runCodex와 동일(+detected). cwd 일치 rollout만 조기 감지(race 방어).
-function runCodexNewSessionAsync(extraArgs, prompt, sinceMs, ws, onDetect) {
+function threadIdFromJsonLine(line){
+  try{const o=JSON.parse(line);const id=(o&&o.type==="thread.started"&&o.thread_id)||o.thread_id||o.session_id||"";const m=String(id).match(UUID_RE);return m?m[1]:"";}catch{return "";}
+}
+function runCodexNewSessionAsync(extraArgs, prompt, sinceMs, ws, onDetect, onSpawn) {
   const inv = resolveCodex();
   const outFile = path.join(os.tmpdir(), `codex_bridge_${process.pid}_${Date.now()}.txt`);
-  const codexArgs = [...inv.args, "exec", "--skip-git-repo-check", "-o", outFile, ...extraArgs];
+  // --json의 thread.started.thread_id를 1차 권위로 삼아 rollout 첫 줄/mtime 탐지 실패에도 생성 즉시 연결한다.
+  const codexArgs = [...inv.args, "exec", "--json", "--skip-git-repo-check", "-o", outFile, ...extraArgs];
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(inv.file, codexArgs, { stdio: ["pipe", "ignore", "pipe"], windowsHide: true, shell: !!inv.shell });
+      child = spawn(inv.file, codexArgs, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true, shell: !!inv.shell });
+      try { onSpawn && onSpawn(child.pid); } catch { /* parent pid 표식이 계속 방어 — 자식 pid 보강 실패는 비치명 */ }
     } catch (e) {
       return resolve({ answer: "", error: e, status: null, stderr: "", detected: null });
     }
     let stderr = "";
+    let jsonBuf = "";
     let detected = null;
     let timedOut = false;
     let done = false;
@@ -925,13 +999,16 @@ function runCodexNewSessionAsync(extraArgs, prompt, sinceMs, ws, onDetect) {
         if (mm) { detected = mm[1]; try { onDetect && onDetect(mm[1]); } catch { /* 다음 폴서 재시도 */ } } // onDetect 자체 멱등(연결 성공시만 멈춤) → recordLink 재시도 허용
       } catch { /* ignore */ }
     };
+    const detectJsonLine=(line)=>{const id=threadIdFromJsonLine(line);if(id){detected=id;try{onDetect&&onDetect(id);}catch{/* final fallback */}}};
+    if(child.stdout)child.stdout.on("data",(d)=>{jsonBuf+=d.toString();const lines=jsonBuf.split(/\r?\n/);jsonBuf=lines.pop()||"";for(const line of lines)if(line.trim())detectJsonLine(line);});
     if (child.stderr) child.stderr.on("data", (d) => { if (stderr.length < 4 * 1024 * 1024) stderr += d.toString(); });
     try { child.stdin.write(prompt); child.stdin.end(); } catch { /* ignore */ }
     const poll = setInterval(detect, 700);                                  // 답 도중 rollout 생기면 즉시 링크
-    const killer = setTimeout(() => { timedOut = true; try { child.kill(); } catch { /* ignore */ } }, verifyTimeoutMin() * 60 * 1000);
+    const killer = setTimeout(() => { timedOut = true; try { child.kill(); } catch { /* ignore */ } }, minimumCallerTimeoutMs());
     const finish = (status, err) => {
       if (done) return; done = true;
       clearInterval(poll); clearTimeout(killer);
+      if(jsonBuf.trim())detectJsonLine(jsonBuf);
       detect();                                                              // 마지막 한 번 더(폴링이 놓쳤을 수도)
       let answer = "";
       try { answer = fs.readFileSync(outFile, "utf8").trim(); } catch { /* ignore */ }
@@ -955,23 +1032,179 @@ function die(msg, code = 1) {
   process.exit(code);
 }
 
+const ASK_FLAGS = new Set(["--allow-new", "--force-new", "--net", "--force-resend"]);
+function askRequest(rest) {
+  const flags = (rest || []).filter((x) => ASK_FLAGS.has(x));
+  let prompt = (rest || []).filter((x) => !ASK_FLAGS.has(x) && x !== "--job-prompt").join(" ").trim();
+  // 내구 작업 worker 전용: 프롬프트를 프로세스 명령줄에 노출하지 않고 job JSON에서 읽는다.
+  if ((rest || []).includes("--job-prompt") && process.env.CODEX_BRIDGE_JOB_PROMPT_FILE) {
+    try { prompt = String(JSON.parse(fs.readFileSync(process.env.CODEX_BRIDGE_JOB_PROMPT_FILE, "utf8")).prompt || "").trim(); }
+    catch { prompt = ""; }
+  }
+  return { flags, prompt };
+}
+
+function askJobFile(id) {
+  const safe = String(id || "").replace(/[^a-zA-Z0-9_-]/g, "");
+  return safe ? path.join(ASK_JOBS_DIR, safe + ".json") : "";
+}
+function askJobPidFile(id){const f=askJobFile(id);return f?f.replace(/\.json$/,".pid"):"";}
+function readAskJob(id) {
+  const f = askJobFile(id);
+  if (!f) return null;
+  try { const o = JSON.parse(fs.readFileSync(f, "utf8")); return o && typeof o === "object" ? o : null; }
+  catch { return null; }
+}
+function pidAlive(pid) { try { if (!(Number.isInteger(pid) && pid > 0)) return false; process.kill(pid, 0); return true; } catch { return false; } }
+function askJobLockFile(ws) { return path.join(ASK_JOBS_DIR, ".lock-" + crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0,16)); }
+function withAskJobLock(ws, fn) {
+  fs.mkdirSync(ASK_JOBS_DIR, { recursive:true });
+  const file=askJobLockFile(ws), token=process.pid+"-"+crypto.randomBytes(4).toString("hex"); let locked=false;
+  for(let i=0;i<200&&!locked;i++){
+    try{fs.writeFileSync(file,token,{flag:"wx"});locked=true;}
+    catch{
+      // 죽은 보유자라도 자동 삭제하지 않는다. read→delete 사이 다른 프로세스가 새 잠금을 얻는 ABA 경합에서
+      // 그 새 잠금을 지워 이중 진입할 수 있기 때문이다. 짧은 잠금 잔재는 명시 진단 후 수동 복구가 안전하다.
+      try{Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);}catch{/* retry */}
+    }
+  }
+  if(!locked)die(tB("검증 작업 잠금 획득 실패 — 새 작업을 만들지 않았습니다.","Could not acquire the verification job lock — no job was created."),3);
+  try{return fn();}finally{try{if(fs.readFileSync(file,"utf8")===token)fs.unlinkSync(file);}catch{/* 무해 */}}
+}
+function activeAskJob(ws) {
+  let names = [];
+  try { names = fs.readdirSync(ASK_JOBS_DIR).filter((n) => n.endsWith(".json")); } catch { return null; }
+  const key = normWs(ws);
+  for (const n of names) {
+    try {
+      const j = JSON.parse(fs.readFileSync(path.join(ASK_JOBS_DIR, n), "utf8"));
+      if (normWs(j.workspace || "") !== key || !["queued", "running"].includes(j.state)) continue;
+      // queued는 workerPid가 기록되기 전의 짧은 창도 살아있는 작업으로 본다. 죽은 worker라도 자동 재전송하지 않고
+      // 사용자가 상태를 확인해 명시 clear하도록 보수 차단(ask-active의 abandoned 정책과 동일).
+      return j;
+    } catch { /* 깨진 타 작업은 건너뜀 */ }
+  }
+  return null;
+}
+
+function cmdAskStart(rest) {
+  const req = askRequest(rest);
+  if (!req.prompt) die('사용법: ask-start [--allow-new] "<프롬프트>"', 2);
+  const ws = configWs();
+  if (!fs.existsSync(ASK_JOB_WORKER)) die(tB("ask job worker가 없습니다. node install.js로 런타임을 다시 동기화하세요.", "Ask job worker is missing. Re-sync the runtime with node install.js."));
+  let id,timeoutMin,job,file;
+  // read-active/read-job/create-queued를 한 임계구역으로 묶는다. 동시 ask-start 둘이 모두 '없음'을 보고
+  // 서로 다른 worker를 만드는 검사-쓰기 경합을 원천 차단한다.
+  try { withAskJobLock(ws,()=>{
+    const active=readAskActive(ws);
+    if(active)throw Object.assign(new Error(tB("⚠️ 이미 검증이 진행 중이거나 확인 대기 중입니다. 새 작업을 만들지 않았습니다. ask-active status로 확인하세요.","⚠️ A verification is already running or awaiting review. No new job was created. Check ask-active status.")),{exitCode:3});
+    const old=activeAskJob(ws);
+    if(old)throw Object.assign(new Error(tB(`⚠️ 기존 검증 작업(${old.id})이 ${old.state} 상태입니다. 새 작업을 만들지 않았습니다. ask-wait ${old.id} 로 이어서 기다리세요.`,`⚠️ Verification job ${old.id} is ${old.state}. No new job was created. Continue with ask-wait ${old.id}.`)),{exitCode:3});
+    id="ask-"+Date.now().toString(36)+"-"+crypto.randomBytes(5).toString("hex");timeoutMin=verifyTimeoutMin();const now=Date.now();
+    job={schema:"ask-job-v1",id,state:"queued",workspace:ws,execCwd:process.cwd(),flags:req.flags,prompt:req.prompt,timeoutMin,createdAt:new Date(now).toISOString(),deadlineAt:new Date(now+timeoutMin*60*1000).toISOString(),workerPid:null,childPid:null,exitCode:null};
+    file=askJobFile(id);
+    if(!atomicWrite(file,JSON.stringify(job)))throw new Error(tB("검증 작업 저장 실패 — 새 검증을 시작하지 않았습니다.","Failed to save the verification job — no verification was started."));
+  }); } catch(e) { die(String(e&&e.message||e),Number(e&&e.exitCode)||1); }
+  try {
+    const child = spawn(process.execPath, [ASK_JOB_WORKER, file], {
+      cwd: process.cwd(), env: Object.assign({}, process.env, { CODEX_BRIDGE_VERIFY_TIMEOUT_MIN: String(timeoutMin) }),
+      detached: true, stdio: "ignore", windowsHide: true,
+    });
+    child.unref();
+    atomicWrite(askJobPidFile(id),String(child.pid)); // job JSON과 분리: worker의 running patch와 덮어쓰기 경합 없음
+    // worker가 자기 pid와 running 상태를 기록한다. 부모가 오래된 queued 스냅샷으로 되덮지 않는다.
+  } catch (e) {
+    atomicWrite(file, JSON.stringify(Object.assign({}, job, { state: "failed", finishedAt: new Date().toISOString(), error: String(e && e.message || e) })));
+    die(tB("검증 작업 worker 시작 실패: ", "Failed to start verification worker: ") + String(e && e.message || e));
+  }
+  process.stdout.write(JSON.stringify({ jobId: id, state: "queued", workspace: ws, verifyTimeoutMin: timeoutMin, deadlineAt: job.deadlineAt, next: `node "${__filename}" ask-wait ${id}` }, null, 2) + "\n");
+}
+
+function cmdAskWait(rest) {
+  const id = rest[0] || "";
+  let j = readAskJob(id);
+  if (!j) die(tB("검증 작업을 찾을 수 없습니다: ", "Verification job not found: ") + id, 2);
+  const sliceEnv = Number(process.env.CODEX_BRIDGE_JOB_WAIT_SLICE_MS);
+  const sliceMs = Number.isFinite(sliceEnv) && sliceEnv >= 0 ? Math.min(sliceEnv, 55000) : 45000;
+  const until = Date.now() + sliceMs;
+  while (["queued", "running"].includes(j.state) && Date.now() < until) {
+    try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500); } catch { /* 즉시 재조회 */ }
+    j = readAskJob(id) || j;
+  }
+  if (["succeeded", "failed"].includes(j.state)) {
+    const outFile = path.join(ASK_JOBS_DIR, id + ".out");
+    const errFile = path.join(ASK_JOBS_DIR, id + ".err");
+    let out = "", err = "";
+    try { out = fs.readFileSync(outFile, "utf8"); } catch { /* 빈 출력 */ }
+    try { err = fs.readFileSync(errFile, "utf8"); } catch { /* 빈 오류 */ }
+    if (out) process.stdout.write(out.endsWith("\n") ? out : out + "\n");
+    if (err) process.stderr.write(err.endsWith("\n") ? err : err + "\n");
+    if (j.state === "failed") process.exit(Number.isInteger(j.exitCode) && j.exitCode !== 0 ? j.exitCode : 1);
+    return;
+  }
+  const deadline = Date.parse(j.deadlineAt || "");
+  let spawnPid=0;try{spawnPid=parseInt(fs.readFileSync(askJobPidFile(id),"utf8"),10)||0;}catch{/* worker patch 전/옛 job */}
+  const effectivePid=j.workerPid||spawnPid,alive=pidAlive(effectivePid),remaining=Number.isFinite(deadline)?Math.max(0,deadline-Date.now()):null;
+  if((effectivePid&&!alive)||remaining===0){j={...j,state:"failed",workerPid:j.workerPid||spawnPid||null,exitCode:1,error:remaining===0?"verification deadline elapsed":"durable worker exited before recording a final state",finishedAt:new Date().toISOString()};atomicWrite(askJobFile(id),JSON.stringify(j));die(remaining===0?tB("검증 작업이 저장된 절대 deadline을 넘겨 실패했습니다.","The verification job exceeded its stored absolute deadline."):tB("검증 worker가 최종 상태 없이 종료됐습니다. 같은 작업을 재전송하지 말고 job/rollout을 확인하세요.","The verification worker exited without a final state. Do not resend; inspect the job/rollout."));}
+  process.stdout.write(JSON.stringify({ jobId: id, state: j.state, workerAlive: alive, childPid: j.childPid || null, verifyTimeoutMin: j.timeoutMin, remainingMs: remaining, next: `node "${__filename}" ask-wait ${id}` }, null, 2) + "\n");
+}
+
+function cmdAskJob(rest) {
+  const sub = rest[0] || "status";
+  const id = rest[1] || "";
+  if (sub === "status") {
+    if (id) { const j = readAskJob(id); if (!j) die(tB("검증 작업을 찾을 수 없습니다: ", "Verification job not found: ") + id, 2); process.stdout.write(JSON.stringify(Object.assign({}, j, { prompt: undefined, workerAlive: pidAlive(j.workerPid) }), null, 2) + "\n"); return; }
+    const a = activeAskJob(configWs()); process.stdout.write(a ? JSON.stringify(Object.assign({}, a, { prompt: undefined, workerAlive: pidAlive(a.workerPid) }), null, 2) + "\n" : tB("활성 검증 작업 없음\n", "No active verification job\n")); return;
+  }
+  if (sub === "clear" && id && rest.includes("--confirm")) {
+    const j = readAskJob(id); if (!j) return;
+    if (pidAlive(j.workerPid)) die(tB("worker가 살아 있어 지우지 않았습니다.", "Worker is still alive; job was not cleared."), 3);
+    for (const ext of [".json", ".out", ".err", ".pid"]) try { fs.unlinkSync(path.join(ASK_JOBS_DIR, id + ext)); } catch { /* 없음 */ }
+    process.stdout.write(tB("확인된 검증 작업 기록을 지웠습니다.\n", "Cleared the reviewed verification job record.\n")); return;
+  }
+  die(tB("사용법: ask-job status [id] | ask-job clear <id> --confirm", "Usage: ask-job status [id] | ask-job clear <id> --confirm"), 2);
+}
+
 async function cmdAsk(rest) {
   const forceNew = rest.includes("--force-new"); // 엉뚱 폴더 방어를 무릅쓰고 '이 폴더'에 새 세션 강제
   const allowNew = rest.includes("--allow-new") || forceNew;
   const net = rest.includes("--net"); // 이 1회만 네트워크 허용(파일 읽기전용 유지) — netArgs 주석 참조
   const forceResend = rest.includes("--force-resend"); // 중복 전송 차단(아래 가드)을 의식적으로 우회
-  const prompt = rest.filter((x) => x !== "--allow-new" && x !== "--force-new" && x !== "--net" && x !== "--force-resend").join(" ").trim();
+  const prompt = askRequest(rest).prompt;
   if (!prompt) die('사용법: ask "<프롬프트>"', 2);
 
   try { maybeCleanupState(); } catch { /* 오래된 상태파일 정리 best-effort(Stop 훅 미설치 환경 대비) — 하루 1회 */ }
   const links = loadLinks();
-  const link = resolveLink(links);
+  let link = resolveLink(links);
   // configWs/execCwd 분리: 설정 기준(계약·생각강도·링크·proof·이벤트 라벨)은 '연 폴더'(ws), 코덱스 실행·새세션 탐지·인용
   // 근거 경로 해석은 '작업 폴더'(exec=실제 실행 cwd). 사용자가 연 폴더에 건 설정이 외부 폴더 작업에도 일관 적용되게 한다.
   const ws = configWs();        // 연 폴더(설정 기준)
+  if (!link && !allowNew) {
+    die(
+      tB(`🔌 이 Claude 세션/워크스페이스에 연결된 Codex 세션이 없습니다. 새 세션을 임의로 만들지 않았습니다.\n   기존 세션은 대시보드에서 연결하거나 link <id>로 연결하세요. 정말 첫 소통일 때만 --allow-new를 사용하세요.`,
+         `🔌 No Codex session is linked to this Claude session/workspace. No session was created automatically.\n   Link an existing session in the dashboard or with link <id>. Use --allow-new only for genuine first contact.`),
+      3,
+    );
+  }
   // 같은 요청 중복 전송 차단(2026-07-10 실사고: 첫 호출이 3분29초 만에 원인미상 비정상 종료되자 원인 확인 없이 '전송 실패' 오판 재전송 →
   // 동일 요청 중복 실행 — 실측: rollout 같은 해시 2건). 같은 내용이 살아있는 프로세스에서 진행 중이면 거부 — 답은 rollout/대시보드에서 확인하라.
   const promptHash = crypto.createHash("sha1").update(prompt).digest("hex").slice(0, 16);
+  // 요청 지문별 중복 가드보다 먼저 ws 전체를 직렬화한다. A가 진행 중일 때 문구가 다른 B를 보내거나,
+  // A의 첫 세션 즉시연결 전에 B가 또 --allow-new/--force-new를 보내는 고아 세션 폭증 경로를 함께 차단한다.
+  const activeClaim = claimAskActive(ws, promptHash, link ? "resume" : "new");
+  if (!activeClaim.claimed) {
+    const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const g = askActiveGuard(activeClaim.rec, alive);
+    const state = g.reason === "parent-alive" || g.reason === "child-alive"
+      ? tB("검증이 실제로 진행 중", "verification is still running")
+      : tB("이전 검증의 비정상 종료 표식이 남음(답이 대시보드에 도착했을 수 있음)", "a previous verification left an abnormal-exit marker (the answer may already be in the dashboard)");
+    die(tB(`⚠️ 이 워크스페이스에는 ${state}입니다. 문구가 다른 요청도 재전송하지 마세요. 대시보드 검증 대화/rollout을 먼저 확인하세요.\n   상태: node codex-bridge.js ask-active status\n   부모·자식 종료를 확인하고 사용자가 재시도를 결정한 경우에만: node codex-bridge.js ask-active clear --confirm`,
+             `⚠️ This workspace has ${state}. Do not resend even a differently worded request. Check the dashboard verification chat/rollout first.\n   Status: node codex-bridge.js ask-active status\n   Only after the user decides to retry and both parent/child are gone: node codex-bridge.js ask-active clear --confirm`), 3);
+  }
+  const activeRec = activeClaim.rec;
+  process.on("exit", () => clearAskActive(ws, activeRec && activeRec.token));
+  // 선점 직전 UI가 연결을 저장했을 수 있다. 새 세션 판단 직전에 최신 사용자 고정을 다시 우선한다.
+  link = resolveLink(loadLinks()) || link;
   let inflightRec = null;
   if (forceResend) {
     inflightRec = overwriteAskInflight(ws, promptHash); // 의식적 강행 — 자기 소유 토큰으로 재선점
@@ -996,20 +1229,28 @@ async function cmdAsk(rest) {
     }
   }
   process.on("exit", () => clearAskInflight(ws, promptHash, inflightRec && inflightRec.token)); // 자기 표식만 해제(SIGKILL 잔존은 pid 생존 검사가 무시)
-  const modeSnap = (loadContract(ws) || {}).verifyMode || ""; // 검증 트리거 모드 스냅샷(검증 중 사용자가 바꿔도 오염 안 되게) → flagVerdict로 전달
+  const contractSnap = loadContract(ws) || {};
+  const modeSnap = contractSnap.verifyMode || ""; // 검증 트리거 모드 스냅샷(검증 중 사용자가 바꿔도 오염 안 되게) → flagVerdict로 전달
+  const harnessModeSnap = contractSnap.harnessMode === "codex-codex" ? "codex-codex" : "claude-codex";
   const langSnap = loadLang(); // 언어 스냅샷 — ask 실행 중(수 분) 언어를 바꿔도 주입 언어와 헤더/footer 언어가 엇갈리지 않게(modeSnap과 동일 원칙)
   const exec = process.cwd();   // 작업 폴더(실행/탐지/근거경로 기준) — 코덱스 spawn은 cwd 미지정이라 실제로 여기서 돈다
-  const mArgs = modelArgs(modelPrefFor(links, ws)); // 선택한 모델/생각강도를 매 호출 -c로 재적용(연 폴더 pref → 작업이 어디든 일관)
+  const mArgs = modelArgs(modelPrefFor(links, ws, harnessModeSnap)); // 운용 모드별 검증 모델/생각강도를 매 호출 -c로 재적용
+
+  if (link && !findRolloutById(link.codexSession)) {
+    if (!allowNew) die(tB(`⚠️ 연결된 Codex 세션(${link.codexSession})을 찾을 수 없습니다. 새 세션을 임의로 만들지 않았습니다.\n→ 사용자가 새 검증 세션 생성을 승인할 때만 ask --allow-new "..."를 사용하세요.`, `⚠️ Linked Codex session (${link.codexSession}) was not found. No session was created automatically.\n→ Use ask --allow-new "..." only when the user approves creating a replacement verifier.`));
+    // 명시 --allow-new는 삭제된 verifier 링크를 같은 역할 잠금에서 제거한 뒤에만 새 세션 경로로 간다.
+    // 구현자 필드는 그대로 보존하므로 역할 탈취/소실이 없다.
+    const staleId=link.codexSession;
+    const latestRaw=clearStaleVerifier(staleId,ws);
+    // 잠금 대기 중 사용자가 다른 verifier를 연결했다면 그 최신 연결을 존중해 resume한다. 새 세션으로 덮지 않는다.
+    const latest=latestRaw?{...latestRaw,via:"workspace"}:null;
+    if(latest&&latest.codexSession!==staleId){
+      if(!findRolloutById(latest.codexSession))die(tB(`동시에 새로 연결된 검증 세션(${latest.codexSession})의 파일을 찾을 수 없어 새 세션을 만들지 않았습니다.`,`The concurrently linked verifier (${latest.codexSession}) has no rollout; no new session was created.`));
+      link=latest;
+    }else link=null;
+  }
 
   if (link) {
-    const file = findRolloutById(link.codexSession);
-    if (!file) {
-      // 연결은 있으나 세션이 사라짐 → 보고만, 새로 안 만듦.
-      die(
-        tB(`⚠️ 연결된 Codex 세션(${link.codexSession})을 찾을 수 없습니다(삭제됨?).\n→ 새로 시작하려면: ask --allow-new "..."  /  다른 세션에 붙이려면: link <id>`,
-           `⚠️ Linked Codex session (${link.codexSession}) not found (deleted?).\n→ To start fresh: ask --allow-new "..."  /  to attach another: link <id>`),
-      );
-    }
     try { writePhase("codex-verifying", { round: (readPhase().round || 0) + 1, session: claudeId(), workspace: ws }); } catch { /* 진행표시 best-effort */ }
     const askId = require("crypto").randomUUID(); // L1-A: '서로 다른 ask 실행' 판정 재료(지문·verdict ts는 재실행 구분에 부적합 — Codex)
     const attCarrier = {};                        // L1-A: 이번 ask에 실제로 실린 동봉 스냅샷(재계산 아님)
@@ -1081,15 +1322,19 @@ async function cmdAsk(rest) {
   const onDetect = (id) => { if (earlyLinked) return; try { if (recordLink(id)) earlyLinked = id; } catch { /* 다음 폴/최종 단계서 재시도 */ } };
   const askId = require("crypto").randomUUID(); // L1-A: '서로 다른 ask 실행' 판정 재료
   const attCarrier = {};                        // L1-A: 이번 ask에 실제로 실린 동봉 스냅샷
-  const { answer, error, status, stderr } = await runCodexNewSessionAsync([...mArgs, ...(net ? netArgs() : [])], withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier), since, exec, onDetect); // 탐지=작업폴더(코덱스 session_meta.cwd와 일치)
+  const { answer, error, status, stderr, detected } = await runCodexNewSessionAsync([...mArgs, ...(net ? netArgs() : [])], withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier), since, exec,
+    (id) => { updateAskActive(ws, activeRec && activeRec.token, { sessionId: id }); onDetect(id); },
+    (pid) => { updateAskActive(ws, activeRec && activeRec.token, { childPid: Number.isInteger(pid) ? pid : null }); }); // 탐지=작업폴더(코덱스 session_meta.cwd와 일치)
   // cwd 일치 우선, 못 찾으면 원래 방식(무회귀) — 최종 식별용 폴백.
   const resolveNew = () => { const f = newestRolloutSinceForWs(since, exec) || newestRolloutSince(since); const mm = f && f.match(UUID_RE); return mm ? mm[1] : ""; }; // 탐지=작업폴더
   if (error || !answer || (typeof status === "number" && status !== 0)) {
     // 실패: 이미 '생성 즉시 연결'됐으면 고아 아님 → autoNewFailed 안 검(다음 시도는 그 세션 resume). 미연결일 때만 폭증방지/식별 시도.
     if (!earlyLinked) {
-      const nid = resolveNew();
-      if (nid && recordLink(nid)) earlyLinked = nid; // 실패해도 세션이 생겼으면 연결(고아 방지)
-      else if (nid) updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; });
+      const nid = detected || resolveNew();
+      if(nid)try{if(recordLink(nid))earlyLinked=nid;}catch{/* 아래에서 생성 차단 */} // 실패해도 세션이 생겼으면 연결(고아 방지)
+      // 새 세션 시도가 연결 없이 끝났다면 실제 생성 여부를 모르는 경우도 포함해 무조건 다음 생성을 막는다.
+      // '생기지 않았을 수도 있음'보다 고아 세션 증식 방지가 우선이며, 수동 link가 성공하면 recordLink가 해제한다.
+      if (!earlyLinked) updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; });
     }
     try { writePhase("claude-working", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // ask 실패 → 진행표시 정리(Claude로 복귀)
     die(tB(`Codex 새 세션 ${earlyLinked ? `(연결됨 ${earlyLinked}) ` : ""}실패: `, `Codex new session ${earlyLinked ? `(linked ${earlyLinked}) ` : ""}failed: `) + `${error?.message || ""}\n${stderr.slice(-500)}\n` + (earlyLinked ? tB("(세션은 연결됐으니 다시 검증하면 그 세션을 이어갑니다.)", "(the session is linked — re-verifying continues it.)") : tB("(세션 파일이 생겼다면 'find'→'link <id>'로 연결하세요.)", "(if a session file appeared, link it via 'find' → 'link <id>'.)")));
@@ -1110,12 +1355,12 @@ async function cmdAsk(rest) {
     process.stdout.write(`${head}\n\n${formatForClaude(answer, langSnap)}\n`);
   } else {
     updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; }); // 다음 자동 생성 차단 플래그
-    writeProof("", answer, ws); // Codex는 성공 응답함(세션id만 미식별) → 검증은 인정
-    flagEvidence(answer, ws, "", exec); // 세션id 미식별 → 존재성 점검만(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
-    flagLedgerConfirms(answer, ws, "", exec, { askId, attach: attCarrier }); // 로드맵 ④ L1-A: 세션 미식별 → seen=unknown으로 기록만(승격 재료 아님)
-    collectScoutTargetEvidence(answer, ws, exec); // 정찰 대상 자기진단 증거(2026-07-10)
-    flagVerdict(answer, ws, "", modeSnap);
-    process.stdout.write(`${langSnap === "en" ? "# New session created (session id unresolved) — auto-creation is paused to avoid session sprawl. Use 'find' then 'link <id>'." : "# 새 세션 생성됨(세션id 식별 실패) — 폭증 방지로 다음 자동 생성은 멈춥니다. 'find'로 찾아 'link <id>' 하세요."}\n\n${formatForClaude(answer, langSnap)}\n`);
+    // thread.started JSON + rollout 탐지 모두 실패한 비정상 상태는 성공 proof로 인정하지 않는다. 세션 증식을
+    // 멈추고 빨강 무결성 사건으로 드러내 사용자가 정확한 세션을 연결하기 전에는 다음 검증을 만들 수 없다.
+    collectScoutTargetEvidence(answer, ws, exec); // 답 자체의 경로 증거는 정찰 대상 진단에만 보존(검증 proof와 무관)
+    flagLedgerConfirms(answer, ws, "", exec, { askId, attach: attCarrier }); // 세션 미식별은 seen=unknown 기록만, 승격/proof 재료 아님
+    try { appendIntegrityEvent({ts:new Date().toISOString(),session:claudeId(),workspace:ws,kind:"session-unresolved",severity:"error",detailKo:"새 검증 세션은 생성됐지만 ID를 식별·연결하지 못했습니다. 자동 생성을 중지했습니다. find에서 방금 세션을 확인해 검증 역할로 연결하세요.",detailEn:"A verifier session was created but its ID could not be resolved and linked. Auto-creation is paused. Identify the new session in find and link it as verifier."}); } catch { /* 상태 파일은 autoNewFailed가 보존 */ }
+    die(langSnap === "en" ? "New verifier session ID unresolved; no proof was accepted and auto-creation is paused. Use find then link <id>." : "새 검증 세션 ID 식별 실패: 성공 증명으로 인정하지 않았고 자동 생성을 중지했습니다. find 후 link <id>로 연결하세요.");
   }
 }
 
@@ -1143,11 +1388,13 @@ function cmdLink(rest) {
 function cmdPref(rest) {
   const ws = configWs(); // 설정 저장 기준 = 연 폴더(ask가 configWs로 읽으므로 CLI 저장도 같은 키여야 일치). 대시보드(연 폴더 저장)와도 정합.
   const key = normWs(ws);
+  const mode = harnessModeFor(ws);
+  const bucket = mode === "codex-codex" ? "codexCodexModelPrefs" : "modelPrefs";
   let ok = true;
   if (rest[0] === "set") {
     ok = updateLinks((o) => {
-      o.modelPrefs = o.modelPrefs || {};
-      const cur = o.modelPrefs[key] || {};
+      o[bucket] = o[bucket] || {};
+      const cur = o[bucket][key] || {};
       for (const kv of rest.slice(1)) {
         const i = kv.indexOf("=");
         if (i < 0) continue;
@@ -1156,15 +1403,18 @@ function cmdPref(rest) {
         if (k === "model") cur.model = v;
         else if (k === "reasoning") cur.reasoning = v;
       }
-      o.modelPrefs[key] = cur;
+      o[bucket][key] = cur;
     });
   } else if (rest[0] === "clear") {
-    ok = updateLinks((o) => { if (o.modelPrefs) delete o.modelPrefs[key]; });
+    ok = updateLinks((o) => { if (o[bucket]) delete o[bucket][key]; });
   }
   if (!ok) process.stderr.write(`⚠️ 모델 선택 저장 실패(권한/잠금?) — 다시 시도하세요.\n`);
-  const pref = (loadLinks().modelPrefs || {})[key] || {};
+  const now = loadLinks();
+  const own = (now[bucket] || {})[key];
+  const pref = modelPrefFor(now, ws, mode);
   process.stdout.write(
     `워크스페이스: ${ws}\n` +
+      `운용 모드: ${mode}${mode === "codex-codex" && !own ? " (Claude 모드 설정 상속)" : ""}\n` +
       `선택값: model=${pref.model || "(기본)"} · 생각강도=${pref.reasoning || "(기본)"}\n` +
       `다음 ask 주입 인자: ${modelArgs(pref).join(" ") || "(없음 — codex config 기본값 사용)"}\n`,
   );
@@ -1184,6 +1434,25 @@ function cmdStatus() {
   process.stdout.write(
     `연결: Codex ${link.codexSession} (${link.via})  · 파일 ${file ? "있음" : "없음(삭제됨?)"}\n`,
   );
+}
+
+function pidAlive(pid) { try { if (!Number.isInteger(pid) || pid <= 0) return false; process.kill(pid, 0); return true; } catch { return false; } }
+function cmdAskActive(rest) {
+  const ws = configWs();
+  const rec = readAskActive(ws);
+  if (rest[0] === "clear") {
+    if (!rest.includes("--confirm")) die("사용법: ask-active clear --confirm", 2);
+    if (!rec) { process.stdout.write(tB("진행 표식 없음\n", "No active marker\n")); return; }
+    if (pidAlive(rec.pid) || pidAlive(rec.childPid)) die(tB("실행 중인 부모/자식 프로세스가 있어 clear를 거부합니다.", "Refusing clear while the parent/child process is alive."), 3);
+    if (!clearAskActive(ws, null, { manual: true, confirm: true })) die(tB("진행 표식 clear 실패", "Failed to clear active marker"));
+    process.stdout.write(tB("✅ 사용자가 확인한 비정상 종료 표식을 해제했습니다.\n", "✅ Cleared the user-confirmed abnormal-exit marker.\n")); return;
+  }
+  if (!rec) { process.stdout.write(tB("진행 중 검증 없음\n", "No active verification\n")); return; }
+  process.stdout.write(JSON.stringify({ workspace: ws, file: askActiveFileFor(ws), mode: rec.mode, startedAt: rec.startedAt, promptHash: rec.hash, parentPid: rec.pid, parentAlive: pidAlive(rec.pid), childPid: rec.childPid, childAlive: pidAlive(rec.childPid), sessionId: rec.sessionId || null }, null, 2) + "\n");
+}
+
+function cmdTimeout() {
+  process.stdout.write(JSON.stringify({ verifyTimeoutMin: verifyTimeoutMin(), minimumCallerTimeoutMs: minimumCallerTimeoutMs(), note: tB("직접 ask의 timeout과 내구 job 절대 deadline에 같은 값이 적용됩니다. 긴 검증은 ask-start 1회 후 같은 job을 ask-wait로 조회하세요.", "The same value governs direct ask timeout and the durable job's absolute deadline. For long verification, call ask-start once and poll that same job with ask-wait.") }, null, 2) + "\n");
 }
 
 function cmdFind() {
@@ -1297,10 +1566,20 @@ function main() {
       if (p && typeof p.then === "function") p.catch((e) => die(tB("ask 오류: ", "ask error: ") + (e && e.message ? e.message : String(e))));
       return p;
     }
+    case "ask-start":
+      return cmdAskStart(rest);
+    case "ask-wait":
+      return cmdAskWait(rest);
+    case "ask-job":
+      return cmdAskJob(rest);
     case "link":
       return cmdLink(rest);
     case "status":
       return cmdStatus();
+    case "ask-active":
+      return cmdAskActive(rest);
+    case "timeout":
+      return cmdTimeout();
     case "find":
       return cmdFind();
     case "doctor":
@@ -1311,12 +1590,17 @@ function main() {
       return cmdPref(rest);
     default:
       process.stdout.write(
-        "codex-bridge: ask | link | status | find | doctor | detect-home | pref\n" +
+        "codex-bridge: ask-start | ask-wait | ask-job | ask | ask-active | timeout | link | status | find | doctor | detect-home | pref\n" +
+          '  node codex-bridge.js ask-start --allow-new "<프롬프트>"  (내구 작업 시작 — 즉시 job id 반환)\n' +
+          "  node codex-bridge.js ask-wait <job-id>                 (45초씩 결과 대기 — pending이면 반복)\n" +
+          "  node codex-bridge.js ask-job status [job-id] | ask-job clear <job-id> --confirm\n" +
           '  node codex-bridge.js ask "<프롬프트>"\n' +
           '  node codex-bridge.js ask --allow-new "<프롬프트>"\n' +
           '  node codex-bridge.js ask --force-new "<프롬프트>"  (엉뚱 폴더 방어 무시, 이 폴더에 새 세션 강제)\n' +
           '  node codex-bridge.js ask --net "<프롬프트>"        (이 1회만 네트워크 허용 — 파일은 읽기전용 유지, 원격 확인용)\n' +
           '  node codex-bridge.js ask --force-resend "<프롬프트>" (같은 요청 진행 중 차단을 의식적으로 우회)\n' +
+          "  node codex-bridge.js ask-active status | ask-active clear --confirm\n" +
+          "  node codex-bridge.js timeout  (대시보드 검증 대기시간과 외부 호출 최소 timeout 확인)\n" +
           "  node codex-bridge.js link <id> | link --last\n" +
           "  node codex-bridge.js status | find | doctor | detect-home\n" +
           "  node codex-bridge.js pref [set model=<m> reasoning=<low|medium|high> | clear]\n",
@@ -1325,4 +1609,4 @@ function main() {
 }
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
-module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, saveLinks, LINKS_FILE, verifyTimeoutMin, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, parseLastTurn, netArgs, netNote };
+module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, saveLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote };

@@ -45,6 +45,9 @@ const SRC_BRIDGE = path.join(__dirname, "bridge"); // 레포의 bridge/
 const BRIDGE_SCRIPTS = [
   "contract-lib.js",
   "codex-bridge.js",
+  "ask-job-worker.js",
+  "codex-hook.js",
+  "codex-plugin-install.js",
   "contract-inject.js",
   "verify-guard.js",
   "codex-guard.js",
@@ -452,7 +455,9 @@ function cmdInstall(dryRun) {
   tryInstallVsix(dryRun);
   if (!dryRun) runDoctor();
 
-  log(`\n${dryRun ? "미리보기 끝(쓰기 없음)." : "설치 완료."} 새 Claude Code 세션부터 훅이 적용됩니다.`);
+  log(dryRun
+    ? "\n미리보기 끝(쓰기 없음)."
+    : "\n설치 완료. VS Code에서 'Developer: Reload Window'를 한 번 실행해야 새 확장·Codex 훅 상태가 현재 창에 적용됩니다. Claude 훅은 새 Claude Code 세션부터 적용됩니다.");
 }
 
 function cmdUninstall(purge) {

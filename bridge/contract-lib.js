@@ -13,11 +13,14 @@ const CONTRACTS_DIR = path.join(BRIDGE_DIR, "contracts"); // 프로젝트별 계
 const BRIDGE = path.join(BRIDGE_DIR, "codex-bridge.js");
 const BASE_DIRECTIVE_FILE = path.join(BRIDGE_DIR, "base-directive.json"); // 기본 지침 사용자 오버라이드(없으면 코드 기본값) — 한국어 슬롯(레거시 그대로). 영어는 base-directive.en.json
 const LANG_FILE = path.join(BRIDGE_DIR, "language.json"); // 전역 언어 설정({lang:"ko"|"en"}). 없으면 ko — 기존 사용자 무회귀. 대시보드 토글이 쓰고 확장·브릿지·훅이 읽음.
+const LINKS_FILE_SHARED = path.join(BRIDGE_DIR, "links.json"); // 검증 대기시간 정본. codex-bridge·훅 지시가 같은 값을 읽는다.
 const INTEGRITY_FILE = path.join(BRIDGE_DIR, "integrity.json"); // 무결성 신호 채널(브릿지/verify-guard 기록 → 확장이 상태바/대시보드로 가시화). BRIDGE_DIR 직하(확장 fs.watch 안정).
 const PHASE_FILE = path.join(BRIDGE_DIR, "phase.json"); // 검증 파이프라인 현재 단계(라이브 진행 표시). 훅/브릿지가 경계에서 기록 → 확장이 읽어 상태바·진행 스트립에 표시.
 const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs"); // 검증 증명(세션별). 시간 지나면 쌓이므로 TTL 정리 대상.
 const ATTEMPTS_DIR = path.join(BRIDGE_DIR, "verify-attempts"); // 한 턴 재검증 횟수(세션별, 단명). TTL 정리 대상.
 const ACTIVE_DIR = path.join(BRIDGE_DIR, "active"); // 세션별 active(연 폴더 앵커, active/<claudeSession>.json). 멀티창에서 단일 active.json이 덮이는 레이스 방지. TTL 정리 대상.
+const CODEX_ACTIVE_DIR = path.join(BRIDGE_DIR, "codex-active"); // Codex 구현자 세션별 프로젝트 앵커. CODEX_THREAD_ID로 작업 cwd와 설정 루트를 분리.
+const CODEX_ACTIVE_FILE = path.join(BRIDGE_DIR, "codex-active.json");
 const CLEANUP_MARKER = path.join(BRIDGE_DIR, ".last-cleanup"); // 마지막 정리 시각(파일 mtime) — 하루 한 번 가드.
 const PROOF_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90일 — 검증 증명은 오래 보존(연결/재방문 가능성).
 const ATTEMPTS_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7일 — 재검증 카운터는 한 턴 단명이라 짧게.
@@ -39,6 +42,7 @@ function cleanupOldState(now) {
   sweep(PROOFS_DIR, PROOF_TTL_MS);
   sweep(ATTEMPTS_DIR, ATTEMPTS_TTL_MS);
   sweep(ACTIVE_DIR, ACTIVE_TTL_MS); // 세션별 active도 오래된 것 정리(휴면 종료된 대화)
+  sweep(CODEX_ACTIVE_DIR, ACTIVE_TTL_MS);
   sweep(path.join(BRIDGE_DIR, "scout-gate-attempts"), ATTEMPTS_TTL_MS); // 게이트 세션 카운터 — 검증 재시도와 같은 7일(단명 상태)
   return removed;
 }
@@ -90,6 +94,22 @@ function saveLang(lang) {
   return atomicWrite(LANG_FILE, JSON.stringify({ lang }));
 }
 
+// 검증 대기시간 정본 — 대시보드가 links.json에 저장한 분 값을 브릿지 자식 프로세스와 구현자 주입문이
+// 모두 여기서 읽는다. 환경변수는 자동화/진단용 1회 override. 정수 1~60분 규칙은 확장 UI와 동일하다.
+function verifyTimeoutMin() {
+  const env = Number(process.env.CODEX_BRIDGE_VERIFY_TIMEOUT_MIN);
+  let min = Number.isFinite(env) && env > 0 ? env : NaN;
+  if (!Number.isFinite(min)) {
+    try {
+      const o = JSON.parse(fs.readFileSync(LINKS_FILE_SHARED, "utf8"));
+      const v = Number(o && o.settings && o.settings.verifyTimeoutMin);
+      if (Number.isFinite(v) && v > 0) min = v;
+    } catch { /* 기본값 */ }
+  }
+  if (!Number.isFinite(min)) min = 8;
+  return Math.max(1, Math.min(60, Math.round(min)));
+}
+
 // ── 무결성 신호 채널 ──────────────────────────────────
 // '검증이 침묵으로 넘어간' 사건(예: 검증이 필요했는데 끝내 미완)을 기록한다. 확장이 이 파일을 읽어
 // 상태바 빨강 + 대시보드 목록으로 가시화한다. 단순 게이트(차단)로 끝내지 않고 사람에게 보이게 하는 채널.
@@ -127,6 +147,13 @@ function withFileLock(lockPath, fn) {
   }
 }
 function withIntegrityLock(fn) { return withFileLock(INTEGRITY_LOCK, fn); }
+// 구현/검증 역할 링크를 바꾸는 모든 주체가 공유하는 잠금. 링크 보존과 동일세션 충돌 판정을
+// 같은 임계구역에서 수행하기 위한 별도 채널이다.
+function withRoleLock(fn) {
+  const r=withFileLockStrict(LINKS_FILE_SHARED+".role.lock",fn);
+  if(!r.ok)throw new Error(r.error||"role-lock-failed");
+  return r.result;
+}
 // fail-closed 변형(Project MAP 정본 전용 — 설계검증 2026-07-10): 관찰 일지의 fail-open(기록을 버리지 않기 위한
 // degraded)과 달리, 구조 정본(topology·decisions) 트랜잭션은 잠금 실패 시 '실행하지 않고' 실패를 알린다 —
 // 두 적용자가 동시에 진입하면 CAS 이후 lost-update가 나기 때문. 반환: {ok, result?, error?}.
@@ -289,7 +316,162 @@ function configWs(opts) {
       if (a && a.claudeSession === sid && typeof a.workspace === "string" && a.workspace.trim()) return a.workspace;
     } catch { /* active 없음/파싱불가 → 폴백 */ }
   }
+  // Codex 구현자 경로: 공식 훅 session_id와 도구 프로세스의 CODEX_THREAD_ID가 동일하다. 세션별 파일을
+  // 우선해 여러 Codex 창이 있어도 다른 프로젝트 active를 집지 않는다. 실제 작업 cwd가 다른 폴더여도 이 앵커 유지.
+  const codexSid = opts.codexSessionId || process.env.CODEX_THREAD_ID || "";
+  if (codexSid) {
+    const safe = String(codexSid).replace(/[^a-zA-Z0-9_-]/g, "");
+    if (safe) try {
+      const a = JSON.parse(fs.readFileSync(path.join(CODEX_ACTIVE_DIR, safe + ".json"), "utf8"));
+      if (a && a.codexSession === codexSid && typeof a.workspace === "string" && a.workspace.trim()) return a.workspace;
+    } catch { /* 폴백 cwd */ }
+    // 플러그인/확장 재설치 직후처럼 active 앵커가 아직 없더라도, 대시보드가 이미 이 세션을 구현 역할로
+    // 고정했다면 그 연결이 더 강한 프로젝트 정본이다. 실제 작업 cwd로 떨어져 다른 계약을 읽고 훅 전체가
+    // 무동작하는 복구 실패를 막는다. 여러 프로젝트에 잘못 중복 연결된 경우는 임의 선택하지 않고 cwd로 폴백.
+    try {
+      const links = JSON.parse(fs.readFileSync(LINKS_FILE_SHARED, "utf8"));
+      const matches = [];
+      for (const [key, rec] of Object.entries((links && links.byWorkspace) || {})) {
+        if (rec && rec.implementerSession === codexSid) matches.push(String(rec.workspace || key || ""));
+      }
+      const unique = [...new Set(matches.filter(Boolean).map((x) => normWs(x)))];
+      if (unique.length === 1) return matches.find((x) => normWs(x) === unique[0]) || unique[0];
+    } catch { /* 링크 없음/손상 → cwd 폴백 */ }
+    // 새 Codex 대화에는 아직 session_id 앵커가 없다. 이때 현재 cwd가 프로젝트 폴더 또는 그 프로젝트가
+    // 명시한 실제 작업 저장소(scoutRepo) 안에 있으면 논리 프로젝트를 역추적한다. 정확히 한 프로젝트만
+    // 일치할 때만 채택해, 한 실제 저장소를 여러 프로젝트가 공유하는 모호한 경우의 오귀속을 막는다.
+    try {
+      const cwd = path.resolve(opts.cwd || process.cwd());
+      const matches = [];
+      const projects = new Map();
+      const contains = (root, child) => {
+        const rel = path.relative(path.resolve(root), child);
+        return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+      };
+      // 연결이 이미 있으면 links가 가장 싼 색인이다.
+      try {
+        const links = JSON.parse(fs.readFileSync(LINKS_FILE_SHARED, "utf8"));
+        for (const [key, rec] of Object.entries((links && links.byWorkspace) || {})) {
+          const logical = String((rec && rec.workspace) || key || "");
+          if (logical) projects.set(normWs(logical), logical);
+        }
+      } catch { /* 최초 연결 전일 수 있음 */ }
+      // 최초 verifier/implementer 연결 전에도 대시보드가 저장한 계약의 workspace 필드가 논리 프로젝트 정본이다.
+      // 파일명은 해시라 역산할 수 없으므로 내용의 workspace만 읽고, 없는 레거시 계약은 오귀속 없이 건너뛴다.
+      try {
+        for (const ent of fs.readdirSync(CONTRACTS_DIR, { withFileTypes: true })) {
+          if (!ent.isFile() || !/\.json$/i.test(ent.name)) continue;
+          try {
+            const saved = JSON.parse(fs.readFileSync(path.join(CONTRACTS_DIR, ent.name), "utf8"));
+            const logical = typeof saved?.workspace === "string" ? saved.workspace.trim() : "";
+            if (logical) projects.set(normWs(logical), logical);
+          } catch { /* 다른 계약 계속 */ }
+        }
+      } catch { /* 계약 폴더 없음 */ }
+      for (const logical of projects.values()) {
+        if (!logical) continue;
+        let contract;
+        try { contract = loadContract(logical); } catch { continue; }
+        if (contract.harnessMode !== "codex-codex") continue;
+        const roots = [logical];
+        try {
+          const mapped = resolveScoutRepo(logical, contract).repo;
+          if (mapped && !roots.some((x) => normWs(x) === normWs(mapped))) roots.push(mapped);
+        } catch { /* 논리 프로젝트 경로만 비교 */ }
+        if (roots.some((root) => contains(root, cwd))) matches.push(logical);
+      }
+      const unique = [...new Map(matches.map((x) => [normWs(x), x])).values()];
+      if (unique.length === 1) return unique[0];
+    } catch { /* 역추적 불가/모호 → cwd 폴백 */ }
+  }
   return opts.cwd || process.cwd();
+}
+
+function codexActiveFileFor(sessionId) {
+  const safe = String(sessionId || "").replace(/[^a-zA-Z0-9_-]/g, "");
+  return safe ? path.join(CODEX_ACTIVE_DIR, safe + ".json") : "";
+}
+function writeCodexActive(sessionId, ws, extra) {
+  if (!sessionId || !ws) return false;
+  const payload = Object.assign({ schema: "codex-active-v1", codexSession: sessionId, workspace: ws, ts: new Date().toISOString() }, extra || {});
+  const file = codexActiveFileFor(sessionId);
+  const a = file && atomicWrite(file, JSON.stringify(payload));
+  const b = atomicWrite(CODEX_ACTIVE_FILE, JSON.stringify(payload));
+  return !!(a && b);
+}
+function readCodexActive(sessionId) {
+  const file = sessionId ? codexActiveFileFor(sessionId) : CODEX_ACTIVE_FILE;
+  try { const o = JSON.parse(fs.readFileSync(file, "utf8")); return o && typeof o === "object" ? o : null; } catch { return null; }
+}
+
+// Snapshot immediately before a hook performs the slower rollout identity read. The later
+// role-locked CAS prevents an older event that finishes late from overwriting a newer chat.
+function codexRoleRevision() {
+  try { return Number((JSON.parse(fs.readFileSync(LINKS_FILE_SHARED, "utf8")) || {}).roleRevision) || 0; }
+  catch { return 0; }
+}
+function codexImplementerSnapshot(ws, roleRevision, eventStartedAt) {
+  if (!ws) return { session: "", revision: 0, roleRevision: Number(roleRevision) || 0, eventStartedAt: Number(eventStartedAt) || 0 };
+  try {
+    const o = JSON.parse(fs.readFileSync(LINKS_FILE_SHARED, "utf8")) || {};
+    const key = normWs(ws);
+    const found = Object.keys(o.byWorkspace || {}).find((k) => normWs(k) === key);
+    const cur = found ? (o.byWorkspace[found] || {}) : {};
+    return { session: String(cur.implementerSession || ""), revision: Number(cur.implementerRevision) || 0, roleRevision: arguments.length >= 2 ? (Number(roleRevision) || 0) : (Number(o.roleRevision) || 0), eventStartedAt: Number(eventStartedAt) || 0 };
+  } catch { return { session: "", revision: 0, roleRevision: Number(roleRevision) || 0, eventStartedAt: Number(eventStartedAt) || 0 }; }
+}
+function codexImplementerSession(ws) { return codexImplementerSnapshot(ws).session; }
+
+// Codex 구현자 역할 자동등록. VS Code의 SessionStart 또는 실제 프롬프트로 확인된 현재 대화가 구현 역할을 넘겨받는다.
+// 하네스가 세션을 새로 만들거나 임의 후보를 고르는 경로가 아니라 UserPromptSubmit의 실제 session_id만
+// 쓰므로, 검증 세션 자동생성 안전규칙과는 별개다. verifier와 같은 세션만 자기검증 방지로 거부한다.
+function registerCodexImplementer(ws, sessionId, model, effort, expectedSession) {
+  if (!ws || !sessionId) return { ok: false, reason: "missing" };
+  const enforceCas = arguments.length >= 5;
+  return withRoleLock(() => {
+    let o = {};
+    try { o = JSON.parse(fs.readFileSync(LINKS_FILE_SHARED, "utf8")) || {}; } catch { o = {}; }
+    o.byWorkspace = o.byWorkspace || {};
+    const key = normWs(ws);
+    let foundKey = Object.keys(o.byWorkspace).find((k) => normWs(k) === key) || key;
+    const cur = o.byWorkspace[foundKey] || {};
+    if (cur.codexSession === sessionId || cur.codexCodexSession === sessionId) return { ok: false, reason: "verifier-conflict", existing: sessionId };
+    const currentSession = String(cur.implementerSession || "");
+    const currentRevision = Number(cur.implementerRevision) || 0;
+    const currentRoleRevision = Number(o.roleRevision) || 0;
+    const currentEventAt = Number(cur.implementerEventAt) || 0;
+    const expectedIsSnapshot = !!expectedSession && typeof expectedSession === "object";
+    const expectedId = expectedIsSnapshot ? String(expectedSession.session || "") : String(expectedSession || "");
+    const expectedRevision = expectedIsSnapshot ? (Number(expectedSession.revision) || 0) : currentRevision;
+    const expectedRoleRevision = expectedIsSnapshot ? (Number(expectedSession.roleRevision) || 0) : currentRoleRevision;
+    const expectedEventAt = expectedIsSnapshot ? (Number(expectedSession.eventStartedAt) || 0) : Date.now();
+    // Events for the same target session commute. A different session taking the role after
+    // the snapshot makes this event stale, so it must not write anything.
+    if (enforceCas && ((expectedEventAt && currentEventAt > expectedEventAt) || (currentSession !== sessionId && (currentSession !== expectedId || currentRevision !== expectedRevision || currentRoleRevision !== expectedRoleRevision)))) {
+      return { ok: false, reason: "implementer-raced", existing: currentSession || null };
+    }
+    const same = cur.implementerSession === sessionId;
+    const replaced = !!cur.implementerSession && !same;
+    const next = Object.assign({}, cur, {
+      workspace: ws,
+      implementerSession: sessionId,
+      implementerLinkedAt: same ? (cur.implementerLinkedAt || new Date().toISOString()) : new Date().toISOString(),
+      implementerLastSeenAt: new Date().toISOString(),
+      implementerRevision: currentRevision + 1,
+      implementerEventAt: Math.max(currentEventAt, expectedEventAt || Date.now()),
+      // 최초 자동 고정값을 기준선으로 유지한다. 이후 훅 입력으로 덮지 않아 실제 모델·추론 변경을 경고할 수 있다.
+      // 구버전 링크에 effort가 없을 때만 같은 구현 세션의 첫 관측값으로 한 번 보충한다.
+      implementerModel: same ? (cur.implementerModel || model || "") : (model || ""),
+      // 같은 세션의 후속 훅 값으로 빈 기준선을 채우지 않는다. 훅 effort가 없던 최초 턴은 확장이
+      // linkedAt 이후 '첫 실제 rollout'을 찾아 보충한다(후속 모델 변경이 기준선으로 둔갑하는 경합 차단).
+      implementerEffort: same ? (cur.implementerEffort || "") : (effort || ""),
+    });
+    if (foundKey !== key) delete o.byWorkspace[foundKey];
+    o.byWorkspace[key] = next;
+    o.roleRevision = currentRoleRevision + 1;
+    const ok = atomicWrite(LINKS_FILE_SHARED, JSON.stringify(o, null, 2));
+    return { ok, reason: ok ? (same ? "same" : replaced ? "relinked" : "linked") : "write-failed", existing: cur.implementerSession || null };
+  });
 }
 
 // 프로젝트별 계약을 읽는다. ★전역 상속 없음★ — 계약은 프로젝트 전용(최신성: 비우면 주입 0·바꾸면 그 프로젝트만 유지).
@@ -304,22 +486,35 @@ function loadContract(ws, lang) {
   };
   const o = read(contractFileFor(ws || currentWs(), lang)) || {}; // CONTRACT_FILE(전역) 폴백 제거 — 미설정 프로젝트는 빈 계약(상속 X). lang=언어 슬롯(ko=레거시 파일)
   return {
+    harnessMode: normHarnessMode(o),
     claude: Array.isArray(o.claude) ? o.claude : [],
     codex: Array.isArray(o.codex) ? o.codex : [],
+    // Codex↔Codex 슬롯은 기존 Claude↔Codex 슬롯과 분리한다. verifier는 최초 전환 시 기존 codex 규칙을
+    // fallback으로 보여주되, 저장 후엔 codexVerifier가 독립 정본이다(모드 왕복 시 덮어쓰기 방지).
+    codexImplementer: Array.isArray(o.codexImplementer) ? o.codexImplementer : [],
+    codexVerifier: Array.isArray(o.codexVerifier) ? o.codexVerifier : (Array.isArray(o.codex) ? o.codex : []),
     // 체크리스트 강제: 기본 true(기존 동작 보존). 해제 시 규약만 주입.
     claudeChecklist: o.claudeChecklist !== false,
     codexChecklist: o.codexChecklist !== false,
+    codexImplementerChecklist: o.codexImplementerChecklist !== false,
+    codexVerifierChecklist: o.codexVerifierChecklist !== false,
     // 검증 모드: off=꺼짐 / code=코드변경 시 / plancode=플랜확정(ExitPlanMode)+코드변경 시 / always=모든 턴.
     // 기본 off(opt-in). 구버전 verify:true는 code로 마이그레이션.
     verifyMode: normVerifyMode(o),
     // 사용자 계약 주입 시점: off / plan(플랜 모드일 때만) / always(기본·무회귀). 확장과 동일 규칙.
     claudeInjectMode: normInjectMode(o),
+    codexInjectMode: normCodexInjectMode(o),
     // 트랙: off=2트랙(구현↔검증, 기본·무회귀) / on=3트랙(탐색 leg 켬 — 범위 장부 advisory. SCOPE-LEDGER.md).
     // 브릿지는 아직 미사용(확장 대시보드 전용)이나 스키마 정합을 위해 양쪽 normalize(한쪽만 빠지면 동작 갈림 — SCOUT-TRACK 교훈).
     scoutMode: normScoutMode(o),
     scoutGate: normScoutGate(o), // 게이트(⑥ 실험) — off|plan. 확장 saveContract는 이 필드를 보존해야 함(스키마 정합)
     scoutRepo: typeof o?.scoutRepo === "string" ? o.scoutRepo.trim() : "", // 정찰 대상 레포(P1 — cwd≠repo 해소). 빈 값=ws 그대로
   };
+}
+
+const HARNESS_MODES = ["claude-codex", "codex-codex"];
+function normHarnessMode(o) {
+  return o && HARNESS_MODES.includes(o.harnessMode) ? o.harnessMode : "claude-codex";
 }
 
 const VERIFY_MODES = ["off", "code", "plancode", "always"];
@@ -333,6 +528,10 @@ const INJECT_MODES = ["off", "plan", "always"];
 function normInjectMode(o) {
   if (o && INJECT_MODES.includes(o.claudeInjectMode)) return o.claudeInjectMode;
   return "always"; // 기본=항상(무회귀). 누락 시 기존 동작 유지.
+}
+function normCodexInjectMode(o) {
+  if (o && INJECT_MODES.includes(o.codexInjectMode)) return o.codexInjectMode;
+  return "always";
 }
 
 const SCOUT_MODES = ["off", "on"];
@@ -502,11 +701,63 @@ function detectScoutTargetDrift(target, evidence, opts) {
 // 일을 중복 수행(실측: 동일 해시 2건). 구조 방어: 같은 내용의 ask가 '살아있는 프로세스'에서 아직 진행 중이면 두 번째 전송을 거부
 // (--force-resend로만 강행). 판정 1차 기준은 pid 생존(정확) — TTL은 시계 이상·좀비 방어 보조. 판정은 순수 함수.
 const ASKS_INFLIGHT_DIR = path.join(BRIDGE_DIR, "asks-inflight");
+// 워크스페이스 전체 직렬화(2026-07-12 실사고): 요청 지문별 가드만으로는 A가 진행 중일 때 문구를 조금 바꾼 B가
+// 통과한다. 특히 호출 창의 외부 timeout이 브릿지의 사용자 설정 timeout보다 짧으면, A가 실제로는 계속 실행 중인데
+// 호출자가 실패로 오판해 B를 새 세션으로 보내는 고아 세션 폭증 경로가 된다. 따라서 hash별 가드보다 먼저 ws당
+// 정확히 1개의 active 표식을 선점한다. 비정상 종료 잔재는 자동 회수하지 않는다 — 답이 rollout/대시보드에 이미
+// 도착했을 수 있으므로, 사용자가 확인한 뒤 명시 clear해야 한다(재전송보다 보수적인 방향).
+const ASK_ACTIVE_DIR = path.join(BRIDGE_DIR, "ask-active");
 // TTL은 pid 생존 판정의 '보조'(좀비·pid 재사용 방어)일 뿐이며 검증 대기 최대치(60분)보다 커야 한다 —
 // Codex 반례: 30분이면 살아있는 정상 장기 검증의 후반이 무방비.
 const INFLIGHT_TTL_MS = 90 * 60 * 1000;
-// 파일은 ws+요청 지문별 1개(Codex 반례: ws당 1개면 A 진행→B 기록→A 재전송이 통과) — 다른 내용 병렬은 파일이 달라 자연 허용.
+// 파일은 ws+요청 지문별 1개(동일 요청의 내구 추적용). 2026-07-12부터 실제 ask 진입은 별도 ws 전체
+// ASK_ACTIVE_DIR이 먼저 직렬화하므로 다른 내용 병렬도 허용하지 않는다. 이 계층은 같은 요청 재전송의 2차 방어로 존치.
 function askInflightFileFor(ws, hash) { return path.join(ASKS_INFLIGHT_DIR, wsKeyFor(ws) + "-" + String(hash || "") + ".json"); }
+function askActiveFileFor(ws) { return path.join(ASK_ACTIVE_DIR, wsKeyFor(ws) + ".json"); }
+function readAskActive(ws) {
+  try { const r = JSON.parse(fs.readFileSync(askActiveFileFor(ws), "utf8")); return r && typeof r === "object" && !Array.isArray(r) ? r : null; }
+  catch { return null; }
+}
+function askActiveGuard(rec, pidAlive) {
+  if (!rec) return { block: false, reason: "none" };
+  const alive = (pid) => Number.isInteger(pid) && pid > 0 && typeof pidAlive === "function" && !!pidAlive(pid);
+  if (alive(rec.pid)) return { block: true, reason: "parent-alive", rec };
+  if (alive(rec.childPid)) return { block: true, reason: "child-alive", rec };
+  // 부모·자식이 모두 끝났어도 자동 재전송 금지. 부모가 결과를 수거하기 전에 죽었지만 Codex rollout에는 답이
+  // 완료된 경우와 진짜 실패를 기계적으로 구분할 수 없다. 명시 clear 전까지 abandoned로 보수 차단한다.
+  return { block: true, reason: "abandoned", rec };
+}
+function claimAskActive(ws, hash, mode) {
+  const rec = { schema: "ask-active-v1", hash: String(hash || ""), mode: mode === "new" ? "new" : "resume", startedAt: new Date().toISOString(), pid: process.pid, childPid: null, sessionId: null, token: crypto.randomBytes(8).toString("hex") };
+  const f = askActiveFileFor(ws);
+  try { fs.mkdirSync(ASK_ACTIVE_DIR, { recursive: true }); }
+  catch (e) { return { claimed: false, rec: null, error: "active-dir: " + String(e && e.message || e) }; }
+  try { fs.writeFileSync(f, JSON.stringify(rec), { flag: "wx" }); return { claimed: true, rec }; }
+  catch (e) {
+    if (!(e && e.code === "EEXIST")) return { claimed: false, rec: null, error: "active-write: " + String(e && e.message || e) };
+    for (let i = 0; i < 3; i++) { try { return { claimed: false, rec: JSON.parse(fs.readFileSync(f, "utf8")) }; } catch { /* 쓰는 중일 수 있어 재시도 */ } }
+    return { claimed: false, rec: null, error: "active-unreadable" };
+  }
+}
+function updateAskActive(ws, token, patch) {
+  if (!token || !patch || typeof patch !== "object") return false;
+  const f = askActiveFileFor(ws);
+  try {
+    const cur = JSON.parse(fs.readFileSync(f, "utf8"));
+    if (!cur || cur.token !== token || cur.pid !== process.pid) return false;
+    return atomicWrite(f, JSON.stringify(Object.assign({}, cur, patch)));
+  } catch { return false; }
+}
+function clearAskActive(ws, token, opts) {
+  const f = askActiveFileFor(ws);
+  try {
+    const cur = JSON.parse(fs.readFileSync(f, "utf8"));
+    const manual = !!(opts && opts.manual === true);
+    if (!manual && (!token || cur.token !== token || cur.pid !== process.pid)) return false;
+    if (manual && !(opts && opts.confirm === true)) return false;
+    fs.unlinkSync(f); return true;
+  } catch { return false; }
+}
 function askInflightGuard(rec, hash, nowMs, pidAlive) {
   if (!rec || rec.hash !== hash) return { block: false, reason: "none" };
   const alive = typeof pidAlive === "function" ? !!pidAlive(rec.pid) : false;
@@ -1418,7 +1669,7 @@ function buildVerifyDirective(mode, lang) {
       "If this turn created/modified files"; // code
     return [
       `[Verify Mode ON(${mode}) · implement→verify two-track · no human relays between the models]`,
-      `${cond}, you MUST get Codex verification via \`node "${BRIDGE}" ask --allow-new "..."\` before reporting completion to the user. (If a Codex session is linked, it continues that session; otherwise it creates and links a new one.) [path is quoted so spaces are safe]`,
+      `${cond}, you MUST get Codex verification before reporting completion. Start exactly one durable job with \`node "${BRIDGE}" ask-start --allow-new "..."\`, then run \`node "${BRIDGE}" ask-wait <job-id>\` repeatedly while it reports pending. Never start a second job while the first is queued/running. The dashboard verification wait (${verifyTimeoutMin()} min) is the actual Codex deadline; short outer tool windows do not terminate the verifier. (A linked verifier session is resumed; a new one is created only when none is linked.) [path is quoted so spaces are safe]`,
       `[Remote checks] The verifier runs with network blocked by default (read-only sandbox). If the verification itself must confirm remote state (e.g., GitHub push/CI/remote refs, registries, live URLs), add \`--net\` to that one ask — that single run allows outbound network while files stay read-only. Do not use --net when local files suffice.`,
       b.transmit,
       b.rejudge,
@@ -1430,7 +1681,7 @@ function buildVerifyDirective(mode, lang) {
     "이번 턴에 파일을 생성/수정했다면"; // code
   return [
     `[검증 모드 ON(${mode}) · 구현→검증 2트랙 · 사람이 턴을 중계하지 않음]`,
-    `${cond}, 사용자에게 완료를 보고하기 전에 반드시 \`node "${BRIDGE}" ask --allow-new "..."\` 로 Codex 검증을 받아라. (연결된 Codex 세션이 있으면 그 세션으로 이어가고, 없으면 새 세션을 만들어 연결한다.) [경로에 공백이 있어도 되도록 따옴표로 감쌌음]`,
+    `${cond}, 사용자에게 완료를 보고하기 전에 반드시 \`node "${BRIDGE}" ask-start --allow-new "..."\` 로 내구 작업을 정확히 1개 시작하고, pending이면 \`node "${BRIDGE}" ask-wait <job-id>\` 를 반복해 Codex 검증 결과를 받아라. 첫 작업이 queued/running인 동안 두 번째 작업을 시작하지 마라. 대시보드 검증 대기시간(${verifyTimeoutMin()}분)이 실제 Codex 마감시간이며, 바깥 도구의 짧은 실행창이 검증자를 종료시키지 않는다. (연결된 검증 세션이 있으면 이어가고, 연결이 전혀 없을 때만 새 세션을 만들어 연결한다.) [경로에 공백이 있어도 되도록 따옴표로 감쌌음]`,
     `[원격 확인] 검증자는 기본적으로 네트워크가 차단된 채(읽기 전용 샌드박스) 돈다. 검증 자체가 원격 상태 확인을 요구하면(예: GitHub 푸시/CI/원격 ref, 패키지 저장소, 라이브 URL) 그 1회의 ask에 \`--net\`을 붙여라 — 그 실행만 외부 통신이 허용되고 파일은 여전히 읽기 전용이다. 로컬 파일로 충분한 검증엔 --net을 쓰지 마라.`,
     b.transmit,
     b.rejudge,
@@ -1527,4 +1778,7 @@ function formatForClaude(answer, lang) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports.codexImplementerSession = codexImplementerSession;
+module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
+module.exports.codexRoleRevision = codexRoleRevision;

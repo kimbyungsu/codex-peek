@@ -118,6 +118,9 @@ export function catchUp<S>(
 // cwd별 마지막 값(byCwd)을 모두 들고 있으므로 어떤 wsFilter 질의도 추가 스캔 없이 답한다.
 export type Msg = { role: "user" | "assistant"; text: string };
 export type MetaVal = { model: string; effort: string; ts: string };
+export type MetaPoint = MetaVal & { cwd: string };
+export type TurnSignal = { turnId: string; ts: string };
+export type PromptSignal = TurnSignal & { model: string; effort: string };
 export type RolloutAcc = {
   msgs: Msg[];
   userTurns: number;                 // msgs 안의 사용자 메시지 수(턴 경계 절삭용 — msgs와 항상 동기)
@@ -129,7 +132,17 @@ export type RolloutAcc = {
                                      // 고지하거나(턴 제거로 오인) 창이 찼을 때 침묵한다(Codex 반례: 1턴+assistant 4,050)
   models: Set<string>;               // 세션이 써본 전체 모델(필터 무관 — knownModels 표시용)
   byCwd: Map<string, MetaVal>;       // 폴더(cwd)별 마지막 turn_context 값 — wsFilter 질의의 답
+  metaHistory: MetaPoint[];          // 구현자 최초 기준선용 시간순 turn_context 메타(본문 없이 작은 레코드만)
   last: MetaVal;                     // 필터 없는 마지막 값
+  selectedByCwd: Map<string, MetaVal>; // Codex 모델 피커가 즉시 남기는 thread_settings_applied 현재 선택값
+  selectedLast: MetaVal;             // cwd 필터 없는 마지막 선택값
+  turnByCwd: Map<string, TurnSignal>; // 현재 구현 턴이 실제 훅 heartbeat와 같은 turn인지 판정
+  lastTurn: TurnSignal;
+  promptByCwd: Map<string, PromptSignal>; // 실제(비주입) 사용자 프롬프트가 제출된 프로젝트별 최신 신호
+  lastPrompt: PromptSignal;
+  activeTurn: (PromptSignal & { cwd: string }) | null; // 직전 turn_context — 뒤따르는 user message의 프로젝트 귀속
+  sessionSource: string;              // session_meta.source: vscode만 사람의 앱 대화로 자동고정
+  threadSource: string;               // session_meta.thread_source: user만 허용(하위 에이전트 제외)
 };
 // 대화 보존은 '완전한 사용자 턴' 경계로 상한 — 메시지 개수 절삭은 recentTurns 계약을 깨뜨린다
 // (Codex 실측: 400메시지=사용자 턴 57개뿐 + 잘린 턴의 assistant가 user:null 합성 턴으로 표시).
@@ -149,10 +162,15 @@ function dropOldestTurn(acc: RolloutAcc): void {
 }
 export function makeRolloutAcc(isInjected: (t: string) => boolean, normWs: (p: string) => string): { init: () => RolloutAcc; merge: (acc: RolloutAcc, line: string) => void } {
   return {
-    init: () => ({ msgs: [], userTurns: 0, firstUser: null, turnsDropped: false, firstTurnInnerDropped: false, models: new Set(), byCwd: new Map(), last: { model: "", effort: "", ts: "" } }),
+    init: () => ({ msgs: [], userTurns: 0, firstUser: null, turnsDropped: false, firstTurnInnerDropped: false, models: new Set(), byCwd: new Map(), metaHistory: [], last: { model: "", effort: "", ts: "" }, selectedByCwd: new Map(), selectedLast: { model: "", effort: "", ts: "" }, turnByCwd: new Map(), lastTurn: { turnId: "", ts: "" }, promptByCwd: new Map(), lastPrompt: { turnId: "", ts: "", model: "", effort: "" }, activeTurn: null, sessionSource: "", threadSource: "" }),
     merge: (acc, line) => {
       let o: any;
       try { o = JSON.parse(line); } catch { return; }
+      if (o.type === "session_meta") {
+        acc.sessionSource = String(o.payload?.source || "");
+        acc.threadSource = String(o.payload?.thread_source || "");
+        return;
+      }
       if (o.type === "response_item" && o.payload?.type === "message") {
         const role = o.payload.role;
         if (role !== "user" && role !== "assistant") return;
@@ -160,6 +178,16 @@ export function makeRolloutAcc(isInjected: (t: string) => boolean, normWs: (p: s
         if (!text) return;
         if (role === "user" && isInjected(text)) return;
         if (role === "user" && acc.firstUser === null) acc.firstUser = text;
+        if (role === "user" && acc.activeTurn?.cwd) {
+          const prompt = {
+            turnId: acc.activeTurn.turnId,
+            ts: String(o.timestamp || acc.activeTurn.ts || ""),
+            model: acc.activeTurn.model,
+            effort: acc.activeTurn.effort,
+          };
+          acc.promptByCwd.set(acc.activeTurn.cwd, prompt);
+          acc.lastPrompt = prompt;
+        }
         acc.msgs.push({ role, text });
         if (role === "user") acc.userTurns++;
         // 상한 이내 파일은 절삭 자체가 없어 구식 파서와 완전 동일.
@@ -186,6 +214,29 @@ export function makeRolloutAcc(isInjected: (t: string) => boolean, normWs: (p: s
         acc.last = upd(acc.last);
         const key = normWs(p.cwd || "");
         acc.byCwd.set(key, upd(acc.byCwd.get(key) || { model: "", effort: "", ts: "" }));
+        acc.metaHistory.push({ cwd: key, model, effort, ts });
+        const turnId = String(p.turn_id || p.turnId || "");
+        if (turnId) {
+          const signal = { turnId, ts };
+          acc.turnByCwd.set(key, signal);
+          acc.lastTurn = signal;
+        }
+        acc.activeTurn = { cwd: key, turnId, ts, model: model || acc.last.model, effort: effort || acc.last.effort };
+        return;
+      }
+      // Codex 앱의 모델·추론강도 피커는 프롬프트 전에도 이 이벤트를 rollout에 즉시 append한다.
+      // turn_context(실제 답에 적용된 값)와 분리해 보존해야 선택 직후 drift를 잡고, 실제 답 표시는 오염하지 않는다.
+      if (o.type === "event_msg" && o.payload?.type === "thread_settings_applied") {
+        const p = o.payload.thread_settings || {};
+        const model = p.model ? String(p.model) : String(p.collaboration_mode?.settings?.model || "");
+        const effort = p.reasoning_effort ? String(p.reasoning_effort) : String(p.collaboration_mode?.settings?.reasoning_effort || "");
+        const ts = o.timestamp ? String(o.timestamp) : "";
+        if (!model && !effort) return;
+        if (model) acc.models.add(model);
+        const upd = (v: MetaVal): MetaVal => ({ model: model || v.model, effort: effort || v.effort, ts: ts || v.ts });
+        acc.selectedLast = upd(acc.selectedLast);
+        const key = normWs(p.cwd || "");
+        acc.selectedByCwd.set(key, upd(acc.selectedByCwd.get(key) || { model: "", effort: "", ts: "" }));
       }
     },
   };

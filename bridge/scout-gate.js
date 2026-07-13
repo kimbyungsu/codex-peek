@@ -45,6 +45,7 @@ function main(raw) {
   // P1: 신선도·지시 경로는 '정찰 대상'(계약 scoutRepo — 세션 폴더≠개발 레포 해소) 기준. 계약 불명이면 ws 그대로.
   let contract = {};
   try { contract = loadContract(ws) || {}; } catch { /* 계약 불명 → 기본값 */ }
+  if (contract.harnessMode === "codex-codex") process.exit(0); // Codex Stop의 공용 3트랙 게이트가 담당.
   const target = (() => { try { return resolveScoutRepo(ws, contract).repo; } catch { return ws; } })();
   // 실험 관측: 이 훅이 실제로 불렸다는 사실 자체가 1차 데이터(플랜 본문은 기록 안 함). 세션 폴더와 대상을 둘 다 남김.
   logObservation(ws, { ts: new Date().toISOString(), tool: toolName, inputKeys, session: String(p.session_id || "").slice(0, 12), ...(target !== ws ? { target } : {}) });

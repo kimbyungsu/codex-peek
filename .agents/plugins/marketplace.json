@@ -1,0 +1,20 @@
+{
+  "name": "codex-peek-local",
+  "interface": {
+    "displayName": "Codex Peek Local"
+  },
+  "plugins": [
+    {
+      "name": "codex-peek",
+      "source": {
+        "source": "local",
+        "path": "./codex-plugin/codex-peek"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

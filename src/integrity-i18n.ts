@@ -34,7 +34,7 @@ const STATIC: Record<string, { ko: string; en: string }> = {
 // brain-drift 과거 이벤트 폴백 — sig에 비교값 두 개가 들어 있어(`cc-model:a!b` 형식) 문구를 재생성할 수 있다.
 // (sig의 cx-model 값은 기록 시 소문자 정규화본이라 원문 표기와 다를 수 있음 — 과거 이벤트 한정 폴백이라 허용.)
 function brainDriftFromSig(sig: string, en: boolean): string | null {
-  const m = /^(cc-model|cx-model|cx-effort):([^!]*)!(.*)$/.exec(sig || "");
+  const m = /^(cc-model|cx-model|cx-effort|ci-model|ci-effort):([^!]*)!(.*)$/.exec(sig || "");
   if (!m) return null;
   const a = m[2], b = m[3];
   if (m[1] === "cc-model") return en
@@ -43,9 +43,15 @@ function brainDriftFromSig(sig: string, en: boolean): string | null {
   if (m[1] === "cx-model") return en
     ? `Codex: configured model is '${a}' but the latest answer used '${b}'. The change may apply from the next answer.`
     : `코덱스: 설정한 모델은 '${a}'인데 최근 답한 모델은 '${b}'예요. 바꾼 게 다음 답부터 반영될 수 있어요.`;
-  return en
+  if (m[1] === "cx-effort") return en
     ? `Codex: configured reasoning is '${a}' but the latest answer used '${b}'. The change may apply from the next answer.`
     : `코덱스: 설정한 생각강도는 '${a}'인데 최근 답은 '${b}'였어요. 바꾼 게 다음 답부터 반영될 수 있어요.`;
+  if (m[1] === "ci-model") return en
+    ? `Implementer Codex: the model at automatic pinning was '${a}', but the latest answer used '${b}'. Confirm that the user intended this model change.`
+    : `구현 코덱스: 자동 고정 당시 모델은 '${a}'인데 최근 답은 '${b}'였어요. 사용자가 의도한 변경인지 확인하세요.`;
+  return en
+    ? `Implementer Codex: reasoning at automatic pinning was '${a}', but the latest answer used '${b}'. Confirm that the user intended this reasoning change.`
+    : `구현 코덱스: 자동 고정 당시 생각강도는 '${a}'인데 최근 답은 '${b}'였어요. 사용자가 의도한 변경인지 확인하세요.`;
 }
 
 // verify-incomplete 과거 이벤트 폴백 — 저장 원문에서 동적 값(검증 모드·강제 횟수)을 되읽어 반대 언어로 재생성(Codex 보완 수용).
