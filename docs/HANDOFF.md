@@ -42,6 +42,15 @@
    ※Codex↔Codex 모드의 구현 세션은 직접 ask가 거부됨(P-6 영수증 계약) — ask-start --allow-new → ask-wait <id> 내구 경로만 성공 증명으로 인정.
 7. **모든 UI 문구는 한/영 쌍**(t/T/tE). 한국어만 넣으면 EN 모드 회귀.
 
+### 1-0. 2026-07-14 로컬 진행 — C-C 훅 사가 해결 + P-6/P-6b 완결 (이 섹션이 최신)
+
+- **훅 미작동 3층 원인 해결(이 PC 폐루프 성공)**: ①리로드 전 장기 실행 app-server가 훅 설치 이전 설정 스냅샷 유지(Reload로 해소) ②핵심 — Codex는 Windows에서 훅을 감지된 기본 셸(PowerShell) -NoProfile -Command로 실행하는데 설치기 생성 명령 '"<node절대경로>" "<script>"'가 PS 파서 오류로 즉사·무로그(업스트림 0.144.0-alpha.4 소스 확인) ③사전검사가 cmd로만 검증(hook-setup.ts:30). **이 PC 핫픽스**: ~/.codex/hooks.json 4훅을 'node "<script>"'로 교체(+재신뢰+Reload). **다른 로컬도 같은 핫픽스 필요**(제품 수정 전까지). 제품 수정=P-5 잔여(docs/CODEX-DUAL-PENDING.md).
+- **P-6 완결(커밋 8a944af)**: '검증 미완 4라운드'(회수 도구 호출이 proof 자기무효화) 구조 해소 — 회수 영수증 계약(job 동결 스냅샷→proof v2[같은 role-lock 재검사+기록]→ask-wait 영수증[결정론 바이트·read-back 후 출력]→Stop은 턴·revision·지문·HEAD OID 결속 체인). C-C에서 직접 ask 금지(ask-start→ask-wait만)·구계약 v1 proof 불인정. 신규 tests/codex-verify-recovery.test.js.
+- **P-6b 완결(커밋 3fdd104)**: 자동 고정의 같은-세션 세대 전진 제거(applyAutoPinUpdate — 같은 세션 재관측=lastSeenAt만)·rollout 스캐너의 hook_prompt 오인 제외(isInjected+bridge 쌍둥이). §5-9의 '보조 고정도 두 revision 증가' 계약은 이 커밋으로 개정됨. 잔여: 다른 세션 첫 프롬프트 fallback↔훅 양방향 경합.
+- **P-7(업스트림·수정판 존재)**: Stop 차단 피드백에 UUIDv7 id → 대화 이어가기 invalid_id_prefix 거부. openai/codex#20783·PR #32312·rust-v0.145.0-alpha.5 수정. 이 PC는 확장 재시작으로 0.144.2 로드(backport 미확정 — 라이브에서 재발 시 새 대화 우회). 상세=CODEX-DUAL-PENDING.md P-7.
+- **P-8(설계 동결·구현 대기)**: C-C '체크리스트 강제' 체크박스 저장 안 됨(state 푸시가 저장 전 DOM 되돌림). 설계 10왕복 끝에 잠금 계약까지 '구현 가능 수준' 판정 — 단 사용자 방침으로 **최소 수정 우선**(토글=즉시 저장·호스트가 해당 필드만 재읽기-병합, 잠금 통일·복구 사다리는 백로그). 전체 설계·사용자 구조 원칙(프로젝트×언어×모드 분리·3트랙만 공용)=CODEX-DUAL-PENDING.md P-8.
+- 다음 순서: ①P-8 최소 수정 ②P-5 제품 수정(설계 v5.1 확정분: 설치기 dual-shell·PS 사전검사·확장 UX 4단계·마이그레이션·창로드 오경고[신뢰질의 10s 타임아웃 fail-closed] — CODEX-DUAL-PENDING.md) ③P-1~P-4 잔여 ④3fdd104 커밋 본문·주석의 P-6b 사건 순서 서술 정정 동승.
+
 ### 1-1. 2026-07-12 로컬 진행 — 검증 deadline 일치 + Codex↔Codex 이원화
 
 - 대시보드 `verifyTimeoutMin`이 직접 `ask`뿐 아니라 내구 작업(`ask-start` 1회 + pending 동안 `ask-wait`)의 deadline 정본이다. 외부 호출창이 10분에 닫혀도 worker는 사용자가 저장한 1~60분까지 살아 있으며, 같은 워크스페이스의 두 번째 작업은 차단한다. 테스트는 임의값 7분·23분으로 고정값 회귀를 막는다.

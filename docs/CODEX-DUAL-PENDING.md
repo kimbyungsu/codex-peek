@@ -160,6 +160,26 @@
   fallback을 훅 heartbeat 확인 뒤로 지연 또는 단일 등록 계약으로 통합)은 테스트로 노출 후 처리.
   HANDOFF의 'rollout 보조 고정도 두 revision 증가' 계약 문구도 함께 갱신할 것.
 
+### P-8. [신규 2026-07-14·설계 진행 중] 체크리스트 강제 체크박스 저장 안 됨 — 계약 저장 구조 재설계
+- 증상(사용자): C-C 모드에서 '체크리스트 강제' 체크박스를 바꾸고 저장해도 반영 안 됨.
+- 원인(검증 확정): 체크박스는 세그(curVM)와 달리 초안 상태가 없어, 대화 중 수시 도착하는 state 푸시가 저장
+  클릭 전에 DOM을 계약값으로 되돌림 → 옛값이 저장됨. 웹뷰 임시 수정 시도 2회(단일 초안·소유권 결속)는 검증이
+  반례(언어 전환 시 webview.html 통째 재생성으로 웹뷰 메모리 전멸[extension.ts:2897]·전역 기준선 무음 소실·
+  지연 응답·TOCTOU)로 기각 — **웹뷰에 지속 상태를 두는 설계 자체가 불가**.
+- **사용자 구조 원칙(2026-07-14 지시·설계 전제)**: 계약은 프로젝트×언어(ko/en)×운용모드(claude-codex/
+  codex-codex)별 분리가 기본, 3트랙(정찰) 관련 부분만 공용.
+- 확정 방향(v4~v6 설계 왕복·중심 아이디어는 검증 인정): **토글=즉시 저장 + 호스트가 잠금 안에서 재읽기·해당
+  필드만 patch + 계약 파일이 유일 정본(웹뷰 무상태)**. 공용 updateContractPatch(ws,lang,patch)로 전 작성자
+  통일(전체저장[dirty 필드만·체크리스트 제외]·모드[harnessMode 1필드]·정찰대상·scope-target.js·scope-gate.js·
+  체크박스). 무폴더 창은 CONTRACT_FILE 폴백·잠금 키=최종 절대경로. 잠금=신설 계약 파일 전용 fail-closed 잠금(v7~v9 확정): wx 선점+read-back fence, **자동 stale 회수 없음**(자동 경로에서 복원 rename이 사라져 해당 ABA 시나리오가 자동 운영에서 제거 — 수동 승인 경로의 잔여 간극은 P1 §5 동형 보장수준으로 명문화), 잠금 상태는 P1 5합타입+absent(alive/dead-valid/invalid/unreadable/owner-unverified/absent) — 정상JSON+ESRCH만 dead-valid·EPERM=alive·**JSON 파싱 실패=invalid**(P1 형식불명 동형)·fs 읽기 실패=unreadable·판정 중 ENOENT=absent(정상 해제 경합)=즉시 재획득 재시도, 복구는 상태별 승인 사다리만: dead-valid=1클릭 [잠금 정리](토큰 재확인·오탈취 즉시 복원)/invalid·owner-unverified=2단 명시 승인 모달(P1 --confirm 사다리 동형·격리 직전 상태 재판정)/unreadable=격리 금지·조사 안내만(토큰 재확인 불가=오탈취 방지 불가). stale-* 격리물은 TTL 청소(활성 잠금 절대 sweep 금지). 확장 호스트는 비동기 재시도(동기 루프로 호스트 블록 금지)·CLI는 동기 짧은 재시도. fence~쓰기 간극은 P1 §5 동형 보장수준 명문화. saveResult에 field·lang·mode 결속(웹뷰 DOM data-lang/mode
+  일치 시만 인라인 표시). 필드별 단일-flight(응답까지 그 박스만 disabled)·호스트 전체 try/catch·최초 렌더 전
+  disabled·즉시저장 aria-live 표시·저장버튼 문구를 규칙·세그 전용으로 정정.
+- 검증 이력: 진단 1회+수정 검증 2회 실패(웹뷰 상태 접근)+설계 v4(방향 인정)·v5(잠금 차단)·v6(funlock 패턴 —
+  판정 대기/진행. 스크래치 /tmp/v-ckbug·v-ckfix·v-slotdesign·v-slotv2·v-v3·v-v4·v-v5.txt).
+- 테스트 계약(검증 제시분 채택): 잠금 미획득 시 callback 미실행·죽은 잠금 회수 ABA·2프로세스 동시 patch
+  (체크박스 vs 전체저장/CLI)·무폴더 창·HTML 재생성 후 타 슬롯 결과 표시 금지·양 체크박스 동시 저장·손상 JSON
+  불변·호스트 예외 시 재활성화+재렌더.
+
 ## 처리 원칙
 - 위 항목들은 이원화 작업 이어서 할 때 각각 [설계→구현→테스트→Codex 검증→커밋] 루프로 처리.
 - P-5(훅 경고)가 사용자 마지막 작업이므로 우선 착수 후보. P-6은 codex-codex 실사용 차단급이라 P-5 제품
