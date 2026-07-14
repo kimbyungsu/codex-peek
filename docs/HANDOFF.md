@@ -2,7 +2,17 @@
 
 > 이 문서 하나로 이어갈 수 있게 쓰였다. 상세 설계 원본(SCOUT-TRACK.md·SCOPE-LEDGER.md)은 **의도적으로 레포 밖 로컬 문서**라
 > 다른 환경에는 없다 — 그래서 이 파일이 그 요지를 포함한다. ⚠ **실 API 키·토큰은 어떤 파일·픽스처·예시에도 절대 넣지 말 것.**
-> 마지막 갱신: 2026-07-09 (버전 0.1.86 불변 · 이 갱신을 포함해 push된 main 기준). 이번 push 묶음(17커밋) 요지:
+> 마지막 갱신: 2026-07-15 (버전 0.1.86 불변 · 이 갱신을 포함해 push된 main 기준). **이번 push 묶음(3커밋) 요지**:
+> ①**P-8 1단**(d0c6af5) — C-C '체크리스트 강제' 체크박스 저장 안 됨 해소: 토글=즉시 저장(그 필드만 재읽기-병합·손상
+> fail-closed), 프로젝트×언어 독립, 응답 수명은 순수 상태기 ckMachine(문서세대 reqId·성공도 화면 좌표 불일치면
+> hold·5초 만료 자기회복). Codex 7차 왕복 통과. 사용자 실기기 동작 확인(07-15). 2단(전 작성자 잠금)은 백로그.
+> ②**P-5 제품 수정**(df85348) — Codex 훅 PS 즉사 명령 근절: 설치기 dual-shell 실검증(bare node 우선·writer가
+> 따옴표 시작 토큰 구조 거부), hook-setup PS 사전검사, Reload UX(리로드 버튼·세대별 1회 권고·재신뢰 전이 포착),
+> 옛 설치본 마이그레이션 제안(무표식=수동 안내), 창로드 오경고 억제(조회 실패≠미신뢰 사실), 경고 주어를 사용자
+> hooks.json(실행 권위)으로 정정. Codex 4차 왕복 통과. 순수 상태기 2종(게이트·추적기)은 테스트가 직접 실행.
+> ③이 인수인계 갱신 — **이 PC(MAIN) hooks.json 마이그레이션 실적용·폐루프 확인**(경보 해소·lifecycle 훅 정상·
+> 체크리스트 저장 동작 사용자 확인 07-15). 다음 착수=P-1~P-4 잔여(§1-0 끝 참조).
+> ── (이전 2026-07-09 push 묶음(17커밋) 요지:
 > ①**관찰 일지 진화**(복권 규칙[반박 후 사람1/검증2 재확인]·확인 증거 기록 차단 해제·틀림 각주 완화·트림 판정/증거
 > 보존 — "지식은 진화해야" 사용자 방향) ②**언어 슬롯 분리**(정찰 설정·태도 슬롯 — 한/영 생활권 분리, API 키만 전역)
 > ③**정찰 프롬프트 ④칸**(단계별 기본 원칙이 트랙 따라 확장 — 태도 편집·형식 잠금 노출·프롬프트 서명) ④**검증 통계
@@ -16,7 +26,7 @@
 > ③**관측 장부 점화**(이벤트 0건 공백 해소 — 파서 위생·legacy 지도 상태·버킷 재알림·씨앗 백필 CLI, §6-3 4-1)
 > ④플랜 게이트 실험 성공 판정(§6-3 ⑥ — PreToolUse가 ExitPlanMode를 잡음 확정) ⑤꾸러미 렌더 민감 파일명 전면
 > 가리기+pytest 테스트 발견(대형 Python 레포 실측 결함 2건 — tg급 서비스 1차 실증) ⑥정찰 UI 3연타(용어를 '정찰
-> 흐름' 4단계로 통일·LLM 필수성 정직 고지·사람 언어 전면 순화·색 카드 시안성·구조 안내 새탭·유형별 기대 실효성).
+> 흐름' 4단계로 통일·LLM 필수성 정직 고지·사람 언어 전면 순화·색 카드 시안성·구조 안내 새탭·유형별 기대 실효성). ──)
 > ⚠ **2026-07-15 main 이력 재작성(force push)**: 저장소에 있어선 안 될 비공개 로컬 문서 1건이 폴더째 백업 커밋에
 > 섞여 들어와 이력에서 제거했다(내용·경로는 의도적으로 미기재). **기존 클론은 먼저 `git status`로 무커밋 수정·무추적 파일을 확인해
 > 백업(stash 또는 폴더 복사)한 뒤, `git fetch origin` → `git reset --hard origin/main`으로 맞출 것**(reset은
@@ -49,7 +59,7 @@
 
 ### 1-0. 2026-07-14 로컬 진행 — C-C 훅 사가 해결 + P-6/P-6b 완결 (이 섹션이 최신)
 
-- **훅 미작동 3층 원인 해결(이 PC 폐루프 성공)**: ①리로드 전 장기 실행 app-server가 훅 설치 이전 설정 스냅샷 유지(Reload로 해소) ②핵심 — Codex는 Windows에서 훅을 감지된 기본 셸(PowerShell) -NoProfile -Command로 실행하는데 설치기 생성 명령 '"<node절대경로>" "<script>"'가 PS 파서 오류로 즉사·무로그(업스트림 0.144.0-alpha.4 소스 확인) ③사전검사가 cmd로만 검증(hook-setup.ts:30). **이 PC 핫픽스**: ~/.codex/hooks.json 4훅을 'node "<script>"'로 교체(교체 전 hooks.json 백업 권장·교체 후 Codex 설정>Hooks 4개 재신뢰→Reload→새 C-C 대화에서 heartbeat/경고 소멸 확인). ~~다른 로컬도 같은 핫픽스 필요~~(제품 수정 완료 2026-07-15 — 확장이 옛 형식을 감지해 교체를 제안[무표식=수동 안내]하고, 설치기는 PS·cmd 양쪽 실검증 통과 토큰만 기입. 상세=CODEX-DUAL-PENDING.md P-5).
+- **훅 미작동 3층 원인 해결(이 PC 폐루프 성공)**: ①리로드 전 장기 실행 app-server가 훅 설치 이전 설정 스냅샷 유지(Reload로 해소) ②핵심 — Codex는 Windows에서 훅을 감지된 기본 셸(PowerShell) -NoProfile -Command로 실행하는데 설치기 생성 명령 '"<node절대경로>" "<script>"'가 PS 파서 오류로 즉사·무로그(업스트림 0.144.0-alpha.4 소스 확인) ③사전검사가 cmd로만 검증(hook-setup.ts:30). **이 PC 핫픽스**: ~/.codex/hooks.json 4훅을 'node "<script>"'로 교체(교체 전 hooks.json 백업 권장·교체 후 Codex 설정>Hooks 4개 재신뢰→Reload→새 C-C 대화에서 heartbeat/경고 소멸 확인). ~~다른 로컬도 같은 핫픽스 필요~~(제품 수정 완료 2026-07-15 — 확장이 옛 형식을 감지해 교체를 제안[무표식=수동 안내]하고, 설치기는 PS·cmd 양쪽 실검증 통과 토큰만 기입. 상세=CODEX-DUAL-PENDING.md P-5). **이 PC(MAIN)도 2026-07-15 옛 형식 실측 확인 후 마이그레이션 writer로 교체 적용, 재신뢰+리로드+프롬프트로 폐루프 성공**(경보 해소·PostToolUse heartbeat 정상·체크리스트 저장 동작까지 사용자 확인 — 백업 hooks.json.bak.2026-07-14T21-38-21-555Z. 경보 해소 조건(정확): C-C 유지 시 대상 슬롯의 hooks/list 신뢰 4/4 + 현재 구현 세션의 최신 lifecycle 하트비트[codex-active/<session>.json, source=codex-hook·현재 turn 일치 — 단 SessionStart는 최신 기존 turn 이후 타임스탬프면 turn 일치 없이 인정] 확인, 또는 C-C 해제 — 신뢰만으론 안 꺼짐. 주의: 테스트 전 실제 사용할 언어 슬롯(ko) 계약이 codex-codex인지 확인[07-15 실측: ko=claude-codex로 되돌아가 있고 C-C는 en 슬롯에만 저장돼 있었음]).
 - **P-6 완결(커밋 8a944af)**: '검증 미완 4라운드'(회수 도구 호출이 proof 자기무효화) 구조 해소 — 회수 영수증 계약(job 동결 스냅샷→proof v2[같은 role-lock 재검사+기록]→ask-wait 영수증[결정론 바이트·read-back 후 출력]→Stop은 턴·revision·지문·HEAD OID 결속 체인). C-C에서 직접 ask 금지(ask-start→ask-wait만)·구계약 v1 proof 불인정. 신규 tests/codex-verify-recovery.test.js.
 - **P-6b 완결(커밋 3fdd104)**: 자동 고정의 같은-세션 세대 전진 제거(applyAutoPinUpdate — 같은 세션 재관측=lastSeenAt만)·rollout 스캐너의 hook_prompt 오인 제외(isInjected+bridge 쌍둥이). §5-9의 '보조 고정도 두 revision 증가' 계약은 이 커밋으로 개정됨. 잔여: 다른 세션 첫 프롬프트 fallback↔훅 양방향 경합.
 - **P-7(업스트림·수정판 존재)**: Stop 차단 피드백에 UUIDv7 id → 대화 이어가기 invalid_id_prefix 거부. openai/codex#20783·PR #32312·rust-v0.145.0-alpha.5 수정. 이 PC는 확장 재시작으로 0.144.2 로드(backport 미확정 — 라이브에서 재발 시 새 대화 우회). 상세=CODEX-DUAL-PENDING.md P-7.
