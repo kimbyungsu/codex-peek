@@ -2652,6 +2652,34 @@ class Dashboard {
           this.post();
           this.panel?.webview.postMessage({ type: "saveResult", target: "timeout", ok });
         }
+        if (m?.type === "saveChecklist") {
+          // P-8 1단: 체크박스 토글=즉시 저장 — 계약을 새로 읽어 '그 필드만' 병합(재읽기-병합·잠금 없음).
+          // 프로젝트별·언어별 독립(2026-07-15 사용자 요구): 창마다 자신의 dashboardWorkspace()·파일=(프로젝트×언어).
+          // 멀티창 한계(정직): 재읽기는 '완료된 선행 저장'만 보존한다 — 잠금이 없어 진짜 동시 저장(읽기-읽기 겹침)은
+          // 서로 다른 필드끼리도 유실될 수 있다(1단 명시 한계 · 2단 잠금이 해소). 필드는 '저장된 운용모드' 기준.
+          const slotLang: Lang | undefined = m.lang === "ko" || m.lang === "en" ? m.lang : undefined;
+          const wsCk = dashboardWorkspace();
+          const box = m.box === "codex" ? "codex" : "claude";
+          const modeCk = normHarnessMode(loadContract(wsCk, slotLang));
+          // 모드 결속(Codex 반례 2026-07-15): 모드는 클릭 즉시 저장되지만 웹뷰 화면은 다음 state까지 옛 모드
+          // 체크박스를 보여준다 — 그 사이 토글되면 '보던 모드'와 '저장된 모드'가 달라 잘못된 필드에 기록될 수
+          // 있으므로, 웹뷰가 렌더 중이던 모드를 동봉하고 불일치면 기록 거부(fail-closed) 후 재렌더로 화면 정합.
+          const renderedMode = m.mode === "codex-codex" || m.mode === "claude-codex" ? m.mode : null;
+          const reqId = typeof m.reqId === "string" && m.reqId ? m.reqId : null;
+          if (!renderedMode || renderedMode !== modeCk) { // 모드 누락·불일치 모두 거부 — fail-closed(Codex 3차 반례: null 통과 금지)
+            this.post(); // 화면을 저장된 모드로 재정렬 — 사용자는 새 모드 기준으로 다시 토글
+            this.panel?.webview.postMessage({ type: "saveResult", target: "checklist", box, field: null, lang: slotLang || null, ok: false, staleMode: true, reqId });
+            return;
+          }
+          const field = modeCk === "codex-codex"
+            ? (box === "codex" ? "codexVerifierChecklist" : "codexImplementerChecklist")
+            : (box === "codex" ? "codexChecklist" : "claudeChecklist");
+          let ok = false;
+          try { ok = bridgeLib()?.patchContractFields?.(wsCk, slotLang, { [field]: !!m.value }) === true; } catch { ok = false; }
+          if (!ok) vscode.window.showErrorMessage(tE("체크리스트 설정 저장 실패 — 파일이 잠겨 있거나 손상됐어요(기존 계약은 보존됨). 잠시 후 다시 시도해 주세요.","Failed to save the checklist setting — file locked or corrupted (existing contract preserved). Try again shortly."));
+          this.post();
+          this.panel?.webview.postMessage({ type: "saveResult", target: "checklist", box, field, lang: slotLang || null, ok, reqId });
+        }
         if (m?.type === "saveContract") {
           // lang = 웹뷰가 '화면에 렌더했던 언어'(보던 슬롯) — 저장 도중 전역 언어가 바뀌었어도 보던 슬롯에 저장(오염 방지).
           const slotLang: Lang | undefined = m.lang === "ko" || m.lang === "en" ? m.lang : undefined;
@@ -2679,15 +2707,13 @@ class Dashboard {
           const rolePatch: Partial<Contract> = mode === "codex-codex" ? {
             codexImplementer: Array.isArray(m.claude) ? m.claude : [],
             codexVerifier: Array.isArray(m.codex) ? m.codex : [],
-            codexImplementerChecklist: !!m.claudeChecklist,
-            codexVerifierChecklist: !!m.codexChecklist,
+            // P-8 1단: 체크리스트 필드는 큰 저장에서 제외 — 즉시 저장(saveChecklist)이 유일 작성 경로.
+            // 화면 되돌림으로 낡은 체크값이 버튼 저장에 실려 재발하는 경로 차단(...prevContract가 디스크 값 보존).
             codexInjectMode: normInjectMode({ claudeInjectMode: m.claudeInjectMode }),
           } : {
             claude: Array.isArray(m.claude) ? m.claude : [],
             codex: Array.isArray(m.codex) ? m.codex : [],
-            claudeChecklist: !!m.claudeChecklist,
-            codexChecklist: !!m.codexChecklist,
-            claudeInjectMode: normInjectMode({ claudeInjectMode: m.claudeInjectMode }),
+            claudeInjectMode: normInjectMode({ claudeInjectMode: m.claudeInjectMode }), // 체크리스트 제외 — 위 주석과 동일(P-8 1단)
           };
           const ok = saveContract(dashboardWorkspace(), {
             ...prevContract,
@@ -3274,7 +3300,7 @@ class Dashboard {
       <div class="chead">${t("규칙", "Rules")} <span class="muted" style="font-weight:400">${t("· 기본 원칙 말고, 이 프로젝트에만 필요한 것", "· not the baseline — only what this project needs")}</span></div>
       <textarea id="cClaude" rows="3" placeholder="${t("예) 이 레포에선 ○○ 라이브러리·패턴 쓰지 마라&#10;예) 보고는 기술용어 빼고 예시로 정리해라&#10;예) 플랜 모드로 쓸 때: 영향받는 호출부·마이그레이션 순서를 플랜에 포함해라", "e.g.) Do not use the ○○ library/pattern in this repo&#10;e.g.) Report with examples, not jargon&#10;e.g.) In plan mode: include affected call sites & migration order in the plan")}"></textarea>
       <div class="rulemeta"><span class="rchip opt">${t("선택", "optional")}</span><span class="rchip">${t("⏎ 한 줄 = 규칙 1개", "⏎ one line = one rule")}</span><span class="rchip">${t("∅ 비우면 이 칸의 규칙만 안 붙음", "∅ empty = this box injects nothing")}</span></div>
-      <label class="ck"><input type="checkbox" id="ckClaude"> ${t("체크리스트 강제 — 각 규칙마다 [준수/위반+근거] 달게 함", "Enforce checklist — require [complies/violated + reason] per rule")}</label>
+      <label class="ck"><input type="checkbox" id="ckClaude" disabled> ${t("체크리스트 강제 — 각 규칙마다 [준수/위반+근거] 달게 함", "Enforce checklist — require [complies/violated + reason] per rule")}</label>
       <div class="hint">${t("☑ 켜짐 → 답변 끝에 <code>[계약점검] 1) 준수 — &lt;근거&gt; / 2) 위반 — &lt;근거&gt;</code> 형식으로 규칙별 자가보고를 강제 · ☐ 꺼짐 → 규칙 텍스트만 주입", "☑ on → forces a per-rule self-report block <code>[Contract Check] 1) complies — &lt;reason&gt;</code> at the end of each answer · ☐ off → injects rule text only")}</div>
     </div>
     <label class="ck verify"><span id="injectTimingLabel">${t("넣는 시점 — 이 규칙을 <b>언제</b> Claude에 넣을지", "Injection timing — <b>when</b> to inject these rules into Claude")}</span> <span id="planNow" class="nowbadge" style="display:none"></span>
@@ -3291,7 +3317,7 @@ class Dashboard {
       <div class="chead">${t("Codex 규칙", "Codex Rules")} <span class="muted" style="font-weight:400">${t("· 기본 검증원칙 말고, 이 프로젝트에서 특히 볼 것 · Codex 검증 때마다 붙음", "· not the baseline — what to focus on in this project · attached to every Codex verification")}</span></div>
       <textarea id="cCodex" rows="3" placeholder="${t("예) 동시성·레이스 컨디션을 중점으로 봐라&#10;예) 결제·정산은 중복 청구·반올림 오차·롤백까지 확인해라&#10;예) 단순 포맷·스타일 지적은 검증에서 빼라", "e.g.) Focus on concurrency & race conditions&#10;e.g.) For payments: check double-charging, rounding, rollback&#10;e.g.) Exclude pure formatting/style nits from verification")}"></textarea>
       <div class="rulemeta"><span class="rchip opt">${t("선택", "optional")}</span><span class="rchip">${t("⏎ 한 줄 = 규칙 1개", "⏎ one line = one rule")}</span><span class="rchip">${t("∅ 비우면 이 칸의 규칙만 안 붙음", "∅ empty = this box injects nothing")}</span></div>
-      <label class="ck"><input type="checkbox" id="ckCodex"> ${t("체크리스트 강제 — 검증 답에 규칙별 [준수/위반+근거] 달게 함", "Enforce checklist — require [complies/violated + reason] per rule in verification answers")}</label>
+      <label class="ck"><input type="checkbox" id="ckCodex" disabled> ${t("체크리스트 강제 — 검증 답에 규칙별 [준수/위반+근거] 달게 함", "Enforce checklist — require [complies/violated + reason] per rule in verification answers")}</label>
       <div class="hint">${t("☑ 켜짐 → Codex 검증 답에도 규칙별 <code>[계약점검]</code> 자가보고 강제 · ☐ 꺼짐 → 규칙 텍스트만 붙음", "☑ on → Codex answers must include a per-rule <code>[Contract Check]</code> self-report · ☐ off → rule text only")}</div>
     </div>
     <label class="ck verify">${t("검증 모드 — <b>언제</b> Codex 검증→보고를 강제할지", "Verify mode — <b>when</b> to force the Codex verify→report loop")}
@@ -3316,7 +3342,7 @@ class Dashboard {
       <div class="sbrow" id="sbScout" style="display:none"><span class="sbmark"></span><b>${t("④ 정찰이 지도를 그릴 때", "④ When the scout draws a map")}</b> ${t("· 정찰 기본 원칙 (3트랙)", "· scout baseline (3-track)")} <span class="sbwhy"></span></div>
     </div>
   </div>
-  <div class="row"><button id="saveC">${t("저장", "Save")}</button><span id="savedAt" class="muted">${t("· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장", "· saves the Claude rules, Codex rules and verify mode together")}</span></div>
+  <div class="row"><button id="saveC">${t("저장", "Save")}</button><span id="savedAt" class="muted">${t("· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장 (체크리스트 강제는 켜고 끄는 즉시 저장)", "· saves the Claude rules, Codex rules and verify mode together (checklist enforcement saves instantly on toggle)")}</span></div>
 
   <h2 class="sec">${t("한눈에 보기", "At a Glance")} <span class="sub2">${t("누구에게 · 뭐가 · 언제 들어가나 — 지금 저장된 설정 기준 (저장하면 바뀐 곳이 깜빡여요)", "who gets what, and when — based on saved settings (changes flash on save)")}</span></h2>
   <section class="flowmap card" id="fmSection">
@@ -3603,6 +3629,60 @@ class Dashboard {
   // 편집 중(dirty) 언어가 바뀌면 그 카드는 옛 언어 화면 그대로 '동결'(hold)되고, 저장하면 옛(보던) 슬롯에 저장된다
   // → 한국어 편집분이 영어 칸에 저장되는 슬롯 오염 차단(Codex 검증 반례 반영).
   let renderedLangC = null, renderedLangB = null;
+  // P-8 1단: 체크박스는 초안 없이 토글 즉시 저장 — 필드별 단일-flight(응답까지 그 박스만 비활성).
+  // ckModeLock: 모드 전환 클릭~다음 state 사이엔 화면 체크박스가 옛 모드 의미라 입력 잠금(잘못된 필드 기록 방지).
+  var ckModeLock = false;
+  // [P8-CKM-BEGIN] 체크박스 요청 수명 상태기 — 순수(DOM·타이머·전역 참조 없음). tests/p8-checklist.test.js가 이
+  // 블록을 그대로 추출·실행해 순서 반례(모드 경합 state→staleMode, 응답 유실→만료→정본 state, 문서 세대 재사용)를
+  // 검증한다. 규약: 실패·만료='hold'(재활성·되돌림 금지 — 정본 state만 값·활성화 적용 · Codex 5차 반례 봉합),
+  // 불일치 응답='ignore'(해제도 되돌림도 없는 완전 no-op — 새 요청의 single-flight를 못 풂 · Codex 3차 봉합).
+  function ckMachine(){
+    var pending = null;
+    return {
+      idle: function(){ return !pending; },
+      begin: function(rid, field, lang, timer){ pending = { id: rid, field: field, lang: lang, timer: timer }; },
+      // saveResult 소비 — reqId+field(성공 응답에만 실림·있을 때만 대조)+lang 전부 일치해야 요청이 끝난다.
+      // 성공이라도 요청 당시의 field·lang이 '소비 시점의 화면'(curField·curLang)과 다르면 commit 금지(Codex 6차
+      // 대칭 반례: 옛 모드 저장 성공 응답이 모드 변경을 건너와 옛 값을 새 화면 기준선으로 오염) — 저장 자체는
+      // 디스크에 유효하므로 UI만 hold, 정본 state가 새 화면 좌표의 값을 채운다.
+      result: function(resp, curField, curLang){
+        if (!pending || resp.reqId !== pending.id || (resp.field && resp.field !== pending.field) || (resp.lang || null) !== pending.lang) return { act: "ignore" };
+        var pd = pending; pending = null;
+        if (!resp.ok || pd.field !== curField || pd.lang !== curLang) return { act: "hold", pd: pd };
+        return { act: "commit", pd: pd };
+      },
+      // 타임아웃 만료 — '그 요청'이 아직 대기 중일 때만 끝낸다(매칭 응답이 먼저 왔으면 ignore).
+      expire: function(rid){ if (!pending || pending.id !== rid) return { act: "ignore" }; var pd = pending; pending = null; return { act: "hold", pd: pd }; },
+      // 정본 state 도착 — 대기 중엔 화면 불가침(미응답 저장 보호=skip), 아니면 값 적용+활성화 허가(fill).
+      state: function(){ return { act: pending ? "skip" : "fill" }; }
+    };
+  }
+  // [P8-CKM-END]
+  var ckM = { claude: ckMachine(), codex: ckMachine() };
+  // 세대 유일성(Codex 4차): 카운터는 문서 재생성마다 0으로 리셋되므로 단독으론 ko→en→ko 왕복 뒤 옛 응답과
+  // 충돌 가능 — HTML 빌드마다 새로 뽑히는 CSP nonce를 문서 세대 접두로 결합해 전역 유일 reqId를 만든다.
+  var ckDoc = "${nonce}";
+  var ckSeq = 0;
+  function ckExpectedField(box){ return harnessMode === "codex-codex" ? (box === "codex" ? "codexVerifierChecklist" : "codexImplementerChecklist") : (box === "codex" ? "codexChecklist" : "claudeChecklist"); }
+  // 응답 유실 liveness(Codex 4차→5차 보수): postMessage는 drop될 수 있다(호스트 data push도 drop 로그를 남김).
+  // 만료는 pending만 해제(hold) — 여기서 재활성·옛 기준선 되돌림을 하면 그 사이 모드가 바뀐 화면에 옛 모드 값이
+  // 노출된다(Codex 5차 반례). disabled 유지+ready로 정본 state를 요청, 값·활성화는 state 채움만 담당(자기 회복:
+  // ready가 유실돼도 pending이 비었으므로 다음 어떤 state 푸시든 채움·재활성한다 — 영구 disabled 경로 없음).
+  function ckExpire(box, rid){
+    if (ckM[box].expire(rid).act !== "hold") return;
+    try { vscode.postMessage({ type: "ready" }); } catch(e){}
+  }
+  [["ckClaude","claude"],["ckCodex","codex"]].forEach(function(pr){
+    var el = $(pr[0]); if(!el) return;
+    el.addEventListener("change", function(){
+      if (!ckM[pr[1]].idle() || ckModeLock) return;
+      el.disabled = true;
+      ckSeq++;
+      var rid = ckDoc + ":" + ckSeq;
+      ckM[pr[1]].begin(rid, ckExpectedField(pr[1]), renderedLangC || null, setTimeout(function(){ ckExpire(pr[1], rid); }, 5000));
+      vscode.postMessage({ type: "saveChecklist", box: pr[1], value: el.checked, lang: renderedLangC || undefined, mode: harnessMode, reqId: rid });
+    });
+  });
   $("saveC").addEventListener("click", () => {
     clearTimeout(pendingScroll);  // 직전 저장의 대기 스크롤 취소
     const toLines = (s) => s.split("\\n").map((x) => x.trim()).filter(Boolean);
@@ -3610,7 +3690,7 @@ class Dashboard {
     pendingSave = {target:"contract", imCh, vmCh};
     vscode.postMessage({type:"saveContract", lang: renderedLangC || undefined, harnessMode:harnessMode,
       claude: toLines($("cClaude").value), codex: toLines($("cCodex").value),
-      claudeChecklist: $("ckClaude").checked, codexChecklist: $("ckCodex").checked, verifyMode: curVM, claudeInjectMode: curIM, scoutMode: curSM});
+      verifyMode: curVM, claudeInjectMode: curIM, scoutMode: curSM}); // 체크리스트는 토글 즉시 저장(P-8 1단) — 버튼 저장에서 제외
     // 성공 플래시·스크롤은 saveResult(ok)에서 (저장 실패 시 거짓 성공 방지)
   });
   $("saveB").addEventListener("click", () => {
@@ -3635,7 +3715,10 @@ class Dashboard {
     b.addEventListener("click", function(){ vscode.postMessage({type:"setLang", lang: b.getAttribute("data-lang")}); });
   });
   document.querySelectorAll(".modebtn").forEach(function(b){
-    b.addEventListener("click", function(){ var m=b.getAttribute("data-mode"); if(m===harnessMode)return; vscode.postMessage({type:"setHarnessMode", mode:m, lang:renderedLangC||undefined}); });
+    b.addEventListener("click", function(){ var m=b.getAttribute("data-mode"); if(m===harnessMode)return;
+      // P-8: 모드 전환~다음 state 사이 화면 체크박스는 옛 모드 의미 — 입력 잠금(잘못된 필드 기록 방지, state 도착 시 해제)
+      ckModeLock = true; if($("ckClaude")) $("ckClaude").disabled = true; if($("ckCodex")) $("ckCodex").disabled = true;
+      vscode.postMessage({type:"setHarnessMode", mode:m, lang:renderedLangC||undefined}); });
   });
   // 탭2 통계 렌더 — 빈 기록이면 안내, 아니면 KPI 카드 + 도넛(28일 분포) + 추이 막대(14일·24h 슬롯) + 히트맵(4주 요일×시간)
   function fmtTok(n){ return n>=1000 ? (n/1000).toFixed(1)+"k" : String(n); }
@@ -3840,6 +3923,24 @@ class Dashboard {
       return;
     }
     if (ev.data?.type === "saveResult") {
+      if (ev.data.target === "checklist") { // P-8 1단 — 상태기 소비(순서 반례는 테스트가 ckMachine을 실행 검증)
+        var ckKey = ev.data.box === "codex" ? "codex" : "claude";
+        var ckEl = ev.data.box === "codex" ? $("ckCodex") : $("ckClaude");
+        // 소비 시점의 화면 좌표를 상태기에 전달 — 성공이라도 그 사이 모드·언어가 바뀌었으면 commit이 아닌 hold.
+        var ckR = ckM[ckKey].result(ev.data, ckExpectedField(ckKey), renderedLangC || null);
+        if (ckR.act === "ignore") return; // 불일치 응답(낡은 요청·타 언어·이전 문서) — 완전 no-op
+        clearTimeout(ckR.pd.timer); // 매칭 응답 도착 — 유실 대비 타이머 해제
+        if (ckR.act === "commit") {
+          // commit=상태기가 '요청 좌표=현재 화면 좌표'까지 보장 — 즉시 재활성·기준선·표시 안전.
+          if (ckEl) { if (!ckModeLock) ckEl.disabled = false; if (ckKey === "codex") appCkX = ckEl.checked; else appCkC = ckEl.checked; }
+          flashSaved($("savedAt"), T("체크리스트 설정 저장됨 ✓ (즉시 적용)","Checklist setting saved ✓ (applies immediately)"));
+        } else {
+          // hold(실패·거부·화면이 바뀐 성공): 여기서 재활성·기준선을 만지면 옛 좌표 값이 새 화면에 노출된다
+          // (Codex 5차·6차 반례) — disabled 유지, ready로 정본 state를 요청해 채움에 위임.
+          try { vscode.postMessage({ type: "ready" }); } catch(e){}
+        }
+        return;
+      }
       // 저장 성공 피드백은 '확장이 실제 저장에 성공했다고 알려줄 때'만 — 클릭 즉시가 아니라(거짓 성공 방지).
       const ps = pendingSave; pendingSave = null;
       if (!ev.data.ok) return; // 실패: 네이티브 에러 토스트가 알린다. 성공 플래시·스크롤은 하지 않음.
@@ -3885,7 +3986,7 @@ class Dashboard {
       $("baseGlobalWarn").innerHTML=cc?T("⚠ <b>전역 공통값입니다.</b> 위 <b>Codex 구현·검증 규칙</b>은 프로젝트·언어·운용 모드별로 분리되지만, 단계별 기본 원칙은 두 운용 모드가 공유합니다.","⚠ <b>This is global.</b> The Codex implementer/verifier rules above are separated by project, language, and harness mode; stage baselines are shared by both harness modes."):T("⚠ <b>전역 공통값입니다.</b> 위 <b>Claude·Codex 규칙</b>은 프로젝트별이지만, 단계별 기본 원칙은 모든 프로젝트에 공통 적용됩니다.","⚠ <b>This is global.</b> The Claude/Codex rules above are per-project, while stage baselines apply to every project.");
       $("baseTransmitTo").textContent=cc?T("→ 구현 Codex에게 · 검증 Codex에 넘길 때 · 검증 ON일 때만","→ to implementer Codex · when handing off to verifier Codex · verify ON only"):T("→ Claude에게 · Claude가 Codex에 넘길 때 · 검증 ON일 때만","→ to Claude · when handing off to Codex · verify ON only");
       $("baseRejudgeTo").textContent=cc?T("→ 구현 Codex에게 · 검증 답을 되짚을 때 · 검증 ON일 때만","→ to implementer Codex · when re-judging the verifier answer · verify ON only"):T("→ Claude에게 · Codex 답을 되짚을 때 · 검증 ON일 때만","→ to Claude · when re-judging Codex's answer · verify ON only");
-      $("savedAt").textContent=cc?T("· 위 Codex 구현 규칙 · Codex 검증 규칙 · 검증 모드를 함께 저장","· saves Codex implementer rules, verifier rules, and verify mode together"):T("· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장","· saves Claude rules, Codex rules and verify mode together");
+      $("savedAt").textContent=cc?T("· 위 Codex 구현 규칙 · Codex 검증 규칙 · 검증 모드를 함께 저장 (체크리스트 강제는 즉시 저장)","· saves Codex implementer rules, verifier rules, and verify mode together (checklist saves instantly)"):T("· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장 (체크리스트 강제는 즉시 저장)","· saves Claude rules, Codex rules and verify mode together (checklist saves instantly)");
       $("brainTitle").textContent=cc?T("검증 코덱스 두뇌 설정","Verifier Codex Brain Settings"):T("코덱스 두뇌 설정","Codex Brain Settings");
       $("brainSub").textContent=cc?T("검증 역할 세션에 매 호출 적용 · 구현 역할 모델 변경은 별도 경고","applied to verifier calls · implementer model changes are warned separately"):T("이 프로젝트에서 코덱스가 쓰는 모델·생각강도","model & reasoning effort Codex uses in this project");
     });
@@ -3952,9 +4053,12 @@ class Dashboard {
       const ccMode=d.contract.harnessMode==="codex-codex";
       if (document.activeElement !== $("cClaude") && !contractDirty.claude) $("cClaude").value = (ccMode?(d.contract.codexImplementer||[]):(d.contract.claude||[])).join("\\n");
       if (document.activeElement !== $("cCodex") && !contractDirty.codex) $("cCodex").value = (ccMode?(d.contract.codexVerifier||[]):(d.contract.codex||[])).join("\\n");
-      $("ckClaude").checked = ccMode ? d.contract.codexImplementerChecklist !== false : d.contract.claudeChecklist !== false;
-      $("ckCodex").checked = ccMode ? d.contract.codexVerifierChecklist !== false : d.contract.codexChecklist !== false;
-      appCkC = $("ckClaude").checked; appCkX = $("ckCodex").checked; // 체크박스 '마지막 적용값'(appVM 패턴) — hold 판정 기준
+      // P-8 1단: 저장 응답 대기 중(pending)엔 상태 푸시가 체크박스를 되돌리지 못한다(skip) — 증상('저장 전
+      // 되돌림')의 구조 제거. 평시(fill)엔 계약 파일이 유일 정본이라 그대로 반영+활성화 — hold(실패·만료)로
+      // 비활성 유지된 체크박스도 여기서만 정본 값으로 되살아난다(최초 렌더 전 disabled 해제도 동일 경로).
+      ckModeLock = false;
+      if (ckM.claude.state().act === "fill") { $("ckClaude").checked = ccMode ? d.contract.codexImplementerChecklist !== false : d.contract.claudeChecklist !== false; appCkC = $("ckClaude").checked; $("ckClaude").disabled = false; }
+      if (ckM.codex.state().act === "fill") { $("ckCodex").checked = ccMode ? d.contract.codexVerifierChecklist !== false : d.contract.codexChecklist !== false; appCkX = $("ckCodex").checked; $("ckCodex").disabled = false; }
       const first = (appVM===null);
       const pVM=appVM, pIM=appIM, pSM=appSM;
       appVM = d.contract.verifyMode || "off";
