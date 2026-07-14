@@ -50,6 +50,8 @@ function main() {
         CODEX_BRIDGE_VERIFY_TIMEOUT_MIN: String(timeoutMin),
         CODEX_BRIDGE_VERIFY_DEADLINE_AT: job.deadlineAt,
         CODEX_BRIDGE_JOB_PROMPT_FILE: jobFile,
+        // P-6: 검증된 자기 job 파일의 id를 명시 전달(상속값 불신 — writeProof v2가 파일과 대조).
+        CODEX_BRIDGE_ASK_JOB_ID: String(job.id),
       }),
       encoding: "utf8", windowsHide: true,
       // 내부 bridge가 절대 deadline에 Codex 자식을 끊고 결과를 정리할 짧은 여유만 준다.

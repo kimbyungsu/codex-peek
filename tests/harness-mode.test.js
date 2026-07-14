@@ -61,8 +61,19 @@ active=JSON.parse(fs.readFileSync(path.join(tmp,"codex-active",sid+".json"),"utf
 writeSessionMeta(sid2,"vscode","user");r=run({hook_event_name:"UserPromptSubmit",session_id:sid2,turn_id:"t2",cwd:ws,model:"gpt-5.4",permission_mode:"default"});assert.match(r.stdout,/구현 규칙/);assert.strictEqual(JSON.parse(fs.readFileSync(path.join(tmp,"links.json"),"utf8")).byWorkspace[lib.normWs(ws)].implementerSession,sid2,"새 대화의 실제 프롬프트로 구현 연결 자동 이동");
 r=run({hook_event_name:"Stop",session_id:sid,turn_id:"t1",cwd:ws,permission_mode:"default"});assert.strictEqual(r.stdout,"","이전 구현 세션의 뒤늦은 Stop은 새 현재 대화를 막지 않음");
 r=run({hook_event_name:"Stop",session_id:sid2,turn_id:"t2",cwd:ws,permission_mode:"default"});assert.match(r.stdout,/"decision":"block"/);assert.match(r.stdout,/ask-start/);
+// P-6(설계 v5.1): 구계약(v1) proof는 C-C Stop에서 더 이상 인정되지 않는다 — 결속 체인(proof v2+영수증) 필수.
 const turn=JSON.parse(fs.readFileSync(path.join(tmp,"codex-turns",sid2+".json"),"utf8"));fs.mkdirSync(path.join(tmp,"proofs"),{recursive:true});fs.writeFileSync(path.join(tmp,"proofs",sid2+".json"),JSON.stringify({status:"success",exit:0,answerChars:10,ts:new Date(turn.startedAt+1000).toISOString()}));
-r=run({hook_event_name:"Stop",session_id:sid2,turn_id:"t2",cwd:ws,permission_mode:"default"});assert.strictEqual(r.stdout,"","성공 proof가 있으면 현재 구현 세션 Stop 통과");
+r=run({hook_event_name:"Stop",session_id:sid2,turn_id:"t2",cwd:ws,permission_mode:"default"});assert.match(r.stdout,/"decision":"block"/,"구계약 v1 proof만으로는 C-C Stop 통과 불가(자기무효화 수정 후 결속 체인 필수)");
+// 공식 경로 전체(job 동결 스냅샷 → proof v2 → 회수 영수증)를 구성하면 Stop이 통과한다.
+const recNow=JSON.parse(fs.readFileSync(path.join(tmp,"links.json"),"utf8")).byWorkspace[lib.normWs(ws)];
+const chainJob={schema:"ask-job-v1",id:"ask-hmode1-0123456789",workspace:ws,harnessMode:"codex-codex",implementerSession:sid2,implementerTurnId:"t2",implementerRevision:recNow.implementerRevision,state:"succeeded",exitCode:0,finishedAt:null};
+const pw=lib.writeDurableProofV2(ws,chainJob,"검증 답변 본문",ver);assert.ok(pw.ok,"proof v2 기록: "+(pw.reason||""));
+chainJob.finishedAt=new Date(Date.now()+1500).toISOString();
+const rw=lib.writeRecoveryReceipt(chainJob);assert.ok(rw.ok,"회수 영수증 기록: "+(rw.reason||""));
+r=run({hook_event_name:"Stop",session_id:sid2,turn_id:"t2",cwd:ws,permission_mode:"default"});assert.strictEqual(r.stdout,"","결속 체인(proof v2+영수증)이 성립하면 현재 구현 세션 Stop 통과");
+// 회수(ask-wait) 이후 다른 도구 호출이 있어도 — lastActionAt 갱신 — proof가 무효화되지 않는다(P-6 핵심).
+r=run({hook_event_name:"PostToolUse",session_id:sid2,turn_id:"t2",cwd:ws,tool_name:"Bash",permission_mode:"default"});assert.strictEqual(r.status,0);
+r=run({hook_event_name:"Stop",session_id:sid2,turn_id:"t2",cwd:ws,permission_mode:"default"});assert.strictEqual(r.stdout,"","회수 도구 호출의 lastActionAt 갱신이 proof를 자기무효화하지 않음");
 assert.match(fs.readFileSync(path.join(__dirname,"..","bridge","verify-guard.js"),"utf8"),/harnessMode === "codex-codex"/,"C-C 모드에서 Claude Stop 훅 무동작");
 assert.match(fs.readFileSync(path.join(__dirname,"..","bridge","scout-gate.js"),"utf8"),/harnessMode === "codex-codex"/,"C-C 모드에서 Claude 플랜 훅 무동작");
 // 현재 대화가 바뀌면 이전 구현자의 모델 기준선도 함께 넘어오지 않는다.

@@ -207,8 +207,9 @@ code --install-extension codex-bridge-*.vsix --force
 > 💡 **홈 경로에 공백이 있으면**(예: `C:/Users/First Last`) 경로를 따옴표로 감싸세요 — `node "$HOME/.codex-bridge/codex-bridge.js" doctor`. `node`가 PATH에 없으면 node를 절대경로로(예: `"C:/Program Files/nodejs/node.exe"`). `CODEX_BRIDGE_HOME`을 설정하면 `.codex-bridge` 위치를 옮길 수 있습니다(그땐 훅 명령 경로도 그에 맞추세요).
 
 ```bash
-node ~/.codex-bridge/codex-bridge.js ask "<프롬프트>"        # 연결 세션에 보내고 답 받기(없으면 보고)
+node ~/.codex-bridge/codex-bridge.js ask "<프롬프트>"        # 연결 세션에 보내고 답 받기(없으면 보고) ※Codex↔Codex 모드에선 미지원 — ask-start 사용
 node ~/.codex-bridge/codex-bridge.js ask --allow-new "<...>" # 첫 소통: 새 세션 생성+연결
+node ~/.codex-bridge/codex-bridge.js ask-start --allow-new "<...>" # ※Codex↔Codex 모드의 검증은 이 내구 경로만 인정(ask-wait <job-id>로 회수)
 node ~/.codex-bridge/codex-bridge.js ask --net "<...>"       # 이 1회만 검증자 네트워크 허용(원격 확인용 — 아래 안전 원칙 참조)
 node ~/.codex-bridge/codex-bridge.js ask-active status       # 이 워크스페이스의 실행 중/비정상 종료 검증 확인
 node ~/.codex-bridge/codex-bridge.js timeout                 # 대시보드 대기시간 + 외부 호출 최소 timeout(ms) 확인

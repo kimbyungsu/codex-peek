@@ -43,6 +43,7 @@ function cleanupOldState(now) {
   sweep(ATTEMPTS_DIR, ATTEMPTS_TTL_MS);
   sweep(ACTIVE_DIR, ACTIVE_TTL_MS); // 세션별 active도 오래된 것 정리(휴면 종료된 대화)
   sweep(CODEX_ACTIVE_DIR, ACTIVE_TTL_MS);
+  sweep(path.join(BRIDGE_DIR, "codex-recovery"), PROOF_TTL_MS); // 회수 영수증 — proof와 같은 수명(설계 v5.1)
   sweep(path.join(BRIDGE_DIR, "scout-gate-attempts"), ATTEMPTS_TTL_MS); // 게이트 세션 카운터 — 검증 재시도와 같은 7일(단명 상태)
   return removed;
 }
@@ -472,6 +473,306 @@ function registerCodexImplementer(ws, sessionId, model, effort, expectedSession)
     const ok = atomicWrite(LINKS_FILE_SHARED, JSON.stringify(o, null, 2));
     return { ok, reason: ok ? (same ? "same" : replaced ? "relinked" : "linked") : "write-failed", existing: cur.implementerSession || null };
   });
+}
+
+// ── P-6: Codex-Codex 내구 검증의 '회수 영수증' 계약 (설계 v5.1 — 2026-07-14) ─────────────────
+// 문제: 검증 결과를 회수하는 도구 호출 자체가 PostToolUse로 lastActionAt을 갱신해 proof를 영구
+// 무효화(자기무효화 → '검증 미완 4라운드'). 해법: 시각 경합 대신 결속 체인 —
+// job 생성 시 구현 컨텍스트(sid·turnId·revision)를 불변 동결 → proof가 그 스냅샷을 복사(v2, 기록
+// 직전 같은 role lock 안에서 현재 상태 재검사) → ask-wait 성공 시 receipt(모든 필드 job/proof 복사,
+// ts=job.finishedAt 결정론 — 동시 회수도 같은 바이트로 수렴) → Stop 게이트는 lastActionAt 없이
+// proof·receipt·현재 역할·이벤트 turnId의 4중 결속으로 판정한다.
+const CODEX_TURNS_DIR = path.join(BRIDGE_DIR, "codex-turns"); // codex-hook.js TURN_DIR과 같은 폴더(계약 공유)
+const CODEX_RECOVERY_DIR = path.join(BRIDGE_DIR, "codex-recovery"); // 회수 영수증 — jobId 단위 파일
+function safeStateName(s) { return String(s || "").replace(/[^0-9a-zA-Z._-]/g, "_"); }
+function askJobIdOk(id) { return /^ask-[a-z0-9]+-[0-9a-f]{10}$/.test(String(id || "")); }
+function recoveryReceiptFileFor(jobId) { return askJobIdOk(jobId) ? path.join(CODEX_RECOVERY_DIR, jobId + ".json") : ""; }
+function proofFileForSession(sid) { return path.join(PROOFS_DIR, safeStateName(sid || "_nosession") + ".json"); }
+function sha256Hex(buf) { return require("crypto").createHash("sha256").update(buf).digest("hex"); }
+
+// links.json 1회 파싱에서 workspace 레코드를 꺼낸다(잠금은 호출자가 잡는다 — Stop·freeze가 같은 판독을 공유).
+function implementerRecordOf(linksObj, ws) {
+  const key = normWs(ws);
+  const by = (linksObj && linksObj.byWorkspace) || {};
+  const found = Object.keys(by).find((k) => normWs(k) === key);
+  const cur = found ? (by[found] || {}) : null;
+  if (!cur) return null;
+  return {
+    session: String(cur.implementerSession || ""),
+    revision: Number(cur.implementerRevision) || 0,
+    eventAt: Number(cur.implementerEventAt) || 0,
+  };
+}
+// role lock 아래에서 links를 정확히 1회 읽어 레코드를 반환. 잠금 실패는 예외(fail-closed는 호출자 몫).
+// '파일 없음'(구현자 미지정=정상)과 '판독·파싱 실패'(손상=차단 대상)를 합타입으로 구분한다 — 손상을 빈
+// 객체로 축소하면 Stop 게이트가 검증 없이 통과하는 fail-open이 된다(구현 검증 1차 지적).
+function readImplementerRecordLocked(ws) {
+  return withRoleLock(() => {
+    let raw = null;
+    try { raw = fs.readFileSync(LINKS_FILE_SHARED, "utf8"); }
+    catch (e) { return (e && e.code === "ENOENT") ? { ok: true, record: null } : { ok: false, reason: "links-unreadable" }; }
+    let o; try { o = JSON.parse(raw) || {}; } catch { return { ok: false, reason: "links-corrupt" }; }
+    return { ok: true, record: implementerRecordOf(o, ws) };
+  });
+}
+// codex-turns/<sid>.json 정확 판독 — 정확 키 집합·타입까지 검증(구현 검증 2차 지적 4: modified 누락 JSON이
+// false로 평가돼 verifyMode=code 게이트를 건너뛰는 통로 차단). 턴 파일은 단명 내부 상태라 느슨 호환 실익 없음.
+const CODEX_TURN_KEYS = ["schema", "turnId", "workspace", "startedAt", "lastActionAt", "modified", "permissionMode"];
+function readCodexTurnStrict(sid, ws) {
+  let o = null;
+  try { o = JSON.parse(fs.readFileSync(path.join(CODEX_TURNS_DIR, safeStateName(sid) + ".json"), "utf8")); } catch { return { ok: false, reason: "turn-missing" }; }
+  if (!exactKeys(o, CODEX_TURN_KEYS) || o.schema !== "codex-turn-v1") return { ok: false, reason: "turn-schema" };
+  if (typeof o.turnId !== "string" || !o.turnId) return { ok: false, reason: "turn-id-empty" };
+  if (normWs(String(o.workspace || "")) !== normWs(ws)) return { ok: false, reason: "turn-workspace" };
+  if (!(Number(o.startedAt) > 0)) return { ok: false, reason: "turn-startedAt" };
+  if (typeof o.modified !== "boolean" || !(Number(o.lastActionAt) >= 0) || typeof o.permissionMode !== "string") return { ok: false, reason: "turn-fields" };
+  return { ok: true, turn: o };
+}
+// 계약 파일 판독 상태 — 부재(legacy 기본값=정상)와 '존재하는데 손상'(모드 권위 판정 불가=차단 대상)을 구분.
+// loadContract는 손상을 기본 claude-codex로 축소해 C-C 훅 전체가 조용히 꺼진다(구현 검증 2차 지적 2).
+function contractReadState(ws, lang) {
+  const file = contractFileFor(ws || currentWs(), lang);
+  let raw = null;
+  try { raw = fs.readFileSync(file, "utf8"); }
+  catch (e) { return (e && e.code === "ENOENT") ? "absent" : "corrupt"; }
+  try { const o = JSON.parse(raw); return o && typeof o === "object" && !Array.isArray(o) ? "ok" : "corrupt"; } catch { return "corrupt"; }
+}
+// 미회수 판정용: job에 결속된 '유효한' 영수증이 실존하는가 — 존재만 보면 빈 파일·타 내용 영수증을 회수 완료로
+// 오인해 이전 proof를 덮을 수 있다(구현 검증 2차 지적 3). 스키마·5필드 결속에 더해 현재 proof 원문과의
+// 지문·시각 결속(proofTs·proofSha·ts=finishedAt·ts>=proofTs)까지 성립해야 회수 완료(3차 지적 1 — 임의
+// proofTs/proofSha 영수증이 settled로 오인되는 반례 차단).
+function receiptSettled(job) {
+  const jr = durableJobSnapshotOk(job);
+  if (!jr.ok) return false;
+  let r = null;
+  try { r = JSON.parse(fs.readFileSync(recoveryReceiptFileFor(job.id), "utf8")); } catch { return false; }
+  if (!strictReceiptV1(r).ok) return false;
+  if (!(r.jobId === job.id && r.implementerSession === job.implementerSession && r.turnId === job.implementerTurnId
+    && Number(r.implementerRevision) === Number(job.implementerRevision) && normWs(r.workspace) === normWs(String(job.workspace || "")))) return false;
+  if (r.ts !== job.finishedAt) return false;
+  // 자체 불변식(역사적 분기 포함 — 4차 보완): 성공 job만 결제 대상이고 영수증 시각은 자기 proofTs보다 앞설 수 없다.
+  if (job.state !== "succeeded" || job.exitCode !== 0) return false;
+  if (!(Date.parse(r.ts) >= Date.parse(r.proofTs))) return false;
+  // 현재 proof와의 지문 사슬 — 사례 분리(같은 턴 '순차 다중 검증'을 깨지 않기 위해):
+  //  ① proof가 아직 이 job의 것 → 전체 결속(proofTs·proofSha·시각 순서) 요구. 위조 영수증으로 새 시작을
+  //     허용시켜 이 proof를 덮는 공격(3차 지적 1)이 여기서 차단된다.
+  //  ② proof가 이미 다른 job의 것(뒤이은 합법 검증이 덮음) → 이 영수증은 그 시점에 결속 검증을 통과해야만
+  //     기록될 수 있었으므로 역사적 결제로 인정(재지문 불가). 위조로 이 상태를 만들려면 새 job 시작이
+  //     필요한데, 그 시작 자체가 ①에서 막힌다.
+  //  ③ proof 부재·손상 → 보호할 대상이 없으므로 결속 영수증만으로 결제 인정(영구 잠금 방지).
+  let raw = null; try { raw = fs.readFileSync(proofFileForSession(job.implementerSession)); } catch { raw = null; }
+  if (raw !== null) {
+    let proof = null; try { proof = JSON.parse(raw.toString("utf8")); } catch { proof = null; }
+    if (proof && strictProofV2(proof).ok && proof.jobId === job.id) {
+      if (proof.turnId !== job.implementerTurnId || Number(proof.implementerRevision) !== Number(job.implementerRevision)
+        || proof.implementerSession !== job.implementerSession || normWs(proof.workspace) !== normWs(String(job.workspace || ""))) return false;
+      if (r.proofTs !== proof.ts || r.proofSha !== sha256Hex(raw)) return false;
+      if (!(Date.parse(r.ts) >= Date.parse(proof.ts))) return false;
+    }
+  }
+  return true;
+}
+// ask-start 시점 동결: ask-job lock '안'에서 호출된다(잠금 순서 고정 ask-job → role, 유일한 중첩 지점).
+// 부재·중간 상태는 전부 거부(fail-closed) — 잘못된 상태에서 검증을 시작하지 않는다.
+function freezeImplementerContext(ws) {
+  let rec, turnRes;
+  try {
+    return withRoleLock(() => {
+      let raw = null;
+      try { raw = fs.readFileSync(LINKS_FILE_SHARED, "utf8"); }
+      catch (e) { if (!(e && e.code === "ENOENT")) return { ok: false, reason: "links-unreadable" }; }
+      let o = {};
+      if (raw !== null) { try { o = JSON.parse(raw) || {}; } catch { return { ok: false, reason: "links-corrupt" }; } }
+      rec = implementerRecordOf(o, ws);
+      if (!rec || !rec.session) return { ok: false, reason: "no-implementer" };
+      if (!(rec.revision > 0)) return { ok: false, reason: "no-revision" };
+      if (!(rec.eventAt > 0)) return { ok: false, reason: "no-eventAt" }; // 부재=구버전/중간 상태 — 생략 금지(설계 v5.1)
+      turnRes = readCodexTurnStrict(rec.session, ws);
+      if (!turnRes.ok) return { ok: false, reason: turnRes.reason };
+      // 링크 갱신 후 turn 기록 전의 창: 새 revision + 이전 turn 조합은 여기서 걸린다.
+      if (!(Number(turnRes.turn.startedAt) >= rec.eventAt)) return { ok: false, reason: "turn-before-link" };
+      return { ok: true, implementerSession: rec.session, implementerTurnId: turnRes.turn.turnId, implementerRevision: rec.revision };
+    });
+  } catch { return { ok: false, reason: "role-lock" }; }
+}
+// git 4상태 판독기(설계 v5.1 — 기존 dirty-mtime 판독기와 별도): 정상 git=HEAD OID / 명확한 non-git=null 허용 /
+// 저장소인데 최초 커밋 전='no-head' 정상 상태 / 실행 부재·timeout·권한·손상=unreadable(차단).
+function gitHeadState(ws) {
+  const run = (args) => {
+    try { return require("child_process").spawnSync("git", ["-c", "safe.directory=*", "-C", ws, ...args], { encoding: "utf8", timeout: 10000, windowsHide: true }); }
+    catch (e) { return { error: e }; }
+  };
+  const inside = run(["rev-parse", "--is-inside-work-tree"]);
+  if (inside.error || inside.signal) return { state: "unreadable" };
+  const insideOut = String(inside.stdout || "").trim();
+  if (inside.status !== 0) {
+    return /not a git repository/i.test(String(inside.stderr || "")) ? { state: "non-git" } : { state: "unreadable" };
+  }
+  if (insideOut !== "true") return { state: "non-git" };
+  const head = run(["rev-parse", "--verify", "HEAD"]);
+  if (head.error || head.signal) return { state: "unreadable" };
+  const oid = String(head.stdout || "").trim();
+  if (head.status === 0 && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(oid)) return { state: "git", oid };
+  if (/(unknown revision|ambiguous argument|Needed a single revision|bad revision)/i.test(String(head.stderr || "") + String(head.stdout || ""))) return { state: "no-head" };
+  return { state: "unreadable" };
+}
+// 정확 키 집합 검증기 — 초과·누락 키 전부 거부(설계 v3~v5: 확장 검사 수준이 아니라 별도 strict validator).
+function exactKeys(o, keys) {
+  if (!o || typeof o !== "object" || Array.isArray(o)) return false;
+  const ks = Object.keys(o);
+  return ks.length === keys.length && keys.every((k) => ks.includes(k));
+}
+const PROOF_V2_KEYS = ["v", "implementerSession", "workspace", "ts", "codexSession", "exit", "status", "answerChars", "jobId", "turnId", "implementerRevision", "headState", "headOid"];
+function strictProofV2(p) {
+  if (!exactKeys(p, PROOF_V2_KEYS)) return { ok: false, reason: "proof-keys" };
+  if (p.v !== 2) return { ok: false, reason: "proof-version" };
+  if (typeof p.implementerSession !== "string" || !p.implementerSession) return { ok: false, reason: "proof-session" };
+  if (typeof p.workspace !== "string" || !p.workspace) return { ok: false, reason: "proof-workspace" };
+  if (!Number.isFinite(Date.parse(p.ts || ""))) return { ok: false, reason: "proof-ts" };
+  if (p.exit !== 0 || p.status !== "success") return { ok: false, reason: "proof-status" };
+  if (!(Number(p.answerChars) > 0)) return { ok: false, reason: "proof-answer" };
+  if (!askJobIdOk(p.jobId)) return { ok: false, reason: "proof-jobId" };
+  if (typeof p.turnId !== "string" || !p.turnId) return { ok: false, reason: "proof-turnId" };
+  if (!(Number(p.implementerRevision) > 0)) return { ok: false, reason: "proof-revision" };
+  if (!["git", "non-git", "no-head"].includes(p.headState)) return { ok: false, reason: "proof-headState" };
+  if (p.headState === "git" ? !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(String(p.headOid || "")) : p.headOid !== null) return { ok: false, reason: "proof-headOid" };
+  return { ok: true };
+}
+const RECEIPT_V1_KEYS = ["schema", "jobId", "implementerSession", "turnId", "implementerRevision", "workspace", "ts", "proofTs", "proofSha"];
+function strictReceiptV1(r) {
+  if (!exactKeys(r, RECEIPT_V1_KEYS)) return { ok: false, reason: "receipt-keys" };
+  if (r.schema !== "cbx-recovery-v1") return { ok: false, reason: "receipt-schema" };
+  if (!askJobIdOk(r.jobId)) return { ok: false, reason: "receipt-jobId" };
+  if (typeof r.implementerSession !== "string" || !r.implementerSession) return { ok: false, reason: "receipt-session" };
+  if (typeof r.turnId !== "string" || !r.turnId) return { ok: false, reason: "receipt-turnId" };
+  if (!(Number(r.implementerRevision) > 0)) return { ok: false, reason: "receipt-revision" };
+  if (typeof r.workspace !== "string" || !r.workspace) return { ok: false, reason: "receipt-workspace" };
+  if (!Number.isFinite(Date.parse(r.ts || ""))) return { ok: false, reason: "receipt-ts" };
+  if (!Number.isFinite(Date.parse(r.proofTs || ""))) return { ok: false, reason: "receipt-proofTs" };
+  if (!/^[0-9a-f]{64}$/.test(String(r.proofSha || ""))) return { ok: false, reason: "receipt-proofSha" };
+  return { ok: true };
+}
+// 내구 job의 불변 스냅샷 필드 정확 검사(C-C 전용 — 부재=구버전 job, 새 검증 필요).
+function durableJobSnapshotOk(job) {
+  if (!job || job.schema !== "ask-job-v1") return { ok: false, reason: "job-schema" };
+  if (!askJobIdOk(job.id)) return { ok: false, reason: "job-id" };
+  if (job.harnessMode !== "codex-codex") return { ok: false, reason: "job-mode" };
+  if (typeof job.implementerSession !== "string" || !job.implementerSession) return { ok: false, reason: "job-session" };
+  if (typeof job.implementerTurnId !== "string" || !job.implementerTurnId) return { ok: false, reason: "job-turnId" };
+  if (!(Number(job.implementerRevision) > 0)) return { ok: false, reason: "job-revision" };
+  return { ok: true };
+}
+// proof v2 기록(내구 C-C 전용) — 기록 '직전 재검사'와 기록이 같은 role-lock callback 안에서 끝난다(설계 v5.1).
+// 현재 역할·turn이 job 스냅샷과 다르면 stale(기록 없이 실패) — '내구 성공'과 '현재 턴 사용가능'의 괴리 차단.
+function writeDurableProofV2(ws, job, answer, codexSession) {
+  const jr = durableJobSnapshotOk(job);
+  if (!jr.ok) return { ok: false, reason: jr.reason };
+  if (normWs(String(job.workspace || "")) !== normWs(ws)) return { ok: false, reason: "job-workspace" };
+  const head = gitHeadState(ws);
+  if (head.state === "unreadable") return { ok: false, reason: "git-unreadable" };
+  try {
+    return withRoleLock(() => {
+      let o = {}; try { o = JSON.parse(fs.readFileSync(LINKS_FILE_SHARED, "utf8")) || {}; } catch { o = {}; }
+      const rec = implementerRecordOf(o, ws);
+      if (!rec || rec.session !== job.implementerSession || rec.revision !== Number(job.implementerRevision)) return { ok: false, reason: "stale-role" };
+      const turnRes = readCodexTurnStrict(rec.session, ws);
+      if (!turnRes.ok) return { ok: false, reason: turnRes.reason };
+      if (turnRes.turn.turnId !== job.implementerTurnId) return { ok: false, reason: "stale-turn" };
+      const proof = {
+        v: 2,
+        implementerSession: job.implementerSession,
+        workspace: ws,
+        ts: new Date().toISOString(),
+        codexSession: String(codexSession || ""),
+        exit: 0,
+        status: "success",
+        answerChars: (answer || "").length,
+        jobId: job.id,
+        turnId: job.implementerTurnId,
+        implementerRevision: Number(job.implementerRevision),
+        headState: head.state,
+        headOid: head.state === "git" ? head.oid : null,
+      };
+      const file = proofFileForSession(job.implementerSession);
+      if (!atomicWrite(file, JSON.stringify(proof))) return { ok: false, reason: "proof-write" };
+      return { ok: true, file };
+    });
+  } catch { return { ok: false, reason: "role-lock" }; }
+}
+// 회수 영수증 기록(ask-wait의 succeeded 분기 전용). 모든 필드가 job/proof 복사값이고 ts=job.finishedAt이라
+// 어떤 프로세스가 기록해도 raw bytes가 같다 — 동시 회수는 수렴, conflict는 진짜 불일치에서만.
+function writeRecoveryReceipt(job) {
+  const jr = durableJobSnapshotOk(job);
+  if (!jr.ok) return { ok: false, reason: jr.reason };
+  if (job.state !== "succeeded" || job.exitCode !== 0) return { ok: false, reason: "job-not-succeeded" };
+  if (!Number.isFinite(Date.parse(job.finishedAt || ""))) return { ok: false, reason: "job-finishedAt" };
+  const pf = proofFileForSession(job.implementerSession);
+  let raw; try { raw = fs.readFileSync(pf); } catch { return { ok: false, reason: "proof-missing" }; }
+  let proof; try { proof = JSON.parse(raw.toString("utf8")); } catch { return { ok: false, reason: "proof-parse" }; }
+  const pv = strictProofV2(proof);
+  if (!pv.ok) return { ok: false, reason: pv.reason };
+  if (proof.jobId !== job.id) return { ok: false, reason: "bind-jobId" };
+  if (proof.implementerSession !== job.implementerSession) return { ok: false, reason: "bind-session" };
+  if (proof.turnId !== job.implementerTurnId) return { ok: false, reason: "bind-turnId" };
+  if (Number(proof.implementerRevision) !== Number(job.implementerRevision)) return { ok: false, reason: "bind-revision" };
+  if (normWs(proof.workspace) !== normWs(String(job.workspace || ""))) return { ok: false, reason: "bind-workspace" };
+  if (!(Date.parse(job.finishedAt) >= Date.parse(proof.ts))) return { ok: false, reason: "finished-before-proof" };
+  const receipt = {
+    schema: "cbx-recovery-v1",
+    jobId: job.id,
+    implementerSession: job.implementerSession,
+    turnId: job.implementerTurnId,
+    implementerRevision: Number(job.implementerRevision),
+    workspace: job.workspace,
+    ts: job.finishedAt,
+    proofTs: proof.ts,
+    proofSha: sha256Hex(raw),
+  };
+  const expected = JSON.stringify(receipt);
+  const file = recoveryReceiptFileFor(job.id);
+  if (!file) return { ok: false, reason: "receipt-path" };
+  let existing = null; try { existing = fs.readFileSync(file, "utf8"); } catch { /* 최초 기록 */ }
+  if (existing !== null && existing !== expected) return { ok: false, reason: "receipt-conflict" };
+  if (existing === expected) return { ok: true, file }; // 멱등 재회수
+  const wrote = atomicWrite(file, expected);
+  // 동시 회수 수렴: rename이 일시 실패해도 이미 같은 바이트가 있으면 성공(설계 v5.1 보완).
+  let back = null; try { back = fs.readFileSync(file, "utf8"); } catch { /* 아래 판정 */ }
+  if (back === expected) return { ok: true, file };
+  return { ok: false, reason: wrote ? "receipt-readback" : "receipt-write" };
+}
+// Stop 게이트 판정기(codex-hook onStop 전용) — lastActionAt을 쓰지 않는다. 결속 체인 전체가 성립해야 통과.
+// role 판독은 호출자가 role lock 아래 1회 파싱으로 얻은 값을 넘긴다(sameImplementer 이중 판독 ABA 제거).
+function durableProofGate(opts) {
+  const { ws, sid, eventTurnId, stateTurnId, roleRevision, since } = opts || {};
+  if (typeof eventTurnId !== "string" || !eventTurnId) return { ok: false, reason: "event-turnId" }; // fail-closed(설계 v4-4)
+  if (typeof stateTurnId !== "string" || !stateTurnId) return { ok: false, reason: "state-turnId" };
+  if (eventTurnId !== stateTurnId) return { ok: false, reason: "turn-mismatch" };
+  let raw; try { raw = fs.readFileSync(proofFileForSession(sid)); } catch { return { ok: false, reason: "proof-missing" }; }
+  let proof; try { proof = JSON.parse(raw.toString("utf8")); } catch { return { ok: false, reason: "proof-parse" }; }
+  const pv = strictProofV2(proof);
+  if (!pv.ok) return { ok: false, reason: pv.reason };
+  if (proof.implementerSession !== sid) return { ok: false, reason: "proof-session-mismatch" };
+  if (proof.turnId !== eventTurnId) return { ok: false, reason: "proof-turn-mismatch" };
+  if (Number(proof.implementerRevision) !== Number(roleRevision)) return { ok: false, reason: "proof-revision-mismatch" };
+  if (normWs(proof.workspace) !== normWs(ws)) return { ok: false, reason: "proof-workspace-mismatch" };
+  if (!(Date.parse(proof.ts) >= Number(since || 0))) return { ok: false, reason: "proof-stale" };
+  const head = gitHeadState(ws);
+  if (head.state === "unreadable") return { ok: false, reason: "git-unreadable" };
+  if (head.state !== proof.headState) return { ok: false, reason: "head-state-changed" };
+  if (head.state === "git" && head.oid !== proof.headOid) return { ok: false, reason: "head-oid-changed" }; // 커밋 은닉 차단
+  let rraw; try { rraw = fs.readFileSync(recoveryReceiptFileFor(proof.jobId), "utf8"); } catch { return { ok: false, reason: "receipt-missing" }; }
+  let receipt; try { receipt = JSON.parse(rraw); } catch { return { ok: false, reason: "receipt-parse" }; }
+  const rv = strictReceiptV1(receipt);
+  if (!rv.ok) return { ok: false, reason: rv.reason };
+  if (receipt.jobId !== proof.jobId) return { ok: false, reason: "receipt-jobId-mismatch" };
+  if (receipt.implementerSession !== sid) return { ok: false, reason: "receipt-session-mismatch" };
+  if (receipt.turnId !== eventTurnId) return { ok: false, reason: "receipt-turn-mismatch" };
+  if (Number(receipt.implementerRevision) !== Number(roleRevision)) return { ok: false, reason: "receipt-revision-mismatch" };
+  if (normWs(receipt.workspace) !== normWs(ws)) return { ok: false, reason: "receipt-workspace-mismatch" };
+  if (receipt.proofTs !== proof.ts) return { ok: false, reason: "receipt-proofTs-mismatch" };
+  if (receipt.proofSha !== sha256Hex(raw)) return { ok: false, reason: "receipt-proofSha-mismatch" };
+  if (!(Date.parse(receipt.ts) >= Date.parse(proof.ts))) return { ok: false, reason: "receipt-before-proof" };
+  return { ok: true };
 }
 
 // 프로젝트별 계약을 읽는다. ★전역 상속 없음★ — 계약은 프로젝트 전용(최신성: 비우면 주입 0·바꾸면 그 프로젝트만 유지).
@@ -1781,4 +2082,24 @@ function formatForClaude(answer, lang) {
 module.exports = { loadContract, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
 module.exports.codexImplementerSession = codexImplementerSession;
 module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
+// P-6 회수 영수증 계약(설계 v5.1)
+module.exports.CODEX_TURNS_DIR = CODEX_TURNS_DIR;
+module.exports.CODEX_RECOVERY_DIR = CODEX_RECOVERY_DIR;
+module.exports.askJobIdOk = askJobIdOk;
+module.exports.recoveryReceiptFileFor = recoveryReceiptFileFor;
+module.exports.proofFileForSession = proofFileForSession;
+module.exports.implementerRecordOf = implementerRecordOf;
+module.exports.readImplementerRecordLocked = readImplementerRecordLocked;
+module.exports.readCodexTurnStrict = readCodexTurnStrict;
+module.exports.freezeImplementerContext = freezeImplementerContext;
+module.exports.gitHeadState = gitHeadState;
+module.exports.strictProofV2 = strictProofV2;
+module.exports.strictReceiptV1 = strictReceiptV1;
+module.exports.durableJobSnapshotOk = durableJobSnapshotOk;
+module.exports.writeDurableProofV2 = writeDurableProofV2;
+module.exports.writeRecoveryReceipt = writeRecoveryReceipt;
+module.exports.durableProofGate = durableProofGate;
+module.exports.sha256Hex = sha256Hex;
+module.exports.contractReadState = contractReadState;
+module.exports.receiptSettled = receiptSettled;
 module.exports.codexRoleRevision = codexRoleRevision;

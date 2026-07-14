@@ -9,9 +9,9 @@ const cp = require("child_process");
 // I/O) runs. It closes ordering gaps even if an older process is delayed during module startup.
 const HOOK_STARTED_AT = require("perf_hooks").performance.timeOrigin;
 const {
-  BRIDGE_DIR, PROOFS_DIR, loadContract, loadLang, buildInjection, buildVerifyDirective, buildScoutDirective,
+  BRIDGE_DIR, loadContract, loadLang, buildInjection, buildVerifyDirective, buildScoutDirective,
   registerCodexImplementer, codexImplementerSnapshot, codexRoleRevision, writeCodexActive, readCodexActive, atomicWrite, writePhase, resolveScoutRepo, scoutMapStatus,
-  scoutHealthLine, maybeCleanupState, configWs,
+  scoutHealthLine, maybeCleanupState, configWs, readImplementerRecordLocked, durableProofGate, readCodexTurnStrict, contractReadState,
 } = require("./contract-lib.js");
 
 const TURN_DIR = path.join(BRIDGE_DIR, "codex-turns");
@@ -120,11 +120,6 @@ function bump(dir, sid, turnId) {
   if (turnId && o.turnId !== turnId) o = { turnId, n:0 };
   o.n = (Number(o.n) || 0) + 1; o.ts = new Date().toISOString(); save(f,o); return o.n;
 }
-function proofOk(sid, since) {
-  const p = read(path.join(PROOFS_DIR, safe(sid) + ".json"));
-  if (!p || p.status !== "success" || p.exit !== 0 || !(Number(p.answerChars) > 0)) return false;
-  const ts = Date.parse(p.ts || ""); return Number.isFinite(ts) && ts >= since;
-}
 function sameImplementer(ws, sid) {
   try {
     const home = process.env.CODEX_BRIDGE_HOME || path.join(require("os").homedir(), ".codex-bridge");
@@ -172,19 +167,23 @@ function onPrompt(j, ws, sid, c, roleRevision) {
   if (!pinned.ok) { context("UserPromptSubmit", "[Codex Bridge] " + pinned.why); return; }
   const turnId = pinned.turnId;
   heartbeat(j, ws, sid, "UserPromptSubmit");
-  save(stateFile(TURN_DIR,sid), { schema:"codex-turn-v1", turnId, workspace:ws, startedAt:Date.now(), lastActionAt:0, modified:false, permissionMode:j.permission_mode||"" });
+  // 턴 상태 저장 실패를 무시하면 Stop이 turn-missing으로 차단될 때 원인을 알 수 없다 — 1회 재시도 후에도
+  // 실패면 주입 컨텍스트에 고지(구현 검증 1차 지적: 상태 기록 실패의 침묵 금지).
+  const turnState = { schema:"codex-turn-v1", turnId, workspace:ws, startedAt:Date.now(), lastActionAt:0, modified:false, permissionMode:j.permission_mode||"" };
+  const turnSaved = save(stateFile(TURN_DIR,sid), turnState) || save(stateFile(TURN_DIR,sid), turnState);
   try { writePhase("codex-implementing", { round:0, session:sid, workspace:ws }); } catch { /* display only */ }
-  context("UserPromptSubmit", implementerContext(j, ws, c));
+  const ctx = implementerContext(j, ws, c);
+  context("UserPromptSubmit", turnSaved ? ctx : t("[Codex Bridge] 턴 상태 기록에 실패했습니다 — 이 턴 종료 시 검증 게이트가 턴 상태 재기록을 요구할 수 있습니다.\n\n","[Codex Bridge] Failed to record the turn state — the verification gate may ask to rewrite it when this turn stops.\n\n") + ctx);
 }
 function onTool(j, ws, sid, c) {
   if(!sameImplementer(ws,sid)) return;
   heartbeat(j, ws, sid, "PostToolUse");
-  const f=stateFile(TURN_DIR,sid), s=read(f)||{turnId:j.turn_id||"",workspace:ws,startedAt:Date.now(),modified:false,lastActionAt:0};
+  const f=stateFile(TURN_DIR,sid), s=read(f)||{schema:"codex-turn-v1",turnId:j.turn_id||"",workspace:ws,startedAt:Date.now(),lastActionAt:0,modified:false,permissionMode:j.permission_mode||""};
   const name=String(j.tool_name||j.tool||"");
   // PostToolUse에는 사전 스냅샷이 없으므로 Bash/MCP는 보수적으로 변경 가능 신호로 본다. 실제 git dirty만
   // 보다가 같은 턴 commit이나 비-git 쓰기를 놓쳐 검증을 우회하는 것보다 필요 시 한 번 더 검증하는 편이 안전하다.
   if(/^(Bash|apply_patch|Edit|Write|MultiEdit|NotebookEdit)$/i.test(name)||/^mcp__/i.test(name)){s.modified=true;s.lastActionAt=Date.now();}
-  save(f,s);
+  if(!save(f,s))save(f,s); // 저장 실패 침묵 금지 — 1회 재시도(끝내 실패하면 Stop의 정확 판독이 차단으로 잡는다)
 }
 function scoutGate(j, ws, sid, c, s) {
   if(c.scoutMode!=="on" || j.permission_mode!=="plan") return false;
@@ -197,19 +196,37 @@ function scoutGate(j, ws, sid, c, s) {
   return true;
 }
 function onStop(j, ws, sid, c) {
-  if(!sameImplementer(ws,sid)) return;
+  // P-6(설계 v5.1): 역할 판독은 role lock 아래 links 1회 파싱 — sameImplementer의 독립 재판독은 같은 sid로
+  // 갔다 돌아온 ABA를 revision과 다른 시점에 읽는 경합이 있어 폐기. 잠금 실패가 훅 최상위 catch(성공 삼킴)로
+  // 새면 게이트가 fail-open이므로 여기서 명시 block(fail-closed·재시도 유도).
+  let roleRes = null, roleErr = false;
+  try { roleRes = readImplementerRecordLocked(ws); } catch { roleErr = true; }
+  // 잠금 실패뿐 아니라 links.json 손상·판독 실패도 차단(fail-closed) — 손상을 '구현자 아님'으로 축소하면
+  // 검증 없이 통과하는 fail-open이 된다(구현 검증 1차 지적). '파일 없음'만 정상(record=null)으로 조용히 종료.
+  if (roleErr || !roleRes || roleRes.ok === false) { block(t(`역할 상태를 판정할 수 없습니다(${roleErr ? "잠금 실패" : (roleRes && roleRes.reason) || "판독 실패"}). links.json 상태를 확인·복구한 뒤 종료를 다시 시도하세요.`, `Cannot judge the role state (${roleErr ? "lock failure" : (roleRes && roleRes.reason) || "read failure"}). Check/repair links.json, then retry stopping.`)); return; }
+  const role = roleRes.record;
+  if (!role || role.session !== sid) return;
   heartbeat(j, ws, sid, "Stop");
-  const s=read(stateFile(TURN_DIR,sid))||{turnId:j.turn_id||"",startedAt:Date.now(),lastActionAt:0,modified:false};
+  // 턴 상태도 정확 판독 — 부재·손상 시 startedAt=now 기본값을 만들면 edited=false → needed=false로 durable
+  // 게이트를 건너뛰는 fail-open 통로가 된다(구현 검증 1차 지적). 구현 세션의 Stop인데 턴 상태가 없다면
+  // 기록 유실·손상이므로 차단하고 재기록을 유도한다.
+  const sRes = readCodexTurnStrict(sid, ws);
+  if (!sRes.ok) { block(t(`이번 턴 상태를 읽을 수 없습니다(${sRes.reason}). 구현 대화에서 새 프롬프트를 한 번 보내 턴 상태를 재기록한 뒤 이어가세요.`, `Cannot read this turn's state (${sRes.reason}). Send one new prompt in the implementer conversation to rewrite the turn state, then continue.`)); return; }
+  const s = sRes.turn;
   if(scoutGate(j,ws,sid,c,s)) return;
   const gitTs=gitChangedMaxMtime(ws); const edited=!!s.modified || gitTs>Number(s.startedAt||0);
   const planned=j.permission_mode==="plan";
   const needed=c.verifyMode==="always" || ((c.verifyMode==="code"||c.verifyMode==="plancode")&&edited) || (c.verifyMode==="plancode"&&planned);
   if(!needed){try{writePhase("done",{session:sid,workspace:ws});}catch{} return;}
-  const since=Math.max(Number(s.startedAt||0),Number(s.lastActionAt||0),gitTs||0);
-  if(proofOk(sid,since)){try{writePhase("rejudging",{session:sid,workspace:ws});}catch{} return;}
+  // 신선도에서 lastActionAt 제거(P-6 자기무효화 해소) — 검증 결과를 '회수하는' 도구 호출이 proof를 낡게
+  // 만들지 않는다. 실제 파일 변경(dirty mtime)과 턴 시작만 본다. 커밋 은닉·회수 정당성은 durableProofGate의
+  // HEAD OID·영수증 결속이 담당한다.
+  const since=Math.max(Number(s.startedAt||0),gitTs||0);
+  const gate=durableProofGate({ws,sid,eventTurnId:String(j.turn_id||""),stateTurnId:String(s.turnId||""),roleRevision:role.revision,since});
+  if(gate.ok){try{writePhase("rejudging",{session:sid,workspace:ws});}catch{} return;}
   const n=bump(ATTEMPT_DIR,sid,j.turn_id||s.turnId||"");
   if(n>MAX_VERIFY_ATTEMPTS){try{writePhase("incomplete",{session:sid,workspace:ws});}catch{} return;}
-  block(t(`검증이 필요한 최종 상태인데 성공 증명이 없습니다(${n}/${MAX_VERIFY_ATTEMPTS}). 대시보드의 검증 대기시간을 따르는 내구 작업을 1개만 시작하세요: \`node "${path.join(BRIDGE_DIR,"codex-bridge.js")}" ask-start --allow-new "<검증 요청>"\`. 반환된 job id로 \`ask-wait <job-id>\`를 pending 동안 반복하고, 결과를 항목별 재판단한 뒤 종료하세요.`, `The final state requires verification but has no success proof (${n}/${MAX_VERIFY_ATTEMPTS}). Start exactly one durable job using the dashboard wait: \`node "${path.join(BRIDGE_DIR,"codex-bridge.js")}" ask-start --allow-new "<verification request>"\`. Repeat \`ask-wait <job-id>\` while pending, re-judge the result item by item, then stop.`));
+  block(t(`검증이 필요한 최종 상태인데 이번 턴에 결속된 성공 증명이 없습니다(${n}/${MAX_VERIFY_ATTEMPTS} · 판정: ${gate.reason}). 대시보드의 검증 대기시간을 따르는 내구 작업을 1개만 시작하세요: \`node "${path.join(BRIDGE_DIR,"codex-bridge.js")}" ask-start --allow-new "<검증 요청>"\`. 반환된 job id로 \`ask-wait <job-id>\`를 pending 동안 반복하고(완료 회수까지 같은 턴에서), 결과를 항목별 재판단한 뒤 종료하세요.`, `The final state requires verification but has no success proof bound to this turn (${n}/${MAX_VERIFY_ATTEMPTS} · verdict: ${gate.reason}). Start exactly one durable job using the dashboard wait: \`node "${path.join(BRIDGE_DIR,"codex-bridge.js")}" ask-start --allow-new "<verification request>"\`. Repeat \`ask-wait <job-id>\` while pending (retrieve within the same turn), re-judge the result item by item, then stop.`));
 }
 
 function main(raw){
@@ -222,11 +239,33 @@ function main(raw){
   // 첫 턴에는 cwd로 프로젝트를 정하고 writeCodexActive가 세션별 앵커를 만든다. 이후 실제 작업 폴더가
   // 달라져도 같은 세션은 그 앵커를 우선한다(Claude configWs와 동일한 프로젝트 추적 불변조건).
   const ws=configWs({codexSessionId:sid,cwd:j.cwd||process.cwd()});
-  let c;try{c=loadContract(ws);}catch{return;} if(c.harnessMode!=="codex-codex")return;
   const ev=j.hook_event_name||"";
+  // 계약 파일이 '존재하는데 손상'이면 모드 권위를 판정할 수 없다 — loadContract의 기본값 축소로 C-C 훅
+  // 전체가 조용히 꺼지는 fail-open 차단(구현 검증 2차 지적 2). 부재(absent)는 legacy 기본값으로 정상 진행.
+  if(contractReadState(ws)==="corrupt"){ if(ev==="Stop")block(t("프로젝트 계약 파일이 손상되어 이번 종료를 판정할 수 없습니다. 대시보드에서 계약을 다시 저장한 뒤 종료를 재시도하세요.","The project contract file is corrupt, so this stop cannot be judged. Re-save the contract from the dashboard, then retry stopping.")); return; }
+  let c;try{c=loadContract(ws);}catch{return;} if(c.harnessMode!=="codex-codex")return;
   if(ev==="SessionStart")return onSessionStart(j,ws,sid,c,roleRevision);
   if(ev==="UserPromptSubmit")return onPrompt(j,ws,sid,c,roleRevision);
   if(ev==="PreToolUse"||ev==="PostToolUse")return onTool(j,ws,sid,c);
-  if(ev==="Stop")return onStop(j,ws,sid,c);
+  if(ev==="Stop"){
+    // 검증 게이트만은 미지 예외도 성공으로 새면 안 된다(sReal 잔재 ReferenceError 무음 통과 실사고 —
+    // 구현 검증 2차 지적 1). 상세는 stderr, 사용자에겐 사유 코드만.
+    try{return onStop(j,ws,sid,c);}
+    catch(e){try{process.stderr.write("codex-hook Stop internal error: "+String(e&&e.stack||e)+"\n");}catch{/* 진단 실패 무해 */}
+      block(t("Stop 판정 내부 오류(internal-error) — 잠시 후 종료를 다시 시도하세요.","Internal error while judging Stop (internal-error) — retry stopping shortly."));return;}
+  }
 }
-let buf="";process.stdin.on("data",d=>buf+=d);process.stdin.on("end",()=>{try{main(buf);}catch{process.exit(0);}});process.stdin.on("error",()=>process.exit(0));
+// 최외곽 예외 처리 — Stop 이벤트만은 전처리(configWs·계약 판독 등)의 미지 예외도 성공으로 새면 안 된다
+// (구현 검증 3차 지적 2: cwd 비문자열 페이로드로 전처리 예외→exit 0 실측). 그 외 이벤트는 기존대로 무해 종료.
+let buf="";process.stdin.on("data",d=>buf+=d);process.stdin.on("end",()=>{try{main(buf);}catch(e){
+  try{
+    let ev="";try{ev=String((JSON.parse(buf)||{}).hook_event_name||"");}catch{/* 파싱 불가면 이벤트 미상 */}
+    if(ev==="Stop"){
+      try{process.stderr.write("codex-hook Stop pre-dispatch error: "+String(e&&e.stack||e)+"\n");}catch{/* 진단 실패 무해 */}
+      let msg="Stop 판정 내부 오류(internal-error) — 잠시 후 종료를 다시 시도하세요.";
+      try{msg=t("Stop 판정 내부 오류(internal-error) — 잠시 후 종료를 다시 시도하세요.","Internal error while judging Stop (internal-error) — retry stopping shortly.");}catch{/* 언어 판독 실패=ko 고정 */}
+      jsonOut({decision:"block",reason:msg});
+    }
+  }catch{/* 마지막 방벽 — 어떤 실패도 훅 프로세스를 비정상 종료시키지 않음 */}
+  process.exit(0);
+}});process.stdin.on("error",()=>process.exit(0));

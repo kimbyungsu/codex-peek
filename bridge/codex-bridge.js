@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, verifyTimeoutMin, readCodexActive, withRoleLock } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -99,15 +99,49 @@ function implementerId(ws) {
 // 검증 증명 기록 — 실제로 Codex가 성공(exit 0·비어있지 않은 응답)했을 때만 호출한다(cmdAsk의 성공 분기들).
 // 한 Claude 세션당 1파일(최신 성공만 보존). verify-guard는 '이번 사용자 발화/변경 이후 ts + status/exit/answerChars'로 인정(workspace는 V1에서 게이트 제외 — 같은 세션 키로 격리).
 // → 명령 문자열만 보던 V1 구멍(echo·실패·미연결도 통과)을 닫는다. claudeSession 미설정(수동 실행)이면 _nosession에 기록(무해).
+// P-6(3차 지적 3): 내구 env는 '존재'가 아니라 실체를 검증한다 — 정본 경로(ask-jobs/<id>.json)·파일명↔id·
+// 정확 스냅샷·running 상태·workspace 결속까지. 임의 경로의 조작 JSON으로 직접 ask 게이트를 우회하거나
+// writeProof가 비정본 job을 신뢰하는 통로를 닫는다. cmdAsk 게이트와 writeProof가 같은 판정을 공유한다.
+function readDurableEnvJob(ws) {
+  const jobFile = process.env.CODEX_BRIDGE_JOB_PROMPT_FILE || "";
+  const jobIdEnv = process.env.CODEX_BRIDGE_ASK_JOB_ID || "";
+  if (!jobFile || !jobIdEnv) return { ok: false, reason: "env-missing" };
+  if (!askJobIdOk(jobIdEnv)) return { ok: false, reason: "env-id-grammar" };
+  const canonical = path.resolve(ASK_JOBS_DIR, jobIdEnv + ".json");
+  let resolved = ""; try { resolved = path.resolve(jobFile); } catch { return { ok: false, reason: "env-path" }; }
+  if (resolved.toLowerCase() !== canonical.toLowerCase()) return { ok: false, reason: "env-noncanonical" };
+  let job = null; try { job = JSON.parse(fs.readFileSync(canonical, "utf8")); } catch { return { ok: false, reason: "env-job-unreadable" }; }
+  if (job.id !== jobIdEnv) return { ok: false, reason: "env-id-mismatch" };
+  const jr = durableJobSnapshotOk(job);
+  if (!jr.ok) return { ok: false, reason: jr.reason };
+  if (normWs(String(job.workspace || "")) !== normWs(ws)) return { ok: false, reason: "env-workspace" };
+  if (job.state !== "running") return { ok: false, reason: "env-not-running" };
+  return { ok: true, job };
+}
 function writeProof(codexSession, answer, ws) {
   // claudeSession: env 우선, 없으면 active.json(contract-inject가 hook.session_id로 기록) 폴백 →
   // verify-guard의 reader 키(env‖j.session_id‖transcript)와 같은 대화 id로 수렴(환경별 env 결측 대비).
   const c = loadContract(ws);
-  const cs = c.harnessMode === "codex-codex" ? implementerId(ws) : (claudeId() || ((readActive() || {}).claudeSession) || "");
+  // P-6(설계 v5.1 + 구현 검증 1차 지적 3): 분기의 권위는 '완료 시점 계약'이 아니라 job의 동결 harnessMode.
+  // C-C로 시작한 job이 완료 중 claude-codex로 바뀌어도 v1 proof로 새지 않고 stale로 실패해 worker가
+  // job을 failed로 기록한다(모드 전환 stale). env job은 정본 검증(readDurableEnvJob)을 통과해야 신뢰한다.
+  const envJob = readDurableEnvJob(ws);
+  const job = envJob.ok ? envJob.job : null;
+  if (job && job.harnessMode === "codex-codex") {
+    if (c.harnessMode !== "codex-codex") die(tB("⚠️ 이 검증 작업은 Codex-Codex 모드에서 시작됐는데 완료 시점 계약이 다른 모드입니다(stale). 현재 모드에서 새 검증을 시작하세요.", "⚠️ This verification job started in Codex-Codex mode but the contract has switched modes (stale). Start a new verification under the current mode."), 4);
+    const r = writeDurableProofV2(ws, job, answer, codexSession);
+    if (!r.ok) die(tB(`⚠️ 검증 증명 기록 실패(${r.reason}) — 이 검증은 성공으로 인정되지 않습니다. 역할·턴이 바뀌었으면 구현 대화의 현재 턴에서 새 검증을 시작하세요.`, `⚠️ Failed to record the verification proof (${r.reason}) — this verification is not accepted. If the role/turn changed, start a new verification from the implementer conversation's current turn.`), 4);
+    return;
+  }
+  if (c.harnessMode === "codex-codex") {
+    // env job이 없거나(직접 ask) 스냅샷 없는 구버전 job — C-C 성공 계약은 내구 경로 v2만 인정.
+    die(tB("⚠️ Codex-Codex 모드의 검증 증명은 내구 작업(ask-start → ask-wait) 경유만 기록됩니다. 직접 ask 또는 구버전 작업은 성공으로 인정되지 않습니다 — ask-start를 사용하세요.", "⚠️ In Codex-Codex mode a verification proof is only recorded through the durable job path (ask-start → ask-wait). A direct ask or a legacy job is not accepted — use ask-start."), 4);
+  }
+  const cs = claudeId() || ((readActive() || {}).claudeSession) || "";
   const proof = {
     v: 1,
-    claudeSession: c.harnessMode === "codex-codex" ? "" : cs,
-    implementerSession: c.harnessMode === "codex-codex" ? cs : "",
+    claudeSession: cs,
+    implementerSession: "",
     workspace: ws || configWs(), // 라벨=연 폴더(인자 없으면 폴백). cmdAsk의 ws 스냅샷과 동일
     ts: nowIso(),
     codexSession: codexSession || "",
@@ -1086,6 +1120,29 @@ function activeAskJob(ws) {
   }
   return null;
 }
+// P-6: 같은 구현 턴에서 성공했지만 아직 영수증이 없는(=미회수) C-C job을 찾는다 — 새 ask-start가 세션
+// 단일 proof 슬롯을 덮기 전에 회수를 강제하기 위한 검사(구현 검증 1차 지적 4).
+function unretrievedSameTurnJob(ws, frozen) {
+  let names = [];
+  try { names = fs.readdirSync(ASK_JOBS_DIR).filter((n) => n.endsWith(".json")); } catch { return null; }
+  const key = normWs(ws);
+  for (const n of names) {
+    try {
+      const j = JSON.parse(fs.readFileSync(path.join(ASK_JOBS_DIR, n), "utf8"));
+      if (j.schema !== "ask-job-v1" || j.harnessMode !== "codex-codex" || j.state !== "succeeded") continue;
+      if (normWs(j.workspace || "") !== key) continue;
+      if (j.implementerSession !== frozen.implementerSession || j.implementerTurnId !== frozen.implementerTurnId) continue;
+      // 귀속 가능한 의미 손상(현재 턴에 결속되는데 id 누락·파일명 불일치)은 건너뛰지 않고 파일명 id로
+      // conflict 차단한다(3차 지적 4 — undefined 반환으로 새 시작이 허용되던 구멍).
+      const fid = n.slice(0, -5);
+      if (!askJobIdOk(String(j.id || "")) || j.id !== fid) return fid;
+      // 존재만 보면 빈 파일·타 내용 영수증을 회수 완료로 오인한다(2차 지적 3) — job·proof에 결속된
+      // 유효 영수증(receiptSettled: 스키마+5필드+지문 사슬)이어야 회수 완료.
+      if (!receiptSettled(j)) return j.id;
+    } catch (e) { try { process.stderr.write("unretrieved-scan skip " + n + ": " + String(e && e.message || e) + "\n"); } catch { /* 진단 실패 무해 */ } }
+  }
+  return null;
+}
 
 function cmdAskStart(rest) {
   const req = askRequest(rest);
@@ -1100,8 +1157,22 @@ function cmdAskStart(rest) {
     if(active)throw Object.assign(new Error(tB("⚠️ 이미 검증이 진행 중이거나 확인 대기 중입니다. 새 작업을 만들지 않았습니다. ask-active status로 확인하세요.","⚠️ A verification is already running or awaiting review. No new job was created. Check ask-active status.")),{exitCode:3});
     const old=activeAskJob(ws);
     if(old)throw Object.assign(new Error(tB(`⚠️ 기존 검증 작업(${old.id})이 ${old.state} 상태입니다. 새 작업을 만들지 않았습니다. ask-wait ${old.id} 로 이어서 기다리세요.`,`⚠️ Verification job ${old.id} is ${old.state}. No new job was created. Continue with ask-wait ${old.id}.`)),{exitCode:3});
+    // P-6(설계 v5.1): C-C면 구현 컨텍스트를 job에 불변 동결. 잠금 순서 고정 ask-job → role(유일한 중첩 지점 —
+    // 기존 role lock 사용처는 전부 단독 획득이라 역순 데드락 없음, Codex 전수 확인). 부재·중간 상태는 fail-closed.
+    const cSnap=loadContract(ws);
+    let frozen={implementerSession:null,implementerTurnId:null,implementerRevision:null};
+    if(cSnap.harnessMode==="codex-codex"){
+      const fr=freezeImplementerContext(ws);
+      if(!fr.ok)throw Object.assign(new Error(tB(`⚠️ 구현 컨텍스트 동결 실패(${fr.reason}) — 검증 작업을 만들지 않았습니다. 구현 Codex 대화에서 새 프롬프트를 한 번 보내 역할·턴을 다시 고정한 뒤 재시도하세요.`,`⚠️ Failed to freeze the implementer context (${fr.reason}) — no verification job was created. Send one new prompt in the implementer Codex conversation to re-pin the role/turn, then retry.`)),{exitCode:3});
+      frozen={implementerSession:fr.implementerSession,implementerTurnId:fr.implementerTurnId,implementerRevision:fr.implementerRevision};
+      // 같은 턴의 '성공했지만 아직 회수 안 된' job이 있으면 새 job이 세션 단일 proof 슬롯을 덮어 첫 job의
+      // 영수증 발급이 영구 불가가 된다(구현 검증 1차 지적 4) — 회수를 먼저 강제. 다른 턴의 미회수 job은
+      // 어차피 게이트에서 거부되므로 새 시작을 막지 않는다.
+      const pendingId=unretrievedSameTurnJob(ws,frozen);
+      if(pendingId)throw Object.assign(new Error(tB(`⚠️ 회수 대기 중인 성공 검증(${pendingId})이 있습니다. 새 작업을 만들지 않았습니다 — 먼저 ask-wait ${pendingId} 로 회수하세요.`,`⚠️ A succeeded verification (${pendingId}) is awaiting retrieval. No new job was created — retrieve it first with ask-wait ${pendingId}.`)),{exitCode:3});
+    }
     id="ask-"+Date.now().toString(36)+"-"+crypto.randomBytes(5).toString("hex");timeoutMin=verifyTimeoutMin();const now=Date.now();
-    job={schema:"ask-job-v1",id,state:"queued",workspace:ws,execCwd:process.cwd(),flags:req.flags,prompt:req.prompt,timeoutMin,createdAt:new Date(now).toISOString(),deadlineAt:new Date(now+timeoutMin*60*1000).toISOString(),workerPid:null,childPid:null,exitCode:null};
+    job={schema:"ask-job-v1",id,state:"queued",workspace:ws,execCwd:process.cwd(),flags:req.flags,prompt:req.prompt,timeoutMin,createdAt:new Date(now).toISOString(),deadlineAt:new Date(now+timeoutMin*60*1000).toISOString(),workerPid:null,childPid:null,exitCode:null,harnessMode:cSnap.harnessMode,implementerSession:frozen.implementerSession,implementerTurnId:frozen.implementerTurnId,implementerRevision:frozen.implementerRevision};
     file=askJobFile(id);
     if(!atomicWrite(file,JSON.stringify(job)))throw new Error(tB("검증 작업 저장 실패 — 새 검증을 시작하지 않았습니다.","Failed to save the verification job — no verification was started."));
   }); } catch(e) { die(String(e&&e.message||e),Number(e&&e.exitCode)||1); }
@@ -1132,6 +1203,14 @@ function cmdAskWait(rest) {
     j = readAskJob(id) || j;
   }
   if (["succeeded", "failed"].includes(j.state)) {
+    // P-6(설계 v5.1): C-C 내구 job의 성공 회수는 '영수증 기록·read-back 성공 후에만' 출력을 반환한다.
+    // 영수증의 모든 필드는 job/proof 복사값·ts=job.finishedAt(결정론) — 동시 회수도 같은 바이트로 수렴하고,
+    // 기록 실패면 출력을 반환하지 않고 비0 종료(멱등 재시도 유도). failed job은 영수증 없이 기존대로 출력만.
+    if (j.state === "succeeded" && j.harnessMode === "codex-codex") {
+      if (j.id !== id) die(tB(`⚠️ 작업 파일과 job id가 어긋납니다(${j.id} ≠ ${id}). 손상된 작업 — 새 검증을 시작하세요.`, `⚠️ Job file and id mismatch (${j.id} ≠ ${id}). Corrupt job — start a new verification.`), 4);
+      const rc = writeRecoveryReceipt(j);
+      if (!rc.ok) die(tB(`⚠️ 회수 영수증 기록 실패(${rc.reason}) — 검증 출력은 반환하지 않았습니다. 같은 명령(ask-wait ${id})으로 재시도하고, 반복 실패면 구현 대화의 현재 턴에서 새 검증을 시작하세요.`, `⚠️ Failed to record the recovery receipt (${rc.reason}) — verification output was not returned. Retry the same command (ask-wait ${id}); if it keeps failing, start a new verification from the implementer conversation's current turn.`), 4);
+    }
     const outFile = path.join(ASK_JOBS_DIR, id + ".out");
     const errFile = path.join(ASK_JOBS_DIR, id + ".err");
     let out = "", err = "";
@@ -1174,11 +1253,18 @@ async function cmdAsk(rest) {
   if (!prompt) die('사용법: ask "<프롬프트>"', 2);
 
   try { maybeCleanupState(); } catch { /* 오래된 상태파일 정리 best-effort(Stop 훅 미설치 환경 대비) — 하루 1회 */ }
-  const links = loadLinks();
-  let link = resolveLink(links);
   // configWs/execCwd 분리: 설정 기준(계약·생각강도·링크·proof·이벤트 라벨)은 '연 폴더'(ws), 코덱스 실행·새세션 탐지·인용
   // 근거 경로 해석은 '작업 폴더'(exec=실제 실행 cwd). 사용자가 연 폴더에 건 설정이 외부 폴더 작업에도 일관 적용되게 한다.
   const ws = configWs();        // 연 폴더(설정 기준)
+  // P-6(구현 검증 1·2차 지적 5): C-C 모드의 직접 ask는 어차피 proof로 인정되지 않는다 — 답을 받은 뒤
+  // 버리는 과도 동작 대신, 링크 해석·외부 실행보다 '앞에서' 안내하고 중단한다. env 두 개가 '있기만' 하면
+  // 통과시키는 검사는 임의 문자열로 우회돼 같은 비용 경로가 되살아나므로, 내구 경로 실체(문법·파일·id 결속·
+  // 모드·workspace)까지 확인한 경우에만 실행을 허용한다.
+  if (loadContract(ws).harnessMode === "codex-codex" && !readDurableEnvJob(ws).ok) {
+    die(tB("⚠️ Codex-Codex 모드에서는 직접 ask가 성공 증명으로 인정되지 않아 실행하지 않았습니다. 내구 작업을 사용하세요: ask-start --allow-new \"<검증 요청>\" → ask-wait <job-id>.", "⚠️ In Codex-Codex mode a direct ask is not accepted as a success proof, so it was not executed. Use the durable path: ask-start --allow-new \"<request>\" → ask-wait <job-id>."), 4);
+  }
+  const links = loadLinks();
+  let link = resolveLink(links);
   if (!link && !allowNew) {
     die(
       tB(`🔌 이 Claude 세션/워크스페이스에 연결된 Codex 세션이 없습니다. 새 세션을 임의로 만들지 않았습니다.\n   기존 세션은 대시보드에서 연결하거나 link <id>로 연결하세요. 정말 첫 소통일 때만 --allow-new를 사용하세요.`,
@@ -1594,7 +1680,7 @@ function main() {
           '  node codex-bridge.js ask-start --allow-new "<프롬프트>"  (내구 작업 시작 — 즉시 job id 반환)\n' +
           "  node codex-bridge.js ask-wait <job-id>                 (45초씩 결과 대기 — pending이면 반복)\n" +
           "  node codex-bridge.js ask-job status [job-id] | ask-job clear <job-id> --confirm\n" +
-          '  node codex-bridge.js ask "<프롬프트>"\n' +
+          '  node codex-bridge.js ask "<프롬프트>"              (Codex-Codex 모드에선 미지원 — ask-start를 사용)\n' +
           '  node codex-bridge.js ask --allow-new "<프롬프트>"\n' +
           '  node codex-bridge.js ask --force-new "<프롬프트>"  (엉뚱 폴더 방어 무시, 이 폴더에 새 세션 강제)\n' +
           '  node codex-bridge.js ask --net "<프롬프트>"        (이 1회만 네트워크 허용 — 파일은 읽기전용 유지, 원격 확인용)\n' +
@@ -1609,4 +1695,4 @@ function main() {
 }
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
-module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, saveLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote };
+module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, saveLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob };
