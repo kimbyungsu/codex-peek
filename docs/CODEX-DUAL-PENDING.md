@@ -42,11 +42,46 @@
 - 문제: 실행 중 job 파일 손상·일시 판독 불가 시 "활성 작업 없음"으로 축소→중복 worker 생성 가능.
 - 이어서 할 것: 손상 job은 진단 후 신규 생성 차단(내구 작업 계약 정합).
 
-### P-5. [사용자 명시 미완] 훅 경고가 실제 실행 권위를 잘못 지칭 (← "코덱스 훅 경고 수정중"의 지점)
-- 위치: codex-plugin-install.js:181(plugin 출처 제외·사용자 hooks.json만 신뢰) vs
-  extension.ts:1704/1715("플러그인 발견됐지만 그 훅이 신뢰 안 됨" 안내) vs extension.ts:4915(사용자 실행 훅 표현) 불일치.
-- 문제: 사용자가 잘못된 훅을 검토하도록 안내될 수 있음 — 이 부분이 미완(사용자가 수정 중이었다고 명시).
-- 이어서 할 것: 플러그인 훅 신뢰 판정과 경고 문구를 실제 실행 권위(사용자 hooks.json 기준)로 일치시켜 완성.
+### P-5. [제품 수정 완료 2026-07-15] 훅 경고가 실제 실행 권위를 잘못 지칭 (← "코덱스 훅 경고 수정중"의 지점)
+- **제품 수정 구현(2026-07-15) — 잔여 ⓐ~ⓓ 전부**:
+  ⓐ 설치기 dual-shell: codex-plugin-install.js에 nodeTokenRunsInShell/nodeTokenDualShellOk 신설 —
+    win32는 PowerShell(-NoProfile -Command)과 cmd '양쪽 실검증' 통과 토큰만 hooks.json에 기입.
+    확장 installCodexUserRuntimeHooks는 bare node를 첫 후보로 resolveNodeTokenDual 사용(절대경로 우선
+    후보 결함 제거), 미해소 시 명시 경고("PATH의 node가 PS·cmd 양쪽에서 실행되지 않습니다").
+  ⓑ hook-setup.ts 사전검사에 shellRunsNodePowerShell·resolveNodeTokenDual 추가(기존 shellRunsNode는
+    cmd 경유라 PS 무효 문자열 통과 — 실측 단언으로 고정).
+  ⓒ UX 계약 ①~⑤: ①설치·신뢰 완료 문구에 '창 리로드 후 반영' 명시 ②'지금 리로드' 버튼이
+    workbench.action.reloadWindow 직접 실행 ③창 로드 시 hooks.json sha1 세대 캡처, 같은 세대엔 1회만
+    권고(codexHookReloadPromptedGen) ④모든 신뢰 조회가 observeCodexHookTrustForReload를 거쳐 '미준비→
+    준비' 전이 시에도 권고 ⑤"시작·재개만 하면 자동 고정" 계열 문구에 신뢰+리로드 조건 명시(ko/en),
+    hooks-untrusted 경보 주어를 사용자 hooks.json(실행 권위)으로 정정.
+  ⓓ 마이그레이션: codexPeekHookCommandNeedsMigration/detectCodexPeekHookMigration — 우리 훅인데 명령이
+    따옴표 절대경로 시작(PS 즉사 옛 형식)이면 자동 제안·설치 흐름 두 입구에서 교체 제안(소유 표식 없으면
+    자동 교체 금지·수동 안내), 교체 후 재신뢰+리로드 안내.
+  +창로드 오경고: 활성화 자동 진입(auto)에서 신뢰 조회 실패(10s 타임아웃·app-server 오류)는 '미신뢰
+    사실'이 아니므로 재신뢰로 오도하는 팝업을 띄우지 않음 — fail-closed는 유지(대시보드 경보·ob4 미확인
+    표시 지속). 조회 실패/확인된 미신뢰 문구 분리+'다시 확인' 버튼.
+  +2·3차 반영(Codex 검증 반박 수용): ①마이그레이션 검사를 두 진입점 '최선행'으로(플러그인 상태·installed
+    4/4 판정보다 앞) — 플러그인 부재·부분 legacy(4개 미만)·무표식 전부 일반 설치 모달(소유권 인수+자동
+    재기입)에 도달 불가, owned/unowned 분기는 offerCodexHookMigration 내부(무표식=수동 안내만) ②동시성 —
+    running Promise+명시 요청 큐: auto 조회 중 온 명시 진입(모드 클릭)은 종료 후 재실행(유실 없음), auto만
+    창당 1회 latch·명시 진입은 latch 무관, auto 조회 실패는 무팝업+latch 해제 ③문구: 재확인 성공은 '설정상
+    신뢰 확인·현재 코어 반영은 리로드 후'(hooks/list는 별도 프로세스 — runnable 단정 금지), C-C 모드 클릭
+    안내·구현 미고정 경보에 훅 설치·신뢰·리로드 선행조건 명시 ④writer 불변조건 —
+    installCodexPeekUserHooks가 따옴표 시작/빈 토큰을 구조적으로 거부(어떤 직접 호출자도 PS 즉사 형식을
+    기입 불가; 실셸 dual 검증은 해석기 몫) ⑤신뢰 재전이 — ready→unready→ready 전이마다 권고.
+  +4차 반영: 큐·리로드 세대의 순서 계약을 순수 상태기 2종(createCodexHookOfferGate·
+    createCodexHookReloadTracker — bridge/codex-plugin-install.js, vscode 무의존)으로 분리, 확장은 판정만
+    소비. 테스트 tests/p5-hook-command.test.js가 '같은 팩토리'를 직접 구동해 순서 반례를 실행 검증(자동 중
+    명시 진입 큐→1회 재실행·auto 1회·조용 실패 후 재시도·최초 ready 무권고·재신뢰 전이별 권고·같은 세대
+    중복 금지·조회 실패 무시)+PS 실셸 실측(절대경로 토큰 cmd 통과·PS 탈락)+writer 거부·파일 바이트 불변
+    실행 검증. 남는 한계(정직): vscode 창·알림과의 최종 결선은 배선 잠금(정규식) — 판정 로직 자체는 전부
+    실행 검증됨. unowned 수동 안내 분기는 offerCodexHookMigration 내부 소스 잠금.
+- (해결됨 2026-07-15) 위치였던 곳: codex-plugin-install.js(plugin 출처 제외·사용자 hooks.json만 신뢰) vs
+  extension.ts 경고 문구("플러그인 발견됐지만…") 불일치 — hooks-untrusted 경보·신뢰 안내의 주어를 전부
+  '사용자 훅(hooks.json)=실행 권위'로 정정(아래 구현 단락 ⑤·2차 반영 ③). 옛 기록: 사용자가 잘못된 훅을
+  검토하도록 안내될 수 있었음(사용자 수정 중 미완 지점이었음).
+- ~~이어서 할 것: 플러그인 훅 신뢰 판정과 경고 문구를 실제 실행 권위(사용자 hooks.json 기준)로 일치시켜 완성.~~ (완료 2026-07-15 — 아래 제품 수정 구현 단락 ⑤·2차 반영 ③)
 
 #### P-5 근본 원인 유력 진단 — 확정은 폐루프 재현 대기 (2026-07-13 실측·Codex 검증)
 - "구현 훅 미작동" 경고에 대해 현재 증거가 가장 강하게 지지하는 원인: **장기 실행 Codex app-server가
@@ -197,8 +232,9 @@
 
 ## 처리 원칙
 - 위 항목들은 이원화 작업 이어서 할 때 각각 [설계→구현→테스트→Codex 검증→커밋] 루프로 처리.
-- 착수 순서는 **HANDOFF §깃헙 동기화 절(더 최신 · 07-14 14:02)이 정본**: ~~P-8 1단~~(완료 2026-07-15) → P-5 →
-  P-1~P-4 → P-6b 서술 정정. (이 단락의 옛 문구 'P-5 우선 착수 후보'는 07-14 10:49 시점 기록 — HANDOFF가 대체.)
+- 착수 순서는 **HANDOFF §깃헙 동기화 절(더 최신 · 07-14 14:02)이 정본**: ~~P-8 1단~~(완료 2026-07-15) →
+  ~~P-5~~(완료 2026-07-15) → P-1~P-4 → P-6b 서술 정정. (이 단락의 옛 문구 'P-5 우선 착수 후보'는 07-14
+  10:49 시점 기록 — HANDOFF가 대체.)
   P-6은 codex-codex 실사용 차단급이라 P-5 제품 수정과 같은 묶음으로 처리 권장.
 - 동기화 자체는 무손실 완료(정본 그대로) — 위 항목은 정본의 미완 상태를 그대로 반영한 것이지 동기화 오류가 아니다.
 

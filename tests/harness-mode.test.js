@@ -81,7 +81,7 @@ reg=lib.registerCodexImplementer(ws,sid,"gpt-6","xhigh");assert.strictEqual(reg.
 const extSrc=fs.readFileSync(path.join(__dirname,"..","src","extension.ts"),"utf8");assert.match(extSrc,/id="planConfirmHelp"/);assert.doesNotMatch(extSrc,/sendText\(`codex plugin marketplace add[^\n]*;/,"Codex 플러그인 설치는 shell 구분자에 의존하지 않음");
 assert.doesNotMatch(extSrc,/data-role","implementer|구현 연결","Link implementer/,"수동 구현 연결 UI 없음 — 현재 대화 훅만 자동 고정");
 assert.match(extSrc,/Claude Code↔Codex와 동일한 검증 세션을 공유 중/);assert.match(extSrc,/ci-effort:/,"구현 Codex 추론강도 drift 경고 배선");
-assert.match(extSrc,/maybeOfferCodexHookSetup\(context\.extensionUri\.fsPath\)/,"확장 활성화 시 Codex 플러그인 설치 동의를 자동 제안");
+assert.match(extSrc,/maybeOfferCodexHookSetup\(context\.extensionUri\.fsPath,true\)/,"확장 활성화 시 Codex 플러그인 설치 동의를 자동 제안(auto — 조회 실패 시 오경고 억제 경로·P-5)");
 assert.match(extSrc,/m\.mode==="codex-codex"[\s\S]{0,700}maybeOfferCodexHookSetup/,"C-C 모드 최초 선택 시에도 설치 동의를 제안");
 assert.match(extSrc,/registerCommand\("codexBridge\.installCodexHooks"[\s\S]{0,180}await codexHomeReady[\s\S]{0,120}runCodexHookInstallFlow/,"수동 Codex 훅 설치도 실제 CODEX_HOME 동기화를 기다림");
 assert.match(extSrc,/syncCodexHome\(\(changed\) => \{[\s\S]{0,900}ready\?\.\(\)[\s\S]{0,900}maybeOfferCodexHookSetup/,"활성화 설치 제안은 codex doctor 홈 확정 뒤 시작");
@@ -89,9 +89,9 @@ assert.match(extSrc,/async function runCodexHookInstallFlow[\s\S]{0,100}await co
 assert.match(extSrc,/if\(codexHomeIsReady\)\{const beforeTrust[\s\S]{0,260}refreshCodexPeekHookTrust/,"doctor 준비 전 render는 hooks\/list 조회를 시작하지 않음");
 assert.match(extSrc,/function syncCodexHookHealth\(ws:[^)]*\)[\s\S]{0,100}!codexHomeIsReady[\s\S]{0,30}return/,"computeState·render의 건강 경보도 CODEX_HOME 준비 전 생성 금지");
 assert.match(extSrc,/codexHomeIsReady=true;codexHookTrustCache\.reset\(\)[\s\S]{0,500}refreshCodexPeekHookTrust\([^\n]+true\)/,"doctor 완료 시 pre-ready 캐시를 폐기하고 현재 홈으로 강제 조회");
-assert.match(extSrc,/if\(codexHookOfferShown\)return;[\s\S]{0,180}codexHookOfferShown=true;[\s\S]{0,220}await codexPeekPluginState/,"활성화와 C-C 선택의 비동기 경합 전에 설치 제안 선점");
+assert.match(extSrc,/const e=codexHookOfferGate\.enter\(auto\);[\s\S]{0,120}if\(e\.act==="queued"\)\{codexHookOfferQueuedRoot=extensionRoot;return;\}/,"활성화와 C-C 선택의 비동기 경합 — 순수 게이트가 선점·큐 판정(P-5 4차: 순서 계약은 게이트 실행 테스트가 잠금)");
 assert.match(extSrc,/\["app-server","--stdio"\][\s\S]{0,2400}"hooks\/list"/,"설치 목록이 아니라 app-server hooks/list로 실제 훅 신뢰 상태 조회");
-assert.match(extSrc,/state\.present&&state\.enabled[\s\S]{0,250}refreshCodexPeekHookTrust[\s\S]{0,150}showCodexHookTrustWarning/,"설치·활성 상태여도 미신뢰면 자동 경고");
+assert.match(extSrc,/state\.present&&state\.enabled[\s\S]{0,700}refreshCodexPeekHookTrust[\s\S]{0,400}showCodexHookTrustWarning/,"설치·활성 상태여도 미신뢰면 자동 경고(P-5: 마이그레이션 선확인·조회 실패는 auto 진입에서 팝업 억제)");
 assert.match(extSrc,/if\(state\.present&&!state\.enabled\)[\s\S]{0,900}활성화한 뒤 Hook에서 네 훅을 검토·신뢰[\s\S]{0,300}구현 연결이 자동 이동/,"비활성 자동 경고도 활성화·네 훅 신뢰→현재 대화 자동 이동을 안내");
 assert.doesNotMatch(extSrc,/기존 구현 세션을 숨겨 연결을 (?:명시적으로 )?해제|hide the old implementer session/,"구현 자동귀속 전에 수동 unlink가 필요하다는 오안내 제거");
 const healthSrc=fs.readFileSync(path.join(__dirname,"..","src","codex-hook-health.ts"),"utf8"),pkg=JSON.parse(fs.readFileSync(path.join(__dirname,"..","package.json"),"utf8"));assert.match(healthSrc,/snapshot\.queried !== true[\s\S]{0,120}hooks-unverified/,"hooks/list 조회 전·실패도 fail-closed");assert.match(pkg.scripts.test,/tests\/codex-hook-health\.test\.js/,"훅 생존·신뢰 테스트가 전체 npm test 체인에 포함");

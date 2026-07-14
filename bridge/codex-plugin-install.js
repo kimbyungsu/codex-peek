@@ -37,6 +37,80 @@ const CODEX_PEEK_USER_HOOKS=[
 function fwd(p){return String(p||"").replace(/\\/g,"/");}
 function shellQuote(p){return '"'+String(p||"").replace(/"/g,'\\"')+'"';}
 function codexPeekHookCommand(nodeToken,bridgeDir){return String(nodeToken||"node")+" "+shellQuote(fwd(path.join(bridgeDir,"codex-hook.js")));}
+// ── P-5 확정 원인 ②: Codex는 Windows에서 훅을 '감지된 기본 셸(대개 PowerShell) -NoProfile -Command'로 실행한다.
+// `"C:\...\node.exe" "script"`처럼 따옴표 경로로 시작하는 명령은 PS에선 문자열 나열(ParserError 즉사·무로그)이라
+// bare `node`만이 PS·cmd 양쪽 유효 — 설치 전 양쪽 셸에서 실제 실행해 검증한다(가정 금지·실검증).
+function nodeTokenRunsInShell(nodeToken,shellKind){
+  const probe=String(nodeToken)+' -e "process.stdout.write(String(6*7))"';
+  const {spawnSync}=require("child_process");
+  try{
+    const r=shellKind==="powershell"
+      ?spawnSync("powershell.exe",["-NoProfile","-NonInteractive","-Command",probe],{encoding:"utf8",timeout:20000,windowsHide:true})
+      :shellKind==="cmd"
+      ?spawnSync(probe,{shell:process.env.ComSpec||"cmd.exe",encoding:"utf8",timeout:20000,windowsHide:true})
+      :spawnSync(probe,{shell:true,encoding:"utf8",timeout:20000,windowsHide:true});
+    return r.status===0&&String(r.stdout||"").trim()==="42";
+  }catch{return false;}
+}
+// Codex 훅용 node 토큰 판정 — win32는 PS와 cmd 둘 다 통과해야 유효(둘 중 무엇이 기본 셸이어도 훅이 산다).
+function nodeTokenDualShellOk(nodeToken,platform=process.platform){
+  if(platform!=="win32")return nodeTokenRunsInShell(nodeToken,"posix");
+  return nodeTokenRunsInShell(nodeToken,"powershell")&&nodeTokenRunsInShell(nodeToken,"cmd");
+}
+// 기존 설치본 마이그레이션 감지(P-5 ⓓ): 우리 훅인데 node 토큰이 따옴표 경로로 시작하면 PS 기본 셸에서 즉사하는 옛 형식.
+function codexPeekHookCommandNeedsMigration(command,bridgeDir){
+  if(!isCodexPeekHookCommand(command,bridgeDir))return false;
+  return /^\s*"/.test(String(command||""));
+}
+// ── P-5 순수 상태기 2종 — vscode 무의존(확장이 require해 쓰고, 테스트가 같은 팩토리를 직접 실행해
+// 순서 계약을 잠근다 — 정규식 잠금만으로는 경합 의미 변화를 못 잡는다는 Codex 지적 반영).
+// ①설치 제안 게이트: auto(활성화)는 창당 1회, 명시 진입(사용자 클릭)은 항상 처리하되 실행 중이면
+//   큐에 보존해 종료 후 정확히 1회 재실행(유실·중복 소비 금지).
+function createCodexHookOfferGate(){
+  let running=false,queued=false,shown=false;
+  return{
+    // 진입 판정: run=본문 실행 / queued=명시 요청 보존(종료 후 재실행 예약) / skip=아무것도 안 함
+    enter(auto){
+      if(running){if(!auto)queued=true;return{act:auto?"skip":"queued"};}
+      if(auto&&shown)return{act:"skip"};
+      running=true;shown=true;return{act:"run"};
+    },
+    // 본문 종료: rerun이면 호출측이 명시 진입으로 정확히 1회 재실행(큐는 여기서 소비)
+    finish(){running=false;const q=queued;queued=false;return{act:q?"rerun":"idle"};},
+    // auto 조회 실패의 조용 종료 — 팝업을 안 보여줬으므로 auto 재시도 여지를 되돌린다
+    silentAutoFail(){shown=false;},
+    state(){return{running,queued,shown};},
+  };
+}
+// ②리로드 세대 추적: 훅 파일 해시·신뢰 전이(미준비→준비, 재신뢰 포함)를 세대로 묶어
+//   '바뀐 세대의 ready'에서만 1회 권고. 조회 실패(queried=false)는 사실이 아니므로 무시.
+function createCodexHookReloadTracker(){
+  let firstReady=null,lastReady=null,transitions=0,promptedGen="";
+  return{
+    observe(queried,ready,fileHashNow,fileHashAtLoad,trusted,untrusted){
+      if(!queried)return{prompt:false,gen:""};
+      if(firstReady===null)firstReady=ready;
+      if(lastReady===false&&ready)transitions++; // ready→unready→ready 재전이도 각각 새 세대(Codex 반례)
+      lastReady=ready;
+      if(!ready)return{prompt:false,gen:""};
+      const gen=String(fileHashNow)+":"+trusted+"/"+untrusted+":"+transitions;
+      const changed=fileHashNow!==fileHashAtLoad||firstReady===false||transitions>0;
+      if(!changed||gen===promptedGen)return{prompt:false,gen};
+      promptedGen=gen;
+      return{prompt:true,gen};
+    },
+  };
+}
+function detectCodexPeekHookMigration(file,bridgeDir){
+  const r=readHookRoot(file);if(!r.ok||r.raw===null)return{needed:false,count:0};
+  let count=0;
+  for(const h of CODEX_PEEK_USER_HOOKS){
+    const groups=r.root.hooks&&Array.isArray(r.root.hooks[h.event])?r.root.hooks[h.event]:[];
+    for(const g of groups)for(const x of(g&&Array.isArray(g.hooks)?g.hooks:[]))
+      if(x&&(codexPeekHookCommandNeedsMigration(x.commandWindows,bridgeDir)||codexPeekHookCommandNeedsMigration(x.command,bridgeDir)))count++;
+  }
+  return{needed:count>0,count};
+}
 function exactNodeHookTarget(command){
   const m=/^\s*(?:"([^"\r\n]+)"|([^\s"'`;&|<>]+))\s+"([^"\r\n]+)"\s*$/.exec(String(command||""));
   if(!m)return"";
@@ -84,6 +158,11 @@ function stripCodexPeekHooks(root,bridgeDir){
   root.hooks=hooks;return removed;
 }
 function installCodexPeekUserHooks(file,bridgeDir,nodeToken="node"){
+  // writer 불변조건(P-5): 따옴표로 시작하는 토큰("<절대경로>")은 Windows 기본 셸이 PowerShell일 때 즉사하는
+  // 형식이라 어떤 호출자도 기입 불가(구조 거부). 실셸 dual 검증은 해석기(resolveNodeTokenDual)의 몫이고,
+  // 이 관문은 검증을 우회한 직접 호출로 옛 결함이 재발하는 경로를 결정적으로 막는다.
+  const tokenStr=String(nodeToken||"").trim();
+  if(!tokenStr||/^"/.test(tokenStr))return{ok:false,reason:"node token must not be empty or a quoted path (quoted paths fail under a PowerShell default shell)"};
   const r=readHookRoot(file);if(!r.ok)return{ok:false,reason:r.reason};
   const problem=hookShapeProblem(r.root);if(problem)return{ok:false,reason:problem};
   let backup="";
@@ -196,4 +275,4 @@ function codexPeekHookTrustState(input,expectedHooksFile="",bridgeDir=""){
     pluginIds:[...new Set(hooks.map(h=>String(h.pluginId||"")).filter(Boolean))],
   };
 }
-module.exports={buildCodexPluginSpawn,marketplaceRootMatches,marketplaceStepOk,codexPeekPluginState,codexPeekHookTrustState,installCodexPeekUserHooks,installCodexPeekOwnedUserHooks,installCodexPeekOwnedUserHooksUnlocked,removeCodexPeekUserHooks,removeCodexPeekOwnedUserHooks,removeCodexPeekOwnedUserHooksUnlocked,withCodexPeekHookOwnerLock,readCodexPeekHookOwner,detectCodexPeekUserHooks,codexPeekHookCommand,isCodexPeekHookCommand,CODEX_PEEK_HOOK_OWNER_SCHEMA,CODEX_PEEK_USER_HOOKS,CODEX_PEEK_HOOK_EVENTS,CODEX_PEEK_PLUGIN_IDS,isCodexPeekPluginId,normRoot,cmdQuote};
+module.exports={buildCodexPluginSpawn,nodeTokenRunsInShell,nodeTokenDualShellOk,codexPeekHookCommandNeedsMigration,detectCodexPeekHookMigration,createCodexHookOfferGate,createCodexHookReloadTracker,marketplaceRootMatches,marketplaceStepOk,codexPeekPluginState,codexPeekHookTrustState,installCodexPeekUserHooks,installCodexPeekOwnedUserHooks,installCodexPeekOwnedUserHooksUnlocked,removeCodexPeekUserHooks,removeCodexPeekOwnedUserHooks,removeCodexPeekOwnedUserHooksUnlocked,withCodexPeekHookOwnerLock,readCodexPeekHookOwner,detectCodexPeekUserHooks,codexPeekHookCommand,isCodexPeekHookCommand,CODEX_PEEK_HOOK_OWNER_SCHEMA,CODEX_PEEK_USER_HOOKS,CODEX_PEEK_HOOK_EVENTS,CODEX_PEEK_PLUGIN_IDS,isCodexPeekPluginId,normRoot,cmdQuote};

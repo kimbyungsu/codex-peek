@@ -34,6 +34,17 @@ export function shellRunsNode(nodeToken: string): boolean {
   } catch { return false; }
 }
 
+// P-5 사전검사 보강: Windows에서 shell:true는 cmd 경유라 PowerShell 무효 문자열(따옴표 경로 시작 —
+// PS에선 문자열 나열=ParserError 즉사)을 통과시켰다. Codex는 훅을 감지된 기본 셸(대개 PS)로 실행하므로
+// Codex 훅용 토큰은 PS에서도 실제 실행돼야 한다(가정 금지·실검증).
+export function shellRunsNodePowerShell(nodeToken: string): boolean {
+  if (process.platform !== "win32") return true; // PS 검증은 Windows에서만 의미
+  try {
+    const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", nodeToken + ' -e "process.stdout.write(String(6*7))"'], { encoding: "utf8", timeout: 20000, windowsHide: true });
+    return r.status === 0 && String(r.stdout || "").trim() === "42";
+  } catch { return false; }
+}
+
 // 후보들을 순서대로 셸 검증해 첫 성공 토큰을 고른다. 절대경로는 따옴표+슬래시로 감싼다.
 // ★확장 호스트의 process.execPath는 Code.exe(node 아님)라 후보로 쓰면 안 됨 — 호출측이 후보 목록을 만든다(Codex 지적).
 export function resolveNodeToken(candidates: Array<string | undefined | null>): { token: string } | null {
@@ -42,6 +53,18 @@ export function resolveNodeToken(candidates: Array<string | undefined | null>): 
     const raw = String(c).trim();
     const token = raw === "node" || raw.startsWith('"') ? raw : q(fwd(raw));
     if (shellRunsNode(token)) return { token };
+  }
+  return null;
+}
+
+// Codex 훅용 토큰 해석(P-5): cmd와 PowerShell '둘 다' 실행되는 첫 후보만 채택 — 어느 쪽이 기본 셸이어도 훅이 산다.
+// 따옴표 절대경로 토큰은 PS 검증에서 자연 탈락하므로 호출측은 bare "node"를 첫 후보로 넣어라.
+export function resolveNodeTokenDual(candidates: Array<string | undefined | null>): { token: string } | null {
+  for (const c of candidates) {
+    if (!c || !String(c).trim()) continue;
+    const raw = String(c).trim();
+    const token = raw === "node" || raw.startsWith('"') ? raw : q(fwd(raw));
+    if (shellRunsNode(token) && shellRunsNodePowerShell(token)) return { token };
   }
   return null;
 }
