@@ -43,6 +43,37 @@ export function autoPinWriteAllowed(
   return beforeImplementer === lockedImplementer && autoPinCandidateIsCurrent(candidatePromptTs, currentPromptTs, linkObservedTs);
 }
 
+// P-6b(2026-07-14 라이브 실측): 같은 세션 재관측은 '세대'(implementerRevision·implementerEventAt·roleRevision)를
+// 전진시키지 않는다 — 세대 기록원이 훅 pin과 자동 고정 둘이 되면 훅 CAS가 raced로 밀려 턴 상태가 링크보다
+// 과거로 남고, freeze가 turn-before-link로 검증 시작을 거부한다(job 실행 중이면 writeProof stale-role까지).
+// 관측 시각(implementerLastSeenAt)만 갱신한다. 세대 전진은 '다른 세션으로의 교체'(ABA 포함)에만 허용 —
+// ABA 검출은 그 분기의 revision 증가가 그대로 담당한다.
+export function applyAutoPinUpdate(
+  cur: Record<string, unknown>,
+  best: { id: string; promptTs: string; model?: string; effort?: string },
+): { next: Record<string, unknown>; generationAdvanced: boolean } {
+  const promptAt = Date.parse(best.promptTs || "") || 0;
+  const observed = Date.parse(String(cur.implementerLastSeenAt || cur.implementerLinkedAt || "")) || 0;
+  if (cur.implementerSession === best.id) {
+    if (promptAt > observed) return { next: { ...cur, implementerLastSeenAt: best.promptTs }, generationAdvanced: false };
+    return { next: { ...cur }, generationAdvanced: false };
+  }
+  return {
+    next: {
+      ...cur,
+      implementerSession: best.id,
+      implementerLinkedAt: best.promptTs,
+      implementerLastSeenAt: best.promptTs,
+      implementerRevision: (Number(cur.implementerRevision) || 0) + 1,
+      implementerEventAt: promptAt,
+      implementerModel: best.model || "",
+      implementerEffort: best.effort || "",
+      implementerLinkSource: "rollout-user-prompt",
+    },
+    generationAdvanced: true,
+  };
+}
+
 // 구현 역할은 사용자가 Codex 앱에서 실제 프롬프트를 가장 최근 제출한 대화가 맡는다.
 // exec 검증 세션·하위 에이전트·현재 검증 역할은 후보에서 제외해 자동고정이 검증 트래픽을 따라가지 않게 한다.
 export function chooseImplementerAutoPin(

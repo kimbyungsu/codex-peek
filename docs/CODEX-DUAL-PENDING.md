@@ -120,6 +120,46 @@
 - incomplete 해제는 성공이 아님: 4라운드 초과로 차단만 풀린 상태이므로 이 결함 수정 전 codex-codex
   모드의 "모든 턴 검증" 보증은 미완.
 
+### P-7. [신규 2026-07-14·업스트림 — 수정판 존재] 훅 차단 피드백이 대화 이어가기를 오염 — invalid_id_prefix
+- 증상: 과거에 Stop 훅 차단이 발생했던 Codex 대화를 이어가면 API가 `[input[N].id] [invalid_id_prefix]
+  Expected an ID that begins with 'msg'`로 거부, 대화 진행 불가(이번 사례는 재개 과정에서 발현 — 단 결함의
+  본질은 '접두사 없는 과거 id를 outbound 입력에 다시 붙이는 것'이라 재기동이 필수 조건은 아님).
+- 실측(rollout 019f5d0f): 오염 항목은 정확히 3건(37·172·261행) — 전부 Stop 차단 사유
+  (`<hook_prompt hook_run_id="stop:...">`)를 담은 response_item(type:message, role:user)에 **UUIDv7 id**.
+  전체 response_item 219건 중 msg_ 31·UUID 3·무id 77·기타 정상 접두(rs_/fc_/ctc_) 108. 런타임 로그에도
+  같은 UUID로 input[23]·input[25] 거부 2건 실재. **우리 훅은 {decision:"block", reason}만 출력 — id 부여는
+  업스트림(0.144.0-alpha.4 items.rs build_hook_prompt_message가 new_item_id()=UUIDv7 사용).**
+- **업스트림 확정**: 공개 이슈 openai/codex#20783 = 동일 증상. PR #32312(커밋 c9d52de)로 수정 — 새 hook
+  prompt에 msg_ id 발급 + 기존 접두사 없는 id는 요청 직전 제거. **rust-v0.145.0-alpha.5 릴리스에 포함.**
+- 대응 순서(확정): ①즉시 우회=새 대화(구 코어에 머무는 동안) ②근본=수정 포함 코어로 교체 — 실측(2026-07-14):
+  새 확장 26.707.71524(코어 0.144.2)가 설치됐지만 실행 3프로세스는 전부 구 확장(0.144.0-alpha.4)에서 구동 중 —
+  **'확장 다시 시작'(또는 Reload)으로 프로세스를 교체해야 새 코어가 로드됨**(디스크의 새 바이너리는 자동 교체
+  안 됨 — VS Code 일반 활성화 경계, 하네스가 추가한 요구 아님). 0.144.2에 #32312 수정이 backport됐는지는
+  미확정 — Reload 후 새 rollout session_meta.cli_version 확인+Stop 차단 다음 입력으로 실검증 필요(수정 확정
+  릴리스는 rust-v0.145.0-alpha.5) ③수동 JSONL 수술(구조적 파싱으로 message의 접두사 없는 payload.id만
+  제거·백업+코어 종료 중 한정)은 갱신 불가·수정판 재현 시에만 최후 수단. Responses API 스키마상 입력 메시지
+  id는 필수 아님(형식적 타당성 확인됨).
+- P-6(8a944af)은 반복 차단으로 인한 오염 '빈도'를 크게 줄이지만, 정당한 차단도 hook prompt를 만들므로
+  0.144.0-alpha.4에 머무는 한 직렬화 결함 자체는 남는다(P-7의 해결은 코어 갱신).
+
+### P-6b. [신규 2026-07-14·P-6 첫 라이브에서 발견] 확장 자동 고정이 훅과 세대 경합 — 동결 거부(turn-before-link)
+- 증상: 새 C-C 대화에서 ask-start가 '구현 컨텍스트 동결 실패(turn-before-link)'로 거부 → 검증 시작 불가 →
+  Stop 차단(proof-missing) → (0.144.0-alpha.4에선 P-7 오염까지 연쇄).
+- 실측 사건 순서(검증 Codex 정정 반영): ①UserPromptSubmit 훅 성공 — 턴 상태 02:25:39.421 기록(raced 아님)
+  ②rollout 사용자 메시지 02:25:39.635 ③**확장 same-session 자동 고정**(extension.ts:1863-1864)이 그 프롬프트
+  시각으로 implementerRevision+1·implementerEventAt 전진 → ④ask-start(02:25:55) 시점 이미
+  eventAt>turn.startedAt → turn-before-link 거부. ⑤이후 eventAt이 02:27:05.607(=Stop 차단 쪽지 시각)로 또
+  전진 — **rollout 스캐너(rollout-scan.ts:174)가 `<hook_prompt>` 차단 피드백을 일반 사용자 프롬프트로 오인**
+  (extension.ts:570 isInjected가 hook_prompt 미제외). 현재 링크: sid 019f5e71·rev 20·src rollout-user-prompt.
+- 근본: 같은 세션의 세대(revision·eventAt) 기록원이 둘(훅 pin+확장 자동 고정). job 실행 중 자동 고정이
+  revision을 올리면 writeProof 재검사 stale-role 실패도 가능.
+- 수정 계약(확정, 3항): ①자동 고정 same-sid 분기=관측 갱신만(implementerLastSeenAt) — revision·eventAt·
+  roleRevision 불변(세대 전진은 '다른 세션 교체'와 훅 pin에만, ABA 검출은 다른-세션 분기가 담당하므로 보존.
+  두뇌 drift는 model/effort만 사용해 무영향) ②isInjected에 `<hook_prompt(\s|>)` 제외 추가 — 차단 피드백이
+  자동 고정·스캔 신호로 오인되지 않게 ③잔여 경합(다른 세션 첫 프롬프트에서 확장 fallback vs 훅 동시 교체 —
+  fallback을 훅 heartbeat 확인 뒤로 지연 또는 단일 등록 계약으로 통합)은 테스트로 노출 후 처리.
+  HANDOFF의 'rollout 보조 고정도 두 revision 증가' 계약 문구도 함께 갱신할 것.
+
 ## 처리 원칙
 - 위 항목들은 이원화 작업 이어서 할 때 각각 [설계→구현→테스트→Codex 검증→커밋] 루프로 처리.
 - P-5(훅 경고)가 사용자 마지막 작업이므로 우선 착수 후보. P-6은 codex-codex 실사용 차단급이라 P-5 제품

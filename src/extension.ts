@@ -13,7 +13,7 @@ import { maskKey, isPlausibleKey, mergeDeepseekConfig } from "./deepseek-config"
 import { appendApproved, parseApprovedFromMap, normSig } from "./map-ledger";
 import { parseEventsJsonl, deriveLedger, computeScoutHealth, HEALTH_MIN_SAMPLE } from "./ledger-events";
 import { catchUp, TailState, makeRolloutAcc, headFirstUserMessage, Msg, RolloutAcc, TURN_CAP } from "./rollout-scan";
-import { autoPinWriteAllowed, chooseImplementerAutoPin, resolvePromptProject } from "./implementer-auto-pin";
+import { applyAutoPinUpdate, autoPinWriteAllowed, chooseImplementerAutoPin, resolvePromptProject } from "./implementer-auto-pin";
 import { scoutDirectiveText, scoutLedgerNotes } from "./scope-package";
 import { firstImplementerMetaFromHistory } from "./implementer-baseline";
 import { assessCodexHookHeartbeat, assessCodexHookTrust, CodexHookTrustCache } from "./codex-hook-health";
@@ -573,7 +573,9 @@ function isInjected(t: string): boolean {
   // 아님 — CLI/레지스트리/상위 오케스트레이터 중 어느 부품인지는 rollout만으로 특정 불가). 목록에 없어 사용자
   // 말풍선처럼 노출됐던 실사고(사용자 발견 2026-07-10). 닫는 '>'까지 요구해 <recommended_plugins_custom> 같은
   // 정상 사용자 문자열은 보존(Codex 보완). bridge/codex-bridge.js 필터와 동형 유지.
-  return /^<(environment_context|user_instructions|system|recommended_plugins>)/i.test(s) || s.startsWith("# AGENTS.md");
+  // hook_prompt: Stop 훅의 차단 피드백을 Codex가 user message로 기록 — 프롬프트로 오인하면 자동 고정이
+  // 세대·waterline을 잘못 전진시킨다(P-6b 실사고 2026-07-14). 속성이 붙으므로 공백/닫는 > 둘 다 경계로.
+  return /^<(environment_context|user_instructions|system|recommended_plugins>|hook_prompt[\s>])/i.test(s) || s.startsWith("# AGENTS.md");
 }
 
 // ── 판독 캐시 — 상태 계산(computeState)이 워처 폭주(검증 턴마다 브릿지 파일 변경)와 결합해 확장 호스트를 포화시키는 것 방지.
@@ -1857,24 +1859,13 @@ function syncCodexImplementerAutoPin(ws: string | null): void {
       for (const k of Object.keys(o.byWorkspace || {})) if (normWs(k) === key) { curKey = k; cur = o.byWorkspace[k] || {}; break; }
       if (best.id === cur.codexSession || best.id === cur.codexCodexSession) return;
       if (!autoPinWriteAllowed(String(before.implementerSession || ""), String(cur.implementerSession || ""), best.promptTs, currentPromptTs, String(cur.implementerLastSeenAt || cur.implementerLinkedAt || ""))) return;
-      const promptAt = Date.parse(best.promptTs || "") || 0;
-      const observed = Date.parse(String(cur.implementerLastSeenAt || cur.implementerLinkedAt || "")) || 0;
       if (curKey !== key) delete o.byWorkspace[curKey];
-      if (cur.implementerSession === best.id) {
-        if (promptAt > observed) { cur.implementerLastSeenAt = best.promptTs; cur.implementerRevision = (Number(cur.implementerRevision) || 0) + 1; cur.implementerEventAt = promptAt; o.roleRevision = (Number(o.roleRevision) || 0) + 1; }
-      } else {
-        cur.implementerSession = best.id;
-        cur.implementerLinkedAt = best.promptTs;
-        cur.implementerLastSeenAt = best.promptTs;
-        cur.implementerRevision = (Number(cur.implementerRevision) || 0) + 1;
-        cur.implementerEventAt = promptAt;
-        o.roleRevision = (Number(o.roleRevision) || 0) + 1;
-        cur.implementerModel = best.model || "";
-        cur.implementerEffort = best.effort || "";
-        cur.implementerLinkSource = "rollout-user-prompt";
-      }
-      cur.workspace = ws;
-      o.byWorkspace[key] = cur;
+      // P-6b: 같은 세션 재관측=관측 갱신만(세대 불변 — 훅 CAS와의 이중 기록원 경합 제거), 다른 세션 교체만 세대 전진.
+      const upd = applyAutoPinUpdate(cur, best);
+      if (upd.generationAdvanced) o.roleRevision = (Number(o.roleRevision) || 0) + 1;
+      const nextRec: any = upd.next;
+      nextRec.workspace = ws;
+      o.byWorkspace[key] = nextRec;
     }));
   } catch { /* 보조 경로 실패는 실제 훅 경로와 경보 계산을 막지 않음 */ }
 }
