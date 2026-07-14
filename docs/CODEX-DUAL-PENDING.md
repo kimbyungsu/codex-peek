@@ -168,15 +168,15 @@
   지연 응답·TOCTOU)로 기각 — **웹뷰에 지속 상태를 두는 설계 자체가 불가**.
 - **사용자 구조 원칙(2026-07-14 지시·설계 전제)**: 계약은 프로젝트×언어(ko/en)×운용모드(claude-codex/
   codex-codex)별 분리가 기본, 3트랙(정찰) 관련 부분만 공용.
-- 확정 방향(v4~v6 설계 왕복·중심 아이디어는 검증 인정): **토글=즉시 저장 + 호스트가 잠금 안에서 재읽기·해당
+- **처리 방침(사용자 확정 2026-07-14) — 2단**: [1단·즉시] 최소 수정: 토글=즉시 저장+호스트가 계약 재읽기 후 해당 필드만 병합(잠금 없음=기존 작성자들과 동급 신뢰 수준 — 동시 저장 lost-update 잔존은 알려진 한계로 명시, 사용자 증상[되돌림]만 구조 제거) [2단·백로그] 아래 확정 설계(전 작성자 통일+잠금). 아래는 2단의 정본 설계다.
+- 확정 방향(v4~v10 설계 왕복·잠금 계약 v10에서 구현 가능 수준 판정): **토글=즉시 저장 + 호스트가 잠금 안에서 재읽기·해당
   필드만 patch + 계약 파일이 유일 정본(웹뷰 무상태)**. 공용 updateContractPatch(ws,lang,patch)로 전 작성자
   통일(전체저장[dirty 필드만·체크리스트 제외]·모드[harnessMode 1필드]·정찰대상·scope-target.js·scope-gate.js·
   체크박스). 무폴더 창은 CONTRACT_FILE 폴백·잠금 키=최종 절대경로. 잠금=신설 계약 파일 전용 fail-closed 잠금(v7~v9 확정): wx 선점+read-back fence, **자동 stale 회수 없음**(자동 경로에서 복원 rename이 사라져 해당 ABA 시나리오가 자동 운영에서 제거 — 수동 승인 경로의 잔여 간극은 P1 §5 동형 보장수준으로 명문화), 잠금 상태는 P1 5합타입+absent(alive/dead-valid/invalid/unreadable/owner-unverified/absent) — 정상JSON+ESRCH만 dead-valid·EPERM=alive·**JSON 파싱 실패=invalid**(P1 형식불명 동형)·fs 읽기 실패=unreadable·판정 중 ENOENT=absent(정상 해제 경합)=즉시 재획득 재시도, 복구는 상태별 승인 사다리만: dead-valid=1클릭 [잠금 정리](토큰 재확인·오탈취 즉시 복원)/invalid·owner-unverified=2단 명시 승인 모달(P1 --confirm 사다리 동형·격리 직전 상태 재판정)/unreadable=격리 금지·조사 안내만(토큰 재확인 불가=오탈취 방지 불가). stale-* 격리물은 TTL 청소(활성 잠금 절대 sweep 금지). 확장 호스트는 비동기 재시도(동기 루프로 호스트 블록 금지)·CLI는 동기 짧은 재시도. fence~쓰기 간극은 P1 §5 동형 보장수준 명문화. saveResult에 field·lang·mode 결속(웹뷰 DOM data-lang/mode
   일치 시만 인라인 표시). 필드별 단일-flight(응답까지 그 박스만 disabled)·호스트 전체 try/catch·최초 렌더 전
   disabled·즉시저장 aria-live 표시·저장버튼 문구를 규칙·세그 전용으로 정정.
-- 검증 이력: 진단 1회+수정 검증 2회 실패(웹뷰 상태 접근)+설계 v4(방향 인정)·v5(잠금 차단)·v6(funlock 패턴 —
-  판정 대기/진행. 스크래치 /tmp/v-ckbug·v-ckfix·v-slotdesign·v-slotv2·v-v3·v-v4·v-v5.txt).
-- 테스트 계약(검증 제시분 채택): 잠금 미획득 시 callback 미실행·죽은 잠금 회수 ABA·2프로세스 동시 patch
+- 검증 이력: 진단 1회+수정 검증 2회 실패(웹뷰 상태 접근)+설계 v4(방향 인정)·v5(잠금 차단)·v6(funlock 자동회수 — P1 잔여간극으로 기각)·v7(자동 회수 포기=자동 경로 ABA 제거)·v8(복구 사다리)·v9(5합타입)·v10(absent·파싱실패=invalid·읽기실패=unreadable 확정 — 잠금 설계 구현 가능 수준 판정. 스크래치 /tmp/v-ckbug~v-v10.txt).
+- 테스트 계약(검증 제시분 채택): 잠금 미획득 시 callback 미실행·죽은 잠금=fail-closed+상태별 수동 사다리(1클릭=dead-valid만·invalid/owner-unverified=2단 승인·unreadable=격리 금지·absent=재획득)·수동 복구 경합(정리 중 새 잠금=중단·복원)·2프로세스 동시 patch
   (체크박스 vs 전체저장/CLI)·무폴더 창·HTML 재생성 후 타 슬롯 결과 표시 금지·양 체크박스 동시 저장·손상 JSON
   불변·호스트 예외 시 재활성화+재렌더.
 
