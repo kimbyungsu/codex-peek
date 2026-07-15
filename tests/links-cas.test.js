@@ -7,7 +7,7 @@ const path = require("path");
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cas_"));
 process.env.CODEX_BRIDGE_HOME = dir;
-const { updateLinks, loadLinks, LINKS_FILE } = require("../bridge/codex-bridge.js");
+const { updateLinks, loadLinks, LINKS_FILE, linksFileState } = require("../bridge/codex-bridge.js");
 
 let pass = 0, fail = 0;
 const ck = (n, c) => { (c ? pass++ : fail++); console.log((c ? "  ✅ " : "  ❌ ") + n); };
@@ -43,6 +43,53 @@ ck("앞 단계 키들도 그대로(wsA·wsB)", after3 && after3.modelPrefs.wsA &
 console.log("[3] loadLinks 기본형 — 파일 없을 때도 bySession/byWorkspace 보장");
 const fresh = loadLinks();
 ck("loadLinks가 bySession/byWorkspace 객체를 줌", fresh && typeof fresh.bySession === "object" && typeof fresh.byWorkspace === "object");
+
+
+console.log("[P-1] 손상 links.json은 어떤 기록자도 덮어쓰지 않는다(부재만 신규 — fail-closed)");
+const CORRUPT = "{broken json!! " + Date.now();
+fs.writeFileSync(LINKS_FILE, CORRUPT, "utf8");
+ck("updateLinks가 손상 파일에서 기록 거부(false)", updateLinks((o) => { o.byWorkspace["wsX"] = { codexSession: "SX" }; }) === false);
+ck("손상 바이트 그대로 보존(복구 기회 유지)", fs.readFileSync(LINKS_FILE, "utf8") === CORRUPT);
+const lib = require("../bridge/contract-lib.js");
+const reg = lib.registerCodexImplementer("D:/ws-p1", "aaaaaaaa-0000-0000-0000-000000000001", "m", "high");
+ck("훅 자동 경로(registerCodexImplementer)도 기록 거부: " + (reg && reg.reason), !!reg && reg.ok === false && reg.reason === "links-corrupt");
+ck("훅 경로 후에도 손상 바이트 보존", fs.readFileSync(LINKS_FILE, "utf8") === CORRUPT);
+fs.unlinkSync(LINKS_FILE);
+ck("부재(ENOENT)는 신규 파일로 정상 기록", updateLinks((o) => { o.byWorkspace["wsY"] = { codexSession: "SY" }; }) === true && !!readFile());
+const extSrc = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
+
+// 의미 손상(구문은 유효): null·배열·문자열 루트, byWorkspace 타입 위반 — 전부 거부+바이트 보존(P-1 검증 반례)
+for (const bad of ["null", "[]", "\"just-a-string\"", "0", "false", JSON.stringify({ byWorkspace: [] }), JSON.stringify({ bySession: "oops" })]) {
+  fs.writeFileSync(LINKS_FILE, bad, "utf8");
+  const wrote = updateLinks((o) => { o.byWorkspace["wsZ"] = { codexSession: "SZ" }; });
+  ck("의미 손상 루트 거부: " + bad.slice(0, 24), wrote === false && fs.readFileSync(LINKS_FILE, "utf8") === bad);
+  const reg2 = lib.registerCodexImplementer("D:/ws-p1b", "aaaaaaaa-0000-0000-0000-000000000002", "m", "high");
+  ck("훅 경로도 의미 손상 거부: " + bad.slice(0, 24), !!reg2 && reg2.ok === false && fs.readFileSync(LINKS_FILE, "utf8") === bad);
+}
+// spawn 전 관문: 손상 links 상태에서 ask-start·ask는 아무 것도 만들지 않고 복구 안내로 중단(P-1 지적 2)
+fs.writeFileSync(LINKS_FILE, "{broken-for-gate", "utf8");
+const cp = require("child_process");
+const gateEnv = { ...process.env, CODEX_BRIDGE_HOME: dir, CLAUDE_PROJECT_DIR: dir };
+const g1 = cp.spawnSync(process.execPath, [path.join(__dirname, "..", "bridge", "codex-bridge.js"), "ask-start", "--allow-new", "x"], { encoding: "utf8", env: gateEnv, timeout: 15000, windowsHide: true });
+ck("손상 links에서 ask-start 중단+복구 안내", g1.status !== 0 && /links\.json/.test(String(g1.stderr || g1.stdout)));
+ck("ask-start 중단 시 job 미생성", !fs.existsSync(path.join(dir, "ask-jobs")) || fs.readdirSync(path.join(dir, "ask-jobs")).filter((f) => f.endsWith(".json")).length === 0);
+const g2 = cp.spawnSync(process.execPath, [path.join(__dirname, "..", "bridge", "codex-bridge.js"), "ask", "x"], { encoding: "utf8", env: gateEnv, timeout: 15000, windowsHide: true });
+ck("손상 links에서 직접 ask도 실행 전 중단", g2.status !== 0 && /links\.json/.test(String(g2.stderr || g2.stdout)));
+fs.unlinkSync(LINKS_FILE);
+
+
+// 판독 실패(EACCES류) — 플랫폼 독립 monkey-patch로 unreadable 분기 고정(4차 보완: Windows ACL 조작 회피)
+fs.writeFileSync(LINKS_FILE, JSON.stringify({ byWorkspace: { keep: { codexSession: "K" } } }), "utf8");
+const realRead = fs.readFileSync;
+fs.readFileSync = function (f, ...rest) { if (String(f) === String(LINKS_FILE)) { const e = new Error("EACCES: permission denied"); e.code = "EACCES"; throw e; } return realRead.call(fs, f, ...rest); };
+try {
+  ck("판독 실패=unreadable 상태", linksFileState() === "unreadable");
+  ck("판독 실패 시 updateLinks 기록 거부", updateLinks((o) => { o.byWorkspace["wsE"] = { codexSession: "SE" }; }) === false);
+} finally { fs.readFileSync = realRead; }
+ck("판독 실패 동안 기존 내용 무손상", !!readFile() && !!readFile().byWorkspace.keep);
+fs.unlinkSync(LINKS_FILE);
+
+ck("확장 updateLinks도 동형 계약(소스 잠금)", extSrc.includes("손상·판독 실패=기록 거부(손상 바이트 보존 — P-1)"));
 
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
 process.exit(fail ? 1 : 0);

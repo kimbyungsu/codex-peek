@@ -633,19 +633,45 @@ function saveLinks(links) {
 // links.json 쓰기 단일 관문(CAS+재시도): 최신본을 읽어 mutate로 '내 부분'만 바꾸고, 쓰기 직전 파일이 그새
 // 바뀌었으면(확장·다른 ask 프로세스가 저장) 최신본으로 다시 적용해 재시도한다 → 마지막 글쓴이가 남의 변경을
 // 통째로 덮어쓰는 lost-update를 크게 줄인다. ⚠ 완전한 lock은 아님(재읽기↔쓰기 사이 미세 경쟁 잔존 — 문서화된 한계).
-function readLinksRaw() { try { return fs.readFileSync(LINKS_FILE, "utf8"); } catch { return ""; } }
+// P-1: 부재(ENOENT)와 '판독 실패/손상'을 구분한다 — 손상을 빈 문자열·{}로 축소해 덮어쓰면 전체 링크·설정 유실.
+function readLinksRaw() { try { return fs.readFileSync(LINKS_FILE, "utf8"); } catch (e) { return (e && e.code === "ENOENT") ? null : undefined; } }
+// 의미 검증(P-1 검증 반례): null·false·0·배열·문자열 루트는 JSON.parse가 '성공'하므로 구문 검사만으로는
+// {}로 축소돼 덮어써진다. 루트와 byWorkspace/bySession(존재 시)이 일반 객체여야만 links 파일로 인정.
+function isPlainObj(v) { return !!v && typeof v === "object" && !Array.isArray(v); }
+function validLinksRoot(o) { return isPlainObj(o) && (o.byWorkspace === undefined || isPlainObj(o.byWorkspace)) && (o.bySession === undefined || isPlainObj(o.bySession)); }
+// 쓰기 명령이 spawn 전에 links 상태를 판정하는 관문 — 손상 상태에서 autoNewFailed 기록·stale 제거가
+// 계속 실패해 '링크 없음'으로 축소·새 세션 폭증으로 이어지는 반복 장애 차단(P-1 검증 지적 2).
+function linksFileState() {
+  const raw = readLinksRaw();
+  if (raw === null) return "absent";
+  if (raw === undefined) return "unreadable";
+  try { const o = JSON.parse(raw); return validLinksRoot(o) ? "ok" : "corrupt"; } catch { return "corrupt"; }
+}
+function requireLinksWritable() {
+  const st = linksFileState();
+  if (st === "corrupt" || st === "unreadable") {
+    die(tB(`⚠️ links.json이 ${st === "corrupt" ? "손상" : "판독 불가"} 상태입니다(${LINKS_FILE}). 유실 방지를 위해 어떤 기록도 하지 않았습니다 — 파일을 백업 후 복구(유효한 JSON으로 수정)하거나 삭제(연결·설정 초기화)한 뒤 다시 시도하세요.`, `⚠️ links.json is ${st} (${LINKS_FILE}). Nothing was written to prevent data loss — back up and repair the file (valid JSON) or delete it (resets links/settings), then retry.`), 4);
+  }
+}
 function updateLinks(mutate, retries = 4) {
+  const parseOr = (raw) => { // null=부재(신규 인정) / undefined=판독실패 / 파싱·의미검증 실패 → undefined(기록 거부)
+    if (raw === null) return {};
+    if (raw === undefined) return undefined;
+    try { const o = JSON.parse(raw); return validLinksRoot(o) ? o : undefined; } catch { return undefined; }
+  };
   for (let i = 0; i <= retries; i++) {
     const before = readLinksRaw();
-    let o; try { o = before ? JSON.parse(before) : {}; } catch { o = {}; }
+    const o = parseOr(before);
+    if (o === undefined) return false; // 손상·판독 실패=기록 거부(손상 바이트 보존 — P-1)
     o.bySession = o.bySession || {};
     o.byWorkspace = o.byWorkspace || {};
     mutate(o);
     if (readLinksRaw() !== before) continue; // 그새 누가 저장함 → 최신본으로 재적용(재시도)
     return saveLinks(o);
   }
-  // 재시도 소진(계속 경합) — 최신본에 한 번 더 적용해 best-effort 저장(드롭보다 나음)
-  let o; try { o = JSON.parse(readLinksRaw()); } catch { o = {}; }
+  // 재시도 소진(계속 경합) — 최신본에 한 번 더 적용해 best-effort 저장(드롭보다 나음). 손상은 여기서도 거부.
+  const o = parseOr(readLinksRaw());
+  if (o === undefined) return false;
   o.bySession = o.bySession || {};
   o.byWorkspace = o.byWorkspace || {};
   mutate(o);
@@ -1147,6 +1173,7 @@ function unretrievedSameTurnJob(ws, frozen) {
 function cmdAskStart(rest) {
   const req = askRequest(rest);
   if (!req.prompt) die('사용법: ask-start [--allow-new] "<프롬프트>"', 2);
+  requireLinksWritable(); // P-1: 손상 links 상태에서 worker를 만들면 연결·기록이 반복 실패 — 시작 전 중단
   const ws = configWs();
   if (!fs.existsSync(ASK_JOB_WORKER)) die(tB("ask job worker가 없습니다. node install.js로 런타임을 다시 동기화하세요.", "Ask job worker is missing. Re-sync the runtime with node install.js."));
   let id,timeoutMin,job,file;
@@ -1253,6 +1280,7 @@ async function cmdAsk(rest) {
   if (!prompt) die('사용법: ask "<프롬프트>"', 2);
 
   try { maybeCleanupState(); } catch { /* 오래된 상태파일 정리 best-effort(Stop 훅 미설치 환경 대비) — 하루 1회 */ }
+  requireLinksWritable(); // P-1: 손상 links 상태로 진행하면 링크·autoNewFailed 기록이 반복 실패해 새 세션 폭증 — spawn 전 중단
   // configWs/execCwd 분리: 설정 기준(계약·생각강도·링크·proof·이벤트 라벨)은 '연 폴더'(ws), 코덱스 실행·새세션 탐지·인용
   // 근거 경로 해석은 '작업 폴더'(exec=실제 실행 cwd). 사용자가 연 폴더에 건 설정이 외부 폴더 작업에도 일관 적용되게 한다.
   const ws = configWs();        // 연 폴더(설정 기준)
@@ -1695,4 +1723,5 @@ function main() {
 }
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
-module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, saveLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob };
+// saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
+module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState };

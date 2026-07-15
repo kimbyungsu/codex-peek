@@ -141,6 +141,8 @@ function pinImplementer(j, ws, sid, expectedSession) {
     };
     const why = reg.reason === "verifier-conflict"
       ? t("현재 세션은 이미 검증 역할이라 구현 역할에도 연결할 수 없습니다. 구현·검증은 서로 다른 세션이어야 합니다.", "This session is already the verifier and cannot also be the implementer. The two roles require distinct sessions.")
+      : (reg.reason === "links-corrupt" || reg.reason === "links-unreadable")
+      ? t(`links.json이 ${reg.reason === "links-corrupt" ? "손상" : "판독 불가"} 상태라 유실 방지를 위해 기록하지 않았습니다. 파일을 백업 후 복구(유효한 JSON)하거나 삭제(초기화)한 뒤 새 프롬프트로 다시 고정하세요.`, `links.json is ${reg.reason === "links-corrupt" ? "corrupt" : "unreadable"}, so nothing was written to prevent data loss. Back up and repair the file (valid JSON) or delete it (reset), then re-pin with a new prompt.`)
       : t("현재 대화를 구현 세션으로 자동 고정하지 못했습니다. 링크 파일 쓰기 상태를 확인하세요.", "Could not auto-pin the current conversation as the implementer. Check the link-file write state.");
     return { ok:false, why };
   }

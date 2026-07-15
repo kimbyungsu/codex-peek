@@ -1650,21 +1650,29 @@ function setSessionHidden(id: string, hidden: boolean): void {
 // '내 부분'만 바꾸고, 쓰기 직전 파일이 그새 바뀌었으면(다른 창·브릿지가 저장) 최신본으로 다시 적용해 재시도한다
 // (낙관적 동시성). atomicWrite(temp+rename)와 합쳐, 마지막 글쓴이가 남의 변경을 통째로 덮어쓰는 lost-update를
 // 크게 줄인다. ⚠ 완전한 lock은 아님 — 재읽기↔쓰기 사이 미세 경쟁 창은 남는다(문서화된 한계).
-function readLinksRaw(): string { try { return fs.readFileSync(LINKS_FILE, "utf8"); } catch { return ""; } }
+// P-1: 부재(ENOENT)와 '판독 실패/손상'을 구분 — 손상을 {}로 축소해 덮어쓰면 전체 링크·설정 유실(bridge와 동형).
+function readLinksRaw(): string | null | undefined { try { return fs.readFileSync(LINKS_FILE, "utf8"); } catch (e: any) { return (e && e.code === "ENOENT") ? null : undefined; } }
 function updateLinks(mutate: (o: any) => void, retries = 4): boolean {
+  const parseOr = (raw: string | null | undefined): any => { // null=부재(신규) / undefined·파싱·의미검증 실패=기록 거부
+    if (raw === null) return {};
+    if (raw === undefined) return undefined;
+    // 의미 검증: null·배열·원시값 루트는 파싱 '성공'이라 구문 검사만으론 {}로 축소·덮어쓰기됨(P-1 반례 — bridge와 동형).
+    const plain = (v: any) => !!v && typeof v === "object" && !Array.isArray(v);
+    try { const o = JSON.parse(raw); return (plain(o) && (o.byWorkspace === undefined || plain(o.byWorkspace)) && (o.bySession === undefined || plain(o.bySession))) ? o : undefined; } catch { return undefined; }
+  };
   for (let i = 0; i <= retries; i++) {
     const before = readLinksRaw();
-    let o: any = {};
-    try { o = before ? JSON.parse(before) : {}; } catch { o = {}; }
+    const o = parseOr(before);
+    if (o === undefined) return false; // 손상·판독 실패=기록 거부(손상 바이트 보존 — P-1)
     o.bySession = o.bySession || {};
     o.byWorkspace = o.byWorkspace || {};
     mutate(o);
     if (readLinksRaw() !== before) continue; // 그새 누가 저장함 → 최신본으로 재적용(재시도)
     return atomicWrite(LINKS_FILE, JSON.stringify(o, null, 2));
   }
-  // 재시도 소진(계속 경합) — 최신본에 한 번 더 적용해 best-effort 저장(드롭보다 나음)
-  let o: any = {};
-  try { o = JSON.parse(readLinksRaw()); } catch { o = {}; }
+  // 재시도 소진(계속 경합) — 최신본에 한 번 더 적용해 best-effort 저장(드롭보다 나음). 손상은 여기서도 거부.
+  const o = parseOr(readLinksRaw());
+  if (o === undefined) return false;
   o.bySession = o.bySession || {};
   o.byWorkspace = o.byWorkspace || {};
   mutate(o);

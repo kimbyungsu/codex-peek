@@ -16,14 +16,19 @@
 
 ## 이어서 처리할 지적 (Codex 사전 점검 2026-07-13 — 미완이라 예상된 항목)
 
-### P-1. [중대] links.json 손상 시 자동 훅이 빈 파일로 덮어써 기존 연결·설정 유실
+### P-1. [해결됨 2026-07-15] links.json 손상 시 자동 훅이 빈 파일로 덮어써 기존 연결·설정 유실
 - 위치: bridge/contract-lib.js:433 `try { JSON.parse(readFileSync(LINKS_FILE_SHARED)) } catch { o = {} }`
   → 이후 :474 `atomicWrite(LINKS_FILE_SHARED, JSON.stringify(o))`로 전체 덮어씀.
 - 문제: registerCodexImplementer는 codex-hook.js:138의 정상 SessionStart·UserPromptSubmit마다 자동 호출.
   links.json이 손상되면 읽기 실패를 `{}`로 축소→새 구현자 레코드만 담아 기록→다른 워크스페이스 연결·
   verifier 링크·모델/timeout 설정 전부 소실. 다음 사용자 대화가 유실 트리거.
-- 이어서 할 것: ENOENT(파일 부재)만 신규 파일로 인정하고, JSON 손상·판독 불가는 fail-closed(기록 거부).
-  손상 links.json이 바이트 그대로 보존되는 회귀 테스트 추가.
+- ~~이어서 할 것~~ **(완료 2026-07-15·검증 2왕복 통과[보완 반영])**: 같은 형상 기록자 3곳 전부 수정 —
+  ①registerCodexImplementer: ENOENT만 신규, 판독 실패=links-unreadable·파싱/의미 실패=links-corrupt(기록 거부)
+  ②bridge updateLinks ③확장 updateLinks(동형). 의미 검증 포함(null·배열·원시값 루트, byWorkspace/bySession
+  타입 위반도 거부 — 구문 검사만으론 {}로 축소됨). +spawn 전 관문 requireLinksWritable(cmdAsk·cmdAskStart —
+  손상 상태에서 autoNewFailed·stale 제거 반복 실패→새 세션 폭증 차단)·훅 안내에 원인/복구 절차 명시·
+  saveLinks export 봉인(단일 관문=updateLinks). 테스트 links-cas [P-1] 33단언(구문·의미 7종×2경로·게이트
+  3종·EACCES monkey-patch). 후속 후보: cmdLink exit code 정밀화·확장 파서 공용 함수화.
 
 ### P-2. [정책 위반] ask-jobs 내구 작업이 프롬프트·응답 영구 보존하는데 PRIVACY.md는 반대 고지
 - 위치: bridge/codex-bridge.js:1104(프롬프트를 ask-jobs/<id>.json의 prompt에 기록),

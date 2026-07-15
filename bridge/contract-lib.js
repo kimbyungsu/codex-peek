@@ -450,8 +450,19 @@ function registerCodexImplementer(ws, sessionId, model, effort, expectedSession)
   if (!ws || !sessionId) return { ok: false, reason: "missing" };
   const enforceCas = arguments.length >= 5;
   return withRoleLock(() => {
+    // P-1: 손상 links.json을 {}로 축소해 전체 덮어쓰면 다른 워크스페이스 연결·verifier 링크·설정이 통째로
+    // 유실된다(훅이 매 프롬프트 자동 호출이라 다음 대화가 유실 트리거). 부재(ENOENT)만 신규 파일로 인정,
+    // 손상·판독 실패는 기록 거부(fail-closed — 손상 바이트 보존, 복구 기회 유지).
+    let raw = null;
+    try { raw = fs.readFileSync(LINKS_FILE_SHARED, "utf8"); }
+    catch (e) { if (!(e && e.code === "ENOENT")) return { ok: false, reason: "links-unreadable" }; }
     let o = {};
-    try { o = JSON.parse(fs.readFileSync(LINKS_FILE_SHARED, "utf8")) || {}; } catch { o = {}; }
+    if (raw !== null) {
+      try { o = JSON.parse(raw); } catch { return { ok: false, reason: "links-corrupt" }; }
+      // 의미 검증: null·배열·원시값 루트는 파싱 '성공'이라 구문 검사만으론 {}로 축소·덮어쓰기됨(P-1 반례).
+      const plain = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+      if (!plain(o) || (o.byWorkspace !== undefined && !plain(o.byWorkspace)) || (o.bySession !== undefined && !plain(o.bySession))) return { ok: false, reason: "links-corrupt" };
+    }
     o.byWorkspace = o.byWorkspace || {};
     const key = normWs(ws);
     let foundKey = Object.keys(o.byWorkspace).find((k) => normWs(k) === key) || key;
