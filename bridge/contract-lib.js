@@ -833,6 +833,10 @@ function loadContract(ws, lang) {
     // 검증 모드: off=꺼짐 / code=코드변경 시 / plancode=플랜확정(ExitPlanMode)+코드변경 시 / always=모든 턴.
     // 기본 off(opt-in). 구버전 verify:true는 code로 마이그레이션.
     verifyMode: normVerifyMode(o),
+    // [모드별 검증 스위치 분리 2026-07-15] verifyMode=CL-C 슬롯 / codexVerifyMode=C-C 슬롯.
+    // 부재 시 normVerifyMode(o) '전체'로 fallback(원시 o.verifyMode 아님 — verify:true→code 레거시 호환 보존).
+    // codexVerifier 규칙과 동일 전례: 최초엔 CL-C 값을 상속해 보여주고, 명시적 C-C 저장 후엔 독립 정본.
+    codexVerifyMode: normCodexVerifyMode(o),
     // 사용자 계약 주입 시점: off / plan(플랜 모드일 때만) / always(기본·무회귀). 확장과 동일 규칙.
     claudeInjectMode: normInjectMode(o),
     codexInjectMode: normCodexInjectMode(o),
@@ -854,6 +858,11 @@ function normVerifyMode(o) {
   if (o && VERIFY_MODES.includes(o.verifyMode)) return o.verifyMode;
   if (o && o.verify === true) return "code"; // 레거시 호환
   return "off";
+}
+// C-C 슬롯 검증 스위치 — 유효 명시값 우선, 부재 시 CL-C 정규화 전체 재사용(설계검증 확정: 원시 폴백 금지).
+function normCodexVerifyMode(o) {
+  if (o && VERIFY_MODES.includes(o.codexVerifyMode)) return o.codexVerifyMode;
+  return normVerifyMode(o);
 }
 
 const INJECT_MODES = ["off", "plan", "always"];

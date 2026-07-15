@@ -153,6 +153,7 @@ interface BridgeState {
   lang: Lang;              // 전역 언어(ko/en)
   otherSlotRules: boolean; // 반대 언어 슬롯에만 규칙 있음(빈칸 안내)
   baseDirective: { verifyBaseline: string; transmit: string; rejudge: string; overridden: boolean };
+  baseReadOk: boolean; // 기본 원칙(+3트랙 정찰) 오버라이드 파일 판독 신뢰(부재=정상) — false면 웹뷰가 canonical fill·잠금 해제 보류(7차 지적 2)
   scoutPrompt: { baseline: string; overridden: boolean; directive: string; notes: string[]; version: string } | null; // §6-11 — 3트랙에서만(null=2트랙/판독 불가)
   baseAvailable: boolean;
   permissionMode: string;
@@ -261,6 +262,12 @@ function normVerifyMode(o: any): VerifyMode {
   if (o && o.verify === true) return "code"; // 레거시 verify:true → code 마이그레이션
   return "off";
 }
+// C-C 슬롯 검증 스위치(모드별 분리 2026-07-15) — bridge/contract-lib.js normCodexVerifyMode와 동형(스키마 정합).
+// 부재 시 normVerifyMode(o) '전체' 재사용(원시 o.verifyMode 폴백 금지 — verify:true→code 레거시 호환 보존).
+function normCodexVerifyMode(o: any): VerifyMode {
+  if (o && VERIFY_MODES.includes(o.codexVerifyMode)) return o.codexVerifyMode;
+  return normVerifyMode(o);
+}
 function withRoleLockExt<T>(fn: () => T): T | null {
   const token=process.pid+"-"+Math.random().toString(36).slice(2,8);let locked=false;
   for(let i=0;i<200&&!locked;i++){
@@ -309,7 +316,8 @@ interface Contract {
   codexChecklist: boolean;
   codexImplementerChecklist: boolean;
   codexVerifierChecklist: boolean;
-  verifyMode: VerifyMode;
+  verifyMode: VerifyMode; // CL-C 슬롯 검증 스위치(레거시 필드명 유지 — 무회귀)
+  codexVerifyMode: VerifyMode; // C-C 슬롯 검증 스위치(모드별 분리 2026-07-15 — 부재 시 verifyMode 상속)
   claudeInjectMode: InjectMode;
   codexInjectMode: InjectMode;
   scoutMode: ScoutMode;
@@ -404,6 +412,7 @@ function loadContract(ws?: string | null, lang?: Lang): Contract {
     codexImplementerChecklist: o.codexImplementerChecklist !== false,
     codexVerifierChecklist: o.codexVerifierChecklist !== false,
     verifyMode: normVerifyMode(o),
+    codexVerifyMode: normCodexVerifyMode(o),
     claudeInjectMode: normInjectMode(o),
     codexInjectMode: o && INJECT_MODES.includes(o.codexInjectMode) ? o.codexInjectMode : "always",
     scoutMode: normScoutMode(o),
@@ -454,22 +463,32 @@ async function setScoutTargetFromUi(ws: string | null, repo: string, slotLang?: 
   }
 }
 
-function saveContract(ws: string | null, c: Contract, lang?: Lang): boolean {
-  // 프로젝트별 파일에 저장(계약은 프로젝트 전용·상속 없음). ws 없으면(폴더 없는 창) 레거시 전역 파일에 저장.
-  // lang: 언어 슬롯 — 현재 언어의 파일에만 저장(다른 언어 슬롯 안 건드림).
+// [모드별 검증 스위치 분리 2026-07-15] 계약 저장은 '모드별 exact patch'만 — 정규화된 전체 객체(Contract) 재직렬화 금지.
+// 이유: loadContract 결과에는 실효 fallback(codexVerifyMode←verifyMode, codexVerifier←codex)이 실려 있어 통째로 쓰면
+// CL-C 저장·모드 전환만으로 C-C 필드가 원시값으로 물질화돼 '명시적 C-C 저장에서만 독립' 계약이 깨진다(설계검증 3차 반례).
+// 옛 saveContract(전체 병합 기록)는 이 이유로 제거·봉인(P-1 saveLinks export 제거와 동일 전례).
+// 손상 파일은 기록 거부(fail-closed — P-1·P-8 1단 patchContractFields와 동일 규약), 부재(ENOENT)만 신설.
+// ws=null(폴더 없는 창)은 레거시 CONTRACT_FILE에 patch(무폴더 회귀 방지 — 설계검증 3차 지적 2).
+function patchContractExt(ws: string | null, lang: Lang | undefined, patch: Record<string, unknown>): boolean {
   const file = ws ? contractFileFor(ws, lang) : CONTRACT_FILE;
-  // 대시보드가 모르는 확장 필드(scoutGate 등 — CLI/훅이 쓰는 실험 설정)는 보존 병합: 고정 스키마로 덮어쓰면
-  // 대시보드 저장 한 번에 게이트 설정이 지워진다(scoutGate 추가 때 발견 — 기존 파일 값 위에 c를 얹는다).
-  let keep: any = {};
-  try { const prev = JSON.parse(fs.readFileSync(file, "utf8")); if (prev && typeof prev === "object" && !Array.isArray(prev)) keep = prev; } catch { /* 새 파일 */ }
-  return atomicWrite(file, JSON.stringify({ ...keep, ...c, workspace: ws || undefined, updatedAt: new Date().toISOString() }, null, 2));
+  let cur: any = {};
+  try {
+    cur = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!cur || typeof cur !== "object" || Array.isArray(cur)) return false; // 형식 불명 → 기록 거부
+  } catch (e: any) {
+    if (!e || e.code !== "ENOENT") return false; // 손상·판독 불가 → 기록 거부(기존 바이트 보존·복구 기회 유지)
+    cur = {};
+  }
+  const stamped: any = { ...cur, ...patch, updatedAt: new Date().toISOString() };
+  if (ws) stamped.workspace = ws;
+  return atomicWrite(file, JSON.stringify(stamped, null, 2));
 }
 
 // '다른 언어 슬롯에만 규칙이 있음' 안내용 — 현재 슬롯이 비었는데 반대 슬롯에 규칙이 있으면 그 사실을 알려
 // "언어 바꿨더니 규칙이 사라졌다" 오해를 막는다(Codex 검증 권고). 규칙 유무만 본다(verifyMode 기본값은 무시).
-function otherSlotHasRules(ws: string | null): boolean {
+function otherSlotHasRules(ws: string | null, lang?: Lang): boolean {
   if (!ws) return false;
-  const cur = loadLangExt();
+  const cur = lang || loadLangExt(); // 호출자(computeState)의 langSnap과 동일 슬롯(10차 보완 1 — 단일 스냅샷 완결)
   const other: Lang = cur === "ko" ? "en" : "ko";
   try {
     const o = JSON.parse(fs.readFileSync(contractFileFor(ws, other), "utf8"));
@@ -827,22 +846,78 @@ function trySpawnMapBootstrap(ws: string): void {
     vscode.window.showWarningMessage(tE("Project MAP 자동 생성 모듈이 아직 배포되지 않았어요(구버전 브릿지) — 브릿지 업데이트 후 다시 켜거나 수동으로: node scripts/scope-map.js <저장소> bootstrap. 그 외 3트랙 기능은 정상 동작합니다.", "The Project MAP auto-creation module is not deployed yet (old bridge runtime) — update the bridge and re-enable, or run manually: node scripts/scope-map.js <repo> bootstrap. All other 3-track features keep working."));
   }
 }
-function loadBaseDirectiveSafe(): { verifyBaseline: string; transmit: string; rejudge: string; overridden: boolean } {
+// [구현검증 7차 지적 2 → 8차 지적 3·4 재구성] 기본 원칙/정찰 오버라이드 파일의 strict 판독 — 한 번 읽은 '동일
+// 바이트'에서 신뢰(ok)와 데이터(o)를 함께 산출한다(별도 probe·로더의 시차로 '신뢰=참+기본값으로 축소된 데이터'가
+// 한 푸시에 결합되던 공백 제거). 신뢰 규칙: 부재(ENOENT)=기본값이 정본(정상) / 파싱 실패·루트 비객체·알려진 필드의
+// 비문자열(의미 손상)=불신 — lib(loadBaseDirective/loadScoutBaseline)는 이들을 침묵으로 기본값 축소하므로,
+// 불신 동안 웹뷰가 fill·잠금 해제·저장을 보류해 '가짜 기본값'이 사용자 값을 덮는 경로를 차단한다.
+function readCanonFile(file: string, fields: string[]): { ok: boolean; o: any } {
+  let raw: string;
+  try { raw = fs.readFileSync(file, "utf8"); }
+  catch (e: any) { return { ok: !!e && e.code === "ENOENT", o: {} }; }
+  try {
+    const p = JSON.parse(raw);
+    if (!p || typeof p !== "object" || Array.isArray(p)) return { ok: false, o: {} };
+    for (const f of fields) if (p[f] !== undefined && typeof p[f] !== "string") return { ok: false, o: {} };
+    return { ok: true, o: p };
+  } catch { return { ok: false, o: {} }; }
+}
+function loadBaseDirectiveSafe(lang?: Lang): { verifyBaseline: string; transmit: string; rejudge: string; overridden: boolean; readOk: boolean } {
   try {
     const lib = bridgeLib();
     if (lib && typeof lib.loadBaseDirective === "function") {
-      const cur = lib.loadBaseDirective();
-      // '수정됨' 배지 비교 기준도 현재 전역 언어의 기본값이어야 한다 — en 모드에서 한국어 기본값과 비교하면
+      // 병합 규칙은 정본(contract-lib loadBaseDirective의 pick)과 동일 — 문자열+trim 비어있지 않으면 오버라이드.
+      // 언어는 호출자 스냅샷을 그대로 사용(9차 지적 2 — 파일·기본값·라벨이 같은 슬롯).
+      const l: Lang = lang || loadLangExt();
+      const file = typeof lib.baseDirectiveFileFor === "function" ? lib.baseDirectiveFileFor(l) : path.join(BRIDGE_DIR, l === "ko" ? "base-directive.json" : `base-directive.${l}.json`);
+      const r = readCanonFile(file, ["verifyBaseline", "transmit", "rejudge"]);
+      // '수정됨' 배지 비교 기준도 같은 언어 슬롯의 기본값이어야 한다 — en 모드에서 한국어 기본값과 비교하면
       // 오버라이드가 없어도 전부 '수정됨'으로 오탐(Codex 검증 반영). 구 런타임(lang 이전)엔 baseDefaultsFor가 없어 폴백.
-      const def = (typeof lib.baseDefaultsFor === "function" ? lib.baseDefaultsFor() : lib.BASE_DEFAULTS) || {};
+      const def = (typeof lib.baseDefaultsFor === "function" ? lib.baseDefaultsFor(l) : lib.BASE_DEFAULTS) || {};
+      const pick = (k: "verifyBaseline" | "transmit" | "rejudge") => (typeof r.o[k] === "string" && r.o[k].trim() ? r.o[k] : (def[k] || ""));
+      const cur = { verifyBaseline: pick("verifyBaseline"), transmit: pick("transmit"), rejudge: pick("rejudge") };
       const overridden =
         cur.verifyBaseline !== def.verifyBaseline || cur.transmit !== def.transmit || cur.rejudge !== def.rejudge;
-      return { verifyBaseline: cur.verifyBaseline || "", transmit: cur.transmit || "", rejudge: cur.rejudge || "", overridden };
+      return { ...cur, overridden, readOk: r.ok };
     }
   } catch {
     /* ignore */
   }
-  return { verifyBaseline: "", transmit: "", rejudge: "", overridden: false };
+  // 런타임 lib 부재 — 저장·복원은 baseAvailable=false가 이미 전면 비활성(판독 축과 별개라 readOk는 참으로 둠)
+  return { verifyBaseline: "", transmit: "", rejudge: "", overridden: false, readOk: true };
+}
+
+// [8차 지적 4] base 축 상태(기본 원칙·정찰 태도층·판독 신뢰)를 한 곳에서 조립 — strict 단일 판독(readCanonFile)의
+// 신뢰와 데이터가 '같은 바이트'에서 나와 같은 푸시에 결속된다(probe/로더 분리 판독의 시차 공백 제거).
+function computeBaseState(ws: string | null, contract: Contract, lang: Lang): { baseDirective: BridgeState["baseDirective"]; baseReadOk: boolean; scoutPrompt: BridgeState["scoutPrompt"] } {
+  const b = loadBaseDirectiveSafe(lang);
+  let scoutOk = true;
+  let sp: BridgeState["scoutPrompt"] = null;
+  try {
+    // 무폴더(ws 없음)는 정찰 태도층을 산출하지 않음 — ④칸도 그 창에선 숨김·저장 페이로드 제외(웹뷰 계약과 대칭).
+    if (ws) {
+      const lib = bridgeLib();
+      if (lib && typeof lib.scoutBaselineDefaultFor === "function" && typeof lib.scoutBaselineFileFor === "function") {
+        const rs = readCanonFile(lib.scoutBaselineFileFor(lang), ["baseline"]);
+        scoutOk = rs.ok;
+        const D = String(lib.scoutBaselineDefaultFor(lang) || "");
+        const text = typeof rs.o.baseline === "string" && rs.o.baseline.trim() ? rs.o.baseline : D; // lib loadScoutBaseline 병합 규칙 동형
+        const notes = scoutLedgerNotes(lang);
+        sp = { baseline: text, overridden: text.trim() !== D.trim(), directive: scoutDirectiveText(lang), notes: [notes.header, notes.trusted, notes.reference, notes.disputed], version: String(lib.SCOUT_FORMAT_VERSION || "f1") };
+      } else {
+        // 구 런타임(helper 부재) — 정찰 정본을 신뢰 판독할 수 없음 = fail-closed(9차 지적 1: true로 두면
+        // 3트랙에서 빈 bScout+저장 활성이 전역 기준선 삭제 경로를 재개방).
+        scoutOk = false;
+      }
+    }
+  } catch { sp = null; scoutOk = false; }
+  // 정찰 파일 신뢰는 3트랙+ws일 때만 base 신뢰에 합성(2트랙·무폴더에선 bScout이 표시·저장 대상 아님)
+  const scoutRelevant = !!ws && contract.scoutMode === "on";
+  return {
+    baseDirective: { verifyBaseline: b.verifyBaseline, transmit: b.transmit, rejudge: b.rejudge, overridden: b.overridden },
+    baseReadOk: b.readOk && (!scoutRelevant || scoutOk),
+    scoutPrompt: sp,
+  };
 }
 
 // 무결성 신호: 브릿지(verify-guard)가 '검증 미완' 등을 integrity.json에 기록 → 여기서 읽어 상태바/대시보드로 가시화.
@@ -1340,9 +1415,12 @@ function readSessionTokens(file: string): CodexTokens | null {
 }
 function computeState(turnsN: number): BridgeState {
   const ws = dashboardWorkspace();
+  // 언어 슬롯 단일 스냅샷(구현검증 9차 지적 2): 다른 창이 language.json을 계산 도중 바꾸면 'ko 파일+en 기본값'
+  // 같은 슬롯 혼합이 한 푸시에 결합될 수 있다 — 계약·기본 원칙·정찰·lang 필드 전부 같은 캡처를 쓴다.
+  const langSnap = loadLangExt();
   syncCodexImplementerAutoPin(ws);
   const links = loadLinks();
-  const contract = loadContract(ws);
+  const contract = loadContract(ws, langSnap);
   const rawLink = workspaceLink(links, ws);
   const link = verifierLinkForMode(rawLink, contract.harnessMode);
   const linkedId: string | null = link?.codexSession ?? null;
@@ -1449,21 +1527,10 @@ function computeState(turnsN: number): BridgeState {
     candidates,
     hiddenCandidates,
     contract,
-    lang: loadLangExt(),                 // 전역 언어(ko/en) — 탭바 토글 상태 + UI 문자열 선택
-    otherSlotRules: otherSlotHasRules(ws), // 반대 언어 슬롯에만 규칙 있음 → '사라진 게 아님' 안내
-    baseDirective: loadBaseDirectiveSafe(),
-    // 정찰 프롬프트(§6-11): 태도층(편집 가능 슬롯)+형식층(잠금 — 지도를 읽는 기계 배선이라 읽기 전용 노출)
-    scoutPrompt: (() => {
-      try {
-        if (!ws) return null; // 트랙 무관 계산 — ④칸 표시 여부는 웹뷰가 저장된 트랙으로 결정(전환 직후 빈 칸 방지)
-        const lib = bridgeLib();
-        const b = lib?.loadScoutBaseline?.();
-        if (!b || typeof b.text !== "string") return null;
-        const lang = loadLangExt();
-        const notes = scoutLedgerNotes(lang);
-        return { baseline: b.text, overridden: !!b.overridden, directive: scoutDirectiveText(lang), notes: [notes.header, notes.trusted, notes.reference, notes.disputed], version: String(lib?.SCOUT_FORMAT_VERSION || "f1") };
-      } catch { return null; }
-    })(),
+    lang: langSnap,                      // 전역 언어(ko/en) — 계약·base 축과 같은 스냅샷(9차 지적 2: 슬롯 혼합 차단)
+    otherSlotRules: otherSlotHasRules(ws, langSnap), // 반대 언어 슬롯에만 규칙 있음 → '사라진 게 아님' 안내(langSnap 동일 슬롯)
+    // base 축(기본 원칙+정찰 태도층) — strict 단일 판독의 신뢰·데이터를 같은 푸시에 결속(8차 지적 4)
+    ...computeBaseState(ws, contract, langSnap),
     baseAvailable: bridgeLib() !== null,
     permissionMode: activePermissionMode(ws),
     codexReady: !!resolveCodexPathForBridge(),
@@ -2567,7 +2634,11 @@ class Dashboard {
       });
       this.panel.webview.html = this.html(this.panel.webview);
       this.panel.webview.onDidReceiveMessage((m) => {
-        if (m?.type === "ready") { this.post(); return; } // 웹뷰 부팅 핸드셰이크 — 초기 push 유실 방지(양 감사 합의)
+        // 웹뷰 부팅 핸드셰이크 — 초기 push 유실 방지(양 감사 합의). dirty 결속 리셋은 boot:true(문서 재생성 직후 1회)에만 —
+        // ready는 만료·되돌리기·체크리스트 복구 등 '정본 재요청'으로도 재사용되므로 무조건 리셋하면 초안이 있는데
+        // clean으로 오인해 보류 중이던 언어 재생성이 초안을 파괴한다(구현검증 3차 지적 1).
+        if (m?.type === "ready") { if (m.boot === true) { this.cardDirty = false; this.cardDirtyAt = 0; } this.post(); return; }
+        if (m?.type === "cardDirtyState") { this.cardDirty = !!m.dirty; this.cardDirtyAt = Date.now(); return; } // 웹뷰 초안/저장대기 상태 결속(2차 지적 2) — post()의 언어 HTML 재생성 보류 판단에 사용
         if (m?.type === "setLang" && (m.lang === "ko" || m.lang === "en")) {
           // 전역 언어 저장(language.json) — 브릿지·훅·다른 창이 같은 파일을 읽는다(BRIDGE_DIR watch로 자동 재렌더).
           if (!saveLangExt(m.lang)) { vscode.window.showErrorMessage(tE("언어 설정 저장에 실패했어요(파일 잠김/권한?).","Failed to save language setting (file locked/permission?).")); return; }
@@ -2576,8 +2647,9 @@ class Dashboard {
         }
         if (m?.type === "setHarnessMode" && (m.mode === "claude-codex" || m.mode === "codex-codex")) {
           const slotLang: Lang | undefined = m.lang === "ko" || m.lang === "en" ? m.lang : undefined;
-          const prev = loadContract(dashboardWorkspace(), slotLang);
-          const ok = saveContract(dashboardWorkspace(), { ...prev, harnessMode: m.mode }, slotLang);
+          // 물질화 계약(2026-07-15): 모드 전환은 harnessMode '단일 필드 patch'만 — 정규화 전체 재저장 금지.
+          // (전체 재저장이면 단순 전환만으로 codexVerifyMode 등 fallback 실효값이 원시 필드로 굳는다 — 설계검증 3차)
+          const ok = patchContractExt(dashboardWorkspace(), slotLang, { harnessMode: m.mode });
           if (!ok) vscode.window.showErrorMessage(tE("운용 모드 저장 실패 — 기존 모드를 유지합니다.", "Failed to save harness mode — keeping the existing mode."));
           else if(m.mode==="codex-codex") { vscode.window.showInformationMessage(tE("훅 설치·신뢰·창 리로드가 끝난 상태라면, 현재 보이는 Codex 대화를 시작·재개할 때 구현 세션이 자동 고정됩니다. 목록 클릭이 실제 재개 이벤트를 만들지 않는 경우 첫 프롬프트가 보조 고정합니다. 검증 세션은 기본적으로 Claude 모드 연결을 공유하며, 원할 때만 아래에서 전용 검증 세션으로 교체하세요.","Once the hooks are installed, trusted, and the window reloaded, starting or resuming the visible Codex conversation automatically pins it as the implementer. If a list click does not produce a real resume event, the first prompt is the fallback. The verifier shares the Claude-mode link by default; choose a dedicated verifier below only when wanted.")); void (async()=>{await codexHomeReady;await maybeOfferCodexHookSetup(this.uri.fsPath);})(); }
           this.post(); vscode.commands.executeCommand("codexBridge.refresh");
@@ -2706,30 +2778,30 @@ class Dashboard {
               { modal: true }, goBtn);
             if (pick0 !== goBtn) {
               vscode.window.showInformationMessage(tE("취소됨 — 설정은 저장되지 않았습니다.", "Cancelled — settings were not saved."));
-              this.panel?.webview.postMessage({ type: "saveResult", target: "contract", ok: false });
+              this.panel?.webview.postMessage({ type: "saveResult", target: "contract", ok: false, reqId: typeof m.reqId === "string" ? m.reqId : null });
               return;
             }
           }
-          const prevContract = loadContract(dashboardWorkspace(), slotLang);
-          const mode = normHarnessMode({ harnessMode: m.harnessMode || prevContract.harnessMode });
-          const rolePatch: Partial<Contract> = mode === "codex-codex" ? {
+          // 물질화 계약(2026-07-15): 일반 저장도 '보던 모드(m.harnessMode=웹뷰 renderedMode)'의 슬롯 필드만
+          // exact patch — harnessMode는 포함하지 않는다(외부/자동 전환을 되돌리지 않음 · 전환은 setHarnessMode 전용).
+          // 공용 허용목록은 scoutMode뿐(체크리스트=즉시 저장 소유, scoutRepo/scoutGate=타 작성자 소유 보존).
+          const mode = normHarnessMode({ harnessMode: m.harnessMode || loadContract(dashboardWorkspace(), slotLang).harnessMode });
+          const patch: Record<string, unknown> = mode === "codex-codex" ? {
             codexImplementer: Array.isArray(m.claude) ? m.claude : [],
             codexVerifier: Array.isArray(m.codex) ? m.codex : [],
             // P-8 1단: 체크리스트 필드는 큰 저장에서 제외 — 즉시 저장(saveChecklist)이 유일 작성 경로.
-            // 화면 되돌림으로 낡은 체크값이 버튼 저장에 실려 재발하는 경로 차단(...prevContract가 디스크 값 보존).
             codexInjectMode: normInjectMode({ claudeInjectMode: m.claudeInjectMode }),
+            // C-C 검증 스위치의 유일 물질화 지점(명시적 C-C 계약 저장) — 이후 CL-C verifyMode와 독립.
+            codexVerifyMode: normVerifyMode({ verifyMode: m.verifyMode }),
+            scoutMode: normScoutMode({ scoutMode: m.scoutMode }),
           } : {
             claude: Array.isArray(m.claude) ? m.claude : [],
             codex: Array.isArray(m.codex) ? m.codex : [],
             claudeInjectMode: normInjectMode({ claudeInjectMode: m.claudeInjectMode }), // 체크리스트 제외 — 위 주석과 동일(P-8 1단)
-          };
-          const ok = saveContract(dashboardWorkspace(), {
-            ...prevContract,
-            ...rolePatch,
-            harnessMode: mode,
             verifyMode: normVerifyMode({ verifyMode: m.verifyMode }),
             scoutMode: normScoutMode({ scoutMode: m.scoutMode }),
-          }, slotLang);
+          };
+          const ok = patchContractExt(dashboardWorkspace(), slotLang, patch);
           if (!ok) vscode.window.showErrorMessage(tE("설정 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 저장해 주세요(기존 설정은 그대로 유지됩니다).","Failed to save settings — file locked or inaccessible. Try again shortly (existing settings are kept)."));
           // 3트랙 선택 시 API 안내(2026-07-09 사용자 요청 — 기본원칙 경고와 같은 모달 형태):
           //  키 없음 → 경고 모달 + [등록하러 가기(고급설정 이동)] / [알겠습니다]
@@ -2788,7 +2860,8 @@ class Dashboard {
             }
           }
           this.post();
-          this.panel?.webview.postMessage({ type: "saveResult", target: "contract", ok });
+          // reqId 결속(2026-07-15): 계약 저장 응답만 웹뷰 cardMachine의 pending을 끝낸다(타 저장 응답의 조기 해제 차단).
+          this.panel?.webview.postMessage({ type: "saveResult", target: "contract", ok, reqId: typeof m.reqId === "string" ? m.reqId : null });
           })();
         }
         if (m?.type === "ledgerAct" && m.sig) {
@@ -2863,7 +2936,8 @@ class Dashboard {
           }
           if (!ok) vscode.window.showErrorMessage(tE("단계별 기본 원칙 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 시도해 주세요.","Failed to save stage baselines — file locked or inaccessible. Try again shortly."));
           this.post();
-          this.panel?.webview.postMessage({ type: "saveResult", target: "base", ok });
+          // reqId 결속(구현검증 4차 지적 1): base 저장 응답도 요청과 대조 — 공유 pendingSave 경합(타 저장이 덮음) 제거.
+          this.panel?.webview.postMessage({ type: "saveResult", target: "base", ok, reqId: typeof m.reqId === "string" ? m.reqId : null });
         }
         if (m?.type === "baseEditWarn") {
           // 편집 시작(필드 첫 포커스) 시점 informed-consent 경고. 필드별 다른 메시지(합의된 설계):
@@ -2894,7 +2968,7 @@ class Dashboard {
           }
           if (!ok) vscode.window.showErrorMessage(tE("기본값 복원 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 시도해 주세요.","Failed to restore defaults — file locked or inaccessible. Try again shortly."));
           this.post();
-          this.panel?.webview.postMessage({ type: "saveResult", target: "base", ok });
+          this.panel?.webview.postMessage({ type: "saveResult", target: "base", ok, reqId: typeof m.reqId === "string" ? m.reqId : null });
         }
         if (m?.type === "dismissOnboard") {
           try { fs.mkdirSync(BRIDGE_DIR, { recursive: true }); fs.writeFileSync(path.join(BRIDGE_DIR,"onboard-dismissed"), "1", "utf8"); } catch { /* ignore */ }
@@ -2932,7 +3006,18 @@ class Dashboard {
     // 언어가 바뀌었으면(이 창 토글이든 다른 창이든 — BRIDGE_DIR watch로 post가 불림) 웹뷰 HTML을 새 언어로 재생성.
     // 정적 라벨은 html() 생성 시 t(ko,en)로 박히므로 재생성이 전환 방법이다(전환은 드묾 — 펼침 상태 리셋 수용).
     // 언어 전환 시 HTML 재생성도 격리 — post()는 어떤 경로에서도 호출자(저장 핸들러 등)의 흐름을 끊지 않는다.
-    try { if (this.panel && this.htmlLang !== loadLangExt()) this.panel.webview.html = this.html(this.panel.webview); } catch (e) { console.warn("codex-bridge: dashboard html regen failed", e); }
+    // ⚠ 보류 조건(구현검증 2차 지적 2): 재생성은 웹뷰 메모리의 미저장 초안(contractDirty·baseDirty)과 저장
+    // 대기(cardMachine pending)를 파괴한다 — 이 창의 언어 버튼은 웹뷰 가드가 막지만, '다른 창'의 전역 언어 변경이
+    // watcher→post로 들어오는 경로는 호스트만 막을 수 있다. 웹뷰가 결속해 준 dirty 상태가 참이면 재생성을 보류
+    // (기존 언어 화면 유지 — 카드 언어 hold와 같은 '보던 슬롯 유지' 계약). 15분 신선도 상한(정확한 의미 — 4차
+    // 보완 3): '정상 통신 중인 retained 웹뷰는 유지'가 보장 범위 — dirty=true 동안 매 data 푸시의 심박이
+    // cardDirtyAt을 갱신하므로, 15분 이상 결속이 갱신되지 않은 경우(심박 두절 — 웹뷰 사망·통신 두절)에만 fail-open.
+    try {
+      if (this.panel && this.htmlLang !== loadLangExt()) {
+        const dirtyHold = this.cardDirty && Date.now() - this.cardDirtyAt < 15 * 60 * 1000;
+        if (!dirtyHold) this.panel.webview.html = this.html(this.panel.webview);
+      }
+    } catch (e) { console.warn("codex-bridge: dashboard html regen failed", e); }
     // 상태 계산 예외가 호출자(저장 핸들러 등)의 후속 처리 — 특히 saveResult(성공 플래시) — 를 중단시키지 않게 격리.
     // (Codex 지적: 저장 성공 후 post가 던지면 '저장됐는데 피드백 없음' — 사용자에겐 누락으로 보임)
     let state: BridgeState;
@@ -2944,6 +3029,8 @@ class Dashboard {
     if (sent && typeof (sent as Thenable<boolean>).then === "function") (sent as Thenable<boolean>).then((ok) => { if (!ok) console.warn("codex-bridge: dashboard data post dropped (webview hidden/destroyed)"); });
   }
   private htmlLang: Lang | null = null; // 현재 웹뷰 HTML이 렌더된 언어(재생성 판단)
+  private cardDirty = false;   // 웹뷰가 결속해 준 '미저장 초안/저장대기' 상태 — 언어 HTML 재생성 보류 판단(2차 지적 2)
+  private cardDirtyAt = 0;     // 결속 신선도(만료 백스톱 — 신호 유실 시 영구 보류 방지)
 
   private html(webview: vscode.Webview): string {
     // UI 언어: 정적 라벨은 t(ko,en)으로 생성 시 결정, 동적(JS) 라벨은 주입되는 EN 상수+t()로 동일 언어 유지.
@@ -3350,7 +3437,8 @@ class Dashboard {
       <div class="sbrow" id="sbScout" style="display:none"><span class="sbmark"></span><b>${t("④ 정찰이 지도를 그릴 때", "④ When the scout draws a map")}</b> ${t("· 정찰 기본 원칙 (3트랙)", "· scout baseline (3-track)")} <span class="sbwhy"></span></div>
     </div>
   </div>
-  <div class="row"><button id="saveC">${t("저장", "Save")}</button><span id="savedAt" class="muted">${t("· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장 (체크리스트 강제는 켜고 끄는 즉시 저장)", "· saves the Claude rules, Codex rules and verify mode together (checklist enforcement saves instantly on toggle)")}</span></div>
+  <div id="cardHold" class="hint" style="display:none;color:var(--vscode-editorWarning-foreground, var(--vscode-errorForeground))"></div>
+  <div class="row"><button id="saveC">${t("저장", "Save")}</button><button id="revertC" type="button" class="secondary" title="${t("저장하지 않은 계약 변경을 버리고 현재 모드의 저장값을 다시 불러옵니다", "Discard unsaved contract edits and reload the saved values for the current mode")}">${t("되돌리기", "Revert")}</button><span id="savedAt" class="muted">${t("· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장 (체크리스트 강제는 켜고 끄는 즉시 저장)", "· saves the Claude rules, Codex rules and verify mode together (checklist enforcement saves instantly on toggle)")}</span></div>
 
   <h2 class="sec">${t("한눈에 보기", "At a Glance")} <span class="sub2">${t("누구에게 · 뭐가 · 언제 들어가나 — 지금 저장된 설정 기준 (저장하면 바뀐 곳이 깜빡여요)", "who gets what, and when — based on saved settings (changes flash on save)")}</span></h2>
   <section class="flowmap card" id="fmSection">
@@ -3389,7 +3477,7 @@ class Dashboard {
       <div class="chead" style="margin-top:8px">${t("④-형식 계약", "④ Format contract")} <span class="fixedbadge">${t("잠금", "locked")}</span> <span class="muted" style="font-weight:400">${t("· 지도의 ①~⑥ 구획·high 표기는 기계가 그대로 읽는 배선이라 수정 불가 — 내용은 공개", "· the map's ①~⑥ sections and 'high' tags are machine-read wiring — not editable, shown for transparency")}</span></div>
       <div id="bScoutFmt" class="muted" style="white-space:pre-wrap;font-size:11px;border:1px dashed var(--vscode-panel-border);padding:6px;border-radius:4px"></div>
     </div>
-    <div class="row"><button id="saveB">${t("단계별 기본 원칙 저장", "Save stage baselines")}</button><button id="resetB" class="secondary">${t("기본값 복원", "Restore defaults")}</button><span id="savedB" class="muted"></span></div>
+    <div class="row"><button id="saveB">${t("단계별 기본 원칙 저장", "Save stage baselines")}</button><button id="resetB" class="secondary">${t("기본값 복원", "Restore defaults")}</button><button id="revertB" type="button" class="secondary" title="${t("저장하지 않은 편집을 버리고 저장된 값을 다시 불러옵니다", "Discard unsaved edits and reload the saved values")}">${t("되돌리기", "Revert")}</button><span id="savedB" class="muted"></span></div>
   </details>
   <h2 class="sec base accent-orange"><span id="brainTitle">${t("코덱스 두뇌 설정", "Codex Brain Settings")}</span> <span class="sub2" id="brainSub">${t("이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)", "model & reasoning effort Codex uses in this project (applies to the ongoing session too)")}</span></h2>
   <div class="mcard">
@@ -3584,10 +3672,10 @@ class Dashboard {
     if(prevVM!=null && prevVM!==appVM){ flashNode(ver); flashNode($("sbTransmit")); flashNode($("sbVerify")); flashNode($("sbRejudge")); }
   }
   function highlightSeg(segId, attr, v){ const s=$(segId); if(s) s.querySelectorAll("button").forEach((b)=>b.classList.toggle("on", b.getAttribute(attr)===v)); }
-  function markDirty(){ const d=$("dirtyHint"); if(d) d.style.display = ((curVM!==appVM)||(curIM!==appIM)||(curSM!==appSM)) ? "" : "none"; }
-  $("segVerify").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-vm]"); if(b){ curVM=b.getAttribute("data-vm"); highlightSeg("segVerify","data-vm",curVM); markDirty(); } });
-  $("segScout").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-sm]"); if(b){ curSM=b.getAttribute("data-sm"); highlightSeg("segScout","data-sm",curSM); markDirty(); } });
-  $("segInject").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-im]"); if(b){ curIM=b.getAttribute("data-im"); highlightSeg("segInject","data-im",curIM); markDirty(); } });
+  function markDirty(){ const d=$("dirtyHint"); if(d) d.style.display = ((curVM!==appVM)||(curIM!==appIM)||(curSM!==appSM)) ? "" : "none"; try { reportCardDirty(); } catch(e){ /* 선언 전 호출 없음 — 방어 */ } }
+  $("segVerify").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-vm]"); if(b){ curVM=b.getAttribute("data-vm"); highlightSeg("segVerify","data-vm",curVM); markDirty(); } });
+  $("segScout").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-sm]"); if(b){ curSM=b.getAttribute("data-sm"); highlightSeg("segScout","data-sm",curSM); markDirty(); } });
+  $("segInject").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-im]"); if(b){ curIM=b.getAttribute("data-im"); highlightSeg("segInject","data-im",curIM); markDirty(); } });
   $("segReason").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-rs]"); if(b){ curRS=b.getAttribute("data-rs"); highlightSeg("segReason","data-rs",curRS); } });
   $("mModel").addEventListener("change", ()=> renderReasonButtons($("mModel").value.trim()));  // 모델 바꾸면 그 모델의 생각강도로 버튼 교체(select=change)
   $("saveModel").addEventListener("click", () => {
@@ -3667,11 +3755,79 @@ class Dashboard {
   }
   // [P8-CKM-END]
   var ckM = { claude: ckMachine(), codex: ckMachine() };
+  // [P9V-CARD-BEGIN] 계약 카드 슬롯·저장 수명 상태기 — 순수(DOM·타이머·전역 참조 없음). tests/verify-split.test.js가
+  // 이 블록을 추출·실행해 반례(미저장 초안 전환 잠금, 저장 대기 전환 잠금, 외부 전환 hold, 되돌리기, 불일치 응답
+  // ignore, 만료)를 검증한다. 규약(모드별 검증 스위치 분리·P-10 공통 계약 2026-07-15): 카드의 값·라벨·저장 대상은
+  // 항상 renderedMode(화면에 렌더된 슬롯) 기준 — 런타임 모드가 외부에서 바뀌어도 미저장 초안·저장 대기가 있으면
+  // hold(화면 동결·라벨 옛 슬롯 고정), 전환 차단은 데이터 소실·무단 저장이 없는 유일한 fail-closed 선택.
+  function cardMachine(){
+    var renderedMode = null; // 카드가 렌더된 모드 슬롯(저장·라벨의 권위)
+    var pending = null;      // 계약 저장 단일-flight { id, mode, meta }
+    return {
+      renderedMode: function(){ return renderedMode; },
+      saving: function(){ return !!pending; },
+      // 수동 모드 전환 허용 — dirty(미저장 초안)나 계약 저장 대기 중이면 잠금(P-10: 규칙·주입·검증을 한 계약으로)
+      canSwitch: function(dirty){ return !dirty && !pending; },
+      // 저장 시작 — 대상 슬롯은 renderedMode로 동결(그 사이 런타임 모드가 바뀌어도 보던 슬롯에 저장).
+      beginSave: function(rid, meta){ if (pending || renderedMode === null) return null; pending = { id: rid, mode: renderedMode, meta: meta || {} }; return pending; },
+      // saveResult 소비 — 계약 저장 응답(reqId 일치)만 pending을 끝낸다. 타 저장·낡은 응답은 완전 no-op(권위 불변)
+      result: function(resp){ if (!pending || resp.reqId !== pending.id) return { act: "ignore" }; var pd = pending; pending = null; return { act: resp.ok ? "commit" : "fail", pd: pd }; },
+      // 만료(응답 유실 liveness) — 그 요청이 아직 대기 중일 때만 해제(fail 취급 · 정본 state 재요청은 호출자 몫)
+      expire: function(rid){ if (!pending || pending.id !== rid) return { act: "ignore" }; var pd = pending; pending = null; return { act: "fail", pd: pd }; },
+      // 정본 state 도착 — 외부(파일 편집·자동 전환)에서 모드가 바뀌었는데 dirty||pending이면 hold, 아니면 fill
+      state: function(curMode, dirty){
+        if (renderedMode === null) { renderedMode = curMode; return { act: "fill", first: true }; }
+        if (curMode !== renderedMode && (dirty || !!pending)) return { act: "hold", renderedMode: renderedMode };
+        renderedMode = curMode; return { act: "fill", first: false };
+      },
+      // 명시적 되돌리기 — 저장 대기 중엔 불가. 초안 폐기 후 다음 state가 무조건 fill(현재 모드 슬롯 재적재)
+      revert: function(){ if (pending) return { act: "ignore" }; renderedMode = null; return { act: "reload" }; }
+    };
+  }
+  // [P9V-CARD-END]
+  var cardM = cardMachine();
+  var cardSaveTimer = null;
+  var cardStLast = { act: "skip" };  // 이번 state 푸시의 상태기 판정(푸시당 1회 호출 — 라벨 블록에서 판정, 카드 블록이 공유)
+  var cardNoticeKind = null;         // "hold"=외부 전환 동결 안내(해소 시 자동 숨김) / "warn"=수동 안내(저장·되돌리기로 숨김)
+  function cardNotice(msg, kind){ var n=$("cardHold"); if(!n) return;
+    // 동일 안내 재호출(매 상태 푸시의 hold/langhold)은 무변화 — 펄스·스크롤 반복 금지(4차 보완 2: 15초마다 깜빡임).
+    var same = cardNoticeKind === (kind || "warn") && n.textContent === msg && n.style.display !== "none";
+    n.style.display=""; n.textContent=msg; cardNoticeKind = kind || "warn";
+    if (same) return;
+    if (cardNoticeKind === "warn") { try { n.scrollIntoView({ block: "center", behavior: "smooth" }); } catch(e){ /* 무해 */ } } // 상단 버튼(언어·모드) 옆에서 안 보이는 문제 — 안내로 스크롤(2차 지적 3)
+    flashNode(n); }
+  function hideCardNotice(){ var n=$("cardHold"); if(n) n.style.display="none"; cardNoticeKind = null; }
+  // 저장 대기 중 카드 입력 잠금(구현검증 1차 지적 1): 저장은 클릭 시점 DOM 스냅샷을 보내므로, 응답 전 재편집을
+  // 허용하면 성공 응답의 contractDirty 일괄 해제가 그 재편집을 '저장된 것'으로 오인해 다음 state가 덮는다(무음 소실).
+  // 봉합=응답(또는 만료)까지 textarea·세그·버튼 잠금 — 체크박스는 별도 즉시 저장 상태기(ckMachine)가 자체 잠금.
+  function cardInputLock(on){
+    var a=$("cClaude"), b=$("cCodex"); if(a) a.readOnly = on; if(b) b.readOnly = on;
+    var s=$("saveC"); if(s) s.disabled = on; var rv=$("revertC"); if(rv) rv.disabled = on;
+  }
+  // 카드 미저장 초안 종합(P-10: 규칙 textarea+세그 초안 — 체크박스는 즉시 저장이라 초안 없음)
+  function cardDirtyNow(){
+    var seg = (appVM!==null && curVM!==appVM) || (appIM!==null && curIM!==appIM) || (appSM!==null && curSM!==appSM);
+    return !!(contractDirty.claude || contractDirty.codex || seg);
+  }
+  // 초안/저장대기 상태를 호스트에 결속(2차 지적 2) — 다른 창발 언어 변경의 HTML 재생성(초안 파괴)을 호스트가 보류.
+  // hb=심박(3차 지적 2): dirty=true 동안 매 data 푸시마다 재전송해 호스트 cardDirtyAt을 신선하게 유지 —
+  // 15분 백스톱은 '살아있는 웹뷰의 장시간 편집'이 아니라 '죽은 웹뷰'(초안도 이미 소멸)만 fail-open으로 놓는다.
+  var lastReportedDirty = null;
+  function reportCardDirty(hb){
+    var v = !!(cardDirtyNow() || cardM.saving() || baseM.locked() || baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout);
+    if (v === lastReportedDirty && !(hb && v)) return;
+    lastReportedDirty = v;
+    try { vscode.postMessage({ type: "cardDirtyState", dirty: v }); } catch(e){ /* 유실 시 심박·백스톱이 회복 */ }
+  }
+  // 저장 페이로드와 동일 정규화(3차 지적 3) — 자기치유 비교는 저장이 실제로 기록한 형태(trim·빈 줄 제거)와 같아야
+  // '지각 저장 성공=디스크가 초안을 따라잡음'을 정확히 감지한다(원문 비교면 후행 공백만으로 영구 dirty).
+  function normLines(s){ return String(s||"").split("\\n").map(function(x){ return x.trim(); }).filter(Boolean).join("\\n"); }
   // 세대 유일성(Codex 4차): 카운터는 문서 재생성마다 0으로 리셋되므로 단독으론 ko→en→ko 왕복 뒤 옛 응답과
   // 충돌 가능 — HTML 빌드마다 새로 뽑히는 CSP nonce를 문서 세대 접두로 결합해 전역 유일 reqId를 만든다.
   var ckDoc = "${nonce}";
   var ckSeq = 0;
-  function ckExpectedField(box){ return harnessMode === "codex-codex" ? (box === "codex" ? "codexVerifierChecklist" : "codexImplementerChecklist") : (box === "codex" ? "codexChecklist" : "claudeChecklist"); }
+  // 좌표는 '화면에 렌더된 슬롯'(cardM.renderedMode) 기준 — 외부 모드 전환 hold 중 런타임 harnessMode와 갈릴 수 있다.
+  function ckExpectedField(box){ var cm = cardM.renderedMode() || harnessMode; return cm === "codex-codex" ? (box === "codex" ? "codexVerifierChecklist" : "codexImplementerChecklist") : (box === "codex" ? "codexChecklist" : "claudeChecklist"); }
   // 응답 유실 liveness(Codex 4차→5차 보수): postMessage는 drop될 수 있다(호스트 data push도 drop 로그를 남김).
   // 만료는 pending만 해제(hold) — 여기서 재활성·옛 기준선 되돌림을 하면 그 사이 모드가 바뀐 화면에 옛 모드 값이
   // 노출된다(Codex 5차 반례). disabled 유지+ready로 정본 state를 요청, 값·활성화는 state 채움만 담당(자기 회복:
@@ -3688,25 +3844,108 @@ class Dashboard {
       ckSeq++;
       var rid = ckDoc + ":" + ckSeq;
       ckM[pr[1]].begin(rid, ckExpectedField(pr[1]), renderedLangC || null, setTimeout(function(){ ckExpire(pr[1], rid); }, 5000));
-      vscode.postMessage({ type: "saveChecklist", box: pr[1], value: el.checked, lang: renderedLangC || undefined, mode: harnessMode, reqId: rid });
+      vscode.postMessage({ type: "saveChecklist", box: pr[1], value: el.checked, lang: renderedLangC || undefined, mode: cardM.renderedMode() || harnessMode, reqId: rid });
     });
   });
   $("saveC").addEventListener("click", () => {
+    if (cardM.saving()) return;   // single-flight — 응답 전 중복 저장 금지(잠금 권위=cardM)
     clearTimeout(pendingScroll);  // 직전 저장의 대기 스크롤 취소
     const toLines = (s) => s.split("\\n").map((x) => x.trim()).filter(Boolean);
     const imCh = curIM!==appIM, vmCh = curVM!==appVM;  // 도안(넣는 시점/검증 모드)에 영향 주는 변경인가 — 성공 시 펄스용
-    pendingSave = {target:"contract", imCh, vmCh};
-    vscode.postMessage({type:"saveContract", lang: renderedLangC || undefined, harnessMode:harnessMode,
+    ckSeq++; var rid = ckDoc + ":c" + ckSeq;
+    var beg = cardM.beginSave(rid, {imCh:imCh, vmCh:vmCh});
+    if (!beg) return; // 렌더 전(renderedMode 미확정) — 저장 대상 슬롯을 모름
+    cardInputLock(true); // 응답 전 재편집 차단(스냅샷 이후 편집이 성공 응답의 dirty 일괄 해제에 휩쓸리는 무음 소실 봉합)
+    reportCardDirty(); // 저장대기 시작 — 호스트 언어 재생성 보류 결속
+    // 응답 유실 liveness: 만료(120초 — 3트랙 켜기 모달 등 저장 앞 사용자 결정 시간 포함)면 잠금 해제+정본 state 재요청.
+    // 만료 후 늦게 도착한 응답은 reqId 불일치로 ignore(저장 자체는 beg.mode 슬롯에 유효 — 아래 fill의 dirty
+    // 자기치유가 '디스크=초안'을 감지해 dirty를 풀므로 전환 잠금이 영구화하지 않는다 · 구현검증 1차 지적 3).
+    clearTimeout(cardSaveTimer);
+    cardSaveTimer = setTimeout(function(){ if (cardM.expire(rid).act === "fail") { cardInputLock(false); reportCardDirty(); try { vscode.postMessage({type:"ready"}); } catch(e){} } }, 120000);
+    // 저장 대상 모드=beg.mode(렌더된 슬롯) — 런타임 harnessMode가 그 사이 바뀌어도 보던 슬롯에 저장(오염 방지).
+    vscode.postMessage({type:"saveContract", lang: renderedLangC || undefined, harnessMode: beg.mode, reqId: rid,
       claude: toLines($("cClaude").value), codex: toLines($("cCodex").value),
       verifyMode: curVM, claudeInjectMode: curIM, scoutMode: curSM}); // 체크리스트는 토글 즉시 저장(P-8 1단) — 버튼 저장에서 제외
     // 성공 플래시·스크롤은 saveResult(ok)에서 (저장 실패 시 거짓 성공 방지)
   });
-  $("saveB").addEventListener("click", () => {
-    pendingSave = {target:"base"};
-    var spVisible = $("bScoutWrap") && $("bScoutWrap").style.display !== "none";
-    vscode.postMessage({type:"saveBase", lang: renderedLangB || undefined, verifyBaseline:$("bVerify").value, transmit:$("bTransmit").value, rejudge:$("bRejudge").value, scoutBaseline: (spVisible && $("bScout")) ? $("bScout").value : null});
+  $("revertC").addEventListener("click", function(){
+    // 명시적 되돌리기(설계 확정 2026-07-15): 초안 폐기+적용값 재적재+dirty 해제 — 이것 없이는 저장을 원치 않는
+    // 사용자가 전환 잠금을 풀 수 없다. 저장 응답 대기 중엔 불가(cardM이 거부).
+    if (cardM.revert().act !== "reload") { cardNotice(T("저장 응답을 기다리는 중이에요 — 잠시 후 다시 시도하세요.","A save is still in flight — try again shortly.")); return; }
+    contractDirty = {};
+    try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch(e){ /* 무해 */ }
+    hideCardNotice();
+    reportCardDirty(); // 결속 갱신을 ready보다 먼저 — 호스트가 stale true로 보류 유지 중 false 도착 순서 보장(3차 지적 1)
+    try { vscode.postMessage({type:"ready"}); } catch(e){ /* state 폴링이 대체 */ }
   });
-  $("resetB").addEventListener("click", () => { pendingSave = {target:"base", msg:T("기본값으로 복원됨 ✓","Restored to defaults ✓")}; vscode.postMessage({type:"resetBase", lang: renderedLangB || undefined, scout: !!($("bScoutWrap") && $("bScoutWrap").style.display !== "none")}); });
+  $("revertB").addEventListener("click", function(){
+    // 기본 원칙 되돌리기(구현검증 2차 지적 3): baseDirty는 저장 성공에만 풀려 '편집 취소' 수단이 없었고,
+    // 언어 전환 잠금 안내('저장 또는 되돌리기')가 기본 원칙엔 거짓이 됐다 — 초안 폐기+적용값 재적재로 신설.
+    if (baseM.saving()) { cardNotice(T("기본 원칙 저장 응답을 기다리는 중이에요 — 잠시 후 다시 시도하세요.","A stage-baseline save is still in flight — try again shortly.")); return; } // 응답 대기만 잠금 — refillWait(정본 확인 대기)엔 되돌리기가 유일 복구 수단이라 허용(6차 지적 1)
+    baseDirty = {};
+    try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch(e){ /* 무해 */ }
+    hideCardNotice();
+    reportCardDirty(); // ready보다 먼저(순서 보장 — 3차 지적 1)
+    try { vscode.postMessage({type:"ready"}); } catch(e){ /* state 폴링이 대체 */ }
+  });
+  // 기본 원칙 저장·복원 전용 single-flight(구현검증 4차 지적 1, 5차 재구성): 공유 pendingSave는 모델·타임아웃·
+  // DeepSeek 저장이 덮을 수 있어 revertB 잠금·응답 매칭의 권위가 못 된다 — reqId 결속+입력 잠금+120초 만료.
+  // [P9V-BASE-BEGIN] 순수 상태기 — tests/verify-split.test.js가 추출·실행. 핵심 계약(5차 지적 1): 성공(commit)은
+  // 잠금을 풀지 않고 refillWait로 넘어가며, '정본 base 값이 화면에 반영되는 fill'에서만 해제(unlock) — 복원 성공
+  // 직후 화면에 남은 옛 DOM 값이 '복원됨 ✓' 아래에서 재저장되는 창을 구조적으로 제거한다.
+  function baseMachine(){
+    var pending = null;      // { id, msg, kind } — 저장(save)/복원(reset) 요청 단일-flight
+    var refillWait = false;  // 정본 재렌더 대기 — 성공·만료(결과 불확실) 공통. 이 동안 저장 경로 잠금 유지.
+    return {
+      saving: function(){ return !!pending; },
+      locked: function(){ return !!pending || refillWait; },
+      begin: function(rid, msg, kind){ if (pending || refillWait) return null; pending = { id: rid, msg: msg, kind: kind }; return pending; },
+      result: function(resp){
+        if (!pending || resp.reqId !== pending.id) return { act: "ignore" };
+        var pd = pending; pending = null;
+        if (!resp.ok) return { act: "fail", pd: pd };
+        refillWait = true; return { act: "commit", pd: pd };
+      },
+      // 만료=결과 불확실(지각 성공이 디스크를 바꿨을 수 있음) — 즉시 해제하면 옛 화면값 재저장 창이 열리므로
+      // (6차 지적 1·2) 저장 경로는 계속 잠그고, 정본 fill(다음 상태 푸시)에서만 회복한다. 강제 해제 경로 없음.
+      expire: function(rid){ if (!pending || pending.id !== rid) return { act: "ignore" }; var pd = pending; pending = null; refillWait = true; return { act: "uncertain", pd: pd }; },
+      fill: function(){ if (!refillWait) return { act: "none" }; refillWait = false; return { act: "unlock" }; }
+    };
+  }
+  // [P9V-BASE-END]
+  var baseM = baseMachine();
+  var baseSaveTimer = null;
+  function baseInputLock(on){
+    ["bVerify","bTransmit","bRejudge","bScout"].forEach(function(id){ var e=$(id); if(e) e.readOnly = on; });
+    ["saveB","resetB"].forEach(function(id){ var e=$(id); if(e) e.disabled = on; });
+    var rv=$("revertB"); if(rv) rv.disabled = baseM.saving(); // 되돌리기는 응답 대기 중에만 잠금 — refillWait의 복구 수단(6차 지적 1)
+  }
+  function baseBegin(msg, kind){
+    var rid = ckDoc + ":b" + (++ckSeq);
+    if (!baseM.begin(rid, msg, kind)) return null;
+    baseInputLock(true); reportCardDirty();
+    clearTimeout(baseSaveTimer);
+    baseSaveTimer = setTimeout(function(){
+      var ex = baseM.expire(rid);
+      if (ex.act !== "uncertain") return;
+      // 결과 불확실: 복원(reset) 의도는 초안 폐기가 맞다(지각 성공 시 옛 초안이 '기본값' 위에 재저장되는 오도 차단 —
+      // 6차 지적 2). 저장(save) 초안은 보존(지각 성공이면 자기치유가, 실패면 일반 미저장 편집 의미가 담당).
+      if (ex.pd && ex.pd.kind === "reset") { baseDirty = {}; try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch(e){ /* 무해 */ } }
+      baseInputLock(true); // 저장·복원은 정본 fill까지 잠금 유지, 되돌리기만 열림(baseInputLock이 saving 기준으로 revertB 해제)
+      cardNotice(T("저장 결과를 확인하지 못했어요 — 다음 화면 갱신 때 저장된 값으로 정리됩니다. 급하면 '되돌리기'로 다시 불러오세요.","Could not confirm the save — the next refresh will settle to the saved values. Press Revert to reload immediately if needed."));
+      reportCardDirty(); try { vscode.postMessage({type:"ready"}); } catch(e){ /* 15초 폴이 대체 */ }
+    }, 120000);
+    return rid;
+  }
+  $("saveB").addEventListener("click", () => {
+    var rid = baseBegin(null, "save"); if (!rid) return;
+    var spVisible = $("bScoutWrap") && $("bScoutWrap").style.display !== "none";
+    vscode.postMessage({type:"saveBase", reqId: rid, lang: renderedLangB || undefined, verifyBaseline:$("bVerify").value, transmit:$("bTransmit").value, rejudge:$("bRejudge").value, scoutBaseline: (spVisible && $("bScout")) ? $("bScout").value : null});
+  });
+  $("resetB").addEventListener("click", () => {
+    var rid = baseBegin(T("기본값으로 복원됨 ✓","Restored to defaults ✓"), "reset"); if (!rid) return;
+    vscode.postMessage({type:"resetBase", reqId: rid, lang: renderedLangB || undefined, scout: !!($("bScoutWrap") && $("bScoutWrap").style.display !== "none")});
+  });
   // 탭 토글(현황 / 검증 통계) — 클릭한 버튼·패널만 active
   document.querySelectorAll(".tabbtn").forEach(function(b){
     b.addEventListener("click", function(){
@@ -3719,11 +3958,27 @@ class Dashboard {
   $("dsSave").addEventListener("click", ()=>{ const v=$("dsKey").value.trim(); if(!v){ return; } pendingSave={target:"deepseek", msg:T("키 저장됨 ✓","Key saved ✓")}; vscode.postMessage({type:"saveDeepseekKey", key:v}); $("dsKey").value=""; });
   $("dsClear").addEventListener("click", ()=>{ pendingSave={target:"deepseek", msg:T("키 삭제됨 ✓","Key removed ✓")}; vscode.postMessage({type:"saveDeepseekKey", key:""}); $("dsKey").value=""; });
   // 언어 토글(전역 ko/en) — 저장은 확장이 language.json에(모든 창이 파일 watch로 따라옴). 표시는 state로 되돌아와 확정.
+  // 전환 잠금(구현검증 1차 지적 2): 언어 전환은 확장이 webview HTML을 통째로 재생성해 메모리의 초안(contractDirty·
+  // baseDirty)과 cardMachine pending이 전부 파괴된다 — 언어 hold가 지킬 수 없는 경로. 미저장 초안·저장 대기 중엔
+  // 전환 자체를 차단(모드 전환 잠금과 동일 fail-closed 계약 — 저장/되돌리기 후 전환).
   document.querySelectorAll(".langbtn").forEach(function(b){
-    b.addEventListener("click", function(){ vscode.postMessage({type:"setLang", lang: b.getAttribute("data-lang")}); });
+    b.addEventListener("click", function(){
+      var baseDirtyAny = !!(baseM.locked() || baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout);
+      if (cardDirtyNow() || cardM.saving() || baseDirtyAny) {
+        cardNotice(T("저장하지 않은 변경(또는 저장 대기)이 있어요 — 언어를 바꾸면 편집 중인 내용이 사라집니다. '저장' 또는 '되돌리기' 후에 전환하세요.","There are unsaved edits (or a save in flight) — switching language would discard them. Save or Revert first."));
+        return;
+      }
+      vscode.postMessage({type:"setLang", lang: b.getAttribute("data-lang")});
+    });
   });
   document.querySelectorAll(".modebtn").forEach(function(b){
     b.addEventListener("click", function(){ var m=b.getAttribute("data-mode"); if(m===harnessMode)return;
+      // 전환 잠금(설계 확정 2026-07-15·P-10): 카드에 미저장 초안이 있거나 계약 저장 응답 대기 중이면 모드 전환 금지 —
+      // 초안이 다른 모드 슬롯에 저장되는 교차 오염의 유일한 fail-closed 차단(자동 확정=무단 저장·폐기=입력 소실).
+      if (!cardM.canSwitch(cardDirtyNow())) {
+        cardNotice(T("저장하지 않은 계약 변경(또는 저장 대기)이 있어요 — '저장' 또는 '되돌리기' 후에 모드를 전환하세요.","There are unsaved contract edits (or a save in flight) — Save or Revert before switching modes."));
+        return;
+      }
       // P-8: 모드 전환~다음 state 사이 화면 체크박스는 옛 모드 의미 — 입력 잠금(잘못된 필드 기록 방지, state 도착 시 해제)
       ckModeLock = true; if($("ckClaude")) $("ckClaude").disabled = true; if($("ckCodex")) $("ckCodex").disabled = true;
       vscode.postMessage({type:"setHarnessMode", mode:m, lang:renderedLangC||undefined}); });
@@ -3896,7 +4151,7 @@ class Dashboard {
   [["bTransmit","transmit"],["bVerify","verify"],["bRejudge","rejudge"],["bScout","scout"]].forEach(function(pr){
     var elx = $(pr[0]); if(!elx) return;
     // 편집 시작 = dirty → 저장 전까지 render가 이 칸을 저장값으로 덮지 않는다(포커스가 잠깐 빠져도 편집 보존). 저장 성공 시 해제.
-    elx.addEventListener("input", function(){ baseDirty[pr[1]] = true; });
+    elx.addEventListener("input", function(){ baseDirty[pr[1]] = true; reportCardDirty(); });
     elx.addEventListener("focus", function(){
       if(baseWarned[pr[1]] || baseWarnPending) return;
       baseWarnPending = true; // blur 안 함 — 포커스 유지
@@ -3905,7 +4160,7 @@ class Dashboard {
   });
   [["cClaude","claude"],["cCodex","codex"]].forEach(function(pr){ // 계약 카드도 같은 race → 동일 보호
     var elx = $(pr[0]); if(!elx) return;
-    elx.addEventListener("input", function(){ contractDirty[pr[1]] = true; });
+    elx.addEventListener("input", function(){ contractDirty[pr[1]] = true; reportCardDirty(); });
   });
   var lastDataAt = 0;
   var safeTop = function(fn){ try{ fn(); }catch(e){} };
@@ -3918,7 +4173,7 @@ class Dashboard {
   }); }, 10000);
   // ready 핸드셰이크(양 감사 합의 2026-07-10): 리스너 '등록 직전' 위치라 등록 직후 첫 매크로태스크에서 전송 —
   // 부팅 refresh(스크립트 꼬리)는 상부 런타임 예외와 함께 죽지만, 이 지점은 스크립트 앞부분이라 생존성이 높다.
-  setTimeout(function(){ try { vscode.postMessage({type:"ready"}); } catch(e){} }, 0);
+  setTimeout(function(){ try { vscode.postMessage({type:"ready", boot:true}); } catch(e){} }, 0); // boot=문서 재생성 직후 1회 — 이때만 호스트 dirty 결속 리셋(3차 지적 1)
   window.addEventListener("message", (ev) => {
     if (ev.data?.type === "baseEditWarnResult") {
       baseWarnPending = false;
@@ -3949,52 +4204,109 @@ class Dashboard {
         }
         return;
       }
-      // 저장 성공 피드백은 '확장이 실제 저장에 성공했다고 알려줄 때'만 — 클릭 즉시가 아니라(거짓 성공 방지).
-      const ps = pendingSave; pendingSave = null;
-      if (!ev.data.ok) return; // 실패: 네이티브 에러 토스트가 알린다. 성공 플래시·스크롤은 하지 않음.
-      if (ev.data.target === "base") baseDirty = {}; // 저장 성공 → dirty 해제(저장값=표시값이 됐으니 render 동기화 재개)
-      else if (ev.data.target === "contract") contractDirty = {};
-      if (ev.data.target === "deepseek") flashSaved($("dsState"), ps && ps.msg);
-      else if (ev.data.target === "model") flashSaved($("savedModel"), T("저장됨 ✓ (다음 코덱스 응답부터 적용)","Saved ✓ (from next Codex response)"));
-      else if (ev.data.target === "timeout") flashSaved($("savedVT"), T("저장됨 ✓ (다음 검증부터 적용)","Saved ✓ (from next verification)"));
-      else if (ev.data.target === "base") flashSaved($("savedB"), ps && ps.msg);
-      else if (ev.data.target === "contract") {
+      if (ev.data.target === "contract") {
+        // 계약 저장 응답의 유일 권위=cardM(확정 계약 ⑶) — reqId 불일치(낡은 요청·만료 후 지각 응답)는 완전 no-op.
+        // pendingSave(전역 공유)는 계약 경로에서 쓰지 않는다(타 저장 응답이 잠금·의도를 덮는 경로 차단).
+        var cr = cardM.result(ev.data);
+        if (cr.act === "ignore") return;
+        clearTimeout(cardSaveTimer);
+        cardInputLock(false); // 응답 도착 — 입력 잠금 해제(성공/실패 공통)
+        if (cr.act === "fail") { reportCardDirty(); return; } // 실패: 네이티브 에러 토스트가 알림. 초안·dirty 유지(재시도 가능), 잠금만 해제.
+        contractDirty = {};
+        hideCardNotice(); // 저장 완료=hold 해소 경로 — 다음 state가 현재 모드 슬롯을 채움
+        reportCardDirty();
         flashSaved($("savedAt"));
-        if (ps && (ps.imCh || ps.vmCh) && appVM !== null) {  // 넣는시점/검증모드가 바뀐 저장만 도안으로 스크롤+펄스
+        var crm = cr.pd.meta || {};
+        if ((crm.imCh || crm.vmCh) && appVM !== null) {  // 넣는시점/검증모드가 바뀐 저장만 도안으로 스크롤+펄스
           clearTimeout(pendingScroll);
           pendingScroll = setTimeout(() => {
             const fm = $("fmSection"); if (fm) fm.scrollIntoView({ behavior: "smooth", block: "center" });
-            if (ps.imCh) flashNode($("faInject"));
-            if (ps.vmCh) { flashNode($("faVerify")); flashNode($("sbTransmit")); flashNode($("sbVerify")); flashNode($("sbRejudge")); }
+            if (crm.imCh) flashNode($("faInject"));
+            if (crm.vmCh) { flashNode($("faVerify")); flashNode($("sbTransmit")); flashNode($("sbVerify")); flashNode($("sbRejudge")); }
           }, 60);
         }
+        return;
       }
+      if (ev.data.target === "base") {
+        // base 전용 single-flight 소비(4차 지적 1) — reqId 불일치(낡은·타 요청)는 완전 no-op(잠금 권위 불변).
+        var br = baseM.result(ev.data);
+        if (br.act === "ignore") return;
+        clearTimeout(baseSaveTimer);
+        if (br.act === "fail") { baseInputLock(false); reportCardDirty(); return; } // 실패: 네이티브 에러 토스트. 초안 유지(재시도 가능).
+        // 성공(commit): 잠금은 유지 — 정본 base 값이 화면에 채워지는 fill에서만 해제(5차 지적 1: 복원 성공 직후
+        // 화면의 옛 값이 '복원됨 ✓' 아래에서 재저장되는 창 제거). ready로 정본 재렌더 요청(7차: 시간 백스톱 없음).
+        baseDirty = {}; reportCardDirty();
+        flashSaved($("savedB"), br.pd.msg);
+        var rvB=$("revertB"); if(rvB) rvB.disabled=false; // refillWait 동안의 복구 수단(강제 해제 백스톱은 6차 지적 1로 제거 — 잠금 회복은 정본 fill·되돌리기만)
+        try { vscode.postMessage({type:"ready"}); } catch(e){ /* 15초 폴이 대체 */ }
+        return;
+      }
+      // 저장 성공 피드백은 '확장이 실제 저장에 성공했다고 알려줄 때'만 — 클릭 즉시가 아니라(거짓 성공 방지).
+      const ps = pendingSave; pendingSave = null;
+      if (!ev.data.ok) return; // 실패: 네이티브 에러 토스트가 알린다. 성공 플래시·스크롤은 하지 않음.
+      if (ev.data.target === "deepseek") flashSaved($("dsState"), ps && ps.msg);
+      else if (ev.data.target === "model") flashSaved($("savedModel"), T("저장됨 ✓ (다음 코덱스 응답부터 적용)","Saved ✓ (from next Codex response)"));
+      else if (ev.data.target === "timeout") flashSaved($("savedVT"), T("저장됨 ✓ (다음 검증부터 적용)","Saved ✓ (from next verification)"));
       return;
     }
     if (ev.data?.type !== "data") return;
     const d = ev.data.data;
     safeTop(function(){
       harnessMode=(d.contract&&d.contract.harnessMode)||"claude-codex"; var cc=harnessMode==="codex-codex";
+      // dirty 자기치유(구현검증 2차 지적 1 — hold 판정보다 먼저): 비교 기준은 '카드가 렌더된 슬롯'(renderedMode)의
+      // 디스크 값. 만료 후 지각 저장·외부 저장으로 디스크가 초안을 따라잡으면 dirty의 실체가 없으므로 여기서
+      // 해제해야 hold(외부 전환+dirty)가 자연 해소된다(fill 내부에만 두면 hold 중 영구 잠금 — 2차 반례).
+      // 언어 슬롯이 갈린 동안(lang-hold)은 비교를 건너뜀 — 타 언어 슬롯과의 우연 일치로 옛 슬롯 초안을 놓지 않게.
+      if (d.contract && (!renderedLangC || !d.lang || d.lang === renderedLangC)) {
+        var rmPre = cardM.renderedMode();
+        var ccR = rmPre ? rmPre === "codex-codex" : cc;
+        var preC = (ccR?(d.contract.codexImplementer||[]):(d.contract.claude||[])).join("\\n");
+        var preX = (ccR?(d.contract.codexVerifier||[]):(d.contract.codex||[])).join("\\n");
+        if (contractDirty.claude && $("cClaude") && normLines($("cClaude").value) === normLines(preC)) contractDirty.claude = false;
+        if (contractDirty.codex && $("cCodex") && normLines($("cCodex").value) === normLines(preX)) contractDirty.codex = false;
+        // 세그 기준선 따라잡기 — 선택값이 렌더 슬롯 디스크 값과 같아지면 appX를 승격(hold 중 fill이 못 하는 갱신).
+        var preVM = ccR ? d.contract.codexVerifyMode : d.contract.verifyMode;
+        var preIM = ccR ? d.contract.codexInjectMode : d.contract.claudeInjectMode;
+        var preSM = d.contract.scoutMode || "off";
+        if (appVM!==null && curVM!==appVM && curVM===preVM) appVM = curVM;
+        if (appIM!==null && curIM!==appIM && curIM===preIM) appIM = curIM;
+        if (appSM!==null && curSM!==appSM && curSM===preSM) appSM = curSM;
+      }
+      // 모드 전환 hold 판정(푸시당 1회 — 확정 계약 ⑴): 외부(파일 편집·자동 전환)로 런타임 모드가 바뀌어도
+      // 미저장 초안·계약 저장 대기(dirty||pending)면 카드는 renderedMode(옛 슬롯) 화면·라벨 그대로 동결.
+      var ckDirtyM = (appCkC!==null && $("ckClaude") && $("ckClaude").checked!==appCkC) || (appCkX!==null && $("ckCodex") && $("ckCodex").checked!==appCkX);
+      var draftM = cardDirtyNow() || ckDirtyM || document.activeElement === $("cClaude") || document.activeElement === $("cCodex");
+      cardStLast = d.contract ? cardM.state(cc ? "codex-codex" : "claude-codex", !!draftM) : { act: "skip" };
+      var holdMode = cardStLast.act === "hold";
+      // 표시 계약: hold 중 카드 제목·라벨은 renderedMode(옛 슬롯) 기준 고정 — 새 모드 라벨 아래 옛 값이 보이는 오도 차단.
+      var ccCard = holdMode ? cardStLast.renderedMode === "codex-codex" : cc;
+      if (holdMode) {
+        if($("ckClaude")) $("ckClaude").disabled = true; if($("ckCodex")) $("ckCodex").disabled = true; // 옛 슬롯 값이 새 모드 필드로 저장되는 경로 차단
+        var rmL = ccCard ? "Codex-Codex" : "Claude-Codex", cmL = cc ? "Codex-Codex" : "Claude-Codex";
+        cardNotice(T("운용 모드가 "+cmL+"로 바뀌었지만, 이 카드는 저장 안 된 "+rmL+" 초안을 편집 중이라 그대로 두었어요. '저장'은 "+rmL+" 슬롯에 저장되고, '되돌리기'는 초안을 버리고 "+cmL+" 값을 불러옵니다.","Harness mode changed to "+cmL+", but this card keeps your unsaved "+rmL+" draft. Save writes to the "+rmL+" slot; Revert discards the draft and loads "+cmL+" values."), "hold");
+      } else if (cardNoticeKind === "hold") hideCardNotice(); // 동결 해소(저장·되돌리기·모드 복귀) — hold 안내만 자동 숨김
       var mc=$("modeClaude"),mx=$("modeCodex");if(mc&&mx){mc.classList.toggle("on",!cc);mx.classList.toggle("on",cc);}
       $("heroTitle").textContent=cc?T("Codex ⇄ Codex 구현·검증","Codex ⇄ Codex implement & verify"):T("Claude ⇄ Codex 자동 연결·검증","Claude ⇄ Codex auto link & verify");
       $("implMono").textContent=cc?"Cx":"C";$("implName").textContent=cc?"Codex":"Claude";$("lsClaude").textContent=cc?T("Codex 구현","Codex implementer"):"Claude";
-      $("implRulesTitle").textContent=cc?T("Codex 구현 규칙","Codex Implementer Rules"):T("Claude 규칙","Claude Rules");
-      $("implRulesTo").textContent=cc?T("→ 구현 Codex에게","→ to implementer Codex"):T("→ Claude에게","→ to Claude");
-      $("implRulesDesc").textContent=cc?T("구현 Codex가 지킬 행동규칙 — 검증 역할과 별개","Behavior rules for the implementer Codex — separate from the verifier role"):T("Claude가 지킬 행동규칙 — 검증과 별개","Behavior rules Claude must follow — separate from verification");
-      $("injectTimingLabel").innerHTML=cc?T("넣는 시점 — 이 규칙을 <b>언제</b> 구현 Codex에 넣을지","Injection timing — <b>when</b> to inject these rules into the implementer Codex"):T("넣는 시점 — 이 규칙을 <b>언제</b> Claude에 넣을지","Injection timing — <b>when</b> to inject these rules into Claude");
-      $("verifyDesc").textContent=cc?T("별도 Codex 세션에게 검증받기 — 구현·검증 세션은 서로 달라야 함","Verify through a separate Codex session — implementer and verifier sessions must differ"):T("Codex에게 검증받기 — 끄면 검증만 안 함(Claude 규칙은 별개)","Get verified by Codex — turning this off only disables verification (Claude rules are separate)");
-      $("sbTransmitText").textContent=cc?T("① 구현 Codex→검증 Codex 넘길 때","① When implementer Codex hands off to verifier Codex"):T("① Claude→Codex 넘길 때","① When Claude hands off to Codex");
-      $("sbImplWho").textContent=cc?T("구현 Codex","Implementer Codex"):"Claude";$("sbRejudgeWho").textContent=cc?T("구현 Codex","Implementer Codex"):"Claude";
-      $("flowImplRules").innerHTML=cc?T("Codex 구현<br>규칙","Codex implementer<br>rules"):T("Claude<br>규칙","Claude<br>rules");
-      $("flowImplMono").textContent=cc?"Cx":"C";$("flowImplName").textContent=cc?"Codex":"Claude";$("scoutImplName").textContent=cc?"Codex":"Claude";
+      $("implRulesTitle").textContent=ccCard?T("Codex 구현 규칙","Codex Implementer Rules"):T("Claude 규칙","Claude Rules");
+      $("implRulesTo").textContent=ccCard?T("→ 구현 Codex에게","→ to implementer Codex"):T("→ Claude에게","→ to Claude");
+      $("implRulesDesc").textContent=ccCard?T("구현 Codex가 지킬 행동규칙 — 검증 역할과 별개","Behavior rules for the implementer Codex — separate from the verifier role"):T("Claude가 지킬 행동규칙 — 검증과 별개","Behavior rules Claude must follow — separate from verification");
+      $("injectTimingLabel").innerHTML=ccCard?T("넣는 시점 — 이 규칙을 <b>언제</b> 구현 Codex에 넣을지","Injection timing — <b>when</b> to inject these rules into the implementer Codex"):T("넣는 시점 — 이 규칙을 <b>언제</b> Claude에 넣을지","Injection timing — <b>when</b> to inject these rules into Claude");
+      $("verifyDesc").textContent=ccCard?T("별도 Codex 세션에게 검증받기 — 구현·검증 세션은 서로 달라야 함","Verify through a separate Codex session — implementer and verifier sessions must differ"):T("Codex에게 검증받기 — 끄면 검증만 안 함(Claude 규칙은 별개)","Get verified by Codex — turning this off only disables verification (Claude rules are separate)");
+      $("sbTransmitText").textContent=ccCard?T("① 구현 Codex→검증 Codex 넘길 때","① When implementer Codex hands off to verifier Codex"):T("① Claude→Codex 넘길 때","① When Claude hands off to Codex");
+      $("sbImplWho").textContent=ccCard?T("구현 Codex","Implementer Codex"):"Claude";$("sbRejudgeWho").textContent=ccCard?T("구현 Codex","Implementer Codex"):"Claude";
+      // 흐름도(도안)는 저장된 카드 값(appVM/appIM)을 그리므로 라벨도 카드 슬롯(ccCard) 권위로 통일 —
+      // hold 중 '새 모드 라벨+옛 슬롯 값' 혼합 차단(구현검증 1차 지적 4).
+      $("flowImplRules").innerHTML=ccCard?T("Codex 구현<br>규칙","Codex implementer<br>rules"):T("Claude<br>규칙","Claude<br>rules");
+      $("flowImplMono").textContent=ccCard?"Cx":"C";$("flowImplName").textContent=ccCard?"Codex":"Claude";$("scoutImplName").textContent=ccCard?"Codex":"Claude";
       $("workTokenTitle").textContent=cc?T("코덱스 구현작업 토큰","Codex implementation work tokens"):T("클로드 작업 토큰","Claude work tokens");
-      var ph=$("planModeHelp");if(ph)ph.title=cc?T("Codex 플랜 모드(permission mode=plan). '플랜 모드'를 고르면 그 모드의 구현 턴에만 규칙을 넣습니다.","Codex plan mode (permission mode=plan). Choosing Plan mode injects these rules only during implementer turns in that mode."):T("플랜 모드 = Claude Code에서 shift+Tab으로 켜는 '계획 먼저 세우기' 모드. '플랜 모드'를 고르면 그 모드로 일할 때만 이 규칙이 들어갑니다.","Plan mode = Claude Code's plan-first mode (shift+Tab). Choosing Plan mode injects these rules only while working in that mode.");
-      var pch=$("planConfirmHelp");if(pch)pch.title=cc?T("Codex↔Codex에서는 구현 세션이 permission mode=plan인 상태로 응답을 끝내는 Stop 턴을 플랜 게이트로 봅니다. ExitPlanMode 순간을 뜻하지 않습니다.","In Codex↔Codex, the plan gate is the implementer Stop turn while permission mode is plan; it is not an ExitPlanMode event."):T("플랜 확정 = 플랜 모드(shift+Tab)에서 세운 계획을 확정·제출하는 그 턴(ExitPlanMode). 플랜 모드 내내가 아니라 확정 순간입니다.","Plan confirm is the Claude Code turn that submits the plan (ExitPlanMode), not the whole time spent in plan mode.");
+      var ph=$("planModeHelp");if(ph)ph.title=ccCard?T("Codex 플랜 모드(permission mode=plan). '플랜 모드'를 고르면 그 모드의 구현 턴에만 규칙을 넣습니다.","Codex plan mode (permission mode=plan). Choosing Plan mode injects these rules only during implementer turns in that mode."):T("플랜 모드 = Claude Code에서 shift+Tab으로 켜는 '계획 먼저 세우기' 모드. '플랜 모드'를 고르면 그 모드로 일할 때만 이 규칙이 들어갑니다.","Plan mode = Claude Code's plan-first mode (shift+Tab). Choosing Plan mode injects these rules only while working in that mode.");
+      var pch=$("planConfirmHelp");if(pch)pch.title=ccCard?T("Codex↔Codex에서는 구현 세션이 permission mode=plan인 상태로 응답을 끝내는 Stop 턴을 플랜 게이트로 봅니다. ExitPlanMode 순간을 뜻하지 않습니다.","In Codex↔Codex, the plan gate is the implementer Stop turn while permission mode is plan; it is not an ExitPlanMode event."):T("플랜 확정 = 플랜 모드(shift+Tab)에서 세운 계획을 확정·제출하는 그 턴(ExitPlanMode). 플랜 모드 내내가 아니라 확정 순간입니다.","Plan confirm is the Claude Code turn that submits the plan (ExitPlanMode), not the whole time spent in plan mode.");
       $("workTokenSub").textContent=cc?T("(연결된 구현 세션 누적 · 검증 세션과 분리)","(linked implementer session cumulative · separate from verifier)"):T("(이 폴더 · 최근 28일 · 검증과 별개인 작업 비용)","(this folder · last 28d · work cost, separate from verification)");
-      $("baseGlobalWarn").innerHTML=cc?T("⚠ <b>전역 공통값입니다.</b> 위 <b>Codex 구현·검증 규칙</b>은 프로젝트·언어·운용 모드별로 분리되지만, 단계별 기본 원칙은 두 운용 모드가 공유합니다.","⚠ <b>This is global.</b> The Codex implementer/verifier rules above are separated by project, language, and harness mode; stage baselines are shared by both harness modes."):T("⚠ <b>전역 공통값입니다.</b> 위 <b>Claude·Codex 규칙</b>은 프로젝트별이지만, 단계별 기본 원칙은 모든 프로젝트에 공통 적용됩니다.","⚠ <b>This is global.</b> The Claude/Codex rules above are per-project, while stage baselines apply to every project.");
-      $("baseTransmitTo").textContent=cc?T("→ 구현 Codex에게 · 검증 Codex에 넘길 때 · 검증 ON일 때만","→ to implementer Codex · when handing off to verifier Codex · verify ON only"):T("→ Claude에게 · Claude가 Codex에 넘길 때 · 검증 ON일 때만","→ to Claude · when handing off to Codex · verify ON only");
-      $("baseRejudgeTo").textContent=cc?T("→ 구현 Codex에게 · 검증 답을 되짚을 때 · 검증 ON일 때만","→ to implementer Codex · when re-judging the verifier answer · verify ON only"):T("→ Claude에게 · Codex 답을 되짚을 때 · 검증 ON일 때만","→ to Claude · when re-judging Codex's answer · verify ON only");
-      $("savedAt").textContent=cc?T("· 위 Codex 구현 규칙 · Codex 검증 규칙 · 검증 모드를 함께 저장 (체크리스트 강제는 즉시 저장)","· saves Codex implementer rules, verifier rules, and verify mode together (checklist saves instantly)"):T("· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장 (체크리스트 강제는 즉시 저장)","· saves Claude rules, Codex rules and verify mode together (checklist saves instantly)");
+      $("baseGlobalWarn").innerHTML=ccCard?T("⚠ <b>전역 공통값입니다.</b> 위 <b>Codex 구현·검증 규칙</b>은 프로젝트·언어·운용 모드별로 분리되지만, 단계별 기본 원칙은 두 운용 모드가 공유합니다.","⚠ <b>This is global.</b> The Codex implementer/verifier rules above are separated by project, language, and harness mode; stage baselines are shared by both harness modes."):T("⚠ <b>전역 공통값입니다.</b> 위 <b>Claude·Codex 규칙</b>은 프로젝트별이지만, 단계별 기본 원칙은 모든 프로젝트에 공통 적용됩니다.","⚠ <b>This is global.</b> The Claude/Codex rules above are per-project, while stage baselines apply to every project.");
+      $("baseTransmitTo").textContent=ccCard?T("→ 구현 Codex에게 · 검증 Codex에 넘길 때 · 검증 ON일 때만","→ to implementer Codex · when handing off to verifier Codex · verify ON only"):T("→ Claude에게 · Claude가 Codex에 넘길 때 · 검증 ON일 때만","→ to Claude · when handing off to Codex · verify ON only");
+      $("baseRejudgeTo").textContent=ccCard?T("→ 구현 Codex에게 · 검증 답을 되짚을 때 · 검증 ON일 때만","→ to implementer Codex · when re-judging the verifier answer · verify ON only"):T("→ Claude에게 · Codex 답을 되짚을 때 · 검증 ON일 때만","→ to Claude · when re-judging Codex's answer · verify ON only");
+      $("savedAt").textContent=ccCard?T("· 위 Codex 구현 규칙 · Codex 검증 규칙 · 검증 모드를 함께 저장 (체크리스트 강제는 즉시 저장)","· saves Codex implementer rules, verifier rules, and verify mode together (checklist saves instantly)"):T("· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장 (체크리스트 강제는 즉시 저장)","· saves Claude rules, Codex rules and verify mode together (checklist saves instantly)");
       $("brainTitle").textContent=cc?T("검증 코덱스 두뇌 설정","Verifier Codex Brain Settings"):T("코덱스 두뇌 설정","Codex Brain Settings");
       $("brainSub").textContent=cc?T("검증 역할 세션에 매 호출 적용 · 구현 역할 모델 변경은 별도 경고","applied to verifier calls · implementer model changes are warned separately"):T("이 프로젝트에서 코덱스가 쓰는 모델·생각강도","model & reasoning effort Codex uses in this project");
     });
@@ -4031,10 +4343,20 @@ class Dashboard {
     safe(()=>{ if(d.contract&&d.contract.harnessMode==="codex-codex")renderCodexImplementerTokens(d.implementerTokens);else renderClaudeTokens(d.claudeTokens); });
     safe(()=>renderProjects(d.projectStats));      // 프로젝트별 비교(전체 폴더 28일)
     curPerm = d.permissionMode || "";   // renderApplied의 plan 게이트 표시에 사용
-    // 언어 토글 표시(전역 ko/en) + '반대 슬롯에만 규칙 있음' 안내(언어 바꿨더니 규칙 사라졌다는 오해 방지)
+    // 언어 토글 표시 + '반대 슬롯에만 규칙 있음' 안내(언어 바꿨더니 규칙 사라졌다는 오해 방지)
+    // 버튼 선택 표시는 '이 패널이 렌더된 언어'(UI_EN) 기준(3차 지적 4): 호스트가 초안 보호로 HTML 재생성을
+    // 보류하는 동안 전역 언어(d.lang)만 바뀐 상태에서 '새 언어 선택+옛 언어 화면' 혼합 표시를 막는다.
     if (d.lang){
+      var uiLangNow = UI_EN ? "en" : "ko";
       var lk=$("langKo"), le=$("langEn");
-      if (lk && le){ lk.classList.toggle("on", d.lang==="ko"); le.classList.toggle("on", d.lang==="en"); }
+      if (lk && le){ lk.classList.toggle("on", uiLangNow==="ko"); le.classList.toggle("on", uiLangNow==="en"); }
+      // 보류 안내: 전역 언어 ≠ 렌더 언어인데 이 패널에 미저장 초안/저장대기가 있으면 이유를 표기(모드 hold 안내가
+      // 이미 떠 있으면 그쪽이 우선 — 같은 자리라 겹침 방지). 해소(저장·되돌리기→재생성)는 새 문서라 자동 소멸.
+      if (d.lang !== uiLangNow && cardNoticeKind !== "hold") {
+        var langHoldNow = !!(cardDirtyNow() || cardM.saving() || baseM.locked() || baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout); // baseM.locked 포함(5차 지적 2 — 초안 없는 복원 대기도 결속과 동일 조건)
+        if (langHoldNow) cardNotice(T("전역 언어가 바뀌었지만, 이 패널은 저장 안 된 편집 때문에 기존 언어 화면을 유지 중이에요 — '저장' 또는 '되돌리기' 후에 새 언어로 전환됩니다.","The global language changed, but this panel keeps its current language because of unsaved edits — Save or Revert to switch."), "langhold");
+        else if (cardNoticeKind === "langhold") hideCardNotice();
+      } else if (cardNoticeKind === "langhold" && d.lang === uiLangNow) hideCardNotice();
       var sn=$("slotNote");
       if (sn){
         if (d.otherSlotRules){
@@ -4053,14 +4375,18 @@ class Dashboard {
     // — 세그만 바꾸고 언어 전환→저장 시 en 슬롯에 ko 화면의 모드가 저장되는 잔여 오염 차단(Codex 검증 반례 반영).
     const segDirtyC = (appVM!==null && curVM!==appVM) || (appIM!==null && curIM!==appIM) || (appSM!==null && curSM!==appSM);
     const ckDirtyC = (appCkC!==null && $("ckClaude").checked!==appCkC) || (appCkX!==null && $("ckCodex").checked!==appCkX);
-    const holdC = langChangedC && (contractDirty.claude || contractDirty.codex || segDirtyC || ckDirtyC ||
-      document.activeElement === $("cClaude") || document.activeElement === $("cCodex"));
+    // 모드 hold(cardStLast — 라벨 블록에서 푸시당 1회 판정)는 언어 hold와 같은 동결 계약: 외부 전환+dirty/저장대기.
+    const holdC = (langChangedC && (contractDirty.claude || contractDirty.codex || segDirtyC || ckDirtyC ||
+      document.activeElement === $("cClaude") || document.activeElement === $("cCodex"))) || cardStLast.act === "hold";
     safe(function(){
     if (d.contract && !holdC){
       if (d.lang) renderedLangC = d.lang; // 이 푸시로 카드가 이 언어 슬롯 값으로 렌더됨
       const ccMode=d.contract.harnessMode==="codex-codex";
-      if (document.activeElement !== $("cClaude") && !contractDirty.claude) $("cClaude").value = (ccMode?(d.contract.codexImplementer||[]):(d.contract.claude||[])).join("\\n");
-      if (document.activeElement !== $("cCodex") && !contractDirty.codex) $("cCodex").value = (ccMode?(d.contract.codexVerifier||[]):(d.contract.codex||[])).join("\\n");
+      const inC = (ccMode?(d.contract.codexImplementer||[]):(d.contract.claude||[])).join("\\n");
+      const inX = (ccMode?(d.contract.codexVerifier||[]):(d.contract.codex||[])).join("\\n");
+      // dirty 자기치유는 라벨 블록(hold 판정 전 — 렌더 슬롯 기준)이 단일 담당(2차 지적 1로 이동 — 이중 로직 금지).
+      if (document.activeElement !== $("cClaude") && !contractDirty.claude) $("cClaude").value = inC;
+      if (document.activeElement !== $("cCodex") && !contractDirty.codex) $("cCodex").value = inX;
       // P-8 1단: 저장 응답 대기 중(pending)엔 상태 푸시가 체크박스를 되돌리지 못한다(skip) — 증상('저장 전
       // 되돌림')의 구조 제거. 평시(fill)엔 계약 파일이 유일 정본이라 그대로 반영+활성화 — hold(실패·만료)로
       // 비활성 유지된 체크박스도 여기서만 정본 값으로 되살아난다(최초 렌더 전 disabled 해제도 동일 경로).
@@ -4068,17 +4394,20 @@ class Dashboard {
       if (ckM.claude.state().act === "fill") { $("ckClaude").checked = ccMode ? d.contract.codexImplementerChecklist !== false : d.contract.claudeChecklist !== false; appCkC = $("ckClaude").checked; $("ckClaude").disabled = false; }
       if (ckM.codex.state().act === "fill") { $("ckCodex").checked = ccMode ? d.contract.codexVerifierChecklist !== false : d.contract.codexChecklist !== false; appCkX = $("ckCodex").checked; $("ckCodex").disabled = false; }
       const first = (appVM===null);
+      // 되돌리기 직후(cardM.revert가 renderedMode를 리셋 → 이번 state가 first)는 초안 폐기 확정 — 저장값으로 강제 동기화.
+      const forceSync = cardStLast.first === true && !first;
       const pVM=appVM, pIM=appIM, pSM=appSM;
-      appVM = d.contract.verifyMode || "off";
+      appVM = (ccMode ? d.contract.codexVerifyMode : d.contract.verifyMode) || "off"; // 모드별 검증 스위치(분리 2026-07-15)
       appIM = (ccMode ? d.contract.codexInjectMode : d.contract.claudeInjectMode) || "always";
       appSM = d.contract.scoutMode || "off";
       // 사용자가 저장 안 한 토글 변경을 들고 있으면(dirty) 폼 선택을 보존, 아니면 저장값으로 동기화.
-      const dirty = !first && ((curVM!==pVM)||(curIM!==pIM)||(curSM!==pSM));
-      if(first || !dirty){ curVM=appVM; curIM=appIM; curSM=appSM; highlightSeg("segVerify","data-vm",curVM); highlightSeg("segInject","data-im",curIM); highlightSeg("segScout","data-sm",curSM); }
+      const dirty = !first && !forceSync && ((curVM!==pVM)||(curIM!==pIM)||(curSM!==pSM));
+      if(first || forceSync || !dirty){ curVM=appVM; curIM=appIM; curSM=appSM; highlightSeg("segVerify","data-vm",curVM); highlightSeg("segInject","data-im",curIM); highlightSeg("segScout","data-sm",curSM); }
       renderApplied(first?undefined:pVM, first?undefined:pIM);  // 저장/변경 반영 후 바뀐 축을 깜빡(첫 렌더는 깜빡 없음)
       markDirty();
     }
     });
+    safe(function(){ reportCardDirty(true); }); // 자기치유·fill 반영 + 심박(dirty=true면 매 푸시 재전송 — 호스트 신선도 유지)
     // ④ 플랜 라이브표시: 지금 플랜 모드인가(active.json permissionMode)
     const pn = $("planNow");
     if (pn){
@@ -4416,7 +4745,10 @@ class Dashboard {
       const ccMode = !!(d.contract&&d.contract.harnessMode==="codex-codex");
       const codexReady = !!d.codexReady, linked = !!d.linkedId && (!ccMode || (!!d.implementerId && d.implementerId!==d.linkedId));
       const hookReady = !ccMode || !!d.codexHookReady;
-      const vOn = holdC ? !!(appVM && appVM!=="off") : !!(d.contract && d.contract.verifyMode && d.contract.verifyMode!=="off"); // hold 중엔 화면 기준(appVM) — 파생 표시 일관
+      const vmEffOb = d.contract ? (d.contract.harnessMode==="codex-codex" ? d.contract.codexVerifyMode : d.contract.verifyMode) : null; // 현재 운용 모드의 슬롯 스위치(분리 2026-07-15)
+      // 온보딩은 '런타임 준비 상태' 단일 권위(구현검증 1차 지적 4) — 연결·훅과 같은 기준(현재 모드의 실효 스위치).
+      // hold 중 옛 슬롯 appVM과 현재 모드 연결 상태를 섞던 혼합 제거(카드 화면 기준은 카드·흐름도가 담당).
+      const vOn = !!(vmEffOb && vmEffOb!=="off");
       const allDone = linked && vOn && hookReady; // C-C는 현재 구현 세션의 실제 hook heartbeat까지 있어야 준비 완료
       const dismissed = !!d.onboardDismissed;
       ob.style.display = "";
@@ -4438,16 +4770,35 @@ class Dashboard {
           e.innerHTML='<span class="k">'+(done?"✓":"○")+'</span>'+text+(where?' <span class="where">'+where+'</span>':'')+b; };
         step("ob1", codexReady, codexReady?T("Codex 준비됨","Codex ready"):T("Codex 경로 미고정 — PATH의 codex로 시도","Codex path not pinned — trying codex on PATH"), {cmd:"openSettings"}, codexReady?"":T("openai.chatgpt 확장이 있으면 보통 자동 · standalone CLI면 PATH로 동작(안 뜨면 codexBridge.codexPath 지정)","usually automatic with the openai.chatgpt extension · standalone CLI works via PATH (set codexBridge.codexPath if not detected)"));
         step("ob2", linked, linked?T("Codex 세션 연결됨","Codex session linked"):T("Codex 세션 미연결","No Codex session linked"), {go:"cands"}, linked?"":T("연결할 세션 고르기","pick a session to link"));
-        step("ob3", vOn, vOn?(T("검증 켜짐 (","verify on (")+((d.contract&&d.contract.verifyMode)||appVM)+")"):T("검증 꺼짐","verify off"), {go:"segVerify"}, vOn?"":T("검증 모드 켜고 저장","turn on a verify mode and save"));
+        step("ob3", vOn, vOn?(T("검증 켜짐 (","verify on (")+(vmEffOb||"off")+")"):T("검증 꺼짐","verify off"), {go:"segVerify"}, vOn?"":T("검증 모드 켜고 저장","turn on a verify mode and save"));
         const ob4=$("ob4"); if(ob4){ ob4.style.display=ccMode?"":"none"; if(ccMode)step("ob4",hookReady,hookReady?T("현재 구현 세션에서 Codex 강제 훅 확인됨","Codex enforcement hook confirmed in the current implementer session"):T("Codex 강제 훅 미확인 — 이 상태에선 모든 턴 검증이 강제되지 않음","Codex enforcement hook not confirmed — verify-every-turn is not enforced"),{cmd:"installCodexHooks"},hookReady?"":T("플러그인 설치·네 훅 신뢰·창 리로드 → 사용할 대화 시작·재개 시 자동 고정","install the plugin, trust all four hooks, reload the window → starting or resuming a conversation auto-pins it")); }
       }
     });
     // 기본지침도 언어 전환 hold(계약 카드와 동일 원리) — 편집 중 언어가 바뀌면 보던 언어 화면 유지, 저장은 보던 슬롯으로.
     safe(function(){
     const langChangedB = renderedLangB !== null && d.lang && d.lang !== renderedLangB;
-    const holdB = langChangedB && (baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout ||
+    // base dirty 자기치유(5차 부수): 디스크가 초안을 따라잡았으면 dirty 해제. 비교는 trim 동등성 — 저장기
+    // (saveBaseDirective/saveScoutBaseline)가 trim 기준으로 기본값 동등성·오버라이드 삭제를 판정하므로
+    // 원문 직접 비교면 후행 공백만으로 영구 dirty(6차 지적 3). 언어 슬롯이 갈린 동안은 생략(타 언어 우연 일치 방지).
+    // canonical 신뢰 게이트(7차 지적 2): 판독 실패로 위장된 '가짜 기본값'이 자기치유·fill·잠금 해제에 쓰이면
+    // 방금 저장한 사용자 값을 화면에서 지우고 재저장까지 유도한다 — 불신 동안 base 반영 전체 보류+안내.
+    const baseCanon = d.baseReadOk !== false;
+    // 안내 우선순위(8차 지적 5): 모드 hold(P-10)·언어 hold가 판독 안내보다 상위 — 같은 자리라 덮지 않는다.
+    if (!baseCanon) { if (cardNoticeKind !== "hold" && cardNoticeKind !== "langhold") cardNotice(T("기본 원칙 쪽 정본을 신뢰할 수 없어 화면 반영·저장을 보류했어요 — 파일 잠금/권한 문제이거나, 브릿지 런타임이 오래된 경우일 수 있어요(브릿지 업데이트 확인 · 입력값은 보존됩니다).","Cannot trust the stage-baseline source — refresh and saving are on hold (your edits are preserved). Check file locks/permissions, or the bridge runtime may be outdated (consider updating)."), "basecanon"); }
+    else if (cardNoticeKind === "basecanon") hideCardNotice();
+    if (baseCanon && d.baseDirective && (!renderedLangB || !d.lang || d.lang === renderedLangB)) {
+      if (baseDirty.verify && $("bVerify") && $("bVerify").value.trim() === (d.baseDirective.verifyBaseline||"").trim()) baseDirty.verify = false;
+      if (baseDirty.transmit && $("bTransmit") && $("bTransmit").value.trim() === (d.baseDirective.transmit||"").trim()) baseDirty.transmit = false;
+      if (baseDirty.rejudge && $("bRejudge") && $("bRejudge").value.trim() === (d.baseDirective.rejudge||"").trim()) baseDirty.rejudge = false;
+      if (baseDirty.scout && $("bScout") && d.scoutPrompt && $("bScout").value.trim() === (d.scoutPrompt.baseline||"").trim()) baseDirty.scout = false;
+    }
+    // holdB에 저장 대기(baseM.saving) 포함(5차 지적 2): 초안 없이 복원만 대기 중일 때 언어가 바뀌어도, 응답이
+    // 소비될 때까지는 base 값이 새 슬롯으로 덮이지 않는다(저장 자체는 요청 시점 renderedLangB 슬롯에 기록됨).
+    // 정직 한정(6차 지적 5): 응답 소비 후(refillWait)의 재적재는 '그 시점 전역 언어' 슬롯 기준 — dirty가 이미
+    // 해제됐으므로 호스트의 언어 HTML 재생성 보류도 함께 풀려 다음 갱신에서 정적 라벨이 따라온다(과도 상태 1푸시).
+    const holdB = langChangedB && (baseM.saving() || baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout ||
       document.activeElement === $("bVerify") || document.activeElement === $("bTransmit") || document.activeElement === $("bRejudge") || document.activeElement === $("bScout"));
-    if (d.baseDirective && !holdB){
+    if (d.baseDirective && !holdB && baseCanon){
       if (d.lang) renderedLangB = d.lang;
       if (document.activeElement !== $("bVerify") && !baseDirty.verify) $("bVerify").value = d.baseDirective.verifyBaseline||"";
       if (document.activeElement !== $("bTransmit") && !baseDirty.transmit) $("bTransmit").value = d.baseDirective.transmit||"";
@@ -4457,21 +4808,37 @@ class Dashboard {
     // ④ 정찰 칸 — 3트랙(저장된 트랙)일 때만 등장. 사용자 단순화 요청(2026-07-09): 트랙에 따라 이 패널이 늘어난다.
     safe(function(){
       const wrap=$("bScoutWrap"), row=$("sbScout"); if(!wrap) return;
-      const on = !!(d.contract && d.contract.scoutMode === "on");
+      // ④칸 노출은 scoutPrompt '실존'에 결속(8차 지적 1→9차 지적 1): 무폴더·구 런타임·조립 실패에선 산출되지
+      // 않아 빈 칸이 되고, 보이면 saveB/resetB 페이로드에 실려(빈 값 저장=오버라이드 삭제) 전역 정찰 기준선을
+      // 지울 수 있다 — 표시·저장 대상에서 구조 제외(신뢰 축은 baseReadOk가 별도로 저장을 잠금).
+      const on = !!(d.contract && d.contract.scoutMode === "on") && !!d.workspace && !!d.scoutPrompt;
       wrap.style.display = on ? "" : "none";
       if (row) row.style.display = on ? "" : "none";
       // ①~③처럼 ✓ 표시(2026-07-09 사용자 지적: ④만 마크가 빈칸이었음 — setStage 미호출 누락).
       // 이 줄은 3트랙일 때만 보이므로 보이는 순간 = 적용 중(정찰 기본 원칙은 검증 모드와 무관하게 지도 그릴 때 주입).
       if (on) setStage(row, true, T("3트랙 켜짐 → 지도 그릴 때 적용(검증 모드와 무관)","3-track on → applied when maps are drawn (independent of verify mode)"));
       const sp=d.scoutPrompt; if(!sp) return;
-      if (!holdB && document.activeElement !== $("bScout") && !baseDirty.scout) $("bScout").value = sp.baseline||"";
+      if (!holdB && baseCanon && document.activeElement !== $("bScout") && !baseDirty.scout) $("bScout").value = sp.baseline||"";
       const sov=$("bScoutOv"); if(sov) sov.textContent = sp.overridden ? T("· (수정됨 — 이후 지도는 실측과 비교 불가 표시)","· (modified — later maps marked incomparable to the measurement)") : T("· (기본값)","· (default)");
       const fmt=$("bScoutFmt"); if(fmt) fmt.textContent = "["+T("형식 버전 ","format version ")+sp.version+"]\\n"+sp.directive+"\\n\\n"+(sp.notes||[]).join("\\n");
     });
+    // 정본 반영 후에만 성공/만료 잠금(refillWait) 해제(5차 지적 1) — 3트랙이면 정찰 필드(bScout)까지 정본이
+    // 확인돼야 한다(scoutPrompt 판독 실패 상태에서 4번째 필드 미확인 채 저장을 열지 않음 — 6차 지적 4).
+    // 무폴더 창(d.workspace 없음)은 scoutPrompt가 산출되지 않으므로 예외(7차 지적 1: 전역 3트랙 계약에서
+    // 영구 잠금 교착 — bScout 자체가 이 창의 저장 대상이 아님). 판독 불신(baseCanon=false) 동안은 해제 보류.
+    const scoutSettled = !(d.contract && d.contract.scoutMode === "on") || !!d.scoutPrompt || !d.workspace;
+    if (d.baseDirective && !holdB && scoutSettled && baseCanon) {
+      if (baseM.fill().act === "unlock") { baseInputLock(false); reportCardDirty(); }
+    }
     // 런타임 라이브러리 없으면 저장/복원이 무효 → 거짓 성공 방지: 버튼 비활성 + 경고(점2 수정).
+    // baseM 잠금도 OR(5차 부수) — 저장·재렌더 대기 중 state 푸시가 잠금을 풀어 보이게 하던 표시 회귀 차단.
+    // 되돌리기는 응답 대기(saving)에만 잠금 — refillWait의 복구 수단(6차 지적 1).
+    // 판독 불신(!baseCanon) 동안 저장·복원도 차단(8차 지적 2): 저장기는 기존 파일을 신뢰 판독 없이 덮거나
+    // 삭제하므로, 손상 증거·기존 설정을 잃는 fail-open이 된다 — 안내('저장 보류')와 실동작 일치.
     const baseOk = d.baseAvailable !== false;
-    if ($("saveB")) $("saveB").disabled = !baseOk;
-    if ($("resetB")) $("resetB").disabled = !baseOk;
+    if ($("saveB")) $("saveB").disabled = !baseOk || baseM.locked() || !baseCanon;
+    if ($("resetB")) $("resetB").disabled = !baseOk || baseM.locked() || !baseCanon;
+    if ($("revertB")) $("revertB").disabled = baseM.saving();
     if (!baseOk){ const ov=$("baseOv"); if(ov) ov.textContent = T("· ⚠ 런타임 라이브러리를 찾을 수 없어 편집 불가","· ⚠ runtime library not found — editing disabled"); const sb=$("savedB"); if(sb) sb.textContent=""; }
     });
     // 히어로 연결 상태 시각화
@@ -4488,7 +4855,7 @@ class Dashboard {
     if (baCx) baCx.textContent = baD.cx ? T("실제 답: ","actual: ") + baD.cx : "";
     // statusline: 검증 모드 배지 + 연결 요약
     const st = $("status"); st.replaceChildren();
-    const vm = (d.contract && d.contract.verifyMode) || "off";
+    const vm = (d.contract && (d.contract.harnessMode==="codex-codex" ? d.contract.codexVerifyMode : d.contract.verifyMode)) || "off"; // 현재 운용 모드의 슬롯 스위치(분리 2026-07-15)
     const vmTxt = (UI_EN ? {off:"verify off", code:"verify on code change", plancode:"verify on plan+code", always:"verify every turn"} : {off:"검증 꺼짐", code:"코드 변경 시 검증", plancode:"플랜+코드 검증", always:"모든 턴 검증"})[vm] || vm;
     st.appendChild(el("span","badge b-"+vm, vmTxt));
     if (d.workspace) st.appendChild(el("span","wschip", d.workspace));

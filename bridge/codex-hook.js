@@ -93,7 +93,7 @@ function implementerContext(j, ws, c) {
   const parts=[]; const plan=j.permission_mode==="plan";
   const inject=c.codexInjectMode==="always" || (c.codexInjectMode==="plan" && plan);
   if(inject){ const x=buildInjection(c.codexImplementer,"Codex Implementer",c.codexImplementerChecklist); if(x)parts.push(x); }
-  if(c.verifyMode!=="off") parts.push(buildVerifyDirective(c.verifyMode));
+  if(c.codexVerifyMode!=="off") parts.push(buildVerifyDirective(c.codexVerifyMode)); // C-C 슬롯 스위치(모드별 분리 2026-07-15)
   try { const x=buildScoutDirective(ws,c); if(x)parts.push(x); } catch { /* advisory */ }
   try { const x=require("./map-bootstrap.js").hookTick(ws); if(x)parts.push(x); } catch { /* advisory */ }
   return parts.join("\n\n");
@@ -218,7 +218,8 @@ function onStop(j, ws, sid, c) {
   if(scoutGate(j,ws,sid,c,s)) return;
   const gitTs=gitChangedMaxMtime(ws); const edited=!!s.modified || gitTs>Number(s.startedAt||0);
   const planned=j.permission_mode==="plan";
-  const needed=c.verifyMode==="always" || ((c.verifyMode==="code"||c.verifyMode==="plancode")&&edited) || (c.verifyMode==="plancode"&&planned);
+  const vmCc=c.codexVerifyMode; // C-C 슬롯 스위치(모드별 분리 2026-07-15) — CL-C의 verifyMode와 독립
+  const needed=vmCc==="always" || ((vmCc==="code"||vmCc==="plancode")&&edited) || (vmCc==="plancode"&&planned);
   if(!needed){try{writePhase("done",{session:sid,workspace:ws});}catch{} return;}
   // 신선도에서 lastActionAt 제거(P-6 자기무효화 해소) — 검증 결과를 '회수하는' 도구 호출이 proof를 낡게
   // 만들지 않는다. 실제 파일 변경(dirty mtime)과 턴 시작만 본다. 커밋 은닉·회수 정당성은 durableProofGate의

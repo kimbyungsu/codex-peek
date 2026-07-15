@@ -1344,8 +1344,10 @@ async function cmdAsk(rest) {
   }
   process.on("exit", () => clearAskInflight(ws, promptHash, inflightRec && inflightRec.token)); // 자기 표식만 해제(SIGKILL 잔존은 pid 생존 검사가 무시)
   const contractSnap = loadContract(ws) || {};
-  const modeSnap = contractSnap.verifyMode || ""; // 검증 트리거 모드 스냅샷(검증 중 사용자가 바꿔도 오염 안 되게) → flagVerdict로 전달
   const harnessModeSnap = contractSnap.harnessMode === "codex-codex" ? "codex-codex" : "claude-codex";
+  // 검증 트리거 모드 스냅샷(검증 중 사용자가 바꿔도 오염 안 되게) → flagVerdict로 전달.
+  // 모드별 분리(2026-07-15): 현재 운용 모드의 슬롯 스위치를 기록(통계 귀속 정확성).
+  const modeSnap = (harnessModeSnap === "codex-codex" ? contractSnap.codexVerifyMode : contractSnap.verifyMode) || "";
   const langSnap = loadLang(); // 언어 스냅샷 — ask 실행 중(수 분) 언어를 바꿔도 주입 언어와 헤더/footer 언어가 엇갈리지 않게(modeSnap과 동일 원칙)
   const exec = process.cwd();   // 작업 폴더(실행/탐지/근거경로 기준) — 코덱스 spawn은 cwd 미지정이라 실제로 여기서 돈다
   const mArgs = modelArgs(modelPrefFor(links, ws, harnessModeSnap)); // 운용 모드별 검증 모델/생각강도를 매 호출 -c로 재적용
@@ -1540,6 +1542,9 @@ function cmdStatus() {
   { const cfg = configWs(), ex = process.cwd();
     process.stdout.write(`Claude 세션: ${claudeId() || "(env 없음)"}\n워크스페이스(설정 기준): ${cfg}\n` +
       (normWs(cfg) !== normWs(ex) ? `실행 폴더(작업 cwd): ${ex}\n` : "")); }
+  // 모드별 분리(2026-07-16 구현검증 1차 지적 5): status에도 현재 운용 모드의 실효 스위치+양 슬롯 병기(doctor와 동일 계약).
+  { let cST = null; try { cST = loadContract(configWs()); } catch { /* 계약 없음/손상 — 아래서 정직 표기 */ }
+    process.stdout.write(`검증 모드: ${cST ? `${cST.harnessMode === "codex-codex" ? cST.codexVerifyMode : cST.verifyMode} (현재 ${cST.harnessMode === "codex-codex" ? "Codex-Codex" : "Claude-Codex"} 모드 기준 · CL-C=${cST.verifyMode} / C-C=${cST.codexVerifyMode})` : "(계약 로드 실패)"}\n`); }
   if (!link) {
     process.stdout.write("연결: 없음 (ask 하면 보고만 함, 또는 link/--allow-new)\n");
     return;
@@ -1624,7 +1629,8 @@ function cmdDoctor() {
   } catch {
     /* ignore */
   }
-  process.stdout.write(`검증 모드      : ${c ? c.verifyMode : "(계약 로드 실패)"}\n`);
+  // 모드별 분리(2026-07-15): 현재 운용 모드의 슬롯 값을 실효값으로, 양 슬롯을 참고로 병기.
+  process.stdout.write(`검증 모드      : ${c ? `${c.harnessMode === "codex-codex" ? c.codexVerifyMode : c.verifyMode} (현재 ${c.harnessMode === "codex-codex" ? "Codex-Codex" : "Claude-Codex"} 모드 기준 · CL-C=${c.verifyMode} / C-C=${c.codexVerifyMode})` : "(계약 로드 실패)"}\n`);
   process.stdout.write(`Claude 세션    : ${claudeId() || "(env 없음)"}\n`);
   process.stdout.write(`워크스페이스   : ${configWs()} (설정 기준=연 폴더)\n`);
   process.stdout.write(`실행 폴더(cwd) : ${process.cwd()}\n`);

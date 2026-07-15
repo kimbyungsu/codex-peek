@@ -64,9 +64,14 @@ ok(/if \(ckM\.claude\.state\(\)\.act === "fill"\) \{ \$\("ckClaude"\)\.checked/.
 ok(/var ckR = ckM\[ckKey\]\.result\(ev\.data, ckExpectedField\(ckKey\), renderedLangC \|\| null\);/.test(ext) && /if \(ckR\.act === "ignore"\) return;/.test(ext) && /clearTimeout\(ckR\.pd\.timer\)/.test(ext), "응답 수신 — 소비 시점의 화면 좌표(기대 field·현재 lang)를 상태기에 전달해 소비(불일치=완전 no-op·매칭 시 타이머 해제)");
 ok(/if \(ckR\.act === "commit"\) \{/.test(ext) && /if \(ckEl\) \{ if \(!ckModeLock\) ckEl\.disabled = false;/.test(ext) && !/appCkX !== null \? appCkX : ckEl\.checked/.test(ext), "성공(commit)만 재활성+기준선 — 실패 경로의 '옛 기준선 되돌림+재활성' 제거(Codex 5차 반례: 모드 바뀐 화면에 옛 모드 값 노출)");
 ok(/disabled 유지, ready로 정본 state를 요청해 채움에 위임/.test(ext) && /try \{ vscode\.postMessage\(\{ type: "ready" \}\); \} catch\(e\)\{\}\s*\n\s*\}\s*\n\s*return;/.test(ext), "실패·거부(hold) — 재활성 없이 ready로 정본 재렌더 요청(값·활성화는 state 채움 전담)");
-ok(/act: resp\.ok \?/.test(ext) === false && /pd\.field !== curField \|\| pd\.lang !== curLang\) return \{ act: "hold", pd: pd \};/.test(ext), "성공 응답도 화면 좌표 불일치면 hold — 옛 모드/언어 값이 새 화면 기준선을 오염 못 함(Codex 6차 대칭 반례)");
+// [분리 2026-07-16] 'ok만으로 commit 금지'는 ckMachine 블록 한정 — cardMachine(P9V)은 begin 시점에 대상 슬롯을
+// 동결(pd.mode)하므로 ok 기반 commit이 좌표 오염을 만들지 않는다(검증: verify-split E3~E5). 파일 전체 검사에서 축소.
+const ckBlock = ext.slice(ext.indexOf("[P8-CKM-BEGIN]"), ext.indexOf("// [P8-CKM-END]"));
+ok(/act: resp\.ok \?/.test(ckBlock) === false && /pd\.field !== curField \|\| pd\.lang !== curLang\) return \{ act: "hold", pd: pd \};/.test(ckBlock), "성공 응답도 화면 좌표 불일치면 hold — 옛 모드/언어 값이 새 화면 기준선을 오염 못 함(Codex 6차 대칭 반례)");
 ok(/!renderedMode \|\| renderedMode !== modeCk/.test(ext) && /staleMode: true/.test(ext), "모드 결속 fail-closed — 모드 누락도 거부(null 통과 금지·Codex 3차)+불일치 시 기록 거부+재렌더");
-ok(/mode: harnessMode/.test(ext) && /ckModeLock = true; if\(\$\("ckClaude"\)\) \$\("ckClaude"\)\.disabled = true/.test(ext) && /ckModeLock = false;/.test(ext), "전송에 렌더 모드 동봉 + 모드 클릭 시 잠금 set·state 도착 시 해제(잠금의 양끝 배선)");
+// [분리 2026-07-16] 전송 모드는 '화면에 렌더된 슬롯'(cardM.renderedMode)이 권위 — 외부 전환 hold 중 런타임
+// harnessMode와 갈릴 수 있어 상향(구 계약 mode: harnessMode보다 정확). 폴백은 최초 렌더 전에만.
+ok(/mode: cardM\.renderedMode\(\) \|\| harnessMode/.test(ext) && /ckModeLock = true; if\(\$\("ckClaude"\)\) \$\("ckClaude"\)\.disabled = true/.test(ext) && /ckModeLock = false;/.test(ext), "전송에 렌더 슬롯 동봉 + 모드 클릭 시 잠금 set·state 도착 시 해제(잠금의 양끝 배선)");
 ok(/ckM\[pr\[1\]\]\.begin\(rid, ckExpectedField\(pr\[1\]\), renderedLangC \|\| null, setTimeout\(function\(\)\{ ckExpire\(pr\[1\], rid\); \}, 5000\)\)/.test(ext), "전송 시 요청 서술자(reqId+field+lang+유실 타이머) 기록 — 만료는 '그 요청' 한정");
 ok(/var ckDoc = "\$\{nonce\}";/.test(ext) && /var rid = ckDoc \+ ":" \+ ckSeq;/.test(ext), "reqId 세대 유일성 — 문서마다 새 CSP nonce 접두+문서 내 카운터(ko→en→ko 재생성 뒤 reqId 재사용 충돌 차단 · Codex 4차)");
 ok(/function ckExpire\(box, rid\)\{\s*\n\s*if \(ckM\[box\]\.expire\(rid\)\.act !== "hold"\) return;\s*\n\s*try \{ vscode\.postMessage\(\{ type: "ready" \}\); \} catch\(e\)\{\}/.test(ext), "응답 유실 liveness — 만료=hold(재활성·되돌림 없음)+ready 재렌더 요청, pending이 비어 다음 어떤 state든 복구(영구 disabled 경로 없음)");

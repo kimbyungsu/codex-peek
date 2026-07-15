@@ -281,7 +281,40 @@
     **→ 결정 확정(2026-07-15 사용자): 분리한다.** 근거: 규칙이 이미 모드별 4슬롯(claude/codex/
     codexImplementer/codexVerifier, contract-lib.js:822~827)·체크리스트 4필드(:829~832)로 별개이듯 검증
     스위치도 모드별이 맞다 — '모드별 분리 기본' 구조 원칙과 일치. 단일 verifyMode가 오히려 스키마의 예외.
-    설계 방향(미착수 — Codex 설계검증 2왕복 반영):
+    **→ 구현 완료(2026-07-16)**: 아래 ⓐ~ⓖ 계약 그대로 구현 — contract-lib `normCodexVerifyMode`+loadContract
+    필드 / codex-hook 주입·Stop 게이트=C-C 슬롯 / codex-bridge 통계 스냅샷·status=현재 모드 슬롯 /
+    확장 `patchContractExt`(exact patch·CONTRACT_FILE fallback·fail-closed)로 옛 saveContract 제거·봉인,
+    모드 전환=harnessMode 단일 patch, 일반 저장=모드별 필드+scoutMode만 / 웹뷰 `cardMachine`(P9V-CARD 마커)
+    — 전환 잠금·되돌리기 버튼(계약·기본원칙 각각)·외부 전환 hold·표시 계약·contractSavePending(reqId 왕복·
+    120초 만료) / 구현검증 1·2차 봉합: 저장 중 카드 입력 잠금, 언어 전환 잠금(+타 창발 언어 변경의 HTML
+    재생성은 호스트 dirty 결속으로 보류·15분 백스톱), dirty 자기치유(hold 판정 전·렌더 슬롯 기준 — 만료 후
+    지각 성공의 영구 잠금 차단), 표시 권위 통일(흐름도·단계원칙=카드 슬롯 / 히어로·온보딩·상태줄=런타임),
+    CLI status에도 실효값+양 슬롯 병기 / 3차 봉합: dirty 결속 리셋은 boot 신호에만(일반 ready 재요청과 분리),
+    백스톱은 dirty 심박으로 '죽은 웹뷰'만 fail-open(활성 장시간 편집 소실 차단), 자기치유는 저장과 동일
+    정규화(normLines) 비교, 보류 중 언어 버튼 표시=렌더 언어+langhold 안내 / 4차 봉합: 기본 원칙 저장·복원
+    전용 single-flight(baseSavePending — reqId 결속·4필드+3버튼 잠금·120초 만료, 공유 pendingSave 경합 제거),
+    동일 안내 재호출 시 펄스·스크롤 생략, 백스톱 의미 정정('정상 통신 retained 웹뷰 유지 · 심박 15분 두절만
+    fail-open') / 5~6차 봉합: base를 순수 상태기 baseMachine(P9V-BASE 마커)으로 재구성 — 성공(commit)·만료
+    (uncertain: 결과 불확실) 모두 잠금 유지, **정본 fill(3트랙이면 정찰 필드 정본까지)에서만 해제**(강제 해제
+    백스톱은 옛 값 재저장 창을 재개방해 제거 — 회복은 정본 fill·되돌리기[응답 대기 아닐 때 항상 가능]만),
+    복원(reset) 만료는 초안 폐기(지각 성공 시 옛 초안 오도 차단), holdB·langhold 결속에 base 잠금 포함,
+    state 푸시의 버튼 재활성이 잠금을 안 덮음, base dirty 자기치유(4필드·trim 동등성 — 저장기 정규화와
+    일치·언어 일치 시만·reset 지각 성공은 자기치유 대상 아님이라 만료 초안 폐기가 담당) /
+    / 7차 봉합: 무폴더+전역 3트랙의 해제 교착 예외(scoutSettled에 !d.workspace — bScout은 그 창의 저장 대상
+    아님), 판독 신뢰 게이트(canonReadOk: 부재=정상·판독/파싱 실패=불신 → 불신 동안 base fill·자기치유·잠금
+    해제 전체 보류+안내 — loadBaseDirective의 침묵 기본값 축소가 '가짜 기본값'으로 사용자 값을 덮는 경로 차단).
+    한정(정직): 되돌리기·정본 fill 회복은 상태 푸시(ready·15초 폴) 수신에 의존 — 푸시 전면 두절 시 출구는
+    45초 갱신 두절 경고+창 재열기 / 8차 봉합: strict 단일 판독 readCanonFile(같은 바이트에서 신뢰+데이터 —
+    의미 손상[비객체 루트·비문자열 필드]도 불신)로 base·정찰 로더 재구성(computeBaseState — probe/로더 시차
+    제거), 판독 불신 동안 저장·복원 버튼도 차단(안내와 실동작 일치), 무폴더 창은 ④정찰 칸 표시·저장 페이로드
+    구조 제외(빈 bScout 저장이 전역 기준선을 삭제하던 기존 경로 차단), basecanon 안내는 모드/언어 hold 안내를
+    덮지 않음 / 9차 봉합: 구 런타임(helper 부재)·정찰 조립 예외=신뢰 fail-closed(3트랙이면 저장 잠김),
+    ④칸 노출을 scoutPrompt 실존에 결속, 언어 슬롯 단일 스냅샷(computeState가 1회 캡처해 계약·기본값·파일
+    경로·라벨·lang 필드 전부에 전달 — 계산 중 언어 변경의 슬롯 혼합 차단, 10차 보완: otherSlotRules까지
+    동일 스냅샷·degraded 안내에 '브릿지 업데이트 필요 가능성' 명시) / tests/verify-split.test.js 134단언
+    (fallback·독립·비물질화·음성회귀·C-C 게이트 기능 반례·status 실행·cardMachine E1~E8·baseMachine B①~B⑨·
+    computeBaseState CB①~⑤ 실행 반례[컴파일 산출물 추출·의존성 주입]·1~10차 봉합 배선).
+    설계 방향(구현됨 — Codex 설계검증 5왕복 반영):
     ⓐ 필드: 기존 `verifyMode`=CL-C 슬롯 유지(레거시 무회귀), 신규 `codexVerifyMode`=C-C 슬롯.
     ⓑ fallback: `codexVerifyMode`가 유효값이면 그것, 아니면 **normVerifyMode(o) 전체를 재사용**(원시
       o.verifyMode 폴백 금지 — 구형 `verify:true→code` 호환이 contract-lib.js:853·extension.ts:259에
@@ -368,7 +401,11 @@
        언어 슬롯은 프롬프트 시작 시 language.json 1회 스냅샷으로 읽기~쓰기 결속.
     ⑹ 전환 provenance(누가·언제·어디서→어디로·언어 슬롯) 기록 + 경고 채널(Claude 주입·대시보드).
 
-### P-10. [신규 2026-07-15] 계약 카드 미저장 초안이 모드 전환을 넘어 타 모드 슬롯에 저장됨 (기존 잠재 결함)
+### P-10. [해결됨 2026-07-16] 계약 카드 미저장 초안이 모드 전환을 넘어 타 모드 슬롯에 저장됨 (기존 잠재 결함)
+> **해결(2026-07-16)**: 검증 스위치 분리 묶음의 웹뷰 `cardMachine` 계약으로 함께 해소 — ①수동 전환은
+> dirty·저장대기 중 버튼 차단(canSwitch) ②외부 전환은 hold(카드·라벨·저장 대상=renderedMode 동결,
+> 체크박스 잠금) ③명시적 '되돌리기' 버튼 신설(초안 폐기+재적재) ④저장 대상 슬롯은 클릭 시점
+> renderedMode로 동결(beg.mode). 반례는 tests/verify-split.test.js §7(E1~E8)에 귀속.
 - 발견 경위: 검증 스위치 모드별 분리(P-9 소절 ⓕ) 설계검증 중 Codex가 확인 — 분리 신설로 생기는 문제가
   아니라 **현재 코드에 이미 존재**하는 누출.
 - 메커니즘(실측): 웹뷰 계약 카드의 초안 상태(규칙 textarea·curIM/appIM 등)가 전역 단일이고
