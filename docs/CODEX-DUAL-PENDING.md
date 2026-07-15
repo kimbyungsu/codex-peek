@@ -277,7 +277,76 @@
   - 전제 정정: 사례 ③④가 전제한 '모드별 검증 꺼짐'은 현 스키마에 없음 — verifyMode는 프로젝트×언어
     슬롯당 단일(contract-lib.js:833~857). 단일 유지 시 ③④는 '전역 off'로 합쳐져 자동 충족(off면 어느
     모드로 전환돼도 검증 안 돎). 모드별로 서로 다른 on/off를 기억하려면 스키마·UI·마이그레이션 분리가
-    필요(선행조건 아님 — 사용자 요구 확정 시에만). ★사용자 결정 대기★
+    필요(선행조건 아님 — 사용자 요구 확정 시에만).
+    **→ 결정 확정(2026-07-15 사용자): 분리한다.** 근거: 규칙이 이미 모드별 4슬롯(claude/codex/
+    codexImplementer/codexVerifier, contract-lib.js:822~827)·체크리스트 4필드(:829~832)로 별개이듯 검증
+    스위치도 모드별이 맞다 — '모드별 분리 기본' 구조 원칙과 일치. 단일 verifyMode가 오히려 스키마의 예외.
+    설계 방향(미착수 — Codex 설계검증 2왕복 반영):
+    ⓐ 필드: 기존 `verifyMode`=CL-C 슬롯 유지(레거시 무회귀), 신규 `codexVerifyMode`=C-C 슬롯.
+    ⓑ fallback: `codexVerifyMode`가 유효값이면 그것, 아니면 **normVerifyMode(o) 전체를 재사용**(원시
+      o.verifyMode 폴백 금지 — 구형 `verify:true→code` 호환이 contract-lib.js:853·extension.ts:259에
+      있어 원시 폴백이면 구계약의 C-C가 off로 회귀). 전례=codexVerifier 규칙(contract-lib.js:824~827).
+    ⓒ 마이그레이션(표현 한정): 벌크 파일 마이그레이션 불필요. 단 신규 필드 부재 동안 C-C는 CL-C 값
+      '상속 중'인 과도 상태(CL-C 변경이 C-C 실효값도 바꿈)이며, 최초 C-C 저장에서 `codexVerifyMode`를
+      물질화해야 독립. **물질화 계약 확정: 계약 파일에 '정규화된 전체 객체 재직렬화'를 금지하고 모든
+      저장을 모드별 exact patch로 바꾼다.** ⑴모드 전환 저장=`harnessMode`만 patch(신규 필드 부재 보존)
+      ⑵CL-C 일반 저장=`claude/codex/claudeInjectMode/verifyMode`(+공용 필드 허용목록)만 기록 ⑶C-C 일반
+      저장=`codexImplementer/codexVerifier/codexInjectMode/codexVerifyMode`(+공용 허용목록)만 기록 —
+      `codexVerifyMode`는 ⑶에서만 물질화. **공용 허용목록 확정: 일반 저장에 함께 실리는 공용 축은
+      `scoutMode`뿐(extension.ts:2731). `harnessMode`는 전환 patch 전용, 체크리스트 4필드는 즉시 저장
+      경로(P-8 1단) 소유, `scoutRepo/scoutGate` 등 타 작성자 소유 필드는 건드리지 않고 보존** — 허용목록을
+      구체 명시해 exact patch가 전체 쓰기로 되넓어지는 것을 차단. 근거: 모드 변경(extension.ts:2577~2580)뿐 아니라 **일반 저장도**
+      `loadContract` 결과 전체를 전개해 재저장(:2713·2726~2728, saveContract `...c` :457~465)하므로,
+      실효 fallback 값이 CL-C 저장만으로 원시 필드에 기록되는 누출이 있음(설계검증 3차 지적 1).
+      구현 수단: patchContractFields는 ws 필수(contract-lib.js:242)라 무폴더 창의 레거시 CONTRACT_FILE
+      경로(saveContract(null,...) 지원, extension.ts:457)가 회귀함 — CONTRACT_FILE fallback을 포함한
+      확장 전용 exact patch 또는 helper 확장이 필요(3차 지적 2).
+    ⓓ 소비처(런타임): C-C 게이트 codex-hook.js:96·221 / 브릿지 스냅샷 codex-bridge.js:1347(harnessMode
+      스냅샷 기준 필드 선택)+상태 출력 :1627. **verify-guard.js·contract-inject.js는 CL-C 전용이라 기존
+      verifyMode를 계속 읽음 — '전환 대상'이 아니라 codexVerifyMode가 이 경로로 새지 않는지의 음성 회귀
+      테스트 대상.**
+    ⓔ 소비처(확장): 상수 :257 / Contract 인터페이스 :302·312 / normalize :260·406·2730(+contract-lib
+      loadContract 반환 필드 :835) / 저장 :3701 /
+      저장 결과 처리 :3963 / 모드 전환 처리 :3725·3977 / segVerify 로드 :4072~4077 / 온보딩 ob3
+      :4419·4441 / :4491 / 예제 contract.example.json:12. normalize는 contract-lib+extension 양쪽 동시
+      정합(SCOUT-TRACK 교훈).
+    ⓕ ★UI 교차 오염 차단(설계 핵심)★: 웹뷰의 검증모드 초안이 전역 단일 쌍(curVM/appVM 선언
+      :3531~3532)이고 dirty면 렌더가 curVM을 동기화하지 않아(:4070~4077 `if(first||!dirty)`), 'CL-C에서
+      초안 변경(미저장)→C-C 전환→저장(:3701)'이 CL-C 초안을 C-C 슬롯에 기록하는 누출 경로가 생김.
+      **UI 계약 확정: 계약 카드가 dirty(미저장 초안 존재)이거나 계약 저장 응답 대기 중이면 모드 전환을
+      잠근다(전환 버튼 비활성+'저장하거나 되돌린 뒤 전환' 안내, ckModeLock :3727~3728과 동일 계열).**
+      선택 근거: 슬롯별 초안 보존은 상태 폭발, '전환 시 자동 확정'은 미저장 값의 무단 저장, '폐기'는
+      입력 소실 — 전환 차단이 유일하게 데이터 소실·무단 저장 없이 fail-closed이며, 같은 카드의 규칙
+      textarea·주입모드(curIM)까지 한 계약으로 커버함(동일 누출이 이미 존재 — 아래 P-10).
+      부속 계약 3건(3차 지적 3~5 수용):
+      ⑴ 외부(수동 파일 편집·향후 P-9 자동 전환) 모드 변경은 버튼 잠금으로 못 막음 — 웹뷰는 화면이
+        렌더된 모드(renderedModeC)를 별도 보관하고, 외부 모드 변경 감지 시 **`dirty || contractSavePending`
+        이면**(dirty만이 아님 — 저장 응답 대기 중 전환도 동일 결속) 기존 슬롯 화면을 hold(state push가
+        화면을 덮지 않음), 저장은 renderedModeC의 슬롯 필드만 patch(현재 harnessMode를 되돌리지 않음),
+        되돌리기는 초안 폐기 후 현재 모드 슬롯 재적재, 완료 시 hold 해제. **표시 계약: hold 중 카드
+        제목·필드 라벨은 renderedModeC(옛 슬롯) 기준으로 고정하고 '런타임은 현재 모드, 이 카드는 미저장
+        옛 모드 초안 편집 중'을 구분 표기** — 새 모드 라벨 아래 옛 값이 보이는 오도 차단.
+      ⑵ '되돌리기' 실행 수단 신설 — 현재 contractDirty는 입력 시 true(:3908)·성공 저장 시만
+        해제(:3956)라 원복 입력으로도 안 풀리고 카드 되돌리기 버튼이 없음 → 명시적 되돌리기 버튼(초안
+        폐기+적용값 재적재+dirty 해제). 이것 없이는 저장 원치 않는 사용자가 전환을 풀 수 없음.
+      ⑶ 저장 대기 권위 분리 — pendingSave는 계약·기본값·모델·타임아웃이 공유(:3953)라 다른 저장 응답이
+        잠금을 조기 해제할 수 있음 → 계약 전용 contractSavePending(또는 요청 ID 대조)으로 결속.
+    ⓖ 테스트 계약: 기존 단일 필드 가정 테스트(harness-mode.test.js:12·codex-verify-recovery.test.js:141·
+      verify-guard.test.js:32·i18n.test.js:29·withcontract.test.js:24·정찰 테스트들) 갱신 + 최소 반례 —
+      verifyMode=off/codexVerifyMode=always와 역방향, 신규 필드 부재 fallback(verify:true 포함), CL-C가
+      C-C 필드 무시, C-C가 CL-C 명시값 무시, 모드 왕복 독립 보존, 언어별 독립, 미저장 초안 상태 모드 전환
+      잠금, 저장 응답 대기 중 모드 전환 잠금, 모드 전환이 codexVerifyMode를 물질화하지 않음, CLI status의
+      현재 모드 필드 선택, **CL-C 일반 저장이 codexVerifyMode를 물질화하지 않음, 무폴더 창(CONTRACT_FILE)의
+      모드 단일 patch, 외부/자동 모드 전환 중 dirty 초안 보존(hold), 명시적 되돌리기 후 잠금 해제, 계약
+      저장과 타 저장 요청이 겹쳐도 pending 권위 불변, 저장 실패 시 dirty·초안·잠금 상태 일관성**(3차 추가),
+      **hold 중 카드 라벨·저장 대상이 renderedModeC로 일치하고 런타임 모드와 구분 표시됨, contractSavePending
+      중 외부 전환도 hold**(4차 추가).
+      **귀속: UI 상태 전이 반례는 신규 순수 상태기 테스트 파일에 배치(현 recon-ui.test.js:20은 이 전이를
+      검사하지 않음) — 규칙 textarea·curIM의 모드 교차 반례(P-10) 포함.**
+    범위: verifyMode만(claudeInjectMode/codexInjectMode는 이미 분리, scoutMode·scoutGate는 3트랙 공용
+    원칙, verifyTimeoutMin은 links.json 워크스페이스 설정이라 대상 아님 — contract-lib.js:100).
+    착수 순서 권고: 이 분리를 먼저 작은 묶음(스키마+게이트+UI+테스트)으로 완결 → P-9 자동 전환은 그 위에.
+    분리 후 자동 전환과 결합하면 사례 ①~④가 원안 의미 그대로 성립.
   - 안전 구현 6조건(검증 지적 수용 — 이것 없이 원안 그대로면 역할 충돌·검증 stale·무게이트 진행·계약
     lost-update 발생):
     ⑴ 이벤트 4분류 선행: claude-user / codex-vscode-user / codex-exec-verifier / unknown.
@@ -298,6 +367,19 @@
        RMW — 훅이 새 작성자가 되면 lost-update 가능. P-8 2단(updateContractPatch+잠금)과 합류 지점.
        언어 슬롯은 프롬프트 시작 시 language.json 1회 스냅샷으로 읽기~쓰기 결속.
     ⑹ 전환 provenance(누가·언제·어디서→어디로·언어 슬롯) 기록 + 경고 채널(Claude 주입·대시보드).
+
+### P-10. [신규 2026-07-15] 계약 카드 미저장 초안이 모드 전환을 넘어 타 모드 슬롯에 저장됨 (기존 잠재 결함)
+- 발견 경위: 검증 스위치 모드별 분리(P-9 소절 ⓕ) 설계검증 중 Codex가 확인 — 분리 신설로 생기는 문제가
+  아니라 **현재 코드에 이미 존재**하는 누출.
+- 메커니즘(실측): 웹뷰 계약 카드의 초안 상태(규칙 textarea·curIM/appIM 등)가 전역 단일이고
+  (extension.ts:3531 부근), 입력 시 contractDirty 설정(:3906~3908) 후 모드가 바뀌어도 dirty면 대상 모드
+  값으로 재적재하지 않음(:4062~4063). 모드 버튼은 체크박스만 잠금(ckModeLock :3727~3728).
+  → 'CL-C 규칙/주입모드를 미저장 편집→C-C 전환→저장'이 CL-C 초안을 C-C 구현자/검증자 규칙·codexInjectMode로
+  기록할 수 있음.
+- 해결 계약(P-9 소절 ⓕ와 공통): 계약 카드 dirty 또는 저장 응답 대기 중이면 모드 전환 잠금 — 검증
+  스위치만이 아니라 카드 전체(규칙 textarea·주입모드·검증모드)를 한 계약으로 커버.
+- 처리 위치: 검증 스위치 분리 묶음(P-9 소절)과 같은 UI 상태기 수정에서 함께 해소하는 것이 자연스러움
+  (같은 잠금 하나). 테스트 반례는 신규 순수 상태기 테스트 파일에 귀속.
 
 ## 처리 원칙
 - 위 항목들은 이원화 작업 이어서 할 때 각각 [설계→구현→테스트→Codex 검증→커밋] 루프로 처리.
