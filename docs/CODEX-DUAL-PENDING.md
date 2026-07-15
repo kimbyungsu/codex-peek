@@ -263,6 +263,41 @@
   관계(그 이전 구간을 커버) 명시 ③정상 C-C 성공 Stop의 rejudging→done 종결 전이 계약 검토
   ④'모드=C-C인데 구현 heartbeat 없음+Claude 활동 감지' 어긋남 힌트. 최소=①+②(①도 표시 phase 전이를
   추가하는 것이긴 하나, 검증 게이트·Stop 전이 계약은 무변경이라는 뜻. 단 ③은 별도 항목으로 남음).
+- **사용자 제안 검토(2026-07-15, Codex 2왕복 — 방향 채택·원안 그대로 구현은 불가 판정)**:
+  제안 = "기준점은 사용자가 어디(Claude/Codex)에서 질문을 시작했는가 + 그 모드의 검증 꺼짐 여부.
+  옵션 모드와 실제 질문 호스트가 어긋나면 경고 후 해당 호스트의 모드로 강제 전환"(4사례).
+  - 채택(방향): 모드 불일치 계열에 한해 근원해결 방향 맞음 — 표시 땜빵이 아니라 원인(모드≠실호스트)을
+    제거하며, 검증이 켜진 경우 게이트·표시·proof 귀속을 원인 층에서 복원. contract-inject(:64)·
+    codex-hook(:248)의 '즉시 종료'를 '판별→안전 전환→정상 진행'으로 바꾸는 위치도 실현 가능.
+  - 한정 1: '반영중' 잔존 전체의 근원해결은 아님 — 정상 C-C 성공 Stop의 rejudging 종결(위 보정 ①,
+    후보 ③)은 불일치 없이 발생하므로 독립 수정 필수. incomplete 경고 분리 보존도 그대로 필요.
+  - 한정 2: 후보 ①②④는 '대체'가 아니라 '보완재로 축소 유지' — 자동 전환이 보류·실패하는 경로와 수동
+    대시보드 전환이 남는 한 provenance·불일치 표시·경고는 여전히 복구/진단 수단(제안의 '경고 알림'은
+    ④의 구체화).
+  - 전제 정정: 사례 ③④가 전제한 '모드별 검증 꺼짐'은 현 스키마에 없음 — verifyMode는 프로젝트×언어
+    슬롯당 단일(contract-lib.js:833~857). 단일 유지 시 ③④는 '전역 off'로 합쳐져 자동 충족(off면 어느
+    모드로 전환돼도 검증 안 돎). 모드별로 서로 다른 on/off를 기억하려면 스키마·UI·마이그레이션 분리가
+    필요(선행조건 아님 — 사용자 요구 확정 시에만). ★사용자 결정 대기★
+  - 안전 구현 6조건(검증 지적 수용 — 이것 없이 원안 그대로면 역할 충돌·검증 stale·무게이트 진행·계약
+    lost-update 발생):
+    ⑴ 이벤트 4분류 선행: claude-user / codex-vscode-user / codex-exec-verifier / unknown.
+       판별기는 이미 존재 — isVscodeUserSession(codex-hook.js:73~77, session_meta source="vscode"+
+       thread_source="user"). 검증자(codex exec resume 구동, codex-bridge.js:1371)도 SessionStart·
+       UserPromptSubmit 훅을 실제 발화시킴이 실측 확인됨(훅 trace) — sid==links.codexSession 정적 비교가
+       아니라 위 불변 판별기가 주 기준.
+    ⑵ 역할 충돌 절차: CL-C 연결 검증자 세션에서 사용자가 직접 질문해도 그 세션을 구현자로 못 바꿈
+       (registerCodexImplementer의 verifier-conflict 거부 — 함수 시작 contract-lib.js:449, 실제 판정
+       :470) — 사례 ②에는 '다른
+       Codex 대화를 구현자로 선택 또는 검증자 재배치' 절차 필요.
+    ⑶ 상대 구현 턴 + in-flight 검증 job(ask-active·내구 job) 확인 — 진행 중 전환은 stale die
+       (codex-bridge.js:131)를 유발하므로 금지. 단 Claude active는 프롬프트 앵커라 턴 종료 신호가 아님
+       (양방향 활성 판정 비대칭 — 설계에서 해소 필요).
+    ⑷ 전환 불가 시 fail-closed: '보류+경고만'은 mismatched 턴이 무게이트로 진행되는 구멍 — 전환 못 하면
+       그 턴 자체를 차단하고 재시도 유도.
+    ⑸ 계약 쓰기 잠금/CAS: patchContractFields(contract-lib.js:240)·대시보드 saveContract 모두 무잠금
+       RMW — 훅이 새 작성자가 되면 lost-update 가능. P-8 2단(updateContractPatch+잠금)과 합류 지점.
+       언어 슬롯은 프롬프트 시작 시 language.json 1회 스냅샷으로 읽기~쓰기 결속.
+    ⑹ 전환 provenance(누가·언제·어디서→어디로·언어 슬롯) 기록 + 경고 채널(Claude 주입·대시보드).
 
 ## 처리 원칙
 - 위 항목들은 이원화 작업 이어서 할 때 각각 [설계→구현→테스트→Codex 검증→커밋] 루프로 처리.
