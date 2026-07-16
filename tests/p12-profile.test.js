@@ -119,5 +119,18 @@ ok(/이후 시작되는 검증\(ask\)부터 즉시 적용/.test(ext) && /한 턴
 ok(/does not guarantee absence of all defects/.test(ext) && /no mechanical round-trip cap/.test(ext), "정직 라벨 en 쌍");
 ok(/appVP = \(ccMode \? d\.contract\.codexVerifyProfile : d\.contract\.verifyProfile\) \|\| "integrity"/.test(ext), "상태 채움 — 모드별 슬롯·부재=integrity");
 
+console.log("[6] 기본 원칙 카드 — 실효 프로필의 '실제 주입 문안' 표시(사용자 지시 07-17)");
+ok(/profile: string \}; \/\/ profile: 표시 중 문안의 실효 프로필/.test(ext) && /shownProfile = "core";/.test(ext), "computeBaseState — 실효 core면 core 캐논을 표시용으로 제공(profile 필드)");
+ok(/Array\.isArray\(lib\.VERIFY_PROFILES\) && typeof lib\.loadBaseDirective === "function"/.test(ext), "구버전 판별 — VERIFY_PROFILES capability 확인(옛 로더가 2번째 인자를 무시하고 integrity를 core로 오표시하는 반례 차단)");
+ok(/readOk: true \}/.test(ext) && /integrity 오버라이드 파일 손상과 무관/.test(ext), "core 캐논 신뢰=코드 내장 — integrity 오버라이드 손상과 분리(readOk 결합 해제)");
+ok(/var baseCoreView = false;/.test(ext) && /e\.readOnly = on \|\| baseCoreView;/.test(ext), "core 표시 중 3칸 읽기 전용(정찰 ④칸은 무관)");
+ok(ext.split("baseLocked: baseCoreView").length === 3, "저장·복원 전송에 baseLocked 스코핑 — 버튼은 살아 있고 ④ 정찰 칸 통로 유지(전면 잠금 반례 봉합)");
+ok(/m\.baseLocked === true \? true : bridgeLib\(\)\?\.saveBaseDirective/.test(ext) && /m\.baseLocked === true \? true : bridgeLib\(\)\?\.resetBaseDirective/.test(ext), "호스트 — core 중 3칸 저장·복원 생략(무결성 오버라이드 불변)·정찰만 처리");
+ok(/baseDraftStash = \{ v: /.test(ext) && /baseDirty\.verify = baseDraftStash\.d\.verify;/.test(ext), "무결성 미저장 초안 — core 진입 시 보관·복귀 시 복원(소실 금지)");
+ok(ext.split("|| baseDraftStash").length === 5, "stash가 dirty 합성 4결선(호스트 보고·언어 버튼 가드·langHold·외부 언어 변경 holdB)에 편입 — 어느 경로의 웹뷰 재생성도 보관 초안을 파괴 못 함");
+ok(/baseDirty\.scout \|\| baseDraftStash \|\|[\s\S]{0,40}document\.activeElement === \$\("bVerify"\)/.test(ext), "외부 언어 변경 상태 푸시(holdB)도 stash 유지(4번째 결선 — 3차 blocker)");
+ok(/baseDraftStash = null; \/\/ P-12: '초안 폐기'는 core 표시 중 보관분\(stash\)도 폐기/.test(ext), "되돌리기=stash도 폐기(복귀 시 부활 방지)");
+ok(/핵심 프로필 문안 표시 중\(코드 고정·읽기 전용/.test(ext) && /showing Core profile text/.test(ext), "배지 한/영 — 표시 중 문안의 정체 고지");
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

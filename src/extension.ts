@@ -152,7 +152,7 @@ interface BridgeState {
   contract: Contract;
   lang: Lang;              // 전역 언어(ko/en)
   otherSlotRules: boolean; // 반대 언어 슬롯에만 규칙 있음(빈칸 안내)
-  baseDirective: { verifyBaseline: string; transmit: string; rejudge: string; overridden: boolean };
+  baseDirective: { verifyBaseline: string; transmit: string; rejudge: string; overridden: boolean; profile: string }; // profile: 표시 중 문안의 실효 프로필(P-12 — 'core'면 코드 고정 문안)
   baseReadOk: boolean; // 기본 원칙(+3트랙 정찰) 오버라이드 파일 판독 신뢰(부재=정상) — false면 웹뷰가 canonical fill·잠금 해제 보류(7차 지적 2)
   scoutPrompt: { baseline: string; overridden: boolean; directive: string; notes: string[]; version: string } | null; // §6-11 — 3트랙에서만(null=2트랙/판독 불가)
   baseAvailable: boolean;
@@ -954,7 +954,27 @@ function loadBaseDirectiveSafe(lang?: Lang): { verifyBaseline: string; transmit:
 // [8차 지적 4] base 축 상태(기본 원칙·정찰 태도층·판독 신뢰)를 한 곳에서 조립 — strict 단일 판독(readCanonFile)의
 // 신뢰와 데이터가 '같은 바이트'에서 나와 같은 푸시에 결속된다(probe/로더 분리 판독의 시차 공백 제거).
 function computeBaseState(ws: string | null, contract: Contract, lang: Lang): { baseDirective: BridgeState["baseDirective"]; baseReadOk: boolean; scoutPrompt: BridgeState["scoutPrompt"] } {
-  const b = loadBaseDirectiveSafe(lang);
+  let b = loadBaseDirectiveSafe(lang);
+  // P-12(사용자 지시 07-17): 카드는 '실제 주입되는 문안'을 보여준다 — 실효 프로필이 core면 core 캐논을
+  // 표시(읽기 전용·편집은 무결성 문안 전용). 구버전 런타임(loadBaseDirective가 profile 미지원)이면
+  // integrity 표시 유지(정직 저하 — 오작동 아님).
+  let shownProfile = "integrity";
+  const effP = contract.harnessMode === "codex-codex" ? contract.codexVerifyProfile : contract.verifyProfile;
+  if (effP === "core") {
+    try {
+      const lib = bridgeLib() as any;
+      // capability 확인(구버전 loadBaseDirective(lang)는 2번째 인자를 조용히 무시하고 integrity 문안을
+      // 돌려주므로, 프로필 지원 여부를 VERIFY_PROFILES 존재로 명시 판별 — 없으면 integrity 표시 유지).
+      const supportsProfile = lib && Array.isArray(lib.VERIFY_PROFILES) && typeof lib.loadBaseDirective === "function";
+      const c = supportsProfile ? lib.loadBaseDirective(lang, "core") : null;
+      if (c && typeof c.verifyBaseline === "string" && c.verifyBaseline.trim()) {
+        // readOk=true: core 캐논은 코드 내장이라 integrity 오버라이드 파일 손상과 무관(신뢰 축 분리 —
+        // 손상 경고는 integrity 표시로 돌아오면 다시 보인다).
+        b = { verifyBaseline: c.verifyBaseline, transmit: String(c.transmit || ""), rejudge: String(c.rejudge || ""), overridden: false, readOk: true };
+        shownProfile = "core";
+      }
+    } catch { /* 구런타임 폴백 — integrity 문안 표시 */ }
+  }
   let scoutOk = true;
   let sp: BridgeState["scoutPrompt"] = null;
   try {
@@ -978,7 +998,7 @@ function computeBaseState(ws: string | null, contract: Contract, lang: Lang): { 
   // 정찰 파일 신뢰는 3트랙+ws일 때만 base 신뢰에 합성(2트랙·무폴더에선 bScout이 표시·저장 대상 아님)
   const scoutRelevant = !!ws && contract.scoutMode === "on";
   return {
-    baseDirective: { verifyBaseline: b.verifyBaseline, transmit: b.transmit, rejudge: b.rejudge, overridden: b.overridden },
+    baseDirective: { verifyBaseline: b.verifyBaseline, transmit: b.transmit, rejudge: b.rejudge, overridden: b.overridden, profile: shownProfile },
     baseReadOk: b.readOk && (!scoutRelevant || scoutOk),
     scoutPrompt: sp,
   };
@@ -2997,7 +3017,8 @@ class Dashboard {
           try {
             // lang = 보던 슬롯(계약 저장과 동일 원리). 구 런타임 lib은 2번째 인자를 무시(=기존 동작·무해).
             const slotLang = m.lang === "ko" || m.lang === "en" ? m.lang : undefined;
-            ok = bridgeLib()?.saveBaseDirective?.({ verifyBaseline: m.verifyBaseline, transmit: m.transmit, rejudge: m.rejudge }, slotLang) === true;
+            // P-12 baseLocked: core 표시 중 저장은 3칸(코드 고정 문안 — 저장 대상 아님)을 제외하고 ④ 정찰만.
+            ok = m.baseLocked === true ? true : bridgeLib()?.saveBaseDirective?.({ verifyBaseline: m.verifyBaseline, transmit: m.transmit, rejudge: m.rejudge }, slotLang) === true;
             if (ok && typeof m.scoutBaseline === "string") ok = bridgeLib()?.saveScoutBaseline?.(m.scoutBaseline, slotLang) === true; // ④ 정찰 칸(같은 패널 한 버튼 — 사용자 단순화 요청 2026-07-09)
           } catch {
             ok = false;
@@ -3028,7 +3049,7 @@ class Dashboard {
           try {
             // lang = 보던 슬롯 — 그 언어의 오버라이드만 기본값 복원(다른 언어 오버라이드 보존).
             const slotLang = m.lang === "ko" || m.lang === "en" ? m.lang : undefined;
-            ok = bridgeLib()?.resetBaseDirective?.(slotLang) === true;
+            ok = m.baseLocked === true ? true : bridgeLib()?.resetBaseDirective?.(slotLang) === true; // P-12: core 중 복원은 3칸 제외(무결성 오버라이드 보존)
             // ④ 정찰 칸은 '화면에 보였을 때만' 함께 복원 — 2트랙에선 안 보이는 정찰 설정을 조용히 지우지 않는다(Codex 반례 2026-07-09)
             if (ok && m.scout === true) ok = bridgeLib()?.resetScoutBaseline?.(slotLang) !== false;
           } catch {
@@ -3890,7 +3911,7 @@ class Dashboard {
   // 15분 백스톱은 '살아있는 웹뷰의 장시간 편집'이 아니라 '죽은 웹뷰'(초안도 이미 소멸)만 fail-open으로 놓는다.
   var lastReportedDirty = null;
   function reportCardDirty(hb){
-    var v = !!(cardDirtyNow() || cardM.saving() || baseM.locked() || baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout);
+    var v = !!(cardDirtyNow() || cardM.saving() || baseM.locked() || baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout || baseDraftStash); // stash=core 표시 중 보관된 무결성 초안 — 소실 방지 결속(P-12)
     if (v === lastReportedDirty && !(hb && v)) return;
     lastReportedDirty = v;
     try { vscode.postMessage({ type: "cardDirtyState", dirty: v }); } catch(e){ /* 유실 시 심박·백스톱이 회복 */ }
@@ -3958,6 +3979,7 @@ class Dashboard {
     // 기본 원칙 되돌리기(구현검증 2차 지적 3): baseDirty는 저장 성공에만 풀려 '편집 취소' 수단이 없었고,
     // 언어 전환 잠금 안내('저장 또는 되돌리기')가 기본 원칙엔 거짓이 됐다 — 초안 폐기+적용값 재적재로 신설.
     if (baseM.saving()) { cardNotice(T("기본 원칙 저장 응답을 기다리는 중이에요 — 잠시 후 다시 시도하세요.","A stage-baseline save is still in flight — try again shortly.")); return; } // 응답 대기만 잠금 — refillWait(정본 확인 대기)엔 되돌리기가 유일 복구 수단이라 허용(6차 지적 1)
+    baseDraftStash = null; // P-12: '초안 폐기'는 core 표시 중 보관분(stash)도 폐기 — 복귀 시 부활 방지
     baseDirty = {};
     try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch(e){ /* 무해 */ }
     hideCardNotice();
@@ -3991,8 +4013,14 @@ class Dashboard {
   // [P9V-BASE-END]
   var baseM = baseMachine();
   var baseSaveTimer = null;
+  // P-12: 핵심 프로필 표시 중 여부 — 카드가 core 캐논(실제 주입 문안)을 읽기 전용으로 보여주는 상태.
+  // 편집·저장·복원은 무결성 문안 전용이므로 core 표시 중엔 3칸 읽기 전용+버튼 잠금(정찰 ④칸은 프로필 무관).
+  var baseCoreView = false;
+  var baseDraftStash = null; // core 표시 중 보관되는 무결성 미저장 초안(복귀 시 복원)
   function baseInputLock(on){
-    ["bVerify","bTransmit","bRejudge","bScout"].forEach(function(id){ var e=$(id); if(e) e.readOnly = on; });
+    ["bVerify","bTransmit","bRejudge"].forEach(function(id){ var e=$(id); if(e) e.readOnly = on || baseCoreView; });
+    var sc=$("bScout"); if(sc) sc.readOnly = on;
+    // 버튼은 core 중에도 살아 있다 — 저장·복원이 ④ 정찰 칸에 계속 필요(핵심 중엔 3칸만 저장 대상에서 제외).
     ["saveB","resetB"].forEach(function(id){ var e=$(id); if(e) e.disabled = on; });
     var rv=$("revertB"); if(rv) rv.disabled = baseM.saving(); // 되돌리기는 응답 대기 중에만 잠금 — refillWait의 복구 수단(6차 지적 1)
   }
@@ -4016,11 +4044,14 @@ class Dashboard {
   $("saveB").addEventListener("click", () => {
     var rid = baseBegin(null, "save"); if (!rid) return;
     var spVisible = $("bScoutWrap") && $("bScoutWrap").style.display !== "none";
-    vscode.postMessage({type:"saveBase", reqId: rid, lang: renderedLangB || undefined, verifyBaseline:$("bVerify").value, transmit:$("bTransmit").value, rejudge:$("bRejudge").value, scoutBaseline: (spVisible && $("bScout")) ? $("bScout").value : null});
+    // P-12: core 표시 중엔 3칸(코드 고정)을 저장 대상에서 제외(baseLocked) — ④ 정찰 칸 저장 통로는 유지.
+    if (baseCoreView) cardNotice(T("핵심 프로필 문안(3칸)은 코드 고정이라 저장에서 제외됐어요 — 정찰 칸만 저장됩니다. 3칸 편집은 무결성 프로필에서 하세요.","The core profile text (3 boxes) is code-fixed and excluded from this save — only the scout box is saved. Edit the 3 boxes under the Integrity profile."));
+    vscode.postMessage({type:"saveBase", reqId: rid, lang: renderedLangB || undefined, baseLocked: baseCoreView, verifyBaseline:$("bVerify").value, transmit:$("bTransmit").value, rejudge:$("bRejudge").value, scoutBaseline: (spVisible && $("bScout")) ? $("bScout").value : null});
   });
   $("resetB").addEventListener("click", () => {
     var rid = baseBegin(T("기본값으로 복원됨 ✓","Restored to defaults ✓"), "reset"); if (!rid) return;
-    vscode.postMessage({type:"resetBase", reqId: rid, lang: renderedLangB || undefined, scout: !!($("bScoutWrap") && $("bScoutWrap").style.display !== "none")});
+    if (baseCoreView) cardNotice(T("핵심 프로필 문안(3칸)은 코드 고정이라 복원 대상이 아니에요 — 정찰 칸만 복원됩니다.","The core profile text (3 boxes) is code-fixed — only the scout box is restored."));
+    vscode.postMessage({type:"resetBase", reqId: rid, lang: renderedLangB || undefined, baseLocked: baseCoreView, scout: !!($("bScoutWrap") && $("bScoutWrap").style.display !== "none")});
   });
   // 탭 토글(현황 / 검증 통계) — 클릭한 버튼·패널만 active
   document.querySelectorAll(".tabbtn").forEach(function(b){
@@ -4039,7 +4070,7 @@ class Dashboard {
   // 전환 자체를 차단(모드 전환 잠금과 동일 fail-closed 계약 — 저장/되돌리기 후 전환).
   document.querySelectorAll(".langbtn").forEach(function(b){
     b.addEventListener("click", function(){
-      var baseDirtyAny = !!(baseM.locked() || baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout);
+      var baseDirtyAny = !!(baseM.locked() || baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout || baseDraftStash); // stash 포함(P-12 — 언어 전환이 웹뷰 메모리의 보관 초안을 파괴하는 경로 차단)
       if (cardDirtyNow() || cardM.saving() || baseDirtyAny) {
         cardNotice(T("저장하지 않은 변경(또는 저장 대기)이 있어요 — 언어를 바꾸면 편집 중인 내용이 사라집니다. '저장' 또는 '되돌리기' 후에 전환하세요.","There are unsaved edits (or a save in flight) — switching language would discard them. Save or Revert first."));
         return;
@@ -4440,7 +4471,7 @@ class Dashboard {
       // 보류 안내: 전역 언어 ≠ 렌더 언어인데 이 패널에 미저장 초안/저장대기가 있으면 이유를 표기(모드 hold 안내가
       // 이미 떠 있으면 그쪽이 우선 — 같은 자리라 겹침 방지). 해소(저장·되돌리기→재생성)는 새 문서라 자동 소멸.
       if (d.lang !== uiLangNow && cardNoticeKind !== "hold") {
-        var langHoldNow = !!(cardDirtyNow() || cardM.saving() || baseM.locked() || baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout); // baseM.locked 포함(5차 지적 2 — 초안 없는 복원 대기도 결속과 동일 조건)
+        var langHoldNow = !!(cardDirtyNow() || cardM.saving() || baseM.locked() || baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout || baseDraftStash); // baseM.locked 포함(5차 지적 2)·stash 포함(P-12)
         if (langHoldNow) cardNotice(T("전역 언어가 바뀌었지만, 이 패널은 저장 안 된 편집 때문에 기존 언어 화면을 유지 중이에요 — '저장' 또는 '되돌리기' 후에 새 언어로 전환됩니다.","The global language changed, but this panel keeps its current language because of unsaved edits — Save or Revert to switch."), "langhold");
         else if (cardNoticeKind === "langhold") hideCardNotice();
       } else if (cardNoticeKind === "langhold" && d.lang === uiLangNow) hideCardNotice();
@@ -4884,14 +4915,28 @@ class Dashboard {
     // 소비될 때까지는 base 값이 새 슬롯으로 덮이지 않는다(저장 자체는 요청 시점 renderedLangB 슬롯에 기록됨).
     // 정직 한정(6차 지적 5): 응답 소비 후(refillWait)의 재적재는 '그 시점 전역 언어' 슬롯 기준 — dirty가 이미
     // 해제됐으므로 호스트의 언어 HTML 재생성 보류도 함께 풀려 다음 갱신에서 정적 라벨이 따라온다(과도 상태 1푸시).
-    const holdB = langChangedB && (baseM.saving() || baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout ||
-      document.activeElement === $("bVerify") || document.activeElement === $("bTransmit") || document.activeElement === $("bRejudge") || document.activeElement === $("bScout"));
+    const holdB = langChangedB && (baseM.saving() || baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout || baseDraftStash ||
+      document.activeElement === $("bVerify") || document.activeElement === $("bTransmit") || document.activeElement === $("bRejudge") || document.activeElement === $("bScout")); // stash 포함(P-12 4결선 — 외부 언어 변경 푸시에서도 core 보관 초안 유지)
     if (d.baseDirective && !holdB && baseCanon){
+      var wasCoreView = baseCoreView;
+      baseCoreView = d.baseDirective.profile === "core";
+      if (!wasCoreView && baseCoreView && (baseDirty.verify || baseDirty.transmit || baseDirty.rejudge)) {
+        // core 진입: 무결성 미저장 초안을 보관(소실 금지 — 구현검증 반례) → integrity 복귀 시 복원.
+        baseDraftStash = { v: $("bVerify").value, t: $("bTransmit").value, r: $("bRejudge").value, d: { verify: baseDirty.verify, transmit: baseDirty.transmit, rejudge: baseDirty.rejudge } };
+      }
+      if (baseCoreView) { baseDirty.verify = false; baseDirty.transmit = false; baseDirty.rejudge = false; } // core 표시=읽기 전용(초안은 stash에 보존)
+      if (wasCoreView && !baseCoreView && baseDraftStash) {
+        // integrity 복귀: 초안·dirty 복원(아래 조건부 채움이 dirty 칸을 건너뛰어 초안 유지).
+        if ($("bVerify")) $("bVerify").value = baseDraftStash.v; if ($("bTransmit")) $("bTransmit").value = baseDraftStash.t; if ($("bRejudge")) $("bRejudge").value = baseDraftStash.r;
+        baseDirty.verify = baseDraftStash.d.verify; baseDirty.transmit = baseDraftStash.d.transmit; baseDirty.rejudge = baseDraftStash.d.rejudge;
+        baseDraftStash = null;
+      }
+      if (wasCoreView !== baseCoreView) baseInputLock(baseM.saving()); // 프로필 전환 반영(잠금 상태 재계산)
       if (d.lang) renderedLangB = d.lang;
-      if (document.activeElement !== $("bVerify") && !baseDirty.verify) $("bVerify").value = d.baseDirective.verifyBaseline||"";
-      if (document.activeElement !== $("bTransmit") && !baseDirty.transmit) $("bTransmit").value = d.baseDirective.transmit||"";
-      if (document.activeElement !== $("bRejudge") && !baseDirty.rejudge) $("bRejudge").value = d.baseDirective.rejudge||"";
-      const ov=$("baseOv"); if(ov) ov.textContent = d.baseDirective.overridden ? T("· (수정됨)","· (modified)") : T("· (기본값)","· (defaults)");
+      if (baseCoreView || (document.activeElement !== $("bVerify") && !baseDirty.verify)) $("bVerify").value = d.baseDirective.verifyBaseline||"";
+      if (baseCoreView || (document.activeElement !== $("bTransmit") && !baseDirty.transmit)) $("bTransmit").value = d.baseDirective.transmit||"";
+      if (baseCoreView || (document.activeElement !== $("bRejudge") && !baseDirty.rejudge)) $("bRejudge").value = d.baseDirective.rejudge||"";
+      const ov=$("baseOv"); if(ov) ov.textContent = baseCoreView ? T("· 핵심 프로필 문안 표시 중(코드 고정·읽기 전용 — 편집·복원은 무결성 문안에 적용)","· showing Core profile text (code-fixed · read-only — edits/restore apply to the Integrity text)") : (d.baseDirective.overridden ? T("· (수정됨)","· (modified)") : T("· (기본값)","· (defaults)"));
     }
     // ④ 정찰 칸 — 3트랙(저장된 트랙)일 때만 등장. 사용자 단순화 요청(2026-07-09): 트랙에 따라 이 패널이 늘어난다.
     safe(function(){
