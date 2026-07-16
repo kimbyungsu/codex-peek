@@ -258,11 +258,83 @@
   (프로토콜은 수동 준수·검증은 전부 수행됨), proof는 잔재 구현 세션(019f5eac) 키로 적립됨 —
   **결과물 손상은 확인되지 않았으나 강제 게이트 보장은 상실됐고 stale 구현 세션에 proof 상태가 기록됐다**
   (하네스 강제 공백+표시 고아+proof 오귀속의 삼중 증상. "기능 피해 없음"은 과장이라 이 표현으로 정정).
-- 수정 후보(미착수): ①모드 전환(setHarnessMode) 시 phase 초기화 — 단 incomplete 경고는 보존 정책 분리
+- **★자동 전환 본체 구현(2026-07-16)★ — 질문 시작 호스트 기준 강제 전환(사례 ①~④ 원안 성립)**:
+  - Claude 측(contract-inject.js): 설정=C-C+Claude 질문 → 가드 통과 시 CL-C로 patch(provenance
+    `modeSwitch{by,from,to,at,session,lang}`)+최상단 전환 고지 주입+정상 CL-C 흐름 재개(phase·게이트 복원).
+    가드 걸리면 그 프롬프트 자체를 block(fail-closed — 경고만 하고 진행하면 무게이트 턴).
+  - Codex 측(codex-hook.js autoSwitchToCodex): 설정=CL-C+Codex 질문 → 4분류(classifyPromptSource) 중
+    vscode-user만 자격 — exec/cli·vscode 비사용자 스레드=침묵(확정 비대상), ★unknown(판독 불가·누락)=차단
+    (fail-closed — 3차 확정), 검증자 역할충돌 사전 차단(linkedVerifier — links 판독 실패=충돌 취급
+    fail-closed), 가드 통과 시 C-C patch+고지+구현자 고정.
+  - 공통 가드(contract-lib): `activeAskJobFor`(진행 중 내구 job=전환 금지 — stale-die 보호. 마감 1분+ 경과
+    잔재·손상 job은 차단 근거 아님[P-4 몫]) / `phaseBusy`(상대 턴 개연성 — 25분 신선창, 같은 세션 흔적 제외
+    → 원사건 '자기 rejudging' 자가 복구 유지) / 계약 손상=contractReadState 가드로 프롬프트 block
+    (contract-inject에 신설 — codex-hook과 대칭. 기존엔 손상 계약이 기본값 축소로 조용히 무게이트).
+  - 언어 슬롯: 두 훅 모두 loadLang() 1회 스냅샷을 판독·patch에 결속(설계 ⓖ).
+  - 구현검증 1차(실패 6건) 반영: ⑴직접 ask(ask-active)도 활성 가드에 포함(부모/자식 생존 시만 — abandoned는
+    전환 비차단·재전송 차단은 askActiveGuard 몫)+phase 세트에 codex-verifying ⑵★성공 Stop=done 종결(후보③
+    이번에 구현 — rejudging 잔존이 '반영중' 고아+정상 완료 후 25분 오차단의 공통 원인이었음. 회수~Stop 사이
+    '반영중'은 cmdAsk가 유지) ⑶Codex 측 fail-closed 봉합: 손상 계약+vscode-user 질문 block(exec 프롬프트는
+    침묵 유지 — 손상 복구 중 진행 검증 보호. 3차에서 unknown도 차단으로 확장)·전환 순서는 2~3차에서 '패치
+    先→고정 後→실패 시 원복(원복 시점 로컬 CAS 판정 — 8차 정본)'으로 최종 확정(아래 2·3차 반영 참조 — 이 문단의 순서 서술은
+    그쪽이 정본) ⑷계약 patch에 파일별 잠금(<계약파일>.lock) — 브릿지
+    withFileLockStrict+확장 withContractLockExt 동형 프로토콜(잠금 실패=기록 거부, P-8 2단의 잠금 축 부분
+    선반영) ⑸손상 판정도 lang 스냅샷 결속(contractReadState(ws,lang) 양 훅) ⑹대시보드 경고 채널 —
+    modeSwitch 통과(표시 전용·저장 페이로드 미포함)+모드 버튼 아래 신선(30분) 자동 전환 고지.
+  - 구현검증 2차(실패 5건) 반영: ⑴계약 작성자 전수 잠금 참여 — 확장 setScoutTargetFromUi를 patchContractExt
+    경유로(무잠금 keep-병합·손상 {} 축소 덮어쓰기 제거), scripts/scope-target.js·scope-gate.js를
+    withFileLockStrict+fail-closed RMW로 교체 ⑵세션 출처 4분류 명시(classifyPromptSource) — vscode-user만
+    자격, exec/other 침묵(진행 검증 보호), ★unknown(rollout 미생성·판독 불가·id 불일치)=차단★(침묵으로
+    합치면 rollout 생성 경합 시 실사용자 질문이 무게이트 우회) ⑶Codex 전환 순서 확정: 패치 先→고정 後→고정
+    실패 시 패치 원복(reverted provenance) — pin 先은 links 세대(implementerRevision·roleRevision)가 먼저
+    전진해 비 inert 잔재(configWs 앵커·기존 구현 밀어냄) 실측. (원복 방식의 정본은 아래 4차 ⑴ — '계약 1필드
+    결정론 원복'이 아니라 역할 세대 CAS로 최종 확정) ⑷고정 결과를
+    onPrompt에 전달·재사용 — 이중 등록의 세대 이중 전진(같은 sid도 revision+1 실측)과 사이 raced 과도 상태
+    제거 ⑸잠금 복구 표면 ⑹복귀 후 낡은 안내 — 대시보드 자동 전환 고지는 to===현재 모드·비원복일 때만 표시.
+  - 구현검증 4차(실패 3건) 반영: ⑴★원복=역할 세대 CAS★(revertSwitchIfRoleUnchanged) — '실패 사유' 분기만으론
+    실패 반환~원복 사이 links 복구+타 세션 등록 간극이 남는다는 실행 반증 수용. 원복 '시점'에 role lock 아래
+    links를 1회 읽어 전환 시작 스냅샷(session·revision)에서 전진이 없을 때만 원복. 전진=새 C-C 턴 관측(모드
+    유지+안내), 판독 불가·의미 손상=불확실(원복 보류·모드 유지 — 상대 Stop은 role 판독 fail-closed가 차단).
+    즉 '그 외 pin 실패'도 무조건 원복이 아니라 ★원복 시점 CAS(로컬 세대 불변+links 신뢰 판독)일 때만★ 실제
+    원복(6차 정합). 등록과 같은 role lock에서 직렬화되므로 재확인~원복 사이 등록 불가(원자성).
+    raced·role-lock-unavailable은 원복 후보 자체가 아님(★8차에서 폐기 — raced는 전역 드리프트가 섞여 CAS가 원복 시점에 로컬 세대·eventAt로 판정하는 것으로 대체, role-lock-unavailable만 무조건 보류★) ⑵pinImplementer가 withRoleLock 예외(잠금 실패)를 role-lock-unavailable 사유로 흡수 —
+    예외가 최외곽 방벽에 삼켜져 프롬프트가 차단 없이 통과하던 fail-open 봉합(실행 반증 수용) ⑶잠금 진단
+    5상태(alive/dead[ESRCH 확정]/owner-unverified[EPERM 등]/invalid/unreadable) — 삭제 안내는 dead에만
+    (EPERM을 사망으로 합치면 활성 잠금 삭제 오도 — 실행 반증 수용). 획득기(withFileLockStrict·
+    withContractLockExt)도 ESRCH만 사망 확정, 그 외 예외는 재시도.
+  - 구현검증 5차(실패 4건) 반영: ⑴★스냅샷을 패치 前으로 이동★ — 패치 후 스냅샷이면 '패치~스냅샷' 사이에
+    등록한 B가 스냅샷에 반영돼 원복 CAS가 오판(B 등록→A verifier-conflict→원복→B 게이트 해제 실행 반증
+    수용). 원복 비교에 전역 roleRevision 차이도 추가(스냅샷 이후 모든 역할 변경을 전진으로 관측 — 과차단
+    쪽으로 보수) ⑵B15 실행 반례의 스냅샷 주입이 이제 운영 순서(패치 전 확보)와 동형 + 순서 소스 계약 고정
+    ⑶links 의미 검증 공용기 validLinksShape 신설(P-1 register 검사와 동형) — readImplementerRecordLocked
+    (Stop 판독)와 원복 판독 양쪽 결속: 의미 손상(null·배열·원시·{byWorkspace:[]})=links-corrupt/원복 보류
+    (종전엔 빈 상태로 축소돼 손상 중 원복+Stop 무음 통과 — 실행 반증 수용) ⑷대칭 경합 잔존 문서화: 자동
+    전환이 최종 확인에서 실패(그 사이 반대 전환으로 모드가 CL-C로 뒤집힘)하면 이 프롬프트가 남긴 구현자
+    기록은 links에 잔존 — 형태는 수동 전환의 보존 의미론과 같지만 원인이 다르며(진행 안 된 자동 전환의
+    부산물) configWs 앵커로 소비될 수 있음. 다음 정상 고정이 자연 교체(별도 정리 없음 — 잔여 한계 ⑥).
+  - 잔여 한계(정직): ①Claude 턴 감지는 phase 휴리스틱(25분) — 25분 초과 장기 Claude 턴 중 Codex 질문 시작은
+    차단 못 함(경고 고지는 Codex 쪽에 주입됨) ②Codex가 UserPromptSubmit block을 무시하면 차단이 무동작으로
+    강등(현행과 동일 — 악화 없음) ③가드 검사→patch→phase 기록은 비원자(ms 창 — phase는 표시 계층이라 게이트
+    미소비, 다음 기록자가 정정) ④patch 성공~pin 사이에 다른 대화가 C-C를 관측해 구현 턴을 시작할 수 있음 —
+    이때 우리 pin은 raced로 지고, 원복 CAS가 로컬 세대·eventAt 전진을 관측해 원복을 거부한다(8차 정본 —
+    진짜 경합=모드 유지로 새 C-C 턴의 Stop 게이트 보존, 전역 드리프트만이면 원복 수행. 모드 유지 시 이 프롬프트만
+    차단이 정답). 그 외 pin 실패는 원복 '후보' — 실제 원복은 원복 시점 CAS(로컬 세대 불변+links 신뢰 판독)를
+    통과할 때만이며 손상 판독은 보류(모드 유지 — 상대 Stop은 role 판독 fail-closed가 차단)
+    ⑤직접 ask 비정상 종료(abandoned)는 job 가드가 아니라 codex-verifying phase 가드(25분)가 커버
+    ⑥자동 전환이 최종 확인에서 실패(반대 전환으로 모드 뒤집힘)하면 이 프롬프트가 남긴 구현자 기록이 links에
+    잔존(수동 보존 의미론과 형태 동일·원인 상이 — configWs 앵커 소비 가능, 다음 정상 고정이 자연 교체).
+  - 테스트: tests/p9-auto-switch.test.js 99단언(실행 반례 — A1~A10·B1~B18+잠금 5상태: 전환 성공/고지/provenance/phase,
+    job·ask-active·phase·손상 차단+계약 불변, 만료·손상·abandoned 무시, 자기 세션 흔적 통과, done 직후 즉시
+    전환, exec 침묵·unknown 차단, 검증자 충돌, 고정 실패=원복 시점 CAS(불변=원복·손상=보류)+links 보존, 고정 세대 1회 전진, 잠금
+    동형·보유 중 거부·.lock 안내·잔존 없음, 교차 작성자 잠금 참여, 대시보드 채널·복귀 시 안내 숨김,
+    SessionStart 비전환, 양모드 정상 회귀).
+- 수정 후보(갱신 2026-07-16): 옛 ③(성공 Stop rejudging→done 종결)은 자동 전환 본체 구현검증 1차 지적 2를
+  계기로 ★구현 완료★(위 구현 기록 참조 — 목록에서 제거). 나머지는 미착수 —
+  ①모드 전환(setHarnessMode) 시 phase 초기화 — 단 incomplete 경고는 보존 정책 분리
   ②phase에 기록 모드·주체 저장, 대시보드가 현재 모드와 불일치하면 회색 처리 — 기존 25분 자동 숨김과의
-  관계(그 이전 구간을 커버) 명시 ③정상 C-C 성공 Stop의 rejudging→done 종결 전이 계약 검토
-  ④'모드=C-C인데 구현 heartbeat 없음+Claude 활동 감지' 어긋남 힌트. 최소=①+②(①도 표시 phase 전이를
-  추가하는 것이긴 하나, 검증 게이트·Stop 전이 계약은 무변경이라는 뜻. 단 ③은 별도 항목으로 남음).
+  관계(그 이전 구간을 커버) 명시
+  ④'모드=C-C인데 구현 heartbeat 없음+Claude 활동 감지' 어긋남 힌트(자동 전환 도입으로 실익 축소 — 재평가).
+  최소=①+②(①도 표시 phase 전이를 추가하는 것이긴 하나, 검증 게이트·Stop 전이 계약은 무변경이라는 뜻).
 - **사용자 제안 검토(2026-07-15, Codex 2왕복 — 방향 채택·원안 그대로 구현은 불가 판정)**:
   제안 = "기준점은 사용자가 어디(Claude/Codex)에서 질문을 시작했는가 + 그 모드의 검증 꺼짐 여부.
   옵션 모드와 실제 질문 호스트가 어긋나면 경고 후 해당 호스트의 모드로 강제 전환"(4사례).

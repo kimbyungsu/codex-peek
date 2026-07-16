@@ -323,6 +323,8 @@ interface Contract {
   scoutMode: ScoutMode;
   scoutRepo?: string; // 정찰 대상 레포(P1 — 세션 폴더≠개발 레포 해소). 빈 값/부재=ws 그대로.
   // ⚠ 대시보드 저장 페이로드는 이 필드를 만들지 않는다 — saveContract의 보존 병합(keep)이 CLI 설정값을 지킨다.
+  // [P-9] 자동 전환 provenance — 훅만 기록·대시보드는 표시 전용(저장 페이로드·exact patch 허용목록에 절대 미포함).
+  modeSwitch?: { by: string; from: string; to: string; at: string; session: string; reverted?: string };
 }
 
 // 정찰 대상 해석 — ⚠ bridge/contract-lib.js resolveScoutRepo와 반드시 동일 규칙(3카피 규약 — 어긋나면 확장 카드와
@@ -417,6 +419,10 @@ function loadContract(ws?: string | null, lang?: Lang): Contract {
     codexInjectMode: o && INJECT_MODES.includes(o.codexInjectMode) ? o.codexInjectMode : "always",
     scoutMode: normScoutMode(o),
     scoutRepo: typeof o.scoutRepo === "string" ? o.scoutRepo.trim() : "",
+    // [P-9] 표시 전용 통과(훅이 기록한 자동 전환 provenance) — 검증된 형태만, 저장 경로엔 절대 미포함
+    modeSwitch: o && o.modeSwitch && typeof o.modeSwitch === "object" && !Array.isArray(o.modeSwitch)
+      ? { by: String(o.modeSwitch.by || ""), from: String(o.modeSwitch.from || ""), to: String(o.modeSwitch.to || ""), at: String(o.modeSwitch.at || ""), session: String(o.modeSwitch.session || ""), reverted: String(o.modeSwitch.reverted || "") }
+      : undefined,
   };
 }
 
@@ -443,11 +449,10 @@ async function setScoutTargetFromUi(ws: string | null, repo: string, slotLang?: 
       vscode.window.showWarningMessage(tE("정찰 대상 폴더를 찾을 수 없어요: " + abs, "Scout target folder not found: " + abs)); return;
     }
     const lang: Lang = slotLang || loadLangExt(); // 호출측 렌더 슬롯 우선(저장 도중 언어 전환 경계에서 3트랙과 scoutRepo가 다른 슬롯에 갈리는 것 방지 — Codex 반례)
-    const file = contractFileFor(ws, lang);
-    let keep: any = {};
-    try { const prev = JSON.parse(fs.readFileSync(file, "utf8")); if (prev && typeof prev === "object" && !Array.isArray(prev)) keep = prev; } catch { /* 슬롯 파일 신설 */ }
-    if (!atomicWrite(file, JSON.stringify({ ...keep, scoutRepo: abs, workspace: ws, updatedAt: new Date().toISOString() }, null, 2))) {
-      vscode.window.showErrorMessage(tE("저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요.", "Save failed — file locked or inaccessible.")); return;
+    // [P-9 2차 지적 1] 잠금 없는 keep-병합(손상 시 {} 축소 덮어쓰기 포함)을 exact patch 경유로 교체 —
+    // 자동 전환(훅)·대시보드와 같은 계약 잠금·fail-closed에 참여(작성자 일부만 잠그면 lost-update 미방지).
+    if (!patchContractExt(ws, lang, { scoutRepo: abs })) {
+      vscode.window.showErrorMessage(tE("저장 실패 — 파일이 잠겨 있거나 손상/접근 불가예요.", "Save failed — file locked, corrupt, or inaccessible.") + contractLockHintExt(ws, lang)); return;
     }
     mapLedgerBump++;
     let otherNote = "";
@@ -469,19 +474,63 @@ async function setScoutTargetFromUi(ws: string | null, repo: string, slotLang?: 
 // 옛 saveContract(전체 병합 기록)는 이 이유로 제거·봉인(P-1 saveLinks export 제거와 동일 전례).
 // 손상 파일은 기록 거부(fail-closed — P-1·P-8 1단 patchContractFields와 동일 규약), 부재(ENOENT)만 신설.
 // ws=null(폴더 없는 창)은 레거시 CONTRACT_FILE에 patch(무폴더 회귀 방지 — 설계검증 3차 지적 2).
+// [P-9 본체] 계약 파일별 잠금 — 브릿지 withFileLockStrict와 동형 프로토콜(<계약파일>.lock · wx 생성 ·
+// 죽은 보유자=실패[수동 삭제 유도] · 보유 중 재시도 15ms×40). 훅(patchContractFields)이 새 계약 작성자가
+// 되면서 무잠금 RMW의 lost-update가 실위험 — 양쪽이 같은 잠금 파일을 쓸 때만 의미가 있다(동형 규약).
+function withContractLockExt<T>(lockPath: string, fn: () => T): T | false {
+  const token = process.pid + "-" + Math.random().toString(36).slice(2, 8);
+  let locked = false;
+  for (let i = 0; i < 40 && !locked; i++) {
+    try { fs.writeFileSync(lockPath, token, { flag: "wx" }); locked = true; }
+    catch {
+      // 사망 확정은 ESRCH만(4차 지적 3) — EPERM 등은 보유 중일 수 있으니 재시도로 처리(브릿지와 동형)
+      try { const pid = parseInt(String(fs.readFileSync(lockPath, "utf8")).split("-")[0], 10); if (pid) { try { process.kill(pid, 0); } catch (ke: any) { if (ke && ke.code === "ESRCH") return false; } } } catch { /* 판독 불가 — 재시도 */ }
+      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15); } catch { /* 즉시 재시도 */ }
+    }
+  }
+  if (!locked) return false;
+  try { return fn(); }
+  finally { try { if (fs.readFileSync(lockPath, "utf8") === token) fs.unlinkSync(lockPath); } catch { /* 무해 */ } }
+}
 function patchContractExt(ws: string | null, lang: Lang | undefined, patch: Record<string, unknown>): boolean {
   const file = ws ? contractFileFor(ws, lang) : CONTRACT_FILE;
-  let cur: any = {};
-  try {
-    cur = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (!cur || typeof cur !== "object" || Array.isArray(cur)) return false; // 형식 불명 → 기록 거부
-  } catch (e: any) {
-    if (!e || e.code !== "ENOENT") return false; // 손상·판독 불가 → 기록 거부(기존 바이트 보존·복구 기회 유지)
-    cur = {};
+  try { fs.mkdirSync(path.dirname(file), { recursive: true }); } catch { /* 잠금 wx가 ENOENT로 헛돌지 않게 */ }
+  const r = withContractLockExt(file + ".lock", () => {
+    let cur: any = {};
+    try {
+      cur = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (!cur || typeof cur !== "object" || Array.isArray(cur)) return false; // 형식 불명 → 기록 거부
+    } catch (e: any) {
+      if (!e || e.code !== "ENOENT") return false; // 손상·판독 불가 → 기록 거부(기존 바이트 보존·복구 기회 유지)
+      cur = {};
+    }
+    const stamped: any = { ...cur, ...patch, updatedAt: new Date().toISOString() };
+    if (ws) stamped.workspace = ws;
+    return atomicWrite(file, JSON.stringify(stamped, null, 2));
+  });
+  return r === true;
+}
+// [P-9 3차 지적 3 → 4차 5상태] 계약 잠금 진단 — 해시 파일명이라 '옆의 .lock'만으론 사용자가 못 찾는다.
+// 삭제 안내는 dead(ESRCH 확정 사망)에만 — EPERM(타 사용자 프로세스일 수 있음)·토큰 손상·판독 실패에
+// 삭제를 권하면 활성 저장의 잠금을 지우도록 오도한다(브릿지 contractLockIssue와 동형 규칙).
+function contractLockHintExt(ws: string | null, lang?: Lang): string {
+  const lockPath = (ws ? contractFileFor(ws, lang) : CONTRACT_FILE) + ".lock";
+  let raw: string;
+  try { raw = fs.readFileSync(lockPath, "utf8"); }
+  catch (e: any) {
+    return e && e.code === "ENOENT"
+      ? tE(" (잠금 파일 없음 — 권한/손상 계열일 수 있습니다.)", " (No lock file found — likely permission/corruption.)")
+      : tE(` 잠금 파일 상태를 판독할 수 없습니다: ${lockPath} — 임의 삭제하지 말고 잠시 후 재시도하세요.`, ` Lock file state unreadable: ${lockPath} — do not delete it; retry shortly.`);
   }
-  const stamped: any = { ...cur, ...patch, updatedAt: new Date().toISOString() };
-  if (ws) stamped.workspace = ws;
-  return atomicWrite(file, JSON.stringify(stamped, null, 2));
+  const m = /^(\d+)-/.exec(String(raw).trim());
+  if (!m) return tE(` 잠금 파일 상태를 판독할 수 없습니다: ${lockPath} — 임의 삭제하지 말고 잠시 후 재시도하세요.`, ` Lock file state unreadable: ${lockPath} — do not delete it; retry shortly.`);
+  const pid = parseInt(m[1], 10);
+  try { process.kill(pid, 0); return tE(` 다른 저장이 진행 중입니다: ${lockPath} (프로세스 ${pid} 실행 중) — 잠시 후 재시도하세요.`, ` Another save is in progress: ${lockPath} (process ${pid} running) — retry shortly.`); }
+  catch (e: any) {
+    return e && e.code === "ESRCH"
+      ? tE(` 잔존 잠금: ${lockPath} (보유 프로세스 ${pid} 종료 확인됨) — 이 파일을 삭제한 뒤 재시도하세요.`, ` Stale lock: ${lockPath} (owner process ${pid} confirmed gone) — delete this file and retry.`)
+      : tE(` 잠금 보유자 확인 불가: ${lockPath} (프로세스 ${pid} — 다른 사용자의 프로세스일 수 있음). 파일을 삭제하지 말고 그 프로세스 종료 후 재시도하세요.`, ` Lock owner unverified: ${lockPath} (process ${pid} — may belong to another user). Do not delete the file; retry after that process ends.`);
+  }
 }
 
 // '다른 언어 슬롯에만 규칙이 있음' 안내용 — 현재 슬롯이 비었는데 반대 슬롯에 규칙이 있으면 그 사실을 알려
@@ -2650,7 +2699,7 @@ class Dashboard {
           // 물질화 계약(2026-07-15): 모드 전환은 harnessMode '단일 필드 patch'만 — 정규화 전체 재저장 금지.
           // (전체 재저장이면 단순 전환만으로 codexVerifyMode 등 fallback 실효값이 원시 필드로 굳는다 — 설계검증 3차)
           const ok = patchContractExt(dashboardWorkspace(), slotLang, { harnessMode: m.mode });
-          if (!ok) vscode.window.showErrorMessage(tE("운용 모드 저장 실패 — 기존 모드를 유지합니다.", "Failed to save harness mode — keeping the existing mode."));
+          if (!ok) vscode.window.showErrorMessage(tE("운용 모드 저장 실패 — 기존 모드를 유지합니다.", "Failed to save harness mode — keeping the existing mode.") + contractLockHintExt(dashboardWorkspace(), slotLang));
           else if(m.mode==="codex-codex") { vscode.window.showInformationMessage(tE("훅 설치·신뢰·창 리로드가 끝난 상태라면, 현재 보이는 Codex 대화를 시작·재개할 때 구현 세션이 자동 고정됩니다. 목록 클릭이 실제 재개 이벤트를 만들지 않는 경우 첫 프롬프트가 보조 고정합니다. 검증 세션은 기본적으로 Claude 모드 연결을 공유하며, 원할 때만 아래에서 전용 검증 세션으로 교체하세요.","Once the hooks are installed, trusted, and the window reloaded, starting or resuming the visible Codex conversation automatically pins it as the implementer. If a list click does not produce a real resume event, the first prompt is the fallback. The verifier shares the Claude-mode link by default; choose a dedicated verifier below only when wanted.")); void (async()=>{await codexHomeReady;await maybeOfferCodexHookSetup(this.uri.fsPath);})(); }
           this.post(); vscode.commands.executeCommand("codexBridge.refresh");
         }
@@ -2733,10 +2782,10 @@ class Dashboard {
           this.panel?.webview.postMessage({ type: "saveResult", target: "timeout", ok });
         }
         if (m?.type === "saveChecklist") {
-          // P-8 1단: 체크박스 토글=즉시 저장 — 계약을 새로 읽어 '그 필드만' 병합(재읽기-병합·잠금 없음).
+          // P-8 1단: 체크박스 토글=즉시 저장 — 계약을 새로 읽어 '그 필드만' 병합(재읽기-병합).
           // 프로젝트별·언어별 독립(2026-07-15 사용자 요구): 창마다 자신의 dashboardWorkspace()·파일=(프로젝트×언어).
-          // 멀티창 한계(정직): 재읽기는 '완료된 선행 저장'만 보존한다 — 잠금이 없어 진짜 동시 저장(읽기-읽기 겹침)은
-          // 서로 다른 필드끼리도 유실될 수 있다(1단 명시 한계 · 2단 잠금이 해소). 필드는 '저장된 운용모드' 기준.
+          // (갱신 2026-07-16 · P-9 본체) patch 경로에 파일별 잠금 도입 — 종전 '잠금이 없어 진짜 동시 저장(읽기-읽기 겹침)은
+          // 서로 다른 필드끼리도 유실될 수 있다'던 1단 한계는 해소(2단 잠금 축 선반영). 필드는 '저장된 운용모드' 기준.
           const slotLang: Lang | undefined = m.lang === "ko" || m.lang === "en" ? m.lang : undefined;
           const wsCk = dashboardWorkspace();
           const box = m.box === "codex" ? "codex" : "claude";
@@ -2802,7 +2851,7 @@ class Dashboard {
             scoutMode: normScoutMode({ scoutMode: m.scoutMode }),
           };
           const ok = patchContractExt(dashboardWorkspace(), slotLang, patch);
-          if (!ok) vscode.window.showErrorMessage(tE("설정 저장 실패 — 파일이 잠겨 있거나 접근이 막혔어요. 잠시 후 다시 저장해 주세요(기존 설정은 그대로 유지됩니다).","Failed to save settings — file locked or inaccessible. Try again shortly (existing settings are kept)."));
+          if (!ok) vscode.window.showErrorMessage(tE("설정 저장 실패 — 파일이 잠겨 있거나 손상/접근 불가예요. 잠시 후 다시 저장해 주세요(기존 설정은 그대로 유지됩니다).","Failed to save settings — file locked, corrupt, or inaccessible. Try again shortly (existing settings are kept).") + contractLockHintExt(dashboardWorkspace(), slotLang));
           // 3트랙 선택 시 API 안내(2026-07-09 사용자 요청 — 기본원칙 경고와 같은 모달 형태):
           //  키 없음 → 경고 모달 + [등록하러 가기(고급설정 이동)] / [알겠습니다]
           //  키 있음 → 실제 연결 점검(ping 1회 — PRIVACY에 전송 지점으로 명시) 후 정상/실패를 사실대로.
@@ -3351,6 +3400,7 @@ class Dashboard {
     </span>
   </nav>
   <div class="modebar"><span class="ml">${t("운용", "Mode")}</span><button type="button" class="modebtn" id="modeClaude" data-mode="claude-codex">Claude Code ↔ Codex</button><button type="button" class="modebtn" id="modeCodex" data-mode="codex-codex">Codex ↔ Codex</button></div>
+  <div id="modeSwitchNote" class="muted" style="display:none;font-size:11.5px;margin:2px 2px 0"></div>
   <div id="tab-main" class="tab-panel active">
   <section class="onboard" id="onboard" style="display:none">
     <button type="button" id="obReopen" class="obreopen" style="display:none">${t("시작하기 다시 보기", "Show Getting Started again")}</button>
@@ -4286,6 +4336,15 @@ class Dashboard {
         cardNotice(T("운용 모드가 "+cmL+"로 바뀌었지만, 이 카드는 저장 안 된 "+rmL+" 초안을 편집 중이라 그대로 두었어요. '저장'은 "+rmL+" 슬롯에 저장되고, '되돌리기'는 초안을 버리고 "+cmL+" 값을 불러옵니다.","Harness mode changed to "+cmL+", but this card keeps your unsaved "+rmL+" draft. Save writes to the "+rmL+" slot; Revert discards the draft and loads "+cmL+" values."), "hold");
       } else if (cardNoticeKind === "hold") hideCardNotice(); // 동결 해소(저장·되돌리기·모드 복귀) — hold 안내만 자동 숨김
       var mc=$("modeClaude"),mx=$("modeCodex");if(mc&&mx){mc.classList.toggle("on",!cc);mx.classList.toggle("on",cc);}
+      // [P-9] 자동 전환 알림(동결 조건 ⑹ 대시보드 채널): 훅이 남긴 provenance(modeSwitch)가 신선하면(30분)
+      // 모드 버튼 바로 아래에 고지 — 사용자가 프롬프트 고지를 놓쳐도 대시보드에서 인지·되돌리기 가능.
+      safe(function(){ var msn=$("modeSwitchNote"); if(!msn) return; var msw=d.contract&&d.contract.modeSwitch;
+        var age=msw&&msw.at?Date.now()-Date.parse(msw.at):NaN;
+        // 신선(30분)+현재 모드가 전환 결과와 일치할 때만 — 사용자가 이미 되돌렸으면(현재 모드≠to) 낡은 안내(2차 지적)
+        var freshSw=isFinite(age)&&age>=0&&age<30*60*1000&&msw.to===harnessMode&&!msw.reverted;
+        if(freshSw){ var mLbl=function(m){return m==="codex-codex"?"Codex↔Codex":"Claude↔Codex";};
+          msn.textContent=T("⚠ 자동 전환됨: ","⚠ Auto-switched: ")+mLbl(msw.from)+" → "+mLbl(msw.to)+T(" · 질문 시작 호스트 기준 · 의도와 다르면 위 버튼으로 되돌리세요"," · prompt-host rule · revert with the buttons above if unintended");
+          msn.style.display=""; } else msn.style.display="none"; });
       $("heroTitle").textContent=cc?T("Codex ⇄ Codex 구현·검증","Codex ⇄ Codex implement & verify"):T("Claude ⇄ Codex 자동 연결·검증","Claude ⇄ Codex auto link & verify");
       $("implMono").textContent=cc?"Cx":"C";$("implName").textContent=cc?"Codex":"Claude";$("lsClaude").textContent=cc?T("Codex 구현","Codex implementer"):"Claude";
       $("implRulesTitle").textContent=ccCard?T("Codex 구현 규칙","Codex Implementer Rules"):T("Claude 규칙","Claude Rules");

@@ -3,8 +3,9 @@
  * P-8 1단(2026-07-15) — 체크리스트 강제 체크박스 즉시 저장.
  * 증상: 상태 푸시가 저장 클릭 전에 체크박스를 계약값으로 되돌려 옛값이 저장됨(C-C 모드 실사고).
  * 1단 계약: 토글=즉시 저장 · 호스트 재읽기-단일필드 병합 · 손상 JSON fail-closed(P-1 교훈) ·
- * 프로젝트×언어 독립+요청 서술자 결속(사용자 추가 요구) · 잠금 없음 — 진짜 동시 저장(읽기-읽기 겹침)은 서로 다른
- * 필드를 포함해 유실 가능(명시된 한계 · 2단 잠금이 해소). 순차 저장은 재읽기-병합이 보존.
+ * 프로젝트×언어 독립+요청 서술자 결속(사용자 추가 요구).
+ * (갱신 2026-07-16 · P-9 본체) patch 경로에 파일별 잠금(<계약파일>.lock) 도입 — '잠금 없음'은 더 이상 현재
+ * 계약이 아니다(2단 updateContractPatch 승격의 잠금 축 선반영). 잠금 실패=기록 거부(fail-closed).
  */
 const fs = require("fs");
 const os = require("os");
@@ -27,7 +28,7 @@ ok(CL.patchContractFields(wsA, "ko", { codexVerifierChecklist: false }) === true
 let c = readC(wsA, "ko");
 ok(c.codexVerifierChecklist === false && c.codexImplementerChecklist === true && c.codexImplementer[0] === "규칙1" && c.scoutGate === "plan" && c.harnessMode === "codex-codex", "그 필드만 변경 — 규칙·다른 체크리스트·게이트·모드 전부 보존");
 
-console.log("[2] 멀티창 '순차' 저장 보존 — 완료된 선행 저장은 재읽기가 보존(정직: 진짜 동시[읽기-읽기 겹침]는 타 필드도 유실 가능 — 무잠금 1단 한계·2단 잠금이 해소)");
+console.log("[2] 멀티창 '순차' 저장 보존 — 완료된 선행 저장은 재읽기가 보존(P-9 본체에서 patch 경로 파일별 잠금 도입 — 옛 '읽기-읽기 겹침 유실' 한계 해소)");
 CL.patchContractFields(wsA, "ko", { claudeChecklist: false });       // 창1: 다른 모드 필드 저장
 CL.patchContractFields(wsA, "ko", { codexImplementerChecklist: false }); // 창2: 그 사이 다른 필드 저장
 c = readC(wsA, "ko");
@@ -77,7 +78,7 @@ ok(/var ckDoc = "\$\{nonce\}";/.test(ext) && /var rid = ckDoc \+ ":" \+ ckSeq;/.
 ok(/function ckExpire\(box, rid\)\{\s*\n\s*if \(ckM\[box\]\.expire\(rid\)\.act !== "hold"\) return;\s*\n\s*try \{ vscode\.postMessage\(\{ type: "ready" \}\); \} catch\(e\)\{\}/.test(ext), "응답 유실 liveness — 만료=hold(재활성·되돌림 없음)+ready 재렌더 요청, pending이 비어 다음 어떤 state든 복구(영구 disabled 경로 없음)");
 ok(/reqId: rid/.test(ext) && /ok, reqId \}/.test(ext) && /staleMode: true, reqId \}/.test(ext) && /typeof m\.reqId === "string" && m\.reqId \? m\.reqId : null/.test(ext), "reqId 왕복 — 호스트가 문자열 reqId를 두 응답 경로 모두에 에코");
 ok(/id="ckClaude" disabled/.test(ext) && /id="ckCodex" disabled/.test(ext) && /\$\("ckClaude"\)\.disabled = false/.test(ext), "최초 렌더 전 disabled(동결 설계 항목) — 첫 state 도착 시 해제");
-ok(ext.includes("진짜 동시 저장(읽기-읽기 겹침)은") && ext.includes("서로 다른 필드끼리도 유실될 수 있다"), "호스트 주석 — 무잠금 한계 정직 서술(과장 금지)");
+ok(ext.includes("patch 경로에 파일별 잠금 도입") && ext.includes("서로 다른 필드끼리도 유실될 수 있다'던 1단 한계는 해소"), "호스트 주석 — 잠금 도입으로 옛 무잠금 한계가 해소됐음을 현재형으로 서술(낡은 계약 서술 금지)");
 ok(/체크리스트 강제는 켜고 끄는 즉시 저장/.test(ext) && /checklist enforcement saves instantly on toggle/.test(ext) && /체크리스트 강제는 즉시 저장/.test(ext), "저장 버튼 안내 문구 정정(한/영·양 모드)");
 const cl = fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8");
 ok(/P-1 교훈: \{\}로 축소해 덮어쓰면 계약 전체 유실/.test(cl) && /updateContractPatch로 승격 예정/.test(cl), "도우미 주석 — fail-closed 근거·2단 승격 경로 명시");

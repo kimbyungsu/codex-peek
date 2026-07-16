@@ -164,7 +164,8 @@ function withFileLockStrict(lockPath, fn) {
   for (let i = 0; i < 40 && !locked; i++) {
     try { fs.writeFileSync(lockPath, token, { flag: "wx" }); locked = true; }
     catch {
-      try { const pid = parseInt(String(fs.readFileSync(lockPath, "utf8")).split("-")[0], 10); if (pid) { try { process.kill(pid, 0); } catch { return { ok: false, error: "dead-lock-holder: " + lockPath + " (pid " + pid + " 사망 — 잔존 잠금 수동 삭제 필요)" }; } } } catch { /* 판독 불가 — 재시도 */ }
+      // 사망 확정은 ESRCH만(4차 지적 3) — EPERM 등은 '존재하나 조회 권한 없음'일 수 있어 사망 단정·삭제 유도 금지(보유 중으로 보고 재시도)
+      try { const pid = parseInt(String(fs.readFileSync(lockPath, "utf8")).split("-")[0], 10); if (pid) { try { process.kill(pid, 0); } catch (ke) { if (ke && ke.code === "ESRCH") return { ok: false, error: "dead-lock-holder: " + lockPath + " (pid " + pid + " 사망 — 잔존 잠금 수동 삭제 필요)" }; } } } catch { /* 판독 불가 — 재시도 */ }
       try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15); } catch { /* 즉시 재시도 */ }
     }
   }
@@ -233,23 +234,29 @@ function appendScoutUsage(ev) {
   } catch { return false; } // best-effort — 비용 기록 실패가 지도 생성 흐름을 막지 않음
 }
 
-// P-8 1단(2026-07-15): 단일 필드 즉시 저장용 '재읽기-병합' 패치. 잠금 없음 — 기존 작성자들과 동급 신뢰
-// 수준이며 같은 필드 동시 저장의 lost-update는 알려진 한계(명시). 손상 JSON은 fail-closed(기록 거부 —
+// P-8 1단(2026-07-15): 단일 필드 즉시 저장용 '재읽기-병합' 패치. 손상 JSON은 fail-closed(기록 거부 —
 // P-1 교훈: {}로 축소해 덮어쓰면 계약 전체 유실). 파일 부재(ENOENT)만 신설로 인정.
-// 2단(백로그·설계 동결 v10)에서 fail-closed 잠금을 포함한 updateContractPatch로 승격 예정.
+// P-9 본체(2026-07-16, 구현검증 1차 지적 4): 파일별 잠금(<계약파일>.lock) 추가 — 훅이 새 계약 작성자가
+// 되면서 무잠금 RMW의 lost-update(대시보드·반대 훅과 동시 쓰기)가 실위험이 됨. 확장 patchContractExt도
+// 같은 잠금 파일·프로토콜을 사용(동형 규약 — 한쪽만 잠그면 무의미). 잠금 실패=기록 거부(fail-closed).
+// P-8 2단(백로그·설계 동결 v10)의 updateContractPatch로 승격 예정 — 그 잠금 축을 여기서 선반영한 것.
 function patchContractFields(ws, lang, patch) {
   try {
     if (!ws || !patch || typeof patch !== "object" || Array.isArray(patch)) return false;
     const file = contractFileFor(ws, lang);
-    let cur = {};
-    try {
-      cur = JSON.parse(fs.readFileSync(file, "utf8"));
-      if (!cur || typeof cur !== "object" || Array.isArray(cur)) return false; // 형식 불명 → 기록 거부
-    } catch (e) {
-      if (!e || e.code !== "ENOENT") return false; // 손상·판독 불가 → 기록 거부(fail-closed)
-      cur = {};
-    }
-    return atomicWrite(file, JSON.stringify({ ...cur, ...patch, workspace: ws, updatedAt: new Date().toISOString() }, null, 2));
+    try { fs.mkdirSync(path.dirname(file), { recursive: true }); } catch { /* 잠금 wx가 ENOENT로 헛돌지 않게 — 실패 시 아래 잠금이 실패로 판정 */ }
+    const r = withFileLockStrict(file + ".lock", () => {
+      let cur = {};
+      try {
+        cur = JSON.parse(fs.readFileSync(file, "utf8"));
+        if (!cur || typeof cur !== "object" || Array.isArray(cur)) return false; // 형식 불명 → 기록 거부
+      } catch (e) {
+        if (!e || e.code !== "ENOENT") return false; // 손상·판독 불가 → 기록 거부(fail-closed)
+        cur = {};
+      }
+      return atomicWrite(file, JSON.stringify({ ...cur, ...patch, workspace: ws, updatedAt: new Date().toISOString() }, null, 2));
+    });
+    return !!(r && r.ok && r.result);
   } catch { return false; }
 }
 
@@ -299,6 +306,68 @@ function normWs(p) {
   // NFC: 환경별 유니코드 폼(NFC/NFD) 차이로 같은 경로가 다른 키 되는 것 방지. 브릿지·확장 3카피 '동일 규칙'이어야 함.
   return path.normalize(p || "").replace(/[\\/]+$/, "").toLowerCase().normalize("NFC");
 }
+// ── P-9 자동 전환(질문 호스트 기준) 안전 판정 ─────────────────────────────────────────────
+// 활성 검증 작업 존재 = 전환 금지 신호: 모드가 바뀌면 진행 중 내구 job이 완료 시점 stale로 무효화된다
+// (codex-bridge writeProof의 모드 검사). 손상 job 파일은 '활성 아님'으로 취급 — 손상 1개가 전환을 영구
+// 차단하면 안 되고, 손상 job 자체는 P-4의 몫. 마감(deadlineAt)이 1분 이상 지난 잔재도 차단 근거로 안 쓴다.
+function activeAskJobFor(ws) {
+  try {
+    const dir = path.join(BRIDGE_DIR, "ask-jobs");
+    const now = Date.now();
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith(".json")) continue;
+      let j = null;
+      try { j = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")); } catch { continue; }
+      if (!j || (j.state !== "queued" && j.state !== "running")) continue;
+      if (normWs(j.workspace) !== normWs(ws)) continue;
+      const dl = Date.parse(j.deadlineAt || "");
+      if (Number.isFinite(dl) && dl < now - 60000) continue;
+      return { id: j.id || f.replace(/\.json$/, ""), state: j.state };
+    }
+  } catch { /* 디렉터리 부재 = 활성 없음 */ }
+  // 직접 ask(ask-active) — 동결 조건 ⑶은 내구 job만이 아니라 ask-active도 요구(구현검증 1차 지적 1).
+  // 부모/자식 프로세스가 '살아 있는' 실행만 활성으로 본다: abandoned(둘 다 사망)는 전환으로 무효화될 실행이
+  // 없고, 그 상태의 재전송 차단은 askActiveGuard 자신의 몫(명시 clear 전 보수 차단)이라 전환까지 막지 않는다.
+  try {
+    const rec = readAskActive(ws);
+    if (rec) {
+      const alive = (pid) => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch { return false; } };
+      if (alive(rec.pid) || alive(rec.childPid)) return { id: "ask-active", state: "direct-ask" };
+    }
+  } catch { /* 판독 실패 = 활성 없음 취급(손상은 P-4 몫) */ }
+  return null;
+}
+// 상대 호스트 턴이 '진행 중일 개연성' 판정 — phase.json은 마지막 기록자 파일이라 정확한 턴 신호가 아니고
+// (성공 종료도 rejudging으로 남는 별도 결함 있음), 신선도 창(기본 25분 — 대시보드 stale 숨김 상한과 동일)
+// 을 씌운 보수 휴리스틱이다. 같은 세션(session===sid)의 흔적은 '상대'가 아니므로 호출자가 걸러야 한다.
+function phaseBusy(ws, phases, maxAgeMs) {
+  try {
+    const p = readPhase();
+    if (!p || !phases.includes(p.phase)) return null;
+    if (normWs(p.workspace || "") !== normWs(ws)) return null;
+    const ts = Date.parse(p.ts || "");
+    if (!Number.isFinite(ts) || Date.now() - ts > (maxAgeMs || 25 * 60 * 1000)) return null;
+    return { phase: p.phase, session: String(p.session || "") };
+  } catch { return null; }
+}
+
+// [P-9 3차 지적 3 → 4차 지적 3] 계약 잠금 상태 진단 — 저장 실패 시 '어떤 파일·어떤 프로세스·어떤 상태'인지
+// 정확히 안내. 상태 분리(4차): alive(생존—재시도) / dead(ESRCH 확정 사망—삭제 안내 허용) /
+// owner-unverified(EPERM 등—타 사용자 프로세스일 수 있어 삭제 금지) / invalid(토큰 손상—삭제 금지) /
+// unreadable(판독 실패—삭제 금지) / null(파일 없음—잠금 문제 아님). 삭제 안내는 dead에만 허용:
+// kill(pid,0)의 모든 예외를 사망으로 합치면 활성 저장의 잠금을 사용자가 지우도록 오도한다(실행 반증).
+function contractLockIssue(ws, lang) {
+  const lockPath = contractFileFor(ws, lang) + ".lock";
+  let raw;
+  try { raw = fs.readFileSync(lockPath, "utf8"); }
+  catch (e) { return (e && e.code === "ENOENT") ? null : { state: "unreadable", lockPath, pid: 0 }; }
+  const m = /^(\d+)-/.exec(String(raw).trim());
+  if (!m) return { state: "invalid", lockPath, pid: 0 };
+  const pid = parseInt(m[1], 10);
+  try { process.kill(pid, 0); return { state: "alive", lockPath, pid }; }
+  catch (e) { return { state: (e && e.code === "ESRCH") ? "dead" : "owner-unverified", lockPath, pid }; }
+}
+
 // 프로젝트별 계약 파일 경로. 키 = normWs의 sha1 앞 16자(파일명 안전·플랫폼 무관). 확장 contractFileFor와 동일.
 // 언어 슬롯: ko = 레거시 <키>.json '그대로'(기존 사용자 규칙 무회귀·마이그레이션 불필요) / en = <키>.en.json.
 // → 언어를 나눠도 기존 파일을 재명명/이동하지 않는다(비파괴). lang 미지정 시 전역 언어(loadLang()).
@@ -460,8 +529,9 @@ function registerCodexImplementer(ws, sessionId, model, effort, expectedSession)
     if (raw !== null) {
       try { o = JSON.parse(raw); } catch { return { ok: false, reason: "links-corrupt" }; }
       // 의미 검증: null·배열·원시값 루트는 파싱 '성공'이라 구문 검사만으론 {}로 축소·덮어쓰기됨(P-1 반례).
-      const plain = (v) => !!v && typeof v === "object" && !Array.isArray(v);
-      if (!plain(o) || (o.byWorkspace !== undefined && !plain(o.byWorkspace)) || (o.bySession !== undefined && !plain(o.bySession))) return { ok: false, reason: "links-corrupt" };
+      // 공용기(validLinksShape)에 ws까지 전달 — 현재 ws 레코드가 배열 등으로 손상이면 기록 거부(P-9 7차
+      // 지적 2: Stop 판독은 corrupt인데 등록은 손상 레코드를 새 객체로 덮어쓰는 불일치+바이트 보존 위반).
+      if (!validLinksShape(o, ws)) return { ok: false, reason: "links-corrupt" };
     }
     o.byWorkspace = o.byWorkspace || {};
     const key = normWs(ws);
@@ -534,15 +604,34 @@ function implementerRecordOf(linksObj, ws) {
     eventAt: Number(cur.implementerEventAt) || 0,
   };
 }
+// [P-9 5차 지적 3 → 6차 지적 3] links 의미 검증 공용기 — 루트·byWorkspace·bySession 컨테이너 검사(P-1
+// register 검사와 동형) + ws를 주면 ★현재 워크스페이스의 레코드 값★까지 일반 객체인지 검사. 컨테이너만
+// 보면 {byWorkspace:{현재키:[]}} 같은 한 단계 안쪽 손상이 빈 역할로 축소돼 원복·Stop 판독이 fail-open
+// (실행 반증 — implementerRecordOf가 session:"" 반환). 검사 범위를 현재 ws 레코드로 한정하는 이유:
+// 무관 프로젝트의 레코드 손상이 이 프로젝트의 Stop까지 전부 차단하는 교차 프로젝트 간섭 방지(6차 지적 1과
+// 같은 패턴 — 판정은 로컬 상태만으로).
+function validLinksShape(o, ws) {
+  const plain = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+  if (!plain(o)) return false;
+  if (o.byWorkspace !== undefined && !plain(o.byWorkspace)) return false;
+  if (o.bySession !== undefined && !plain(o.bySession)) return false;
+  if (ws !== undefined && plain(o.byWorkspace)) {
+    const key = normWs(ws);
+    const found = Object.keys(o.byWorkspace).find((k) => normWs(k) === key);
+    if (found !== undefined && !plain(o.byWorkspace[found])) return false;
+  }
+  return true;
+}
 // role lock 아래에서 links를 정확히 1회 읽어 레코드를 반환. 잠금 실패는 예외(fail-closed는 호출자 몫).
-// '파일 없음'(구현자 미지정=정상)과 '판독·파싱 실패'(손상=차단 대상)를 합타입으로 구분한다 — 손상을 빈
-// 객체로 축소하면 Stop 게이트가 검증 없이 통과하는 fail-open이 된다(구현 검증 1차 지적).
+// '파일 없음'(구현자 미지정=정상)과 '판독·파싱·의미 실패'(손상=차단 대상)를 합타입으로 구분한다 — 손상을 빈
+// 객체로 축소하면 Stop 게이트가 검증 없이 통과하는 fail-open이 된다(구현 검증 1차 지적·P-9 5차 지적 3).
 function readImplementerRecordLocked(ws) {
   return withRoleLock(() => {
     let raw = null;
     try { raw = fs.readFileSync(LINKS_FILE_SHARED, "utf8"); }
     catch (e) { return (e && e.code === "ENOENT") ? { ok: true, record: null } : { ok: false, reason: "links-unreadable" }; }
-    let o; try { o = JSON.parse(raw) || {}; } catch { return { ok: false, reason: "links-corrupt" }; }
+    let o; try { o = JSON.parse(raw); } catch { return { ok: false, reason: "links-corrupt" }; }
+    if (!validLinksShape(o, ws)) return { ok: false, reason: "links-corrupt" }; // 현재 ws 레코드 손상까지 검사(6차 지적 3)
     return { ok: true, record: implementerRecordOf(o, ws) };
   });
 }
@@ -2141,5 +2230,10 @@ module.exports.writeRecoveryReceipt = writeRecoveryReceipt;
 module.exports.durableProofGate = durableProofGate;
 module.exports.sha256Hex = sha256Hex;
 module.exports.contractReadState = contractReadState;
+// P-9 자동 전환(질문 호스트 기준) 안전 판정
+module.exports.activeAskJobFor = activeAskJobFor;
+module.exports.phaseBusy = phaseBusy;
+module.exports.contractLockIssue = contractLockIssue;
+module.exports.validLinksShape = validLinksShape;
 module.exports.receiptSettled = receiptSettled;
 module.exports.codexRoleRevision = codexRoleRevision;

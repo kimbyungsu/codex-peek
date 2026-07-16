@@ -11,7 +11,7 @@
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { contractFileFor, loadContract, atomicWrite, resolveScoutRepo, loadLang } = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
+const { contractFileFor, loadContract, atomicWrite, resolveScoutRepo, loadLang, withFileLockStrict } = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
 const tB = (ko, en) => (loadLang() === "en" ? en : ko); // CLI 출력도 한/영 쌍(2026-07-09)
 
 const wsArg = process.argv[2];
@@ -36,13 +36,25 @@ const gitLabel = (p) => usableGit(p) ? tB("git 저장소(이력 있음)","git re
 
 // 현재 언어 슬롯에만 저장 — 언어 슬롯 분리 원칙(2026-07-09 사용자 결정: 한글/영문 생활권은 다른 사용자,
 // 규칙·기본지침과 동일 · API 키만 전역). 반대 슬롯 값이 다르면 고지(소실 오해 방지)하고 건드리지 않는다.
+// [P-9 2차 지적 1] 계약 잠금 프로토콜 참여 + fail-closed: 무잠금 RMW는 자동 전환(훅)·대시보드 저장과 겹치면
+// 이전 바이트 기준 전체 쓰기로 harnessMode·modeSwitch를 되돌리고, 손상 JSON을 {}로 축소해 덮어썼다(P-1 계열).
 function writeCurrentSlot(mutate) {
   const f = contractFileFor(ws, loadLang());
-  let o = {};
-  try { o = JSON.parse(fs.readFileSync(f, "utf8")) || {}; } catch { /* 슬롯 파일 없으면 신설 */ }
-  mutate(o);
-  if (!atomicWrite(f, JSON.stringify({ ...o, updatedAt: new Date().toISOString() }, null, 2))) {
-    console.error(tB(`저장 실패: ${f} (권한/디스크?)`,`Save failed: ${f} (permission/disk?)`)); process.exit(1);
+  try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { /* 잠금 wx가 ENOENT로 헛돌지 않게 */ }
+  const r = withFileLockStrict(f + ".lock", () => {
+    let o = {};
+    try {
+      o = JSON.parse(fs.readFileSync(f, "utf8"));
+      if (!o || typeof o !== "object" || Array.isArray(o)) return false; // 형식 불명 → 기록 거부
+    } catch (e) {
+      if (!e || e.code !== "ENOENT") return false; // 손상·판독 불가 → 기록 거부(바이트 보존·복구 기회)
+      o = {};
+    }
+    mutate(o);
+    return atomicWrite(f, JSON.stringify({ ...o, updatedAt: new Date().toISOString() }, null, 2));
+  });
+  if (!(r && r.ok && r.result)) {
+    console.error(tB(`저장 실패: ${f} (잠금/손상/권한 — .lock 잔존 시 보유 프로세스 종료 확인 후 삭제)`,`Save failed: ${f} (lock/corruption/permission — if a stale .lock remains, verify the owner is gone and delete it)`)); process.exit(1);
   }
 }
 function noteOtherSlot() {
