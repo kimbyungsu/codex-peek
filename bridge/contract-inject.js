@@ -132,7 +132,7 @@ process.stdin.on("end", () => {
       const rules = buildInjection(c.claude, "Claude Code", c.claudeChecklist);
       if (rules) parts.push(rules);
     }
-    if (c.verifyMode && c.verifyMode !== "off") parts.push(buildVerifyDirective(c.verifyMode));
+    if (c.verifyMode && c.verifyMode !== "off") parts.push(buildVerifyDirective(c.verifyMode, undefined, c.verifyProfile)); // P-12 프로필(주입 시점 실효값)
     // 탐색(3트랙) 자동 지시 — 지도 없음/낡음일 때 그 상태에 1회만(상태 서명 기반·advisory). 실패해도 훅을 막지 않음.
     try { const sd = buildScoutDirective(ws, c); if (sd) parts.push(sd); } catch { /* advisory */ }
     // P1: Project MAP 비차단 bootstrap — 훅은 유계 신호+상태 고지(1회)+detach 기동만(실행·전수 판독 금지:

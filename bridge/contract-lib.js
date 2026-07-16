@@ -922,6 +922,8 @@ function loadContract(ws, lang) {
     // 검증 모드: off=꺼짐 / code=코드변경 시 / plancode=플랜확정(ExitPlanMode)+코드변경 시 / always=모든 턴.
     // 기본 off(opt-in). 구버전 verify:true는 code로 마이그레이션.
     verifyMode: normVerifyMode(o),
+    verifyProfile: normVerifyProfile(o),   // P-12: CL-C 슬롯 검증 강도(부재=integrity)
+    codexVerifyProfile: normCodexVerifyProfile(o), // P-12: C-C 슬롯(부재 시 verifyProfile 상속)
     // [모드별 검증 스위치 분리 2026-07-15] verifyMode=CL-C 슬롯 / codexVerifyMode=C-C 슬롯.
     // 부재 시 normVerifyMode(o) '전체'로 fallback(원시 o.verifyMode 아님 — verify:true→code 레거시 호환 보존).
     // codexVerifier 규칙과 동일 전례: 최초엔 CL-C 값을 상속해 보여주고, 명시적 C-C 저장 후엔 독립 정본.
@@ -952,6 +954,22 @@ function normVerifyMode(o) {
 function normCodexVerifyMode(o) {
   if (o && VERIFY_MODES.includes(o.codexVerifyMode)) return o.codexVerifyMode;
   return normVerifyMode(o);
+}
+
+// P-12 1단(설계 동결 v2.1): 검증 강도 프로필 — integrity=현행(넓은 탐색·기본), core=핵심(직접 영향 중심).
+// '언제 검증하나'(verifyMode)와 독립인 '어떻게 검증하나' 축. 부재=integrity(무회귀), C-C 부재 시 CL-C 상속.
+const VERIFY_PROFILES = ["integrity", "core"];
+function normVerifyProfile(o) {
+  if (o && VERIFY_PROFILES.includes(o.verifyProfile)) return o.verifyProfile;
+  return "integrity";
+}
+function normCodexVerifyProfile(o) {
+  if (o && VERIFY_PROFILES.includes(o.codexVerifyProfile)) return o.codexVerifyProfile;
+  return normVerifyProfile(o); // C-C 전용값 없으면 CL-C 상속(codexVerifyMode와 동형 규칙)
+}
+// 실효 프로필: 현재 운용 모드의 슬롯 값.
+function effectiveVerifyProfile(c) {
+  return (c && c.harnessMode === "codex-codex") ? normCodexVerifyProfile(c) : normVerifyProfile(c);
 }
 
 const INJECT_MODES = ["off", "plan", "always"];
@@ -2017,6 +2035,56 @@ const BASE_DEFAULTS = {
   ].join("\n"),
 };
 
+// P-12 core(핵심) 프리셋 — 직접 영향 중심 검증. 판정 4단 문자열·findings-first 형식은 integrity와 동일
+// (extractVerdict 판독기 불변 — 계약 ⓖ). 사용자 오버라이드(base-directive*.json)는 integrity에만 적용되고
+// core는 코드 캐논 고정(1단 — 프리셋 전환이 사용자 편집을 덮지 않게 분리, core 커스텀은 2단 custom).
+const BASE_CORE = {
+  verifyBaseline: [
+    "[검증 기본 원칙 · 핵심 프로필 — 직접 영향 중심]",
+    "1) 논리 구조만으로 단정하지 말고, 코드·파일을 실제로 열어 확인해 검증하라.",
+    "2) 검증 대상은 '요청이 선언한 목표·인수조건과 그 직접 영향'이다. 지정된 파일·범위는 시작점이되, 범위 밖 확장은 직접 의존이나 안전 불변식 위반 의심 같은 구체 사유가 있을 때만 하고 그 사유를 해당 항목에 표기하라.",
+    "3) 판정 규약(핵심 프로필): '검증: 실패'는 미해결 blocker가 최소 1개일 때만 쓴다. blocker는 항목의 종류가 아니라 실질 영향으로 판정한다 — ①선언된 인수조건 안에서 재현 가능하거나 신뢰할 수 있는 오작동 경로 ②데이터·보안·역할·증명 무결성 훼손(희귀 경합이라도 여기 해당하면 blocker) ③명시 요구사항 위반 ④핵심 인수조건을 입증할 실행 증거 부재 ⑤직접 연관된 고위험 회귀. 이에 해당하지 않는 지적(현재 범위 밖 잔여 위험, 실행 결과를 바꾸지 않는 문구·구조 개선, 추가 방어 권고)은 각 항목 머리에 '[백로그]'를 붙여 분리하라 — blocker가 없으면 판정은 '검증: 통과(보완)'.",
+    "4) 본문에 검토 내용·항목별 근거(경로·라인)를 '먼저' 상세히 작성하라. 판정 결론은 반드시 '맨 마지막 한 줄'에만 다음 4가지 중 정확히 하나로 출력하라: '검증: 통과' / '검증: 통과(보완)' / '검증: 보류' / '검증: 실패'. 마지막 줄 외에는 '검증:'으로 시작하는 줄을 쓰지 마라.",
+  ].join("\n"),
+  transmit: [
+    "[전달 원칙 · 핵심 프로필] 검증모델에게 검증을 맡길 때:",
+    "- 요청문을 구조화하라: 목표 / 인수조건(무엇이 되면 성공인가) / 직접 범위 / 제외 범위 / 필요한 증거를 명시한다.",
+    "- 파일·라인은 시작점으로만 제시하고, 내 결론은 '내 주장'으로 표시해 검증모델이 공격하게 하라.",
+    "- 검증 요청을 요약/생략하지 말고, 받을 답변을 축약하도록 지시하지 마라(판정 표지누락 유도 방지).",
+  ].join("\n"),
+  rejudge: [
+    "[재판단 · 핵심 프로필] 검증모델 답을 그대로 옮기지 마라:",
+    "- 지적을 항목으로 나눠 [수용/반박/보류] + 근거(파일·라인)를 달라. 수용에는 직접 확인한 근거가 있어야 한다.",
+    "- '[백로그]' 항목은 이 루프에서 수정하지 마라 — 사용자 최종 보고에 백로그 목록으로 그대로 전달한다(지금 고치면 최종본 재검증 의무가 다시 발동해 왕복만 늘어난다).",
+    "- blocker(실패 사유)만 고치고 재검증하라. 완료 보고는 '통과'/'통과(보완)' 후에만.",
+    "- 재검증이 반복·교착되는데 blocker가 잔존하면 통과로 포장하지 말고 '보류'로 사용자에게 선택을 넘겨라.",
+    "- 묶음 완성·로컬 커밋 후 push·배포 전에 무결성 프로필로 승격 검증 1회를 권장한다.",
+  ].join("\n"),
+};
+const BASE_CORE_EN = {
+  verifyBaseline: [
+    "[Verification Baseline · Core profile — direct-impact focused]",
+    "1) Do not conclude from logical structure alone — actually open and inspect the code/files to verify.",
+    "2) The verification target is the declared goal/acceptance criteria and their direct impact. The given files/scope are a starting point; expand beyond them only with a concrete reason (direct dependency, suspected safety-invariant violation) and note that reason on the item.",
+    "3) Verdict rule (core profile): use 'Verdict: fail' only when at least one unresolved blocker exists. A blocker is judged by real impact, not category — (1) a reproducible or credible malfunction path within the declared acceptance criteria, (2) damage to data/security/role/proof integrity (even a rare race, if it qualifies), (3) violation of an explicit requirement, (4) missing executable evidence for a core acceptance criterion, (5) directly related high-risk regression. Non-blocking findings (residual risk outside the current scope, wording/structure improvements that change no behavior, extra-hardening advice) must be prefixed with '[backlog]' — with no blocker, the verdict is 'Verdict: pass (notes)'.",
+    "4) Write the review details FIRST in the body with per-item evidence (path·line). Output the verdict only as the VERY LAST line, as exactly one of: 'Verdict: pass' / 'Verdict: pass (notes)' / 'Verdict: inconclusive' / 'Verdict: fail'. Do not write any other line starting with 'Verdict:'.",
+  ].join("\n"),
+  transmit: [
+    "[Transmission Principles · Core profile] When handing work to the verifier model:",
+    "- Structure the request: goal / acceptance criteria (what counts as success) / direct scope / exclusions / required evidence.",
+    "- Present files/lines only as starting points, and mark your conclusion as 'my claim' so the verifier can attack it.",
+    "- Do not summarize or omit the request, and do not instruct the verifier to abbreviate its reply (avoids verdict-line omission).",
+  ].join("\n"),
+  rejudge: [
+    "[Re-judgment · Core profile] Do not copy the verifier's answer verbatim:",
+    "- Split points into items with [accept/rebut/hold] + evidence (file·line). Accepted items need evidence you checked yourself.",
+    "- Do NOT fix '[backlog]' items in this loop — pass them through to the user's final report as a backlog list (fixing them now re-triggers the final-state re-verification duty and only inflates round-trips).",
+    "- Fix only blockers (fail reasons), then re-verify. Report completion only after 'pass' or 'pass (notes)'.",
+    "- If re-verification stalls with blockers remaining, do not package it as a pass — escalate to the user as 'inconclusive/hold'.",
+    "- After the bundle is complete and locally committed, one integrity-profile escalation verification before push/deploy is recommended.",
+  ].join("\n"),
+};
+
 // 영문 기본 지침 — 한국어 캐논의 '동등 품질' 영어판(직역 아님). 출력 형식(findings-first / verdict-last ·
 // 4단계 판정 문자열)은 아래 extractVerdict의 영어 문법과 반드시 일치해야 한다(지침이 시키는 형식 = 판독기가 읽는 형식).
 const BASE_DEFAULTS_EN = {
@@ -2054,7 +2122,13 @@ function baseDirectiveFileFor(lang) {
   return l === "ko" ? BASE_DIRECTIVE_FILE : path.join(BRIDGE_DIR, `base-directive.${l}.json`);
 }
 // 기본 지침 로드: 오버라이드 파일의 비지 않은 항목만 기본값을 대체. lang=언어 슬롯(오버라이드·기본값 모두 그 언어 것).
-function loadBaseDirective(lang) {
+// P-12: profile="core"면 core 캐논 고정(오버라이드 미적용 — 프리셋 전환이 사용자 편집을 덮거나 섞지 않게 분리,
+// integrity 오버라이드 파일 바이트는 불변·복귀 시 그대로). 미지정/기타=integrity(현행 동작 그대로 — 무회귀).
+function loadBaseDirective(lang, profile) {
+  if (profile === "core") {
+    const C = (LANGS.includes(lang) ? lang : loadLang()) === "en" ? BASE_CORE_EN : BASE_CORE;
+    return { verifyBaseline: C.verifyBaseline, transmit: C.transmit, rejudge: C.rejudge };
+  }
   let o = {};
   try {
     o = JSON.parse(fs.readFileSync(baseDirectiveFileFor(lang), "utf8"));
@@ -2089,9 +2163,9 @@ function resetBaseDirective(lang) {
 }
 
 // 검증 모드 ON일 때 Claude(구현모델)에게 매 턴 주입하는 2트랙 지시. 전달원칙·재판단은 기본 지침에서 로드(오버라이드 가능).
-function buildVerifyDirective(mode, lang) {
+function buildVerifyDirective(mode, lang, profile) {
   const l = LANGS.includes(lang) ? lang : loadLang();
-  const b = loadBaseDirective(l);
+  const b = loadBaseDirective(l, profile); // P-12: 주입 시점의 실효 프로필(미지정=integrity — 무회귀)
   if (l === "en") {
     const cond =
       mode === "always" ? "This turn (every response)" :
@@ -2189,10 +2263,25 @@ const VERDICT_ACTION_EN = {
 // findings-first(P1a)로 받은 답에서 '마지막 검증: 선언 줄'을 본문에서 떼어, 라벨 대신 '처리 의무' footer로 옮긴다.
 // → Claude가 '통과(보완)'의 '통과'에 앵커링해 보완을 건너뛰는 것 방지(가시성 색칩은 사람용 대시보드가 담당).
 // 떼어낸 원문 줄을 footer에 그대로 보여줘 '정확한 결론 인용'(재판단 원칙)도 보존. 게이트가 아니라 nudge.
-function formatForClaude(answer, lang) {
+// P-12 core 처리 의무: 비차단([백로그]) 자동수정 금지·blocker만 수정 — 동결된 프로필 인자로만 선택
+// (완료 시점 계약 재읽기 금지 — 계약 ⓓ). 미지정=integrity 문구(무회귀).
+const VERDICT_ACTION_CORE = {
+  pass: "조치 없음 — 단, 본문에 보완·주의·수정 항목이 보이면 선언 결론보다 본문 항목을 우선 처리하라.",
+  "pass-notes": "보완 의견 있음 — '[백로그]' 항목은 이 루프에서 수정하지 말고 사용자 최종 보고에 백로그 목록으로 전달하라. 백로그가 아닌 보완만 [수용/반박/보류]로 처리하라.",
+  inconclusive: "추가 확인 필요 — 판단 보류 사유와 다음 확인 지점을 보고하라. blocker가 잔존한 교착이면 사용자에게 선택을 넘겨라.",
+  fail: "수정 필요 — blocker(실패 사유)만 고친 뒤 재검증하라. '[백로그]' 항목은 수정하지 말고 보고에 전달하라.",
+};
+const VERDICT_ACTION_CORE_EN = {
+  pass: "No action — but if the body contains supplement/caution/fix items, prioritize those body items over the declared verdict.",
+  "pass-notes": "Notes present — do NOT fix '[backlog]' items in this loop; pass them to the user's final report as a backlog list. Handle only non-backlog notes as [accept/rebut/hold].",
+  inconclusive: "Further verification needed — report the hold reason and next checkpoints. If blockers remain in a stalemate, escalate the choice to the user.",
+  fail: "Fix required — fix only the blockers (fail reasons), then re-verify. Do not fix '[backlog]' items; pass them through in the report.",
+};
+function formatForClaude(answer, lang, profile) {
   const text = String(answer || "");
   const en = (LANGS.includes(lang) ? lang : loadLang()) === "en";
-  const action = (en ? VERDICT_ACTION_EN : VERDICT_ACTION)[extractVerdict(text)];
+  const table = profile === "core" ? (en ? VERDICT_ACTION_CORE_EN : VERDICT_ACTION_CORE) : (en ? VERDICT_ACTION_EN : VERDICT_ACTION);
+  const action = table[extractVerdict(text)];
   if (!action) return text; // 결론 표지 못 찾음(null) → 원문 그대로(나서서 자르지 않음)
   const lines = text.split(/\r?\n/);
   // '판정으로 분류되는 줄'만 선언으로 본다 = 그 줄 하나로 extractVerdict가 non-null. VERDICT_DECL_RE 단독 매칭보다 보수적 —
@@ -2208,7 +2297,7 @@ function formatForClaude(answer, lang) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, BASE_CORE, BASE_CORE_EN, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
 module.exports.codexImplementerSession = codexImplementerSession;
 module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
 // P-6 회수 영수증 계약(설계 v5.1)

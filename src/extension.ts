@@ -264,6 +264,17 @@ function normVerifyMode(o: any): VerifyMode {
 }
 // C-C 슬롯 검증 스위치(모드별 분리 2026-07-15) — bridge/contract-lib.js normCodexVerifyMode와 동형(스키마 정합).
 // 부재 시 normVerifyMode(o) '전체' 재사용(원시 o.verifyMode 폴백 금지 — verify:true→code 레거시 호환 보존).
+type VerifyProfile = "integrity" | "core";
+const VERIFY_PROFILES: VerifyProfile[] = ["integrity", "core"];
+// P-12: 검증 강도 프로필 — 부재=integrity(무회귀), C-C 부재 시 CL-C 상속(bridge/contract-lib.js와 동일 규칙).
+function normVerifyProfile(o: any): VerifyProfile {
+  if (o && VERIFY_PROFILES.includes(o.verifyProfile)) return o.verifyProfile;
+  return "integrity";
+}
+function normCodexVerifyProfile(o: any): VerifyProfile {
+  if (o && VERIFY_PROFILES.includes(o.codexVerifyProfile)) return o.codexVerifyProfile;
+  return normVerifyProfile(o);
+}
 function normCodexVerifyMode(o: any): VerifyMode {
   if (o && VERIFY_MODES.includes(o.codexVerifyMode)) return o.codexVerifyMode;
   return normVerifyMode(o);
@@ -318,6 +329,8 @@ interface Contract {
   codexVerifierChecklist: boolean;
   verifyMode: VerifyMode; // CL-C 슬롯 검증 스위치(레거시 필드명 유지 — 무회귀)
   codexVerifyMode: VerifyMode; // C-C 슬롯 검증 스위치(모드별 분리 2026-07-15 — 부재 시 verifyMode 상속)
+  verifyProfile: VerifyProfile; // P-12: CL-C 슬롯 검증 강도(부재=integrity)
+  codexVerifyProfile: VerifyProfile; // P-12: C-C 슬롯(부재 시 verifyProfile 상속)
   claudeInjectMode: InjectMode;
   codexInjectMode: InjectMode;
   scoutMode: ScoutMode;
@@ -415,6 +428,8 @@ function loadContract(ws?: string | null, lang?: Lang): Contract {
     codexVerifierChecklist: o.codexVerifierChecklist !== false,
     verifyMode: normVerifyMode(o),
     codexVerifyMode: normCodexVerifyMode(o),
+    verifyProfile: normVerifyProfile(o),
+    codexVerifyProfile: normCodexVerifyProfile(o),
     claudeInjectMode: normInjectMode(o),
     codexInjectMode: o && INJECT_MODES.includes(o.codexInjectMode) ? o.codexInjectMode : "always",
     scoutMode: normScoutMode(o),
@@ -2842,12 +2857,16 @@ class Dashboard {
             codexInjectMode: normInjectMode({ claudeInjectMode: m.claudeInjectMode }),
             // C-C 검증 스위치의 유일 물질화 지점(명시적 C-C 계약 저장) — 이후 CL-C verifyMode와 독립.
             codexVerifyMode: normVerifyMode({ verifyMode: m.verifyMode }),
+            // P-12 굳힘 금지(계약 ⓐ): 사용자가 프로필을 실제로 바꾼 저장에만 기록 — 상속 실효값이
+            // 원시 필드로 물질화되면 이후 CL-C 변경이 C-C로 상속되지 않는 회귀(구현검증 1차 지적 2).
+            ...(m.verifyProfileTouched ? { codexVerifyProfile: normVerifyProfile({ verifyProfile: m.verifyProfile }) } : {}),
             scoutMode: normScoutMode({ scoutMode: m.scoutMode }),
           } : {
             claude: Array.isArray(m.claude) ? m.claude : [],
             codex: Array.isArray(m.codex) ? m.codex : [],
             claudeInjectMode: normInjectMode({ claudeInjectMode: m.claudeInjectMode }), // 체크리스트 제외 — 위 주석과 동일(P-8 1단)
             verifyMode: normVerifyMode({ verifyMode: m.verifyMode }),
+            ...(m.verifyProfileTouched ? { verifyProfile: normVerifyProfile({ verifyProfile: m.verifyProfile }) } : {}), // P-12: 명시 변경만(굳힘 금지)
             scoutMode: normScoutMode({ scoutMode: m.scoutMode }),
           };
           const ok = patchContractExt(dashboardWorkspace(), slotLang, patch);
@@ -3470,6 +3489,12 @@ class Dashboard {
         <button type="button" data-vm="off">${t("꺼짐<small>강제 안 함</small>", "Off<small>not forced</small>")}</button><button type="button" data-vm="code">${t("코드 변경 시<small>편집한 턴</small>", "On code change<small>edited turns</small>")}</button><button type="button" data-vm="plancode">${t("플랜 확정/코드 변경<small>플랜·편집 턴</small>", "Plan confirm/code<small>plan·edit turns</small>")}</button><button type="button" data-vm="always">${t("모든 턴<small>매 응답</small>", "Every turn<small>all replies</small>")}</button>
       </span>
     </label>
+    <label class="ck verify">${t("검증 강도 — <b>어떻게</b> 검증할지 (P-12)", "Verify intensity — <b>how</b> to verify (P-12)")}
+      <span class="seg" id="segProfile">
+        <button type="button" data-vp="integrity">${t("무결성<small>넓게 탐색 (기본)</small>", "Integrity<small>wide search (default)</small>")}</button><button type="button" data-vp="core">${t("핵심<small>직접 영향 중심</small>", "Core<small>direct impact</small>")}</button>
+      </span>
+    </label>
+    <div class="hint">${t("무결성: 관련 호출부·경합·회귀·문서까지 넓게 탐색 — 모든 결함 부재를 보증하지는 않음 · 핵심: 선언된 요구·직접 영향 중심, 비차단 지적은 [백로그]로 분리·자동수정 금지 — 범위 밖 잔여 위험이 남을 수 있고, 모델에 주입되는 처리 규약이라 기계적 왕복 상한·자동수정 차단은 아직 없음(2단). 프로필·언어 선택은 이후 시작되는 검증(ask)부터 즉시 적용됩니다 — 이미 진행 중인 턴의 주입 지침은 바뀌지 않아 한 턴 안에서 규약이 섞일 수 있으니, 턴 전체 일관성이 필요하면 다음 프롬프트를 보내기 전에 전환하세요. 핵심으로 작업했다면 push·배포 전에 무결성 승격 검증 1회를 권장합니다.", "Integrity: searches widely across call sites, races, regressions, and docs — does not guarantee absence of all defects. Core: focuses on the declared requirements and their direct impact; non-blocking findings are split as [backlog] and must not be auto-fixed — residual out-of-scope risk may remain, and this is a protocol injected into the models: no mechanical round-trip cap or auto-fix blocking yet (phase 2). Profile/language choices apply immediately to verifications (asks) started afterwards — directives already injected into the current turn do not change, so protocols can mix within one turn; switch before your next prompt if you need whole-turn consistency. If you worked in Core, one Integrity escalation verification before push/deploy is recommended.")}</div>
     <div class="hint"><span class="ic" id="planConfirmHelp" title="${t("플랜 확정 = 플랜 모드(shift+Tab)에서 세운 계획을 확정·제출하는 그 턴(ExitPlanMode). 플랜 모드 '내내'가 아니라 확정하는 '순간'이에요. '플랜 확정/코드 변경'은 이 플랜 확정 턴이거나 파일을 바꾼 턴에 검증을 강제합니다.", "Plan confirm = the turn that submits the plan (ExitPlanMode) — the moment of confirming, not the whole plan mode. 'Plan confirm/code' forces verification on that turn or on file-changing turns.")}">ⓘ ${t("'플랜 확정'이 뭐야?", "What is 'plan confirm'?")}</span> · <span class="ic" title="${t("검증이 필요한 턴은 선택한 모드가 정해요. 모든 턴=매 답변, 코드 변경 시=파일을 만든/고친 턴, 플랜 확정/코드 변경=플랜을 확정했거나 파일을 고친 턴. 그 턴엔 Codex 검증 결과를 반영해 보고해야 끝낼 수 있어요.", "The selected mode decides which turns require verification. Every turn = all replies; on code change = turns that create/modify files; plan confirm/code = plan-confirm or file-changing turns. Those turns can only finish after reporting with Codex verification.")}">ⓘ ${t("언제 검증되나?", "When is it verified?")}</span></div>
     <label class="ck verify">${t("트랙 — 구현·검증 흐름에 <b>정찰(영향 미리보기·관찰 일지)</b>을 더할지", "Track — add <b>recon (impact preview · field journal)</b> to the implement·verify flow")}
       <span class="seg" id="segScout">
@@ -3666,8 +3691,8 @@ class Dashboard {
   function el(tag, cls, text){ const e=document.createElement(tag); if(cls)e.className=cls; if(text!=null)e.textContent=text; return e; }
   // 폼에서 고른 값(curVM/curIM, 저장 시 전송) vs 저장돼 실제 적용 중인 값(appVM/appIM, 지도·'지금 받는 것'에 표시).
   // 지도/패널은 "저장된 것"만 보여주고(거짓 미리보기 방지), 저장하는 순간 바뀐 곳을 깜빡인다.
-  let curVM = "off", curIM = "always", curSM = "off", harnessMode = "claude-codex";
-  let appVM = null, appIM = null, appSM = null;
+  let curVM = "off", curIM = "always", curSM = "off", curVP = "integrity", harnessMode = "claude-codex";
+  let appVM = null, appIM = null, appSM = null, appVP = null;
   let appCkC = null, appCkX = null; // 체크박스 '마지막 적용값'(hold 판정용 — 미저장 체크 변경이 언어 전환에 덮이지 않게)
   let curPerm = "";   // 지금 Claude Code 권한 모드(active.json) — plan 게이트 표시용
   let curRS = "";     // 두뇌 설정 폼에서 고른 생각강도("" = 기본). 모델은 입력칸 값 직접 사용.
@@ -3722,8 +3747,9 @@ class Dashboard {
     if(prevVM!=null && prevVM!==appVM){ flashNode(ver); flashNode($("sbTransmit")); flashNode($("sbVerify")); flashNode($("sbRejudge")); }
   }
   function highlightSeg(segId, attr, v){ const s=$(segId); if(s) s.querySelectorAll("button").forEach((b)=>b.classList.toggle("on", b.getAttribute(attr)===v)); }
-  function markDirty(){ const d=$("dirtyHint"); if(d) d.style.display = ((curVM!==appVM)||(curIM!==appIM)||(curSM!==appSM)) ? "" : "none"; try { reportCardDirty(); } catch(e){ /* 선언 전 호출 없음 — 방어 */ } }
+  function markDirty(){ const d=$("dirtyHint"); if(d) d.style.display = ((curVM!==appVM)||(curIM!==appIM)||(curSM!==appSM)||(appVP!==null&&curVP!==appVP)) ? "" : "none"; try { reportCardDirty(); } catch(e){ /* 선언 전 호출 없음 — 방어 */ } }
   $("segVerify").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-vm]"); if(b){ curVM=b.getAttribute("data-vm"); highlightSeg("segVerify","data-vm",curVM); markDirty(); } });
+  $("segProfile").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-vp]"); if(b){ curVP=b.getAttribute("data-vp"); highlightSeg("segProfile","data-vp",curVP); markDirty(); } });
   $("segScout").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-sm]"); if(b){ curSM=b.getAttribute("data-sm"); highlightSeg("segScout","data-sm",curSM); markDirty(); } });
   $("segInject").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-im]"); if(b){ curIM=b.getAttribute("data-im"); highlightSeg("segInject","data-im",curIM); markDirty(); } });
   $("segReason").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-rs]"); if(b){ curRS=b.getAttribute("data-rs"); highlightSeg("segReason","data-rs",curRS); } });
@@ -3856,7 +3882,7 @@ class Dashboard {
   }
   // 카드 미저장 초안 종합(P-10: 규칙 textarea+세그 초안 — 체크박스는 즉시 저장이라 초안 없음)
   function cardDirtyNow(){
-    var seg = (appVM!==null && curVM!==appVM) || (appIM!==null && curIM!==appIM) || (appSM!==null && curSM!==appSM);
+    var seg = (appVM!==null && curVM!==appVM) || (appIM!==null && curIM!==appIM) || (appSM!==null && curSM!==appSM) || (appVP!==null && curVP!==appVP);
     return !!(contractDirty.claude || contractDirty.codex || seg);
   }
   // 초안/저장대기 상태를 호스트에 결속(2차 지적 2) — 다른 창발 언어 변경의 HTML 재생성(초안 파괴)을 호스트가 보류.
@@ -3915,7 +3941,7 @@ class Dashboard {
     // 저장 대상 모드=beg.mode(렌더된 슬롯) — 런타임 harnessMode가 그 사이 바뀌어도 보던 슬롯에 저장(오염 방지).
     vscode.postMessage({type:"saveContract", lang: renderedLangC || undefined, harnessMode: beg.mode, reqId: rid,
       claude: toLines($("cClaude").value), codex: toLines($("cCodex").value),
-      verifyMode: curVM, claudeInjectMode: curIM, scoutMode: curSM}); // 체크리스트는 토글 즉시 저장(P-8 1단) — 버튼 저장에서 제외
+      verifyMode: curVM, verifyProfile: curVP, verifyProfileTouched: (appVP!==null && curVP!==appVP), claudeInjectMode: curIM, scoutMode: curSM}); // 체크리스트는 토글 즉시 저장(P-8 1단) — 버튼 저장에서 제외
     // 성공 플래시·스크롤은 saveResult(ok)에서 (저장 실패 시 거짓 성공 방지)
   });
   $("revertC").addEventListener("click", function(){
@@ -4318,9 +4344,11 @@ class Dashboard {
         var preVM = ccR ? d.contract.codexVerifyMode : d.contract.verifyMode;
         var preIM = ccR ? d.contract.codexInjectMode : d.contract.claudeInjectMode;
         var preSM = d.contract.scoutMode || "off";
+        var preVP = (ccR ? d.contract.codexVerifyProfile : d.contract.verifyProfile) || "integrity"; // P-12
         if (appVM!==null && curVM!==appVM && curVM===preVM) appVM = curVM;
         if (appIM!==null && curIM!==appIM && curIM===preIM) appIM = curIM;
         if (appSM!==null && curSM!==appSM && curSM===preSM) appSM = curSM;
+        if (appVP!==null && curVP!==appVP && curVP===preVP) appVP = curVP;
       }
       // 모드 전환 hold 판정(푸시당 1회 — 확정 계약 ⑴): 외부(파일 편집·자동 전환)로 런타임 모드가 바뀌어도
       // 미저장 초안·계약 저장 대기(dirty||pending)면 카드는 renderedMode(옛 슬롯) 화면·라벨 그대로 동결.
@@ -4432,7 +4460,7 @@ class Dashboard {
     const langChangedC = renderedLangC !== null && d.lang && d.lang !== renderedLangC;
     // '카드에 저장 안 한 변경'은 textarea(dirty·포커스)만이 아니라 세그(curVM/curIM≠app*)·체크박스(appCk*와 다름)도 포함
     // — 세그만 바꾸고 언어 전환→저장 시 en 슬롯에 ko 화면의 모드가 저장되는 잔여 오염 차단(Codex 검증 반례 반영).
-    const segDirtyC = (appVM!==null && curVM!==appVM) || (appIM!==null && curIM!==appIM) || (appSM!==null && curSM!==appSM);
+    const segDirtyC = (appVM!==null && curVM!==appVM) || (appIM!==null && curIM!==appIM) || (appSM!==null && curSM!==appSM) || (appVP!==null && curVP!==appVP);
     const ckDirtyC = (appCkC!==null && $("ckClaude").checked!==appCkC) || (appCkX!==null && $("ckCodex").checked!==appCkX);
     // 모드 hold(cardStLast — 라벨 블록에서 푸시당 1회 판정)는 언어 hold와 같은 동결 계약: 외부 전환+dirty/저장대기.
     const holdC = (langChangedC && (contractDirty.claude || contractDirty.codex || segDirtyC || ckDirtyC ||
@@ -4455,13 +4483,14 @@ class Dashboard {
       const first = (appVM===null);
       // 되돌리기 직후(cardM.revert가 renderedMode를 리셋 → 이번 state가 first)는 초안 폐기 확정 — 저장값으로 강제 동기화.
       const forceSync = cardStLast.first === true && !first;
-      const pVM=appVM, pIM=appIM, pSM=appSM;
+      const pVM=appVM, pIM=appIM, pSM=appSM, pVP=appVP; // pVP: P-12 — 프로필 초안도 상태 푸시에 안 되돌아가게
       appVM = (ccMode ? d.contract.codexVerifyMode : d.contract.verifyMode) || "off"; // 모드별 검증 스위치(분리 2026-07-15)
+      appVP = (ccMode ? d.contract.codexVerifyProfile : d.contract.verifyProfile) || "integrity"; // P-12 모드별 프로필(부재=integrity)
       appIM = (ccMode ? d.contract.codexInjectMode : d.contract.claudeInjectMode) || "always";
       appSM = d.contract.scoutMode || "off";
       // 사용자가 저장 안 한 토글 변경을 들고 있으면(dirty) 폼 선택을 보존, 아니면 저장값으로 동기화.
-      const dirty = !first && !forceSync && ((curVM!==pVM)||(curIM!==pIM)||(curSM!==pSM));
-      if(first || forceSync || !dirty){ curVM=appVM; curIM=appIM; curSM=appSM; highlightSeg("segVerify","data-vm",curVM); highlightSeg("segInject","data-im",curIM); highlightSeg("segScout","data-sm",curSM); }
+      const dirty = !first && !forceSync && ((curVM!==pVM)||(curIM!==pIM)||(curSM!==pSM)||(pVP!==null&&curVP!==pVP));
+      if(first || forceSync || !dirty){ curVM=appVM; curIM=appIM; curSM=appSM; curVP=appVP; highlightSeg("segVerify","data-vm",curVM); highlightSeg("segInject","data-im",curIM); highlightSeg("segScout","data-sm",curSM); highlightSeg("segProfile","data-vp",curVP); }
       renderApplied(first?undefined:pVM, first?undefined:pIM);  // 저장/변경 반영 후 바뀐 축을 깜빡(첫 렌더는 깜빡 없음)
       markDirty();
     }

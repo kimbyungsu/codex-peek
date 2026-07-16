@@ -117,7 +117,7 @@ ok(/cardStLast\.act === "hold"/.test(ext) && /cardNotice\(T\("운용 모드가 "
 ok(/const forceSync = cardStLast\.first === true && !first;/.test(ext), "되돌리기 후 저장값 강제 동기화 경로");
 // 구현검증 1차 지적 1~4 봉합 배선
 ok(/function cardInputLock\(on\)\{/.test(ext) && /cardInputLock\(true\); \/\/ 응답 전 재편집 차단/.test(ext) && /cardInputLock\(false\); \/\/ 응답 도착/.test(ext) && /if \(cardM\.expire\(rid\)\.act === "fail"\) \{ cardInputLock\(false\);/.test(ext), "지적1 — 저장 대기 중 카드 입력 잠금(시작·응답·만료 3지점 배선, 무음 소실 봉합)");
-ok((ext.match(/if\(cardM\.saving\(\)\) return; const b=ev\.target\.closest/g) || []).length === 3, "지적1 — 세그 3종도 저장 대기 중 입력 차단");
+ok((ext.match(/if\(cardM\.saving\(\)\) return; const b=ev\.target\.closest/g) || []).length === 4, "지적1 — 세그 4종(검증 모드·주입·트랙·P-12 프로필)도 저장 대기 중 입력 차단");
 ok(/var baseDirtyAny = !!\(baseM\.locked\(\) \|\| baseDirty\.verify \|\| baseDirty\.transmit \|\| baseDirty\.rejudge \|\| baseDirty\.scout\);/.test(ext) && /if \(cardDirtyNow\(\) \|\| cardM\.saving\(\) \|\| baseDirtyAny\) \{/.test(ext), "지적2 — 언어 전환도 미저장 초안·저장 대기 중 차단(HTML 재생성이 초안·상태기 파괴 — base 잠금 포함)");
 // [2차 지적 1] 자기치유는 fill 내부가 아니라 hold 판정 '전'(라벨 블록)에서, 렌더 슬롯(renderedMode) 기준으로 실행 —
 // 외부 전환 hold 중에도 디스크가 초안을 따라잡으면 dirty가 풀려 hold가 자연 해소된다(영구 잠금 차단).

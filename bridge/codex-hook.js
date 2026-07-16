@@ -94,7 +94,7 @@ function implementerContext(j, ws, c) {
   const parts=[]; const plan=j.permission_mode==="plan";
   const inject=c.codexInjectMode==="always" || (c.codexInjectMode==="plan" && plan);
   if(inject){ const x=buildInjection(c.codexImplementer,"Codex Implementer",c.codexImplementerChecklist); if(x)parts.push(x); }
-  if(c.codexVerifyMode!=="off") parts.push(buildVerifyDirective(c.codexVerifyMode)); // C-C 슬롯 스위치(모드별 분리 2026-07-15)
+  if(c.codexVerifyMode!=="off") parts.push(buildVerifyDirective(c.codexVerifyMode, undefined, c.codexVerifyProfile)); // C-C 슬롯 스위치(모드별 분리 2026-07-15)·P-12 프로필(주입 시점 실효값)
   try { const x=buildScoutDirective(ws,c); if(x)parts.push(x); } catch { /* advisory */ }
   try { const x=require("./map-bootstrap.js").hookTick(ws); if(x)parts.push(x); } catch { /* advisory */ }
   return parts.join("\n\n");

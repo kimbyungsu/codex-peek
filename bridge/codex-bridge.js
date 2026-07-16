@@ -20,17 +20,17 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
 // 호출 시점 전역 언어의 문자열 선택(무결성 detail·CLI 안내 등). ask 본문 흐름은 langSnap 사용.
 function tB(ko, en) { return loadLang() === "en" ? en : ko; }
-function withContract(prompt, ws, lang, carrier) {
+function withContract(prompt, ws, lang, carrier, profile) {
   // lang: 언어 스냅샷(cmdAsk의 langSnap) — 미지정 시 전역 언어. 주입(기본지침·계약 지시문)과 헤더/footer 언어를 한 스냅샷으로 일관.
   // carrier(L1-A): 호출자가 준 객체에 '이번 ask에 실제로 실린 동봉 스냅샷'(mapItems·couplings)을 담아 준다 —
   // 확인 판정(flagLedgerConfirms)이 '지금 다시 계산한 동봉'이 아니라 '전송된 그 동봉'으로 echo를 판정하게(Codex 설계검증).
-  const baseline = loadBaseDirective(lang).verifyBaseline;
+  const baseline = loadBaseDirective(lang, profile).verifyBaseline; // P-12: 동결된 프로필의 검증자 기본 원칙
   let inj = "", scout = "", c = null;
   try {
     // 계약은 '연 폴더(configWs)' 기준으로 로드 — cmdAsk가 modelPref·proof·라벨·withContract에 같은 configWs 스냅샷(ws)을
@@ -102,6 +102,25 @@ function implementerId(ws) {
 // P-6(3차 지적 3): 내구 env는 '존재'가 아니라 실체를 검증한다 — 정본 경로(ask-jobs/<id>.json)·파일명↔id·
 // 정확 스냅샷·running 상태·workspace 결속까지. 임의 경로의 조작 JSON으로 직접 ask 게이트를 우회하거나
 // writeProof가 비정본 job을 신뢰하는 통로를 닫는다. cmdAsk 게이트와 writeProof가 같은 판정을 공유한다.
+// P-12(구현검증 2차 정정): 프로필·언어 동결값 회수용 '모드 무관' 정본 판독기 — 경로·ID 문법·정본 경로·
+// id 일치·schema·workspace·running까지 확인하되, C-C proof 전용 조건(구현 세션·턴·revision —
+// durableJobSnapshotOk)은 적용하지 않는다. CL-C 정상 job이 job-mode로 거부돼 동결값이 무시되던 회귀 봉합.
+// P-6 proof 경계(readDurableEnvJob)는 그대로 — 완화 아님(분리).
+function readCanonicalEnvJob(ws) {
+  const jobFile = process.env.CODEX_BRIDGE_JOB_PROMPT_FILE || "";
+  const jobIdEnv = process.env.CODEX_BRIDGE_ASK_JOB_ID || "";
+  if (!jobFile || !jobIdEnv) return { ok: false, reason: "env-missing" };
+  if (!askJobIdOk(jobIdEnv)) return { ok: false, reason: "env-id-grammar" };
+  const canonical = path.resolve(ASK_JOBS_DIR, jobIdEnv + ".json");
+  let resolved = ""; try { resolved = path.resolve(jobFile); } catch { return { ok: false, reason: "env-path" }; }
+  if (resolved.toLowerCase() !== canonical.toLowerCase()) return { ok: false, reason: "env-noncanonical" };
+  let job = null; try { job = JSON.parse(fs.readFileSync(canonical, "utf8")); } catch { return { ok: false, reason: "env-job-unreadable" }; }
+  if (job.id !== jobIdEnv) return { ok: false, reason: "env-id-mismatch" };
+  if (job.schema !== "ask-job-v1") return { ok: false, reason: "env-schema" };
+  if (normWs(String(job.workspace || "")) !== normWs(ws)) return { ok: false, reason: "env-workspace" };
+  if (job.state !== "running") return { ok: false, reason: "env-not-running" };
+  return { ok: true, job };
+}
 function readDurableEnvJob(ws) {
   const jobFile = process.env.CODEX_BRIDGE_JOB_PROMPT_FILE || "";
   const jobIdEnv = process.env.CODEX_BRIDGE_ASK_JOB_ID || "";
@@ -1186,7 +1205,8 @@ function cmdAskStart(rest) {
     if(old)throw Object.assign(new Error(tB(`⚠️ 기존 검증 작업(${old.id})이 ${old.state} 상태입니다. 새 작업을 만들지 않았습니다. ask-wait ${old.id} 로 이어서 기다리세요.`,`⚠️ Verification job ${old.id} is ${old.state}. No new job was created. Continue with ask-wait ${old.id}.`)),{exitCode:3});
     // P-6(설계 v5.1): C-C면 구현 컨텍스트를 job에 불변 동결. 잠금 순서 고정 ask-job → role(유일한 중첩 지점 —
     // 기존 role lock 사용처는 전부 단독 획득이라 역순 데드락 없음, Codex 전수 확인). 부재·중간 상태는 fail-closed.
-    const cSnap=loadContract(ws);
+    const askLangSnap=loadLang(); // P-12: 언어 먼저 캡처 → 같은 슬롯 계약(프로필·언어 단일 스냅샷)
+    const cSnap=loadContract(ws, askLangSnap);
     let frozen={implementerSession:null,implementerTurnId:null,implementerRevision:null};
     if(cSnap.harnessMode==="codex-codex"){
       const fr=freezeImplementerContext(ws);
@@ -1199,7 +1219,7 @@ function cmdAskStart(rest) {
       if(pendingId)throw Object.assign(new Error(tB(`⚠️ 회수 대기 중인 성공 검증(${pendingId})이 있습니다. 새 작업을 만들지 않았습니다 — 먼저 ask-wait ${pendingId} 로 회수하세요.`,`⚠️ A succeeded verification (${pendingId}) is awaiting retrieval. No new job was created — retrieve it first with ask-wait ${pendingId}.`)),{exitCode:3});
     }
     id="ask-"+Date.now().toString(36)+"-"+crypto.randomBytes(5).toString("hex");timeoutMin=verifyTimeoutMin();const now=Date.now();
-    job={schema:"ask-job-v1",id,state:"queued",workspace:ws,execCwd:process.cwd(),flags:req.flags,prompt:req.prompt,timeoutMin,createdAt:new Date(now).toISOString(),deadlineAt:new Date(now+timeoutMin*60*1000).toISOString(),workerPid:null,childPid:null,exitCode:null,harnessMode:cSnap.harnessMode,implementerSession:frozen.implementerSession,implementerTurnId:frozen.implementerTurnId,implementerRevision:frozen.implementerRevision};
+    job={schema:"ask-job-v1",id,state:"queued",workspace:ws,execCwd:process.cwd(),flags:req.flags,prompt:req.prompt,timeoutMin,createdAt:new Date(now).toISOString(),deadlineAt:new Date(now+timeoutMin*60*1000).toISOString(),workerPid:null,childPid:null,exitCode:null,harnessMode:cSnap.harnessMode,verifyProfile:effectiveVerifyProfile(cSnap),verifyLang:askLangSnap,implementerSession:frozen.implementerSession,implementerTurnId:frozen.implementerTurnId,implementerRevision:frozen.implementerRevision};
     file=askJobFile(id);
     if(!atomicWrite(file,JSON.stringify(job)))throw new Error(tB("검증 작업 저장 실패 — 새 검증을 시작하지 않았습니다.","Failed to save the verification job — no verification was started."));
   }); } catch(e) { die(String(e&&e.message||e),Number(e&&e.exitCode)||1); }
@@ -1343,12 +1363,30 @@ async function cmdAsk(rest) {
     }
   }
   process.on("exit", () => clearAskInflight(ws, promptHash, inflightRec && inflightRec.token)); // 자기 표식만 해제(SIGKILL 잔존은 pid 생존 검사가 무시)
-  const contractSnap = loadContract(ws) || {};
+  // P-12 동결(계약 ⓕ · 구현검증 1~2차 정정): 내구 경로는 '모드 무관 정본 판독'(readCanonicalEnvJob —
+  // 경로·id·schema·workspace·running까지, C-C proof 전용 조건은 미적용: P-6 판독기 readDurableEnvJob은
+  // CL-C job을 job-mode로 거부하므로 여기 쓰면 안 됨)을 통과한 job의 동결값만 신뢰하고, 정본인데 필드가
+  // 없는 legacy job은 integrity+전역 언어로 고정한다(생성 후 계약을 core로 바꿔도 legacy job이 core로
+  // 실행되지 않음 — 무회귀). 직접 ask는 시작 시점 스냅샷.
+  const durableEnv = process.env.CODEX_BRIDGE_JOB_PROMPT_FILE ? readCanonicalEnvJob(ws) : null; // 모드 무관 정본 판독(CL-C job 포함 — P-6 판독기는 C-C proof 전용이라 여기서 쓰면 CL-C 동결값이 무시됨)
+  const jobFrozen = (() => {
+    if (!durableEnv) return null; // 직접 ask
+    if (!durableEnv.ok) return { profile: "integrity", lang: loadLang() }; // 비정본 env — 프로필 출처로 불신(fail-safe 최소값)
+    const j = durableEnv.job;
+    return {
+      profile: VERIFY_PROFILES.includes(j.verifyProfile) ? j.verifyProfile : "integrity",
+      lang: (j.verifyLang === "ko" || j.verifyLang === "en") ? j.verifyLang : loadLang(),
+    };
+  })();
+  // 언어를 먼저 한 번 캡처하고 '같은 슬롯'의 계약을 읽는다 — 두 읽기 사이 언어 전환으로 ko 계약 프로필과
+  // en 언어가 한 ask에 결합되는 교차 슬롯 스냅샷 차단(구현검증 1차 지적 4).
+  const langSnap = jobFrozen ? jobFrozen.lang : loadLang();
+  const contractSnap = loadContract(ws, langSnap) || {};
   const harnessModeSnap = contractSnap.harnessMode === "codex-codex" ? "codex-codex" : "claude-codex";
   // 검증 트리거 모드 스냅샷(검증 중 사용자가 바꿔도 오염 안 되게) → flagVerdict로 전달.
   // 모드별 분리(2026-07-15): 현재 운용 모드의 슬롯 스위치를 기록(통계 귀속 정확성).
   const modeSnap = (harnessModeSnap === "codex-codex" ? contractSnap.codexVerifyMode : contractSnap.verifyMode) || "";
-  const langSnap = loadLang(); // 언어 스냅샷 — ask 실행 중(수 분) 언어를 바꿔도 주입 언어와 헤더/footer 언어가 엇갈리지 않게(modeSnap과 동일 원칙)
+  const profileSnap = jobFrozen ? jobFrozen.profile : effectiveVerifyProfile(contractSnap); // 직접 ask=시작 스냅샷(계약 ⓕ)
   const exec = process.cwd();   // 작업 폴더(실행/탐지/근거경로 기준) — 코덱스 spawn은 cwd 미지정이라 실제로 여기서 돈다
   const mArgs = modelArgs(modelPrefFor(links, ws, harnessModeSnap)); // 운용 모드별 검증 모델/생각강도를 매 호출 -c로 재적용
 
@@ -1370,7 +1408,7 @@ async function cmdAsk(rest) {
     try { writePhase("codex-verifying", { round: (readPhase().round || 0) + 1, session: claudeId(), workspace: ws }); } catch { /* 진행표시 best-effort */ }
     const askId = require("crypto").randomUUID(); // L1-A: '서로 다른 ask 실행' 판정 재료(지문·verdict ts는 재실행 구분에 부적합 — Codex)
     const attCarrier = {};                        // L1-A: 이번 ask에 실제로 실린 동봉 스냅샷(재계산 아님)
-    const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs, ...(net ? netArgs() : [])], withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier));
+    const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs, ...(net ? netArgs() : [])], withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier, profileSnap));
     if (error || !answer || (typeof status === "number" && status !== 0)) {
       try { writePhase("claude-working", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // ask 실패 → 진행표시 codex-verifying 잔존 방지(Claude로 복귀)
       die(tB(`Codex resume 실패: `,`Codex resume failed: `) + `${error?.message || ""}\n${stderr.slice(-500)}`);
@@ -1381,7 +1419,7 @@ async function cmdAsk(rest) {
     flagLedgerConfirms(answer, ws, link.codexSession, exec, { askId, attach: attCarrier }); // 로드맵 ④ L1-A: 등급·echo·askId·seen을 이벤트에
     collectScoutTargetEvidence(answer, ws, exec); // 정찰 대상 자기진단 증거(2026-07-10 — 판정 무관·3트랙만·실패 무해)
     flagVerdict(answer, ws, link.codexSession, modeSnap); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 답에 판정 줄이 없으면 표지 누락 노랑 가시화(자동 차단 X)
-    process.stdout.write(`${langSnap === "en" ? "# Linked session" : "# 연결 세션"} ${link.codexSession} (${link.via})\n\n${formatForClaude(answer, langSnap)}\n`);
+    process.stdout.write(`${langSnap === "en" ? "# Linked session" : "# 연결 세션"} ${link.codexSession} (${link.via})\n\n${formatForClaude(answer, langSnap, profileSnap)}\n`);
     return;
   }
 
@@ -1438,7 +1476,7 @@ async function cmdAsk(rest) {
   const onDetect = (id) => { if (earlyLinked) return; try { if (recordLink(id)) earlyLinked = id; } catch { /* 다음 폴/최종 단계서 재시도 */ } };
   const askId = require("crypto").randomUUID(); // L1-A: '서로 다른 ask 실행' 판정 재료
   const attCarrier = {};                        // L1-A: 이번 ask에 실제로 실린 동봉 스냅샷
-  const { answer, error, status, stderr, detected } = await runCodexNewSessionAsync([...mArgs, ...(net ? netArgs() : [])], withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier), since, exec,
+  const { answer, error, status, stderr, detected } = await runCodexNewSessionAsync([...mArgs, ...(net ? netArgs() : [])], withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier, profileSnap), since, exec,
     (id) => { updateAskActive(ws, activeRec && activeRec.token, { sessionId: id }); onDetect(id); },
     (pid) => { updateAskActive(ws, activeRec && activeRec.token, { childPid: Number.isInteger(pid) ? pid : null }); }); // 탐지=작업폴더(코덱스 session_meta.cwd와 일치)
   // cwd 일치 우선, 못 찾으면 원래 방식(무회귀) — 최종 식별용 폴백.
@@ -1468,7 +1506,7 @@ async function cmdAsk(rest) {
     const head = earlyLinked
       ? (en ? `# New Codex session created·linked immediately: ${id}` : `# 새 Codex 세션 생성·즉시연결: ${id}`)
       : (en ? `# New Codex session created·linked: ${id}` : `# 새 Codex 세션 생성·연결: ${id}`);
-    process.stdout.write(`${head}\n\n${formatForClaude(answer, langSnap)}\n`);
+    process.stdout.write(`${head}\n\n${formatForClaude(answer, langSnap, profileSnap)}\n`);
   } else {
     updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; }); // 다음 자동 생성 차단 플래그
     // thread.started JSON + rollout 탐지 모두 실패한 비정상 상태는 성공 proof로 인정하지 않는다. 세션 증식을
@@ -1730,4 +1768,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState };
+module.exports = { readCanonicalEnvJob, withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState };
