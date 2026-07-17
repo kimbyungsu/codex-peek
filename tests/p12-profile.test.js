@@ -40,7 +40,12 @@ ok(/실질 영향으로 판정/.test(coreKo.verifyBaseline) && /희귀 경합이
 ok(/'검증: 통과' \/ '검증: 통과\(보완\)' \/ '검증: 보류' \/ '검증: 실패'/.test(coreKo.verifyBaseline), "판정 4단 출력 형식은 integrity와 동일(판독기 불변 — 계약 ⓖ)");
 ok(/Core profile/.test(coreEn.verifyBaseline) && /\[backlog\]/.test(coreEn.verifyBaseline) && /'Verdict: pass' \/ 'Verdict: pass \(notes\)' \/ 'Verdict: inconclusive' \/ 'Verdict: fail'/.test(coreEn.verifyBaseline), "core en — 동등 규약+영어 판독 문법 일치");
 ok(/목표 \/ 인수조건/.test(coreKo.transmit) && /goal \/ acceptance criteria/.test(coreEn.transmit), "core 전달 원칙 — 요청문 구조화(ⓔ·한/영)");
-ok(/이 루프에서 수정하지 마라/.test(coreKo.rejudge) && /'보류'로 사용자에게 선택을 넘겨라/.test(coreKo.rejudge) && /무결성 프로필로 승격 검증 1회/.test(coreKo.rejudge), "core 재판단 — 백로그 자동수정 금지·교착 시 보류 승격·승격 게이트 권장(ⓓⓗⓘ)");
+ok(/재판단 단계에서는 수정하지 마라/.test(coreKo.rejudge) && /'보류'로 사용자에게 선택을 넘겨라/.test(coreKo.rejudge) && /무결성 프로필로 승격 검증 1회/.test(coreKo.rejudge), "core 재판단 — 백로그 자동수정 금지(재판단 단계 한정)·교착 시 보류 승격·승격 게이트 권장(ⓓⓗⓘ)");
+// [v2.3 2026-07-17] 보류 3분류 의무 + 백로그 단계 경계(마감 선별 승격) — ko/en 대칭(사용자 승인 개정)
+ok(/\[분쟁 보류\]/.test(coreKo.rejudge) && /\[미해결 결함 보류\]/.test(coreKo.rejudge) && /\[외부 결정 보류\]/.test(coreKo.rejudge) && /그냥 보류'는 금지/.test(coreKo.rejudge) && /대상 지적·최종 상태·사용자 선택지/.test(coreKo.rejudge), "v2.3 — 보류 이관은 3분류+근거 의무('그냥 보류' 금지)");
+ok(/묶음 마감\(최종 커밋 전\)에는 열린 장부를 선별하라/.test(coreKo.rejudge) && /인수조건으로 승격해 한 번에 수정하고 최종 검증 1회/.test(coreKo.rejudge) && /처분 사유와 함께 장부에 유지/.test(coreKo.rejudge), "v2.3 — 백로그 소화=마감 선별(직접 관련·명시 선택만 승격·나머지는 사유와 유지)");
+ok(/\[disputed hold\]/.test(coreEn.rejudge) && /\[unresolved-defect hold\]/.test(coreEn.rejudge) && /\[external-decision hold\]/.test(coreEn.rejudge) && /Never a bare hold/.test(coreEn.rejudge) && /At bundle close \(before the final commit\), triage the open ledger/.test(coreEn.rejudge), "v2.3 en — 동등 규약(3분류 보류·마감 선별)");
+ok(/allowed immediately even with budget left/.test(coreEn.rejudge) && /예산·왕복이 남아도 즉시 가능/.test(coreKo.rejudge), "v2.3 — 외부 결정 보류는 예산 소진 전 즉시 가능(예산 소진=충분조건, 유일 정의 아님)");
 ok(CL.loadBaseDirective("ko").verifyBaseline === CL.baseDefaultsFor("ko").verifyBaseline, "integrity(미지정)=현행 캐논 그대로(무회귀)");
 ok(CL.loadBaseDirective("ko", "integrity").verifyBaseline === CL.loadBaseDirective("ko").verifyBaseline, "명시 integrity=미지정과 동일");
 // integrity 프리셋 1글자 불변(스냅샷 대조 — 5항 실질 영향 원칙 문구 앵커)

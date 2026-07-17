@@ -81,5 +81,41 @@ ok(/비밀값·개인정보 원문 금지/.test(CL.BASE_CORE.rejudge) && /never 
 const cl = fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8");
 ok(!/verify-backlog/.test(cl.split("function cleanupOldState")[1].split("function maybeCleanupState")[0] || ""), "TTL 스윕 비대상 — 사용자 할 일은 자동 삭제 안 함(수동 clear만)");
 
+
+// [v2.3 2026-07-17] 대시보드 부채 카드 — 소스 계약+★실행 반례★(컴파일 산출물에서 순수 함수 추출·의존성 없음)
+{
+  const extSrc = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
+  ok(/typeof lib\.readBacklog !== "function"/.test(extSrc) && /표시 전용 휴리스틱/.test(extSrc), "카드 상태 배선 — readBacklog+표시 전용 휴리스틱 명시(캐논/게이트 미사용)");
+  ok(/id="backlogSec"/.test(extSrc) && /id="blSummary"/.test(extSrc) && /id="blList"/.test(extSrc) && /backlog done\|dismiss/.test(extSrc), "카드 HTML — backlogSec·blSummary·blList·CLI 처분 안내(읽기 전용)");
+  const rBeg = extSrc.indexOf('const sec=$("backlogSec")'); const rEnd = extSrc.indexOf("// ⑤ 범위 장부 카드", rBeg);
+  const renderBlk = rBeg > 0 && rEnd > rBeg ? extSrc.slice(rBeg, rEnd) : "";
+  ok(renderBlk.length > 0 && !/innerHTML/.test(renderBlk) && /replaceChildren\(\)/.test(renderBlk) && /bl\.corrupt\?T\(" · 손상 "/.test(renderBlk), "카드 렌더 — 동적 값 innerHTML 부재(텍스트 조립만)·손상 줄 경고");
+  ok(/if\(text!=null\)e\.textContent=text;/.test(extSrc), "공용 el() 헬퍼 — textContent 조립 계약(향후 innerHTML 회귀 방어)");
+  // 실행 반례 — out/extension.js에서 computeBacklogView 추출(체인은 tsc 선행)
+  const outFile = path.join(ROOT, "out", "extension.js");
+  ok(fs.existsSync(outFile), "out/extension.js 존재(없으면 npm run compile 또는 npx tsc -p ./ 후 재실행)");
+  if (fs.existsSync(outFile)) {
+    const outSrc = fs.readFileSync(outFile, "utf8");
+    const b = outSrc.indexOf("function computeBacklogView("); const e = outSrc.indexOf("\nfunction ", b + 10);
+    ok(b > 0 && e > b, "컴파일 산출물에서 computeBacklogView 추출 가능");
+    const view = new Function(outSrc.slice(b, e) + "\nreturn computeBacklogView;")();
+    const DAY = 86400000; const now = 1800000000000;
+    const mk = (o) => Object.assign({ id: "aaaaaaaaaaaaaaaa", tag: "백로그", title: "t", file: "f", status: "open", seenCount: 1, firstSeen: new Date(now - DAY).toISOString(), lastSeen: new Date(now - DAY).toISOString() }, o);
+    let v = view([mk({}), mk({ id: "b", status: "done" })], now);
+    ok(v.items.length === 1 && v.items[0].id === "aaaaaaaaaaaaaaaa", "CB-V1 open만 포함(done 제외)");
+    v = view([mk({ id: "c", firstSeen: new Date(now - 40 * DAY).toISOString(), lastSeen: new Date(now - 1 * DAY).toISOString(), seenCount: 2 })], now);
+    ok(v.items[0].ageDays === 40 && v.items[0].due === true, "CB-V2 나이=firstSeen 기준(재발견이 40일 항목을 D+1로 되감지 못함 — 1차 blocker 반례)");
+    v = view([mk({ id: "d", seenCount: 3 })], now);
+    ok(v.items[0].due === true, "CB-V3 재발견 3회=검토 기한");
+    v = view([mk({ id: "e1", firstSeen: new Date(now - 5 * DAY).toISOString() }), mk({ id: "e2", firstSeen: new Date(now - 45 * DAY).toISOString() }), mk({ id: "e3", firstSeen: new Date(now - 10 * DAY).toISOString(), seenCount: 4 })], now);
+    ok(v.items[0].id === "e2" && v.items[1].id === "e3" && v.items[2].id === "e1", "CB-V4 정렬=검토기한 우선→오래된 순");
+    const many = []; for (let i = 0; i < 35; i++) many.push(mk({ id: "m" + i, title: "t" + i }));
+    v = view(many, now);
+    ok(v.items.length === 30 && v.backlog === 35, "CB-V5 표시 30건 절단·집계는 전체(35)");
+    v = view([mk({ id: "x", tag: "주의" }), mk({ id: "y" })], now);
+    ok(v.caution === 1 && v.backlog === 1, "CB-V6 태그별 집계");
+  }
+}
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

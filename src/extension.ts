@@ -155,6 +155,8 @@ interface BridgeState {
   baseDirective: { verifyBaseline: string; transmit: string; rejudge: string; overridden: boolean; profile: string }; // profile: 표시 중 문안의 실효 프로필(P-12 — 'core'면 코드 고정 문안)
   baseReadOk: boolean; // 기본 원칙(+3트랙 정찰) 오버라이드 파일 판독 신뢰(부재=정상) — false면 웹뷰가 canonical fill·잠금 해제 보류(7차 지적 2)
   scoutPrompt: { baseline: string; overridden: boolean; directive: string; notes: string[]; version: string } | null; // §6-11 — 3트랙에서만(null=2트랙/판독 불가)
+  // P-12 v2.3: 검증 백로그(부채 장부) 읽기 전용 가시화 — 처분은 CLI(backlog done|dismiss). null=무폴더/구 런타임.
+  backlog: { caution: number; backlog: number; corrupt: number; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } | null;
   baseAvailable: boolean;
   permissionMode: string;
   codexReady: boolean;
@@ -1004,6 +1006,20 @@ function computeBaseState(ws: string | null, contract: Contract, lang: Lang): { 
   };
 }
 
+// P-12 v2.3: 부채 카드 뷰 계산(순수 함수 — 테스트가 컴파일 산출물에서 추출 실행·의존성 없음).
+// ★나이 기준=firstSeen★(구현검증 1차 blocker: lastSeen 기준이면 재발견이 나이를 되감아 40일 묵은 항목이
+// D+1로 표시되며 30일 검토 기한을 회피) — firstSeen 부재·무효 시에만 lastSeen fallback.
+function computeBacklogView(rawItems: any[], now: number): { caution: number; backlog: number; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } {
+  const items = (rawItems || []).filter((i: any) => i && i.status === "open").map((i: any) => {
+    const first = Date.parse(String(i.firstSeen || ""));
+    const seen = Number.isFinite(first) ? first : Date.parse(String(i.lastSeen || ""));
+    const ageDays = Number.isFinite(seen) ? Math.max(0, Math.floor((now - seen) / 86400000)) : 0;
+    const seenCount = Number(i.seenCount) || 1;
+    return { id: String(i.id), tag: i.tag === "주의" ? "주의" : "백로그", title: String(i.title || ""), file: String(i.file || ""), seenCount, ageDays, due: ageDays >= 30 || seenCount >= 3 };
+  }).sort((a, b) => (a.due === b.due ? b.ageDays - a.ageDays : (a.due ? -1 : 1)));
+  return { caution: items.filter((x) => x.tag === "주의").length, backlog: items.filter((x) => x.tag === "백로그").length, items: items.slice(0, 30) };
+}
+
 // 무결성 신호: 브릿지(verify-guard)가 '검증 미완' 등을 integrity.json에 기록 → 여기서 읽어 상태바/대시보드로 가시화.
 // 단순 게이트(차단)로 끝내지 않고 사람에게 보이게 하는 채널의 소비자 쪽. 포맷은 contract-lib과 공유.
 interface IntegrityEvent { id: string; ts?: string; kind?: string; severity?: string; detail?: string; detailKo?: string; detailEn?: string; ack?: boolean; session?: string; workspace?: string; sig?: string }
@@ -1615,6 +1631,16 @@ function computeState(turnsN: number): BridgeState {
     otherSlotRules: otherSlotHasRules(ws, langSnap), // 반대 언어 슬롯에만 규칙 있음 → '사라진 게 아님' 안내(langSnap 동일 슬롯)
     // base 축(기본 원칙+정찰 태도층) — strict 단일 판독의 신뢰·데이터를 같은 푸시에 결속(8차 지적 4)
     ...computeBaseState(ws, contract, langSnap),
+    // P-12 v2.3: 부채 장부 가시화. '검토 기한' 강조는 표시 전용 휴리스틱(30일 경과 또는 3회 재발견 —
+    // 2d의 정식 reviewDue 계약이 동결되면 그 계약으로 대체·이 상수는 캐논/게이트에 미사용).
+    backlog: (() => {
+      try {
+        const lib = bridgeLib();
+        if (!ws || !lib || typeof lib.readBacklog !== "function") return null;
+        const r = lib.readBacklog(ws);
+        return { ...computeBacklogView(r.items || [], Date.now()), corrupt: Number(r.corrupt) || 0 };
+      } catch { return null; }
+    })(),
     baseAvailable: bridgeLib() !== null,
     permissionMode: activePermissionMode(ws),
     codexReady: !!resolveCodexPathForBridge(),
@@ -3536,6 +3562,15 @@ class Dashboard {
   <div id="cardHold" class="hint" style="display:none;color:var(--vscode-editorWarning-foreground, var(--vscode-errorForeground))"></div>
   <div class="row"><button id="saveC">${t("저장", "Save")}</button><button id="revertC" type="button" class="secondary" title="${t("저장하지 않은 계약 변경을 버리고 현재 모드의 저장값을 다시 불러옵니다", "Discard unsaved contract edits and reload the saved values for the current mode")}">${t("되돌리기", "Revert")}</button><span id="savedAt" class="muted">${t("· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장 (체크리스트 강제는 켜고 끄는 즉시 저장)", "· saves the Claude rules, Codex rules and verify mode together (checklist enforcement saves instantly on toggle)")}</span></div>
 
+  <div id="backlogSec" style="display:none">
+    <h2 class="sec">${t("검증 백로그 — 부채 장부", "Verification Backlog — debt ledger")} <span class="sub2" id="blSummary"></span></h2>
+    <div class="card">
+      <div class="hint">${t("검증에서 나온 비차단 지적이 여기 쌓여요. <b>묶음을 마감(푸시 전)할 때</b> 이 목록을 펼쳐 '이번 묶음과 직접 관련'이거나 직접 고른 항목만 한 번에 갚고, 나머지는 사유와 함께 남깁니다(핵심 프로필 v2.3 규약). '검토 기한' 표시는 오래됐거나(30일+) 자주 재발견(3회+)된 항목 — 갚으라는 강제가 아니라 '건너뛰지 말고 살펴보라'는 뜻이에요.", "Non-blocking findings from verification accumulate here. <b>When closing a bundle (before push)</b>, open this list and pay off only items directly related to this bundle or explicitly picked, leaving the rest with a note (core-profile v2.3 protocol). 'review due' marks old (30d+) or repeatedly rediscovered (3×+) items — not a fix order, but 'do not skip reviewing'.")}</div>
+      <div id="blList" style="margin-top:6px"></div>
+      <div class="hint">${t("처분은 CLI: <code>node codex-bridge.js backlog done|dismiss &lt;id&gt;</code> · 목록: <code>backlog list</code> · 이 카드는 읽기 전용(이 PC 로컬 장부)", "Dispose via CLI: <code>node codex-bridge.js backlog done|dismiss &lt;id&gt;</code> · list: <code>backlog list</code> · this card is read-only (local ledger of this PC)")}</div>
+    </div>
+  </div>
+
   <h2 class="sec">${t("한눈에 보기", "At a Glance")} <span class="sub2">${t("누구에게 · 뭐가 · 언제 들어가나 — 지금 저장된 설정 기준 (저장하면 바뀐 곳이 깜빡여요)", "who gets what, and when — based on saved settings (changes flash on save)")}</span></h2>
   <section class="flowmap card" id="fmSection">
     <div class="flow">
@@ -4537,6 +4572,25 @@ class Dashboard {
         pn.textContent = d.permissionMode==="plan" ? T("지금 플랜 모드예요 ✓","Plan mode is on now ✓") : T("지금은 플랜 모드 아니에요","Not in plan mode right now");
       } else { pn.style.display="none"; }
     }
+    // P-12 v2.3: 검증 백로그(부채 장부) 카드 — 읽기 전용 가시화. XSS 안전: 전부 createElement/textContent.
+    safe(function(){
+      const sec=$("backlogSec"); if(!sec) return;
+      const bl=d.backlog;
+      if(!bl || (bl.items.length===0 && !bl.corrupt)){ sec.style.display="none"; return; }
+      sec.style.display="";
+      const sum=$("blSummary");
+      if(sum) sum.textContent = T("열림 ","open ")+(bl.caution+bl.backlog)+T("건 — 주의 "," — caution ")+bl.caution+T(" · 백로그 "," · backlog ")+bl.backlog+(bl.corrupt?T(" · 손상 "," · corrupt ")+bl.corrupt+T("줄"," line(s)"):"");
+      const list=$("blList"); if(!list) return; list.replaceChildren();
+      bl.items.forEach(function(it){
+        var row=el("div",""); row.style.margin="5px 0"; row.style.fontSize="12px"; row.style.lineHeight="1.5";
+        row.appendChild(el("span","badge "+(it.tag==="주의"?"b-plancode":"b-off"), it.tag==="주의"?T("주의","caution"):T("백로그","backlog")));
+        if(it.due){ var dueB=el("span","badge b-always", T("검토 기한","review due")); dueB.style.marginLeft="4px"; row.appendChild(dueB); }
+        var t1=el("span","", " "+it.title); row.appendChild(t1);
+        var meta=el("div","muted", (it.file? it.file+" · ":"")+T("재발견 ","seen ")+it.seenCount+T("회","×")+" · D+"+it.ageDays+" · "+it.id);
+        meta.style.fontSize="11px"; row.appendChild(meta);
+        list.appendChild(row);
+      });
+    });
     // ⑤ 범위 장부 카드(3트랙 advisory) — 저장값 기준 표시. '데이터 없음/비-git/변경 없음'을 추측 없이 정직 표기(필수 안전장치).
     safe(function(){
       const box=$("scoutBox"); if(!box) return;
