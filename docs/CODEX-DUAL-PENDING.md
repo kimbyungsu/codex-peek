@@ -654,11 +654,84 @@
     ③의미 손상(파싱은 되나 schema≠ask-job-v1·id≠파일명·state 부재) 객체가 차단을 우회 —
     corruptAskJobFiles가 의미 검증까지 수행(주의: 구스키마 job은 7일 스윕 전이라도 차단 대상이 됨 —
     확인 후 clear로 해소, 메시지에 명시). 대시보드 백로그 열람 카드는 2a-2(후속·읽기 전용 목록+건수 칩).
-  - **2b 왕복 예산(다음)**: 계약 필드 verifyBudget(사용자 설정·기본 없음=무제한 — 임의 상수 금지),
-    캠페인 키=사용자 턴 결속(CL-C=verify-guard의 사용자 발화 기준·C-C=구현 턴), 카운터=같은 캠페인의
-    실패→재검증 사이클 수(문구 수정·신규 job 생성으로 초기화 금지 — 1단 판단 검증에서 동결한 3식별자
-    원칙), 소진 시 footer 강제 문구: 비차단만 잔존=장부 기록 후 종결, blocker 잔존=보류 승격(자동 통과
-    금지). 착수 시 상세 동결.
+  - **2b 왕복 예산(상세 동결 v6 2026-07-17 — 설계검증 2~5차 차단 16건 반영)**: 상위 계약(동결 유지)=
+    verifyBudget(사용자 설정·기본 없음=무제한 — 임의 상수 금지), 캠페인 키=사용자 턴 결속, 카운터 초기화
+    금지, 소진 시 자동 통과 금지. ※상위 ⓗ의 3식별자는 단계별 소유로 정정: campaignId=2b /
+    findingId·snapshotHash=2c·2d. ※상한의 성격(정직 한정): '정상 추적 상태의 기계적 상한' — 앵커·잠금·
+    기록 실패 시엔 미집계로 느슨해지되 반드시 가시화(절대 상한 주장 금지).
+    상세:
+    ⑴ 필드: `verifyBudget`(CL-C)/`codexVerifyBudget`(C-C·부재=CL-C 상속 — 상속 표시는 raw-presence 판독).
+      1 이상 정수만 유효, 부재·0·비정수·음수=무제한(무회귀). normVerifyBudget 양쪽 동형·모드별 exact patch
+      허용목록 추가·비물질화 동형(빈값 저장=원시 필드 삭제).
+    ⑵ 캠페인 키(기존 앵커 재사용): CL-C=`cl:<claudeSession>:<active ts>` / C-C=`cc:<implementerSession>:
+      <turnId>`. ★campaignId는 job '생성 시점'에 완성해 job에 동결★(4차 지적 2 — child가 예약 시점에
+      active를 재판독하면 queued~예약 사이 새 사용자 발화가 이전 턴 검증을 새 캠페인 예산으로 오귀속:
+      ask-start가 CL-C의 claudeSession+activeTs를 캡처해 완성된 campaignId를 job에 저장, count '예약'만
+      child 래퍼에서 수행). ★CL-C 앵커 판독 권위(5차 blocker — 멀티 창 미끼 차단)★: 전역 active.json만
+      읽는 기존 readActive() 재사용 금지 — ①CLAUDE_CODE_SESSION_ID의 ACTIVE_DIR/<safe-sid>.json 우선
+      ②내용의 claudeSession===sid·유효 ts 검증(configWs의 세션별 판독 권위와 동형) ③전역 active.json
+      폴백은 '내용이 같은 세션일 때만' ④실패=budgetUntracked 진행. 반례: 창 B가 전역 active를 덮은 뒤
+      창 A의 ask-start가 A 세션 앵커에 결속되는지(⑽). 직접 ask=실행 시점 1회 캡처. 앵커 판독 실패=미집계+가시화([내구] job.
+      budgetUntracked / [직접] 로컬 reservation.budgetUntracked + 출력 1줄).
+    ⑶ ★예약 위치 확정(2차 지적 1·2)★: 예약은 ★자식 cmdAsk의 검증 모델 호출 공통 래퍼 직전 1곳★ —
+      resume/new 두 분기가 같은 래퍼를 지나므로 예약 누락·이중 예약 구조 차단. 내구 경로=worker가 실행하는
+      child cmdAsk의 그 1회(worker 자신·부모 ask-start는 예약 없음), 직접 ask=같은 래퍼 1회. 전처리 실패
+      (링크·CLI·세션 복구·중복 가드)=호출 전=미집계, 래퍼 통과 후 실패=집계. ★ask-start는 소진 즉시 판정을
+      약속하지 않는다★ — 부모는 queued 성공 반환이 정상이고, 소진 거부는 child가 exit 3으로 실패→job
+      failed→ask-wait가 안내와 함께 exit 3 전달(직접 ask는 그 자리에서 exit 3). 거부 시 이미 잡은
+      active/inflight 표식은 기존 exit handler가 해제(재전송 차단 체계와 충돌 없음 — 2차 확인 항목).
+      ★phase 조건(3차 지적 1→4차 지적 1 정정)★: `codex-verifying` 기록·round 증가는 ★'호출 진행이 확정된
+      뒤'★ 수행 — tracked 예약 성공 '또는' 가시화된 untracked 진행 결정(앵커·잠금·patch·counter 실패로
+      미집계지만 호출은 하는 경우) 둘 다 기록하고, ★M+1 소진 거부만★ phase·round 불변(현행 선기록 폐기).
+      untracked 진행도 phase/round는 정확히 1회 증가(상태 표시 회귀 금지 — 테스트 ⑽).
+    ⑷ ★오프바이원 확정(2차 지적 4)★: 임계구역 안에서 `next=count+1`; 유한 예산이고 `next>M`이면 ★증가
+      없이 거부★; 아니면 count=next 기록 후 호출 진행. M번째(next==M) 회수 출력에 예고 1줄.
+    ⑸ 카운터·직렬화·부분 실패(2차 지적 3·4): verify-campaigns/<wsKey>.json {schema:"vcamp-1", campaignId
+      (=캠페인 키), count, budget(M — 캠페인 최초 예약 시점 동결·같은 캠페인 중 설정 변경은 다음 캠페인부터),
+      startedAt, updatedAt}. 모든 판독·비교·증가·history 기록·교체를 `<wsKey>.json.lock` 한 임계구역에서
+      수행(2a 패턴·잠금 실패=미집계+untracked·ask 진행). ★슬롯·앵커 권위(3차 지적 4)★: 내구 경로는 job
+      동결값(harnessMode/verifyLang/implementer*)으로 예산 슬롯·캠페인 앵커를 정한다(프로필 동결·P-6 귀속
+      전례 — 생성 후 모드 변경이 CL-C job에 C-C 예산을 읽히는 혼합 차단), 직접 ask만 현재 스냅샷.
+      ★기록 순서·권위(경로 분리 — 3차 지적 2)★: 임계구역 안에서 ①next 계산·거부 판정 ②[내구] 정본
+      running job에 campaignKey/verifyRound(N=next)/verifyBudget(M)/budgetUntracked 동결 patch /
+      [직접] 프로세스 로컬 불변 reservation 객체에 동일 값 보관(job 없음) ③②성공 시에만 counter 기록.
+      ②실패=예약 취소(counter 미증가·호출은 진행+untracked 1줄 — 검증 접근 차단이 더 해로움),
+      ③실패=★budgetUntracked=true 승격+N/M 표시 억제★(3차 지적 3 — counter 미반영 상태의 N은 캠페인
+      서수가 아니므로 권위 주장 금지). untracked 승격 patch마저 실패할 수 있으므로 child 로컬 출력과
+      worker .out에는 경고 1줄이 반드시 남는다(최후 fallback). worker의 종료 patch는 child가 기록한 예산 필드를 보존(1단
+      '동결 필드 보존' 계약에 필드 추가). 카운터 손상=원자 격리(.corrupt-<ts> 원문 보존)+새 캠페인+
+      '예산 미적용' 경고.
+    ⑹ history 일관성·보존(2차 지적 5): 캠페인 교체 시 같은 임계구역에서 ①<wsKey>.history.jsonl에 이전
+      레코드 append(campaignId 포함) ②current 교체 — 순서 고정. crash 중복은 append 전 '마지막 history
+      줄의 campaignId와 같으면 skip'으로 제거(2d 집계도 campaignId dedupe). 보존 정책: history는 append
+      시 60일 초과 줄 trim — ★같은 잠금 아래 atomic rewrite★(trimVerdicts의 무잠금 직접 rewrite를 복제
+      하지 않음, 3차 확인 반영). ★trim 판단 필드=Date.parse(record.updatedAt)★(5차 [주의] — trimVerdicts를
+      문자 복제해 history에 없는 o.ts를 읽으면 전 줄 NaN=영구 보존 오구현: 무효 시각(NaN)=보존하되 손상 줄
+      경고에 합산, 미래 시각=보존(시계 보정 관용), 반례를 ⑽에 포함). 카운터 손상 격리는 ★verify-campaigns/corrupt/ 별도 서랍★에 <wsKey>-
+      <ts>.json으로 이동(공용 sweep이 .json만 지우는 필터와 호환·current .json 오삭제 차단 — 3차 지적 5)
+      후 그 서랍만 P-3 스윕 7일 편입. PRIVACY.md 표에 verify-campaigns 행 추가(위치·내용=캠페인 키[세션 식별자 포함]·
+      왕복 수·보존=current 상시+history 60일+corrupt 7일·로컬 전용).
+    ⑺ 소진 거부 문구(ko/en): '[왕복 예산 소진 · M/M] 이 캠페인의 검증 왕복 예산을 소진했다. 비차단
+      ([백로그]/[주의])만 남았으면 backlog add로 기록하고 id를 인용해 종결하라. blocker가 남았으면 자동
+      통과 금지 — 보류로 보고를 승격해 사용자에게 예산 초과와 잔여 blocker를 알리고 지시를 받아라.'
+      ★게이트 상호작용 정직 서술(2차 지적 6)★: 이 문구는 구현모델에 보류 '보고'를 지시하는 것이며, 그래도
+      종료하면 기존 Stop 밸브가 미검증(verify-incomplete·error) 감사 기록을 남긴다 — '보류가 기록된다'가
+      아니라 '보류 보고 지시+미검증 감사 기록'이 정확.
+    ⑻ 안내 계층 분리(3차 지적 6): [포맷 계층] N=M 예고·성공 호출의 미집계(untracked) 안내=formatForClaude
+      소비자 stdout에만(raw answer 불변) / [예약 오류 계층] M+1 소진 거부=모델 답이 없으므로 예약 거부
+      메시지 자체가 산출물 — 직접 ask=그 자리 stderr+exit 3, 내구=child의 stderr/stdout을 worker가
+      .err/.out에 보존하고 ask-wait가 재출력(반복 ask-wait 바이트 동일은 이 보존 바이트 기준). 무제한=
+      바이트 동일 무회귀.
+    ⑼ UI: 숫자 입력(모드 슬롯·빈값=무제한·상속 표시·'변경은 다음 캠페인부터' 고지). cardMachine 편승.
+    ⑽ 테스트: normalize·상속·비물질화·빈값 삭제(ko/en) / 키 안정성(같은 턴 누적·새 발화·새 턴=새 캠페인) /
+      ★내구 1회=집계 1회(ask-start→worker→child 경로)★ / ★내구 소진: ask-start=queued 성공+ask-wait=
+      exit 3 안내 전달★ / ★count==M에서 M+1 예약 거부·verifier 미호출★ / resume·new 양 분기 예약 정확히
+      1회 / counter 성공·job patch 실패=미증가+untracked / job patch 성공·counter 실패=★N/M 표시 억제+untracked 경고가 권위★ /
+      history: append→교체 순서·crash 재시도 campaignId dedupe·60일 trim / 앵커·잠금 실패=미집계 가시화 /
+      손상=격리 원문 보존(corrupt 서랍) / N=M 예고 / 무제한 바이트 동일 / raw answer 불변·반복 ask-wait 동일 /
+      모델 spawn 실패=집계(래퍼 통과 후) 경계 / ★M+1 거부 후 phase·round 불변★ / 직접 ask 예약(무 job)
+      정상 동작·출력 바이트 / 내구 job 동결 슬롯 권위(생성 후 모드 변경에도 원 슬롯 예산·앵커) / counter
+      실패=N/M 표시 억제+경고 최후 fallback / corrupt 서랍 7일 스윕이 current를 건드리지 않음.
   - **2c 기계 판독 딱지(후속)**: 구조화 지적 블록(안정 findingId·blocking 여부·태그) + 실패↔blocker 정합
     강등(불일치=보류)·파싱 실패=보류 fail-closed + [백로그]/[주의] 자동 장부 등록. 착수 시 상세 동결.
   - **2d 통계·승격(후속)**: stats/verdicts.jsonl에 프로필·캠페인 왕복 수·소요·승격 게이트에서 발견된
