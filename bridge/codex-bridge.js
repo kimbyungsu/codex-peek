@@ -1331,8 +1331,11 @@ function cmdBacklog(rest) {
     const { items, corrupt } = lib.readBacklog(ws);
     const shown = all ? items : items.filter((x) => x.status === "open");
     const cnt = (t) => shown.filter((x) => x.tag === t && x.status === "open").length;
-    process.stdout.write(tB(`검증 백로그 — 열림 ${items.filter((x) => x.status === "open").length}건(주의 ${cnt("주의")} · 백로그 ${cnt("백로그")})${all ? ` · 전체 ${items.length}건` : ""}\n`, `Verify backlog — open ${items.filter((x) => x.status === "open").length} (주의 ${cnt("주의")} · 백로그 ${cnt("백로그")})${all ? ` · total ${items.length}` : ""}\n`));
-    for (const x of shown) process.stdout.write(`  [${x.tag}]${x.status !== "open" ? "(" + x.status + ")" : ""} ${x.id} ${x.title}${x.file ? " — " + x.file : ""} (${x.seenCount}회 · ${String(x.lastSeen).slice(0, 10)})\n`);
+    // 표시 라벨은 전역 언어를 따름(장부 저장 태그는 한국어 고정값 — 표시만 번역. 백로그 ab1fe318 소화)
+    const en = loadLang() === "en";
+    const tagL = (t) => (en ? (t === "주의" ? "caution" : "backlog") : t);
+    process.stdout.write(tB(`검증 백로그 — 열림 ${items.filter((x) => x.status === "open").length}건(주의 ${cnt("주의")} · 백로그 ${cnt("백로그")})${all ? ` · 전체 ${items.length}건` : ""}\n`, `Verify backlog — open ${items.filter((x) => x.status === "open").length} (caution ${cnt("주의")} · backlog ${cnt("백로그")})${all ? ` · total ${items.length}` : ""}\n`));
+    for (const x of shown) process.stdout.write(`  [${tagL(x.tag)}]${x.status !== "open" ? "(" + x.status + ")" : ""} ${x.id} ${x.title}${x.file ? " — " + x.file : ""} (${x.seenCount}${en ? "×" : "회"} · ${String(x.lastSeen).slice(0, 10)})\n`);
     if (corrupt) process.stdout.write(tB(`⚠ 손상 ${corrupt}줄 — 해당 줄의 할 일은 표시되지 않을 수 있습니다(원문은 장부 파일에 보존됨).\n`, `⚠ ${corrupt} corrupt line(s) — items on those lines may be hidden (originals preserved in the ledger file).\n`));
     return;
   }

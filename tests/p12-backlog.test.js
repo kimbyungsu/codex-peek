@@ -66,12 +66,38 @@ ok(!after.includes("지적 B") && after.includes("지적 A"), "닫힌 항목 줄
 fs.appendFileSync(file, JSON.stringify({ schema: "vbl-1", ev: "status", id: idA, status: "done", ts: "2000-01-01" }) + "\n", "utf8");
 ok(CL.readBacklog(WS).items.find((x) => x.id === idA).status === "done", "fold=append 줄 순서(ts는 표시용 — 시계 역전 무영향)");
 
+console.log("[3b] 의미 손상 add — 위조 id(재계산 해시 불일치)는 수용 금지(지속 반례 · 백로그 816820f0 소화)");
+{
+  const before = CL.readBacklog(WS).corrupt;
+  fs.appendFileSync(file, JSON.stringify({ schema: "vbl-1", ev: "add", id: "1234567890abcdef", tag: "백로그", title: "위조 id 지적", ts: "2026-01-02" }) + "\n", "utf8");
+  const b2 = CL.readBacklog(WS);
+  ok(b2.corrupt === before + 1 && !b2.items.find((x) => x.id === "1234567890abcdef"), "id≠sha256(제목|경로) add 줄 — 항목 수용 안 함+손상 계수(fail-visible)");
+  fs.appendFileSync(file, JSON.stringify({ schema: "vbl-1", ev: "add", id: "zz-not-hash", tag: "백로그", title: "형식 위반 id", ts: "2026-01-02" }) + "\n", "utf8");
+  ok(CL.readBacklog(WS).corrupt === before + 2, "16hex 형식 위반 id add 줄 — 동일 거부");
+}
+
 console.log("[4] 잠금 직렬화 — 실패=기록 거부(fail-closed)");
 fs.writeFileSync(file + ".lock", process.pid + "-hold", "utf8"); // 살아있는 이 프로세스가 보유한 잠금
 ok(CL.backlogAdd(WS, { tag: "백로그", title: "잠금 중 등록" }).ok === false, "잠금 보유 중 add — 기록 거부");
 ok(CL.backlogClearDone(WS).ok === false, "잠금 보유 중 clear — 거부");
 fs.unlinkSync(file + ".lock");
 ok(CL.backlogAdd(WS, { tag: "백로그", title: "잠금 해제 후 등록" }).ok === true, "해제 후 정상");
+
+console.log("[4b] 실제 자식 프로세스 경합 — 부모 보유 잠금 동안 자식 CLI add/clear 거부(백로그 c2bbff67 소화)");
+{
+  const cp = require("child_process");
+  const CLI = path.join(ROOT, "bridge", "codex-bridge.js");
+  const env = { ...process.env, CODEX_BRIDGE_HOME: dir, CLAUDE_PROJECT_DIR: WS };
+  fs.writeFileSync(file + ".lock", process.pid + "-parent-hold", "utf8"); // 살아있는 부모가 보유
+  const beforeRaw = fs.readFileSync(file, "utf8");
+  const c1 = cp.spawnSync(process.execPath, [CLI, "backlog", "add", "--tag", "백로그", "--title", "자식 경합 등록"], { encoding: "utf8", env, timeout: 20000, windowsHide: true });
+  ok(c1.status !== 0 && fs.readFileSync(file, "utf8") === beforeRaw, "자식 add — 비0 종료+장부 바이트 불변(잠금 직렬화가 프로세스 경계 넘어 유효)");
+  const c2 = cp.spawnSync(process.execPath, [CLI, "backlog", "clear", "--done", "--confirm"], { encoding: "utf8", env, timeout: 20000, windowsHide: true });
+  ok(c2.status !== 0 && fs.readFileSync(file, "utf8") === beforeRaw, "자식 clear — 거부+재작성 없음(add vs clear 경합 차단)");
+  fs.unlinkSync(file + ".lock");
+  const c3 = cp.spawnSync(process.execPath, [CLI, "backlog", "add", "--tag", "백로그", "--title", "자식 경합 등록"], { encoding: "utf8", env, timeout: 20000, windowsHide: true });
+  ok(c3.status === 0 && /id: [a-f0-9]{16}/.test(c3.stdout), "해제 후 자식 add 성공(id 영수증)");
+}
 
 console.log("[5] 배선 — CLI·rejudge 규약·TTL 비대상");
 const src = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
