@@ -116,6 +116,41 @@ ok(!/verify-backlog/.test(cl.split("function cleanupOldState")[1].split("functio
   const rBeg = extSrc.indexOf('const sec=$("backlogSec")'); const rEnd = extSrc.indexOf("// ⑤ 범위 장부 카드", rBeg);
   const renderBlk = rBeg > 0 && rEnd > rBeg ? extSrc.slice(rBeg, rEnd) : "";
   ok(renderBlk.length > 0 && !/innerHTML/.test(renderBlk) && /replaceChildren\(\)/.test(renderBlk) && /bl\.corrupt\?T\(" · 손상 "/.test(renderBlk), "카드 렌더 — 동적 값 innerHTML 부재(텍스트 조립만)·손상 줄 경고");
+  ok(/if\(!bl\)\{ sec\.style\.display="none"; return; \}/.test(renderBlk) && /비어 있음 — 검증에서 범위 밖 제안/.test(renderBlk), "빈 보관함=카드 유지+비어 있음 표시(기능 발견 가능 — 숨김은 무폴더/구 런타임만)");
+  // ★실행 반례★ — 렌더 블록을 추출 실행해 표시 계약을 상태별로 잠근다(확인 판정 [보완] 수용 2026-07-18:
+  // 소스 정규식만으로는 '카드 유지·빈 분기 조건·영문 문구·corrupt-only 경로'를 회귀 방지하지 못함).
+  {
+    const bodyEnd = renderBlk.lastIndexOf("});"); // safe(function(){...}) 닫힘 직전까지가 완결 문장 목록
+    const body = bodyEnd > 0 ? renderBlk.slice(0, bodyEnd) : "";
+    ok(body.length > 0, "렌더 블록 본문 추출 가능(safe 닫힘 절단)");
+    const runRender = (backlog, lang) => {
+      const mkNode = () => ({ style: {}, children: [], textContent: "", className: "", appendChild(c) { this.children.push(c); }, replaceChildren() { this.children = []; } });
+      const nodes = { backlogSec: mkNode(), blSummary: mkNode(), blList: mkNode() };
+      const fn = new Function("$", "T", "el", "d", body);
+      fn((id) => nodes[id], (ko, en) => (lang === "en" ? en : ko), (tag, cls, text) => { const n = mkNode(); n.className = cls || ""; if (text != null) n.textContent = text; return n; }, { backlog });
+      return nodes;
+    };
+    let n = runRender(null, "ko");
+    ok(n.backlogSec.style.display === "none", "RB-1 bl=null(무폴더·구 런타임) — 카드 숨김 유지");
+    n = runRender({ caution: 0, backlog: 0, corrupt: 0, items: [] }, "ko");
+    ok(n.backlogSec.style.display === "" && n.blSummary.textContent.startsWith("비어 있음"), "RB-2 정상 빈 상태 — 카드 표시+'비어 있음'(ko · 실사고 2026-07-18 반례)");
+    n = runRender({ caution: 0, backlog: 0, corrupt: 0, items: [] }, "en");
+    ok(n.blSummary.textContent.startsWith("empty — out-of-scope"), "RB-3 정상 빈 상태 — 영문 문구 존재(ko/en 쌍)");
+    n = runRender({ caution: 0, backlog: 0, corrupt: 2, items: [] }, "ko");
+    ok(n.backlogSec.style.display === "" && /손상 2줄/.test(n.blSummary.textContent) && !/비어 있음/.test(n.blSummary.textContent), "RB-4 corrupt-only(open 0) — 빈 문구가 아니라 손상 요약");
+    n = runRender({ caution: 1, backlog: 0, corrupt: 0, readError: true, items: [] }, "ko");
+    ok(n.backlogSec.style.display === "" && /불러올 수 없음/.test(n.blSummary.textContent) && n.blList.children.length === 0, "RB-5 판독 실패 — '비어 있음' 위장 금지+'불러올 수 없음' 표시([주의] 수용분)");
+    n = runRender({ caution: 1, backlog: 0, corrupt: 0, items: [{ id: "a".repeat(16), tag: "주의", title: "t", file: "f", seenCount: 1, ageDays: 1, due: false }] }, "ko");
+    ok(/열림 1건/.test(n.blSummary.textContent) && n.blList.children.length === 1, "RB-6 항목 존재 — 요약·목록 렌더 정상(회귀 앵커)");
+  }
+  // readBacklog 판독 실패 구분 — ENOENT=빈 상태·그 외=readError(위장 차단의 데이터 원천)
+  {
+    const wsE = "D:/bl-readerr";
+    fs.mkdirSync(CL.backlogFileFor(wsE), { recursive: true }); // 파일 자리에 디렉터리 → EISDIR(비-ENOENT 판독 실패 재현)
+    const rE = CL.readBacklog(wsE);
+    ok(rE.readError === true && rE.items.length === 0, "readBacklog 비-ENOENT 실패 — readError:true(빈 상태로 축소 금지)");
+    ok(CL.readBacklog("D:/bl-noexist").readError === undefined, "readBacklog ENOENT(미생성) — readError 없음(진짜 빈 상태)");
+  }
   ok(/if\(text!=null\)e\.textContent=text;/.test(extSrc), "공용 el() 헬퍼 — textContent 조립 계약(향후 innerHTML 회귀 방어)");
   // 실행 반례 — out/extension.js에서 computeBacklogView 추출(체인은 tsc 선행)
   const outFile = path.join(ROOT, "out", "extension.js");

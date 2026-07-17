@@ -342,7 +342,12 @@ function foldBacklogRaw(raw) {
   return { items: [...map.values()], corrupt, lines };
 }
 function readBacklog(ws) {
-  let raw = ""; try { raw = fs.readFileSync(backlogFileFor(ws), "utf8"); } catch { return { items: [], corrupt: 0 }; }
+  let raw = "";
+  try { raw = fs.readFileSync(backlogFileFor(ws), "utf8"); }
+  catch (e) {
+    if (e && e.code === "ENOENT") return { items: [], corrupt: 0 }; // 장부 미생성=진짜 빈 상태
+    return { items: [], corrupt: 0, readError: true }; // 권한·잠금 등 판독 실패 — '비어 있음'으로 위장 금지(확인 판정 [주의] 수용 2026-07-18)
+  }
   const f = foldBacklogRaw(raw); return { items: f.items, corrupt: f.corrupt };
 }
 // 기록: 잠금 직렬화 — 실패=false(기록 거부·fail-closed). 반환 {ok, id, existed}.

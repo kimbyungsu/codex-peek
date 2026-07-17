@@ -1638,7 +1638,7 @@ function computeState(turnsN: number): BridgeState {
         const lib = bridgeLib();
         if (!ws || !lib || typeof lib.readBacklog !== "function") return null;
         const r = lib.readBacklog(ws);
-        return { ...computeBacklogView(r.items || [], Date.now()), corrupt: Number(r.corrupt) || 0 };
+        return { ...computeBacklogView(r.items || [], Date.now()), corrupt: Number(r.corrupt) || 0, readError: r.readError === true };
       } catch { return null; }
     })(),
     baseAvailable: bridgeLib() !== null,
@@ -4576,11 +4576,22 @@ class Dashboard {
     safe(function(){
       const sec=$("backlogSec"); if(!sec) return;
       const bl=d.backlog;
-      if(!bl || (bl.items.length===0 && !bl.corrupt)){ sec.style.display="none"; return; }
+      // 무폴더·구 런타임(bl 산출 불가)만 숨김 — 빈 보관함은 '비어 있음'으로 표시해 기능 발견 가능하게
+      // (실사고 2026-07-18: 전부 처분해 열림 0이 되자 카드 자체가 사라져 사용자가 기능을 못 찾음).
+      if(!bl){ sec.style.display="none"; return; }
       sec.style.display="";
       const sum=$("blSummary");
-      if(sum) sum.textContent = T("열림 ","open ")+(bl.caution+bl.backlog)+T("건 — 주의 "," — caution ")+bl.caution+T(" · 백로그 "," · backlog ")+bl.backlog+(bl.corrupt?T(" · 손상 "," · corrupt ")+bl.corrupt+T("줄"," line(s)"):"");
-      const list=$("blList"); if(!list) return; list.replaceChildren();
+      const list=$("blList");
+      if(bl.readError){
+        // 판독 실패(권한·잠금 등)는 '비어 있음'과 다른 상태 — 위장 표시 금지(확인 판정 [주의] 수용 2026-07-18).
+        if(sum) sum.textContent=T("장부를 불러올 수 없음(판독 실패) — 장부 파일의 권한·잠금 상태를 확인하세요","cannot read the ledger (read failure) — check the ledger file's permissions/lock state");
+        if(list) list.replaceChildren();
+        return;
+      }
+      if(sum) sum.textContent = (bl.caution+bl.backlog)===0 && !bl.corrupt
+        ? T("비어 있음 — 검증에서 범위 밖 제안·판단 대기 항목이 나오면 여기 쌓입니다","empty — out-of-scope proposals and pending judgments will accumulate here")
+        : T("열림 ","open ")+(bl.caution+bl.backlog)+T("건 — 주의 "," — caution ")+bl.caution+T(" · 백로그 "," · backlog ")+bl.backlog+(bl.corrupt?T(" · 손상 "," · corrupt ")+bl.corrupt+T("줄"," line(s)"):"");
+      if(!list) return; list.replaceChildren();
       bl.items.forEach(function(it){
         var row=el("div",""); row.style.margin="5px 0"; row.style.fontSize="12px"; row.style.lineHeight="1.5";
         row.appendChild(el("span","badge "+(it.tag==="주의"?"b-plancode":"b-off"), it.tag==="주의"?T("주의","caution"):T("백로그","backlog")));

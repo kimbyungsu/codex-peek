@@ -1328,7 +1328,9 @@ function cmdBacklog(rest) {
   }
   if (sub === "list") {
     const all = rest.includes("--all");
-    const { items, corrupt } = lib.readBacklog(ws);
+    const r0 = lib.readBacklog(ws);
+    const { items, corrupt } = r0;
+    if (r0.readError) process.stdout.write(tB("⚠ 장부 파일을 읽지 못했습니다(권한/잠금) — 아래 집계는 불완전할 수 있습니다.\n", "⚠ Could not read the ledger file (permissions/lock) — counts below may be incomplete.\n"));
     const shown = all ? items : items.filter((x) => x.status === "open");
     const cnt = (t) => shown.filter((x) => x.tag === t && x.status === "open").length;
     // 표시 라벨은 전역 언어를 따름(장부 저장 태그는 한국어 고정값 — 표시만 번역. 백로그 ab1fe318 소화)
