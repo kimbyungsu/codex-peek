@@ -14,7 +14,7 @@ fs.writeFileSync(fake, [
   'if(j.prompt.includes("concurrent"))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,1200);',
   'process.stdout.write("answer:"+j.prompt+":timeout="+process.env.CODEX_BRIDGE_VERIFY_TIMEOUT_MIN+":deadline="+(process.env.CODEX_BRIDGE_VERIFY_DEADLINE_AT||""));',
 ].join("\n"));
-const id = "ask-test-1", file = path.join(jobDir, id + ".json");
+const id = "ask-test01-aaaaaaaaaa", file = path.join(jobDir, id + ".json");
 const deadlineAt=new Date(Date.now()+7*60*1000).toISOString();
 fs.writeFileSync(file, JSON.stringify({ schema:"ask-job-v1", id, state:"queued", workspace:tmp, execCwd:tmp, flags:["--allow-new"], prompt:"seven-minute-check", timeoutMin:7, deadlineAt }));
 const worker = path.join(__dirname, "..", "bridge", "ask-job-worker.js");
@@ -34,7 +34,7 @@ const wait = cp.spawnSync(process.execPath, [path.join(__dirname,"..","bridge","
 assert.strictEqual(wait.status, 0, wait.stderr);
 assert.match(wait.stdout, /seven-minute-check/);
 
-const pastId="ask-pidless-past",pastFile=path.join(jobDir,pastId+".json");
+const pastId="ask-pidless-aaaaaaaaaa",pastFile=path.join(jobDir,pastId+".json");
 fs.writeFileSync(pastFile,JSON.stringify({schema:"ask-job-v1",id:pastId,state:"queued",workspace:tmp,execCwd:tmp,timeoutMin:7,deadlineAt:new Date(Date.now()-1000).toISOString(),workerPid:null}));
 const past=cp.spawnSync(process.execPath,[path.join(__dirname,"..","bridge","codex-bridge.js"),"ask-wait",pastId],{encoding:"utf8",env:{...process.env,CODEX_BRIDGE_HOME:tmp,CODEX_BRIDGE_JOB_WAIT_SLICE_MS:"0"},timeout:10000});
 assert.notStrictEqual(past.status,0,"PID 없는 queued job도 deadline 경과 시 실패");assert.strictEqual(JSON.parse(fs.readFileSync(pastFile,"utf8")).state,"failed");fs.unlinkSync(pastFile);

@@ -193,7 +193,7 @@ const bridgeMod = JSON.stringify(path.join(__dirname, "..", "bridge", "codex-bri
 const wsSwitch = path.join(tmp, "모드전환"); fs.mkdirSync(wsSwitch, { recursive: true }); // 계약 없음=기본 claude-codex
 const swJobId = "ask-cvr005-00112233ee";
 const swJobFile = path.join(tmp, "ask-jobs", swJobId + ".json");
-fs.writeFileSync(swJobFile, JSON.stringify({ schema: "ask-job-v1", id: swJobId, workspace: wsSwitch, harnessMode: "codex-codex", implementerSession: sid, implementerTurnId: "turn-S", implementerRevision: 3, state: "running" }));
+fs.writeFileSync(swJobFile, JSON.stringify({ schema: "ask-job-v1", id: swJobId, workspace: wsSwitch, harnessMode: "codex-codex", implementerSession: sid, implementerTurnId: "turn-S", implementerRevision: 3, state: "running", deadlineAt: new Date(Date.now() + 7 * 60 * 1000).toISOString() })); // P-4 심화: 진행형 job은 deadline 필수(의미 검증) — 픽스처도 정본 형태
 const swRun = cp.spawnSync(process.execPath, ["-e", `const b=require(${bridgeMod});b.writeProof("v","답",${JSON.stringify(wsSwitch)});`], { encoding: "utf8", env: { ...process.env, CODEX_BRIDGE_HOME: tmp, CODEX_BRIDGE_JOB_PROMPT_FILE: swJobFile, CODEX_BRIDGE_ASK_JOB_ID: swJobId }, timeout: 15000, windowsHide: true });
 assert.notStrictEqual(swRun.status, 0, "모드 전환 stale=비정상 종료(worker가 failed로 기록할 신호)");
 assert.match(String(swRun.stderr || swRun.stdout), /stale/i, "stale 사유 안내");

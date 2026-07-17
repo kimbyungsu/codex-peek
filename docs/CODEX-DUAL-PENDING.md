@@ -606,10 +606,65 @@
   ('이후 시작되는 ask부터 즉시 적용…' — '다음 턴부터' 류 표현 금지). 무결성 오버라이드가
   있는 상태는 '사용자 수정됨'으로 표시(내장 프리셋과 혼동 방지). '모델 무관 조절'=발견량 보장이 아니라
   정책·범위·처리 의무의 모델 무관 적용임을 문구로 한정.
-- ⓚ **2단 백로그(별도 설계·P-2/P-3와 함께)**: 구조화 지적 블록 기계 집행(안정 findingId·blocking 여부·실패
-  ↔blocker 정합 강등·파싱 실패=보류 fail-closed), 중복 제거 백로그 장부(저장 위치·로컬 전용·보존 기간·삭제·
-  민감 본문 제외·손상 fail-closed), 의미 왕복 예산 카운터, 승격 게이트 자동화, custom 프로필, 통계 확장
-  (stats/verdicts.jsonl에 프로필·왕복·소요·승격 발견 blocker 수 — 효과 측정: 왕복 감소·탈출 결함 불증), ⓕ에서 이관된 nonce 완전 결속 설계(동결 검증 4~7차 요건: nonce 운반 명령·스냅/포인터 원자 기록·CAS·전 경로 재안내 결속·supersede·turnId 결속·다중 파일 트랜잭션 잠금·유일성 생성).
+- ⓚ **2단(설계 동결 2026-07-17 — 소단계 2a~2d 분해 · 2a 상세 동결·착수, 2b~2d는 착수 시 상세 동결)**:
+  - **2a 백로그 장부+기록물 위생(이번 착수)** —
+    ⑴ 장부: BRIDGE_DIR/verify-backlog/<wsKey>.jsonl(프로젝트별·로컬 전용·append-only). **이벤트 스키마
+    (3종·전부 ts 포함 — 동결 검증 2차에서 고정, 판독 권위는 아래 fold 순서 단일 규정)**:
+    add={schema:"vbl-1",ev:"add",id,tag("주의"|"백로그"),title,file?,lang,mode,profile,source?,ts} /
+    seen={schema:"vbl-1",ev:"seen",id,tag,lang,mode,profile,source?,ts} / status={schema:"vbl-1",ev:"status",id,
+    status:"done"|"dismissed",ts}. **fold 순서=파일 append 순서(줄 순서 — 3차 blocker 봉합: 잠금 직렬화가
+    append 순서를 권위로 만들며, ts 정렬은 시계 역전·동일 ms에서 상태를 뒤집을 수 있어 표시용으로만 사용)**.
+    **상태 전이표**: 신규 add=open · 기존 id에 add/seen=lastSeen·seenCount
+    갱신+tag는 단조 승격(백로그→주의만 상향, 주의→백로그 하향 없음 — 승격 소실 차단)+lang·mode·profile·
+    source 최신값 갱신(최초 좌표는 firstSeen 시점 add 줄에 보존 — 4차 [주의] 반영: 타 모드 재발견 시 최신
+    좌표가 보이게) · done/dismissed 후 같은 id의 add/seen=자동 reopen(재발견=미해결) · status 줄=지정 상태로 전이.
+    **중복 제거**: id=sha256(정규화 제목+"|"+정규화 file) 앞 16hex. **손상 줄=fail-visible(2차 blocker
+    봉합)**: 판독은 손상 줄을 건너뛰되 list 출력에 '손상 N줄' 경고를 표시하고, clear 재작성은 손상 줄
+    원문을 그대로 보존 복사(조용한 제거 금지) — '전체 유실 없음'이 아니라 '전체 유실 없음+개별 손상은
+    경고로 가시화'가 정확한 보장.
+    ⑵ CLI(codex-bridge): backlog add --tag 주의|백로그 --title "..." [--file <경로>] [--source <jobId>] /
+    backlog list [--all](기본=open만·태그·건수 요약) / backlog done <id> / backlog dismiss <id> /
+    backlog clear --done --confirm(닫힌 항목만 물리 정리). 한/영 출력 쌍. **직렬화(동결 검증 1차 blocker
+    봉합)**: 장부 명령 전체(add/done/dismiss/clear)가 <장부 파일>.lock 파일 잠금으로 직렬화 —
+    append(add·done·dismiss)와 재작성(clear)의 읽기-재작성 경합으로 신규 항목이 유실되는 경로 차단,
+    잠금 실패=기록 거부(fail-closed·P-8 잠금 축과 동일 패턴). add 성공 시 **id 영수증 출력**, rejudge
+    규약은 '기록 후 그 id를 보고에 인용'을 요구(기록 누락이 보고에서 드러나게 — [주의] 반영).
+    **민감 최소화 규칙([주의] 반영·2차에서 강제로 승격)**: 제목에 비밀값·개인정보 원문 금지(지적의
+    '종류'만 서술), 제목 200자 상한(초과 절단), file은 프로젝트(ws) 내부 절대경로면 반드시 상대화 저장,
+    프로젝트 외부 경로는 basename만 저장('외부' 표시) — 사용자명 등 로컬 식별정보가 무기한 잔존하는 경로
+    차단(PRIVACY에 동일 고지).
+    ⑶ 규약 연결: core rejudge에 '[백로그] 항목·[주의] 승격 항목은 backlog add로 장부에 기록한 뒤 목록을
+    보고에 전달하라' 추가(1단의 '보고 전달'이 장부 기록으로 물질화 — 같은 지적이 매 왕복 재등장하는 것을
+    id 중복 제거가 흡수). 기계 파싱 자동 등록은 2c(지금은 구현모델 기록 의무 — 프롬프트 규약).
+    ⑷ 보존·PRIVACY(P-2/P-3 동주제): 장부는 사용자 할 일 목록이므로 TTL 자동 삭제 '비대상'(P-3 스윕 제외
+    명시), 정리는 backlog clear 수동만. PRIVACY.md 표에 위치·내용(지적 제목·파일 경로 — 로컬 전용)·수명
+    (수동 정리) 명시. 민감 최소화: 프롬프트·응답 본문은 저장하지 않음(제목 1줄+경로만).
+    ⑸ **보류분 마무리(P-2~P-4 blocker 3건 — 동주제 동승)**: ①ask-job clear의 queued 삭제 경합(동결
+    검증 1차 정정 — 생성 잠금 해제~spawn~.pid 기록 사이엔 두 PID 모두 부재라 생존 검사로 못 닫음):
+    clear가 생성과 같은 ask-job 잠금을 잡고, state=queued이며 저장된 deadline 미경과면 PID 유무와
+    무관하게 삭제 거부(안내: deadline 경과 후 재시도 — 경과 queued는 상태 조회가 failed로 전이),
+    그 외에는 job workerPid와 별도 .pid 모두 무생존일 때만 삭제
+    ②손상 job에 해소 명령(clear)이 작동하지 않던 모순 — 파싱 불가 파일은 '삭제'가 아니라 **격리**
+    (원자 rename: <id>.json→<id>.json.corrupt-<격리시각> — 원문 보존·수동 검토 가능). **시한부 차단
+    (3차 blocker 봉합 — 격리 즉시 해제는 살아있는 worker와 중복 가능)**: 격리 파일도 격리시각+시스템
+    timeout 상한(60분 — verifyTimeoutMin의 기존 코드 상한 재사용, 새 상수 아님)까지는 신규 생성 차단을
+    유지하고 경과 후 자동 비차단(파일은 보존 — 어떤 worker의 deadline도 이 상한을 넘지 못하므로 생존
+    중복 창이 닫힘). 즉시 재개가 필요하면 위험 고지가 붙은 --force 별도 경로(안전 해소로 규정하지 않음).
+    --confirm 필수, 파일명이 id 문법을 벗어난 손상 파일은 수동 처리 안내를 메시지에 포함
+    ③의미 손상(파싱은 되나 schema≠ask-job-v1·id≠파일명·state 부재) 객체가 차단을 우회 —
+    corruptAskJobFiles가 의미 검증까지 수행(주의: 구스키마 job은 7일 스윕 전이라도 차단 대상이 됨 —
+    확인 후 clear로 해소, 메시지에 명시). 대시보드 백로그 열람 카드는 2a-2(후속·읽기 전용 목록+건수 칩).
+  - **2b 왕복 예산(다음)**: 계약 필드 verifyBudget(사용자 설정·기본 없음=무제한 — 임의 상수 금지),
+    캠페인 키=사용자 턴 결속(CL-C=verify-guard의 사용자 발화 기준·C-C=구현 턴), 카운터=같은 캠페인의
+    실패→재검증 사이클 수(문구 수정·신규 job 생성으로 초기화 금지 — 1단 판단 검증에서 동결한 3식별자
+    원칙), 소진 시 footer 강제 문구: 비차단만 잔존=장부 기록 후 종결, blocker 잔존=보류 승격(자동 통과
+    금지). 착수 시 상세 동결.
+  - **2c 기계 판독 딱지(후속)**: 구조화 지적 블록(안정 findingId·blocking 여부·태그) + 실패↔blocker 정합
+    강등(불일치=보류)·파싱 실패=보류 fail-closed + [백로그]/[주의] 자동 장부 등록. 착수 시 상세 동결.
+  - **2d 통계·승격(후속)**: stats/verdicts.jsonl에 프로필·캠페인 왕복 수·소요·승격 게이트에서 발견된
+    blocker 수(효과 측정 — 왕복 감소·탈출 결함 불증), 승격 게이트 자동 안내·고위험 변경 무결성 필수 정책.
+    ⓕ에서 이관된 nonce 완전 결속 설계(동결 검증 4~7차 요건: nonce 운반 명령·스냅/포인터 원자 기록·CAS·전
+    경로 재안내 결속·supersede·turnId 결속·다중 파일 트랜잭션 잠금·유일성 생성)도 이 단계 후보.
 - ⓛ **1단 회귀 테스트(축소 확정)**: 필드 정규화·상속(C-C 부재→CL-C 상속·명시 저장 후 독립)·ko/en 쌍,
   프리셋 선택(core/integrity 각 3축이 실제 주입문에 반영), job 동결→worker 소비(생성 후 계약을 core↔
   integrity로 바꿔도 job 동결값 유지·worker patch가 동결 필드 보존), legacy job(profile/언어 없음)=

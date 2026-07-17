@@ -1150,6 +1150,33 @@ function withAskJobLock(ws, fn) {
   if(!locked)die(tB("검증 작업 잠금 획득 실패 — 새 작업을 만들지 않았습니다.","Could not acquire the verification job lock — no job was created."),3);
   try{return fn();}finally{try{if(fs.readFileSync(file,"utf8")===token)fs.unlinkSync(file);}catch{/* 무해 */}}
 }
+// P-4: 손상(파싱 불가·비객체) job 파일 목록 — activeAskJob은 손상 파일을 건너뛰므로(타 작업 보호)
+// '실행 중 job이 손상되면 활성 없음으로 축소→중복 worker 생성' 구멍이 있었다. 신규 생성 전에 진단해 차단.
+const QUARANTINE_BLOCK_MS = 60 * 60 * 1000; // verifyTimeoutMin의 기존 코드 상한(60분) 재사용 — 새 상수 아님(P-12 ⓚ)
+function corruptAskJobFiles() {
+  let names = [];
+  try { names = fs.readdirSync(ASK_JOBS_DIR); } catch { return []; }
+  const bad = [];
+  for (const n of names) {
+    if (n.endsWith(".json")) {
+      try {
+        const o = JSON.parse(fs.readFileSync(path.join(ASK_JOBS_DIR, n), "utf8"));
+        // 의미 손상(P-4 3차 blocker): 파싱은 되지만 정본 필드가 깨진 객체(schema·id↔파일명·state)는
+        // activeAskJob의 활성 판정을 우회해 중복 worker를 허용하므로 함께 차단. 구스키마 잔존 job도
+        // 여기 걸린다 — 확인 후 clear로 해소(안내 메시지에 명시).
+        const stOk = ["queued", "running", "succeeded", "failed"].includes(o && o.state); // 상태 오타=활성 판정 우회 차단(구현검증 1차 blocker)
+        const wsOk = o && typeof o.workspace === "string" && o.workspace.trim(); // workspace 소실·공백뿐=활성 판정 우회 차단(재검증 2차 blocker)
+        const dlOk = !(o && (o.state === "queued" || o.state === "running")) || Number.isFinite(Date.parse(o && o.deadlineAt || "")); // 진행형은 deadline 필수
+        if (!o || typeof o !== "object" || Array.isArray(o) || o.schema !== "ask-job-v1" || typeof o.id !== "string" || !askJobIdOk(o.id) || o.id + ".json" !== n || !stOk || !wsOk || !dlOk) bad.push(n);
+      } catch { bad.push(n); }
+      continue;
+    }
+    // 격리 파일 시한부 차단(P-12 ⓚ — '격리 즉시 해제'는 살아있는 worker와 중복 가능): 격리시각+60분까지 유지.
+    const m = /\.json\.corrupt-(\d+)$/.exec(n);
+    if (m) { const ts = Number(m[1]); if (Number.isFinite(ts) && Math.abs(Date.now() - ts) < QUARANTINE_BLOCK_MS) bad.push(n); } // |now-ts|<60분 — 미래 시각(시계 역행·조작)이 무기한 차단이 되지 않게(재검증 2차 blocker)
+  }
+  return bad;
+}
 function activeAskJob(ws) {
   let names = [];
   try { names = fs.readdirSync(ASK_JOBS_DIR).filter((n) => n.endsWith(".json")); } catch { return null; }
@@ -1203,6 +1230,11 @@ function cmdAskStart(rest) {
     if(active)throw Object.assign(new Error(tB("⚠️ 이미 검증이 진행 중이거나 확인 대기 중입니다. 새 작업을 만들지 않았습니다. ask-active status로 확인하세요.","⚠️ A verification is already running or awaiting review. No new job was created. Check ask-active status.")),{exitCode:3});
     const old=activeAskJob(ws);
     if(old)throw Object.assign(new Error(tB(`⚠️ 기존 검증 작업(${old.id})이 ${old.state} 상태입니다. 새 작업을 만들지 않았습니다. ask-wait ${old.id} 로 이어서 기다리세요.`,`⚠️ Verification job ${old.id} is ${old.state}. No new job was created. Continue with ask-wait ${old.id}.`)),{exitCode:3});
+    // P-4 fail-closed: 손상 job 파일이 있으면 '활성 없음'으로 축소하지 않고 신규 생성을 차단(중복 worker 방지).
+    // 손상 파일의 workspace를 읽을 수 없어 보수적으로 전체 차단 — 확인 후 ask-job clear <id> --confirm 또는
+    // 파일 정리로 해소(7일 경과분은 하루 1회 정리가 자동 삭제).
+    const corrupt=corruptAskJobFiles();
+    if(corrupt.length)throw Object.assign(new Error(tB(`⚠️ 판독 불가(손상) 검증 작업 파일이 있어 새 작업을 만들지 않았습니다: ${corrupt.join(", ")}. 실행 중 작업일 수 있으니 내용 확인 후 ask-job clear <id> --confirm 으로 정리하고 재시도하세요.`,`⚠️ Unreadable (corrupt) verification job file(s) exist; no new job was created: ${corrupt.join(", ")}. They may belong to a running job — inspect, then clean with ask-job clear <id> --confirm and retry.`)),{exitCode:3});
     // P-6(설계 v5.1): C-C면 구현 컨텍스트를 job에 불변 동결. 잠금 순서 고정 ask-job → role(유일한 중첩 지점 —
     // 기존 role lock 사용처는 전부 단독 획득이라 역순 데드락 없음, Codex 전수 확인). 부재·중간 상태는 fail-closed.
     const askLangSnap=loadLang(); // P-12: 언어 먼저 캡처 → 같은 슬롯 계약(프로필·언어 단일 스냅샷)
@@ -1275,6 +1307,42 @@ function cmdAskWait(rest) {
   process.stdout.write(JSON.stringify({ jobId: id, state: j.state, workerAlive: alive, childPid: j.childPid || null, verifyTimeoutMin: j.timeoutMin, remainingMs: remaining, next: `node "${__filename}" ask-wait ${id}` }, null, 2) + "\n");
 }
 
+// P-12 2a — 검증 백로그 장부 CLI(설계 동결 ⓚ): add/list/done/dismiss/clear. 프로젝트별·로컬 전용.
+function cmdBacklog(rest) {
+  const lib = require("./contract-lib.js");
+  const ws = configWs();
+  const sub = rest[0] || "list";
+  const val = (flag) => { const i = rest.indexOf(flag); return i >= 0 && rest[i + 1] ? rest[i + 1] : ""; };
+  if (sub === "add") {
+    const tag = val("--tag"), title = val("--title");
+    if (tag !== "주의" && tag !== "백로그") die(tB('사용법: backlog add --tag 주의|백로그 --title "..." [--file <경로>] [--source <jobId>]', 'Usage: backlog add --tag 주의|백로그 --title "..." [--file <path>] [--source <jobId>]'), 2);
+    const c = loadContract(ws);
+    const r = lib.backlogAdd(ws, { tag, title, file: val("--file"), source: val("--source"), lang: loadLang(), mode: c.harnessMode, profile: (c.harnessMode === "codex-codex" ? c.codexVerifyProfile : c.verifyProfile) || "integrity" });
+    if (!r.ok) die(tB("장부 기록 실패(잠금/입력): ", "Backlog write failed (lock/input): ") + String(r.error || ""), 3);
+    process.stdout.write((r.existed ? tB("재발견 기록됨(기존 항목 갱신) — id: ", "Re-occurrence recorded (existing item updated) — id: ") : tB("등록됨 — id: ", "Registered — id: ")) + r.id + "\n"); return;
+  }
+  if (sub === "list") {
+    const all = rest.includes("--all");
+    const { items, corrupt } = lib.readBacklog(ws);
+    const shown = all ? items : items.filter((x) => x.status === "open");
+    const cnt = (t) => shown.filter((x) => x.tag === t && x.status === "open").length;
+    process.stdout.write(tB(`검증 백로그 — 열림 ${items.filter((x) => x.status === "open").length}건(주의 ${cnt("주의")} · 백로그 ${cnt("백로그")})${all ? ` · 전체 ${items.length}건` : ""}\n`, `Verify backlog — open ${items.filter((x) => x.status === "open").length} (주의 ${cnt("주의")} · 백로그 ${cnt("백로그")})${all ? ` · total ${items.length}` : ""}\n`));
+    for (const x of shown) process.stdout.write(`  [${x.tag}]${x.status !== "open" ? "(" + x.status + ")" : ""} ${x.id} ${x.title}${x.file ? " — " + x.file : ""} (${x.seenCount}회 · ${String(x.lastSeen).slice(0, 10)})\n`);
+    if (corrupt) process.stdout.write(tB(`⚠ 손상 ${corrupt}줄 — 해당 줄의 할 일은 표시되지 않을 수 있습니다(원문은 장부 파일에 보존됨).\n`, `⚠ ${corrupt} corrupt line(s) — items on those lines may be hidden (originals preserved in the ledger file).\n`));
+    return;
+  }
+  if ((sub === "done" || sub === "dismiss") && rest[1]) {
+    const r = lib.backlogSetStatus(ws, rest[1], sub === "done" ? "done" : "dismissed");
+    if (!r.ok) die(tB("상태 변경 실패: ", "Status change failed: ") + String(r.error || ""), r.error === "not-found" ? 2 : 3);
+    process.stdout.write(tB("처리됨 ✓\n", "Updated ✓\n")); return;
+  }
+  if (sub === "clear" && rest.includes("--done") && rest.includes("--confirm")) {
+    const r = lib.backlogClearDone(ws);
+    if (!r.ok) die(tB("정리 실패: ", "Clear failed: ") + String(r.error || ""), 3);
+    process.stdout.write(tB(`닫힌 항목 ${r.removed}건 정리됨${r.corrupt ? ` · 손상 ${r.corrupt}줄은 원문 보존` : ""}\n`, `Cleared ${r.removed} closed item(s)${r.corrupt ? ` · ${r.corrupt} corrupt line(s) preserved verbatim` : ""}\n`)); return;
+  }
+  die(tB('사용법: backlog add --tag 주의|백로그 --title "..." [--file <경로>] [--source <jobId>] | backlog list [--all] | backlog done <id> | backlog dismiss <id> | backlog clear --done --confirm', 'Usage: backlog add --tag 주의|백로그 --title "..." [--file <path>] [--source <jobId>] | backlog list [--all] | backlog done <id> | backlog dismiss <id> | backlog clear --done --confirm'), 2);
+}
 function cmdAskJob(rest) {
   const sub = rest[0] || "status";
   const id = rest[1] || "";
@@ -1283,9 +1351,31 @@ function cmdAskJob(rest) {
     const a = activeAskJob(configWs()); process.stdout.write(a ? JSON.stringify(Object.assign({}, a, { prompt: undefined, workerAlive: pidAlive(a.workerPid) }), null, 2) + "\n" : tB("활성 검증 작업 없음\n", "No active verification job\n")); return;
   }
   if (sub === "clear" && id && rest.includes("--confirm")) {
-    const j = readAskJob(id); if (!j) return;
-    if (pidAlive(j.workerPid)) die(tB("worker가 살아 있어 지우지 않았습니다.", "Worker is still alive; job was not cleared."), 3);
-    for (const ext of [".json", ".out", ".err", ".pid"]) try { fs.unlinkSync(path.join(ASK_JOBS_DIR, id + ext)); } catch { /* 없음 */ }
+    // id 문법 강제(구현검증 1차 blocker): 문자 제거식 경로 해석은 잘못된 id가 '다른 정상 job'으로 축소돼
+    // 오삭제될 수 있다 — 문법 밖 id는 거부하고 수동 처리 안내(계약 ⓚ와 일치).
+    if (!askJobIdOk(id)) die(tB("id 문법이 올바르지 않습니다: " + id + " — 파일명이 문법을 벗어난 손상 파일은 ask-jobs 폴더에서 직접 확인·삭제하세요.", "Invalid job id grammar: " + id + " — for corrupt files whose names fall outside the grammar, inspect/delete them manually in the ask-jobs folder."), 2);
+    const jsonPath = askJobFile(id);
+    const j = readAskJob(id);
+    if (!j && fs.existsSync(jsonPath)) {
+      // P-4(2차 blocker): 파싱 불가 파일은 '삭제'가 아니라 원자 rename 격리 — queued/deadline/ws를 알 수
+      // 없어 생존·잠금 판단이 원천 불가. 원문 보존, corruptAskJobFiles의 시한부 차단이 약 60분 유지된다.
+      const q = jsonPath + ".corrupt-" + Date.now();
+      try { fs.renameSync(jsonPath, q); } catch (e) { die(tB("격리 실패: ", "Quarantine failed: ") + String(e && e.message || e), 3); }
+      process.stdout.write(tB(`손상 job을 격리했습니다: ${path.basename(q)} — 원문은 보존되며, 살아있는 worker와의 중복을 막기 위해 약 60분(시스템 timeout 상한)까지 신규 검증 생성 차단이 유지됩니다. 즉시 해제가 필요하면 위험을 확인한 뒤 격리 파일을 직접 삭제하세요(안전 해소 아님).\n`, `Quarantined the corrupt job: ${path.basename(q)} — original preserved; new-verification blocking stays ~60min (system timeout cap) to avoid duplicating a live worker. To lift immediately, review the risk and delete the quarantine file manually (not a safe resolution).\n`)); return;
+    }
+    if (!j) return;
+    // P-2(1차 blocker)+queued 경합(설계 ⓚ ⑸①): 생성과 같은 ask-job 잠금 안에서 판정 —
+    // 생성 잠금 해제~spawn~.pid 기록 공백에선 두 PID 모두 부재라 생존 검사로 못 닫는다.
+    try {
+      withAskJobLock(String(j.workspace || configWs()), () => {
+        const cur = readAskJob(id) || j;
+        const dl = Date.parse(cur.deadlineAt || "");
+        if (cur.state === "queued" && Number.isFinite(dl) && Date.now() < dl) throw Object.assign(new Error(tB("대기(queued) 상태이고 deadline이 지나지 않아 지우지 않았습니다 — worker가 곧 붙을 수 있습니다. deadline 경과 후 다시 시도하세요.", "Job is queued and its deadline has not passed; not cleared — a worker may still attach. Retry after the deadline.")), { exitCode: 3 });
+        let spawnPid = 0; try { spawnPid = parseInt(fs.readFileSync(path.join(ASK_JOBS_DIR, id + ".pid"), "utf8"), 10) || 0; } catch { /* 없음 */ }
+        if (pidAlive(cur.workerPid) || pidAlive(spawnPid)) throw Object.assign(new Error(tB("worker가 살아 있어 지우지 않았습니다.", "Worker is still alive; job was not cleared.")), { exitCode: 3 });
+        for (const ext of [".json", ".out", ".err", ".pid"]) try { fs.unlinkSync(path.join(ASK_JOBS_DIR, id + ext)); } catch { /* 없음 */ }
+      });
+    } catch (e) { die(String(e && e.message || e), Number(e && e.exitCode) || 3); }
     process.stdout.write(tB("확인된 검증 작업 기록을 지웠습니다.\n", "Cleared the reviewed verification job record.\n")); return;
   }
   die(tB("사용법: ask-job status [id] | ask-job clear <id> --confirm", "Usage: ask-job status [id] | ask-job clear <id> --confirm"), 2);
@@ -1730,6 +1820,8 @@ function main() {
       return cmdAskWait(rest);
     case "ask-job":
       return cmdAskJob(rest);
+    case "backlog":
+      return cmdBacklog(rest); // P-12 2a — 검증 백로그 장부
     case "link":
       return cmdLink(rest);
     case "status":
@@ -1768,4 +1860,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { readCanonicalEnvJob, withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState };
+module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState };

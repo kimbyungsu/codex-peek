@@ -275,6 +275,125 @@ function patchContractFields(ws, lang, patch) {
   } catch { return false; }
 }
 
+// ── P-12 2a 백로그 장부(설계 동결 ⓚ) — 검증의 비차단 지적([백로그]·[주의] 승격분)이 답변에만 남고
+// 증발하는 부채 누적 구조를 막는 프로젝트별 할 일 장부. append-only jsonl + 줄 순서 fold(ts=표시용),
+// 전 명령 <파일>.lock 직렬화(재작성 경합 차단·실패=기록 거부), 손상 줄=건너뛰되 개수 가시화(fail-visible),
+// TTL 자동 삭제 '비대상'(사용자 할 일 — 수동 clear만).
+const BACKLOG_DIR = path.join(BRIDGE_DIR, "verify-backlog");
+const BACKLOG_TAGS = ["주의", "백로그"];
+// 정규화·id([백로그] 항목의 구현 확정): 제목=NFC→공백 압축→trim→200자 절단(저장값과 동일) →
+// 해시는 절단 '후' 값의 소문자. 경로=NFC→trim→구분자 / 통일, 해시는 소문자(win 대소문자 무시).
+function normBacklogTitle(t) {
+  let x = String(t || "").normalize("NFC").replace(/\s+/g, " ").trim();
+  if (x.length > 200) x = x.slice(0, 200); // 민감 최소화 — 200자 상한(설계 ⓚ)
+  return x;
+}
+// 파일 경로 민감 최소화(설계 ⓚ 강제): ws 내부=상대화, 외부=basename+"(외부)" — 사용자명 등 로컬 식별정보가
+// 무기한 잔존하는 경로 차단. 상대·절대 모두 ws 기준으로 실제 위치를 확정 후 포함 검사(구현검증 2차 blocker:
+// '../…' 상대경로가 외부 축소를 우회하던 구멍).
+function normBacklogFile(f, ws) {
+  if (!f) return "";
+  const x = String(f).normalize("NFC").trim().replace(/\\/g, "/");
+  const abs = path.isAbsolute(x) ? x : path.resolve(String(ws || ""), x);
+  const rel = path.relative(String(ws || ""), abs).replace(/\\/g, "/");
+  if (rel && rel !== ".." && !rel.startsWith("../") && !path.isAbsolute(rel)) return rel; // 세그먼트 단위 경계(3차 blocker: ..notes/ 같은 내부 정상 디렉터리 오판·항목 병합 방지)
+  return path.basename(abs) + " (외부)";
+}
+function backlogId(title, file) {
+  return crypto.createHash("sha256").update(normBacklogTitle(title).toLowerCase() + "|" + String(file || "").toLowerCase(), "utf8").digest("hex").slice(0, 16);
+}
+function backlogFileFor(ws) { return path.join(BACKLOG_DIR, wsKeyFor(ws) + ".jsonl"); }
+// fold=파일 append 순서(잠금 직렬화가 순서를 권위로 — ts 정렬은 시계 역전·동일 ms 역전 위험이라 표시용).
+// 전이표(동결): 신규 add=open · 기존 id add/seen=lastSeen·seenCount·tag 단조 승격(백로그→주의만)·
+// lang/mode/profile/source 최신화·status=open(재발견=reopen) · status 줄=지정 상태. add 없는 seen/status·
+// 스키마 불일치=손상으로 계수(침묵 유실 금지).
+function foldBacklogRaw(raw) {
+  const map = new Map(); const lines = []; let corrupt = 0;
+  for (const line of String(raw || "").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let o = null; try { o = JSON.parse(line); } catch { corrupt++; lines.push({ line, id: null, bad: true }); continue; }
+    // 의미 검증(구현검증 1차 blocker): id 16hex·ts 존재·이벤트별 필수 필드·add의 id=재계산 해시 일치 —
+    // 스키마 불일치는 정상 항목으로 수용하지 않고 손상으로 계수(침묵 수용 금지).
+    const okBase = o && typeof o === "object" && o.schema === "vbl-1" && typeof o.id === "string" && /^[a-f0-9]{16}$/.test(o.id) && typeof o.ts === "string" && o.ts;
+    const okShape = okBase && (
+      (o.ev === "add" && BACKLOG_TAGS.includes(o.tag) && typeof o.title === "string" && normBacklogTitle(o.title) && o.id === backlogId(o.title, o.file)) ||
+      (o.ev === "seen" && BACKLOG_TAGS.includes(o.tag)) ||
+      (o.ev === "status" && (o.status === "done" || o.status === "dismissed"))
+    );
+    if (!okShape) { corrupt++; lines.push({ line, id: okBase ? o.id : null, bad: true }); continue; }
+    const cur = map.get(o.id);
+    if (o.ev === "add" && !cur) {
+      map.set(o.id, { id: o.id, tag: o.tag === "주의" ? "주의" : "백로그", title: normBacklogTitle(o.title), file: String(o.file || ""), lang: String(o.lang || ""), mode: String(o.mode || ""), profile: String(o.profile || ""), source: String(o.source || ""), firstSeen: String(o.ts || ""), lastSeen: String(o.ts || ""), seenCount: 1, status: "open" });
+      lines.push({ line, id: o.id, bad: false }); continue;
+    }
+    if ((o.ev === "add" || o.ev === "seen") && cur) {
+      cur.lastSeen = String(o.ts || cur.lastSeen); cur.seenCount++;
+      if (o.tag === "주의") cur.tag = "주의"; // 단조 승격 — 하향 없음
+      if (o.lang) cur.lang = String(o.lang); if (o.mode) cur.mode = String(o.mode);
+      if (o.profile) cur.profile = String(o.profile); if (o.source) cur.source = String(o.source);
+      cur.status = "open"; // 재발견=reopen
+      lines.push({ line, id: o.id, bad: false }); continue;
+    }
+    if (o.ev === "status" && cur && (o.status === "done" || o.status === "dismissed")) {
+      cur.status = o.status; lines.push({ line, id: o.id, bad: false }); continue;
+    }
+    corrupt++; lines.push({ line, id: typeof o.id === "string" ? o.id : null, bad: true }); // add 없는 seen/status 등
+  }
+  return { items: [...map.values()], corrupt, lines };
+}
+function readBacklog(ws) {
+  let raw = ""; try { raw = fs.readFileSync(backlogFileFor(ws), "utf8"); } catch { return { items: [], corrupt: 0 }; }
+  const f = foldBacklogRaw(raw); return { items: f.items, corrupt: f.corrupt };
+}
+// 기록: 잠금 직렬화 — 실패=false(기록 거부·fail-closed). 반환 {ok, id, existed}.
+function backlogAdd(ws, opts) {
+  const title = normBacklogTitle(opts && opts.title);
+  if (!title) return { ok: false, error: "empty-title" };
+  const tag = opts && opts.tag === "주의" ? "주의" : "백로그";
+  const file = normBacklogFile(opts && opts.file, ws);
+  const id = backlogId(title, file);
+  const target = backlogFileFor(ws);
+  try { fs.mkdirSync(BACKLOG_DIR, { recursive: true }); } catch { /* append에서 드러남 */ }
+  const r = withFileLockStrict(target + ".lock", () => {
+    let raw = ""; try { raw = fs.readFileSync(target, "utf8"); } catch { /* 신규 */ }
+    const existed = foldBacklogRaw(raw).items.some((x) => x.id === id);
+    const base = { schema: "vbl-1", id, tag, lang: String(opts && opts.lang || ""), mode: String(opts && opts.mode || ""), profile: String(opts && opts.profile || ""), source: String(opts && opts.source || ""), ts: new Date().toISOString() };
+    const ev = existed ? { ...base, ev: "seen" } : { ...base, ev: "add", title, file };
+    fs.appendFileSync(target, JSON.stringify(ev) + "\n", "utf8");
+    return existed;
+  });
+  if (!r.ok) return { ok: false, error: r.error || "lock" };
+  return { ok: true, id, existed: r.result === true };
+}
+function backlogSetStatus(ws, id, status) {
+  if (status !== "done" && status !== "dismissed") return { ok: false, error: "bad-status" };
+  const target = backlogFileFor(ws);
+  const r = withFileLockStrict(target + ".lock", () => {
+    let raw = ""; try { raw = fs.readFileSync(target, "utf8"); } catch { return "missing"; }
+    if (!foldBacklogRaw(raw).items.some((x) => x.id === id)) return "missing";
+    fs.appendFileSync(target, JSON.stringify({ schema: "vbl-1", id, ev: "status", status, ts: new Date().toISOString() }) + "\n", "utf8");
+    return "ok";
+  });
+  if (!r.ok) return { ok: false, error: r.error || "lock" };
+  return r.result === "ok" ? { ok: true } : { ok: false, error: "not-found" };
+}
+// 닫힌 항목만 물리 정리 — 손상 줄은 '원문 그대로 보존 복사'(조용한 제거 금지·fail-visible),
+// open 항목의 줄 전부 보존. 잠금 안 재작성(atomicWrite — 크래시 안전).
+function backlogClearDone(ws) {
+  const target = backlogFileFor(ws);
+  const r = withFileLockStrict(target + ".lock", () => {
+    let raw = ""; try { raw = fs.readFileSync(target, "utf8"); } catch { return { removed: 0, corrupt: 0 }; }
+    const f = foldBacklogRaw(raw);
+    const closed = new Set(f.items.filter((x) => x.status !== "open").map((x) => x.id));
+    const kept = f.lines.filter((l) => l.bad || !l.id || !closed.has(l.id)).map((l) => l.line);
+    if (!atomicWrite(target, kept.length ? kept.join("\n") + "\n" : "")) return { error: "write" };
+    return { removed: closed.size, corrupt: f.corrupt };
+  });
+  if (!r.ok) return { ok: false, error: r.error || "lock" };
+  if (r.result && r.result.error) return { ok: false, error: r.result.error };
+  return { ok: true, removed: r.result.removed, corrupt: r.result.corrupt };
+}
+
 function appendVerdict(ev) {
   try {
     fs.mkdirSync(STATS_DIR, { recursive: true });
@@ -2072,6 +2191,7 @@ const BASE_CORE = {
     "- 지적을 항목으로 나눠 [수용/반박/보류] + 근거(파일·라인)를 달라. 수용에는 직접 확인한 근거가 있어야 한다.",
     "- '[주의]' 항목(보안·데이터 인접)은 심각성을 스스로 재판단하라: 실질 위험이 있다고 보면 blocker 수정과 같은 루프에서 함께 고치고(추가 재검증은 1회에 동승), 아니라고 보면 그 근거를 달아 사용자 보고로 승격하라 — 근거 없는 조용한 백로그 이관 금지.",
     "- '[백로그]' 항목은 이 루프에서 수정하지 마라 — 사용자 최종 보고에 백로그 목록으로 그대로 전달한다(지금 고치면 최종본 재검증 의무가 다시 발동해 왕복만 늘어난다).",
+    "- '[백로그]' 항목과 사용자 승격으로 결정한 '[주의]' 항목은 \`node \"" + BRIDGE + "\" backlog add --tag 백로그|주의 --title \"<지적 1줄 — 비밀값·개인정보 원문 금지>\" [--file <경로>]\`로 장부에 기록하고, 출력된 id를 보고에 인용하라(기록 누락이 보고에서 드러나게).",
     "- blocker(실패 사유)는 반드시 고치고, '[주의]'는 위 재판단에서 이번 루프 처리로 결정한 항목만 함께 고쳐 재검증하라(그 외는 새 수정 금지). 완료 보고는 '통과'/'통과(보완)' 후에만.",
     "- 재검증이 반복·교착되는데 blocker가 잔존하면 통과로 포장하지 말고 '보류'로 사용자에게 선택을 넘겨라.",
     "- 묶음 완성·로컬 커밋 후 push·배포 전에 무결성 프로필로 승격 검증 1회를 권장한다.",
@@ -2096,6 +2216,7 @@ const BASE_CORE_EN = {
     "- Split points into items with [accept/rebut/hold] + evidence (file·line). Accepted items need evidence you checked yourself.",
     "- Re-judge the severity of '[caution]' items (security/data-adjacent) yourself: if you judge the risk real, fix them in the same loop as the blockers (any extra re-verification rides along once); if not, escalate them to the user's report with your reasoning — never silently defer them to the backlog.",
     "- Do NOT fix '[backlog]' items in this loop — pass them through to the user's final report as a backlog list (fixing them now re-triggers the final-state re-verification duty and only inflates round-trips).",
+    "- Record '[backlog]' items and user-escalated '[caution]' items with \`node \"" + BRIDGE + "\" backlog add --tag 백로그|주의 --title \"<one line — never secret/PII originals>\" [--file <path>]\` and cite the printed id in your report (so omissions are visible).",
     "- Always fix the blockers, plus only those '[caution]' items you decided above to handle in this loop, then re-verify (no other new fixes). Report completion only after 'pass' or 'pass (notes)'.",
     "- If re-verification stalls with blockers remaining, do not package it as a pass — escalate to the user as 'inconclusive/hold'.",
     "- After the bundle is complete and locally committed, one integrity-profile escalation verification before push/deploy is recommended.",
@@ -2314,7 +2435,7 @@ function formatForClaude(answer, lang, profile) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, BASE_CORE, BASE_CORE_EN, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, BASE_CORE, BASE_CORE_EN, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
 module.exports.codexImplementerSession = codexImplementerSession;
 module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
 // P-6 회수 영수증 계약(설계 v5.1)
