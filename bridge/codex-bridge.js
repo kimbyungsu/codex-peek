@@ -1417,11 +1417,11 @@ function patchAskJobFile(id, extra) {
 function budgetExhaustMsg(m, lang, profile) {
   const en = lang === "en";
   if (profile === "core") return en
-    ? `[verify budget exhausted · ${m}/${m}] This campaign's verification round budget is spent — no further rounds. Since no confirmation round is possible, do NOT newly apply '[notes]'; report them as unapplied (the canon's 'apply as a batch + one confirmation' cannot run under this budget — ask the user for approval if applying is necessary). Re-judge each '[caution]' and escalate it to the user's judgment with your reasoning (backlog add --tag 주의, cite the id); record '[backlog]' (out-of-scope proposals) in the parking lot and pass the list. If blockers remain, never auto-pass — escalate as a hold with a [disputed|unresolved-defect|external-decision] class, report the budget overrun and remaining blockers, and wait for instructions.`
-    : `[왕복 예산 소진 · ${m}/${m}] 이 캠페인의 검증 왕복 예산을 소진했습니다 — 추가 왕복은 불가합니다. 확인 검증이 불가하므로 '[보완]'은 새로 반영하지 말고 미반영 상태로 사용자 보고에 명시하세요(캐논의 '일괄 반영+확인 1회'는 예산상 실행 불가 — 반영이 필요하면 사용자 승인을 구하세요). '[주의]'는 재판단해 근거와 함께 사용자 판단으로 승격(backlog add --tag 주의·id 인용)하고, '[백로그]'(범위 밖 제안)는 보관함에 기록해 목록으로 전달하세요. blocker가 남았으면 자동 통과 금지 — [분쟁|미해결 결함|외부 결정] 분류를 붙인 보류로 승격해 예산 초과와 잔여 blocker를 알리고 지시를 받으세요.`;
+    ? `[verify round cap exhausted · ${m}/${m}] This campaign's verification round cap is used up — no further rounds. Since no confirmation round is possible, do NOT newly apply '[notes]'; report them as unapplied (the canon's 'apply as a batch + one confirmation' cannot run under this cap — ask the user for approval if applying is necessary). Re-judge each '[caution]' and escalate it to the user's judgment with your reasoning (backlog add --tag 주의, cite the id); record '[backlog]' (out-of-scope proposals) in the parking lot and pass the list. If blockers remain, never auto-pass — escalate as a hold with a [disputed|unresolved-defect|external-decision] class, report the cap exhaustion and remaining blockers, and wait for instructions. State the options explicitly in the report: (1) approve more verification, (2) leave as is, (3) change the cap (applies from the next instruction).`
+    : `[검증 왕복 상한 소진 · ${m}/${m}] 이 지시(턴)의 검증 왕복 상한을 다 썼습니다 — 추가 왕복은 불가합니다. 확인 검증이 불가하므로 '[보완]'은 새로 반영하지 말고 미반영 상태로 사용자 보고에 명시하세요(캐논의 '일괄 반영+확인 1회'는 상한상 실행 불가 — 반영이 필요하면 사용자 승인을 구하세요). '[주의]'는 재판단해 근거와 함께 사용자 판단으로 승격(backlog add --tag 주의·id 인용)하고, '[백로그]'(범위 밖 제안)는 보관함에 기록해 목록으로 전달하세요. blocker가 남았으면 자동 통과 금지 — [분쟁|미해결 결함|외부 결정] 분류를 붙인 보류로 승격해 상한 소진과 잔여 blocker를 알리고 지시를 받으세요. 보고에는 선택지를 명시하세요: ① 추가 검증 승인 ② 이 상태로 두기 ③ 상한 변경(다음 지시부터).`;
   return en
-    ? `[verify budget exhausted · ${m}/${m}] This campaign's verification round budget is spent — no further rounds. Since re-verification is impossible, make no new post-verification edits; report remaining findings to the user as unapplied. If blockers remain, never auto-pass — escalate as a hold, report the budget overrun and remaining blockers, and wait for instructions.`
-    : `[왕복 예산 소진 · ${m}/${m}] 이 캠페인의 검증 왕복 예산을 소진했습니다 — 추가 왕복은 불가합니다. 재검증이 불가하므로 검증 후 새 수정은 하지 말고, 남은 지적은 미반영 상태로 사용자 보고에 명시하세요. blocker가 남았으면 자동 통과 금지 — 보류로 승격해 예산 초과와 잔여 blocker를 알리고 지시를 받으세요.`;
+    ? `[verify round cap exhausted · ${m}/${m}] This campaign's verification round cap is used up — no further rounds. Since re-verification is impossible, make no new post-verification edits; report remaining findings to the user as unapplied. If blockers remain, never auto-pass — escalate as a hold, report the cap exhaustion and remaining blockers, and wait for instructions. State the options explicitly in the report: (1) approve more verification, (2) leave as is, (3) change the cap (applies from the next instruction).`
+    : `[검증 왕복 상한 소진 · ${m}/${m}] 이 지시(턴)의 검증 왕복 상한을 다 썼습니다 — 추가 왕복은 불가합니다. 재검증이 불가하므로 검증 후 새 수정은 하지 말고, 남은 지적은 미반영 상태로 사용자 보고에 명시하세요. blocker가 남았으면 자동 통과 금지 — 보류로 승격해 상한 소진과 잔여 blocker를 알리고 지시를 받으세요. 보고에는 선택지를 명시하세요: ① 추가 검증 승인 ② 이 상태로 두기 ③ 상한 변경(다음 지시부터).`;
 }
 function reserveVerifyBudgetGate(ws, durableEnv, contractSnap, harnessModeSnap, langSnap, profileSnap) {
   const job = durableEnv && durableEnv.ok ? durableEnv.job : null;
@@ -1474,24 +1474,24 @@ function budgetNoticeLines(res, lang, profile) {
   if (res.tracked) {
     let s = "";
     if (res.historyWarn) s += en
-      ? `\n[verify budget] ${res.historyWarn} campaign-history line(s) had unreadable timestamps — preserved, not trimmed; inspect verify-campaigns/<ws>.history.jsonl if this repeats.\n`
-      : `\n[왕복 예산] 캠페인 이력에서 시각 판독 불가 줄 ${res.historyWarn}건 — 삭제하지 않고 보존했습니다(반복되면 verify-campaigns 이력 파일 확인).\n`;
+      ? `\n[verify round cap] ${res.historyWarn} campaign-history line(s) had unreadable timestamps — preserved, not trimmed; inspect verify-campaigns/<ws>.history.jsonl if this repeats.\n`
+      : `\n[검증 왕복 상한] 캠페인 이력에서 시각 판독 불가 줄 ${res.historyWarn}건 — 삭제하지 않고 보존했습니다(반복되면 verify-campaigns 이력 파일 확인).\n`;
     if (res.quarantined) s += en
-      ? "\n[verify budget] The round counter was corrupt and was quarantined (original preserved in verify-campaigns/corrupt) — a new campaign started, and the budget was not applied to earlier rounds.\n"
-      : "\n[왕복 예산] 왕복 카운터가 손상돼 격리했습니다(원문은 verify-campaigns/corrupt에 보존) — 새 캠페인으로 시작하며, 이전 왕복에는 예산이 적용되지 않았습니다.\n";
+      ? "\n[verify round cap] The round counter was corrupt and was quarantined (original preserved in verify-campaigns/corrupt) — a new campaign started, and the cap was not applied to earlier rounds.\n"
+      : "\n[검증 왕복 상한] 왕복 카운터가 손상돼 격리했습니다(원문은 verify-campaigns/corrupt에 보존) — 새 캠페인으로 시작하며, 이전 왕복에는 상한이 적용되지 않았습니다.\n";
     if (res.last) s += profile === "core"
       ? (en
-        ? `\n[verify budget ${res.n}/${res.budget}] This was this campaign's last reserved round — the next request in the same campaign will be refused. The confirmation round for '[notes]' accepted from this verdict is NOT left in the budget, so the 'apply as a batch + one confirmation' instruction cannot run — do not apply them; report them as unapplied, or ask the user for approval if applying is necessary (budget changes take effect from the next campaign). Record what stays in the parking lot ([backlog] and user-escalated [caution] via backlog add); if blockers remain, escalate to the user as a classified hold.\n`
-        : `\n[왕복 예산 ${res.n}/${res.budget}] 이 캠페인의 마지막 예약 왕복입니다 — 같은 캠페인의 다음 요청은 거부됩니다. 이 판정에서 수용한 '[보완]'의 확인 검증은 예산에 남아 있지 않으므로 '일괄 반영+확인 1회' 지시는 실행할 수 없습니다 — 반영하지 말고 미반영 상태로 보고하거나, 반영이 필요하면 사용자 승인을 구하세요(예산 변경은 다음 캠페인부터). 남길 지적은 보관함([백로그]·승격 [주의] — backlog add)에 기록하고, blocker가 남으면 분류를 붙인 보류로 승격하세요.\n`)
+        ? `\n[verify round cap ${res.n}/${res.budget}] This was this campaign's last reserved round — the next request in the same campaign will be refused. The confirmation round for '[notes]' accepted from this verdict is NOT left under the cap, so the 'apply as a batch + one confirmation' instruction cannot run — do not apply them; report them as unapplied, or ask the user for approval if applying is necessary (cap changes take effect from the next instruction). Record what stays in the parking lot ([backlog] and user-escalated [caution] via backlog add); if blockers remain, escalate to the user as a classified hold.\n`
+        : `\n[검증 왕복 상한 ${res.n}/${res.budget}] 이 캠페인의 마지막 예약 왕복입니다 — 같은 캠페인의 다음 요청은 거부됩니다. 이 판정에서 수용한 '[보완]'의 확인 검증 몫이 상한에 남아 있지 않으므로 '일괄 반영+확인 1회' 지시는 실행할 수 없습니다 — 반영하지 말고 미반영 상태로 보고하거나, 반영이 필요하면 사용자 승인을 구하세요(상한 변경은 다음 지시부터). 남길 지적은 보관함([백로그]·승격 [주의] — backlog add)에 기록하고, blocker가 남으면 분류를 붙인 보류로 승격하세요.\n`)
       : (en
-        ? `\n[verify budget ${res.n}/${res.budget}] This was this campaign's last reserved round — the next request in the same campaign will be refused. Since re-verification is impossible afterwards, close within this round without new post-verification edits; report anything remaining to the user as unapplied, and escalate remaining blockers as a hold.\n`
-        : `\n[왕복 예산 ${res.n}/${res.budget}] 이 캠페인의 마지막 예약 왕복입니다 — 같은 캠페인의 다음 요청은 거부됩니다. 이후 재검증이 불가하므로 검증 후 새 수정 없이 이 왕복 안에서 마감하고, 남는 사항은 미반영 상태로 사용자에게 보고하세요. blocker가 남으면 보류로 승격하세요.\n`);
+        ? `\n[verify round cap ${res.n}/${res.budget}] This was this campaign's last reserved round — the next request in the same campaign will be refused. Since re-verification is impossible afterwards, close within this round without new post-verification edits; report anything remaining to the user as unapplied, and escalate remaining blockers as a hold.\n`
+        : `\n[검증 왕복 상한 ${res.n}/${res.budget}] 이 캠페인의 마지막 예약 왕복입니다 — 같은 캠페인의 다음 요청은 거부됩니다. 이후 재검증이 불가하므로 검증 후 새 수정 없이 이 왕복 안에서 마감하고, 남는 사항은 미반영 상태로 사용자에게 보고하세요. blocker가 남으면 보류로 승격하세요.\n`);
     return s;
   }
   const why = String(res.untracked || "unknown");
   return en
-    ? `\n[verify budget untracked] This round was not counted toward the budget (${why}) — the budget is a mechanical cap only while normally tracked; N/M has no authority for this round.\n`
-    : `\n[왕복 예산 미집계] 이 왕복은 예산에 집계되지 않았습니다(${why}) — 예산은 정상 추적 상태에서만 기계적 상한이며, 이 왕복의 N/M은 권위가 없습니다.\n`;
+    ? `\n[verify round cap untracked] This round was not counted toward the cap (${why}) — the cap is enforced only while its bookkeeping is intact; N/M has no authority for this round.\n`
+    : `\n[검증 왕복 상한 미집계] 이 왕복은 상한에 집계되지 않았습니다(${why}) — 상한은 내부 기록이 정상일 때만 기계적으로 강제되며, 이 왕복의 N/M은 권위가 없습니다.\n`;
 }
 
 async function cmdAsk(rest) {

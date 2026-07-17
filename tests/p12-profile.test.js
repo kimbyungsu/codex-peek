@@ -129,9 +129,9 @@ ok(/id="segProfile"/.test(ext) && /data-vp="integrity"/.test(ext) && /data-vp="c
 ok(ext.split("m.verifyProfileTouched ?").length === 3 && !/^\s*codexVerifyProfile: normVerifyProfile/m.test(ext), "저장 — 사용자가 실제로 바꾼 저장에만 프로필 기록(굳힘 금지 ⓐ — 상속 실효값이 원시 필드로 물질화되는 회귀 차단)");
 ok(/verifyProfileTouched: \(appVP!==null && curVP!==appVP\)/.test(ext), "웹뷰 — touched 플래그(선택값≠저장값일 때만 참)");
 ok(/pVM=appVM, pIM=appIM, pSM=appSM, pVP=appVP, pVB=appVB;/.test(ext) && /\(pVP!==null&&curVP!==pVP\)/.test(ext) && /\(pVB!==null&&curVB!==pVB\)/.test(ext), "상태 푸시 — 프로필·예산만 바꾼 미저장 초안도 보존(dirty에 포함 — 조용한 원복 차단·2b 축 합류)");
-ok(/모든 결함 부재를 보증하지는 않음/.test(ext) && /범위 밖 잔여 위험이 남을 수 있고/.test(ext) && /자동수정 차단은 없음/.test(ext) && /왕복 예산.*기본 무제한/.test(ext) && !/왕복 상한·자동수정 차단은 아직 없음/.test(ext), "정직 라벨 — 과장 금지+한계 명시: 2b 이후 왕복 상한은 '설정 시 존재'로 갱신('아직 없음' 낡은 서술 부재)");
+ok(/모든 결함 부재를 보증하지는 않음/.test(ext) && /범위 밖 잔여 위험이 남을 수 있고/.test(ext) && /자동수정 차단은 없음/.test(ext) && /검증 왕복 상한.*기본 무제한/.test(ext) && !/왕복 상한·자동수정 차단은 아직 없음/.test(ext), "정직 라벨 — 과장 금지+한계 명시: 2b 이후 왕복 상한은 '설정 시 존재'로 갱신('아직 없음' 낡은 서술 부재)");
 ok(/이후 시작되는 검증\(ask\)부터 즉시 적용/.test(ext) && /한 턴 안에서 규약이 섞일 수 있으니/.test(ext) && !/다음 사용자 턴부터/.test(ext), "전환 효력 정확 고지('다음 턴부터' 류 부정확 표현 부재 — ⓕ 한계 고지)");
-ok(/does not guarantee absence of all defects/.test(ext) && /mechanical round-trip cap is available separately via 'Round budget'/.test(ext) && !/no mechanical round-trip cap/.test(ext), "정직 라벨 en 쌍(2b 이후 갱신 — 낡은 'no cap' 서술 부재)");
+ok(/does not guarantee absence of all defects/.test(ext) && /mechanical round-trip cap is available separately via 'Verification round cap'/.test(ext) && !/no mechanical round-trip cap/.test(ext), "정직 라벨 en 쌍(2b 이후 갱신 — 낡은 'no cap' 서술 부재)");
 ok(/appVP = \(ccMode \? d\.contract\.codexVerifyProfile : d\.contract\.verifyProfile\) \|\| "integrity"/.test(ext), "상태 채움 — 모드별 슬롯·부재=integrity");
 
 console.log("[6] 기본 원칙 카드 — 실효 프로필의 '실제 주입 문안' 표시(사용자 지시 07-17)");
