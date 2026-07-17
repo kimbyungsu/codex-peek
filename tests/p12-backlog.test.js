@@ -23,8 +23,11 @@ ok(CL.normBacklogTitle("  여러   공백\t지적  ") === "여러 공백 지적"
 ok(CL.normBacklogTitle("가".repeat(300)).length === 200, "제목 200자 절단(민감 최소화)");
 ok(CL.backlogId("  테스트  지적 ", "SRC/A.TS") === CL.backlogId("테스트 지적", "src/a.ts"), "id — 정규화 후 동일(공백·대소문자 무시)");
 ok(CL.backlogId("가".repeat(300), "") === CL.backlogId("가".repeat(200), ""), "id — 절단 '후' 해시(저장값과 일치)");
-ok(CL.normBacklogFile("D:\\bl-proj\\src\\x.ts", WS) === "src/x.ts", "ws 내부 절대경로 — 강제 상대화(구분자 / 통일)");
-ok(CL.normBacklogFile("C:/Users/someone/secret.txt", WS) === "secret.txt (외부)", "외부 절대경로 — basename만+(외부) 표시(로컬 식별정보 차단)");
+// 절대경로 반례는 실행 OS의 경로 의미론을 따라야 한다(ubuntu CI 실측: POSIX에서 "D:\\…"는 절대경로가
+// 아니라 상대경로로 해석돼 두 단언이 항상 실패 — 534f9af 도입 이후의 선재 CI 적자. 플랫폼별 실경로로 분기).
+const isWinFS = process.platform === "win32";
+ok(CL.normBacklogFile(isWinFS ? "D:\\bl-proj\\src\\x.ts" : "/bl-proj/src/x.ts", isWinFS ? WS : "/bl-proj") === "src/x.ts", "ws 내부 절대경로 — 강제 상대화(구분자 / 통일)");
+ok(CL.normBacklogFile(isWinFS ? "C:/Users/someone/secret.txt" : "/home/someone/secret.txt", isWinFS ? WS : "/bl-proj") === "secret.txt (외부)", "외부 절대경로 — basename만+(외부) 표시(로컬 식별정보 차단)");
 ok(CL.normBacklogFile("src/y.ts", WS) === "src/y.ts", "내부 상대경로는 그대로");
 ok(CL.normBacklogFile("../Users/someone/secret.txt", WS) === "secret.txt (외부)", "../ 상대경로의 외부 탈출 — basename 축소(구현검증 2차 blocker: 우회 봉합)");
 ok(CL.normBacklogFile("..notes/a.ts", WS) === "..notes/a.ts" && CL.normBacklogFile("..hidden/b.ts", WS) === "..hidden/b.ts", "..으로 시작하는 내부 정상 디렉터리 — 외부 오판 없음(세그먼트 단위 경계 · 3차 blocker: 서로 다른 지적의 id 병합 방지)");
