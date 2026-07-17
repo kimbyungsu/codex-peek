@@ -50,6 +50,9 @@ function cleanupOldState(now) {
   sweep(path.join(BRIDGE_DIR, "codex-turns"), ATTEMPTS_TTL_MS);
   sweep(path.join(BRIDGE_DIR, "codex-verify-attempts"), ATTEMPTS_TTL_MS);
   sweep(path.join(BRIDGE_DIR, "codex-scout-attempts"), ATTEMPTS_TTL_MS);
+  // P-12 2b: 손상 캠페인 카운터 '격리 서랍'만 7일 편입 — verify-campaigns 본체(current .json·history)는
+  // 스윕 비대상(current 상시·history는 append 시 60일 자체 trim). 서랍 분리로 current 오삭제 경로 차단.
+  sweep(path.join(BRIDGE_DIR, "verify-campaigns", "corrupt"), ATTEMPTS_TTL_MS);
   // P-2: 내구 검증 작업(ask-jobs)은 프롬프트(.json)·응답(.out)·오류(.err)를 담으므로 짧게 보존.
   // 회수·재판단은 그 턴 안에서 끝나고 deadline 상한이 60분이라, mtime 7일이면 살아있는 작업일 수 없다.
   // 공용 sweep은 .json만 보므로 부속물(.out/.err/.pid·비정상 잔존 .lock-*)까지 전용 스윕으로 함께 정리.
@@ -397,6 +400,130 @@ function backlogClearDone(ws) {
   if (!r.ok) return { ok: false, error: r.error || "lock" };
   if (r.result && r.result.error) return { ok: false, error: r.result.error };
   return { ok: true, removed: r.result.removed, corrupt: r.result.corrupt };
+}
+
+// ── P-12 2b 왕복 예산(설계 동결 v6) — '정상 추적 상태의 기계적 상한'. 앵커·잠금·기록 실패 시엔 미집계로
+// 느슨해지되 반드시 가시화한다(절대 상한 주장 금지). 캠페인 키=사용자 턴 결속, 카운터 초기화 금지,
+// 소진 시 자동 통과 금지. 예약 위치는 자식 cmdAsk의 검증 모델 호출 공통 래퍼 1곳(codex-bridge.js).
+const CAMPAIGN_DIR = path.join(BRIDGE_DIR, "verify-campaigns");
+const CAMPAIGN_CORRUPT_DIR = path.join(CAMPAIGN_DIR, "corrupt"); // 손상 카운터 격리 서랍 — 공용 sweep(.json)과 분리해 current 오삭제 차단, P-3 7일 스윕 편입
+const CAMPAIGN_HISTORY_DAYS = 60;
+function campaignFileFor(ws) { return path.join(CAMPAIGN_DIR, wsKeyFor(ws) + ".json"); }
+function campaignHistoryFileFor(ws) { return path.join(CAMPAIGN_DIR, wsKeyFor(ws) + ".history.jsonl"); }
+// CL-C 캠페인 앵커 판독 권위(5차 blocker — 멀티 창 미끼 차단): 전역 active.json 단독 판독 금지.
+// ①CLAUDE_CODE_SESSION_ID의 세션별 active/<safe-sid>.json 우선 ②내용 claudeSession===sid·유효 ts 검증
+// ③전역 active.json 폴백은 '내용이 같은 세션일 때만' ④실패=미집계(untracked) 진행. configWs 판독 권위와 동형.
+function claudeCampaignAnchor(sid) {
+  const s = String(sid || process.env.CLAUDE_CODE_SESSION_ID || "");
+  if (!s) return { ok: false, reason: "no-session-env" };
+  const safe = s.replace(/[^a-zA-Z0-9_-]/g, "");
+  const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return null; } };
+  const valid = (a) => !!(a && a.claudeSession === s && typeof a.ts === "string" && Number.isFinite(Date.parse(a.ts)));
+  let a = safe ? readJson(path.join(ACTIVE_DIR, safe + ".json")) : null;
+  if (!valid(a)) { const g = readJson(path.join(BRIDGE_DIR, "active.json")); a = valid(g) ? g : null; }
+  if (!a) return { ok: false, reason: "anchor-unreadable" };
+  return { ok: true, campaignId: "cl:" + s + ":" + a.ts };
+}
+// history append+trim — 반드시 카운터 잠금 '안에서만' 호출(같은 임계구역·순서 고정: ①append ②current 교체).
+// crash 중복은 '같은 campaignId가 마지막 줄이면 그 줄을 최신 레코드로 갱신'(3차 [보완]: skip 서술은 옛 구현 —
+// skip이면 더 큰 count가 은폐돼 복원이 상한을 되감는다). trim 판단 필드=Date.parse(record.updatedAt)
+// (5차 [주의]: trimVerdicts의 o.ts를 문자 복제하면 전 줄 NaN=영구 보존 오구현) — NaN=보존+경고 계수,
+// 미래 시각=보존(시계 보정 관용). 재작성은 같은 잠금 아래 atomicWrite(무잠금 직접 rewrite 복제 금지).
+function appendCampaignHistoryLocked(ws, rec) {
+  const hf = campaignHistoryFileFor(ws);
+  let raw = "";
+  try { raw = fs.readFileSync(hf, "utf8"); }
+  catch (e) {
+    if (!e || e.code !== "ENOENT") return { readFailed: true }; // 2차 B4': 판독 실패를 '신규'로 축소하면 기존 이력을 빈 파일로 원자 교체해 유실 — 교체 중단 신호
+  }
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim());
+  let lastId = null;
+  if (lines.length) { try { lastId = JSON.parse(lines[lines.length - 1]).campaignId; } catch { /* 손상 줄 — 보존 */ } }
+  // 같은 캠페인이 마지막 줄이면 '최신 레코드로 갱신'(2차 B1': skip만 하면 더 큰 count가 은폐돼 복원이 상한을
+  // 되감음). crash 재시도(동일 레코드)는 자기 자신으로의 갱신이라 중복도 없다.
+  if (lastId === rec.campaignId) lines[lines.length - 1] = JSON.stringify(rec);
+  else lines.push(JSON.stringify(rec));
+  const cutoff = Date.now() - CAMPAIGN_HISTORY_DAYS * 24 * 60 * 60 * 1000;
+  let warn = 0;
+  const kept = lines.filter((l) => {
+    let t = NaN; try { t = Date.parse(JSON.parse(l).updatedAt); } catch { /* 파싱 불가 줄 → NaN */ }
+    if (!Number.isFinite(t)) { warn++; return true; } // 무효 시각=보존(침묵 삭제 금지)+경고 계수(호출자가 안내 1줄로 가시화)
+    return t >= cutoff; // 미래 시각 포함 보존
+  });
+  const writeFailed = !atomicWrite(hf, kept.length ? kept.join("\n") + "\n" : "");
+  return { warn, writeFailed }; // writeFailed=이 append가 유실됨 — 호출자는 교체를 중단해 이전 캠페인 레코드를 보존해야 한다(1차 B4)
+}
+// 교대 복귀 캠페인 조회(1차 B1 — '카운터 초기화 금지'의 물질화): history를 끝에서부터 훑어 같은 campaignId의
+// 최신 레코드를 찾는다. 반드시 카운터 잠금 안에서만 호출. A→B→A 교대(멀티 창 등)에서 복귀 캠페인이
+// count=0으로 리셋돼 상한을 우회하는 경로를 닫는다(count·동결 budget·startedAt 복원).
+function findCampaignInHistory(ws, campaignId) {
+  let raw = "";
+  try { raw = fs.readFileSync(campaignHistoryFileFor(ws), "utf8"); }
+  catch (e) { return (!e || e.code !== "ENOENT") ? { readFailed: true } : null; } // 2차 B4': 판독 실패≠부재 — count 0 재시작으로 축소 금지
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim());
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let o = null; try { o = JSON.parse(lines[i]); } catch { continue; }
+    if (o && o.campaignId === campaignId && Number.isInteger(o.count) && o.count >= 0 && Number.isInteger(o.budget) && o.budget >= 0) return o;
+  }
+  return null;
+}
+// 예약(임계구역 전체 — 판독·비교·증가·history·교체를 <wsKey>.json.lock 하나에서):
+//  ⑴ 오프바이원 확정: next=count+1; 유한 예산이고 next>M이면 '증가 없이 거부'(rejected). next==M이면 예고(last).
+//  ⑵ 기록 순서·권위: ①next 계산·거부 판정 ②persistFn(정본 영수증 — [내구] job patch/[직접] 로컬 예약)
+//     성공 시에만 ③counter 기록. ②실패=예약 취소(counter 미증가·호출은 untracked 진행),
+//     ③실패=counterFailedAfterReceipt(호출자가 budgetUntracked 승격+N/M 표시 억제).
+//  ⑶ budget(M)은 캠페인 최초 예약 시점 동결 — 같은 캠페인 중 설정 변경은 다음 캠페인부터.
+//  ⑷ 손상 카운터=원자 격리(corrupt 서랍·원문 보존)+새 캠페인+quarantined 플래그. 격리 실패=미집계.
+//  ⑸ 잠금 실패=미집계(untracked:"lock")·ask 진행 — 검증 접근 차단이 더 해로움.
+function reserveVerifyCampaign(ws, campaignId, budget, persistFn) {
+  if (typeof campaignId !== "string" || !campaignId) return { tracked: false, untracked: "no-campaign" };
+  const M0 = Number.isInteger(budget) && budget >= 1 ? budget : 0;
+  const file = campaignFileFor(ws);
+  try { fs.mkdirSync(CAMPAIGN_DIR, { recursive: true }); } catch { /* 잠금/쓰기에서 드러남 */ }
+  const r = withFileLockStrict(file + ".lock", () => {
+    let cur = null, quarantined = false;
+    let raw = null;
+    try { raw = fs.readFileSync(file, "utf8"); }
+    catch (e) { if (!e || e.code !== "ENOENT") return { tracked: false, untracked: "counter-unreadable" }; }
+    if (raw !== null) {
+      let o = null; try { o = JSON.parse(raw); } catch { o = null; }
+      const okShape = !!(o && typeof o === "object" && !Array.isArray(o) && o.schema === "vcamp-1" && typeof o.campaignId === "string" && o.campaignId && Number.isInteger(o.count) && o.count >= 0 && Number.isInteger(o.budget) && o.budget >= 0);
+      if (okShape) cur = o;
+      else {
+        try {
+          fs.mkdirSync(CAMPAIGN_CORRUPT_DIR, { recursive: true });
+          fs.renameSync(file, path.join(CAMPAIGN_CORRUPT_DIR, wsKeyFor(ws) + "-" + Date.now() + ".json"));
+          quarantined = true;
+        } catch { return { tracked: false, untracked: "counter-corrupt-unquarantined" }; }
+      }
+    }
+    const nowIso = new Date().toISOString();
+    let M = M0, count = 0, startedAt = nowIso, historyWarn = 0;
+    const switching = !(cur && cur.campaignId === campaignId);
+    if (!switching) { M = cur.budget; count = cur.count; startedAt = cur.startedAt || nowIso; }
+    else {
+      const back = findCampaignInHistory(ws, campaignId); // 1차 B1: 교대 복귀 — history에서 count·동결 budget 복원
+      if (back && back.readFailed) return { tracked: false, untracked: "history-read-failed" }; // 2차 B4': 복원 불능=미집계(count 0 재시작 금지)
+      if (back) { M = back.budget; count = back.count; startedAt = back.startedAt || nowIso; }
+    }
+    // 2차 B1' 순서 재배열: 거부·영수증 실패는 history·current를 '건드리기 전에' 반환 — 거부된 교체 시도가
+    // history에 옛 레코드를 남겨 dedupe·복원을 오염시키던 경로 제거(교체는 진행 확정 후에만).
+    const next = count + 1;
+    if (M >= 1 && next > M) return { tracked: false, rejected: true, count, budget: M, campaignId, quarantined };
+    if (typeof persistFn === "function" && persistFn(next, M, campaignId) !== true)
+      return { tracked: false, untracked: "receipt-persist-failed", count, budget: M, campaignId, quarantined };
+    if (switching && cur) {
+      const h = appendCampaignHistoryLocked(ws, cur); // 진행 확정 — ①history(이전 캠페인 보존) ②current 교체 순서 고정
+      if (h.readFailed) return { tracked: false, untracked: "history-read-failed", counterFailedAfterReceipt: true, budget: M, campaignId, quarantined };
+      if (h.writeFailed) return { tracked: false, untracked: "history-write-failed", counterFailedAfterReceipt: true, budget: M, campaignId, quarantined }; // 1차 B4: 교체 중단(current 불변)
+      historyWarn = h.warn;
+    }
+    if (!atomicWrite(file, JSON.stringify({ schema: "vcamp-1", campaignId, count: next, budget: M, startedAt, updatedAt: nowIso })))
+      return { tracked: false, untracked: "counter-write-failed", counterFailedAfterReceipt: true, n: next, budget: M, campaignId, quarantined };
+    return { tracked: true, n: next, budget: M, campaignId, last: M >= 1 && next === M, quarantined, historyWarn };
+  });
+  if (!r.ok) return { tracked: false, untracked: "lock" };
+  return r.result;
 }
 
 function appendVerdict(ev) {
@@ -1063,6 +1190,8 @@ function loadContract(ws, lang) {
     verifyMode: normVerifyMode(o),
     verifyProfile: normVerifyProfile(o),   // P-12: CL-C 슬롯 검증 강도(부재=integrity)
     codexVerifyProfile: normCodexVerifyProfile(o), // P-12: C-C 슬롯(부재 시 verifyProfile 상속)
+    verifyBudget: normVerifyBudget(o),         // P-12 2b: CL-C 왕복 예산(0=무제한)
+    codexVerifyBudget: normCodexVerifyBudget(o), // P-12 2b: C-C 슬롯(부재=CL-C 상속)
     // [모드별 검증 스위치 분리 2026-07-15] verifyMode=CL-C 슬롯 / codexVerifyMode=C-C 슬롯.
     // 부재 시 normVerifyMode(o) '전체'로 fallback(원시 o.verifyMode 아님 — verify:true→code 레거시 호환 보존).
     // codexVerifier 규칙과 동일 전례: 최초엔 CL-C 값을 상속해 보여주고, 명시적 C-C 저장 후엔 독립 정본.
@@ -1109,6 +1238,23 @@ function normCodexVerifyProfile(o) {
 // 실효 프로필: 현재 운용 모드의 슬롯 값.
 function effectiveVerifyProfile(c) {
   return (c && c.harnessMode === "codex-codex") ? normCodexVerifyProfile(c) : normVerifyProfile(c);
+}
+
+// P-12 2b(설계 동결 v6 ⑴): 왕복 예산 — 1 이상 정수=상한, 그 외=무제한(0으로 정규화·무회귀).
+// C-C 슬롯은 '부재'만 CL-C 상속 — 명시 정수 0은 '이 슬롯만 무제한'(구현검증 1차 B3: CL-C 유한+C-C 무제한을
+// 표현할 유일한 값 — 0을 부재와 뭉개면 C-C 독립 무제한이 불가능해진다).
+function normVerifyBudget(o) {
+  const v = o && o.verifyBudget;
+  return (typeof v === "number" && Number.isInteger(v) && v >= 1) ? v : 0;
+}
+function normCodexVerifyBudget(o) {
+  const v = o && o.codexVerifyBudget;
+  if (typeof v === "number" && Number.isInteger(v) && v >= 1) return v;
+  if (v === 0) return 0; // 명시 무제한(상속 차단)
+  return normVerifyBudget(o); // 부재·무효=상속
+}
+function effectiveVerifyBudget(c) {
+  return (c && c.harnessMode === "codex-codex") ? normCodexVerifyBudget(c) : normVerifyBudget(c);
 }
 
 const INJECT_MODES = ["off", "plan", "always"];
@@ -2444,7 +2590,7 @@ function formatForClaude(answer, lang, profile) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, BASE_CORE, BASE_CORE_EN, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, BASE_CORE, BASE_CORE_EN, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
 module.exports.codexImplementerSession = codexImplementerSession;
 module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
 // P-6 회수 영수증 계약(설계 v5.1)

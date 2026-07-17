@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -1255,8 +1255,15 @@ function cmdAskStart(rest) {
       const pendingId=unretrievedSameTurnJob(ws,frozen);
       if(pendingId)throw Object.assign(new Error(tB(`⚠️ 회수 대기 중인 성공 검증(${pendingId})이 있습니다. 새 작업을 만들지 않았습니다 — 먼저 ask-wait ${pendingId} 로 회수하세요.`,`⚠️ A succeeded verification (${pendingId}) is awaiting retrieval. No new job was created — retrieve it first with ask-wait ${pendingId}.`)),{exitCode:3});
     }
+    // P-12 2b(⑵): campaignId는 job '생성 시점'에 완성해 동결 — child가 예약 시점에 앵커를 재판독하면
+    // queued~예약 사이 새 사용자 발화가 이전 턴 검증을 새 캠페인 예산으로 오귀속한다. C-C=구현자 세션·턴 앵커
+    // (위 frozen — 이미 이 임계구역에서 확정), CL-C=세션별 active 앵커(claudeCampaignAnchor — 전역 active
+    // 단독 판독 금지). 앵커 실패=null 동결(예약 시점에 미집계로 가시화·job 생성은 막지 않음).
+    let campaignId=null;
+    if(cSnap.harnessMode==="codex-codex")campaignId="cc:"+frozen.implementerSession+":"+frozen.implementerTurnId;
+    else{const an=claudeCampaignAnchor();if(an.ok)campaignId=an.campaignId;}
     id="ask-"+Date.now().toString(36)+"-"+crypto.randomBytes(5).toString("hex");timeoutMin=verifyTimeoutMin();const now=Date.now();
-    job={schema:"ask-job-v1",id,state:"queued",workspace:ws,execCwd:process.cwd(),flags:req.flags,prompt:req.prompt,timeoutMin,createdAt:new Date(now).toISOString(),deadlineAt:new Date(now+timeoutMin*60*1000).toISOString(),workerPid:null,childPid:null,exitCode:null,harnessMode:cSnap.harnessMode,verifyProfile:effectiveVerifyProfile(cSnap),verifyLang:askLangSnap,implementerSession:frozen.implementerSession,implementerTurnId:frozen.implementerTurnId,implementerRevision:frozen.implementerRevision};
+    job={schema:"ask-job-v1",id,state:"queued",workspace:ws,execCwd:process.cwd(),flags:req.flags,prompt:req.prompt,timeoutMin,createdAt:new Date(now).toISOString(),deadlineAt:new Date(now+timeoutMin*60*1000).toISOString(),workerPid:null,childPid:null,exitCode:null,harnessMode:cSnap.harnessMode,verifyProfile:effectiveVerifyProfile(cSnap),verifyLang:askLangSnap,campaignId,implementerSession:frozen.implementerSession,implementerTurnId:frozen.implementerTurnId,implementerRevision:frozen.implementerRevision};
     file=askJobFile(id);
     if(!atomicWrite(file,JSON.stringify(job)))throw new Error(tB("검증 작업 저장 실패 — 새 검증을 시작하지 않았습니다.","Failed to save the verification job — no verification was started."));
   }); } catch(e) { die(String(e&&e.message||e),Number(e&&e.exitCode)||1); }
@@ -1391,6 +1398,102 @@ function cmdAskJob(rest) {
   die(tB("사용법: ask-job status [id] | ask-job clear <id> --confirm", "Usage: ask-job status [id] | ask-job clear <id> --confirm"), 2);
 }
 
+// ── P-12 2b 왕복 예산(설계 동결 v6) ──────────────────────────────────────────
+// child가 자기 job 파일에 예약 영수증을 남긴다(worker patch와 경합 없음 — worker는 시작 전 running·종료 후
+// final만 기록하고 종료 patch는 재읽기-병합이라 이 필드를 보존한다).
+function patchAskJobFile(id, extra) {
+  const file = askJobFile(id);
+  let cur = null; try { cur = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return false; }
+  if (!cur || cur.id !== id) return false;
+  return atomicWrite(file, JSON.stringify(Object.assign({}, cur, extra)));
+}
+// 검증 모델 호출 공통 래퍼(⑶) — resume/new 두 분기가 이 함수 '1곳'을 호출 직전에 지난다(전처리 실패=호출 전
+// =미집계). 소진 거부(M+1)만 phase/round 불변으로 조기 반환하고, tracked 성공·무제한·가시화된 untracked
+// 진행은 codex-verifying 기록+round를 정확히 1회 증가시킨다. 상한의 성격(정직 한정): '정상 추적 상태의
+// 기계적 상한' — 앵커·잠금·기록 실패는 미집계로 느슨해지되 반드시 가시화(절대 상한 주장 금지).
+// 소진 문구(3차 blocker 봉합): ①'미확인 반영' 같은 캐논 밖 예외를 만들지 않는다 — 확인 왕복이 불가하면
+// '[보완]'은 반영하지 않고 미반영 보고가 원칙(확인 단계 종결 규칙과 동형), 반영이 필요하면 사용자 승인으로.
+// ②프로필 정합 — v2.4 어휘([보완]/[주의]/[백로그]·보관함)는 core 전용, integrity(기타)는 프로필 중립 문구.
+function budgetExhaustMsg(m, lang, profile) {
+  const en = lang === "en";
+  if (profile === "core") return en
+    ? `[verify budget exhausted · ${m}/${m}] This campaign's verification round budget is spent — no further rounds. Since no confirmation round is possible, do NOT newly apply '[notes]'; report them as unapplied (the canon's 'apply as a batch + one confirmation' cannot run under this budget — ask the user for approval if applying is necessary). Re-judge each '[caution]' and escalate it to the user's judgment with your reasoning (backlog add --tag 주의, cite the id); record '[backlog]' (out-of-scope proposals) in the parking lot and pass the list. If blockers remain, never auto-pass — escalate as a hold with a [disputed|unresolved-defect|external-decision] class, report the budget overrun and remaining blockers, and wait for instructions.`
+    : `[왕복 예산 소진 · ${m}/${m}] 이 캠페인의 검증 왕복 예산을 소진했습니다 — 추가 왕복은 불가합니다. 확인 검증이 불가하므로 '[보완]'은 새로 반영하지 말고 미반영 상태로 사용자 보고에 명시하세요(캐논의 '일괄 반영+확인 1회'는 예산상 실행 불가 — 반영이 필요하면 사용자 승인을 구하세요). '[주의]'는 재판단해 근거와 함께 사용자 판단으로 승격(backlog add --tag 주의·id 인용)하고, '[백로그]'(범위 밖 제안)는 보관함에 기록해 목록으로 전달하세요. blocker가 남았으면 자동 통과 금지 — [분쟁|미해결 결함|외부 결정] 분류를 붙인 보류로 승격해 예산 초과와 잔여 blocker를 알리고 지시를 받으세요.`;
+  return en
+    ? `[verify budget exhausted · ${m}/${m}] This campaign's verification round budget is spent — no further rounds. Since re-verification is impossible, make no new post-verification edits; report remaining findings to the user as unapplied. If blockers remain, never auto-pass — escalate as a hold, report the budget overrun and remaining blockers, and wait for instructions.`
+    : `[왕복 예산 소진 · ${m}/${m}] 이 캠페인의 검증 왕복 예산을 소진했습니다 — 추가 왕복은 불가합니다. 재검증이 불가하므로 검증 후 새 수정은 하지 말고, 남은 지적은 미반영 상태로 사용자 보고에 명시하세요. blocker가 남았으면 자동 통과 금지 — 보류로 승격해 예산 초과와 잔여 blocker를 알리고 지시를 받으세요.`;
+}
+function reserveVerifyBudgetGate(ws, durableEnv, contractSnap, harnessModeSnap, langSnap, profileSnap) {
+  const job = durableEnv && durableEnv.ok ? durableEnv.job : null;
+  // 슬롯·앵커 권위(⑸): 내구=job 동결값(생성 후 모드 변경이 CL-C job에 C-C 예산을 읽히는 혼합 차단), 직접=현재 스냅샷.
+  const slotCC = job ? job.harnessMode === "codex-codex" : harnessModeSnap === "codex-codex";
+  const M = slotCC ? contractSnap.codexVerifyBudget : contractSnap.verifyBudget; // 0=무제한 '요청' — 캠페인 동결값이 최종 권위(1차 B2)
+  let campaignId = null, anchorReason = "";
+  if (durableEnv) {
+    if (job && typeof job.campaignId === "string" && job.campaignId) campaignId = job.campaignId; // 생성 시점 동결(⑵)
+    else anchorReason = job ? "job-no-campaign" : "env-noncanonical"; // legacy job·비정본 env=미집계
+  } else {
+    const an = claudeCampaignAnchor(); // 직접 ask=실행 시점 1회 캡처
+    if (an.ok) campaignId = an.campaignId; else anchorReason = an.reason;
+  }
+  let res;
+  if (!campaignId) {
+    // 앵커 실패: 유한 요청=미집계 가시화, 무제한 요청=침묵(예산 미사용자 무회귀 — 경고 소음 금지)
+    res = (Number.isInteger(M) && M >= 1) ? { tracked: false, untracked: "anchor:" + anchorReason } : { unlimited: true };
+  } else {
+    // 1차 B2: 무제한 '요청'이어도 캠페인 동결 계약은 유지 — 진행 중 캠페인이 유한 예산으로 동결돼 있으면
+    // 설정을 비워도 그 예산이 권위(거부 가능)고, 무제한(0)으로 시작한 캠페인은 유한 저장도 다음 캠페인부터.
+    // 기록 순서·권위(⑸): 임계구역 안 ①next 계산·거부 판정 ②정본 영수증([내구] job patch/[직접] 로컬 예약)
+    // 성공 시에만 ③counter. ②실패=예약 취소(미증가·untracked 진행), ③실패=budgetUntracked 승격+N/M 억제.
+    const persist = job
+      ? (n, m, cid) => patchAskJobFile(job.id, { campaignKey: cid, verifyRound: n, verifyBudget: m, budgetUntracked: false })
+      : () => true; // [직접] 프로세스 로컬 불변 예약 — 반환 res(n/budget/campaignId)가 그 예약 객체(job 없음)
+    res = reserveVerifyCampaign(ws, campaignId, Number.isInteger(M) && M >= 1 ? M : 0, persist);
+    if (res && res.rejected) return { proceed: false, exitCode: 3, msg: budgetExhaustMsg(res.budget, langSnap, profileSnap) };
+    if (res && res.counterFailedAfterReceipt) {
+      // ③ 실패(counter·history): 미반영 N은 캠페인 서수가 아니므로 권위 주장 금지 — N/M 억제(실패 사유·동결 budget 보존).
+      res = { tracked: false, untracked: res.untracked || "counter-write-failed", budget: res.budget };
+    }
+    // 침묵 판정(무회귀): 이 캠페인의 동결 budget이 무제한(0)이면 침묵 집계(요청 M과 무관 — 유한 저장도 다음
+    // 캠페인부터), 미집계인데 유한 요청도 유한 동결도 아니면 무제한 동작으로 환원(경고 소음 0).
+    if (res && res.tracked === true && res.budget === 0) res = Object.assign({}, res, { silent: true }); // 2d 재료용 침묵 집계
+    else if (res && res.tracked !== true && res.unlimited !== true && !(Number.isInteger(M) && M >= 1) && !(res.budget >= 1)) res = { unlimited: true };
+  }
+  // [내구] 미집계 가시화(⑵ — 앵커·영수증·counter·history 실패 전부): job.budgetUntracked=true 승격.
+  // 이 patch마저 실패해도 미집계 1줄이 child 로컬 stdout·worker .out에 남는다(최후 fallback).
+  if (job && res && res.tracked !== true && res.unlimited !== true) patchAskJobFile(job.id, { budgetUntracked: true });
+  // 호출 진행 확정(⑶: tracked 성공 '또는' 가시화된 untracked 진행 결정·무제한) → phase/round 정확히 1회.
+  try { writePhase("codex-verifying", { round: (readPhase().round || 0) + 1, session: claudeId(), workspace: ws }); } catch { /* 진행표시 best-effort */ }
+  return { proceed: true, res };
+}
+// 포맷 계층(⑻) — formatForClaude 소비자 stdout 전용 안내(raw answer·proof·rollout 불변). 무제한·침묵·중간 왕복="".
+// profile 분기(3차 blocker): v2.4 어휘는 core 전용 — integrity에는 프로필 중립 문구(처리 규약 혼입 금지).
+function budgetNoticeLines(res, lang, profile) {
+  if (!res || res.unlimited || res.silent) return "";
+  const en = lang === "en";
+  if (res.tracked) {
+    let s = "";
+    if (res.historyWarn) s += en
+      ? `\n[verify budget] ${res.historyWarn} campaign-history line(s) had unreadable timestamps — preserved, not trimmed; inspect verify-campaigns/<ws>.history.jsonl if this repeats.\n`
+      : `\n[왕복 예산] 캠페인 이력에서 시각 판독 불가 줄 ${res.historyWarn}건 — 삭제하지 않고 보존했습니다(반복되면 verify-campaigns 이력 파일 확인).\n`;
+    if (res.quarantined) s += en
+      ? "\n[verify budget] The round counter was corrupt and was quarantined (original preserved in verify-campaigns/corrupt) — a new campaign started, and the budget was not applied to earlier rounds.\n"
+      : "\n[왕복 예산] 왕복 카운터가 손상돼 격리했습니다(원문은 verify-campaigns/corrupt에 보존) — 새 캠페인으로 시작하며, 이전 왕복에는 예산이 적용되지 않았습니다.\n";
+    if (res.last) s += profile === "core"
+      ? (en
+        ? `\n[verify budget ${res.n}/${res.budget}] This was this campaign's last reserved round — the next request in the same campaign will be refused. The confirmation round for '[notes]' accepted from this verdict is NOT left in the budget, so the 'apply as a batch + one confirmation' instruction cannot run — do not apply them; report them as unapplied, or ask the user for approval if applying is necessary (budget changes take effect from the next campaign). Record what stays in the parking lot ([backlog] and user-escalated [caution] via backlog add); if blockers remain, escalate to the user as a classified hold.\n`
+        : `\n[왕복 예산 ${res.n}/${res.budget}] 이 캠페인의 마지막 예약 왕복입니다 — 같은 캠페인의 다음 요청은 거부됩니다. 이 판정에서 수용한 '[보완]'의 확인 검증은 예산에 남아 있지 않으므로 '일괄 반영+확인 1회' 지시는 실행할 수 없습니다 — 반영하지 말고 미반영 상태로 보고하거나, 반영이 필요하면 사용자 승인을 구하세요(예산 변경은 다음 캠페인부터). 남길 지적은 보관함([백로그]·승격 [주의] — backlog add)에 기록하고, blocker가 남으면 분류를 붙인 보류로 승격하세요.\n`)
+      : (en
+        ? `\n[verify budget ${res.n}/${res.budget}] This was this campaign's last reserved round — the next request in the same campaign will be refused. Since re-verification is impossible afterwards, close within this round without new post-verification edits; report anything remaining to the user as unapplied, and escalate remaining blockers as a hold.\n`
+        : `\n[왕복 예산 ${res.n}/${res.budget}] 이 캠페인의 마지막 예약 왕복입니다 — 같은 캠페인의 다음 요청은 거부됩니다. 이후 재검증이 불가하므로 검증 후 새 수정 없이 이 왕복 안에서 마감하고, 남는 사항은 미반영 상태로 사용자에게 보고하세요. blocker가 남으면 보류로 승격하세요.\n`);
+    return s;
+  }
+  const why = String(res.untracked || "unknown");
+  return en
+    ? `\n[verify budget untracked] This round was not counted toward the budget (${why}) — the budget is a mechanical cap only while normally tracked; N/M has no authority for this round.\n`
+    : `\n[왕복 예산 미집계] 이 왕복은 예산에 집계되지 않았습니다(${why}) — 예산은 정상 추적 상태에서만 기계적 상한이며, 이 왕복의 N/M은 권위가 없습니다.\n`;
+}
+
 async function cmdAsk(rest) {
   const forceNew = rest.includes("--force-new"); // 엉뚱 폴더 방어를 무릅쓰고 '이 폴더'에 새 세션 강제
   const allowNew = rest.includes("--allow-new") || forceNew;
@@ -1505,7 +1608,10 @@ async function cmdAsk(rest) {
   }
 
   if (link) {
-    try { writePhase("codex-verifying", { round: (readPhase().round || 0) + 1, session: claudeId(), workspace: ws }); } catch { /* 진행표시 best-effort */ }
+    // P-12 2b: 예약=호출 직전 공통 래퍼 1곳(전처리 전부 통과 후). 소진 거부는 phase/round 불변 exit 3 —
+    // 내구 경로면 이 stderr가 worker .err에 보존돼 job failed(3)→ask-wait가 안내와 함께 exit 3 전달.
+    const budgetGate = reserveVerifyBudgetGate(ws, durableEnv, contractSnap, harnessModeSnap, langSnap, profileSnap);
+    if (!budgetGate.proceed) die(budgetGate.msg, budgetGate.exitCode);
     const askId = require("crypto").randomUUID(); // L1-A: '서로 다른 ask 실행' 판정 재료(지문·verdict ts는 재실행 구분에 부적합 — Codex)
     const attCarrier = {};                        // L1-A: 이번 ask에 실제로 실린 동봉 스냅샷(재계산 아님)
     const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs, ...(net ? netArgs() : [])], withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier, profileSnap));
@@ -1520,6 +1626,7 @@ async function cmdAsk(rest) {
     collectScoutTargetEvidence(answer, ws, exec); // 정찰 대상 자기진단 증거(2026-07-10 — 판정 무관·3트랙만·실패 무해)
     flagVerdict(answer, ws, link.codexSession, modeSnap); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 답에 판정 줄이 없으면 표지 누락 노랑 가시화(자동 차단 X)
     process.stdout.write(`${langSnap === "en" ? "# Linked session" : "# 연결 세션"} ${link.codexSession} (${link.via})\n\n${formatForClaude(answer, langSnap, profileSnap)}\n`);
+    process.stdout.write(budgetNoticeLines(budgetGate.res, langSnap, profileSnap)); // 포맷 계층(⑻) — N=M 예고·미집계 1줄(무제한="")
     return;
   }
 
@@ -1569,7 +1676,9 @@ async function cmdAsk(rest) {
 
   // --allow-new: 새 세션 생성 + '생성 즉시' 연결(답을 기다리는 동안 rollout 뜨면 바로 link → 8분 답 끝까지 안 기다림).
   const since = Date.now() - 2000;
-  try { writePhase("codex-verifying", { round: (readPhase().round || 0) + 1, session: claudeId(), workspace: ws }); } catch { /* 진행표시 best-effort */ }
+  // P-12 2b: 새 세션 분기도 같은 래퍼 1곳(전처리 전부 통과 후·호출 직전) — 소진 거부는 phase/round 불변 exit 3.
+  const budgetGate = reserveVerifyBudgetGate(ws, durableEnv, contractSnap, harnessModeSnap, langSnap, profileSnap);
+  if (!budgetGate.proceed) die(budgetGate.msg, budgetGate.exitCode);
   let earlyLinked = null;
   // recordLink가 '성공(true)'일 때만 earlyLinked 확정 → 저장 실패(CAS/잠금/권한)면 미연결로 두고 다음 폴/최종 단계서 재시도.
   // detected(세션 발견)와 linked(저장 성공)를 분리해 "즉시연결" 거짓보고를 막는다(Codex 지적).
@@ -1607,6 +1716,7 @@ async function cmdAsk(rest) {
       ? (en ? `# New Codex session created·linked immediately: ${id}` : `# 새 Codex 세션 생성·즉시연결: ${id}`)
       : (en ? `# New Codex session created·linked: ${id}` : `# 새 Codex 세션 생성·연결: ${id}`);
     process.stdout.write(`${head}\n\n${formatForClaude(answer, langSnap, profileSnap)}\n`);
+    process.stdout.write(budgetNoticeLines(budgetGate.res, langSnap, profileSnap)); // 포맷 계층(⑻) — 무제한=""(바이트 동일)
   } else {
     updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; }); // 다음 자동 생성 차단 플래그
     // thread.started JSON + rollout 탐지 모두 실패한 비정상 상태는 성공 proof로 인정하지 않는다. 세션 증식을
@@ -1870,4 +1980,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState };
+module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile };

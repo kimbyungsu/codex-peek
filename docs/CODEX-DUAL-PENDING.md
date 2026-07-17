@@ -694,7 +694,37 @@
     ③의미 손상(파싱은 되나 schema≠ask-job-v1·id≠파일명·state 부재) 객체가 차단을 우회 —
     corruptAskJobFiles가 의미 검증까지 수행(주의: 구스키마 job은 7일 스윕 전이라도 차단 대상이 됨 —
     확인 후 clear로 해소, 메시지에 명시). 대시보드 백로그 열람 카드는 2a-2(후속·읽기 전용 목록+건수 칩).
-  - **2b 왕복 예산(상세 동결 v6 2026-07-17 — 설계검증 2~5차 차단 16건 반영)**: 상위 계약(동결 유지)=
+  - **2b 왕복 예산(상세 동결 v6 2026-07-17 — 설계검증 2~5차 차단 16건 반영) — ★구현 완료 2026-07-18★**:
+    구현 실체: contract-lib(normVerifyBudget/normCodexVerifyBudget/effectiveVerifyBudget·claudeCampaignAnchor·
+    reserveVerifyCampaign+appendCampaignHistoryLocked·corrupt 서랍 P-3 7일 스윕 편입) / codex-bridge(ask-start
+    campaignId 생성 시점 동결·reserveVerifyBudgetGate 공통 래퍼[resume/new 양 분기 호출 직전 1곳·소진만
+    phase/round 불변 exit 3]·budgetNoticeLines 포맷 계층·patchAskJobFile 영수증·[내구] 미집계=job.budgetUntracked
+    승격) / 확장 UI(vBudget 숫자 입력·touched-only exact patch·빈값=키 삭제 비물질화·상속 raw-presence 표시·
+    '다음 캠페인부터' 고지·프로필 정직 라벨 갱신["왕복 상한 아직 없음"→"왕복 예산으로 설정"]) / PRIVACY
+    verify-campaigns 행 / tests/p12-budget.test.js(⑽ 실행 가능분+소스 계약). 유의: C-C 직접 ask는 기존
+    차단이 선행이라 직접 예약 경로는 CL-C 전용. ★구현검증 1차 blocker 6건 반영(07-18)★: B1 교대 캠페인
+    (A→B→A)=findCampaignInHistory로 count·동결 budget 복원(카운터 초기화 금지 물질화) / B2 유한↔무제한
+    중간 전환=무제한 '요청'도 캠페인 동결 계약 유지(무제한 캠페인=budget 0으로 침묵 집계[출력 0바이트
+    무회귀·2d 재료]·동결 budget이 요청보다 권위 — 비워도 이번 캠페인 거부 유지·유한 저장도 다음 캠페인부터)
+    / B3 C-C 명시 정수 0='이 슬롯만 무제한'(부재만 상속 — UI 0 입력 저장·rawVal 표시·빈값=상속 복원) /
+    B4 history append 실패=캠페인 교체 중단(untracked:"history-write-failed" — 이전 레코드 유실 차단)+NaN
+    시각 경고를 회수 출력 1줄로 가시화 / B5 cardInputLock에 vBudget 편입(저장 중 잠금) / B6 npm test 체인
+    등록+실행 반례 보강(교대 복원·유한↔무제한 동결·counter 읽기전용 주입 ③실패·실 child 내구 소진 e2e
+    [ask-start queued 성공→child codex 실행 전 exit 3→ask-wait 3 전달]). ★구현검증 2차 blocker 4건 반영★:
+    B1' 거부·영수증 실패는 history·current를 '건드리기 전에' 반환(거부된 교체의 history 오염 제거)+history
+    dedupe는 같은 캠페인 마지막 줄을 skip이 아니라 '최신 레코드로 갱신'(count 은폐→복원 되감기 봉합) /
+    B4' history 판독 실패(비-ENOENT)='신규' 축소 금지 — 복원 조회·append 모두 미집계(history-read-failed)로
+    진행(빈 파일 원자 교체 유실·count 0 재시작 차단) / B3' 소진·N=M 문구를 v2.4 어휘로 정합(수용 [보완]=
+    '미확인 반영' 명시·[주의]=재판단 후 승격 기록·보관함 두 종류·보류 3분류 — '비차단 전부 보관함' 축약 폐기) /
+    B4'' spawn 실패=집계 e2e(CODEX_BIN=즉시 실패 js — 직접 ask 비0 종료 후 count=1 유지). [보완] 2건 동승:
+    vBudget min=0(C-C 명시 0 입력 정합)·동결 원문 ⑴에 B3 정정 주석. ★구현검증 3차 blocker 1건 반영★:
+    소진·N=M 문구의 지시 충돌 제거 — ①'미확인 반영' 캐논 밖 예외 폐기: 확인 왕복 불가 시 '[보완]'은 반영하지
+    않고 '미반영 보고'가 원칙(확인 단계 종결 규칙과 동형·반영 필요 시 사용자 승인 유도), N=M 예고는 footer의
+    '일괄 반영+확인 1회'가 예산상 실행 불가함을 명시(우선순위 명문화) ②프로필 분기: budgetExhaustMsg·
+    budgetNoticeLines가 동결 profileSnap을 받아 v2.4 어휘([보완]/[주의]/[백로그]·보관함)는 core 전용,
+    integrity=프로필 중립 문구(처리 규약 혼입 차단). [보완] 2건 동승: dedupe 서술 정정(skip→최신 갱신 —
+    코드 주석·동결 원문 부기)·[7c]에 boom stderr 표식 단언. 상세는 아래 동결 원문(정본 계약) 그대로.
+    (원 동결 머리) 상위 계약(동결 유지)=
     (이관 메모 — 구 보관함 3d8eff6b: 구현 시 설계문 용어 전수 확인 필요 — '앵커 실패=job.budgetUntracked' 표현과 직접 ask(무 job) 경로의 [내구] job/[직접] local reservation 용어 정리, v5에서 부분 반영됨)
     verifyBudget(사용자 설정·기본 없음=무제한 — 임의 상수 금지), 캠페인 키=사용자 턴 결속, 카운터 초기화
     금지, 소진 시 자동 통과 금지. ※상위 ⓗ의 3식별자는 단계별 소유로 정정: campaignId=2b /
@@ -702,7 +732,9 @@
     기록 실패 시엔 미집계로 느슨해지되 반드시 가시화(절대 상한 주장 금지).
     상세:
     ⑴ 필드: `verifyBudget`(CL-C)/`codexVerifyBudget`(C-C·부재=CL-C 상속 — 상속 표시는 raw-presence 판독).
-      1 이상 정수만 유효, 부재·0·비정수·음수=무제한(무회귀). normVerifyBudget 양쪽 동형·모드별 exact patch
+      1 이상 정수만 유효, 부재·0·비정수·음수=무제한(무회귀). (★B3 정정 07-18: 이 문언은 CL-C 기준 —
+      C-C 슬롯은 '부재=상속'과 양립해야 하므로 명시 정수 0='이 슬롯만 무제한'(상속 차단), 부재·무효=상속.
+      0을 부재와 뭉개면 CL-C 유한+C-C 무제한 조합을 표현할 수 없다.) normVerifyBudget 양쪽 동형·모드별 exact patch
       허용목록 추가·비물질화 동형(빈값 저장=원시 필드 삭제).
     ⑵ 캠페인 키(기존 앵커 재사용): CL-C=`cl:<claudeSession>:<active ts>` / C-C=`cc:<implementerSession>:
       <turnId>`. ★campaignId는 job '생성 시점'에 완성해 job에 동결★(4차 지적 2 — child가 예약 시점에
@@ -744,7 +776,8 @@
       '예산 미적용' 경고.
     ⑹ history 일관성·보존(2차 지적 5): 캠페인 교체 시 같은 임계구역에서 ①<wsKey>.history.jsonl에 이전
       레코드 append(campaignId 포함) ②current 교체 — 순서 고정. crash 중복은 append 전 '마지막 history
-      줄의 campaignId와 같으면 skip'으로 제거(2d 집계도 campaignId dedupe). 보존 정책: history는 append
+      줄의 campaignId와 같으면 skip'으로 제거(2d 집계도 campaignId dedupe). (★B1' 정정 07-18: skip이 아니라
+      '같은 campaignId 마지막 줄을 최신 레코드로 갱신' — skip은 더 큰 count를 은폐해 복귀 복원이 상한을 되감음.) 보존 정책: history는 append
       시 60일 초과 줄 trim — ★같은 잠금 아래 atomic rewrite★(trimVerdicts의 무잠금 직접 rewrite를 복제
       하지 않음, 3차 확인 반영). ★trim 판단 필드=Date.parse(record.updatedAt)★(5차 [주의] — trimVerdicts를
       문자 복제해 history에 없는 o.ts를 읽으면 전 줄 NaN=영구 보존 오구현: 무효 시각(NaN)=보존하되 손상 줄
@@ -794,8 +827,8 @@
 - 착수 순서는 **HANDOFF §1-0 끝의 '다음 순서'가 정본(2026-07-17 갱신)**: ~~P-8 1단~~(완료 07-15) →
   ~~P-5~~(완료 07-15) → ~~검증 스위치 분리+P-10~~(완료 07-16 ae9932b) → ~~P-9 자동 전환+done 종결~~(완료
   07-16 1d31617) → ~~P-12 1단+2a~~(완료 07-17 — 1단 프로필 이원화 c36c327+카드 표시 3d2822b+v2.2 [주의]
-  47d84ec, 2a 백로그 장부+P-2·P-3·P-4 마무리 534f9af) → **P-12 2단 잔여 2b(왕복 예산)→2c(기계 판독)→
-  2d(통계·승격 자동화)** — 각각 착수 시 상세 동결(ⓚ) → P-8 2단 잔여
+  47d84ec, 2a 백로그 장부+P-2·P-3·P-4 마무리 534f9af) → ~~P-12 2b 왕복 예산~~(완료 07-18 — ⓚ 2b 구현
+  실체 참조) → **P-12 2단 잔여 2c(기계 판독)→2d(통계·승격 자동화)** — 각각 착수 시 상세 동결(ⓚ) → P-8 2단 잔여
   (v10 나머지 — 잠금 축은 분리 묶음에서 선반영)·fallback↔훅 경합 → P-6b 서술 정정. (이 단락의 옛 참조 'HANDOFF §깃헙 동기화 절 07-14 14:02'와 'P-6·P-5 같은 묶음 권장'은
   낡은 기록 — P-6·P-5 모두 완료됨.)
 - 동기화 자체는 무손실 완료(정본 그대로) — 위 항목은 정본의 미완 상태를 그대로 반영한 것이지 동기화 오류가 아니다.

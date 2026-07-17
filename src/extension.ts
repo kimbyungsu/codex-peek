@@ -156,7 +156,7 @@ interface BridgeState {
   baseReadOk: boolean; // 기본 원칙(+3트랙 정찰) 오버라이드 파일 판독 신뢰(부재=정상) — false면 웹뷰가 canonical fill·잠금 해제 보류(7차 지적 2)
   scoutPrompt: { baseline: string; overridden: boolean; directive: string; notes: string[]; version: string } | null; // §6-11 — 3트랙에서만(null=2트랙/판독 불가)
   // P-12 v2.4: 보관함(범위 밖 제안+판단 대기 [주의]) 읽기 전용 가시화 — 처분은 CLI(backlog done|dismiss). null=무폴더/구 런타임.
-  backlog: { caution: number; backlog: number; corrupt: number; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } | null;
+  backlog: { caution: number; backlog: number; corrupt: number; readError: boolean; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } | null; // readError: 판독 실패(ENOENT 외) — '비어 있음' 위장 금지(2026-07-18 확인 판정 [보완] 소화)
   baseAvailable: boolean;
   permissionMode: string;
   codexReady: boolean;
@@ -281,6 +281,18 @@ function normCodexVerifyMode(o: any): VerifyMode {
   if (o && VERIFY_MODES.includes(o.codexVerifyMode)) return o.codexVerifyMode;
   return normVerifyMode(o);
 }
+// P-12 2b: 왕복 예산 — bridge/contract-lib.js normVerifyBudget/normCodexVerifyBudget와 동형(스키마 정합).
+// 1 이상 정수=상한, 그 외=0(무제한·무회귀). C-C는 '부재'만 상속 — 명시 0='이 슬롯만 무제한'(B3).
+function normVerifyBudget(o: any): number {
+  const v = o && o.verifyBudget;
+  return (typeof v === "number" && Number.isInteger(v) && v >= 1) ? v : 0;
+}
+function normCodexVerifyBudget(o: any): number {
+  const v = o && o.codexVerifyBudget;
+  if (typeof v === "number" && Number.isInteger(v) && v >= 1) return v;
+  if (v === 0) return 0; // 명시 무제한(상속 차단)
+  return normVerifyBudget(o);
+}
 function withRoleLockExt<T>(fn: () => T): T | null {
   const token=process.pid+"-"+Math.random().toString(36).slice(2,8);let locked=false;
   for(let i=0;i<200&&!locked;i++){
@@ -333,6 +345,9 @@ interface Contract {
   codexVerifyMode: VerifyMode; // C-C 슬롯 검증 스위치(모드별 분리 2026-07-15 — 부재 시 verifyMode 상속)
   verifyProfile: VerifyProfile; // P-12: CL-C 슬롯 검증 강도(부재=integrity)
   codexVerifyProfile: VerifyProfile; // P-12: C-C 슬롯(부재 시 verifyProfile 상속)
+  verifyBudget: number; // P-12 2b: CL-C 왕복 예산(0=무제한)
+  codexVerifyBudget: number; // P-12 2b: C-C 슬롯(부재=CL-C 상속)
+  codexVerifyBudgetRawVal: number | null; // 상속 '표시'용 raw-presence — null=부재(상속), 0=명시 무제한, n=명시 상한(저장 경로 미포함 · 1차 B3)
   claudeInjectMode: InjectMode;
   codexInjectMode: InjectMode;
   scoutMode: ScoutMode;
@@ -432,6 +447,9 @@ function loadContract(ws?: string | null, lang?: Lang): Contract {
     codexVerifyMode: normCodexVerifyMode(o),
     verifyProfile: normVerifyProfile(o),
     codexVerifyProfile: normCodexVerifyProfile(o),
+    verifyBudget: normVerifyBudget(o),
+    codexVerifyBudget: normCodexVerifyBudget(o),
+    codexVerifyBudgetRawVal: (typeof o.codexVerifyBudget === "number" && Number.isInteger(o.codexVerifyBudget) && o.codexVerifyBudget >= 0) ? o.codexVerifyBudget : null,
     claudeInjectMode: normInjectMode(o),
     codexInjectMode: o && INJECT_MODES.includes(o.codexInjectMode) ? o.codexInjectMode : "always",
     scoutMode: normScoutMode(o),
@@ -508,6 +526,14 @@ function withContractLockExt<T>(lockPath: string, fn: () => T): T | false {
   if (!locked) return false;
   try { return fn(); }
   finally { try { if (fs.readFileSync(lockPath, "utf8") === token) fs.unlinkSync(lockPath); } catch { /* 무해 */ } }
+}
+// P-12 2b: 웹뷰 예산 입력 파싱 — 0 이상 정수 문자열=그 수(0=명시 무제한·C-C 상속 차단), 그 외(빈값 포함)=
+// undefined(JSON 직렬화에서 키 탈락=비물질화 — C-C는 상속 복원, CL-C는 무제한).
+function parseBudgetInput(v: unknown): number | undefined {
+  const s = typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "";
+  if (!/^\d+$/.test(s)) return undefined;
+  const n = parseInt(s, 10);
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
 }
 function patchContractExt(ws: string | null, lang: Lang | undefined, patch: Record<string, unknown>): boolean {
   const file = ws ? contractFileFor(ws, lang) : CONTRACT_FILE;
@@ -2906,6 +2932,8 @@ class Dashboard {
             // P-12 굳힘 금지(계약 ⓐ): 사용자가 프로필을 실제로 바꾼 저장에만 기록 — 상속 실효값이
             // 원시 필드로 물질화되면 이후 CL-C 변경이 C-C로 상속되지 않는 회귀(구현검증 1차 지적 2).
             ...(m.verifyProfileTouched ? { codexVerifyProfile: normVerifyProfile({ verifyProfile: m.verifyProfile }) } : {}),
+            // P-12 2b: 예산도 명시 변경만(굳힘 금지). C-C는 0=명시 무제한 저장(1차 B3), 빈값=키 삭제(상속 복원).
+            ...(m.verifyBudgetTouched ? { codexVerifyBudget: parseBudgetInput(m.verifyBudget) } : {}),
             scoutMode: normScoutMode({ scoutMode: m.scoutMode }),
           } : {
             claude: Array.isArray(m.claude) ? m.claude : [],
@@ -2913,6 +2941,7 @@ class Dashboard {
             claudeInjectMode: normInjectMode({ claudeInjectMode: m.claudeInjectMode }), // 체크리스트 제외 — 위 주석과 동일(P-8 1단)
             verifyMode: normVerifyMode({ verifyMode: m.verifyMode }),
             ...(m.verifyProfileTouched ? { verifyProfile: normVerifyProfile({ verifyProfile: m.verifyProfile }) } : {}), // P-12: 명시 변경만(굳힘 금지)
+            ...(m.verifyBudgetTouched ? { verifyBudget: (() => { const n = parseBudgetInput(m.verifyBudget); return n !== undefined && n >= 1 ? n : undefined; })() } : {}), // P-12 2b: CL-C는 0≡부재(무제한)라 유한값만 저장·그 외=키 삭제
             scoutMode: normScoutMode({ scoutMode: m.scoutMode }),
           };
           const ok = patchContractExt(dashboardWorkspace(), slotLang, patch);
@@ -3541,8 +3570,13 @@ class Dashboard {
         <button type="button" data-vp="integrity">${t("무결성<small>넓게 탐색 (기본)</small>", "Integrity<small>wide search (default)</small>")}</button><button type="button" data-vp="core">${t("핵심<small>직접 영향 중심</small>", "Core<small>direct impact</small>")}</button>
       </span>
     </label>
-    <div class="hint">${t("무결성: 관련 호출부·경합·회귀·문서까지 넓게 탐색 — 모든 결함 부재를 보증하지는 않음 · 핵심: 선언된 요구·직접 영향 중심. 비차단 지적은 세 갈래(v2.4) — [주의](보안·데이터 인접·구체 경로 필수 — 구현모델이 재판단: 지금 고침 또는 사용자 판단으로 승격해 보관함 기록), [보완](자명·국소 — 그 루프에서 일괄 반영+확인 1회), [백로그](범위 밖 제안 — 보관함 기록·갚을 의무 없음·채택 시만 작업) — 범위 밖 잔여 위험이 남을 수 있고, 모델에 주입되는 처리 규약이라 기계적 왕복 상한·자동수정 차단은 아직 없음(2단). 프로필·언어 선택은 이후 시작되는 검증(ask)부터 즉시 적용됩니다 — 이미 진행 중인 턴의 주입 지침은 바뀌지 않아 한 턴 안에서 규약이 섞일 수 있으니, 턴 전체 일관성이 필요하면 다음 프롬프트를 보내기 전에 전환하세요. 핵심으로 작업했다면 push·배포 전에 무결성 승격 검증 1회를 권장합니다.", "Integrity: searches widely across call sites, races, regressions, and docs — does not guarantee absence of all defects. Core: focuses on the declared requirements and their direct impact; non-blocking findings are marked three ways (v2.4) — [caution] (security/data-adjacent, concrete path required — the implementer re-judges: fix now or escalate to your judgment and park it), [notes] (obvious & local — applied in that loop as a batch with one confirmation), [backlog] (out-of-scope proposal — parked, no repayment duty, work only when adopted) — residual out-of-scope risk may remain, and this is a protocol injected into the models: no mechanical round-trip cap or auto-fix blocking yet (phase 2). Profile/language choices apply immediately to verifications (asks) started afterwards — directives already injected into the current turn do not change, so protocols can mix within one turn; switch before your next prompt if you need whole-turn consistency. If you worked in Core, one Integrity escalation verification before push/deploy is recommended.")}</div>
+    <div class="hint">${t("무결성: 관련 호출부·경합·회귀·문서까지 넓게 탐색 — 모든 결함 부재를 보증하지는 않음 · 핵심: 선언된 요구·직접 영향 중심. 비차단 지적은 세 갈래(v2.4) — [주의](보안·데이터 인접·구체 경로 필수 — 구현모델이 재판단: 지금 고침 또는 사용자 판단으로 승격해 보관함 기록), [보완](자명·국소 — 그 루프에서 일괄 반영+확인 1회), [백로그](범위 밖 제안 — 보관함 기록·갚을 의무 없음·채택 시만 작업) — 범위 밖 잔여 위험이 남을 수 있고, 모델에 주입되는 처리 규약이라 자동수정 차단은 없음 — 기계적 왕복 상한은 아래 '왕복 예산'(기본 무제한·앵커/기록 실패 시 미집계로 표시)으로 별도 설정. 프로필·언어 선택은 이후 시작되는 검증(ask)부터 즉시 적용됩니다 — 이미 진행 중인 턴의 주입 지침은 바뀌지 않아 한 턴 안에서 규약이 섞일 수 있으니, 턴 전체 일관성이 필요하면 다음 프롬프트를 보내기 전에 전환하세요. 핵심으로 작업했다면 push·배포 전에 무결성 승격 검증 1회를 권장합니다.", "Integrity: searches widely across call sites, races, regressions, and docs — does not guarantee absence of all defects. Core: focuses on the declared requirements and their direct impact; non-blocking findings are marked three ways (v2.4) — [caution] (security/data-adjacent, concrete path required — the implementer re-judges: fix now or escalate to your judgment and park it), [notes] (obvious & local — applied in that loop as a batch with one confirmation), [backlog] (out-of-scope proposal — parked, no repayment duty, work only when adopted) — residual out-of-scope risk may remain, and this is a protocol injected into the models with no auto-fix blocking — a mechanical round-trip cap is available separately via 'Round budget' below (unlimited by default; anchor/write failures show as untracked). Profile/language choices apply immediately to verifications (asks) started afterwards — directives already injected into the current turn do not change, so protocols can mix within one turn; switch before your next prompt if you need whole-turn consistency. If you worked in Core, one Integrity escalation verification before push/deploy is recommended.")}</div>
     <div class="hint"><span class="ic" id="planConfirmHelp" title="${t("플랜 확정 = 플랜 모드(shift+Tab)에서 세운 계획을 확정·제출하는 그 턴(ExitPlanMode). 플랜 모드 '내내'가 아니라 확정하는 '순간'이에요. '플랜 확정/코드 변경'은 이 플랜 확정 턴이거나 파일을 바꾼 턴에 검증을 강제합니다.", "Plan confirm = the turn that submits the plan (ExitPlanMode) — the moment of confirming, not the whole plan mode. 'Plan confirm/code' forces verification on that turn or on file-changing turns.")}">ⓘ ${t("'플랜 확정'이 뭐야?", "What is 'plan confirm'?")}</span> · <span class="ic" title="${t("검증이 필요한 턴은 선택한 모드가 정해요. 모든 턴=매 답변, 코드 변경 시=파일을 만든/고친 턴, 플랜 확정/코드 변경=플랜을 확정했거나 파일을 고친 턴. 그 턴엔 Codex 검증 결과를 반영해 보고해야 끝낼 수 있어요.", "The selected mode decides which turns require verification. Every turn = all replies; on code change = turns that create/modify files; plan confirm/code = plan-confirm or file-changing turns. Those turns can only finish after reporting with Codex verification.")}">ⓘ ${t("언제 검증되나?", "When is it verified?")}</span></div>
+    <label class="ck verify">${t("왕복 예산 — 한 캠페인(한 사용자 턴)당 검증 왕복 상한", "Round budget — verification round cap per campaign (per user turn)")}
+      <input id="vBudget" type="number" min="0" step="1" style="width:76px" placeholder="${t("무제한", "unlimited")}">
+      <span class="muted" id="vBudgetNote" style="font-size:11.5px"></span>
+    </label>
+    <div class="hint">${t("빈값=무제한(기본). 소진하면 같은 캠페인의 다음 검증 요청이 거부되고(자동 통과 없음), 남은 blocker는 보류로 사용자에게 승격하라는 안내가 나갑니다. 저장 후 '다음 캠페인'(다음 사용자 턴)부터 적용 — 진행 중인 캠페인의 예산은 그대로예요. 정상 추적 상태의 기계적 상한이라, 앵커·잠금·기록 실패 시엔 그 왕복은 집계되지 않고 '미집계'로 표시됩니다(절대 상한 아님).", "Empty = unlimited (default). When spent, the next verification request in the same campaign is refused (no auto-pass), with guidance to escalate remaining blockers to you as a hold. Applies from the next campaign (next user turn) after saving — the running campaign keeps its budget. This is a mechanical cap in the normally tracked state: on anchor/lock/write failures that round is not counted and is shown as 'untracked' (not an absolute cap).")}</div>
     <label class="ck verify">${t("트랙 — 구현·검증 흐름에 <b>정찰(영향 미리보기·관찰 일지)</b>을 더할지", "Track — add <b>recon (impact preview · field journal)</b> to the implement·verify flow")}
       <span class="seg" id="segScout">
         <button type="button" data-sm="off">${t("2트랙<small>구현↔검증 (기본)</small>", "2-track<small>implement↔verify (default)</small>")}</button><button type="button" data-sm="on">${t("3트랙<small>+정찰 (관찰)</small>", "3-track<small>+recon (advisory)</small>")}</button>
@@ -3749,6 +3783,7 @@ class Dashboard {
   // 지도/패널은 "저장된 것"만 보여주고(거짓 미리보기 방지), 저장하는 순간 바뀐 곳을 깜빡인다.
   let curVM = "off", curIM = "always", curSM = "off", curVP = "integrity", harnessMode = "claude-codex";
   let appVM = null, appIM = null, appSM = null, appVP = null;
+  let curVB = "", appVB = null; // P-12 2b: 왕복 예산 초안/저장값(문자열 — ""=무제한, 숫자 문자열=상한)
   let appCkC = null, appCkX = null; // 체크박스 '마지막 적용값'(hold 판정용 — 미저장 체크 변경이 언어 전환에 덮이지 않게)
   let curPerm = "";   // 지금 Claude Code 권한 모드(active.json) — plan 게이트 표시용
   let curRS = "";     // 두뇌 설정 폼에서 고른 생각강도("" = 기본). 모델은 입력칸 값 직접 사용.
@@ -3803,9 +3838,11 @@ class Dashboard {
     if(prevVM!=null && prevVM!==appVM){ flashNode(ver); flashNode($("sbTransmit")); flashNode($("sbVerify")); flashNode($("sbRejudge")); }
   }
   function highlightSeg(segId, attr, v){ const s=$(segId); if(s) s.querySelectorAll("button").forEach((b)=>b.classList.toggle("on", b.getAttribute(attr)===v)); }
-  function markDirty(){ const d=$("dirtyHint"); if(d) d.style.display = ((curVM!==appVM)||(curIM!==appIM)||(curSM!==appSM)||(appVP!==null&&curVP!==appVP)) ? "" : "none"; try { reportCardDirty(); } catch(e){ /* 선언 전 호출 없음 — 방어 */ } }
+  function markDirty(){ const d=$("dirtyHint"); if(d) d.style.display = ((curVM!==appVM)||(curIM!==appIM)||(curSM!==appSM)||(appVP!==null&&curVP!==appVP)||(appVB!==null&&curVB!==appVB)) ? "" : "none"; try { reportCardDirty(); } catch(e){ /* 선언 전 호출 없음 — 방어 */ } }
   $("segVerify").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-vm]"); if(b){ curVM=b.getAttribute("data-vm"); highlightSeg("segVerify","data-vm",curVM); markDirty(); } });
   $("segProfile").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-vp]"); if(b){ curVP=b.getAttribute("data-vp"); highlightSeg("segProfile","data-vp",curVP); markDirty(); } });
+  // P-12 2b: 예산 입력 — cardMachine 편승(저장 중 편집 무시·초안은 markDirty 축에 합류)
+  var vbEl=$("vBudget"); if(vbEl) vbEl.addEventListener("input", function(){ if(cardM.saving()) return; curVB=String(vbEl.value||"").trim(); markDirty(); });
   $("segScout").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-sm]"); if(b){ curSM=b.getAttribute("data-sm"); highlightSeg("segScout","data-sm",curSM); markDirty(); } });
   $("segInject").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-im]"); if(b){ curIM=b.getAttribute("data-im"); highlightSeg("segInject","data-im",curIM); markDirty(); } });
   $("segReason").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-rs]"); if(b){ curRS=b.getAttribute("data-rs"); highlightSeg("segReason","data-rs",curRS); } });
@@ -3935,10 +3972,11 @@ class Dashboard {
   function cardInputLock(on){
     var a=$("cClaude"), b=$("cCodex"); if(a) a.readOnly = on; if(b) b.readOnly = on;
     var s=$("saveC"); if(s) s.disabled = on; var rv=$("revertC"); if(rv) rv.disabled = on;
+    var vb=$("vBudget"); if(vb) vb.disabled = on; // P-12 2b(구현검증 1차 B5): 저장 중 예산 입력 잠금 — DOM 값과 저장값 분기 차단
   }
   // 카드 미저장 초안 종합(P-10: 규칙 textarea+세그 초안 — 체크박스는 즉시 저장이라 초안 없음)
   function cardDirtyNow(){
-    var seg = (appVM!==null && curVM!==appVM) || (appIM!==null && curIM!==appIM) || (appSM!==null && curSM!==appSM) || (appVP!==null && curVP!==appVP);
+    var seg = (appVM!==null && curVM!==appVM) || (appIM!==null && curIM!==appIM) || (appSM!==null && curSM!==appSM) || (appVP!==null && curVP!==appVP) || (appVB!==null && curVB!==appVB);
     return !!(contractDirty.claude || contractDirty.codex || seg);
   }
   // 초안/저장대기 상태를 호스트에 결속(2차 지적 2) — 다른 창발 언어 변경의 HTML 재생성(초안 파괴)을 호스트가 보류.
@@ -3997,7 +4035,9 @@ class Dashboard {
     // 저장 대상 모드=beg.mode(렌더된 슬롯) — 런타임 harnessMode가 그 사이 바뀌어도 보던 슬롯에 저장(오염 방지).
     vscode.postMessage({type:"saveContract", lang: renderedLangC || undefined, harnessMode: beg.mode, reqId: rid,
       claude: toLines($("cClaude").value), codex: toLines($("cCodex").value),
-      verifyMode: curVM, verifyProfile: curVP, verifyProfileTouched: (appVP!==null && curVP!==appVP), claudeInjectMode: curIM, scoutMode: curSM}); // 체크리스트는 토글 즉시 저장(P-8 1단) — 버튼 저장에서 제외
+      verifyMode: curVM, verifyProfile: curVP, verifyProfileTouched: (appVP!==null && curVP!==appVP),
+      verifyBudget: curVB, verifyBudgetTouched: (appVB!==null && curVB!==appVB), // P-12 2b: 명시 변경만(굳힘 금지·빈값=무제한)
+      claudeInjectMode: curIM, scoutMode: curSM}); // 체크리스트는 토글 즉시 저장(P-8 1단) — 버튼 저장에서 제외
     // 성공 플래시·스크롤은 saveResult(ok)에서 (저장 실패 시 거짓 성공 방지)
   });
   $("revertC").addEventListener("click", function(){
@@ -4411,10 +4451,14 @@ class Dashboard {
         var preIM = ccR ? d.contract.codexInjectMode : d.contract.claudeInjectMode;
         var preSM = d.contract.scoutMode || "off";
         var preVP = (ccR ? d.contract.codexVerifyProfile : d.contract.verifyProfile) || "integrity"; // P-12
+        // P-12 2b 표시 규칙(1차 B3): C-C=원시 슬롯 값 그대로(null=""·0="0"=명시 무제한), CL-C=유한값만(무제한="").
+        var preVB = ccR ? (d.contract.codexVerifyBudgetRawVal===null ? "" : String(d.contract.codexVerifyBudgetRawVal))
+                        : (d.contract.verifyBudget>=1 ? String(d.contract.verifyBudget) : "");
         if (appVM!==null && curVM!==appVM && curVM===preVM) appVM = curVM;
         if (appIM!==null && curIM!==appIM && curIM===preIM) appIM = curIM;
         if (appSM!==null && curSM!==appSM && curSM===preSM) appSM = curSM;
         if (appVP!==null && curVP!==appVP && curVP===preVP) appVP = curVP;
+        if (appVB!==null && curVB!==appVB && curVB===preVB) appVB = curVB;
       }
       // 모드 전환 hold 판정(푸시당 1회 — 확정 계약 ⑴): 외부(파일 편집·자동 전환)로 런타임 모드가 바뀌어도
       // 미저장 초안·계약 저장 대기(dirty||pending)면 카드는 renderedMode(옛 슬롯) 화면·라벨 그대로 동결.
@@ -4526,7 +4570,7 @@ class Dashboard {
     const langChangedC = renderedLangC !== null && d.lang && d.lang !== renderedLangC;
     // '카드에 저장 안 한 변경'은 textarea(dirty·포커스)만이 아니라 세그(curVM/curIM≠app*)·체크박스(appCk*와 다름)도 포함
     // — 세그만 바꾸고 언어 전환→저장 시 en 슬롯에 ko 화면의 모드가 저장되는 잔여 오염 차단(Codex 검증 반례 반영).
-    const segDirtyC = (appVM!==null && curVM!==appVM) || (appIM!==null && curIM!==appIM) || (appSM!==null && curSM!==appSM) || (appVP!==null && curVP!==appVP);
+    const segDirtyC = (appVM!==null && curVM!==appVM) || (appIM!==null && curIM!==appIM) || (appSM!==null && curSM!==appSM) || (appVP!==null && curVP!==appVP) || (appVB!==null && curVB!==appVB);
     const ckDirtyC = (appCkC!==null && $("ckClaude").checked!==appCkC) || (appCkX!==null && $("ckCodex").checked!==appCkX);
     // 모드 hold(cardStLast — 라벨 블록에서 푸시당 1회 판정)는 언어 hold와 같은 동결 계약: 외부 전환+dirty/저장대기.
     const holdC = (langChangedC && (contractDirty.claude || contractDirty.codex || segDirtyC || ckDirtyC ||
@@ -4549,14 +4593,22 @@ class Dashboard {
       const first = (appVM===null);
       // 되돌리기 직후(cardM.revert가 renderedMode를 리셋 → 이번 state가 first)는 초안 폐기 확정 — 저장값으로 강제 동기화.
       const forceSync = cardStLast.first === true && !first;
-      const pVM=appVM, pIM=appIM, pSM=appSM, pVP=appVP; // pVP: P-12 — 프로필 초안도 상태 푸시에 안 되돌아가게
+      const pVM=appVM, pIM=appIM, pSM=appSM, pVP=appVP, pVB=appVB; // pVP/pVB: P-12 — 초안이 상태 푸시에 안 되돌아가게
       appVM = (ccMode ? d.contract.codexVerifyMode : d.contract.verifyMode) || "off"; // 모드별 검증 스위치(분리 2026-07-15)
       appVP = (ccMode ? d.contract.codexVerifyProfile : d.contract.verifyProfile) || "integrity"; // P-12 모드별 프로필(부재=integrity)
+      appVB = ccMode ? (d.contract.codexVerifyBudgetRawVal===null ? "" : String(d.contract.codexVerifyBudgetRawVal))
+                     : (d.contract.verifyBudget>=1 ? String(d.contract.verifyBudget) : ""); // P-12 2b(1차 B3: C-C 원시값 표시 — 0=명시 무제한)
       appIM = (ccMode ? d.contract.codexInjectMode : d.contract.claudeInjectMode) || "always";
       appSM = d.contract.scoutMode || "off";
       // 사용자가 저장 안 한 토글 변경을 들고 있으면(dirty) 폼 선택을 보존, 아니면 저장값으로 동기화.
-      const dirty = !first && !forceSync && ((curVM!==pVM)||(curIM!==pIM)||(curSM!==pSM)||(pVP!==null&&curVP!==pVP));
-      if(first || forceSync || !dirty){ curVM=appVM; curIM=appIM; curSM=appSM; curVP=appVP; highlightSeg("segVerify","data-vm",curVM); highlightSeg("segInject","data-im",curIM); highlightSeg("segScout","data-sm",curSM); highlightSeg("segProfile","data-vp",curVP); }
+      const dirty = !first && !forceSync && ((curVM!==pVM)||(curIM!==pIM)||(curSM!==pSM)||(pVP!==null&&curVP!==pVP)||(pVB!==null&&curVB!==pVB));
+      if(first || forceSync || !dirty){ curVM=appVM; curIM=appIM; curSM=appSM; curVP=appVP; curVB=appVB; highlightSeg("segVerify","data-vm",curVM); highlightSeg("segInject","data-im",curIM); highlightSeg("segScout","data-sm",curSM); highlightSeg("segProfile","data-vp",curVP); if($("vBudget")&&document.activeElement!==$("vBudget")) $("vBudget").value=curVB; }
+      // P-12 2b: 상속·적용 시점 안내(표시 전용 — 저장 경로 미포함). C-C 모드에서 원시 슬롯 값이 없으면 CL-C 상속임을 표기.
+      safe(function(){ var n=$("vBudgetNote"); if(!n) return;
+        var inh = ccMode && d.contract.codexVerifyBudgetRawVal===null && d.contract.codexVerifyBudget>0;
+        n.textContent = (inh?T("CL-C 설정 상속(실효 "+d.contract.codexVerifyBudget+") · ","inherited from CL-C (effective "+d.contract.codexVerifyBudget+") · "):"")
+          + (ccMode?T("빈값=상속 · 0=이 슬롯만 무제한 · ","empty=inherit · 0=unlimited for this slot · "):"")
+          + T("저장 후 다음 캠페인부터","applies from the next campaign after saving"); });
       renderApplied(first?undefined:pVM, first?undefined:pIM);  // 저장/변경 반영 후 바뀐 축을 깜빡(첫 렌더는 깜빡 없음)
       markDirty();
     }
