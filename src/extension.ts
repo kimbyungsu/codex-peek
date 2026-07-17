@@ -155,7 +155,7 @@ interface BridgeState {
   baseDirective: { verifyBaseline: string; transmit: string; rejudge: string; overridden: boolean; profile: string }; // profile: 표시 중 문안의 실효 프로필(P-12 — 'core'면 코드 고정 문안)
   baseReadOk: boolean; // 기본 원칙(+3트랙 정찰) 오버라이드 파일 판독 신뢰(부재=정상) — false면 웹뷰가 canonical fill·잠금 해제 보류(7차 지적 2)
   scoutPrompt: { baseline: string; overridden: boolean; directive: string; notes: string[]; version: string } | null; // §6-11 — 3트랙에서만(null=2트랙/판독 불가)
-  // P-12 v2.3: 검증 백로그(부채 장부) 읽기 전용 가시화 — 처분은 CLI(backlog done|dismiss). null=무폴더/구 런타임.
+  // P-12 v2.4: 보관함(범위 밖 제안+판단 대기 [주의]) 읽기 전용 가시화 — 처분은 CLI(backlog done|dismiss). null=무폴더/구 런타임.
   backlog: { caution: number; backlog: number; corrupt: number; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } | null;
   baseAvailable: boolean;
   permissionMode: string;
@@ -1006,7 +1006,7 @@ function computeBaseState(ws: string | null, contract: Contract, lang: Lang): { 
   };
 }
 
-// P-12 v2.3: 부채 카드 뷰 계산(순수 함수 — 테스트가 컴파일 산출물에서 추출 실행·의존성 없음).
+// P-12 v2.4: 보관함 카드 뷰 계산(순수 함수 — 테스트가 컴파일 산출물에서 추출 실행·의존성 없음).
 // ★나이 기준=firstSeen★(구현검증 1차 blocker: lastSeen 기준이면 재발견이 나이를 되감아 40일 묵은 항목이
 // D+1로 표시되며 30일 검토 기한을 회피) — firstSeen 부재·무효 시에만 lastSeen fallback.
 function computeBacklogView(rawItems: any[], now: number): { caution: number; backlog: number; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } {
@@ -1631,7 +1631,7 @@ function computeState(turnsN: number): BridgeState {
     otherSlotRules: otherSlotHasRules(ws, langSnap), // 반대 언어 슬롯에만 규칙 있음 → '사라진 게 아님' 안내(langSnap 동일 슬롯)
     // base 축(기본 원칙+정찰 태도층) — strict 단일 판독의 신뢰·데이터를 같은 푸시에 결속(8차 지적 4)
     ...computeBaseState(ws, contract, langSnap),
-    // P-12 v2.3: 부채 장부 가시화. '검토 기한' 강조는 표시 전용 휴리스틱(30일 경과 또는 3회 재발견 —
+    // P-12 v2.4: 보관함(범위 밖 제안+판단 대기 [주의]) 가시화. '검토 기한' 강조는 표시 전용 휴리스틱(30일 경과 또는 3회 재발견 —
     // 2d의 정식 reviewDue 계약이 동결되면 그 계약으로 대체·이 상수는 캐논/게이트에 미사용).
     backlog: (() => {
       try {
@@ -3541,7 +3541,7 @@ class Dashboard {
         <button type="button" data-vp="integrity">${t("무결성<small>넓게 탐색 (기본)</small>", "Integrity<small>wide search (default)</small>")}</button><button type="button" data-vp="core">${t("핵심<small>직접 영향 중심</small>", "Core<small>direct impact</small>")}</button>
       </span>
     </label>
-    <div class="hint">${t("무결성: 관련 호출부·경합·회귀·문서까지 넓게 탐색 — 모든 결함 부재를 보증하지는 않음 · 핵심: 선언된 요구·직접 영향 중심. 비차단 지적은 [주의](보안·데이터 인접 — 구현모델이 심각성 재판단: 지금 고침 또는 근거와 함께 사용자 승격)와 [백로그](목록 전달·자동수정 금지)로 분리 — 범위 밖 잔여 위험이 남을 수 있고, 모델에 주입되는 처리 규약이라 기계적 왕복 상한·자동수정 차단은 아직 없음(2단). 프로필·언어 선택은 이후 시작되는 검증(ask)부터 즉시 적용됩니다 — 이미 진행 중인 턴의 주입 지침은 바뀌지 않아 한 턴 안에서 규약이 섞일 수 있으니, 턴 전체 일관성이 필요하면 다음 프롬프트를 보내기 전에 전환하세요. 핵심으로 작업했다면 push·배포 전에 무결성 승격 검증 1회를 권장합니다.", "Integrity: searches widely across call sites, races, regressions, and docs — does not guarantee absence of all defects. Core: focuses on the declared requirements and their direct impact; non-blocking findings are split into [caution] (security/data-adjacent — the implementer re-judges severity: fix now or escalate to you with reasoning) and [backlog] (listed, never auto-fixed) — residual out-of-scope risk may remain, and this is a protocol injected into the models: no mechanical round-trip cap or auto-fix blocking yet (phase 2). Profile/language choices apply immediately to verifications (asks) started afterwards — directives already injected into the current turn do not change, so protocols can mix within one turn; switch before your next prompt if you need whole-turn consistency. If you worked in Core, one Integrity escalation verification before push/deploy is recommended.")}</div>
+    <div class="hint">${t("무결성: 관련 호출부·경합·회귀·문서까지 넓게 탐색 — 모든 결함 부재를 보증하지는 않음 · 핵심: 선언된 요구·직접 영향 중심. 비차단 지적은 세 갈래(v2.4) — [주의](보안·데이터 인접·구체 경로 필수 — 구현모델이 재판단: 지금 고침 또는 사용자 판단으로 승격해 보관함 기록), [보완](자명·국소 — 그 루프에서 일괄 반영+확인 1회), [백로그](범위 밖 제안 — 보관함 기록·갚을 의무 없음·채택 시만 작업) — 범위 밖 잔여 위험이 남을 수 있고, 모델에 주입되는 처리 규약이라 기계적 왕복 상한·자동수정 차단은 아직 없음(2단). 프로필·언어 선택은 이후 시작되는 검증(ask)부터 즉시 적용됩니다 — 이미 진행 중인 턴의 주입 지침은 바뀌지 않아 한 턴 안에서 규약이 섞일 수 있으니, 턴 전체 일관성이 필요하면 다음 프롬프트를 보내기 전에 전환하세요. 핵심으로 작업했다면 push·배포 전에 무결성 승격 검증 1회를 권장합니다.", "Integrity: searches widely across call sites, races, regressions, and docs — does not guarantee absence of all defects. Core: focuses on the declared requirements and their direct impact; non-blocking findings are marked three ways (v2.4) — [caution] (security/data-adjacent, concrete path required — the implementer re-judges: fix now or escalate to your judgment and park it), [notes] (obvious & local — applied in that loop as a batch with one confirmation), [backlog] (out-of-scope proposal — parked, no repayment duty, work only when adopted) — residual out-of-scope risk may remain, and this is a protocol injected into the models: no mechanical round-trip cap or auto-fix blocking yet (phase 2). Profile/language choices apply immediately to verifications (asks) started afterwards — directives already injected into the current turn do not change, so protocols can mix within one turn; switch before your next prompt if you need whole-turn consistency. If you worked in Core, one Integrity escalation verification before push/deploy is recommended.")}</div>
     <div class="hint"><span class="ic" id="planConfirmHelp" title="${t("플랜 확정 = 플랜 모드(shift+Tab)에서 세운 계획을 확정·제출하는 그 턴(ExitPlanMode). 플랜 모드 '내내'가 아니라 확정하는 '순간'이에요. '플랜 확정/코드 변경'은 이 플랜 확정 턴이거나 파일을 바꾼 턴에 검증을 강제합니다.", "Plan confirm = the turn that submits the plan (ExitPlanMode) — the moment of confirming, not the whole plan mode. 'Plan confirm/code' forces verification on that turn or on file-changing turns.")}">ⓘ ${t("'플랜 확정'이 뭐야?", "What is 'plan confirm'?")}</span> · <span class="ic" title="${t("검증이 필요한 턴은 선택한 모드가 정해요. 모든 턴=매 답변, 코드 변경 시=파일을 만든/고친 턴, 플랜 확정/코드 변경=플랜을 확정했거나 파일을 고친 턴. 그 턴엔 Codex 검증 결과를 반영해 보고해야 끝낼 수 있어요.", "The selected mode decides which turns require verification. Every turn = all replies; on code change = turns that create/modify files; plan confirm/code = plan-confirm or file-changing turns. Those turns can only finish after reporting with Codex verification.")}">ⓘ ${t("언제 검증되나?", "When is it verified?")}</span></div>
     <label class="ck verify">${t("트랙 — 구현·검증 흐름에 <b>정찰(영향 미리보기·관찰 일지)</b>을 더할지", "Track — add <b>recon (impact preview · field journal)</b> to the implement·verify flow")}
       <span class="seg" id="segScout">
@@ -3563,9 +3563,9 @@ class Dashboard {
   <div class="row"><button id="saveC">${t("저장", "Save")}</button><button id="revertC" type="button" class="secondary" title="${t("저장하지 않은 계약 변경을 버리고 현재 모드의 저장값을 다시 불러옵니다", "Discard unsaved contract edits and reload the saved values for the current mode")}">${t("되돌리기", "Revert")}</button><span id="savedAt" class="muted">${t("· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장 (체크리스트 강제는 켜고 끄는 즉시 저장)", "· saves the Claude rules, Codex rules and verify mode together (checklist enforcement saves instantly on toggle)")}</span></div>
 
   <div id="backlogSec" style="display:none">
-    <h2 class="sec">${t("검증 백로그 — 부채 장부", "Verification Backlog — debt ledger")} <span class="sub2" id="blSummary"></span></h2>
+    <h2 class="sec">${t("검증 확장 제안·판단 대기 — 보관함", "Verification-expansion Proposals & Pending Judgments — parking lot")} <span class="sub2" id="blSummary"></span></h2>
     <div class="card">
-      <div class="hint">${t("검증에서 나온 비차단 지적이 여기 쌓여요. <b>묶음을 마감(푸시 전)할 때</b> 이 목록을 펼쳐 '이번 묶음과 직접 관련'이거나 직접 고른 항목만 한 번에 갚고, 나머지는 사유와 함께 남깁니다(핵심 프로필 v2.3 규약). '검토 기한' 표시는 오래됐거나(30일+) 자주 재발견(3회+)된 항목 — 갚으라는 강제가 아니라 '건너뛰지 말고 살펴보라'는 뜻이에요.", "Non-blocking findings from verification accumulate here. <b>When closing a bundle (before push)</b>, open this list and pay off only items directly related to this bundle or explicitly picked, leaving the rest with a note (core-profile v2.3 protocol). 'review due' marks old (30d+) or repeatedly rediscovered (3×+) items — not a fix order, but 'do not skip reviewing'.")}</div>
+      <div class="hint">${t("검증이 낸 지적 중 <b>이번 작업 범위를 넘는 제안</b>(새 시나리오 방어·구조 재설계·커버리지 확장 등)이 여기 보관돼요 — 이론적 구멍을 계속 메우는 무한 검증 루프를 끊기 위한 주차장입니다(핵심 프로필 v2.4). <b>보관 항목엔 갚을 의무가 없고</b>, 채택할 때만 작업이 됩니다. 사용자 판단을 기다리도록 승격된 [주의] 항목도 여기에 함께 기록돼요. 즉시 고칠 자명한 보완([보완])은 애초에 여기 들어오지 않아요(그 루프에서 바로 반영). '검토 기한' 표시는 오래됐거나(30일+) 자주 재발견(3회+)된 항목 — 기한이 아니라 '채택 후보로 한번 살펴보라'는 환기예요.", "Findings that go <b>beyond this work's scope</b> (new scenario hardening, redesign proposals, coverage expansion) are parked here — a parking lot that cuts the endless loop of patching theoretical holes (core profile v2.4). <b>Parked items carry no repayment duty</b>; they become work only when adopted. '[caution]' items escalated to await your judgment are also recorded here. Obvious mechanical notes ([notes]) never land here (they are applied in-loop). 'review due' marks old (30d+) or often-rediscovered (3×+) items — not a deadline, just a nudge to consider adoption.")}</div>
       <div id="blList" style="margin-top:6px"></div>
       <div class="hint">${t("처분은 CLI: <code>node codex-bridge.js backlog done|dismiss &lt;id&gt;</code> · 목록: <code>backlog list</code> · 이 카드는 읽기 전용(이 PC 로컬 장부)", "Dispose via CLI: <code>node codex-bridge.js backlog done|dismiss &lt;id&gt;</code> · list: <code>backlog list</code> · this card is read-only (local ledger of this PC)")}</div>
     </div>
@@ -4572,7 +4572,7 @@ class Dashboard {
         pn.textContent = d.permissionMode==="plan" ? T("지금 플랜 모드예요 ✓","Plan mode is on now ✓") : T("지금은 플랜 모드 아니에요","Not in plan mode right now");
       } else { pn.style.display="none"; }
     }
-    // P-12 v2.3: 검증 백로그(부채 장부) 카드 — 읽기 전용 가시화. XSS 안전: 전부 createElement/textContent.
+    // P-12 v2.4: 보관함 카드 — 읽기 전용 가시화. XSS 안전: 전부 createElement/textContent.
     safe(function(){
       const sec=$("backlogSec"); if(!sec) return;
       const bl=d.backlog;
