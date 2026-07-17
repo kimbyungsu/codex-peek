@@ -26,7 +26,7 @@ ok(CL.backlogId("가".repeat(300), "") === CL.backlogId("가".repeat(200), ""), 
 ok(CL.normBacklogFile("D:\\bl-proj\\src\\x.ts", WS) === "src/x.ts", "ws 내부 절대경로 — 강제 상대화(구분자 / 통일)");
 ok(CL.normBacklogFile("C:/Users/someone/secret.txt", WS) === "secret.txt (외부)", "외부 절대경로 — basename만+(외부) 표시(로컬 식별정보 차단)");
 ok(CL.normBacklogFile("src/y.ts", WS) === "src/y.ts", "내부 상대경로는 그대로");
-ok(CL.normBacklogFile("../Users/MAIN/secret.txt", WS) === "secret.txt (외부)", "../ 상대경로의 외부 탈출 — basename 축소(구현검증 2차 blocker: 우회 봉합)");
+ok(CL.normBacklogFile("../Users/someone/secret.txt", WS) === "secret.txt (외부)", "../ 상대경로의 외부 탈출 — basename 축소(구현검증 2차 blocker: 우회 봉합)");
 ok(CL.normBacklogFile("..notes/a.ts", WS) === "..notes/a.ts" && CL.normBacklogFile("..hidden/b.ts", WS) === "..hidden/b.ts", "..으로 시작하는 내부 정상 디렉터리 — 외부 오판 없음(세그먼트 단위 경계 · 3차 blocker: 서로 다른 지적의 id 병합 방지)");
 
 console.log("[2] 전이표 실동작 — add·재등록(승격·좌표 최신화)·reopen·status");

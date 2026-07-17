@@ -2,7 +2,31 @@
 
 > 이 문서 하나로 이어갈 수 있게 쓰였다. 상세 설계 원본(SCOUT-TRACK.md·SCOPE-LEDGER.md)은 **의도적으로 레포 밖 로컬 문서**라
 > 다른 환경에는 없다 — 그래서 이 파일이 그 요지를 포함한다. ⚠ **실 API 키·토큰은 어떤 파일·픽스처·예시에도 절대 넣지 말 것.**
-> 마지막 갱신: 2026-07-16 (버전 0.1.86 불변 · 이 갱신을 포함해 push된 main 기준). **이번 push 묶음(9커밋) 요지**:
+> 마지막 갱신: 2026-07-17 (버전 0.1.86 불변 · 이 갱신을 포함해 push된 main 기준). **이번 push 묶음(5커밋) 요지 — P-12 1단+v2.2+2a 완료(2단 잔여 2b~2d)**:
+> ①**P-12 1단**(c36c327) — 검증 강도 프로필 이원화(핵심/무결성): 사용자 채택 배경='벌레 하나 잡자고 집안에 불'
+> 검증 폭주 억제. 계약 필드 verifyProfile(CL-C)/codexVerifyProfile(C-C·부재=상속, 둘 다 부재=integrity),
+> core 프리셋 ko/en(심각도 게이트 — '실패'=미해결 blocker≥1·실질 영향 분류·교착 시 보류 승격·push 전 무결성
+> 승격 권장), core=코드 캐논 고정(오버라이드 저장은 integrity 문안 전용), ask 시작 시점 동결(job.verifyProfile/
+> verifyLang 저장→worker 소비·footer 동일값·legacy job=integrity), 대시보드 프로필 세그+정직 라벨.
+> 설계 동결 9왕복(확장 6왕복 후 '비례성 판단'으로 축소 — nonce 완전 결속은 2단 이관). tests/p12-profile 49단언.
+> ②**카드 표시 보강**(3d2822b, 사용자 지적 수용) — '단계별 기본 원칙' 카드가 실효 프로필의 '실제 주입 문안'을
+> 표시(핵심 선택 시 카드 무변화=표시 공백이었음): 핵심=읽기 전용 캐논 뷰·편집/복원 버튼은 무결성 문안 전용
+> 잠금(④정찰 칸 통로는 유지)·무결성 미저장 초안 stash 왕복 보존(4결선)·구버전 웹뷰 capability 판별.
+> ③**v2.2 [주의] 딱지**(47d84ec, 사용자 우려 '심각한 것만 잡아 부채 누적' 수용) — core 비차단 지적을 3단화:
+> [주의]=보안·개인정보·데이터 손상·복구 불능·운영 오판 '인접'+구체 경로 1줄 필수, 구현모델이 심각성 재판단
+> (동승 수정 1회 또는 근거 승격·침묵 이관 금지) / [백로그]=자동수정 금지·목록 전달. ko/en 캐논 동시 개정.
+> ④**P-12 2a 백로그 장부+기록물 위생 마무리**(534f9af, 설계 동결 5왕복+구현 4왕복) — verify-backlog/
+> <wsKey>.jsonl 장부(전 명령 잠금 직렬화·id 중복 제거·tag 단조 승격·재발견 reopen·손상 fail-visible·TTL
+> 비대상·민감 최소화)+CLI backlog 5명령+core 재판단 규약에 기록·id 인용 의무. P-2(ask-jobs 7일 TTL+PRIVACY)·
+> P-3(서랍 3종 TTL)·P-4 심화(의미 손상 차단·clear 잠금 보호·손상 격리 60분 시한부) 전부 마무리(§1-0 ⑥ 상세).
+> ⑤이 인수인계 갱신(push 전 무결성 폭 승격 검증 2왕복 반영 — 로컬 계정명 비식별화·문서 상태 정합 포함). ⚠ **백로그 장부는
+> PC별 로컬**(~/.codex-bridge/verify-backlog — 레포에 없음): 작성 PC에 열린 3건+[주의] 승격 1건은 §1-0 끝에
+> 옮겨 적음 — 다른 로컬에서 이어가려면 그쪽 장부에 재등록 권장.
+> ⚠ **3트랙(정찰) 관련 사항은 미완·보존**: 3트랙 본체·설계·백로그는 이번 묶음에서 무변경 보존(정합 목적의
+> 주변 변경 2건만 — 정찰 attempt 서랍 codex-scout-attempts TTL 편입, 프로필 카드의 ④정찰 칸 저장·복원 통로
+> 유지 결선). §5~§11의 3트랙 설계·백로그(게이트 승격 재논의·재실측 70.5% 후속·관측 장부 등)는 추후 진행
+> 예정이므로 삭제·정리 금지.
+> ── (이전 2026-07-16 push 묶음(9커밋) 요지:
 > ①**P-1 완결**(f1d765a+2cac330) — 손상 links.json 덮어쓰기 fail-closed: 기록자 3곳+의미검증+spawn 관문
 > (requireLinksWritable), links-cas 33단언. ②**P-9 진단·검토 문서 3건**(24d6af1·a63c337·6341f93) — 모드 불일치
 > phase 고아 진단, 사용자 제안(질문 호스트 기준 강제 전환) 검토·안전 6조건, 검증 스위치 모드별 분리 설계 동결
@@ -21,8 +45,7 @@
 > 가드 차단 경로는 라이브 미실측(단위 테스트로만 잠김).** ⑤**P-11 등재·종결**(a97ddc6+이 커밋) — 종료 검문
 > '판정 후 마무리 기록' 소음 검토: 원안(마지막 판정 통과=통과) 기각(위험 창=마지막 판정 이후 무검증 수정),
 > 사용자 최종 결정=현행 유지(3회 차단 후 error 감사 기록+추가 차단 없이 종료 — 사소 수정의 자율 종료 허용,
-> 책임은 구현모델), 운영 규칙=마무리 기록을 마지막 검증 앞에 배치. ⑥이 인수인계 갱신. 다음 착수=P-2(PRIVACY)·
-> P-3(TTL)·P-4(손상 job)→P-8 2단·fallback↔훅 경합(§1-0 끝·CODEX-DUAL-PENDING.md 참조).
+> 책임은 구현모델), 운영 규칙=마무리 기록을 마지막 검증 앞에 배치. ⑥이 인수인계 갱신. ──)
 > ── (이전 2026-07-15 push 묶음(3커밋) 요지:
 > ①**P-8 1단**(d0c6af5) — C-C '체크리스트 강제' 체크박스 저장 안 됨 해소: 토글=즉시 저장(그 필드만 재읽기-병합·손상
 > fail-closed), 프로젝트×언어 독립, 응답 수명은 순수 상태기 ckMachine(문서세대 reqId·성공도 화면 좌표 불일치면
@@ -31,7 +54,7 @@
 > 따옴표 시작 토큰 구조 거부), hook-setup PS 사전검사, Reload UX(리로드 버튼·세대별 1회 권고·재신뢰 전이 포착),
 > 옛 설치본 마이그레이션 제안(무표식=수동 안내), 창로드 오경고 억제(조회 실패≠미신뢰 사실), 경고 주어를 사용자
 > hooks.json(실행 권위)으로 정정. Codex 4차 왕복 통과. 순수 상태기 2종(게이트·추적기)은 테스트가 직접 실행.
-> ③인수인계 갱신 — **MAIN PC hooks.json 마이그레이션 실적용·폐루프 확인**(경보 해소·lifecycle 훅 정상·
+> ③인수인계 갱신 — **작성 PC hooks.json 마이그레이션 실적용·폐루프 확인**(경보 해소·lifecycle 훅 정상·
 > 체크리스트 저장 동작 사용자 확인 07-15). ──)
 > ── (이전 2026-07-09 push 묶음(17커밋) 요지:
 > ①**관찰 일지 진화**(복권 규칙[반박 후 사람1/검증2 재확인]·확인 증거 기록 차단 해제·틀림 각주 완화·트림 판정/증거
@@ -85,12 +108,13 @@
 
 ### 1-0. 2026-07-14~16 로컬 진행 — C-C 훅 사가 해결 + P-6/P-6b + 검증 스위치 분리·P-9 자동 전환 완결 (이 섹션이 최신 — 07-16분은 문서 머리 '이번 push 묶음(9커밋) 요지' 참조)
 
-- **훅 미작동 3층 원인 해결(이 PC 폐루프 성공)**: ①리로드 전 장기 실행 app-server가 훅 설치 이전 설정 스냅샷 유지(Reload로 해소) ②핵심 — Codex는 Windows에서 훅을 감지된 기본 셸(PowerShell) -NoProfile -Command로 실행하는데 설치기 생성 명령 '"<node절대경로>" "<script>"'가 PS 파서 오류로 즉사·무로그(업스트림 0.144.0-alpha.4 소스 확인) ③사전검사가 cmd로만 검증(hook-setup.ts:30). **이 PC 핫픽스**: ~/.codex/hooks.json 4훅을 'node "<script>"'로 교체(교체 전 hooks.json 백업 권장·교체 후 Codex 설정>Hooks 4개 재신뢰→Reload→새 C-C 대화에서 heartbeat/경고 소멸 확인). ~~다른 로컬도 같은 핫픽스 필요~~(제품 수정 완료 2026-07-15 — 확장이 옛 형식을 감지해 교체를 제안[무표식=수동 안내]하고, 설치기는 PS·cmd 양쪽 실검증 통과 토큰만 기입. 상세=CODEX-DUAL-PENDING.md P-5). **이 PC(MAIN)도 2026-07-15 옛 형식 실측 확인 후 마이그레이션 writer로 교체 적용, 재신뢰+리로드+프롬프트로 폐루프 성공**(경보 해소·PostToolUse heartbeat 정상·체크리스트 저장 동작까지 사용자 확인 — 백업 hooks.json.bak.2026-07-14T21-38-21-555Z. 경보 해소 조건(정확): C-C 유지 시 대상 슬롯의 hooks/list 신뢰 4/4 + 현재 구현 세션의 최신 lifecycle 하트비트[codex-active/<session>.json, source=codex-hook·현재 turn 일치 — 단 SessionStart는 최신 기존 turn 이후 타임스탬프면 turn 일치 없이 인정] 확인, 또는 C-C 해제 — 신뢰만으론 안 꺼짐. 주의: 테스트 전 실제 사용할 언어 슬롯(ko) 계약이 codex-codex인지 확인[07-15 실측: ko=claude-codex로 되돌아가 있고 C-C는 en 슬롯에만 저장돼 있었음]).
+- **훅 미작동 3층 원인 해결(이 PC 폐루프 성공)**: ①리로드 전 장기 실행 app-server가 훅 설치 이전 설정 스냅샷 유지(Reload로 해소) ②핵심 — Codex는 Windows에서 훅을 감지된 기본 셸(PowerShell) -NoProfile -Command로 실행하는데 설치기 생성 명령 '"<node절대경로>" "<script>"'가 PS 파서 오류로 즉사·무로그(업스트림 0.144.0-alpha.4 소스 확인) ③사전검사가 cmd로만 검증(hook-setup.ts:30). **이 PC 핫픽스**: ~/.codex/hooks.json 4훅을 'node "<script>"'로 교체(교체 전 hooks.json 백업 권장·교체 후 Codex 설정>Hooks 4개 재신뢰→Reload→새 C-C 대화에서 heartbeat/경고 소멸 확인). ~~다른 로컬도 같은 핫픽스 필요~~(제품 수정 완료 2026-07-15 — 확장이 옛 형식을 감지해 교체를 제안[무표식=수동 안내]하고, 설치기는 PS·cmd 양쪽 실검증 통과 토큰만 기입. 상세=CODEX-DUAL-PENDING.md P-5). **작성 PC도 2026-07-15 옛 형식 실측 확인 후 마이그레이션 writer로 교체 적용, 재신뢰+리로드+프롬프트로 폐루프 성공**(경보 해소·PostToolUse heartbeat 정상·체크리스트 저장 동작까지 사용자 확인 — 백업 hooks.json.bak.2026-07-14T21-38-21-555Z. 경보 해소 조건(정확): C-C 유지 시 대상 슬롯의 hooks/list 신뢰 4/4 + 현재 구현 세션의 최신 lifecycle 하트비트[codex-active/<session>.json, source=codex-hook·현재 turn 일치 — 단 SessionStart는 최신 기존 turn 이후 타임스탬프면 turn 일치 없이 인정] 확인, 또는 C-C 해제 — 신뢰만으론 안 꺼짐. 주의: 테스트 전 실제 사용할 언어 슬롯(ko) 계약이 codex-codex인지 확인[07-15 실측: ko=claude-codex로 되돌아가 있고 C-C는 en 슬롯에만 저장돼 있었음]).
 - **P-6 완결(커밋 8a944af)**: '검증 미완 4라운드'(회수 도구 호출이 proof 자기무효화) 구조 해소 — 회수 영수증 계약(job 동결 스냅샷→proof v2[같은 role-lock 재검사+기록]→ask-wait 영수증[결정론 바이트·read-back 후 출력]→Stop은 턴·revision·지문·HEAD OID 결속 체인). C-C에서 직접 ask 금지(ask-start→ask-wait만)·구계약 v1 proof 불인정. 신규 tests/codex-verify-recovery.test.js.
 - **P-6b 완결(커밋 3fdd104)**: 자동 고정의 같은-세션 세대 전진 제거(applyAutoPinUpdate — 같은 세션 재관측=lastSeenAt만)·rollout 스캐너의 hook_prompt 오인 제외(isInjected+bridge 쌍둥이). §5-9의 '보조 고정도 두 revision 증가' 계약은 이 커밋으로 개정됨. 잔여: 다른 세션 첫 프롬프트 fallback↔훅 양방향 경합.
 - **P-7(업스트림·수정판 존재)**: Stop 차단 피드백에 UUIDv7 id → 대화 이어가기 invalid_id_prefix 거부. openai/codex#20783·PR #32312·rust-v0.145.0-alpha.5 수정. 이 PC는 확장 재시작으로 0.144.2 로드(backport 미확정 — 라이브에서 재발 시 새 대화 우회). 상세=CODEX-DUAL-PENDING.md P-7.
 - **P-8(1단 구현 완료 2026-07-15 · 2단 백로그)**: C-C '체크리스트 강제' 체크박스 저장 안 됨(state 푸시가 저장 전 DOM 되돌림). **1단 반영: 토글=즉시 저장·재읽기-단일필드 병합(patchContractFields — 손상 fail-closed)·큰 저장에서 체크리스트 제외·프로젝트×언어 독립·응답 수명=순수 상태기 ckMachine(서술자 결속, 성공도 화면 좌표 불일치면 hold — 재활성·되돌림 없이 정본 state 채움만이 값·활성화 적용, 5초 만료 자기 회복)·호스트 모드 결속 기록 거부(fail-closed) — ★2026-07-16 갱신: 잠금 축은 '검증 스위치 분리' 묶음(ae9932b)에서 선반영됨 — patchContractFields·확장·스크립트 작성자 전부 계약 파일 잠금 참여(동시 저장 lost-update 해소). 2단 백로그의 잔여는 v10의 나머지(복구 사다리·통합 updateContractPatch 계약)뿐. 테스트 tests/p8-checklist=도우미 실동작+배선 잠금+상태기 순서 반례 실행**. 이력: 설계 10왕복 끝 사용자 방침=2단이었고, 1단 설계 '당시'에는 무잠금 lost-update가 알려진 한계·2단 백로그가 '전 작성자 잠금 도입'이었음 → ae9932b에서 잠금 축이 선반영돼 그 한계는 해소, 현재 2단 잔여=v10의 복구 사다리·통합 updateContractPatch 계약뿐. 전체 설계·사용자 구조 원칙(프로젝트×언어×모드 분리·3트랙만 공용)=CODEX-DUAL-PENDING.md P-8.
-- 다음 순서: ~~①P-8 최소 수정~~(완료 2026-07-15) ~~②P-5 제품 수정~~(완료 2026-07-15 — 설치기 dual-shell 실검증·PS 사전검사·Reload UX 계약 ①~⑤·마이그레이션·창로드 오경고 억제[조회 실패≠미신뢰 사실, fail-closed는 대시보드 경보 유지] · tests/p5-hook-command, 상세=CODEX-DUAL-PENDING.md P-5) ~~③검증 스위치 모드별 분리+P-10~~(완료 2026-07-16 ae9932b) ~~④P-9 자동 전환 본체+성공 Stop done 종결~~(완료 2026-07-16 1d31617 — 라이브는 사례 ①④·한글만 실측) ⑤~~P-12 검증 강도 프로필 이원화(핵심/무결성)~~(**1단 구현 완료 2026-07-17** — 설계 동결 v2.1[9왕복: 확장 6왕복 후 비례성 축소 — nonce 완전 결속은 2단 이관]·계약 필드 verifyProfile/codexVerifyProfile[부재=integrity·C-C 상속]·core 프리셋 ko/en[심각도 게이트·(백로그) 분리·자동수정 금지·교착 시 보류 승격·승격 게이트 권장]·오버라이드는 integrity만[core=캐논 고정]·ask 시작 시점 동결[job 저장→worker 소비·footer 동일값·legacy=integrity]·대시보드 프로필 세그+정직 라벨+전환 효력 정확 고지·tests/p12-profile 49단언(정본 판독 실행 검증 포함). 잔여=2단[ⓚ: 기계 집행·백로그 장부·예산 카운터·nonce 결속·custom·통계 — P-2/P-3와 함께]. 정본=CODEX-DUAL-PENDING.md P-12 계약 ⓐ~ⓛ) ⑥~~P-12 2a+P-2·P-3·P-4~~(**완료 2026-07-17** — [2a] 검증 백로그 장부 verify-backlog/<wsKey>.jsonl: 전 명령 <파일>.lock 직렬화[실패=기록 거부]·fold=append 줄 순서[ts=표시용]·id=sha256(정규화 제목|경로) 16hex 중복 제거·tag 단조 승격[백로그→주의만]·재발견=reopen·손상 줄 fail-visible[개수 경고·clear 원문 보존]·TTL 비대상[수동 clear만]·민감 최소화[제목 200자·비밀 원문 금지·ws 내부 상대화/외부 basename], CLI backlog add(id 영수증)/list/done/dismiss/clear, core 재판단 규약에 기록+id 인용 의무 연결. [P-2~P-4] ask-jobs 7일 스윕[부속물 포함]+PRIVACY 표 7행, 서랍 3종 TTL 편입, 손상 차단 심화: 의미 손상[스키마·id↔파일명·state]도 차단·clear는 생성과 같은 잠금+queued&deadline 미경과 삭제 거부+이중 PID 생존 검사·파싱 불가=삭제 아닌 원자 격리[원문 보존·60분 시한부 차단 유지]. tests/p234-hygiene 25단언+p12-backlog 28단언. 설계 동결 5왕복[격리 시한부·fold 권위 단일화·전이표·경합 직렬화]. P-1은 07-15 해결. 2b 예산·2c 기계 판독·2d 통계/승격=착수 시 상세 동결, 정본=CODEX-DUAL-PENDING.md P-12 ⓚ) ⑦P-8 2단·fallback↔훅 경합 백로그 ⑧3fdd104 커밋 본문·주석의 P-6b 사건 순서 서술 정정 동승. P-11은 검토 후 현행 유지로 종결(07-16).
+- 다음 순서: ~~①P-8 최소 수정~~(완료 2026-07-15) ~~②P-5 제품 수정~~(완료 2026-07-15 — 설치기 dual-shell 실검증·PS 사전검사·Reload UX 계약 ①~⑤·마이그레이션·창로드 오경고 억제[조회 실패≠미신뢰 사실, fail-closed는 대시보드 경보 유지] · tests/p5-hook-command, 상세=CODEX-DUAL-PENDING.md P-5) ~~③검증 스위치 모드별 분리+P-10~~(완료 2026-07-16 ae9932b) ~~④P-9 자동 전환 본체+성공 Stop done 종결~~(완료 2026-07-16 1d31617 — 라이브는 사례 ①④·한글만 실측) ⑤~~P-12 검증 강도 프로필 이원화(핵심/무결성)~~(**1단 구현 완료 2026-07-17** — 설계 동결 v2.1[9왕복: 확장 6왕복 후 비례성 축소 — nonce 완전 결속은 2단 이관]·계약 필드 verifyProfile/codexVerifyProfile[부재=integrity·C-C 상속]·core 프리셋 ko/en[심각도 게이트·(백로그) 분리·자동수정 금지·교착 시 보류 승격·승격 게이트 권장]·오버라이드는 integrity만[core=캐논 고정]·ask 시작 시점 동결[job 저장→worker 소비·footer 동일값·legacy=integrity]·대시보드 프로필 세그+정직 라벨+전환 효력 정확 고지·tests/p12-profile 49단언(정본 판독 실행 검증 포함). 2단 중 2a 백로그 장부는 ⑥에서 완료 — 잔여=2b 예산·2c 기계 판독·2d 통계/승격+nonce 결속(⑦ 참조). 정본=CODEX-DUAL-PENDING.md P-12 계약 ⓐ~ⓛ) ⑥~~P-12 2a+P-2·P-3·P-4~~(**완료 2026-07-17** — [2a] 검증 백로그 장부 verify-backlog/<wsKey>.jsonl: 전 명령 <파일>.lock 직렬화[실패=기록 거부]·fold=append 줄 순서[ts=표시용]·id=sha256(정규화 제목|경로) 16hex 중복 제거·tag 단조 승격[백로그→주의만]·재발견=reopen·손상 줄 fail-visible[개수 경고·clear 원문 보존]·TTL 비대상[수동 clear만]·민감 최소화[제목 200자·비밀 원문 금지·ws 내부 상대화/외부 basename], CLI backlog add(id 영수증)/list/done/dismiss/clear, core 재판단 규약에 기록+id 인용 의무 연결. [P-2~P-4] ask-jobs 7일 스윕[부속물 포함]+PRIVACY 표 7행, 서랍 3종 TTL 편입, 손상 차단 심화: 의미 손상[스키마·id↔파일명·state]도 차단·clear는 생성과 같은 잠금+queued&deadline 미경과 삭제 거부+이중 PID 생존 검사·파싱 불가=삭제 아닌 원자 격리[원문 보존·60분 시한부 차단 유지]. tests/p234-hygiene 29단언+p12-backlog 30단언. 설계 동결 5왕복[격리 시한부·fold 권위 단일화·전이표·경합 직렬화]+구현 검증 4왕복[의미 손상 수용·../ 탈출·..세그먼트 경계·id 축소 오삭제 등 전부 봉합, 통과(보완)]. P-1은 07-15 해결.) ⑦**다음 착수=P-12 2단 잔여 2b~2d**(2b 왕복 예산[사용자 설정·campaign 단위·소진 시 blocker 잔존=보류 승격]→2c 기계 판독 딱지[구조화 지적 블록·자동 장부 등록·'실패'↔blocker 정합]→2d 통계·승격 자동화+nonce 완전 결속 후보 — 각각 착수 시 상세 동결, 정본=CODEX-DUAL-PENDING.md P-12 ⓚ) ⑧P-8 2단 잔여(v10 복구 사다리·통합 updateContractPatch)·fallback↔훅 경합 백로그 ⑨3fdd104 커밋 본문·주석의 P-6b 사건 순서 서술 정정 동승 ⑩3트랙(정찰) 잔여는 미완·보존(§5~§11 — 게이트 승격 재논의·재실측 70.5% 후속 등, 추후 진행. 이번 묶음은 본체·설계 무변경이나 정합 목적 주변 변경 2건은 있음 — 머리말 ⚠ 참조). P-11은 검토 후 현행 유지로 종결(07-16).
+- **작성 PC 백로그 장부 열린 3건(07-17 이관 — 장부는 PC별 로컬이라 레포에 없음, 다른 로컬에서는 `backlog add`로 재등록 권장)**: ⑴`5b6fff1d950b08a9` backlog CLI list 영문 모드에서 태그·횟수 라벨(주의/백로그/회) 한국어 잔존 — 표시 번역 필요(bridge/codex-bridge.js) ⑵`25dd39231bc50a9f` 장부 동시 프로세스 경합(add vs clear)의 실제 자식 프로세스 회귀 테스트 부재(현재는 잠금 보유 거부 테스트만, tests/p12-backlog.test.js) ⑶`12fc4f498f9a9e74` 의미 손상 add(not-a-hash id) 반례가 지속 회귀 테스트에 미포함(검증에서 1회 실행 확인만). **+[주의] 사용자 승격 1건(수정 안 함·데이터·증적 훼손 없음 판정 07-17 — 운영 영향은 있음)**: 손상 ask-job 격리 차단이 시계 보정 시 문서상 60분이 아니라 최대 ~119분 가능(그동안 해당 ws의 새 검증 시작이 차단됨. `|now-격리시각|<60분` 대칭 판정 — 무기한 아님·안전 방향, bridge/codex-bridge.js QUARANTINE_BLOCK_MS).
 
 ### 1-1. 2026-07-12 로컬 진행 — 검증 deadline 일치 + Codex↔Codex 이원화
 
