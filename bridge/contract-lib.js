@@ -45,6 +45,21 @@ function cleanupOldState(now) {
   sweep(CODEX_ACTIVE_DIR, ACTIVE_TTL_MS);
   sweep(path.join(BRIDGE_DIR, "codex-recovery"), PROOF_TTL_MS); // 회수 영수증 — proof와 같은 수명(설계 v5.1)
   sweep(path.join(BRIDGE_DIR, "scout-gate-attempts"), ATTEMPTS_TTL_MS); // 게이트 세션 카운터 — 검증 재시도와 같은 7일(단명 상태)
+  // P-3: C-C 훅이 만드는 세션 단명 상태 3서랍 — 세션 수만큼 무기한 누적되던 것을 TTL 편입.
+  // 전부 턴/세션 단명 카운터·메타라 재검증 카운터와 같은 7일(휴면 재개는 새 턴이 새 파일을 만들므로 무해).
+  sweep(path.join(BRIDGE_DIR, "codex-turns"), ATTEMPTS_TTL_MS);
+  sweep(path.join(BRIDGE_DIR, "codex-verify-attempts"), ATTEMPTS_TTL_MS);
+  sweep(path.join(BRIDGE_DIR, "codex-scout-attempts"), ATTEMPTS_TTL_MS);
+  // P-2: 내구 검증 작업(ask-jobs)은 프롬프트(.json)·응답(.out)·오류(.err)를 담으므로 짧게 보존.
+  // 회수·재판단은 그 턴 안에서 끝나고 deadline 상한이 60분이라, mtime 7일이면 살아있는 작업일 수 없다.
+  // 공용 sweep은 .json만 보므로 부속물(.out/.err/.pid·비정상 잔존 .lock-*)까지 전용 스윕으로 함께 정리.
+  try {
+    const jobsDir = path.join(BRIDGE_DIR, "ask-jobs");
+    for (const n of fs.readdirSync(jobsDir)) {
+      const f = path.join(jobsDir, n);
+      try { if (now - fs.statSync(f).mtimeMs > ATTEMPTS_TTL_MS) { fs.unlinkSync(f); removed++; } } catch { /* 잠김/사라짐 → 건너뜀 */ }
+    }
+  } catch { /* 폴더 없음 = 정리할 것 없음 */ }
   return removed;
 }
 // 하루 한 번만 best-effort 정리(마커 파일 mtime으로 가드). 훅/브릿지가 매 턴 불러도 실제 청소는 하루 1회.
@@ -2043,7 +2058,7 @@ const BASE_CORE = {
     "[검증 기본 원칙 · 핵심 프로필 — 직접 영향 중심]",
     "1) 논리 구조만으로 단정하지 말고, 코드·파일을 실제로 열어 확인해 검증하라.",
     "2) 검증 대상은 '요청이 선언한 목표·인수조건과 그 직접 영향'이다. 지정된 파일·범위는 시작점이되, 범위 밖 확장은 직접 의존이나 안전 불변식 위반 의심 같은 구체 사유가 있을 때만 하고 그 사유를 해당 항목에 표기하라.",
-    "3) 판정 규약(핵심 프로필): '검증: 실패'는 미해결 blocker가 최소 1개일 때만 쓴다. blocker는 항목의 종류가 아니라 실질 영향으로 판정한다 — ①선언된 인수조건 안에서 재현 가능하거나 신뢰할 수 있는 오작동 경로 ②데이터·보안·역할·증명 무결성 훼손(희귀 경합이라도 여기 해당하면 blocker) ③명시 요구사항 위반 ④핵심 인수조건을 입증할 실행 증거 부재 ⑤직접 연관된 고위험 회귀. 이에 해당하지 않는 지적(현재 범위 밖 잔여 위험, 실행 결과를 바꾸지 않는 문구·구조 개선, 추가 방어 권고)은 각 항목 머리에 '[백로그]'를 붙여 분리하라 — blocker가 없으면 판정은 '검증: 통과(보완)'.",
+    "3) 판정 규약(핵심 프로필): '검증: 실패'는 미해결 blocker가 최소 1개일 때만 쓴다. blocker는 항목의 종류가 아니라 실질 영향으로 판정한다 — ①선언된 인수조건 안에서 재현 가능하거나 신뢰할 수 있는 오작동 경로 ②데이터·보안·역할·증명 무결성 훼손(희귀 경합이라도 여기 해당하면 blocker) ③명시 요구사항 위반 ④핵심 인수조건을 입증할 실행 증거 부재 ⑤직접 연관된 고위험 회귀. 이에 해당하지 않는 지적은 두 갈래로 분리하라: blocker는 아니지만 보안·개인정보·데이터 손상·복구 불능·운영 오판 위험에 '인접'한 항목은 머리에 '[주의]'를 붙이되 그 위험으로 이어지는 구체 경로를 한 줄 명시하라(경로를 못 대면 [백로그] — 남용 방지. 구현모델이 심각성을 재판단해 이번 루프 처리 여부를 결정한다 — 침묵 이관 금지 대상), 그 외(범위 밖 잔여 위험, 실행 결과를 바꾸지 않는 문구·구조 개선, 일반 방어 권고)는 '[백로그]'를 붙여라. blocker가 없으면 판정은 '검증: 통과(보완)'.",
     "4) 본문에 검토 내용·항목별 근거(경로·라인)를 '먼저' 상세히 작성하라. 판정 결론은 반드시 '맨 마지막 한 줄'에만 다음 4가지 중 정확히 하나로 출력하라: '검증: 통과' / '검증: 통과(보완)' / '검증: 보류' / '검증: 실패'. 마지막 줄 외에는 '검증:'으로 시작하는 줄을 쓰지 마라.",
   ].join("\n"),
   transmit: [
@@ -2055,8 +2070,9 @@ const BASE_CORE = {
   rejudge: [
     "[재판단 · 핵심 프로필] 검증모델 답을 그대로 옮기지 마라:",
     "- 지적을 항목으로 나눠 [수용/반박/보류] + 근거(파일·라인)를 달라. 수용에는 직접 확인한 근거가 있어야 한다.",
+    "- '[주의]' 항목(보안·데이터 인접)은 심각성을 스스로 재판단하라: 실질 위험이 있다고 보면 blocker 수정과 같은 루프에서 함께 고치고(추가 재검증은 1회에 동승), 아니라고 보면 그 근거를 달아 사용자 보고로 승격하라 — 근거 없는 조용한 백로그 이관 금지.",
     "- '[백로그]' 항목은 이 루프에서 수정하지 마라 — 사용자 최종 보고에 백로그 목록으로 그대로 전달한다(지금 고치면 최종본 재검증 의무가 다시 발동해 왕복만 늘어난다).",
-    "- blocker(실패 사유)만 고치고 재검증하라. 완료 보고는 '통과'/'통과(보완)' 후에만.",
+    "- blocker(실패 사유)는 반드시 고치고, '[주의]'는 위 재판단에서 이번 루프 처리로 결정한 항목만 함께 고쳐 재검증하라(그 외는 새 수정 금지). 완료 보고는 '통과'/'통과(보완)' 후에만.",
     "- 재검증이 반복·교착되는데 blocker가 잔존하면 통과로 포장하지 말고 '보류'로 사용자에게 선택을 넘겨라.",
     "- 묶음 완성·로컬 커밋 후 push·배포 전에 무결성 프로필로 승격 검증 1회를 권장한다.",
   ].join("\n"),
@@ -2066,7 +2082,7 @@ const BASE_CORE_EN = {
     "[Verification Baseline · Core profile — direct-impact focused]",
     "1) Do not conclude from logical structure alone — actually open and inspect the code/files to verify.",
     "2) The verification target is the declared goal/acceptance criteria and their direct impact. The given files/scope are a starting point; expand beyond them only with a concrete reason (direct dependency, suspected safety-invariant violation) and note that reason on the item.",
-    "3) Verdict rule (core profile): use 'Verdict: fail' only when at least one unresolved blocker exists. A blocker is judged by real impact, not category — (1) a reproducible or credible malfunction path within the declared acceptance criteria, (2) damage to data/security/role/proof integrity (even a rare race, if it qualifies), (3) violation of an explicit requirement, (4) missing executable evidence for a core acceptance criterion, (5) directly related high-risk regression. Non-blocking findings (residual risk outside the current scope, wording/structure improvements that change no behavior, extra-hardening advice) must be prefixed with '[backlog]' — with no blocker, the verdict is 'Verdict: pass (notes)'.",
+    "3) Verdict rule (core profile): use 'Verdict: fail' only when at least one unresolved blocker exists. A blocker is judged by real impact, not category — (1) a reproducible or credible malfunction path within the declared acceptance criteria, (2) damage to data/security/role/proof integrity (even a rare race, if it qualifies), (3) violation of an explicit requirement, (4) missing executable evidence for a core acceptance criterion, (5) directly related high-risk regression. Split non-blocking findings in two: items adjacent to security/privacy/data-loss/unrecoverable-state/operational-misjudgment risk get the '[caution]' prefix with a one-line concrete path to that risk (no concrete path — use '[backlog]' instead; the implementer re-judges their severity and decides whether to handle them in this loop — never silently deferred), and the rest (residual out-of-scope risk, wording/structure improvements that change no behavior, general hardening advice) get '[backlog]'. With no blocker, the verdict is 'Verdict: pass (notes)'.",
     "4) Write the review details FIRST in the body with per-item evidence (path·line). Output the verdict only as the VERY LAST line, as exactly one of: 'Verdict: pass' / 'Verdict: pass (notes)' / 'Verdict: inconclusive' / 'Verdict: fail'. Do not write any other line starting with 'Verdict:'.",
   ].join("\n"),
   transmit: [
@@ -2078,8 +2094,9 @@ const BASE_CORE_EN = {
   rejudge: [
     "[Re-judgment · Core profile] Do not copy the verifier's answer verbatim:",
     "- Split points into items with [accept/rebut/hold] + evidence (file·line). Accepted items need evidence you checked yourself.",
+    "- Re-judge the severity of '[caution]' items (security/data-adjacent) yourself: if you judge the risk real, fix them in the same loop as the blockers (any extra re-verification rides along once); if not, escalate them to the user's report with your reasoning — never silently defer them to the backlog.",
     "- Do NOT fix '[backlog]' items in this loop — pass them through to the user's final report as a backlog list (fixing them now re-triggers the final-state re-verification duty and only inflates round-trips).",
-    "- Fix only blockers (fail reasons), then re-verify. Report completion only after 'pass' or 'pass (notes)'.",
+    "- Always fix the blockers, plus only those '[caution]' items you decided above to handle in this loop, then re-verify (no other new fixes). Report completion only after 'pass' or 'pass (notes)'.",
     "- If re-verification stalls with blockers remaining, do not package it as a pass — escalate to the user as 'inconclusive/hold'.",
     "- After the bundle is complete and locally committed, one integrity-profile escalation verification before push/deploy is recommended.",
   ].join("\n"),
@@ -2267,15 +2284,15 @@ const VERDICT_ACTION_EN = {
 // (완료 시점 계약 재읽기 금지 — 계약 ⓓ). 미지정=integrity 문구(무회귀).
 const VERDICT_ACTION_CORE = {
   pass: "조치 없음 — 단, 본문에 보완·주의·수정 항목이 보이면 선언 결론보다 본문 항목을 우선 처리하라.",
-  "pass-notes": "보완 의견 있음 — '[백로그]' 항목은 이 루프에서 수정하지 말고 사용자 최종 보고에 백로그 목록으로 전달하라. 백로그가 아닌 보완만 [수용/반박/보류]로 처리하라.",
+  "pass-notes": "보완 의견 있음 — '[주의]' 항목은 심각성을 재판단해 지금 고치거나(추가 재검증 1회 동승) 근거와 함께 사용자 보고로 승격하라(조용한 이관 금지). '[백로그]' 항목은 수정하지 말고 백로그 목록으로 전달하라. 나머지 보완만 [수용/반박/보류]로 처리하라.",
   inconclusive: "추가 확인 필요 — 판단 보류 사유와 다음 확인 지점을 보고하라. blocker가 잔존한 교착이면 사용자에게 선택을 넘겨라.",
-  fail: "수정 필요 — blocker(실패 사유)만 고친 뒤 재검증하라. '[백로그]' 항목은 수정하지 말고 보고에 전달하라.",
+  fail: "수정 필요 — blocker(실패 사유)를 고치고, '[주의]' 항목은 심각성을 재판단해 같은 루프에서 함께 고칠지 결정한 뒤 재검증하라. '[백로그]' 항목은 수정하지 말고 보고에 전달하라.",
 };
 const VERDICT_ACTION_CORE_EN = {
   pass: "No action — but if the body contains supplement/caution/fix items, prioritize those body items over the declared verdict.",
-  "pass-notes": "Notes present — do NOT fix '[backlog]' items in this loop; pass them to the user's final report as a backlog list. Handle only non-backlog notes as [accept/rebut/hold].",
+  "pass-notes": "Notes present — re-judge each '[caution]' item's severity: fix it now (any extra re-verification rides along once) or escalate it to the user with reasoning (never defer silently). Do NOT fix '[backlog]' items; pass them through as a backlog list. Handle remaining notes as [accept/rebut/hold].",
   inconclusive: "Further verification needed — report the hold reason and next checkpoints. If blockers remain in a stalemate, escalate the choice to the user.",
-  fail: "Fix required — fix only the blockers (fail reasons), then re-verify. Do not fix '[backlog]' items; pass them through in the report.",
+  fail: "Fix required — fix the blockers, re-judge each '[caution]' item and decide whether to fix it in the same loop, then re-verify. Do not fix '[backlog]' items; pass them through in the report.",
 };
 function formatForClaude(answer, lang, profile) {
   const text = String(answer || "");

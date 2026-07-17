@@ -30,19 +30,22 @@
   saveLinks export 봉인(단일 관문=updateLinks). 테스트 links-cas [P-1] 33단언(구문·의미 7종×2경로·게이트
   3종·EACCES monkey-patch). 후속 후보: cmdLink exit code 정밀화·확장 파서 공용 함수화.
 
-### P-2. [정책 위반] ask-jobs 내구 작업이 프롬프트·응답 영구 보존하는데 PRIVACY.md는 반대 고지
+### P-2. [해결 2026-07-17] ask-jobs 내구 작업이 프롬프트·응답 영구 보존하는데 PRIVACY.md는 반대 고지
+- **해결**: cleanupOldState에 ask-jobs 전용 스윕(7일 — 부속물 .out/.err/.pid·잔존 .lock 포함, deadline 상한 60분이라 mtime 7일=사망 확정), PRIVACY 73행 정정(내구 경로 예외 명시·즉시 삭제 방법)+표에 ask-jobs 행 추가. tests/p234-hygiene.
 - 위치: bridge/codex-bridge.js:1104(프롬프트를 ask-jobs/<id>.json의 prompt에 기록),
   ask-job-worker.js:64(응답·오류를 .out/.err에 기록). 자동 삭제 없음 — codex-bridge.js:1159 `ask-job clear`만 삭제.
 - 문제: PRIVACY.md:73은 "프롬프트를 디스크에 쓰지 않고 출력 임시파일도 곧 지운다"고 단정, ask-jobs/를 데이터 표에 미열거.
 - 이어서 할 것: 보존 정책+자동 정리(또는 명시 삭제 계약) 구현 후 PRIVACY.md 표에 ask-jobs/ 위치·내용·수명 명시.
 
-### P-3. [운영] 신규 Codex 상태 서랍이 TTL 정리·문서화 대상에서 빠짐
+### P-3. [해결 2026-07-17] 신규 Codex 상태 서랍이 TTL 정리·문서화 대상에서 빠짐
+- **해결**: codex-turns/·codex-verify-attempts/·codex-scout-attempts/ 3서랍을 TTL 정리 편입(7일 — 재검증 카운터와 동일·단명 상태 근거 주석), PRIVACY 표에 3서랍+codex-active(30일)+codex-recovery(90일) 행 추가. tests/p234-hygiene(8일=삭제·1일=보존 실행 검증).
 - 위치: codex-hook.js:17이 codex-turns/·codex-verify-attempts/·codex-scout-attempts/ 생성.
   contract-lib.js:31의 TTL 정리(maybeCleanupState)가 이 셋을 소비하지 않음 → 세션 수만큼 무기한 누적.
   codex-active/는 30일 정리되나 PRIVACY 표에 미열거.
 - 이어서 할 것: 세 서랍 TTL 정리 편입 + PRIVACY 표에 위치·내용(세션/워크스페이스/turn/권한모드 메타)·수명 고지 + TTL 테스트.
 
-### P-4. [내구성] 손상된 내구 job을 건너뛰어 중복 검증 시작 가능
+### P-4. [해결 2026-07-17] 손상된 내구 job을 건너뛰어 중복 검증 시작 가능
+- **해결**: corruptAskJobFiles() 진단 신설, cmdAskStart 임계구역에서 손상 존재 시 신규 생성 차단(fail-closed — 손상 파일 workspace 판독 불가라 보수 전체 차단)+해소 절차 안내(ask-job clear·7일 자동 정리). activeAskJob의 건너뛰기(타 작업 보호)는 유지. tests/p234-hygiene.
 - 위치: codex-bridge.js:1074 activeAskJob이 JSON 판독 실패 무시 → :1101에서 신규 worker 생성 선행조건으로 사용.
 - 문제: 실행 중 job 파일 손상·일시 판독 불가 시 "활성 작업 없음"으로 축소→중복 worker 생성 가능.
 - 이어서 할 것: 손상 job은 진단 후 신규 생성 차단(내구 작업 계약 정합).
@@ -538,7 +541,7 @@
   최종본 재검증 의무 ⑤의미 왕복 예산·중복 지적 장부 부재 ⑥요청문 경계 불명확. **지시문 프리셋만으론 구조적
   상한 보장 없음** — 판정 규약·처리 의무가 같이 바뀌어야 실효.
 
-#### 설계 계약 v2.1 (동결 2026-07-17 — 1단 '축소' 범위 · v1→v1.6 6왕복 후 비례성 축소, v2.0→v2.1 문구 정밀화)
+#### 설계 계약 v2.2 (동결 2026-07-17 — 1단 '축소' 범위 · v1→v1.6 6왕복 후 비례성 축소, v2.0→v2.1 문구 정밀화, v2.2=사용자 검토 지시로 [주의] 중간 딱지 신설)
 - ⓐ **저장**: 계약 필드 `verifyProfile`(CL-C 슬롯)·`codexVerifyProfile`(C-C 슬롯), 값 `"integrity"|"core"`.
   부재=integrity(무회귀), C-C 부재 시 verifyProfile 상속(codexVerifyMode와 동형 규칙). 로드 시 정규화.
   큰 저장(rolePatch)이 실효 fallback 값을 원시 필드로 굳히지 않는다(ae9932b 교훈 동일 적용 — 명시 변경만 기록).
@@ -550,8 +553,13 @@
 - ⓒ **core 심각도 게이트(프롬프트 계약)**: '실패'는 미해결 blocker가 최소 1개일 때만 — blocker는 항목
   '종류'가 아니라 실질 영향: ①선언된 인수조건 내 재현/신뢰 가능한 오작동 경로 ②데이터·보안·역할·proof
   무결성 훼손(희귀 경합이라도 해당하면 실패) ③명시 요구사항 위반 ④핵심 인수조건을 입증할 실행 증거 부재
-  ⑤직접 연관 고위험 회귀. 비차단(범위 밖 잔여 위험·실행 결과를 바꾸지 않는 문구/구조 개선·추가 방어 권고)은
-  본문에서 `[백로그]` 접두로 분리 표기하고 판정은 통과(보완).
+  ⑤직접 연관 고위험 회귀. 비차단은 두 갈래(v2.2 —
+  사용자 지적: '심각·크리티컬만 잡기'로 흘러 보안 인접 부채가 침묵 누적되는 구조 방지): **[주의]**=blocker는
+  아니나 보안·개인정보·데이터 손상·복구 불능·운영 오판 위험에 인접 — 태깅 시 그 위험으로 이어지는 구체
+  경로 1줄 필수(못 대면 [백로그] — 남용 방지), 구현모델이 심각성을 재판단해 이번 루프 처리(추가 재검증
+  1회 동승) 또는 근거와 함께 사용자 승격(조용한 백로그 이관 금지), **[백로그]**=그 외
+  (범위 밖 잔여 위험·실행 결과 불변 문구/구조·일반 방어 권고) — 목록 전달만. blocker 없으면 판정은
+  통과(보완). 참고: findings-first·처리 의무 발췌 재배치(사용자 눈≠모델 눈)는 프로필 무관 공통 유지.
 - ⓓ **core 처리 의무(재판단·formatForClaude)**: `[백로그]` 항목은 현재 루프에서 자동 수정 금지 — 사용자
   최종 보고에 백로그 목록으로 전달(1단=보고 의무·저장 장부는 2단). formatForClaude가 '동결된 프로필' 인자를
   받아 core의 pass-notes/fail 처리 의무 문구를 이 규약으로 교체. **결선 위치(동결 검증 1차 정정)**: footer는
