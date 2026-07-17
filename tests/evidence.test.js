@@ -27,6 +27,16 @@ console.log("[1] 범위 내 인용 → 불일치 없음(노이즈 방지)");
 ok(checkCitedEvidence(`근거 [foo](${abs}:5) 확인`, ws).length === 0, "5줄 파일의 :5 = OK");
 ok(checkCitedEvidence(`[foo](${abs}:1) [foo](${abs}:3)`, ws).length === 0, ":1·:3 모두 OK");
 
+console.log("[1b] 선행 슬래시 드라이브 절대경로(/D:/...) 정규화 — 2026-07-17 오경보 실사고 반례");
+// 정규화 없으면: 절대/상대 해석 실패 → basename 폴백이 ws의 '이름만 같은 다른 파일'(줄수 2)과 대조 → 정확한 인용이 오경보.
+fs.writeFileSync(path.join(ws, "decoy-dir.js"), "1\n2"); // 이름 다른 파일이라 basename 폴백 비대상 — 유일성 오염 방지용 아님
+const slashAbs = "/" + abs; // d:/... → /d:/...
+ok(checkCitedEvidence(`[foo](${slashAbs}:5) 확인`, ws).length === 0, "/드라이브: 절대경로 :5(범위 내) = OK(원 파일로 해석)");
+ok(checkCitedEvidence(`[foo](${slashAbs}:99)`, ws).length === 1, "/드라이브: 절대경로 :99 = 원 파일 기준 불일치(엉뚱한 파일 대조 아님)");
+const decoyWs = path.join(dir, "ws-decoy"); fs.mkdirSync(decoyWs, { recursive: true });
+fs.writeFileSync(path.join(decoyWs, "foo.js"), "1\n2"); // 같은 basename·2줄 — 폴백이 이걸 봤다면 :5도 불일치가 됐을 것
+ok(checkCitedEvidence(`[foo](${slashAbs}:5)`, decoyWs).length === 0, "ws에 동명 미끼(2줄)가 있어도 절대경로가 이겨 오경보 없음(실사고 재현 반례)");
+
 console.log("[2] 범위 초과 인용 → 불일치(존재하지 않는 줄)");
 ok(checkCitedEvidence(`[foo](${abs}:99)`, ws).length === 1, "5줄 파일의 :99 = 불일치");
 ok(/99/.test(checkCitedEvidence(`[foo](${abs}:99)`, ws)[0]), "불일치 메시지에 라인 표시");

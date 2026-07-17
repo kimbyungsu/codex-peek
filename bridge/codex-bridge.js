@@ -203,6 +203,11 @@ function resolveCitedPath(raw, ws) {
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(p)) return null; // URL(https:// 등)은 로컬 파일 아님 → 건너뜀(cry-wolf 방지)
   const mnt = p.match(/^\/mnt\/([a-zA-Z])\/(.*)$/); // /mnt/d/... → d:/...
   if (mnt) p = mnt[1] + ":/" + mnt[2];
+  // /D:/... → D:/... (검증자가 마크다운 링크에 즐겨 쓰는 선행 슬래시 절대경로 — 이 정규화가 없으면 절대/상대
+  // 해석이 모두 실패한 뒤 basename 폴백이 ws의 '이름만 같은 무관 파일'과 대조해 오경보를 낸다. 2026-07-17
+  // 실사고: 정확한 인용 docs/HANDOFF.md:116을 대화 폴더의 79줄짜리 옛 HANDOFF.md와 대조해 불일치 2건 오보.)
+  const drv = p.match(/^\/([a-zA-Z]):\/(.*)$/);
+  if (drv) p = drv[1] + ":/" + drv[2];
   try { if (path.isAbsolute(p) && fs.existsSync(p) && fs.statSync(p).isFile()) return p; } catch { /* */ }
   try { const c = path.join(ws, p); if (fs.existsSync(c) && fs.statSync(c).isFile()) return c; } catch { /* */ }
   const hits = findByBasename(ws, path.basename(p), 6, 5000);
