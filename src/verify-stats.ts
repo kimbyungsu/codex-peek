@@ -22,7 +22,21 @@ export interface VerifyStats {
   resolved7: number;       // 최근 7일 '실패/보류 뒤 통과' 전환 근사(같은 세션·14일내 직전 unclean→pass). '잡은 문제 수'가 아님 — UI 라벨도 이 톤으로
   byModel: Record<string, { count: number; tokens: number }>; // 흐름 28일: 모델별 검증 건수·코덱스 토큰(1회분 합). 과거 기록은 model 없어 '(미상)'
   byMode: Record<string, { count: number; tokens: number }>;  // 흐름 28일: 검증모드(플랜/코드/올웨이즈)별 건수·토큰
+  // ── P-12 2d(설계 동결 v1~v7) — 프로필 효과·캠페인·승격 안내 재료(전부 28일 창·accepted 행 기준) ──
+  // 판정 버킷·운영 수치는 '실효 판정'(machineEffective ?? verdict — 2c 실효 권위) 기준. outcome이 있는 비-accepted
+  // 행(run-error 등)은 판정 버킷에 넣지 않고 outcomes28에만 계수. 과거 행(필드 부재)=profile '(unknown)'.
+  byProfile: Record<string, { attempts: number; count: number; effFail: number; effInconclusive: number; demoted: number; corrected: number; durationMsSum: number; durationCount: number }>; // attempts=outcome 무관 전 시도(실패 귀속 보존 — 구현검증 2차 blocker)·count=accepted(판정 있는 검증)만
+  outcomes28: { runError: number; sessionUnresolved: number; proofRejected: number; postprocessError: number }; // 실행 실패 계수(승격·판정 미산입)
+  campaigns28: {
+    total: number; coreOnly: number; integrityOnly: number; mixed: number;      // 캠페인 3분류(혼합 과대계상 차단 — 1차 B3)
+    avgRoundsCore: number | null; sampleCore: number;                            // 단일 프로필·완전 추적 캠페인만의 평균 왕복(표본 분모=캠페인 수·정책값 MIN_SAMPLE=5)
+    avgRoundsIntegrity: number | null; sampleIntegrity: number;
+    untrackedRows: number; trackedRows: number; campaignRows: number;            // 커버리지(미집계 편향 가시화 — 1차 B4)
+    incompleteCampaigns: number; corruptRounds: number;                          // 미집계 포함 캠페인·회차 의미 위반(중복·역행·비정수)
+  };
+  escalation: { lastCoreTs: number; lastIntegrityOkTs: number; legacyRows: number }; // 승격 안내 재료 — 정상 판정 accepted 행만(error류 미산입·3차 B2), legacyRows=프로필 미상 행 수(과거 이력 오판 방지 병기)
 }
+export const VERIFY_STATS_MIN_SAMPLE = 5; // 표본 부족 경계(정찰 HEALTH_MIN_SAMPLE 재사용 아닌 동일 정책값 명시 — 2차 [보완])
 
 // 정찰(3트랙) 비용 집계 — scout-usage.jsonl(append-only) → 28일 팔별 합계. 렌더는 통계 탭 '정찰 토큰' 구획.
 // self 팔은 usage가 null(토큰 미제공) — 문자수 합계만 참(정직 표기는 렌더 몫). ping은 workspace가 비어 전역 합산.
@@ -63,8 +77,14 @@ export function computeVerifyStats(raw: string, now: number, ws: string | null, 
     heatmap: Array.from({ length: 7 }, () => new Array(24).fill(0)) as number[][],
     resolved7: 0,
     byModel: {}, byMode: {},
+    byProfile: {},
+    outcomes28: { runError: 0, sessionUnresolved: 0, proofRejected: 0, postprocessError: 0 },
+    campaigns28: { total: 0, coreOnly: 0, integrityOnly: 0, mixed: 0, avgRoundsCore: null, sampleCore: 0, avgRoundsIntegrity: null, sampleIntegrity: 0, untrackedRows: 0, trackedRows: 0, campaignRows: 0, incompleteCampaigns: 0, corruptRounds: 0 },
+    escalation: { lastCoreTs: 0, lastIntegrityOkTs: 0, legacyRows: 0 },
   };
   const events: { ts: number; v: string; session: string; model: string; mode: string; effort: string; tok: number }[] = [];
+  // 2d 캠페인 누적기(28일 창): campaignId별 — 회차는 양의 정수만 유효·중복/역행=corruptRounds(평균 미산입 — 2차 [보완]4).
+  const camp: Record<string, { maxRound: number; lastRound: number; profiles: Set<string>; anyUntracked: boolean; corrupt: boolean }> = {};
   let seq = 0;
   for (const ln of String(raw).split(/\r?\n/)) {
     if (!ln.trim()) continue;
@@ -72,12 +92,84 @@ export function computeVerifyStats(raw: string, now: number, ws: string | null, 
     if (ws && (!o.workspace || normWs(o.workspace) !== normWs(ws))) continue; // 이 프로젝트(폴더)만 — workspace 없는 구버전/깨진 줄도 제외
     const ts = Date.parse(o.ts);
     if (!Number.isFinite(ts) || ts > now) continue; // 미래 timestamp(시계 꼬임·수동편집·타 PC) 제외 — 안 그러면 합계엔 들고 일별엔 빠져 불일치
+    const outcome = typeof o.outcome === "string" && o.outcome ? o.outcome : "accepted"; // 과거 행=accepted(필드 부재)
+    const profile = o.profile === "core" || o.profile === "integrity" ? o.profile : "(unknown)";
+    if (ts >= d28) {
+      // 2d — 프로필·outcome·캠페인 축(28일). 비-accepted 행은 판정 축 미산입·실행 실패 계수만(3차 B2).
+      // 2차 blocker: 프로필별 '시도' 수는 outcome 무관 전 행 — 실패 시도의 프로필 귀속 보존(count=accepted 전용과 분리)
+      if (!out.byProfile[profile]) out.byProfile[profile] = { attempts: 0, count: 0, effFail: 0, effInconclusive: 0, demoted: 0, corrected: 0, durationMsSum: 0, durationCount: 0 };
+      out.byProfile[profile].attempts++;
+      if (outcome !== "accepted") {
+        if (outcome === "run-error") out.outcomes28.runError++;
+        else if (outcome === "session-unresolved") out.outcomes28.sessionUnresolved++;
+        else if (outcome === "proof-rejected") out.outcomes28.proofRejected++;
+        else out.outcomes28.postprocessError++;
+        // 구현검증 1차 blocker②: 실패 종결의 소요도 프로필 소요에 합산 — 실패가 잦은 프로필이 소요 통계에서
+        // 낙관적으로 보이는 것 차단(count는 accepted 전용 유지 — durationCount가 소요 표본의 분모).
+        if (typeof o.durationMs === "number" && Number.isFinite(o.durationMs) && o.durationMs >= 0) {
+          if (!out.byProfile[profile]) out.byProfile[profile] = { attempts: 0, count: 0, effFail: 0, effInconclusive: 0, demoted: 0, corrected: 0, durationMsSum: 0, durationCount: 0 };
+          out.byProfile[profile].durationMsSum += o.durationMs; out.byProfile[profile].durationCount++;
+        }
+      } else {
+        const eff = String(o.machineEffective || o.verdict || "unparsed"); // 운영 수치=실효 판정 권위(2c)
+        if (!out.byProfile[profile]) out.byProfile[profile] = { attempts: 0, count: 0, effFail: 0, effInconclusive: 0, demoted: 0, corrected: 0, durationMsSum: 0, durationCount: 0 };
+        const bp = out.byProfile[profile];
+        bp.count++;
+        if (eff === "fail") bp.effFail++;
+        if (eff === "inconclusive") bp.effInconclusive++;
+        if (o.machineDemoted === true) bp.demoted++;
+        if (o.machineCorrected === true) bp.corrected++;
+        if (typeof o.durationMs === "number" && Number.isFinite(o.durationMs) && o.durationMs >= 0) { bp.durationMsSum += o.durationMs; bp.durationCount++; }
+        if (profile === "(unknown)") out.escalation.legacyRows++; // 프로필 미상(과거) 행 — 승격 안내 병기용(3차 [주의])
+        if (profile === "core") out.escalation.lastCoreTs = Math.max(out.escalation.lastCoreTs, ts);
+        // 승격 재료: '정상 판정' accepted 무결성 행만(실효 unparsed 제외 — error류는 위에서 이미 분리)
+        if (profile === "integrity" && ["pass", "pass-notes", "inconclusive", "fail"].includes(eff)) out.escalation.lastIntegrityOkTs = Math.max(out.escalation.lastIntegrityOkTs, ts);
+      }
+      // 캠페인 축 — outcome 무관 전 행(소비된 왕복 보존·3차 B1). 커버리지=추적/전체(1차 B4).
+      if (typeof o.campaignId === "string" && o.campaignId) {
+        out.campaigns28.campaignRows++;
+        const tracked = o.budgetTracked === true;
+        if (tracked) out.campaigns28.trackedRows++; else out.campaigns28.untrackedRows++;
+        if (!camp[o.campaignId]) camp[o.campaignId] = { maxRound: 0, lastRound: 0, profiles: new Set(), anyUntracked: false, corrupt: false };
+        const c = camp[o.campaignId];
+        c.profiles.add(profile);
+        if (!tracked) c.anyUntracked = true;
+        const rd = o.verifyRound;
+        if (tracked) {
+          if (!Number.isInteger(rd) || rd < 1) c.corrupt = true;                 // 비정수·0 이하
+          else if (rd <= c.lastRound) c.corrupt = true;                          // 중복·역행(append 순 의미 위반)
+          else { c.lastRound = rd; c.maxRound = Math.max(c.maxRound, rd); }
+        }
+      }
+    }
     // 전환 추적용 세션 키: Claude 세션 우선 → 없으면 Codex 세션 → 둘 다 비면 고유키(seq). 빈 세션 다발이 한 그룹으로 묶여 과대계상되는 것 차단.
     const session = String(o.claudeSession || o.codexSession || ("__u" + seq));
     const tk = (o.codexTokens && typeof o.codexTokens.total === "number") ? o.codexTokens.total : 0; // 이 검증 1회 코덱스 토큰(2순위-A 수집, 없으면 0)
-    events.push({ ts, v: String(o.verdict || "unparsed"), session, model: String(o.model || ""), mode: String(o.mode || ""), effort: String(o.effort || ""), tok: tk });
+    if (outcome === "accepted") {
+      // 판정 버킷은 accepted 행만+실효 판정 기준(2d — error류가 unparsed로 오염되는 것 차단)
+      events.push({ ts, v: String(o.machineEffective || o.verdict || "unparsed"), session, model: String(o.model || ""), mode: String(o.mode || ""), effort: String(o.effort || ""), tok: tk });
+    }
     seq++;
   }
+  // 캠페인 집계 마감(1차 B3·2차 [보완]4): 3분류·단일 프로필+완전 추적 캠페인만 평균 산입.
+  const roundsCore: number[] = [], roundsIntegrity: number[] = [];
+  for (const id of Object.keys(camp)) {
+    const c = camp[id];
+    out.campaigns28.total++;
+    const ps = [...c.profiles].filter((p) => p !== "(unknown)");
+    const cls = ps.length === 1 && c.profiles.size === 1 ? (ps[0] === "core" ? "core" : "integrity") : (c.profiles.size >= 2 ? "mixed" : "mixed");
+    if (cls === "core") out.campaigns28.coreOnly++; else if (cls === "integrity") out.campaigns28.integrityOnly++; else out.campaigns28.mixed++;
+    if (c.corrupt) { out.campaigns28.corruptRounds++; continue; }               // 회차 의미 위반 캠페인=평균 미산입
+    if (c.anyUntracked) { out.campaigns28.incompleteCampaigns++; continue; }    // 미집계 포함 캠페인='완전 추적' 평균 제외(낙관 편향 차단)
+    if (c.maxRound >= 1) {
+      if (cls === "core") roundsCore.push(c.maxRound);
+      else if (cls === "integrity") roundsIntegrity.push(c.maxRound);
+    }
+  }
+  out.campaigns28.sampleCore = roundsCore.length;
+  out.campaigns28.sampleIntegrity = roundsIntegrity.length;
+  out.campaigns28.avgRoundsCore = roundsCore.length ? roundsCore.reduce((a, b) => a + b, 0) / roundsCore.length : null;
+  out.campaigns28.avgRoundsIntegrity = roundsIntegrity.length ? roundsIntegrity.reduce((a, b) => a + b, 0) / roundsIntegrity.length : null;
   events.sort((a, b) => a.ts - b.ts);
   const prevUncleanTsBySession: Record<string, number> = {}; // 세션별 직전 fail/inconclusive의 시각(0=없음/직전 통과)
   for (const e of events) {

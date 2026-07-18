@@ -3746,6 +3746,13 @@ class Dashboard {
           <div id="projectBars"></div>
         </div>
       </div>
+      <div class="stat-chart">
+        <div class="chart-box wide">
+          <h3 class="chart-h">${t("검증 강도 프로필 효과", "Verify profile effect")} <span class="muted">${t("(최근 28일 · 실효 판정 기준 · 로컬 관찰 통계(best-effort) — 감사 기록 아님)", "(28d · effective verdicts · local best-effort observation — not an audit log)")}</span></h3>
+          <div id="profileEffect"></div>
+          <p class="muted" id="escalationHint"></p>
+        </div>
+      </div>
       <p class="muted" id="statsNote"></p>
     </div>
   </section>
@@ -4268,6 +4275,34 @@ class Dashboard {
     $("statsNote").textContent = T("완전통과=깨끗이 통과 · 통과(보완)=통과지만 보완의견(재판단 적용 잦음) · 보류=판단 보류 · 실패=수정 필요 · 판정표지 누락=코덱스가 답은 했지만 '통과/실패' 결론 줄을 안 적은 경우(통과율 계산에선 빼요). 보완이상 비율=검증이 그냥 통과시키지 않은 비율. 도넛·가로막대=28일, 막대=14일, 히트맵=4주.", "pass = clean pass · pass (notes) = passed with supplements (often re-judged) · hold = no conclusion · fail = fix required · no verdict line = Codex answered without a verdict line (excluded from pass rate). notes-or-worse = share not passed cleanly. Donut/bars = 28d, trend = 14d, heatmap = 4 weeks.");
     renderBars("byModelBars", vs.byModel); // 모델별 28일 토큰(외부 모델명 textContent 안전)
     renderBars("byModeBars", vs.byMode, modeLabel); // 검증모드별 28일 토큰(모드 코드→한국어 라벨)
+    // ⑥ P-12 2d — 프로필 효과·승격 안내(전 값 내부 숫자·상수 라벨이라 innerHTML 안전. MIN_SAMPLE=5 미만=표본 부족 정직 표기)
+    var bp = vs.byProfile || {}, cg = vs.campaigns28 || {}, oc = vs.outcomes28 || {}, esc = vs.escalation || {};
+    var MINS = 5;
+    var profLbl = { core: T("핵심","core"), integrity: T("무결성","integrity"), "(unknown)": T("(프로필 미상 — 구 기록)","(unknown — legacy rows)") };
+    var rows = Object.keys(bp).map(function(k){
+      var b = bp[k];
+      var avgDur = b.durationCount>0 ? Math.round(b.durationMsSum/b.durationCount/1000)+T("초","s") : "–";
+      var att = (b.attempts||0) > b.count ? (' · '+T("실행 실패 "+((b.attempts||0)-b.count)+"건 포함 시도 "+(b.attempts||0),"attempts "+(b.attempts||0)+" incl. "+((b.attempts||0)-b.count)+" exec-fail")) : ''; // 시도>판정이면 실패 귀속 병기(2차 blocker)
+      return '<div class="vrow"><span class="vlbl">'+(profLbl[k]||k)+'</span><b class="vnum">'+b.count+T("건"," runs")+'</b><span class="muted">'+att+' · '+T("실효 실패","eff-fail")+' '+b.effFail+' · '+T("실효 보류","eff-hold")+' '+b.effInconclusive+' · '+T("기계 강등","demoted")+' '+b.demoted+' · '+T("기계 정정","corrected")+' '+b.corrected+' · '+T("평균 소요","avg dur")+' '+avgDur+'</span></div>';
+    }).join("");
+    var avgTxt = function(avg, n){ return avg===null ? "–" : (avg.toFixed(1)+T("회","")+(n<MINS?T(" (표본 부족 "+n+"건)"," (low sample "+n+")"):T(" ("+n+"캠페인)"," ("+n+" campaigns)"))); };
+    rows += '<div class="vrow"><span class="vlbl">'+T("캠페인당 평균 왕복","avg rounds/campaign")+'</span><span class="muted">'+T("핵심 전용","core-only")+' '+avgTxt(cg.avgRoundsCore, cg.sampleCore)+' · '+T("무결성 전용","integrity-only")+' '+avgTxt(cg.avgRoundsIntegrity, cg.sampleIntegrity)+(cg.mixed?(' · '+T("혼합 "+cg.mixed+"건 제외","mixed "+cg.mixed+" excluded")):"")+'</span></div>';
+    if (cg.campaignRows>0) rows += '<div class="vrow"><span class="vlbl">'+T("상한 집계 커버리지","cap coverage")+'</span><span class="muted">'+cg.trackedRows+'/'+cg.campaignRows+T("행 추적"," rows tracked")+(cg.untrackedRows?(' · '+T("미집계 "+cg.untrackedRows+"행 — 평균은 완전 추적 캠페인만","untracked "+cg.untrackedRows+" — averages use fully-tracked campaigns only")):"")+(cg.incompleteCampaigns?(' · '+T("불완전 캠페인 "+cg.incompleteCampaigns,"incomplete "+cg.incompleteCampaigns)):"")+(cg.corruptRounds?(' · '+T("회차 손상 "+cg.corruptRounds,"corrupt rounds "+cg.corruptRounds)):"")+'</span></div>';
+    var execFail = (oc.runError||0)+(oc.sessionUnresolved||0)+(oc.proofRejected||0)+(oc.postprocessError||0);
+    if (execFail>0) rows += '<div class="vrow"><span class="vlbl">'+T("실행 실패(판정 없음)","exec failures (no verdict)")+'</span><span class="muted">'+T("모델 실행 "+(oc.runError||0)+" · 세션 미결속 "+(oc.sessionUnresolved||0)+" · 증명 거부 "+(oc.proofRejected||0)+" · 후처리 "+(oc.postprocessError||0),"run "+(oc.runError||0)+" · unresolved "+(oc.sessionUnresolved||0)+" · proof "+(oc.proofRejected||0)+" · postprocess "+(oc.postprocessError||0))+'</span></div>';
+    $("profileEffect").innerHTML = rows || '<p class="muted">'+T("아직 프로필 기록이 있는 검증이 없어요.","No profile-tagged verifications yet.")+'</p>';
+    // 승격 안내 — 사실 진술만(2차 B2·4차 B2: 게이트 판정형 표현 금지·정상 판정 무결성 행만 인정·구 기록 병기)
+    var hint = "";
+    if (esc.lastCoreTs > 0) {
+      if (!(esc.lastIntegrityOkTs > esc.lastCoreTs)) {
+        var days = Math.floor((Date.now() - (esc.lastIntegrityOkTs || 0)) / 86400000);
+        hint = T("최근 핵심 검증 이후 무결성 검증 기록이 없어요(마지막 무결성: "+(esc.lastIntegrityOkTs? days+"일 전":"28일 내 없음")+") — push·배포 전 무결성 승격 검증 1회를 권장해요.","No integrity verification recorded after the latest core verification (last integrity: "+(esc.lastIntegrityOkTs? days+"d ago":"none in 28d")+") — one integrity escalation before push/deploy is recommended.");
+      } else {
+        hint = T("최근 핵심 검증 이후 무결성 검증 기록이 있어요.","An integrity verification is recorded after the latest core verification.");
+      }
+      if (esc.legacyRows > 0) hint += " " + T("(프로필 기록이 없는 이전 검증 "+esc.legacyRows+"건은 판단에서 제외)","("+esc.legacyRows+" older rows without profile info are excluded)");
+    }
+    $("escalationHint").textContent = hint;
   }
   // 토큰 카드 — 연결 코덱스 세션 누적(외부 데이터가 들어와도 안전하게 createElement/textContent로만 조립)
   function renderTokens(tk){

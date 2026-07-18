@@ -506,7 +506,57 @@ function parseLastTurn(file) {
 // 실패→수정→재검증 통과로 해소되면 그 경보도 사라진다(반복 검증이 무조건 경보를 남기는 cry-wolf 방지). 그 뒤 실패(빨강)·보류·불가(노랑)일 때만 새로 띄움.
 // '통과'·'통과(보완)'은 새 경보를 만들지 않는다(굿하트 '통과 도장' 안 만들기). 단 답은 있는데 마지막 판정 줄이 없으면(null)
 // verdict-missing 노랑으로 '표지 누락'을 가시화한다(대시보드 색 분류 입력이 비기 때문). 빈/공백 답은 아무 신호도 안 건드린다. answer=마지막 메시지(-o).
-function flagVerdict(answer, ws, codexSession, modeSnapshot, machine) {
+// ── P-12 2d 단일 시도 기록 계층(설계 동결 v5~v7) ──────────────────────────────
+// 예산 예약 '직후' 생성 — 예약된 왕복의 모든 종결을 상호 배타 결과 5종
+// {accepted, run-error, session-unresolved, proof-rejected, postprocess-error}로 정확히 1회 기록 '시도'한다
+// (append는 기존 best-effort — 저장 성공 시 1행. 감사급 격상=잠금 후보). die(process.exit)·예기치 못한 예외로
+// 명시 종결을 안 거치면 exit 훅이 단계 기반 매핑(pre-call→run-error / answered→proof-rejected /
+// proof-accepted→postprocess-error)으로 기록 — 경로 열거가 아니라 구조적으로 우회 불가(6·7차 blocker).
+// duration: 시도 생성 시각이 아니라 '모델 호출 직전'(markCallStart)부터 측정(7차 [보완] — 예약·전처리 시간 미포함).
+function beginVerifyAttempt(ws, gateRes, profileSnap, modeSnap) {
+  const r = gateRes || {};
+  const a = {
+    stage: "pre-call", recorded: false, callStartHr: null,
+    meta: {
+      profile: profileSnap || "", mode: modeSnap || "",
+      campaignId: typeof r.campaignId === "string" ? r.campaignId : "",
+      budgetTracked: r.tracked === true,
+      untrackedReason: r.tracked === true ? "" : String(r.untracked || (r.unlimited ? "unlimited" : "") || ""),
+      ...(r.tracked === true && Number.isInteger(r.n) && r.n >= 1 ? { verifyRound: r.n } : {}), // 권위 있을 때만(회차 의미 검증은 집계기도 재확인)
+      ...(Number.isInteger(r.budget) ? { budget: r.budget } : {}),
+    },
+  };
+  a.markCallStart = () => { if (!a.callStartHr) a.callStartHr = process.hrtime.bigint(); };
+  // 구현검증 1차 blocker①: 측정 종료='답 수신 시각'(answered) — proof·기계 판독·stdout 등 후처리 시간을
+  // 소요에 넣지 않는다(효과 측정 왜곡 방지). 실패 종결(수신 없음)은 종결 시각이 곧 실패 반환 시각.
+  a.answered = () => { if (a.stage === "pre-call") { a.stage = "answered"; if (a.endHr === null) a.endHr = process.hrtime.bigint(); } };
+  a.endHr = null;
+  a.proofAccepted = () => { a.stage = "proof-accepted"; };
+  a.record = (outcome, extra) => {
+    if (a.recorded) return; // 이중 기록 방지(명시 지점·exit 훅 공용 플래그)
+    a.recorded = true;
+    let durationMs;
+    if (a.callStartHr !== null) {
+      const end = a.endHr !== null ? a.endHr : process.hrtime.bigint();
+      const d = Number((end - a.callStartHr) / 1000000n); // bigint 차이→ms 정수(3차 [보완] 변환 계약)
+      if (Number.isFinite(d) && d >= 0) durationMs = d;
+    }
+    try {
+      appendVerdict({
+        ts: nowIso(), workspace: ws,
+        claudeSession: claudeId() || ((readActive() || {}).claudeSession) || "",
+        outcome, ...a.meta, ...(durationMs !== undefined ? { durationMs } : {}),
+        ...(extra || {}), // accepted: verdict·machine·model·tokens·answerChars·blockerCount / 그 외: 없음(원문·stderr 비저장)
+      });
+    } catch { /* 통계 실패가 검증 흐름을 막지 않음(best-effort) */ }
+  };
+  process.on("exit", () => {
+    if (a.recorded) return;
+    a.record(a.stage === "pre-call" ? "run-error" : a.stage === "answered" ? "proof-rejected" : "postprocess-error");
+  });
+  return a;
+}
+function flagVerdict(answer, ws, codexSession, modeSnapshot, machine, attempt) {
   try {
     const text = String(answer || "");
     if (!text.trim()) return; // 빈/공백 답 → 직전 신호(표지 누락 포함)도 함부로 안 건드림(supersede도 안 함)
@@ -520,7 +570,12 @@ function flagVerdict(answer, ws, codexSession, modeSnapshot, machine) {
     // 통계 누적(append-only, stats/verdicts.jsonl) — 대시보드 탭2 재료. 원문 저장 안 함(메타만). best-effort.
     // P-12 2c: machine 필드는 같은 행에 추가(별도 append 없음 — 검증 1회=통계 1행 유지). 2c=원시 메타까지·집계는 2d.
     const mFields = machine && machine.effective ? { machineEffective: machine.effective, machineDemoted: !!machine.demoted, machineCorrected: !!machine.corrected, machineReason: machine.reasonKey || "" } : {};
-    try { appendVerdict({ ts: nowIso(), workspace: ws, claudeSession: session, codexSession: codexSession || "", verdict: v || "unparsed", answerChars: text.length, model: model, mode: mode, effort: effort, codexTokens: codexTok, ...mFields }); } catch { /* 통계 실패가 검증 흐름을 막지 않음 */ }
+    // 2d([보완]1): blockerCount는 블록 정상 판독(core) 행만 — 손상·부재는 필드 생략(집계에서 '판독 불가' 분리).
+    const bc = machine && machine.parse && machine.parse.ok ? { blockerCount: machine.parse.findings.filter((f) => f.tag === "blocker").length } : {};
+    const row = { codexSession: codexSession || "", verdict: v || "unparsed", answerChars: text.length, model: model, mode: mode, effort: effort, codexTokens: codexTok, ...mFields, ...bc };
+    // 2d: 시도 계층이 있으면 accepted 1행으로 위임(검증 1회=통계 1행 유지 — 이중 append 없음). 없으면 기존 직접 기록(무회귀).
+    if (attempt) attempt.record("accepted", row);
+    else { try { appendVerdict({ ts: nowIso(), workspace: ws, claudeSession: session, ...row }); } catch { /* 통계 실패가 검증 흐름을 막지 않음 */ } }
     // P-12 2c: 강등·정정 가시화 — 기존 verdict 경보와 같은 계층(위 supersede로 최신 1건 유지). 원문 비복사(사유 키 문장만).
     if (machine && (machine.demoted || machine.corrected)) {
       const reasonKo = machineReasonText(machine, false);
@@ -1469,12 +1524,13 @@ function reserveVerifyBudgetGate(ws, durableEnv, contractSnap, harnessModeSnap, 
     if (res && res.rejected) return { proceed: false, exitCode: 3, msg: budgetExhaustMsg(res.budget, langSnap, profileSnap) };
     if (res && res.counterFailedAfterReceipt) {
       // ③ 실패(counter·history): 미반영 N은 캠페인 서수가 아니므로 권위 주장 금지 — N/M 억제(실패 사유·동결 budget 보존).
-      res = { tracked: false, untracked: res.untracked || "counter-write-failed", budget: res.budget };
+      // 2d([보완]3): campaignId는 보존 — 통계 행이 캠페인 귀속을 잃지 않음(추적 상태와 분리 필드).
+      res = { tracked: false, untracked: res.untracked || "counter-write-failed", budget: res.budget, campaignId };
     }
     // 침묵 판정(무회귀): 이 캠페인의 동결 budget이 무제한(0)이면 침묵 집계(요청 M과 무관 — 유한 저장도 다음
     // 캠페인부터), 미집계인데 유한 요청도 유한 동결도 아니면 무제한 동작으로 환원(경고 소음 0).
     if (res && res.tracked === true && res.budget === 0) res = Object.assign({}, res, { silent: true }); // 2d 재료용 침묵 집계
-    else if (res && res.tracked !== true && res.unlimited !== true && !(Number.isInteger(M) && M >= 1) && !(res.budget >= 1)) res = { unlimited: true };
+    else if (res && res.tracked !== true && res.unlimited !== true && !(Number.isInteger(M) && M >= 1) && !(res.budget >= 1)) res = { unlimited: true, campaignId }; // 2d: 무제한 환원도 캠페인 귀속 보존(출력 계약 불변 — unlimited면 안내 "")
   }
   // [내구] 미집계 가시화(⑵ — 앵커·영수증·counter·history 실패 전부): job.budgetUntracked=true 승격.
   // 이 patch마저 실패해도 미집계 1줄이 child 로컬 stdout·worker .out에 남는다(최후 fallback).
@@ -1676,21 +1732,26 @@ async function cmdAsk(rest) {
     // P-12 2b: 예약=호출 직전 공통 래퍼 1곳(전처리 전부 통과 후). 소진 거부는 phase/round 불변 exit 3 —
     // 내구 경로면 이 stderr가 worker .err에 보존돼 job failed(3)→ask-wait가 안내와 함께 exit 3 전달.
     const budgetGate = reserveVerifyBudgetGate(ws, durableEnv, contractSnap, harnessModeSnap, langSnap, profileSnap);
-    if (!budgetGate.proceed) die(budgetGate.msg, budgetGate.exitCode);
+    if (!budgetGate.proceed) die(budgetGate.msg, budgetGate.exitCode); // 예약 전 거부=시도 0행(2d 계약)
+    const attempt = beginVerifyAttempt(ws, budgetGate.res, profileSnap, modeSnap); // 2d: 예약 직후 — 이후 모든 종결이 정확히 1회 기록 시도
     const askId = require("crypto").randomUUID(); // L1-A: '서로 다른 ask 실행' 판정 재료(지문·verdict ts는 재실행 구분에 부적합 — Codex)
     const attCarrier = {};                        // L1-A: 이번 ask에 실제로 실린 동봉 스냅샷(재계산 아님)
-    const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs, ...(net ? netArgs() : [])], withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier, profileSnap));
+    const promptText = withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier, profileSnap); // 프롬프트 조립은 측정 밖(1차 blocker①)
+    attempt.markCallStart(); // duration=모델 호출 직전부터(7차 [보완])
+    const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs, ...(net ? netArgs() : [])], promptText);
     if (error || !answer || (typeof status === "number" && status !== 0)) {
       try { writePhase("claude-working", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // ask 실패 → 진행표시 codex-verifying 잔존 방지(Claude로 복귀)
       die(tB(`Codex resume 실패: `,`Codex resume failed: `) + `${error?.message || ""}\n${stderr.slice(-500)}`);
     }
+    attempt.answered(); // 답 수신(이후 예외=proof-rejected 매핑)
     try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
     writeProof(link.codexSession, answer, ws); // 실제 성공 → 검증 증명 기록(verify-guard가 인정)
+    attempt.proofAccepted(); // 증명 실물 확정(이후 예외=postprocess-error — proof-rejected 오분류 차단·6차 blocker)
     flagEvidence(answer, ws, link.codexSession, exec); // 결정2: 인용 근거 존재성+다룬 흔적 점검(경로해석=작업폴더 exec). 라벨=연 폴더 ws
     flagLedgerConfirms(answer, ws, link.codexSession, exec, { askId, attach: attCarrier }); // 로드맵 ④ L1-A: 등급·echo·askId·seen을 이벤트에
     collectScoutTargetEvidence(answer, ws, exec); // 정찰 대상 자기진단 증거(2026-07-10 — 판정 무관·3트랙만·실패 무해)
     const mfl = machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId); // P-12 2c: 판독·정합·[백로그] 자동 등록(core만·1회)
-    flagVerdict(answer, ws, link.codexSession, modeSnap, mfl.machine); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 표지 누락·기계 강등=노랑 가시화(자동 차단 X)
+    flagVerdict(answer, ws, link.codexSession, modeSnap, mfl.machine, attempt); // 경보+2d accepted 1행 위임(비-깨끗=빨강/노랑·표지 누락·기계 강등 가시화)
     process.stdout.write(`${langSnap === "en" ? "# Linked session" : "# 연결 세션"} ${link.codexSession} (${link.via})\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine)}\n`);
     process.stdout.write(mfl.notice); // 2c 영수증/거부/실패 줄(core 외·해당 없음="" — 바이트 동일)
     process.stdout.write(budgetNoticeLines(budgetGate.res, langSnap, profileSnap)); // 포맷 계층(⑻) — N=M 예고·미집계 1줄(무제한="")
@@ -1746,13 +1807,16 @@ async function cmdAsk(rest) {
   // P-12 2b: 새 세션 분기도 같은 래퍼 1곳(전처리 전부 통과 후·호출 직전) — 소진 거부는 phase/round 불변 exit 3.
   const budgetGate = reserveVerifyBudgetGate(ws, durableEnv, contractSnap, harnessModeSnap, langSnap, profileSnap);
   if (!budgetGate.proceed) die(budgetGate.msg, budgetGate.exitCode);
+  const attempt = beginVerifyAttempt(ws, budgetGate.res, profileSnap, modeSnap); // 2d: 예약 직후 — 모든 종결 1회 기록 시도
   let earlyLinked = null;
   // recordLink가 '성공(true)'일 때만 earlyLinked 확정 → 저장 실패(CAS/잠금/권한)면 미연결로 두고 다음 폴/최종 단계서 재시도.
   // detected(세션 발견)와 linked(저장 성공)를 분리해 "즉시연결" 거짓보고를 막는다(Codex 지적).
   const onDetect = (id) => { if (earlyLinked) return; try { if (recordLink(id)) earlyLinked = id; } catch { /* 다음 폴/최종 단계서 재시도 */ } };
   const askId = require("crypto").randomUUID(); // L1-A: '서로 다른 ask 실행' 판정 재료
   const attCarrier = {};                        // L1-A: 이번 ask에 실제로 실린 동봉 스냅샷
-  const { answer, error, status, stderr, detected } = await runCodexNewSessionAsync([...mArgs, ...(net ? netArgs() : [])], withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier, profileSnap), since, exec,
+  const promptText = withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier, profileSnap); // 프롬프트 조립은 측정 밖(1차 blocker①)
+  attempt.markCallStart(); // duration=모델 호출 직전부터(7차 [보완])
+  const { answer, error, status, stderr, detected } = await runCodexNewSessionAsync([...mArgs, ...(net ? netArgs() : [])], promptText, since, exec,
     (id) => { updateAskActive(ws, activeRec && activeRec.token, { sessionId: id }); onDetect(id); },
     (pid) => { updateAskActive(ws, activeRec && activeRec.token, { childPid: Number.isInteger(pid) ? pid : null }); }); // 탐지=작업폴더(코덱스 session_meta.cwd와 일치)
   // cwd 일치 우선, 못 찾으면 원래 방식(무회귀) — 최종 식별용 폴백.
@@ -1769,16 +1833,18 @@ async function cmdAsk(rest) {
     try { writePhase("claude-working", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // ask 실패 → 진행표시 정리(Claude로 복귀)
     die(tB(`Codex 새 세션 ${earlyLinked ? `(연결됨 ${earlyLinked}) ` : ""}실패: `, `Codex new session ${earlyLinked ? `(linked ${earlyLinked}) ` : ""}failed: `) + `${error?.message || ""}\n${stderr.slice(-500)}\n` + (earlyLinked ? tB("(세션은 연결됐으니 다시 검증하면 그 세션을 이어갑니다.)", "(the session is linked — re-verifying continues it.)") : tB("(세션 파일이 생겼다면 'find'→'link <id>'로 연결하세요.)", "(if a session file appeared, link it via 'find' → 'link <id>'.)")));
   }
+  attempt.answered(); // 답 수신(이후 예외=proof-rejected 매핑)
   try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
   let id = earlyLinked;
   if (!id) { const nid = resolveNew(); if (nid && recordLink(nid)) id = nid; } // 즉시연결 못했으면 지금 찾아 연결
   if (id) {
     writeProof(id, answer, ws); // 실제 성공 → 검증 증명 기록
+    attempt.proofAccepted(); // 증명 실물 확정(이후 예외=postprocess-error·6차 blocker)
     flagEvidence(answer, ws, id, exec); // 결정2: 인용 근거 존재성+다룬 흔적(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
     flagLedgerConfirms(answer, ws, id, exec, { askId, attach: attCarrier }); // 로드맵 ④ L1-A: 등급·echo·askId·seen
     collectScoutTargetEvidence(answer, ws, exec); // 정찰 대상 자기진단 증거(2026-07-10)
     const mfl = machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId); // P-12 2c: 판독·정합·[백로그] 자동 등록(core만·1회)
-    flagVerdict(answer, ws, id, modeSnap, mfl.machine); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 표지 누락·기계 강등=노랑 가시화(자동 차단 X)
+    flagVerdict(answer, ws, id, modeSnap, mfl.machine, attempt); // 경보+2d accepted 1행 위임(비-깨끗=빨강/노랑·표지 누락·기계 강등 가시화)
     const en = langSnap === "en";
     const head = earlyLinked
       ? (en ? `# New Codex session created·linked immediately: ${id}` : `# 새 Codex 세션 생성·즉시연결: ${id}`)
@@ -1787,6 +1853,7 @@ async function cmdAsk(rest) {
     process.stdout.write(mfl.notice); // 2c 영수증/거부/실패 줄(core 외·해당 없음="" — 바이트 동일)
     process.stdout.write(budgetNoticeLines(budgetGate.res, langSnap, profileSnap)); // 포맷 계층(⑻) — 무제한=""(바이트 동일)
   } else {
+    attempt.record("session-unresolved"); // 2d: 답은 왔으나 세션 미결속 — 소비된 왕복 보존(승격·최근 무결성 미산입)
     updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; }); // 다음 자동 생성 차단 플래그
     // thread.started JSON + rollout 탐지 모두 실패한 비정상 상태는 성공 proof로 인정하지 않는다. 세션 증식을
     // 멈추고 빨강 무결성 사건으로 드러내 사용자가 정확한 세션을 연결하기 전에는 다음 검증을 만들 수 없다.
@@ -2049,4 +2116,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile };
+module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt };
