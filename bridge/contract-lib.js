@@ -695,11 +695,17 @@ function ackIntegrityEvents(ids) {
 // 경보를 삭제한다. ws를 주면 '그 워크스페이스 이벤트'만 supersede(다른 ws 이벤트 보존·workspace 없는 구
 // 이벤트=기존 동작대로 대상). 미전달=기존 동작(다른 호출처 무회귀).
 function supersedeIntegrity(session, kind, ws) {
-  if (!session) return false; // 세션 모르면 섣불리 안 지움 — 다른 대화의 신호를 잘못 지우지 않게
+  if (!session && !ws) return false; // 세션·ws 둘 다 모르면 섣불리 안 지움 — 다른 대화의 신호를 잘못 지우지 않게
   const wsN = ws ? normWs(ws) : "";
   return withIntegrityLock(() => {
     const events = readIntegrityEvents();
-    const kept = events.filter((e) => !(!e.ack && e.kind === kind && e.session === session && (!wsN || !e.workspace || normWs(e.workspace) === wsN)));
+    // ws가 있으면 '그 프로젝트' 기준으로 갱신(판정 경보는 프로젝트 단위 최신 1건 — C-C 세션 폴백이 창마다
+    // 달라져도 같은 프로젝트의 해소된 경보가 잔존하지 않음 · 확인 검증 blocker). workspace 없는 구 이벤트만
+    // 세션 기준 유지. ws 미전달=기존 세션 기준(다른 호출처 무회귀).
+    const hit = (e) => !e.ack && e.kind === kind && (wsN
+      ? (e.workspace ? normWs(e.workspace) === wsN : (!!session && e.session === session))
+      : e.session === session);
+    const kept = events.filter((e) => !hit(e));
     if (kept.length === events.length) return true; // 지울 것 없음(무변경 성공)
     return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: kept }));
   });
