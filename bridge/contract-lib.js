@@ -53,6 +53,17 @@ function cleanupOldState(now) {
   // P-12 2b: 손상 캠페인 카운터 '격리 서랍'만 7일 편입 — verify-campaigns 본체(current .json·history)는
   // 스윕 비대상(current 상시·history는 append 시 60일 자체 trim). 서랍 분리로 current 오삭제 경로 차단.
   sweep(path.join(BRIDGE_DIR, "verify-campaigns", "corrupt"), ATTEMPTS_TTL_MS);
+  // P-8 2단(v10): 승인 사다리로 '격리된' 잠금 잔재(*.lock.stale-<ts>)만 TTL 청소 — 활성 .lock은 절대 sweep
+  // 금지(자동 회수 없음 계약). 격리물은 이름에 시각이 있어도 mtime 기준 7일(단명 진단 재료).
+  for (const dir of [CONTRACTS_DIR, BRIDGE_DIR]) { // BRIDGE_DIR=무폴더 창 전역 계약(contract.json)의 격리물(1차 blocker⑦)
+    try {
+      for (const n of fs.readdirSync(dir)) {
+        if (!/\.lock\.stale-\d+$/.test(n)) continue;
+        const f = path.join(dir, n);
+        try { if (now - fs.statSync(f).mtimeMs > ATTEMPTS_TTL_MS) { fs.unlinkSync(f); removed++; } } catch { /* 잠김/사라짐 */ }
+      }
+    } catch { /* 폴더 없음 */ }
+  }
   // P-2: 내구 검증 작업(ask-jobs)은 프롬프트(.json)·응답(.out)·오류(.err)를 담으므로 짧게 보존.
   // 회수·재판단은 그 턴 안에서 끝나고 deadline 상한이 60분이라, mtime 7일이면 살아있는 작업일 수 없다.
   // 공용 sweep은 .json만 보므로 부속물(.out/.err/.pid·비정상 잔존 .lock-*)까지 전용 스윕으로 함께 정리.
@@ -252,30 +263,133 @@ function appendScoutUsage(ev) {
   } catch { return false; } // best-effort — 비용 기록 실패가 지도 생성 흐름을 막지 않음
 }
 
-// P-8 1단(2026-07-15): 단일 필드 즉시 저장용 '재읽기-병합' 패치. 손상 JSON은 fail-closed(기록 거부 —
-// P-1 교훈: {}로 축소해 덮어쓰면 계약 전체 유실). 파일 부재(ENOENT)만 신설로 인정.
-// P-9 본체(2026-07-16, 구현검증 1차 지적 4): 파일별 잠금(<계약파일>.lock) 추가 — 훅이 새 계약 작성자가
-// 되면서 무잠금 RMW의 lost-update(대시보드·반대 훅과 동시 쓰기)가 실위험이 됨. 확장 patchContractExt도
-// 같은 잠금 파일·프로토콜을 사용(동형 규약 — 한쪽만 잠그면 무의미). 잠금 실패=기록 거부(fail-closed).
-// P-8 2단(백로그·설계 동결 v10)의 updateContractPatch로 승격 예정 — 그 잠금 축을 여기서 선반영한 것.
-function patchContractFields(ws, lang, patch) {
+// ── P-8 2단(설계 동결 v10) — 계약 저장 단일 관문 updateContractPatch + 계약 전용 v10 잠금 ─────────────
+// v10 잠금 계약: 토큰=구조화 JSON({v:1,pid,rnd,ts}) wx 선점 → '획득 직후 read-back fence'(내 토큰 재확인 —
+// wx 경합·파일계 이상으로 남의 잠금 위에서 진행하는 것 차단) → 실패 시 상태 6분류로 종료(자동 stale 회수
+// 없음 — 복구는 상태별 승인 사다리[확장 UI/CLI 안내]만): alive(보유자 생존·EPERM 포함)=재시도 후 timeout /
+// dead-valid(정상 토큰+ESRCH 확정 사망) / invalid(신·구 형식 모두 아님 — 파싱 실패) / unreadable(fs 읽기
+// 실패 — 격리 금지·조사 안내) / owner-unverified(pid 판정이 ESRCH·EPERM 외 오류) / absent(판정 중 ENOENT=
+// 정상 해제 경합 — 즉시 재획득 재시도). 구형 토큰("pid-rnd" 평문)은 전환기 혼용 대비 유효로 인정(pid 판정).
+function parseLockToken(raw) {
+  const s = String(raw || "").trim();
   try {
-    if (!ws || !patch || typeof patch !== "object" || Array.isArray(patch)) return false;
-    const file = contractFileFor(ws, lang);
-    try { fs.mkdirSync(path.dirname(file), { recursive: true }); } catch { /* 잠금 wx가 ENOENT로 헛돌지 않게 — 실패 시 아래 잠금이 실패로 판정 */ }
-    const r = withFileLockStrict(file + ".lock", () => {
+    const o = JSON.parse(s);
+    // 1차 blocker③: '정상 토큰'은 전 필드 엄격 — v===1·양의 정수 pid·비공백 rnd·비공백 ts 문자열.
+    // 느슨하면 손상 잠금이 dead-valid/alive로 오분류돼 승인 사다리(2단)가 1클릭으로 약화된다.
+    if (o && typeof o === "object" && o.v === 1 && Number.isInteger(o.pid) && o.pid > 0 && typeof o.rnd === "string" && o.rnd.trim() && typeof o.ts === "string" && o.ts.trim()) return { pid: o.pid, form: "v10" }; // 2차 blocker③: 공백뿐 필드=손상(invalid) — trim 검사
+  } catch { /* 구형 폴백 */ }
+  const m = /^(\d+)-[0-9a-z]+$/.exec(s);
+  if (m) { const pid = parseInt(m[1], 10); if (pid > 0) return { pid, form: "legacy" }; }
+  return null;
+}
+function withContractLockV10(lockPath, fn, maxTries) {
+  const mine = JSON.stringify({ v: 1, pid: process.pid, rnd: Math.random().toString(36).slice(2, 10), ts: new Date().toISOString() });
+  const N = Number.isInteger(maxTries) && maxTries >= 1 ? maxTries : 40; // CLI=동기 짧은 재시도(기본 40×15ms) / 확장=1회 시도+비동기 재시도(호스트 블록 금지 — v10)
+  let lastState = "alive";
+  for (let i = 0; i < N; i++) {
+    let locked = false;
+    try { fs.writeFileSync(lockPath, mine, { flag: "wx" }); locked = true; } catch { /* 경합 — 아래 분류 */ }
+    if (locked) {
+      // read-back fence(v10): 내가 방금 쓴 토큰이 실제로 파일에 있는지 재확인 — 아니면 획득 무효(재시도).
+      // 2차 blocker④+4차: fence '읽기 실패'=unreadable 반환만 — 자동 삭제 없음(확인-후-삭제 TOCTOU 제거).
+      // 내 잠금이 남으면 프로세스 생존 동안 정직한 alive 자기차단(희귀 일시 장애)·종료 후 dead-valid 사다리가 회수.
+      let back = null, rerr = null; try { back = fs.readFileSync(lockPath, "utf8"); } catch (e) { rerr = e; }
+      if (rerr) {
+        // 4차 blocker: fence 판독 실패 시 자동 삭제 '없음' — 재판독~unlink 사이 교체 경합이 새 활성 잠금을 지울 수
+        // 있어(3차의 조건부 삭제도 TOCTOU 잔존) 확인-후-삭제 자체를 폐기한다. 내 잠금이 남으면: 이 프로세스 생존
+        // 동안은 alive(정직한 자기차단·희귀 일시 장애), 종료 후엔 dead-valid 1클릭 사다리가 사후 회수 경로.
+        return { ok: false, state: "unreadable", lockPath, error: "lock-unreadable-after-acquire: " + lockPath };
+      }
+      if (back !== mine) { lastState = "alive"; continue; } // 남이 교체(극단 경합) — 내 잠금 아님(정리 불요·재시도)
+      // fn에 '쓰기 직전 소유 재확인' 수단 제공(2차 blocker② 완화 — 격리 이중 경합으로 잠금이 옮겨져도 실제 쓰기 전에
+      // 감지·중단. 재확인~쓰기 사이 미시적 간극은 P1 §5 동형 보장수준으로 명문화 — v10 정본 그대로).
+      const stillMine = () => { try { return fs.readFileSync(lockPath, "utf8") === mine; } catch { return false; } };
+      try { return { ok: true, result: fn(stillMine) }; }
+      finally { try { if (fs.readFileSync(lockPath, "utf8") === mine) fs.unlinkSync(lockPath); } catch { /* 무해 */ } }
+    }
+    let raw = null;
+    try { raw = fs.readFileSync(lockPath, "utf8"); }
+    catch (e) {
+      if (e && e.code === "ENOENT") { lastState = "absent"; continue; } // 정상 해제 경합 — 즉시 재획득
+      return { ok: false, state: "unreadable", lockPath, error: "lock-unreadable: " + lockPath }; // 격리 금지·조사 안내
+    }
+    const tok = parseLockToken(raw);
+    if (!tok) return { ok: false, state: "invalid", lockPath, error: "lock-invalid: " + lockPath }; // 형식 불명 — 2단 승인 사다리 대상
+    try { process.kill(tok.pid, 0); lastState = "alive"; } // 생존 — 재시도
+    catch (ke) {
+      if (ke && ke.code === "ESRCH") return { ok: false, state: "dead-valid", lockPath, pid: tok.pid, error: "dead-lock-holder: " + lockPath + " (pid " + tok.pid + " 사망 — 승인 후 정리)" };
+      if (ke && ke.code === "EPERM") lastState = "alive"; // 존재하나 조회 권한 없음 — 보유 중 취급(사망 단정 금지)
+      else return { ok: false, state: "owner-unverified", lockPath, error: "lock-owner-unverified: " + lockPath };
+    }
+    if (N > 1) { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15); } catch { /* 즉시 재시도 */ } } // 1회 시도 모드는 대기 없이 즉시 반환(비동기 재시도는 호출자 몫)
+  }
+  return { ok: false, state: lastState === "absent" ? "absent" : "alive", lockPath, error: "lock-timeout: " + lockPath };
+}
+// 승인된 복구만 수행하는 격리(자동 경로에서 절대 호출 금지): 정리 직전 상태 재판정+expect(승인 시점 원문)
+// 불변 확인 후 <lock>.stale-<ts>로 rename(삭제 아님 — 원문 보존·TTL 청소 대상). 상태가 바뀌었으면 중단.
+function quarantineContractLock(lockPath, expectRaw, _testHookBeforeRename) {
+  let raw = null;
+  try { raw = fs.readFileSync(lockPath, "utf8"); }
+  catch (e) { return { ok: false, reason: e && e.code === "ENOENT" ? "absent" : "unreadable" }; }
+  if (typeof expectRaw === "string" && raw !== expectRaw) return { ok: false, reason: "changed" }; // 승인 사이에 내용 변경 — 오탈취 방지
+  const tok = parseLockToken(raw);
+  if (tok) { try { process.kill(tok.pid, 0); return { ok: false, reason: "alive" }; } catch (ke) { if (!(ke && ke.code === "ESRCH")) return { ok: false, reason: "owner-unverified" }; } }
+  if (typeof _testHookBeforeRename === "function") _testHookBeforeRename(); // 테스트 전용 주입 — 판정~rename 사이 교체 경합 재현
+  const dest = lockPath + ".stale-" + Date.now();
+  try { fs.renameSync(lockPath, dest); } catch { return { ok: false, reason: "rename-failed" }; }
+  // 1차 blocker②(TOCTOU): rename 뒤 '옮겨진 실물'이 승인 원문인지 재확인 — 판정~rename 사이 옛 잠금 해제+새
+  // 활성 잠금 생성이면 우리가 새 잠금을 격리한 것 → 즉시 원위치 복원·중단(v10 '정리 중 새 잠금=중단·복원').
+  let moved = null; try { moved = fs.readFileSync(dest, "utf8"); } catch { moved = null; }
+  if (moved !== raw) {
+    // 2차 blocker②: 복원은 '자리가 비어 있을 때만'(POSIX rename의 기존 목적지 무단 교체=제3 활성 잠금 삭제 금지).
+    // 자리가 차 있으면 격리물을 그대로 두고 위치 보고 — 밀려난 작성자의 실제 쓰기는 관문의 '쓰기 직전 소유
+    // 재확인'(stillMine)이 중단시키므로 동시 쓰기는 성립하지 않는다(이중 방어).
+    // 3차 blocker②: 복원은 '원자적 무클로버'만 — link(dest→lockPath)는 목적지 존재 시 EEXIST로 실패해
+    // (existsSync~rename 사이 경합에서 POSIX rename이 제3 활성 잠금을 교체하던 경로 제거) 성공 시에만 격리물 제거.
+    let restored = false;
+    try { fs.linkSync(dest, lockPath); try { fs.unlinkSync(dest); } catch { /* 링크 성공 후 잔재 — TTL이 정리 */ } restored = true; }
+    catch { /* EEXIST(자리 참)·링크 미지원 — 클로버 시도 없이 위치 보고 */ }
+    if (restored) return { ok: false, reason: "raced-restored" };
+    return { ok: false, reason: "raced-unrestored", dest };
+  }
+  return { ok: true, dest };
+}
+// 단일 관문(v10): 전 작성자(전체저장·모드·정찰대상·scope-target·scope-gate·체크박스·modeSwitch)가 이 관문만
+// 통과한다. ws=null(무폴더 창)=CONTRACT_FILE 폴백·잠금 키=최종 절대경로. patch=객체(재읽기-병합) 또는
+// 함수(mutate(cur) — scope 스크립트의 삭제 포함 변형용·반환 무시). 손상 JSON=기록 거부(fail-closed)·
+// ENOENT만 신설. 반환 {ok, state?, error?} — 실패 상태는 복구 사다리의 입력.
+function updateContractPatch(ws, lang, patch, opts) {
+  try {
+    if (!patch || (typeof patch !== "object" && typeof patch !== "function") || Array.isArray(patch)) return { ok: false, state: "bad-input", error: "bad-patch" };
+    const file = ws ? contractFileFor(ws, lang) : CONTRACT_FILE;
+    try { fs.mkdirSync(path.dirname(file), { recursive: true }); } catch { /* 잠금 wx가 ENOENT로 헛돌지 않게 — 실패 시 잠금이 실패 판정 */ }
+    const r = withContractLockV10(path.resolve(file) + ".lock", (stillMine) => {
       let cur = {};
       try {
         cur = JSON.parse(fs.readFileSync(file, "utf8"));
         if (!cur || typeof cur !== "object" || Array.isArray(cur)) return false; // 형식 불명 → 기록 거부
       } catch (e) {
-        if (!e || e.code !== "ENOENT") return false; // 손상·판독 불가 → 기록 거부(fail-closed)
+        if (!e || e.code !== "ENOENT") return false; // 손상·판독 불가 → 기록 거부(fail-closed — P-1 교훈)
         cur = {};
       }
-      return atomicWrite(file, JSON.stringify({ ...cur, ...patch, workspace: ws, updatedAt: new Date().toISOString() }, null, 2));
-    });
-    return !!(r && r.ok && r.result);
-  } catch { return false; }
+      let next;
+      if (typeof patch === "function") { next = { ...cur }; patch(next); }
+      else next = { ...cur, ...patch };
+      next.updatedAt = new Date().toISOString();
+      if (ws) next.workspace = ws;
+      // 2차 blocker②: 쓰기 '직전' 소유 재확인 — 승인 격리 이중 경합 등으로 내 잠금이 옮겨졌으면 기록 중단
+      // (밀려난 작성자와 새 보유자의 동시 쓰기 차단 — 잔여 미시 간극은 P1 §5 동형 보장수준 명문화).
+      if (typeof stillMine === "function" && !stillMine()) return false;
+      return atomicWrite(file, JSON.stringify(next, null, 2));
+    }, opts && opts.tries);
+    if (!r.ok) return { ok: false, state: r.state, error: r.error, lockPath: r.lockPath };
+    return r.result ? { ok: true } : { ok: false, state: "refused", error: "corrupt-or-write-failed" };
+  } catch (e) { return { ok: false, state: "exception", error: String((e && e.message) || e) }; }
+}
+// P-8 1단(2026-07-15) 서명 유지 래퍼 — 기존 호출처(훅·테스트) 무변경. 실체는 단일 관문 updateContractPatch.
+function patchContractFields(ws, lang, patch) {
+  if (!ws) return false; // 기존 계약: 훅 경로는 ws 필수(무폴더 폴백은 관문 직접 호출자만)
+  return updateContractPatch(ws, lang, patch).ok === true;
 }
 
 // ── P-12 2a 백로그 장부(설계 동결 ⓚ) — 검증의 비차단 지적([백로그]·[주의] 승격분)이 답변에만 남고
@@ -2774,7 +2888,7 @@ function formatForClaude(answer, lang, profile, machine) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}${machineLine}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
 module.exports.codexImplementerSession = codexImplementerSession;
 module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
 // P-6 회수 영수증 계약(설계 v5.1)

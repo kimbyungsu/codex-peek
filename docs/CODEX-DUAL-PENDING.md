@@ -203,7 +203,7 @@
   fallback을 훅 heartbeat 확인 뒤로 지연 또는 단일 등록 계약으로 통합)은 테스트로 노출 후 처리.
   HANDOFF의 'rollout 보조 고정도 두 revision 증가' 계약 문구도 함께 갱신할 것.
 
-### P-8. [1단 구현 완료 2026-07-15 · 2단 백로그(설계 동결 v10)] 체크리스트 강제 체크박스 저장 안 됨 — 계약 저장 구조 재설계
+### P-8. [1단 완료 2026-07-15 · 2단 구현 완료 2026-07-19(v10)] 체크리스트 강제 체크박스 저장 안 됨 — 계약 저장 구조 재설계
 - **1단 구현(2026-07-15)**: 토글=즉시 저장(webview change→saveChecklist)+호스트 재읽기-단일필드 병합
   (contract-lib patchContractFields — 손상 JSON fail-closed[P-1 교훈]·부재만 신설), 큰 저장(rolePatch·웹뷰
   페이로드)에서 체크리스트 4필드 전면 제외(되돌린 화면값이 버튼 저장에 실리는 재발 경로 차단), 상태 푸시는
@@ -233,6 +233,16 @@
   체크박스). 무폴더 창은 CONTRACT_FILE 폴백·잠금 키=최종 절대경로. 잠금=신설 계약 파일 전용 fail-closed 잠금(v7~v9 확정): wx 선점+read-back fence, **자동 stale 회수 없음**(자동 경로에서 복원 rename이 사라져 해당 ABA 시나리오가 자동 운영에서 제거 — 수동 승인 경로의 잔여 간극은 P1 §5 동형 보장수준으로 명문화), 잠금 상태는 P1 5합타입+absent(alive/dead-valid/invalid/unreadable/owner-unverified/absent) — 정상JSON+ESRCH만 dead-valid·EPERM=alive·**JSON 파싱 실패=invalid**(P1 형식불명 동형)·fs 읽기 실패=unreadable·판정 중 ENOENT=absent(정상 해제 경합)=즉시 재획득 재시도, 복구는 상태별 승인 사다리만: dead-valid=1클릭 [잠금 정리](토큰 재확인·오탈취 즉시 복원)/invalid·owner-unverified=2단 명시 승인 모달(P1 --confirm 사다리 동형·격리 직전 상태 재판정)/unreadable=격리 금지·조사 안내만(토큰 재확인 불가=오탈취 방지 불가). stale-* 격리물은 TTL 청소(활성 잠금 절대 sweep 금지). 확장 호스트는 비동기 재시도(동기 루프로 호스트 블록 금지)·CLI는 동기 짧은 재시도. fence~쓰기 간극은 P1 §5 동형 보장수준 명문화. saveResult에 field·lang·mode 결속(웹뷰 DOM data-lang/mode
   일치 시만 인라인 표시). 필드별 단일-flight(응답까지 그 박스만 disabled)·호스트 전체 try/catch·최초 렌더 전
   disabled·즉시저장 aria-live 표시·저장버튼 문구를 규칙·세그 전용으로 정정.
+- **2단 구현 실체(2026-07-19 — 착수 범위 확정 2왕복 후 v10 그대로 구현)**:
+  - **단일 관문 updateContractPatch(ws,lang,patch|mutate,opts)**(contract-lib): 전 작성자 통일 — 훅 patchContractFields=서명 유지 래퍼(contract-inject·codex-hook의 modeSwitch 원자 patch 포함 자동 이관), 확장=patchContractOnceExt가 관문 위임(tries:1), scope-target(mutate 함수형 — 삭제 포함)·scope-gate(객체형) 직접 RMW 폐기, 체크박스=기존 bridgeLib 경유 그대로. ws=null=CONTRACT_FILE 폴백·잠금 키=path.resolve 최종 절대경로. 손상 JSON=기록 거부·ENOENT만 신설(불변).
+  - **v10 잠금 withContractLockV10**: 구조화 JSON 토큰({v,pid,rnd,ts}) wx 선점→획득 직후 read-back fence(내 토큰 재확인 — 불일치=획득 무효 재시도)→상태 6분류(alive[EPERM 포함]/dead-valid[정상 토큰+ESRCH만]/invalid[신·구 형식 모두 아님]/unreadable[fs 읽기 실패]/owner-unverified[pid 판정 기타 오류]/absent[판정 중 ENOENT=즉시 재획득]). 구형 평문 토큰(pid-rnd)은 전환기 유효 인정(invalid 오판=활성 저장 탈취 유도 차단). maxTries 인자: CLI=기본 40×15ms 동기 짧은 재시도·확장=1(대기 없이 즉시 반환 — 비동기 재시도는 확장 몫).
+  - **자동 stale 회수 없음 — 승인 격리 quarantineContractLock**: 정리 직전 상태 재판정(생존=중단)+승인 시점 원문(expect) 불변 확인(교체 오탈취 방지)→삭제 아닌 <lock>.stale-<ts> rename(원문 보존). cleanupOldState가 격리물만 7일 TTL(활성 .lock은 mtime 무관 절대 sweep 금지).
+  - **확장 복구 사다리 offerLockRecoveryExt**: dead-valid=1클릭 [잠금 정리](정리 후 저장 1회 자동 재시도) / invalid·owner-unverified=2단 명시 승인(1단 경고→2단 modal — 격리는 보존 이동임을 고지) / unreadable=격리 금지·조사 안내 / alive=재시도 안내. patchContractRetryExt=비동기 15ms×40 재시도(호스트 블록 금지 — 관문 내부 동기 대기 제거). 저장 지점 4곳(모드 전환·전체 저장·정찰 대상·체크박스) 사다리 경유.
+  - **⑸ 마감**: saveChecklist saveResult에 mode 결속(호스트 동봉+웹뷰 렌더 모드 불일치=commit 금지 hold 동형·ready 재요청 — field 인코딩 간접 방어에 직접 결속 추가)·즉시저장 aria-live(ckLive role=status — 성공/hold 양쪽)·대시보드 메시지 핸들러 전체 try/catch(예외=고지+정본 재렌더 — fill이 재활성·값 되돌림 없음).
+  - **구현검증 1차 blocker 8건 반영(07-19)**: ①전체 저장=전 필드 touched-gated(웹뷰 규칙 기준선 appRules+모드/주입/정찰 touched 플래그 — 낡은 창의 미변경 값이 타 창 갱신을 되돌리는 lost-update 차단·3트랙 전환 판정도 touched 기준) ②격리 TOCTOU — rename 후 실물 재확인·경합이면 원위치 복원(raced-restored·이중 경합=위치 보고) ③토큰 엄격(v===1·양의 pid·비공백 rnd·ts — 손상 잠금의 dead-valid/alive 오분류 차단) ④체크박스=관문 비동기 재시도 경유(무폴더 폴백·호스트 비블록·사다리 진입) ⑤웹뷰 mode 결속을 상태기 판정 후 commit 조건으로 재구성(조기 반환 폐기 — pending·타이머·hold aria-live 정상 경유) ⑥분리 실행 비동기 저장 .catch(실패 응답+정본 재렌더 — 120초 잔류 방지) ⑦무폴더 전역 계약 격리물도 TTL(BRIDGE_DIR 스윕) ⑧반례 보강(경합 주입 훅으로 격리 복원 실증·dirty 제한 실동작·엄격 토큰).
+  - **구현검증 2차 blocker 4건 반영(07-19)**: ①필드별 segTouched(클릭에서만 set·정본 fill=필드별 동기화+자기치유·저장 성공=일괄 해제·payload touched=사용자 편집 AND 값 상이 — 묶음 dirty의 외부 변경 오인 lost-update 봉합·규칙은 contractDirty AND 기준선 비교) ②격리 복원=자리 빌 때만(POSIX rename 클로버로 제3 활성 잠금 삭제 금지)+관문에 '쓰기 직전 소유 재확인'(stillMine — 밀려난 작성자의 실제 기록 중단·이중 방어·잔여 미시 간극=P1 §5 동형 명문화)+raced-unrestored 격리물 위치 사용자 고지 ③토큰 rnd·ts trim 검사(공백뿐=invalid) ④fence 읽기 실패=unreadable(4차 확정: 자동 삭제 없음 — 확인-후-삭제 TOCTOU 제거·프로세스 종료 후 dead-valid 사다리가 회수).
+  - **테스트 tests/p8-stage2(57단언)**: 잠금 미획득=callback 미실행·상태 6분류 실측(dead-valid=실제 종료 pid·invalid·unreadable[디렉터리]·구형 토큰 생존/사망)·관문(객체/함수 patch·손상 바이트 불변·무폴더 폴백·잠금 중 불변)·승인 격리(원문 불변 확인·정리 중 생존=중단·absent)·2프로세스 동시 patch 무유실(실 자식)·격리물 TTL vs 활성 잠금 보존·배선(작성자 이관·사다리 분기·mode 결속·aria-live·예외 복구). 기존 p8-checklist·verify-split·p9-auto-switch 픽스처는 관문 시대 정본형으로 갱신(완화 아님).
+  - 미구현 잔여 없음 — v10 테스트 계약(237~239행) 중 'HTML 재생성 후 타 슬롯 결과 표시 금지·양 체크박스 동시 저장'은 1단 ckMachine 기존 테스트가 소유(중복 없음).
 - 검증 이력: 진단 1회+수정 검증 2회 실패(웹뷰 상태 접근)+설계 v4(방향 인정)·v5(잠금 차단)·v6(funlock 자동회수 — P1 잔여간극으로 기각)·v7(자동 회수 포기=자동 경로 ABA 제거)·v8(복구 사다리)·v9(5합타입)·v10(absent·파싱실패=invalid·읽기실패=unreadable 확정 — 잠금 설계 구현 가능 수준 판정. 스크래치 /tmp/v-ckbug~v-v10.txt).
 - 테스트 계약(검증 제시분 채택): 잠금 미획득 시 callback 미실행·죽은 잠금=fail-closed+상태별 수동 사다리(1클릭=dead-valid만·invalid/owner-unverified=2단 승인·unreadable=격리 금지·absent=재획득)·수동 복구 경합(정리 중 새 잠금=중단·복원)·2프로세스 동시 patch
   (체크박스 vs 전체저장/CLI)·무폴더 창·HTML 재생성 후 타 슬롯 결과 표시 금지·양 체크박스 동시 저장·손상 JSON
@@ -901,8 +911,8 @@
   07-16 1d31617) → ~~P-12 1단+2a~~(완료 07-17 — 1단 프로필 이원화 c36c327+카드 표시 3d2822b+v2.2 [주의]
   47d84ec, 2a 백로그 장부+P-2·P-3·P-4 마무리 534f9af) → ~~P-12 2b 왕복 예산~~(완료 07-18 — ⓚ 2b 구현
   실체 참조) → ~~P-12 2c 기계 판독~~(완료 07-18 — 설계 동결 5왕복+구현, ⓚ 2c 블록 참조) →
-  ~~P-12 2d 기본~~(완료 07-19 — 설계 동결 7왕복+구현, ⓚ 2d 블록 참조. 종결 선언·차단형 정책=사용자 결정 대기) → **P-8 2단 잔여**
-  (v10 나머지 — 잠금 축은 분리 묶음에서 선반영)·fallback↔훅 경합 → P-6b 서술 정정. (이 단락의 옛 참조 'HANDOFF §깃헙 동기화 절 07-14 14:02'와 'P-6·P-5 같은 묶음 권장'은
+  ~~P-12 2d 기본~~(완료 07-19 — 설계 동결 7왕복+구현, ⓚ 2d 블록 참조. 종결·차단형 기각=사용자 결정 확정 07-19[P-12 표제]) → ~~P-8 2단~~(완료 07-19 — P-8 표제·'2단 구현 실체' 참조) →
+  **다음 착수=P-6b 서술 정정(3fdd104 커밋 본문·주석 사건 순서)**·fallback↔훅 경합 백로그(잔존). (이 단락의 옛 참조 'HANDOFF §깃헙 동기화 절 07-14 14:02'와 'P-6·P-5 같은 묶음 권장'은
   낡은 기록 — P-6·P-5 모두 완료됨.)
 - 동기화 자체는 무손실 완료(정본 그대로) — 위 항목은 정본의 미완 상태를 그대로 반영한 것이지 동기화 오류가 아니다.
 

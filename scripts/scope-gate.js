@@ -10,7 +10,7 @@
  */
 const fs = require("fs");
 const path = require("path");
-const { contractFileFor, loadContract, atomicWrite, normScoutGate, normScoutMode, loadLang, withFileLockStrict } = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
+const { contractFileFor, loadContract, normScoutGate, normScoutMode, loadLang, updateContractPatch } = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
 const tB = (ko, en) => (loadLang() === "en" ? en : ko); // CLI 출력도 한/영 쌍(2026-07-09)
 
 const repoArg = process.argv[2];
@@ -42,25 +42,14 @@ const lang = loadLang();
 const f = contractFileFor(repo, lang); // 현재 언어 슬롯에만 — 언어 슬롯 분리 원칙(2026-07-09)
 // [P-9 2차 지적 1] 계약 잠금 프로토콜 참여 + fail-closed(무잠금 RMW가 자동 전환·대시보드 저장을 되돌리고
 // 손상 JSON을 {}로 축소 덮어쓰던 경로 차단 — P-1 계열)
-try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { /* 잠금 wx가 ENOENT로 헛돌지 않게 */ }
-let o = {};
-const wr = withFileLockStrict(f + ".lock", () => {
-  try {
-    o = JSON.parse(fs.readFileSync(f, "utf8"));
-    if (!o || typeof o !== "object" || Array.isArray(o)) return false; // 형식 불명 → 기록 거부
-  } catch (e) {
-    if (!e || e.code !== "ENOENT") return false; // 손상·판독 불가 → 기록 거부(바이트 보존·복구 기회)
-    o = {};
-  }
-  o.scoutGate = target;
-  return atomicWrite(f, JSON.stringify({ ...o, updatedAt: new Date().toISOString() }, null, 2));
-});
-if (!(wr && wr.ok && wr.result)) {
-  console.error(tB(`저장 실패: ${f} (잠금/손상/권한 — .lock 잔존 시 보유 프로세스 종료 확인 후 삭제) — 게이트 설정이 반영되지 않았을 수 있음`,`Save failed: ${f} (lock/corruption/permission — if a stale .lock remains, verify the owner is gone and delete it) — the gate setting may not have been applied`));
+// P-8 2단(v10): 단일 관문 updateContractPatch로 이관 — 직접 RMW 폐기(전 작성자 통일·자동 삭제 유도 금지).
+const wr = updateContractPatch(repo, lang, { scoutGate: target });
+if (!wr.ok) {
+  console.error(tB(`저장 실패: ${f} (${wr.state || "unknown"}${wr.error ? " · " + wr.error : ""}) — .lock을 직접 삭제하지 말고, 진행 중 저장이면 잠시 후 재시도, 죽은 잠금이면 대시보드의 잠금 정리 안내를 따르세요 — 게이트 설정이 반영되지 않았을 수 있음`,`Save failed: ${f} (${wr.state || "unknown"}${wr.error ? " · " + wr.error : ""}) — do not delete the .lock yourself; retry shortly if a save is in progress, or follow the dashboard lock-recovery guidance for a dead lock — the gate setting may not have been applied`));
   process.exit(1);
 }
 console.log(tB(`scoutGate=${target} 저장(${lang} 언어 슬롯 — 다른 언어 모드는 별도 설정). `,`scoutGate=${target} saved (${lang} language slot — other language modes keep their own setting). `) + (target === "plan" ? tB("⚠ 훅은 새 Claude 세션부터 동작 — 상세는 docs/HANDOFF.md ⑥ 참조","⚠ the hook takes effect from the next Claude session — see docs/HANDOFF.md ⑥") : tB("게이트 꺼짐(관측 로그만 유지)","gate off (observation log only)")));
-if (normScoutMode(o) !== "on") console.log(tB("ⓘ 이 프로젝트는 2트랙(scoutMode off) — 게이트는 지도 전제라 3트랙을 켜기 전까지는 어떤 값이든 비활성입니다.","ⓘ This project is 2-track (scoutMode off) — the gate presupposes maps, so any value stays inactive until 3-track is on."));
+if (normScoutMode(loadContract(repo)) !== "on") console.log(tB("ⓘ 이 프로젝트는 2트랙(scoutMode off) — 게이트는 지도 전제라 3트랙을 켜기 전까지는 어떤 값이든 비활성입니다.","ⓘ This project is 2-track (scoutMode off) — the gate presupposes maps, so any value stays inactive until 3-track is on."));
 // 반대 슬롯이 다른 값이면 고지(설정이 '사라진' 게 아니라 언어별로 따로임을 알림 — 소실 오해 방지)
 try {
   const other = lang === "ko" ? "en" : "ko";

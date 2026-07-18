@@ -11,7 +11,7 @@
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { contractFileFor, loadContract, atomicWrite, resolveScoutRepo, loadLang, withFileLockStrict } = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
+const { contractFileFor, loadContract, resolveScoutRepo, loadLang, updateContractPatch } = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
 const tB = (ko, en) => (loadLang() === "en" ? en : ko); // CLI 출력도 한/영 쌍(2026-07-09)
 
 const wsArg = process.argv[2];
@@ -38,23 +38,13 @@ const gitLabel = (p) => usableGit(p) ? tB("git 저장소(이력 있음)","git re
 // 규칙·기본지침과 동일 · API 키만 전역). 반대 슬롯 값이 다르면 고지(소실 오해 방지)하고 건드리지 않는다.
 // [P-9 2차 지적 1] 계약 잠금 프로토콜 참여 + fail-closed: 무잠금 RMW는 자동 전환(훅)·대시보드 저장과 겹치면
 // 이전 바이트 기준 전체 쓰기로 harnessMode·modeSwitch를 되돌리고, 손상 JSON을 {}로 축소해 덮어썼다(P-1 계열).
+// P-8 2단(v10): 단일 관문 updateContractPatch로 이관 — 직접 RMW 폐기(전 작성자 통일). 실패는 잠금 상태
+// 키와 함께 안내(자동 삭제 유도 금지 — 복구는 대시보드 승인 사다리 또는 상태별 안내 경로만).
 function writeCurrentSlot(mutate) {
   const f = contractFileFor(ws, loadLang());
-  try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { /* 잠금 wx가 ENOENT로 헛돌지 않게 */ }
-  const r = withFileLockStrict(f + ".lock", () => {
-    let o = {};
-    try {
-      o = JSON.parse(fs.readFileSync(f, "utf8"));
-      if (!o || typeof o !== "object" || Array.isArray(o)) return false; // 형식 불명 → 기록 거부
-    } catch (e) {
-      if (!e || e.code !== "ENOENT") return false; // 손상·판독 불가 → 기록 거부(바이트 보존·복구 기회)
-      o = {};
-    }
-    mutate(o);
-    return atomicWrite(f, JSON.stringify({ ...o, updatedAt: new Date().toISOString() }, null, 2));
-  });
-  if (!(r && r.ok && r.result)) {
-    console.error(tB(`저장 실패: ${f} (잠금/손상/권한 — .lock 잔존 시 보유 프로세스 종료 확인 후 삭제)`,`Save failed: ${f} (lock/corruption/permission — if a stale .lock remains, verify the owner is gone and delete it)`)); process.exit(1);
+  const r = updateContractPatch(ws, loadLang(), (o) => mutate(o));
+  if (!r.ok) {
+    console.error(tB(`저장 실패: ${f} (${r.state || "unknown"}${r.error ? " · " + r.error : ""}) — .lock을 직접 삭제하지 말고, 보유 저장이 진행 중이면 잠시 후 재시도, 죽은 잠금이면 대시보드의 잠금 정리 안내를 따르세요.`,`Save failed: ${f} (${r.state || "unknown"}${r.error ? " · " + r.error : ""}) — do not delete the .lock yourself; retry shortly if a save is in progress, or follow the dashboard lock-recovery guidance for a dead lock.`)); process.exit(1);
   }
 }
 function noteOtherSlot() {

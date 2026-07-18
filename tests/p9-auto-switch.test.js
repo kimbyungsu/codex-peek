@@ -410,7 +410,7 @@ ck("B13b vscode 비사용자 스레드는 침묵·불변", !rb.out && readContra
   const cl3 = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
   ck("잠금 진단 — contractLockIssue(경로·pid·생존) export", /function contractLockIssue\(ws, lang\)/.test(cl3) && /module\.exports\.contractLockIssue = contractLockIssue;/.test(cl3));
   const ext3 = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
-  ck("잠금 진단 — 확장 토스트 3곳이 contractLockHintExt 사용", (ext3.match(/contractLockHintExt\(/g) || []).length >= 4);
+  ck("잠금 진단 — 확장 저장 실패는 P-8 2단 사다리(offerLockRecoveryExt) 경유", (ext3.match(/offerLockRecoveryExt\(/g) || []).length >= 3 && (ext3.match(/contractLockHintExt\(/g) || []).length >= 2);
 }
 
 // A10 — 살아있는 보유자가 계약 잠금을 쥔 동안 Claude 전환 → 기록 거부+차단+.lock 복구 안내(2차 지적 5)
@@ -427,11 +427,11 @@ setContract("codex-codex"); clearState();
 // 교차 작성자 잠금 참여(2차 지적 1) — 소스 계약: 확장 setScoutTargetFromUi=patchContractExt 경유,
 // scripts(scope-target/scope-gate)=withFileLockStrict+fail-closed(무잠금 keep-병합·{} 축소 덮어쓰기 제거)
 const extSrc2 = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
-ck("교차 작성자 — setScoutTargetFromUi가 patchContractExt 경유", /patchContractExt\(ws, lang, \{ scoutRepo: abs \}\)/.test(extSrc2) && !/\.\.\.keep, scoutRepo: abs/.test(extSrc2));
+ck("교차 작성자 — setScoutTargetFromUi가 관문(재시도+사다리) 경유", /patchContractRetryExt\(ws, lang, \{ scoutRepo: abs \}\)/.test(extSrc2) && !/\.\.\.keep, scoutRepo: abs/.test(extSrc2));
 const st2 = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-target.js"), "utf8");
 const sg2 = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-gate.js"), "utf8");
-ck("교차 작성자 — scope-target 잠금+fail-closed", /withFileLockStrict\(f \+ "\.lock"/.test(st2) && /기록 거부/.test(st2));
-ck("교차 작성자 — scope-gate 잠금+fail-closed", /withFileLockStrict\(f \+ "\.lock"/.test(sg2) && /기록 거부/.test(sg2));
+ck("교차 작성자 — scope-target 단일 관문 이관(P-8 2단: 잠금·fail-closed=관문 내부)", /updateContractPatch\(ws, loadLang\(\)/.test(st2) && !/withFileLockStrict\(/.test(st2));
+ck("교차 작성자 — scope-gate 단일 관문 이관(P-8 2단)", /updateContractPatch\(repo, lang/.test(sg2) && !/withFileLockStrict\(/.test(sg2));
 // 대시보드 — 복귀(현재 모드≠to)·원복(reverted) 상태에선 자동 전환 안내 숨김(2차 부수 지적)
 ck("대시보드 — 안내는 to===현재 모드·비원복일 때만", /msw\.to===harnessMode&&!msw\.reverted/.test(extSrc2));
 

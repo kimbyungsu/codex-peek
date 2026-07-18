@@ -97,9 +97,9 @@ ok(/codexVerifyMode: VerifyMode;/.test(ext) && /codexVerifyMode: normCodexVerify
 ok(!/function saveContract\(/.test(ext), "옛 saveContract(정규화 전체 병합 기록) 제거 — 봉인(물질화 누출 경로 폐쇄)");
 ok(/function patchContractExt\(ws: string \| null, lang: Lang \| undefined, patch: Record<string, unknown>\): boolean/.test(ext) && /const file = ws \? contractFileFor\(ws, lang\) : CONTRACT_FILE;/.test(ext), "patchContractExt — 무폴더 창 CONTRACT_FILE fallback 포함");
 ok(/if \(!e \|\| e\.code !== "ENOENT"\) return false;/.test(ext) && /if \(!cur \|\| typeof cur !== "object" \|\| Array\.isArray\(cur\)\) return false;/.test(ext), "patchContractExt — 손상 fail-closed·부재만 신설(P-1 규약)");
-ok(/patchContractExt\(dashboardWorkspace\(\), slotLang, \{ harnessMode: m\.mode \}\)/.test(ext), "모드 전환=harnessMode 단일 patch(정규화 전체 재저장 제거)");
-ok(/codexVerifyMode: normVerifyMode\(\{ verifyMode: m\.verifyMode \}\),/.test(ext) && /C-C 검증 스위치의 유일 물질화 지점/.test(ext), "C-C 일반 저장 분기에서만 codexVerifyMode 기록");
-const ccBranch = ext.slice(ext.indexOf('const patch: Record<string, unknown> = mode === "codex-codex"'), ext.indexOf("const ok = patchContractExt(dashboardWorkspace(), slotLang, patch);"));
+ok(/patchContractWithRecovery\(dashboardWorkspace\(\), slotLang, \{ harnessMode: m\.mode \}/.test(ext), "모드 전환=harnessMode 단일 patch(정규화 전체 재저장 제거 — P-8 2단 복구 경로 경유·페이로드 계약 동일)");
+ok(/m\.verifyModeTouched \? \{ codexVerifyMode: normVerifyMode\(\{ verifyMode: m\.verifyMode \}\) \}/.test(ext) && /C-C 검증 스위치의 유일 물질화 지점/.test(ext), "C-C 일반 저장 분기에서만 codexVerifyMode 기록(P-8 2단: 변경 시에만 — dirty 제한·물질화 지점 동일)");
+const ccBranch = ext.slice(ext.indexOf('const patch: Record<string, unknown> = mode === "codex-codex"'), ext.indexOf("await patchContractRetryExt(dashboardWorkspace(), slotLang, patch)"));
 ok(ccBranch.length > 0 && !ccBranch.includes("harnessMode:") && !/\.\.\.prev/.test(ccBranch), "일반 저장 patch에 harnessMode·prev 전개 없음(외부 전환 미되돌림+비물질화)");
 ok((ccBranch.match(/scoutMode: normScoutMode/g) || []).length === 2 && !ccBranch.includes("Checklist:"), "공용 허용목록=scoutMode뿐·체크리스트 제외(즉시 저장 소유)");
 ok(/target: "contract", ok, reqId: typeof m\.reqId === "string" \? m\.reqId : null/.test(ext) && /target: "contract", ok: false, reqId: typeof m\.reqId === "string" \? m\.reqId : null/.test(ext), "계약 saveResult 두 경로(성공/취소) 모두 reqId 에코");
