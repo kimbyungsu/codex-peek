@@ -235,5 +235,25 @@ console.log("[7] 배선 소스 계약 — 단일 계층·양 분기·flagVerdict
   ok(/프로필 기록이 없는 이전 검증/.test(ext), "구 기록 병기 — 과거 이력 오판 방지(3차 [주의])");
 }
 
+console.log("[8] 경보 supersede ws 격리(3축 감사 blocker) — 다른 프로젝트 경보 미삭제");
+{
+  const H = fs.mkdtempSync(path.join(os.tmpdir(), "p12st_sup_"));
+  process.env.CODEX_BRIDGE_HOME = H;
+  delete require.cache[require.resolve(path.join(ROOT, "bridge", "contract-lib.js"))];
+  const CL2 = require(path.join(ROOT, "bridge", "contract-lib.js"));
+  // 같은 세션(전역 active 폴백으로 잘못 집힌 상황 재현) — ws A의 미확인 실패 경보
+  CL2.appendIntegrityEvent({ ts: new Date().toISOString(), session: "S1", workspace: "D:/proj-A", kind: "verdict-nonclean", severity: "error", detail: "A 실패" });
+  CL2.appendIntegrityEvent({ ts: new Date().toISOString(), session: "S1", workspace: "D:/proj-B", kind: "verdict-nonclean", severity: "warning", detail: "B 보류" });
+  CL2.supersedeIntegrity("S1", "verdict-nonclean", "D:/proj-B"); // B 프로젝트의 새 검증 답 도착
+  const left = CL2.readIntegrityEvents();
+  ok(left.some((e) => e.workspace === "D:/proj-A") && !left.some((e) => e.workspace === "D:/proj-B"), "ws 전달 supersede — B만 갱신·A의 미확인 경보 보존(C-C 전역 active 폴백 교차 삭제 봉합)");
+  CL2.appendIntegrityEvent({ ts: new Date().toISOString(), session: "S1", workspace: "", kind: "verdict-nonclean", severity: "warning", detail: "구 이벤트(ws 없음)" });
+  CL2.supersedeIntegrity("S1", "verdict-nonclean", "D:/proj-A");
+  const left2 = CL2.readIntegrityEvents();
+  ok(!left2.some((e) => e.kind === "verdict-nonclean"), "workspace 없는 구 이벤트 — 기존 동작대로 supersede 대상(잔존 경보 고아화 방지)");
+  const src2 = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
+  ok((src2.match(/supersedeIntegrity\(session, "(verdict-missing|machine-verdict|verdict-nonclean)", ws\)/g) || []).length === 3, "flagVerdict의 supersede 3곳 전부 ws 격리 전달");
+}
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

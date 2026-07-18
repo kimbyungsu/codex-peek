@@ -690,11 +690,16 @@ function ackIntegrityEvents(ids) {
 // 같은 세션의 직전 특정 kind 신호를 '새 결과가 나왔으니' 대체(supersede)한다. verdict는 누적이 아니라 '최신 상태'다 —
 // 한 턴에 실패→수정→통과로 해소되면 직전 실패/보류 노랑도 사라져야 한다(반복 검증이 무조건 노랑을 남기는 cry-wolf 방지).
 // 미확인(ack 안 됨) + 같은 session + 같은 kind인 것만 제거한다(확인한 것·다른 세션·다른 kind는 보존). 세션 미상이면 안 건드림.
-function supersedeIntegrity(session, kind) {
+// ws(선택·3축 감사 blocker 2026-07-19): C-C 실행은 CLAUDE_CODE_SESSION_ID가 없어 세션 폴백이 전역 active의
+// '다른 프로젝트' 세션을 집을 수 있다 — 그 세션+kind만으로 지우면 프로젝트 B의 검증이 프로젝트 A의 미확인
+// 경보를 삭제한다. ws를 주면 '그 워크스페이스 이벤트'만 supersede(다른 ws 이벤트 보존·workspace 없는 구
+// 이벤트=기존 동작대로 대상). 미전달=기존 동작(다른 호출처 무회귀).
+function supersedeIntegrity(session, kind, ws) {
   if (!session) return false; // 세션 모르면 섣불리 안 지움 — 다른 대화의 신호를 잘못 지우지 않게
+  const wsN = ws ? normWs(ws) : "";
   return withIntegrityLock(() => {
     const events = readIntegrityEvents();
-    const kept = events.filter((e) => !(!e.ack && e.kind === kind && e.session === session));
+    const kept = events.filter((e) => !(!e.ack && e.kind === kind && e.session === session && (!wsN || !e.workspace || normWs(e.workspace) === wsN)));
     if (kept.length === events.length) return true; // 지울 것 없음(무변경 성공)
     return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: kept }));
   });

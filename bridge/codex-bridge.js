@@ -561,8 +561,8 @@ function flagVerdict(answer, ws, codexSession, modeSnapshot, machine, attempt) {
     const text = String(answer || "");
     if (!text.trim()) return; // 빈/공백 답 → 직전 신호(표지 누락 포함)도 함부로 안 건드림(supersede도 안 함)
     const session = claudeId() || ((readActive() || {}).claudeSession) || "";
-    supersedeIntegrity(session, "verdict-missing"); // 새 답 도착 → 직전 '표지 누락' 신호는 갱신 대상(최신 1건만 유지)
-    supersedeIntegrity(session, "machine-verdict"); // P-12 2c: 기계 판독 경보도 verdict와 같은 '최신 1건' 수명주기(새 답=직전 강등 경보 갱신)
+    supersedeIntegrity(session, "verdict-missing", ws); // 새 답 도착 → 직전 '표지 누락' 신호는 갱신 대상(최신 1건만 유지)
+    supersedeIntegrity(session, "machine-verdict", ws); // P-12 2c: 기계 판독 경보도 verdict와 같은 '최신 1건' 수명주기(새 답=직전 강등 경보 갱신)
     const v = extractVerdict(text);
     // 2순위: 모델·검증모드·이 검증 1회 토큰 수집(모델별/모드별 통계 재료). 못 읽으면 빈값/null → 통계에서 '미상' 처리. 과거 기록엔 이 필드들이 없다.
     let model = "", mode = modeSnapshot || "", codexTok = null, effort = ""; // mode는 cmdAsk 시작 시점 스냅샷(검증 중 사용자가 바꿔도 trigger 모드 보존)
@@ -602,7 +602,7 @@ function flagVerdict(answer, ws, codexSession, modeSnapshot, machine, attempt) {
       });
       return; // verdict-nonclean(직전 실패 빨강·보류 노랑)은 유지
     }
-    supersedeIntegrity(session, "verdict-nonclean"); // 정상 판정 → 직전 비-깨끗 신호를 대체(통과면 그대로 해소)
+    supersedeIntegrity(session, "verdict-nonclean", ws); // 정상 판정 → 직전 비-깨끗 신호를 대체(통과면 그대로 해소)
     // P-12 2c([주의] 동승): 경보 축은 '실효 판정' 권위 — 기계가 보류로 강등한 답에 원시 '실패' 빨강을 병존시키면
     // 사용자가 실효 결론(보류)과 다른 색을 본다. 통계(위)는 원시 v+machine 필드로 그대로 남는다(원문 계층 불변).
     const vAlert = machine && machine.effective ? machine.effective : v;
