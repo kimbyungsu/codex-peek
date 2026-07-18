@@ -116,7 +116,7 @@ ok(/if \(!durableEnv\.ok\) return \{ profile: "integrity", lang: loadLang\(\) \}
 ok(/const langSnap = jobFrozen \? jobFrozen\.lang : loadLang\(\);\s*\n\s*const contractSnap = loadContract\(ws, langSnap\)/.test(src), "직접 ask — 언어 먼저 캡처 후 같은 슬롯 계약 읽기(프로필·언어 단일 스냅샷)");
 ok(/const profileSnap = jobFrozen \? jobFrozen\.profile : effectiveVerifyProfile\(contractSnap\);/.test(src), "직접 ask=시작 시점 계약 스냅샷·내구=job 동결값(계약 ⓕ)");
 ok(/withContract\(prompt \+ \(net \? netNote\(langSnap\) : ""\), ws, langSnap, attCarrier, profileSnap\)/.test(src), "주입(withContract)이 동결 프로필 사용");
-ok(src.split("formatForClaude(answer, langSnap, profileSnap)").length === 3, "footer 2경로(연결·새 세션) 모두 동결 프로필 사용 — 완료 시점 재읽기 없음");
+ok(src.split("formatForClaude(answer, langSnap, profileSnap, mfl.machine)").length === 3, "footer 2경로(연결·새 세션) 모두 동결 프로필 사용(+2c machine 4번째 인자) — 완료 시점 재읽기 없음");
 const wk = fs.readFileSync(path.join(ROOT, "bridge", "ask-job-worker.js"), "utf8");
 ok(/Object\.assign\(\{\}, cur, extra\)/.test(wk), "worker patch=기존 필드 보존 병합(동결 필드 불변)");
 

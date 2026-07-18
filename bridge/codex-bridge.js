@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -506,18 +506,32 @@ function parseLastTurn(file) {
 // 실패→수정→재검증 통과로 해소되면 그 경보도 사라진다(반복 검증이 무조건 경보를 남기는 cry-wolf 방지). 그 뒤 실패(빨강)·보류·불가(노랑)일 때만 새로 띄움.
 // '통과'·'통과(보완)'은 새 경보를 만들지 않는다(굿하트 '통과 도장' 안 만들기). 단 답은 있는데 마지막 판정 줄이 없으면(null)
 // verdict-missing 노랑으로 '표지 누락'을 가시화한다(대시보드 색 분류 입력이 비기 때문). 빈/공백 답은 아무 신호도 안 건드린다. answer=마지막 메시지(-o).
-function flagVerdict(answer, ws, codexSession, modeSnapshot) {
+function flagVerdict(answer, ws, codexSession, modeSnapshot, machine) {
   try {
     const text = String(answer || "");
     if (!text.trim()) return; // 빈/공백 답 → 직전 신호(표지 누락 포함)도 함부로 안 건드림(supersede도 안 함)
     const session = claudeId() || ((readActive() || {}).claudeSession) || "";
     supersedeIntegrity(session, "verdict-missing"); // 새 답 도착 → 직전 '표지 누락' 신호는 갱신 대상(최신 1건만 유지)
+    supersedeIntegrity(session, "machine-verdict"); // P-12 2c: 기계 판독 경보도 verdict와 같은 '최신 1건' 수명주기(새 답=직전 강등 경보 갱신)
     const v = extractVerdict(text);
     // 2순위: 모델·검증모드·이 검증 1회 토큰 수집(모델별/모드별 통계 재료). 못 읽으면 빈값/null → 통계에서 '미상' 처리. 과거 기록엔 이 필드들이 없다.
     let model = "", mode = modeSnapshot || "", codexTok = null, effort = ""; // mode는 cmdAsk 시작 시점 스냅샷(검증 중 사용자가 바꿔도 trigger 모드 보존)
     try { if (codexSession) { const f = findRolloutById(codexSession); if (f) { const lt = parseLastTurn(f); model = lt.model; effort = lt.effort || ""; codexTok = lt.tokens; } } } catch { /* rollout 파싱 best-effort */ }
     // 통계 누적(append-only, stats/verdicts.jsonl) — 대시보드 탭2 재료. 원문 저장 안 함(메타만). best-effort.
-    try { appendVerdict({ ts: nowIso(), workspace: ws, claudeSession: session, codexSession: codexSession || "", verdict: v || "unparsed", answerChars: text.length, model: model, mode: mode, effort: effort, codexTokens: codexTok }); } catch { /* 통계 실패가 검증 흐름을 막지 않음 */ }
+    // P-12 2c: machine 필드는 같은 행에 추가(별도 append 없음 — 검증 1회=통계 1행 유지). 2c=원시 메타까지·집계는 2d.
+    const mFields = machine && machine.effective ? { machineEffective: machine.effective, machineDemoted: !!machine.demoted, machineCorrected: !!machine.corrected, machineReason: machine.reasonKey || "" } : {};
+    try { appendVerdict({ ts: nowIso(), workspace: ws, claudeSession: session, codexSession: codexSession || "", verdict: v || "unparsed", answerChars: text.length, model: model, mode: mode, effort: effort, codexTokens: codexTok, ...mFields }); } catch { /* 통계 실패가 검증 흐름을 막지 않음 */ }
+    // P-12 2c: 강등·정정 가시화 — 기존 verdict 경보와 같은 계층(위 supersede로 최신 1건 유지). 원문 비복사(사유 키 문장만).
+    if (machine && (machine.demoted || machine.corrected)) {
+      const reasonKo = machineReasonText(machine, false);
+      appendIntegrityEvent({
+        ts: nowIso(), session, workspace: ws, kind: "machine-verdict", severity: "warning",
+        detail: tB(machine.demoted ? `기계 판독이 판정을 '보류'로 강등했습니다(${reasonKo}) — 지적 블록과 판정 선언이 어긋나거나 블록이 없어, 선언 결론을 신뢰하지 않았습니다.` : `기계 판독이 '통과' 선언을 '통과(보완)'로 정정했습니다 — 비차단 지적이 지적 블록에 존재합니다.`,
+          machine.demoted ? `Machine reading demoted the verdict to 'inconclusive' (${machine.reasonKey}) — the findings block is missing/corrupt or contradicts the declared verdict.` : `Machine reading corrected 'pass' to 'pass (notes)' — non-blocking findings exist in the findings block.`),
+        detailKo: machine.demoted ? `기계 판독이 판정을 '보류'로 강등했습니다(${reasonKo}) — 지적 블록과 판정 선언이 어긋나거나 블록이 없어, 선언 결론을 신뢰하지 않았습니다.` : `기계 판독이 '통과' 선언을 '통과(보완)'로 정정했습니다 — 비차단 지적이 지적 블록에 존재합니다.`,
+        detailEn: machine.demoted ? `Machine reading demoted the verdict to 'inconclusive' (${machine.reasonKey}) — the findings block is missing/corrupt or contradicts the declared verdict.` : `Machine reading corrected 'pass' to 'pass (notes)' — non-blocking findings exist in the findings block.`,
+      });
+    }
     if (!v) {
       // 답은 있는데 마지막 '검증:' 판정 줄이 없음 → 형식 위반 가시화. 별도 kind로 격리해 verdict-nonclean(실패 빨강·보류 노랑)은 안 건드린다.
       appendIntegrityEvent({
@@ -534,7 +548,10 @@ function flagVerdict(answer, ws, codexSession, modeSnapshot) {
       return; // verdict-nonclean(직전 실패 빨강·보류 노랑)은 유지
     }
     supersedeIntegrity(session, "verdict-nonclean"); // 정상 판정 → 직전 비-깨끗 신호를 대체(통과면 그대로 해소)
-    if (v !== "fail" && v !== "inconclusive") return; // 통과·통과(보완) → 새 경보 없음(직전 것은 이미 supersede로 정리)
+    // P-12 2c([주의] 동승): 경보 축은 '실효 판정' 권위 — 기계가 보류로 강등한 답에 원시 '실패' 빨강을 병존시키면
+    // 사용자가 실효 결론(보류)과 다른 색을 본다. 통계(위)는 원시 v+machine 필드로 그대로 남는다(원문 계층 불변).
+    const vAlert = machine && machine.effective ? machine.effective : v;
+    if (vAlert !== "fail" && vAlert !== "inconclusive") return; // 통과·통과(보완) → 새 경보 없음(직전 것은 이미 supersede로 정리)
     appendIntegrityEvent({
       ts: nowIso(),
       session,
@@ -542,15 +559,15 @@ function flagVerdict(answer, ws, codexSession, modeSnapshot) {
       kind: "verdict-nonclean",
       // 실패=빨강(error) — 대시보드 칩(실패=빨강)과 일치, '고쳐야 함'의 명확한 신호. 보류·불가=노랑(warning) — '검토하라'.
       // 빨강이어도 kind는 verdict-nonclean이라 재검증 통과 시 supersede로 자동 해소(검증 미완 빨강과 달리 ack 안 해도 사라짐).
-      severity: v === "fail" ? "error" : "warning",
+      severity: vAlert === "fail" ? "error" : "warning",
       // detailKo/detailEn 동시 저장 — 확장 표시부가 현재 언어를 고름. detail은 구버전 판독 폴백.
-      detail: v === "fail"
+      detail: vAlert === "fail"
         ? tB("Codex 결론이 '검증 실패'입니다 — 통과가 아닙니다. 대시보드 대화에서 결론과 근거를 확인하세요.", "Codex's verdict is FAIL — not a pass. Check the conclusion and evidence in the dashboard conversation.")
         : tB("Codex 결론이 '통과'가 아닙니다(보류·불가·정보 부족 등 — 결론을 못 냄). 대시보드 대화에서 결론을 확인하세요.", "Codex's verdict is not a pass (hold/unable/insufficient info — no conclusion). Check the conclusion in the dashboard conversation."),
-      detailKo: v === "fail"
+      detailKo: vAlert === "fail"
         ? "Codex 결론이 '검증 실패'입니다 — 통과가 아닙니다. 대시보드 대화에서 결론과 근거를 확인하세요."
         : "Codex 결론이 '통과'가 아닙니다(보류·불가·정보 부족 등 — 결론을 못 냄). 대시보드 대화에서 결론을 확인하세요.",
-      detailEn: v === "fail"
+      detailEn: vAlert === "fail"
         ? "Codex's verdict is FAIL — not a pass. Check the conclusion and evidence in the dashboard conversation."
         : "Codex's verdict is not a pass (hold/unable/insufficient info — no conclusion). Check the conclusion in the dashboard conversation.",
     });
@@ -1481,17 +1498,65 @@ function budgetNoticeLines(res, lang, profile) {
       : "\n[검증 왕복 상한] 왕복 카운터가 손상돼 격리했습니다(원문은 verify-campaigns/corrupt에 보존) — 새 캠페인으로 시작하며, 이전 왕복에는 상한이 적용되지 않았습니다.\n";
     if (res.last) s += profile === "core"
       ? (en
-        ? `\n[verify round cap ${res.n}/${res.budget}] This was this campaign's last reserved round — the next request in the same campaign will be refused. The confirmation round for '[notes]' accepted from this verdict is NOT left under the cap, so the 'apply as a batch + one confirmation' instruction cannot run — do not apply them; report them as unapplied, or ask the user for approval if applying is necessary (cap changes take effect from the next instruction). Record what stays in the parking lot ([backlog] and user-escalated [caution] via backlog add); if blockers remain, escalate to the user as a classified hold.\n`
-        : `\n[검증 왕복 상한 ${res.n}/${res.budget}] 이 캠페인의 마지막 예약 왕복입니다 — 같은 캠페인의 다음 요청은 거부됩니다. 이 판정에서 수용한 '[보완]'의 확인 검증 몫이 상한에 남아 있지 않으므로 '일괄 반영+확인 1회' 지시는 실행할 수 없습니다 — 반영하지 말고 미반영 상태로 보고하거나, 반영이 필요하면 사용자 승인을 구하세요(상한 변경은 다음 지시부터). 남길 지적은 보관함([백로그]·승격 [주의] — backlog add)에 기록하고, blocker가 남으면 분류를 붙인 보류로 승격하세요.\n`)
+        ? `\n[verify round cap ${res.n}/${res.budget}] This was this campaign's last reserved round — the next request in the same campaign will be refused. The confirmation round for '[notes]' accepted from this verdict is NOT left under the cap, so the 'apply as a batch + one confirmation' instruction cannot run — do not apply them; report them as unapplied, or ask the user for approval if applying is necessary (cap changes take effect from the next instruction). Record what stays in the parking lot ([backlog] and user-escalated [caution] via backlog add); if blockers remain, escalate to the user as a classified hold. State the user's options in the report: (1) approve more verification (2) keep as is (3) change the cap (from the next instruction).\n`
+        : `\n[검증 왕복 상한 ${res.n}/${res.budget}] 이 캠페인의 마지막 예약 왕복입니다 — 같은 캠페인의 다음 요청은 거부됩니다. 이 판정에서 수용한 '[보완]'의 확인 검증 몫이 상한에 남아 있지 않으므로 '일괄 반영+확인 1회' 지시는 실행할 수 없습니다 — 반영하지 말고 미반영 상태로 보고하거나, 반영이 필요하면 사용자 승인을 구하세요(상한 변경은 다음 지시부터). 남길 지적은 보관함([백로그]·승격 [주의] — backlog add)에 기록하고, blocker가 남으면 분류를 붙인 보류로 승격하세요. 보고에는 선택지를 명시하세요: ① 추가 검증 승인 ② 이 상태로 두기 ③ 상한 변경(다음 지시부터).\n`)
       : (en
-        ? `\n[verify round cap ${res.n}/${res.budget}] This was this campaign's last reserved round — the next request in the same campaign will be refused. Since re-verification is impossible afterwards, close within this round without new post-verification edits; report anything remaining to the user as unapplied, and escalate remaining blockers as a hold.\n`
-        : `\n[검증 왕복 상한 ${res.n}/${res.budget}] 이 캠페인의 마지막 예약 왕복입니다 — 같은 캠페인의 다음 요청은 거부됩니다. 이후 재검증이 불가하므로 검증 후 새 수정 없이 이 왕복 안에서 마감하고, 남는 사항은 미반영 상태로 사용자에게 보고하세요. blocker가 남으면 보류로 승격하세요.\n`);
+        ? `\n[verify round cap ${res.n}/${res.budget}] This was this campaign's last reserved round — the next request in the same campaign will be refused. Since re-verification is impossible afterwards, close within this round without new post-verification edits; report anything remaining to the user as unapplied, and escalate remaining blockers as a hold. State the user's options in the report: (1) approve more verification (2) keep as is (3) change the cap (from the next instruction).\n`
+        : `\n[검증 왕복 상한 ${res.n}/${res.budget}] 이 캠페인의 마지막 예약 왕복입니다 — 같은 캠페인의 다음 요청은 거부됩니다. 이후 재검증이 불가하므로 검증 후 새 수정 없이 이 왕복 안에서 마감하고, 남는 사항은 미반영 상태로 사용자에게 보고하세요. blocker가 남으면 보류로 승격하세요. 보고에는 선택지를 명시하세요: ① 추가 검증 승인 ② 이 상태로 두기 ③ 상한 변경(다음 지시부터).\n`);
     return s;
   }
   const why = String(res.untracked || "unknown");
   return en
     ? `\n[verify round cap untracked] This round was not counted toward the cap (${why}) — the cap is enforced only while its bookkeeping is intact; N/M has no authority for this round.\n`
     : `\n[검증 왕복 상한 미집계] 이 왕복은 상한에 집계되지 않았습니다(${why}) — 상한은 내부 기록이 정상일 때만 기계적으로 강제되며, 이 왕복의 N/M은 권위가 없습니다.\n`;
+}
+
+// P-12 2c 기계 판독 계층(동결 v2~v5) — cmdAsk가 답 수신 직후 1회 실행(자연 1회: 내구 경로는 child가 1번 돌고
+// ask-wait는 저장된 .out 재인쇄 → 반복 회수 바이트 동일·부작용 없음). core 프로필만(integrity·legacy=null 무회귀).
+// 반환 {machine, notice}: machine=judgeMachineVerdict 결과(+parse) → formatForClaude 4번째 인자·flagVerdict 전달,
+// notice=[백로그] 자동 장부 등록 영수증/거부/실패 줄(stdout 전용 — raw answer·proof·rollout 불변).
+// 민감 방어(D-2): safeBacklogAutoTitle 거부 시 제목 원문을 장부·경고 어디에도 복사하지 않는다(순번·태그만).
+function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId) {
+  if (profileSnap !== "core") return { machine: null, notice: "" };
+  const en = langSnap === "en";
+  const parse = parseFindingsBlock(answer);
+  // 위치 결속(구현검증 1차 blocker①): 정합 판정은 '종료 마커 뒤의 판정 선언'에만 결속 — 블록 앞 본문의 옛 판정
+  // 줄을 전체 재판독으로 재사용하지 않는다(tail 부재=no-verdict-line 강등). 블록 부재/손상은 어차피 그 사유로 강등.
+  const verdict = parse.present && parse.ok ? extractVerdict(parse.tailVerdictLine || "") : extractVerdict(String(answer || ""));
+  const machine = { ...judgeMachineVerdict(verdict, parse), parse };
+  const out = [];
+  // 자동 등록은 '블록 정상+블록 뒤 판정 존재'일 때만 — 형태가 깨진 답(판정 미결속 포함)에서 부작용을 만들지 않는다.
+  if (parse.ok && machine.reasonKey !== "no-verdict-line") {
+    let idx = 0;
+    for (const f of parse.findings) {
+      idx++;
+      if (f.tag !== "백로그") continue; // 자동 등록은 [백로그]만(동결 D-1 — [주의]는 재판단 후 승격 시 수동)
+      // 민감 방어(동결 D-2+2차 blocker③): 제목=전체 규칙, file=비경로 비밀형(토큰·이메일·제어) — 거부 시 원문 비복사(순번·태그·사유 키만).
+      const safe = safeBacklogAutoTitle(f.title);
+      const safeF = safe.ok ? safeBacklogAutoFile(f.file) : safe;
+      if (!safe.ok || !safeF.ok) {
+        const why = safe.ok ? (en ? `possibly sensitive file (${safeF.reasonKey})` : `민감 가능 file(${safeF.reasonKey})`) : (en ? `possibly sensitive title (${safe.reasonKey})` : `민감 가능 제목(${safe.reasonKey})`);
+        out.push(en
+          ? `[ledger auto-record refused] finding #${idx} [backlog]: ${why} — generalize it and register manually: node "${__filename}" backlog add --tag 백로그 --title "<generalized title>"`
+          : `[장부 자동 등록 거부] ${idx}번째 [백로그] 항목: ${why} — 일반화해 수동 등록: node "${__filename}" backlog add --tag 백로그 --title "<일반화한 제목>"`);
+        continue;
+      }
+      let r = null;
+      try { r = backlogAdd(ws, { tag: "백로그", title: f.title, file: f.file || undefined, lang: langSnap, mode: harnessModeSnap, profile: profileSnap, source: askId ? String(askId) : "machine-2c" }); } catch { r = null; } // source=askId(동결 D — 검증 실행 귀속)
+      if (r && r.ok) out.push(en
+        ? `[ledger auto-record] ${r.id}${r.existed ? " (re-seen)" : ""} — cite this id in your report`
+        : `[장부 자동 등록] ${r.id}${r.existed ? " (재발견)" : ""} — 이 id를 보고에 인용하세요`);
+      else {
+        // 사유 키 화이트리스트(2차 blocker③): backlogAdd error에 절대 잠금 경로 등 로컬 정보가 실릴 수 있어
+        // 짧은 키 형태만 통과시키고 그 외는 상수로 축약(fail-visible은 유지·원문 비복사).
+        const ek = r && typeof r.error === "string" && /^[a-z0-9-]{1,32}$/.test(r.error) ? r.error : "write-refused";
+        out.push(en
+          ? `[ledger auto-record failed] finding #${idx} [backlog] (${ek}) — register manually: node "${__filename}" backlog add --tag 백로그 --title "<title>"`
+          : `[장부 자동 등록 실패] ${idx}번째 [백로그] 항목(${ek}) — 수동 등록: node "${__filename}" backlog add --tag 백로그 --title "<제목>"`);
+      }
+    }
+  }
+  return { machine, notice: out.length ? "\n" + out.join("\n") + "\n" : "" };
 }
 
 async function cmdAsk(rest) {
@@ -1624,8 +1689,10 @@ async function cmdAsk(rest) {
     flagEvidence(answer, ws, link.codexSession, exec); // 결정2: 인용 근거 존재성+다룬 흔적 점검(경로해석=작업폴더 exec). 라벨=연 폴더 ws
     flagLedgerConfirms(answer, ws, link.codexSession, exec, { askId, attach: attCarrier }); // 로드맵 ④ L1-A: 등급·echo·askId·seen을 이벤트에
     collectScoutTargetEvidence(answer, ws, exec); // 정찰 대상 자기진단 증거(2026-07-10 — 판정 무관·3트랙만·실패 무해)
-    flagVerdict(answer, ws, link.codexSession, modeSnap); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 답에 판정 줄이 없으면 표지 누락 노랑 가시화(자동 차단 X)
-    process.stdout.write(`${langSnap === "en" ? "# Linked session" : "# 연결 세션"} ${link.codexSession} (${link.via})\n\n${formatForClaude(answer, langSnap, profileSnap)}\n`);
+    const mfl = machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId); // P-12 2c: 판독·정합·[백로그] 자동 등록(core만·1회)
+    flagVerdict(answer, ws, link.codexSession, modeSnap, mfl.machine); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 표지 누락·기계 강등=노랑 가시화(자동 차단 X)
+    process.stdout.write(`${langSnap === "en" ? "# Linked session" : "# 연결 세션"} ${link.codexSession} (${link.via})\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine)}\n`);
+    process.stdout.write(mfl.notice); // 2c 영수증/거부/실패 줄(core 외·해당 없음="" — 바이트 동일)
     process.stdout.write(budgetNoticeLines(budgetGate.res, langSnap, profileSnap)); // 포맷 계층(⑻) — N=M 예고·미집계 1줄(무제한="")
     return;
   }
@@ -1710,12 +1777,14 @@ async function cmdAsk(rest) {
     flagEvidence(answer, ws, id, exec); // 결정2: 인용 근거 존재성+다룬 흔적(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
     flagLedgerConfirms(answer, ws, id, exec, { askId, attach: attCarrier }); // 로드맵 ④ L1-A: 등급·echo·askId·seen
     collectScoutTargetEvidence(answer, ws, exec); // 정찰 대상 자기진단 증거(2026-07-10)
-    flagVerdict(answer, ws, id, modeSnap); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 표지 누락도 노랑 가시화(자동 차단 X)
+    const mfl = machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId); // P-12 2c: 판독·정합·[백로그] 자동 등록(core만·1회)
+    flagVerdict(answer, ws, id, modeSnap, mfl.machine); // 비-깨끗한 결론이면 실패=빨강·보류·불가=노랑, 표지 누락·기계 강등=노랑 가시화(자동 차단 X)
     const en = langSnap === "en";
     const head = earlyLinked
       ? (en ? `# New Codex session created·linked immediately: ${id}` : `# 새 Codex 세션 생성·즉시연결: ${id}`)
       : (en ? `# New Codex session created·linked: ${id}` : `# 새 Codex 세션 생성·연결: ${id}`);
-    process.stdout.write(`${head}\n\n${formatForClaude(answer, langSnap, profileSnap)}\n`);
+    process.stdout.write(`${head}\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine)}\n`);
+    process.stdout.write(mfl.notice); // 2c 영수증/거부/실패 줄(core 외·해당 없음="" — 바이트 동일)
     process.stdout.write(budgetNoticeLines(budgetGate.res, langSnap, profileSnap)); // 포맷 계층(⑻) — 무제한=""(바이트 동일)
   } else {
     updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; }); // 다음 자동 생성 차단 플래그

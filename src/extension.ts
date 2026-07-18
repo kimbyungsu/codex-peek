@@ -5148,7 +5148,8 @@ class Dashboard {
         const nVerdict = warnEvs.filter(function(e){return e.kind==="verdict-nonclean";}).length; // 보류·불가(실패는 빨강으로 분리)
         const nMissing = warnEvs.filter(function(e){return e.kind==="verdict-missing";}).length; // 판정 표지 누락(통과 아님과 구분)
         const nDrift = warnEvs.filter(function(e){return e.kind==="brain-drift";}).length; // 두뇌 설정(모델/추론) 어긋남 — 검증과 별개 라벨
-        const nEvid = warnEvs.length - nVerdict - nMissing - nDrift; // 근거(evidence-*) 계열
+        const nMachine = warnEvs.filter(function(e){return e.kind==="machine-verdict";}).length; // P-12 2c 기계 판독 강등·정정 — 판정 계열(근거 의심과 구분)
+        const nEvid = warnEvs.length - nVerdict - nMissing - nDrift - nMachine; // 근거(evidence-*) 계열
         const errParts = [];
         if (nFail) errParts.push(T("검증 실패 "+nFail+"건","verify failed "+nFail)); // 빨강 — Codex 결론이 통과 아님(실패)
         if (nSession) errParts.push(T("Codex 세션 없음 "+nSession+"건","no Codex session "+nSession)); // 빨강 — 연결된 세션 없음(연결되면 자동 사라짐·확인함으론 안 사라짐)
@@ -5157,6 +5158,7 @@ class Dashboard {
         const warnParts = [];
         if (nVerdict) warnParts.push(T("Codex 보류·불가 "+nVerdict+"건","Codex hold/unable "+nVerdict)); // 노랑 — 통과도 실패도 아닌 보류/불가/정보부족
         if (nMissing) warnParts.push(T("판정 표지 없음 "+nMissing+"건","no verdict line "+nMissing)); // 마지막 '검증:' 줄 없음 → 색 표시 빔
+        if (nMachine) warnParts.push(T("기계 판독 강등·정정 "+nMachine+"건","machine reading demoted/corrected "+nMachine)); // 지적 블록↔판정 불일치(근거 의심 아님 — 2차 [주의])
         if (nEvid) warnParts.push(T("근거 의심 "+nEvid+"건","evidence doubt "+nEvid)); // 인용 근거가 파일/라인과 안 맞음
         if (nDrift) warnParts.push(T("두뇌 설정 어긋남 "+nDrift+"건","brain setting drift "+nDrift)); // 모델/추론 계열 불일치(설정 미적용 가능 — 검증과 무관)
         const errStr = errParts.join(" · ");
@@ -6029,16 +6031,19 @@ export function activate(context: vscode.ExtensionContext): void {
       const nVerdict = warns.filter((e) => e.kind === "verdict-nonclean").length;
       const nMissing = warns.filter((e) => e.kind === "verdict-missing").length; // 표지 누락 — '통과 아님'과 다름
       const nDrift = warns.filter((e) => e.kind === "brain-drift").length; // 두뇌 설정 어긋남 — 검증 근거와 무관(배너와 동일 분리)
-      const nEvid = warns.length - nVerdict - nMissing - nDrift;
-      const kinds = [nVerdict > 0, nMissing > 0, nEvid > 0, nDrift > 0].filter(Boolean).length;
+      const nMachine = warns.filter((e) => e.kind === "machine-verdict").length; // P-12 2c 기계 판독 강등·정정 — 판정 계열(근거 의심 오분류 방지 — 2차 [주의])
+      const nEvid = warns.length - nVerdict - nMissing - nDrift - nMachine;
+      const kinds = [nVerdict > 0, nMissing > 0, nEvid > 0, nDrift > 0, nMachine > 0].filter(Boolean).length;
       const label = kinds > 1 ? tE("Codex 주의","Codex warnings")
                   : nVerdict ? tE("Codex 보류·불가","Codex hold/unable")
                   : nMissing ? tE("Codex 표지 없음","Codex no verdict line")
+                  : nMachine ? tE("기계 판독 강등·정정","machine reading demoted/corrected")
                   : nDrift ? tE("두뇌 설정 어긋남","brain setting drift")
                   : tE("Codex 근거 의심","Codex evidence doubt");
       const parts: string[] = [];
       if (nVerdict) parts.push(tE(`보류·불가 ${nVerdict}건`,`hold/unable ${nVerdict}`));
       if (nMissing) parts.push(tE(`판정 표지 없음 ${nMissing}건`,`no verdict line ${nMissing}`));
+      if (nMachine) parts.push(tE(`기계 판독 강등·정정 ${nMachine}건`,`machine demoted/corrected ${nMachine}`));
       if (nEvid) parts.push(tE(`근거 의심 ${nEvid}건`,`evidence doubt ${nEvid}`));
       if (nDrift) parts.push(tE(`두뇌 설정 어긋남 ${nDrift}건`,`brain drift ${nDrift}`));
       const tipHead = parts.join(" · ");

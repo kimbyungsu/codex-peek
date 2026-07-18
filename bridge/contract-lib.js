@@ -297,6 +297,20 @@ function normBacklogTitle(t) {
 function normBacklogFile(f, ws) {
   if (!f) return "";
   const x = String(f).normalize("NFC").trim().replace(/\\/g, "/");
+  // 2c 구현검증 3차 blocker: file: URI와 '반대 OS' 절대경로(예: POSIX에서 드라이브 경로)는 현 OS의
+  // path.isAbsolute가 절대로 인식하지 못해 ws 기준 상대 결합으로 원문(사용자 디렉터리 포함)이 보존되던 우회 —
+  // 현 OS 문법과 무관하게 '절대경로 형태'를 먼저 식별해, 현 OS가 해석 못 하는 형태는 즉시 basename 외부 축소.
+  const lastSeg = (s) => { const parts = s.replace(/[?#].*$/, "").split("/").filter(Boolean); return parts.length ? parts[parts.length - 1] : s; };
+  if (/^file:/i.test(x)) {
+    // 4차 blocker: %2F·%5C 등 퍼센트 인코딩 구분자가 lastSeg를 우회해 전체 경로 문자열이 보존되던 구멍 —
+    // 해독 후 축소하고, 해독 불능·이중 인코딩 잔존은 원문을 '전혀' 보존하지 않는 상수로 축소(fail-closed).
+    let u = x.replace(/[?#].*$/, "");
+    try { u = decodeURIComponent(u); } catch { return "(외부 URI)"; }
+    if (u.includes("%")) return "(외부 URI)"; // 해독 후 % 잔존=다중 인코딩 가능성(3중 %25255C가 %255C로 통과하던 5차 blocker) — 깊이 불문 원문 비보존(리터럴 % 파일명 오탐=안전 방향)
+    return lastSeg(u.replace(/\\/g, "/")) + " (외부)"; // file:// URI — 경로 원문 비보존
+  }
+  const foreignAbs = /^[A-Za-z]:\//.test(x) || /^\/\//.test(x) || x.startsWith("/"); // 드라이브·UNC(//)·루트 — OS 무관 절대 형태
+  if (foreignAbs && !path.isAbsolute(x)) return lastSeg(x) + " (외부)"; // 현 OS가 절대로 못 읽는 이형 절대경로
   const abs = path.isAbsolute(x) ? x : path.resolve(String(ws || ""), x);
   const rel = path.relative(String(ws || ""), abs).replace(/\\/g, "/");
   if (rel && rel !== ".." && !rel.startsWith("../") && !path.isAbsolute(rel)) return rel; // 세그먼트 단위 경계(3차 blocker: ..notes/ 같은 내부 정상 디렉터리 오판·항목 병합 방지)
@@ -524,6 +538,136 @@ function reserveVerifyCampaign(ws, campaignId, budget, persistFn) {
   });
   if (!r.ok) return { tracked: false, untracked: "lock" };
   return r.result;
+}
+
+// ── P-12 2c 기계 판독 딱지(설계 동결 5왕복 v2~v5) ─────────────────────────────────
+// 검증자 답의 '판정 줄 바로 앞' 구조화 지적 블록을 기계가 판독해 ①판정↔blocker 정합 확인(불일치·파싱
+// 실패=보류 강등 fail-closed·비차단 있는 깨끗한 통과=통과(보완) 상향 정정) ②[백로그] 자동 장부 등록.
+// proof·raw answer·rollout은 불변 — 강등은 판정·경보 계층(footer·flagVerdict·통계 메타)만(proof=실행 영수증 계약 유지).
+const FINDINGS_MARKERS = {
+  ko: { start: "[지적 목록 v1]", end: "[지적 목록 끝]" },
+  en: { start: "[findings v1]", end: "[findings end]" },
+};
+// 태그 정규화: en 동의어→ko 정본. 미지 태그=null(손상).
+function normFindingTag(t) {
+  const s = typeof t === "string" ? t.trim().toLowerCase() : "";
+  if (s === "blocker") return "blocker";
+  if (s === "주의" || s === "caution") return "주의";
+  if (s === "보완" || s === "notes") return "보완";
+  if (s === "백로그" || s === "backlog") return "백로그";
+  return null;
+}
+// 순수 판독기 — 구조만 반환(id·ws 무관). corrupt 진단은 원문 비복사 계약: {count, items:[{lineNo, reasonKey}]}만
+// (reasonKey∈bad-json|not-object|bad-tag|bad-title|bad-file|marker — 손상 줄에 비밀값이 있어도 어디로도 전파 안 됨).
+// 문법(동결 C-2): 마커=행 전체 정확 일치·시작/종료 같은 언어 쌍·'마지막 시작 마커' 뒤 정확히 1개의 종료 마커·
+// 종료 마커 뒤에는 빈 줄 제외 판정 선언 1줄만 허용·그 이후 잔여 마커(미완·중복)=ok:false·ok:false면 자동 등록 0건.
+function parseFindingsBlock(text) {
+  const out = { present: false, ok: false, findings: [], corrupt: { count: 0, items: [] }, tailVerdictLine: "" };
+  const lines = String(text || "").split(/\r?\n/);
+  const isStart = (l) => l === FINDINGS_MARKERS.ko.start || l === FINDINGS_MARKERS.en.start;
+  const isEnd = (l) => l === FINDINGS_MARKERS.ko.end || l === FINDINGS_MARKERS.en.end;
+  let s = -1;
+  for (let i = 0; i < lines.length; i++) if (isStart(lines[i])) s = i;
+  if (s < 0) return out;
+  out.present = true;
+  const langEnd = lines[s] === FINDINGS_MARKERS.ko.start ? FINDINGS_MARKERS.ko.end : FINDINGS_MARKERS.en.end;
+  const bad = (lineNo, reasonKey) => { out.corrupt.count++; out.corrupt.items.push({ lineNo, reasonKey }); };
+  // 마지막 시작 마커 뒤의 모든 마커 줄 수집 — 정확히 1개여야 하고 같은 언어의 종료 마커여야 한다.
+  const after = [];
+  for (let i = s + 1; i < lines.length; i++) if (isStart(lines[i]) || isEnd(lines[i])) after.push(i);
+  if (after.length !== 1 || lines[after[0]] !== langEnd) {
+    for (const i of after) bad(i + 1, "marker");
+    if (!after.length) bad(s + 1, "marker"); // 종료 마커 자체가 없음
+    return out; // ok:false — 목록 전체 불신(부분 수용 금지)
+  }
+  const e = after[0];
+  // 본문 행: 줄당 JSON 1개 — plain object만(배열·중첩 file 거부), title=비공백 문자열, file=부재 또는 문자열.
+  for (let i = s + 1; i < e; i++) {
+    const ln = lines[i];
+    if (!ln.trim()) continue;
+    let o;
+    try { o = JSON.parse(ln); } catch { bad(i + 1, "bad-json"); continue; }
+    if (!o || typeof o !== "object" || Array.isArray(o)) { bad(i + 1, "not-object"); continue; }
+    const tag = normFindingTag(o.tag);
+    if (!tag) { bad(i + 1, "bad-tag"); continue; }
+    if (typeof o.title !== "string" || !o.title.trim() || /[\r\n\u2028\u2029]/.test(o.title)) { bad(i + 1, "bad-title"); continue; } // '1줄' 계약 — JSON \n 디코딩 다행 제목 거부(구현검증 1차 blocker②)
+    if (o.file !== undefined && typeof o.file !== "string") { bad(i + 1, "bad-file"); continue; }
+    out.findings.push({ tag, title: o.title.trim(), file: typeof o.file === "string" ? o.file : "" });
+  }
+  // 종료 마커 뒤: 빈 줄 제외 '판정 선언 1줄'만 허용(그 외 본문·잉여 줄=marker 손상). 그 선언 줄을 tailVerdictLine으로
+  // 보존한다 — 정합 판정은 이 '블록 뒤 판정'에만 결속(블록 앞 본문의 옛 판정 줄을 전체 재판독으로 재사용하면
+  // 위치 결속이 깨짐 — 구현검증 1차 blocker①). 선언이 없으면 tailVerdictLine=""(정합기에서 no-verdict-line 강등).
+  let declSeen = 0;
+  for (let i = e + 1; i < lines.length; i++) {
+    const ln = lines[i];
+    if (!ln.trim()) continue;
+    if (extractVerdict(ln) !== null && declSeen === 0) { declSeen = 1; out.tailVerdictLine = ln.trim(); continue; }
+    bad(i + 1, "marker");
+  }
+  out.ok = out.corrupt.count === 0;
+  return out;
+}
+// 정합 판정(동결 C-1 행렬) — 적용 게이트(core 프로필)는 호출자가 건다. verdict=extractVerdict 결과(null 허용).
+// 반환 effective∈pass|pass-notes|inconclusive|fail. 강등=보류(fail-closed), 유일한 상향 정정=통과→통과(보완).
+function judgeMachineVerdict(verdict, parse) {
+  const keep = (v) => ({ effective: v, demoted: false, corrected: false, reasonKey: "" });
+  const demote = (k) => ({ effective: "inconclusive", demoted: true, corrected: false, reasonKey: k });
+  if (verdict === "inconclusive") return keep("inconclusive"); // 보류 선언은 '블록 상태 무관' 고유 의미 유지(행렬 정본 — 부재/손상 검사보다 선행: 이미 보류인 답에 강등 footer·경보를 덧씌우지 않음 · 구현검증 2차 blocker②)
+  if (!parse || !parse.present) return demote("block-missing");
+  if (!parse.ok) return demote("block-corrupt");
+  if (verdict === null) return demote("no-verdict-line");
+  const blockers = parse.findings.filter((f) => f.tag === "blocker").length;
+  const nonblock = parse.findings.length - blockers;
+  if (blockers >= 1) return verdict === "fail" ? keep("fail") : demote("pass-with-blocker");
+  if (verdict === "fail") return demote("fail-without-blocker"); // blocker 0인데 실패 선언
+  if (nonblock >= 1 && verdict === "pass") return { effective: "pass-notes", demoted: false, corrected: true, reasonKey: "pass-with-notes" }; // 상향 정정(처리 의무 약화 차단)
+  return keep(verdict); // 빈 블록=통과 정합·통과(보완)는 유지 관용(항목 0개 보완 의무=공집합)
+}
+// 자동 등록 제목 민감 방어(동결 D-2 v5) — 원칙: 열거가 아니라 형태 '일반형'·오탐은 수동 폴백이 흡수(안전 방향).
+// 거부 시 호출자는 제목 원문을 장부·경고·통계·무결성 detail 어디에도 복사하지 않는다(항목 순번·태그만 노출).
+const AUTO_TITLE_BOUNDARY = "(^|[\\s\"'`“”‘’()\\[\\]{}<>=:,;])";
+const AUTO_TITLE_RULES = [
+  { reasonKey: "control", re: /[\u0000-\u001f\u007f]/ },
+  { reasonKey: "path", re: /[A-Za-z]:[\\/]/ },                                        // 드라이브 경로
+  { reasonKey: "path", re: /\\\\/ },                                                   // UNC(\\server\share·\\?\ 장경로 포함)
+  { reasonKey: "path", re: new RegExp(AUTO_TITLE_BOUNDARY + "//[^\\s/]+/[^\\s]") },    // //host/share
+  { reasonKey: "path", re: new RegExp(AUTO_TITLE_BOUNDARY + "/[^\\s/]+/[^\\s]") },     // 유닉스 절대경로 일반형(/root/x·/etc/passwd — 세그먼트 2+)
+  { reasonKey: "path", re: new RegExp(AUTO_TITLE_BOUNDARY + "~[^\\s]*/") },            // 물결 홈(~/·~계정/)
+  { reasonKey: "email", re: /[^\s@]+@[^\s@]+\.[^\s@]{2,}/ },
+  { reasonKey: "token", re: /\beyJ[A-Za-z0-9_-]{8,}/ },                                // JWT
+  { reasonKey: "token", re: /\bAKIA[0-9A-Z]{8,}/ },
+  { reasonKey: "token", re: /\bghp_[A-Za-z0-9]{8,}/ },
+  { reasonKey: "token", re: /\bsk-[A-Za-z0-9_-]{8,}/ },
+  { reasonKey: "token", re: /\bxox[a-z]?-[A-Za-z0-9-]{8,}/ },
+  { reasonKey: "token", re: /[A-Za-z0-9+/=_-]{32,}/ },                                 // 32+ 연속 base64/hex 덩어리
+];
+// 제목·file 공용 스캐너(7·8차 blocker — 대칭 강제): 원문 전체 규칙 검사 → 유효 %HH가 있으면 해독본도 같은
+// 규칙으로 재검사 → 해독 불능·해독 후 %HH 잔존(다중·손상 인코딩)=보수 거부 'encoded'(오탐=수동 폴백 흡수).
+// includePathRules=false면 경로 형태 규칙 제외(file은 경로가 정상 — 절대경로 최소화는 normBacklogFile 담당).
+function backlogAutoScan(s, includePathRules) {
+  const check = (v) => { for (const r of AUTO_TITLE_RULES) { if (!includePathRules && r.reasonKey === "path") continue; if (r.re.test(v)) return r.reasonKey; } return ""; };
+  let k = check(s);
+  if (k) return k;
+  if (/%[0-9A-Fa-f]{2}/.test(s)) {
+    let d;
+    try { d = decodeURIComponent(s); } catch { return "encoded"; }
+    k = check(d);
+    if (k) return k;
+    if (/%[0-9A-Fa-f]{2}/.test(d)) return "encoded";
+  }
+  return "";
+}
+function safeBacklogAutoTitle(title) {
+  const k = backlogAutoScan(String(title || ""), true);
+  return k ? { ok: false, reasonKey: k } : { ok: true, reasonKey: "" };
+}
+// file 필드용 민감 방어(구현검증 2차 blocker③·8차 대칭 통일): 비경로 비밀형(토큰·이메일·제어문자)+인코딩
+// fail-closed — 상대경로에 %HH를 겹쳐 감춘 비밀형도 제목과 같은 규칙으로 거부된다.
+function safeBacklogAutoFile(file) {
+  const s = String(file || "");
+  if (!s) return { ok: true, reasonKey: "" };
+  const k = backlogAutoScan(s, false);
+  return k ? { ok: false, reasonKey: k } : { ok: true, reasonKey: "" };
 }
 
 function appendVerdict(ev) {
@@ -2328,8 +2472,9 @@ const BASE_CORE = {
     "[검증 기본 원칙 · 핵심 프로필 — 직접 영향 중심]",
     "1) 논리 구조만으로 단정하지 말고, 코드·파일을 실제로 열어 확인해 검증하라.",
     "2) 검증 대상은 '요청이 선언한 목표·인수조건과 그 직접 영향'이다. 지정된 파일·범위는 시작점이되, 범위 밖 확장은 직접 의존이나 안전 불변식 위반 의심 같은 구체 사유가 있을 때만 하고 그 사유를 해당 항목에 표기하라.",
-    "3) 판정 규약(핵심 프로필): '검증: 실패'는 미해결 blocker가 최소 1개일 때만 쓴다. blocker는 항목의 종류가 아니라 실질 영향으로 판정한다 — ①선언된 인수조건 안에서 재현 가능하거나 신뢰할 수 있는 오작동 경로 ②데이터·보안·역할·증명 무결성 훼손(희귀 경합이라도 여기 해당하면 blocker) ③명시 요구사항 위반 ④핵심 인수조건을 입증할 실행 증거 부재 ⑤직접 연관된 고위험 회귀. 이에 해당하지 않는 지적은 세 갈래로 표기하라: '[주의]'=blocker는 아니지만 보안·개인정보·데이터 손상·복구 불능·운영 오판 위험에 '인접'(그 위험으로 이어지는 구체 경로 1줄 필수 — 경로를 못 대면 다른 갈래로. 구현모델이 심각성을 재판단해 이번 루프 처리 여부를 결정한다 — 침묵 이관 금지 대상) / '[보완]'=지적이 구체적이고 국소 수정으로 끝나며 새 설계 선택이 필요 없는 것(문구·라벨·수치·명백 소결함 — 구현모델이 이번 루프에서 일괄 반영할 것을 기대) / '[백로그]'=범위 밖 제안(선언된 인수조건 밖이고, 현재 결과물의 재현 가능한 명세 위반이 아니며, 불변식 훼손의 구체 경로가 없고, 채택하려면 새 시나리오·정책·아키텍처 범위를 열어야 하는 것 — 추가 방어·커버리지 확장 포함). 이름만 '저확률·경합·테스트 보강'이라고 [백로그]로 보내지 마라 — 무결성을 훼손하는 저확률 경합은 blocker고, 핵심 인수조건 입증에 필요한 테스트 부재도 blocker다. blocker가 없으면 판정은 '검증: 통과(보완)'.",
+    "3) 판정 규약(핵심 프로필): '검증: 실패'는 미해결 blocker가 최소 1개일 때만 쓴다. blocker는 항목의 종류가 아니라 실질 영향으로 판정한다 — ①선언된 인수조건 안에서 재현 가능하거나 신뢰할 수 있는 오작동 경로 ②데이터·보안·역할·증명 무결성 훼손(희귀 경합이라도 여기 해당하면 blocker) ③명시 요구사항 위반 ④핵심 인수조건을 입증할 실행 증거 부재 ⑤직접 연관된 고위험 회귀. 이에 해당하지 않는 지적은 세 갈래로 표기하라: '[주의]'=blocker는 아니지만 보안·개인정보·데이터 손상·복구 불능·운영 오판 위험에 '인접'(그 위험으로 이어지는 구체 경로 1줄 필수 — 경로를 못 대면 다른 갈래로. 구현모델이 심각성을 재판단해 이번 루프 처리 여부를 결정한다 — 침묵 이관 금지 대상) / '[보완]'=지적이 구체적이고 국소 수정으로 끝나며 새 설계 선택이 필요 없는 것(문구·라벨·수치·명백 소결함 — 구현모델이 이번 루프에서 일괄 반영할 것을 기대) / '[백로그]'=범위 밖 제안(선언된 인수조건 밖이고, 현재 결과물의 재현 가능한 명세 위반이 아니며, 불변식 훼손의 구체 경로가 없고, 채택하려면 새 시나리오·정책·아키텍처 범위를 열어야 하는 것 — 추가 방어·커버리지 확장 포함). 이름만 '저확률·경합·테스트 보강'이라고 [백로그]로 보내지 마라 — 무결성을 훼손하는 저확률 경합은 blocker고, 핵심 인수조건 입증에 필요한 테스트 부재도 blocker다. 지적이 하나도 없으면 판정은 '검증: 통과', blocker 없이 비차단 지적([주의]/[보완]/[백로그])이 1건이라도 있으면 '검증: 통과(보완)'.",
     "4) 본문에 검토 내용·항목별 근거(경로·라인)를 '먼저' 상세히 작성하라. 판정 결론은 반드시 '맨 마지막 한 줄'에만 다음 4가지 중 정확히 하나로 출력하라: '검증: 통과' / '검증: 통과(보완)' / '검증: 보류' / '검증: 실패'. 마지막 줄 외에는 '검증:'으로 시작하는 줄을 쓰지 마라.",
+    "5) 판정 줄 '바로 앞'에 기계 판독용 지적 블록을 붙여라: '[지적 목록 v1]' 한 줄(그 문자열 그대로 행 전체) → 본문에서 제기한 모든 지적을 줄당 JSON 1개로 {\"tag\":\"blocker|주의|보완|백로그\",\"title\":\"지적 1줄(비밀값·개인정보·절대경로 원문 금지)\",\"file\":\"관련 파일 경로(선택)\"} → '[지적 목록 끝]' 한 줄. 지적이 없으면 마커 두 줄만(빈 블록). 종료 마커와 마지막 판정 줄 사이에는 빈 줄 외에 아무것도 쓰지 마라. 블록이 없거나 손상되거나 판정과 모순이면(예: blocker를 나열하고 '통과' 선언) 하네스가 판정을 '보류'로 강등한다(fail-closed).",
   ].join("\n"),
   transmit: [
     "[전달 원칙 · 핵심 프로필] 검증모델에게 검증을 맡길 때:",
@@ -2343,7 +2488,7 @@ const BASE_CORE = {
     "- '[주의]' 항목(보안·데이터 인접)은 심각성을 스스로 재판단하라: 실질 위험이 있다고 보면 blocker 수정과 같은 루프에서 함께 고치고(추가 재검증은 1회에 동승), 아니라고 보면 그 근거를 달아 사용자 보고로 승격하라 — 근거 없는 조용한 백로그 이관 금지.",
     "- 재판단에서 수용한 '[보완]'(기계적 보완: 지적이 구체적이고, 수정이 국소적이며, 스키마·상태·동시성·보안·역할·증명의 설계 선택을 새로 만들지 않고, 좁은 테스트로 결과를 확정할 수 있는 것)은 이번 루프에서 일괄 반영하고 확인 검증 1회로 마감하라. 확인 범위는 그 변경과 직접 회귀로 한정한다 — 일괄 반영 대상은 '첫 판정에서 수용한 [보완]'뿐이며, 확인 단계에서 새로 나온 비차단 지적([보완] 포함)은 반영하지 않고 사용자 최종 보고에 미반영 상태로 명시한다(범위 밖 제안은 보관함으로). 추가 왕복은 새 blocker에만 허용한다. 첫 판정의 [보완]을 보관함으로 미루지 마라.",
     "- '[백로그]'(범위 밖 제안)는 이 루프에서 수정하지 마라 — 보관함에 기록하고 사용자 최종 보고에 목록으로 전달한다. 보관함 항목에는 갚을 의무가 없다 — 사용자·구현모델이 채택할 때만 작업이 된다(대형 실작업은 보관함이 아니라 정식 계획 문서에 등재). 보관함은 범위 밖 제안([백로그])과 사용자 판단 대기로 승격한 [주의] 두 종류만 담는다.",
-    "- '[백로그]' 항목과 사용자 승격으로 결정한 '[주의]' 항목은 \`node \"" + BRIDGE + "\" backlog add --tag 백로그|주의 --title \"<지적 1줄 — 비밀값·개인정보 원문 금지>\" [--file <경로>]\`로 보관함에 기록하고, 출력된 id를 보고에 인용하라(기록 누락이 보고에서 드러나게).",
+    "- '[백로그]' 항목은 하네스가 검증자 지적 블록에서 자동으로 보관함에 등록한다 — 회수 출력의 '[장부 자동 등록]' 영수증 id를 보고에 인용하라. '[장부 자동 등록 거부/실패]' 경고가 보이면 그 항목만 제목을 일반화해 수동 등록하고, 사용자 승격으로 결정한 '[주의]' 항목은 직접 \`node \"" + BRIDGE + "\" backlog add --tag 백로그|주의 --title \"<지적 1줄 — 비밀값·개인정보 원문 금지>\" [--file <경로>]\`로 기록해 출력된 id를 보고에 인용하라(기록 누락이 보고에서 드러나게).",
     "- blocker(실패 사유)는 반박이 성립하지 않는 한 반드시 고치고, '[주의]'는 위 재판단에서 이번 루프 처리로 결정한 항목만 함께 고쳐 재검증하라. 완료 보고는 '통과'/'통과(보완)' 후에만.",
     "- 최종(마감) 검증 요청에는 처리표를 첨부하라: ①즉시 수정한 항목 ②범위 밖 보관 항목+제외 근거 ③정식 계획으로 승격한 대형 작업 ④사용자가 수용한 위험. 검증자는 직접 영향이나 안전 불변식 훼손 경로가 있는 항목의 '보관' 분류를 기각할 수 있다.",
     "- 재검증이 반복·교착되는데 blocker가 잔존하면 통과로 포장하지 말고 '보류'로 사용자에게 선택을 넘겨라. 단 '그냥 보류'는 금지 — 반드시 분류와 근거를 붙인다: [분쟁 보류]=코드·테스트·명세 실측 근거로 반박했으나 검증자가 유지(반박 근거·왕복 이력 첨부 — 과잉 검증 여부는 사용자가 판단) / [미해결 결함 보류]=결함 인정·해소 실패(시도 내역·잔여 위험 첨부) / [외부 결정 보류]=사용자 정책·자격증명 등 사용자 입력 없이 진행 불가(필요한 결정 명시 — 예산·왕복이 남아도 즉시 가능). 공통 첨부: 대상 지적·최종 상태·사용자 선택지.",
@@ -2355,8 +2500,9 @@ const BASE_CORE_EN = {
     "[Verification Baseline · Core profile — direct-impact focused]",
     "1) Do not conclude from logical structure alone — actually open and inspect the code/files to verify.",
     "2) The verification target is the declared goal/acceptance criteria and their direct impact. The given files/scope are a starting point; expand beyond them only with a concrete reason (direct dependency, suspected safety-invariant violation) and note that reason on the item.",
-    "3) Verdict rule (core profile): use 'Verdict: fail' only when at least one unresolved blocker exists. A blocker is judged by real impact, not category — (1) a reproducible or credible malfunction path within the declared acceptance criteria, (2) damage to data/security/role/proof integrity (even a rare race, if it qualifies), (3) violation of an explicit requirement, (4) missing executable evidence for a core acceptance criterion, (5) directly related high-risk regression. Mark non-blocking findings in three ways: '[caution]' = adjacent to security/privacy/data-loss/unrecoverable-state/operational-misjudgment risk (a one-line concrete path to that risk is mandatory — no path, use another class; the implementer re-judges severity and decides in-loop handling — never silently deferred) / '[notes]' = concrete, locally fixable, requiring no new design choice (wording, labels, counts, obvious small defects — the implementer is expected to apply them in this loop as a batch) / '[backlog]' = out-of-scope proposal (outside the declared acceptance criteria, not a reproducible spec violation of the current result, no concrete invariant-damaging path, and adopting it would open a new scenario/policy/architecture scope — including extra hardening/coverage expansion). Never send an item to '[backlog]' merely because it is named 'low-probability/race/test-hardening' — a low-probability race that damages integrity is a blocker, and a missing test needed to prove a core acceptance criterion is a blocker. With no blocker, the verdict is 'Verdict: pass (notes)'.",
+    "3) Verdict rule (core profile): use 'Verdict: fail' only when at least one unresolved blocker exists. A blocker is judged by real impact, not category — (1) a reproducible or credible malfunction path within the declared acceptance criteria, (2) damage to data/security/role/proof integrity (even a rare race, if it qualifies), (3) violation of an explicit requirement, (4) missing executable evidence for a core acceptance criterion, (5) directly related high-risk regression. Mark non-blocking findings in three ways: '[caution]' = adjacent to security/privacy/data-loss/unrecoverable-state/operational-misjudgment risk (a one-line concrete path to that risk is mandatory — no path, use another class; the implementer re-judges severity and decides in-loop handling — never silently deferred) / '[notes]' = concrete, locally fixable, requiring no new design choice (wording, labels, counts, obvious small defects — the implementer is expected to apply them in this loop as a batch) / '[backlog]' = out-of-scope proposal (outside the declared acceptance criteria, not a reproducible spec violation of the current result, no concrete invariant-damaging path, and adopting it would open a new scenario/policy/architecture scope — including extra hardening/coverage expansion). Never send an item to '[backlog]' merely because it is named 'low-probability/race/test-hardening' — a low-probability race that damages integrity is a blocker, and a missing test needed to prove a core acceptance criterion is a blocker. With zero findings the verdict is 'Verdict: pass'; with no blocker but at least one non-blocking finding ('[caution]'/'[notes]'/'[backlog]') it is 'Verdict: pass (notes)'.",
     "4) Write the review details FIRST in the body with per-item evidence (path·line). Output the verdict only as the VERY LAST line, as exactly one of: 'Verdict: pass' / 'Verdict: pass (notes)' / 'Verdict: inconclusive' / 'Verdict: fail'. Do not write any other line starting with 'Verdict:'.",
+    "5) Immediately BEFORE the verdict line, attach a machine-readable findings block: a line '[findings v1]' (that exact string as the whole line) → every finding you raised, one JSON object per line as {\"tag\":\"blocker|caution|notes|backlog\",\"title\":\"one line (never secret/PII/absolute-path originals)\",\"file\":\"related file path (optional)\"} → a line '[findings end]'. With no findings, output just the two marker lines (empty block). Between the end marker and the final verdict line write nothing but blank lines. If the block is missing, corrupt, or contradicts the verdict (e.g. blockers listed under 'pass'), the harness demotes the verdict to 'inconclusive' (fail-closed).",
   ].join("\n"),
   transmit: [
     "[Transmission Principles · Core profile] When handing work to the verifier model:",
@@ -2370,7 +2516,7 @@ const BASE_CORE_EN = {
     "- Re-judge the severity of '[caution]' items (security/data-adjacent) yourself: if you judge the risk real, fix them in the same loop as the blockers (any extra re-verification rides along once); if not, escalate them to the user's report with your reasoning — never silently defer them to the backlog.",
     "- Apply accepted '[notes]' (mechanical: the finding is concrete, the fix is local, it creates no new schema/state/concurrency/security/role/proof design choice, and a narrow test can settle it) in this loop as one batch, closed by a single confirmation verification. Scope that confirmation to the change and its direct regressions — the batch covers only '[notes]' accepted from the first verdict; new non-blocking findings surfacing during confirmation (including '[notes]') are NOT applied and are reported to the user as unapplied (out-of-scope proposals go to the parking lot). Extra round-trips are allowed only for new blockers. Never defer first-verdict '[notes]' to the parking lot.",
     "- Do NOT fix '[backlog]' (out-of-scope proposal) items in this loop — record them in the parking lot and pass the list to the user's final report. Parked items carry no repayment duty — they become work only when the user/implementer adopts them (large real work belongs in the formal plan document, not the parking lot). The parking lot holds exactly two kinds: out-of-scope proposals ('[backlog]') and '[caution]' items escalated to await the user's judgment.",
-    "- Record '[backlog]' items and user-escalated '[caution]' items with \`node \"" + BRIDGE + "\" backlog add --tag 백로그|주의 --title \"<one line — never secret/PII originals>\" [--file <path>]\` and cite the printed id in your report (so omissions are visible).",
+    "- '[backlog]' items are auto-recorded in the parking lot by the harness from the verifier's findings block — cite the '[ledger auto-record]' receipt ids from the retrieval output in your report. If an '[ledger auto-record refused/failed]' warning appears, register just that item manually with a generalized title; user-escalated '[caution]' items you record yourself with \`node \"" + BRIDGE + "\" backlog add --tag 백로그|주의 --title \"<one line — never secret/PII originals>\" [--file <path>]\` and cite the printed id (so omissions are visible).",
     "- Fix every blocker unless a rebuttal stands, plus only those '[caution]' items you decided above to handle in this loop, then re-verify. Report completion only after 'pass' or 'pass (notes)'.",
     "- Attach a disposition table to the final (closing) verification request: (1) items fixed now, (2) items parked as out-of-scope with the exclusion reason, (3) large work promoted to the formal plan, (4) risks the user accepted. The verifier may reject a 'parked' classification for any item with direct impact or a concrete invariant-damaging path.",
     "- If re-verification stalls with blockers remaining, do not package it as a pass — escalate to the user as 'inconclusive/hold'. Never a bare hold: attach a class and evidence — [disputed hold]=you rebutted the blocker with code/test/spec evidence but the verifier maintains it (attach the rebuttal and round-trip history — the user judges over-verification) / [unresolved-defect hold]=defect acknowledged but unfixed (attach attempts and residual risk) / [external-decision hold]=cannot proceed without user input such as policy or credentials (state the needed decision — allowed immediately even with budget left). Common attachments: the finding, final state, and the user's options.",
@@ -2570,12 +2716,29 @@ const VERDICT_ACTION_CORE_EN = {
   inconclusive: "Further verification needed — report the hold reason and next checkpoints. If blockers remain in a stalemate, escalate to the user with a [disputed|unresolved-defect|external-decision] class and evidence.",
   fail: "Fix required — fix the blockers unless a rebuttal stands, re-judge each '[caution]' for same-loop handling, apply accepted '[notes]' in the same batch, then re-verify (but if this is a CONFIRMATION verdict, fix only new blockers and report new non-blocking findings as unapplied). Do not fix '[backlog]' (out-of-scope proposals); record them in the parking lot and pass them through.",
 };
-function formatForClaude(answer, lang, profile) {
+// P-12 2c: 강등·정정 사유 키 → 사람 문장(원문 비복사 — 손상 줄 내용은 절대 안 담김. corrupt는 개수·좌표만).
+function machineReasonText(machine, en) {
+  const n = machine && machine.parse && machine.parse.corrupt ? machine.parse.corrupt.count : 0;
+  const M = {
+    "block-missing": en ? "no machine-readable findings block" : "기계 판독용 지적 블록 없음",
+    "block-corrupt": en ? `findings block corrupt (${n} line(s))` : `지적 블록 손상(${n}줄)`,
+    "no-verdict-line": en ? "no final verdict line" : "판정 표지 줄 없음",
+    "fail-without-blocker": en ? "'fail' declared but zero blocker findings" : "'실패' 선언인데 blocker 지적 0건",
+    "pass-with-blocker": en ? "pass-class verdict declared but blocker findings listed" : "통과류 선언인데 blocker 지적 존재",
+    "pass-with-notes": en ? "non-blocking findings listed" : "비차단 지적 존재",
+  };
+  return M[machine && machine.reasonKey] || (en ? "verdict/findings mismatch" : "판정·지적 불일치");
+}
+// machine(선택 4번째 인자·P-12 2c): judgeMachineVerdict 결과({effective, demoted, corrected, reasonKey, parse}).
+// 전달되면 처리 의무를 '실효 판정'으로 선택하고 강등·정정 사유 줄을 footer에 넣는다(core에서만 호출자가 전달 —
+// 미전달 호출은 기존과 바이트 동일=무회귀). 강등 시 표지 줄이 없어도 footer를 강제한다(fail-closed 구멍 봉합).
+function formatForClaude(answer, lang, profile, machine) {
   const text = String(answer || "");
   const en = (LANGS.includes(lang) ? lang : loadLang()) === "en";
   const table = profile === "core" ? (en ? VERDICT_ACTION_CORE_EN : VERDICT_ACTION_CORE) : (en ? VERDICT_ACTION_EN : VERDICT_ACTION);
-  const action = table[extractVerdict(text)];
-  if (!action) return text; // 결론 표지 못 찾음(null) → 원문 그대로(나서서 자르지 않음)
+  const m = machine && typeof machine === "object" && machine.effective ? machine : null;
+  const action = table[m ? m.effective : extractVerdict(text)];
+  if (!action) return text; // 결론 표지 못 찾음(null)·machine 없음 → 원문 그대로(나서서 자르지 않음)
   const lines = text.split(/\r?\n/);
   // '판정으로 분류되는 줄'만 선언으로 본다 = 그 줄 하나로 extractVerdict가 non-null. VERDICT_DECL_RE 단독 매칭보다 보수적 —
   // "검증: 이 함수는 A 경로에서만 호출됨"처럼 검증:로 시작해도 판정어(통과/실패/보류/불가…)가 없는 설명 줄은 본문에 보존한다.
@@ -2583,14 +2746,24 @@ function formatForClaude(answer, lang, profile) {
   const isDecl = (l) => extractVerdict(l) !== null;
   let verdictLine = "";
   for (const l of lines) if (isDecl(l)) verdictLine = l.trim(); // 마지막 판정 선언 줄(extractVerdict 전체 결과를 만든 그 줄)
+  // 2c tail 결속(구현검증 2차 blocker①): machine이 오면 'Codex 선언'도 블록 뒤 판정만 표시 — 블록 앞 옛 선언을
+  // 권위 있는 선언처럼 재노출하지 않는다(tail 부재='(표지 줄 없음)' — 강등 사유와 일관).
+  if (m && m.parse && m.parse.present && m.parse.ok) verdictLine = m.parse.tailVerdictLine || "";
   // 판정 선언 줄만 제거하고 끝의 빈 줄만 정돈한다. 전역 공백/개행 정규화는 하지 않는다(md hard break·코드블록·의도적 공백 보존).
   const body = lines.filter((l) => !isDecl(l)).join("\n").trimEnd();
+  let machineLine = "";
+  if (m && m.demoted) machineLine = en
+    ? `\nMachine reading: ${machineReasonText(m, true)} — verdict demoted to 'inconclusive' (fail-closed).`
+    : `\n기계 판독: ${machineReasonText(m, false)} — 판정을 '보류'로 강등(fail-closed).`;
+  else if (m && m.corrected) machineLine = en
+    ? `\nMachine reading: ${machineReasonText(m, true)} — 'pass' corrected to 'pass (notes)'.`
+    : `\n기계 판독: ${machineReasonText(m, false)} — '통과' 선언을 '통과(보완)'로 정정.`;
   return en
-    ? `${body}\n\n---\n[Claude handling note — next action, not a color label]\nCodex declared: ${verdictLine || "(no verdict line)"}\nObligation: ${action}`
-    : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}\n처리 의무: ${action}`;
+    ? `${body}\n\n---\n[Claude handling note — next action, not a color label]\nCodex declared: ${verdictLine || "(no verdict line)"}${machineLine}\nObligation: ${action}`
+    : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}${machineLine}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, BASE_CORE, BASE_CORE_EN, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
 module.exports.codexImplementerSession = codexImplementerSession;
 module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
 // P-6 회수 영수증 계약(설계 v5.1)
