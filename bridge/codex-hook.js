@@ -305,7 +305,7 @@ function pinImplementer(j, ws, sid, expectedSession) {
   // withRoleLock은 잠금 실패를 예외로 던진다(구현검증 4차 지적 2 — 예외가 최외곽 방벽에 삼켜지면 프롬프트
   // 이벤트가 차단 없이 통과하는 fail-open). 불확실 사유로 변환해 호출자가 반드시 차단하게 한다.
   let reg;
-  try { reg = registerCodexImplementer(ws, sid, j.model || "", effort, expectedSession); }
+  try { reg = registerCodexImplementer(ws, sid, j.model || "", effort, expectedSession, turnId); } // turnId=동일 턴 인계 예외 재료(설계 동결 v3~v4 — fallback 선기록과 같은 턴이면 raced 대신 합류)
   catch { reg = { ok: false, reason: "role-lock-unavailable" }; }
   if (!reg.ok) {
     if (reg.reason === "role-lock-unavailable") return {

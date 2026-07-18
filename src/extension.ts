@@ -13,7 +13,7 @@ import { maskKey, isPlausibleKey, mergeDeepseekConfig } from "./deepseek-config"
 import { appendApproved, parseApprovedFromMap, normSig } from "./map-ledger";
 import { parseEventsJsonl, deriveLedger, computeScoutHealth, HEALTH_MIN_SAMPLE } from "./ledger-events";
 import { catchUp, TailState, makeRolloutAcc, headFirstUserMessage, Msg, RolloutAcc, TURN_CAP } from "./rollout-scan";
-import { applyAutoPinUpdate, autoPinWriteAllowed, chooseImplementerAutoPin, resolvePromptProject } from "./implementer-auto-pin";
+import { applyAutoPinUpdate, autoPinReplacementReady, autoPinWriteAllowed, chooseImplementerAutoPin, clearImplementerLinkFields, hookActiveTsForGate, resolvePromptProject } from "./implementer-auto-pin";
 import { scoutDirectiveText, scoutLedgerNotes } from "./scope-package";
 import { firstImplementerMetaFromHistory } from "./implementer-baseline";
 import { assessCodexHookHeartbeat, assessCodexHookTrust, CodexHookTrustCache } from "./codex-hook-health";
@@ -1965,7 +1965,7 @@ function unlinkSession(id: string, ws: string): boolean {
       const cur=o.byWorkspace[k]; if(!cur)continue;
       if(cur.codexSession===id){delete cur.codexSession;delete cur.linkedAt;}
       if(cur.codexCodexSession===id){delete cur.codexCodexSession;delete cur.codexCodexLinkedAt;}
-      if(cur.implementerSession===id){delete cur.implementerSession;delete cur.implementerLinkedAt;delete cur.implementerLastSeenAt;delete cur.implementerRevision;delete cur.implementerEventAt;delete cur.implementerModel;delete cur.implementerEffort;}
+      if(cur.implementerSession===id){clearImplementerLinkFields(cur);} // 수명주기 ⑸ 공용 정본(출처·턴 힌트 포함 잔존 0)
       if(!cur.codexSession&&!cur.codexCodexSession&&!cur.implementerSession)delete o.byWorkspace[k];
     }
   })) === true;
@@ -2137,6 +2137,15 @@ function syncCodexImplementerAutoPin(ws: string | null): void {
     });
     const best = chooseImplementerAutoPin(candidates, [String(before.codexSession || ""), String(before.codexCodexSession || "")]);
     if (!best) return;
+    // 경합 위생 게이트(설계 동결 B — 정확성은 브릿지의 동일 턴 합류 예외가 담당): '다른 세션 교체' 후보에만,
+    // 훅이 그 프롬프트를 봤으면(codex-active ts≥promptTs) 지연·훅 침묵도 20초 grace 후에만 안전망 가동.
+    if (best.id !== String(before.implementerSession || "")) {
+      let hookTs: number | null = null;
+      // 프로젝트 귀속 결속(1차 B1): 세션 id·workspace가 모두 이 후보·이 프로젝트일 때만 훅 흔적으로 인정 —
+      // 같은 세션의 타 프로젝트 heartbeat가 이 프로젝트 안전망을 영구 지연시키는 경로 차단.
+      try { hookTs = hookActiveTsForGate(bridgeLib()?.readCodexActive?.(best.id), best.id, ws, normWs); } catch { hookTs = null; }
+      if (!autoPinReplacementReady(Date.parse(best.promptTs || "") || 0, hookTs, Date.now())) return;
+    }
     withRoleLockExt(() => updateLinks((o) => {
       let curKey = key, cur: any = {};
       for (const k of Object.keys(o.byWorkspace || {})) if (normWs(k) === key) { curKey = k; cur = o.byWorkspace[k] || {}; break; }
@@ -2272,7 +2281,7 @@ function unlinkSessionEverywhere(id: string): boolean {
       const cur=o.byWorkspace[k]; if(!cur)continue;
       if(cur.codexSession===id){delete cur.codexSession;delete cur.linkedAt;}
       if(cur.codexCodexSession===id){delete cur.codexCodexSession;delete cur.codexCodexLinkedAt;}
-      if(cur.implementerSession===id){delete cur.implementerSession;delete cur.implementerLinkedAt;delete cur.implementerLastSeenAt;delete cur.implementerRevision;delete cur.implementerEventAt;delete cur.implementerModel;delete cur.implementerEffort;}
+      if(cur.implementerSession===id){clearImplementerLinkFields(cur);} // 수명주기 ⑸ 공용 정본(출처·턴 힌트 포함 잔존 0)
       if(!cur.codexSession&&!cur.codexCodexSession&&!cur.implementerSession)delete o.byWorkspace[k];
     }
   })) === true;

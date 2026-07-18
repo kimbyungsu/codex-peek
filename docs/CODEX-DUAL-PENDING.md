@@ -202,6 +202,17 @@
   자동 고정·스캔 신호로 오인되지 않게 ③잔여 경합(다른 세션 첫 프롬프트에서 확장 fallback vs 훅 동시 교체 —
   fallback을 훅 heartbeat 확인 뒤로 지연 또는 단일 등록 계약으로 통합)은 테스트로 노출 후 처리.
   HANDOFF의 'rollout 보조 고정도 두 revision 증가' 계약 문구도 함께 갱신할 것.
+- **잔여 경합(수정 계약 ③) 완결(2026-07-19 — 설계 확인 4왕복 동결)**: 실체=확장 fallback이 다른 세션
+  교체를 먼저 기록(eventAt=rollout promptTs)하면 늦게 재개된 훅 CAS(currentEventAt>expectedEventAt)가
+  implementer-raced로 정당한 첫 프롬프트를 차단(tests/p6b-race [1]이 실행 노출). 해소 3축: ⑴**동일 턴 한정
+  인계** — fallback 교체 기록에 implementerTurnHint(rollout 사용자 턴 id) 저장, 훅이 turnId를 전달해 같은
+  세션+auto-pin 출처+힌트 일치일 때만 raced 대신 정상 합류(eventAt=훅 자신의 anchor — fallback rollout ts가
+  max로 살아남아 turn-before-link ms 역전되던 것 차단·'턴 기록자=eventAt 기록자' 쌍 복원. 다른 턴·다른
+  세션·힌트 부재=기존 보호 전부 불변) ⑵**힌트 수명주기** — 같은 세션 N+1 관측=힌트만 교체(세대 불변)·모든
+  정상 훅 성공=출처 hook 승격+힌트 소거(1회성 인계·예외 재사용 불가·잔존 0) ⑶**확장 위생 게이트**(정확성
+  아닌 이중 세대 전진 빈도 축소 — 명시 축소): 다른 세션 교체에만, 후보 세션 codex-active ts≥promptTs=지연·
+  훅 침묵 20초 grace 후에만 안전망(autoPinReplacementReady·AUTO_PIN_HOOK_GRACE_MS=20000).
+  tests/p6b-race 29단언(1차 blocker 2건 반영: 게이트 훅 흔적=세션·프로젝트 결속 판독[타 프로젝트 heartbeat의 영구 지연 차단]·연결 제거 시 출처·힌트 소거)(노출·합류·다른 턴 거부·N/N+1 역전·소거 후 재사용 불가·다른 세션 불변·게이트 경계·배선).
 - **서술 정정 완결(2026-07-19 — 처리 순서 ⑨)**: 수정 커밋(현 이력 해시 6998725 — 07-15 이력 재작성 전
   구지칭 3fdd104)은 불변 이력이라 본문을 고치지 않는다. (이 절과 코드 주석에 남은 해당 문구는 오기의 '인용'이며 잔존 오기가 아님 — 비인용 오기 잔존 0건.) 그 본문의 '훅 pin의 CAS가 raced로 밀리고' 서술은
   오기이며 **위 '실측 사건 순서(검증 Codex 정정 반영)'가 정본**(훅은 성공·raced 아님 — 자동 고정이 '그 뒤'

@@ -53,12 +53,19 @@ export function autoPinWriteAllowed(
 // ABA 검출은 그 분기의 revision 증가가 그대로 담당한다.
 export function applyAutoPinUpdate(
   cur: Record<string, unknown>,
-  best: { id: string; promptTs: string; model?: string; effort?: string },
+  best: { id: string; promptTs: string; model?: string; effort?: string; turnId?: string },
 ): { next: Record<string, unknown>; generationAdvanced: boolean } {
   const promptAt = Date.parse(best.promptTs || "") || 0;
   const observed = Date.parse(String(cur.implementerLastSeenAt || cur.implementerLinkedAt || "")) || 0;
   if (cur.implementerSession === best.id) {
-    if (promptAt > observed) return { next: { ...cur, implementerLastSeenAt: best.promptTs }, generationAdvanced: false };
+    if (promptAt > observed) {
+      const next: Record<string, unknown> = { ...cur, implementerLastSeenAt: best.promptTs };
+      // 경합 인계 힌트 수명주기(설계 4차 ⑴): auto-pin 출처 레코드에 한해 더 새 프롬프트(N+1) 관측 시 턴
+      // 힌트를 최신으로 교체(세대 불변) — 늦은 옛 턴(N) 훅이 동일 턴 예외를 재사용 못 하게. hook 출처
+      // 레코드는 힌트 부재라 무접촉(정상 훅 성공이 이미 소거).
+      if (cur.implementerLinkSource === "rollout-user-prompt" && best.turnId) next.implementerTurnHint = best.turnId;
+      return { next, generationAdvanced: false };
+    }
     return { next: { ...cur }, generationAdvanced: false };
   }
   return {
@@ -72,9 +79,39 @@ export function applyAutoPinUpdate(
       implementerModel: best.model || "",
       implementerEffort: best.effort || "",
       implementerLinkSource: "rollout-user-prompt",
+      // 동일 턴 한정 인계(설계 동결 v3~v4): 늦게 재개된 '같은 턴' 훅만 registerCodexImplementer의 좁은 예외로
+      // 합류할 수 있게 rollout 사용자 턴 id를 힌트로 남긴다(훅 성공 시 소거 — 1회성).
+      implementerTurnHint: best.turnId || "",
     },
     generationAdvanced: true,
   };
+}
+
+// fallback 교체 게이트(설계 동결 B — 위생 축: 목표는 '이중 세대 전진 빈도 축소'이며 정확성 책임은 동일 턴
+// 합류 예외(A'')가 진다): ①훅 흔적(codex-active ts)이 프롬프트 이후=지연(훅이 그 프롬프트를 봄 — pin은 훅
+// 권위 몫) ②흔적 없음·프롬프트가 grace(기본 20초) 미만 경과=지연(훅에게 기회) ③그 외=허용(훅 침묵 — 안전망).
+export const AUTO_PIN_HOOK_GRACE_MS = 20000;
+// 게이트의 훅 흔적은 '이 프로젝트·이 후보 세션'의 기록만 인정(구현검증 1차 B1): codex-active는 세션당 단일
+// 파일이라 같은 세션의 '다른 프로젝트' heartbeat ts를 그대로 쓰면 그 프로젝트 활동이 이 프로젝트의 안전망을
+// 영구 지연시킨다(프로젝트 분리 훼손). 세션 id·workspace 결속이 확인될 때만 ts 반환.
+// 구현자 연결 필드 일괄 소거(수명주기 ⑸ 공용 정본 — 확장 해제 경로 2곳이 이 함수만 호출·테스트가 직접 실행):
+// 출처(implementerLinkSource)·턴 힌트(implementerTurnHint)까지 포함해 잔존 0(고아 메타로 남으면 늦은 옛 훅이
+// 예외 재사용·verifier 연결만 남은 레코드에 falsy 힌트 잔류). 비구현자 필드(codexSession 등)는 불변.
+export function clearImplementerLinkFields(cur: Record<string, unknown>): void {
+  delete cur.implementerSession; delete cur.implementerLinkedAt; delete cur.implementerLastSeenAt;
+  delete cur.implementerRevision; delete cur.implementerEventAt; delete cur.implementerModel;
+  delete cur.implementerEffort; delete cur.implementerLinkSource; delete cur.implementerTurnHint;
+}
+export function hookActiveTsForGate(rec: { codexSession?: unknown; workspace?: unknown; ts?: unknown } | null | undefined, sessionId: string, ws: string, normWsFn: (p: string) => string): number | null {
+  if (!rec || String(rec.codexSession || "") !== sessionId) return null;
+  if (!ws || normWsFn(String(rec.workspace || "")) !== normWsFn(ws)) return null;
+  const t = Date.parse(String(rec.ts || ""));
+  return Number.isFinite(t) ? t : null;
+}
+export function autoPinReplacementReady(promptTsMs: number, hookActiveTsMs: number | null, nowMs: number, graceMs: number = AUTO_PIN_HOOK_GRACE_MS): boolean {
+  if (!promptTsMs) return false;
+  if (hookActiveTsMs !== null && hookActiveTsMs >= promptTsMs) return false; // 훅이 이미 봄 — 영구 지연
+  return nowMs - promptTsMs >= graceMs; // 훅 침묵이 grace 이상 지속될 때만 안전망 가동
 }
 
 // 구현 역할은 사용자가 Codex 앱에서 실제 프롬프트를 가장 최근 제출한 대화가 맡는다.

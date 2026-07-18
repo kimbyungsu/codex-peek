@@ -1050,7 +1050,7 @@ function codexImplementerSession(ws) { return codexImplementerSnapshot(ws).sessi
 // Codex 구현자 역할 자동등록. VS Code의 SessionStart 또는 실제 프롬프트로 확인된 현재 대화가 구현 역할을 넘겨받는다.
 // 하네스가 세션을 새로 만들거나 임의 후보를 고르는 경로가 아니라 UserPromptSubmit의 실제 session_id만
 // 쓰므로, 검증 세션 자동생성 안전규칙과는 별개다. verifier와 같은 세션만 자기검증 방지로 거부한다.
-function registerCodexImplementer(ws, sessionId, model, effort, expectedSession) {
+function registerCodexImplementer(ws, sessionId, model, effort, expectedSession, hookTurnId) {
   if (!ws || !sessionId) return { ok: false, reason: "missing" };
   const enforceCas = arguments.length >= 5;
   return withRoleLock(() => {
@@ -1082,9 +1082,17 @@ function registerCodexImplementer(ws, sessionId, model, effort, expectedSession)
     const expectedRevision = expectedIsSnapshot ? (Number(expectedSession.revision) || 0) : currentRevision;
     const expectedRoleRevision = expectedIsSnapshot ? (Number(expectedSession.roleRevision) || 0) : currentRoleRevision;
     const expectedEventAt = expectedIsSnapshot ? (Number(expectedSession.eventStartedAt) || 0) : Date.now();
-    // Events for the same target session commute. A different session taking the role after
-    // the snapshot makes this event stale, so it must not write anything.
-    if (enforceCas && ((expectedEventAt && currentEventAt > expectedEventAt) || (currentSession !== sessionId && (currentSession !== expectedId || currentRevision !== expectedRevision || currentRoleRevision !== expectedRoleRevision)))) {
+    // 같은 대상 세션 이벤트는 revision·roleRevision 불일치에 한해 가환(시간 순서까지 무조건 가환 아님 —
+    // eventAt 후행 거부는 같은 세션의 '옛' 이벤트 역행 보호로 유지). 스냅샷 이후 다른 세션이 역할을 가져갔으면
+    // 이 이벤트는 stale — 아무것도 쓰지 않는다.
+    // [경합 인계 예외 — 설계 동결 v3~v4(2026-07-19)] 확장 fallback이 '같은 후보 세션·같은 턴'을 먼저 기록한
+    // 경우(implementerLinkSource=rollout-user-prompt+implementerTurnHint 일치)에만 eventAt 후행 거부를 면제하고
+    // 늦게 재개된 훅이 정상 '합류'한다(fallback의 rollout promptTs가 훅 앵커를 앞질러 정당한 첫 프롬프트가
+    // implementer-raced로 차단되던 경합 해소). 다른 턴·다른 세션·힌트 부재는 전부 기존 보호 그대로.
+    const sameTurnJoin = enforceCas && currentSession === sessionId
+      && cur.implementerLinkSource === "rollout-user-prompt"
+      && !!hookTurnId && String(cur.implementerTurnHint || "") === String(hookTurnId);
+    if (enforceCas && !sameTurnJoin && ((expectedEventAt && currentEventAt > expectedEventAt) || (currentSession !== sessionId && (currentSession !== expectedId || currentRevision !== expectedRevision || currentRoleRevision !== expectedRoleRevision)))) {
       return { ok: false, reason: "implementer-raced", existing: currentSession || null };
     }
     const same = cur.implementerSession === sessionId;
@@ -1095,7 +1103,10 @@ function registerCodexImplementer(ws, sessionId, model, effort, expectedSession)
       implementerLinkedAt: same ? (cur.implementerLinkedAt || new Date().toISOString()) : new Date().toISOString(),
       implementerLastSeenAt: new Date().toISOString(),
       implementerRevision: currentRevision + 1,
-      implementerEventAt: Math.max(currentEventAt, expectedEventAt || Date.now()),
+      // 합류(sameTurnJoin) 시 eventAt='훅 자신의 anchor' — fallback이 넣은 rollout promptTs(훅 턴 기록 시각보다
+      // ms 단위 후행 — P-6b 실측 200ms)가 max로 살아남아 turn-before-link ms 역전을 재발시키는 것 차단
+      // ('턴 기록자=eventAt 기록자' 쌍 복원). 그 외는 기존 monotonic 유지.
+      implementerEventAt: sameTurnJoin ? (expectedEventAt || Date.now()) : Math.max(currentEventAt, expectedEventAt || Date.now()),
       // 최초 자동 고정값을 기준선으로 유지한다. 이후 훅 입력으로 덮지 않아 실제 모델·추론 변경을 경고할 수 있다.
       // 구버전 링크에 effort가 없을 때만 같은 구현 세션의 첫 관측값으로 한 번 보충한다.
       implementerModel: same ? (cur.implementerModel || model || "") : (model || ""),
@@ -1103,6 +1114,10 @@ function registerCodexImplementer(ws, sessionId, model, effort, expectedSession)
       // linkedAt 이후 '첫 실제 rollout'을 찾아 보충한다(후속 모델 변경이 기준선으로 둔갑하는 경합 차단).
       implementerEffort: same ? (cur.implementerEffort || "") : (effort || ""),
     });
+    // 힌트 수명주기(설계 4차 ⑶): 모든 정상 훅 성공(합류·일반 등록 공통)=출처 'hook' 승격+턴 힌트 소거(1회성
+    // 인계 — 이후 늦은 옛 훅이 예외를 재사용할 수 없음·연결 교체 시에도 잔존 0).
+    next.implementerLinkSource = "hook";
+    delete next.implementerTurnHint;
     if (foundKey !== key) delete o.byWorkspace[foundKey];
     o.byWorkspace[key] = next;
     o.roleRevision = currentRoleRevision + 1;
