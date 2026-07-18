@@ -43,9 +43,12 @@ export function autoPinWriteAllowed(
   return beforeImplementer === lockedImplementer && autoPinCandidateIsCurrent(candidatePromptTs, currentPromptTs, linkObservedTs);
 }
 
-// P-6b(2026-07-14 라이브 실측): 같은 세션 재관측은 '세대'(implementerRevision·implementerEventAt·roleRevision)를
-// 전진시키지 않는다 — 세대 기록원이 훅 pin과 자동 고정 둘이 되면 훅 CAS가 raced로 밀려 턴 상태가 링크보다
-// 과거로 남고, freeze가 turn-before-link로 검증 시작을 거부한다(job 실행 중이면 writeProof stale-role까지).
+// P-6b(2026-07-14 라이브 실측 — 사건 순서는 검증 정정본이 정본: 커밋 6998725 본문의 '훅 CAS가 raced로 밀림'
+// 서술은 오기): 실제로는 ①훅 pin이 먼저 '성공'해 턴 상태를 정상 기록했고(raced 아님) ②그 '뒤' 확장의 같은-세션
+// 자동 고정이 implementerEventAt을 새 프롬프트(나중엔 <hook_prompt> 차단 쪽지 오인분까지) 시각으로 전진시켜
+// ③eventAt이 이미 기록된 turn.startedAt보다 미래가 되면서 freeze가 turn-before-link로 검증 시작을 거부했다
+// (job 실행 중이면 writeProof stale-role까지). 그래서 같은 세션 재관측은 '세대'(implementerRevision·
+// implementerEventAt·roleRevision)를 전진시키지 않는다 — 세대 기록원은 훅 pin과 '다른 세션 교체'만.
 // 관측 시각(implementerLastSeenAt)만 갱신한다. 세대 전진은 '다른 세션으로의 교체'(ABA 포함)에만 허용 —
 // ABA 검출은 그 분기의 revision 증가가 그대로 담당한다.
 export function applyAutoPinUpdate(
