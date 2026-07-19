@@ -387,6 +387,16 @@ export function canonicalSerialize(t: Topology): string {
 export function mapHashOf(t: Topology): string {
   return require("crypto").createHash("sha1").update(canonicalSerialize(t)).digest("hex");
 }
+// P4(설계 v8 — historyless 자기참조 해소): provenance 필드를 제외한 '구조 해시'. v3 historyless
+// VerificationBasis.basisFp의 유일 출처 — provenance 주입 '전'에 계산 가능하고(순환 없음) provenance만의
+// 변경에는 불변이다. ⚠dual basis 불변식: PatchBasis.basisFp·mapHashAfter·audit·snapshot·WAL·authorityHash는
+// 계속 mapHashOf(full — provenance 포함)를 쓴다. 이 함수로 교체 금지.
+export function structuralHashOf(t: Topology): string {
+  const copy = JSON.parse(JSON.stringify(t)) as Topology;
+  for (const n of copy.nodes || []) delete (n as { provenance?: unknown }).provenance;
+  for (const e of copy.edges || []) delete (e as { provenance?: unknown }).provenance;
+  return mapHashOf(copy);
+}
 
 // ── v1→v2 결정론 마이그레이터(P0.5 — 설계 §3) ──────────────────────────────
 // '결정론'=동일 v1 입력이면 어느 clone·브랜치에서 실행해도 동일 v2 출력(P0.5 설계검증 #2: 실사용 randomUUID는
@@ -1179,6 +1189,7 @@ export type AuthorityDecisionProjection = {
   evidenceFps: Array<{ ref: string; contentHash: string }>;
   classification: "auto" | "verifier-resolved" | "intent-choice";
   resolutionOutcome: string; verdictFp?: string;
+  affectedIds?: string[]; // P4(v3 전용): 생존 changedIds — v2 projection에는 이 키 자체가 없어야 한다(해시 불변 계약)
 };
 export type MapDecisionV2 = {
   schema: "map-decision-v2";
@@ -1194,6 +1205,10 @@ export type MapDecisionV2 = {
   audit: { ts: string; topologyBeforeHash: string; topologyAfterHash: string; mapMdAfterHash: string; authorityHashAfter: string; expectedMapHashAfter: string; walRef: string };
 };
 
+// P4(설계 v8 — 버전·호환 계약): map-decision-v3 = v2 + affectedIds(topology decision 필수·정렬·중복 제거 /
+// policy decision=부재 금지 조건부). historyless VerificationBasis의 structural 의미는 v3부터. 신규 기록=v3만,
+// 구 v2 레코드=바이트 의미 보존(재작성·일괄 변환 금지 — adpOf/해시 결속 불변, 판정은 dual reader가 분기).
+export type MapDecisionV3 = Omit<MapDecisionV2, "schema"> & { schema: "map-decision-v3"; affectedIds?: string[] };
 const DECISION_V2_KEYS = ["schema", "decisionId", "mapId", "patchId", "opHash", "patch", "actor", "classification", "resolution", "preCutover", "verification", "evidenceFps", "verdictFp", "audit"] as const;
 const AUDIT_KEYS = ["ts", "topologyBeforeHash", "topologyAfterHash", "mapMdAfterHash", "authorityHashAfter", "expectedMapHashAfter", "walRef"] as const;
 export function validateDecisionV2(d: MapDecisionV2): string[] {
@@ -1374,13 +1389,40 @@ export function targetIdsOfPatch(p: MapPatchV2): string[] {
   return [];
 }
 
-export function adpOf(d: MapDecisionV2): AuthorityDecisionProjection {
+// P4 dual reader: v3 검증 — v2 본문 검사를 사본(schema=v2·affectedIds 제거)으로 재사용하고 v3 고유 조건만 추가.
+// 원본은 무변경(사본 검사) — v2 validator의 strict unknownKeys를 그대로 활용한다.
+export function validateDecisionV3(d: MapDecisionV3): string[] {
+  if (!d || typeof d !== "object") return ["decision이 객체가 아님"];
+  if ((d as { schema?: unknown }).schema !== "map-decision-v3") return ['schema는 "map-decision-v3"여야'];
+  const asV2 = { ...(d as unknown as Record<string, unknown>) };
+  delete asV2.affectedIds;
+  asV2.schema = "map-decision-v2";
+  const errs = validateDecisionV2(asV2 as unknown as MapDecisionV2);
+  const isPolicy = d.patch && isPolicyOpV2(d.patch.operation);
+  const a = (d as { affectedIds?: unknown }).affectedIds;
+  if (isPolicy) {
+    if (a !== undefined) errs.push("정책 op decision(v3): affectedIds 금지(entity 대상 없음)");
+  } else if (!Array.isArray(a) || !a.length || a.some((x) => typeof x !== "string" || !isUuid(x))) {
+    errs.push("v3 topology decision: affectedIds(비어있지 않은 entity UUID 배열) 필수");
+  } else if (JSON.stringify(a) !== JSON.stringify([...a].sort()) || new Set(a).size !== a.length) {
+    errs.push("affectedIds는 정렬·중복 제거 canonical이어야");
+  }
+  return errs;
+}
+export function validateDecisionAny(d: MapDecisionV2 | MapDecisionV3): string[] {
+  if (d && (d as { schema?: unknown }).schema === "map-decision-v3") return validateDecisionV3(d as MapDecisionV3);
+  return validateDecisionV2(d as MapDecisionV2);
+}
+export function adpOf(d: MapDecisionV2 | MapDecisionV3): AuthorityDecisionProjection {
   return {
     decisionId: d.decisionId, mapId: d.mapId, patchId: d.patchId, opHash: d.opHash,
     operation: d.patch.operation, targetIds: targetIdsOfPatch(d.patch).sort(),
     verification: d.verification, evidenceFps: [...(d.evidenceFps || [])].sort((a, b) => (a.ref < b.ref ? -1 : 1)),
     classification: d.classification, resolutionOutcome: d.resolution.outcome,
     ...(d.verdictFp ? { verdictFp: d.verdictFp } : {}),
+    // v3 전용 — v2 projection에는 이 키가 절대 들어가지 않는다(adpHash·decisionIndexHash·authorityHash 불변 계약)
+    ...((d as MapDecisionV3).schema === "map-decision-v3" && (d as MapDecisionV3).affectedIds
+      ? { affectedIds: [...((d as MapDecisionV3).affectedIds as string[])].sort() } : {}),
   };
 }
 export function adpHashOf(proj: AuthorityDecisionProjection): string { return domHash("adp", canonicalJsonOf(proj)); }
@@ -1419,7 +1461,14 @@ export function effectiveConfidenceOf(
   const proj = idx.projections.find((x) => x.decisionId === pv.decisionId);
   if (!proj) return { confidence: "unknown", degraded: "provenance decision 미실존(dangling)" };
   if (proj.mapId !== mapId) return { confidence: "unknown", degraded: "provenance decision의 mapId 불일치(세대 오염)" };
-  if (!proj.targetIds.includes(entity.id)) return { confidence: "unknown", degraded: "provenance decision이 이 entity를 변경하지 않음" };
+  // P4 판정 규칙: 구(v2) historyless는 basisFp가 provenance 포함 mapHashAfter 의미(자기참조)라 structural
+  // 기준으로 재검증 불가 — 정직 강등(마이그레이션 위조 금지). v2 git=기존 검사 유지, v3=targetIds∪affectedIds.
+  if (proj.affectedIds === undefined && (proj.verification as { kind?: string }).kind === "historyless") {
+    return { confidence: "unknown", degraded: "구(v2) historyless provenance — structural 기준 재검증 불가(정직 강등)" };
+  }
+  if (!proj.targetIds.includes(entity.id) && !(proj.affectedIds || []).includes(entity.id)) {
+    return { confidence: "unknown", degraded: "provenance decision이 이 entity를 변경하지 않음" };
+  }
   if (canonicalJsonOf(pv.basis) !== canonicalJsonOf(proj.verification)) return { confidence: "unknown", degraded: "provenance basis가 decision 기록과 불일치" };
   for (const f of proj.evidenceFps) {
     const cur = fileHashOf(f.ref);

@@ -544,7 +544,7 @@ targetId 계약: 생성 op(add_node/add_edge)=금지, split/merge=원본 targetI
 - (고지 사항) P3b cutover에서 docs/MAP.md 내보내기·approve가 Project MAP 경로로 전환됨 — 지시로 이미 확정된 정책이며
   재승인을 구하지 않는다(1-22).
 
-## P4 상세 설계 (2026-07-19 착수 — 동결 후보 v8 — 설계검증 1~7차 blocker 19건·[주의] 2건·[보완] 9건 반영)
+## P4 상세 설계 (동결 v8 — 2026-07-19 · 설계검증 8왕복+확인 1회 완료[blocker 19·주의 2·보완 12 전부 수용] · 구현 진행: 증분 1=P2 확장 계층 완료)
 
 범위(§5 P4 원문): freshness(로컬 재료 저장소+공유 provenance 1-2·유도 판정기·신선도 권위 단일화)·slice 동봉
 (buildScoutAttach 교체 — 이중 try 격리·echo 계약 이관)·공용 reader API(대시보드·collectCommon·게이트·동봉 —

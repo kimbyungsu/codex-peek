@@ -83,7 +83,7 @@ function main() {
     ok(t1.revision === topo0.revision + 1 && t1.nodes.find((n) => n.id === nodeId).conditions.includes("test-cond"), "topology 반영+revision +1");
     const decFile = path.join(ws, "project-map", "decisions", ap.decisionId + ".json");
     const dec = JSON.parse(fs.readFileSync(decFile, "utf8"));
-    ok(PM.validateDecisionV2(dec).length === 0 && dec.preCutover === true, "decision 파일=스키마 전체 통과+preCutover");
+    ok(PM.validateDecisionAny(dec).length === 0 && dec.schema === "map-decision-v3" && Array.isArray(dec.affectedIds) && dec.preCutover === true, "decision 파일=스키마 전체 통과(P4: v3+affectedIds)+preCutover");
     const d = MP.dirsFor(ws, patch.mapId);
     ok(fs.existsSync(path.join(d.walComplete, ap.decisionId + ".json")) && !fs.existsSync(path.join(d.wal, ap.decisionId + ".json")), "WAL=complete 이동(⑪)");
     const mk = JSON.parse(fs.readFileSync(path.join(d.markers, ap.decisionId + ".json"), "utf8"));

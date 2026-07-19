@@ -113,7 +113,7 @@ function decisionIndexFor(repo, mapId) {
     const r = readJson3(path.join(dir, f));
     if (r.st !== "ok") return { st: "error", error: "decision 파일 손상(" + f + ")" }; // 조용한 skip 금지(§C-3)
     const d = r.data;
-    const errs = PM.validateDecisionV2(d);
+    const errs = PM.validateDecisionAny(d); // P4 dual reader — v2/v3 판독(신규 기록은 v3만)
     if (errs.length) return { st: "error", error: "decision 스키마 위반(" + f + "): " + errs[0] };
     if (f !== d.decisionId + ".json") return { st: "error", error: "파일명≠decisionId(" + f + ")" };
     if (d.mapId !== mapId) continue; // 타 세대 — 색인 불참(파일명·스키마는 유효)
@@ -174,6 +174,13 @@ function buildReadSetFor(topo, patch, ctx) {
     for (const t of (patch.readSet && patch.readSet.files) || []) refs.add(t.ref);
     if (op === "add_anchor" && pl.anchor && pl.anchor.path) refs.add(pl.anchor.path); // anchor 파일 자체(12차 #1)
     if (op === "widen" && pl.additions && Array.isArray(pl.additions.anchors)) for (const a of pl.additions.anchors) if (a && a.path) refs.add(a.path);
+    // P4(설계 v8 ⑤): 대상·생성·분할·병합 결과 node의 '모든' anchor를 read-set에 포함 — anchor 기준선 지문의
+    // 유일 출처(CAS가 검증한 지문만 기준선이 될 수 있게 set_state/rewrite_label/merge/add 계열까지 확장).
+    const addNodeAnchors = (nd) => { for (const a of (nd && nd.anchors) || []) if (a && a.path) refs.add(a.path); };
+    for (const id of readTargetIds) addNodeAnchors(find(id));
+    if (op === "add_node") addNodeAnchors(pl.node);
+    if (op === "split_node") for (const nn of pl.newNodes || []) addNodeAnchors(nn);
+    if (op === "merge_node") { addNodeAnchors(find(pl.survivorId)); for (const ab of pl.absorbed || []) { if (ab && ab.anchorsTo) addNodeAnchors(find(ab.anchorsTo)); if (ab && ab.evidenceTo) addNodeAnchors(find(ab.evidenceTo)); } } // 1차 blocker③: 외부 destination node의 기존 anchor 포함
     rs.files = [...refs].sort().map((ref) => ({ ref, contentHash: ctx.fileHashOf(ref) || sha1("__missing__" + ref) }));
     if (!rs.files.length) delete rs.files;
   }
@@ -207,7 +214,14 @@ function buildReadSetFor(topo, patch, ctx) {
     }
     else if (op === "supersede") { const tr = find(patch.targetId) || {}; negs.push({ kind: "absent", key: "supersede-rel:" + patch.targetId + ">" + pl.successorId, fingerprint: sha1(JSON.stringify((topo.edges || []).some((x) => x.relation === "supersedes" && x.from === pl.successorId && x.to === patch.targetId))) }); void tr; }
     else if (op === "create_intent_policy") negs.push({ kind: "absent", key: "policy:" + ((pl.policy || {}).policyId || ""), fingerprint: sha1(JSON.stringify(((ctx.pol || {}).policies || []).some((x) => x.rec.policyId === (pl.policy || {}).policyId))) });
-    if (negs.length) rs.negative = negs.sort((a, b) => (a.key < b.key ? -1 : 1));
+    // canonical 정렬은 검증기(validateReadSetShape)와 동일한 kind\0key 복합키 — key 단독 정렬은 kind가 섞이는
+    // op(add_node의 absent+dir-inventory 등)에서 'N 형식 위반'을 유발하던 잠복 결함(P4 증분 1 테스트가 노출).
+    const negKeyOf = (x) => x.kind + "\u0000" + x.key;
+    // canonical 중복 제거(2차 [보완]②): 같은 디렉터리에 anchor가 여러 개인 add_node/widen은 동일 dir-inventory
+    // 항목을 중복 생성했고 검증기는 중복 key를 거부한다 — 유효 patch가 자기 read-set 때문에 거부되던 결함.
+    const negSeen = new Set();
+    const negUniq = negs.filter((x) => { const k = negKeyOf(x); if (negSeen.has(k)) return false; negSeen.add(k); return true; });
+    if (negUniq.length) rs.negative = negUniq.sort((a, b) => (negKeyOf(a) < negKeyOf(b) ? -1 : 1));
   }
   if (rules.X === "required") {
     const involved = new Set([...PM.targetIdsOfPatch(patch)]);
@@ -469,19 +483,37 @@ function applyPatch(repo, mapId, patchId, opts) {
     const isPolicy = PM.isPolicyOpV2(livePatch.operation);
     const mapHashBefore = PM.mapHashOf(topo);
     const mapMdBefore = fileSha(path.join(repo, "project-map", "MAP.md"));
-    let outTopo = topo, mapHashAfter = mapHashBefore, mapMdText = null, mapMdAfterHash = mapMdBefore;
+    let outTopo = topo, mapHashAfter = mapHashBefore, mapMdText = null, mapMdAfterHash = mapMdBefore, apChangedIds = [];
     if (!isPolicy) {
       const ap = PM.applyOperationV2(topo, livePatch);
       if (ap.errors.length) return { fail: "적용기: " + ap.errors[0] };
       const ve = PM.validateTopology(ap.topo);
       if (ve.length) return { fail: "출력 topology 스키마 위반: " + ve[0] };
       outTopo = ap.topo;
+      apChangedIds = ap.changedIds || []; // P4: 생존 changedIds — provenance 주입·affectedIds의 재료
       mapHashAfter = PM.mapHashOf(outTopo);
       mapMdText = PM.renderMapMd(outTopo);
       mapMdAfterHash = sha1(mapMdText);
     }
     const prospective = idx.st === "ok" ? [...idx.projections] : [];
-    const verification = ctx.git ? { kind: "git", objectFormat: ctx.git.oidFormat, head: ctx.git.head } : { kind: "historyless", basisFp: mapHashAfter, inventoryFp: PM.opHashOf(outTopo.inventory) };
+    // P4(설계 v8): historyless basisFp=structuralHashOf(provenance 제외 — 자기참조 해소·주입 전후 동일값).
+    const verification = ctx.git ? { kind: "git", objectFormat: ctx.git.oidFormat, head: ctx.git.head } : { kind: "historyless", basisFp: PM.structuralHashOf(outTopo), inventoryFp: PM.opHashOf(outTopo.inventory) };
+    // P4 provenance 주입(설계 v8 순서 ①): 생존 changedIds entity에 {basis, decisionId} — 주입 '후' 재검증·해시.
+    let affectedIds = null;
+    if (!isPolicy) {
+      // 1차 blocker①: affectedIds='생존' changedIds만 — split/merge의 삭제 entity ID를 제외(outTopo 실존 교집합).
+      const surviving = new Set([...(outTopo.nodes || []).map((x) => x && x.id), ...(outTopo.edges || []).map((x) => x && x.id)]);
+      affectedIds = [...new Set(apChangedIds)].filter((id) => surviving.has(id)).sort();
+      for (const cid of affectedIds) {
+        const ent = (outTopo.nodes || []).find((x) => x && x.id === cid) || (outTopo.edges || []).find((x) => x && x.id === cid);
+        if (ent) ent.provenance = { basis: verification, decisionId };
+      }
+      const ve3 = PM.validateTopology(outTopo);
+      if (ve3.length) return { fail: "provenance 주입 후 topology 스키마 위반: " + ve3[0] };
+      mapHashAfter = PM.mapHashOf(outTopo);
+      mapMdText = PM.renderMapMd(outTopo);
+      mapMdAfterHash = sha1(mapMdText);
+    }
     const evidenceFps = (livePatch.evidence || []).map((e) => ({ ref: e.ref, contentHash: ctx.fileHashOf(e.ref) || sha1("__missing__" + e.ref) })).sort((a, b) => (a.ref < b.ref ? -1 : 1));
     // 정책 산출물 선계산(F-2·F-1 정책 동반은 P2 미지원 — 정책은 전용 트랜잭션)
     let policyArtifact = null, pfhAfter, dchAfter;
@@ -498,7 +530,8 @@ function applyPatch(repo, mapId, patchId, opts) {
       }
     } else pfhAfter = pol.pfh;
     const decision = {
-      schema: "map-decision-v2", decisionId, mapId, patchId: livePatch.patchId, opHash: PM.opHashOf(livePatch),
+      schema: "map-decision-v3", decisionId, mapId, patchId: livePatch.patchId, opHash: PM.opHashOf(livePatch), // P4: 신규 기록=v3만
+      ...(isPolicy ? {} : { affectedIds }),
       patch: livePatch,
       actor: isPolicy ? { kind: "user-choice", cardId: o.resolutionRef } : { kind: "auto" },
       classification: isPolicy ? "intent-choice" : "auto",
@@ -536,7 +569,7 @@ function applyPatch(repo, mapId, patchId, opts) {
         : { topologyBeforeHash: mapHashBefore, mapMdBeforeHash: mapMdBefore || sha1(""), snapshotRef, expectedTopologyAfterHash: mapHashAfter, expectedMapMdAfterHash: mapMdAfterHash }),
     };
     if (fs.existsSync(path.join(repo, "project-map", "decisions", decisionId + ".json"))) return { fail: "decisionId 충돌(경쟁 — 클레임 후 생성됨)" }; // 정책 createdFromDecision 재확인(12차 #5)
-    { const dv = PM.validateDecisionV2(decision); if (dv.length) return { fail: "decision 최종 검증 실패: " + dv[0] }; } // durable 전 최종 검증(12차 #6)
+    { const dv = PM.validateDecisionAny(decision); if (dv.length) return { fail: "decision 최종 검증 실패: " + dv[0] }; } // P4: v3 기록 // durable 전 최종 검증(12차 #6)
     const walFile = path.join(d.wal, decisionId + ".json");
     if (!CL.atomicWrite(walFile, JSON.stringify(wal, null, 1))) {
       if (snapshotRef) { try { fs.unlinkSync(snapshotRef.path); } catch { /* gc 승계 */ } } // orphan 즉시 삭제(12차 #6)
@@ -598,7 +631,7 @@ function validateWalV2(w, fname) {
 
     if (PM.validatePatchBasis(w.basis).length) return "basis 위반";
     if (fname !== undefined && fname !== String(w.decision.decisionId) + ".json") return "파일명≠decisionId";
-    if (PM.validateDecisionV2(w.decision).length) return "decision 사본 위반";
+    if (PM.validateDecisionAny(w.decision).length) return "decision 사본 위반"; // P4 dual
     if (w.transactionKind === "topology") {
       if (w.policyArtifact !== undefined && w.policyArtifact !== null) return "topology WAL에 policyArtifact 금지(16차 #1)";
       if (!/^[0-9a-f]{40}$/.test(String(w.topologyBeforeHash)) || !/^[0-9a-f]{40}$/.test(String(w.expectedTopologyAfterHash)) || !/^[0-9a-f]{40}$/.test(String(w.expectedMapMdAfterHash))) return "topology WAL 지문 위반";
@@ -667,7 +700,7 @@ function recoverWalInLock(repo, mapId) {
     const walShapeErr = validateWalV2(w, f);
     if (walShapeErr) { out.push({ decisionId: f, verdict: "conflict", reason: "WAL 스키마 위반: " + walShapeErr }); continue; }
     const did = w.decision.decisionId;
-    if (f !== did + ".json" || PM.validateDecisionV2(w.decision).length) { out.push({ decisionId: f, verdict: "conflict", reason: "WAL decision 사본 위반(파일명/스키마)" }); continue; } // 경로 주입 차단(12차 #7)
+    if (f !== did + ".json" || PM.validateDecisionAny(w.decision).length) { out.push({ decisionId: f, verdict: "conflict", reason: "WAL decision 사본 위반(파일명/스키마)" }); continue; } // 경로 주입 차단(12차 #7)
     // 선행 ⓐ hard boundary(항상)
     if (PM.canonicalJsonOf(localOriginFor(repo)) !== PM.canonicalJsonOf(w.localOrigin)) { out.push({ decisionId: did, verdict: "hard-reject", reason: "localOrigin 불일치(cross-worktree 복구 금지)" }); continue; }
     const gi = gitInfo(repo);
@@ -741,6 +774,15 @@ function recoverWalInLock(repo, mapId) {
         if (cas5.disposition === "stale-expired") { out.push({ decisionId: did, verdict: "stale-expired", reason: "t5: read-set 파손 — abort 권고" }); continue; }
         if (cas5.disposition === "rebase") { out.push({ decisionId: did, verdict: "not-started", reason: "t5: 기반 전진 — WAL expected가 낡음: abort 후 새 prepare" }); continue; }
         const ap5 = PM.applyOperationV2(rt.topo, w.patch);
+        // P4: 재적용 결정론 — apply 경로와 동일하게 생존 changedIds에 WAL decision의 {basis, decisionId}를
+        // 주입한 뒤 expected와 대조한다. 단 '구 v2 WAL'은 주입 없이 기록된 expected 해시라 주입하면 영구
+        // 불일치(1차 blocker② — 업그레이드 직전 중단된 정상 v2 WAL 보존): v3 decision일 때만 주입.
+        if (!ap5.errors.length && w.decision && w.decision.schema === "map-decision-v3") {
+          for (const cid5 of [...new Set(ap5.changedIds || [])]) {
+            const ent5 = (ap5.topo.nodes || []).find((x) => x && x.id === cid5) || (ap5.topo.edges || []).find((x) => x && x.id === cid5);
+            if (ent5) ent5.provenance = { basis: w.decision.verification, decisionId: did };
+          }
+        }
         if (ap5.errors.length || PM.mapHashOf(ap5.topo) !== w.expectedTopologyAfterHash) { out.push({ decisionId: did, verdict: "conflict", reason: "t5: 재적용 결과가 expected와 불일치" }); continue; }
         const topoText5 = PM.canonicalSerialize(ap5.topo);
         const tmp5 = path.join(repo, "project-map", "topology.json." + process.pid + ".tmp");
