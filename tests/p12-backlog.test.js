@@ -116,6 +116,7 @@ ok(!/verify-backlog/.test(cl.split("function cleanupOldState")[1].split("functio
   const extSrc = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
   ok(/typeof lib\.readBacklog !== "function"/.test(extSrc) && /표시 전용 휴리스틱/.test(extSrc), "카드 상태 배선 — readBacklog+표시 전용 휴리스틱 명시(캐논/게이트 미사용)");
   ok(/id="backlogSec"/.test(extSrc) && /id="blSummary"/.test(extSrc) && /id="blList"/.test(extSrc) && /backlog done\|dismiss/.test(extSrc), "카드 HTML — backlogSec·blSummary·blList·CLI 처분 안내(읽기 전용)");
+  ok(/핵심 프로필 전용/.test(extSrc) && /core profile only/.test(extSrc) && /무결성 프로필 검증에서는 지적이 여기로 유입되지 않아요/.test(extSrc), "카드 — 핵심 프로필 전용 명시(제목 배지+힌트 ko/en · 사용자 지적 07-19: 무결성 오해 방지)");
   const rBeg = extSrc.indexOf('const sec=$("backlogSec")'); const rEnd = extSrc.indexOf("// ⑤ 범위 장부 카드", rBeg);
   const renderBlk = rBeg > 0 && rEnd > rBeg ? extSrc.slice(rBeg, rEnd) : "";
   ok(renderBlk.length > 0 && !/innerHTML/.test(renderBlk) && /replaceChildren\(\)/.test(renderBlk) && /bl\.corrupt\?T\(" · 손상 "/.test(renderBlk), "카드 렌더 — 동적 값 innerHTML 부재(텍스트 조립만)·손상 줄 경고");
