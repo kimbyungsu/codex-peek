@@ -65,6 +65,22 @@ ok(CL.loadBaseDirective("ko", "core").verifyBaseline === CL.BASE_CORE.verifyBase
 ok(fs.readFileSync(ovFile, "utf8") === ovBytes && CL.loadBaseDirective("ko").verifyBaseline === "사용자 커스텀 원칙", "core 조회가 오버라이드 파일 바이트를 불변 유지·integrity 복귀 시 그대로 복원");
 CL.resetBaseDirective("ko");
 
+console.log("[2b] v2.6 프롬프트 축소(2026-07-19 사용자 승인) — 기능 등가·앵커 보존·재비대 방지 상한");
+{
+  const kLen = coreKo.verifyBaseline.length + coreKo.transmit.length + coreKo.rejudge.length;
+  const eLen = coreEn.verifyBaseline.length + coreEn.transmit.length + coreEn.rejudge.length;
+  ok(kLen <= 3000, "핵심 캐논 ko 총량 상한 3,000자(축소 회귀 방지 — v2.5 3,611→현재 " + kLen + ")");
+  ok(eLen <= 6200, "핵심 캐논 en 총량 상한 6,200자(v2.5 7,414→현재 " + eLen + ")");
+  ok(CL.formatForClaude(ans2b(), "ko", "core").includes("상세 절차는 주입된 재판단 규약을 따르라"), "footer 축소 — 행동 요약+재판단 규약 위임(중복 재서술 제거)");
+  // v2.6 1차 blocker 봉합 잠금: ①보류 3분류의 고유 첨부 의무(왕복 이력·잔여 위험)는 압축에도 보존
+  ok(/왕복 이력 첨부/.test(coreKo.rejudge) && /잔여 위험 첨부/.test(coreKo.rejudge) && /round-trip history/.test(coreEn.rejudge) && /residual risk/.test(coreEn.rejudge), "보류 3분류 고유 첨부(왕복 이력·잔여 위험) 보존 — 사용자 결정 정보 삭제 금지(ko/en)");
+  // ②footer는 재판단 규약 미주입 경로(검증 모드 off의 직접 ask)에서도 최소 규약으로 자립
+  const fkoB = CL.formatForClaude(ans2b(), "ko", "core"), fenB = CL.formatForClaude("x\nVerdict: pass (notes)", "en", "core");
+  ok(/수정하지 말고 보관함 기록·목록 전달/.test(fkoB) && /자동 등록 거부\/실패=수동 등록/.test(fkoB) && /미주입이면 이 문장들이 최소 규약/.test(fkoB), "footer 자립 fallback ko — [백로그] 수정 금지·수동 등록·미주입 최소 규약 명시");
+  ok(/do not fix — record in the parking lot/.test(fenB) && /auto-record refused\/failed = register manually/.test(fenB) && /if absent, these sentences are the minimum protocol/.test(fenB), "footer 자립 fallback en 쌍");
+  function ans2b(){ return "본문\n검증: 통과(보완)"; }
+}
+
 console.log("[3] formatForClaude — 동결 프로필 문구(계약 ⓓ)");
 const ans = "본문 근거\n검증: 통과(보완)";
 ok(CL.formatForClaude(ans, "ko").includes("[수용/반박/보류]로 최종 보고에서 처리하라"), "integrity(미지정) pass-notes=현행 문구(무회귀)");
