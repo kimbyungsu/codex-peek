@@ -136,8 +136,8 @@ function validateTopologyWith(t, spec) {
         errs.push("project는 비어있지 않은 문자열이어야");
     if (typeof t.createdAt !== "string" || !t.createdAt)
         errs.push("createdAt은 문자열이어야");
-    if (!Number.isInteger(t.revision) || t.revision < 1)
-        errs.push("revision은 1 이상 정수여야");
+    if (!Number.isSafeInteger(t.revision) || t.revision < 1)
+        errs.push("revision은 1 이상 안전 정수여야(2^53-1 초과=+1 불능 — 순환 offset 정지 차단: 7차 [보완])");
     if (t.freshnessNote !== undefined && typeof t.freshnessNote !== "string")
         errs.push("freshnessNote는 문자열이어야");
     if (spec.v2) {

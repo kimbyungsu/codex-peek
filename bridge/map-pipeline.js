@@ -10,6 +10,7 @@ const crypto = require("crypto");
 const { spawnSync } = require("child_process");
 const CL = require(path.join(__dirname, "contract-lib.js"));
 const MR = require(path.join(__dirname, "map-runtime.js"));
+const MF = require(path.join(__dirname, "map-freshness.js"));
 const PM = MR.PM;
 
 const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(require("os").homedir(), ".codex-bridge");
@@ -358,6 +359,29 @@ function classifyPatch(repo, mapId, patchId) {
   return { ok: true, classification, errors: verdict.errors };
 }
 
+// ── P4-3ⓐ 기준선 기록 훅 재료(설계 v8 — 증분 2·순수 계산) ─────────────────────
+// 기준선 지문의 출처(5차 blocker): 'CAS가 방금 검증한 livePatch.readSet.files의 동일 경로 지문'에서만 복사 —
+// apply 후 재해시 금지('CAS 직후 외부 편집' 흡수 차단). read-set에 없는 anchor=기준선 미생성(축 unknown 유지).
+// missing sentinel 지문도 기준선으로 복사(2차 blocker③ — 부재도 CAS가 검증한 상태: 이후 파일이 생기면
+// 지문 불일치=stale로 감지된다. 판정기[P4-3]의 현재 지문은 부재 시 같은 sentinel 규약으로 계산할 계약).
+// edge=anchor축 N/A(node만).
+function baselineUpdatesFor(patch, decisionId, affectedIds, outTopo) {
+  const fpByRef = new Map((((patch || {}).readSet || {}).files || []).map((x) => [x.ref, x.contentHash]));
+  const up = {};
+  const seenAt = new Date().toISOString();
+  for (const id of affectedIds || []) {
+    const nd = ((outTopo || {}).nodes || []).find((x) => x && x.id === id);
+    if (!nd) continue;
+    for (const a of nd.anchors || []) {
+      if (!a || !a.path) continue;
+      const fp = fpByRef.get(a.path);
+      if (!fp) continue; // read-set에 없는 anchor=기준선 미생성(④)
+      up["a:" + id + "|" + a.path] = { fp, seenAt, basisDecisionId: decisionId };
+    }
+  }
+  return up;
+}
+
 // ── apply(§B 클레임+§F 트랜잭션) ────────────────────────────────────────────────
 function applyPatch(repo, mapId, patchId, opts) {
   const o = opts || {};
@@ -594,7 +618,21 @@ function applyPatch(repo, mapId, patchId, opts) {
     }
     if (!CL.atomicWrite(path.join(d.markers, decisionId + ".json"), JSON.stringify(marker, null, 1))) return { fail: "marker 기록 실패 — 활성 WAL 유지(recoverWal이 보충. 산출물은 기록됨 — 성공 위장 금지: 13차 #3)", keepClaim: true }; // ⑩
     fs.renameSync(walFile, path.join(d.walComplete, decisionId + ".json")); // ⑪
-    return { done: true, decisionId, mapHashAfter, authorityHashAfter: ahAfter };
+    // P4-3ⓐ 기준선 기록(2차 blocker② 봉합): 정본 잠금 '안'(트랜잭션 완결 후)에서 기록 — apply가 정본 잠금으로
+    // 직렬화되므로 완료 순서 역전(늦은 과거 쓰기가 최신을 덮음)이 원천 차단된다. 전용 잠금은 reader 캐시(e:)
+    // 경합용으로 여전히 사용(map→freshness 단방향 중첩 — 역방향 없음·교착 불가). 실패=apply 성공 불변(축 unknown 유지).
+    let freshnessBaseline;
+    if (!isPolicy) {
+      const up = baselineUpdatesFor(livePatch, decisionId, affectedIds, outTopo);
+      // up이 비어도 호출: 상시 자가 수리(저장소 vs provenance 차이)가 이번 topology 전이에서 수행된다(구조 교체 —
+      // 재수집 원본은 GC 비대상 영구 정본 decisions/·수리 승인은 이번 apply가 권위 계산에 쓴 색인 스냅샷과
+      // ADP 지문 결속: 5차 blocker③).
+      const idxByDec = {};
+      for (const pr9 of prospIdx) idxByDec[pr9.decisionId] = PM.adpHashOf(pr9);
+      try { freshnessBaseline = MF.recordBaselines(repo, mapId, up, { topo: outTopo, decisionsDir: path.join(repo, "project-map", "decisions"), indexByDecision: idxByDec }); }
+      catch (e) { freshnessBaseline = { ok: false, wrote: 0, skipped: 0, stale: 0, reason: "exception: " + String(e && e.message).slice(0, 60) }; }
+    }
+    return { done: true, decisionId, mapHashAfter, authorityHashAfter: ahAfter, freshnessBaseline };
   });
   if (!tx.ok) { rollbackClaim(); return { ok: false, error: "정본 잠금 실패: " + (tx.error || "") }; }
   const r = tx.result;
@@ -608,7 +646,7 @@ function applyPatch(repo, mapId, patchId, opts) {
   // 재시도는 claimed 분기의 완료 영수증 판정이 보충 종결한다)
   const fin = withNsLock(repo, mapId, () => { const f = pendingFileFor(repo, mapId, patchId); const pr = readJson3(f); if (pr.st !== "ok") return false; return CL.atomicWrite(f, JSON.stringify({ ...pr.data, lifecycle: "resolved", resolvedAt: new Date().toISOString() }, null, 1)); });
   const finalized = fin.ok && fin.result === true;
-  return { ok: true, decisionId: r.decisionId, mapHashAfter: r.mapHashAfter, authorityHashAfter: r.authorityHashAfter, ...(finalized ? {} : { finalizePending: true, warn: "적용은 완결·pending 종결만 실패 — apply 재호출이 영수증으로 보충 종결" }) };
+  return { ok: true, decisionId: r.decisionId, mapHashAfter: r.mapHashAfter, authorityHashAfter: r.authorityHashAfter, ...(r.freshnessBaseline ? { freshnessBaseline: r.freshnessBaseline } : {}), ...(finalized ? {} : { finalizePending: true, warn: "적용은 완결·pending 종결만 실패 — apply 재호출이 영수증으로 보충 종결" }) };
 }
 
 // ── recoverWal(§G — 전진만·표) ─────────────────────────────────────────────────
@@ -727,10 +765,22 @@ function recoverWalInLock(repo, mapId) {
     const Pf3 = polFile ? fileSha3(polFile) : { st: "absent" };
     if (Pf3.st === "unreadable") { out.push({ decisionId: did, verdict: "conflict", reason: "policy 파일 판독 불가(fail-closed)" }); continue; }
     const Pf = Pf3.st === "ok" ? Pf3.hash : null;
+    let topoAfterForBaseline = rt.topo; // t5만 재적용 결과로 교체(그 외 표 상태는 디스크가 이미 후상태)
     const finish = (steps) => {
       try { for (const s of steps) s(); } catch (e) { out.push({ decisionId: did, verdict: "conflict", reason: "복구 쓰기 실패: " + (e && e.message) }); return; }
       fs.renameSync(wf, path.join(d.walComplete, did + ".json"));
       out.push({ decisionId: did, verdict: "recovered", reason: "roll-forward 완결" });
+      // P4-3ⓐ: 복구=그 decisionId를 생성한 apply 전이의 완결 — v3 topology만 기준선 기록(구 v2=주입 gating과
+      // 동일 경계). 정본 잠금 안이라 apply 경로와 같은 직렬화·실패해도 복구 결과 불변(축 unknown 유지).
+      if (w.transactionKind === "topology" && w.decision.schema === "map-decision-v3") {
+        const up9 = baselineUpdatesFor(w.patch, did, w.decision.affectedIds, topoAfterForBaseline);
+        // 수리 결속용 색인: writeD 직후의 검증된 색인(정본 잠금 안 — apply 경로의 스냅샷 결속과 동형).
+        const idx9 = decisionIndexFor(repo, mapId);
+        const idxByDec9 = {};
+        if (idx9.st === "ok") for (const pr9 of idx9.projections) idxByDec9[pr9.decisionId] = PM.adpHashOf(pr9);
+        try { MF.recordBaselines(repo, mapId, up9, { topo: topoAfterForBaseline, decisionsDir: path.join(repo, "project-map", "decisions"), ...(idx9.st === "ok" ? { indexByDecision: idxByDec9 } : {}) }); }
+        catch { /* 예외여도 누락은 상시 자가 수리가 다음 topology 전이에서 재유도 */ }
+      }
     };
     const writeD = () => { fs.mkdirSync(path.dirname(decFile), { recursive: true }); const t7 = decFile + "." + process.pid + ".tmp"; fs.writeFileSync(t7, JSON.stringify(w.decision, null, 1), "utf8"); fs.renameSync(t7, decFile); };
     const writeP = () => { if (w.policyArtifact) { const pd = path.join(repo, "project-map", "policies"); fs.mkdirSync(pd, { recursive: true }); const t8 = polFile + "." + process.pid + ".tmp"; fs.writeFileSync(t8, JSON.stringify(w.policyArtifact.copy, null, 1), "utf8"); fs.renameSync(t8, polFile); } };
@@ -784,6 +834,7 @@ function recoverWalInLock(repo, mapId) {
           }
         }
         if (ap5.errors.length || PM.mapHashOf(ap5.topo) !== w.expectedTopologyAfterHash) { out.push({ decisionId: did, verdict: "conflict", reason: "t5: 재적용 결과가 expected와 불일치" }); continue; }
+        topoAfterForBaseline = ap5.topo; // P4-3ⓐ: t5의 후상태
         const topoText5 = PM.canonicalSerialize(ap5.topo);
         const tmp5 = path.join(repo, "project-map", "topology.json." + process.pid + ".tmp");
         fs.writeFileSync(tmp5, topoText5, "utf8"); fs.renameSync(tmp5, path.join(repo, "project-map", "topology.json"));
@@ -1100,7 +1151,7 @@ function proposeUnique(repo, mapId, semanticKey, buildPatch) {
 module.exports = {
   findPromotions, proposeUnique,
   guardExcludedFor,
-  canonicalIdentityFor, localOriginFor, patchBasisFor, pipeRootFor, dirsFor, ensureDirs,
+  canonicalIdentityFor, localOriginFor, patchBasisFor, pipeRootFor, dirsFor, ensureDirs, baselineUpdatesFor,
   activePipelineWalFor, decisionIndexFor, policyStateFor, authorityOf,
   buildReadSetFor, readSetIntact, casCheck, entityHashOf,
   proposePatch, classifyPatch, applyPatch, recoverWal, abortWal, recoverCorruption, pipelineGc, validateWalV2,

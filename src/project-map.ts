@@ -161,7 +161,7 @@ function validateTopologyWith(t: Topology, spec: SchemaSpec): string[] {
   // 루트 스칼라 타입(6차 반례: 비문자열 label 등이 검증을 통과한 뒤 렌더에서 사망 — 정본 스키마의 타입 계약)
   if (typeof t.project !== "string" || !t.project) errs.push("project는 비어있지 않은 문자열이어야");
   if (typeof t.createdAt !== "string" || !t.createdAt) errs.push("createdAt은 문자열이어야");
-  if (!Number.isInteger(t.revision) || (t.revision as number) < 1) errs.push("revision은 1 이상 정수여야");
+  if (!Number.isSafeInteger(t.revision) || (t.revision as number) < 1) errs.push("revision은 1 이상 안전 정수여야(2^53-1 초과=+1 불능 — 순환 offset 정지 차단: 7차 [보완])");
   if (t.freshnessNote !== undefined && typeof t.freshnessNote !== "string") errs.push("freshnessNote는 문자열이어야");
   if (spec.v2) {
     if (!isUuid(t.mapId)) errs.push("mapId는 UUID여야(지도 세대 정체성 — patch·decision·바인딩·WAL 결속 키)");
