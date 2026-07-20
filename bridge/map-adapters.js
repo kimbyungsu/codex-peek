@@ -169,15 +169,18 @@ const REQUIRED_SURFACES = [
   { id: "package-map-content", ownerPhase: "P3a", legacyFile: "scripts/scope-package.js", legacyFn: "collectCommon(mapContent raw embed)", v2: "mapContentFor" },
   { id: "ledger-export", ownerPhase: "P3a", legacyFile: "src/extension.ts", legacyFn: "ledgerAct export→appendApproved", v2: "promoteEntry" },
   { id: "reconcile-approve", ownerPhase: "P3a", legacyFile: "scripts/scope-reconcile.js", legacyFn: "approve→appendApproved", v2: "promoteEntry" },
-  { id: "scout-attach", ownerPhase: "P4", legacyFile: "bridge/contract-lib.js", legacyFn: "buildScoutAttach", v2: null },
-  { id: "gate-map-reader", ownerPhase: "P4", legacyFile: "bridge/scout-gate.js", legacyFn: "scoutMapStatus 소비(플랜 게이트 preflight)", v2: null },
+  // P4 표면(증분 3 — ready='호출 가능 구현' 기준: 활성 여부와 별개. buildMapAttach는 cutover 전 항상
+  // 기존 buildScoutAttach로 위임하고, mapGateAssessFor는 어떤 런타임 경로도 아직 호출하지 않는다[비활성 준비]).
+  { id: "scout-attach", ownerPhase: "P4", legacyFile: "bridge/contract-lib.js", legacyFn: "buildScoutAttach", v2: "buildMapAttach", activation: "P3b" },
+  { id: "gate-map-reader", ownerPhase: "P4", legacyFile: "bridge/scout-gate.js", legacyFn: "scoutMapStatus 소비(플랜 게이트 preflight)", v2: "mapGateAssessFor", activation: "P3b" },
 ];
-const V2_FNS = { approvedViewFor, mapContentFor, promoteEntry };
+const RD = require(path.join(__dirname, "map-reader.js")); // P4 reader(단방향: adapters→reader — 역방향 require 금지)
+const V2_FNS = { approvedViewFor, mapContentFor, promoteEntry, buildMapAttach: RD.buildMapAttach, mapGateAssessFor: RD.mapGateAssessFor };
 function adapterManifest() {
   return {
     schema: "map-adapter-manifest-v1",
-    surfaces: REQUIRED_SURFACES.map((sf) => ({ id: sf.id, ready: !!(sf.v2 && typeof V2_FNS[sf.v2] === "function"), fn: sf.v2 })),
+    surfaces: REQUIRED_SURFACES.map((sf) => ({ id: sf.id, ready: !!(sf.v2 && typeof V2_FNS[sf.v2] === "function"), fn: sf.v2, ...(sf.activation ? { activation: sf.activation } : {}) })), // activation=활성 시점(ready와 별개 — manifest 스키마 명시
   };
 }
 
-module.exports = { approvedViewFor, mapContentFor, promoteEntry, REQUIRED_SURFACES, adapterManifest };
+module.exports = { approvedViewFor, mapContentFor, promoteEntry, REQUIRED_SURFACES, adapterManifest, buildMapAttach: RD.buildMapAttach, mapGateAssessFor: RD.mapGateAssessFor }; // P4 표면 재수출(1차 blocker④ — manifest ready=공개 호출 가능과 일치)

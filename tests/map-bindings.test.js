@@ -290,7 +290,10 @@ function main() {
     ok(MB.legacyPreviewFor(ws) && MB.legacyPreviewFor(ws).authority === false, "legacyPreviewFor=비권위 진단 전용 분리");
     fs.rmSync(path.join(ws, "project-map", "authority-history"), { recursive: true, force: true });
     const mf = MA.adapterManifest();
-    ok(mf.surfaces.length === MA.REQUIRED_SURFACES.length && mf.surfaces.filter((x) => x.ready).length === 4, "manifest: P3a 4표면 ready·P4 2표면 미준비(집합 일치)");
+    // 의도 개정(P4 증분 3, 2026-07-20): P4 표면 2개(scout-attach·gate-map-reader)가 v2 함수 등록으로 ready —
+    // ready='호출 가능 구현' 기준이고 활성화(activation=P3b)는 별개(manifest가 명시). 전 표면 ready+P4 표면은 activation 표기 필수.
+    ok(mf.surfaces.length === MA.REQUIRED_SURFACES.length && mf.surfaces.filter((x) => x.ready).length === MA.REQUIRED_SURFACES.length, "manifest: 전 표면 ready(P4 2표면 포함 — 증분 3 등록·집합 일치)");
+    ok(mf.surfaces.filter((x) => x.activation === "P3b").length === 2, "P4 표면 2개=activation P3b 명시(ready와 활성의 분리)");
     const pr = MA.promoteEntry(ws, { text: "no topo test", from: "x" }, {});
     ok(pr.st === "needs-binding" || pr.st === "rejected", "(경계) promoteEntry 합타입 유지");
   }

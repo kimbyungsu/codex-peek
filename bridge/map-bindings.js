@@ -132,29 +132,49 @@ function authorityHistoryExists(repo) {
   try { return fs.readdirSync(path.join(repo, "project-map", "authority-history")).length > 0; }
   catch (e) { return !(e && e.code === "ENOENT"); } // 판독 불가=이력 존재로 간주(fail-closed)
 }
-function authorityStateFor(repo) {
+// P4 증분 3(reader 검증 blocker①②): 캡처(raw 바이트)와 판정(파싱·검증)을 분리 — 공용 reader가 map lock
+// 안에서는 바이트 캡처만 하고 판정은 잠금 밖에서. topology는 '같은 캡처 세트'의 파싱본을 인자로 받아
+// marker mapId와 원자 대조(For의 독립 재판독이 만들던 세대 혼합 창 제거). 기존 For는 조합(단일 정본).
+function captureAuthorityRaw(repo) {
+  const cap = { auth: null, history: null };
   const authFile = path.join(repo, "project-map", "authority.json");
-  const mk = readJson3(authFile);
-  if (mk.st === "absent") {
-    return authorityHistoryExists(repo)
+  try { cap.auth = { st: "ok", raw: fs.readFileSync(authFile, "utf8") }; }
+  catch (e) { cap.auth = { st: e && e.code === "ENOENT" ? "absent" : "unreadable" }; }
+  try {
+    const dir = path.join(repo, "project-map", "authority-history");
+    const names = fs.readdirSync(dir);
+    cap.history = { st: "ok", files: names.map((name) => { try { return { name, st: "ok", raw: fs.readFileSync(path.join(dir, name), "utf8") }; } catch { return { name, st: "unreadable" }; } }) };
+  } catch (e) { cap.history = { st: e && e.code === "ENOENT" ? "absent" : "unreadable" }; }
+  return cap;
+}
+function authorityStateFromCapture(cap, topoParsed) {
+  const historyExists = cap.history ? (cap.history.st === "ok" ? cap.history.files.length > 0 : cap.history.st !== "absent") : false; // 판독 불가=이력 존재 간주(fail-closed)
+  if (cap.auth.st === "absent") {
+    return historyExists
       ? { st: "blocked", reason: "cutover 이력 존재+marker 부재(삭제로 전환 전 복귀 금지 — §B)" }
       : { st: "legacy" };
   }
-  if (mk.st !== "ok") return { st: "blocked", reason: "authority.json 손상/판독 불가" };
-  const m = mk.data;
+  if (cap.auth.st !== "ok") return { st: "blocked", reason: "authority.json 손상/판독 불가" };
+  let m = null;
+  try { m = JSON.parse(cap.auth.raw); } catch { m = null; }
+  if (m === null) return { st: "blocked", reason: "authority.json 손상/판독 불가" };
   if (!m || typeof m !== "object" || Object.keys(m).sort().join(",") !== AUTH_KEYS
     || m.schema !== "map-authority-v1" || m.cutover !== true
     || typeof m.mapId !== "string" || !UUID_RE.test(m.mapId)
     || typeof m.decisionRef !== "string" || !UUID_RE.test(m.decisionRef) || typeof m.ts !== "string" || !ISO_RE.test(m.ts)) {
     return { st: "blocked", reason: "authority.json 형식 위반(정확 키 집합 — §B)" };
   }
-  const rt = MR.readTopoExFor(repo);
-  if (rt.st !== "ok") return { st: "blocked", reason: "topology 판독 불가(권위 대조 불능)" };
-  if (rt.topo.mapId !== m.mapId) return { st: "blocked", reason: "authority.json mapId ≠ 현재 topology 세대" };
-  const rc = readJson3(path.join(repo, "project-map", "authority-history", m.decisionRef + ".json"));
-  if (rc.st !== "ok" || !validReceipt(rc.data, m.decisionRef + ".json")) return { st: "blocked", reason: "cutover receipt 부재/손상/결속 위반(§B-1)" };
-  if (rc.data.authorityFileFp !== fileSha3(authFile).hash) return { st: "blocked", reason: "marker 지문 ≠ receipt 기대 지문" };
+  if (!topoParsed || topoParsed.st !== "ok" || !topoParsed.topo || typeof topoParsed.topo !== "object") return { st: "blocked", reason: "topology 판독 불가(권위 대조 불능)" }; // 방어 심층(3차 blocker — 임의 JSON 값에도 예외 없이 blocked)
+  if (topoParsed.topo.mapId !== m.mapId) return { st: "blocked", reason: "authority.json mapId ≠ 현재 topology 세대" };
+  const rcFile = cap.history && cap.history.st === "ok" ? cap.history.files.find((f) => f.name === m.decisionRef + ".json") : null;
+  let rc = null;
+  if (rcFile && rcFile.st === "ok") { try { rc = JSON.parse(rcFile.raw); } catch { rc = null; } }
+  if (rc === null || !validReceipt(rc, m.decisionRef + ".json")) return { st: "blocked", reason: "cutover receipt 부재/손상/결속 위반(§B-1)" };
+  if (rc.authorityFileFp !== sha1(cap.auth.raw)) return { st: "blocked", reason: "marker 지문 ≠ receipt 기대 지문" };
   return { st: "v2", mapId: m.mapId };
+}
+function authorityStateFor(repo) {
+  return authorityStateFromCapture(captureAuthorityRaw(repo), MR.readTopoExFor(repo));
 }
 
 // ── 서랍 경로(C-1 — nsKey는 P2 canonical identity·mapId 하위) ───────────────────
@@ -429,17 +449,21 @@ function readCardRefs3(repo, mapId, authSt) {
 
 // ── bindings.json(확정 — repo·sig 기본키·canonical 정렬) ─────────────────────────
 function bindingsFileFor(repo) { return path.join(repo, "project-map", "bindings.json"); }
-function readBindingsFor(repo, mapId) {
-  const r = readJson3(bindingsFileFor(repo));
-  if (r.st === "absent") return { st: "ok", data: { schema: "map-bindings-v1", mapId, bindings: [] }, absent: true };
-  if (r.st !== "ok") return { st: r.st };
-  const d = r.data;
+function readBindingsFromRaw(rawCap, mapId) { // rawCap={st:"ok",raw}|{st:"absent"|"unreadable"}
+  if (rawCap.st === "absent") return { st: "ok", data: { schema: "map-bindings-v1", mapId, bindings: [] }, absent: true };
+  if (rawCap.st !== "ok") return { st: rawCap.st };
+  let d = null;
+  try { d = JSON.parse(rawCap.raw); } catch { return { st: "invalid" }; }
   if (!d || d.schema !== "map-bindings-v1" || !Array.isArray(d.bindings) || !UUID_RE.test(String(d.mapId))
     || Object.keys(d).sort().join(",") !== "bindings,mapId,schema") return { st: "invalid" };
   if (d.mapId !== mapId) return { st: "stale", fileMapId: d.mapId }; // 세대 결속(1차 #2) — 소비 거부
   if (!d.bindings.every(validBindingRec)) return { st: "invalid" }; // JSON-valid 손상도 거부(구현 1차 #3)
   { const seen = new Set(); for (const b of d.bindings) { if (seen.has(b.sig)) return { st: "invalid" }; seen.add(b.sig); } } // sig 유일
   return { st: "ok", data: d };
+}
+function readBindingsFor(repo, mapId) {
+  const r = readJson3(bindingsFileFor(repo));
+  return readBindingsFromRaw(r.st === "ok" ? { st: "ok", raw: r.raw } : { st: r.st }, mapId);
 }
 function writeBindings(repo, data) {
   data.bindings.sort((a, b) => (a.sig < b.sig ? -1 : 1)); // canonical(sig 오름차순)
@@ -820,7 +844,7 @@ function gcBindingsInLock(repo) {
 
 module.exports = {
   gcBindingsInLock, readCardRefs3, validBindingRec, validCandidateItem,
-  authorityStateFor, legacyPreviewFor, validReceipt,
+  authorityStateFor, captureAuthorityRaw, authorityStateFromCapture, readBindingsFromRaw, legacyPreviewFor, validReceipt,
   parseApprovedCopy, legacySourceFor, caseAwarePathsFromText, endpointsKeyOfCopy, normRelPath, classifyEvidencePath,
   resolvePathToNode, matchEntry, buildCandidatesFor, scanLegacy,
   bindingsRootFor, bindingsDirFor, withCandGlobalLock, readBindingsFor, bindingsFileFor, findTarget,

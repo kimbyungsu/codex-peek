@@ -103,35 +103,45 @@ function withNsLock(repo, mapId, fn) {
 }
 
 // ── 파일 판독기(§E fail-closed) ──────────────────────────────────────────────────
-function decisionIndexFor(repo, mapId) {
-  const dir = path.join(repo, "project-map", "decisions");
-  let files;
-  try { files = fs.readdirSync(dir).filter((f) => f.endsWith(".json") && !f.includes(path.sep)); } catch (e) { return e && e.code === "ENOENT" ? { st: "none" } : { st: "error", error: "decisions/ 판독 실패" }; }
-  files = files.filter((f) => !f.startsWith("legacy"));
+// P4 증분 3(reader 검증 blocker②): '디렉터리 raw 캡처'와 '파싱·검증'을 분리 — 공용 reader가 map lock 안에서는
+// 바이트 캡처만 하고 파싱·검증·해시는 잠금 밖에서 하도록. 기존 For 함수는 캡처+FromCapture 조합(단일 정본 —
+// 3카피 금지·오류 메시지 동일).
+function captureDirRaw(dir) {
+  let names;
+  try { names = fs.readdirSync(dir); } catch (e) { return { st: e && e.code === "ENOENT" ? "absent" : "error" }; }
+  return { st: "ok", files: names.map((name) => { try { return { name, st: "ok", raw: fs.readFileSync(path.join(dir, name), "utf8") }; } catch { return { name, st: "unreadable" }; } }) };
+}
+function decisionIndexFromCapture(cap, mapId) {
+  if (cap.st === "absent") return { st: "none" };
+  if (cap.st !== "ok") return { st: "error", error: "decisions/ 판독 실패" };
+  const files = cap.files.filter((f) => f.name.endsWith(".json") && !f.name.includes(path.sep) && !f.name.startsWith("legacy"));
   if (!files.length) return { st: "none" };
   const projections = [];
   for (const f of files) {
-    const r = readJson3(path.join(dir, f));
-    if (r.st !== "ok") return { st: "error", error: "decision 파일 손상(" + f + ")" }; // 조용한 skip 금지(§C-3)
-    const d = r.data;
+    let d = null;
+    if (f.st === "ok") { try { d = JSON.parse(f.raw); } catch { d = null; } }
+    if (d === null) return { st: "error", error: "decision 파일 손상(" + f.name + ")" }; // 조용한 skip 금지(§C-3)
     const errs = PM.validateDecisionAny(d); // P4 dual reader — v2/v3 판독(신규 기록은 v3만)
-    if (errs.length) return { st: "error", error: "decision 스키마 위반(" + f + "): " + errs[0] };
-    if (f !== d.decisionId + ".json") return { st: "error", error: "파일명≠decisionId(" + f + ")" };
+    if (errs.length) return { st: "error", error: "decision 스키마 위반(" + f.name + "): " + errs[0] };
+    if (f.name !== d.decisionId + ".json") return { st: "error", error: "파일명≠decisionId(" + f.name + ")" };
     if (d.mapId !== mapId) continue; // 타 세대 — 색인 불참(파일명·스키마는 유효)
     if (PM.isPolicyOpV2(d.patch.operation)) continue; // 정책 op — 색인 제외(파일은 존재)
     projections.push(PM.adpOf(d));
   }
   return projections.length ? { st: "ok", projections } : { st: "none" };
 }
-function policyStateFor(repo, mapId) {
-  const dir = path.join(repo, "project-map", "policies");
-  let files;
-  try { files = fs.readdirSync(dir); } catch (e) { if (e && e.code === "ENOENT") { return { st: "ok", policies: [], revocations: [], frontier: [], pfh: PM.policyFrontierHashOf([], []) }; } return { st: "error", error: "policies/ 판독 실패" }; } // 부재도 frontier·pfh 완전체(빈 frontier 명시 주입 계약)
+function decisionIndexFor(repo, mapId) {
+  return decisionIndexFromCapture(captureDirRaw(path.join(repo, "project-map", "decisions")), mapId);
+}
+function policyStateFromCapture(cap, mapId) {
+  if (cap.st === "absent") return { st: "ok", policies: [], revocations: [], frontier: [], pfh: PM.policyFrontierHashOf([], []) }; // 부재도 frontier·pfh 완전체(빈 frontier 명시 주입 계약)
+  if (cap.st !== "ok") return { st: "error", error: "policies/ 판독 실패" };
   const policies = [], revocations = [];
-  for (const f of files) {
-    const full = path.join(dir, f);
-    const r = readJson3(full);
-    if (r.st !== "ok") return { st: "error", error: "정책 파일 손상(" + f + ")" };
+  for (const fc of cap.files) {
+    const f = fc.name;
+    let r = null;
+    if (fc.st === "ok") { try { r = { data: JSON.parse(fc.raw), raw: fc.raw }; } catch { r = null; } }
+    if (r === null) return { st: "error", error: "정책 파일 손상(" + f + ")" };
     if (f.endsWith(".revoke.json")) {
       const errs = PM.validatePolicyRevocation(r.data);
       if (errs.length) return { st: "error", error: "revocation 위반(" + f + "): " + errs[0] };
@@ -147,6 +157,9 @@ function policyStateFor(repo, mapId) {
   const frontier = PM.effectivePolicyFrontier(policies.map((x) => x.rec), revocations.map((x) => x.rec));
   const pfh = PM.policyFrontierHashOf(policies.map((x) => x.rec), revocations.map((x) => x.rec));
   return { st: "ok", policies, revocations, frontier, pfh };
+}
+function policyStateFor(repo, mapId) {
+  return policyStateFromCapture(captureDirRaw(path.join(repo, "project-map", "policies")), mapId);
 }
 // authority 문맥(§E): decision 색인은 디스크, mapHash는 호출자의 동일 스냅샷 — 혼합 금지.
 function authorityOf(mapHash, idx) {
@@ -1151,7 +1164,7 @@ function proposeUnique(repo, mapId, semanticKey, buildPatch) {
 module.exports = {
   findPromotions, proposeUnique,
   guardExcludedFor,
-  canonicalIdentityFor, localOriginFor, patchBasisFor, pipeRootFor, dirsFor, ensureDirs, baselineUpdatesFor,
+  canonicalIdentityFor, localOriginFor, patchBasisFor, pipeRootFor, dirsFor, ensureDirs, baselineUpdatesFor, captureDirRaw, decisionIndexFromCapture, policyStateFromCapture,
   activePipelineWalFor, decisionIndexFor, policyStateFor, authorityOf,
   buildReadSetFor, readSetIntact, casCheck, entityHashOf,
   proposePatch, classifyPatch, applyPatch, recoverWal, abortWal, recoverCorruption, pipelineGc, validateWalV2,
