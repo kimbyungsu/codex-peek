@@ -114,11 +114,11 @@ console.log("[4] 대시보드 표면 — 행·핸들러·ko/en 쌍(소스 계약
   ok(src.includes('id="scoutArmRow"'), "정찰 카드에 탐색 담당 행 존재");
   ok(src.includes('type === "setScoutArm"') || src.includes('type:"setScoutArm"'), "setScoutArm 메시지 배선(수신·발신)");
   ok(src.includes("scoutArmViewExt"), "실효 뷰(강등 표시) 계산 존재");
-  ok(src.includes("기본 정찰(Claude — 추가 과금 없음)") && src.includes("Default scout (Claude — no extra billing)"), "선택지 라벨 ko/en 쌍(1차 blocker① — self=별도 Claude 호출이라 '현재 AI 겸임' 표기 금지)");
+  ok(src.includes('T("기본 정찰","Default")') && src.includes('T("Claude · 무과금","Claude · free")'), "선택지 라벨 ko/en 쌍(세그먼트 메인+서브 — self=Claude 명시·무과금 표기)");
   ok(src.includes("DeepSeek 정찰") && src.includes("DeepSeek scout"), "DeepSeek 선택지 ko/en 쌍");
   ok(src.includes("키 미등록 — 키 등록") || src.includes("키 미등록"), "강등 안내(키 없음) 존재");
   ok(src.includes("{ modal: true }") && /modal: true[^]{0,300}그래도 저장/.test(src), "키 없는 deepseek 선택=저장 전 모달 확인(1차 blocker④)");
-  ok(src.includes('lang:(UI_EN?"en":"ko")'), "전송 슬롯=표시 화면 언어(UI_EN 베이크 — 1차 blocker⑤ 언어 전환 경계 오염 차단)");
+  ok(src.includes("lang:uiSlot") && src.includes('const uiSlot = UI_EN ? "en" : "ko"'), "전송 슬롯=표시 화면 언어(UI_EN 베이크 — 1차 blocker⑤ 언어 전환 경계 오염 차단)");
   ok(/patchContractRetryExt\(ws, lang, \{ scoutArm: arm \}\);[^]{0,200}codexBridge\.refresh/.test(src), "저장 성공 후 즉시 재렌더(1차 [보완])");
   ok(src.includes("slotIn || loadLangExt()"), "slot=계산과 원자 결속(3차 blocker — 1회 캡처·사후 재판독 금지)");
   // 3차 blocker 실행 반례: 컴파일 산출물에서 실제 함수를 추출해, '계산 도중 전역 언어가 en→ko로 바뀌는'
@@ -140,18 +140,18 @@ console.log("[4] 대시보드 표면 — 행·핸들러·ko/en 쌍(소스 계약
     ok(calls === 1, "언어 판독 1회 캡처(원자 결속의 실체): calls=" + calls);
   }
   ok(src.includes("slotMismatch") && src.includes("av.slot && av.slot !== uiSlot"), "데이터 슬롯≠표시 슬롯이면 조작 잠금(hold 창 오염 차단)");
-  ok(src.includes("언어 전환 반영 중") && src.includes("language switch in progress"), "잠금 안내 ko/en 쌍");
+  ok(src.includes("언어 전환 반영 중") && src.includes("Language switch in progress"), "잠금 안내 ko/en 쌍");
   ok(src.includes('lang === "en" ? enM : koM'), "모달 문구=저장 슬롯 기준(전역 tE와 갈리는 창 제거)");
   // 클릭 피드백(2026-07-20 사용자 실보고 봉합): 재클릭 안내·낙관 전환·저장 중 표시·현재 선택 ✓ 표기
-  ok(src.includes("이미 선택돼 있어요 ✓") && src.includes("already selected ✓"), "같은 선택 재클릭=무동작+안내 ko/en 쌍");
-  ok(src.includes("· 저장 중…") && src.includes("· saving…"), "클릭 즉시 '저장 중' 표시 ko/en 쌍");
-  ok(src.includes("낙관적 즉시 전환") && src.includes('markOf(btns[k].label,k===arm)'), "낙관적 즉시 전환(서버 재렌더가 최종 확정)");
-  ok(src.includes('(active?"✓ ":"")'), "현재 선택 버튼 ✓ 표기(선택 상태 가시화)");
+  ok(src.includes("이미 선택돼 있어요 ✓") && src.includes("Already selected ✓"), "같은 선택 재클릭=무동작+안내 ko/en 쌍");
+  ok(src.includes('T("저장 중…","Saving…")'), "클릭 즉시 '저장 중' 표시 ko/en 쌍");
+  ok(src.includes("curSel=arm; setOn(arm);"), "낙관적 즉시 전환(클릭 즉시 활성 이동 — 서버 재렌더가 최종 확정)");
+  ok(src.includes('classList.toggle("on", k===arm)') && src.includes('seg.className="seg"') === false ? false : src.includes("className=\"seg\"") || src.includes('className="seg"'), "현재 선택=세그먼트 .on 활성(기존 디자인 언어 재사용)");
   // Codex 예정 표시(2026-07-20 사용자 결정): 비활성·예정 배지 — 거짓 옵션 금지(러너는 P6)
-  ok(src.includes("Codex 정찰 (예정)") && src.includes("Codex scout (planned)"), "Codex 예정 선택지 ko/en 쌍(항상 비활성)");
-  ok(/Codex 정찰 \(예정\)[^]{0,200}disabled=true/.test(src) || /bC\.disabled=true/.test(src), "예정 버튼=항상 비활성(선택 불가 — 클릭 배선 없음)");
+  ok(src.includes('T("예정","planned")') && src.includes('createTextNode("Codex")'), "Codex 예정 선택지 ko/en 쌍(항상 비활성)");
+  ok(/createTextNode\("Codex"\)[^]{0,400}b\.disabled=true/.test(src) || /b\.disabled=true;[^]{0,200}createTextNode\("Codex"\)/.test(src), "예정 버튼=항상 비활성(선택 불가 — 클릭 배선 없음)");
   ok(src.includes("로드맵 P6에서 구현") && src.includes("roadmap P6"), "예정 사유 툴팁 ko/en 쌍");
-  ok(src.includes("let curSel=av.raw;") && src.includes("curSel=arm;"), "재클릭 판정=명시 선택 로컬 추적(낙관 전환 시 즉시 갱신 — 1차 blocker②)");
+  ok(src.includes("let curSel=av.raw;") && src.includes("curSel=arm; setOn(arm);"), "재클릭 판정=명시 선택 로컬 추적(낙관 전환 시 즉시 갱신 — 1차 blocker②)");
   // 1차 blocker①②: 판정 순수 함수를 산출물에서 추출해 상태 전이 실행 — 문구 검사로는 못 잡던 결함 잠금
   {
     const outSrc = fs.readFileSync(path.join(ROOT, "out", "extension.js"), "utf8");

@@ -68,7 +68,7 @@ const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.j
 ok(/scoutHealthLine\(target, en\)/.test(src) && /health \? \[health\] : \[\]/.test(src), "buildScoutAttach가 target(정찰 대상) 기준으로 신호 줄 첨부");
 ok(/신호 실패가 지도 동봉을 막지 않음/.test(src), "실패 격리 주석·catch");
 const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
-ok(/health: computeScoutHealth\(derived\)/.test(ext) && /관찰 신호\(이 프로젝트\)/.test(ext) && /표본 아직 작음/.test(ext) && /양방향일 수 있어요/.test(ext) && !/보수 집계라 실제 유용성/.test(ext), "대시보드 관찰 일지 카드에 신호 1줄(표본 게이트·양방향 편향 문구)");
+ok(/health: computeScoutHealth\(derived\)/.test(ext) && /관찰 신호/.test(ext) && /표본 아직 작음/.test(ext) && /양방향일 수 있어요/.test(ext) && !/보수 집계라 실제 유용성/.test(ext), "대시보드 관찰 일지 카드 신호 — 지표 칩 행+편향 툴팁(2026-07-20 문장 나열→칩 개정·표본 게이트 유지)");
 
 console.log("[건강 리포트 새탭] 대시보드 포화 대응(2026-07-09 사용자 지시) — 스크립트 없음·열 때 베이크·동적 데이터 esc");
 const repStart = ext.indexOf("function openScoutHealthReport");

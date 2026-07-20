@@ -3471,6 +3471,13 @@ class Dashboard {
   .lschip{display:inline-block;padding:3px 11px;border-radius:999px;font-weight:600;border:1px solid currentColor}
   .lschip.codex-gen,.lschip.codex-req{color:#3a9}.lschip.rejudge{color:#a73}.lschip.claude{color:#58f}.lschip.incomplete{color:#d44}.lschip.done{color:#3a9}
   .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid currentColor}
+  .pfm{display:inline-flex;gap:4px;align-items:baseline;padding:1px 8px;border-radius:999px;border:1px solid var(--vscode-panel-border);font-size:10.5px;margin:1px 4px 1px 0;white-space:nowrap}
+  .pfm b{font-size:11.5px;font-variant-numeric:tabular-nums}
+  .pfm.z{opacity:.45}
+  .pfm.bad{border-color:var(--vscode-charts-red);color:var(--vscode-charts-red)}
+  .pfm.warn{border-color:var(--vscode-charts-orange);color:var(--vscode-charts-orange)}
+  .pfm.note{border-color:var(--vscode-charts-yellow,#d7ba7d);color:var(--vscode-charts-yellow,#d7ba7d)}
+  .pfm.okc{border-color:var(--vscode-charts-green);color:var(--vscode-charts-green)}
   .wschip{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:6px;font-size:11px;font-weight:600;border:1px solid var(--vscode-charts-orange);color:var(--vscode-charts-orange)}
   .b-off{color:var(--vscode-descriptionForeground)}
   .b-code{color:var(--vscode-charts-blue)}
@@ -3735,7 +3742,8 @@ class Dashboard {
     <div id="scoutArmRow" style="display:none;font-size:11.5px;margin:6px 0 0 2px"></div>
     <div id="scoutBox" class="stagebox" style="display:none"></div>
     <div class="stagebox" id="stageBox">
-      <div class="sbhead">${t("↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요", "↑ With verification on, the <b>stage baselines</b> apply at each step of the flow")} <span class="muted" style="font-weight:400">${t("· 지금 검증:", "· verify now:")} <b id="sbState">—</b> ${t("· 내용은 아래 단계별 기본 원칙에서", "· see Stage Baselines below for the text")}</span></div>
+      <div class="sbhead" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${t("↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요", "↑ With verification on, the <b>stage baselines</b> apply at each step of the flow")} <span class="badge" id="sbStateBadge" style="margin-left:auto"><span class="muted" style="font-weight:400">${t("지금 검증", "verify now")}</span> <b id="sbState">—</b></span></div>
+      <div class="hint" style="margin:2px 0 6px">${t("각 단계에 들어가는 문구는 아래 '단계별 기본 원칙'에서 편집해요", "Edit each step's text below in Stage Baselines")}</div>
       <div class="sbrow" id="sbTransmit"><span class="sbmark"></span><b id="sbTransmitText">${t("① Claude→Codex 넘길 때", "① When Claude hands off to Codex")}</b> ${t("· 전달 원칙", "· transmission principles")} <span class="who2 claude" id="sbImplWho">Claude</span> <span class="sbwhy"></span></div>
       <div class="sbrow" id="sbVerify"><span class="sbmark"></span><b>${t("② Codex가 검증할 때", "② When Codex verifies")}</b> ${t("· 검증 기본원칙 + Codex 규칙", "· verification baseline + Codex rules")} <span class="who2 codex">Codex</span> <span class="sbwhy"></span></div>
       <div class="sbrow" id="sbRejudge"><span class="sbmark"></span><b>${t("③ Codex 답을 되짚을 때", "③ When re-judging Codex's answer")}</b> ${t("· 재판단 원칙", "· re-judgment principles")} <span class="who2 claude" id="sbRejudgeWho">Claude</span> <span class="sbwhy"></span></div>
@@ -3746,7 +3754,7 @@ class Dashboard {
   <div class="row"><button id="saveC">${t("저장", "Save")}</button><button id="revertC" type="button" class="secondary" title="${t("저장하지 않은 계약 변경을 버리고 현재 모드의 저장값을 다시 불러옵니다", "Discard unsaved contract edits and reload the saved values for the current mode")}">${t("되돌리기", "Revert")}</button><span id="savedAt" class="muted">${t("· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장 (체크리스트 강제는 켜고 끄는 즉시 저장)", "· saves the Claude rules, Codex rules and verify mode together (checklist enforcement saves instantly on toggle)")}</span></div>
 
   <div id="backlogSec" style="display:none">
-    <h2 class="sec">${t("검증 확장 제안·판단 대기 — 보관함", "Verification-expansion Proposals & Pending Judgments — parking lot")} <span class="sub2">${t("핵심 프로필 전용", "core profile only")}</span> · <span class="sub2" id="blSummary"></span></h2>
+    <h2 class="sec accent-rose">${t("검증 확장 제안·판단 대기 — 보관함", "Verification-expansion Proposals & Pending Judgments — parking lot")} <span class="sub2">${t("핵심 프로필 전용", "core profile only")}</span> · <span class="sub2" id="blSummary"></span></h2>
     <div class="card">
       <div class="hint">${t("<b>핵심 프로필 전용</b> — 무결성 프로필 검증에서는 지적이 여기로 유입되지 않아요(자동 등록·기록 규약 모두 핵심 전용 — 직접 명령으로 수동 등록만 가능). 검증이 낸 지적 중 <b>이번 작업 범위를 넘는 제안</b>(새 시나리오 방어·구조 재설계·커버리지 확장 등)이 여기 보관돼요 — 이론적 구멍을 계속 메우는 무한 검증 루프를 끊기 위한 주차장입니다(핵심 프로필 v2.4). <b>보관 항목엔 갚을 의무가 없고</b>, 채택할 때만 작업이 됩니다. 사용자 판단을 기다리도록 승격된 [주의] 항목도 여기에 함께 기록돼요. 즉시 고칠 자명한 보완([보완])은 애초에 여기 들어오지 않아요(그 루프에서 바로 반영). '검토 기한' 표시는 오래됐거나(30일+) 자주 재발견(3회+)된 항목 — 기한이 아니라 '채택 후보로 한번 살펴보라'는 환기예요.", "<b>Core profile only</b> — integrity-profile verifications never feed this parking lot (both auto-record and the recording protocol are core-only; manual CLI registration is the only other way in). Findings that go <b>beyond this work's scope</b> (new scenario hardening, redesign proposals, coverage expansion) are parked here — a parking lot that cuts the endless loop of patching theoretical holes (core profile v2.4). <b>Parked items carry no repayment duty</b>; they become work only when adopted. '[caution]' items escalated to await your judgment are also recorded here. Obvious mechanical notes ([notes]) never land here (they are applied in-loop). 'review due' marks old (30d+) or often-rediscovered (3×+) items — not a deadline, just a nudge to consider adoption.")}</div>
       <div id="blList" style="margin-top:6px"></div>
@@ -3754,7 +3762,7 @@ class Dashboard {
     </div>
   </div>
 
-  <h2 class="sec">${t("한눈에 보기", "At a Glance")} <span class="sub2">${t("누구에게 · 뭐가 · 언제 들어가나 — 지금 저장된 설정 기준 (저장하면 바뀐 곳이 깜빡여요)", "who gets what, and when — based on saved settings (changes flash on save)")}</span></h2>
+  <h2 class="sec accent-teal">${t("한눈에 보기", "At a Glance")} <span class="sub2">${t("누구에게 · 뭐가 · 언제 들어가나 — 지금 저장된 설정 기준 (저장하면 바뀐 곳이 깜빡여요)", "who gets what, and when — based on saved settings (changes flash on save)")}</span></h2>
   <section class="flowmap card" id="fmSection">
     <div class="flow">
       <div class="fnode rule" id="flowImplRules">${t("Claude<br>규칙", "Claude<br>rules")}</div>
@@ -3991,6 +3999,7 @@ class Dashboard {
     // 검증 토글 직하 단계 패널: 검증 ON이면 ①③ 켜짐, ②는 검증할 때. OFF면 ①③ 꺼짐, ②는 수동 ask 때만.
     const von = appVM!=="off";
     const st=$("sbState"); if(st) st.textContent = von ? lblVM(appVM) : T("꺼짐","off");
+    { const bg=$("sbStateBadge"); if(bg) bg.style.color = von ? "var(--vscode-charts-green)" : "var(--vscode-descriptionForeground)"; } // 상태 배지 색(켜짐=초록/꺼짐=회색)
     setStage($("sbTransmit"), von, von?T("검증 켜짐 → 적용","verify on → applied"):T("검증 꺼짐 → 안 들어감","verify off → not injected"));
     setStage($("sbVerify"), von, von?T("검증할 때 적용","applied when verifying"):T("자동 검증 없음 (수동 ask 땐 들어감)","no auto verify (still applied on manual ask)"));
     setStage($("sbRejudge"), von, von?T("검증 켜짐 → 적용","verify on → applied"):T("검증 꺼짐 → 안 들어감","verify off → not injected"));
@@ -4446,13 +4455,19 @@ class Dashboard {
       var b = bp[k];
       var avgDur = b.durationCount>0 ? Math.round(b.durationMsSum/b.durationCount/1000)+T("초","s") : "–";
       var att = (b.attempts||0) > b.count ? (' · '+T("실행 실패 "+((b.attempts||0)-b.count)+"건 포함 시도 "+(b.attempts||0),"attempts "+(b.attempts||0)+" incl. "+((b.attempts||0)-b.count)+" exec-fail")) : ''; // 시도>판정이면 실패 귀속 병기(2차 blocker)
-      return '<div class="vrow"><span class="vlbl">'+(profLbl[k]||k)+'</span><b class="vnum">'+b.count+T("건"," runs")+'</b><span class="muted">'+att+' · '+T("실효 실패","eff-fail")+' '+b.effFail+' · '+T("실효 보류","eff-hold")+' '+b.effInconclusive+' · '+T("기계 강등","demoted")+' '+b.demoted+' · '+T("기계 정정","corrected")+' '+b.corrected+' · '+T("평균 소요","avg dur")+' '+avgDur+'</span></div>';
+      var chip=function(lbl,val,cls){ var z=(val===0||val==="0")?" z":""; return '<span class="pfm '+(cls||'')+z+'">'+lbl+' <b>'+val+'</b></span>'; };
+      return '<div class="vrow"><span class="vlbl">'+(profLbl[k]||k)+'</span><b class="vnum">'+b.count+T("건"," runs")+'</b><span>'
+        + chip(T("실효 실패","eff-fail"), b.effFail, "bad") + chip(T("실효 보류","eff-hold"), b.effInconclusive, "warn")
+        + chip(T("기계 강등","demoted"), b.demoted, "note") + chip(T("기계 정정","corrected"), b.corrected, "note")
+        + chip(T("평균 소요","avg dur"), avgDur, "") + (att?'<span class="pfm warn">'+att.replace(/^ · /,'')+'</span>':'')
+        + '</span></div>';
     }).join("");
     var avgTxt = function(avg, n){ return avg===null ? "–" : (avg.toFixed(1)+T("회","")+(n<MINS?T(" (표본 부족 "+n+"건)"," (low sample "+n+")"):T(" ("+n+"캠페인)"," ("+n+" campaigns)"))); };
     rows += '<div class="vrow"><span class="vlbl">'+T("캠페인당 평균 왕복","avg rounds/campaign")+'</span><span class="muted">'+T("핵심 전용","core-only")+' '+avgTxt(cg.avgRoundsCore, cg.sampleCore)+' · '+T("무결성 전용","integrity-only")+' '+avgTxt(cg.avgRoundsIntegrity, cg.sampleIntegrity)+(cg.mixed?(' · '+T("혼합 "+cg.mixed+"건 제외","mixed "+cg.mixed+" excluded")):"")+'</span></div>';
     if (cg.campaignRows>0) rows += '<div class="vrow"><span class="vlbl">'+T("상한 집계 커버리지","cap coverage")+'</span><span class="muted">'+cg.trackedRows+'/'+cg.campaignRows+T("행 추적"," rows tracked")+(cg.untrackedRows?(' · '+T("미집계 "+cg.untrackedRows+"행 — 평균은 완전 추적 캠페인만","untracked "+cg.untrackedRows+" — averages use fully-tracked campaigns only")):"")+(cg.incompleteCampaigns?(' · '+T("불완전 캠페인 "+cg.incompleteCampaigns,"incomplete "+cg.incompleteCampaigns)):"")+(cg.corruptRounds?(' · '+T("회차 손상 "+cg.corruptRounds,"corrupt rounds "+cg.corruptRounds)):"")+'</span></div>';
     var execFail = (oc.runError||0)+(oc.sessionUnresolved||0)+(oc.proofRejected||0)+(oc.postprocessError||0);
-    if (execFail>0) rows += '<div class="vrow"><span class="vlbl">'+T("실행 실패(판정 없음)","exec failures (no verdict)")+'</span><span class="muted">'+T("모델 실행 "+(oc.runError||0)+" · 세션 미결속 "+(oc.sessionUnresolved||0)+" · 증명 거부 "+(oc.proofRejected||0)+" · 후처리 "+(oc.postprocessError||0),"run "+(oc.runError||0)+" · unresolved "+(oc.sessionUnresolved||0)+" · proof "+(oc.proofRejected||0)+" · postprocess "+(oc.postprocessError||0))+'</span></div>';
+    if (execFail>0) { var xc=function(lbl,v){ return '<span class="pfm bad'+(v?'':' z')+'">'+lbl+' <b>'+(v||0)+'</b></span>'; };
+      rows += '<div class="vrow"><span class="vlbl">'+T("실행 실패(판정 없음)","exec failures (no verdict)")+'</span><span>'+xc(T("모델 실행","run"),oc.runError)+xc(T("세션 미결속","unresolved"),oc.sessionUnresolved)+xc(T("증명 거부","proof"),oc.proofRejected)+xc(T("후처리","postprocess"),oc.postprocessError)+'</span></div>'; }
     $("profileEffect").innerHTML = rows || '<p class="muted">'+T("아직 프로필 기록이 있는 검증이 없어요.","No profile-tagged verifications yet.")+'</p>';
     // 승격 안내 — 사실 진술만(2차 B2·4차 B2: 게이트 판정형 표현 금지·정상 판정 무결성 행만 인정·구 기록 병기)
     var hint = "";
@@ -4880,67 +4895,68 @@ class Dashboard {
         const api=$("scoutApiLine"); if(!api) return;
         if(!on){ api.style.display="none"; return; }
         api.style.display="";
-        if(d.deepseek && d.deepseek.hasKey){
-          const ds=((d.scoutMaps&&d.scoutMaps.items)||[]).find(x=>x&&x.arm==="deepseek"&&x.ts);
-          api.textContent=T("DeepSeek 비교 정찰: 키 등록됨("+d.deepseek.masked+")","DeepSeek comparison scout: key registered ("+d.deepseek.masked+")")
-            + (ds? T(" · 마지막 성공 통신 "+new Date(ds.ts).toLocaleString()," · last successful call "+new Date(ds.ts).toLocaleString())
-                 : T(" · 이 프로젝트에선 아직 실행 기록 없음"," · no runs recorded in this project yet"));
-        } else {
-          api.textContent=T("DeepSeek 비교 정찰: 키 없음 — 변경 감지와 기본 정찰(Claude) 지도(별도 과금 없음)만 동작해요(⚙️ 고급설정에서 등록 가능).","DeepSeek comparison scout: no key — change sensing & default-scout maps (no separate billing) only (register in ⚙️ Advanced).");
+        api.textContent="";
+        { // 상태 배지+메타 칩으로 분해(문장 나열 → 구조 — 2026-07-20 UI 개선)
+          const bd=document.createElement("span"); bd.className="pfm "+(d.deepseek&&d.deepseek.hasKey?"okc":"z");
+          bd.textContent=(d.deepseek&&d.deepseek.hasKey)?T("DeepSeek 키 등록됨","DeepSeek key registered"):T("DeepSeek 키 없음","No DeepSeek key");
+          api.appendChild(bd);
+          if(d.deepseek && d.deepseek.hasKey){
+            const km=document.createElement("span"); km.className="pfm"; km.textContent=d.deepseek.masked; api.appendChild(km);
+            const ds=((d.scoutMaps&&d.scoutMaps.items)||[]).find(x=>x&&x.arm==="deepseek"&&x.ts);
+            const tm=document.createElement("span"); tm.className="pfm"+(ds?"":" z");
+            tm.textContent=ds?T("⏱ 마지막 통신 ","⏱ last call ")+new Date(ds.ts).toLocaleString():T("이 프로젝트 실행 기록 없음","no runs in this project yet");
+            api.appendChild(tm);
+          } else {
+            const hint2=document.createElement("span"); hint2.className="muted"; hint2.style.fontSize="10.5px";
+            hint2.textContent=T("기본 정찰(Claude·무과금)은 전부 동작 — 비교 정찰만 잠김(⚙️ 고급설정에서 등록)","default scout (Claude · free) fully works — only the comparison scout is locked (register in ⚙️ Advanced)");
+            api.appendChild(hint2);
+          }
         }
         // 비-git 폴더면 기준을 명시(아래 상태 요약과 일관): 통계만 불가, 지도는 무이력 모드로 가능.
-        if(d.scope && d.scope.note==="no-git") api.textContent += T(" ※ 이 폴더는 변경 기록(버전 관리)이 없어 '같이 바뀌던 파일' 힌트만 불가 — 지도는 최근 수정 기준으로 가능해요."," ※ This folder has no change history (version control), so only 'changed-together' hints are unavailable — maps still work from recent edits.");
-        safe(function(){ // 탐색 담당 선택(2026-07-20 사용자 요청) — 자동 지시가 이 선택을 1순위 러너로 반영
+        if(d.scope && d.scope.note==="no-git"){ const ng=document.createElement("span"); ng.className="pfm warn"; ng.style.whiteSpace="normal";
+          ng.textContent=T("ⓘ 비-git 폴더 — '같이 바뀌던 파일' 힌트만 불가·지도는 최근 수정 기준","ⓘ non-git folder — only 'changed-together' hints unavailable · maps use recent edits");
+          ng.title=T("이 폴더는 변경 기록(버전 관리)이 없어요. 통계 힌트만 제한되고 지도 생성은 정상 동작해요.","This folder has no version-control history. Only the stats hint is limited — map creation works normally.");
+          api.appendChild(ng); }
+        safe(function(){ // 탐색 담당 선택(2026-07-20 사용자 요청) — .seg 세그먼트(기존 디자인 언어)로 시각화(UX 교훈 3: 말 대신 구조)
           const row=$("scoutArmRow"); if(!row) return;
           const av=d.scoutArm;
           if(!on||!av){ row.style.display="none"; return; }
           row.style.display=""; row.textContent="";
-          // 2차 blocker②: 데이터가 계산된 슬롯(av.slot)과 이 화면의 베이크 슬롯(UI_EN)이 다르면 — 언어 전환
-          // 직후·hold 창 — 표시값을 근거로 다른 슬롯을 바꾸게 되므로 조작을 잠그고 상태만 알린다.
           const uiSlot = UI_EN ? "en" : "ko";
           const slotMismatch = !!(av.slot && av.slot !== uiSlot);
-          const lb=document.createElement("span"); lb.className="muted"; lb.textContent=T("탐색 담당(영향지도): ","Scout assignment (impact map): "); // 범위 명시(정본 감사 2026-07-20): 이 선택=Impact Map 러너 선호 — P7 provider mode(경제/정밀/자동)는 별도 제어
+          const lb=document.createElement("span"); lb.className="muted"; lb.textContent=T("탐색 담당(영향지도)","Scout assignment (impact map)");
           row.appendChild(lb);
-          // 클릭 피드백(2026-07-20 사용자 실보고 '눌러도 반응 없음' — 경로는 정상이나 표시 무피드백):
-          // ①현재 선택 버튼에 ✓ 표기 ②같은 선택 재클릭=무동작+안내 ③다른 선택 클릭=낙관적 즉시 전환+'저장 중…'
-          // (서버 재렌더가 최종 확정 — 실패 시 다음 데이터로 자연 복귀).
-          const btns={};
+          const seg=document.createElement("span"); seg.className="seg";
           let curSel=av.raw; // 명시 선택의 로컬 추적(미지정=null — 낙관 전환 시 갱신)
-          const styleOf=function(active){ return "margin-right:6px;font-size:11px;padding:2px 8px"+(active?";font-weight:700;outline:1px solid var(--vscode-focusBorder)":""); };
-          const markOf=function(label,active){ return (active?"✓ ":"")+label; };
-          const mk=function(arm,label,dis,active){
+          const note=document.createElement("div"); note.className="muted"; note.style.cssText="margin-top:3px;font-size:10.5px";
+          const btns={};
+          const setOn=function(arm){ for(const k in btns){ btns[k].classList.toggle("on", k===arm); } };
+          const mk=function(arm,label,sub,dis){
             const b=document.createElement("button");
-            b.textContent=markOf(label,active); b.disabled=!!dis;
-            b.style.cssText=styleOf(active);
+            const t1=document.createTextNode(label); const sm=document.createElement("small"); sm.textContent=sub;
+            b.appendChild(t1); b.appendChild(sm);
+            b.disabled=!!dis; if(dis) b.style.opacity=".55";
             b.addEventListener("click", function(){
               if(dis) return;
-              // 1차 blocker①: 재클릭 판정은 '명시 선택'(curSel)과만 — 미지정(null)에서는 어떤 클릭도 저장.
-              // 1차 blocker②: curSel은 낙관 전환 시 즉시 갱신되는 로컬 상태 — 재렌더 전 되돌림 클릭도 정상 저장.
-              if(scoutArmClick(curSel, arm)==="noop"){ note.textContent=T("· 이미 선택돼 있어요 ✓","· already selected ✓"); note.classList.remove("flash"); void note.offsetWidth; note.classList.add("flash"); return; }
-              curSel=arm;
-              for(const k in btns){ btns[k].b.textContent=markOf(btns[k].label,k===arm); btns[k].b.style.cssText=styleOf(k===arm); } // 낙관적 즉시 전환
-              note.textContent=T("· 저장 중…","· saving…");
-              vscode.postMessage({type:"setScoutArm", arm:arm, lang:(UI_EN?"en":"ko")}); // 표시 화면(UI_EN 베이크)과 같은 슬롯에 저장
+              if(scoutArmClick(curSel, arm)==="noop"){ note.textContent=T("이미 선택돼 있어요 ✓","Already selected ✓"); note.classList.remove("flash"); void note.offsetWidth; note.classList.add("flash"); return; }
+              curSel=arm; setOn(arm);
+              note.textContent=T("저장 중…","Saving…");
+              vscode.postMessage({type:"setScoutArm", arm:arm, lang:uiSlot});
             });
-            btns[arm]={b:b,label:label};
-            row.appendChild(b);
+            btns[arm]=b; seg.appendChild(b);
           };
-          const effSelf=av.eff==="self";
-          mk("self", T("기본 정찰(Claude — 추가 과금 없음)","Default scout (Claude — no extra billing)"), slotMismatch, effSelf);
-          mk("deepseek", T("DeepSeek 정찰","DeepSeek scout")+(av.hasKey?"":T(" (키 필요)"," (key required)")), slotMismatch, !effSelf);
-          { // Codex 정찰 예정 표시(2026-07-20 사용자 결정): 무과금 기본 설계의 확장 로드맵 가시화 —
-            // 러너가 아직 없으므로(P6에서 독립 세션으로 구현) 항상 비활성·예정 배지(거짓 옵션 금지).
-            const bC=document.createElement("button");
-            bC.textContent=T("Codex 정찰 (예정)","Codex scout (planned)");
-            bC.disabled=true;
-            bC.title=T("추후 지원 예정 — Codex가 탐색(영향지도·의미 보강)을 맡는 독립 세션은 로드맵 P6에서 구현돼요. 지금은 기본 정찰(Claude)과 DeepSeek 중에서 선택합니다.","Coming later — a dedicated Codex scout session (impact map · semantic enrichment) arrives in roadmap P6. For now choose between the default scout (Claude) and DeepSeek.");
-            bC.style.cssText="margin-right:6px;font-size:11px;padding:2px 8px;opacity:.55";
-            row.appendChild(bC);
-          }
-          const note=document.createElement("span"); note.className="muted";
-          if(slotMismatch) note.textContent=T("· 언어 전환 반영 중 — 새 화면에서 다시 조작해 주세요","· language switch in progress — reopen controls on the refreshed screen");
-          else if(av.raw==="deepseek"&&!av.hasKey) note.textContent=T("· 선호=DeepSeek이나 키 미등록 — 키 등록(⚙️ 고급설정) 전까지 기본 정찰(Claude)로 동작","· preference=DeepSeek but no key — the default scout (Claude) runs until you register one (⚙️ Advanced)");
-          else if(av.raw===null) note.textContent=T("· 미지정(기본값) — 선택은 자동 지시의 1순위 러너에 반영돼요","· unset (default) — your choice becomes the auto-directive's first-choice runner");
+          mk("self", T("기본 정찰","Default"), T("Claude · 무과금","Claude · free"), slotMismatch);
+          mk("deepseek", "DeepSeek", av.hasKey?T("키 등록됨","key set"):T("키 필요","key required"), slotMismatch);
+          { const b=document.createElement("button"); b.disabled=true; b.style.opacity=".45";
+            b.appendChild(document.createTextNode("Codex")); const sm=document.createElement("small"); sm.textContent=T("예정","planned"); b.appendChild(sm);
+            b.title=T("추후 지원 예정 — Codex가 탐색(영향지도·의미 보강)을 맡는 독립 세션은 로드맵 P6에서 구현돼요. 지금은 기본 정찰(Claude)과 DeepSeek 중에서 선택합니다.","Coming later — a dedicated Codex scout session (impact map · semantic enrichment) arrives in roadmap P6. For now choose between the default scout (Claude) and DeepSeek.");
+            seg.appendChild(b); }
+          setOn(av.eff==="self"?"self":"deepseek");
+          row.appendChild(seg);
+          if(slotMismatch) note.textContent=T("언어 전환 반영 중 — 새 화면에서 다시 조작해 주세요","Language switch in progress — reopen controls on the refreshed screen");
+          else if(av.raw==="deepseek"&&!av.hasKey) note.textContent=T("선호=DeepSeek이나 키 미등록 — 키 등록(⚙️ 고급설정) 전까지 기본 정찰(Claude)로 동작","Preference=DeepSeek but no key — the default scout (Claude) runs until you register one (⚙️ Advanced)");
+          else if(av.raw===null) note.textContent=T("미지정(기본값) — 선택은 자동 지시의 1순위 러너에 반영돼요","Unset (default) — your choice becomes the auto-directive's first-choice runner");
+          else note.textContent="";
           row.appendChild(note);
         });
       })();
@@ -5022,9 +5038,20 @@ class Dashboard {
         else if(sc.note==="error") line=T("지금: 변경 기록을 읽지 못했어요 — 잠시 후 자동 재시도돼요.","Now: couldn't read the change history — retries shortly.");
         else if(sc.note==="no-changes") line=T("지금: 대기 — 작업트리에 변경이 없어요. 파일이 바뀌면 변경 감지가 자동으로 후보를 찾고, 지도는 직접/자동 지시 실행으로 만들어져요.","Now: idle — no working-tree changes. Change sensing finds candidates automatically once files change; maps are made on direct/auto-directive runs.");
         else {
+          // 상태 칩+수치 칩으로 분해(5정보 한 문장 나열 → 훑어 읽기 — 2026-07-20 UI 개선)
           const when = sc.checkedAt ? new Date(sc.checkedAt).toLocaleTimeString() : "?";
           const cand = (sc.suggestion && sc.suggestion.candidates) ? sc.suggestion.candidates.length : 0;
-          line=T("지금: 변경 감지 동작 중 — 마지막 확인 "+when+" (과거 변경 "+sc.logCount+"건 검토 · 후보 "+cand+"개) · 지도는 직접/자동 지시 실행 대기.","Now: change sensing active — last checked "+when+" ("+sc.logCount+" past changes reviewed · "+cand+" candidates) · maps await a direct/auto-directive run.");
+          const el9=document.createElement("div");
+          const st9=document.createElement("span"); st9.className="pfm okc"; st9.textContent=T("● 변경 감지 동작 중","● change sensing active"); el9.appendChild(st9);
+          const c9=function(lbl,val,z){ const c=document.createElement("span"); c.className="pfm"+(z?" z":""); const b=document.createElement("b"); b.textContent=String(val); c.appendChild(document.createTextNode(lbl+" ")); c.appendChild(b); el9.appendChild(c); };
+          c9(T("마지막 확인","last check"), when, false);
+          c9(T("검토한 과거 변경","past changes reviewed"), sc.logCount, !sc.logCount);
+          c9(T("후보","candidates"), cand, !cand);
+          const nx9=document.createElement("span"); nx9.className="muted"; nx9.style.fontSize="10.5px";
+          nx9.textContent=T("지도는 직접/자동 지시 실행 대기","maps await a direct/auto-directive run");
+          el9.appendChild(nx9);
+          box.appendChild(el9);
+          return;
         }
         const el=add(line,"muted"); el.style.fontWeight="600";
       })();
@@ -5162,10 +5189,26 @@ class Dashboard {
       // 프로젝트별 관찰 신호 1줄 — 전역 임계값 대신 '이 폴더의 장부'가 신뢰 판단 재료(advisory·사용자 결정 2026-07-09).
       safe(function(){
         const h=ml.health; if(!h||!h.entries) return;
-        const line=document.createElement("div"); line.className="muted";
-        line.textContent = h.entries<5
-          ? T("관찰 신호: 표본 아직 작음(항목 "+h.entries+"건) — 비율 표시는 보류(과신 방지)","Observation signal: sample still small ("+h.entries+" items) — ratios withheld (avoids overconfidence)")
-          : T("관찰 신호(이 프로젝트): 확인 "+h.verified+"/"+h.entries+(h.reusedDen>=5?" · 재사용 항목 중 확인 이력 "+h.reusedNum+"/"+h.reusedDen:"")+(h.autoDen>=5?" · 기계 확인 가능 중 기계 확인 "+h.autoNum+"/"+h.autoDen:"")+(h.reinterpreted>0?" · 재해석 강등 "+h.reinterpreted+"건":"")+" · 반박 "+h.disputedEntries+"건(수동 기록 기준) · 복권 "+h.rehabilitated+"건 — 관측치이며 편향은 양방향일 수 있어요(자동 반박 없음=반박 과소·지도 동봉 노출=확인 과대)","Observation signal (this project): confirmed "+h.verified+"/"+h.entries+(h.reusedDen>=5?" · reused items with a confirm "+h.reusedNum+"/"+h.reusedDen:"")+(h.autoDen>=5?" · machine-checkable w/ machine confirm "+h.autoNum+"/"+h.autoDen:"")+(h.reinterpreted>0?" · reinterpreted "+h.reinterpreted:"")+" · disputed "+h.disputedEntries+" (manually recorded) · rehabilitated "+h.rehabilitated+" — observational; bias can go both ways (no auto-dispute = disputes undercounted · map-attached exposure = confirms overcounted)");
+        const line=document.createElement("div");
+        if(h.entries<5){
+          line.className="muted";
+          line.textContent = T("관찰 신호: 표본 아직 작음(항목 "+h.entries+"건) — 비율 표시는 보류(과신 방지)","Observation signal: sample still small ("+h.entries+" items) — ratios withheld (avoids overconfidence)");
+        } else {
+          // 6개 지표 문장 나열 → 지표 칩 행(분수는 칩 안 굵은 값) + 편향 주의는 ⓘ 툴팁(2026-07-20 UI 개선)
+          const lb9=document.createElement("span"); lb9.className="muted"; lb9.style.marginRight="4px";
+          lb9.textContent=T("관찰 신호","Observation signal");
+          lb9.title=T("관측치이며 편향은 양방향일 수 있어요 — 자동 반박 없음=반박 과소·지도 동봉 노출=확인 과대","Observational; bias can go both ways — no auto-dispute = disputes undercounted · map-attached exposure = confirms overcounted");
+          line.appendChild(lb9);
+          const chip9=function(lbl,val,cls,tip){ const c9=document.createElement("span"); c9.className="pfm "+(cls||""); const b9=document.createElement("b"); b9.textContent=String(val); c9.appendChild(document.createTextNode(lbl+" ")); c9.appendChild(b9); if(tip) c9.title=tip; line.appendChild(c9); };
+          chip9(T("확인","confirmed"), h.verified+"/"+h.entries, "okc");
+          if(h.reusedDen>=5) chip9(T("재사용→확인","reused→confirm"), h.reusedNum+"/"+h.reusedDen, "");
+          if(h.autoDen>=5) chip9(T("기계 확인","machine confirm"), h.autoNum+"/"+h.autoDen, "");
+          if(h.reinterpreted>0) chip9(T("재해석 강등","reinterpreted"), h.reinterpreted, "note");
+          chip9(T("반박","disputed"), h.disputedEntries, h.disputedEntries?"warn":"z", T("수동 기록 기준","manually recorded"));
+          chip9(T("복권","rehabilitated"), h.rehabilitated, h.rehabilitated?"okc":"z");
+          const bi=document.createElement("span"); bi.className="muted"; bi.style.cssText="font-size:10px;cursor:help"; bi.textContent="ⓘ";
+          bi.title=lb9.title; line.appendChild(bi);
+        }
         card.appendChild(line);
       });
       // 건강 리포트 새탭 — 현황이 포화라 확장판(수치 뜻·게이트·타임라인)은 대시보드에 더 얹지 않고 새탭으로(2026-07-09).
