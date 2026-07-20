@@ -142,6 +142,31 @@ console.log("[4] 대시보드 표면 — 행·핸들러·ko/en 쌍(소스 계약
   ok(src.includes("slotMismatch") && src.includes("av.slot && av.slot !== uiSlot"), "데이터 슬롯≠표시 슬롯이면 조작 잠금(hold 창 오염 차단)");
   ok(src.includes("언어 전환 반영 중") && src.includes("language switch in progress"), "잠금 안내 ko/en 쌍");
   ok(src.includes('lang === "en" ? enM : koM'), "모달 문구=저장 슬롯 기준(전역 tE와 갈리는 창 제거)");
+  // 클릭 피드백(2026-07-20 사용자 실보고 봉합): 재클릭 안내·낙관 전환·저장 중 표시·현재 선택 ✓ 표기
+  ok(src.includes("이미 선택돼 있어요 ✓") && src.includes("already selected ✓"), "같은 선택 재클릭=무동작+안내 ko/en 쌍");
+  ok(src.includes("· 저장 중…") && src.includes("· saving…"), "클릭 즉시 '저장 중' 표시 ko/en 쌍");
+  ok(src.includes("낙관적 즉시 전환") && src.includes('markOf(btns[k].label,k===arm)'), "낙관적 즉시 전환(서버 재렌더가 최종 확정)");
+  ok(src.includes('(active?"✓ ":"")'), "현재 선택 버튼 ✓ 표기(선택 상태 가시화)");
+  ok(src.includes("let curSel=av.raw;") && src.includes("curSel=arm;"), "재클릭 판정=명시 선택 로컬 추적(낙관 전환 시 즉시 갱신 — 1차 blocker②)");
+  // 1차 blocker①②: 판정 순수 함수를 산출물에서 추출해 상태 전이 실행 — 문구 검사로는 못 잡던 결함 잠금
+  {
+    const outSrc = fs.readFileSync(path.join(ROOT, "out", "extension.js"), "utf8");
+    const stIdx = outSrc.indexOf("function scoutArmClick(");
+    const enIdx = outSrc.indexOf("}", stIdx);
+    const fnText = stIdx >= 0 && enIdx > stIdx ? outSrc.slice(stIdx, enIdx + 1) : "";
+    ok(!!fnText, "(전제) 산출물에서 판정 함수 추출");
+    const dec = new Function("return (" + fnText + ");")();
+    ok(dec(null, "self") === "save", "미지정 상태에서 기본 클릭=저장(미지정≠명시 self — 1차 blocker① 소멸)");
+    ok(dec(null, "deepseek") === "save", "미지정 상태에서 DeepSeek 클릭=저장");
+    ok(dec("self", "self") === "noop", "명시 self 재클릭=무동작+안내");
+    let curSel = "self";
+    ok(dec(curSel, "deepseek") === "save", "(전이 1) self→DeepSeek 클릭=저장");
+    curSel = "deepseek"; // 낙관 전환의 로컬 갱신 재현
+    ok(dec(curSel, "self") === "save", "(전이 2) 재렌더 전 되돌림 클릭도 저장(고착 소멸 — 1차 blocker②)");
+    curSel = "self"; // 2차 [보완]: 되돌림 저장도 낙관 갱신 — '방금 고른 값'은 self
+    ok(dec(curSel, "self") === "noop", "(전이 3) 방금 고른 값(되돌림 후 self) 재클릭=무동작");
+    ok(dec(curSel, "deepseek") === "save", "(전이 4) 다시 반대로 전환도 저장(연속 전환 자유)");
+  }
   const out = fs.readFileSync(path.join(ROOT, "out", "extension.js"), "utf8");
   ok(out.includes("scoutArmRow") && out.includes("setScoutArm"), "컴파일 산출물에도 배선 존재(설치본 정합)");
 }

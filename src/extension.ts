@@ -4022,6 +4022,9 @@ class Dashboard {
     pendingSave = {target:"timeout"};
     vscode.postMessage({type:"saveVerifyTimeout", min: n});
   });
+  // scoutArm 클릭 판정(순수 — 테스트가 산출물에서 추출 실행): 재클릭 판정은 '명시 선택(curSel)'과만 비교.
+  // 미지정(null)은 어떤 클릭도 저장(명시화 — 미지정과 명시 self는 지시 문구가 다른 별개 상태: 1차 blocker①).
+  function scoutArmClick(curSel, arm){ return curSel===arm ? "noop" : "save"; }
   function flashSaved(node, msg){ if(!node) return; node.textContent = msg || T("저장됨 ✓ (다음 턴부터 적용)","Saved ✓ (applies from next turn)"); node.classList.remove("flash"); void node.offsetWidth; node.classList.add("flash"); }
   $("cands").addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-relink]");
@@ -4898,11 +4901,28 @@ class Dashboard {
           const slotMismatch = !!(av.slot && av.slot !== uiSlot);
           const lb=document.createElement("span"); lb.className="muted"; lb.textContent=T("탐색 담당(영향지도): ","Scout assignment (impact map): "); // 범위 명시(정본 감사 2026-07-20): 이 선택=Impact Map 러너 선호 — P7 provider mode(경제/정밀/자동)는 별도 제어
           row.appendChild(lb);
+          // 클릭 피드백(2026-07-20 사용자 실보고 '눌러도 반응 없음' — 경로는 정상이나 표시 무피드백):
+          // ①현재 선택 버튼에 ✓ 표기 ②같은 선택 재클릭=무동작+안내 ③다른 선택 클릭=낙관적 즉시 전환+'저장 중…'
+          // (서버 재렌더가 최종 확정 — 실패 시 다음 데이터로 자연 복귀).
+          const btns={};
+          let curSel=av.raw; // 명시 선택의 로컬 추적(미지정=null — 낙관 전환 시 갱신)
+          const styleOf=function(active){ return "margin-right:6px;font-size:11px;padding:2px 8px"+(active?";font-weight:700;outline:1px solid var(--vscode-focusBorder)":""); };
+          const markOf=function(label,active){ return (active?"✓ ":"")+label; };
           const mk=function(arm,label,dis,active){
             const b=document.createElement("button");
-            b.textContent=label; b.disabled=!!dis;
-            b.style.cssText="margin-right:6px;font-size:11px;padding:2px 8px"+(active?";font-weight:700;outline:1px solid var(--vscode-focusBorder)":"");
-            b.addEventListener("click", function(){ if(dis) return; vscode.postMessage({type:"setScoutArm", arm:arm, lang:(UI_EN?"en":"ko")}); }); // 1차 blocker⑤: 표시 화면(UI_EN 베이크)과 같은 슬롯에 저장 — 언어 전환 경계에서 d.lang(전역 최신)로 갈리는 오염 차단
+            b.textContent=markOf(label,active); b.disabled=!!dis;
+            b.style.cssText=styleOf(active);
+            b.addEventListener("click", function(){
+              if(dis) return;
+              // 1차 blocker①: 재클릭 판정은 '명시 선택'(curSel)과만 — 미지정(null)에서는 어떤 클릭도 저장.
+              // 1차 blocker②: curSel은 낙관 전환 시 즉시 갱신되는 로컬 상태 — 재렌더 전 되돌림 클릭도 정상 저장.
+              if(scoutArmClick(curSel, arm)==="noop"){ note.textContent=T("· 이미 선택돼 있어요 ✓","· already selected ✓"); note.classList.remove("flash"); void note.offsetWidth; note.classList.add("flash"); return; }
+              curSel=arm;
+              for(const k in btns){ btns[k].b.textContent=markOf(btns[k].label,k===arm); btns[k].b.style.cssText=styleOf(k===arm); } // 낙관적 즉시 전환
+              note.textContent=T("· 저장 중…","· saving…");
+              vscode.postMessage({type:"setScoutArm", arm:arm, lang:(UI_EN?"en":"ko")}); // 표시 화면(UI_EN 베이크)과 같은 슬롯에 저장
+            });
+            btns[arm]={b:b,label:label};
             row.appendChild(b);
           };
           const effSelf=av.eff==="self";
