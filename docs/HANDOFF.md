@@ -2,7 +2,7 @@
 
 > 이 문서 하나로 이어갈 수 있게 쓰였다. 상세 설계 원본(SCOUT-TRACK.md·SCOPE-LEDGER.md)은 **의도적으로 레포 밖 로컬 문서**라
 > 다른 환경에는 없다 — 그래서 이 파일이 그 요지를 포함한다. ⚠ **실 API 키·토큰은 어떤 파일·픽스처·예시에도 절대 넣지 말 것.**
-> 마지막 갱신: 2026-07-20 (버전 0.1.86 불변 · 이 갱신을 포함해 push된 main 기준). **이번 push 묶음(12커밋) 요지 —
+> 마지막 갱신: 2026-07-20 (버전 0.1.86 불변 · 이 갱신을 포함해 push된 main 기준). **이번 push 묶음(11커밋+수치 정정 1) 요지 —
 > MAP v2 P4 전 증분 완결+탐색 담당(scoutArm) 옵션 신설: 다음 착수=P3b cutover**:
 > ①**P4 증분 1 — P2 확장 계층**(4ef214a·검증 3왕복): structuralHashOf(provenance 제외 — historyless 자기참조
 > 해소)·map-decision-v3(affectedIds='생존' changedIds 필수·정렬)·v2/v3 dual reader(구 v2 바이트·해시 불변
