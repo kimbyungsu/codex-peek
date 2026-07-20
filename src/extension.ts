@@ -4928,6 +4928,15 @@ class Dashboard {
           const effSelf=av.eff==="self";
           mk("self", T("기본 정찰(Claude — 추가 과금 없음)","Default scout (Claude — no extra billing)"), slotMismatch, effSelf);
           mk("deepseek", T("DeepSeek 정찰","DeepSeek scout")+(av.hasKey?"":T(" (키 필요)"," (key required)")), slotMismatch, !effSelf);
+          { // Codex 정찰 예정 표시(2026-07-20 사용자 결정): 무과금 기본 설계의 확장 로드맵 가시화 —
+            // 러너가 아직 없으므로(P6에서 독립 세션으로 구현) 항상 비활성·예정 배지(거짓 옵션 금지).
+            const bC=document.createElement("button");
+            bC.textContent=T("Codex 정찰 (예정)","Codex scout (planned)");
+            bC.disabled=true;
+            bC.title=T("추후 지원 예정 — Codex가 탐색(영향지도·의미 보강)을 맡는 독립 세션은 로드맵 P6에서 구현돼요. 지금은 기본 정찰(Claude)과 DeepSeek 중에서 선택합니다.","Coming later — a dedicated Codex scout session (impact map · semantic enrichment) arrives in roadmap P6. For now choose between the default scout (Claude) and DeepSeek.");
+            bC.style.cssText="margin-right:6px;font-size:11px;padding:2px 8px;opacity:.55";
+            row.appendChild(bC);
+          }
           const note=document.createElement("span"); note.className="muted";
           if(slotMismatch) note.textContent=T("· 언어 전환 반영 중 — 새 화면에서 다시 조작해 주세요","· language switch in progress — reopen controls on the refreshed screen");
           else if(av.raw==="deepseek"&&!av.hasKey) note.textContent=T("· 선호=DeepSeek이나 키 미등록 — 키 등록(⚙️ 고급설정) 전까지 기본 정찰(Claude)로 동작","· preference=DeepSeek but no key — the default scout (Claude) runs until you register one (⚙️ Advanced)");

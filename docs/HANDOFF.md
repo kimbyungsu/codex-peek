@@ -2,7 +2,44 @@
 
 > 이 문서 하나로 이어갈 수 있게 쓰였다. 상세 설계 원본(SCOUT-TRACK.md·SCOPE-LEDGER.md)은 **의도적으로 레포 밖 로컬 문서**라
 > 다른 환경에는 없다 — 그래서 이 파일이 그 요지를 포함한다. ⚠ **실 API 키·토큰은 어떤 파일·픽스처·예시에도 절대 넣지 말 것.**
-> 마지막 갱신: 2026-07-19 (버전 0.1.86 불변 · 이 갱신을 포함해 push된 main 기준). **이번 push 묶음(8커밋) 요지 —
+> 마지막 갱신: 2026-07-20 (버전 0.1.86 불변 · 이 갱신을 포함해 push된 main 기준). **이번 push 묶음(12커밋) 요지 —
+> MAP v2 P4 전 증분 완결+탐색 담당(scoutArm) 옵션 신설: 다음 착수=P3b cutover**:
+> ①**P4 증분 1 — P2 확장 계층**(4ef214a·검증 3왕복): structuralHashOf(provenance 제외 — historyless 자기참조
+> 해소)·map-decision-v3(affectedIds='생존' changedIds 필수·정렬)·v2/v3 dual reader(구 v2 바이트·해시 불변
+> 리터럴 잠금·v2 historyless=unknown 정직 강등)·apply provenance 주입·read-set 전 anchor 확장(merge destination
+> 포함)·구 v2 WAL 복구=무주입 의미 보존. tests/p4-core 55단언.
+> ②**P4 증분 2 — freshness 재료 저장소+기준선 훅**(adbb89a·검증 14왕복 — 구조 교체 2회): mfresh-1(a:=검증
+> 전이 기준선[CAS 검증 지문 '복사'만·해시 0회·basisDecisionId 결속·권위 swap 전용]/e:=비권위 캐시 합타입),
+> 판독 무파괴·세대 안전·e: 우선 축출·영수증=실기록. 실패 복구=마커 없는 '상시 자가 수리'(누락=상태가 아니라
+> 매 topology 전이마다 저장소 vs provenance 차이로 재유도·원본=무GC 정본 decisions/·전체 검증기+ADP 권위
+> 스냅샷 결속·fp까지 대조)+retry 사이드카+감사 LRU=논리 순번 seq(시계 비의존 — 시각 기반 순번은 역행·포화·
+> 혼합 반례 3연속으로 폐기)+판독 예산(후보 상한+감사 예약·missing-first). 경로 경계+lstat/O_NOFOLLOW 안전
+> 판독. tests/p4-freshness 139단언. 보관함 2건: c016deec(symlink 잔여 창)·abec10d4(updates overlay — 지연만).
+> ③**P4 증분 3 — 공용 reader·판정기·동봉·게이트 준비**(569f729·검증 4왕복): bridge/map-reader.js —
+> readMapProjection(잠금 안='원문 바이트 캡처만'·captureDirRaw/FromCapture 분리 리팩터[pipeline·bindings]·
+> 같은 캡처 세트에서 marker↔topology 세대 원자 대조·validateTopology 관문·비객체 JSON 안전 판정·권위 세대
+> flap 재시도 1회·blocked=legacy 폴백 금지·bindings 실패 은폐 금지·effective/degraded 분리)/deriveFreshness
+> (anchor 기준선+evidence 실대조 이축·stale>unknown>fresh)/buildMapAttach(비v2=기존 동봉 바이트 위임)/
+> mapGateAssessFor(비활성 준비 — 절단 시 fresh 주장 금지). manifest P4 표면 2개 ready+activation:'P3b'.
+> tests/p4-reader 54단언(실 자식 프로세스 잠금 경쟁·stale edge 단독[전제 실측] 포함). **전 표면 비활성/위임 —
+> 활성화는 P3b cutover에서 일괄.**
+> ④**탐색 담당(scoutArm) 옵션**(f016212+0512a90+9a38777+이번 커밋·검증 총 8왕복): 배경=사용자 지적 '탐색자
+> 선택 옵션 부재' — 절차 실패 기록: 설계 정본(1-26·1-34·P5~P8) 미확인 상태로 임의 신설 진행했고, 사용자 제공
+> P0 원문 대비 전수 감사(Codex 백지 감사)로 정본 조항 소실 0 확인(누락은 문서가 아니라 구현모델의 확인 절차).
+> 실체: 정찰 카드 '탐색 담당(영향지도)' 행 — 기본 정찰(Claude·**무과금 기본 설계**: 유료 키 없이 전부 동작이
+> 정본 1-26 의도)/DeepSeek(키=동의·키 없으면 정직 강등)/**Codex 정찰(예정) 비활성 배지**(2026-07-20 사용자
+> 결정 — 로드맵 가시화·러너는 P6에서). 선택은 자동 지시·플랜 게이트(Claude/C-C)의 1순위 러너에 반영.
+> **경계(정본 1-26 부기): scoutArm=Impact Map 러너 선호 한정 — P7 provider mode(경제형=DeepSeek/정밀형=
+> Codex/자동형=조합, readiness 행렬 1-34)는 별도 제어로 구현·통합 금지·'키 없으면 강등' 규칙 P7 재사용 금지.**
+> 클릭 피드백(무반응 실보고 봉합): ✓ 표기·재클릭 안내·낙관 전환+'저장 중…'·판정 순수 함수(미지정≠명시 self·
+> 연속 클릭 고착 소멸 — 상태 전이 실행 반례). 언어 슬롯 오염 3단 봉합(UI_EN 베이크 전송·slot 원자 캡처·불일치
+> 잠금). tests/scout-arm 57단언.
+> ⑤**교훈(재발 방지 — ④의 절차 실패)**: 사용자가 기능 부재를 지적하면 **설계 정본 문서·장기 계획(P0~P10)을
+> 먼저 대조**하고, 지적의 의미를 못 찾으면 **물어보고 진행**한다 — 임의 해석으로 신설하지 않는다.
+> ▶**다음 착수=P3b cutover**(권위 marker 생성·소비처 일괄 전환[대시보드·collectCommon·게이트 4+P4 표면 2]·
+> 자동 적용 활성화·docs/MAP.md 동결·재배선 — 정본 §5 P3 항·MAP-P3A-DESIGN.md §F) → P5(provider 공통
+> 인터페이스·self typed adapter) → P6(Codex Scout 독립 세션 — 위 '예정' 배지의 실체) → P7(모드 UI) → P8(라우터).
+> ── (이전 2026-07-19 push 묶음(8커밋) 요지 —
 > P-12 완전 종결+P-8 2단+P-6b 정정+경합 봉합: 정식 백로그 소진(잔여=3트랙뿐)**:
 > ①**P-12 2c 기계 판독 딱지**(c5d38ce) — 핵심 프로필 캐논 v2.5: 검증자가 판정 줄 앞에 기계 판독용 지적 블록
 > ('[지적 목록 v1]'…JSONL…'[지적 목록 끝]') 의무. 판독기(엄격 마커 문법·tail 결속·손상 진단 원문 비복사)+

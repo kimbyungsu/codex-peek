@@ -147,6 +147,10 @@ console.log("[4] 대시보드 표면 — 행·핸들러·ko/en 쌍(소스 계약
   ok(src.includes("· 저장 중…") && src.includes("· saving…"), "클릭 즉시 '저장 중' 표시 ko/en 쌍");
   ok(src.includes("낙관적 즉시 전환") && src.includes('markOf(btns[k].label,k===arm)'), "낙관적 즉시 전환(서버 재렌더가 최종 확정)");
   ok(src.includes('(active?"✓ ":"")'), "현재 선택 버튼 ✓ 표기(선택 상태 가시화)");
+  // Codex 예정 표시(2026-07-20 사용자 결정): 비활성·예정 배지 — 거짓 옵션 금지(러너는 P6)
+  ok(src.includes("Codex 정찰 (예정)") && src.includes("Codex scout (planned)"), "Codex 예정 선택지 ko/en 쌍(항상 비활성)");
+  ok(/Codex 정찰 \(예정\)[^]{0,200}disabled=true/.test(src) || /bC\.disabled=true/.test(src), "예정 버튼=항상 비활성(선택 불가 — 클릭 배선 없음)");
+  ok(src.includes("로드맵 P6에서 구현") && src.includes("roadmap P6"), "예정 사유 툴팁 ko/en 쌍");
   ok(src.includes("let curSel=av.raw;") && src.includes("curSel=arm;"), "재클릭 판정=명시 선택 로컬 추적(낙관 전환 시 즉시 갱신 — 1차 blocker②)");
   // 1차 blocker①②: 판정 순수 함수를 산출물에서 추출해 상태 전이 실행 — 문구 검사로는 못 잡던 결함 잠금
   {
