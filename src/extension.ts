@@ -191,6 +191,7 @@ interface BridgeState {
   deepseek: { hasKey: boolean; masked: string; model: string }; // 고급설정 탭 표시용 — 키 원문은 절대 웹뷰로 안 보냄(마스킹만)
   scoutTarget: { repo: string; differs: boolean; invalid: boolean; configured: boolean; inherited: boolean; drift: { repo: string; sample: number; agree: number } | null } | null; // P1 정찰 대상 + 어긋남 자기진단(2026-07-10). null=2트랙
   scoutGate: { eff: string; raw: string | null } | null; // 실효 플랜 게이트(표시 전용 — 3트랙에서만, 계약에 저장 안 함). null=2트랙/ws 없음
+  scoutArm: { raw: string | null; eff: "self" | "deepseek"; hasKey: boolean; slot?: string } | null; // 탐색 담당(2026-07-20) — raw=명시 선택(반대 언어 슬롯 상속·null=미지정), eff=실효(키 없으면 self 강등), slot=계산 언어. null=2트랙/ws 없음
   mapLedger: MapLedgerView | null; // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만). null=2트랙
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
   brainActual: { cc: string; cx: string; scout: string }; // 두뇌 '실제 답'(대화 기록 실측) 표시 문구 — 경고 아닌 평시 정보(피커 표시 결함 실사고 2026-07-08). 기록 없으면 '기록 없음' 문구. scout=마지막 정찰 실행(비용 장부 lastTs — 감사 일치 2026-07-10)
@@ -352,6 +353,7 @@ interface Contract {
   codexInjectMode: InjectMode;
   scoutMode: ScoutMode;
   scoutRepo?: string; // 정찰 대상 레포(P1 — 세션 폴더≠개발 레포 해소). 빈 값/부재=ws 그대로.
+  scoutArm?: "self" | "deepseek"; // 탐색 담당 선호(2026-07-20) — self=기본(현재 AI 겸임)/deepseek. 부재=self(비물질화).
   // ⚠ 대시보드 저장 페이로드는 이 필드를 만들지 않는다 — saveContract의 보존 병합(keep)이 CLI 설정값을 지킨다.
   // [P-9] 자동 전환 provenance — 훅만 기록·대시보드는 표시 전용(저장 페이로드·exact patch 허용목록에 절대 미포함).
   modeSwitch?: { by: string; from: string; to: string; at: string; session: string; reverted?: string };
@@ -454,6 +456,7 @@ function loadContract(ws?: string | null, lang?: Lang): Contract {
     codexInjectMode: o && INJECT_MODES.includes(o.codexInjectMode) ? o.codexInjectMode : "always",
     scoutMode: normScoutMode(o),
     scoutRepo: typeof o.scoutRepo === "string" ? o.scoutRepo.trim() : "",
+    scoutArm: o && (o.scoutArm === "self" || o.scoutArm === "deepseek") ? o.scoutArm : undefined, // raw 보존(부재=미지정 — 실효 계산은 scoutArmViewExt)
     // [P-9] 표시 전용 통과(훅이 기록한 자동 전환 provenance) — 검증된 형태만, 저장 경로엔 절대 미포함
     modeSwitch: o && o.modeSwitch && typeof o.modeSwitch === "object" && !Array.isArray(o.modeSwitch)
       ? { by: String(o.modeSwitch.by || ""), from: String(o.modeSwitch.from || ""), to: String(o.modeSwitch.to || ""), at: String(o.modeSwitch.at || ""), session: String(o.modeSwitch.session || ""), reverted: String(o.modeSwitch.reverted || "") }
@@ -476,6 +479,38 @@ function effectiveScoutGate(ws: string): { eff: "off" | "plan"; raw: "off" | "pl
 // 정찰 대상 지정(대시보드 원클릭·전환 모달 공용) — scripts/scope-target.js set과 동일 효과: 현재 언어 슬롯의
 // 프로젝트 계약 파일에 scoutRepo만 보존 병합(⚠ saveContract 재사용 금지 — 대시보드 저장 페이로드는 scoutRepo를
 // 모르는 스키마라 섞으면 오염, Codex 설계검증 2026-07-10). 반대 슬롯이 다른 값이면 고지(언어 슬롯 분리 원칙).
+// 탐색 담당 실효 뷰(2026-07-20) — ⚠ bridge/contract-lib.js scoutArmView와 동일 규칙(어긋나면 카드와 지시 문구가
+// 다른 답을 말함): raw=현재 슬롯 명시값 우선·부재 시 반대 언어 슬롯 상속(사실 성격 — scoutRepo P1-④ 동형)·
+// 그래도 없으면 null(미지정=기본). eff=deepseek 선택인데 키 없으면 self로 정직 강등.
+function scoutArmViewExt(ws: string, slotIn?: Lang): { raw: string | null; eff: "self" | "deepseek"; hasKey: boolean; slot: Lang } {
+  const slot: Lang = slotIn || loadLangExt(); // 3차 blocker: 언어 판독 '1회 캡처' — 값과 slot 표지가 같은 판독에서 원자 결속(계산 중 전역 전환에도 표지가 실제 계산 슬롯을 말함)
+  let raw: string | null = null;
+  try { const o = JSON.parse(fs.readFileSync(contractFileFor(ws, slot), "utf8")); if (o && (o.scoutArm === "self" || o.scoutArm === "deepseek")) raw = o.scoutArm; } catch { /* 미지정 */ }
+  if (raw === null) {
+    try { const oo = JSON.parse(fs.readFileSync(contractFileFor(ws, slot === "en" ? "ko" : "en"), "utf8")); if (oo && (oo.scoutArm === "self" || oo.scoutArm === "deepseek")) raw = oo.scoutArm; } catch { /* 반대 슬롯 없음 */ }
+  }
+  const hasKey = readDeepseekView().hasKey;
+  const want = raw === null ? "self" : raw;
+  return { raw, eff: want === "deepseek" && !hasKey ? "self" : (want as "self" | "deepseek"), hasKey, slot };
+}
+async function setScoutArmFromUi(ws: string | null, arm: "self" | "deepseek", slotLang?: Lang): Promise<void> {
+  if (!ws) { vscode.window.showWarningMessage(tE("폴더가 열려 있지 않아 설정할 수 없어요.", "No folder is open, so this cannot be set.")); return; }
+  const lang: Lang = slotLang || loadLangExt();
+  if (arm === "deepseek" && !readDeepseekView().hasKey) {
+    // 1차 blocker④: 저장 '전' 모달 확인(계속/취소) — 저장 성공을 선행 확정하는 문구 금지(잠금 실패면 미저장).
+    const koM = "DeepSeek 키가 아직 없어요. 지금 저장하면 선호만 기록되고, 키를 등록(⚙️ 고급설정)하기 전까지는 기본 정찰(Claude)로 동작해요.";
+    const enM = "No DeepSeek key yet. Saving now records the preference only — the default scout (Claude) runs until you register a key (⚙️ Advanced).";
+    const goOn = await vscode.window.showWarningMessage(
+      lang === "en" ? enM : koM, // 2차 blocker②: 모달도 저장 슬롯(lang) 기준 — 전역 tE와 갈리는 창 제거
+      { modal: true },
+      lang === "en" ? "Save anyway" : "그래도 저장");
+    if (!goOn) return;
+  }
+  const pr = await patchContractRetryExt(ws, lang, { scoutArm: arm });
+  if (!pr.ok) { void offerLockRecoveryExt(pr, () => { void setScoutArmFromUi(ws, arm, lang); }); return; }
+  vscode.commands.executeCommand("codexBridge.refresh"); // 저장 성공 후 즉시 재렌더(1차 [보완] — 복구 재시도 경유 포함)
+}
+
 async function setScoutTargetFromUi(ws: string | null, repo: string, slotLang?: Lang): Promise<void> {
   if (!ws) { vscode.window.showWarningMessage(tE("폴더가 열려 있지 않아 설정할 수 없어요.", "No folder is open, so this cannot be set.")); return; }
   try {
@@ -1773,6 +1808,7 @@ function computeState(turnsN: number): BridgeState {
     scoutLive: readScoutLive(ws),       // 지도 생성중 신호(러너 실행 동안만 — 카드 '지금:'과 상태바 라벨)
     scoutTarget: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const r = scoutTargetFor(ws); const dr = detectScoutTargetDriftExt(r.repo, ws); return { repo: r.repo, differs: normWs(r.repo) !== normWs(ws), invalid: r.source === "ws-fallback-invalid", configured: r.source === "contract" || r.source === "contract-other-lang", inherited: r.source === "contract-other-lang", drift: dr.drift ? { repo: dr.repo as string, sample: dr.sample || 0, agree: dr.agree || 0 } : null }; } catch { return null; } })(),
     scoutGate: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; return effectiveScoutGate(ws); } catch { return null; } })(),
+    scoutArm: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; return scoutArmViewExt(ws); } catch { return null; } })(), // slot은 뷰가 계산과 원자 결속해 반환(3차 blocker — 사후 재판독 금지)
     mapLedger: readMapLedger(ws),       // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만)
     deepseek: readDeepseekView(),       // 고급설정 탭 — 키 유무·마스킹(원문 미노출)
     brainActual: (({ cc, cx }) => ({ cc, cx, scout: scoutActualText(ws) }))(brainActualTexts(ws)), // 두뇌 '실제 답' 정보 문구(히어로) — sig는 상태바 전용이라 제외
@@ -2886,6 +2922,7 @@ class Dashboard {
         if (m?.type === "openReconGuide") openReconGuide(); // 정찰 구조 안내 — 대시보드와 별개의 정적 새탭(스크립트 없음)
         if (m?.type === "openScoutHealthReport") openScoutHealthReport(dashboardWorkspace()); // 건강 리포트 — 포화 대응 새탭(열 때 베이크·스크립트 없음)
         if (m?.type === "setScoutTarget" && typeof m.repo === "string") setScoutTargetFromUi(dashboardWorkspace(), m.repo, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
+        if (m?.type === "setScoutArm" && (m.arm === "self" || m.arm === "deepseek")) setScoutArmFromUi(dashboardWorkspace(), m.arm, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
         if (m?.type === "hideSession" && m.id) {
           const id = String(m.id);
           const ws = dashboardWorkspace();
@@ -3695,6 +3732,7 @@ class Dashboard {
     </label>
     <div class="hint"><span class="ic" title="${t("정찰(3트랙) = 4단계 흐름 — ①변경 감지(기계·AI 없음): 지금 고치는 파일+예전에 같이 바뀌던 파일 힌트 ②영향지도(정찰 AI 호출): 이 변경이 어디까지 번질지 미리보기 ③관찰 일지(자동·추가 LLM 없음): 검증을 지나며 맞은 것/틀린 것이 저절로 쌓임 ④확정 교범(👤 선택): 원할 때만 도장 찍어 저장소 문서로 — 안 써도 ①~③은 자동. 관찰(advisory) 중심 — 단 하나의 예외는 플랜 게이트(3트랙 기본 켜짐): 지도가 없거나 낡으면 플랜 확정 전에 먼저 지도를 요청(세션당 2회까지·이후 통과·언제든 끌 수 있음), 그 외에는 아무것도 막거나 강제하지 않음. 외부로 나가는 경로는 두 갈래 — DeepSeek 키 등록 시(②의 꾸러미+연결 점검 1회, 키 등록=동의) / 기본 정찰 실행 시(같은 꾸러미가 쓰시던 Claude CLI 경유 — 별도 결제 없음). 이 설정은 프로젝트별 저장.", "Recon (3-track) = a 4-step flow — ① change sensing (machine, no AI): files you're editing + hints of files that changed together before ② impact map (scout AI call): preview how far this change reaches ③ field journal (auto, no extra LLM): right/wrong accrues by itself through verification ④ field manual (👤 optional): stamp items into repo docs only when you want — ①–③ run without it. Advisory-centred — the one exception is the plan gate (on by default in 3-track): if the map is missing/stale it asks for a map before plan confirmation (up to 2×/session, then passes · can be turned off anytime); everything else blocks/forces nothing. Data leaves via two routes — with a DeepSeek key (②'s package plus one connection check; key registration = consent) / when the default scout runs (the same package via your existing Claude CLI — no separate billing). Saved per project.")}">ⓘ ${t("정찰이란? (4단계 흐름)", "What is recon? (the 4-step flow)")}</span></div>
     <div id="scoutApiLine" class="muted" style="display:none;font-size:11.5px;margin:4px 0 0 2px"></div>
+    <div id="scoutArmRow" style="display:none;font-size:11.5px;margin:6px 0 0 2px"></div>
     <div id="scoutBox" class="stagebox" style="display:none"></div>
     <div class="stagebox" id="stageBox">
       <div class="sbhead">${t("↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요", "↑ With verification on, the <b>stage baselines</b> apply at each step of the flow")} <span class="muted" style="font-weight:400">${t("· 지금 검증:", "· verify now:")} <b id="sbState">—</b> ${t("· 내용은 아래 단계별 기본 원칙에서", "· see Stage Baselines below for the text")}</span></div>
@@ -4849,6 +4887,33 @@ class Dashboard {
         }
         // 비-git 폴더면 기준을 명시(아래 상태 요약과 일관): 통계만 불가, 지도는 무이력 모드로 가능.
         if(d.scope && d.scope.note==="no-git") api.textContent += T(" ※ 이 폴더는 변경 기록(버전 관리)이 없어 '같이 바뀌던 파일' 힌트만 불가 — 지도는 최근 수정 기준으로 가능해요."," ※ This folder has no change history (version control), so only 'changed-together' hints are unavailable — maps still work from recent edits.");
+        safe(function(){ // 탐색 담당 선택(2026-07-20 사용자 요청) — 자동 지시가 이 선택을 1순위 러너로 반영
+          const row=$("scoutArmRow"); if(!row) return;
+          const av=d.scoutArm;
+          if(!on||!av){ row.style.display="none"; return; }
+          row.style.display=""; row.textContent="";
+          // 2차 blocker②: 데이터가 계산된 슬롯(av.slot)과 이 화면의 베이크 슬롯(UI_EN)이 다르면 — 언어 전환
+          // 직후·hold 창 — 표시값을 근거로 다른 슬롯을 바꾸게 되므로 조작을 잠그고 상태만 알린다.
+          const uiSlot = UI_EN ? "en" : "ko";
+          const slotMismatch = !!(av.slot && av.slot !== uiSlot);
+          const lb=document.createElement("span"); lb.className="muted"; lb.textContent=T("탐색 담당: ","Scout assignment: ");
+          row.appendChild(lb);
+          const mk=function(arm,label,dis,active){
+            const b=document.createElement("button");
+            b.textContent=label; b.disabled=!!dis;
+            b.style.cssText="margin-right:6px;font-size:11px;padding:2px 8px"+(active?";font-weight:700;outline:1px solid var(--vscode-focusBorder)":"");
+            b.addEventListener("click", function(){ if(dis) return; vscode.postMessage({type:"setScoutArm", arm:arm, lang:(UI_EN?"en":"ko")}); }); // 1차 blocker⑤: 표시 화면(UI_EN 베이크)과 같은 슬롯에 저장 — 언어 전환 경계에서 d.lang(전역 최신)로 갈리는 오염 차단
+            row.appendChild(b);
+          };
+          const effSelf=av.eff==="self";
+          mk("self", T("기본 정찰(Claude — 추가 과금 없음)","Default scout (Claude — no extra billing)"), slotMismatch, effSelf);
+          mk("deepseek", T("DeepSeek 정찰","DeepSeek scout")+(av.hasKey?"":T(" (키 필요)"," (key required)")), slotMismatch, !effSelf);
+          const note=document.createElement("span"); note.className="muted";
+          if(slotMismatch) note.textContent=T("· 언어 전환 반영 중 — 새 화면에서 다시 조작해 주세요","· language switch in progress — reopen controls on the refreshed screen");
+          else if(av.raw==="deepseek"&&!av.hasKey) note.textContent=T("· 선호=DeepSeek이나 키 미등록 — 키 등록(⚙️ 고급설정) 전까지 기본 정찰(Claude)로 동작","· preference=DeepSeek but no key — the default scout (Claude) runs until you register one (⚙️ Advanced)");
+          else if(av.raw===null) note.textContent=T("· 미지정(기본값) — 선택은 자동 지시의 1순위 러너에 반영돼요","· unset (default) — your choice becomes the auto-directive's first-choice runner");
+          row.appendChild(note);
+        });
       })();
       if(!on){ box.style.display="none"; return; }
       box.style.display="";

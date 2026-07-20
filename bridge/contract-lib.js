@@ -1488,6 +1488,7 @@ function loadContract(ws, lang) {
     scoutMode: normScoutMode(o),
     scoutGate: normScoutGate(o), // 게이트(⑥ 실험) — off|plan. 확장 saveContract는 이 필드를 보존해야 함(스키마 정합)
     scoutRepo: typeof o?.scoutRepo === "string" ? o.scoutRepo.trim() : "", // 정찰 대상 레포(P1 — cwd≠repo 해소). 빈 값=ws 그대로
+    scoutArm: o && SCOUT_ARMS.includes(o.scoutArm) ? o.scoutArm : undefined, // 탐색 담당 raw 보존(1차 blocker② — norm으로 굳히면 상속·미지정 분기가 죽음). 실효는 scoutArmView
   };
 }
 
@@ -1552,6 +1553,38 @@ function normCodexInjectMode(o) {
 }
 
 const SCOUT_MODES = ["off", "on"];
+// ── 탐색 담당(scoutArm — 2026-07-20 사용자 요청: 대시보드에 선택 옵션 표시) ──────────────
+// self=기본 정찰(Claude — 구현 대화와 분리된 별도 claude CLI 호출·별도 과금 없음. ⚠C-C 모드에서도 Codex가
+// 아니라 Claude다: scope-scout-self.js가 claude를 spawn — 1차 blocker① 라벨 정직화) / deepseek=DeepSeek(키 등록=동의).
+// 부재=self(비물질화 — 저장 안 된 계약과 동작 동일). '사실' 성격이라 scoutRepo와 같은 반대 언어 슬롯 폴백 적용.
+const SCOUT_ARMS = ["self", "deepseek"];
+function normScoutArm(o) {
+  if (o && SCOUT_ARMS.includes(o.scoutArm)) return o.scoutArm;
+  return "self";
+}
+function deepseekKeyPresent() {
+  try { const j = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, "deepseek.json"), "utf8")); return !!(j && typeof j.apiKey === "string" && j.apiKey.trim()); } catch { return false; }
+}
+// 실효 뷰: raw=명시 선택(현재 슬롯 우선·부재 시 반대 언어 슬롯 상속·그래도 없으면 null=미지정) /
+// eff=실제 담당(deepseek 선택인데 키 없으면 self로 정직 강등 — degraded:"no-key") / hasKey=키 유무.
+function scoutArmView(ws, c) {
+  let raw = null;
+  // 1차 blocker②: 전달 c(loadContract 요약본)가 필드를 굳혔거나 누락해도 정확하도록, 현재 슬롯은
+  // 항상 디스크 원본에서 판독한다(전달 c는 원본 객체일 때만 보조로 인정).
+  try { const own = JSON.parse(fs.readFileSync(ws ? contractFileFor(ws, loadLang()) : CONTRACT_FILE, "utf8")); if (own && SCOUT_ARMS.includes(own.scoutArm)) raw = own.scoutArm; } catch { /* 미지정 */ }
+  if (raw === null && c && typeof c === "object" && SCOUT_ARMS.includes(c.scoutArm)) raw = c.scoutArm;
+  if (raw === null && ws) {
+    try {
+      const other = loadLang() === "en" ? "ko" : "en";
+      const oo = JSON.parse(fs.readFileSync(contractFileFor(ws, other), "utf8"));
+      if (oo && SCOUT_ARMS.includes(oo.scoutArm)) raw = oo.scoutArm;
+    } catch { /* 반대 슬롯 없음 */ }
+  }
+  const hasKey = deepseekKeyPresent();
+  const want = raw === null ? "self" : raw;
+  if (want === "deepseek" && !hasKey) return { raw, eff: "self", hasKey, degraded: "no-key" };
+  return { raw, eff: want, hasKey, degraded: null };
+}
 function normScoutMode(o) {
   if (o && SCOUT_MODES.includes(o.scoutMode)) return o.scoutMode;
   return "off"; // 기본=2트랙(무회귀 — 미설정 프로젝트는 기존과 100% 동일)
@@ -2016,8 +2049,9 @@ function buildScoutDirective(ws, c) {
       const cur = rs.source === "contract" || inh
         ? (en2 ? (inh ? "the target inherited from the other language slot: " + target : "the contract-set target " + target) : (inh ? "반대 언어 슬롯에서 상속된 " + target : "계약에 지정된 " + target))
         : (en2 ? "unset, so the session folder (" + target + ") is being used" : "미지정이라 세션 폴더(" + target + ") 기준");
-      if (en2) return "[Recon (3-track) auto-directive · target mismatch suspected · this suggestion once] In the last " + drift.sample + " verification(s), " + drift.agree + " cited mostly files under " + drift.repo + ", but the scout target is " + cur + ". If " + drift.repo + " is the actual dev repo, run from the codex-peek source repo: `node scripts/scope-target.js \"" + ws + "\" set \"" + drift.repo + "\"` (this writes scoutRepo into this project's contract file for the current language slot — the other language mode inherits it unless it sets its own), then `node scripts/scope-scout-self.js \"" + drift.repo + "\"` for a map. If not, ignore this (advisory — nothing is blocked).";
-      return "[탐색(3트랙) 자동 지시 · 대상 어긋남 의심 · 이 제안 1회만] 최근 검증 " + drift.sample + "회 중 " + drift.agree + "회가 " + drift.repo + " 소속 파일을 주로 인용했는데, 정찰 대상은 " + cur + "다. 실제 개발 레포가 " + drift.repo + " 가 맞으면 codex-peek 소스 저장소에서 `node scripts/scope-target.js \"" + ws + "\" set \"" + drift.repo + "\"` 를 실행해 대상을 지정하고(이 프로젝트 계약 파일의 현재 언어 슬롯에 scoutRepo가 저장됨 — 다른 언어 모드는 별도 지정이 없으면 이 값을 상속), 이어서 `node scripts/scope-scout-self.js \"" + drift.repo + "\"` 로 지도를 받아라. 아니라면 무시해도 된다(참고용 — 아무것도 막지 않는다).";
+      const drRunner = (() => { try { return scoutArmView(ws, c).eff === "deepseek" ? "scope-scout-deepseek.js" : "scope-scout-self.js"; } catch { return "scope-scout-self.js"; } })(); // 2차 blocker①: 어긋남 분기도 탐색 담당 선택 반영
+      if (en2) return "[Recon (3-track) auto-directive · target mismatch suspected · this suggestion once] In the last " + drift.sample + " verification(s), " + drift.agree + " cited mostly files under " + drift.repo + ", but the scout target is " + cur + ". If " + drift.repo + " is the actual dev repo, run from the codex-peek source repo: `node scripts/scope-target.js \"" + ws + "\" set \"" + drift.repo + "\"` (this writes scoutRepo into this project's contract file for the current language slot — the other language mode inherits it unless it sets its own), then `node scripts/" + drRunner + " \"" + drift.repo + "\"` for a map. If not, ignore this (advisory — nothing is blocked).";
+      return "[탐색(3트랙) 자동 지시 · 대상 어긋남 의심 · 이 제안 1회만] 최근 검증 " + drift.sample + "회 중 " + drift.agree + "회가 " + drift.repo + " 소속 파일을 주로 인용했는데, 정찰 대상은 " + cur + "다. 실제 개발 레포가 " + drift.repo + " 가 맞으면 codex-peek 소스 저장소에서 `node scripts/scope-target.js \"" + ws + "\" set \"" + drift.repo + "\"` 를 실행해 대상을 지정하고(이 프로젝트 계약 파일의 현재 언어 슬롯에 scoutRepo가 저장됨 — 다른 언어 모드는 별도 지정이 없으면 이 값을 상속), 이어서 `node scripts/" + drRunner + " \"" + drift.repo + "\"` 로 지도를 받아라. 아니라면 무시해도 된다(참고용 — 아무것도 막지 않는다).";
     }
   } catch { /* 자기진단 실패가 기존 신선도 지시를 못 막음 */ }
   const st = scoutMapStatus(target);
@@ -2048,8 +2082,8 @@ function buildScoutDirective(ws, c) {
   const mergedBuckets = {};
   for (const k of ["seed", "commits", "dirty", "history"]) mergedBuckets[k] = Math.max(comp[k], prev && prev.base === st.base && prev.buckets ? ((prev.buckets[k] | 0) || 0) : 0);
   try { atomicWrite(f, JSON.stringify({ state: st.state, base: st.base, buckets: mergedBuckets, ts: new Date().toISOString() })); } catch { /* 기억 실패 시 다음 턴 재지시 — 무해 */ }
-  let hasKey = false;
-  try { const j = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, "deepseek.json"), "utf8")); hasKey = !!(j && typeof j.apiKey === "string" && j.apiKey.trim()); } catch { /* 키 없음 */ }
+  const armV = scoutArmView(ws, c); // 탐색 담당 선호(2026-07-20) — 지시 문구가 사용자 선택을 반영
+  const hasKey = armV.hasKey;
   const en = loadLang() === "en"; // 훅 주입문도 전역 언어 준수(한/영 쌍 규칙 — 2026-07-09 사용자 지적)
   const staleWhyKo = "최신 지도 이후 변경 신호 " + st.staleCount + "건(근거 파일 " + st.seedChanged + " · 새 커밋 " + st.commitsAfter + " · 작업트리 " + st.dirtyChanged + (st.historyLost ? " · 기록 기준 커밋 소실(이력 재작성?) " + st.historyLost : "") + ") — 지도가 낡았다";
   const staleWhyEn = st.staleCount + " change signal(s) since the latest map (basis files " + st.seedChanged + " · new commits " + st.commitsAfter + " · working tree " + st.dirtyChanged + (st.historyLost ? " · recorded base commit missing (history rewritten?) " + st.historyLost : "") + ") — the map is stale";
@@ -2062,12 +2096,22 @@ function buildScoutDirective(ws, c) {
     : st.state === "unknown"
     ? (en ? "freshness cannot be fully judged (non-git target too large to scan completely) — if you changed files here, refreshing the map is recommended" : "신선도를 전수 판정할 수 없다(비-git 대상이 커서 스캔 상한 도달) — 이 폴더의 파일을 바꿨다면 지도 갱신을 권고")
     : (en ? staleWhyEn : staleWhyKo);
-  if (en) return "[Recon (3-track) auto-directive · once per state] " + why + ". If this turn involves file changes, refresh the impact map before concluding — run `node scripts/scope-scout-self.js \"" + target + "\"` from the codex-peek source repo (default Claude scout first — no separate billing"
-    + (hasKey ? " · scope-scout-deepseek.js (DeepSeek scout) available if comparison seems useful — key registration = consent to auto calls" : "")
-    + "). Trivial turns (a question, a one-line doc edit) may skip — the map is advisory and blocks nothing.";
-  return "[탐색(3트랙) 자동 지시 · 이 상태에 1회만] " + why + ". 이번 턴이 파일 변경을 동반하면 결론 전에 영향지도를 갱신하라 — codex-peek 소스 저장소에서 `node scripts/scope-scout-self.js \"" + target + "\"` 실행(기본 정찰[Claude 겸임·별도 과금 없음] 우선"
-    + (hasKey ? " · 비교가 필요하다고 판단되면 scope-scout-deepseek.js(DeepSeek 정찰) 사용 가능 — 키 등록=자동 호출 동의됨" : "")
-    + "). 사소한 턴(질문·문서 한 줄)이면 스킵해도 된다 — 지도는 참고용이며 아무것도 막지 않는다.";
+  // 러너 지시(탐색 담당 반영): 명시 deepseek(키 있음)=DeepSeek 1순위 / 명시 self=기본만(재량 문구 없음) /
+  // 미지정=현행 유지(기본 우선·키 있으면 비교 재량). 강등(deepseek 선택·키 없음)=기본으로 진행+사유 고지.
+  if (en) {
+    const runner = armV.eff === "deepseek"
+      ? "run `node scripts/scope-scout-deepseek.js \"" + target + "\"` from the codex-peek source repo (scout preference set on the dashboard: DeepSeek — key registration = consent to auto calls · the default scout scope-scout-self.js also remains available)"
+      : "run `node scripts/scope-scout-self.js \"" + target + "\"` from the codex-peek source repo (default scout (Claude) — a separate claude CLI call, no separate billing"
+        + (armV.raw === "self" ? "" : armV.degraded === "no-key" ? " · dashboard preference is DeepSeek but no key is registered — proceeding with the default scout" : hasKey ? " · scope-scout-deepseek.js (DeepSeek scout) available if comparison seems useful — key registration = consent to auto calls" : "")
+        + ")";
+    return "[Recon (3-track) auto-directive · once per state] " + why + ". If this turn involves file changes, refresh the impact map before concluding — " + runner + ". Trivial turns (a question, a one-line doc edit) may skip — the map is advisory and blocks nothing.";
+  }
+  const runnerKo = armV.eff === "deepseek"
+    ? "codex-peek 소스 저장소에서 `node scripts/scope-scout-deepseek.js \"" + target + "\"` 실행(대시보드에 설정된 탐색 담당: DeepSeek 정찰 — 키 등록=자동 호출 동의됨 · 기본 정찰 scope-scout-self.js도 병행 가능)"
+    : "codex-peek 소스 저장소에서 `node scripts/scope-scout-self.js \"" + target + "\"` 실행(기본 정찰(Claude) — 구현 대화와 분리된 별도 claude 호출·별도 과금 없음"
+      + (armV.raw === "self" ? "" : armV.degraded === "no-key" ? " · 대시보드 선호는 DeepSeek이나 키 미등록 — 기본 정찰로 진행" : hasKey ? " · 비교가 필요하다고 판단되면 scope-scout-deepseek.js(DeepSeek 정찰) 사용 가능 — 키 등록=자동 호출 동의됨" : "")
+      + ")";
+  return "[탐색(3트랙) 자동 지시 · 이 상태에 1회만] " + why + ". 이번 턴이 파일 변경을 동반하면 결론 전에 영향지도를 갱신하라 — " + runnerKo + ". 사소한 턴(질문·문서 한 줄)이면 스킵해도 된다 — 지도는 참고용이며 아무것도 막지 않는다.";
 }
 
 // ── Phase 3: 지도 high 항목 구조화 + 검증 요청 동봉 ──────────────
@@ -2897,7 +2941,7 @@ function formatForClaude(answer, lang, profile, machine) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}${machineLine}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, normScoutGate, normScoutMode, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
 module.exports.codexImplementerSession = codexImplementerSession;
 module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
 // P-6 회수 영수증 계약(설계 v5.1)

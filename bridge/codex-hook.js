@@ -12,7 +12,7 @@ const {
   BRIDGE_DIR, loadContract, loadLang, buildInjection, buildVerifyDirective, buildScoutDirective,
   registerCodexImplementer, codexImplementerSnapshot, codexRoleRevision, writeCodexActive, readCodexActive, atomicWrite, writePhase, resolveScoutRepo, scoutMapStatus,
   scoutHealthLine, maybeCleanupState, configWs, readImplementerRecordLocked, durableProofGate, readCodexTurnStrict, contractReadState,
-  patchContractFields, activeAskJobFor, phaseBusy, contractLockIssue, withRoleLock, implementerRecordOf, validLinksShape,
+  patchContractFields, activeAskJobFor, phaseBusy, contractLockIssue, withRoleLock, implementerRecordOf, validLinksShape, scoutArmView,
 } = require("./contract-lib.js");
 
 const TURN_DIR = path.join(BRIDGE_DIR, "codex-turns");
@@ -375,7 +375,8 @@ function scoutGate(j, ws, sid, c, s) {
   if(!st || st.state==="fresh") return false;
   const n=bump(SCOUT_ATTEMPT_DIR,sid,j.turn_id||s.turnId||""); if(n>MAX_SCOUT_ATTEMPTS)return false;
   let health=""; try{health=scoutHealthLine(target,loadLang()==="en")||"";}catch{}
-  block(t(`플랜 확정 전 3트랙 지도가 ${st.state} 상태입니다. \`node scripts/scope-scout-self.js "${target}"\`로 공용 지도·일지를 갱신한 뒤 계속하세요. ${health}`, `Before finalizing the plan, the shared 3-track map is ${st.state}. Run \`node scripts/scope-scout-self.js "${target}"\`, update the shared map/journal, then continue. ${health}`));
+  let runner="scope-scout-self.js"; try{ if(scoutArmView(ws).eff==="deepseek") runner="scope-scout-deepseek.js"; }catch{ /* 판독 실패=기본 */ } // 탐색 담당 선택 반영(scoutArm 1차 blocker③)
+  block(t(`플랜 확정 전 3트랙 지도가 ${st.state} 상태입니다. \`node scripts/${runner} "${target}"\`로 공용 지도·일지를 갱신한 뒤 계속하세요. ${health}`, `Before finalizing the plan, the shared 3-track map is ${st.state}. Run \`node scripts/${runner} "${target}"\`, update the shared map/journal, then continue. ${health}`));
   return true;
 }
 function onStop(j, ws, sid, c) {

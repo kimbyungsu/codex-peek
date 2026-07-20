@@ -16,7 +16,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, scoutMapStatus, wsKeyFor, atomicWrite, resolveScoutRepo, loadLang, scoutHealthLine, readScoutTargetEvidence, detectScoutTargetDrift } = require("./contract-lib.js");
+const { loadContract, scoutMapStatus, wsKeyFor, atomicWrite, resolveScoutRepo, loadLang, scoutHealthLine, readScoutTargetEvidence, detectScoutTargetDrift, scoutArmView } = require("./contract-lib.js");
 const tB = (ko, en) => (loadLang() === "en" ? en : ko); // 훅 문구도 한/영 쌍(2026-07-09 사용자 지적)
 
 const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(os.homedir(), ".codex-bridge");
@@ -82,7 +82,11 @@ function main(raw) {
   try { const hl = scoutHealthLine(target, loadLang() === "en"); if (hl) healthTail = hl + "\n"; } catch { /* 신호 실패 무해 */ }
   // 대상 어긋남 의심이면 '엉뚱한 레포의 지도를 만들라'고 안내하면 안 된다(Codex 설계검증 2026-07-10) —
   // 대상 지정을 먼저 시키고, 지도 명령도 의심 레포 기준으로 바꾼다. 진단 실패는 기존 안내 유지(fail-open).
-  let cmd = `node scripts/scope-scout-self.js "${target}"`;
+  // 탐색 담당 선택 반영(scoutArm 1차 blocker③ — 게이트 안내 명령이 대시보드 선택과 충돌하지 않게):
+  // 실효 deepseek면 DeepSeek 러너를 안내(강등이면 기본 유지 — scoutArmView가 정직 강등).
+  let runner = "scope-scout-self.js";
+  try { if (scoutArmView(ws).eff === "deepseek") runner = "scope-scout-deepseek.js"; } catch { /* 판독 실패=기본 */ }
+  let cmd = `node scripts/${runner} "${target}"`;
   let driftNote = "";
   try {
     const drift = detectScoutTargetDrift(target, readScoutTargetEvidence(ws));
@@ -90,7 +94,7 @@ function main(raw) {
       driftNote = tB(
         ` ⚠ 대상 어긋남 의심: 최근 검증 인용 다수가 ${drift.repo} 소속 — 먼저 \`node scripts/scope-target.js "${ws}" set "${drift.repo}"\` 로 정찰 대상을 지정하라(현재 언어 슬롯).`,
         ` ⚠ Target mismatch suspected: recent verification citations mostly live under ${drift.repo} — first run \`node scripts/scope-target.js "${ws}" set "${drift.repo}"\` to set the scout target (current language slot).`);
-      cmd = `node scripts/scope-scout-self.js "${drift.repo}"`;
+      cmd = `node scripts/${runner} "${drift.repo}"`;
     }
   } catch { /* 자기진단 실패 — 기존 안내 유지 */ }
   process.stderr.write(tB(
