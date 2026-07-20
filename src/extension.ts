@@ -4896,7 +4896,7 @@ class Dashboard {
           // 직후·hold 창 — 표시값을 근거로 다른 슬롯을 바꾸게 되므로 조작을 잠그고 상태만 알린다.
           const uiSlot = UI_EN ? "en" : "ko";
           const slotMismatch = !!(av.slot && av.slot !== uiSlot);
-          const lb=document.createElement("span"); lb.className="muted"; lb.textContent=T("탐색 담당: ","Scout assignment: ");
+          const lb=document.createElement("span"); lb.className="muted"; lb.textContent=T("탐색 담당(영향지도): ","Scout assignment (impact map): "); // 범위 명시(정본 감사 2026-07-20): 이 선택=Impact Map 러너 선호 — P7 provider mode(경제/정밀/자동)는 별도 제어
           row.appendChild(lb);
           const mk=function(arm,label,dis,active){
             const b=document.createElement("button");
