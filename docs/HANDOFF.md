@@ -33,8 +33,8 @@
 > B-1 frozen probe(지문 대조=동결 위반 경보 축/미이관 총수=정보 배지·기준선 불명=경고) → D 문서(PRIVACY:
 > authority.json·authority-history·map-cutover-snapshots 행 / README ko/en '확정 교범' 개정) → E p3b cutover
 > e2e(성공·멱등+tail·재개·복수 receipt conflict·manifest 불일치·미이관 정확 수·잠금 안 재검사·배너 멱등 등).
-> 완료 후 클린빌드+install 일괄(**현재 이 PC 설치본·훅은 아직 34ad02f 세대 — 증분 1은 커밋만 됨**).
-> ⚠ 이 PC 백로그 장부: 열림 1건 유지(f17952166d364f8a 대화 칩 실효 표시 — 보관함 카드 커밋 a4b9bd7과 무관 확인).
+> 완료 후 클린빌드+install 일괄(2026-07-21 정정: 이 경고를 쓴 PC 기준이며, 재동기화한 PC는 install 실행으로 acaad64 세대 설치 완료 — 배포 18파일 SHA-256 전수 일치 실측).
+> ⚠ 백로그 장부(PC별 로컬 — 2026-07-21 정정): 재동기화 PC의 활성 워크스페이스 장부 열림 2건=[주의] c016deec789e4817(freshness symlink TOCTOU 잔여 창)·abec10d4d0672fed(자가 수리 updates overlay 미반영 — 지연만). 다른 PC에서 이어가면 그쪽 장부에 이 2건 재등록 권장. (작성 PC의 구 스냅샷이던 f17952166d 1건 표기는 이 정정으로 대체.)
 > ── (이전 2026-07-20 push 묶음(11커밋+수치 정정 1) 요지 —
 > MAP v2 P4 전 증분 완결+탐색 담당(scoutArm) 옵션 신설: 다음 착수=P3b cutover**:
 > ①**P4 증분 1 — P2 확장 계층**(4ef214a·검증 3왕복): structuralHashOf(provenance 제외 — historyless 자기참조
