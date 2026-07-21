@@ -196,6 +196,7 @@ interface BridgeState {
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
   brainActual: { cc: string; cx: string; scout: string }; // 두뇌 '실제 답'(대화 기록 실측) 표시 문구 — 경고 아닌 평시 정보(피커 표시 결함 실사고 2026-07-08). 기록 없으면 '기록 없음' 문구. scout=마지막 정찰 실행(비용 장부 lastTs — 감사 일치 2026-07-10)
   hasTestsDir: boolean; // 표준 테스트 폴더(tests|test) '감지' 여부 — 성격 프로필용(미감지≠없음, 관행 밖은 못 봄)
+  envelope: { label: string; btn: string | null; repo: string; tone: string; lang: Lang } | null; // 거버넌스 증분 1(2차 배치 정정) — 검증 경계(수칙서). 최상위=2트랙 기본 프로젝트 포함·lang=렌더 슬롯 결속. null=부재/ws 없음
 }
 
 function normWs(p: string): string {
@@ -575,6 +576,29 @@ function parseBudgetInput(v: unknown): number | undefined {
 // 같은 코드 1곳). 확장은 tries:1(관문 내부 동기 대기 없음)+아래 patchContractRetryExt의 '비동기' 재시도로
 // 호스트 블록 금지(v10). 구런타임(관문 없음)만 종전 로컬 잠금 폴백.
 type ContractPatchRes = { ok: boolean; state?: string; lockPath?: string; error?: string };
+// 거버넌스 증분 1(2차 배치 정정 — 구현검증 1차 blocker①②): 검증 경계는 정찰(3트랙)이 아니라 '검증' 계층이다 —
+// MAP 카드가 아닌 최상위 뷰 필드로 항상 계산(2트랙 기본 프로젝트에서도 승인 가능). lang=렌더 슬롯 결속(도장도 그 슬롯 계약에).
+function readEnvelopeView(ws: string | null): { label: string; btn: string | null; repo: string; tone: string; lang: Lang } | null {
+  if (!ws) return null;
+  try {
+    const CL9: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
+    if (typeof CL9.readVerifyEnvelope !== "function") return null; // 구 런타임 — 표시 없음
+    const slot: Lang = loadLangExt();
+    const repo9 = scoutTargetFor(ws).repo;
+    const evv = CL9.readVerifyEnvelope(repo9);
+    if (!evv || evv.st === "absent") return null; // 도입 전 프로젝트=카드 없음(무변화)
+    if (evv.st === "corrupt") return { label: tE("수칙서 파일이 깨져 있어 적용을 멈췄어요(verify-envelope.json 판독 불가 — 검증엔 주입 안 됨)", "The rulebook file is unreadable — not applied (verify-envelope.json is not injected)"), btn: null, repo: repo9, tone: "warn", lang: slot };
+    let hash9: string | null = null;
+    try { hash9 = (CL9.loadContract(ws, slot) || {}).envelopeHash || null; } catch { hash9 = null; }
+    const n9 = [evv.data.supportedEnv.length, evv.data.alwaysBlocker.length, evv.data.outOfScope.length];
+    // 2차 blocker①: 절삭 사실은 승인 '전' 상태에서도 숨기지 않는다 — 잘린 내용을 못 본 채 원본 지문을 승인하는 경로 차단(핸들러가 승인 거부).
+    const cutNote9 = evv.truncated === true ? tE(" ⚠ 일부 항목이 상한(축 12·항목 200자)을 넘어 잘립니다 — 파일을 줄이기 전에는 승인할 수 없어요.", " ⚠ Some items exceed the caps (12/axis · 200 chars) — approval is blocked until the file is trimmed.") : "";
+    if (!hash9) return { label: tE(`승인 대기 — 지원 ${n9[0]}·절대 ${n9[1]}·범위밖 ${n9[2]}항목. 내용을 확인하고 승인하면 다음 검증부터 판정 경계로 적용돼요`, `Awaiting approval — ${n9[0]}/${n9[1]}/${n9[2]} items. Review and approve to apply from the next verification`) + cutNote9, btn: tE("내용 확인·승인", "Review & approve"), repo: repo9, tone: cutNote9 ? "warn" : "info", lang: slot };
+    if (hash9 !== evv.sha1) return { label: tE("수칙서가 승인본과 달라졌어요 — 재승인 전까지 적용 중단(검증엔 주입 안 됨)", "The rulebook differs from the approved copy — suspended until re-approval (not injected)") + cutNote9, btn: tE("재승인", "Re-approve"), repo: repo9, tone: "warn", lang: slot };
+    if (evv.truncated === true) return { label: tE("적용 중 — 단 일부 항목이 상한(축 12·항목 200자) 초과로 절삭돼 초과분은 주입에서 빠져요. 파일을 줄여 재승인 권장", "Active — but some items exceeded the caps (12/axis · 200 chars) and were truncated; trim the file and re-approve"), btn: null, repo: repo9, tone: "warn", lang: slot };
+    return { label: tE(`적용 중 — 지원 ${n9[0]}·절대 ${n9[1]}·범위밖 ${n9[2]}항목이 검증 판정 경계로 주입돼요(파일을 고치면 재승인 전까지 중단)`, `Active — ${n9[0]}/${n9[1]}/${n9[2]} items injected as the judging boundary (edits suspend it until re-approval)`), btn: null, repo: repo9, tone: "ok", lang: slot };
+  } catch { return null; }
+}
 function patchContractOnceExt(ws: string | null, lang: Lang | undefined, patch: Record<string, unknown>): ContractPatchRes {
   const lib = bridgeLib();
   if (lib && typeof lib.updateContractPatch === "function") {
@@ -1852,6 +1876,7 @@ function computeState(turnsN: number): BridgeState {
     // 표준 테스트 폴더 '감지' 여부(성격 프로필용) — 외부 전송·LLM 없는 가벼운 로컬 판독. '테스트 없음' 단정이 아니라
     // '표준 폴더 미감지'(src/tests·언어별 관행은 못 볼 수 있음 — scope-package 비재귀 한계 고지와 같은 축).
     hasTestsDir: !!ws && (fs.existsSync(path.join(ws, "tests")) || fs.existsSync(path.join(ws, "test"))),
+    envelope: readEnvelopeView(ws), // 거버넌스 증분 1 — 검증 경계(정찰·MAP과 무관한 '검증' 계층: 2트랙 포함·매 푸시 신선 계산=승인 후 캐시 지연 없음)
   };
 }
 
@@ -2791,6 +2816,7 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
   let mapStale = 0, mapRetired = 0;
   let mapFrozenProbe: { state: string; unmigratedTotal: number | null } | null = null;
   let mapCutoverCard: { n: number; rows: Array<{ sig24: string; text: string; why: string }>; repo: string } | null = null;
+
   let mapAutoCutoverDone = false; // 3차 blocker⑤: 이번 세션에서 자동 전환 관측 — 카드에 리로드 필요 표시
   const MA = mapAdapters();
   if (MA && typeof MA.approvedViewFor === "function") {
@@ -3035,6 +3061,51 @@ class Dashboard {
         if (m?.type === "openScoutHealthReport") openScoutHealthReport(dashboardWorkspace()); // 건강 리포트 — 포화 대응 새탭(열 때 베이크·스크립트 없음)
         if (m?.type === "setScoutTarget" && typeof m.repo === "string") setScoutTargetFromUi(dashboardWorkspace(), m.repo, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
         if (m?.type === "setScoutArm" && (m.arm === "self" || m.arm === "deepseek")) setScoutArmFromUi(dashboardWorkspace(), m.arm, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
+        if (m?.type === "envelopeApprove" && typeof m.repo === "string" && m.repo) { // 거버넌스 증분 1 — 수칙서 승인(지문 도장). 2차 정정: 렌더 언어 슬롯 결속(1차 blocker②)+항목 전문 모달(1차 blocker③)
+          if (m.lang !== "en" && m.lang !== "ko") return; // 2차 [보완]: 무효 언어값=기록 없이 거부(ko 강제 금지 — 검증값 계약)
+          const apLang: Lang = m.lang; // 카드가 렌더된 슬롯 — 도장도 이 슬롯 계약에(모달 사이 전역 언어 전환 경합 차단)
+          const en9 = apLang === "en";
+          const wsE = dashboardWorkspace();
+          const tgtE = wsE ? scoutTargetFor(wsE).repo : null;
+          if (!tgtE) return;
+          if (normWs(tgtE) !== normWs(m.repo)) { vscode.window.showWarningMessage(en9 ? "The scout target changed — the card refreshes. Please confirm again." : "정찰 대상이 바뀌었어요 — 카드가 갱신됩니다. 다시 확인해 주세요."); this.post(); return; }
+          let evv: any = null;
+          try { const CL9: any = require(path.join(BRIDGE_DIR, "contract-lib.js")); evv = typeof CL9.readVerifyEnvelope === "function" ? CL9.readVerifyEnvelope(tgtE) : null; } catch { evv = null; }
+          if (!evv || evv.st !== "ok") { vscode.window.showWarningMessage(en9 ? "Cannot read the rulebook file — approval aborted." : "수칙서 파일을 읽을 수 없어 승인할 수 없어요."); this.post(); return; }
+          if (evv.truncated === true) { // 2차 blocker①: 절삭 상태 승인 금지 — 모달에 '전부' 보이지 않는 내용의 원본 지문을 도장 찍는 경로 차단(안전 방향)
+            vscode.window.showWarningMessage(en9 ? "Some rulebook items exceed the caps (12 per axis · 200 chars) and are cut off — approval is blocked because the modal cannot show the omitted content. Trim verify-envelope.json, then approve." : "수칙서 항목이 상한(축 12·항목 200자)을 넘어 일부가 잘립니다 — 잘려서 보이지 않는 내용까지 승인할 수는 없어요. verify-envelope.json을 상한 안으로 줄인 뒤 다시 승인해 주세요.");
+            this.post(); return;
+          }
+          const shaAt = String(evv.sha1);
+          // 1차 blocker③: 승인 대상은 '개수'가 아니라 '내용' — 모달 detail에 전 항목을 ID와 함께 그대로 제시(문구만 바뀐 재승인도 눈으로 확인 가능).
+          const axKo: Record<string, string> = { supportedEnv: "지원 환경", alwaysBlocker: "절대 blocker(지원 세계 안)", outOfScope: "기본 범위 밖" };
+          const axEn: Record<string, string> = { supportedEnv: "supported environment", alwaysBlocker: "always a blocker (within the supported world)", outOfScope: "out of scope by default" };
+          const pre9: Record<string, string> = { supportedEnv: "sup", alwaysBlocker: "ab", outOfScope: "oos" };
+          const lines9: string[] = [];
+          for (const ax of ["supportedEnv", "alwaysBlocker", "outOfScope"]) {
+            lines9.push((en9 ? axEn[ax] : axKo[ax]) + ":");
+            const arr9: string[] = (en9 && evv.dataEn && evv.dataEn[ax]) ? evv.dataEn[ax] : evv.data[ax];
+            arr9.forEach((x: string, i9: number) => lines9.push("  " + pre9[ax] + "-" + (i9 + 1) + ". " + x));
+            lines9.push("");
+          }
+          const okBtn = en9 ? "Reviewed — approve" : "내용을 확인했고 승인합니다";
+          const msg9 = en9
+            ? "Approve the verification envelope — the items below become the judging boundary for every verification (out-of-scope findings are submitted as notes, not stops). Edits to verify-envelope.json suspend it until re-approval."
+            : "검증 경계(수칙서) 승인 — 아래 내용이 앞으로 모든 검증의 판정 경계가 됩니다(범위 밖 지적은 중단 사유가 아니라 메모로 제출). verify-envelope.json을 고치면 재승인 전까지 적용이 멈춥니다.";
+          vscode.window.showInformationMessage(msg9, { modal: true, detail: lines9.join("\n") }, okBtn).then((sel) => {
+            if (sel !== okBtn) return;
+            const wsNow = dashboardWorkspace();
+            const tgtNow = wsNow ? scoutTargetFor(wsNow).repo : null; // 모달 사이 대상 재해석(B-3 전례)
+            if (!tgtNow || normWs(tgtNow) !== normWs(tgtE)) { vscode.window.showWarningMessage(en9 ? "The target changed during approval — not approved." : "승인하는 사이 정찰 대상이 바뀌어 승인하지 않았습니다."); this.post(); return; }
+            let ev2: any = null;
+            try { const CL9: any = require(path.join(BRIDGE_DIR, "contract-lib.js")); ev2 = typeof CL9.readVerifyEnvelope === "function" ? CL9.readVerifyEnvelope(tgtNow) : null; } catch { ev2 = null; }
+            if (!ev2 || ev2.st !== "ok" || ev2.sha1 !== shaAt) { vscode.window.showWarningMessage(en9 ? "The rulebook changed while approving — not approved. Please review again." : "승인하는 사이 수칙서 파일이 바뀌어 승인하지 않았습니다 — 내용을 다시 확인해 주세요."); this.post(); return; }
+            if (patchContractExt(wsE, apLang, { envelopeHash: shaAt })) vscode.window.showInformationMessage(en9 ? "Rulebook approved — applies from the next verification." : "수칙서 승인됨 — 다음 검증부터 적용됩니다.");
+            else vscode.window.showWarningMessage(en9 ? "Failed to store the approval — please try again." : "승인 기록 저장에 실패했어요 — 잠시 후 다시 시도해 주세요.");
+            this.post();
+          });
+          return;
+        }
         if (m?.type === "cutoverConfirm" && typeof m.n === "number" && Number.isInteger(m.n) && m.n > 0 && typeof m.repo === "string" && m.repo) { // C-7 원클릭 전환(미이관 N>0 — informed 동의는 이 모달이 담당)
           const wsC7 = dashboardWorkspace();
           const targetC7 = wsC7 ? scoutTargetFor(wsC7).repo : null;
@@ -3932,6 +4003,8 @@ class Dashboard {
       <span class="muted" id="vBudgetNote" style="font-size:11.5px"></span>
     </label>
     <div class="hint" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center"><span class="pfm">${t("빈값", "empty")} <b>${t("무제한(기본)", "unlimited (default)")}</b></span><span class="pfm">${t("숫자 n", "number n")} <b>${t("지시당 n회까지", "up to n per instruction")}</b></span><span class="pfm note">${t("마지막 회차", "final round")} <b>${t("예고 부착", "notice attached")}</b></span><span class="pfm bad">${t("초과", "beyond cap")} <b>${t("기계적 거부", "mechanically refused")}</b></span></div>
+    <div class="hint" id="vbPresets" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">${t("추천값:", "Suggested:")} <button type="button" data-vb="2">${t("소형 수정 · 2", "small fix · 2")}</button><button type="button" data-vb="3">${t("일상 개발 · 3 (권장)", "daily dev · 3 (recommended)")}</button><button type="button" data-vb="5">${t("대형·복잡 · 5", "large/complex · 5")}</button><button type="button" data-vb="0">${t("무제한 · 0", "unlimited · 0")}</button> <span class="muted">${t("클릭=자동 입력 — 직접 숫자를 적어도 돼요(저장 후 다음 지시부터)", "click to fill — manual entry works too (applies from the next instruction after saving)")}</span></div>
+    <div id="envCard" class="hint" style="display:none;margin-top:6px;padding:7px;border:1px solid var(--vscode-widget-border,#555);border-radius:6px"></div>
     <details class="hintfold"><summary>${t("ⓘ 상한에 걸리면 어떻게 되나", "ⓘ What happens at the cap")}</summary><div class="hint">${t("그 시점에 심각한 결함(blocker)이 남아 있으면 '완료'로 포장하지 않고, 선택지를 붙인 보고(예: 더 검증하도록 승인 / 이 상태로 두기 / 상한 변경)로 사용자의 지시를 기다립니다. 저장 후 다음 지시부터 적용 — 진행 중인 지시의 상한은 그대로예요. 상한을 설정한 지시에서 내부 기록이 실패한 왕복은 세지 못하며 '미집계'로 표시됩니다(절대 상한 아님 — 무제한일 땐 세지 않고 표시도 없음).", "If serious defects (blockers) remain at that point, the report is not dressed up as 'done'; instead it presents options (approve more verification / leave as is / change the cap) and waits for your instruction. Applies from the next instruction after saving — the running one keeps its cap. Under a finite cap, round-trips whose internal bookkeeping failed cannot be counted and are shown as 'untracked' (not an absolute cap — with unlimited, nothing is counted or shown).")}</div></details>
     <label class="ck verify">${t("트랙 — 구현·검증 흐름에 <b>정찰(영향 미리보기·관찰 일지)</b>을 더할지", "Track — add <b>recon (impact preview · field journal)</b> to the implement·verify flow")}
       <span class="seg" id="segScout">
@@ -4213,6 +4286,7 @@ class Dashboard {
   $("segProfile").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-vp]"); if(b){ curVP=b.getAttribute("data-vp"); segTouched.vp=true; highlightSeg("segProfile","data-vp",curVP); markDirty(); } });
   // P-12 2b: 예산 입력 — cardMachine 편승(저장 중 편집 무시·초안은 markDirty 축에 합류)
   var vbEl=$("vBudget"); if(vbEl) vbEl.addEventListener("input", function(){ if(cardM.saving()) return; curVB=String(vbEl.value||"").trim(); segTouched.vb=true; markDirty(); });
+  safe(function(){ var pr=$("vbPresets"); if(!pr) return; pr.addEventListener("click", function(ev){ var b=ev.target && ev.target.closest ? ev.target.closest("button") : null; if(!b || cardM.saving()) return; var v=b.getAttribute("data-vb"); if(v===null) return; var el=$("vBudget"); if(!el) return; el.value=v; curVB=v; segTouched.vb=true; markDirty(); }); }); // 상한 추천 버튼 — 기존 저장 흐름 재사용(수동 입력·무제한 유지·프로젝트별 계약 저장)
   $("segScout").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-sm]"); if(b){ curSM=b.getAttribute("data-sm"); segTouched.sm=true; highlightSeg("segScout","data-sm",curSM); markDirty(); } });
   $("segInject").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-im]"); if(b){ curIM=b.getAttribute("data-im"); segTouched.im=true; highlightSeg("segInject","data-im",curIM); markDirty(); } });
   $("segReason").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-rs]"); if(b){ curRS=b.getAttribute("data-rs"); highlightSeg("segReason","data-rs",curRS); } });
@@ -5036,6 +5110,11 @@ class Dashboard {
       if (!segTouched.vp){ curVP=appVP; highlightSeg("segProfile","data-vp",curVP); }
       if (!segTouched.vb){ curVB=appVB; if($("vBudget")&&document.activeElement!==$("vBudget")) $("vBudget").value=curVB; }
       // P-12 2b: 상속·적용 시점 안내(표시 전용 — 저장 경로 미포함). C-C 모드에서 원시 슬롯 값이 없으면 CL-C 상속임을 표기.
+      safe(function(){ var ec=$("envCard"); if(!ec) return; var e9=d.envelope; ec.innerHTML=""; if(!e9){ ec.style.display="none"; return; } ec.style.display="block";
+        var h9=document.createElement("div"); h9.style.fontWeight="600"; h9.textContent=(d.lang==="en"?"Verification envelope (rulebook)":"검증 경계(수칙서)"); ec.appendChild(h9);
+        var s9=document.createElement("div"); if(e9.tone==="warn"){ s9.style.cssText="color:var(--vscode-editorWarning-foreground,#d9a441)"; } else { s9.className="muted"; } s9.textContent=e9.label; ec.appendChild(s9);
+        if(e9.btn){ var ab=document.createElement("button"); ab.style.cssText="margin-top:4px;font-weight:700"; ab.textContent=e9.btn; ab.addEventListener("click", function(){ vscode.postMessage({type:"envelopeApprove", repo: e9.repo, lang: e9.lang}); }); ec.appendChild(ab); }
+      });
       safe(function(){ var n=$("vBudgetNote"); if(!n) return;
         var inh = ccMode && d.contract.codexVerifyBudgetRawVal===null && d.contract.codexVerifyBudget>0;
         n.textContent = (inh?T("CL-C 설정 상속(실효 "+d.contract.codexVerifyBudget+") · ","inherited from CL-C (effective "+d.contract.codexVerifyBudget+") · "):"")

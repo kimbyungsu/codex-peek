@@ -20,12 +20,27 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
 // 호출 시점 전역 언어의 문자열 선택(무결성 detail·CLI 안내 등). ask 본문 흐름은 langSnap 사용.
 function tB(ko, en) { return loadLang() === "en" ? en : ko; }
+// 거버넌스 증분 1: 판정문 병기 경고 — 승인된 경계가 '손상/미승인 변경' 상태면 ask-wait 결과에 1줄 병기(위장 금지).
+// 정상·부재·미승인="" (바이트 동일 — 기존 출력 무회귀).
+function envelopeWarnLine(ws, lang) {
+  // 보완②(1차 구현검증): 이 함수는 '완료 시점 재판독'이라 이번 ask에 실제 주입됐는지는 모른다 — 문구를 '현재 상태'
+  // 서술로 한정(주입 여부 단정 금지). ask 시점 주입 상태의 내구 보존은 증분 2 라운드 레코드(envelopeHash 동결) 소관.
+  try {
+    const c9 = loadContract(ws || configWs(), lang);
+    const evi = envelopeInjectionFor(resolveScoutRepo(ws || configWs(), c9).repo, c9.envelopeHash, lang);
+    const en9 = (lang || loadLang()) === "en";
+    if (evi.warn === "mismatch") return en9 ? "\n[verification envelope: the rulebook now differs from the approved copy — new verifications will not inject it until re-approval (dashboard)]\n" : "\n[검증 경계: 수칙서 파일이 지금 승인본과 다릅니다 — 재승인 전까지 새 검증에 주입되지 않습니다(대시보드에서 재승인)]\n";
+    if (evi.warn === "corrupt") return en9 ? "\n[verification envelope: the rulebook file is currently unreadable — new verifications will not inject it]\n" : "\n[검증 경계: 수칙서 파일이 지금 판독 불가 상태입니다 — 새 검증에 주입되지 않습니다]\n";
+    if (evi.warn === "truncated") return en9 ? "\n[verification envelope: some items are truncated by the caps — the injected boundary omits the excess; trim the file and re-approve]\n" : "\n[검증 경계: 일부 항목이 상한 초과로 절삭된 상태로 적용 중 — 초과분은 경계에서 빠져 있습니다. 파일을 줄여 재승인 권장]\n";
+  } catch { /* 무해 — 경고 계층이 결과 전달을 막지 않음 */ }
+  return "";
+}
 function withContract(prompt, ws, lang, carrier, profile) {
   // lang: 언어 스냅샷(cmdAsk의 langSnap) — 미지정 시 전역 언어. 주입(기본지침·계약 지시문)과 헤더/footer 언어를 한 스냅샷으로 일관.
   // carrier(L1-A): 호출자가 준 객체에 '이번 ask에 실제로 실린 동봉 스냅샷'(mapItems·couplings)을 담아 준다 —
@@ -51,7 +66,24 @@ function withContract(prompt, ws, lang, carrier, profile) {
       if (carrier && typeof carrier === "object") { carrier.mapItems = att.mapItems || []; carrier.couplings = att.couplings || []; }
     } else scout = att || ""; // 구형 문자열 반환 호환(테스트 목·부분 배포)
   } catch { scout = ""; }
-  const head = [baseline, inj, scout].filter(Boolean).join("\n\n");
+  // 거버넌스 증분 1: 검증 경계(사용자 승인 수칙서) — 승인 지문 일치 시에만 주입(데이터 절=두 프로필 공통·한정 문구=core만).
+  // 부재·미승인=주입 없음(현행 그대로)·손상/미승인 변경=주입 생략+stderr 1줄 경고(ask 시작 출력 — 위장 금지).
+  let envText = "", baseQual = "";
+  try {
+    if (c && typeof envelopeInjectionFor === "function") {
+      const target9 = resolveScoutRepo(ws || configWs(), c).repo;
+      const evi = envelopeInjectionFor(target9, c.envelopeHash, lang);
+      const en9 = (lang || loadLang()) === "en";
+      if (evi.text) {
+        envText = evi.text;
+        if (profile === "core") baseQual = envelopeCoreQualifier(lang);
+        if (evi.warn === "truncated") console.error(en9 ? "[verification envelope: some items exceeded the caps (12/axis · 200 chars) and were truncated — the injected boundary omits the excess; trim the file and re-approve]" : "[검증 경계: 일부 항목이 상한(축 12·항목 200자) 초과로 절삭된 채 주입됨 — 초과분은 경계에서 빠짐. 파일을 줄여 재승인 권장]"); // 1차 blocker④: 절삭의 침묵 금지
+      }
+      else if (evi.warn === "mismatch") console.error(en9 ? "[verification envelope changed without approval — skipped this ask; re-approve on the dashboard]" : "[검증 경계 미승인 변경 — 이번 검증에 주입 생략. 대시보드에서 재승인 필요]");
+      else if (evi.warn === "corrupt") console.error(en9 ? "[verification envelope unreadable — skipped]" : "[검증 경계 판독 불가 — 주입 생략]");
+    }
+  } catch { /* 경계 실패가 ask 자체를 막지 않음(주입만 생략 — 검증은 현행 규약으로 진행) */ }
+  const head = [baseline, baseQual, envText, inj, scout].filter(Boolean).join("\n\n");
   const reqLabel = (lang || loadLang()) === "en" ? "[Work Request]" : "[작업 요청]";
   return `${head}\n\n---\n${reqLabel}\n${prompt}`;
 }
@@ -1778,6 +1810,7 @@ async function cmdAsk(rest) {
     flagVerdict(answer, ws, link.codexSession, modeSnap, mfl.machine, attempt); // 경보+2d accepted 1행 위임(비-깨끗=빨강/노랑·표지 누락·기계 강등 가시화)
     process.stdout.write(`${langSnap === "en" ? "# Linked session" : "# 연결 세션"} ${link.codexSession} (${link.via})\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine)}\n`);
     process.stdout.write(mfl.notice); // 2c 영수증/거부/실패 줄(core 외·해당 없음="" — 바이트 동일)
+    process.stdout.write(envelopeWarnLine(ws, langSnap)); // 거버넌스 증분 1 — 경계 손상/미승인 변경 경고(정상·부재·미승인="")
     process.stdout.write(budgetNoticeLines(budgetGate.res, langSnap, profileSnap)); // 포맷 계층(⑻) — N=M 예고·미집계 1줄(무제한="")
     return;
   }
@@ -1875,6 +1908,7 @@ async function cmdAsk(rest) {
       : (en ? `# New Codex session created·linked: ${id}` : `# 새 Codex 세션 생성·연결: ${id}`);
     process.stdout.write(`${head}\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine)}\n`);
     process.stdout.write(mfl.notice); // 2c 영수증/거부/실패 줄(core 외·해당 없음="" — 바이트 동일)
+    process.stdout.write(envelopeWarnLine(ws, langSnap)); // 거버넌스 증분 1 — 경계 손상/미승인 변경 경고(정상·부재·미승인="")
     process.stdout.write(budgetNoticeLines(budgetGate.res, langSnap, profileSnap)); // 포맷 계층(⑻) — 무제한=""(바이트 동일)
   } else {
     attempt.record("session-unresolved"); // 2d: 답은 왔으나 세션 미결속 — 소비된 왕복 보존(승격·최근 무결성 미산입)
