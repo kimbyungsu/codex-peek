@@ -53,6 +53,27 @@ function main(raw) {
   // loadContract가 normScoutGate로 정규화한 실효값 — 3트랙 기본 plan / 2트랙 무조건 off(명시 plan 잔재도 비활성).
   const gate = contract.scoutGate || "off";
   if (gate !== "plan") process.exit(0);
+  // ── P3b B-6: 게이트 3분기 — 결정은 순수 함수 decideGate(아래 수출 — 테스트가 같은 팩토리 실행: 검증 통과
+  // 공식)에 위임. main은 IO(권위 판독·trace·상한 파일·로그·exit)만 담당.
+  const decision = decideGate({
+    auth: (() => { try { return require("./map-bindings.js").authorityStateFor(target); } catch { return null; } })(),
+    trace: gateTraceStateOf(target),
+    assess: () => require("./map-reader.js").mapGateAssessFor(target),
+    blocksUsed: (() => { try { return (JSON.parse(fs.readFileSync(path.join(ATTEMPTS_DIR, String(p.session_id || "nosession").replace(/[^0-9A-Za-z._-]/g, "_").slice(0, 32) + ".json"), "utf8")).n | 0) || 0; } catch { return 0; } })(),
+    cap: BLOCKS_PER_SESSION,
+    en: loadLang() === "en",
+  });
+  if (decision.action === "pass") {
+    if (decision.log) logObservation(ws, { ts: new Date().toISOString(), tool: toolName, passThrough: true, reason: decision.log });
+    process.exit(0);
+  }
+  if (decision.action === "block") {
+    const af2 = path.join(ATTEMPTS_DIR, String(p.session_id || "nosession").replace(/[^0-9A-Za-z._-]/g, "_").slice(0, 32) + ".json");
+    try { fs.mkdirSync(ATTEMPTS_DIR, { recursive: true }); const n2 = (() => { try { return (JSON.parse(fs.readFileSync(af2, "utf8")).n | 0) || 0; } catch { return 0; } })(); atomicWrite(af2, JSON.stringify({ n: n2 + 1, ts: new Date().toISOString() })); } catch { /* 기록 실패해도 차단 진행 */ }
+    process.stderr.write(tB("[탐색 게이트 · plan] ", "[Recon gate · plan] ") + decision.msg.replace(/<저장소>|<repo>/g, '"' + target + '"') + tB(` (이 게이트는 세션당 ${BLOCKS_PER_SESSION}회까지만 막고 이후 통과 · 끄기: node scripts/scope-gate.js "${ws}" off)\n`, ` (This gate blocks at most ${BLOCKS_PER_SESSION}× per session, then passes · turn off: node scripts/scope-gate.js "${ws}" off)\n`));
+    process.exit(2);
+  }
+  // decision.action === "legacy" → 기존 판정기(아래 무변경 — decideGate가 전환 흔적 재검사까지 마친 뒤에만 도달)
   let st = { state: "fresh", staleCount: 0 };
   try { st = scoutMapStatus(target); } catch { process.exit(0); } // 판정 불가 → fail-open
   if (st.state === "fresh") process.exit(0);
@@ -103,7 +124,45 @@ function main(raw) {
   process.exit(2); // 차단 — stderr가 Claude에게 피드백됨(공식 문서 명시)
 }
 
-let buf = "";
-process.stdin.on("data", (d) => { buf += d; });
-process.stdin.on("end", () => { try { main(buf); } catch { process.exit(0); } }); // 어떤 예외도 fail-open
-process.stdin.on("error", () => process.exit(0));
+// ── P3b: 게이트 순수 결정기(구현검증 3차 #1 — 판정 로직을 순수 함수로 분리·테스트가 같은 팩토리 실행) ──
+// 입력: auth(권위 판정 결과 또는 null=런타임 판독 실패), trace(3상태 — auth null·legacy에서 사용),
+// assess(v2에서만 호출되는 판정기 썽크 — 예외 허용), blocksUsed/cap(세션 차단 상한), en(언어).
+// 반환: {action:"pass", log?} | {action:"block", msg} | {action:"legacy"}(기존 판정기 위임 — 흔적 absent 확인 후에만).
+// 불변식: auth null·blocked·v2(예외 포함)·전환 흔적 present/unreadable에서는 절대 "legacy"를 반환하지 않는다.
+function decideGate(inp) {
+  const t9 = (ko, en9) => (inp.en ? en9 : ko);
+  if (inp.auth === null) {
+    if (inp.trace !== "absent") return { action: "pass", log: t9("전환된 프로젝트인데 MAP 런타임 판독 불가 — legacy 판정 공급 금지·통과(node install.js 필요)", "project cut over but MAP runtime unreadable — no legacy verdict, passing (run node install.js)") };
+    return { action: "legacy" };
+  }
+  if (inp.auth.st === "blocked") return { action: "pass", log: t9("권위 판독 차단(" + (inp.auth.reasonKey || inp.auth.reason || "") + ") — 무차단 통과(숨김 금지: 로그 기록)", "authority blocked (" + (inp.auth.reasonKey || inp.auth.reason || "") + ") — passing without block (logged)") };
+  if (inp.auth.st === "v2") {
+    let g = null;
+    try { g = inp.assess(); } catch { g = null; } // 판정기 예외=legacy 하강 금지(구현검증 1차 #3)
+    if (!g) return { action: "pass", log: t9("v2 판정기 예외 — legacy 판정 공급 금지·통과", "v2 assessor exception — no legacy verdict, passing") };
+    if (g.state === "fresh") return { action: "pass" };
+    if (g.state === "unknown" || g.state === "blocked") return { action: "pass", log: g.why || g.state };
+    if (inp.blocksUsed >= inp.cap) return { action: "pass", log: t9("세션 차단 상한 도달 — 통과(무한 잠금 방지)", "session block cap reached — passing through (no hard-lock)") };
+    return { action: "block", msg: (g.notice && (inp.en ? g.notice.en : g.notice.ko)) || g.why || g.state };
+  }
+  // legacy 판정 — 기존 판정기 위임 직전 전환 흔적 재검사(legacy 판정 직후 cutover 완료 경합 봉합 — 1차 #3)
+  if (inp.trace !== "absent") return { action: "pass", log: t9("전환 흔적 감지(legacy 판정기 직전 재검사) — legacy 판정 공급 금지·통과", "cutover trace detected right before legacy assessor — no legacy verdict, passing") };
+  return { action: "legacy" };
+}
+// 3상태 원시 판독(공용 판독기 재사용 시도 — 실패 시 로컬 사본·둘 다 예외=unreadable 보수)
+function gateTraceStateOf(repo9) {
+  try { return require("./map-reader.js").cutoverTraceStateOf(repo9); } catch { /* 낡은 사본 — 로컬 */ }
+  try {
+    const s1b = (p9) => { try { const s9 = fs.statSync(p9); if (s9.isFile()) return "present"; if (s9.isDirectory()) { try { return fs.readdirSync(p9).length > 0 ? "present" : "absent"; } catch { return "unreadable"; } } return "absent"; } catch (e9) { return e9 && e9.code === "ENOENT" ? "absent" : "unreadable"; } };
+    const a9b = s1b(path.join(repo9, "project-map", "authority.json")), b9b = s1b(path.join(repo9, "project-map", "authority-history"));
+    return (a9b === "present" || b9b === "present") ? "present" : (a9b === "unreadable" || b9b === "unreadable") ? "unreadable" : "absent";
+  } catch { return "unreadable"; }
+}
+
+module.exports = { decideGate, gateTraceStateOf }; // 테스트 실행용(훅 본체는 require.main 가드)
+if (require.main === module) {
+  let buf = "";
+  process.stdin.on("data", (d) => { buf += d; });
+  process.stdin.on("end", () => { try { main(buf); } catch { process.exit(0); } }); // 어떤 예외도 fail-open
+  process.stdin.on("error", () => process.exit(0));
+}

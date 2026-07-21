@@ -159,12 +159,35 @@ function collectCommon(repo) {
       .map((e) => ({ ts: e.ts, kind: e.kind, detail: e.detail }));
   } catch { /* 없음 */ }
 
-  // stable MAP(있으면)
-  let mapContent = null;
-  for (const c of ["docs/MAP.md", "MAP.md"]) {
-    try { mapContent = fs.readFileSync(path.join(repo, c), "utf8"); break; } catch { /* 다음 후보 */ }
+  // stable MAP(있으면) — P3b B-2: mapContentFor 어댑터 경유(legacy=기존 폴백 순서와 바이트 동일·v2=생성 뷰·
+  // blocked=null+사유[blind spot 위장 금지]). require 실패=공통 원칙 (a) 읽기 폴백(전환 흔적 원시 검사).
+  let mapContent = null, mapContentBlocked = null, mapContentBlockedKey = null;
+  let adapterUsed = false;
+  try {
+    const MA = require(path.join(__dirname, "..", "bridge", "map-adapters.js"));
+    const mc = MA.mapContentFor(repo);
+    adapterUsed = true;
+    if (mc.source === "blocked") { mapContentBlockedKey = mc.reasonKey || null; mapContentBlocked = mc.reason || ""; } // 키·원문 분리 보존(구현검증 1차 #4 — 소비처 번역 재료)
+    else mapContent = mc.content;
+  } catch { /* 낡은/손상 사본 — 아래 원시 검사 폴백 */ }
+  if (!adapterUsed) {
+    const s1 = (q) => { try { const st = fs.statSync(q); if (st.isFile()) return "present"; if (st.isDirectory()) { try { return fs.readdirSync(q).length > 0 ? "present" : "absent"; } catch { return "unreadable"; } } return "absent"; } catch (e) { return e && e.code === "ENOENT" ? "absent" : "unreadable"; } }; // 3상태(구현검증 2차 #3)
+    const aT = s1(path.join(repo, "project-map", "authority.json")), bT = s1(path.join(repo, "project-map", "authority-history"));
+    const trace = (aT === "present" || bT === "present") ? "present" : (aT === "unreadable" || bT === "unreadable") ? "unreadable" : "absent";
+    if (trace !== "absent") {
+      mapContentBlockedKey = trace === "unreadable" ? "trace-unreadable" : "runtime-outdated";
+      mapContentBlocked = trace === "unreadable" ? "전환 흔적 판독 불가(권한 확인 필요)" : "전환된 프로젝트인데 MAP 런타임 판독 불가(node install.js 필요)"; // legacy 공급 금지(공통 (a))
+    } else {
+      for (const c of ["docs/MAP.md", "MAP.md"]) {
+        try { mapContent = fs.readFileSync(path.join(repo, c), "utf8"); break; } catch { /* 다음 후보 */ }
+      }
+    }
   }
-  return { tests, recentFailures, mapContent };
+  // 영문 번역문(구현검증 3차 #3 — 정본 4표면 언어 계약: 키가 아니라 번역문. 번역기=단일 출처 map-reader·부재=키 폴백)
+  const mapContentBlockedEn = mapContentBlockedKey
+    ? (() => { try { return require(path.join(__dirname, "..", "bridge", "map-reader.js")).reasonTextFor(mapContentBlockedKey, null, true); } catch { return mapContentBlockedKey; } })()
+    : null;
+  return { tests, recentFailures, mapContent, mapContentBlocked, mapContentBlockedKey, mapContentBlockedEn };
 }
 
 // ── 무이력(비-git) 모드 — 사용자 결정 2026-07-06: git이 없는 프로젝트도 지도를 만들 수 있어야 한다.
@@ -313,7 +336,7 @@ function collectPackageHistoryless(repo) {
   return pkg;
 }
 
-module.exports = { collectPackage, captureSeedBaseline };
+module.exports = { collectPackage, captureSeedBaseline, collectCommon };
 
 if (require.main === module) {
   const repo = process.argv[2];

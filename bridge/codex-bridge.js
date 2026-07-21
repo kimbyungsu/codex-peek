@@ -45,7 +45,7 @@ function withContract(prompt, ws, lang, carrier, profile) {
   }
   // Phase 3 동봉은 별도 try — 새 기능(지도 동봉) 실패가 기존 계약 주입(inj)까지 지우지 않게(모든 ask의 급소 분리).
   try {
-    const att = c ? buildScoutAttach(ws || configWs(), c, lang) : null;
+    const att = c ? mapAttachSurface(ws || configWs(), c, lang) : null;
     if (att && typeof att === "object") {
       scout = att.text || "";
       if (carrier && typeof carrier === "object") { carrier.mapItems = att.mapItems || []; carrier.couplings = att.couplings || []; }
@@ -54,6 +54,30 @@ function withContract(prompt, ws, lang, carrier, profile) {
   const head = [baseline, inj, scout].filter(Boolean).join("\n\n");
   const reqLabel = (lang || loadLang()) === "en" ? "[Work Request]" : "[작업 요청]";
   return `${head}\n\n---\n${reqLabel}\n${prompt}`;
+}
+
+// ── P3b B-5: scout-attach 표면 재배선 — buildMapAttach 경유(비v2=기존 동봉 위임·바이트 동일) ─────────
+// lazy require: map-reader가 없는/깨진 배포 사본이면 공통 원칙 (a) 읽기 폴백 — 대상 repo의 전환 표식(marker)
+// '또는' 전환 이력(authority-history)이 존재하면 legacy 데이터 공급 금지(고지 attach), 둘 다 부재=기존 동봉.
+function mapAttachSurface(ws, c, lang) {
+  try { return require(path.join(__dirname, "map-reader.js")).buildMapAttach(ws, c, lang); }
+  catch { /* 낡은/손상 사본 — 아래 원시 검사 폴백 */ }
+  // 3상태 원시 검사(구현검증 2차 #3): present/unreadable=legacy 공급 금지·absent만 기존 동봉.
+  let trace = "unreadable"; // 검사 자체가 죽으면 보수(공급 금지)
+  try {
+    const target = resolveScoutRepo(ws, c).repo;
+    const st1 = (p) => { try { const s = fs.statSync(p); if (s.isFile()) return "present"; if (s.isDirectory()) { try { return fs.readdirSync(p).length > 0 ? "present" : "absent"; } catch { return "unreadable"; } } return "absent"; } catch (e) { return e && e.code === "ENOENT" ? "absent" : "unreadable"; } };
+    const a = st1(path.join(target, "project-map", "authority.json")), b = st1(path.join(target, "project-map", "authority-history"));
+    trace = (a === "present" || b === "present") ? "present" : (a === "unreadable" || b === "unreadable") ? "unreadable" : "absent";
+  } catch { trace = "unreadable"; }
+  if (trace === "absent") return buildScoutAttach(ws, c, lang);
+  const en = lang === "en" || (lang !== "ko" && loadLang() === "en");
+  return {
+    text: trace === "present"
+      ? (en ? "[Project MAP] This project has cut over, but the MAP runtime here is outdated — no map slice attached (run node install.js)." : "[Project MAP] 전환된 프로젝트인데 이 설치본의 MAP 런타임이 낡음 — 지도 조각을 동봉하지 않습니다(node install.js 실행 필요).")
+      : (en ? "[Project MAP] Cutover trace unreadable (permissions?) — no map slice attached (not proven legacy)." : "[Project MAP] 전환 흔적 판독 불가(권한?) — 지도 조각을 동봉하지 않습니다(legacy 확인 안 됨)."),
+    mapItems: [], couplings: [],
+  };
 }
 
 const HOME = os.homedir();
@@ -2116,4 +2140,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt };
+module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface };

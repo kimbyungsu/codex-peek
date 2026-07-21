@@ -398,7 +398,14 @@ function baselineUpdatesFor(patch, decisionId, affectedIds, outTopo) {
 // ── apply(§B 클레임+§F 트랜잭션) ────────────────────────────────────────────────
 function applyPatch(repo, mapId, patchId, opts) {
   const o = opts || {};
-  if (!o.preCutover) return { ok: false, error: "--pre-cutover 명시 필수(§A — cutover 전 수동 적용 승인)" };
+  // P3b C-4: 권위 분기 — blocked=플래그 무관 전면 거부(receipt-only 중단 위에 topology 변경 금지·설계검증
+  // 2차 #3) / v2=플래그 불요(자동 적용 활성화 1-30) / legacy=기존 --pre-cutover 명시 필수. lazy require —
+  // map-bindings가 이 모듈을 top-level require하므로 역방향은 실행 시점만(순환 초기화 회피).
+  const auth0 = (() => { try { return require(path.join(__dirname, "map-bindings.js")).authorityStateFor(repo); } catch { return null; } })();
+  if (auth0 === null) return { ok: false, error: "권위 판독 불가(map-bindings 로드 실패) — 적용 거부(fail-closed)" };
+  if (auth0.st === "blocked") return { ok: false, error: "권위 상태 blocked(" + (auth0.reasonKey || "") + ": " + auth0.reason + ") — 적용 거부. 전환 중단 상태면 cutover 재실행으로 재개하라" };
+  o._authV2 = auth0.st === "v2"; // 기록 필드 분기 재료(아래 decision 조립 — 잠금 안 재검사와 함께 최종 확정)
+  if (!o.preCutover && !o._authV2) return { ok: false, error: "--pre-cutover 명시 필수(§A — cutover 전 수동 적용 승인)" };
   const d = ensureDirs(repo, mapId);
   // §B ①′ 사전 검사: 활성 WAL 있으면 claim 자체를 만들지 않음
   const aw = activePipelineWalFor(repo);
@@ -491,6 +498,14 @@ function applyPatch(repo, mapId, patchId, opts) {
   // §B ② withMapLock 트랜잭션(§F-1/F-2)
   const tx = MR.withMapLock(repo, () => {
     // ⓪ 공통 barrier 재검사(mapLock 안 — 7차 #2·9차 보완①)
+    // P3b C-4(구현검증 1차 #1): 권위 상태도 잠금 안 재판정 — 판정~잠금 사이 cutover 전이(어느 방향이든)=중단.
+    // blocked=중단(receipt-only 위 topology 변경 금지). 초기 판정과 상이=중단(재실행 시 새 판정으로 진행).
+    {
+      const authIn = (() => { try { return require(path.join(__dirname, "map-bindings.js")).authorityStateFor(repo); } catch { return null; } })();
+      if (authIn === null) return { fail: "권위 판독 불가(잠금 안 재판정) — fail-closed 중단" };
+      if (authIn.st === "blocked") return { fail: "권위 상태 blocked(잠금 안 재판정 — " + (authIn.reasonKey || "") + ") — 중단. 전환 중단 상태면 cutover 재실행으로 재개하라" };
+      if ((authIn.st === "v2") !== !!o._authV2) return { fail: "권위 상태가 판정~잠금 사이 변경됨(" + (o._authV2 ? "v2→legacy" : "legacy→v2") + " — cutover 전이) — 재실행하라" };
+    }
     const aw2 = activePipelineWalFor(repo);
     if (aw2.st === "unreadable") return { fail: "WAL 서랍 판독 불가" };
     if (aw2.st === "active") return { fail: "활성 WAL 존재(경쟁) — recoverWal 선행" };
@@ -572,7 +587,7 @@ function applyPatch(repo, mapId, patchId, opts) {
       patch: livePatch,
       actor: isPolicy ? { kind: "user-choice", cardId: o.resolutionRef } : { kind: "auto" },
       classification: isPolicy ? "intent-choice" : "auto",
-      resolution: { outcome: "applied", evidenceRef: isPolicy ? o.resolutionRef : "auto" }, preCutover: true,
+      resolution: { outcome: "applied", evidenceRef: isPolicy ? o.resolutionRef : "auto" }, ...(o.preCutover ? { preCutover: true } : {}), // P3b C-4: 필드는 --pre-cutover 명시 경로만 기록(v2 무플래그=생략 — validator '부재=cutover 후' 정합·증명 이력 왜곡 차단)
       verification, evidenceFps,
       audit: { ts: new Date().toISOString(), topologyBeforeHash: mapHashBefore, topologyAfterHash: mapHashAfter, mapMdAfterHash: mapMdAfterHash || sha1(""), authorityHashAfter: "", expectedMapHashAfter: mapHashAfter, walRef: "wal/" + decisionId + ".json" },
     };

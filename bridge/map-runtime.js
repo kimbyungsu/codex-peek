@@ -20,6 +20,47 @@ const tB = (ko, en) => (loadLang() === "en" ? en : ko);
 
 const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(require("os").homedir(), ".codex-bridge");
 
+// ── P3b C-6: 정본 잠금 키=물리 경로(realpath — 정본 1-29)+신·구 이중 잠금(이행 창 봉합) ──────────
+// map-pipeline canonicalIdentityFor.physKey(realOf)와 동형이어야 한다(패리티 테스트 잠금) — map-pipeline이
+// 이 모듈을 선행 require하므로 역방향 top-level require는 순환. 자체 무순환 구현(realpath 실패=resolve 폴백
+// — 잠금 부재보다 보수). junction/symlink 별칭 경로가 서로 다른 잠금을 만들던 반례 봉합.
+const MAP_LOCK_DIR = path.join(BRIDGE_DIR, "project-map-locks");
+function physKeyOf(repo) { try { return fs.realpathSync(path.resolve(repo)); } catch { return path.resolve(repo); } }
+// 구 wsKey 잠금 대상=관측 가능한 등록 별칭 전수(설계 C-6): 입력 resolve·realpath·계약(contracts)·links.json에
+// 등록된 workspace/scoutRepo 중 같은 물리 경로인 문자열들. 구 세대 프로세스는 자기가 등록한 ws 문자열로
+// 잠그므로 이것이 실측 가능한 최대 집합 — 판독 실패=그 별칭 누락 가능(작성자 정지 게이트가 최종 방어).
+function legacyLockKeysFor(repo) {
+  const phys = physKeyOf(repo);
+  const aliases = new Set([path.resolve(repo), phys]);
+  const sameReal = (p) => { try { return typeof p === "string" && p.trim() !== "" && physKeyOf(p) === phys; } catch { return false; } };
+  try {
+    const cdir = path.join(BRIDGE_DIR, "contracts");
+    for (const f of fs.readdirSync(cdir)) {
+      if (!f.endsWith(".json")) continue;
+      try {
+        const o = JSON.parse(fs.readFileSync(path.join(cdir, f), "utf8"));
+        for (const cand of [o && o.workspace, o && o.scoutRepo]) if (sameReal(cand)) aliases.add(path.resolve(cand));
+      } catch { /* 손상 계약 — 그 별칭 누락 가능(정지 게이트가 방어) */ }
+    }
+  } catch { /* contracts 폴더 없음 */ }
+  try {
+    const lk = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, "links.json"), "utf8"));
+    for (const k of Object.keys((lk && lk.byWorkspace) || {})) if (sameReal(k)) aliases.add(path.resolve(k));
+  } catch { /* links 없음/손상 */ }
+  return [...new Set([...aliases].map((a) => wsKeyFor(a)))].sort();
+}
+// 잠금 전수 취득 — [신 physKey 잠금 → 구 wsKey 잠금들(정렬)] 순서 고정(모든 신 코드 동일 순서=교착 없음).
+// withFileLockStrict 중첩의 합타입을 평탄화해 기존 {ok, result|error} 계약 유지.
+function withCtxLocks(ctx, fn) {
+  fs.mkdirSync(MAP_LOCK_DIR, { recursive: true });
+  const acquire = (i) => {
+    if (i >= ctx.LOCKS.length) return { ok: true, result: fn() };
+    const r = withFileLockStrict(ctx.LOCKS[i], () => acquire(i + 1));
+    return r.ok ? r.result : r;
+  };
+  return acquire(0);
+}
+
 // ── 결정론 인벤토리(설계검증: collectPackage[변경 꾸러미] 재사용 불가 — 전체 구조용 전용 수집기) ──
 const POLICY_EXCLUDE = new Set(["node_modules", ".git", "dist", "build", "out", "vendor", "__pycache__", ".venv", "venv", "coverage", ".idea", ".vscode-test"]);
 const CODE_EXT = new Set([".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".py"]);
@@ -181,8 +222,7 @@ function pipelineBarrier(repo) {
   } catch { return { blocked: true, reason: "pipeline-barrier-error" }; } // resolve 통과 후 예외=전부 fail-closed(내부 의존성 누락 포함 — 14차 #5)
 }
 function writeCanonicalLocked(ctx, inLock) {
-  fs.mkdirSync(path.dirname(ctx.LOCK), { recursive: true });
-  const r = withFileLockStrict(ctx.LOCK, () => {
+  const r = withCtxLocks(ctx, () => {
     { const b = pipelineBarrier(ctx.repo); if (b.blocked) return { wrote: false, error: "활성 pipeline WAL(" + (b.items || []).join(",") + ") — recoverWal 선행(" + b.reason + ")" }; } // 잠금 '안' 쓰기 직전 재검사(12차 #4 — check-to-lock 창 봉합)
     const topo = inLock();
     if (!topo) return false;
@@ -206,10 +246,7 @@ function runCli(repoArg, cmdArg, extraArgs) {
   const cmd = cmdArg || "status";
   if (!repoArg) { console.error(tB("사용: node scripts/scope-map.js <repo> [inventory|init|status|render|migrate]", "Usage: node scripts/scope-map.js <repo> [inventory|init|status|render|migrate]")); return 2; }
   const repo = path.resolve(repoArg);
-  const ctx = { repo, MAP_DIR: path.join(repo, "project-map") };
-  ctx.TOPO = path.join(ctx.MAP_DIR, "topology.json");
-  ctx.VIEW = path.join(ctx.MAP_DIR, "MAP.md");
-  ctx.LOCK = path.join(BRIDGE_DIR, "project-map-locks", wsKeyFor(repo) + ".lock"); // 잠금은 하네스 서랍(레포 무오염)
+  const ctx = ctxFor(repo); // C-6(P3b): 잠금 구성의 단일 출처 — runCli 자체 LOCK 조립 폐기(별칭 이원 잠금 반례 봉합)
 
   if (cmd === "inventory") {
     const { importsByDir, cov } = collectInventory(repo);
@@ -399,15 +436,17 @@ function runCli(repoArg, cmdArg, extraArgs) {
 function ctxFor(repo) {
   const r = path.resolve(repo);
   const MAP_DIR = path.join(r, "project-map");
-  return { repo: r, MAP_DIR, TOPO: path.join(MAP_DIR, "topology.json"), VIEW: path.join(MAP_DIR, "MAP.md"), LOCK: path.join(BRIDGE_DIR, "project-map-locks", wsKeyFor(r) + ".lock") };
+  // C-6(P3b): 신 물리 키 잠금("phys-" 접두 — 구 wsKey 파일명과 네임스페이스 분리)+구 wsKey 잠금(등록 별칭
+  // 전수·정렬). LOCK은 신 키 단일(진단·표시용) — 실제 취득은 LOCKS 전체(withCtxLocks).
+  const physLock = path.join(MAP_LOCK_DIR, "phys-" + crypto.createHash("sha1").update(physKeyOf(r)).digest("hex").slice(0, 16) + ".lock");
+  const legacyLocks = legacyLockKeysFor(r).map((k) => path.join(MAP_LOCK_DIR, k + ".lock"));
+  return { repo: r, MAP_DIR, TOPO: path.join(MAP_DIR, "topology.json"), VIEW: path.join(MAP_DIR, "MAP.md"), LOCK: physLock, LOCKS: [physLock, ...legacyLocks.filter((l) => l !== physLock)] };
 }
 function readTopoExFor(repo) { return readTopoEx(ctxFor(repo).TOPO); }
 // P1 4차: bootstrap의 완료 트랜잭션이 init·render와 '같은 정본 잠금'을 쓰게 노출 — 잠금 안 단일 스냅샷으로
 // MAP 정합·큐·지문·run-state 재료를 결속(잠금 밖 재판독들이 서로 다른 topology 세대를 섞던 반례 차단).
 function withMapLock(repo, fn) {
-  const ctx = ctxFor(repo);
-  fs.mkdirSync(path.dirname(ctx.LOCK), { recursive: true });
-  return withFileLockStrict(ctx.LOCK, fn);
+  return withCtxLocks(ctxFor(repo), fn); // C-6: 신·구 이중 잠금 전수 취득(합타입 {ok, result|error} 불변)
 }
 function renderFor(repo) { return runCli(repo, "render") === 0; }
 // 반환 st: created | already-valid | already-v1 | already-invalid | already-unreadable | basis-changed |
@@ -442,4 +481,4 @@ function initTopologyForBootstrap(repo, opts) {
   return { st: "created", mapId: topo.mapId, topoFp: crypto.createHash("sha1").update(PM.canonicalSerialize(topo)).digest("hex"), mapMdFp: crypto.createHash("sha1").update(PM.renderMapMd(topo)).digest("hex") }; // 생성 지문(P1 5차: finish 시점 지문과 대조해야 사이 편집분을 자동물로 오귀속하지 않음
 }
 
-module.exports = { runCli, collectInventory, buildDraft, readTopoEx, readTopoExFor, renderFor, initTopologyForBootstrap, ctxFor, withMapLock, pipelineBarrier, PM };
+module.exports = { runCli, collectInventory, buildDraft, readTopoEx, readTopoExFor, renderFor, initTopologyForBootstrap, ctxFor, withMapLock, pipelineBarrier, physKeyOf, legacyLockKeysFor, PM }; // physKeyOf·legacyLockKeysFor: P3b C-6 패리티·잠금 테스트용 노출

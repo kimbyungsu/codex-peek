@@ -92,21 +92,21 @@ function readMapProjection(repoRoot, _testHooks) {
     if (cap.topoRaw.st !== "ok") topoParsed = { st: cap.topoRaw.st };
     else { try { const t9 = JSON.parse(cap.topoRaw.raw); topoParsed = t9 && typeof t9 === "object" && !Array.isArray(t9) ? { st: "ok", topo: t9 } : { st: "invalid" }; } catch { topoParsed = { st: "invalid" }; } } // 3차 blocker: JSON null·배열·원시값=invalid(권위 대조 전 안전 판정 — 예외 이탈 금지)
     const auth = MB.authorityStateFromCapture(cap.authority, topoParsed);
-    if (auth.st === "blocked") return { ok: false, source: "blocked", reason: auth.reason };
+    if (auth.st === "blocked") return { ok: false, source: "blocked", reason: auth.reason, reasonKey: auth.reasonKey }; // P3b 공통 (f)
     if (auth.st === "legacy") {
       const src = MB.legacySourceFor(repoRoot);
-      if (src && src.err) return { ok: false, source: "blocked", reason: src.err }; // 판독 실패≠부재
+      if (src && src.err) return { ok: false, source: "blocked", reason: src.err, reasonKey: "legacy-source-unreadable" }; // 판독 실패≠부재
       if (!src) return { ok: true, source: "none", mapId: null, authorityHash: null, decisionContextHash: null, nodes: [], edges: [], approved: [], degraded: [], decisions: [] };
       return { ok: true, source: "legacy", mapId: null, authorityHash: null, decisionContextHash: null, nodes: [], edges: [], approved: [], degraded: [], decisions: [] }; // legacy 데이터는 소비처가 기존 경로로(폴백 아님 — 위임)
     }
     const topo = topoParsed.topo;
-    { const ve = PM.validateTopology(topo); if (ve.length) return { ok: false, source: "blocked", reason: "topology 스키마 위반: " + ve[0] }; } // 2차 blocker①: 손상 정본이 '빈 정상 지도'로 승인되는 경로 차단
+    { const ve = PM.validateTopology(topo); if (ve.length) return { ok: false, source: "blocked", reason: "topology 스키마 위반: " + ve[0], reasonKey: "topology-invalid" }; } // 2차 blocker①: 손상 정본이 '빈 정상 지도'로 승인되는 경로 차단
     const idx = MP.decisionIndexFromCapture(cap.decisions, topo.mapId);
     const pol = MP.policyStateFromCapture(cap.policies, topo.mapId);
-    if (idx.st === "error") return { ok: false, source: "blocked", reason: "decision 색인 판독 실패" };
-    if (pol.st !== "ok") return { ok: false, source: "blocked", reason: "정책 frontier 판독 실패" };
+    if (idx.st === "error") return { ok: false, source: "blocked", reason: "decision 색인 판독 실패", reasonKey: "decision-index-unreadable" };
+    if (pol.st !== "ok") return { ok: false, source: "blocked", reason: "정책 frontier 판독 실패", reasonKey: "policy-frontier-unreadable" };
     const rb = MB.readBindingsFromRaw(cap.bindingsRaw, topo.mapId);
-    if (rb.st !== "ok") return { ok: false, source: "blocked", reason: "bindings.json " + rb.st }; // 1차 blocker③: 판독 실패가 빈 approved로 은폐 금지
+    if (rb.st !== "ok") return { ok: false, source: "blocked", reason: "bindings.json " + rb.st, reasonKey: "bindings-unreadable" }; // 1차 blocker③: 판독 실패가 빈 approved로 은폐 금지
     const { ah } = MP.authorityOf(PM.mapHashOf(topo), idx);
     const dch = PM.decisionContextHashOf(ah, pol.pfh);
     // effective 판정(evidence 실해시 포함) — 안전 판독기(경로 경계+심링크 거부) 경유·호출 내 메모
@@ -207,12 +207,47 @@ function deriveFreshness(repoRoot, projection) {
 }
 
 // ── P4-4 slice 동봉(scout-attach 표면) ──────────────────────────────────────────
+// blocked/error 사유의 ko/en 표(P3b 공통 (f) — reasonKey 번역·미지 키=원문 폴백).
+const ATTACH_REASON_KO = { "history-without-marker": "전환 이력 존재+표식 부재", "authority-unreadable": "전환 표식 판독 불가", "authority-format": "전환 표식 형식 위반", "authority-mapid-mismatch": "전환 표식 세대 불일치", "topology-unreadable": "지도 정본 판독 불가", "topology-invalid": "지도 정본 형식 위반", "receipt-unbound": "전환 영수증 부재/손상", "marker-fp-mismatch": "표식 지문 불일치", "legacy-source-unreadable": "확정층 판독 불가", "decision-index-unreadable": "결정 색인 판독 불가", "policy-frontier-unreadable": "정책 판독 불가", "bindings-unreadable": "결속 파일 판독 불가", "bindings-stale": "결속 파일 세대 불일치", lock: "잠금 경합", "authority-flap": "권위 세대 변동", "map-md-absent": "생성 뷰(MAP.md) 부재", "map-md-unreadable": "생성 뷰(MAP.md) 판독 불가", "entry-text-required": "승격 문구 누락", "active-wal": "적용 중 기록(WAL) 존재", "live-actionref-invalid": "승인 출처 표기 오류", "live-approvedat-invalid": "승인 시각 형식 오류", "live-upsert-failed": "승인 후보 기록 실패", "live-rejected": "승인 후보 기록 거부(상한/손상)", "candidate-lookup-failed": "후보 조회 실패", "binding-target-gone": "결속 대상 소멸(재결속 필요)", "no-evidence": "증거 경로 없음(code/test/config)", "resolved-without-evidence": "종결 제안과 증거 불일치(진단 필요)", "propose-conflict": "제안 충돌", "propose-failed": "제안 기록 실패", "trace-unreadable": "전환 흔적 판독 불가(권한 확인 필요)", "runtime-outdated": "MAP 런타임 낡음(node install.js 필요)" };
+const ATTACH_REASON_EN = { "history-without-marker": "cutover history exists but marker is missing", "authority-unreadable": "authority marker unreadable", "authority-format": "authority marker malformed", "authority-mapid-mismatch": "authority marker generation mismatch", "topology-unreadable": "topology unreadable", "topology-invalid": "topology schema violation", "receipt-unbound": "cutover receipt missing/corrupt", "marker-fp-mismatch": "marker fingerprint mismatch", "legacy-source-unreadable": "stable ledger unreadable", "decision-index-unreadable": "decision index unreadable", "policy-frontier-unreadable": "policy frontier unreadable", "bindings-unreadable": "bindings file unreadable", "bindings-stale": "bindings file from a previous generation", lock: "lock contention", "authority-flap": "authority generation flapped", "map-md-absent": "generated view (MAP.md) missing", "map-md-unreadable": "generated view (MAP.md) unreadable", "entry-text-required": "promotion text missing", "active-wal": "active write-ahead log present", "live-actionref-invalid": "approval action tag invalid", "live-approvedat-invalid": "approval timestamp invalid", "live-upsert-failed": "failed to store the approval candidate", "live-rejected": "approval candidate refused (cap/corruption)", "candidate-lookup-failed": "candidate lookup failed", "binding-target-gone": "binding target gone (rebind needed)", "no-evidence": "no evidence paths (code/test/config)", "resolved-without-evidence": "resolved proposal without target evidence (needs diagnosis)", "propose-conflict": "proposal conflict", "propose-failed": "failed to record the proposal", "trace-unreadable": "cutover trace unreadable (check permissions)", "runtime-outdated": "MAP runtime outdated (run node install.js)" };
+function attachReasonText(key, raw, en) { return (en ? ATTACH_REASON_EN : ATTACH_REASON_KO)[key] || raw || key || (en ? "unknown" : "미상"); }
+const reasonTextFor = attachReasonText; // P3b 공통 (f) — CLI·소비 표면 공용 번역기(단일 출처 재수출)
+const REASON_KEYS = Object.keys(ATTACH_REASON_KO); // 표 동기화 대조용(테스트가 소비 표면 로컬 표와 집합 대조)
+// ── 공통 (a) 원시 3상태 판독기(단일 출처 — 4표면 3카피 제거·구현검증 3차 #2): 판독 오류=unreadable(부재 축소 금지).
+// deps 주입=실행 반례용(EACCES 등 — 프로덕션은 기본 fs).
+function cutoverTraceStateOf(repo, deps) {
+  const st = (deps && deps.statSync) || fs.statSync;
+  const rd = (deps && deps.readdirSync) || fs.readdirSync;
+  const one = (p) => {
+    try {
+      const s = st(p);
+      if (s.isFile()) return "present";
+      if (s.isDirectory()) { try { return rd(p).length > 0 ? "present" : "absent"; } catch { return "unreadable"; } }
+      return "absent";
+    } catch (e) { return e && e.code === "ENOENT" ? "absent" : "unreadable"; }
+  };
+  const a = one(path.join(repo, "project-map", "authority.json"));
+  const b = one(path.join(repo, "project-map", "authority-history"));
+  if (a === "present" || b === "present") return "present";
+  if (a === "unreadable" || b === "unreadable") return "unreadable";
+  return "absent";
+}
 function buildMapAttach(ws, c, lang) {
   if (!ws || CL.normScoutMode(c) !== "on") return null; // 2트랙 게이트 최선행(출력 0·reader 미호출)
   let proj = null;
   try { proj = module.exports.readMapProjection(CL.resolveScoutRepo(ws, c).repo); } catch { proj = null; } // exports 경유 — 테스트가 호출 수를 실측(2트랙 미호출 증명)
-  if (!proj || proj.ok !== true || proj.source !== "v2") return CL.buildScoutAttach(ws, c, lang); // legacy/none/blocked/error/예외 전부 위임(바이트 동일)
-  return renderV2Slice(ws, c, lang, proj); // P3b cutover 후에만 도달(현재 authorityStateFor=legacy 고정)
+  // P3b 공통 (b) 개정(설계검증 2차 #2): legacy/none '판정 확인'시에만 기존 동봉 위임(바이트 동일).
+  // blocked·error(lock/flap)·예외=marker 세대 판정 불가/차단 — legacy 데이터 공급 금지·고지 attach(무차단).
+  if (proj && proj.ok === true && proj.source === "v2") return renderV2Slice(ws, c, lang, proj);
+  if (proj && proj.ok === true && (proj.source === "legacy" || proj.source === "none")) return CL.buildScoutAttach(ws, c, lang);
+  const en = lang === "en" || (lang !== "ko" && CL.loadLang() === "en");
+  const why = attachReasonText(proj && proj.reasonKey, proj && proj.reason, en);
+  return {
+    text: en
+      ? "[Project MAP] Unreadable right now (" + why + ") — no map slice attached this time (advisory only; not a verdict rule)."
+      : "[Project MAP] 지금은 판독 불가(" + why + ") — 이번에는 지도 조각을 동봉하지 않습니다(참고 정보일 뿐 판정 기준 아님).",
+    mapItems: [], couplings: [],
+  };
 }
 // v2 slice — envelope {text, mapItems, couplings} 승계(healthLine 별도 필드 금지 — text 포함)
 function renderV2Slice(ws, c, lang, proj) {
@@ -272,11 +307,13 @@ function gitChangedEx(repo) {
 function mapGateAssessFor(repoRoot) {
   let proj = null;
   try { proj = readMapProjection(repoRoot); } catch { proj = null; }
-  if (!proj) return gateResult("unknown", "reader 예외(무차단)");
-  if (proj.ok !== true) return gateResult("unknown", "판독 불가/" + proj.source + "(" + (proj.reason || "") + ") — 무차단"); // blocked·flap·lock 전부 fail-open
-  if (proj.source === "none" || proj.source === "legacy") return gateResult("no-map", "Project MAP projection 부재(" + proj.source + ")");
+  if (!proj) return gateResult("unknown", "reader 예외(무차단)", false);
+  // P3b(설계검증 2차 #6): blocked를 unknown으로 뭉개지 않고 별도 state — 소비처가 구분 소비(여전히 무차단).
+  if (proj.ok !== true && proj.source === "blocked") return gateResult("blocked", "권위 판독 차단(" + (proj.reason || "") + ") — 무차단", false, proj.reasonKey);
+  if (proj.ok !== true) return gateResult("unknown", "판독 불가/" + proj.source + "(" + (proj.reason || "") + ") — 무차단", false, proj.reasonKey); // flap·lock=fail-open
+  if (proj.source === "none" || proj.source === "legacy") return gateResult("no-map", "Project MAP projection 부재(" + proj.source + ")", false);
   const ch = module.exports.gitChangedEx(repoRoot); // exports 경유 — 절단 반례 테스트가 스텁 주입 가능
-  if (!ch.ok) return gateResult("unknown", "변경 파일 판독 실패(무차단)");
+  if (!ch.ok) return gateResult("unknown", "변경 파일 판독 실패(무차단)", true);
   const fresh = deriveFreshness(repoRoot, proj);
   const stateOf = new Map(fresh.map((f) => [f.id, f.state]));
   const agg = (ids) => { // 집계 우선순위: stale>unknown>fresh
@@ -284,7 +321,7 @@ function mapGateAssessFor(repoRoot) {
     for (const id of ids) { const s = stateOf.get(id) || "unknown"; if (s === "stale") return "stale"; if (s === "unknown") hasUnknown = true; }
     return hasUnknown ? "unknown" : "fresh";
   };
-  const withCap = (st9, why9) => (ch.truncated && st9 === "fresh" ? gateResult("unknown", "변경 목록 절단(전수 아님) — fresh 주장 금지·무차단") : gateResult(st9, why9 + (ch.truncated ? " · 변경 목록 절단(부분)" : ""))); // 1차 blocker⑤: 절단 시 false-fresh 차단
+  const withCap = (st9, why9) => (ch.truncated && st9 === "fresh" ? gateResult("unknown", "변경 목록 절단(전수 아님) — fresh 주장 금지·무차단", true) : gateResult(st9, why9 + (ch.truncated ? " · 변경 목록 절단(부분)" : ""), true)); // 1차 blocker⑤: 절단 시 false-fresh 차단
   if (ch.paths.length === 0) return withCap(agg([...proj.nodes.map((n) => n.id), ...proj.edges.map((e) => e.id)]), "clean — 관련 effective node·edge 전체 집계");
   // 변경 있음: seed node(anchor가 변경 파일과 일치)+인접 edge+evidence 직접 일치 edge
   const changed = new Set(ch.paths);
@@ -296,9 +333,9 @@ function mapGateAssessFor(repoRoot) {
     || (e.provenance && (evOf.get(e.provenance.decisionId) || []).some((x) => changed.has(x.ref))));
   return withCap(agg([...seedIds, ...edges.map((e) => e.id)]), "변경 연결 부분 집계(seed " + seed.length + "·edge " + edges.length + ")");
 }
-function gateResult(state, why) {
+function gateResult(state, why, active, reasonKey) {
   return {
-    prepared: true, active: false, state, why, // active:false — 활성화는 P3b 스윕(문구 세트만 준비)
+    prepared: true, active: active === true, state, why, ...(reasonKey ? { reasonKey } : {}), // P3b: active=v2 projection 확인 시에만 true(자기신고 고정값 폐기 — 설계검증 1차 #6)
     notice: {
       ko: state === "stale" ? "플랜 확정 전에 Project MAP부터 — 지도가 이 변경을 아직 모릅니다. `node scripts/scope-map.js <저장소> refresh` 후 계속하세요."
         : state === "no-map" ? "이 프로젝트에 Project MAP projection이 아직 없습니다 — `node scripts/scope-map.js <저장소> bootstrap`으로 시작할 수 있어요."
@@ -310,4 +347,4 @@ function gateResult(state, why) {
   };
 }
 
-module.exports = { readMapProjection, deriveFreshness, buildMapAttach, renderV2Slice, mapGateAssessFor, gitChangedEx, authorityGenTokenFor };
+module.exports = { readMapProjection, deriveFreshness, buildMapAttach, renderV2Slice, mapGateAssessFor, gitChangedEx, authorityGenTokenFor, reasonTextFor, REASON_KEYS, cutoverTraceStateOf };

@@ -223,11 +223,11 @@ console.log("[4] 게이트 준비(비활성) — 변환 규칙 단위 반례");
   // projection 부재(none)=no-map
   let g = RD.mapGateAssessFor(ws);
   ok(g.prepared === true && g.active === false && g.state === "no-map", "정상 판독+projection 부재=no-map(비활성 준비 함수)");
-  // blocked=unknown(무차단 fail-open)
+  // blocked=별도 state(여전히 무차단 — P3b 설계검증 2차 #6 개정: unknown으로 뭉개지 않고 소비처가 구분 소비)
   fs.mkdirSync(path.join(ws, "project-map", "authority-history"), { recursive: true });
   fs.writeFileSync(path.join(ws, "project-map", "authority-history", "x.json"), "{}", "utf8");
   g = RD.mapGateAssessFor(ws);
-  ok(g.state === "unknown", "blocked=unknown(무차단 — 판독 실패를 차단 상태로 바꾸지 않는다)");
+  ok(g.state === "blocked" && g.active === false && !!g.reasonKey, "blocked=별도 state+reasonKey(무차단 유지 — P3b: 판독 실패 사유를 숨기지 않는다)");
   fs.rmSync(path.join(ws, "project-map", "authority-history"), { recursive: true, force: true });
   // v2 구성(비-git ws — 변경 파일 판독 실패=unknown 무차단 증명)
   const nid = MR.readTopoExFor(ws).topo.nodes[0].id;

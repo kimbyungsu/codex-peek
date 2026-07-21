@@ -149,28 +149,30 @@ function captureAuthorityRaw(repo) {
 }
 function authorityStateFromCapture(cap, topoParsed) {
   const historyExists = cap.history ? (cap.history.st === "ok" ? cap.history.files.length > 0 : cap.history.st !== "absent") : false; // 판독 불가=이력 존재 간주(fail-closed)
+  // P3b 공통 (f): blocked 사유에 안정 키(reasonKey) 병행 — 소비 표면(웹뷰·CLI·attach·gate)이 ko/en 번역.
+  const blocked = (reasonKey, reason) => ({ st: "blocked", reasonKey, reason });
   if (cap.auth.st === "absent") {
     return historyExists
-      ? { st: "blocked", reason: "cutover 이력 존재+marker 부재(삭제로 전환 전 복귀 금지 — §B)" }
+      ? blocked("history-without-marker", "cutover 이력 존재+marker 부재(삭제로 전환 전 복귀 금지 — §B)")
       : { st: "legacy" };
   }
-  if (cap.auth.st !== "ok") return { st: "blocked", reason: "authority.json 손상/판독 불가" };
+  if (cap.auth.st !== "ok") return blocked("authority-unreadable", "authority.json 손상/판독 불가");
   let m = null;
   try { m = JSON.parse(cap.auth.raw); } catch { m = null; }
-  if (m === null) return { st: "blocked", reason: "authority.json 손상/판독 불가" };
+  if (m === null) return blocked("authority-unreadable", "authority.json 손상/판독 불가");
   if (!m || typeof m !== "object" || Object.keys(m).sort().join(",") !== AUTH_KEYS
     || m.schema !== "map-authority-v1" || m.cutover !== true
     || typeof m.mapId !== "string" || !UUID_RE.test(m.mapId)
     || typeof m.decisionRef !== "string" || !UUID_RE.test(m.decisionRef) || typeof m.ts !== "string" || !ISO_RE.test(m.ts)) {
-    return { st: "blocked", reason: "authority.json 형식 위반(정확 키 집합 — §B)" };
+    return blocked("authority-format", "authority.json 형식 위반(정확 키 집합 — §B)");
   }
-  if (!topoParsed || topoParsed.st !== "ok" || !topoParsed.topo || typeof topoParsed.topo !== "object") return { st: "blocked", reason: "topology 판독 불가(권위 대조 불능)" }; // 방어 심층(3차 blocker — 임의 JSON 값에도 예외 없이 blocked)
-  if (topoParsed.topo.mapId !== m.mapId) return { st: "blocked", reason: "authority.json mapId ≠ 현재 topology 세대" };
+  if (!topoParsed || topoParsed.st !== "ok" || !topoParsed.topo || typeof topoParsed.topo !== "object") return blocked("topology-unreadable", "topology 판독 불가(권위 대조 불능)"); // 방어 심층(3차 blocker — 임의 JSON 값에도 예외 없이 blocked)
+  if (topoParsed.topo.mapId !== m.mapId) return blocked("authority-mapid-mismatch", "authority.json mapId ≠ 현재 topology 세대");
   const rcFile = cap.history && cap.history.st === "ok" ? cap.history.files.find((f) => f.name === m.decisionRef + ".json") : null;
   let rc = null;
   if (rcFile && rcFile.st === "ok") { try { rc = JSON.parse(rcFile.raw); } catch { rc = null; } }
-  if (rc === null || !validReceipt(rc, m.decisionRef + ".json")) return { st: "blocked", reason: "cutover receipt 부재/손상/결속 위반(§B-1)" };
-  if (rc.authorityFileFp !== sha1(cap.auth.raw)) return { st: "blocked", reason: "marker 지문 ≠ receipt 기대 지문" };
+  if (rc === null || !validReceipt(rc, m.decisionRef + ".json")) return blocked("receipt-unbound", "cutover receipt 부재/손상/결속 위반(§B-1)");
+  if (rc.authorityFileFp !== sha1(cap.auth.raw)) return blocked("marker-fp-mismatch", "marker 지문 ≠ receipt 기대 지문");
   return { st: "v2", mapId: m.mapId };
 }
 function authorityStateFor(repo) {

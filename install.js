@@ -56,6 +56,7 @@ const BRIDGE_SCRIPTS = [
   "project-map.js", // P0.5: Project MAP 순수 코어(out/ 산출물 사본 — scripts/sync-map-core.js가 생성·훅 아님)
   "map-runtime.js", // P0.5: Project MAP 런타임(수집기·draft·CLI 본체 — 훅 아님)
   "map-bootstrap.js", "map-pipeline.js", "map-bindings.js", "map-adapters.js", // P1: 비차단 bootstrap(훅이 lazy require — 훅 아님·detach 자식 실행기)
+  "map-freshness.js", "map-reader.js", // P3b: P4 신설분 배포 편입 — map-adapters가 map-reader를 require하므로 누락 시 설치본 어댑터 전체 로드 불능(P3b 설계 A-3 실측 결함 봉합)
 ];
 
 // 우리가 settings.json에 심는 훅. event → {matcher, script}

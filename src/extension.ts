@@ -1031,6 +1031,43 @@ function bridgeLib(): any | null {
     return null;
   }
 }
+// P3b: MAP 어댑터(배포 사본) lazy require — bridgeLib와 동형 가드. 부재/손상=null(소비처가 공통 (a) 폴백).
+function mapAdapters(): any | null {
+  try { return require(path.join(BRIDGE_DIR, "map-adapters.js")); } catch { return null; }
+}
+function mapRuntimeLib(): any | null {
+  try { return require(path.join(BRIDGE_DIR, "map-runtime.js")); } catch { return null; }
+}
+// 공통 (a) 읽기 폴백의 원시 검사 — 전환 표식(marker)·이력(history)의 3상태(구현검증 2차 #3: 판독 오류를
+// '부재'로 축소하면 EACCES 등에서 legacy가 재공급됨 — present/unreadable=공급 금지·absent만 legacy).
+function cutoverTraceState(repo: string): "present" | "absent" | "unreadable" {
+  const st = (p: string): "present" | "absent" | "unreadable" => {
+    try {
+      const s = fs.statSync(p);
+      if (s.isFile()) return "present";
+      if (s.isDirectory()) { try { return fs.readdirSync(p).length > 0 ? "present" : "absent"; } catch { return "unreadable"; } }
+      return "absent";
+    } catch (e) { return (e as NodeJS.ErrnoException)?.code === "ENOENT" ? "absent" : "unreadable"; }
+  };
+  const a = st(path.join(repo, "project-map", "authority.json"));
+  const b = st(path.join(repo, "project-map", "authority-history"));
+  if (a === "present" || b === "present") return "present";
+  if (a === "unreadable" || b === "unreadable") return "unreadable";
+  return "absent";
+}
+// reasonKey → ko/en 번역(P3b 공통 (f) — 단일 출처=배포 map-reader.reasonTextFor·부재 시 로컬 축약표 폴백·미지 키=원문)
+function mapReasonText(key: string | undefined, raw: string | undefined): string {
+  try {
+    const rtx = require(path.join(BRIDGE_DIR, "map-reader.js")).reasonTextFor;
+    if (typeof rtx === "function") return rtx(key, raw, loadLangExt() === "en");
+  } catch { /* 구 런타임 — 아래 로컬 표 */ }
+  const ko: Record<string, string> = { "history-without-marker": "전환 이력 존재+표식 부재", "authority-unreadable": "전환 표식 판독 불가", "authority-format": "전환 표식 형식 위반", "authority-mapid-mismatch": "전환 표식 세대 불일치", "topology-unreadable": "지도 정본 판독 불가", "topology-invalid": "지도 정본 형식 위반", "receipt-unbound": "전환 영수증 부재/손상", "marker-fp-mismatch": "표식 지문 불일치", "legacy-source-unreadable": "확정층 판독 불가", "bindings-unreadable": "결속 파일 판독 불가", "bindings-stale": "결속 파일 세대 불일치", "map-md-absent": "생성 뷰(MAP.md) 부재", "map-md-unreadable": "생성 뷰(MAP.md) 판독 불가", "entry-text-required": "승격 문구 누락", "active-wal": "적용 중 기록(WAL) 존재", "live-actionref-invalid": "승인 출처 표기 오류", "live-approvedat-invalid": "승인 시각 형식 오류", "live-upsert-failed": "승인 후보 기록 실패", "live-rejected": "승인 후보 기록 거부(상한/손상)", "candidate-lookup-failed": "후보 조회 실패", "binding-target-gone": "결속 대상 소멸(재결속 필요)", "no-evidence": "증거 경로 없음(code/test/config)", "resolved-without-evidence": "종결 제안과 증거 불일치(진단 필요)", "propose-conflict": "제안 충돌", "propose-failed": "제안 기록 실패", "trace-unreadable": "전환 흔적 판독 불가(권한 확인 필요)", "decision-index-unreadable": "결정 색인 판독 불가", "policy-frontier-unreadable": "정책 판독 불가", lock: "잠금 경합", "authority-flap": "권위 세대 변동", "runtime-outdated": "MAP 런타임 낡음(node install.js 필요)" };
+  const en: Record<string, string> = { "history-without-marker": "cutover history exists but marker missing", "authority-unreadable": "authority marker unreadable", "authority-format": "authority marker malformed", "authority-mapid-mismatch": "authority marker generation mismatch", "topology-unreadable": "topology unreadable", "topology-invalid": "topology schema violation", "receipt-unbound": "cutover receipt missing/corrupt", "marker-fp-mismatch": "marker fingerprint mismatch", "legacy-source-unreadable": "stable ledger unreadable", "bindings-unreadable": "bindings file unreadable", "bindings-stale": "bindings file from a previous generation", "map-md-absent": "generated view (MAP.md) missing", "map-md-unreadable": "generated view (MAP.md) unreadable", "entry-text-required": "promotion text missing", "active-wal": "active write-ahead log present", "live-actionref-invalid": "approval action tag invalid", "live-approvedat-invalid": "approval timestamp invalid", "live-upsert-failed": "failed to store the approval candidate", "live-rejected": "approval candidate refused (cap/corruption)", "candidate-lookup-failed": "candidate lookup failed", "binding-target-gone": "binding target gone (rebind needed)", "no-evidence": "no evidence paths (code/test/config)", "resolved-without-evidence": "resolved proposal without target evidence (needs diagnosis)", "propose-conflict": "proposal conflict", "propose-failed": "failed to record the proposal", "trace-unreadable": "cutover trace unreadable (check permissions)", "decision-index-unreadable": "decision index unreadable", "policy-frontier-unreadable": "policy frontier unreadable", lock: "lock contention", "authority-flap": "authority generation flapped", "runtime-outdated": "MAP runtime outdated (run node install.js)" };
+  const enMode = loadLangExt() === "en";
+  const table = enMode ? en : ko;
+  // en 슬롯 폴백=키(영문 식별자) 우선 — raw(한국어 원문)를 절대 노출하지 않는다(구현검증 2차 #4)
+  return (key && table[key]) || (enMode ? (key || "unknown") : (raw || key || "미상"));
+}
 // P1: Project MAP 비차단 bootstrap 기동 — 배포 런타임(map-bootstrap.js) 경유. 2트랙 게이트는 모듈 내부
 // 최선행(scoutMode!=="on"→무동작)이라 여기선 존재·버전만 가드. 부재/구버전=정직한 degraded 고지(조용한 무시 금지).
 function trySpawnMapBootstrap(ws: string): void {
@@ -2691,6 +2728,8 @@ type MapLedgerView = {
   dropped: number;                 // 깨진/미지 이벤트 줄 수(침묵 삼킴 금지 — 정직 표기)
   mapRel: string; mapExists: boolean; mapApproved: number; mapTotalItems: number;
   mapText: string; mapTruncated: boolean;
+  // P3b B-1: 확정층 판독 출처·차단 사유 — legacy=기존 그대로 / v2=Project MAP(결속 원문) / blocked=사유만
+  mapSource: "legacy" | "v2" | "blocked"; mapBlockedReason: string | null; mapStale: number; mapRetired: number;
 };
 const MAP_LEDGER_TEXT_CAP = 8000;
 const LEDGER_ENTRIES_CAP_UI = 12;  // 카드에 보이는 항목 상한(전체는 이벤트 파일이 원본)
@@ -2740,7 +2779,29 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
     if (e.status === "disputed") counts.disputed++;
     if (e.status === "banned" || e.status === "superseded" || e.status === "tombstone") counts.excluded++;
   }
-  const mp = parseApprovedFromMap(mapMd);
+  // ── P3b B-1: 확정층 판독을 어댑터 경유로(권위 3분기) — legacy=기존 동치·v2=결속 원문·blocked=사유만.
+  // 어댑터 부재(구 런타임)=공통 (a) 읽기 폴백: 전환 흔적 존재=blocked 표시(legacy 데이터 공급 금지)·부재=기존 파싱.
+  const targetRepo = scoutTargetFor(ws).repo;
+  let mp: { approved: Array<{ text: string; date?: string; from?: string; stale?: boolean; retired?: boolean }>; totalItems: number } = { approved: [], totalItems: 0 };
+  let mapSource: "legacy" | "v2" | "blocked" = "legacy";
+  let mapBlockedReason: string | null = null;
+  let mapStale = 0, mapRetired = 0;
+  const MA = mapAdapters();
+  if (MA && typeof MA.approvedViewFor === "function") {
+    try {
+      const av = MA.approvedViewFor(targetRepo);
+      if (av.source === "blocked") { mapSource = "blocked"; mapBlockedReason = mapReasonText(av.reasonKey, av.reason); }
+      else {
+        mapSource = av.source;
+        mp = { approved: av.approved, totalItems: av.totalItems };
+        if (av.source === "v2") { mapStale = av.approved.filter((a: { stale?: boolean }) => a.stale).length; mapRetired = av.approved.filter((a: { retired?: boolean }) => a.retired).length; }
+      }
+    } catch { mapSource = "blocked"; mapBlockedReason = mapReasonText("runtime-outdated", undefined); }
+  } else if (cutoverTraceState(targetRepo) !== "absent") {
+    mapSource = "blocked"; mapBlockedReason = mapReasonText(cutoverTraceState(targetRepo) === "unreadable" ? "trace-unreadable" : "runtime-outdated", undefined); // 전환 흔적 존재/판독 불가+구 런타임 — legacy 공급 금지(공통 (a)·3상태 — 구현검증 2차 #3)
+  } else {
+    mp = parseApprovedFromMap(mapMd); // 구 런타임·전환 흔적 없음=기존 경로 그대로(무회귀)
+  }
   // 서랍 전환 고지 재료(2026-07-10 실사고: scoutRepo 설정 순간 카드가 대상 서랍으로 바뀌며 '신뢰 2→0' —
   // 사용자는 삭제로 오인. 실제로는 이 폴더 자체 서랍에 그대로 보존): 대상≠ws일 때만 이전 서랍을 요약.
   let prevDrawer: { entries: number; trusted: number; migrateCmd: string } | null = null;
@@ -2758,7 +2819,9 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
     entries, timeline, counts, impact, health: computeScoutHealth(derived), dropped: parsed.dropped, prevDrawer,
     mapRel: path.relative(ws, mapF).replace(/\\/g, "/"), mapExists,
     mapApproved: mp.approved.length, mapTotalItems: mp.totalItems,
-    mapText: mapMd.slice(0, MAP_LEDGER_TEXT_CAP), mapTruncated: mapMd.length > MAP_LEDGER_TEXT_CAP,
+    // P3b B-1: blocked=원문 미리보기 숨김+사유만(정본 §B — 진단 전용 표시는 P9 위임)
+    mapText: mapSource === "blocked" ? "" : mapMd.slice(0, MAP_LEDGER_TEXT_CAP), mapTruncated: mapSource !== "blocked" && mapMd.length > MAP_LEDGER_TEXT_CAP,
+    mapSource, mapBlockedReason, mapStale, mapRetired,
   };
 }
 function readMapLedger(ws: string | null): MapLedgerView | null {
@@ -3184,16 +3247,62 @@ class Dashboard {
           }
           if (act === "export") {
             if (item.lane !== "trusted") { vscode.window.showWarningMessage(tE("내보내기는 신뢰 차선(검증됨/고정) 항목만 가능해요.","Only trusted-lane entries (verified/pinned) can be exported.")); return; }
-            if (item.inMap) { vscode.window.showInformationMessage(tE("이미 확정 장부에 같은 문구가 있어요 — 중복 기록하지 않았습니다.","The stable ledger already contains this text — no duplicate written.")); return; }
-            vscode.window.showWarningMessage(tE(`이 지식을 확정 장부(${cur.mapRel})에 기록할까요? 저장소 파일이 변경됩니다.\n\n"${item.text}"`,`Export this knowledge to the stable ledger (${cur.mapRel})? A repository file will be modified.\n\n"${item.text}"`), { modal: true }, tE("내보내기","Export")).then((pick) => {
+            // ── P3b B-3: 대상 스냅샷 결속(모달 전 캡처 — 모달 중 정찰 대상 전환의 교차 프로젝트 혼입 차단)
+            const targetSnap = scoutTargetFor(ws).repo;
+            const MAx = mapAdapters();
+            const authSnap = (() => { try { return MAx ? require(path.join(BRIDGE_DIR, "map-bindings.js")).authorityStateFor(targetSnap) : null; } catch { return null; } })();
+            const isV2 = !!authSnap && authSnap.st === "v2";
+            if (authSnap && authSnap.st === "blocked") { vscode.window.showErrorMessage(tE("권위 판독 차단(" + mapReasonText(authSnap.reasonKey, authSnap.reason) + ") — 내보내기를 기록하지 않았습니다.","Authority blocked (" + mapReasonText(authSnap.reasonKey, authSnap.reason) + ") — nothing was exported.")); return; }
+            if (!authSnap && cutoverTraceState(targetSnap) !== "absent") { vscode.window.showErrorMessage(tE("전환 여부를 확인할 수 없거나 전환된 프로젝트인데 MAP 런타임이 낡았어요 — node install.js 후 창을 리로드하세요(아무것도 기록되지 않았습니다).","Cutover state is present/unreadable but the MAP runtime is outdated — run node install.js and reload (nothing was written).")); return; }
+            if (!isV2 && item.inMap) { vscode.window.showInformationMessage(tE("이미 확정 장부에 같은 문구가 있어요 — 중복 기록하지 않았습니다.","The stable ledger already contains this text — no duplicate written.")); return; }
+            const modalMsg = isV2
+              ? tE(`이 지식을 Project MAP(구조 지도)에 승격할까요? 결속 확인 또는 제안 생성이 진행됩니다.\n\n"${item.text}"`,`Promote this knowledge into the Project MAP? It will be bound or proposed.\n\n"${item.text}"`)
+              : tE(`이 지식을 확정 장부(${cur.mapRel})에 기록할까요? 저장소 파일이 변경됩니다.\n\n"${item.text}"`,`Export this knowledge to the stable ledger (${cur.mapRel})? A repository file will be modified.\n\n"${item.text}"`);
+            vscode.window.showWarningMessage(modalMsg, { modal: true }, tE("내보내기","Export")).then((pick) => {
               if (pick !== tE("내보내기","Export")) return;
+              // 대상 불변 재검사(B-3): 모달이 열린 사이 실효 대상이 바뀌면 기록 0
+              if (normWs(scoutTargetFor(ws).repo) !== normWs(targetSnap)) { vscode.window.showWarningMessage(tE("정찰 대상이 바뀌어 내보내기를 중단했어요(기록 0) — 다시 시도하세요.","Scout target changed during the dialog — export aborted (nothing written). Try again.")); return; }
               const now = new Date().toISOString();
-              const f = mapLedgerFile(ws);
-              let md = "";
-              try { md = fs.readFileSync(f, "utf8"); } catch { /* 없으면 공유 모듈이 뼈대 생성 */ }
-              try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { /* atomicWrite가 재시도 */ }
-              if (!atomicWrite(f, appendApproved(md, [{ text: item.text, from: item.from || tE("관측 장부","observed ledger") }], now))) { vscode.window.showErrorMessage(tE("확정 장부 기록에 실패했어요(파일 잠김/권한?) — 아무것도 변경되지 않았습니다.","Failed to write the stable ledger (locked/permission?) — nothing was changed.")); return; }
-              record("exported", tE("대시보드 내보내기 → ","dashboard export → ") + cur.mapRel,
+              const recordTo = (type: string, fromNote: string, failMsg?: string): boolean => { // 스냅샷 대상 고정판 record
+                const okA = lib.appendLedgerEvent(targetSnap, { ts: now, type, sig: item.sig, text: item.text, from: fromNote }) === true;
+                if (!okA) vscode.window.showErrorMessage(failMsg || tE("장부 기록에 실패했어요(권한/디스크?) — 아무것도 반영되지 않았습니다.","Failed to write the ledger (permission/disk?) — nothing was applied."));
+                return okA;
+              };
+              if (isV2) {
+                // 전환 후: promoteEntry(actionRef=export) — 합타입별 고지. exported 이벤트는 승격 도달 시에만.
+                let r: { st: string; patchId?: string; candidateFp?: string; reasonKey?: string; reason?: string } | null = null;
+                try { r = MAx.promoteEntry(targetSnap, { text: item.text, from: item.from || tE("관측 장부","observed ledger"), approvedAt: now, actionRef: "export" }); } catch { r = null; }
+                if (!r) { vscode.window.showErrorMessage(tE("Project MAP 승격 실행 실패(런타임 오류) — 아무것도 기록되지 않았습니다.","Project MAP promotion failed (runtime error) — nothing was written.")); return; }
+                if (r.st === "patch") { vscode.window.showInformationMessage(tE("Project MAP 제안 생성(" + String(r.patchId).slice(0, 8) + "…) — classify/apply로 반영됩니다.","Project MAP proposal created (" + String(r.patchId).slice(0, 8) + "…) — classify/apply will land it.")); recordTo("exported", tE("대시보드 내보내기 → Project MAP 제안","dashboard export → Project MAP proposal")); done(); return; }
+                if (r.st === "already-applied") { vscode.window.showInformationMessage(tE("이미 Project MAP에 반영된 지식이에요 — 관측 이력만 기록했습니다.","Already applied in the Project MAP — observed event recorded only.")); recordTo("exported", tE("대시보드 내보내기 → 이미 반영됨(Project MAP)","dashboard export → already applied (Project MAP)")); done(); return; } // 구현검증 1차 [보완]: 설계 B-3 — already-applied도 exported 이벤트 기록
+                if (r.st === "already-pending") { vscode.window.showInformationMessage(tE("같은 제안이 이미 대기 중이에요(" + String(r.patchId).slice(0, 8) + "…).","The same proposal is already pending (" + String(r.patchId).slice(0, 8) + "…).")); recordTo("exported", tE("대시보드 내보내기 → 기존 제안 합류","dashboard export → joined pending proposal")); done(); return; }
+                if (r.st === "needs-binding") { vscode.window.showInformationMessage(tE("Project MAP 결속이 필요해요 — 승인은 안전하게 보관됐고, `binding-confirm " + (r.candidateFp ? String(r.candidateFp).slice(0, 12) + "…" : "<legacy-scan>") + "` 확정 후 다시 내보내면 이어집니다.","Needs a Project MAP binding — your approval is durably stored; confirm with `binding-confirm " + (r.candidateFp ? String(r.candidateFp).slice(0, 12) + "…" : "<legacy-scan>") + "`, then export again to continue.")); done(); return; }
+                vscode.window.showErrorMessage(tE("승격 거부(" + mapReasonText(r.reasonKey, r.reason) + ") — 아무것도 기록되지 않았습니다.","Promotion rejected (" + mapReasonText(r.reasonKey, r.reason) + ") — nothing was written."));
+                return;
+              }
+              // legacy — 정본 잠금 안 재판정 후 기록(설계검증 1차 #1: cutover와 같은 잠금으로 직렬화)
+              const MRt = mapRuntimeLib();
+              if (!MRt || typeof MRt.withMapLock !== "function") { vscode.window.showErrorMessage(tE("MAP 런타임 판독 불가 — 기록을 거부했어요(node install.js 후 재시도).","MAP runtime unreadable — write refused (run node install.js, retry).")); return; }
+              const lkw = MRt.withMapLock(targetSnap, () => {
+                try {
+                  const a2 = require(path.join(BRIDGE_DIR, "map-bindings.js")).authorityStateFor(targetSnap);
+                  if (a2.st !== "legacy") return { wrote: false, why: String(a2.st) };
+                } catch { return { wrote: false, why: "authority-unreadable" }; }
+                // 스냅샷 대상에서 직접 계산(구현검증 1차 #2 — 잠금 취득 후 가변 ws 재해석 금지: 재검사 직후
+                // 대상 전환이 A 잠금 아래 B 파일을 쓰는 교차 프로젝트 TOCTOU 차단. mapLedgerFile과 동일 폴백 순서)
+                const f = (() => { for (const c9 of ["docs/MAP.md", "MAP.md"]) { const p9 = path.join(targetSnap, c9); if (fs.existsSync(p9)) return p9; } return path.join(targetSnap, "docs", "MAP.md"); })();
+                let md = "";
+                try { md = fs.readFileSync(f, "utf8"); } catch { /* 없으면 공유 모듈이 뼈대 생성 */ }
+                try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { /* atomicWrite가 재시도 */ }
+                if (!atomicWrite(f, appendApproved(md, [{ text: item.text, from: item.from || tE("관측 장부","observed ledger") }], now))) return { wrote: false, why: "write-failed" };
+                return { wrote: true };
+              });
+              if (!lkw.ok) { vscode.window.showErrorMessage(tE("정본 잠금 실패 — 기록을 거부했어요(다시 시도하세요).","Map lock failed — write refused (retry).")); return; }
+              if (!lkw.result.wrote) {
+                if (lkw.result.why === "write-failed") { vscode.window.showErrorMessage(tE("확정 장부 기록에 실패했어요(파일 잠김/권한?) — 아무것도 변경되지 않았습니다.","Failed to write the stable ledger (locked/permission?) — nothing was changed.")); return; }
+                vscode.window.showWarningMessage(tE("기록 직전 권위 상태가 바뀌어(전환 감지: " + lkw.result.why + ") 기록하지 않았어요 — 다시 내보내면 Project MAP 경로로 진행됩니다.","Authority changed right before write (cutover detected: " + lkw.result.why + ") — nothing written. Export again to go through the Project MAP path.")); return;
+              }
+              recordTo("exported", tE("대시보드 내보내기 → ","dashboard export → ") + cur.mapRel,
                 tE("확정 장부 파일에는 기록됐지만 관측 이벤트 적재는 실패했어요(권한/디스크?) — 재내보내기는 확정 장부 중복 대조가 막아줍니다.","Written to the stable ledger file, but recording the observed event failed (permission/disk?) — duplicate export is still prevented by the ledger text match."));
               done();
             });
@@ -5283,11 +5392,19 @@ class Dashboard {
           r.appendChild(w); det.appendChild(r);});
         card.appendChild(det);
       }
-      if(ml.mapExists){
+      if(ml.mapSource==="blocked"){
+        // P3b B-1: blocked=원문 숨김+사유만(빈 정상·'없음'으로 위장 금지)
+        const wB=document.createElement("div"); wB.style.cssText="font-size:11px;color:var(--vscode-editorWarning-foreground,#d9a441);margin-top:4px";
+        wB.textContent=T("⚠ 확정층 판독 불가: ","⚠ Stable layer unreadable: ")+(ml.mapBlockedReason||"");
+        card.appendChild(wB);
+      } else if(ml.mapExists){
         const det=document.createElement("details"); const s=document.createElement("summary");
-        s.textContent=T("확정 장부 열람 ("+ml.mapRel+" · 승인 "+ml.mapApproved+"건/전체 항목 "+ml.mapTotalItems+"건)","Open ledger ("+ml.mapRel+" · "+ml.mapApproved+" approved / "+ml.mapTotalItems+" items)");
+        const srcTag=ml.mapSource==="v2"?T(" · 출처 Project MAP"," · via Project MAP"):"";
+        const staleTag=ml.mapSource==="v2"&&(ml.mapStale||ml.mapRetired)?T(" · 낡음 "+ml.mapStale+"·퇴역 "+ml.mapRetired," · stale "+ml.mapStale+" · retired "+ml.mapRetired):"";
+        s.textContent=T("확정 장부 열람 ("+ml.mapRel+" · 승인 "+ml.mapApproved+"건/전체 항목 "+ml.mapTotalItems+"건"+srcTag+staleTag+")","Open ledger ("+ml.mapRel+" · "+ml.mapApproved+" approved / "+ml.mapTotalItems+" items"+srcTag+staleTag+")");
         const pre=document.createElement("pre"); pre.style.cssText="white-space:pre-wrap;max-height:260px;overflow:auto;font-size:11px";
-        pre.textContent=ml.mapText+(ml.mapTruncated?T("\\n… (길어서 접힘 — 전문은 파일)","\\n… (truncated — full text in the file)"):""); // ★백슬래시 두 겹 — 웹뷰 JS 개행 지뢰(webview-syntax.test.js 검출)
+        const frozenTag=ml.mapSource==="v2"?T("[동결(이관 소스) — 신규 승인은 Project MAP 경로]\\n","[frozen migration source — new approvals go through Project MAP]\\n"):"";
+        pre.textContent=frozenTag+ml.mapText+(ml.mapTruncated?T("\\n… (길어서 접힘 — 전문은 파일)","\\n… (truncated — full text in the file)"):""); // ★백슬래시 두 겹 — 웹뷰 JS 개행 지뢰(webview-syntax.test.js 검출)
         det.appendChild(s); det.appendChild(pre); card.appendChild(det);
       }
       box.appendChild(card);

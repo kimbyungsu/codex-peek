@@ -77,7 +77,7 @@ export type TokenHit = { token: string; files: string[]; truncated: boolean };
 // 관측 장부 선별분 — 구조만 요구(text 있는 항목 배열 3차선). 유도·선별은 out/ledger-events.js selectForPackage.
 export type LedgerSection = { trusted: { text: string }[]; reference: { text: string }[]; disputed: { text: string }[] };
 export type ScopePackage = {
-  meta: { repo: string; head: string; generatedBy: string; caps: typeof PKG_DEFAULTS; truncations: string[]; basisTs?: string; seedMissing?: string[]; seedHashes?: Record<string, string>; nonGitFiles?: { n: number; complete: boolean } }; // 기준선 필드는 수집 드라이버(scripts/scope-package.js)가 seed 확정 직후 주입 — 신선도 계약(2026-07-10·L1-C 지문/비-git 인벤토리 포함)
+  meta: { repo: string; head: string; generatedBy: string; caps: typeof PKG_DEFAULTS; truncations: string[]; basisTs?: string; seedMissing?: string[]; seedHashes?: Record<string, string>; nonGitFiles?: { n: number; complete: boolean }; mapContentBlocked?: string; mapContentBlockedKey?: string; mapContentBlockedEn?: string }; // 기준선 필드는 수집 드라이버(scripts/scope-package.js)가 seed 확정 직후 주입 — 신선도 계약(2026-07-10·L1-C 지문/비-git 인벤토리 포함). mapContentBlocked=P3b B-2(MAP 판독 차단 사유 — '지도 없음' 위장 금지)
   seeds: string[];                 // 지금 바뀌는 파일들(작업트리) — '무엇을 바꾸는가'
   diff: string;                    // 실제 변경 내용(상한 적용)
   tokenHits: TokenHit[];           // 바뀐 식별자를 참조하는 다른 파일들 — 파일채널·사본 결합의 결정론 후보
@@ -98,6 +98,9 @@ export function buildPackage(input: {
   tokenHits: TokenHit[]; droppedTokens?: string[]; coChange: ScopeSuggestion | null;
   tests: string[]; recentFailures: { ts?: string; kind?: string; detail?: string }[];
   mapContent: string | null;
+  mapContentBlocked?: string | null; // P3b B-2: MAP 판독 차단 사유 원문(blocked를 '지도 없음'으로 위장 금지)
+  mapContentBlockedKey?: string | null; // 안정 사유 키(소비처 번역 재료 — 구현검증 1차 #4)
+  mapContentBlockedEn?: string | null; // 영문 번역문(드라이버가 공용 번역기로 산출 — 이 모듈은 순수 유지·3차 #3)
   ledger?: LedgerSection | null; // 관측 장부 선별분(드라이버가 out/ledger-events.js로 유도·선별해 전달)
   sensitiveExcluded?: string[]; // redactSensitiveDiff가 제외한 민감 범주 파일(경로만) — 은폐 금지, 고지로 표기
   historyless?: boolean;        // 무이력(비-git) 모드 — '최근 수정 파일'을 변경으로 간주한 축소 꾸러미(전후 비교·함께변경 통계 없음)
@@ -114,7 +117,7 @@ export function buildPackage(input: {
   const failures = (input.recentFailures || []).slice(0, o.maxFailures);
   if ((input.recentFailures || []).length > o.maxFailures) truncations.push(`최근 실패 ${input.recentFailures.length}→${o.maxFailures}건`);
   return {
-    meta: { repo: input.repo, head: input.head, generatedBy: "scope-package v1 (deterministic)", caps: o as typeof PKG_DEFAULTS, truncations },
+    meta: { repo: input.repo, head: input.head, generatedBy: "scope-package v1 (deterministic)", caps: o as typeof PKG_DEFAULTS, truncations, ...(input.mapContentBlocked ? { mapContentBlocked: input.mapContentBlocked } : {}), ...(input.mapContentBlockedKey ? { mapContentBlockedKey: input.mapContentBlockedKey } : {}), ...(input.mapContentBlockedEn ? { mapContentBlockedEn: input.mapContentBlockedEn } : {}) },
     seeds: input.seeds,
     diff,
     tokenHits: input.tokenHits,
@@ -134,7 +137,7 @@ export function buildPackage(input: {
       ] : []),
       "처음 생기는 결합(이력·참조 어디에도 아직 없음)은 이 꾸러미에 없다",
       "실행해봐야 드러나는 동작(OS별 차이·타이밍·권한)은 담기지 않는다",
-      "의미적 연쇄(코드에 글자로 안 남는 규칙)는 MAP에 없으면 없다" + (input.mapContent ? "" : " — 이 저장소는 아직 MAP이 없다"),
+      "의미적 연쇄(코드에 글자로 안 남는 규칙)는 MAP에 없으면 없다" + (input.mapContent ? "" : input.mapContentBlocked ? " — 이 저장소의 MAP은 지금 판독 불가(" + (input.mapContentBlockedKey || "unknown") + ") — 없음과 다르다" : " — 이 저장소는 아직 MAP이 없다"), // 사유는 키만(언어 중립 — en 렌더에 한국어 원문 재노출 금지·구현검증 4차 #1)
       "grep은 문자열 일치만 — 리네임·간접 호출·동적 키는 놓칠 수 있다",
       "역참조 grep은 git이 추적(tracked)하는 파일만 본다 — 새(untracked) 파일의 내용과 그 안의 참조는 이 꾸러미에 빠질 수 있다(새 파일 중심 변경이면 과소보고 가능)",
       "테스트 발견은 node(package.json·tests 폴더 *.test.*)와 pytest(test_*.py 등) 관행만, 그것도 tests/·test/ 폴더 바로 아래만 본다 — 중첩 폴더(tests/unit/ 등)·그 외 생태계의 테스트는 못 볼 수 있다",
@@ -204,6 +207,9 @@ export function renderPackageMarkdown(p: ScopePackage, lang?: string): string {
   L.push(`\n## 5. 이 저장소의 테스트\n${p.tests.length ? p.tests.map((t) => `- ${t}`).join("\n") : "(발견된 테스트 없음)"}`);
   L.push(`\n## 6. 최근 검증 실패/미완 기록\n${p.recentFailures.length ? p.recentFailures.map((f) => `- [${f.ts || "?"}] ${f.kind || ""}: ${maskText((f.detail || "").slice(0, 160))}`).join("\n") : "(없음)"}`);
   if (p.map) L.push(`\n## 7. stable MAP(확정 지식층)\n${maskText(p.map)}`);
+  else if (p.meta.mapContentBlocked) L.push(lang === "en"
+    ? `\n## 7. stable MAP\n(Unreadable — ${p.meta.mapContentBlockedEn || p.meta.mapContentBlockedKey || "unknown"}. This is not 'no map' — it needs attention.)` // en=번역문(드라이버가 공용 번역기로 산출·부재=키 폴백 — 한국어 원문 비노출·P3b 공통 (f) 동결 계약·3차 #3)
+    : `\n## 7. stable MAP(확정 지식층)\n(판독 불가 — ${p.meta.mapContentBlockedKey ? p.meta.mapContentBlockedKey + ": " : ""}${p.meta.mapContentBlocked}. '지도 없음'이 아니라 확인이 필요한 상태다.)`); // P3b B-2: blocked를 blind spot으로 위장 금지
   if (p.ledger) {
     // 관측 장부 — 자동 축적된 결합 지식을 신뢰 등급별로 구분 동봉(confidence band 철학: 재료를 왜곡하지 않고 확신도만 라벨).
     const N = scoutLedgerNotes(lang);

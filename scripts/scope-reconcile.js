@@ -193,17 +193,59 @@ for (const n of nums) {
 
 const now = new Date().toISOString();
 if (cmd === "approve") {
-  const f = mapFile();
-  fs.mkdirSync(path.dirname(f), { recursive: true });
-  let cur = "";
-  try { cur = fs.readFileSync(f, "utf8"); } catch { /* 없으면 공유 모듈이 뼈대 생성 */ }
-  const next = appendApproved(cur, picked, now);
+  // ── P3b B-4: 권위 분기 — v2=promoteEntry(항목별 독립) / legacy=정본 잠금 안 재판정 후 기존 기록 /
+  // blocked=거부. 어댑터·런타임 require 실패=기록 거부(공통 (a) fail-closed — 검사-후-쓰기 폴백 없음).
+  let MA = null, MRt = null, MBd = null;
+  try {
+    MA = require(path.join(__dirname, "..", "bridge", "map-adapters.js"));
+    MRt = require(path.join(__dirname, "..", "bridge", "map-runtime.js"));
+    MBd = require(path.join(__dirname, "..", "bridge", "map-bindings.js"));
+  } catch { MA = null; }
+  if (!MA || !MRt || !MBd || typeof MA.promoteEntry !== "function" || typeof MRt.withMapLock !== "function" || typeof MBd.authorityStateFor !== "function") {
+    console.error(tB("MAP 런타임 판독 불가 — 확정층 기록을 거부한다(node install.js 후 재시도)","MAP runtime unreadable — refusing to write the stable layer (run node install.js, then retry)")); process.exit(1);
+  }
+  const auth = MBd.authorityStateFor(repo);
+  if (auth.st === "blocked") { console.error(tB("권위 판독 차단(" + (auth.reasonKey || "") + ": " + auth.reason + ") — 승인 기록 거부(상태 무변경)","Authority blocked (" + (auth.reasonKey || "") + ": " + auth.reason + ") — refusing to record approvals (state unchanged)")); process.exit(1); }
+  if (auth.st === "v2") {
+    // 전환 후: 항목별 promoteEntry(actionRef=approve) — 부분 실패는 항목별 보고(legacy도 전체 원자성 없었음).
+    let allOk = true;
+    for (const p of picked) {
+      const r = MA.promoteEntry(repo, { text: p.text, from: p.from || "", approvedAt: now, actionRef: "approve" });
+      if (r.st === "patch") { st.approved.push({ sig: p.sig, ts: now, text: p.text, from: p.from }); console.log(tB("승인 → Project MAP 제안 생성(" + String(r.patchId).slice(0, 8) + "…): ","Approved → Project MAP proposal (" + String(r.patchId).slice(0, 8) + "…): ") + p.text); }
+      else if (r.st === "already-applied") { st.approved.push({ sig: p.sig, ts: now, text: p.text, from: p.from }); console.log(tB("이미 Project MAP에 반영됨: ","Already applied in Project MAP: ") + p.text); }
+      else if (r.st === "already-pending") { st.approved.push({ sig: p.sig, ts: now, text: p.text, from: p.from }); console.log(tB("같은 제안이 이미 대기 중(" + String(r.patchId).slice(0, 8) + "…): ","Same proposal already pending (" + String(r.patchId).slice(0, 8) + "…): ") + p.text); }
+      else if (r.st === "needs-binding") { allOk = false; console.log(tB("결속 필요(미승격 — 목록에 남음): `binding-confirm " + (r.candidateFp || "<legacy-scan 필요>") + "` 후 재승인: ","Needs binding (not promoted — stays listed): run `binding-confirm " + (r.candidateFp || "<legacy-scan needed>") + "`, then approve again: ") + p.text); }
+      else { // en 슬롯=키 번역(한국어 원문 비노출 — 구현검증 1차 #5·공통 (f). 번역기 부재=키만)
+        allOk = false;
+        const rtx = (() => { try { return require(path.join(__dirname, "..", "bridge", "map-reader.js")).reasonTextFor; } catch { return null; } })();
+        const enWhy = rtx ? rtx(r.reasonKey, null, true) : (r.reasonKey || String(r.st));
+        console.error(tB("거부(" + (r.reasonKey ? r.reasonKey + ": " : "") + (r.reason || r.st) + "): ","Rejected (" + (r.reasonKey ? r.reasonKey + ": " : "") + enWhy + "): ") + p.text);
+      }
+    }
+    if (!saveState(st)) { console.error(tB("⚠ 승인 상태 저장 실패 — 재목록 방지는 Project MAP 중복 대조가 대신 막아주지만, 권한/디스크를 확인하라","Warning: saving approval state failed — re-listing is still prevented by Project MAP dedup; check permission/disk")); process.exit(1); }
+    process.exit(allOk ? 0 : 1);
+  }
+  // legacy — 정본 잠금 안 재판정 후 기록(설계검증 1차 #1: marker 활성과 legacy 쓰기가 같은 잠금으로 직렬화)
+  const lkw = MRt.withMapLock(repo, () => {
+    const a2 = MBd.authorityStateFor(repo);
+    if (a2.st !== "legacy") return { wrote: false, why: a2.st }; // 그 사이 전환됨 — 기록 0(사전 차단)
+    const f = mapFile();
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    let cur = "";
+    try { cur = fs.readFileSync(f, "utf8"); } catch { /* 없으면 공유 모듈이 뼈대 생성 */ }
+    if (!atomicWrite(f, appendApproved(cur, picked, now))) return { wrote: false, why: "write-failed" };
+    return { wrote: true, f };
+  });
+  if (!lkw.ok) { console.error(tB("정본 잠금 실패 — 기록 거부(다시 시도하라): " + lkw.error,"Map lock failed — write refused (retry): " + lkw.error)); process.exit(1); }
+  if (!lkw.result.wrote) {
+    if (lkw.result.why === "write-failed") { console.error(tB("확정층 기록 실패 — 상태 미변경(다시 시도하라)","Failed to write the stable layer — state unchanged (retry)")); process.exit(1); }
+    console.error(tB("기록 직전 권위 상태 변경(" + lkw.result.why + " — cutover 감지) — 기록 0. 다시 실행하면 Project MAP 경로로 승격된다.","Authority changed right before write (" + lkw.result.why + " — cutover detected) — nothing written. Re-run to promote via Project MAP.")); process.exit(1);
+  }
   for (const p of picked) {
     st.approved.push({ sig: p.sig, ts: now, text: p.text, from: p.from }); // text·from 보존 — 대시보드 이력이 원문을 보여줌
     console.log(tB("승인 → 확정층: ","Approved → stable layer: ") + p.text);
   }
-  if (!atomicWrite(f, next)) { console.error(tB("확정층 기록 실패 — 상태 미변경(다시 시도하라)","Failed to write the stable layer — state unchanged (retry)")); process.exit(1); }
-  console.log(tB("확정층 기록: ","Stable layer written: ") + f);
+  console.log(tB("확정층 기록: ","Stable layer written: ") + lkw.result.f);
   if (!saveState(st)) { console.error(tB("⚠ 확정층에는 기록됐으나 승인 상태 저장 실패 — 재목록 방지는 확정층 문구 대조가 대신 막아주지만, 권한/디스크를 확인하라","Warning: written to the stable layer but saving approval state failed — re-listing is still prevented by the layer text match; check permission/disk")); process.exit(1); }
 } else {
   for (const p of picked) {
