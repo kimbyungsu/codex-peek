@@ -57,7 +57,9 @@
 | `map-enrich-queue/<키>.json` | 지도 의미 보강 '대기표'(지도 세대 id·기준 지문 — 소비는 후속 단계·LLM 호출은 이 파일이 아니라 소비 시점에) |
 | `map-bindings/<식별 키>/<지도 세대>/` (candidates·live-candidates·card-refs) | **옛 확정 장부↔구조 지도 대응표(P3a)의 로컬 작업 서랍** — 옛 장부 훑기(legacy-scan)는 저장소를 읽기만 하고 후보를 여기에만 적습니다. 새 승인 대기(live-candidates)·보호 딱지(card-refs)도 로컬. 미처리 승인은 자동 삭제하지 않고(상한 도달 시 신규 접수만 보류) 종결분만 정리. 전부 하네스 홈 안(레포 무오염)·수동 명령 전용·LLM 호출 0·외부 전송 0 |
 | `map-pipeline/<식별 키>/<지도 세대>/` (pending·wal·wal-complete·wal-aborted·markers·snapshots) | **Project MAP 수정 파이프라인(P2)의 로컬 작업 서랍** — 지도 수정 '제안서'(pending), 적용 중단 대비 복구 장부(wal — 적용 직전 스냅샷을 참조로 결속), 완료 영수증(wal-complete), 산출물 표식(markers), 적용 직전 스냅샷. 완료 영수증·표식은 보존 상한(기본 200건·CODEX_BRIDGE_MAP_GC_KEEP로 조정) 안에서 정리 명령이 오래된 순으로 비웁니다. 전부 하네스 홈 안(레포 무오염)·**수동 명령으로만 생성**(자동 적용은 후속 단계 전환 전까지 없음)·LLM 호출 0·외부 전송 0 |
-| `<대상 저장소>/project-map/bindings.json`·`authority-history/` | **옛 장부↔지도 대응 확정본(P3a — binding-confirm을 직접 실행할 때만 생성)**과 **전환 영수증 서랍(후속 단계가 기록·P3a는 읽기만)**. ⚠대상 저장소 안 파일: 커밋·푸시하면 git 원격으로 전달됨(하네스 자체 전송 없음) |
+| `<대상 저장소>/project-map/bindings.json`·`authority-history/` | **옛 장부↔지도 대응 확정본(P3a — binding-confirm을 직접 실행할 때만 생성)**과 **전환 영수증 서랍(P3b `scope-map cutover` 수동 명령이 기록)**. ⚠대상 저장소 안 파일: 커밋·푸시하면 git 원격으로 전달됨(하네스 자체 전송 없음) |
+| `<대상 저장소>/project-map/authority.json` | **권위 전환 표식(P3b cutover 시에만 — 수동 명령 산물)**: 이 저장소의 구조 지식 정본이 Project MAP으로 전환됐음을 선언하는 1파일. ⚠대상 저장소 안 파일: 커밋·푸시하면 git 원격으로 전달됨(하네스 자체 전송 없음) |
+| `map-cutover-snapshots/` | **전환 직전 스냅샷(하네스 홈 — 로컬 진단·수동 복구 재료)**: cutover 실행 시 topology·확정층·대응표 원문+동결 기준 지문을 보관. **TTL 자동 삭제 비대상**(일생 소수 회 생성·롤백 재료 — 자동 삭제가 재료를 없앰). 외부 전송 없음 |
 | `<대상 저장소>/project-map/decisions/`·`policies/` | **적용된 지도 수정의 결정 기록**(decision별 독립 파일)과 **사용자 의도 정책**(불변 버전 파일 — 생성 경로는 후속 단계). ⚠대상 저장소 안 파일: 커밋·푸시하면 git 원격으로 전달됨(하네스 자체 전송 없음). P2에서는 수동 명령으로만 생성 |
 | `phase.json` | 지금 검증이 어느 단계인지(라이브 진행 표시용) |
 | `verify-attempts/<세션>.json` | 검증 재시도 횟수 |

@@ -36,7 +36,7 @@ Connect **Claude Code or a dedicated Codex session** (implementation) to **a sep
   ① change sensing (files you're editing + hints of files that used to change with them; formerly "scope ledger") ⚙ no LLM ·
   ② impact map (a scout AI previews how far the change reaches; formerly "impact-map board") ⚡ LLM call (default scout (Claude) = no separate billing, within the usage you already have / DeepSeek scout with a key) ·
   ③ field journal (right/wrong accrues automatically through verification; formerly "observed/MAP ledger") ⚙ no extra LLM ·
-  ④ field manual (stamp items into repo docs, docs/MAP.md, only when you want — ①–③ keep running without it) 👤 optional.
+  ④ field manual (stamp items into repo docs, docs/MAP.md, only when you want — ①–③ keep running without it. **After cutover (P3b — a manual command)**: the old document is frozen with a migration-source banner and new approvals go through Project MAP only — the "we never touch your docs" promise describes the pre-cutover mode, and cutover happens only when you run it yourself) 👤 optional.
   Accrual/promotion/demotion are fully automatic; manual controls (pin/ban/export) are optional overrides. The status-bar hover always shows whether an LLM call is running right now.
 - Codex session files are **read-only** (single exception: the "permanently delete" button you explicitly confirm).
 - `settings.json` is only modified after your consent, with a timestamped backup; other hooks are preserved.

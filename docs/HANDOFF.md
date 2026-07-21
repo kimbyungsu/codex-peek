@@ -2,7 +2,22 @@
 
 > 이 문서 하나로 이어갈 수 있게 쓰였다. 상세 설계 원본(SCOUT-TRACK.md·SCOPE-LEDGER.md)은 **의도적으로 레포 밖 로컬 문서**라
 > 다른 환경에는 없다 — 그래서 이 파일이 그 요지를 포함한다. ⚠ **실 API 키·토큰은 어떤 파일·픽스처·예시에도 절대 넣지 말 것.**
-> 마지막 갱신: 2026-07-21 (버전 0.1.86 불변 · 이 갱신을 포함해 push된 main 기준). **이번 push 묶음(2커밋) 요지 —
+> 마지막 갱신: 2026-07-21 (버전 0.1.86 불변). **★P3b 증분 2 완결(로컬 커밋 — push는 사용자 지시 대기): P3b 전체 완료 — 다음 착수=P5(provider 공통 인터페이스)**:
+> **증분 2 — cutover 명령 본체**(구현검증 4왕복[blocker 7 전부 수용]·tests/p3b-cutover 70단언): bridge/map-cutover.js —
+> C-1 게이트(scoutMode 최선행·권위 분기[v2=멱등+tail 보충/blocked=재개 판별(손상 receipt 1개라도=거부·공용
+> resumeEligibilityFor)/legacy=신규]·manifest 집합+전 ready·topology 유효·WAL 부재·미이관 N='entryFp 다중집합
+> 수량 소비'(--confirm-unmigrated 정확 수)·스냅샷+decisionId 사전발급·배포 세대 19파일 바이트 대조[레포 실행
+> 전제·설치본 실행=fail-closed]·quiescence 지속 약속 문구 ko/en) → C-2 잠금 안 전부 재검사+스냅샷 바이트
+> 불변→frozen-ledger-fp 'receipt 직전' 내구 기록→receipt→marker→read-back→C-5 배너(같은 임계구역·실패=경고) →
+> C-3 재개(승인 조건만 생략 — 잠금 안 자격 전수 재판별+read-back+배너 완결까지 임계구역·보고 decisionRef=잠금
+> 안 재판독본·확정층 소실/손상 기준선=조건 없이 경보[침묵 성공 3연속 반례 소멸]) → B-1 frozen probe(경보 축=
+> 동결 지문 대조[추가·재기록·삭제·동수 치환 전수]·미이관=정보 배지·기준선 불명=경고색) 대시보드 배선 →
+> D 문서(PRIVACY 3행·README ko/en '확정 교범' 전환 한정) → runCli cutover 분기·_testHooks 주입점 2개
+> (afterSnapshot·afterEligibility — TOCTOU·경합 실행 반례·프로덕션 분기 없음).
+> ▶**다음 착수=P5**(provider 공통 인터페이스: runScout→typed ScoutResult·self typed adapter[1-26]·deepseek
+> probe[1-8]) → P6(Codex Scout 독립 세션) → P7(모드 UI — 경제형/정밀형/자동형·readiness 행렬 1-34) → P8(라우터).
+> ⚠ cutover는 구현만 완료 — 실제 전환 실행은 사용자 결정(수동 명령·informed 동의 게이트).
+> ── (이전 2026-07-21 push 묶음(2커밋) 요지 —
 > P3b cutover 설계 동결+증분 1(6표면 재배선) 완료: 다음 착수=P3b 증분 2(cutover 명령 본체)**:
 > ①**P3b 상세 설계 동결**(docs/MAP-P3B-DESIGN.md — 정본 §5 P3b·1-22·1-29·1-30·P3A §B/§E의 위임 이행.
 > Codex 설계검증 8왕복[실패 7회→통과]·blocker 누적 25건 전부 수용/반박 처리). 핵심 계약: 증분 1=재배선

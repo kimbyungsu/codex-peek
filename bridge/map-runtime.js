@@ -244,10 +244,19 @@ const V1_HINT_EN = "v1 topology detected — convert with `migrate` (one-shot, d
 // CLI 본체 — 종료 코드를 반환(process.exit는 래퍼 몫: 테스트·재사용성).
 function runCli(repoArg, cmdArg, extraArgs) {
   const cmd = cmdArg || "status";
-  if (!repoArg) { console.error(tB("사용: node scripts/scope-map.js <repo> [inventory|init|status|render|migrate]", "Usage: node scripts/scope-map.js <repo> [inventory|init|status|render|migrate]")); return 2; }
+  if (!repoArg) { console.error(tB("사용: node scripts/scope-map.js <repo> [inventory|init|status|render|migrate|cutover --confirm-windows-reloaded [--confirm-unmigrated <N>]]", "Usage: node scripts/scope-map.js <repo> [inventory|init|status|render|migrate|cutover --confirm-windows-reloaded [--confirm-unmigrated <N>]]")); return 2; }
   const repo = path.resolve(repoArg);
   const ctx = ctxFor(repo); // C-6(P3b): 잠금 구성의 단일 출처 — runCli 자체 LOCK 조립 폐기(별칭 이원 잠금 반례 봉합)
 
+  if (cmd === "cutover") { // P3b 증분 2 — 본체는 map-cutover.js(lazy require: 비-cutover 경로 비용 0)
+    const ex = extraArgs || [];
+    const idx = ex.indexOf("--confirm-unmigrated");
+    const rawN = idx >= 0 ? ex[idx + 1] : null;
+    const nVal = rawN !== null && /^\d+$/.test(String(rawN)) ? parseInt(rawN, 10) : null;
+    if (idx >= 0 && nVal === null) { console.error(tB("--confirm-unmigrated 는 정확한 수(정수)를 요구한다", "--confirm-unmigrated requires an exact integer")); return 2; }
+    const CO = require(path.join(__dirname, "map-cutover.js"));
+    return CO.runCutover(repo, { confirmWindowsReloaded: ex.includes("--confirm-windows-reloaded"), confirmUnmigrated: nVal });
+  }
   if (cmd === "inventory") {
     const { importsByDir, cov } = collectInventory(repo);
     console.log(tB(`파일 ${cov.filesSeen}개(순회 ${cov.scanComplete ? "완료" : "미완"}) · regex 스캔 ${cov.semantic.scannedSupportedFiles}건(js/ts — 파싱 보장 아님) · 미지원 ${cov.semantic.unsupportedFiles} · 동적 미상 ${cov.semantic.dynamicUnknowns} · 외부/별칭 ${cov.semantic.externalOrAliasSkipped}`, `${cov.filesSeen} file(s) (walk ${cov.scanComplete ? "complete" : "incomplete"}) · regex-scanned ${cov.semantic.scannedSupportedFiles} (js/ts — not full parsing) · unsupported ${cov.semantic.unsupportedFiles} · dynamic unknowns ${cov.semantic.dynamicUnknowns} · external/alias ${cov.semantic.externalOrAliasSkipped}`));

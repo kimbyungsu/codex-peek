@@ -2730,6 +2730,7 @@ type MapLedgerView = {
   mapText: string; mapTruncated: boolean;
   // P3b B-1: 확정층 판독 출처·차단 사유 — legacy=기존 그대로 / v2=Project MAP(결속 원문) / blocked=사유만
   mapSource: "legacy" | "v2" | "blocked"; mapBlockedReason: string | null; mapStale: number; mapRetired: number;
+  mapFrozenProbe: { state: string; unmigratedTotal: number | null } | null; // P3b B-1 — v2에서만(경보 축=동결 지문·배지 축=미이관 수)
 };
 const MAP_LEDGER_TEXT_CAP = 8000;
 const LEDGER_ENTRIES_CAP_UI = 12;  // 카드에 보이는 항목 상한(전체는 이벤트 파일이 원본)
@@ -2786,6 +2787,7 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
   let mapSource: "legacy" | "v2" | "blocked" = "legacy";
   let mapBlockedReason: string | null = null;
   let mapStale = 0, mapRetired = 0;
+  let mapFrozenProbe: { state: string; unmigratedTotal: number | null } | null = null;
   const MA = mapAdapters();
   if (MA && typeof MA.approvedViewFor === "function") {
     try {
@@ -2794,7 +2796,9 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
       else {
         mapSource = av.source;
         mp = { approved: av.approved, totalItems: av.totalItems };
-        if (av.source === "v2") { mapStale = av.approved.filter((a: { stale?: boolean }) => a.stale).length; mapRetired = av.approved.filter((a: { retired?: boolean }) => a.retired).length; }
+        if (av.source === "v2") { mapStale = av.approved.filter((a: { stale?: boolean }) => a.stale).length; mapRetired = av.approved.filter((a: { retired?: boolean }) => a.retired).length;
+          try { const CO = require(path.join(BRIDGE_DIR, "map-cutover.js")); mapFrozenProbe = typeof CO.frozenLedgerProbeFor === "function" ? CO.frozenLedgerProbeFor(targetRepo) : { state: "baseline-unknown", unmigratedTotal: null }; } // 구 런타임/부재=기준선 불명(위장 금지)
+          catch { mapFrozenProbe = { state: "baseline-unknown", unmigratedTotal: null }; } }
       }
     } catch { mapSource = "blocked"; mapBlockedReason = mapReasonText("runtime-outdated", undefined); }
   } else if (cutoverTraceState(targetRepo) !== "absent") {
@@ -2821,7 +2825,7 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
     mapApproved: mp.approved.length, mapTotalItems: mp.totalItems,
     // P3b B-1: blocked=원문 미리보기 숨김+사유만(정본 §B — 진단 전용 표시는 P9 위임)
     mapText: mapSource === "blocked" ? "" : mapMd.slice(0, MAP_LEDGER_TEXT_CAP), mapTruncated: mapSource !== "blocked" && mapMd.length > MAP_LEDGER_TEXT_CAP,
-    mapSource, mapBlockedReason, mapStale, mapRetired,
+    mapSource, mapBlockedReason, mapStale, mapRetired, mapFrozenProbe,
   };
 }
 function readMapLedger(ws: string | null): MapLedgerView | null {
@@ -5391,6 +5395,14 @@ class Dashboard {
           w.textContent=(e.ts?new Date(e.ts).toLocaleString():"?")+(e.from?" · "+e.from:"");
           r.appendChild(w); det.appendChild(r);});
         card.appendChild(det);
+      }
+      if(ml.mapSource==="v2" && ml.mapFrozenProbe){ // P3b B-1 — 동결 감시(경보 축=지문·정보 배지=미이관)
+        const pr=ml.mapFrozenProbe;
+        const ln=document.createElement("div");
+        if(pr.state==="violated"){ ln.className="integrity"; ln.textContent=T("🚨 동결 위반: 이관 소스(구 확정 교범)가 전환 후 변경됨 — 리로드 전 창·구세대 도구의 쓰기로 의심. 변경분은 Project MAP 경로로 다시 승인해야 반영돼요.","🚨 Freeze violation: the migration source (old ledger) changed after cutover — likely a pre-reload window or old tooling. Re-approve changes through Project MAP."); }
+        else if(pr.state==="baseline-unknown"){ ln.style.cssText="font-size:11px;color:var(--vscode-editorWarning-foreground,#d9a441)"; ln.textContent=T("⚠ 동결 기준선 불명 — 감시 판정 불가(위장 없이 표시)","⚠ Freeze baseline unknown — probe cannot judge (shown honestly)"); } // 1차 [보완]: 경고 수준 표시(muted 강등 금지)
+        else if(pr.state==="ok"){ ln.className="muted"; ln.textContent=T("동결 감시: 정상(이관 소스 무변경)","Freeze probe: ok (migration source unchanged)"); }
+        if(ln.textContent){ if(typeof pr.unmigratedTotal==="number" && pr.unmigratedTotal>0) ln.textContent+=T(" · 미표현 "+pr.unmigratedTotal+"행(정보 — v2 뷰 밖·증거층 보존)"," · "+pr.unmigratedTotal+" unmigrated row(s) (info — outside v2 view, kept in evidence layer)"); card.appendChild(ln); }
       }
       if(ml.mapSource==="blocked"){
         // P3b B-1: blocked=원문 숨김+사유만(빈 정상·'없음'으로 위장 금지)
