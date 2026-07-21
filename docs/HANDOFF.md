@@ -5,7 +5,7 @@
 > 마지막 갱신: 2026-07-22 (버전 0.1.86 불변). **★C-7 자동화 계층 완결(로컬 커밋 — push는 사용자 지시 대기)**:
 > 사용자 지시(2026-07-21 "MAP은 수동을 없애려는 설계인데 전환에 또 수동 명령은 과보수") → 정본 C-7 절 신설+구현.
 > 원칙: 동의할 내용 없으면(legacy AND 미이관 0 AND 안전 조건 전부) 자동·판단 필요(미이관 N>0)만 원클릭 카드.
-> 검증 9왕복(blocker 누적 16 전부 수용·최종 통과(보완)): ①자동 실행 2지점(bootstrap 완료 직후·대시보드 legacy
+> 검증 9왕복(blocker 누적 19 전부 수용[verdicts 실측 5+5+2+1+1+2+1+2]·최종 통과(보완)): ①자동 실행 2지점(bootstrap 완료 직후·대시보드 legacy
 > 관측)+auto 침묵(exit 0/1/3)·blocked(재개)는 auto 범위 밖 ②deploy-manifest.json(deploy-manifest-v1) —
 > 지문 출처=배포 '원본'(install.js=SRC_BRIDGE·확장=번들 src, 설치본 재판독 금지=TOCTOU 반전)·EXPECTED_DEPLOY_FILES
 > 19파일 정확 일치·manifest 기록은 전체 재배치/번들 검증 통과 시에만(부분 보충=미기록) ③배포 잠금 .deploy.lock —
