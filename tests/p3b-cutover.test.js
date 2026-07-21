@@ -28,6 +28,12 @@ const sha = (t) => crypto.createHash("sha1").update(t).digest("hex");
 // 배포 사본 준비(C-1 7 통과 재료): BRIDGE_SCRIPTS 전체를 홈에 복사(레포와 바이트 동일)
 const LIST = require(path.join(ROOT, "install.js")).BRIDGE_SCRIPTS;
 for (const f of LIST) fs.copyFileSync(path.join(ROOT, "bridge", f), path.join(process.env.CODEX_BRIDGE_HOME, f));
+function writeDeployManifest() { // install.js와 동일 규약(deploy-manifest-v1) — deployed-self 전수 대조 기준
+  const files = {};
+  for (const f of LIST) files[f] = crypto.createHash("sha1").update(fs.readFileSync(path.join(process.env.CODEX_BRIDGE_HOME, f))).digest("hex");
+  fs.writeFileSync(path.join(process.env.CODEX_BRIDGE_HOME, "deploy-manifest.json"), JSON.stringify({ schema: "deploy-manifest-v1", ts: new Date().toISOString(), files }, null, 1));
+}
+writeDeployManifest();
 
 function mkWs(tag, opts) {
   const o = opts || {};
@@ -366,6 +372,169 @@ console.log("[5] 잠금 안 재검사·배포 세대·manifest 스텁");
     return rr;
   });
   ok(lk.ok === true && lk.result.code === 1 && /잠금|lock/i.test(lk.result.out), "정본 잠금 보유 중 cutover=실패(임계구역 상호 배제 실측)");
+}
+
+console.log("[6] C-7 자동화 계층 — auto 모드·deployed-self·배선 계약");
+{
+  // auto+미이관 0=quiescence 플래그 없이 자동 전환 성공(동의할 내용 없음)
+  const wsA = mkWs("auto0");
+  const rA = runCut(wsA, ["--auto"]);
+  ok(rA.code === 0 && rA.out.trim() === "", "auto+미이관 0=플래그 없이 자동 전환 성공+침묵(출력 0 — detach/폴 로그 오염 방지)");
+  ok(MB.authorityStateFor(wsA).st === "v2", "자동 전환 후 권위=v2");
+  // auto+미이관 N>0=조용히 물러남(exit 3·쓰기 0 — 카드 소관)
+  const wsB = mkWs("autoN");
+  fs.mkdirSync(path.join(wsB, "docs"), { recursive: true });
+  fs.writeFileSync(path.join(wsB, "docs", "MAP.md"), ledgerLine("미이관 자동거부", "2026-07-01", "v") + "\n", "utf8");
+  const rB = runCut(wsB, ["--auto"]);
+  ok(rB.code === 3 && rB.out.trim() === "", "auto+미이관 1=exit 3+침묵(카드 소관 — 코드로만 판정)");
+  ok(!fs.existsSync(path.join(wsB, "project-map", "authority.json")), "auto 물러남=쓰기 0(marker 미기록)");
+  // autoCutoverAssess 합타입
+  ok(CO.autoCutoverAssess(wsB).state === "card" && CO.autoCutoverAssess(wsB).n === 1, "assess=card+N(원클릭 카드 재료)");
+  ok(CO.autoCutoverAssess(wsA).state === "no", "assess(v2)=no(멱등 — 재시도 소음 없음)");
+  const wsC2 = mkWs("assessAuto");
+  ok(CO.autoCutoverAssess(wsC2).state === "auto", "assess(legacy·미이관 0)=auto");
+  // 수동 경로 무회귀: auto 아닌 실행은 여전히 quiescence 플래그 필수
+  ok(runCut(wsC2, []).code === 2, "수동 경로=플래그 필수 유지(자동화가 수동 검사를 완화하지 않음)");
+  // deployed-self: BRIDGE_DIR 사본에서 실행하면 배포 세대 검사=자기 정합 통과
+  const rSelf = cp.spawnSync(process.execPath, ["-e",
+    "const MR=require(process.argv[1]); process.exit(MR.runCli(process.argv[2], 'cutover', ['--auto']));",
+    path.join(process.env.CODEX_BRIDGE_HOME, "map-runtime.js"), wsC2], { encoding: "utf8", env: { ...process.env } });
+  ok(rSelf.status === 0 && MB.authorityStateFor(wsC2).st === "v2", "설치본 실행=deploy-manifest 전수 대조 통과·자동 전환 성공: " + (rSelf.stderr || "").split("\n")[0]);
+  { // 2차 blocker②: '섞인 세대'(1파일만 다른 배포) — manifest 지문 불일치로 거부
+    const wsMix = mkWs("mixgen");
+    const tgt9 = path.join(process.env.CODEX_BRIDGE_HOME, "scout-gate.js");
+    const keep9 = fs.readFileSync(tgt9);
+    fs.writeFileSync(tgt9, Buffer.concat([keep9, Buffer.from("\n// stale-gen\n")]));
+    const rMix = cp.spawnSync(process.execPath, ["-e",
+      "const MR=require(process.argv[1]); process.exit(MR.runCli(process.argv[2], 'cutover', ['--auto']));",
+      path.join(process.env.CODEX_BRIDGE_HOME, "map-runtime.js"), wsMix], { encoding: "utf8", env: { ...process.env } });
+    fs.writeFileSync(tgt9, keep9);
+    ok(rMix.status !== 0 && !fs.existsSync(path.join(wsMix, "project-map", "authority.json")), "섞인 세대(소비처 1파일 변조)=거부·쓰기 0(자기 경로 확인만으로 통과하던 구멍 소멸)");
+    ok(runCut(wsMix, ["--auto"]).code === 0, "(대조) 세대 복원=자동 전환 성공");
+  }
+  { // 3차 blocker②: 축소 manifest({files:{}} 등)=집합 불일치 거부(자기 서술만 믿던 구멍 소멸)
+    const wsSh = mkWs("shrink");
+    const manF9 = path.join(process.env.CODEX_BRIDGE_HOME, "deploy-manifest.json");
+    const manKeep9 = fs.readFileSync(manF9, "utf8");
+    fs.writeFileSync(manF9, JSON.stringify({ schema: "deploy-manifest-v1", ts: "2026-07-21T00:00:00.000Z", files: {} }), "utf8");
+    const rSh = cp.spawnSync(process.execPath, ["-e",
+      "const MR=require(process.argv[1]); process.exit(MR.runCli(process.argv[2], 'cutover', ['--auto']));",
+      path.join(process.env.CODEX_BRIDGE_HOME, "map-runtime.js"), wsSh], { encoding: "utf8", env: { ...process.env } });
+    fs.writeFileSync(manF9, manKeep9, "utf8");
+    ok(rSh.status !== 0 && !fs.existsSync(path.join(wsSh, "project-map", "authority.json")), "축소 manifest(빈 files)=거부·쓰기 0(키 집합=EXPECTED 정확 일치 강제)");
+  }
+  { // EXPECTED_DEPLOY_FILES 3카피 패리티(install.js·hook-setup.ts와 동일 집합)
+    const hs = fs.readFileSync(path.join(ROOT, "src", "hook-setup.ts"), "utf8");
+    const m9 = hs.match(/BRIDGE_SCRIPTS = \[(.*?)\]/s);
+    const hsList = m9 ? m9[1].split(",").map((x) => x.trim().replace(/^"|"$/g, "")).filter((x) => x && !x.startsWith("//")) : [];
+    ok(JSON.stringify([...CO.EXPECTED_DEPLOY_FILES].sort()) === JSON.stringify([...LIST].sort()), "EXPECTED=install.js BRIDGE_SCRIPTS(패리티)");
+    ok(JSON.stringify([...CO.EXPECTED_DEPLOY_FILES].sort()) === JSON.stringify([...hsList].sort()), "EXPECTED=hook-setup.ts BRIDGE_SCRIPTS(패리티 — 3카피 규약)");
+  }
+  { // manifest 부재=거부(설치 재실행 안내 축)
+    const wsNoM = mkWs("noman");
+    const manF = path.join(process.env.CODEX_BRIDGE_HOME, "deploy-manifest.json");
+    const manKeep = fs.readFileSync(manF, "utf8");
+    fs.unlinkSync(manF);
+    const rNoM = cp.spawnSync(process.execPath, ["-e",
+      "const MR=require(process.argv[1]); process.exit(MR.runCli(process.argv[2], 'cutover', ['--auto']));",
+      path.join(process.env.CODEX_BRIDGE_HOME, "map-runtime.js"), wsNoM], { encoding: "utf8", env: { ...process.env } });
+    fs.writeFileSync(manF, manKeep, "utf8");
+    ok(rNoM.status !== 0, "deploy-manifest 부재=거부(전수 대조 기준 없음 — fail-closed)");
+  }
+  { // 2차 blocker⑤: auto는 blocked(재개)에서 침묵 물러남(exit 3·quiescence 우회 없음)
+    const wsBk = mkWs("autoblk");
+    ok(runCut(wsBk, ["--confirm-windows-reloaded"]).code === 0, "(전제) cutover 성공");
+    fs.unlinkSync(path.join(wsBk, "project-map", "authority.json")); // receipt-only=blocked
+    const rBk = runCut(wsBk, ["--auto"]);
+    ok(rBk.code === 3 && rBk.out.trim() === "" && !fs.existsSync(path.join(wsBk, "project-map", "authority.json")), "auto+blocked(재개)=exit 3·침묵·쓰기 0(재개는 판단 필요 — 수동·카드 소관)");
+    ok(runCut(wsBk, ["--confirm-windows-reloaded"]).code === 0, "(대조) 수동 재개=성공(플래그 요구 유지)");
+  }
+  { // 4차 blocker②: auto 성공=notice 파일 기록(bootstrap 침묵 경로의 리로드 고지 전달 재료)+ack 왕복
+    const wsNt = mkWs("notice");
+    ok(runCut(wsNt, ["--auto"]).code === 0, "(전제) auto 전환 성공");
+    let nt = null;
+    try { nt = JSON.parse(fs.readFileSync(path.join(wsNt, "project-map", "cutover-notice.json"), "utf8")); } catch { nt = null; }
+    ok(!!nt && nt.schema === "map-cutover-notice-v1" && nt.mode === "auto" && nt.pending === true && typeof nt.decisionRef === "string" && nt.decisionRef.length > 0, "auto 성공=notice 기록(schema·mode·pending·decisionRef 결속)");
+    ok(CO.autoNoticePendingFor(wsNt).pending === true, "autoNoticePendingFor=pending(확장 v2 관측이 소비할 재료)");
+    ok(CO.ackAutoCutoverNotice(wsNt) === true && CO.autoNoticePendingFor(wsNt).pending === false, "ack=pending 해제(리로드 후 재고지 없음)");
+    ok(JSON.parse(fs.readFileSync(path.join(wsNt, "project-map", "cutover-notice.json"), "utf8")).pending === false, "ack는 파일에 내구(deliveredTs 기록)");
+    const wsNm = mkWs("noticeman");
+    ok(runCut(wsNm, ["--confirm-windows-reloaded"]).code === 0 && !fs.existsSync(path.join(wsNm, "project-map", "cutover-notice.json")), "수동 cutover=notice 없음(고지는 CLI 완료 문구가 담당 — auto 전용)");
+    ok(CO.autoNoticePendingFor(wsNm).pending === false, "notice 부재=pending 아님(손상/부재=고지 없음 방향)");
+  }
+  // 배선 계약(소스 단언): bootstrap 완료 훅·확장 자동 시도·원클릭 카드·모달
+  const bs = fs.readFileSync(path.join(ROOT, "bridge", "map-bootstrap.js"), "utf8");
+  ok(/finishDone[^]{0,3000}runCutover\(repo, \{ auto: true/.test(bs) || /okRs\) \{ try \{ const CO = require[^]{0,200}auto: true/.test(bs), "bootstrap 완결 직후 자동 전환 시도 배선(신규 프로젝트 자연 경로)");
+  const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
+  ok(ext.includes("autoCutoverAssess") && /aa\.state === "auto"[^]{0,200}auto: true/.test(ext), "대시보드 legacy 관측=auto 시도 배선(기존 프로젝트 경로)");
+  ok(ext.includes("mapCutoverCard") && ext.includes('type === "cutoverConfirm"') && ext.includes("확인했고 전환 진행"), "원클릭 카드+확인 모달 배선(CLI 타이핑 제거)");
+  ok(/code9 === 0[^]{0,700}approvedViewFor\(targetRepo\)/.test(ext), "auto 성공=같은 응답에서 어댑터 재판독(marker 후 legacy 공급·캐시 창 제거 — 2차 blocker③·3차 blocked 선강등 포함)");
+  ok(ext.includes("repo: targetRepo }; // 2차 blocker④") || /mapCutoverCard = \{ n: aa\.n[^]{0,80}repo: targetRepo/.test(ext), "카드에 대상 repo 결속");
+  ok(/normWs\(targetC7\) !== normWs\(m\.repo\)/.test(ext) && ext.includes("정찰 대상이 바뀌었어요"), "핸들러=전송 repo와 현재 재해석 대조(불일치=기록 0 — 2차 blocker④)");
+  ok(ext.includes("function writeDeployManifest") && ext.includes("ensureDeployManifest(src)"), "확장 배포 경로도 manifest 기록+조기 반환 시 사후 보충(3차 blocker① — 기록 조건은 4차 단언이 강제)");
+  ok(/writeDeployManifest\(src: string\)[^]{0,700}fs\.readFileSync\(path\.join\(src, f\)\)/.test(ext) && !/writeDeployManifest\(src: string\)[^]{0,700}readFileSync\(path\.join\(BRIDGE_DIR, f\)\)/.test(ext), "확장 manifest 지문=번들 원본 바이트(설치본 재판독 금지 — 5차 blocker TOCTOU)");
+  ok(/mapSource = "blocked"; mapBlockedReason = mapReasonText\("runtime-outdated"[^]{0,400}av2\.source === "v2"/.test(ext), "auto 성공 후 재판독 실패=blocked 강등(legacy 복귀 금지 — 3차 blocker③)");
+  ok(/targetNow = dashboardWorkspace\(\)[^]{0,200}normWs\(targetNow\) !== normWs\(targetC7\)/.test(ext) && ext.includes("전환하지 않았습니다"), "모달 callback 시점 대상 재해석 재대조(3차 blocker④)");
+  ok(ext.includes("autoCutoverNotified") && ext.includes("자동 전환됨") && ext.includes("switched automatically"), "자동 전환 리로드 고지 — 알림 1회+카드 표시 ko/en(3차 blocker⑤)");
+  ok(ext.includes("mapAutoCutoverDone"), "카드 '리로드 필요' 표시 재료 배선");
+  ok(/absent\.length === 0 && stamp\.version === ver && bundleDriftFiles\(src\)\.length === 0/.test(ext), "같은 버전 조기 반환도 번들 전수 대조 통과 시에만 manifest 보충(드리프트=전체 재배치 — 4차 blocker①)");
+  ok(ext.includes("if (allOk && writeStamp) writeDeployManifest(src)"), "manifest는 전체 재배치 후에만 — 부분 보충(수동 모드)의 혼합 세대 정본화 금지(4차 blocker①)");
+  { // 5차 blocker 실행 반례: install.js 지문=레포 원본 바이트 — '대조 후 설치본 교체' 경합을 재현하면 manifest가 교체본과 불일치=cutover 거부(승인 창 소멸)
+    const ins = fs.readFileSync(path.join(ROOT, "install.js"), "utf8");
+    ok(/files\[f\] = crypto\.createHash\("sha1"\)\.update\(fs\.readFileSync\(path\.join\(SRC_BRIDGE, f\)\)\)/.test(ins) && !/files\[f\] = crypto\.createHash\("sha1"\)\.update\(fs\.readFileSync\(path\.join\(BRIDGE_DIR, f\)\)\)/.test(ins), "install.js manifest 지문=레포 원본(목적지 재판독 금지 — 5차 blocker)");
+    const wsRc = mkWs("race");
+    const tgtR = path.join(process.env.CODEX_BRIDGE_HOME, "scout-gate.js");
+    const keepR = fs.readFileSync(tgtR);
+    fs.writeFileSync(tgtR, Buffer.concat([keepR, Buffer.from("\n// racer-gen\n")])); // manifest(원본 세대) 기록 '후' 설치본이 교체된 경합의 최종 상태
+    const rRc = cp.spawnSync(process.execPath, ["-e",
+      "const MR=require(process.argv[1]); process.exit(MR.runCli(process.argv[2], 'cutover', ['--auto']));",
+      path.join(process.env.CODEX_BRIDGE_HOME, "map-runtime.js"), wsRc], { encoding: "utf8", env: { ...process.env } });
+    fs.writeFileSync(tgtR, keepR);
+    ok(rRc.status !== 0 && !fs.existsSync(path.join(wsRc, "project-map", "authority.json")), "경합 최종 상태(원본 지문 manifest+교체 설치본)=거부·쓰기 0(혼합 승인 창 소멸 — fail-closed 방향)");
+  }
+  { // 9차(8차 검증 blocker 2건 — 프로토콜 교체): wx 파일 잠금(contract-lock v10 계보) — 자동 탈환 전면 폐기
+    const lockF = path.join(process.env.CODEX_BRIDGE_HOME, ".deploy.lock");
+    { // 무경합 획득·해제
+      const rA = CO.withDeployLock(() => "ok");
+      ok(rA.ok === true && rA.result === "ok" && !fs.existsSync(lockF), "무경합 획득=성공·해제(잠금 파일 소멸)");
+    }
+    { // 활성 보유자(생존 pid)=유한 타임아웃·잠금 보존 — CLI cutover도 fail-closed
+      fs.writeFileSync(lockF, JSON.stringify({ v: 1, pid: process.pid, rnd: "x", ts: new Date().toISOString() }));
+      process.env.CODEX_DEPLOY_LOCK_TIMEOUT_MS = "300";
+      const t9 = Date.now();
+      const rB = CO.withDeployLock(() => "never");
+      ok(rB.ok === false && rB.key === "deploy-lock-timeout" && Date.now() - t9 < 5000 && fs.existsSync(lockF), "활성 잠금=유한 시간 내 타임아웃(무한 busy-loop 없음)·타인 잠금 보존");
+      const wsLk9 = mkWs("lockbusy");
+      const rC = runCut(wsLk9, ["--auto"]);
+      ok(rC.code !== 0 && !fs.existsSync(path.join(wsLk9, "project-map", "authority.json")), "잠금 보유 중 cutover=거부·쓰기 0(검사기 fail-closed)");
+      delete process.env.CODEX_DEPLOY_LOCK_TIMEOUT_MS;
+      fs.unlinkSync(lockF);
+      ok(runCut(wsLk9, ["--auto"]).code === 0, "(대조) 잠금 해제 후=자동 전환 성공");
+    }
+    { // 사망 보유자=자동 삭제 '없음'(확인-후-삭제 TOCTOU 폐기) — stale 검출 실패+복구 안내
+      fs.writeFileSync(lockF, JSON.stringify({ v: 1, pid: 999999999, rnd: "d", ts: "2026-01-01T00:00:00.000Z" }));
+      process.env.CODEX_DEPLOY_LOCK_TIMEOUT_MS = "300";
+      const rD = CO.withDeployLock(() => "never");
+      delete process.env.CODEX_DEPLOY_LOCK_TIMEOUT_MS;
+      ok(rD.ok === false && rD.key === "deploy-lock-stale" && fs.existsSync(lockF), "사망 pid 잔존=자동 탈환 없이 검출 실패(이중 진입 벡터 원천 소멸·fail-closed)");
+      ok(String(rD.detail || "").includes("999999999"), "stale 안내에 pid·경로 동봉(수동 복구 판단 재료)");
+      fs.unlinkSync(lockF);
+    }
+    { // 임계구역 중 외부 개입(내용 교체)=상실 검출+타인 내용 비삭제(조건부 해제)
+      const rE = CO.withDeployLock(() => { fs.writeFileSync(lockF, "hijacker"); return "ran"; });
+      ok(rE.ok === false && rE.key === "deploy-lock-lost" && fs.readFileSync(lockF, "utf8") === "hijacker", "소유권 상실=검출된 실패·외부 잠금 비삭제");
+      fs.unlinkSync(lockF);
+    }
+    const ins9 = fs.readFileSync(path.join(ROOT, "install.js"), "utf8");
+    const ext9 = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
+    const co9 = fs.readFileSync(path.join(ROOT, "bridge", "map-cutover.js"), "utf8");
+    ok([ins9, ext9, co9].every((t9) => t9.includes('".deploy.lock"') && t9.includes('flag: "wx"')), "wx 원자 획득(생성=신원 한 시스템콜) 3카피 패리티");
+    ok([ins9, ext9, co9].every((t9) => !t9.includes(".deploy-lock.d") && !t9.includes('".steal-"') && !t9.includes("renameSync(lockDir")), "디렉터리 잠금·자동 탈환 경로 전면 제거 3카피(원복 공백·null 세대 동치 소멸)");
+    ok([ins9, ext9, co9].every((t9) => /for \(;;\) \{\s*\n\s*if \(Date\.now\(\) - t0 > timeoutMs\)/.test(t9)), "루프 머리 타임아웃 3카피(무한 busy-loop 봉합 유지)");
+    ok([ins9, co9].every((t9) => t9.includes('ke.code === "ESRCH"')), "사망 보유자 분류(ESRCH만 사망 단정) — 검사기·installer 카피");
+  }
+  ok(/autoNoticePendingFor\(targetRepo\)\.pending/.test(ext) && ext.includes("ackAutoCutoverNotice"), "v2 관측 시 notice 소비(알림 1회+ack) — bootstrap 침묵 자동 전환 고지 전달(4차 blocker②)");
+  ok(ext.includes("Confirmed — proceed") && ext.includes("Confirm & switch"), "카드·모달 ko/en 쌍");
 }
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);

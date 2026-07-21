@@ -255,7 +255,7 @@ function runCli(repoArg, cmdArg, extraArgs) {
     const nVal = rawN !== null && /^\d+$/.test(String(rawN)) ? parseInt(rawN, 10) : null;
     if (idx >= 0 && nVal === null) { console.error(tB("--confirm-unmigrated 는 정확한 수(정수)를 요구한다", "--confirm-unmigrated requires an exact integer")); return 2; }
     const CO = require(path.join(__dirname, "map-cutover.js"));
-    return CO.runCutover(repo, { confirmWindowsReloaded: ex.includes("--confirm-windows-reloaded"), confirmUnmigrated: nVal });
+    return CO.runCutover(repo, { confirmWindowsReloaded: ex.includes("--confirm-windows-reloaded"), confirmUnmigrated: nVal, auto: ex.includes("--auto") }); // --auto=C-7 자동화 계층(미이관 0만 진행·N>0=exit 3)
   }
   if (cmd === "inventory") {
     const { importsByDir, cov } = collectInventory(repo);

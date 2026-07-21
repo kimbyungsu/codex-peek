@@ -2,7 +2,22 @@
 
 > 이 문서 하나로 이어갈 수 있게 쓰였다. 상세 설계 원본(SCOUT-TRACK.md·SCOPE-LEDGER.md)은 **의도적으로 레포 밖 로컬 문서**라
 > 다른 환경에는 없다 — 그래서 이 파일이 그 요지를 포함한다. ⚠ **실 API 키·토큰은 어떤 파일·픽스처·예시에도 절대 넣지 말 것.**
-> 마지막 갱신: 2026-07-21 (버전 0.1.86 불변). **★P3b 증분 2 완결(로컬 커밋 — push는 사용자 지시 대기): P3b 전체 완료 — 다음 착수=P5(provider 공통 인터페이스)**:
+> 마지막 갱신: 2026-07-22 (버전 0.1.86 불변). **★C-7 자동화 계층 완결(로컬 커밋 — push는 사용자 지시 대기)**:
+> 사용자 지시(2026-07-21 "MAP은 수동을 없애려는 설계인데 전환에 또 수동 명령은 과보수") → 정본 C-7 절 신설+구현.
+> 원칙: 동의할 내용 없으면(legacy AND 미이관 0 AND 안전 조건 전부) 자동·판단 필요(미이관 N>0)만 원클릭 카드.
+> 검증 9왕복(blocker 누적 16 전부 수용·최종 통과(보완)): ①자동 실행 2지점(bootstrap 완료 직후·대시보드 legacy
+> 관측)+auto 침묵(exit 0/1/3)·blocked(재개)는 auto 범위 밖 ②deploy-manifest.json(deploy-manifest-v1) —
+> 지문 출처=배포 '원본'(install.js=SRC_BRIDGE·확장=번들 src, 설치본 재판독 금지=TOCTOU 반전)·EXPECTED_DEPLOY_FILES
+> 19파일 정확 일치·manifest 기록은 전체 재배치/번들 검증 통과 시에만(부분 보충=미기록) ③배포 잠금 .deploy.lock —
+> 6~8차의 mkdir+자동 stale 탈환 안은 검증에서 폐기(원복 공백·null 세대 동치), 9차=contract-lock v10 계보(wx
+> 원자 생성=신원 동시·read-back fence·자동 탈환/삭제 전면 폐기·사망 pid=deploy-lock-stale 수동 복구 안내·
+> lockLost 검출) 3카피(map-cutover·install.js·확장) ④리로드 고지 — marker는 정확 키 집합이라 provenance 불가 →
+> project-map/cutover-notice.json(auto 성공 시 pending) → 확장 v2 관측 시 알림 1회+ack ⑤원클릭 카드=repo 결속+
+> 모달 callback 재해석 재대조 ⑥auto 성공 즉시 재판독(실패=blocked 강등·legacy 복귀 금지). p3b-cutover 124단언·
+> 체인 EXIT=0·설치 완료(⚠Reload 필요). **미반영 2건(확인 검증 규약)**: PRIVACY.md에 cutover-notice.json 공개
+> 항목 누락(다음 묶음 동승 후보)·[주의→보관함 5364ebe0] wx 생성↔토큰 기록 비원자(부분 잠금 잔존=stale 안내
+> 없이 타임아웃 반복). ▶다음 착수=P5 유지.
+> ── (이전 2026-07-21: **★P3b 증분 2 완결: P3b 전체 완료 — 다음 착수=P5(provider 공통 인터페이스)**):
 > **증분 2 — cutover 명령 본체**(구현검증 4왕복[blocker 7 전부 수용]·tests/p3b-cutover 70단언): bridge/map-cutover.js —
 > C-1 게이트(scoutMode 최선행·권위 분기[v2=멱등+tail 보충/blocked=재개 판별(손상 receipt 1개라도=거부·공용
 > resumeEligibilityFor)/legacy=신규]·manifest 집합+전 ready·topology 유효·WAL 부재·미이관 N='entryFp 다중집합

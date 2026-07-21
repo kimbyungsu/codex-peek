@@ -484,6 +484,10 @@ function runChild(repo, manual) {
     if (w.result && w.result.err) { writeRs(repo, claim, { phase: "failed", error: w.result.err, doneAt: new Date().toISOString() }); return 1; }
     const r0 = w.result;
     const okRs = writeRs(repo, claim, { phase: "done", doneAt: new Date().toISOString(), mapId: r0.mapId, topoFp: r0.topoFp, mapMdFp: r0.mapMdFp, exclude: excludeOf(r0) });
+    // C-7(P3b 자동화 계층): bootstrap 완결 직후 auto-eligible이면 권위 전환을 자동 시도 — 신규 프로젝트의
+    // 자연 경로(미이관 0=동의할 내용 없음일 때만 내부에서 진행·N>0/조건 미충족=쓰기 0 무해). 실패해도
+    // bootstrap 성공은 불변(대시보드 관측·수동 명령이 재시도).
+    if (okRs) { try { const CO = require(path.join(__dirname, "map-cutover.js")); CO.runCutover(repo, { auto: true, confirmWindowsReloaded: false, confirmUnmigrated: null }); } catch { /* 무해 — 후속 경로가 재시도 */ } }
     return okRs ? 0 : 1; // 기록 실패·소유 상실=성공 위장 금지
   };
   try {

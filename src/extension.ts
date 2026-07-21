@@ -2731,6 +2731,8 @@ type MapLedgerView = {
   // P3b B-1: 확정층 판독 출처·차단 사유 — legacy=기존 그대로 / v2=Project MAP(결속 원문) / blocked=사유만
   mapSource: "legacy" | "v2" | "blocked"; mapBlockedReason: string | null; mapStale: number; mapRetired: number;
   mapFrozenProbe: { state: string; unmigratedTotal: number | null } | null; // P3b B-1 — v2에서만(경보 축=동결 지문·배지 축=미이관 수)
+  mapCutoverCard: { n: number; rows: Array<{ sig24: string; text: string; why: string }>; repo: string } | null; // C-7 — legacy+미이관 N>0일 때 원클릭 전환 카드 재료(repo=대상 결속 — 2차 blocker④)
+  mapAutoCutoverDone: boolean; // C-7 — 이번 세션 자동 전환 관측(카드의 '리로드 필요' 표시 재료)
 };
 const MAP_LEDGER_TEXT_CAP = 8000;
 const LEDGER_ENTRIES_CAP_UI = 12;  // 카드에 보이는 항목 상한(전체는 이벤트 파일이 원본)
@@ -2788,6 +2790,8 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
   let mapBlockedReason: string | null = null;
   let mapStale = 0, mapRetired = 0;
   let mapFrozenProbe: { state: string; unmigratedTotal: number | null } | null = null;
+  let mapCutoverCard: { n: number; rows: Array<{ sig24: string; text: string; why: string }>; repo: string } | null = null;
+  let mapAutoCutoverDone = false; // 3차 blocker⑤: 이번 세션에서 자동 전환 관측 — 카드에 리로드 필요 표시
   const MA = mapAdapters();
   if (MA && typeof MA.approvedViewFor === "function") {
     try {
@@ -2796,9 +2800,50 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
       else {
         mapSource = av.source;
         mp = { approved: av.approved, totalItems: av.totalItems };
+        if (av.source === "legacy") { // C-7 자동화 계층: 동의할 내용이 없으면 자동 전환·판단 필요(미이관>0)만 원클릭 카드
+          try {
+            const CO = require(path.join(BRIDGE_DIR, "map-cutover.js"));
+            if (typeof CO.autoCutoverAssess === "function") {
+              const aa = CO.autoCutoverAssess(targetRepo);
+              if (aa.state === "auto") {
+                let code9 = -1;
+                try { code9 = CO.runCutover(targetRepo, { auto: true, confirmWindowsReloaded: false, confirmUnmigrated: null }); } catch { code9 = -1; }
+                if (code9 === 0) { // 2차 blocker③: 성공 즉시 재판독 — 같은 응답(및 캐시)부터 v2 공급(marker 활성 후 legacy 공급 창 제거)
+                  // 3차 blocker③: 성공했으면 legacy 공급은 어떤 경우에도 금지 — 재판독 실패·예외·예상 밖 값=blocked 강등(안전 방향)
+                  mapSource = "blocked"; mapBlockedReason = mapReasonText("runtime-outdated", undefined);
+                  try {
+                    const av2 = MA.approvedViewFor(targetRepo);
+                    if (av2.source === "v2") { mapSource = "v2"; mapBlockedReason = null; mp = { approved: av2.approved, totalItems: av2.totalItems }; mapStale = av2.approved.filter((a: { stale?: boolean }) => a.stale).length; mapRetired = av2.approved.filter((a: { retired?: boolean }) => a.retired).length; }
+                    else if (av2.source === "blocked") { mapBlockedReason = mapReasonText(av2.reasonKey, av2.reason); }
+                  } catch { /* blocked 유지 — legacy로 복귀 금지 */ }
+                  // 3차 blocker⑤: quiescence 생략 자동 전환의 필수 사후 조치 — 전 창 리로드 고지(ws당 1회 알림+카드 표시 재료)
+                  if (!autoCutoverNotified.has(normWs(targetRepo))) {
+                    autoCutoverNotified.add(normWs(targetRepo));
+                    vscode.window.showInformationMessage(tE("Project MAP 자동 전환됨 — 이 저장소를 여는 모든 VS Code 창을 리로드하세요(리로드 전 창의 옛 방식 기록은 권위에 반영되지 않고 동결 감시가 경보합니다).", "Project MAP switched automatically — reload every VS Code window opening this repository (pre-reload windows' old-style writes are non-authoritative and trigger the freeze probe alert)."));
+                    if (typeof CO.ackAutoCutoverNotice === "function") CO.ackAutoCutoverNotice(targetRepo); // 4차 blocker②: 고지 전달됨 — 리로드 후 재고지 방지(세션 내 표시는 Set이 유지)
+                  }
+                  mapAutoCutoverDone = true;
+                }
+              }
+              else if (aa.state === "card") mapCutoverCard = { n: aa.n, rows: (aa.rows || []).slice(0, 5), repo: targetRepo }; // 2차 blocker④: 대상 결속
+            }
+          } catch { /* 구 런타임 — 자동화 없음(수동 CLI 존치) */ }
+        }
         if (av.source === "v2") { mapStale = av.approved.filter((a: { stale?: boolean }) => a.stale).length; mapRetired = av.approved.filter((a: { retired?: boolean }) => a.retired).length;
           try { const CO = require(path.join(BRIDGE_DIR, "map-cutover.js")); mapFrozenProbe = typeof CO.frozenLedgerProbeFor === "function" ? CO.frozenLedgerProbeFor(targetRepo) : { state: "baseline-unknown", unmigratedTotal: null }; } // 구 런타임/부재=기준선 불명(위장 금지)
-          catch { mapFrozenProbe = { state: "baseline-unknown", unmigratedTotal: null }; } }
+          catch { mapFrozenProbe = { state: "baseline-unknown", unmigratedTotal: null }; }
+          try { // 4차 blocker②: bootstrap 침묵 자동 전환(별도 자식)은 확장이 처음부터 v2로 관측 — notice 파일이 고지 전달 재료
+            const CO = require(path.join(BRIDGE_DIR, "map-cutover.js"));
+            if (typeof CO.autoNoticePendingFor === "function" && CO.autoNoticePendingFor(targetRepo).pending) {
+              if (!autoCutoverNotified.has(normWs(targetRepo))) {
+                autoCutoverNotified.add(normWs(targetRepo));
+                vscode.window.showInformationMessage(tE("Project MAP 자동 전환됨 — 이 저장소를 여는 모든 VS Code 창을 리로드하세요(리로드 전 창의 옛 방식 기록은 권위에 반영되지 않고 동결 감시가 경보합니다).", "Project MAP switched automatically — reload every VS Code window opening this repository (pre-reload windows' old-style writes are non-authoritative and trigger the freeze probe alert)."));
+              }
+              if (typeof CO.ackAutoCutoverNotice === "function") CO.ackAutoCutoverNotice(targetRepo);
+            }
+          } catch { /* 구 런타임 — 고지 생략(수동 CLI 완료 문구가 잔여 수단) */ }
+          if (autoCutoverNotified.has(normWs(targetRepo))) mapAutoCutoverDone = true; // 세션 내 리로드 줄 유지(리로드하면 Set·pending 모두 소멸=표시 종료)
+        }
       }
     } catch { mapSource = "blocked"; mapBlockedReason = mapReasonText("runtime-outdated", undefined); }
   } else if (cutoverTraceState(targetRepo) !== "absent") {
@@ -2825,7 +2870,7 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
     mapApproved: mp.approved.length, mapTotalItems: mp.totalItems,
     // P3b B-1: blocked=원문 미리보기 숨김+사유만(정본 §B — 진단 전용 표시는 P9 위임)
     mapText: mapSource === "blocked" ? "" : mapMd.slice(0, MAP_LEDGER_TEXT_CAP), mapTruncated: mapSource !== "blocked" && mapMd.length > MAP_LEDGER_TEXT_CAP,
-    mapSource, mapBlockedReason, mapStale, mapRetired, mapFrozenProbe,
+    mapSource, mapBlockedReason, mapStale, mapRetired, mapFrozenProbe, mapCutoverCard, mapAutoCutoverDone,
   };
 }
 function readMapLedger(ws: string | null): MapLedgerView | null {
@@ -2990,6 +3035,35 @@ class Dashboard {
         if (m?.type === "openScoutHealthReport") openScoutHealthReport(dashboardWorkspace()); // 건강 리포트 — 포화 대응 새탭(열 때 베이크·스크립트 없음)
         if (m?.type === "setScoutTarget" && typeof m.repo === "string") setScoutTargetFromUi(dashboardWorkspace(), m.repo, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
         if (m?.type === "setScoutArm" && (m.arm === "self" || m.arm === "deepseek")) setScoutArmFromUi(dashboardWorkspace(), m.arm, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
+        if (m?.type === "cutoverConfirm" && typeof m.n === "number" && Number.isInteger(m.n) && m.n > 0 && typeof m.repo === "string" && m.repo) { // C-7 원클릭 전환(미이관 N>0 — informed 동의는 이 모달이 담당)
+          const wsC7 = dashboardWorkspace();
+          const targetC7 = wsC7 ? scoutTargetFor(wsC7).repo : null;
+          if (!targetC7) return;
+          if (normWs(targetC7) !== normWs(m.repo)) { // 2차 blocker④: 카드 표시 시점의 대상과 현재 재해석이 다르면 기록 0(B-3 대상 스냅샷 결속 전례)
+            vscode.window.showWarningMessage(tE("정찰 대상이 바뀌었어요 — 카드가 갱신됩니다. 다시 확인해 주세요.", "The scout target changed — the card refreshes. Please confirm again."));
+            this.post(); return;
+          }
+          vscode.window.showWarningMessage(
+            tE(`Project MAP으로 권위를 전환합니다.\n\n· 옛 확정 교범의 ${m.n}건은 새 화면(v2 뷰)에 나타나지 않게 됩니다(증거층에는 보존).\n· 이 저장소를 여는 모든 VS Code 창을 닫거나 리로드했고, 옛 방식 명령이 실행 중이지 않으며, 전환 완료까지 새로 시작하지 않겠다는 확인이 필요합니다.\n\n전환 후 옛 문서는 동결되고 신규 승인은 Project MAP 경로로만 들어갑니다.`,
+               `Switching authority to Project MAP.\n\n· ${m.n} old-ledger row(s) will not appear in the v2 view (kept in the evidence layer).\n· Confirm that every VS Code window opening this repository is closed/reloaded, no old-generation commands are running, and none will be started until cutover completes.\n\nAfter cutover the old document is frozen and new approvals go through Project MAP only.`),
+            { modal: true },
+            tE("확인했고 전환 진행", "Confirmed — proceed"),
+          ).then((btn) => {
+            if (!btn) return;
+            const targetNow = dashboardWorkspace() ? scoutTargetFor(dashboardWorkspace() as string).repo : null; // 3차 blocker④: callback 시점 재해석(B-3 전례 — 모달 열린 동안 대상 변경=기록 0)
+            if (!targetNow || normWs(targetNow) !== normWs(targetC7)) {
+              vscode.window.showWarningMessage(tE("정찰 대상이 바뀌었어요 — 전환하지 않았습니다. 카드가 갱신됩니다.", "The scout target changed — nothing was switched. The card refreshes."));
+              this.post(); return;
+            }
+            try {
+              const CO = require(path.join(BRIDGE_DIR, "map-cutover.js"));
+              const code = CO.runCutover(targetC7, { confirmWindowsReloaded: true, confirmUnmigrated: m.n, auto: false });
+              if (code === 0) vscode.window.showInformationMessage(tE("전환 완료 — 모든 VS Code 창을 리로드하세요.", "Cutover complete — reload every VS Code window."));
+              else vscode.window.showErrorMessage(tE("전환이 진행되지 않았어요(조건 변동 가능 — 카드가 갱신됩니다). 코드 " + code, "Cutover did not proceed (conditions may have changed — the card refreshes). Code " + code));
+            } catch (e: any) { vscode.window.showErrorMessage(tE("전환 실행 실패: ", "Cutover run failed: ") + String(e?.message || e)); }
+            this.post();
+          });
+        }
         if (m?.type === "hideSession" && m.id) {
           const id = String(m.id);
           const ws = dashboardWorkspace();
@@ -5396,6 +5470,26 @@ class Dashboard {
           r.appendChild(w); det.appendChild(r);});
         card.appendChild(det);
       }
+      if(ml.mapSource==="legacy" && ml.mapCutoverCard){ // C-7 원클릭 전환 카드(미이관 N>0 — 자동 불가 상태만)
+        const cc=ml.mapCutoverCard;
+        const box9=document.createElement("div");
+        box9.style.cssText="margin:6px 0;padding:8px;border:1px solid var(--vscode-charts-purple);border-radius:6px";
+        const t1=document.createElement("div"); t1.style.fontWeight="600";
+        t1.textContent=T("Project MAP 전환 준비됨 — 확인 "+cc.n+"건","Ready to switch to Project MAP — "+cc.n+" item(s) need your OK");
+        const t2=document.createElement("div"); t2.className="muted";
+        t2.textContent=T("옛 확정 교범의 "+cc.n+"건이 새 화면에 나타나지 않게 돼요(증거층 보존). 아래 버튼 하나로 확인·전환합니다 — 명령 입력 없음.","In the old ledger, "+cc.n+" row(s) will not appear in the new view (kept in evidence). One click below confirms and switches — no command typing.");
+        box9.appendChild(t1); box9.appendChild(t2);
+        (cc.rows||[]).forEach(function(r9){ const li=document.createElement("div"); li.className="muted"; li.style.fontSize="10.5px"; li.textContent="· ["+r9.why+"] "+r9.text; box9.appendChild(li); });
+        const b9=document.createElement("button"); b9.style.cssText="margin-top:6px;font-weight:700";
+        b9.textContent=T("확인하고 전환","Confirm & switch");
+        b9.addEventListener("click", function(){ vscode.postMessage({type:"cutoverConfirm", n: cc.n, repo: cc.repo}); }); // 대상 결속(2차 blocker④)
+        box9.appendChild(b9); card.appendChild(box9);
+      }
+      if(ml.mapSource==="v2" && ml.mapAutoCutoverDone){ // C-7: 자동 전환됨 — 필수 리로드 고지(quiescence 생략의 사후 조치)
+        const rl=document.createElement("div"); rl.style.cssText="font-size:11px;color:var(--vscode-editorWarning-foreground,#d9a441);font-weight:600";
+        rl.textContent=T("Project MAP 자동 전환됨 — 모든 VS Code 창을 리로드하세요","Project MAP switched automatically — reload every VS Code window");
+        card.appendChild(rl);
+      }
       if(ml.mapSource==="v2" && ml.mapFrozenProbe){ // P3b B-1 — 동결 감시(경보 축=지문·정보 배지=미이관)
         const pr=ml.mapFrozenProbe;
         const ln=document.createElement("div");
@@ -5904,10 +5998,62 @@ function syncCodexHome(onDone: (changed: boolean) => void): void {
 // 브릿지 배치 stamp: 확장이 배치했다는 표식. 레포 install.js(수동/개발 흐름)는 이 stamp를 지워 '수동 모드'로 표시 →
 // 확장이 개발자의 최신 수동본을 옛 번들본으로 덮지 않는다. stamp가 있으면 확장 버전이 바뀔 때만 재배치(업그레이드).
 const BRIDGE_STAMP = path.join(BRIDGE_DIR, ".bridge-deployed-by.json");
+const autoCutoverNotified = new Set<string>(); // C-7: 자동 전환 리로드 알림 ws당 1회(세션 메모리 — 리로드하면 초기화되는 게 목적과 정합)
+function withDeployLockSync<T>(fn: () => T): T | null { // C-7 9차: wx 파일 잠금 — 검사기(map-cutover)·install.js와 동일 프로토콜(".deploy.lock"·wx 원자 생성=신원 동시·read-back fence·자동 탈환 없음[contract-lock v10 결론]). null=획득 실패/소유권 상실(다음 활성화 재시도 — 소비 측은 검사기 fail-closed가 방어)
+  const lockPath = path.join(BRIDGE_DIR, ".deploy.lock");
+  const token = JSON.stringify({ v: 1, pid: process.pid, rnd: crypto.randomBytes(8).toString("hex"), ts: new Date().toISOString() });
+  try { fs.mkdirSync(BRIDGE_DIR, { recursive: true }); } catch { /* 부모 생성 실패는 아래 wx가 판정 */ }
+  const timeoutMs = Math.max(200, Number(process.env.CODEX_DEPLOY_LOCK_TIMEOUT_MS || 5000) || 5000);
+  const t0 = Date.now();
+  for (;;) {
+    if (Date.now() - t0 > timeoutMs) return null;
+    let locked = false;
+    try { fs.writeFileSync(lockPath, token, { flag: "wx" }); locked = true; }
+    catch (e: any) { if (!e || (e.code !== "EEXIST" && e.code !== "EPERM")) return null; }
+    if (locked) {
+      let back: string | null = null;
+      try { back = fs.readFileSync(lockPath, "utf8"); } catch { back = null; }
+      if (back === token) break; // read-back fence — 실패=삭제 없이 재시도(확인-후-삭제 TOCTOU 폐기)
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+  let result: T; let lockLost = false;
+  try { result = fn(); }
+  finally {
+    let cur: string | null = null;
+    try { cur = fs.readFileSync(lockPath, "utf8"); } catch { cur = null; }
+    lockLost = cur !== token;
+    if (!lockLost) { try { fs.unlinkSync(lockPath); } catch { /* 드묾 — 다음 획득자에게 stale 안내 */ } }
+  }
+  return lockLost ? null : result!;
+}
+function bundleDriftFiles(src: string): string[] { // 4차 blocker①: 설치본↔번들 sha1 전수 대조(부재/판독 불가=드리프트) — manifest는 이 검증을 통과한 상태에서만 기록
+  const bad: string[] = [];
+  for (const f of hookSetup.BRIDGE_SCRIPTS) {
+    try {
+      const cur = crypto.createHash("sha1").update(fs.readFileSync(path.join(BRIDGE_DIR, f))).digest("hex");
+      const want = crypto.createHash("sha1").update(fs.readFileSync(path.join(src, f))).digest("hex");
+      if (cur !== want) bad.push(f);
+    } catch { bad.push(f); }
+  }
+  return bad;
+}
+function writeDeployManifest(src: string): void { // install.js와 동일 규약(deploy-manifest-v1) — C-7 배포 세대 전수 대조 기준
+  // 5차 blocker: 지문은 배포 '원본'(번들 src) 바이트에서 계산 — 설치본(BRIDGE_DIR) 재판독 금지. 대조↔기록
+  // 사이 다른 프로세스가 설치본을 교체하는 경합에서 혼합 결과를 해시해 정상 manifest로 승인하는 창을 제거
+  // (경합 시 manifest[번들]≠디스크[교체본] → cutover 전수 대조가 거부 — fail-closed 방향으로 반전).
+  try {
+    const files: Record<string, string> = {};
+    for (const f of hookSetup.BRIDGE_SCRIPTS) files[f] = crypto.createHash("sha1").update(fs.readFileSync(path.join(src, f))).digest("hex");
+    hookSetup.atomicWriteFile(path.join(BRIDGE_DIR, "deploy-manifest.json"), JSON.stringify({ schema: "deploy-manifest-v1", ts: new Date().toISOString(), files }, null, 1));
+  } catch { /* 실패=검사 fail-closed가 안내(다음 활성화 재시도) */ }
+}
+function ensureDeployManifest(src: string): void { if (!fs.existsSync(path.join(BRIDGE_DIR, "deploy-manifest.json"))) writeDeployManifest(src); }
 function deployBridgeRuntime(context: vscode.ExtensionContext): boolean {
   try {
     const src = path.join(context.extensionPath, "bridge");
     if (!fs.existsSync(src)) return false; // 번들에 bridge 없음(구버전 vsix) → 아무것도 안 함
+    const lk = withDeployLockSync<boolean>(() => { // 6차 blocker: 대조·복사·manifest·stamp 전체를 검사기와 상호 배제
     const ver = String((context.extension.packageJSON as any)?.version || "");
     const absent = hookSetup.BRIDGE_SCRIPTS.filter((f) => !fs.existsSync(path.join(BRIDGE_DIR, f)));
     let stamp: any = null;
@@ -5919,8 +6065,8 @@ function deployBridgeRuntime(context: vscode.ExtensionContext): boolean {
     let targets: string[];
     let writeStamp: boolean;
     if (stamp) {
-      if (absent.length === 0 && stamp.version === ver) return false; // 같은 버전 배치됨 → 스킵
-      targets = hookSetup.BRIDGE_SCRIPTS; writeStamp = true;          // 업그레이드/복구: 전체 재배치
+      if (absent.length === 0 && stamp.version === ver && bundleDriftFiles(src).length === 0) { ensureDeployManifest(src); return false; } // 4차 blocker①: manifest 보충은 번들 검증 통과 상태에서만 — 같은 버전이라도 드리프트(이전 커밋 세대·변조)면 전체 재배치로 진입해 혼합 세대 정본화 차단
+      targets = hookSetup.BRIDGE_SCRIPTS; writeStamp = true;          // 업그레이드/복구/드리프트: 전체 재배치
     } else if (absent.length === hookSetup.BRIDGE_SCRIPTS.length) {
       targets = hookSetup.BRIDGE_SCRIPTS; writeStamp = true;          // 마켓 fresh 설치
     } else if (absent.length > 0) {
@@ -5933,12 +6079,15 @@ function deployBridgeRuntime(context: vscode.ExtensionContext): boolean {
       const body = fs.readFileSync(path.join(src, f), "utf8");
       if (!hookSetup.atomicWriteFile(path.join(BRIDGE_DIR, f), body)) allOk = false; // 실행 중 훅과의 충돌 최소화(tmp+rename)
     }
+    if (allOk && writeStamp) writeDeployManifest(src); // 4차 blocker①: manifest는 전체 재배치(설치본=번들 보장) 후에만 — 부분 보충(수동 모드) 경로가 혼합 세대를 새 정상으로 정본화하는 것 금지(수동 흐름의 manifest는 install.js 소관)
     // stamp는 '전부 성공'일 때만 — 일부 실패 상태를 최신으로 표시하면 다음 활성화가 스킵해 낡은 런타임이 방치됨(Codex 지적).
     // stamp 쓰기 자체도 실패하면 false 반환(관리 모드 표식 없이 파일만 있는 상태 = 다음 활성화가 '수동'으로 오인 — 드물지만 성공으로 위장하지 않음).
     if (writeStamp && allOk) {
       if (!hookSetup.atomicWriteFile(BRIDGE_STAMP, JSON.stringify({ version: ver, ts: new Date().toISOString() }) + "\n")) return false;
     }
     return allOk;
+    });
+    return lk === null ? false : lk; // 잠금 실패/타임아웃=이번 활성화 배치 보류(다음 활성화 재시도 — 소비 측은 검사기 fail-closed가 방어)
   } catch { return false; } // best-effort — 배치 실패가 확장 활성화를 막지 않음
 }
 
