@@ -2,7 +2,40 @@
 
 > 이 문서 하나로 이어갈 수 있게 쓰였다. 상세 설계 원본(SCOUT-TRACK.md·SCOPE-LEDGER.md)은 **의도적으로 레포 밖 로컬 문서**라
 > 다른 환경에는 없다 — 그래서 이 파일이 그 요지를 포함한다. ⚠ **실 API 키·토큰은 어떤 파일·픽스처·예시에도 절대 넣지 말 것.**
-> 마지막 갱신: 2026-07-20 (버전 0.1.86 불변 · 이 갱신을 포함해 push된 main 기준). **이번 push 묶음(11커밋+수치 정정 1) 요지 —
+> 마지막 갱신: 2026-07-21 (버전 0.1.86 불변 · 이 갱신을 포함해 push된 main 기준). **이번 push 묶음(2커밋) 요지 —
+> P3b cutover 설계 동결+증분 1(6표면 재배선) 완료: 다음 착수=P3b 증분 2(cutover 명령 본체)**:
+> ①**P3b 상세 설계 동결**(docs/MAP-P3B-DESIGN.md — 정본 §5 P3b·1-22·1-29·1-30·P3A §B/§E의 위임 이행.
+> Codex 설계검증 8왕복[실패 7회→통과]·blocker 누적 25건 전부 수용/반박 처리). 핵심 계약: 증분 1=재배선
+> (marker 비활성 동안 100% 동치 — 활성화는 marker 하나로 일괄) / 증분 2=cutover 명령(사전 검사 0~8→스냅샷+
+> frozen-ledger-fp 'marker 전' 내구 기록→receipt→marker→read-back·중단 재개=전수 재검사·v2 tail 보충은
+> 정지 플래그+이중 잠금 안에서만·자동 롤백 없음[정본 §B가 전환 전 복귀를 의도적으로 차단]).
+> ②**증분 1 구현 완료**(16af0ec — 구현검증 7왕복[blocker 15 전부 처리]·tests/p3b-stage1 93단언·전체 체인
+> 초록): C-6 정본 잠금=물리 경로 키(physKeyOf — canonicalIdentityFor.physKey 패리티)+신구 이중 잠금(등록
+> 별칭 전수 — 이행 창 상호 배제 실측)·ctxFor 단일 출처(runCli 자체 조립 폐기) / 공통 (f) reasonKey 전 표면
+> 전파+공용 번역기 reasonTextFor(31키·en 슬롯 한국어 원문 비노출=키 우선 폴백) / 6표면 재배선: 대시보드
+> (approvedViewFor·blocked=사유만+mapText 숨김)·꾸러미(mapContentFor·blocked 정직 표기+영문 번역문·blindSpot
+> 사유=키만)·export(대상 스냅샷 결속·legacy 기록=잠금 안 재판정·경로도 스냅샷 고정·promoteEntry 합타입 소비·
+> already-applied도 exported 이벤트)·reconcile(권위 분기·부분 실패=항목별 보고)·동봉(buildMapAttach 경유·
+> blocked/error=고지 attach[위임 금지])·게이트(순수 결정기 decideGate 분리 수출 — 'auth null·blocked·v2·흔적
+> present/unreadable에서 legacy 반환 금지' 불변식) / 폴백 fail-closed: 쓰기=런타임 판독 불가 시 거부(검사-후-
+> 쓰기 없음)·읽기=전환 흔적 3상태(cutoverTraceStateOf — EACCES 등 판독 오류≠부재) / applyPatch: blocked=플래그
+> 무관 전면 거부·잠금 안 권위 재판정(전이=중단+claim 롤백 — 실행 반례로 잠금)·v2 무플래그 통과·preCutover
+> 필드는 명시 경로만 기록(validator '부재=cutover 후' 정합). 테스트 실행 반례: 권위 전이 모킹·실물 receipt→
+> marker 손수 제작(v2 성립)·EACCES 주입·어댑터 2파일이 빠진 사본 트리(부분 배포 실물)·위임 바이트 동일.
+> ③**배포 목록 실결함 봉합**: BRIDGE_SCRIPTS에 map-freshness.js·map-reader.js 누락(P4 신설분) — 설치본의
+> map-adapters가 require 즉사해 어댑터 전체 로드 불능이던 결함. +2(=18)·hook-setup.ts 쌍 갱신.
+> ▶**다음 착수=P3b 증분 2**(정본=docs/MAP-P3B-DESIGN.md C·D·E절 — 전 계약 동결·임의 변경 금지):
+> cutover 명령(runCli 분기 — C-1 검사: scoutMode·manifest 집합+ready·topology 유효·WAL 부재·미이관 entryFp
+> 다중집합 --confirm-unmigrated N·스냅샷+decisionId 사전발급·배포 세대 18파일 바이트 대조·writer-quiescence
+> --confirm-windows-reloaded[지속 약속 문구 ko/en]) → C-2 잠금 안 재검사(0~5+7)+expected 배너 바이트의
+> frozen-ledger-fp 'receipt 직전' 기록→receipt→marker→read-back → C-3 재개(전수 재검사·marker 보충만) →
+> C-5 배너(결정론 바이트·재시도는 v2 재진입 tail이 담당[플래그+이중 잠금 안 조건부 기록·흡수 금지]) →
+> B-1 frozen probe(지문 대조=동결 위반 경보 축/미이관 총수=정보 배지·기준선 불명=경고) → D 문서(PRIVACY:
+> authority.json·authority-history·map-cutover-snapshots 행 / README ko/en '확정 교범' 개정) → E p3b cutover
+> e2e(성공·멱등+tail·재개·복수 receipt conflict·manifest 불일치·미이관 정확 수·잠금 안 재검사·배너 멱등 등).
+> 완료 후 클린빌드+install 일괄(**현재 이 PC 설치본·훅은 아직 34ad02f 세대 — 증분 1은 커밋만 됨**).
+> ⚠ 이 PC 백로그 장부: 열림 1건 유지(f17952166d364f8a 대화 칩 실효 표시 — 보관함 카드 커밋 a4b9bd7과 무관 확인).
+> ── (이전 2026-07-20 push 묶음(11커밋+수치 정정 1) 요지 —
 > MAP v2 P4 전 증분 완결+탐색 담당(scoutArm) 옵션 신설: 다음 착수=P3b cutover**:
 > ①**P4 증분 1 — P2 확장 계층**(4ef214a·검증 3왕복): structuralHashOf(provenance 제외 — historyless 자기참조
 > 해소)·map-decision-v3(affectedIds='생존' changedIds 필수·정렬)·v2/v3 dual reader(구 v2 바이트·해시 불변
