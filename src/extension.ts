@@ -146,6 +146,7 @@ interface BridgeState {
   lastActivity: string | null;
   turns: Turn[];
   turnsTrimmed: boolean;      // 오래된 턴 '통째' 제거로 요청한 recentTurns를 못 채울 때만 true — 조용한 축소 금지(고지)
+  turnsStart: number;         // 표시 슬라이스 첫 턴의 '전체 대화 기준' 순번 — 주입 접힘 펼침 키의 창 이동 안정성(3차 blocker)
   turnsInnerTrimmed: boolean; // 화면에 있는 '선두 턴 내부'의 오래된 답변이 생략됐을 때 true — 원인이 다르므로 별도 고지(Codex 반례)
   candidates: Candidate[];
   hiddenCandidates: Candidate[];
@@ -1765,6 +1766,7 @@ function computeState(turnsN: number): BridgeState {
 
   let turns: Turn[] = [];
   let turnsTrimmed = false;
+  let turnsStart = 0;
   let turnsInnerTrimmed = false;
   let lastActivity: string | null = null;
   let modelMeta: { model: string; effort: string; models: string[] } = { model: "", effort: "", models: [] };
@@ -1778,6 +1780,7 @@ function computeState(turnsN: number): BridgeState {
       const racc = rolloutAccFor(file);
       const allTurns = toTurns(racc.msgs);
       turns = allTurns.slice(-Math.max(1, turnsN));
+      turnsStart = Math.max(0, allTurns.length - Math.max(1, turnsN)); // 전체 기준 시작 순번(창이 밀려도 각 턴의 전역 순번은 불변 — 보관 상한 절삭 시에만 이동[기존 고지 배너 케이스])
       // 두 원인을 구분 고지(단일 표지는 원인 오표기·창 찼을 때 침묵 — Codex 반례): ①턴 통째 제거는 요청 창을
       // 못 채울 때만 ②선두 턴 내부 생략은 그 턴이 화면에 있을 때(표시=마지막 N턴이므로 전체≤N일 때 선두가 보임).
       turnsTrimmed = racc.turnsDropped && allTurns.length < Math.max(1, turnsN);
@@ -1858,6 +1861,7 @@ function computeState(turnsN: number): BridgeState {
     lastActivity,
     turns,
     turnsTrimmed,
+    turnsStart,
     turnsInnerTrimmed,
     candidates,
     hiddenCandidates,
@@ -4301,6 +4305,42 @@ class Dashboard {
   // 가까운 좌표'로 복원한다. 판정은 순수 함수(테스트가 산출물에서 추출 실행) — 의도적 최상단 이동은 없음
   // (명시 이동은 전부 smooth scrollIntoView라 한 프레임 안에 0으로 도달하지 않아 가드에 안 걸림).
   function clickJumpRestore(prevY, nowY, maxY){ return (prevY > 50 && nowY < 2) ? Math.min(prevY, Math.max(0, maxY)) : null; }
+  // 주입 지침 접기(2026-07-23 사용자 결정 — 판단 검증 3왕복 귀결): 하네스가 매 검증 요청 앞에 붙이는 규약
+  // 보일러플레이트(기본원칙·경계·서식 지시 등 수천 자)를 검증 대화 말풍선에서 접힌 칩으로 강등. **표시 전용 —
+  // 전송(모델 입력)은 불변**(내부화·경로표시는 감쇠·미이행 위험으로 기각된 판단 이력 참조).
+  // 구분자는 '유일 출현'일 때만 경계로 인정한다(1차 검증 blocker① 반영): 본문이 구분자를 인용하면 마지막
+  // 출현 방식이, 주입 머리(사용자 계약·경계 등 임의 다줄 문자열 포함)가 인용하면 첫 출현 방식이 각각 오분류
+  // — 표시 계층 휴리스틱은 양방향 모두 완전할 수 없다. 그래서 다중 출현=접기 생략(원문 그대로 — 오분류 0의
+  // fail-safe·흔한 정상 케이스는 유일 출현). 전송측 공용 경계 프레이밍은 보관함 afdd6850b4ea2030(백로그).
+  // 복원 계약: head+marker+body === 원문(펼치면 전체가 보임).
+  function splitInjectedHead(text){
+    var occ=[];
+    ["\\n---\\n[작업 요청]\\n","\\n---\\n[Work Request]\\n"].forEach(function(m){ var i=text.indexOf(m); while(i>=0){ occ.push({i:i,m:m}); i=text.indexOf(m,i+1); } });
+    if(occ.length!==1 || occ[0].i<=0) return null; // 애매(다중)·머리 없음 → 접지 않음
+    var o=occ[0];
+    return { head:text.slice(0,o.i), marker:o.m, body:text.slice(o.i+o.m.length) };
+  }
+  // 펼침 키=사용자 본문만의 해시(1차 blocker② 반영): convKey는 답변 배열까지 해시라 답변이 자라는 재렌더마다
+  // 키가 바뀌어 펼침이 접혔다 — 주입 머리는 사용자 메시지에 속하므로 사용자 본문만으로 안정 키를 만든다.
+  function injKeyOf(u){ var s=String(u||""); var h=0; for(var i=0;i<s.length;i++){ h=(h*31+s.charCodeAt(i))|0; } return "inj"+h; }
+  function userBubble(t, turnIdx){
+    var u=el("div","umsg");
+    var sp=splitInjectedHead(t.user||"");
+    if(!sp){ u.textContent=t.user; return u; }
+    // 키=사용자 본문 해시+'전체 대화 기준' 턴 순번(2차 [보완]+3차 blocker 반영): 같은 요청문 반복 턴의 상태
+    // 공유 차단 + 최근 N턴 표시 창이 밀려도 전역 순번은 불변(host가 turnsStart로 전달)이라 펼침 유지. 답변
+    // 성장에도 불변(새 턴은 뒤에만 붙음). 예외=보관 상한(4,000메시지) 절삭 시 전역 순번 이동(기존 고지 배너 케이스·희귀).
+    var det=keyedDetails(injKeyOf(t.user)+":"+turnIdx, T("🔒 하네스 주입 지침 "+sp.head.length+"자 (규약·경계·서식 — 매 검증에 자동 첨부) — 펼쳐서 원문 보기","🔒 harness-injected directives, "+sp.head.length+" chars (rules · boundary · format — auto-attached to every ask) — expand for full text"));
+    var pre=document.createElement("pre");
+    pre.style.cssText="white-space:pre-wrap;max-height:280px;overflow:auto;font-size:11px;margin:4px 0 0 0";
+    pre.textContent=sp.head+sp.marker; // 구분자까지 포함 — '접힘 원문+아래 본문=전송 원문 전체' 복원 계약(바이트 결합 동일)
+    det.appendChild(pre);
+    u.appendChild(det);
+    var b=document.createElement("div");
+    b.textContent=sp.body; // textContent만(HTML 주입 없음 — 기존 지도 본문과 같은 원칙)
+    u.appendChild(b);
+    return u;
+  }
   document.addEventListener("click", function(){
     const y = window.scrollY; if (y < 2) return;
     requestAnimationFrame(function(){
@@ -6009,9 +6049,9 @@ class Dashboard {
     else {
       if (d.turnsTrimmed) conv.appendChild(el("div","card muted",T("대화가 매우 길어 오래된 턴 일부가 보관 상한(메시지 4,000개)으로 절삭됐습니다 — 설정한 턴 수보다 적게 보일 수 있고, 보존된 최근 턴은 아래에 전부 표시됩니다.","This conversation is very long, so some oldest turns were dropped by the retention cap (4,000 messages) — fewer turns than configured may appear; everything retained is shown below.")));
       if (d.turnsInnerTrimmed) conv.appendChild(el("div","card muted",T("가장 오래된 표시 턴이 매우 길어, 그 턴 '내부'의 오래된 Codex 답변 일부가 보관 상한으로 생략됐습니다(사용자 메시지와 최신 답변은 보존).","The oldest visible turn is very long, so some of the oldest Codex replies inside that turn were omitted by the retention cap (the user message and latest replies are kept).")));
-      d.turns.forEach((t) => {
+      d.turns.forEach((t, tIdx9) => {
         const wrap = el("div","turn");
-        if (t.user) wrap.appendChild(el("div","umsg", t.user));
+        if (t.user) wrap.appendChild(userBubble(t, (d.turnsStart||0)+tIdx9)); // 주입 지침 접힘 말풍선 — 키의 턴 순번은 '전체 대화 기준'(3차 blocker: 최근 N턴 창이 밀려도 전역 순번 불변 → 펼침 유지)
         let body=null, more=null, ckey=null;
         if (t.assistant.length){
           const txt = t.assistant.join("\\n\\n");
