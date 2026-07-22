@@ -10,11 +10,12 @@
  *   call-failed (열거 — 러너·후속 소비층의 분기 재료. '빈 지도'는 provider별 기존 의미 보존: self=call-failed로
  *   invoke가 보고·deepseek=빈 stdout도 그대로 진행이 구 러너 동작이라 공통층이 새 실패를 신설하지 않는다).
  * - probe(가벼운 도달성 점검 — 지도 요청 아님): self=Claude CLI 존재 확인 / deepseek=bridge ping(키 없으면
- *   정직한 실패 반환 — 게이트 아님) / codex=P6 예정(available:false — 1-26 부기의 '예정 배지'와 정합).
+ *   정직한 실패 반환 — 게이트 아님) / codex=codex --version(브릿지 resolveCodex 해석 재사용 — P6에서 실체화).
  * - 동작 보존: 기존 러너의 stdout(지도 본문)·stderr(보관/usage 알림)·exit 의미·장부 기록은 러너 껍데기가
  *   ScoutResult로부터 동일하게 재구성한다(바이트 수준 메시지 보존이 테스트 대상).
  */
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { collectPackage } = require("./scope-package.js");
@@ -105,12 +106,52 @@ const PROVIDERS = {
       return { ok: true, map: String(r.stdout || "").trim(), usage: um ? { in: Number(um[1]), out: Number(um[2]), model: um[3] || null } : null, stderrPass, rawStdout: String(r.stdout || "") };
     },
   },
+  // Codex 정찰(P6 2026-07-22 — 구 '예정' 소켓의 실체): 검증 세션과 분리된 독립 codex exec 1회.
+  // 실행 해석은 브릿지 정본 resolveCodex 재사용(CODEX_BIN→codex-bin.txt 핀→PATH — 중복 구현 금지).
   codex: {
     id: "codex",
-    billed: true,
-    available: () => false, // P6(Codex Scout 독립 세션) 예정 — 소켓만(대시보드 '예정' 배지와 정합·여기서 구현 금지)
-    probe: () => ({ ok: false, key: "provider-unavailable", detail: "P6" }),
-    invoke: () => ({ ok: false, key: "provider-unavailable", detail: "P6" }),
+    billed: true, // Codex 플랜 사용량 소모(토큰 단가 청구형은 아님 — 정직 표기. 검증 축과 같은 계정을 쓴다)
+    available: () => true, // 검증 축이 이미 codex 실행파일에 의존 — 별도 가용성 게이트 없음(실패=정직 보고)
+    probe: () => {
+      let inv;
+      try { inv = require(path.join(__dirname, "..", "bridge", "codex-bridge.js")).resolveCodex(); }
+      catch (e) { return { ok: false, key: "probe-failed", detail: "bridge-load: " + ((e && e.message) || "") }; }
+      const r = spawnSync(inv.file, [...inv.args, "--version"], { encoding: "utf8", timeout: 30000, windowsHide: true, shell: !!inv.shell });
+      return r.error || r.status !== 0 ? { ok: false, key: "probe-failed", detail: (r.error && r.error.message) || `exit=${r.status}` } : { ok: true, detail: String(r.stdout || "").trim().slice(0, 60) };
+    },
+    invoke: ({ preface, md }) => {
+      // 독립 세션 계약: resume이 아닌 새 codex exec 1회 + cwd=빈 임시 폴더 —
+      // ①꾸러미'만' 근거(빈 폴더로 저장소 탐색 억제 — 단 read-only 샌드박스는 절대경로 '읽기'를 물리
+      //   차단하진 못한다: 정직 한계, preface의 codex 각주(탐색 금지 지시)로 보강. 통신은 read-only가 차단)
+      // ②검증 세션 오링크 방지의 정본은 --ephemeral(rollout 무잔재 — 아래 인자 주석)·cwd=임시 폴더는 부차 방어.
+      let inv;
+      try { inv = require(path.join(__dirname, "..", "bridge", "codex-bridge.js")).resolveCodex(); }
+      catch (e) { return { ok: false, key: "call-failed", detail: "bridge-load: " + ((e && e.message) || "") }; }
+      const tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), "scout-codex-"));
+      const outFile = path.join(tmpCwd, "map-out.txt");
+      try {
+        // --sandbox read-only 명시(검증 1차 blocker①): 사용자 config가 쓰기 가능 기본이어도 이 호출만은
+        // 읽기 전용으로 강제 — preface의 '읽기 전용 샌드박스 실행' 사실 문장과 실제 실행을 일치시킨다.
+        // --ephemeral(검증 2차 blocker②): rollout을 아예 안 남긴다 — 검증 세션 식별의 최종 폴백(무제한 cwd
+        // newestRolloutSince)이 정찰 rollout을 검증 세션으로 오링크할 경합을 원천 차단(+정찰 대화 잔재 없음 =
+        // 프라이버시 부수 이득). 구버전 codex가 이 플래그를 모르면 exec가 실패하고 러너가 정직 보고한다.
+        const r = spawnSync(inv.file, [...inv.args, "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-o", outFile], {
+          input: preface + md,
+          cwd: tmpCwd,
+          stdio: ["pipe", "ignore", "pipe"],
+          encoding: "utf8",
+          timeout: 8 * 60 * 1000, // self 팔과 동일 상한
+          windowsHide: true,
+          shell: !!inv.shell,
+          maxBuffer: 1024 * 1024 * 64,
+        });
+        let map = "";
+        try { map = fs.readFileSync(outFile, "utf8").trim(); } catch { /* 아래 실패 판정으로 */ }
+        if (r.error || r.status !== 0 || !map) return { ok: false, key: "call-failed", detail: ((r.error && r.error.message) || `exit=${r.status}`) + " " + String(r.stderr || "").slice(-300) };
+        // codex exec은 토큰 실측을 안 내놓는다 → usage null(정직 — self 팔과 동일 규약·문자수만 장부에)
+        return { ok: true, map, usage: null, stderrPass: "" };
+      } finally { try { fs.rmSync(tmpCwd, { recursive: true, force: true }); } catch { /* 임시 잔재 — 무해 */ } }
+    },
   },
 };
 
@@ -142,7 +183,7 @@ function runScout(repo, providerId, opts) {
     ? { basisTs: pkg.meta.basisTs, ...(Array.isArray(pkg.meta.seedMissing) ? { seedMissing: pkg.meta.seedMissing } : {}), ...(pkg.meta.seedHashes && typeof pkg.meta.seedHashes === "object" ? { seedHashes: pkg.meta.seedHashes } : {}), ...(pkg.meta.nonGitFiles && typeof pkg.meta.nonGitFiles === "object" ? { nonGitFiles: pkg.meta.nonGitFiles } : {}) }
     : {};
   const md = renderPackageMarkdown(pkg, lang);
-  const preface = providerId === "self" ? CL.buildScoutPreface("self", lang) + "\n\n" : ""; // deepseek preface는 브릿지 buildMapRequest가 같은 슬롯에서 읽음(기존 계약)
+  const preface = providerId === "self" || providerId === "codex" ? CL.buildScoutPreface(providerId, lang) + "\n\n" : ""; // deepseek preface는 브릿지 buildMapRequest가 같은 슬롯에서 읽음(기존 계약) · codex는 CLI 팔이라 self와 같은 자리에서 주입(P6)
   markLive(repo, providerId); // 상태바 '지도 생성중…' — 호출 동안만
   let call;
   try { call = P.invoke({ preface, md, lang, repo, outFile: o.outFile || null }); }

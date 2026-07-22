@@ -2,7 +2,7 @@
 
 > 이 문서 하나로 이어갈 수 있게 쓰였다. 상세 설계 원본(SCOUT-TRACK.md·SCOPE-LEDGER.md)은 **의도적으로 레포 밖 로컬 문서**라
 > 다른 환경에는 없다 — 그래서 이 파일이 그 요지를 포함한다. ⚠ **실 API 키·토큰은 어떤 파일·픽스처·예시에도 절대 넣지 말 것.**
-> 마지막 갱신: 2026-07-22 (버전 0.1.86 불변). **★검증 거버넌스 트랙(설계+증분 1~3) 완결 + P5(provider 공통 인터페이스) 완결(로컬 커밋 — push 대기)**:
+> 마지막 갱신: 2026-07-22 (버전 0.1.86 불변). **★검증 거버넌스 트랙(설계+증분 1~3) 완결 + P5(provider 공통 인터페이스) 완결 + P6(Codex Scout) 완결(로컬 커밋 — push 대기)**:
 > 배경: C-7이 core 프로필로도 11왕복·blocker 19(실측 — core ②조항 "희귀 경합=blocker"가 이 프로젝트에선
 > 만능 통과문+지원 환경 선언 부재) → 사용자 결정으로 P5보다 선행. ①설계 v1 동결(docs/VERIFY-GOVERNANCE.md
 > — 설계검증 6왕복·"열린 탐색+제한된 차단 권한"·Envelope·입장 심사·지적 계보·범위 확장·소진 분해. 726219f)
@@ -38,7 +38,28 @@
 > 기존 소스 단언 8곳 재배선(scout-store·scout-usage·scout-prompt·deepseek-bridge·ledger-events·l1-provenance·
 > scout-drift×2·scout-advice — 러너 원문 단언→공통층+위임 단언)·신규 tests/scout-providers.test.js 53단언
 > (목 provider 경계 실행·ledger 사보타주·Module._load 후킹 러너 e2e 6케이스)·체인 등록·전체 EXIT=0.
-> ▶다음: P6(Codex Scout 독립 세션 — codex 소켓에 어댑터 구현·'Codex 예정' 배지의 실체) → P7(모드 UI) → P8(라우터). 미반영 합의 이월: f-e9c23d7a·PRIVACY cutover-notice·보관함 5364ebe0.
+> ★P6 완결(2026-07-22 — 구현검증 4왕복[실패 3→통과]·blocker 누적 6 전부 수용·반박 0): 구 '예정' 배지의 실체 —
+> ①codex 어댑터(scout-providers.js): 검증 세션과 분리된 독립 `codex exec --ephemeral --sandbox read-only
+> --skip-git-repo-check` 1회·cwd=빈 임시 폴더·stdin=preface+꾸러미·-o 회수·resolveCodex 정본 재사용(codex-bridge
+> export 1개 추가·중복 구현 금지)·probe=--version. --ephemeral=rollout 무잔재(검증 세션 식별의 무제한 cwd 폴백
+> newestRolloutSince가 정찰 rollout을 집는 오링크 경합 원천 차단 — 2차 blocker·검증자 로컬 --help 실측 유효 확인.
+> 구버전 codex가 플래그 모르면 exec 실패=러너 정직 보고). read-only 강제=preface 사실 문장과 실행 일치(1차
+> blocker). 정직 한계 명문: read-only는 절대경로 '읽기'를 물리 차단 못함(SELF_DENY 등가 아님 — 지시 보강,
+> 검증자 'best-effort 허용·동등 보장 해석 금지' 판정). usage=null(exec 토큰 미제공 — 문자수만).
+> ②scoutArm 3값(SCOUT_ARMS+"codex"·강등 게이트 없음 — 검증 축이 이미 codex 의존이라 중복, 검증자 타당 판정)·
+> 러너 scope-scout-codex.js(CLI 껍데기·self 동형)·게이트 2곳(scout-gate·codex-hook)·자동지시 ko/en·어긋남
+> drRunner 분기. ③소비점 전면 3값(1~3차 blocker 계보 f-a2404f14): 최근 실행 요약·실행중 카드·지도 목록·최신
+> 지도·상태바 정찰 줄·LLM 줄·flow 툴팁·상태바 '탐색중' 접미 3곳(연결/미연결/flow)·통계 행·검증 프롬프트 지도
+> attach 머리(contract-lib) — scout-arm [5b]가 소비점 '개별' 단언으로 고정(전역 개수 단언은 누락을 고정한다는
+> 3차 보완 수용·지점 추가 시 개별 단언 추가가 계약). ④고지 세 갈래 개정(f-ecfbc8ae): PRIVACY 3·32·55행,
+> 확장 FAQ 2곳·트랙 툴팁·가이드 비용 카드·기본 원칙 라벨(all scouts)·통계 각주, README ko 117·123·126·239·
+> 245·258행, README.en 16·17·34·37행("Two exceptions"→"A DeepSeek key adds two flows") — '두 갈래' 잔재 0
+> 단언화. ⑤대시보드 Codex 실선택 버튼(mk·setOn(av.eff) 3값·핸들러 화이트리스트·툴팁 ko/en — 2026-07-20 '거짓
+> 옵션 금지' 결정은 러너 실존으로 의도 계승), scoutArmViewExt·Contract 타입·loadContract 정규화 3값.
+> 테스트: scout-providers 69단언(가짜 CODEX_BIN 실 invoke e2e — 인자·stdin·임시 cwd·-o 회수·정리·종료코드,
+> 실 codex 호출 0)·scout-arm 81단언·deepseek-bridge 구 문서모델 단언 3건 세 갈래 재배선·cli-bilingual에
+> codex 러너 추가·전체 체인 EXIT=0. billed 표기=Codex 플랜 사용량 소모(토큰 단가형 아님 정직).
+> ▶다음: P7(모드 UI — 경제형/정밀형/자동형·readiness 행렬. 1-26 경계 유지: scoutArm과 통합 금지·'키 없으면 강등' 규칙 재사용 금지) → P8(라우터). 미반영 합의 이월: f-e9c23d7a·PRIVACY cutover-notice·보관함 5364ebe0.
 > ── (이전: **★C-7 자동화 계층 완결**):
 > 사용자 지시(2026-07-21 "MAP은 수동을 없애려는 설계인데 전환에 또 수동 명령은 과보수") → 정본 C-7 절 신설+구현.
 > 원칙: 동의할 내용 없으면(legacy AND 미이관 0 AND 안전 조건 전부) 자동·판단 필요(미이관 N>0)만 원클릭 카드.

@@ -61,7 +61,7 @@ const dsSrc = fs.readFileSync(path.join(ROOT, "scripts", "scope-scout-deepseek.j
 const brSrc = fs.readFileSync(path.join(ROOT, "bridge", "deepseek-bridge.js"), "utf8");
 const abSrc = fs.readFileSync(path.join(ROOT, "scripts", "scope-ab-retro.js"), "utf8");
 const provSrc = fs.readFileSync(path.join(ROOT, "scripts", "scout-providers.js"), "utf8");
-ok(/buildScoutPreface\("self"/.test(provSrc) && !/const preface = "너는 '탐색자'다/.test(provSrc) && !/너는 '탐색자'다/.test(selfSrc), "self 팔 preface — 하드코딩 폐기·단일 출처(P5: 공통층 한 곳)");
+ok(/buildScoutPreface\(providerId, lang\)/.test(provSrc) && !/const preface = "너는 '탐색자'다/.test(provSrc) && !/너는 '탐색자'다/.test(selfSrc), "CLI 팔(self·codex) preface — 하드코딩 폐기·단일 출처(P5 공통층 한 곳·P6 codex 동승)");
 ok(/buildScoutPreface\("deepseek"\)/.test(brSrc), "deepseek-bridge — 같은 슬롯에서 preface(폴백 포함)");
 ok(/scoutPromptSignature\(lang\)/.test(provSrc) && /runScout\(repo, "self"/.test(selfSrc) && /runScout\(repo, "deepseek"/.test(dsSrc), "지도 메타 프롬프트 서명(P4) — 공통층 기록+러너 2종 위임");
 ok(/renderPackageMarkdown\(pkg, lang\)/.test(provSrc), "꾸러미 렌더에 언어 전달(공통층 — 러너 2종 패리티는 구조 보장)");
