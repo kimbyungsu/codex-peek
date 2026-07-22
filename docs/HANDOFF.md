@@ -93,7 +93,15 @@
 > 고지 배너 케이스·희귀]). 복원 계약=펼침(head+구분자)+본문의 바이트 결합=전송 원문. textContent만(주입 없음).
 > 보관함 신규 2건: afdd6850b4ea2030(공용 경계 프레이밍)·17d4697dc6a164fb(비브릿지 단일 인용 구분 한계 — 같은
 > 취지). tests/conv-fold.test.js 22단언(산출물 추출 실행 — 이중 이스케이프 한 겹 벗김·중괄호 짝 추출)·체인 등록·EXIT=0.
-> ▶다음: P7(모드 UI — 경제형/정밀형/자동형·readiness 행렬. 1-26 경계 유지: scoutArm과 통합 금지·'키 없으면 강등' 규칙 재사용 금지) → P8(라우터). 미반영 합의 이월: f-e9c23d7a·PRIVACY cutover-notice·보관함 5364ebe0.
+> ★P7 상세 설계 v4 동결(2026-07-23 — 설계검증 4왕복[실패 3→통과]·blocker 계보 전부 수용): 정본=docs/MAP-V2-DESIGN.md 말미
+> 'P7 상세 설계 v4'. 요지: mapMode 4값(self 명시 포함 — scoutArm 동형)·readiness 행렬(economy=실효 지문+capability
+> probe[최대 2회 과금 고지]/precision=실제 정찰과 동일 조립의 초소형 ephemeral 실행/self=P5 산출물)·전 provider
+> probe 세대 결속(실행 직전 캡처→잠금 안 재확인·불일치=폐기)·영속 map-readiness.json(v1·strict lock·손상=unknown)·
+> 조용한 전환 금지(eff 미도입)·P8 전 노출+정직 배지. 1-34 원문·P7 로드맵에 supersession 부기 완료.
+> **⛔구현 착수 불가 — 사용자 결정 2건 대기**: ①1-33 정합(map-enrich-queue 실재·소비자 부재 실측): ⓐP7에 최소
+> 실행기 포함(범위 확대) vs ⓑ1-33 개정(재개 발동=실행기 배포 Phase — P7은 트리거 훅 자리만) ②정본 개정 승인
+> (1-34 precisionReady ephemeral 재정의·P7 로드맵 Scout 세션 관리 소거).
+> ▶다음: 사용자 결정 2건 → P7 구현 → P8(라우터). 미반영 합의 이월: f-e9c23d7a·PRIVACY cutover-notice·보관함 5364ebe0.
 > ── (이전: **★C-7 자동화 계층 완결**):
 > 사용자 지시(2026-07-21 "MAP은 수동을 없애려는 설계인데 전환에 또 수동 명령은 과보수") → 정본 C-7 절 신설+구현.
 > 원칙: 동의할 내용 없으면(legacy AND 미이관 0 AND 안전 조건 전부) 자동·판단 필요(미이관 N>0)만 원클릭 카드.
