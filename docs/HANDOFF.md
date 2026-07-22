@@ -2,7 +2,7 @@
 
 > 이 문서 하나로 이어갈 수 있게 쓰였다. 상세 설계 원본(SCOUT-TRACK.md·SCOPE-LEDGER.md)은 **의도적으로 레포 밖 로컬 문서**라
 > 다른 환경에는 없다 — 그래서 이 파일이 그 요지를 포함한다. ⚠ **실 API 키·토큰은 어떤 파일·픽스처·예시에도 절대 넣지 말 것.**
-> 마지막 갱신: 2026-07-23 (버전 0.1.86 불변). **★검증 거버넌스 트랙(설계+증분 1~3) 완결 + P5(provider 공통 인터페이스) 완결(이상 07-22) + P6(Codex Scout) 완결(07-23·로컬 커밋 — push 대기)**:
+> 마지막 갱신: 2026-07-23 (버전 0.1.86 불변). **★검증 거버넌스 트랙(설계+증분 1~3) 완결 + P5(provider 공통 인터페이스) 완결(이상 07-22) + P6(Codex Scout)·P6b(Codex 정찰 두뇌 설정) 완결(07-23·로컬 커밋 — push 대기)**:
 > 배경: C-7이 core 프로필로도 11왕복·blocker 19(실측 — core ②조항 "희귀 경합=blocker"가 이 프로젝트에선
 > 만능 통과문+지원 환경 선언 부재) → 사용자 결정으로 P5보다 선행. ①설계 v1 동결(docs/VERIFY-GOVERNANCE.md
 > — 설계검증 6왕복·"열린 탐색+제한된 차단 권한"·Envelope·입장 심사·지적 계보·범위 확장·소진 분해. 726219f)
@@ -59,6 +59,18 @@
 > 테스트: scout-providers 69단언(가짜 CODEX_BIN 실 invoke e2e — 인자·stdin·임시 cwd·-o 회수·정리·종료코드,
 > 실 codex 호출 0)·scout-arm 81단언·deepseek-bridge 구 문서모델 단언 3건 세 갈래 재배선·cli-bilingual에
 > codex 러너 추가·전체 체인 EXIT=0. billed 표기=Codex 플랜 사용량 소모(토큰 단가형 아님 정직).
+> ★P6b 완결(2026-07-23 — 사용자 결정 2건 반영·구현검증 4왕복[실패 3→통과]·blocker 계보 3 전부 수용):
+> 사용자 판단 질의 2건의 귀결 — ①팔 전환 후 데이터 공유="이미 충족" 확답(판단 검증 통과(보완): 보관함·신선도·
+> 자동지시·게이트·attach·관찰 일지 전부 프로젝트 단위·arm=출처 라벨일 뿐 — 검증자 7개소 실측. 작업 없음)
+> ②세션 선택=도입 안 함(--ephemeral 무잔재가 세션 폭발을 원천 해소·resume은 '꾸러미만 근거' 공정성 오염 —
+> 사용자 승인) ③Codex 정찰 두뇌 설정만 신설: **전역** scout-codex.json {model,reasoning}(프로젝트별 분리 안 함
+> — 사용자 결정 "설정만 복잡해짐"). 정본=contract-lib(readScoutCodexPrefs/saveScoutCodexPrefs/scoutCodexArgs —
+> 빈 값=파일 삭제=비물질화·값 화이트리스트 없음[잘못된 값=exec 실패 정직 보고])·어댑터 -c model/-c
+> model_reasoning_effort 삽입(검증 modelPrefs와 별개 슬롯 — 싼 정찰+강한 검증 조합)·고급설정 카드(현재값
+> 선충전 WYSIWYG[1차 blocker ab-2: 빈 칸 전체 교체 침묵 소실 차단]+편집 세대 결속 scGen/scSavedGen[2차:
+> 응답 전 새 편집 초안 보호]+단일-flight scBusy/scLock[3차 f-c4c4ab24: 겹친 요청 차단·해제=성공/실패 공통])·
+> 대시보드 codex 선택 시 고급설정 안내·PRIVACY 파일 표 행. scout-providers [11] 21단언(가짜 CODEX_BIN 실
+> invoke에 -c 실림·초기화 후 0개 포함)·체인 EXIT=0.
 > ▶다음: P7(모드 UI — 경제형/정밀형/자동형·readiness 행렬. 1-26 경계 유지: scoutArm과 통합 금지·'키 없으면 강등' 규칙 재사용 금지) → P8(라우터). 미반영 합의 이월: f-e9c23d7a·PRIVACY cutover-notice·보관함 5364ebe0.
 > ── (이전: **★C-7 자동화 계층 완결**):
 > 사용자 지시(2026-07-21 "MAP은 수동을 없애려는 설계인데 전환에 또 수동 명령은 과보수") → 정본 C-7 절 신설+구현.

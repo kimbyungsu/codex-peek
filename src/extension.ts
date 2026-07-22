@@ -189,6 +189,7 @@ interface BridgeState {
   scoutMapStale: number | null;    // 낡은 지도 배지 — 지도 이후 변경 신호 수(seed 변경+새 커밋+작업트리 — 브릿지 scoutMapStatus 정합·판단 불가면 null·경고 아님)
   scoutLive: { arm: string; startedAt: string } | null; // 지도 생성중(러너 실행 동안만 — TTL로 잔존 걸러냄)
   deepseek: { hasKey: boolean; masked: string; model: string }; // 고급설정 탭 표시용 — 키 원문은 절대 웹뷰로 안 보냄(마스킹만)
+  scoutCodex: { model: string; reasoning: string }; // 고급설정 탭 — Codex 정찰 두뇌 설정(P6b·전역·비밀 아님)
   scoutTarget: { repo: string; differs: boolean; invalid: boolean; configured: boolean; inherited: boolean; drift: { repo: string; sample: number; agree: number } | null } | null; // P1 정찰 대상 + 어긋남 자기진단(2026-07-10). null=2트랙
   scoutGate: { eff: string; raw: string | null } | null; // 실효 플랜 게이트(표시 전용 — 3트랙에서만, 계약에 저장 안 함). null=2트랙/ws 없음
   scoutArm: { raw: string | null; eff: "self" | "deepseek" | "codex"; hasKey: boolean; slot?: string } | null; // 탐색 담당(2026-07-20·P6 codex 추가) — raw=명시 선택(반대 언어 슬롯 상속·null=미지정), eff=실효(deepseek는 키 없으면 self 강등·codex는 강등 없음), slot=계산 언어. null=2트랙/ws 없음
@@ -1912,6 +1913,7 @@ function computeState(turnsN: number): BridgeState {
     scoutArm: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; return scoutArmViewExt(ws); } catch { return null; } })(), // slot은 뷰가 계산과 원자 결속해 반환(3차 blocker — 사후 재판독 금지)
     mapLedger: readMapLedger(ws),       // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만)
     deepseek: readDeepseekView(),       // 고급설정 탭 — 키 유무·마스킹(원문 미노출)
+    scoutCodex: readScoutCodexPrefsExt(), // 고급설정 탭 — Codex 정찰 모델·추론강도(전역·비밀 아님)
     brainActual: (({ cc, cx }) => ({ cc, cx, scout: scoutActualText(ws) }))(brainActualTexts(ws)), // 두뇌 '실제 답' 정보 문구(히어로) — sig는 상태바 전용이라 제외
     // 표준 테스트 폴더 '감지' 여부(성격 프로필용) — 외부 전송·LLM 없는 가벼운 로컬 판독. '테스트 없음' 단정이 아니라
     // '표준 폴더 미감지'(src/tests·언어별 관행은 못 볼 수 있음 — scope-package 비재귀 한계 고지와 같은 축).
@@ -2963,6 +2965,15 @@ function readScoutLive(ws: string | null): { arm: string; startedAt: string } | 
 
 // ── DeepSeek 설정(고급 탐색 키) — 런타임 홈 deepseek.json. 웹뷰에는 마스킹만, 원문은 절대 안 보냄 ──
 const DEEPSEEK_FILE = path.join(BRIDGE_DIR, "deepseek.json");
+// ── Codex 정찰 두뇌 설정(P6b — 전역 scout-codex.json·비밀 아님: 모델명·추론강도만) ──
+// ⚠ bridge/contract-lib.js readScoutCodexPrefs와 같은 파일·같은 형태(어긋나면 저장한 값이 정찰에 안 먹음).
+const SCOUT_CODEX_FILE = path.join(BRIDGE_DIR, "scout-codex.json");
+function readScoutCodexPrefsExt(): { model: string; reasoning: string } {
+  try {
+    const j = JSON.parse(fs.readFileSync(SCOUT_CODEX_FILE, "utf8"));
+    return { model: j && typeof j.model === "string" ? j.model.trim() : "", reasoning: j && typeof j.reasoning === "string" ? j.reasoning.trim() : "" };
+  } catch { return { model: "", reasoning: "" }; }
+}
 function readDeepseekRaw(): any { try { return JSON.parse(fs.readFileSync(DEEPSEEK_FILE, "utf8")); } catch { return {}; } }
 function readDeepseekView(): { hasKey: boolean; masked: string; model: string } {
   const j = readDeepseekRaw();
@@ -3504,6 +3515,19 @@ class Dashboard {
             });
             return;
           }
+        }
+        if (m?.type === "saveScoutCodexPrefs") {
+          // Codex 정찰 두뇌 설정(P6b) — 전역·비밀 아님(모델명·추론강도만). 둘 다 빈 값=파일 삭제(비물질화=codex 기본).
+          const modelC = typeof m.model === "string" ? m.model.trim() : "";
+          const reasoningC = typeof m.reasoning === "string" ? m.reasoning.trim() : "";
+          let okC = false;
+          try {
+            if (!modelC && !reasoningC) { try { fs.unlinkSync(SCOUT_CODEX_FILE); okC = true; } catch (e: any) { okC = !!(e && e.code === "ENOENT"); } }
+            else okC = atomicWrite(SCOUT_CODEX_FILE, JSON.stringify({ model: modelC, reasoning: reasoningC }, null, 2));
+          } catch { okC = false; }
+          if (!okC) vscode.window.showErrorMessage(tE("Codex 정찰 설정 저장 실패 — 파일 접근이 막혔어요. 잠시 후 다시 시도하세요.","Failed to save the Codex scout settings — file inaccessible. Try again shortly."));
+          this.post();
+          this.panel?.webview.postMessage({ type: "saveResult", target: "scoutCodex", ok: okC });
         }
         if (m?.type === "saveDeepseekKey") {
           // 키 저장/삭제 — 원문은 이 핸들러에서 파일로만 가고, 상태(post)로는 마스킹만 나감. 빈 입력=키 삭제(모델·주소 설정은 보존).
@@ -4246,6 +4270,17 @@ class Dashboard {
       </div>
       <div class="hint" id="dsState" style="margin-top:6px"></div>
     </div>
+    <div class="card">
+      <div class="chead">${t("Codex 정찰 모델·추론 강도", "Codex scout model · reasoning effort")} <span class="muted" style="font-weight:400">${t("· 탐색 담당을 Codex로 선택했을 때의 정찰 실행에만 적용 — 검증(2트랙)의 두뇌 설정과는 별개예요(정찰은 싸게, 검증은 강하게 조합 가능)", "· applies only to scout runs when Codex is the selected scout — separate from the verification brain settings (cheap scout + strong verifier is a valid combo)")}</span></div>
+      <div class="hint">${t("전역 설정(모든 프로젝트 공통)이고 이 컴퓨터의 브릿지 홈(<code>~/.codex-bridge/scout-codex.json</code>)에만 저장돼요 — 비밀값이 아니라 모델 이름과 추론 강도 문자열뿐이에요. <b>빈 값=쓰시는 codex 기본값 그대로</b>(아무것도 안 바꿈). 값은 codex가 이해하는 이름이어야 하며(추론 강도 예: minimal / low / medium / high), 잘못된 값이면 그 정찰 실행이 정직하게 실패로 보고돼요(조용히 무시하지 않음).", "Global (shared by all projects), stored only in this machine's bridge home (<code>~/.codex-bridge/scout-codex.json</code>) — not a secret: just a model name and a reasoning-effort string. <b>Empty = your codex defaults as-is</b> (changes nothing). Values must be names codex understands (reasoning effort e.g. minimal / low / medium / high); an invalid value makes that scout run fail honestly (never silently ignored).")}</div>
+      <div class="row" style="margin-top:8px">
+        <input id="scModel" placeholder="${t("모델 (예: gpt-5-codex · 비우면 기본)", "model (e.g. gpt-5-codex · empty = default)")}" style="flex:1;min-width:180px" autocomplete="off" />
+        <input id="scReason" placeholder="${t("추론 강도 (예: high · 비우면 기본)", "reasoning effort (e.g. high · empty = default)")}" style="flex:1;min-width:180px" autocomplete="off" />
+        <button id="scSave">${t("저장", "Save")}</button>
+        <button id="scClear" class="secondary">${t("초기화", "Reset")}</button>
+      </div>
+      <div class="hint" id="scState" style="margin-top:6px"></div>
+    </div>
   </section>
 </main>
 <script nonce="${nonce}">
@@ -4640,6 +4675,19 @@ class Dashboard {
   // 고급설정: DeepSeek 키 저장/삭제 — 원문은 저장 메시지로만 나가고, 표시는 state의 마스킹만.
   $("dsSave").addEventListener("click", ()=>{ const v=$("dsKey").value.trim(); if(!v){ return; } pendingSave={target:"deepseek", msg:T("키 저장됨 ✓","Key saved ✓")}; vscode.postMessage({type:"saveDeepseekKey", key:v}); $("dsKey").value=""; });
   $("dsClear").addEventListener("click", ()=>{ pendingSave={target:"deepseek", msg:T("키 삭제됨 ✓","Key removed ✓")}; vscode.postMessage({type:"saveDeepseekKey", key:""}); $("dsKey").value=""; });
+  // Codex 정찰 두뇌 설정(P6b) — 비밀 아님: 입력칸에 '현재 저장값'을 미리 채워 보이는 그대로 저장(WYSIWYG —
+  // 빈 칸 저장=화면에 보이는 의도적 비움). 1차 검증 blocker(ab-2) 반영: 빈 입력 전체 교체로 기존값이 침묵
+  // 소실되던 경로 제거. scDirty=편집 중 렌더가 값 안 덮음(다른 편집 보존 배선과 같은 문법) — 저장 성공 시 해제.
+  // 2차 blocker 반영: 저장 '요청 시점의 편집 세대(scGen)'를 캡처(scSavedGen)하고, 성공 응답에서 세대가 그대로일
+  // 때만 clean — 응답 전에 새로 타이핑하면 세대가 앞서가 dirty 유지(다음 상태 푸시가 초안을 못 덮음).
+  // 3차 blocker(f-c4c4ab24 잔여) 반영: 단일-flight — 응답이 올 때까지 저장/초기화 버튼을 잠가 요청이 아예
+  // 안 겹치게 한다(전역 scSavedGen 슬롯이 안전해짐). 잠금 해제는 성공/실패 응답 공통(실패=dirty 유지로 초안 보존).
+  let scDirty=false; let scGen=0; let scSavedGen=-1; let scBusy=false;
+  function scLock(on){ scBusy=on; $("scSave").disabled=on; $("scClear").disabled=on; }
+  $("scModel").addEventListener("input", ()=>{ scDirty=true; scGen++; });
+  $("scReason").addEventListener("input", ()=>{ scDirty=true; scGen++; });
+  $("scSave").addEventListener("click", ()=>{ if(scBusy) return; pendingSave={target:"scoutCodex", msg:T("저장됨 ✓ (다음 정찰부터 적용)","Saved ✓ (applies from the next scout run)")}; scLock(true); scSavedGen=scGen; vscode.postMessage({type:"saveScoutCodexPrefs", model:$("scModel").value.trim(), reasoning:$("scReason").value.trim()}); });
+  $("scClear").addEventListener("click", ()=>{ if(scBusy) return; pendingSave={target:"scoutCodex", msg:T("초기화됨 ✓ (codex 기본값으로)","Reset ✓ (back to codex defaults)")}; $("scModel").value=""; $("scReason").value=""; scLock(true); scSavedGen=scGen; vscode.postMessage({type:"saveScoutCodexPrefs", model:"", reasoning:""}); });
   // 언어 토글(전역 ko/en) — 저장은 확장이 language.json에(모든 창이 파일 watch로 따라옴). 표시는 state로 되돌아와 확정.
   // 전환 잠금(구현검증 1차 지적 2): 언어 전환은 확장이 webview HTML을 통째로 재생성해 메모리의 초안(contractDirty·
   // baseDirty)과 cardMachine pending이 전부 파괴된다 — 언어 hold가 지킬 수 없는 경로. 미저장 초안·저장 대기 중엔
@@ -4967,8 +5015,10 @@ class Dashboard {
       }
       // 저장 성공 피드백은 '확장이 실제 저장에 성공했다고 알려줄 때'만 — 클릭 즉시가 아니라(거짓 성공 방지).
       const ps = pendingSave; pendingSave = null;
+      if (ev.data.target === "scoutCodex") scLock(false); // 성공/실패 무관 단일-flight 잠금 해제(실패=dirty 유지 — 초안 보존·3차 blocker)
       if (!ev.data.ok) return; // 실패: 네이티브 에러 토스트가 알린다. 성공 플래시·스크롤은 하지 않음.
       if (ev.data.target === "deepseek") flashSaved($("dsState"), ps && ps.msg);
+      else if (ev.data.target === "scoutCodex") { flashSaved($("scState"), ps && ps.msg); if(scSavedGen===scGen) scDirty=false; } // 저장 성공이어도 '그 사이 새 편집 없음'(세대 일치)일 때만 clean — 응답 전 타이핑한 초안 보호(2차 blocker)
       else if (ev.data.target === "model") flashSaved($("savedModel"), T("저장됨 ✓ (다음 코덱스 응답부터 적용)","Saved ✓ (from next Codex response)"));
       else if (ev.data.target === "timeout") flashSaved($("savedVT"), T("저장됨 ✓ (다음 검증부터 적용)","Saved ✓ (from next verification)"));
       return;
@@ -5283,6 +5333,7 @@ class Dashboard {
           row.appendChild(seg);
           if(slotMismatch) note.textContent=T("언어 전환 반영 중 — 새 화면에서 다시 조작해 주세요","Language switch in progress — reopen controls on the refreshed screen");
           else if(av.raw==="deepseek"&&!av.hasKey) note.textContent=T("선호=DeepSeek이나 키 미등록 — 키 등록(⚙️ 고급설정) 전까지 기본 정찰(Claude)로 동작","Preference=DeepSeek but no key — the default scout (Claude) runs until you register one (⚙️ Advanced)");
+          else if(av.raw==="codex") note.textContent=T("모델·추론 강도는 ⚙️ 고급설정에서 조절할 수 있어요(전역 — 모든 프로젝트 공통 · 빈 값=쓰시는 codex 기본)","Model & reasoning effort are adjustable in ⚙️ Advanced (global — all projects · empty = your codex defaults)"); // P6b: 사용자 결정 — codex 선택 시 고급설정 안내
           else if(av.raw===null) note.textContent=T("미지정(기본값) — 선택은 자동 지시의 1순위 러너에 반영돼요","Unset (default) — your choice becomes the auto-directive's first-choice runner");
           else note.textContent="";
           row.appendChild(note);
@@ -5649,6 +5700,16 @@ class Dashboard {
       st.textContent = d.deepseek && d.deepseek.hasKey
         ? T("등록됨: ","Registered: ") + d.deepseek.masked + T(" · 모델: "," · model: ") + d.deepseek.model
         : T("등록된 키 없음 — 잠기는 건 DeepSeek 비교 정찰뿐(변경 감지·기본 정찰 지도[별도 과금 없음]는 키 없이 동작).","No key registered — only the DeepSeek comparison scout is locked (change sensing and default-scout maps [no separate billing] work without it).");
+    });
+    // ⑥-b 고급설정 탭 — Codex 정찰 두뇌 설정(P6b·비밀 아님): 입력칸에 현재 저장값 미리 채움(WYSIWYG —
+    // 1차 blocker ab-2 반영: 빈 칸 전체 교체로 기존값 침묵 소실 차단). 편집 중(scDirty)에는 렌더가 안 덮음.
+    safe(function(){
+      const st=$("scState"); if(!st) return;
+      const sc=d.scoutCodex||{};
+      if(!scDirty){ $("scModel").value=sc.model||""; $("scReason").value=sc.reasoning||""; }
+      st.textContent = (sc.model||sc.reasoning)
+        ? T("현재: ","Current: ") + (sc.model?T("모델=","model=")+sc.model:"") + (sc.model&&sc.reasoning?" · ":"") + (sc.reasoning?T("추론 강도=","reasoning=")+sc.reasoning:"") + T(" (전역 — 모든 프로젝트 공통)"," (global — all projects)")
+        : T("미설정 — 쓰시는 codex 기본값 그대로 정찰해요(전역 설정).","Unset — scouts run with your codex defaults as-is (global setting).");
     });
     // 온보딩: 미완료=설명 단계(이동 버튼·은은한 펄스) / 완료=축하+끄기 / 끄고 완료=다시보기 링크만.
     // 미완료(연결 끊김·검증 꺼짐)면 끄기 여부와 무관하게 단계가 다시 보여 '고장'을 숨기지 않음.

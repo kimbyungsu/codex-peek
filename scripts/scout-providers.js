@@ -135,7 +135,8 @@ const PROVIDERS = {
         // --ephemeral(검증 2차 blocker②): rollout을 아예 안 남긴다 — 검증 세션 식별의 최종 폴백(무제한 cwd
         // newestRolloutSince)이 정찰 rollout을 검증 세션으로 오링크할 경합을 원천 차단(+정찰 대화 잔재 없음 =
         // 프라이버시 부수 이득). 구버전 codex가 이 플래그를 모르면 exec가 실패하고 러너가 정직 보고한다.
-        const r = spawnSync(inv.file, [...inv.args, "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-o", outFile], {
+        // 정찰 전용 두뇌 설정(P6b — 전역 scout-codex.json·빈 값=codex 기본): -c 오버라이드로 이 호출에만 적용.
+        const r = spawnSync(inv.file, [...inv.args, "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", ...CL.scoutCodexArgs(), "-o", outFile], {
           input: preface + md,
           cwd: tmpCwd,
           stdio: ["pipe", "ignore", "pipe"],

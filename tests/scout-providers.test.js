@@ -90,7 +90,7 @@ ok(/process\.stdout\.write\(res\.map \+ "\\n"\)/.test(selfW) && /process\.stdout
 ok(/if \(o\.outFile && !P\.handlesOutFile\) fs\.writeFileSync\(o\.outFile, map\)/.test(provSrc), "--out 쓰기 실패는 구 러너처럼 전파(조용한 삼킴 금지 — 소스 잠금)");
 // P6 — codex 어댑터 소스 계약(실 호출 없이 형태 잠금)
 ok(/resolveCodex\(\)/.test(provSrc) && !/function resolveCodex/.test(provSrc), "codex 어댑터 — 실행 해석은 브릿지 정본 resolveCodex 재사용(중복 구현 없음)");
-ok(/"exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-o", outFile/.test(provSrc) && /cwd: tmpCwd/.test(provSrc) && /mkdtempSync/.test(provSrc), "codex 어댑터 — 독립 exec 1회·--ephemeral(rollout 무잔재=오링크 원천 차단)·read-only 강제·빈 임시 폴더 실행");
+ok(/"exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", \.\.\.CL\.scoutCodexArgs\(\), "-o", outFile/.test(provSrc) && /cwd: tmpCwd/.test(provSrc) && /mkdtempSync/.test(provSrc), "codex 어댑터 — 독립 exec 1회·--ephemeral(rollout 무잔재)·read-only 강제·정찰 전용 -c 슬롯·빈 임시 폴더 실행");
 ok(/\[\.\.\.inv\.args, "--version"\]/.test(provSrc), "codex probe=codex --version(가벼운 도달성 — 지도 요청 아님)");
 ok(/read-only는 절대경로 읽기를 물리 차단하진|절대경로 '읽기'를 물리/.test(provSrc + fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8")), "정직 한계 명문(빈 폴더+지시 보강 — 읽기 전면 물리 차단 아님)");
 const cxW = fs.readFileSync(path.join(ROOT, "scripts", "scope-scout-codex.js"), "utf8");
@@ -191,7 +191,39 @@ ok(cxSaved && cxSaved.arm === "codex", "게시판 보관 arm=codex(소비 화면
 process.env.STUB_MODE = "fail";
 const rxf = SP.runScout(repo, "codex", {});
 ok(rxf.ok === false && rxf.error.key === "call-failed" && /exit=2/.test(rxf.error.detail) && /stub-fail/.test(rxf.error.detail), "실 invoke 실패 — 종료코드·stderr 꼬리가 detail로(정직 보고)");
-delete process.env.CODEX_BIN; delete process.env.STUB_MODE; delete process.env.STUB_LOG;
+delete process.env.STUB_MODE;
+
+console.log("[11] P6b — Codex 정찰 두뇌 설정(전역 scout-codex.json·모델+추론강도만·세션 선택 없음 — 사용자 결정 2026-07-23)");
+const CL2 = require(path.join(ROOT, "bridge", "contract-lib.js"));
+ok(JSON.stringify(CL2.readScoutCodexPrefs()) === JSON.stringify({ model: "", reasoning: "" }), "부재=빈 값(비물질화 — codex 기본 그대로)");
+ok(CL2.scoutCodexArgs().length === 0, "미설정 → -c 오버라이드 0개(현행 무회귀)");
+ok(CL2.saveScoutCodexPrefs({ model: "  m-정찰 ", reasoning: " high " }) === true && JSON.stringify(CL2.readScoutCodexPrefs()) === JSON.stringify({ model: "m-정찰", reasoning: "high" }), "저장 왕복(공백 트림)");
+ok(JSON.stringify(CL2.scoutCodexArgs()) === JSON.stringify(["-c", "model=m-정찰", "-c", "model_reasoning_effort=high"]), "인자 조립 — 검증 경로와 같은 -c 키(값 출처만 정찰 전용 슬롯)");
+ok(CL2.saveScoutCodexPrefs({ model: "", reasoning: "low" }) === true && JSON.stringify(CL2.scoutCodexArgs()) === JSON.stringify(["-c", "model_reasoning_effort=low"]), "부분 설정 — 지정된 값만 오버라이드");
+// 실 invoke 반영(가짜 CODEX_BIN 재사용): 설정값이 exec 인자에 실제로 실린다
+CL2.saveScoutCodexPrefs({ model: "m-정찰", reasoning: "high" });
+const rx2 = SP.runScout(repo, "codex", {});
+const slog2 = JSON.parse(fs.readFileSync(stubLog, "utf8"));
+ok(rx2.ok === true && slog2.args.includes("-c") && slog2.args.includes("model=m-정찰") && slog2.args.includes("model_reasoning_effort=high"), "실 invoke — -c model·추론강도가 인자에 실림(다음 정찰부터 적용)");
+ok(slog2.args.indexOf("model=m-정찰") < slog2.args.indexOf("-o"), "인자 순서 — 오버라이드는 -o 앞(exec 옵션 구간)");
+ok(CL2.saveScoutCodexPrefs({ model: "", reasoning: "" }) === true && !fs.existsSync(CL2.SCOUT_CODEX_FILE), "둘 다 빈 값=파일 삭제(초기화=비물질화)");
+const rx3 = SP.runScout(repo, "codex", {});
+const slog3 = JSON.parse(fs.readFileSync(stubLog, "utf8"));
+ok(rx3.ok === true && !slog3.args.includes("-c"), "초기화 후 실 invoke — 오버라이드 0개(codex 기본 복귀)");
+delete process.env.CODEX_BIN; delete process.env.STUB_LOG;
+// 배선 소스 단언 — 확장(고급설정 카드·핸들러·payload·안내)·PRIVACY·어댑터
+const extP6b = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
+ok(/saveScoutCodexPrefs/.test(extP6b) && /scModel/.test(extP6b) && /scReason/.test(extP6b) && /scState/.test(extP6b), "고급설정 카드+저장 핸들러 배선");
+ok(extP6b.includes('if(!scDirty){ $("scModel").value=sc.model||""; $("scReason").value=sc.reasoning||""; }'), "입력칸에 현재 저장값 미리 채움(WYSIWYG — 빈 칸 전체 교체로 기존값 침묵 소실 차단·1차 blocker ab-2)");
+ok((extP6b.match(/scDirty=true; scGen\+\+/g) || []).length === 2 && (extP6b.match(/scSavedGen=scGen/g) || []).length === 2, "편집 보존 — 입력마다 세대 전진·저장/초기화가 요청 시점 세대 캡처");
+ok(extP6b.includes("if(scSavedGen===scGen) scDirty=false"), "성공 응답은 세대 일치 시에만 clean(응답 전 새 편집 초안 보호 — 2차 blocker 잠금)");
+ok((extP6b.match(/if\(scBusy\) return;/g) || []).length === 2 && (extP6b.match(/scLock\(true\)/g) || []).length === 2, "단일-flight — 응답 전 재클릭 차단(요청 겹침 자체가 불가·3차 blocker f-c4c4ab24 잠금)");
+ok(extP6b.includes('if (ev.data.target === "scoutCodex") scLock(false);'), "잠금 해제=성공/실패 응답 공통(실패 시 버튼 고착 없음·dirty 유지로 초안 보존)");
+ok(extP6b.includes("전역 설정(모든 프로젝트 공통)이고") && extP6b.includes("Global (shared by all projects)"), "전역 명시 ko/en(사용자 결정 — 프로젝트별 분리 안 함)");
+ok(extP6b.includes("scoutCodex: readScoutCodexPrefsExt()"), "payload에 현재값(비밀 아님 — 그대로 표시)");
+ok(extP6b.includes("모델·추론 강도는 ⚙️ 고급설정에서 조절할 수 있어요") && extP6b.includes("adjustable in ⚙️ Advanced"), "대시보드 codex 선택 시 고급설정 안내(사용자 제안 채택)");
+ok(/scoutCodexArgs\(\)/.test(fs.readFileSync(path.join(ROOT, "scripts", "scout-providers.js"), "utf8")), "어댑터가 정찰 전용 슬롯을 소비(검증 modelPrefs 재사용 아님)");
+ok(/scout-codex\.json/.test(fs.readFileSync(path.join(ROOT, "PRIVACY.md"), "utf8")), "PRIVACY 파일 표에 scout-codex.json 행(비밀 아님 명시)");
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
