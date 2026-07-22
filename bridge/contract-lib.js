@@ -1508,6 +1508,7 @@ function loadContract(ws, lang) {
     scoutGate: normScoutGate(o), // 게이트(⑥ 실험) — off|plan. 확장 saveContract는 이 필드를 보존해야 함(스키마 정합)
     scoutRepo: typeof o?.scoutRepo === "string" ? o.scoutRepo.trim() : "", // 정찰 대상 레포(P1 — cwd≠repo 해소). 빈 값=ws 그대로
     scoutArm: o && SCOUT_ARMS.includes(o.scoutArm) ? o.scoutArm : undefined, // 탐색 담당 raw 보존(1차 blocker② — norm으로 굳히면 상속·미지정 분기가 죽음). 실효는 scoutArmView
+    mapMode: normMapMode(o), // P7 — MAP 의미 보강 provider 모드 raw 보존(부재=미지정·기본 self). 뷰는 mapModeView
     envelopeHash: typeof o?.envelopeHash === "string" && /^[0-9a-f]{40}$/.test(o.envelopeHash) ? o.envelopeHash : null, // 거버넌스 증분 1 — 검증 경계(수칙서) 승인 도장(확장 관할·CLI 미기록). 무효/부재=null(미승인)
   };
 }
@@ -1614,6 +1615,153 @@ function scoutCodexArgs() {
   if (p.model) a.push("-c", `model=${p.model}`);
   if (p.reasoning) a.push("-c", `model_reasoning_effort=${p.reasoning}`);
   return a;
+}
+// ── P7(2026-07-23 — 정본 MAP-V2-DESIGN 말미 'P7 상세 설계' v4·사용자 승인 확정): MAP 의미 보강 provider
+// 모드(mapMode)+readiness 행렬(1-34 개정판). scoutArm(영향지도 러너 선호)과 별개 축 — 통합 금지(1-26 부기).
+// 조용한 전환 금지: eff/강등 개념 자체를 두지 않는다(저장값=표시값·readiness 상실은 별도 배지). ──────────
+const MAP_MODES = ["self", "economy", "precision", "auto"];
+// raw 보존(부재=미지정 undefined — 비물질화. 기본 동작=self[1-33 '기본 설정에서는 self typed adapter']).
+function normMapMode(o) { return o && MAP_MODES.includes(o.mapMode) ? o.mapMode : undefined; }
+// 뷰: scoutArmView와 동형(현재 슬롯 디스크 원본 우선→전달 c 보조→반대 언어 슬롯 상속 — '사실' 성격).
+// 명시 self도 값이라 반대 슬롯 economy를 자연 override(설계검증 1차 blocker① 반례 봉합). 강등 분기 없음.
+function mapModeView(ws, c) {
+  let raw = null;
+  try { const own = JSON.parse(fs.readFileSync(ws ? contractFileFor(ws, loadLang()) : CONTRACT_FILE, "utf8")); if (own && MAP_MODES.includes(own.mapMode)) raw = own.mapMode; } catch { /* 미지정 */ }
+  if (raw === null && c && typeof c === "object" && MAP_MODES.includes(c.mapMode)) raw = c.mapMode;
+  if (raw === null && ws) {
+    try {
+      const other = loadLang() === "en" ? "ko" : "en";
+      const oo = JSON.parse(fs.readFileSync(contractFileFor(ws, other), "utf8"));
+      if (oo && MAP_MODES.includes(oo.mapMode)) raw = oo.mapMode;
+    } catch { /* 반대 슬롯 없음 */ }
+  }
+  return { raw, mode: raw === null ? "self" : raw };
+}
+// 공용 invocation 빌더(설계검증 2차 blocker — probe는 '실제 정찰과 동일 조립'이어야 준비 오판이 없다):
+// scout-providers codex 어댑터와 준비 점검(probe)이 같은 이 함수를 쓴다. 어댑터 계약 버전은 인자 형태가
+// 바뀔 때 올린다(probe 세대 무효화 재료).
+const CODEX_SCOUT_ADAPTER_VER = "codex-scout-exec-v1";
+function codexScoutExecArgs(outFile) {
+  return ["exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", ...scoutCodexArgs(), "-o", outFile];
+}
+// ── readiness 영속 상태(1-8·P7-3): 전역 map-readiness.json — strict lock read-merge-write·손상=전 provider
+// unknown(기본값 위장 금지)·probeVer 불일치=전 레코드 무효·지문 재대조는 뷰가 수행. ──
+const MAP_READINESS_FILE = path.join(BRIDGE_DIR, "map-readiness.json");
+const MAP_READINESS_VER = "map-readiness-v1";
+const MAP_PROBE_VER = 2; // v2(2026-07-23 — 구현검증 3차 blocker): economy 성공 조건에 stdout capability-ok 검사+Electron→node 전환이 추가됨 — 구계약(v1) 성공 레코드는 위조 가능성이 있어 전량 무효(probe-ver-changed)
+function readMapReadinessRaw() {
+  try {
+    const j = JSON.parse(fs.readFileSync(MAP_READINESS_FILE, "utf8"));
+    if (!j || typeof j !== "object" || Array.isArray(j) || j.version !== MAP_READINESS_VER) return null; // 손상·이형=무효(정직)
+    return j;
+  } catch (e) { return e && e.code === "ENOENT" ? {} : null; } // 부재={}(미점검) / 판독 불가=null(손상)
+}
+// 기록(P7-3 probe 세대 결속): 잠금 '안'에서 currentFpFn()을 재계산해 rec.fp와 일치할 때만 기록 —
+// probe 실행 중 다른 창이 전역 설정(scout-codex.json·CODEX_BIN·deepseek.json)을 바꾸면 결과 폐기(TOCTOU).
+function writeMapReadinessGuarded(provider, rec, currentFpFn) {
+  try { fs.mkdirSync(BRIDGE_DIR, { recursive: true }); } catch { /* 잠금이 실패 판정 */ }
+  const r = withFileLockStrict(MAP_READINESS_FILE + ".lock", () => {
+    // 지문 검사(성공/실패 비대칭 — 2차 blocker②+3차 [주의]):
+    // 성공 레코드=지문 일치 필수(불일치·계산 불가=폐기 — 준비 증명 오결속 차단).
+    // 실패 레코드=지문이 '있으면' 일치할 때만 기록(구 설정에서 늦게 끝난 실패가 새 설정의 최신 성공을 덮어
+    // 자동형을 불필요 차단하는 다중 창 경합 차단) / 지문이 null이면 기록 허용(CLI 부재 등 '지문 생성 자체가
+    // 불가'한 현 상태의 실패 — 이건 반드시 기록돼야 옛 성공이 화면에 잔존하지 않는다).
+    if (rec && typeof currentFpFn === "function") {
+      let now = null;
+      try { now = currentFpFn(); } catch { now = null; }
+      if (rec.ok === true) { if (now === null || now !== rec.fp) return "fp-mismatch"; }
+      else if (rec.fp !== null && rec.fp !== undefined && now !== rec.fp) return "fp-mismatch"; // 구 세대 실패=폐기
+    }
+    let cur = readMapReadinessRaw();
+    // 손상·구버전 '그리고 구계약 세대(probeVer 불일치)'는 병합하지 않고 새 컨테이너로 시작(4차 blocker
+    // f-5d8a090f: v1 파일 위에 v2 provider를 기록하면서 구 성공 레코드를 펼쳐 보존하면 파일 세대만 v2로
+    // 승격돼 위조 가능 세대의 성공이 '준비됨'으로 부활한다 — 세대가 다르면 타 provider 레코드도 전량 폐기).
+    if (cur === null || !cur.version || cur.probeVer !== MAP_PROBE_VER) cur = {};
+    // 늦은-패자 폐기(4차 [주의] f-871aa1de — 지문 축과 직교하는 시간 축): 실패 레코드의 '점검 시작 시각'이
+    // 기존 성공의 기록 시각보다 앞서면, 그 사이 다른 창이 성공을 기록한 것 — 구 세대 실행의 실패이므로 폐기.
+    // fp:null(지문 생성 불가) 실패까지 일반화. 같은 창의 '방금 실패'는 시작이 기존 성공 기록 이후라 통과
+    // (f-c27944f3 유지). startedAt 미탑재 레코드(구 호출자)는 검사 생략 — 실제 probe 실행기는 항상 탑재.
+    const prev = cur[provider];
+    if (rec && rec.ok !== true && prev && prev.ok === true && typeof rec.startedAt === "string" && typeof prev.probedAt === "string" && rec.startedAt < prev.probedAt) return "stale-loser";
+    const next = { ...cur, version: MAP_READINESS_VER, probeVer: MAP_PROBE_VER, [provider]: rec };
+    return atomicWrite(MAP_READINESS_FILE, JSON.stringify(next, null, 2)) ? "ok" : "write-failed";
+  });
+  if (!r.ok) return { ok: false, reason: r.error || "lock" };
+  return r.result === "ok" ? { ok: true } : { ok: false, reason: r.result };
+}
+// ── 지문(P7-2·P7-3): economy=실효 해석(env 키가 파일 키를 이김 — deepseek-bridge resolveDeepseekConfig 재사용)
+// 기준·키 원문 미포함(키 sha1 앞 12) / self=어댑터 배포 지문(+기록용 CLI 버전) / precision=실행 해석+실효
+// home+두뇌 설정 조립+어댑터 계약 버전(실행 해석 inv는 호출자가 주입 — 순환 require 회피). ──
+function sha1Of(s) { return crypto.createHash("sha1").update(String(s)).digest("hex"); }
+// 관련 설정 파일의 mtimeMs 서명(구현검증 1차 blocker⑥ — A→B→A 경합 차단): 내용 지문이 같아도 파일이
+// 다시 쓰이면 mtime이 전진해 지문이 바뀐다(probe 실행 중 설정을 B로 바꿨다 A로 되돌리는 오결속 봉합).
+// 부작용 정직 고지: 내용 무변경 touch에도 '재점검 필요'가 뜰 수 있음(안전 우선 — 준비 증명 오결속보다 낫다).
+function mtimeSig(files) {
+  return files.map((f) => { try { return String(fs.statSync(f).mtimeMs); } catch { return "-"; } }).join(",");
+}
+function economyConfigFp() {
+  try {
+    const db = require(path.join(__dirname, "deepseek-bridge.js"));
+    const dsFile = path.join(BRIDGE_DIR, "deepseek.json");
+    let fileJson = null;
+    try { fileJson = JSON.parse(fs.readFileSync(dsFile, "utf8")); } catch { /* 부재 */ }
+    const cfg = db.resolveDeepseekConfig(process.env, fileJson);
+    if (!cfg.apiKey) return null; // 설정 부재(economyReady 1조건 미충족)
+    return sha1Of(cfg.baseUrl + "|" + cfg.model + "|" + sha1Of(cfg.apiKey).slice(0, 12) + "|" + mtimeSig([dsFile]));
+  } catch { return null; }
+}
+// self 어댑터 지문(1차 blocker① 반영 — 설치본 contract-lib 기준 상대경로만으론 dev 창에서도 null):
+// 후보=①호출자 힌트(확장이 자기 루트 기준 scripts/ 경로를 줌 — dev 창=레포라 실존·마켓 vsix=비번들이라
+// 부재=정직 미준비) ②이 파일 기준 ../scripts(레포 안에서 직접 require된 경우).
+function selfAdapterSha(pathHint) {
+  for (const cand of [pathHint, path.join(__dirname, "..", "scripts", "scout-providers.js")]) {
+    if (!cand) continue;
+    try { return sha1Of(fs.readFileSync(cand)); } catch { /* 다음 후보 */ }
+  }
+  return null;
+}
+// self 실행 지문(1차 blocker② 반영): 어댑터 sha+Claude CLI 버전 결속 — CLI 교체가 기존 준비 결과를 못 살림.
+function selfExecFp(cliVer, adapterPathHint) {
+  const sha = selfAdapterSha(adapterPathHint);
+  if (sha === null || !cliVer) return null;
+  return sha1Of(String(cliVer) + "|" + sha);
+}
+function precisionExecFp(inv) {
+  if (!inv || !inv.file) return null;
+  let home = process.env.CODEX_HOME || "";
+  try { if (!home) home = fs.readFileSync(path.join(BRIDGE_DIR, "codex-home.txt"), "utf8").trim(); } catch { /* 미기록 */ }
+  // env CODEX_BIN 문자열+설정 파일 mtime 포함(blocker③ 해석 일치·blocker⑥ A-B-A — env 자체의 A-B-A는
+  // mtime이 없어 잔여 수용 위험: 창 프로세스별 env라 실행 중 교체 가능성이 파일 대비 현저히 낮음).
+  return sha1Of(inv.file + "|" + (inv.args || []).join(" ") + "|" + home + "|" + (process.env.CODEX_BIN || "") + "|" + codexScoutExecArgs("<out>").join(" ") + "|" + CODEX_SCOUT_ADAPTER_VER + "|" + mtimeSig([SCOUT_CODEX_FILE, path.join(BRIDGE_DIR, "codex-bin.txt")]));
+}
+// ── readiness 뷰(1-34): 저장 레코드+현재 지문 재대조. precision 재대조 지문은 호출자가 주입(실행 해석 보유자
+// — 확장). 반환: { damaged, self|economy|precision:{ok,reason,probedAt}, auto:{ok,reason} } — ok=true는 재대조
+// 통과까지. reason은 사람 문장 키(표시층이 ko/en 변환). ──
+function mapReadinessView(opts) {
+  const o = opts || {};
+  const raw = readMapReadinessRaw();
+  const damaged = raw === null;
+  const rec = raw || {};
+  const verOk = !damaged && rec.probeVer === MAP_PROBE_VER;
+  const ent = (p) => (rec && typeof rec[p] === "object" && rec[p] ? rec[p] : null);
+  const judge = (p, fpNow, fpKey) => {
+    if (damaged) return { ok: false, reason: "state-damaged" };
+    const r = ent(p);
+    if (!r) return { ok: false, reason: "not-probed" };
+    if (!verOk) return { ok: false, reason: "probe-ver-changed" };
+    if (r.ok !== true) return { ok: false, reason: "probe-failed", probedAt: r.probedAt, detail: r.detail };
+    if (fpNow === null) return { ok: false, reason: "config-missing" };
+    if (fpNow !== undefined && r[fpKey] !== fpNow) return { ok: false, reason: "config-changed", probedAt: r.probedAt };
+    return { ok: true, probedAt: r.probedAt };
+  };
+  // self 재대조 지문도 호출자 주입(1차 blocker② — CLI 버전 성분은 spawn이 필요해 뷰가 직접 못 만든다:
+  // 호스트가 캐시된 버전+어댑터 힌트로 selfExecFp를 계산해 준다. 미주입=재대조 생략·기록 상태만).
+  const self9 = judge("self", o.selfFpNow, "fp");
+  const economy = judge("economy", economyConfigFp(), "fp");
+  // precision: 호출자가 현재 execFp를 주입하면 재대조·미주입(undefined)이면 지문 재대조 생략(기록 상태만 — CLI 등 실행 해석 부재 환경)
+  const precision = judge("precision", o.precisionFpNow, "fp");
+  const auto = economy.ok && precision.ok ? { ok: true } : { ok: false, reason: !economy.ok ? "economy-not-ready" : "precision-not-ready" };
+  return { damaged, self: self9, economy, precision, auto };
 }
 // 실효 뷰: raw=명시 선택(현재 슬롯 우선·부재 시 반대 언어 슬롯 상속·그래도 없으면 null=미지정) /
 // eff=실제 담당(deepseek 선택인데 키 없으면 self로 정직 강등 — degraded:"no-key") / hasKey=키 유무.
@@ -3248,7 +3396,7 @@ function formatForClaude(answer, lang, profile, machine) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}${machineLine}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, selfAdapterSha, selfExecFp, precisionExecFp, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
 module.exports.codexImplementerSession = codexImplementerSession;
 module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
 // P-6 회수 영수증 계약(설계 v5.1)

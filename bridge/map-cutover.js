@@ -28,7 +28,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ABSENT_SENTINEL = "(absent)"; // 확정층 부재 시 frozen-ledger-fp 기준선 sentinel(C-1 6)
 // 3차 blocker②: deploy-manifest가 증명해야 할 '정확한 전체 집합' — install.js BRIDGE_SCRIPTS·hook-setup.ts와
 // 3카피 규약(패리티는 p3b-cutover 테스트가 잠금). manifest 자기 서술만 믿으면 축소 목록으로 혼합 세대 통과.
-const EXPECTED_DEPLOY_FILES = ["contract-lib.js", "codex-bridge.js", "ask-job-worker.js", "codex-hook.js", "codex-plugin-install.js", "contract-inject.js", "verify-guard.js", "codex-guard.js", "deepseek-bridge.js", "scout-gate.js", "project-map.js", "map-runtime.js", "map-bootstrap.js", "map-pipeline.js", "map-bindings.js", "map-adapters.js", "map-freshness.js", "map-reader.js", "map-cutover.js"];
+const EXPECTED_DEPLOY_FILES = ["contract-lib.js", "codex-bridge.js", "ask-job-worker.js", "codex-hook.js", "codex-plugin-install.js", "contract-inject.js", "verify-guard.js", "codex-guard.js", "deepseek-bridge.js", "scout-gate.js", "project-map.js", "map-runtime.js", "map-bootstrap.js", "map-pipeline.js", "map-bindings.js", "map-adapters.js", "map-freshness.js", "map-reader.js", "map-cutover.js", "map-probe.js"];
 
 // C-5 동결 배너(1-22 — 결정론 바이트·ko/en 병기 고정 문구)
 const BANNER = "<!-- DEPRECATED (frozen migration source): 이 확정 교범은 Project MAP(project-map/)으로 전환됨 — 신규 승인은 Project MAP 경로만. This ledger is frozen; new approvals go through Project MAP. -->";
@@ -43,7 +43,7 @@ function snapDirFor(repo, decisionId) { return path.join(SNAP_ROOT, MP.canonical
 function atomicWriteBuf(file, buf) { return CL.atomicWrite(file, buf); }
 
 // ── 배포 잠금(C-7 6차 blocker — 검사기↔배포 writer 상호 배제) ──────────────────────────────────
-// 19파일 순차 대조 '도중' writer가 파일을 교체하면 검사기는 교체 전 바이트만 읽고 통과하는데 최종 디스크는
+// 20파일 순차 대조 '도중' writer가 파일을 교체하면 검사기는 교체 전 바이트만 읽고 통과하는데 최종 디스크는
 // 혼합 세대가 된다(reader-writer TOCTOU). 우리가 소유한 모든 writer(install.js·확장 deployBridgeRuntime)와
 // 이 검사기가 같은 wx 파일 잠금(.deploy.lock — 9차 프로토콜)을 공유 — 잠금 실패/타임아웃=검사기 fail-closed.
 // 잔여 수용 위험(정본 명문): ①구세대 writer(잠금 프로토콜 이전 배포본)는 잠금을 모름 — 업그레이드 전까지

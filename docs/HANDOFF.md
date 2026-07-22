@@ -2,7 +2,7 @@
 
 > 이 문서 하나로 이어갈 수 있게 쓰였다. 상세 설계 원본(SCOUT-TRACK.md·SCOPE-LEDGER.md)은 **의도적으로 레포 밖 로컬 문서**라
 > 다른 환경에는 없다 — 그래서 이 파일이 그 요지를 포함한다. ⚠ **실 API 키·토큰은 어떤 파일·픽스처·예시에도 절대 넣지 말 것.**
-> 마지막 갱신: 2026-07-23 (버전 0.1.86 불변). **★검증 거버넌스 트랙(설계+증분 1~3) 완결 + P5(provider 공통 인터페이스) 완결(이상 07-22) + P6(Codex Scout)·P6b(Codex 정찰 두뇌 설정) 완결(07-23·로컬 커밋 — push 대기)**:
+> 마지막 갱신: 2026-07-23 (버전 0.1.86 불변). **★검증 거버넌스 트랙(설계+증분 1~3) 완결 + P5(provider 공통 인터페이스) 완결(이상 07-22) + P6(Codex Scout)·P6b(Codex 정찰 두뇌 설정)·UX 3건·주입 지침 표시 접기·★P7(모드 UI+readiness 행렬) 설계·구현 완결(07-23·로컬 커밋 — push 대기)**:
 > 배경: C-7이 core 프로필로도 11왕복·blocker 19(실측 — core ②조항 "희귀 경합=blocker"가 이 프로젝트에선
 > 만능 통과문+지원 환경 선언 부재) → 사용자 결정으로 P5보다 선행. ①설계 v1 동결(docs/VERIFY-GOVERNANCE.md
 > — 설계검증 6왕복·"열린 탐색+제한된 차단 권한"·Envelope·입장 심사·지적 계보·범위 확장·소진 분해. 726219f)
@@ -98,10 +98,30 @@
 > probe[최대 2회 과금 고지]/precision=실제 정찰과 동일 조립의 초소형 ephemeral 실행/self=P5 산출물)·전 provider
 > probe 세대 결속(실행 직전 캡처→잠금 안 재확인·불일치=폐기)·영속 map-readiness.json(v1·strict lock·손상=unknown)·
 > 조용한 전환 금지(eff 미도입)·P8 전 노출+정직 배지. 1-34 원문·P7 로드맵에 supersession 부기 완료.
-> **⛔구현 착수 불가 — 사용자 결정 2건 대기**: ①1-33 정합(map-enrich-queue 실재·소비자 부재 실측): ⓐP7에 최소
-> 실행기 포함(범위 확대) vs ⓑ1-33 개정(재개 발동=실행기 배포 Phase — P7은 트리거 훅 자리만) ②정본 개정 승인
-> (1-34 precisionReady ephemeral 재정의·P7 로드맵 Scout 세션 관리 소거).
-> ▶다음: 사용자 결정 2건 → P7 구현 → P8(라우터). 미반영 합의 이월: f-e9c23d7a·PRIVACY cutover-notice·보관함 5364ebe0.
+> 사용자 결정 2건 승인 완료(2026-07-23): ①ⓑ 1-33 개정(재개 발동=실행기 배포 Phase) ②1-34 precisionReady
+> ephemeral 재정의·Scout 세션 관리 소거 — 정본에 [확정 2026-07-23(사용자 승인)] 부기.
+> ★P7 구현 완결(2026-07-23 — 구현검증 6왕복[실패 4→통과(보완)→확인 통과(보완)]·blocker 계보 전부 수용·부분 반박 1 성립):
+> ①contract-lib.js P7 블록 — MAP_MODES 4값(self|economy|precision|auto·명시 self=반대 슬롯 override·부재=비물질화)/
+> mapModeView(강등 없음)/codexScoutExecArgs(outFile) 공용 빌더(P6 인라인→어댑터·probe 동일 조립)/map-readiness.json
+> (map-readiness-v1·**MAP_PROBE_VER=2** — 3차 blocker로 v1→v2 상향: economy capability-ok 검사+Electron→node 전환
+> 이전(v1) 성공은 위조 가능 세대라 전량 probe-ver-changed 강등·**세대 불일치 병합 금지**[4차 blocker — v1 파일 위
+> v2 기록 시 구 레코드 펼침 보존 경로 차단=새 컨테이너])/writeMapReadinessGuarded(성공=지문 일치 필수·실패=지문
+> 있으면 일치 시만 기록[3차 주의 — 구 세대 늦은 실패의 최신 성공 덮기 차단]·fp:null 실패=**늦은-패자 규칙**[4차
+> 주의 f-871aa1de — startedAt<기존 성공 probedAt이면 stale-loser 폐기·시간 축은 지문 축과 직교·'방금 실패' 무회귀])/
+> 지문 3종(economy=실효 해석[env 키 우선]+키 sha1 앞12+mtime / self=CLI 버전+어댑터 sha / precision=inv+CODEX_HOME+
+> env CODEX_BIN+빌더 조립+어댑터 계약 버전+mtimeSig[A-B-A]) ②bridge/map-probe.js 신설(2차 blocker④ — vscode 무관
+> 실행기 probeSelf/Economy/Precision·startedAt 캡처·테스트가 같은 실행기를 가짜 CODEX_BIN·가짜 claude·스텁 API로
+> 실제 실행)·배포 3카피 19→20 등록 ③deepseek-bridge capability 명령(strict validateCapability·bounded repair 1회·
+> usage arm "capability") ④extension — mapModeRow(4버튼·자동형만 autoReady 게이트·'라우팅 적용은 P8부터' 정직
+> 배지·준비 점검 버튼[모달 과금 고지 DeepSeek 최대 2회/Codex 1회]·단일-flight·economy에도 ELECTRON_RUN_AS_NODE=1·
+> cachedClaudeVer 실패 포함 반영·stale-loser='더 최신 결과 유지' 표시 분기[5차 보완]) ⑤README ko/en 마켓 설치본
+> scripts/ 미포함 한계 한 줄(3차 보완 — f-15d2907b 부분 반박 성립: VSIX self 미준비=정직 상태)·19→20파일 문서
+> 갱신(MAP-P3B-DESIGN 3곳+map-cutover 주석). tests/p7-mode.test.js 76단언·전체 체인 EXIT=0.
+> **미반영 2건(확인 검증 규약 — 다음 묶음 동승 후보)**: f-6dc403af(self probe의 stale-loser가 wNote를 안 거쳐 CLI
+> 실패 사유로 표시 — 표시 한정·로직 무영향) / f-c66da17f=[주의→보관함 1f501cceed39340b] wall-clock 의존(시계 역행
+> 시 최신 단일 창 실패가 stale-loser 폐기 — 재점검 1회 복구·근본 해법=잠금 아래 provider 세대 토큰, P8 동승).
+> ▶다음: P8(결정론 라우터 — 1-34 규범 판정표 그대로·재해석 금지)+의미 보강 실행기(1-33 개정: 재개 발동=실행기
+> 배포 Phase). 미반영 합의 이월: f-e9c23d7a·PRIVACY cutover-notice·보관함 5364ebe0·afdd6850b4ea2030·17d4697dc6a164fb.
 > ── (이전: **★C-7 자동화 계층 완결**):
 > 사용자 지시(2026-07-21 "MAP은 수동을 없애려는 설계인데 전환에 또 수동 명령은 과보수") → 정본 C-7 절 신설+구현.
 > 원칙: 동의할 내용 없으면(legacy AND 미이관 0 AND 안전 조건 전부) 자동·판단 필요(미이관 N>0)만 원클릭 카드.

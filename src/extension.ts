@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as crypto from "crypto";
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import { computeVerifyStats, VerifyStats, CodexTokens, parseSessionTokens, ClaudeTokens, sumClaudeUsage, computeProjectStats, ProjectStat, computeScoutCosts, ScoutCosts } from "./verify-stats";
 import * as hookSetup from "./hook-setup";
 import { localizeIntegrityDetail } from "./integrity-i18n";
@@ -191,6 +191,8 @@ interface BridgeState {
   scoutLive: { arm: string; startedAt: string } | null; // 지도 생성중(러너 실행 동안만 — TTL로 잔존 걸러냄)
   deepseek: { hasKey: boolean; masked: string; model: string }; // 고급설정 탭 표시용 — 키 원문은 절대 웹뷰로 안 보냄(마스킹만)
   scoutCodex: { model: string; reasoning: string }; // 고급설정 탭 — Codex 정찰 두뇌 설정(P6b·전역·비밀 아님)
+  mapMode: { raw: string | null; mode: string } | null; // P7 — 의미 보강 담당(3트랙에서만·null=2트랙/ws 없음). raw=명시 선택·mode=표시값(부재=self)
+  mapReadiness: any | null; // P7 — readiness 뷰(contract-lib mapReadinessView 산출·precision 지문은 호스트 주입)
   scoutTarget: { repo: string; differs: boolean; invalid: boolean; configured: boolean; inherited: boolean; drift: { repo: string; sample: number; agree: number } | null } | null; // P1 정찰 대상 + 어긋남 자기진단(2026-07-10). null=2트랙
   scoutGate: { eff: string; raw: string | null } | null; // 실효 플랜 게이트(표시 전용 — 3트랙에서만, 계약에 저장 안 함). null=2트랙/ws 없음
   scoutArm: { raw: string | null; eff: "self" | "deepseek" | "codex"; hasKey: boolean; slot?: string } | null; // 탐색 담당(2026-07-20·P6 codex 추가) — raw=명시 선택(반대 언어 슬롯 상속·null=미지정), eff=실효(deepseek는 키 없으면 self 강등·codex는 강등 없음), slot=계산 언어. null=2트랙/ws 없음
@@ -496,6 +498,84 @@ function scoutArmViewExt(ws: string, slotIn?: Lang): { raw: string | null; eff: 
   const hasKey = readDeepseekView().hasKey;
   const want = raw === null ? "self" : raw;
   return { raw, eff: want === "deepseek" && !hasKey ? "self" : (want as "self" | "deepseek" | "codex"), hasKey, slot };
+}
+// ── P7: MAP 의미 보강 모드(mapMode)·readiness(정본 MAP-V2-DESIGN 'P7 상세 설계' v4 — 사용자 승인 확정) ──
+const MAP_MODES_EXT = ["self", "economy", "precision", "auto"]; // ⚠ contract-lib MAP_MODES와 동일 목록
+async function setMapModeFromUi(ws: string | null, mode: string, slotLang?: Lang): Promise<void> {
+  if (!ws) { vscode.window.showWarningMessage(tE("폴더가 열려 있지 않아 설정할 수 없어요.", "No folder is open, so this cannot be set.")); return; }
+  if (!MAP_MODES_EXT.includes(mode)) return;
+  const lang: Lang = slotLang || loadLangExt();
+  const pr = await patchContractRetryExt(ws, lang, { mapMode: mode });
+  if (!pr.ok) { void offerLockRecoveryExt(pr, () => { void setMapModeFromUi(ws, mode, lang); }); return; }
+  vscode.commands.executeCommand("codexBridge.refresh");
+}
+// probe용 codex 실행 해석 — 브릿지 resolveCodex와 '같은 우선순위'(구현검증 1차 blocker③: CODEX_BIN→
+// codex-bin.txt pin→(확장 탐지)→PATH — 실제 정찰이 고를 실행 파일과 probe가 같은 것을 봐야 준비 오판이 없다).
+// .js 해석은 electronNode 표식(확장의 process.execPath=Electron이라 ELECTRON_RUN_AS_NODE=1로 spawn해야 node로 돎).
+function codexInvForProbe(): { file: string; args: string[]; shell: boolean; electronNode: boolean } {
+  const wrap = (p: string) => {
+    if (/\.js$/i.test(p)) return { file: process.execPath, args: [p], shell: false, electronNode: true };
+    if (/\.(cmd|bat)$/i.test(p)) return { file: p, args: [], shell: true, electronNode: false };
+    return { file: p, args: [], shell: false, electronNode: false };
+  };
+  const envBin = (process.env.CODEX_BIN || "").trim();
+  if (envBin && fs.existsSync(envBin)) return wrap(envBin);
+  try { const pin = fs.readFileSync(path.join(BRIDGE_DIR, "codex-bin.txt"), "utf8").trim(); if (pin && fs.existsSync(pin)) return wrap(pin); } catch { /* 미기록 */ }
+  const p = resolveCodexPathForBridge();
+  if (p) return wrap(p);
+  return { file: "codex", args: [], shell: process.platform === "win32", electronNode: false };
+}
+function precisionFpNowExt(): string | null {
+  try { const CLx: any = bridgeLib(); return CLx && CLx.precisionExecFp ? CLx.precisionExecFp(codexInvForProbe()) : null; } catch { return null; }
+}
+// self 재대조 재료: Claude CLI 버전 캐시(확장 수명 동안 — probe 시 갱신. 매 상태 푸시 spawn은 과함이라
+// 캐시 사용: CLI 교체 감지는 다음 probe·재시작에서 — 정직 한정)와 어댑터 경로 힌트(dev 창=레포 루트).
+let cachedClaudeVer: string | null = null;
+function selfAdapterHintExt(): string { return path.join(__dirname, "..", "scripts", "scout-providers.js"); } // out/ 기준 상위=확장 루트(dev 창=레포 — vsix엔 비번들이라 부재=정직 미준비)
+function selfFpNowExt(): string | null {
+  try { const CLx: any = bridgeLib(); return CLx && CLx.selfExecFp ? CLx.selfExecFp(cachedClaudeVer, selfAdapterHintExt()) : null; } catch { return null; }
+}
+let mapProbeBusy = false; // 단일-flight(P6b 계보와 같은 규범 — 겹친 점검 금지)
+async function runMapProbeFromUi(ws: string | null): Promise<void> {
+  if (mapProbeBusy) return;
+  const CLx: any = bridgeLib();
+  if (!CLx || !CLx.writeMapReadinessGuarded) { vscode.window.showWarningMessage(tE("브릿지 판이 낮아 준비 점검을 지원하지 않아요 — 재설치 후 다시 시도하세요.", "The deployed bridge is too old for readiness checks — reinstall and retry.")); return; }
+  const goOn = await vscode.window.showWarningMessage(
+    tE("의미 보강 담당의 준비 상태를 실제로 점검합니다. DeepSeek은 소형 요청 최대 2회(과금 대상 — 형식 실패 시 교정 재요청 1회 포함), Codex는 계정 사용량 1회를 씁니다(키·설정이 없는 항목은 건너뜀). 진행할까요?",
+       "This actually checks provider readiness. DeepSeek uses up to 2 small billed requests (incl. one repair retry on format failure); Codex uses 1 run within your account usage (unconfigured providers are skipped). Proceed?"),
+    { modal: true }, tE("점검 진행", "Run checks"));
+  if (goOn !== tE("점검 진행", "Run checks")) return;
+  mapProbeBusy = true;
+  try {
+    // 실행부는 vscode 무관 계층(bridge/map-probe.js — 설치본 사본)에 위임(구현검증 2차 blocker④: 테스트가
+    // 같은 실행기를 가짜 CODEX_BIN·가짜 claude·스텁 API로 끝까지 실행). 확장은 주입(inv·힌트·Electron env)과
+    // 캐시·알림만 담당.
+    let MP: any = null;
+    try { MP = require(path.join(BRIDGE_DIR, "map-probe.js")); } catch { MP = null; }
+    if (!MP) { vscode.window.showWarningMessage(tE("설치본에 준비 점검 실행기(map-probe.js)가 없어요 — 재설치 후 다시 시도하세요.", "The deployed bridge lacks the probe runner (map-probe.js) — reinstall and retry.")); return; }
+    const notes: string[] = [];
+    const wNote = (w: any) => w.reason === "fp-mismatch" ? tE("설정이 점검 중 바뀜 — 재점검 필요", "config changed during check — re-check") : w.reason === "stale-loser" ? tE("더 최신 점검 결과가 이미 저장돼 있어 이 결과는 반영 안 함", "a newer check result is already stored — this one was not applied") : tE("저장 실패(잠금/쓰기: " + (w.reason || "?") + ") — 잠시 후 재시도", "save failed (lock/write: " + (w.reason || "?") + ") — retry shortly"); // 1차 [보완]: 실패 사유 분리 / 5차 [보완]: stale-loser는 장애가 아니라 정상 폐기
+    // self — 무과금. 버전 캐시는 '실패 포함' 그대로 반영(2차 blocker②: 실패 후 이전 캐시가 살아 있으면 옛 성공이 '준비됨'으로 잔존).
+    try {
+      const rs = MP.probeSelf({ adapterHint: selfAdapterHintExt() });
+      cachedClaudeVer = rs.ver; // null이면 null로 리셋 — view 재대조(selfFpNow)도 즉시 미준비로 뒤집힘
+      const detS = rs.rec.detail === "adapter-missing" ? tE("어댑터 미배포 — 정찰 스크립트는 마켓 설치본에 없어요(소스 저장소에서 실행해야 준비됨: 현 단계 정직 한계)", "adapter not deployed — scout scripts are not bundled in marketplace builds (run from the source repo: honest current limit)") : rs.rec.detail;
+      notes.push("self: " + (rs.rec.ok && rs.write.ok ? "OK" : rs.rec.ok ? wNote(rs.write) : detS));
+    } catch (e: any) { notes.push("self: " + String(e && e.message)); }
+    // economy — 과금 최대 2회. Electron→node 전환 env 필수(2차 blocker③ — 실행기는 stdout capability-ok까지 검사).
+    try {
+      const re = MP.probeEconomy({ nodeBin: process.execPath, bridgeDir: BRIDGE_DIR, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
+      if (re.skipped) notes.push(tE("economy: 설정 없음(키 미등록 — 건너뜀)", "economy: not configured (no key — skipped)"));
+      else notes.push("economy: " + (re.rec.ok && re.write.ok ? "OK" : re.write.ok ? "실패(" + re.rec.detail + ")" : wNote(re.write)));
+    } catch (e: any) { notes.push("economy: " + String(e && e.message)); }
+    // precision — 계정 사용량 1회: 실제 정찰과 동일 조립(공용 빌더는 실행기 내부)·.js 해석이면 Electron→node.
+    try {
+      const inv = codexInvForProbe();
+      const rp = MP.probePrecision({ inv, prompt: tE("아무 도구도 쓰지 말고 'ready'라고만 답하라.", "Reply with only 'ready'; use no tools."), env: inv.electronNode ? { ...process.env, ELECTRON_RUN_AS_NODE: "1" } : process.env });
+      notes.push("precision: " + (rp.rec.ok && rp.write.ok ? "OK" : rp.write.ok ? "실패(" + rp.rec.detail + ")" : wNote(rp.write)));
+    } catch (e: any) { notes.push("precision: " + String(e && e.message)); }
+    vscode.window.showInformationMessage(tE("준비 점검 결과 — ", "Readiness check — ") + notes.join(" · "));
+  } finally { mapProbeBusy = false; }
 }
 async function setScoutArmFromUi(ws: string | null, arm: "self" | "deepseek" | "codex", slotLang?: Lang): Promise<void> {
   if (!ws) { vscode.window.showWarningMessage(tE("폴더가 열려 있지 않아 설정할 수 없어요.", "No folder is open, so this cannot be set.")); return; }
@@ -1915,6 +1995,8 @@ function computeState(turnsN: number): BridgeState {
     scoutTarget: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const r = scoutTargetFor(ws); const dr = detectScoutTargetDriftExt(r.repo, ws); return { repo: r.repo, differs: normWs(r.repo) !== normWs(ws), invalid: r.source === "ws-fallback-invalid", configured: r.source === "contract" || r.source === "contract-other-lang", inherited: r.source === "contract-other-lang", drift: dr.drift ? { repo: dr.repo as string, sample: dr.sample || 0, agree: dr.agree || 0 } : null }; } catch { return null; } })(),
     scoutGate: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; return effectiveScoutGate(ws); } catch { return null; } })(),
     scoutArm: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; return scoutArmViewExt(ws); } catch { return null; } })(), // slot은 뷰가 계산과 원자 결속해 반환(3차 blocker — 사후 재판독 금지)
+    mapMode: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const CLx: any = bridgeLib(); return CLx && CLx.mapModeView ? CLx.mapModeView(ws) : null; } catch { return null; } })(), // P7 — 3트랙에서만
+    mapReadiness: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const CLx: any = bridgeLib(); return CLx && CLx.mapReadinessView ? CLx.mapReadinessView({ precisionFpNow: precisionFpNowExt(), selfFpNow: selfFpNowExt() }) : null; } catch { return null; } })(), // P7 — 저장 레코드+현재 지문 재대조(precision·self 지문은 호스트 주입)
     mapLedger: readMapLedger(ws),       // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만)
     deepseek: readDeepseekView(),       // 고급설정 탭 — 키 유무·마스킹(원문 미노출)
     scoutCodex: readScoutCodexPrefsExt(), // 고급설정 탭 — Codex 정찰 모델·추론강도(전역·비밀 아님)
@@ -3116,6 +3198,8 @@ class Dashboard {
         if (m?.type === "openScoutHealthReport") openScoutHealthReport(dashboardWorkspace()); // 건강 리포트 — 포화 대응 새탭(열 때 베이크·스크립트 없음)
         if (m?.type === "setScoutTarget" && typeof m.repo === "string") setScoutTargetFromUi(dashboardWorkspace(), m.repo, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
         if (m?.type === "setScoutArm" && (m.arm === "self" || m.arm === "deepseek" || m.arm === "codex")) setScoutArmFromUi(dashboardWorkspace(), m.arm, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
+        if (m?.type === "setMapMode" && typeof m.mode === "string") setMapModeFromUi(dashboardWorkspace(), m.mode, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post()); // P7 — 검증은 setMapModeFromUi의 MAP_MODES 화이트리스트
+        if (m?.type === "runMapProbe") runMapProbeFromUi(dashboardWorkspace()).then(() => this.post()); // P7 — 명시 버튼만(자동 probe 금지)·단일-flight는 함수 내부
         if (m?.type === "envelopeShow" && typeof m.repo === "string" && m.repo) { // 수칙서 열람 전용 — 승인 후에도 세부내용 재확인·제외 요청 판단 창구(2026-07-22 사용자 지적)
           if (m.lang !== "en" && m.lang !== "ko") return;
           const enV = m.lang === "en";
@@ -4089,6 +4173,7 @@ class Dashboard {
     <div class="hint"><span class="ic" title="${t("정찰(3트랙) = 4단계 흐름 — ①변경 감지(기계·AI 없음): 지금 고치는 파일+예전에 같이 바뀌던 파일 힌트 ②영향지도(정찰 AI 호출): 이 변경이 어디까지 번질지 미리보기 ③관찰 일지(자동·추가 LLM 없음): 검증을 지나며 맞은 것/틀린 것이 저절로 쌓임 ④확정 교범(👤 선택): 원할 때만 도장 찍어 저장소 문서로 — 안 써도 ①~③은 자동. 관찰(advisory) 중심 — 단 하나의 예외는 플랜 게이트(3트랙 기본 켜짐): 지도가 없거나 낡으면 플랜 확정 전에 먼저 지도를 요청(세션당 2회까지·이후 통과·언제든 끌 수 있음), 그 외에는 아무것도 막거나 강제하지 않음. 외부로 나가는 경로는 세 갈래 — DeepSeek 키 등록 시(②의 꾸러미+연결 점검 1회, 키 등록=동의) / 기본 정찰 실행 시(같은 꾸러미가 쓰시던 Claude CLI 경유 — 별도 결제 없음) / Codex 정찰 선택·실행 시(같은 꾸러미가 쓰시던 codex CLI 경유 — 검증과 분리된 독립 실행·계정 사용량 범위). 이 설정은 프로젝트별 저장.", "Recon (3-track) = a 4-step flow — ① change sensing (machine, no AI): files you're editing + hints of files that changed together before ② impact map (scout AI call): preview how far this change reaches ③ field journal (auto, no extra LLM): right/wrong accrues by itself through verification ④ field manual (👤 optional): stamp items into repo docs only when you want — ①–③ run without it. Advisory-centred — the one exception is the plan gate (on by default in 3-track): if the map is missing/stale it asks for a map before plan confirmation (up to 2×/session, then passes · can be turned off anytime); everything else blocks/forces nothing. Data leaves via three routes — with a DeepSeek key (②'s package plus one connection check; key registration = consent) / when the default scout runs (the same package via your existing Claude CLI — no separate billing) / when the Codex scout is selected and runs (the same package via your existing codex CLI — one independent run separate from verification, within your account usage). Saved per project.")}">ⓘ ${t("정찰이란? (4단계 흐름)", "What is recon? (the 4-step flow)")}</span></div>
     <div id="scoutApiLine" class="muted" style="display:none;font-size:11.5px;margin:4px 0 0 2px"></div>
     <div id="scoutArmRow" style="display:none;font-size:11.5px;margin:6px 0 0 2px"></div>
+    <div id="mapModeRow" style="display:none;font-size:11.5px;margin:6px 0 0 2px"></div>
     <div id="scoutBox" class="stagebox" style="display:none"></div>
     <div class="stagebox" id="stageBox">
       <div class="sbhead" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${t("↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요", "↑ With verification on, the <b>stage baselines</b> apply at each step of the flow")} <span class="badge" id="sbStateBadge" style="margin-left:auto"><span class="muted" style="font-weight:400">${t("지금 검증", "verify now")}</span> <b id="sbState">—</b></span></div>
@@ -5410,6 +5495,43 @@ class Dashboard {
           else if(av.raw==="codex"){ note.textContent=T("모델·추론 강도 옵션은 ⚙️ 고급설정에 있어요(전역 — 모든 프로젝트 공통 · '기본'=쓰시는 codex 기본)","Model & reasoning options live in ⚙️ Advanced (global — all projects · 'Default' = your codex defaults)"); note.appendChild(advBtn()); } // P6b: codex 선택 시 고급설정 안내+원클릭 이동
           else if(av.raw===null) note.textContent=T("미지정(기본값) — 선택은 자동 지시의 1순위 러너에 반영돼요","Unset (default) — your choice becomes the auto-directive's first-choice runner");
           else note.textContent="";
+          row.appendChild(note);
+        });
+        safe(function(){ // P7 — 의미 보강 담당(mapMode)+readiness(scoutArm과 별개 축 — 1-26 부기 통합 금지)
+          const row=$("mapModeRow"); if(!row) return;
+          const mm=d.mapMode; const rd=d.mapReadiness||null;
+          if(!on||!mm){ row.style.display="none"; return; }
+          row.style.display=""; row.replaceChildren();
+          const lb=document.createElement("span"); lb.className="muted";
+          lb.textContent=T("의미 보강 담당(Project MAP) — 영향지도 탐색 담당과 별개 · 라우팅 적용은 P8부터","Semantic-enrichment provider (Project MAP) — separate from the impact-map scout · routing applies from P8");
+          row.appendChild(lb);
+          const seg=document.createElement("span"); seg.className="seg"; seg.style.marginLeft="8px";
+          const btns={}; let mmCur=mm.raw; // 재클릭 판정=명시 선택 기준(미지정≠명시 self — scoutArmClick 교훈 동형)
+          const note=document.createElement("div"); note.className="muted"; note.style.marginTop="3px";
+          const rdOf=function(p){ return (rd&&rd[p])?rd[p]:{ok:false,reason:"not-probed"}; };
+          const reasonT=function(r){ if(!r) return ""; const m={"state-damaged":T("상태 파일 손상 — 재점검 필요","state file damaged — re-check"),"not-probed":T("준비 점검 전","not checked yet"),"probe-ver-changed":T("점검 계약 개정 — 재점검 필요","check contract changed — re-check"),"probe-failed":T("점검 실패","check failed"),"config-missing":T("설정 없음","not configured"),"config-changed":T("설정 변경됨 — 재점검 필요","config changed — re-check"),"economy-not-ready":T("경제형 미준비","economy not ready"),"precision-not-ready":T("정밀형 미준비","precision not ready")}; return m[r.reason]||r.reason||""; };
+          const setOn9=function(){ const cur9=(mmCur===null?"self":mmCur); for(const k in btns) btns[k].classList.toggle("on", k===cur9); };
+          const mk=function(mode,label,sub,dis,title){ const b=document.createElement("button"); b.type="button"; b.appendChild(document.createTextNode(label)); const sm=document.createElement("small"); sm.textContent=sub; b.appendChild(sm); b.disabled=!!dis; if(dis) b.style.opacity=".55"; if(title) b.title=title;
+            b.addEventListener("click", function(){ if(dis) return; if(mmCur===mode){ note.textContent=T("이미 선택돼 있어요 ✓","Already selected ✓"); return; }
+              mmCur=mode; setOn9(); note.textContent=T("저장 중…","Saving…"); vscode.postMessage({type:"setMapMode", mode:mode, lang:(UI_EN?"en":"ko")}); });
+            btns[mode]=b; seg.appendChild(b); };
+          const rdChip=function(p){ const r=rdOf(p); return r.ok?T("준비됨","ready"):reasonT(r); };
+          mk("self", T("기본","Default"), "Claude · "+rdChip("self"), false, T("기본 self 어댑터(무과금) — Project MAP 의미 보강용","Default self adapter (free) — for Project MAP semantic enrichment"));
+          mk("economy", T("경제형","Economy"), "DeepSeek · "+rdChip("economy"), false, T("경제형=DeepSeek(키 등록=동의) — 준비 미성립이어도 선택은 저장돼요(조용한 전환 없음·상태 배지로 표시)","Economy=DeepSeek (key=consent) — selection persists even if not ready (no silent switching · shown as a badge)"));
+          mk("precision", T("정밀형","Precision"), "Codex · "+rdChip("precision"), false, T("정밀형=Codex(계정 사용량) — 준비 미성립이어도 선택은 저장돼요","Precision=Codex (account usage) — selection persists even if not ready"));
+          const autoRd=rd&&rd.auto; const autoOk=!!(autoRd&&autoRd.ok);
+          mk("auto", T("자동형","Auto"), autoOk?T("준비됨","ready"):reasonT(autoRd||{reason:"not-probed"}), !autoOk, autoOk?T("경제형+정밀형 조합(라우터가 승격 담당 — P8)","Economy+precision combo (router escalates — P8)"):T("자동형은 경제형·정밀형이 모두 준비돼야 선택할 수 있어요(1-34): ","Auto requires both economy and precision ready (1-34): ")+reasonT(autoRd||{reason:"not-probed"}));
+          setOn9();
+          row.appendChild(seg);
+          const pb=document.createElement("button"); pb.type="button"; pb.className="secondary"; pb.style.cssText="margin-left:8px;font-size:11px;padding:2px 8px";
+          pb.textContent=T("🔎 준비 점검","🔎 Check readiness");
+          pb.title=T("실제 점검을 돌려요 — DeepSeek 소형 요청 최대 2회(과금·형식 실패 시 교정 1회 포함)·Codex 계정 사용량 1회. 자동 실행은 없어요(이 버튼만).","Runs real checks — up to 2 small billed DeepSeek requests (incl. 1 repair) · 1 Codex run within account usage. Never runs automatically (this button only).");
+          pb.addEventListener("click", function(){ pb.disabled=true; pb.textContent=T("점검 중…","Checking…"); vscode.postMessage({type:"runMapProbe"}); });
+          row.appendChild(pb);
+          // degraded 배지: 선택한 담당의 readiness가 미성립이면 저장값은 유지한 채 사유만 표시(조용한 전환 금지 — 1-34)
+          const cur=mm.mode; const curRd= cur==="auto" ? (autoRd||{ok:false,reason:"not-probed"}) : rdOf(cur);
+          if(!curRd.ok && cur!=="self") note.textContent=T("⚠ 선택된 담당("+cur+")이 아직 준비되지 않았어요 — ","⚠ Selected provider ("+cur+") is not ready — ")+reasonT(curRd)+T(" (선택은 그대로 유지·자동 전환 없음)"," (selection kept · no silent switching)");
+          else if(mm.raw===null) note.textContent=T("미지정(기본 self) — Project MAP 의미 보강을 누가 맡을지의 선택이에요","Unset (default self) — who performs Project MAP semantic enrichment");
           row.appendChild(note);
         });
       })();

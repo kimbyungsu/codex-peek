@@ -5,7 +5,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
 
-export const BRIDGE_SCRIPTS = ["contract-lib.js", "codex-bridge.js", "ask-job-worker.js", "codex-hook.js", "codex-plugin-install.js", "contract-inject.js", "verify-guard.js", "codex-guard.js", "deepseek-bridge.js", "scout-gate.js", "project-map.js", "map-runtime.js", "map-bootstrap.js", "map-pipeline.js", "map-bindings.js", "map-adapters.js", "map-freshness.js", "map-reader.js", "map-cutover.js"]; // ask-job-worker=내구 검증, codex-hook=Codex 구현자 lifecycle. 뒤 MAP 파일=P0.5/P1/P4 런타임(map-adapters→map-reader→map-freshness require 사슬 — P3b 배포 편입)
+export const BRIDGE_SCRIPTS = ["contract-lib.js", "codex-bridge.js", "ask-job-worker.js", "codex-hook.js", "codex-plugin-install.js", "contract-inject.js", "verify-guard.js", "codex-guard.js", "deepseek-bridge.js", "scout-gate.js", "project-map.js", "map-runtime.js", "map-bootstrap.js", "map-pipeline.js", "map-bindings.js", "map-adapters.js", "map-freshness.js", "map-reader.js", "map-cutover.js", "map-probe.js"]; // ask-job-worker=내구 검증, codex-hook=Codex 구현자 lifecycle. 뒤 MAP 파일=P0.5/P1/P4 런타임(map-adapters→map-reader→map-freshness require 사슬 — P3b 배포 편입)
 export const OUR_HOOKS = [
   { event: "UserPromptSubmit", matcher: "", script: "contract-inject.js" },
   { event: "PreToolUse", matcher: "Bash", script: "codex-guard.js" },

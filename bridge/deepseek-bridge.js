@@ -94,6 +94,16 @@ async function callChat(cfg, body, timeoutMs, opts) {
 
 const NO_KEY_MSG = "DeepSeek 키 없음 — 잠기는 건 'DeepSeek 비교 팔'뿐입니다(기초 탐색과 무료 self 팔 지도는 키 없이 동작: node scripts/scope-scout-self.js <repo>). 키 등록: 대시보드 ⚙️고급설정 탭 또는 DEEPSEEK_API_KEY env";
 
+// P7(1-8) capability 판정(순수 — 테스트가 직접 실행): 정확한 JSON 객체 하나만·크기 상한 2,000자.
+// 코드펜스·설명 문장 동반=실패(strict — typed 경로에 쓸 수 있는지의 실증이므로 관대 파싱 금지).
+function validateCapability(txt) {
+  const t = String(txt || "").trim();
+  if (!t || t.length > 2000) return false;
+  let o;
+  try { o = JSON.parse(t); } catch { return false; }
+  return !!(o && typeof o === "object" && !Array.isArray(o) && o.capability === "ok" && o.n === 7 && Object.keys(o).length === 2);
+}
+
 async function main() {
   const cmd = process.argv[2];
   const cfg = loadConfig();
@@ -105,6 +115,23 @@ async function main() {
     if (r.usage) { try { require(path.join(__dirname, "contract-lib.js")).appendScoutUsage({ ts: new Date().toISOString(), workspace: "", arm: "ping", model: r.model || cfg.model, usageIn: r.usage.prompt_tokens ?? null, usageOut: r.usage.completion_tokens ?? null }); } catch { /* 무해 */ } }
     console.log(`ok — ${r.model} 응답 수신(${r.content ? "본문" : r.reasoning ? "추론만(정상 — 상한 내)" : "빈 응답"})${r.usage ? ` tokens in=${r.usage.prompt_tokens} out=${r.usage.completion_tokens}` : ""}`);
     return;
+  }
+  if (cmd === "capability") {
+    // P7(1-8) — typed capability probe: '지시대로 정확한 JSON만 내놓을 수 있는가'를 실검증(ping은 증거 아님).
+    // strict validator+크기 상한+bounded repair(원격 재호출 1회) — 최대 2회 과금(UI 고지와 일치)·호출별 usage 기록.
+    if (!cfg.apiKey) { console.error(NO_KEY_MSG); process.exit(1); }
+    const capReq = { model: cfg.model, messages: [{ role: "user", content: '다음 JSON만 정확히 출력하라(설명·코드펜스 금지): {"capability":"ok","n":7}' }], max_tokens: 64, temperature: 0, stream: false };
+    const recordUse = (r9) => { if (r9 && r9.usage) { try { require(path.join(__dirname, "contract-lib.js")).appendScoutUsage({ ts: new Date().toISOString(), workspace: "", arm: "capability", model: r9.model || cfg.model, usageIn: r9.usage.prompt_tokens ?? null, usageOut: r9.usage.completion_tokens ?? null }); } catch { /* 무해 */ } } };
+    let r1 = await callChat(cfg, capReq, 60000, { allowEmptyContent: true });
+    recordUse(r1);
+    let ok = validateCapability(r1.content || "");
+    if (!ok) { // bounded repair — 원격 재호출 정확히 1회
+      const r2 = await callChat(cfg, { ...capReq, messages: [...capReq.messages, { role: "assistant", content: r1.content || "" }, { role: "user", content: "형식이 틀렸다. 요구한 JSON 객체만 정확히 다시 출력하라." }] }, 60000, { allowEmptyContent: true });
+      recordUse(r2);
+      ok = validateCapability(r2.content || "");
+    }
+    console.log(ok ? "capability-ok" : "capability-fail");
+    process.exit(ok ? 0 : 2);
   }
   if (cmd === "map") {
     if (!cfg.apiKey) { console.error(NO_KEY_MSG); process.exit(1); }
@@ -122,5 +149,5 @@ async function main() {
   process.exit(2);
 }
 
-module.exports = { resolveDeepseekConfig, buildMapRequest, DEEPSEEK_DEFAULTS };
+module.exports = { resolveDeepseekConfig, buildMapRequest, DEEPSEEK_DEFAULTS, validateCapability };
 if (require.main === module) main().catch((e) => { console.error("deepseek-bridge 실패:", (e && e.message) || e); process.exit(1); });

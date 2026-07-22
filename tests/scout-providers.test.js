@@ -90,7 +90,8 @@ ok(/process\.stdout\.write\(res\.map \+ "\\n"\)/.test(selfW) && /process\.stdout
 ok(/if \(o\.outFile && !P\.handlesOutFile\) fs\.writeFileSync\(o\.outFile, map\)/.test(provSrc), "--out 쓰기 실패는 구 러너처럼 전파(조용한 삼킴 금지 — 소스 잠금)");
 // P6 — codex 어댑터 소스 계약(실 호출 없이 형태 잠금)
 ok(/resolveCodex\(\)/.test(provSrc) && !/function resolveCodex/.test(provSrc), "codex 어댑터 — 실행 해석은 브릿지 정본 resolveCodex 재사용(중복 구현 없음)");
-ok(/"exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", \.\.\.CL\.scoutCodexArgs\(\), "-o", outFile/.test(provSrc) && /cwd: tmpCwd/.test(provSrc) && /mkdtempSync/.test(provSrc), "codex 어댑터 — 독립 exec 1회·--ephemeral(rollout 무잔재)·read-only 강제·정찰 전용 -c 슬롯·빈 임시 폴더 실행");
+ok(/\.\.\.CL\.codexScoutExecArgs\(outFile\)/.test(provSrc) && /cwd: tmpCwd/.test(provSrc) && /mkdtempSync/.test(provSrc), "codex 어댑터 — 공용 빌더(codexScoutExecArgs — P7 probe와 동일 조립 계약)·빈 임시 폴더 실행");
+ok(JSON.stringify(require(path.join(ROOT, "bridge", "contract-lib.js")).codexScoutExecArgs("OUT")).startsWith('["exec","--ephemeral","--sandbox","read-only","--skip-git-repo-check"'), "빌더 내용 — exec·--ephemeral(무잔재)·read-only 강제(구 인라인과 동일·P6 계보 계승)");
 ok(/\[\.\.\.inv\.args, "--version"\]/.test(provSrc), "codex probe=codex --version(가벼운 도달성 — 지도 요청 아님)");
 ok(/read-only는 절대경로 읽기를 물리 차단하진|절대경로 '읽기'를 물리/.test(provSrc + fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8")), "정직 한계 명문(빈 폴더+지시 보강 — 읽기 전면 물리 차단 아님)");
 const cxW = fs.readFileSync(path.join(ROOT, "scripts", "scope-scout-codex.js"), "utf8");
@@ -245,7 +246,7 @@ ok(extP6b.includes("function clickJumpRestore(prevY, nowY, maxY)") && extP6b.inc
   ok(fnJ(30, 0, 2000) === null, "실행 — 원래 상단 근처(30) → 개입 없음(오탐 방지)");
   ok(fnJ(500, 0, -10) === 0, "실행 — 내용이 화면보다 짧음 → 0으로 클램프(음수 좌표 금지)");
 }
-ok(/scoutCodexArgs\(\)/.test(fs.readFileSync(path.join(ROOT, "scripts", "scout-providers.js"), "utf8")), "어댑터가 정찰 전용 슬롯을 소비(검증 modelPrefs 재사용 아님)");
+ok(/codexScoutExecArgs/.test(fs.readFileSync(path.join(ROOT, "scripts", "scout-providers.js"), "utf8")) && /scoutCodexArgs\(\)/.test(fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8")), "어댑터→공용 빌더→정찰 전용 슬롯 소비(검증 modelPrefs 재사용 아님 — P7 빌더 이동 반영)");
 ok(/scout-codex\.json/.test(fs.readFileSync(path.join(ROOT, "PRIVACY.md"), "utf8")), "PRIVACY 파일 표에 scout-codex.json 행(비밀 아님 명시)");
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
