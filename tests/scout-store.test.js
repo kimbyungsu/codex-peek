@@ -69,7 +69,7 @@ ok(/키 등록=동의 모델/.test(ext) && /key-registration=consent model/.test
 
 console.log("[복원 탭 갱신 보강] 3요원 조사 합의 — 자가 치유·구획 격리·재표시 갱신·복원 실패 가시화");
 ok(/부팅 자가 치유/.test(ext) && /vscode\.postMessage\(\{type:"refresh"\}\);\n<\/script>/.test(ext.replace(/\r/g, "")), "웹뷰 로드 직후 1회 데이터 요청(push 전용 설계의 자가 복구 경로)");
-ok(/const safe=\(fn\)=>\{ try\{ fn\(\); \}catch/.test(ext) && (ext.match(/safe\(/g) || []).length >= 10, "data 핸들러 구획 격리(한 구획 예외가 연결·대화 갱신을 못 막음)");
+ok(/function safe\(fn\)\{ try\{ fn\(\); \}catch/.test(ext) && (ext.match(/safe\(/g) || []).length >= 10, "data 핸들러 구획 격리(한 구획 예외가 연결·대화 갱신을 못 막음 — 2026-07-22 함수 선언 호이스팅으로 강화·TDZ 소멸)");
 ok(/onDidChangeViewState\(\(e\) => \{ if \(e\.webviewPanel\.visible\) this\.post\(\); \}\)/.test(ext), "재표시 즉시 최신화(15s poll 대기 제거)");
 ok(/대시보드 복원에 실패했어요/.test(ext) && /Failed to restore the dashboard/.test(ext), "복원 실패 가시화+죽은 탭 정리(침묵 삼킴 제거)");
 ok(/dashboard data post dropped/.test(ext), "전달 실패(미배달) 관측 로그");

@@ -4286,7 +4286,7 @@ class Dashboard {
   $("segProfile").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-vp]"); if(b){ curVP=b.getAttribute("data-vp"); segTouched.vp=true; highlightSeg("segProfile","data-vp",curVP); markDirty(); } });
   // P-12 2b: 예산 입력 — cardMachine 편승(저장 중 편집 무시·초안은 markDirty 축에 합류)
   var vbEl=$("vBudget"); if(vbEl) vbEl.addEventListener("input", function(){ if(cardM.saving()) return; curVB=String(vbEl.value||"").trim(); segTouched.vb=true; markDirty(); });
-  safe(function(){ var pr=$("vbPresets"); if(!pr) return; pr.addEventListener("click", function(ev){ var b=ev.target && ev.target.closest ? ev.target.closest("button") : null; if(!b || cardM.saving()) return; var v=b.getAttribute("data-vb"); if(v===null) return; var el=$("vBudget"); if(!el) return; el.value=v; curVB=v; segTouched.vb=true; markDirty(); }); }); // 상한 추천 버튼 — 기존 저장 흐름 재사용(수동 입력·무제한 유지·프로젝트별 계약 저장)
+  try { var pr9=$("vbPresets"); if(pr9) pr9.addEventListener("click", function(ev){ var b=ev.target && ev.target.closest ? ev.target.closest("button") : null; if(!b || cardM.saving()) return; var v=b.getAttribute("data-vb"); if(v===null) return; var el=$("vBudget"); if(!el) return; el.value=v; curVB=v; segTouched.vb=true; markDirty(); }); } catch(e9) { /* 버튼 연결 실패는 버튼만 — 초기화 전체를 죽이지 않음 */ } // 상한 추천 버튼(실사고 2026-07-22: safe는 5009행 const라 초기화 구간에서 TDZ ReferenceError → 웹뷰 스크립트 전체 즉사·전 버튼 무반응. 초기화 구간에서는 safe 사용 금지)
   $("segScout").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-sm]"); if(b){ curSM=b.getAttribute("data-sm"); segTouched.sm=true; highlightSeg("segScout","data-sm",curSM); markDirty(); } });
   $("segInject").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-im]"); if(b){ curIM=b.getAttribute("data-im"); segTouched.im=true; highlightSeg("segInject","data-im",curIM); markDirty(); } });
   $("segReason").addEventListener("click", (ev)=>{ const b=ev.target.closest("[data-rs]"); if(b){ curRS=b.getAttribute("data-rs"); highlightSeg("segReason","data-rs",curRS); } });
@@ -5006,7 +5006,7 @@ class Dashboard {
     safeTop(function(){ lastDataAt = Date.now(); var fn=$("freshNote"); if(fn){ fn.style.color=""; fn.textContent = T("마지막 갱신 ","last update ") + new Date(d.postedAt || Date.now()).toLocaleTimeString(); } });
     // 구획 격리(safe): 렌더 구획 하나가 특정 데이터 형상에서 예외를 던져도 아래 구획(특히 연결·대화)이 계속
     // 갱신되게 한다 — '한 구획 예외 → 이후 전 구획 영구 미갱신'이 복원 탭 낡음의 유력 경로(3요원 조사 합의).
-    const safe=(fn)=>{ try{ fn(); }catch(e){ /* 구획 실패는 그 구획만 — 다음 push에서 재시도됨 */ } };
+    function safe(fn){ try{ fn(); }catch(e){ /* 구획 실패는 그 구획만 — 다음 push에서 재시도됨 */ } } // 함수 선언(호이스팅)으로 교체 — 실사고 2026-07-22: const 화살표는 콜백 앞 분기(switchTab·ckLive·modeSwitchNote)의 호출에서 TDZ ReferenceError(잠재해 있다가 증분 1 삽입으로 정의가 밀리며 표면화). 함수 선언은 스코프 전체 호이스팅이라 정의 순서 무관.
     safe(()=>renderStats(d.verifyStats));          // 탭2 검증 통계 갱신(현황 탭과 같은 data 푸시에 함께 반영)
     safe(function(){ // 3트랙 기여(관찰 신호) — 일지 이벤트 합계(2026-07-09 사용자 요청 · §6-10 (b) 즉시분)
       const el=$("scoutImpact"); if(!el) return;
