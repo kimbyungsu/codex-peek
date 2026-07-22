@@ -2,7 +2,7 @@
 
 > 이 문서 하나로 이어갈 수 있게 쓰였다. 상세 설계 원본(SCOUT-TRACK.md·SCOPE-LEDGER.md)은 **의도적으로 레포 밖 로컬 문서**라
 > 다른 환경에는 없다 — 그래서 이 파일이 그 요지를 포함한다. ⚠ **실 API 키·토큰은 어떤 파일·픽스처·예시에도 절대 넣지 말 것.**
-> 마지막 갱신: 2026-07-22 (버전 0.1.86 불변). **★검증 거버넌스 트랙(설계+증분 1~3) 완결 + P5(provider 공통 인터페이스) 완결 + P6(Codex Scout) 완결(로컬 커밋 — push 대기)**:
+> 마지막 갱신: 2026-07-23 (버전 0.1.86 불변). **★검증 거버넌스 트랙(설계+증분 1~3) 완결 + P5(provider 공통 인터페이스) 완결(이상 07-22) + P6(Codex Scout) 완결(07-23·로컬 커밋 — push 대기)**:
 > 배경: C-7이 core 프로필로도 11왕복·blocker 19(실측 — core ②조항 "희귀 경합=blocker"가 이 프로젝트에선
 > 만능 통과문+지원 환경 선언 부재) → 사용자 결정으로 P5보다 선행. ①설계 v1 동결(docs/VERIFY-GOVERNANCE.md
 > — 설계검증 6왕복·"열린 탐색+제한된 차단 권한"·Envelope·입장 심사·지적 계보·범위 확장·소진 분해. 726219f)
@@ -38,7 +38,7 @@
 > 기존 소스 단언 8곳 재배선(scout-store·scout-usage·scout-prompt·deepseek-bridge·ledger-events·l1-provenance·
 > scout-drift×2·scout-advice — 러너 원문 단언→공통층+위임 단언)·신규 tests/scout-providers.test.js 53단언
 > (목 provider 경계 실행·ledger 사보타주·Module._load 후킹 러너 e2e 6케이스)·체인 등록·전체 EXIT=0.
-> ★P6 완결(2026-07-22 — 구현검증 4왕복[실패 3→통과]·blocker 누적 6 전부 수용·반박 0): 구 '예정' 배지의 실체 —
+> ★P6 완결(2026-07-23 — 구현검증 4왕복[실패 3→통과]·blocker 누적 6 전부 수용·반박 0): 구 '예정' 배지의 실체 —
 > ①codex 어댑터(scout-providers.js): 검증 세션과 분리된 독립 `codex exec --ephemeral --sandbox read-only
 > --skip-git-repo-check` 1회·cwd=빈 임시 폴더·stdin=preface+꾸러미·-o 회수·resolveCodex 정본 재사용(codex-bridge
 > export 1개 추가·중복 구현 금지)·probe=--version. --ephemeral=rollout 무잔재(검증 세션 식별의 무제한 cwd 폴백
