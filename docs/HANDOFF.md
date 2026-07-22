@@ -69,7 +69,7 @@
 > model_reasoning_effort 삽입(검증 modelPrefs와 별개 슬롯 — 싼 정찰+강한 검증 조합)·고급설정 카드(현재값
 > 선충전 WYSIWYG[1차 blocker ab-2: 빈 칸 전체 교체 침묵 소실 차단]+편집 세대 결속 scGen/scSavedGen[2차:
 > 응답 전 새 편집 초안 보호]+단일-flight scBusy/scLock[3차 f-c4c4ab24: 겹친 요청 차단·해제=성공/실패 공통])·
-> 대시보드 codex 선택 시 고급설정 안내·PRIVACY 파일 표 행. scout-providers [11] 21단언(가짜 CODEX_BIN 실
+> 대시보드 codex 선택 시 고급설정 안내·PRIVACY 파일 표 행. scout-providers [11] 20단언(가짜 CODEX_BIN 실
 > invoke에 -c 실림·초기화 후 0개 포함)·체인 EXIT=0.
 > ▶다음: P7(모드 UI — 경제형/정밀형/자동형·readiness 행렬. 1-26 경계 유지: scoutArm과 통합 금지·'키 없으면 강등' 규칙 재사용 금지) → P8(라우터). 미반영 합의 이월: f-e9c23d7a·PRIVACY cutover-notice·보관함 5364ebe0.
 > ── (이전: **★C-7 자동화 계층 완결**):
