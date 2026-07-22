@@ -273,7 +273,7 @@ usable-draft→usable 전이는 의미 보강+검증을 거친 confirmed subgrap
 - `economyReady = DeepSeek 설정 존재 AND 설정 지문 일치 AND typed capability probe 통과`
 - `precisionReady = Codex binary/home 준비 AND session-role-registry 정상 AND (Scout 세션 연결 OR 고아 방지
   계약(1-9)을 갖춘 1회 자동 생성 가능)` **[개정 2026-07-23 — P6이 사용자 결정으로 --ephemeral 무잔재 1회 실행이
-  되어 상시 Scout 세션·registry 대상이 소멸: 개정 정의는 말미 'P7 상세 설계 v2' P7-2 참조(원문은 이력 보존).]**
+  되어 상시 Scout 세션·registry 대상이 소멸: 개정 정의는 말미 'P7 상세 설계'(최신판 — 현재 v4) P7-2 참조(원문은 이력 보존).]**
 - `selfReady = Claude CLI 실행 가능 AND self typed adapter 배포됨`(15차 반영 — P5에서 성립. **P1~P4 동안
   기본 self의 의미 보강 큐는 semantic-enrichment-pending 보존이 규범이고, P5 배포로 selfReady가 성립하는
   순간 1-33의 자동 재개가 발동한다** — 큐잉(P1)과 실행 가능 시점(P5)의 Phase 간극을 이 계약이 잇는다.)
@@ -522,7 +522,7 @@ targetId 계약: 생성 op(add_node/add_edge)=금지, split/merge=원본 targetI
 - **P6** Codex Scout 독립 세션: session-role-registry(1-9)·Scout 전용 진입점(1-4)·두뇌 설정 독립(매 호출 주입).
 - **P7** 모드 UI·readiness 행렬(1-34 — economyReady/precisionReady/autoReady, 조용한 전환 금지)·Scout 세션
   관리(segScout 확장 시 dirty/hold 연쇄 편입) **[개정 2026-07-23 — Scout 세션 관리는 P6 ephemeral 확정으로
-  대상 소멸(소거): 말미 'P7 상세 설계 v2' 참조.]**
+  대상 소멸(소거): 말미 'P7 상세 설계'(최신판 — 현재 v4) 참조.]**
 - **P8** 결정론 라우터 — 1-34 규범 판정표 그대로(재해석 금지)·라우팅 로그.
 - **P9** intent-choice 카드(1-14)·**Intent Policy Memory(1-35 — 정책 탐색→자동 적용→카드는 최후)**·
   recovery-action 카드(1-18)·선택 후 자동 마무리.
