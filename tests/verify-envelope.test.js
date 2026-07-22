@@ -137,8 +137,53 @@ console.log("[6] 이 저장소의 제안본 실검증");
 {
   const r = CL.readVerifyEnvelope(ROOT);
   ok(r.st === "ok" && r.truncated !== true, "verify-envelope.json 제안본=스키마 유효·상한 안(승인은 대시보드에서)");
-  ok(r.data.alwaysBlocker.some((x) => x.includes("지원 흐름 안에서")) && r.data.outOfScope.some((x) => x.includes("배포·설치 행위 간")), "제안본 내용=동결 설계 §2.2(지원 세계 전제·상호 배타 문구)");
+  ok(r.data.alwaysBlocker.some((x) => x.includes("평소 사용 중에")) && r.data.outOfScope.some((x) => x.includes("설치·업데이트를 동시에")), "제안본 내용=동결 설계 §2.2 의도 보존(지원 세계 전제='평소 사용 중'·상호 배타='설치는 한 번에 하나' — 상황예시 문안으로 재표현)");
 }
 
+console.log("[7] 프로젝트별·언어별 분리 실측(사용자 확인 요청 2026-07-22)");
+{
+  const repoA = fs.mkdtempSync(path.join(os.tmpdir(), "venvA_"));
+  const repoB = fs.mkdtempSync(path.join(os.tmpdir(), "venvB_"));
+  fs.writeFileSync(path.join(repoA, "verify-envelope.json"), JSON.stringify(base({ supportedEnv: ["A 프로젝트 전용 항목"] })));
+  fs.writeFileSync(path.join(repoB, "verify-envelope.json"), JSON.stringify(base({ supportedEnv: ["B 프로젝트 전용 항목"] })));
+  const shaA = CL.readVerifyEnvelope(repoA).sha1, shaB = CL.readVerifyEnvelope(repoB).sha1;
+  ok(shaA !== shaB, "수칙서 파일=저장소마다 독립(내용·지문 별개)");
+  const wsA = fs.mkdtempSync(path.join(os.tmpdir(), "venvWsA_"));
+  const wsB = fs.mkdtempSync(path.join(os.tmpdir(), "venvWsB_"));
+  const r1 = CL.updateContractPatch(wsA, "ko", { envelopeHash: shaA }, { tries: 3 });
+  ok(r1 && r1.ok === true, "A 프로젝트 계약에 승인 도장 기록 성공");
+  ok(CL.loadContract(wsA, "ko").envelopeHash === shaA, "A 프로젝트(ko)=도장 있음");
+  ok(CL.loadContract(wsB, "ko").envelopeHash === null, "B 프로젝트=여전히 미승인(A 승인이 B에 전파되지 않음 — 프로젝트별 분리)");
+  ok(CL.loadContract(wsA, "en").envelopeHash === null, "A 프로젝트의 영어 슬롯=별도 미승인(언어별 분리)");
+  ok(CL.envelopeInjectionFor(repoA, CL.loadContract(wsA, "ko").envelopeHash, "ko").st === "ok", "A: 자기 수칙서+자기 도장=주입 성립");
+  ok(CL.envelopeInjectionFor(repoB, CL.loadContract(wsA, "ko").envelopeHash, "ko").st === "mismatch", "B 수칙서에 A 도장=불일치 거부(교차 오적용 차단)");
+}
+console.log("[7.5] 하네스 표현 계층 — 축 해설·쉬운 예시 슬롯(프로젝트 무관 공통)");
+{
+  mk(base({ supportedEnvEx: ["회사 서버 공용 사용은 지원 안 함", "창 두 개 동시 사용 OK"] }));
+  const rx = CL.readVerifyEnvelope(repo);
+  ok(rx.st === "ok" && Array.isArray(rx.dataEx.supportedEnv) && rx.dataEx.supportedEnv[1] === "창 두 개 동시 사용 OK" && rx.dataEx.alwaysBlocker === null, "쉬운 예시 슬롯(<axis>Ex)=길이 일치 축만 유효(표시 전용)");
+  mk(base({ supportedEnvEx: ["길이 불일치 하나뿐"] }));
+  ok(CL.readVerifyEnvelope(repo).dataEx.supportedEnv === null, "예시 길이 불일치=무시(번호 어긋남 방지 — En과 동일 규칙)");
+  mk(base({ supportedEnvEx: ["c".repeat(250), "짧음"] }));
+  ok(CL.readVerifyEnvelope(repo).truncated === true, "예시 절삭도 truncated 합산(못 본 예시로 승인 금지)");
+  mk(base({ supportedEnvEx: ["EXAMPLE-ONLY-UNIQUE-9271 회사 서버 공용", "EXAMPLE-ONLY-UNIQUE-9272 창 둘"] }));
+  const r75 = CL.readVerifyEnvelope(repo);
+  const inj75 = CL.envelopeInjectionFor(repo, r75.sha1, "ko");
+  ok(r75.dataEx.supportedEnv[0].includes("EXAMPLE-ONLY-UNIQUE-9271") && inj75.st === "ok" && !inj75.text.includes("EXAMPLE-ONLY-UNIQUE-9271") && !inj75.text.includes("EXAMPLE-ONLY-UNIQUE-9272") && !inj75.text.includes("↳"), "예시가 '실재하는' 입력에서도 검증자 주입에 안 실림(판정 경계=본문만 — 1차 [보완]: 회귀 검출력 있는 반례로 교체)");
+  mk(base());
+  const ext75 = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
+  ok(ext75.includes("① 지원 환경 —") && ext75.includes("② 절대 안 되는 일 —") && ext75.includes("③ 신경 안 씀 —") && ext75.includes("① Supported use"), "모달=축별 하네스 고정 해설 ko/en(파일 작성 품질과 무관한 이해 보조 — 프로젝트 공통)");
+  ok(ext75.includes('"      ↳ " + (en9 ? "e.g." : "예:")'), "항목별 쉬운 예시를 승인 화면에 병기(<axis>Ex 슬롯)");
+}
+console.log("[8] 승인 UX — 부분 부동의 경로·상황예시 문안");
+{
+  const ext8 = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
+  ok(ext8.includes("부분 승인은 없습니다") && ext8.includes("no partial approval"), "모달에 '일부 부동의=승인 취소+항목 번호 지정' 경로 안내 ko/en(문서 단위 도장 계약 명시)");
+  const dr = CL.readVerifyEnvelope(ROOT);
+  ok(dr.st === "ok" && dr.truncated !== true, "개정 제안본=스키마 유효·상한 안");
+  const all8 = [...dr.data.supportedEnv, ...dr.data.alwaysBlocker, ...dr.data.outOfScope];
+  ok(all8.length === 17 && all8.every((x) => x.includes("예:") || x.includes("전제")), "전 항목 상황예시 병기(추상·기술 문구 제거 — 2026-07-22 사용자 지시)");
+}
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

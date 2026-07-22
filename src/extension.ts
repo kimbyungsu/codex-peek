@@ -3078,20 +3078,29 @@ class Dashboard {
           }
           const shaAt = String(evv.sha1);
           // 1차 blocker③: 승인 대상은 '개수'가 아니라 '내용' — 모달 detail에 전 항목을 ID와 함께 그대로 제시(문구만 바뀐 재승인도 눈으로 확인 가능).
-          const axKo: Record<string, string> = { supportedEnv: "지원 환경", alwaysBlocker: "절대 blocker(지원 세계 안)", outOfScope: "기본 범위 밖" };
-          const axEn: Record<string, string> = { supportedEnv: "supported environment", alwaysBlocker: "always a blocker (within the supported world)", outOfScope: "out of scope by default" };
+          // 하네스 표현 계층(2026-07-22 사용자 지시): 어떤 프로젝트의 수칙서든, 축마다 '이걸 승인하면 무슨 뜻인지'를
+          // 하네스가 고정 해설로 풀어 보여준다(파일 작성 품질에 의존하지 않는 사용자 이해 보조 — 프로젝트 무관 공통).
+          const axKo: Record<string, string> = { supportedEnv: "① 지원 환경 — 이 도구가 '정상 사용'으로 약속하는 상황들", alwaysBlocker: "② 절대 안 되는 일 — 지원 상황 안에서 하나라도 어기면 무조건 공사 중단(blocker)", outOfScope: "③ 신경 안 씀 — 이런 상황을 전제로 한 지적은 공사 중단이 아니라 메모로 분류" };
+          const axEn: Record<string, string> = { supportedEnv: "① Supported use — situations this tool promises to work in", alwaysBlocker: "② Never allowed — any breach within supported use stops the work (blocker)", outOfScope: "③ Not defended — findings assuming these become notes, not stops" };
+          const axNoteKo: Record<string, string> = { supportedEnv: "(검증은 이 세계 안의 문제를 잡는 데 집중합니다)", alwaysBlocker: "(늦게 발견돼도, 드물어도 — 여기 걸리면 반드시 고칩니다)", outOfScope: "(승인은 '이런 상황까지는 방어하지 않아도 된다'는 사용자 결정입니다)" };
+          const axNoteEn: Record<string, string> = { supportedEnv: "(verification focuses on problems inside this world)", alwaysBlocker: "(however rare or late-found — these always get fixed)", outOfScope: "(approving means: we accept not defending these)" };
           const pre9: Record<string, string> = { supportedEnv: "sup", alwaysBlocker: "ab", outOfScope: "oos" };
           const lines9: string[] = [];
           for (const ax of ["supportedEnv", "alwaysBlocker", "outOfScope"]) {
-            lines9.push((en9 ? axEn[ax] : axKo[ax]) + ":");
+            lines9.push((en9 ? axEn[ax] : axKo[ax]));
+            lines9.push((en9 ? axNoteEn[ax] : axNoteKo[ax]));
             const arr9: string[] = (en9 && evv.dataEn && evv.dataEn[ax]) ? evv.dataEn[ax] : evv.data[ax];
-            arr9.forEach((x: string, i9: number) => lines9.push("  " + pre9[ax] + "-" + (i9 + 1) + ". " + x));
+            const exArr9: string[] | null = evv.dataEx && evv.dataEx[ax] ? evv.dataEx[ax] : null;
+            arr9.forEach((x: string, i9: number) => {
+              lines9.push("  " + pre9[ax] + "-" + (i9 + 1) + ". " + x);
+              if (exArr9 && exArr9[i9]) lines9.push("      ↳ " + (en9 ? "e.g." : "예:") + " " + exArr9[i9]); // 선택 '쉬운 예시' 슬롯(<axis>Ex — 표시 전용)
+            });
             lines9.push("");
           }
           const okBtn = en9 ? "Reviewed — approve" : "내용을 확인했고 승인합니다";
           const msg9 = en9
-            ? "Approve the verification envelope — the items below become the judging boundary for every verification (out-of-scope findings are submitted as notes, not stops). Edits to verify-envelope.json suspend it until re-approval."
-            : "검증 경계(수칙서) 승인 — 아래 내용이 앞으로 모든 검증의 판정 경계가 됩니다(범위 밖 지적은 중단 사유가 아니라 메모로 제출). verify-envelope.json을 고치면 재승인 전까지 적용이 멈춥니다.";
+            ? "Approve the verification envelope — the items below become the judging boundary for every verification (out-of-scope findings are submitted as notes, not stops). Edits to verify-envelope.json suspend it until re-approval.\n\nDisagree with some items? Do NOT approve — cancel and tell the implementer the item ids (e.g., oos-2) to drop or reword; the file gets revised and re-proposed. Approval is per-document (a stamp on the exact bytes), so there is no partial approval."
+            : "검증 경계(수칙서) 승인 — 아래 내용이 앞으로 모든 검증의 판정 경계가 됩니다(범위 밖 지적은 중단 사유가 아니라 메모로 제출). verify-envelope.json을 고치면 재승인 전까지 적용이 멈춥니다.\n\n일부 항목에 동의하지 않으면 승인하지 마세요 — 취소한 뒤 빼거나 고칠 항목 번호(예: oos-2)를 구현모델에게 말씀해 주시면, 파일을 고쳐 다시 승인 요청을 드립니다. 승인은 문서 전체에 도장을 찍는 방식이라 부분 승인은 없습니다.";
           vscode.window.showInformationMessage(msg9, { modal: true, detail: lines9.join("\n") }, okBtn).then((sel) => {
             if (sel !== okBtn) return;
             const wsNow = dashboardWorkspace();

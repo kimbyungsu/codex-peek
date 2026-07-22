@@ -2806,7 +2806,7 @@ function readVerifyEnvelope(repo) {
     const out = arr.slice(0, ENVELOPE_ITEM_MAX).map((x) => { const v = x.trim(); if (v.length > ENVELOPE_CHAR_MAX) { cut = true; return v.slice(0, ENVELOPE_CHAR_MAX); } return v; });
     return { out, cut };
   };
-  const data = {}, dataEn = {};
+  const data = {}, dataEn = {}, dataEx = {};
   let truncated = false;
   for (const ax of ENVELOPE_AXES) {
     if (!Array.isArray(o[ax]) || o[ax].some((x) => typeof x !== "string" || !x.trim())) return { st: "corrupt" };
@@ -2817,8 +2817,14 @@ function readVerifyEnvelope(repo) {
     const enArr = o[ax + "En"];
     if (Array.isArray(enArr) && enArr.length === o[ax].length && !enArr.some((x) => typeof x !== "string" || !x.trim())) { const c2 = clip(enArr); dataEn[ax] = c2.out; if (c2.cut) truncated = true; } // 번역 절삭도 truncated 합산(구현검증 1차 blocker④ — 승인 항목의 침묵 누락 금지)
     else dataEn[ax] = null;
+    // 선택 '쉬운 예시' 슬롯 <axis>Ex(하네스 표현 계층 2026-07-22 사용자 지시) — 항목별 일상 상황예시를 승인 화면에
+    // 함께 출력(표시 전용·검증자 주입에는 안 실림 — 판정 경계는 본문만). 규칙은 En과 동일: 길이 일치+전항목
+    // 문자열일 때만 유효, 절삭은 truncated 합산(사용자가 못 본 예시로 승인하는 침묵 누락 금지).
+    const exArr = o[ax + "Ex"];
+    if (Array.isArray(exArr) && exArr.length === o[ax].length && !exArr.some((x) => typeof x !== "string" || !x.trim())) { const c3 = clip(exArr); dataEx[ax] = c3.out; if (c3.cut) truncated = true; }
+    else dataEx[ax] = null;
   }
-  return { st: "ok", data, dataEn, sha1: crypto.createHash("sha1").update(raw).digest("hex"), truncated };
+  return { st: "ok", data, dataEn, dataEx, sha1: crypto.createHash("sha1").update(raw).digest("hex"), truncated };
 }
 function envelopeInjectionFor(repo, approvedHash, lang) {
   const ev = readVerifyEnvelope(repo);
