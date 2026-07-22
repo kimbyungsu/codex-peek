@@ -3889,7 +3889,7 @@ class Dashboard {
   .mcard{border:1px solid var(--vscode-panel-border);border-radius:10px;padding:14px 16px;background:var(--vscode-editor-background);box-shadow:0 1px 3px rgba(0,0,0,.07)}
   .mrow{display:flex;align-items:center;gap:8px;margin-top:10px}
   .mlbl{min-width:60px;color:var(--vscode-descriptionForeground);font-size:12px}
-  #mModel{flex:1;max-width:280px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,var(--vscode-panel-border));border-radius:5px;padding:5px 8px;font:inherit}
+  #mModel,#scModel{flex:1;max-width:280px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,var(--vscode-panel-border));border-radius:5px;padding:5px 8px;font:inherit}
   #segReason{margin-left:0}
   .nowbadge{font-size:10px;font-weight:700;padding:1px 8px;border-radius:999px;border:1px solid var(--vscode-charts-purple);color:var(--vscode-charts-purple)}
   /* 온보딩 배너 */
@@ -4272,10 +4272,14 @@ class Dashboard {
     </div>
     <div class="card">
       <div class="chead">${t("Codex 정찰 모델·추론 강도", "Codex scout model · reasoning effort")} <span class="muted" style="font-weight:400">${t("· 탐색 담당을 Codex로 선택했을 때의 정찰 실행에만 적용 — 검증(2트랙)의 두뇌 설정과는 별개예요(정찰은 싸게, 검증은 강하게 조합 가능)", "· applies only to scout runs when Codex is the selected scout — separate from the verification brain settings (cheap scout + strong verifier is a valid combo)")}</span></div>
-      <div class="hint">${t("전역 설정(모든 프로젝트 공통)이고 이 컴퓨터의 브릿지 홈(<code>~/.codex-bridge/scout-codex.json</code>)에만 저장돼요 — 비밀값이 아니라 모델 이름과 추론 강도 문자열뿐이에요. <b>빈 값=쓰시는 codex 기본값 그대로</b>(아무것도 안 바꿈). 값은 codex가 이해하는 이름이어야 하며(추론 강도 예: minimal / low / medium / high), 잘못된 값이면 그 정찰 실행이 정직하게 실패로 보고돼요(조용히 무시하지 않음).", "Global (shared by all projects), stored only in this machine's bridge home (<code>~/.codex-bridge/scout-codex.json</code>) — not a secret: just a model name and a reasoning-effort string. <b>Empty = your codex defaults as-is</b> (changes nothing). Values must be names codex understands (reasoning effort e.g. minimal / low / medium / high); an invalid value makes that scout run fail honestly (never silently ignored).")}</div>
+      <div class="hint">${t("전역 설정(모든 프로젝트 공통)이고 이 컴퓨터의 브릿지 홈(<code>~/.codex-bridge/scout-codex.json</code>)에만 저장돼요 — 비밀값이 아니라 모델 이름과 추론 강도뿐이에요. <b>'기본'=쓰시는 codex 기본값 그대로</b>(아무것도 안 바꿈). 목록은 검증 두뇌 설정과 같은 계정 캐시에서 와요 — 저장해 둔 값이 목록에서 사라져도 '저장된 값' 항목으로 보존돼 조용히 바뀌지 않아요.", "Global (shared by all projects), stored only in this machine's bridge home (<code>~/.codex-bridge/scout-codex.json</code>) — not a secret: just a model name and a reasoning effort. <b>'Default' = your codex defaults as-is</b> (changes nothing). The list comes from the same account cache as the verification brain settings — a saved value missing from the list is kept as a 'saved value' entry, never silently changed.")}</div>
+      <div class="mrow" style="margin-top:8px"><span class="mlbl">${t("모델", "Model")}</span>
+        <select id="scModel" title="${t("Codex 정찰이 쓸 모델 — 계정에서 받은 목록(비우면 codex 기본값)", "Model the Codex scout uses — list from your account (empty = codex default)")}"></select>
+      </div>
+      <div class="mrow"><span class="mlbl">${t("추론 강도", "Reasoning")}</span>
+        <span id="scSeg" class="seg"></span>
+      </div>
       <div class="row" style="margin-top:8px">
-        <input id="scModel" placeholder="${t("모델 (예: gpt-5-codex · 비우면 기본)", "model (e.g. gpt-5-codex · empty = default)")}" style="flex:1;min-width:180px" autocomplete="off" />
-        <input id="scReason" placeholder="${t("추론 강도 (예: high · 비우면 기본)", "reasoning effort (e.g. high · empty = default)")}" style="flex:1;min-width:180px" autocomplete="off" />
         <button id="scSave">${t("저장", "Save")}</button>
         <button id="scClear" class="secondary">${t("초기화", "Reset")}</button>
       </div>
@@ -4292,6 +4296,18 @@ class Dashboard {
   // 저절로 접히던 실버그(사용자 실측 2026-07-08 — 검증 대화에서 고친 것과 같은 부류)의 동형 해법.
   const openPanels = new Set();
   function keyedDetails(key, summaryText){ var det=document.createElement("details"); if(openPanels.has(key)) det.open=true; det.addEventListener("toggle", function(){ if(det.open) openPanels.add(key); else openPanels.delete(key); }); var s=document.createElement("summary"); s.textContent=summaryText; det.appendChild(s); return det; }
+  // 클릭 점프 가드(2026-07-23 사용자 실보고 ②의 '클릭 직접 경로' 몫): 접기/펼치기 등 클릭 직후 레이아웃
+  // 변화(접기로 페이지가 짧아짐 등)로 브라우저가 스크롤을 최상단으로 강제하면, 한 프레임 뒤 '가능한 가장
+  // 가까운 좌표'로 복원한다. 판정은 순수 함수(테스트가 산출물에서 추출 실행) — 의도적 최상단 이동은 없음
+  // (명시 이동은 전부 smooth scrollIntoView라 한 프레임 안에 0으로 도달하지 않아 가드에 안 걸림).
+  function clickJumpRestore(prevY, nowY, maxY){ return (prevY > 50 && nowY < 2) ? Math.min(prevY, Math.max(0, maxY)) : null; }
+  document.addEventListener("click", function(){
+    const y = window.scrollY; if (y < 2) return;
+    requestAnimationFrame(function(){
+      const r = clickJumpRestore(y, window.scrollY, document.documentElement.scrollHeight - window.innerHeight);
+      if (r !== null) window.scrollTo(0, r);
+    });
+  }, true);
   function convKey(t){ var s=(t.user||"")+"|||"+((t.assistant||[]).join("~")); var h=0; for(var i=0;i<s.length;i++){ h=(h*31+s.charCodeAt(i))|0; } return "c"+h; }
   const $ = (id) => document.getElementById(id);
   // UI 언어(웹뷰 생성 시 고정 — 전환 시 확장이 HTML을 재생성). 동적 문자열은 T(ko,en)으로 정적 라벨과 같은 언어 유지.
@@ -4675,19 +4691,30 @@ class Dashboard {
   // 고급설정: DeepSeek 키 저장/삭제 — 원문은 저장 메시지로만 나가고, 표시는 state의 마스킹만.
   $("dsSave").addEventListener("click", ()=>{ const v=$("dsKey").value.trim(); if(!v){ return; } pendingSave={target:"deepseek", msg:T("키 저장됨 ✓","Key saved ✓")}; vscode.postMessage({type:"saveDeepseekKey", key:v}); $("dsKey").value=""; });
   $("dsClear").addEventListener("click", ()=>{ pendingSave={target:"deepseek", msg:T("키 삭제됨 ✓","Key removed ✓")}; vscode.postMessage({type:"saveDeepseekKey", key:""}); $("dsKey").value=""; });
-  // Codex 정찰 두뇌 설정(P6b) — 비밀 아님: 입력칸에 '현재 저장값'을 미리 채워 보이는 그대로 저장(WYSIWYG —
-  // 빈 칸 저장=화면에 보이는 의도적 비움). 1차 검증 blocker(ab-2) 반영: 빈 입력 전체 교체로 기존값이 침묵
-  // 소실되던 경로 제거. scDirty=편집 중 렌더가 값 안 덮음(다른 편집 보존 배선과 같은 문법) — 저장 성공 시 해제.
-  // 2차 blocker 반영: 저장 '요청 시점의 편집 세대(scGen)'를 캡처(scSavedGen)하고, 성공 응답에서 세대가 그대로일
-  // 때만 clean — 응답 전에 새로 타이핑하면 세대가 앞서가 dirty 유지(다음 상태 푸시가 초안을 못 덮음).
-  // 3차 blocker(f-c4c4ab24 잔여) 반영: 단일-flight — 응답이 올 때까지 저장/초기화 버튼을 잠가 요청이 아예
-  // 안 겹치게 한다(전역 scSavedGen 슬롯이 안전해짐). 잠금 해제는 성공/실패 응답 공통(실패=dirty 유지로 초안 보존).
-  let scDirty=false; let scGen=0; let scSavedGen=-1; let scBusy=false;
+  // Codex 정찰 두뇌 설정(P6b — 2026-07-23 사용자 지적으로 선택형 개편: 검증 두뇌 카드와 같은 계정 캐시
+  // 목록의 <select>+강도 버튼. 텍스트 직접 입력 폐기). 계약은 그대로: 현재 저장값 선충전 WYSIWYG(ab-2)·
+  // 편집 세대 결속 scGen/scSavedGen(응답 전 새 편집 초안 보호)·단일-flight scBusy/scLock(겹친 요청 차단·
+  // 해제=성공/실패 공통). 저장된 값이 목록에 없으면 '저장된 값' 항목으로 보존(조용히 안 바뀜 — 검증 카드 동형).
+  let scDirty=false; let scGen=0; let scSavedGen=-1; let scBusy=false; let scCurRS=""; let SCAVAIL=[];
   function scLock(on){ scBusy=on; $("scSave").disabled=on; $("scClear").disabled=on; }
-  $("scModel").addEventListener("input", ()=>{ scDirty=true; scGen++; });
-  $("scReason").addEventListener("input", ()=>{ scDirty=true; scGen++; });
-  $("scSave").addEventListener("click", ()=>{ if(scBusy) return; pendingSave={target:"scoutCodex", msg:T("저장됨 ✓ (다음 정찰부터 적용)","Saved ✓ (applies from the next scout run)")}; scLock(true); scSavedGen=scGen; vscode.postMessage({type:"saveScoutCodexPrefs", model:$("scModel").value.trim(), reasoning:$("scReason").value.trim()}); });
-  $("scClear").addEventListener("click", ()=>{ if(scBusy) return; pendingSave={target:"scoutCodex", msg:T("초기화됨 ✓ (codex 기본값으로)","Reset ✓ (back to codex defaults)")}; $("scModel").value=""; $("scReason").value=""; scLock(true); scSavedGen=scGen; vscode.postMessage({type:"saveScoutCodexPrefs", model:"", reasoning:""}); });
+  function scMark(){ scDirty=true; scGen++; }
+  // 정찰용 강도 버튼(검증 renderReasonButtons와 동형·상태만 분리 — 검증 카드 경로 무접촉)
+  function renderScSeg(slug){
+    const seg=$("scSeg"); if(!seg) return; seg.replaceChildren();
+    let levels=[]; const m=SCAVAIL.find(function(x){return x.slug===slug;});
+    if(m) levels=m.levels;
+    else { const u=new Map(); SCAVAIL.forEach(function(x){x.levels.forEach(function(l){u.set(l.effort,l.description);});}); levels=[...u].map(function(kv){return {effort:kv[0],description:kv[1]};}); }
+    if(!levels.length) levels=["low","medium","high"].map(function(e){return {effort:e,description:""};}); // 캐시 전무 폴백(검증 카드 동형)
+    if(scCurRS && !levels.some(function(l){return l.effort===scCurRS;})) levels=[...levels,{effort:scCurRS,description:T("저장된 값(현재 목록에 없음)","saved value (not in current list)")}];
+    const mk=function(rs,label,desc){const b=document.createElement("button");b.setAttribute("data-rs",rs);b.textContent=label;if(desc)b.title=desc;return b;};
+    seg.appendChild(mk("",T("기본","default")));
+    levels.forEach(function(l){ seg.appendChild(mk(l.effort, RSKO[l.effort]||l.effort, l.description)); });
+    highlightSeg("scSeg","data-rs",scCurRS);
+  }
+  $("scSeg").addEventListener("click", function(ev){ const b=ev.target.closest("[data-rs]"); if(b){ scCurRS=b.getAttribute("data-rs"); highlightSeg("scSeg","data-rs",scCurRS); scMark(); } });
+  $("scModel").addEventListener("change", function(){ scMark(); renderScSeg($("scModel").value.trim()); });
+  $("scSave").addEventListener("click", ()=>{ if(scBusy) return; pendingSave={target:"scoutCodex", msg:T("저장됨 ✓ (다음 정찰부터 적용)","Saved ✓ (applies from the next scout run)")}; scLock(true); scSavedGen=scGen; vscode.postMessage({type:"saveScoutCodexPrefs", model:$("scModel").value.trim(), reasoning:scCurRS}); });
+  $("scClear").addEventListener("click", ()=>{ if(scBusy) return; pendingSave={target:"scoutCodex", msg:T("초기화됨 ✓ (codex 기본값으로)","Reset ✓ (back to codex defaults)")}; $("scModel").value=""; scCurRS=""; highlightSeg("scSeg","data-rs",""); scLock(true); scSavedGen=scGen; vscode.postMessage({type:"saveScoutCodexPrefs", model:"", reasoning:""}); });
   // 언어 토글(전역 ko/en) — 저장은 확장이 language.json에(모든 창이 파일 watch로 따라옴). 표시는 state로 되돌아와 확정.
   // 전환 잠금(구현검증 1차 지적 2): 언어 전환은 확장이 webview HTML을 통째로 재생성해 메모리의 초안(contractDirty·
   // baseDirty)과 cardMachine pending이 전부 파괴된다 — 언어 hold가 지킬 수 없는 경로. 미저장 초안·저장 대기 중엔
@@ -5025,6 +5052,9 @@ class Dashboard {
     }
     if (ev.data?.type !== "data") return;
     const d = ev.data.data;
+    // 스크롤 좌표 선캡처(2026-07-23 사용자 실보고 ②): 아래 구획들이 통째로 비워졌다 다시 채워지는 동안 페이지
+    // 높이가 잠깐 줄면 브라우저가 스크롤을 위로 강제(clamp) — '펼침은 유지되는데 화면이 최상단으로 튐'의 실체.
+    const keepY = window.scrollY;
     safeTop(function(){
       harnessMode=(d.contract&&d.contract.harnessMode)||"claude-codex"; var cc=harnessMode==="codex-codex";
       // dirty 자기치유(구현검증 2차 지적 1 — hold 판정보다 먼저): 비교 기준은 '카드가 렌더된 슬롯'(renderedMode)의
@@ -5318,7 +5348,7 @@ class Dashboard {
             b.disabled=!!dis; if(dis) b.style.opacity=".55";
             b.addEventListener("click", function(){
               if(dis) return;
-              if(scoutArmClick(curSel, arm)==="noop"){ note.textContent=T("이미 선택돼 있어요 ✓","Already selected ✓"); note.classList.remove("flash"); void note.offsetWidth; note.classList.add("flash"); return; }
+              if(scoutArmClick(curSel, arm)==="noop"){ note.textContent=T("이미 선택돼 있어요 ✓","Already selected ✓"); if(arm==="deepseek"||arm==="codex") note.appendChild(advBtn()); note.classList.remove("flash"); void note.offsetWidth; note.classList.add("flash"); return; } // 재클릭 안내가 바로가기를 지우지 않게 재부착(1차 blocker③)
               curSel=arm; setOn(arm);
               note.textContent=T("저장 중…","Saving…");
               vscode.postMessage({type:"setScoutArm", arm:arm, lang:uiSlot});
@@ -5331,9 +5361,13 @@ class Dashboard {
           btns.codex.title=T("Codex가 탐색을 맡아요 — 검증 세션과 분리된 독립 실행 1회(쓰시는 Codex 계정 사용량 범위). 선택은 자동 지시의 1순위 러너에 반영돼요.","Codex handles scouting — one independent run, separate from the verification session (uses your existing Codex account). Your choice becomes the auto-directive's first-choice runner.");
           setOn(av.eff);
           row.appendChild(seg);
+          // 고급설정 바로가기(2026-07-23 사용자 요청 ③): 딥시크·코덱스 선택 시 '옵션이 고급설정에 있다'는
+          // 안내와 함께 한 번에 이동하는 버튼 — 경로 설명만 있고 이동 수단이 없던 공백 해소(탭 버튼 로컬 클릭).
+          const advBtn=function(){ const b=document.createElement("button"); b.type="button"; b.className="secondary"; b.style.cssText="margin-left:8px;font-size:11px;padding:2px 8px"; b.textContent=T("⚙️ 고급설정 열기","⚙️ Open Advanced"); b.addEventListener("click", function(){ const t=document.querySelector('.tabbtn[data-tab=\"adv\"]'); if(t) t.click(); }); return b; };
           if(slotMismatch) note.textContent=T("언어 전환 반영 중 — 새 화면에서 다시 조작해 주세요","Language switch in progress — reopen controls on the refreshed screen");
-          else if(av.raw==="deepseek"&&!av.hasKey) note.textContent=T("선호=DeepSeek이나 키 미등록 — 키 등록(⚙️ 고급설정) 전까지 기본 정찰(Claude)로 동작","Preference=DeepSeek but no key — the default scout (Claude) runs until you register one (⚙️ Advanced)");
-          else if(av.raw==="codex") note.textContent=T("모델·추론 강도는 ⚙️ 고급설정에서 조절할 수 있어요(전역 — 모든 프로젝트 공통 · 빈 값=쓰시는 codex 기본)","Model & reasoning effort are adjustable in ⚙️ Advanced (global — all projects · empty = your codex defaults)"); // P6b: 사용자 결정 — codex 선택 시 고급설정 안내
+          else if(av.raw==="deepseek"&&!av.hasKey){ note.textContent=T("선호=DeepSeek이나 키 미등록 — 키 등록 전까지 기본 정찰(Claude)로 동작","Preference=DeepSeek but no key — the default scout (Claude) runs until you register one"); note.appendChild(advBtn()); }
+          else if(av.raw==="deepseek"){ note.textContent=T("키·모델 옵션은 ⚙️ 고급설정에 있어요(전역)","Key & model options live in ⚙️ Advanced (global)"); note.appendChild(advBtn()); }
+          else if(av.raw==="codex"){ note.textContent=T("모델·추론 강도 옵션은 ⚙️ 고급설정에 있어요(전역 — 모든 프로젝트 공통 · '기본'=쓰시는 codex 기본)","Model & reasoning options live in ⚙️ Advanced (global — all projects · 'Default' = your codex defaults)"); note.appendChild(advBtn()); } // P6b: codex 선택 시 고급설정 안내+원클릭 이동
           else if(av.raw===null) note.textContent=T("미지정(기본값) — 선택은 자동 지시의 1순위 러너에 반영돼요","Unset (default) — your choice becomes the auto-directive's first-choice runner");
           else note.textContent="";
           row.appendChild(note);
@@ -5701,14 +5735,30 @@ class Dashboard {
         ? T("등록됨: ","Registered: ") + d.deepseek.masked + T(" · 모델: "," · model: ") + d.deepseek.model
         : T("등록된 키 없음 — 잠기는 건 DeepSeek 비교 정찰뿐(변경 감지·기본 정찰 지도[별도 과금 없음]는 키 없이 동작).","No key registered — only the DeepSeek comparison scout is locked (change sensing and default-scout maps [no separate billing] work without it).");
     });
-    // ⑥-b 고급설정 탭 — Codex 정찰 두뇌 설정(P6b·비밀 아님): 입력칸에 현재 저장값 미리 채움(WYSIWYG —
-    // 1차 blocker ab-2 반영: 빈 칸 전체 교체로 기존값 침묵 소실 차단). 편집 중(scDirty)에는 렌더가 안 덮음.
+    // ⑥-b 고급설정 탭 — Codex 정찰 두뇌 설정(P6b·선택형 개편 2026-07-23): 검증 카드와 같은 계정 캐시로
+    // <select>+강도 버튼 재구성. 선충전 WYSIWYG(ab-2)·편집 보존(scDirty — select replaceChildren 리셋 보정
+    // prevV는 검증 mModel 동형)·저장값 목록 밖 보존 옵션.
     safe(function(){
       const st=$("scState"); if(!st) return;
       const sc=d.scoutCodex||{};
-      if(!scDirty){ $("scModel").value=sc.model||""; $("scReason").value=sc.reasoning||""; }
+      SCAVAIL = d.availModels||[];
+      const sel=$("scModel");
+      const prevV = sel.value; // replaceChildren가 select 값을 ""로 리셋 — 편집 중 복원용 선캡처(검증 카드 동형)
+      sel.replaceChildren();
+      const addO=function(v,t){ const o=document.createElement("option"); o.value=v; o.textContent=t; sel.appendChild(o); };
+      addO("", T("(코덱스 기본값)","(Codex default)"));
+      const opts = SCAVAIL.length ? SCAVAIL.map(function(m){return {v:m.slug,t:m.name};}) : (d.knownModels||[]).map(function(s){return {v:s,t:s};});
+      opts.forEach(function(o){ addO(o.v, (o.t&&o.t!==o.v)?(o.t+" ("+o.v+")"):o.v); });
+      const savedM=sc.model||"";
+      if(savedM && !opts.some(function(o){return o.v===savedM;})) addO(savedM, savedM+T(" (저장된 값 · 현재 목록에 없음)"," (saved · not in current list)"));
+      // 1차 blocker①(ab-2): 편집 중 값(prevV)도 갱신된 목록에서 탈락하면 보존 옵션으로 추가 — 안 그러면
+      // sel.value=prevV가 빈 값으로 귀결돼 다음 저장이 사용자가 고른 모델 대신 빈 모델을 기록한다.
+      if(scDirty && prevV && prevV!==savedM && !opts.some(function(o){return o.v===prevV;})) addO(prevV, prevV+T(" (편집 중 값 · 현재 목록에 없음)"," (editing · not in current list)"));
+      if(!scDirty){ sel.value=savedM; scCurRS=sc.reasoning||""; }
+      else { sel.value=prevV; }
+      renderScSeg(sel.value.trim());
       st.textContent = (sc.model||sc.reasoning)
-        ? T("현재: ","Current: ") + (sc.model?T("모델=","model=")+sc.model:"") + (sc.model&&sc.reasoning?" · ":"") + (sc.reasoning?T("추론 강도=","reasoning=")+sc.reasoning:"") + T(" (전역 — 모든 프로젝트 공통)"," (global — all projects)")
+        ? T("현재: ","Current: ") + (sc.model?T("모델=","model=")+sc.model:"") + (sc.model&&sc.reasoning?" · ":"") + (sc.reasoning?T("추론 강도=","reasoning=")+(RSKO[sc.reasoning]||sc.reasoning):"") + T(" (전역 — 모든 프로젝트 공통)"," (global — all projects)")
         : T("미설정 — 쓰시는 codex 기본값 그대로 정찰해요(전역 설정).","Unset — scouts run with your codex defaults as-is (global setting).");
     });
     // 온보딩: 미완료=설명 단계(이동 버튼·은은한 펄스) / 완료=축하+끄기 / 끄고 완료=다시보기 링크만.
@@ -6063,6 +6113,9 @@ class Dashboard {
     const vt=$("vtMin"); if(vt && document.activeElement!==vt) vt.value = d.verifyTimeoutMin || 8; // 편집 중이 아니면 저장값 표시
     // (코덱스 드리프트 인라인 경고 제거됨 — 모델/생각강도 어긋남은 상태바/배너 무결성 경고(brain-drift, 확인 가능)로 일원화. computeState의 syncBrainDriftFor가 cx-model/cx-effort 계산.)
     // (Claude 두뇌 카드 렌더도 제거됨 — 동일하게 상태바 drift(무결성 채널)로 이동.)
+    // 스크롤 복원(②의 나머지 반쪽): 재구성이 끝나 높이가 돌아온 시점에 캡처 좌표로 되돌린다. 명시 이동
+    // (scrollIntoView smooth)은 비동기 애니메이션이라 이 동기 복원 뒤에도 제 목표로 진행 — 충돌 없음.
+    safe(function(){ if (Math.abs(window.scrollY - keepY) > 1) window.scrollTo(0, keepY); });
   });
   // 부팅 자가 치유(3요원 조사 합의): 이 화면은 원래 스스로 데이터를 요청하지 않아(push 전용), 초기 post가 어떤 이유로든
   // 유실되면 다음 poll까지 빈/낡은 화면이 남았다. 로드 직후 1회 refresh를 보내 어떤 경로로 살아난 패널이든 즉시 당겨온다.

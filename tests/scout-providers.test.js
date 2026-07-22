@@ -213,15 +213,38 @@ ok(rx3.ok === true && !slog3.args.includes("-c"), "초기화 후 실 invoke — 
 delete process.env.CODEX_BIN; delete process.env.STUB_LOG;
 // 배선 소스 단언 — 확장(고급설정 카드·핸들러·payload·안내)·PRIVACY·어댑터
 const extP6b = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
-ok(/saveScoutCodexPrefs/.test(extP6b) && /scModel/.test(extP6b) && /scReason/.test(extP6b) && /scState/.test(extP6b), "고급설정 카드+저장 핸들러 배선");
-ok(extP6b.includes('if(!scDirty){ $("scModel").value=sc.model||""; $("scReason").value=sc.reasoning||""; }'), "입력칸에 현재 저장값 미리 채움(WYSIWYG — 빈 칸 전체 교체로 기존값 침묵 소실 차단·1차 blocker ab-2)");
-ok((extP6b.match(/scDirty=true; scGen\+\+/g) || []).length === 2 && (extP6b.match(/scSavedGen=scGen/g) || []).length === 2, "편집 보존 — 입력마다 세대 전진·저장/초기화가 요청 시점 세대 캡처");
+ok(/saveScoutCodexPrefs/.test(extP6b) && /scModel/.test(extP6b) && /scSeg/.test(extP6b) && /scState/.test(extP6b), "고급설정 카드+저장 핸들러 배선(선택형 개편 2026-07-23 — 자유 텍스트 입력 폐기)");
+ok(!/id="scReason"/.test(extP6b) && /<select id="scModel"/.test(extP6b) && /renderScSeg/.test(extP6b), "선택형 UI — 모델 <select>+강도 버튼(검증 두뇌 카드 동형·1차원 텍스트칸 잔재 0)");
+ok(extP6b.includes("SCAVAIL = d.availModels||[]") && extP6b.includes('(d.knownModels||[])'), "목록 출처=검증 카드와 같은 계정 캐시(+known 폴백 — 하드코딩 목록 아님)");
+ok(extP6b.includes('addO(savedM, savedM+T(" (저장된 값 · 현재 목록에 없음)"') && extP6b.includes("저장된 값(현재 목록에 없음)"), "목록 밖 저장값 보존(모델·강도 모두 — 조용히 안 바뀜)");
+ok(extP6b.includes('if(!scDirty){ sel.value=savedM; scCurRS=sc.reasoning||""; }'), "현재 저장값 선충전(WYSIWYG — 빈 선택 전체 교체로 기존값 침묵 소실 차단·1차 blocker ab-2 계승)");
+ok((extP6b.match(/scMark\(\)/g) || []).length >= 2 && extP6b.includes("function scMark(){ scDirty=true; scGen++; }") && (extP6b.match(/scSavedGen=scGen/g) || []).length === 2, "편집 보존 — 선택/버튼 편집마다 세대 전진·저장/초기화가 요청 시점 세대 캡처");
 ok(extP6b.includes("if(scSavedGen===scGen) scDirty=false"), "성공 응답은 세대 일치 시에만 clean(응답 전 새 편집 초안 보호 — 2차 blocker 잠금)");
 ok((extP6b.match(/if\(scBusy\) return;/g) || []).length === 2 && (extP6b.match(/scLock\(true\)/g) || []).length === 2, "단일-flight — 응답 전 재클릭 차단(요청 겹침 자체가 불가·3차 blocker f-c4c4ab24 잠금)");
 ok(extP6b.includes('if (ev.data.target === "scoutCodex") scLock(false);'), "잠금 해제=성공/실패 응답 공통(실패 시 버튼 고착 없음·dirty 유지로 초안 보존)");
 ok(extP6b.includes("전역 설정(모든 프로젝트 공통)이고") && extP6b.includes("Global (shared by all projects)"), "전역 명시 ko/en(사용자 결정 — 프로젝트별 분리 안 함)");
 ok(extP6b.includes("scoutCodex: readScoutCodexPrefsExt()"), "payload에 현재값(비밀 아님 — 그대로 표시)");
-ok(extP6b.includes("모델·추론 강도는 ⚙️ 고급설정에서 조절할 수 있어요") && extP6b.includes("adjustable in ⚙️ Advanced"), "대시보드 codex 선택 시 고급설정 안내(사용자 제안 채택)");
+ok(extP6b.includes("모델·추론 강도 옵션은 ⚙️ 고급설정에 있어요") && extP6b.includes("options live in ⚙️ Advanced"), "대시보드 codex 선택 시 고급설정 안내(사용자 제안 채택)");
+// 2026-07-23 사용자 요청 ③ — 탐색 담당에서 고급설정 원클릭 이동(딥시크 무키/유키·코덱스 3분기 전부)
+ok((extP6b.match(/note\.appendChild\(advBtn\(\)\)/g) || []).length === 4 && extP6b.includes("⚙️ 고급설정 열기") && extP6b.includes("⚙️ Open Advanced"), "고급설정 바로가기 버튼 — 딥시크(키 유/무)·코덱스 3분기+재클릭 안내까지 4곳");
+ok(extP6b.includes('.tabbtn[data-tab=\\"adv\\"]'), "바로가기=탭 버튼 로컬 클릭(호스트 왕복 없음)");
+ok(extP6b.includes('if(arm==="deepseek"||arm==="codex") note.appendChild(advBtn());'), "재클릭(이미 선택됨) 안내가 바로가기를 지우지 않게 재부착(1차 blocker③)");
+ok(extP6b.includes("(편집 중 값 · 현재 목록에 없음)") && extP6b.includes("(editing · not in current list)"), "dirty 편집값도 목록 밖 보존 옵션(캐시 갱신으로 빈 값 강등→오저장 차단 — 1차 blocker① ab-2)");
+// 2026-07-23 사용자 실보고 ② — 두 겹: ⓐ데이터 재렌더 중 높이 붕괴 clamp=캡처→복원 ⓑ클릭 직접 경로=점프 가드
+ok(extP6b.includes("const keepY = window.scrollY;") && extP6b.includes("window.scrollTo(0, keepY)"), "ⓐ렌더 전 스크롤 캡처+렌더 후 복원(주기 푸시 재구성 중 위로 튐 봉합)");
+ok(extP6b.includes("function clickJumpRestore(prevY, nowY, maxY)") && extP6b.includes('document.addEventListener("click"') && /requestAnimationFrame/.test(extP6b), "ⓑ클릭 점프 가드 배선(캡처 단계 클릭→1프레임 뒤 판정·복원)");
+{ // ⓑ 판정 순수 함수를 컴파일 산출물에서 추출해 '실행'으로 잠금(문자열 존재 단언만으로는 불충분 — 1차 blocker② 지적 수용)
+  const outSrc9 = fs.readFileSync(path.join(ROOT, "out", "extension.js"), "utf8");
+  const stI9 = outSrc9.indexOf("function clickJumpRestore(");
+  const enI9 = outSrc9.indexOf("}", stI9);
+  ok(stI9 >= 0 && enI9 > stI9, "(전제) 산출물에서 가드 판정 함수 추출");
+  const fnJ = new Function("return (" + outSrc9.slice(stI9, enI9 + 1) + ");")();
+  ok(fnJ(500, 0, 2000) === 500, "실행 — 클릭 직후 최상단 강제(500→0) → 원좌표 복원");
+  ok(fnJ(500, 0, 300) === 300, "실행 — 접기로 페이지가 짧아짐 → 가능한 최대 좌표로 복원(500>max 300)");
+  ok(fnJ(500, 480, 2000) === null, "실행 — 점프 아님(스크롤 유지·smooth 이동 중 포함) → 개입 없음");
+  ok(fnJ(30, 0, 2000) === null, "실행 — 원래 상단 근처(30) → 개입 없음(오탐 방지)");
+  ok(fnJ(500, 0, -10) === 0, "실행 — 내용이 화면보다 짧음 → 0으로 클램프(음수 좌표 금지)");
+}
 ok(/scoutCodexArgs\(\)/.test(fs.readFileSync(path.join(ROOT, "scripts", "scout-providers.js"), "utf8")), "어댑터가 정찰 전용 슬롯을 소비(검증 modelPrefs 재사용 아님)");
 ok(/scout-codex\.json/.test(fs.readFileSync(path.join(ROOT, "PRIVACY.md"), "utf8")), "PRIVACY 파일 표에 scout-codex.json 행(비밀 아님 명시)");
 
