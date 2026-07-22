@@ -675,6 +675,7 @@ function normFindingTag(t) {
   if (s === "주의" || s === "caution") return "주의";
   if (s === "보완" || s === "notes") return "보완";
   if (s === "백로그" || s === "backlog") return "백로그";
+  if (s === "범위확장" || s === "scope-expansion") return "범위확장"; // 증분 3(§4): 경계 밖 중대 발견의 정식 통로 — 비차단 제출(판정 실패 사유 아님·승격은 하네스가 장부로)
   return null;
 }
 // 순수 판독기 — 구조만 반환(id·ws 무관). corrupt 진단은 원문 비복사 계약: {count, items:[{lineNo, reasonKey}]}만
@@ -747,7 +748,9 @@ function judgeMachineVerdict(verdict, parse) {
   if (!parse.ok) return demote("block-corrupt");
   if (verdict === null) return demote("no-verdict-line");
   const blockers = parse.findings.filter((f) => f.tag === "blocker").length;
-  const nonblock = parse.findings.length - blockers;
+  // 증분 3 1차 blocker① 반영: 범위확장은 '이번 판정 불변' 계약(§4) — nonblock 집계에서 제외해 범위확장만
+  // 있는 '통과'가 '통과(보완)'으로 교정되지 않게 한다(확장 처리 의무는 하네스 승격 경로가 전담).
+  const nonblock = parse.findings.filter((f) => f.tag !== "blocker" && f.tag !== "범위확장").length;
   if (blockers >= 1) return verdict === "fail" ? keep("fail") : demote("pass-with-blocker");
   if (verdict === "fail") return demote("fail-without-blocker"); // blocker 0인데 실패 선언
   if (nonblock >= 1 && verdict === "pass") return { effective: "pass-notes", demoted: false, corrected: true, reasonKey: "pass-with-notes" }; // 상향 정정(처리 의무 약화 차단)
@@ -2998,6 +3001,15 @@ function judgeAdmission(findings, roundType, openIds, oosCount, abCount) {
   for (const f of findings) {
     idx++;
     const it = { ...f };
+    if (f.tag === "범위확장") { // 증분 3(§4): 확장 요청 — abId 유효 인용=승격 후보(캠페인당 1회는 호출자 장부 판정)·무효/미인용=백로그
+      if (f.abId && abCount !== null && abCount !== undefined) {
+        const an9 = parseInt(f.abId.slice(3), 10);
+        if (Number.isInteger(an9) && an9 >= 1 && an9 <= abCount) { it.escalateCandidate = true; items.push(it); receipts.push({ idx, key: "expansion-candidate", detail: f.abId }); continue; }
+      }
+      it.demotedTo = "백로그"; it.receiptKey = "expansion-unproven";
+      items.push(it); receipts.push({ idx, key: "expansion-unproven", detail: f.abId || "no-abId" });
+      continue;
+    }
     if (f.tag !== "blocker") { items.push(it); continue; } // 심사 대상은 blocker의 '차단 권한'만(비차단은 그대로)
     const isReref = f.id && openIds.has(f.id);
     if (f.abId && abCount !== null && abCount !== undefined) { // 규칙 0(1차 blocker① 반영): 면제는 '승인 세대의 유효 불변식 인덱스 정확 인용'만 — 형식만 맞는 ab-999는 면제 아님(oosId와 동일 결정론 대조)

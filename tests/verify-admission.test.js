@@ -308,5 +308,71 @@ console.log("[7] 통합 시나리오 — 1차 일괄→재지적 유지·신규 
   ok(remain.some((o) => o.id === "f-33333333") && !remain.some((o) => o.id === "f-11111111"), "통과 종결=이전 라운드 개설분만·같은 라운드 첫 등장은 open 유지(계보 소멸 차단 — 4차 설계 blocker②)");
 }
 
+console.log("[8] 증분 3 — 범위 확장 통로(비차단·캠페인당 승격 1회)");
+{
+  ok(CL.parseFindingsBlock(["[지적 목록 v2]", JSON.stringify({ tag: "범위확장", title: "확장 요청", abId: "ab-1" }), "[지적 목록 끝]", "", "검증: 통과(보완)"].join(String.fromCharCode(10))).findings[0].tag === "범위확장", "태그 등록(ko — en scope-expansion 동의어)");
+  const rE = CL.judgeAdmission([{ tag: "범위확장", title: "유효 확장", abId: "ab-2" }], "confirm", new Set(), 3, 5);
+  ok(rE.items[0].escalateCandidate === true && rE.receipts[0].key === "expansion-candidate" && rE.keptBlockers === 0, "유효 abId=승격 후보 마킹(비차단 — blocker 집계 불변·승격 결정은 장부)");
+  const rE2 = CL.judgeAdmission([{ tag: "범위확장", title: "무효 확장", abId: "ab-99" }], "discovery", new Set(), 3, 5);
+  ok(rE2.items[0].demotedTo === "백로그" && rE2.receipts[0].key === "expansion-unproven", "무효 인덱스=백로그 강등(expansion-unproven 영수증)");
+  const rE3 = CL.judgeAdmission([{ tag: "범위확장", title: "미인용 확장" }], "discovery", new Set(), 3, 5);
+  ok(rE3.items[0].demotedTo === "백로그", "abId 미인용=백로그(인용 필수 계약과 대칭)");
+  // 1차 blocker① 반영: 범위확장만+통과=판정 불변(pass-notes 교정 금지)
+  const pJ = CL.parseFindingsBlock(["[지적 목록 v2]", JSON.stringify({ tag: "범위확장", title: "확장만", abId: "ab-1" }), "[지적 목록 끝]", "", "검증: 통과"].join(String.fromCharCode(10)));
+  const vJ = CL.judgeMachineVerdict("pass", pJ);
+  ok(vJ.effective === "pass" && vJ.corrected === false, "범위확장만 있는 '통과'=통과 유지(비차단·판정 불변 — nonblock 집계 제외)");
+  const pJ2 = CL.parseFindingsBlock(["[지적 목록 v2]", JSON.stringify({ tag: "범위확장", title: "확장", abId: "ab-1" }), JSON.stringify({ tag: "보완", title: "노트" }), "[지적 목록 끝]", "", "검증: 통과"].join(String.fromCharCode(10)));
+  ok(CL.judgeMachineVerdict("pass", pJ2).effective === "pass-notes", "(대조) 실제 비차단(보완) 동반=기존 상향 정정 유지");
+  // 실행: 승격 1회+상한 소진
+  const CB3 = require(path.join(ROOT, "bridge", "codex-bridge.js"));
+  const repoX = fs.mkdtempSync(path.join(os.tmpdir(), "vadmexp_"));
+  fs.writeFileSync(path.join(repoX, "verify-envelope.json"), JSON.stringify({ schema: "verify-envelope-v1", supportedEnv: ["s"], alwaysBlocker: ["a1", "a2"], outOfScope: ["o1"] }));
+  const shaX = CL.readVerifyEnvelope(repoX).sha1;
+  const wsX = fs.mkdtempSync(path.join(os.tmpdir(), "vadmexpws_"));
+  CL.updateContractPatch(wsX, "ko", { envelopeHash: shaX, scoutRepo: repoX }, { tries: 3 });
+  const NLc = String.fromCharCode(10);
+  process.env.CODEX_BRIDGE_ASK_JOB_ID = "ask-x1"; CL.writeEnvelopeFreeze(wsX, shaX, "ask-x1");
+  const rX1 = CB3.machineFindingsLayer(["본문", "[지적 목록 v2]",
+    JSON.stringify({ tag: "범위확장", title: "설치 경합도 방어하자", abId: "ab-1" }),
+    "[지적 목록 끝]", "", "검증: 통과(보완)"].join(NLc), wsX, "ko", "core", "claude-codex", "ask-x1");
+  ok(rX1.notice.includes("[범위 확장 승격]") && rX1.machine.effective === "pass-notes", "유효 확장=승격 영수증·이번 판정 불변(비차단 제출)");
+  const openX = CL.openFindingsFor(wsX, "no-campaign", shaX);
+  ok(openX.length === 1 && openX[0].tag === "blocker", "승격분=다음 라운드 열린 blocker로 등록(origin new-evidence)");
+  process.env.CODEX_BRIDGE_ASK_JOB_ID = "ask-x2"; CL.writeEnvelopeFreeze(wsX, shaX, "ask-x2");
+  // 시나리오 정정: X2가 '통과'를 선언하면 동결 규칙(통과=이전 라운드 open 종결)이 승격 blocker를 정당하게
+  // 해소한다 — 상한 소진 검증은 '승격분 재지적+실패' 흐름에서 해야 blocker 잔존이 유지된다.
+  const rX2 = CB3.machineFindingsLayer(["본문", "[지적 목록 v2]",
+    JSON.stringify({ tag: "blocker", title: "승격분 아직 미해결", id: openX[0].id, origin: "incomplete-fix", prevId: openX[0].id }),
+    JSON.stringify({ tag: "범위확장", title: "두 번째 확장", abId: "ab-2" }),
+    "[지적 목록 끝]", "", "검증: 실패"].join(NLc), wsX, "ko", "core", "claude-codex", "ask-x2");
+  ok(rX2.notice.includes("[범위 확장 상한 소진] 캠페인·승인 세대당") && CL.openFindingsFor(wsX, "no-campaign", shaX).filter((o) => o.tag === "blocker").length === 1, "같은 캠페인 두 번째=상한 소진([주의] 기록·blocker 추가 없음 — 승격분은 재지적으로 잔존)");
+  ok(CL.openFindingsFor(wsX, "no-campaign", shaX).some((o) => o.tag === "주의"), "상한 소진분=[주의]로 장부 기록(발견 보존)");
+  delete process.env.CODEX_BRIDGE_ASK_JOB_ID;
+
+  console.log("[9] 증분 3 — 원인 분해·재심 재료·라우팅 문구·대시보드");
+  const bd = CB3.breakdownNoticeFor(wsX, "ko", { tracked: true, last: true });
+  ok(bd.includes("[원인 분해 · 이번 캠페인]") && /범위 확장 1/.test(bd) && /초기 결함 0/.test(bd), "상한 마지막 왕복=원인 분해 1줄 — 승격 1건은 확장 축에만(초기 결함 중복 집계 금지 · 1차 blocker②)");
+  ok(CB3.breakdownNoticeFor(wsX, "ko", { tracked: true, last: false }) === "" && CB3.breakdownNoticeFor(wsX, "ko", null) === "", "마지막 왕복 아님·무제한=출력 없음(바이트 동일)");
+  // 재심 재료: 강등(oosId) 만들고 integrity 줄 확인
+  process.env.CODEX_BRIDGE_ASK_JOB_ID = "ask-x3"; CL.writeEnvelopeFreeze(wsX, shaX, "ask-x3");
+  CB3.machineFindingsLayer(["본문", "[지적 목록 v2]",
+    JSON.stringify({ tag: "blocker", title: "범위 밖 하나", origin: "fix-induced", supported: false, oosId: "oos-1" }),
+    "[지적 목록 끝]", "", "검증: 실패"].join(NLc), wsX, "ko", "core", "claude-codex", "ask-x3");
+  const irl = CB3.integrityReviewLine(wsX, "ko", "integrity");
+  ok(irl.includes("[경계 재심 재료]") && irl.includes("oos-1 ×1") && irl.includes("사용자 승인"), "무결성=oos별 강등 집계+개정 안내(자동 개정 아님)");
+  ok(CB3.integrityReviewLine(wsX, "ko", "core") === "", "core=출력 없음(재심은 무결성 임무)");
+  // 1차 [주의]① 반영: 구세대 강등은 신세대 재심 집계에서 제외
+  CL.appendFindingsLedger(wsX, [{ type: "finding", findingId: "f-oldgen01", campaignId: "no-campaign", round: 1, tag: "백로그", titleNorm: "구세대 강등", origin: "baseline", oosId: "oos-1", envelopeHash: "0".repeat(40), demoted: true, status: "closed", closeReason: "demoted", ts: "t" }]);
+  ok(CB3.integrityReviewLine(wsX, "ko", "integrity").includes("oos-1 ×1") && !CB3.integrityReviewLine(wsX, "ko", "integrity").includes("×2"), "재심 집계=동결 세대 한정(재승인으로 의미 바뀐 구세대 oos 합산 금지)");
+  delete process.env.CODEX_BRIDGE_ASK_JOB_ID;
+  const cb3 = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
+  ok(cb3.includes("[범위 확장 통로]") && cb3.includes("[Scope-expansion channel]") && cb3.includes("[MAP 라우팅]") && cb3.includes("fresh 표시 조각만 경계 판정 참고 가능"), "v2 지시절=확장 통로+MAP 라우팅 ko/en(구역 자동화는 P5 이후 — 정본 명문)");
+  ok((cb3.match(/breakdownNoticeFor\(ws, langSnap, budgetGate\.res\)/g) || []).length === 2 && (cb3.match(/integrityReviewLine\(ws, langSnap, profileSnap\)/g) || []).length === 2, "두 출력 경로에 분해·재심 병기 배선");
+  const ext3 = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
+  ok(ext3.includes("이번 캠페인 심사: 인정") && ext3.includes("this campaign: kept") && /campaignId === camp9/.test(ext3) && /\(r\.envelopeHash \|\| null\) === \(hash9 \|\| null\)/.test(ext3), "수칙서 카드=이번 캠페인+현재 승인 세대 한정 통계(혼합 부풀림 차단 · 1차 [주의]②)");
+  const doc3 = fs.readFileSync(path.join(ROOT, "docs", "VERIFY-GOVERNANCE.md"), "utf8");
+  ok(doc3.includes("상세 동결 2026-07-22") && doc3.includes("캠페인·세대당 1회") && doc3.includes("P5(공용 reader 소비층) 이후 검토"), "정본 §4 상세 동결(승격 계약·MAP 자동화 정직 한정)");
+}
+
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

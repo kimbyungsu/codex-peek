@@ -618,7 +618,24 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
     if (!hash9) return { label: tE(`승인 대기 — 지원 ${n9[0]}·절대 ${n9[1]}·범위밖 ${n9[2]}항목. 내용을 확인하고 승인하면 다음 검증부터 판정 경계로 적용돼요`, `Awaiting approval — ${n9[0]}/${n9[1]}/${n9[2]} items. Review and approve to apply from the next verification`) + cutNote9, btn: tE("내용 확인·승인", "Review & approve"), btn2: tE("내용 보기", "View details"), repo: repo9, tone: cutNote9 ? "warn" : "info", lang: slot };
     if (hash9 !== evv.sha1) return { label: tE("수칙서가 승인본과 달라졌어요 — 재승인 전까지 적용 중단(검증엔 주입 안 됨)", "The rulebook differs from the approved copy — suspended until re-approval (not injected)") + cutNote9, btn: tE("재승인", "Re-approve"), btn2: tE("내용 보기", "View details"), repo: repo9, tone: "warn", lang: slot };
     if (evv.truncated === true) return { label: tE("적용 중 — 단 일부 항목이 상한(축 12·항목 200자) 초과로 절삭돼 초과분은 주입에서 빠져요. 파일을 줄여 재승인 권장", "Active — but some items exceeded the caps (12/axis · 200 chars) and were truncated; trim the file and re-approve"), btn: null, btn2: tE("내용 보기", "View details"), repo: repo9, tone: "warn", lang: slot };
-    return { label: tE(`적용 중 — 지원 ${n9[0]}·절대 ${n9[1]}·범위밖 ${n9[2]}항목이 검증 판정 경계로 주입돼요(파일을 고치면 재승인 전까지 중단)`, `Active — ${n9[0]}/${n9[1]}/${n9[2]} items injected as the judging boundary (edits suspend it until re-approval)`), btn: null, btn2: tE("내용 보기", "View details"), repo: repo9, tone: "ok", lang: slot };
+    // 증분 3(§4 대시보드 최소): 이번 캠페인 심사 통계 1줄 — 장부 집계(구 런타임=생략·계산 실패=생략)
+    let adm9 = "";
+    try {
+      // 1차 [주의]② 반영: '이번 캠페인+현재 승인 세대(hash9)'로 한정 — 이전 캠페인·구세대 기록 혼합으로
+      // 수치가 부풀어 경계·상한 효과를 오판하는 경로 차단(freeze 세대가 아니라 승인 도장 세대 기준).
+      if (typeof CL9.readFindingsLedger === "function" && typeof CL9.campaignFileFor === "function") {
+        let camp9 = "no-campaign";
+        try { const co9 = JSON.parse(fs.readFileSync(CL9.campaignFileFor(ws), "utf8")); if (co9 && (co9.campaignId || co9.startedAt)) camp9 = String(co9.campaignId || co9.startedAt); } catch { /* 미예약 */ }
+        const all9: any[] = CL9.readFindingsLedger(ws);
+        const rows9 = all9.filter((r: any) => r && r.type === "finding" && r.campaignId === camp9 && (r.envelopeHash || null) === (hash9 || null));
+        if (rows9.length) {
+          const dem9 = rows9.filter((r: any) => r.demoted).length;
+          const esc9 = all9.filter((r: any) => r && r.type === "escalation" && r.campaignId === camp9 && (r.envelopeHash || null) === (hash9 || null)).length;
+          adm9 = tE(` · 이번 캠페인 심사: 인정 ${rows9.length - dem9}·강등 ${dem9}${esc9 ? `·승격 ${esc9}` : ""}`, ` · this campaign: kept ${rows9.length - dem9} · demoted ${dem9}${esc9 ? ` · escalated ${esc9}` : ""}`);
+        }
+      }
+    } catch { adm9 = ""; }
+    return { label: tE(`적용 중 — 지원 ${n9[0]}·절대 ${n9[1]}·범위밖 ${n9[2]}항목이 검증 판정 경계로 주입돼요(파일을 고치면 재승인 전까지 중단)`, `Active — ${n9[0]}/${n9[1]}/${n9[2]} items injected as the judging boundary (edits suspend it until re-approval)`) + adm9, btn: null, btn2: tE("내용 보기", "View details"), repo: repo9, tone: "ok", lang: slot };
   } catch { return null; }
 }
 function patchContractOnceExt(ws: string | null, lang: Lang | undefined, patch: Record<string, unknown>): ContractPatchRes {
