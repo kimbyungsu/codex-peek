@@ -142,8 +142,8 @@ ok(/function detectScoutTargetDriftExt/.test(extSrc) && /DRIFT_MIN_OBS = 3, DRIF
 ok(/정찰 대상: \(미지정 — 이 폴더 기준\)/.test(extSrc), "대상 '상시' 표시 — 미지정 침묵 해소(differs일 때만 보이던 실사고 원인)");
 ok(/setScoutTarget/.test(extSrc) && /setScoutTargetFromUi/.test(extSrc) && !/saveContract\(ws, \{ \.\.\..*scoutRepo/.test(extSrc), "원클릭 설정은 전용 경로(setScoutTargetFromUi) — saveContract 스키마 오염 금지(Codex 권고)");
 ok(/정찰 대상 확인 — 이 폴더/.test(extSrc) && /showOpenDialog/.test(extSrc), "3트랙 켜는 순간 대상 확인 스텝(발원지 차단)");
-ok(/head: \(pkg\.meta && pkg\.meta\.head\) \|\| ""/.test(fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-scout-self.js"), "utf8")), "self 러너가 메타에 head 기록(커밋 신호 재료)");
-ok(/head: \(pkg\.meta && pkg\.meta\.head\) \|\| ""/.test(fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-scout-deepseek.js"), "utf8")), "deepseek 러너도 동일(패리티)");
+ok(/head: \(pkg\.meta && pkg\.meta\.head\) \|\| ""/.test(fs.readFileSync(path.join(__dirname, "..", "scripts", "scout-providers.js"), "utf8")), "공통 파이프라인(P5)이 메타에 head 기록(커밋 신호 재료)");
+ok(/runScout\(repo, "self"/.test(fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-scout-self.js"), "utf8")) && /runScout\(repo, "deepseek"/.test(fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-scout-deepseek.js"), "utf8")), "러너 2종 runScout 위임(패리티는 구조 보장)");
 const priv = fs.readFileSync(path.join(__dirname, "..", "PRIVACY.md"), "utf8");
 ok(/scout-target-evidence/.test(priv) && /제안 이력 키/.test(priv) && /최근 20키/.test(priv), "PRIVACY에 새 로컬 저장소 명시 — 실제 저장 필드(advisedKeys 언어·대상별 이력·상한 20)와 일치(Codex 반례: 과소 고지→구조 변경 반영)");
 ok(/asks-inflight/.test(priv), "PRIVACY에 중복 전송 차단 표식 파일 명시(지문·시각·pid만)");
@@ -215,9 +215,9 @@ const pkgSrc = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-pack
 ok(/function captureSeedBaseline/.test(pkgSrc) && /ENOENT/.test(pkgSrc), "수집기에 기준선 캡처 함수(ENOENT만 '없음'·그 외 오류=seedMissing만 생략)");
 ok((pkgSrc.match(/= captureSeedBaseline\(repo, /g) || []).length === 2, "git·무이력 두 경로 모두 seed 확정 직후 캡처(러너 사후 재조사는 수집~응답 사이 삭제를 오분류 — Codex 반례)");
 ok(pkgSrc.indexOf("captureSeedBaseline(repo, seeds)") < pkgSrc.indexOf('git(["diff"])'), "git 경로 — 캡처가 diff/grep/log 수집보다 앞");
-for (const rp of ["scripts/scope-scout-self.js", "scripts/scope-scout-deepseek.js"]) {
+for (const rp of ["scripts/scout-providers.js", "scripts/scope-scout-self.js", "scripts/scope-scout-deepseek.js"]) {
   const rs = fs.readFileSync(path.join(__dirname, "..", rp), "utf8");
-  ok(/pkg\.meta\.basisTs/.test(rs) && !/new Date\(\)\.toISOString\(\), seedMissing/.test(rs), rp + " — 기준선은 수집기 것 전달만(자체 재조사 금지)");
+  ok((rp !== "scripts/scout-providers.js" || /pkg\.meta\.basisTs/.test(rs)) && !/new Date\(\)\.toISOString\(\), seedMissing/.test(rs), rp + " — 기준선은 수집기 것 전달만(자체 재조사 금지 — P5: 전달은 공통층 한 곳)");
 }
 // 기준선 캡처 오류 — basisTs는 항상 반환(삭제 판정만 불가). 파일을 디렉터리처럼 참조해 ENOTDIR 유발
 const SP = require(path.join(__dirname, "..", "scripts", "scope-package.js"));

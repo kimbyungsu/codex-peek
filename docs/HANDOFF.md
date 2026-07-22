@@ -20,7 +20,25 @@
 > 무결성 재심 재료(oos별 강등 집계·세대 한정)·MAP 라우팅 문구(fresh만 경계 참고 — 구역 자동화 P5 이후)·
 > 수칙서 카드 캠페인+세대 한정 통계. 미반영 합의 1건=f-e9c23d7a(분해 분류식 정본 병기 — 다음 묶음 동승).
 > ★거버넌스 트랙(설계+증분 1~3) 완결 — 이후 모든 검증에 경계·심사·계보·분해가 적용된다.
-> ▶다음: P5 재개(provider 공통 인터페이스: runScout→typed ScoutResult·self typed adapter[1-26]·deepseek probe[1-8]) → P6(Codex Scout) → P7(모드 UI) → P8(라우터).
+> ★P5 완결(2026-07-22 — 구현검증 3왕복[실패 2→통과]·blocker 3 전부 수용·반박 0): scripts/scout-providers.js 신설 —
+> 러너 2종이 중복하던 파이프라인(수집→렌더→markLive→호출→비용 장부→(--out)→보관→관측 장부)을 runScout(repo,
+> providerId, opts) 한 곳으로 추출, 반환=typed ScoutResult 판별 합타입(JSDoc 정본 ScoutSuccess{ok:true}/
+> ScoutFailure{ok:false,error:{key:not-git|provider-unavailable|call-failed,detail}} + ScoutProvider 어댑터 계약).
+> scripts/ 계층은 tsc 미검사(레포 구조 계약)라 실효 강제=①JSDoc ②런타임 경계(어댑터 available/probe/invoke의
+> 예외·오형식 성공(map/rawStdout 비문자열)·오형식 실패(미지 key→call-failed 정규화·detail 문자열화)·usage
+> 오형식(null 강등) 전부 ScoutFailure/정규값으로 — 프로세스 예외 이탈 금지) ③경계 실행 테스트 세 겹(검증 1·2차
+> blocker 계보 f-710a3f76). ledgerNote는 appendLedgerEvent 반환값 기반 3상태(""/"ok"/"failed" — 오보고 차단
+> f-47a1e872). PROVIDERS: self(무과금·claude -p 1회+SELF_DENY·probe=claude --version)/deepseek(과금·bridge map
+> 위임·handlesOutFile·probe=bridge ping — 키 없음=정직 실패이지 게이트 아님)/codex(P6 소켓 — available:false·
+> "P6"·구현 없음). 러너 2종=CLI 껍데기(출력 바이트·exit 의미 보존: usage exit 2·not-git exit 1·self=트림+개행·
+> deepseek=브릿지 stderr 선통과+비트림 원문·--out은 self=공통층 쓰기[실패 전파]/deepseek=브릿지 위임·usage 장부
+> pkgChars/mapChars 산식 동일). 의도적 개선 1건(검증 승인): 보관 실패 "undefined"→"save-failed". 1-26 경계 유지
+> (공통층 코드에 scoutArm 결합 없음·P7 provider mode 통합 금지 명문 — 정본 SCOUT-TRACK.md는 이 PC 부재라 HANDOFF
+> 요지 기반 구현이며 검증자가 '최소 확장' 판정). 배치 변경 없음(러너=소스 레포 실행 계약·scripts/** 비번들 유지).
+> 기존 소스 단언 8곳 재배선(scout-store·scout-usage·scout-prompt·deepseek-bridge·ledger-events·l1-provenance·
+> scout-drift×2·scout-advice — 러너 원문 단언→공통층+위임 단언)·신규 tests/scout-providers.test.js 53단언
+> (목 provider 경계 실행·ledger 사보타주·Module._load 후킹 러너 e2e 6케이스)·체인 등록·전체 EXIT=0.
+> ▶다음: P6(Codex Scout 독립 세션 — codex 소켓에 어댑터 구현·'Codex 예정' 배지의 실체) → P7(모드 UI) → P8(라우터). 미반영 합의 이월: f-e9c23d7a·PRIVACY cutover-notice·보관함 5364ebe0.
 > ── (이전: **★C-7 자동화 계층 완결**):
 > 사용자 지시(2026-07-21 "MAP은 수동을 없애려는 설계인데 전환에 또 수동 명령은 과보수") → 정본 C-7 절 신설+구현.
 > 원칙: 동의할 내용 없으면(legacy AND 미이관 0 AND 안전 조건 전부) 자동·판단 필요(미이관 N>0)만 원클릭 카드.

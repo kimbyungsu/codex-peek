@@ -60,10 +60,11 @@ const selfSrc = fs.readFileSync(path.join(ROOT, "scripts", "scope-scout-self.js"
 const dsSrc = fs.readFileSync(path.join(ROOT, "scripts", "scope-scout-deepseek.js"), "utf8");
 const brSrc = fs.readFileSync(path.join(ROOT, "bridge", "deepseek-bridge.js"), "utf8");
 const abSrc = fs.readFileSync(path.join(ROOT, "scripts", "scope-ab-retro.js"), "utf8");
-ok(/buildScoutPreface\("self"/.test(selfSrc) && !/const preface = "너는 '탐색자'다/.test(selfSrc), "self 러너 — 하드코딩 폐기·단일 출처");
+const provSrc = fs.readFileSync(path.join(ROOT, "scripts", "scout-providers.js"), "utf8");
+ok(/buildScoutPreface\("self"/.test(provSrc) && !/const preface = "너는 '탐색자'다/.test(provSrc) && !/너는 '탐색자'다/.test(selfSrc), "self 팔 preface — 하드코딩 폐기·단일 출처(P5: 공통층 한 곳)");
 ok(/buildScoutPreface\("deepseek"\)/.test(brSrc), "deepseek-bridge — 같은 슬롯에서 preface(폴백 포함)");
-ok(/scoutPromptSignature\(lang\)/.test(selfSrc) && /scoutPromptSignature\(lang\)/.test(dsSrc), "두 러너 지도 메타에 프롬프트 서명 기록(P4)");
-ok(/renderPackageMarkdown\(pkg, lang\)/.test(selfSrc) && /renderPackageMarkdown\(pkg, lang\)/.test(dsSrc), "두 러너 꾸러미 렌더에 언어 전달");
+ok(/scoutPromptSignature\(lang\)/.test(provSrc) && /runScout\(repo, "self"/.test(selfSrc) && /runScout\(repo, "deepseek"/.test(dsSrc), "지도 메타 프롬프트 서명(P4) — 공통층 기록+러너 2종 위임");
+ok(/renderPackageMarkdown\(pkg, lang\)/.test(provSrc), "꾸러미 렌더에 언어 전달(공통층 — 러너 2종 패리티는 구조 보장)");
 ok(/의도적 고정\(§6-11\)/.test(abSrc) && /너는 '탐색자'다/.test(abSrc), "ab-retro — 실측 비교 안정성 위해 기본 문구 고정(사유 주석 잠금)");
 ok(/SCOUT_PREFACE_FIXED: "1"/.test(abSrc) && /SCOUT_PREFACE_FIXED !== "1"/.test(brSrc), "ab-retro deepseek 팔도 고정 스위치로 사용자 수정 미반영(실측 오염 차단 — Codex 반례 잠금)");
 const fixedEnv = { ...process.env, SCOUT_PREFACE_FIXED: "1" };

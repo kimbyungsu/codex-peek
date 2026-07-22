@@ -25,7 +25,7 @@ const req = buildMapRequest("# 꾸러미 본문", "deepseek-v4-flash");
 ok(req.model === "deepseek-v4-flash" && req.stream === false, "모델 지정 + 스트림 없음(단일 응답)");
 ok(req.messages.length === 1 && req.messages[0].role === "user" && /탐색자.*꾸러미가 유일한 근거/.test(req.messages[0].content) && /# 꾸러미 본문/.test(req.messages[0].content), "지시 앞머리 + 꾸러미 전문이 한 user 메시지");
 ok(req.temperature === 0 && typeof req.max_tokens === "number", "temperature 0(재현성 — A/B 비교 대상) + 출력 상한");
-const selfSrc = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-scout-self.js"), "utf8");
+const selfSrc = fs.readFileSync(path.join(__dirname, "..", "scripts", "scout-providers.js"), "utf8"); // P5: self 팔 로직은 공통층(scout-providers.js)으로 이동
 ok(/buildScoutPreface\("self"/.test(selfSrc) && /\[탐색자 지시\] 형식을 정확히 따르라/.test(req.messages[0].content), "두 팔 preface 단일 출처(buildScoutPreface — §6-11 P1) + 기본 문구가 요청에 실림(같은 계약)");
 
 console.log("[보안 소스 계약] 실키 리터럴 없음 · 키는 env/파일에서만 · 키 원문 미출력");
@@ -33,8 +33,9 @@ const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "deepseek-bridg
 ok(!/sk-[A-Za-z0-9]{16,}/.test(src), "소스에 실키 형태 리터럴 없음(유출 사고 재발 방지 규칙)");
 ok(/DEEPSEEK_API_KEY/.test(src) && /deepseek\.json/.test(src), "키 출처는 env·브릿지 홈 파일뿐");
 ok(!/console\.(log|error)\([^)]*apiKey/.test(src), "키 원문을 로그로 찍는 경로 없음");
-const runnerSrc = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-scout-deepseek.js"), "utf8");
-ok(/collectPackage/.test(runnerSrc) && /deepseek-bridge\.js/.test(runnerSrc), "러너는 같은 꾸러미 수집기 + 브릿지 map 경유(별도 수집 경로 없음)");
+const runnerSrc = fs.readFileSync(path.join(__dirname, "..", "scripts", "scout-providers.js"), "utf8"); // P5: deepseek 팔 로직도 공통층으로 이동
+ok(/collectPackage/.test(runnerSrc) && /deepseek-bridge\.js/.test(runnerSrc), "러너는 같은 꾸러미 수집기 + 브릿지 map 경유(별도 수집 경로 없음 — 공통층 한 곳)");
+ok(/runScout\(repo, "deepseek"/.test(fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-scout-deepseek.js"), "utf8")), "deepseek 러너는 runScout 위임(P5)");
 
 console.log("[배치·문구 계약] 런타임 배치 목록 포함 + '전송 없음' 단정 문구 제거(첫 외부 전송의 정직성 — Codex 검증 지적 잠금)");
 const installSrc = fs.readFileSync(path.join(__dirname, "..", "install.js"), "utf8");
