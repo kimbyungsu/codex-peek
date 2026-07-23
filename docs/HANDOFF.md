@@ -120,8 +120,18 @@
 > **미반영 2건(확인 검증 규약 — 다음 묶음 동승 후보)**: f-6dc403af(self probe의 stale-loser가 wNote를 안 거쳐 CLI
 > 실패 사유로 표시 — 표시 한정·로직 무영향) / f-c66da17f=[주의→보관함 1f501cceed39340b] wall-clock 의존(시계 역행
 > 시 최신 단일 창 실패가 stale-loser 폐기 — 재점검 1회 복구·근본 해법=잠금 아래 provider 세대 토큰, P8 동승).
-> ▶다음: P8(결정론 라우터 — 1-34 규범 판정표 그대로·재해석 금지)+의미 보강 실행기(1-33 개정: 재개 발동=실행기
-> 배포 Phase). 미반영 합의 이월: f-e9c23d7a·PRIVACY cutover-notice·보관함 5364ebe0·afdd6850b4ea2030·17d4697dc6a164fb.
+> ★P8 상세 설계 v10 동결(2026-07-23 커밋 a8d49d7 — 설계검증 11왕복[실패 9→통과(보완)→확인 통과]·blocker 29·보완 12
+> 전부 수용): 정본=MAP-V2-DESIGN 말미 'P8 상세 설계 v10'. 요지: 라우터 9행 전순서(conflict 모드 무관 최상향)·corridor
+> (node 소속·historyless invSnap 내용 지문)·실행기 2층 장부(job+attempt·유료 uncertain=park·순차 변환 cursor·super
+> 전이·rev 세대)·P2 확장 허용 4종(applyPatch opts/decision 필드/expirePendingPatch lifecycle CAS/reasonCode 닫힌
+> 열거+expireCode 원자 영속)·verifier 해소 경로(근거 사전 결속·rebase 금지·적용 시점 claim 지문)·동의 세대(ws×slot
+> grants·genCounter·호출 직전 재대조 — 기존 동의·mapMode 저장 소급 금지). **구현 착수 가능(확인 검증 지적 0).**
+> ★P8 구현 증분 1 완결(구현검증 2왕복[보류 강등 1→수정→통과 지적 0]): bridge/map-router.js — decideRoute
+> 9행 전순서(1행 strict: ready 4필드 불리언 필수·이형=park 최우선)+corridorOf(node 소속·anchor 부모 디렉터리
+> 경계·공집합=mapped·v2 아님/변경 null=unknown)·p8-router 49단언(전수 스윕 2,592조합 예외 0)·소비자 배선 0(무회귀).
+> ▶다음: P8 구현 계속(배치: ①잔여 P2 확장[expirePendingPatch·reasonCode·expireCode·verifierResolution opts]
+> ②map-enrich 실행기+어댑터·변환기·동의 ③UI·문서·테스트). 미반영 합의 이월:
+> f-e9c23d7a·PRIVACY cutover-notice·보관함 5364ebe0·afdd6850b4ea2030·17d4697dc6a164fb·1f501cceed39340b·f-6dc403af.
 > ── (이전: **★C-7 자동화 계층 완결**):
 > 사용자 지시(2026-07-21 "MAP은 수동을 없애려는 설계인데 전환에 또 수동 명령은 과보수") → 정본 C-7 절 신설+구현.
 > 원칙: 동의할 내용 없으면(legacy AND 미이관 0 AND 안전 조건 전부) 자동·판단 필요(미이관 N>0)만 원클릭 카드.
