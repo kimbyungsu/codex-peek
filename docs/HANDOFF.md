@@ -135,7 +135,14 @@
 > token 필수 정확 일치]·소진 잔존은 자기 소유 재선점이 자연 회수[정본 부기])·구조화 reasonCode(닫힌 열거·직접
 > 쓰기 예외→write-failed+keepClaim 변환)·opts.verifierResolution(typed claim 전 필드 강제[locator·stance·모순
 > 거부]·claims⊆evidence·적용 시점 지문 재검증·rebase 금지·decision 삼중 결속 동일 값). p8-pipeline-ext 49단언.
-> ▶다음: P8 구현 계속(배치: ①잔여 없음 — P2 확장 완료
+> ★P8 구현 증분 3a 완결(구현검증 9왕복[실패 8→통과 지적 0] — blocker 계보 f-b74df6a1·ab-2·ab-3·ab-7 전부
+> 수용): bridge/map-enrich.js 저장·순수 계층 — 동의 세대(enrich-consent-v1: ws×slot grants strict[slot·paidMode·
+> selfAuto 이형=거부]·genCounter 단조·중복/역전=damaged)·작업 장부(enrich-job-v2 strict: 키 화이트리스트·
+> jobKey 공식 결속·results=EnrichItem 형태 전면+상한·resolution P2 동형·cursor 전이 불변식 4종·currentPatch
+> 5중 결속[patchId 공식·provider·item·{kind,ref} evidence 전문]·consentGen>=1 전 provider[self도 동의 필수])·
+> validateEnrichResult(op별 strict 합타입·root/payload 화이트리스트)·toPatchV2(결정론 UUID patchId[rev 세대]·
+> evidenceKindOf 정직 분류[무확장·미지=doc — 세탁 차단]·P2 전 경로 실통과 e2e)·p8-enrich-store 97단언.
+> ▶다음: P8 구현 계속(배치: ①잔여 없음 — P2 확장·저장 계층 완료
 > ②map-enrich 실행기+어댑터·변환기·동의 ③UI·문서·테스트). 미반영 합의 이월:
 > f-e9c23d7a·PRIVACY cutover-notice·보관함 5364ebe0·afdd6850b4ea2030·17d4697dc6a164fb·1f501cceed39340b·f-6dc403af.
 > ── (이전: **★C-7 자동화 계층 완결**):
