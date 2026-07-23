@@ -52,7 +52,7 @@ ok(injKeyOf("요청A") !== injKeyOf("요청B"), "다른 본문=다른 키");
 console.log("[2] 배선 소스 계약 — 표시 전용·textContent·펼침 유지·전송 무접촉");
 const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
 ok(ext.includes("wrap.appendChild(userBubble(t, (d.turnsStart||0)+tIdx9))") && !/el\("div","umsg", t\.user\)/.test(ext), "사용자 말풍선=접힘 렌더로 교체(직결 렌더 잔재 0)");
-ok(ext.includes('keyedDetails(injKeyOf(t.user)+":"+turnIdx') && !ext.includes('keyedDetails("inj:"+convKey(t)'), "펼침 키=사용자 본문 해시+턴 순번(답변 성장에 불변·동일 요청 반복 턴끼리 상태 공유 안 함 — 2차 보완)");
+ok(ext.includes('var fkey=injKeyOf(t.user)+":"+turnIdx') && ext.includes("keyedDetails(fkey") && !ext.includes('keyedDetails("inj:"+convKey(t)'), "펼침 키=사용자 본문 해시+턴 순번(답변 성장에 불변·동일 요청 반복 턴끼리 상태 공유 안 함 — 2차 보완·fkey로 내부 스크롤 키와 단일화)");
 // 3차 blocker 잠금 — 키 순번은 '전체 대화 기준': 최근 N턴 창이 [A..E]→[B..F]로 밀려도 B의 전역 순번은 불변.
 // host 산식과 소비를 함께 고정하고, 창 이동 반례를 산식으로 직접 실행한다.
 ok(ext.includes("turnsStart = Math.max(0, allTurns.length - Math.max(1, turnsN))") && ext.includes("turnsStart: number;"), "host가 슬라이스 시작의 전역 순번을 계산·전달(turnsStart)");
@@ -68,6 +68,31 @@ ok(ext.includes("하네스 주입 지침 ") && ext.includes("harness-injected di
 const bridgeSrc = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
 ok(/\[작업 요청\]/.test(bridgeSrc), "(전제) 브릿지 구분자 실재 — 전송 조립은 이번 변경에서 무접촉(표시 전용의 근거)");
 ok(!/splitInjectedHead|userBubble/.test(bridgeSrc), "브릿지(전송 경로)에 접기 코드 없음 — 모델 입력 불변 잠금");
+
+console.log("[3] 내부 스크롤 보존(2026-07-24 실버그 — 재렌더마다 펼친 지침 상자가 맨 위로 강제 이동)");
+// 재렌더 시뮬레이션: userBubble이 상자를 재생성하는 흐름을 DOM 스텁으로 실행 — 수정 전(보존 코드 없음)이면
+// 두 번째 생성물의 scrollTop이 0으로 남아 실패했을 구성.
+{
+  ok(ext.includes("const foldScroll = new Map()"), "내부 스크롤 좌표 저장소(fkey→scrollTop) 존재");
+  ok(ext.includes('pre.addEventListener("scroll"') && ext.includes("foldScroll.set(fkey, pre.scrollTop)"), "스크롤 시 좌표 저장 배선");
+  ok(ext.includes("foldScroll.get(fkey)") && /requestAnimationFrame\(function\(\)\{ pre\.scrollTop=sv9; \}\)/.test(ext), "재렌더 직후 한 프레임 뒤 복원(레이아웃 완료 시점)");
+  // 흐름 실행: 저장→재생성→복원(rAF 콜백 즉시 실행 스텁)
+  const store = new Map();
+  const mkPre = (fkey) => {
+    const raf = (fn) => fn(); // 레이아웃 완료 가정
+    const pre = { scrollTop: 0, onScroll: null, addEventListener: (ev, fn) => { pre.onScroll = fn; } };
+    pre.addEventListener("scroll", function () { store.set(fkey, pre.scrollTop); });
+    const sv9 = store.get(fkey);
+    if (sv9) raf(function () { pre.scrollTop = sv9; });
+    return pre;
+  };
+  const p1 = mkPre("inj1:0");
+  p1.scrollTop = 180; p1.onScroll(); // 사용자가 상자 안에서 아래로 스크롤
+  const p2 = mkPre("inj1:0");        // 상태 갱신 재렌더 — 상자 재생성
+  ok(p2.scrollTop === 180, "재렌더 후에도 내부 위치 180 유지(수정 전=0으로 리셋되던 실버그 재현 차단)");
+  const p3 = mkPre("inj2:1");
+  ok(p3.scrollTop === 0, "다른 상자(다른 키)는 영향 없음(키 격리)");
+}
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

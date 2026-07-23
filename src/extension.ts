@@ -4485,6 +4485,8 @@ class Dashboard {
   // 펼친 정찰 구역 패널 키 모음(정찰 흐름·최신 지도) — 매 재렌더가 #scoutBox를 통째 재생성해 details 펼침이
   // 저절로 접히던 실버그(사용자 실측 2026-07-08 — 검증 대화에서 고친 것과 같은 부류)의 동형 해법.
   const openPanels = new Set();
+  // 펼친 주입 지침 상자의 내부 스크롤 좌표(fkey→scrollTop) — 재렌더가 상자를 재생성해도 위치 유지(2026-07-24 실버그).
+  const foldScroll = new Map();
   function keyedDetails(key, summaryText){ var det=document.createElement("details"); if(openPanels.has(key)) det.open=true; det.addEventListener("toggle", function(){ if(det.open) openPanels.add(key); else openPanels.delete(key); }); var s=document.createElement("summary"); s.textContent=summaryText; det.appendChild(s); return det; }
   // 클릭 점프 가드(2026-07-23 사용자 실보고 ②의 '클릭 직접 경로' 몫): 접기/펼치기 등 클릭 직후 레이아웃
   // 변화(접기로 페이지가 짧아짐 등)로 브라우저가 스크롤을 최상단으로 강제하면, 한 프레임 뒤 '가능한 가장
@@ -4516,10 +4518,17 @@ class Dashboard {
     // 키=사용자 본문 해시+'전체 대화 기준' 턴 순번(2차 [보완]+3차 blocker 반영): 같은 요청문 반복 턴의 상태
     // 공유 차단 + 최근 N턴 표시 창이 밀려도 전역 순번은 불변(host가 turnsStart로 전달)이라 펼침 유지. 답변
     // 성장에도 불변(새 턴은 뒤에만 붙음). 예외=보관 상한(4,000메시지) 절삭 시 전역 순번 이동(기존 고지 배너 케이스·희귀).
-    var det=keyedDetails(injKeyOf(t.user)+":"+turnIdx, T("🔒 하네스 주입 지침 "+sp.head.length+"자 (규약·경계·서식 — 매 검증에 자동 첨부) — 펼쳐서 원문 보기","🔒 harness-injected directives, "+sp.head.length+" chars (rules · boundary · format — auto-attached to every ask) — expand for full text"));
+    var fkey=injKeyOf(t.user)+":"+turnIdx;
+    var det=keyedDetails(fkey, T("🔒 하네스 주입 지침 "+sp.head.length+"자 (규약·경계·서식 — 매 검증에 자동 첨부) — 펼쳐서 원문 보기","🔒 harness-injected directives, "+sp.head.length+" chars (rules · boundary · format — auto-attached to every ask) — expand for full text"));
     var pre=document.createElement("pre");
     pre.style.cssText="white-space:pre-wrap;max-height:280px;overflow:auto;font-size:11px;margin:4px 0 0 0";
     pre.textContent=sp.head+sp.marker; // 구분자까지 포함 — '접힘 원문+아래 본문=전송 원문 전체' 복원 계약(바이트 결합 동일)
+    // 내부 스크롤 보존(2026-07-24 사용자 실보고: 펼친 지침 안에서 아래로 내려도 계속 맨 위로 강제 이동 —
+    // 상태 갱신마다 대화 DOM이 재생성돼 이 상자의 scrollTop이 0으로 리셋되던 실버그. 창 스크롤(keepY)과
+    // 같은 원리로, 상자 내부 위치를 fkey로 기억했다가 재렌더 직후 한 프레임 뒤(레이아웃 완료) 복원한다).
+    pre.addEventListener("scroll", function(){ foldScroll.set(fkey, pre.scrollTop); });
+    var sv9=foldScroll.get(fkey);
+    if(sv9){ requestAnimationFrame(function(){ pre.scrollTop=sv9; }); }
     det.appendChild(pre);
     u.appendChild(det);
     var b=document.createElement("div");
