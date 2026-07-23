@@ -154,8 +154,9 @@
 > v11: done 멱등 판정표=sourceFp 우선·AND 폴백·patchId=jobSeed[jobKey+startedAt] 세대·-uall·project-map 제외·
 > 호출 시점 지문만 도장)·bootstrap 큐 v0→v1(invSnap·fresh v0=stale 취급 마이그레이션). p8-enrich-run 73단언
 > (동시 경합·사망 창·구 장부 폴백 등 실행 반례)·전체 체인 EXIT=0.
-> ▶다음: P8 구현 계속(배치: ①잔여 없음 — P2 확장·저장 계층 완료
-> ②map-enrich 실행기+어댑터·변환기·동의 ③UI·문서·테스트). 미반영 합의 이월:
+> ▶다음: P8 증분 4(마지막) — 어댑터 3종 실배선(scripts/enrich-providers·deepseek enrich 명령·codex ephemeral·
+> verifier ask 1-4 진입점)·발동 3지점 extension 배선·UI 보강 상태 행·PRIVACY/README·배포 등록(map-enrich.js·
+> map-router.js — 20→22파일 3카피)·설치. 미반영 합의 이월:
 > f-e9c23d7a·PRIVACY cutover-notice·보관함 5364ebe0·afdd6850b4ea2030·17d4697dc6a164fb·1f501cceed39340b·f-6dc403af.
 > ── (이전: **★C-7 자동화 계층 완결**):
 > 사용자 지시(2026-07-21 "MAP은 수동을 없애려는 설계인데 전환에 또 수동 명령은 과보수") → 정본 C-7 절 신설+구현.
