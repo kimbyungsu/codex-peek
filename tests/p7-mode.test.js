@@ -216,7 +216,7 @@ const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
 ok(/mapModeRow/.test(ext) && /setMapMode/.test(ext) && /runMapProbe/.test(ext), "모드 행·저장·준비 점검 배선");
 ok(ext.includes('MAP_MODES_EXT = ["self", "economy", "precision", "auto"]'), "확장 화이트리스트=contract-lib MAP_MODES 동일");
 ok(ext.includes("의미 보강 담당(Project MAP) — 영향지도 탐색 담당과 별개") && ext.includes("separate from the impact-map scout"), "별개 축 라벨 ko/en(1-26 부기 — scoutArm과 통합 금지)");
-ok(ext.includes("라우팅 적용은 P8부터") && ext.includes("routing applies from P8"), "P8 전 정직 배지(소비자 부재 미은폐)");
+ok(ext.includes("자동 보강 실행 담당") && ext.includes("runs automatic enrichment") && !ext.includes("routing applies from P8"), "실적용 문구(P8 증분 4 — 구 'P8부터' 배지 ko/en 모두 제거·발동 배선 완료)");
 ok(ext.includes("자동형은 경제형·정밀형이 모두 준비돼야 선택할 수 있어요(1-34)"), "자동형 선택 게이트(1-34 autoReady=AND — 유일한 비활성 버튼)");
 ok(ext.includes("선택은 그대로 유지·자동 전환 없음") && !/mapMode[^\n]*강등|mapMode[^\n]*degrade.*self/.test(ext), "조용한 전환 금지 — degraded 배지만·강등 코드 없음(scoutArm no-key 규칙 재사용 금지)");
 ok(ext.includes("DeepSeek 소형 요청 최대 2회") && ext.includes("Codex 계정 사용량 1회") && ext.includes("자동 실행은 없어요"), "과금 고지(최대 2회 — 설계 1차 [주의])+자동 probe 금지 명문");

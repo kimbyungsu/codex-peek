@@ -193,6 +193,7 @@ interface BridgeState {
   scoutCodex: { model: string; reasoning: string }; // 고급설정 탭 — Codex 정찰 두뇌 설정(P6b·전역·비밀 아님)
   mapMode: { raw: string | null; mode: string } | null; // P7 — 의미 보강 담당(3트랙에서만·null=2트랙/ws 없음). raw=명시 선택·mode=표시값(부재=self)
   mapReadiness: any | null; // P7 — readiness 뷰(contract-lib mapReadinessView 산출·precision 지문은 호스트 주입)
+  enrich: any | null; // P8 — 자동 보강 상태(동의·장부 요약 — 표시 전용·정본은 실행기 장부)
   scoutTarget: { repo: string; differs: boolean; invalid: boolean; configured: boolean; inherited: boolean; drift: { repo: string; sample: number; agree: number } | null } | null; // P1 정찰 대상 + 어긋남 자기진단(2026-07-10). null=2트랙
   scoutGate: { eff: string; raw: string | null } | null; // 실효 플랜 게이트(표시 전용 — 3트랙에서만, 계약에 저장 안 함). null=2트랙/ws 없음
   scoutArm: { raw: string | null; eff: "self" | "deepseek" | "codex"; hasKey: boolean; slot?: string } | null; // 탐색 담당(2026-07-20·P6 codex 추가) — raw=명시 선택(반대 언어 슬롯 상속·null=미지정), eff=실효(deepseek는 키 없으면 self 강등·codex는 강등 없음), slot=계산 언어. null=2트랙/ws 없음
@@ -505,8 +506,87 @@ async function setMapModeFromUi(ws: string | null, mode: string, slotLang?: Lang
   if (!ws) { vscode.window.showWarningMessage(tE("폴더가 열려 있지 않아 설정할 수 없어요.", "No folder is open, so this cannot be set.")); return; }
   if (!MAP_MODES_EXT.includes(mode)) return;
   const lang: Lang = slotLang || loadLangExt();
+  // P8 증분 4(설계 v10 P8-2 동의 세대): 유료 모드는 '선택 시점' 모달 고지+grant 기록 — 기존 저장·bootstrap
+  // 동의 소급 금지. 거절=저장 안 함(조용한 과금 경로 0). self 선택은 여기서 grant를 만들지 않는다(자동 보강
+  // 동의는 별도 selfAuto 1클릭 — 무과금이어도 AI 호출+전송이라 독립 동의).
+  if (mode === "economy" || mode === "precision" || mode === "auto") {
+    const who = mode === "economy" ? tE("DeepSeek(키 과금)", "DeepSeek (billed by key)") : mode === "precision" ? tE("Codex(계정 사용량)", "Codex (account usage)") : tE("DeepSeek+Codex(라우터가 배정·승격)", "DeepSeek+Codex (router assigns/escalates)");
+    const goOn = await vscode.window.showWarningMessage(
+      tE(`이 담당을 선택하면 Project MAP '자동 의미 보강'이 ${who}(으)로 백그라운드 실행될 수 있어요 — 지도 초안과 소스 발췌가 해당 서비스로 전송되고 비용이 발생합니다(무엇을 보내는지: PRIVACY.md). 선택=자동 실행 동의로 기록됩니다.`,
+         `Selecting this provider lets Project MAP auto-enrichment run in the background via ${who} — the map draft and source excerpts are sent to that service and it costs money (what is sent: PRIVACY.md). Selecting records your consent for automatic runs.`),
+      { modal: true }, tE("동의하고 선택", "Consent & select"));
+    if (goOn !== tE("동의하고 선택", "Consent & select")) return;
+    try {
+      const CLe: any = bridgeLib();
+      const ME9: any = CLe ? require(path.join(BRIDGE_DIR, "map-enrich.js")) : null;
+      if (ME9 && ME9.grantEnrichConsent) {
+        const repo9 = (((bridgeLib() as any) || {}).resolveScoutRepo ? ((bridgeLib() as any).resolveScoutRepo(ws, loadContract(ws)) || {}).repo : null) || ws;
+        const cur9 = ME9.findGrant(ME9.readEnrichConsent(repo9), ws, lang);
+        ME9.grantEnrichConsent(repo9, { ws, slot: lang, selfAuto: cur9 ? cur9.selfAuto : false, paidMode: mode });
+      }
+    } catch { /* grant 실패=실행기가 no-consent park(정직 — 선택 저장은 진행) */ }
+  }
   const pr = await patchContractRetryExt(ws, lang, { mapMode: mode });
   if (!pr.ok) { void offerLockRecoveryExt(pr, () => { void setMapModeFromUi(ws, mode, lang); }); return; }
+  vscode.commands.executeCommand("codexBridge.refresh");
+}
+// P8 증분 4 — 자동 보강 발동(설계 3지점 중 ⓑ준비 점검 직후·ⓒ관측 tick[ⓐbootstrap 완료 직후 포함 — 큐
+// pending 관측이 완료 직후를 커버]): 창당 단일-flight+스로틀. 실행은 설치본 CLI를 detach spawn — 결과는
+// 실행기 장부·로그가 정본(확장은 발동만).
+let enrichSpawnBusy = false;
+let enrichSpawnLastAt = 0;
+function maybeSpawnEnrichExt(ws: string | null, trigger: string): void {
+  try {
+    if (!ws || enrichSpawnBusy) return;
+    if (Date.now() - enrichSpawnLastAt < 5 * 60 * 1000 && trigger === "tick") return; // tick 스로틀 5분(probe 직후는 즉시)
+    if (loadContract(ws).scoutMode !== "on") return;
+    const ME9: any = require(path.join(BRIDGE_DIR, "map-enrich.js"));
+    const MB9: any = require(path.join(BRIDGE_DIR, "map-bootstrap.js"));
+    const repo9 = (((bridgeLib() as any) || {}).resolveScoutRepo ? ((bridgeLib() as any).resolveScoutRepo(ws, loadContract(ws)) || {}).repo : null) || ws;
+    if (!fs.existsSync(MB9.queueFileFor(repo9))) return; // 큐 없음=발동 대상 아님
+    const lang = loadLangExt();
+    const mode9 = (bridgeLib() as any).mapModeView(ws).mode;
+    const g9 = ME9.findGrant(ME9.readEnrichConsent(repo9), ws, lang);
+    const eligible = mode9 === "self" ? !!(g9 && g9.selfAuto) : !!(g9 && g9.paidMode === mode9);
+    if (!eligible) return; // 동의 없음=발동 안 함(실행기도 park하지만 spawn 자체를 아낌)
+    const jr9 = ME9.readEnrichJob(repo9);
+    if (jr9.st === "ok" && (jr9.job.phase === "parked" || jr9.job.phase === "done")) { /* done=수렴은 실행기 판정·parked=재시도 버튼만 — 단 done은 소스 변경 재보강 판정이 실행기 소관이라 spawn 허용 */ }
+    if (jr9.st === "ok" && jr9.job.phase === "parked") return; // parked=명시 재시도만(자동 재발동 금지·consent-stale 자동 재개는 실행기가 판단하지만 그 판단도 spawn이 필요 — grant 세대 전진 시에만 spawn)
+    enrichSpawnBusy = true; enrichSpawnLastAt = Date.now();
+    const cli = path.join(BRIDGE_DIR, "map-enrich.js");
+    const child = spawn(process.execPath, [cli, "run", repo9, "--ws", ws, "--slot", lang, "--trigger", trigger], { stdio: "ignore", detached: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
+    child.on("exit", () => { enrichSpawnBusy = false; vscode.commands.executeCommand("codexBridge.refresh"); });
+    child.on("error", () => { enrichSpawnBusy = false; });
+    child.unref();
+  } catch { enrichSpawnBusy = false; }
+}
+async function grantEnrichSelfFromUi(ws: string | null): Promise<void> {
+  if (!ws) return;
+  const goOn = await vscode.window.showWarningMessage(
+    tE("기본(Claude) 담당의 '자동 의미 보강'을 켭니다 — 지도 초안과 소스 발췌가 쓰시던 Claude CLI를 통해 Claude 서비스로 전송돼요(별도 결제 없음 — 구독 사용량 범위·PRIVACY.md). 새 지도·소스 변경이 관측되면 백그라운드로 실행됩니다.",
+       "Turn on automatic semantic enrichment with the default (Claude) provider — the map draft and source excerpts go to Claude via your existing Claude CLI (no extra billing — within your subscription · PRIVACY.md). Runs in the background when a new map or source change is observed."),
+    { modal: true }, tE("동의하고 켜기", "Consent & enable"));
+  if (goOn !== tE("동의하고 켜기", "Consent & enable")) return;
+  try {
+    const ME9: any = require(path.join(BRIDGE_DIR, "map-enrich.js"));
+    const repo9 = (((bridgeLib() as any) || {}).resolveScoutRepo ? ((bridgeLib() as any).resolveScoutRepo(ws, loadContract(ws)) || {}).repo : null) || ws;
+    const lang = loadLangExt();
+    const cur9 = ME9.findGrant(ME9.readEnrichConsent(repo9), ws, lang);
+    ME9.grantEnrichConsent(repo9, { ws, slot: lang, selfAuto: true, paidMode: cur9 ? cur9.paidMode : null });
+    maybeSpawnEnrichExt(ws, "consent");
+  } catch { /* 실패=상태 행이 무동의 그대로 표시(정직) */ }
+  vscode.commands.executeCommand("codexBridge.refresh");
+}
+async function retryEnrichFromUi(ws: string | null): Promise<void> {
+  if (!ws) return;
+  try {
+    const ME9: any = require(path.join(BRIDGE_DIR, "map-enrich.js"));
+    const repo9 = (((bridgeLib() as any) || {}).resolveScoutRepo ? ((bridgeLib() as any).resolveScoutRepo(ws, loadContract(ws)) || {}).repo : null) || ws;
+    // 재시도=park 해제(open 복원 — 감사 attempt 열 보존) 후 동일 진입점(설계 P8-6)
+    ME9.updateEnrichJob(repo9, (jj: any) => { if (!jj || jj.phase !== "parked") return null; const nx = { ...jj, phase: "open" }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
+    enrichSpawnLastAt = 0;
+    maybeSpawnEnrichExt(ws, "retry");
+  } catch { /* 무해 — 상태 행 유지 */ }
   vscode.commands.executeCommand("codexBridge.refresh");
 }
 // probe용 codex 실행 해석 — 브릿지 resolveCodex와 '같은 우선순위'(구현검증 1차 blocker③: CODEX_BIN→
@@ -576,6 +656,7 @@ async function runMapProbeFromUi(ws: string | null): Promise<void> {
     } catch (e: any) { notes.push("precision: " + String(e && e.message)); }
     vscode.window.showInformationMessage(tE("준비 점검 결과 — ", "Readiness check — ") + notes.join(" · "));
   } finally { mapProbeBusy = false; }
+  maybeSpawnEnrichExt(ws, "probe"); // P8 발동 ⓑ — 준비 점검 직후(readiness 성립 순간·게이트·동의는 함수 내부)
 }
 async function setScoutArmFromUi(ws: string | null, arm: "self" | "deepseek" | "codex", slotLang?: Lang): Promise<void> {
   if (!ws) { vscode.window.showWarningMessage(tE("폴더가 열려 있지 않아 설정할 수 없어요.", "No folder is open, so this cannot be set.")); return; }
@@ -1997,6 +2078,24 @@ function computeState(turnsN: number): BridgeState {
     scoutArm: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; return scoutArmViewExt(ws); } catch { return null; } })(), // slot은 뷰가 계산과 원자 결속해 반환(3차 blocker — 사후 재판독 금지)
     mapMode: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const CLx: any = bridgeLib(); return CLx && CLx.mapModeView ? CLx.mapModeView(ws) : null; } catch { return null; } })(), // P7 — 3트랙에서만
     mapReadiness: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const CLx: any = bridgeLib(); return CLx && CLx.mapReadinessView ? CLx.mapReadinessView({ precisionFpNow: precisionFpNowExt(), selfFpNow: selfFpNowExt() }) : null; } catch { return null; } })(), // P7 — 저장 레코드+현재 지문 재대조(precision·self 지문은 호스트 주입)
+    enrich: (() => { // P8 증분 4 — 자동 보강 상태(동의·장부 요약)+ⓒ tick 발동
+      if (!ws) return null;
+      try {
+        if (loadContract(ws).scoutMode !== "on") return null;
+        const ME9: any = require(path.join(BRIDGE_DIR, "map-enrich.js"));
+        const repo9 = (((bridgeLib() as any) || {}).resolveScoutRepo ? ((bridgeLib() as any).resolveScoutRepo(ws, loadContract(ws)) || {}).repo : null) || ws;
+        const lang9 = loadLangExt();
+        const c9 = ME9.readEnrichConsent(repo9);
+        const g9 = c9.st === "ok" ? ME9.findGrant(c9, ws, lang9) : null;
+        const jr9 = ME9.readEnrichJob(repo9);
+        maybeSpawnEnrichExt(ws, "tick"); // 발동 ⓒ(내부 게이트·동의·스로틀·단일-flight)
+        return {
+          consentSt: c9.st, selfAuto: !!(g9 && g9.selfAuto), paidMode: g9 ? g9.paidMode : null,
+          job: jr9.st === "ok" ? { phase: jr9.job.phase, parkedReason: jr9.job.parkedReason || null, provider: jr9.job.attempts.length ? jr9.job.attempts[jr9.job.attempts.length - 1].provider : null, applied: jr9.job.attempts.reduce((n9: number, a9: any) => n9 + ((a9.cursor && a9.cursor.appliedPatchIds) || []).length, 0) } : { phase: jr9.st },
+          queuePending: (() => { try { const MB9: any = require(path.join(BRIDGE_DIR, "map-bootstrap.js")); return fs.existsSync(MB9.queueFileFor(repo9)); } catch { return false; } })(),
+        };
+      } catch { return null; }
+    })(),
     mapLedger: readMapLedger(ws),       // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만)
     deepseek: readDeepseekView(),       // 고급설정 탭 — 키 유무·마스킹(원문 미노출)
     scoutCodex: readScoutCodexPrefsExt(), // 고급설정 탭 — Codex 정찰 모델·추론강도(전역·비밀 아님)
@@ -3200,6 +3299,8 @@ class Dashboard {
         if (m?.type === "setScoutArm" && (m.arm === "self" || m.arm === "deepseek" || m.arm === "codex")) setScoutArmFromUi(dashboardWorkspace(), m.arm, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
         if (m?.type === "setMapMode" && typeof m.mode === "string") setMapModeFromUi(dashboardWorkspace(), m.mode, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post()); // P7 — 검증은 setMapModeFromUi의 MAP_MODES 화이트리스트
         if (m?.type === "runMapProbe") runMapProbeFromUi(dashboardWorkspace()).then(() => this.post()); // P7 — 명시 버튼만(자동 probe 금지)·단일-flight는 함수 내부
+        if (m?.type === "grantEnrichSelf") grantEnrichSelfFromUi(dashboardWorkspace()).then(() => this.post()); // P8 — self 자동 보강 동의(1클릭·모달 고지)
+        if (m?.type === "retryEnrich") retryEnrichFromUi(dashboardWorkspace()).then(() => this.post()); // P8 — parked 재시도(open 복원+동일 진입점)
         if (m?.type === "envelopeShow" && typeof m.repo === "string" && m.repo) { // 수칙서 열람 전용 — 승인 후에도 세부내용 재확인·제외 요청 판단 창구(2026-07-22 사용자 지적)
           if (m.lang !== "en" && m.lang !== "ko") return;
           const enV = m.lang === "en";
@@ -5503,7 +5604,7 @@ class Dashboard {
           if(!on||!mm){ row.style.display="none"; return; }
           row.style.display=""; row.replaceChildren();
           const lb=document.createElement("span"); lb.className="muted";
-          lb.textContent=T("의미 보강 담당(Project MAP) — 영향지도 탐색 담당과 별개 · 라우팅 적용은 P8부터","Semantic-enrichment provider (Project MAP) — separate from the impact-map scout · routing applies from P8");
+          lb.textContent=T("의미 보강 담당(Project MAP) — 영향지도 탐색 담당과 별개 · 자동 보강 실행 담당","Semantic-enrichment provider (Project MAP) — separate from the impact-map scout · runs automatic enrichment");
           row.appendChild(lb);
           const seg=document.createElement("span"); seg.className="seg"; seg.style.marginLeft="8px";
           const btns={}; let mmCur=mm.raw; // 재클릭 판정=명시 선택 기준(미지정≠명시 self — scoutArmClick 교훈 동형)
@@ -5520,7 +5621,7 @@ class Dashboard {
           mk("economy", T("경제형","Economy"), "DeepSeek · "+rdChip("economy"), false, T("경제형=DeepSeek(키 등록=동의) — 준비 미성립이어도 선택은 저장돼요(조용한 전환 없음·상태 배지로 표시)","Economy=DeepSeek (key=consent) — selection persists even if not ready (no silent switching · shown as a badge)"));
           mk("precision", T("정밀형","Precision"), "Codex · "+rdChip("precision"), false, T("정밀형=Codex(계정 사용량) — 준비 미성립이어도 선택은 저장돼요","Precision=Codex (account usage) — selection persists even if not ready"));
           const autoRd=rd&&rd.auto; const autoOk=!!(autoRd&&autoRd.ok);
-          mk("auto", T("자동형","Auto"), autoOk?T("준비됨","ready"):reasonT(autoRd||{reason:"not-probed"}), !autoOk, autoOk?T("경제형+정밀형 조합(라우터가 승격 담당 — P8)","Economy+precision combo (router escalates — P8)"):T("자동형은 경제형·정밀형이 모두 준비돼야 선택할 수 있어요(1-34): ","Auto requires both economy and precision ready (1-34): ")+reasonT(autoRd||{reason:"not-probed"}));
+          mk("auto", T("자동형","Auto"), autoOk?T("준비됨","ready"):reasonT(autoRd||{reason:"not-probed"}), !autoOk, autoOk?T("경제형+정밀형 조합(라우터가 배정·승격)","Economy+precision combo (router assigns/escalates)"):T("자동형은 경제형·정밀형이 모두 준비돼야 선택할 수 있어요(1-34): ","Auto requires both economy and precision ready (1-34): ")+reasonT(autoRd||{reason:"not-probed"}));
           setOn9();
           row.appendChild(seg);
           const pb=document.createElement("button"); pb.type="button"; pb.className="secondary"; pb.style.cssText="margin-left:8px;font-size:11px;padding:2px 8px";
@@ -5528,6 +5629,36 @@ class Dashboard {
           pb.title=T("실제 점검을 돌려요 — DeepSeek 소형 요청 최대 2회(과금·형식 실패 시 교정 1회 포함)·Codex 계정 사용량 1회. 자동 실행은 없어요(이 버튼만).","Runs real checks — up to 2 small billed DeepSeek requests (incl. 1 repair) · 1 Codex run within account usage. Never runs automatically (this button only).");
           pb.addEventListener("click", function(){ pb.disabled=true; pb.textContent=T("점검 중…","Checking…"); vscode.postMessage({type:"runMapProbe"}); });
           row.appendChild(pb);
+          // P8 — 자동 보강 상태 줄(동의·장부 표시+동의/재시도 버튼. 정본=실행기 장부 — 표시 전용)
+          const en9=d.enrich||null;
+          const st9=document.createElement("div"); st9.className="muted"; st9.style.marginTop="4px";
+          if(en9){
+            const modeNow=(mmCur===null?"self":mmCur);
+            const consented=modeNow==="self"?en9.selfAuto:(en9.paidMode===modeNow);
+            const jp=en9.job&&en9.job.phase;
+            let msg;
+            if(en9.consentSt==="damaged") msg=T("자동 보강: 동의 기록 손상 — 수동 복구 필요","Auto-enrich: consent record damaged — manual recovery");
+            else if(!consented) msg=T("자동 보강: 꺼짐(이 담당의 자동 실행 동의 없음)","Auto-enrich: off (no consent for this provider)");
+            else if(jp==="damaged") msg=T("자동 보강: 작업 기록 손상 — 자동 실행 정지","Auto-enrich: job ledger damaged — automation halted");
+            else if(jp==="parked") msg=T("자동 보강: 보류됨 — ","Auto-enrich: parked — ")+(en9.job.parkedReason||"");
+            else if(jp==="done") msg=T("자동 보강: 완료(적용 ","Auto-enrich: done (applied ")+String(en9.job.applied||0)+T("건) — 소스가 바뀌면 다시 돌아요",") — reruns when sources change");
+            else if(jp==="open") msg=T("자동 보강: 진행 중","Auto-enrich: in progress");
+            else msg=en9.queuePending?T("자동 보강: 대기 중(다음 관측 때 실행)","Auto-enrich: pending (runs on next observation)"):T("자동 보강: 대기 없음","Auto-enrich: nothing queued");
+            st9.textContent=msg;
+            if(!consented&&modeNow==="self"&&en9.consentSt!=="damaged"){
+              const cb=document.createElement("button"); cb.type="button"; cb.className="secondary"; cb.style.cssText="margin-left:8px;font-size:11px;padding:2px 8px";
+              cb.textContent=T("자동 보강 켜기","Enable auto-enrich");
+              cb.addEventListener("click", function(){ cb.disabled=true; vscode.postMessage({type:"grantEnrichSelf"}); });
+              st9.appendChild(cb);
+            }
+            if(jp==="parked"){
+              const rb=document.createElement("button"); rb.type="button"; rb.className="secondary"; rb.style.cssText="margin-left:8px;font-size:11px;padding:2px 8px";
+              rb.textContent=T("다시 시도","Retry");
+              rb.addEventListener("click", function(){ rb.disabled=true; vscode.postMessage({type:"retryEnrich"}); });
+              st9.appendChild(rb);
+            }
+            row.appendChild(st9);
+          }
           // degraded 배지: 선택한 담당의 readiness가 미성립이면 저장값은 유지한 채 사유만 표시(조용한 전환 금지 — 1-34)
           const cur=mm.mode; const curRd= cur==="auto" ? (autoRd||{ok:false,reason:"not-probed"}) : rdOf(cur);
           if(!curRd.ok && cur!=="self") note.textContent=T("⚠ 선택된 담당("+cur+")이 아직 준비되지 않았어요 — ","⚠ Selected provider ("+cur+") is not ready — ")+reasonT(curRd)+T(" (선택은 그대로 유지·자동 전환 없음)"," (selection kept · no silent switching)");

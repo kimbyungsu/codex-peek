@@ -133,6 +133,29 @@ async function main() {
     console.log(ok ? "capability-ok" : "capability-fail");
     process.exit(ok ? 0 : 2);
   }
+  if (cmd === "enrich") {
+    // P8 증분 4 — 의미 보강 typed 호출(capability 문법 동형: strict 형태 표지+bounded repair 원격 1회 —
+    // 합타입·실존·근거 실증은 실행기[validateEnrichResult+quote 대조]가 수행·여기서는 'JSON 형태' 회복만).
+    if (!cfg.apiKey) { console.error(NO_KEY_MSG); process.exit(1); }
+    let prompt = "";
+    try { prompt = fs.readFileSync(0, "utf8"); } catch { /* stdin 없음 */ }
+    if (!prompt.trim()) { console.error("stdin으로 보강 프롬프트를 넣어라(enrich-providers가 조립)"); process.exit(2); }
+    const shapeOk = (txt) => { try { const o = JSON.parse(txt); return !!(o && typeof o === "object" && !Array.isArray(o) && o.schema === "enrich-result-v1" && Array.isArray(o.items)); } catch { return false; } };
+    const strip = (txt) => { const m = String(txt || "").match(/```(?:json)?\s*([\s\S]*?)```/); return (m ? m[1] : String(txt || "")).trim(); }; // 코드펜스 제거만(bounded 추출)
+    const recordUse9 = (r9) => { if (r9 && r9.usage) { try { require(path.join(__dirname, "contract-lib.js")).appendScoutUsage({ ts: new Date().toISOString(), workspace: "", arm: "enrich", model: r9.model || cfg.model, usageIn: r9.usage.prompt_tokens ?? null, usageOut: r9.usage.completion_tokens ?? null }); } catch { /* 무해 */ } } };
+    const req1 = { model: cfg.model, messages: [{ role: "user", content: prompt }], max_tokens: 4096, temperature: 0, stream: false };
+    let r1 = await callChat(cfg, req1, 4 * 60 * 1000);
+    recordUse9(r1);
+    let body = strip(r1.content || "");
+    if (!shapeOk(body)) { // bounded repair — 원격 재호출 정확히 1회
+      const r2 = await callChat(cfg, { ...req1, messages: [...req1.messages, { role: "assistant", content: r1.content || "" }, { role: "user", content: "형식이 틀렸다. schema \"enrich-result-v1\"과 items 배열을 가진 JSON 객체만(설명·코드펜스 금지) 다시 출력하라." }] }, 4 * 60 * 1000);
+      recordUse9(r2);
+      body = strip(r2.content || "");
+      if (!shapeOk(body)) { console.error("enrich-shape-fail"); process.exit(2); }
+    }
+    process.stdout.write(body + require("os").EOL);
+    return;
+  }
   if (cmd === "map") {
     if (!cfg.apiKey) { console.error(NO_KEY_MSG); process.exit(1); }
     let md = "";
@@ -145,7 +168,7 @@ async function main() {
     if (r.usage) console.error(`[usage] in=${r.usage.prompt_tokens} out=${r.usage.completion_tokens} (${r.model})`); // stderr — 지도 본문(stdout) 오염 방지
     return;
   }
-  console.error("사용: node deepseek-bridge.js <ping|map> [--out <파일>]");
+  console.error("사용: node deepseek-bridge.js <ping|map|capability|enrich> [--out <파일>]");
   process.exit(2);
 }
 

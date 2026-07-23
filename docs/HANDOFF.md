@@ -2,7 +2,7 @@
 
 > 이 문서 하나로 이어갈 수 있게 쓰였다. 상세 설계 원본(SCOUT-TRACK.md·SCOPE-LEDGER.md)은 **의도적으로 레포 밖 로컬 문서**라
 > 다른 환경에는 없다 — 그래서 이 파일이 그 요지를 포함한다. ⚠ **실 API 키·토큰은 어떤 파일·픽스처·예시에도 절대 넣지 말 것.**
-> 마지막 갱신: 2026-07-23 (버전 0.1.86 불변). **★검증 거버넌스 트랙(설계+증분 1~3) 완결 + P5(provider 공통 인터페이스) 완결(이상 07-22) + P6(Codex Scout)·P6b(Codex 정찰 두뇌 설정)·UX 3건·주입 지침 표시 접기·★P7(모드 UI+readiness 행렬) 설계·구현 완결(07-23·로컬 커밋 — push 대기)**:
+> 마지막 갱신: 2026-07-23 (버전 0.1.86 불변). **★검증 거버넌스 트랙(설계+증분 1~3) 완결 + P5(provider 공통 인터페이스) 완결(이상 07-22) + P6(Codex Scout)·P6b(Codex 정찰 두뇌 설정)·UX 3건·주입 지침 표시 접기·★P7(모드 UI+readiness 행렬) 설계·구현 완결 + ★P8(결정론 라우터+의미 보강 실행기) 설계 v10~v11·증분 1~4 전체 완결(07-23·로컬 커밋 — push 대기)**:
 > 배경: C-7이 core 프로필로도 11왕복·blocker 19(실측 — core ②조항 "희귀 경합=blocker"가 이 프로젝트에선
 > 만능 통과문+지원 환경 선언 부재) → 사용자 결정으로 P5보다 선행. ①설계 v1 동결(docs/VERIFY-GOVERNANCE.md
 > — 설계검증 6왕복·"열린 탐색+제한된 차단 권한"·Envelope·입장 심사·지적 계보·범위 확장·소진 분해. 726219f)
@@ -154,10 +154,29 @@
 > v11: done 멱등 판정표=sourceFp 우선·AND 폴백·patchId=jobSeed[jobKey+startedAt] 세대·-uall·project-map 제외·
 > 호출 시점 지문만 도장)·bootstrap 큐 v0→v1(invSnap·fresh v0=stale 취급 마이그레이션). p8-enrich-run 73단언
 > (동시 경합·사망 창·구 장부 폴백 등 실행 반례)·전체 체인 EXIT=0.
-> ▶다음: P8 증분 4(마지막) — 어댑터 3종 실배선(scripts/enrich-providers·deepseek enrich 명령·codex ephemeral·
-> verifier ask 1-4 진입점)·발동 3지점 extension 배선·UI 보강 상태 행·PRIVACY/README·배포 등록(map-enrich.js·
-> map-router.js — 20→22파일 3카피)·설치. 미반영 합의 이월:
+> ★P8 증분 4 완결(2026-07-23 — 구현검증 7왕복[1차 blocker 6→2차 4→3차 1→4차 2→5차 2→6차 1→7차 통과 지적 0]·
+> blocker 16 전부 수용·반박 0): **P8 전체(설계 v10~v11+증분 1·2·3a·3b·4) 종결.**
+> ①어댑터 3종 실배선 bridge/enrich-providers.js(1차⑤: 설치본 발동에 실존해야 하므로 scripts/가 아닌 bridge/):
+> self=claude -p+SELF_DENY / economy=deepseek-bridge 신규 enrich 명령(strict 표지+bounded repair 원격 1회+usage
+> arm enrich) / precision=ephemeral 독립 1회(P6 문법). ②Verifier 해소 진입점 askVerifierResolution(1-4 부작용 0):
+> 자격 게이트=정본 resolveLink 재사용(byWorkspace 우선 — bySession 전수 스캔은 정상 연결 오판·잔존 오인 양쪽
+> 위험[2차③])·preRead 사전 캡처(해시=전체 파일[P2 재검증 축]·quote 실증='실제 전송한 발췌' 기준[2차② ab-3])·
+> claim strict(결손 보정 금지·support+지지 0=null[1차③]). ③**topology slice(3~6차 계보 — 전체 지도 직렬화
+> 금지)**: sliceTopology(변경 연결→인접→잔여·NODES 40/EDGES 60)+필드 상한(anchor 노드당 8·경로 200자·라벨
+> 120자)+TOPO_CHARS_MAX 20,000 줄 절단+절단·생략 고지(침묵 상한 금지)·발췌 우선 집합=capLines 실제 표시 노드
+> 기준(절단 후 재분리 차단[5차②])·edge=표시 노드 양끝만(숨은 endpoint 차단[6차])·EXCERPT_PATH_MAX=200(초장
+> 경로 발췌 제외+고지[5차①])·민감 경로=발췌+anchor 경로명 양쪽 제외(scope-package 동형 복제+드리프트 잠금
+> 테스트[1차①·2차① ab-7]). ④발동 3지점 extension 배선(maybeSpawnEnrichExt: probe 직후·tick 스로틀 5분·단일-
+> flight·parked=자동 재발동 금지)·동의 UI(유료 모달+self 별도 grant·소급 금지)·보강 상태 줄·재시도. ⑤배포
+> 3카피 20→23파일(map-router.js·map-enrich.js·enrich-providers.js — install.js/hook-setup.ts/EXPECTED_DEPLOY_
+> FILES 패리티 테스트). ⑥PRIVACY(자동 의미 보강 별도 동의·소급 금지·invSnap·map-route.jsonl)+README ko/en.
+> ⑦tests/p8-enrich-wire.test.js 43단언 — 문자열 단언 아닌 실행 반례(1차⑥): 민감 12케이스 양쪽 함수 비교·
+> anchor/라벨/경로 폭탄·1,000-node·역순 changed 분리 선택·가짜 CODEX_BIN Verifier 5경로·어댑터 3종 stubbed
+> spawn(self=PATH 스텁·economy=스텁 HTTP 서버+deepseek.json baseUrl·precision=CODEX_BIN 스텁[2차④])·설치본
+> 23파일 사본 CLI 실행. 체인 EXIT=0·tsc 통과.
+> 미반영 합의 이월(수정 의무 없음):
 > f-e9c23d7a·PRIVACY cutover-notice·보관함 5364ebe0·afdd6850b4ea2030·17d4697dc6a164fb·1f501cceed39340b·f-6dc403af.
+> ▶다음: MAP v2 로드맵 P9~P10(정본 MAP-V2-DESIGN.md §5) 또는 사용자 지정 작업. ⚠Reload 1회 필요(새 확장 코드).
 > ── (이전: **★C-7 자동화 계층 완결**):
 > 사용자 지시(2026-07-21 "MAP은 수동을 없애려는 설계인데 전환에 또 수동 명령은 과보수") → 정본 C-7 절 신설+구현.
 > 원칙: 동의할 내용 없으면(legacy AND 미이관 0 AND 안전 조건 전부) 자동·판단 필요(미이관 N>0)만 원클릭 카드.

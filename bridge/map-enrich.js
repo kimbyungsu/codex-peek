@@ -839,7 +839,7 @@ function applyOnePatch(repo, o, env, ctx) {
     let res = saved || null;
     if (!res) {
       if (typeof o.askVerifier !== "function") return { parkReason: "no-verifier" };
-      try { res = o.askVerifier({ repo, patch, item, framing, existing }); } catch { res = null; } // existing={provider, decisionId, evidence, rationale} — 충돌은 양측 자료 제시(1-34 adjudication)
+      try { res = o.askVerifier({ repo, ws: job.configWs, patch, item, framing, existing }); } catch { res = null; } // existing={provider, decisionId, evidence, rationale} — 충돌은 양측 자료 제시(1-34 adjudication)
       if (!res || !["support", "reject", "inconclusive"].includes(res.verdict)) return { parkReason: "no-verifier" };
       // 영속(수신 즉시 — verdict 무관: 사망 후 재개도 재호출 0). strict 스키마에 맞는 레코드만(이형=park)
       const rec9 = { patchId: patch.patchId, opHash: opH, baseDecisionContextHash: patch.baseDecisionContextHash, verdict: res.verdict, claims: Array.isArray(res.claims) ? res.claims : [] };
@@ -932,4 +932,36 @@ function resumeJob(repo, oIn, env, j, st2) {
   return park((jj) => jj && { ...jj, phase: "parked", parkedReason: "attempt-state:" + a.phase, finishedAt: nowIso() }, "attempt-state");
 }
 
-module.exports = { ENRICH_DIR, repoKeyFor, consentFileFor, jobFileFor, readEnrichConsent, grantEnrichConsent, revokeEnrichConsent, findGrant, readEnrichJob, updateEnrichJob, jobKeyOf, jobSeedOf, detPatchId, validateEnrichResult, toPatchV2, evidenceKindOf, appendRouteLog, historylessChanges, computeSourceFp, runEnrich, ROUTE_LOG, JOB_PHASES, ATTEMPT_PHASES, ENRICH_TARGET_OPS };
+// ── CLI 진입점(증분 4 — 발동 3지점이 공용으로 spawn하는 실행 표면) ────────────────
+// node bridge/map-enrich.js run <repo> [--ws <ws>] [--slot ko|en] [--trigger <t>]
+// 어댑터·Verifier 진입점은 scripts/enrich-providers.js(repo 전용 — 비배포)에서 로드: 마켓 설치본은 부재=
+// adapter-missing park(정직 한계 — P7 selfReady 계약 동형). mode·readiness는 P7 뷰로 산출.
+function cliMain(argv) {
+  const cmd = argv[2];
+  if (cmd !== "run" || !argv[3]) { process.stderr.write("사용: node bridge/map-enrich.js run <repo> [--ws <ws>] [--slot ko|en] [--trigger <t>]\n"); return 2; }
+  const repo = argv[3];
+  const arg = (k, d) => { const i = argv.indexOf(k); return i > 0 && argv[i + 1] ? argv[i + 1] : d; };
+  const ws = arg("--ws", repo);
+  const slot = arg("--slot", "ko") === "en" ? "en" : "ko";
+  const trigger = arg("--trigger", "cli");
+  // mode·readiness(P7 뷰 — precision 지문은 실행 해석 보유 시 주입·self는 기록 상태만[보수])
+  const mode = CL.mapModeView(ws).mode;
+  let precisionFpNow;
+  try { const inv = require(path.join(__dirname, "codex-bridge.js")).resolveCodex(); precisionFpNow = CL.precisionExecFp(inv); } catch { precisionFpNow = undefined; }
+  const rv = CL.mapReadinessView({ precisionFpNow });
+  const readiness = { selfReady: rv.self.ok === true, economyReady: rv.economy.ok === true, precisionReady: rv.precision.ok === true, autoReady: rv.auto.ok === true };
+  // 어댑터·verifier 로드(repo 실행 전용 — 부재는 실행기가 adapter-missing park로 정직 처리)
+  let adapters = {}, askVerifier;
+  try {
+    const EP = require(path.join(__dirname, "enrich-providers.js")); // bridge 계층(설치본 실존 — 증분 4 1차 blocker⑤)
+    adapters = EP.ENRICH_ADAPTERS;
+    askVerifier = EP.askVerifierResolution;
+  } catch { adapters = {}; askVerifier = undefined; }
+  const r = runEnrich(repo, { ws, slot, mode, readiness, adapters, askVerifier, trigger });
+  process.stdout.write(JSON.stringify(r) + "\n");
+  return r.outcome === "applied" || r.outcome === "settled" || r.outcome === "noop" ? 0 : r.outcome === "busy" ? 3 : 1;
+}
+
+module.exports = { ENRICH_DIR, repoKeyFor, consentFileFor, jobFileFor, readEnrichConsent, grantEnrichConsent, revokeEnrichConsent, findGrant, readEnrichJob, updateEnrichJob, jobKeyOf, jobSeedOf, detPatchId, validateEnrichResult, toPatchV2, evidenceKindOf, appendRouteLog, historylessChanges, computeSourceFp, runEnrich, cliMain, ROUTE_LOG, JOB_PHASES, ATTEMPT_PHASES, ENRICH_TARGET_OPS };
+
+if (require.main === module) process.exit(cliMain(process.argv));

@@ -59,6 +59,9 @@ const BRIDGE_SCRIPTS = [
   "map-freshness.js", "map-reader.js", // P3b: P4 신설분 배포 편입 — map-adapters가 map-reader를 require하므로 누락 시 설치본 어댑터 전체 로드 불능(P3b 설계 A-3 실측 결함 봉합)
   "map-cutover.js", // P3b 증분 2: cutover 본체+frozen-ledger probe(대시보드 lazy 소비 — 설치본 부재 시 probe 불능)
   "map-probe.js", // P7: readiness probe 실행기(vscode 무관 계층 — 확장이 설치본 사본을 lazy require)
+  "map-router.js", // P8: 결정론 라우터(1-34 표 — 실행기·테스트 공용 순수 계층)
+  "map-enrich.js", // P8: 의미 보강 실행기(저장·순수+runEnrich+CLI — 발동 3지점이 spawn하는 표면)
+  "enrich-providers.js", // P8: 보강 어댑터 3종+Verifier 해소 진입점(설치본 자동 발동에서 실존해야 함)
 ];
 
 // 우리가 settings.json에 심는 훅. event → {matcher, script}
