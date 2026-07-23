@@ -112,7 +112,7 @@ console.log("[2] 작업 장부 — strict 판독·RMW·자기 산출 strict·손
   ok(put({ ...okJob, attempts: [{ ...okJob.attempts[0], results: RES1, cursor: { nextIndex: 1, rev: 1, appliedPatchIds: [U(5)], super: { fromPatchId: U(6), fromOpHash: sha("o"), toRev: 2, phase: "marked" } } }] }) === "damaged", "전 item 완료(nextIndex==items 수)인데 진행 흔적 잔존=damaged");
   // 5차 f-b74df6a1: currentPatch 결속 — '다른 유효 patch' 재개 정본 승인 차단
   {
-    const cpOK = { schema: "map-patch-v2", patchId: ME.detPatchId(okJob.jobKey, 0, 0, 0), mapId: okJob.mapId, basis: { kind: "historyless", basisFp: sha("b"), inventoryFp: sha("i") }, baseMapHash: sha("m"), baseAuthorityHash: sha("a"), baseDecisionContextHash: sha("c"), baseDirtyFp: "", operation: "add_evidence", targetId: U(1), payload: RES1.items[0].payload, readSet: { targets: [{ id: U(1), contentHash: sha("t") }], files: [{ ref: "src/a.js", contentHash: sha("e") }], decisionIndex: [{ id: U(1), indexFp: sha("x") }] }, rationale: "r", evidence: [{ kind: "code", ref: "src/a.js" }], provider: "economy" };
+    const cpOK = { schema: "map-patch-v2", patchId: ME.detPatchId(ME.jobSeedOf(okJob.jobKey, okJob.startedAt), 0, 0, 0), mapId: okJob.mapId, basis: { kind: "historyless", basisFp: sha("b"), inventoryFp: sha("i") }, baseMapHash: sha("m"), baseAuthorityHash: sha("a"), baseDecisionContextHash: sha("c"), baseDirtyFp: "", operation: "add_evidence", targetId: U(1), payload: RES1.items[0].payload, readSet: { targets: [{ id: U(1), contentHash: sha("t") }], files: [{ ref: "src/a.js", contentHash: sha("e") }], decisionIndex: [{ id: U(1), indexFp: sha("x") }] }, rationale: "r", evidence: [{ kind: "code", ref: "src/a.js" }], provider: "economy" };
     const withCp = (cp) => put({ ...okJob, attempts: [{ ...okJob.attempts[0], phase: "applying", results: RES1, cursor: { nextIndex: 0, rev: 0, appliedPatchIds: [], currentPatch: cp } }] });
     ok(withCp(cpOK) === "ok", "결속 일치 currentPatch=승인");
     ok(withCp({ ...cpOK, patchId: U(77) }) === "damaged", "patchId 결속 위반(공식 밖 UUID)=damaged");
@@ -122,7 +122,7 @@ console.log("[2] 작업 장부 — strict 판독·RMW·자기 산출 strict·손
     ok(withCp({ ...cpOK, evidence: [{ kind: "code", ref: "src/other.js" }] }) === "damaged", "evidence 파일 집합↔item 불일치=damaged");
     // 6차(ab-3): kind 세탁 반례 — 같은 ref여도 kind가 변환기 규칙(evidenceKindOf)과 다르면 damaged
     const RESDOC = { schema: "enrich-result-v1", items: [{ op: "add_evidence", targetId: U(1), payload: RES1.items[0].payload, evidence: [{ file: "docs/x.md", quote: "q" }] }] };
-    const cpDoc = { ...cpOK, patchId: ME.detPatchId(okJob.jobKey, 0, 0, 0), evidence: [{ kind: "code", ref: "docs/x.md" }] };
+    const cpDoc = { ...cpOK, patchId: ME.detPatchId(ME.jobSeedOf(okJob.jobKey, okJob.startedAt), 0, 0, 0), evidence: [{ kind: "code", ref: "docs/x.md" }] };
     ok(put({ ...okJob, attempts: [{ ...okJob.attempts[0], phase: "applying", results: RESDOC, cursor: { nextIndex: 0, rev: 0, appliedPatchIds: [], currentPatch: cpDoc } }] }) === "damaged", "doc 근거를 code kind로 기록한 currentPatch=damaged(P2 관문 세탁 차단)");
     ok(put({ ...okJob, attempts: [{ ...okJob.attempts[0], phase: "applying", results: RESDOC, cursor: { nextIndex: 0, rev: 0, appliedPatchIds: [], currentPatch: { ...cpDoc, evidence: [{ kind: "doc", ref: "docs/x.md" }] } } }] }) === "damaged", "(참고) doc 단독 근거 patch는 P2 validator 자체가 거부 — currentPatch로도 승인 불가");
   }

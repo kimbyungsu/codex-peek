@@ -221,6 +221,9 @@ function queueLooksSane(repo) {
 function queueFresh(repo, topoPath) {
   const q = readJson3(queueFileFor(repo));
   if (!(q.st === "ok" && (q.data.schema === "enrich-queue-v0" || q.data.schema === "enrich-queue-v1") && typeof q.data.mapId === "string")) return false;
+  // P8 3b 2차 blocker⑦: fresh v0 historyless를 정상 인정하면 부모 게이트가 ready로 끝나 ensureQueue의
+  // v1 마이그레이션에 영원히 도달하지 못한다(invSnap 부재=실행기 영구 corridor-unknown park) — stale 취급.
+  if (q.data.schema === "enrich-queue-v0" && q.data.basis && q.data.basis.kind === "historyless") return false;
   if (!q.data.topoStat) return false;
   try { const st = fs.statSync(topoPath); return st.mtimeMs === q.data.topoStat.mtimeMs && st.size === q.data.topoStat.size; } catch { return false; }
 }

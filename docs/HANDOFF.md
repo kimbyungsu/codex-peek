@@ -142,19 +142,18 @@
 > 5중 결속[patchId 공식·provider·item·{kind,ref} evidence 전문]·consentGen>=1 전 provider[self도 동의 필수])·
 > validateEnrichResult(op별 strict 합타입·root/payload 화이트리스트)·toPatchV2(결정론 UUID patchId[rev 세대]·
 > evidenceKindOf 정직 분류[무확장·미지=doc — 세탁 차단]·P2 전 경로 실통과 e2e)·p8-enrich-store 97단언.
-> **⚠P8 증분 3b 진행 중(미완 — 구현검증 2왕복 모두 실패·WIP 커밋)**: 실행기 본체(runEnrich 계열)+bootstrap 큐
-> v0→v1(invSnap)+p8-enrich-run 51단언은 작성·자체 테스트 통과(체인 EXIT=0)이나 **검증 미통과 — 2차 blocker 9
-> 잔존(수정 필요 목록)**: ①super 전이가 strict 불변식(rev>0→흔적 필수)과 충돌해 cas-stale 전진 불가+저장
-> currentPatch 미재투입 ②quote 확인↔toPatchV2 해시 재읽기 사이 TOCTOU(ab-3 — 같은 판독으로 결속 필요)
-> ③충돌 해소 요청에 기존 측 provider·claims 미전달(양측 제시 계약 위반) ④reject·N-I pending이 appliedPatchIds
-> ·applied로 기록(도장 오염 — 종결 분류 분리 필요) ⑤범위 밖 인용 rev+1 재제안 경로 부재(강등 장부
-> 3271ca9db65f319a) ⑥gitChangedEx 반환 필드 불일치(paths vs files)+jobKey 선행 반환이 sourceFp 수렴을 가림
-> +**sourceFp는 설계 개정 필요 판정(v10 job 스키마·1-33 문면과 상충 — 정본 개정 후 재구현)** ⑦fresh v0 큐가
-> 부모 게이트(queueFresh)에서 정상 처리돼 ensureQueue 마이그레이션에 도달 불가 ⑧run-lock 회수 중 빈 경로 창
-> (임계구역 소유권 fence 재검사 필요 — bootstrap 문법 전면 이식) ⑨재개가 동결 configWs/slot/mode 대신 현재
-> 호출자 동의 사용(ab-1)+[보완] 로그 consentGen 미기록·adjudicated 선기록. **다음 이 증분 재개 시: 위 9건을
-> 설계 v10 재대조와 함께 수정(⑥은 정본 개정 선행) 후 재검증. 판정 전문=스크래치 p8impl3b-ask2-wait.out(소실
-> 시 이 목록이 정본).**
+> ★P8 증분 3b 완결(재개 구현검증 6왕복[실패 5→통과 지적 0] — WIP 봉인의 blocker 9 전부 해소+파생 계보 수용):
+> 실행기 본체(runEnrich 계열) — 생명주기 ①~⑧(게이트 최선행·큐 읽기 전용·run 잠금[rename 격리 회수+fence
+> 재검사·동시 복구자 3회 반복 반례]·⑦a 변경·corridor·srcFp 선산출)·동의 세대(job 생성 전+유료 호출 직전
+> 재대조·consent-stale 자동 재개[새 grant 세대·동결 주체 기준]·빈 attempts open=신규 attempt 경로)·라우팅
+> (decideRoute 재호출·승격 attempt 열 감사·both-failed)·item 순차 적용(currentPatch 저장본 재투입·super 전이=
+> expire 멱등→재변환+rev=toRev+소거 '한 원자 기록'[전이 중 rev 구 값 — strict 정합]·연속 stale=최신 장부 rev
+> 기준·rev 상한 2)·verifier 해소(resolutions 영속=재호출 0·reject=expire 확인 후 도장 없는 settled 종결·충돌=
+> 양측 제시[기존 decision evidence 사전 결속+claims 동봉]·같은 provider 격하=일반 분류·범위 밖 인용=evExtra+
+> oosUsed 1회 재제안)·근거 실증(수신 시+변환 직전 같은 판독으로 quote·해시 결속 — TOCTOU 봉합)·수렴(정본
+> v11: done 멱등 판정표=sourceFp 우선·AND 폴백·patchId=jobSeed[jobKey+startedAt] 세대·-uall·project-map 제외·
+> 호출 시점 지문만 도장)·bootstrap 큐 v0→v1(invSnap·fresh v0=stale 취급 마이그레이션). p8-enrich-run 73단언
+> (동시 경합·사망 창·구 장부 폴백 등 실행 반례)·전체 체인 EXIT=0.
 > ▶다음: P8 구현 계속(배치: ①잔여 없음 — P2 확장·저장 계층 완료
 > ②map-enrich 실행기+어댑터·변환기·동의 ③UI·문서·테스트). 미반영 합의 이월:
 > f-e9c23d7a·PRIVACY cutover-notice·보관함 5364ebe0·afdd6850b4ea2030·17d4697dc6a164fb·1f501cceed39340b·f-6dc403af.

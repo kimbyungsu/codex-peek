@@ -286,9 +286,14 @@ function renderV2Slice(ws, c, lang, proj) {
 
 // ── P4-5 게이트 준비(비활성 — cutover 전 어떤 런타임 경로도 호출하지 않는다) ────────────────
 // 변경 파일 판독을 {ok, paths}로 분리 — git 실패·timeout이 clean으로 위장되지 않게(설계 3차 blocker②).
-function gitChangedEx(repo) {
+function gitChangedEx(repo, opts) {
   try {
-    const r = spawnSync("git", ["-c", "safe.directory=" + String(repo).replace(/\\/g, "/"), "-C", repo, "status", "--porcelain", "-z"], { encoding: "utf8", timeout: 3000, windowsHide: true });
+    // opts.untrackedAll(P8 3b 4차): 미추적 디렉터리를 dir/ 하나로 축약하지 않고 내부 파일까지 열거(-uall) —
+    // 소스 지문(sourceFp)이 디렉터리 내부 변경을 식별해야 하는 소비처 전용. 기본 동작 불변(무회귀).
+    const args = ["-c", "safe.directory=" + String(repo).replace(/\\/g, "/"), "-C", repo, "status", "--porcelain"];
+    if (opts && opts.untrackedAll) args.push("-uall");
+    args.push("-z");
+    const r = spawnSync("git", args, { encoding: "utf8", timeout: 3000, windowsHide: true });
     if (r.status !== 0 || r.error) return { ok: false, paths: [], truncated: false };
     const toks = String(r.stdout || "").split("\0");
     const paths = [];
