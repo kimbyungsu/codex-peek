@@ -179,6 +179,30 @@ function fillHistorylessFp(basis, topo, PM) {
   if (!basis || basis.kind !== "historyless" || !topo) return basis;
   return { kind: "historyless", basisFp: PM.mapHashOf(topo), inventoryFp: PM.opHashOf(topo.inventory) };
 }
+// P8(설계 v10 P8-1 historyless — 큐 v0→v1): 비-git 변경 산출용 inventory 스냅샷. collectInventory는
+// {rel,kind}만 반환(실측)하므로 stat+내용 sha1을 보강한다. 상한 20,000파일+총 500MB — 초과=invSnap 미기록
+// +사유(실행기는 부재=corridor unknown 정직 park). 실패 파일은 목록에서 제외하지 않고 fp:null(변경 취급).
+function snapInvFor(repo, MR) {
+  try {
+    const inv = MR.collectInventory(repo);
+    const files = [];
+    let total = 0;
+    if (!inv || !Array.isArray(inv.files)) return { cap: "scan-failed" };
+    if (inv.files.length > 20000) return { cap: "file-count" };
+    for (const f of inv.files) {
+      const ab = path.join(repo, f.rel);
+      let st9 = null;
+      try { st9 = fs.statSync(ab); } catch { files.push({ path: f.rel, mtimeMs: 0, size: 0, fp: null }); continue; }
+      total += st9.size;
+      if (total > 500 * 1024 * 1024) return { cap: "total-bytes" };
+      let fp = null;
+      try { fp = crypto.createHash("sha1").update(fs.readFileSync(ab)).digest("hex"); } catch { /* fp null=변경 취급 */ }
+      files.push({ path: f.rel, mtimeMs: st9.mtimeMs, size: st9.size, fp });
+    }
+    return { files };
+  } catch (e) { return { cap: "error:" + String(e && e.message).slice(0, 40) }; }
+}
+
 function sameBasisBoundary(a, b) { // 브랜치/워크트리 경계 동일성(HEAD 전진은 허용 — hard reject는 경계 이탈만: 1-1)
   if (!a || !b || a.kind !== b.kind) return false;
   if (a.kind === "historyless") return true;
@@ -188,7 +212,7 @@ function sameBasisBoundary(a, b) { // 브랜치/워크트리 경계 동일성(HE
 // 큐 소형 검증(부모용 — 유계: 소형 JSON 파싱만. 내용 정합[mapHash·basis]은 자식이 판정)
 function queueLooksSane(repo) {
   const q = readJson3(queueFileFor(repo));
-  return q.st === "ok" && q.data.schema === "enrich-queue-v0" && typeof q.data.mapId === "string";
+  return q.st === "ok" && (q.data.schema === "enrich-queue-v0" || q.data.schema === "enrich-queue-v1") && typeof q.data.mapId === "string";
 }
 
 // 부모용 신선 판정(2차 #2 — 유계 유지): sane + 큐에 기록된 topology stat(mtime·size)과 현재 파일 stat 일치.
@@ -196,7 +220,7 @@ function queueLooksSane(repo) {
 // 없음)도 재작성 유도. ⚠브랜치 전환만으로 파일이 동일하면 못 잡는다 — 큐 브랜치별 분리(P2)의 명시 한계.
 function queueFresh(repo, topoPath) {
   const q = readJson3(queueFileFor(repo));
-  if (!(q.st === "ok" && q.data.schema === "enrich-queue-v0" && typeof q.data.mapId === "string")) return false;
+  if (!(q.st === "ok" && (q.data.schema === "enrich-queue-v0" || q.data.schema === "enrich-queue-v1") && typeof q.data.mapId === "string")) return false;
   if (!q.data.topoStat) return false;
   try { const st = fs.statSync(topoPath); return st.mtimeMs === q.data.topoStat.mtimeMs && st.size === q.data.topoStat.size; } catch { return false; }
 }
@@ -419,11 +443,14 @@ function ensureQueue(repo, PM) {
   const nowHash = PM.mapHashOf(sn.topo);
   const basis = fillHistorylessFp(basisFor(repo), sn.topo, PM);
   const cur = readJson3(qf);
-  if (cur.st === "ok" && cur.data.schema === "enrich-queue-v0" && cur.data.mapId === sn.topo.mapId && cur.data.mapHash === nowHash && sameBasisBoundary(cur.data.basis, basis)
+  const v0Hist = cur.st === "ok" && cur.data.schema === "enrich-queue-v0" && basis && basis.kind === "historyless"; // P8 3b 검증 1차 blocker⑦: 신선한 v0 historyless는 invSnap이 없어 실행기가 영구 corridor-unknown park — 멱등 인정하지 않고 v1로 재작성
+  if (!v0Hist && cur.st === "ok" && (cur.data.schema === "enrich-queue-v0" || cur.data.schema === "enrich-queue-v1") && cur.data.mapId === sn.topo.mapId && cur.data.mapHash === nowHash && sameBasisBoundary(cur.data.basis, basis)
     && cur.data.topoStat && cur.data.topoStat.mtimeMs === sn.topoStat.mtimeMs && cur.data.topoStat.size === sn.topoStat.size) return true; // 멱등(1-33)
+  const inv1 = basis && basis.kind === "historyless" ? snapInvFor(repo, require(path.join(__dirname, "map-runtime.js"))) : null; // P8 큐 v1
   return CL.atomicWrite(qf, JSON.stringify({
-    schema: "enrich-queue-v0", // 전환 스키마: 브랜치별 파일 분리·stale 정밀 판정은 P2 승격
+    schema: "enrich-queue-v1", // P8: v0+invSnap(historyless 변경 산출 재료 — v0 판독 무회귀·실행기는 invSnap 부재=unknown)
     mapId: sn.topo.mapId, mapHash: nowHash, basis, topoStat: sn.topoStat, queuedAt: new Date().toISOString(), provider: null,
+    ...(inv1 ? { invSnap: inv1 } : {}),
   }, null, 2));
 }
 
@@ -474,8 +501,10 @@ function runChild(repo, manual) {
       }
       const topoStat = { mtimeMs: st.mtimeMs, size: st.size };
       const basis = fillHistorylessFp(basisFor(repo), topo, MR.PM);
+      const invD = basis && basis.kind === "historyless" ? snapInvFor(repo, MR) : null; // P8 큐 v1
       const qOk = CL.atomicWrite(queueFileFor(repo), JSON.stringify({
-        schema: "enrich-queue-v0", mapId: topo.mapId, mapHash: MR.PM.mapHashOf(topo), basis, topoStat, queuedAt: new Date().toISOString(), provider: null,
+        schema: "enrich-queue-v1", mapId: topo.mapId, mapHash: MR.PM.mapHashOf(topo), basis, topoStat, queuedAt: new Date().toISOString(), provider: null,
+        ...(invD ? { invSnap: invD } : {}),
       }, null, 2));
       if (!qOk) return { err: "보강 큐 기록 실패" };
       return { mapId: topo.mapId, topoFp: sha1(raw), mapMdFp: sha1(view), rendered };
@@ -602,7 +631,7 @@ function bootstrapStatusFor(repo) {
   const contentOk = q.st === "ok" && q.data.mapId === rt.topo.mapId && q.data.mapHash === MR.PM.mapHashOf(rt.topo); // CLI는 전체 판독 가능 — 내용까지 대조
   return { state: contentOk ? "draft-ready" : "draft-stale-queue", rs: rsd, mapId: rt.topo.mapId };
 }
-module.exports = { maybeSpawnBootstrap, hookTick, bootstrapStatusFor, lockNeedsManualDelete, lockStateOf, forceUnlock, runChild, parentSignals, repoKeyFor, rsFileFor, queueFileFor, consentFileFor, hasConsent, grantConsent, basisFor, fillHistorylessFp, sameBasisBoundary, pidState, ensureQueue, queueLooksSane, mapAutoExcluded, projectMapMtimeForStatus, RUN_DIR, QUEUE_DIR }; // main 블록보다 먼저 — run-manual→runCli→본 모듈 순환 require 시 exports가 채워져 있어야 함(6차 #3 위임의 전제)
+module.exports = { maybeSpawnBootstrap, hookTick, bootstrapStatusFor, lockNeedsManualDelete, lockStateOf, forceUnlock, runChild, parentSignals, repoKeyFor, rsFileFor, queueFileFor, consentFileFor, hasConsent, grantConsent, basisFor, fillHistorylessFp, sameBasisBoundary, pidState, ensureQueue, queueLooksSane, mapAutoExcluded, projectMapMtimeForStatus, snapInvFor, RUN_DIR, QUEUE_DIR }; // main 블록보다 먼저 — run-manual→runCli→본 모듈 순환 require 시 exports가 채워져 있어야 함(6차 #3 위임의 전제)
 
 if (require.main === module) {
   const mode = process.argv[2];
