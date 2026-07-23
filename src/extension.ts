@@ -4485,8 +4485,14 @@ class Dashboard {
   // 펼친 정찰 구역 패널 키 모음(정찰 흐름·최신 지도) — 매 재렌더가 #scoutBox를 통째 재생성해 details 펼침이
   // 저절로 접히던 실버그(사용자 실측 2026-07-08 — 검증 대화에서 고친 것과 같은 부류)의 동형 해법.
   const openPanels = new Set();
-  // 펼친 주입 지침 상자의 내부 스크롤 좌표(fkey→scrollTop) — 재렌더가 상자를 재생성해도 위치 유지(2026-07-24 실버그).
+  // 펼친 스크롤 상자의 내부 좌표(키→scrollTop) — 재렌더가 상자를 재생성해도 위치 유지(2026-07-24 실버그·
+  // 동류 상자 3곳 공통: 주입 지침·최신 지도·확정 장부[보관함 1cc80d65856b7c41 채택]).
   const foldScroll = new Map();
+  function keepInnerScroll(pre, key){
+    pre.addEventListener("scroll", function(){ foldScroll.set(key, pre.scrollTop); });
+    var sv=foldScroll.get(key);
+    if(sv){ requestAnimationFrame(function(){ pre.scrollTop=sv; }); }
+  }
   function keyedDetails(key, summaryText){ var det=document.createElement("details"); if(openPanels.has(key)) det.open=true; det.addEventListener("toggle", function(){ if(det.open) openPanels.add(key); else openPanels.delete(key); }); var s=document.createElement("summary"); s.textContent=summaryText; det.appendChild(s); return det; }
   // 클릭 점프 가드(2026-07-23 사용자 실보고 ②의 '클릭 직접 경로' 몫): 접기/펼치기 등 클릭 직후 레이아웃
   // 변화(접기로 페이지가 짧아짐 등)로 브라우저가 스크롤을 최상단으로 강제하면, 한 프레임 뒤 '가능한 가장
@@ -4526,9 +4532,7 @@ class Dashboard {
     // 내부 스크롤 보존(2026-07-24 사용자 실보고: 펼친 지침 안에서 아래로 내려도 계속 맨 위로 강제 이동 —
     // 상태 갱신마다 대화 DOM이 재생성돼 이 상자의 scrollTop이 0으로 리셋되던 실버그. 창 스크롤(keepY)과
     // 같은 원리로, 상자 내부 위치를 fkey로 기억했다가 재렌더 직후 한 프레임 뒤(레이아웃 완료) 복원한다).
-    pre.addEventListener("scroll", function(){ foldScroll.set(fkey, pre.scrollTop); });
-    var sv9=foldScroll.get(fkey);
-    if(sv9){ requestAnimationFrame(function(){ pre.scrollTop=sv9; }); }
+    keepInnerScroll(pre, fkey);
     det.appendChild(pre);
     u.appendChild(det);
     var b=document.createElement("div");
@@ -5845,6 +5849,7 @@ class Dashboard {
         const pre=document.createElement("pre");
         pre.style.cssText="white-space:pre-wrap;max-height:340px;overflow:auto;font-size:11px";
         pre.textContent=sm.latest.text + (sm.latest.truncated?T("\\n… (길어서 접힘 — 전문은 브릿지 홈 scouts 폴더 파일)","\\n… (truncated — full text in the bridge home scouts folder)"):""); // ★백슬래시 두 겹 필수: 이 스크립트는 바깥 템플릿 안이라 한 겹이면 HTML 생성 시 실제 개행으로 변환돼 웹뷰 JS 전체가 문법 오류로 죽는다(2026-07-06 실사고 — tests/webview-syntax가 검출)
+        keepInnerScroll(pre, "mapPre:"+(sm.latest.ts||"?")); // 내부 스크롤 보존(새 지도=새 키라 자연 리셋)
         det.appendChild(pre); sec.appendChild(det);
       }
       add(T("ⓘ 이 게시판은 열람 전용(보는 것만으로는 아무것도 전송 안 됨) — 지도 생성·전송은 명령이 실행될 때만: 당신이 직접, 또는 3트랙 자동 지시를 받은 Claude가(같은 상태엔 1회 지시). 프로젝트별 최근 10장 보관.","ⓘ Read-only board (viewing sends nothing) — maps are generated/sent only when the command runs: by you directly, or by Claude on the 3-track auto-directive (issued once per state). Last 10 kept per project."),"muted");
@@ -6018,14 +6023,15 @@ class Dashboard {
         wB.textContent=T("⚠ 확정층 판독 불가: ","⚠ Stable layer unreadable: ")+(ml.mapBlockedReason||"");
         card.appendChild(wB);
       } else if(ml.mapExists){
-        const det=document.createElement("details"); const s=document.createElement("summary");
         const srcTag=ml.mapSource==="v2"?T(" · 출처 Project MAP"," · via Project MAP"):"";
         const staleTag=ml.mapSource==="v2"&&(ml.mapStale||ml.mapRetired)?T(" · 낡음 "+ml.mapStale+"·퇴역 "+ml.mapRetired," · stale "+ml.mapStale+" · retired "+ml.mapRetired):"";
-        s.textContent=T("확정 장부 열람 ("+ml.mapRel+" · 승인 "+ml.mapApproved+"건/전체 항목 "+ml.mapTotalItems+"건"+srcTag+staleTag+")","Open ledger ("+ml.mapRel+" · "+ml.mapApproved+" approved / "+ml.mapTotalItems+" items"+srcTag+staleTag+")");
+        // 재검증 blocker③: 일반 details는 재렌더마다 닫혀 내부 스크롤 복원이 무의미 — keyedDetails로 펼침 유지+내부 좌표 보존을 함께
+        const det=keyedDetails("ledger:"+(ml.mapRel||"?"), T("확정 장부 열람 ("+ml.mapRel+" · 승인 "+ml.mapApproved+"건/전체 항목 "+ml.mapTotalItems+"건"+srcTag+staleTag+")","Open ledger ("+ml.mapRel+" · "+ml.mapApproved+" approved / "+ml.mapTotalItems+" items"+srcTag+staleTag+")"));
         const pre=document.createElement("pre"); pre.style.cssText="white-space:pre-wrap;max-height:260px;overflow:auto;font-size:11px";
         const frozenTag=ml.mapSource==="v2"?T("[동결(이관 소스) — 신규 승인은 Project MAP 경로]\\n","[frozen migration source — new approvals go through Project MAP]\\n"):"";
         pre.textContent=frozenTag+ml.mapText+(ml.mapTruncated?T("\\n… (길어서 접힘 — 전문은 파일)","\\n… (truncated — full text in the file)"):""); // ★백슬래시 두 겹 — 웹뷰 JS 개행 지뢰(webview-syntax.test.js 검출)
-        det.appendChild(s); det.appendChild(pre); card.appendChild(det);
+        keepInnerScroll(pre, "ledgerPre:"+(ml.mapRel||"?")); // 내부 스크롤 보존(장부 파일 단위 키)
+        det.appendChild(pre); card.appendChild(det);
       }
       box.appendChild(card);
     });
