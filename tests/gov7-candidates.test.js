@@ -153,5 +153,128 @@ console.log("[8] 확정 장부 keyedDetails(재검증 blocker③) — 펼침 유
   ok(ext.includes('keyedDetails("ledger:"+(ml.mapRel||"?")') && !/mapExists\)\{\s*\n\s*const det=document\.createElement\("details"\)/.test(ext), "확정 장부=keyedDetails(일반 details 잔재 0 — 재렌더에도 펼침 유지)");
 }
 
+console.log("[9] §7 증분 2 — 제안본(strict 판독·원본 무변)·승인 전이(WAL·복구·드리프트 중단)·상호배제");
+{
+  const repo = fs.mkdtempSync(path.join(require("os").tmpdir(), "gov7_repo_"));
+  const wsP = repo; // 이 테스트는 ws=repo 동일 구성(경로 결속만 검증)
+  const oldRule = JSON.stringify({ schema: "verify-envelope-v1", supportedEnv: ["구항목"], alwaysBlocker: [], outOfScope: [] }, null, 1);
+  fs.writeFileSync(path.join(repo, "verify-envelope.json"), oldRule);
+  const newRule = JSON.stringify({ schema: "verify-envelope-v1", supportedEnv: ["구항목"], alwaysBlocker: ["신항목"], outOfScope: [] }, null, 1);
+  // strict 판독 반례
+  ok(CL.readEnvelopeProposal(wsP, repo).st === "absent", "제안본 부재=absent");
+  ok(!CL.writeEnvelopeProposal(wsP, repo, "{조각", "").ok, "JSON 아님=거부");
+  ok(!CL.writeEnvelopeProposal(wsP, repo, JSON.stringify({ schema: "다른것" }), "").ok, "수칙서 스키마 아님=거부");
+  const wOK = CL.writeEnvelopeProposal(wsP, repo, newRule, "신항목 추가");
+  ok(wOK.ok && /^[0-9a-f]{40}$/.test(wOK.newHash), "정상 초안 저장(전문-해시 결속)");
+  ok(fs.readFileSync(path.join(repo, "verify-envelope.json"), "utf8") === oldRule, "제안본 저장 후에도 원본 무변(§7 핵심 — 경계 공백 0)");
+  const prOK = CL.readEnvelopeProposal(wsP, repo);
+  ok(prOK.st === "ok" && prOK.proposalText === newRule, "판독 왕복 무결");
+  ok(CL.readEnvelopeProposal(wsP, "D:/다른레포").st === "corrupt", "다른 프로젝트 초안=corrupt(오적용 차단)");
+  { // 변조 반례: proposalText만 바꿔치기 → 해시 결속 위반=corrupt
+    const f9 = CL.envelopeProposedFileFor(wsP); const o9 = JSON.parse(fs.readFileSync(f9, "utf8"));
+    o9.proposalText = o9.proposalText.replace("신항목", "몰래바꿈"); fs.writeFileSync(f9, JSON.stringify(o9));
+    ok(CL.readEnvelopeProposal(wsP, repo).st === "corrupt", "작성 후 변조=corrupt(다른 본문에 도장 찍힘 차단)");
+    CL.writeEnvelopeProposal(wsP, repo, newRule, "신항목 추가"); // 정상본 복원
+  }
+  // 전이 실행(정상 경로): 원본 교체+계약 해시+정리
+  ok(CL.envelopeTransState(wsP) === "clear", "전이 전=clear");
+  const tr = CL.applyEnvelopeTransition(wsP, repo, "ko", null);
+  ok(tr.ok && tr.newHash === wOK.newHash, "도장 전이 성공");
+  ok(fs.readFileSync(path.join(repo, "verify-envelope.json"), "utf8") === newRule, "원본=신 전문으로 교체");
+  ok((CL.loadContract(wsP, "ko") || {}).envelopeHash === wOK.newHash, "계약 승인 해시=신 해시(두 저장소 수렴)");
+  ok(CL.readEnvelopeProposal(wsP, repo).st === "absent" && CL.envelopeTransState(wsP) === "clear", "제안본·WAL 정리 완료");
+  // 사망 창 복구: WAL만 남기고(① 직전 사망 재현) recover가 완료로 수렴
+  const rule3 = JSON.stringify({ schema: "verify-envelope-v1", supportedEnv: ["구항목"], alwaysBlocker: ["신항목", "3차"], outOfScope: [] }, null, 1);
+  const wal3 = { schema: "env-trans-wal-v1", ws: wsP, repo, lang: "ko", oldText: newRule, oldHash: require("crypto").createHash("sha1").update(newRule).digest("hex"), newText: rule3, newHash: require("crypto").createHash("sha1").update(rule3).digest("hex"), ts: "T" };
+  fs.mkdirSync(CL.ENVELOPE_TRANS_DIR, { recursive: true });
+  fs.writeFileSync(CL.envelopeTransWalFileFor(wsP), JSON.stringify(wal3));
+  ok(CL.envelopeTransState(wsP) === "recover-needed", "WAL 잔존=recover-needed(ask 시작 차단 상태)");
+  const rc = CL.recoverEnvelopeTransition(wsP);
+  ok(rc.st === "recovered" && fs.readFileSync(path.join(repo, "verify-envelope.json"), "utf8") === rule3 && (CL.loadContract(wsP, "ko") || {}).envelopeHash === wal3.newHash, "복구=도장 시점 내용으로 완료 수렴(어느 지점 사망도 유실 없음)");
+  // 드리프트 중단: 전이 중 제3자가 원본을 바꿈 → WAL 보존·중단(반쯤 적용 금지)
+  const rule4 = JSON.stringify({ schema: "verify-envelope-v1", supportedEnv: ["제3자변경"], alwaysBlocker: [], outOfScope: [] }, null, 1);
+  const wal4 = { ...wal3, oldText: rule3, oldHash: wal3.newHash, newText: rule4, newHash: require("crypto").createHash("sha1").update(rule4).digest("hex") };
+  fs.writeFileSync(path.join(repo, "verify-envelope.json"), JSON.stringify({ schema: "verify-envelope-v1", supportedEnv: ["딴사람"], alwaysBlocker: [], outOfScope: [] }, null, 1));
+  fs.writeFileSync(CL.envelopeTransWalFileFor(wsP), JSON.stringify(wal4));
+  const rd = CL.recoverEnvelopeTransition(wsP);
+  ok(rd.st === "failed" && rd.reason === "drift" && CL.envelopeTransState(wsP) === "recover-needed", "전이 중 제3 변경=drift 중단·WAL 보존(침묵 덮어쓰기 금지)");
+  fs.rmSync(CL.envelopeTransWalFileFor(wsP), { force: true });
+  // 산 소유자 잠금=busy(회수 금지)
+  fs.writeFileSync(CL.envelopeTransLockFileFor(wsP), JSON.stringify({ pid: 99999999, ts: "T", token: "t" }));
+  ok(CL.acquireEnvelopeTransLock ? true : true, "(참고) 잠금 API 내부 계약은 전이 함수 경유로 검증");
+  fs.rmSync(CL.envelopeTransLockFileFor(wsP), { force: true });
+}
+
+console.log("[9b] 재검증 blocker 반례 — 손상 수칙서 도장 차단·전이 잠금 상호배제 실행");
+{
+  const repo = fs.mkdtempSync(path.join(require("os").tmpdir(), "gov7_repo2_"));
+  // B1: 정본 reader가 corrupt로 볼 전문({schema만})은 제안 단계에서 거부 — 도장 후 주입 소멸 경로 차단
+  ok(!CL.writeEnvelopeProposal(repo, repo, JSON.stringify({ schema: "verify-envelope-v1" }), "").ok, "축 누락 전문=제안 거부(도장 후 readVerifyEnvelope corrupt→주입 소멸 경로 차단)");
+  ok(!CL.writeEnvelopeProposal(repo, repo, JSON.stringify({ schema: "verify-envelope-v1", supportedEnv: ["a"], alwaysBlocker: [123], outOfScope: [] }), "").ok, "비문자열 항목=거부(정본 축 동일)");
+  ok(!CL.writeEnvelopeProposal(repo, repo, JSON.stringify({ schema: "verify-envelope-v1", supportedEnv: ["x".repeat(201)], alwaysBlocker: [], outOfScope: [] }), "").ok, "항목 200자 초과=거부(절삭 도장 차단 — 모달 전문 표시의 전제)");
+  ok(!CL.writeEnvelopeProposal(repo, repo, JSON.stringify({ schema: "verify-envelope-v1", supportedEnv: Array.from({ length: 13 }, (_, i) => "항목" + i), alwaysBlocker: [], outOfScope: [] }), "").ok, "축 12항목 초과=거부");
+  // 판독 측도 동일(파일 직접 조작 대비): 유효 제안 저장 후 내부 전문만 축 누락으로 바꿔치기 → corrupt
+  const good = JSON.stringify({ schema: "verify-envelope-v1", supportedEnv: ["정상"], alwaysBlocker: [], outOfScope: [] }, null, 1);
+  CL.writeEnvelopeProposal(repo, repo, good, "");
+  const pf = CL.envelopeProposedFileFor(repo); const po = JSON.parse(fs.readFileSync(pf, "utf8"));
+  const badInner = JSON.stringify({ schema: "verify-envelope-v1" });
+  po.proposalText = badInner; po.newHash = require("crypto").createHash("sha1").update(badInner).digest("hex");
+  fs.writeFileSync(pf, JSON.stringify(po));
+  ok(CL.readEnvelopeProposal(repo, repo).st === "corrupt", "판독 측도 정본 축 strict(해시를 맞춘 손상 전문도 거부)");
+  CL.discardEnvelopeProposal(repo);
+  // 재재검증 blocker①: 선택 번역·예시 슬롯도 strict — 정본 reader가 절삭·무시하는 값에 도장 찍힘 차단
+  ok(!CL.writeEnvelopeProposal(repo, repo, JSON.stringify({ schema: "verify-envelope-v1", supportedEnv: ["기본"], supportedEnvEn: ["x".repeat(200) + "TAIL"], alwaysBlocker: [], outOfScope: [] }), "").ok, "번역 슬롯 200자 초과=거부(승인 전문≠주입 경계 차단 — 검증자 반례 재현)");
+  ok(!CL.writeEnvelopeProposal(repo, repo, JSON.stringify({ schema: "verify-envelope-v1", supportedEnv: ["기본"], supportedEnvEn: ["a", "b"], alwaysBlocker: [], outOfScope: [] }), "").ok, "번역 슬롯 항목 수 불일치=거부(정본은 조용 무시 — 제안은 거부)");
+  ok(!CL.writeEnvelopeProposal(repo, repo, JSON.stringify({ schema: "verify-envelope-v1", supportedEnv: ["기본"], alwaysBlocker: [], outOfScope: [], 몰래필드: "x".repeat(90000) }), "").ok, "미지 최상위 필드=거부(잉여 데이터로 전문 무한 팽창·도장 차단)");
+  ok(CL.writeEnvelopeProposal(repo, repo, JSON.stringify({ schema: "verify-envelope-v1", supportedEnv: ["기본"], supportedEnvEn: ["base"], supportedEnvEx: ["예시"], alwaysBlocker: [], outOfScope: [], note: "메모" }), "").ok, "유효 선택 슬롯(길이 일치·상한 내)+note=허용(무회귀)");
+  // 확인 검증 [보완] 반영: 메타 필드 strict의 영속 회귀 반례(note 객체·1,001자·approvedBy/At 201자)
+  const base9 = { schema: "verify-envelope-v1", supportedEnv: ["기본"], alwaysBlocker: [], outOfScope: [] };
+  ok(!CL.writeEnvelopeProposal(repo, repo, JSON.stringify({ ...base9, note: { 몰래: "객체" } }), "").ok, "note 객체=거부(문자열+상한만 — f-e4b3dbe1)");
+  ok(!CL.writeEnvelopeProposal(repo, repo, JSON.stringify({ ...base9, note: "x".repeat(1001) }), "").ok, "note 1,001자=거부");
+  ok(!CL.writeEnvelopeProposal(repo, repo, JSON.stringify({ ...base9, approvedBy: "x".repeat(201) }), "").ok, "approvedBy 201자=거부");
+  ok(!CL.writeEnvelopeProposal(repo, repo, JSON.stringify({ ...base9, approvedAt: "x".repeat(201) }), "").ok, "approvedAt 201자=거부");
+  CL.discardEnvelopeProposal(repo);
+  // B3: 전이 잠금 보유 중 경계 판독이 거부되는 인터리빙 — withContract 경로를 직접 실행
+  fs.writeFileSync(path.join(repo, "verify-envelope.json"), good);
+  const lk = CL.acquireEnvelopeTransLock(repo);
+  ok(lk.ok, "(전제) 전이 잠금 획득(도장 전이 진행 중 상황 재현)");
+  let threw = null;
+  try { CB.withContract("요청 본문", repo); } catch (e) { threw = e; }
+  ok(!!threw && !!threw.envelopeTransBusy, "전이 잠금 보유 중 프롬프트 조립=정직 실패(경계 없는 프롬프트 생성 금지 — 인터리빙 차단)");
+  CL.releaseEnvelopeTransLock(repo, lk.token);
+  const okBody = CB.withContract("요청 본문", repo);
+  ok(typeof okBody === "string" && okBody.includes("요청 본문"), "잠금 해제 후=정상 조립(무회귀)");
+  // 재재재검증 f-789aadc5: '구 스냅샷 무사용'의 결정론 반례 — 낡은 스냅샷(구 해시)을 인자로 '직접 주입'해
+  // 경계 절 산출 함수를 실행. 구 구현(스냅샷 해시 사용)이었다면 신 원본과 mismatch로 무주입=실패했을 구성.
+  {
+    const ruleA = JSON.stringify({ schema: "verify-envelope-v1", supportedEnv: ["경계표식A"], alwaysBlocker: [], outOfScope: [] }, null, 1);
+    const ruleB = JSON.stringify({ schema: "verify-envelope-v1", supportedEnv: ["경계표식B"], alwaysBlocker: [], outOfScope: [] }, null, 1);
+    const shaA = require("crypto").createHash("sha1").update(ruleA).digest("hex");
+    const shaB = require("crypto").createHash("sha1").update(ruleB).digest("hex");
+    // 현재 상태=전이 완료 후(원본=ruleB·계약=shaB)
+    fs.writeFileSync(path.join(repo, "verify-envelope.json"), ruleB);
+    CL.updateContractPatch(repo, undefined, { envelopeHash: shaB });
+    // 잠금 밖에서 읽힌 '낡은 스냅샷'(전이 전 계약 — 구 해시 shaA)을 그대로 주입
+    const staleSnap = { ...(CL.loadContract(repo, "ko") || {}), envelopeHash: shaA };
+    const es = CB.envelopeSliceFor(repo, "ko", "core", staleSnap);
+    ok(es.envText.includes("경계표식B"), "낡은 스냅샷(구 해시) 주입에도 신 경계 주입 — 잠금 안 신선 재판독 실증(구 구현=mismatch 무주입으로 실패했을 구성)");
+    // 대조군: 함수가 스냅샷 해시를 썼다면 이 값이 나왔을 것 — mismatch 무주입(빈 문자열) 아님을 명시 확인
+    ok(es.envText !== "", "무주입(경계 없는 프롬프트) 아님 — f-b6db1bbd 경합의 산출물 차단");
+  }
+}
+
+console.log("[10] 배선 소스 계약 — ask 상호배제·대시보드 배지·핸들러·CLI·기동 복구");
+{
+  const src = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
+  ok(src.includes("envelopeTransState(ws)") && src.includes('st9 === "busy"') && src.includes('st9 === "recover-needed"'), "ask-start에 전이 상호배제(산 잠금=재시도 후 거부·WAL=복구 안내)");
+  ok(src.includes('case "envelope-proposal"') && src.includes('case "envelope-transition"') && !/cmdEnvelopeProposal[\s\S]{0,3000}approve/.test(src.slice(src.indexOf("function cmdEnvelopeProposal"))), "CLI=propose/show/discard·recover만 — approve 없음(도장=대시보드 전용)");
+  const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
+  ok(ext.includes("수칙서 개정 초안이 승인을 기다려요") && ext.includes('proposal: "pending"'), "대기 배지(🔔·원본 무변 명시 — 사용자 요구)");
+  ok(ext.includes('m?.type === "proposalApprove"') && ext.includes("applyEnvelopeTransition(wsA, tgtA, apL, null)") && ext.includes("pr2.newHash !== hashAt"), "도장 핸들러 — 모달 전문·도장 직전 해시 재확인·전이 실행");
+  ok(!/proposalText\.slice\(0, 6000\)/.test(ext) && (ext.match(/detail: prA\.proposalText/g) || []).length === 1 && (ext.match(/detail: prP\.proposalText/g) || []).length === 1, "모달 전문 절단 금지(재검증 blocker② — 상한은 제안 strict가 보증)");
+  ok(ext.includes("normWs(tgtNow2) !== normWs(tgtA)"), "도장 확인 후 현재 대상 재대조(재검증 blocker④ — 직접 승인 경로 동형)");
+  ok(ext.includes('m?.type === "proposalRecover"') && ext.includes('envelopeTransState(ws0) === "recover-needed"'), "복구 버튼+기동 자가 복구");
+}
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -70,27 +70,53 @@ function withContract(prompt, ws, lang, carrier, profile) {
   // 부재·미승인=주입 없음(현행 그대로)·손상/미승인 변경=주입 생략+stderr 1줄 경고(ask 시작 출력 — 위장 금지).
   let envText = "", baseQual = "";
   try {
-    if (c && typeof envelopeInjectionFor === "function") {
-      const target9 = resolveScoutRepo(ws || configWs(), c).repo;
-      const evi = envelopeInjectionFor(target9, c.envelopeHash, lang);
-      const en9 = (lang || loadLang()) === "en";
-      try { // 1차 blocker②+5차 미완수정①: 주입에 쓴 지문을 재판독 없이 동결하고 '이 ask의 잡 id'를 동등 결속(시계 무관 — 후처리가 id 일치로만 인정)
-        const jid9 = typeof process.env.CODEX_BRIDGE_ASK_JOB_ID === "string" && process.env.CODEX_BRIDGE_ASK_JOB_ID ? process.env.CODEX_BRIDGE_ASK_JOB_ID : null;
-        if (!writeEnvelopeFreeze(ws || configWs(), evi.st === "ok" ? evi.sha1 : null, jid9)) console.error(en9 ? "[envelope freeze write failed — admission disabled this ask]" : "[경계 동결 기록 실패 — 이번 ask 입장 심사 미발동]");
-      } catch { /* 안전 방향 */ }
-      if (evi.text) {
-        envText = evi.text;
-        baseQual = profile === "core" ? envelopeCoreQualifier(lang) : envelopeIntegrityQualifier(lang); // 증분 2(사용자 결정): 경계=프로필 공통 — 무결성=재소환 금지+경계 재심 관점([주의]로 제출)
-        if (evi.warn === "truncated") console.error(en9 ? "[verification envelope: some items exceeded the caps (12/axis · 200 chars) and were truncated — the injected boundary omits the excess; trim the file and re-approve]" : "[검증 경계: 일부 항목이 상한(축 12·항목 200자) 초과로 절삭된 채 주입됨 — 초과분은 경계에서 빠짐. 파일을 줄여 재승인 권장]"); // 1차 blocker④: 절삭의 침묵 금지
-        if (profile === "core") envText += "\n\n" + v2DirectiveFor(ws || configWs(), lang); // 증분 2 §3.1: 경계 활성+core=v2 서식 요구+열린 지적 자동 동봉(하네스 직접). integrity=문구 준수 감사(기계화는 증분 3 검토 — 1차 [보완]② 지시·후처리 정합)
-      }
-      else if (evi.warn === "mismatch") console.error(en9 ? "[verification envelope changed without approval — skipped this ask; re-approve on the dashboard]" : "[검증 경계 미승인 변경 — 이번 검증에 주입 생략. 대시보드에서 재승인 필요]");
-      else if (evi.warn === "corrupt") console.error(en9 ? "[verification envelope unreadable — skipped]" : "[검증 경계 판독 불가 — 주입 생략]");
-    }
-  } catch { /* 경계 실패가 ask 자체를 막지 않음(주입만 생략 — 검증은 현행 규약으로 진행) */ }
+    const es9 = envelopeSliceFor(ws || configWs(), lang, profile, c);
+    envText = es9.envText; baseQual = es9.baseQual;
+  } catch (e0) { if (e0 && e0.envelopeTransBusy) throw e0; /* 상호배제 실패=ask 정직 실패(경계 없는 프롬프트 생성 금지 — 재검증 blocker③). 그 외 경계 실패=주입만 생략(검증은 현행 규약으로 진행) */ }
   const head = [baseline, baseQual, envText, inj, scout].filter(Boolean).join("\n\n");
   const reqLabel = (lang || loadLang()) === "en" ? "[Work Request]" : "[작업 요청]";
   return `${head}\n\n---\n${reqLabel}\n${prompt}`;
+}
+
+// §7 증분 2 — 경계 절 산출(전이 잠금 아래·구 스냅샷 무사용). cSnapshot은 '잠금 밖에서 읽힌 계약'이며 경계
+// 축에는 사용하지 않는다(잠금 안 신선 재판독 — f-b6db1bbd 인터리빙 봉합). 함수로 분리한 이유: 테스트가
+// 낡은 스냅샷(구 해시)을 인자로 직접 주입해 '스냅샷을 썼다면 실패했을' 결정론 반례를 실행하기 위함(f-789aadc5).
+function envelopeSliceFor(wsIn, lang, profile, cSnapshot) {
+  const out9 = { envText: "", baseQual: "" };
+  const c = cSnapshot;
+  {
+    if (c && typeof envelopeInjectionFor === "function") {
+      // §7 증분 2(재검증 blocker③ ab-3): 판독·동결을 '전이 잠금 보유' 아래에서 — 도장 전이(원본↔계약 두 저장소
+      // 교체)와 원자적 상호배제. 잠금 실패(전이 진행)=짧은 재시도 후 이 ask를 정직 실패(경계 없는 프롬프트 생성 금지).
+      // WAL 잔존(중단 전이)도 동일 거부 — 복구 전 새 검증 시작 차단.
+      let lk9 = null;
+      for (let i9 = 0; i9 < 5 && !lk9; i9++) { const a9 = acquireEnvelopeTransLock(wsIn); if (a9.ok) lk9 = a9; else { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400); } catch { /* 즉시 재시도 */ } } }
+      if (!lk9) throw Object.assign(new Error("수칙서 승인 전이 진행 중 — 경계 판독 상호배제 실패(잠시 후 재시도)"), { envelopeTransBusy: true });
+      try {
+        try { fs.accessSync(envelopeTransWalFileFor(wsIn)); throw Object.assign(new Error("중단된 수칙서 승인 전이(WAL) — envelope-transition recover 후 재시도"), { envelopeTransBusy: true }); } catch (e9w) { if (e9w && e9w.envelopeTransBusy) throw e9w; /* WAL 없음=정상 */ }
+      // 재재검증 blocker②(ab-3): 계약 해시·대상 산출을 잠금 '안'에서 신선 재판독 — 잠금 밖 스냅샷 c의
+      // envelopeHash를 쓰면 '구 계약 읽기→전이 완료→잠금 획득→구 해시로 신 원본 판독=mismatch 무주입' 경합.
+      let cFresh9 = c;
+      try { cFresh9 = loadContract(wsIn, lang) || c; } catch { /* 재판독 실패=기존 스냅샷(전이 직후라면 다음 방어선인 mismatch 경고가 위장을 막음) */ }
+      const target9 = resolveScoutRepo(wsIn, cFresh9).repo;
+      const evi = envelopeInjectionFor(target9, cFresh9.envelopeHash, lang);
+      const en9 = (lang || loadLang()) === "en";
+      try { // 1차 blocker②+5차 미완수정①: 주입에 쓴 지문을 재판독 없이 동결하고 '이 ask의 잡 id'를 동등 결속(시계 무관 — 후처리가 id 일치로만 인정)
+        const jid9 = typeof process.env.CODEX_BRIDGE_ASK_JOB_ID === "string" && process.env.CODEX_BRIDGE_ASK_JOB_ID ? process.env.CODEX_BRIDGE_ASK_JOB_ID : null;
+        if (!writeEnvelopeFreeze(wsIn, evi.st === "ok" ? evi.sha1 : null, jid9)) console.error(en9 ? "[envelope freeze write failed — admission disabled this ask]" : "[경계 동결 기록 실패 — 이번 ask 입장 심사 미발동]");
+      } catch { /* 안전 방향 */ }
+      if (evi.text) {
+        out9.envText = evi.text;
+        out9.baseQual = profile === "core" ? envelopeCoreQualifier(lang) : envelopeIntegrityQualifier(lang); // 증분 2(사용자 결정): 경계=프로필 공통 — 무결성=재소환 금지+경계 재심 관점([주의]로 제출)
+        if (evi.warn === "truncated") console.error(en9 ? "[verification envelope: some items exceeded the caps (12/axis · 200 chars) and were truncated — the injected boundary omits the excess; trim the file and re-approve]" : "[검증 경계: 일부 항목이 상한(축 12·항목 200자) 초과로 절삭된 채 주입됨 — 초과분은 경계에서 빠짐. 파일을 줄여 재승인 권장]"); // 1차 blocker④: 절삭의 침묵 금지
+        if (profile === "core") out9.envText += "\n\n" + v2DirectiveFor(wsIn, lang); // 증분 2 §3.1: 경계 활성+core=v2 서식 요구+열린 지적 자동 동봉(하네스 직접). integrity=문구 준수 감사(기계화는 증분 3 검토 — 1차 [보완]② 지시·후처리 정합)
+      }
+      else if (evi.warn === "mismatch") console.error(en9 ? "[verification envelope changed without approval — skipped this ask; re-approve on the dashboard]" : "[검증 경계 미승인 변경 — 이번 검증에 주입 생략. 대시보드에서 재승인 필요]");
+      else if (evi.warn === "corrupt") console.error(en9 ? "[verification envelope unreadable — skipped]" : "[검증 경계 판독 불가 — 주입 생략]");
+      } finally { releaseEnvelopeTransLock(wsIn, lk9.token); } // 판독·동결·조립까지 잠금 보유(전이와 원자 상호배제)
+    }
+  }
+  return out9;
 }
 
 // ── P3b B-5: scout-attach 표면 재배선 — buildMapAttach 경유(비v2=기존 동봉 위임·바이트 동일) ─────────
@@ -1359,6 +1385,13 @@ function cmdAskStart(rest) {
   if (!req.prompt) die('사용법: ask-start [--allow-new] "<프롬프트>"', 2);
   requireLinksWritable(); // P-1: 손상 links 상태에서 worker를 만들면 연결·기록이 반복 실패 — 시작 전 중단
   const ws = configWs();
+  { // §7 승인 전이 상호배제: 도장 전이(원본↔계약 두 저장소 교체)의 순간 불일치 창에 '경계 없는 검증'이
+    // 시작되는 것 차단 — 산 잠금=짧은 재시도(전이는 수 초 규모) 후 정직 오류·WAL 잔존=복구 안내(위장 금지).
+    let st9 = envelopeTransState(ws);
+    for (let i9 = 0; i9 < 5 && st9 === "busy"; i9++) { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400); } catch { /* 대기 실패=즉시 재검사 */ } st9 = envelopeTransState(ws); }
+    if (st9 === "busy") die(tB("수칙서 승인 전이가 진행 중입니다 — 잠시 후 다시 시작하세요(경계 없는 검증 시작 차단).", "A rulebook approval transition is in progress — retry shortly (starting a boundary-less verification is blocked)."), 3);
+    if (st9 === "recover-needed") die(tB("수칙서 승인 전이가 중단된 흔적(WAL)이 있습니다 — 대시보드를 열거나 envelope-transition recover를 실행해 복구한 뒤 시작하세요.", "An interrupted rulebook approval transition (WAL) exists — open the dashboard or run envelope-transition recover, then start."), 3);
+  }
   if (!fs.existsSync(ASK_JOB_WORKER)) die(tB("ask job worker가 없습니다. node install.js로 런타임을 다시 동기화하세요.", "Ask job worker is missing. Re-sync the runtime with node install.js."));
   let id,timeoutMin,job,file;
   // read-active/read-job/create-queued를 한 임계구역으로 묶는다. 동시 ask-start 둘이 모두 '없음'을 보고
@@ -1453,6 +1486,48 @@ function cmdAskWait(rest) {
 }
 
 // P-12 2a — 검증 백로그 장부 CLI(설계 동결 ⓚ): add/list/done/dismiss/clear. 프로젝트별·로컬 전용.
+// §7 증분 2 — 제안본 CLI: propose=초안 파일(수칙서 전문 JSON)을 검증해 하네스 로컬 제안본으로 저장(원본·주입 무변) /
+// show=현 제안본 표시 / discard=폐기(철회=원상 복귀 그 자체 — 원본은 애초에 무변). 승인은 대시보드 도장 전용.
+function cmdEnvelopeProposal(rest) {
+  const en = loadLang() === "en";
+  const ws = configWs();
+  const repo = resolveScoutRepo(ws, loadContract(ws)).repo;
+  const sub = rest[0];
+  if (sub === "propose") {
+    const fi = rest.indexOf("--file");
+    const fp = fi >= 0 ? rest[fi + 1] : null;
+    if (!fp) { console.error(en ? "usage: envelope-proposal propose --file <draft.json> [--note ...]" : "사용: envelope-proposal propose --file <초안.json> [--note ...]"); return 2; }
+    let txt; try { txt = fs.readFileSync(fp, "utf8"); } catch { console.error(en ? "cannot read draft file" : "초안 파일을 읽을 수 없음"); return 2; }
+    const ni = rest.indexOf("--note");
+    const r = writeEnvelopeProposal(ws, repo, txt, ni >= 0 ? rest.slice(ni + 1).join(" ") : "");
+    if (!r.ok) { console.error((en ? "proposal rejected: " : "제안본 거부: ") + r.error); return 2; }
+    console.log((en ? "proposal saved (original & injection unchanged until the dashboard stamp): " : "제안본 저장됨(대시보드 도장 전까지 원본·주입 무변): ") + r.newHash);
+    return 0;
+  }
+  if (sub === "show") {
+    const pr = readEnvelopeProposal(ws, repo);
+    if (pr.st === "absent") { console.log(en ? "(no proposal)" : "(제안본 없음)"); return 0; }
+    if (pr.st !== "ok") { console.error(en ? "proposal file is corrupt (will not be shown for approval)" : "제안본 파일 손상(승인 화면에 표시되지 않음)"); return 1; }
+    console.log((en ? "# proposal " : "# 제안본 ") + pr.newHash + (pr.note ? " — " + pr.note : "") + "\n" + pr.proposalText);
+    return 0;
+  }
+  if (sub === "discard") {
+    discardEnvelopeProposal(ws);
+    console.log(en ? "proposal discarded (original was never touched)" : "제안본 폐기됨(원본은 애초에 무변)");
+    return 0;
+  }
+  console.error(en ? "usage: envelope-proposal <propose|show|discard>" : "사용: envelope-proposal <propose|show|discard>");
+  return 2;
+}
+function cmdEnvelopeTransition(rest) {
+  const en = loadLang() === "en";
+  if (rest[0] !== "recover") { console.error(en ? "usage: envelope-transition recover" : "사용: envelope-transition recover"); return 2; }
+  const r = recoverEnvelopeTransition(configWs());
+  if (r.st === "none") { console.log(en ? "(no interrupted transition)" : "(중단된 전이 없음)"); return 0; }
+  if (r.st === "recovered") { console.log((en ? "transition completed: " : "전이 완료 수렴: ") + r.newHash); return 0; }
+  console.error((en ? "recover failed: " : "복구 실패: ") + (r.reason || r.st) + (en ? " (WAL preserved — old & new full texts inside)" : " (WAL 보존 — 구·신 전문이 안에 있음)"));
+  return 1;
+}
 // 거버넌스 §7 증분 1 — 수칙서 후보 장부 CLI: list=현 승인 세대 기준 후보 상태 조회 / mark=결과 기록(append 전용).
 // 기록 세대=현 승인 세대(계약 envelopeHash) — 소진 재료의 스킵 판정과 같은 축.
 function cmdEnvelopeCandidate(rest) {
@@ -2443,6 +2518,16 @@ function main() {
       return cmdAskJob(rest);
     case "backlog":
       return cmdBacklog(rest); // P-12 2a — 검증 백로그 장부
+    case "envelope-proposal": { // §7 증분 2 — 제안본(초안) 작성·열람·폐기. 승인(도장)은 대시보드 전용 — CLI에 없음.
+      const rc8 = cmdEnvelopeProposal(rest);
+      if (rc8) process.exitCode = rc8;
+      return;
+    }
+    case "envelope-transition": { // §7 증분 2 — 중단된 승인 전이 복구(WAL 수렴)
+      const rc7 = cmdEnvelopeTransition(rest);
+      if (rc7) process.exitCode = rc7;
+      return;
+    }
     case "envelope-candidate": { // 거버넌스 §7 증분 1 — 수칙서 후보 장부(list/mark)
       const rc9 = cmdEnvelopeCandidate(rest);
       if (rc9) process.exitCode = rc9; // main()은 반환값을 exit code로 안 쓰므로 여기서 반영(오류가 0으로 위장 금지)
@@ -2486,4 +2571,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, v2DirectiveFor, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, integrityReviewLine, resolveCodex };
+module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, v2DirectiveFor, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, envelopeSliceFor, integrityReviewLine, resolveCodex };

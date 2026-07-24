@@ -201,7 +201,7 @@ interface BridgeState {
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
   brainActual: { cc: string; cx: string; scout: string }; // 두뇌 '실제 답'(대화 기록 실측) 표시 문구 — 경고 아닌 평시 정보(피커 표시 결함 실사고 2026-07-08). 기록 없으면 '기록 없음' 문구. scout=마지막 정찰 실행(비용 장부 lastTs — 감사 일치 2026-07-10)
   hasTestsDir: boolean; // 표준 테스트 폴더(tests|test) '감지' 여부 — 성격 프로필용(미감지≠없음, 관행 밖은 못 봄)
-  envelope: { label: string; btn: string | null; btn2: string | null; repo: string; tone: string; lang: Lang } | null; // 거버넌스 증분 1(2차 배치 정정) — 검증 경계(수칙서). 최상위=2트랙 기본 프로젝트 포함·lang=렌더 슬롯 결속. null=부재/ws 없음
+  envelope: { label: string; btn: string | null; btn2: string | null; repo: string; tone: string; lang: Lang; proposal?: string } | null; // 거버넌스 증분 1(2차 배치 정정) — 검증 경계(수칙서). 최상위=2트랙 기본 프로젝트 포함·lang=렌더 슬롯 결속. null=부재/ws 없음
 }
 
 function normWs(p: string): string {
@@ -764,7 +764,7 @@ function envelopeDetailText(evv: any, en9: boolean): string {
 }
 // 거버넌스 증분 1(2차 배치 정정 — 구현검증 1차 blocker①②): 검증 경계는 정찰(3트랙)이 아니라 '검증' 계층이다 —
 // MAP 카드가 아닌 최상위 뷰 필드로 항상 계산(2트랙 기본 프로젝트에서도 승인 가능). lang=렌더 슬롯 결속(도장도 그 슬롯 계약에).
-function readEnvelopeView(ws: string | null): { label: string; btn: string | null; btn2: string | null; repo: string; tone: string; lang: Lang } | null {
+function readEnvelopeView(ws: string | null): { label: string; btn: string | null; btn2: string | null; repo: string; tone: string; lang: Lang; proposal?: string } | null {
   if (!ws) return null;
   try {
     const CL9: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
@@ -776,6 +776,19 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
     if (evv.st === "corrupt") return { label: tE("수칙서 파일이 깨져 있어 적용을 멈췄어요(verify-envelope.json 판독 불가 — 검증엔 주입 안 됨)", "The rulebook file is unreadable — not applied (verify-envelope.json is not injected)"), btn: null, btn2: null, repo: repo9, tone: "warn", lang: slot };
     let hash9: string | null = null;
     try { hash9 = (CL9.loadContract(ws, slot) || {}).envelopeHash || null; } catch { hash9 = null; }
+    // §7 증분 2: 개정 초안(제안본) 대기 — 원본·주입은 무변이지만 대시보드만 봐도 알 수 있게 강조(사용자 요구 2026-07-24).
+    // 중단된 전이(WAL)는 기동 복구가 수렴시키지만, 잔존하면 최우선 표시(경계 없는 검증 시작이 차단된 상태).
+    try {
+      if (typeof CL9.envelopeTransState === "function" && CL9.envelopeTransState(ws) === "recover-needed")
+        return { label: tE("수칙서 승인 전이가 중단된 흔적이 있어요 — '전이 복구'를 누르면 승인 순간의 내용으로 마무리됩니다(그 전까지 새 검증 시작이 차단돼요)", "An interrupted rulebook approval transition exists — press 'Recover' to complete it with the stamped content (new verifications are blocked until then)"), btn: tE("전이 복구", "Recover"), btn2: null, repo: repo9, tone: "warn", lang: slot, proposal: "recover" };
+      if (typeof CL9.readEnvelopeProposal === "function") {
+        const pr9 = CL9.readEnvelopeProposal(ws, repo9);
+        if (pr9 && pr9.st === "ok")
+          return { label: tE("🔔 수칙서 개정 초안이 승인을 기다려요 — 지금 적용 중인 수칙서는 그대로이고, 초안 내용을 확인한 뒤 도장을 찍어야만 바뀝니다", "🔔 A rulebook revision draft awaits approval — the active rulebook is unchanged; it changes only after you review and stamp the draft") + (pr9.note ? tE(" (메모: ", " (note: ") + pr9.note + ")" : ""), btn: tE("초안 확인·승인", "Review & approve draft"), btn2: tE("초안 보기", "View draft"), repo: repo9, tone: "warn", lang: slot, proposal: "pending" };
+        if (pr9 && pr9.st === "corrupt")
+          return { label: tE("수칙서 개정 초안 파일이 손상돼 승인 화면에 올릴 수 없어요 — 초안을 다시 작성해 달라고 요청하세요(적용 중인 수칙서는 무사)", "The rulebook draft file is corrupt and cannot be shown for approval — ask for the draft to be rewritten (the active rulebook is intact)"), btn: null, btn2: null, repo: repo9, tone: "warn", lang: slot, proposal: "corrupt" };
+      }
+    } catch { /* 초안 표시는 부가 — 실패해도 기존 카드 흐름 유지 */ }
     const n9 = [evv.data.supportedEnv.length, evv.data.alwaysBlocker.length, evv.data.outOfScope.length];
     // 2차 blocker①: 절삭 사실은 승인 '전' 상태에서도 숨기지 않는다 — 잘린 내용을 못 본 채 원본 지문을 승인하는 경로 차단(핸들러가 승인 거부).
     const cutNote9 = evv.truncated === true ? tE(" ⚠ 일부 항목이 상한(축 12·항목 200자)을 넘어 잘립니다 — 파일을 줄이기 전에는 승인할 수 없어요.", " ⚠ Some items exceed the caps (12/axis · 200 chars) — approval is blocked until the file is trimmed.") : "";
@@ -3353,6 +3366,55 @@ class Dashboard {
           });
           return;
         }
+        if (m?.type === "proposalShow" && typeof m.repo === "string" && m.repo) { // §7 증분 2 — 초안 열람(승인 아님)
+          const wsP = dashboardWorkspace(); if (!wsP) return;
+          const enP = (m.lang === "en");
+          let prP: any = null;
+          try { const CL9: any = require(path.join(BRIDGE_DIR, "contract-lib.js")); prP = typeof CL9.readEnvelopeProposal === "function" ? CL9.readEnvelopeProposal(wsP, m.repo) : null; } catch { prP = null; }
+          if (!prP || prP.st !== "ok") { vscode.window.showWarningMessage(enP ? "Cannot read the draft." : "초안을 읽을 수 없어요."); this.post(); return; }
+          vscode.window.showInformationMessage(enP ? "Rulebook revision draft (view only — the active rulebook is unchanged)" : "수칙서 개정 초안(열람 전용 — 지금 적용 중인 수칙서는 그대로예요)", { modal: true, detail: prP.proposalText }, enP ? "Close" : "닫기"); // 절단 금지(재검증 blocker② — 상한은 제안본 strict가 보증해 전문이 유계)
+          return;
+        }
+        if (m?.type === "proposalRecover") { // §7 증분 2 — 중단 전이 복구(승인 순간의 내용으로 수렴 — 새 도장 아님)
+          const wsR = dashboardWorkspace(); if (!wsR) return;
+          const enR = loadLangExt() === "en";
+          let rr: any = null;
+          try { const CL9: any = require(path.join(BRIDGE_DIR, "contract-lib.js")); rr = typeof CL9.recoverEnvelopeTransition === "function" ? CL9.recoverEnvelopeTransition(wsR) : null; } catch { rr = null; }
+          if (rr && rr.st === "recovered") vscode.window.showInformationMessage(enR ? "Transition completed with the stamped content." : "중단됐던 승인 전이를 도장 시점 내용으로 마무리했어요.");
+          else if (rr && rr.st === "none") vscode.window.showInformationMessage(enR ? "No interrupted transition." : "중단된 전이가 없습니다.");
+          else vscode.window.showWarningMessage((enR ? "Recovery failed: " : "복구 실패: ") + ((rr && (rr.reason || rr.st)) || "unknown") + (enR ? " (the WAL is preserved — old & new full texts inside)" : " (기록 보존 — 구·신 전문이 안에 있어 유실 없음)"));
+          this.post(); return;
+        }
+        if (m?.type === "proposalApprove" && typeof m.repo === "string" && m.repo) { // §7 증분 2 — 초안 도장(사용자 전용 표면·전이=잠금+WAL)
+          const wsA = dashboardWorkspace(); if (!wsA) return;
+          const enA = (m.lang === "en");
+          const apL: Lang = (m.lang === "en" || m.lang === "ko") ? m.lang : loadLangExt();
+          const tgtA = scoutTargetFor(wsA).repo;
+          if (normWs(tgtA) !== normWs(m.repo)) { vscode.window.showWarningMessage(enA ? "The scout target changed — the card refreshes. Please open it again." : "정찰 대상이 바뀌었어요 — 카드가 갱신됩니다. 다시 열어 주세요."); this.post(); return; }
+          let CLA: any = null, prA: any = null;
+          try { CLA = require(path.join(BRIDGE_DIR, "contract-lib.js")); prA = typeof CLA.readEnvelopeProposal === "function" ? CLA.readEnvelopeProposal(wsA, tgtA) : null; } catch { prA = null; }
+          if (!prA || prA.st !== "ok" || typeof CLA.applyEnvelopeTransition !== "function") { vscode.window.showWarningMessage(enA ? "Cannot read the draft — approval aborted." : "초안을 읽을 수 없어 승인할 수 없어요."); this.post(); return; }
+          const hashAt = String(prA.newHash);
+          const okA = enA ? "Reviewed the draft — stamp & apply" : "초안을 확인했고 도장을 찍어 적용합니다";
+          const msgA = enA
+            ? "Approve the rulebook REVISION draft — the full text below replaces the current rulebook the moment you stamp (until then nothing changes). If you disagree with any item, cancel and tell the implementer what to change; the draft gets rewritten. To withdraw entirely: ask to discard the draft — the current rulebook stays as is."
+            : "수칙서 '개정 초안' 승인 — 도장을 찍는 순간 아래 전문이 현재 수칙서를 교체합니다(그 전까지는 아무것도 바뀌지 않아요). 동의하지 않는 항목이 있으면 취소하고 바꿀 점을 구현모델에게 말씀해 주세요 — 초안을 다시 씁니다. 전체 철회를 원하면 초안 폐기를 요청하시면 되고, 현재 수칙서는 그대로 유지됩니다.";
+          vscode.window.showInformationMessage(msgA, { modal: true, detail: prA.proposalText }, okA).then((sel) => { // 절단 금지 — 못 본 후반부에 도장이 찍히는 경로 차단(재검증 blocker②)
+            if (sel !== okA) return;
+            const wsNow2 = dashboardWorkspace(); // 재검증 blocker④(ab-1): 모달 사이 대상 변경=중단(직접 승인 경로 동형)
+            const tgtNow2 = wsNow2 ? scoutTargetFor(wsNow2).repo : null;
+            if (!tgtNow2 || normWs(tgtNow2) !== normWs(tgtA)) { vscode.window.showWarningMessage(enA ? "The target changed during approval — not applied." : "승인하는 사이 정찰 대상이 바뀌어 적용하지 않았습니다."); this.post(); return; }
+            let pr2: any = null;
+            try { pr2 = CLA.readEnvelopeProposal(wsA, tgtA); } catch { pr2 = null; }
+            if (!pr2 || pr2.st !== "ok" || pr2.newHash !== hashAt) { vscode.window.showWarningMessage(enA ? "The draft changed while approving — not applied. Please review again." : "승인하는 사이 초안이 바뀌어 적용하지 않았습니다 — 다시 확인해 주세요."); this.post(); return; }
+            let tr: any = null;
+            try { tr = CLA.applyEnvelopeTransition(wsA, tgtA, apL, null); } catch { tr = null; }
+            if (tr && tr.ok) vscode.window.showInformationMessage(enA ? "Draft stamped — the revised rulebook applies from the next verification." : "초안 도장 완료 — 개정 수칙서가 다음 검증부터 적용됩니다.");
+            else vscode.window.showWarningMessage((enA ? "Transition failed: " : "전이 실패: ") + ((tr && tr.reason) || "unknown") + (enA ? " — nothing is half-applied (the WAL/lock keeps it recoverable); try again or press Recover." : " — 반쯤 적용된 상태는 없습니다(기록·잠금이 복구를 보장). 다시 시도하거나 '전이 복구'를 눌러 주세요."));
+            this.post();
+          });
+          return;
+        }
         if (m?.type === "cutoverConfirm" && typeof m.n === "number" && Number.isInteger(m.n) && m.n > 0 && typeof m.repo === "string" && m.repo) { // C-7 원클릭 전환(미이관 N>0 — informed 동의는 이 모달이 담당)
           const wsC7 = dashboardWorkspace();
           const targetC7 = wsC7 ? scoutTargetFor(wsC7).repo : null;
@@ -5481,8 +5543,10 @@ class Dashboard {
       safe(function(){ var ec=$("envCard"); if(!ec) return; var e9=d.envelope; ec.innerHTML=""; if(!e9){ ec.style.display="none"; return; } ec.style.display="block";
         var h9=document.createElement("div"); h9.style.fontWeight="600"; h9.textContent=(d.lang==="en"?"Verification envelope (rulebook)":"검증 경계(수칙서)"); ec.appendChild(h9);
         var s9=document.createElement("div"); if(e9.tone==="warn"){ s9.style.cssText="color:var(--vscode-editorWarning-foreground,#d9a441)"; } else { s9.className="muted"; } s9.textContent=e9.label; ec.appendChild(s9);
-        if(e9.btn){ var ab=document.createElement("button"); ab.style.cssText="margin-top:4px;font-weight:700"; ab.textContent=e9.btn; ab.addEventListener("click", function(){ vscode.postMessage({type:"envelopeApprove", repo: e9.repo, lang: e9.lang}); }); ec.appendChild(ab); }
-        if(e9.btn2){ var vb2=document.createElement("button"); vb2.style.cssText="margin-top:4px;margin-left:4px"; vb2.textContent=e9.btn2; vb2.addEventListener("click", function(){ vscode.postMessage({type:"envelopeShow", repo: e9.repo, lang: e9.lang}); }); ec.appendChild(vb2); }
+        var actT=e9.proposal==="recover"?"proposalRecover":e9.proposal==="pending"?"proposalApprove":"envelopeApprove"; // §7 증분 2 — 초안·복구는 별도 채널(도장=사용자 전용 표면)
+        var act2T=e9.proposal==="pending"?"proposalShow":"envelopeShow";
+        if(e9.btn){ var ab=document.createElement("button"); ab.style.cssText="margin-top:4px;font-weight:700"; ab.textContent=e9.btn; ab.addEventListener("click", function(){ vscode.postMessage({type:actT, repo: e9.repo, lang: e9.lang}); }); ec.appendChild(ab); }
+        if(e9.btn2){ var vb2=document.createElement("button"); vb2.style.cssText="margin-top:4px;margin-left:4px"; vb2.textContent=e9.btn2; vb2.addEventListener("click", function(){ vscode.postMessage({type:act2T, repo: e9.repo, lang: e9.lang}); }); ec.appendChild(vb2); }
       });
       safe(function(){ var n=$("vBudgetNote"); if(!n) return;
         var inh = ccMode && d.contract.codexVerifyBudgetRawVal===null && d.contract.codexVerifyBudget>0;
@@ -7285,6 +7349,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // 두뇌 drift 입력원 감시 ②: 트랜스크립트(CLAUDE_HOME/projects/**/*.jsonl, CLAUDE_CONFIG_DIR일 수 있음)는 응답마다 잦게 append돼 재귀 watch가 과하다 →
   // 15s 주기 폴링으로 '최근 응답 모델' 변화와 drift 해소(적용되면 사라짐)를 따라잡는다. render는 syncBrainDriftFor 1.5s throttle로 비용 한정(폴링 1회=최대 drift 1회).
+  // §7 증분 2 — 기동 자가 복구: 중단된 수칙서 승인 전이(WAL 잔존)를 도장 시점 내용으로 수렴(멱등·없으면 no-op).
+  // 실패해도 카드 배지+ask 차단이 상태를 가시화하므로 침묵 유실 없음.
+  try { const ws0 = dashboardWorkspace(); if (ws0) { const CL0: any = require(path.join(BRIDGE_DIR, "contract-lib.js")); if (typeof CL0.envelopeTransState === "function" && CL0.envelopeTransState(ws0) === "recover-needed" && typeof CL0.recoverEnvelopeTransition === "function") CL0.recoverEnvelopeTransition(ws0); } } catch { /* 기동 차단 금지 */ }
   const driftPoll = setInterval(() => { try { render(); } catch (e) { console.warn("codex-bridge: status render failed", e); } dashboard.post(); }, 15000); // render 예외가 post를 못 막게 격리(위 scheduleRender와 동일 원칙)
   // settings.json은 Claude Code가 원자 교체할 때 Windows fs.watch 이벤트가 실제로 누락될 수 있다. 포커스된 창에서만
   // 작은 설정 파일을 짧게 폴링해 변경을 프로젝트에 귀속하고, 잡힌 경우 즉시 경고를 다시 계산한다.

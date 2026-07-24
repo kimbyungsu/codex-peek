@@ -3092,6 +3092,122 @@ function appendFindingsLedger(ws, recs) {
     return true;
   } catch { return false; }
 }
+// ── §7 제안본·승인 도장 전이(거버넌스 §7 — 원본·주입 무변 초안+2저장소 전이의 WAL 원자화) ──
+// 제안본=하네스 로컬(repo 오염 0): {schema:"env-proposal-v1", repo, proposalText(수칙서 전문 문자열),
+// newHash(sha1(proposalText)), baseHash(제안 시점 승인 해시 — 정보용), note?, ts}. 도장 전이는 확장(대시보드)
+// 전용 표면에서만 실행(도장=사용자 전용 — CLI에 approve를 만들지 않는다: 구현모델이 도장 가능해지는 경로 차단).
+const ENVELOPE_PROPOSED_DIR = path.join(BRIDGE_DIR, "verify-envelope-proposed");
+const ENVELOPE_TRANS_DIR = path.join(BRIDGE_DIR, "envelope-transitions");
+function envelopeProposedFileFor(ws) { return path.join(ENVELOPE_PROPOSED_DIR, wsKeyFor(ws) + ".json"); }
+function envelopeTransWalFileFor(ws) { return path.join(ENVELOPE_TRANS_DIR, wsKeyFor(ws) + ".wal.json"); }
+function envelopeTransLockFileFor(ws) { return path.join(ENVELOPE_TRANS_DIR, wsKeyFor(ws) + ".lock"); }
+function sha1Of(s) { return crypto.createHash("sha1").update(s).digest("hex"); }
+// 제안 전문의 strict 판정(재검증 blocker① ab-3 — 정본 reader와 같은 축): 세 축 전부 비공백 문자열 배열이고
+// 상한(축 12·항목 200자) 이내여야 유효. 상한 초과=거부 — 절삭된 채 도장 찍히는 경로(기존 승인 계약과 동형) 차단.
+function validEnvelopeProposalInner(inner) {
+  if (!inner || typeof inner !== "object" || Array.isArray(inner) || inner.schema !== "verify-envelope-v1") return false;
+  const allowed = new Set(["schema", "note", "approvedBy", "approvedAt"]); // 미지 최상위 필드=거부(재재검증 blocker① — '유계' 주장의 실보장: 정본 reader가 무시하는 잉여 데이터에 도장 찍힘 차단)
+  const strAxis = (arr, mustLen) => Array.isArray(arr) && (mustLen === undefined || arr.length === mustLen) && arr.length <= ENVELOPE_ITEM_MAX && !arr.some((x) => typeof x !== "string" || !x.trim() || x.trim().length > ENVELOPE_CHAR_MAX);
+  for (const ax of ENVELOPE_AXES) {
+    allowed.add(ax); allowed.add(ax + "En"); allowed.add(ax + "Ex");
+    if (!strAxis(inner[ax])) return false;
+    // 선택 번역·예시 슬롯: 존재하면 정본 reader의 유효 조건(길이 일치·전항목 문자열)+상한을 '거부'로 강제 —
+    // 정본은 무효를 조용히 무시·초과를 절삭하지만, 제안은 도장 대상이므로 승인 전문=주입 경계 동일성이 계약.
+    for (const suf of ["En", "Ex"]) { const opt = inner[ax + suf]; if (opt !== undefined && !strAxis(opt, inner[ax].length)) return false; }
+  }
+  for (const k of Object.keys(inner)) if (!allowed.has(k)) return false;
+  // 메타 필드도 '존재하면 문자열+상한' 강제(재재재검증 f-e4b3dbe1 — note 객체·무상한 메타로 유계 계약 우회 차단)
+  if (inner.note !== undefined && (typeof inner.note !== "string" || inner.note.length > 1000)) return false;
+  if (inner.approvedBy !== undefined && (typeof inner.approvedBy !== "string" || inner.approvedBy.length > 200)) return false;
+  if (inner.approvedAt !== undefined && (typeof inner.approvedAt !== "string" || inner.approvedAt.length > 200)) return false;
+  return true;
+}
+// 제안본 판독 — strict: wrapper 형태·repo 일치·전문이 verify-envelope-v1로 실파싱·해시 결속. 이형=corrupt(위장 금지).
+function readEnvelopeProposal(ws, repo) {
+  let raw;
+  try { raw = fs.readFileSync(envelopeProposedFileFor(ws), "utf8"); } catch (e) { return { st: e && e.code === "ENOENT" ? "absent" : "corrupt" }; }
+  let o; try { o = JSON.parse(raw); } catch { return { st: "corrupt" }; }
+  if (!o || typeof o !== "object" || Array.isArray(o) || o.schema !== "env-proposal-v1") return { st: "corrupt" };
+  if (typeof o.proposalText !== "string" || !o.proposalText || typeof o.newHash !== "string") return { st: "corrupt" };
+  if (repo !== undefined && normWs(String(o.repo || "")) !== normWs(String(repo || ""))) return { st: "corrupt" }; // 다른 프로젝트 초안 오적용 차단
+  if (sha1Of(o.proposalText) !== o.newHash) return { st: "corrupt" }; // 전문-해시 결속(작성 후 변조=거부)
+  let inner; try { inner = JSON.parse(o.proposalText); } catch { return { st: "corrupt" }; }
+  if (!validEnvelopeProposalInner(inner)) return { st: "corrupt" }; // 정본 reader와 같은 축의 strict — 손상 수칙서에 도장 찍힌 뒤 주입이 사라지는 경로 차단(재검증 blocker①)
+  return { st: "ok", proposalText: o.proposalText, newHash: o.newHash, baseHash: typeof o.baseHash === "string" ? o.baseHash : null, note: typeof o.note === "string" ? o.note.slice(0, 300) : "", ts: typeof o.ts === "string" ? o.ts : null };
+}
+function writeEnvelopeProposal(ws, repo, proposalText, note) {
+  try { const inner = JSON.parse(proposalText); if (!validEnvelopeProposalInner(inner)) return { ok: false, error: "제안 전문이 정본 수칙서 계약(3축 문자열 배열·축 12·항목 200자)에 맞지 않음" }; } catch { return { ok: false, error: "제안 전문 JSON 파싱 실패" }; }
+  let baseHash = null; try { const evv = readVerifyEnvelope(repo); if (evv.st === "ok") baseHash = evv.sha1; } catch { /* 정보용 */ }
+  const rec = { schema: "env-proposal-v1", repo: String(repo), proposalText: String(proposalText), newHash: sha1Of(String(proposalText)), baseHash, ...(note ? { note: String(note).slice(0, 300) } : {}), ts: new Date().toISOString() };
+  try { fs.mkdirSync(ENVELOPE_PROPOSED_DIR, { recursive: true }); } catch { /* atomicWrite가 실패 판정 */ }
+  return atomicWrite(envelopeProposedFileFor(ws), JSON.stringify(rec, null, 1)) ? { ok: true, newHash: rec.newHash } : { ok: false, error: "제안본 기록 실패" };
+}
+function discardEnvelopeProposal(ws) { try { fs.rmSync(envelopeProposedFileFor(ws), { force: true }); return true; } catch { return false; } }
+// 전이 잠금 — 구조화 토큰{pid, ts, token}·wx 생성. 사망 소유자만 rename 격리 후 재선점(P8 run-lock 문법)·산 소유자=거부.
+function acquireEnvelopeTransLock(ws) {
+  const f = envelopeTransLockFileFor(ws);
+  try { fs.mkdirSync(ENVELOPE_TRANS_DIR, { recursive: true }); } catch { return { ok: false, reason: "mkdir" }; }
+  const token = crypto.randomUUID();
+  const tryWrite = () => { try { fs.writeFileSync(f, JSON.stringify({ pid: process.pid, ts: new Date().toISOString(), token }), { flag: "wx" }); return true; } catch { return false; } };
+  if (tryWrite()) return { ok: true, token };
+  let cur; try { cur = JSON.parse(fs.readFileSync(f, "utf8")); } catch { cur = null; }
+  const pid = cur && Number.isInteger(cur.pid) ? cur.pid : null;
+  const dead = pid === null || pid === process.pid ? pid === null : (() => { try { process.kill(pid, 0); return false; } catch (e) { return !!(e && e.code === "ESRCH"); } })();
+  if (!dead) return { ok: false, reason: "busy" }; // 산 소유자(또는 판독 불가 아닌 자기 자신)=회수 금지
+  const iso = f + ".dead-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+  try { fs.renameSync(f, iso); } catch { return { ok: false, reason: "busy" }; } // 경합 패배=다른 회수자 선점
+  try { fs.rmSync(iso, { force: true }); } catch { /* 잔재 무해 */ }
+  return tryWrite() ? { ok: true, token } : { ok: false, reason: "busy" };
+}
+function releaseEnvelopeTransLock(ws, token) {
+  const f = envelopeTransLockFileFor(ws);
+  try { const cur = JSON.parse(fs.readFileSync(f, "utf8")); if (cur && cur.token === token) fs.rmSync(f, { force: true }); } catch { /* 이미 없음=무해 */ }
+}
+// ask 상호배제 판정: 산 전이 잠금=busy / WAL 잔존=recover-needed / 그 외=clear(§7 — 순간 불일치 창의 경계 없는 검증 시작 차단)
+function envelopeTransState(ws) {
+  try { const cur = JSON.parse(fs.readFileSync(envelopeTransLockFileFor(ws), "utf8")); const pid = cur && Number.isInteger(cur.pid) ? cur.pid : null; if (pid !== null && pid !== process.pid) { try { process.kill(pid, 0); return "busy"; } catch (e) { if (!(e && e.code === "ESRCH")) return "busy"; } } } catch { /* 잠금 없음/손상=아래 WAL 검사 */ }
+  try { fs.accessSync(envelopeTransWalFileFor(ws)); return "recover-needed"; } catch { return "clear"; }
+}
+// 도장 전이 본체(§7 승인 도장 전이 계약): ⓪잠금+WAL 선기록(구·신 전문) ①원본 교체 ②계약 해시 기록 ③정리.
+// 호출자=확장 승인 핸들러(도장 직후)·복구 스캐너. lang=계약 슬롯(확장 렌더 슬롯과 결속).
+function applyEnvelopeTransition(ws, repo, lang, wal) {
+  const lk = acquireEnvelopeTransLock(ws);
+  if (!lk.ok) return { ok: false, reason: lk.reason };
+  try {
+    const walFile = envelopeTransWalFileFor(ws);
+    if (!wal) { // 신규 전이: 제안본에서 WAL 구성(복구 재개는 기존 WAL 전달)
+      const pr = readEnvelopeProposal(ws, repo);
+      if (pr.st !== "ok") return { ok: false, reason: pr.st === "absent" ? "no-proposal" : "proposal-corrupt" };
+      let oldText = null, oldHash = null;
+      try { oldText = fs.readFileSync(path.join(repo, ENVELOPE_FILE), "utf8"); oldHash = sha1Of(oldText); } catch (e) { if (!e || e.code !== "ENOENT") return { ok: false, reason: "old-unreadable" }; }
+      wal = { schema: "env-trans-wal-v1", ws: String(ws), repo: String(repo), lang: lang || null, oldText, oldHash, newText: pr.proposalText, newHash: pr.newHash, ts: new Date().toISOString() };
+      if (!atomicWrite(walFile, JSON.stringify(wal, null, 1))) return { ok: false, reason: "wal-write" };
+    }
+    // ① 원본 교체(원본=신 해시면 멱등 통과 — 복구 재개 분기)
+    let curHash = null; try { curHash = sha1Of(fs.readFileSync(path.join(repo, ENVELOPE_FILE), "utf8")); } catch { curHash = null; }
+    if (curHash !== wal.newHash) {
+      if (curHash !== wal.oldHash) return { ok: false, reason: "drift" }; // 전이 중 제3 변경=중단(WAL 보존 — 사용자 재확인)
+      if (!atomicWrite(path.join(repo, ENVELOPE_FILE), wal.newText)) return { ok: false, reason: "replace-failed" };
+    }
+    // ② 계약 해시 기록(멱등)
+    const up = updateContractPatch(ws, wal.lang || undefined, { envelopeHash: wal.newHash });
+    if (!up || !up.ok) return { ok: false, reason: "contract-write" };
+    // ③ 정리 — WAL 완료·제안본 폐기
+    try { fs.rmSync(walFile, { force: true }); } catch { /* 잔존=다음 복구가 멱등 완료 */ }
+    discardEnvelopeProposal(ws);
+    return { ok: true, newHash: wal.newHash };
+  } finally { releaseEnvelopeTransLock(ws, lk.token); }
+}
+// 복구 스캐너: WAL 잔존 시 상태별 수렴(§7 복구 규칙 — 완료 방향 재개. 원복은 사용자 판단 영역이라 자동 실행하지 않고
+// WAL 보존+사유 반환: 구 전문이 WAL에 있어 어느 쪽으로도 안전).
+function recoverEnvelopeTransition(ws) {
+  let wal;
+  try { wal = JSON.parse(fs.readFileSync(envelopeTransWalFileFor(ws), "utf8")); } catch (e) { return { st: e && e.code === "ENOENT" ? "none" : "wal-corrupt" }; }
+  if (!wal || typeof wal !== "object" || wal.schema !== "env-trans-wal-v1" || typeof wal.newText !== "string" || typeof wal.newHash !== "string") return { st: "wal-corrupt" };
+  const r = applyEnvelopeTransition(wal.ws, wal.repo, wal.lang, wal);
+  return r.ok ? { st: "recovered", newHash: r.newHash } : { st: "failed", reason: r.reason };
+}
+
 // ── §7 수칙서 후보 장부(거버넌스 §7 — 재제시 금지의 내구 기록) ─────────────────────
 // append 전용 JSONL: {candidateId(계보 기반 결정론 16hex), envelopeHash(제시 시점 승인 세대), status:
 // proposed|adopted|declined|failed, ts, note?}. 같은 (candidateId, envelopeHash)의 최신 status가 유효 —
@@ -3422,7 +3538,7 @@ function formatForClaude(answer, lang, profile, machine) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}${machineLine}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, selfAdapterSha, selfExecFp, precisionExecFp, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, selfAdapterSha, selfExecFp, precisionExecFp, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
 module.exports.codexImplementerSession = codexImplementerSession;
 module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
 // P-6 회수 영수증 계약(설계 v5.1)

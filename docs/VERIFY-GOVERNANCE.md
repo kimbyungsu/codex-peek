@@ -308,7 +308,7 @@ WAL 잔존 시 — 원본=신 해시면 ②부터 재개 / 원본=구 해시면 
 status: proposed|adopted|declined|failed, ts, note}. 재제시 판정=같은 (candidateId, envelopeHash)에
 declined|failed 기록 있으면 그 세대에서 스킵(새 승인 세대=재제시 가능·세대 전환이 자연 리셋).
 
-**구현 배치**: [증분 1 구현 완료 2026-07-24] ⓪후보 장부(verify-envelope-candidates·CLI envelope-candidate list/mark) ①occurrence 레코드+소진 보고 후보 재료 병기(envelopeCandidateNoticeFor — ①②③ 기계 집계·0건 명시·재제시 스킵)+작성 의무 문구(§8 계약 참조) / [후속 증분] ⓪-2 제안본 파일·승인 전이(잠금·WAL·복구·상호 배제) ②캐논: 소진 보고 규약에 '수칙서 후보' 절 의무+표현 계약 편입 ③대시보드 표시(선택).
+**구현 배치**: [증분 1 구현 완료 2026-07-24] ⓪후보 장부(verify-envelope-candidates·CLI envelope-candidate list/mark) ①occurrence 레코드+소진 보고 후보 재료 병기(envelopeCandidateNoticeFor — ①②③ 기계 집계·0건 명시·재제시 스킵)+작성 의무 문구(§8 계약 참조) / [증분 2 구현 완료 2026-07-24] ⓪-2 제안본 파일(하네스 로컬 env-proposal-v1 — strict 판독·전문-해시 결속·CLI envelope-proposal propose/show/discard[approve 없음 — 도장=대시보드 전용])·승인 전이(전이 잠금{pid,ts,token} 사망 회수·WAL 구·신 전문·복구 수렴·drift 중단·ask-start 상호배제·대시보드 🔔 대기 배지+도장 모달+전이 복구 버튼+기동 자가 복구) / [후속 증분] 대시보드 선택 기록 버튼·빼기/병합 후보·항목 수 임계 ②캐논: 소진 보고 규약에 '수칙서 후보' 절 의무+표현 계약 편입 ③대시보드 표시(선택).
 
 ## 8. 사용자 대면 선택 출력의 표현 계약 (전역 — 사용자 지시 2026-07-24)
 
