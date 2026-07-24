@@ -343,7 +343,7 @@ const DEFAULT_CLASSIFICATION = {
   change_relation: "verifier-resolved", split_node: "verifier-resolved", split_edge: "verifier-resolved",
   merge_node: "verifier-resolved", merge_edge: "verifier-resolved", widen: "verifier-resolved", narrow: "verifier-resolved",
   supersede: "verifier-resolved", tombstone_candidate: "needs-investigation",
-  change_steward: "intent-choice", change_authority: "intent-choice", rewrite_label: "verifier-resolved",
+  change_steward: "verifier-resolved", change_authority: "verifier-resolved", rewrite_label: "verifier-resolved", // P9 ⓒ 확정(2026-07-24): 비정책 의미 제안=검증 담당 판정(카드 폐지 — 정책 op만 사용자 선택)
   create_intent_policy: "intent-choice", supersede_intent_policy: "intent-choice", revoke_intent_policy: "intent-choice",
 };
 function classifyPatch(repo, mapId, patchId) {
@@ -372,6 +372,66 @@ function classifyPatch(repo, mapId, patchId) {
   });
   if (!wrote.ok || !wrote.result.ok) return { ok: false, error: (wrote.result && wrote.result.error) || wrote.error };
   return { ok: true, classification, errors: verdict.errors };
+}
+
+// P9 v12 개정 ②(ⓒ 확정 2026-07-24): 기존 '비정책 op+classification=intent-choice' pending을 재분류로 전환 —
+// 기본 분류 개정(change_steward/authority→verifier-resolved) 전에 저장된 pending이 영구 잔존하지 않게, 실행기가
+// 시작 시 1회 스윕한다. classified만 대상(claimed·종결=classifyPatch가 자체 거부)·정책 op=불가침(사용자 선택 전용).
+// 유물 표지 기록(원자·nsLock — 표지 실패의 침묵 금지): classified 상태에만 legacyReclass(+rebasedFrom) 부여.
+function markLegacyReclassMark(repo, mapId, patchId, rebasedFrom) {
+  const f = path.join(dirsFor(repo, mapId).pending, patchId + ".json");
+  const w = withNsLock(repo, mapId, () => {
+    const cur = readJson3(f);
+    if (cur.st !== "ok" || cur.data.lifecycle !== "classified") return { ok: false, reason: "not-classified" };
+    const rec2 = { ...cur.data, legacyReclass: true, reclassifiedAt: new Date().toISOString(), ...(rebasedFrom ? { rebasedFrom } : {}) };
+    return CL.atomicWrite(f, JSON.stringify(rec2, null, 1)) ? { ok: true } : { ok: false, reason: "write" };
+  });
+  return w.ok && w.result && w.result.ok ? { ok: true } : { ok: false, reason: (w.result && w.result.reason) || w.reason || "lock" };
+}
+function sweepReclassifyNonPolicyIntentChoice(repo, mapId) {
+  const out = { scanned: 0, reclassified: 0, errors: 0, resolveIds: [] };
+  let names = [];
+  try { names = fs.readdirSync(dirsFor(repo, mapId).pending).filter((n) => n.endsWith(".json")); } catch { return out; }
+  const rebasedFromSet = new Set(); // 신본이 가리키는 구 유물 — 재소비 제외+만료 재시도(중복 재기반 차단)
+  const recs9 = [];
+  for (const n of names) {
+    const f = path.join(dirsFor(repo, mapId).pending, n);
+    let rec; try { rec = JSON.parse(fs.readFileSync(f, "utf8")); } catch { out.errors++; continue; }
+    if (rec && typeof rec.rebasedFrom === "string" && rec.rebasedFrom) rebasedFromSet.add(rec.rebasedFrom);
+    recs9.push({ f, rec });
+  }
+  for (const { f, rec } of recs9) {
+    if (!rec) continue;
+    const pid = rec.patch && rec.patch.patchId;
+    // f-253b9008 종결부: 표지 유물이 '어느 지점에서든' cas-stale로 만료돼도 소실시키지 않는다 — 재기반
+    // 재소비 대상(expired 원본은 불변·재기반 신본이 계보를 잇는다). 신본이 이미 있으면(rebasedFrom) 제외.
+    if (rec.lifecycle === "expired" && rec.expireCode === "cas-stale" && rec.legacyReclass === true && pid && !rebasedFromSet.has(pid)) {
+      const op0 = rec.patch && rec.patch.operation;
+      if (op0 && !PM.isPolicyOpV2(op0)) out.resolveIds.push(pid);
+      continue;
+    }
+    if (rec.lifecycle !== "classified") continue;
+    if (pid && rebasedFromSet.has(pid)) { // 신본이 이미 존재하는 구 유물=재소비 금지·만료만 재시도(expire 실패 잔존 회수)
+      try { expirePendingPatch(repo, mapId, pid, PM.opHashV2Of ? PM.opHashV2Of(rec.patch) : PM.opHashOf(rec.patch)); } catch { /* 다음 실행 재시도 */ }
+      continue;
+    }
+    const op = rec.patch && rec.patch.operation;
+    // 이전 스윕에서 전환됐지만 해소가 미완(inconclusive·일시 실패)으로 잔류한 유물 — 표지로 재소비 대상 유지
+    // (표지 없는 verifier-resolved는 정상 job 소관이라 불침).
+    if (rec.classification === "verifier-resolved" && rec.legacyReclass === true) { out.resolveIds.push(rec.patch.patchId); continue; }
+    if (rec.classification !== "intent-choice") continue;
+    if (!op || PM.isPolicyOpV2(op)) continue; // 정책 op=intent-choice 유지(ab-3 — 사용자 승인 증명 불가침)
+    out.scanned++;
+    const w = withNsLock(repo, mapId, () => {
+      const cur = readJson3(f);
+      if (cur.st !== "ok" || cur.data.lifecycle !== "classified" || cur.data.classification !== "intent-choice") return { ok: false };
+      const rec2 = { ...cur.data, classification: "verifier-resolved", legacyReclass: true, reclassifiedAt: new Date().toISOString() };
+      return CL.atomicWrite(f, JSON.stringify(rec2, null, 1)) ? { ok: true } : { ok: false };
+    });
+    if (w.ok && w.result && w.result.ok) { out.reclassified++; out.resolveIds.push(rec.patch.patchId); }
+    else out.errors++;
+  }
+  return out;
 }
 
 // ── P8: pending 종결 진입점(설계 v10 P8-0 ③ — 구 revision 종결 의무의 유일 표면) ─────────
@@ -1291,7 +1351,7 @@ function proposeUnique(repo, mapId, semanticKey, buildPatch) {
 }
 
 module.exports = {
-  findPromotions, proposeUnique, expirePendingPatch, persistTerminalExpire,
+  findPromotions, proposeUnique, expirePendingPatch, persistTerminalExpire, sweepReclassifyNonPolicyIntentChoice, markLegacyReclassMark,
   guardExcludedFor,
   canonicalIdentityFor, localOriginFor, patchBasisFor, pipeRootFor, dirsFor, ensureDirs, baselineUpdatesFor, captureDirRaw, decisionIndexFromCapture, policyStateFromCapture,
   activePipelineWalFor, decisionIndexFor, policyStateFor, authorityOf,

@@ -400,6 +400,39 @@ function historylessChanges(repo, invSnap, MR) {
 // askVerifier?((req{patch,claims,framing})=>해소 레코드|null — 1-4 별도 진입점·null=no-verifier),
 // trigger(로그용), _testHooks?}. 반환 {outcome, reason?, jobKey?, applied?, parked?}.
 // 이 함수는 LLM을 직접 호출하지 않는다 — adapters·askVerifier 주입이 유일한 외부 경로(무주입=park).
+// f-4b69df7e 유물 재기반: 같은 내용(op·targetId·payload·evidence·rationale)을 '현 기준선'으로 재제안+분류+
+// legacyReclass 표지(적용 실패 잔류 시 다음 실행 재소비). 유물 한정 — 정식 job 경로는 P8 rev 세대가 담당.
+function rebaseLegacyPatch(repo, MP, PM, oldPatch, oldPid) {
+  try {
+    const MRl = require(path.join(__dirname, "map-runtime.js"));
+    const rt = MRl.readTopoExFor(repo);
+    if (rt.st !== "ok") return { ok: false, reason: "topo" };
+    const topo = rt.topo;
+    const idx = MP.decisionIndexFor(repo, topo.mapId);
+    const pol = MP.policyStateFor(repo, topo.mapId);
+    if (idx.st === "error" || pol.st !== "ok") return { ok: false, reason: "ctx" };
+    const { ah } = MP.authorityOf(PM.mapHashOf(topo), idx);
+    const np = {
+      schema: "map-patch-v2", patchId: crypto.randomUUID(), mapId: topo.mapId,
+      basis: MP.patchBasisFor(repo, topo), baseMapHash: PM.mapHashOf(topo),
+      baseAuthorityHash: ah, baseDecisionContextHash: PM.decisionContextHashOf(ah, pol.pfh),
+      baseDirtyFp: "", operation: oldPatch.operation, payload: oldPatch.payload, readSet: {},
+      rationale: oldPatch.rationale || "legacy-rebase", evidence: oldPatch.evidence || [],
+      ...(oldPatch.targetId ? { targetId: oldPatch.targetId } : {}), ...(oldPatch.targetIds ? { targetIds: oldPatch.targetIds } : {}),
+      ...(oldPatch.provider ? { provider: oldPatch.provider } : {}), ...(oldPatch.detectedBy ? { detectedBy: oldPatch.detectedBy } : {}),
+    };
+    np.readSet = MP.buildReadSetFor(topo, np, { idx, pol, repoRoot: repo, fileHashOf: (ref) => { try { return sha1(fs.readFileSync(path.join(repo, ref), "utf8")); } catch { return null; } } });
+    const pr = MP.proposePatch(repo, np);
+    if (!pr.ok) return { ok: false, reason: "propose" };
+    const cf = MP.classifyPatch(repo, topo.mapId, np.patchId);
+    if (!cf.ok || cf.classification !== "verifier-resolved") return { ok: false, reason: "classify" };
+    // 표지+계보(원자·nsLock — pipeline 정본): 신본이 구 유물을 가리키게(rebasedFrom) — 스윕이 구를 재소비에서
+    // 제외·만료 재시도하고, 신본은 미해소 잔류 시 다음 실행 재소비(내구 수렴 — 재재재검증 B2).
+    const mk = MP.markLegacyReclassMark(repo, topo.mapId, np.patchId, oldPid || null);
+    if (!mk.ok) return { ok: false, reason: "mark-" + (mk.reason || "failed") };
+    return { ok: true, patch: np };
+  } catch { return { ok: false, reason: "exception" }; }
+}
 function runEnrich(repo, opts) {
   const o = opts || {};
   const MR = require(path.join(__dirname, "map-runtime.js"));
@@ -476,6 +509,75 @@ function runEnrichLocked(repo, o, env) {
   try { topo = JSON.parse(lk.result.raw); } catch { return park(null, "topology-invalid"); }
   if (PM.validateTopology(topo).length) return park(null, "topology-invalid");
   if (topo.mapId !== queue.mapId || PM.mapHashOf(topo) !== queue.mapHash) return { outcome: "noop", reason: "queue-stale" }; // 큐 재작성=bootstrap 소관
+  // P9 v12 개정 ②(ⓒ): 구 기본분류 시절의 '비정책 intent-choice' pending을 재분류+P8 해소 경로로 재결속
+  // (재재검증 blocker① ab-6 — 재분류만 하면 cursor가 이미 전진한 유물이라 아무도 재소비하지 않아 영구 잔존).
+  // 유물 해소는 job·attempt 장부 밖(레코드 영속 슬롯 없음): 성공(적용/폐기)=pending 종결로 자연 멱등,
+  // inconclusive·일시 실패=legacyReclass 표지로 잔류→다음 실행 재시도(verifier 재호출 1회 발생 — 유물 한정 수용).
+  const MRl9 = (r9) => require(path.join(__dirname, "map-runtime.js")).readTopoExFor(r9); // stale 예측용 현 기준선 재판독
+  try {
+    const sw9 = MP.sweepReclassifyNonPolicyIntentChoice(repo, topo.mapId);
+    if (sw9.errors) log({ route: "legacy-reclass", reason: "sweep-errors", outcome: "error", detail: String(sw9.errors) });
+    for (const pid9 of sw9.resolveIds || []) {
+      let oc9 = "deferred";
+      try {
+        const pf9 = path.join(MP.dirsFor(repo, topo.mapId).pending, pid9 + ".json");
+        const pr9 = JSON.parse(fs.readFileSync(pf9, "utf8"));
+        const expiredStale9 = pr9.lifecycle === "expired" && pr9.expireCode === "cas-stale" && pr9.legacyReclass === true;
+        if (pr9.lifecycle !== "classified" && !expiredStale9) { oc9 = "already-settled"; }
+        else if (typeof o.askVerifier !== "function") { oc9 = "no-verifier"; }
+        else if (expiredStale9) {
+          // f-253b9008 종결부: 판독-적용 사이 외부 전이로 cas-stale 만료된 표지 유물 — 재기반 신본으로 회수
+          // (원본은 expired 불변·신본이 rebasedFrom으로 계보를 이어 다음 스윕의 중복 재기반도 차단).
+          const rbE = rebaseLegacyPatch(repo, MP, PM, pr9.patch, pid9);
+          if (!rbE.ok) { oc9 = "rebase-" + (rbE.reason || "failed"); } // 만료 원본+표지 그대로 — 다음 실행 재시도(스윕 재소비)
+          else {
+            const resE = o.askVerifier({ repo, ws: o.ws, patch: rbE.patch, item: null, framing: "resolution", existing: null });
+            if (resE && resE.verdict === "support") { const apE = MP.applyPatch(repo, topo.mapId, rbE.patch.patchId, { preCutover: true, verifierResolution: { patchId: rbE.patch.patchId, opHash: PM.opHashOf(rbE.patch), baseDecisionContextHash: rbE.patch.baseDecisionContextHash, verdict: "support", claims: resE.claims || [] } }); oc9 = apE.ok ? "resolved" : "apply-" + String(apE.reasonCode || "failed"); }
+            else if (resE && resE.verdict === "reject") { const exE = MP.expirePendingPatch(repo, topo.mapId, rbE.patch.patchId, PM.opHashOf(rbE.patch)); oc9 = (exE.ok || exE.reason === "idempotent") ? "rejected" : "expire-" + String(exE.reason || "failed"); }
+            else oc9 = "deferred"; // 신본 표지 잔류 — 다음 실행 재소비
+          }
+        }
+        else {
+          // f-253b9008(ab-6): applyPatch는 cas-stale을 'terminal expire로 영속'한다 — 낡은 유물에 apply를
+          // 부르는 순간 구 pending이 이미 만료돼, 신본 제안·표지 실패 시 재소비가 소실된다. 그래서 apply 전에
+          // **stale 예측 검사**(현 기준선 dch 대조): 낡음=재기반 먼저(신본+원자 표지 성공 후에야 구 만료),
+          // 신선=기존 경로. verifier 호출은 항상 '적용할 그 patch'에 1회(ab-3 정합 — 구본이든 신본이든 재사용 0).
+          let target9 = { pid: pid9, patch: pr9.patch, isRebase: false };
+          const curDch9 = (() => { try { const rtN = MRl9(repo); const idxN = MP.decisionIndexFor(repo, rtN.topo.mapId); const polN = MP.policyStateFor(repo, rtN.topo.mapId); const ahN = MP.authorityOf(PM.mapHashOf(rtN.topo), idxN).ah; return PM.decisionContextHashOf(ahN, polN.pfh); } catch { return null; } })();
+          if (curDch9 && pr9.patch.baseDecisionContextHash !== curDch9) {
+            const rb9 = rebaseLegacyPatch(repo, MP, PM, pr9.patch, pid9);
+            if (!rb9.ok) { oc9 = "rebase-" + (rb9.reason || "failed"); target9 = null; } // 구 pending 무변(classified+표지 유지 — 다음 실행 재시도)
+            else {
+              const exO = MP.expirePendingPatch(repo, topo.mapId, pid9, PM.opHashOf(pr9.patch));
+              void exO; // 실패=신·구 공존 — 스윕의 rebasedFrom 매핑이 구를 재소비에서 제외+만료 재시도
+              target9 = { pid: rb9.patch.patchId, patch: rb9.patch, isRebase: true };
+            }
+          }
+          if (target9) {
+            const resT = o.askVerifier({ repo, ws: o.ws, patch: target9.patch, item: null, framing: "resolution", existing: null });
+            if (resT && resT.verdict === "support") {
+              let ap9 = MP.applyPatch(repo, topo.mapId, target9.pid, { preCutover: true, verifierResolution: { patchId: target9.pid, opHash: PM.opHashOf(target9.patch), baseDecisionContextHash: target9.patch.baseDecisionContextHash, verdict: "support", claims: resT.claims || [] } });
+              if (!ap9.ok && ap9.reasonCode === "cas-stale" && !target9.isRebase) {
+                // 예측과 apply 사이의 희귀 경합 — 구는 P2가 이미 만료 영속. 재기반+재호출 1회, 실패=소실 아님이
+                // 보장되지 않으므로 정직 로그(다음 스윕은 expired라 재소비 불가 — legacy-lost 가시화).
+                const rbX = rebaseLegacyPatch(repo, MP, PM, target9.patch, target9.pid);
+                if (rbX.ok) {
+                  const resX = o.askVerifier({ repo, ws: o.ws, patch: rbX.patch, item: null, framing: "resolution", existing: null });
+                  ap9 = resX && resX.verdict === "support" ? MP.applyPatch(repo, topo.mapId, rbX.patch.patchId, { preCutover: true, verifierResolution: { patchId: rbX.patch.patchId, opHash: PM.opHashOf(rbX.patch), baseDecisionContextHash: rbX.patch.baseDecisionContextHash, verdict: "support", claims: resX.claims || [] } }) : { ok: false, reasonCode: "rebase-deferred" };
+                } else ap9 = { ok: false, reasonCode: "expired-deferred:" + (rbX.reason || "failed") }; // 만료 원본+표지=다음 실행 스윕이 재소비(소실 아님 — f-253b9008 종결)
+              }
+              oc9 = ap9.ok ? "resolved" : "apply-" + String(ap9.reasonCode || "failed");
+            } else if (resT && resT.verdict === "reject") {
+              const ex9 = MP.expirePendingPatch(repo, topo.mapId, target9.pid, PM.opHashOf(target9.patch));
+              oc9 = (ex9.ok || ex9.reason === "idempotent") ? "rejected" : "expire-" + String(ex9.reason || "failed");
+            } // inconclusive·호출 실패=deferred(표지 잔류 — 다음 실행 재시도)
+          }
+        }
+      } catch { oc9 = "error"; }
+      log({ route: "legacy-reclass", reason: "resolve", outcome: oc9, patchId: pid9 });
+    }
+    if (sw9.reclassified) log({ route: "legacy-reclass", reason: "swept", outcome: "reclassified", detail: sw9.reclassified + "/" + sw9.scanned });
+  } catch (eS9) { log({ route: "legacy-reclass", reason: "sweep-failed", outcome: "error", detail: String((eS9 && eS9.message) || eS9).slice(0, 120) }); }
   // ④ 장부 판독(strict — damaged=전면 정지)
   const jr = readEnrichJob(repo);
   if (jr.st === "damaged") return park(null, "job-damaged", { detail: jr.detail || "" });
