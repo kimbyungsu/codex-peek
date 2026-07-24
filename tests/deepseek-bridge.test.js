@@ -25,16 +25,17 @@ const req = buildMapRequest("# 꾸러미 본문", "deepseek-v4-flash");
 ok(req.model === "deepseek-v4-flash" && req.stream === false, "모델 지정 + 스트림 없음(단일 응답)");
 ok(req.messages.length === 1 && req.messages[0].role === "user" && /탐색자.*꾸러미가 유일한 근거/.test(req.messages[0].content) && /# 꾸러미 본문/.test(req.messages[0].content), "지시 앞머리 + 꾸러미 전문이 한 user 메시지");
 ok(req.temperature === 0 && typeof req.max_tokens === "number", "temperature 0(재현성 — A/B 비교 대상) + 출력 상한");
-const selfSrc = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-scout-self.js"), "utf8");
-ok(/buildScoutPreface\("self"/.test(selfSrc) && /\[탐색자 지시\] 형식을 정확히 따르라/.test(req.messages[0].content), "두 팔 preface 단일 출처(buildScoutPreface — §6-11 P1) + 기본 문구가 요청에 실림(같은 계약)");
+const selfSrc = fs.readFileSync(path.join(__dirname, "..", "scripts", "scout-providers.js"), "utf8"); // P5: self 팔 로직은 공통층(scout-providers.js)으로 이동
+ok(/buildScoutPreface\(providerId, lang\)/.test(selfSrc) && /\[탐색자 지시\] 형식을 정확히 따르라/.test(req.messages[0].content), "CLI 팔 preface 단일 출처(buildScoutPreface — §6-11 P1·P6 providerId 일반화) + 기본 문구가 요청에 실림(같은 계약)");
 
 console.log("[보안 소스 계약] 실키 리터럴 없음 · 키는 env/파일에서만 · 키 원문 미출력");
 const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "deepseek-bridge.js"), "utf8");
 ok(!/sk-[A-Za-z0-9]{16,}/.test(src), "소스에 실키 형태 리터럴 없음(유출 사고 재발 방지 규칙)");
 ok(/DEEPSEEK_API_KEY/.test(src) && /deepseek\.json/.test(src), "키 출처는 env·브릿지 홈 파일뿐");
 ok(!/console\.(log|error)\([^)]*apiKey/.test(src), "키 원문을 로그로 찍는 경로 없음");
-const runnerSrc = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-scout-deepseek.js"), "utf8");
-ok(/collectPackage/.test(runnerSrc) && /deepseek-bridge\.js/.test(runnerSrc), "러너는 같은 꾸러미 수집기 + 브릿지 map 경유(별도 수집 경로 없음)");
+const runnerSrc = fs.readFileSync(path.join(__dirname, "..", "scripts", "scout-providers.js"), "utf8"); // P5: deepseek 팔 로직도 공통층으로 이동
+ok(/collectPackage/.test(runnerSrc) && /deepseek-bridge\.js/.test(runnerSrc), "러너는 같은 꾸러미 수집기 + 브릿지 map 경유(별도 수집 경로 없음 — 공통층 한 곳)");
+ok(/runScout\(repo, "deepseek"/.test(fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-scout-deepseek.js"), "utf8")), "deepseek 러너는 runScout 위임(P5)");
 
 console.log("[배치·문구 계약] 런타임 배치 목록 포함 + '전송 없음' 단정 문구 제거(첫 외부 전송의 정직성 — Codex 검증 지적 잠금)");
 const installSrc = fs.readFileSync(path.join(__dirname, "..", "install.js"), "utf8");
@@ -54,12 +55,12 @@ const clSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib
 ok(!/무전송 원칙 불변/.test(clSrc) && /예외 둘/.test(clSrc), "contract-lib 주석: '무전송 원칙 불변' 잔재 0(예외 둘 체계 — Codex 4차 반례 잠금)");
 const readmeKo = fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8");
 const readmeEn = fs.readFileSync(path.join(__dirname, "..", "docs", "README.en.md"), "utf8");
-ok(!/\*\*외부 전송 없음\*\*/.test(readmeKo) && /외부로 나가는 경로는 두 갈래/.test(readmeKo) && !/유일한 예외/.test(readmeKo) && !/예외는 둘뿐/.test(readmeKo), "README(ko): 절대 표현 제거 + 두 갈래 모델(DeepSeek 키 2종/기본 정찰 Claude CLI 경유 — 2026-07-10 정정), '키 없으면 전송 0' 단정 잔재 0");
+ok(!/\*\*외부 전송 없음\*\*/.test(readmeKo) && /외부로 나가는 경로는 세 갈래/.test(readmeKo) && !/두 갈래/.test(readmeKo) && !/유일한 예외/.test(readmeKo) && !/예외는 둘뿐/.test(readmeKo), "README(ko): 절대 표현 제거 + 세 갈래 모델(DeepSeek 키 2종/기본 정찰 Claude CLI/Codex 정찰 codex CLI — P6 2026-07-22 개정), 구 모델 잔재 0");
 const extSrc2 = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
 ok(!/외부 전송은 DeepSeek 키 등록 시 둘뿐|외부 전송은 DeepSeek 키를 등록한 경우 둘뿐/.test(extSrc2) && !/External transfers only with a DeepSeek key|exactly two external transfers/.test(extSrc2), "확장 UI(가이드 새탭·트랙 툴팁)에도 옛 '키 없으면 전송 0' 모델 잔재 0(Codex 반례 잠금)");
-ok((readmeKo.match(/외부로 나가는 경로는 두 갈래|외부로 나가는 것은 정찰 관련뿐/g) || []).length >= 2, "README 안전 절·원칙 절이 같은 두 갈래 모델(문서 내 상충 잔재 0)");
+ok((readmeKo.match(/외부로 나가는 경로는 세 갈래|외부로 나가는 것은 정찰 관련뿐/g) || []).length >= 2, "README 안전 절·원칙 절이 같은 세 갈래 모델(문서 내 상충 잔재 0)");
 ok(!/예외 1건/.test(readmeKo) && !/실행 시에만\(키 등록=동의/.test(readmeKo), "README(ko): '예외 1건'·'실행 시에만' 잔재 0");
-ok(/Two exceptions/.test(readmeEn) && /connection check/.test(readmeEn) && !/Single exception/.test(readmeEn), "README(en): 예외 둘 명시, 'Single exception' 잔재 0");
+ok(/A DeepSeek key adds two flows/.test(readmeEn) && /connection check/.test(readmeEn) && !/Single exception/.test(readmeEn) && !/Two exceptions/.test(readmeEn), "README(en): DeepSeek 2흐름 명시(P6 세 갈래 개정 — 'Two exceptions' 구표현 잔재 0)");
 const privacySrc = fs.readFileSync(path.join(__dirname, "..", "PRIVACY.md"), "utf8");
 ok(/나머지 예외 — DeepSeek 지도 생성/.test(privacySrc) && /안 보내는 것\(자동 제외\)/.test(privacySrc), "PRIVACY: 전송 내용·자동 제외 목록 명시(연결 점검 예외 추가로 '유일한→나머지' 개정 — 2026-07-09)");
 

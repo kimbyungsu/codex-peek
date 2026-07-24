@@ -54,8 +54,8 @@ ok(CL.loadBaseDirective("ko").verifyBaseline === CL.baseDefaultsFor("ko").verify
 ok(CL.loadBaseDirective("ko", "integrity").verifyBaseline === CL.loadBaseDirective("ko").verifyBaseline, "명시 integrity=미지정과 동일");
 // integrity 프리셋 1글자 불변(스냅샷 대조 — 5항 실질 영향 원칙 문구 앵커)
 const sha16 = (t) => require("crypto").createHash("sha256").update(t, "utf8").digest("hex").slice(0, 16);
-ok(sha16(CL.BASE_DEFAULTS.verifyBaseline) === "09245598a6d8fa0f" && sha16(CL.BASE_DEFAULTS.transmit) === "10938882fe841e0d" && sha16(CL.BASE_DEFAULTS.rejudge) === "9050fc227f2039b6", "integrity ko 캐논 3축 전문 해시 불변(1글자 불변 — P-12 도입 시점 스냅샷)");
-ok(sha16(CL.BASE_DEFAULTS_EN.verifyBaseline) === "3c48e8f0d56bd2b8" && sha16(CL.BASE_DEFAULTS_EN.transmit) === "9175bd8183f9bee2" && sha16(CL.BASE_DEFAULTS_EN.rejudge) === "4c19437bd47ef3cf", "integrity en 캐논 3축 전문 해시 불변");
+ok(sha16(CL.BASE_DEFAULTS.verifyBaseline) === "09245598a6d8fa0f" && sha16(CL.BASE_DEFAULTS.transmit) === "10938882fe841e0d" && sha16(CL.BASE_DEFAULTS.rejudge) === "f173809f9d2fb9b2", "integrity ko 캐논 3축 전문 해시 불변(스냅샷 갱신 2026-07-22: 거버넌스 증분 1 — 분쟁 경위 보고 서식 bullet 추가는 사용자 지시 개정)");
+ok(sha16(CL.BASE_DEFAULTS_EN.verifyBaseline) === "3c48e8f0d56bd2b8" && sha16(CL.BASE_DEFAULTS_EN.transmit) === "9175bd8183f9bee2" && sha16(CL.BASE_DEFAULTS_EN.rejudge) === "fe94b5f4383cdd8c", "integrity en 캐논 3축 전문 해시 불변(스냅샷 갱신 2026-07-22 — 동일 개정)");
 // 오버라이드는 integrity에만 적용, core 전환이 오버라이드 파일 바이트를 건드리지 않음(ⓑ 불변 조건)
 CL.saveBaseDirective({ verifyBaseline: "사용자 커스텀 원칙", transmit: "", rejudge: "" }, "ko");
 const ovFile = CL.baseDirectiveFileFor("ko");

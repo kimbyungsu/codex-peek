@@ -1117,7 +1117,10 @@ export type IntentPolicy = {
   scopeTarget?: string[];                              // entity|subgraph면 필수(대상 UUID)
   predicateExpr: { version: number; kind: string } & Record<string, unknown>; // typed 강제 — 자유문장 금지(미지원 kind=자동 매칭 없이 needs-investigation)
   predicateDescription: string;                        // 사람용 — 자동 판정 입력 금지
-  chosenMeaning: string;
+  // P9: 기존 사람용 문자열은 판독 호환을 위해 유지하되 자동 위임에는 typed v1만 사용한다.
+  // predicateExpr.opClass와 chosenMeaning.opClass가 다르면 한 정책이 서로 다른 두 사건을 가리키게
+  // 되므로 형식 단계에서 거부한다.
+  chosenMeaning: string | { version: 1; disposition: "apply" | "decline"; opClass: string };
   exclusions?: string[];
   createdFromDecision: string;                         // decisionId(UUID)
   verification: VerificationBasis;
@@ -1139,7 +1142,23 @@ export function validateIntentPolicy(pol: IntentPolicy): string[] {
   if (!pe || typeof pe !== "object" || Array.isArray(pe) || !Number.isInteger(pe.version) || (pe.version as number) < 1 || typeof pe.kind !== "string" || !pe.kind) errs.push("predicateExpr{version≥1,kind,...} typed 필수(자유문장 금지 — 정본 22차)");
   if (pe && !deepShapeOk(pe, FREE_FIELD_MAX_DEPTH)) errs.push("predicateExpr: 깊이/크기 상한 초과(무사망 계약 — 1차 #1)");
   if (typeof pol.predicateDescription !== "string" || !pol.predicateDescription.trim()) errs.push("predicateDescription 필요(사람용)");
-  if (typeof pol.chosenMeaning !== "string" || !pol.chosenMeaning.trim()) errs.push("chosenMeaning 필요");
+  if (typeof pol.chosenMeaning === "string") {
+    if (!pol.chosenMeaning.trim()) errs.push("chosenMeaning 필요");
+  } else {
+    const cm = pol.chosenMeaning as Record<string, unknown> | undefined;
+    if (!cm || typeof cm !== "object" || Array.isArray(cm)) errs.push("chosenMeaning은 문자열 또는 typed v1 객체여야");
+    else {
+      if (Object.keys(cm).sort().join(",") !== "disposition,opClass,version") errs.push("chosenMeaning typed v1은 {version,disposition,opClass} 정확 키만 허용");
+      if (cm.version !== 1) errs.push("chosenMeaning.version은 1이어야");
+      if (cm.disposition !== "apply" && cm.disposition !== "decline") errs.push("chosenMeaning.disposition은 apply|decline이어야");
+      if (typeof cm.opClass !== "string" || !cm.opClass.trim()) errs.push("chosenMeaning.opClass 필요");
+      // typed 의미는 현재 지원하는 op-class 조건과 한 쌍이다. 지원 밖 predicate에 typed 의미를
+      // 붙여 두면 저장 때는 통과하고 자동 위임 때만 사라지는 반쪽 정책이 되므로 정본에서 거부한다.
+      if (!pe || pe.version !== 1 || pe.kind !== "op-class" || typeof pe.opClass !== "string" || !pe.opClass.trim()
+        || Object.keys(pe).sort().join(",") !== "kind,opClass,version") errs.push("chosenMeaning typed v1은 predicateExpr v1 op-class 정확 형식과 함께여야");
+      else if (cm.opClass !== pe.opClass) errs.push("chosenMeaning.opClass는 predicateExpr.opClass와 같아야");
+    }
+  }
   if (pol.exclusions !== undefined && (!Array.isArray(pol.exclusions) || !pol.exclusions.every((x) => typeof x === "string" && x))) errs.push("exclusions는 문자열 배열이어야");
   // 집합 의미 배열=정렬·중복 거부(1차 #3 — v1 '집합 배열 전체 정렬' 선례: 파일 자체가 canonical이어야 frontier 해시가 의미 결정론)
   const sortedSet = (v: unknown) => Array.isArray(v) && new Set(v).size === v.length && v.every((x, i) => i === 0 || String(v[i - 1]) <= String(x));

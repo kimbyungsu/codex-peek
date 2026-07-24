@@ -375,7 +375,7 @@ function scoutGate(j, ws, sid, c, s) {
   if(!st || st.state==="fresh") return false;
   const n=bump(SCOUT_ATTEMPT_DIR,sid,j.turn_id||s.turnId||""); if(n>MAX_SCOUT_ATTEMPTS)return false;
   let health=""; try{health=scoutHealthLine(target,loadLang()==="en")||"";}catch{}
-  let runner="scope-scout-self.js"; try{ if(scoutArmView(ws).eff==="deepseek") runner="scope-scout-deepseek.js"; }catch{ /* 판독 실패=기본 */ } // 탐색 담당 선택 반영(scoutArm 1차 blocker③)
+  let runner="scope-scout-self.js"; try{ const e9=scoutArmView(ws).eff; if(e9==="deepseek") runner="scope-scout-deepseek.js"; else if(e9==="codex") runner="scope-scout-codex.js"; }catch{ /* 판독 실패=기본 */ } // 탐색 담당 선택 반영(scoutArm 1차 blocker③·P6: codex 포함)
   block(t(`플랜 확정 전 3트랙 지도가 ${st.state} 상태입니다. \`node scripts/${runner} "${target}"\`로 공용 지도·일지를 갱신한 뒤 계속하세요. ${health}`, `Before finalizing the plan, the shared 3-track map is ${st.state}. Run \`node scripts/${runner} "${target}"\`, update the shared map/journal, then continue. ${health}`));
   return true;
 }

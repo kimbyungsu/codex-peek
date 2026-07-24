@@ -76,7 +76,7 @@ async function main() {
     ok(MR.PM.validateTopology(topo).length === 0 && topo.schemaVersion === 2, "생성 topology = 유효 v2");
     ok(done.mapId === topo.mapId && done.exclude && done.exclude.topology && done.exclude.mapMd, "exclude에 이번 실행 산출물 2종 귀속(1차 #6)");
     const q = JSON.parse(fs.readFileSync(MB.queueFileFor(ws), "utf8"));
-    ok(q.mapId === topo.mapId && q.schema === "enrich-queue-v0" && q.mapHash === MR.PM.mapHashOf(topo) && q.basis && q.basis.kind === "historyless" && typeof q.basis.basisFp === "string" && typeof q.basis.inventoryFp === "string", "큐: mapId+mapHash+historyless fp 2종 결속(1차 #3)");
+    ok(q.mapId === topo.mapId && q.schema === "enrich-queue-v1" && q.mapHash === MR.PM.mapHashOf(topo) && q.basis && q.basis.kind === "historyless" && typeof q.basis.basisFp === "string" && typeof q.basis.inventoryFp === "string", "큐: mapId+mapHash+historyless fp 2종 결속(1차 #3)");
     ok(MB.maybeSpawnBootstrap(ws).reason === "ready", "완료 후 → ready(재기동 0)");
   }
 

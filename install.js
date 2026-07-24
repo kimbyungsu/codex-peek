@@ -57,6 +57,12 @@ const BRIDGE_SCRIPTS = [
   "map-runtime.js", // P0.5: Project MAP 런타임(수집기·draft·CLI 본체 — 훅 아님)
   "map-bootstrap.js", "map-pipeline.js", "map-bindings.js", "map-adapters.js", // P1: 비차단 bootstrap(훅이 lazy require — 훅 아님·detach 자식 실행기)
   "map-freshness.js", "map-reader.js", // P3b: P4 신설분 배포 편입 — map-adapters가 map-reader를 require하므로 누락 시 설치본 어댑터 전체 로드 불능(P3b 설계 A-3 실측 결함 봉합)
+  "map-cutover.js", // P3b 증분 2: cutover 본체+frozen-ledger probe(대시보드 lazy 소비 — 설치본 부재 시 probe 불능)
+  "map-probe.js", // P7: readiness probe 실행기(vscode 무관 계층 — 확장이 설치본 사본을 lazy require)
+  "map-router.js", // P8: 결정론 라우터(1-34 표 — 실행기·테스트 공용 순수 계층)
+  "map-enrich.js", // P8: 의미 보강 실행기(저장·순수+runEnrich+CLI — 발동 3지점이 spawn하는 표면)
+  "map-intent.js", // P9: 정책 충돌 카드 파생 뷰+사용자 선택 선기록(자동 적용/UI 전 바닥 계층)
+  "enrich-providers.js", // P8: 보강 어댑터 3종+Verifier 해소 진입점(설치본 자동 발동에서 실존해야 함)
 ];
 
 // 우리가 settings.json에 심는 훅. event → {matcher, script}
@@ -201,6 +207,45 @@ function readSettingsSafe() {
   } catch (e) { return { ok: false, settings: null, raw, existed: true, err: e.message }; }
 }
 
+function withDeployLock(fn) { // C-7 9차: wx 파일 잠금 — 검사기(map-cutover)·확장과 동일 프로토콜(".deploy.lock"·wx 원자 생성=신원 동시·read-back fence·자동 탈환 없음[contract-lock v10 결론]). 반환 {ok, why}
+  const crypto = require("crypto");
+  const lockPath = path.join(BRIDGE_DIR, ".deploy.lock");
+  const token = JSON.stringify({ v: 1, pid: process.pid, rnd: crypto.randomBytes(8).toString("hex"), ts: new Date().toISOString() });
+  const timeoutMs = Math.max(200, Number(process.env.CODEX_DEPLOY_LOCK_TIMEOUT_MS || 5000) || 5000);
+  const t0 = Date.now();
+  let staleWhy = null;
+  for (;;) {
+    if (Date.now() - t0 > timeoutMs) return { ok: false, why: staleWhy || ("타임아웃(다른 배포/검사 진행 중): " + lockPath + " — 잠시 후 재실행") };
+    let locked = false;
+    try { fs.writeFileSync(lockPath, token, { flag: "wx" }); locked = true; }
+    catch (e) { if (!e || (e.code !== "EEXIST" && e.code !== "EPERM")) return { ok: false, why: "잠금 오류: " + String((e && e.code) || e) }; }
+    if (locked) {
+      let back = null;
+      try { back = fs.readFileSync(lockPath, "utf8"); } catch { back = null; }
+      if (back === token) break; // read-back fence — 실패=삭제 없이 재시도(확인-후-삭제 TOCTOU 폐기)
+    } else {
+      try {
+        const cur = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+        const pid = Number(cur && cur.pid);
+        if (Number.isInteger(pid) && pid > 0) {
+          try { process.kill(pid, 0); staleWhy = null; }
+          catch (ke) { if (ke && ke.code === "ESRCH") staleWhy = "잔존 잠금(" + lockPath + " · pid " + pid + " 사망) — pid 사망을 확인했다면 이 파일을 삭제 후 재실행"; }
+        }
+      } catch { /* 판독 불가/경합 소멸 — 재시도 */ }
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+  let lockLost = false;
+  try { fn(); }
+  finally {
+    let cur = null;
+    try { cur = fs.readFileSync(lockPath, "utf8"); } catch { cur = null; }
+    lockLost = cur !== token;
+    if (!lockLost) { try { fs.unlinkSync(lockPath); } catch { /* 드묾 — 다음 획득자에게 stale 안내 */ } }
+  }
+  return lockLost ? { ok: false, why: "임계구역 중 잠금 파일이 외부에서 변경됨 — 설치 상태 재확인 후 재실행 권장" } : { ok: true, why: null };
+}
+
 // ── 명령들 ────────────────────────────────────────────
 function copyBridge(dryRun) {
   for (const f of BRIDGE_SCRIPTS) {
@@ -213,9 +258,21 @@ function copyBridge(dryRun) {
   }
   if (!dryRun) {
     fs.mkdirSync(BRIDGE_DIR, { recursive: true });
+    const locked = withDeployLock(() => { // 6차 blocker: 복사+manifest를 검사기와 상호 배제(검사 도중 교체 경합 소멸)
     for (const f of BRIDGE_SCRIPTS) fs.copyFileSync(path.join(SRC_BRIDGE, f), path.join(BRIDGE_DIR, f));
+    { // C-7(B2): 배포 manifest — 이 설치가 하나의 세대임을 파일별 지문으로 증명(설치본 실행 cutover의 전수 검사 기준)
+      // 5차 blocker: 지문은 복사 '원본'(레포 bridge/) 바이트에서 계산 — 목적지 재판독 금지. 대조↔기록 사이 다른
+      // 배포자가 설치본을 교체하는 경합에서 혼합 세대가 정상 manifest로 승인되는 창을 제거한다(경합 시
+      // manifest≠디스크 → cutover 전수 대조가 fail-closed로 거부 — 승인이 아니라 거부로 떨어지는 방향).
+      const crypto = require("crypto");
+      const files = {};
+      for (const f of BRIDGE_SCRIPTS) files[f] = crypto.createHash("sha1").update(fs.readFileSync(path.join(SRC_BRIDGE, f))).digest("hex");
+      fs.writeFileSync(path.join(BRIDGE_DIR, "deploy-manifest.json"), JSON.stringify({ schema: "deploy-manifest-v1", ts: new Date().toISOString(), files }, null, 1));
+    }
     // 확장 자동배치 stamp 제거 = '수동(레포) 설치 모드' 표시 — 확장이 개발자의 최신 수동본을 옛 번들본으로 덮지 않게 한다(src/extension.ts deployBridgeRuntime 대칭).
     try { fs.unlinkSync(path.join(BRIDGE_DIR, ".bridge-deployed-by.json")); } catch { /* 없으면 무시 */ }
+    });
+    if (!locked.ok) { log("❌ 배포 잠금 실패: " + locked.why); process.exit(1); }
   }
   log(`✅ 브릿지 파일 ${BRIDGE_SCRIPTS.length}개 → ${BRIDGE_DIR}${dryRun ? "  (미리보기 — 복사 안 함)" : ""}`);
 }

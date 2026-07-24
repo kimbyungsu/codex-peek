@@ -40,8 +40,10 @@ console.log("[3] 생산자 배선(소스 잠금) — 러너 2종·ping이 실제
 const selfSrc = fs.readFileSync(path.join(ROOT, "scripts", "scope-scout-self.js"), "utf8");
 const dsSrc = fs.readFileSync(path.join(ROOT, "scripts", "scope-scout-deepseek.js"), "utf8");
 const brSrc = fs.readFileSync(path.join(ROOT, "bridge", "deepseek-bridge.js"), "utf8");
-ok(/appendScoutUsage\(\{ ts: new Date\(\)\.toISOString\(\), workspace: repo, arm: "deepseek"/.test(dsSrc), "deepseek 러너 — 지도마다 기록(workspace=정찰 대상 레포)");
-ok(/appendScoutUsage\(\{ ts: new Date\(\)\.toISOString\(\), workspace: repo, arm: "self"/.test(selfSrc) && /usageIn: null/.test(selfSrc), "self 러너 — 문자수 추정 재료 기록(토큰 null 정직)");
+const provSrc = fs.readFileSync(path.join(ROOT, "scripts", "scout-providers.js"), "utf8");
+ok(/appendScoutUsage\(\{ ts: new Date\(\)\.toISOString\(\), workspace: repo, arm: providerId/.test(provSrc), "공통 파이프라인(P5) — 지도마다 기록(workspace=정찰 대상 레포·팔=providerId)");
+ok(/usageIn: usage \? usage\.in : null/.test(provSrc) && /usage: null/.test(provSrc), "self 어댑터 — 토큰 미제공 시 null 정직(문자수만 추정 재료·공통층이 정규화된 usage를 그대로 기록)");
+ok(/runScout\(repo, "self"/.test(selfSrc) && /runScout\(repo, "deepseek"/.test(dsSrc), "러너 2종은 runScout 위임(장부 배선은 공통층 한 곳)");
 ok(/arm: "ping"/.test(brSrc) && /appendScoutUsage/.test(brSrc), "연결 점검(ping)도 과금 호출로 기록");
 
 console.log("[4] 통계 탭 표시(소스 잠금) — 정찰 비용 구획·정직 각주");

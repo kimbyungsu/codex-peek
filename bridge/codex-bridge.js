@@ -20,12 +20,27 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
 // 호출 시점 전역 언어의 문자열 선택(무결성 detail·CLI 안내 등). ask 본문 흐름은 langSnap 사용.
 function tB(ko, en) { return loadLang() === "en" ? en : ko; }
+// 거버넌스 증분 1: 판정문 병기 경고 — 승인된 경계가 '손상/미승인 변경' 상태면 ask-wait 결과에 1줄 병기(위장 금지).
+// 정상·부재·미승인="" (바이트 동일 — 기존 출력 무회귀).
+function envelopeWarnLine(ws, lang) {
+  // 보완②(1차 구현검증): 이 함수는 '완료 시점 재판독'이라 이번 ask에 실제 주입됐는지는 모른다 — 문구를 '현재 상태'
+  // 서술로 한정(주입 여부 단정 금지). ask 시점 주입 상태의 내구 보존은 증분 2 라운드 레코드(envelopeHash 동결) 소관.
+  try {
+    const c9 = loadContract(ws || configWs(), lang);
+    const evi = envelopeInjectionFor(resolveScoutRepo(ws || configWs(), c9).repo, c9.envelopeHash, lang);
+    const en9 = (lang || loadLang()) === "en";
+    if (evi.warn === "mismatch") return en9 ? "\n[verification envelope: the rulebook now differs from the approved copy — new verifications will not inject it until re-approval (dashboard)]\n" : "\n[검증 경계: 수칙서 파일이 지금 승인본과 다릅니다 — 재승인 전까지 새 검증에 주입되지 않습니다(대시보드에서 재승인)]\n";
+    if (evi.warn === "corrupt") return en9 ? "\n[verification envelope: the rulebook file is currently unreadable — new verifications will not inject it]\n" : "\n[검증 경계: 수칙서 파일이 지금 판독 불가 상태입니다 — 새 검증에 주입되지 않습니다]\n";
+    if (evi.warn === "truncated") return en9 ? "\n[verification envelope: some items are truncated by the caps — the injected boundary omits the excess; trim the file and re-approve]\n" : "\n[검증 경계: 일부 항목이 상한 초과로 절삭된 상태로 적용 중 — 초과분은 경계에서 빠져 있습니다. 파일을 줄여 재승인 권장]\n";
+  } catch { /* 무해 — 경고 계층이 결과 전달을 막지 않음 */ }
+  return "";
+}
 function withContract(prompt, ws, lang, carrier, profile) {
   // lang: 언어 스냅샷(cmdAsk의 langSnap) — 미지정 시 전역 언어. 주입(기본지침·계약 지시문)과 헤더/footer 언어를 한 스냅샷으로 일관.
   // carrier(L1-A): 호출자가 준 객체에 '이번 ask에 실제로 실린 동봉 스냅샷'(mapItems·couplings)을 담아 준다 —
@@ -51,9 +66,57 @@ function withContract(prompt, ws, lang, carrier, profile) {
       if (carrier && typeof carrier === "object") { carrier.mapItems = att.mapItems || []; carrier.couplings = att.couplings || []; }
     } else scout = att || ""; // 구형 문자열 반환 호환(테스트 목·부분 배포)
   } catch { scout = ""; }
-  const head = [baseline, inj, scout].filter(Boolean).join("\n\n");
+  // 거버넌스 증분 1: 검증 경계(사용자 승인 수칙서) — 승인 지문 일치 시에만 주입(데이터 절=두 프로필 공통·한정 문구=core만).
+  // 부재·미승인=주입 없음(현행 그대로)·손상/미승인 변경=주입 생략+stderr 1줄 경고(ask 시작 출력 — 위장 금지).
+  let envText = "", baseQual = "";
+  try {
+    const es9 = envelopeSliceFor(ws || configWs(), lang, profile, c);
+    envText = es9.envText; baseQual = es9.baseQual;
+  } catch (e0) { if (e0 && e0.envelopeTransBusy) throw e0; /* 상호배제 실패=ask 정직 실패(경계 없는 프롬프트 생성 금지 — 재검증 blocker③). 그 외 경계 실패=주입만 생략(검증은 현행 규약으로 진행) */ }
+  const head = [baseline, baseQual, envText, inj, scout].filter(Boolean).join("\n\n");
   const reqLabel = (lang || loadLang()) === "en" ? "[Work Request]" : "[작업 요청]";
   return `${head}\n\n---\n${reqLabel}\n${prompt}`;
+}
+
+// §7 증분 2 — 경계 절 산출(전이 잠금 아래·구 스냅샷 무사용). cSnapshot은 '잠금 밖에서 읽힌 계약'이며 경계
+// 축에는 사용하지 않는다(잠금 안 신선 재판독 — f-b6db1bbd 인터리빙 봉합). 함수로 분리한 이유: 테스트가
+// 낡은 스냅샷(구 해시)을 인자로 직접 주입해 '스냅샷을 썼다면 실패했을' 결정론 반례를 실행하기 위함(f-789aadc5).
+function envelopeSliceFor(wsIn, lang, profile, cSnapshot) {
+  const out9 = { envText: "", baseQual: "" };
+  const c = cSnapshot;
+  {
+    if (c && typeof envelopeInjectionFor === "function") {
+      // §7 증분 2(재검증 blocker③ ab-3): 판독·동결을 '전이 잠금 보유' 아래에서 — 도장 전이(원본↔계약 두 저장소
+      // 교체)와 원자적 상호배제. 잠금 실패(전이 진행)=짧은 재시도 후 이 ask를 정직 실패(경계 없는 프롬프트 생성 금지).
+      // WAL 잔존(중단 전이)도 동일 거부 — 복구 전 새 검증 시작 차단.
+      let lk9 = null;
+      for (let i9 = 0; i9 < 5 && !lk9; i9++) { const a9 = acquireEnvelopeTransLock(wsIn); if (a9.ok) lk9 = a9; else { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400); } catch { /* 즉시 재시도 */ } } }
+      if (!lk9) throw Object.assign(new Error("수칙서 승인 전이 진행 중 — 경계 판독 상호배제 실패(잠시 후 재시도)"), { envelopeTransBusy: true });
+      try {
+        try { fs.accessSync(envelopeTransWalFileFor(wsIn)); throw Object.assign(new Error("중단된 수칙서 승인 전이(WAL) — envelope-transition recover 후 재시도"), { envelopeTransBusy: true }); } catch (e9w) { if (e9w && e9w.envelopeTransBusy) throw e9w; /* WAL 없음=정상 */ }
+      // 재재검증 blocker②(ab-3): 계약 해시·대상 산출을 잠금 '안'에서 신선 재판독 — 잠금 밖 스냅샷 c의
+      // envelopeHash를 쓰면 '구 계약 읽기→전이 완료→잠금 획득→구 해시로 신 원본 판독=mismatch 무주입' 경합.
+      let cFresh9 = c;
+      try { cFresh9 = loadContract(wsIn, lang) || c; } catch { /* 재판독 실패=기존 스냅샷(전이 직후라면 다음 방어선인 mismatch 경고가 위장을 막음) */ }
+      const target9 = resolveScoutRepo(wsIn, cFresh9).repo;
+      const evi = envelopeInjectionFor(target9, cFresh9.envelopeHash, lang);
+      const en9 = (lang || loadLang()) === "en";
+      try { // 1차 blocker②+5차 미완수정①: 주입에 쓴 지문을 재판독 없이 동결하고 '이 ask의 잡 id'를 동등 결속(시계 무관 — 후처리가 id 일치로만 인정)
+        const jid9 = typeof process.env.CODEX_BRIDGE_ASK_JOB_ID === "string" && process.env.CODEX_BRIDGE_ASK_JOB_ID ? process.env.CODEX_BRIDGE_ASK_JOB_ID : null;
+        if (!writeEnvelopeFreeze(wsIn, evi.st === "ok" ? evi.sha1 : null, jid9)) console.error(en9 ? "[envelope freeze write failed — admission disabled this ask]" : "[경계 동결 기록 실패 — 이번 ask 입장 심사 미발동]");
+      } catch { /* 안전 방향 */ }
+      if (evi.text) {
+        out9.envText = evi.text;
+        out9.baseQual = profile === "core" ? envelopeCoreQualifier(lang) : envelopeIntegrityQualifier(lang); // 증분 2(사용자 결정): 경계=프로필 공통 — 무결성=재소환 금지+경계 재심 관점([주의]로 제출)
+        if (evi.warn === "truncated") console.error(en9 ? "[verification envelope: some items exceeded the caps (12/axis · 200 chars) and were truncated — the injected boundary omits the excess; trim the file and re-approve]" : "[검증 경계: 일부 항목이 상한(축 12·항목 200자) 초과로 절삭된 채 주입됨 — 초과분은 경계에서 빠짐. 파일을 줄여 재승인 권장]"); // 1차 blocker④: 절삭의 침묵 금지
+        if (profile === "core") out9.envText += "\n\n" + v2DirectiveFor(wsIn, lang); // 증분 2 §3.1: 경계 활성+core=v2 서식 요구+열린 지적 자동 동봉(하네스 직접). integrity=문구 준수 감사(기계화는 증분 3 검토 — 1차 [보완]② 지시·후처리 정합)
+      }
+      else if (evi.warn === "mismatch") console.error(en9 ? "[verification envelope changed without approval — skipped this ask; re-approve on the dashboard]" : "[검증 경계 미승인 변경 — 이번 검증에 주입 생략. 대시보드에서 재승인 필요]");
+      else if (evi.warn === "corrupt") console.error(en9 ? "[verification envelope unreadable — skipped]" : "[검증 경계 판독 불가 — 주입 생략]");
+      } finally { releaseEnvelopeTransLock(wsIn, lk9.token); } // 판독·동결·조립까지 잠금 보유(전이와 원자 상호배제)
+    }
+  }
+  return out9;
 }
 
 // ── P3b B-5: scout-attach 표면 재배선 — buildMapAttach 경유(비v2=기존 동봉 위임·바이트 동일) ─────────
@@ -1322,6 +1385,13 @@ function cmdAskStart(rest) {
   if (!req.prompt) die('사용법: ask-start [--allow-new] "<프롬프트>"', 2);
   requireLinksWritable(); // P-1: 손상 links 상태에서 worker를 만들면 연결·기록이 반복 실패 — 시작 전 중단
   const ws = configWs();
+  { // §7 승인 전이 상호배제: 도장 전이(원본↔계약 두 저장소 교체)의 순간 불일치 창에 '경계 없는 검증'이
+    // 시작되는 것 차단 — 산 잠금=짧은 재시도(전이는 수 초 규모) 후 정직 오류·WAL 잔존=복구 안내(위장 금지).
+    let st9 = envelopeTransState(ws);
+    for (let i9 = 0; i9 < 5 && st9 === "busy"; i9++) { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400); } catch { /* 대기 실패=즉시 재검사 */ } st9 = envelopeTransState(ws); }
+    if (st9 === "busy") die(tB("수칙서 승인 전이가 진행 중입니다 — 잠시 후 다시 시작하세요(경계 없는 검증 시작 차단).", "A rulebook approval transition is in progress — retry shortly (starting a boundary-less verification is blocked)."), 3);
+    if (st9 === "recover-needed") die(tB("수칙서 승인 전이가 중단된 흔적(WAL)이 있습니다 — 대시보드를 열거나 envelope-transition recover를 실행해 복구한 뒤 시작하세요.", "An interrupted rulebook approval transition (WAL) exists — open the dashboard or run envelope-transition recover, then start."), 3);
+  }
   if (!fs.existsSync(ASK_JOB_WORKER)) die(tB("ask job worker가 없습니다. node install.js로 런타임을 다시 동기화하세요.", "Ask job worker is missing. Re-sync the runtime with node install.js."));
   let id,timeoutMin,job,file;
   // read-active/read-job/create-queued를 한 임계구역으로 묶는다. 동시 ask-start 둘이 모두 '없음'을 보고
@@ -1416,6 +1486,79 @@ function cmdAskWait(rest) {
 }
 
 // P-12 2a — 검증 백로그 장부 CLI(설계 동결 ⓚ): add/list/done/dismiss/clear. 프로젝트별·로컬 전용.
+// §7 증분 2 — 제안본 CLI: propose=초안 파일(수칙서 전문 JSON)을 검증해 하네스 로컬 제안본으로 저장(원본·주입 무변) /
+// show=현 제안본 표시 / discard=폐기(철회=원상 복귀 그 자체 — 원본은 애초에 무변). 승인은 대시보드 도장 전용.
+function cmdEnvelopeProposal(rest) {
+  const en = loadLang() === "en";
+  const ws = configWs();
+  const repo = resolveScoutRepo(ws, loadContract(ws)).repo;
+  const sub = rest[0];
+  if (sub === "propose") {
+    const fi = rest.indexOf("--file");
+    const fp = fi >= 0 ? rest[fi + 1] : null;
+    if (!fp) { console.error(en ? "usage: envelope-proposal propose --file <draft.json> [--note ...]" : "사용: envelope-proposal propose --file <초안.json> [--note ...]"); return 2; }
+    let txt; try { txt = fs.readFileSync(fp, "utf8"); } catch { console.error(en ? "cannot read draft file" : "초안 파일을 읽을 수 없음"); return 2; }
+    const ni = rest.indexOf("--note");
+    const r = writeEnvelopeProposal(ws, repo, txt, ni >= 0 ? rest.slice(ni + 1).join(" ") : "");
+    if (!r.ok) { console.error((en ? "proposal rejected: " : "제안본 거부: ") + r.error); return 2; }
+    console.log((en ? "proposal saved (original & injection unchanged until the dashboard stamp): " : "제안본 저장됨(대시보드 도장 전까지 원본·주입 무변): ") + r.newHash);
+    return 0;
+  }
+  if (sub === "show") {
+    const pr = readEnvelopeProposal(ws, repo);
+    if (pr.st === "absent") { console.log(en ? "(no proposal)" : "(제안본 없음)"); return 0; }
+    if (pr.st !== "ok") { console.error(en ? "proposal file is corrupt (will not be shown for approval)" : "제안본 파일 손상(승인 화면에 표시되지 않음)"); return 1; }
+    console.log((en ? "# proposal " : "# 제안본 ") + pr.newHash + (pr.note ? " — " + pr.note : "") + "\n" + pr.proposalText);
+    return 0;
+  }
+  if (sub === "discard") {
+    discardEnvelopeProposal(ws);
+    console.log(en ? "proposal discarded (original was never touched)" : "제안본 폐기됨(원본은 애초에 무변)");
+    return 0;
+  }
+  console.error(en ? "usage: envelope-proposal <propose|show|discard>" : "사용: envelope-proposal <propose|show|discard>");
+  return 2;
+}
+function cmdEnvelopeTransition(rest) {
+  const en = loadLang() === "en";
+  if (rest[0] !== "recover") { console.error(en ? "usage: envelope-transition recover" : "사용: envelope-transition recover"); return 2; }
+  const r = recoverEnvelopeTransition(configWs());
+  if (r.st === "none") { console.log(en ? "(no interrupted transition)" : "(중단된 전이 없음)"); return 0; }
+  if (r.st === "recovered") { console.log((en ? "transition completed: " : "전이 완료 수렴: ") + r.newHash); return 0; }
+  console.error((en ? "recover failed: " : "복구 실패: ") + (r.reason || r.st) + (en ? " (WAL preserved — old & new full texts inside)" : " (WAL 보존 — 구·신 전문이 안에 있음)"));
+  return 1;
+}
+// 거버넌스 §7 증분 1 — 수칙서 후보 장부 CLI: list=현 승인 세대 기준 후보 상태 조회 / mark=결과 기록(append 전용).
+// 기록 세대=현 승인 세대(계약 envelopeHash) — 소진 재료의 스킵 판정과 같은 축.
+function cmdEnvelopeCandidate(rest) {
+  const en = loadLang() === "en";
+  const ws = configWs();
+  const sub = rest[0];
+  const gen = (() => { try { return loadContract(ws).envelopeHash || null; } catch { return null; } })();
+  if (sub === "list") {
+    const { latest } = readEnvelopeCandidates(ws);
+    const rows = [...latest.entries()].filter(([k]) => k.endsWith("@" + String(gen || "")));
+    if (!rows.length) { console.log(en ? "(no candidate records for the current approval generation)" : "(현 승인 세대의 후보 기록 없음)"); return 0; }
+    for (const [, r] of rows) console.log(`${r.candidateId} ${r.status} ${r.ts || ""}${r.note ? " — " + r.note : ""}`);
+    return 0;
+  }
+  if (sub === "mark") {
+    const id = String(rest[1] || "");
+    const status = String(rest[2] || "");
+    const ni = rest.indexOf("--note");
+    const note = ni >= 0 ? rest.slice(ni + 1).join(" ") : "";
+    if (!/^[0-9a-f]{16}$/.test(id) || !ENVELOPE_CANDIDATE_STATUSES.includes(status)) {
+      console.error(en ? "usage: envelope-candidate mark <16hex-id> <proposed|adopted|declined|failed> [--note ...]" : "사용: envelope-candidate mark <16자리 id> <proposed|adopted|declined|failed> [--note ...]");
+      return 2;
+    }
+    const okW = appendEnvelopeCandidates(ws, [{ candidateId: id, envelopeHash: gen, status, ts: new Date().toISOString(), ...(note ? { note: note.slice(0, 200) } : {}) }]);
+    if (!okW) { console.error(en ? "record failed (ledger write error)" : "기록 실패(장부 쓰기 오류)"); return 1; }
+    console.log((en ? "recorded: " : "기록됨: ") + id + " " + status);
+    return 0;
+  }
+  console.error(en ? "usage: envelope-candidate <list|mark ...>" : "사용: envelope-candidate <list|mark ...>");
+  return 2;
+}
 function cmdBacklog(rest) {
   const lib = require("./contract-lib.js");
   const ws = configWs();
@@ -1596,8 +1739,166 @@ function budgetNoticeLines(res, lang, profile) {
 // 반환 {machine, notice}: machine=judgeMachineVerdict 결과(+parse) → formatForClaude 4번째 인자·flagVerdict 전달,
 // notice=[백로그] 자동 장부 등록 영수증/거부/실패 줄(stdout 전용 — raw answer·proof·rollout 불변).
 // 민감 방어(D-2): safeBacklogAutoTitle 거부 시 제목 원문을 장부·경고 어디에도 복사하지 않는다(순번·태그만).
+// 증분 2: 계보 장부의 캠페인 결속 — 기존 캠페인 서랍(vcamp-1)의 식별자를 재사용(부재=no-campaign: 무제한
+// 슬롯 등 캠페인 미예약 상태도 장부는 쌓인다 — 라운드 유형 유도·열린 지적은 같은 식별자 안에서만 유효).
+function currentCampaignIdFor(ws) {
+  try { const o = JSON.parse(fs.readFileSync(campaignFileFor(ws), "utf8")); if (o && typeof o === "object" && (o.campaignId || o.startedAt)) return String(o.campaignId || o.startedAt); } catch { /* 미예약 */ }
+  return "no-campaign";
+}
+// 증분 2 §3.1: 경계 활성 시 v2 서식 요구+열린 지적 자동 동봉. 열린 목록은 하네스가 장부에서 직접 뽑아
+// 주입한다(구현모델이 목록을 선별·누락해 기존 결함을 '신규'로 위장 분류시키는 경로 차단 — 설계 2차 blocker①).
+function v2DirectiveFor(ws, lang) {
+  const en = (lang || loadLang()) === "en";
+  const L = [];
+  L.push(en
+    ? '[Finding format v2 — envelope active] Submit the machine block with the "[findings v2]" marker (fields beyond v1): "origin":"baseline|fix-induced|incomplete-fix|new-evidence" (required on every blocker), "supported":true|false, an out-of-scope claim must cite "oosId":"oos-<n>" exactly, an invariant-breach blocker MUST cite "abId":"ab-<n>" (uncited = no exemption), a re-raised finding cites "id":"f-xxxxxxxx", an incomplete fix cites "prevId". Missing or invalid fields are treated as absent by the admission gate.'
+    : '[지적 서식 v2 — 검증 경계 활성] 기계 판독 블록은 "[지적 목록 v2]" 마커로 제출하라(v1 대비 추가 필드): "origin":"baseline|fix-induced|incomplete-fix|new-evidence"(모든 blocker에 필수), "supported":true|false, 범위 밖 주장은 "oosId":"oos-<n>" 정확 인용, 불변식 침해 blocker는 "abId":"ab-<n>" 인용 필수(미인용=면제 없음), 재지적은 "id":"f-xxxxxxxx", 미완 수정은 "prevId" 인용. 누락·무효 형식은 입장 심사에서 미기재로 취급된다.');
+  L.push(en
+    ? '[Scope-expansion channel] A finding OUTSIDE the boundary that deserves reconsideration: submit "tag":"scope-expansion" with a mandatory "abId":"ab-<n>" and a concrete causal path. It is a non-blocking submission (never a failure reason by itself). If valid, the harness escalates it to an open blocker for the NEXT round (limit: once per campaign AND approval generation); invalid/uncited goes to [backlog]. Boundary revisions themselves remain user-only.'
+    : '[범위 확장 통로] 경계 밖이지만 재검토가 필요한 중대 발견: "tag":"범위확장"으로 제출하되 "abId":"ab-<n>" 인용+구체 인과 경로 필수. 비차단 제출이다(그 자체로 실패 사유 아님). 유효하면 하네스가 다음 라운드의 열린 blocker로 승격한다(캠페인·승인 세대당 1회 상한). 무효·미인용=[백로그]. 경계 개정 자체는 사용자만 한다.');
+  L.push(en
+    ? '[MAP routing] If a Project MAP attachment is present: only slices marked fresh may inform boundary judgments; stale/unknown maps are advisory only — never a basis for supported/oosId claims.'
+    : '[MAP 라우팅] Project MAP 동봉이 있는 경우: fresh 표시 조각만 경계 판정 참고 가능. stale·unknown 지도=참고 전용 — supported·oosId 주장 근거로 사용 금지.');
+  try {
+    // 2차 미완수정③④ 반영: 상한 제거=전 목록 주입(구현모델 의존 복귀 금지 — 프롬프트 비대는 제목 60자
+    // 절단으로 완화·id는 전부 보존) / 세대 필터=이 ask의 동결 세대 open만(구세대 id 주입 금지).
+    const opens = openFindingsFor(ws, currentCampaignIdFor(ws), readFrozenEnvelope(ws));
+    if (opens.length) {
+      L.push(en ? "[Open findings — cite these ids when re-raising or reporting an incomplete fix (uncited = treated as new)]" : "[열린 지적 — 재지적·미완 수정 보고 시 이 id를 인용하라(미인용=신규 취급)]");
+      for (const o of opens) L.push("> " + o.id + " [" + o.tag + "] " + String(o.titleNorm || "").slice(0, 60));
+    }
+  } catch { /* 장부 판독 실패=목록 생략(서식 요구는 유지) */ }
+  return L.join("\n");
+}
+// 증분 3(§4): 상한 소진(마지막 예약 왕복) 시 '구현이 놓쳤나 vs 검증이 올렸나'에 데이터로 답하는 원인 분해 1줄.
+// demote 사유 구분: demoted+oosId=범위 밖 / demoted+oosId 없음=후속 이론(신규성·확인 라운드 심사).
+// §7 수칙서 후보 재료(요구 동결 2026-07-24 — 구현 증분 1): 상한 소진(마지막 예약 왕복) 보고에 기계 재료를
+// 병기하고, 구현모델에게 '수칙서 후보' 절 작성 의무(§8 표현 계약)를 지시한다. 후보 원천(①~③=기계):
+// ①같은 oosId 강등 2회+ ②입장 심사 승격 범위확장(escalation) ③같은 계보(occurrence) 반복 2회+(원 등장 포함 3회).
+// 재제시 스킵: 후보 장부에서 같은 (candidateId, 승인 세대)에 declined|failed → 목록에서 제외하고 스킵 수만 표기.
+// 후보 0건=명시(침묵 생략 금지). ④(보류 항목)는 캐논 전용 재료 — 여기서 집계하지 않음(§7 명문).
+// §7 증분 3 — 후보 집계 본체(분리: 소진 보고와 대시보드 후보 카드가 같은 산출을 공유). 반환
+// { live, skipped, overCap } — live=[{candidateId, kind, key, n, titles}].
+function computeEnvelopeCandidatesFor(ws) {
+  const camp = currentCampaignIdFor(ws);
+  const gen = readFrozenEnvelope(ws);
+  const rows = readFindingsLedger(ws).filter((r) => r.campaignId === camp && (r.envelopeHash || null) === (gen || null));
+  const titleOf = new Map();
+  for (const r of rows) if (r.type === "finding" && r.findingId) titleOf.set(r.findingId, String(r.titleNorm || "").slice(0, 60));
+  // §7 증분 3(실전 첫 발동의 교훈 2026-07-24): '이미 해소된 계보'는 후보에서 제외 — 반복됐어도 이번 캠페인에서
+  // 수정 완료된 지적은 "앞으로 지킬 약속" 후보가 아니다. open 판정=현 세대 열린 지적 목록.
+  const openIds9 = new Set();
+  try { for (const o of openFindingsFor(ws, camp, gen)) openIds9.add(o.id); } catch { /* 판독 실패=제외 없이 전체(보수) */ }
+  const cands = [];
+  { // ① oos 강등 반복(강등=닫힘이 정상이라 open 조건 비적용 — 반복 자체가 신호)
+    const byOos = new Map();
+    for (const r of rows) if (r.type === "finding" && r.demoted && r.oosId) { const a = byOos.get(r.oosId) || []; a.push(r); byOos.set(r.oosId, a); }
+    for (const [oosId, list] of byOos) if (list.length >= 2) cands.push({ candidateId: envelopeCandidateId("oos-repeat", oosId), kind: "oos-repeat", key: oosId, n: list.length, titles: list.map((x) => titleOf.get(x.findingId) || x.titleNorm || "").filter(Boolean).slice(0, 3) });
+  }
+  { // ② 입장 심사 승격 범위확장(기계 승격 — 사용자 승인 아님·§2 승인과 구분)·해소됐으면 제외
+    for (const r of rows) if (r.type === "escalation" && r.findingId && openIds9.has(r.findingId)) cands.push({ candidateId: envelopeCandidateId("escalation", r.findingId), kind: "escalation", key: r.findingId, n: 1, titles: [titleOf.get(r.findingId) || ""].filter(Boolean) });
+  }
+  { // ③ 같은 계보 반복(occurrence — 원 등장 포함 3회+)·effectiveTag가 blocker인 재등장만·**고유 라운드 수**로
+    // 집계(재검증 blocker② — 같은 라운드 중복 레코드를 별도 반복으로 세는 조기 후보 차단·기록 측 억제와 이중 방어)·
+    // 해소된(open 아님) 계보=제외(증분 3).
+    const byF = new Map();
+    for (const r of rows) if (r.type === "occurrence" && r.findingId && r.effectiveTag === "blocker") { const st9 = byF.get(r.findingId) || new Set(); st9.add(r.round); byF.set(r.findingId, st9); }
+    for (const [fid, st9] of byF) if (st9.size >= 2 && openIds9.has(fid)) cands.push({ candidateId: envelopeCandidateId("lineage", fid), kind: "lineage", key: fid, n: st9.size + 1, titles: [titleOf.get(fid) || ""].filter(Boolean) });
+  }
+  { // ④ 빼기 후보(§7 성장 억제 — 현 승인 세대 '전체'에서 한 번도 발동 안 한 범위-밖 항목): 세대 전 캠페인의
+    // finding에서 oosId 인용이 0회인 oos-N=빼기/병합 검토 재료. 항상-차단(ab)은 발동 데이터가 심사 면제 축이라
+    // 미인용=미발동으로 단정할 수 없어 제외(정직 한정 — 캐논 재료로만).
+    try {
+      const c9 = loadContract(ws);
+      const repo9 = resolveScoutRepo(ws, c9).repo;
+      const evv9 = readVerifyEnvelope(repo9);
+      if (evv9.st === "ok" && c9.envelopeHash === evv9.sha1 && (gen || null) === evv9.sha1) {
+        const usedOos = new Set(readFindingsLedger(ws).filter((r) => r.type === "finding" && (r.envelopeHash || null) === (gen || null) && r.oosId).map((r) => r.oosId));
+        evv9.data.outOfScope.forEach((txt, i) => { const id9 = "oos-" + (i + 1); if (!usedOos.has(id9)) cands.push({ candidateId: envelopeCandidateId("unused-oos", id9 + "@" + evv9.sha1), kind: "unused-oos", key: id9, n: 0, titles: [String(txt).slice(0, 60)] }); });
+      }
+    } catch { /* 원본 판독 실패=빼기 후보 생략(추가 후보는 유지) */ }
+  }
+  // 항목 수 임계(§7 — 추가 단방향 성장 방지): 수칙서 3축 합이 30항목 이상이면 추가 후보보다 정리 후보 우선 표기
+  let overCap = false;
+  try { const c9 = loadContract(ws); const evv9 = readVerifyEnvelope(resolveScoutRepo(ws, c9).repo); if (evv9.st === "ok") overCap = (evv9.data.supportedEnv.length + evv9.data.alwaysBlocker.length + evv9.data.outOfScope.length) >= 30; } catch { /* 판정 불가=false */ }
+  const { latest } = readEnvelopeCandidates(ws);
+  let skipped = 0;
+  const live = cands.filter((c) => {
+    const cur = latest.get(c.candidateId + "@" + String(gen || ""));
+    if (cur && (cur.status === "declined" || cur.status === "failed")) { skipped++; return false; }
+    return true;
+  });
+  return { live, skipped, overCap, gen: gen || null }; // gen=산출 세대(동결) — 소비자(대시보드)는 이 값과 현 승인 해시의 일치를 결속해야 함(증분 3 재검증 blocker)
+}
+function envelopeCandidateNoticeFor(ws, lang, res) {
+  try {
+    if (!res || !res.tracked || !res.last) return "";
+    const en = lang === "en";
+    const { live, skipped, overCap } = computeEnvelopeCandidatesFor(ws);
+    const kindLabel = (k) => en
+      ? (k === "oos-repeat" ? "repeated out-of-scope demotions — reconsider defending this scenario" : k === "escalation" ? "admission-escalated scope expansion — consider formal adoption" : k === "unused-oos" ? "never triggered this approval generation — consider removing/merging" : "repeated blocker lineage — consider an always-block entry")
+      : (k === "oos-repeat" ? "범위 밖 강등 반복 — 이 시나리오를 계속 치워둘지 재검토" : k === "escalation" ? "입장 심사 승격 확장 — 정식 편입 검토" : k === "unused-oos" ? "이 승인 세대에서 한 번도 발동 안 됨 — 빼기/병합 검토" : "같은 계보 blocker 반복 — 항상 차단 명시 검토");
+    const L = [];
+    L.push(en ? "\n[rulebook candidates · this campaign — machine material]" : "\n[수칙서 후보 재료 · 이번 캠페인 — 기계 집계]");
+    if (overCap) L.push(en ? "> ⚠ the rulebook already holds 30+ items — prioritize removal/merge candidates over additions (§7 growth control)." : "> ⚠ 수칙서가 이미 30항목 이상 — 추가보다 빼기/병합 후보를 우선하라(§7 성장 억제).");
+    if (!live.length) L.push(en ? "> none from this exhaustion (state this explicitly in the report — no silent omission)." + (skipped ? ` (${skipped} previously declined/failed candidate(s) skipped this generation)` : "") : "> 이번 소진에서는 수칙서로 올릴 후보가 없습니다(보고에 명시 — 침묵 생략 금지)." + (skipped ? ` (이 승인 세대에서 이미 거절·실패한 후보 ${skipped}건 스킵)` : ""));
+    else {
+      for (const c of live) L.push(`> ${c.candidateId} [${c.kind} ×${c.n}] ${kindLabel(c.kind)}${c.titles.length ? " — " + c.titles.join(" / ") : ""}`);
+      if (skipped) L.push(en ? `> (${skipped} previously declined/failed candidate(s) skipped this generation)` : `> (이 승인 세대에서 이미 거절·실패한 후보 ${skipped}건 스킵)`);
+      L.push(en
+        ? "[duty] Write a 'rulebook candidates' section in the exhaustion report from the material above, per the global presentation contract (§8): no jargon · a concrete situation example per candidate · what changes if adopted / what stays if not · one-line recommendation with grounds · include a draft clause the user can approve as-is. Selection is confirmed via chat reply (a dashboard click may only record a selection); adoption still requires the user's stamp. Record outcomes with: envelope-candidate mark <id> <adopted|declined|failed>."
+        : "[의무] 위 재료로 소진 보고에 '수칙서 후보' 절을 §8 전역 표현 계약대로 작성하라: 기술용어 금지 · 후보마다 상황예시 · 채택 시 달라지는 것/미채택 시 유지되는 것 · 권장+근거 1줄 · 사용자가 '이대로 올려'만 하면 되는 문안 초안 포함. 선택 확정=대화 응답(대시보드 클릭은 선택 기록까지만) · 채택돼도 효력은 사용자 도장부터. 결과 기록: envelope-candidate mark <id> <adopted|declined|failed>.");
+    }
+    return L.join("\n") + "\n";
+  } catch { return ""; } // 재료 산출 실패가 판정 전달을 막지 않음
+}
+function breakdownNoticeFor(ws, lang, res) {
+  try {
+    if (!res || !res.tracked || !res.last) return "";
+    const en = lang === "en";
+    const camp = currentCampaignIdFor(ws);
+    const gen = readFrozenEnvelope(ws);
+    const rows9 = readFindingsLedger(ws);
+    const fs9 = rows9.filter((r) => r.type === "finding" && r.campaignId === camp && (r.envelopeHash || null) === (gen || null));
+    if (!fs9.length) return "";
+    // 증분 3 1차 blocker② 반영: 승격 유래 finding은 escalation 축에만 — 초기/유발 축과 중복 집계 금지(원인 오보 차단)
+    const escIds9 = new Set(rows9.filter((r) => r.type === "escalation" && r.campaignId === camp && (r.envelopeHash || null) === (gen || null)).map((r) => r.findingId));
+    let base9 = 0, fixi = 0, oos9 = 0, theory = 0;
+    for (const f of fs9) {
+      if (escIds9.has(f.findingId) || f.expansion) continue; // 확장 유래(승격·상한 소진 주의)=초기/유발 축 제외
+      if (f.demoted) { if (f.oosId) oos9++; else theory++; continue; }
+      if (f.origin === "fix-induced") fixi++; else base9++;
+    }
+    const esc9 = escIds9.size;
+    return en
+      ? `\n[cause breakdown · this campaign] initial defects ${base9} · fix-induced ${fixi} · out-of-scope demoted ${oos9} · late-theory demoted ${theory} · scope-expansions ${esc9}\n`
+      : `\n[원인 분해 · 이번 캠페인] 초기 결함 ${base9} · 수정 유발 ${fixi} · 범위 밖 강등 ${oos9} · 후속 이론 강등 ${theory} · 범위 확장 ${esc9}\n`;
+  } catch { return ""; }
+}
+// 증분 3(§4·프로필 공통 결정): 무결성 검증 결과에 '경계 재심 재료' 병기 — 치워둔(강등) 지적을 oos 항목별로
+// 집계해 재검토 판단 재료로 제공(자동 개정 아님 — 개정은 사용자만). 강등 0건·경계 비활성="".
+function integrityReviewLine(ws, lang, profile) {
+  try {
+    if (profile !== "integrity") return "";
+    const en = lang === "en";
+    const gen = readFrozenEnvelope(ws);
+    if (!gen) return "";
+    const camp = currentCampaignIdFor(ws);
+    const cnt = new Map();
+    for (const r of readFindingsLedger(ws)) {
+      if (r.type !== "finding" || r.campaignId !== camp || !r.demoted || !r.oosId) continue;
+      if ((r.envelopeHash || null) !== (gen || null)) continue; // 1차 [주의]① 반영: 세대 필터 — 재승인으로 의미가 바뀐 구세대 oos 번호를 신세대 집계에 합산 금지(개정 대상 오판 차단)
+      cnt.set(r.oosId, (cnt.get(r.oosId) || 0) + 1);
+    }
+    if (!cnt.size) return "";
+    const parts = [...cnt.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => k + " ×" + v);
+    return en
+      ? "\n[boundary review material] findings demoted as out-of-scope this campaign: " + parts.join(" · ") + " — if any deserve defending now, request a boundary revision by item id (user approval required)\n"
+      : "\n[경계 재심 재료] 이번 캠페인에서 범위 밖으로 치워진 지적: " + parts.join(" · ") + " — 이제는 방어할 가치가 있어 보이면 항목 번호로 경계 개정을 요청하세요(개정은 사용자 승인)\n";
+  } catch { return ""; }
+}
 function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId) {
-  if (profileSnap !== "core") return { machine: null, notice: "" };
+  if (profileSnap !== "core") return { machine: null, notice: "" }; // 기계 판독 계약은 core 경로(무결성=문구 준수 감사 — 정본 §2.1 구현 한정)
   const en = langSnap === "en";
   const parse = parseFindingsBlock(answer);
   // 위치 결속(구현검증 1차 blocker①): 정합 판정은 '종료 마커 뒤의 판정 선언'에만 결속 — 블록 앞 본문의 옛 판정
@@ -1605,12 +1906,149 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
   const verdict = parse.present && parse.ok ? extractVerdict(parse.tailVerdictLine || "") : extractVerdict(String(answer || ""));
   const machine = { ...judgeMachineVerdict(verdict, parse), parse };
   const out = [];
-  // 자동 등록은 '블록 정상+블록 뒤 판정 존재'일 때만 — 형태가 깨진 답(판정 미결속 포함)에서 부작용을 만들지 않는다.
-  if (parse.ok && machine.reasonKey !== "no-verdict-line") {
+  // ── 증분 2(§3.2): 입장 심사+계보 장부 — 동결 경계(ask 시작 스냅샷) 기준 ─────────────────────────
+  // 4차→5차 미완수정① 반영 — 동결 기록 실패의 최종 방어=후처리 자체 검증(벽시계 비교 폐기): 동결 레코드의
+  // askId가 이 검증 잡 id와 '동등'할 때만 이 ask의 동결로 인정(시계 역행 무관). 불일치·부재=낡은 동결(이번
+  // ask의 기록 실패·잔존)로 간주해 심사 미발동(fail-closed). askId가 없는 비표준 직접 경로는 심사 자체를
+  // 발동하지 않는 방향으로 동일(동결 askId=null이어도 잡 askId가 없으면 대조 불능=미발동 — 내구 경로가 표준).
+  let frozen = null;
+  let staleFreezeNote = false;
+  {
+    const fz = readFrozenEnvelopeRec(ws);
+    frozen = fz ? fz.hash : null;
+    if (fz && frozen) {
+      // 6차 미완수정① 반영: 비교 기준=동결 기록자와 '같은 출처'(이 child 프로세스의 내구 잡 env) — 인자
+      // askId는 L1-A 실행 표식용 랜덤 UUID라 잡 id와 다르다(라이브 실증: 정상 ask가 항상 미발동). env가
+      // 없는 비내구 직접 경로=엄격 미발동(잔존 null-동결 미검출 창까지 제거 — 내구 경로가 표준).
+      const envJid9 = typeof process.env.CODEX_BRIDGE_ASK_JOB_ID === "string" && process.env.CODEX_BRIDGE_ASK_JOB_ID ? process.env.CODEX_BRIDGE_ASK_JOB_ID : null;
+      if (!envJid9 || !fz.askId || fz.askId !== envJid9) { frozen = null; staleFreezeNote = true; }
+    }
+  }
+  const camp = currentCampaignIdFor(ws);
+  const roundType = deriveRoundType(ws, camp, frozen); // 1차 blocker④: 같은 동결 세대의 라운드만으로 유도(비활성 기록이 활성 심사 오염 금지)
+  const roundNo = readFindingsLedger(ws).filter((r) => r.type === "round" && r.campaignId === camp && (r.envelopeHash || null) === (frozen || null)).length + 1;
+  const blockShaped = parse.present && parse.ok && machine.reasonKey !== "no-verdict-line";
+  if (staleFreezeNote) out.push(en ? "[envelope freeze is not bound to this verification job (freeze write likely failed or non-durable path) — admission disabled this round]" : "[경계 동결이 이 검증 잡에 결속되지 않음(동결 기록 실패·비내구 경로로 판단) — 이번 라운드 입장 심사 미발동]");
+  let effItems = parse.findings; // 자동 등록 루프가 쓰는 '실효' 목록(강등 반영본)
+  if (frozen && blockShaped && parse.ver === "v2") {
+    // 동결 세대 재확인(§2.1 4차 blocker①): 후처리 시점 승인 해시≠동결이면 경계 참조(oosId·abId) 무시+경고
+    let oosCount = null, abCount = null;
+    try {
+      const cNow = loadContract(ws, langSnap);
+      const evNow = readVerifyEnvelope(resolveScoutRepo(ws, cNow).repo);
+      // 1차 blocker②: 파일 세대+'현재 계약 도장'까지 동결과 일치해야 참조 유효(검증 중 재승인·철회=무시+경고)
+      if (evNow.st === "ok" && evNow.sha1 === frozen && cNow.envelopeHash === frozen) { oosCount = evNow.data.outOfScope.length; abCount = evNow.data.alwaysBlocker.length; }
+      else out.push(en ? "[envelope generation changed — oosId/abId references ignored this round]" : "[경계 세대 변경 — 이번 라운드의 경계 참조(oosId·abId)는 무시됨]");
+    } catch { oosCount = null; abCount = null; }
+    const openList = openFindingsFor(ws, camp, frozen); // 2차 미완수정④: 같은 동결 세대의 open만(구세대 id=재지적 인정 금지)
+    const openIds = new Set(openList.map((o) => o.id));
+    const adm = judgeAdmission(parse.findings, roundType, openIds, oosCount, abCount);
+    machine.admission = { kept: adm.keptBlockers, demoted: adm.demotedBlockers, roundType };
+    effItems = adm.items;
+    const RK = {
+      "ab-exempt": en ? "invariant (abId) cited — exempt from demotion (truth judged in re-judgment)" : "불변식(abId) 지목 — 강등 면제(진위는 재판단 몫)",
+      "lineage-bound": en ? "incomplete-fix — lineage bound (prevId verified)" : "미완 수정 — 계보 결속(prevId 확인)",
+      "lineage-unproven": en ? "incomplete-fix kept — [lineage unproven] (prevId missing/unmatched)" : "미완 수정 — blocker 유지·[계보 미증명](prevId 부재/불일치)",
+      "out-of-scope": en ? "out-of-scope (approved boundary) → demoted to [backlog]" : "범위 밖(승인 경계) → [백로그] 강등",
+      "late-theory": en ? "late new blocker without qualifying origin (theory not raised in round 1) → [backlog]" : "후속 라운드 신규 blocker(자격 origin 없음 — 1차에 제출하지 않은 이론 강화) → [백로그] 강등",
+      "confirm-scope": en ? "confirm-round new blocker not fix-induced → [backlog]" : "확인 라운드 신규 blocker(수정 유발 아님) → [백로그] 강등",
+      "ab-invalid": en ? "abId cites an invalid index — exemption not applied (other rules evaluated)" : "abId가 무효 인덱스 — 면제 미발동(다른 규칙으로 계속 평가)",
+      "expansion-candidate": en ? "scope-expansion with a valid abId — escalation candidate (once per campaign)" : "범위 확장 — 유효 abId 인용(승격 후보·캠페인당 1회)",
+      "expansion-unproven": en ? "scope-expansion without a valid abId → [backlog]" : "범위 확장 — abId 무효/미인용 → [백로그] 강등",
+    };
+    for (const r of adm.receipts) out.push((en ? "[admission] finding #" + r.idx + ": " : "[입장 심사] " + r.idx + "번째 항목: ") + (RK[r.key] || r.key) + (r.detail ? " (" + r.detail + ")" : ""));
+    // 증분 3(§4): 범위 확장 승격 — 유효 후보(escalateCandidate)를 캠페인·세대당 1회 blocker로 승격해 '다음
+    // 라운드'의 열린 지적으로 등록(이번 판정은 불변 — 기계는 판정을 만들지도 뒤집지도 않는다). 상한 소진=주의 기록.
+    try {
+      const escUsed = readFindingsLedger(ws).some((r9) => r9.type === "escalation" && r9.campaignId === camp && (r9.envelopeHash || null) === (frozen || null));
+      let escSeq = 0;
+      for (const f of adm.items) {
+        if (!f.escalateCandidate) continue;
+        escSeq++;
+        const tnE = normBacklogTitle(f.title);
+        if (!escUsed && escSeq === 1) {
+          const fidE = newFindingId(camp, frozen, roundNo, tnE, "esc" + escSeq);
+          appendFindingsLedger(ws, [
+            { type: "escalation", campaignId: camp, round: roundNo, findingId: fidE, abId: f.abId || "", envelopeHash: frozen, ts: new Date().toISOString() },
+            { type: "finding", findingId: fidE, campaignId: camp, round: roundNo, tag: "blocker", titleNorm: tnE, origin: "new-evidence", oosId: "", envelopeHash: frozen, demoted: false, status: "open", closeReason: "", ts: new Date().toISOString() },
+          ]);
+          out.push(en ? "[scope-expansion granted] " + fidE + " — escalated to an open blocker for the next round (once per campaign & approval generation; boundary revision itself stays user-only)" : "[범위 확장 승격] " + fidE + " — 다음 라운드부터 열린 blocker로 추적(캠페인·승인 세대당 1회·경계 개정 자체는 사용자만)");
+        } else {
+          appendFindingsLedger(ws, [{ type: "finding", findingId: newFindingId(camp, frozen, roundNo, tnE, "esc" + escSeq), campaignId: camp, round: roundNo, tag: "주의", titleNorm: tnE, origin: "new-evidence", oosId: "", envelopeHash: frozen, demoted: false, expansion: true, status: "open", closeReason: "", ts: new Date().toISOString() }]); // expansion 표식 — 원인 분해에서 초기/유발 축 오집계 금지
+          out.push(en ? "[scope-expansion cap reached] recorded as [caution] — this campaign & approval generation's single escalation is already used" : "[범위 확장 상한 소진] 캠페인·승인 세대당 1회 승격이 이미 사용됨 — [주의]로 기록(재판단·사용자 보고 경로)");
+        }
+      }
+    } catch { /* 승격 실패가 판정 전달을 막지 않음 */ }
+    // §3.2 규칙 5(판정 반전 안전장치): 강등으로 blocker 0이 된 '실패'는 자동 통과가 아니라 정본 '보류'+선택지
+    if (machine.effective === "fail" && adm.keptBlockers === 0 && adm.demotedBlockers > 0) {
+      machine.effective = "inconclusive"; machine.demoted = true; machine.reasonKey = "scope-demoted";
+      out.push(en
+        ? "[admission] every remaining blocker was demoted as out-of-scope — verdict re-derived as HOLD. Choices: (1) accept as out-of-scope and close (2) request re-review"
+        : "[입장 심사] 남은 blocker가 전부 범위 강등되어 판정을 '보류'로 재산출했습니다 — 선택지: ①범위 밖 수용(종결) ②재심 요청");
+    }
+    // 장부 기록(§3.2): round 1건+finding(신규만·강등=즉시 closed)+close(통과 계열=round<N 개설분만·재분류)
+    try {
+      const now = new Date().toISOString();
+      const recs = [{ type: "round", campaignId: camp, round: roundNo, roundType, verdict: machine.effective, envelopeHash: frozen, ts: now }];
+      const occSeen = new Set(); // §7 — 같은 라운드 같은 계보(뿌리)의 occurrence 중복 억제(라운드당 1건)
+      // §7 재재검증(f-2344e4d8): 미완 수정이 '직전 자식'을 prevId로 인용하는 실제 사슬(root→child→grandchild)에서도
+      // 뿌리로 수렴해야 집계가 모인다 — 이 세대 finding들의 prevId 사슬을 유계 순회(순환 방지)로 뿌리 정규화.
+      const prevMap = new Map();
+      const existIds = new Set(); // 이 세대에 finding으로 실존하는 id — 끊긴 사슬(실존하지 않는 prevId)로 전진 금지(3차 [보완])
+      try { for (const r0 of readFindingsLedger(ws)) if (r0.type === "finding" && r0.campaignId === camp && (r0.envelopeHash || null) === (frozen || null) && r0.findingId) { existIds.add(r0.findingId); if (r0.prevId) prevMap.set(r0.findingId, r0.prevId); } } catch { /* 판독 실패=사슬 없음 취급 */ }
+      const rootOf = (id0) => { const seen0 = new Set(); let cur0 = id0; while (prevMap.has(cur0) && existIds.has(prevMap.get(cur0)) && !seen0.has(cur0) && seen0.size < 50) { seen0.add(cur0); cur0 = prevMap.get(cur0); } return cur0; };
+      let seq = 0;
+      for (const f of effItems) {
+        seq++;
+        if (f.tag === "범위확장" && !f.demotedTo) continue; // 증분 3: 확장 요청의 장부 수명주기는 승격 블록 전담(승격 blocker/[주의]) — 일반 finding 이중 기록 금지
+        const tn = normBacklogTitle(f.title);
+        const cited = f.id && openIds.has(f.id) ? f.id : null; // 1차 blocker③: 제목 일치 폴백 제거 — '미인용=신규' 계약 그대로(동명 신규가 기존 지적을 침묵 종결시키는 경로 차단)
+        // §7 재검증 blocker①: prevId만 인용된 미완 수정(새 id의 신규 finding)도 계보에 영속 — 뿌리 정규화:
+        // prevId가 '열린' 지적이면 그 id를 계보 뿌리로 occurrence 기록(사슬 순회 없이 뿌리 기준 집계 가능).
+        // prevId가 이미 닫힌 id면 occurrence 생략(finding.prevId 저장만 — 집계 한계는 정직 수용).
+        const prevRoot = !cited && f.prevId && (openIds.has(f.prevId) || prevMap.has(f.prevId)) ? rootOf(f.prevId) : null;
+        if (prevRoot && openIds.has(prevRoot) && !occSeen.has(prevRoot)) { occSeen.add(prevRoot); recs.push({ type: "occurrence", campaignId: camp, findingId: prevRoot, prevId: f.prevId, round: roundNo, envelopeHash: frozen, effectiveTag: f.demotedTo || f.tag, ts: now }); }
+        if (cited) { // 재등장 — 새 레코드 없음. 종결은 ⓑ'태그가 실제로 바뀐' 재분류 ⓒ강등만(3차 신규 실행증거 반영:
+          // 같은 태그 재제출을 reclassified로 닫으면 미해결 비차단이 계보에서 침묵 소멸 — f-63c42134 실증. 같은 태그=open 유지)
+          // §7 occurrence(레코드 5유형째): 매 재등장을 계보로 영속 — 수칙서 후보 원천 ③("같은 계보 반복")의
+          // 유일 재료. effectiveTag=당시 유효 딱지(보완 재분류 재등장을 반복 blocker로 오집계하지 않기 위함).
+          // 같은 라운드에 같은 id가 중복 제출돼도 occurrence는 라운드당 1건(재검증 blocker② — 중복 제출로 3회 후보 조기 생성 차단).
+          { const root9 = rootOf(cited); if (!occSeen.has(root9)) { occSeen.add(root9); recs.push({ type: "occurrence", campaignId: camp, findingId: root9, prevId: f.prevId || cited, round: roundNo, envelopeHash: frozen, effectiveTag: f.demotedTo || f.tag, ts: now }); } }
+          const prevTag = (openList.find((o) => o.id === cited) || {}).tag;
+          if (f.demotedTo) recs.push({ type: "close", campaignId: camp, findingId: cited, closeReason: "demoted", round: roundNo, envelopeHash: frozen, ts: now });
+          else if (f.tag !== prevTag) recs.push({ type: "close", campaignId: camp, findingId: cited, closeReason: "reclassified", round: roundNo, envelopeHash: frozen, ts: now });
+          continue;
+        }
+        recs.push({ type: "finding", findingId: newFindingId(camp, frozen, roundNo, tn, seq), campaignId: camp, round: roundNo, tag: f.demotedTo || f.tag, titleNorm: tn, origin: f.origin || "", oosId: f.oosId || "", prevId: f.prevId || "", envelopeHash: frozen, demoted: !!f.demotedTo, status: f.demotedTo ? "closed" : "open", closeReason: f.demotedTo ? "demoted" : "", ts: now });
+      }
+      if (machine.effective === "pass" || machine.effective === "pass-notes") {
+        for (const o of openList) if (o.round < roundNo) recs.push({ type: "close", campaignId: camp, findingId: o.id, closeReason: "resolved", round: roundNo, envelopeHash: frozen, ts: now }); // 같은 라운드 첫 등장은 open 유지(4차 설계 blocker②)·close도 세대 결속(3차 미완수정②)
+      }
+      appendFindingsLedger(ws, recs);
+    } catch { /* 장부 실패가 판정 전달을 막지 않음 */ }
+  } else if (frozen && blockShaped && parse.ver === "v1") {
+    out.push(en ? "[admission not applied — v1 response (the directive requested v2); recorded for statistics]" : "[입장 심사 미적용 — v1 응답(지시문은 v2 요구) · 통계 기록]"); // 활성 행렬 fail-open
+    try { appendFindingsLedger(ws, [{ type: "round", campaignId: camp, round: roundNo, roundType, verdict: machine.effective, envelopeHash: frozen, v1: true, ts: new Date().toISOString() }]); } catch { /* 무해 */ }
+  } else if (frozen && !blockShaped) {
+    // 판정 추출 실패·블록 손상도 회차 소비 기록(verdict:"error" — 다음 라운드 유형은 fix-verify 유도·4차 설계 보완)
+    try { appendFindingsLedger(ws, [{ type: "round", campaignId: camp, round: roundNo, roundType, verdict: "error", envelopeHash: frozen, ts: new Date().toISOString() }]); } catch { /* 무해 */ }
+  } else if (!frozen && blockShaped && parse.ver === "v2") {
+    // 경계 비활성+v2=신필드 파싱·장부 기록만(활성 행렬 — 강등 없음·통계 축적)
+    try {
+      const now = new Date().toISOString();
+      const recs = [{ type: "round", campaignId: camp, round: roundNo, roundType, verdict: machine.effective, envelopeHash: null, ts: now }];
+      let seq = 0;
+      for (const f of parse.findings) { seq++; const tn = normBacklogTitle(f.title); recs.push({ type: "finding", findingId: newFindingId(camp, null, roundNo, tn, seq), campaignId: camp, round: roundNo, tag: f.tag, titleNorm: tn, origin: f.origin || "", oosId: "", envelopeHash: null, demoted: false, status: "open", closeReason: "", ts: now }); }
+      appendFindingsLedger(ws, recs);
+    } catch { /* 무해 */ }
+  }
+  // ── 기존 2c: [백로그] 자동 등록 — 강등분(demotedTo=백로그)도 같은 경로(강등된 지적도 보관함·통계에 남김 §3.3) ──
+  if (blockShaped) {
     let idx = 0;
-    for (const f of parse.findings) {
+    for (const f of effItems) {
       idx++;
-      if (f.tag !== "백로그") continue; // 자동 등록은 [백로그]만(동결 D-1 — [주의]는 재판단 후 승격 시 수동)
+      const effTag = f.demotedTo || f.tag;
+      if (effTag !== "백로그") continue; // 자동 등록은 [백로그]만(동결 D-1 — [주의]는 재판단 후 승격 시 수동)
       // 민감 방어(동결 D-2+2차 blocker③): 제목=전체 규칙, file=비경로 비밀형(토큰·이메일·제어) — 거부 시 원문 비복사(순번·태그·사유 키만).
       const safe = safeBacklogAutoTitle(f.title);
       const safeF = safe.ok ? safeBacklogAutoFile(f.file) : safe;
@@ -1624,11 +2062,9 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
       let r = null;
       try { r = backlogAdd(ws, { tag: "백로그", title: f.title, file: f.file || undefined, lang: langSnap, mode: harnessModeSnap, profile: profileSnap, source: askId ? String(askId) : "machine-2c" }); } catch { r = null; } // source=askId(동결 D — 검증 실행 귀속)
       if (r && r.ok) out.push(en
-        ? `[ledger auto-record] ${r.id}${r.existed ? " (re-seen)" : ""} — cite this id in your report`
-        : `[장부 자동 등록] ${r.id}${r.existed ? " (재발견)" : ""} — 이 id를 보고에 인용하세요`);
+        ? `[ledger auto-record] ${r.id}${r.existed ? " (re-seen)" : ""}${f.demotedTo ? " (demoted)" : ""} — cite this id in your report`
+        : `[장부 자동 등록] ${r.id}${r.existed ? " (재발견)" : ""}${f.demotedTo ? " (강등분)" : ""} — 이 id를 보고에 인용하세요`);
       else {
-        // 사유 키 화이트리스트(2차 blocker③): backlogAdd error에 절대 잠금 경로 등 로컬 정보가 실릴 수 있어
-        // 짧은 키 형태만 통과시키고 그 외는 상수로 축약(fail-visible은 유지·원문 비복사).
         const ek = r && typeof r.error === "string" && /^[a-z0-9-]{1,32}$/.test(r.error) ? r.error : "write-refused";
         out.push(en
           ? `[ledger auto-record failed] finding #${idx} [backlog] (${ek}) — register manually: node "${__filename}" backlog add --tag 백로그 --title "<title>"`
@@ -1778,7 +2214,11 @@ async function cmdAsk(rest) {
     flagVerdict(answer, ws, link.codexSession, modeSnap, mfl.machine, attempt); // 경보+2d accepted 1행 위임(비-깨끗=빨강/노랑·표지 누락·기계 강등 가시화)
     process.stdout.write(`${langSnap === "en" ? "# Linked session" : "# 연결 세션"} ${link.codexSession} (${link.via})\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine)}\n`);
     process.stdout.write(mfl.notice); // 2c 영수증/거부/실패 줄(core 외·해당 없음="" — 바이트 동일)
-    process.stdout.write(budgetNoticeLines(budgetGate.res, langSnap, profileSnap)); // 포맷 계층(⑻) — N=M 예고·미집계 1줄(무제한="")
+    process.stdout.write(envelopeWarnLine(ws, langSnap)); // 거버넌스 증분 1 — 경계 손상/미승인 변경 경고(정상·부재·미승인="")
+    process.stdout.write(budgetNoticeLines(budgetGate.res, langSnap, profileSnap));
+    process.stdout.write(breakdownNoticeFor(ws, langSnap, budgetGate.res)); // 증분 3 — 상한 마지막 왕복=원인 분해 병기
+    process.stdout.write(envelopeCandidateNoticeFor(ws, langSnap, budgetGate.res)); // §7 증분 1 — 소진=수칙서 후보 재료+작성 의무 병기
+    process.stdout.write(integrityReviewLine(ws, langSnap, profileSnap)); // 증분 3 — 무결성=경계 재심 재료 병기 // 포맷 계층(⑻) — N=M 예고·미집계 1줄(무제한="")
     return;
   }
 
@@ -1875,7 +2315,11 @@ async function cmdAsk(rest) {
       : (en ? `# New Codex session created·linked: ${id}` : `# 새 Codex 세션 생성·연결: ${id}`);
     process.stdout.write(`${head}\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine)}\n`);
     process.stdout.write(mfl.notice); // 2c 영수증/거부/실패 줄(core 외·해당 없음="" — 바이트 동일)
-    process.stdout.write(budgetNoticeLines(budgetGate.res, langSnap, profileSnap)); // 포맷 계층(⑻) — 무제한=""(바이트 동일)
+    process.stdout.write(envelopeWarnLine(ws, langSnap)); // 거버넌스 증분 1 — 경계 손상/미승인 변경 경고(정상·부재·미승인="")
+    process.stdout.write(budgetNoticeLines(budgetGate.res, langSnap, profileSnap));
+    process.stdout.write(breakdownNoticeFor(ws, langSnap, budgetGate.res)); // 증분 3 — 상한 마지막 왕복=원인 분해 병기
+    process.stdout.write(envelopeCandidateNoticeFor(ws, langSnap, budgetGate.res)); // §7 증분 1 — 소진=수칙서 후보 재료+작성 의무 병기
+    process.stdout.write(integrityReviewLine(ws, langSnap, profileSnap)); // 증분 3 — 무결성=경계 재심 재료 병기 // 포맷 계층(⑻) — 무제한=""(바이트 동일)
   } else {
     attempt.record("session-unresolved"); // 2d: 답은 왔으나 세션 미결속 — 소비된 왕복 보존(승격·최근 무결성 미산입)
     updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; }); // 다음 자동 생성 차단 플래그
@@ -2102,6 +2546,21 @@ function main() {
       return cmdAskJob(rest);
     case "backlog":
       return cmdBacklog(rest); // P-12 2a — 검증 백로그 장부
+    case "envelope-proposal": { // §7 증분 2 — 제안본(초안) 작성·열람·폐기. 승인(도장)은 대시보드 전용 — CLI에 없음.
+      const rc8 = cmdEnvelopeProposal(rest);
+      if (rc8) process.exitCode = rc8;
+      return;
+    }
+    case "envelope-transition": { // §7 증분 2 — 중단된 승인 전이 복구(WAL 수렴)
+      const rc7 = cmdEnvelopeTransition(rest);
+      if (rc7) process.exitCode = rc7;
+      return;
+    }
+    case "envelope-candidate": { // 거버넌스 §7 증분 1 — 수칙서 후보 장부(list/mark)
+      const rc9 = cmdEnvelopeCandidate(rest);
+      if (rc9) process.exitCode = rc9; // main()은 반환값을 exit code로 안 쓰므로 여기서 반영(오류가 0으로 위장 금지)
+      return;
+    }
     case "link":
       return cmdLink(rest);
     case "status":
@@ -2140,4 +2599,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface };
+module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, v2DirectiveFor, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex };

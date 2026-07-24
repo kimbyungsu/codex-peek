@@ -2,7 +2,304 @@
 
 > 이 문서 하나로 이어갈 수 있게 쓰였다. 상세 설계 원본(SCOUT-TRACK.md·SCOPE-LEDGER.md)은 **의도적으로 레포 밖 로컬 문서**라
 > 다른 환경에는 없다 — 그래서 이 파일이 그 요지를 포함한다. ⚠ **실 API 키·토큰은 어떤 파일·픽스처·예시에도 절대 넣지 말 것.**
-> 마지막 갱신: 2026-07-21 (버전 0.1.86 불변 · 이 갱신을 포함해 push된 main 기준). **이번 push 묶음(2커밋) 요지 —
+> 마지막 갱신: 2026-07-24 (버전 0.1.86 불변). **⚡다른 로컬 인수인계 — 아래 '원격에서 바로 이어가기'와 '2026-07-24 묶음+C-C 이어가기' 절 필독.**
+>
+> ═══ 원격에서 바로 이어가기 — 2026-07-24 게시 인계 ═══
+> - 원격: `https://github.com/kimbyungsu/codex-peek.git`
+> - 인계 브랜치: `agent/p9-intent-recovery` (`origin/main`보다 앞서 있던 로컬 커밋 전부와 P9 2A~2C 최종본 포함).
+> - 새 PC: `git fetch origin` → `git switch --track -c agent/p9-intent-recovery origin/agent/p9-intent-recovery`.
+>   같은 이름의 로컬 브랜치가 이미 있으면 `git switch agent/p9-intent-recovery` → `git pull --ff-only`.
+> - 도착 확인: `npm install`이 이미 끝난 환경이면 `npm test`; 의존성이 없으면 먼저 `npm ci`. 현재 기준 전체
+>   `npm test`+`posttest` 통과, 버전 잠금 0.1.86 통과. 설치·버전 상승은 이번 게시에 포함하지 않았다.
+> - 현재 마감선: **P9 2C 완료**. 다음은 P10(통계·비용·건강도)의 상세 설계 게이트이며, 한 줄 개요를 곧바로
+>   구현하지 말고 지표 의미·분모·기록 최소화·2트랙 무회귀부터 동결한다.
+> - 게시 제외: 작업 폴더의 미추적 `project-map/`은 사용자 소유 로컬 자료라 커밋·푸시하지 않았다.
+>
+> 마지막 갱신(이전): 2026-07-23. **★검증 거버넌스 트랙(설계+증분 1~3) 완결 + P5(provider 공통 인터페이스) 완결(이상 07-22) + P6(Codex Scout)·P6b(Codex 정찰 두뇌 설정)·UX 3건·주입 지침 표시 접기·★P7(모드 UI+readiness 행렬) 설계·구현 완결 + ★P8(결정론 라우터+의미 보강 실행기) 설계 v10~v11·증분 1~4 전체 완결(07-23·인계 브랜치에 포함)**:
+> 배경: C-7이 core 프로필로도 11왕복·blocker 19(실측 — core ②조항 "희귀 경합=blocker"가 이 프로젝트에선
+> 만능 통과문+지원 환경 선언 부재) → 사용자 결정으로 P5보다 선행. ①설계 v1 동결(docs/VERIFY-GOVERNANCE.md
+> — 설계검증 6왕복·"열린 탐색+제한된 차단 권한"·Envelope·입장 심사·지적 계보·범위 확장·소진 분해. 726219f)
+> ②증분 1 구현(a9eac1e — 구현검증 3왕복[1차 일괄 6→2차 파생 2→3차 통과=새 상한 3 안 실증]): verify-envelope.json
+> 제안본+대시보드 승인(지문 도장=프로젝트별 계약 envelopeHash·렌더 언어 슬롯 결속·모달 전문+ID·절삭=승인
+> 거부)+승인 지문 주입([검증 경계] 데이터 절+core 한정 문구 '지원 세계 전제')+분쟁 경위 보고 캐논 4슬롯+
+> 상한 추천 버튼(3 권장). ⚠Reload 후 대시보드에서 수칙서 승인 1클릭 필요(그 전까지 미승인=무주입).
+> ③증분 2 완결(8482f80 — 구현검증 7왕복 통과·blocker 누적 14 전부 수용): 서식 v2·기계 입장 심사(규칙 0~5·
+> abId 인용 필수 정본 개정·반전=보류)·계보 장부(3유형·세대 결속·legacy close 단일 세대 한정)·경계 동결
+> (주입 지문+내구 잡 env 동등 결속 — L1-A UUID 오비교 라이브 실증 수정)·프로필 공통 경계(무결성=재소환
+> 금지+재심 관점). 검증 중 심사 실전 가동(검증자가 abId·prevId 서식 사용). 교훈: 테스트 스팬 교체가
+> E1~E6 스위트를 소실시킨 1건 발견·복원(단언 수만 확인 금지 — 섹션 수 확인).
+> ④증분 3 완결(구현검증 3왕복 통과·blocker 2+주의 2+보완 3 처리): 범위 확장 통로(비차단·abId 필수·캠페인·
+> 승인 세대당 승격 1회=다음 라운드 열린 blocker — 판정 불변)·소진 원인 분해 5축(확장 유래 중복 집계 금지)·
+> 무결성 재심 재료(oos별 강등 집계·세대 한정)·MAP 라우팅 문구(fresh만 경계 참고 — 구역 자동화 P5 이후)·
+> 수칙서 카드 캠페인+세대 한정 통계. 미반영 합의 1건=f-e9c23d7a(분해 분류식 정본 병기 — 다음 묶음 동승).
+> ★거버넌스 트랙(설계+증분 1~3) 완결 — 이후 모든 검증에 경계·심사·계보·분해가 적용된다.
+> ★P5 완결(2026-07-22 — 구현검증 3왕복[실패 2→통과]·blocker 3 전부 수용·반박 0): scripts/scout-providers.js 신설 —
+> 러너 2종이 중복하던 파이프라인(수집→렌더→markLive→호출→비용 장부→(--out)→보관→관측 장부)을 runScout(repo,
+> providerId, opts) 한 곳으로 추출, 반환=typed ScoutResult 판별 합타입(JSDoc 정본 ScoutSuccess{ok:true}/
+> ScoutFailure{ok:false,error:{key:not-git|provider-unavailable|call-failed,detail}} + ScoutProvider 어댑터 계약).
+> scripts/ 계층은 tsc 미검사(레포 구조 계약)라 실효 강제=①JSDoc ②런타임 경계(어댑터 available/probe/invoke의
+> 예외·오형식 성공(map/rawStdout 비문자열)·오형식 실패(미지 key→call-failed 정규화·detail 문자열화)·usage
+> 오형식(null 강등) 전부 ScoutFailure/정규값으로 — 프로세스 예외 이탈 금지) ③경계 실행 테스트 세 겹(검증 1·2차
+> blocker 계보 f-710a3f76). ledgerNote는 appendLedgerEvent 반환값 기반 3상태(""/"ok"/"failed" — 오보고 차단
+> f-47a1e872). PROVIDERS: self(무과금·claude -p 1회+SELF_DENY·probe=claude --version)/deepseek(과금·bridge map
+> 위임·handlesOutFile·probe=bridge ping — 키 없음=정직 실패이지 게이트 아님)/codex(P6 소켓 — available:false·
+> "P6"·구현 없음). 러너 2종=CLI 껍데기(출력 바이트·exit 의미 보존: usage exit 2·not-git exit 1·self=트림+개행·
+> deepseek=브릿지 stderr 선통과+비트림 원문·--out은 self=공통층 쓰기[실패 전파]/deepseek=브릿지 위임·usage 장부
+> pkgChars/mapChars 산식 동일). 의도적 개선 1건(검증 승인): 보관 실패 "undefined"→"save-failed". 1-26 경계 유지
+> (공통층 코드에 scoutArm 결합 없음·P7 provider mode 통합 금지 명문 — 정본 SCOUT-TRACK.md는 이 PC 부재라 HANDOFF
+> 요지 기반 구현이며 검증자가 '최소 확장' 판정). 배치 변경 없음(러너=소스 레포 실행 계약·scripts/** 비번들 유지).
+> 기존 소스 단언 8곳 재배선(scout-store·scout-usage·scout-prompt·deepseek-bridge·ledger-events·l1-provenance·
+> scout-drift×2·scout-advice — 러너 원문 단언→공통층+위임 단언)·신규 tests/scout-providers.test.js 53단언
+> (목 provider 경계 실행·ledger 사보타주·Module._load 후킹 러너 e2e 6케이스)·체인 등록·전체 EXIT=0.
+> ★P6 완결(2026-07-23 — 구현검증 4왕복[실패 3→통과]·blocker 누적 6 전부 수용·반박 0): 구 '예정' 배지의 실체 —
+> ①codex 어댑터(scout-providers.js): 검증 세션과 분리된 독립 `codex exec --ephemeral --sandbox read-only
+> --skip-git-repo-check` 1회·cwd=빈 임시 폴더·stdin=preface+꾸러미·-o 회수·resolveCodex 정본 재사용(codex-bridge
+> export 1개 추가·중복 구현 금지)·probe=--version. --ephemeral=rollout 무잔재(검증 세션 식별의 무제한 cwd 폴백
+> newestRolloutSince가 정찰 rollout을 집는 오링크 경합 원천 차단 — 2차 blocker·검증자 로컬 --help 실측 유효 확인.
+> 구버전 codex가 플래그 모르면 exec 실패=러너 정직 보고). read-only 강제=preface 사실 문장과 실행 일치(1차
+> blocker). 정직 한계 명문: read-only는 절대경로 '읽기'를 물리 차단 못함(SELF_DENY 등가 아님 — 지시 보강,
+> 검증자 'best-effort 허용·동등 보장 해석 금지' 판정). usage=null(exec 토큰 미제공 — 문자수만).
+> ②scoutArm 3값(SCOUT_ARMS+"codex"·강등 게이트 없음 — 검증 축이 이미 codex 의존이라 중복, 검증자 타당 판정)·
+> 러너 scope-scout-codex.js(CLI 껍데기·self 동형)·게이트 2곳(scout-gate·codex-hook)·자동지시 ko/en·어긋남
+> drRunner 분기. ③소비점 전면 3값(1~3차 blocker 계보 f-a2404f14): 최근 실행 요약·실행중 카드·지도 목록·최신
+> 지도·상태바 정찰 줄·LLM 줄·flow 툴팁·상태바 '탐색중' 접미 3곳(연결/미연결/flow)·통계 행·검증 프롬프트 지도
+> attach 머리(contract-lib) — scout-arm [5b]가 소비점 '개별' 단언으로 고정(전역 개수 단언은 누락을 고정한다는
+> 3차 보완 수용·지점 추가 시 개별 단언 추가가 계약). ④고지 세 갈래 개정(f-ecfbc8ae): PRIVACY 3·32·55행,
+> 확장 FAQ 2곳·트랙 툴팁·가이드 비용 카드·기본 원칙 라벨(all scouts)·통계 각주, README ko 117·123·126·239·
+> 245·258행, README.en 16·17·34·37행("Two exceptions"→"A DeepSeek key adds two flows") — '두 갈래' 잔재 0
+> 단언화. ⑤대시보드 Codex 실선택 버튼(mk·setOn(av.eff) 3값·핸들러 화이트리스트·툴팁 ko/en — 2026-07-20 '거짓
+> 옵션 금지' 결정은 러너 실존으로 의도 계승), scoutArmViewExt·Contract 타입·loadContract 정규화 3값.
+> 테스트: scout-providers 69단언(가짜 CODEX_BIN 실 invoke e2e — 인자·stdin·임시 cwd·-o 회수·정리·종료코드,
+> 실 codex 호출 0)·scout-arm 81단언·deepseek-bridge 구 문서모델 단언 3건 세 갈래 재배선·cli-bilingual에
+> codex 러너 추가·전체 체인 EXIT=0. billed 표기=Codex 플랜 사용량 소모(토큰 단가형 아님 정직).
+> ★P6b 완결(2026-07-23 — 사용자 결정 2건 반영·구현검증 4왕복[실패 3→통과]·blocker 계보 3 전부 수용):
+> 사용자 판단 질의 2건의 귀결 — ①팔 전환 후 데이터 공유="이미 충족" 확답(판단 검증 통과(보완): 보관함·신선도·
+> 자동지시·게이트·attach·관찰 일지 전부 프로젝트 단위·arm=출처 라벨일 뿐 — 검증자 7개소 실측. 작업 없음)
+> ②세션 선택=도입 안 함(--ephemeral 무잔재가 세션 폭발을 원천 해소·resume은 '꾸러미만 근거' 공정성 오염 —
+> 사용자 승인) ③Codex 정찰 두뇌 설정만 신설: **전역** scout-codex.json {model,reasoning}(프로젝트별 분리 안 함
+> — 사용자 결정 "설정만 복잡해짐"). 정본=contract-lib(readScoutCodexPrefs/saveScoutCodexPrefs/scoutCodexArgs —
+> 빈 값=파일 삭제=비물질화·값 화이트리스트 없음[잘못된 값=exec 실패 정직 보고])·어댑터 -c model/-c
+> model_reasoning_effort 삽입(검증 modelPrefs와 별개 슬롯 — 싼 정찰+강한 검증 조합)·고급설정 카드(현재값
+> 선충전 WYSIWYG[1차 blocker ab-2: 빈 칸 전체 교체 침묵 소실 차단]+편집 세대 결속 scGen/scSavedGen[2차:
+> 응답 전 새 편집 초안 보호]+단일-flight scBusy/scLock[3차 f-c4c4ab24: 겹친 요청 차단·해제=성공/실패 공통])·
+> 대시보드 codex 선택 시 고급설정 안내·PRIVACY 파일 표 행. scout-providers [11] 20단언(가짜 CODEX_BIN 실
+> invoke에 -c 실림·초기화 후 0개 포함)·체인 EXIT=0.
+> ★UX 3건 완결(2026-07-23 사용자 지적·구현검증 2왕복[실패 1→통과]·blocker 3 전부 수용): ①Codex 정찰 두뇌
+> 설정 선택형 개편 — 자유 텍스트 2칸 폐기, 검증 두뇌 카드 동형의 <select>(계정 캐시 availModels·known 폴백·
+> 기본값 옵션)+강도 버튼(renderScSeg — 모델별 levels·합집합·캐시 전무 폴백). 저장값·dirty 편집값 모두 목록
+> 밖이면 보존 옵션(1차 blocker①: 캐시 갱신 시 편집값이 빈 값으로 강등→오저장되던 ab-2 경로 — DOM 재실행
+> 검증). 기존 3계보(선충전 WYSIWYG·세대 결속 scMark·단일-flight) 유지, 검증 카드와 상태 분리(SCAVAIL/scCurRS).
+> ②'펼치기 누르면 화면 최상단으로 튐' 봉합 — 두 겹: ⓐ데이터 재렌더 중 높이 붕괴 clamp=렌더 전 keepY 캡처+
+> 렌더 후 복원 ⓑ클릭 직접 경로=클릭 점프 가드(캡처 단계 리스너→1프레임 뒤 최상단 강제 감지 시 가장 가까운
+> 유효 좌표 복원 — 판정 순수 함수 clickJumpRestore를 산출물 추출 실행 5반례로 잠금·smooth 명시 이동과 무충돌).
+> ③탐색 담당(딥시크 키 유/무·코덱스) 선택 시 '⚙️ 고급설정 열기' 원클릭 버튼(탭 로컬 클릭·호스트 왕복 없음) —
+> 재클릭 안내가 버튼을 지우던 경로까지 재부착(1차 blocker③). scout-providers 104단언·체인 EXIT=0.
+> ★주입 지침 '표시 접기' 완결(2026-07-23 사용자 결정 — 판단 검증 3왕복[내부화·경로표시=감쇠·미이행 위험으로
+> 기각, '읽기 강제' 제안은 자기 보고=베끼기 가능이라 증명 불가 판정·향후 2단계는 '상시 최소 안전규칙 층+내부화
+> 가능층 분리'+하네스 결정론 재주입으로 재설계 합의]·구현검증 4왕복[실패 2→통과]): 검증 대화 사용자 말풍선의
+> 하네스 보일러플레이트(기본원칙·경계·서식 등 수천 자)를 접힌 칩("🔒 하네스 주입 지침 N자 — 펼쳐서 원문 보기")
+> 으로 강등, 본문만 평시 표시. **표시 전용 — 전송(모델 입력)·rollout 불변**. 구분자("---[작업 요청]")는 '유일
+> 출현'일 때만 경계 인정(1차 blocker: 본문 인용은 물론 주입 머리(사용자 계약 등 임의 다줄)도 인용 가능 — 양방향
+> 오분류를 다중 출현=접기 생략 fail-safe로 차단·전송측 공용 경계 프레이밍은 보관함 afdd6850b4ea2030). 펼침 키
+> =사용자 본문 해시+'전체 대화 기준' 턴 순번(host turnsStart 전달 — 2차: convKey는 답변 성장에 키 요동 / 3차:
+> 슬라이스 내부 순번은 최근 N턴 창 이동에 요동 — 두 재현 반례 모두 잠금. 예외=4,000메시지 절삭 시 이동[기존
+> 고지 배너 케이스·희귀]). 복원 계약=펼침(head+구분자)+본문의 바이트 결합=전송 원문. textContent만(주입 없음).
+> 보관함 신규 2건: afdd6850b4ea2030(공용 경계 프레이밍)·17d4697dc6a164fb(비브릿지 단일 인용 구분 한계 — 같은
+> 취지). tests/conv-fold.test.js 22단언(산출물 추출 실행 — 이중 이스케이프 한 겹 벗김·중괄호 짝 추출)·체인 등록·EXIT=0.
+> ★P7 상세 설계 v4 동결(2026-07-23 — 설계검증 4왕복[실패 3→통과]·blocker 계보 전부 수용): 정본=docs/MAP-V2-DESIGN.md 말미
+> 'P7 상세 설계 v4'. 요지: mapMode 4값(self 명시 포함 — scoutArm 동형)·readiness 행렬(economy=실효 지문+capability
+> probe[최대 2회 과금 고지]/precision=실제 정찰과 동일 조립의 초소형 ephemeral 실행/self=P5 산출물)·전 provider
+> probe 세대 결속(실행 직전 캡처→잠금 안 재확인·불일치=폐기)·영속 map-readiness.json(v1·strict lock·손상=unknown)·
+> 조용한 전환 금지(eff 미도입)·P8 전 노출+정직 배지. 1-34 원문·P7 로드맵에 supersession 부기 완료.
+> 사용자 결정 2건 승인 완료(2026-07-23): ①ⓑ 1-33 개정(재개 발동=실행기 배포 Phase) ②1-34 precisionReady
+> ephemeral 재정의·Scout 세션 관리 소거 — 정본에 [확정 2026-07-23(사용자 승인)] 부기.
+> ★P7 구현 완결(2026-07-23 — 구현검증 6왕복[실패 4→통과(보완)→확인 통과(보완)]·blocker 계보 전부 수용·부분 반박 1 성립):
+> ①contract-lib.js P7 블록 — MAP_MODES 4값(self|economy|precision|auto·명시 self=반대 슬롯 override·부재=비물질화)/
+> mapModeView(강등 없음)/codexScoutExecArgs(outFile) 공용 빌더(P6 인라인→어댑터·probe 동일 조립)/map-readiness.json
+> (map-readiness-v1·**MAP_PROBE_VER=2** — 3차 blocker로 v1→v2 상향: economy capability-ok 검사+Electron→node 전환
+> 이전(v1) 성공은 위조 가능 세대라 전량 probe-ver-changed 강등·**세대 불일치 병합 금지**[4차 blocker — v1 파일 위
+> v2 기록 시 구 레코드 펼침 보존 경로 차단=새 컨테이너])/writeMapReadinessGuarded(성공=지문 일치 필수·실패=지문
+> 있으면 일치 시만 기록[3차 주의 — 구 세대 늦은 실패의 최신 성공 덮기 차단]·fp:null 실패=**늦은-패자 규칙**[4차
+> 주의 f-871aa1de — startedAt<기존 성공 probedAt이면 stale-loser 폐기·시간 축은 지문 축과 직교·'방금 실패' 무회귀])/
+> 지문 3종(economy=실효 해석[env 키 우선]+키 sha1 앞12+mtime / self=CLI 버전+어댑터 sha / precision=inv+CODEX_HOME+
+> env CODEX_BIN+빌더 조립+어댑터 계약 버전+mtimeSig[A-B-A]) ②bridge/map-probe.js 신설(2차 blocker④ — vscode 무관
+> 실행기 probeSelf/Economy/Precision·startedAt 캡처·테스트가 같은 실행기를 가짜 CODEX_BIN·가짜 claude·스텁 API로
+> 실제 실행)·배포 3카피 19→20 등록 ③deepseek-bridge capability 명령(strict validateCapability·bounded repair 1회·
+> usage arm "capability") ④extension — mapModeRow(4버튼·자동형만 autoReady 게이트·'라우팅 적용은 P8부터' 정직
+> 배지·준비 점검 버튼[모달 과금 고지 DeepSeek 최대 2회/Codex 1회]·단일-flight·economy에도 ELECTRON_RUN_AS_NODE=1·
+> cachedClaudeVer 실패 포함 반영·stale-loser='더 최신 결과 유지' 표시 분기[5차 보완]) ⑤README ko/en 마켓 설치본
+> scripts/ 미포함 한계 한 줄(3차 보완 — f-15d2907b 부분 반박 성립: VSIX self 미준비=정직 상태)·19→20파일 문서
+> 갱신(MAP-P3B-DESIGN 3곳+map-cutover 주석). tests/p7-mode.test.js 76단언·전체 체인 EXIT=0.
+> **미반영 2건(확인 검증 규약 — 다음 묶음 동승 후보)**: f-6dc403af(self probe의 stale-loser가 wNote를 안 거쳐 CLI
+> 실패 사유로 표시 — 표시 한정·로직 무영향) / f-c66da17f=[주의→보관함 1f501cceed39340b] wall-clock 의존(시계 역행
+> 시 최신 단일 창 실패가 stale-loser 폐기 — 재점검 1회 복구·근본 해법=잠금 아래 provider 세대 토큰, P8 동승).
+> ★P8 상세 설계 v10 동결(2026-07-23 커밋 a8d49d7 — 설계검증 11왕복[실패 9→통과(보완)→확인 통과]·blocker 29·보완 12
+> 전부 수용): 정본=MAP-V2-DESIGN 말미 'P8 상세 설계 v10'. 요지: 라우터 9행 전순서(conflict 모드 무관 최상향)·corridor
+> (node 소속·historyless invSnap 내용 지문)·실행기 2층 장부(job+attempt·유료 uncertain=park·순차 변환 cursor·super
+> 전이·rev 세대)·P2 확장 허용 4종(applyPatch opts/decision 필드/expirePendingPatch lifecycle CAS/reasonCode 닫힌
+> 열거+expireCode 원자 영속)·verifier 해소 경로(근거 사전 결속·rebase 금지·적용 시점 claim 지문)·동의 세대(ws×slot
+> grants·genCounter·호출 직전 재대조 — 기존 동의·mapMode 저장 소급 금지). **구현 착수 가능(확인 검증 지적 0).**
+> ★P8 구현 증분 1 완결(구현검증 2왕복[보류 강등 1→수정→통과 지적 0]): bridge/map-router.js — decideRoute
+> 9행 전순서(1행 strict: ready 4필드 불리언 필수·이형=park 최우선)+corridorOf(node 소속·anchor 부모 디렉터리
+> 경계·공집합=mapped·v2 아님/변경 null=unknown)·p8-router 49단언(전수 스윕 2,592조합 예외 0)·소비자 배선 0(무회귀).
+> ★P8 구현 증분 2 완결(구현검증 5왕복[실패 4→통과 지적 0] — blocker 계보 f-2dbae7f0·f-fbcd8cc7·f-3e0cf167 전부
+> 수용): map-pipeline.js P2 확장 4종 — expirePendingPatch(lifecycle CAS 분기표·claimed/resolved 불가침)·terminal
+> expireCode 원자 영속(classify+apply·persistTerminalExpire 단일 잠금+재시도 ~2s+소유권 CAS[claimed+자기 pid+
+> token 필수 정확 일치]·소진 잔존은 자기 소유 재선점이 자연 회수[정본 부기])·구조화 reasonCode(닫힌 열거·직접
+> 쓰기 예외→write-failed+keepClaim 변환)·opts.verifierResolution(typed claim 전 필드 강제[locator·stance·모순
+> 거부]·claims⊆evidence·적용 시점 지문 재검증·rebase 금지·decision 삼중 결속 동일 값). p8-pipeline-ext 49단언.
+> ★P8 구현 증분 3a 완결(구현검증 9왕복[실패 8→통과 지적 0] — blocker 계보 f-b74df6a1·ab-2·ab-3·ab-7 전부
+> 수용): bridge/map-enrich.js 저장·순수 계층 — 동의 세대(enrich-consent-v1: ws×slot grants strict[slot·paidMode·
+> selfAuto 이형=거부]·genCounter 단조·중복/역전=damaged)·작업 장부(enrich-job-v2 strict: 키 화이트리스트·
+> jobKey 공식 결속·results=EnrichItem 형태 전면+상한·resolution P2 동형·cursor 전이 불변식 4종·currentPatch
+> 5중 결속[patchId 공식·provider·item·{kind,ref} evidence 전문]·consentGen>=1 전 provider[self도 동의 필수])·
+> validateEnrichResult(op별 strict 합타입·root/payload 화이트리스트)·toPatchV2(결정론 UUID patchId[rev 세대]·
+> evidenceKindOf 정직 분류[무확장·미지=doc — 세탁 차단]·P2 전 경로 실통과 e2e)·p8-enrich-store 97단언.
+> ★P8 증분 3b 완결(재개 구현검증 6왕복[실패 5→통과 지적 0] — WIP 봉인의 blocker 9 전부 해소+파생 계보 수용):
+> 실행기 본체(runEnrich 계열) — 생명주기 ①~⑧(게이트 최선행·큐 읽기 전용·run 잠금[rename 격리 회수+fence
+> 재검사·동시 복구자 3회 반복 반례]·⑦a 변경·corridor·srcFp 선산출)·동의 세대(job 생성 전+유료 호출 직전
+> 재대조·consent-stale 자동 재개[새 grant 세대·동결 주체 기준]·빈 attempts open=신규 attempt 경로)·라우팅
+> (decideRoute 재호출·승격 attempt 열 감사·both-failed)·item 순차 적용(currentPatch 저장본 재투입·super 전이=
+> expire 멱등→재변환+rev=toRev+소거 '한 원자 기록'[전이 중 rev 구 값 — strict 정합]·연속 stale=최신 장부 rev
+> 기준·rev 상한 2)·verifier 해소(resolutions 영속=재호출 0·reject=expire 확인 후 도장 없는 settled 종결·충돌=
+> 양측 제시[기존 decision evidence 사전 결속+claims 동봉]·같은 provider 격하=일반 분류·범위 밖 인용=evExtra+
+> oosUsed 1회 재제안)·근거 실증(수신 시+변환 직전 같은 판독으로 quote·해시 결속 — TOCTOU 봉합)·수렴(정본
+> v11: done 멱등 판정표=sourceFp 우선·AND 폴백·patchId=jobSeed[jobKey+startedAt] 세대·-uall·project-map 제외·
+> 호출 시점 지문만 도장)·bootstrap 큐 v0→v1(invSnap·fresh v0=stale 취급 마이그레이션). p8-enrich-run 73단언
+> (동시 경합·사망 창·구 장부 폴백 등 실행 반례)·전체 체인 EXIT=0.
+> ═══ 2026-07-24 묶음(CL-C 마지막 세션 — 이 절이 최신) ═══
+> **①거버넌스 §7·§8 설계+구현 전체 완결**(사용자 지시 전사→설계검증 6왕복 동결→구현 3증분·검증 12왕복):
+> §8=사용자 대면 선택 출력의 전역 표현 계약(기술용어 금지·상황예시·달라지는것/유지되는것·권장+근거 —
+> AskUserQuestion 포함. 첫 실사고 기록 있음). §7=상한 소진 시 수칙서 후보 깔때기: occurrence 계보(장부
+> 5유형째 — 재등장·prevId 사슬 뿌리 정규화 rootOf)·소진 보고 후보 재료(envelopeCandidateNoticeFor: oos 반복
+> 2+/입장심사 승격/계보 blocker 고유 라운드 3+/빼기 unused-oos[세대 전체 인용 0·3자 해시 일치 전제]·0건
+> 명시·재제시 스킵·30항목 임계=정리 우선·§8 작성 의무 문구)·후보 장부(verify-envelope-candidates JSONL·
+> CLI envelope-candidate list/mark)·제안본(env-proposal-v1 하네스 로컬 — strict[정본 축+En/Ex 슬롯+미지 필드
+> 거부+메타 상한]·전문-해시 결속·CLI envelope-proposal propose/show/discard[**approve 없음 — 도장=대시보드
+> 전용**])·승인 도장 전이(전이 잠금{pid,ts,token} 사망 rename 회수·WAL 구·신 전문·복구 수렴·drift 중단·
+> **ask 상호배제=envelopeSliceFor가 전이 잠금 실보유 아래 계약 신선 재판독**)·대시보드(🔔 초안 대기 배지·
+> 도장 모달 절단 금지+해시·대상 재대조·전이 복구 버튼·기동 자가 복구·후보 카드 '기록만' 버튼[gen+wsKey
+> 결속·클릭 시 세대/프로젝트/실존 3중 재대조]). 커밋: 08e8e66(§7§8 전사)+db07fb4(판정 3건)+4c7de8c(증분1+
+> 스크롤)+18b458f(증분2)+c9fb0ce(증분3). 관련 결정: 소진 화면 후보 선택=대화 응답 확정·대시보드 버튼=기록만·
+> 효력=도장부터. **첫 실전 발동 확인**(07-24 상한 5/5 소진에서 분해+후보 재료 정상 출력).
+> **②검증 대화 스크롤 실버그 3곳 봉합**(2521c01+4c7de8c): 주입 지침·최신 지도·확정 장부 상자 — 재렌더마다
+> 내부 위치 0 리셋+펼침 닫힘 → keepInnerScroll(foldScroll Map+rAF 복원)+keyedDetails 통일.
+> **③P9 구현 증분 1 완결**(a8108e2 — 검증 6왕복·blocker 7 수용·내 주장 1 철회): 사용자 확정 ⓒ("검증 담당이
+> 판정") 반영 — v12 소규모 개정 3건 부기·DEFAULT_CLASSIFICATION 개정(change_steward/authority=
+> verifier-resolved — 카드 폐지·정책 op 3종만 intent-choice)·유물 전환 회수 계보(스윕 원자 전환+legacyReclass
+> 표지+rebasedFrom 매핑+만료 cas-stale 표지 재소비 / 실행기 stale 예측[apply 전 검사 — **P2 applyPatch는
+> cas-stale을 terminal expire로 영속하므로 낡은 patch에 apply 호출 자체가 소실 경로**]·재기반 신본=원자 표지+
+> verifier 재호출[구 verdict 재사용 금지 ab-3]·어느 지점 만료도 재기반 회수=소실 0). tests/p9-reclass 53단언.
+> **④P9 잔여 착수 — 증분 2A 바닥 계약 구현(2026-07-24, 버전 불변·인계 브랜치에 포함)**: 후속 정책 카드·frontier
+> 자동 적용이 의존하는 P2 경계를 먼저 닫음. IntentPolicy.chosenMeaning은 기존 사람용 문자열 판독을 유지하면서
+> 자동 위임용 typed v1 `{version:1, disposition:apply|decline, opClass}`를 허용하고, 정확 키·predicate v1 op-class
+> 결속과 일치를 강제. `expirePendingPatch`는 기존 기본값 superseded를 보존하면서 user-declined/policy-declined를
+> 원자 영속. `applyPatch(opts.policyDelegation)`은 classified 비정책 pending에만 열고 유효 frontier leaf·정책 파일
+> 지문·typed 뜻·op 종류·scope·exclusions를 정본 잠금 안 재검증하고, 명시 대상·생성물·merge 외부 목적지·split
+> edgeReroute와 순수 적용 미리보기의 실제 변경 대상 전부가 비-project 범위 안일 때만 decision을 auto+
+> user-choice-delegated로 기록함. 기존 정책이 새 정책 op를 대신 승인하는 경로는 명시 거부. 신규
+> `tests/p9-policy-foundation.test.js` 48단언+P8/patch/pipeline/reclass 직접 회귀 통과. 아직 카드·전이 장부·
+> 자동 스윕·복구·UI는 구현하지 않았으므로 이 증분만으로 사용자 대면 기능이 켜지지 않는다.
+> **⑤P9 증분 2B — 정책 충돌 카드+선택 선기록 구현(2026-07-24, 버전 불변·인계 브랜치에 포함)**:
+> 신규 `bridge/map-intent.js`가 classified·intent-choice 비정책 pending에 맞는 typed frontier leaf를
+> entity>subgraph>project 순으로 좁혀, 최고 특이도에서 apply/decline이 갈리는 head들을 정렬 집합 지문 한 장으로
+> 합친다(영향 pending 목록 포함·조회 쓰기 0·문자열/미지원 predicate 자동 해석 0). 사용자가 뜻과 승계 head를
+> 고르면 현재 pfh·dch·head를 map lock 안 재확인하고, 승계 범위/조건/제외를 복사+뜻만 교체+선택 시점 증명을
+> 새로 캡처한 완성 supersede patch 전문을 `<conflictKey>-<cardId>.json` phase=chosen으로 pipeline side effect 전에
+> 선기록한다. 같은 선택 멱등·다른 뜻 덮기/미완 다중 선택/낡은 화면 거부·손상 서랍 fail-closed. 새 정책 파일과
+> policy pending은 아직 0이며, parked 새 세대도 WAL 선행 복구 표면을 여는 다음 증분 전까지 거부한다. 실제
+> propose/classify/apply·phase 재개·위임 장부·자동 스윕·UI는 다음 증분이다.
+> typed 뜻의 predicate도 정확 키 `{version,kind,opClass}`만 정본/위임에서 허용하도록 닫았다. 배포 전수 목록
+> (install/hook-setup/cutover)에 map-intent를 편입. 신규 `tests/p9-policy-conflict-card.test.js` 29단언,
+> 2A 테스트 50단언 및 install/cutover 직접 회귀 통과.
+> **⑥P9 증분 2C — 인계 잔여 실행부·복구·UI 완결(2026-07-24, 버전 불변·인계 브랜치에 포함)**:
+> 충돌 선택 canonical patch의 propose/classify/apply+decision/WAL 재개, 구 pending별 위임 장부 선기록과
+> frontier 자동 sweep(entity>subgraph>project·apply 재결속·decline 종결·동급 충돌 무적용), parked 자동 반복
+> 금지+대시보드 명시 재시도(선택 canonical unpark·위임 새 attempt), P8 enrich 종료 후 1회+대시보드 조회 발동,
+> 모달 뒤 모드가 바뀐 경우까지 core API가 재확인하는 2트랙 완전 무동작을 연결했다.
+> topology 손상 복구는 decision/snapshot/git 최근 20커밋 후보→별도 recovered+로컬 내구 계획(planId·nonce·
+> 원본/후보/복구본 지문) 생성→재대조→손상 원본 시각 백업 후 교체의 2단이다. 첫 rename 전 replacing을
+> 선기록해 두 rename 사이/설치 직후 종료도 다음 판독에서 수렴하며 dead nsLock만 회수한다. 대시보드는 반대
+> 정책 선택·조사 정보·정책 요지·parked 재시도·손상 주의·복구를 ko/en으로 표시하고, host 조기 거부까지
+> `intentDone`을 보장하는 호스트/웹뷰 단일-flight를 쓴다. 자가점검은 실행 실패와
+> readiness 기록 실패를 각각 숨김없이 표시하도록 고쳤다. VERIFY-GOVERNANCE 원인 분해의 범위확장 중복 집계
+> 금지, PRIVACY의 cutover-notice/map-intent/정책 공유/recovery 산출물도 동기화했다. 신규/갱신 테스트:
+> foundation 50·conflict 43·intent-auto 26·recovery 30·UI 13·P7 77·P8 wire 45. 첫 단일 독립 검증은 blocker 5건
+> (2트랙 재확인·parked 실행 표면·복구 plan/nonce·rename 중단 수렴·host 조기 해제)을 냈고 전부 **수용·수정**,
+> 해당 인터리빙 실행 반례가 통과했다. 수정 뒤 전체 `npm test`와 `posttest`도 통과했다.
+>
+> ═══ C-C(코덱스-코덱스)로 이어가기 — 필수 확인 ═══
+> - **모드 전환**: 대시보드에서 harnessMode=codex-codex 전환(P-9 자동 전환 계약 있음 — 질문 호스트 기준).
+>   ⚠**전환 직후 검증 설정을 반드시 확인·설정하라**(검증자 실측 07-24): C-C 전용 필드(codexVerifyProfile·
+>   codexVerifyBudget)가 원시 계약에 없으면 C-C 기본은 **integrity·무제한(0)** — 이대로면 core 전용
+>   기계 판독(입장 심사·[지적 목록 v2]·백로그 자동 등록)과 유한 상한의 소진 후보 흐름이 발동하지 않는다.
+>   CL-C에서 쓰던 운영값을 원하면 대시보드에서 **C-C 검증 스위치를 core·상한 5로 명시 설정**할 것(설정은
+>   다음 지시 캠페인부터 적용 — 진행 중 캠페인은 시작값 동결). 거버넌스 배선 자체(경계 주입·계보 장부·
+>   occurrence·소진 후보·§8 캐논)는 cmdAsk 공통 경로라 설정만 맞추면 C-C에서 동일 작동(캠페인 앵커=C-C는
+>   구현자 세션:턴 동결).
+> - **C-C 불변 계약**: 직접 ask 금지(ask-start만 — P-6)·구계약 v1 proof 불인정·검증자 충돌 사전차단(P-9).
+> - **오늘 신설분의 모드 접점**: §7 소진 후보·분해·상한 문구=cmdAsk 공통 출력(모드 무관)·제안본/도장/전이=
+>   워크스페이스 기준(모드 무관)·P8 verifier 자격 게이트=resolveLink(C-C면 codexCodexSession override/상속
+>   인정)·P9 유물 회수=파이프라인 계층(모드 무관).
+> - **다음 작업**: P9 2C는 수용 blocker 수정과 전체 회귀 확인까지 닫았다. P10(통계·비용·건강도)은 상세 설계 게이트부터 시작.
+>   P10은 현재 로드맵 한 줄뿐이므로 지표 의미·분모·기록 최소화·2트랙 무회귀를 먼저 동결하고 구현한다.
+> - **이월(불변)**: f-e9c23d7a·보관함 5364ebe0·afdd6850b4ea2030·17d4697dc6a164fb·
+>   1f501cceed39340b·f-6dc403af. ⚠Reload 1회 필요(누적 설치분). 이번 사용자 지시로 원격 인계 브랜치 게시·0.1.86 불변.
+>
+> ★P8 증분 4 완결(2026-07-23 — 구현검증 7왕복[1차 blocker 6→2차 4→3차 1→4차 2→5차 2→6차 1→7차 통과 지적 0]·
+> blocker 16 전부 수용·반박 0): **P8 전체(설계 v10~v11+증분 1·2·3a·3b·4) 종결.**
+> ①어댑터 3종 실배선 bridge/enrich-providers.js(1차⑤: 설치본 발동에 실존해야 하므로 scripts/가 아닌 bridge/):
+> self=claude -p+SELF_DENY / economy=deepseek-bridge 신규 enrich 명령(strict 표지+bounded repair 원격 1회+usage
+> arm enrich) / precision=ephemeral 독립 1회(P6 문법). ②Verifier 해소 진입점 askVerifierResolution(1-4 부작용 0):
+> 자격 게이트=정본 resolveLink 재사용(byWorkspace 우선 — bySession 전수 스캔은 정상 연결 오판·잔존 오인 양쪽
+> 위험[2차③])·preRead 사전 캡처(해시=전체 파일[P2 재검증 축]·quote 실증='실제 전송한 발췌' 기준[2차② ab-3])·
+> claim strict(결손 보정 금지·support+지지 0=null[1차③]). ③**topology slice(3~6차 계보 — 전체 지도 직렬화
+> 금지)**: sliceTopology(변경 연결→인접→잔여·NODES 40/EDGES 60)+필드 상한(anchor 노드당 8·경로 200자·라벨
+> 120자)+TOPO_CHARS_MAX 20,000 줄 절단+절단·생략 고지(침묵 상한 금지)·발췌 우선 집합=capLines 실제 표시 노드
+> 기준(절단 후 재분리 차단[5차②])·edge=표시 노드 양끝만(숨은 endpoint 차단[6차])·EXCERPT_PATH_MAX=200(초장
+> 경로 발췌 제외+고지[5차①])·민감 경로=발췌+anchor 경로명 양쪽 제외(scope-package 동형 복제+드리프트 잠금
+> 테스트[1차①·2차① ab-7]). ④발동 3지점 extension 배선(maybeSpawnEnrichExt: probe 직후·tick 스로틀 5분·단일-
+> flight·parked=자동 재발동 금지)·동의 UI(유료 모달+self 별도 grant·소급 금지)·보강 상태 줄·재시도. ⑤배포
+> 3카피 20→23파일(map-router.js·map-enrich.js·enrich-providers.js — install.js/hook-setup.ts/EXPECTED_DEPLOY_
+> FILES 패리티 테스트). ⑥PRIVACY(자동 의미 보강 별도 동의·소급 금지·invSnap·map-route.jsonl)+README ko/en.
+> ⑦tests/p8-enrich-wire.test.js 43단언 — 문자열 단언 아닌 실행 반례(1차⑥): 민감 12케이스 양쪽 함수 비교·
+> anchor/라벨/경로 폭탄·1,000-node·역순 changed 분리 선택·가짜 CODEX_BIN Verifier 5경로·어댑터 3종 stubbed
+> spawn(self=PATH 스텁·economy=스텁 HTTP 서버+deepseek.json baseUrl·precision=CODEX_BIN 스텁[2차④])·설치본
+> 23파일 사본 CLI 실행. 체인 EXIT=0·tsc 통과.
+> 미반영 합의 이월(수정 의무 없음):
+> f-e9c23d7a·PRIVACY cutover-notice·보관함 5364ebe0·afdd6850b4ea2030·17d4697dc6a164fb·1f501cceed39340b·f-6dc403af.
+> ▶다음: MAP v2 로드맵 P9~P10(정본 MAP-V2-DESIGN.md §5) 또는 사용자 지정 작업. ⚠Reload 1회 필요(새 확장 코드).
+> ── (이전: **★C-7 자동화 계층 완결**):
+> 사용자 지시(2026-07-21 "MAP은 수동을 없애려는 설계인데 전환에 또 수동 명령은 과보수") → 정본 C-7 절 신설+구현.
+> 원칙: 동의할 내용 없으면(legacy AND 미이관 0 AND 안전 조건 전부) 자동·판단 필요(미이관 N>0)만 원클릭 카드.
+> 검증 9왕복(blocker 누적 19 전부 수용[verdicts 실측 5+5+2+1+1+2+1+2]·최종 통과(보완)): ①자동 실행 2지점(bootstrap 완료 직후·대시보드 legacy
+> 관측)+auto 침묵(exit 0/1/3)·blocked(재개)는 auto 범위 밖 ②deploy-manifest.json(deploy-manifest-v1) —
+> 지문 출처=배포 '원본'(install.js=SRC_BRIDGE·확장=번들 src, 설치본 재판독 금지=TOCTOU 반전)·EXPECTED_DEPLOY_FILES
+> 19파일 정확 일치·manifest 기록은 전체 재배치/번들 검증 통과 시에만(부분 보충=미기록) ③배포 잠금 .deploy.lock —
+> 6~8차의 mkdir+자동 stale 탈환 안은 검증에서 폐기(원복 공백·null 세대 동치), 9차=contract-lock v10 계보(wx
+> 원자 생성=신원 동시·read-back fence·자동 탈환/삭제 전면 폐기·사망 pid=deploy-lock-stale 수동 복구 안내·
+> lockLost 검출) 3카피(map-cutover·install.js·확장) ④리로드 고지 — marker는 정확 키 집합이라 provenance 불가 →
+> project-map/cutover-notice.json(auto 성공 시 pending) → 확장 v2 관측 시 알림 1회+ack ⑤원클릭 카드=repo 결속+
+> 모달 callback 재해석 재대조 ⑥auto 성공 즉시 재판독(실패=blocked 강등·legacy 복귀 금지). p3b-cutover 124단언·
+> 체인 EXIT=0·설치 완료(⚠Reload 필요). **미반영 2건(확인 검증 규약)**: PRIVACY.md에 cutover-notice.json 공개
+> 항목 누락(다음 묶음 동승 후보)·[주의→보관함 5364ebe0] wx 생성↔토큰 기록 비원자(부분 잠금 잔존=stale 안내
+> 없이 타임아웃 반복). ▶다음 착수=P5 유지.
+> ── (이전 2026-07-21: **★P3b 증분 2 완결: P3b 전체 완료 — 다음 착수=P5(provider 공통 인터페이스)**):
+> **증분 2 — cutover 명령 본체**(구현검증 4왕복[blocker 7 전부 수용]·tests/p3b-cutover 70단언): bridge/map-cutover.js —
+> C-1 게이트(scoutMode 최선행·권위 분기[v2=멱등+tail 보충/blocked=재개 판별(손상 receipt 1개라도=거부·공용
+> resumeEligibilityFor)/legacy=신규]·manifest 집합+전 ready·topology 유효·WAL 부재·미이관 N='entryFp 다중집합
+> 수량 소비'(--confirm-unmigrated 정확 수)·스냅샷+decisionId 사전발급·배포 세대 19파일 바이트 대조[레포 실행
+> 전제·설치본 실행=fail-closed]·quiescence 지속 약속 문구 ko/en) → C-2 잠금 안 전부 재검사+스냅샷 바이트
+> 불변→frozen-ledger-fp 'receipt 직전' 내구 기록→receipt→marker→read-back→C-5 배너(같은 임계구역·실패=경고) →
+> C-3 재개(승인 조건만 생략 — 잠금 안 자격 전수 재판별+read-back+배너 완결까지 임계구역·보고 decisionRef=잠금
+> 안 재판독본·확정층 소실/손상 기준선=조건 없이 경보[침묵 성공 3연속 반례 소멸]) → B-1 frozen probe(경보 축=
+> 동결 지문 대조[추가·재기록·삭제·동수 치환 전수]·미이관=정보 배지·기준선 불명=경고색) 대시보드 배선 →
+> D 문서(PRIVACY 3행·README ko/en '확정 교범' 전환 한정) → runCli cutover 분기·_testHooks 주입점 2개
+> (afterSnapshot·afterEligibility — TOCTOU·경합 실행 반례·프로덕션 분기 없음).
+> ▶**다음 착수=P5**(provider 공통 인터페이스: runScout→typed ScoutResult·self typed adapter[1-26]·deepseek
+> probe[1-8]) → P6(Codex Scout 독립 세션) → P7(모드 UI — 경제형/정밀형/자동형·readiness 행렬 1-34) → P8(라우터).
+> ⚠ cutover는 구현만 완료 — 실제 전환 실행은 사용자 결정(수동 명령·informed 동의 게이트).
+> ── (이전 2026-07-21 push 묶음(2커밋) 요지 —
 > P3b cutover 설계 동결+증분 1(6표면 재배선) 완료: 다음 착수=P3b 증분 2(cutover 명령 본체)**:
 > ①**P3b 상세 설계 동결**(docs/MAP-P3B-DESIGN.md — 정본 §5 P3b·1-22·1-29·1-30·P3A §B/§E의 위임 이행.
 > Codex 설계검증 8왕복[실패 7회→통과]·blocker 누적 25건 전부 수용/반박 처리). 핵심 계약: 증분 1=재배선
@@ -33,8 +330,8 @@
 > B-1 frozen probe(지문 대조=동결 위반 경보 축/미이관 총수=정보 배지·기준선 불명=경고) → D 문서(PRIVACY:
 > authority.json·authority-history·map-cutover-snapshots 행 / README ko/en '확정 교범' 개정) → E p3b cutover
 > e2e(성공·멱등+tail·재개·복수 receipt conflict·manifest 불일치·미이관 정확 수·잠금 안 재검사·배너 멱등 등).
-> 완료 후 클린빌드+install 일괄(**현재 이 PC 설치본·훅은 아직 34ad02f 세대 — 증분 1은 커밋만 됨**).
-> ⚠ 이 PC 백로그 장부: 열림 1건 유지(f17952166d364f8a 대화 칩 실효 표시 — 보관함 카드 커밋 a4b9bd7과 무관 확인).
+> 완료 후 클린빌드+install 일괄(2026-07-21 정정: 이 경고를 쓴 PC 기준이며, 재동기화한 PC는 install 실행으로 acaad64 세대 설치 완료 — 배포 18파일 SHA-256 전수 일치 실측).
+> ⚠ 백로그 장부(PC별 로컬 — 2026-07-21 정정): 재동기화 PC의 활성 워크스페이스 장부 열림 2건=[주의] c016deec789e4817(freshness symlink TOCTOU 잔여 창)·abec10d4d0672fed(자가 수리 updates overlay 미반영 — 지연만). 다른 PC에서 이어가면 그쪽 장부에 이 2건 재등록 권장. (작성 PC의 구 스냅샷이던 f17952166d 1건 표기는 이 정정으로 대체.)
 > ── (이전 2026-07-20 push 묶음(11커밋+수치 정정 1) 요지 —
 > MAP v2 P4 전 증분 완결+탐색 담당(scoutArm) 옵션 신설: 다음 착수=P3b cutover**:
 > ①**P4 증분 1 — P2 확장 계층**(4ef214a·검증 3왕복): structuralHashOf(provenance 제외 — historyless 자기참조

@@ -94,6 +94,16 @@ async function callChat(cfg, body, timeoutMs, opts) {
 
 const NO_KEY_MSG = "DeepSeek 키 없음 — 잠기는 건 'DeepSeek 비교 팔'뿐입니다(기초 탐색과 무료 self 팔 지도는 키 없이 동작: node scripts/scope-scout-self.js <repo>). 키 등록: 대시보드 ⚙️고급설정 탭 또는 DEEPSEEK_API_KEY env";
 
+// P7(1-8) capability 판정(순수 — 테스트가 직접 실행): 정확한 JSON 객체 하나만·크기 상한 2,000자.
+// 코드펜스·설명 문장 동반=실패(strict — typed 경로에 쓸 수 있는지의 실증이므로 관대 파싱 금지).
+function validateCapability(txt) {
+  const t = String(txt || "").trim();
+  if (!t || t.length > 2000) return false;
+  let o;
+  try { o = JSON.parse(t); } catch { return false; }
+  return !!(o && typeof o === "object" && !Array.isArray(o) && o.capability === "ok" && o.n === 7 && Object.keys(o).length === 2);
+}
+
 async function main() {
   const cmd = process.argv[2];
   const cfg = loadConfig();
@@ -104,6 +114,46 @@ async function main() {
     // 연결 점검도 과금 대상 호출 — 비용 장부에 기록(ws 무관 전역 · contract-lib은 같은 폴더 배포, 실패는 무해)
     if (r.usage) { try { require(path.join(__dirname, "contract-lib.js")).appendScoutUsage({ ts: new Date().toISOString(), workspace: "", arm: "ping", model: r.model || cfg.model, usageIn: r.usage.prompt_tokens ?? null, usageOut: r.usage.completion_tokens ?? null }); } catch { /* 무해 */ } }
     console.log(`ok — ${r.model} 응답 수신(${r.content ? "본문" : r.reasoning ? "추론만(정상 — 상한 내)" : "빈 응답"})${r.usage ? ` tokens in=${r.usage.prompt_tokens} out=${r.usage.completion_tokens}` : ""}`);
+    return;
+  }
+  if (cmd === "capability") {
+    // P7(1-8) — typed capability probe: '지시대로 정확한 JSON만 내놓을 수 있는가'를 실검증(ping은 증거 아님).
+    // strict validator+크기 상한+bounded repair(원격 재호출 1회) — 최대 2회 과금(UI 고지와 일치)·호출별 usage 기록.
+    if (!cfg.apiKey) { console.error(NO_KEY_MSG); process.exit(1); }
+    const capReq = { model: cfg.model, messages: [{ role: "user", content: '다음 JSON만 정확히 출력하라(설명·코드펜스 금지): {"capability":"ok","n":7}' }], max_tokens: 64, temperature: 0, stream: false };
+    const recordUse = (r9) => { if (r9 && r9.usage) { try { require(path.join(__dirname, "contract-lib.js")).appendScoutUsage({ ts: new Date().toISOString(), workspace: "", arm: "capability", model: r9.model || cfg.model, usageIn: r9.usage.prompt_tokens ?? null, usageOut: r9.usage.completion_tokens ?? null }); } catch { /* 무해 */ } } };
+    let r1 = await callChat(cfg, capReq, 60000, { allowEmptyContent: true });
+    recordUse(r1);
+    let ok = validateCapability(r1.content || "");
+    if (!ok) { // bounded repair — 원격 재호출 정확히 1회
+      const r2 = await callChat(cfg, { ...capReq, messages: [...capReq.messages, { role: "assistant", content: r1.content || "" }, { role: "user", content: "형식이 틀렸다. 요구한 JSON 객체만 정확히 다시 출력하라." }] }, 60000, { allowEmptyContent: true });
+      recordUse(r2);
+      ok = validateCapability(r2.content || "");
+    }
+    console.log(ok ? "capability-ok" : "capability-fail");
+    process.exit(ok ? 0 : 2);
+  }
+  if (cmd === "enrich") {
+    // P8 증분 4 — 의미 보강 typed 호출(capability 문법 동형: strict 형태 표지+bounded repair 원격 1회 —
+    // 합타입·실존·근거 실증은 실행기[validateEnrichResult+quote 대조]가 수행·여기서는 'JSON 형태' 회복만).
+    if (!cfg.apiKey) { console.error(NO_KEY_MSG); process.exit(1); }
+    let prompt = "";
+    try { prompt = fs.readFileSync(0, "utf8"); } catch { /* stdin 없음 */ }
+    if (!prompt.trim()) { console.error("stdin으로 보강 프롬프트를 넣어라(enrich-providers가 조립)"); process.exit(2); }
+    const shapeOk = (txt) => { try { const o = JSON.parse(txt); return !!(o && typeof o === "object" && !Array.isArray(o) && o.schema === "enrich-result-v1" && Array.isArray(o.items)); } catch { return false; } };
+    const strip = (txt) => { const m = String(txt || "").match(/```(?:json)?\s*([\s\S]*?)```/); return (m ? m[1] : String(txt || "")).trim(); }; // 코드펜스 제거만(bounded 추출)
+    const recordUse9 = (r9) => { if (r9 && r9.usage) { try { require(path.join(__dirname, "contract-lib.js")).appendScoutUsage({ ts: new Date().toISOString(), workspace: "", arm: "enrich", model: r9.model || cfg.model, usageIn: r9.usage.prompt_tokens ?? null, usageOut: r9.usage.completion_tokens ?? null }); } catch { /* 무해 */ } } };
+    const req1 = { model: cfg.model, messages: [{ role: "user", content: prompt }], max_tokens: 4096, temperature: 0, stream: false };
+    let r1 = await callChat(cfg, req1, 4 * 60 * 1000);
+    recordUse9(r1);
+    let body = strip(r1.content || "");
+    if (!shapeOk(body)) { // bounded repair — 원격 재호출 정확히 1회
+      const r2 = await callChat(cfg, { ...req1, messages: [...req1.messages, { role: "assistant", content: r1.content || "" }, { role: "user", content: "형식이 틀렸다. schema \"enrich-result-v1\"과 items 배열을 가진 JSON 객체만(설명·코드펜스 금지) 다시 출력하라." }] }, 4 * 60 * 1000);
+      recordUse9(r2);
+      body = strip(r2.content || "");
+      if (!shapeOk(body)) { console.error("enrich-shape-fail"); process.exit(2); }
+    }
+    process.stdout.write(body + require("os").EOL);
     return;
   }
   if (cmd === "map") {
@@ -118,9 +168,9 @@ async function main() {
     if (r.usage) console.error(`[usage] in=${r.usage.prompt_tokens} out=${r.usage.completion_tokens} (${r.model})`); // stderr — 지도 본문(stdout) 오염 방지
     return;
   }
-  console.error("사용: node deepseek-bridge.js <ping|map> [--out <파일>]");
+  console.error("사용: node deepseek-bridge.js <ping|map|capability|enrich> [--out <파일>]");
   process.exit(2);
 }
 
-module.exports = { resolveDeepseekConfig, buildMapRequest, DEEPSEEK_DEFAULTS };
+module.exports = { resolveDeepseekConfig, buildMapRequest, DEEPSEEK_DEFAULTS, validateCapability };
 if (require.main === module) main().catch((e) => { console.error("deepseek-bridge 실패:", (e && e.message) || e); process.exit(1); });
