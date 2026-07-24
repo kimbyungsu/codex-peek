@@ -2,7 +2,8 @@
 
 > 이 문서 하나로 이어갈 수 있게 쓰였다. 상세 설계 원본(SCOUT-TRACK.md·SCOPE-LEDGER.md)은 **의도적으로 레포 밖 로컬 문서**라
 > 다른 환경에는 없다 — 그래서 이 파일이 그 요지를 포함한다. ⚠ **실 API 키·토큰은 어떤 파일·픽스처·예시에도 절대 넣지 말 것.**
-> 마지막 갱신: 2026-07-23 (버전 0.1.86 불변). **★검증 거버넌스 트랙(설계+증분 1~3) 완결 + P5(provider 공통 인터페이스) 완결(이상 07-22) + P6(Codex Scout)·P6b(Codex 정찰 두뇌 설정)·UX 3건·주입 지침 표시 접기·★P7(모드 UI+readiness 행렬) 설계·구현 완결 + ★P8(결정론 라우터+의미 보강 실행기) 설계 v10~v11·증분 1~4 전체 완결(07-23·로컬 커밋 — push 대기)**:
+> 마지막 갱신: 2026-07-24 (버전 0.1.86 불변). **⚡C-C(코덱스-코덱스) 인수인계 — 아래 '2026-07-24 묶음+C-C 이어가기' 절 필독.**
+> 마지막 갱신(이전): 2026-07-23. **★검증 거버넌스 트랙(설계+증분 1~3) 완결 + P5(provider 공통 인터페이스) 완결(이상 07-22) + P6(Codex Scout)·P6b(Codex 정찰 두뇌 설정)·UX 3건·주입 지침 표시 접기·★P7(모드 UI+readiness 행렬) 설계·구현 완결 + ★P8(결정론 라우터+의미 보강 실행기) 설계 v10~v11·증분 1~4 전체 완결(07-23·로컬 커밋 — push 대기)**:
 > 배경: C-7이 core 프로필로도 11왕복·blocker 19(실측 — core ②조항 "희귀 경합=blocker"가 이 프로젝트에선
 > 만능 통과문+지원 환경 선언 부재) → 사용자 결정으로 P5보다 선행. ①설계 v1 동결(docs/VERIFY-GOVERNANCE.md
 > — 설계검증 6왕복·"열린 탐색+제한된 차단 권한"·Envelope·입장 심사·지적 계보·범위 확장·소진 분해. 726219f)
@@ -154,6 +155,48 @@
 > v11: done 멱등 판정표=sourceFp 우선·AND 폴백·patchId=jobSeed[jobKey+startedAt] 세대·-uall·project-map 제외·
 > 호출 시점 지문만 도장)·bootstrap 큐 v0→v1(invSnap·fresh v0=stale 취급 마이그레이션). p8-enrich-run 73단언
 > (동시 경합·사망 창·구 장부 폴백 등 실행 반례)·전체 체인 EXIT=0.
+> ═══ 2026-07-24 묶음(CL-C 마지막 세션 — 이 절이 최신) ═══
+> **①거버넌스 §7·§8 설계+구현 전체 완결**(사용자 지시 전사→설계검증 6왕복 동결→구현 3증분·검증 12왕복):
+> §8=사용자 대면 선택 출력의 전역 표현 계약(기술용어 금지·상황예시·달라지는것/유지되는것·권장+근거 —
+> AskUserQuestion 포함. 첫 실사고 기록 있음). §7=상한 소진 시 수칙서 후보 깔때기: occurrence 계보(장부
+> 5유형째 — 재등장·prevId 사슬 뿌리 정규화 rootOf)·소진 보고 후보 재료(envelopeCandidateNoticeFor: oos 반복
+> 2+/입장심사 승격/계보 blocker 고유 라운드 3+/빼기 unused-oos[세대 전체 인용 0·3자 해시 일치 전제]·0건
+> 명시·재제시 스킵·30항목 임계=정리 우선·§8 작성 의무 문구)·후보 장부(verify-envelope-candidates JSONL·
+> CLI envelope-candidate list/mark)·제안본(env-proposal-v1 하네스 로컬 — strict[정본 축+En/Ex 슬롯+미지 필드
+> 거부+메타 상한]·전문-해시 결속·CLI envelope-proposal propose/show/discard[**approve 없음 — 도장=대시보드
+> 전용**])·승인 도장 전이(전이 잠금{pid,ts,token} 사망 rename 회수·WAL 구·신 전문·복구 수렴·drift 중단·
+> **ask 상호배제=envelopeSliceFor가 전이 잠금 실보유 아래 계약 신선 재판독**)·대시보드(🔔 초안 대기 배지·
+> 도장 모달 절단 금지+해시·대상 재대조·전이 복구 버튼·기동 자가 복구·후보 카드 '기록만' 버튼[gen+wsKey
+> 결속·클릭 시 세대/프로젝트/실존 3중 재대조]). 커밋: 08e8e66(§7§8 전사)+db07fb4(판정 3건)+4c7de8c(증분1+
+> 스크롤)+18b458f(증분2)+c9fb0ce(증분3). 관련 결정: 소진 화면 후보 선택=대화 응답 확정·대시보드 버튼=기록만·
+> 효력=도장부터. **첫 실전 발동 확인**(07-24 상한 5/5 소진에서 분해+후보 재료 정상 출력).
+> **②검증 대화 스크롤 실버그 3곳 봉합**(2521c01+4c7de8c): 주입 지침·최신 지도·확정 장부 상자 — 재렌더마다
+> 내부 위치 0 리셋+펼침 닫힘 → keepInnerScroll(foldScroll Map+rAF 복원)+keyedDetails 통일.
+> **③P9 구현 증분 1 완결**(a8108e2 — 검증 6왕복·blocker 7 수용·내 주장 1 철회): 사용자 확정 ⓒ("검증 담당이
+> 판정") 반영 — v12 소규모 개정 3건 부기·DEFAULT_CLASSIFICATION 개정(change_steward/authority=
+> verifier-resolved — 카드 폐지·정책 op 3종만 intent-choice)·유물 전환 회수 계보(스윕 원자 전환+legacyReclass
+> 표지+rebasedFrom 매핑+만료 cas-stale 표지 재소비 / 실행기 stale 예측[apply 전 검사 — **P2 applyPatch는
+> cas-stale을 terminal expire로 영속하므로 낡은 patch에 apply 호출 자체가 소실 경로**]·재기반 신본=원자 표지+
+> verifier 재호출[구 verdict 재사용 금지 ab-3]·어느 지점 만료도 재기반 회수=소실 0). tests/p9-reclass 53단언.
+>
+> ═══ C-C(코덱스-코덱스)로 이어가기 — 필수 확인 ═══
+> - **모드 전환**: 대시보드에서 harnessMode=codex-codex 전환(P-9 자동 전환 계약 있음 — 질문 호스트 기준).
+>   ⚠**전환 직후 검증 설정을 반드시 확인·설정하라**(검증자 실측 07-24): C-C 전용 필드(codexVerifyProfile·
+>   codexVerifyBudget)가 원시 계약에 없으면 C-C 기본은 **integrity·무제한(0)** — 이대로면 core 전용
+>   기계 판독(입장 심사·[지적 목록 v2]·백로그 자동 등록)과 유한 상한의 소진 후보 흐름이 발동하지 않는다.
+>   CL-C에서 쓰던 운영값을 원하면 대시보드에서 **C-C 검증 스위치를 core·상한 5로 명시 설정**할 것(설정은
+>   다음 지시 캠페인부터 적용 — 진행 중 캠페인은 시작값 동결). 거버넌스 배선 자체(경계 주입·계보 장부·
+>   occurrence·소진 후보·§8 캐논)는 cmdAsk 공통 경로라 설정만 맞추면 C-C에서 동일 작동(캠페인 앵커=C-C는
+>   구현자 세션:턴 동결).
+> - **C-C 불변 계약**: 직접 ask 금지(ask-start만 — P-6)·구계약 v1 proof 불인정·검증자 충돌 사전차단(P-9).
+> - **오늘 신설분의 모드 접점**: §7 소진 후보·분해·상한 문구=cmdAsk 공통 출력(모드 무관)·제안본/도장/전이=
+>   워크스페이스 기준(모드 무관)·P8 verifier 자격 게이트=resolveLink(C-C면 codexCodexSession override/상속
+>   인정)·P9 유물 회수=파이프라인 계층(모드 무관).
+> - **다음 작업(P9 잔여 증분)**: 정책 supersession 카드(intent-choice — 사용자 선택 전용 유지)·frontier 자동
+>   적용 스윕(1-35 ②)·recovery-action 카드(1-18)·UI. 정본=MAP-V2-DESIGN 말미 P9 v12+소규모 개정 부기.
+> - **이월(불변)**: f-e9c23d7a·PRIVACY cutover-notice·보관함 5364ebe0·afdd6850b4ea2030·17d4697dc6a164fb·
+>   1f501cceed39340b·f-6dc403af. ⚠Reload 1회 필요(누적 설치분). push는 사용자 지시 시만·0.1.86 불변.
+>
 > ★P8 증분 4 완결(2026-07-23 — 구현검증 7왕복[1차 blocker 6→2차 4→3차 1→4차 2→5차 2→6차 1→7차 통과 지적 0]·
 > blocker 16 전부 수용·반박 0): **P8 전체(설계 v10~v11+증분 1·2·3a·3b·4) 종결.**
 > ①어댑터 3종 실배선 bridge/enrich-providers.js(1차⑤: 설치본 발동에 실존해야 하므로 scripts/가 아닌 bridge/):
