@@ -201,7 +201,7 @@ interface BridgeState {
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
   brainActual: { cc: string; cx: string; scout: string }; // 두뇌 '실제 답'(대화 기록 실측) 표시 문구 — 경고 아닌 평시 정보(피커 표시 결함 실사고 2026-07-08). 기록 없으면 '기록 없음' 문구. scout=마지막 정찰 실행(비용 장부 lastTs — 감사 일치 2026-07-10)
   hasTestsDir: boolean; // 표준 테스트 폴더(tests|test) '감지' 여부 — 성격 프로필용(미감지≠없음, 관행 밖은 못 봄)
-  envelope: { label: string; btn: string | null; btn2: string | null; repo: string; tone: string; lang: Lang; proposal?: string } | null; // 거버넌스 증분 1(2차 배치 정정) — 검증 경계(수칙서). 최상위=2트랙 기본 프로젝트 포함·lang=렌더 슬롯 결속. null=부재/ws 없음
+  envelope: { label: string; btn: string | null; btn2: string | null; repo: string; tone: string; lang: Lang; proposal?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string }> } | null; // 거버넌스 증분 1(2차 배치 정정) — 검증 경계(수칙서). 최상위=2트랙 기본 프로젝트 포함·lang=렌더 슬롯 결속. null=부재/ws 없음
 }
 
 function normWs(p: string): string {
@@ -764,7 +764,7 @@ function envelopeDetailText(evv: any, en9: boolean): string {
 }
 // 거버넌스 증분 1(2차 배치 정정 — 구현검증 1차 blocker①②): 검증 경계는 정찰(3트랙)이 아니라 '검증' 계층이다 —
 // MAP 카드가 아닌 최상위 뷰 필드로 항상 계산(2트랙 기본 프로젝트에서도 승인 가능). lang=렌더 슬롯 결속(도장도 그 슬롯 계약에).
-function readEnvelopeView(ws: string | null): { label: string; btn: string | null; btn2: string | null; repo: string; tone: string; lang: Lang; proposal?: string } | null {
+function readEnvelopeView(ws: string | null): { label: string; btn: string | null; btn2: string | null; repo: string; tone: string; lang: Lang; proposal?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string }> } | null {
   if (!ws) return null;
   try {
     const CL9: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
@@ -812,7 +812,21 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
         }
       }
     } catch { adm9 = ""; }
-    return { label: tE(`적용 중 — 지원 ${n9[0]}·절대 ${n9[1]}·범위밖 ${n9[2]}항목이 검증 판정 경계로 주입돼요(파일을 고치면 재승인 전까지 중단)`, `Active — ${n9[0]}/${n9[1]}/${n9[2]} items injected as the judging boundary (edits suspend it until re-approval)`) + adm9, btn: null, btn2: tE("내용 보기", "View details"), repo: repo9, tone: "ok", lang: slot };
+    let cands9: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string }> | undefined;
+    try { // §7 증분 3 — 수칙서 후보(판단 대기) 목록: 소진 보고와 같은 집계(codex-bridge 설치본)를 공유. 버튼=기록만(작업 발동 금지 계약)
+      const CB9: any = require(path.join(BRIDGE_DIR, "codex-bridge.js"));
+      if (typeof CB9.computeEnvelopeCandidatesFor === "function") {
+        const cc9 = CB9.computeEnvelopeCandidatesFor(ws);
+        // 증분 3 재검증 blocker: 산출 세대(마지막 ask 동결)≠현 승인 해시면 카드 미표시 — 승인 전이 직후
+        // '동결=구·승인=신' 창에서 구세대 후보 판단이 신세대 장부에 오귀속되는 경로 차단(다음 ask부터 재표시).
+        if ((cc9.gen || null) === (hash9 || null)) {
+          const lat9 = typeof CL9.readEnvelopeCandidates === "function" ? CL9.readEnvelopeCandidates(ws).latest : new Map();
+          cands9 = (cc9.live || []).slice(0, 8).map((c: any) => ({ id: c.candidateId, kind: c.kind, n: c.n, title: (c.titles && c.titles[0]) || "", status: (lat9.get(c.candidateId + "@" + String(hash9 || "")) || {}).status || "", gen: cc9.gen || "", wsKey: typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : "" })); // wsKey=원본 프로젝트 내구 키(재재검증 ab-1 — 같은 수칙서 해시를 쓰는 타 프로젝트 장부 오귀속 차단)
+          if (cands9 && !cands9.length) cands9 = undefined;
+        }
+      }
+    } catch { cands9 = undefined; }
+    return { label: tE(`적용 중 — 지원 ${n9[0]}·절대 ${n9[1]}·범위밖 ${n9[2]}항목이 검증 판정 경계로 주입돼요(파일을 고치면 재승인 전까지 중단)`, `Active — ${n9[0]}/${n9[1]}/${n9[2]} items injected as the judging boundary (edits suspend it until re-approval)`) + adm9, btn: null, btn2: tE("내용 보기", "View details"), repo: repo9, tone: "ok", lang: slot, ...(cands9 ? { cands: cands9 } : {}) };
   } catch { return null; }
 }
 function patchContractOnceExt(ws: string | null, lang: Lang | undefined, patch: Record<string, unknown>): ContractPatchRes {
@@ -3366,6 +3380,26 @@ class Dashboard {
           });
           return;
         }
+        if (m?.type === "candMark" && typeof m.id === "string" && /^[0-9a-f]{16}$/.test(m.id) && (m.status === "adopted" || m.status === "declined") && typeof m.gen === "string" && typeof m.wsKey === "string" && m.wsKey) { // §7 증분 3 — 후보 선택 '기록만'(작업 발동 금지·반영은 다음 대화 턴)
+          const wsM = dashboardWorkspace(); if (!wsM) return;
+          const enM = loadLangExt() === "en";
+          try {
+            const CLM: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
+            // 재재검증 blocker(ab-1): 카드 원본 프로젝트의 내구 키와 클릭 시점 워크스페이스 재대조 — 멀티루트
+            // 창에서 활성 프로젝트가 바뀐 사이 클릭하면(같은 수칙서 해시라 세대 검사는 통과) 타 장부 오귀속.
+            if (typeof CLM.wsKeyFor !== "function" || String(CLM.wsKeyFor(wsM)) !== m.wsKey) { vscode.window.showWarningMessage(enM ? "The active project changed while this card was open — the list refreshes; please judge again." : "카드가 떠 있는 사이 활성 프로젝트가 바뀌었어요 — 목록이 갱신됩니다. 다시 판단해 주세요."); this.post(); return; }
+            // 후보 실존 재검사 — 지금 이 프로젝트·세대의 실후보 목록에 있는 id만 기록(유령 id·낡은 카드 차단)
+            try { const CBM: any = require(path.join(BRIDGE_DIR, "codex-bridge.js")); const nowC = typeof CBM.computeEnvelopeCandidatesFor === "function" ? CBM.computeEnvelopeCandidatesFor(wsM) : null; if (!nowC || !(nowC.live || []).some((c: any) => c.candidateId === m.id)) { vscode.window.showWarningMessage(enM ? "That candidate is no longer current — the list refreshes." : "그 후보는 더 이상 유효하지 않아요 — 목록이 갱신됩니다."); this.post(); return; } } catch { this.post(); return; }
+            const genM = (CLM.loadContract(wsM) || {}).envelopeHash || null;
+            // 재검증 blocker: 클릭 시점 재대조 — 후보를 산출한 세대(m.gen)와 지금 승인 세대가 다르면 기록 거부
+            // (카드가 떠 있는 사이 재승인된 경우 구세대 판단의 신세대 오귀속 차단).
+            if ((m.gen || null) !== (genM || null)) { vscode.window.showWarningMessage(enM ? "The rulebook was re-approved while this card was open — the candidate list refreshes; please judge again." : "카드가 떠 있는 사이 수칙서가 재승인됐어요 — 후보 목록이 갱신됩니다. 다시 판단해 주세요."); this.post(); return; }
+            const okM = typeof CLM.appendEnvelopeCandidates === "function" && CLM.appendEnvelopeCandidates(wsM, [{ candidateId: m.id, envelopeHash: genM, status: m.status, ts: new Date().toISOString(), note: "dashboard-record" }]);
+            if (okM) vscode.window.showInformationMessage(enM ? "Recorded. Nothing runs from this click — tell the implementer in chat to apply it (a stamp is still required for effect)." : "기록했어요. 이 클릭으로 실행되는 것은 없습니다 — 반영은 대화에서 지시해 주세요(효력은 도장부터).");
+            else vscode.window.showWarningMessage(enM ? "Record failed — please try again." : "기록에 실패했어요 — 다시 시도해 주세요.");
+          } catch { vscode.window.showWarningMessage(enM ? "Record failed." : "기록에 실패했어요."); }
+          this.post(); return;
+        }
         if (m?.type === "proposalShow" && typeof m.repo === "string" && m.repo) { // §7 증분 2 — 초안 열람(승인 아님)
           const wsP = dashboardWorkspace(); if (!wsP) return;
           const enP = (m.lang === "en");
@@ -5547,6 +5581,17 @@ class Dashboard {
         var act2T=e9.proposal==="pending"?"proposalShow":"envelopeShow";
         if(e9.btn){ var ab=document.createElement("button"); ab.style.cssText="margin-top:4px;font-weight:700"; ab.textContent=e9.btn; ab.addEventListener("click", function(){ vscode.postMessage({type:actT, repo: e9.repo, lang: e9.lang}); }); ec.appendChild(ab); }
         if(e9.btn2){ var vb2=document.createElement("button"); vb2.style.cssText="margin-top:4px;margin-left:4px"; vb2.textContent=e9.btn2; vb2.addEventListener("click", function(){ vscode.postMessage({type:act2T, repo: e9.repo, lang: e9.lang}); }); ec.appendChild(vb2); }
+        if(e9.cands && e9.cands.length){ // §7 증분 3 — 수칙서 후보(판단 대기): 버튼은 '기록만'(반영은 대화에서·효력은 도장부터)
+          var ch9=document.createElement("div"); ch9.style.cssText="margin-top:6px;font-weight:600"; ch9.textContent=T("수칙서 후보 — 판단 대기(버튼은 기록만, 실제 반영은 대화로 지시)","Rulebook candidates — awaiting judgment (buttons only record; apply via chat)"); ec.appendChild(ch9);
+          e9.cands.forEach(function(cd){
+            var row9=document.createElement("div"); row9.style.cssText="font-size:11px;margin-top:2px";
+            var kl9=cd.kind==="oos-repeat"?T("치워둔 항목이 반복 등장","waived scenario keeps appearing"):cd.kind==="escalation"?T("한 번 봐준 항목","one-time expanded item"):cd.kind==="unused-oos"?T("이 세대에서 발동 0회 — 빼기 검토","never triggered — consider removal"):T("같은 지적 계보 반복","repeated finding lineage");
+            row9.textContent=(cd.status?"["+cd.status+"] ":"")+kl9+(cd.n?" ×"+cd.n:"")+(cd.title?" — "+cd.title:"");
+            var mb9=function(lab,st){ var b9=document.createElement("button"); b9.style.cssText="margin-left:4px;font-size:10px"; b9.textContent=lab; b9.onclick=function(){ vscode.postMessage({type:"candMark", id: cd.id, status: st, gen: cd.gen, wsKey: cd.wsKey, lang: e9.lang}); }; row9.appendChild(b9); };
+            if(!cd.status){ mb9(T("채택 기록","record: adopt"),"adopted"); mb9(T("거절 기록","record: decline"),"declined"); }
+            ec.appendChild(row9);
+          });
+        }
       });
       safe(function(){ var n=$("vBudgetNote"); if(!n) return;
         var inh = ccMode && d.contract.codexVerifyBudgetRawVal===null && d.contract.codexVerifyBudget>0;

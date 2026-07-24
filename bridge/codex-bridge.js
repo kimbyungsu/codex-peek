@@ -1777,42 +1777,70 @@ function v2DirectiveFor(ws, lang) {
 // ①같은 oosId 강등 2회+ ②입장 심사 승격 범위확장(escalation) ③같은 계보(occurrence) 반복 2회+(원 등장 포함 3회).
 // 재제시 스킵: 후보 장부에서 같은 (candidateId, 승인 세대)에 declined|failed → 목록에서 제외하고 스킵 수만 표기.
 // 후보 0건=명시(침묵 생략 금지). ④(보류 항목)는 캐논 전용 재료 — 여기서 집계하지 않음(§7 명문).
+// §7 증분 3 — 후보 집계 본체(분리: 소진 보고와 대시보드 후보 카드가 같은 산출을 공유). 반환
+// { live, skipped, overCap } — live=[{candidateId, kind, key, n, titles}].
+function computeEnvelopeCandidatesFor(ws) {
+  const camp = currentCampaignIdFor(ws);
+  const gen = readFrozenEnvelope(ws);
+  const rows = readFindingsLedger(ws).filter((r) => r.campaignId === camp && (r.envelopeHash || null) === (gen || null));
+  const titleOf = new Map();
+  for (const r of rows) if (r.type === "finding" && r.findingId) titleOf.set(r.findingId, String(r.titleNorm || "").slice(0, 60));
+  // §7 증분 3(실전 첫 발동의 교훈 2026-07-24): '이미 해소된 계보'는 후보에서 제외 — 반복됐어도 이번 캠페인에서
+  // 수정 완료된 지적은 "앞으로 지킬 약속" 후보가 아니다. open 판정=현 세대 열린 지적 목록.
+  const openIds9 = new Set();
+  try { for (const o of openFindingsFor(ws, camp, gen)) openIds9.add(o.id); } catch { /* 판독 실패=제외 없이 전체(보수) */ }
+  const cands = [];
+  { // ① oos 강등 반복(강등=닫힘이 정상이라 open 조건 비적용 — 반복 자체가 신호)
+    const byOos = new Map();
+    for (const r of rows) if (r.type === "finding" && r.demoted && r.oosId) { const a = byOos.get(r.oosId) || []; a.push(r); byOos.set(r.oosId, a); }
+    for (const [oosId, list] of byOos) if (list.length >= 2) cands.push({ candidateId: envelopeCandidateId("oos-repeat", oosId), kind: "oos-repeat", key: oosId, n: list.length, titles: list.map((x) => titleOf.get(x.findingId) || x.titleNorm || "").filter(Boolean).slice(0, 3) });
+  }
+  { // ② 입장 심사 승격 범위확장(기계 승격 — 사용자 승인 아님·§2 승인과 구분)·해소됐으면 제외
+    for (const r of rows) if (r.type === "escalation" && r.findingId && openIds9.has(r.findingId)) cands.push({ candidateId: envelopeCandidateId("escalation", r.findingId), kind: "escalation", key: r.findingId, n: 1, titles: [titleOf.get(r.findingId) || ""].filter(Boolean) });
+  }
+  { // ③ 같은 계보 반복(occurrence — 원 등장 포함 3회+)·effectiveTag가 blocker인 재등장만·**고유 라운드 수**로
+    // 집계(재검증 blocker② — 같은 라운드 중복 레코드를 별도 반복으로 세는 조기 후보 차단·기록 측 억제와 이중 방어)·
+    // 해소된(open 아님) 계보=제외(증분 3).
+    const byF = new Map();
+    for (const r of rows) if (r.type === "occurrence" && r.findingId && r.effectiveTag === "blocker") { const st9 = byF.get(r.findingId) || new Set(); st9.add(r.round); byF.set(r.findingId, st9); }
+    for (const [fid, st9] of byF) if (st9.size >= 2 && openIds9.has(fid)) cands.push({ candidateId: envelopeCandidateId("lineage", fid), kind: "lineage", key: fid, n: st9.size + 1, titles: [titleOf.get(fid) || ""].filter(Boolean) });
+  }
+  { // ④ 빼기 후보(§7 성장 억제 — 현 승인 세대 '전체'에서 한 번도 발동 안 한 범위-밖 항목): 세대 전 캠페인의
+    // finding에서 oosId 인용이 0회인 oos-N=빼기/병합 검토 재료. 항상-차단(ab)은 발동 데이터가 심사 면제 축이라
+    // 미인용=미발동으로 단정할 수 없어 제외(정직 한정 — 캐논 재료로만).
+    try {
+      const c9 = loadContract(ws);
+      const repo9 = resolveScoutRepo(ws, c9).repo;
+      const evv9 = readVerifyEnvelope(repo9);
+      if (evv9.st === "ok" && c9.envelopeHash === evv9.sha1 && (gen || null) === evv9.sha1) {
+        const usedOos = new Set(readFindingsLedger(ws).filter((r) => r.type === "finding" && (r.envelopeHash || null) === (gen || null) && r.oosId).map((r) => r.oosId));
+        evv9.data.outOfScope.forEach((txt, i) => { const id9 = "oos-" + (i + 1); if (!usedOos.has(id9)) cands.push({ candidateId: envelopeCandidateId("unused-oos", id9 + "@" + evv9.sha1), kind: "unused-oos", key: id9, n: 0, titles: [String(txt).slice(0, 60)] }); });
+      }
+    } catch { /* 원본 판독 실패=빼기 후보 생략(추가 후보는 유지) */ }
+  }
+  // 항목 수 임계(§7 — 추가 단방향 성장 방지): 수칙서 3축 합이 30항목 이상이면 추가 후보보다 정리 후보 우선 표기
+  let overCap = false;
+  try { const c9 = loadContract(ws); const evv9 = readVerifyEnvelope(resolveScoutRepo(ws, c9).repo); if (evv9.st === "ok") overCap = (evv9.data.supportedEnv.length + evv9.data.alwaysBlocker.length + evv9.data.outOfScope.length) >= 30; } catch { /* 판정 불가=false */ }
+  const { latest } = readEnvelopeCandidates(ws);
+  let skipped = 0;
+  const live = cands.filter((c) => {
+    const cur = latest.get(c.candidateId + "@" + String(gen || ""));
+    if (cur && (cur.status === "declined" || cur.status === "failed")) { skipped++; return false; }
+    return true;
+  });
+  return { live, skipped, overCap, gen: gen || null }; // gen=산출 세대(동결) — 소비자(대시보드)는 이 값과 현 승인 해시의 일치를 결속해야 함(증분 3 재검증 blocker)
+}
 function envelopeCandidateNoticeFor(ws, lang, res) {
   try {
     if (!res || !res.tracked || !res.last) return "";
     const en = lang === "en";
-    const camp = currentCampaignIdFor(ws);
-    const gen = readFrozenEnvelope(ws);
-    const rows = readFindingsLedger(ws).filter((r) => r.campaignId === camp && (r.envelopeHash || null) === (gen || null));
-    const titleOf = new Map();
-    for (const r of rows) if (r.type === "finding" && r.findingId) titleOf.set(r.findingId, String(r.titleNorm || "").slice(0, 60));
-    const cands = [];
-    { // ① oos 강등 반복
-      const byOos = new Map();
-      for (const r of rows) if (r.type === "finding" && r.demoted && r.oosId) { const a = byOos.get(r.oosId) || []; a.push(r); byOos.set(r.oosId, a); }
-      for (const [oosId, list] of byOos) if (list.length >= 2) cands.push({ candidateId: envelopeCandidateId("oos-repeat", oosId), kind: "oos-repeat", key: oosId, n: list.length, titles: list.map((x) => titleOf.get(x.findingId) || x.titleNorm || "").filter(Boolean).slice(0, 3) });
-    }
-    { // ② 입장 심사 승격 범위확장(기계 승격 — 사용자 승인 아님·§2 승인과 구분)
-      for (const r of rows) if (r.type === "escalation" && r.findingId) cands.push({ candidateId: envelopeCandidateId("escalation", r.findingId), kind: "escalation", key: r.findingId, n: 1, titles: [titleOf.get(r.findingId) || ""].filter(Boolean) });
-    }
-    { // ③ 같은 계보 반복(occurrence — 원 등장 포함 3회+)·effectiveTag가 blocker인 재등장만·**고유 라운드 수**로
-      // 집계(재검증 blocker② — 같은 라운드 중복 레코드를 별도 반복으로 세는 조기 후보 차단·기록 측 억제와 이중 방어).
-      const byF = new Map();
-      for (const r of rows) if (r.type === "occurrence" && r.findingId && r.effectiveTag === "blocker") { const st9 = byF.get(r.findingId) || new Set(); st9.add(r.round); byF.set(r.findingId, st9); }
-      for (const [fid, st9] of byF) if (st9.size >= 2) cands.push({ candidateId: envelopeCandidateId("lineage", fid), kind: "lineage", key: fid, n: st9.size + 1, titles: [titleOf.get(fid) || ""].filter(Boolean) });
-    }
-    const { latest } = readEnvelopeCandidates(ws);
-    let skipped = 0;
-    const live = cands.filter((c) => {
-      const cur = latest.get(c.candidateId + "@" + String(gen || ""));
-      if (cur && (cur.status === "declined" || cur.status === "failed")) { skipped++; return false; }
-      return true;
-    });
+    const { live, skipped, overCap } = computeEnvelopeCandidatesFor(ws);
     const kindLabel = (k) => en
-      ? (k === "oos-repeat" ? "repeated out-of-scope demotions — reconsider defending this scenario" : k === "escalation" ? "admission-escalated scope expansion — consider formal adoption" : "repeated blocker lineage — consider an always-block entry")
-      : (k === "oos-repeat" ? "범위 밖 강등 반복 — 이 시나리오를 계속 치워둘지 재검토" : k === "escalation" ? "입장 심사 승격 확장 — 정식 편입 검토" : "같은 계보 blocker 반복 — 항상 차단 명시 검토");
+      ? (k === "oos-repeat" ? "repeated out-of-scope demotions — reconsider defending this scenario" : k === "escalation" ? "admission-escalated scope expansion — consider formal adoption" : k === "unused-oos" ? "never triggered this approval generation — consider removing/merging" : "repeated blocker lineage — consider an always-block entry")
+      : (k === "oos-repeat" ? "범위 밖 강등 반복 — 이 시나리오를 계속 치워둘지 재검토" : k === "escalation" ? "입장 심사 승격 확장 — 정식 편입 검토" : k === "unused-oos" ? "이 승인 세대에서 한 번도 발동 안 됨 — 빼기/병합 검토" : "같은 계보 blocker 반복 — 항상 차단 명시 검토");
     const L = [];
     L.push(en ? "\n[rulebook candidates · this campaign — machine material]" : "\n[수칙서 후보 재료 · 이번 캠페인 — 기계 집계]");
+    if (overCap) L.push(en ? "> ⚠ the rulebook already holds 30+ items — prioritize removal/merge candidates over additions (§7 growth control)." : "> ⚠ 수칙서가 이미 30항목 이상 — 추가보다 빼기/병합 후보를 우선하라(§7 성장 억제).");
     if (!live.length) L.push(en ? "> none from this exhaustion (state this explicitly in the report — no silent omission)." + (skipped ? ` (${skipped} previously declined/failed candidate(s) skipped this generation)` : "") : "> 이번 소진에서는 수칙서로 올릴 후보가 없습니다(보고에 명시 — 침묵 생략 금지)." + (skipped ? ` (이 승인 세대에서 이미 거절·실패한 후보 ${skipped}건 스킵)` : ""));
     else {
       for (const c of live) L.push(`> ${c.candidateId} [${c.kind} ×${c.n}] ${kindLabel(c.kind)}${c.titles.length ? " — " + c.titles.join(" / ") : ""}`);
@@ -2571,4 +2599,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, v2DirectiveFor, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, envelopeSliceFor, integrityReviewLine, resolveCodex };
+module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, v2DirectiveFor, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex };

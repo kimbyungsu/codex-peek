@@ -276,5 +276,54 @@ console.log("[10] 배선 소스 계약 — ask 상호배제·대시보드 배지
   ok(ext.includes('m?.type === "proposalRecover"') && ext.includes('envelopeTransState(ws0) === "recover-needed"'), "복구 버튼+기동 자가 복구");
 }
 
+console.log("[11] §7 증분 3 — 해소 계보 제외·빼기 후보·항목 수 임계·대시보드 기록 버튼");
+{
+  // 해소 계보 제외: [3] 픽스처의 f-aaa(open)는 후보 유지 — close 기록을 추가하면 후보에서 사라져야 한다
+  const idLin = CL.envelopeCandidateId("lineage", "f-aaa");
+  const before = CB.computeEnvelopeCandidatesFor(ws);
+  // (f-aaa·f-esc는 [3]에서 declined/failed 기록됨 — skipped로 이미 제외 상태. 제외 로직 검증은 별도 ws)
+  const wsR = fs.mkdtempSync(path.join(require("os").tmpdir(), "gov7_wsr_"));
+  fs.writeFileSync(CL.campaignFileFor(wsR), JSON.stringify({ schema: "vcamp-1", campaignId: CAMP, count: 1, budget: 9, startedAt: "T", updatedAt: "T" }));
+  CL.writeEnvelopeFreeze(wsR, GEN, "ask-rz");
+  CL.appendFindingsLedger(wsR, [
+    { type: "finding", findingId: "f-live", campaignId: CAMP, round: 1, tag: "blocker", titleNorm: "미해결 반복", envelopeHash: GEN, demoted: false, status: "open", ts: "T" },
+    { type: "occurrence", findingId: "f-live", campaignId: CAMP, prevId: "f-live", round: 2, envelopeHash: GEN, effectiveTag: "blocker", ts: "T" },
+    { type: "occurrence", findingId: "f-live", campaignId: CAMP, prevId: "f-live", round: 3, envelopeHash: GEN, effectiveTag: "blocker", ts: "T" },
+    { type: "finding", findingId: "f-done", campaignId: CAMP, round: 1, tag: "blocker", titleNorm: "해소된 반복", envelopeHash: GEN, demoted: false, status: "open", ts: "T" },
+    { type: "occurrence", findingId: "f-done", campaignId: CAMP, prevId: "f-done", round: 2, envelopeHash: GEN, effectiveTag: "blocker", ts: "T" },
+    { type: "occurrence", findingId: "f-done", campaignId: CAMP, prevId: "f-done", round: 3, envelopeHash: GEN, effectiveTag: "blocker", ts: "T" },
+    { type: "close", campaignId: CAMP, findingId: "f-done", closeReason: "resolved", round: 4, envelopeHash: GEN, ts: "T" },
+    { type: "finding", findingId: "f-esc2", campaignId: CAMP, round: 2, tag: "blocker", titleNorm: "승격후해소", envelopeHash: GEN, demoted: false, status: "open", ts: "T" },
+    { type: "escalation", findingId: "f-esc2", campaignId: CAMP, round: 2, envelopeHash: GEN, ts: "T" },
+    { type: "close", campaignId: CAMP, findingId: "f-esc2", closeReason: "resolved", round: 4, envelopeHash: GEN, ts: "T" },
+  ]);
+  const cc = CB.computeEnvelopeCandidatesFor(wsR);
+  const ids = cc.live.map((c) => c.candidateId);
+  ok(ids.includes(CL.envelopeCandidateId("lineage", "f-live")), "미해결 반복=후보 유지");
+  ok(!ids.includes(CL.envelopeCandidateId("lineage", "f-done")), "해소된 반복 계보=후보 제외(실전 첫 발동의 교훈 — '이미 지키는 약속'은 후보 아님)");
+  ok(!ids.includes(CL.envelopeCandidateId("escalation", "f-esc2")), "해소된 승격 확장=후보 제외");
+  ok(before.live !== undefined && typeof before.skipped === "number", "분리 집계 함수=소진 보고와 공유 산출(live·skipped)");
+  ok(before.overCap === false, "소형 수칙서=임계 미달(overCap=false)");
+  // 재검증 blocker(세대 오귀속) 반례: 산출 세대(gen)가 반환에 결속되고, 소비자는 현 승인 해시와 일치할 때만 표시
+  ok((CB.computeEnvelopeCandidatesFor(wsR).gen || null) === GEN, "집계 반환에 산출 세대(gen=동결 해시) 결속");
+  {
+    const ext2 = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
+    ok(ext2.includes("(cc9.gen || null) === (hash9 || null)") && ext2.includes("gen: cc9.gen"), "대시보드=산출 세대≠현 승인 해시면 카드 미표시+DTO에 세대 동봉");
+    ok(ext2.includes('typeof m.gen === "string"') && ext2.includes("(m.gen || null) !== (genM || null)"), "기록 핸들러=클릭 시점 세대 재대조(불일치=기록 거부 — 구세대 판단의 신세대 오귀속 차단)");
+    ok(ext2.includes("wsKey: typeof CL9.wsKeyFor") && ext2.includes('String(CLM.wsKeyFor(wsM)) !== m.wsKey'), "DTO에 원본 프로젝트 내구 키 결속+클릭 시 재대조(멀티루트 활성 전환 오귀속 차단 — ab-1)");
+    ok(ext2.includes("computeEnvelopeCandidatesFor(wsM)") && ext2.includes("c.candidateId === m.id"), "기록 전 후보 실존 재검사(유령 id·낡은 카드 차단)");
+  }
+}
+
+console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 전용)·소진 임계 문구");
+{
+  const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
+  ok(ext.includes("computeEnvelopeCandidatesFor(ws)") && ext.includes("수칙서 후보 — 판단 대기(버튼은 기록만"), "후보 목록=소진 보고와 같은 집계 공유+기록 전용 명시(§8)");
+  ok(ext.includes('m?.type === "candMark"') && ext.includes('note: "dashboard-record"') && !/candMark[\s\S]{0,900}applyEnvelopeTransition/.test(ext.slice(ext.indexOf('m?.type === "candMark"'))), "기록 버튼=장부 기록만(작업·전이 발동 없음 — §7 완화 계약)");
+  ok(ext.includes('m.status === "adopted" || m.status === "declined"') && ext.includes("/^[0-9a-f]{16}$/.test(m.id)"), "기록 인자 strict(16hex·상태 2종만)");
+  const src = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
+  ok(src.includes("30항목 이상 — 추가보다 빼기/병합 후보를 우선하라") && src.includes('kind: "unused-oos"'), "임계 문구+빼기 후보 kind 존재");
+}
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
