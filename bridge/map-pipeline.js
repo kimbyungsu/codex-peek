@@ -169,6 +169,61 @@ function authorityOf(mapHash, idx) {
 
 // ── read-set 재계산기(§D — 제안·대조 공용: 대조=재생성 비교가 결정론) ─────────────────
 const entityHashOf = (ent) => sha1(PM.canonicalJsonOf(ent));
+// P9 정책 위임의 의미 경계. policyId/fp만 맞는다고 다른 종류의 제안을 대신 승인할 수는 없다.
+// scopeTarget은 사용자가 확정한 entity/subgraph 집합이다. 명시 대상·생성물·payload의 직접 변경 참조와,
+// topology가 주어지면 순수 적용 미리보기의 실제 changedIds까지 합친다. 비-project 정책은 그 전부가 승인
+// 범위 안일 때만 쓸 수 있다.
+function policyInvolvedIdsForPatch(patch, topo) {
+  const pl = patch && patch.payload || {};
+  const ids = new Set(PM.targetIdsOfPatch(patch));
+  const newNodes = Array.isArray(pl.newNodes) ? pl.newNodes : [];
+  const newEdges = Array.isArray(pl.newEdges) ? pl.newEdges : [];
+  for (const ent of [pl.node, pl.edge, ...newNodes, ...newEdges]) {
+    if (ent && typeof ent.id === "string") ids.add(ent.id);
+  }
+  if (patch.operation === "merge_node") {
+    for (const absorbed of Array.isArray(pl.absorbed) ? pl.absorbed : []) {
+      for (const key of ["rerouteEdgesTo", "anchorsTo", "evidenceTo"]) {
+        if (absorbed && typeof absorbed[key] === "string") ids.add(absorbed[key]);
+      }
+    }
+  }
+  if (patch.operation === "split_node") {
+    for (const reroute of Array.isArray(pl.edgeReroute) ? pl.edgeReroute : []) {
+      if (reroute && typeof reroute.edgeId === "string") ids.add(reroute.edgeId);
+    }
+  }
+  if (topo) {
+    try {
+      const effect = PM.applyOperationV2(topo, patch);
+      if (!effect || effect.errors.length || !effect.topo) return { ok: false, reason: "effect-unavailable", ids };
+      for (const id of effect.changedIds || []) if (typeof id === "string") ids.add(id);
+    } catch {
+      return { ok: false, reason: "effect-unavailable", ids };
+    }
+  }
+  return { ok: true, ids };
+}
+function policyAppliesToPatch(policy, patch, disposition, topo) {
+  if (!policy || !patch || PM.isPolicyOpV2(patch.operation)) return { ok: false, reason: "policy-or-patch" };
+  const pe = policy.predicateExpr || {};
+  const cm = policy.chosenMeaning;
+  if (pe.version !== 1 || pe.kind !== "op-class" || typeof pe.opClass !== "string"
+    || Object.keys(pe).sort().join(",") !== "kind,opClass,version") return { ok: false, reason: "predicate-unsupported" };
+  if (!cm || typeof cm !== "object" || Array.isArray(cm) || cm.version !== 1 || cm.disposition !== disposition || cm.opClass !== pe.opClass)
+    return { ok: false, reason: "meaning-mismatch" };
+  const op = String(patch.operation || "");
+  if (!(op === pe.opClass || op.startsWith(pe.opClass + "_"))) return { ok: false, reason: "op-class" };
+  const involvement = policyInvolvedIdsForPatch(patch, topo);
+  if (!involvement.ok) return { ok: false, reason: involvement.reason };
+  const involved = involvement.ids;
+  if ((policy.exclusions || []).some((id) => involved.has(id))) return { ok: false, reason: "excluded" };
+  if (policy.scope !== "project") {
+    const allowed = new Set(policy.scopeTarget || []);
+    if ([...involved].some((id) => !allowed.has(id))) return { ok: false, reason: "scope" };
+  }
+  return { ok: true };
+}
 function buildReadSetFor(topo, patch, ctx) {
   // ctx: { idx: DecisionIndexState, pol: policyState, fileHashOf(ref)→hash|null }
   const rs = {};
@@ -439,19 +494,25 @@ function sweepReclassifyNonPolicyIntentChoice(repo, mapId) {
 // (recover-first — 적용 중 pending 불가침·claim~map잠금 사이에 끼어드는 8차 재현 경로 차단) /
 // resolved|resolved-noop=already-applied 거부(적용 완료 불변) / 이미 expired=idempotent 성공 /
 // 부재·opHash 불일치=conflict 거부(다른 주체 관여 — 직접 삭제로 증명 경계를 우회하지 않는다).
-function expirePendingPatch(repo, mapId, patchId, expectedOpHash) {
+const EXPIRE_REQUEST_CODES = new Set(["superseded", "user-declined", "policy-declined"]);
+function expirePendingPatch(repo, mapId, patchId, expectedOpHash, expireCode) {
+  const code = expireCode === undefined ? "superseded" : expireCode;
+  if (!EXPIRE_REQUEST_CODES.has(code)) return { ok: false, reason: "invalid-code", error: "expireCode 허용값 아님(superseded|user-declined|policy-declined)" };
   const w = withNsLock(repo, mapId, () => {
     const f = pendingFileFor(repo, mapId, patchId);
     const pr = readJson3(f);
     if (pr.st === "absent") return { ok: false, reason: "conflict", error: "pending 부재" };
     if (pr.st !== "ok") return { ok: false, reason: "conflict", error: "pending 판독 실패(" + pr.st + ")" };
     const rec = pr.data;
-    if (rec.lifecycle === "expired") return { ok: true, reason: "idempotent" };
+    if (rec.lifecycle === "expired") return { ok: true, reason: "idempotent", expireCode: rec.expireCode || null };
     if (rec.lifecycle === "claimed") return { ok: false, reason: "busy", error: "claimed — recover-first(적용 중 pending 불가침)" };
     if (rec.lifecycle === "resolved" || rec.lifecycle === "resolved-noop") return { ok: false, reason: "already-applied", error: "적용 완료 불변" };
     if (!rec.patch || PM.opHashOf(rec.patch) !== expectedOpHash) return { ok: false, reason: "conflict", error: "opHash 불일치(다른 주체 관여)" };
     if (rec.lifecycle !== "proposed" && rec.lifecycle !== "classified") return { ok: false, reason: "conflict", error: "미지 lifecycle(" + String(rec.lifecycle) + ")" };
-    const next = { ...rec, lifecycle: "expired", expiredAt: new Date().toISOString(), expireReason: "revision superseded(P8 rev 전진)", expireCode: "superseded" };
+    const reason = code === "user-declined" ? "사용자가 이번 제안을 거부함(P9)"
+      : code === "policy-declined" ? "사용자가 확정한 정책에 따라 거부함(P9)"
+        : "revision superseded(P8 rev 전진)";
+    const next = { ...rec, lifecycle: "expired", expiredAt: new Date().toISOString(), expireReason: reason, expireCode: code };
     return CL.atomicWrite(f, JSON.stringify(next, null, 1)) ? { ok: true, reason: "expired" } : { ok: false, reason: "conflict", error: "쓰기 실패" };
   });
   if (!w.ok) return { ok: false, reason: "lock", error: w.error };
@@ -515,6 +576,13 @@ function baselineUpdatesFor(patch, decisionId, affectedIds, outTopo) {
 // ── apply(§B 클레임+§F 트랜잭션) ────────────────────────────────────────────────
 function applyPatch(repo, mapId, patchId, opts) {
   const o = opts || {};
+  const delegationArg = o.policyDelegation;
+  if (delegationArg !== undefined && (!delegationArg || typeof delegationArg !== "object" || Array.isArray(delegationArg)
+    || Object.keys(delegationArg).sort().join(",") !== "policyFp,policyId"
+    || typeof delegationArg.policyId !== "string" || !UUID_RE.test(delegationArg.policyId)
+    || typeof delegationArg.policyFp !== "string" || !/^[0-9a-f]{40}$/.test(delegationArg.policyFp))) {
+    return { ok: false, reasonCode: "decision-conflict", error: "policyDelegation은 {policyId(UUID),policyFp(sha1)} 정확 형식이어야" };
+  }
   // P3b C-4: 권위 분기 — blocked=플래그 무관 전면 거부(receipt-only 중단 위에 topology 변경 금지·설계검증
   // 2차 #3) / v2=플래그 불요(자동 적용 활성화 1-30) / legacy=기존 --pre-cutover 명시 필수. lazy require —
   // map-bindings가 이 모듈을 top-level require하므로 역방향은 실행 시점만(순환 초기화 회피).
@@ -604,6 +672,12 @@ function applyPatch(repo, mapId, patchId, opts) {
       if (rec.classification !== "intent-choice") return { ok: false, error: "정책 op는 classification=intent-choice여야(classify 선행)" };
       if (!o.resolutionRef) return { ok: false, error: "정책 op는 해소 참조(resolutionRef) 없이 적용 불가(§A — intent-choice 카드는 P9)" };
       if (!(rec.patch.authorizationRefs || []).some((x) => x.kind === "user-choice" && x.ref === o.resolutionRef)) return { ok: false, error: "resolutionRef가 patch.authorizationRefs(user-choice)와 불일치(선택→정책 귀속 — A1 계약)" };
+      if (delegationArg) return { ok: false, reasonCode: "decision-conflict", error: "정책 op 자체를 기존 정책 위임으로 적용할 수 없음(사용자 선택 증명 불가침)" };
+    } else if (delegationArg) {
+      // P9: 비정책 pending의 원래 분류를 완화하는 것이 아니라, 적용 decision만 기존 정책의 위임으로
+      // 새로 기록한다. proposed(미분류)는 허용하지 않아 카드/스윕이 classify를 건너뛰지 못하게 한다.
+      if (rec.lifecycle !== "classified" || !["auto", "verifier-resolved", "intent-choice"].includes(rec.classification))
+        return { ok: false, reasonCode: "not-classified", error: "정책 위임 적용은 classified 비정책 pending만 허용" };
     } else if (rec.classification === "verifier-resolved" && o.verifierResolution && typeof o.verifierResolution === "object") {
       // P8(설계 v10 P8-4): 예약돼 있던 '해소 레코드 검증기' 자리 — 1-5 결속을 nsLock 안에서 1차 재검증
       // (내용 지문·claims⊆evidence는 map 트랜잭션 안에서 적용 시점 재검증 — 아래 ①vr).
@@ -664,6 +738,15 @@ function applyPatch(repo, mapId, patchId, opts) {
     if (idx.st === "error") return { fail: idx.error };
     const pol = policyStateFor(repo, mapId);
     if (pol.st !== "ok") return { fail: pol.error };
+    const delegationIn = delegationArg || null;
+    if (delegationIn) {
+      const stored = (pol.policies || []).find((x) => x.rec && x.rec.policyId === delegationIn.policyId);
+      const leaf = (pol.frontier || []).some((x) => x && x.policyId === delegationIn.policyId);
+      if (!stored || !leaf || stored.fp !== delegationIn.policyFp)
+        return { fail: "정책 위임 결속 불일치(유효 leaf·policyFp 재검증 실패)", reasonCode: "decision-conflict" };
+      const applicable = policyAppliesToPatch(stored.rec, patch, "apply", topo);
+      if (!applicable.ok) return { fail: "정책 위임 의미 불일치(" + applicable.reason + ")", reasonCode: "decision-conflict" };
+    }
     const ctx = { idx, pol, git: gitInfo(repo), repoRoot: repo, fileHashOf: (ref) => fileSha(path.isAbsolute(ref) ? ref : path.join(repo, ref)) };
     // ① CAS
     let cas = casCheck(repo, patch, topo, ctx, pending.localOrigin);
@@ -748,10 +831,10 @@ function applyPatch(repo, mapId, patchId, opts) {
       // P8(설계 v10 P8-4·삼중 결속 — 4차 보완①): verifier 해소 적용은 기존 decision 스키마의 삼중 결속을
       // 실제로 채운다 — validator 규칙(1차 #6)은 verdictFp==actor.resultFp==resolution.evidenceRef '동일 값':
       // 전부 해소 레코드의 canonical 지문 하나(vrFp)로 통일.
-      actor: isPolicy ? { kind: "user-choice", cardId: o.resolutionRef } : vrIn ? { kind: "verifier", resultFp: sha1(PM.canonicalJsonOf(vrIn)) } : { kind: "auto" },
+      actor: isPolicy ? { kind: "user-choice", cardId: o.resolutionRef } : vrIn ? { kind: "verifier", resultFp: sha1(PM.canonicalJsonOf(vrIn)) } : delegationIn ? { kind: "user-choice-delegated", policyId: delegationIn.policyId } : { kind: "auto" },
       classification: isPolicy ? "intent-choice" : vrIn ? "verifier-resolved" : "auto",
       ...(vrIn ? { verdictFp: sha1(PM.canonicalJsonOf(vrIn)) } : {}),
-      resolution: { outcome: "applied", evidenceRef: isPolicy ? o.resolutionRef : vrIn ? sha1(PM.canonicalJsonOf(vrIn)) : "auto" }, ...(o.preCutover ? { preCutover: true } : {}), // P3b C-4: 필드는 --pre-cutover 명시 경로만 기록(v2 무플래그=생략 — validator '부재=cutover 후' 정합·증명 이력 왜곡 차단)
+      resolution: { outcome: "applied", evidenceRef: isPolicy ? o.resolutionRef : vrIn ? sha1(PM.canonicalJsonOf(vrIn)) : delegationIn ? delegationIn.policyId : "auto" }, ...(o.preCutover ? { preCutover: true } : {}), // P3b C-4: 필드는 --pre-cutover 명시 경로만 기록(v2 무플래그=생략 — validator '부재=cutover 후' 정합·증명 이력 왜곡 차단)
       verification, evidenceFps,
       audit: { ts: new Date().toISOString(), topologyBeforeHash: mapHashBefore, topologyAfterHash: mapHashAfter, mapMdAfterHash: mapMdAfterHash || sha1(""), authorityHashAfter: "", expectedMapHashAfter: mapHashAfter, walRef: "wal/" + decisionId + ".json" },
     };
@@ -1098,7 +1181,9 @@ function abortWalInLock(repo, mapId, decisionId) {
 // ── recoverCorruption(1-18 — 별도 파일·원본 보존) ─────────────────────────────────
 function recoverCorruption(repo, mapId) {
   const rt = MR.readTopoExFor(repo);
-  if (rt.st === "ok") return { ok: false, error: "topology 정상 — 복구 불필요" };
+  // readTopoExFor의 st=ok는 JSON 파싱 성공만 뜻한다. 스키마 위반 JSON도 복구 대상이며,
+  // 완전히 유효한 topology일 때만 정상으로 닫는다(P9 recovery-action 진입 계약).
+  if (rt.st === "ok" && PM.validateTopology(rt.topo).length === 0) return { ok: false, error: "topology 정상 — 복구 불필요" };
   const d = ensureDirs(repo, mapId);
   let snaps;
   try { snaps = listJson(d.snapshots).map((f) => readJson3(path.join(d.snapshots, f))).filter((r) => r.st === "ok" && r.data.topology && r.data.mapId === mapId && r.data.decisionId).map((r) => r.data); }
@@ -1356,6 +1441,7 @@ module.exports = {
   canonicalIdentityFor, localOriginFor, patchBasisFor, pipeRootFor, dirsFor, ensureDirs, baselineUpdatesFor, captureDirRaw, decisionIndexFromCapture, policyStateFromCapture,
   activePipelineWalFor, decisionIndexFor, policyStateFor, authorityOf,
   buildReadSetFor, readSetIntact, casCheck, entityHashOf,
+  policyAppliesToPatch,
   proposePatch, classifyPatch, applyPatch, recoverWal, abortWal, recoverCorruption, pipelineGc, validateWalV2,
   DEFAULT_CLASSIFICATION,
 };

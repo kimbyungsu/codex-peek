@@ -229,6 +229,9 @@ ok((ext.match(/ELECTRON_RUN_AS_NODE: "1"/g) || []).length >= 2, "Electron→node
 ok(ext.includes("cachedClaudeVer = rs.ver;") && ext.includes("selfFpNow: selfFpNowExt()"), "self 버전 캐시=실패 포함 반영(null 리셋 — 2차 blocker②)·뷰 재대조 주입");
 ok(fs.readFileSync(path.join(ROOT, "bridge", "map-probe.js"), "utf8").includes('arm: "codex-probe"'), "Codex 점검 비용 기록은 실행기 소관(1차 blocker④ — [2c]에서 실행 검증)");
 ok(ext.includes('w.reason === "fp-mismatch" ?'), "저장 실패 사유 분리(설정 변경 vs 잠금/쓰기 — 1차 [보완])");
+ok(ext.includes('rs.write.ok ? (rs.rec.ok ? "OK" : detS) : wNote(rs.write)')
+  && !ext.includes('rs.rec.ok && rs.write.ok ? "OK" : rs.rec.ok ? wNote(rs.write) : detS'),
+  "self 점검 결과 실패와 준비 기록 실패를 각각 숨김없이 표시");
 ok(ext.includes("어댑터 미배포 — 정찰 스크립트는 마켓 설치본에 없어요"), "VSIX 미배포=정직 미준비 사유 표시(f-15d2907b 재판단: 러너 자체가 마켓 빌드에 없는 현 단계 사실 — 거짓 준비 표시가 더 나쁨)");
 const deployLists = [fs.readFileSync(path.join(ROOT, "bridge", "map-cutover.js"), "utf8"), fs.readFileSync(path.join(ROOT, "src", "hook-setup.ts"), "utf8"), fs.readFileSync(path.join(ROOT, "install.js"), "utf8")];
 ok(deployLists.every((s9) => s9.includes('"map-probe.js"')), "map-probe.js 배포 3카피 등록(EXPECTED·hook-setup·install 패리티)");

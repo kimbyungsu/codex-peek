@@ -2,8 +2,20 @@
 
 > 이 문서 하나로 이어갈 수 있게 쓰였다. 상세 설계 원본(SCOUT-TRACK.md·SCOPE-LEDGER.md)은 **의도적으로 레포 밖 로컬 문서**라
 > 다른 환경에는 없다 — 그래서 이 파일이 그 요지를 포함한다. ⚠ **실 API 키·토큰은 어떤 파일·픽스처·예시에도 절대 넣지 말 것.**
-> 마지막 갱신: 2026-07-24 (버전 0.1.86 불변). **⚡C-C(코덱스-코덱스) 인수인계 — 아래 '2026-07-24 묶음+C-C 이어가기' 절 필독.**
-> 마지막 갱신(이전): 2026-07-23. **★검증 거버넌스 트랙(설계+증분 1~3) 완결 + P5(provider 공통 인터페이스) 완결(이상 07-22) + P6(Codex Scout)·P6b(Codex 정찰 두뇌 설정)·UX 3건·주입 지침 표시 접기·★P7(모드 UI+readiness 행렬) 설계·구현 완결 + ★P8(결정론 라우터+의미 보강 실행기) 설계 v10~v11·증분 1~4 전체 완결(07-23·로컬 커밋 — push 대기)**:
+> 마지막 갱신: 2026-07-24 (버전 0.1.86 불변). **⚡다른 로컬 인수인계 — 아래 '원격에서 바로 이어가기'와 '2026-07-24 묶음+C-C 이어가기' 절 필독.**
+>
+> ═══ 원격에서 바로 이어가기 — 2026-07-24 게시 인계 ═══
+> - 원격: `https://github.com/kimbyungsu/codex-peek.git`
+> - 인계 브랜치: `agent/p9-intent-recovery` (`origin/main`보다 앞서 있던 로컬 커밋 전부와 P9 2A~2C 최종본 포함).
+> - 새 PC: `git fetch origin` → `git switch --track -c agent/p9-intent-recovery origin/agent/p9-intent-recovery`.
+>   같은 이름의 로컬 브랜치가 이미 있으면 `git switch agent/p9-intent-recovery` → `git pull --ff-only`.
+> - 도착 확인: `npm install`이 이미 끝난 환경이면 `npm test`; 의존성이 없으면 먼저 `npm ci`. 현재 기준 전체
+>   `npm test`+`posttest` 통과, 버전 잠금 0.1.86 통과. 설치·버전 상승은 이번 게시에 포함하지 않았다.
+> - 현재 마감선: **P9 2C 완료**. 다음은 P10(통계·비용·건강도)의 상세 설계 게이트이며, 한 줄 개요를 곧바로
+>   구현하지 말고 지표 의미·분모·기록 최소화·2트랙 무회귀부터 동결한다.
+> - 게시 제외: 작업 폴더의 미추적 `project-map/`은 사용자 소유 로컬 자료라 커밋·푸시하지 않았다.
+>
+> 마지막 갱신(이전): 2026-07-23. **★검증 거버넌스 트랙(설계+증분 1~3) 완결 + P5(provider 공통 인터페이스) 완결(이상 07-22) + P6(Codex Scout)·P6b(Codex 정찰 두뇌 설정)·UX 3건·주입 지침 표시 접기·★P7(모드 UI+readiness 행렬) 설계·구현 완결 + ★P8(결정론 라우터+의미 보강 실행기) 설계 v10~v11·증분 1~4 전체 완결(07-23·인계 브랜치에 포함)**:
 > 배경: C-7이 core 프로필로도 11왕복·blocker 19(실측 — core ②조항 "희귀 경합=blocker"가 이 프로젝트에선
 > 만능 통과문+지원 환경 선언 부재) → 사용자 결정으로 P5보다 선행. ①설계 v1 동결(docs/VERIFY-GOVERNANCE.md
 > — 설계검증 6왕복·"열린 탐색+제한된 차단 권한"·Envelope·입장 심사·지적 계보·범위 확장·소진 분해. 726219f)
@@ -178,6 +190,43 @@
 > 표지+rebasedFrom 매핑+만료 cas-stale 표지 재소비 / 실행기 stale 예측[apply 전 검사 — **P2 applyPatch는
 > cas-stale을 terminal expire로 영속하므로 낡은 patch에 apply 호출 자체가 소실 경로**]·재기반 신본=원자 표지+
 > verifier 재호출[구 verdict 재사용 금지 ab-3]·어느 지점 만료도 재기반 회수=소실 0). tests/p9-reclass 53단언.
+> **④P9 잔여 착수 — 증분 2A 바닥 계약 구현(2026-07-24, 버전 불변·인계 브랜치에 포함)**: 후속 정책 카드·frontier
+> 자동 적용이 의존하는 P2 경계를 먼저 닫음. IntentPolicy.chosenMeaning은 기존 사람용 문자열 판독을 유지하면서
+> 자동 위임용 typed v1 `{version:1, disposition:apply|decline, opClass}`를 허용하고, 정확 키·predicate v1 op-class
+> 결속과 일치를 강제. `expirePendingPatch`는 기존 기본값 superseded를 보존하면서 user-declined/policy-declined를
+> 원자 영속. `applyPatch(opts.policyDelegation)`은 classified 비정책 pending에만 열고 유효 frontier leaf·정책 파일
+> 지문·typed 뜻·op 종류·scope·exclusions를 정본 잠금 안 재검증하고, 명시 대상·생성물·merge 외부 목적지·split
+> edgeReroute와 순수 적용 미리보기의 실제 변경 대상 전부가 비-project 범위 안일 때만 decision을 auto+
+> user-choice-delegated로 기록함. 기존 정책이 새 정책 op를 대신 승인하는 경로는 명시 거부. 신규
+> `tests/p9-policy-foundation.test.js` 48단언+P8/patch/pipeline/reclass 직접 회귀 통과. 아직 카드·전이 장부·
+> 자동 스윕·복구·UI는 구현하지 않았으므로 이 증분만으로 사용자 대면 기능이 켜지지 않는다.
+> **⑤P9 증분 2B — 정책 충돌 카드+선택 선기록 구현(2026-07-24, 버전 불변·인계 브랜치에 포함)**:
+> 신규 `bridge/map-intent.js`가 classified·intent-choice 비정책 pending에 맞는 typed frontier leaf를
+> entity>subgraph>project 순으로 좁혀, 최고 특이도에서 apply/decline이 갈리는 head들을 정렬 집합 지문 한 장으로
+> 합친다(영향 pending 목록 포함·조회 쓰기 0·문자열/미지원 predicate 자동 해석 0). 사용자가 뜻과 승계 head를
+> 고르면 현재 pfh·dch·head를 map lock 안 재확인하고, 승계 범위/조건/제외를 복사+뜻만 교체+선택 시점 증명을
+> 새로 캡처한 완성 supersede patch 전문을 `<conflictKey>-<cardId>.json` phase=chosen으로 pipeline side effect 전에
+> 선기록한다. 같은 선택 멱등·다른 뜻 덮기/미완 다중 선택/낡은 화면 거부·손상 서랍 fail-closed. 새 정책 파일과
+> policy pending은 아직 0이며, parked 새 세대도 WAL 선행 복구 표면을 여는 다음 증분 전까지 거부한다. 실제
+> propose/classify/apply·phase 재개·위임 장부·자동 스윕·UI는 다음 증분이다.
+> typed 뜻의 predicate도 정확 키 `{version,kind,opClass}`만 정본/위임에서 허용하도록 닫았다. 배포 전수 목록
+> (install/hook-setup/cutover)에 map-intent를 편입. 신규 `tests/p9-policy-conflict-card.test.js` 29단언,
+> 2A 테스트 50단언 및 install/cutover 직접 회귀 통과.
+> **⑥P9 증분 2C — 인계 잔여 실행부·복구·UI 완결(2026-07-24, 버전 불변·인계 브랜치에 포함)**:
+> 충돌 선택 canonical patch의 propose/classify/apply+decision/WAL 재개, 구 pending별 위임 장부 선기록과
+> frontier 자동 sweep(entity>subgraph>project·apply 재결속·decline 종결·동급 충돌 무적용), parked 자동 반복
+> 금지+대시보드 명시 재시도(선택 canonical unpark·위임 새 attempt), P8 enrich 종료 후 1회+대시보드 조회 발동,
+> 모달 뒤 모드가 바뀐 경우까지 core API가 재확인하는 2트랙 완전 무동작을 연결했다.
+> topology 손상 복구는 decision/snapshot/git 최근 20커밋 후보→별도 recovered+로컬 내구 계획(planId·nonce·
+> 원본/후보/복구본 지문) 생성→재대조→손상 원본 시각 백업 후 교체의 2단이다. 첫 rename 전 replacing을
+> 선기록해 두 rename 사이/설치 직후 종료도 다음 판독에서 수렴하며 dead nsLock만 회수한다. 대시보드는 반대
+> 정책 선택·조사 정보·정책 요지·parked 재시도·손상 주의·복구를 ko/en으로 표시하고, host 조기 거부까지
+> `intentDone`을 보장하는 호스트/웹뷰 단일-flight를 쓴다. 자가점검은 실행 실패와
+> readiness 기록 실패를 각각 숨김없이 표시하도록 고쳤다. VERIFY-GOVERNANCE 원인 분해의 범위확장 중복 집계
+> 금지, PRIVACY의 cutover-notice/map-intent/정책 공유/recovery 산출물도 동기화했다. 신규/갱신 테스트:
+> foundation 50·conflict 43·intent-auto 26·recovery 30·UI 13·P7 77·P8 wire 45. 첫 단일 독립 검증은 blocker 5건
+> (2트랙 재확인·parked 실행 표면·복구 plan/nonce·rename 중단 수렴·host 조기 해제)을 냈고 전부 **수용·수정**,
+> 해당 인터리빙 실행 반례가 통과했다. 수정 뒤 전체 `npm test`와 `posttest`도 통과했다.
 >
 > ═══ C-C(코덱스-코덱스)로 이어가기 — 필수 확인 ═══
 > - **모드 전환**: 대시보드에서 harnessMode=codex-codex 전환(P-9 자동 전환 계약 있음 — 질문 호스트 기준).
@@ -192,10 +241,10 @@
 > - **오늘 신설분의 모드 접점**: §7 소진 후보·분해·상한 문구=cmdAsk 공통 출력(모드 무관)·제안본/도장/전이=
 >   워크스페이스 기준(모드 무관)·P8 verifier 자격 게이트=resolveLink(C-C면 codexCodexSession override/상속
 >   인정)·P9 유물 회수=파이프라인 계층(모드 무관).
-> - **다음 작업(P9 잔여 증분)**: 정책 supersession 카드(intent-choice — 사용자 선택 전용 유지)·frontier 자동
->   적용 스윕(1-35 ②)·recovery-action 카드(1-18)·UI. 정본=MAP-V2-DESIGN 말미 P9 v12+소규모 개정 부기.
-> - **이월(불변)**: f-e9c23d7a·PRIVACY cutover-notice·보관함 5364ebe0·afdd6850b4ea2030·17d4697dc6a164fb·
->   1f501cceed39340b·f-6dc403af. ⚠Reload 1회 필요(누적 설치분). push는 사용자 지시 시만·0.1.86 불변.
+> - **다음 작업**: P9 2C는 수용 blocker 수정과 전체 회귀 확인까지 닫았다. P10(통계·비용·건강도)은 상세 설계 게이트부터 시작.
+>   P10은 현재 로드맵 한 줄뿐이므로 지표 의미·분모·기록 최소화·2트랙 무회귀를 먼저 동결하고 구현한다.
+> - **이월(불변)**: f-e9c23d7a·보관함 5364ebe0·afdd6850b4ea2030·17d4697dc6a164fb·
+>   1f501cceed39340b·f-6dc403af. ⚠Reload 1회 필요(누적 설치분). 이번 사용자 지시로 원격 인계 브랜치 게시·0.1.86 불변.
 >
 > ★P8 증분 4 완결(2026-07-23 — 구현검증 7왕복[1차 blocker 6→2차 4→3차 1→4차 2→5차 2→6차 1→7차 통과 지적 0]·
 > blocker 16 전부 수용·반박 0): **P8 전체(설계 v10~v11+증분 1·2·3a·3b·4) 종결.**

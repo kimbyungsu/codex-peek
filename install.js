@@ -61,6 +61,7 @@ const BRIDGE_SCRIPTS = [
   "map-probe.js", // P7: readiness probe 실행기(vscode 무관 계층 — 확장이 설치본 사본을 lazy require)
   "map-router.js", // P8: 결정론 라우터(1-34 표 — 실행기·테스트 공용 순수 계층)
   "map-enrich.js", // P8: 의미 보강 실행기(저장·순수+runEnrich+CLI — 발동 3지점이 spawn하는 표면)
+  "map-intent.js", // P9: 정책 충돌 카드 파생 뷰+사용자 선택 선기록(자동 적용/UI 전 바닥 계층)
   "enrich-providers.js", // P8: 보강 어댑터 3종+Verifier 해소 진입점(설치본 자동 발동에서 실존해야 함)
 ];
 

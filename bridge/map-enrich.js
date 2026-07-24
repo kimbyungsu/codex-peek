@@ -488,7 +488,19 @@ function runEnrich(repo, opts) {
   const fence = () => { const h = readJson3(runLock); return h.st === "ok" && h.data.token === tok && h.data.pid === process.pid; };
   try {
     if (!fence()) return { outcome: "busy", reason: "run-lock-lost" }; // 2차 blocker⑧: 회수 경합 뒤 임계구역 소유 재검증
-    return runEnrichLocked(repo, o, { MR, MP, PM, MB, MRt, queue, log, park, fence });
+    const result = runEnrichLocked(repo, o, { MR, MP, PM, MB, MRt, queue, log, park, fence });
+    // P9: enrich 본체 결과·job 원장은 불변으로 둔 채, 종료 뒤 정책 위임 스윕을 정확히 한 번 후행한다.
+    // 실패는 P9 항목별 원장에 남고 P8의 outcome을 바꾸지 않는다. 요약은 기존 route log에 한 줄만 보탠다.
+    try {
+      const MI = require(path.join(__dirname, "map-intent.js"));
+      MI.sweepIntentAuto(repo, queue.mapId, {
+        ws: o.ws || repo,
+        log: (line, sweep) => log({ route: "intent-auto", reason: line, outcome: sweep && sweep.outcome || "unknown" }),
+      });
+    } catch (e) {
+      log({ route: "intent-auto", reason: "exception:" + String(e && e.message || e).slice(0, 80), outcome: "partial" });
+    }
+    return result;
   } finally {
     try { const h = readJson3(runLock); if (h.st === "ok" && h.data.token === tok) fs.unlinkSync(runLock); } catch { /* 무해 */ }
   }

@@ -194,6 +194,7 @@ interface BridgeState {
   mapMode: { raw: string | null; mode: string } | null; // P7 — 의미 보강 담당(3트랙에서만·null=2트랙/ws 없음). raw=명시 선택·mode=표시값(부재=self)
   mapReadiness: any | null; // P7 — readiness 뷰(contract-lib mapReadinessView 산출·precision 지문은 호스트 주입)
   enrich: any | null; // P8 — 자동 보강 상태(동의·장부 요약 — 표시 전용·정본은 실행기 장부)
+  intent: any | null; // P9 — 정책 충돌 선택·조사 정보·손상 복구(3트랙에서만)
   scoutTarget: { repo: string; differs: boolean; invalid: boolean; configured: boolean; inherited: boolean; drift: { repo: string; sample: number; agree: number } | null } | null; // P1 정찰 대상 + 어긋남 자기진단(2026-07-10). null=2트랙
   scoutGate: { eff: string; raw: string | null } | null; // 실효 플랜 게이트(표시 전용 — 3트랙에서만, 계약에 저장 안 함). null=2트랙/ws 없음
   scoutArm: { raw: string | null; eff: "self" | "deepseek" | "codex"; hasKey: boolean; slot?: string } | null; // 탐색 담당(2026-07-20·P6 codex 추가) — raw=명시 선택(반대 언어 슬롯 상속·null=미지정), eff=실효(deepseek는 키 없으면 self 강등·codex는 강등 없음), slot=계산 언어. null=2트랙/ws 없음
@@ -640,7 +641,7 @@ async function runMapProbeFromUi(ws: string | null): Promise<void> {
       const rs = MP.probeSelf({ adapterHint: selfAdapterHintExt() });
       cachedClaudeVer = rs.ver; // null이면 null로 리셋 — view 재대조(selfFpNow)도 즉시 미준비로 뒤집힘
       const detS = rs.rec.detail === "adapter-missing" ? tE("어댑터 미배포 — 정찰 스크립트는 마켓 설치본에 없어요(소스 저장소에서 실행해야 준비됨: 현 단계 정직 한계)", "adapter not deployed — scout scripts are not bundled in marketplace builds (run from the source repo: honest current limit)") : rs.rec.detail;
-      notes.push("self: " + (rs.rec.ok && rs.write.ok ? "OK" : rs.rec.ok ? wNote(rs.write) : detS));
+      notes.push("self: " + (rs.write.ok ? (rs.rec.ok ? "OK" : detS) : wNote(rs.write)));
     } catch (e: any) { notes.push("self: " + String(e && e.message)); }
     // economy — 과금 최대 2회. Electron→node 전환 env 필수(2차 blocker③ — 실행기는 stdout capability-ok까지 검사).
     try {
@@ -2123,6 +2124,27 @@ function computeState(turnsN: number): BridgeState {
         };
       } catch { return null; }
     })(),
+    intent: (() => { // P9 — 조회 발동점은 자동 스윕을 먼저 실행한 뒤 최신 파생 카드만 보낸다.
+      if (!ws) return null;
+      try {
+        if (loadContract(ws).scoutMode !== "on") return null; // 2트랙=파일·스윕·카드 0
+        const CL9: any = bridgeLib();
+        const repo9 = (CL9 && CL9.resolveScoutRepo ? (CL9.resolveScoutRepo(ws, loadContract(ws)) || {}).repo : null) || ws;
+        const MI9: any = require(path.join(BRIDGE_DIR, "map-intent.js"));
+        const recovery = MI9.collectRecoveryState(repo9, { ws });
+        let dashboard: any = null, sweep: any = null;
+        if (recovery && recovery.ok && recovery.topologyState === "ok" && typeof recovery.mapId === "string") {
+          sweep = MI9.sweepIntentAuto(repo9, recovery.mapId, { ws });
+          dashboard = MI9.collectIntentDashboard(repo9, recovery.mapId);
+        }
+        return {
+          repo: repo9,
+          recovery,
+          dashboard,
+          sweep: sweep ? { ok: !!sweep.ok, outcome: sweep.outcome, scanned: sweep.scanned || 0, applied: sweep.applied || 0, declined: sweep.declined || 0, conflicts: sweep.conflicts || 0, errors: sweep.errors || 0 } : null,
+        };
+      } catch { return null; }
+    })(),
     mapLedger: readMapLedger(ws),       // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만)
     deepseek: readDeepseekView(),       // 고급설정 탭 — 키 유무·마스킹(원문 미노출)
     scoutCodex: readScoutCodexPrefsExt(), // 고급설정 탭 — Codex 정찰 모델·추론강도(전역·비밀 아님)
@@ -3273,6 +3295,7 @@ function clearCodexCodexVerifierOverride(): boolean {
 
 class Dashboard {
   private panel?: vscode.WebviewPanel;
+  private intentBusy = false;
   public onChange?: () => void; // 상태바 등 외부 갱신 콜백(예: 무결성 ack 후 상태바 즉시 새로고침 — watcher 지연에 안 기댐)
   constructor(private readonly uri: vscode.Uri, private readonly turnsN: () => number) {}
 
@@ -3704,6 +3727,107 @@ class Dashboard {
             vscode.window.showErrorMessage(tE("설정 저장 처리 중 오류 — 화면을 정본 상태로 재정렬합니다(설정 파일은 훼손되지 않음).","Settings save errored — re-aligning to canonical state (settings files untouched).") + ` (${String(e?.message || e).slice(0, 80)})`);
             try { this.post(); this.panel?.webview.postMessage({ type: "saveResult", target: "contract", ok: false, reqId: typeof m.reqId === "string" ? m.reqId : null }); } catch { /* 15s poll 복구 */ }
           });
+        }
+        if (m?.type === "intentAct") {
+          const finishIntentRequest = () => { try { this.panel?.webview.postMessage({ type: "intentDone" }); } catch { /* 다음 state 렌더가 해제 */ } };
+          if (this.intentBusy) { vscode.window.showInformationMessage(tE("MAP 선택/복구 작업이 이미 진행 중이에요.", "A MAP choice/recovery action is already running.")); finishIntentRequest(); return; }
+          const ws = dashboardWorkspace();
+          let repo: string;
+          try {
+            if (!ws || loadContract(ws).scoutMode !== "on") { finishIntentRequest(); return; }
+            const CL9: any = bridgeLib();
+            repo = (CL9 && CL9.resolveScoutRepo ? (CL9.resolveScoutRepo(ws, loadContract(ws)) || {}).repo : null) || ws;
+          } catch { finishIntentRequest(); return; }
+          if (m.repo && normWs(String(m.repo)) !== normWs(repo)) { vscode.window.showWarningMessage(tE("대상 폴더가 바뀌어 작업을 중단했어요. 새 화면에서 다시 눌러 주세요.", "The target folder changed. Use the refreshed card and try again.")); this.post(); finishIntentRequest(); return; }
+          this.intentBusy = true;
+          void (async () => {
+            try {
+              const MI9: any = require(path.join(BRIDGE_DIR, "map-intent.js"));
+              const act = String(m.act || "");
+              if (act === "conflict-apply" || act === "conflict-decline") {
+                const mapId = String(m.mapId || ""), cardId = String(m.cardId || ""), conflictKey = String(m.conflictKey || "");
+                const cards = MI9.collectPolicyConflictCards(repo, mapId, { cardIdFor: (key: string) => key === conflictKey ? cardId : crypto.randomUUID() });
+                const card = cards && cards.ok ? cards.cards.find((x: any) => x.cardId === cardId && x.conflictKey === conflictKey) : null;
+                if (!card) { vscode.window.showWarningMessage(tE("정책 충돌 상태가 이미 달라졌어요. 최신 목록으로 다시 확인해 주세요.", "The policy conflict has changed. Review the refreshed list.")); return; }
+                let inheritancePolicyId = card.headPolicyIds[0];
+                if (card.policies.length > 1) {
+                  const picked = await vscode.window.showQuickPick<{ label: string; description: string; detail: string; policyId: string }>(card.policies.map((p: any) => ({
+                    label: String(p.predicateDescription || p.policyId),
+                    description: p.scope === "project" ? tE("프로젝트 전체 기준", "project-wide basis") : tE("선택 범위 기준", "scoped basis"),
+                    detail: tE("이 정책의 적용 범위와 예외를 새 정책에 이어 씁니다.", "The new policy inherits this policy's scope and exclusions."),
+                    policyId: p.policyId,
+                  })), { title: tE("새 정책이 이어받을 범위를 고르세요", "Choose the scope basis for the new policy"), placeHolder: tE("뜻은 방금 누른 적용/거부로 정해지고, 여기서는 범위만 고릅니다.", "Your apply/decline choice sets the meaning; this selects only its scope.") });
+                  if (!picked) return;
+                  inheritancePolicyId = picked.policyId;
+                }
+                const decision = act === "conflict-apply" ? "apply" : "decline";
+                const confirmLabel = decision === "apply" ? tE("적용으로 정리", "Resolve as apply") : tE("거부로 정리", "Resolve as decline");
+                const yes = await vscode.window.showWarningMessage(tE(
+                  "서로 반대인 정책을 새 정책 하나로 정리합니다.\n\n달라지는 것: project-map/policies/에 선택 결과가 공유 기록되고, 이 뜻과 맞는 MAP 대기 변경이 자동으로 이어집니다.\n유지되는 것: 기존 정책·선택 이력은 삭제하지 않고 교체 관계로 남습니다.",
+                  "This replaces conflicting policies with one new policy.\n\nChanges: your choice is shared under project-map/policies/, and matching pending MAP changes continue automatically.\nUnchanged: old policies and choice history remain as superseded records."),
+                  { modal: true }, confirmLabel);
+                if (yes !== confirmLabel) return;
+                const recorded = MI9.recordPolicyConflictChoice(repo, mapId, { card, decision, inheritancePolicyId }, { ws });
+                if (!recorded.ok) { vscode.window.showErrorMessage(tE("정책 선택을 안전하게 기록하지 못했어요: ", "Could not safely record the policy choice: ") + String(recorded.reason || recorded.error || "unknown")); return; }
+                const resumed = MI9.resumePolicyConflictChoice(repo, mapId, cardId, { ws });
+                if (!resumed.ok) { vscode.window.showWarningMessage(tE("선택은 보존됐지만 자동 마무리가 멈췄어요: ", "The choice was saved, but automatic completion stopped: ") + String(resumed.reason || resumed.detail || "unknown")); return; }
+                const sweep = MI9.sweepIntentAuto(repo, mapId, { ws });
+                if (sweep.ok) vscode.window.showInformationMessage(tE("정책 충돌을 정리했고, 맞는 대기 변경까지 자동으로 확인했습니다.", "Policy conflict resolved; matching pending changes were checked automatically."));
+                else vscode.window.showWarningMessage(tE("정책은 정리됐지만 일부 대기 변경은 확인이 더 필요해요(화면에 남겨 둡니다).", "The policy was resolved, but some pending changes need attention and remain visible."));
+                return;
+              }
+              if (act === "conflict-retry") {
+                const retried = MI9.resumePolicyConflictChoice(repo, String(m.mapId || ""), String(m.cardId || ""), { ws, explicitRetry: true });
+                if (retried.ok) vscode.window.showInformationMessage(tE("보류된 정책 선택을 안전하게 다시 진행했습니다.", "Safely retried the parked policy choice."));
+                else vscode.window.showWarningMessage(tE("정책 선택을 다시 진행하지 않았습니다: ", "The parked policy choice was not retried: ") + String(retried.detail || retried.reason));
+                return;
+              }
+              if (act === "delegation-retry") {
+                const retried = MI9.retryDelegation(repo, String(m.mapId || ""), String(m.oldPatchId || ""), { ws });
+                if (retried.ok) vscode.window.showInformationMessage(tE("보류된 정책 위임을 명시적으로 다시 진행했습니다.", "Explicitly retried the parked policy delegation."));
+                else vscode.window.showWarningMessage(tE("정책 위임을 다시 진행하지 않았습니다: ", "The parked policy delegation was not retried: ") + String(retried.detail || retried.reason));
+                return;
+              }
+              if (act === "recovery-prepare") {
+                const mapId = String(m.mapId || "");
+                const made = MI9.prepareTopologyRecovery(repo, mapId, { ws });
+                if (!made.ok) { vscode.window.showErrorMessage(tE("복구본을 만들지 못했어요: ", "Could not create a recovery copy: ") + String(made.detail || made.reason)); return; }
+                vscode.window.showInformationMessage(tE("복구본을 별도 파일로 만들었습니다. 손상 원본은 아직 바꾸지 않았습니다 — 내용을 확인한 뒤 '복구본으로 교체'를 눌러 주세요.", "A separate recovery copy was created. The damaged original is unchanged—review it, then choose 'Replace with recovery copy'."));
+                return;
+              }
+              if (act === "recovery-confirm") {
+                const mapId = String(m.mapId || "");
+                const yesLabel = tE("백업 후 교체", "Back up and replace");
+                const yes = await vscode.window.showWarningMessage(tE(
+                  "복구본을 현재 구조 지도로 교체할까요?\n\n달라지는 것: topology.json이 검증된 복구본으로 바뀝니다.\n유지되는 것: 지금의 손상 파일은 topology.corrupt-<시각>.json으로 먼저 보존되며 삭제되지 않습니다.",
+                  "Replace the current structure map with the recovery copy?\n\nChanges: topology.json becomes the validated recovery copy.\nUnchanged: the damaged file is first preserved as topology.corrupt-<time>.json and is not deleted."),
+                  { modal: true }, yesLabel);
+                if (yes !== yesLabel) return;
+                const done = MI9.confirmTopologyRecovery(repo, mapId, {
+                  recoveredHash: String(m.hash || ""), planId: String(m.planId || ""), nonce: String(m.nonce || ""),
+                }, { ws });
+                if (done.ok) vscode.window.showInformationMessage(tE("구조 지도를 복구했습니다. 손상 원본 백업: ", "Structure map recovered. Damaged original backup: ") + String(done.backup));
+                else vscode.window.showErrorMessage(tE("교체하지 못했습니다. 원본은 유지됩니다: ", "Replacement failed; the original remains: ") + String(done.detail || done.reason));
+                return;
+              }
+              if (act === "recovery-lock") {
+                const mapId = String(m.mapId || "");
+                const yesLabel = tE("사망 잠금 회수", "Recover dead lock");
+                const yes = await vscode.window.showWarningMessage(tE("종료된 작업이 남긴 MAP 잠금만 회수합니다. 살아 있는 작업·판독할 수 없는 잠금은 건드리지 않습니다.", "Recover only a MAP lock left by a dead process. Live or unreadable locks are left untouched."), { modal: true }, yesLabel);
+                if (yes !== yesLabel) return;
+                const rec = MI9.recoverDeadPipelineLock(repo, mapId, { ws });
+                if (rec.ok) vscode.window.showInformationMessage(tE("종료된 작업의 MAP 잠금을 회수했습니다.", "Recovered the MAP lock left by the dead process."));
+                else vscode.window.showWarningMessage(tE("잠금을 회수하지 않았습니다: ", "The lock was not recovered: ") + String(rec.state || rec.reason));
+              }
+            } catch (e: any) {
+              vscode.window.showErrorMessage(tE("MAP 선택/복구 처리 중 오류가 났어요: ", "MAP choice/recovery failed: ") + String(e?.message || e).slice(0, 120));
+            } finally {
+              this.intentBusy = false;
+              this.post();
+              finishIntentRequest();
+            }
+          })();
+          return;
         }
         if (m?.type === "ledgerAct" && m.sig) {
           // MAP 장부 개입(⑤ 역할 전환) — 승인 큐가 아니라 선택적 오버라이드: 고정/차단(+해제)은 관측 장부 이벤트로,
@@ -4371,6 +4495,7 @@ class Dashboard {
     <div id="scoutApiLine" class="muted" style="display:none;font-size:11.5px;margin:4px 0 0 2px"></div>
     <div id="scoutArmRow" style="display:none;font-size:11.5px;margin:6px 0 0 2px"></div>
     <div id="mapModeRow" style="display:none;font-size:11.5px;margin:6px 0 0 2px"></div>
+    <div id="intentBox" class="stagebox" style="display:none"></div>
     <div id="scoutBox" class="stagebox" style="display:none"></div>
     <div class="stagebox" id="stageBox">
       <div class="sbhead" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${t("↑ 위 검증을 켜면 <b>흐름 단계마다 '단계별 기본 원칙'</b>이 적용돼요", "↑ With verification on, the <b>stage baselines</b> apply at each step of the flow")} <span class="badge" id="sbStateBadge" style="margin-left:auto"><span class="muted" style="font-weight:400">${t("지금 검증", "verify now")}</span> <b id="sbState">—</b></span></div>
@@ -4581,6 +4706,7 @@ class Dashboard {
   // 펼친 정찰 구역 패널 키 모음(정찰 흐름·최신 지도) — 매 재렌더가 #scoutBox를 통째 재생성해 details 펼침이
   // 저절로 접히던 실버그(사용자 실측 2026-07-08 — 검증 대화에서 고친 것과 같은 부류)의 동형 해법.
   const openPanels = new Set();
+  let intentBusyWeb = false; // P9 선택·복구 단일-flight — 호스트 intentDone 또는 최신 state로 해제
   // 펼친 스크롤 상자의 내부 좌표(키→scrollTop) — 재렌더가 상자를 재생성해도 위치 유지(2026-07-24 실버그·
   // 동류 상자 3곳 공통: 주입 지침·최신 지도·확정 장부[보관함 1cc80d65856b7c41 채택]).
   const foldScroll = new Map();
@@ -5302,6 +5428,7 @@ class Dashboard {
   // 부팅 refresh(스크립트 꼬리)는 상부 런타임 예외와 함께 죽지만, 이 지점은 스크립트 앞부분이라 생존성이 높다.
   setTimeout(function(){ try { vscode.postMessage({type:"ready", boot:true}); } catch(e){} }, 0); // boot=문서 재생성 직후 1회 — 이때만 호스트 dirty 결속 리셋(3차 지적 1)
   window.addEventListener("message", (ev) => {
+    if (ev.data?.type === "intentDone") { intentBusyWeb = false; return; }
     if (ev.data?.type === "baseEditWarnResult") {
       baseWarnPending = false;
       if (ev.data.ok) baseWarned[ev.data.field] = true; // 승인 → 그 필드 재경고 안 함. 포커스/편집값 안 건드림
@@ -5787,6 +5914,58 @@ class Dashboard {
           else if(mm.raw===null) note.textContent=T("미지정(기본 self) — Project MAP 의미 보강을 누가 맡을지의 선택이에요","Unset (default self) — who performs Project MAP semantic enrichment");
           row.appendChild(note);
         });
+      })();
+      // P9 — 정책 충돌은 사용자 뜻이 필요한 마지막 경우만 카드로, 조사 항목은 정보만, 복구는 생성/교체 2단으로 표시.
+      (function(){
+        const ib=$("intentBox"); if(!ib) return;
+        const iv=d.intent||null, dv=iv&&iv.dashboard, rv=iv&&iv.recovery;
+        const conflicts=(dv&&dv.conflictCards)||[], infos=(dv&&dv.information)||[], policies=(dv&&dv.policies)||[];
+        const attention=dv&&dv.attention;
+        const show=on&&iv&&(conflicts.length||infos.length||policies.length||(rv&&rv.needed)||(attention&&(attention.parkedChoices||attention.parkedDelegations||attention.damaged)));
+        if(!show){ ib.style.display="none"; ib.replaceChildren(); return; }
+        ib.style.display=""; ib.replaceChildren();
+        const head=document.createElement("div"); head.className="sbhead"; head.textContent=T("Project MAP 대기 선택·복구","Project MAP choices & recovery"); ib.appendChild(head);
+        const intro=document.createElement("div"); intro.className="muted"; intro.style.cssText="font-size:11px;margin-bottom:7px";
+        intro.textContent=T("대부분은 검증·정책에 따라 자동으로 끝납니다. 여기에는 서로 반대인 정책처럼 사람의 뜻이 꼭 필요한 경우와 복구 작업만 남습니다.","Most work finishes automatically from verification and policy. Only cases that require your meaning—such as opposing policies—and recovery actions appear here."); ib.appendChild(intro);
+        const send=function(msg,btn){ if(intentBusyWeb) return; intentBusyWeb=true; ib.querySelectorAll("button").forEach(function(b){b.disabled=true;}); if(btn)btn.textContent=T("처리 중…","Working…"); vscode.postMessage(Object.assign({type:"intentAct",repo:iv.repo},msg)); };
+        if(dv&&dv.policySummary){
+          const ps=document.createElement("div"); ps.className="hint"; ps.textContent=T("현재 재사용 정책 ","Reusable policies: ")+dv.policySummary.activeLeafCount+T("개 · 충돌을 정리해 교체한 정책 "," · conflict-resolving replacements: ")+dv.policySummary.supersedingLeafCount; ib.appendChild(ps);
+        }
+        conflicts.forEach(function(card){
+          const row=document.createElement("div"); row.className="card"; row.style.cssText="margin:8px 0;padding:10px;border-left:3px solid var(--vscode-charts-orange)";
+          const title=document.createElement("b"); title.textContent=T("서로 반대인 정책 ","Opposing policies · ")+card.affectedPending.length+T("개 대기 변경에 영향"," pending change(s) affected"); row.appendChild(title);
+          const target=document.createElement("div"); target.className="muted"; target.style.marginTop="4px"; target.textContent=T("영향 대상: ","Targets: ")+card.affectedPending.map(function(x){return (x.targetLabels||[]).join(", ")||x.operation;}).join(" · "); row.appendChild(target);
+          card.policies.forEach(function(p){ const line=document.createElement("div"); line.style.cssText="font-size:11px;margin-top:4px"; const disp=p.chosenMeaning&&p.chosenMeaning.disposition; line.textContent=(disp==="apply"?T("적용 기준 · ","apply · "):T("거부 기준 · ","decline · "))+String(p.predicateDescription||p.policyId)+" ("+String(p.scope)+")"; row.appendChild(line); });
+          const changed=document.createElement("div"); changed.className="muted"; changed.style.cssText="font-size:10.5px;margin-top:6px"; changed.textContent=T("선택하면: 새 공유 정책으로 충돌을 정리하고 맞는 대기 변경을 자동 확인합니다. 기존 정책·이력은 삭제하지 않습니다.","Choosing: creates one shared resolving policy and checks matching pending changes automatically. Existing policies/history are not deleted."); row.appendChild(changed);
+          const ba=document.createElement("button"); ba.textContent=T("앞으로 적용","Apply going forward"); ba.style.marginTop="7px"; ba.onclick=function(){send({act:"conflict-apply",mapId:card.mapId,cardId:card.cardId,conflictKey:card.conflictKey},ba);}; row.appendChild(ba);
+          const bd=document.createElement("button"); bd.className="secondary"; bd.style.cssText="margin:7px 0 0 5px"; bd.textContent=T("앞으로 거부","Decline going forward"); bd.onclick=function(){send({act:"conflict-decline",mapId:card.mapId,cardId:card.cardId,conflictKey:card.conflictKey},bd);}; row.appendChild(bd);
+          ib.appendChild(row);
+        });
+        infos.forEach(function(info){ const row=document.createElement("div"); row.className="hint"; row.style.marginTop="7px"; row.textContent=T("조사 필요(선택 버튼 없음): ","Needs investigation (no action button): ")+String(info.operation)+" · "+((info.targetLabels||[]).join(", ")||String(info.patchId).slice(0,8))+" — "+String(info.rationale||""); ib.appendChild(row); });
+        if(attention&&(attention.parkedChoices||attention.parkedDelegations||attention.damaged)){
+          const at=document.createElement("div"); at.className="integrity"; at.style.marginTop="7px"; at.textContent=attention.damaged?T("선택/위임 기록을 읽을 수 없어 자동 마무리가 정지했습니다. 기록 파일을 수동 확인해 주세요.","Choice/delegation records are unreadable; automatic completion stopped. Inspect the record files manually."):T("자동 마무리 보류: 정책 선택 ","Parked automatic completion: choices ")+attention.parkedChoices+T("건 · 위임 "," · delegations ")+attention.parkedDelegations+T("건 — 같은 작업을 반복하지 않고 사람 확인을 기다립니다."," — no repeated retries; awaiting human review."); ib.appendChild(at);
+          if(!attention.damaged){
+            (attention.parkedChoiceItems||[]).forEach(function(x){ const b=document.createElement("button"); b.className="secondary"; b.style.cssText="margin:6px 5px 0 0;font-size:11px;padding:2px 8px"; b.textContent=T("보류 선택 다시 시도","Retry parked choice"); b.title=String(x.parkedReason||""); b.onclick=function(){send({act:"conflict-retry",mapId:dv.mapId,cardId:x.cardId},b);}; ib.appendChild(b); });
+            (attention.parkedDelegationItems||[]).forEach(function(x){ const b=document.createElement("button"); b.className="secondary"; b.style.cssText="margin:6px 5px 0 0;font-size:11px;padding:2px 8px"; b.textContent=T("보류 위임 다시 시도","Retry parked delegation"); b.title=String(x.parkedReason||""); b.onclick=function(){send({act:"delegation-retry",mapId:dv.mapId,oldPatchId:x.oldPatchId},b);}; ib.appendChild(b); });
+          }
+        }
+        if(rv&&rv.needed){
+          const rec=document.createElement("div"); rec.className="card"; rec.style.cssText="margin:8px 0 0;padding:10px;border-left:3px solid var(--vscode-charts-red)";
+          const rh=document.createElement("b"); rh.textContent=rv.kind==="topology-corruption"?T("구조 지도 복구","Recover structure map"):T("남은 MAP 잠금","Leftover MAP lock"); rec.appendChild(rh);
+          if(rv.kind==="topology-corruption"){
+            const why=document.createElement("div"); why.className="muted"; why.style.marginTop="4px"; why.textContent=T("현재 topology.json을 정상적으로 읽을 수 없습니다. 복구본 생성은 원본을 바꾸지 않고, 교체는 별도 확인 뒤에만 진행됩니다.","topology.json cannot be read as a valid map. Creating a recovery copy does not alter the original; replacement requires a separate confirmation."); rec.appendChild(why);
+            const cands=rv.candidates||[];
+            if(!cands.length){ const no=document.createElement("div"); no.className="integrity"; no.style.marginTop="6px"; no.textContent=T("decision·스냅샷·최근 git 이력에서 복구할 지도 세대를 찾지 못했습니다. 새 지도 만들기(bootstrap)가 필요합니다.","No recoverable map generation was found in decisions, snapshots, or recent git history. Bootstrap a new map."); rec.appendChild(no); }
+            cands.forEach(function(c){ const line=document.createElement("div"); line.style.cssText="margin-top:7px;font-size:11px"; line.appendChild(document.createTextNode(String(c.mapId).slice(0,8)+"… · "+(c.sources||[]).join(", "))); const b=document.createElement("button"); b.className="secondary"; b.style.cssText="margin-left:7px;font-size:11px;padding:2px 8px"; b.textContent=T("복구본 만들기","Create recovery copy"); b.onclick=function(){send({act:"recovery-prepare",mapId:c.mapId},b);}; line.appendChild(b); rec.appendChild(line); });
+            const prepared=rv.prepared||null;
+            if(prepared){ const line=document.createElement("div"); line.className="hint"; line.style.marginTop="8px"; line.appendChild(document.createTextNode(T("검증된 복구본과 확인 계획이 준비됨 — 손상 원본은 아직 그대로입니다.","Validated recovery copy and confirmation plan ready — damaged original is still unchanged."))); const b=document.createElement("button"); b.style.cssText="margin-left:7px"; b.textContent=T("복구본으로 교체","Replace with recovery copy"); b.onclick=function(){send({act:"recovery-confirm",mapId:prepared.mapId,hash:prepared.hash,planId:prepared.planId,nonce:prepared.nonce},b);}; line.appendChild(b); rec.appendChild(line); }
+          } else {
+            const ls=document.createElement("div"); ls.className="muted"; ls.style.marginTop="4px"; ls.textContent=rv.lock.state==="dead"?T("종료된 작업이 남긴 잠금입니다. 사망한 작업임을 다시 확인한 뒤에만 회수합니다.","This lock was left by a dead process and is recovered only after rechecking that fact."):T("잠금 상태: ","Lock state: ")+String(rv.lock.state)+T(" — 살아 있거나 판독 불가한 잠금은 자동 삭제하지 않습니다."," — live or unreadable locks are never auto-deleted."); rec.appendChild(ls);
+          }
+          const lock=rv.lock;
+          if(lock&&lock.state==="dead"){ const b=document.createElement("button"); b.className="secondary"; b.style.marginTop="7px"; b.textContent=T("종료된 작업의 잠금 회수","Recover dead-process lock"); b.onclick=function(){send({act:"recovery-lock",mapId:rv.mapId},b);}; rec.appendChild(b); }
+          ib.appendChild(rec);
+        }
       })();
       if(!on){ box.style.display="none"; return; }
       box.style.display="";
