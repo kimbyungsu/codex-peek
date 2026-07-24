@@ -36,8 +36,11 @@ console.log("[1] 동의 세대 — ws×slot upsert·타 레코드 보존(ab-2)·
   ok(g2.ok === true && g2.gen === 2, "다른 ws grant(gen=2)");
   const c1 = ME.readEnrichConsent(repo);
   ok(c1.grants.length === 2, "upsert — 타 (ws,slot) 레코드 보존(ab-2)");
-  const g3 = ME.grantEnrichConsent(repo, { ws: "d:/PROJ/a/", slot: "ko", selfAuto: false, paidMode: "economy" });
-  ok(g3.ok === true && ME.readEnrichConsent(repo).grants.length === 2, "normWs 정규화 — 대소문자·구분자·꼬리 슬래시 달라도 같은 ws로 upsert(중복 생성 0)");
+  // path.normalize는 실행 OS의 구분자만 해석한다. 동의 파일은 로컬 전용이므로 Linux CI에 Windows의
+  // 구분자 혼용 의미를 강요하지 않고, Windows에서만 slash/backslash 혼용까지 확인한다.
+  const aliasA = process.platform === "win32" ? "d:/PROJ/a/" : "d:\\PROJ\\a\\";
+  const g3 = ME.grantEnrichConsent(repo, { ws: aliasA, slot: "ko", selfAuto: false, paidMode: "economy" });
+  ok(g3.ok === true && ME.readEnrichConsent(repo).grants.length === 2, "normWs 정규화 — 대소문자·꼬리 슬래시(Windows는 구분자 혼용)에도 같은 ws로 upsert(중복 생성 0)");
   const found = ME.findGrant(ME.readEnrichConsent(repo), "D:\\proj\\A", "ko");
   ok(found && found.paidMode === "economy" && found.gen === 3, "findGrant — 정규화 조회·최신 grant(gen=3)");
   ok(ME.findGrant(ME.readEnrichConsent(repo), "D:\\proj\\A", "en") === null, "언어 슬롯 독립(en 무동의)");
