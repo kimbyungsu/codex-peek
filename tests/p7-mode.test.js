@@ -76,8 +76,8 @@ const MP = require(path.join(ROOT, "bridge", "map-probe.js"));
   ok(rp1.rec.ok === true && rp1.write.ok === true, "실행기 성공 경로 — 실 spawn·-o 회수·guarded 기록");
   const vP = CL.mapReadinessView({ precisionFpNow: CL.precisionExecFp(invOk) });
   ok(vP.precision.ok === true, "기록 후 뷰 재대조 — precision 준비됨");
-  const capRows0 = fs.readFileSync(path.join(tmpHome, "stats", "scout-usage.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((r) => r.arm === "codex-probe");
-  ok(capRows0.length === 1 && capRows0[0].pkgChars === 1, "codex-probe 비용 장부 기록(문자수 정직 — 1차 blocker④ '실행' 증거)");
+  const capRows0 = fs.readFileSync(path.join(tmpHome, "stats", "scout-usage.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((r) => r.schema === "scout-usage-v2" && r.flow === "readiness" && r.provider === "codex");
+  ok(capRows0.length === 1 && capRows0[0].charsIn === 1 && capRows0[0].tokenIn === null, "Codex 점검 v2 호출 기록(문자수·토큰 미제공 분리 — 1차 blocker④ '실행' 증거)");
   // TOCTOU 정본 필수 반례: 스텁 '자신'이 실행 중 전역 설정을 바꿈 → 실행기 내부 guarded 기록이 결과 폐기
   const stubMut = path.join(tmpHome, "codex-mutate-stub.js");
   const scFile = path.join(tmpHome, "scout-codex.json").replace(/\\/g, "/");
@@ -106,10 +106,15 @@ const MP = require(path.join(ROOT, "bridge", "map-probe.js"));
   // probeSelf 실행: 가짜 claude(버전 출력) → 성공, 존재하지 않는 명령 → 실패 레코드 기록+ver null 반환(캐시 리셋 계약)
   const fakeClaude = path.join(tmpHome, "fake-claude.js");
   fs.writeFileSync(fakeClaude, 'console.log("9.9.9 (fake)"); process.exit(0);');
+  const selfUsageBefore = fs.readFileSync(path.join(tmpHome, "stats", "scout-usage.jsonl"), "utf8").trim().split("\n").filter(Boolean).map(JSON.parse).filter((r) => r.schema === "scout-usage-v2" && r.flow === "readiness" && r.provider === "claude").length;
   const rs1 = MP.probeSelf({ claudeCmd: process.execPath, claudeArgs: [fakeClaude], adapterHint: path.join(ROOT, "scripts", "scout-providers.js"), shell: false });
   ok(rs1.ver === "9.9.9 (fake)" && rs1.rec.ok === true && rs1.write.ok === true, "probeSelf 성공 경로 실행 — 버전 캡처+어댑터 지문 결속+guarded 기록");
-  const rs2 = MP.probeSelf({ claudeCmd: path.join(tmpHome, "no-such-cli-xyz.exe"), adapterHint: path.join(ROOT, "scripts", "scout-providers.js"), shell: false });
+  let selfUsageRows = fs.readFileSync(path.join(tmpHome, "stats", "scout-usage.jsonl"), "utf8").trim().split("\n").filter(Boolean).map(JSON.parse).filter((r) => r.schema === "scout-usage-v2" && r.flow === "readiness" && r.provider === "claude");
+  ok(selfUsageRows.length === selfUsageBefore + 1 && selfUsageRows.at(-1).charsIn === 0 && selfUsageRows.at(-1).charsOut > 0, "Claude --version 준비 점검도 실제 시작된 CLI 호출 1건으로 기록");
+  const rs2 = MP.probeSelf({ claudeCmd: "no-such-cli-p10-xyz", adapterHint: path.join(ROOT, "scripts", "scout-providers.js") });
   ok(rs2.ver === null && rs2.rec.ok === false && rs2.write.ok === true, "CLI 부재 → ver null 반환(호출자 캐시 리셋 계약)+실패 레코드 기록(2차 blocker②)");
+  selfUsageRows = fs.readFileSync(path.join(tmpHome, "stats", "scout-usage.jsonl"), "utf8").trim().split("\n").filter(Boolean).map(JSON.parse).filter((r) => r.schema === "scout-usage-v2" && r.flow === "readiness" && r.provider === "claude");
+  ok(selfUsageRows.length === selfUsageBefore + 1, "실행 파일 부재로 프로세스가 시작되지 않은 점검은 호출 0건");
   ok(typeof rs1.rec.startedAt === "string" && typeof rs2.rec.startedAt === "string", "probe 레코드에 시작 시각 탑재(늦은-패자 규칙 입력 — 4차 [주의])");
   const vS = CL.mapReadinessView({ selfFpNow: null });
   ok(vS.self.ok === false, "실패 기록+캐시 리셋 후 뷰=미준비(옛 성공 부활 없음)");
@@ -155,7 +160,7 @@ ok(DB.validateCapability('```json\n{"capability":"ok","n":7}\n```') === false, "
 ok(DB.validateCapability('{"capability":"ok","n":7,"extra":1}') === false, "추가 키 → 실패(정확 일치)");
 ok(DB.validateCapability("x".repeat(2001)) === false, "크기 상한 초과 → 실패");
 const dbSrc = fs.readFileSync(path.join(ROOT, "bridge", "deepseek-bridge.js"), "utf8");
-ok(/cmd === "capability"/.test(dbSrc) && /bounded repair — 원격 재호출 정확히 1회/.test(dbSrc) && /arm: "capability"/.test(dbSrc), "capability 명령 — repair 1회 한정·호출별 usage 기록(최대 2회 과금 고지와 일치)");
+ok(/cmd === "capability"/.test(dbSrc) && /bounded repair — 원격 재호출 정확히 1회/.test(dbSrc) && /inheritedUsageContext\("readiness"/.test(dbSrc), "capability 명령 — repair 1회 한정·호출별 v2 usage 기록(최대 2회 과금 고지와 일치)");
 
 console.log("[5b] capability 흐름 실행(가짜 API 서버) — 1차 실패→repair 수신→2차 정상=exit 0 / 2차도 실패=exit 2·usage 2건");
 const capFlow = () => new Promise((resolve) => {
@@ -184,8 +189,8 @@ const capFlow = () => new Promise((resolve) => {
     run((code1, out1) => {
       ok(code1 === 0 && /capability-ok/.test(out1), "1차 형식 실패→repair 1회→정상 JSON → exit 0(bounded repair 실행 흐름)");
       ok(calls === 2 && sawRepair, "원격 호출 정확히 2회(최대 2회 과금 고지와 일치)+repair 프롬프트 실수신");
-      const usageRows = fs.readFileSync(path.join(tmpHome, "stats", "scout-usage.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((r) => r.arm === "capability");
-      ok(usageRows.length === 2 && usageRows[0].usageIn === 5, "호출별 usage 기록(arm=capability — 2건)");
+      const usageRows = fs.readFileSync(path.join(tmpHome, "stats", "scout-usage.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((r) => r.schema === "scout-usage-v2" && r.flow === "readiness" && r.provider === "deepseek");
+      ok(usageRows.length === 2 && usageRows[0].tokenIn === 5 && new Set(usageRows.map((r) => r.callId)).size === 2, "repair 포함 실제 API 호출별 v2 usage·서로 다른 callId 2건");
       calls = 0; sawRepair = false; mode = "repair-fail";
       run((code2, out2) => {
         ok(code2 === 2 && /capability-fail/.test(out2) && calls === 2, "repair도 실패 → exit 2·추가 재시도 없음(정확히 1회 한정)");
@@ -227,7 +232,7 @@ ok(ext.includes("process.env.CODEX_BIN"), "probe 실행 해석 — CODEX_BIN 우
 ok(ext.includes("codex-bin.txt"), "probe 실행 해석 — codex-bin.txt pin 2순위");
 ok((ext.match(/ELECTRON_RUN_AS_NODE: "1"/g) || []).length >= 2, "Electron→node 전환 env — precision(.js 해석)+economy(브릿지 실행) 모두(2차 blocker③)");
 ok(ext.includes("cachedClaudeVer = rs.ver;") && ext.includes("selfFpNow: selfFpNowExt()"), "self 버전 캐시=실패 포함 반영(null 리셋 — 2차 blocker②)·뷰 재대조 주입");
-ok(fs.readFileSync(path.join(ROOT, "bridge", "map-probe.js"), "utf8").includes('arm: "codex-probe"'), "Codex 점검 비용 기록은 실행기 소관(1차 blocker④ — [2c]에서 실행 검증)");
+ok(fs.readFileSync(path.join(ROOT, "bridge", "map-probe.js"), "utf8").includes('recordReadiness("codex"'), "Codex 점검 v2 기록은 실행기 소관(1차 blocker④ — [2c]에서 실행 검증)");
 ok(ext.includes('w.reason === "fp-mismatch" ?'), "저장 실패 사유 분리(설정 변경 vs 잠금/쓰기 — 1차 [보완])");
 ok(ext.includes('rs.write.ok ? (rs.rec.ok ? "OK" : detS) : wNote(rs.write)')
   && !ext.includes('rs.rec.ok && rs.write.ok ? "OK" : rs.rec.ok ? wNote(rs.write) : detS'),

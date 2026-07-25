@@ -1792,6 +1792,16 @@ function computeEnvelopeCandidatesFor(ws) {
   const openIds9 = new Set();
   try { for (const o of openFindingsFor(ws, camp, gen)) openIds9.add(o.id); } catch { /* 판독 실패=제외 없이 전체(보수) */ }
   const cands = [];
+  // 빼기 후보는 수칙서가 실제 정리 임계(30항목)에 닿았을 때만 의미가 있다. 작은 수칙서에서 단지
+  // "아직 발동 안 됨"만으로 전 항목을 사용자 판단으로 올리면 사용하지 않은 소화기를 버리자고 매번 묻는 셈이다.
+  let overCap = false, envForCleanup = null;
+  try {
+    const c9 = loadContract(ws), evv9 = readVerifyEnvelope(resolveScoutRepo(ws, c9).repo);
+    if (evv9.st === "ok") {
+      overCap = (evv9.data.supportedEnv.length + evv9.data.alwaysBlocker.length + evv9.data.outOfScope.length) >= 30;
+      if (c9.envelopeHash === evv9.sha1 && (gen || null) === evv9.sha1) envForCleanup = evv9;
+    }
+  } catch { /* 판정 불가=false */ }
   { // ① oos 강등 반복(강등=닫힘이 정상이라 open 조건 비적용 — 반복 자체가 신호)
     const byOos = new Map();
     for (const r of rows) if (r.type === "finding" && r.demoted && r.oosId) { const a = byOos.get(r.oosId) || []; a.push(r); byOos.set(r.oosId, a); }
@@ -1807,22 +1817,14 @@ function computeEnvelopeCandidatesFor(ws) {
     for (const r of rows) if (r.type === "occurrence" && r.findingId && r.effectiveTag === "blocker") { const st9 = byF.get(r.findingId) || new Set(); st9.add(r.round); byF.set(r.findingId, st9); }
     for (const [fid, st9] of byF) if (st9.size >= 2 && openIds9.has(fid)) cands.push({ candidateId: envelopeCandidateId("lineage", fid), kind: "lineage", key: fid, n: st9.size + 1, titles: [titleOf.get(fid) || ""].filter(Boolean) });
   }
-  { // ④ 빼기 후보(§7 성장 억제 — 현 승인 세대 '전체'에서 한 번도 발동 안 한 범위-밖 항목): 세대 전 캠페인의
+  if (overCap && envForCleanup) { // ④ 빼기 후보(§7 성장 억제 — 30항목 이상일 때만, 현 승인 세대 '전체'에서 한 번도 발동 안 한 범위-밖 항목): 세대 전 캠페인의
     // finding에서 oosId 인용이 0회인 oos-N=빼기/병합 검토 재료. 항상-차단(ab)은 발동 데이터가 심사 면제 축이라
     // 미인용=미발동으로 단정할 수 없어 제외(정직 한정 — 캐논 재료로만).
     try {
-      const c9 = loadContract(ws);
-      const repo9 = resolveScoutRepo(ws, c9).repo;
-      const evv9 = readVerifyEnvelope(repo9);
-      if (evv9.st === "ok" && c9.envelopeHash === evv9.sha1 && (gen || null) === evv9.sha1) {
-        const usedOos = new Set(readFindingsLedger(ws).filter((r) => r.type === "finding" && (r.envelopeHash || null) === (gen || null) && r.oosId).map((r) => r.oosId));
-        evv9.data.outOfScope.forEach((txt, i) => { const id9 = "oos-" + (i + 1); if (!usedOos.has(id9)) cands.push({ candidateId: envelopeCandidateId("unused-oos", id9 + "@" + evv9.sha1), kind: "unused-oos", key: id9, n: 0, titles: [String(txt).slice(0, 60)] }); });
-      }
+      const usedOos = new Set(readFindingsLedger(ws).filter((r) => r.type === "finding" && (r.envelopeHash || null) === (gen || null) && r.oosId).map((r) => r.oosId));
+      envForCleanup.data.outOfScope.forEach((txt, i) => { const id9 = "oos-" + (i + 1); if (!usedOos.has(id9)) cands.push({ candidateId: envelopeCandidateId("unused-oos", id9 + "@" + envForCleanup.sha1), kind: "unused-oos", key: id9, n: 0, titles: [String(txt).slice(0, 60)] }); });
     } catch { /* 원본 판독 실패=빼기 후보 생략(추가 후보는 유지) */ }
   }
-  // 항목 수 임계(§7 — 추가 단방향 성장 방지): 수칙서 3축 합이 30항목 이상이면 추가 후보보다 정리 후보 우선 표기
-  let overCap = false;
-  try { const c9 = loadContract(ws); const evv9 = readVerifyEnvelope(resolveScoutRepo(ws, c9).repo); if (evv9.st === "ok") overCap = (evv9.data.supportedEnv.length + evv9.data.alwaysBlocker.length + evv9.data.outOfScope.length) >= 30; } catch { /* 판정 불가=false */ }
   const { latest } = readEnvelopeCandidates(ws);
   let skipped = 0;
   const live = cands.filter((c) => {

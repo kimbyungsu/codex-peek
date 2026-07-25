@@ -152,7 +152,8 @@ console.log("[2b] 어댑터 3종 — stubbed spawn 직접 호출(2차 blocker④
 {
   const repoA = fs.mkdtempSync(path.join(os.tmpdir(), "p8ew_ad_"));
   fs.writeFileSync(path.join(repoA, "app.js"), "// adapter fixture\n");
-  const ctx = { repo: repoA, topo: { nodes: [{ id: U(1), label: "L", entityType: "module", state: {}, anchors: [{ kind: "code", path: "app.js" }] }], edges: [] }, changed: ["app.js"], provider: "test" };
+  const usageContext = { repoKey: CL.repoKeyForStats(repoA), runId: U(91), jobKey: "a".repeat(40), jobRunId: "b".repeat(40) };
+  const ctx = { repo: repoA, topo: { nodes: [{ id: U(1), label: "L", entityType: "module", state: {}, anchors: [{ kind: "code", path: "app.js" }] }], edges: [] }, changed: ["app.js"], provider: "test", usageContext };
   const ENRICH_JSON = { schema: "enrich-result-v1", items: [] };
   // precision — 가짜 CODEX_BIN(-o 파일에 enrich-result 기록) 실행
   const rP = withStub(ENRICH_JSON, () => EP.ENRICH_ADAPTERS.precision(ctx));
@@ -164,21 +165,31 @@ console.log("[2b] 어댑터 3종 — stubbed spawn 직접 호출(2차 blocker④
   else { const p9 = path.join(stubDir, "claude"); fs.writeFileSync(p9, "#!/bin/sh\nprintf '%s' '" + SELF_OUT + "'\n"); fs.chmodSync(p9, 0o755); }
   const oldPath = process.env.PATH;
   process.env.PATH = stubDir + path.delimiter + oldPath;
-  let rS = null; try { rS = EP.ENRICH_ADAPTERS.self(ctx); } finally { process.env.PATH = oldPath; }
+  let rS = null;
+  let rSBad = null;
+  try {
+    rS = EP.ENRICH_ADAPTERS.self(ctx);
+    if (process.platform === "win32") fs.writeFileSync(path.join(stubDir, "claude.cmd"), "@echo not-json\r\n");
+    else { const p9 = path.join(stubDir, "claude"); fs.writeFileSync(p9, "#!/bin/sh\nprintf '%s' 'not-json'\n"); fs.chmodSync(p9, 0o755); }
+    rSBad = EP.ENRICH_ADAPTERS.self(ctx);
+  } finally { process.env.PATH = oldPath; }
   ok(rS && rS.ok === true && rS.result.schema === "enrich-result-v1", "self — PATH 스텁 claude로 조립·실행·파싱");
+  ok(rSBad && rSBad.ok === false && rSBad.failureKind === "result-invalid", "self — 실제 CLI 비JSON 응답은 호출 실패가 아닌 결과 형식 실패");
   // economy — 스텁 HTTP 서버(별도 프로세스)+deepseek.json baseUrl로 deepseek-bridge enrich 실체인 실행
   const srvJs = path.join(stubDir, "srv.js");
   const portF = path.join(stubDir, "port.txt");
+  const badModeF = path.join(stubDir, "always-bad");
   fs.writeFileSync(srvJs, [
     'const http = require("http"); const fs = require("fs");',
-    "const content = " + JSON.stringify(SELF_OUT) + ";",
+    "const content = " + JSON.stringify(SELF_OUT) + "; let calls = 0;",
     "const srv = http.createServer((req, res) => { let b = \"\"; req.on(\"data\", (c) => { b += c; }); req.on(\"end\", () => {",
     '  res.setHeader("Content-Type", "application/json");',
-    '  res.end(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: 1, completion_tokens: 1 }, model: "stub" }));',
+    '  const out = fs.existsSync(process.argv[3]) ? "{\\\"bad\\\":true}" : (calls++ === 0 ? "{\\\"bad\\\":true}" : content);',
+    '  res.end(JSON.stringify({ choices: [{ message: { content: out } }], usage: { prompt_tokens: 1, completion_tokens: 1 }, model: "stub" }));',
     "}); });",
     'srv.listen(0, "127.0.0.1", () => { fs.writeFileSync(process.argv[2], String(srv.address().port)); });',
   ].join("\n"));
-  const srv = require("child_process").spawn(process.execPath, [srvJs, portF], { stdio: "ignore" });
+  const srv = require("child_process").spawn(process.execPath, [srvJs, portF, badModeF], { stdio: "ignore" });
   const sleep = (ms) => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { const t = Date.now() + ms; while (Date.now() < t) { /* 폴백 */ } } };
   let port = ""; for (let i = 0; i < 100 && !port; i++) { try { port = fs.readFileSync(portF, "utf8").trim(); } catch { sleep(100); } }
   if (!port) ok(false, "economy — 스텁 서버 기동 실패");
@@ -187,6 +198,14 @@ console.log("[2b] 어댑터 3종 — stubbed spawn 직접 호출(2차 blocker④
     const oldKey = process.env.DEEPSEEK_API_KEY; delete process.env.DEEPSEEK_API_KEY; // 파일 키 강제 — 혹시 있을 실키 env로의 이탈 차단(baseUrl은 어차피 스텁)
     let rE = null; try { rE = EP.ENRICH_ADAPTERS.economy(ctx); } finally { if (oldKey !== undefined) process.env.DEEPSEEK_API_KEY = oldKey; }
     ok(rE && rE.ok === true && rE.result.schema === "enrich-result-v1", "economy — deepseek-bridge enrich 실체인+스텁 API로 실행·파싱");
+    const usageRows = fs.readFileSync(CL.SCOUT_USAGE_FILE, "utf8").trim().split("\n").map(JSON.parse).filter((x) => x.schema === "scout-usage-v2" && x.flow === "map-enrich" && x.runId === usageContext.runId);
+    const deepRows = usageRows.filter((x) => x.provider === "deepseek");
+    ok(deepRows.length === 2 && new Set(deepRows.map((x) => x.callId)).size === 2 && deepRows.every((x) => x.jobRunId === usageContext.jobRunId), "DeepSeek repair 2호출=서로 다른 callId·같은 run/job 세대");
+    fs.writeFileSync(badModeF, "1");
+    let rEBad = null;
+    const oldKey2 = process.env.DEEPSEEK_API_KEY; delete process.env.DEEPSEEK_API_KEY;
+    try { rEBad = EP.ENRICH_ADAPTERS.economy(ctx); } finally { if (oldKey2 !== undefined) process.env.DEEPSEEK_API_KEY = oldKey2; }
+    ok(rEBad && rEBad.ok === false && rEBad.failureKind === "result-invalid", "economy — 원격 2회 모두 잘못된 결과면 호출 실패가 아닌 결과 형식 실패");
     fs.rmSync(path.join(CL.BRIDGE_DIR, "deepseek.json"), { force: true });
   }
   try { srv.kill(); } catch { /* 무해 */ }
@@ -238,7 +257,7 @@ console.log("[5] 배포 파일 — 3카피 패리티+실물+deepseek enrich 계�
   ok(a.length === 25 && c.length === 25 && JSON.stringify([...a].sort()) === JSON.stringify([...c].sort()), "25파일(+cap-handoff·router·enrich·intent·providers) 집합 일치");
   ok(h.includes('"enrich-providers.js"') && a.every((f) => fs.existsSync(path.join(ROOT, "bridge", f))), "hook-setup 포함+전부 실물");
   const db = fs.readFileSync(path.join(ROOT, "bridge", "deepseek-bridge.js"), "utf8");
-  ok(db.includes('cmd === "enrich"') && /enrich-result-v1/.test(db) && db.includes("enrich-shape-fail") && db.includes('arm: "enrich"'), "deepseek enrich — strict 표지·repair 1회 실패 표지·usage");
+  ok(db.includes('cmd === "enrich"') && /enrich-result-v1/.test(db) && db.includes("enrich-shape-fail") && db.includes('inheritedUsageContext("map-enrich"'), "deepseek enrich — strict 표지·repair 1회 실패 표지·호출별 v2 usage");
   const me = fs.readFileSync(path.join(ROOT, "bridge", "map-enrich.js"), "utf8");
   ok(me.includes("MI.sweepIntentAuto(repo, queue.mapId") && me.indexOf("MI.sweepIntentAuto(repo, queue.mapId") > me.indexOf("runEnrichLocked(repo, o"), "P9 자동 스윕=enrich 본체 종료 뒤 정확한 후행 위치");
   ok(me.includes('route: "intent-auto"') && /return result;/.test(me), "후행 스윕은 기존 route log 1줄을 쓰고 P8 결과를 그대로 반환");

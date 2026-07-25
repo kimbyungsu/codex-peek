@@ -16,7 +16,7 @@ ok(ext.includes("intent: any | null") && ext.includes("const MI9: any = require(
   "BridgeState와 설치본 map-intent 연결");
 const sweepAt = ext.indexOf("sweep = MI9.sweepIntentAuto(repo9, recovery.mapId, { ws });");
 const collectAt = ext.indexOf("dashboard = MI9.collectIntentDashboard(repo9, recovery.mapId);");
-ok(ext.includes('if (loadContract(ws).scoutMode !== "on") return null; // 2트랙=파일·스윕·카드 0') && sweepAt >= 0 && collectAt > sweepAt,
+ok(ext.includes('if (contract.scoutMode !== "on") return null;') && sweepAt >= 0 && collectAt > sweepAt,
   "2트랙 조기 종료·자동 sweep 후 최신 카드 수집 순서");
 
 console.log("[2] 호스트 액션 — 단일-flight·재대조·정책 충돌/복구 배선");

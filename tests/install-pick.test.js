@@ -1,6 +1,10 @@
 // install.js의 pickVsix / buildInstallCmd 회귀 테스트.
 // 자동설치가 빗나간 두 버그(잘못된 vsix 선택 / bare code 따옴표)를 고정한다.
-const { pickVsix, currentVsix, buildInstallCmd } = require("../install.js");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const crypto = require("crypto");
+const { pickVsix, currentVsix, buildInstallCmd, bridgeRuntimeParity } = require("../install.js");
 
 let pass = 0, fail = 0;
 const ck = (n, c) => { (c ? pass++ : fail++); console.log((c ? "  ✅ " : "  ❌ ") + n); };
@@ -25,6 +29,29 @@ ck("현재 버전 vsix 있으면 그걸 반환", currentVsix(["codex-bridge-0.1.
 ck("옛것+현재것 섞여도 현재 버전 반환", currentVsix(["codex-bridge-0.1.20.vsix", "codex-bridge-0.1.28.vsix"], "0.1.28") === "codex-bridge-0.1.28.vsix");
 ck("vsix 전무면 null", currentVsix([], "0.1.28") === null);
 ck("version 비면 폴백 유지(하위호환, 최신 반환)", currentVsix(["codex-bridge-0.1.20.vsix"], "") === "codex-bridge-0.1.20.vsix");
+
+console.log("[4] bridgeRuntimeParity — 리로드로 숨은 구 실행 파일을 status가 검출");
+{
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "install_parity_"));
+  const src = path.join(root, "src"), live = path.join(root, "live"), files = ["a.js", "b.js"];
+  fs.mkdirSync(src); fs.mkdirSync(live);
+  fs.writeFileSync(path.join(src, "a.js"), "A"); fs.writeFileSync(path.join(src, "b.js"), "B");
+  fs.copyFileSync(path.join(src, "a.js"), path.join(live, "a.js")); fs.copyFileSync(path.join(src, "b.js"), path.join(live, "b.js"));
+  const manifest = { schema: "deploy-manifest-v1", files: {} };
+  for (const f of files) manifest.files[f] = crypto.createHash("sha1").update(fs.readFileSync(path.join(src, f))).digest("hex");
+  fs.writeFileSync(path.join(live, "deploy-manifest.json"), JSON.stringify(manifest));
+  ck("같은 실행 세대=정상", bridgeRuntimeParity(src, live, files).ok);
+  fs.unlinkSync(path.join(live, "b.js"));
+  const missing = bridgeRuntimeParity(src, live, files);
+  ck("새 파일 누락=실패+파일명", !missing.ok && missing.missing.includes("b.js"));
+  fs.copyFileSync(path.join(src, "b.js"), path.join(live, "b.js")); fs.writeFileSync(path.join(live, "a.js"), "OLD");
+  const changed = bridgeRuntimeParity(src, live, files);
+  ck("옛 내용=실패+파일명", !changed.ok && changed.changed.includes("a.js"));
+  fs.copyFileSync(path.join(src, "a.js"), path.join(live, "a.js")); manifest.files["a.js"] = "0".repeat(40); fs.writeFileSync(path.join(live, "deploy-manifest.json"), JSON.stringify(manifest));
+  const staleManifest = bridgeRuntimeParity(src, live, files);
+  ck("실행 파일이 같아도 낡은 배포 목록=실패", !staleManifest.ok && staleManifest.manifest === "source-mismatch");
+  fs.rmSync(root, { recursive: true, force: true });
+}
 
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
 process.exit(fail ? 1 : 0);

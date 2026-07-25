@@ -236,32 +236,124 @@ function trimVerdicts(maxDays = 60) {
     return kept.length;
   } catch { return -1; } // 파일 없음 등 — best-effort(검증 흐름 안 막음)
 }
-// ── 정찰(3트랙) 비용 기록 — 2026-07-09 사용자 요구 "토큰·턴수를 투명하게, 비용 추정 가능하게" ──
-// 지도 메타(.json)는 프로젝트당 최근 10장만 남아 누적 비용 산출이 불가(실사고 감사) → verdicts와 동일한
-// append-only + 60일 트림 패턴의 별도 장부. 스키마: {ts, workspace, arm(self|deepseek|ping), model,
-// usageIn, usageOut(토큰 — self는 null: claude -p text 출력이 사용량을 안 줌), pkgChars, mapChars(문자수 — self 추정 재료)}.
+// ── P10 통계 기록 관문 ───────────────────────────────────────────────────────
+// 구형 scout-usage 행은 하위 호환 때문에 계속 받을 수 있다. 새 생산자는 strict v2 writer를 쓴다.
+// 두 파일 모두 append와 60일 trim을 같은 파일 잠금 안에서 수행하며 실패는 본 작업을 막지 않는다.
 const SCOUT_USAGE_FILE = path.join(STATS_DIR, "scout-usage.jsonl");
-function trimScoutUsage(maxDays = 60) {
+const MAP_ROUTE_FILE = path.join(STATS_DIR, "map-route.jsonl");
+const UUID_RE_P10 = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const HEX16_RE_P10 = /^[0-9a-f]{16}$/;
+const HEX40_RE_P10 = /^[0-9a-f]{40}$/;
+const ISO_RE_P10 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const USAGE_KEYS_P10 = ["schema", "ts", "callId", "scope", "repoKey", "flow", "provider", "model", "tokenIn", "tokenOut", "charsIn", "charsOut", "runId", "jobKey", "jobRunId"];
+const AUTO_KEYS_P10 = {
+  "enrich-start": ["schema", "event", "ts", "repoKey", "runId", "jobKey", "jobRunId", "mapId", "mode", "trigger"],
+  "enrich-run-terminal": ["schema", "event", "ts", "repoKey", "runId", "mapId", "mode", "trigger", "outcome", "reasonCode", "provider"],
+  "enrich-job-terminal": ["schema", "event", "ts", "repoKey", "runId", "jobKey", "jobRunId", "mapId", "mode", "trigger", "outcome", "reasonCode", "provider", "baselineState", "everApplied", "unresolvedBaseItems", "activeDeferredItems", "deferredState"],
+};
+const USAGE_FLOWS_P10 = new Set(["map-scout", "readiness", "map-enrich", "map-adjudicate"]);
+const PROVIDERS_P10 = new Set(["claude", "deepseek", "codex"]);
+const MAP_MODES_P10 = new Set(["self", "economy", "precision", "auto"]);
+const MAP_TRIGGERS_P10 = new Set(["consent", "retry", "probe", "tick", "cli", "link", "unknown"]);
+const MAP_OUTCOMES_P10 = new Set(["applied", "settled", "parked", "noop", "provider-failed", "busy", "error"]);
+const MAP_REASONS_P10 = new Set(["none", "queue-damaged", "pipeline-blocked", "map-unavailable", "queue-stale", "deferred-damaged", "deferred-retry", "job-damaged", "policy-unavailable", "parked-existing", "consent-missing", "consent-stale", "mode-invalid", "already-enriched", "state-write-failed", "route-parked", "adapter-missing", "provider-call-failed", "provider-result-invalid", "lock-lost", "retry-exhausted", "resolution-pending", "apply-failed", "unknown"]);
+const BASELINES_P10 = new Set(["current-job", "prior-terminal", "unavailable"]);
+const DEFERRED_STATES_P10 = new Set(["clear", "pending", "damaged", "unknown"]);
+const safeIntP10 = (v) => Number.isSafeInteger(v) && v >= 0;
+const isoP10 = (v) => {
+  if (typeof v !== "string" || !ISO_RE_P10.test(v)) return false;
+  try { return new Date(v).toISOString() === v; } catch { return false; }
+};
+const exactKeysP10 = (o, keys) => !!o && typeof o === "object" && !Array.isArray(o) && Object.keys(o).length === keys.length && keys.every((k) => Object.prototype.hasOwnProperty.call(o, k));
+const nullableIdP10 = (v, re) => v === null || (typeof v === "string" && re.test(v));
+
+function validateScoutUsageV2(o) {
+  if (!exactKeysP10(o, USAGE_KEYS_P10) || o.schema !== "scout-usage-v2" || !isoP10(o.ts) || !UUID_RE_P10.test(String(o.callId || ""))) return false;
+  if (!(o.scope === "project" || o.scope === "global") || !USAGE_FLOWS_P10.has(o.flow) || !PROVIDERS_P10.has(o.provider)) return false;
+  if (o.scope === "project" ? !HEX16_RE_P10.test(String(o.repoKey || "")) : o.repoKey !== null) return false;
+  if (!(o.model === null || (typeof o.model === "string" && o.model.length >= 1 && o.model.length <= 100 && !/[\x00-\x1f\x7f]/.test(o.model)))) return false;
+  if (!((o.tokenIn === null && o.tokenOut === null) || (safeIntP10(o.tokenIn) && safeIntP10(o.tokenOut)))) return false;
+  if (!((o.charsIn === null || safeIntP10(o.charsIn)) && (o.charsOut === null || safeIntP10(o.charsOut)))) return false;
+  if (!nullableIdP10(o.runId, UUID_RE_P10) || !nullableIdP10(o.jobKey, HEX40_RE_P10) || !nullableIdP10(o.jobRunId, HEX40_RE_P10)) return false;
+  return o.jobRunId === null || o.jobKey !== null;
+}
+function normalizeScoutUsageV2(ev) {
+  if (!ev || typeof ev !== "object") return null;
+  const model = ev.model === null ? null : typeof ev.model === "string" ? ev.model.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 100) : ev.model;
+  const partialToken = (ev.tokenIn === null && safeIntP10(ev.tokenOut)) || (safeIntP10(ev.tokenIn) && ev.tokenOut === null);
+  const o = Object.fromEntries(USAGE_KEYS_P10.map((k) => [k, k === "model" ? model : partialToken && (k === "tokenIn" || k === "tokenOut") ? null : ev[k]]));
+  return validateScoutUsageV2(o) ? o : null;
+}
+function validateMapAutomationV1(o) {
+  const keys = o && AUTO_KEYS_P10[o.event];
+  if (!keys || !exactKeysP10(o, keys) || o.schema !== "map-automation-v1" || !isoP10(o.ts)) return false;
+  if (!HEX16_RE_P10.test(String(o.repoKey || "")) || !UUID_RE_P10.test(String(o.runId || "")) || !UUID_RE_P10.test(String(o.mapId || "")) || !MAP_MODES_P10.has(o.mode) || !MAP_TRIGGERS_P10.has(o.trigger)) return false;
+  if (o.event === "enrich-start") return nullableIdP10(o.jobKey, HEX40_RE_P10) && nullableIdP10(o.jobRunId, HEX40_RE_P10) && (o.jobRunId === null || o.jobKey !== null);
+  if (!MAP_OUTCOMES_P10.has(o.outcome) || !MAP_REASONS_P10.has(o.reasonCode) || !(o.provider === null || PROVIDERS_P10.has(o.provider))) return false;
+  if (o.event === "enrich-run-terminal") return true;
+  if (!HEX40_RE_P10.test(String(o.jobKey || "")) || !HEX40_RE_P10.test(String(o.jobRunId || "")) || !BASELINES_P10.has(o.baselineState) || !DEFERRED_STATES_P10.has(o.deferredState)) return false;
+  const validBase = o.baselineState === "current-job" || o.baselineState === "prior-terminal";
+  if (validBase ? !(typeof o.everApplied === "boolean" && safeIntP10(o.unresolvedBaseItems)) : !(o.everApplied === null && o.unresolvedBaseItems === null && (o.deferredState === "unknown" || o.deferredState === "damaged"))) return false;
+  if (o.deferredState === "clear" || o.deferredState === "pending") return validBase && safeIntP10(o.activeDeferredItems);
+  return o.activeDeferredItems === null;
+}
+function normalizeMapAutomationV1(ev) {
+  const keys = ev && AUTO_KEYS_P10[ev.event];
+  if (!keys) return null;
+  const o = Object.fromEntries(keys.map((k) => [k, ev[k]]));
+  return validateMapAutomationV1(o) ? o : null;
+}
+
+function trimStatsUnlocked(file, maxDays) {
   try {
-    const raw = fs.readFileSync(SCOUT_USAGE_FILE, "utf8");
+    const raw = fs.readFileSync(file, "utf8");
     const cut = Date.now() - maxDays * 24 * 60 * 60 * 1000;
-    const kept = [];
+    const kept = []; let nonEmpty = 0;
     for (const ln of raw.split(/\r?\n/)) {
       if (!ln.trim()) continue;
+      nonEmpty++;
       try { const o = JSON.parse(ln); const t = Date.parse(o.ts || ""); if (Number.isFinite(t) && t >= cut) kept.push(ln); } catch { /* 깨진 줄 폐기 */ }
     }
-    fs.writeFileSync(SCOUT_USAGE_FILE, kept.length ? kept.join("\n") + "\n" : "", "utf8");
-  } catch { /* 파일 없음/잠김 — 다음 기회 */ }
+    if (kept.length === nonEmpty) return kept.length;
+    fs.writeFileSync(file, kept.length ? kept.join("\n") + "\n" : "", "utf8");
+    return kept.length;
+  } catch (e) { return e && e.code === "ENOENT" ? 0 : -1; }
 }
-function appendScoutUsage(ev) {
+function appendStatsLocked(file, row) {
   try {
-    if (!ev || !ev.arm) return false;
-    fs.mkdirSync(STATS_DIR, { recursive: true });
-    fs.appendFileSync(SCOUT_USAGE_FILE, JSON.stringify(ev) + "\n", "utf8");
-    trimScoutUsage(60);
-    return true;
-  } catch { return false; } // best-effort — 비용 기록 실패가 지도 생성 흐름을 막지 않음
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const w = withFileLockStrict(file + ".lock", () => {
+      fs.appendFileSync(file, JSON.stringify(row) + "\n", "utf8");
+      return trimStatsUnlocked(file, 60) >= 0;
+    });
+    return w.ok === true && w.result === true;
+  } catch { return false; }
 }
+function trimStatsLocked(file, maxDays) {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const w = withFileLockStrict(file + ".lock", () => trimStatsUnlocked(file, maxDays));
+    return w.ok ? w.result : -1;
+  } catch { return -1; }
+}
+function trimScoutUsage(maxDays = 60) { return trimStatsLocked(SCOUT_USAGE_FILE, maxDays); }
+function appendScoutUsage(ev) {
+  if (ev && ev.schema === "scout-usage-v2") {
+    const row = normalizeScoutUsageV2(ev);
+    return !!row && appendStatsLocked(SCOUT_USAGE_FILE, row);
+  }
+  if (!ev || typeof ev.arm !== "string" || !ev.arm || !isoP10(ev.ts)) return false;
+  return appendStatsLocked(SCOUT_USAGE_FILE, ev);
+}
+function appendMapAutomation(ev) {
+  const row = normalizeMapAutomationV1(ev);
+  return !!row && appendStatsLocked(MAP_ROUTE_FILE, row);
+}
+function appendLegacyMapRoute(ev) {
+  if (!ev || typeof ev !== "object" || !isoP10(ev.ts)) return false;
+  return appendStatsLocked(MAP_ROUTE_FILE, ev);
+}
+function trimMapAutomation(maxDays = 60) { return trimStatsLocked(MAP_ROUTE_FILE, maxDays); }
 
 // ── P-8 2단(설계 동결 v10) — 계약 저장 단일 관문 updateContractPatch + 계약 전용 v10 잠금 ─────────────
 // v10 잠금 계약: 토큰=구조화 JSON({v:1,pid,rnd,ts}) wx 선점 → '획득 직후 read-back fence'(내 토큰 재확인 —
@@ -1875,6 +1967,29 @@ const SCOUTS_DIR = path.join(BRIDGE_DIR, "scouts");           // 지도 보관�
 const SCOUT_ADVICE_DIR = path.join(BRIDGE_DIR, "scout-advice"); // 상태 서명 기억(프로젝트별 1파일)
 function wsKeyFor(ws) { // 계약 키·지도 보관함 키와 반드시 동일 규칙(sha1(normWs) 앞 16자)
   return crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0, 16);
+}
+function repoKeyForStats(repo) {
+  let actual;
+  try { actual = fs.realpathSync(repo); } catch { actual = path.resolve(repo); }
+  return crypto.createHash("sha1").update(normWs(actual)).digest("hex").slice(0, 16);
+}
+// Windows의 shell:true spawn은 대상 명령이 없어도 cmd.exe PID를 돌려준다. 통계의 "실제 CLI 시작"을
+// 셸 시작으로 오인하지 않도록, 셸을 열기 전에 절대/상대 경로나 PATH의 실파일을 먼저 확인한다.
+function resolveExecutableForSpawn(command, env) {
+  const cmd = typeof command === "string" ? command.trim() : "";
+  if (!cmd) return null;
+  const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
+  if (path.isAbsolute(cmd) || /[\\/]/.test(cmd)) return isFile(cmd) ? cmd : null;
+  if (process.platform !== "win32") return cmd; // POSIX 생산 경로는 shell:false라 spawn pid가 대상 시작 증거다.
+  const e = env || process.env;
+  const dirs = String(e.Path || e.PATH || "").split(path.delimiter).map((x) => x.replace(/^"|"$/g, "")).filter(Boolean);
+  const hasExt = !!path.extname(cmd);
+  const exts = hasExt ? [""] : String(e.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  for (const dir of dirs) for (const ext of exts) {
+    const candidate = path.join(dir, cmd + ext);
+    if (isFile(candidate)) return candidate;
+  }
+  return null;
 }
 // ── 정찰 대상(scoutRepo) 해석(P1 — 세션 폴더≠개발 레포 해소) ──────────────
 // 계약의 scoutRepo(사용자 명시 지정)가 유효하면 정찰 계열(지도·꾸러미 대상·장부·확인신호·게이트)의 기준 경로가 된다.
@@ -3584,3 +3699,14 @@ module.exports.contractLockIssue = contractLockIssue;
 module.exports.validLinksShape = validLinksShape;
 module.exports.receiptSettled = receiptSettled;
 module.exports.codexRoleRevision = codexRoleRevision;
+// P10 통계 v1 — strict writer/parser와 두 원장 경로.
+module.exports.normalizeScoutUsageV2 = normalizeScoutUsageV2;
+module.exports.validateScoutUsageV2 = validateScoutUsageV2;
+module.exports.appendMapAutomation = appendMapAutomation;
+module.exports.appendLegacyMapRoute = appendLegacyMapRoute;
+module.exports.trimMapAutomation = trimMapAutomation;
+module.exports.normalizeMapAutomationV1 = normalizeMapAutomationV1;
+module.exports.validateMapAutomationV1 = validateMapAutomationV1;
+module.exports.MAP_ROUTE_FILE = MAP_ROUTE_FILE;
+module.exports.repoKeyForStats = repoKeyForStats;
+module.exports.resolveExecutableForSpawn = resolveExecutableForSpawn;

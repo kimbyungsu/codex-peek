@@ -213,7 +213,7 @@ console.log("[5b] P6 — 자동 지시·어긋남 분기의 codex 러너 반영"
   ok(extSrc.includes('live.arm === "codex" ? "Codex 정찰"'), "소비점⑤ 상태바 정찰 줄 3값");
   ok((extSrc.match(/scoutLiveNow\.arm === "codex" \? "Codex 정찰"/g) || []).length === 2, "소비점⑥⑦ LLM 호출 줄+flow 진행 툴팁 3값(정확히 2곳)");
   ok((extSrc.match(/=== "codex" \? "·Codex"/g) || []).length === 3, "소비점⑧⑨⑩′ 상태바 '탐색중' 접미 3곳(연결 상태바+미연결 상태바+flow 화살표) — codex 무표기 잔재 소멸(2·3차 blocker①)");
-  ok(extSrc.includes('const cx=sc["codex"]'), "소비점⑩ 통계 탭 Codex 정찰 행");
+  ok(extSrc.includes('["codex","Codex"]') && extSrc.includes('addPurpose(T("영향지도 생성","Impact-map generation"),usage.byFlowProvider,"map-scout")'), "소비점⑩ P10 목적별 통계의 Codex 영향지도 행");
   ok(clSrc.includes('meta.arm === "codex" ? "Codex scout"') && clSrc.includes('meta.arm === "codex" ? "Codex 정찰"'), "소비점⑪ 검증 프롬프트 동봉 머리(지도 attach) 3값 ko/en(2차 blocker①)");
   ok(extSrc.includes("scope-scout-codex.js (Codex 정찰)") && extSrc.includes("scope-scout-codex.js (Codex scout)"), "빈 게시판 안내에 codex 러너 포함");
   ok(extSrc.includes('o.scoutArm === "codex"'), "확장 Contract 정규화(loadContract)·타입 합타입도 codex 허용(보완 수용)");

@@ -17,6 +17,7 @@ import { applyAutoPinUpdate, autoPinReplacementReady, autoPinWriteAllowed, choos
 import { scoutDirectiveText, scoutLedgerNotes } from "./scope-package";
 import { firstImplementerMetaFromHistory } from "./implementer-baseline";
 import { assessCodexHookHeartbeat, assessCodexHookTrust, CodexHookTrustCache } from "./codex-hook-health";
+import { collectCurrentMapState, collectMapHistoryState, CurrentMapState, MapAutomationStats, MapUsageStats, RunLockObservation } from "./map-stats";
 
 const HOME = os.homedir();
 // 자체 namespace 폴더. CODEX_BRIDGE_HOME으로 override(확장 호스트≠훅 home 환경 대비 — 브릿지·훅과 동일 규칙).
@@ -59,6 +60,8 @@ function withIntegrityLockExt<T>(fn: () => T): T {
 }
 const PHASE_FILE = path.join(BRIDGE_DIR, "phase.json"); // 검증 파이프라인 라이브 단계(훅/브릿지 기록 → 상태바·진행 스트립)
 const VERDICTS_FILE = path.join(BRIDGE_DIR, "stats", "verdicts.jsonl"); // 검증 통계 누적(append-only, 브릿지가 flagVerdict에서 기록) → 탭2 집계 소스.
+const MAP_USAGE_FILE = path.join(BRIDGE_DIR, "stats", "scout-usage.jsonl"); // P10 목적별 외부 호출(60일 원장·28일 화면)
+const MAP_AUTOMATION_FILE = path.join(BRIDGE_DIR, "stats", "map-route.jsonl"); // P10 자동 의미 보강 실행·작업 종결(60일 원장·28일 화면)
 const PHASE_STALE_FLOOR_MS = 15 * 60 * 1000; // 실제 상한은 dashboard verifyTimeoutMin+5분. 기본값 시에도 과거 15분 무회귀.
 // 두뇌 drift '최근 실제값' 신선도(7일). 이보다 오래된 답/세션은 stale로 보고 경고 안 함 — 옛 모델 기록(예: 몇 주 전 다른 모델 사용)이 거짓 drift 내는 것 방지.
 // 24h→7일 확장(사용자 결정 2026-07-05): 여러 프로젝트 병행 개발에선 3일+ 텀이 일상이라, 24h는 하루만 쉬어도 모든 프로젝트의
@@ -180,7 +183,6 @@ interface BridgeState {
   live: LiveStage | null;      // 검증 파이프라인 라이브 단계(없으면 대기) — 상태바·진행 스트립
   verifyTimeoutMin: number;    // 검증(codex) 대기시간(분) — 저장값 또는 기본 8. 브릿지 verifyTimeoutMin과 같은 규칙.
   verifyStats: VerifyStats;    // 탭2 검증 통계(기간별 분포·전환·히트맵) — verify-stats.ts computeVerifyStats 결과
-  scoutCosts: ScoutCosts;      // 정찰(3트랙) 비용 28일 합계 — scout-usage.jsonl(지도 프루닝과 무관 · 60일 보존)
   codexTokens: CodexTokens | null; // 연결 코덱스 세션 누적 토큰(없으면 null) — 검증 비용 카드
   implementerTokens: CodexTokens | null; // Codex↔Codex 구현 세션 누적 토큰. Claude↔Codex에서는 null.
   claudeTokens: ClaudeTokens;      // 이 폴더 클로드 대화기록 28일 토큰 + 턴수 — 작업 비용(코덱스 검증 비용과 분리)
@@ -195,6 +197,10 @@ interface BridgeState {
   mapReadiness: any | null; // P7 — readiness 뷰(contract-lib mapReadinessView 산출·precision 지문은 호스트 주입)
   enrich: any | null; // P8 — 자동 보강 상태(동의·장부 요약 — 표시 전용·정본은 실행기 장부)
   intent: any | null; // P9 — 정책 충돌 선택·조사 정보·손상 복구(3트랙에서만)
+  mapCurrent: CurrentMapState | null; // P10 증분 2 — 현재 지도 건강도와 재사용한 P9 판단 스냅샷
+  mapAutomation: MapAutomationStats | null; // P10 증분 3 — 실제 저장소의 최근 28일 자동 의미 보강
+  mapUsage: MapUsageStats | null; // P10 증분 3 — 목적·공급자별 외부 호출과 사용량
+  mapStatsRead: { usage: "ok" | "absent" | "unreadable"; automation: "ok" | "absent" | "unreadable" } | null; // 원장 부재와 판독 실패를 0건으로 혼동하지 않음
   scoutTarget: { repo: string; differs: boolean; invalid: boolean; configured: boolean; inherited: boolean; drift: { repo: string; sample: number; agree: number } | null } | null; // P1 정찰 대상 + 어긋남 자기진단(2026-07-10). null=2트랙
   scoutGate: { eff: string; raw: string | null } | null; // 실효 플랜 게이트(표시 전용 — 3트랙에서만, 계약에 저장 안 함). null=2트랙/ws 없음
   scoutArm: { raw: string | null; eff: "self" | "deepseek" | "codex"; hasKey: boolean; slot?: string } | null; // 탐색 담당(2026-07-20·P6 codex 추가) — raw=명시 선택(반대 언어 슬롯 상속·null=미지정), eff=실효(deepseek는 키 없으면 self 강등·codex는 강등 없음), slot=계산 언어. null=2트랙/ws 없음
@@ -1476,9 +1482,27 @@ function readVerifyStats(ws: string | null, now = Date.now()) {
 function readScoutCosts(ws: string | null, now = Date.now()): ScoutCosts {
   if (!ws) return computeScoutCosts("", now, "", normWs);
   let raw = "";
-  try { raw = fs.readFileSync(path.join(BRIDGE_DIR, "stats", "scout-usage.jsonl"), "utf8"); } catch { /* 아직 기록 없음 */ }
+  try { raw = fs.readFileSync(MAP_USAGE_FILE, "utf8"); } catch { /* 아직 기록 없음 */ }
   // P1: 지도 기록의 workspace는 '정찰 대상' — 세션 폴더가 아니라 대상 레포 기준으로 걸러야 실측과 일치
   return computeScoutCosts(raw, now, scoutTargetFor(ws).repo, normWs);
+}
+
+// P10 실행 잠금 관찰. 고정 시간으로 중단을 추측하지 않고, 같은 runId의 소유 프로세스가
+// 확실히 살아 있거나 ESRCH로 죽은 경우만 구분한다. 권한·플랫폼상 확인 불가는 별도 상태다.
+function observeMapRunLock(repoKey: string): RunLockObservation {
+  const file = path.join(BRIDGE_DIR, "map-enrich", repoKey + ".run.funlock");
+  let raw = "";
+  try { raw = fs.readFileSync(file, "utf8"); }
+  catch (e: any) { return { state: e && e.code === "ENOENT" ? "absent" : "unreadable", runId: null }; }
+  let lock: any;
+  try { lock = JSON.parse(raw); } catch { return { state: "damaged", runId: null }; }
+  if (!lock || typeof lock !== "object" || Array.isArray(lock) || !Number.isSafeInteger(lock.pid) || lock.pid <= 0
+    || typeof lock.token !== "string" || !lock.token) return { state: "damaged", runId: null };
+  const runId = lock.runId == null ? null : String(lock.runId);
+  if (runId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId))
+    return { state: "damaged", runId: null };
+  try { process.kill(lock.pid, 0); return { state: "alive", runId }; }
+  catch (e: any) { return { state: e && e.code === "ESRCH" ? "dead" : "owner-unverified", runId }; }
 }
 function ackIntegrity(ids: string[] | "all"): boolean {
   return withIntegrityLockExt(() => {
@@ -1793,6 +1817,7 @@ function brainActualTexts(ws: string | null): { cc: string; cx: string; sig: str
 function scoutActualText(ws: string | null): string {
   if (!ws) return "";
   try {
+    if (loadContract(ws).scoutMode !== "on") return ""; // 2트랙은 숨은 scout-usage 판독도 하지 않는다(P10 화면 경계).
     const sc = readScoutCosts(ws);
     const en = loadLangExt() === "en";
     let best: { arm: string; ts: number } | null = null;
@@ -2041,6 +2066,66 @@ function computeState(turnsN: number): BridgeState {
   syncSessionMissing(ws);
   syncCodexHookHealth(ws);
 
+  // P10 증분 2: 설정된 실제 지도 저장소를 한 번만 해석한다. 다른 대상이
+  // 설정되었을 때 대시보드 작업공간을 대신 집계해서는 안 된다.
+  const mapActualRepo = (() => {
+    if (!ws || contract.scoutMode !== "on") return null;
+    try {
+      const CL10: any = bridgeLib();
+      if (!CL10 || typeof CL10.resolveScoutRepo !== "function") return null;
+      const resolved = CL10.resolveScoutRepo(ws, contract);
+      return resolved && typeof resolved.repo === "string" && resolved.repo.trim() ? resolved.repo : null;
+    } catch { return null; }
+  })();
+  // 기존 P9 순서와 부작용은 정확히 한 번 유지한다. P10은 이 결과만 재사용하며
+  // 향후 통계 화면을 열거나 새로 고친다는 이유로 별도 스윕을 시작하지 않는다.
+  let intentState: any | null = null;
+  const collectIntentState = () => {
+    if (!ws) return null;
+    try {
+      if (contract.scoutMode !== "on") return null;
+      const repo9 = mapActualRepo || ws;
+      const MI9: any = require(path.join(BRIDGE_DIR, "map-intent.js"));
+      const recovery = MI9.collectRecoveryState(repo9, { ws });
+      let dashboard: any = null, sweep: any = null;
+      if (recovery && recovery.ok && recovery.topologyState === "ok" && typeof recovery.mapId === "string") {
+        sweep = MI9.sweepIntentAuto(repo9, recovery.mapId, { ws });
+        dashboard = MI9.collectIntentDashboard(repo9, recovery.mapId);
+      }
+      return {
+        repo: repo9,
+        recovery,
+        dashboard,
+        sweep: sweep ? { ok: !!sweep.ok, outcome: sweep.outcome, scanned: sweep.scanned || 0, applied: sweep.applied || 0, declined: sweep.declined || 0, conflicts: sweep.conflicts || 0, errors: sweep.errors || 0 } : null,
+      };
+    } catch { return null; }
+  };
+  const collectMapCurrent = (currentIntent: any | null) => collectCurrentMapState(contract.scoutMode === "on", mapActualRepo, currentIntent, {
+    readProjection: (repo) => {
+      const MR10: any = require(path.join(BRIDGE_DIR, "map-reader.js"));
+      if (!MR10 || typeof MR10.readMapProjection !== "function") throw new Error("map reader unavailable");
+      return MR10.readMapProjection(repo);
+    },
+    deriveFreshness: (repo, projection) => {
+      const MR10: any = require(path.join(BRIDGE_DIR, "map-reader.js"));
+      if (!MR10 || typeof MR10.deriveFreshness !== "function") throw new Error("freshness reader unavailable");
+      return MR10.deriveFreshness(repo, projection);
+    },
+  });
+  // P10 증분 3: 2트랙이면 collectMapHistoryState가 repo key·통계 파일·실행 잠금 수집기를
+  // 하나도 호출하지 않는다. 3트랙에서도 actual repo의 익명 키로만 접고 원 경로는 웹뷰에 싣지 않는다.
+  let mapHistoryState: ReturnType<typeof collectMapHistoryState> = null;
+  const collectMapHistory = () => collectMapHistoryState(contract.scoutMode === "on", mapActualRepo, Date.now(), normWs, {
+    repoKeyFor: (repo) => {
+      const CL10: any = bridgeLib();
+      if (!CL10 || typeof CL10.repoKeyForStats !== "function") throw new Error("stats key unavailable");
+      return CL10.repoKeyForStats(repo);
+    },
+    readUsage: () => fs.readFileSync(MAP_USAGE_FILE, "utf8"),
+    readAutomation: () => fs.readFileSync(MAP_AUTOMATION_FILE, "utf8"),
+    observeRunLock: (repoKey) => observeMapRunLock(repoKey),
+  });
+
   return {
     workspace: ws,
     linkedId,
@@ -2094,7 +2179,6 @@ function computeState(turnsN: number): BridgeState {
     live: computeLiveStage(linkedId),
     verifyTimeoutMin: clampVerifyTimeout(links.settings?.verifyTimeoutMin),
     verifyStats: readVerifyStats(ws), // 탭2 검증 통계(기간별 분포·전환·히트맵) — 이 폴더(ws) 기준
-    scoutCosts: readScoutCosts(ws),   // 정찰 비용(28일 · 정찰 방식별) — 사용자 비용 추정용 투명 기록(2026-07-09)
     codexTokens,                      // 연결 코덱스 세션 누적 토큰(검증 비용 카드)
     implementerTokens,
     claudeTokens: readClaudeTokens(ws), // 이 폴더 클로드 작업 토큰(28일) — 코덱스와 분리
@@ -2138,27 +2222,11 @@ function computeState(turnsN: number): BridgeState {
         };
       } catch { return null; }
     })(),
-    intent: (() => { // P9 — 조회 발동점은 자동 스윕을 먼저 실행한 뒤 최신 파생 카드만 보낸다.
-      if (!ws) return null;
-      try {
-        if (loadContract(ws).scoutMode !== "on") return null; // 2트랙=파일·스윕·카드 0
-        const CL9: any = bridgeLib();
-        const repo9 = (CL9 && CL9.resolveScoutRepo ? (CL9.resolveScoutRepo(ws, loadContract(ws)) || {}).repo : null) || ws;
-        const MI9: any = require(path.join(BRIDGE_DIR, "map-intent.js"));
-        const recovery = MI9.collectRecoveryState(repo9, { ws });
-        let dashboard: any = null, sweep: any = null;
-        if (recovery && recovery.ok && recovery.topologyState === "ok" && typeof recovery.mapId === "string") {
-          sweep = MI9.sweepIntentAuto(repo9, recovery.mapId, { ws });
-          dashboard = MI9.collectIntentDashboard(repo9, recovery.mapId);
-        }
-        return {
-          repo: repo9,
-          recovery,
-          dashboard,
-          sweep: sweep ? { ok: !!sweep.ok, outcome: sweep.outcome, scanned: sweep.scanned || 0, applied: sweep.applied || 0, declined: sweep.declined || 0, conflicts: sweep.conflicts || 0, errors: sweep.errors || 0 } : null,
-        };
-      } catch { return null; }
-    })(),
+    intent: (intentState = collectIntentState()),
+    mapCurrent: collectMapCurrent(intentState),
+    mapAutomation: (mapHistoryState = collectMapHistory()) ? mapHistoryState.automation : null,
+    mapUsage: mapHistoryState ? mapHistoryState.usage : null,
+    mapStatsRead: mapHistoryState ? mapHistoryState.readStatus : null,
     mapLedger: readMapLedger(ws),       // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만)
     deepseek: readDeepseekView(),       // 고급설정 탭 — 키 유무·마스킹(원문 미노출)
     scoutCodex: readScoutCodexPrefsExt(), // 고급설정 탭 — Codex 정찰 모델·추론강도(전역·비밀 아님)
@@ -4151,6 +4219,16 @@ class Dashboard {
   .stat-card.s-purple{--accent:var(--vscode-charts-purple)}
   .stat-num{font-size:26px;font-weight:800;color:var(--accent,var(--vscode-charts-blue));line-height:1.1}
   .stat-lbl{font-size:11px;color:var(--vscode-descriptionForeground);margin-top:5px}
+  .map-ops-card{margin:10px 0 14px;padding:14px 16px;border:1px solid var(--vscode-panel-border);border-radius:10px;background:var(--vscode-editor-background)}
+  .map-ops-card h4{margin:0 0 10px;font-size:13px;color:var(--vscode-foreground)}
+  .map-ops-lines{display:flex;flex-direction:column;gap:7px}
+  .map-ops-line{display:flex;gap:12px;justify-content:space-between;align-items:flex-start;padding:7px 9px;border-radius:6px;background:var(--vscode-editorWidget-background)}
+  .map-ops-line .map-ops-key{font-weight:650;color:var(--vscode-foreground)}
+  .map-ops-line .map-ops-val{text-align:right;color:var(--vscode-descriptionForeground);font-variant-numeric:tabular-nums}
+  .map-ops-purpose{margin:7px 0 2px;font-size:12px;font-weight:750;color:var(--vscode-foreground)}
+  .map-ops-detail{margin:0;padding:7px 9px;border-radius:6px;background:var(--vscode-editorWidget-background)}
+  .map-ops-detail summary{cursor:pointer;color:var(--vscode-foreground)}
+  .map-ops-detail .muted{margin-top:6px}
   .stat-chart{display:flex;gap:22px;align-items:center;flex-wrap:wrap;margin:10px 0 14px;padding:14px 16px;border:1px solid var(--vscode-panel-border);border-radius:10px;background:var(--vscode-editor-background)}
   .chart-h{font-size:14px;font-weight:800;color:var(--vscode-foreground);margin:4px 0 14px;padding:6px 12px 6px 13px;border-left:4px solid var(--vscode-charts-blue);background:color-mix(in srgb,var(--vscode-charts-blue) 9%,var(--vscode-editorWidget-background));border-radius:0 7px 7px 0;line-height:1.45}
   .chart-h .muted{font-weight:400;font-size:11px}
@@ -4622,17 +4700,60 @@ class Dashboard {
         <div class="stat-card s-purple"><div class="stat-num" id="st7res">–</div><div class="stat-lbl">${t("실패·보류→통과 전환 (7일)", "fail/hold→pass turnarounds (7d)")}</div></div>
       </div>
       <div id="scoutImpact" style="display:none">
-        <h3 class="chart-h" style="margin-top:12px">${t("3트랙 기여 — 정찰이 검증에 실제로 보탠 것 (관찰 신호 · 누적)", "3-track contribution — what recon actually fed into verification (observed signals · cumulative)")}</h3>
-        <div class="stat-cards">
-          <div class="stat-card s-blue"><div class="stat-num" id="siProposed">–</div><div class="stat-lbl">${t("지도가 발견해 기억에 올린 결합", "couplings maps discovered & remembered")}</div></div>
-          <div class="stat-card s-orange"><div class="stat-num" id="siAttached">–</div><div class="stat-lbl">${t("다음 지도 자료에 실려 재사용된 횟수", "times re-fed into the next map's material")}</div></div>
-          <div class="stat-card s-green"><div class="stat-num" id="siConfirmed">–</div><div class="stat-lbl">${t("검증·사용자가 실제 확인(신뢰 승격 재료)", "actually confirmed by verify/user")}</div></div>
-          <div class="stat-card s-purple"><div class="stat-num" id="siGuard">–</div><div class="stat-lbl">${t("틀림 판명(재실수 방지 각주행) · 복권", "judged wrong (mistake guard) · rehabilitated")}</div></div>
+        <div id="mapOps">
+          <h3 class="chart-h" style="margin-top:12px">${t("Project MAP 운영 현황", "Project MAP operations")}</h3>
+          <div class="map-ops-card">
+            <h4>${t("1. 현재 지도 상태", "1. Current map state")}</h4>
+            <p id="mapCurrentStatus" class="muted"></p>
+            <div id="mapCurrentHealth" class="stat-cards">
+              <div class="stat-card s-blue"><div class="stat-num" id="mcTotal">–</div><div class="stat-lbl">${t("현재 확인 대상", "items checked now")}</div></div>
+              <div class="stat-card s-green"><div class="stat-num" id="mcFresh">–</div><div class="stat-lbl">${t("최신 근거", "current evidence")}</div></div>
+              <div class="stat-card s-orange"><div class="stat-num" id="mcStale">–</div><div class="stat-lbl">${t("근거 파일이 바뀌어 갱신 필요", "source files changed — refresh needed")}</div></div>
+              <div class="stat-card s-purple"><div class="stat-num" id="mcUnknown">–</div><div class="stat-lbl">${t("현재 확인할 자료 부족", "not enough evidence to check now")}</div></div>
+              <div class="stat-card s-orange"><div class="stat-num" id="mcDegraded">–</div><div class="stat-lbl">${t("검증 근거가 맞지 않아 임시 제외", "temporarily excluded because verification evidence does not match")}</div></div>
+            </div>
+          </div>
+          <div class="map-ops-card">
+            <h4>${t("2. 최근 자동 의미 보강", "2. Recent automatic semantic enrichment")}</h4>
+            <div class="stat-cards">
+              <div class="stat-card s-green"><div class="stat-num" id="maCompletion">–</div><div class="stat-lbl">${t("사람 확인 없이 끝난 고유 작업 묶음", "unique job groups finished without human review")}</div></div>
+              <div class="stat-card s-blue"><div class="stat-num" id="maJobs">–</div><div class="stat-lbl">${t("고유 작업 묶음", "unique job groups")}</div></div>
+              <div class="stat-card s-purple"><div class="stat-num" id="maRuns">–</div><div class="stat-lbl">${t("관찰된 실행", "observed runs")}</div></div>
+              <div class="stat-card s-orange"><div class="stat-num" id="maPairs">–</div><div class="stat-lbl">${t("시작·종료 기록이 모두 있는 실행", "runs with both start and terminal records")}</div></div>
+            </div>
+            <div id="mapAutoStates" class="map-ops-lines"></div>
+            <p class="muted">${t("자동 완료 비율은 지도 정확도나 수정 항목 성공률이 아니라, 시작한 고유 작업 묶음이 사람 확인 없이 종결됐는지를 보여줍니다. 종료 기록 없음은 실제 중단 확정이 아니라 마지막 통계 기록이 없다는 뜻입니다.", "The automatic completion ratio is not map accuracy or per-edit success. It shows whether started unique job groups finished without human review. A missing terminal record does not prove interruption; it means the last statistics record is absent.")}</p>
+          </div>
+          <div class="map-ops-card">
+            <h4>${t("3. 현재 선택·복구 대기", "3. Current choices and recovery")}</h4>
+            <div class="stat-cards">
+              <div class="stat-card s-orange"><div class="stat-num" id="miChoices">–</div><div class="stat-lbl">${t("사용자 선택 대기", "waiting for a user choice")}</div></div>
+              <div class="stat-card s-purple"><div class="stat-num" id="miRetry">–</div><div class="stat-lbl">${t("명시 재시도 대기", "waiting for explicit retry")}</div></div>
+              <div class="stat-card s-orange"><div class="stat-num" id="miRecovery">–</div><div class="stat-lbl">${t("손상 복구 필요", "corruption recovery needed")}</div></div>
+              <div class="stat-card s-blue"><div class="stat-num" id="miInvestigations">–</div><div class="stat-lbl">${t("조사 정보", "investigation notes")}</div></div>
+            </div>
+            <p class="muted">${t("현재 스냅샷이며 자동 완료 비율의 분자·분모에는 넣지 않습니다.", "This is a current snapshot and is not included in the automatic completion numerator or denominator.")}</p>
+          </div>
+          <div class="map-ops-card">
+            <h4>${t("4. 목적별 외부 호출·사용량", "4. External calls and usage by purpose")}</h4>
+            <div id="mapUsageRows" class="map-ops-lines"></div>
+          </div>
+          <div class="map-ops-card">
+            <h4>${t("5. 자료 범위와 한계", "5. Data coverage and limits")}</h4>
+            <div id="mapCoverageRows" class="map-ops-lines"></div>
+            <p class="muted">${t("화면은 최근 28일, 원장은 60일 보존합니다. 로컬에서 기록에 성공한 사건만 보여주며 서비스 청구서와 다를 수 있습니다. 토큰 합은 실제 토큰을 확인할 수 있었던 호출만 포함합니다.", "The screen covers the last 28 days and the logs are kept for 60 days. Only events successfully recorded locally are shown, so this can differ from a service bill. Token totals include only calls whose real token counts were available.")}</p>
+          </div>
         </div>
-        <div class="muted" style="font-size:11px">${t("ⓘ 정직 고지: 이건 '2트랙이었다면 놓쳤을 것'의 증명이 아니라, 정찰→검증→기억 루프가 실제로 돌았는지의 관찰 신호예요. '검증 지적이 동봉 지도를 짚었는지' 대조와 '게이트 차단→플랜 수정' 추적은 기록을 새로 심어야 해서 후속입니다.", "ⓘ Honest note: this doesn't prove 'what 2-track would have missed' — it observes whether the recon→verify→memory loop actually ran. Matching verify findings against attached maps, and gate-block→plan-change tracking, need new recording and come later.")}</div>
-        <h3 class="chart-h" style="margin-top:12px">${t("정찰(3트랙) 비용 — 최근 28일 표시 (장부는 60일 보존 · 지도 10장 보관과 무관)", "Recon (3-track) cost — last 28 days shown (log kept 60 days · independent of map pruning)")}</h3>
-        <div id="scoutCostRows"></div>
-        <div class="muted" style="font-size:11px">${t("ⓘ DeepSeek 정찰·연결 점검은 응답이 알려준 실측 토큰(입력/출력)이고, 기본 정찰(Claude)은 쓰시던 구독으로 돌아 별도 결제가 없으며, Codex 정찰은 쓰시는 Codex 계정 사용량 범위로 돌아요 — 이 두 정찰은 도구가 토큰 수를 알려주지 않아 자료·지도 '글자 수'만 기록해요(토큰 아님 — 대략 추정용).", "ⓘ The DeepSeek scout & connection checks show real tokens (in/out) from the API response; the default scout (Claude) runs on your existing subscription (no separate billing) and the Codex scout runs within your existing Codex account usage — neither tool reports tokens, so only character counts of package/map are recorded (not tokens — rough estimation only).")}</div>
+        <div id="scoutSignals">
+          <h3 class="chart-h" style="margin-top:12px">${t("3트랙 기여 — 정찰이 검증에 실제로 보탠 것 (관찰 신호 · 누적)", "3-track contribution — what recon actually fed into verification (observed signals · cumulative)")}</h3>
+          <div class="stat-cards">
+            <div class="stat-card s-blue"><div class="stat-num" id="siProposed">–</div><div class="stat-lbl">${t("지도가 발견해 기억에 올린 결합", "couplings maps discovered & remembered")}</div></div>
+            <div class="stat-card s-orange"><div class="stat-num" id="siAttached">–</div><div class="stat-lbl">${t("다음 지도 자료에 실려 재사용된 횟수", "times re-fed into the next map's material")}</div></div>
+            <div class="stat-card s-green"><div class="stat-num" id="siConfirmed">–</div><div class="stat-lbl">${t("검증·사용자가 실제 확인(신뢰 승격 재료)", "actually confirmed by verify/user")}</div></div>
+            <div class="stat-card s-purple"><div class="stat-num" id="siGuard">–</div><div class="stat-lbl">${t("틀림 판명(재실수 방지 각주행) · 복권", "judged wrong (mistake guard) · rehabilitated")}</div></div>
+          </div>
+          <div class="muted" style="font-size:11px">${t("ⓘ 정직 고지: 이건 '2트랙이었다면 놓쳤을 것'의 증명이 아니라, 정찰→검증→기억 루프가 실제로 돌았는지의 관찰 신호예요. '검증 지적이 동봉 지도를 짚었는지' 대조와 '게이트 차단→플랜 수정' 추적은 기록을 새로 심어야 해서 후속입니다.", "ⓘ Honest note: this doesn't prove 'what 2-track would have missed' — it observes whether the recon→verify→memory loop actually ran. Matching verify findings against attached maps, and gate-block→plan-change tracking, need new recording and come later.")}</div>
+        </div>
       </div>
       <div class="stat-chart">
         <div class="chart-box">
@@ -4796,6 +4917,10 @@ class Dashboard {
   // UI 언어(웹뷰 생성 시 고정 — 전환 시 확장이 HTML을 재생성). 동적 문자열은 T(ko,en)으로 정적 라벨과 같은 언어 유지.
   const UI_EN = ${EN};
   function T(ko, en){ return UI_EN ? en : ko; }
+  // P10 화면 계약: Project MAP 운영 카드는 기존 검증 결과·토큰·프로필 뒤에 온다.
+  // 템플릿에서는 3트랙 묶음을 한 덩어리로 유지하고, 초기 DOM에서 최종 표시 위치만 확정한다.
+  const statsNoteNode=$("statsNote"), mapOpsNode=$("scoutImpact");
+  if(statsNoteNode&&mapOpsNode) statsNoteNode.insertAdjacentElement("afterend",mapOpsNode);
   document.getElementById("refresh").addEventListener("click", () => vscode.postMessage({type:"refresh"}));
   function el(tag, cls, text){ const e=document.createElement(tag); if(cls)e.className=cls; if(text!=null)e.textContent=text; return e; }
   // 폼에서 고른 값(curVM/curIM, 저장 시 전송) vs 저장돼 실제 적용 중인 값(appVM/appIM, 지도·'지금 받는 것'에 표시).
@@ -5246,12 +5371,129 @@ class Dashboard {
       row.appendChild(lbl); row.appendChild(bar); row.appendChild(num); wrap.appendChild(row);
     });
   }
-  function renderStats(vs){
+  function renderMapOps(d){
+    var root=$("scoutImpact"); if(!root) return;
+    var on=!!(d && d.contract && d.contract.scoutMode === "on");
+    root.style.display=on?"":"none";
+    if(!on) return;
+    var nf=function(n){ return Number(n||0).toLocaleString(); };
+    var set=function(id,v){ var e=$(id); if(e) e.textContent=String(v); };
+    var ratioCount=function(n,total,ratio){ return ratio===null ? nf(n) : nf(n)+"/"+nf(total)+" · "+Math.round(ratio*100)+"%"; };
+    var addLine=function(box,label,value){
+      if(!box) return;
+      var row=document.createElement("div"); row.className="map-ops-line";
+      var key=document.createElement("span"); key.className="map-ops-key"; key.textContent=label;
+      var val=document.createElement("span"); val.className="map-ops-val"; val.textContent=value;
+      row.appendChild(key); row.appendChild(val); box.appendChild(row);
+    };
+    var clear=function(e){ if(e) while(e.firstChild) e.removeChild(e.firstChild); };
+
+    var cur=d.mapCurrent, health=cur&&cur.source==="v2"?cur.health:null, status=$("mapCurrentStatus"), healthBox=$("mapCurrentHealth");
+    var sourceText=!cur?T("현재 확인할 자료가 없습니다.","No current data is available.")
+      :cur.source==="v2"?T("Project MAP을 읽어 현재 근거 상태를 확인했습니다.","Project MAP was read and its current evidence state was checked.")
+      :(cur.source==="none"||cur.source==="legacy")?T("아직 Project MAP 기준으로 전환되지 않았습니다.","This repository has not yet switched to the Project MAP baseline.")
+      :cur.source==="blocked"?T("지도를 읽을 수 없어 확인이 필요합니다.","The map could not be read and needs attention.")
+      :T("이번 판독에서는 현재 지도 상태를 확인할 수 없습니다.","The current map state could not be determined in this read.");
+    if(status) status.textContent=sourceText+(health&&health.total<5?T(" 유효 항목이 5개 미만이라 비율은 숨기고 건수만 표시합니다."," With fewer than 5 valid items, ratios are hidden and only counts are shown."):"");
+    if(healthBox) healthBox.style.display=health?"":"none";
+    if(health){
+      set("mcTotal",nf(health.total));
+      set("mcFresh",ratioCount(health.fresh,health.total,health.ratios.fresh));
+      set("mcStale",ratioCount(health.stale,health.total,health.ratios.stale));
+      set("mcUnknown",ratioCount(health.unknown,health.total,health.ratios.unknown));
+      set("mcDegraded",nf(health.degraded));
+    }
+
+    var reads=d.mapStatsRead||null, au=d.mapAutomation, auReadable=!!au&&(!reads||reads.automation!=="unreadable");
+    set("maCompletion",auReadable?(nf(au.completion.numerator)+"/"+nf(au.completion.denominator)+(au.completion.ratio===null?T(" · 비율은 5건부터"," · ratio from 5 cases"):" · "+Math.round(au.completion.ratio*100)+"%")):(reads&&reads.automation==="unreadable"?T("판독 불가","unreadable"):"–"));
+    set("maJobs",auReadable?nf(au.jobs):(reads&&reads.automation==="unreadable"?T("판독 불가","unreadable"):"–"));
+    set("maRuns",auReadable?nf(au.observedRuns):(reads&&reads.automation==="unreadable"?T("판독 불가","unreadable"):"–"));
+    set("maPairs",auReadable?nf(au.pairedRuns):(reads&&reads.automation==="unreadable"?T("판독 불가","unreadable"):"–"));
+    var autoBox=$("mapAutoStates"); clear(autoBox);
+    if(reads&&reads.automation==="unreadable") addLine(autoBox,T("최근 기록","Recent records"),T("자동 실행 원장을 읽을 수 없습니다.","The automation log could not be read."));
+    else if(!au) addLine(autoBox,T("최근 기록","Recent records"),T("현재 확인할 자료가 없습니다.","No data is available now."));
+    else {
+      var states=[
+        ["applied",T("지도에 반영하고 끝남","applied to the map and finished")],
+        ["settled",T("바꿀 것 없이 끝남","finished with nothing to change")],
+        ["awaiting",T("확인 대기","waiting for review")],
+        ["parked",T("나중 처리로 보관","parked for later")],
+        ["provider-failed",T("외부 모델 호출 실패","external model call failed")],
+        ["error",T("처리 오류","processing error")],
+        ["interrupted",T("소유 프로세스 종료 확인","owner process confirmed stopped")],
+        ["running",T("진행 중","running")],
+        ["state-unknown",T("실행 상태 확인 불가","run state unavailable")],
+        ["terminal-missing",T("종료 기록 없음","terminal record missing")],
+        ["busy",T("다른 실행이 처리 중","another run was active")],
+        ["noop",T("실행할 일 없음","nothing to run")]
+      ];
+      var jobParts=[]; states.forEach(function(x){ var n=Number((au.jobsByState||{})[x[0]]||0); if(n) jobParts.push(x[1]+" "+nf(n)); });
+      var runParts=[]; states.forEach(function(x){ var n=Number((au.runsByState||{})[x[0]]||0); if(n) runParts.push(x[1]+" "+nf(n)); });
+      addLine(autoBox,T("고유 작업의 최신 상태","Latest state of unique jobs"),jobParts.length?jobParts.join(" · "):T("기록 없음","no records"));
+      addLine(autoBox,T("실행 상태","Run states"),runParts.length?runParts.join(" · "):T("기록 없음","no records"));
+      var reasonLabels={
+        "already-enriched":T("이미 최신","already current"), "queue-stale":T("대기표가 교체됨","queue replaced"),
+        "parked-existing":T("이미 나중 처리로 보관됨","already parked"), "none":T("추가 사유 없음","no additional reason")
+      };
+      var reasonParts=[]; Object.keys(au.noopByReason||{}).forEach(function(k){ reasonParts.push((reasonLabels[k]||T("그 밖의 정상 사유","other normal reason"))+" "+nf(au.noopByReason[k])); });
+      if(reasonParts.length) addLine(autoBox,T("실행할 일 없음의 사유","Reasons nothing ran"),reasonParts.join(" · "));
+    }
+
+    var intent=cur&&cur.intent?cur.intent:null;
+    var known=function(v){ return Number.isFinite(v)?nf(v):T("자료 없음","no data"); };
+    set("miChoices",intent?known(intent.choicePending):T("자료 없음","no data"));
+    set("miRetry",intent?known(intent.retryPending):T("자료 없음","no data"));
+    set("miInvestigations",intent?known(intent.investigations):T("자료 없음","no data"));
+    set("miRecovery",!intent||intent.recoveryNeeded===null?T("자료 없음","no data"):(intent.recoveryNeeded?T("필요","needed"):T("없음","none")));
+
+    var usage=d.mapUsage, usageReadable=!!usage&&(!reads||reads.usage!=="unreadable"), usageBox=$("mapUsageRows"); clear(usageBox);
+    var providers=[["claude","Claude"],["deepseek","DeepSeek"],["codex","Codex"]];
+    var usageText=function(c){
+      return T(nf(c.calls)+"회 · 실제 토큰 확인 "+nf(c.tokenCoveredCalls)+"/"+nf(c.calls)+"회 · 확인된 입력 "+nf(c.tokenIn)+" / 출력 "+nf(c.tokenOut)+" tok · 토큰 미제공 호출의 입력 "+nf(c.charsWithoutTokensIn)+" / 출력 "+nf(c.charsWithoutTokensOut)+"자",
+        nf(c.calls)+" call(s) · real tokens available for "+nf(c.tokenCoveredCalls)+"/"+nf(c.calls)+" · known in "+nf(c.tokenIn)+" / out "+nf(c.tokenOut)+" tok · calls without tokens: in "+nf(c.charsWithoutTokensIn)+" / out "+nf(c.charsWithoutTokensOut)+" chars");
+    };
+    var addPurpose=function(title,source,prefix){
+      var h=document.createElement("div"); h.className="map-ops-purpose"; h.textContent=title; usageBox.appendChild(h);
+      var any=false;
+      providers.forEach(function(p){
+        var c=source&&source[prefix?prefix+"|"+p[0]:p[0]]; if(!c) return; any=true;
+        var detail=document.createElement("details"); detail.className="map-ops-detail";
+        var summary=document.createElement("summary"); summary.textContent=p[1]+" — "+usageText(c); detail.appendChild(summary);
+        var models=document.createElement("div"); models.className="muted"; models.textContent=(c.models&&c.models.length)?T("기록된 모델: ","Recorded models: ")+c.models.join(", "):T("모델 이름 기록 없음","No model name recorded"); detail.appendChild(models);
+        usageBox.appendChild(detail);
+      });
+      if(!any) addLine(usageBox,T("기록","Records"),T("호출 0회","0 calls"));
+    };
+    if(reads&&reads.usage==="unreadable") addLine(usageBox,T("사용량","Usage"),T("외부 호출 원장을 읽을 수 없습니다.","The external-call log could not be read."));
+    else if(usageReadable){
+      addPurpose(T("영향지도 생성","Impact-map generation"),usage.byFlowProvider,"map-scout");
+      addPurpose(T("전역 준비 점검 (현재 프로젝트 비용과 분리)","Global readiness checks (separate from current-project usage)"),usage.globalReadinessByProvider,"");
+      addPurpose(T("의미 보강","Semantic enrichment"),usage.byFlowProvider,"map-enrich");
+      addPurpose(T("검증 담당 판정","Verifier adjudication"),usage.byFlowProvider,"map-adjudicate");
+    } else addLine(usageBox,T("사용량","Usage"),T("현재 확인할 자료가 없습니다.","No data is available now."));
+
+    var covBox=$("mapCoverageRows"); clear(covBox);
+    if(reads&&reads.usage==="unreadable") addLine(covBox,T("외부 호출 원장","External-call log"),T("판독 불가 — 0건으로 해석하지 않음","unreadable — not interpreted as zero records"));
+    else if(usageReadable){ var uc=usage.coverage||{};
+      addLine(covBox,T("외부 호출 기록","External-call records"),T("새 형식 "+nf(uc.validV2)+" · 구형 귀속 가능 "+nf(uc.legacyAttributed)+" · 구형 프로젝트 미상 "+nf(uc.legacyUnknownProject)+" · 손상·미지 제외 "+nf(uc.excluded)+" · 미래 시각 제외 "+nf(uc.future),
+        "new-format "+nf(uc.validV2)+" · attributable legacy "+nf(uc.legacyAttributed)+" · legacy project unknown "+nf(uc.legacyUnknownProject)+" · damaged/unknown excluded "+nf(uc.excluded)+" · future timestamps excluded "+nf(uc.future)));
+    }
+    if(reads&&reads.automation==="unreadable") addLine(covBox,T("자동 실행 원장","Automation log"),T("판독 불가 — 0건으로 해석하지 않음","unreadable — not interpreted as zero records"));
+    else if(auReadable){ var ac=au.coverage||{};
+      addLine(covBox,T("자동 실행 기록","Automation records"),T("유효 행 "+nf(ac.validRows)+" · 정상 시작/종료 쌍 "+nf(au.pairedRuns)+" · 시작 누락 "+nf(ac.startMissing)+" · 유효 작업 종결 "+nf(ac.validJobTerminals)+" · 작업 기준선 없음 "+nf(ac.baselineMissing),
+        "valid rows "+nf(ac.validRows)+" · paired start/terminal "+nf(au.pairedRuns)+" · missing starts "+nf(ac.startMissing)+" · valid job terminals "+nf(ac.validJobTerminals)+" · missing job baselines "+nf(ac.baselineMissing)));
+      addLine(covBox,T("자동 실행 판독 한계","Automation interpretation limits"),T("작업 세대 미상 "+nf(ac.jobGenerationUnknown)+" · 작업 식별 충돌 "+nf(ac.jobIdentityCollision)+" · 실행 상태 확인 불가 "+nf(ac.stateUnknown)+" · 종료 기록 없음 "+nf(ac.terminalMissing)+" · 구형 행 "+nf(ac.legacyRows)+" · 손상·미지 제외 "+nf(ac.excluded)+" · 미래 시각 제외 "+nf(ac.future),
+        "unknown job generation "+nf(ac.jobGenerationUnknown)+" · job identity collisions "+nf(ac.jobIdentityCollision)+" · run state unavailable "+nf(ac.stateUnknown)+" · terminal record missing "+nf(ac.terminalMissing)+" · legacy rows "+nf(ac.legacyRows)+" · damaged/unknown excluded "+nf(ac.excluded)+" · future timestamps excluded "+nf(ac.future)));
+    }
+    if(!usage&&!au&&!reads) addLine(covBox,T("자료 범위","Data coverage"),T("현재 확인할 자료가 없습니다.","No data is available now."));
+  }
+  function renderStats(vs,mapOn){
     if(!vs) return;
     var emptyEl = $("statsEmpty"), bodyEl = $("statsBody");
     if(!emptyEl || !bodyEl) return;
-    if(vs.month.total === 0){ emptyEl.style.display="block"; bodyEl.style.display="none"; return; }
-    emptyEl.style.display="none"; bodyEl.style.display="block";
+    emptyEl.style.display=vs.month.total===0?"block":"none";
+    bodyEl.style.display=(vs.month.total>0||mapOn)?"block":"none";
+    if(bodyEl.style.display==="none") return;
     // ② KPI — 통과(보완)을 통과와 분리. 분모 jw = 판정 표지 있는 것만(표지없음 제외)
     var w = vs.week, jw = w.pass + w.passNotes + w.inconclusive + w.fail;
     var pct = function(n,d){ return d>0 ? Math.round(n/d*100)+"%" : "–"; };
@@ -5618,9 +5860,10 @@ class Dashboard {
     // 구획 격리(safe): 렌더 구획 하나가 특정 데이터 형상에서 예외를 던져도 아래 구획(특히 연결·대화)이 계속
     // 갱신되게 한다 — '한 구획 예외 → 이후 전 구획 영구 미갱신'이 복원 탭 낡음의 유력 경로(3요원 조사 합의).
     function safe(fn){ try{ fn(); }catch(e){ /* 구획 실패는 그 구획만 — 다음 push에서 재시도됨 */ } } // 함수 선언(호이스팅)으로 교체 — 실사고 2026-07-22: const 화살표는 콜백 앞 분기(switchTab·ckLive·modeSwitchNote)의 호출에서 TDZ ReferenceError(잠재해 있다가 증분 1 삽입으로 정의가 밀리며 표면화). 함수 선언은 스코프 전체 호이스팅이라 정의 순서 무관.
-    safe(()=>renderStats(d.verifyStats));          // 탭2 검증 통계 갱신(현황 탭과 같은 data 푸시에 함께 반영)
+    safe(()=>renderStats(d.verifyStats,!!(d.contract&&d.contract.scoutMode==="on"))); // 검증 기록 0이어도 3트랙 P10 운영 카드는 표시
+    safe(()=>renderMapOps(d));                     // P10 현재 지도·자동 실행·선택·목적별 사용량·coverage
     safe(function(){ // 3트랙 기여(관찰 신호) — 일지 이벤트 합계(2026-07-09 사용자 요청 · §6-10 (b) 즉시분)
-      const el=$("scoutImpact"); if(!el) return;
+      const el=$("scoutSignals"); if(!el) return;
       const im=d.mapLedger && d.mapLedger.impact;
       const on = !!(d.contract && d.contract.scoutMode === "on");
       el.style.display = (on && im) ? "" : "none";
@@ -5629,20 +5872,6 @@ class Dashboard {
       $("siAttached").textContent=String(im.attached);
       $("siConfirmed").textContent=String(im.confirmed);
       $("siGuard").textContent=String(im.disputedEv)+" · "+String(im.rehabilitated);
-      // 정찰 비용 행(28일 · 정찰 방식별) — 사용자 비용 추정용(2026-07-09). fmtTok는 renderStats 내부라 여기선 천단위 구분만.
-      const rows=$("scoutCostRows"); if(!rows) return;
-      while(rows.firstChild) rows.removeChild(rows.firstChild);
-      const sc=d.scoutCosts && d.scoutCosts.byArm ? d.scoutCosts.byArm : {};
-      const nf=function(n){ return Number(n||0).toLocaleString(); };
-      const addRow=function(label,val){ const r=document.createElement("div"); r.className="muted"; r.style.margin="2px 0"; r.textContent=label+" — "+val; rows.appendChild(r); };
-      const ds=sc["deepseek"];
-      addRow(T("DeepSeek 지도","DeepSeek maps"), ds ? T(ds.count+"건 · 입력 "+nf(ds.usageIn)+" tok · 출력 "+nf(ds.usageOut)+" tok", ds.count+" run(s) · in "+nf(ds.usageIn)+" tok · out "+nf(ds.usageOut)+" tok") : T("0건","0 runs"));
-      const pg=sc["ping"];
-      addRow(T("연결 점검(3트랙 켤 때 1회·전역)","Connection checks (once per 3-track enable · global)"), pg ? T(pg.count+"건 · 입력 "+nf(pg.usageIn)+" tok · 출력 "+nf(pg.usageOut)+" tok", pg.count+" check(s) · in "+nf(pg.usageIn)+" tok · out "+nf(pg.usageOut)+" tok") : T("0건","0 checks"));
-      const sf=sc["self"];
-      addRow(T("기본 정찰(Claude) 지도 — 별도 결제 없음","Default-scout (Claude) maps — no separate billing"), sf ? T(sf.count+"건 · 자료 "+nf(sf.pkgChars)+"자 · 지도 "+nf(sf.mapChars)+"자(토큰 아님)", sf.count+" run(s) · package "+nf(sf.pkgChars)+" chars · map "+nf(sf.mapChars)+" chars (not tokens)") : T("0건","0 runs"));
-      const cx=sc["codex"]; // P6: Codex 정찰 — 토큰 미제공(exec 최종 메시지만)이라 self와 같은 문자수 정직 표기
-      if(cx) addRow(T("Codex 정찰 지도 — 쓰시는 Codex 계정 사용량 범위","Codex-scout maps — within your existing Codex account usage"), T(cx.count+"건 · 자료 "+nf(cx.pkgChars)+"자 · 지도 "+nf(cx.mapChars)+"자(토큰 아님)", cx.count+" run(s) · package "+nf(cx.pkgChars)+" chars · map "+nf(cx.mapChars)+" chars (not tokens)"));
     });
     safe(()=>renderTokens(d.codexTokens));         // 토큰 카드 갱신(연결 검증 세션 누적)
     safe(()=>{ if(d.contract&&d.contract.harnessMode==="codex-codex")renderCodexImplementerTokens(d.implementerTokens);else renderClaudeTokens(d.claudeTokens); });

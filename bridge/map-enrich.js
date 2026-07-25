@@ -14,8 +14,7 @@ const CL = require(path.join(__dirname, "contract-lib.js"));
 const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(os.homedir(), ".codex-bridge");
 const ENRICH_DIR = path.join(BRIDGE_DIR, "map-enrich");
 const sha1 = (s) => crypto.createHash("sha1").update(s).digest("hex");
-const realOf = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
-const repoKeyFor = (repo) => sha1(CL.normWs(realOf(repo))).slice(0, 16);
+const repoKeyFor = (repo) => CL.repoKeyForStats(repo);
 const consentFileFor = (repo) => path.join(ENRICH_DIR, "consent-" + repoKeyFor(repo) + ".json");
 const jobFileFor = (repo) => path.join(ENRICH_DIR, repoKeyFor(repo) + ".job.json");
 const deferredFileFor = (repo) => path.join(ENRICH_DIR, repoKeyFor(repo) + ".deferred.json");
@@ -506,16 +505,100 @@ const ROUTE_LOG = path.join(BRIDGE_DIR, "stats", "map-route.jsonl");
 const ROUTE_LOG_DAYS = 60;
 function appendRouteLog(entry) {
   try {
-    fs.mkdirSync(path.dirname(ROUTE_LOG), { recursive: true });
     // P8-5 고정 필드(3b 1차 보완): 부재 필드는 null로 상시 채움 — 감사 행 형태 균일
     const fixed = { ts: null, repoKey: null, mapId: null, mode: null, configWs: null, slot: null, consentGen: null, readinessFp: null, corridor: null, changedCount: null, route: null, reason: null, escalated: null, outcome: null, provider: null, jobKey: null, trigger: null };
-    fs.appendFileSync(ROUTE_LOG, JSON.stringify({ ...fixed, ...entry }) + "\n");
-    // 기간 기반 trim(60일 — 행 수 조건 없음: 저빈도 파일이라 매 기록 시 날짜 필터해도 무해)
-    const cut = Date.now() - ROUTE_LOG_DAYS * 86400000;
-    const lines = fs.readFileSync(ROUTE_LOG, "utf8").split("\n").filter(Boolean);
-    const kept = lines.filter((l) => { try { return new Date(JSON.parse(l).ts).getTime() >= cut; } catch { return false; } });
-    if (kept.length < lines.length) CL.atomicWrite(ROUTE_LOG, kept.join("\n") + "\n");
+    if (!CL.appendLegacyMapRoute({ ...fixed, ...entry })) throw new Error("stats-lock-or-write");
   } catch (e) { try { process.stderr.write("[map-route] 로그 기록 실패(비차단): " + String(e && e.message) + "\n"); } catch { /* 무해 */ } }
+}
+
+// ── P10 자동 실행 기록(새 형식) ──────────────────────────────────────────────
+function p10Trigger(v) { const s = String(v || ""); return s.startsWith("link:") ? "link" : ["consent", "retry", "probe", "tick", "cli", "link"].includes(s) ? s : "unknown"; }
+function p10Provider(v) { return v === "self" ? "claude" : v === "economy" ? "deepseek" : v === "precision" ? "codex" : null; }
+function p10Reason(result) {
+  const r = String((result && result.reason) || "");
+  if (!r && result && (result.outcome === "applied" || result.outcome === "settled")) return "none";
+  if (r === "pipeline-wal") return "pipeline-blocked";
+  if (r === "map-lock" || r.startsWith("topology-")) return "map-unavailable";
+  if (r === "queue-stale") return "queue-stale";
+  if (r.includes("deferred-damaged") || r.startsWith("deferred-result")) return "deferred-damaged";
+  if (r === "deferred-retry" || r === "legacy-deferred-retry") return "deferred-retry";
+  if (r.startsWith("job-damaged") || r === "attempt-state") return "job-damaged";
+  if (r === "decision-index" || r === "policy-frontier") return "policy-unavailable";
+  if (r === "parked") return "parked-existing";
+  if (r === "consent-damaged" || r === "no-consent") return "consent-missing";
+  if (r === "consent-stale") return "consent-stale";
+  if (r === "invalid-mode") return "mode-invalid";
+  if (r === "already-enriched") return "already-enriched";
+  if (/^(job|attempt|results|cursor|done)-write/.test(r)) return "state-write-failed";
+  if (r === "adapter-missing" || r.startsWith("adapter-missing:")) return "adapter-missing";
+  if (result && result.outcome === "provider-failed") return "provider-call-failed";
+  if (r === "run-lock-lost") return "lock-lost";
+  if (r === "retry-exhausted" || r === "rev-exhausted") return "retry-exhausted";
+  if (["no-verifier", "inconclusive", "uncertain-call", "resolution-out-of-scope"].includes(r)) return "resolution-pending";
+  if (/^(expire|apply)-/.test(r)) return "apply-failed";
+  if (result && result.outcome === "parked") return "route-parked";
+  return "unknown";
+}
+function lastP10JobTerminal(repoKey, jobKey, jobRunId) {
+  let raw = ""; try { raw = fs.readFileSync(CL.MAP_ROUTE_FILE, "utf8"); } catch { return null; }
+  let last = null;
+  for (const ln of raw.split(/\r?\n/)) {
+    if (!ln.trim()) continue;
+    try { const v = JSON.parse(ln); if (v.event === "enrich-job-terminal" && v.repoKey === repoKey && v.jobKey === jobKey && v.jobRunId === jobRunId && CL.validateMapAutomationV1(v)) last = v; } catch { /* skip */ }
+  }
+  return last;
+}
+function p10JobSnapshot(repo, ref, result) {
+  const jr = readEnrichJob(repo), dr = readDeferred(repo);
+  const current = jr.st === "ok" && jr.job.jobKey === ref.jobKey && jobRunIdOf(jr.job) === ref.jobRunId ? jr.job : null;
+  const prior = lastP10JobTerminal(repoKeyFor(repo), ref.jobKey, ref.jobRunId);
+  let baselineState = "unavailable", everApplied = null, unresolvedBaseItems = null;
+  if (current) {
+    baselineState = "current-job";
+    const applied = new Set(), rejected = new Set();
+    for (const a of current.attempts || []) {
+      for (const id of ((a.cursor && a.cursor.appliedPatchIds) || [])) applied.add(id);
+      for (const z of (a.resolutions || [])) if (z && z.verdict === "reject" && z.patchId) rejected.add(z.patchId);
+    }
+    if (dr.st === "ok") for (const d of dr.data.records || []) if (d.jobKey === ref.jobKey && d.jobRunId === ref.jobRunId) {
+      if (d.terminalOutcome === "applied") applied.add(d.patchId);
+      if (d.terminalOutcome === "rejected") rejected.add(d.patchId);
+    }
+    everApplied = applied.size > 0 || !!(prior && prior.everApplied === true);
+    const last = [...(current.attempts || [])].reverse().find((a) => a.results && Array.isArray(a.results.items));
+    if (result && result.jobKey === ref.jobKey && Number.isSafeInteger(result.investigationPending) && result.investigationPending >= 0) unresolvedBaseItems = result.investigationPending;
+    else unresolvedBaseItems = last ? Math.max(0, last.results.items.length - applied.size - rejected.size) : 0;
+  } else if (prior && (prior.baselineState === "current-job" || prior.baselineState === "prior-terminal")) {
+    baselineState = "prior-terminal"; everApplied = prior.everApplied; unresolvedBaseItems = prior.unresolvedBaseItems;
+  }
+  let activeDeferredItems = null, deferredState = "unknown";
+  if (dr.st === "damaged") deferredState = "damaged";
+  else if (baselineState !== "unavailable") {
+    const active = new Map();
+    for (const d of dr.data.records || []) if (d.jobKey === ref.jobKey && d.jobRunId === ref.jobRunId && ["waiting", "calling", "answered", "uncertain"].includes(d.phase)) active.set(String(d.attemptId) + ":" + String(d.itemIndex), d);
+    activeDeferredItems = active.size;
+    deferredState = (unresolvedBaseItems || 0) + activeDeferredItems > 0 ? "pending" : "clear";
+  }
+  return { baselineState, everApplied, unresolvedBaseItems, activeDeferredItems, deferredState, _currentPhase: current ? current.phase : null, _provider: (() => {
+    if (current && current.attempts && current.attempts.length) return p10Provider(current.attempts[current.attempts.length - 1].provider);
+    return prior ? prior.provider : null;
+  })() };
+}
+function appendP10Terminals(repo, ctx, result) {
+  const reasonCode = ctx.reasonCode || p10Reason(result);
+  const providers = new Set();
+  for (const ref of ctx.affected.values()) {
+    const s = p10JobSnapshot(repo, ref, result);
+    const provider = p10Provider(result && result.provider) || s._provider;
+    if (provider) providers.add(provider);
+    const completedSummary = s.deferredState === "clear" && (s._currentPhase === "done" || p10Reason(result) === "deferred-retry");
+    const outcome = completedSummary ? (s.everApplied ? "applied" : "settled") : result.outcome;
+    const { _currentPhase, _provider, ...stored } = s;
+    CL.appendMapAutomation({ schema: "map-automation-v1", event: "enrich-job-terminal", ts: new Date().toISOString(), repoKey: ctx.repoKey, runId: ctx.runId, jobKey: ref.jobKey, jobRunId: ref.jobRunId, mapId: ctx.mapId, mode: ctx.mode, trigger: ctx.trigger, outcome, reasonCode, provider, ...stored });
+  }
+  const directProvider = p10Provider(result && result.provider);
+  const provider = directProvider || (providers.size === 1 ? [...providers][0] : null);
+  CL.appendMapAutomation({ schema: "map-automation-v1", event: "enrich-run-terminal", ts: new Date().toISOString(), repoKey: ctx.repoKey, runId: ctx.runId, mapId: ctx.mapId, mode: ctx.mode, trigger: ctx.trigger, outcome: result.outcome, reasonCode, provider });
 }
 
 // ── historyless 변경 산출(P8-1 — 큐 v1 invSnap 대조) ─────────────────────────────
@@ -613,8 +696,9 @@ function retryDeferredResolutions(repo, o, env, topo, triggerKind, linkGeneratio
   for (let rec of before.records) {
     const pf = path.join(MP.dirsFor(repo, topo.mapId).pending, rec.patchId + ".json");
     let pr = null; try { pr = JSON.parse(fs.readFileSync(pf, "utf8")); } catch { continue; }
-    if (!pr || !pr.patch || PM.opHashOf(pr.patch) !== rec.opHash) { settleDeferred(repo, rec.patchId, "stale", "cas-stale"); continue; }
+    if (!pr || !pr.patch || PM.opHashOf(pr.patch) !== rec.opHash) { if (env.p10) env.p10.touch(rec.jobKey, rec.jobRunId); settleDeferred(repo, rec.patchId, "stale", "cas-stale"); continue; }
     if (["resolved", "resolved-noop", "expired"].includes(pr.lifecycle)) {
+      if (env.p10) env.p10.touch(rec.jobKey, rec.jobRunId);
       if (pr.lifecycle === "expired" && pr.expireCode === "cas-stale") settleDeferred(repo, rec.patchId, "stale", "cas-stale");
       else settleDeferred(repo, rec.patchId, "settled", "settled", pr.lifecycle === "expired" ? "rejected" : "applied");
       settled++; continue;
@@ -642,6 +726,7 @@ function retryDeferredResolutions(repo, o, env, topo, triggerKind, linkGeneratio
     if (!resolution) {
       const selected = triggerKind === "manual" || (triggerKind === "link" && rec.reason === "no-verifier") || (triggerKind === "initial" && rec.history.length === 0);
       if (!selected) continue;
+      if (env.p10) env.p10.touch(rec.jobKey, rec.jobRunId);
       const beg = beginDeferredCall(repo, rec, triggerKind, linkGeneration);
       if (!beg.ok || beg.action === "conflict") continue;
       if (beg.action === "answered") resolution = beg.record && beg.record.resolution;
@@ -649,7 +734,7 @@ function retryDeferredResolutions(repo, o, env, topo, triggerKind, linkGeneratio
       else {
         let raw = null, callThrew = false, existing = null;
         if (rec.framing === "conflict") existing = existingDecisionOf(repo, require(path.join(__dirname, "map-runtime.js")).readTopoExFor(repo).topo, patch.targetId);
-        if (typeof o.askVerifier === "function") { try { raw = o.askVerifier({ repo, ws: o.ws, patch, item: null, framing: rec.framing, existing }); } catch { callThrew = true; raw = null; } }
+        if (typeof o.askVerifier === "function") { try { raw = o.askVerifier({ repo, ws: o.ws, patch, item: null, framing: rec.framing, existing, usageContext: env.p10 ? env.p10.usage(rec.jobKey, rec.jobRunId) : null }); } catch { callThrew = true; raw = null; } }
         const outcome = callThrew ? "uncertain-call" : raw && raw.verdict === "inconclusive" ? "inconclusive" : raw && ["support", "reject"].includes(raw.verdict) ? raw.verdict : "no-verifier";
         const rr = raw && ["support", "reject"].includes(raw.verdict) ? { patchId: patch.patchId, opHash: PM.opHashOf(patch), baseDecisionContextHash: patch.baseDecisionContextHash, verdict: raw.verdict, claims: Array.isArray(raw.claims) ? raw.claims : [] } : null;
         const fin = finishDeferredCall(repo, patch.patchId, beg.token, outcome, rr); handled++;
@@ -658,6 +743,7 @@ function retryDeferredResolutions(repo, o, env, topo, triggerKind, linkGeneratio
       }
     }
     if (!resolution) continue;
+    if (env.p10) env.p10.touch(rec.jobKey, rec.jobRunId);
     if (resolution.verdict === "reject") {
       const ex = MP.expirePendingPatch(repo, topo.mapId, patch.patchId, PM.opHashOf(patch));
       if (ex.ok || ex.reason === "idempotent" || ex.reason === "already-applied") { settleDeferred(repo, patch.patchId, "settled", "settled", ex.reason === "already-applied" ? "applied" : "rejected"); settled++; }
@@ -704,7 +790,8 @@ function runEnrich(repo, opts) {
   try { fs.mkdirSync(ENRICH_DIR, { recursive: true }); } catch { /* 잠금이 실패 판정 */ }
   const runLock = path.join(ENRICH_DIR, rKey + ".run.funlock");
   const tok = crypto.randomBytes(8).toString("hex");
-  try { fs.writeFileSync(runLock, JSON.stringify({ pid: process.pid, token: tok }), { flag: "wx" }); }
+  const p10RunId = crypto.randomUUID();
+  try { fs.writeFileSync(runLock, JSON.stringify({ pid: process.pid, token: tok, runId: p10RunId }), { flag: "wx" }); }
   catch {
     // 사망 회수(3b 1차 강등분 d2deff57384881b8 즉시 수정 — 두 창이 같은 dead lock을 읽고 한쪽이 새로 취득한
     // 뒤 다른 쪽이 그 새 잠금을 삭제하는 경합): unlink가 아니라 '고유 격리명으로의 원자 rename' — 이동에
@@ -723,20 +810,29 @@ function runEnrich(repo, opts) {
       return { outcome: "busy", reason: "run-lock" }; // 오탈취(교체된 잠금) — 복원 후 물러남
     }
     try { fs.unlinkSync(grave); } catch { /* 격리 잔존 무해 */ }
-    try { fs.writeFileSync(runLock, JSON.stringify({ pid: process.pid, token: tok }), { flag: "wx" }); } catch { return { outcome: "busy", reason: "run-lock" }; }
+    try { fs.writeFileSync(runLock, JSON.stringify({ pid: process.pid, token: tok, runId: p10RunId }), { flag: "wx" }); } catch { return { outcome: "busy", reason: "run-lock" }; }
     const rb = readJson3(runLock); // read-back fence
     if (!(rb.st === "ok" && rb.data.token === tok && rb.data.pid === process.pid)) return { outcome: "busy", reason: "run-lock" };
   }
   const fence = () => { const h = readJson3(runLock); return h.st === "ok" && h.data.token === tok && h.data.pid === process.pid; };
   try {
     if (!fence()) return { outcome: "busy", reason: "run-lock-lost" }; // 2차 blocker⑧: 회수 경합 뒤 임계구역 소유 재검증
+    const startJob = readEnrichJob(repo);
+    const startJobRunId = startJob.st === "ok" ? jobRunIdOf(startJob.job) : null;
+    const p10 = {
+      repoKey: rKey, runId: p10RunId, mapId: queue.mapId, mode: o.mode, trigger: p10Trigger(o.trigger), affected: new Map(), reasonCode: null,
+      touch(jobKey, jobRunId) { if (FP_RE.test(String(jobKey || "")) && FP_RE.test(String(jobRunId || ""))) this.affected.set(jobRunId, { jobKey, jobRunId }); },
+      usage(jobKey, jobRunId) { return { repoKey: rKey, runId: p10RunId, jobKey: jobKey || null, jobRunId: jobRunId || null }; },
+    };
+    CL.appendMapAutomation({ schema: "map-automation-v1", event: "enrich-start", ts: new Date().toISOString(), repoKey: rKey, runId: p10RunId, jobKey: startJobRunId ? startJob.job.jobKey : null, jobRunId: startJobRunId, mapId: queue.mapId, mode: o.mode, trigger: p10.trigger });
     // 이전 프로세스가 verifier 호출 시작을 기록한 뒤 결과를 못 남기고 죽은 경우 자동 재호출하지 않는다.
     const dr9 = recoverDeferredCalls(repo);
-    if (!dr9.ok) return { outcome: "parked", reason: dr9.reason || "deferred-damaged" };
-    const result = runEnrichLocked(repo, o, { MR, MP, PM, MB, MRt, queue, log, park, fence });
+    let result;
+    if (!dr9.ok) result = { outcome: "parked", reason: dr9.reason || "deferred-damaged" };
+    else result = runEnrichLocked(repo, o, { MR, MP, PM, MB, MRt, queue, log, park, fence, p10 });
     // P9: enrich 본체 결과·job 원장은 불변으로 둔 채, 종료 뒤 정책 위임 스윕을 정확히 한 번 후행한다.
     // 실패는 P9 항목별 원장에 남고 P8의 outcome을 바꾸지 않는다. 요약은 기존 route log에 한 줄만 보탠다.
-    try {
+    if (dr9.ok) try {
       const MI = require(path.join(__dirname, "map-intent.js"));
       MI.sweepIntentAuto(repo, queue.mapId, {
         ws: o.ws || repo,
@@ -745,6 +841,7 @@ function runEnrich(repo, opts) {
     } catch (e) {
       log({ route: "intent-auto", reason: "exception:" + String(e && e.message || e).slice(0, 80), outcome: "partial" });
     }
+    appendP10Terminals(repo, p10, result);
     return result;
   } finally {
     try { const h = readJson3(runLock); if (h.st === "ok" && h.data.token === tok) fs.unlinkSync(runLock); } catch { /* 무해 */ }
@@ -848,7 +945,7 @@ function runEnrichLocked(repo, o, env) {
   // ⑥ 멱등·복구 우선(수렴은 ⑦b — 설계 v11: authority 단독 결속은 자기 재보강/외부 억제 양쪽 실패라 폐기)
   if (jr.st === "ok") {
     const j = jr.job;
-    if (j.phase === "open") return resumeJob(repo, o, env, j, { topo, idx, pol, ah, corridor, changed, srcFp }); // 미완 복구가 신규보다 항상 우선
+    if (j.phase === "open") { if (env.p10) env.p10.touch(j.jobKey, jobRunIdOf(j)); return resumeJob(repo, o, env, j, { topo, idx, pol, ah, corridor, changed, srcFp }); } // 미완 복구가 신규보다 항상 우선
     if (j.jobKey === jobKey && j.phase === "parked") {
       // 3차 blocker⑤: consent-stale park는 '새 grant 세대'가 생기면 같은 job의 새 attempt로 자동 재개(v10 P8-2)
       if (j.parkedReason === "consent-stale") {
@@ -858,7 +955,7 @@ function runEnrichLocked(repo, o, env) {
         const eligible = j.mode === "self" ? !!(gR && gR.selfAuto) : !!(gR && gR.paidMode === j.mode);
         if (cR.st === "ok" && eligible && gR.gen > lastGen) {
           const wRe = updateEnrichJob(repo, (jj) => { if (!jj || jj.phase !== "parked") return null; const nx = { ...jj, phase: "open" }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
-          if (wRe.ok && !wRe.unchanged) return resumeJob(repo, o, env, wRe.job, { topo, idx, pol, ah, corridor, changed, srcFp });
+          if (wRe.ok && !wRe.unchanged) { if (env.p10) env.p10.touch(wRe.job.jobKey, jobRunIdOf(wRe.job)); return resumeJob(repo, o, env, wRe.job, { topo, idx, pol, ah, corridor, changed, srcFp }); }
         }
       }
       return { outcome: "noop", reason: "parked", parkedReason: j.parkedReason || "" }; // 그 외=명시 재시도 버튼이 해제
@@ -884,6 +981,7 @@ function runEnrichLocked(repo, o, env) {
     return { schema: "enrich-job-v2", jobKey, mapId: topo.mapId, authorityHash: ah, decisionContextHash: null, mode, configWs: CL.normWs(o.ws || ""), slot: o.slot === "en" ? "en" : "ko", phase: "open", startedAt: nowIso(), attempts: [] };
   });
   if (!mk.ok) return park(null, "job-write:" + mk.reason);
+  if (env.p10 && mk.job) env.p10.touch(mk.job.jobKey, jobRunIdOf(mk.job));
   return driveAttempts(repo, o, env, { topo, idx, pol, ah, jobKey, corridor, changed, srcFp, grant, consent });
 }
 
@@ -917,17 +1015,26 @@ function computeSourceFp(repo, queue, changed, MR) {
 // attempt 루프 — decideRoute 재호출(실패 플래그 관측 후)·승격은 표가 결정(라우터 7행=정확 1회)
 function driveAttempts(repo, o, env, st) {
   const { MRt, log, park } = env;
-  let economyFailed = false, precisionFailed = false;
+  let economyFailed = false, precisionFailed = false, lastP10Failure = null;
   for (let guard = 0; guard < 3; guard++) { // 최대: 최초 route+승격 1회(+both-failed 종결) — 라우터 표가 상한
     if (env.fence && !env.fence()) return { outcome: "busy", reason: "run-lock-lost" }; // 상태 변경 전 소유 재검증(2차 blocker⑧ — bootstrap 문법)
     const d = MRt.decideRoute({ mode: o.mode, ready: o.readiness, corridor: st.corridor, economyFailed, precisionFailed, conflict: false });
     log({ route: d.route, reason: d.reason, corridor: st.corridor, changedCount: Array.isArray(st.changed) ? st.changed.length : null, jobKey: st.jobKey, escalated: economyFailed && d.route === "precision" });
-    if (d.route === "park") return park((j) => j && { ...j, phase: "parked", parkedReason: d.reason, finishedAt: new Date().toISOString() }, d.reason, { jobKey: st.jobKey });
+    if (d.route === "park") {
+      if (env.p10 && lastP10Failure) env.p10.reasonCode = lastP10Failure;
+      return park((j) => j && { ...j, phase: "parked", parkedReason: d.reason, finishedAt: new Date().toISOString() }, d.reason, { jobKey: st.jobKey });
+    }
     if (d.route === "adjudicate") return park((j) => j && { ...j, phase: "parked", parkedReason: "adjudicate-unreachable", finishedAt: new Date().toISOString() }, "adjudicate-unreachable", { jobKey: st.jobKey }); // 신규 경로에서 conflict=false — 도달 불가 방어
     const provider = d.route;
     const at = runAttempt(repo, o, env, st, provider);
     if (at.outcome === "applied" || at.outcome === "parked" || at.outcome === "noop") return at;
-    if (at.outcome === "provider-failed") { if (provider === "economy") economyFailed = true; else if (provider === "precision") precisionFailed = true; else return park(null, "self-failed", { jobKey: st.jobKey }); continue; }
+    if (at.outcome === "provider-failed") {
+      lastP10Failure = at._p10Reason || "provider-call-failed";
+      if (provider === "economy") economyFailed = true;
+      else if (provider === "precision") precisionFailed = true;
+      else { if (env.p10) env.p10.reasonCode = lastP10Failure; return park(null, "self-failed", { jobKey: st.jobKey }); }
+      continue;
+    }
     return at;
   }
   return park((j) => j && { ...j, phase: "parked", parkedReason: "route-loop-guard", finishedAt: new Date().toISOString() }, "route-loop-guard");
@@ -953,12 +1060,15 @@ function runAttempt(repo, o, env, st, provider) {
   if (!mk.ok || attemptId < 0) return park(null, "attempt-write");
   // provider 호출(주입 어댑터 — 실 LLM 배선은 3b-2)
   let call;
-  try { call = adapter({ repo, topo: st.topo, changed: st.changed, provider }); }
+  const jobForUsage = mk.job || (readEnrichJob(repo).job || null);
+  const usageContext = env.p10 ? env.p10.usage(st.jobKey, jobRunIdOf(jobForUsage)) : null;
+  try { call = adapter({ repo, topo: st.topo, changed: st.changed, provider, usageContext }); }
   catch (e) { call = { ok: false, detail: "adapter-threw: " + String(e && e.message) }; }
   if (!call || call.ok !== true) {
+    const failureReason = call && call.failureKind === "result-invalid" ? "provider-result-invalid" : "provider-call-failed";
     updateEnrichJob(repo, (j) => j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "failed", failReason: String((call && call.detail) || "adapter-failed").slice(0, 200), finishedAt: nowIso() } : a) });
-    log({ route: provider, reason: "provider-call-failed", outcome: "error", provider, jobKey: st.jobKey, consentGen: g2.gen });
-    return { outcome: "provider-failed", provider };
+    log({ route: provider, reason: failureReason, outcome: "error", provider, jobKey: st.jobKey, consentGen: g2.gen });
+    return { outcome: "provider-failed", provider, _p10Reason: failureReason };
   }
   // results 검증(strict — 실패 분류 3종은 provider 실패 플래그)+근거 실증(3b 1차 blocker④ ab-3:
   // quote가 실제 파일 내용에 존재하는지 대조 — 허위 인용으로 생성된 의미 변경이 P2 관문을 통과하는 경로 차단)
@@ -977,7 +1087,7 @@ function runAttempt(repo, o, env, st, provider) {
   if (!vr.ok) {
     updateEnrichJob(repo, (j) => j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "failed", failReason: (vr.kind + ": " + (vr.errors[0] || "")).slice(0, 200), finishedAt: nowIso() } : a) });
     log({ route: provider, reason: "result-" + vr.kind, outcome: "error", provider, jobKey: st.jobKey, consentGen: g2.gen });
-    return { outcome: "provider-failed", provider };
+    return { outcome: "provider-failed", provider, _p10Reason: "provider-result-invalid" };
   }
   // results 영속(수신 즉시 — 이후 재개는 provider 재호출 0)
   const wR = updateEnrichJob(repo, (j) => j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "applying", results: call.result, ...(st.srcFp ? { sourceFp: st.srcFp } : {}), cursor: { nextIndex: 0, rev: 0, appliedPatchIds: [] } } : a) }); // 호출 시점 지문 영속(5차 blocker — 재개 done의 도장 정본)
@@ -1210,7 +1320,7 @@ function applyOnePatch(repo, o, env, ctx) {
       else {
         let raw = null, callThrew = false;
         if (typeof o.askVerifier === "function") {
-          try { raw = o.askVerifier({ repo, ws: job.configWs, patch, item, framing, existing }); } catch { callThrew = true; raw = null; }
+          try { raw = o.askVerifier({ repo, ws: job.configWs, patch, item, framing, existing, usageContext: env.p10 ? env.p10.usage(job.jobKey, jobRunIdOf(job)) : null }); } catch { callThrew = true; raw = null; }
         }
         const outcome = callThrew ? "uncertain-call" : raw && raw.verdict === "inconclusive" ? "inconclusive" : raw && ["support", "reject"].includes(raw.verdict) ? raw.verdict : "no-verifier";
         const rec9 = raw && ["support", "reject"].includes(raw.verdict)

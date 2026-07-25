@@ -511,15 +511,54 @@ function tryInstallVsix(dryRun) {
   }
 }
 
+// 레포에서 status를 실행할 때는 "실행 가능"만 보지 말고, 지금 레포의 실행 파일과 실제 훅이 부르는
+// 운영 사본이 같은 세대인지 먼저 본다. 사용자가 새 코드를 받은 뒤 창만 리로드하면 옛 확장 묶음이 옛
+// 사본을 계속 쓰는 상황을 doctor의 초록처럼 오해하지 않게 한다.
+function bridgeRuntimeParity(srcDir = SRC_BRIDGE, liveDir = BRIDGE_DIR, files = BRIDGE_SCRIPTS) {
+  const missing = [], changed = [];
+  for (const f of files) {
+    const src = path.join(srcDir, f), live = path.join(liveDir, f);
+    if (!fs.existsSync(src) || !fs.existsSync(live)) { missing.push(f); continue; }
+    try { if (!fs.readFileSync(src).equals(fs.readFileSync(live))) changed.push(f); }
+    catch { changed.push(f); }
+  }
+  let manifest = "ok";
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(liveDir, "deploy-manifest.json"), "utf8"));
+    const got = m && m.schema === "deploy-manifest-v1" && m.files && typeof m.files === "object"
+      ? Object.keys(m.files).sort().join(",") : "";
+    if (got !== [...files].sort().join(",")) manifest = "set-mismatch";
+    else {
+      const crypto = require("crypto");
+      for (const f of files) {
+        const sha = crypto.createHash("sha1").update(fs.readFileSync(path.join(srcDir, f))).digest("hex");
+        if (m.files[f] !== sha) { manifest = "source-mismatch"; break; }
+      }
+    }
+  } catch { manifest = "missing-or-corrupt"; }
+  return { ok: missing.length === 0 && changed.length === 0 && manifest === "ok", missing, changed, manifest };
+}
+
 function runDoctor() {
   const bridge = path.join(BRIDGE_DIR, "codex-bridge.js");
-  if (!fs.existsSync(bridge)) { log("ℹ️  doctor 생략(브릿지 미설치)"); return; }
+  if (!fs.existsSync(bridge)) { log("❌ 활성 브릿지 미설치 — node install.js 실행 필요"); return false; }
+  const parity = bridgeRuntimeParity();
+  if (!parity.ok) {
+    log("❌ 현재 레포와 활성 브릿지의 실행 세대가 다릅니다 — 창 리로드만으로는 갱신되지 않습니다.");
+    if (parity.missing.length) log("   빠진 실행 파일: " + parity.missing.join(", "));
+    if (parity.changed.length) log("   내용이 다른 실행 파일: " + parity.changed.join(", "));
+    if (parity.manifest !== "ok") log("   배포 목록 상태: " + parity.manifest);
+    log("   이 레포에서 node install.js 를 실행한 뒤 다시 status를 확인하세요.");
+  } else log("✅ 현재 레포와 활성 브릿지의 실행 세대가 같습니다.");
   log("\n── 설치 점검(doctor) ──");
+  let doctorOk = true;
   try {
     const r = cp.spawnSync(process.execPath, [bridge, "doctor"], { encoding: "utf8", timeout: 60000, maxBuffer: 1024 * 1024 * 64 });
     if (r.stdout) process.stdout.write(r.stdout);
     if (r.status !== 0 && r.stderr) process.stdout.write(r.stderr);
-  } catch (e) { log("ℹ️  doctor 실행 실패: " + e.message); }
+    doctorOk = r.status === 0;
+  } catch (e) { log("ℹ️  doctor 실행 실패: " + e.message); doctorOk = false; }
+  return parity.ok && doctorOk;
 }
 
 function cmdInstall(dryRun) {
@@ -638,8 +677,8 @@ if (require.main === module) {
 
   if (has("--help") || has("-h") || cmd === "help") cmdHelp();
   else if (cmd === "uninstall") cmdUninstall(has("--purge"));
-  else if (cmd === "status" || cmd === "doctor") runDoctor();
+  else if (cmd === "status" || cmd === "doctor") { if (!runDoctor()) process.exitCode = 1; }
   else cmdInstall(has("--dry-run") || has("-n"));
 }
 
-module.exports = { pickVsix, currentVsix, buildInstallCmd, installedExtensionVersionFromList, installVsixWithCli, candidateCodeClis, findRootUpwards, vscodeSignalClis, standardCodeClis, codeCliPriority, OUR_HOOKS, BRIDGE_SCRIPTS, isOurHookCmd }; // 뒤 3개: hook-setup.ts와의 규칙 패리티 테스트용
+module.exports = { pickVsix, currentVsix, buildInstallCmd, installedExtensionVersionFromList, installVsixWithCli, candidateCodeClis, findRootUpwards, vscodeSignalClis, standardCodeClis, codeCliPriority, bridgeRuntimeParity, OUR_HOOKS, BRIDGE_SCRIPTS, isOurHookCmd }; // 뒤 3개: hook-setup.ts와의 규칙 패리티 테스트용

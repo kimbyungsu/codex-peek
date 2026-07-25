@@ -13,10 +13,16 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
+const crypto = require("crypto");
 const BR = __dirname; // bridge 계층(증분 4 1차 blocker⑤ — 설치본 자동 발동에서 어댑터 실존해야 하므로 배포 대상으로 이동)
 const CL = require(path.join(BR, "contract-lib.js"));
 
 const SELF_DENY = "Bash,Read,Grep,Glob,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,TodoWrite,KillShell,TaskOutput";
+
+function recordCliUsage(provider, flow, callId, usageContext, charsIn, charsOut) {
+  const c = usageContext || {};
+  try { CL.appendScoutUsage({ schema: "scout-usage-v2", ts: new Date().toISOString(), callId, scope: "project", repoKey: c.repoKey, flow, provider, model: null, tokenIn: null, tokenOut: null, charsIn, charsOut, runId: c.runId || null, jobKey: c.jobKey || null, jobRunId: c.jobRunId || null }); } catch { /* 비차단 */ }
+}
 
 // 민감 경로 제외(증분 4 1차 blocker① ab-7 — 정찰 꾸러미와 같은 규칙): 정본은 scope-package.js의
 // SENSITIVE_PATH_RE — 배포본(bridge)은 out/에 의존할 수 없어 동형 복제하고, 드리프트는 테스트가 양쪽
@@ -123,38 +129,45 @@ function buildEnrichPrompt(ctx) {
 function parseResult(txt) {
   const m = String(txt || "").match(/```(?:json)?\s*([\s\S]*?)```/);
   const body = (m ? m[1] : String(txt || "")).trim();
-  try { const o = JSON.parse(body); return { ok: true, result: o }; } catch { return { ok: false, detail: "JSON 파싱 실패: " + body.slice(0, 120) }; }
+  try { const o = JSON.parse(body); return { ok: true, result: o }; } catch { return { ok: false, failureKind: "result-invalid", detail: "JSON 파싱 실패: " + body.slice(0, 120) }; }
 }
 
 // ── 어댑터 3종 ────────────────────────────────────────────────────────────────
 const ENRICH_ADAPTERS = {
   self: (ctx) => {
-    const r = spawnSync("claude", ["-p", "--output-format", "text", "--disallowedTools", SELF_DENY], {
-      input: buildEnrichPrompt(ctx), encoding: "utf8", timeout: 8 * 60 * 1000, windowsHide: true,
+    const prompt = buildEnrichPrompt(ctx), target = CL.resolveExecutableForSpawn("claude", process.env);
+    if (!target) return { ok: false, detail: "cli-not-found" };
+    const callId = crypto.randomUUID();
+    const r = spawnSync(target, ["-p", "--output-format", "text", "--disallowedTools", SELF_DENY], {
+      input: prompt, encoding: "utf8", timeout: 8 * 60 * 1000, windowsHide: true,
       shell: process.platform === "win32", // npm 전역 셔틀(claude.cmd) 대응
     });
+    if (Number.isSafeInteger(r.pid) && r.pid > 0) recordCliUsage("claude", "map-enrich", callId, ctx.usageContext, prompt.length, String(r.stdout || "").length);
     if (r.error || r.status !== 0 || !String(r.stdout || "").trim()) return { ok: false, detail: ((r.error && r.error.message) || `exit=${r.status}`) + " " + String(r.stderr || "").slice(-200) };
-    try { CL.appendScoutUsage({ ts: new Date().toISOString(), workspace: "", arm: "enrich-self", model: null, usageIn: null, usageOut: null, pkgChars: buildEnrichPrompt(ctx).length, mapChars: r.stdout.length }); } catch { /* 무해 */ }
     return parseResult(r.stdout);
   },
   economy: (ctx) => {
     const bridge = path.join(BR, "deepseek-bridge.js"); // 브릿지가 bounded repair(원격 1회)+usage(arm enrich) 기록
-    const r = spawnSync(process.execPath, [bridge, "enrich"], { input: buildEnrichPrompt(ctx), encoding: "utf8", timeout: 6 * 60 * 1000, windowsHide: true });
-    if (r.error || r.status !== 0) return { ok: false, detail: ((r.error && r.error.message) || `exit=${r.status}`) + " " + String(r.stderr || "").slice(-200) };
+    const usageEnv = JSON.stringify({ ...(ctx.usageContext || {}), flow: "map-enrich" });
+    const r = spawnSync(process.execPath, [bridge, "enrich"], { input: buildEnrichPrompt(ctx), encoding: "utf8", timeout: 6 * 60 * 1000, windowsHide: true, env: { ...process.env, CODEX_BRIDGE_USAGE_CONTEXT: usageEnv } });
+    if (r.error || r.status !== 0) return { ok: false, ...(String(r.stderr || "").includes("enrich-shape-fail") ? { failureKind: "result-invalid" } : {}), detail: ((r.error && r.error.message) || `exit=${r.status}`) + " " + String(r.stderr || "").slice(-200) };
     return parseResult(r.stdout);
   },
   precision: (ctx) => {
     let inv;
     try { inv = require(path.join(BR, "codex-bridge.js")).resolveCodex(); }
     catch (e) { return { ok: false, detail: "bridge-load: " + ((e && e.message) || "") }; }
+    const target = CL.resolveExecutableForSpawn(inv.file, process.env);
+    if (!target) return { ok: false, detail: "cli-not-found" };
     const tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), "enrich-codex-"));
     const outF = path.join(tmpCwd, "enrich-out.txt");
     try {
       const prompt = buildEnrichPrompt(ctx);
-      const r = spawnSync(inv.file, [...(inv.args || []), ...CL.codexScoutExecArgs(outF)], { input: prompt, cwd: tmpCwd, encoding: "utf8", timeout: 10 * 60 * 1000, windowsHide: true, shell: !!inv.shell, stdio: ["pipe", "ignore", "pipe"] });
+      const callId = crypto.randomUUID();
+      const r = spawnSync(target, [...(inv.args || []), ...CL.codexScoutExecArgs(outF)], { input: prompt, cwd: tmpCwd, encoding: "utf8", timeout: 10 * 60 * 1000, windowsHide: true, shell: !!inv.shell, stdio: ["pipe", "ignore", "pipe"] });
       let outTxt = "";
       try { outTxt = fs.readFileSync(outF, "utf8").trim(); } catch { /* 실패 판정 */ }
-      try { CL.appendScoutUsage({ ts: new Date().toISOString(), workspace: "", arm: "enrich-codex", model: null, usageIn: null, usageOut: null, pkgChars: prompt.length, mapChars: outTxt.length }); } catch { /* 무해 */ }
+      if (Number.isSafeInteger(r.pid) && r.pid > 0) recordCliUsage("codex", "map-enrich", callId, ctx.usageContext, prompt.length, outTxt.length);
       if (r.error || r.status !== 0 || !outTxt) return { ok: false, detail: ((r.error && r.error.message) || `exit=${r.status}`) + " " + String(r.stderr || "").slice(-200) };
       return parseResult(outTxt);
     } finally { try { fs.rmSync(tmpCwd, { recursive: true, force: true }); } catch { /* 무해 */ } }
@@ -178,6 +191,8 @@ function askVerifierResolution(req) {
   } catch { return null; } // 판독 불가=자격 불명=park(fail-closed)
   let inv;
   try { inv = require(path.join(BR, "codex-bridge.js")).resolveCodex(); } catch { return null; }
+  const target = CL.resolveExecutableForSpawn(inv.file, process.env);
+  if (!target) return null;
   const PM = require(path.join(BR, "project-map.js"));
   const opH = PM.opHashOf(req.patch);
   const evList = (req.patch.evidence || []).map((e) => e.ref).filter((f) => !isSensitiveEnrichPath(f)); // ab-7 — 민감 경로는 근거 본문에도 미포함
@@ -206,10 +221,11 @@ function askVerifierResolution(req) {
   const tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), "enrich-adjud-"));
   const outF = path.join(tmpCwd, "verdict-out.txt");
   try {
-    const r = spawnSync(inv.file, [...(inv.args || []), ...CL.codexScoutExecArgs(outF)], { input: prompt, cwd: tmpCwd, encoding: "utf8", timeout: 10 * 60 * 1000, windowsHide: true, shell: !!inv.shell, stdio: ["pipe", "ignore", "pipe"] });
+    const callId = crypto.randomUUID();
+    const r = spawnSync(target, [...(inv.args || []), ...CL.codexScoutExecArgs(outF)], { input: prompt, cwd: tmpCwd, encoding: "utf8", timeout: 10 * 60 * 1000, windowsHide: true, shell: !!inv.shell, stdio: ["pipe", "ignore", "pipe"] });
     let outTxt = "";
     try { outTxt = fs.readFileSync(outF, "utf8").trim(); } catch { /* 실패 판정 */ }
-    try { CL.appendScoutUsage({ ts: new Date().toISOString(), workspace: "", arm: "enrich-adjudicate", model: null, usageIn: null, usageOut: null, pkgChars: prompt.length, mapChars: outTxt.length }); } catch { /* 무해 */ }
+    if (Number.isSafeInteger(r.pid) && r.pid > 0) recordCliUsage("codex", "map-adjudicate", callId, req.usageContext, prompt.length, outTxt.length);
     if (r.error || r.status !== 0 || !outTxt) return null;
     const pr = parseResult(outTxt);
     if (!pr.ok || !pr.result || !["support", "reject", "inconclusive"].includes(pr.result.verdict)) return null;

@@ -65,6 +65,10 @@ console.log("[2] self 성공 e2e — applied·P2 decision 실존·job done·멱�
   ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
   const r = ME.runEnrich(ws, base(ws, { adapters: { self: goodAdapter(nodeId) } }));
   ok(r.outcome === "applied" && r.applied === 2, "self 보강 성공 — 2 item 적용");
+  const p10Rows = fs.readFileSync(ME.ROUTE_LOG, "utf8").trim().split("\n").map(JSON.parse).filter((x) => x.schema === "map-automation-v1" && x.mapId === topo.mapId);
+  const p10Start = p10Rows.find((x) => x.event === "enrich-start"), p10Job = p10Rows.find((x) => x.event === "enrich-job-terminal"), p10Run = p10Rows.find((x) => x.event === "enrich-run-terminal");
+  ok(!!p10Start && !!p10Job && !!p10Run && p10Start.runId === p10Job.runId && p10Job.runId === p10Run.runId, "P10 start→job terminal→run terminal 한 실행 세대 결속");
+  ok(p10Job.baselineState === "current-job" && p10Job.everApplied === true && p10Job.deferredState === "clear", "P10 job terminal은 현재 job 적용 사실·clear 기준선 기록");
   const j = ME.readEnrichJob(ws).job;
   ok(j.phase === "done" && j.attempts.length === 1 && j.attempts[0].phase === "done", "장부 done(attempt done·cursor 정리)");
   const decDir = path.join(ws, "project-map", "decisions");
@@ -244,7 +248,7 @@ console.log("[5] verifier 해소 경로 — 확인 대기는 독립 항목을 �
 
 console.log("[7] 근거 실증·수렴 외부 변경(3b 1차 blocker④⑤)");
 {
-  const { ws, nodeId } = setup("quote");
+  const { ws, topo, nodeId } = setup("quote");
   ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
   const fake = (ctx) => ({ ok: true, result: { schema: "enrich-result-v1", items: [
     { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "n" } }, evidence: [{ file: "src/a.js", quote: "// 이 인용은 파일에 없다" }] },
@@ -253,6 +257,15 @@ console.log("[7] 근거 실증·수렴 외부 변경(3b 1차 blocker④⑤)");
   ok(r.outcome === "parked" && r.reason === "self-failed", "허위 인용=근거 실패(self라 승격 없음=park — 파일 대조 실증)");
   const j = ME.readEnrichJob(ws).job;
   ok(/evidence/.test(j.attempts[0].failReason || ""), "실패 사유에 근거 실패 분류 기록");
+  const invalidRows = fs.readFileSync(ME.ROUTE_LOG, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse).filter((x) => x.schema === "map-automation-v1" && x.mapId === topo.mapId && (x.event === "enrich-job-terminal" || x.event === "enrich-run-terminal"));
+  ok(invalidRows.length === 2 && invalidRows.every((x) => x.reasonCode === "provider-result-invalid"), "호출 성공 뒤 schema/evidence 검증 실패는 provider-call-failed와 분리 기록");
+}
+{
+  const { ws, topo } = setup("parse-invalid");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  const r = ME.runEnrich(ws, base(ws, { adapters: { self: () => ({ ok: false, failureKind: "result-invalid", detail: "JSON 파싱 실패" }) } }));
+  const invalidRows = fs.readFileSync(ME.ROUTE_LOG, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse).filter((x) => x.schema === "map-automation-v1" && x.mapId === topo.mapId && (x.event === "enrich-job-terminal" || x.event === "enrich-run-terminal"));
+  ok(r.outcome === "parked" && invalidRows.length === 2 && invalidRows.every((x) => x.reasonCode === "provider-result-invalid"), "어댑터 JSON 파싱 실패도 호출 실패와 분리해 provider-result-invalid로 기록");
 }
 {
   const { ws, nodeId, topo } = setup("extchange");
@@ -381,6 +394,15 @@ for (const prior of ["terminal", "active"]) {
     prior + " 실행 A 결과가 실행 B의 적용·기각·대기·조사 수에 혼입되지 않음");
   ok((prior === "active" ? counts.otherAwaiting === 1 : counts.otherAwaiting === 0) && counts.unattributed === 0,
     prior + " 과거 활성은 이전 실행 대기로 분리하고 새 형식 기록은 미귀속 0");
+  if (prior === "active") {
+    const rr = ME.runEnrich(ws, base(ws, { trigger: "retry", askVerifier: () => ({ verdict: "reject", claims: [] }) }));
+    const rows = fs.readFileSync(ME.ROUTE_LOG, "utf8").trim().split("\n").map(JSON.parse).filter((x) => x.schema === "map-automation-v1" && x.mapId === topo.mapId);
+    const rt = [...rows].reverse().find((x) => x.event === "enrich-run-terminal"), jt = rows.filter((x) => x.event === "enrich-job-terminal" && rt && x.runId === rt.runId);
+    ok(rr.reason === "deferred-retry" && jt.length === 2 && new Set(jt.map((x) => x.jobRunId)).size === 2 && jt.some((x) => x.jobRunId === runA) && jt.some((x) => x.jobRunId === runB),
+      "한 retry가 A/B 두 대기 세대를 처리해도 job terminal 2건·세대별 1건");
+    const aTerm = jt.find((x) => x.jobRunId === runA), bTerm = jt.find((x) => x.jobRunId === runB);
+    ok(aTerm.baselineState === "prior-terminal" && bTerm.baselineState === "current-job", "교체된 A는 prior terminal, 현재 B는 current-job 기준선으로 분리");
+  }
 }
 
 console.log("[9] run-lock 사망 회수 — 동시 복구자 경합(4차: 시작 장벽+임계구역 유지+3회 반복)");

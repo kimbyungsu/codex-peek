@@ -69,18 +69,24 @@ const PROVIDERS = {
     billed: false, // 1-26: 무과금(구독 Claude 재사용)
     available: () => true,
     probe: () => {
-      const r = spawnSync("claude", ["--version"], { encoding: "utf8", timeout: 20000, windowsHide: true, shell: process.platform === "win32" });
+      const target = CL.resolveExecutableForSpawn("claude", process.env);
+      if (!target) return { ok: false, key: "cli-missing", detail: "cli-not-found" };
+      const r = spawnSync(target, ["--version"], { encoding: "utf8", timeout: 20000, windowsHide: true, shell: process.platform === "win32" });
       return r.error || r.status !== 0 ? { ok: false, key: "cli-missing", detail: (r.error && r.error.message) || `exit=${r.status}` } : { ok: true, detail: String(r.stdout || "").trim().slice(0, 60) };
     },
-    invoke: ({ preface, md }) => {
-      const r = spawnSync("claude", ["-p", "--output-format", "text", "--disallowedTools", SELF_DENY], {
+    invoke: ({ preface, md, onCallStart, onCallStarted }) => {
+      const target = CL.resolveExecutableForSpawn("claude", process.env);
+      if (!target) return { ok: false, key: "call-failed", detail: "cli-not-found", charsOut: 0 };
+      if (typeof onCallStart === "function") onCallStart();
+      const r = spawnSync(target, ["-p", "--output-format", "text", "--disallowedTools", SELF_DENY], {
         input: preface + md,
         encoding: "utf8",
         timeout: 8 * 60 * 1000,
         windowsHide: true,
         shell: process.platform === "win32", // npm 전역 셔틀(claude.cmd) 대응
       });
-      if (r.error || r.status !== 0 || !String(r.stdout || "").trim()) return { ok: false, key: "call-failed", detail: ((r.error && r.error.message) || `exit=${r.status}`) + " " + String(r.stderr || "").slice(-300) };
+      if (Number.isSafeInteger(r.pid) && r.pid > 0 && typeof onCallStarted === "function") onCallStarted();
+      if (r.error || r.status !== 0 || !String(r.stdout || "").trim()) return { ok: false, key: "call-failed", detail: ((r.error && r.error.message) || `exit=${r.status}`) + " " + String(r.stderr || "").slice(-300), charsOut: String(r.stdout || "").length };
       // self 팔(claude -p text)은 토큰을 안 알려줘 usage=null(정직: 문자수만 추정 재료 — §6-12 후속 유지)
       return { ok: true, map: r.stdout.trim(), usage: null, stderrPass: "" };
     },
@@ -95,11 +101,12 @@ const PROVIDERS = {
       const r = spawnSync(process.execPath, [bridge, "ping"], { encoding: "utf8", timeout: 45000, windowsHide: true });
       return r.error || r.status !== 0 ? { ok: false, key: "probe-failed", detail: ((r.error && r.error.message) || `exit=${r.status}`) + " " + String(r.stderr || "").slice(-200) } : { ok: true, detail: String(r.stdout || r.stderr || "").trim().slice(0, 80) };
     },
-    invoke: ({ md, outFile }) => {
+    invoke: ({ md, outFile, repo }) => {
       const bridge = path.join(__dirname, "..", "bridge", "deepseek-bridge.js"); // repo 정본 직접 실행(설치본 드리프트 회피 — 기존 계약)
       const args = [bridge, "map"];
       if (outFile) args.push("--out", outFile);
-      const r = spawnSync(process.execPath, args, { input: md, encoding: "utf8", timeout: 5 * 60 * 1000, windowsHide: true });
+      const usageContext = JSON.stringify({ repoKey: CL.repoKeyForStats(repo), flow: "map-scout", runId: null, jobKey: null, jobRunId: null });
+      const r = spawnSync(process.execPath, args, { input: md, encoding: "utf8", timeout: 5 * 60 * 1000, windowsHide: true, env: { ...process.env, CODEX_BRIDGE_USAGE_CONTEXT: usageContext } });
       const stderrPass = String(r.stderr || ""); // usage/오류 안내 통과 전달(키 원문은 브릿지가 애초에 안 찍음)
       if (r.error || r.status !== 0) return { ok: false, key: "call-failed", detail: (r.error && r.error.message) || `exit=${r.status}`, stderrPass };
       const um = stderrPass.match(/\[usage\] in=(\d+) out=(\d+)(?: \((.+?)\))?/);
@@ -116,10 +123,12 @@ const PROVIDERS = {
       let inv;
       try { inv = require(path.join(__dirname, "..", "bridge", "codex-bridge.js")).resolveCodex(); }
       catch (e) { return { ok: false, key: "probe-failed", detail: "bridge-load: " + ((e && e.message) || "") }; }
-      const r = spawnSync(inv.file, [...inv.args, "--version"], { encoding: "utf8", timeout: 30000, windowsHide: true, shell: !!inv.shell });
+      const target = CL.resolveExecutableForSpawn(inv.file, process.env);
+      if (!target) return { ok: false, key: "probe-failed", detail: "cli-not-found" };
+      const r = spawnSync(target, [...inv.args, "--version"], { encoding: "utf8", timeout: 30000, windowsHide: true, shell: !!inv.shell });
       return r.error || r.status !== 0 ? { ok: false, key: "probe-failed", detail: (r.error && r.error.message) || `exit=${r.status}` } : { ok: true, detail: String(r.stdout || "").trim().slice(0, 60) };
     },
-    invoke: ({ preface, md }) => {
+    invoke: ({ preface, md, onCallStart, onCallStarted }) => {
       // 독립 세션 계약: resume이 아닌 새 codex exec 1회 + cwd=빈 임시 폴더 —
       // ①꾸러미'만' 근거(빈 폴더로 저장소 탐색 억제 — 단 read-only 샌드박스는 절대경로 '읽기'를 물리
       //   차단하진 못한다: 정직 한계, preface의 codex 각주(탐색 금지 지시)로 보강. 통신은 read-only가 차단)
@@ -127,6 +136,8 @@ const PROVIDERS = {
       let inv;
       try { inv = require(path.join(__dirname, "..", "bridge", "codex-bridge.js")).resolveCodex(); }
       catch (e) { return { ok: false, key: "call-failed", detail: "bridge-load: " + ((e && e.message) || "") }; }
+      const target = CL.resolveExecutableForSpawn(inv.file, process.env);
+      if (!target) return { ok: false, key: "call-failed", detail: "cli-not-found" };
       const tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), "scout-codex-"));
       const outFile = path.join(tmpCwd, "map-out.txt");
       try {
@@ -135,7 +146,8 @@ const PROVIDERS = {
         // --sandbox read-only 강제(P6 1차 blocker① — preface 사실 문장과 실행 일치)·--ephemeral(P6 2차
         // blocker② — rollout 무잔재로 검증 세션 오링크 원천 차단·구버전 codex면 실패=정직 보고)·
         // 정찰 전용 두뇌 설정 -c 오버라이드(P6b — scoutCodexArgs, 빈 값=codex 기본).
-        const r = spawnSync(inv.file, [...inv.args, ...CL.codexScoutExecArgs(outFile)], {
+        if (typeof onCallStart === "function") onCallStart();
+        const r = spawnSync(target, [...inv.args, ...CL.codexScoutExecArgs(outFile)], {
           input: preface + md,
           cwd: tmpCwd,
           stdio: ["pipe", "ignore", "pipe"],
@@ -145,9 +157,10 @@ const PROVIDERS = {
           shell: !!inv.shell,
           maxBuffer: 1024 * 1024 * 64,
         });
+        if (Number.isSafeInteger(r.pid) && r.pid > 0 && typeof onCallStarted === "function") onCallStarted();
         let map = "";
         try { map = fs.readFileSync(outFile, "utf8").trim(); } catch { /* 아래 실패 판정으로 */ }
-        if (r.error || r.status !== 0 || !map) return { ok: false, key: "call-failed", detail: ((r.error && r.error.message) || `exit=${r.status}`) + " " + String(r.stderr || "").slice(-300) };
+        if (r.error || r.status !== 0 || !map) return { ok: false, key: "call-failed", detail: ((r.error && r.error.message) || `exit=${r.status}`) + " " + String(r.stderr || "").slice(-300), charsOut: map.length };
         // codex exec은 토큰 실측을 안 내놓는다 → usage null(정직 — self 팔과 동일 규약·문자수만 장부에)
         return { ok: true, map, usage: null, stderrPass: "" };
       } finally { try { fs.rmSync(tmpCwd, { recursive: true, force: true }); } catch { /* 임시 잔재 — 무해 */ } }
@@ -185,10 +198,20 @@ function runScout(repo, providerId, opts) {
   const md = renderPackageMarkdown(pkg, lang);
   const preface = providerId === "self" || providerId === "codex" ? CL.buildScoutPreface(providerId, lang) + "\n\n" : ""; // deepseek preface는 브릿지 buildMapRequest가 같은 슬롯에서 읽음(기존 계약) · codex는 CLI 팔이라 self와 같은 자리에서 주입(P6)
   markLive(repo, providerId); // 상태바 '지도 생성중…' — 호출 동안만
-  let call;
-  try { call = P.invoke({ preface, md, lang, repo, outFile: o.outFile || null }); }
+  let call, callId = null, callStarted = false;
+  const onCallStart = () => { if (!callId) callId = require("crypto").randomUUID(); };
+  const onCallStarted = () => { callStarted = true; };
+  try { call = P.invoke({ preface, md, lang, repo, outFile: o.outFile || null, onCallStart, onCallStarted }); }
   catch (e) { call = { ok: false, key: "call-failed", detail: "invoke-threw: " + ((e && e.message) || String(e)) }; } // 경계 정규화(예외→ScoutFailure)
   finally { clearLive(repo); }
+  // Claude/Codex CLI를 실제로 시작한 호출은 성공·실패·빈 출력과 무관하게 정확히 한 줄 기록한다.
+  // DeepSeek는 자식 브릿지의 실제 API 경계가 repair까지 호출별로 기록하므로 여기서 중복 기록하지 않는다.
+  if (callId && callStarted && (providerId === "self" || providerId === "codex")) {
+    const u9 = call && call.usage;
+    const both9 = u9 && Number.isSafeInteger(u9.in) && u9.in >= 0 && Number.isSafeInteger(u9.out) && u9.out >= 0;
+    const out9 = call && typeof call.rawStdout === "string" ? call.rawStdout.length : call && typeof call.map === "string" ? call.map.length : call && Number.isSafeInteger(call.charsOut) ? call.charsOut : 0;
+    try { CL.appendScoutUsage({ schema: "scout-usage-v2", ts: new Date().toISOString(), callId, scope: "project", repoKey: CL.repoKeyForStats(repo), flow: "map-scout", provider: providerId === "self" ? "claude" : "codex", model: u9 && typeof u9.model === "string" ? u9.model : null, tokenIn: both9 ? u9.in : null, tokenOut: both9 ? u9.out : null, charsIn: (preface + md).length, charsOut: out9, runId: null, jobKey: null, jobRunId: null }); } catch { /* 비차단 */ }
+  }
   const sp = call && typeof call.stderrPass === "string" ? call.stderrPass : "";
   if (!call || call.ok !== true) {
     // 실패 결과도 검증(2차 잔여 f-710a3f76): key는 허용 열거로 정규화(미지 키=call-failed)·detail은 문자열화 —
@@ -209,8 +232,10 @@ function runScout(repo, providerId, opts) {
     : null;
   // 추출·문자수는 provider가 원문을 주면 원문 기준(구 deepseek 러너=비트림 r.stdout — 동작 보존), 아니면 트림 지도 기준(self)
   const exSrc = call.rawStdout != null ? call.rawStdout : map;
-  // 비용 장부(60일) — usage 없으면 null 그대로(정직: 토큰 아님·문자수만)
-  try { CL.appendScoutUsage({ ts: new Date().toISOString(), workspace: repo, arm: providerId, model: usage ? usage.model : null, usageIn: usage ? usage.in : null, usageOut: usage ? usage.out : null, pkgChars: (preface + md).length, mapChars: exSrc.length }); } catch { /* 무해 */ }
+  // 테스트 주입·구버전 확장점의 미지 provider만 구형 행으로 남긴다. 생산 3종은 위 v2/API 경계를 쓴다.
+  if (!callId && !["self", "deepseek", "codex"].includes(providerId)) {
+    try { CL.appendScoutUsage({ ts: new Date().toISOString(), workspace: repo, arm: providerId, model: usage ? usage.model : null, usageIn: usage ? usage.in : null, usageOut: usage ? usage.out : null, pkgChars: (preface + md).length, mapChars: exSrc.length }); } catch { /* 무해 */ }
+  }
   // --out: 브릿지가 직접 쓰는 팔(deepseek)은 위임 유지, 그 외는 여기서 씀(구 self 러너와 같은 위치·같은 비포획 —
   // 쓰기 실패는 구 러너처럼 그대로 전파되어 러너가 비정상 종료한다. 조용한 삼킴으로 바꾸지 않는다.)
   if (o.outFile && !P.handlesOutFile) fs.writeFileSync(o.outFile, map);

@@ -304,6 +304,23 @@ console.log("[11] §7 증분 3 — 해소 계보 제외·빼기 후보·항목 �
   ok(!ids.includes(CL.envelopeCandidateId("escalation", "f-esc2")), "해소된 승격 확장=후보 제외");
   ok(before.live !== undefined && typeof before.skipped === "number", "분리 집계 함수=소진 보고와 공유 산출(live·skipped)");
   ok(before.overCap === false, "소형 수칙서=임계 미달(overCap=false)");
+  { // 미사용만으로 사용자 선택을 만들지 않음: 3항목은 그대로 보존, 30항목에 닿았을 때만 정리 후보
+    const mkEnv = (n) => ({ schema: "verify-envelope-v1", approvedBy: "test", approvedAt: "2026-07-25", supportedEnv: Array.from({length:n},(_,i)=>"지원 "+i), alwaysBlocker: Array.from({length:n},(_,i)=>"차단 "+i), outOfScope: Array.from({length:n},(_,i)=>"제외 "+i) });
+    const mkCandidateWs = (n) => {
+      const w = fs.mkdtempSync(path.join(require("os").tmpdir(), "gov7_unused_"));
+      fs.writeFileSync(path.join(w, "verify-envelope.json"), JSON.stringify(mkEnv(n)));
+      const e = CL.readVerifyEnvelope(w); ok(e.st === "ok", n+"개씩 수칙서 픽스처 정상");
+      fs.mkdirSync(path.dirname(CL.contractFileFor(w)), { recursive: true });
+      fs.writeFileSync(CL.contractFileFor(w), JSON.stringify({ workspace:w, envelopeHash:e.sha1 }));
+      fs.writeFileSync(CL.campaignFileFor(w), JSON.stringify({ schema:"vcamp-1", campaignId:CAMP, count:1, budget:1, startedAt:"T", updatedAt:"T" }));
+      CL.writeEnvelopeFreeze(w, e.sha1, "ask-unused");
+      return w;
+    };
+    const small = CB.computeEnvelopeCandidatesFor(mkCandidateWs(1));
+    ok(!small.overCap && !small.live.some((c)=>c.kind === "unused-oos"), "30항목 미만=미사용 제외 규칙을 판단 후보로 올리지 않음");
+    const large = CB.computeEnvelopeCandidatesFor(mkCandidateWs(10));
+    ok(large.overCap && large.live.filter((c)=>c.kind === "unused-oos").length === 10, "30항목 도달=미사용 제외 규칙만 정리 후보로 제시");
+  }
   // 재검증 blocker(세대 오귀속) 반례: 산출 세대(gen)가 반환에 결속되고, 소비자는 현 승인 해시와 일치할 때만 표시
   ok((CB.computeEnvelopeCandidatesFor(wsR).gen || null) === GEN, "집계 반환에 산출 세대(gen=동결 해시) 결속");
   {

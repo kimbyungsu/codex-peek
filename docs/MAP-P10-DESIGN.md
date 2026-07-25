@@ -1,7 +1,7 @@
 # Project MAP P10 상세 설계 v1 — 통계·비용·건강도
 
-> 상태: **동결 후보**(2026-07-25). 이 문서 본문을 바꾸지 않은 최종 독립 검증이 `통과` 또는
-> `통과(보완)`이면 v1로 동결한다. 그 전에는 구현하지 않는다.
+> 상태: **v1 동결**(2026-07-25, 독립 설계 검증 완료 뒤 사용자 승인 `terminal-missing` 보완 반영).
+> 이후 구현은 이 문서의 분모·필드 의미를 바꾸지 않고 증분별로 진행한다.
 >
 > 상위 정본: `docs/MAP-V2-DESIGN.md` §5 P10 — “통계·비용·건강도
 > (`scout-usage` 확장·지표 분리)”. 이 문서는 그 한 줄을 실행 가능한 계약으로 닫는다.
@@ -81,8 +81,11 @@ P10의 목적은 “AI가 얼마나 똑똑했는가”를 점수 하나로 매�
 | 실행 묶음(run) | P8이 유효 큐를 읽고 저장소 실행 잠금을 얻은 뒤 시작한 한 번 | 2트랙, 큐 없음, 타 창이 이미 실행 중인 경우 |
 | 의미 보강 작업(job) | 같은 `jobRunId`로 묶이는 하나의 입력 세대 | 같은 작업 세대를 재개한 run을 새 job으로 세지 않음 |
 | 지도 항목 | 현재 projection의 유효 node 또는 edge 하나 | `degraded`로 임시 제외된 항목 |
-| 자동 완료 | job의 최신 상태가 `applied` 또는 `settled`이고 확인 대기·조사·장부 손상이 없음 | `noop`, `busy`, `awaiting`, 실행 중 |
+| 자동 완료 | job의 최신 상태가 `applied` 또는 `settled`이고 확인 대기·조사·장부 손상이 없음 | `noop`, `busy`, `awaiting`, 실행 중, `terminal-missing` |
 | 확인 필요 | job의 최신 상태가 `awaiting`, `parked`, `provider-failed`, `error`, `interrupted` | 정상 no-op |
+
+`terminal-missing`은 자동 완료나 확인 필요로 추정하지 않는 자료 한계다. 사용자 표면에서는 “종료 기록 없음”으로
+표시하고 별도 coverage에 센다.
 
 `jobKey`는 `mapId+authorityHash[+decisionContextHash]` 계보를 가리키며, 소스가 바뀌어도 같을 수 있다.
 `jobRunId=sha1(jobKey+"|"+startedAt)`가 현재 P8이 이미 쓰는 불변 입력 세대다. 같은 `jobRunId`를 여러 run이
@@ -340,13 +343,14 @@ P8의 공개 반환값은 바꾸지 않고 writer에 넘길 내부 요약만 이
   증거로 집계하되 `start 누락` coverage에 따로 보인다. job terminal은 있지만 run terminal이 없으면 job 결과는
   보존한다.
 - run terminal이 없는 모든 run은 start 유무와 관계없이 현재 같은 저장소 실행 잠금의 `runId`와 소유자
-  판정을 결합한다: `alive`는 `running`, `ESRCH`로 확정 사망은 `interrupted`, `owner-unverified`는
-  `state-unknown`이다. 잠금 부재·다른 runId는 `interrupted`, 잠금 손상·판독 불가는 `state-unknown`이다.
+  판정을 결합한다. 같은 `runId`의 `alive`는 `running`, 같은 `runId`의 `ESRCH` 확정 사망만 `interrupted`다.
+  `owner-unverified`·잠금 손상·판독 불가는 `state-unknown`이다. 잠금 부재·다른 `runId`는 정상 종료 뒤 마지막
+  통계 기록만 빠진 경우와 실제 중단을 구별할 수 없으므로 `terminal-missing`(사용자 표면: “종료 기록 없음”)이다.
   start가 없으면 같은 상태를 쓰되 `start 누락` coverage에도 센다. 고정 시간으로 생사를 추측하지 않는다.
 - job 활동 후보는 모든 유효 job terminal과, run terminal도 job terminal도 없이 끝난 start의 유효
-  `jobRunId/jobKey`다. start는 그 세대의 `running|interrupted|state-unknown` 후보이고 job terminal은 기록된
-  세대의 종결 후보다. 한 run의 start가 A를 가리켜도 그 run이 A와 B job terminal을 함께 남기는 것은 충돌이
-  아니라 정상 deferred 다중 종결이다.
+  `jobRunId/jobKey`다. start는 그 세대의 `running|interrupted|state-unknown|terminal-missing` 후보이고 job
+  terminal은 기록된 세대의 종결 후보다. 한 run의 start가 A를 가리켜도 그 run이 A와 B job terminal을 함께
+  남기는 것은 충돌이 아니라 정상 deferred 다중 종결이다.
 - 같은 `jobRunId`가 서로 다른 유효 `jobKey`와 결속되면 그 세대의 job 통계를 제외하고 `job identity 충돌`
   coverage로 센다.
 - job 통계는 `jobRunId`별로 모든 활동을 모으고 append 순번이 가장 뒤인 활동 하나를 최신 상태로 쓴다.
@@ -388,15 +392,17 @@ P8의 공개 반환값은 바꾸지 않고 writer에 넘길 내부 요약만 이
 
 `map-automation-v1` 행을 현재 `repoKey`와 28일 창으로 필터한 뒤 다음을 표시한다.
 
-- 관찰된 run / start-run terminal 정상 쌍 / start 누락 run terminal / 진행 중 / 중단 흔적.
+- 관찰된 run / start-run terminal 정상 쌍 / start 누락 run terminal / 진행 중 / 중단 흔적 / 종료 기록 없음 /
+  상태 판정 불가.
 - 고유 job 수.
 - job 최신 상태별 `applied`, `settled`, `awaiting`, `parked`, `provider-failed`, `error`, `interrupted`,
-  `running`, `state-unknown`, `busy`, `noop`.
+  `running`, `state-unknown`, `terminal-missing`, `busy`, `noop`.
 - 정상 no-op은 job 완료율에서 제외하고 `이미 최신`, `큐 교체됨` 등 사유별 별도 건수로 표시한다.
 - 자동 완료 비율 = `(applied job + settled job) / (applied + settled + awaiting + parked + provider-failed + error +
   interrupted)`.
-- 분모 5 미만이면 비율을 숨긴다. `busy`, `running`, `state-unknown`, 정상 `noop`, `jobRunId:null`은 이 분모에서
-  제외하고 coverage에 표시한다.
+- 분모 5 미만이면 비율을 숨긴다. `busy`, `running`, `state-unknown`, `terminal-missing`, 정상 `noop`,
+  `jobRunId:null`은 이 분모에서 제외하고 coverage에 표시한다. `terminal-missing`은 실제 중단의 증거가 아니라
+  마지막 통계 기록의 부재이므로 자료 한계를 함께 고지한다.
 - “자동 완료 비율”은 지도 정확도나 수정 항목 성공률이 아니라, 시작한 고유 작업 묶음이 사람 확인 없이
   종결됐는지를 나타낸다고 화면에 명시한다.
 
@@ -545,10 +551,10 @@ P10 상태 수집기는 이미 만들어진 `intentView`를 받아 표시만 한
 9. 구형 `workspace:""` 의미 보강 비용은 현재 프로젝트 합계에 들어가지 않는다.
 10. 같은 `jobRunId`의 실패→재개→완료는 run 여러 건, job 하나, 최신 상태 완료 하나다.
 11. 같은 `jobKey`라도 `startedAt/jobRunId`가 다른 두 입력 세대는 job 둘이며 서로의 terminal을 섞지 않는다.
-12. start 뒤 정상 run terminal, 살아 있는 잠금과 짝인 start, ESRCH 사망 잠금과 짝인 start, owner-unverified,
-    잠금 손상·판독 불가, run-terminal-only, 중복 run/job terminal, `jobRunId:null`, 동일 jobRunId-jobKey identity
-    충돌을 각각
-    정해진 상태/coverage로 접는다.
+12. start 뒤 정상 run terminal, 살아 있는 같은 `runId` 잠금과 짝인 start, ESRCH 사망인 같은 `runId` 잠금과
+    짝인 start, owner-unverified, 잠금 손상·판독 불가, 잠금 부재·다른 `runId`, run-terminal-only, 중복
+    run/job terminal, `jobRunId:null`, 동일 jobRunId-jobKey identity 충돌을 각각 정해진 상태/coverage로 접는다.
+    잠금 부재·다른 `runId`는 `interrupted`가 아니라 `terminal-missing`이다.
 13. 과거 provider 실패 terminal 뒤 같은 `jobRunId`의 살아 있는 재개 start가 오면 최신 job은 `running`이고
     실패 분모에서 빠진다.
 14. 적용 1+확인 대기 1인 `applied` terminal과 inconclusive-only `settled` terminal은 둘 다 `awaiting`이며,
@@ -564,7 +570,8 @@ P10 상태 수집기는 이미 만들어진 `intentView`를 받아 표시만 한
     - D1 applied terminal record가 60일 trim되고 같은 A의 D2 active가 남아 재시도돼도 prior terminal의
       `everApplied=true`가 false로 내려가지 않는다.
 16. 4개 표본에서는 비율이 없고 5개부터 `분자/분모`와 함께 비율이 보인다.
-17. `noop/busy/running/state-unknown`은 자동 완료율 분모에서 빠지고 `awaiting`은 확인 필요 분모에 들어간다.
+17. `noop/busy/running/state-unknown/terminal-missing`은 자동 완료율 분모에서 빠지고 `awaiting`은 확인 필요
+    분모에 들어간다.
 18. projection의 node 2+edge 1+degraded 1이면 freshness 분모 3, 임시 제외 1이다.
 19. blocked/error/legacy/none 상태에서는 stale 비율을 만들지 않는다.
 20. 손상·미지·미래 JSONL 줄은 합계를 오염시키지 않고 coverage에 반영된다.

@@ -9,7 +9,12 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
+const crypto = require("crypto");
 const CL = require(path.join(__dirname, "contract-lib.js"));
+
+function recordReadiness(provider, callId, charsIn, charsOut) {
+  try { CL.appendScoutUsage({ schema: "scout-usage-v2", ts: new Date().toISOString(), callId, scope: "global", repoKey: null, flow: "readiness", provider, model: null, tokenIn: null, tokenOut: null, charsIn, charsOut, runId: null, jobKey: null, jobRunId: null }); } catch { /* 비차단 */ }
+}
 
 // self — claude --version+어댑터 지문 결속. 반환 ver=null이면 호출자는 버전 캐시를 반드시 null로 리셋
 // (2차 blocker②: 실패 후 이전 캐시가 살아 있으면 view 재대조가 옛 성공을 '준비됨'으로 되살린다).
@@ -17,7 +22,13 @@ function probeSelf(opts) {
   const o = opts || {};
   const startedAt = new Date().toISOString(); // 늦은-패자 규칙 입력(4차 [주의] — 실행 전 캡처)
   const cmd = o.claudeCmd || "claude";
-  const rv = spawnSync(cmd, [...(o.claudeArgs || []), "--version"], { encoding: "utf8", timeout: 20000, windowsHide: true, shell: o.shell !== undefined ? o.shell : process.platform === "win32" }); // claudeArgs=테스트 주입 프리픽스(가짜 CLI 스크립트 실행용 — 실경로는 빈 배열)
+  const args = [...(o.claudeArgs || []), "--version"];
+  const target = CL.resolveExecutableForSpawn(cmd, o.env || process.env);
+  const callId = target ? crypto.randomUUID() : null;
+  const rv = target
+    ? spawnSync(target, args, { encoding: "utf8", timeout: 20000, windowsHide: true, shell: o.shell !== undefined ? o.shell : process.platform === "win32", env: o.env || process.env }) // claudeArgs=테스트 주입 프리픽스(가짜 CLI 스크립트 실행용 — 실경로는 빈 배열)
+    : { error: new Error("cli-not-found"), status: null, stdout: "", stderr: "", pid: null };
+  if (Number.isSafeInteger(rv.pid) && rv.pid > 0) recordReadiness("claude", callId, 0, String(rv.stdout || "").length);
   const ver = !rv.error && rv.status === 0 ? String(rv.stdout || "").trim().slice(0, 60) : null;
   const fp = ver ? CL.selfExecFp(ver, o.adapterHint) : null;
   const okS = !!ver && fp !== null;
@@ -47,17 +58,22 @@ function probePrecision(opts) {
   const startedAt = new Date().toISOString();
   const tmpC = fs.mkdtempSync(path.join(os.tmpdir(), "map-probe-"));
   const outF = path.join(tmpC, "probe-out.txt");
-  let okP = false, detP = "", inLen = 0, outLen = 0;
+  let okP = false, detP = "", inLen = 0, outLen = 0, callId = null, launched = false;
   try {
     const probeIn = o.prompt || "아무 도구도 쓰지 말고 'ready'라고만 답하라.";
     inLen = probeIn.length;
-    const rp = spawnSync(inv.file, [...(inv.args || []), ...CL.codexScoutExecArgs(outF)], { input: probeIn, cwd: tmpC, encoding: "utf8", timeout: o.timeoutMs || 120000, windowsHide: true, shell: !!inv.shell, stdio: ["pipe", "ignore", "pipe"], env: o.env || process.env });
+    const target = inv && CL.resolveExecutableForSpawn(inv.file, o.env || process.env);
+    callId = target ? crypto.randomUUID() : null;
+    const rp = target
+      ? spawnSync(target, [...(inv.args || []), ...CL.codexScoutExecArgs(outF)], { input: probeIn, cwd: tmpC, encoding: "utf8", timeout: o.timeoutMs || 120000, windowsHide: true, shell: !!inv.shell, stdio: ["pipe", "ignore", "pipe"], env: o.env || process.env })
+      : { error: new Error("cli-not-found"), status: null, stdout: "", stderr: "", pid: null };
+    launched = Number.isSafeInteger(rp.pid) && rp.pid > 0;
     let outTxt = ""; try { outTxt = fs.readFileSync(outF, "utf8").trim(); } catch { /* 실패 판정 */ }
     outLen = outTxt.length;
     okP = !rp.error && rp.status === 0 && !!outTxt;
     detP = okP ? "" : ((rp.error && rp.error.message) || `exit=${rp.status}`) + " " + String(rp.stderr || "").slice(-160);
   } finally { try { fs.rmSync(tmpC, { recursive: true, force: true }); } catch { /* 무해 */ } }
-  try { CL.appendScoutUsage({ ts: new Date().toISOString(), workspace: "", arm: "codex-probe", model: null, usageIn: null, usageOut: null, pkgChars: inLen, mapChars: outLen }); } catch { /* 무해 */ }
+  if (callId && launched) recordReadiness("codex", callId, inLen, outLen);
   const rec = { ok: okP, probedAt: new Date().toISOString(), startedAt, fp: fpP, detail: detP };
   const w = CL.writeMapReadinessGuarded("precision", rec, () => CL.precisionExecFp(inv));
   return { rec, write: w };
