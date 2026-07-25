@@ -123,7 +123,7 @@ console.log("[4] 복구 상태표 — 유료 running=uncertain-call park(재호�
   ok(j1.phase === "parked" && j1.attempts[0].phase === "parked", "장부 parked 감사 보존");
 }
 
-console.log("[5] verifier 해소 경로 — rewrite_label: no-verifier=park·reject=종결·support=적용");
+console.log("[5] verifier 해소 경로 — 확인 대기는 독립 항목을 막지 않고 명시 재시도만 새 호출");
 {
   const mkRl = (ws, nodeId, lbl) => (ctx) => ({ ok: true, result: { schema: "enrich-result-v1", items: [
     { op: "rewrite_label", targetId: nodeId, payload: { to: { label: lbl + "-x" }, expect: { label: lbl } }, evidence: [{ file: "src/a.js", quote: "// a" }], claims: [{ file: "src/a.js", quote: "// a", stance: "support" }] },
@@ -132,8 +132,23 @@ console.log("[5] verifier 해소 경로 — rewrite_label: no-verifier=park·rej
     const { ws, topo, nodeId } = setup("rl-nov");
     const lbl = topo.nodes[0].label;
     ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
-    const r = ME.runEnrich(ws, base(ws, { adapters: { self: mkRl(ws, nodeId, lbl) } }));
-    ok(r.outcome === "parked" && r.reason === "no-verifier", "verifier-resolved 분류인데 askVerifier 미주입=park(no-verifier — 조용한 대체 금지)");
+    const mixed = () => ({ ok: true, result: { schema: "enrich-result-v1", items: [
+      { op: "rewrite_label", targetId: nodeId, payload: { to: { label: lbl + "-x" }, expect: { label: lbl } }, evidence: [{ file: "src/a.js", quote: "// a" }], claims: [{ file: "src/a.js", quote: "// a", stance: "support" }] },
+      { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "independent" } }, evidence: [{ file: "src/a.js", quote: "// a" }] },
+    ] } });
+    const r = ME.runEnrich(ws, base(ws, { adapters: { self: mixed } }));
+    ok(r.outcome === "applied" && r.applied === 1 && r.awaitingVerification === 1, "검증 없는 의미 변경 1건은 확인 대기, 독립 항목 1건은 계속 적용");
+    ok(ME.readEnrichJob(ws).job.phase === "done" && ME.deferredSummary(ws).awaiting === 1, "작업은 완료되고 확인 대기는 별도 장부에 남음");
+    ok(MR.readTopoExFor(ws).topo.nodes.find((n) => n.id === nodeId).label === lbl, "확인 전 의미 변경은 적용하지 않음");
+    let normalCalls = 0;
+    ME.runEnrich(ws, base(ws, { askVerifier: () => { normalCalls++; return { verdict: "support", claims: [] }; } }));
+    ok(normalCalls === 0, "일반 관측은 확인 대기 검증을 자동 반복하지 않음");
+    let retryCalls = 0;
+    const rr = ME.runEnrich(ws, base(ws, { trigger: "retry", askVerifier: () => { retryCalls++; return { verdict: "support", claims: [{ file: "src/a.js", contentHash: sha(fs.readFileSync(path.join(ws, "src", "a.js"), "utf8")), locator: "L1", stance: "support" }] }; } }));
+    ok(rr.outcome === "applied" && retryCalls === 1 && ME.deferredSummary(ws).awaiting === 0, "명시 재시도는 새 검증 1회 후 대기 항목을 적용");
+    ok(MR.readTopoExFor(ws).topo.nodes.find((n) => n.id === nodeId).label === lbl + "-x", "재검증 통과 뒤 의미 변경 적용");
+    const counts = ME.enrichOutcomeSummary(ME.readEnrichJob(ws).job, ME.deferredSummary(ws));
+    ok(counts.applied === 2 && counts.rejected === 0 && counts.awaiting === 0 && counts.investigation === 0, "지연 support도 원 작업과 중복 없이 적용 2·나머지 0으로 집계");
   }
   {
     const { ws, topo, nodeId } = setup("rl-ok");
@@ -146,6 +161,66 @@ console.log("[5] verifier 해소 경로 — rewrite_label: no-verifier=park·rej
     ok(t2.nodes.find((n) => n.id === nodeId).label === lbl + "-x", "라벨 실반영");
     const decs = fs.readdirSync(path.join(ws, "project-map", "decisions")).map((f) => JSON.parse(fs.readFileSync(path.join(ws, "project-map", "decisions", f), "utf8")));
     ok(decs.some((d) => d.classification === "verifier-resolved" && d.actor.kind === "verifier"), "decision에 verifier 삼중 결속 실기록");
+  }
+  {
+    const { ws, topo, nodeId } = setup("rl-inc");
+    const lbl = topo.nodes[0].label;
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+    let calls = 0;
+    const r1 = ME.runEnrich(ws, base(ws, { adapters: { self: mkRl(ws, nodeId, lbl) }, askVerifier: () => { calls++; return { verdict: "inconclusive" }; } }));
+    ok(r1.outcome === "settled" && r1.awaitingVerification === 1 && calls === 1, "판단 불가는 적용 없이 별도 확인 대기로 종결");
+    ME.runEnrich(ws, base(ws, { trigger: "link:g1", askVerifier: () => { calls++; return { verdict: "support", claims: [] }; } }));
+    ok(calls === 1, "새 연결은 '검증 없음'만 한 번 깨우며 판단 불가를 자동 재질문하지 않음");
+    const r2 = ME.runEnrich(ws, base(ws, { trigger: "retry", askVerifier: () => { calls++; return { verdict: "reject" }; } }));
+    ok(r2.reason === "deferred-retry" && calls === 2 && ME.deferredSummary(ws).awaiting === 0, "판단 불가는 사용자의 명시 재시도에서만 다음 세대로 진행");
+    const counts = ME.enrichOutcomeSummary(ME.readEnrichJob(ws).job, ME.deferredSummary(ws));
+    ok(counts.applied === 0 && counts.rejected === 1 && counts.awaiting === 0 && counts.investigation === 0, "지연 reject도 기각 1·나머지 0으로 집계");
+  }
+  for (const verdict of ["support", "reject"]) {
+    const { ws, topo, nodeId } = setup("rl-terminal-crash-" + verdict);
+    const lbl = topo.nodes[0].label;
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+    ME.runEnrich(ws, base(ws, { adapters: { self: mkRl(ws, nodeId, lbl) } }));
+    const active = ME.deferredSummary(ws).records[0];
+    const pendingPath = path.join(MP.dirsFor(ws, active.mapId).pending, active.patchId + ".json");
+    const patch = JSON.parse(fs.readFileSync(pendingPath, "utf8")).patch;
+    const beg = ME.beginDeferredCall(ws, active, "manual", "");
+    const resolution = { patchId: patch.patchId, opHash: PM.opHashOf(patch), baseDecisionContextHash: patch.baseDecisionContextHash, verdict,
+      claims: verdict === "support" ? [{ file: "src/a.js", contentHash: sha(fs.readFileSync(path.join(ws, "src", "a.js"), "utf8")), locator: "L1", stance: "support" }] : [] };
+    ok(beg.ok && beg.action === "call" && ME.finishDeferredCall(ws, patch.patchId, beg.token, verdict, resolution).ok, verdict + " 종결 직전 판정 장부 구성");
+    if (verdict === "support") ok(MP.applyPatch(ws, active.mapId, patch.patchId, { preCutover: true, verifierResolution: resolution }).ok, "support P2 적용 직후 종료 창 구성");
+    else ok(MP.expirePendingPatch(ws, active.mapId, patch.patchId, PM.opHashOf(patch)).ok, "reject P2 만료 직후 종료 창 구성");
+    ME.runEnrich(ws, base(ws));
+    const counts = ME.enrichOutcomeSummary(ME.readEnrichJob(ws).job, ME.deferredSummary(ws));
+    ok(counts.awaiting === 0 && counts.investigation === 0 && counts[verdict === "support" ? "applied" : "rejected"] === 1,
+      verdict + " P2 종결 뒤 프로세스 종료·재개도 terminal 결과를 복구 집계");
+  }
+  {
+    const { ws, topo, nodeId } = setup("rl-linkgen");
+    const lbl = topo.nodes[0].label;
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+    ME.runEnrich(ws, base(ws, { adapters: { self: mkRl(ws, nodeId, lbl) } }));
+    let calls = 0;
+    ME.runEnrich(ws, base(ws, { trigger: "link:g1", askVerifier: () => { calls++; return null; } }));
+    ME.runEnrich(ws, base(ws, { trigger: "link:g1", askVerifier: () => { calls++; return { verdict: "support", claims: [] }; } }));
+    ok(calls === 1, "같은 검증 연결 세대는 검증 없음 항목을 한 번만 깨움");
+    const r2 = ME.runEnrich(ws, base(ws, { trigger: "link:g2", askVerifier: () => { calls++; return { verdict: "support", claims: [{ file: "src/a.js", contentHash: sha(fs.readFileSync(path.join(ws, "src", "a.js"), "utf8")), locator: "L1", stance: "support" }] }; } }));
+    ok(calls === 2 && r2.outcome === "applied", "새 연결 세대에서만 한 번 더 시도해 통과 결과 적용");
+  }
+  {
+    const { ws, topo, nodeId } = setup("rl-crash");
+    const lbl = topo.nodes[0].label;
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+    let calls = 0;
+    const r1 = ME.runEnrich(ws, base(ws, { adapters: { self: mkRl(ws, nodeId, lbl) }, askVerifier: () => { calls++; throw new Error("lost-receipt"); } }));
+    const dr = ME.deferredSummary(ws);
+    ok(r1.outcome === "settled" && dr.records[0].phase === "uncertain" && calls === 1, "호출 중 결과 유실은 불확실 상태로 보존");
+    ME.runEnrich(ws, base(ws, { trigger: "link:g1", askVerifier: () => { calls++; return { verdict: "reject" }; } }));
+    ok(calls === 1, "불확실 호출은 연결 변화로 자동 재호출하지 않음");
+    const beg = ME.beginDeferredCall(ws, ME.deferredSummary(ws).records[0], "manual", "");
+    ok(beg.ok && beg.action === "call", "호출 직전 calling 영속 창 구성");
+    ME.runEnrich(ws, base(ws, { askVerifier: () => { calls++; return { verdict: "reject" }; } }));
+    ok(calls === 1 && ME.deferredSummary(ws).records[0].phase === "uncertain", "calling 뒤 프로세스 사망은 재개 시 자동 재호출 없이 불확실로 복구");
   }
   {
     const { ws, topo, nodeId } = setup("rl-rej");
@@ -284,6 +359,28 @@ console.log("[8c] sourceFp 폴백=AND(6~7차 — 같은 jobKey에서 기록 부�
   let re = 0;
   const r2 = ME.runEnrich(ws, base(ws, { adapters: { self: (c) => { re++; return rlA(c); } }, askVerifier: () => ({ verdict: "reject" }) }));
   ok(re === 1 && r2.reason !== "already-enriched", "같은 jobKey+지문 부재 done+현재 지문 산출 가능=재보강 실행(AND 폴백 — OR였다면 already-enriched로 억제)");
+}
+
+console.log("[8d] 같은 jobKey의 새 실행은 과거 terminal·active를 현재 네 수치에 섞지 않음");
+for (const prior of ["terminal", "active"]) {
+  const { ws, topo, nodeId } = setup("run-generation-" + prior);
+  const lbl = topo.nodes[0].label;
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  const item = () => ({ ok: true, result: { schema: "enrich-result-v1", items: [
+    { op: "rewrite_label", targetId: nodeId, payload: { to: { label: lbl + "-g" }, expect: { label: lbl } }, evidence: [{ file: "src/a.js", quote: "// a" }], claims: [{ file: "src/a.js", quote: "// a", stance: "support" }] },
+  ] } });
+  const a = ME.runEnrich(ws, base(ws, { adapters: { self: item }, ...(prior === "terminal" ? { askVerifier: () => ({ verdict: "reject" }) } : {}) }));
+  ok(a.outcome === "settled" && ME.deferredSummary(ws).awaiting === (prior === "active" ? 1 : 0), prior + " 실행 A 구성");
+  const jobA = ME.readEnrichJob(ws).job, runA = ME.jobRunIdOf(jobA);
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3);
+  fs.appendFileSync(path.join(ws, "src", "a.js"), "// source generation B\n");
+  const b = ME.runEnrich(ws, base(ws, { adapters: { self: item } }));
+  const jobB = ME.readEnrichJob(ws).job, runB = ME.jobRunIdOf(jobB), ds = ME.deferredSummary(ws), counts = ME.enrichOutcomeSummary(jobB, ds);
+  ok(jobB.jobKey === jobA.jobKey && runB !== runA, prior + " 실행 B는 같은 jobKey·다른 실행 세대");
+  ok(b.awaitingVerification === 1 && counts.applied === 0 && counts.rejected === 0 && counts.awaiting === 1 && counts.investigation === 0,
+    prior + " 실행 A 결과가 실행 B의 적용·기각·대기·조사 수에 혼입되지 않음");
+  ok((prior === "active" ? counts.otherAwaiting === 1 : counts.otherAwaiting === 0) && counts.unattributed === 0,
+    prior + " 과거 활성은 이전 실행 대기로 분리하고 새 형식 기록은 미귀속 0");
 }
 
 console.log("[9] run-lock 사망 회수 — 동시 복구자 경합(4차: 시작 장벽+임계구역 유지+3회 반복)");

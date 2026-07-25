@@ -552,7 +552,7 @@ function maybeSpawnEnrichExt(ws: string | null, trigger: string): void {
     if (!eligible) return; // 동의 없음=발동 안 함(실행기도 park하지만 spawn 자체를 아낌)
     const jr9 = ME9.readEnrichJob(repo9);
     if (jr9.st === "ok" && (jr9.job.phase === "parked" || jr9.job.phase === "done")) { /* done=수렴은 실행기 판정·parked=재시도 버튼만 — 단 done은 소스 변경 재보강 판정이 실행기 소관이라 spawn 허용 */ }
-    if (jr9.st === "ok" && jr9.job.phase === "parked") return; // parked=명시 재시도만(자동 재발동 금지·consent-stale 자동 재개는 실행기가 판단하지만 그 판단도 spawn이 필요 — grant 세대 전진 시에만 spawn)
+    if (jr9.st === "ok" && jr9.job.phase === "parked" && !trigger.startsWith("link:")) return; // 새 검증 연결은 별도 확인 대기 장부만 처리할 수 있어 parked 작업과 독립
     enrichSpawnBusy = true; enrichSpawnLastAt = Date.now();
     const cli = path.join(BRIDGE_DIR, "map-enrich.js");
     const child = spawn(process.execPath, [cli, "run", repo9, "--ws", ws, "--slot", lang, "--trigger", trigger], { stdio: "ignore", detached: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
@@ -1866,7 +1866,7 @@ function alertTooltip(headMd: string): vscode.MarkdownString {
 }
 
 // 검증 파이프라인 라이브 단계: 훅/브릿지가 phase.json에 기록한 단계 + 코덱스 rollout 성장 + staleness로
-// 사용자에게 진행을 보여준다(토큰 스트림 아님, 파일변화 기반). 단계: 대기/Claude작업중/검증요청됨/Codex생성중/반영중/완료/미완.
+// 사용자에게 진행을 보여준다(토큰 스트림 아님, 파일변화 기반). 단계: 대기/Claude작업중/검증요청됨/Codex생성중/반영중/완료/판단대기/미완.
 interface LiveStage { key: string; label: string; icon: string; spin: boolean; round: number; color: string }
 function readPhaseRaw(): { phase?: string; round?: number; session?: string; workspace?: string; ts?: string } {
   try { return JSON.parse(fs.readFileSync(PHASE_FILE, "utf8")) || {}; } catch { return {}; }
@@ -1901,6 +1901,8 @@ function computeLiveStage(linkedId: string | null): LiveStage | null {
         : { key: "codex-req", label: tE("코덱스에 검증 요청","verify requested to Codex"), icon: "$(sync~spin)", spin: true, round, color: "charts.yellow" };
     case "rejudging": return { key: "rejudge", label: tE("검증 답 반영중","applying verify answer"), icon: "$(pencil)", spin: false, round, color: "charts.orange" };
     case "done": return { key: "done", label: tE("검증 완료","verify done"), icon: "$(check)", spin: false, round, color: "charts.green" };
+    case "held": return { key: "held", label: tE("검증 상한 · 사용자 판단 대기","verification cap · awaiting user decision"), icon: "$(question)", spin: false, round, color: "charts.yellow" };
+    case "cap-settled": return { key: "cap-settled", label: tE("검증 상한 · 자동 정리 완료(통과 아님)","verification cap · triage complete (not a pass)"), icon: "$(checklist)", spin: false, round, color: "charts.yellow" };
     case "incomplete": return { key: "incomplete", label: tE("검증 미완","unverified"), icon: "$(alert)", spin: false, round, color: "charts.red" };
     default: return null;
   }
@@ -2116,10 +2118,22 @@ function computeState(turnsN: number): BridgeState {
         const c9 = ME9.readEnrichConsent(repo9);
         const g9 = c9.st === "ok" ? ME9.findGrant(c9, ws, lang9) : null;
         const jr9 = ME9.readEnrichJob(repo9);
+        const job9 = jr9.st === "ok" ? jr9.job : null;
+        const ds9 = typeof ME9.deferredSummary === "function" ? ME9.deferredSummary(repo9, job9 && job9.mapId ? job9.mapId : undefined) : { st: "ok", awaiting: 0 };
+        const counts9 = typeof ME9.enrichOutcomeSummary === "function" ? ME9.enrichOutcomeSummary(job9, ds9) : { applied: 0, rejected: 0, awaiting: ds9.st === "ok" ? (ds9.awaiting || 0) : null, investigation: 0, otherAwaiting: 0, unattributed: 0 };
+        const applied9 = counts9.applied;
+        const rejected9 = counts9.rejected;
+        const awaiting9 = counts9.awaiting;
+        const last9 = job9 && job9.attempts.length ? job9.attempts[job9.attempts.length - 1] : null;
+        const investigation9 = counts9.investigation;
         maybeSpawnEnrichExt(ws, "tick"); // 발동 ⓒ(내부 게이트·동의·스로틀·단일-flight)
         return {
           consentSt: c9.st, selfAuto: !!(g9 && g9.selfAuto), paidMode: g9 ? g9.paidMode : null,
-          job: jr9.st === "ok" ? { phase: jr9.job.phase, parkedReason: jr9.job.parkedReason || null, provider: jr9.job.attempts.length ? jr9.job.attempts[jr9.job.attempts.length - 1].provider : null, applied: jr9.job.attempts.reduce((n9: number, a9: any) => n9 + ((a9.cursor && a9.cursor.appliedPatchIds) || []).length, 0) } : { phase: jr9.st },
+          job: job9 ? { phase: job9.phase, parkedReason: job9.parkedReason || null, provider: last9 ? last9.provider : null, applied: applied9, rejected: rejected9, investigation: investigation9 } : { phase: jr9.st },
+          awaitingVerification: awaiting9,
+          previousRunAwaiting: counts9.otherAwaiting || 0,
+          unattributedDeferred: counts9.unattributed || 0,
+          deferredSt: ds9.st,
           queuePending: (() => { try { const MB9: any = require(path.join(BRIDGE_DIR, "map-bootstrap.js")); return fs.existsSync(MB9.queueFileFor(repo9)); } catch { return false; } })(),
         };
       } catch { return null; }
@@ -3280,6 +3294,12 @@ function relinkVerifier(id: string): boolean {
   return result===true&&!conflict;
 }
 
+function triggerEnrichLinkRetry(ws: string | null, verifierId: string): void {
+  if (!ws) return;
+  enrichSpawnLastAt = 0;
+  maybeSpawnEnrichExt(ws, "link:" + Date.now() + ":" + verifierId);
+}
+
 function clearCodexCodexVerifierOverride(): boolean {
   const ws = dashboardWorkspace();
   if (!ws) return false;
@@ -3336,11 +3356,13 @@ class Dashboard {
         }
         if (m?.type === "relink" && m.id) {
           if (!relinkVerifier(String(m.id))) { vscode.window.showErrorMessage(tE("검증 연결 저장에 실패했어요. 현재 구현 세션은 검증자로 선택할 수 없으며, 파일 잠금/권한도 확인하세요.","Failed to save the verifier link. The current implementer cannot also be the verifier; check file locks/permissions too.")); return; }
+          triggerEnrichLinkRetry(dashboardWorkspace(), String(m.id));
           this.post();
           vscode.commands.executeCommand("codexBridge.refresh");
         }
         if (m?.type === "clearCodexCodexVerifier") {
           if (!clearCodexCodexVerifierOverride()) { vscode.window.showErrorMessage(tE("전용 검증 연결 해제에 실패했어요.","Failed to clear the dedicated verifier.")); return; }
+          triggerEnrichLinkRetry(dashboardWorkspace(), "shared");
           this.post(); vscode.commands.executeCommand("codexBridge.refresh");
         }
         if (m?.type === "openReconGuide") openReconGuide(); // 정찰 구조 안내 — 대시보드와 별개의 정적 새탭(스크립트 없음)
@@ -4485,7 +4507,7 @@ class Dashboard {
     <div class="hint" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center"><span class="pfm">${t("빈값", "empty")} <b>${t("무제한(기본)", "unlimited (default)")}</b></span><span class="pfm">${t("숫자 n", "number n")} <b>${t("지시당 n회까지", "up to n per instruction")}</b></span><span class="pfm note">${t("마지막 회차", "final round")} <b>${t("예고 부착", "notice attached")}</b></span><span class="pfm bad">${t("초과", "beyond cap")} <b>${t("기계적 거부", "mechanically refused")}</b></span></div>
     <div class="hint" id="vbPresets" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">${t("추천값:", "Suggested:")} <button type="button" data-vb="2">${t("소형 수정 · 2", "small fix · 2")}</button><button type="button" data-vb="3">${t("일상 개발 · 3 (권장)", "daily dev · 3 (recommended)")}</button><button type="button" data-vb="5">${t("대형·복잡 · 5", "large/complex · 5")}</button><button type="button" data-vb="0">${t("무제한 · 0", "unlimited · 0")}</button> <span class="muted">${t("클릭=자동 입력 — 직접 숫자를 적어도 돼요(저장 후 다음 지시부터)", "click to fill — manual entry works too (applies from the next instruction after saving)")}</span></div>
     <div id="envCard" class="hint" style="display:none;margin-top:6px;padding:7px;border:1px solid var(--vscode-widget-border,#555);border-radius:6px"></div>
-    <details class="hintfold"><summary>${t("ⓘ 상한에 걸리면 어떻게 되나", "ⓘ What happens at the cap")}</summary><div class="hint">${t("그 시점에 심각한 결함(blocker)이 남아 있으면 '완료'로 포장하지 않고, 선택지를 붙인 보고(예: 더 검증하도록 승인 / 이 상태로 두기 / 상한 변경)로 사용자의 지시를 기다립니다. 저장 후 다음 지시부터 적용 — 진행 중인 지시의 상한은 그대로예요. 상한을 설정한 지시에서 내부 기록이 실패한 왕복은 세지 못하며 '미집계'로 표시됩니다(절대 상한 아님 — 무제한일 땐 세지 않고 표시도 없음).", "If serious defects (blockers) remain at that point, the report is not dressed up as 'done'; instead it presents options (approve more verification / leave as is / change the cap) and waits for your instruction. Applies from the next instruction after saving — the running one keeps its cap. Under a finite cap, round-trips whose internal bookkeeping failed cannot be counted and are shown as 'untracked' (not an absolute cap — with unlimited, nothing is counted or shown).")}</div></details>
+    <details class="hintfold"><summary>${t("ⓘ 상한에 걸리면 어떻게 되나", "ⓘ What happens at the cap")}</summary><div class="hint">${t("마지막 검증 지적만 수용·처리 / 근거 있는 반박 / 영수증 있는 보관함 / 사용자 판단으로 나눕니다. 앞의 세 갈래는 구현 담당이 정리하고, 구현자가 대신 정할 수 없는 선택이 있을 때만 질문 하나로 묶습니다. 질문이 없어 자동 정리돼도 검증 통과는 아닙니다. 저장한 상한 변경은 다음 지시부터 적용되며, 내부 기록이 실패한 왕복은 '미집계'로 표시됩니다(절대 상한 아님 — 무제한일 땐 세지 않고 표시도 없음).", "Only the latest findings are split into accepted-and-handled, evidence-backed rebuttal, receipt-backed parking, or user decision. The implementer closes the first three and asks one combined question only for a choice it cannot make. Automatic triage is still not a verification pass. Saved cap changes apply from the next instruction; rounds with failed bookkeeping are shown as untracked (not an absolute cap — unlimited mode is not counted or shown).")}</div></details>
     <label class="ck verify">${t("트랙 — 구현·검증 흐름에 <b>정찰(영향 미리보기·관찰 일지)</b>을 더할지", "Track — add <b>recon (impact preview · field journal)</b> to the implement·verify flow")}
       <span class="seg" id="segScout">
         <button type="button" data-sm="off">${t("2트랙<small>구현↔검증 (기본)</small>", "2-track<small>implement↔verify (default)</small>")}</button><button type="button" data-sm="on">${t("3트랙<small>+정찰 (관찰)</small>", "3-track<small>+recon (advisory)</small>")}</button>
@@ -5889,10 +5911,13 @@ class Dashboard {
             if(en9.consentSt==="damaged") msg=T("자동 보강: 동의 기록 손상 — 수동 복구 필요","Auto-enrich: consent record damaged — manual recovery");
             else if(!consented) msg=T("자동 보강: 꺼짐(이 담당의 자동 실행 동의 없음)","Auto-enrich: off (no consent for this provider)");
             else if(jp==="damaged") msg=T("자동 보강: 작업 기록 손상 — 자동 실행 정지","Auto-enrich: job ledger damaged — automation halted");
+            else if(en9.deferredSt==="damaged") msg=T("자동 보강: 확인 대기 기록 손상 — 수동 복구 필요","Auto-enrich: verification queue damaged — manual recovery required");
             else if(jp==="parked") msg=T("자동 보강: 보류됨 — ","Auto-enrich: parked — ")+(en9.job.parkedReason||"");
-            else if(jp==="done") msg=T("자동 보강: 완료(적용 ","Auto-enrich: done (applied ")+String(en9.job.applied||0)+T("건) — 소스가 바뀌면 다시 돌아요",") — reruns when sources change");
+            else if(jp==="done") msg=T("자동 보강: 완료 — 적용 ","Auto-enrich: done — applied ")+String(en9.job.applied||0)+T("건 · 확인 대기 "," · awaiting verification ")+String(en9.awaitingVerification||0)+T("건 · 기각 "," · rejected ")+String(en9.job.rejected||0)+T("건 · 조사 대기 "," · investigation ")+String(en9.job.investigation||0)+T("건"," items");
             else if(jp==="open") msg=T("자동 보강: 진행 중","Auto-enrich: in progress");
             else msg=en9.queuePending?T("자동 보강: 대기 중(다음 관측 때 실행)","Auto-enrich: pending (runs on next observation)"):T("자동 보강: 대기 없음","Auto-enrich: nothing queued");
+            if((en9.previousRunAwaiting||0)>0) msg+=T(" · 이전 실행 확인 대기 "," · previous-run awaiting ")+String(en9.previousRunAwaiting)+T("건"," items");
+            if((en9.unattributedDeferred||0)>0) msg+=T(" · 구형 기록 귀속 확인 필요 "," · legacy records need attribution ")+String(en9.unattributedDeferred)+T("건"," items");
             st9.textContent=msg;
             if(!consented&&modeNow==="self"&&en9.consentSt!=="damaged"){
               const cb=document.createElement("button"); cb.type="button"; cb.className="secondary"; cb.style.cssText="margin-left:8px;font-size:11px;padding:2px 8px";
@@ -5900,9 +5925,9 @@ class Dashboard {
               cb.addEventListener("click", function(){ cb.disabled=true; vscode.postMessage({type:"grantEnrichSelf"}); });
               st9.appendChild(cb);
             }
-            if(jp==="parked"){
+            if(jp==="parked"||(en9.awaitingVerification||0)>0||(en9.previousRunAwaiting||0)>0){
               const rb=document.createElement("button"); rb.type="button"; rb.className="secondary"; rb.style.cssText="margin-left:8px;font-size:11px;padding:2px 8px";
-              rb.textContent=T("다시 시도","Retry");
+              rb.textContent=((en9.awaitingVerification||0)>0||(en9.previousRunAwaiting||0)>0)?T("확인 대기 다시 시도","Retry verification queue"):T("다시 시도","Retry");
               rb.addEventListener("click", function(){ rb.disabled=true; vscode.postMessage({type:"retryEnrich"}); });
               st9.appendChild(rb);
             }
@@ -7444,12 +7469,14 @@ export function activate(context: vscode.ExtensionContext): void {
       const nFail = errs.filter((e) => e.kind === "verdict-nonclean").length; // Codex 결론 '실패'(빨강·재검증 통과 시 자동 해소)
       const nSession = errs.filter((e) => e.kind === "session-missing").length; // 연결 세션 없음(빨강·연결되면 자동 해소, ack 아님)
       const nHook = errs.filter((e) => e.kind === "codex-hook-missing").length; // C-C 구현 훅 미작동(heartbeat로만 해소)
-      const nIncomplete = errs.length - nFail - nSession - nHook;               // 검증 미완(검증 자체가 안 일어남·ack 필요)
-      const ekinds = [nFail > 0, nSession > 0, nHook > 0, nIncomplete > 0].filter(Boolean).length;
+      const nHandoff = errs.filter((e) => e.kind === "verify-handoff-missing").length; // 상한 뒤 네 갈래 마감문 누락
+      const nIncomplete = errs.length - nFail - nSession - nHook - nHandoff;            // 검증 미완(검증 자체가 안 일어남·ack 필요)
+      const ekinds = [nFail > 0, nSession > 0, nHook > 0, nHandoff > 0, nIncomplete > 0].filter(Boolean).length;
       const label = ekinds > 1 ? tE("Codex 검증 문제","Codex verify issues")
                   : nFail ? tE("Codex 검증 실패","Codex verify failed")
                   : nSession ? tE("Codex 세션 없음","no Codex session")
                   : nHook ? tE("Codex 구현 훅 미작동","Codex implementer hook inactive")
+                  : nHandoff ? tE("검증 상한 마감 누락","verification cap closeout missing")
                   : tE("Codex 검증 미완","Codex verify incomplete");
       const warnTail = warns.length ? ` · 🟡${warns.length}` : ""; // 같이 뜬 노랑(두뇌 어긋남·근거 의심 등)도 건수로 노출
       status.text = `$(alert) ${label} ${errs.length}${warnTail}`;
@@ -7460,6 +7487,7 @@ export function activate(context: vscode.ExtensionContext): void {
           (nFail ? tE(`\n\n검증 실패: 고쳐서 다시 검증해 통과하면 빨강이 사라집니다.`,`\n\nVerify failed: fix, re-verify to pass, and the red clears.`) : ``) +
           (nSession ? tE(`\n\nCodex 세션 없음: 'Codex 세션 연결'에서 수동 연결하거나, 검증을 계속 진행하면 자동 연결을 시도해요(연결되면 사라짐 · '확인함'으론 안 닫힘).`,`\n\nNo Codex session: link manually under 'Codex Session Link', or keep verifying for auto-link (clears when linked · cannot be dismissed).`) : ``) +
           (nHook ? tE(`\n\nCodex 구현 훅 미작동: 플러그인을 설치·활성화하고 Codex 설정 → Hook에서 네 훅을 신뢰한 뒤, 사용하려는 Codex 대화를 다시 열거나 프롬프트를 보내 실제 lifecycle heartbeat를 확인하세요. 구현 연결과 초록 표시는 그 대화로 자동 이동합니다. 이 상태에서는 모든 턴 검증이 강제되지 않습니다.`,`\n\nCodex implementer hook inactive: install/enable the plugin, trust all four hooks under Codex Settings → Hooks, then reopen the Codex conversation or send a prompt and confirm a real lifecycle heartbeat. The implementer link and green marker move there automatically. Verify-every-turn is not enforced in this state.`) : ``) +
+          (nHandoff ? tE(`\n\n상한 마감 누락: 마지막 검증 지적이 수용·반박·보관함·사용자 판단 중 어디로 갔는지 정리되지 않았습니다. 그냥 지나치면 안 되며, 구현 대화에서 네 갈래 마감문을 마치면 자동으로 사라집니다.`,`\n\nCap closeout missing: the latest verification findings were not assigned to accepted, rebutted, parked, or user-decision lanes. Do not ignore it; it clears automatically after the implementer conversation completes the four-way closeout.`) : ``) +
           (errs.some((e) => e.sig === "session-missing:blocked") ? tE(`\n\n자동 생성이 멈춰 있어요 — 계속되면 `,`\n\nAuto-creation is paused — if it persists, `) + `[${tE("GitHub에 문제 신고","report on GitHub")}](https://github.com/kimbyungsu/codex-peek/issues)` : ``) +
           (nIncomplete ? tE(`\n\n검증 미완: 이 턴이 '검증 없이' 종료됐을 수 있어요(확인 필요).`,`\n\nUnverified: this turn may have ended WITHOUT verification (needs review).`) : ``),
       );

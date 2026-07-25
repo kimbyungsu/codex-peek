@@ -6,7 +6,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, loadLang, buildInjection, buildVerifyDirective, buildScoutDirective, atomicWrite, BRIDGE_DIR, ACTIVE_DIR, writePhase, patchContractFields, contractReadState, activeAskJobFor, phaseBusy, contractLockIssue } = require("./contract-lib.js");
+const { loadContract, loadLang, buildInjection, buildVerifyDirective, buildScoutDirective, verifyCampaignProgress, atomicWrite, BRIDGE_DIR, ACTIVE_DIR, writePhase, patchContractFields, contractReadState, activeAskJobFor, phaseBusy, contractLockIssue } = require("./contract-lib.js");
 
 let input = "";
 process.stdin.on("data", (d) => (input += d));
@@ -22,13 +22,14 @@ process.stdin.on("end", () => {
 
   // 활성 작업 폴더 기록 → 대시보드/configWs가 VS Code 첫 폴더가 아니라 이 폴더(연 폴더)를 따라가게.
   const sid = hook.session_id || process.env.CLAUDE_CODE_SESSION_ID || "";
+  const activeTs = new Date().toISOString();
   const activePayload = JSON.stringify({
     workspace: ws,
     claudeSession: sid,
     // §5.3: 플랜 모드 감지·라이브표시용. Claude Code UserPromptSubmit 입력의 permission_mode
     // ("plan"이면 플랜 모드). 문서 예시는 "default"라 실제 값은 실로그로 확인(빈값=미노출).
     permissionMode: (hook && typeof hook.permission_mode === "string") ? hook.permission_mode : "",
-    ts: new Date().toISOString(),
+    ts: activeTs,
   });
   // (1) 레거시 단일 active.json — 확장(activeWorkspace)·세션ID 없는 폴백 경로가 읽음.
   try { atomicWrite(path.join(BRIDGE_DIR, "active.json"), activePayload); } catch { /* ignore */ }
@@ -132,7 +133,10 @@ process.stdin.on("end", () => {
       const rules = buildInjection(c.claude, "Claude Code", c.claudeChecklist);
       if (rules) parts.push(rules);
     }
-    if (c.verifyMode && c.verifyMode !== "off") parts.push(buildVerifyDirective(c.verifyMode, undefined, c.verifyProfile)); // P-12 프로필(주입 시점 실효값)
+    if (c.verifyMode && c.verifyMode !== "off") {
+      const campaignId = sid ? "cl:" + sid + ":" + activeTs : "";
+      parts.push(buildVerifyDirective(c.verifyMode, undefined, c.verifyProfile, verifyCampaignProgress(ws, campaignId, c.verifyBudget)));
+    }
     // 탐색(3트랙) 자동 지시 — 지도 없음/낡음일 때 그 상태에 1회만(상태 서명 기반·advisory). 실패해도 훅을 막지 않음.
     try { const sd = buildScoutDirective(ws, c); if (sd) parts.push(sd); } catch { /* advisory */ }
     // P1: Project MAP 비차단 bootstrap — 훅은 유계 신호+상태 고지(1회)+detach 기동만(실행·전수 판독 금지:

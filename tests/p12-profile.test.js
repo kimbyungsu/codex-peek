@@ -137,8 +137,8 @@ const wk = fs.readFileSync(path.join(ROOT, "bridge", "ask-job-worker.js"), "utf8
 ok(/Object\.assign\(\{\}, cur, extra\)/.test(wk), "worker patch=기존 필드 보존 병합(동결 필드 불변)");
 
 console.log("[5] 주입자·P-6·UI 배선(소스 잠금)");
-ok(/buildVerifyDirective\(c\.codexVerifyMode, undefined, c\.codexVerifyProfile\)/.test(fs.readFileSync(path.join(ROOT, "bridge", "codex-hook.js"), "utf8")), "C-C 주입 — 그 시점 실효 프로필 전달");
-ok(/buildVerifyDirective\(c\.verifyMode, undefined, c\.verifyProfile\)/.test(fs.readFileSync(path.join(ROOT, "bridge", "contract-inject.js"), "utf8")), "CL-C 주입 — 동일");
+ok(/buildVerifyDirective\(c\.codexVerifyMode, undefined, c\.codexVerifyProfile, verifyCampaignProgress/.test(fs.readFileSync(path.join(ROOT, "bridge", "codex-hook.js"), "utf8")), "C-C 주입 — 그 시점 실효 프로필+실제 회차 전달");
+ok(/buildVerifyDirective\(c\.verifyMode, undefined, c\.verifyProfile, verifyCampaignProgress/.test(fs.readFileSync(path.join(ROOT, "bridge", "contract-inject.js"), "utf8")), "CL-C 주입 — 동일");
 ok(/writeDurableProofV2/.test(src) && !/verifyProfile/.test(String((CL.writeDurableProofV2 || "").toString())), "P-6 proof 서명에 프로필 미포함(영수증 바이트 불변 — 계약 ⓖ)");
 const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
 ok(/id="segProfile"/.test(ext) && /data-vp="integrity"/.test(ext) && /data-vp="core"/.test(ext), "UI — 프로필 세그먼트(무결성 기본/핵심)");

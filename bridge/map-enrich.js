@@ -18,6 +18,7 @@ const realOf = (p) => { try { return fs.realpathSync(p); } catch { return path.r
 const repoKeyFor = (repo) => sha1(CL.normWs(realOf(repo))).slice(0, 16);
 const consentFileFor = (repo) => path.join(ENRICH_DIR, "consent-" + repoKeyFor(repo) + ".json");
 const jobFileFor = (repo) => path.join(ENRICH_DIR, repoKeyFor(repo) + ".job.json");
+const deferredFileFor = (repo) => path.join(ENRICH_DIR, repoKeyFor(repo) + ".deferred.json");
 
 function readJson3(f) {
   let raw;
@@ -263,10 +264,163 @@ function jobKeyOf(mapId, authorityHash, decisionContextHash) {
   return sha1(String(mapId) + "|" + String(authorityHash) + (decisionContextHash ? "|" + decisionContextHash : ""));
 }
 
+// ── 검증 확인 대기 장부(enrich-deferred-v1) ────────────────────────────────────
+// Project MAP pending은 patch/lifecycle 정본이고, 이 장부는 P8 실행기의 운영 상태만 보존한다. job 파일과 분리해
+// 새 source 세대가 와도 확인 대기 사유·호출 세대가 사라지지 않는다. 일반 tick은 이 장부를 읽기만 하며 외부
+// verifier 재호출을 열지 않는다.
+const DEFERRED_PHASES = ["waiting", "calling", "answered", "uncertain", "settled", "stale"];
+const DEFERRED_REASONS = ["no-verifier", "inconclusive", "uncertain-call", "answered", "cas-stale", "settled"];
+const DEFERRED_TERMINAL_KEEP_MS = 60 * 24 * 60 * 60 * 1000;
+function validateDeferred(d) {
+  if (!d || typeof d !== "object" || Array.isArray(d) || d.schema !== "enrich-deferred-v1" || !Array.isArray(d.records)) return "root";
+  if (Object.keys(d).some((k) => !["schema", "records"].includes(k))) return "root-key";
+  const ids = new Set();
+  for (const r of d.records) {
+    if (!r || typeof r !== "object" || Array.isArray(r)) return "record";
+    const allowed = ["mapId", "patchId", "opHash", "jobKey", "jobRunId", "attemptId", "itemIndex", "framing", "phase", "reason", "retryGeneration", "lastLinkGeneration", "callToken", "callTrigger", "resolution", "terminalOutcome", "history", "createdAt", "updatedAt", "rebasedFrom"];
+    if (Object.keys(r).some((k) => !allowed.includes(k))) return "record-key";
+    if (!UUID_RE.test(String(r.mapId)) || !UUID_RE.test(String(r.patchId)) || !FP_RE.test(String(r.opHash)) || !FP_RE.test(String(r.jobKey))) return "identity";
+    if (ids.has(r.patchId)) return "duplicate"; ids.add(r.patchId);
+    if (!Number.isInteger(r.attemptId) || r.attemptId < 0 || !Number.isInteger(r.itemIndex) || r.itemIndex < 0) return "position";
+    if (r.jobRunId !== undefined && !FP_RE.test(String(r.jobRunId))) return "job-run-id";
+    if (!["resolution", "conflict"].includes(r.framing) || !DEFERRED_PHASES.includes(r.phase) || !DEFERRED_REASONS.includes(r.reason)) return "state";
+    if (!Number.isInteger(r.retryGeneration) || r.retryGeneration < 0 || typeof r.createdAt !== "string" || typeof r.updatedAt !== "string") return "meta";
+    if (r.lastLinkGeneration !== undefined && typeof r.lastLinkGeneration !== "string") return "link-generation";
+    if (r.callToken !== undefined && typeof r.callToken !== "string") return "call-token";
+    if (r.callTrigger !== undefined && !["initial", "manual", "link"].includes(r.callTrigger)) return "call-trigger";
+    if (r.terminalOutcome !== undefined && (!["applied", "rejected"].includes(r.terminalOutcome) || !["settled", "stale"].includes(r.phase))) return "terminal-outcome";
+    if (r.rebasedFrom !== undefined && !UUID_RE.test(String(r.rebasedFrom))) return "rebased-from";
+    if (!Array.isArray(r.history) || r.history.length > 40) return "history";
+    for (const h of r.history) {
+      if (!h || typeof h !== "object" || Array.isArray(h) || Object.keys(h).some((k) => !["generation", "trigger", "outcome", "at"].includes(k))
+        || !Number.isInteger(h.generation) || h.generation < 0 || typeof h.trigger !== "string" || typeof h.outcome !== "string" || typeof h.at !== "string") return "history-row";
+    }
+    if (r.resolution !== undefined) {
+      const z = r.resolution;
+      if (!z || typeof z !== "object" || Array.isArray(z) || Object.keys(z).some((k) => !["patchId", "opHash", "baseDecisionContextHash", "verdict", "claims"].includes(k))
+        || z.patchId !== r.patchId || z.opHash !== r.opHash || !FP_RE.test(String(z.baseDecisionContextHash)) || !["support", "reject"].includes(z.verdict) || !Array.isArray(z.claims)) return "resolution";
+      if (z.verdict === "support" && (z.claims.length < 1 || !z.claims.some((c) => c && c.stance === "support"))) return "resolution-support";
+      for (const c of z.claims) {
+        if (!c || typeof c !== "object" || Array.isArray(c) || Object.keys(c).some((k) => !["file", "contentHash", "locator", "stance"].includes(k))
+          || typeof c.file !== "string" || !c.file || !FP_RE.test(String(c.contentHash)) || typeof c.locator !== "string" || !c.locator || !["support", "rebut"].includes(c.stance)) return "resolution-claim";
+      }
+    }
+  }
+  return null;
+}
+function readDeferred(repo) {
+  const r = readJson3(deferredFileFor(repo));
+  if (r.st === "absent") return { st: "ok", data: { schema: "enrich-deferred-v1", records: [] } };
+  if (r.st !== "ok") return { st: "damaged" };
+  const e = validateDeferred(r.data); return e ? { st: "damaged", detail: e } : { st: "ok", data: r.data };
+}
+function updateDeferred(repo, mut) {
+  try { fs.mkdirSync(ENRICH_DIR, { recursive: true }); } catch { /* lock reports failure */ }
+  const w = CL.withFileLockStrict(deferredFileFor(repo) + ".lock", () => {
+    const cur = readDeferred(repo); if (cur.st !== "ok") return { ok: false, reason: "deferred-damaged" };
+    const next = mut(cur.data); if (next === null) return { ok: true, unchanged: true, data: cur.data };
+    const cutoff = Date.now() - DEFERRED_TERMINAL_KEEP_MS;
+    const compact = { ...next, records: next.records.filter((r) => {
+      if (!["settled", "stale"].includes(r.phase)) return true;
+      const t = Date.parse(r.updatedAt);
+      return !Number.isFinite(t) || t >= cutoff;
+    }) };
+    const e = validateDeferred(compact); if (e) return { ok: false, reason: "deferred-invalid:" + e };
+    return CL.atomicWrite(deferredFileFor(repo), JSON.stringify(compact, null, 1)) ? { ok: true, data: compact } : { ok: false, reason: "write" };
+  });
+  return w.ok ? w.result : { ok: false, reason: "lock" };
+}
+function deferredRecord(repo, patchId) {
+  const r = readDeferred(repo); return r.st === "ok" ? r.data.records.find((x) => x.patchId === patchId) || null : null;
+}
+function ensureDeferredWaiting(repo, meta, reason) {
+  const now = new Date().toISOString(); let created = false;
+  const w = updateDeferred(repo, (d) => {
+    if (d.records.some((r) => r.patchId === meta.patchId)) return null;
+    created = true;
+    return { ...d, records: [...d.records, { ...meta, phase: "waiting", reason: reason || "no-verifier", retryGeneration: 0, history: [], createdAt: now, updatedAt: now }] };
+  });
+  return w.ok ? { ok: true, created } : { ok: false, reason: w.reason };
+}
+function recoverDeferredCalls(repo) {
+  const now = new Date().toISOString();
+  return updateDeferred(repo, (d) => d.records.some((r) => r.phase === "calling") ? ({ ...d, records: d.records.map((r) => r.phase === "calling"
+    ? { ...r, phase: "uncertain", reason: "uncertain-call", callToken: undefined, callTrigger: undefined, updatedAt: now, history: [...r.history, { generation: r.retryGeneration, trigger: "recovery", outcome: "uncertain-call", at: now }].slice(-40) }
+    : r) }) : null);
+}
+function beginDeferredCall(repo, meta, trigger, linkGeneration) {
+  const now = new Date().toISOString(), token = crypto.randomBytes(8).toString("hex"); let action = "skip", recOut = null;
+  const w = updateDeferred(repo, (d) => {
+    const i = d.records.findIndex((r) => r.patchId === meta.patchId); let r = i >= 0 ? d.records[i] : null;
+    if (r && r.opHash !== meta.opHash) { action = "conflict"; return null; }
+    if (r && r.phase === "answered") { action = "answered"; recOut = r; return null; }
+    if (r && ["settled", "stale"].includes(r.phase)) { action = "skip"; recOut = r; return null; }
+    const manual = trigger === "manual";
+    const link = trigger === "link" && (!r || r.reason === "no-verifier") && String(linkGeneration || "") !== String(r && r.lastLinkGeneration || "");
+    const initial = trigger === "initial" && (!r || (r.phase === "waiting" && r.history.length === 0));
+    if (!(initial || manual || link)) { action = "skip"; recOut = r; return null; }
+    const generation = r ? r.retryGeneration + (manual || link ? 1 : 0) : 0;
+    const next = r ? { ...r } : { ...meta, phase: "waiting", reason: "no-verifier", retryGeneration: 0, history: [], createdAt: now, updatedAt: now };
+    Object.assign(next, { phase: "calling", reason: next.reason || "no-verifier", retryGeneration: generation, callToken: token, callTrigger: trigger, updatedAt: now, ...(link ? { lastLinkGeneration: String(linkGeneration || "") } : {}) });
+    const records = [...d.records]; if (i >= 0) records[i] = next; else records.push(next);
+    action = "call"; recOut = next; return { ...d, records };
+  });
+  return w.ok ? { ok: true, action, record: recOut, token } : { ok: false, action: "error", reason: w.reason };
+}
+function finishDeferredCall(repo, patchId, token, outcome, resolution) {
+  const now = new Date().toISOString(); let out = null;
+  const w = updateDeferred(repo, (d) => {
+    const i = d.records.findIndex((r) => r.patchId === patchId); if (i < 0) return null;
+    const r = d.records[i]; if (r.phase !== "calling" || r.callToken !== token) return null;
+    const answered = resolution && ["support", "reject"].includes(resolution.verdict);
+    const next = { ...r, phase: answered ? "answered" : outcome === "uncertain-call" ? "uncertain" : "waiting", reason: answered ? "answered" : outcome, callToken: undefined, callTrigger: undefined,
+      ...(answered ? { resolution } : { resolution: undefined }), updatedAt: now,
+      history: [...r.history, { generation: r.retryGeneration, trigger: r.callTrigger || "initial", outcome, at: now }].slice(-40) };
+    const records = [...d.records]; records[i] = next; out = next; return { ...d, records };
+  });
+  return w.ok ? { ok: true, record: out } : { ok: false, reason: w.reason };
+}
+function settleDeferred(repo, patchId, phase, reason, terminalOutcome) {
+  const now = new Date().toISOString();
+  return updateDeferred(repo, (d) => d.records.some((r) => r.patchId === patchId) ? ({ ...d, records: d.records.map((r) => r.patchId === patchId
+    ? { ...r, phase: phase || "settled", reason: reason || "settled", callToken: undefined, callTrigger: undefined, resolution: undefined,
+      ...((terminalOutcome || r.terminalOutcome) ? { terminalOutcome: terminalOutcome || r.terminalOutcome } : {}), updatedAt: now }
+    : r) }) : null);
+}
+function deferredSummary(repo, mapId) {
+  const r = readDeferred(repo); if (r.st !== "ok") return { st: r.st, awaiting: null, records: [] };
+  const selected = r.data.records.filter((x) => !mapId || x.mapId === mapId);
+  const records = selected.filter((x) => ["waiting", "calling", "answered", "uncertain"].includes(x.phase));
+  const terminalRecords = selected.filter((x) => ["applied", "rejected"].includes(x.terminalOutcome));
+  const unattributedRecords = selected.filter((x) => !x.jobRunId);
+  return { st: "ok", awaiting: records.length, records, terminalRecords, unattributed: unattributedRecords.length, unattributedRecords };
+}
+function enrichOutcomeSummary(job, deferred) {
+  if (!job) return { applied: 0, rejected: 0, awaiting: deferred && deferred.st === "ok" ? deferred.awaiting || 0 : null, investigation: 0, otherAwaiting: 0, unattributed: deferred && deferred.st === "ok" ? deferred.unattributed || 0 : null };
+  const runId = jobRunIdOf(job);
+  const appliedIds = new Set(), rejectedIds = new Set();
+  for (const a of job.attempts || []) {
+    for (const id of ((a.cursor && a.cursor.appliedPatchIds) || [])) appliedIds.add(id);
+    for (const z of (a.resolutions || [])) if (z && z.verdict === "reject" && z.patchId) rejectedIds.add(z.patchId);
+  }
+  if (deferred && deferred.st === "ok") for (const r of (deferred.terminalRecords || [])) {
+    if (r.jobKey !== job.jobKey || !runId || r.jobRunId !== runId) continue;
+    if (r.terminalOutcome === "applied") { appliedIds.add(r.patchId); rejectedIds.delete(r.patchId); }
+    if (r.terminalOutcome === "rejected") { rejectedIds.add(r.patchId); appliedIds.delete(r.patchId); }
+  }
+  const awaiting = deferred && deferred.st === "ok" ? (deferred.records || []).filter((r) => r.jobKey === job.jobKey && runId && r.jobRunId === runId).length : null;
+  const otherAwaiting = deferred && deferred.st === "ok" ? (deferred.records || []).filter((r) => r.mapId === job.mapId && r.jobRunId && (!runId || r.jobRunId !== runId)).length : 0;
+  const last = job.attempts && job.attempts.length ? job.attempts[job.attempts.length - 1] : null;
+  const itemCount = last && last.results && Array.isArray(last.results.items) ? last.results.items.length : 0;
+  return { applied: appliedIds.size, rejected: rejectedIds.size, awaiting, otherAwaiting, unattributed: deferred && deferred.st === "ok" ? deferred.unattributed || 0 : null,
+    investigation: awaiting === null ? null : Math.max(0, itemCount - appliedIds.size - rejectedIds.size - awaiting) };
+}
+
 // ── 결정론 patchId(설계 3·6차 — RFC 4122 name-based·rev 세대 포함·재계산 동일·rebase 불변) ──
 // 3차 blocker④: patchId에 job '실행 세대'(startedAt — 장부 영속·불변·재계산 가능)를 결속 — v11에서 같은
 // jobKey의 새 실행(sourceFp 상이)이 이전 실행의 patchId를 재사용해 P2 잔존 pending과 충돌하는 경로 차단.
 function jobSeedOf(jobKey, startedAt) { return sha1(String(jobKey) + "|" + String(startedAt)); }
+function jobRunIdOf(job) { return job && job.jobKey && job.startedAt ? jobSeedOf(job.jobKey, job.startedAt) : null; }
 function detPatchId(jobKey, attemptId, index, rev) {
   const h = crypto.createHash("sha1").update(jobKey + ":" + attemptId + ":" + index + ":" + rev).digest();
   const b = Buffer.from(h.subarray(0, 16));
@@ -402,7 +556,7 @@ function historylessChanges(repo, invSnap, MR) {
 // 이 함수는 LLM을 직접 호출하지 않는다 — adapters·askVerifier 주입이 유일한 외부 경로(무주입=park).
 // f-4b69df7e 유물 재기반: 같은 내용(op·targetId·payload·evidence·rationale)을 '현 기준선'으로 재제안+분류+
 // legacyReclass 표지(적용 실패 잔류 시 다음 실행 재소비). 유물 한정 — 정식 job 경로는 P8 rev 세대가 담당.
-function rebaseLegacyPatch(repo, MP, PM, oldPatch, oldPid) {
+function rebaseLegacyPatch(repo, MP, PM, oldPatch, oldPid, markLegacy = true) {
   try {
     const MRl = require(path.join(__dirname, "map-runtime.js"));
     const rt = MRl.readTopoExFor(repo);
@@ -428,10 +582,98 @@ function rebaseLegacyPatch(repo, MP, PM, oldPatch, oldPid) {
     if (!cf.ok || cf.classification !== "verifier-resolved") return { ok: false, reason: "classify" };
     // 표지+계보(원자·nsLock — pipeline 정본): 신본이 구 유물을 가리키게(rebasedFrom) — 스윕이 구를 재소비에서
     // 제외·만료 재시도하고, 신본은 미해소 잔류 시 다음 실행 재소비(내구 수렴 — 재재재검증 B2).
-    const mk = MP.markLegacyReclassMark(repo, topo.mapId, np.patchId, oldPid || null);
-    if (!mk.ok) return { ok: false, reason: "mark-" + (mk.reason || "failed") };
+    if (markLegacy) {
+      const mk = MP.markLegacyReclassMark(repo, topo.mapId, np.patchId, oldPid || null);
+      if (!mk.ok) return { ok: false, reason: "mark-" + (mk.reason || "failed") };
+    }
     return { ok: true, patch: np };
   } catch { return { ok: false, reason: "exception" }; }
+}
+function transferDeferredRebase(repo, oldRec, patch, PM) {
+  const now = new Date().toISOString(), opHash = PM.opHashOf(patch); let made = null;
+  const w = updateDeferred(repo, (d) => {
+    const oi = d.records.findIndex((x) => x.patchId === oldRec.patchId);
+    const ni = d.records.findIndex((x) => x.patchId === patch.patchId);
+    if (ni >= 0) { made = d.records[ni]; return null; }
+    if (oi < 0) return null;
+    const old = d.records[oi];
+    const next = { ...old, patchId: patch.patchId, opHash, phase: "waiting", reason: "cas-stale", callToken: undefined, callTrigger: undefined, resolution: undefined, rebasedFrom: old.patchId, createdAt: now, updatedAt: now };
+    const records = [...d.records]; records[oi] = { ...old, phase: "stale", reason: "cas-stale", resolution: undefined, callToken: undefined, callTrigger: undefined, updatedAt: now }; records.push(next); made = next;
+    return { ...d, records };
+  });
+  return w.ok && made ? { ok: true, record: made } : { ok: false, reason: w.reason || "transfer" };
+}
+
+// deferred 재시도는 일반 tick이 열지 않는다. answered는 외부 호출 없이 적용/폐기만 이어가므로 매 실행에서
+// 안전하게 배수하고, waiting/uncertain은 사용자 retry 또는 새 verifier 연결 세대에서만 새 호출을 연다.
+function retryDeferredResolutions(repo, o, env, topo, triggerKind, linkGeneration) {
+  const { MP, PM } = env; const before = deferredSummary(repo, topo.mapId);
+  if (before.st !== "ok") return { handled: 0, applied: 0, settled: 0, awaiting: null, error: "deferred-damaged" };
+  let handled = 0, applied = 0, settled = 0;
+  for (let rec of before.records) {
+    const pf = path.join(MP.dirsFor(repo, topo.mapId).pending, rec.patchId + ".json");
+    let pr = null; try { pr = JSON.parse(fs.readFileSync(pf, "utf8")); } catch { continue; }
+    if (!pr || !pr.patch || PM.opHashOf(pr.patch) !== rec.opHash) { settleDeferred(repo, rec.patchId, "stale", "cas-stale"); continue; }
+    if (["resolved", "resolved-noop", "expired"].includes(pr.lifecycle)) {
+      if (pr.lifecycle === "expired" && pr.expireCode === "cas-stale") settleDeferred(repo, rec.patchId, "stale", "cas-stale");
+      else settleDeferred(repo, rec.patchId, "settled", "settled", pr.lifecycle === "expired" ? "rejected" : "applied");
+      settled++; continue;
+    }
+    if (pr.lifecycle !== "classified" || pr.classification !== "verifier-resolved") continue;
+
+    // 기준선이 이미 바뀌었으면 구 판정을 받기 전에 신본을 먼저 만든다. 구 판정은 신본에 재사용하지 않는다.
+    let patch = pr.patch;
+    try {
+      const idx = MP.decisionIndexFor(repo, topo.mapId), pol = MP.policyStateFor(repo, topo.mapId);
+      if (idx.st === "ok" && pol.st === "ok") {
+        const ah = MP.authorityOf(PM.mapHashOf(require(path.join(__dirname, "map-runtime.js")).readTopoExFor(repo).topo), idx).ah;
+        const dch = PM.decisionContextHashOf(ah, pol.pfh);
+        if (patch.baseDecisionContextHash !== dch) {
+          const rb = rebaseLegacyPatch(repo, MP, PM, patch, rec.patchId, false);
+          if (!rb.ok) { settleDeferred(repo, rec.patchId, "stale", "cas-stale"); continue; }
+          const tr = transferDeferredRebase(repo, rec, rb.patch, PM); if (!tr.ok) continue;
+          MP.expirePendingPatch(repo, topo.mapId, rec.patchId, rec.opHash);
+          rec = tr.record; patch = rb.patch;
+        }
+      }
+    } catch { continue; }
+
+    let resolution = rec.phase === "answered" ? rec.resolution : null;
+    if (!resolution) {
+      const selected = triggerKind === "manual" || (triggerKind === "link" && rec.reason === "no-verifier") || (triggerKind === "initial" && rec.history.length === 0);
+      if (!selected) continue;
+      const beg = beginDeferredCall(repo, rec, triggerKind, linkGeneration);
+      if (!beg.ok || beg.action === "conflict") continue;
+      if (beg.action === "answered") resolution = beg.record && beg.record.resolution;
+      else if (beg.action !== "call") continue;
+      else {
+        let raw = null, callThrew = false, existing = null;
+        if (rec.framing === "conflict") existing = existingDecisionOf(repo, require(path.join(__dirname, "map-runtime.js")).readTopoExFor(repo).topo, patch.targetId);
+        if (typeof o.askVerifier === "function") { try { raw = o.askVerifier({ repo, ws: o.ws, patch, item: null, framing: rec.framing, existing }); } catch { callThrew = true; raw = null; } }
+        const outcome = callThrew ? "uncertain-call" : raw && raw.verdict === "inconclusive" ? "inconclusive" : raw && ["support", "reject"].includes(raw.verdict) ? raw.verdict : "no-verifier";
+        const rr = raw && ["support", "reject"].includes(raw.verdict) ? { patchId: patch.patchId, opHash: PM.opHashOf(patch), baseDecisionContextHash: patch.baseDecisionContextHash, verdict: raw.verdict, claims: Array.isArray(raw.claims) ? raw.claims : [] } : null;
+        const fin = finishDeferredCall(repo, patch.patchId, beg.token, outcome, rr); handled++;
+        if (!fin.ok) return { handled, applied, settled, awaiting: null, error: fin.reason || "deferred-result" };
+        if (!rr) continue; resolution = rr;
+      }
+    }
+    if (!resolution) continue;
+    if (resolution.verdict === "reject") {
+      const ex = MP.expirePendingPatch(repo, topo.mapId, patch.patchId, PM.opHashOf(patch));
+      if (ex.ok || ex.reason === "idempotent" || ex.reason === "already-applied") { settleDeferred(repo, patch.patchId, "settled", "settled", ex.reason === "already-applied" ? "applied" : "rejected"); settled++; }
+      continue;
+    }
+    const ap = MP.applyPatch(repo, topo.mapId, patch.patchId, { preCutover: true, verifierResolution: resolution });
+    if (ap.ok || ap.reasonCode === "already-applied") { settleDeferred(repo, patch.patchId, "settled", "settled", "applied"); applied++; settled++; continue; }
+    if (ap.reasonCode === "wal-active") { try { MP.recoverWal(repo, topo.mapId); } catch { /* next run drains answered */ } }
+    if (ap.reasonCode === "cas-stale") {
+      const rb = rebaseLegacyPatch(repo, MP, PM, patch, patch.patchId, false);
+      if (rb.ok) { const tr = transferDeferredRebase(repo, rec, rb.patch, PM); if (!tr.ok) settleDeferred(repo, patch.patchId, "stale", "cas-stale"); }
+      else settleDeferred(repo, patch.patchId, "stale", "cas-stale");
+    }
+  }
+  const after = deferredSummary(repo, topo.mapId);
+  return { handled, applied, settled, awaiting: after.awaiting };
 }
 function runEnrich(repo, opts) {
   const o = opts || {};
@@ -488,6 +730,9 @@ function runEnrich(repo, opts) {
   const fence = () => { const h = readJson3(runLock); return h.st === "ok" && h.data.token === tok && h.data.pid === process.pid; };
   try {
     if (!fence()) return { outcome: "busy", reason: "run-lock-lost" }; // 2차 blocker⑧: 회수 경합 뒤 임계구역 소유 재검증
+    // 이전 프로세스가 verifier 호출 시작을 기록한 뒤 결과를 못 남기고 죽은 경우 자동 재호출하지 않는다.
+    const dr9 = recoverDeferredCalls(repo);
+    if (!dr9.ok) return { outcome: "parked", reason: dr9.reason || "deferred-damaged" };
     const result = runEnrichLocked(repo, o, { MR, MP, PM, MB, MRt, queue, log, park, fence });
     // P9: enrich 본체 결과·job 원장은 불변으로 둔 채, 종료 뒤 정책 위임 스윕을 정확히 한 번 후행한다.
     // 실패는 P9 항목별 원장에 남고 P8의 outcome을 바꾸지 않는다. 요약은 기존 route log에 한 줄만 보탠다.
@@ -520,12 +765,23 @@ function runEnrichLocked(repo, o, env) {
   let topo;
   try { topo = JSON.parse(lk.result.raw); } catch { return park(null, "topology-invalid"); }
   if (PM.validateTopology(topo).length) return park(null, "topology-invalid");
-  if (topo.mapId !== queue.mapId || PM.mapHashOf(topo) !== queue.mapHash) return { outcome: "noop", reason: "queue-stale" }; // 큐 재작성=bootstrap 소관
+  if (topo.mapId !== queue.mapId) return { outcome: "noop", reason: "queue-stale" }; // 다른 지도 세대의 큐는 사용하지 않음
+  // 확인 대기 항목은 보강 작업 파일과 분리해 처리한다. 일반 tick은 저장된 답만 마무리하고
+  // 외부 검증을 다시 부르지 않는다. 사용자의 재시도 또는 새 검증 연결 세대만 새 호출을 허용한다.
+  const trigger9 = String(o.trigger || "");
+  const retryKind9 = trigger9 === "retry" ? "manual" : trigger9.startsWith("link:") ? "link" : null;
+  const linkGeneration9 = retryKind9 === "link" ? trigger9.slice(5) : "";
+  const deferredRun9 = retryDeferredResolutions(repo, o, env, topo, retryKind9, linkGeneration9);
+  if (deferredRun9.error) return park(null, deferredRun9.error);
+  if (deferredRun9.handled || deferredRun9.applied || deferredRun9.settled) {
+    log({ route: "deferred", reason: retryKind9 || "drain", outcome: deferredRun9.applied ? "applied" : "settled", detail: JSON.stringify(deferredRun9) });
+    return { outcome: deferredRun9.applied ? "applied" : "noop", reason: "deferred-retry", ...deferredRun9 };
+  }
+  if (PM.mapHashOf(topo) !== queue.mapHash) return { outcome: "noop", reason: "queue-stale" }; // 일반 보강은 bootstrap이 큐를 갱신한 뒤 진행
   // P9 v12 개정 ②(ⓒ): 구 기본분류 시절의 '비정책 intent-choice' pending을 재분류+P8 해소 경로로 재결속
   // (재재검증 blocker① ab-6 — 재분류만 하면 cursor가 이미 전진한 유물이라 아무도 재소비하지 않아 영구 잔존).
-  // 유물 해소는 job·attempt 장부 밖(레코드 영속 슬롯 없음): 성공(적용/폐기)=pending 종결로 자연 멱등,
-  // inconclusive·일시 실패=legacyReclass 표지로 잔류→다음 실행 재시도(verifier 재호출 1회 발생 — 유물 한정 수용).
-  const MRl9 = (r9) => require(path.join(__dirname, "map-runtime.js")).readTopoExFor(r9); // stale 예측용 현 기준선 재판독
+  // 유물도 같은 확인 대기 장부로 옮긴다. 일반 tick마다 verifier를 다시 부르던 옛 예외는 제거한다.
+  let legacyDeferredAdded9 = 0;
   try {
     const sw9 = MP.sweepReclassifyNonPolicyIntentChoice(repo, topo.mapId);
     if (sw9.errors) log({ route: "legacy-reclass", reason: "sweep-errors", outcome: "error", detail: String(sw9.errors) });
@@ -536,53 +792,25 @@ function runEnrichLocked(repo, o, env) {
         const pr9 = JSON.parse(fs.readFileSync(pf9, "utf8"));
         const expiredStale9 = pr9.lifecycle === "expired" && pr9.expireCode === "cas-stale" && pr9.legacyReclass === true;
         if (pr9.lifecycle !== "classified" && !expiredStale9) { oc9 = "already-settled"; }
-        else if (typeof o.askVerifier !== "function") { oc9 = "no-verifier"; }
-        else if (expiredStale9) {
-          // f-253b9008 종결부: 판독-적용 사이 외부 전이로 cas-stale 만료된 표지 유물 — 재기반 신본으로 회수
-          // (원본은 expired 불변·신본이 rebasedFrom으로 계보를 이어 다음 스윕의 중복 재기반도 차단).
-          const rbE = rebaseLegacyPatch(repo, MP, PM, pr9.patch, pid9);
-          if (!rbE.ok) { oc9 = "rebase-" + (rbE.reason || "failed"); } // 만료 원본+표지 그대로 — 다음 실행 재시도(스윕 재소비)
-          else {
-            const resE = o.askVerifier({ repo, ws: o.ws, patch: rbE.patch, item: null, framing: "resolution", existing: null });
-            if (resE && resE.verdict === "support") { const apE = MP.applyPatch(repo, topo.mapId, rbE.patch.patchId, { preCutover: true, verifierResolution: { patchId: rbE.patch.patchId, opHash: PM.opHashOf(rbE.patch), baseDecisionContextHash: rbE.patch.baseDecisionContextHash, verdict: "support", claims: resE.claims || [] } }); oc9 = apE.ok ? "resolved" : "apply-" + String(apE.reasonCode || "failed"); }
-            else if (resE && resE.verdict === "reject") { const exE = MP.expirePendingPatch(repo, topo.mapId, rbE.patch.patchId, PM.opHashOf(rbE.patch)); oc9 = (exE.ok || exE.reason === "idempotent") ? "rejected" : "expire-" + String(exE.reason || "failed"); }
-            else oc9 = "deferred"; // 신본 표지 잔류 — 다음 실행 재소비
-          }
-        }
         else {
-          // f-253b9008(ab-6): applyPatch는 cas-stale을 'terminal expire로 영속'한다 — 낡은 유물에 apply를
-          // 부르는 순간 구 pending이 이미 만료돼, 신본 제안·표지 실패 시 재소비가 소실된다. 그래서 apply 전에
-          // **stale 예측 검사**(현 기준선 dch 대조): 낡음=재기반 먼저(신본+원자 표지 성공 후에야 구 만료),
-          // 신선=기존 경로. verifier 호출은 항상 '적용할 그 patch'에 1회(ab-3 정합 — 구본이든 신본이든 재사용 0).
-          let target9 = { pid: pid9, patch: pr9.patch, isRebase: false };
-          const curDch9 = (() => { try { const rtN = MRl9(repo); const idxN = MP.decisionIndexFor(repo, rtN.topo.mapId); const polN = MP.policyStateFor(repo, rtN.topo.mapId); const ahN = MP.authorityOf(PM.mapHashOf(rtN.topo), idxN).ah; return PM.decisionContextHashOf(ahN, polN.pfh); } catch { return null; } })();
-          if (curDch9 && pr9.patch.baseDecisionContextHash !== curDch9) {
+          let target9 = { pid: pid9, patch: pr9.patch };
+          const rt9 = require(path.join(__dirname, "map-runtime.js")).readTopoExFor(repo);
+          const idx9 = rt9.st === "ok" ? MP.decisionIndexFor(repo, rt9.topo.mapId) : { st: "error" };
+          const pol9 = rt9.st === "ok" ? MP.policyStateFor(repo, rt9.topo.mapId) : { st: "error" };
+          const dch9 = idx9.st === "ok" && pol9.st === "ok" ? PM.decisionContextHashOf(MP.authorityOf(PM.mapHashOf(rt9.topo), idx9).ah, pol9.pfh) : null;
+          if (expiredStale9 || (dch9 && pr9.patch.baseDecisionContextHash !== dch9)) {
             const rb9 = rebaseLegacyPatch(repo, MP, PM, pr9.patch, pid9);
-            if (!rb9.ok) { oc9 = "rebase-" + (rb9.reason || "failed"); target9 = null; } // 구 pending 무변(classified+표지 유지 — 다음 실행 재시도)
+            if (!rb9.ok) { oc9 = "rebase-" + (rb9.reason || "failed"); target9 = null; }
             else {
-              const exO = MP.expirePendingPatch(repo, topo.mapId, pid9, PM.opHashOf(pr9.patch));
-              void exO; // 실패=신·구 공존 — 스윕의 rebasedFrom 매핑이 구를 재소비에서 제외+만료 재시도
-              target9 = { pid: rb9.patch.patchId, patch: rb9.patch, isRebase: true };
+              MP.expirePendingPatch(repo, topo.mapId, pid9, PM.opHashOf(pr9.patch));
+              target9 = { pid: rb9.patch.patchId, patch: rb9.patch };
             }
           }
           if (target9) {
-            const resT = o.askVerifier({ repo, ws: o.ws, patch: target9.patch, item: null, framing: "resolution", existing: null });
-            if (resT && resT.verdict === "support") {
-              let ap9 = MP.applyPatch(repo, topo.mapId, target9.pid, { preCutover: true, verifierResolution: { patchId: target9.pid, opHash: PM.opHashOf(target9.patch), baseDecisionContextHash: target9.patch.baseDecisionContextHash, verdict: "support", claims: resT.claims || [] } });
-              if (!ap9.ok && ap9.reasonCode === "cas-stale" && !target9.isRebase) {
-                // 예측과 apply 사이의 희귀 경합 — 구는 P2가 이미 만료 영속. 재기반+재호출 1회, 실패=소실 아님이
-                // 보장되지 않으므로 정직 로그(다음 스윕은 expired라 재소비 불가 — legacy-lost 가시화).
-                const rbX = rebaseLegacyPatch(repo, MP, PM, target9.patch, target9.pid);
-                if (rbX.ok) {
-                  const resX = o.askVerifier({ repo, ws: o.ws, patch: rbX.patch, item: null, framing: "resolution", existing: null });
-                  ap9 = resX && resX.verdict === "support" ? MP.applyPatch(repo, topo.mapId, rbX.patch.patchId, { preCutover: true, verifierResolution: { patchId: rbX.patch.patchId, opHash: PM.opHashOf(rbX.patch), baseDecisionContextHash: rbX.patch.baseDecisionContextHash, verdict: "support", claims: resX.claims || [] } }) : { ok: false, reasonCode: "rebase-deferred" };
-                } else ap9 = { ok: false, reasonCode: "expired-deferred:" + (rbX.reason || "failed") }; // 만료 원본+표지=다음 실행 스윕이 재소비(소실 아님 — f-253b9008 종결)
-              }
-              oc9 = ap9.ok ? "resolved" : "apply-" + String(ap9.reasonCode || "failed");
-            } else if (resT && resT.verdict === "reject") {
-              const ex9 = MP.expirePendingPatch(repo, topo.mapId, target9.pid, PM.opHashOf(target9.patch));
-              oc9 = (ex9.ok || ex9.reason === "idempotent") ? "rejected" : "expire-" + String(ex9.reason || "failed");
-            } // inconclusive·호출 실패=deferred(표지 잔류 — 다음 실행 재시도)
+            const legacyKey9 = sha1("legacy|" + topo.mapId + "|" + target9.pid);
+            const ew9 = ensureDeferredWaiting(repo, { mapId: topo.mapId, patchId: target9.pid, opHash: PM.opHashOf(target9.patch), jobKey: legacyKey9, jobRunId: sha1("legacy-run|" + legacyKey9), attemptId: 0, itemIndex: 0, framing: "resolution" }, "no-verifier");
+            if (!ew9.ok) oc9 = "deferred-" + (ew9.reason || "write");
+            else { if (ew9.created) legacyDeferredAdded9++; oc9 = "deferred"; }
           }
         }
       } catch { oc9 = "error"; }
@@ -590,6 +818,11 @@ function runEnrichLocked(repo, o, env) {
     }
     if (sw9.reclassified) log({ route: "legacy-reclass", reason: "swept", outcome: "reclassified", detail: sw9.reclassified + "/" + sw9.scanned });
   } catch (eS9) { log({ route: "legacy-reclass", reason: "sweep-failed", outcome: "error", detail: String((eS9 && eS9.message) || eS9).slice(0, 120) }); }
+  if (legacyDeferredAdded9) {
+    const legacyRetry9 = retryDeferredResolutions(repo, o, env, topo, retryKind9 || "initial", linkGeneration9);
+    if (legacyRetry9.error) return park(null, legacyRetry9.error);
+    if (legacyRetry9.handled || legacyRetry9.applied || legacyRetry9.settled) return { outcome: legacyRetry9.applied ? "applied" : "noop", reason: "legacy-deferred-retry", ...legacyRetry9 };
+  }
   // ④ 장부 판독(strict — damaged=전면 정지)
   const jr = readEnrichJob(repo);
   if (jr.st === "damaged") return park(null, "job-damaged", { detail: jr.detail || "" });
@@ -778,10 +1011,15 @@ function applyItems(repo, o, env, st, attemptId) {
       const srcFp = (st && st.srcFp) ? st.srcFp : (a.sourceFp || null);
       const applied = a.cursor.appliedPatchIds.length;
       const skipped = items.length - applied; // reject·N-I·intent 보존 등 비적용 종결(도장 분리 — 2차 blocker④)
+      const ds9 = deferredSummary(repo, j.mapId);
+      const runId9 = jobRunIdOf(j);
+      const awaitingVerification = ds9.st === "ok" ? ds9.records.filter((x) => x.jobKey === j.jobKey && runId9 && x.jobRunId === runId9).length : null;
+      const rejected = (a.resolutions || []).filter((x) => x.verdict === "reject").length;
+      const investigationPending = awaitingVerification === null ? null : Math.max(0, skipped - awaitingVerification - rejected);
       const wD = updateEnrichJob(repo, (jj) => jj && { ...jj, phase: "done", finishedAt: nowIso(), ...(srcFp ? { sourceFp: srcFp } : {}), attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, phase: "done", finishedAt: nowIso(), cursor: { nextIndex: x.cursor.nextIndex, rev: 0, appliedPatchIds: x.cursor.appliedPatchIds } } : x) });
       if (!wD.ok) return park(null, "done-write:" + wD.reason);
-      log({ route: a.provider, reason: applied > 0 ? "enriched" : "settled-no-apply", outcome: applied > 0 ? "applied" : "settled", provider: a.provider, jobKey: j.jobKey, consentGen: a.consentGen });
-      return { outcome: applied > 0 ? "applied" : "settled", jobKey: j.jobKey, applied, skipped };
+      log({ route: a.provider, reason: applied > 0 ? "enriched" : "settled-no-apply", outcome: applied > 0 ? "applied" : "settled", provider: a.provider, jobKey: j.jobKey, consentGen: a.consentGen, awaitingVerification, rejected, investigationPending });
+      return { outcome: applied > 0 ? "applied" : "settled", jobKey: j.jobKey, applied, skipped, awaitingVerification, rejected, investigationPending };
     }
     const i = a.cursor.nextIndex;
     const item = items[i];
@@ -924,7 +1162,17 @@ function applyOnePatch(repo, o, env, ctx) {
   const pr = MP.proposePatch(repo, patch);
   if (!pr.ok && pr.stage !== "conflict") return { parkReason: "propose-" + (pr.stage || "failed") };
   if (!pr.ok && pr.stage === "conflict") return { parkReason: "ledger-conflict" }; // 같은 ID 다른 내용=다른 주체(표면화)
-  const cl = MP.classifyPatch(repo, job.mapId, patch.patchId);
+  // 별도 확인 대기 장부가 먼저 결론을 적용한 뒤 원 작업이 복구돼도 같은 패치를 다시 판단하지 않는다.
+  let pending9 = null;
+  try { pending9 = JSON.parse(fs.readFileSync(path.join(MP.dirsFor(repo, job.mapId).pending, patch.patchId + ".json"), "utf8")); } catch { pending9 = null; }
+  if (pending9 && ["resolved", "resolved-noop"].includes(pending9.lifecycle)) { settleDeferred(repo, patch.patchId, "settled", "settled", "applied"); return { done: true, applied: true }; }
+  if (pending9 && pending9.lifecycle === "expired") {
+    settleDeferred(repo, patch.patchId, pending9.expireCode === "cas-stale" ? "stale" : "settled", pending9.expireCode === "cas-stale" ? "cas-stale" : "settled", pending9.expireCode === "cas-stale" ? undefined : "rejected");
+    return pending9.expireCode === "cas-stale" ? { revUp: true } : { done: true, applied: false, rejected: true };
+  }
+  const cl = pending9 && pending9.lifecycle === "classified"
+    ? { ok: true, classification: pending9.classification }
+    : MP.classifyPatch(repo, job.mapId, patch.patchId);
   if (!cl.ok) return { retry: true }; // 판독·잠금성 실패=일시(상한은 호출자)
   if (cl.classification === "hard-reject") return { parkReason: "hard-reject" };
   if (cl.classification === "needs-investigation" || cl.classification === "intent-choice") return { done: true, applied: false, pendingOnly: true }; // 제안 보존(P9 소관)=이 item 종결·적용 도장 없음(2차 blocker④)
@@ -945,34 +1193,50 @@ function applyOnePatch(repo, o, env, ctx) {
   const needVerifier = cl.classification === "verifier-resolved" || demotionEscalate;
   let vrRes = null;
   if (needVerifier) {
-    // 영속 해소 재사용(blocker③): 같은 patchId+opHash 레코드가 장부에 있으면 재호출 0
+    // support/reject만 attempt의 최종 판정으로 재사용한다. inconclusive는 별도 deferred 세대 이력으로
+    // 보존해 명시 재시도가 과거 inconclusive를 답처럼 재사용하지 않게 한다.
     const opH = PMx.opHashOf(patch);
     const jr9 = readEnrichJob(repo);
     const at9 = jr9.st === "ok" ? jr9.job.attempts.find((x) => x.attemptId === attemptId) : null;
     const saved = at9 && Array.isArray(at9.resolutions) ? at9.resolutions.find((r) => r.patchId === patch.patchId && r.opHash === opH) : null;
-    let res = saved || null;
+    const priorDeferred = deferredRecord(repo, patch.patchId);
+    let res = saved || (priorDeferred && priorDeferred.phase === "answered" ? priorDeferred.resolution : null) || null;
     if (!res) {
-      if (typeof o.askVerifier !== "function") return { parkReason: "no-verifier" };
-      try { res = o.askVerifier({ repo, ws: job.configWs, patch, item, framing, existing }); } catch { res = null; } // existing={provider, decisionId, evidence, rationale} — 충돌은 양측 자료 제시(1-34 adjudication)
-      if (!res || !["support", "reject", "inconclusive"].includes(res.verdict)) return { parkReason: "no-verifier" };
-      // 영속(수신 즉시 — verdict 무관: 사망 후 재개도 재호출 0). strict 스키마에 맞는 레코드만(이형=park)
-      const rec9 = { patchId: patch.patchId, opHash: opH, baseDecisionContextHash: patch.baseDecisionContextHash, verdict: res.verdict, claims: Array.isArray(res.claims) ? res.claims : [] };
+      const meta = { mapId: job.mapId, patchId: patch.patchId, opHash: opH, jobKey: job.jobKey, jobRunId: jobRunIdOf(job), attemptId, itemIndex: at9 && at9.cursor ? at9.cursor.nextIndex : 0, framing };
+      const beg = beginDeferredCall(repo, meta, "initial", "");
+      if (!beg.ok) return { parkReason: "deferred-" + (beg.reason || "write") };
+      if (beg.action === "answered") res = beg.record && beg.record.resolution;
+      else if (beg.action !== "call") return { done: true, applied: false, pendingOnly: true, deferred: true, deferredReason: (beg.record && beg.record.reason) || "no-verifier" };
+      else {
+        let raw = null, callThrew = false;
+        if (typeof o.askVerifier === "function") {
+          try { raw = o.askVerifier({ repo, ws: job.configWs, patch, item, framing, existing }); } catch { callThrew = true; raw = null; }
+        }
+        const outcome = callThrew ? "uncertain-call" : raw && raw.verdict === "inconclusive" ? "inconclusive" : raw && ["support", "reject"].includes(raw.verdict) ? raw.verdict : "no-verifier";
+        const rec9 = raw && ["support", "reject"].includes(raw.verdict)
+          ? { patchId: patch.patchId, opHash: opH, baseDecisionContextHash: patch.baseDecisionContextHash, verdict: raw.verdict, claims: Array.isArray(raw.claims) ? raw.claims : [] }
+          : null;
+        const fin = finishDeferredCall(repo, patch.patchId, beg.token, outcome, rec9);
+        if (!fin.ok) return { parkReason: "deferred-result-" + (fin.reason || "write") };
+        if (!rec9) return { done: true, applied: false, pendingOnly: true, deferred: true, deferredReason: outcome };
+        res = rec9;
+      }
+      // 같은 실행의 적용 일시 실패는 이 support/reject를 재사용하고 verifier를 다시 부르지 않는다.
+      const rec9 = res;
       const wS = updateEnrichJob(repo, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, resolutions: [...(x.resolutions || []), rec9] } : x) });
       if (!wS.ok) return { parkReason: "resolution-persist:" + wS.reason }; // 영속 실패=적용 진행 금지(재호출 멱등 깨짐)
-      res = rec9;
     }
     if (res.verdict === "reject") {
       const ex = MP.expirePendingPatch(repo, job.mapId, patch.patchId, opH);
-      if (ex.ok || ex.reason === "idempotent" || ex.reason === "expired") { if (framing === "conflict" && log) log({ route: "adjudicate", reason: "conflict-rejected", outcome: "adjudicated", provider: patch.provider, jobKey: job.jobKey, consentGen: ctx.attempt ? ctx.attempt.consentGen : null }); return { done: true, applied: false, rejected: true }; } // 폐기 확정=종결(적용 도장 없음 — 2차 blocker④)
-      if (ex.reason === "already-applied") return { done: true, applied: true }; // 이미 적용 완료(경합) — 종결 보충
+      if (ex.ok || ex.reason === "idempotent" || ex.reason === "expired") { settleDeferred(repo, patch.patchId, "settled", "settled", "rejected"); if (framing === "conflict" && log) log({ route: "adjudicate", reason: "conflict-rejected", outcome: "adjudicated", provider: patch.provider, jobKey: job.jobKey, consentGen: ctx.attempt ? ctx.attempt.consentGen : null }); return { done: true, applied: false, rejected: true }; } // 폐기 확정=종결(적용 도장 없음 — 2차 blocker④)
+      if (ex.reason === "already-applied") { settleDeferred(repo, patch.patchId, "settled", "settled", "applied"); return { done: true, applied: true }; } // 이미 적용 완료(경합) — 종결 보충
       if (ex.reason === "busy" || ex.reason === "lock") return { retry: true }; // 일시 — 만료 재시도(재호출 0: 영속 레코드 재사용)
       return { parkReason: "reject-expire:" + ex.reason }; // conflict 등=표면화(폐기 미확정 상태로 전진 금지)
     }
-    if (res.verdict !== "support") return { parkReason: "resolution-inconclusive" };
     vrRes = res;
   }
   const ap = MP.applyPatch(repo, job.mapId, patch.patchId, { preCutover: true, ...(vrRes ? { verifierResolution: vrRes } : {}) });
-  if (ap.ok) { if (framing === "conflict" && log) log({ route: "adjudicate", reason: "conflict-resolved", outcome: "adjudicated", provider: patch.provider, jobKey: job.jobKey, consentGen: ctx.attempt ? ctx.attempt.consentGen : null }); return { done: true, applied: true }; }
+  if (ap.ok) { settleDeferred(repo, patch.patchId, "settled", "settled", "applied"); if (framing === "conflict" && log) log({ route: "adjudicate", reason: "conflict-resolved", outcome: "adjudicated", provider: patch.provider, jobKey: job.jobKey, consentGen: ctx.attempt ? ctx.attempt.consentGen : null }); return { done: true, applied: true }; }
   const rc = ap.reasonCode;
   // 2차 blocker⑤: 범위 밖 Verifier 인용 — vr 경로의 decision-conflict 중 '사전 결속 위반'은 evidence 확장+
   // rev 재제안+재해소 정확 1회(v10 P8-4). 식별=claims 중 patch.evidence 밖 파일.
@@ -984,7 +1248,7 @@ function applyOnePatch(repo, o, env, ctx) {
   if (rc === "wal-active") return { retry: true, recoverFirst: true }; // P2 복구 표면 선행(blocker②)
   if (["lock", "write-failed", "claim-busy"].includes(rc)) return { retry: true }; // 일시=같은 rev 재시도(상한은 호출자)
   if (rc === "cas-stale") return { revUp: true };
-  if (rc === "already-applied") return { done: true, applied: true };
+  if (rc === "already-applied") { settleDeferred(repo, patch.patchId, "settled", "settled", "applied"); return { done: true, applied: true }; }
   if (rc === "hard-reject") return { parkReason: "hard-reject" };
   return { parkReason: "unknown-outcome:" + String(rc || "none") }; // 미지·미부여=fail-closed park
 }
@@ -1076,6 +1340,6 @@ function cliMain(argv) {
   return r.outcome === "applied" || r.outcome === "settled" || r.outcome === "noop" ? 0 : r.outcome === "busy" ? 3 : 1;
 }
 
-module.exports = { ENRICH_DIR, repoKeyFor, consentFileFor, jobFileFor, readEnrichConsent, grantEnrichConsent, revokeEnrichConsent, findGrant, readEnrichJob, updateEnrichJob, jobKeyOf, jobSeedOf, detPatchId, validateEnrichResult, toPatchV2, evidenceKindOf, appendRouteLog, historylessChanges, computeSourceFp, runEnrich, cliMain, ROUTE_LOG, JOB_PHASES, ATTEMPT_PHASES, ENRICH_TARGET_OPS };
+module.exports = { ENRICH_DIR, repoKeyFor, consentFileFor, jobFileFor, deferredFileFor, readEnrichConsent, grantEnrichConsent, revokeEnrichConsent, findGrant, readEnrichJob, updateEnrichJob, readDeferred, deferredSummary, enrichOutcomeSummary, recoverDeferredCalls, beginDeferredCall, finishDeferredCall, retryDeferredResolutions, jobKeyOf, jobSeedOf, jobRunIdOf, detPatchId, validateEnrichResult, toPatchV2, evidenceKindOf, appendRouteLog, historylessChanges, computeSourceFp, runEnrich, cliMain, ROUTE_LOG, JOB_PHASES, ATTEMPT_PHASES, ENRICH_TARGET_OPS };
 
 if (require.main === module) process.exit(cliMain(process.argv));

@@ -8,7 +8,8 @@ const fs = require("fs");
 const path = require("path");
 const cp = require("child_process");
 const crypto = require("crypto");
-const { loadContract, BRIDGE, BRIDGE_DIR, atomicWrite, appendIntegrityEvent, writePhase, maybeCleanupState, loadLang, verifyTimeoutMin } = require("./contract-lib.js");
+const { loadContract, BRIDGE, BRIDGE_DIR, atomicWrite, appendIntegrityEvent, supersedeIntegrity, writePhase, maybeCleanupState, loadLang, verifyTimeoutMin, claudeCampaignAnchor, verifyCampaignProgress } = require("./contract-lib.js");
+const { validateCapHandoff, capHandoffInstruction, capHandoffContext, claudeAssistantText } = require("./verify-cap-handoff.js");
 try { maybeCleanupState(); } catch { /* 오래된 상태파일 정리는 best-effort — 검증 흐름 방해 금지 */ } // 매 턴 끝(Stop 훅)에 들르되 실제 청소는 하루 1회
 const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs");
 const ATTEMPTS_DIR = path.join(BRIDGE_DIR, "verify-attempts"); // V4: 한 턴 재검증 강제 횟수(무한정지 방지 바운드)
@@ -108,13 +109,13 @@ function clearAttempts(session) { if (!session) return; try { fs.unlinkSync(atte
 // 이번 턴 차단 횟수를 1 올려 반환. turnTs(이번 사용자 발화 시각)가 저장된 것보다 새로우면 이전 턴 카운터로 보고 리셋.
 // 반환: 이번 턴 차단 횟수(>=1), 또는 null = 카운터 추적 불가(세션키 없음 또는 저장 실패).
 // null이면 호출부가 옛 안전밸브(재진입=통과)로 폴백 → 카운터를 못 믿는 경우에도 무한 차단이 없게 한다.
-function bumpAttempts(session, turnTs) {
+function bumpAttempts(session, turnTs, progressEpoch) {
   if (!session) return null; // 세션키 없음 → 카운트 불가
   let a = { ts: 0, count: 0 };
   try { a = JSON.parse(fs.readFileSync(attemptsPath(session), "utf8")); } catch { /* 없음=새로 */ }
   // 유효 발화시각이고 저장된 게 이전 턴이면 리셋. turnTs<=0(턴 경계 불명)이면 리셋하지 않고 '누적'해서라도
   // MAX로 바운드한다 — 매번 리셋하면 count가 1에 머물러 MAX에 영영 도달 못 해 무한 차단되기 때문.
-  if (turnTs > 0 && Number(a.ts) < turnTs) a = { ts: turnTs, count: 0 };
+  if ((turnTs > 0 && Number(a.ts) < turnTs) || String(a.progressEpoch || "") !== String(progressEpoch || "")) a = { ts: turnTs, count: 0, progressEpoch: String(progressEpoch || "") };
   a.count = (Number(a.count) || 0) + 1;
   if (!atomicWrite(attemptsPath(session), JSON.stringify(a))) return null; // 저장 실패 → 카운터 신뢰 불가
   return a.count;
@@ -250,37 +251,60 @@ process.stdin.on("end", () => {
     process.exit(0);
   }
 
-  // 검증 필요 + 미검증 → 재검증 강제. 단 무한정지 방지로 한 턴 MAX_ATTEMPTS회까지만 차단(V4).
-  // 재진입(stop_hook_active)이어도 검증을 다시 확인하므로 '다시 멈추기'로 바이패스되지 않는다.
-  // 카운터를 못 믿는 경우(세션키 없음/저장 실패=null)엔 옛 안전밸브로 폴백: 재진입이면 통과(무한 차단 방지).
-  const n = bumpAttempts(attemptKey, lastUserTs);
+  // Stop 반복 횟수는 검증 왕복 수가 아니다. 실제 왕복은 모델 호출 직전 캠페인 영수증 N/M이 권위이며,
+  // 여기의 안전밸브는 '아무 진행도 없는 같은 상태'에서만 누적한다. 새 예약·실제 수정이 생기면 epoch가 바뀌어 리셋된다.
+  const anchor = claudeCampaignAnchor(claudeSession);
+  const progress = anchor.ok ? verifyCampaignProgress(ws, anchor.campaignId, c.verifyBudget) : { tracked: false, count: 0, budget: c.verifyBudget || 0, source: anchor.reason || "no-anchor" };
+  const progressEpoch = crypto.createHash("sha1").update(JSON.stringify({ campaignId: anchor.campaignId || "", count: progress.count || 0, budget: progress.budget || 0, sinceTs, editedReal, planned })).digest("hex");
+  const en = loadLang() === "en"; // 차단 사유는 Claude(모델)가 읽는 지시문 — 전역 언어를 따른다
+  const round = progress.tracked && progress.budget >= 1 ? `${progress.count}/${progress.budget}` : (progress.budget === 0 ? (en ? "unlimited" : "무제한") : (en ? "untracked" : "미집계"));
+  const capReached = progress.tracked && progress.budget >= 1 && progress.count >= progress.budget;
+  const handoffCtx = capReached ? capHandoffContext(BRIDGE_DIR, ws, anchor.campaignId) : null;
+  // 상한에서는 새 검증 대신 마지막 지적의 네 갈래 마감을 요구한다. 사용자 판단 항목이 있을 때만 held,
+  // 처리·반박·보관함으로 모두 닫혔으면 cap-settled다. 어느 쪽도 검증 통과로 위장하지 않는다.
+  const capCloseout = capReached ? validateCapHandoff(claudeAssistantText(lines, lastUser), handoffCtx) : null;
+  if (capReached && capCloseout.ok) {
+    clearAttempts(attemptKey);
+    try { supersedeIntegrity(claudeSession, "verify-handoff-missing", ws); } catch { /* best-effort */ }
+    try { writePhase(capCloseout.needsUserDecision ? "held" : "cap-settled", { session: claudeSession, workspace: ws, round: progress.count }); } catch { /* best-effort */ }
+    process.exit(0);
+  }
+  const n = bumpAttempts(attemptKey, lastUserTs, progressEpoch);
   if (n === null) {
-    if (j.stop_hook_active) process.exit(0); // 저장 실패 등 카운트 불가 + 재진입 → 통과(무한 차단 방지)
+    if (j.stop_hook_active) {
+      // 상한 인계까지 저장 실패로 조용히 사라지면 사용자는 빨강의 의미도, 다음 선택도 받지 못한다.
+      // 무한 차단은 피하되 상한 인계 누락만은 별도 빨강으로 남긴다.
+      if (capReached) {
+        const ko = `검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았고, 종료 안내 횟수도 기록하지 못했습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.`;
+        const enMsg = `Verification cap ${round} was reached without the required accept/rebut/park/user-decision closeout, and the stop-reminder count could not be stored. Do not ignore this red alert: complete the four-way closeout before treating the work as closed.`;
+        try { appendIntegrityEvent({ ts: new Date().toISOString(), session: claudeSession || "", workspace: ws, kind: "verify-handoff-missing", severity: "error", detail: en ? enMsg : ko, detailKo: ko, detailEn: enMsg }); } catch { /* best-effort */ }
+        try { writePhase("incomplete", { session: claudeSession, workspace: ws }); } catch { /* best-effort */ }
+      }
+      process.exit(0); // 저장 실패 등 카운트 불가 + 재진입 → 통과(무한 차단 방지)
+    }
   } else if (n > MAX_ATTEMPTS) {
-    // 충분히 강제했으나 여전히 미검증(예: Codex 미응답·연결 없음) → 무한정지 방지로 종료 허용.
+    // 같은 진행 상태에서 충분히 알렸으나 여전히 미검증 → 무한정지 방지로 종료 허용.
     // 단 '침묵'으로 넘기지 않는다: 무결성 이벤트로 기록해 확장이 상태바 빨강 + 대시보드로 사용자에게 보인다(결정2 가시화 1단계).
-    process.stderr.write(`[verify-guard] 검증을 ${MAX_ATTEMPTS}회 강제했으나 완료되지 않음 — 무한정지 방지로 종료를 허용합니다.\n`);
+    process.stderr.write(`[verify-guard] 같은 진행 상태에서 종료 차단 안내가 반복됐으나 검증이 완료되지 않음 — 무한정지 방지로 종료를 허용합니다.\n`);
     try {
       appendIntegrityEvent({
         ts: new Date().toISOString(),
         session: claudeSession || "",
         workspace: ws,
-        kind: "verify-incomplete",
+        kind: capReached ? "verify-handoff-missing" : "verify-incomplete",
         severity: "error",
         // detailKo/detailEn 동시 저장 — 확장 표시부가 현재 언어를 고름. detail은 구버전 판독 폴백.
-        detail: loadLang() === "en"
-          ? `Verify mode:${c.verifyMode} — forced ${MAX_ATTEMPTS} times, but this turn ended without a completed verification (this turn's result is UNVERIFIED).`
-          : `검증 모드:${c.verifyMode} — ${MAX_ATTEMPTS}회 강제했으나 검증이 완료되지 않은 채 이 턴이 종료됨(이 턴 결과는 미검증).`,
-        detailKo: `검증 모드:${c.verifyMode} — ${MAX_ATTEMPTS}회 강제했으나 검증이 완료되지 않은 채 이 턴이 종료됨(이 턴 결과는 미검증).`,
-        detailEn: `Verify mode:${c.verifyMode} — forced ${MAX_ATTEMPTS} times, but this turn ended without a completed verification (this turn's result is UNVERIFIED).`,
+        detail: en
+          ? (capReached ? `Verification cap ${round} was reached, but the required accept/rebut/park/user-decision closeout was not shown. Do not ignore this red alert: complete the four-way closeout before treating the work as closed.` : `Verify mode:${c.verifyMode} — stop reminders repeated without progress, and this turn ended without completed verification (this turn's result is UNVERIFIED).`)
+          : (capReached ? `검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.` : `검증 모드:${c.verifyMode} — 진행 변화 없이 종료 차단 안내가 반복된 뒤 검증 미완료 상태로 이 턴이 종료됨(이 턴 결과는 미검증).`),
+        detailKo: capReached ? `검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.` : `검증 모드:${c.verifyMode} — 진행 변화 없이 종료 차단 안내가 반복된 뒤 검증 미완료 상태로 이 턴이 종료됨(이 턴 결과는 미검증).`,
+        detailEn: capReached ? `Verification cap ${round} was reached, but the required accept/rebut/park/user-decision closeout was not shown. Do not ignore this red alert: complete the four-way closeout before treating the work as closed.` : `Verify mode:${c.verifyMode} — stop reminders repeated without progress, and this turn ended without completed verification (this turn's result is UNVERIFIED).`,
       });
     } catch { /* 이벤트 기록 실패는 종료를 막지 않음 */ }
     try { writePhase("incomplete", { session: claudeSession, workspace: ws }); } catch { /* best-effort */ } // 검증 미완 종료
     clearAttempts(attemptKey); // 카운터 키와 일치(세션키 없을 때 no-op 방지)
     process.exit(0);
   }
-  const shown = n === null ? "?" : n;
-  const en = loadLang() === "en"; // 차단 사유는 Claude(모델)가 읽는 지시문 — 전역 언어를 따른다
   const waitMin = verifyTimeoutMin(); // 대시보드 전역값 정본 — Claude↔Codex와 Codex↔Codex가 같은 deadline 사용
   const what = en
     ? (planned && !editedReal ? "You confirmed a plan, but" : editedReal ? "You modified files, but" : "In this turn,")
@@ -288,17 +312,11 @@ process.stdin.on("end", () => {
   process.stdout.write(
     JSON.stringify({
       decision: "block",
-      reason: en
-        ? `[Verify mode:${c.verifyMode} · attempt ${shown}/${MAX_ATTEMPTS}] ${what} there is no successful Codex verification response this turn. ` +
-          `Do not finish — start exactly one durable verification via \`node "${BRIDGE}" ask-start --allow-new "<what to verify>"\`, then repeat \`node "${BRIDGE}" ask-wait <job-id>\` while pending. ` +
-          `The dashboard verification wait (${waitMin} min) is the actual deadline; never start a second job. (A linked verifier is resumed and a new session is created only when none is linked.) ` +
-          `(An empty command, a failure, or no link does not count — an actual response must come back). ` +
-          `Report the result (pass/fail + evidence) to the user, then finish. (If there is no link and only a report is possible, report that fact. After ${MAX_ATTEMPTS} attempts, finishing is allowed.)`
-        : `[검증 모드:${c.verifyMode} · ${shown}/${MAX_ATTEMPTS}회] ${what} 이번 턴에 Codex 검증의 '성공 응답'이 없다. ` +
-          `종료하지 말고 지금 \`node "${BRIDGE}" ask-start --allow-new "<무엇을 검증할지>"\` 로 내구 검증을 정확히 1개 시작하고, pending이면 \`node "${BRIDGE}" ask-wait <job-id>\` 를 반복하라. ` +
-          `대시보드 검증 대기시간(${waitMin}분)이 실제 deadline이며 두 번째 job은 만들지 마라. (연결된 검증 세션은 이어가고 연결이 전혀 없을 때만 새 세션을 만든다.) ` +
-          `(빈 명령·실패·미연결은 인정되지 않는다 — 실제 응답이 와야 검증으로 친다). ` +
-          `그 결과(통과/실패+근거)를 사용자에게 보고한 뒤 종료하라. (연결이 없어 보고만 된다면 그 사실을 보고하라. ${MAX_ATTEMPTS}회 후엔 종료가 허용된다)`,
+      reason: capReached
+        ? capHandoffInstruction(en ? "en" : "ko", round, "not-pass", handoffCtx)
+        : en
+          ? `[Verify mode:${c.verifyMode} · actual round ${round}] ${what} there is no successful Codex verification response bound to this turn. At most one durable verification may be queued/running: start one via \`node "${BRIDGE}" ask-start --allow-new "<what to verify>"\`, then repeat \`node "${BRIDGE}" ask-wait <job-id>\` while pending. The dashboard verification wait (${waitMin} min) is the actual deadline. After a completed fail or a later edit, finish that job before starting the next round sequentially; stop on pass. A new verifier session is created only when none is linked.`
+          : `[검증 모드:${c.verifyMode} · 실제 회차 ${round}] ${what} 이번 턴에 결속된 Codex 통과 증명이 없다. queued/running 내구 검증은 동시에 최대 1개만 둘 수 있다. \`node "${BRIDGE}" ask-start --allow-new "<무엇을 검증할지>"\` 로 시작하고 pending이면 \`node "${BRIDGE}" ask-wait <job-id>\` 를 반복하라. 대시보드 검증 대기시간(${waitMin}분)이 실제 deadline이다. 완료된 실패 또는 이후 수정이 있으면 앞 작업을 끝낸 뒤 다음 회차를 순차적으로 시작하고, 통과하면 멈춰라. 연결이 전혀 없을 때만 새 검증 세션을 만든다.`,
     }),
   );
   process.exit(0);

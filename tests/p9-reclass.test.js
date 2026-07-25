@@ -231,8 +231,8 @@ console.log("[2c] 재재재검증 B2 — 재제안·표지 실패 시 구 유물
   ok(JSON.parse(fs.readFileSync(c2f, "utf8")).lifecycle === "expired", "구 유물=스윕이 만료 재시도로 정리(expire 실패 잔존 회수)");
   // 실행기 순서 계약(소스): 신본 제안·표지 성공 '후' 구 expire — 제안 실패=구 무변
   const me2 = fs.readFileSync(path.join(ROOT, "bridge", "map-enrich.js"), "utf8");
-  ok(me2.includes("pr9.patch.baseDecisionContextHash !== curDch9") && me2.indexOf("rebaseLegacyPatch(repo, MP, PM, pr9.patch, pid9)") < me2.indexOf("expirePendingPatch(repo, topo.mapId, pid9"), "stale 예측=apply 전 검사(낡은 유물에 apply 금지 — cas-stale 조기 만료 차단)+신본 선행→구 만료 순서");
-  ok(me2.includes("markLegacyReclassMark(repo, topo.mapId, np.patchId, oldPid") && me2.includes("o.askVerifier({ repo, ws: o.ws, patch: target9.patch"), "재기반=원자 표지+호출은 '적용할 그 patch'에만(구 verdict 재사용 0 — ab-3)");
+  ok(me2.includes("pr9.patch.baseDecisionContextHash !== dch9") && me2.indexOf("rebaseLegacyPatch(repo, MP, PM, pr9.patch, pid9)") < me2.indexOf("expirePendingPatch(repo, topo.mapId, pid9"), "stale 예측=apply 전 검사(낡은 유물에 apply 금지 — cas-stale 조기 만료 차단)+신본 선행→구 만료 순서");
+  ok(me2.includes("markLegacyReclassMark(repo, topo.mapId, np.patchId, oldPid") && me2.includes("retryDeferredResolutions") && me2.includes("o.askVerifier({ repo, ws: o.ws, patch"), "재기반=원자 표지+별도 확인 대기 경로에서 적용할 patch만 검증(구 verdict 재사용 0 — ab-3)");
   // 실행 반례(f-253b9008 재현 절차): 유물 2건 — 첫 적용 후 둘째의 재기반(propose)이 잠금 경합으로 실패해도
   // 구 pending은 classified+표지로 보존(수정 전=apply cas-stale이 구를 먼저 만료해 소실)·잠금 해제 후 수렴.
   {
@@ -311,7 +311,7 @@ console.log("[2c] 재재재검증 B2 — 재제안·표지 실패 시 구 유물
     ok(l3st.legacyReclass === true && (l3st.lifecycle === "classified" || (l3st.lifecycle === "expired" && l3st.expireCode === "cas-stale")), "인터리빙 재현 — 소실 0(보존 경로: " + l3st.lifecycle + (l3st.expireCode ? "/" + l3st.expireCode : "") + "+표지)");
     fs.rmSync(lockL, { force: true });
     ok(MBx.ensureQueue(wsl, PM) === true, "(전제) 큐 재생성 4");
-    MEx.runEnrich(wsl, { ws: wsl, slot: "ko", mode: "self", readiness: { selfReady: true, economyReady: true, precisionReady: true, autoReady: true }, adapters: { self: () => ({ ok: true, result: { schema: "enrich-result-v1", items: [] } }) }, askVerifier: askHook, trigger: "test" });
+    MEx.runEnrich(wsl, { ws: wsl, slot: "ko", mode: "self", readiness: { selfReady: true, economyReady: true, precisionReady: true, autoReady: true }, adapters: { self: () => ({ ok: true, result: { schema: "enrich-result-v1", items: [] } }) }, askVerifier: askHook, trigger: "retry" });
     const tL2 = MR.readTopoExFor(wsl).topo;
     ok((tL2.nodes.find((n) => n.id === nL) || {}).steward === "결제팀", "다음 실행=보존 유물이 재기반 신본으로 회수·적용(소실 0 — f-253b9008 종결)");
     // expired+cas-stale+표지 경로 직접 유닛(P2 영속이 성공한 쪽 창): 파일을 그 상태로 구성→스윕 재소비+실행기 회수
@@ -333,7 +333,7 @@ console.log("[3] 배선·문서 — 실행기 스윕 1회·v12 개정 부기");
 {
   const me = fs.readFileSync(path.join(ROOT, "bridge", "map-enrich.js"), "utf8");
   ok(me.includes("sweepReclassifyNonPolicyIntentChoice(repo, topo.mapId)") && me.includes('route: "legacy-reclass"'), "실행기가 시작 시 1회 스윕+구조화 로그(route/reason/outcome — 성공·실패 양쪽)");
-  ok(me.includes("o.askVerifier({ repo, ws: o.ws, patch: target9.patch") && me.includes("verifierResolution: { patchId: target9.pid") && me.includes("expirePendingPatch(repo, topo.mapId, target9.pid"), "재결속 소비=P8 해소 경로(support=적용·reject=폐기·inconclusive=표지 잔류 재시도)");
+  ok(me.includes("ensureDeferredWaiting") && me.includes("retryDeferredResolutions") && me.includes("finishDeferredCall"), "재결속 소비=공통 확인 대기 경로(support=적용·reject=폐기·inconclusive=명시 재시도)");
   const doc = fs.readFileSync(path.join(ROOT, "docs", "MAP-V2-DESIGN.md"), "utf8");
   ok(doc.includes("P9 v12 소규모 개정") && doc.includes("intent-choice→**verifier-resolved**"), "정본 개정 부기(ⓒ 반영 3건)");
   ok(doc.includes("정책 op\n   3종(create/supersede/revoke_intent_policy)만 intent-choice 유지") || doc.includes("정책 op") && doc.includes("만 intent-choice 유지"), "정책 op 한정 명문");

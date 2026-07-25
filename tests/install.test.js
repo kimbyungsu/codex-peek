@@ -51,7 +51,7 @@ function cleanup(sb) { try { fs.rmSync(sb.dir, { recursive: true, force: true })
   const sb = freshSandbox("fresh");
   const r = run(sb, []);
   ok(r.status === 0, "종료코드 0");
-  for (const f of ["contract-lib.js", "codex-bridge.js", "ask-job-worker.js", "codex-hook.js", "contract-inject.js", "verify-guard.js", "codex-guard.js"])
+  for (const f of ["contract-lib.js", "verify-cap-handoff.js", "codex-bridge.js", "ask-job-worker.js", "codex-hook.js", "contract-inject.js", "verify-guard.js", "codex-guard.js"])
     ok(fs.existsSync(path.join(sb.bridgeDir, f)), "브릿지 파일 복사: " + f);
   ok(fs.existsSync(sb.settings), "settings.json 생성됨");
   const s = readJson(sb.settings);
@@ -341,6 +341,45 @@ function cleanup(sb) { try { fs.rmSync(sb.dir, { recursive: true, force: true })
   const iStd = std.length ? pri.indexOf(std[0]) : -1;
   ok(iStd > iPath, "우선순위: OS 표준위치는 PATH 'code'보다 뒤");
   ok(vscodeSignalClis({}).length === 0, "신호 없으면(외부 터미널) 신호후보 0개 → PATH/표준으로 폴백");
+})();
+
+// ── 같은 버전 강제 재설치 사고 방지 ──────────────────
+(function sameVersionInstallGuard() {
+  console.log("[같은 버전 설치 보호] 실행 중인 확장 폴더 선삭제 방지");
+  const { installedExtensionVersionFromList, installVsixWithCli } = require(INSTALL);
+  const list = [
+    "ms-vscode.powershell@2026.1.0",
+    "kimbyungsu.codex-bridge@0.1.86",
+    "openai.chatgpt@26.721.30844",
+  ].join("\r\n");
+  ok(installedExtensionVersionFromList(list, "kimbyungsu.codex-bridge") === "0.1.86", "목록에서 같은 확장 버전을 찾음");
+  ok(installedExtensionVersionFromList(list.toUpperCase(), "kimbyungsu.codex-bridge") === "0.1.86", "확장 이름 대소문자 차이를 무시함");
+  ok(installedExtensionVersionFromList(list, "kimbyungsu.other") === null, "다른 확장은 같은 버전으로 오인하지 않음");
+  ok(installedExtensionVersionFromList("kimbyungsu.codex-bridge", "kimbyungsu.codex-bridge") === null, "버전 없는 손상 줄은 설치됨으로 오인하지 않음");
+
+  const callsSame = [];
+  const same = installVsixWithCli("fake-code", "C:\\tmp\\same.vsix", "kimbyungsu.codex-bridge", "0.1.86", (cmd) => {
+    callsSame.push(cmd);
+    return { status: 0, stdout: list };
+  });
+  ok(same.kind === "same-version" && callsSame.length === 1 && /--list-extensions/.test(callsSame[0]), "같은 버전이면 목록 조회 뒤 즉시 멈춤");
+  ok(callsSame.every((cmd) => !/--install-extension/.test(cmd)), "같은 버전에서는 force 설치 호출이 실제로 0회");
+
+  const callsUnreadable = [];
+  const unreadable = installVsixWithCli("fake-code", "C:\\tmp\\same.vsix", "kimbyungsu.codex-bridge", "0.1.86", (cmd) => {
+    callsUnreadable.push(cmd);
+    return { status: 1, stdout: "" };
+  });
+  ok(unreadable.kind === "list-unreadable" && callsUnreadable.length === 1, "설치 목록 판독 실패는 미설치로 추측하지 않고 보류");
+  ok(callsUnreadable.every((cmd) => !/--install-extension/.test(cmd)), "목록 판독 실패에서도 force 설치 호출이 실제로 0회");
+
+  const callsNew = [];
+  const newer = installVsixWithCli("fake-code", "C:\\tmp\\new.vsix", "kimbyungsu.codex-bridge", "0.1.87", (cmd) => {
+    callsNew.push(cmd);
+    if (/--list-extensions/.test(cmd)) return { status: 0, stdout: list };
+    return { status: 0, stdout: "installed" };
+  });
+  ok(newer.kind === "installed" && callsNew.length === 2 && /--install-extension/.test(callsNew[1]), "다른 새 버전은 목록 확인 뒤 정상 설치");
 })();
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);

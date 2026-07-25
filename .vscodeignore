@@ -3,6 +3,7 @@ src/**
 **/*.log
 scripts/**
 node_modules/**
+project-map/**
 tsconfig.json
 package-lock.json
 out/**/*.map

@@ -1656,11 +1656,11 @@ function patchAskJobFile(id, extra) {
 function budgetExhaustMsg(m, lang, profile) {
   const en = lang === "en";
   if (profile === "core") return en
-    ? `[verify round cap exhausted · ${m}/${m}] This campaign's verification round cap is used up — no further rounds. Since no confirmation round is possible, do NOT newly apply '[notes]'; report them as unapplied (the canon's 'apply as a batch + one confirmation' cannot run under this cap — ask the user for approval if applying is necessary). Re-judge each '[caution]' and escalate it to the user's judgment with your reasoning (backlog add --tag 주의, cite the id); record '[backlog]' (out-of-scope proposals) in the parking lot and pass the list. If blockers remain, never auto-pass — escalate as a hold with a [disputed|unresolved-defect|external-decision] class, report the cap exhaustion and remaining blockers, and wait for instructions. State the options explicitly in the report: (1) approve more verification, (2) leave as is, (3) change the cap (applies from the next instruction).`
-    : `[검증 왕복 상한 소진 · ${m}/${m}] 이 지시(턴)의 검증 왕복 상한을 다 썼습니다 — 추가 왕복은 불가합니다. 확인 검증이 불가하므로 '[보완]'은 새로 반영하지 말고 미반영 상태로 사용자 보고에 명시하세요(캐논의 '일괄 반영+확인 1회'는 상한상 실행 불가 — 반영이 필요하면 사용자 승인을 구하세요). '[주의]'는 재판단해 근거와 함께 사용자 판단으로 승격(backlog add --tag 주의·id 인용)하고, '[백로그]'(범위 밖 제안)는 보관함에 기록해 목록으로 전달하세요. blocker가 남았으면 자동 통과 금지 — [분쟁|미해결 결함|외부 결정] 분류를 붙인 보류로 승격해 상한 소진과 잔여 blocker를 알리고 지시를 받으세요. 보고에는 선택지를 명시하세요: ① 추가 검증 승인 ② 이 상태로 두기 ③ 상한 변경(다음 지시부터).`;
+    ? `[verify round cap exhausted · ${m}/${m}] This campaign's verification round cap is used up — no further rounds. Re-judge only the latest findings: (1) accepted and already handled, (2) rebutted and closed with measured evidence, (3) parked out-of-scope/caution with a real backlog receipt, or (4) a product/risk/external decision the implementer cannot make. Do not apply new '[notes]' without their required confirmation; if one is important enough to require acceptance, put only that concrete choice in (4). Never auto-pass. Ask the user one combined question only when lane (4) is nonempty; otherwise close the triage without inventing choices, while stating that it is not a verification pass.`
+    : `[검증 왕복 상한 소진 · ${m}/${m}] 이 지시(턴)의 검증 왕복 상한을 다 썼습니다 — 추가 왕복은 불가합니다. 마지막 지적만 다시 판단해 ①수용해 이미 처리 ②측정 근거로 반박·종결 ③범위 밖·주의를 실제 영수증과 보관함 이관 ④구현자가 대신 정할 수 없는 제품·위험·외부 결정으로 정확히 나누세요. 확인 검증 없는 새 '[보완]' 반영은 금지하며, 꼭 수용해야 할 보완만 구체적 선택으로 ④에 둡니다. 자동 통과시키지 마세요. ④가 있을 때만 한 묶음으로 사용자에게 묻고, 없으면 선택지를 만들지 말고 검증 통과가 아니라는 점과 함께 자동 정리하세요.`;
   return en
-    ? `[verify round cap exhausted · ${m}/${m}] This campaign's verification round cap is used up — no further rounds. Since re-verification is impossible, make no new post-verification edits; report remaining findings to the user as unapplied. If blockers remain, never auto-pass — escalate as a hold, report the cap exhaustion and remaining blockers, and wait for instructions. State the options explicitly in the report: (1) approve more verification, (2) leave as is, (3) change the cap (applies from the next instruction).`
-    : `[검증 왕복 상한 소진 · ${m}/${m}] 이 지시(턴)의 검증 왕복 상한을 다 썼습니다 — 추가 왕복은 불가합니다. 재검증이 불가하므로 검증 후 새 수정은 하지 말고, 남은 지적은 미반영 상태로 사용자 보고에 명시하세요. blocker가 남았으면 자동 통과 금지 — 보류로 승격해 상한 소진과 잔여 blocker를 알리고 지시를 받으세요. 보고에는 선택지를 명시하세요: ① 추가 검증 승인 ② 이 상태로 두기 ③ 상한 변경(다음 지시부터).`;
+    ? `[verify round cap exhausted · ${m}/${m}] This campaign's verification round cap is used up — no further rounds. Re-judge only the latest findings into exactly one lane: accepted and handled; rebutted with measured evidence; parked with a real backlog receipt; or a genuine product/risk/external decision. Never auto-pass. Ask one combined user question only when the last lane is nonempty; otherwise close the triage without inventing choices and state that it is not a verification pass.`
+    : `[검증 왕복 상한 소진 · ${m}/${m}] 이 지시(턴)의 검증 왕복 상한을 다 썼습니다 — 추가 왕복은 불가합니다. 마지막 지적만 ①수용·처리 ②측정 근거로 반박·종결 ③실제 영수증과 보관함 이관 ④진짜 제품·위험·외부 결정 중 정확히 한 곳으로 나누세요. 자동 통과시키지 마세요. ④가 있을 때만 한 번에 사용자에게 묻고, 없으면 선택지를 만들지 말고 검증 통과가 아니라는 점과 함께 자동 정리하세요.`;
 }
 function reserveVerifyBudgetGate(ws, durableEnv, contractSnap, harnessModeSnap, langSnap, profileSnap) {
   const job = durableEnv && durableEnv.ok ? durableEnv.job : null;
@@ -1719,13 +1719,15 @@ function budgetNoticeLines(res, lang, profile) {
     if (res.quarantined) s += en
       ? "\n[verify round cap] The round counter was corrupt and was quarantined (original preserved in verify-campaigns/corrupt) — a new campaign started, and the cap was not applied to earlier rounds.\n"
       : "\n[검증 왕복 상한] 왕복 카운터가 손상돼 격리했습니다(원문은 verify-campaigns/corrupt에 보존) — 새 캠페인으로 시작하며, 이전 왕복에는 상한이 적용되지 않았습니다.\n";
-    if (res.last) s += profile === "core"
-      ? (en
-        ? `\n[verify round cap ${res.n}/${res.budget}] This was this campaign's last reserved round — the next request in the same campaign will be refused. The confirmation round for '[notes]' accepted from this verdict is NOT left under the cap, so the 'apply as a batch + one confirmation' instruction cannot run — do not apply them; report them as unapplied, or ask the user for approval if applying is necessary (cap changes take effect from the next instruction). Record what stays in the parking lot ([backlog] and user-escalated [caution] via backlog add); if blockers remain, escalate to the user as a classified hold. State the user's options in the report: (1) approve more verification (2) keep as is (3) change the cap (from the next instruction).\n`
-        : `\n[검증 왕복 상한 ${res.n}/${res.budget}] 이 캠페인의 마지막 예약 왕복입니다 — 같은 캠페인의 다음 요청은 거부됩니다. 이 판정에서 수용한 '[보완]'의 확인 검증 몫이 상한에 남아 있지 않으므로 '일괄 반영+확인 1회' 지시는 실행할 수 없습니다 — 반영하지 말고 미반영 상태로 보고하거나, 반영이 필요하면 사용자 승인을 구하세요(상한 변경은 다음 지시부터). 남길 지적은 보관함([백로그]·승격 [주의] — backlog add)에 기록하고, blocker가 남으면 분류를 붙인 보류로 승격하세요. 보고에는 선택지를 명시하세요: ① 추가 검증 승인 ② 이 상태로 두기 ③ 상한 변경(다음 지시부터).\n`)
-      : (en
-        ? `\n[verify round cap ${res.n}/${res.budget}] This was this campaign's last reserved round — the next request in the same campaign will be refused. Since re-verification is impossible afterwards, close within this round without new post-verification edits; report anything remaining to the user as unapplied, and escalate remaining blockers as a hold. State the user's options in the report: (1) approve more verification (2) keep as is (3) change the cap (from the next instruction).\n`
-        : `\n[검증 왕복 상한 ${res.n}/${res.budget}] 이 캠페인의 마지막 예약 왕복입니다 — 같은 캠페인의 다음 요청은 거부됩니다. 이후 재검증이 불가하므로 검증 후 새 수정 없이 이 왕복 안에서 마감하고, 남는 사항은 미반영 상태로 사용자에게 보고하세요. blocker가 남으면 보류로 승격하세요. 보고에는 선택지를 명시하세요: ① 추가 검증 승인 ② 이 상태로 두기 ③ 상한 변경(다음 지시부터).\n`);
+    s += en
+      ? `\n[verify round ${res.n}/${res.budget}] This is the round reserved immediately before the verifier model call. Pass ends the sequence; after fail or a later edit, finish this job first and then start the next round sequentially if capacity remains.\n`
+      : `\n[검증 왕복 ${res.n}/${res.budget}] 검증 모델 호출 직전에 예약된 실제 회차입니다. 통과하면 종료하고, 실패하거나 이후 수정했다면 이 작업을 먼저 끝낸 뒤 여유가 있을 때 다음 회차를 순차적으로 시작하세요.\n`;
+    if (res.last) s += en
+      ? `\n[verify round cap ${res.n}/${res.budget}] This was the last reserved round. Re-judge its findings into accepted-and-handled, evidence-backed rebuttal, receipt-backed parking, or genuine user decision. Ask one combined question only for the last lane; otherwise close triage without inventing options. This is never a verification pass.\n`
+      : `\n[검증 왕복 상한 ${res.n}/${res.budget}] 마지막 예약 왕복입니다. 이 판정의 지적을 수용·처리, 근거 있는 반박, 영수증 있는 보관함, 진짜 사용자 결정으로 나누세요. 마지막 갈래가 있을 때만 한 번에 묻고, 없으면 선택지를 만들지 말고 정리하세요. 어느 쪽도 검증 통과는 아닙니다.\n`;
+    if (res.last) s += en
+      ? "\n[cap closeout format] If this final verdict is not pass, one response must contain: [Verification cap closeout] [Accepted and handled] [Rebutted and closed] [Parked] [User decision required] [Alert meaning] [Recommendation]. Each latest finding belongs to exactly one of the first four sections.\n"
+      : "\n[상한 마감 형식] 이 마지막 판정이 통과가 아니라면 한 응답에 다음 제목을 모두 넣으세요: [검증 상한 인계] [수용·처리] [반박·종결] [보관함 이관] [사용자 판단 필요] [경고등 의미] [권장]. 마지막 지적마다 앞 네 절 중 정확히 한 곳만 배정합니다.\n";
     return s;
   }
   const why = String(res.untracked || "unknown");
@@ -1830,8 +1832,9 @@ function computeEnvelopeCandidatesFor(ws) {
   });
   return { live, skipped, overCap, gen: gen || null }; // gen=산출 세대(동결) — 소비자(대시보드)는 이 값과 현 승인 해시의 일치를 결속해야 함(증분 3 재검증 blocker)
 }
-function envelopeCandidateNoticeFor(ws, lang, res) {
+function envelopeCandidateNoticeFor(ws, lang, res, profile = "core") {
   try {
+    if (profile !== "core") return ""; // integrity 검증에는 core 전용 수칙서 후보·입장 심사 어휘를 붙이지 않는다.
     if (!res || !res.tracked || !res.last) return "";
     const en = lang === "en";
     const { live, skipped, overCap } = computeEnvelopeCandidatesFor(ws);
@@ -1841,7 +1844,7 @@ function envelopeCandidateNoticeFor(ws, lang, res) {
     const L = [];
     L.push(en ? "\n[rulebook candidates · this campaign — machine material]" : "\n[수칙서 후보 재료 · 이번 캠페인 — 기계 집계]");
     if (overCap) L.push(en ? "> ⚠ the rulebook already holds 30+ items — prioritize removal/merge candidates over additions (§7 growth control)." : "> ⚠ 수칙서가 이미 30항목 이상 — 추가보다 빼기/병합 후보를 우선하라(§7 성장 억제).");
-    if (!live.length) L.push(en ? "> none from this exhaustion (state this explicitly in the report — no silent omission)." + (skipped ? ` (${skipped} previously declined/failed candidate(s) skipped this generation)` : "") : "> 이번 소진에서는 수칙서로 올릴 후보가 없습니다(보고에 명시 — 침묵 생략 금지)." + (skipped ? ` (이 승인 세대에서 이미 거절·실패한 후보 ${skipped}건 스킵)` : ""));
+    if (!live.length) L.push(en ? "> no machine-aggregated candidate from this exhaustion. Any item parked by the implementer must still carry its real receipt in [Parked]." + (skipped ? ` (${skipped} previously declined/failed candidate(s) skipped this generation)` : "") : "> 이번 소진의 기계 집계로는 수칙서로 올릴 후보가 없습니다. 구현 담당이 보류한 항목은 [보관함 이관]에 실제 영수증과 별도로 밝혀야 합니다." + (skipped ? ` (이 승인 세대에서 이미 거절·실패한 후보 ${skipped}건 스킵)` : ""));
     else {
       for (const c of live) L.push(`> ${c.candidateId} [${c.kind} ×${c.n}] ${kindLabel(c.kind)}${c.titles.length ? " — " + c.titles.join(" / ") : ""}`);
       if (skipped) L.push(en ? `> (${skipped} previously declined/failed candidate(s) skipped this generation)` : `> (이 승인 세대에서 이미 거절·실패한 후보 ${skipped}건 스킵)`);
@@ -2217,7 +2220,7 @@ async function cmdAsk(rest) {
     process.stdout.write(envelopeWarnLine(ws, langSnap)); // 거버넌스 증분 1 — 경계 손상/미승인 변경 경고(정상·부재·미승인="")
     process.stdout.write(budgetNoticeLines(budgetGate.res, langSnap, profileSnap));
     process.stdout.write(breakdownNoticeFor(ws, langSnap, budgetGate.res)); // 증분 3 — 상한 마지막 왕복=원인 분해 병기
-    process.stdout.write(envelopeCandidateNoticeFor(ws, langSnap, budgetGate.res)); // §7 증분 1 — 소진=수칙서 후보 재료+작성 의무 병기
+    process.stdout.write(envelopeCandidateNoticeFor(ws, langSnap, budgetGate.res, profileSnap)); // §7 증분 1 — core 소진=수칙서 후보 재료+작성 의무 병기
     process.stdout.write(integrityReviewLine(ws, langSnap, profileSnap)); // 증분 3 — 무결성=경계 재심 재료 병기 // 포맷 계층(⑻) — N=M 예고·미집계 1줄(무제한="")
     return;
   }
@@ -2318,7 +2321,7 @@ async function cmdAsk(rest) {
     process.stdout.write(envelopeWarnLine(ws, langSnap)); // 거버넌스 증분 1 — 경계 손상/미승인 변경 경고(정상·부재·미승인="")
     process.stdout.write(budgetNoticeLines(budgetGate.res, langSnap, profileSnap));
     process.stdout.write(breakdownNoticeFor(ws, langSnap, budgetGate.res)); // 증분 3 — 상한 마지막 왕복=원인 분해 병기
-    process.stdout.write(envelopeCandidateNoticeFor(ws, langSnap, budgetGate.res)); // §7 증분 1 — 소진=수칙서 후보 재료+작성 의무 병기
+    process.stdout.write(envelopeCandidateNoticeFor(ws, langSnap, budgetGate.res, profileSnap)); // §7 증분 1 — core 소진=수칙서 후보 재료+작성 의무 병기
     process.stdout.write(integrityReviewLine(ws, langSnap, profileSnap)); // 증분 3 — 무결성=경계 재심 재료 병기 // 포맷 계층(⑻) — 무제한=""(바이트 동일)
   } else {
     attempt.record("session-unresolved"); // 2d: 답은 왔으나 세션 미결속 — 소비된 왕복 보존(승격·최근 무결성 미산입)

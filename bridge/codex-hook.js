@@ -5,15 +5,18 @@
 const fs = require("fs");
 const path = require("path");
 const cp = require("child_process");
+const crypto = require("crypto");
 // Comparable across hook processes and captured by Node before this module (or any cleanup/config
 // I/O) runs. It closes ordering gaps even if an older process is delayed during module startup.
 const HOOK_STARTED_AT = require("perf_hooks").performance.timeOrigin;
 const {
-  BRIDGE_DIR, loadContract, loadLang, buildInjection, buildVerifyDirective, buildScoutDirective,
+  BRIDGE_DIR, loadContract, loadLang, buildInjection, buildVerifyDirective, buildScoutDirective, appendIntegrityEvent, supersedeIntegrity,
   registerCodexImplementer, codexImplementerSnapshot, codexRoleRevision, writeCodexActive, readCodexActive, atomicWrite, writePhase, resolveScoutRepo, scoutMapStatus,
   scoutHealthLine, maybeCleanupState, configWs, readImplementerRecordLocked, durableProofGate, readCodexTurnStrict, contractReadState,
   patchContractFields, activeAskJobFor, phaseBusy, contractLockIssue, withRoleLock, implementerRecordOf, validLinksShape, scoutArmView,
+  verifyCampaignProgress, effectiveVerifyBudget,
 } = require("./contract-lib.js");
+const { validateCapHandoff, capHandoffInstruction, capHandoffContext, codexAssistantText } = require("./verify-cap-handoff.js");
 
 const TURN_DIR = path.join(BRIDGE_DIR, "codex-turns");
 const ATTEMPT_DIR = path.join(BRIDGE_DIR, "codex-verify-attempts");
@@ -94,7 +97,11 @@ function implementerContext(j, ws, c) {
   const parts=[]; const plan=j.permission_mode==="plan";
   const inject=c.codexInjectMode==="always" || (c.codexInjectMode==="plan" && plan);
   if(inject){ const x=buildInjection(c.codexImplementer,"Codex Implementer",c.codexImplementerChecklist); if(x)parts.push(x); }
-  if(c.codexVerifyMode!=="off") parts.push(buildVerifyDirective(c.codexVerifyMode, undefined, c.codexVerifyProfile)); // C-C 슬롯 스위치(모드별 분리 2026-07-15)·P-12 프로필(주입 시점 실효값)
+  if(c.codexVerifyMode!=="off") {
+    const turnId=String(j.turn_id||j.turnId||"");
+    const campaignId=turnId ? "cc:"+String(j.session_id||process.env.CODEX_THREAD_ID||"")+":"+turnId : "";
+    parts.push(buildVerifyDirective(c.codexVerifyMode, undefined, c.codexVerifyProfile, verifyCampaignProgress(ws,campaignId,effectiveVerifyBudget(c))));
+  }
   try { const x=buildScoutDirective(ws,c); if(x)parts.push(x); } catch { /* advisory */ }
   try { const x=require("./map-bootstrap.js").hookTick(ws); if(x)parts.push(x); } catch { /* advisory */ }
   return parts.join("\n\n");
@@ -116,10 +123,12 @@ function gitChangedMaxMtime(ws) {
     return max;
   } catch { return 0; }
 }
-function bump(dir, sid, turnId) {
+function bump(dir, sid, turnId, progressEpoch) {
   const f = stateFile(dir, sid); let o = read(f) || { turnId:"", n:0 };
   if (turnId && o.turnId !== turnId) o = { turnId, n:0 };
-  o.n = (Number(o.n) || 0) + 1; o.ts = new Date().toISOString(); save(f,o); return o.n;
+  if (progressEpoch !== undefined && String(o.progressEpoch || "") !== String(progressEpoch)) o = { turnId, n:0, progressEpoch: String(progressEpoch) };
+  o.n = (Number(o.n) || 0) + 1; o.ts = new Date().toISOString();
+  return save(f,o) ? o.n : null;
 }
 function sameImplementer(ws, sid) {
   try {
@@ -413,9 +422,38 @@ function onStop(j, ws, sid, c) {
   // 다음 Claude 질문을 최대 25분 오차단(구현검증 1차 지적 2)의 원인. 검증 답 회수~Stop 사이의 '반영중'은
   // cmdAsk가 그대로 기록하므로 표시 흐름은 유지된다.
   if(gate.ok){try{writePhase("done",{session:sid,workspace:ws});}catch{} return;}
-  const n=bump(ATTEMPT_DIR,sid,j.turn_id||s.turnId||"");
-  if(n>MAX_VERIFY_ATTEMPTS){try{writePhase("incomplete",{session:sid,workspace:ws});}catch{} return;}
-  block(t(`검증이 필요한 최종 상태인데 이번 턴에 결속된 성공 증명이 없습니다(${n}/${MAX_VERIFY_ATTEMPTS} · 판정: ${gate.reason}). 대시보드의 검증 대기시간을 따르는 내구 작업을 1개만 시작하세요: \`node "${path.join(BRIDGE_DIR,"codex-bridge.js")}" ask-start --allow-new "<검증 요청>"\`. 반환된 job id로 \`ask-wait <job-id>\`를 pending 동안 반복하고(완료 회수까지 같은 턴에서), 결과를 항목별 재판단한 뒤 종료하세요.`, `The final state requires verification but has no success proof bound to this turn (${n}/${MAX_VERIFY_ATTEMPTS} · verdict: ${gate.reason}). Start exactly one durable job using the dashboard wait: \`node "${path.join(BRIDGE_DIR,"codex-bridge.js")}" ask-start --allow-new "<verification request>"\`. Repeat \`ask-wait <job-id>\` while pending (retrieve within the same turn), re-judge the result item by item, then stop.`));
+  const turnId=String(j.turn_id||s.turnId||"");
+  const campaignId=turnId ? "cc:"+sid+":"+turnId : "";
+  const progress=verifyCampaignProgress(ws,campaignId,effectiveVerifyBudget(c));
+  const progressEpoch=crypto.createHash("sha1").update(JSON.stringify({campaignId,count:progress.count||0,budget:progress.budget||0,since,edited,planned,roleRevision:role.revision})).digest("hex");
+  const round=progress.tracked&&progress.budget>=1?`${progress.count}/${progress.budget}`:(progress.budget===0?t("무제한","unlimited"):t("미집계","untracked"));
+  const capReached=progress.tracked&&progress.budget>=1&&progress.count>=progress.budget;
+  const handoffCtx=capReached?capHandoffContext(BRIDGE_DIR,ws,campaignId):null;
+  const capCloseout=capReached?validateCapHandoff(codexAssistantText(rolloutForSession(j,sid)),handoffCtx):null;
+  if(capReached&&capCloseout.ok){
+    try{supersedeIntegrity(sid,"verify-handoff-missing",ws);}catch{}
+    try{writePhase(capCloseout.needsUserDecision?"held":"cap-settled",{session:sid,workspace:ws,round:progress.count});}catch{}
+    return;
+  }
+  const n=bump(ATTEMPT_DIR,sid,turnId,progressEpoch);
+  if(n===null){
+    if(capReached){
+      const ko=`검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았고, 종료 안내 횟수도 기록하지 못했습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.`;
+      const en=`Verification cap ${round} was reached without the required accept/rebut/park/user-decision closeout, and the stop-reminder count could not be stored. Do not ignore this red alert: complete the four-way closeout before treating the work as closed.`;
+      try{appendIntegrityEvent({ts:new Date().toISOString(),session:sid,workspace:ws,kind:"verify-handoff-missing",severity:"error",detail:t(ko,en),detailKo:ko,detailEn:en});}catch{}
+    }
+    try{writePhase("incomplete",{session:sid,workspace:ws});}catch{} return;
+  }
+  if(n>MAX_VERIFY_ATTEMPTS){
+    if(capReached){
+      const ko=`검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.`;
+      const en=`Verification cap ${round} was reached, but the required accept/rebut/park/user-decision closeout was not shown. Do not ignore this red alert: complete the four-way closeout before treating the work as closed.`;
+      try{appendIntegrityEvent({ts:new Date().toISOString(),session:sid,workspace:ws,kind:"verify-handoff-missing",severity:"error",detail:t(ko,en),detailKo:ko,detailEn:en});}catch{}
+    }
+    try{writePhase("incomplete",{session:sid,workspace:ws});}catch{} return;
+  }
+  if(capReached){block(capHandoffInstruction(loadLang()==="en"?"en":"ko",round,gate.reason,handoffCtx));return;}
+  block(t(`검증이 필요한 최종 상태인데 이번 턴에 결속된 통과 증명이 없습니다(실제 검증 회차 ${round} · 판정: ${gate.reason}). queued/running 내구 검증은 동시에 최대 1개만 두세요. \`node "${path.join(BRIDGE_DIR,"codex-bridge.js")}" ask-start --allow-new "<검증 요청>"\`으로 시작하고, 반환된 job id로 \`ask-wait <job-id>\`를 pending 동안 반복하세요. 완료된 실패 또는 이후 수정이 있으면 앞 작업을 끝낸 뒤 다음 회차를 순차적으로 시작하고, 통과하면 멈추세요.`, `The final state requires verification but has no pass proof bound to this turn (actual round ${round} · verdict: ${gate.reason}). At most one durable verification may be queued/running. Start it with \`node "${path.join(BRIDGE_DIR,"codex-bridge.js")}" ask-start --allow-new "<verification request>"\`, repeat \`ask-wait <job-id>\` while pending, then after a completed fail or later edit start the next round sequentially only after the prior job ends; stop on pass.`));
 }
 
 function main(raw){

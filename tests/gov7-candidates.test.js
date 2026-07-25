@@ -91,7 +91,7 @@ console.log("[4] CLI — list·mark 실행(설치본 동형 소스 직접 호출
 console.log("[5] 출력부 병기 — 두 경로(내구 회수·직결) 모두");
 {
   const src = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
-  ok((src.match(/envelopeCandidateNoticeFor\(ws, langSnap, budgetGate\.res\)/g) || []).length === 2, "budget 소진 출력 2곳 모두 후보 재료 병기(breakdown과 동일 배치)");
+  ok((src.match(/envelopeCandidateNoticeFor\(ws, langSnap, budgetGate\.res, profileSnap\)/g) || []).length === 2, "budget 소진 출력 2곳 모두 동결 profile을 결속해 core에서만 후보 재료 병기");
 }
 
 console.log("[6] 실경로 반례(재검증 blocker①②) — machineFindingsLayer로 prevId 계보·같은 라운드 중복");

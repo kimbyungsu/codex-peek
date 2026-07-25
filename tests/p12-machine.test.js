@@ -333,7 +333,7 @@ console.log("[7] 배선 소스 계약 — 양 분기·flagVerdict machine·같�
   ok(CL.BASE_CORE_EN.verifyBaseline.includes("[findings v1]") && CL.BASE_CORE_EN.verifyBaseline.includes("[findings end]"), "core 캐논 en — 5) 블록 형식");
   ok(/지적이 하나도 없으면 판정은 '검증: 통과'/.test(canon), "캐논 3) — 지적 0건=통과·비차단≥1=통과(보완) 정정(2차 [보완])");
   ok(/\[장부 자동 등록\]/.test(CL.BASE_CORE.rejudge) && /ledger auto-record/.test(CL.BASE_CORE_EN.rejudge), "재판단 규약 — 자동 등록 영수증 인용 의무로 개정");
-  ok(/보고에는 선택지를 명시하세요: ① 추가 검증 승인 ② 이 상태로 두기 ③ 상한 변경\(다음 지시부터\)\./.test(src) && (src.match(/State the user's options in the report/g) || []).length >= 2, "동승 — 2b 마지막 왕복 예고 4벌에 선택지 3종 명시");
+  ok(src.includes("④가 있을 때만 한 묶음으로 사용자에게 묻고") && src.includes("Ask one combined user question only when") && src.includes("[수용·처리]") && src.includes("[Rebutted and closed]"), "동승 — 2b 마지막 왕복 예고도 네 갈래 재판단 후 진짜 선택만 한 번에 질문");
 }
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);

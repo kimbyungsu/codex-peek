@@ -2,7 +2,7 @@
  * P8 증분 4 — 실배선 실행 테스트(1차 blocker⑥+2차 blocker①~④ 반영 — 문자열 단언이 아니라 실행 반례):
  * 민감 경로 제외(발췌+topology anchor 직렬화·양쪽 함수 동작 비교)·Verifier 이형 응답=null(가짜 CODEX_BIN 실행)·
  * 발췌 밖 인용 불인정·연결 자격=정본 resolveLink(byWorkspace 우선·잔존 bySession 거부)·
- * 어댑터 3종 stubbed spawn 직접 호출·설치본 디렉터리 CLI 실행(어댑터 실존)·활성 CLI(동의·게이트)·배포 24파일.
+ * 어댑터 3종 stubbed spawn 직접 호출·설치본 디렉터리 CLI 실행(어댑터 실존)·활성 CLI(동의·게이트)·배포 파일.
  */
 process.env.CODEX_BRIDGE_HOME = require("fs").mkdtempSync(require("path").join(require("os").tmpdir(), "p8ew_home_"));
 const fs = require("fs");
@@ -194,7 +194,7 @@ console.log("[2b] 어댑터 3종 — stubbed spawn 직접 호출(2차 blocker④
 
 console.log("[3] CLI — 설치본 디렉터리 실행(어댑터 실존)·게이트·동의");
 {
-  // 설치본 시뮬: BRIDGE_SCRIPTS 24파일을 임시 '설치 디렉터리'로 복사 후 그 사본 CLI 실행
+  // 설치본 시뮬: BRIDGE_SCRIPTS 전체를 임시 '설치 디렉터리'로 복사 후 그 사본 CLI 실행
   const inst = fs.mkdtempSync(path.join(os.tmpdir(), "p8ew_inst_"));
   const list = require(path.join(ROOT, "install.js")).BRIDGE_SCRIPTS;
   for (const f of list) fs.copyFileSync(path.join(ROOT, "bridge", f), path.join(inst, f));
@@ -227,15 +227,15 @@ console.log("[4] extension 배선 — 소스 계약(발동·핸들러·동의 �
   ok(src.includes('type === "grantEnrichSelf"') && src.includes('type === "retryEnrich"'), "핸들러 2종");
   ok(src.includes("동의하고 선택") && src.includes("동의하고 켜기"), "유료 모달 동의+self 별도 동의(소급 금지)");
   ok(!src.includes("라우팅 적용은 P8부터") && src.includes("ELECTRON_RUN_AS_NODE") && src.includes("enrichSpawnBusy"), "배지 제거·node 전환·단일-flight");
-  ok(src.includes('jr9.job.phase === "parked") return'), "parked=자동 재발동 금지");
+  ok(src.includes('jr9.job.phase === "parked" && !trigger.startsWith("link:")') && src.includes("triggerEnrichLinkRetry"), "parked 자동 재발동은 금지하되 새 검증 연결은 확인 대기만 깨움");
 }
 
-console.log("[5] 배포 24파일 — 3카피 패리티+실물+deepseek enrich 계약");
+console.log("[5] 배포 파일 — 3카피 패리티+실물+deepseek enrich 계약");
 {
   const a = require(path.join(ROOT, "install.js")).BRIDGE_SCRIPTS;
   const c = require(path.join(ROOT, "bridge", "map-cutover.js")).EXPECTED_DEPLOY_FILES;
   const h = fs.readFileSync(path.join(ROOT, "src", "hook-setup.ts"), "utf8");
-  ok(a.length === 24 && c.length === 24 && JSON.stringify([...a].sort()) === JSON.stringify([...c].sort()), "24파일(+router·enrich·intent·providers) 집합 일치");
+  ok(a.length === 25 && c.length === 25 && JSON.stringify([...a].sort()) === JSON.stringify([...c].sort()), "25파일(+cap-handoff·router·enrich·intent·providers) 집합 일치");
   ok(h.includes('"enrich-providers.js"') && a.every((f) => fs.existsSync(path.join(ROOT, "bridge", f))), "hook-setup 포함+전부 실물");
   const db = fs.readFileSync(path.join(ROOT, "bridge", "deepseek-bridge.js"), "utf8");
   ok(db.includes('cmd === "enrich"') && /enrich-result-v1/.test(db) && db.includes("enrich-shape-fail") && db.includes('arm: "enrich"'), "deepseek enrich — strict 표지·repair 1회 실패 표지·usage");
