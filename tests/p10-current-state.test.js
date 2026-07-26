@@ -84,7 +84,9 @@ MS.collectCurrentMapState(true, "D:/actual-repo", intent(), {
 ok(freshness === 0, "비-v2 projection은 freshness를 호출하지 않음");
 
 console.log("[5] 호스트 배선 — 실제 저장소 1회 해석·P9 결과 재사용");
-const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
+// .ts는 Windows 체크아웃에서 CRLF가 될 수 있다. 아래 호스트 배선 검사는 줄바꿈 모양이 아니라
+// 실행 순서를 확인하는 것이므로, OS와 무관하게 같은 LF 문자열로 맞춘 뒤 범위를 자른다.
+const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8").replace(/\r\n?/g, "\n");
 const setupStart = ext.indexOf("const mapActualRepo =");
 const setup = ext.slice(setupStart, ext.indexOf("\n  return {\n    workspace:", setupStart));
 ok(setup.includes("resolveScoutRepo(ws, contract)") && setup.includes("collectCurrentMapState(contract.scoutMode === \"on\", mapActualRepo, currentIntent"), "captured contract의 actual repo와 intentState를 collector에 전달");
