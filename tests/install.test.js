@@ -382,5 +382,71 @@ function cleanup(sb) { try { fs.rmSync(sb.dir, { recursive: true, force: true })
   ok(newer.kind === "installed" && callsNew.length === 2 && /--install-extension/.test(callsNew[1]), "다른 새 버전은 목록 확인 뒤 정상 설치");
 })();
 
+// ── 같은 버전 안전 갱신 ──────────────────────────────
+(function sameVersionSafeOverlay() {
+  console.log("[같은 버전 안전 갱신] 버전 상승 없이 GitHub 설치 묶음 반영");
+  const {
+    extensionRootCandidates,
+    findInstalledExtensionDir,
+    overlaySameVersionExtension,
+    hasLocalPackageToolchain,
+  } = require(INSTALL);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "codex-bridge-overlay-test-"));
+  const src = path.join(tmp, "source");
+  const extensions = path.join(tmp, "portable", "data", "extensions");
+  const target = path.join(extensions, "kimbyungsu.codex-bridge-0.1.88");
+  const backupParent = path.join(tmp, "backups");
+  const meta = { publisher: "kimbyungsu", name: "codex-bridge", version: "0.1.88" };
+  const installedMeta = Object.assign({}, meta, { __metadata: { installedTimestamp: 123, size: 456, targetPlatform: "undefined" } });
+  fs.mkdirSync(path.join(src, "out"), { recursive: true });
+  fs.mkdirSync(path.join(src, "bridge"), { recursive: true });
+  fs.mkdirSync(path.join(src, "docs"), { recursive: true });
+  fs.mkdirSync(path.join(target, "out"), { recursive: true });
+  fs.mkdirSync(path.join(target, "bridge"), { recursive: true });
+  fs.writeFileSync(path.join(src, "package.json"), JSON.stringify(meta));
+  fs.writeFileSync(path.join(src, "out", "extension.js"), "NEW-EXTENSION");
+  fs.writeFileSync(path.join(src, "bridge", "codex-bridge.js"), "NEW-BRIDGE");
+  fs.writeFileSync(path.join(src, "docs", "README.en.md"), "NEW-README");
+  fs.writeFileSync(path.join(target, "package.json"), JSON.stringify(installedMeta));
+  fs.writeFileSync(path.join(target, "out", "extension.js"), "OLD-EXTENSION");
+  fs.writeFileSync(path.join(target, "bridge", "codex-bridge.js"), "OLD-BRIDGE");
+  fs.writeFileSync(path.join(target, ".vsixmanifest"), "VSCODE-OWNED");
+
+  const explicit = extensionRootCandidates("ignored", { CODEX_BRIDGE_EXTENSIONS_DIR: extensions }, path.join(tmp, "home"));
+  ok(explicit.length === 1 && explicit[0] === path.resolve(extensions), "명시한 extensions 폴더만 사용(다른 VS Code 오염 방지)");
+  ok(findInstalledExtensionDir(explicit, "kimbyungsu.codex-bridge", "0.1.88") === target, "ID·버전이 모두 맞는 실제 설치 폴더를 찾음");
+  ok(findInstalledExtensionDir(explicit, "kimbyungsu.codex-bridge", "0.1.89") === null, "버전이 다르면 같은 설치로 오인하지 않음");
+
+  const over = overlaySameVersionExtension(src, target, "kimbyungsu.codex-bridge", "0.1.88", backupParent);
+  ok(over.ok && over.count >= 4, "핵심 런타임을 백업 후 같은 버전에 덮어씀");
+  ok(fs.readFileSync(path.join(target, "out", "extension.js"), "utf8") === "NEW-EXTENSION", "새 extension 런타임 반영");
+  ok(fs.readFileSync(path.join(target, "bridge", "codex-bridge.js"), "utf8") === "NEW-BRIDGE", "새 bridge 런타임 반영");
+  ok(fs.readFileSync(path.join(target, "readme.md"), "utf8") === "NEW-README", "설치본 README도 GitHub 문서로 갱신");
+  ok(fs.readFileSync(path.join(target, ".vsixmanifest"), "utf8") === "VSCODE-OWNED", "VS Code 소유 설치 메타데이터 보존");
+  ok(JSON.stringify(readJson(path.join(target, "package.json")).__metadata) === JSON.stringify(installedMeta.__metadata), "package.json의 VS Code 설치 메타데이터도 보존");
+  ok(fs.readFileSync(path.join(over.backupDir, "out", "extension.js"), "utf8") === "OLD-EXTENSION", "교체 전 런타임 백업 보존");
+  const mismatch = overlaySameVersionExtension(src, target, "kimbyungsu.codex-bridge", "0.1.87", backupParent);
+  ok(!mismatch.ok && /일치하지 않음/.test(mismatch.why), "요청 버전이 다르면 덮어쓰기 전 거부");
+
+  const toolRoot = path.join(tmp, "tools");
+  fs.mkdirSync(path.join(toolRoot, "node_modules", "typescript", "bin"), { recursive: true });
+  fs.mkdirSync(path.join(toolRoot, "node_modules", "@vscode", "vsce"), { recursive: true });
+  ok(!hasLocalPackageToolchain(toolRoot), "부분 설치된 빌드 도구는 준비됨으로 오인하지 않음");
+  fs.writeFileSync(path.join(toolRoot, "node_modules", "typescript", "bin", "tsc"), "");
+  fs.writeFileSync(path.join(toolRoot, "node_modules", "@vscode", "vsce", "vsce"), "");
+  ok(hasLocalPackageToolchain(toolRoot), "TypeScript와 VSCE가 모두 있을 때만 소스 재빌드");
+
+  const cliA = path.join(tmp, "cli-a", "bin", process.platform === "win32" ? "code.cmd" : "code");
+  const envB = path.join(tmp, "cli-b");
+  const rootsBound = extensionRootCandidates(cliA, { VSCODE_CWD: envB, VSCODE_PORTABLE: path.join(envB, "data") }, path.join(tmp, "home"));
+  ok(rootsBound[0] === path.join(tmp, "cli-a", "data", "extensions"), "버전을 조회한 CLI의 포터블 폴더가 첫 대상");
+  ok(!rootsBound.some((p) => p.startsWith(envB)), "다른 열린 VS Code의 환경변수 폴더를 오버레이 후보로 섞지 않음");
+
+  const installSource = fs.readFileSync(INSTALL, "utf8");
+  ok(/const extensionOk = tryInstallVsix\(dryRun\);[\s\S]{0,300}if \(!extensionOk \|\| !doctorOk\)[\s\S]{0,200}return false;/.test(installSource), "확장 동일 버전 갱신 실패는 설치 완료 경로로 진행하지 않음");
+  ok(/else if \(!cmdInstall\([\s\S]{0,80}process\.exitCode = 1/.test(installSource), "설치 미완료는 CLI 종료코드 1로 전달");
+  fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

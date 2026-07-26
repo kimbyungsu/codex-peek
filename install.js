@@ -27,6 +27,7 @@
  *   CODEX_BRIDGE_NODE  훅이 쓸 node 실행파일       (기본 지금 이 설치기를 돌린 node)
  *   CODE_CLI           VS Code CLI(code) 경로      (미지정 시 PATH의 code → 환경변수/표준위치 자동탐지)
  *                      ※ 포터블/무설치형 VS Code(PATH에 code 없음)도 VSCODE_CWD 등으로 자동탐지. 그래도 못 찾으면 이 변수로 지정.
+ *   CODEX_BRIDGE_EXTENSIONS_DIR  비표준 VS Code의 extensions 폴더(같은 버전 안전 갱신용)
  */
 
 const fs = require("fs");
@@ -339,6 +340,139 @@ function installedExtensionState(codeCli, extensionId, spawnSyncImpl = cp.spawnS
     return { ok: false, version: null };
   }
 }
+
+// 같은 버전의 새 소스를 `code --install-extension --force`로 밀어 넣으면, 실행 중인 VS Code가
+// 기존 확장 폴더를 먼저 지운 뒤 재시작 대기 상태에 들어갈 수 있다. 버전 숫자를 억지로 올리지 않고도
+// GitHub 설치 묶음을 적용할 수 있도록, 현재 CLI가 실제로 쓰는 extensions 폴더를 좁게 찾은 뒤
+// 런타임 파일만 백업·대조하며 덮는다. `.vsixmanifest` 등 VS Code 소유 파일은 건드리지 않는다.
+function extensionRootCandidates(codeCli, env = process.env, home = HOME) {
+  const out = [];
+  const add = (p) => { if (p) { const abs = path.resolve(String(p)); if (!out.includes(abs)) out.push(abs); } };
+  if (env.CODEX_BRIDGE_EXTENSIONS_DIR) return [path.resolve(String(env.CODEX_BRIDGE_EXTENSIONS_DIR))];
+  const cli = String(codeCli || "");
+  // 버전을 조회한 바로 그 CLI에서 유도한 포터블 루트를 항상 먼저 쓴다. VSCODE_CWD/PORTABLE은
+  // 다른 열린 창의 값일 수 있으므로 여기서 독립 후보로 섞지 않는다(A CLI 확인→B 폴더 갱신 방지).
+  if (/[\\/]/.test(cli)) add(path.join(path.dirname(path.dirname(path.resolve(cli))), "data", "extensions"));
+  const insiders = /insiders/i.test(cli);
+  add(path.join(home, insiders ? ".vscode-insiders" : ".vscode", "extensions"));
+  return out;
+}
+
+function findInstalledExtensionDir(roots, extensionId, version) {
+  const wantedId = String(extensionId || "").toLowerCase();
+  const wantedVersion = String(version || "");
+  for (const root of roots || []) {
+    let entries = [];
+    try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { continue; }
+    const matches = [];
+    for (const ent of entries) {
+      if (!ent.isDirectory() || ent.isSymbolicLink()) continue;
+      const dir = path.join(root, ent.name);
+      let meta;
+      try { meta = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")); } catch { continue; }
+      const id = meta && meta.publisher && meta.name ? `${meta.publisher}.${meta.name}`.toLowerCase() : "";
+      if (id !== wantedId || String(meta.version || "") !== wantedVersion) continue;
+      matches.push({ dir, exact: ent.name.toLowerCase() === `${wantedId}-${wantedVersion}` });
+    }
+    matches.sort((a, b) => Number(b.exact) - Number(a.exact) || a.dir.localeCompare(b.dir));
+    if (matches.length) return matches[0].dir;
+  }
+  return null;
+}
+
+function walkFiles(root, rel = "") {
+  const dir = path.join(root, rel);
+  let entries = [];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+  const out = [];
+  for (const ent of entries) {
+    const child = path.join(rel, ent.name);
+    if (ent.isDirectory() && !ent.isSymbolicLink()) out.push(...walkFiles(root, child));
+    else if (ent.isFile()) out.push(child);
+  }
+  return out;
+}
+
+function sameVersionOverlayEntries(sourceRoot) {
+  const pairs = [];
+  const add = (sourceRel, targetRel = sourceRel) => {
+    if (fs.existsSync(path.join(sourceRoot, sourceRel))) pairs.push({ sourceRel, targetRel });
+  };
+  for (const rel of walkFiles(path.join(sourceRoot, "out")).filter((p) => !p.endsWith(".map"))) add(path.join("out", rel));
+  for (const rel of BRIDGE_SCRIPTS) add(path.join("bridge", rel));
+  add(path.join(".agents", "plugins", "marketplace.json"));
+  add(path.join("codex-plugin", "codex-peek", ".codex-plugin", "plugin.json"));
+  add(path.join("codex-plugin", "codex-peek", "scripts", "codex-hook-launcher.js"));
+  add("verify-envelope.json");
+  add(path.join("docs", "icon.png"));
+  add(path.join("docs", "README.en.md"), "readme.md");
+  add("LICENSE", "LICENSE.txt");
+  add("package.json"); // 활성화 메타는 런타임 파일이 모두 복사된 뒤 마지막에 교체한다.
+  return pairs;
+}
+
+function overlaySameVersionExtension(sourceRoot, targetDir, expectedId, expectedVersion, backupParent) {
+  let srcMeta, dstMeta;
+  try {
+    srcMeta = JSON.parse(fs.readFileSync(path.join(sourceRoot, "package.json"), "utf8"));
+    dstMeta = JSON.parse(fs.readFileSync(path.join(targetDir, "package.json"), "utf8"));
+    if (fs.lstatSync(targetDir).isSymbolicLink()) throw new Error("설치 폴더가 심볼릭 링크임");
+  } catch (e) { return { ok: false, why: `메타데이터 판독 실패: ${e.message}` }; }
+  const srcId = srcMeta.publisher && srcMeta.name ? `${srcMeta.publisher}.${srcMeta.name}` : "";
+  const dstId = dstMeta.publisher && dstMeta.name ? `${dstMeta.publisher}.${dstMeta.name}` : "";
+  if (srcId.toLowerCase() !== String(expectedId || "").toLowerCase() || dstId.toLowerCase() !== srcId.toLowerCase()
+      || String(srcMeta.version || "") !== String(expectedVersion || "") || String(dstMeta.version || "") !== String(expectedVersion || "")) {
+    return { ok: false, why: "확장 ID 또는 버전이 일치하지 않음" };
+  }
+  const entries = sameVersionOverlayEntries(sourceRoot);
+  if (!entries.some((e) => e.targetRel === path.join("out", "extension.js")) || !entries.some((e) => e.targetRel === path.join("bridge", "codex-bridge.js"))) {
+    return { ok: false, why: "컴파일된 핵심 파일(out/extension.js 또는 bridge/codex-bridge.js)이 없음" };
+  }
+  let backupDir;
+  try {
+    const parent = backupParent || os.tmpdir();
+    fs.mkdirSync(parent, { recursive: true });
+    backupDir = fs.mkdtempSync(path.join(parent, `codex-bridge-extension-${expectedVersion}-backup-`));
+  } catch (e) { return { ok: false, why: `백업 폴더 생성 실패: ${e.message}` }; }
+  const existed = [], created = [];
+  try {
+    const rootReal = fs.realpathSync(targetDir);
+    for (const { sourceRel, targetRel } of entries) {
+      const src = path.join(sourceRoot, sourceRel);
+      const dst = path.join(targetDir, targetRel);
+      let payload = fs.readFileSync(src);
+      if (targetRel === "package.json" && Object.prototype.hasOwnProperty.call(dstMeta, "__metadata")) {
+        // VS Code가 설치 시 덧붙인 관리 메타데이터는 소스 package.json에 없다. 새 확장 메타와
+        // 결합해 보존해야 이후 업데이트/진단에서 불완전 설치로 보이지 않는다.
+        const mergedMeta = Object.assign({}, srcMeta, { __metadata: dstMeta.__metadata });
+        payload = Buffer.from(JSON.stringify(mergedMeta, null, "\t") + "\n", "utf8");
+      }
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      const parentReal = fs.realpathSync(path.dirname(dst));
+      if (parentReal !== rootReal && !parentReal.startsWith(rootReal + path.sep)) throw new Error(`설치 폴더 밖 경로 거부: ${targetRel}`);
+      if (fs.existsSync(dst)) {
+        if (fs.lstatSync(dst).isSymbolicLink()) throw new Error(`심볼릭 링크 파일 거부: ${targetRel}`);
+        const bak = path.join(backupDir, targetRel);
+        fs.mkdirSync(path.dirname(bak), { recursive: true });
+        fs.copyFileSync(dst, bak);
+        existed.push({ dst, bak });
+      } else created.push(dst);
+      fs.writeFileSync(dst, payload);
+      if (!payload.equals(fs.readFileSync(dst))) throw new Error(`복사 대조 실패: ${targetRel}`);
+    }
+    return { ok: true, count: entries.length, backupDir };
+  } catch (e) {
+    for (const dst of created.reverse()) { try { fs.unlinkSync(dst); } catch { /* best-effort rollback */ } }
+    for (const { dst, bak } of existed.reverse()) { try { fs.copyFileSync(bak, dst); } catch { /* best-effort rollback */ } }
+    return { ok: false, why: e.message, backupDir };
+  }
+}
+
+function hasLocalPackageToolchain(root = __dirname) {
+  return fs.existsSync(path.join(root, "node_modules", "typescript", "bin", "tsc"))
+    && fs.existsSync(path.join(root, "node_modules", "@vscode", "vsce", "vsce"));
+}
+
 // 목록을 읽지 못하면 "미설치"로 추측하지 않는다. 그 추측이 동일 버전 강제 교체로 이어져
 // 실행 중인 확장 폴더부터 사라진 실제 사고가 있었으므로, 판독 실패는 설치 보류가 정답이다.
 function installVsixWithCli(codeCli, vsixPath, extensionId, version, spawnSyncImpl = cp.spawnSync) {
@@ -446,23 +580,36 @@ function tryInstallVsix(dryRun) {
     version = meta.version || "";
     extensionId = meta.publisher && meta.name ? `${meta.publisher}.${meta.name}` : "";
   } catch { /* ignore */ }
-  // ★ 실제 설치는 '항상' 현재 소스로 새로 빌드한다. 캐시된 vsix를 재사용하면 (1) 버전 올린 뒤 옛 vsix만 남거나
-  //   (2) 버전은 같은데 옛 소스로 빌드된 stale vsix가 남았을 때 'git pull && install'이 옛 확장을 깔았다(둘 다 실제 발생).
-  //   currentVsix(버전명 일치)만으론 (2)를 못 거르므로 캐시 재사용 자체를 버린다. npm run package = compile &&
-  //   clean:vsix && vsce package 라 십수 초에 항상 최신을 보장. 빌드 도구가 없을 때(빌드 실패)만 기존 vsix로 폴백.
+  // 개발 체크아웃은 현재 소스로 다시 빌드해 stale VSIX를 피한다. GitHub 설치 묶음은 node_modules 없이
+  // 배포되므로, 정확한 현재 버전의 동봉 VSIX를 릴리스 산출물로 신뢰해 그대로 사용한다.
   let vsix = null;
   if (dryRun) {
     const cur = currentVsix(files, version);
-    log("ℹ️  (미리보기) 실제 설치 시 현재 소스로 새로 빌드(npm run package) 후 설치합니다" +
-      (cur ? ` (현재 ${cur}가 있어도 최신 보장 위해 재빌드).` : " (현재 버전 VSIX 없음 → 빌드로 생성)."));
+    if (hasLocalPackageToolchain(__dirname)) {
+      log("ℹ️  (미리보기) 실제 설치 시 현재 소스로 새로 빌드(npm run package) 후 설치합니다" +
+        (cur ? ` (현재 ${cur}가 있어도 최신 보장 위해 재빌드).` : " (현재 버전 VSIX 없음 → 빌드로 생성)."));
+    } else if (cur) {
+      log(`ℹ️  (미리보기) GitHub 설치 묶음의 미리 빌드된 ${cur}를 사용합니다 (npm install 불필요).`);
+    } else {
+      log("ℹ️  (미리보기) 빌드 도구와 현재 버전 VSIX가 없어 확장 설치는 보류됩니다. 먼저 'npm install'이 필요합니다.");
+    }
     const detected = resolveCodeCli();
     log(detected ? `ℹ️  (미리보기) 확장 설치에 쓸 VS Code CLI: ${detected}` : "ℹ️  (미리보기) VS Code CLI(code)를 못 찾음 — CODE_CLI 지정 또는 수동 설치 필요.");
-    return;
+    return true;
   }
-  log("ℹ️  현재 소스로 확장을 새로 빌드합니다 (npm run package)…");
   let b;
-  try { b = cp.spawnSync("npm run package", { cwd: __dirname, shell: true, encoding: "utf8", timeout: 300000, stdio: "inherit" }); }
-  catch { b = null; }
+  const bundled = currentVsix(files, version);
+  if (!hasLocalPackageToolchain(__dirname) && bundled) {
+    log(`ℹ️  GitHub 설치 묶음의 미리 빌드된 ${bundled}를 사용합니다 (npm install 불필요).`);
+    b = { status: 0, bundled: true };
+  } else if (!hasLocalPackageToolchain(__dirname)) {
+    log("ℹ️  확장을 빌드할 도구가 없고 함께 제공된 VSIX도 없습니다. 먼저 'npm install'을 실행하세요.");
+    return true;
+  } else {
+    log("ℹ️  현재 소스로 확장을 새로 빌드합니다 (npm run package)…");
+    try { b = cp.spawnSync("npm run package", { cwd: __dirname, shell: true, encoding: "utf8", timeout: 300000, stdio: "inherit" }); }
+    catch { b = null; }
+  }
   // npm run package는 성공이든 실패든 clean:vsix로 기존 VSIX를 이미 지웠을 수 있다(예: compile·clean은 됐는데 vsce 실패).
   // 그래서 빌드 결과와 무관하게 디렉터리를 '다시' 읽어 실제 '남아있는' VSIX로만 판단한다(삭제된 파일을 가리키지 않게).
   try { files = fs.readdirSync(__dirname); } catch { /* ignore */ }
@@ -470,17 +617,17 @@ function tryInstallVsix(dryRun) {
   if (!(b && b.status === 0)) {
     // 빌드 실패(빌드 도구 미설치 / vsce 실패 등): 현재 버전 VSIX가 '실제로' 남아있으면 폴백(경고), 없으면 안내 후 종료.
     if (vsix) log(`⚠️  빌드 실패 — 남아있는 ${vsix}로 설치합니다(최신 소스가 아닐 수 있음). 'npm install' 후 재시도를 권장합니다.`);
-    else { log("ℹ️  VSIX 빌드 실패 + 설치할 VSIX 없음(clean:vsix로 삭제됐을 수 있음) — 'npm install' 후 다시 실행하거나 확장을 수동 설치하세요."); return; }
+    else { log("ℹ️  VSIX 빌드 실패 + 설치할 VSIX 없음(clean:vsix로 삭제됐을 수 있음) — 'npm install' 후 다시 실행하거나 확장을 수동 설치하세요."); return true; }
   }
   if (!vsix) {
     log("ℹ️  확장 VSIX(codex-bridge-*.vsix)를 못 찾음 — 확장은 수동 설치하세요(또는 마켓플레이스).");
-    return;
+    return true;
   }
   const vsixPath = path.join(__dirname, vsix);
   if (!fs.existsSync(vsixPath)) {
     // 최종 안전장치: 설치 직전 파일이 실제로 있는지 확인(빌드 산출물/폴백 불일치 방어 — 없는 파일로 code 설치 시도 방지).
     log(`ℹ️  설치할 VSIX 파일이 실제로 없습니다(${vsix}) — 'npm install' 후 다시 실행하세요.`);
-    return;
+    return true;
   }
   const codeCli = resolveCodeCli();
   if (!codeCli) {
@@ -488,26 +635,41 @@ function tryInstallVsix(dryRun) {
     log("ℹ️  VS Code CLI(code)를 못 찾아 확장 자동 설치를 건너뜁니다.");
     log(`   수동: VS Code에서 '확장: VSIX에서 설치'로 ${vsixPath} 선택`);
     log("   또는 환경변수 CODE_CLI 에 code(.cmd) 실행파일 경로 지정 후 재시도.");
-    return;
+    return true;
   }
   const installResult = installVsixWithCli(codeCli, vsixPath, extensionId, version);
   if (installResult.kind === "list-unreadable") {
     log(`ℹ️  확장 설치 목록을 읽지 못해 자동 설치를 안전하게 보류합니다(${extensionId}).`);
     log("   미설치로 추측해 강제 교체하면 실행 중인 확장 폴더가 먼저 사라질 수 있습니다.");
     log("   VS Code를 완전히 다시 연 뒤 설치기를 재실행하거나 새 버전 VSIX를 수동 설치하세요.");
-    return;
+    return true; // 기존 계약: 브릿지·훅 설치는 유지하고 확장만 명시적으로 보류한다.
   }
   if (installResult.kind === "same-version") {
-    log(`ℹ️  확장 ${extensionId}@${version}이 이미 설치 목록에 있어 같은 버전 강제 교체를 건너뜁니다.`);
-    log("   실행 중인 같은 버전을 강제로 덮으면 기존 파일만 사라지고 재시작 대기 상태가 될 수 있습니다.");
-    log("   소스 변경분을 확장에 반영할 때는 package.json 버전을 올려 새 VSIX로 설치하세요.");
-    return;
+    const roots = extensionRootCandidates(codeCli);
+    const target = findInstalledExtensionDir(roots, extensionId, version);
+    if (!target) {
+      log(`ℹ️  확장 ${extensionId}@${version}의 실제 설치 폴더를 찾지 못해 같은 버전 갱신을 안전하게 보류합니다.`);
+      log(`   확인한 위치: ${roots.join(" · ") || "없음"}`);
+      log("   비표준 위치라면 CODEX_BRIDGE_EXTENSIONS_DIR에 extensions 폴더를 지정한 뒤 재실행하세요.");
+      return false;
+    }
+    const over = overlaySameVersionExtension(__dirname, target, extensionId, version);
+    if (!over.ok) {
+      log(`ℹ️  같은 버전 안전 갱신을 완료하지 못했습니다: ${over.why}`);
+      if (over.backupDir) log(`   복구용 백업: ${over.backupDir}`);
+      return false;
+    }
+    log(`✅ 같은 버전 안전 갱신: ${extensionId}@${version} 런타임 ${over.count}개 → ${target}`);
+    log(`   기존 파일 백업: ${over.backupDir}`);
+    log("   VS Code 소유 설치 메타데이터는 보존했습니다. Developer: Reload Window로 새 코드를 불러오세요.");
+    return true;
   }
-  if (installResult.kind === "installed") { log(`✅ 확장 설치: ${vsix}  (code: ${codeCli})`); }
+  if (installResult.kind === "installed") { log(`✅ 확장 설치: ${vsix}  (code: ${codeCli})`); return true; }
   else {
     log(`ℹ️  확장 자동 설치 실패(code: ${codeCli}).`);
     log(`   수동: VS Code에서 '확장: VSIX에서 설치'로 ${vsixPath} 선택`);
     log("   또는 환경변수 CODE_CLI 에 code(.cmd) 실행파일 경로 지정 후 재시도.");
+    return true;
   }
 }
 
@@ -609,12 +771,17 @@ function cmdInstall(dryRun) {
   }
 
   // 5) 확장 + 점검
-  tryInstallVsix(dryRun);
-  if (!dryRun) runDoctor();
+  const extensionOk = tryInstallVsix(dryRun);
+  const doctorOk = dryRun ? true : runDoctor();
+  if (!extensionOk || !doctorOk) {
+    log("\n❌ 설치 미완료 — 브릿지·훅의 반영 여부와 위 오류를 확인한 뒤 다시 실행하세요.");
+    return false;
+  }
 
   log(dryRun
     ? "\n미리보기 끝(쓰기 없음)."
     : "\n설치 완료. VS Code에서 'Developer: Reload Window'를 한 번 실행해야 새 확장·Codex 훅 상태가 현재 창에 적용됩니다. Claude 훅은 새 Claude Code 세션부터 적용됩니다.");
+  return true;
 }
 
 function cmdUninstall(purge) {
@@ -678,7 +845,7 @@ if (require.main === module) {
   if (has("--help") || has("-h") || cmd === "help") cmdHelp();
   else if (cmd === "uninstall") cmdUninstall(has("--purge"));
   else if (cmd === "status" || cmd === "doctor") { if (!runDoctor()) process.exitCode = 1; }
-  else cmdInstall(has("--dry-run") || has("-n"));
+  else if (!cmdInstall(has("--dry-run") || has("-n"))) process.exitCode = 1;
 }
 
-module.exports = { pickVsix, currentVsix, buildInstallCmd, installedExtensionVersionFromList, installVsixWithCli, candidateCodeClis, findRootUpwards, vscodeSignalClis, standardCodeClis, codeCliPriority, bridgeRuntimeParity, OUR_HOOKS, BRIDGE_SCRIPTS, isOurHookCmd }; // 뒤 3개: hook-setup.ts와의 규칙 패리티 테스트용
+module.exports = { pickVsix, currentVsix, buildInstallCmd, installedExtensionVersionFromList, installVsixWithCli, extensionRootCandidates, findInstalledExtensionDir, sameVersionOverlayEntries, overlaySameVersionExtension, hasLocalPackageToolchain, candidateCodeClis, findRootUpwards, vscodeSignalClis, standardCodeClis, codeCliPriority, bridgeRuntimeParity, OUR_HOOKS, BRIDGE_SCRIPTS, isOurHookCmd }; // 뒤 3개: hook-setup.ts와의 규칙 패리티 테스트용

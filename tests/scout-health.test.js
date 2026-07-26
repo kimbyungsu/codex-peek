@@ -31,6 +31,12 @@ ok(h1.entries === 5, `항목 5(실제 ${h1.entries})`);
 ok(h1.verified === 2 && h1.rehabilitated === 1, `신뢰 2(a·복권 d) — confirmed 3회 반복이 1항목으로만(실제 v=${h1.verified} r=${h1.rehabilitated})`);
 ok(h1.reusedDen === 2 && h1.reusedNum === 1, `재사용 분모=attached 있는 항목 2(a·b), 분자=그중 확인 1(a) — 이벤트 수 비율 아님(실제 ${h1.reusedNum}/${h1.reusedDen})`);
 ok(h1.disputedEntries === 2, `반박 이력 항목 2(c·d — 복권돼도 이력은 남음, 실제 ${h1.disputedEntries})`);
+const recordOnly = LE.deriveLedger([
+  { ts: "r0", type: "proposed", sig: "record-only", text: "src/record-only-alpha.ts ↔ lib/record-only-beta.ts" },
+  { ts: "r1", type: "refuted", sig: "record-only", grade: "claimed", cited: false, seen: "ok", askId: "ask-record-only" },
+]);
+const hRecordOnly = LE.computeScoutHealth(recordOnly);
+ok(recordOnly[0].status === "inferred" && hRecordOnly.disputedEntries === 1, "근거 미충족 명시 반박은 상태 강등 없이 반박 이력에는 포함 — 기록과 판정의 두 층 분리");
 
 console.log("[패리티] 배포 미니 사본 = 정본 (같은 JSONL → 같은 수치 · 복권 규칙 동형)");
 const raw2 = raw1 + "\n" + [ev("proposed", "f", { text: "f" }), ev("refuted", "f"), ev("confirmed", "f", { ts: "t1" }), ev("confirmed", "f", { ts: "t2" })].join("\n"); // 반박 후 서로 다른 시각 legacy 확인 2회 → 복권
@@ -52,7 +58,7 @@ const small = CL.scoutHealthLine(repo, false);
 ok(!!small && /아직 작음/.test(small) && /후보로만/.test(small) && !/\d+\/\d+/.test(small), "표본 부족(항목<5) → 비율 없는 1줄(과신 방지)");
 fs.writeFileSync(CL.ledgerEventsFileFor(repo), raw2 + "\n");
 const full = CL.scoutHealthLine(repo, false);
-ok(!!full && /확인 항목 3\/6/.test(full) && /반박 3건\(수동 기록 기준\)/.test(full) && /복권 2건/.test(full), `표본 충분 → 항목 수치(라벨='확인 항목' — 신뢰/pinned lane과 혼동 금지, 실제: ${(full || "").slice(0, 60)}…)`);
+ok(!!full && /확인 항목 3\/6/.test(full) && /반박 이력 3건\(기록 전용을 포함한 명시 반박 표지 \+ 사람 정정\)/.test(full) && /복권 2건/.test(full), `표본 충분 → 항목 수치(라벨='확인 항목' — 신뢰/pinned lane과 혼동 금지, 실제: ${(full || "").slice(0, 80)}…)`);
 ok(!/재사용 항목 중 확인 이력 \d/.test(full), "재사용 분모<5면 그 비율은 숨김(지표별 게이트 — Codex 보완)");
 for (const f of ["bridge/contract-lib.js", "src/ledger-events.ts", "src/extension.ts", "docs/HANDOFF.md"]) {
   const s = fs.readFileSync(path.join(__dirname, "..", f), "utf8");
@@ -61,7 +67,7 @@ for (const f of ["bridge/contract-lib.js", "src/ledger-events.ts", "src/extensio
 ok(/양방향/.test(full) && /안전 보장이 아니다/.test(full) && /독립 확인/.test(full) && !/유용성은 더 높/.test(full), "상시 한계 문구 — 편향 양방향(반박 과소·노출 확인 과대) 정직화, '보수 단방향' 주장 제거(논리 점검 #8 잠금)");
 ok(!/정확도/.test(full) && !(/accuracy/.test(CL.scoutHealthLine(repo, true) || "")), "'정확도/accuracy' 용어 금지(관찰 신호로만)");
 const en = CL.scoutHealthLine(repo, true);
-ok(!!en && /Scout observation signal/.test(en) && /manually recorded/.test(en) && /both ways/.test(en) && !/usefulness may be higher/.test(en), "영문 동등 품질 — 양방향 편향 문구 포함·옛 단방향 주장 제거(Codex 반례 잠금)");
+ok(!!en && /Scout observation signal/.test(en) && /including record-only markers/.test(en) && /demote status only after evidence checks/.test(en) && !/usefulness may be higher/.test(en), "영문 동등 품질 — 반박 기록과 상태 강등을 분리하고 옛 단방향 주장 제거");
 
 console.log("[attach 배선] 지도 동봉 꼬리에 신호 줄 — 실패해도 지도 동봉 불침(소스 계약)");
 const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
@@ -83,7 +89,10 @@ ok(ext.includes('type:"openScoutHealthReport"') && ext.includes('m?.type === "op
 console.log("[역할 명시(2026-07-09 사용자 지적 2)] 리포트에 '어디서 생기고 어디에 반영되나' 구조 + '고정값 아님' 차별점");
 ok(rep.includes("관찰 신호의 역할") && rep.includes("role of observation signals"), "역할 섹션 제목(한/영 쌍)");
 ok(rep.includes("1. 감지") && rep.includes("2. 기록") && rep.includes("3. 해석") && rep.includes("4. 반영"), "감지→기록→해석→반영 4단 흐름 카드");
-ok(rep.includes("고정값이 아니라 따라가는 값") && rep.includes("관측치") && !/스스로 좁혀/.test(rep), "차별점 — 관측치임을 명시(자기학습 제어 장치 과장 제거 — 논리 점검 #9 잠금)");
+ok(rep.includes("고정값이 아니라 자동으로 따라가는 값") && rep.includes("관측치") && !/스스로 좁혀/.test(rep), "차별점 — 자동 집계되는 관측치임을 명시(자기학습 제어 장치 과장 제거 — 논리 점검 #9 잠금)");
+ok(rep.includes("사건으로 자동 기록") && rep.includes("근거 조건을 통과한 사건") && rep.includes("자동으로 우선 동봉") && rep.includes("선택적 예외") && !rep.includes("사람이 반박·차단으로 정정해 주는 만큼만"), "자동이 기본 — 사건 기록과 근거 기반 상태 판정→재계산→다음 정찰 동봉을 명시하고 사람 개입 필수처럼 읽히던 문구 제거");
+ok(rep.includes("표지는 자동으로 반박 이력에 기록") && rep.includes("근거 미충족 표기도 이력 수에는 남습니다") && rep.includes("조건을 통과한 것만 항목을 '틀림 판명'으로 내립니다") && !rep.includes("자동 반박 추출이 없어"), "한계 고지 — 명시 반박의 기록과 근거 충족 강등을 분리하고 평문 암시만 비집계라고 정확히 설명");
+ok(!ext.includes("자동 반박 없음") && !ext.includes("no auto-dispute") && !ext.includes("수동 기록 기준") && !ext.includes("manually recorded"), "사용자 표면의 낡은 '자동 반박 없음/수동만' 표현 전부 제거");
 ok(rep.includes("셋은 그 순간 장부에서 새로 계산") && rep.includes("짧은 캐시로 따라잡음") && !/넷 다 그 순간/.test(rep) && !/언어별로 따로 쌓/.test(rep), "반영 4곳 실시간성 정확 서술 — 대시보드 1줄은 5초 캐시 경유라 '넷 다 즉시' 과장 금지(Codex 반례 잠금) · 장부가 언어별 분리라는 과잉 주장 없음(일지는 프로젝트별 단일 — 언어 슬롯 분리는 설정 쪽)");
 ok(ext.includes("신호의 역할·수치의 뜻"), "대시보드 버튼 라벨에 '신호의 역할' 명시");
 

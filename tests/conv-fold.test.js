@@ -95,5 +95,12 @@ console.log("[3] 내부 스크롤 보존(2026-07-24 실버그 — 재렌더마�
   ok(p3.scrollTop === 0, "다른 상자(다른 키)는 영향 없음(키 격리)");
 }
 
+console.log("[4] 최근 사건 타임라인 펼침 유지 — 관찰 카드 재렌더에도 즉시 닫히지 않음");
+ok(ext.includes('keyedDetails("ledgerTimeline:"+(d.scoutTarget&&d.scoutTarget.repo||ml.mapRel||"?")'), "타임라인도 openPanels 기반 keyedDetails 사용(정찰 대상별 키)");
+const timelineStart = ext.indexOf("if(ml.timeline.length)");
+const timelineEnd = ext.indexOf('if(ml.mapSource==="legacy"', timelineStart);
+const timelineSrc = timelineStart >= 0 && timelineEnd > timelineStart ? ext.slice(timelineStart, timelineEnd) : "";
+ok(!!timelineSrc && !timelineSrc.includes('document.createElement("details")'), "타임라인 구간의 상태 없는 raw details 제거(재렌더 즉시 접힘 회귀 차단)");
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

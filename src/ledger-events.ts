@@ -273,7 +273,8 @@ export function computeAliasCandidates(entries: LedgerEntry[]): Array<{ key: str
 // 임계값은 프로젝트 구조별로 의미가 달라 고정 불가 → 헬스 신호로 프로젝트 성향에 적응). v1은 advisory 전용 —
 // 어떤 자동 강제·게이트 기본값 변경도 없음. 용어 잠금: '정확도' 아님 — '관찰 신호'·'재사용 항목 중 확인 이력'
 // (attached는 다음 꾸러미 재동봉 사건이지 검증자 열람 인과가 아니고, 이벤트 선후도 검사하지 않으므로 '후'를
-// 주장하지 않는다)·반박은 '수동 기록 기준'(자동 추출 미배선).
+// 주장하지 않는다)·반박 이력은 명시적 자동 refuted(근거 미충족 기록 전용 사건도 포함)와 사람 user_dispute 기준.
+// 실제 disputed 강등은 promotableDispute가 별도로 근거 조건을 판정하며, 평문 암시는 추측하지 않는다.
 // 전부 entry(항목) 단위 — 이벤트 수 합산은 반복 사건 많은 한 항목에 끌린다(Codex 보완).
 export type ScoutHealth = {
   entries: number;          // 전체 항목 수(표본 게이트의 1차 분모)
@@ -283,7 +284,7 @@ export type ScoutHealth = {
   autoDen: number;          // 재사용 항목 중 '기계 확인이 원리상 가능'(autoEligible)한 것 — 기계 지표의 분모.
                             //   L1-A: 경로<2 항목을 기계 지표 분모에 섞으면 비율이 구조적으로 낮아짐(분모 왜곡).
   autoNum: number;          // 그중 기계 확인(confirmed) 이력이 있는 것 — 사람 확인은 이 지표에서 제외(별도 지표와 혼동 금지)
-  disputedEntries: number;  // 반박 이력(user_dispute/refuted≥1) 항목 수 — 수동 기록 기준
+  disputedEntries: number;  // 반박 이력(user_dispute/refuted≥1) 항목 수 — refuted는 강등 불가 기록 전용 사건도 포함
   rehabilitated: number;    // 복권된 항목 수(분모는 disputedEntries — 이벤트 수 아님)
   reinterpreted: number;    // v2 증거 규칙 재해석으로 '확인됨'에서 내려온 항목 수(조용한 강등 금지 — 고지)
 };

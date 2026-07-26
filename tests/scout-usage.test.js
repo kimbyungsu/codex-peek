@@ -67,7 +67,7 @@ console.log("[6] 문서 정합(감사 C 반영 잠금)");
 const privacy = fs.readFileSync(path.join(ROOT, "PRIVACY.md"), "utf8");
 ok(/scout-baseline\.json/.test(privacy) && /scout-live\/<키>\.json/.test(privacy) && /stats\/scout-usage\.jsonl/.test(privacy), "PRIVACY — 새 파일 3종(태도 슬롯·라이브 신호·비용 장부) 기재");
 ok(/판정·복권 증거 이벤트\(반박·대체·소멸·사람 재확인·반박 이후 유효 확인\)는 우선 보존/.test(privacy) && /순계 압축/.test(privacy), "PRIVACY — 트림 서술을 현행(판정 보존+가역쌍 순계 압축) 구현에 맞춤");
-ok(/반박 뒤 재확인\(사람 1회·검증 2회\)이 쌓이면 복권/.test(ext) && /rehabilitated on later re-confirms/.test(ext), "가이드 — 복권 경로 반영(틀림=영구 제외 서술 폐기)");
+ok(/반박 뒤 재확인\(사람 1회·검증 2회\)이 쌓이면 복권/.test(ext) && /rehabilitated if re-confirmed after \(1 human \/ 2 verify\)/.test(ext), "가이드 — 복권 경로 반영(틀림=영구 제외 서술 폐기)");
 const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
 const readmeEn = fs.readFileSync(path.join(ROOT, "docs", "README.en.md"), "utf8");
 ok(/3트랙 기여\(관찰 신호\)/.test(readme) && /Project MAP 운영 현황/.test(readme) && /목적별 외부 호출·사용량/.test(readme), "README ko — 통계 절에 기여 카드·P10 목적별 사용량");

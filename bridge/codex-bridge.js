@@ -337,9 +337,44 @@ function citedResolvedBasenames(answer, ws) {
 }
 // 결정2-3(L1-A 개정): 인용한 (실재) 파일 중, '이번 턴'(rollout 마지막 사용자 메시지 이후)의 도구 명령/출력
 // 어디에도 basename이 안 나타난 것. 세션 '전체' 스캔은 이전 턴에서 다룬 파일을 이번 확인의 근거로 인정하는
-// 결함(Codex 설계검증). 반환은 삼상태 — {checked:false}=검사 자체가 불가(세션 미식별·대형 기록·경계 미발견·
+// 결함(Codex 설계검증). 반환은 삼상태 — {checked:false}=검사 자체가 불가(세션 미식별·현재 턴 경계 미발견·
 // 도구활동 0)로, '미확인 파일 없음'(checked:true·unseen:[])과 구분된다. 판정 불가를 빈 배열로 돌려주면
 // 소비자가 확인 성공으로 오독해 승격으로 흐른다(같은 지적).
+// 오래 이어진 세션은 파일 전체 크기와 이번 턴의 증명 가능성이 무관하다. 따라서 전체 파일을 거부하지 않고
+// 끝 16MiB만 읽어 마지막 사용자 경계를 찾는다. 현재 턴 자체가 이 범위를 넘겨 경계가 잘렸다면 unknown을
+// 유지한다 — 과거 턴을 이번 턴 근거로 오인하지 않으면서 장기 세션의 정상 최신 턴은 판독한다.
+const ROLLOUT_TURN_TAIL_MAX = 16 * 1024 * 1024;
+function rolloutTailLines(file) {
+  let size;
+  try { size = fs.statSync(file).size; } catch { return null; }
+  if (size <= ROLLOUT_TURN_TAIL_MAX) {
+    try { return fs.readFileSync(file, "utf8").split(/\r?\n/); } catch { return null; }
+  }
+  let fd;
+  try {
+    fd = fs.openSync(file, "r");
+    const start = size - ROLLOUT_TURN_TAIL_MAX;
+    const before = Buffer.allocUnsafe(1);
+    const startsAtLineBoundary = fs.readSync(fd, before, 0, 1, start - 1) === 1 && before[0] === 0x0a;
+    const buf = Buffer.allocUnsafe(ROLLOUT_TURN_TAIL_MAX);
+    let got = 0;
+    while (got < buf.length) {
+      const n = fs.readSync(fd, buf, got, buf.length - got, start + got);
+      if (!n) break;
+      got += n;
+    }
+    let text = buf.subarray(0, got).toString("utf8");
+    // 직전 바이트가 개행이면 꼬리는 완전한 JSONL 행에서 시작한다. 그때 첫 행을 버리면 정확히 경계에
+    // 놓인 최신 사용자 메시지를 잃는다. 그 외에는 한 줄(또는 UTF-8 문자) 중간이므로 첫 개행까지 버린다.
+    if (!startsAtLineBoundary) {
+      const firstNl = text.indexOf("\n");
+      if (firstNl < 0) return null;
+      text = text.slice(firstNl + 1);
+    }
+    return text.split(/\r?\n/);
+  } catch { return null; }
+  finally { if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* best-effort */ } } }
+}
 function citedFilesUnseen(answer, ws, sessionId) {
   const unknown = { checked: false, unseen: [] };
   if (!sessionId) return unknown;
@@ -348,9 +383,8 @@ function citedFilesUnseen(answer, ws, sessionId) {
   if (!file) return unknown;
   const remaining = citedResolvedBasenames(answer, ws);
   if (!remaining.size) return { checked: true, unseen: [] };
-  try { if (fs.statSync(file).size > 16 * 1024 * 1024) return unknown; } catch { return unknown; } // 비정상적으로 큰 rollout은 비용·신뢰 모두 보류
-  let lines;
-  try { lines = fs.readFileSync(file, "utf8").split(/\r?\n/); } catch { return unknown; }
+  const lines = rolloutTailLines(file);
+  if (!lines) return unknown;
   // 턴 경계: 마지막 '사용자 메시지'(response_item message user) 줄 — 그 이후만 이번 ask의 활동.
   let lastUser = -1;
   for (let i = 0; i < lines.length; i++) {

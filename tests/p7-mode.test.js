@@ -16,6 +16,7 @@ delete process.env.DEEPSEEK_API_KEY;
 const ROOT = path.join(__dirname, "..");
 const CL = require(path.join(ROOT, "bridge", "contract-lib.js"));
 const DB = require(path.join(ROOT, "bridge", "deepseek-bridge.js"));
+const MR = require(path.join(ROOT, "bridge", "map-router.js"));
 
 console.log("[1] mapMode — 4값·명시 self override·비물질화 기본");
 ok(JSON.stringify(CL.MAP_MODES) === JSON.stringify(["self", "economy", "precision", "auto"]), "합타입 4값(1-34·명시 self 포함 — 설계 1차 blocker①)");
@@ -238,6 +239,18 @@ ok(ext.includes('rs.write.ok ? (rs.rec.ok ? "OK" : detS) : wNote(rs.write)')
   && !ext.includes('rs.rec.ok && rs.write.ok ? "OK" : rs.rec.ok ? wNote(rs.write) : detS'),
   "self 점검 결과 실패와 준비 기록 실패를 각각 숨김없이 표시");
 ok(ext.includes("어댑터 미배포 — 정찰 스크립트는 마켓 설치본에 없어요"), "VSIX 미배포=정직 미준비 사유 표시(f-15d2907b 재판단: 러너 자체가 마켓 빌드에 없는 현 단계 사실 — 거짓 준비 표시가 더 나쁨)");
+const guideStart = ext.indexOf("function openMapModeGuide");
+const guideEnd = ext.indexOf("function openScoutHealthReport", guideStart);
+const guide = guideStart >= 0 && guideEnd > guideStart ? ext.slice(guideStart, guideEnd) : "";
+ok(guide.includes('codexBridgeMapModeGuide') && guide.includes("enableScripts: false") && guide.includes("default-src 'none'"), "의미 보강 모드 전용 새탭 — 별도 viewType·스크립트/외부 전송 차단");
+ok(ext.includes('type:"openMapModeGuide"') && ext.includes('m?.type === "openMapModeGuide"'), "모드 행의 자세히 보기 버튼→호스트 새탭 배선");
+ok(guide.includes("지도 안쪽 변경은 경제형") && guide.includes("새 경계 변경은 정밀형") && guide.includes("경제형 실패 때만 정밀형으로 정확히 한 번"), "자동형 라우팅을 상황 예시로 설명(mapped→economy·delta→precision·실패 1회 승격)");
+ok(guide.includes("명시 모드는 그대로 보류") && guide.includes("몰래 바꾸지 않고 보류"), "명시 모드 실패 시 조용한 공급자 전환 없음 명문");
+const guideProj = { ok: true, source: "v2", nodes: [{ anchors: [{ path: "src/a.ts" }] }] };
+const guideReady = { selfReady: true, economyReady: true, precisionReady: true, autoReady: true };
+const guideRoute = (changedFiles) => MR.decideRoute({ mode: "auto", ready: guideReady, corridor: MR.corridorOf(guideProj, changedFiles), economyFailed: false, precisionFailed: false, conflict: false }).route;
+ok(guideRoute(["src/new/b.ts"]) === "economy" && guide.includes("src/ 아래 새 하위 폴더는 여전히 지도 안쪽"), "가이드와 라우터 교차 — 기존 anchor 부모 아래 새 폴더=mapped→economy");
+ok(guideRoute(["infra/new/b.ts"]) === "precision" && guide.includes("기존 앵커의 부모 디렉터리 경계 밖"), "가이드와 라우터 교차 — anchor 부모 밖 파일=delta→precision");
 const deployLists = [fs.readFileSync(path.join(ROOT, "bridge", "map-cutover.js"), "utf8"), fs.readFileSync(path.join(ROOT, "src", "hook-setup.ts"), "utf8"), fs.readFileSync(path.join(ROOT, "install.js"), "utf8")];
 ok(deployLists.every((s9) => s9.includes('"map-probe.js"')), "map-probe.js 배포 3카피 등록(EXPECTED·hook-setup·install 패리티)");
 

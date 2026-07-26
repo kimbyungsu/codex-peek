@@ -26,6 +26,12 @@ Connect **Claude Code or a dedicated Codex session** (implementation) to **a sep
 - **Claude Code** CLI (hooks support) and **OpenAI Codex** CLI (`codex exec`) — the codex binary is auto-detected (ChatGPT VS Code extension, `PATH`, or `CODEX_BIN`).
 - **Node.js 20+** (used by the hooks; the setup flow verifies the path actually runs).
 
+## Install from GitHub
+
+For the complete extension, bridge, hooks, and 3-track scouting scripts, download **[codex-peek-0.1.88-installer.zip](https://github.com/kimbyungsu/codex-peek/releases/download/v0.1.88/codex-peek-0.1.88-installer.zip)**, extract it, then run `install.cmd` on Windows or `sh install.sh` on macOS/Linux. Node.js 20+ is the only prerequisite; the bundle includes a prebuilt VSIX, so `npm install` is not required. Finish with **Developer: Reload Window** in VS Code.
+
+If `0.1.88` is already installed, the bundled installer backs up and overlays only the changed runtime files instead of asking VS Code to force-delete the live extension directory. For extension-only/2-track use, install **[codex-bridge-0.1.88.vsix](https://github.com/kimbyungsu/codex-peek/releases/download/v0.1.88/codex-bridge-0.1.88.vsix)** with **Extensions: Install from VSIX...**; existing `0.1.88` installations should use the full bundle for a safe same-version refresh. Checksums are published as `SHA256SUMS.txt` on the **[v0.1.88 release page](https://github.com/kimbyungsu/codex-peek/releases/tag/v0.1.88)**.
+
 ## Getting started
 
 1. Install this extension.
@@ -42,7 +48,7 @@ Connect **Claude Code or a dedicated Codex session** (implementation) to **a sep
   ② impact map (a scout AI previews how far the change reaches; formerly "impact-map board") ⚡ LLM call (default scout (Claude) = no separate billing, within the usage you already have / DeepSeek scout with a key / Codex scout within your existing Codex account usage) ·
   ③ field journal (right/wrong accrues automatically through verification; formerly "observed/MAP ledger") ⚙ no extra LLM ·
   ④ field manual (stamp items into repo docs, docs/MAP.md, only when you want — ①–③ keep running without it. **After cutover (P3b — a manual command)**: the old document is frozen with a migration-source banner and new approvals go through Project MAP only — the "we never touch your docs" promise describes the pre-cutover mode, and cutover happens only when you run it yourself) 👤 optional.
-  Accrual/promotion/demotion are fully automatic; manual controls (pin/ban/export) are optional overrides. The status-bar hover always shows whether an LLM call is running right now.
+  Accrual/promotion/demotion are fully automatic. Direct confirm/correct and pin/ban/manual export are optional exceptions for cases where a person knows better; ignoring them never stops automation. **Verified** means prioritized in future scout packages, not that code or Project MAP was automatically changed. The dashboard separates recorded machine confirmations, promotion-eligible evidence, and unknown file handling. The status-bar hover always shows whether an LLM call is running right now.
 - Codex session files are **read-only** (single exception: the "permanently delete" button you explicitly confirm).
 - `settings.json` is only modified after your consent, with a timestamped backup; other hooks are preserved.
 - Full policy docs: [PRIVACY](https://github.com/kimbyungsu/codex-peek/blob/main/PRIVACY.md) · [SECURITY](https://github.com/kimbyungsu/codex-peek/blob/main/SECURITY.md) · [COMPATIBILITY](https://github.com/kimbyungsu/codex-peek/blob/main/COMPATIBILITY.md)

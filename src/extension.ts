@@ -11,7 +11,7 @@ import { parseLastModelCommand, parseLastAssistantModel, parseSessionStartTs, re
 import { parseGitLog, suggest as scopeSuggest, ScopeSuggestion } from "./scope-ledger";
 import { maskKey, isPlausibleKey, mergeDeepseekConfig } from "./deepseek-config";
 import { appendApproved, parseApprovedFromMap, normSig } from "./map-ledger";
-import { parseEventsJsonl, deriveLedger, computeScoutHealth, HEALTH_MIN_SAMPLE } from "./ledger-events";
+import { parseEventsJsonl, deriveLedger, computeScoutHealth, promotableConfirm, HEALTH_MIN_SAMPLE } from "./ledger-events";
 import { catchUp, TailState, makeRolloutAcc, headFirstUserMessage, Msg, RolloutAcc, TURN_CAP } from "./rollout-scan";
 import { applyAutoPinUpdate, autoPinReplacementReady, autoPinWriteAllowed, chooseImplementerAutoPin, clearImplementerLinkFields, hookActiveTsForGate, resolvePromptProject } from "./implementer-auto-pin";
 import { scoutDirectiveText, scoutLedgerNotes } from "./scope-package";
@@ -1655,7 +1655,7 @@ ${card("#3ca89a", "⚙", "변경 감지", "Change sensing", [[tE("무엇", "what
 <div class="arrow">→</div>
 ${card("#9a6cdc", "⚡", "영향지도", "Impact map", [[tE("무엇", "what"), tE("이 변경이 어디까지 번질지 미리보기(확인 목록)", "a preview/checklist of how far the change reaches")], [tE("누가", "who"), tE("정찰 LLM — 직접 또는 자동 지시로 실행", "scout LLM — run directly or via auto-directive")], [tE("비용", "cost"), tE("기본 정찰(Claude)=별도 과금 없음(쓰시던 Claude 사용량 범위) · DeepSeek 정찰은 키 등록 시(=동의) · Codex 정찰은 쓰시는 Codex 계정 사용량 범위", "default scout (Claude) = no separate billing (within the Claude usage you already have) · DeepSeek scout only with a key (=consent) · Codex scout within your existing Codex account usage")], [tE("저장", "store"), tE("보관함(최근 10장) → 영향지도 카드", "archive (last 10) → impact-map card")]])}
 <div class="arrow">→</div>
-${card("#3ca89a", "⚙", "관찰 일지", "Field journal", [[tE("무엇", "what"), tE("지도의 제안이 검증을 지나며 맞음/틀림으로 자동 분류", "map suggestions auto-classified right/wrong through verification")], [tE("누가", "who"), tE("자동 — 검증 대화에 편승(추가 LLM 호출 0)", "automatic — rides the verify chat (0 extra LLM calls)")], [tE("신분", "states"), tE("미검증 → 신뢰(검증 확인) / 틀림 판명 — 단 반박 뒤 재확인(사람 1회·검증 2회)이 쌓이면 복권", "unverified → trusted (confirmed) / disputed — rehabilitated if re-confirmed after (1 human / 2 verify)")], [tE("개입", "override"), tE("선택: 고정·차단·내보내기", "optional: pin · ban · export")]])}
+${card("#3ca89a", "⚙", "관찰 일지", "Field journal", [[tE("무엇", "what"), tE("지도의 제안이 검증을 지나며 맞음/틀림으로 자동 분류", "map suggestions auto-classified right/wrong through verification")], [tE("누가", "who"), tE("자동 — 검증 대화에 편승(추가 LLM 호출 0)", "automatic — rides the verify chat (0 extra LLM calls)")], [tE("신분", "states"), tE("미검증 → 검증됨(다음 정찰 자료에 우선 동봉) / 틀림 판명 — 반박 뒤 재확인(사람 1회·검증 2회)이 쌓이면 복권", "unverified → verified (prioritized in future scout packages) / disputed — rehabilitated if re-confirmed after (1 human / 2 verify)")], [tE("개입", "override"), tE("선택: 직접 확인·정정, 고정·차단, 교범 기록", "optional: confirm/correct, pin/ban, manual export")]])}
 <div class="arrow">→</div>
 ${card("#d9a441", "👤", "확정 교범", "Field manual", [[tE("무엇", "what"), tE("도장 찍은 결합만 저장소 문서(docs/MAP.md)로", "only stamped couplings become repo docs (docs/MAP.md)")], [tE("누가", "who"), tE("사람 — 원할 때만(선택)", "human — only when you want (optional)")], [tE("효과", "effect"), tE("다음 정찰·검증의 확정 지식 입력", "trusted input for future recon & verification")], [tE("없으면?", "if absent"), tE("아무 문제 없음 — ①~③은 그대로 자동", "totally fine — ①–③ keep running automatically")]])}
 </div>
@@ -1667,7 +1667,7 @@ ${card("#d9a441", "👤", "확정 교범", "Field manual", [[tE("무엇", "what"
   <style>text{font-family:inherit;fill:var(--vscode-foreground)} .bx{fill:var(--vscode-editor-background);stroke-width:1.6;rx:8} .t1{font-size:12px;font-weight:700} .t2{font-size:10px;opacity:.8} .lb{font-size:9.5px;opacity:.75} .ln{stroke:var(--vscode-descriptionForeground);stroke-width:1.4;fill:none;color:var(--vscode-descriptionForeground)} .fb{stroke-dasharray:5 4}</style>
   <rect class="bx" x="14" y="30" width="120" height="52" stroke="#7f8c9b"/><text class="t1" x="26" y="50">${tE("👨‍💻 작업", "👨‍💻 Your work")}</text><text class="t2" x="26" y="66">${tE("파일 수정·플랜", "edits · plans")}</text>
   <rect class="bx" x="170" y="30" width="140" height="52" stroke="#3ca89a"/><text class="t1" x="182" y="50">${tE("⚙ ① 변경 감지", "⚙ ① Sensing")}</text><text class="t2" x="182" y="66">${tE("확장이 자동 관찰", "extension watches")}</text>
-  <rect class="bx" x="346" y="18" width="160" height="76" stroke="#3ca89a"/><text class="t1" x="358" y="38">${tE("📦 증거 꾸러미", "📦 Evidence pack")}</text><text class="t2" x="358" y="54">${tE("바뀐 내용·참조·과거 힌트", "diff · refs · history hints")}</text><text class="t2" x="358" y="68">${tE("+ 일지 신뢰분 + 교범", "+ trusted journal + manual")}</text><text class="t2" x="358" y="82">${tE("(자동 조립·민감정보 제외)", "(auto-built · secrets excluded)")}</text>
+  <rect class="bx" x="346" y="18" width="160" height="76" stroke="#3ca89a"/><text class="t1" x="358" y="38">${tE("📦 증거 꾸러미", "📦 Evidence pack")}</text><text class="t2" x="358" y="54">${tE("바뀐 내용·참조·과거 힌트", "diff · refs · history hints")}</text><text class="t2" x="358" y="68">${tE("+ 일지 검증분 + 교범", "+ verified journal + manual")}</text><text class="t2" x="358" y="82">${tE("(자동 조립·민감정보 제외)", "(auto-built · secrets excluded)")}</text>
   <rect class="bx" x="542" y="30" width="150" height="52" stroke="#9a6cdc"/><text class="t1" x="554" y="50">${tE("⚡ ② 정찰 AI", "⚡ ② Scout AI")}</text><text class="t2" x="554" y="66">${tE("기본=Claude · 키 시 DeepSeek", "default=Claude · DeepSeek w/ key")}</text>
   <rect class="bx" x="728" y="30" width="120" height="52" stroke="#9a6cdc"/><text class="t1" x="740" y="50">${tE("🗺 영향지도", "🗺 Impact map")}</text><text class="t2" x="740" y="66">${tE("어디까지 번지나", "how far it reaches")}</text>
   <line class="ln" x1="134" y1="56" x2="166" y2="56" marker-end="url(#ah)"/><line class="ln" x1="310" y1="56" x2="342" y2="56" marker-end="url(#ah)"/><line class="ln" x1="506" y1="56" x2="538" y2="56" marker-end="url(#ah)"/><line class="ln" x1="692" y1="56" x2="724" y2="56" marker-end="url(#ah)"/>
@@ -1679,18 +1679,18 @@ ${card("#d9a441", "👤", "확정 교범", "Field manual", [[tE("무엇", "what"
   <path class="ln" d="M 74 82 C 74 110 80 130 110 150" marker-end="url(#ah)"/>
   <rect class="bx" x="250" y="250" width="420" height="88" stroke="#3ca89a"/><text class="t1" x="262" y="270">${tE("📔 ③ 관찰 일지 — 자동 기억(이 PC)", "📔 ③ Field journal — auto memory (this PC)")}</text>
   <text class="t2" x="262" y="288">${tE("✚ 제안(지도가 발견) ▶ 동봉(자료에 실림) ✔ 확인(검증이 인정) ✖ 반박(틀림 판명)", "✚ proposed (map finds) ▶ attached (packed) ✔ confirmed (verify agrees) ✖ disputed")}</text>
-  <text class="t2" x="262" y="304">${tE("신분: 미검증(참고) → 신뢰(자동 반영) / 틀림 판명(제외 — 반박 뒤 재확인 쌓이면 복권)", "states: unverified (reference) → trusted (auto-fed) / disputed (excluded — rehabilitated on later re-confirms)")}</text>
-  <text class="t2" x="262" y="320">${tE("👤 개입(선택): 고정=신뢰 강제 · 차단=제외 — 안 눌러도 굴러감", "👤 optional: pin = force-trust · ban = exclude — runs fine untouched")}</text>
+  <text class="t2" x="262" y="304">${tE("신분: 미검증(참고) → 검증됨(다음 정찰에 동봉) / 틀림 판명(제외 — 재확인 시 복권)", "states: unverified (reference) → verified (feeds future scout) / disputed (excluded — later evidence can rehabilitate)")}</text>
+  <text class="t2" x="262" y="320">${tE("👤 개입(선택): 직접 확인·정정 / 고정·차단 — 안 눌러도 자동 운용", "👤 optional: confirm/correct / pin/ban — automatic when untouched")}</text>
   <path class="ln" d="M 800 82 C 860 140 820 220 670 268" marker-end="url(#ah)"/><text class="lb" x="812" y="180">${tE("발견을 제안으로", "findings → proposals")}</text>
   <path class="ln" d="M 481 206 L 481 246" marker-end="url(#ah)"/><text class="lb" x="489" y="232">${tE("확인/반박", "confirm/refute")}</text>
   <rect class="bx" x="80" y="266" width="120" height="52" stroke="#7f8c9b"/><text class="t1" x="92" y="286">${tE("🗣 당신의 말", "🗣 Your words")}</text><text class="t2" x="92" y="302">${tE("'그건 아니야' =", "'that's wrong' =")}</text><text class="t2" x="92" y="314">${tE("정정 근거로 기록", "recorded as dispute")}</text>
   <line class="ln" x1="200" y1="292" x2="246" y2="292" marker-end="url(#ah)"/>
   <rect class="bx" x="728" y="380" width="200" height="60" stroke="#d9a441"/><text class="t1" x="740" y="400">${tE("📕 ④ 확정 교범 👤", "📕 ④ Field manual 👤")}</text><text class="t2" x="740" y="416">${tE("도장 찍은 항목만 저장소 문서로", "only stamped items → repo doc")}</text><text class="t2" x="740" y="430">${tE("팀·다른 PC 공유 · 자동 주입 없음", "shared via repo · never auto-injected")}</text>
   <path class="ln" d="M 670 310 C 720 330 740 350 780 376" marker-end="url(#ah)"/><text class="lb" x="700" y="348">${tE("👤 도장(선택)", "👤 stamp (optional)")}</text>
-  <path class="ln fb" d="M 250 300 C 120 340 150 120 342 80" marker-end="url(#ah)"/><text class="lb" x="128" y="238">${tE("신뢰분이 다음 꾸러미로", "trusted feeds next pack")}</text>
+  <path class="ln fb" d="M 250 300 C 120 340 150 120 342 80" marker-end="url(#ah)"/><text class="lb" x="128" y="238">${tE("검증된 일지가 다음 꾸러미로", "verified journal feeds next pack")}</text>
   <path class="ln fb" d="M 728 400 C 300 460 240 200 350 96" marker-end="url(#ah)"/><text class="lb" x="300" y="430">${tE("교범도 다음 꾸러미의 확정 사실로", "manual feeds next pack as settled fact")}</text>
 </svg>
-<div class="sub">${tE("한눈 요약: 지도(⚡ 1회)가 발견을 내고 → 검증이 그 발견을 채점하고 → 일지가 스스로 기억하고(틀림도 반박 뒤 재확인이 쌓이면 복권) → 확실해진 것만 당신이 도장 찍어 문서로 남깁니다. 사람 개입 지점은 👤 세 곳(고정·차단·도장)과 게이트 스위치, 그리고 원하면 '단계별 기본 원칙' ④칸의 정찰 태도 편집 — 전부 선택입니다.", "In one line: the map (one ⚡ call) makes findings → verification grades them → the journal remembers by itself (even 'wrong' entries rehabilitate on later re-confirms) → you stamp only what's proven into a doc. Human touchpoints are the three 👤 spots (pin · ban · stamp), the gate switch, and optionally editing the scout attitude in Stage Baselines slot ④ — all optional.")}</div>
+<div class="sub">${tE("한눈 요약: 지도(⚡ 1회)가 발견을 내고 → 검증이 그 발견을 채점하고 → 일지가 스스로 기억하고(틀림도 반박 뒤 재확인이 쌓이면 복권) → 확실해진 것만 당신이 도장 찍어 문서로 남깁니다. 사람 개입은 직접 확인·정정, 고정·차단·도장, 게이트 스위치와 원할 때의 정찰 태도 편집뿐이며 전부 선택입니다.", "In one line: the map (one ⚡ call) makes findings → verification grades them → the journal remembers by itself (even 'wrong' entries rehabilitate on later re-confirms) → you stamp only what's proven into a doc. Human touchpoints—confirm/correct, pin/ban/stamp, the gate switch, and optional scout-attitude editing—are all optional.")}</div>
 <h1 style="margin-top:20px">${tE("프로젝트 유형별 — 기대할 수 있는 실효성", "By project type — what to realistically expect")}</h1>
 <div class="sub">${tE("유형은 구조로 판단하세요(이름이 아니라). '참고 실측'은 이 도구를 만들며 그 유형에서 실제 운용해 확인한 사례입니다.", "Judge by structure, not by name. 'Reference run' notes where this tool was actually operated on that shape during development.")}</div>
 <div class="types" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;margin:12px 0">
@@ -1702,7 +1702,7 @@ ${card("#d9a441", "🌱", "신생 프로젝트", "Young project", [[tE("구조",
 <div class="sub">${tE("공통 한계(정직): 처음 생기는 결합은 어떤 기록에도 없어 못 봅니다 · 실행해봐야 드러나는 동작(타이밍·권한·OS 차이)은 안 담깁니다 · AI 정찰(⚡)을 한 번도 실행하지 않으면 ②③④는 비어 있습니다.", "Honest common limits: first-ever couplings exist in no record and can't be seen · behaviors only running reveals (timing, permissions, OS differences) aren't captured · if AI recon (⚡) never runs, ②③④ stay empty.")}</div>
 <div class="faq">
 <b>${tE("Q. 내가 일일이 승인해야 하나요?", "Q. Do I have to approve things one by one?")}</b>
-${tE("아니요. 적재·승격·강등은 전부 자동입니다. 👤 단계(확정 교범 내보내기)와 고정/차단만 선택 개입이고, 안 써도 아무것도 멈추지 않습니다.", "No. Accrual, promotion and demotion are fully automatic. Only the 👤 step (exporting to the manual) and pin/ban are optional — skipping them stops nothing.")}
+${tE("아니요. 적재·승격·강등은 전부 자동입니다. 직접 확인·정정, 확정 교범 내보내기, 고정·차단만 예외적인 선택 개입이고 안 써도 아무것도 멈추지 않습니다.", "No. Accrual, promotion and demotion are fully automatic. Direct confirm/correct, manual export, and pin/ban are exceptional optional controls — skipping them stops nothing.")}
 <b>${tE("Q. 언제 비용(LLM 호출)이 나가나요?", "Q. When does an LLM call (cost) happen?")}</b>
 ${tE("⚡ 단계(영향지도 생성)뿐입니다 — 기본 정찰은 별도 과금 없이 쓰시던 Claude로 실행되고(Claude 사용량 범위), DeepSeek 정찰은 키를 등록했을 때만, Codex 정찰은 쓰시는 Codex 계정 사용량 범위입니다. ⚙ 단계들은 LLM 없이 돌고, 상태바 호버에 '지금 실행 중인 LLM 호출' 여부가 항상 표시됩니다.", "Only the ⚡ step (map generation) — the default scout adds no separate billing and runs on the Claude you already use (within your Claude usage); the DeepSeek scout only with a registered key; the Codex scout runs within your existing Codex account usage. ⚙ steps run without LLM, and the status-bar hover always shows whether an LLM call is running.")}
 <b>${tE("Q. AI 정찰(⚡)을 한 번도 실행하지 않으면 어떻게 되나요?", "Q. What if the AI recon (⚡) never runs?")}</b>
@@ -1710,6 +1710,35 @@ ${tE("①(변경 감지)의 힌트만 동작하고, ②③④는 계속 비어 �
 <b>${tE("Q. 데이터는 어디로 가나요?", "Q. Where does data go?")}</b>
 ${tE("전부 이 컴퓨터의 브릿지 홈에 남습니다. 외부로 나가는 경로는 세 갈래 — ⑴ DeepSeek 키 등록 시: ① DeepSeek 정찰 '실행 순간'의 증거 꾸러미(민감 범주 파일은 내용도 이름도 가려짐) ② 3트랙을 켤 때 연결 점검 요청 1회(꾸러미 아님) ⑵ 기본 정찰 실행 시: 같은 꾸러미가 쓰시던 Claude CLI를 통해 Claude 서비스로 전달(별도 결제 없음 — 검증이 Codex로 가는 것과 같은 성격) ⑶ Codex 정찰 선택·실행 시: 같은 꾸러미가 쓰시던 codex CLI를 통해 Codex 서비스로 전달(검증과 분리된 독립 실행 1회·읽기 전용 강제 — 계정 사용량 범위). 상세는 PRIVACY.md.", "Everything stays in the bridge home on this machine. Data leaves via three routes — ⑴ with a DeepSeek key: ① the evidence package at the moment the DeepSeek scout runs (sensitive-category files excluded by content and by name) ② a single connection check when you switch on 3-track (not a package) ⑵ when the default scout runs: the same package travels through your existing Claude CLI to the Claude service (no separate billing — same nature as verification going to Codex) ⑶ when the Codex scout is selected and runs: the same package travels through your existing codex CLI to the Codex service (one independent run separate from verification, forced read-only — within your account usage). Details in PRIVACY.md.")}
 </div>
+</body></html>`;
+}
+
+// Project MAP 의미 보강 모드 안내 — 모드 행의 짧은 이름만으로 비용·실패·자동 배정 차이를 추측하게 하지 않는다.
+// 정적 설명이므로 정찰 구조 안내와 같은 무스크립트·무전송 새탭이다(열람만으로 준비 점검이나 AI 호출 없음).
+function openMapModeGuide(): void {
+  const panel = vscode.window.createWebviewPanel("codexBridgeMapModeGuide", tE("Project MAP 의미 보강 모드 안내", "Project MAP enrichment modes"), vscode.ViewColumn.Beside, { enableScripts: false });
+  const mode = (color: string, titleKo: string, titleEn: string, provider: string, fitKo: string, fitEn: string, behaviorKo: string, behaviorEn: string, costKo: string, costEn: string) => `
+    <section class="mode" style="border-top-color:${color}"><h2>${tE(titleKo, titleEn)}</h2><div class="provider">${provider}</div>
+      <dl><dt>${tE("이럴 때", "Good fit")}</dt><dd>${tE(fitKo, fitEn)}</dd><dt>${tE("실제 동작", "What happens")}</dt><dd>${tE(behaviorKo, behaviorEn)}</dd><dt>${tE("사용량", "Usage")}</dt><dd>${tE(costKo, costEn)}</dd></dl></section>`;
+  panel.webview.html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
+<style>
+body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);padding:20px;max-width:940px;line-height:1.45}h1{font-size:18px;margin-bottom:4px}.sub,.note{color:var(--vscode-descriptionForeground);font-size:12px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(205px,1fr));gap:10px;margin:16px 0}.mode{border:1px solid var(--vscode-panel-border);border-top:3px solid;border-radius:7px;padding:12px;background:var(--vscode-editorWidget-background)}h2{font-size:14px;margin:0}.provider{font-size:11px;color:var(--vscode-descriptionForeground);margin:2px 0 9px}dl{margin:0;font-size:12px}dt{font-weight:700;margin-top:7px}dd{margin:1px 0}.flow{border:1px dashed var(--vscode-panel-border);border-radius:7px;padding:12px;margin-top:14px;font-size:12px}.ex{display:grid;grid-template-columns:110px 1fr;gap:5px 10px;margin-top:8px}.ex b{color:var(--vscode-descriptionForeground)}.warn{color:var(--vscode-editorWarning-foreground);font-weight:600}
+</style></head><body>
+<h1>${tE("의미 보강 담당 — 네 모드는 무엇이 다른가요?", "Semantic enrichment — how do the four modes differ?")}</h1>
+<div class="sub">${tE("영향지도를 새로 그리는 '정찰 담당'과는 별개입니다. 이미 있는 Project MAP을 읽고 코드 근거를 더 붙이거나 라벨·관계를 보완할 때 누가 일할지를 고릅니다. 화면을 보는 것만으로는 아무 호출도 일어나지 않습니다.", "This is separate from the scout that draws an impact map. It chooses who enriches an existing Project MAP with code evidence, labels, and relationships. Merely viewing this page makes no call.")}</div>
+<div class="grid">
+${mode("#3ca89a", "기본", "Default", "Claude", "별도 키나 추가 과금 없이 지금 쓰는 Claude 흐름으로 맡기고 싶을 때", "Use the Claude flow you already have, with no separate key or billing", "준비 상태와 무관하게 Claude가 맡습니다. 실패하면 다른 제공자로 몰래 바꾸지 않고 보류합니다.", "Claude handles it regardless of paid-provider readiness. Failure is parked; there is no silent provider switch.", "쓰시던 Claude 사용량 범위 · 별도 API 키 없음", "Within existing Claude usage · no separate API key")}
+${mode("#5b8dd9", "경제형", "Economy", "DeepSeek", "이미 지도에 잡힌 영역을 자주 보강하며 API 비용을 우선 아끼고 싶을 때", "Frequent enrichment in already-mapped areas where API cost matters most", "항상 DeepSeek만 사용합니다. 키·준비 점검이 성립하지 않거나 실행이 실패하면 보류하며 Codex로 자동 전환하지 않습니다.", "Always uses DeepSeek. Missing readiness or a failed run is parked; it never silently switches to Codex.", "등록한 DeepSeek API 사용량 · 키 등록이 사용 동의", "Your DeepSeek API usage · registering a key is consent")}
+${mode("#9a6cdc", "정밀형", "Precision", "Codex", "기존 지도 앵커가 잡은 디렉터리 경계 밖처럼 새 구조 경계를 정밀 검토할 때", "Changes outside directories covered by existing map anchors, or other new structural boundaries", "항상 독립 Codex 실행 1회가 맡습니다. 준비되지 않았거나 실패하면 보류하며 다른 제공자로 자동 전환하지 않습니다.", "Always uses one independent Codex run. Missing readiness or failure is parked; it never silently switches providers.", "쓰시는 Codex 계정 사용량 범위", "Within your Codex account usage")}
+${mode("#d9a441", "자동형", "Auto", "DeepSeek + Codex", "매번 고르지 않고 지도 상태에 따라 시스템이 비용과 정밀도를 나누게 할 때", "Let the system balance cost and precision without choosing every time", "지도 안쪽 변경은 경제형, 새 경계 변경은 정밀형으로 보냅니다. 경제형 실패 때만 정밀형으로 정확히 한 번 올리고, 둘 다 실패하거나 영역을 판정할 수 없으면 보류합니다.", "Mapped-area changes go to Economy; boundary changes go to Precision. An Economy failure escalates exactly once to Precision; both failures or an unknown area are parked.", "두 제공자의 해당 사용량 · 둘 다 준비돼야 선택 가능", "Usage of both providers · both must be ready")}
+</div>
+<div class="flow"><b>${tE("상황 예시", "Situation examples")}</b><div class="ex">
+<b>${tE("작은 기존 수정", "Small known edit")}</b><span>${tE("기본이면 Claude, 경제형이면 DeepSeek, 정밀형이면 Codex가 그대로 맡습니다. 자동형은 기존 지도 안쪽이면 DeepSeek를 고릅니다.", "Default uses Claude, Economy uses DeepSeek, and Precision uses Codex. Auto chooses DeepSeek when the edit stays inside the mapped area.")}</span>
+<b>${tE("지도 경계 밖 파일", "File outside map boundary")}</b><span>${tE("예를 들어 지도 앵커가 src/ 안에만 있는데 루트의 infra/ 파일이 바뀌면, 자동형은 기존 앵커의 부모 디렉터리 경계 밖 변화로 보고 Codex를 고릅니다. src/ 아래 새 하위 폴더는 여전히 지도 안쪽이라 DeepSeek 대상입니다. 명시적으로 고른 기본·경제형·정밀형은 몰래 바뀌지 않습니다.", "For example, if map anchors exist only under src/ and a root-level infra/ file changes, Auto sees it outside the existing anchor-parent boundary and chooses Codex. A new subfolder under src/ is still mapped and goes to DeepSeek. Explicit Default, Economy, and Precision choices never change silently.")}</span>
+<b>${tE("실패", "Failure")}</b><span>${tE("명시 모드는 그대로 보류합니다. 자동형만 DeepSeek 실패를 Codex로 한 번 넘깁니다. 무한 재시도나 무단 대체는 없습니다.", "Explicit modes park. Only Auto escalates a DeepSeek failure once to Codex. There is no infinite retry or unauthorized substitution.")}</span>
+</div></div>
+<p class="note"><span class="warn">${tE("준비 점검은 실제 호출입니다.", "Readiness checking makes real calls.")}</span> ${tE("버튼을 눌렀을 때만 DeepSeek 소형 요청 최대 2회(형식 교정 1회 포함)와 Codex 실행 1회를 사용합니다. 모드 선택은 저장될 수 있어도, 준비되지 않은 담당으로 작업을 조용히 강행하지는 않습니다.", "Only pressing the button uses up to two small DeepSeek requests (including one format repair) and one Codex run. A mode selection may be saved, but work is never silently forced through an unready provider.")}</p>
 </body></html>`;
 }
 
@@ -1733,10 +1762,10 @@ function openScoutHealthReport(ws: string | null): void {
     ? `<div class="notice">${tE(`관찰 일지가 아직 작아요(항목 ${h.entries}건 &lt; ${HEALTH_MIN_SAMPLE}건) — 비율은 표시하지 않습니다(과신 방지). 지도는 후보 목록으로만 쓰세요. 정찰·검증이 돌수록 이 리포트가 채워집니다.`, `The field journal is still small (${h.entries} item(s) &lt; ${HEALTH_MIN_SAMPLE}) — ratios are withheld to avoid overconfidence. Treat maps as candidate lists only. This report fills in as recon & verification run.`)}</div>`
     : `<div class="grid">
 ${stat(h.entries, "관찰 항목", "observed items", "#3ca89a", "일지에 쌓인 결합 항목 수(이벤트 반복은 1항목)", "coupling items in the journal (repeated events count once)")}
-${stat(`${h.verified}/${h.entries}`, "확인 항목", "confirmed items", "#4a9e57", "검증을 통과해 신뢰로 승격된 항목", "items promoted to trusted via verification")}
+${stat(`${h.verified}/${h.entries}`, "확인 항목", "confirmed items", "#4a9e57", "자동 검증 또는 직접 맞음 확인으로 검증됨이 된 항목", "items marked verified by automatic verification or a direct human confirm")}
 ${stat(h.reusedDen >= HEALTH_MIN_SAMPLE ? `${h.reusedNum}/${h.reusedDen}` : "—", "재사용 항목 중 확인 이력", "reused items with a confirm", "#9a6cdc", h.reusedDen >= HEALTH_MIN_SAMPLE ? "지도에 다시 동봉된 항목 중 확인 기록이 있는 것(선후 무주장 · 사람 확인 포함)" : `재사용 표본이 ${HEALTH_MIN_SAMPLE}건 미만이라 보류`, h.reusedDen >= HEALTH_MIN_SAMPLE ? "re-attached items that have a confirm on record (no order claim · incl. human confirms)" : `withheld — fewer than ${HEALTH_MIN_SAMPLE} reused samples`)}
 ${stat(h.autoDen >= HEALTH_MIN_SAMPLE ? `${h.autoNum}/${h.autoDen}` : "—", "기계 확인 가능 재사용 항목 중 기계 확인", "machine-checkable reused w/ machine confirm", "#5b8def", h.autoDen >= HEALTH_MIN_SAMPLE ? "경로 2개 이상이라 자동 확인이 '원리상 가능'한 항목만 분모(사람 확인은 제외 — 별도 지표)" : `기계 확인 가능 표본이 ${HEALTH_MIN_SAMPLE}건 미만이라 보류`, h.autoDen >= HEALTH_MIN_SAMPLE ? "denominator = items machine-checkable in principle (2+ paths); human confirms excluded (separate metric)" : `withheld — fewer than ${HEALTH_MIN_SAMPLE} machine-checkable samples`)}
-${stat(h.disputedEntries, "반박 이력", "disputed", "#d9a441", "수동 기록+명시 표기('결합반박 #id') 기준", "manually recorded + explicit reply markers ('결합반박 #id')")}
+${stat(h.disputedEntries, "반박 이력", "disputed", "#d9a441", "명시 반박 표기('결합반박 #id', 기록 전용 포함) + 사람 정정. 실제 틀림 강등은 근거 조건을 통과한 표기만", "explicit refute markers ('결합반박 #id', including record-only markers) + human corrections. Only markers that pass evidence checks demote status")}
 ${stat(h.rehabilitated, "복권", "rehabilitated", "#4a9e57", "반박 뒤 재확인(사람 1회/서로 다른 ask 2회)으로 신뢰 복귀", "back to trusted after re-confirms (1 human / 2 distinct asks)")}
 ${h.reinterpreted > 0 ? stat(h.reinterpreted, "재해석 강등", "reinterpreted", "#d9a441", "증거 규칙 v2(2026-07)로 '확인됨'에서 내려온 항목 — 삭제 아님(이력 보존)", "stepped down by the 2026-07 evidence rules — not deleted (history kept)") : ""}
 </div>`;
@@ -1768,16 +1797,16 @@ ${cards}
 <div class="sub">${gateLine} — ${tE("지도가 없거나 낡으면 플랜 확정 전에 먼저 지도를 요청(세션당 2회까지·이후 통과·fail-open). 차단 안내에는 위 관찰 신호가 함께 실립니다 — 전역 수치가 아니라 이 프로젝트의 장부가 근거. 켜고 끄기: node scripts/scope-gate.js &lt;프로젝트&gt; on|off (현재 언어 슬롯에만 저장 — 한/영 모드는 별도 설정)", "if the map is missing/stale, a map is requested before plan confirmation (up to 2×/session, then passes · fail-open). The block notice carries the observation signals above — this project's journal is the evidence, not a global number. Toggle: node scripts/scope-gate.js &lt;repo&gt; on|off (saved to the current language slot only — ko/en modes are configured separately)")}</div>
 <h2>${tE("이 신호는 어디서 생기고 어디에 반영되나 — 관찰 신호의 역할", "Where these signals come from and where they act — the role of observation signals")}</h2>
 <div class="grid">
-${stat("⚙", "1. 감지 (자동)", "1. Sensing (automatic)", "#3ca89a", "검증 대화의 확인·지도 재동봉·당신이 확정 어조로 기록한 정정/확인이 사건(제안·동봉·확인·반박)으로 잡혀요 — 추가 AI 호출 0", "confirms from verification chats, map re-attachments, and corrections you record with certainty become events (proposed·attached·confirmed·disputed) — zero extra AI calls")}
+${stat("⚙", "1. 감지 (자동)", "1. Sensing (automatic)", "#3ca89a", "정찰 제안·지도 재동봉·검증 답변의 확인과 명시 반박 표기·당신의 직접 확인/정정이 사건(제안·동봉·확인·반박)으로 잡혀요 — 근거 조건을 통과한 사건만 상태를 올리거나 내려요 · 추가 AI 호출 0", "recon proposals, map re-attachments, confirms and explicit refute markers in verification replies, and your direct confirms/corrections become events — only events that pass evidence checks promote or demote status · zero extra AI calls")}
 ${stat("📔", "2. 기록 (관찰 일지)", "2. Recording (field journal)", "#3ca89a", "이 프로젝트(정찰 대상) 전용 장부에 덧붙이기만 — 반박 이력도 지우지 않고 보존, 반박 뒤 재확인이 쌓이면 복권", "append-only, per project (scout target) — dispute history is never erased; re-confirms after a dispute can rehabilitate")}
 ${stat("🩺", "3. 해석 (관찰 신호)", "3. Interpretation (observation signals)", "#9a6cdc", "장부를 항목 단위로 보수 집계 — 위 카드의 수치. 모든 프로젝트에 같은 합격선을 들이대는 전역 임계값이 없어요", "the journal is conservatively counted per item — the cards above. No global threshold that judges every project by the same bar")}
 ${stat("📤", "4. 반영 (4곳)", "4. Application (4 places)", "#d9a441", "정찰 AI에게 보내는 지도 자료 꼬리 · 플랜 게이트 차단 안내 · 이 리포트(셋은 그 순간 장부에서 새로 계산) · 대시보드 관찰 일지 카드 1줄(몇 초 안의 짧은 캐시로 따라잡음)", "the tail of map material sent to the scout AI · the plan-gate block notice · this report (these three recompute from the journal at that moment) · the one-line dashboard signal (catches up within a few seconds via a short cache)")}
 </div>
-<div class="notice">${tE("<b>차별점 — 고정값이 아니라 따라가는 값</b>: 어떤 프로젝트는 파일이 촘촘히 얽혀 있고 어떤 프로젝트는 독립적이라, 하나의 합격 숫자를 박아두면 어딘가에선 반드시 틀립니다. 그래서 이 시스템은 숫자를 고정하지 않고, 그 프로젝트의 관찰 일지에서 매번 다시 계산합니다. 다만 정직하게: 이것은 '스스로 학습해 최적값을 찾아가는 제어 장치'가 아니라 **관측치**입니다 — 무엇도 자동 조정하지 않고(advisory), 플랜 게이트조차 이 신호를 '근거 인용'으로만 실으며, 수치의 품질은 결국 정찰·검증이 실제로 돌고 사람이 반박·차단으로 정정해 주는 만큼만 좋아집니다.", "<b>What makes this different — a tracking value, not a fixed one</b>: some projects are tightly coupled, others independent, so any single hard-coded pass number is wrong somewhere. This system fixes no number — it recomputes from that project's own field journal every time. Honestly though: this is an **observation**, not a self-tuning controller — nothing is auto-adjusted (advisory), even the plan gate only quotes these signals as evidence, and the numbers are only as good as the recon/verification runs and the human dispute/ban corrections behind them.")}</div>
+<div class="notice">${tE("<b>차별점 — 고정값이 아니라 자동으로 따라가는 값</b>: 어떤 프로젝트는 파일이 촘촘히 얽혀 있고 어떤 프로젝트는 독립적이라, 하나의 합격 숫자를 박아두면 어딘가에선 반드시 틀립니다. 그래서 정찰 제안과 검증 답변의 확인·명시 반박 표지가 사건으로 자동 기록되고, 근거 조건을 통과한 사건을 바탕으로 이 프로젝트의 상태와 수치가 다시 계산됩니다. 검증된 항목은 다음 정찰 자료에 자동으로 우선 동봉됩니다. 다만 이 관측치가 스스로 합격선을 바꾸거나 코드·Project MAP을 고치지는 않으며, 플랜 게이트도 숫자 하나로 통과·실패를 정하지 않고 상황 근거로 함께 보여줍니다. 사람의 맞음 확인·틀림 정정·고정·차단은 실제 사정을 더 잘 아는 때에만 쓰는 선택적 예외입니다.", "<b>What makes this different — an automatically tracking value, not a fixed one</b>: some projects are tightly coupled, others independent, so any single hard-coded pass number is wrong somewhere. Recon proposals, confirmations, and explicit refute markers in verification replies are recorded automatically; this project's states and figures are then recomputed from events that pass the relevant evidence checks. Verified items are automatically prioritized in future scout packages. These observations do not tune their own pass threshold or edit code or the Project MAP, and the plan gate presents them as contextual evidence rather than deciding pass/fail from one number. Human confirm/correct/pin/ban actions are optional exceptions for when you know the real situation better.")}</div>
 <h2>${tE("최근 사건 흐름(최신 12건)", "Recent events (latest 12)")}</h2>
 ${tl ? `<table>${tl}</table>` : `<div class="sub">${tE("아직 기록된 사건이 없어요 — 정찰 지도가 결합을 제안하면 자동으로 쌓입니다.", "No events recorded yet — they accrue automatically once scout maps propose couplings.")}</div>`}
 ${ml.dropped ? `<div class="sub">${tE(`ⓘ 판독 불가 기록 ${ml.dropped}줄은 건너뜀(집계에 안 섞임)`, `ⓘ ${ml.dropped} unreadable record line(s) skipped (not counted)`)}</div>` : ""}
-<div class="limits">${tE("<b>읽는 법(한계 고지)</b> — 이 수치는 관측치이고 편향은 양방향일 수 있어요: 자동 반박 추출이 없어 반박은 적게 잡히고, 지도에 실려 검증자에게 노출된 항목은 확인이 잘 잡힙니다(검증이 안 돌면 확인 기회 자체가 없음). '재사용 항목 중 확인 이력'은 선후 인과를 주장하지 않습니다. 지도는 후보 목록이지 안전 보장이 아니에요 — 지도 밖 독립 확인을 유지하세요.", "<b>How to read this (limits)</b> — these are observations and the bias can go both ways: with no automatic dispute extraction, disputes are undercounted; items exposed to the verifier via map attachment get confirmed more easily (and without verification runs there is no chance to confirm at all). 'Reused items with a confirm' makes no order/causality claim. Maps are candidate lists, not safety guarantees — keep independent checks beyond the map.")}</div>
+<div class="limits">${tE("<b>읽는 법(한계 고지)</b> — 이 수치는 관측치이고 편향은 양방향일 수 있어요. 검증 답변의 '결합반박 #id' 표지는 자동으로 반박 이력에 기록되며, 그중 실제 두 경로 인용·이번 턴 취급 흔적·요청 ID 조건을 통과한 것만 항목을 '틀림 판명'으로 내립니다. 평문 속 암시는 추측하지 않아 반박 이력이 적게 잡힐 수 있고, 반대로 근거 미충족 표기도 이력 수에는 남습니다. 지도에 실려 검증자에게 노출된 항목은 확인이 잘 잡힙니다(검증이 안 돌면 확인 기회 자체가 없음). '재사용 항목 중 확인 이력'은 선후 인과를 주장하지 않습니다. 지도는 후보 목록이지 안전 보장이 아니에요 — 지도 밖 독립 확인을 유지하세요.", "<b>How to read this (limits)</b> — these are observations and the bias can go both ways. An explicit '결합반박 #id' marker is recorded in dispute history automatically; only markers that also pass the two-path citation, current-turn handling, and request-ID checks demote an item to 'disputed'. Implied refutations in ordinary prose are not guessed, so dispute history may be undercounted, while explicit markers that fail evidence checks still remain in the history count. Items exposed to the verifier via map attachment get confirmed more easily (and without verification runs there is no chance to confirm at all). 'Reused items with a confirm' makes no order/causality claim. Maps are candidate lists, not safety guarantees — keep independent checks beyond the map.")}</div>
 </body></html>`;
 }
 
@@ -3104,7 +3133,8 @@ type LedgerTimelineItem = { ts: string; type: string; text: string; from: string
 type MapLedgerView = {
   entries: ObservedEntry[];        // 최신순 상위 N — 신분 배지·개입 버튼 재료
   timeline: LedgerTimelineItem[];  // 최근 사건 흐름(최신 먼저)
-  counts: { trusted: number; reference: number; disputed: number; excluded: number };
+  counts: { verified: number; pinnedOverride: number; reference: number; disputed: number; excluded: number };
+  autoEvidence: { machineRecorded: number; promotable: number; unknown: number; humanConfirmed: number }; // 자동 승격 통로 가시화 — '확인 기록'과 실제 승격 재료를 혼동하지 않게
   impact: { proposed: number; attached: number; confirmed: number; disputedEv: number; rehabilitated: number; verifiedEntries: number }; // 3트랙 기여 관찰 신호(이벤트 합계 — 검증 통계 탭 카드 재료)
   health: import("./ledger-events").ScoutHealth; // 프로젝트별 관찰 신호(entry 단위 — 전역 임계값 대체·advisory 전용, 사용자 결정 2026-07-09)
   prevDrawer: { entries: number; trusted: number; migrateCmd: string } | null; // 정찰 대상 전환 시 '이 폴더 자체 서랍'의 잔존 요약 — 침묵 전환이 '데이터 삭제'로 보이던 실사고(2026-07-10) 고지 재료. 전환 없으면 null
@@ -3151,7 +3181,13 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
   const textOf = new Map(derived.map((e) => [e.sig, e.text || e.sig]));
   const timeline: LedgerTimelineItem[] = parsed.events.slice(-LEDGER_TIMELINE_CAP_UI).reverse()
     .map((ev) => ({ ts: ev.ts || "", type: ev.type, text: (textOf.get(ev.sig) || ev.text || ev.sig).slice(0, 90), from: (ev.from || "").slice(0, 80) }));
-  const counts = { trusted: 0, reference: 0, disputed: 0, excluded: 0 };
+  const counts = { verified: 0, pinnedOverride: 0, reference: 0, disputed: 0, excluded: 0 };
+  const autoEvidence = {
+    machineRecorded: parsed.events.filter((e) => e.type === "confirmed").length,
+    promotable: parsed.events.filter((e) => promotableConfirm(e) || (e.type === "confirmed" && !e.grade)).length, // 구형 grade 없음 확인도 유도기의 2회 규칙 재료
+    unknown: parsed.events.filter((e) => e.type === "confirmed" && e.seen === "unknown").length,
+    humanConfirmed: parsed.events.filter((e) => e.type === "user_confirm").length,
+  };
   const impact = { proposed: 0, attached: 0, confirmed: 0, disputedEv: 0, rehabilitated: 0, verifiedEntries: 0 };
   for (const e of derived) {
     impact.proposed += e.counts.proposed || 0;
@@ -3160,7 +3196,8 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
     impact.disputedEv += (e.counts.refuted || 0) + (e.counts.user_dispute || 0);
     if ((e as { rehabilitated?: boolean }).rehabilitated) impact.rehabilitated++;
     if (e.status === "verified") impact.verifiedEntries++;
-    if (e.lane === "trusted") counts.trusted++;
+    if (e.status === "verified") counts.verified++;
+    else if (e.lane === "trusted") counts.pinnedOverride++; // 검증됨이 아닌데 사람이 고정해 다음 정찰에 넣은 예외
     else if (e.lane === "reference") counts.reference++;
     if (e.status === "disputed") counts.disputed++;
     if (e.status === "banned" || e.status === "superseded" || e.status === "tombstone") counts.excluded++;
@@ -3249,7 +3286,7 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
     }
   } catch { /* 고지 재료 실패 — 카드 본체 불침 */ }
   return {
-    entries, timeline, counts, impact, health: computeScoutHealth(derived), dropped: parsed.dropped, prevDrawer,
+    entries, timeline, counts, autoEvidence, impact, health: computeScoutHealth(derived), dropped: parsed.dropped, prevDrawer,
     mapRel: path.relative(ws, mapF).replace(/\\/g, "/"), mapExists,
     mapApproved: mp.approved.length, mapTotalItems: mp.totalItems,
     // P3b B-1: blocked=원문 미리보기 숨김+사유만(정본 §B — 진단 전용 표시는 P9 위임)
@@ -3434,6 +3471,7 @@ class Dashboard {
           this.post(); vscode.commands.executeCommand("codexBridge.refresh");
         }
         if (m?.type === "openReconGuide") openReconGuide(); // 정찰 구조 안내 — 대시보드와 별개의 정적 새탭(스크립트 없음)
+        if (m?.type === "openMapModeGuide") openMapModeGuide(); // 의미 보강 모드 안내 — 비용·라우팅·실패 차이를 설명하는 정적 새탭
         if (m?.type === "openScoutHealthReport") openScoutHealthReport(dashboardWorkspace()); // 건강 리포트 — 포화 대응 새탭(열 때 베이크·스크립트 없음)
         if (m?.type === "setScoutTarget" && typeof m.repo === "string") setScoutTargetFromUi(dashboardWorkspace(), m.repo, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
         if (m?.type === "setScoutArm" && (m.arm === "self" || m.arm === "deepseek" || m.arm === "codex")) setScoutArmFromUi(dashboardWorkspace(), m.arm, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
@@ -3920,7 +3958,7 @@ class Dashboard {
           return;
         }
         if (m?.type === "ledgerAct" && m.sig) {
-          // MAP 장부 개입(⑤ 역할 전환) — 승인 큐가 아니라 선택적 오버라이드: 고정/차단(+해제)은 관측 장부 이벤트로,
+          // MAP 장부 개입(⑤ 역할 전환) — 승인 큐가 아니라 선택적 예외: 직접 확인/정정과 고정/차단(+해제)은 관측 장부 이벤트로,
           // 내보내기는 확정 장부(MAP.md) 명시 기록으로. sig 기준이라 목록 갱신·번호 밀림 오작동이 원천적으로 없다.
           // 이벤트 적재는 배포 런타임(contract-lib)의 appendLedgerEvent 재사용 — 형식 단일 출처(복사 없음).
           const ws = dashboardWorkspace();
@@ -3939,6 +3977,18 @@ class Dashboard {
             return okA;
           };
           const done = () => { mapLedgerBump++; this.post(); };
+          if (act === "confirm" || act === "dispute") {
+            const positive = act === "confirm";
+            const actionLabel = positive ? tE("맞음 확인","Confirm") : tE("틀림 정정","Correct");
+            const prompt = positive
+              ? tE(`이 지식이 맞다고 직접 확인할까요? 즉시 '검증됨'이 되어 다음 정찰 자료에 우선 동봉됩니다. 자동 운용을 위해 누를 필요는 없습니다.\n\n"${item.text}"`,`Confirm that this knowledge is correct? It immediately becomes 'verified' and is prioritized in future scout packages. This is not required for automatic operation.\n\n"${item.text}"`)
+              : tE(`이 지식이 틀렸다고 직접 정정할까요? '맞는 결합 후보'에서는 빠지고, 재실수 방지를 위한 '틀림 판명' 경고로만 제한적으로 남습니다. 이후 새 근거로 다시 확인되면 복권될 수 있습니다. 완전히 숨기려면 차단을 사용하세요.\n\n"${item.text}"`,`Correct this knowledge as wrong? It leaves the valid-coupling candidates and remains only as a limited 'known wrong' warning to prevent repeated mistakes. Later evidence can rehabilitate it. Use Ban to hide it completely from scout packages.\n\n"${item.text}"`);
+            vscode.window.showWarningMessage(prompt, { modal: true }, actionLabel).then((pick) => {
+              if (pick !== actionLabel) return;
+              if (record(positive ? "user_confirm" : "user_dispute", positive ? tE("대시보드 직접 확인","dashboard direct confirm") : tE("대시보드 직접 정정","dashboard direct correction"))) done();
+            });
+            return;
+          }
           if (act === "pin" || act === "unpin" || act === "unban") {
             // 가역·장부 내부 기록만 → 모달 없이 즉시(작업 흐름 방해 최소화)
             if (record(act === "pin" ? "pinned" : act === "unpin" ? "unpinned" : "unbanned", tE("대시보드 개입","dashboard action"))) done();
@@ -4376,6 +4426,11 @@ class Dashboard {
   .mlrow{display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-top:1px dashed var(--vscode-panel-border)} /* ⚠ 'mrow'는 기존 설정 카드가 쓰는 전역 클래스 — 반드시 별도 이름(mlrow) */
   .mlrow .mltxt{flex:1;min-width:0} .mlrow .mltxt .t{font-size:12px;word-break:break-all} .mlrow .mltxt .f{font-size:10px;opacity:.6;margin-top:2px}
   .mlrow button{padding:3px 10px;font-size:11px;flex-shrink:0}
+  .mlactions{margin:7px 0 9px;padding:8px;border:1px solid var(--vscode-panel-border);border-radius:6px;background:var(--vscode-editorWidget-background)}
+  .mlactions .mt{font-size:11px;font-weight:700;margin-bottom:5px}.mlactions .mg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
+  .mlactions .ma{font-size:10.5px;line-height:1.4;padding:5px 6px;border-left:2px solid var(--vscode-charts-blue);background:var(--vscode-sideBar-background)}
+  .mlactions .ma b{display:block;font-size:11px}.mlactions .mf{font-size:10px;opacity:.72;margin-top:6px}
+  @media(max-width:650px){.mlactions .mg{grid-template-columns:1fr}}
   .mhist{font-size:11px;padding:3px 0;word-break:break-all} .mhist .w{opacity:.6;font-size:10px}
   /* 정찰 한눈 도해 — 위쪽 검증 파이프라인과 같은 시각 문법(색 박스+화살표). 첫 화면=그림, 텍스트=접힘 원칙 */
   .rflow{display:flex;align-items:stretch;gap:6px;flex-wrap:wrap;margin:8px 0 6px}
@@ -6124,6 +6179,11 @@ class Dashboard {
           mk("auto", T("자동형","Auto"), autoOk?T("준비됨","ready"):reasonT(autoRd||{reason:"not-probed"}), !autoOk, autoOk?T("경제형+정밀형 조합(라우터가 배정·승격)","Economy+precision combo (router assigns/escalates)"):T("자동형은 경제형·정밀형이 모두 준비돼야 선택할 수 있어요(1-34): ","Auto requires both economy and precision ready (1-34): ")+reasonT(autoRd||{reason:"not-probed"}));
           setOn9();
           row.appendChild(seg);
+          const gb9=document.createElement("button"); gb9.type="button"; gb9.className="secondary"; gb9.style.cssText="margin-left:8px;font-size:11px;padding:2px 8px";
+          gb9.textContent=T("📖 모드 자세히 보기 (새탭)","📖 Mode guide (new tab)");
+          gb9.title=T("기본·경제형·정밀형·자동형의 담당, 사용량, 실패 시 동작을 상황 예시로 설명합니다. 열람만으로는 호출하지 않아요.","Explains provider, usage, and failure behavior for Default, Economy, Precision, and Auto with examples. Viewing makes no call.");
+          gb9.addEventListener("click", function(){ vscode.postMessage({type:"openMapModeGuide"}); });
+          row.appendChild(gb9);
           const pb=document.createElement("button"); pb.type="button"; pb.className="secondary"; pb.style.cssText="margin-left:8px;font-size:11px;padding:2px 8px";
           pb.textContent=T("🔎 준비 점검","🔎 Check readiness");
           pb.title=T("실제 점검을 돌려요 — DeepSeek 소형 요청 최대 2회(과금·형식 실패 시 교정 1회 포함)·Codex 계정 사용량 1회. 자동 실행은 없어요(이 버튼만).","Runs real checks — up to 2 small billed DeepSeek requests (incl. 1 repair) · 1 Codex run within account usage. Never runs automatically (this button only).");
@@ -6408,7 +6468,7 @@ class Dashboard {
       h.textContent=T("관찰 일지(자동 기억) ⚙ 추가 LLM 없음 — 개입은 선택","Field journal (auto memory) ⚙ no extra LLM — intervention optional");
       card.appendChild(h);
       const info=document.createElement("div"); info.className="muted";
-      info.textContent=T("영향지도의 발견이 자동으로 쌓이고, 검증이 확인하면 신뢰로 승격되고, 반박되면 스스로 강등됩니다 — 클릭 없이 굴러갑니다. 원하실 때만 고정(신뢰 강제)/차단(제외)/'확정 교범("+ml.mapRel+")'으로 내보내기(승격)로 개입하세요.","Impact-map findings accumulate automatically, get promoted on verification and demoted on dispute — no clicking required. Intervene only when you want: pin (force-trust), ban (exclude), or export (promote) into the 'field manual ("+ml.mapRel+")'.");
+      info.textContent=T("영향지도의 발견은 자동으로 쌓입니다. 같은 항목을 서로 다른 검증 2회가 실제 근거 파일까지 다룬 것으로 확인하면 '검증됨'으로 승격되어 다음 정찰 자료에 우선 동봉되고, 반박되면 스스로 강등됩니다 — 코드나 Project MAP에 자동 적용됐다는 뜻은 아닙니다. 클릭 없이 굴러가며, 직접 맞음/틀림을 아는 경우의 확인·정정과 고정·차단·교범 기록만 선택 개입입니다.","Impact-map findings accumulate automatically. When two separate verification runs for an item are confirmed to have handled the cited evidence files, it becomes 'verified' and is prioritized in future scout packages; a dispute demotes it. This does not mean code or Project MAP was automatically changed. It runs without clicks; confirm/correct, pin/ban, and manual export are optional exceptions when you know better.");
       card.appendChild(info);
       // 정찰 대상 — '상시' 표시(2026-07-10 구조 해법: 미지정=세션 폴더 폴백이 조용히 축을 눈 감기던 실사고 —
       // differs/invalid일 때만 보이던 것을 항상 보이게. 어긋남 의심이면 문구가 아니라 '행동 카드'로).
@@ -6443,11 +6503,37 @@ class Dashboard {
       });
       const chips=document.createElement("div"); chips.className="mledchips";
       const chip=(n,label,cls)=>{const c=document.createElement("div");c.className="mchip "+(cls||"");const b=document.createElement("b");b.textContent=String(n);const s=document.createElement("span");s.textContent=label;c.appendChild(b);c.appendChild(s);chips.appendChild(c);};
-      chip(ml.counts.trusted,T("신뢰(자동 반영)","trusted"),"ok");
+      chip(ml.counts.verified,T("검증됨","verified"),"ok");
+      if(ml.counts.pinnedOverride) chip(ml.counts.pinnedOverride,T("고정 포함","pinned override"),"ok");
       chip(ml.counts.reference,T("미검증(참고)","unverified"),"");
       chip(ml.counts.disputed,T("틀림 판명","disputed"),ml.counts.disputed?"hot":"no");
       if(ml.counts.excluded) chip(ml.counts.excluded,T("제외(차단·대체)","excluded"),"no");
       card.appendChild(chips);
+      safe(function(){
+        const ae=ml.autoEvidence||{machineRecorded:0,promotable:0,unknown:0,humanConfirmed:0};
+        const line=document.createElement("div"); line.className="muted"; line.style.cssText="font-size:10.5px;margin:3px 0 5px";
+        line.textContent=T("자동 확인 통로: 기계 확인 기록 "+ae.machineRecorded+" · 승격 조건 통과 "+ae.promotable+" · 파일 취급 흔적 판정 불가 "+ae.unknown+(ae.humanConfirmed?" · 사람 확인 "+ae.humanConfirmed:""),"Automatic evidence path: machine confirmations "+ae.machineRecorded+" · passed promotion conditions "+ae.promotable+" · file-handling evidence unknown "+ae.unknown+(ae.humanConfirmed?" · human confirmations "+ae.humanConfirmed:""));
+        line.title=T("승격 재료는 seen=ok 등 증거 조건을 통과한 확인 사건 수입니다. 같은 항목에 서로 다른 검증 실행 2건이 쌓여야 자동 승격됩니다. 과거의 '확인 불가' 기록은 소급해 성공으로 바꾸지 않습니다.","Promotion-eligible evidence means confirmation events that passed evidence conditions such as seen=ok. Automatic promotion requires two different verification runs for the same item. Historical unknown records are never retroactively treated as success.");
+        card.appendChild(line);
+      });
+      // 네 선택 개입은 이름만으로 포함/제외와 상태 전이의 차이를 알기 어렵다. 접힌 도움말이나 툴팁이 아니라
+      // 실제 결과를 예와 함께 항상 노출한다(자동 흐름이 기본이고 버튼은 예외라는 경계도 같은 자리에서 명시).
+      safe(function(){
+        const guide=document.createElement("div"); guide.className="mlactions";
+        const title=document.createElement("div"); title.className="mt";
+        title.textContent=T("선택 버튼을 누르면 — 자동 흐름은 버튼 없이 진행됩니다","What the optional buttons do — automatic flow needs no clicks");
+        guide.appendChild(title);
+        const grid=document.createElement("div"); grid.className="mg";
+        const action=function(label,body){const x=document.createElement("div");x.className="ma";const b=document.createElement("b");b.textContent=label;const s=document.createElement("span");s.textContent=body;x.appendChild(b);x.appendChild(s);grid.appendChild(x);};
+        action(T("맞음 확인","Confirm"),T("예: 실제 코드를 봐서 맞다고 앎 → 바로 ‘검증됨’, 다음 정찰 자료에 우선 포함.","Example: you checked the code and know it is right → immediately verified and prioritized in future scout packages."));
+        action(T("틀림 정정","Correct"),T("예: 두 파일이 더는 관련 없음을 앎 → 맞는 결합 후보에서 제외하고 재실수 방지용 ‘틀림 판명’ 경고로만 남김. 새 자동 근거가 쌓이면 복권 가능.","Example: you know the files are no longer related → remove it from valid-coupling candidates and keep it only as a 'known wrong' warning. New automatic evidence can rehabilitate it."));
+        action(T("고정","Pin"),T("예: 자동 판정과 별개로 꼭 참고해야 함 → 맞음/틀림 딱지는 바꾸지 않고 ‘참고할 결합 후보’ 그룹에 강제로 넣음. 항목 상한 안에서 선별되며 해제 가능.","Example: it must remain a candidate regardless of the automatic verdict → keep its right/wrong status but force it into the candidate pool. It is selected within the package cap and can be unpinned."));
+        action(T("차단","Ban"),T("예: 낡거나 위험해 정찰에 아예 보이면 안 됨 → 확인·고정보다 우선해 정찰 자료에서 완전히 제외. 해제 전에는 자동 복귀하지 않음.","Example: it is stale or unsafe and must not appear in recon at all → remove it completely from scout packages ahead of confirms or pins, with no automatic return until unbanned."));
+        guide.appendChild(grid);
+        const foot=document.createElement("div"); foot.className="mf";
+        foot.textContent=T("공통: 네 버튼은 이 PC의 관찰 일지와 다음 정찰 자료 선별만 바꾸며, 코드나 Project MAP을 직접 수정하지 않습니다.","All four affect only this PC's field journal and future scout-package selection; they do not directly edit code or the Project MAP.");
+        guide.appendChild(foot); card.appendChild(guide);
+      });
       // 프로젝트별 관찰 신호 1줄 — 전역 임계값 대신 '이 폴더의 장부'가 신뢰 판단 재료(advisory·사용자 결정 2026-07-09).
       safe(function(){
         const h=ml.health; if(!h||!h.entries) return;
@@ -6459,14 +6545,14 @@ class Dashboard {
           // 6개 지표 문장 나열 → 지표 칩 행(분수는 칩 안 굵은 값) + 편향 주의는 ⓘ 툴팁(2026-07-20 UI 개선)
           const lb9=document.createElement("span"); lb9.className="muted"; lb9.style.marginRight="4px";
           lb9.textContent=T("관찰 신호","Observation signal");
-          lb9.title=T("관측치이며 편향은 양방향일 수 있어요 — 자동 반박 없음=반박 과소·지도 동봉 노출=확인 과대","Observational; bias can go both ways — no auto-dispute = disputes undercounted · map-attached exposure = confirms overcounted");
+          lb9.title=T("관측치이며 편향은 양방향일 수 있어요 — 명시 반박 표지는 이력에 자동 기록되지만 근거 조건을 통과해야만 틀림 강등·평문 암시는 미집계·지도 동봉 노출은 확인 과대 가능","Observational; bias can go both ways — explicit refute markers enter history automatically but demote only after evidence checks · implied prose is not counted · map-attached exposure may overcount confirms");
           line.appendChild(lb9);
           const chip9=function(lbl,val,cls,tip){ const c9=document.createElement("span"); c9.className="pfm "+(cls||""); const b9=document.createElement("b"); b9.textContent=String(val); c9.appendChild(document.createTextNode(lbl+" ")); c9.appendChild(b9); if(tip) c9.title=tip; line.appendChild(c9); };
           chip9(T("확인","confirmed"), h.verified+"/"+h.entries, "okc");
           if(h.reusedDen>=5) chip9(T("재사용→확인","reused→confirm"), h.reusedNum+"/"+h.reusedDen, "");
           if(h.autoDen>=5) chip9(T("기계 확인","machine confirm"), h.autoNum+"/"+h.autoDen, "");
           if(h.reinterpreted>0) chip9(T("재해석 강등","reinterpreted"), h.reinterpreted, "note");
-          chip9(T("반박","disputed"), h.disputedEntries, h.disputedEntries?"warn":"z", T("수동 기록 기준","manually recorded"));
+          chip9(T("반박","disputed"), h.disputedEntries, h.disputedEntries?"warn":"z", T("명시 반박 표지(근거 미충족 기록 포함) + 사람 정정 이력","explicit refute markers (including record-only markers) + human correction history"));
           chip9(T("복권","rehabilitated"), h.rehabilitated, h.rehabilitated?"okc":"z");
           const bi=document.createElement("span"); bi.className="muted"; bi.style.cssText="font-size:10px;cursor:help"; bi.textContent="ⓘ";
           bi.title=lb9.title; line.appendChild(bi);
@@ -6509,19 +6595,19 @@ class Dashboard {
         const t2=document.createElement("div"); t2.className="f";
         t2.textContent=T("제안 "+p.n.proposed+" · 동봉 "+p.n.attached+" · 확인 "+p.n.confirmed+" · 반박 "+p.n.disputed+(p.from?" · 출처: "+p.from:""),"proposed "+p.n.proposed+" · attached "+p.n.attached+" · confirmed "+p.n.confirmed+" · disputed "+p.n.disputed+(p.from?" · from: "+p.from:""));
         tx.appendChild(t1); tx.appendChild(t2); row.appendChild(tx);
-        const btn=(label,act,cls)=>{const b=document.createElement("button"); if(cls)b.className=cls; b.textContent=label; b.onclick=function(){ vscode.postMessage({type:"ledgerAct",act:act,sig:p.sig}); }; row.appendChild(b);};
-        if(p.status==="banned"){ btn(T("차단 해제","Unban"),"unban","secondary"); }
+        const btn=(label,act,cls,title)=>{const b=document.createElement("button"); if(cls)b.className=cls; b.textContent=label; if(title)b.title=title; b.onclick=function(){ vscode.postMessage({type:"ledgerAct",act:act,sig:p.sig}); }; row.appendChild(b);};
+        if(p.status==="banned"){ btn(T("차단 해제","Unban"),"unban","secondary",T("차단만 해제합니다. 그 뒤에는 남아 있는 확인·고정·자동 판정에 따라 다시 선별됩니다.","Removes only the ban; remaining confirmations, pins, and automatic status determine selection again.")); }
         else {
-          btn(p.pinned?T("고정 해제","Unpin"):T("고정","Pin"),p.pinned?"unpin":"pin","secondary");
-          btn(T("차단","Ban"),"ban","secondary");
-          if(p.lane==="trusted"&&!p.inMap) btn(T("장부로","Export"),"export","");
+          if(p.status!=="verified") btn(T("맞음 확인","Confirm"),"confirm","secondary",T("선택 개입 — 직접 맞다고 아는 경우 즉시 검증됨으로 올립니다. 자동 운용에 필요하지 않습니다.","Optional — immediately marks this verified when you personally know it is correct. Not required for automatic operation."));
+          if(p.status!=="disputed") btn(T("틀림 정정","Correct"),"dispute","secondary",T("선택 개입 — 맞는 결합 후보에서는 제외하고 재실수 방지용 틀림 경고로만 남깁니다. 완전 제외는 차단입니다.","Optional — remove this from valid-coupling candidates and keep it only as a known-wrong warning. Ban removes it completely."));
+          btn(p.pinned?T("고정 해제","Unpin"):T("고정","Pin"),p.pinned?"unpin":"pin","secondary",p.pinned?T("강제 후보 지정을 해제합니다. 맞음/틀림 상태는 바뀌지 않습니다.","Removes the forced candidate override; the right/wrong status is unchanged."):T("맞음/틀림 상태는 그대로 두고 정찰이 참고할 결합 후보 그룹에 강제로 넣습니다(꾸러미 항목 상한 안에서 선별).","Forces this into the coupling-candidate pool without changing its right/wrong status (selected within the package cap)."));
+          btn(T("차단","Ban"),"ban","secondary",T("확인·고정보다 우선해 다음 정찰 자료에서 계속 제외합니다. 기록은 남고 해제할 수 있습니다.","Excludes this from future scout packages ahead of confirms and pins. The record remains and can be unbanned."));
+          if(p.lane==="trusted"&&!p.inMap) btn(T("교범에 기록","Export to manual"),"export","");
         }
         card.appendChild(row);
       });
       if(ml.timeline.length){
-        const det=document.createElement("details"); const s=document.createElement("summary");
-        s.textContent=T("최근 사건 타임라인 ("+ml.timeline.length+")","Recent events ("+ml.timeline.length+")");
-        det.appendChild(s);
+        const det=keyedDetails("ledgerTimeline:"+(d.scoutTarget&&d.scoutTarget.repo||ml.mapRel||"?"), T("최근 사건 타임라인 ("+ml.timeline.length+")","Recent events ("+ml.timeline.length+")"));
         const ICON={proposed:"✚",attached:"▶",confirmed:"✔",user_confirm:"✔",refuted:"✖",user_dispute:"✖",pinned:"📌",unpinned:"📌",banned:"🚫",unbanned:"🚫",superseded:"↷",tombstone:"†",exported:"📤"};
         const NAME={proposed:T("정찰 제안","proposed"),attached:T("자료에 동봉","attached to package"),confirmed:T("검증이 확인","verified confirm"),user_confirm:T("사용자 확인","user confirm"),refuted:T("검증이 반박","verify refute"),user_dispute:T("사용자 정정","user dispute"),pinned:T("고정","pinned"),unpinned:T("고정 해제","unpinned"),banned:T("차단","banned"),unbanned:T("차단 해제","unbanned"),superseded:T("대체됨","superseded"),tombstone:T("소멸","gone"),exported:T("장부로 내보냄","exported")};
         ml.timeline.forEach(e=>{const r=document.createElement("div"); r.className="mhist";
@@ -7508,6 +7594,9 @@ export function activate(context: vscode.ExtensionContext): void {
     // 정적 새탭 2종도 리로드 후 죽은 탭으로 남지 않게 — 정적 내용이라 재베이크 비용 0(감사 지적 2026-07-10).
     vscode.window.registerWebviewPanelSerializer("codexBridgeReconGuide", {
       deserializeWebviewPanel: async (panel) => { try { panel.dispose(); } catch { /* 무해 */ } try { openReconGuide(); } catch { /* 무해 */ } },
+    }),
+    vscode.window.registerWebviewPanelSerializer("codexBridgeMapModeGuide", {
+      deserializeWebviewPanel: async (panel) => { try { panel.dispose(); } catch { /* 무해 */ } try { openMapModeGuide(); } catch { /* 무해 */ } },
     }),
     vscode.window.registerWebviewPanelSerializer("codexBridgeScoutHealth", {
       // 재베이크 금지(Codex 반례: 스크립트 없는 정적 패널이라 원래 ws를 저장할 수 없어, 그 순간의 활성 폴더로
