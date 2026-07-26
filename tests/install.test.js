@@ -390,6 +390,8 @@ function cleanup(sb) { try { fs.rmSync(sb.dir, { recursive: true, force: true })
     findInstalledExtensionDir,
     overlaySameVersionExtension,
     hasLocalPackageToolchain,
+    resolveCommandOnPath,
+    resolveCodeCli,
   } = require(INSTALL);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "codex-bridge-overlay-test-"));
   const src = path.join(tmp, "source");
@@ -441,6 +443,25 @@ function cleanup(sb) { try { fs.rmSync(sb.dir, { recursive: true, force: true })
   const rootsBound = extensionRootCandidates(cliA, { VSCODE_CWD: envB, VSCODE_PORTABLE: path.join(envB, "data") }, path.join(tmp, "home"));
   ok(rootsBound[0] === path.join(tmp, "cli-a", "data", "extensions"), "버전을 조회한 CLI의 포터블 폴더가 첫 대상");
   ok(!rootsBound.some((p) => p.startsWith(envB)), "다른 열린 VS Code의 환경변수 폴더를 오버레이 후보로 섞지 않음");
+
+  const pathRoot = path.join(tmp, "path-cli");
+  const pathBin = path.join(pathRoot, "bin");
+  const pathCli = path.join(pathBin, process.platform === "win32" ? "code.cmd" : "code");
+  fs.mkdirSync(pathBin, { recursive: true });
+  fs.writeFileSync(pathCli, process.platform === "win32" ? "@echo 1.0.0\r\n" : "#!/bin/sh\necho 1.0.0\n");
+  if (process.platform !== "win32") fs.chmodSync(pathCli, 0o755);
+  const pathEnv = { ...process.env, PATH: pathBin };
+  delete pathEnv.CODE_CLI; delete pathEnv.VSCODE_CWD; delete pathEnv.VSCODE_GIT_ASKPASS_NODE; delete pathEnv.CLAUDE_CODE_EXECPATH;
+  const resolvedBare = resolveCommandOnPath("code", pathEnv);
+  const selectedBare = resolveCodeCli(pathEnv);
+  const realPathCli = fs.realpathSync(pathCli);
+  const sameFsPath = (a, b) => process.platform === "win32"
+    ? String(a).toLowerCase() === String(b).toLowerCase()
+    : a === b;
+  ok(sameFsPath(resolvedBare, realPathCli) && sameFsPath(selectedBare, realPathCli), "PATH의 code도 실행한 실제 파일 절대경로로 결속");
+  const rootsFromBare = extensionRootCandidates(selectedBare, pathEnv, path.join(tmp, "home"));
+  ok(rootsFromBare[0] === path.join(pathRoot, "data", "extensions"), "PATH 포터블 CLI의 목록 조회와 오버레이 폴더가 같은 설치본");
+  ok(extensionRootCandidates("code", {}, path.join(tmp, "home")).length === 0, "절대경로로 결속 못 한 bare code는 다른 설치본 추측 없이 거부");
 
   const installSource = fs.readFileSync(INSTALL, "utf8");
   ok(/const extensionOk = tryInstallVsix\(dryRun\);[\s\S]{0,300}if \(!extensionOk \|\| !doctorOk\)[\s\S]{0,200}return false;/.test(installSource), "확장 동일 버전 갱신 실패는 설치 완료 경로로 진행하지 않음");

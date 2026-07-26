@@ -409,7 +409,19 @@ function withContractLockV10(lockPath, fn, maxTries) {
     if (!tok) return { ok: false, state: "invalid", lockPath, error: "lock-invalid: " + lockPath }; // 형식 불명 — 2단 승인 사다리 대상
     try { process.kill(tok.pid, 0); lastState = "alive"; } // 생존 — 재시도
     catch (ke) {
-      if (ke && ke.code === "ESRCH") return { ok: false, state: "dead-valid", lockPath, pid: tok.pid, error: "dead-lock-holder: " + lockPath + " (pid " + tok.pid + " 사망 — 승인 후 정리)" };
+      if (ke && ke.code === "ESRCH") {
+        // 토큰을 읽은 직후 정상 보유자가 기록을 끝내고 잠금을 지울 수 있다. 그 찰나를 죽은
+        // 잔재로 단정하면 동시에 시작한 정상 저장 하나가 사라진다. 같은 토큰이 아직 남아
+        // 있을 때만 dead-valid이고, 사라졌거나 교체됐으면 새 상태로 다시 경쟁한다.
+        let now = null;
+        try { now = fs.readFileSync(lockPath, "utf8"); }
+        catch (re) {
+          if (re && re.code === "ENOENT") { lastState = "absent"; continue; }
+          return { ok: false, state: "unreadable", lockPath, error: "lock-unreadable-after-owner-exit: " + lockPath };
+        }
+        if (now !== raw) { lastState = "alive"; continue; }
+        return { ok: false, state: "dead-valid", lockPath, pid: tok.pid, error: "dead-lock-holder: " + lockPath + " (pid " + tok.pid + " 사망 — 승인 후 정리)" };
+      }
       if (ke && ke.code === "EPERM") lastState = "alive"; // 존재하나 조회 권한 없음 — 보유 중 취급(사망 단정 금지)
       else return { ok: false, state: "owner-unverified", lockPath, error: "lock-owner-unverified: " + lockPath };
     }

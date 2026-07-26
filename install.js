@@ -350,9 +350,13 @@ function extensionRootCandidates(codeCli, env = process.env, home = HOME) {
   const add = (p) => { if (p) { const abs = path.resolve(String(p)); if (!out.includes(abs)) out.push(abs); } };
   if (env.CODEX_BRIDGE_EXTENSIONS_DIR) return [path.resolve(String(env.CODEX_BRIDGE_EXTENSIONS_DIR))];
   const cli = String(codeCli || "");
+  // bare `code`만으로는 PATH의 어느 설치본을 실행했는지 여기서 증명할 수 없다. 잘못된 다른
+  // VS Code를 덮는 것보다 명시 위치를 요구하며 실패하는 편이 안전하다(resolveCodeCli는 정상
+  // 자동탐지에서 bare 명령을 실제 실행 파일 절대경로로 바꿔 이 경로에 넘긴다).
+  if (!/[\\/]/.test(cli)) return [];
   // 버전을 조회한 바로 그 CLI에서 유도한 포터블 루트를 항상 먼저 쓴다. VSCODE_CWD/PORTABLE은
   // 다른 열린 창의 값일 수 있으므로 여기서 독립 후보로 섞지 않는다(A CLI 확인→B 폴더 갱신 방지).
-  if (/[\\/]/.test(cli)) add(path.join(path.dirname(path.dirname(path.resolve(cli))), "data", "extensions"));
+  add(path.join(path.dirname(path.dirname(path.resolve(cli))), "data", "extensions"));
   const insiders = /insiders/i.test(cli);
   add(path.join(home, insiders ? ".vscode-insiders" : ".vscode", "extensions"));
   return out;
@@ -517,7 +521,7 @@ function vscodeSignalClis(env) {
   return [...new Set(list)];
 }
 // (B) OS 표준 설치 위치 후보(설치형 VS Code / Insiders / Flatpak 등). PATH의 code보다 뒤에 시도.
-function standardCodeClis() {
+function standardCodeClis(env = process.env) {
   const isWin = process.platform === "win32";
   const isMac = process.platform === "darwin";
   const bin = isWin ? "code.cmd" : "code";
@@ -525,9 +529,9 @@ function standardCodeClis() {
   const fromRoot = (root) => { if (root) list.push(path.join(root, "bin", bin)); };
   if (isWin) {
     // 환경변수가 없어도 동작하도록 표준 기본값으로 폴백(LOCALAPPDATA→홈/AppData/Local, ProgramFiles→C:\Program Files).
-    const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
-    const progFiles = process.env.ProgramFiles || "C:\\Program Files";
-    const progFiles86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+    const localAppData = env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+    const progFiles = env.ProgramFiles || "C:\\Program Files";
+    const progFiles86 = env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
     fromRoot(path.join(localAppData, "Programs", "Microsoft VS Code"));
     fromRoot(path.join(progFiles, "Microsoft VS Code"));
     fromRoot(path.join(progFiles86, "Microsoft VS Code"));
@@ -547,26 +551,56 @@ function standardCodeClis() {
 // 전체 우선순위(순수함수 — 테스트로 잠금): 현재 VS Code 신호 → PATH의 'code' → OS 표준위치.
 // (CODE_CLI 명시는 resolveCodeCli에서 이보다 먼저 단락처리.) 'code'는 PATH 해석용 bare 토큰(존재검사 없이 --version으로 확인).
 function codeCliPriority(env) {
-  return [...new Set([...vscodeSignalClis(env), "code", ...standardCodeClis()])];
+  return [...new Set([...vscodeSignalClis(env), "code", ...standardCodeClis(env)])];
 }
 // 하위호환: 신호+표준 후보(‘code’ 제외) — 기존 호출/테스트용.
 function candidateCodeClis(env) {
-  return [...new Set([...vscodeSignalClis(env), ...standardCodeClis()])];
+  return [...new Set([...vscodeSignalClis(env), ...standardCodeClis(env)])];
+}
+// PATH의 bare 명령을 실제 실행 파일에 결속한다. 같은 이름의 다른 VS Code 폴더를 갱신하지
+// 않으려면 `--version`을 실행한 대상과 extensions 루트를 유도한 대상이 같은 절대경로여야 한다.
+function resolveCommandOnPath(command, env = process.env, platform = process.platform, cwd = process.cwd()) {
+  let cmd = String(command || "").trim();
+  if (cmd.startsWith('"') && cmd.endsWith('"')) cmd = cmd.slice(1, -1);
+  if (!cmd) return null;
+  const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+  if (/[\\/]/.test(cmd)) {
+    try { return fs.statSync(cmd).isFile() ? real(cmd) : null; } catch { return null; }
+  }
+  const isWin = platform === "win32";
+  const pathText = String(env.PATH || env.Path || env.path || "");
+  const delim = isWin ? ";" : ":";
+  const dirs = [...new Set([...(isWin && cwd ? [cwd] : []), ...pathText.split(delim)]
+    .map((p) => String(p || "").trim().replace(/^"|"$/g, "")).filter(Boolean))];
+  let suffixes = [""];
+  if (isWin && !path.extname(cmd)) {
+    const pathext = String(env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").map((x) => x.trim()).filter(Boolean);
+    suffixes = [...new Set(["", ...pathext, ...pathext.map((x) => x.toLowerCase())])];
+  }
+  for (const dir of dirs) for (const suffix of suffixes) {
+    const candidate = path.join(dir, cmd + suffix);
+    try { if (fs.statSync(candidate).isFile()) return real(candidate); } catch { /* 다음 PATH 후보 */ }
+  }
+  return null;
 }
 // 실제로 동작하는 code 실행파일인지 확인(--version 시도). 경로/공백 있으면 따옴표, bare 이름은 그대로(PATHEXT 해석 위해).
-function codeCliWorks(tok) {
+function codeCliWorks(tok, env = process.env) {
   if (!tok) return false;
   const t = /[\\/\s]/.test(String(tok)) ? q(fwd(tok)) : String(tok);
-  try { const r = cp.spawnSync(`${t} --version`, { shell: true, encoding: "utf8", timeout: 30000 }); return !!(r && r.status === 0); }
+  try { const r = cp.spawnSync(`${t} --version`, { shell: true, encoding: "utf8", timeout: 30000, env }); return !!(r && r.status === 0); }
   catch { return false; }
 }
 // 쓸 code CLI를 결정: ① CODE_CLI 명시(그대로 신뢰 — 자동탐지 안 함; 테스트가 가짜값으로 자동설치 무력화하는 계약 유지)
 // ② codeCliPriority 순서대로 — 현재 VS Code 신호(존재+동작) → PATH 'code'(동작) → OS 표준(존재+동작). 못 찾으면 null.
-function resolveCodeCli() {
-  if (process.env.CODE_CLI) return process.env.CODE_CLI;
-  for (const tok of codeCliPriority()) {
-    if (tok === "code") { if (codeCliWorks("code")) return "code"; }      // PATH bare — 존재검사 없이 --version
-    else if (fs.existsSync(tok) && codeCliWorks(tok)) return tok;          // 경로 후보 — 실제 존재+동작
+function resolveCodeCli(env = process.env) {
+  if (env.CODE_CLI) {
+    const bound = resolveCommandOnPath(env.CODE_CLI, env);
+    if (bound && codeCliWorks(bound, env)) return bound;
+    return codeCliWorks(env.CODE_CLI, env) ? env.CODE_CLI : null; // 셸 별칭이면 같은 버전 갱신은 명시 extensions 경로를 요구
+  }
+  for (const tok of codeCliPriority(env)) {
+    const bound = resolveCommandOnPath(tok, env);
+    if (bound && codeCliWorks(bound, env)) return bound;
   }
   return null;
 }
@@ -848,4 +882,4 @@ if (require.main === module) {
   else if (!cmdInstall(has("--dry-run") || has("-n"))) process.exitCode = 1;
 }
 
-module.exports = { pickVsix, currentVsix, buildInstallCmd, installedExtensionVersionFromList, installVsixWithCli, extensionRootCandidates, findInstalledExtensionDir, sameVersionOverlayEntries, overlaySameVersionExtension, hasLocalPackageToolchain, candidateCodeClis, findRootUpwards, vscodeSignalClis, standardCodeClis, codeCliPriority, bridgeRuntimeParity, OUR_HOOKS, BRIDGE_SCRIPTS, isOurHookCmd }; // 뒤 3개: hook-setup.ts와의 규칙 패리티 테스트용
+module.exports = { pickVsix, currentVsix, buildInstallCmd, installedExtensionVersionFromList, installVsixWithCli, extensionRootCandidates, findInstalledExtensionDir, sameVersionOverlayEntries, overlaySameVersionExtension, hasLocalPackageToolchain, resolveCommandOnPath, resolveCodeCli, candidateCodeClis, findRootUpwards, vscodeSignalClis, standardCodeClis, codeCliPriority, bridgeRuntimeParity, OUR_HOOKS, BRIDGE_SCRIPTS, isOurHookCmd }; // 뒤 3개: hook-setup.ts와의 규칙 패리티 테스트용
