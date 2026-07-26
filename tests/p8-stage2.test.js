@@ -60,6 +60,21 @@ console.log("[2] 상태 6분류(v10) — dead-valid·invalid·unreadable·legacy
   r = CL.withContractLockV10(LOCK, () => 1, 1);
   ok(!r.ok && r.state === "dead-valid", "구형 토큰+사망 pid=dead-valid(전환기에도 사다리 일관)");
   fs.unlinkSync(LOCK);
+  // 보유자가 토큰 판독 직후 정상 저장을 끝내고 잠금을 해제한 찰나를 결정론적으로 재현한다.
+  // 이 경우는 죽은 잔재가 아니라 다음 저장자가 다시 획득해야 하는 정상 인계다.
+  fs.writeFileSync(LOCK, JSON.stringify({ v: 1, pid: deadPid, rnd: "released", ts: "t" }));
+  const originalKill = process.kill;
+  try {
+    process.kill = (pid, signal) => {
+      if (pid === deadPid) {
+        fs.unlinkSync(LOCK);
+        const e = new Error("owner exited after unlock"); e.code = "ESRCH"; throw e;
+      }
+      return originalKill.call(process, pid, signal);
+    };
+    r = CL.withContractLockV10(LOCK, () => "saved-after-release", 2);
+  } finally { process.kill = originalKill; }
+  ok(r.ok && r.result === "saved-after-release" && !fs.existsSync(LOCK), "정상 해제 직후 ESRCH는 죽은 잔재 오판 없이 재시도");
   ok(typeof CL.parseLockToken === "function" && CL.parseLockToken("") === null && CL.parseLockToken(JSON.stringify({ v: 1, pid: 1, rnd: "x", ts: "t" })).form === "v10", "토큰 판독기 — 신형(전 필드 엄격)/무효 분류");
 }
 

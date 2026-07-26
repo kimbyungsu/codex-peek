@@ -1394,8 +1394,32 @@ function validateIntentPolicy(pol) {
         errs.push("predicateExpr: 깊이/크기 상한 초과(무사망 계약 — 1차 #1)");
     if (typeof pol.predicateDescription !== "string" || !pol.predicateDescription.trim())
         errs.push("predicateDescription 필요(사람용)");
-    if (typeof pol.chosenMeaning !== "string" || !pol.chosenMeaning.trim())
-        errs.push("chosenMeaning 필요");
+    if (typeof pol.chosenMeaning === "string") {
+        if (!pol.chosenMeaning.trim())
+            errs.push("chosenMeaning 필요");
+    }
+    else {
+        const cm = pol.chosenMeaning;
+        if (!cm || typeof cm !== "object" || Array.isArray(cm))
+            errs.push("chosenMeaning은 문자열 또는 typed v1 객체여야");
+        else {
+            if (Object.keys(cm).sort().join(",") !== "disposition,opClass,version")
+                errs.push("chosenMeaning typed v1은 {version,disposition,opClass} 정확 키만 허용");
+            if (cm.version !== 1)
+                errs.push("chosenMeaning.version은 1이어야");
+            if (cm.disposition !== "apply" && cm.disposition !== "decline")
+                errs.push("chosenMeaning.disposition은 apply|decline이어야");
+            if (typeof cm.opClass !== "string" || !cm.opClass.trim())
+                errs.push("chosenMeaning.opClass 필요");
+            // typed 의미는 현재 지원하는 op-class 조건과 한 쌍이다. 지원 밖 predicate에 typed 의미를
+            // 붙여 두면 저장 때는 통과하고 자동 위임 때만 사라지는 반쪽 정책이 되므로 정본에서 거부한다.
+            if (!pe || pe.version !== 1 || pe.kind !== "op-class" || typeof pe.opClass !== "string" || !pe.opClass.trim()
+                || Object.keys(pe).sort().join(",") !== "kind,opClass,version")
+                errs.push("chosenMeaning typed v1은 predicateExpr v1 op-class 정확 형식과 함께여야");
+            else if (cm.opClass !== pe.opClass)
+                errs.push("chosenMeaning.opClass는 predicateExpr.opClass와 같아야");
+        }
+    }
     if (pol.exclusions !== undefined && (!Array.isArray(pol.exclusions) || !pol.exclusions.every((x) => typeof x === "string" && x)))
         errs.push("exclusions는 문자열 배열이어야");
     // 집합 의미 배열=정렬·중복 거부(1차 #3 — v1 '집합 배열 전체 정렬' 선례: 파일 자체가 canonical이어야 frontier 해시가 의미 결정론)

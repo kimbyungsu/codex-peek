@@ -104,9 +104,9 @@ function main(raw) {
   // 대상 어긋남 의심이면 '엉뚱한 레포의 지도를 만들라'고 안내하면 안 된다(Codex 설계검증 2026-07-10) —
   // 대상 지정을 먼저 시키고, 지도 명령도 의심 레포 기준으로 바꾼다. 진단 실패는 기존 안내 유지(fail-open).
   // 탐색 담당 선택 반영(scoutArm 1차 blocker③ — 게이트 안내 명령이 대시보드 선택과 충돌하지 않게):
-  // 실효 deepseek면 DeepSeek 러너를 안내(강등이면 기본 유지 — scoutArmView가 정직 강등).
+  // 실효 담당의 러너를 안내(deepseek 강등이면 기본 유지 — scoutArmView가 정직 강등. P6: codex 포함).
   let runner = "scope-scout-self.js";
-  try { if (scoutArmView(ws).eff === "deepseek") runner = "scope-scout-deepseek.js"; } catch { /* 판독 실패=기본 */ }
+  try { const e9 = scoutArmView(ws).eff; if (e9 === "deepseek") runner = "scope-scout-deepseek.js"; else if (e9 === "codex") runner = "scope-scout-codex.js"; } catch { /* 판독 실패=기본 */ }
   let cmd = `node scripts/${runner} "${target}"`;
   let driftNote = "";
   try {

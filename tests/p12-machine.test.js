@@ -327,13 +327,13 @@ console.log("[7] 배선 소스 계약 — 양 분기·flagVerdict machine·같�
   ok(/supersedeIntegrity\(session, "machine-verdict", ws\)/.test(src), "machine 경보 — 새 답마다 최신 1건 supersede 수명주기+ws 격리(2차 [주의]·3축 감사 blocker)");
   ok(/machineEffective: machine\.effective, machineDemoted: !!machine\.demoted, machineCorrected: !!machine\.corrected/.test(src), "통계 — 같은 appendVerdict 행에 machine 필드 추가(이중 집계 없음)");
   ok(/if \(profileSnap !== "core"\) return \{ machine: null, notice: "" \};/.test(src), "core 게이트 — integrity·legacy 무회귀(null)");
-  ok(/f\.tag !== "백로그"\) continue;/.test(src), "자동 등록 대상 — [백로그]만(동결 D-1)");
+  ok(/effTag !== "백로그"\) continue;/.test(src) && src.includes("const effTag = f.demotedTo || f.tag"), "자동 등록 대상 — 실효 태그 [백로그]만(동결 D-1 유지·증분 2: 입장 심사 강등분 포함 — §3.3 강등 지적도 보관함 보존)");
   const canon = CL.BASE_CORE.verifyBaseline;
   ok(canon.includes("[지적 목록 v1]") && canon.includes("[지적 목록 끝]") && /보류'로 강등한다\(fail-closed\)/.test(canon), "core 캐논 ko — 5) 블록 형식+강등 고지");
   ok(CL.BASE_CORE_EN.verifyBaseline.includes("[findings v1]") && CL.BASE_CORE_EN.verifyBaseline.includes("[findings end]"), "core 캐논 en — 5) 블록 형식");
   ok(/지적이 하나도 없으면 판정은 '검증: 통과'/.test(canon), "캐논 3) — 지적 0건=통과·비차단≥1=통과(보완) 정정(2차 [보완])");
   ok(/\[장부 자동 등록\]/.test(CL.BASE_CORE.rejudge) && /ledger auto-record/.test(CL.BASE_CORE_EN.rejudge), "재판단 규약 — 자동 등록 영수증 인용 의무로 개정");
-  ok(/보고에는 선택지를 명시하세요: ① 추가 검증 승인 ② 이 상태로 두기 ③ 상한 변경\(다음 지시부터\)\./.test(src) && (src.match(/State the user's options in the report/g) || []).length >= 2, "동승 — 2b 마지막 왕복 예고 4벌에 선택지 3종 명시");
+  ok(src.includes("④가 있을 때만 한 묶음으로 사용자에게 묻고") && src.includes("Ask one combined user question only when") && src.includes("[수용·처리]") && src.includes("[Rebutted and closed]"), "동승 — 2b 마지막 왕복 예고도 네 갈래 재판단 후 진짜 선택만 한 번에 질문");
 }
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);

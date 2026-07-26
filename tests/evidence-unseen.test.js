@@ -65,5 +65,30 @@ writeRollout("44444444-dddd", [userMsg("요청"), fc("ls")]);
 const r5 = citedFilesUnseen(ansGhost, ws, "44444444-dddd");
 ck("실재 안 하는 인용 파일은 unseen 대상 아님", r5.checked === true && r5.unseen.length === 0);
 
+console.log("[6] 장기 세션 — 파일 전체가 16MiB를 넘어도 최신 턴 경계와 도구 흔적은 판독");
+const largeId = "77777777-large";
+const largeFile = path.join(SESS, `rollout-${largeId}.jsonl`);
+fs.writeFileSync(largeFile, JSON.stringify(userMsg("아주 오래된 턴")) + "\n", "utf8");
+fs.truncateSync(largeFile, 17 * 1024 * 1024); // 오래된 세션 본문을 희소 파일로 재현(메모리·디스크 낭비 없이 구형 16MiB 거부를 발동)
+fs.appendFileSync(largeFile, "\n" + [userMsg("최신 검증 요청"), fc("rg -n pattern foo.ts bar.ts")].map((l) => JSON.stringify(l)).join("\n"), "utf8");
+const r6 = citedFilesUnseen(answer, ws, largeId);
+ck("오래된 이력 크기와 무관하게 최신 턴은 checked=true", r6.checked === true && r6.unseen.length === 0);
+
+const cutId = "88888888-cut";
+const cutFile = path.join(SESS, `rollout-${cutId}.jsonl`);
+fs.writeFileSync(cutFile, JSON.stringify(userMsg("꼬리 범위 밖 사용자 경계")) + "\n", "utf8");
+fs.truncateSync(cutFile, 17 * 1024 * 1024);
+fs.appendFileSync(cutFile, "\n" + JSON.stringify(fc("cat foo.ts bar.ts")), "utf8");
+ck("현재 턴 경계가 꼬리 범위 밖이면 과거 도구를 근거로 삼지 않고 checked=false", citedFilesUnseen(answer, ws, cutId).checked === false);
+
+const alignedId = "99999999-aligned";
+const alignedFile = path.join(SESS, `rollout-${alignedId}.jsonl`);
+const prefix = JSON.stringify(userMsg("오래된 턴")) + "\n";
+const alignedTurn = [userMsg("꼬리 시작과 정확히 맞은 최신 검증 요청"), fc("rg -n pattern foo.ts bar.ts")].map((l) => JSON.stringify(l)).join("\n") + "\n";
+fs.writeFileSync(alignedFile, prefix + alignedTurn, "utf8");
+fs.truncateSync(alignedFile, Buffer.byteLength(prefix) + 16 * 1024 * 1024); // tail 시작=최신 user 행 시작, 나머지는 희소 패딩
+const aligned = citedFilesUnseen(answer, ws, alignedId);
+ck("16MiB 꼬리가 완전한 user 행 시작에 맞으면 첫 행을 보존해 checked=true", aligned.checked === true && aligned.unseen.length === 0);
+
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
 process.exit(fail ? 1 : 0);

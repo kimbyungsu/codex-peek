@@ -11,10 +11,19 @@ function ok(c, m) { if (c) { pass++; console.log("  ✅ " + m); } else { fail++;
 const root = path.join(__dirname, "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const lock = JSON.parse(fs.readFileSync(path.join(root, "package-lock.json"), "utf8"));
+const readmeKo = fs.readFileSync(path.join(root, "README.md"), "utf8");
+const readmeEn = fs.readFileSync(path.join(root, "docs", "README.en.md"), "utf8");
 
 ok(typeof pkg.version === "string" && /^\d+\.\d+\.\d+$/.test(pkg.version), `package.json 버전 형식(${pkg.version})`);
 ok(lock.version === pkg.version, `lock 루트 버전 = package.json (${lock.version} vs ${pkg.version})`);
 ok(lock.packages && lock.packages[""] && lock.packages[""].version === pkg.version, `lock packages[""] 버전 = package.json (${lock.packages?.[""]?.version} vs ${pkg.version})`);
+const releaseBase = `releases/download/v${pkg.version}`;
+const installerName = `codex-peek-${pkg.version}-installer.zip`;
+const vsixName = `codex-bridge-${pkg.version}.vsix`;
+for (const [lang, doc] of [["ko", readmeKo], ["en", readmeEn]]) {
+  ok(doc.includes(`${releaseBase}/${installerName}`), `README ${lang}: 현재 버전 GitHub 전체 설치 묶음 링크`);
+  ok(doc.includes(`${releaseBase}/${vsixName}`), `README ${lang}: 현재 버전 GitHub VSIX 링크`);
+}
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

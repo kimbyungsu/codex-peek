@@ -169,6 +169,61 @@ function authorityOf(mapHash, idx) {
 
 // ── read-set 재계산기(§D — 제안·대조 공용: 대조=재생성 비교가 결정론) ─────────────────
 const entityHashOf = (ent) => sha1(PM.canonicalJsonOf(ent));
+// P9 정책 위임의 의미 경계. policyId/fp만 맞는다고 다른 종류의 제안을 대신 승인할 수는 없다.
+// scopeTarget은 사용자가 확정한 entity/subgraph 집합이다. 명시 대상·생성물·payload의 직접 변경 참조와,
+// topology가 주어지면 순수 적용 미리보기의 실제 changedIds까지 합친다. 비-project 정책은 그 전부가 승인
+// 범위 안일 때만 쓸 수 있다.
+function policyInvolvedIdsForPatch(patch, topo) {
+  const pl = patch && patch.payload || {};
+  const ids = new Set(PM.targetIdsOfPatch(patch));
+  const newNodes = Array.isArray(pl.newNodes) ? pl.newNodes : [];
+  const newEdges = Array.isArray(pl.newEdges) ? pl.newEdges : [];
+  for (const ent of [pl.node, pl.edge, ...newNodes, ...newEdges]) {
+    if (ent && typeof ent.id === "string") ids.add(ent.id);
+  }
+  if (patch.operation === "merge_node") {
+    for (const absorbed of Array.isArray(pl.absorbed) ? pl.absorbed : []) {
+      for (const key of ["rerouteEdgesTo", "anchorsTo", "evidenceTo"]) {
+        if (absorbed && typeof absorbed[key] === "string") ids.add(absorbed[key]);
+      }
+    }
+  }
+  if (patch.operation === "split_node") {
+    for (const reroute of Array.isArray(pl.edgeReroute) ? pl.edgeReroute : []) {
+      if (reroute && typeof reroute.edgeId === "string") ids.add(reroute.edgeId);
+    }
+  }
+  if (topo) {
+    try {
+      const effect = PM.applyOperationV2(topo, patch);
+      if (!effect || effect.errors.length || !effect.topo) return { ok: false, reason: "effect-unavailable", ids };
+      for (const id of effect.changedIds || []) if (typeof id === "string") ids.add(id);
+    } catch {
+      return { ok: false, reason: "effect-unavailable", ids };
+    }
+  }
+  return { ok: true, ids };
+}
+function policyAppliesToPatch(policy, patch, disposition, topo) {
+  if (!policy || !patch || PM.isPolicyOpV2(patch.operation)) return { ok: false, reason: "policy-or-patch" };
+  const pe = policy.predicateExpr || {};
+  const cm = policy.chosenMeaning;
+  if (pe.version !== 1 || pe.kind !== "op-class" || typeof pe.opClass !== "string"
+    || Object.keys(pe).sort().join(",") !== "kind,opClass,version") return { ok: false, reason: "predicate-unsupported" };
+  if (!cm || typeof cm !== "object" || Array.isArray(cm) || cm.version !== 1 || cm.disposition !== disposition || cm.opClass !== pe.opClass)
+    return { ok: false, reason: "meaning-mismatch" };
+  const op = String(patch.operation || "");
+  if (!(op === pe.opClass || op.startsWith(pe.opClass + "_"))) return { ok: false, reason: "op-class" };
+  const involvement = policyInvolvedIdsForPatch(patch, topo);
+  if (!involvement.ok) return { ok: false, reason: involvement.reason };
+  const involved = involvement.ids;
+  if ((policy.exclusions || []).some((id) => involved.has(id))) return { ok: false, reason: "excluded" };
+  if (policy.scope !== "project") {
+    const allowed = new Set(policy.scopeTarget || []);
+    if ([...involved].some((id) => !allowed.has(id))) return { ok: false, reason: "scope" };
+  }
+  return { ok: true };
+}
 function buildReadSetFor(topo, patch, ctx) {
   // ctx: { idx: DecisionIndexState, pol: policyState, fileHashOf(ref)→hash|null }
   const rs = {};
@@ -343,7 +398,7 @@ const DEFAULT_CLASSIFICATION = {
   change_relation: "verifier-resolved", split_node: "verifier-resolved", split_edge: "verifier-resolved",
   merge_node: "verifier-resolved", merge_edge: "verifier-resolved", widen: "verifier-resolved", narrow: "verifier-resolved",
   supersede: "verifier-resolved", tombstone_candidate: "needs-investigation",
-  change_steward: "intent-choice", change_authority: "intent-choice", rewrite_label: "verifier-resolved",
+  change_steward: "verifier-resolved", change_authority: "verifier-resolved", rewrite_label: "verifier-resolved", // P9 ⓒ 확정(2026-07-24): 비정책 의미 제안=검증 담당 판정(카드 폐지 — 정책 op만 사용자 선택)
   create_intent_policy: "intent-choice", supersede_intent_policy: "intent-choice", revoke_intent_policy: "intent-choice",
 };
 function classifyPatch(repo, mapId, patchId) {
@@ -365,11 +420,134 @@ function classifyPatch(repo, mapId, patchId) {
     if (cur.st !== "ok") return { ok: false, error: "pending 재판독 실패" };
     if (cur.data.lifecycle === "claimed") return { ok: false, error: "claimed 상태 — classify 불가(진행 중)" };
     if (["resolved", "expired", "resolved-noop"].includes(cur.data.lifecycle)) return { ok: false, error: "종결 상태(" + cur.data.lifecycle + ") — 재분류 금지(재적용 차단: 13차 #6)" };
-    const rec = { ...cur.data, lifecycle, classification, classifiedAt: new Date().toISOString(), semanticErrors: verdict.errors };
+    // P8(설계 v10): terminal 종결은 기계 판독 expireCode를 같은 원자 쓰기에 동봉(반환 코드는 프로세스
+    // 사망으로 유실될 수 있다 — 재시작 복구는 expireCode로만 분기·expireReason은 사람용).
+    const rec = { ...cur.data, lifecycle, classification, classifiedAt: new Date().toISOString(), semanticErrors: verdict.errors, ...(lifecycle === "expired" ? { expiredAt: new Date().toISOString(), expireReason: "classify hard-reject: " + (verdict.errors[0] || ""), expireCode: "hard-reject" } : {}) };
     return CL.atomicWrite(f, JSON.stringify(rec, null, 1)) ? { ok: true } : { ok: false, error: "pending 갱신 실패" };
   });
   if (!wrote.ok || !wrote.result.ok) return { ok: false, error: (wrote.result && wrote.result.error) || wrote.error };
   return { ok: true, classification, errors: verdict.errors };
+}
+
+// P9 v12 개정 ②(ⓒ 확정 2026-07-24): 기존 '비정책 op+classification=intent-choice' pending을 재분류로 전환 —
+// 기본 분류 개정(change_steward/authority→verifier-resolved) 전에 저장된 pending이 영구 잔존하지 않게, 실행기가
+// 시작 시 1회 스윕한다. classified만 대상(claimed·종결=classifyPatch가 자체 거부)·정책 op=불가침(사용자 선택 전용).
+// 유물 표지 기록(원자·nsLock — 표지 실패의 침묵 금지): classified 상태에만 legacyReclass(+rebasedFrom) 부여.
+function markLegacyReclassMark(repo, mapId, patchId, rebasedFrom) {
+  const f = path.join(dirsFor(repo, mapId).pending, patchId + ".json");
+  const w = withNsLock(repo, mapId, () => {
+    const cur = readJson3(f);
+    if (cur.st !== "ok" || cur.data.lifecycle !== "classified") return { ok: false, reason: "not-classified" };
+    const rec2 = { ...cur.data, legacyReclass: true, reclassifiedAt: new Date().toISOString(), ...(rebasedFrom ? { rebasedFrom } : {}) };
+    return CL.atomicWrite(f, JSON.stringify(rec2, null, 1)) ? { ok: true } : { ok: false, reason: "write" };
+  });
+  return w.ok && w.result && w.result.ok ? { ok: true } : { ok: false, reason: (w.result && w.result.reason) || w.reason || "lock" };
+}
+function sweepReclassifyNonPolicyIntentChoice(repo, mapId) {
+  const out = { scanned: 0, reclassified: 0, errors: 0, resolveIds: [] };
+  let names = [];
+  try { names = fs.readdirSync(dirsFor(repo, mapId).pending).filter((n) => n.endsWith(".json")); } catch { return out; }
+  const rebasedFromSet = new Set(); // 신본이 가리키는 구 유물 — 재소비 제외+만료 재시도(중복 재기반 차단)
+  const recs9 = [];
+  for (const n of names) {
+    const f = path.join(dirsFor(repo, mapId).pending, n);
+    let rec; try { rec = JSON.parse(fs.readFileSync(f, "utf8")); } catch { out.errors++; continue; }
+    if (rec && typeof rec.rebasedFrom === "string" && rec.rebasedFrom) rebasedFromSet.add(rec.rebasedFrom);
+    recs9.push({ f, rec });
+  }
+  for (const { f, rec } of recs9) {
+    if (!rec) continue;
+    const pid = rec.patch && rec.patch.patchId;
+    // f-253b9008 종결부: 표지 유물이 '어느 지점에서든' cas-stale로 만료돼도 소실시키지 않는다 — 재기반
+    // 재소비 대상(expired 원본은 불변·재기반 신본이 계보를 잇는다). 신본이 이미 있으면(rebasedFrom) 제외.
+    if (rec.lifecycle === "expired" && rec.expireCode === "cas-stale" && rec.legacyReclass === true && pid && !rebasedFromSet.has(pid)) {
+      const op0 = rec.patch && rec.patch.operation;
+      if (op0 && !PM.isPolicyOpV2(op0)) out.resolveIds.push(pid);
+      continue;
+    }
+    if (rec.lifecycle !== "classified") continue;
+    if (pid && rebasedFromSet.has(pid)) { // 신본이 이미 존재하는 구 유물=재소비 금지·만료만 재시도(expire 실패 잔존 회수)
+      try { expirePendingPatch(repo, mapId, pid, PM.opHashV2Of ? PM.opHashV2Of(rec.patch) : PM.opHashOf(rec.patch)); } catch { /* 다음 실행 재시도 */ }
+      continue;
+    }
+    const op = rec.patch && rec.patch.operation;
+    // 이전 스윕에서 전환됐지만 해소가 미완(inconclusive·일시 실패)으로 잔류한 유물 — 표지로 재소비 대상 유지
+    // (표지 없는 verifier-resolved는 정상 job 소관이라 불침).
+    if (rec.classification === "verifier-resolved" && rec.legacyReclass === true) { out.resolveIds.push(rec.patch.patchId); continue; }
+    if (rec.classification !== "intent-choice") continue;
+    if (!op || PM.isPolicyOpV2(op)) continue; // 정책 op=intent-choice 유지(ab-3 — 사용자 승인 증명 불가침)
+    out.scanned++;
+    const w = withNsLock(repo, mapId, () => {
+      const cur = readJson3(f);
+      if (cur.st !== "ok" || cur.data.lifecycle !== "classified" || cur.data.classification !== "intent-choice") return { ok: false };
+      const rec2 = { ...cur.data, classification: "verifier-resolved", legacyReclass: true, reclassifiedAt: new Date().toISOString() };
+      return CL.atomicWrite(f, JSON.stringify(rec2, null, 1)) ? { ok: true } : { ok: false };
+    });
+    if (w.ok && w.result && w.result.ok) { out.reclassified++; out.resolveIds.push(rec.patch.patchId); }
+    else out.errors++;
+  }
+  return out;
+}
+
+// ── P8: pending 종결 진입점(설계 v10 P8-0 ③ — 구 revision 종결 의무의 유일 표면) ─────────
+// lifecycle CAS 분기표(설계검증 8~9차): proposed|classified+opHash 일치=expired 전환 / claimed=busy 거부
+// (recover-first — 적용 중 pending 불가침·claim~map잠금 사이에 끼어드는 8차 재현 경로 차단) /
+// resolved|resolved-noop=already-applied 거부(적용 완료 불변) / 이미 expired=idempotent 성공 /
+// 부재·opHash 불일치=conflict 거부(다른 주체 관여 — 직접 삭제로 증명 경계를 우회하지 않는다).
+const EXPIRE_REQUEST_CODES = new Set(["superseded", "user-declined", "policy-declined"]);
+function expirePendingPatch(repo, mapId, patchId, expectedOpHash, expireCode) {
+  const code = expireCode === undefined ? "superseded" : expireCode;
+  if (!EXPIRE_REQUEST_CODES.has(code)) return { ok: false, reason: "invalid-code", error: "expireCode 허용값 아님(superseded|user-declined|policy-declined)" };
+  const w = withNsLock(repo, mapId, () => {
+    const f = pendingFileFor(repo, mapId, patchId);
+    const pr = readJson3(f);
+    if (pr.st === "absent") return { ok: false, reason: "conflict", error: "pending 부재" };
+    if (pr.st !== "ok") return { ok: false, reason: "conflict", error: "pending 판독 실패(" + pr.st + ")" };
+    const rec = pr.data;
+    if (rec.lifecycle === "expired") return { ok: true, reason: "idempotent", expireCode: rec.expireCode || null };
+    if (rec.lifecycle === "claimed") return { ok: false, reason: "busy", error: "claimed — recover-first(적용 중 pending 불가침)" };
+    if (rec.lifecycle === "resolved" || rec.lifecycle === "resolved-noop") return { ok: false, reason: "already-applied", error: "적용 완료 불변" };
+    if (!rec.patch || PM.opHashOf(rec.patch) !== expectedOpHash) return { ok: false, reason: "conflict", error: "opHash 불일치(다른 주체 관여)" };
+    if (rec.lifecycle !== "proposed" && rec.lifecycle !== "classified") return { ok: false, reason: "conflict", error: "미지 lifecycle(" + String(rec.lifecycle) + ")" };
+    const reason = code === "user-declined" ? "사용자가 이번 제안을 거부함(P9)"
+      : code === "policy-declined" ? "사용자가 확정한 정책에 따라 거부함(P9)"
+        : "revision superseded(P8 rev 전진)";
+    const next = { ...rec, lifecycle: "expired", expiredAt: new Date().toISOString(), expireReason: reason, expireCode: code };
+    return CL.atomicWrite(f, JSON.stringify(next, null, 1)) ? { ok: true, reason: "expired" } : { ok: false, reason: "conflict", error: "쓰기 실패" };
+  });
+  if (!w.ok) return { ok: false, reason: "lock", error: w.error };
+  return w.result;
+}
+
+// P8(재검증 blocker — terminal 기록 실패 시 rollback도 같은 잠금에 막혀 claimed 잔존): terminal 종결 기록과
+// claim 롤백 폴백을 '하나의 nsLock 안'에서 처리+잠금 경합은 bounded 재시도(경합 창은 짧은 파일 RMW라 수 ms —
+// 일시 경합은 재시도로 해소·영구 잔재는 어떤 구현도 잠금 없이 쓰면 상호배제가 깨지므로 정직 반환+기존 복구
+// 표면[gc·claim 사망 판정] 소관). 반환: {wrote, rolledBack?, error?} — wrote=false여도 rolledBack=true면
+// pending은 classified로 복원돼 rev 전진 CAS 대상.
+function persistTerminalExpire(repo, mapId, patchId, expireReason, expireCode, claimToken) {
+  const sleep = (ms) => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* 대기 실패=즉시 재시도 */ } };
+  for (let i = 0; i < 40; i++) { // ~2s(3차 재검증: 500ms는 긴 보유를 못 흡수 — 소진 잔존은 아래 자기 소유 재선점이 자연 회수)
+    const tw = withNsLock(repo, mapId, () => {
+      const f = pendingFileFor(repo, mapId, patchId);
+      const pr = readJson3(f);
+      if (pr.st !== "ok") return { wrote: false, error: "pending 판독 실패(" + pr.st + ")" };
+      const rec = pr.data;
+      // 3차 재검증(소유권 CAS — 기록 '전' 검사): 이 helper의 계약은 '자기 claim의 terminal 전환'뿐 —
+      // claimed+자기 pid+token 일치만 expired 전환. 그 외 lifecycle·타 소유 claim은 거부(아무 레코드나
+      // expired로 덮는 우회 차단 — expirePendingPatch의 lifecycle 분기표와 역할 분리).
+      if (rec.lifecycle !== "claimed") return { wrote: false, error: "소유권/상태 불일치(lifecycle=" + String(rec.lifecycle) + " — claimed 자기 claim만 terminal 전환)" };
+      // 4차 재검증: claimToken은 필수 정확 일치 — 빈 토큰이 같은 pid의 다른 claim을 덮는 우회 차단
+      if (typeof claimToken !== "string" || !claimToken) return { wrote: false, error: "claimToken 필수(빈 토큰으로 terminal 전환 불가)" };
+      if (!rec.claim || rec.claim.pid !== process.pid || rec.claim.token !== claimToken) return { wrote: false, error: "소유권 불일치(타 claim — terminal 전환 거부)" };
+      if (CL.atomicWrite(f, JSON.stringify({ ...rec, lifecycle: "expired", expiredAt: new Date().toISOString(), expireReason, ...(expireCode ? { expireCode } : {}) }, null, 1))) return { wrote: true };
+      // 기록 실패 — 같은 잠금 안에서 claim 롤백 시도(claimed 잔존 차단)
+      const back = { ...rec, lifecycle: "classified" }; delete back.claim;
+      return { wrote: false, rolledBack: CL.atomicWrite(f, JSON.stringify(back, null, 1)), error: "expired 쓰기 실패" };
+    });
+    if (tw.ok) return tw.result;
+    sleep(50); // 잠금 경합 — 재시도(일시 경합 흡수)
+  }
+  return { wrote: false, rolledBack: false, error: "nsLock 경합 지속(잔재 가능 — 자기 소유 claim은 다음 apply 재호출이 재선점 회수·잔재 잠금은 gc 소관)" };
 }
 
 // ── P4-3ⓐ 기준선 기록 훅 재료(설계 v8 — 증분 2·순수 계산) ─────────────────────
@@ -398,19 +576,30 @@ function baselineUpdatesFor(patch, decisionId, affectedIds, outTopo) {
 // ── apply(§B 클레임+§F 트랜잭션) ────────────────────────────────────────────────
 function applyPatch(repo, mapId, patchId, opts) {
   const o = opts || {};
+  const delegationArg = o.policyDelegation;
+  if (delegationArg !== undefined && (!delegationArg || typeof delegationArg !== "object" || Array.isArray(delegationArg)
+    || Object.keys(delegationArg).sort().join(",") !== "policyFp,policyId"
+    || typeof delegationArg.policyId !== "string" || !UUID_RE.test(delegationArg.policyId)
+    || typeof delegationArg.policyFp !== "string" || !/^[0-9a-f]{40}$/.test(delegationArg.policyFp))) {
+    return { ok: false, reasonCode: "decision-conflict", error: "policyDelegation은 {policyId(UUID),policyFp(sha1)} 정확 형식이어야" };
+  }
   // P3b C-4: 권위 분기 — blocked=플래그 무관 전면 거부(receipt-only 중단 위에 topology 변경 금지·설계검증
   // 2차 #3) / v2=플래그 불요(자동 적용 활성화 1-30) / legacy=기존 --pre-cutover 명시 필수. lazy require —
   // map-bindings가 이 모듈을 top-level require하므로 역방향은 실행 시점만(순환 초기화 회피).
+  // P8(설계 v10 P8-0 ④): 반환에 기계 판독 reasonCode 동봉 — 닫힌 열거(일시=wal-active|lock|write-failed|
+  // claim-busy / 영구-전진=cas-stale / 영구-park=hard-reject|authority-blocked|wal-corrupt|decision-conflict|
+  // semantic-reject|not-classified / 완료=already-applied). 명확히 매핑되지 않는 반환점은 코드 미부여 —
+  // 소비자는 미지·미부여=fail-closed park(기존 {ok,error} 문자열 무회귀).
   const auth0 = (() => { try { return require(path.join(__dirname, "map-bindings.js")).authorityStateFor(repo); } catch { return null; } })();
-  if (auth0 === null) return { ok: false, error: "권위 판독 불가(map-bindings 로드 실패) — 적용 거부(fail-closed)" };
-  if (auth0.st === "blocked") return { ok: false, error: "권위 상태 blocked(" + (auth0.reasonKey || "") + ": " + auth0.reason + ") — 적용 거부. 전환 중단 상태면 cutover 재실행으로 재개하라" };
+  if (auth0 === null) return { ok: false, reasonCode: "authority-blocked", error: "권위 판독 불가(map-bindings 로드 실패) — 적용 거부(fail-closed)" };
+  if (auth0.st === "blocked") return { ok: false, reasonCode: "authority-blocked", error: "권위 상태 blocked(" + (auth0.reasonKey || "") + ": " + auth0.reason + ") — 적용 거부. 전환 중단 상태면 cutover 재실행으로 재개하라" };
   o._authV2 = auth0.st === "v2"; // 기록 필드 분기 재료(아래 decision 조립 — 잠금 안 재검사와 함께 최종 확정)
   if (!o.preCutover && !o._authV2) return { ok: false, error: "--pre-cutover 명시 필수(§A — cutover 전 수동 적용 승인)" };
   const d = ensureDirs(repo, mapId);
   // §B ①′ 사전 검사: 활성 WAL 있으면 claim 자체를 만들지 않음
   const aw = activePipelineWalFor(repo);
-  if (aw.st === "unreadable") return { ok: false, error: "WAL 서랍 판독 불가(fail-closed)" };
-  if (aw.st === "active") return { ok: false, error: "활성 WAL 존재 — recoverWal 선행: " + aw.items.map((x) => x.decisionId).join(",") };
+  if (aw.st === "unreadable") return { ok: false, reasonCode: "wal-corrupt", error: "WAL 서랍 판독 불가(fail-closed)" };
+  if (aw.st === "active") return { ok: false, reasonCode: "wal-active", error: "활성 WAL 존재 — recoverWal 선행: " + aw.items.map((x) => x.decisionId).join(",") };
   // §B ① 클레임(nsLock — 3대 분기)
   // decisionId 발급은 nsLock '안'에서(12차 #5 — preview 경쟁 창 제거). 값은 클레임 결과로 회수.
   const claim = withNsLock(repo, mapId, () => {
@@ -418,10 +607,11 @@ function applyPatch(repo, mapId, patchId, opts) {
     const pr = readJson3(f);
     if (pr.st !== "ok") return { ok: false, error: "pending 판독 실패(" + pr.st + ")" };
     const rec = pr.data;
-    if (rec.lifecycle === "resolved" || rec.lifecycle === "expired" || rec.lifecycle === "resolved-noop") return { ok: false, error: "이미 종결(" + rec.lifecycle + ")" };
+    if (rec.lifecycle === "resolved" || rec.lifecycle === "resolved-noop") return { ok: false, reasonCode: "already-applied", error: "이미 종결(" + rec.lifecycle + ")" };
+    if (rec.lifecycle === "expired") return { ok: false, error: "이미 종결(expired)" }; // 코드 미부여 — 소비자는 pending의 영속 expireCode로 분기(P8 상태표 ⑦)
     if (rec.lifecycle === "claimed") {
       const cid = rec.claim && rec.claim.decisionId;
-      if (cid && fs.existsSync(path.join(d.wal, cid + ".json"))) return { ok: false, error: "진행 중(활성 WAL) — recoverWal" }; // ⓐ
+      if (cid && fs.existsSync(path.join(d.wal, cid + ".json"))) return { ok: false, reasonCode: "wal-active", error: "진행 중(활성 WAL) — recoverWal" }; // ⓐ
       const cw = cid ? readJson3(path.join(d.walComplete, cid + ".json")) : { st: "absent" };
       if (cw.st === "invalid" || cw.st === "unreadable") return { ok: false, error: "완료 영수증 손상/판독 불가 — conflict(재선점 금지·18차 #1)" };
       if (cw.st === "ok") { // ⓑ/ⓑ′ 완료 영수증 — 전체 검증 후 보충 종결·재적용 금지(18차 #1)
@@ -441,12 +631,12 @@ function applyPatch(repo, mapId, patchId, opts) {
         if (mk3r.st === "invalid" || mk3r.st === "unreadable") return { ok: false, error: "marker 손상 — conflict" };
         let markerOk = mk3r.st === "ok" && PM.canonicalJsonOf(mk3r.data) === PM.canonicalJsonOf(cwd.expectedMarker);
         if (!markerOk) { // ⓑ′: 파일 재검증을 통과했으므로 marker 보충 — 쓰기 결과 검사(18차 #2)
-          if (!CL.atomicWrite(mkPath, JSON.stringify(cwd.expectedMarker, null, 1))) return { ok: false, error: "marker 보충 실패 — 재시도 필요(종결 안 됨)" };
+          if (!CL.atomicWrite(mkPath, JSON.stringify(cwd.expectedMarker, null, 1))) return { ok: false, reasonCode: "write-failed", error: "marker 보충 실패 — 재시도 필요(종결 안 됨)" };
           markerOk = true;
         }
         const wrote = CL.atomicWrite(pendingFileFor(repo, mapId, patchId), JSON.stringify({ ...rec, lifecycle: "resolved", resolvedAt: new Date().toISOString() }, null, 1));
-        if (!wrote) return { ok: false, error: "영수증 확인·pending 종결 쓰기 실패 — 재시도 필요(supplemented 아님·18차 #2)" };
-        return { ok: false, error: "이미 적용 완료 — 검증 후 보충 종결(재적용 금지)", supplemented: true };
+        if (!wrote) return { ok: false, reasonCode: "write-failed", error: "영수증 확인·pending 종결 쓰기 실패 — 재시도 필요(supplemented 아님·18차 #2)" };
+        return { ok: false, reasonCode: "already-applied", error: "이미 적용 완료 — 검증 후 보충 종결(재적용 금지)", supplemented: true };
       }
       { // 영수증 소실 혼합 상태(19차 #1): wal·wal-complete 모두 부재인데 durable 산출물이 하나라도 있으면
         // pre-WAL 사망이 아니다 — 자동 재선점 금지(topology는 새 decisionId로 재적용 왜곡·정책은 영구 claimed).
@@ -462,8 +652,11 @@ function applyPatch(repo, mapId, patchId, opts) {
       }
       // ⓒ pre-WAL 사망 회수
       const pid = rec.claim && rec.claim.pid;
-      const dead = !Number.isInteger(pid) || (() => { try { process.kill(pid, 0); return false; } catch (e) { return !!(e && e.code === "ESRCH"); } })();
-      if (!dead) return { ok: false, error: "타 프로세스 claim 보유 중" };
+      // P8(3차 재검증 — terminal 기록 실패 후 claimed 잔존의 자연 회수): 자기 프로세스 소유 claim은 사망과
+      // 동일하게 재선점 허용 — 같은 프로세스의 동시 apply는 이 nsLock으로 직렬화되므로 활성 진행과의 경합이
+      // 없고, 위의 WAL·완료 영수증·durable 잔존 검사를 이미 통과한 상태(pre-WAL)라 안전.
+      const dead = !Number.isInteger(pid) || pid === process.pid || (() => { try { process.kill(pid, 0); return false; } catch (e) { return !!(e && e.code === "ESRCH"); } })();
+      if (!dead) return { ok: false, reasonCode: "claim-busy", error: "타 프로세스 claim 보유 중" };
     }
     const prevOp = rec.patch ? rec.patch.operation : null;
     const prevPl = rec.patch ? (rec.patch.payload || {}) : {};
@@ -479,16 +672,44 @@ function applyPatch(repo, mapId, patchId, opts) {
       if (rec.classification !== "intent-choice") return { ok: false, error: "정책 op는 classification=intent-choice여야(classify 선행)" };
       if (!o.resolutionRef) return { ok: false, error: "정책 op는 해소 참조(resolutionRef) 없이 적용 불가(§A — intent-choice 카드는 P9)" };
       if (!(rec.patch.authorizationRefs || []).some((x) => x.kind === "user-choice" && x.ref === o.resolutionRef)) return { ok: false, error: "resolutionRef가 patch.authorizationRefs(user-choice)와 불일치(선택→정책 귀속 — A1 계약)" };
+      if (delegationArg) return { ok: false, reasonCode: "decision-conflict", error: "정책 op 자체를 기존 정책 위임으로 적용할 수 없음(사용자 선택 증명 불가침)" };
+    } else if (delegationArg) {
+      // P9: 비정책 pending의 원래 분류를 완화하는 것이 아니라, 적용 decision만 기존 정책의 위임으로
+      // 새로 기록한다. proposed(미분류)는 허용하지 않아 카드/스윕이 classify를 건너뛰지 못하게 한다.
+      if (rec.lifecycle !== "classified" || !["auto", "verifier-resolved", "intent-choice"].includes(rec.classification))
+        return { ok: false, reasonCode: "not-classified", error: "정책 위임 적용은 classified 비정책 pending만 허용" };
+    } else if (rec.classification === "verifier-resolved" && o.verifierResolution && typeof o.verifierResolution === "object") {
+      // P8(설계 v10 P8-4): 예약돼 있던 '해소 레코드 검증기' 자리 — 1-5 결속을 nsLock 안에서 1차 재검증
+      // (내용 지문·claims⊆evidence는 map 트랜잭션 안에서 적용 시점 재검증 — 아래 ①vr).
+      const vr = o.verifierResolution;
+      if (vr.patchId !== patchId) return { ok: false, reasonCode: "decision-conflict", error: "해소 레코드 patchId 불일치(낡은 해소로 다른 patch 적용 금지)" };
+      if (vr.opHash !== PM.opHashOf(rec.patch)) return { ok: false, reasonCode: "decision-conflict", error: "해소 레코드 opHash 불일치" };
+      if (vr.baseDecisionContextHash !== rec.patch.baseDecisionContextHash) return { ok: false, reasonCode: "decision-conflict", error: "해소 레코드 baseDecisionContextHash 불일치" };
+      if (vr.verdict !== "support") return { ok: false, reasonCode: "decision-conflict", error: "해소 verdict=" + String(vr.verdict) + " — support만 적용 가능(reject=폐기·inconclusive=잔류는 호출자 소관)" };
+      if (!Array.isArray(vr.claims) || vr.claims.length === 0) return { ok: false, reasonCode: "decision-conflict", error: "해소 claims 부재(1-5 — 내용 결속 없는 판정은 증거가 아니다)" };
+      const evRefs = new Set((rec.patch.evidence || []).map((e) => e.ref));
+      // 구현검증 1차 blocker①(ab-3): claim은 typed 계약 {file, contentHash, locator, stance} 전 필드 강제 —
+      // 필드 누락·이형이 canonical 지문에 실려 '유효한 verifier 판정'으로 확정되는 경로 차단.
+      const fpRe = /^[0-9a-f]{40}$/;
+      for (const c of vr.claims) {
+        if (!c || typeof c !== "object") return { ok: false, reasonCode: "decision-conflict", error: "해소 claim 이형(객체 아님)" };
+        if (typeof c.file !== "string" || !c.file) return { ok: false, reasonCode: "decision-conflict", error: "해소 claim file 누락" };
+        if (typeof c.contentHash !== "string" || !fpRe.test(c.contentHash)) return { ok: false, reasonCode: "decision-conflict", error: "해소 claim contentHash 이형(sha1 필요)" };
+        if (typeof c.locator !== "string" || !c.locator.trim()) return { ok: false, reasonCode: "decision-conflict", error: "해소 claim locator 누락(1-5 — 위치 없는 인용은 결속이 아니다)" };
+        if (c.stance !== "support" && c.stance !== "rebut") return { ok: false, reasonCode: "decision-conflict", error: "해소 claim stance 이형(support|rebut)" };
+        if (!evRefs.has(c.file)) return { ok: false, reasonCode: "decision-conflict", error: "해소 claim이 patch.evidence 밖 파일 인용(" + c.file + ") — 사전 결속 위반(재제안+재해소 필요)" };
+      }
+      if (!vr.claims.some((c) => c.stance === "support")) return { ok: false, reasonCode: "decision-conflict", error: "verdict=support인데 지지 claim 0(전부 반박 — 모순 해소 레코드 거부)" };
     } else if (rec.classification !== "auto") {
-      // 분류 해소 증거 강제(§A): P2 실경로는 auto만. verifier/intent는 해소 레코드 검증기가 P5+/P9.
-      return { ok: false, error: "classification=" + String(rec.classification) + " — 해소 증거 없이 적용 불가(§A. classify 선행 필요 여부 확인)" };
+      // 분류 해소 증거 강제(§A): P2 실경로는 auto+verifier-resolved(P8 해소 레코드 동봉 시)만. intent는 P9.
+      return { ok: false, reasonCode: "not-classified", error: "classification=" + String(rec.classification) + " — 해소 증거 없이 적용 불가(§A. classify 선행 필요 여부 확인)" };
     }
     const claimed = { ...rec, lifecycle: "claimed", claim: { pid: process.pid, token: crypto.randomBytes(8).toString("hex"), claimedAt: new Date().toISOString(), decisionId } };
-    if (!CL.atomicWrite(f, JSON.stringify(claimed, null, 1))) return { ok: false, error: "claim 기록 실패" };
+    if (!CL.atomicWrite(f, JSON.stringify(claimed, null, 1))) return { ok: false, reasonCode: "write-failed", error: "claim 기록 실패" };
     return { ok: true, rec: claimed };
   });
-  if (!claim.ok) return { ok: false, error: claim.error };
-  if (!claim.result.ok) return { ok: false, error: claim.result.error, supplemented: claim.result.supplemented };
+  if (!claim.ok) return { ok: false, reasonCode: "lock", error: claim.error };
+  if (!claim.result.ok) return { ok: false, ...(claim.result.reasonCode ? { reasonCode: claim.result.reasonCode } : {}), error: claim.result.error, supplemented: claim.result.supplemented };
   const pending = claim.result.rec;
   const decisionId = pending.claim.decisionId;
   const patch = pending.patch;
@@ -502,13 +723,13 @@ function applyPatch(repo, mapId, patchId, opts) {
     // blocked=중단(receipt-only 위 topology 변경 금지). 초기 판정과 상이=중단(재실행 시 새 판정으로 진행).
     {
       const authIn = (() => { try { return require(path.join(__dirname, "map-bindings.js")).authorityStateFor(repo); } catch { return null; } })();
-      if (authIn === null) return { fail: "권위 판독 불가(잠금 안 재판정) — fail-closed 중단" };
-      if (authIn.st === "blocked") return { fail: "권위 상태 blocked(잠금 안 재판정 — " + (authIn.reasonKey || "") + ") — 중단. 전환 중단 상태면 cutover 재실행으로 재개하라" };
+      if (authIn === null) return { fail: "권위 판독 불가(잠금 안 재판정) — fail-closed 중단", reasonCode: "authority-blocked" };
+      if (authIn.st === "blocked") return { fail: "권위 상태 blocked(잠금 안 재판정 — " + (authIn.reasonKey || "") + ") — 중단. 전환 중단 상태면 cutover 재실행으로 재개하라", reasonCode: "authority-blocked" };
       if ((authIn.st === "v2") !== !!o._authV2) return { fail: "권위 상태가 판정~잠금 사이 변경됨(" + (o._authV2 ? "v2→legacy" : "legacy→v2") + " — cutover 전이) — 재실행하라" };
     }
     const aw2 = activePipelineWalFor(repo);
-    if (aw2.st === "unreadable") return { fail: "WAL 서랍 판독 불가" };
-    if (aw2.st === "active") return { fail: "활성 WAL 존재(경쟁) — recoverWal 선행" };
+    if (aw2.st === "unreadable") return { fail: "WAL 서랍 판독 불가", reasonCode: "wal-corrupt" };
+    if (aw2.st === "active") return { fail: "활성 WAL 존재(경쟁) — recoverWal 선행", reasonCode: "wal-active" };
     const rt = MR.readTopoExFor(repo);
     if (rt.st !== "ok") return { fail: "topology 판독 실패(" + rt.st + ")" };
     const topo = rt.topo;
@@ -517,20 +738,42 @@ function applyPatch(repo, mapId, patchId, opts) {
     if (idx.st === "error") return { fail: idx.error };
     const pol = policyStateFor(repo, mapId);
     if (pol.st !== "ok") return { fail: pol.error };
+    const delegationIn = delegationArg || null;
+    if (delegationIn) {
+      const stored = (pol.policies || []).find((x) => x.rec && x.rec.policyId === delegationIn.policyId);
+      const leaf = (pol.frontier || []).some((x) => x && x.policyId === delegationIn.policyId);
+      if (!stored || !leaf || stored.fp !== delegationIn.policyFp)
+        return { fail: "정책 위임 결속 불일치(유효 leaf·policyFp 재검증 실패)", reasonCode: "decision-conflict" };
+      const applicable = policyAppliesToPatch(stored.rec, patch, "apply", topo);
+      if (!applicable.ok) return { fail: "정책 위임 의미 불일치(" + applicable.reason + ")", reasonCode: "decision-conflict" };
+    }
     const ctx = { idx, pol, git: gitInfo(repo), repoRoot: repo, fileHashOf: (ref) => fileSha(path.isAbsolute(ref) ? ref : path.join(repo, ref)) };
     // ① CAS
     let cas = casCheck(repo, patch, topo, ctx, pending.localOrigin);
-    if (cas.disposition === "hard-reject") return { fail: "CAS hard-reject: " + cas.reason, terminal: "expired" };
-    if (cas.disposition === "stale-expired") return { fail: "read-set 파손(" + cas.broken.join(",") + ") — stale-expired", terminal: "expired" };
+    if (cas.disposition === "hard-reject") return { fail: "CAS hard-reject: " + cas.reason, terminal: "expired", reasonCode: "hard-reject", expireCode: "hard-reject" };
+    if (cas.disposition === "stale-expired") return { fail: "read-set 파손(" + cas.broken.join(",") + ") — stale-expired", terminal: "expired", reasonCode: "cas-stale", expireCode: "cas-stale" };
+    const vrIn = pending.classification === "verifier-resolved" && o.verifierResolution ? o.verifierResolution : null;
     let livePatch = patch;
     if (cas.disposition === "rebase") { // 재기반(12차 #3): base 3해시·basis를 현재로 갱신한 사본으로 진행 — decision·WAL에 신선 기준 기록
+      // P8(설계 v10 P8-4): verifier 해소 경로는 CAS rebase 전면 금지 — 검증받지 않은 rebased patch가
+      // verifier-resolved로 기록되는 경로 차단(base 불일치=거부·재제안+재해소 요구). terminal 아님(expire는
+      // 호출자의 rev 전진 규약 소관 — P2가 임의 종결하지 않는다).
+      if (vrIn) return { fail: "verifier 해소 경로 rebase 금지 — base 불일치(재제안+재해소 필요)", reasonCode: "cas-stale" };
       livePatch = { ...patch, basis: patchBasisFor(repo, topo), baseMapHash: cas.current.mapHash, baseAuthorityHash: cas.current.ah, baseDecisionContextHash: cas.current.dch };
       const ve2 = PM.validatePatchV2(livePatch);
       if (ve2.length) return { fail: "재기반 사본 검증 실패: " + ve2[0] };
     }
+    // ①vr(P8 — 적용 시점 claim 지문 재검증·설계 3~5차 ab-3): 해소 후 근거 파일이 바뀐 상태에서 이전 판정이
+    // 결속되는 경로를 map 잠금 안 현재 지문 대조로 차단. claims⊆evidence는 claim 단계에서 검증 완료.
+    if (vrIn) {
+      for (const c of vrIn.claims || []) {
+        const now9 = ctx.fileHashOf(c.file);
+        if (!now9 || now9 !== c.contentHash) return { fail: "해소 claim 지문 불일치(" + c.file + ") — 근거가 바뀜(재해소 필요)", reasonCode: "decision-conflict" };
+      }
+    }
     // ② ②b(frontier 주입)
     const verdict = PM.semanticValidateV2(topo, livePatch, { frontier: pol.frontier, policyIds: new Set((pol.policies || []).map((x) => x.rec.policyId)), artifactIds: new Set([...(pol.policies || []).map((x) => x.rec.policyId), ...(pol.revocations || []).map((x) => x.rec.revocationId)]), revokedPolicyIds: new Set((pol.revocations || []).map((x) => x.rec.targetPolicyId)) });
-    if (verdict.disposition !== "ok") return { fail: "②b " + verdict.disposition + ": " + verdict.errors[0], terminal: verdict.disposition === "hard-reject" ? "expired" : null };
+    if (verdict.disposition !== "ok") return { fail: "②b " + verdict.disposition + ": " + verdict.errors[0], terminal: verdict.disposition === "hard-reject" ? "expired" : null, reasonCode: verdict.disposition === "hard-reject" ? "hard-reject" : "semantic-reject", ...(verdict.disposition === "hard-reject" ? { expireCode: "hard-reject" } : {}) };
     // ③ 선계산 일괄(§F ③)
     const isPolicy = PM.isPolicyOpV2(livePatch.operation);
     const mapHashBefore = PM.mapHashOf(topo);
@@ -585,9 +828,13 @@ function applyPatch(repo, mapId, patchId, opts) {
       schema: "map-decision-v3", decisionId, mapId, patchId: livePatch.patchId, opHash: PM.opHashOf(livePatch), // P4: 신규 기록=v3만
       ...(isPolicy ? {} : { affectedIds }),
       patch: livePatch,
-      actor: isPolicy ? { kind: "user-choice", cardId: o.resolutionRef } : { kind: "auto" },
-      classification: isPolicy ? "intent-choice" : "auto",
-      resolution: { outcome: "applied", evidenceRef: isPolicy ? o.resolutionRef : "auto" }, ...(o.preCutover ? { preCutover: true } : {}), // P3b C-4: 필드는 --pre-cutover 명시 경로만 기록(v2 무플래그=생략 — validator '부재=cutover 후' 정합·증명 이력 왜곡 차단)
+      // P8(설계 v10 P8-4·삼중 결속 — 4차 보완①): verifier 해소 적용은 기존 decision 스키마의 삼중 결속을
+      // 실제로 채운다 — validator 규칙(1차 #6)은 verdictFp==actor.resultFp==resolution.evidenceRef '동일 값':
+      // 전부 해소 레코드의 canonical 지문 하나(vrFp)로 통일.
+      actor: isPolicy ? { kind: "user-choice", cardId: o.resolutionRef } : vrIn ? { kind: "verifier", resultFp: sha1(PM.canonicalJsonOf(vrIn)) } : delegationIn ? { kind: "user-choice-delegated", policyId: delegationIn.policyId } : { kind: "auto" },
+      classification: isPolicy ? "intent-choice" : vrIn ? "verifier-resolved" : "auto",
+      ...(vrIn ? { verdictFp: sha1(PM.canonicalJsonOf(vrIn)) } : {}),
+      resolution: { outcome: "applied", evidenceRef: isPolicy ? o.resolutionRef : vrIn ? sha1(PM.canonicalJsonOf(vrIn)) : delegationIn ? delegationIn.policyId : "auto" }, ...(o.preCutover ? { preCutover: true } : {}), // P3b C-4: 필드는 --pre-cutover 명시 경로만 기록(v2 무플래그=생략 — validator '부재=cutover 후' 정합·증명 이력 왜곡 차단)
       verification, evidenceFps,
       audit: { ts: new Date().toISOString(), topologyBeforeHash: mapHashBefore, topologyAfterHash: mapHashAfter, mapMdAfterHash: mapMdAfterHash || sha1(""), authorityHashAfter: "", expectedMapHashAfter: mapHashAfter, walRef: "wal/" + decisionId + ".json" },
     };
@@ -604,7 +851,7 @@ function applyPatch(repo, mapId, patchId, opts) {
     if (!isPolicy) {
       const snapText = JSON.stringify({ mapId, decisionId, topologyBeforeHash: mapHashBefore, basis: livePatch.basis, appliedCountAtSnapshot: prospective.length, topology: JSON.parse(rt.raw ? rt.raw : JSON.stringify(topo)) }, null, 1); // basis=재기반 후(14차 #9)
       const snapFile = path.join(d.snapshots, decisionId + ".json");
-      if (!CL.atomicWrite(snapFile, snapText)) return { fail: "스냅샷 기록 실패" };
+      if (!CL.atomicWrite(snapFile, snapText)) return { fail: "스냅샷 기록 실패", reasonCode: "write-failed" };
       snapshotRef = { path: snapFile, contentHash: sha1(snapText) };
     }
     // ⑤ WAL(합타입 — C-4)
@@ -625,9 +872,11 @@ function applyPatch(repo, mapId, patchId, opts) {
     const walFile = path.join(d.wal, decisionId + ".json");
     if (!CL.atomicWrite(walFile, JSON.stringify(wal, null, 1))) {
       if (snapshotRef) { try { fs.unlinkSync(snapshotRef.path); } catch { /* gc 승계 */ } } // orphan 즉시 삭제(12차 #6)
-      return { fail: "WAL 기록 실패" };
+      return { fail: "WAL 기록 실패", reasonCode: "write-failed" };
     }
-    // ⑥~⑪ 산출물 기록(중단=recoverWal 소관)
+    // ⑥~⑪ 산출물 기록(중단=recoverWal 소관). P8 보완: 직접 쓰기 예외를 구조화 실패로 변환(write-failed·
+    // 활성 WAL 유지=recoverWal 소관 — 예외 이탈로 닫힌 반환 계약이 깨지지 않게).
+    try {
     const decDir = path.join(repo, "project-map", "decisions");
     fs.mkdirSync(decDir, { recursive: true });
     if (!isPolicy) {
@@ -644,8 +893,9 @@ function applyPatch(repo, mapId, patchId, opts) {
       const fname = policyArtifact.kind === "intent-policy" ? policyArtifact.policyId + ".json" : policyArtifact.revocationId + ".revoke.json";
       { const t4 = path.join(polDir, fname + "." + process.pid + ".tmp"); fs.writeFileSync(t4, JSON.stringify(policyArtifact.copy, null, 1), "utf8"); fs.renameSync(t4, path.join(polDir, fname)); }
     }
-    if (!CL.atomicWrite(path.join(d.markers, decisionId + ".json"), JSON.stringify(marker, null, 1))) return { fail: "marker 기록 실패 — 활성 WAL 유지(recoverWal이 보충. 산출물은 기록됨 — 성공 위장 금지: 13차 #3)", keepClaim: true }; // ⑩
+    if (!CL.atomicWrite(path.join(d.markers, decisionId + ".json"), JSON.stringify(marker, null, 1))) return { fail: "marker 기록 실패 — 활성 WAL 유지(recoverWal이 보충. 산출물은 기록됨 — 성공 위장 금지: 13차 #3)", keepClaim: true, reasonCode: "write-failed" }; // ⑩
     fs.renameSync(walFile, path.join(d.walComplete, decisionId + ".json")); // ⑪
+    } catch (e9) { return { fail: "산출물 기록 실패(" + String(e9 && e9.message).slice(0, 80) + ") — 활성 WAL 유지(recoverWal 소관)", keepClaim: true, reasonCode: "write-failed" }; }
     // P4-3ⓐ 기준선 기록(2차 blocker② 봉합): 정본 잠금 '안'(트랜잭션 완결 후)에서 기록 — apply가 정본 잠금으로
     // 직렬화되므로 완료 순서 역전(늦은 과거 쓰기가 최신을 덮음)이 원천 차단된다. 전용 잠금은 reader 캐시(e:)
     // 경합용으로 여전히 사용(map→freshness 단방향 중첩 — 역방향 없음·교착 불가). 실패=apply 성공 불변(축 unknown 유지).
@@ -662,13 +912,20 @@ function applyPatch(repo, mapId, patchId, opts) {
     }
     return { done: true, decisionId, mapHashAfter, authorityHashAfter: ahAfter, freshnessBaseline };
   });
-  if (!tx.ok) { rollbackClaim(); return { ok: false, error: "정본 잠금 실패: " + (tx.error || "") }; }
+  if (!tx.ok) { rollbackClaim(); return { ok: false, reasonCode: "lock", error: "정본 잠금 실패: " + (tx.error || "") }; }
   const r = tx.result;
   if (r.fail) {
-    if (r.keepClaim) return { ok: false, error: r.fail }; // 활성 WAL 유지 — claim 롤백도 하지 않음(recoverWal 소관)
-    if (r.terminal === "expired") { withNsLock(repo, mapId, () => { const f = pendingFileFor(repo, mapId, patchId); const pr = readJson3(f); if (pr.st === "ok") CL.atomicWrite(f, JSON.stringify({ ...pr.data, lifecycle: "expired", expiredAt: new Date().toISOString(), expireReason: r.fail }, null, 1)); }); }
+    if (r.keepClaim) return { ok: false, ...(r.reasonCode ? { reasonCode: r.reasonCode } : {}), error: r.fail }; // 활성 WAL 유지 — claim 롤백도 하지 않음(recoverWal 소관)
+    // P8: terminal 종결은 expireCode를 같은 원자 쓰기에 동봉(반환 코드 유실 대비 — 재시작 복구는 이 코드로만
+    // 분기). 구현검증 1차 blocker②: 영속 실패(잠금 점유·쓰기 실패)를 무시하면 pending이 claimed로 잔존한 채
+    // 호출자만 terminal을 받는다 — 실패 시 claim 롤백(classified 복원)+정직 병기: 소비자가 반환 코드로 rev
+    // 전진해도 expire CAS 대상(proposed|classified)이라 규약 정합·재시도도 가능.
+    if (r.terminal === "expired") {
+      const tw = persistTerminalExpire(repo, mapId, patchId, r.fail, r.expireCode || null, pending.claim.token);
+      if (!tw.wrote) return { ok: false, ...(r.reasonCode ? { reasonCode: r.reasonCode } : {}), error: r.fail + " (terminal 기록 실패: " + (tw.error || "") + (tw.rolledBack ? " — claim 롤백됨[classified 복원·rev 전진 CAS 대상]" : " — claim 잔존 가능[gc·claim 사망 판정 소관]") + " · expireCode 미영속)", terminalPersisted: false, claimRolledBack: !!tw.rolledBack };
+    }
     else rollbackClaim();
-    return { ok: false, error: r.fail };
+    return { ok: false, ...(r.reasonCode ? { reasonCode: r.reasonCode } : {}), error: r.fail };
   }
   // §B ③ 종결(nsLock — 결과 검사: 17차 #3. durable은 완료됐으므로 실패=finalizePending 미종결로 정직 보고,
   // 재시도는 claimed 분기의 완료 영수증 판정이 보충 종결한다)
@@ -924,7 +1181,9 @@ function abortWalInLock(repo, mapId, decisionId) {
 // ── recoverCorruption(1-18 — 별도 파일·원본 보존) ─────────────────────────────────
 function recoverCorruption(repo, mapId) {
   const rt = MR.readTopoExFor(repo);
-  if (rt.st === "ok") return { ok: false, error: "topology 정상 — 복구 불필요" };
+  // readTopoExFor의 st=ok는 JSON 파싱 성공만 뜻한다. 스키마 위반 JSON도 복구 대상이며,
+  // 완전히 유효한 topology일 때만 정상으로 닫는다(P9 recovery-action 진입 계약).
+  if (rt.st === "ok" && PM.validateTopology(rt.topo).length === 0) return { ok: false, error: "topology 정상 — 복구 불필요" };
   const d = ensureDirs(repo, mapId);
   let snaps;
   try { snaps = listJson(d.snapshots).map((f) => readJson3(path.join(d.snapshots, f))).filter((r) => r.st === "ok" && r.data.topology && r.data.mapId === mapId && r.data.decisionId).map((r) => r.data); }
@@ -1177,11 +1436,12 @@ function proposeUnique(repo, mapId, semanticKey, buildPatch) {
 }
 
 module.exports = {
-  findPromotions, proposeUnique,
+  findPromotions, proposeUnique, expirePendingPatch, persistTerminalExpire, sweepReclassifyNonPolicyIntentChoice, markLegacyReclassMark,
   guardExcludedFor,
   canonicalIdentityFor, localOriginFor, patchBasisFor, pipeRootFor, dirsFor, ensureDirs, baselineUpdatesFor, captureDirRaw, decisionIndexFromCapture, policyStateFromCapture,
   activePipelineWalFor, decisionIndexFor, policyStateFor, authorityOf,
   buildReadSetFor, readSetIntact, casCheck, entityHashOf,
+  policyAppliesToPatch,
   proposePatch, classifyPatch, applyPatch, recoverWal, abortWal, recoverCorruption, pipelineGc, validateWalV2,
   DEFAULT_CLASSIFICATION,
 };

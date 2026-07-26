@@ -224,11 +224,17 @@ CL.appendLedgerEvent(wsT2, { ts: "sz", type: "proposed", sig: "s0", text: "x-alp
 const trimmed2 = CL.readLedgerEventsText(wsT2).split(/\r?\n/).filter(Boolean);
 ok(trimmed2.length <= CL.LEDGER_EVENTS_CAP, "판정 이벤트만 2450건인 극단에서도 총량 ≤ 상한(판정도 최신순 컷)");
 
-console.log("[5] 대시보드 배선(소스 검사) — 승인 큐 제거·관측 개입(ledgerAct)·런타임 재사용(⑤ 역할 전환 잠금)");
+console.log("[5] 대시보드 배선(소스 검사) — 자동 기본·선택 개입(ledgerAct)·증거 통로 가시화");
 const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
-ok(ext.includes('m?.type === "ledgerAct"'), "ledgerAct 핸들러 존재(고정/차단/해제/내보내기)");
+ok(ext.includes('m?.type === "ledgerAct"'), "ledgerAct 핸들러 존재(직접 확인/정정·고정/차단/해제/내보내기)");
 ok(!ext.includes('"mapApprove"') && !ext.includes('"mapReject"'), "승인 큐 메시지 타입(\"mapApprove\"/\"mapReject\") 잔재 없음 — 필드명 mapApproved(확정층 줄 수)와 구분");
 ok(ext.includes("lib?.appendLedgerEvent") || ext.includes("lib.appendLedgerEvent"), "이벤트 적재는 배포 런타임(contract-lib) 재사용 — 형식 복사 없음");
+ok(ext.includes('act === "confirm" || act === "dispute"') && ext.includes('positive ? "user_confirm" : "user_dispute"'), "사람 판단은 user_confirm/user_dispute 선택 이벤트로만 기록(자동 승인 큐로 회귀 없음)");
+ok(ext.includes("자동 운용을 위해 누를 필요는 없습니다") && ext.includes("클릭 없이 굴러가며"), "사람 선택은 예외·자동이 기본이라는 철학을 UI와 모달에 명문");
+ok(ext.includes("선택 버튼을 누르면 — 자동 흐름은 버튼 없이 진행됩니다") && ext.includes("바로 ‘검증됨’") && ext.includes("재실수 방지용 ‘틀림 판명’ 경고로만 남김") && ext.includes("완전히 숨기려면 차단"), "선택 버튼 안내는 항상 보이는 결과 중심 설명 — 맞음 확인·틀림 정정(경고 보존)·차단과의 차이");
+ok(ext.includes("‘참고할 결합 후보’ 그룹에 강제로 넣음") && ext.includes("항목 상한 안에서 선별") && ext.includes("정찰 자료에서 완전히 제외") && ext.includes("코드나 Project MAP을 직접 수정하지 않습니다"), "선택 버튼 안내 — 고정은 상한 내 후보 오버라이드, 차단은 완전 제외, 영향 범위는 일지·정찰 선별만");
+ok(ext.includes('T("검증됨","verified")') && !ext.includes('T("신뢰(자동 반영)"'), "오해 라벨 제거 — 검증됨은 코드/MAP 자동 적용과 분리");
+ok(ext.includes("machineRecorded") && ext.includes("promotable") && ext.includes("파일 취급 흔적 판정 불가"), "기계 확인 기록·승격 조건 통과·취급 불명을 따로 노출(자동 증명 통로 자기진단)");
 ok(/act === "export"[\s\S]{0,400}lane !== "trusted"/.test(ext), "내보내기는 신뢰 차선만(게이트 소스 잠금)");
 ok(/recordTo\("exported"[\s\S]{0,300}기록됐지만/.test(ext), "export의 이벤트 적재 실패 문구는 '장부 파일은 기록됐다'는 사실을 말함(거짓 '무반영' 금지 — Codex 반례 잠금. P3b: record→recordTo[대상 스냅샷 고정판] 개명 — 행동 계약 동일)");
 

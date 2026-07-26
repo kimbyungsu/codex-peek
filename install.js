@@ -27,6 +27,7 @@
  *   CODEX_BRIDGE_NODE  훅이 쓸 node 실행파일       (기본 지금 이 설치기를 돌린 node)
  *   CODE_CLI           VS Code CLI(code) 경로      (미지정 시 PATH의 code → 환경변수/표준위치 자동탐지)
  *                      ※ 포터블/무설치형 VS Code(PATH에 code 없음)도 VSCODE_CWD 등으로 자동탐지. 그래도 못 찾으면 이 변수로 지정.
+ *   CODEX_BRIDGE_EXTENSIONS_DIR  비표준 VS Code의 extensions 폴더(같은 버전 안전 갱신용)
  */
 
 const fs = require("fs");
@@ -44,6 +45,7 @@ const SRC_BRIDGE = path.join(__dirname, "bridge"); // 레포의 bridge/
 // 복사 대상(런타임 전체). contract-lib는 다른 .js가 require하므로 필수.
 const BRIDGE_SCRIPTS = [
   "contract-lib.js",
+  "verify-cap-handoff.js",
   "codex-bridge.js",
   "ask-job-worker.js",
   "codex-hook.js",
@@ -57,6 +59,12 @@ const BRIDGE_SCRIPTS = [
   "map-runtime.js", // P0.5: Project MAP 런타임(수집기·draft·CLI 본체 — 훅 아님)
   "map-bootstrap.js", "map-pipeline.js", "map-bindings.js", "map-adapters.js", // P1: 비차단 bootstrap(훅이 lazy require — 훅 아님·detach 자식 실행기)
   "map-freshness.js", "map-reader.js", // P3b: P4 신설분 배포 편입 — map-adapters가 map-reader를 require하므로 누락 시 설치본 어댑터 전체 로드 불능(P3b 설계 A-3 실측 결함 봉합)
+  "map-cutover.js", // P3b 증분 2: cutover 본체+frozen-ledger probe(대시보드 lazy 소비 — 설치본 부재 시 probe 불능)
+  "map-probe.js", // P7: readiness probe 실행기(vscode 무관 계층 — 확장이 설치본 사본을 lazy require)
+  "map-router.js", // P8: 결정론 라우터(1-34 표 — 실행기·테스트 공용 순수 계층)
+  "map-enrich.js", // P8: 의미 보강 실행기(저장·순수+runEnrich+CLI — 발동 3지점이 spawn하는 표면)
+  "map-intent.js", // P9: 정책 충돌 카드 파생 뷰+사용자 선택 선기록(자동 적용/UI 전 바닥 계층)
+  "enrich-providers.js", // P8: 보강 어댑터 3종+Verifier 해소 진입점(설치본 자동 발동에서 실존해야 함)
 ];
 
 // 우리가 settings.json에 심는 훅. event → {matcher, script}
@@ -201,6 +209,45 @@ function readSettingsSafe() {
   } catch (e) { return { ok: false, settings: null, raw, existed: true, err: e.message }; }
 }
 
+function withDeployLock(fn) { // C-7 9차: wx 파일 잠금 — 검사기(map-cutover)·확장과 동일 프로토콜(".deploy.lock"·wx 원자 생성=신원 동시·read-back fence·자동 탈환 없음[contract-lock v10 결론]). 반환 {ok, why}
+  const crypto = require("crypto");
+  const lockPath = path.join(BRIDGE_DIR, ".deploy.lock");
+  const token = JSON.stringify({ v: 1, pid: process.pid, rnd: crypto.randomBytes(8).toString("hex"), ts: new Date().toISOString() });
+  const timeoutMs = Math.max(200, Number(process.env.CODEX_DEPLOY_LOCK_TIMEOUT_MS || 5000) || 5000);
+  const t0 = Date.now();
+  let staleWhy = null;
+  for (;;) {
+    if (Date.now() - t0 > timeoutMs) return { ok: false, why: staleWhy || ("타임아웃(다른 배포/검사 진행 중): " + lockPath + " — 잠시 후 재실행") };
+    let locked = false;
+    try { fs.writeFileSync(lockPath, token, { flag: "wx" }); locked = true; }
+    catch (e) { if (!e || (e.code !== "EEXIST" && e.code !== "EPERM")) return { ok: false, why: "잠금 오류: " + String((e && e.code) || e) }; }
+    if (locked) {
+      let back = null;
+      try { back = fs.readFileSync(lockPath, "utf8"); } catch { back = null; }
+      if (back === token) break; // read-back fence — 실패=삭제 없이 재시도(확인-후-삭제 TOCTOU 폐기)
+    } else {
+      try {
+        const cur = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+        const pid = Number(cur && cur.pid);
+        if (Number.isInteger(pid) && pid > 0) {
+          try { process.kill(pid, 0); staleWhy = null; }
+          catch (ke) { if (ke && ke.code === "ESRCH") staleWhy = "잔존 잠금(" + lockPath + " · pid " + pid + " 사망) — pid 사망을 확인했다면 이 파일을 삭제 후 재실행"; }
+        }
+      } catch { /* 판독 불가/경합 소멸 — 재시도 */ }
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+  let lockLost = false;
+  try { fn(); }
+  finally {
+    let cur = null;
+    try { cur = fs.readFileSync(lockPath, "utf8"); } catch { cur = null; }
+    lockLost = cur !== token;
+    if (!lockLost) { try { fs.unlinkSync(lockPath); } catch { /* 드묾 — 다음 획득자에게 stale 안내 */ } }
+  }
+  return lockLost ? { ok: false, why: "임계구역 중 잠금 파일이 외부에서 변경됨 — 설치 상태 재확인 후 재실행 권장" } : { ok: true, why: null };
+}
+
 // ── 명령들 ────────────────────────────────────────────
 function copyBridge(dryRun) {
   for (const f of BRIDGE_SCRIPTS) {
@@ -213,9 +260,21 @@ function copyBridge(dryRun) {
   }
   if (!dryRun) {
     fs.mkdirSync(BRIDGE_DIR, { recursive: true });
+    const locked = withDeployLock(() => { // 6차 blocker: 복사+manifest를 검사기와 상호 배제(검사 도중 교체 경합 소멸)
     for (const f of BRIDGE_SCRIPTS) fs.copyFileSync(path.join(SRC_BRIDGE, f), path.join(BRIDGE_DIR, f));
+    { // C-7(B2): 배포 manifest — 이 설치가 하나의 세대임을 파일별 지문으로 증명(설치본 실행 cutover의 전수 검사 기준)
+      // 5차 blocker: 지문은 복사 '원본'(레포 bridge/) 바이트에서 계산 — 목적지 재판독 금지. 대조↔기록 사이 다른
+      // 배포자가 설치본을 교체하는 경합에서 혼합 세대가 정상 manifest로 승인되는 창을 제거한다(경합 시
+      // manifest≠디스크 → cutover 전수 대조가 fail-closed로 거부 — 승인이 아니라 거부로 떨어지는 방향).
+      const crypto = require("crypto");
+      const files = {};
+      for (const f of BRIDGE_SCRIPTS) files[f] = crypto.createHash("sha1").update(fs.readFileSync(path.join(SRC_BRIDGE, f))).digest("hex");
+      fs.writeFileSync(path.join(BRIDGE_DIR, "deploy-manifest.json"), JSON.stringify({ schema: "deploy-manifest-v1", ts: new Date().toISOString(), files }, null, 1));
+    }
     // 확장 자동배치 stamp 제거 = '수동(레포) 설치 모드' 표시 — 확장이 개발자의 최신 수동본을 옛 번들본으로 덮지 않게 한다(src/extension.ts deployBridgeRuntime 대칭).
     try { fs.unlinkSync(path.join(BRIDGE_DIR, ".bridge-deployed-by.json")); } catch { /* 없으면 무시 */ }
+    });
+    if (!locked.ok) { log("❌ 배포 잠금 실패: " + locked.why); process.exit(1); }
   }
   log(`✅ 브릿지 파일 ${BRIDGE_SCRIPTS.length}개 → ${BRIDGE_DIR}${dryRun ? "  (미리보기 — 복사 안 함)" : ""}`);
 }
@@ -253,6 +312,188 @@ function buildInstallCmd(codeCli, vsixPath) {
   const codeTok = /[\\/\s]/.test(String(codeCli)) ? q(fwd(codeCli)) : String(codeCli);
   return `${codeTok} --install-extension ${q(fwd(vsixPath))} --force`;
 }
+// `code --list-extensions --show-versions`의 한 줄(`publisher.name@1.2.3`)에서
+// 우리 확장의 현재 버전만 안전하게 뽑는다. 같은 버전을 실행 중인 채 `--force`로
+// 덮으면 VS Code가 기존 폴더부터 지운 뒤 재시작 요구로 멈출 수 있으므로 사전 확인에 쓴다.
+function installedExtensionVersionFromList(output, extensionId) {
+  const wanted = String(extensionId || "").trim().toLowerCase();
+  if (!wanted) return null;
+  for (const raw of String(output || "").split(/\r?\n/)) {
+    const line = raw.trim();
+    const at = line.lastIndexOf("@");
+    if (at <= 0) continue;
+    if (line.slice(0, at).toLowerCase() === wanted) return line.slice(at + 1).trim() || null;
+  }
+  return null;
+}
+function installedExtensionState(codeCli, extensionId, spawnSyncImpl = cp.spawnSync) {
+  const codeTok = /[\\/\s]/.test(String(codeCli)) ? q(fwd(codeCli)) : String(codeCli);
+  try {
+    const r = spawnSyncImpl(`${codeTok} --list-extensions --show-versions`, {
+      shell: true,
+      encoding: "utf8",
+      timeout: 30000,
+    });
+    if (!r || r.status !== 0) return { ok: false, version: null };
+    return { ok: true, version: installedExtensionVersionFromList(r.stdout, extensionId) };
+  } catch {
+    return { ok: false, version: null };
+  }
+}
+
+// 같은 버전의 새 소스를 `code --install-extension --force`로 밀어 넣으면, 실행 중인 VS Code가
+// 기존 확장 폴더를 먼저 지운 뒤 재시작 대기 상태에 들어갈 수 있다. 버전 숫자를 억지로 올리지 않고도
+// GitHub 설치 묶음을 적용할 수 있도록, 현재 CLI가 실제로 쓰는 extensions 폴더를 좁게 찾은 뒤
+// 런타임 파일만 백업·대조하며 덮는다. `.vsixmanifest` 등 VS Code 소유 파일은 건드리지 않는다.
+function extensionRootCandidates(codeCli, env = process.env, home = HOME) {
+  const out = [];
+  const add = (p) => { if (p) { const abs = path.resolve(String(p)); if (!out.includes(abs)) out.push(abs); } };
+  if (env.CODEX_BRIDGE_EXTENSIONS_DIR) return [path.resolve(String(env.CODEX_BRIDGE_EXTENSIONS_DIR))];
+  const cli = String(codeCli || "");
+  // bare `code`만으로는 PATH의 어느 설치본을 실행했는지 여기서 증명할 수 없다. 잘못된 다른
+  // VS Code를 덮는 것보다 명시 위치를 요구하며 실패하는 편이 안전하다(resolveCodeCli는 정상
+  // 자동탐지에서 bare 명령을 실제 실행 파일 절대경로로 바꿔 이 경로에 넘긴다).
+  if (!/[\\/]/.test(cli)) return [];
+  // 버전을 조회한 바로 그 CLI에서 유도한 포터블 루트를 항상 먼저 쓴다. VSCODE_CWD/PORTABLE은
+  // 다른 열린 창의 값일 수 있으므로 여기서 독립 후보로 섞지 않는다(A CLI 확인→B 폴더 갱신 방지).
+  add(path.join(path.dirname(path.dirname(path.resolve(cli))), "data", "extensions"));
+  const insiders = /insiders/i.test(cli);
+  add(path.join(home, insiders ? ".vscode-insiders" : ".vscode", "extensions"));
+  return out;
+}
+
+function findInstalledExtensionDir(roots, extensionId, version) {
+  const wantedId = String(extensionId || "").toLowerCase();
+  const wantedVersion = String(version || "");
+  for (const root of roots || []) {
+    let entries = [];
+    try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { continue; }
+    const matches = [];
+    for (const ent of entries) {
+      if (!ent.isDirectory() || ent.isSymbolicLink()) continue;
+      const dir = path.join(root, ent.name);
+      let meta;
+      try { meta = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")); } catch { continue; }
+      const id = meta && meta.publisher && meta.name ? `${meta.publisher}.${meta.name}`.toLowerCase() : "";
+      if (id !== wantedId || String(meta.version || "") !== wantedVersion) continue;
+      matches.push({ dir, exact: ent.name.toLowerCase() === `${wantedId}-${wantedVersion}` });
+    }
+    matches.sort((a, b) => Number(b.exact) - Number(a.exact) || a.dir.localeCompare(b.dir));
+    if (matches.length) return matches[0].dir;
+  }
+  return null;
+}
+
+function walkFiles(root, rel = "") {
+  const dir = path.join(root, rel);
+  let entries = [];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+  const out = [];
+  for (const ent of entries) {
+    const child = path.join(rel, ent.name);
+    if (ent.isDirectory() && !ent.isSymbolicLink()) out.push(...walkFiles(root, child));
+    else if (ent.isFile()) out.push(child);
+  }
+  return out;
+}
+
+function sameVersionOverlayEntries(sourceRoot) {
+  const pairs = [];
+  const add = (sourceRel, targetRel = sourceRel) => {
+    if (fs.existsSync(path.join(sourceRoot, sourceRel))) pairs.push({ sourceRel, targetRel });
+  };
+  for (const rel of walkFiles(path.join(sourceRoot, "out")).filter((p) => !p.endsWith(".map"))) add(path.join("out", rel));
+  for (const rel of BRIDGE_SCRIPTS) add(path.join("bridge", rel));
+  add(path.join(".agents", "plugins", "marketplace.json"));
+  add(path.join("codex-plugin", "codex-peek", ".codex-plugin", "plugin.json"));
+  add(path.join("codex-plugin", "codex-peek", "scripts", "codex-hook-launcher.js"));
+  add("verify-envelope.json");
+  add(path.join("docs", "icon.png"));
+  add(path.join("docs", "README.en.md"), "readme.md");
+  add("LICENSE", "LICENSE.txt");
+  add("package.json"); // 활성화 메타는 런타임 파일이 모두 복사된 뒤 마지막에 교체한다.
+  return pairs;
+}
+
+function overlaySameVersionExtension(sourceRoot, targetDir, expectedId, expectedVersion, backupParent) {
+  let srcMeta, dstMeta;
+  try {
+    srcMeta = JSON.parse(fs.readFileSync(path.join(sourceRoot, "package.json"), "utf8"));
+    dstMeta = JSON.parse(fs.readFileSync(path.join(targetDir, "package.json"), "utf8"));
+    if (fs.lstatSync(targetDir).isSymbolicLink()) throw new Error("설치 폴더가 심볼릭 링크임");
+  } catch (e) { return { ok: false, why: `메타데이터 판독 실패: ${e.message}` }; }
+  const srcId = srcMeta.publisher && srcMeta.name ? `${srcMeta.publisher}.${srcMeta.name}` : "";
+  const dstId = dstMeta.publisher && dstMeta.name ? `${dstMeta.publisher}.${dstMeta.name}` : "";
+  if (srcId.toLowerCase() !== String(expectedId || "").toLowerCase() || dstId.toLowerCase() !== srcId.toLowerCase()
+      || String(srcMeta.version || "") !== String(expectedVersion || "") || String(dstMeta.version || "") !== String(expectedVersion || "")) {
+    return { ok: false, why: "확장 ID 또는 버전이 일치하지 않음" };
+  }
+  const entries = sameVersionOverlayEntries(sourceRoot);
+  if (!entries.some((e) => e.targetRel === path.join("out", "extension.js")) || !entries.some((e) => e.targetRel === path.join("bridge", "codex-bridge.js"))) {
+    return { ok: false, why: "컴파일된 핵심 파일(out/extension.js 또는 bridge/codex-bridge.js)이 없음" };
+  }
+  let backupDir;
+  try {
+    const parent = backupParent || os.tmpdir();
+    fs.mkdirSync(parent, { recursive: true });
+    backupDir = fs.mkdtempSync(path.join(parent, `codex-bridge-extension-${expectedVersion}-backup-`));
+  } catch (e) { return { ok: false, why: `백업 폴더 생성 실패: ${e.message}` }; }
+  const existed = [], created = [];
+  try {
+    const rootReal = fs.realpathSync(targetDir);
+    for (const { sourceRel, targetRel } of entries) {
+      const src = path.join(sourceRoot, sourceRel);
+      const dst = path.join(targetDir, targetRel);
+      let payload = fs.readFileSync(src);
+      if (targetRel === "package.json" && Object.prototype.hasOwnProperty.call(dstMeta, "__metadata")) {
+        // VS Code가 설치 시 덧붙인 관리 메타데이터는 소스 package.json에 없다. 새 확장 메타와
+        // 결합해 보존해야 이후 업데이트/진단에서 불완전 설치로 보이지 않는다.
+        const mergedMeta = Object.assign({}, srcMeta, { __metadata: dstMeta.__metadata });
+        payload = Buffer.from(JSON.stringify(mergedMeta, null, "\t") + "\n", "utf8");
+      }
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      const parentReal = fs.realpathSync(path.dirname(dst));
+      if (parentReal !== rootReal && !parentReal.startsWith(rootReal + path.sep)) throw new Error(`설치 폴더 밖 경로 거부: ${targetRel}`);
+      if (fs.existsSync(dst)) {
+        if (fs.lstatSync(dst).isSymbolicLink()) throw new Error(`심볼릭 링크 파일 거부: ${targetRel}`);
+        const bak = path.join(backupDir, targetRel);
+        fs.mkdirSync(path.dirname(bak), { recursive: true });
+        fs.copyFileSync(dst, bak);
+        existed.push({ dst, bak });
+      } else created.push(dst);
+      fs.writeFileSync(dst, payload);
+      if (!payload.equals(fs.readFileSync(dst))) throw new Error(`복사 대조 실패: ${targetRel}`);
+    }
+    return { ok: true, count: entries.length, backupDir };
+  } catch (e) {
+    for (const dst of created.reverse()) { try { fs.unlinkSync(dst); } catch { /* best-effort rollback */ } }
+    for (const { dst, bak } of existed.reverse()) { try { fs.copyFileSync(bak, dst); } catch { /* best-effort rollback */ } }
+    return { ok: false, why: e.message, backupDir };
+  }
+}
+
+function hasLocalPackageToolchain(root = __dirname) {
+  return fs.existsSync(path.join(root, "node_modules", "typescript", "bin", "tsc"))
+    && fs.existsSync(path.join(root, "node_modules", "@vscode", "vsce", "vsce"));
+}
+
+// 목록을 읽지 못하면 "미설치"로 추측하지 않는다. 그 추측이 동일 버전 강제 교체로 이어져
+// 실행 중인 확장 폴더부터 사라진 실제 사고가 있었으므로, 판독 실패는 설치 보류가 정답이다.
+function installVsixWithCli(codeCli, vsixPath, extensionId, version, spawnSyncImpl = cp.spawnSync) {
+  const installed = installedExtensionState(codeCli, extensionId, spawnSyncImpl);
+  if (!installed.ok) return { kind: "list-unreadable", command: null, result: null };
+  if (version && installed.version === version) return { kind: "same-version", command: null, result: null };
+
+  const command = buildInstallCmd(codeCli, vsixPath);
+  let result;
+  try { result = spawnSyncImpl(command, { shell: true, encoding: "utf8", timeout: 120000 }); }
+  catch { result = null; }
+  return {
+    kind: result && result.status === 0 ? "installed" : "install-failed",
+    command,
+    result,
+  };
+}
 // 주어진 파일 경로에서 위로 올라가며 'bin/<binName>'을 찾는다(예: …/<root>/data/extensions/…/claude.exe → <root>/bin/code.cmd).
 // VS Code 포터블/무설치형은 표준 위치에 없으므로, 실행 중인 도구의 경로에서 설치 루트를 역추적하는 신호로 쓴다.
 function findRootUpwards(startPath, binName) {
@@ -280,7 +521,7 @@ function vscodeSignalClis(env) {
   return [...new Set(list)];
 }
 // (B) OS 표준 설치 위치 후보(설치형 VS Code / Insiders / Flatpak 등). PATH의 code보다 뒤에 시도.
-function standardCodeClis() {
+function standardCodeClis(env = process.env) {
   const isWin = process.platform === "win32";
   const isMac = process.platform === "darwin";
   const bin = isWin ? "code.cmd" : "code";
@@ -288,9 +529,9 @@ function standardCodeClis() {
   const fromRoot = (root) => { if (root) list.push(path.join(root, "bin", bin)); };
   if (isWin) {
     // 환경변수가 없어도 동작하도록 표준 기본값으로 폴백(LOCALAPPDATA→홈/AppData/Local, ProgramFiles→C:\Program Files).
-    const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
-    const progFiles = process.env.ProgramFiles || "C:\\Program Files";
-    const progFiles86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+    const localAppData = env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+    const progFiles = env.ProgramFiles || "C:\\Program Files";
+    const progFiles86 = env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
     fromRoot(path.join(localAppData, "Programs", "Microsoft VS Code"));
     fromRoot(path.join(progFiles, "Microsoft VS Code"));
     fromRoot(path.join(progFiles86, "Microsoft VS Code"));
@@ -310,26 +551,56 @@ function standardCodeClis() {
 // 전체 우선순위(순수함수 — 테스트로 잠금): 현재 VS Code 신호 → PATH의 'code' → OS 표준위치.
 // (CODE_CLI 명시는 resolveCodeCli에서 이보다 먼저 단락처리.) 'code'는 PATH 해석용 bare 토큰(존재검사 없이 --version으로 확인).
 function codeCliPriority(env) {
-  return [...new Set([...vscodeSignalClis(env), "code", ...standardCodeClis()])];
+  return [...new Set([...vscodeSignalClis(env), "code", ...standardCodeClis(env)])];
 }
 // 하위호환: 신호+표준 후보(‘code’ 제외) — 기존 호출/테스트용.
 function candidateCodeClis(env) {
-  return [...new Set([...vscodeSignalClis(env), ...standardCodeClis()])];
+  return [...new Set([...vscodeSignalClis(env), ...standardCodeClis(env)])];
+}
+// PATH의 bare 명령을 실제 실행 파일에 결속한다. 같은 이름의 다른 VS Code 폴더를 갱신하지
+// 않으려면 `--version`을 실행한 대상과 extensions 루트를 유도한 대상이 같은 절대경로여야 한다.
+function resolveCommandOnPath(command, env = process.env, platform = process.platform, cwd = process.cwd()) {
+  let cmd = String(command || "").trim();
+  if (cmd.startsWith('"') && cmd.endsWith('"')) cmd = cmd.slice(1, -1);
+  if (!cmd) return null;
+  const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+  if (/[\\/]/.test(cmd)) {
+    try { return fs.statSync(cmd).isFile() ? real(cmd) : null; } catch { return null; }
+  }
+  const isWin = platform === "win32";
+  const pathText = String(env.PATH || env.Path || env.path || "");
+  const delim = isWin ? ";" : ":";
+  const dirs = [...new Set([...(isWin && cwd ? [cwd] : []), ...pathText.split(delim)]
+    .map((p) => String(p || "").trim().replace(/^"|"$/g, "")).filter(Boolean))];
+  let suffixes = [""];
+  if (isWin && !path.extname(cmd)) {
+    const pathext = String(env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").map((x) => x.trim()).filter(Boolean);
+    suffixes = [...new Set(["", ...pathext, ...pathext.map((x) => x.toLowerCase())])];
+  }
+  for (const dir of dirs) for (const suffix of suffixes) {
+    const candidate = path.join(dir, cmd + suffix);
+    try { if (fs.statSync(candidate).isFile()) return real(candidate); } catch { /* 다음 PATH 후보 */ }
+  }
+  return null;
 }
 // 실제로 동작하는 code 실행파일인지 확인(--version 시도). 경로/공백 있으면 따옴표, bare 이름은 그대로(PATHEXT 해석 위해).
-function codeCliWorks(tok) {
+function codeCliWorks(tok, env = process.env) {
   if (!tok) return false;
   const t = /[\\/\s]/.test(String(tok)) ? q(fwd(tok)) : String(tok);
-  try { const r = cp.spawnSync(`${t} --version`, { shell: true, encoding: "utf8", timeout: 30000 }); return !!(r && r.status === 0); }
+  try { const r = cp.spawnSync(`${t} --version`, { shell: true, encoding: "utf8", timeout: 30000, env }); return !!(r && r.status === 0); }
   catch { return false; }
 }
 // 쓸 code CLI를 결정: ① CODE_CLI 명시(그대로 신뢰 — 자동탐지 안 함; 테스트가 가짜값으로 자동설치 무력화하는 계약 유지)
 // ② codeCliPriority 순서대로 — 현재 VS Code 신호(존재+동작) → PATH 'code'(동작) → OS 표준(존재+동작). 못 찾으면 null.
-function resolveCodeCli() {
-  if (process.env.CODE_CLI) return process.env.CODE_CLI;
-  for (const tok of codeCliPriority()) {
-    if (tok === "code") { if (codeCliWorks("code")) return "code"; }      // PATH bare — 존재검사 없이 --version
-    else if (fs.existsSync(tok) && codeCliWorks(tok)) return tok;          // 경로 후보 — 실제 존재+동작
+function resolveCodeCli(env = process.env) {
+  if (env.CODE_CLI) {
+    const bound = resolveCommandOnPath(env.CODE_CLI, env);
+    if (bound && codeCliWorks(bound, env)) return bound;
+    return codeCliWorks(env.CODE_CLI, env) ? env.CODE_CLI : null; // 셸 별칭이면 같은 버전 갱신은 명시 extensions 경로를 요구
+  }
+  for (const tok of codeCliPriority(env)) {
+    const bound = resolveCommandOnPath(tok, env);
+    if (bound && codeCliWorks(bound, env)) return bound;
   }
   return null;
 }
@@ -337,24 +608,42 @@ function tryInstallVsix(dryRun) {
   let files = [];
   try { files = fs.readdirSync(__dirname); } catch { /* ignore */ }
   let version = "";
-  try { version = (require(path.join(__dirname, "package.json")).version) || ""; } catch { /* ignore */ }
-  // ★ 실제 설치는 '항상' 현재 소스로 새로 빌드한다. 캐시된 vsix를 재사용하면 (1) 버전 올린 뒤 옛 vsix만 남거나
-  //   (2) 버전은 같은데 옛 소스로 빌드된 stale vsix가 남았을 때 'git pull && install'이 옛 확장을 깔았다(둘 다 실제 발생).
-  //   currentVsix(버전명 일치)만으론 (2)를 못 거르므로 캐시 재사용 자체를 버린다. npm run package = compile &&
-  //   clean:vsix && vsce package 라 십수 초에 항상 최신을 보장. 빌드 도구가 없을 때(빌드 실패)만 기존 vsix로 폴백.
+  let extensionId = "";
+  try {
+    const meta = require(path.join(__dirname, "package.json"));
+    version = meta.version || "";
+    extensionId = meta.publisher && meta.name ? `${meta.publisher}.${meta.name}` : "";
+  } catch { /* ignore */ }
+  // 개발 체크아웃은 현재 소스로 다시 빌드해 stale VSIX를 피한다. GitHub 설치 묶음은 node_modules 없이
+  // 배포되므로, 정확한 현재 버전의 동봉 VSIX를 릴리스 산출물로 신뢰해 그대로 사용한다.
   let vsix = null;
   if (dryRun) {
     const cur = currentVsix(files, version);
-    log("ℹ️  (미리보기) 실제 설치 시 현재 소스로 새로 빌드(npm run package) 후 설치합니다" +
-      (cur ? ` (현재 ${cur}가 있어도 최신 보장 위해 재빌드).` : " (현재 버전 VSIX 없음 → 빌드로 생성)."));
+    if (hasLocalPackageToolchain(__dirname)) {
+      log("ℹ️  (미리보기) 실제 설치 시 현재 소스로 새로 빌드(npm run package) 후 설치합니다" +
+        (cur ? ` (현재 ${cur}가 있어도 최신 보장 위해 재빌드).` : " (현재 버전 VSIX 없음 → 빌드로 생성)."));
+    } else if (cur) {
+      log(`ℹ️  (미리보기) GitHub 설치 묶음의 미리 빌드된 ${cur}를 사용합니다 (npm install 불필요).`);
+    } else {
+      log("ℹ️  (미리보기) 빌드 도구와 현재 버전 VSIX가 없어 확장 설치는 보류됩니다. 먼저 'npm install'이 필요합니다.");
+    }
     const detected = resolveCodeCli();
     log(detected ? `ℹ️  (미리보기) 확장 설치에 쓸 VS Code CLI: ${detected}` : "ℹ️  (미리보기) VS Code CLI(code)를 못 찾음 — CODE_CLI 지정 또는 수동 설치 필요.");
-    return;
+    return true;
   }
-  log("ℹ️  현재 소스로 확장을 새로 빌드합니다 (npm run package)…");
   let b;
-  try { b = cp.spawnSync("npm run package", { cwd: __dirname, shell: true, encoding: "utf8", timeout: 300000, stdio: "inherit" }); }
-  catch { b = null; }
+  const bundled = currentVsix(files, version);
+  if (!hasLocalPackageToolchain(__dirname) && bundled) {
+    log(`ℹ️  GitHub 설치 묶음의 미리 빌드된 ${bundled}를 사용합니다 (npm install 불필요).`);
+    b = { status: 0, bundled: true };
+  } else if (!hasLocalPackageToolchain(__dirname)) {
+    log("ℹ️  확장을 빌드할 도구가 없고 함께 제공된 VSIX도 없습니다. 먼저 'npm install'을 실행하세요.");
+    return true;
+  } else {
+    log("ℹ️  현재 소스로 확장을 새로 빌드합니다 (npm run package)…");
+    try { b = cp.spawnSync("npm run package", { cwd: __dirname, shell: true, encoding: "utf8", timeout: 300000, stdio: "inherit" }); }
+    catch { b = null; }
+  }
   // npm run package는 성공이든 실패든 clean:vsix로 기존 VSIX를 이미 지웠을 수 있다(예: compile·clean은 됐는데 vsce 실패).
   // 그래서 빌드 결과와 무관하게 디렉터리를 '다시' 읽어 실제 '남아있는' VSIX로만 판단한다(삭제된 파일을 가리키지 않게).
   try { files = fs.readdirSync(__dirname); } catch { /* ignore */ }
@@ -362,17 +651,17 @@ function tryInstallVsix(dryRun) {
   if (!(b && b.status === 0)) {
     // 빌드 실패(빌드 도구 미설치 / vsce 실패 등): 현재 버전 VSIX가 '실제로' 남아있으면 폴백(경고), 없으면 안내 후 종료.
     if (vsix) log(`⚠️  빌드 실패 — 남아있는 ${vsix}로 설치합니다(최신 소스가 아닐 수 있음). 'npm install' 후 재시도를 권장합니다.`);
-    else { log("ℹ️  VSIX 빌드 실패 + 설치할 VSIX 없음(clean:vsix로 삭제됐을 수 있음) — 'npm install' 후 다시 실행하거나 확장을 수동 설치하세요."); return; }
+    else { log("ℹ️  VSIX 빌드 실패 + 설치할 VSIX 없음(clean:vsix로 삭제됐을 수 있음) — 'npm install' 후 다시 실행하거나 확장을 수동 설치하세요."); return true; }
   }
   if (!vsix) {
     log("ℹ️  확장 VSIX(codex-bridge-*.vsix)를 못 찾음 — 확장은 수동 설치하세요(또는 마켓플레이스).");
-    return;
+    return true;
   }
   const vsixPath = path.join(__dirname, vsix);
   if (!fs.existsSync(vsixPath)) {
     // 최종 안전장치: 설치 직전 파일이 실제로 있는지 확인(빌드 산출물/폴백 불일치 방어 — 없는 파일로 code 설치 시도 방지).
     log(`ℹ️  설치할 VSIX 파일이 실제로 없습니다(${vsix}) — 'npm install' 후 다시 실행하세요.`);
-    return;
+    return true;
   }
   const codeCli = resolveCodeCli();
   if (!codeCli) {
@@ -380,29 +669,92 @@ function tryInstallVsix(dryRun) {
     log("ℹ️  VS Code CLI(code)를 못 찾아 확장 자동 설치를 건너뜁니다.");
     log(`   수동: VS Code에서 '확장: VSIX에서 설치'로 ${vsixPath} 선택`);
     log("   또는 환경변수 CODE_CLI 에 code(.cmd) 실행파일 경로 지정 후 재시도.");
-    return;
+    return true;
   }
-  const cmd = buildInstallCmd(codeCli, vsixPath);
-  let r;
-  try { r = cp.spawnSync(cmd, { shell: true, encoding: "utf8", timeout: 120000 }); }
-  catch { r = null; }
-  if (r && r.status === 0) { log(`✅ 확장 설치: ${vsix}  (code: ${codeCli})`); }
+  const installResult = installVsixWithCli(codeCli, vsixPath, extensionId, version);
+  if (installResult.kind === "list-unreadable") {
+    log(`ℹ️  확장 설치 목록을 읽지 못해 자동 설치를 안전하게 보류합니다(${extensionId}).`);
+    log("   미설치로 추측해 강제 교체하면 실행 중인 확장 폴더가 먼저 사라질 수 있습니다.");
+    log("   VS Code를 완전히 다시 연 뒤 설치기를 재실행하거나 새 버전 VSIX를 수동 설치하세요.");
+    return true; // 기존 계약: 브릿지·훅 설치는 유지하고 확장만 명시적으로 보류한다.
+  }
+  if (installResult.kind === "same-version") {
+    const roots = extensionRootCandidates(codeCli);
+    const target = findInstalledExtensionDir(roots, extensionId, version);
+    if (!target) {
+      log(`ℹ️  확장 ${extensionId}@${version}의 실제 설치 폴더를 찾지 못해 같은 버전 갱신을 안전하게 보류합니다.`);
+      log(`   확인한 위치: ${roots.join(" · ") || "없음"}`);
+      log("   비표준 위치라면 CODEX_BRIDGE_EXTENSIONS_DIR에 extensions 폴더를 지정한 뒤 재실행하세요.");
+      return false;
+    }
+    const over = overlaySameVersionExtension(__dirname, target, extensionId, version);
+    if (!over.ok) {
+      log(`ℹ️  같은 버전 안전 갱신을 완료하지 못했습니다: ${over.why}`);
+      if (over.backupDir) log(`   복구용 백업: ${over.backupDir}`);
+      return false;
+    }
+    log(`✅ 같은 버전 안전 갱신: ${extensionId}@${version} 런타임 ${over.count}개 → ${target}`);
+    log(`   기존 파일 백업: ${over.backupDir}`);
+    log("   VS Code 소유 설치 메타데이터는 보존했습니다. Developer: Reload Window로 새 코드를 불러오세요.");
+    return true;
+  }
+  if (installResult.kind === "installed") { log(`✅ 확장 설치: ${vsix}  (code: ${codeCli})`); return true; }
   else {
     log(`ℹ️  확장 자동 설치 실패(code: ${codeCli}).`);
     log(`   수동: VS Code에서 '확장: VSIX에서 설치'로 ${vsixPath} 선택`);
     log("   또는 환경변수 CODE_CLI 에 code(.cmd) 실행파일 경로 지정 후 재시도.");
+    return true;
   }
+}
+
+// 레포에서 status를 실행할 때는 "실행 가능"만 보지 말고, 지금 레포의 실행 파일과 실제 훅이 부르는
+// 운영 사본이 같은 세대인지 먼저 본다. 사용자가 새 코드를 받은 뒤 창만 리로드하면 옛 확장 묶음이 옛
+// 사본을 계속 쓰는 상황을 doctor의 초록처럼 오해하지 않게 한다.
+function bridgeRuntimeParity(srcDir = SRC_BRIDGE, liveDir = BRIDGE_DIR, files = BRIDGE_SCRIPTS) {
+  const missing = [], changed = [];
+  for (const f of files) {
+    const src = path.join(srcDir, f), live = path.join(liveDir, f);
+    if (!fs.existsSync(src) || !fs.existsSync(live)) { missing.push(f); continue; }
+    try { if (!fs.readFileSync(src).equals(fs.readFileSync(live))) changed.push(f); }
+    catch { changed.push(f); }
+  }
+  let manifest = "ok";
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(liveDir, "deploy-manifest.json"), "utf8"));
+    const got = m && m.schema === "deploy-manifest-v1" && m.files && typeof m.files === "object"
+      ? Object.keys(m.files).sort().join(",") : "";
+    if (got !== [...files].sort().join(",")) manifest = "set-mismatch";
+    else {
+      const crypto = require("crypto");
+      for (const f of files) {
+        const sha = crypto.createHash("sha1").update(fs.readFileSync(path.join(srcDir, f))).digest("hex");
+        if (m.files[f] !== sha) { manifest = "source-mismatch"; break; }
+      }
+    }
+  } catch { manifest = "missing-or-corrupt"; }
+  return { ok: missing.length === 0 && changed.length === 0 && manifest === "ok", missing, changed, manifest };
 }
 
 function runDoctor() {
   const bridge = path.join(BRIDGE_DIR, "codex-bridge.js");
-  if (!fs.existsSync(bridge)) { log("ℹ️  doctor 생략(브릿지 미설치)"); return; }
+  if (!fs.existsSync(bridge)) { log("❌ 활성 브릿지 미설치 — node install.js 실행 필요"); return false; }
+  const parity = bridgeRuntimeParity();
+  if (!parity.ok) {
+    log("❌ 현재 레포와 활성 브릿지의 실행 세대가 다릅니다 — 창 리로드만으로는 갱신되지 않습니다.");
+    if (parity.missing.length) log("   빠진 실행 파일: " + parity.missing.join(", "));
+    if (parity.changed.length) log("   내용이 다른 실행 파일: " + parity.changed.join(", "));
+    if (parity.manifest !== "ok") log("   배포 목록 상태: " + parity.manifest);
+    log("   이 레포에서 node install.js 를 실행한 뒤 다시 status를 확인하세요.");
+  } else log("✅ 현재 레포와 활성 브릿지의 실행 세대가 같습니다.");
   log("\n── 설치 점검(doctor) ──");
+  let doctorOk = true;
   try {
     const r = cp.spawnSync(process.execPath, [bridge, "doctor"], { encoding: "utf8", timeout: 60000, maxBuffer: 1024 * 1024 * 64 });
     if (r.stdout) process.stdout.write(r.stdout);
     if (r.status !== 0 && r.stderr) process.stdout.write(r.stderr);
-  } catch (e) { log("ℹ️  doctor 실행 실패: " + e.message); }
+    doctorOk = r.status === 0;
+  } catch (e) { log("ℹ️  doctor 실행 실패: " + e.message); doctorOk = false; }
+  return parity.ok && doctorOk;
 }
 
 function cmdInstall(dryRun) {
@@ -453,12 +805,17 @@ function cmdInstall(dryRun) {
   }
 
   // 5) 확장 + 점검
-  tryInstallVsix(dryRun);
-  if (!dryRun) runDoctor();
+  const extensionOk = tryInstallVsix(dryRun);
+  const doctorOk = dryRun ? true : runDoctor();
+  if (!extensionOk || !doctorOk) {
+    log("\n❌ 설치 미완료 — 브릿지·훅의 반영 여부와 위 오류를 확인한 뒤 다시 실행하세요.");
+    return false;
+  }
 
   log(dryRun
     ? "\n미리보기 끝(쓰기 없음)."
     : "\n설치 완료. VS Code에서 'Developer: Reload Window'를 한 번 실행해야 새 확장·Codex 훅 상태가 현재 창에 적용됩니다. Claude 훅은 새 Claude Code 세션부터 적용됩니다.");
+  return true;
 }
 
 function cmdUninstall(purge) {
@@ -521,8 +878,8 @@ if (require.main === module) {
 
   if (has("--help") || has("-h") || cmd === "help") cmdHelp();
   else if (cmd === "uninstall") cmdUninstall(has("--purge"));
-  else if (cmd === "status" || cmd === "doctor") runDoctor();
-  else cmdInstall(has("--dry-run") || has("-n"));
+  else if (cmd === "status" || cmd === "doctor") { if (!runDoctor()) process.exitCode = 1; }
+  else if (!cmdInstall(has("--dry-run") || has("-n"))) process.exitCode = 1;
 }
 
-module.exports = { pickVsix, currentVsix, buildInstallCmd, candidateCodeClis, findRootUpwards, vscodeSignalClis, standardCodeClis, codeCliPriority, OUR_HOOKS, BRIDGE_SCRIPTS, isOurHookCmd }; // 뒤 3개: hook-setup.ts와의 규칙 패리티 테스트용
+module.exports = { pickVsix, currentVsix, buildInstallCmd, installedExtensionVersionFromList, installVsixWithCli, extensionRootCandidates, findInstalledExtensionDir, sameVersionOverlayEntries, overlaySameVersionExtension, hasLocalPackageToolchain, resolveCommandOnPath, resolveCodeCli, candidateCodeClis, findRootUpwards, vscodeSignalClis, standardCodeClis, codeCliPriority, bridgeRuntimeParity, OUR_HOOKS, BRIDGE_SCRIPTS, isOurHookCmd }; // 뒤 3개: hook-setup.ts와의 규칙 패리티 테스트용

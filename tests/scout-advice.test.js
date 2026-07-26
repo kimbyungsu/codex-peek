@@ -111,8 +111,9 @@ store.clearLive(repo);
 ok(!fs.existsSync(path.join(store.LIVE_DIR, store.wsKeyFor(repo) + ".json")), "clear → 신호 파일 제거");
 const selfSrc = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-scout-self.js"), "utf8");
 const dsSrc = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-scout-deepseek.js"), "utf8");
-ok(/markLive\(repo, "self"\)/.test(selfSrc) && /finally \{ clearLive\(repo\); \}/.test(selfSrc), "self 러너: 호출 직전 mark·finally clear");
-ok(/markLive\(repo, "deepseek"\)/.test(dsSrc) && /finally \{ clearLive\(repo\); \}/.test(dsSrc), "DeepSeek 러너: 동일 배선");
+const provSrc = fs.readFileSync(path.join(__dirname, "..", "scripts", "scout-providers.js"), "utf8");
+ok(/markLive\(repo, providerId\)/.test(provSrc) && /finally \{ clearLive\(repo\); \}/.test(provSrc), "공통 파이프라인(P5): 호출 직전 mark·finally clear(러너 2종 공통)");
+ok(/runScout\(repo, "self"/.test(selfSrc) && /runScout\(repo, "deepseek"/.test(dsSrc), "러너 2종 runScout 위임(동일 배선은 구조 보장)");
 
 console.log("[확장·훅 배선] 상태바 생성중 라벨·카드 반영·훅 주입(소스 계약)");
 const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");

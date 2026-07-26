@@ -40,17 +40,19 @@ console.log("[3] 생산자 배선(소스 잠금) — 러너 2종·ping이 실제
 const selfSrc = fs.readFileSync(path.join(ROOT, "scripts", "scope-scout-self.js"), "utf8");
 const dsSrc = fs.readFileSync(path.join(ROOT, "scripts", "scope-scout-deepseek.js"), "utf8");
 const brSrc = fs.readFileSync(path.join(ROOT, "bridge", "deepseek-bridge.js"), "utf8");
-ok(/appendScoutUsage\(\{ ts: new Date\(\)\.toISOString\(\), workspace: repo, arm: "deepseek"/.test(dsSrc), "deepseek 러너 — 지도마다 기록(workspace=정찰 대상 레포)");
-ok(/appendScoutUsage\(\{ ts: new Date\(\)\.toISOString\(\), workspace: repo, arm: "self"/.test(selfSrc) && /usageIn: null/.test(selfSrc), "self 러너 — 문자수 추정 재료 기록(토큰 null 정직)");
-ok(/arm: "ping"/.test(brSrc) && /appendScoutUsage/.test(brSrc), "연결 점검(ping)도 과금 호출로 기록");
+const provSrc = fs.readFileSync(path.join(ROOT, "scripts", "scout-providers.js"), "utf8");
+ok(/schema: "scout-usage-v2"/.test(provSrc) && /repoKey: CL\.repoKeyForStats\(repo\)/.test(provSrc) && /flow: "map-scout"/.test(provSrc), "공통 파이프라인(P10) — 실제 저장소 키·목적별 v2 호출 기록");
+ok(/tokenIn: both9 \? u9\.in : null/.test(provSrc) && /usage: null/.test(provSrc), "self 어댑터 — 토큰 미제공 시 null 정직(문자수와 분리)");
+ok(/runScout\(repo, "self"/.test(selfSrc) && /runScout\(repo, "deepseek"/.test(dsSrc), "러너 2종은 runScout 위임(장부 배선은 공통층 한 곳)");
+ok(/inheritedUsageContext\("readiness"/.test(brSrc) && /schema: "scout-usage-v2"/.test(brSrc) && /callId/.test(brSrc), "연결·형식 점검 API도 실제 호출별 v2 행으로 기록");
 
-console.log("[4] 통계 탭 표시(소스 잠금) — 정찰 비용 구획·정직 각주");
+console.log("[4] 통계 탭 표시(소스 잠금) — P10 목적별 사용량·정직 각주");
 const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
-ok(/scoutCostRows/.test(ext) && /정찰\(3트랙\) 비용 — 최근 28일/.test(ext) && /Recon \(3-track\) cost — last 28 days/.test(ext), "통계 탭 '정찰 비용' 구획(한/영)");
-ok(/장부는 60일 보존/.test(ext) && !/영구 장부/.test(ext) && /log kept 60 days/.test(ext), "보존 기간 표현 정직 — '영구' 금지(실제 60일 트림과 일치 · Codex 반례 잠금)");
-ok(/글자 수'만 기록해요\(토큰 아님/.test(ext) && /not tokens — rough estimation only/.test(ext), "self 팔 정직 각주 — 글자 수는 토큰이 아님·별도 결제 없음");
-ok(/readScoutCosts/.test(ext) && /scoutCosts: readScoutCosts\(ws\)/.test(ext) && /scoutTargetFor\(ws\)\.repo/.test(ext), "판독기 — 정찰 대상(P1) 기준 필터로 상태에 실림");
-ok(/연결 점검\(3트랙 켤 때 1회·전역\)/.test(ext) && /별도 결제 없음/.test(ext), "행 라벨 — ping 전역·self 무과금 명시");
+ok(/목적별 외부 호출·사용량/.test(ext) && /External calls and usage by purpose/.test(ext), "통계 탭 목적별 사용량 구획(한/영)");
+ok(/원장은 60일 보존/.test(ext) && !/영구 장부/.test(ext) && /logs are kept for 60 days/.test(ext), "보존 기간 표현 정직 — '영구' 금지(실제 60일 트림과 일치)");
+ok(/토큰 미제공 호출의 입력/.test(ext) && /calls without tokens/.test(ext), "토큰 미제공 호출은 글자 수로 별도 표시");
+ok(/collectMapHistoryState\(contract\.scoutMode === "on", mapActualRepo/.test(ext) && /repoKeyForStats\(repo\)/.test(ext), "판독기 — actual repo 익명 키 기준·3트랙 게이트로 상태에 실림");
+ok(/전역 준비 점검 \(현재 프로젝트 비용과 분리\)/.test(ext) && /Global readiness checks \(separate from current-project usage\)/.test(ext), "준비 점검은 현재 프로젝트 비용과 분리");
 
 console.log("[5] 상태바(소스 잠금) — 감사 B 반영: flow 병기·툴팁 분기·게이트·평시 분기·워처");
 ok(/const scoutOn = !!ws && \(\(\) => \{ try \{ return loadContract\(ws\)\.scoutMode === "on"; \}/.test(ext), "scoutMode 게이트 일원화 — 2트랙 잔존 live 파일이 정찰 문구 노출 못 함");
@@ -65,13 +67,13 @@ console.log("[6] 문서 정합(감사 C 반영 잠금)");
 const privacy = fs.readFileSync(path.join(ROOT, "PRIVACY.md"), "utf8");
 ok(/scout-baseline\.json/.test(privacy) && /scout-live\/<키>\.json/.test(privacy) && /stats\/scout-usage\.jsonl/.test(privacy), "PRIVACY — 새 파일 3종(태도 슬롯·라이브 신호·비용 장부) 기재");
 ok(/판정·복권 증거 이벤트\(반박·대체·소멸·사람 재확인·반박 이후 유효 확인\)는 우선 보존/.test(privacy) && /순계 압축/.test(privacy), "PRIVACY — 트림 서술을 현행(판정 보존+가역쌍 순계 압축) 구현에 맞춤");
-ok(/반박 뒤 재확인\(사람 1회·검증 2회\)이 쌓이면 복권/.test(ext) && /rehabilitated on later re-confirms/.test(ext), "가이드 — 복권 경로 반영(틀림=영구 제외 서술 폐기)");
+ok(/반박 뒤 재확인\(사람 1회·검증 2회\)이 쌓이면 복권/.test(ext) && /rehabilitated if re-confirmed after \(1 human \/ 2 verify\)/.test(ext), "가이드 — 복권 경로 반영(틀림=영구 제외 서술 폐기)");
 const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
 const readmeEn = fs.readFileSync(path.join(ROOT, "docs", "README.en.md"), "utf8");
-ok(/3트랙 기여\(관찰 신호\)/.test(readme) && /정찰\(3트랙\) 비용/.test(readme), "README ko — 통계 절에 기여 카드·비용 구획");
+ok(/3트랙 기여\(관찰 신호\)/.test(readme) && /Project MAP 운영 현황/.test(readme) && /목적별 외부 호출·사용량/.test(readme), "README ko — 통계 절에 기여 카드·P10 목적별 사용량");
 ok(/단계별 기본 원칙\*\* 섹션에서/.test(readme) && /④ 정찰 기본 원칙/.test(readme) && !/🔒 기본 지침\*\* 섹션/.test(readme), "README ko — 옛 명칭 정리+④칸 안내");
 ok(/scout-baseline\.en\.json/.test(readme) && /지도 원문 언어도 전역 언어를 따릅니다/.test(readme), "README ko — 언어 절에 정찰 슬롯·지도 언어");
-ok(/3-track contribution card/.test(readmeEn) && /recon cost log/.test(readmeEn) && /per-language slots/.test(readmeEn), "README en — 대응 절 갱신");
+ok(/3-track contribution card/.test(readmeEn) && /Project MAP operations/.test(readmeEn) && /per-language slots/.test(readmeEn), "README en — 대응 절 갱신");
 
 console.log("[7] 리팩토링(감사 D 반영 잠금) — 고아 제거·version 실사용·러너 i18n");
 ok(!/m\?\.type === "saveScoutBaseline"/.test(ext) && !/target: "scoutBase"/.test(ext), "고아 메시지 핸들러(웹뷰가 더는 안 보내는 saveScoutBaseline/reset) 제거");

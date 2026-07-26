@@ -20,7 +20,7 @@ ok(/실질 효과는 '정찰 실행'에서 나와요/.test(ext) && /별도 과�
 ok(!/addStep=\(color,name,state\)/.test(ext), "옛 단계 행(addStep) 폐기 — 역할은 항상 노출 도해(rflow 노드+실데이터)가 대체");
 ok(!/사람 승인/.test(ext) && !/human approval/.test(ext), "'사람 승인/human approval' 잔재 0 — 세그먼트 힌트 포함 전거(Codex 반례 잠금)");
 ok(!/수동 명령으로|수동 생성 가능|via manual command|made by manual command/.test(ext), "상태 요약·상태바의 '수동만' 잔재 0 — 직접/자동 지시 모델 유지(Codex 반례 잠금)");
-ok(/추가 LLM 없음/.test(ext) && /ml&&ml\.mapExists/.test(ext) && /mapApproved/.test(ext) && /검증이 확인하면 신뢰로 승격/.test(ext), "③ 정확 표현·④ 실신호 유지(도해·일지 카드로 이관)");
+ok(/추가 LLM 없음/.test(ext) && /ml&&ml\.mapExists/.test(ext) && /mapApproved/.test(ext) && /서로 다른 검증 2회가 실제 근거 파일까지 다룬/.test(ext), "③ 자동 승격 조건의 정확 표현·④ 실신호 유지(도해·일지 카드로 이관)");
 ok(/openReconGuide/.test(ext) && /codexBridgeReconGuide/.test(ext) && /enableScripts: false/.test(ext) && /default-src 'none'; style-src 'unsafe-inline'/.test(ext), "자세히 보기(새탭): 별개 viewType·스크립트 차단·좁은 CSP(사용자 지적 7·Codex 보완)");
 ok(/gb\.addEventListener\("click"/.test(ext) && !/summary.*appendChild\(gb\)/.test(ext), "가이드 버튼은 summary 밖(토글 충돌 방지 — Codex 보완)");
 ok(!/det\.firstChild\.title=T\("변경 감지\(⚙자동\)/.test(ext), "옛 접힘 hover 스트립 폐기(구획 자체 폐기에 따름)");
@@ -72,8 +72,8 @@ ok(/📔 ③ 관찰 일지/.test(ext) && /Field journal — auto memory/.test(ex
 ok(/🚧 플랜 게이트 \(3트랙 기본 켜짐·끌 수 있음\)/.test(ext) && /Plan gate \(on by default in 3-track, can be turned off\)/.test(ext) && /🗣 당신의 말/.test(ext) && /Your words/.test(ext), "개입 지점 노드: 게이트(3트랙 기본 켜짐 정직 표기 — 2026-07-09 승격)·사용자 발화(한/영 쌍)");
 ok(!/기본 꺼짐·관측만/.test(ext) && !/opt-in, off/.test(ext) && !/선택·기본 꺼짐/.test(ext) && !/Advisory — blocks\/forces nothing/.test(ext) && !/아무것도 막거나 강제하지 않고/.test(ext.replace(/그 외에는 아무것도 막거나 강제하지 않고/g, "")), "옛 '기본 꺼짐·무조건 안 막음' 정책 문구 잔재 0 — 승격 후 사용자 표면(새탭 SVG·툴팁·설치 모달·장부 한계문)이 실제 동작과 일치(게이트 예외를 단서로 단 문장만 허용 — Codex 반례 잠금)");
 ok(/✚ 제안\(지도가 발견\) ▶ 동봉\(자료에 실림\) ✔ 확인\(검증이 인정\) ✖ 반박\(틀림 판명\)/.test(ext), "일지 이벤트 4종(✚▶✔✖)을 기술용어 없이 평문 설명");
-ok((ext.match(/class="ln fb"/g) || []).length === 2 && /신뢰분이 다음 꾸러미로/.test(ext) && /교범도 다음 꾸러미의 확정 사실로/.test(ext), "점선 피드백 경로 2개(일지→꾸러미·교범→꾸러미) — '다음 정찰이 똑똑해지는 길' 명시");
-ok(/사람 개입 지점은 👤 세 곳/.test(ext) && /all optional/.test(ext), "한 줄 요약 — 개입(고정·차단·도장)은 전부 선택(한/영 쌍)");
+ok((ext.match(/class="ln fb"/g) || []).length === 2 && /검증된 일지가 다음 꾸러미로/.test(ext) && /교범도 다음 꾸러미의 확정 사실로/.test(ext), "점선 피드백 경로 2개(검증된 일지→꾸러미·교범→꾸러미) — '다음 정찰이 똑똑해지는 길' 명시");
+ok(/사람 개입은 직접 확인·정정/.test(ext) && /are all optional/.test(ext), "한 줄 요약 — 사람 판단은 예외적 선택이고 자동 흐름이 기본(한/영 쌍)");
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
