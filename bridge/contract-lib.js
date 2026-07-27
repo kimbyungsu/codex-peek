@@ -2555,8 +2555,8 @@ function extractMapPatches(mapText) {
 function ledgerSig(t) { return String(t || "").replace(/\s+/g, " ").trim().toLowerCase(); }
 const LEDGER_EVENTS_DIR = path.join(BRIDGE_DIR, "map-ledger-events");
 function ledgerEventsFileFor(ws) { return path.join(LEDGER_EVENTS_DIR, wsKeyFor(ws) + ".jsonl"); }
-const LEDGER_EVENTS_CAP = 2000;   // 보존 상한(감사 추적 vs 무한 증가의 절충 — 정직 고지: 이보다 오래된 이벤트는 잘림)
-const LEDGER_EVENTS_TRIM_AT = 2400; // 히스테리시스 — 매 append마다 rewrite하지 않게
+const LEDGER_EVENTS_CAP = 10000;    // 대형·장기 프로젝트 보존 상한(압축 시 상태·판정 의미 우선 보존)
+const LEDGER_EVENTS_TRIM_AT = 12000; // 히스테리시스 — 2,000건 여유를 둬 매 append 재작성 방지
 function appendLedgerEvent(ws, ev) {
   try {
     if (!ws || !ev || !ev.sig || !ev.type) return false;
@@ -2570,7 +2570,7 @@ function appendLedgerEvent(ws, ev) {
     try {
       const lines = fs.readFileSync(f, "utf8").split(/\r?\n/).filter(Boolean);
       if (lines.length > LEDGER_EVENTS_TRIM_AT) {
-        // 재압축 유예(Codex 8차 #2): 마지막 압축 세대 이후 '새 이벤트'가 임계(TRIM_AT-CAP=400)만큼 쌓이기 전엔
+        // 재압축 유예(Codex 8차 #2): 마지막 압축 세대 이후 '새 이벤트'가 임계(TRIM_AT-CAP=2,000)만큼 쌓이기 전엔
         // 재정리하지 않는다 — 상한 초과 극단에서 매 append마다 전량 파싱·재작성이 반복되는 비용 차단(문자열 검사만 — 파싱 없음).
         {
           let lastCompact = -1;
@@ -2579,7 +2579,7 @@ function appendLedgerEvent(ws, ev) {
         }
         // 판정·복권 증거를 '우선' 보존(2026-07-09 확정 결함 2건 방지) + 가역쌍은 '순계 압축'(Codex 5차 반례:
         // ban/unban 2,401회 교대처럼 개수 기반 절단은 접두를 잘라 순계를 뒤집는다 — 개수 보존이 아니라 순계 보존이 계약).
-        // 총량은 상한(2000)을 절대 넘지 않는다(PRIVACY '약 2,000줄 보존' 고지 불침).
+        // 총량은 원칙적으로 상한(10,000)을 넘지 않는다(PRIVACY 고지와 일치; 활성 상태가 더 많으면 의미 보존 우선 예외).
         const parsedLines = lines.map((ln) => { try { return JSON.parse(ln); } catch { return null; } });
         // ① 가역쌍(banned/unbanned·pinned/unpinned·alias/unalias) 순계 압축 — 전량에서 순계·활성 간선을 계산해
         //    압축 이벤트(from: trim-compact)로 대체. 원시 가역 이벤트는 트림에서 제거(순계는 압축본이 정확히 재현).

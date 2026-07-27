@@ -1,6 +1,6 @@
 /*
  * 지도 보관함(scripts/scout-store.js) + 영향지도 게시판 배선 — 동작 테스트(임시 폴더 실 IO) + 소스 계약.
- * 핵심 계약: ①wsKey가 계약 키 규칙(sha1(normWs) 앞16자)과 동형 ②저장=md+json 쌍 ③프로젝트별 최근 10장 유지
+ * 핵심 계약: ①wsKey가 계약 키 규칙(sha1(normWs) 앞16자)과 동형 ②저장=md+json 쌍 ③프로젝트별 최근 30장 유지
  * ④러너 양쪽이 보관 호출 ⑤확장이 게시판·상태바 줄을 양언어로 배선 ⑥PRIVACY에 scouts 행 명시.
  */
 const fs = require("fs");
@@ -64,7 +64,8 @@ ok(/정찰\(3트랙\): /.test(ext) && /recon \(3-track\): /.test(ext) && !/탐�
 ok(/scout: scoutSb \|\| null/.test(ext), "탐색 상태가 상태바 갱신 키에 포함(낡은 지도 수 잔존 방지)");
 ok(!/scoutMaps[^\n]*\.text[^\n]*innerHTML|innerHTML[^\n]*scoutMaps/.test(ext), "지도 본문은 textContent로만(HTML 주입 없음)");
 const privacy = fs.readFileSync(path.join(__dirname, "..", "PRIVACY.md"), "utf8");
-ok(/scouts\/<키>/.test(privacy) && /최근 10장만 유지/.test(privacy), "PRIVACY에 scouts 보관함 행 명시");
+ok(store.KEEP_PER_WS === 30, "대형·장기 프로젝트용 지도 원본 보관 기본값=30장");
+ok(/scouts\/<키>/.test(privacy) && /최근 30장 유지/.test(privacy), "PRIVACY에 scouts 보관함 30장 정책 명시");
 ok(/DeepSeek 정찰 자동 사용에 대한 동의/.test(privacy) && /지도가 없거나 낡았을 때/.test(privacy) && /키를 삭제하면 DeepSeek 자동 사용도 함께 꺼집니다/.test(privacy), "PRIVACY: 키 등록=자동 호출 동의 + 발동 조건 정직 명시(사용자 결정·현재형)");
 ok(/키 등록=동의 모델/.test(ext) && /key-registration=consent model/.test(ext), "고급설정 hint에도 동의 모델 양언어 명시(현재형)");
 

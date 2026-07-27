@@ -1653,7 +1653,7 @@ h1{font-size:16px} h2{font-size:13px;margin:6px 0} .sub{color:var(--vscode-descr
 <div class="flow">
 ${card("#3ca89a", "⚙", "변경 감지", "Change sensing", [[tE("무엇", "what"), tE("지금 고치는 파일 + 예전에 같이 바뀌던 파일 힌트", "files you're editing + hints of files that changed together before")],[tE("누가", "who"), tE("기계(확장) — 자동", "machine (extension) — automatic")], [tE("비용", "cost"), tE("0 · LLM 없음 · 전부 로컬", "0 · no LLM · all local")], [tE("저장", "store"), tE("표시만(대시보드)", "display only (dashboard)")]])}
 <div class="arrow">→</div>
-${card("#9a6cdc", "⚡", "영향지도", "Impact map", [[tE("무엇", "what"), tE("이 변경이 어디까지 번질지 미리보기(확인 목록)", "a preview/checklist of how far the change reaches")], [tE("누가", "who"), tE("정찰 LLM — 직접 또는 자동 지시로 실행", "scout LLM — run directly or via auto-directive")], [tE("비용", "cost"), tE("기본 정찰(Claude)=별도 과금 없음(쓰시던 Claude 사용량 범위) · DeepSeek 정찰은 키 등록 시(=동의) · Codex 정찰은 쓰시는 Codex 계정 사용량 범위", "default scout (Claude) = no separate billing (within the Claude usage you already have) · DeepSeek scout only with a key (=consent) · Codex scout within your existing Codex account usage")], [tE("저장", "store"), tE("보관함(최근 10장) → 영향지도 카드", "archive (last 10) → impact-map card")]])}
+${card("#9a6cdc", "⚡", "영향지도", "Impact map", [[tE("무엇", "what"), tE("이 변경이 어디까지 번질지 미리보기(확인 목록)", "a preview/checklist of how far the change reaches")], [tE("누가", "who"), tE("정찰 LLM — 직접 또는 자동 지시로 실행", "scout LLM — run directly or via auto-directive")], [tE("비용", "cost"), tE("기본 정찰(Claude)=별도 과금 없음(쓰시던 Claude 사용량 범위) · DeepSeek 정찰은 키 등록 시(=동의) · Codex 정찰은 쓰시는 Codex 계정 사용량 범위", "default scout (Claude) = no separate billing (within the Claude usage you already have) · DeepSeek scout only with a key (=consent) · Codex scout within your existing Codex account usage")], [tE("저장", "store"), tE("보관함(최근 30장) → 영향지도 카드", "archive (last 30) → impact-map card")]])}
 <div class="arrow">→</div>
 ${card("#3ca89a", "⚙", "관찰 일지", "Field journal", [[tE("무엇", "what"), tE("지도의 제안이 검증을 지나며 맞음/틀림으로 자동 분류", "map suggestions auto-classified right/wrong through verification")], [tE("누가", "who"), tE("자동 — 검증 대화에 편승(추가 LLM 호출 0)", "automatic — rides the verify chat (0 extra LLM calls)")], [tE("신분", "states"), tE("미검증 → 검증됨(다음 정찰 자료에 우선 동봉) / 틀림 판명 — 반박 뒤 재확인(사람 1회·검증 2회)이 쌓이면 복권", "unverified → verified (prioritized in future scout packages) / disputed — rehabilitated if re-confirmed after (1 human / 2 verify)")], [tE("개입", "override"), tE("선택: 직접 확인·정정, 고정·차단, 교범 기록", "optional: confirm/correct, pin/ban, manual export")]])}
 <div class="arrow">→</div>
@@ -1841,7 +1841,7 @@ function brainActualTexts(ws: string | null): { cc: string; cx: string; sig: str
   } catch { /* best-effort */ }
   return { cc, cx, sig };
 }
-// 탐색자 카드 '마지막 정찰 실행' 문구 — 비용 장부(scout-usage)의 정찰 방식별 lastTs 기준(지도 10장 프루닝과 무관).
+// 탐색자 카드 '마지막 정찰 실행' 문구 — 비용 장부(scout-usage)의 정찰 방식별 lastTs 기준(지도 30장 프루닝과 무관).
 // ping(연결 점검)은 정찰이 아니므로 제외. 3트랙이 아닐 땐 카드 자체가 숨겨져 호출 결과 무의미.
 function scoutActualText(ws: string | null): string {
   if (!ws) return "";
@@ -3132,6 +3132,7 @@ type ObservedEntry = {
 type LedgerTimelineItem = { ts: string; type: string; text: string; from: string };
 type MapLedgerView = {
   entries: ObservedEntry[];        // 최신순 상위 N — 신분 배지·개입 버튼 재료
+  totalEntries: number;            // 전체 유도 항목 수 — entries의 화면 12개 상한과 전체 집계 범위를 구분
   timeline: LedgerTimelineItem[];  // 최근 사건 흐름(최신 먼저)
   counts: { verified: number; pinnedOverride: number; reference: number; disputed: number; excluded: number };
   autoEvidence: { machineRecorded: number; promotable: number; unknown: number; humanConfirmed: number }; // 자동 승격 통로 가시화 — '확인 기록'과 실제 승격 재료를 혼동하지 않게
@@ -3286,7 +3287,7 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
     }
   } catch { /* 고지 재료 실패 — 카드 본체 불침 */ }
   return {
-    entries, timeline, counts, autoEvidence, impact, health: computeScoutHealth(derived), dropped: parsed.dropped, prevDrawer,
+    entries, totalEntries: derived.length, timeline, counts, autoEvidence, impact, health: computeScoutHealth(derived), dropped: parsed.dropped, prevDrawer,
     mapRel: path.relative(ws, mapF).replace(/\\/g, "/"), mapExists,
     mapApproved: mp.approved.length, mapTotalItems: mp.totalItems,
     // P3b B-1: blocked=원문 미리보기 숨김+사유만(정본 §B — 진단 전용 표시는 P9 위임)
@@ -4226,7 +4227,7 @@ class Dashboard {
   /* 워드마크: 파랑(Claude)→초록(Codex) 그라데이션 사각 — 이모지 대신 */
   .brand{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,var(--vscode-charts-blue),var(--vscode-charts-green));flex:none;box-shadow:0 2px 8px color-mix(in srgb,var(--vscode-charts-blue) 32%,transparent)}
   h2{font-size:15.5px;font-weight:800;margin:28px 0 11px;color:var(--vscode-foreground);display:flex;align-items:center;gap:9px;letter-spacing:.2px}
-  h2 .sub2{font-size:11px;font-weight:400;color:var(--vscode-descriptionForeground);letter-spacing:0}
+  h2 .sub2,summary.sec .sub2{font-size:11px;font-weight:400;color:var(--vscode-descriptionForeground);letter-spacing:0}
   /* 섹션 헤더: 의미색 틴트 배경 + 두꺼운 좌측 악센트로 또렷하게(파랑=Claude · 초록=Codex/검증 · 보라=공통/기본). */
   h2.sec{--accent:var(--vscode-charts-purple);margin:34px 0 12px;padding:11px 16px;border:1px solid color-mix(in srgb,var(--accent) 28%,var(--vscode-panel-border));border-left:5px solid var(--accent);border-radius:10px;background:color-mix(in srgb,var(--accent) 11%,var(--vscode-sideBar-background));box-shadow:0 1px 2px rgba(0,0,0,.06);flex-wrap:wrap}
   h2.sec.claude{--accent:var(--vscode-charts-blue)}
@@ -4238,6 +4239,10 @@ class Dashboard {
   h2.sec.accent-teal{--accent:#4ec9b0}
   h2.sec.accent-rose{--accent:#d18fb0}
   h2.sec::before{display:none}
+  summary.sec{font-size:15.5px;font-weight:800;color:var(--vscode-foreground);display:flex;align-items:center;gap:9px;letter-spacing:.2px;--accent:#d18fb0;margin:34px 0 12px;padding:11px 16px;border:1px solid color-mix(in srgb,var(--accent) 28%,var(--vscode-panel-border));border-left:5px solid var(--accent);border-radius:10px;background:color-mix(in srgb,var(--accent) 11%,var(--vscode-sideBar-background));box-shadow:0 1px 2px rgba(0,0,0,.06);flex-wrap:wrap;cursor:pointer;list-style:none;user-select:none}
+  summary.sec::-webkit-details-marker{display:none}
+  details.backlog-fold>summary.sec::after{content:"▸";margin-left:auto;color:var(--vscode-descriptionForeground)}
+  details.backlog-fold[open]>summary.sec::after{content:"▾"}
   .hint{font-size:11px;color:var(--vscode-descriptionForeground);margin:4px 0 0 22px;line-height:1.5}
   .hint code{font-family:var(--vscode-editor-font-family);background:var(--vscode-textCodeBlock-background,var(--vscode-panel-border));padding:0 4px;border-radius:3px}
   .hint .ic{cursor:help;border-bottom:1px dotted currentColor;white-space:nowrap}
@@ -4572,7 +4577,7 @@ class Dashboard {
     <div class="agent claude"><div class="mono c" id="implMono">C</div><div class="nm" id="implName">Claude</div><div class="ro">${t("구현 · implement", "implement")}</div><div class="ro" id="ccActualRo" title="${t("구현 세션 기록의 실제 모델", "actual model from the implementer session log")}"></div></div>
     <div class="link" id="linkViz"><div class="bar"></div><div class="emo" id="linkEmo">●</div><div class="st" id="linkState">${t("연결 없음", "Not linked")}</div></div>
     <div class="agent codex"><div class="mono x">Cx</div><div class="nm">Codex</div><div class="ro">${t("검증 · verify", "verify")}</div><div class="ro" id="cxActualRo" title="${t("연결된 검증 세션 기록의 최근 실제 모델·생각강도", "latest actual model & effort from the linked verify session log")}"></div></div>
-    <div class="agent scout" id="heroScout" style="display:none"><div class="mono s">S</div><div class="nm">${t("탐색자", "Scout")}</div><div class="ro">${t("영향지도 · 3트랙", "impact map · 3-track")}</div><div class="ro" id="scoutActualRo" title="${t("마지막 정찰 실행(지도 생성) — 비용 장부 기준(지도 보관 10장 정리와 무관)", "last scout run (map generation) — from the usage ledger (independent of map pruning)")}"></div></div>
+    <div class="agent scout" id="heroScout" style="display:none"><div class="mono s">S</div><div class="nm">${t("탐색자", "Scout")}</div><div class="ro">${t("영향지도 · 3트랙", "impact map · 3-track")}</div><div class="ro" id="scoutActualRo" title="${t("마지막 정찰 실행(지도 생성) — 비용 장부 기준(지도 보관 30장 정리와 무관)", "last scout run (map generation) — from the usage ledger (independent of the 30-map archive pruning)")}"></div></div>
   </div>
   <div id="status" class="statusline"></div>
   <div id="freshNote" style="font-size:10px;color:var(--vscode-descriptionForeground);margin:2px 0 4px">${t("데이터 불러오는 중… (몇 초가 지나도 안 바뀌면 이 창을 닫고 상태바에서 다시 여세요)", "Loading… (if this doesn't change within seconds, close this tab and reopen from the status bar)")}</div>
@@ -4664,14 +4669,14 @@ class Dashboard {
   <div id="cardHold" class="hint" style="display:none;color:var(--vscode-editorWarning-foreground, var(--vscode-errorForeground))"></div>
   <div class="row"><button id="saveC">${t("저장", "Save")}</button><button id="revertC" type="button" class="secondary" title="${t("저장하지 않은 계약 변경을 버리고 현재 모드의 저장값을 다시 불러옵니다", "Discard unsaved contract edits and reload the saved values for the current mode")}">${t("되돌리기", "Revert")}</button><span id="savedAt" class="muted">${t("· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장 (체크리스트 강제는 켜고 끄는 즉시 저장)", "· saves the Claude rules, Codex rules and verify mode together (checklist enforcement saves instantly on toggle)")}</span></div>
 
-  <div id="backlogSec" style="display:none">
-    <h2 class="sec accent-rose">${t("검증 확장 제안·판단 대기 — 보관함", "Verification-expansion Proposals & Pending Judgments — parking lot")} <span class="sub2">${t("핵심 프로필 전용", "core profile only")}</span> · <span class="sub2" id="blSummary"></span></h2>
+  <details id="backlogSec" class="backlog-fold" style="display:none">
+    <summary class="sec accent-rose">${t("검증 확장 제안·판단 대기 — 보관함", "Verification-expansion Proposals & Pending Judgments — parking lot")} <span class="sub2">${t("핵심 프로필 전용", "core profile only")}</span> · <span class="sub2" id="blSummary"></span></summary>
     <div class="card">
       <div class="hint">${t("<b>핵심 프로필 전용</b> — 무결성 프로필 검증에서는 지적이 여기로 유입되지 않아요(자동 등록·기록 규약 모두 핵심 전용 — 직접 명령으로 수동 등록만 가능). 검증이 낸 지적 중 <b>이번 작업 범위를 넘는 제안</b>(새 시나리오 방어·구조 재설계·커버리지 확장 등)이 여기 보관돼요 — 이론적 구멍을 계속 메우는 무한 검증 루프를 끊기 위한 주차장입니다(핵심 프로필 v2.4). <b>보관 항목엔 갚을 의무가 없고</b>, 채택할 때만 작업이 됩니다. 사용자 판단을 기다리도록 승격된 [주의] 항목도 여기에 함께 기록돼요. 즉시 고칠 자명한 보완([보완])은 애초에 여기 들어오지 않아요(그 루프에서 바로 반영). '검토 기한' 표시는 오래됐거나(30일+) 자주 재발견(3회+)된 항목 — 기한이 아니라 '채택 후보로 한번 살펴보라'는 환기예요.", "<b>Core profile only</b> — integrity-profile verifications never feed this parking lot (both auto-record and the recording protocol are core-only; manual CLI registration is the only other way in). Findings that go <b>beyond this work's scope</b> (new scenario hardening, redesign proposals, coverage expansion) are parked here — a parking lot that cuts the endless loop of patching theoretical holes (core profile v2.4). <b>Parked items carry no repayment duty</b>; they become work only when adopted. '[caution]' items escalated to await your judgment are also recorded here. Obvious mechanical notes ([notes]) never land here (they are applied in-loop). 'review due' marks old (30d+) or often-rediscovered (3×+) items — not a deadline, just a nudge to consider adoption.")}</div>
       <div id="blList" style="margin-top:6px"></div>
       <div class="hint">${t("처분은 CLI: <code>node codex-bridge.js backlog done|dismiss &lt;id&gt;</code> · 목록: <code>backlog list</code> · 이 카드는 읽기 전용(이 PC 로컬 장부)", "Dispose via CLI: <code>node codex-bridge.js backlog done|dismiss &lt;id&gt;</code> · list: <code>backlog list</code> · this card is read-only (local ledger of this PC)")}</div>
     </div>
-  </div>
+  </details>
 
   <h2 class="sec accent-teal">${t("한눈에 보기", "At a Glance")} <span class="sub2">${t("누구에게 · 뭐가 · 언제 들어가나 — 지금 저장된 설정 기준 (저장하면 바뀐 곳이 깜빡여요)", "who gets what, and when — based on saved settings (changes flash on save)")}</span></h2>
   <section class="flowmap card" id="fmSection">
@@ -6454,7 +6459,7 @@ class Dashboard {
         keepInnerScroll(pre, "mapPre:"+(sm.latest.ts||"?")); // 내부 스크롤 보존(새 지도=새 키라 자연 리셋)
         det.appendChild(pre); sec.appendChild(det);
       }
-      add(T("ⓘ 이 게시판은 열람 전용(보는 것만으로는 아무것도 전송 안 됨) — 지도 생성·전송은 명령이 실행될 때만: 당신이 직접, 또는 3트랙 자동 지시를 받은 Claude가(같은 상태엔 1회 지시). 프로젝트별 최근 10장 보관.","ⓘ Read-only board (viewing sends nothing) — maps are generated/sent only when the command runs: by you directly, or by Claude on the 3-track auto-directive (issued once per state). Last 10 kept per project."),"muted");
+      add(T("ⓘ 이 게시판은 열람 전용(보는 것만으로는 아무것도 전송 안 됨) — 지도 생성·전송은 명령이 실행될 때만: 당신이 직접, 또는 3트랙 자동 지시를 받은 Claude가(같은 상태엔 1회 지시). 대형·장기 프로젝트를 위해 프로젝트별 최근 30장을 보관.","ⓘ Read-only board (viewing sends nothing) — maps are generated/sent only when the command runs: by you directly, or by Claude on the 3-track auto-directive (issued once per state). The latest 30 are kept per project for large, long-running work."),"muted");
     });
     // ⑤-3 MAP 장부(자동 관측 기억 — 역할 전환 2026-07-07) — 승인 큐가 아니라 관측 패널:
     // 무엇을 봤고(제안)·반영했고(동봉/확인)·정정했는지(반박/차단)를 신분·타임라인으로 보여주고,
@@ -6509,6 +6514,12 @@ class Dashboard {
       chip(ml.counts.disputed,T("틀림 판명","disputed"),ml.counts.disputed?"hot":"no");
       if(ml.counts.excluded) chip(ml.counts.excluded,T("제외(차단·대체)","excluded"),"no");
       card.appendChild(chips);
+      safe(function(){
+        const shown=ml.entries.length, total=Number.isFinite(ml.totalEntries)?ml.totalEntries:shown;
+        const line=document.createElement("div"); line.className="muted"; line.style.cssText="font-size:10.5px;margin:3px 0 5px";
+        line.textContent=T("목록은 최근 "+shown+"/전체 "+total+"개를 표시합니다. 위 상태 수·관찰 신호·자동 선별은 화면의 12개가 아니라 전체 "+total+"개를 계산합니다.","The list shows the latest "+shown+" of "+total+" items. Status counts, observation signals, and automatic selection use all "+total+" items, not just the 12 shown.");
+        card.appendChild(line);
+      });
       safe(function(){
         const ae=ml.autoEvidence||{machineRecorded:0,promotable:0,unknown:0,humanConfirmed:0};
         const line=document.createElement("div"); line.className="muted"; line.style.cssText="font-size:10.5px;margin:3px 0 5px";

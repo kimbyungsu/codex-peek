@@ -17,7 +17,7 @@
  * - 캐시(e:)는 fresh 증명에 절대 사용 금지(2차 blocker①) — 저장소는 재료만 보관, 판정은 P4-3 판정기 소관.
  * - 모든 쓰기는 <wsKey>.json.lock 전용 잠금 아래 read-merge-write(5차 [주의] — lost-update 차단).
  *   잠금 실패=쓰기 포기(기준선은 다음 apply 전이에 재시도·캐시는 무해 skip·판정 정확성 불변).
- * - 손상=삭제 재생성(fail-open — 캐시) / mapId·schema 불일치=전체 폐기 / 상한 2,000(seenAt 오래된 순 축출).
+ * - 손상=삭제 재생성(fail-open — 캐시) / mapId·schema 불일치=전체 폐기 / 상한 10,000(비권위 캐시부터 축출).
  */
 const fs = require("fs");
 const path = require("path");
@@ -26,7 +26,7 @@ const PMv = require("./project-map.js"); // decision 전체 스키마 검증+ADP
 
 const SCHEMA = "mfresh-1";
 const NUL = String.fromCharCode(0); // 소스에 NUL 바이트를 넣지 않기 위한 조립(2차 [보완]① 교훈)
-const ENTRY_CAP = 2000;
+const ENTRY_CAP = 10000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FP_RE = /^[0-9a-f]{40}$/;
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/; // toISOString 정확 형태만(밀리초 필수)
@@ -227,8 +227,8 @@ function readRepoFileSafe(repoRoot, rel) {
 
 // ── 기준선 재시도 사이드카(3차 blocker② — '다음 apply 전이에 재시도'의 실현) ──────────────────────────
 // 기준선 기록이 실패(잠금 충돌 등)하면 updates를 <wsKey>.json.retry.json에 보관하고, 다음 전이의
-// recordBaselines가 회수·합류한다. seenAt 단조 가드가 오래된 재시도의 최신 덮음을 막는다. 상한 500.
-const RETRY_CAP = ENTRY_CAP; // 4차 blocker②: 정본 상한과 동일 — 단일 합법 배치(<=2,000)는 절단되지 않는다
+// recordBaselines가 회수·합류한다. seenAt 단조 가드가 오래된 재시도의 최신 덮음을 막는다.
+const RETRY_CAP = ENTRY_CAP; // 정본 상한과 동일 — 대형 단일 합법 배치(<=10,000)도 절단되지 않는다
 function retryFileFor(ws) { return freshnessFileFor(ws) + ".retry.json"; }
 function peekRetry(ws, mapId) {
   let cur = null;

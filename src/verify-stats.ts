@@ -41,7 +41,7 @@ export const VERIFY_STATS_MIN_SAMPLE = 5; // 표본 부족 경계(정찰 HEALTH_
 // 정찰(3트랙) 비용 집계 — scout-usage.jsonl(append-only) → 28일 팔별 합계. 렌더는 통계 탭 '정찰 토큰' 구획.
 // self 팔은 usage가 null(토큰 미제공) — 문자수 합계만 참(정직 표기는 렌더 몫). ping은 workspace가 비어 전역 합산.
 export type ScoutCosts = {
-  byArm: Record<string, { count: number; usageIn: number; usageOut: number; pkgChars: number; mapChars: number; lastTs: string }>; // lastTs=팔별 마지막 사용 시각(탐색자 카드 표시 재료 — 지도 10장 프루닝과 무관한 장부 기반, 감사 일치 2026-07-10)
+  byArm: Record<string, { count: number; usageIn: number; usageOut: number; pkgChars: number; mapChars: number; lastTs: string }>; // lastTs=팔별 마지막 사용 시각(탐색자 카드 표시 재료 — 지도 30장 프루닝과 무관한 장부 기반, 감사 일치 2026-07-10)
   total: number; // 28일 기록 건수(전 팔)
 };
 export function computeScoutCosts(raw: string, now: number, ws: string, normWsFn: (s: string) => string): ScoutCosts {

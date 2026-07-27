@@ -15,6 +15,9 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), "l1_"));
 process.env.CODEX_BRIDGE_HOME = home;
 const CL = require(path.join(__dirname, "..", "bridge", "contract-lib.js"));
 const store = require(path.join(__dirname, "..", "scripts", "scout-store.js"));
+const TRIM_FILL = CL.LEDGER_EVENTS_TRIM_AT + 50;
+const ALT_COUNT = CL.LEDGER_EVENTS_TRIM_AT + 1; // 홀수 — 가역쌍 순계 +1
+const IDENTITY_COUNT = Math.ceil((CL.LEDGER_EVENTS_TRIM_AT + 20) / 3);
 const git = (repo, args) => spawnSync("git", ["-c", "safe.directory=*", "-C", repo, ...args], { encoding: "utf8", windowsHide: true });
 const bump = (f) => { const t = new Date(Date.now() + 5000); fs.utimesSync(f, t, t); };
 
@@ -200,7 +203,7 @@ console.log("[B-3] 트림 동형성(Codex 3차 반례 2종) — 기록 전용 �
     JSON.stringify({ ts: "t4", type: "refuted", sig: "tt", grade: "claimed", cited: true, seen: "unknown", askId: "a3" }), // 기록 전용(승격/강등 재료 아님)
   ];
   const fillA = [];
-  for (let i = 0; i < 2450; i++) fillA.push(JSON.stringify({ ts: "f" + i, type: "proposed", sig: "tt", text: "tq-alpha.ts ↔ tq-beta.ts" }));
+  for (let i = 0; i < TRIM_FILL; i++) fillA.push(JSON.stringify({ ts: "f" + i, type: "proposed", sig: "tt", text: "tq-alpha.ts ↔ tq-beta.ts" }));
   fs.writeFileSync(CL.ledgerEventsFileFor(wA), seedA.concat(fillA).join("\n") + "\n");
   const beforeA = derive(wA);
   CL.appendLedgerEvent(wA, { ts: "tz", type: "proposed", sig: "tt", text: "tq-alpha.ts ↔ tq-beta.ts" }); // 트림 유발
@@ -214,7 +217,7 @@ console.log("[B-3] 트림 동형성(Codex 3차 반례 2종) — 기록 전용 �
     JSON.stringify({ ts: "t1", type: "user_dispute", sig: "tt" }),
   ];
   const fillB = [];
-  for (let i = 0; i < 2450; i++) fillB.push(JSON.stringify({ ts: "g" + i, type: "confirmed", sig: "tt", grade: "claimed", cited: false, echoed: true, askId: "x" + i, seen: "ok" }));
+  for (let i = 0; i < TRIM_FILL; i++) fillB.push(JSON.stringify({ ts: "g" + i, type: "confirmed", sig: "tt", grade: "claimed", cited: false, echoed: true, askId: "x" + i, seen: "ok" }));
   fs.writeFileSync(CL.ledgerEventsFileFor(wB), seedB.concat(fillB).join("\n") + "\n");
   CL.appendLedgerEvent(wB, { ts: "tz", type: "confirmed", sig: "tt", grade: "claimed", cited: false, echoed: true, askId: "xz", seen: "ok" });
   const afterB = derive(wB);
@@ -227,7 +230,7 @@ console.log("[B-3] 트림 동형성(Codex 3차 반례 2종) — 기록 전용 �
     JSON.stringify({ ts: "t1", type: "user_dispute", sig: "tt" }),
   ];
   const fillC = [];
-  for (let i = 0; i < 2450; i++) fillC.push(JSON.stringify({ ts: "h" + i, type: "refuted", sig: "tt", grade: "claimed", cited: false, seen: "ok", askId: "y" + i }));
+  for (let i = 0; i < TRIM_FILL; i++) fillC.push(JSON.stringify({ ts: "h" + i, type: "refuted", sig: "tt", grade: "claimed", cited: false, seen: "ok", askId: "y" + i }));
   fs.writeFileSync(CL.ledgerEventsFileFor(wC), seedC.concat(fillC).join("\n") + "\n");
   CL.appendLedgerEvent(wC, { ts: "tz", type: "proposed", sig: "tt", text: "tq-alpha.ts ↔ tq-beta.ts" });
   const rawC = CL.readLedgerEventsText(wC);
@@ -239,15 +242,15 @@ console.log("[B-3] 트림 동형성(Codex 3차 반례 2종) — 기록 전용 �
     const w = path.join(home, "trim-eq-" + name);
     fs.mkdirSync(w, { recursive: true });
     const rows = [JSON.stringify({ ts: "t0", type: "proposed", sig: "tt", text: "tq-alpha.ts ↔ tq-beta.ts" })];
-    for (let i = 0; i < 2401; i++) rows.push(JSON.stringify({ ts: "a" + i, type: i % 2 === 0 ? evenType : oddType, sig: "tt", ...(extra || {}) }));
+    for (let i = 0; i < ALT_COUNT; i++) rows.push(JSON.stringify({ ts: "a" + i, type: i % 2 === 0 ? evenType : oddType, sig: "tt", ...(extra || {}) }));
     fs.writeFileSync(CL.ledgerEventsFileFor(w), rows.join("\n") + "\n");
     CL.appendLedgerEvent(w, { ts: "tz", type: "proposed", sig: "tt", text: "tq-alpha.ts ↔ tq-beta.ts" });
     return derive(w);
   };
   const dBan = mkAlt("ban", "banned", "unbanned");   // 순계 +1(banned로 시작·홀수 회) → 트림 후에도 banned여야
-  ok(dBan && dBan.status === "banned", `ban/unban 2,401회 교대 → 트림 후 순계 보존(banned — 실제 ${dBan && dBan.status})`);
+  ok(dBan && dBan.status === "banned", `ban/unban ${ALT_COUNT}회 교대 → 트림 후 순계 보존(banned — 실제 ${dBan && dBan.status})`);
   const dPin = mkAlt("pin", "pinned", "unpinned");
-  ok(dPin && dPin.pinned === true, "pin/unpin 2,401회 교대 → 트림 후 고정 유지(순계 압축)");
+  ok(dPin && dPin.pinned === true, `pin/unpin ${ALT_COUNT}회 교대 → 트림 후 고정 유지(순계 압축)`);
   {
     const w = path.join(home, "trim-eq-al");
     fs.mkdirSync(w, { recursive: true });
@@ -255,12 +258,12 @@ console.log("[B-3] 트림 동형성(Codex 3차 반례 2종) — 기록 전용 �
       JSON.stringify({ ts: "t0", type: "proposed", sig: "P", text: "tq-alpha.ts ↔ tq-beta.ts" }),
       JSON.stringify({ ts: "t1", type: "proposed", sig: "S", text: "결합 S(별칭)" }),
     ];
-    for (let i = 0; i < 2401; i++) rows.push(JSON.stringify({ ts: "a" + i, type: i % 2 === 0 ? "alias" : "unalias", sig: "P", aliasSig: "S" }));
+    for (let i = 0; i < ALT_COUNT; i++) rows.push(JSON.stringify({ ts: "a" + i, type: i % 2 === 0 ? "alias" : "unalias", sig: "P", aliasSig: "S" }));
     fs.writeFileSync(CL.ledgerEventsFileFor(w), rows.join("\n") + "\n");
     CL.appendLedgerEvent(w, { ts: "tz", type: "proposed", sig: "P", text: "tq-alpha.ts ↔ tq-beta.ts" });
     const LEx = require(path.join(__dirname, "..", "out", "ledger-events.js"));
     const es = LEx.deriveLedger(LEx.parseEventsJsonl(CL.readLedgerEventsText(w)).events);
-    ok(es.length === 1 && es.some((x) => (x.aliases || []).includes("S")), `alias/unalias 2,401회 교대 → 트림 후 병합 유지(순계 +1 압축 — 실제 ${es.length}항목)·원문 proposed도 생존`);
+    ok(es.length === 1 && es.some((x) => (x.aliases || []).includes("S")), `alias/unalias ${ALT_COUNT}회 교대 → 트림 후 병합 유지(순계 +1 압축 — 실제 ${es.length}항목)·원문 proposed도 생존`);
   }
   // 반례 E/G(Codex 6·7차): '압축이 먼저 확정된 뒤' 미래 역이벤트 — 트림 유발과 역이벤트를 분리(같은 append면
   // 역이벤트가 압축 전에 반영돼 부호-only 압축도 통과하는 무효 검사 — Codex 7차 #3).
@@ -268,7 +271,7 @@ console.log("[B-3] 트림 동형성(Codex 3차 반례 2종) — 기록 전용 �
     const w = path.join(home, "trim-eq-" + name);
     fs.mkdirSync(w, { recursive: true });
     const rows = stateEvents.map((e) => JSON.stringify(e));
-    for (let i = 0; i < 2450; i++) rows.push(JSON.stringify({ ts: "f" + i, type: "proposed", sig: "tt", text: "tq-alpha.ts ↔ tq-beta.ts" }));
+    for (let i = 0; i < TRIM_FILL; i++) rows.push(JSON.stringify({ ts: "f" + i, type: "proposed", sig: "tt", text: "tq-alpha.ts ↔ tq-beta.ts" }));
     fs.writeFileSync(CL.ledgerEventsFileFor(w), rows.join("\n") + "\n");
     CL.appendLedgerEvent(w, { ts: "tn", type: "proposed", sig: "tt", text: "tq-alpha.ts ↔ tq-beta.ts" }); // 중립 이벤트로 트림 확정
     ok(/trim-compact/.test(CL.readLedgerEventsText(w)), name + " — 압축 확정(trim-compact 존재) 후에야 미래 명령 적용");
@@ -304,7 +307,7 @@ console.log("[B-3] 트림 동형성(Codex 3차 반례 2종) — 기록 전용 �
     const w = path.join(home, "trim-eq-edges");
     fs.mkdirSync(w, { recursive: true });
     const rows = [];
-    for (let i = 0; i < 2450; i++) rows.push(JSON.stringify({ ts: "f" + i, type: "proposed", sig: "Z", text: "tz-alpha.ts ↔ tz-beta.ts" }));
+    for (let i = 0; i < TRIM_FILL; i++) rows.push(JSON.stringify({ ts: "f" + i, type: "proposed", sig: "Z", text: "tz-alpha.ts ↔ tz-beta.ts" }));
     rows.push(
       JSON.stringify({ ts: "t0", type: "proposed", sig: "Z", text: "tz-alpha.ts ↔ tz-beta.ts" }),
       JSON.stringify({ ts: "t1", type: "proposed", sig: "A", text: "ta-alpha.ts ↔ ta-beta.ts" }),
@@ -328,11 +331,11 @@ console.log("[B-3] 트림 동형성(Codex 3차 반례 2종) — 기록 전용 �
 
 console.log("[B-4] 압축 극단(Codex 8차) — 압축본이 예산을 채워도 항목 정체성(대표 원문) 보존·재압축 유예");
 {
-  // 활성 alias 2,000개(부모·자식 proposed 포함 6,000줄) → 트림 후에도 유도 항목이 사라지지 않아야
+  // 활성 alias가 확장 임계보다 많은 줄을 만들 때도 유도 항목이 사라지지 않아야
   const w = path.join(home, "trim-ident");
   fs.mkdirSync(w, { recursive: true });
   const rows = [];
-  for (let i = 0; i < 2000; i++) {
+  for (let i = 0; i < IDENTITY_COUNT; i++) {
     rows.push(JSON.stringify({ ts: "p" + i, type: "proposed", sig: "P" + i, text: "id-alpha-" + i + ".ts ↔ id-beta-" + i + ".ts" }));
     rows.push(JSON.stringify({ ts: "c" + i, type: "proposed", sig: "C" + i, text: "별칭 문구 " + i }));
     rows.push(JSON.stringify({ ts: "a" + i, type: "alias", sig: "P" + i, aliasSig: "C" + i }));
@@ -341,14 +344,14 @@ console.log("[B-4] 압축 극단(Codex 8차) — 압축본이 예산을 채워�
   CL.appendLedgerEvent(w, { ts: "tn", type: "proposed", sig: "P0", text: "id-alpha-0.ts ↔ id-beta-0.ts" }); // 트림 유발
   const LEz = require(path.join(__dirname, "..", "out", "ledger-events.js"));
   const es = LEz.deriveLedger(LEz.parseEventsJsonl(CL.readLedgerEventsText(w)).events);
-  ok(es.length >= 2000, `트림 후 유도 항목 보존(${es.length}건 ≥ 2000) — 압축본만 남아 항목이 0이 되던 반례(Codex 8차 #1) 봉합`);
-  ok(es.filter((x) => (x.aliases || []).length === 1).length >= 2000, "병합 상태(간선)도 전부 유지");
+  ok(es.length >= IDENTITY_COUNT, `트림 후 유도 항목 보존(${es.length}건 ≥ ${IDENTITY_COUNT}) — 압축본만 남아 항목이 0이 되던 반례(Codex 8차 #1) 봉합`);
+  ok(es.filter((x) => (x.aliases || []).length === 1).length >= IDENTITY_COUNT, "병합 상태(간선)도 전부 유지");
   // 재압축 유예: 압축 직후 일반 append 몇 건은 재정리(재작성)를 트리거하지 않음 — 원시 줄이 꼬리에 그대로 남는다
   const linesBefore = CL.readLedgerEventsText(w).split(/\r?\n/).filter(Boolean).length;
   CL.appendLedgerEvent(w, { ts: "s1", type: "proposed", sig: "P0", text: "id-alpha-0.ts ↔ id-beta-0.ts" });
   CL.appendLedgerEvent(w, { ts: "s2", type: "proposed", sig: "P0", text: "id-alpha-0.ts ↔ id-beta-0.ts" });
   const tail2 = CL.readLedgerEventsText(w).split(/\r?\n/).filter(Boolean);
-  ok(tail2.length === linesBefore + 2 && /"ts":"s2"/.test(tail2[tail2.length - 1]), "압축 직후 연속 append 2건 → 재정리 없이 꼬리에 원시 보존(유예 임계 400 미만 — 매 append 전량 재작성 반복 차단: Codex 8차 #2)");
+  ok(tail2.length === linesBefore + 2 && /"ts":"s2"/.test(tail2[tail2.length - 1]), "압축 직후 연속 append 2건 → 재정리 없이 꼬리에 원시 보존(유예 임계 미만 — 매 append 전량 재작성 반복 차단: Codex 8차 #2)");
 }
 
 console.log("[B-5] 장부 동시 쓰기(Codex 9차) — 트림 임계 직전 원장에 두 프로세스 병렬 append → 고유 이벤트 유실 0");
@@ -356,9 +359,9 @@ console.log("[B-5] 장부 동시 쓰기(Codex 9차) — 트림 임계 직전 원
   const home2 = fs.mkdtempSync(path.join(os.tmpdir(), "l1lock_")); // 전용 홈 — 정확 단언
   const w = path.join(home2, "proj");
   fs.mkdirSync(w, { recursive: true });
-  // 임계 직전(2,390줄) 원장 준비 — 병렬 append 중 트림이 실제로 발동하는 경계
+  // 확장 임계 직전 원장 준비 — 병렬 append 중 트림이 실제로 발동하는 경계
   const seedRows = [];
-  for (let i = 0; i < 2390; i++) seedRows.push(JSON.stringify({ ts: "s" + i, type: "proposed", sig: "seed" + i, text: "sd-alpha-" + i + ".ts ↔ sd-beta-" + i + ".ts" }));
+  for (let i = 0; i < CL.LEDGER_EVENTS_TRIM_AT - 10; i++) seedRows.push(JSON.stringify({ ts: "s" + i, type: "proposed", sig: "seed" + i, text: "sd-alpha-" + i + ".ts ↔ sd-beta-" + i + ".ts" }));
   const N = 25;
   const workerJs = `
     process.env.CODEX_BRIDGE_HOME = ${JSON.stringify(home2)};
@@ -417,7 +420,7 @@ console.log("[B-2] 트리머 병합 인지 — 별칭 자식의 반박 뒤 '부�
     JSON.stringify({ ts: "t5", type: "confirmed", sig: "parent", grade: "co-cited", askId: "a2", seen: "ok" }),
   ];
   const filler = [];
-  for (let i = 0; i < 2450; i++) filler.push(JSON.stringify({ ts: "f" + i, type: "proposed", sig: "parent", text: "pa-alpha.ts ↔ pa-beta.ts" }));
+  for (let i = 0; i < TRIM_FILL; i++) filler.push(JSON.stringify({ ts: "f" + i, type: "proposed", sig: "parent", text: "pa-alpha.ts ↔ pa-beta.ts" }));
   fs.writeFileSync(tf, seed.concat(filler).join("\n") + "\n");
   CL.appendLedgerEvent(wsT, { ts: "tz", type: "proposed", sig: "parent", text: "pa-alpha.ts ↔ pa-beta.ts" }); // 트림 유발
   const LE2 = require(path.join(__dirname, "..", "out", "ledger-events.js"));

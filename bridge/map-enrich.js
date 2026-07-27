@@ -608,7 +608,9 @@ function historylessChanges(repo, invSnap, MR) {
   if (!invSnap || !Array.isArray(invSnap.files)) return null; // 부재·상한 초과=unknown(정직)
   let now;
   try { now = MR.collectInventory(repo); } catch { return null; }
-  if (!now || !Array.isArray(now.files)) return null;
+  // 기준선 뒤 현재 스캔도 전수 완료된 경우에만 변경 없음/mapped를 주장한다. 수집기가
+  // 항목·깊이 상한에 닿으면 files는 정상 배열이어도 일부 목록이므로 unknown으로 보낸다.
+  if (!now || !Array.isArray(now.files) || !now.cov || now.cov.scanComplete !== true) return null;
   const changed = new Set();
   const snapBy = new Map(invSnap.files.map((f) => [f.path, f]));
   const nowSet = new Set(now.files.map((f) => f.rel));
@@ -1006,7 +1008,9 @@ function computeSourceFp(repo, queue, changed, MR) {
       return sha1("git|" + head + "|" + parts.join(","));
     }
     const inv = MR.collectInventory(repo);
-    if (!inv || !Array.isArray(inv.files)) return null;
+    // historyless 지문도 전수 스캔만 권위가 있다. 부분 목록을 지문으로 만들면 보이지 않는
+    // 꼬리 변경이 기존 done 지문과 같아져 corridor=unknown보다 먼저 already-enriched로 끝난다.
+    if (!inv || !Array.isArray(inv.files) || !inv.cov || inv.cov.scanComplete !== true) return null;
     const parts = inv.files.map((f) => { try { return f.rel + ":" + crypto.createHash("sha1").update(fs.readFileSync(path.join(repo, f.rel))).digest("hex"); } catch { return f.rel + ":unreadable"; } }).sort();
     return sha1("hist|" + parts.join(","));
   } catch { return null; }

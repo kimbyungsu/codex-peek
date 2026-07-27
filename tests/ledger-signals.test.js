@@ -185,16 +185,17 @@ const badCmd = run("erase", "x");
 ok(badCmd.status === 2, "미지 명령 거부");
 
 console.log("[4-1] 트림 판정 보존 — 이벤트 상한 초과 시 오래된 '반박'이 잘려 틀림 딱지가 부활하는 결함 방지(2026-07-09)");
+const OVER_TRIM = CL.LEDGER_EVENTS_TRIM_AT + 50;
 const wsT = path.join(dir, "trim-ws");
 fs.mkdirSync(wsT, { recursive: true });
 const tf = CL.ledgerEventsFileFor(wsT);
 fs.mkdirSync(path.dirname(tf), { recursive: true });
 const oldLines = [JSON.stringify({ ts: "t0", type: "proposed", sig: "keep", text: "old-alpha.ts ↔ old-beta.ts" }), JSON.stringify({ ts: "t1", type: "user_dispute", sig: "keep", from: "사용자 정정" })];
-for (let i = 0; i < 2450; i++) oldLines.push(JSON.stringify({ ts: "t" + (i + 2), type: "proposed", sig: "keep", text: "old-alpha.ts ↔ old-beta.ts" }));
+for (let i = 0; i < OVER_TRIM; i++) oldLines.push(JSON.stringify({ ts: "t" + (i + 2), type: "proposed", sig: "keep", text: "old-alpha.ts ↔ old-beta.ts" }));
 fs.writeFileSync(tf, oldLines.join("\n") + "\n");
 CL.appendLedgerEvent(wsT, { ts: "tz", type: "proposed", sig: "keep", text: "old-alpha.ts ↔ old-beta.ts" });
 const trimmed = CL.readLedgerEventsText(wsT).split(/\r?\n/).filter(Boolean);
-ok(trimmed.length <= CL.LEDGER_EVENTS_CAP, "트림 후 총량은 상한(2000) 이내 — PRIVACY '약 2,000줄 보존' 고지 불침");
+ok(trimmed.length <= CL.LEDGER_EVENTS_CAP, "트림 후 총량은 확장 상한(" + CL.LEDGER_EVENTS_CAP + ") 이내 — PRIVACY 고지와 일치");
 ok(trimmed.some((l) => l.includes('"user_dispute"')), "가장 오래된 판정(반박) 이벤트가 트림에서 살아남음(판정 보존)");
 const afterTrim = LE.deriveLedger(LE.parseEventsJsonl(CL.readLedgerEventsText(wsT)).events).find((x) => x.sig === "keep");
 ok(afterTrim && afterTrim.status === "disputed", "트림 후에도 신분 disputed 유지 — 조용한 부활 없음");
@@ -208,7 +209,7 @@ const rehabLines = [
   JSON.stringify({ ts: "t2", type: "confirmed", sig: "rh" }),
   JSON.stringify({ ts: "t3", type: "confirmed", sig: "rh" }),
 ];
-for (let i = 0; i < 2450; i++) rehabLines.push(JSON.stringify({ ts: "t" + (i + 4), type: "proposed", sig: "rh", text: "rh-alpha.ts ↔ rh-beta.ts" }));
+for (let i = 0; i < OVER_TRIM; i++) rehabLines.push(JSON.stringify({ ts: "t" + (i + 4), type: "proposed", sig: "rh", text: "rh-alpha.ts ↔ rh-beta.ts" }));
 fs.writeFileSync(tf3, rehabLines.join("\n") + "\n");
 CL.appendLedgerEvent(wsT3, { ts: "tz", type: "proposed", sig: "rh", text: "rh-alpha.ts ↔ rh-beta.ts" });
 const afterTrim3 = LE.deriveLedger(LE.parseEventsJsonl(CL.readLedgerEventsText(wsT3)).events).find((x) => x.sig === "rh");
@@ -218,11 +219,11 @@ const wsT2 = path.join(dir, "trim-ws2");
 fs.mkdirSync(wsT2, { recursive: true });
 const tf2 = CL.ledgerEventsFileFor(wsT2);
 const manyState = [];
-for (let i = 0; i < 2450; i++) manyState.push(JSON.stringify({ ts: "s" + i, type: "user_dispute", sig: "s" + i }));
+for (let i = 0; i < OVER_TRIM; i++) manyState.push(JSON.stringify({ ts: "s" + i, type: "user_dispute", sig: "s" + i }));
 fs.writeFileSync(tf2, manyState.join("\n") + "\n");
 CL.appendLedgerEvent(wsT2, { ts: "sz", type: "proposed", sig: "s0", text: "x-alpha.ts ↔ x-beta.ts" });
 const trimmed2 = CL.readLedgerEventsText(wsT2).split(/\r?\n/).filter(Boolean);
-ok(trimmed2.length <= CL.LEDGER_EVENTS_CAP, "판정 이벤트만 2450건인 극단에서도 총량 ≤ 상한(판정도 최신순 컷)");
+ok(trimmed2.length <= CL.LEDGER_EVENTS_CAP, "판정 이벤트만 확장 임계 초과인 극단에서도 총량 ≤ 상한(판정도 최신순 컷)");
 
 console.log("[5] 대시보드 배선(소스 검사) — 자동 기본·선택 개입(ledgerAct)·증거 통로 가시화");
 const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
@@ -235,6 +236,8 @@ ok(ext.includes("선택 버튼을 누르면 — 자동 흐름은 버튼 없이 �
 ok(ext.includes("‘참고할 결합 후보’ 그룹에 강제로 넣음") && ext.includes("항목 상한 안에서 선별") && ext.includes("정찰 자료에서 완전히 제외") && ext.includes("코드나 Project MAP을 직접 수정하지 않습니다"), "선택 버튼 안내 — 고정은 상한 내 후보 오버라이드, 차단은 완전 제외, 영향 범위는 일지·정찰 선별만");
 ok(ext.includes('T("검증됨","verified")') && !ext.includes('T("신뢰(자동 반영)"'), "오해 라벨 제거 — 검증됨은 코드/MAP 자동 적용과 분리");
 ok(ext.includes("machineRecorded") && ext.includes("promotable") && ext.includes("파일 취급 흔적 판정 불가"), "기계 확인 기록·승격 조건 통과·취급 불명을 따로 노출(자동 증명 통로 자기진단)");
+ok(/entries, totalEntries: derived\.length, timeline, counts/.test(ext) && /for \(const e of derived\)/.test(ext), "목록 12개와 전체 원장을 분리 — totalEntries·상태/영향 집계는 전체 derived 사용");
+ok(ext.includes("목록은 최근 ") && ext.includes("화면의 12개가 아니라 전체") && ext.includes("not just the 12 shown"), "대시보드가 최근 12/전체 N과 전체 관찰 신호·자동 선별을 명시");
 ok(/act === "export"[\s\S]{0,400}lane !== "trusted"/.test(ext), "내보내기는 신뢰 차선만(게이트 소스 잠금)");
 ok(/recordTo\("exported"[\s\S]{0,300}기록됐지만/.test(ext), "export의 이벤트 적재 실패 문구는 '장부 파일은 기록됐다'는 사실을 말함(거짓 '무반영' 금지 — Codex 반례 잠금. P3b: record→recordTo[대상 스냅샷 고정판] 개명 — 행동 계약 동일)");
 

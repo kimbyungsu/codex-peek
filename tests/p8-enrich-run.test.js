@@ -293,6 +293,24 @@ console.log("[6] historylessChanges — invSnap 대조(삭제·신규·메타 �
   fs.utimesSync(path.join(ws, "src", "a.js"), st0.atime, st0.mtime); // 메타 동일 위장
   ok((ME.historylessChanges(ws, q.invSnap, MR) || []).includes("src/a.js"), "메타 동일 내용 교체=지문 대조로 검출(6차 설계 반례)");
   ok(ME.historylessChanges(ws, undefined, MR) === null, "invSnap 부재=null(corridor unknown 정직)");
+  const partialMr = { collectInventory: () => ({ files: [], cov: { scanComplete: false, entryCapped: true, depthCapped: [] } }) };
+  ok(ME.historylessChanges(ws, q.invSnap, partialMr) === null, "현재 스캔이 10만 항목 상한에 닿으면 null(corridor unknown — 빈 변경으로 위장 금지)");
+}
+{
+  const { ws, nodeId } = setup("partial-source-fp");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  ok(ME.runEnrich(ws, base(ws, { adapters: { self: goodAdapter(nodeId) } })).outcome === "applied", "(전제) 완전 스캔의 완료 도장 생성");
+  ok(MB.ensureQueue(ws, PM) === true, "(전제) 적용 뒤 큐 재결속");
+  const q = JSON.parse(fs.readFileSync(MB.queueFileFor(ws), "utf8"));
+  const complete = MR.collectInventory(ws);
+  const origCollect = MR.collectInventory;
+  let calls = 0;
+  try {
+    MR.collectInventory = () => ({ files: complete.files, cov: { ...complete.cov, scanComplete: false, entryCapped: true } });
+    ok(ME.computeSourceFp(ws, q, null, MR) === null, "불완전 현재 스캔은 sourceFp를 만들지 않음(부분 지문 완료 도장 금지)");
+    const r = ME.runEnrich(ws, base(ws, { adapters: { self: () => { calls++; return { ok: false, detail: "partial-scan-probe" }; } } }));
+    ok(r.reason !== "already-enriched" && calls === 1, "부분 스캔은 기존 완료 도장으로 조기 종료하지 않음(corridor unknown이 실행 흐름에 생존)");
+  } finally { MR.collectInventory = origCollect; }
 }
 
 console.log("[8] 3b 2차 반례 — v0 마이그레이션·재개 동결 주체");

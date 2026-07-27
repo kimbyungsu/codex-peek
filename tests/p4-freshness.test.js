@@ -21,6 +21,7 @@ const PM = MR.PM;
 
 let pass = 0, fail = 0;
 function ok(c, m) { if (c) { pass++; console.log("  ✅ " + m); } else { fail++; console.log("  ❌ " + m); } }
+ok(MF.ENTRY_CAP === 10000 && MF.RETRY_CAP === 10000, "대형 Project MAP 근거 최신성 기억=10,000건(재시도도 동일)");
 const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const sha = (t) => crypto.createHash("sha1").update(t).digest("hex");
 const FP = "a".repeat(40);

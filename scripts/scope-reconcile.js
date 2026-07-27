@@ -154,7 +154,7 @@ function mapFile() {
   return path.join(repo, "docs", "MAP.md");
 }
 
-// 제안 수집: 최근 지도들(보관 정책=최근 10장)의 meta.mapPatches 합집합 — 계산은 공유 모듈(computePending).
+// 제안 수집: 최근 지도들(보관 정책=최근 30장)의 meta.mapPatches 합집합 — 계산은 공유 모듈(computePending).
 function pendingProposals(st) {
   let mapNow = "";
   try { mapNow = fs.readFileSync(mapFile(), "utf8"); } catch { /* 확정층 아직 없음 */ }

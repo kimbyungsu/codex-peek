@@ -29,7 +29,7 @@ ok(/function verdictActualFor/.test(ext) && /verdicts\.jsonl/.test(ext.slice(ext
 ok(/귀속 보정.*두 감사 일치/.test(ext) && /verdictActualFor\(wsFilter/.test(ext), "sessionModelMeta 한 곳 보정 — brainActual·drift·현재값 세 소비처 공유");
 ok(/fileCacheKey\(path\.join\(BRIDGE_DIR, "stats", "verdicts\.jsonl"\)\)/.test(ext), "캐시 키에 장부 상태 포함(보정 입력 변화 시 즉시 무효)");
 
-console.log("[4] 탐색자 카드 시각 — 비용 장부 lastTs 기반(지도 10장 프루닝·top-5 사각과 무관)");
+console.log("[4] 탐색자 카드 시각 — 비용 장부 lastTs 기반(지도 30장 프루닝·top-5 사각과 무관)");
 const VS = require(path.join(__dirname, "..", "out", "verify-stats.js"));
 const now = Date.now();
 const mk = (ts, arm, ws) => JSON.stringify({ ts: new Date(ts).toISOString(), workspace: ws || "D:/proj", arm, usageIn: 1, usageOut: 1 });

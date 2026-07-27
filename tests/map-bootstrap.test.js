@@ -37,6 +37,34 @@ async function waitRs(repo, pred, ms) {
 }
 
 async function main() {
+  console.log("[0] 대형 프로젝트 기본 용량 — 기존 2만/10단계 경계를 실제로 넘어 전수 스캔");
+  ok(MR.MAX_ENTRIES === 100000 && MR.MAX_DEPTH === 20, "Project MAP 구조 스캔 기본값=10만 항목·20단계");
+  ok(MB.INVENTORY_SNAPSHOT_FILE_CAP === 100000 && MB.INVENTORY_SNAPSHOT_BYTES_CAP === 1024 * 1024 * 1024, "무-git 변경 스냅샷=10만 파일·1GB");
+  {
+    const fakeRoot = "virtual-large-map-root";
+    const many = Array.from({ length: 20001 }, (_, i) => ({ name: "f" + i + ".bin", isDirectory: () => false }));
+    const origReadDir = fs.readdirSync;
+    try {
+      fs.readdirSync = (p, o) => p === fakeRoot ? many : origReadDir(p, o);
+      const inv = MR.collectInventory(fakeRoot);
+      ok(inv.files.length === 20001 && inv.cov.entryCapped === false && inv.cov.scanComplete === true, "구 한도(2만)를 넘는 20,001항목도 전수 스캔");
+    } finally { fs.readdirSync = origReadDir; }
+  }
+  {
+    const deep = fs.mkdtempSync(path.join(os.tmpdir(), "mapboot_deep_"));
+    let at = deep;
+    for (let i = 0; i < 15; i++) { at = path.join(at, "d" + i); fs.mkdirSync(at); }
+    fs.writeFileSync(path.join(at, "leaf.js"), "module.exports=1;\n");
+    const inv = MR.collectInventory(deep);
+    ok(inv.files.some((f) => f.rel.endsWith("leaf.js")) && inv.cov.depthCapped.length === 0, "구 깊이(10)를 넘는 15단계 소스도 스캔");
+  }
+  {
+    const entryCap = MB.snapInvFor("virtual-entry-cap", { collectInventory: () => ({ files: Array(MB.INVENTORY_SNAPSHOT_FILE_CAP).fill({ rel: "x" }), cov: { scanComplete: false, entryCapped: true, depthCapped: [] } }) });
+    const depthCap = MB.snapInvFor("virtual-depth-cap", { collectInventory: () => ({ files: [], cov: { scanComplete: false, entryCapped: false, depthCapped: ["deep"] } }) });
+    ok(entryCap.cap === "scan-entry-cap" && !entryCap.files, "10만 항목 상한 도달 목록은 완전한 비-git 기준선으로 저장하지 않음");
+    ok(depthCap.cap === "scan-depth-cap" && !depthCap.files, "20단계 깊이 상한 도달 목록도 완전한 비-git 기준선으로 저장하지 않음");
+  }
+
   console.log("[1] 2트랙 = 완전 무접촉(계약 없음/off면 파일 0·spawn 0)");
   {
     const ws = mkRepo("twotrack");

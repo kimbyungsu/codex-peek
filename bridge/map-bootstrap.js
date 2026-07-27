@@ -180,21 +180,31 @@ function fillHistorylessFp(basis, topo, PM) {
   return { kind: "historyless", basisFp: PM.mapHashOf(topo), inventoryFp: PM.opHashOf(topo.inventory) };
 }
 // P8(설계 v10 P8-1 historyless — 큐 v0→v1): 비-git 변경 산출용 inventory 스냅샷. collectInventory는
-// {rel,kind}만 반환(실측)하므로 stat+내용 sha1을 보강한다. 상한 20,000파일+총 500MB — 초과=invSnap 미기록
+// {rel,kind}만 반환(실측)하므로 stat+내용 sha1을 보강한다. 대형 무-git 폴더용 상한 100,000파일+총 1GB — 초과=invSnap 미기록
 // +사유(실행기는 부재=corridor unknown 정직 park). 실패 파일은 목록에서 제외하지 않고 fp:null(변경 취급).
+const INVENTORY_SNAPSHOT_FILE_CAP = 100000;
+const INVENTORY_SNAPSHOT_BYTES_CAP = 1024 * 1024 * 1024;
 function snapInvFor(repo, MR) {
   try {
     const inv = MR.collectInventory(repo);
     const files = [];
     let total = 0;
     if (!inv || !Array.isArray(inv.files)) return { cap: "scan-failed" };
-    if (inv.files.length > 20000) return { cap: "file-count" };
+    // collectInventory 자체 상한에 닿은 목록은 길이가 정확히 FILE_CAP이라 아래 길이 비교로는
+    // 부분 스캔임을 알 수 없다. 불완전 목록을 기준선으로 저장하면 미탐색 영역의 변경을
+    // "변경 없음"으로 오판하므로, coverage를 기준으로 invSnap을 의도적으로 무효화한다.
+    if (!inv.cov || inv.cov.scanComplete !== true) {
+      if (inv.cov && inv.cov.entryCapped === true) return { cap: "scan-entry-cap" };
+      if (inv.cov && Array.isArray(inv.cov.depthCapped) && inv.cov.depthCapped.length > 0) return { cap: "scan-depth-cap" };
+      return { cap: "scan-incomplete" };
+    }
+    if (inv.files.length > INVENTORY_SNAPSHOT_FILE_CAP) return { cap: "file-count" };
     for (const f of inv.files) {
       const ab = path.join(repo, f.rel);
       let st9 = null;
       try { st9 = fs.statSync(ab); } catch { files.push({ path: f.rel, mtimeMs: 0, size: 0, fp: null }); continue; }
       total += st9.size;
-      if (total > 500 * 1024 * 1024) return { cap: "total-bytes" };
+      if (total > INVENTORY_SNAPSHOT_BYTES_CAP) return { cap: "total-bytes" };
       let fp = null;
       try { fp = crypto.createHash("sha1").update(fs.readFileSync(ab)).digest("hex"); } catch { /* fp null=변경 취급 */ }
       files.push({ path: f.rel, mtimeMs: st9.mtimeMs, size: st9.size, fp });
@@ -634,7 +644,7 @@ function bootstrapStatusFor(repo) {
   const contentOk = q.st === "ok" && q.data.mapId === rt.topo.mapId && q.data.mapHash === MR.PM.mapHashOf(rt.topo); // CLI는 전체 판독 가능 — 내용까지 대조
   return { state: contentOk ? "draft-ready" : "draft-stale-queue", rs: rsd, mapId: rt.topo.mapId };
 }
-module.exports = { maybeSpawnBootstrap, hookTick, bootstrapStatusFor, lockNeedsManualDelete, lockStateOf, forceUnlock, runChild, parentSignals, repoKeyFor, rsFileFor, queueFileFor, consentFileFor, hasConsent, grantConsent, basisFor, fillHistorylessFp, sameBasisBoundary, pidState, ensureQueue, queueLooksSane, mapAutoExcluded, projectMapMtimeForStatus, snapInvFor, RUN_DIR, QUEUE_DIR }; // main 블록보다 먼저 — run-manual→runCli→본 모듈 순환 require 시 exports가 채워져 있어야 함(6차 #3 위임의 전제)
+module.exports = { maybeSpawnBootstrap, hookTick, bootstrapStatusFor, lockNeedsManualDelete, lockStateOf, forceUnlock, runChild, parentSignals, repoKeyFor, rsFileFor, queueFileFor, consentFileFor, hasConsent, grantConsent, basisFor, fillHistorylessFp, sameBasisBoundary, pidState, ensureQueue, queueLooksSane, mapAutoExcluded, projectMapMtimeForStatus, snapInvFor, INVENTORY_SNAPSHOT_FILE_CAP, INVENTORY_SNAPSHOT_BYTES_CAP, RUN_DIR, QUEUE_DIR }; // main 블록보다 먼저 — run-manual→runCli→본 모듈 순환 require 시 exports가 채워져 있어야 함(6차 #3 위임의 전제)
 
 if (require.main === module) {
   const mode = process.argv[2];

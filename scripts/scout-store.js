@@ -12,7 +12,7 @@ const crypto = require("crypto");
 
 const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(os.homedir(), ".codex-bridge");
 const SCOUTS_DIR = path.join(BRIDGE_DIR, "scouts");
-const KEEP_PER_WS = 10; // 프로젝트별 최근 10장만 유지(프라이버시·용량 — PRIVACY.md 명시와 일치해야 함)
+const KEEP_PER_WS = 30; // 대형·장기 프로젝트도 비교 근거를 잃지 않게 최근 30장 유지(PRIVACY.md와 일치)
 
 // extension.ts normWs와 동일: normalize + 끝 구분자 제거 + 소문자 + NFC(유니코드 폼 차이 방지)
 function normWs(p) {

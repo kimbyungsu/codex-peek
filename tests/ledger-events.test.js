@@ -160,10 +160,14 @@ const ws = path.join(dir, "proj");
 ok(CL.appendLedgerEvent(ws, { ts: "t", type: "proposed", sig: "x", text: "X" }) === true, "정상 append");
 ok(CL.readLedgerEventsText(ws).includes('"sig":"x"'), "읽기 왕복");
 ok(CL.appendLedgerEvent(ws, { ts: "t", type: "proposed" }) === false, "sig 없는 이벤트 거부");
-for (let i = 0; i < 2500; i++) CL.appendLedgerEvent(ws, { ts: "t" + i, type: "proposed", sig: "bulk" + i });
+const bulkN = CL.LEDGER_EVENTS_TRIM_AT + 50;
+const bulkRows = [];
+for (let i = 0; i < bulkN; i++) bulkRows.push(JSON.stringify({ ts: "t" + i, type: "proposed", sig: "bulk" + i }));
+fs.writeFileSync(CL.ledgerEventsFileFor(ws), bulkRows.join("\n") + "\n", "utf8");
+CL.appendLedgerEvent(ws, { ts: "latest", type: "proposed", sig: "bulk-latest" });
 const lines = CL.readLedgerEventsText(ws).split(/\r?\n/).filter(Boolean);
-ok(lines.length <= 2400 && lines.length >= 2000, `상한 트림 동작(현재 ${lines.length}줄 — 2000~2400 창)`);
-ok(JSON.parse(lines[lines.length - 1]).sig === "bulk2499", "트림은 오래된 쪽을 자름(최신 보존)");
+ok(lines.length <= CL.LEDGER_EVENTS_CAP, `확장 상한 트림 동작(현재 ${lines.length}줄 ≤ ${CL.LEDGER_EVENTS_CAP})`);
+ok(JSON.parse(lines[lines.length - 1]).sig === "bulk-latest", "트림은 오래된 쪽을 자름(최신 보존)");
 
 console.log("[7] 렌더 동봉 — §7.5 3차선, 장부 없으면 구획 자체가 없음(주입 0)");
 const base = { repo: "r", head: "abcdef0", seeds: ["s.ts"], diffText: "", tokenHits: [], coChange: null, tests: [], recentFailures: [], mapContent: null };

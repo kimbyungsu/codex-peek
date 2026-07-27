@@ -66,7 +66,9 @@ const POLICY_EXCLUDE = new Set(["node_modules", ".git", "dist", "build", "out", 
 const CODE_EXT = new Set([".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".py"]);
 const CONFIG_EXT = new Set([".json", ".yml", ".yaml", ".toml", ".ini"]);
 const DOC_EXT = new Set([".md", ".rst", ".txt"]);
-const MAX_ENTRIES = 20000, MAX_DEPTH = 10;
+// 의존성·빌드 산출물은 위 정책 제외로 먼저 걷어내고, 실제 소스가 큰 모노레포는 넉넉히 훑는다.
+// 상한에 닿으면 기존처럼 scanComplete=false로 정직하게 표시하며 완전 스캔으로 위장하지 않는다.
+const MAX_ENTRIES = 100000, MAX_DEPTH = 20;
 
 function collectInventory(root) {
   const files = []; // {rel, kind}
@@ -490,4 +492,4 @@ function initTopologyForBootstrap(repo, opts) {
   return { st: "created", mapId: topo.mapId, topoFp: crypto.createHash("sha1").update(PM.canonicalSerialize(topo)).digest("hex"), mapMdFp: crypto.createHash("sha1").update(PM.renderMapMd(topo)).digest("hex") }; // 생성 지문(P1 5차: finish 시점 지문과 대조해야 사이 편집분을 자동물로 오귀속하지 않음
 }
 
-module.exports = { runCli, collectInventory, buildDraft, readTopoEx, readTopoExFor, renderFor, initTopologyForBootstrap, ctxFor, withMapLock, pipelineBarrier, physKeyOf, legacyLockKeysFor, PM }; // physKeyOf·legacyLockKeysFor: P3b C-6 패리티·잠금 테스트용 노출
+module.exports = { runCli, collectInventory, buildDraft, readTopoEx, readTopoExFor, renderFor, initTopologyForBootstrap, ctxFor, withMapLock, pipelineBarrier, physKeyOf, legacyLockKeysFor, MAX_ENTRIES, MAX_DEPTH, PM }; // physKeyOf·legacyLockKeysFor: P3b C-6 패리티·잠금 테스트용 노출
