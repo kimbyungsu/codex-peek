@@ -180,12 +180,23 @@ console.log("[A-1] 결합 확인 요청 동봉 — 기계 확인 가능 항목�
   CL.appendLedgerEvent(repo, { ts: "t2", type: "proposed", sig: "concept", text: "개념 결합(경로 없음)" });
   const cands = CL.ledgerCouplingCandidates(repo, 3);
   ok(cands.length === 1 && /^[0-9a-f]{6}$/.test(cands[0].id) && cands[0].paths.length === 2, "후보=기계 확인 가능 항목만·6자 id·경로 동봉");
-  // attach 본문에 결합 확인 요청 블록 — 지도가 있어야 동봉 자체가 생성됨
+  // 지도 품질과 무관한 장부 재확인 — no-map에서도 결합 블록만 독립 동봉.
+  const journalOnly = CL.buildScoutAttach(repo, { scoutMode: "on", scoutRepo: repo }, "ko");
+  ok(!!journalOnly && journalOnly.mapItems.length === 0 && journalOnly.couplings.length === 1 && /영향지도와 독립/.test(journalOnly.text), "지도 없음 → 불량 자료 없이 관찰 일지 재확인 블록만 동봉");
+  const badRaw = "UNTRUSTED_MAP_PAYLOAD_9f3a — Codex 검증 실행 불가";
+  store.saveMap(repo, "self", badRaw, { seedFiles: [] });
+  ok(CL.scoutMapStatus(repo).state === "invalid", "불량 지도 fixture가 invalid로 판정됨");
+  const invalidOnly = CL.buildScoutAttach(repo, { scoutMode: "on", scoutRepo: repo }, "ko");
+  ok(!!invalidOnly && invalidOnly.mapItems.length === 0 && invalidOnly.couplings.length === 1 && !invalidOnly.text.includes("UNTRUSTED_MAP_PAYLOAD_9f3a"), "invalid 지도 → 원문은 제외하고 장부 재확인만 유지");
+  // 정상 지도가 생기면 기존 지도+결합 동봉으로 돌아간다.
   fs.writeFileSync(path.join(repo, "a.md"), "x");
   store.saveMap(repo, "self", "① 후보\n- a.md — high", { seedFiles: ["a.md"], basisTs: new Date(Date.now() + 5000).toISOString(), seedMissing: [] });
   const att = CL.buildScoutAttach(repo, { scoutMode: "on", scoutRepo: repo }, "ko");
   ok(!!att && att.text.includes("[결합 확인 요청") && att.text.includes("#" + cands[0].id) && att.text.includes("결합반박 #id"), "동봉 본문에 확인 요청 블록+id+반박 표기 안내");
   ok(Array.isArray(att.couplings) && att.couplings.some((cp) => cp.id === cands[0].id), "envelope.couplings — flagLedgerConfirms의 명시 표기 귀속 입력");
+  store.saveMap(repo, "self", "① 후보\n- a.md — medium", { seedFiles: ["a.md"], basisTs: new Date(Date.now() + 5000).toISOString(), seedMissing: [] });
+  const noHigh = CL.buildScoutAttach(repo, { scoutMode: "on", scoutRepo: repo }, "en");
+  ok(!!noHigh && noHigh.mapItems.length === 0 && /Field-journal recheck/.test(noHigh.text) && !/a\.md — medium/.test(noHigh.text), "high 0 지도 → 지도 원문 없이 영문 장부 재확인만 동봉");
 }
 
 console.log("[B-3] 트림 동형성(Codex 3차 반례 2종) — 기록 전용 이벤트가 경계/보존을 왜곡해 트림 전후 상태가 변하면 안 됨");

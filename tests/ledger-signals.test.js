@@ -51,10 +51,11 @@ ok(countType("confirmed") === 1, "두 경로 실존 인용 + 통과 → confirme
 {
   const SESS = path.join(dir, "sessions");
   fs.mkdirSync(SESS, { recursive: true });
-  const roll = (id) => fs.writeFileSync(path.join(SESS, `rollout-${id}.jsonl`), [
+  const roll = (id) => { const callId = "call-" + id; fs.writeFileSync(path.join(SESS, `rollout-${id}.jsonl`), [
     JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "검증 요청" }] } }),
-    JSON.stringify({ type: "response_item", payload: { type: "function_call", name: "shell", arguments: JSON.stringify({ command: "cat src/alpha-channel.ts lib/beta-consumer.ts" }) } }),
-  ].map((s) => s).join("\n"), "utf8");
+    JSON.stringify({ type: "response_item", payload: { type: "function_call", name: "shell", call_id: callId, arguments: JSON.stringify({ command: "cat src/alpha-channel.ts lib/beta-consumer.ts" }) } }),
+    JSON.stringify({ type: "response_item", payload: { type: "function_call_output", call_id: callId, output: JSON.stringify({ exit_code: 0, output: "l1\nl2\nl3\nl4\nl5" }) } }),
+  ].join("\n"), "utf8"); };
   roll("aaaa1111-e2e1"); roll("aaaa1111-e2e2");
   CB.flagLedgerConfirms(PASS_ANSWER, ws, "aaaa1111-e2e1", ws, { askId: "ask-1", attach: { mapItems: [], couplings: [] } });
   let d = LE.deriveLedger(eventsNow()).find((e) => e.sig === sig);
@@ -87,12 +88,16 @@ console.log("[1-2] 명시 표기(claimed) — 행 단독만·상충 거부·인�
   const ws3 = path.join(dir, "proj-claim");
   fs.mkdirSync(path.join(ws3, "src"), { recursive: true });
   fs.mkdirSync(path.join(ws3, "lib"), { recursive: true });
+  fs.mkdirSync(path.join(ws3, "other"), { recursive: true });
   fs.writeFileSync(path.join(ws3, "src", "alpha-channel.ts"), "l1\nl2\n");
   fs.writeFileSync(path.join(ws3, "lib", "beta-consumer.ts"), "l1\nl2\nl3\n");
+  fs.writeFileSync(path.join(ws3, "other", "alpha-channel.ts"), "decoy\n");
+  fs.writeFileSync(path.join(ws3, "other", "beta-consumer.ts"), "decoy\n");
   const cpl = { id: "abc123", sig: "claim-sig", paths: ["src/alpha-channel.ts", "lib/beta-consumer.ts"] };
   const cpl2 = { id: "def456", sig: "claim-sig-2", paths: ["src/alpha-channel.ts", "lib/beta-consumer.ts"] };
   const cpl3 = { id: "aaa111", sig: "claim-sig-3", paths: ["src/alpha-channel.ts", "lib/beta-consumer.ts"] };
-  const attach = { mapItems: [], couplings: [cpl, cpl2, cpl3] };
+  const cpl4 = { id: "bbb222", sig: "claim-sig-4", paths: ["src/alpha-channel.ts", "lib/beta-consumer.ts"] };
+  const attach = { mapItems: [], couplings: [cpl, cpl2, cpl3, cpl4] };
   const answer3 = [
     "이 답은 결합확인 #abc123 를 본문 문장 안에 인용만 했다(행 단독 아님 — 무시돼야).",
     "결합확인 #def456",             // 행 단독 — 유효(단 인용 미동반)
@@ -112,19 +117,32 @@ console.log("[1-2] 명시 표기(claimed) — 행 단독만·상충 거부·인�
   CB.flagLedgerConfirms("결합확인 #def456\n검증: 실패", ws3, "", ws3, { askId: "c2", attach });
   const d3 = LE.deriveLedger(evsNow3(ws3)).find((x) => x.sig === "claim-sig-2");
   ok(d3 && d3.status === "inferred", "인용 미동반 표기 2회(서로 다른 askId) → 여전히 미승격(자기보고 단독 승격 차단)");
-  // 인용 동반 표기 + seen=ok(세션 rollout에 이번 턴 취급 흔적) → cited=true → 서로 다른 askId 2회에 승격
+  // 인용 동반 표기 + seen=ok(세션 rollout에 이번 턴 정확 경로 취급 흔적) → cited=true → 강한 확인 1회에 승격
   const SESS3 = path.join(dir, "sessions");
   fs.mkdirSync(SESS3, { recursive: true });
-  const roll3 = (id) => fs.writeFileSync(path.join(SESS3, `rollout-${id}.jsonl`), [
+  const roll3 = (id) => { const callId = "call-" + id; fs.writeFileSync(path.join(SESS3, `rollout-${id}.jsonl`), [
     JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "검증 요청" }] } }),
-    JSON.stringify({ type: "response_item", payload: { type: "function_call", name: "shell", arguments: JSON.stringify({ command: "cat src/alpha-channel.ts lib/beta-consumer.ts" }) } }),
-  ].join("\n"), "utf8");
-  roll3("cccc1111-cl03"); roll3("cccc1111-cl04"); roll3("cccc1111-cl05"); roll3("cccc1111-cl06");
+    JSON.stringify({ type: "response_item", payload: { type: "function_call", name: "shell", call_id: callId, arguments: JSON.stringify({ command: "cat src/alpha-channel.ts lib/beta-consumer.ts" }) } }),
+    JSON.stringify({ type: "response_item", payload: { type: "function_call_output", call_id: callId, output: JSON.stringify({ exit_code: 0, output: "l1\nl2\nl3\nl4\nl5" }) } }),
+  ].join("\n"), "utf8"); };
+  roll3("cccc1111-cl03"); roll3("cccc1111-cl05"); roll3("cccc1111-cl06");
   const citedAns = "근거: (src/alpha-channel.ts:1) (lib/beta-consumer.ts:2)\n결합확인 #abc123\n검증: 통과";
   CB.flagLedgerConfirms(citedAns, ws3, "cccc1111-cl03", ws3, { askId: "c3", attach });
-  CB.flagLedgerConfirms(citedAns, ws3, "cccc1111-cl04", ws3, { askId: "c4", attach });
   const d4 = LE.deriveLedger(evsNow3(ws3)).find((x) => x.sig === "claim-sig");
-  ok(d4 && d4.status === "verified", "인용 동반(cited=true)·seen=ok 표기가 서로 다른 askId 2회 → 승격");
+  ok(d4 && d4.status === "verified", "정확 경로 인용(cited=true)·실제 취급(seen=ok) 명시 표기 1회 → 승격");
+  // 같은 basename의 다른 디렉터리 파일을 열거나 목록 출력에 이름만 보인 것은 강한 확인이 아니다.
+  const decoyId = "cccc1111-cl07";
+  const decoyCallId = "call-" + decoyId;
+  fs.writeFileSync(path.join(SESS3, `rollout-${decoyId}.jsonl`), [
+    JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "검증 요청" }] } }),
+    JSON.stringify({ type: "response_item", payload: { type: "function_call", name: "shell", call_id: decoyCallId, arguments: JSON.stringify({ command: "cat other/alpha-channel.ts other/beta-consumer.ts" }) } }),
+    JSON.stringify({ type: "response_item", payload: { type: "function_call_output", call_id: decoyCallId, output: JSON.stringify({ exit_code: 0, output: "src/alpha-channel.ts\nlib/beta-consumer.ts" }) } }),
+  ].join("\n"), "utf8");
+  const decoyAns = "근거: (src/alpha-channel.ts:1) (lib/beta-consumer.ts:2)\n결합확인 #bbb222\n검증: 통과";
+  CB.flagLedgerConfirms(decoyAns, ws3, decoyId, ws3, { askId: "c7", attach });
+  const decoyEvent = evsNow3(ws3).find((x) => x.sig === "claim-sig-4" && x.type === "confirmed");
+  const decoyDerived = LE.deriveLedger(evsNow3(ws3)).find((x) => x.sig === "claim-sig-4");
+  ok(decoyEvent && decoyEvent.cited === false && decoyDerived.status === "inferred", "동명 다른 경로 열람·출력 이름 노출 → 정확 후보 파일 확인 아님, 승격 차단");
   // 반박 표기: 인용 미동반이면 강등 재료 아님(기록만)
   CB.flagLedgerConfirms("결합반박 #abc123\n검증: 실패", ws3, "cccc1111-cl05", ws3, { askId: "c5", attach });
   const d5 = LE.deriveLedger(evsNow3(ws3)).find((x) => x.sig === "claim-sig");

@@ -6473,7 +6473,7 @@ class Dashboard {
       h.textContent=T("관찰 일지(자동 기억) ⚙ 추가 LLM 없음 — 개입은 선택","Field journal (auto memory) ⚙ no extra LLM — intervention optional");
       card.appendChild(h);
       const info=document.createElement("div"); info.className="muted";
-      info.textContent=T("영향지도의 발견은 자동으로 쌓입니다. 같은 항목을 서로 다른 검증 2회가 실제 근거 파일까지 다룬 것으로 확인하면 '검증됨'으로 승격되어 다음 정찰 자료에 우선 동봉되고, 반박되면 스스로 강등됩니다 — 코드나 Project MAP에 자동 적용됐다는 뜻은 아닙니다. 클릭 없이 굴러가며, 직접 맞음/틀림을 아는 경우의 확인·정정과 고정·차단·교범 기록만 선택 개입입니다.","Impact-map findings accumulate automatically. When two separate verification runs for an item are confirmed to have handled the cited evidence files, it becomes 'verified' and is prioritized in future scout packages; a dispute demotes it. This does not mean code or Project MAP was automatically changed. It runs without clicks; confirm/correct, pin/ban, and manual export are optional exceptions when you know better.");
+      info.textContent=T("영향지도의 발견은 자동으로 쌓입니다. 검증자가 일지의 결합을 명시적으로 골라 정확한 근거 파일까지 다룬 강한 확인은 1회, 결합을 고르지 않은 공동 인용은 서로 다른 검증 2회가 모이면 '검증됨'으로 승격되어 다음 정찰 자료에 우선 동봉됩니다. 반박되면 스스로 강등됩니다 — 코드나 Project MAP에 자동 적용됐다는 뜻은 아닙니다. 클릭 없이 굴러가며, 직접 맞음/틀림을 아는 경우의 확인·정정과 고정·차단·교범 기록만 선택 개입입니다.","Impact-map findings accumulate automatically. One strong confirmation—where the verifier explicitly selects a journal coupling and handles its exact evidence paths—or two separate incidental co-citations promote it to 'verified' and prioritize it in future scout packages. A dispute demotes it. This does not mean code or Project MAP was automatically changed. It runs without clicks; confirm/correct, pin/ban, and manual export are optional exceptions when you know better.");
       card.appendChild(info);
       // 정찰 대상 — '상시' 표시(2026-07-10 구조 해법: 미지정=세션 폴더 폴백이 조용히 축을 눈 감기던 실사고 —
       // differs/invalid일 때만 보이던 것을 항상 보이게. 어긋남 의심이면 문구가 아니라 '행동 카드'로).
@@ -6523,8 +6523,8 @@ class Dashboard {
       safe(function(){
         const ae=ml.autoEvidence||{machineRecorded:0,promotable:0,unknown:0,humanConfirmed:0};
         const line=document.createElement("div"); line.className="muted"; line.style.cssText="font-size:10.5px;margin:3px 0 5px";
-        line.textContent=T("자동 확인 통로: 기계 확인 기록 "+ae.machineRecorded+" · 승격 조건 통과 "+ae.promotable+" · 파일 취급 흔적 판정 불가 "+ae.unknown+(ae.humanConfirmed?" · 사람 확인 "+ae.humanConfirmed:""),"Automatic evidence path: machine confirmations "+ae.machineRecorded+" · passed promotion conditions "+ae.promotable+" · file-handling evidence unknown "+ae.unknown+(ae.humanConfirmed?" · human confirmations "+ae.humanConfirmed:""));
-        line.title=T("승격 재료는 seen=ok 등 증거 조건을 통과한 확인 사건 수입니다. 같은 항목에 서로 다른 검증 실행 2건이 쌓여야 자동 승격됩니다. 과거의 '확인 불가' 기록은 소급해 성공으로 바꾸지 않습니다.","Promotion-eligible evidence means confirmation events that passed evidence conditions such as seen=ok. Automatic promotion requires two different verification runs for the same item. Historical unknown records are never retroactively treated as success.");
+        line.textContent=T("자동 확인 통로: 기계 확인 기록 "+ae.machineRecorded+" · 승격 가능한 증거 사건 "+ae.promotable+" · 파일 취급 흔적 판정 불가 "+ae.unknown+(ae.humanConfirmed?" · 사람 확인 "+ae.humanConfirmed:""),"Automatic evidence path: machine confirmations "+ae.machineRecorded+" · promotion-eligible evidence events "+ae.promotable+" · file-handling evidence unknown "+ae.unknown+(ae.humanConfirmed?" · human confirmations "+ae.humanConfirmed:""));
+        line.title=T("명시적으로 결합을 골라 정확한 경로를 실제로 다룬 강한 확인은 1회, 결합을 고르지 않은 공동 인용과 구형 기록은 서로 다른 실행 2회가 필요합니다. 과거의 '확인 불가' 기록은 소급해 성공으로 바꾸지 않고, 이후의 새 확인 사건으로 승격합니다.","One strong confirmation that explicitly selects a coupling and handles its exact paths is enough; incidental co-citations and legacy records require two separate runs. Historical unknown records are not rewritten as successes; later evidence adds a new confirmation event.");
         card.appendChild(line);
       });
       // 네 선택 개입은 이름만으로 포함/제외와 상태 전이의 차이를 알기 어렵다. 접힌 도움말이나 툴팁이 아니라

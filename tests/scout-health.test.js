@@ -40,11 +40,13 @@ ok(recordOnly[0].status === "inferred" && hRecordOnly.disputedEntries === 1, "�
 
 console.log("[패리티] 배포 미니 사본 = 정본 (같은 JSONL → 같은 수치 · 복권 규칙 동형)");
 const raw2 = raw1 + "\n" + [ev("proposed", "f", { text: "f" }), ev("refuted", "f"), ev("confirmed", "f", { ts: "t1" }), ev("confirmed", "f", { ts: "t2" })].join("\n"); // 반박 후 서로 다른 시각 legacy 확인 2회 → 복권
-for (const raw of [raw1, raw2, ""]) {
+const raw3 = [ev("proposed", "g", { text: "src/strong-alpha.ts ↔ lib/strong-beta.ts" }), ev("confirmed", "g", { grade: "claimed", askId: "strong-1", cited: true, seen: "ok" })].join("\n");
+for (const raw of [raw1, raw2, raw3, ""]) {
   const a = LE.computeScoutHealth(LE.deriveLedger(LE.parseEventsJsonl(raw).events));
   const b = CL.computeScoutHealthMini(raw);
   ok(JSON.stringify(a) === JSON.stringify(b), `패리티(${raw ? raw.split("\n").length + "줄" : "빈 장부"}): ${JSON.stringify(b)}`);
 }
+ok(CL.computeScoutHealthMini(raw3).verified === 1, "강한 claimed 1회 승격도 정본·미니 집계가 동일");
 ok(CL.HEALTH_MIN_SAMPLE === LE.HEALTH_MIN_SAMPLE, "표본 게이트 상수 동일(정본·사본)");
 const rawUnknown = raw1 + "\n" + JSON.stringify({ ts: "t", type: "future_type", sig: "z" }) + "\n" + JSON.stringify({ ts: "t", type: "??", sig: "y" });
 ok(JSON.stringify(LE.computeScoutHealth(LE.deriveLedger(LE.parseEventsJsonl(rawUnknown).events))) === JSON.stringify(CL.computeScoutHealthMini(rawUnknown)), "미지 타입 패리티 — 사본도 allowlist로 버려 표본 수가 안 부풀음(Codex 반례 잠금)");

@@ -56,7 +56,7 @@ ok(/const tB = \(ko, en\)/.test(sg) && /this project has no impact map yet/.test
 const sgBad = sg.split(/\r?\n/).filter((l) => /(console\.(log|error)|process\.std(out|err)\.write)\(/.test(l) && /[가-힣]/.test(l) && !/tB\(/.test(l));
 ok(sgBad.length === 0, "scout-gate 훅: 출력 호출 줄에 tB 없는 한글 없음(stderr 차단문 포함)" + (sgBad.length ? " ← " + sgBad[0].trim().slice(0, 70) : ""));
 const clsrc = fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8");
-ok(/const en = loadLang\(\) === "en"/.test(clsrc) && /\[Recon \(3-track\) auto-directive · once per state\]/.test(clsrc), "buildScoutDirective: 자동지시 en 변형(훅 주입문도 언어 준수)");
+ok(/const langSnap = loadLang\(\)/.test(clsrc) && /const en = langSnap === "en"/.test(clsrc) && /\[Recon \(3-track\) auto-directive · once per state\]/.test(clsrc), "buildScoutDirective: 한 번 잡은 언어 스냅샷으로 자동지시 en 변형 유지");
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

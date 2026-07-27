@@ -101,13 +101,14 @@ export function parseEventsJsonl(raw: string): { events: LedgerEvent[]; dropped:
 // 전이 임계 — '이벤트 먼저, 정책 나중'(tg learning_events). L1 v2(2026-07-10 설계검증 반영):
 // 확인 1건=승격(v1)은 '공동 인용≠결합 확인' 결함이라 폐기. 승격은 증거의 질로:
 //  - user_confirm ≥1 → verified(사람 확인은 즉시 — 사람 결정 보존)
-//  - '승격 가능 기계 확인'(claimed[명시 표기·태생적 echoed] 또는 co-cited·비-echoed·seen=ok)이
-//    서로 다른 askId ≥2 → verified ("독립 턴" 주장 아님 — '서로 다른 ask 실행' 기준)
+//  - claimed(명시 표기+cited+seen=ok)는 정확한 결합을 골라 확인한 강한 증거라 서로 다른 askId ≥1 → verified
+//  - co-cited(비-echoed·seen=ok)는 우연 공동 인용 가능성이 있어 서로 다른 askId ≥2 → verified
 //  - legacy(grade 없는 구형) ≥2 → verified(노출 여부 미상이라 안전한 증거로 단정하지 않되,
 //    서로 다른 시각의 반복은 인정 — 기존 다회 확인 항목의 강등 최소화)
 //  - co-cited·echoed / seen=unknown → 기록만(노출 관측 — 승격 재료 아님)
-// 복권(rehab): 마지막 반박 '이후'의 확인만 — 사람 1회 즉시, 기계는 위와 같은 '승격 가능' 기준으로 askId 2개.
-export const DERIVE_V2 = { disputeToDemote: 1, machineAskIds: 2, legacyRepeats: 2, rehabUserConfirm: 1 };
+// 복권(rehab): 마지막 반박 '이후'의 확인만 — 사람 1회 즉시, 기계도 위 등급별 기준을 그대로 적용.
+// machineAskIds는 외부 소비자 호환 별칭이며 coCitedAskIds와 같다.
+export const DERIVE_V2 = { disputeToDemote: 1, claimedAskIds: 1, coCitedAskIds: 2, machineAskIds: 2, legacyRepeats: 2, rehabUserConfirm: 1 };
 
 // 이벤트 → 항목별 현재 상태(약한 전이). 우선순위(문서화된 결정, 위에서 아래로 먼저 매치):
 //   banned > superseded > tombstone > disputed > verified > inferred. pinned은 상태가 아니라 차선 오버라이드.
@@ -132,11 +133,16 @@ export function promotableDispute(e: LedgerEvent): boolean {
   if (!e.grade) return true; // 구형/수동 경로
   return e.cited === true && e.seen === "ok" && !!e.askId;
 }
-function promotableMachineAskIds(evs: LedgerEvent[]): number {
-  const ids = new Set<string>();
-  for (const e of evs) if (promotableConfirm(e)) ids.add(e.askId || e.ts || "");
-  ids.delete("");
-  return ids.size;
+function machineConfirmSatisfied(evs: LedgerEvent[]): boolean {
+  const claimed = new Set<string>();
+  const coCited = new Set<string>();
+  for (const e of evs) {
+    if (!promotableConfirm(e)) continue;
+    const id = e.askId || e.ts || "";
+    if (!id) continue;
+    (e.grade === "claimed" ? claimed : coCited).add(id);
+  }
+  return claimed.size >= DERIVE_V2.claimedAskIds || coCited.size >= DERIVE_V2.coCitedAskIds;
 }
 export function deriveLedger(events: LedgerEvent[]): LedgerEntry[] {
   // 1패스: alias 순계(사람 승인 병합) — S→P. 체인은 따라가되 자기 자신/순환은 중단(사람 입력 방어).
@@ -218,18 +224,18 @@ export function deriveLedger(events: LedgerEvent[]): LedgerEntry[] {
     const disputes = disputeCount.get(it.sig) || 0; // 근거 없는 표식 반박은 기록만(강등 재료 아님) — counts.refuted와 다를 수 있음
     const confs = perEvents.get(it.sig) || [];
     const legacyRepeats = new Set(confs.filter((e) => !e.grade).map((e) => e.ts || "")).size;
-    const machineOk = promotableMachineAskIds(confs) >= DERIVE_V2.machineAskIds || legacyRepeats >= DERIVE_V2.legacyRepeats;
+    const machineOk = machineConfirmSatisfied(confs) || legacyRepeats >= DERIVE_V2.legacyRepeats;
     it.machineEvidence = confs.some((x) => promotableConfirm(x) || !x.grade);
     const userOk = (c.user_confirm || 0) >= 1;
     if (banNet > 0) it.status = "banned";
     else if (c.superseded) it.status = "superseded";
     else if (c.tombstone) it.status = "tombstone";
     else if (disputes >= DERIVE_V2.disputeToDemote) {
-      // 복권 판정 — 반박 '이후'의 확인만(사람 1회 또는 승격 가능 기계 확인 askId 2개). 차단·대체·소멸은 복권 대상 아님(선매치).
+      // 복권 판정 — 반박 '이후'의 확인만(사람 1회, 강한 claimed 1회 또는 약한 co-cited 2회). 차단·대체·소멸은 복권 대상 아님(선매치).
       const after = afterDispute.get(it.sig) || [];
       const afterLegacy = new Set(after.filter((e) => !e.grade).map((e) => e.ts || "")).size;
       if ((afterDisputeUser.get(it.sig) || 0) >= DERIVE_V2.rehabUserConfirm
-        || promotableMachineAskIds(after) >= DERIVE_V2.machineAskIds || afterLegacy >= DERIVE_V2.legacyRepeats) { it.status = "verified"; it.rehabilitated = true; }
+        || machineConfirmSatisfied(after) || afterLegacy >= DERIVE_V2.legacyRepeats) { it.status = "verified"; it.rehabilitated = true; }
       else it.status = "disputed";
     }
     else if (userOk || machineOk) it.status = "verified";

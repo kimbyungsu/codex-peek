@@ -323,20 +323,43 @@ function checkCitedEvidence(answer, ws) {
   }
   return mism;
 }
-// 인용된 파일 중 '실재(resolve)하는' 것들의 basename 집합. 모호/해석불가는 제외(cry-wolf 방지).
-function citedResolvedBasenames(answer, ws) {
+function canonicalFileKey(file) {
+  try {
+    const real = fs.realpathSync.native ? fs.realpathSync.native(file) : fs.realpathSync(file);
+    const norm = path.resolve(real).replace(/\\/g, "/");
+    return process.platform === "win32" ? norm.toLowerCase() : norm;
+  } catch { return null; }
+}
+// 인용된 파일 중 실재하며 줄 번호도 유효하고, 인용 범위에 실제 비어 있지 않은 내용이 있는 파일의 정확한
+// 정규 경로+내용 조각. 읽기 도구의 성공 출력이 이 조각 중 하나를 실제 반환했는지까지 뒤에서 대조한다.
+function citedResolvedEvidence(answer, ws) {
   const text = String(answer || "");
-  const re = /\(([^()\s]+\.[A-Za-z0-9]+):(\d+)(?:-\d+)?\)/g;
-  const out = new Set();
+  const re = /\(([^()\s]+\.[A-Za-z0-9]+):(\d+)(?:-(\d+))?\)/g;
+  const out = new Map();
   let m;
   while ((m = re.exec(text))) {
     const file = resolveCitedPath(m[1], ws || process.cwd());
-    if (file) out.add(path.basename(file));
+    if (!file) continue;
+    let lines = [];
+    try { lines = fs.readFileSync(file, "utf8").split(/\r?\n/); } catch { continue; }
+    const start = parseInt(m[2], 10), end = m[3] ? parseInt(m[3], 10) : start;
+    if (start < 1 || end < start || end > lines.length) continue;
+    const snippets = lines.slice(start - 1, end).map((s) => s.trim()).filter(Boolean);
+    if (!snippets.length) continue; // 빈 줄 인용은 실제 내용 반환 증거와 결속할 수 없음
+    const key = canonicalFileKey(file);
+    if (!key) continue;
+    const prev = out.get(key) || [];
+    out.set(key, [...new Set(prev.concat(snippets))]);
   }
   return out;
 }
-// 결정2-3(L1-A 개정): 인용한 (실재) 파일 중, '이번 턴'(rollout 마지막 사용자 메시지 이후)의 도구 명령/출력
-// 어디에도 basename이 안 나타난 것. 세션 '전체' 스캔은 이전 턴에서 다룬 파일을 이번 확인의 근거로 인정하는
+function citedResolvedPaths(answer, ws) { return new Set(citedResolvedEvidence(answer, ws).keys()); }
+// 기존 공개 API와 무결성 경고 문구 호환 — 화면에는 basename만, 신뢰 판정은 citedResolvedPaths를 사용.
+function citedResolvedBasenames(answer, ws) {
+  return new Set([...citedResolvedPaths(answer, ws)].map((p) => path.basename(p)));
+}
+// 결정2-3(L1-A 개정): 인용한 실재 파일 중, '이번 턴'(rollout 마지막 사용자 메시지 이후)의 읽기 도구 인수에
+// 정확한 절대/상대 경로가 없는 것. 세션 '전체' 스캔은 이전 턴에서 다룬 파일을 이번 확인의 근거로 인정하는
 // 결함(Codex 설계검증). 반환은 삼상태 — {checked:false}=검사 자체가 불가(세션 미식별·현재 턴 경계 미발견·
 // 도구활동 0)로, '미확인 파일 없음'(checked:true·unseen:[])과 구분된다. 판정 불가를 빈 배열로 돌려주면
 // 소비자가 확인 성공으로 오독해 승격으로 흐른다(같은 지적).
@@ -375,13 +398,140 @@ function rolloutTailLines(file) {
   } catch { return null; }
   finally { if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* best-effort */ } } }
 }
-function citedFilesUnseen(answer, ws, sessionId) {
+function toolArgumentValues(p) {
+  const values = [];
+  const collect = (v) => {
+    if (typeof v === "string") { values.push(v); return; }
+    if (Array.isArray(v)) { for (const x of v) collect(x); return; }
+    if (v && typeof v === "object") for (const x of Object.values(v)) collect(x);
+  };
+  for (const raw of [p && p.arguments, p && p.input]) {
+    if (typeof raw === "string") { try { collect(JSON.parse(raw)); } catch { collect(raw); } }
+    else collect(raw);
+  }
+  return values.map((v) => String(v).replace(/\\/g, "/"));
+}
+function toolArgumentText(p) { return toolArgumentValues(p).join("\n"); }
+function toolCallCanReadFile(p, hay) {
+  const name = String((p && (p.name || p.tool_name)) || "").toLowerCase();
+  if (/apply[_-]?patch|write|delete|remove|list|glob/.test(name) && !/read|view|open/.test(name)) return false;
+  if (/read|view|open/.test(name)) return true;
+  const text = String(hay || "").trim();
+  // 셸/터미널 호출은 문장 '시작'의 실제 내용 판독 명령만 인정한다. echo 안의 "cat 파일" 같은 문자열과
+  // 파일 목록·상태 조회는 제외한다. 복잡한 스크립트는 과대 승격보다 unknown으로 남기는 쪽을 택한다.
+  const lead = text.replace(/^&\s*/, "");
+  if (/^(rg|ripgrep)(?:\.exe)?\s+[^\r\n]*--files(?:\s|$)/i.test(lead)) return false;
+  return /^(cat|type|more|less|head|tail|sed|grep|rg|ripgrep|select-string|get-content|gc)(?:\.exe)?(?:\s|$)/i.test(lead)
+    || /^git(?:\.exe)?(?:\s+-C\s+(?:"[^"]+"|'[^']+'|\S+))?\s+(diff|show|grep)(?:\s|$)/i.test(lead);
+}
+function splitShellStatements(text) {
+  const out = [];
+  let cur = "", quote = "";
+  const push = () => { const s = cur.trim(); if (s) out.push(s); cur = ""; };
+  const src = String(text || "");
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (quote) {
+      cur += ch;
+      if (ch === quote && src[i - 1] !== "\\" && src[i - 1] !== "`") quote = "";
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; cur += ch; continue; }
+    if (ch === "\r" || ch === "\n" || ch === ";" || ch === "|") {
+      push();
+      if (ch === "\r" && src[i + 1] === "\n") i++;
+      if (ch === "|" && src[i + 1] === "|") i++;
+      continue;
+    }
+    if (ch === "&" && src[i + 1] === "&") { push(); i++; continue; }
+    cur += ch;
+  }
+  push();
+  return out;
+}
+function nestedShellCommands(text) {
+  const out = [];
+  // functions.exec가 감싼 실제 exec_command 호출의 cmd/command 문자열. JSON 이중따옴표 리터럴만 받아
+  // 임의 JS를 평가하지 않는다. 해석 불가한 스크립트는 확인 성공으로 추측하지 않는다.
+  const re = /(?:["'](?:cmd|command)["']|\b(?:cmd|command))\s*:\s*("(?:\\.|[^"\\])*")/g;
+  let m;
+  while ((m = re.exec(String(text || "")))) { try { out.push(JSON.parse(m[1])); } catch { /* 무시 */ } }
+  return out;
+}
+function toolReadParts(p) {
+  const values = toolArgumentValues(p);
+  const name = String((p && (p.name || p.tool_name)) || "").toLowerCase();
+  if (/apply[_-]?patch|write|delete|remove|list|glob/.test(name) && !/read|view|open/.test(name)) return [];
+  if (/read|view|open/.test(name)) return values;
+  const nested = values.flatMap(nestedShellCommands);
+  const sources = nested.length ? nested : values;
+  return sources.flatMap(splitShellStatements).filter((s) => toolCallCanReadFile(p, s));
+}
+function toolCallNamesExactFile(p, fileKey, ws) {
+  // 전용 read/view/open 도구는 인수 전체가 한 읽기 동작이다. 셸 호출은 문장별로 잘라, 다른 문장에서 이름만
+  // 출력한 파일이 앞 문장의 읽기 명령 덕분에 함께 처리된 것으로 오인되지 않게 한다.
+  const readParts = toolReadParts(p);
+  if (!readParts.length) return false;
+  const variants = [fileKey];
+  try {
+    const rel = path.relative(ws || process.cwd(), fileKey).replace(/\\/g, "/");
+    if (rel && rel !== ".." && !rel.startsWith("../") && !path.isAbsolute(rel)) variants.push(rel);
+  } catch { /* 절대경로만 대조 */ }
+  for (const v0 of variants) {
+    const v = String(v0).replace(/\\/g, "/");
+    const esc = v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(^|[^a-z0-9_.\\/-])(?:\\./)?${esc}(?=$|[^a-z0-9_.\\/-])`, process.platform === "win32" ? "i" : "");
+    if (readParts.some((part) => re.test(part))) return true;
+  }
+  return false;
+}
+function toolCallId(p) { return String((p && (p.call_id || p.callId || p.id)) || ""); }
+function toolResultEvidence(call, result) {
+  const statuses = [];
+  const content = [];
+  let successMarker = false;
+  const visitString = (raw, keyed) => {
+    const s = String(raw || "");
+    if (!s) return;
+    const trimmed = s.trim();
+    if ((trimmed.startsWith("{") || trimmed.startsWith("[")) && trimmed.length < 2_000_000) {
+      try { const parsed = JSON.parse(trimmed); visit(parsed, "json"); return; } catch { /* 일반 출력 */ }
+    }
+    let m;
+    const codeRe = /(?:process\s+exited\s+with\s+code|exit\s*code)\s*[:=]?\s*(-?\d+)/ig;
+    while ((m = codeRe.exec(s))) statuses.push(parseInt(m[1], 10));
+    if (/\bscript completed\b/i.test(s)) successMarker = true;
+    const marker = /(?:final\s+output|output)\s*:\s*(?:\r?\n|$)/ig;
+    let last = null;
+    while ((m = marker.exec(s))) last = m;
+    if (last) content.push(s.slice(last.index + last[0].length));
+    else if (keyed) content.push(s);
+  };
+  const visit = (v, key) => {
+    if (typeof v === "string") { visitString(v, /^(output|stdout|text|content|json)$/.test(String(key || ""))); return; }
+    if (typeof v === "number" && /^(exit_code|exitCode|code|status)$/.test(String(key || ""))) { statuses.push(v); return; }
+    if (Array.isArray(v)) { for (const x of v) visit(x, "content"); return; }
+    if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) visit(x, k);
+  };
+  visit(result, "result");
+  const name = String((call && (call.name || call.tool_name)) || "").toLowerCase();
+  const directRead = /read|view|open/.test(name) && !/apply[_-]?patch|write|delete|remove|list|glob/.test(name);
+  const failed = statuses.some((n) => n !== 0);
+  const succeeded = !failed && (statuses.some((n) => n === 0) || successMarker || directRead);
+  return { ok: succeeded, text: content.join("\n").trim() };
+}
+function outputContainsCitedContent(output, snippets) {
+  const hay = String(output || "");
+  return !!hay && (snippets || []).some((s) => s && hay.includes(s));
+}
+function citedFilesUnseenExact(answer, ws, sessionId) {
   const unknown = { checked: false, unseen: [] };
   if (!sessionId) return unknown;
   let file;
   try { file = findRolloutById(sessionId); } catch { return unknown; }
   if (!file) return unknown;
-  const remaining = citedResolvedBasenames(answer, ws);
+  const citedEvidence = citedResolvedEvidence(answer, ws);
+  const remaining = new Set(citedEvidence.keys());
   if (!remaining.size) return { checked: true, unseen: [] };
   const lines = rolloutTailLines(file);
   if (!lines) return unknown;
@@ -395,6 +545,7 @@ function citedFilesUnseen(answer, ws, sessionId) {
   }
   if (lastUser < 0) return unknown; // 경계 미발견 — 세션 전체를 근거로 쓰지 않는다(판단 보류)
   let hadTool = false;
+  const pending = new Map();
   for (let i = lastUser + 1; i < lines.length; i++) {
     const ln = lines[i];
     if (!ln) continue;
@@ -402,16 +553,35 @@ function citedFilesUnseen(answer, ws, sessionId) {
     const p = o && typeof o.payload === "object" && o.payload ? o.payload : null;
     if (!p) continue;
     const t = p.type;
-    if (t === "function_call" || t === "custom_tool_call") hadTool = true;
-    if (t === "function_call" || t === "function_call_output" || t === "custom_tool_call" || t === "custom_tool_call_output") {
-      const out = typeof p.output === "string" ? p.output : p.output ? JSON.stringify(p.output) : "";
-      const hay = String(p.arguments || "") + "\n" + out + "\n" + String(p.input || "");
-      for (const bn of [...remaining]) if (hay.includes(bn)) remaining.delete(bn);
+    if (t === "function_call" || t === "custom_tool_call") {
+      hadTool = true;
+      const files = [...remaining].filter((fp) => toolCallNamesExactFile(p, fp, ws));
+      if (!files.length) continue;
+      const id = toolCallId(p);
+      if (!id) continue; // 강한 승격 증명은 호출-결과 동일 id가 필수 — 구형/불완전 사건의 순서 추측 금지
+      pending.set(id, { call: p, files });
+      continue;
+    }
+    if (t === "function_call_output" || t === "custom_tool_call_output") {
+      const id = toolCallId(p);
+      if (!id) continue;
+      const rec = pending.get(id);
+      if (!rec) continue;
+      pending.delete(id);
+      const proof = toolResultEvidence(rec.call, p);
+      if (!proof.ok || !proof.text) continue;
+      // 성공 코드와 비어 있지 않은 출력만으로도 다른 문장의 출력일 수 있다. 답에서 인용한 실제 줄 내용이
+      // 반환물 안에 들어 있는 파일만 이번 턴에 다룬 것으로 인정한다.
+      for (const fp of rec.files) if (outputContainsCitedContent(proof.text, citedEvidence.get(fp))) remaining.delete(fp);
       if (!remaining.size) break;
     }
   }
   if (!hadTool) return unknown; // 이번 턴 도구활동 없음 → 이전 턴 맥락 등으로 답했을 수 있음 → 판단 보류
   return { checked: true, unseen: [...remaining] };
+}
+function citedFilesUnseen(answer, ws, sessionId) {
+  const r = citedFilesUnseenExact(answer, ws, sessionId);
+  return r.checked ? { checked: true, unseen: r.unseen.map((p) => path.basename(p)) } : r;
 }
 // ws=configWs(이벤트 workspace 라벨 — 대시보드 귀속), execCwd=실제 실행 폴더(인용 상대경로 해석 기준).
 // 분리 이유: 코덱스 답의 '(경로:라인)' 인용은 코덱스가 돈 폴더(execCwd) 기준 상대경로라, 라벨용 연 폴더로 해석하면 오탐.
@@ -449,11 +619,30 @@ function flagEvidence(answer, ws, sessionId, execCwd) {
     }
   } catch { /* best-effort — 점검 실패가 검증 흐름을 막지 않음 */ }
 }
+function exactPathFromRoot(raw, root) {
+  let p = String(raw || "").replace(/\\/g, "/");
+  if (!p || /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(p)) return null;
+  const mnt = p.match(/^\/mnt\/([a-zA-Z])\/(.*)$/);
+  if (mnt) p = mnt[1] + ":/" + mnt[2];
+  const drv = p.match(/^\/([a-zA-Z]):\/(.*)$/);
+  if (drv) p = drv[1] + ":/" + drv[2];
+  const file = path.isAbsolute(p) ? p : path.resolve(root || process.cwd(), p);
+  try { if (!fs.statSync(file).isFile()) return null; } catch { return null; }
+  return canonicalFileKey(file);
+}
+function exactLedgerPathKeys(paths, root) {
+  const out = new Set();
+  for (const p of paths || []) {
+    const key = exactPathFromRoot(p, root);
+    if (key) out.add(key);
+  }
+  return out;
+}
 // 관측 장부 확인 신호(로드맵 ④ — L1-A v2) — 증거의 질을 이벤트에 남긴다(승격 판정은 유도기 DERIVE_V2):
 //  claimed  = 답의 '결합확인 #id' 명시 표기(동봉 결합 후보의 id — 기계 판정 확실. 동봉이 유도하므로 태생적 echoed)
 //  co-cited = 통과류 답 전체에서 항목의 서로 다른 경로 2개가 각각 실존 인용(약한 공동 인용 — 공동 인용≠결합 확인)
 //  echoed   = 이번 ask 동봉의 '한 항목 안에' 그 경로 쌍이 함께 노출됐음(항목 단위 — 전역 합집합은 과도[Codex])
-//  seen     = 이번 턴 취급 흔적 검사 삼상태("ok"/"unknown" — 판정 불가를 확인 성공으로 오독 금지)
+//  seen     = 이번 턴 정확 경로 읽기 흔적 검사 삼상태("ok"/"unknown" — 판정 불가를 확인 성공으로 오독 금지)
 //  askId    = ask 실행 UUID('서로 다른 ask 실행' 판정 재료 — '독립 턴' 주장 아님)
 // 반박은 명시 표기('결합반박 #id')만 자동 적재(기계 추측 반박 없음 — 발화 기록 CLI는 별도).
 // 텍스트 메아리(항목 문구가 답에 보임)로는 확인 안 됨 — 자기강화 순환 차단. 실패가 검증 흐름을 절대 막지 않음.
@@ -467,15 +656,15 @@ function flagLedgerConfirms(answer, ws, sessionId, execCwd, extra) {
     let target = ws;
     try { target = resolveScoutRepo(ws, loadContract(ws)).repo; } catch { /* ws 유지(fail-open) */ }
     const now = nowIso();
-    const seenChk = citedFilesUnseen(answer, execCwd || ws, sessionId);
+    const pathWs = execCwd || ws;
+    const seenChk = citedFilesUnseenExact(answer, pathWs, sessionId);
     const seenState = seenChk.checked ? "ok" : "unknown";
-    const unseen = new Set((seenChk.checked ? seenChk.unseen : []).map((b) => b.toLowerCase()));
-    // 실존 인용 집합(라인 실재까지) — 표식(claimed)의 cited 판정과 공동 인용(co-cited) 둘 다의 재료.
-    const cited = new Set([...citedResolvedBasenames(answer, execCwd || ws)].map((b) => b.toLowerCase()));
-    for (const m of checkCitedEvidence(answer, execCwd || ws)) cited.delete(String(m).split(":")[0].toLowerCase());
+    const unseen = new Set(seenChk.checked ? seenChk.unseen : []);
+    // 실존·줄번호 유효 인용의 정확 경로 집합. 같은 basename의 다른 파일과 디렉터리 목록 출력은 결합 증거가 아니다.
+    const cited = citedResolvedPaths(answer, pathWs);
     const citedPairOk = (paths) => {
-      const bns = [...new Set((paths || []).map((p) => String(p).split("/").pop() || ""))].filter((b) => b.length >= 8);
-      return bns.filter((b) => cited.has(b.toLowerCase()) && !unseen.has(b.toLowerCase())).length >= 2;
+      const keys = exactLedgerPathKeys(paths, target);
+      return [...keys].filter((p) => cited.has(p) && !unseen.has(p)).length >= 2;
     };
     // ① 명시 표기(claimed) — 표식은 검증자의 '자기보고'라 방어 3겹(Codex 반례 왕복):
     //    ⑴ 행 단독만 인정(부정문 "…표기를 쓰지 않았다"·본문 예시 오인식 차단)
@@ -523,28 +712,24 @@ function flagLedgerConfirms(answer, ws, sessionId, execCwd, extra) {
     }
     for (const [s, n] of banNet) { if (n > 0) dead.add(s); }
     if (!texts.size) return;
-    // cited(라인 실재 인용)·unseen은 위에서 표식 판정과 함께 계산됨(같은 재료 공유).
+    // cited(라인 실재 정확 경로 인용)·unseen은 위에서 표식 판정과 함께 계산됨(같은 재료 공유).
     if (cited.size < 2) return;
-    // echo 판정용: 동봉 '항목 단위' basename 집합(경로+노트 안 경로들) — 전역 합집합 아님.
+    // echo 판정용: 동봉 '항목 단위' 정확 경로 집합(경로+노트 안 경로들) — 전역 합집합 아님.
     const itemSets = (attach.mapItems || []).map((it) => {
-      const bs = new Set();
-      for (const p of ledgerPathsFromText(String(it.path || "") + " " + String(it.note || ""))) { const b = p.split("/").pop() || ""; if (b) bs.add(b.toLowerCase()); }
-      return bs;
+      return exactLedgerPathKeys(ledgerPathsFromText(String(it.path || "") + " " + String(it.note || "")), target);
     });
     for (const cp of attach.couplings || []) {
-      const bs = new Set();
-      for (const p of cp.paths || []) { const b = String(p).split("/").pop() || ""; if (b) bs.add(b.toLowerCase()); }
-      if (bs.size) itemSets.push(bs); // 결합 후보 동봉 자체도 '그 쌍의 노출'
+      const ps = exactLedgerPathKeys(cp.paths || [], target);
+      if (ps.size) itemSets.push(ps); // 결합 후보 동봉 자체도 '그 쌍의 노출'
     }
     for (const [sig, text] of texts) {
       if (dead.has(sig)) continue;
       // basename 8자 미만은 우연 일치 위험(index.ts류) → 제외(지도 채점기의 8자 규칙과 동일 근거)
-      const bns = [...new Set(ledgerPathsFromText(text).map((p) => path.basename(p)))].filter((b) => b.length >= 8);
-      const hit = bns.filter((b) => cited.has(b) && !unseen.has(b));
+      const ledgerPaths = ledgerPathsFromText(text).filter((p) => path.basename(p).length >= 8);
+      const hit = [...exactLedgerPathKeys(ledgerPaths, target)].filter((p) => cited.has(p) && !unseen.has(p));
       if (hit.length < 2) continue;
-      const lows = hit.map((b) => b.toLowerCase());
-      const echoed = itemSets.some((set) => lows.filter((b) => set.has(b)).length >= 2);
-      appendLedgerEvent(target, { ts: now, type: "confirmed", sig, grade: "co-cited", echoed, askId, seen: seenState, from: `verify ${sessionId || "?"} ${verdict} — 실존 인용: ${hit.slice(0, 3).join(", ")}` });
+      const echoed = itemSets.some((set) => hit.filter((p) => set.has(p)).length >= 2);
+      appendLedgerEvent(target, { ts: now, type: "confirmed", sig, grade: "co-cited", echoed, askId, seen: seenState, from: `verify ${sessionId || "?"} ${verdict} — 실존 인용: ${hit.slice(0, 3).map((p) => path.basename(p)).join(", ")}` });
     }
   } catch { /* best-effort — 장부 실패가 검증 흐름을 막지 않음 */ }
 }

@@ -207,14 +207,29 @@ console.log("[3] attach — 2트랙 0·비v2 위임 바이트 동일·v2 envelop
   ok(JSON.stringify(legacy) === JSON.stringify(viaMap), "비v2=기존 동봉 그대로 위임(산출 동일 — cutover 전 무회귀): " + (legacy === null ? "둘 다 null(지도 없음)" : "동일 envelope"));
   // (교체됨 — 위 spy 실측이 정본)
   // v2 envelope: {text, mapItems, couplings}
-  const wsV = mkWs("atv2", { "src/a.js": "console.log(1);\n" });
+  const wsV = mkWs("atv2", { "src/alpha-module.ts": "console.log(1);\n", "src/beta-consumer.ts": "console.log(2);\n" });
   const nidV = MR.readTopoExFor(wsV).topo.nodes[0].id;
   applyOp(wsV, nidV, "add_condition", { condition: "at" });
   mkV2Authority(wsV);
+  const couplingText = "src/alpha-module.ts ↔ src/beta-consumer.ts — v2 재확인";
+  CL.appendLedgerEvent(wsV, { ts: "t-v2", type: "proposed", sig: CL.ledgerSig(couplingText), text: couplingText });
+  const couplingId = CL.ledgerItemId(CL.ledgerSig(couplingText));
   const cV = JSON.parse(fs.readFileSync(CL.contractFileFor(wsV, "ko"), "utf8"));
   const aV = RD.buildMapAttach(wsV, cV, "ko");
   ok(aV && typeof aV.text === "string" && Array.isArray(aV.mapItems) && Array.isArray(aV.couplings) && Object.keys(aV).sort().join(",") === "couplings,mapItems,text", "v2 slice=envelope {text,mapItems,couplings}(healthLine 별도 필드 금지)");
   ok(aV.text.includes("Project MAP"), "v2 slice 머리말(advisory 명시)");
+  ok(aV.couplings.some((cp) => cp.id === couplingId) && aV.text.includes("#" + couplingId) && aV.text.includes("결합확인 #id"), "v2 slice에도 과거 관찰 재확인 후보와 표기 규칙이 실제 본문으로 동봉됨");
+
+  // cutover 흔적만 남은 blocked 지도에서도 불량 지도는 공급하지 않되, 독립적인 관찰 재확인 통로는 유지한다.
+  const wsB = mkWs("atblocked", { "src/alpha-module.ts": "// a\n", "src/beta-consumer.ts": "// b\n" });
+  const blockedText = "src/alpha-module.ts ↔ src/beta-consumer.ts — blocked 재확인";
+  CL.appendLedgerEvent(wsB, { ts: "t-blocked", type: "proposed", sig: CL.ledgerSig(blockedText), text: blockedText });
+  const blockedId = CL.ledgerItemId(CL.ledgerSig(blockedText));
+  fs.mkdirSync(path.join(wsB, "project-map", "authority-history"), { recursive: true });
+  fs.writeFileSync(path.join(wsB, "project-map", "authority-history", "broken.json"), "{}", "utf8");
+  const cB = JSON.parse(fs.readFileSync(CL.contractFileFor(wsB, "ko"), "utf8"));
+  const aB = RD.buildMapAttach(wsB, cB, "ko");
+  ok(aB && aB.mapItems.length === 0 && aB.couplings.some((cp) => cp.id === blockedId) && aB.text.includes("#" + blockedId), "blocked 지도 → 지도 조각 없이 관찰 재확인 후보는 독립 동봉");
 }
 
 console.log("[4] 게이트 준비(비활성) — 변환 규칙 단위 반례");

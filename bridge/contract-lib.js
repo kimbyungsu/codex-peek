@@ -2367,8 +2367,9 @@ function scoutMapStatus(ws) {
 }
 // 3트랙이고 지도가 없/낡았으며 이 상태에 아직 지시한 적 없으면 지시문 반환, 아니면 null. c=이미 로드된 계약(중복 로드 방지).
 // 재지시 정책(2026-07-08 점화 보수): 같은 지도라도 낡음 '정도'가 커지면(2의 거듭제곱 버킷 1,2,4,8… 상승) 다시 1회 지시.
-// 기억은 {state, base, maxBucket} — 버킷 하강(파일 삭제 등으로 staleCount 감소)은 재지시 안 함(스팸 방지·시간 상수 0).
-// 구버전 기억({sig:"stale:<base>"})은 maxBucket=1로 해석(정도 진행 시 재지시 — 마이그레이션 의도 그대로).
+// 기억 v3는 대상 파일 안에서 호출자(연 폴더+언어 슬롯)별 {state,base,buckets,arm}을 분리한다. 같은 대상을
+// 서로 다른 계약이 공유해도 담당값을 번갈아 덮어 무한 재안내하지 않는다. 판독·판정·기록은 한 잠금 안에서 수행.
+// 구버전 단일 기억은 현재 호출자 슬롯으로 1회 마이그레이션한다.
 function scoutBucket(n) { let b = 1; while (b * 2 <= n) b *= 2; return n > 0 ? b : 0; } // 1,2,4,8,… (n<1이면 0)
 function buildScoutDirective(ws, c) {
   if (!ws || normScoutMode(c) !== "on") return null;
@@ -2409,28 +2410,44 @@ function buildScoutDirective(ws, c) {
     ? { seed: scoutBucket(st.seedChanged), commits: scoutBucket(st.commitsAfter), dirty: scoutBucket(st.dirtyChanged), history: scoutBucket(st.historyLost || 0) }
     : { seed: 0, commits: 0, dirty: 0, history: 0 };
   const f = path.join(SCOUT_ADVICE_DIR, wsKeyFor(target) + ".json");
-  let prev = null;
-  try {
-    const raw = JSON.parse(fs.readFileSync(f, "utf8"));
-    if (raw && typeof raw === "object" && typeof raw.state === "string") {
-      prev = { state: raw.state, base: raw.base || null, buckets: raw.buckets && typeof raw.buckets === "object" ? raw.buckets : null };
-    } else if (raw && typeof raw.sig === "string") { // v0 형식 — 성분 배정 불가(buckets=null → 1회 재알림)
-      prev = raw.sig === "no-map" ? { state: "no-map", base: null, buckets: null }
-        : raw.sig.startsWith("stale:") ? { state: "stale", base: raw.sig.slice(6), buckets: null }
-        : raw.sig.startsWith("legacy:") ? { state: "legacy-no-seeds", base: raw.sig.slice(7), buckets: null }
+  const langSnap = loadLang();
+  const armV = scoutArmView(ws, c); // 실효 담당이 바뀌면 같은 실패 상태도 새 실행 기회이므로 억제 서명에 포함
+  const callerKey = langSnap + "-" + wsKeyFor(ws);
+  try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { return null; }
+  const claimed = withFileLockStrict(f + ".lock", () => {
+    let raw = null;
+    try { raw = JSON.parse(fs.readFileSync(f, "utf8")); } catch { /* 첫 지시 */ }
+    let callers = {};
+    let prev = null;
+    if (raw && raw.schema === "scout-advice-v3" && raw.callers && typeof raw.callers === "object" && !Array.isArray(raw.callers)) {
+      callers = { ...raw.callers };
+      const p = callers[callerKey];
+      if (p && typeof p === "object" && typeof p.state === "string") prev = { state: p.state, base: p.base || null, buckets: p.buckets && typeof p.buckets === "object" ? p.buckets : null, arm: typeof p.arm === "string" ? p.arm : null };
+    } else if (raw && typeof raw === "object" && typeof raw.state === "string") {
+      prev = { state: raw.state, base: raw.base || null, buckets: raw.buckets && typeof raw.buckets === "object" ? raw.buckets : null, arm: typeof raw.arm === "string" ? raw.arm : null };
+    } else if (raw && typeof raw.sig === "string") { // v0 형식 — 성분·담당 배정 불가 → 현재 호출자에게 1회 재알림
+      prev = raw.sig === "no-map" ? { state: "no-map", base: null, buckets: null, arm: null }
+        : raw.sig.startsWith("stale:") ? { state: "stale", base: raw.sig.slice(6), buckets: null, arm: null }
+        : raw.sig.startsWith("legacy:") ? { state: "legacy-no-seeds", base: raw.sig.slice(7), buckets: null, arm: null }
         : null;
     }
-  } catch { /* 첫 지시 */ }
-  if (prev && prev.state === st.state && prev.base === st.base) {
-    if (st.state !== "stale") return null; // no-map/legacy/invalid/unknown은 상태당 1회
-    if (prev.buckets && ["seed", "commits", "dirty", "history"].every((k) => comp[k] <= ((prev.buckets[k] | 0) || 0))) return null; // 모든 성분이 정도 이하 → 침묵
-  }
-  const mergedBuckets = {};
-  for (const k of ["seed", "commits", "dirty", "history"]) mergedBuckets[k] = Math.max(comp[k], prev && prev.base === st.base && prev.buckets ? ((prev.buckets[k] | 0) || 0) : 0);
-  try { atomicWrite(f, JSON.stringify({ state: st.state, base: st.base, buckets: mergedBuckets, ts: new Date().toISOString() })); } catch { /* 기억 실패 시 다음 턴 재지시 — 무해 */ }
-  const armV = scoutArmView(ws, c); // 탐색 담당 선호(2026-07-20) — 지시 문구가 사용자 선택을 반영
+    const sameState = prev && prev.state === st.state && prev.base === st.base;
+    const sameArm = sameState && prev.arm === armV.eff;
+    if (sameArm) {
+      if (st.state !== "stale") return false; // no-map/legacy/invalid/unknown은 호출자·담당·상태당 1회
+      if (prev.buckets && ["seed", "commits", "dirty", "history"].every((k) => comp[k] <= ((prev.buckets[k] | 0) || 0))) return false;
+    }
+    const mergedBuckets = {};
+    for (const k of ["seed", "commits", "dirty", "history"]) mergedBuckets[k] = Math.max(comp[k], sameState && prev.buckets ? ((prev.buckets[k] | 0) || 0) : 0);
+    const ts = new Date().toISOString();
+    callers[callerKey] = { state: st.state, base: st.base, buckets: mergedBuckets, arm: armV.eff, ts };
+    const keys = Object.keys(callers).sort((a, b) => String((callers[a] || {}).ts || "").localeCompare(String((callers[b] || {}).ts || "")));
+    for (const k of keys.slice(0, Math.max(0, keys.length - 32))) delete callers[k];
+    return atomicWrite(f, JSON.stringify({ schema: "scout-advice-v3", callers }));
+  });
+  if (!claimed.ok || claimed.result !== true) return null; // 잠금/기억 실패나 이미 안내됨 — 중복 발화보다 침묵
   const hasKey = armV.hasKey;
-  const en = loadLang() === "en"; // 훅 주입문도 전역 언어 준수(한/영 쌍 규칙 — 2026-07-09 사용자 지적)
+  const en = langSnap === "en"; // 훅 주입문도 이 판정의 언어 스냅샷을 끝까지 준수
   const staleWhyKo = "최신 지도 이후 변경 신호 " + st.staleCount + "건(근거 파일 " + st.seedChanged + " · 새 커밋 " + st.commitsAfter + " · 작업트리 " + st.dirtyChanged + (st.historyLost ? " · 기록 기준 커밋 소실(이력 재작성?) " + st.historyLost : "") + ") — 지도가 낡았다";
   const staleWhyEn = st.staleCount + " change signal(s) since the latest map (basis files " + st.seedChanged + " · new commits " + st.commitsAfter + " · working tree " + st.dirtyChanged + (st.historyLost ? " · recorded base commit missing (history rewritten?) " + st.historyLost : "") + ") — the map is stale";
   const why = st.state === "no-map"
@@ -2721,15 +2738,41 @@ function changedEntriesFor(repo) {
 // 경로만 필요한 기존 소비자(재랭킹)용 — ask마다 1회·3초 상한·실패는 빈 배열(재정렬만 포기, 동봉은 유지).
 function changedFilesFor(repo) { return changedEntriesFor(repo).map((e) => e.rel); }
 
+// 영향지도 형식(legacy/Project MAP/판독 불가)과 독립된 관찰 일지 재확인 블록. 모든 동봉 표면이 같은 id·문구를 쓴다.
+function scoutCouplingAttach(target, en) {
+  let couplings = [];
+  try { couplings = ledgerCouplingCandidates(target, 3); } catch { couplings = []; }
+  const text = couplings.length
+    ? (en
+      ? ["[Coupling check requests — reply markers]", ...couplings.map((cp) => `- (#${cp.id}) ${String(cp.text).slice(0, 200)}`), `Only if you actually verified one of these couplings during this verification, write \`결합확인 #id\` on its own line; if you actually found it wrong, write \`결합반박 #id\`. If you did not check it, write nothing about it (no guessing).`]
+      : ["[결합 확인 요청 — 답 표기]", ...couplings.map((cp) => `- (#${cp.id}) ${String(cp.text).slice(0, 200)}`), `이번 검증에서 위 결합을 '실제로 확인'한 경우에만 \`결합확인 #id\` 를 한 줄로 명시하고, '실제로 틀렸음을 확인'했다면 \`결합반박 #id\` 를 명시하라. 확인하지 않았다면 아무것도 쓰지 마라(추측 금지).`]).join("\n")
+    : "";
+  return { text, couplings };
+}
+
 function buildScoutAttach(ws, c, lang) {
   if (!ws || normScoutMode(c) !== "on") return null;
   const target = resolveScoutRepo(ws, c).repo; // P1: 지도 조회도 정찰 대상 기준(세션 폴더가 비-git 부모여도 레포 지도를 씀)
+  const en = (LANGS.includes(lang) ? lang : loadLang()) === "en";
+  const health = scoutHealthLine(target, en); // 프로젝트별 관찰 신호 — 실패해도 지도/장부 재확인 동봉 불침
+  // 관찰 일지의 재확인은 영향지도 품질과 독립이다. 불량 지도 원문은 계속 배제하되, 과거 결합 후보는 다음
+  // 검증에서 정확한 파일 근거로 다시 확인할 수 있어야 한다.
+  const couplingAttach = scoutCouplingAttach(target, en);
+  const couplings = couplingAttach.couplings;
+  const coupleBlock = couplingAttach.text;
+  const ledgerOnly = () => {
+    if (!coupleBlock) return null;
+    const head = en
+      ? "[Field-journal recheck · independent of the impact map] No usable high-priority map material is included in this verification, but the earlier couplings below can still be checked on their own. Missing, invalid, or unreadable map text is not included."
+      : "[관찰 일지 재확인 · 영향지도와 독립] 이번 검증에 쓸 수 있는 영향지도 high 자료는 싣지 않았지만, 아래 과거 결합은 별도로 다시 확인할 수 있다. 누락·불량·판독 실패 지도 원문은 포함하지 않았다.";
+    return { text: [head, coupleBlock, ...(health ? [health] : [])].join("\n"), mapItems: [], couplings };
+  };
   const st = scoutMapStatus(target);
-  if (st.state === "no-map" || !st.base) return null;
-  if (st.state === "invalid") return null; // 형식 불명(빈/불량) 지도는 신뢰 입력으로 주입하지 않는다(L1-C 품질 — 게이트와 같은 판정 소비)
+  if (st.state === "no-map" || !st.base) return ledgerOnly();
+  if (st.state === "invalid") return ledgerOnly(); // 형식 불명(빈/불량) 지도는 신뢰 입력으로 주입하지 않고 장부만 독립 동봉
   const dir = path.join(SCOUTS_DIR, wsKeyFor(target));
   let md = "", meta = {};
-  try { md = fs.readFileSync(path.join(dir, st.base + ".md"), "utf8"); } catch { return null; }
+  try { md = fs.readFileSync(path.join(dir, st.base + ".md"), "utf8"); } catch { return ledgerOnly(); }
   try { meta = JSON.parse(fs.readFileSync(path.join(dir, st.base + ".json"), "utf8")); } catch { /* 메타 없어도 지도는 사용 가능 */ }
   // 저장된 구조화 계층 우선 — 단 항목 검증(깨진 메타 [null]류가 아래 i.path 접근을 못 깨게). 유효분 없으면 md 재파싱 폴백.
   const valid = (a) => (Array.isArray(a) ? a.filter((i) => i && typeof i.path === "string" && i.path.trim()) : []);
@@ -2740,8 +2783,7 @@ function buildScoutAttach(ws, c, lang) {
   // 실존 필터(소음 제거) → 지금 바뀐 파일과의 교집합 우선 → 그 다음에야 동봉 상한 8(하단 새 항목 안 밀림)
   items = rankScoutItems(items, changedFilesFor(target), (p) => { try { return fs.existsSync(path.join(target, p)); } catch { return false; } });
   items = items.slice(0, 8);
-  if (!items.length) return null;
-  const en = (LANGS.includes(lang) ? lang : loadLang()) === "en";
+  if (!items.length) return ledgerOnly();
   const staleNote = st.state === "stale"
     ? (en ? ` · STALE: ${st.staleCount} change signal(s) since (basis ${st.seedChanged} · commits ${st.commitsAfter} · working tree ${st.dirtyChanged}${st.historyLost ? ` · base commit missing ${st.historyLost}` : ""})` : ` · 낡음: 생성 후 변경 신호 ${st.staleCount}건(근거 ${st.seedChanged} · 커밋 ${st.commitsAfter} · 작업트리 ${st.dirtyChanged}${st.historyLost ? ` · 기록 기준 커밋 소실 ${st.historyLost}` : ""})`)
     : st.state === "unknown"
@@ -2755,17 +2797,6 @@ function buildScoutAttach(ws, c, lang) {
   const tail = en
     ? `While verifying, check whether these paths were considered; if a path above is impacted but unaddressed, point it out. The map is a scout LLM's advisory opinion — use it as a checklist source only. This list is a starting point, NOT a boundary: do not narrow your own search for counterexamples outside it.`
     : `검증 시 위 경로들이 고려/영향받았는지 확인하고, 영향을 받는데 다뤄지지 않은 경로가 있으면 지적하라. 지도는 탐색자(LLM)의 참고 의견이다 — 확인 목록으로만 쓰고 판정 기준은 바꾸지 마라. 이 목록은 시작점일 뿐 한계가 아니다: 목록 밖 반례 탐색을 줄이지 마라.`;
-  const health = scoutHealthLine(target, en); // 프로젝트별 관찰 신호(전역 임계값 대체 — 사용자 결정 2026-07-09) — 실패해도 지도 동봉 불침
-  // 결합확인 표기 채널(L1-A claimed 등급) — 장부의 기계 확인 가능 후보 소수를 id와 함께 싣고, '실제로 확인/반박한
-  // 경우에만' 명시 표기를 요구. 공동 인용의 애매함(같은 답에 우연히 둘 다 등장)과 달리 표기는 기계 판정이 확실.
-  // 별도 try — 후보 계산 실패가 지도 동봉을 막지 않음.
-  let couplings = [];
-  try { couplings = ledgerCouplingCandidates(target, 3); } catch { couplings = []; }
-  const coupleBlock = couplings.length
-    ? (en
-      ? ["[Coupling check requests — reply markers]", ...couplings.map((cp) => `- (#${cp.id}) ${String(cp.text).slice(0, 200)}`), `Only if you actually verified one of these couplings during this verification, write \`결합확인 #id\` on its own line; if you actually found it wrong, write \`결합반박 #id\`. If you did not check it, write nothing about it (no guessing).`]
-      : ["[결합 확인 요청 — 답 표기]", ...couplings.map((cp) => `- (#${cp.id}) ${String(cp.text).slice(0, 200)}`), `이번 검증에서 위 결합을 '실제로 확인'한 경우에만 \`결합확인 #id\` 를 한 줄로 명시하고, '실제로 틀렸음을 확인'했다면 \`결합반박 #id\` 를 명시하라. 확인하지 않았다면 아무것도 쓰지 마라(추측 금지).`]).join("\n")
-    : "";
   const text = [head, ...items.map((i) => `- ${i.path}${i.note && String(i.note) !== i.path ? ` — ${String(i.note).slice(0, 120)}` : ""}`), tail, ...(coupleBlock ? [coupleBlock] : []), ...(health ? [health] : [])].join("\n");
   // envelope(L1-A): '이번 ask에 실제로 실린 것'의 스냅샷 — echo 판정은 전역 합집합이 아니라 '항목 단위'로
   // (지도에서 A·B가 서로 다른 항목이면 그 결합이 노출된 게 아니다 — Codex 설계검증). 소비자는 flagLedgerConfirms.
@@ -2780,8 +2811,8 @@ function buildScoutAttach(ws, c, lang) {
 // 배포 관례상 원시 JSONL을 직접 항목(entry) 단위로 집계하며, tests/scout-health.test.js가 정본과 패리티를 잠근다).
 // 용어 잠금: '정확도' 금지 — '관찰 신호'. attached는 '다음 꾸러미 재동봉' 사건(검증자 열람 인과 아님)이고 이벤트 선후도 안 보므로 순서('후')를 주장하지 않는 지표명만 쓴다.
 const HEALTH_EVENT_TYPES = new Set(["proposed", "attached", "confirmed", "refuted", "user_confirm", "user_dispute", "pinned", "unpinned", "banned", "unbanned", "superseded", "tombstone", "exported", "alias", "unalias"]); // 정본 parseEventsJsonl의 allowlist와 동형 — 미지 타입이 표본 수를 부풀리지 못하게(Codex 반례)
-// 기계 확인 '승격 가능' 판정(정본 promotableMachineAskIds와 동형): 명시 표기(claimed)거나 비-echoed 공동 인용,
-// 취급 흔적 검사 불가(seen=unknown)는 제외. 서로 다른 askId(구형은 ts)만 센다 — '서로 다른 ask 실행' 기준.
+// 기계 확인 '승격 가능' 판정: 강한 명시 확인(claimed)은 1회, 약한 비-echoed 공동 인용은 서로 다른 askId 2회.
+// 취급 흔적 검사 불가(seen=unknown)는 제외한다. 정본 machineConfirmSatisfied와 동형.
 // 기계 확인 '승격 가능' 판정(정본 promotableConfirm과 동형): claimed는 '실제 인용 동반(cited)'일 때만
 // (표식은 자기보고 — 단독 승격 금지), co-cited는 비-echoed만, seen=unknown 제외.
 // 가중 해석(정본 evWeight 동형) — 트림 순계 압축본(n>1)과 일반 이벤트(1)를 한 규칙으로.
@@ -2800,11 +2831,16 @@ function miniPromotableDispute(e) {
   if (!e.grade) return true;
   return e.cited === true && e.seen === "ok" && !!e.askId; // 확인과 동일 명시 조건(부정이 더 약한 조건이면 안 됨)
 }
-function miniPromoteIds(confs) {
-  const ids = new Set();
-  for (const e of confs) if (miniPromotableConfirm(e)) ids.add(e.askId || e.ts || "");
-  ids.delete("");
-  return ids.size;
+function miniMachineConfirmSatisfied(confs) {
+  const claimed = new Set();
+  const coCited = new Set();
+  for (const e of confs) {
+    if (!miniPromotableConfirm(e)) continue;
+    const id = e.askId || e.ts || "";
+    if (!id) continue;
+    (e.grade === "claimed" ? claimed : coCited).add(id);
+  }
+  return claimed.size >= 1 || coCited.size >= 2;
 }
 // 자동(기계) 확인 가능성 — 정본 autoConfirmEligible과 동형(확인기 flagLedgerConfirms의 증거 키와 같은 규칙).
 function miniAutoEligible(text) {
@@ -2874,8 +2910,8 @@ function miniLedgerEntries(raw) {
   const out = [];
   for (const e of per.values()) {
     e.dead = (e.ban - e.unban) > 0 || e.sup > 0 || e.tomb > 0;
-    const machineOk = miniPromoteIds(e.confs) >= 2 || legacyRepeats(e.confs) >= 2; // DERIVE_V2와 동형(패리티 테스트 잠금)
-    e.rehab = e.everDisp && !e.dead && (e.afterU >= 1 || miniPromoteIds(e.after) >= 2 || legacyRepeats(e.after) >= 2);
+    const machineOk = miniMachineConfirmSatisfied(e.confs) || legacyRepeats(e.confs) >= 2; // DERIVE_V2와 동형(패리티 테스트 잠금)
+    e.rehab = e.everDisp && !e.dead && (e.afterU >= 1 || miniMachineConfirmSatisfied(e.after) || legacyRepeats(e.after) >= 2);
     e.verified = !e.dead && (e.everDisp ? e.rehab : (e.userConf >= 1 || machineOk));
     e.autoEligible = miniAutoEligible(e.text);
     e.machineEvidence = e.confs.some((x) => miniPromotableConfirm(x) || !x.grade); // 정본 동형 — 기계 지표 과대 표시 방지(Codex #7)
@@ -3682,7 +3718,7 @@ function formatForClaude(answer, lang, profile, machine) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}${machineLine}\n처리 의무: ${action}`;
 }
 
-module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, verifyCampaignProgress, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, selfAdapterSha, selfExecFp, precisionExecFp, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, scoutCouplingAttach, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, verifyCampaignProgress, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, selfAdapterSha, selfExecFp, precisionExecFp, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
 module.exports.codexImplementerSession = codexImplementerSession;
 module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
 // P-6 회수 영수증 계약(설계 v5.1)

@@ -234,19 +234,22 @@ function cutoverTraceStateOf(repo, deps) {
 }
 function buildMapAttach(ws, c, lang) {
   if (!ws || CL.normScoutMode(c) !== "on") return null; // 2트랙 게이트 최선행(출력 0·reader 미호출)
+  const target = CL.resolveScoutRepo(ws, c).repo;
   let proj = null;
-  try { proj = module.exports.readMapProjection(CL.resolveScoutRepo(ws, c).repo); } catch { proj = null; } // exports 경유 — 테스트가 호출 수를 실측(2트랙 미호출 증명)
+  try { proj = module.exports.readMapProjection(target); } catch { proj = null; } // exports 경유 — 테스트가 호출 수를 실측(2트랙 미호출 증명)
   // P3b 공통 (b) 개정(설계검증 2차 #2): legacy/none '판정 확인'시에만 기존 동봉 위임(바이트 동일).
   // blocked·error(lock/flap)·예외=marker 세대 판정 불가/차단 — legacy 데이터 공급 금지·고지 attach(무차단).
   if (proj && proj.ok === true && proj.source === "v2") return renderV2Slice(ws, c, lang, proj);
   if (proj && proj.ok === true && (proj.source === "legacy" || proj.source === "none")) return CL.buildScoutAttach(ws, c, lang);
   const en = lang === "en" || (lang !== "ko" && CL.loadLang() === "en");
   const why = attachReasonText(proj && proj.reasonKey, proj && proj.reason, en);
+  const coupling = typeof CL.scoutCouplingAttach === "function" ? CL.scoutCouplingAttach(target, en) : { text: "", couplings: [] };
+  const mapNotice = en
+    ? "[Project MAP] Unreadable right now (" + why + ") — no map slice attached this time (advisory only; not a verdict rule)."
+    : "[Project MAP] 지금은 판독 불가(" + why + ") — 이번에는 지도 조각을 동봉하지 않습니다(참고 정보일 뿐 판정 기준 아님).";
   return {
-    text: en
-      ? "[Project MAP] Unreadable right now (" + why + ") — no map slice attached this time (advisory only; not a verdict rule)."
-      : "[Project MAP] 지금은 판독 불가(" + why + ") — 이번에는 지도 조각을 동봉하지 않습니다(참고 정보일 뿐 판정 기준 아님).",
-    mapItems: [], couplings: [],
+    text: [mapNotice, ...(coupling.text ? [coupling.text] : [])].join("\n"),
+    mapItems: [], couplings: coupling.couplings,
   };
 }
 // v2 slice — envelope {text, mapItems, couplings} 승계(healthLine 별도 필드 금지 — text 포함)
@@ -266,8 +269,8 @@ function renderV2Slice(ws, c, lang, proj) {
   items.sort((a, b) => (a._hit === b._hit ? 0 : a._hit ? -1 : 1));
   const top = items.slice(0, 8).map(({ path: p, note }) => ({ path: p, note }));
   if (!top.length) return CL.buildScoutAttach(ws, c, lang); // slice가 비면 기존 동봉으로(무손실)
-  let couplings = [];
-  try { couplings = CL.ledgerCouplingCandidates(target, 3); } catch { couplings = []; }
+  const coupling = typeof CL.scoutCouplingAttach === "function" ? CL.scoutCouplingAttach(target, en) : { text: "", couplings: [] };
+  const couplings = coupling.couplings;
   // edge 동봉(1차 blocker⑥ — 설계: '연결된 node/edge'): 동봉 node의 인접 edge를 effective만·신선도
   // 라벨과 함께 text에 실음(mapItems 계약 {path,note}는 파일 단위라 edge는 text 라인으로 — envelope 불변).
   const shownIds = new Set(proj.nodes.filter((nd) => (nd.anchors || []).some((a) => a && top.some((t) => t.path === a.path))).map((nd) => nd.id));
@@ -280,7 +283,7 @@ function renderV2Slice(ws, c, lang, proj) {
     ? "[Project MAP slice · advisory — not a verdict rule] Confirmed-structure nodes/edges connected to this change (freshness per item):"
     : "[Project MAP 조각 · 참고 — 판정 기준 아님] 이번 변경과 연결된 확정 구조 node/edge(항목별 신선도):";
   const health = CL.scoutHealthLine(target, en);
-  const text = [head, ...top.map((i) => `- ${i.path}${i.note ? ` — ${i.note}` : ""}`), ...edgeLines, ...(health ? [health] : [])].join("\n");
+  const text = [head, ...top.map((i) => `- ${i.path}${i.note ? ` — ${i.note}` : ""}`), ...edgeLines, ...(coupling.text ? [coupling.text] : []), ...(health ? [health] : [])].join("\n");
   return { text, mapItems: top, couplings };
 }
 

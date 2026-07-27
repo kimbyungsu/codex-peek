@@ -20,7 +20,7 @@ ok(/실질 효과는 '정찰 실행'에서 나와요/.test(ext) && /별도 과�
 ok(!/addStep=\(color,name,state\)/.test(ext), "옛 단계 행(addStep) 폐기 — 역할은 항상 노출 도해(rflow 노드+실데이터)가 대체");
 ok(!/사람 승인/.test(ext) && !/human approval/.test(ext), "'사람 승인/human approval' 잔재 0 — 세그먼트 힌트 포함 전거(Codex 반례 잠금)");
 ok(!/수동 명령으로|수동 생성 가능|via manual command|made by manual command/.test(ext), "상태 요약·상태바의 '수동만' 잔재 0 — 직접/자동 지시 모델 유지(Codex 반례 잠금)");
-ok(/추가 LLM 없음/.test(ext) && /ml&&ml\.mapExists/.test(ext) && /mapApproved/.test(ext) && /서로 다른 검증 2회가 실제 근거 파일까지 다룬/.test(ext), "③ 자동 승격 조건의 정확 표현·④ 실신호 유지(도해·일지 카드로 이관)");
+ok(/추가 LLM 없음/.test(ext) && /ml&&ml\.mapExists/.test(ext) && /mapApproved/.test(ext) && /강한 확인은 1회/.test(ext) && /공동 인용은 서로 다른 검증 2회/.test(ext) && /정확한 경로를 실제로 다룬/.test(ext), "③ 증거 강도별 자동 승격 조건의 정확 표현·④ 실신호 유지(도해·일지 카드로 이관)");
 ok(/openReconGuide/.test(ext) && /codexBridgeReconGuide/.test(ext) && /enableScripts: false/.test(ext) && /default-src 'none'; style-src 'unsafe-inline'/.test(ext), "자세히 보기(새탭): 별개 viewType·스크립트 차단·좁은 CSP(사용자 지적 7·Codex 보완)");
 ok(/gb\.addEventListener\("click"/.test(ext) && !/summary.*appendChild\(gb\)/.test(ext), "가이드 버튼은 summary 밖(토글 충돌 방지 — Codex 보완)");
 ok(!/det\.firstChild\.title=T\("변경 감지\(⚙자동\)/.test(ext), "옛 접힘 hover 스트립 폐기(구획 자체 폐기에 따름)");

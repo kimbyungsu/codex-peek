@@ -27,7 +27,22 @@ ok(!!d1 && /영향지도가 아직 없다/.test(d1) && /scope-scout-self\.js/.te
 ok(/아무것도 막지 않는다/.test(d1) && /스킵해도 된다/.test(d1), "advisory 명시(게이트 아님·재량 허용)");
 ok(!/deepseek/i.test(d1), "키 없으면 DeepSeek 팔 언급 없음(동의 모델)");
 ok(lib.buildScoutDirective(repo, cOn) === null, "같은 상태(no-map) 재호출 → 재지시 없음(지시 피로 방지)");
+const dArm = lib.buildScoutDirective(repo, { scoutMode: "on", scoutArm: "codex" });
+ok(!!dArm && /scope-scout-codex\.js/.test(dArm), "같은 실패 상태라도 실효 담당 self→codex 변경 → 새 실행 기회로 1회 재지시");
+ok(lib.buildScoutDirective(repo, { scoutMode: "on", scoutArm: "codex" }) === null, "담당 변경 재지시 뒤 같은 담당·상태 → 다시 침묵");
 ok(lib.buildScoutDirective(repo, cOff) === null, "2트랙이면 어떤 상태든 지시 없음(무회귀)");
+
+console.log("[다중 창 억제] 같은 정찰 대상을 서로 다른 계약·담당이 공유해도 호출자별 1회 기억");
+const callerA = fs.mkdtempSync(path.join(os.tmpdir(), "scout-caller-a-"));
+const callerB = fs.mkdtempSync(path.join(os.tmpdir(), "scout-caller-b-"));
+const ca = { scoutMode: "on", scoutRepo: repo, scoutArm: "self" };
+const cb = { scoutMode: "on", scoutRepo: repo, scoutArm: "codex" };
+ok(!!lib.buildScoutDirective(callerA, ca) && !!lib.buildScoutDirective(callerB, cb), "호출자 A·B가 각자 첫 안내를 받음");
+ok(lib.buildScoutDirective(callerA, ca) === null && lib.buildScoutDirective(callerB, cb) === null && lib.buildScoutDirective(callerA, ca) === null, "A↔B를 번갈아 호출해도 상대 담당값 때문에 재안내되지 않음");
+const adviceV3 = JSON.parse(fs.readFileSync(path.join(tmpHome, "scout-advice", store.wsKeyFor(repo) + ".json"), "utf8"));
+ok(adviceV3.schema === "scout-advice-v3" && Object.keys(adviceV3.callers || {}).length === 3, "대상 파일 안에 연 폴더+언어별 억제 슬롯을 분리 저장");
+const adviceSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
+ok(adviceSrc.includes('withFileLockStrict(f + ".lock"'), "재지시 판독·판정·기록을 같은 파일 잠금 안에서 수행(동시 창 중복 방지)");
 
 console.log("[서명 갱신] 지도가 생기면 fresh → 침묵, seed가 더 바뀌면 stale → 새 서명으로 다시 1회");
 store.saveMap(repo, "self", "# 지도\n① 직접 변경 후보\n- a.md — high", { seedFiles: ["a.md"] });
