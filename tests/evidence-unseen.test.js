@@ -270,6 +270,60 @@ console.log("[3-3] 문맥 보정(2026-07-28 실사고) — 인정 명령은 그�
     ck("다른 객체에 놓인 폴더는 짝짓지 않음(소속 확인 불가=폴더 없음으로 처리)", rSW.checked === true && rSW.unseen.includes("foo.ts"));
   }
 
+  {
+    // 검증 2차 blocker: 주석으로 지운 폴더는 실행에 쓰이지 않는다.
+    const id = "custom-cmt-wd-" + (++callSeq);
+    const input = "const real = {\n  command: \"Get-Content -LiteralPath foo.ts\",\n  // workdir: " + JSON.stringify(ws) + "\n};\nawait tools.shell_command(real);";
+    const result = [{ type: "input_text", text: "Script completed\nOutput:\nline1\nline2" }, { type: "input_text", text: "Exit code: 0\nOutput:\nline1\nline2" }];
+    writeRollout("cccccccc-cmt-wd", [
+      userMsg("검증 요청"),
+      { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: id, input } },
+      { type: "response_item", payload: { type: "custom_tool_call_output", call_id: id, output: result } },
+    ]);
+    const rCW = citedFilesUnseen(answerAbs, wsOther, "cccccccc-cmt-wd");
+    ck("주석으로 지운 폴더는 결속하지 않음", rCW.checked === true && rCW.unseen.includes("foo.ts"));
+  }
+  {
+    // 검증 2차 blocker: 같은 객체에 폴더가 둘이면 어느 것이 실제인지 알 수 없다 → 결속 포기.
+    const id = "custom-dup-wd-" + (++callSeq);
+    const other = path.join(os.tmpdir(), "no-such-dup-dir");
+    const input = "const real = {\n  command: \"Get-Content -LiteralPath foo.ts\",\n  workdir: " + JSON.stringify(ws) + ",\n  workdir: " + JSON.stringify(other) + "\n};\nawait tools.shell_command(real);";
+    const result = [{ type: "input_text", text: "Script completed\nOutput:\nline1\nline2" }, { type: "input_text", text: "Exit code: 0\nOutput:\nline1\nline2" }];
+    writeRollout("cccccccc-dup-wd", [
+      userMsg("검증 요청"),
+      { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: id, input } },
+      { type: "response_item", payload: { type: "custom_tool_call_output", call_id: id, output: result } },
+    ]);
+    const rDW = citedFilesUnseen(answerAbs, wsOther, "cccccccc-dup-wd");
+    ck("같은 객체에 폴더가 둘이면 결속 포기(첫 값을 실제로 가정하지 않음)", rDW.checked === true && rDW.unseen.includes("foo.ts"));
+  }
+  {
+    // 문자열 안에 적힌 글자는 속성이 아니다(명령 본문에 workdir: 이 들어간 형태).
+    const id = "custom-str-wd-" + (++callSeq);
+    const input = "const real = {\n  command: \"Write-Output 'workdir: " + ws.replace(/\\/g, "/") + "'; Get-Content -LiteralPath foo.ts\"\n};\nawait tools.shell_command(real);";
+    const result = [{ type: "input_text", text: "Script completed\nOutput:\nline1\nline2" }, { type: "input_text", text: "Exit code: 0\nOutput:\nline1\nline2" }];
+    writeRollout("cccccccc-str-wd", [
+      userMsg("검증 요청"),
+      { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: id, input } },
+      { type: "response_item", payload: { type: "custom_tool_call_output", call_id: id, output: result } },
+    ]);
+    const rSW2 = citedFilesUnseen(answerAbs, wsOther, "cccccccc-str-wd");
+    ck("명령 문자열 안에 적힌 workdir 글자는 속성으로 보지 않음", rSW2.checked === true && rSW2.unseen.includes("foo.ts"));
+  }
+  {
+    // 무회귀: 속성 이름이 따옴표로 감싸인 정상 형태는 그대로 인정한다.
+    const id = "custom-quoted-key-" + (++callSeq);
+    const input = "const calls = [\n  {\n    \"command\": \"Get-Content -LiteralPath foo.ts\",\n    \"workdir\": " + JSON.stringify(ws) + "\n  }\n];";
+    const result = [{ type: "input_text", text: "Script completed\nOutput:\nline1\nline2" }, { type: "input_text", text: "Exit code: 0\nOutput:\nline1\nline2" }];
+    writeRollout("cccccccc-quoted-key", [
+      userMsg("검증 요청"),
+      { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: id, input } },
+      { type: "response_item", payload: { type: "custom_tool_call_output", call_id: id, output: result } },
+    ]);
+    const rQK = citedFilesUnseen(answerAbs, wsOther, "cccccccc-quoted-key");
+    ck("따옴표로 감싼 속성 이름도 종전대로 인정(과잉 배제 회귀 방지)", rQK.checked === true && rQK.unseen.length === 0);
+  }
+
   // 2차 blocker②: 주석에 적힌 경로는 그 명령이 읽은 대상일 수 없다(실제로 읽은 것은 미끼 파일뿐).
   fs.writeFileSync(path.join(ws, "decoy.txt"), "line1\nline2\n", "utf8");
   writeRollout("cccccccc-comment-path", [userMsg("검증 요청"), ...pairW("Get-Content -LiteralPath decoy.txt # foo.ts", ws, "line1\nline2")]);

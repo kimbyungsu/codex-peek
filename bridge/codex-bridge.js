@@ -556,34 +556,54 @@ function splitShellStatements(text) {
 // 명령 사이에 놓인 무관한 객체의 폴더가 끌려와, 읽지도 않은 폴더가 경로 기준이 된다).
 // 소속을 확인할 수 없으면 폴더 없음으로 둔다(안전한 실패).
 // JSON 이중따옴표 리터럴만 받아 임의 JS를 평가하지 않는다.
-function braceOwnerIndex(s) {
+// 스크립트를 한 번 훑어 ①각 글자가 속한 중괄호 블록 ②주석 안인지 ③문자열 '안'인지를 함께 낸다.
+// 문자열은 '여는 따옴표 다음부터' 안으로 본다 — 속성 이름이 따옴표로 감싸인 정상 형태("workdir": …)는
+// 여는 따옴표에서 시작하므로 걸러지지 않고, 명령 문자열 속에 적힌 workdir 같은 글자는 걸러진다.
+function scriptOwnerScan(s) {
   const owner = new Int32Array(s.length).fill(-1);
+  const inStr = new Uint8Array(s.length);
+  const inCmt = new Uint8Array(s.length);
   const stack = [];
-  let quote = "";
-  for (let i = 0; i < s.length; i++) {
-    const ch = s[i];
+  let i = 0, quote = "";
+  const mark = (j, top, str, cmt) => { if (j < s.length) { owner[j] = top; inStr[j] = str; inCmt[j] = cmt; } };
+  while (i < s.length) {
     const top = stack.length ? stack[stack.length - 1] : -1;
-    if (quote) { owner[i] = top; if (ch === "\\") { i++; if (i < s.length) owner[i] = top; continue; } if (ch === quote) quote = ""; continue; }
-    if (ch === '"' || ch === "'" || ch === "`") { owner[i] = top; quote = ch; continue; }
-    if (ch === "{") { owner[i] = top; stack.push(i); continue; }
-    if (ch === "}") { stack.pop(); owner[i] = stack.length ? stack[stack.length - 1] : -1; continue; }
-    owner[i] = top;
+    const ch = s[i], nx = s[i + 1];
+    if (quote) {
+      mark(i, top, 1, 0);
+      if (ch === "\\") { mark(i + 1, top, 1, 0); i += 2; continue; }
+      if (ch === quote) quote = "";
+      i++; continue;
+    }
+    if (ch === "/" && nx === "/") { while (i < s.length && s[i] !== "\n") { mark(i, top, 0, 1); i++; } continue; }
+    if (ch === "/" && nx === "*") { mark(i, top, 0, 1); mark(i + 1, top, 0, 1); i += 2; while (i < s.length && !(s[i] === "*" && s[i + 1] === "/")) { mark(i, top, 0, 1); i++; } mark(i, top, 0, 1); mark(i + 1, top, 0, 1); i += 2; continue; }
+    if (ch === '"' || ch === "'" || ch === "`") { mark(i, top, 0, 0); quote = ch; i++; continue; }
+    if (ch === "{") { mark(i, top, 0, 0); stack.push(i); i++; continue; }
+    if (ch === "}") { stack.pop(); mark(i, stack.length ? stack[stack.length - 1] : -1, 0, 0); i++; continue; }
+    mark(i, top, 0, 0); i++;
   }
-  return owner;
+  return { owner, inStr, inCmt };
 }
 function nestedShellCalls(text) {
   const s = String(text || "");
-  const owner = braceOwnerIndex(s);
-  const cmdRe = /(?:["'](?:cmd|command)["']|\b(?:cmd|command))\s*:\s*("(?:\\.|[^"\\])*")/g;
-  const cmds = [];
-  let m;
-  while ((m = cmdRe.exec(s))) { let v; try { v = JSON.parse(m[1]); } catch { continue; } cmds.push({ command: v, own: owner[m.index] }); }
-  const wdRe = /(?:["'](?:workdir|cwd)["']|\b(?:workdir|cwd))\s*:\s*("(?:\\.|[^"\\])*")/g;
-  const wds = [];
-  while ((m = wdRe.exec(s))) { let v; try { v = JSON.parse(m[1]); } catch { continue; } wds.push({ dir: v.replace(/\\/g, "/"), own: owner[m.index] }); }
+  const { owner, inStr, inCmt } = scriptOwnerScan(s);
+  const live = (idx) => !inStr[idx] && !inCmt[idx]; // 주석 안·문자열 안의 글자는 속성이 아니다
+  const collect = (re) => {
+    const out = [];
+    let m;
+    while ((m = re.exec(s))) { if (!live(m.index)) continue; let v; try { v = JSON.parse(m[1]); } catch { continue; } out.push({ value: v, own: owner[m.index] }); }
+    return out;
+  };
+  const cmds = collect(/(?:["'](?:cmd|command)["']|\b(?:cmd|command))\s*:\s*("(?:\\.|[^"\\])*")/g);
+  const wds = collect(/(?:["'](?:workdir|cwd)["']|\b(?:workdir|cwd))\s*:\s*("(?:\\.|[^"\\])*")/g);
+  // 같은 객체 안에서만 짝짓고, 그 객체에 명령이나 폴더가 둘 이상이면 어느 것이 실제인지 알 수 없으므로
+  // 폴더 결속을 통째로 포기한다(1차 blocker② — 중복 속성은 실행 시 마지막 값이 이기지만 우리가 그걸
+  // 안다고 가정하면 안 된다. 모르면 폴더 없음이 안전한 실패).
+  const cnt = (arr, own) => arr.filter((x) => x.own === own).length;
   return cmds.map((c) => {
-    const own = c.own >= 0 ? wds.find((w) => w.own === c.own) : null; // 같은 객체 안에서만 — 최상위(소속 없음)는 짝짓지 않음
-    return { command: c.command, workdir: own ? own.dir : "" };
+    const ok = c.own >= 0 && cnt(cmds, c.own) === 1 && cnt(wds, c.own) === 1;
+    const own = ok ? wds.find((w) => w.own === c.own) : null;
+    return { command: c.value, workdir: own ? String(own.value).replace(/\\/g, "/") : "" };
   });
 }
 function nestedShellCommands(text) { return nestedShellCalls(text).map((c) => c.command); }
