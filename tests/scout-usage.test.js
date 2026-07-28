@@ -69,8 +69,8 @@ ok(/지난 호출은 그때 설정을 따랐어요/.test(ext) && /past calls fol
 ok(!/이 기록엔 모델 이름이 없어요/.test(ext) && !/모델 이름 기록 없음/.test(ext), "'기록 없음'으로 시작하던 옛 문구 잔재 0");
 
 console.log("[4c] 자동 보강 보류 사유를 사람 말로(2026-07-28 사용자 지적 — 화면에 영문 코드가 그대로 떴다)");
-ok(/var PARK_REASONS=\{/.test(ext) && /function parkReasonText\(raw\)/.test(ext), "보류 사유 표+변환 함수 존재");
-ok(/parkReasonText\(en9\.job\.parkedReason\)/.test(ext) && !/\+\(en9\.job\.parkedReason\|\|""\)/.test(ext), "보강 상태 줄이 원시 코드 대신 변환을 거침(직결 잔재 0)");
+ok(/var PARK_REASONS=\{/.test(ext) && /function parkReasonText\(raw, readiness\)/.test(ext), "보류 사유 표+변환 함수 존재(현재 준비 상태도 함께 받음)");
+ok(/parkReasonText\(en9\.job\.parkedReason, d\.mapReadiness\)/.test(ext) && !/\+\(en9\.job\.parkedReason\|\|""\)/.test(ext), "보강 상태 줄이 원시 코드 대신 변환을 거침(직결 잔재 0)");
 ok(/"precision-not-ready": \["정밀형 담당이 아직 준비되지 않았어요"/.test(ext), "실제로 발생한 사유(정밀형 미준비)가 표에 있음");
 // 1차 [보완] 수용 2건: provider-conflict는 '설정 불일치'가 아니라 '결과 충돌'이고, 사유 목록은 닫혀 있지 않다.
 ok(/"provider-conflict": \["담당들이 낸 결과가 서로 충돌해요"/.test(ext) && !/담당 지정이 서로 어긋나요/.test(ext), "provider-conflict를 결과 충돌로 옮김(설정 불일치 오역 잔재 0)");
@@ -88,6 +88,26 @@ ok(/'자주 나오는 사유'만/.test(ext) && !/닫힌 목록이라 표로 옮�
   ok(f("adapter-missing:codex") === "그 담당을 실행할 방법이 없어요 (codex)", "공급자가 붙은 형태는 앞부분 변환+뒤는 괄호 보존");
   ok(f("brand-new-code") === "brand-new-code", "모르는 코드는 사라지지 않고 그대로 보임(정보 손실 금지)");
   ok(f("") === "사유 기록 없음", "사유가 비면 빈칸 대신 그렇다고 밝힘");
+}
+
+console.log("[4d] 0회인 이유·멈춤 사유의 현재 상태(2026-07-29 사용자: 숫자만 보고는 이해할 수 없었다)");
+ok(/var why=zeroReason\(prefix\)/.test(ext) && /T\("0회인 이유","Why zero"\)/.test(ext), "0회 줄 옆에 이유 줄을 함께 표시");
+ok(/if\(prefix!=="map-enrich"&&prefix!=="map-adjudicate"\) return "";/.test(ext), "이유 표시는 의미 보강·검증 담당 판정 두 칸에만(다른 칸 오염 금지)");
+ok(/이 판정은 자동 보강이 도는 중에만 생겨요/.test(ext) && /This adjudication only happens while auto-enrichment runs/.test(ext), "검증 담당 판정이 보강에 딸린 것임을 밝힘(한/영)");
+ok(/자동 보강이 시작 전에 멈춰 있어요/.test(ext) && /정찰 구역의 '다시 시도'를 눌러야 실행돼요/.test(ext), "멈춤 상태와 다음 행동(다시 시도)을 함께 안내");
+{
+  // 멈춘 사유는 '그때'의 사실이다. 그 사이 준비가 끝났으면 지금 상태를 함께 말해야 한다
+  // (실사고: 7/24에 정밀형 미준비로 멈춘 문구가 준비가 끝난 뒤에도 그대로 떠 있었다).
+  const src3 = fs.readFileSync(path.join(ROOT, "out", "extension.js"), "utf8");
+  const st3 = src3.indexOf("function parkReasonText(");
+  let i3 = src3.indexOf("{", st3), d3 = 0, fn3 = "";
+  for (; i3 < src3.length; i3++) { if (src3[i3] === "{") d3++; else if (src3[i3] === "}") { d3--; if (d3 === 0) { fn3 = src3.slice(st3, i3 + 1); break; } } }
+  const tbl3 = src3.slice(src3.indexOf("var PARK_REASONS="), src3.indexOf("};", src3.indexOf("var PARK_REASONS=")) + 2);
+  const g = new Function("T", tbl3 + "\n" + fn3 + "\nreturn parkReasonText;")((ko) => ko);
+  ok(g("precision-not-ready", { precision: { ok: true } }).includes("지금은 준비돼 있어요"), "그 사이 준비가 끝났으면 '지금은 준비됨'을 덧붙임");
+  ok(!g("precision-not-ready", { precision: { ok: false } }).includes("지금은 준비돼 있어요"), "아직 준비 안 됐으면 덧붙이지 않음");
+  ok(!g("precision-not-ready", {}).includes("지금은 준비돼 있어요"), "준비 상태를 모르면 덧붙이지 않음(추측 금지)");
+  ok(g("precision-not-ready", { precision: { ok: true } }).startsWith("정밀형 담당이 아직 준비되지 않았어요"), "그때의 사유 자체는 지우지 않음(기록 왜곡 금지)");
 }
 ok(/if\(c\.models&&c\.models\.length\) models\.textContent=T\("기록된 모델: "/.test(ext), "기록이 있으면 종전대로 기록된 모델 우선(무회귀)");
 

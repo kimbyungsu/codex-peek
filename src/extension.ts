@@ -4959,13 +4959,20 @@ class Dashboard {
     "route-loop-guard": ["같은 자리를 맴돌아 멈췄어요","it looped and was stopped"],
     "uncertain-call": ["호출 결과를 확신할 수 없어 멈췄어요","the call outcome was uncertain, so it stopped"]
   };
-  function parkReasonText(raw){
+  function parkReasonText(raw, readiness){
     var s=String(raw||"").trim();
     if(!s) return T("사유 기록 없음","no reason recorded");
     var i=s.indexOf(":"), head=i>=0?s.slice(0,i):s, tail=i>=0?s.slice(i+1):"";
     var hit=PARK_REASONS[head];
-    if(!hit) return s;
-    return T(hit[0],hit[1])+(tail?" ("+tail+")":"");
+    var base=hit?T(hit[0],hit[1])+(tail?" ("+tail+")":""):s;
+    // 멈춘 사유는 '그때'의 사실이다. 그 사이 준비가 끝났으면 지금 상태를 함께 말한다
+    // (2026-07-29 실사고: 7/24에 '정밀형 미준비'로 멈춘 문구가, 준비가 끝난 뒤에도 그대로 떠 있었다).
+    var m=/^(self|economy|precision|auto)-not-ready$/.exec(head);
+    if(m){
+      var rd=(readiness||{})[m[1]];
+      if(rd&&rd.ok===true) base+=T(" (지금은 준비돼 있어요 — 다시 시도하면 실행돼요)"," (it is ready now — a retry will run it)");
+    }
+    return base;
   }
   function keyedDetails(key, summaryText){ var det=document.createElement("details"); if(openPanels.has(key)) det.open=true; det.addEventListener("toggle", function(){ if(det.open) openPanels.add(key); else openPanels.delete(key); }); var s=document.createElement("summary"); s.textContent=summaryText; det.appendChild(s); return det; }
   // 클릭 점프 가드(2026-07-23 사용자 실보고 ②의 '클릭 직접 경로' 몫): 접기/펼치기 등 클릭 직후 레이아웃
@@ -5591,7 +5598,28 @@ class Dashboard {
         detail.appendChild(models);
         usageBox.appendChild(detail);
       });
-      if(!any) addLine(usageBox,T("기록","Records"),T("호출 0회","0 calls"));
+      // 0회일 때 '왜 0회인지'를 함께 말한다(2026-07-29 사용자: 숫자만 보고는 이해할 수 없었다).
+      // 자동 보강이 시작 전에 멈춰 있으면 그 두 칸은 영영 0회로 남는데, 멈춘 사실은 다른 화면에만 있었다.
+      if(!any){
+        addLine(usageBox,T("기록","Records"),T("호출 0회","0 calls"));
+        var why=zeroReason(prefix);
+        if(why) addLine(usageBox,T("0회인 이유","Why zero"),why);
+      }
+    };
+    // 의미 보강·검증 담당 판정이 0회인 이유. 보강이 멈춰 있으면 그 멈춤이 곧 이유다
+    // (검증 담당 판정은 보강이 도는 중에만 생기므로 함께 0이 된다).
+    var zeroReason=function(prefix){
+      if(prefix!=="map-enrich"&&prefix!=="map-adjudicate") return "";
+      var en=d.enrich||null, jp=en&&en.job&&en.job.phase;
+      var lead=prefix==="map-adjudicate"
+        ? T("이 판정은 자동 보강이 도는 중에만 생겨요. ","This adjudication only happens while auto-enrichment runs. ")
+        : "";
+      if(!en) return lead+T("자동 보강 상태를 읽지 못했어요.","Auto-enrichment state could not be read.");
+      if(jp==="parked") return lead+T("자동 보강이 시작 전에 멈춰 있어요: ","Auto-enrichment is parked before it started: ")+parkReasonText(en.job.parkedReason, d.mapReadiness)
+        +T(" · 같은 일을 자동으로 반복하지 않으므로, 정찰 구역의 '다시 시도'를 눌러야 실행돼요."," · it never retries on its own — press Retry in the recon area to run it.");
+      if(jp==="done") return lead+T("자동 보강이 이미 끝난 뒤로 새로 실행할 일이 없었어요.","Auto-enrichment already finished and nothing new needed running.");
+      if(jp==="open") return lead+T("자동 보강이 지금 진행 중이라 아직 기록이 없어요.","Auto-enrichment is running now, so there are no records yet.");
+      return lead+T("아직 자동 보강이 한 번도 시작되지 않았어요.","Auto-enrichment has never started yet.");
     };
     if(reads&&reads.usage==="unreadable") addLine(usageBox,T("사용량","Usage"),T("외부 호출 원장을 읽을 수 없습니다.","The external-call log could not be read."));
     else if(usageReadable){
@@ -6275,7 +6303,7 @@ class Dashboard {
             else if(!consented) msg=T("자동 보강: 꺼짐(이 담당의 자동 실행 동의 없음)","Auto-enrich: off (no consent for this provider)");
             else if(jp==="damaged") msg=T("자동 보강: 작업 기록 손상 — 자동 실행 정지","Auto-enrich: job ledger damaged — automation halted");
             else if(en9.deferredSt==="damaged") msg=T("자동 보강: 확인 대기 기록 손상 — 수동 복구 필요","Auto-enrich: verification queue damaged — manual recovery required");
-            else if(jp==="parked") msg=T("자동 보강: 보류됨 — ","Auto-enrich: parked — ")+parkReasonText(en9.job.parkedReason);
+            else if(jp==="parked") msg=T("자동 보강: 보류됨 — ","Auto-enrich: parked — ")+parkReasonText(en9.job.parkedReason, d.mapReadiness);
             else if(jp==="done") msg=T("자동 보강: 완료 — 적용 ","Auto-enrich: done — applied ")+String(en9.job.applied||0)+T("건 · 확인 대기 "," · awaiting verification ")+String(en9.awaitingVerification||0)+T("건 · 기각 "," · rejected ")+String(en9.job.rejected||0)+T("건 · 조사 대기 "," · investigation ")+String(en9.job.investigation||0)+T("건"," items");
             else if(jp==="open") msg=T("자동 보강: 진행 중","Auto-enrich: in progress");
             else msg=en9.queuePending?T("자동 보강: 대기 중(다음 관측 때 실행)","Auto-enrich: pending (runs on next observation)"):T("자동 보강: 대기 없음","Auto-enrich: nothing queued");

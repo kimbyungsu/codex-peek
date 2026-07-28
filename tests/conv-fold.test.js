@@ -107,7 +107,7 @@ ok(ext.includes('var dkey="usage:"+usageScope+"|"+(prefix||"global-readiness")+"
 ok(ext.includes('var usageScope=(d.scoutTarget&&d.scoutTarget.repo)||"?"'), "펼침 키에 정찰 대상 축 존재(1차 [보완] — 같은 창에서 프로젝트를 바꿔도 상태가 넘어오지 않음)");
 {
   const usageStart = ext.indexOf("var addPurpose=function(title,source,prefix)");
-  const usageEnd = ext.indexOf("if(!any) addLine(usageBox", usageStart);
+  const usageEnd = ext.indexOf("if(!any){", usageStart); // 0회 분기 시작 = 담당 반복 구간의 끝
   const usageSrc = usageStart >= 0 && usageEnd > usageStart ? ext.slice(usageStart, usageEnd) : "";
   ok(!!usageSrc && !usageSrc.includes('document.createElement("details")'), "사용량 구간의 상태 없는 raw details 제거(재렌더 즉시 접힘 회귀 차단)");
 }
