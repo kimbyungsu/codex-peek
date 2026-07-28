@@ -164,7 +164,7 @@ const ENRICH_ADAPTERS = {
     try {
       const prompt = buildEnrichPrompt(ctx);
       const callId = crypto.randomUUID();
-      const r = spawnSync(target, [...(inv.args || []), ...CL.codexScoutExecArgs(outF)], { input: prompt, cwd: tmpCwd, encoding: "utf8", timeout: 10 * 60 * 1000, windowsHide: true, shell: !!inv.shell, stdio: ["pipe", "ignore", "pipe"] });
+      const r = spawnSync(target, [...(inv.args || []), ...CL.codexScoutExecArgs(outF)], { input: prompt, cwd: tmpCwd, encoding: "utf8", timeout: 10 * 60 * 1000, windowsHide: true, shell: !!inv.shell, stdio: ["pipe", "ignore", "pipe"], env: CL.codexScoutExecEnv(process.env, "enrich") });
       let outTxt = "";
       try { outTxt = fs.readFileSync(outF, "utf8").trim(); } catch { /* 실패 판정 */ }
       if (Number.isSafeInteger(r.pid) && r.pid > 0) recordCliUsage("codex", "map-enrich", callId, ctx.usageContext, prompt.length, outTxt.length);
@@ -222,7 +222,7 @@ function askVerifierResolution(req) {
   const outF = path.join(tmpCwd, "verdict-out.txt");
   try {
     const callId = crypto.randomUUID();
-    const r = spawnSync(target, [...(inv.args || []), ...CL.codexScoutExecArgs(outF)], { input: prompt, cwd: tmpCwd, encoding: "utf8", timeout: 10 * 60 * 1000, windowsHide: true, shell: !!inv.shell, stdio: ["pipe", "ignore", "pipe"] });
+    const r = spawnSync(target, [...(inv.args || []), ...CL.codexScoutExecArgs(outF)], { input: prompt, cwd: tmpCwd, encoding: "utf8", timeout: 10 * 60 * 1000, windowsHide: true, shell: !!inv.shell, stdio: ["pipe", "ignore", "pipe"], env: CL.codexScoutExecEnv(process.env, "enrich") });
     let outTxt = "";
     try { outTxt = fs.readFileSync(outF, "utf8").trim(); } catch { /* 실패 판정 */ }
     if (Number.isSafeInteger(r.pid) && r.pid > 0) recordCliUsage("codex", "map-adjudicate", callId, req.usageContext, prompt.length, outTxt.length);

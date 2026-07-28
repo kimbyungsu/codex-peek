@@ -150,6 +150,7 @@ const PROVIDERS = {
         const r = spawnSync(target, [...inv.args, ...CL.codexScoutExecArgs(outFile)], {
           input: preface + md,
           cwd: tmpCwd,
+          env: CL.codexScoutExecEnv(process.env, "scout"), // 도구 실행 표식 — 훅의 세션 출처 판정이 ephemeral을 unknown으로 차단하는 경로 봉합
           stdio: ["pipe", "ignore", "pipe"],
           encoding: "utf8",
           timeout: 8 * 60 * 1000, // self 팔과 동일 상한

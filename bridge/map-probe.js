@@ -65,7 +65,7 @@ function probePrecision(opts) {
     const target = inv && CL.resolveExecutableForSpawn(inv.file, o.env || process.env);
     callId = target ? crypto.randomUUID() : null;
     const rp = target
-      ? spawnSync(target, [...(inv.args || []), ...CL.codexScoutExecArgs(outF)], { input: probeIn, cwd: tmpC, encoding: "utf8", timeout: o.timeoutMs || 120000, windowsHide: true, shell: !!inv.shell, stdio: ["pipe", "ignore", "pipe"], env: o.env || process.env })
+      ? spawnSync(target, [...(inv.args || []), ...CL.codexScoutExecArgs(outF)], { input: probeIn, cwd: tmpC, encoding: "utf8", timeout: o.timeoutMs || 120000, windowsHide: true, shell: !!inv.shell, stdio: ["pipe", "ignore", "pipe"], env: CL.codexScoutExecEnv(o.env || process.env, "probe") })
       : { error: new Error("cli-not-found"), status: null, stdout: "", stderr: "", pid: null };
     launched = Number.isSafeInteger(rp.pid) && rp.pid > 0;
     let outTxt = ""; try { outTxt = fs.readFileSync(outF, "utf8").trim(); } catch { /* 실패 판정 */ }

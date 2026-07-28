@@ -442,6 +442,32 @@ rb = runChook(cxPayload());
 ck("B10 codex-verifying 흔적 → block", rb.out && rb.out.decision === "block");
 ck("B10 계약 불변", readContract().o.harnessMode === "claude-codex");
 
+// [C] 도구 자체 실행 표식 — 2026-07-28 실측 결함 봉합(ephemeral 호출은 rollout이 없어 unknown→차단됐다)
+console.log("[C] 도구 실행 표식(CODEX_PEEK_TOOL_EXEC) — ephemeral 정찰·점검·보강 호출 침묵");
+{
+  setContract("claude-codex"); clearState();
+  try { fs.rmSync(rollout, { force: true }); } catch { /* 무해 */ } // rollout 없음 = ephemeral 실행 재현
+  // 표식 없음: 판정 불가(unknown) → fail-closed 차단(기존 계약 유지 확인)
+  const noMark = cp.spawnSync(process.execPath, [CHOOK], { encoding: "utf8", env, input: JSON.stringify(cxPayload()), timeout: 30000, windowsHide: true });
+  let o1 = null; try { o1 = JSON.parse(noMark.stdout); } catch { o1 = null; }
+  ck("C1 표식 없는 rollout 부재 프롬프트 = 차단 유지(무게이트 우회 금지)", !!(o1 && o1.decision === "block"));
+  // 표식 있음: exec(확정 비대상)과 동일 침묵 → 차단 없음(수정 전이면 여기서 block이 나와 실패했을 구성)
+  const marked = cp.spawnSync(process.execPath, [CHOOK], { encoding: "utf8", env: { ...env, CODEX_PEEK_TOOL_EXEC: "scout" }, input: JSON.stringify(cxPayload()), timeout: 30000, windowsHide: true });
+  let o2 = null; try { o2 = JSON.parse(marked.stdout); } catch { o2 = null; }
+  ck("C2 표식 있으면 침묵 — 정찰·점검·보강 실행이 차단되지 않음", !(o2 && o2.decision === "block"));
+  ck("C3 계약 불변(표식은 자동 전환 판정 전용)", readContract().o.harnessMode === "claude-codex");
+  const hookSrc2 = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-hook.js"), "utf8");
+  const cps = hookSrc2.indexOf("function classifyPromptSource(j, sid)");
+  const seg = hookSrc2.slice(cps, cps + 1200);
+  ck("C4 표식 검사는 판정 함수 안에서 rollout 판독보다 앞(소스 계약)", cps > 0 && seg.indexOf("CODEX_PEEK_TOOL_EXEC") > 0 && seg.indexOf("CODEX_PEEK_TOOL_EXEC") < seg.indexOf("rolloutForSession(j, sid)"));
+  const clSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
+  ck("C5 공용 헬퍼 codexScoutExecEnv 존재·export", /function codexScoutExecEnv\(base, kind\)/.test(clSrc) && clSrc.includes("codexScoutExecEnv, TOOL_EXEC_ENV"));
+  const sp = fs.readFileSync(path.join(__dirname, "..", "scripts", "scout-providers.js"), "utf8");
+  const ep = fs.readFileSync(path.join(__dirname, "..", "bridge", "enrich-providers.js"), "utf8");
+  const mp = fs.readFileSync(path.join(__dirname, "..", "bridge", "map-probe.js"), "utf8");
+  ck("C6 ephemeral 호출 4곳 전부 표식 적용(정찰·보강 2·점검)", /codexScoutExecEnv\(process\.env, "scout"\)/.test(sp) && (ep.match(/codexScoutExecEnv\(process\.env, "enrich"\)/g) || []).length === 2 && /codexScoutExecEnv\(o\.env \|\| process\.env, "probe"\)/.test(mp));
+}
+
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);
 try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* Windows 잠금 무해 */ }
 process.exit(fail ? 1 : 0);

@@ -158,6 +158,12 @@ function linkedVerifier(ws, sid) {
 // 불가·id 불일치)은 '실사용자일 수도 있는 판정 불가'라 fail-closed(차단) — 침묵으로 합치면 rollout 생성
 // 경합 시 실제 사용자 질문이 무게이트로 새는 우회가 된다.
 function classifyPromptSource(j, sid) {
+  // [2026-07-28 실측 결함 봉합] 하네스가 스스로 띄운 도구 실행(정찰·준비 점검·의미 보강·해소 질의)은
+  // `--ephemeral`이라 rollout(세션 기록)을 남기지 않는다 — 그래서 아래 판정이 항상 unknown이 되고 P-9의
+  // fail-closed가 그 프롬프트를 차단해, '지도 재생성 안내를 따라 실행하면 반드시 실패'하는 상태였다
+  // (실행 재현: UserPromptSubmit Blocked·빈 산출물). 표식이 있는 프로세스만 exec(확정 비대상)과 동일하게
+  // 침묵 처리한다. 표식은 자동 전환 판정 전용이며 검증 통과 증명에는 어떤 영향도 주지 않는다.
+  if (String(process.env.CODEX_PEEK_TOOL_EXEC || "").trim()) return "exec";
   const file = rolloutForSession(j, sid);
   if (!file) return "unknown";
   const meta = readFirstJsonLine(file);
