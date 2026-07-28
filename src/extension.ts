@@ -4934,7 +4934,8 @@ class Dashboard {
     if(sv){ requestAnimationFrame(function(){ pre.scrollTop=sv; }); }
   }
   // 보류 사유를 사람 말로 옮긴다(2026-07-28 사용자 지적: 화면에 영문 코드가 그대로 떠서 왜 멈췄는지 알 수 없었다).
-  // 코드는 실행기가 정한 닫힌 목록이라 표로 옮기되, 모르는 값이 오면 코드를 그대로 보여준다(사라지지 않게).
+  // 실행기는 여기 없는 사유도 만들 수 있으므로(상황에 따라 조립되는 코드 포함) 이 표는 '자주 나오는 사유'만
+  // 옮긴 것이다. 모르는 값이 오면 코드를 그대로 보여준다(사라지지 않게).
   // 공급자 이름이 뒤에 붙는 형태(adapter-missing:codex)는 콜론 앞만 보고 옮기고 뒤는 괄호로 남긴다.
   var PARK_REASONS={
     "precision-not-ready": ["정밀형 담당이 아직 준비되지 않았어요","the Precision provider is not ready yet"],
@@ -4944,7 +4945,7 @@ class Dashboard {
     "economy-failed": ["경제형 담당 실행이 실패했어요","the Economy run failed"],
     "both-failed": ["두 담당 모두 실행이 실패했어요","both providers failed"],
     "corridor-unknown": ["바뀐 자리가 지도의 어느 구역인지 판단할 수 없었어요","the changed area could not be located on the map"],
-    "provider-conflict": ["담당 지정이 서로 어긋나요","the provider selection is inconsistent"],
+    "provider-conflict": ["담당들이 낸 결과가 서로 충돌해요","the providers returned conflicting results"],
     "invalid-input": ["입력이 온전하지 않아요","the input was not well-formed"],
     "consent-stale": ["동의 이후 설정이 바뀌어 다시 확인이 필요해요","settings changed after consent, so it needs re-confirmation"],
     "adapter-missing": ["그 담당을 실행할 방법이 없어요","there is no way to run that provider"],
@@ -5581,8 +5582,8 @@ class Dashboard {
         else {
           var nowM=(d.scoutModelNow||{})[p[0]];
           models.textContent=nowM
-            ? T("설정한 모델로 고정됩니다: ","Fixed to the configured model: ")+nowM+T(" (호출이 모델을 알려주지 않아 기록엔 안 남아요)"," (the call does not report a model, so records have none)")
-            : T("기본값으로 고정됩니다 (따로 지정 안 함 · 호출이 모델을 알려주지 않아 기록엔 안 남아요)","Fixed to the default (nothing specified · the call does not report a model, so records have none)");
+            ? T("지금 설정한 모델로 고정됩니다: ","Fixed to the model set right now: ")+nowM+T(" (호출이 모델을 알려주지 않아 기록엔 안 남아요 · 지난 호출은 그때 설정을 따랐어요)"," (the call does not report a model, so records have none · past calls followed the setting at that time)")
+            : T("지금은 기본값으로 고정됩니다 (따로 지정 안 함 · 호출이 모델을 알려주지 않아 기록엔 안 남아요 · 지난 호출은 그때 설정을 따랐어요)","Right now it is fixed to the default (nothing specified · the call does not report a model, so records have none · past calls followed the setting at that time)");
         }
         detail.appendChild(models);
         usageBox.appendChild(detail);

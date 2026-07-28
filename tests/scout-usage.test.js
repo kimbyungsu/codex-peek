@@ -61,15 +61,20 @@ ok(/codex: scoutCodexPrefs\.model/.test(ext) && /deepseek: dsView\.model/.test(e
 ok(/const dsView = readDeepseekView\(\)/.test(ext) && /const scoutCodexPrefs = readScoutCodexPrefsExt\(\)/.test(ext) && !/scoutCodex: readScoutCodexPrefsExt\(\)/.test(ext), "같은 설정 파일을 한 번만 읽어 재사용(상태 조립마다 중복 판독 없음)");
 // 2026-07-28 사용자 지적: 이 담당들은 매번 고르는 게 아니라 설정값으로 고정돼 도니, '기록이 없다'로 시작하면
 // 실제 상황을 잘못 전달한다. 고정 사실을 앞에 두고 기록에 안 남는 이유는 괄호로 덧붙인다.
-ok(/설정한 모델로 고정됩니다: /.test(ext) && /Fixed to the configured model: /.test(ext), "지정이 있으면 '설정한 모델로 고정' 문구가 먼저 온다(한/영)");
-ok(/기본값으로 고정됩니다 \(따로 지정 안 함/.test(ext) && /Fixed to the default \(nothing specified/.test(ext), "지정이 없으면 '기본값으로 고정' 문구(빈칸·추측 금지)");
+ok(/지금 설정한 모델로 고정됩니다: /.test(ext) && /Fixed to the model set right now: /.test(ext), "지정이 있으면 '지금 설정한 모델로 고정' 문구가 먼저 온다(한/영 — '지금'으로 시점 명시)");
+ok(/지금은 기본값으로 고정됩니다 \(따로 지정 안 함/.test(ext) && /Right now it is fixed to the default \(nothing specified/.test(ext), "지정이 없으면 '지금은 기본값으로 고정' 문구(빈칸·추측 금지)");
 ok(/호출이 모델을 알려주지 않아 기록엔 안 남아요/.test(ext) && /the call does not report a model, so records have none/.test(ext), "기록이 비는 이유를 함께 밝힘(기록 위장 금지)");
+// 1차 [보완] 수용: 표시값은 '지금 설정'인데 카드는 과거 기록을 집계하므로, 지난 호출이 그때 설정을 따랐음을 함께 밝힌다.
+ok(/지난 호출은 그때 설정을 따랐어요/.test(ext) && /past calls followed the setting at that time/.test(ext), "과거 호출이 현재 설정으로 돌았다고 읽히지 않게 시점 구분을 명시");
 ok(!/이 기록엔 모델 이름이 없어요/.test(ext) && !/모델 이름 기록 없음/.test(ext), "'기록 없음'으로 시작하던 옛 문구 잔재 0");
 
 console.log("[4c] 자동 보강 보류 사유를 사람 말로(2026-07-28 사용자 지적 — 화면에 영문 코드가 그대로 떴다)");
 ok(/var PARK_REASONS=\{/.test(ext) && /function parkReasonText\(raw\)/.test(ext), "보류 사유 표+변환 함수 존재");
 ok(/parkReasonText\(en9\.job\.parkedReason\)/.test(ext) && !/\+\(en9\.job\.parkedReason\|\|""\)/.test(ext), "보강 상태 줄이 원시 코드 대신 변환을 거침(직결 잔재 0)");
 ok(/"precision-not-ready": \["정밀형 담당이 아직 준비되지 않았어요"/.test(ext), "실제로 발생한 사유(정밀형 미준비)가 표에 있음");
+// 1차 [보완] 수용 2건: provider-conflict는 '설정 불일치'가 아니라 '결과 충돌'이고, 사유 목록은 닫혀 있지 않다.
+ok(/"provider-conflict": \["담당들이 낸 결과가 서로 충돌해요"/.test(ext) && !/담당 지정이 서로 어긋나요/.test(ext), "provider-conflict를 결과 충돌로 옮김(설정 불일치 오역 잔재 0)");
+ok(/'자주 나오는 사유'만/.test(ext) && !/닫힌 목록이라 표로 옮기되/.test(ext), "표가 전체 사유를 담는다는 서술 제거(실행기가 동적 사유도 만든다)");
 {
   // 흐름 실행: 모르는 코드는 사라지지 않고 그대로, 공급자가 붙은 형태는 앞부분만 옮기고 뒤는 괄호로 남는다.
   const src2 = fs.readFileSync(path.join(ROOT, "out", "extension.js"), "utf8");
