@@ -171,6 +171,35 @@ console.log("[3-3] 문맥 보정(2026-07-28 실사고) — 인정 명령은 그�
   writeRollout("cccccccc-workdir-other", [userMsg("검증 요청"), ...pairW("Select-String -LiteralPath 'foo.ts' -Pattern 'line' -Encoding utf8", path.join(os.tmpdir(), "no-such-project-dir"), "line1")]);
   ck("무관한 폴더의 같은 이름 상대경로는 오귀속 금지(폴더가 다르면 미인정)", unseen("cccccccc-workdir-other"));
 
+  // 1차 blocker③의 생산 경로 재현: 인용 대상은 A 폴더 파일인데 읽기는 B 폴더에서 일어났다.
+  // 두 폴더에 내용이 같은 동명 파일이 있으면 최종 관문(인용 내용 실재)도 통과하므로, 기준 폴더를
+  // 둘 다 열어 두면 B에서 읽고 A를 인정하는 오귀속이 생긴다.
+  {
+    const wsB = fs.mkdtempSync(path.join(os.tmpdir(), "ev_projB_"));
+    fs.writeFileSync(path.join(wsB, "foo.ts"), "line1\nline2\n", "utf8");
+    writeRollout("cccccccc-cross-proj", [userMsg("검증 요청"), ...pairW("Get-Content -LiteralPath foo.ts", wsB, "line1\nline2")]);
+    const rX = citedFilesUnseen(answer, ws, "cccccccc-cross-proj"); // 인용은 A(ws) 기준 상대경로
+    ck("B 폴더에서 읽은 동명 파일이 A 폴더 파일의 판독으로 둔갑하지 않음(작업 폴더를 밝히면 그 폴더만 기준)", rX.checked === true && rX.unseen.includes("foo.ts"));
+  }
+
+  // 1차 blocker①: 뒤에 나온 대입이 앞 문장에 소급되면, 없는 파일을 읽어 실패한 뒤 이름만 나중에
+  // 붙여도 '읽었다'가 된다. 실행 순서를 지키는지 확인한다.
+  writeRollout("cccccccc-var-late", [userMsg("검증 요청"), ...pairW("$p='does-not-exist'; Get-Content -LiteralPath $p -ErrorAction SilentlyContinue; Write-Output 'line1'; $p='foo.ts'", ws, "line1")]);
+  ck("뒤에 나온 대입은 앞 판독 문장에 소급되지 않음(실행 순서 준수)", unseen("cccccccc-var-late"));
+
+  writeRollout("cccccccc-var-overwrite", [userMsg("검증 요청"), ...pairW("$p='foo.ts'; $p=(Get-Random); Get-Content -LiteralPath $p", ws, "line1")]);
+  ck("리터럴이 아닌 대입으로 덮이면 옛 값이 남지 않음(덮어쓴 뒤 판독은 미인정)", unseen("cccccccc-var-overwrite"));
+
+  // 1차 blocker②: 주석 자리의 -C 는 경로 기준이 되면 안 된다(읽은 것은 저장소의 다른 파일뿐).
+  {
+    const wsC = fs.mkdtempSync(path.join(os.tmpdir(), "ev_projC_"));
+    fs.writeFileSync(path.join(wsC, "foo.ts"), "line1\nline2\n", "utf8");
+    const answerC = `확인했습니다. (${path.join(wsC, "foo.ts").replace(/\\/g, "/")}:1) 을 봤습니다.`; // 인용 대상은 '읽지 않은' 다른 폴더의 파일
+    writeRollout("cccccccc-git-comment", [userMsg("검증 요청"), ...pairW(`git -c safe.directory=${ws} -C ${ws} grep -n line HEAD -- bar.ts # -C ${wsC} foo.ts`, wsOther, "line1")]);
+    const rC = citedFilesUnseen(answerC, wsOther, "cccccccc-git-comment");
+    ck("주석 자리의 -C 는 경로 기준이 되지 않음(옵션 구간에서 소비된 값만 인정)", rC.checked === true && rC.unseen.includes("foo.ts"));
+  }
+
   writeRollout("cccccccc-var-forge", [userMsg("검증 요청"), ...pairW(`$x = node -e "console.log('line1')" foo.ts`, ws, "line1")]);
   ck("대입 오른쪽이 임의 실행기면 여전히 미인정(대입 접두 제거가 창구를 넓히지 않음)", unseen("cccccccc-var-forge"));
 
