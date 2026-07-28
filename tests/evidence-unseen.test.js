@@ -146,6 +146,44 @@ console.log("[3-2] 인식 창구의 경계(2026-07-28 확장 시도 3회 철회)
   ck("목록 밖 명령(nl)=미인정 — 확장 철회 상태 고정", rN.checked === true && rN.unseen.includes("foo.ts"));
 }
 
+console.log("[3-3] 문맥 보정(2026-07-28 실사고) — 인정 명령은 그대로, 못 알아보던 구문·폴더만 해소");
+{
+  // 실사고: 검증자가 정직하게 읽었는데도 매번 '근거 의심' 경보가 떴다. 실제 기록을 세어 보니 판독이
+  // ①git 전역 설정 앞붙임 ②경로를 변수에 담아 읽기 ③브릿지를 띄운 폴더와 다른 폴더에서 상대경로 읽기
+  // 세 형태였고 셋 다 인식에 실패했다. 아래는 그 세 형태의 실물과, 같은 보정으로 위조가 새지 않는다는 반례.
+  const wsOther = fs.mkdtempSync(path.join(os.tmpdir(), "ev_other_"));
+  const abs = path.join(ws, "foo.ts").replace(/\\/g, "/");
+  const answerAbs = `확인했습니다. (${abs}:1) 을 봤습니다.`;
+  const fcw = (cmd, workdir, id = "call-" + (++callSeq)) => ({ type: "response_item", payload: { type: "function_call", name: "shell_command", call_id: id, arguments: JSON.stringify({ command: cmd, workdir }) } });
+  const pairW = (cmd, workdir, output, exitCode = 0) => { const id = "call-" + (++callSeq); return [fcw(cmd, workdir, id), fo(id, output, exitCode)]; };
+  const seen = (id) => { const r = citedFilesUnseen(answerAbs, wsOther, id); return r.checked === true && r.unseen.length === 0; };
+  const unseen = (id) => { const r = citedFilesUnseen(answerAbs, wsOther, id); return r.checked === true && r.unseen.includes("foo.ts"); };
+
+  writeRollout("cccccccc-git-opts", [userMsg("검증 요청"), ...pairW(`git -c safe.directory=${ws} -C ${ws} show HEAD -- foo.ts`, wsOther, "line1")]);
+  ck("git 전역 설정이 앞에 붙어도 판독으로 인정(경로 기준은 -C 로 지정한 저장소)", seen("cccccccc-git-opts"));
+
+  writeRollout("cccccccc-var-read", [userMsg("검증 요청"), ...pairW("$p='foo.ts'; $lines=Get-Content -LiteralPath $p -Encoding utf8; for($i=0;$i -lt 2;$i++){ $lines[$i] }", ws, "line1\nline2")]);
+  ck("경로를 변수에 담아 읽어도 인정(대입 접두 제거+같은 호출의 리터럴 대입 복원)", seen("cccccccc-var-read"));
+
+  writeRollout("cccccccc-workdir", [userMsg("검증 요청"), ...pairW("Select-String -LiteralPath 'foo.ts' -Pattern 'line' -Encoding utf8", ws, "foo.ts:1:line1")]);
+  ck("호출이 밝힌 작업 폴더 기준으로 상대경로 해석(브릿지를 띄운 폴더와 달라도 인정)", seen("cccccccc-workdir"));
+
+  writeRollout("cccccccc-workdir-other", [userMsg("검증 요청"), ...pairW("Select-String -LiteralPath 'foo.ts' -Pattern 'line' -Encoding utf8", path.join(os.tmpdir(), "no-such-project-dir"), "line1")]);
+  ck("무관한 폴더의 같은 이름 상대경로는 오귀속 금지(폴더가 다르면 미인정)", unseen("cccccccc-workdir-other"));
+
+  writeRollout("cccccccc-var-forge", [userMsg("검증 요청"), ...pairW(`$x = node -e "console.log('line1')" foo.ts`, ws, "line1")]);
+  ck("대입 오른쪽이 임의 실행기면 여전히 미인정(대입 접두 제거가 창구를 넓히지 않음)", unseen("cccccccc-var-forge"));
+
+  writeRollout("cccccccc-git-exec", [userMsg("검증 요청"), ...pairW(`git -c diff.external=node -C ${ws} show HEAD -- foo.ts`, wsOther, "line1")]);
+  ck("외부 프로그램을 부르는 git 설정(-c diff.external)은 미인정 — 허용 목록 밖", unseen("cccccccc-git-exec"));
+
+  writeRollout("cccccccc-var-cmd", [userMsg("검증 요청"), ...pairW("$p=(Get-Random); Get-Content -LiteralPath $p", ws, "line1")]);
+  ck("대입값이 리터럴이 아니면 경로로 풀지 않음(명령 결과가 경로로 둔갑 금지)", unseen("cccccccc-var-cmd"));
+
+  writeRollout("cccccccc-stdin-forge", [userMsg("검증 요청"), ...pairW("Write-Output 'line1' | nl # foo.ts", ws, "1\tline1")]);
+  ck("표준 입력을 받아 출력하는 목록 밖 명령은 여전히 미인정(3회 철회 계약 유지)", unseen("cccccccc-stdin-forge"));
+}
+
 console.log("[6] 장기 세션 — 파일 전체가 16MiB를 넘어도 최신 턴 경계와 도구 흔적은 판독");
 const largeId = "77777777-large";
 const largeFile = path.join(SESS, `rollout-${largeId}.jsonl`);

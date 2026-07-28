@@ -432,7 +432,9 @@ function toolCallCanReadFile(p, hay) {
   // 그 증명은 **명령 자체의 의미론**(cat/sed/grep 등은 지정한 파일을 읽지 않고는 그 출력을 낼 수 없다)에서만
   // 나온다. 그래서 임의 코드 실행기(node -e·python -c·perl -e·sh -c·powershell -Command)와 제어문은
   // 계속 제외한다 — 좁은 창구는 위조 방지의 대가이며, 놓친 판독은 unknown(기록만)으로 남는 안전한 실패다.
-  const lead = text.replace(/^&\s*/, "");
+  // 변수 대입 접두(`$lines=Get-Content …`)는 벗겨서 **대입 오른쪽**을 판정한다. 오른쪽이 목록 밖이면
+  // 그대로 탈락하므로(예: `$x = node -e "…"`) 인정 범위는 넓어지지 않는다.
+  const lead = text.replace(/^&\s*/, "").replace(/^\$[A-Za-z_][A-Za-z0-9_]*\s*=\s*/, "");
   if (/^(rg|ripgrep)(?:\.exe)?\s+[^\r\n]*--files(?:\s|$)/i.test(lead)) return false;
   // [확장 시도 3회 전면 철회 — 목록은 종전 그대로] 3차 반증에서 더 근본적인 사실이 드러났다: 목록에 무엇을
   // 넣든 `Write-Output '<인용 줄>' | nl # A.js B.js`처럼 **표준 입력으로 받은 내용을 출력하면서 경로는
@@ -440,8 +442,70 @@ function toolCallCanReadFile(p, hay) {
   // 아니라 **경로가 실제 입력 피연산자인지 결속하지 못하는 판정 방식 자체**에 있다(기존 sed·cat 등에도 동일).
   // 따라서 목록 확장으로는 이 문제를 풀 수 없다고 결론하고 원상 복구했다. 근본 해법은 판독 기록의 구조화
   // (무엇을 읽었는지 도구가 직접 남기는 방식)이며 별도 설계가 필요하다 — 보관함 d6ead5db517cffa4·b8e15bf229983ddb.
+  //
+  // [2026-07-28 문맥 보정 — 위와 '축'이 다른 수정]
+  // 위 되돌림은 **인정 명령을 늘리는** 축이었다. 그와 별개로, 같은 명령을 우리가 못 알아보는 구문 문제가
+  // 실제 기록에서 확인됐다(정직하게 읽었는데 매번 '근거 의심' 경보가 뜨는 원인).
+  //   (a) `git -c safe.directory=… -C <repo> show … -- <파일들>` — 옛 규칙은 git 바로 뒤 -C만 허용했다.
+  //   (b) `$p='경로'; $lines=Get-Content -LiteralPath $p …` — 문장 선두가 변수 대입이라 탈락하고,
+  //       경로가 다른 문장에 있어 경로 대조도 못 했다.
+  // 아래 보정은 **인정 명령을 한 개도 늘리지 않는다**(같은 목록·같은 최종 관문). 그래서 위조 여지도
+  // 늘지 않는다 — 임의 실행기는 여전히 전부 탈락한다(대입 오른쪽이 목록 밖이면 탈락, git -c는 실행을
+  // 유발할 수 있는 설정이면 탈락). 검증 반례는 tests/evidence-unseen.test.js [4] 절.
   return /^(cat|type|more|less|head|tail|sed|grep|rg|ripgrep|select-string|get-content|gc)(?:\.exe)?(?:\s|$)/i.test(lead)
-    || /^git(?:\.exe)?(?:\s+-C\s+(?:"[^"]+"|'[^']+'|\S+))?\s+(diff|show|grep)(?:\s|$)/i.test(lead);
+    || gitReadsFiles(lead);
+}
+// git 전역 옵션(-C 폴더 / -c 설정)이 앞에 붙어도 판독 하위명령을 알아본다.
+// -c는 **실행을 유발하지 않는 설정만** 허용한다(허용 목록 방식): diff.external·core.pager·alias.* 처럼
+// 외부 프로그램을 부르는 설정을 통과시키면 '읽지 않고 출력만 만드는' 경로가 새로 열리기 때문이다.
+// 금지 목록이 아니라 허용 목록인 이유: git 설정은 계속 늘어나므로 '아직 모르는 실행 설정'이 새면 안 된다.
+// 목록에 없는 설정이 쓰이면 인식만 실패한다(과대 승격이 아니라 unknown — 안전한 실패 방향).
+const GIT_INERT_CONFIG_KEYS = ["safe.directory"];
+function gitReadsFiles(lead) {
+  const m = String(lead || "").match(/^git(?:\.exe)?\s+([\s\S]*)$/i);
+  if (!m) return false;
+  let rest = m[1].trim();
+  for (;;) {
+    const c1 = rest.match(/^-C\s+(?:"[^"]*"|'[^']*'|\S+)\s+/);
+    if (c1) { rest = rest.slice(c1[0].length); continue; }
+    const c2 = rest.match(/^-c\s+([A-Za-z0-9_.-]+)=(?:"[^"]*"|'[^']*'|\S+)\s+/);
+    if (c2) {
+      if (!GIT_INERT_CONFIG_KEYS.includes(c2[1].toLowerCase())) return false; // 실행 유발 가능 설정 → 인식 거부
+      rest = rest.slice(c2[0].length);
+      continue;
+    }
+    break;
+  }
+  return /^(diff|show|grep)(?:\s|$)/i.test(rest);
+}
+// 셸 호출이 스스로 밝힌 작업 폴더. 같은 검증 안에서도 도구 호출마다 폴더가 다를 수 있어(브릿지를 띄운
+// 폴더와 검증자가 실제로 파일을 읽은 폴더가 다름), 상대경로 인용을 한 폴더 기준으로만 풀면 못 맞춘다.
+function toolCallWorkdir(p) {
+  for (const raw of [p && p.arguments, p && p.input]) {
+    let o = raw;
+    if (typeof raw === "string") { try { o = JSON.parse(raw); } catch { o = null; } }
+    if (o && typeof o === "object" && !Array.isArray(o)) {
+      for (const k of ["workdir", "cwd", "working_dir", "workingDirectory"]) {
+        const v = o[k];
+        if (typeof v === "string" && v.trim()) return v.replace(/\\/g, "/");
+      }
+    }
+  }
+  return "";
+}
+// 같은 호출 안에서 `$이름 = '리터럴'` 형태의 대입만 모은다. 값이 명령·치환이면 담지 않는다
+// (임의 실행 결과가 경로처럼 둔갑하는 것을 막음 — 따옴표 안 순수 문자열만).
+function shellVarLiterals(statements) {
+  const map = new Map();
+  for (const s of statements) {
+    const m = String(s).trim().match(/^\$([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:"([^"$`]*)"|'([^']*)')$/);
+    if (m) map.set(m[1], m[2] !== undefined ? m[2] : m[3]);
+  }
+  return map;
+}
+function expandShellVars(part, map) {
+  if (!map || !map.size) return part;
+  return String(part).replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (whole, nm) => (map.has(nm) ? map.get(nm) : whole));
 }
 function splitShellStatements(text) {
   const out = [];
@@ -484,25 +548,44 @@ function toolReadParts(p) {
   if (/read|view|open/.test(name)) return values;
   const nested = values.flatMap(nestedShellCommands);
   const sources = nested.length ? nested : values;
-  return sources.flatMap(splitShellStatements).filter((s) => toolCallCanReadFile(p, s));
+  const stmts = sources.flatMap(splitShellStatements);
+  // 같은 호출 안의 리터럴 대입을 풀어 넣는다 — 경로를 변수에 담아 읽는 형태에서 '무엇을 읽었는지'가
+  // 판독 문장에 남게 하려는 것뿐이다(대입 자체는 판독 문장이 아니라 아래 filter에서 이미 탈락한다).
+  const vars = shellVarLiterals(stmts);
+  return stmts.filter((s) => toolCallCanReadFile(p, s)).map((s) => expandShellVars(s, vars));
 }
 function toolCallNamesExactFile(p, fileKey, ws) {
   // 전용 read/view/open 도구는 인수 전체가 한 읽기 동작이다. 셸 호출은 문장별로 잘라, 다른 문장에서 이름만
   // 출력한 파일이 앞 문장의 읽기 명령 덕분에 함께 처리된 것으로 오인되지 않게 한다.
   const readParts = toolReadParts(p);
   if (!readParts.length) return false;
-  const variants = [fileKey];
-  try {
-    const rel = path.relative(ws || process.cwd(), fileKey).replace(/\\/g, "/");
-    if (rel && rel !== ".." && !rel.startsWith("../") && !path.isAbsolute(rel)) variants.push(rel);
-  } catch { /* 절대경로만 대조 */ }
-  for (const v0 of variants) {
+  // 상대경로 인용은 '그 명령이 실제로 돈 폴더' 기준으로 풀어야 맞는다. 기준 후보는 문장마다 다를 수 있어
+  // (호출이 밝힌 작업 폴더 / 종전 기준 폴더 / git -C 로 지정한 저장소) 문장별로 만들어 대조한다.
+  const baseRoots = [toolCallWorkdir(p), ws || process.cwd()].filter(Boolean);
+  const hit = (v0, part) => {
     const v = String(v0).replace(/\\/g, "/");
     const esc = v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const re = new RegExp(`(^|[^a-z0-9_.\\/-])(?:\\./)?${esc}(?=$|[^a-z0-9_.\\/-])`, process.platform === "win32" ? "i" : "");
-    if (readParts.some((part) => re.test(part))) return true;
+    return re.test(part);
+  };
+  for (const part of readParts) {
+    if (hit(fileKey, part)) return true;
+    for (const root of [...baseRoots, ...gitDirRoots(part)]) {
+      let rel = "";
+      try { rel = path.relative(root, fileKey).replace(/\\/g, "/"); } catch { continue; }
+      if (!rel || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel)) continue;
+      if (hit(rel, part)) return true;
+    }
   }
   return false;
+}
+// `git -C <폴더>`로 지정한 저장소 — git이 인쇄하는 경로는 작업 폴더가 아니라 이 폴더 기준이다.
+function gitDirRoots(part) {
+  const out = [];
+  const re = /(?:^|\s)-C\s+("([^"]+)"|'([^']+)'|\S+)/g;
+  let m;
+  while ((m = re.exec(String(part || "")))) out.push((m[2] || m[3] || m[1]).replace(/\\/g, "/"));
+  return out;
 }
 function toolCallId(p) { return String((p && (p.call_id || p.callId || p.id)) || ""); }
 function toolResultEvidence(call, result) {
