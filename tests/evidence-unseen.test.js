@@ -211,6 +211,27 @@ console.log("[3-3] 문맥 보정(2026-07-28 실사고) — 인정 명령은 그�
 
   writeRollout("cccccccc-stdin-forge", [userMsg("검증 요청"), ...pairW("Write-Output 'line1' | nl # foo.ts", ws, "1\tline1")]);
   ck("표준 입력을 받아 출력하는 목록 밖 명령은 여전히 미인정(3회 철회 계약 유지)", unseen("cccccccc-stdin-forge"));
+
+  // 2차 blocker①: 중첩 셸 호출은 서로 다른 프로세스라 변수가 이어지지 않는다.
+  {
+    const id = "custom-cross-" + (++callSeq);
+    const input = `const a = await tools.exec_command({"cmd":"$p='foo.ts'"}); const b = await tools.exec_command({"cmd":"Get-Content -LiteralPath $p; Write-Output 'line1'"}); text(b.output);`;
+    const result = [{ type: "input_text", text: "Script completed\nOutput:\nline1" }, { type: "input_text", text: "Exit code: 0\nOutput:\nline1" }];
+    writeRollout("cccccccc-cross-call", [
+      userMsg("검증 요청"),
+      { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: id, input } },
+      { type: "response_item", payload: { type: "custom_tool_call_output", call_id: id, output: result } },
+    ]);
+    const rCC = citedFilesUnseen(answer, ws, "cccccccc-cross-call");
+    ck("다른 셸 호출에서 정한 변수는 이어지지 않음(호출 경계 넘는 복원 금지)", rCC.checked === true && rCC.unseen.includes("foo.ts"));
+  }
+
+  // 2차 blocker②: 주석에 적힌 경로는 그 명령이 읽은 대상일 수 없다(실제로 읽은 것은 미끼 파일뿐).
+  fs.writeFileSync(path.join(ws, "decoy.txt"), "line1\nline2\n", "utf8");
+  writeRollout("cccccccc-comment-path", [userMsg("검증 요청"), ...pairW("Get-Content -LiteralPath decoy.txt # foo.ts", ws, "line1\nline2")]);
+  ck("판독 명령 주석에 적힌 경로는 인정하지 않음(주석은 명령의 일부가 아님)", unseen("cccccccc-comment-path"));
+  writeRollout("cccccccc-hash-quoted", [userMsg("검증 요청"), ...pairW("Select-String -LiteralPath 'foo.ts' -Pattern '#해시는주석아님' -Encoding utf8", ws, "line1")]);
+  ck("따옴표 안의 #은 주석이 아니라 인정 유지(과잉 절단 회귀 방지)", seen("cccccccc-hash-quoted"));
 }
 
 console.log("[6] 장기 세션 — 파일 전체가 16MiB를 넘어도 최신 턴 경계와 도구 흔적은 판독");

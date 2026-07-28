@@ -507,6 +507,19 @@ function shellAssignTarget(stmt) {
   const m = String(stmt).trim().match(/^\$([A-Za-z_][A-Za-z0-9_]*)\s*=/);
   return m ? m[1] : "";
 }
+// 주석은 명령의 일부가 아니다 — 주석에 적힌 경로는 그 명령이 읽은 대상일 수 없다(2차 blocker② 대응).
+// 따옴표 안의 #은 주석이 아니므로 인용 상태를 지키며 자른다.
+function stripShellComment(stmt) {
+  const s = String(stmt || "");
+  let quote = "";
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (quote) { if (ch === quote && s[i - 1] !== "\\" && s[i - 1] !== "`") quote = ""; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (ch === "#" && (i === 0 || /\s/.test(s[i - 1]))) return s.slice(0, i);
+  }
+  return s;
+}
 function expandShellVars(part, map) {
   if (!map || !map.size) return part;
   return String(part).replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (whole, nm) => (map.has(nm) ? map.get(nm) : whole));
@@ -552,18 +565,20 @@ function toolReadParts(p) {
   if (/read|view|open/.test(name)) return values;
   const nested = values.flatMap(nestedShellCommands);
   const sources = nested.length ? nested : values;
-  const stmts = sources.flatMap(splitShellStatements);
-  // 리터럴 대입을 풀어 넣되 **실행 순서를 지킨다**(1차 blocker① — 뒤에 나온 대입이 앞 문장에 소급되면,
-  // 없는 파일을 읽고 실패한 뒤 이름만 나중에 대입해도 '그 파일을 읽었다'가 되어버린다).
+  // 리터럴 대입을 풀어 넣되 **실행 순서를 지키고**(1차 blocker① — 뒤에 나온 대입이 앞 문장에 소급되면,
+  // 없는 파일을 읽고 실패한 뒤 이름만 나중에 대입해도 '그 파일을 읽었다'가 된다), **호출 경계를 넘지
+  // 않는다**(2차 blocker① — 셸 호출이 다르면 서로 다른 프로세스라 변수가 이어지지 않는다).
   // 리터럴이 아닌 대입은 그 변수의 값을 알 수 없게 되므로 복원 대상에서 지운다(옛 값이 남지 않게).
-  const vars = new Map();
   const out = [];
-  for (const s of stmts) {
-    if (toolCallCanReadFile(p, s)) out.push(expandShellVars(s, vars));
-    const lit = shellLiteralAssign(s);
-    if (lit) { vars.set(lit.name, lit.value); continue; }
-    const tgt = shellAssignTarget(s);
-    if (tgt) vars.delete(tgt);
+  for (const source of sources) {
+    const vars = new Map();
+    for (const s of splitShellStatements(source)) {
+      if (toolCallCanReadFile(p, s)) out.push(expandShellVars(stripShellComment(s), vars));
+      const lit = shellLiteralAssign(s);
+      if (lit) { vars.set(lit.name, lit.value); continue; }
+      const tgt = shellAssignTarget(s);
+      if (tgt) vars.delete(tgt);
+    }
   }
   return out;
 }
