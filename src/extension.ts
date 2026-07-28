@@ -4970,7 +4970,9 @@ class Dashboard {
     var m=/^(self|economy|precision|auto)-not-ready$/.exec(head);
     if(m){
       var rd=(readiness||{})[m[1]];
-      if(rd&&rd.ok===true) base+=T(" (지금은 준비돼 있어요 — 다시 시도하면 실행돼요)"," (it is ready now — a retry will run it)");
+      // 준비됐다는 것과 실제로 호출까지 간다는 것은 다르다(1차 [보완]: 재시도 뒤에도 대기표·잠금·지도
+      // 상태 같은 관문이 남는다). 그래서 '다시 시도할 수 있다'까지만 말한다.
+      if(rd&&rd.ok===true) base+=T(" (지금은 준비돼 있어요 — 다시 시도해 볼 수 있어요)"," (it is ready now — you can retry)");
     }
     return base;
   }
@@ -5615,11 +5617,19 @@ class Dashboard {
         ? T("이 판정은 자동 보강이 도는 중에만 생겨요. ","This adjudication only happens while auto-enrichment runs. ")
         : "";
       if(!en) return lead+T("자동 보강 상태를 읽지 못했어요.","Auto-enrichment state could not be read.");
-      if(jp==="parked") return lead+T("자동 보강이 시작 전에 멈춰 있어요: ","Auto-enrichment is parked before it started: ")+parkReasonText(en.job.parkedReason, d.mapReadiness)
-        +T(" · 같은 일을 자동으로 반복하지 않으므로, 정찰 구역의 '다시 시도'를 눌러야 실행돼요."," · it never retries on its own — press Retry in the recon area to run it.");
+      if(jp==="damaged"||en.consentSt==="damaged") return lead+T("자동 보강 기록이 손상돼 자동 실행이 멈춰 있어요(수동 복구가 필요해요).","The auto-enrichment records are damaged and automation is halted (manual recovery needed).");
+      // '시작 전'은 담당을 한 번도 부르지 않았을 때만 쓴다(1차 [보완]: 담당 호출 뒤 보류된 경우도 있다).
+      if(jp==="parked"){
+        var started=!!(en.job&&en.job.provider);
+        var head=started
+          ? T("자동 보강이 담당을 부른 뒤 멈췄어요: ","Auto-enrichment stopped after calling a provider: ")
+          : T("자동 보강이 담당을 부르기 전에 멈췄어요: ","Auto-enrichment stopped before calling any provider: ");
+        return lead+head+parkReasonText(en.job.parkedReason, d.mapReadiness)
+          +T(" · 같은 일을 자동으로 반복하지 않으므로, 정찰 구역의 '다시 시도'를 눌러야 다시 진행돼요."," · it never retries on its own — press Retry in the recon area to resume it.");
+      }
       if(jp==="done") return lead+T("자동 보강이 이미 끝난 뒤로 새로 실행할 일이 없었어요.","Auto-enrichment already finished and nothing new needed running.");
-      if(jp==="open") return lead+T("자동 보강이 지금 진행 중이라 아직 기록이 없어요.","Auto-enrichment is running now, so there are no records yet.");
-      return lead+T("아직 자동 보강이 한 번도 시작되지 않았어요.","Auto-enrichment has never started yet.");
+      if(jp==="open") return lead+T("자동 보강이 진행 중으로 표시돼 있는데 아직 이 목적의 기록은 없어요.","Auto-enrichment is marked as in progress, but this purpose has no records yet.");
+      return lead+T("이 목적으로 담당을 부른 기록이 아직 없어요.","No provider call has been recorded for this purpose yet.");
     };
     if(reads&&reads.usage==="unreadable") addLine(usageBox,T("사용량","Usage"),T("외부 호출 원장을 읽을 수 없습니다.","The external-call log could not be read."));
     else if(usageReadable){

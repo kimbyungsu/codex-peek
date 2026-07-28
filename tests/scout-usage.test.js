@@ -94,7 +94,9 @@ console.log("[4d] 0회인 이유·멈춤 사유의 현재 상태(2026-07-29 사�
 ok(/var why=zeroReason\(prefix\)/.test(ext) && /T\("0회인 이유","Why zero"\)/.test(ext), "0회 줄 옆에 이유 줄을 함께 표시");
 ok(/if\(prefix!=="map-enrich"&&prefix!=="map-adjudicate"\) return "";/.test(ext), "이유 표시는 의미 보강·검증 담당 판정 두 칸에만(다른 칸 오염 금지)");
 ok(/이 판정은 자동 보강이 도는 중에만 생겨요/.test(ext) && /This adjudication only happens while auto-enrichment runs/.test(ext), "검증 담당 판정이 보강에 딸린 것임을 밝힘(한/영)");
-ok(/자동 보강이 시작 전에 멈춰 있어요/.test(ext) && /정찰 구역의 '다시 시도'를 눌러야 실행돼요/.test(ext), "멈춤 상태와 다음 행동(다시 시도)을 함께 안내");
+ok(/자동 보강이 담당을 부르기 전에 멈췄어요/.test(ext) && /자동 보강이 담당을 부른 뒤 멈췄어요/.test(ext), "담당 호출 전후를 구분해 표시(1차 [보완] — 사후 보류를 미시작으로 단정 금지)");
+ok(/정찰 구역의 '다시 시도'를 눌러야 다시 진행돼요/.test(ext), "멈춤 상태와 다음 행동(다시 시도)을 함께 안내");
+ok(/자동 보강 기록이 손상돼 자동 실행이 멈춰 있어요/.test(ext), "손상 상태를 미시작과 구분해 표시");
 {
   // 멈춘 사유는 '그때'의 사실이다. 그 사이 준비가 끝났으면 지금 상태를 함께 말해야 한다
   // (실사고: 7/24에 정밀형 미준비로 멈춘 문구가 준비가 끝난 뒤에도 그대로 떠 있었다).
@@ -104,7 +106,7 @@ ok(/자동 보강이 시작 전에 멈춰 있어요/.test(ext) && /정찰 구역
   for (; i3 < src3.length; i3++) { if (src3[i3] === "{") d3++; else if (src3[i3] === "}") { d3--; if (d3 === 0) { fn3 = src3.slice(st3, i3 + 1); break; } } }
   const tbl3 = src3.slice(src3.indexOf("var PARK_REASONS="), src3.indexOf("};", src3.indexOf("var PARK_REASONS=")) + 2);
   const g = new Function("T", tbl3 + "\n" + fn3 + "\nreturn parkReasonText;")((ko) => ko);
-  ok(g("precision-not-ready", { precision: { ok: true } }).includes("지금은 준비돼 있어요"), "그 사이 준비가 끝났으면 '지금은 준비됨'을 덧붙임");
+  ok(g("precision-not-ready", { precision: { ok: true } }).includes("지금은 준비돼 있어요 — 다시 시도해 볼 수 있어요"), "그 사이 준비가 끝났으면 '지금은 준비됨·다시 시도해 볼 수 있음'까지만 덧붙임(1차 [보완] — 실행 보장 문구 금지)");
   ok(!g("precision-not-ready", { precision: { ok: false } }).includes("지금은 준비돼 있어요"), "아직 준비 안 됐으면 덧붙이지 않음");
   ok(!g("precision-not-ready", {}).includes("지금은 준비돼 있어요"), "준비 상태를 모르면 덧붙이지 않음(추측 금지)");
   ok(g("precision-not-ready", { precision: { ok: true } }).startsWith("정밀형 담당이 아직 준비되지 않았어요"), "그때의 사유 자체는 지우지 않음(기록 왜곡 금지)");
