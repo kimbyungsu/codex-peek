@@ -788,8 +788,10 @@ function citedFilesUnseenExact(answer, ws, sessionId) {
     const t = p.type;
     if (t === "function_call" || t === "custom_tool_call") {
       hadTool = true;
+      // 두 축을 **독립적으로** 본다: 약한 증거가 먼저 와서 경보 집합이 비어도, 승격 집합에 남은 파일은
+      // 뒤에 오는 직접 도구 판독으로 여전히 확인될 수 있다(5차 blocker — 순서에 따라 강한 증거를 잃던 회귀).
       const files = [];
-      for (const fp of remainingWeak) { const st = toolCallNamesExactFile(p, fp, ws); if (st) files.push({ fp, st }); }
+      for (const fp of new Set([...remaining, ...remainingWeak])) { const st = toolCallNamesExactFile(p, fp, ws); if (st) files.push({ fp, st }); }
       if (!files.length) continue;
       const id = toolCallId(p);
       if (!id) continue; // 강한 승격 증명은 호출-결과 동일 id가 필수 — 구형/불완전 사건의 순서 추측 금지
@@ -811,7 +813,7 @@ function citedFilesUnseenExact(answer, ws, sessionId) {
         remainingWeak.delete(f.fp);
         if (f.st === "strong") remaining.delete(f.fp);
       }
-      if (!remainingWeak.size) break;
+      if (!remaining.size && !remainingWeak.size) break; // 둘 다 비어야 끝 — 한쪽만 비었다고 멈추면 다른 축을 잃는다
     }
   }
   if (!hadTool) return unknown; // 이번 턴 도구활동 없음 → 이전 턴 맥락 등으로 답했을 수 있음 → 판단 보류

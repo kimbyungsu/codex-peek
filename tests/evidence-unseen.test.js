@@ -393,6 +393,22 @@ console.log("[3-4] 증거 세기 — 스크립트 글자는 경보를 끄되 신
   writeRollout("eeeeeeee-strong", [userMsg("검증 요청"), ...pair("cat foo.ts", "line1\nline2")]);
   const st = citedFilesUnseenExact(answer, ws, "eeeeeeee-strong");
   ck("도구 인수로 기록된 판독은 승격 축에서도 인정(무회귀)", st.checked === true && !st.unseen.some((p) => p.endsWith("foo.ts")) && !st.unseenWeak.some((p) => p.endsWith("foo.ts")));
+
+  // 5차 blocker: 같은 세션에서 약한 판독이 **먼저** 오고 강한 판독이 뒤에 와도 강한 축이 확인돼야 한다
+  // (경보 집합이 먼저 비었다고 멈추면 뒤의 직접 도구 판독을 잃는다).
+  {
+    const id2 = "custom-weak-first-" + (++callSeq);
+    const input2 = "const calls = [{ command: \"Get-Content -LiteralPath foo.ts\" }];\nconst r=await Promise.all(calls.map(c=>tools.shell_command(c)));text(r);";
+    const res2 = [{ type: "input_text", text: "Script completed\nOutput:\nline1\nline2" }, { type: "input_text", text: "Exit code: 0\nOutput:\nline1\nline2" }];
+    writeRollout("eeeeeeee-order", [
+      userMsg("검증 요청"),
+      { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: id2, input: input2 } },
+      { type: "response_item", payload: { type: "custom_tool_call_output", call_id: id2, output: res2 } },
+      ...pair("cat foo.ts", "line1\nline2"),
+    ]);
+    const od = citedFilesUnseenExact(answer, ws, "eeeeeeee-order");
+    ck("약한 판독이 먼저여도 뒤의 직접 도구 판독이 승격 축에서 인정됨(순서 의존 회귀 차단)", od.checked === true && !od.unseen.some((p) => p.endsWith("foo.ts")) && !od.unseenWeak.some((p) => p.endsWith("foo.ts")));
+  }
 }
 
 console.log("[6] 장기 세션 — 파일 전체가 16MiB를 넘어도 최신 턴 경계와 도구 흔적은 판독");
