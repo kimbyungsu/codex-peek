@@ -94,7 +94,8 @@ console.log("[4d] 0회인 이유·멈춤 사유의 현재 상태(2026-07-29 사�
 ok(/var why=zeroReason\(prefix\)/.test(ext) && /T\("0회인 이유","Why zero"\)/.test(ext), "0회 줄 옆에 이유 줄을 함께 표시");
 ok(/if\(prefix!=="map-enrich"&&prefix!=="map-adjudicate"\) return "";/.test(ext), "이유 표시는 의미 보강·검증 담당 판정 두 칸에만(다른 칸 오염 금지)");
 ok(/이 판정은 자동 보강이 도는 중에만 생겨요/.test(ext) && /This adjudication only happens while auto-enrichment runs/.test(ext), "검증 담당 판정이 보강에 딸린 것임을 밝힘(한/영)");
-ok(/자동 보강이 담당을 부르기 전에 멈췄어요/.test(ext) && /자동 보강이 담당을 부른 뒤 멈췄어요/.test(ext), "담당 호출 전후를 구분해 표시(1차 [보완] — 사후 보류를 미시작으로 단정 금지)");
+// 2026-07-29 설계 상의 반영: 실패 기록이 있으면 그 실패를 그대로 말하고, 없을 때만 '시도 기록 전/후'로 가른다.
+ok(/자동 보강이 담당을 부르기 전에 멈췄어요/.test(ext) && /자동 보강이 담당 시도가 기록된 뒤 멈췄어요/.test(ext), "담당 시도 기록 전후를 구분해 표시(provider만으로 '호출 완료'를 단정하지 않음)");
 ok(/정찰 구역의 '다시 시도'를 눌러야 다시 진행돼요/.test(ext), "멈춤 상태와 다음 행동(다시 시도)을 함께 안내");
 ok(/자동 보강 기록이 손상돼 자동 실행이 멈춰 있어요/.test(ext), "손상 상태를 미시작과 구분해 표시");
 {
@@ -112,6 +113,28 @@ ok(/자동 보강 기록이 손상돼 자동 실행이 멈춰 있어요/.test(ex
   ok(g("precision-not-ready", { precision: { ok: true } }).startsWith("정밀형 담당이 아직 준비되지 않았어요"), "그때의 사유 자체는 지우지 않음(기록 왜곡 금지)");
 }
 ok(/if\(c\.models&&c\.models\.length\) models\.textContent=T\("기록된 모델: "/.test(ext), "기록이 있으면 종전대로 기록된 모델 우선(무회귀)");
+
+console.log("[4e] 실패를 '호출 실패'와 '답 거부'로 갈라 표시(2026-07-29 설계 상의 결론 — 사용자 실사고)");
+ok(/lastFailure: last9 && last9\.failureCode/.test(ext) && !/failReason/.test(ext.slice(ext.indexOf("job: job9 ?"), ext.indexOf("awaitingVerification"))), "화면 상태에는 구조 필드만 싣고 자유 문자열 사유는 안 보냄");
+ok(/"evidence-mismatch": \["답은 돌아왔지만 근거로 든 인용이 실제 파일과 맞지 않아 버렸어요"/.test(ext), "인용 불일치 문구(이번 실사고의 실제 사유)");
+ok(/"evidence-unreadable": \["답은 돌아왔지만 근거 파일을 읽어 확인하지 못했어요"/.test(ext) && /"parse-invalid":/.test(ext) && /"schema-invalid":/.test(ext), "결과 거부를 형식·구조·근거로 갈라 표시(한 덩어리로 뭉치지 않음)");
+ok(/"process-failed": \["담당 호출을 끝내지 못했어요"/.test(ext) && !/담당을 부르지 못했어요/.test(ext), "호출 실패는 '끝내지 못했어요'(프로세스가 뜬 뒤 실패했을 수 있음)");
+ok(/사용량 소모/.test(ext) && /uses quota/.test(ext), "재시도 안내에 추가 사용량 발생을 명시([주의] 수용 — 비용 오판 방지)");
+ok(/담당 실행 파일·설정·연결을 먼저 확인해 주세요/.test(ext), "호출 실패와 답 거부의 다음 행동을 갈라 안내");
+ok(/이 숫자는 담당을 부른 횟수예요 — 그 답이 채택됐다는 뜻은 아니에요/.test(ext) && /it does not mean the answers were accepted/.test(ext), "의미 보강 숫자의 뜻을 못박음(호출 수 ≠ 채택 수)");
+{
+  // 흐름 실행: 코드별 문구·안내가 실제로 갈리는지, 모르는 코드는 사라지지 않는지.
+  const src4 = fs.readFileSync(path.join(ROOT, "out", "extension.js"), "utf8");
+  const pick = (name) => { const s0 = src4.indexOf("function " + name + "("); let i = src4.indexOf("{", s0), d = 0; for (; i < src4.length; i++) { if (src4[i] === "{") d++; else if (src4[i] === "}") { d--; if (d === 0) return src4.slice(s0, i + 1); } } return ""; };
+  const tbl4 = src4.slice(src4.indexOf("var FAIL_TEXT="), src4.indexOf("};", src4.indexOf("var FAIL_TEXT=")) + 2);
+  const M = new Function("T", tbl4 + "\n" + pick("failureText") + "\n" + pick("failureAdvice") + "\nreturn {failureText, failureAdvice};")((ko) => ko);
+  ok(M.failureText({ code: "evidence-mismatch", file: "scripts/make-icon.js", stage: "validation" }).includes("scripts/make-icon.js"), "근거 불일치는 어느 파일인지 함께 보여줌");
+  ok(M.failureText({ code: "process-failed", stage: "call" }) !== M.failureText({ code: "evidence-mismatch", stage: "validation" }), "호출 실패와 답 거부의 문구가 서로 다름");
+  ok(M.failureAdvice({ code: "process-failed", stage: "call" }).includes("설정") && !M.failureAdvice({ code: "process-failed", stage: "call" }).includes("사용량 소모"), "호출 실패 안내는 설정·연결 쪽(재시도 비용 문구 아님)");
+  ok(M.failureAdvice({ code: "evidence-mismatch", stage: "validation" }).includes("사용량 소모"), "답 거부 안내에는 재시도 비용 명시");
+  ok(M.failureText({ code: "brand-new-code", stage: "validation" }).includes("brand-new-code"), "모르는 코드는 사라지지 않고 그대로 보임");
+  ok(M.failureText(null) === "" && M.failureAdvice(null) === "", "실패 기록이 없으면 아무 말도 만들지 않음");
+}
 
 console.log("[5] 상태바(소스 잠금) — 감사 B 반영: flow 병기·툴팁 분기·게이트·평시 분기·워처");
 ok(/const scoutOn = !!ws && \(\(\) => \{ try \{ return loadContract\(ws\)\.scoutMode === "on"; \}/.test(ext), "scoutMode 게이트 일원화 — 2트랙 잔존 live 파일이 정찰 문구 노출 못 함");

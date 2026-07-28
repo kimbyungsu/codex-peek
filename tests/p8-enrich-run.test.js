@@ -259,6 +259,27 @@ console.log("[7] 근거 실증·수렴 외부 변경(3b 1차 blocker④⑤)");
   ok(/evidence/.test(j.attempts[0].failReason || ""), "실패 사유에 근거 실패 분류 기록");
   const invalidRows = fs.readFileSync(ME.ROUTE_LOG, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse).filter((x) => x.schema === "map-automation-v1" && x.mapId === topo.mapId && (x.event === "enrich-job-terminal" || x.event === "enrich-run-terminal"));
   ok(invalidRows.length === 2 && invalidRows.every((x) => x.reasonCode === "provider-result-invalid"), "호출 성공 뒤 schema/evidence 검증 실패는 provider-call-failed와 분리 기록");
+  // 2026-07-29 설계 상의: 자유 문자열만으로는 화면이 '호출 실패'와 '답 거부'를 못 가른다 → 구조 필드도 남긴다.
+  ok(j.attempts[0].failureStage === "validation" && j.attempts[0].failureCode === "evidence-mismatch" && j.attempts[0].failureFile === "src/a.js", "실패를 단계·코드·파일 구조로도 기록(인용 불일치)");
+}
+
+console.log("[7b] 재개 경로의 결과 거부 — 감사 기록이 '못 불렀다'로 뒤집히지 않음(2026-07-29 실사고)");
+{
+  // 실사고: 보류된 작업을 '다시 시도'로 재개하면 곧바로 시도 실행으로 들어가는데, 그 경로에서
+  // 결과 거부가 provider-call-failed로 기록됐다(호출은 실제로 나갔는데 '못 불렀다'는 감사 기록).
+  const { ws, topo, nodeId } = setup("resume-evidence");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  const fake = (ctx) => ({ ok: true, result: { schema: "enrich-result-v1", items: [
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "n" } }, evidence: [{ file: "src/a.js", quote: "// 없는 인용" }] },
+  ] } });
+  ME.runEnrich(ws, base(ws, { adapters: { self: fake } }));           // 1회차: 실패 → parked
+  const before = fs.readFileSync(ME.ROUTE_LOG, "utf8").trim().split("\n").length;
+  ME.updateEnrichJob(ws, (jj) => (jj && jj.phase === "parked" ? { ...jj, phase: "open", finishedAt: undefined, parkedReason: undefined } : null)); // '다시 시도'와 같은 해제
+  const r2 = ME.runEnrich(ws, base(ws, { adapters: { self: fake }, trigger: "retry" }));
+  const rows2 = fs.readFileSync(ME.ROUTE_LOG, "utf8").trim().split("\n").filter(Boolean).slice(before - 1).map(JSON.parse)
+    .filter((x) => x.schema === "map-automation-v1" && (x.event === "enrich-job-terminal" || x.event === "enrich-run-terminal"));
+  ok(r2.outcome === "provider-failed", "재개는 라우터를 거치지 않고 곧바로 시도로 들어가 결과 거부를 그대로 돌려준다(이 경로가 실사고 지점)");
+  ok(rows2.length >= 1 && rows2.every((x) => x.reasonCode === "provider-result-invalid"), "재개 경로의 결과 거부도 provider-result-invalid로 기록(‘못 불렀다’ 오기록 차단)");
 }
 {
   const { ws, topo } = setup("parse-invalid");

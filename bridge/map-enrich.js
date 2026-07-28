@@ -102,7 +102,12 @@ const ATTEMPT_PHASES = ["running", "applying", "done", "failed", "parked"];
 // 3a 검증 1차 blocker①: strict=미지 필드 거부+내용 검증(results·currentPatch·resolutions·UUID 배열)까지 —
 // 3b가 이 장부를 재개 정본으로 신뢰하므로 이형이 통과하면 item 건너뜀·오재개·잘못된 patch 재투입.
 const JOB_KEYS = ["schema", "jobKey", "mapId", "authorityHash", "decisionContextHash", "mode", "configWs", "slot", "phase", "startedAt", "finishedAt", "parkedReason", "sourceFp", "attempts"];
-const ATTEMPT_KEYS = ["attemptId", "provider", "consentGen", "phase", "startedAt", "sourceFp", "results", "cursor", "resolutions", "failReason", "parkedReason", "finishedAt"];
+// failureStage/failureCode/failureFile: 실패를 사람이 읽을 수 있게 '구조'로도 남긴다(2026-07-29 설계 상의 결론).
+// failReason 자유 문자열만 남기면 화면이 내부 표현을 그대로 노출하거나, 호출 실패와 결과 거부를 구분하지 못한다.
+const ATTEMPT_KEYS = ["attemptId", "provider", "consentGen", "phase", "startedAt", "sourceFp", "results", "cursor", "resolutions", "failReason", "failureStage", "failureCode", "failureFile", "parkedReason", "finishedAt"];
+// 단계와 코드는 닫힌 열거다(화면이 이 값만 보고 문구를 고른다 — 모르는 값은 화면이 '알 수 없음'으로 표시).
+const FAILURE_STAGES = ["call", "response", "validation", "conversion"];
+const FAILURE_CODES = ["process-failed", "empty-output", "parse-invalid", "schema-invalid", "evidence-mismatch", "evidence-unreadable", "convert-invalid"];
 const CURSOR_KEYS = ["nextIndex", "rev", "currentPatch", "super", "appliedPatchIds", "evExtra", "oosUsed"];
 const SUPER_KEYS = ["fromPatchId", "fromOpHash", "toRev", "phase"];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -163,6 +168,10 @@ function validateJob(d) {
     if (typeof a.startedAt !== "string") return "attempt startedAt";
     if (a.sourceFp !== undefined && !FP_RE.test(String(a.sourceFp))) return "attempt sourceFp"; // 호출 시점 소비 지문(5차 — 재개 done이 사후 지문을 도장으로 쓰는 오염 차단)
     if (a.failReason !== undefined && typeof a.failReason !== "string") return "attempt failReason";
+    if (a.failureStage !== undefined && !FAILURE_STAGES.includes(a.failureStage)) return "attempt failureStage";
+    if (a.failureCode !== undefined && !FAILURE_CODES.includes(a.failureCode)) return "attempt failureCode";
+    // 저장소 상대경로만 — 절대경로·상위 탈출은 화면으로 내보낼 값이 아니다.
+    if (a.failureFile !== undefined && (typeof a.failureFile !== "string" || !a.failureFile || a.failureFile.length > 260 || /^([a-zA-Z]:|[\\/])/.test(a.failureFile) || a.failureFile.split(/[\\/]/).includes(".."))) return "attempt failureFile";
     if (a.parkedReason !== undefined && typeof a.parkedReason !== "string") return "attempt parkedReason";
     if (a.finishedAt !== undefined && typeof a.finishedAt !== "string") return "attempt finishedAt";
     if (a.results !== undefined) { // typed 결과 전문 — EnrichItem 형태 strict 전면(3차 f-b74df6a1: op만 보면 malformed가 수신 완료로 위장)
@@ -531,6 +540,9 @@ function p10Reason(result) {
   if (r === "already-enriched") return "already-enriched";
   if (/^(job|attempt|results|cursor|done)-write/.test(r)) return "state-write-failed";
   if (r === "adapter-missing" || r.startsWith("adapter-missing:")) return "adapter-missing";
+  // 실행기가 실패 종류를 이미 판정했으면 그 값을 쓴다(2026-07-29: 재개 경로에서 결과 거부가
+  // 'provider-call-failed'로 기록돼, 호출은 됐는데 '못 불렀다'는 감사 기록이 남았다).
+  if (result && typeof result._p10Reason === "string" && result._p10Reason) return result._p10Reason;
   if (result && result.outcome === "provider-failed") return "provider-call-failed";
   if (r === "run-lock-lost") return "lock-lost";
   if (r === "retry-exhausted" || r === "rev-exhausted") return "retry-exhausted";
@@ -1070,7 +1082,11 @@ function runAttempt(repo, o, env, st, provider) {
   catch (e) { call = { ok: false, detail: "adapter-threw: " + String(e && e.message) }; }
   if (!call || call.ok !== true) {
     const failureReason = call && call.failureKind === "result-invalid" ? "provider-result-invalid" : "provider-call-failed";
-    updateEnrichJob(repo, (j) => j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "failed", failReason: String((call && call.detail) || "adapter-failed").slice(0, 200), finishedAt: nowIso() } : a) });
+    // 어댑터가 '답은 왔는데 형태가 아니다'로 알려주면 응답 단계, 그 밖은 호출 단계로 남긴다.
+    const fx0 = call && call.failureKind === "result-invalid"
+      ? { failureStage: "response", failureCode: "parse-invalid" }
+      : { failureStage: "call", failureCode: "process-failed" };
+    updateEnrichJob(repo, (j) => j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "failed", failReason: String((call && call.detail) || "adapter-failed").slice(0, 200), ...fx0, finishedAt: nowIso() } : a) });
     log({ route: provider, reason: failureReason, outcome: "error", provider, jobKey: st.jobKey, consentGen: g2.gen });
     return { outcome: "provider-failed", provider, _p10Reason: failureReason };
   }
@@ -1083,13 +1099,18 @@ function runAttempt(repo, o, env, st, provider) {
       for (const cv of cites) {
         let body = null;
         try { body = fs.readFileSync(path.join(repo, cv.file), "utf8"); } catch { body = null; }
-        if (body === null || !body.includes(cv.quote)) { vr = { ok: false, kind: "evidence", errors: ["근거 실패: " + cv.file + " 인용 불일치/판독 불가"] }; break; }
+        // 파일을 못 읽은 것과 인용이 안 맞는 것은 사용자가 할 일이 다르다 — 두 코드로 나눈다(설계 상의 결론).
+        if (body === null) { vr = { ok: false, kind: "evidence", code: "evidence-unreadable", file: cv.file, errors: ["근거 실패: " + cv.file + " 판독 불가"] }; break; }
+        if (!body.includes(cv.quote)) { vr = { ok: false, kind: "evidence", code: "evidence-mismatch", file: cv.file, errors: ["근거 실패: " + cv.file + " 인용 불일치"] }; break; }
       }
       if (!vr.ok) break;
     }
   }
   if (!vr.ok) {
-    updateEnrichJob(repo, (j) => j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "failed", failReason: (vr.kind + ": " + (vr.errors[0] || "")).slice(0, 200), finishedAt: nowIso() } : a) });
+    const fx1 = vr.kind === "evidence"
+      ? { failureStage: "validation", failureCode: vr.code || "evidence-mismatch", ...(vr.file ? { failureFile: String(vr.file).replace(/\\/g, "/").slice(0, 260) } : {}) }
+      : { failureStage: "validation", failureCode: "schema-invalid" };
+    updateEnrichJob(repo, (j) => j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "failed", failReason: (vr.kind + ": " + (vr.errors[0] || "")).slice(0, 200), ...fx1, finishedAt: nowIso() } : a) });
     log({ route: provider, reason: "result-" + vr.kind, outcome: "error", provider, jobKey: st.jobKey, consentGen: g2.gen });
     return { outcome: "provider-failed", provider, _p10Reason: "provider-result-invalid" };
   }
@@ -1223,7 +1244,8 @@ function convertItem(repo, env, j, a, item, index, rev) {
   const cites = [...(item.evidence || []), ...((item.claims || []).map((c) => ({ file: c.file, quote: c.quote })))];
   for (const cv of cites) {
     const rec = readOnce(cv.file);
-    if (!rec || !rec.body.includes(cv.quote)) return { ok: false, kind: "evidence", errors: ["근거 실패(변환 시점 재실증): " + cv.file] };
+    if (!rec) return { ok: false, kind: "evidence", code: "evidence-unreadable", file: cv.file, errors: ["근거 실패(변환 시점 재실증): " + cv.file + " 판독 불가"] };
+    if (!rec.body.includes(cv.quote)) return { ok: false, kind: "evidence", code: "evidence-mismatch", file: cv.file, errors: ["근거 실패(변환 시점 재실증): " + cv.file + " 인용 불일치"] };
   }
   const fileHashOf = (ref) => { const rec = readOnce(ref); return rec ? rec.sha : null; }; // 같은 판독의 sha가 P2 결속에 실림
   let evExtra = a.cursor && Array.isArray(a.cursor.evExtra) ? [...a.cursor.evExtra] : [];

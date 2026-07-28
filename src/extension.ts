@@ -2251,7 +2251,13 @@ function computeState(turnsN: number): BridgeState {
         maybeSpawnEnrichExt(ws, "tick"); // 발동 ⓒ(내부 게이트·동의·스로틀·단일-flight)
         return {
           consentSt: c9.st, selfAuto: !!(g9 && g9.selfAuto), paidMode: g9 ? g9.paidMode : null,
-          job: job9 ? { phase: job9.phase, parkedReason: job9.parkedReason || null, provider: last9 ? last9.provider : null, applied: applied9, rejected: rejected9, investigation: investigation9 } : { phase: jr9.st },
+          // 마지막 시도의 실패를 '구조'로만 싣는다(자유 문자열 failReason은 내부 진단용으로 남긴다 —
+          // 2026-07-29 설계 상의: 화면에 내부 표현이 새면 안 되고, 호출 실패와 결과 거부는 갈라 보여야 한다).
+          job: job9 ? {
+            phase: job9.phase, parkedReason: job9.parkedReason || null, provider: last9 ? last9.provider : null,
+            applied: applied9, rejected: rejected9, investigation: investigation9,
+            lastFailure: last9 && last9.failureCode ? { stage: last9.failureStage || null, code: last9.failureCode, file: last9.failureFile || null, provider: last9.provider || null } : null,
+          } : { phase: jr9.st },
           awaitingVerification: awaiting9,
           previousRunAwaiting: counts9.otherAwaiting || 0,
           unattributedDeferred: counts9.unattributed || 0,
@@ -4959,6 +4965,29 @@ class Dashboard {
     "route-loop-guard": ["같은 자리를 맴돌아 멈췄어요","it looped and was stopped"],
     "uncertain-call": ["호출 결과를 확신할 수 없어 멈췄어요","the call outcome was uncertain, so it stopped"]
   };
+  // 마지막 시도가 왜 실패했는지 — 단계·코드로만 판단한다(자유 문자열은 화면에 오지 않는다).
+  // '실행 실패'와 '답은 왔는데 버림'은 사용자가 할 일이 다르므로 문구도 안내도 갈린다.
+  var FAIL_TEXT={
+    "process-failed": ["담당 호출을 끝내지 못했어요","the provider call did not complete"],
+    "empty-output": ["담당이 답을 돌려주지 않았어요","the provider returned nothing"],
+    "parse-invalid": ["답은 돌아왔지만 결과 형식을 읽을 수 없어 버렸어요","an answer came back but its format could not be read, so it was discarded"],
+    "schema-invalid": ["답은 돌아왔지만 필요한 결과 형식을 통과하지 못했어요","an answer came back but did not pass the required result shape"],
+    "evidence-mismatch": ["답은 돌아왔지만 근거로 든 인용이 실제 파일과 맞지 않아 버렸어요","an answer came back but its quoted evidence did not match the real file, so it was discarded"],
+    "evidence-unreadable": ["답은 돌아왔지만 근거 파일을 읽어 확인하지 못했어요","an answer came back but the evidence file could not be read to verify it"],
+    "convert-invalid": ["답은 돌아왔지만 지도 변경으로 바꾸는 데 실패했어요","an answer came back but could not be turned into a map change"]
+  };
+  function failureText(lf){
+    if(!lf||!lf.code) return "";
+    var hit=FAIL_TEXT[lf.code];
+    if(!hit) return T("알 수 없는 실패(","unrecognized failure (")+lf.code+")";
+    return T(hit[0],hit[1])+(lf.file?" ("+lf.file+")":"");
+  }
+  // 다음에 뭘 해야 하는지도 갈래별로 다르다. 다시 시도는 실제 호출이라 사용량이 또 든다 — 반드시 함께 밝힌다.
+  function failureAdvice(lf){
+    if(!lf||!lf.code) return "";
+    if(lf.stage==="call") return T(" 담당 실행 파일·설정·연결을 먼저 확인해 주세요(시간 초과나 비정상 종료였을 수도 있어요).","Check the provider's executable, settings, and connection first (it may also have timed out or exited abnormally).");
+    return T(" 다시 시도하면 다른 답이 나올 수 있지만 같은 이유로 또 버려질 수도 있고, 그때마다 담당 호출이 한 번 더 나갑니다(사용량 소모).","A retry may produce a different answer, but it can be discarded for the same reason — and each retry makes another provider call (uses quota).");
+  }
   function parkReasonText(raw, readiness){
     var s=String(raw||"").trim();
     if(!s) return T("사유 기록 없음","no reason recorded");
@@ -5577,6 +5606,13 @@ class Dashboard {
     var addPurpose=function(title,source,prefix){
       var h=document.createElement("div"); h.className="map-ops-purpose"; h.textContent=title; usageBox.appendChild(h);
       var any=false;
+      // 숫자의 뜻을 오해하지 않게 한 줄(2026-07-29 설계 상의 Q6): 담당을 부른 횟수이지 답이 채택된 횟수가 아니다.
+      // 실제로 이번 사건에서 '의미 보강 1회'는 났지만 그 답은 근거 검사에서 버려졌다.
+      if(prefix==="map-enrich"){
+        var nt=document.createElement("div"); nt.className="muted"; nt.style.fontSize="11px";
+        nt.textContent=T("이 숫자는 담당을 부른 횟수예요 — 그 답이 채택됐다는 뜻은 아니에요.","This counts provider calls — it does not mean the answers were accepted.");
+        usageBox.appendChild(nt);
+      }
       providers.forEach(function(p){
         var c=source&&source[prefix?prefix+"|"+p[0]:p[0]]; if(!c) return; any=true;
         // 재렌더에도 펼침 유지(2026-07-28 사용자 실보고: 담당을 펼치면 아주 잠깐 보였다가 곧바로 닫혔다).
@@ -5620,12 +5656,15 @@ class Dashboard {
       if(jp==="damaged"||en.consentSt==="damaged") return lead+T("자동 보강 기록이 손상돼 자동 실행이 멈춰 있어요(수동 복구가 필요해요).","The auto-enrichment records are damaged and automation is halted (manual recovery needed).");
       // '시작 전'은 담당을 한 번도 부르지 않았을 때만 쓴다(1차 [보완]: 담당 호출 뒤 보류된 경우도 있다).
       if(jp==="parked"){
+        var lf=en.job&&en.job.lastFailure;
+        var retryNote=T(" · 같은 일을 자동으로 반복하지 않으므로, 정찰 구역의 '다시 시도'를 눌러야 다시 진행돼요."," · it never retries on its own — press Retry in the recon area to resume it.");
+        // 마지막 시도가 실제로 실패한 경우에는 그 실패를 그대로 말한다(park 사유는 두 경우를 한 이름으로 접는다).
+        if(lf) return lead+T("자동 보강이 멈췄어요: ","Auto-enrichment stopped: ")+failureText(lf)+retryNote+failureAdvice(lf);
         var started=!!(en.job&&en.job.provider);
         var head=started
-          ? T("자동 보강이 담당을 부른 뒤 멈췄어요: ","Auto-enrichment stopped after calling a provider: ")
+          ? T("자동 보강이 담당 시도가 기록된 뒤 멈췄어요: ","Auto-enrichment stopped after an attempt was recorded: ")
           : T("자동 보강이 담당을 부르기 전에 멈췄어요: ","Auto-enrichment stopped before calling any provider: ");
-        return lead+head+parkReasonText(en.job.parkedReason, d.mapReadiness)
-          +T(" · 같은 일을 자동으로 반복하지 않으므로, 정찰 구역의 '다시 시도'를 눌러야 다시 진행돼요."," · it never retries on its own — press Retry in the recon area to resume it.");
+        return lead+head+parkReasonText(en.job.parkedReason, d.mapReadiness)+retryNote;
       }
       if(jp==="done") return lead+T("자동 보강이 이미 끝난 뒤로 새로 실행할 일이 없었어요.","Auto-enrichment already finished and nothing new needed running.");
       if(jp==="open") return lead+T("자동 보강이 진행 중으로 표시돼 있는데 아직 이 목적의 기록은 없어요.","Auto-enrichment is marked as in progress, but this purpose has no records yet.");
@@ -6313,7 +6352,8 @@ class Dashboard {
             else if(!consented) msg=T("자동 보강: 꺼짐(이 담당의 자동 실행 동의 없음)","Auto-enrich: off (no consent for this provider)");
             else if(jp==="damaged") msg=T("자동 보강: 작업 기록 손상 — 자동 실행 정지","Auto-enrich: job ledger damaged — automation halted");
             else if(en9.deferredSt==="damaged") msg=T("자동 보강: 확인 대기 기록 손상 — 수동 복구 필요","Auto-enrich: verification queue damaged — manual recovery required");
-            else if(jp==="parked") msg=T("자동 보강: 보류됨 — ","Auto-enrich: parked — ")+parkReasonText(en9.job.parkedReason, d.mapReadiness);
+            else if(jp==="parked") msg=T("자동 보강: 보류됨 — ","Auto-enrich: parked — ")
+              +(en9.job.lastFailure?failureText(en9.job.lastFailure)+failureAdvice(en9.job.lastFailure):parkReasonText(en9.job.parkedReason, d.mapReadiness));
             else if(jp==="done") msg=T("자동 보강: 완료 — 적용 ","Auto-enrich: done — applied ")+String(en9.job.applied||0)+T("건 · 확인 대기 "," · awaiting verification ")+String(en9.awaitingVerification||0)+T("건 · 기각 "," · rejected ")+String(en9.job.rejected||0)+T("건 · 조사 대기 "," · investigation ")+String(en9.job.investigation||0)+T("건"," items");
             else if(jp==="open") msg=T("자동 보강: 진행 중","Auto-enrich: in progress");
             else msg=en9.queuePending?T("자동 보강: 대기 중(다음 관측 때 실행)","Auto-enrich: pending (runs on next observation)"):T("자동 보강: 대기 없음","Auto-enrich: nothing queued");
