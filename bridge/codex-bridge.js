@@ -643,9 +643,14 @@ function toolReadParts(p) {
   const values = toolArgumentValues(p);
   const name = String((p && (p.name || p.tool_name)) || "").toLowerCase();
   if (/apply[_-]?patch|write|delete|remove|list|glob/.test(name) && !/read|view|open/.test(name)) return [];
-  if (/read|view|open/.test(name)) return values.map((v) => ({ text: v, workdir: "" }));
+  if (/read|view|open/.test(name)) return values.map((v) => ({ text: v, workdir: "", weak: false }));
+  // 증거 세기 구분(2026-07-29 — 검증 4왕복이 같은 벽에 부딪힌 뒤 결론): 도구 인수는 하네스가 기록한
+  // '실제로 부른 것'이지만, 중첩 스크립트는 검증자가 **쓴 코드 글자**라 어느 줄이 실행됐는지 글자만으로는
+  // 증명할 수 없다(실행 안 되는 분기·호출 아닌 이름 재사용 등이 계속 새 반례로 나왔다).
+  // 그래서 스크립트에서 읽어낸 것은 **약한 증거**로만 쓴다: 경보(다룬 흔적 확인)에는 쓰고,
+  // 신뢰 등급 승격에는 쓰지 않는다. 승격은 하네스가 기록한 인수만 인정한다.
   const nested = values.flatMap(nestedShellCalls);
-  const sources = nested.length ? nested : values.map((v) => ({ command: v, workdir: "" }));
+  const sources = nested.length ? nested.map((c) => ({ ...c, weak: true })) : values.map((v) => ({ command: v, workdir: "", weak: false }));
   // 리터럴 대입을 풀어 넣되 **실행 순서를 지키고**(1차 blocker① — 뒤에 나온 대입이 앞 문장에 소급되면,
   // 없는 파일을 읽고 실패한 뒤 이름만 나중에 대입해도 '그 파일을 읽었다'가 된다), **호출 경계를 넘지
   // 않는다**(2차 blocker① — 셸 호출이 다르면 서로 다른 프로세스라 변수가 이어지지 않는다).
@@ -655,7 +660,7 @@ function toolReadParts(p) {
   for (const source of sources) {
     const vars = new Map();
     for (const s of splitShellStatements(source.command)) {
-      if (toolCallCanReadFile(p, s)) out.push({ text: expandShellVars(stripShellComment(s), vars), workdir: source.workdir || "" });
+      if (toolCallCanReadFile(p, s)) out.push({ text: expandShellVars(stripShellComment(s), vars), workdir: source.workdir || "", weak: !!source.weak });
       const lit = shellLiteralAssign(s);
       if (lit) { vars.set(lit.name, lit.value); continue; }
       const tgt = shellAssignTarget(s);
@@ -667,8 +672,10 @@ function toolReadParts(p) {
 function toolCallNamesExactFile(p, fileKey, ws) {
   // 전용 read/view/open 도구는 인수 전체가 한 읽기 동작이다. 셸 호출은 문장별로 잘라, 다른 문장에서 이름만
   // 출력한 파일이 앞 문장의 읽기 명령 덕분에 함께 처리된 것으로 오인되지 않게 한다.
+  // 반환: ""(아님) / "weak"(스크립트 글자에서 읽어냄 — 경보용) / "strong"(하네스가 기록한 인수 — 승격 가능)
   const readParts = toolReadParts(p);
-  if (!readParts.length) return false;
+  if (!readParts.length) return "";
+  let best = "";
   // 상대경로 인용은 '그 명령이 실제로 돈 폴더' 기준으로 풀어야 맞는다. 기준 후보는 문장마다 다를 수 있어
   // (호출이 밝힌 작업 폴더 / 종전 기준 폴더 / git -C 로 지정한 저장소) 문장별로 만들어 대조한다.
   // 호출이 작업 폴더를 밝혔으면 **그 폴더만** 기준이다(1차 blocker③ — 기준 폴더를 둘 다 열어 두면
@@ -684,15 +691,21 @@ function toolCallNamesExactFile(p, fileKey, ws) {
   for (const item of readParts) {
     const part = item.text;
     const baseRoots = [item.workdir || wd || ws || process.cwd()];
-    if (hit(fileKey, part)) return true;
-    for (const root of [...baseRoots, ...gitDirRoots(part)]) {
-      let rel = "";
-      try { rel = path.relative(root, fileKey).replace(/\\/g, "/"); } catch { continue; }
-      if (!rel || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel)) continue;
-      if (hit(rel, part)) return true;
+    const strength = item.weak ? "weak" : "strong";
+    let matched = hit(fileKey, part);
+    if (!matched) {
+      for (const root of [...baseRoots, ...gitDirRoots(part)]) {
+        let rel = "";
+        try { rel = path.relative(root, fileKey).replace(/\\/g, "/"); } catch { continue; }
+        if (!rel || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel)) continue;
+        if (hit(rel, part)) { matched = true; break; }
+      }
     }
+    if (!matched) continue;
+    if (strength === "strong") return "strong"; // 더 강한 증거가 나오면 즉시 확정
+    best = "weak";
   }
-  return false;
+  return best;
 }
 // `git -C <폴더>`로 지정한 저장소 — git이 인쇄하는 경로는 작업 폴더가 아니라 이 폴더 기준이다.
 // 옵션 구간에서 소비된 값만 돌려주므로, 주석·인수 자리에 적힌 -C 는 기준이 되지 않는다.
@@ -741,14 +754,18 @@ function outputContainsCitedContent(output, snippets) {
   return !!hay && (snippets || []).some((s) => s && hay.includes(s));
 }
 function citedFilesUnseenExact(answer, ws, sessionId) {
-  const unknown = { checked: false, unseen: [] };
+  // 두 갈래로 돌려준다(2026-07-29 결론): unseen=**승격에 쓸 강한 증거**로도 확인 안 된 것,
+  // unseenWeak=강한 증거든 스크립트 글자든 아무 흔적도 못 찾은 것(경보용).
+  // 검증자가 쓴 스크립트 글자는 '무엇이 실행됐는지'를 증명하지 못하므로 승격 재료로 삼지 않는다.
+  const unknown = { checked: false, unseen: [], unseenWeak: [] };
   if (!sessionId) return unknown;
   let file;
   try { file = findRolloutById(sessionId); } catch { return unknown; }
   if (!file) return unknown;
   const citedEvidence = citedResolvedEvidence(answer, ws);
   const remaining = new Set(citedEvidence.keys());
-  if (!remaining.size) return { checked: true, unseen: [] };
+  const remainingWeak = new Set(citedEvidence.keys());
+  if (!remaining.size) return { checked: true, unseen: [], unseenWeak: [] };
   const lines = rolloutTailLines(file);
   if (!lines) return unknown;
   // 턴 경계: 마지막 '사용자 메시지'(response_item message user) 줄 — 그 이후만 이번 ask의 활동.
@@ -771,7 +788,8 @@ function citedFilesUnseenExact(answer, ws, sessionId) {
     const t = p.type;
     if (t === "function_call" || t === "custom_tool_call") {
       hadTool = true;
-      const files = [...remaining].filter((fp) => toolCallNamesExactFile(p, fp, ws));
+      const files = [];
+      for (const fp of remainingWeak) { const st = toolCallNamesExactFile(p, fp, ws); if (st) files.push({ fp, st }); }
       if (!files.length) continue;
       const id = toolCallId(p);
       if (!id) continue; // 강한 승격 증명은 호출-결과 동일 id가 필수 — 구형/불완전 사건의 순서 추측 금지
@@ -788,16 +806,22 @@ function citedFilesUnseenExact(answer, ws, sessionId) {
       if (!proof.ok || !proof.text) continue;
       // 성공 코드와 비어 있지 않은 출력만으로도 다른 문장의 출력일 수 있다. 답에서 인용한 실제 줄 내용이
       // 반환물 안에 들어 있는 파일만 이번 턴에 다룬 것으로 인정한다.
-      for (const fp of rec.files) if (outputContainsCitedContent(proof.text, citedEvidence.get(fp))) remaining.delete(fp);
-      if (!remaining.size) break;
+      for (const f of rec.files) {
+        if (!outputContainsCitedContent(proof.text, citedEvidence.get(f.fp))) continue;
+        remainingWeak.delete(f.fp);
+        if (f.st === "strong") remaining.delete(f.fp);
+      }
+      if (!remainingWeak.size) break;
     }
   }
   if (!hadTool) return unknown; // 이번 턴 도구활동 없음 → 이전 턴 맥락 등으로 답했을 수 있음 → 판단 보류
-  return { checked: true, unseen: [...remaining] };
+  return { checked: true, unseen: [...remaining], unseenWeak: [...remainingWeak] };
 }
+// 경보용 — '아무 흔적도 못 찾은 것'만 알린다. 스크립트 글자로라도 판독이 보이면 경보하지 않는다
+// (정직하게 읽은 회차가 매번 의심으로 남던 실보고 해소 — 승격은 아래 strong 축에서 따로 잠근다).
 function citedFilesUnseen(answer, ws, sessionId) {
   const r = citedFilesUnseenExact(answer, ws, sessionId);
-  return r.checked ? { checked: true, unseen: r.unseen.map((p) => path.basename(p)) } : r;
+  return r.checked ? { checked: true, unseen: (r.unseenWeak || r.unseen).map((p) => path.basename(p)) } : r;
 }
 // ws=configWs(이벤트 workspace 라벨 — 대시보드 귀속), execCwd=실제 실행 폴더(인용 상대경로 해석 기준).
 // 분리 이유: 코덱스 답의 '(경로:라인)' 인용은 코덱스가 돈 폴더(execCwd) 기준 상대경로라, 라벨용 연 폴더로 해석하면 오탐.
@@ -3039,4 +3063,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, v2DirectiveFor, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex };
+module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, v2DirectiveFor, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex };

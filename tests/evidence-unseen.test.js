@@ -12,7 +12,7 @@ const ws = fs.mkdtempSync(path.join(os.tmpdir(), "ev_ws_"));
 fs.writeFileSync(path.join(ws, "foo.ts"), "line1\nline2\n", "utf8"); // 인용 대상(실재)
 fs.writeFileSync(path.join(ws, "bar.ts"), "line1\nline2\n", "utf8"); // 인용 대상(실재)
 
-const { citedFilesUnseen, citedResolvedBasenames } = require("../bridge/codex-bridge.js");
+const { citedFilesUnseen, citedFilesUnseenExact, citedResolvedBasenames } = require("../bridge/codex-bridge.js");
 
 let pass = 0, fail = 0;
 const ck = (n, c) => { (c ? pass++ : fail++); console.log((c ? "  ✅ " : "  ❌ ") + n); };
@@ -370,6 +370,29 @@ console.log("[3-3] 문맥 보정(2026-07-28 실사고) — 인정 명령은 그�
   ck("판독 명령 주석에 적힌 경로는 인정하지 않음(주석은 명령의 일부가 아님)", unseen("cccccccc-comment-path"));
   writeRollout("cccccccc-hash-quoted", [userMsg("검증 요청"), ...pairW("Select-String -LiteralPath 'foo.ts' -Pattern '#해시는주석아님' -Encoding utf8", ws, "line1")]);
   ck("따옴표 안의 #은 주석이 아니라 인정 유지(과잉 절단 회귀 방지)", seen("cccccccc-hash-quoted"));
+}
+
+console.log("[3-4] 증거 세기 — 스크립트 글자는 경보를 끄되 신뢰 등급 승격에는 쓰지 않는다");
+{
+  // 검증 4왕복이 같은 벽에 부딪혀 내린 결론: 검증자가 '쓴' 스크립트 글자로는 어느 줄이 실행됐는지
+  // 증명할 수 없다(실행 안 되는 분기·호출 아닌 이름 재사용 등). 그래서 스크립트에서 읽어낸 판독은
+  // 경보를 끄는 데만 쓰고, 승격 재료로는 인정하지 않는다. 하네스가 기록한 도구 인수만 승격 가능.
+  const id = "custom-weak-" + (++callSeq);
+  const input = "const calls = [{ command: \"Get-Content -LiteralPath foo.ts\" }];\nconst r=await Promise.all(calls.map(c=>tools.shell_command(c)));text(r);";
+  const result = [{ type: "input_text", text: "Script completed\nOutput:\nline1\nline2" }, { type: "input_text", text: "Exit code: 0\nOutput:\nline1\nline2" }];
+  writeRollout("eeeeeeee-weak", [
+    userMsg("검증 요청"),
+    { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: id, input } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: id, output: result } },
+  ]);
+  const w = citedFilesUnseenExact(answer, ws, "eeeeeeee-weak");
+  ck("스크립트에서 읽어낸 판독은 경보를 끈다(다룬 흔적 있음)", w.checked === true && !w.unseenWeak.includes(path.join(ws, "foo.ts")) && !w.unseenWeak.some((p) => p.endsWith("foo.ts")));
+  ck("그러나 승격 축에는 남지 않는다(스크립트 글자는 실행을 증명하지 못함)", w.unseen.some((p) => p.endsWith("foo.ts")));
+
+  // 하네스가 기록한 도구 인수는 종전대로 강한 증거다(무회귀).
+  writeRollout("eeeeeeee-strong", [userMsg("검증 요청"), ...pair("cat foo.ts", "line1\nline2")]);
+  const st = citedFilesUnseenExact(answer, ws, "eeeeeeee-strong");
+  ck("도구 인수로 기록된 판독은 승격 축에서도 인정(무회귀)", st.checked === true && !st.unseen.some((p) => p.endsWith("foo.ts")) && !st.unseenWeak.some((p) => p.endsWith("foo.ts")));
 }
 
 console.log("[6] 장기 세션 — 파일 전체가 16MiB를 넘어도 최신 턴 경계와 도구 흔적은 판독");
