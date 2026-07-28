@@ -563,6 +563,7 @@ function scriptOwnerScan(s) {
   const owner = new Int32Array(s.length).fill(-1);
   const inStr = new Uint8Array(s.length);
   const inCmt = new Uint8Array(s.length);
+  const closeOf = new Map(); // 여는 중괄호 → 닫는 중괄호(소속 블록의 끝을 알아야 '나중에 쓰였는지'를 본다)
   const stack = [];
   let i = 0, quote = "";
   const mark = (j, top, str, cmt) => { if (j < s.length) { owner[j] = top; inStr[j] = str; inCmt[j] = cmt; } };
@@ -579,14 +580,14 @@ function scriptOwnerScan(s) {
     if (ch === "/" && nx === "*") { mark(i, top, 0, 1); mark(i + 1, top, 0, 1); i += 2; while (i < s.length && !(s[i] === "*" && s[i + 1] === "/")) { mark(i, top, 0, 1); i++; } mark(i, top, 0, 1); mark(i + 1, top, 0, 1); i += 2; continue; }
     if (ch === '"' || ch === "'" || ch === "`") { mark(i, top, 0, 0); quote = ch; i++; continue; }
     if (ch === "{") { mark(i, top, 0, 0); stack.push(i); i++; continue; }
-    if (ch === "}") { stack.pop(); mark(i, stack.length ? stack[stack.length - 1] : -1, 0, 0); i++; continue; }
+    if (ch === "}") { const op = stack.pop(); if (op !== undefined) closeOf.set(op, i); mark(i, stack.length ? stack[stack.length - 1] : -1, 0, 0); i++; continue; }
     mark(i, top, 0, 0); i++;
   }
-  return { owner, inStr, inCmt };
+  return { owner, inStr, inCmt, closeOf };
 }
 function nestedShellCalls(text) {
   const s = String(text || "");
-  const { owner, inStr, inCmt } = scriptOwnerScan(s);
+  const { owner, inStr, inCmt, closeOf } = scriptOwnerScan(s);
   const live = (idx) => !inStr[idx] && !inCmt[idx]; // 주석 안·문자열 안의 글자는 속성이 아니다
   const collect = (re) => {
     const out = [];
@@ -596,13 +597,44 @@ function nestedShellCalls(text) {
   };
   const cmds = collect(/(?:["'](?:cmd|command)["']|\b(?:cmd|command))\s*:\s*("(?:\\.|[^"\\])*")/g);
   const wds = collect(/(?:["'](?:workdir|cwd)["']|\b(?:workdir|cwd))\s*:\s*("(?:\\.|[^"\\])*")/g);
+  // 실제로 '쓰인' 객체만 판독 후보로 본다(2차 blocker — 선언만 하고 안 쓴 객체나 정규식 안의 글자가
+  // 도구 호출 증거로 집계되면, 파일을 읽지 않고도 판독 흔적을 만들 수 있다).
+  // 쓰였다고 인정하는 두 가지: ①괄호 바로 안에 놓인 객체(호출 인수) ②이름에 담긴 뒤 그 이름이 나중에
+  // 다시 나오는 경우(실제 형태 `const calls=[{…}]; calls.map(c=>tools.shell_command(c))`).
+  // 둘 다 아니면 미인정한다 — 증명 못 하면 안 세는 쪽이 안전한 실패다.
+  const prevCode = (i, skip) => { let j = i; while (j >= 0 && (!live(j) || skip.includes(s[j]))) j--; return j; };
+  const usedLater = (name, from) => {
+    const re = new RegExp("\\b" + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "g");
+    let m;
+    while ((m = re.exec(s))) if (m.index > from && live(m.index)) return true;
+    return false;
+  };
+  const openOf = new Map();
+  for (const [o, c] of closeOf) openOf.set(c, o);
+  const bound = (b) => {
+    const p = prevCode(b - 1, " \t\r\n");
+    if (p >= 0 && s[p] === "(") return true;                       // 호출 인수 자리
+    // 배열 안 형제 객체를 건너뛰며 '이름에 담는 =' 를 찾는다(`const calls=[{…},{…}]` 형태).
+    let q = prevCode(b - 1, " \t\r\n[,");
+    while (q >= 0 && s[q] === "}" && openOf.has(q)) q = prevCode(openOf.get(q) - 1, " \t\r\n[,");
+    if (q < 0 || s[q] !== "=") return false;                        // 이름에 담기지도 않음
+    const idEnd = prevCode(q - 1, " \t\r\n");
+    if (idEnd < 0) return false;
+    let st = idEnd;
+    while (st >= 0 && /[A-Za-z0-9_$]/.test(s[st]) && live(st)) st--;
+    const name = s.slice(st + 1, idEnd + 1);
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) return false;
+    const close = closeOf.has(b) ? closeOf.get(b) : b;
+    return usedLater(name, close);
+  };
   // 같은 객체 안에서만 짝짓고, 그 객체에 명령이나 폴더가 둘 이상이면 어느 것이 실제인지 알 수 없으므로
   // 폴더 결속을 통째로 포기한다(1차 blocker② — 중복 속성은 실행 시 마지막 값이 이기지만 우리가 그걸
   // 안다고 가정하면 안 된다. 모르면 폴더 없음이 안전한 실패).
   const cnt = (arr, own) => arr.filter((x) => x.own === own).length;
-  return cmds.map((c) => {
-    const ok = c.own >= 0 && cnt(cmds, c.own) === 1 && cnt(wds, c.own) === 1;
-    const own = ok ? wds.find((w) => w.own === c.own) : null;
+  const boundCache = new Map();
+  const isBound = (b) => { if (!boundCache.has(b)) boundCache.set(b, bound(b)); return boundCache.get(b); };
+  return cmds.filter((c) => c.own >= 0 && cnt(cmds, c.own) === 1 && isBound(c.own)).map((c) => {
+    const own = cnt(wds, c.own) === 1 ? wds.find((w) => w.own === c.own) : null;
     return { command: c.value, workdir: own ? String(own.value).replace(/\\/g, "/") : "" };
   });
 }

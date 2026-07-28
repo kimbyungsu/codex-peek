@@ -230,7 +230,7 @@ console.log("[3-3] 문맥 보정(2026-07-28 실사고) — 인정 명령은 그�
   // 작업 폴더를 들고 있는' 형태로 왔다. 명령만 뽑고 폴더를 버리면 상대경로를 풀 기준이 없어 전부 미확인이 된다.
   {
     const id = "custom-nested-wd-" + (++callSeq);
-    const input = "const calls = [\n  {\n    command: \"Select-String -LiteralPath 'foo.ts' -Pattern 'line' -Encoding utf8\",\n    workdir: " + JSON.stringify(ws) + ",\n    timeout_ms: 10000\n  }\n];";
+    const input = "const calls = [\n  {\n    command: \"Select-String -LiteralPath 'foo.ts' -Pattern 'line' -Encoding utf8\",\n    workdir: " + JSON.stringify(ws) + ",\n    timeout_ms: 10000\n  }\n];\nconst results=await Promise.all(calls.map(c=>tools.shell_command(c)));results.forEach(r=>text(r));";
     const result = [{ type: "input_text", text: "Script completed\nOutput:\nfoo.ts:1:line1" }, { type: "input_text", text: "Exit code: 0\nOutput:\nfoo.ts:1:line1" }];
     writeRollout("cccccccc-nested-wd", [
       userMsg("검증 요청"),
@@ -244,7 +244,7 @@ console.log("[3-3] 문맥 보정(2026-07-28 실사고) — 인정 명령은 그�
     // 폴더가 다른 두 호출이 섞여도 서로의 폴더를 끌어다 쓰지 않는다(오귀속 금지).
     const id = "custom-nested-mix-" + (++callSeq);
     const other = path.join(os.tmpdir(), "no-such-mixed-dir");
-    const input = "const calls = [\n  {\n    command: \"Select-String -LiteralPath 'foo.ts' -Pattern 'line'\",\n    workdir: " + JSON.stringify(other) + "\n  },\n  {\n    command: \"Get-Content -LiteralPath bar.ts\",\n    workdir: " + JSON.stringify(ws) + "\n  }\n];";
+    const input = "const calls = [\n  {\n    command: \"Select-String -LiteralPath 'foo.ts' -Pattern 'line'\",\n    workdir: " + JSON.stringify(other) + "\n  },\n  {\n    command: \"Get-Content -LiteralPath bar.ts\",\n    workdir: " + JSON.stringify(ws) + "\n  }\n];\nconst results=await Promise.all(calls.map(c=>tools.shell_command(c)));results.forEach(r=>text(r));";
     const result = [{ type: "input_text", text: "Script completed\nOutput:\nline1" }, { type: "input_text", text: "Exit code: 0\nOutput:\nline1" }];
     writeRollout("cccccccc-nested-mix", [
       userMsg("검증 요청"),
@@ -313,7 +313,7 @@ console.log("[3-3] 문맥 보정(2026-07-28 실사고) — 인정 명령은 그�
   {
     // 무회귀: 속성 이름이 따옴표로 감싸인 정상 형태는 그대로 인정한다.
     const id = "custom-quoted-key-" + (++callSeq);
-    const input = "const calls = [\n  {\n    \"command\": \"Get-Content -LiteralPath foo.ts\",\n    \"workdir\": " + JSON.stringify(ws) + "\n  }\n];";
+    const input = "const calls = [\n  {\n    \"command\": \"Get-Content -LiteralPath foo.ts\",\n    \"workdir\": " + JSON.stringify(ws) + "\n  }\n];\nconst results=await Promise.all(calls.map(c=>tools.shell_command(c)));results.forEach(r=>text(r));";
     const result = [{ type: "input_text", text: "Script completed\nOutput:\nline1\nline2" }, { type: "input_text", text: "Exit code: 0\nOutput:\nline1\nline2" }];
     writeRollout("cccccccc-quoted-key", [
       userMsg("검증 요청"),
@@ -322,6 +322,46 @@ console.log("[3-3] 문맥 보정(2026-07-28 실사고) — 인정 명령은 그�
     ]);
     const rQK = citedFilesUnseen(answerAbs, wsOther, "cccccccc-quoted-key");
     ck("따옴표로 감싼 속성 이름도 종전대로 인정(과잉 배제 회귀 방지)", rQK.checked === true && rQK.unseen.length === 0);
+  }
+
+  {
+    // 검증 3차 blocker: 선언만 하고 쓰지 않은 객체의 명령은 실행된 적이 없다.
+    const id = "custom-unused-obj-" + (++callSeq);
+    const input = "const unused = {\n  command: \"Get-Content -LiteralPath foo.ts\",\n  workdir: " + JSON.stringify(ws) + "\n};\nconst actual = { command: \"Write-Output line1\" };\nawait tools.shell_command(actual);";
+    const result = [{ type: "input_text", text: "Script completed\nOutput:\nline1" }, { type: "input_text", text: "Exit code: 0\nOutput:\nline1" }];
+    writeRollout("cccccccc-unused-obj", [
+      userMsg("검증 요청"),
+      { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: id, input } },
+      { type: "response_item", payload: { type: "custom_tool_call_output", call_id: id, output: result } },
+    ]);
+    const rUO = citedFilesUnseen(answerAbs, wsOther, "cccccccc-unused-obj");
+    ck("선언만 하고 쓰지 않은 객체의 명령은 판독 증거가 아님", rUO.checked === true && rUO.unseen.includes("foo.ts"));
+  }
+  {
+    // 검증 3차 blocker: 정규식 안에 적힌 명령 표기도 실행된 적이 없다(객체 소속 자체가 없음).
+    const id = "custom-regex-cmd-" + (++callSeq);
+    const input = "const marker = /command: \"Get-Content -LiteralPath foo.ts\"/;\nawait tools.shell_command({ command: \"Write-Output line1\" });";
+    const result = [{ type: "input_text", text: "Script completed\nOutput:\nline1" }, { type: "input_text", text: "Exit code: 0\nOutput:\nline1" }];
+    writeRollout("cccccccc-regex-cmd", [
+      userMsg("검증 요청"),
+      { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: id, input } },
+      { type: "response_item", payload: { type: "custom_tool_call_output", call_id: id, output: result } },
+    ]);
+    const rRC = citedFilesUnseen(answerAbs, wsOther, "cccccccc-regex-cmd");
+    ck("정규식 안에 적힌 명령 표기는 판독 증거가 아님", rRC.checked === true && rRC.unseen.includes("foo.ts"));
+  }
+  {
+    // 무회귀: 괄호 바로 안에 놓인 객체(호출 인수)는 그대로 인정한다.
+    const id = "custom-direct-arg-" + (++callSeq);
+    const input = "await tools.shell_command({ command: \"Get-Content -LiteralPath foo.ts\", workdir: " + JSON.stringify(ws) + " });";
+    const result = [{ type: "input_text", text: "Script completed\nOutput:\nline1\nline2" }, { type: "input_text", text: "Exit code: 0\nOutput:\nline1\nline2" }];
+    writeRollout("cccccccc-direct-arg", [
+      userMsg("검증 요청"),
+      { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: id, input } },
+      { type: "response_item", payload: { type: "custom_tool_call_output", call_id: id, output: result } },
+    ]);
+    const rDA = citedFilesUnseen(answerAbs, wsOther, "cccccccc-direct-arg");
+    ck("호출 인수 자리의 객체는 종전대로 인정(과잉 배제 회귀 방지)", rDA.checked === true && rDA.unseen.length === 0);
   }
 
   // 2차 blocker②: 주석에 적힌 경로는 그 명령이 읽은 대상일 수 없다(실제로 읽은 것은 미끼 파일뿐).
