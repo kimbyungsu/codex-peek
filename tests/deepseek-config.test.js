@@ -27,7 +27,9 @@ ok(fresh.model === DEEPSEEK_DEFAULTS.model && fresh.baseUrl === DEEPSEEK_DEFAULT
 
 console.log("[보안 소스 계약] 웹뷰로 키 원문이 나가지 않음 + 안내 배선(소스 검사)");
 const src = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
-ok(/deepseek: readDeepseekView\(\)/.test(src) && /hasKey: boolean; masked: string/.test(src), "상태에는 hasKey·masked만(원문 필드 없음)");
+// 2026-07-28: 사용량 카드가 같은 값을 재사용하면서 호출이 한 번으로 묶였다(const dsView). 보안 계약은 그대로 —
+// 상태에 실리는 것은 여전히 readDeepseekView()의 산출물뿐이고 키 원문 필드는 없다.
+ok(/const dsView = readDeepseekView\(\)/.test(src) && /\n\s*deepseek: dsView,/.test(src) && /hasKey: boolean; masked: string/.test(src), "상태에는 hasKey·masked만(원문 필드 없음 — 판독은 readDeepseekView 한 곳)");
 ok(!/apiKey[^\n]*postMessage|postMessage[^\n]*apiKey/.test(src), "postMessage 경로에 apiKey 원문 없음");
 ok(/saveDeepseekKey/.test(src) && /mergeDeepseekConfig\(readDeepseekRaw\(\), key\)/.test(src), "저장 핸들러가 병합 정본 사용");
 ok(/scoutMode: m\.scoutMode \}\) === "on"/.test(src) && /readDeepseekView\(\)\.hasKey/.test(src) && /등록하러 가기/.test(src), "3트랙 저장 시 키 안내 — 키 없음은 경고 모달+[등록하러 가기]/[알겠습니다](2026-07-09 개편·차단 아님)");

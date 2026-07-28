@@ -224,7 +224,8 @@ ok(extP6b.includes("if(scSavedGen===scGen) scDirty=false"), "성공 응답은 �
 ok((extP6b.match(/if\(scBusy\) return;/g) || []).length === 2 && (extP6b.match(/scLock\(true\)/g) || []).length === 2, "단일-flight — 응답 전 재클릭 차단(요청 겹침 자체가 불가·3차 blocker f-c4c4ab24 잠금)");
 ok(extP6b.includes('if (ev.data.target === "scoutCodex") scLock(false);'), "잠금 해제=성공/실패 응답 공통(실패 시 버튼 고착 없음·dirty 유지로 초안 보존)");
 ok(extP6b.includes("전역 설정(모든 프로젝트 공통)이고") && extP6b.includes("Global (shared by all projects)"), "전역 명시 ko/en(사용자 결정 — 프로젝트별 분리 안 함)");
-ok(extP6b.includes("scoutCodex: readScoutCodexPrefsExt()"), "payload에 현재값(비밀 아님 — 그대로 표시)");
+// 2026-07-28: 사용량 카드가 같은 값을 재사용해 판독을 const 하나로 묶었다 — 실리는 값은 동일(readScoutCodexPrefsExt 산출물).
+ok(extP6b.includes("const scoutCodexPrefs = readScoutCodexPrefsExt()") && /\n\s*scoutCodex: scoutCodexPrefs,/.test(extP6b), "payload에 현재값(비밀 아님 — 그대로 표시·판독은 한 곳)");
 ok(extP6b.includes("모델·추론 강도 옵션은 ⚙️ 고급설정에 있어요") && extP6b.includes("options live in ⚙️ Advanced"), "대시보드 codex 선택 시 고급설정 안내(사용자 제안 채택)");
 // 2026-07-23 사용자 요청 ③ — 탐색 담당에서 고급설정 원클릭 이동(딥시크 무키/유키·코덱스 3분기 전부)
 ok((extP6b.match(/note\.appendChild\(advBtn\(\)\)/g) || []).length === 4 && extP6b.includes("⚙️ 고급설정 열기") && extP6b.includes("⚙️ Open Advanced"), "고급설정 바로가기 버튼 — 딥시크(키 유/무)·코덱스 3분기+재클릭 안내까지 4곳");

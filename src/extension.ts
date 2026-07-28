@@ -193,6 +193,10 @@ interface BridgeState {
   scoutLive: { arm: string; startedAt: string } | null; // 지도 생성중(러너 실행 동안만 — TTL로 잔존 걸러냄)
   deepseek: { hasKey: boolean; masked: string; model: string }; // 고급설정 탭 표시용 — 키 원문은 절대 웹뷰로 안 보냄(마스킹만)
   scoutCodex: { model: string; reasoning: string }; // 고급설정 탭 — Codex 정찰 두뇌 설정(P6b·전역·비밀 아님)
+  // 사용량 카드의 '모델 이름 기록 없음' 보조 표시(2026-07-28 사용자 요청): 담당별로 **다음 실행이 쓸 현재 설정값**.
+  // 과거 기록의 모델이 아니라 '지금 설정'이므로 화면 문구가 반드시 그렇게 밝힌다(기록 위장 금지).
+  // 빈 문자열 = 그 담당의 기본값(우리가 아무것도 지정하지 않음) — 화면에서 '기본값'으로 표기한다.
+  scoutModelNow: { claude: string; codex: string; deepseek: string };
   mapMode: { raw: string | null; mode: string } | null; // P7 — 의미 보강 담당(3트랙에서만·null=2트랙/ws 없음). raw=명시 선택·mode=표시값(부재=self)
   mapReadiness: any | null; // P7 — readiness 뷰(contract-lib mapReadinessView 산출·precision 지문은 호스트 주입)
   enrich: any | null; // P8 — 자동 보강 상태(동의·장부 요약 — 표시 전용·정본은 실행기 장부)
@@ -2051,6 +2055,8 @@ function computeState(turnsN: number): BridgeState {
   const pref: any = prefState.pref;
   const scope = readScopeState(ws);       // 3트랙 변경 감지(내부에서 scoutMode 확인·캐시)
   const scoutMaps = readScoutMaps(ws);    // 3트랙 지도 게시판(읽기 전용)
+  const dsView = readDeepseekView();      // 고급설정 표시 + 사용량 카드 '지금 설정' 둘 다 쓰므로 한 번만 읽는다
+  const scoutCodexPrefs = readScoutCodexPrefsExt(); // 위와 같은 이유(중복 파일 판독 방지)
 
   const hid = hiddenSessions();
   const mkCand = (r: { id: string; file: string; mtime: number }): Candidate => ({
@@ -2257,8 +2263,17 @@ function computeState(turnsN: number): BridgeState {
     mapUsage: mapHistoryState ? mapHistoryState.usage : null,
     mapStatsRead: mapHistoryState ? mapHistoryState.readStatus : null,
     mapLedger: readMapLedger(ws),       // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만)
-    deepseek: readDeepseekView(),       // 고급설정 탭 — 키 유무·마스킹(원문 미노출)
-    scoutCodex: readScoutCodexPrefsExt(), // 고급설정 탭 — Codex 정찰 모델·추론강도(전역·비밀 아님)
+    deepseek: dsView,       // 고급설정 탭 — 키 유무·마스킹(원문 미노출)
+    scoutCodex: scoutCodexPrefs, // 고급설정 탭 — Codex 정찰 모델·추론강도(전역·비밀 아님)
+    // 담당별 '지금 설정' 모델(사용량 카드 보조 표시). 출처를 실행 경로와 맞춘다:
+    //  · Claude 정찰은 별도 `claude -p` 프로세스라 대화창에서 고른 모델이 아니라 **설정 파일의 기본 모델**을 쓴다.
+    //  · Codex 정찰은 고급설정의 Codex 정찰 두뇌 설정(비우면 codex 기본값).
+    //  · DeepSeek는 고급설정의 모델(기록도 남지만 미기록 회차 대비).
+    scoutModelNow: {
+      claude: readClaudeSettingsModel(),
+      codex: scoutCodexPrefs.model,
+      deepseek: dsView.model,
+    },
     brainActual: (({ cc, cx }) => ({ cc, cx, scout: scoutActualText(ws) }))(brainActualTexts(ws)), // 두뇌 '실제 답' 정보 문구(히어로) — sig는 상태바 전용이라 제외
     // 표준 테스트 폴더 '감지' 여부(성격 프로필용) — 외부 전송·LLM 없는 가벼운 로컬 판독. '테스트 없음' 단정이 아니라
     // '표준 폴더 미감지'(src/tests·언어별 관행은 못 볼 수 있음 — scope-package 비재귀 한계 고지와 같은 축).
@@ -5527,7 +5542,17 @@ class Dashboard {
         // 키=대상+목적+담당이라 숫자가 갱신돼도 같은 줄로 이어지고, 접두사가 비는 전역 준비 점검만 고유 이름을 준다.
         var dkey="usage:"+usageScope+"|"+(prefix||"global-readiness")+"|"+p[0];
         var detail=keyedDetails(dkey, p[1]+" — "+usageText(c)); detail.className="map-ops-detail";
-        var models=document.createElement("div"); models.className="muted"; models.textContent=(c.models&&c.models.length)?T("기록된 모델: ","Recorded models: ")+c.models.join(", "):T("모델 이름 기록 없음","No model name recorded"); detail.appendChild(models);
+        // 기록에 모델 이름이 없으면(Claude·Codex 정찰은 호출이 토큰·모델을 안 돌려줌) 대신 **지금 설정값**을 알려준다.
+        // 사용자 요청 2026-07-28: "모델 이름 기록 없음"만 뜨는 게 아니라 무슨 모델인지 알 수 있어야 한다.
+        // 과거 기록의 모델이라고 오해하지 않도록 '지금 설정'이라고 못박고, 지정이 없으면 '기본값'으로 표기한다.
+        var models=document.createElement("div"); models.className="muted";
+        if(c.models&&c.models.length) models.textContent=T("기록된 모델: ","Recorded models: ")+c.models.join(", ");
+        else {
+          var nowM=(d.scoutModelNow||{})[p[0]];
+          var shown=nowM?nowM:T("기본값(따로 지정 안 함)","default (nothing specified)");
+          models.textContent=T("이 기록엔 모델 이름이 없어요 · 지금 설정: ","No model name in these records · current setting: ")+shown;
+        }
+        detail.appendChild(models);
         usageBox.appendChild(detail);
       });
       if(!any) addLine(usageBox,T("기록","Records"),T("호출 0회","0 calls"));

@@ -54,6 +54,15 @@ ok(/토큰 미제공 호출의 입력/.test(ext) && /calls without tokens/.test(
 ok(/collectMapHistoryState\(contract\.scoutMode === "on", mapActualRepo/.test(ext) && /repoKeyForStats\(repo\)/.test(ext), "판독기 — actual repo 익명 키 기준·3트랙 게이트로 상태에 실림");
 ok(/전역 준비 점검 \(현재 프로젝트 비용과 분리\)/.test(ext) && /Global readiness checks \(separate from current-project usage\)/.test(ext), "준비 점검은 현재 프로젝트 비용과 분리");
 
+console.log("[4b] 모델 이름이 기록에 없을 때 '지금 설정'을 대신 보여줌(2026-07-28 사용자 요청 — Claude·Codex 정찰은 호출이 모델을 안 돌려줌)");
+ok(/scoutModelNow: \{ claude: string; codex: string; deepseek: string \}/.test(ext), "상태에 담당별 '지금 설정' 모델 슬롯 존재");
+ok(/claude: readClaudeSettingsModel\(\)/.test(ext), "Claude 정찰은 대화창 선택이 아니라 설정 파일 기본 모델을 쓰므로 그 값을 표시(별도 프로세스 실행 경로와 일치)");
+ok(/codex: scoutCodexPrefs\.model/.test(ext) && /deepseek: dsView\.model/.test(ext), "Codex는 정찰 두뇌 설정, DeepSeek는 고급설정 모델을 그대로 표시");
+ok(/const dsView = readDeepseekView\(\)/.test(ext) && /const scoutCodexPrefs = readScoutCodexPrefsExt\(\)/.test(ext) && !/scoutCodex: readScoutCodexPrefsExt\(\)/.test(ext), "같은 설정 파일을 한 번만 읽어 재사용(상태 조립마다 중복 판독 없음)");
+ok(/이 기록엔 모델 이름이 없어요 · 지금 설정: /.test(ext) && /No model name in these records · current setting: /.test(ext), "화면 문구가 '기록'이 아니라 '지금 설정'임을 못박음(한/영 — 기록 위장 금지)");
+ok(/기본값\(따로 지정 안 함\)/.test(ext) && /default \(nothing specified\)/.test(ext), "아무것도 지정 안 했으면 '기본값'으로 정직 표기(빈칸·추측 금지)");
+ok(/if\(c\.models&&c\.models\.length\) models\.textContent=T\("기록된 모델: "/.test(ext), "기록이 있으면 종전대로 기록된 모델 우선(무회귀)");
+
 console.log("[5] 상태바(소스 잠금) — 감사 B 반영: flow 병기·툴팁 분기·게이트·평시 분기·워처");
 ok(/const scoutOn = !!ws && \(\(\) => \{ try \{ return loadContract\(ws\)\.scoutMode === "on"; \}/.test(ext), "scoutMode 게이트 일원화 — 2트랙 잔존 live 파일이 정찰 문구 노출 못 함");
 ok(/mode === "linked" \|\| mode === "unlinked" \|\| mode === "flow"\) \? readScoutLive\(ws\) : null/.test(ext), "flow 모드에서도 정찰 라이브 읽음(자동 지시 주 경로 — 표시 전멸 해소)");
