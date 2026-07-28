@@ -116,6 +116,36 @@ writeRollout("44444444-dddd", [userMsg("요청"), fc("ls")]);
 const r5 = citedFilesUnseen(ansGhost, ws, "44444444-dddd");
 ck("실재 안 하는 인용 파일은 unseen 대상 아님", r5.checked === true && r5.unseen.length === 0);
 
+console.log("[3-2] 인식 창구의 경계(2026-07-28 확장 시도 3회 철회) — 목록 밖 명령은 인정하지 않는다");
+{
+  // 검증자 제시 반례: 파일을 전혀 읽지 않고 인용 줄을 합성 출력하면서 인수에만 파일명을 넣는 구성.
+  // 최종 관문 3중(성공·비어있지 않음·인용 내용 실재)은 모두 통과하지만 '읽었다'는 증명이 아니다.
+  const forge = 'node -e "console.log(' + "'line1'" + ')" foo.ts bar.ts';
+  writeRollout("dddddddd-forge-node", [userMsg("검증 요청"), ...pair(forge, "line1")]);
+  const rF = citedFilesUnseen(answer, ws, "dddddddd-forge-node");
+  ck("임의 코드 실행기의 합성 출력=판독 아님(ab-3 위조 경로 차단)", rF.checked === true && rF.unseen.includes("foo.ts") && rF.unseen.includes("bar.ts"));
+
+  writeRollout("dddddddd-forge-py", [userMsg("검증 요청"), ...pair('python -c "print(' + "'line1'" + ')" foo.ts', "line1")]);
+  const rP = citedFilesUnseen(answer, ws, "dddddddd-forge-py");
+  ck("python -c 합성 출력=판독 아님", rP.checked === true && rP.unseen.includes("foo.ts"));
+
+  writeRollout("dddddddd-forge-loop", [userMsg("검증 요청"), ...pair('for f in foo.ts; do echo "line1"; done', "line1")]);
+  const rL = citedFilesUnseen(answer, ws, "dddddddd-forge-loop");
+  ck("제어문으로 감싼 합성 출력=판독 아님", rL.checked === true && rL.unseen.includes("foo.ts"));
+
+  // 2차 반증: awk는 스크립트 인수로 파일을 안 읽고 출력을 만들 수 있어(BEGIN 블록) 목록 밖으로 유지.
+  writeRollout("dddddddd-awk-forge", [userMsg("검증 요청"), ...pair("awk 'BEGIN{print \"line1\"}' foo.ts", "line1")]);
+  const rAF = citedFilesUnseen(answer, ws, "dddddddd-awk-forge");
+  ck("awk BEGIN 합성 출력=판독 아님(스크립트 인수를 받는 명령은 확장 제외)", rAF.checked === true && rAF.unseen.includes("foo.ts"));
+
+  // 목록 확장은 3회 반증 끝에 전면 철회했다(표준 입력+비피연산자 경로 구성이 어떤 목록이든 통과 —
+  // 한계는 목록이 아니라 '경로를 실제 입력 피연산자에 결속하지 못하는 판정 방식'. 보관함 b8e15bf229983ddb).
+  // 아래는 철회 후에도 유지되는 계약: 목록 밖 명령은 인정하지 않는다.
+  writeRollout("dddddddd-nl-out", [userMsg("검증 요청"), ...pair("nl foo.ts", "1	line1")]);
+  const rN = citedFilesUnseen(answer, ws, "dddddddd-nl-out");
+  ck("목록 밖 명령(nl)=미인정 — 확장 철회 상태 고정", rN.checked === true && rN.unseen.includes("foo.ts"));
+}
+
 console.log("[6] 장기 세션 — 파일 전체가 16MiB를 넘어도 최신 턴 경계와 도구 흔적은 판독");
 const largeId = "77777777-large";
 const largeFile = path.join(SESS, `rollout-${largeId}.jsonl`);
