@@ -226,6 +226,35 @@ console.log("[3-3] 문맥 보정(2026-07-28 실사고) — 인정 명령은 그�
     ck("다른 셸 호출에서 정한 변수는 이어지지 않음(호출 경계 넘는 복원 금지)", rCC.checked === true && rCC.unseen.includes("foo.ts"));
   }
 
+  // 사용자 실보고 2026-07-29: 실제 기록에서 판독이 '한 스크립트 안에 여러 호출을 담고 각 호출이 자기
+  // 작업 폴더를 들고 있는' 형태로 왔다. 명령만 뽑고 폴더를 버리면 상대경로를 풀 기준이 없어 전부 미확인이 된다.
+  {
+    const id = "custom-nested-wd-" + (++callSeq);
+    const input = "const calls = [\n  {\n    command: \"Select-String -LiteralPath 'foo.ts' -Pattern 'line' -Encoding utf8\",\n    workdir: " + JSON.stringify(ws) + ",\n    timeout_ms: 10000\n  }\n];";
+    const result = [{ type: "input_text", text: "Script completed\nOutput:\nfoo.ts:1:line1" }, { type: "input_text", text: "Exit code: 0\nOutput:\nfoo.ts:1:line1" }];
+    writeRollout("cccccccc-nested-wd", [
+      userMsg("검증 요청"),
+      { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: id, input } },
+      { type: "response_item", payload: { type: "custom_tool_call_output", call_id: id, output: result } },
+    ]);
+    const rNW = citedFilesUnseen(answerAbs, wsOther, "cccccccc-nested-wd");
+    ck("한 스크립트 안 호출이 들고 온 자기 작업 폴더로 상대경로를 품(실보고 형태)", rNW.checked === true && rNW.unseen.length === 0);
+  }
+  {
+    // 폴더가 다른 두 호출이 섞여도 서로의 폴더를 끌어다 쓰지 않는다(오귀속 금지).
+    const id = "custom-nested-mix-" + (++callSeq);
+    const other = path.join(os.tmpdir(), "no-such-mixed-dir");
+    const input = "const calls = [\n  {\n    command: \"Select-String -LiteralPath 'foo.ts' -Pattern 'line'\",\n    workdir: " + JSON.stringify(other) + "\n  },\n  {\n    command: \"Get-Content -LiteralPath bar.ts\",\n    workdir: " + JSON.stringify(ws) + "\n  }\n];";
+    const result = [{ type: "input_text", text: "Script completed\nOutput:\nline1" }, { type: "input_text", text: "Exit code: 0\nOutput:\nline1" }];
+    writeRollout("cccccccc-nested-mix", [
+      userMsg("검증 요청"),
+      { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: id, input } },
+      { type: "response_item", payload: { type: "custom_tool_call_output", call_id: id, output: result } },
+    ]);
+    const rMX = citedFilesUnseen(answerAbs, wsOther, "cccccccc-nested-mix");
+    ck("다른 호출의 작업 폴더를 끌어와 인정하지 않음(호출별 폴더 격리)", rMX.checked === true && rMX.unseen.includes("foo.ts"));
+  }
+
   // 2차 blocker②: 주석에 적힌 경로는 그 명령이 읽은 대상일 수 없다(실제로 읽은 것은 미끼 파일뿐).
   fs.writeFileSync(path.join(ws, "decoy.txt"), "line1\nline2\n", "utf8");
   writeRollout("cccccccc-comment-path", [userMsg("검증 요청"), ...pairW("Get-Content -LiteralPath decoy.txt # foo.ts", ws, "line1\nline2")]);

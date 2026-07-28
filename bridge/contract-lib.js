@@ -1841,8 +1841,12 @@ function economyConfigFp() {
 // self 어댑터 지문(1차 blocker① 반영 — 설치본 contract-lib 기준 상대경로만으론 dev 창에서도 null):
 // 후보=①호출자 힌트(확장이 자기 루트 기준 scripts/ 경로를 줌 — dev 창=레포라 실존·마켓 vsix=비번들이라
 // 부재=정직 미준비) ②이 파일 기준 ../scripts(레포 안에서 직접 require된 경우).
+// 기본(Claude) 담당의 준비 지문은 **의미 보강이 실제로 실행하는 어댑터** 기준이어야 한다.
+// 2026-07-29 사용자 실보고: 준비 점검에서 기본 담당만 계속 실패로 떴다. 원인은 여기서 정찰용
+// scripts/scout-providers.js 를 보고 있었기 때문 — 그 파일은 설치본에 안 들어가고, 의미 보강 실행에도
+// 쓰이지 않는다(보강 self 어댑터는 bridge/enrich-providers.js 이며 설치본에 함께 배포된다).
 function selfAdapterSha(pathHint) {
-  for (const cand of [pathHint, path.join(__dirname, "..", "scripts", "scout-providers.js")]) {
+  for (const cand of [pathHint, path.join(__dirname, "enrich-providers.js")]) {
     if (!cand) continue;
     try { return sha1Of(fs.readFileSync(cand)); } catch { /* 다음 후보 */ }
   }

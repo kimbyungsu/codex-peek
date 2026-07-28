@@ -549,31 +549,45 @@ function splitShellStatements(text) {
   push();
   return out;
 }
-function nestedShellCommands(text) {
-  const out = [];
-  // functions.exec가 감싼 실제 exec_command 호출의 cmd/command 문자열. JSON 이중따옴표 리터럴만 받아
-  // 임의 JS를 평가하지 않는다. 해석 불가한 스크립트는 확인 성공으로 추측하지 않는다.
-  const re = /(?:["'](?:cmd|command)["']|\b(?:cmd|command))\s*:\s*("(?:\\.|[^"\\])*")/g;
+// functions.exec가 감싼 실제 호출들. 각 호출은 명령과 **자기 작업 폴더**를 같이 들고 있어서, 명령만 뽑고
+// 폴더를 버리면 그 호출이 쓴 상대경로를 풀 기준이 사라진다(사용자 실보고 2026-07-29: 이 형태로 읽은
+// 회차가 전부 '흔적 미확인'으로 남았다). 명령과 폴더를 짝지어 돌려준다.
+// 짝짓기는 **자기 명령 뒤, 다음 명령 앞** 구간에서만 찾는다 — 다른 호출의 폴더를 끌어오면 읽지도 않은
+// 폴더가 기준이 되므로, 못 찾으면 폴더 없음으로 두는 쪽(안전한 실패)을 택한다.
+// JSON 이중따옴표 리터럴만 받아 임의 JS를 평가하지 않는다.
+function nestedShellCalls(text) {
+  const s = String(text || "");
+  const cmdRe = /(?:["'](?:cmd|command)["']|\b(?:cmd|command))\s*:\s*("(?:\\.|[^"\\])*")/g;
+  const cmds = [];
   let m;
-  while ((m = re.exec(String(text || "")))) { try { out.push(JSON.parse(m[1])); } catch { /* 무시 */ } }
-  return out;
+  while ((m = cmdRe.exec(s))) { let v; try { v = JSON.parse(m[1]); } catch { continue; } cmds.push({ command: v, at: m.index, end: cmdRe.lastIndex }); }
+  const wdRe = /(?:["'](?:workdir|cwd)["']|\b(?:workdir|cwd))\s*:\s*("(?:\\.|[^"\\])*")/g;
+  const wds = [];
+  while ((m = wdRe.exec(s))) { let v; try { v = JSON.parse(m[1]); } catch { continue; } wds.push({ dir: v.replace(/\\/g, "/"), at: m.index }); }
+  return cmds.map((c, i) => {
+    const hi = i + 1 < cmds.length ? cmds[i + 1].at : s.length;
+    const own = wds.find((w) => w.at >= c.end && w.at < hi);
+    return { command: c.command, workdir: own ? own.dir : "" };
+  });
 }
+function nestedShellCommands(text) { return nestedShellCalls(text).map((c) => c.command); }
 function toolReadParts(p) {
   const values = toolArgumentValues(p);
   const name = String((p && (p.name || p.tool_name)) || "").toLowerCase();
   if (/apply[_-]?patch|write|delete|remove|list|glob/.test(name) && !/read|view|open/.test(name)) return [];
-  if (/read|view|open/.test(name)) return values;
-  const nested = values.flatMap(nestedShellCommands);
-  const sources = nested.length ? nested : values;
+  if (/read|view|open/.test(name)) return values.map((v) => ({ text: v, workdir: "" }));
+  const nested = values.flatMap(nestedShellCalls);
+  const sources = nested.length ? nested : values.map((v) => ({ command: v, workdir: "" }));
   // 리터럴 대입을 풀어 넣되 **실행 순서를 지키고**(1차 blocker① — 뒤에 나온 대입이 앞 문장에 소급되면,
   // 없는 파일을 읽고 실패한 뒤 이름만 나중에 대입해도 '그 파일을 읽었다'가 된다), **호출 경계를 넘지
   // 않는다**(2차 blocker① — 셸 호출이 다르면 서로 다른 프로세스라 변수가 이어지지 않는다).
   // 리터럴이 아닌 대입은 그 변수의 값을 알 수 없게 되므로 복원 대상에서 지운다(옛 값이 남지 않게).
+  // 각 조각은 자기가 나온 호출의 작업 폴더를 달고 나간다(경로 기준이 호출마다 다르기 때문).
   const out = [];
   for (const source of sources) {
     const vars = new Map();
-    for (const s of splitShellStatements(source)) {
-      if (toolCallCanReadFile(p, s)) out.push(expandShellVars(stripShellComment(s), vars));
+    for (const s of splitShellStatements(source.command)) {
+      if (toolCallCanReadFile(p, s)) out.push({ text: expandShellVars(stripShellComment(s), vars), workdir: source.workdir || "" });
       const lit = shellLiteralAssign(s);
       if (lit) { vars.set(lit.name, lit.value); continue; }
       const tgt = shellAssignTarget(s);
@@ -591,15 +605,17 @@ function toolCallNamesExactFile(p, fileKey, ws) {
   // (호출이 밝힌 작업 폴더 / 종전 기준 폴더 / git -C 로 지정한 저장소) 문장별로 만들어 대조한다.
   // 호출이 작업 폴더를 밝혔으면 **그 폴더만** 기준이다(1차 blocker③ — 기준 폴더를 둘 다 열어 두면
   // B 폴더에서 읽은 동명 파일이 A 폴더 파일의 판독으로 둔갑한다). 안 밝힌 경우에만 종전 기준(무회귀).
+  // 우선순위: 그 조각이 나온 호출의 폴더 → 도구 인수의 폴더 → 종전 기준(무회귀). 하나만 쓴다.
   const wd = toolCallWorkdir(p);
-  const baseRoots = wd ? [wd] : [ws || process.cwd()];
   const hit = (v0, part) => {
     const v = String(v0).replace(/\\/g, "/");
     const esc = v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const re = new RegExp(`(^|[^a-z0-9_.\\/-])(?:\\./)?${esc}(?=$|[^a-z0-9_.\\/-])`, process.platform === "win32" ? "i" : "");
     return re.test(part);
   };
-  for (const part of readParts) {
+  for (const item of readParts) {
+    const part = item.text;
+    const baseRoots = [item.workdir || wd || ws || process.cwd()];
     if (hit(fileKey, part)) return true;
     for (const root of [...baseRoots, ...gitDirRoots(part)]) {
       let rel = "";

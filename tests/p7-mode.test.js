@@ -117,6 +117,17 @@ const MP = require(path.join(ROOT, "bridge", "map-probe.js"));
   selfUsageRows = fs.readFileSync(path.join(tmpHome, "stats", "scout-usage.jsonl"), "utf8").trim().split("\n").filter(Boolean).map(JSON.parse).filter((r) => r.schema === "scout-usage-v2" && r.flow === "readiness" && r.provider === "claude");
   ok(selfUsageRows.length === selfUsageBefore + 1, "실행 파일 부재로 프로세스가 시작되지 않은 점검은 호출 0건");
   ok(typeof rs1.rec.startedAt === "string" && typeof rs2.rec.startedAt === "string", "probe 레코드에 시작 시각 탑재(늦은-패자 규칙 입력 — 4차 [주의])");
+  // 2026-07-29 사용자 실보고: 준비 점검에서 기본(Claude) 담당만 계속 실패했다. 지문 기준이 '의미 보강이
+  // 실제로 실행하는 어댑터'가 아니라 설치본에 없는 정찰 스크립트였기 때문. 힌트 없이도 배포되는 어댑터를
+  // 찾아야 하고, 확장이 넘기는 힌트도 그 파일이어야 한다.
+  ok(CL.selfAdapterSha(null) !== null, "힌트 없이도 배포되는 보강 어댑터로 지문이 잡힘(설치본에서 기본 담당이 늘 미준비로 떨어지던 원인 해소)");
+  ok(fs.existsSync(path.join(ROOT, "bridge", "enrich-providers.js")), "(전제) 보강 어댑터 실재");
+  {
+    const extSrc = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
+    ok(/selfAdapterHintExt\(\): string \{ return path\.join\(__dirname, "\.\.", "bridge", "enrich-providers\.js"\); \}/.test(extSrc), "확장이 넘기는 힌트=보강 어댑터");
+    ok(!/"scripts", "scout-providers\.js"/.test(extSrc), "옛 정찰 스크립트 힌트 잔재 0");
+    ok(/보강 어댑터 파일을 찾지 못했어요/.test(extSrc) && /the enrichment adapter file was not found/.test(extSrc), "미발견 안내가 실제 원인(설치 불완전)을 말함 — 옛 '마켓 미번들' 설명 교체");
+  }
   const vS = CL.mapReadinessView({ selfFpNow: null });
   ok(vS.self.ok === false, "실패 기록+캐시 리셋 후 뷰=미준비(옛 성공 부활 없음)");
   // 4차 [주의](f-871aa1de): fp:null 실패도 '시작 시각'이 기존 성공 기록보다 앞서면(그 사이 다른 창이 성공
@@ -238,7 +249,9 @@ ok(ext.includes('w.reason === "fp-mismatch" ?'), "저장 실패 사유 분리(�
 ok(ext.includes('rs.write.ok ? (rs.rec.ok ? "OK" : detS) : wNote(rs.write)')
   && !ext.includes('rs.rec.ok && rs.write.ok ? "OK" : rs.rec.ok ? wNote(rs.write) : detS'),
   "self 점검 결과 실패와 준비 기록 실패를 각각 숨김없이 표시");
-ok(ext.includes("어댑터 미배포 — 정찰 스크립트는 마켓 설치본에 없어요"), "VSIX 미배포=정직 미준비 사유 표시(f-15d2907b 재판단: 러너 자체가 마켓 빌드에 없는 현 단계 사실 — 거짓 준비 표시가 더 나쁨)");
+// 2026-07-29 개정: 옛 문구는 '정찰 스크립트가 마켓 빌드에 없다'였는데, 준비 점검이 보는 대상 자체가
+// 잘못돼 있었다(의미 보강은 배포되는 보강 어댑터로 돈다). 이제 이 사유는 '설치가 온전하지 않다'는 뜻이다.
+ok(ext.includes("보강 어댑터 파일을 찾지 못했어요") && !ext.includes("어댑터 미배포 — 정찰 스크립트는 마켓 설치본에 없어요"), "어댑터 미발견=설치 불완전 안내(옛 '마켓 미번들' 사유 문구 잔재 0)");
 const guideStart = ext.indexOf("function openMapModeGuide");
 const guideEnd = ext.indexOf("function openScoutHealthReport", guideStart);
 const guide = guideStart >= 0 && guideEnd > guideStart ? ext.slice(guideStart, guideEnd) : "";

@@ -622,7 +622,10 @@ function precisionFpNowExt(): string | null {
 // self 재대조 재료: Claude CLI 버전 캐시(확장 수명 동안 — probe 시 갱신. 매 상태 푸시 spawn은 과함이라
 // 캐시 사용: CLI 교체 감지는 다음 probe·재시작에서 — 정직 한정)와 어댑터 경로 힌트(dev 창=레포 루트).
 let cachedClaudeVer: string | null = null;
-function selfAdapterHintExt(): string { return path.join(__dirname, "..", "scripts", "scout-providers.js"); } // out/ 기준 상위=확장 루트(dev 창=레포 — vsix엔 비번들이라 부재=정직 미준비)
+// out/ 기준 상위=확장 루트. 의미 보강의 기본(Claude) 담당이 실제로 실행하는 어댑터를 가리킨다
+// (2026-07-29 사용자 실보고 — 종전엔 정찰용 scripts/scout-providers.js 를 가리켜, 설치본에서 그 파일이
+//  없다는 이유만으로 기본 담당이 늘 '점검 실패'로 보였다. 보강 어댑터는 설치본에 함께 배포된다).
+function selfAdapterHintExt(): string { return path.join(__dirname, "..", "bridge", "enrich-providers.js"); }
 function selfFpNowExt(): string | null {
   try { const CLx: any = bridgeLib(); return CLx && CLx.selfExecFp ? CLx.selfExecFp(cachedClaudeVer, selfAdapterHintExt()) : null; } catch { return null; }
 }
@@ -650,7 +653,7 @@ async function runMapProbeFromUi(ws: string | null): Promise<void> {
     try {
       const rs = MP.probeSelf({ adapterHint: selfAdapterHintExt() });
       cachedClaudeVer = rs.ver; // null이면 null로 리셋 — view 재대조(selfFpNow)도 즉시 미준비로 뒤집힘
-      const detS = rs.rec.detail === "adapter-missing" ? tE("어댑터 미배포 — 정찰 스크립트는 마켓 설치본에 없어요(소스 저장소에서 실행해야 준비됨: 현 단계 정직 한계)", "adapter not deployed — scout scripts are not bundled in marketplace builds (run from the source repo: honest current limit)") : rs.rec.detail;
+      const detS = rs.rec.detail === "adapter-missing" ? tE("보강 어댑터 파일을 찾지 못했어요 — 설치가 온전하지 않을 수 있어요(재설치 후 다시 점검)", "the enrichment adapter file was not found — the install may be incomplete (reinstall, then re-check)") : rs.rec.detail;
       notes.push("self: " + (rs.write.ok ? (rs.rec.ok ? "OK" : detS) : wNote(rs.write)));
     } catch (e: any) { notes.push("self: " + String(e && e.message)); }
     // economy — 과금 최대 2회. Electron→node 전환 env 필수(2차 blocker③ — 실행기는 stdout capability-ok까지 검사).
