@@ -193,9 +193,9 @@ interface BridgeState {
   scoutLive: { arm: string; startedAt: string } | null; // 지도 생성중(러너 실행 동안만 — TTL로 잔존 걸러냄)
   deepseek: { hasKey: boolean; masked: string; model: string }; // 고급설정 탭 표시용 — 키 원문은 절대 웹뷰로 안 보냄(마스킹만)
   scoutCodex: { model: string; reasoning: string }; // 고급설정 탭 — Codex 정찰 두뇌 설정(P6b·전역·비밀 아님)
-  // 사용량 카드의 '모델 이름 기록 없음' 보조 표시(2026-07-28 사용자 요청): 담당별로 **다음 실행이 쓸 현재 설정값**.
-  // 과거 기록의 모델이 아니라 '지금 설정'이므로 화면 문구가 반드시 그렇게 밝힌다(기록 위장 금지).
-  // 빈 문자열 = 그 담당의 기본값(우리가 아무것도 지정하지 않음) — 화면에서 '기본값'으로 표기한다.
+  // 사용량 카드에서 기록에 모델이 없을 때 보여줄 값(2026-07-28 사용자 요청): 담당별로 **실행이 쓰는 설정값**.
+  // 이 담당들은 매번 고르는 게 아니라 이 값으로 고정돼 돌기 때문에, 화면도 '고정됩니다'로 밝힌다.
+  // 빈 문자열 = 그 담당의 기본값(우리가 아무것도 지정하지 않음) — 화면에서 '기본값으로 고정'으로 표기한다.
   scoutModelNow: { claude: string; codex: string; deepseek: string };
   mapMode: { raw: string | null; mode: string } | null; // P7 — 의미 보강 담당(3트랙에서만·null=2트랙/ws 없음). raw=명시 선택·mode=표시값(부재=self)
   mapReadiness: any | null; // P7 — readiness 뷰(contract-lib mapReadinessView 산출·precision 지문은 호스트 주입)
@@ -4933,6 +4933,36 @@ class Dashboard {
     var sv=foldScroll.get(key);
     if(sv){ requestAnimationFrame(function(){ pre.scrollTop=sv; }); }
   }
+  // 보류 사유를 사람 말로 옮긴다(2026-07-28 사용자 지적: 화면에 영문 코드가 그대로 떠서 왜 멈췄는지 알 수 없었다).
+  // 코드는 실행기가 정한 닫힌 목록이라 표로 옮기되, 모르는 값이 오면 코드를 그대로 보여준다(사라지지 않게).
+  // 공급자 이름이 뒤에 붙는 형태(adapter-missing:codex)는 콜론 앞만 보고 옮기고 뒤는 괄호로 남긴다.
+  var PARK_REASONS={
+    "precision-not-ready": ["정밀형 담당이 아직 준비되지 않았어요","the Precision provider is not ready yet"],
+    "economy-not-ready": ["경제형 담당이 아직 준비되지 않았어요","the Economy provider is not ready yet"],
+    "auto-not-ready": ["자동형은 두 담당이 모두 준비돼야 하는데 아직이에요","Auto needs both providers ready, and they are not"],
+    "precision-failed": ["정밀형 담당 실행이 실패했어요","the Precision run failed"],
+    "economy-failed": ["경제형 담당 실행이 실패했어요","the Economy run failed"],
+    "both-failed": ["두 담당 모두 실행이 실패했어요","both providers failed"],
+    "corridor-unknown": ["바뀐 자리가 지도의 어느 구역인지 판단할 수 없었어요","the changed area could not be located on the map"],
+    "provider-conflict": ["담당 지정이 서로 어긋나요","the provider selection is inconsistent"],
+    "invalid-input": ["입력이 온전하지 않아요","the input was not well-formed"],
+    "consent-stale": ["동의 이후 설정이 바뀌어 다시 확인이 필요해요","settings changed after consent, so it needs re-confirmation"],
+    "adapter-missing": ["그 담당을 실행할 방법이 없어요","there is no way to run that provider"],
+    "adjudicate-unreachable": ["판정을 맡길 자리가 없어요","there is no adjudication path to take"],
+    "resolution-out-of-scope": ["돌아온 결정이 이번 범위를 벗어났어요","the returned decision was outside this scope"],
+    "retry-exhausted": ["재시도 횟수를 다 썼어요","retries were exhausted"],
+    "rev-exhausted": ["세대 재시도를 다 썼어요","generation retries were exhausted"],
+    "route-loop-guard": ["같은 자리를 맴돌아 멈췄어요","it looped and was stopped"],
+    "uncertain-call": ["호출 결과를 확신할 수 없어 멈췄어요","the call outcome was uncertain, so it stopped"]
+  };
+  function parkReasonText(raw){
+    var s=String(raw||"").trim();
+    if(!s) return T("사유 기록 없음","no reason recorded");
+    var i=s.indexOf(":"), head=i>=0?s.slice(0,i):s, tail=i>=0?s.slice(i+1):"";
+    var hit=PARK_REASONS[head];
+    if(!hit) return s;
+    return T(hit[0],hit[1])+(tail?" ("+tail+")":"");
+  }
   function keyedDetails(key, summaryText){ var det=document.createElement("details"); if(openPanels.has(key)) det.open=true; det.addEventListener("toggle", function(){ if(det.open) openPanels.add(key); else openPanels.delete(key); }); var s=document.createElement("summary"); s.textContent=summaryText; det.appendChild(s); return det; }
   // 클릭 점프 가드(2026-07-23 사용자 실보고 ②의 '클릭 직접 경로' 몫): 접기/펼치기 등 클릭 직후 레이아웃
   // 변화(접기로 페이지가 짧아짐 등)로 브라우저가 스크롤을 최상단으로 강제하면, 한 프레임 뒤 '가능한 가장
@@ -5542,15 +5572,17 @@ class Dashboard {
         // 키=대상+목적+담당이라 숫자가 갱신돼도 같은 줄로 이어지고, 접두사가 비는 전역 준비 점검만 고유 이름을 준다.
         var dkey="usage:"+usageScope+"|"+(prefix||"global-readiness")+"|"+p[0];
         var detail=keyedDetails(dkey, p[1]+" — "+usageText(c)); detail.className="map-ops-detail";
-        // 기록에 모델 이름이 없으면(Claude·Codex 정찰은 호출이 토큰·모델을 안 돌려줌) 대신 **지금 설정값**을 알려준다.
-        // 사용자 요청 2026-07-28: "모델 이름 기록 없음"만 뜨는 게 아니라 무슨 모델인지 알 수 있어야 한다.
-        // 과거 기록의 모델이라고 오해하지 않도록 '지금 설정'이라고 못박고, 지정이 없으면 '기본값'으로 표기한다.
+        // 기록에 모델 이름이 없으면(Claude·Codex 정찰은 호출이 토큰·모델을 안 돌려줌) **어떤 모델로 도는지**를 알려준다.
+        // 사용자 지적 2026-07-28: 이 담당들은 매번 고르는 게 아니라 설정값으로 '고정'돼 도니까,
+        // '기록이 없다'로 시작하면 실제 상황을 잘못 전달한다. 그래서 고정 사실을 앞에 두고,
+        // 기록에 안 남는 이유는 괄호로 덧붙인다. 지정이 없으면 그 담당의 기본값으로 고정된 것이다.
         var models=document.createElement("div"); models.className="muted";
         if(c.models&&c.models.length) models.textContent=T("기록된 모델: ","Recorded models: ")+c.models.join(", ");
         else {
           var nowM=(d.scoutModelNow||{})[p[0]];
-          var shown=nowM?nowM:T("기본값(따로 지정 안 함)","default (nothing specified)");
-          models.textContent=T("이 기록엔 모델 이름이 없어요 · 지금 설정: ","No model name in these records · current setting: ")+shown;
+          models.textContent=nowM
+            ? T("설정한 모델로 고정됩니다: ","Fixed to the configured model: ")+nowM+T(" (호출이 모델을 알려주지 않아 기록엔 안 남아요)"," (the call does not report a model, so records have none)")
+            : T("기본값으로 고정됩니다 (따로 지정 안 함 · 호출이 모델을 알려주지 않아 기록엔 안 남아요)","Fixed to the default (nothing specified · the call does not report a model, so records have none)");
         }
         detail.appendChild(models);
         usageBox.appendChild(detail);
@@ -6239,7 +6271,7 @@ class Dashboard {
             else if(!consented) msg=T("자동 보강: 꺼짐(이 담당의 자동 실행 동의 없음)","Auto-enrich: off (no consent for this provider)");
             else if(jp==="damaged") msg=T("자동 보강: 작업 기록 손상 — 자동 실행 정지","Auto-enrich: job ledger damaged — automation halted");
             else if(en9.deferredSt==="damaged") msg=T("자동 보강: 확인 대기 기록 손상 — 수동 복구 필요","Auto-enrich: verification queue damaged — manual recovery required");
-            else if(jp==="parked") msg=T("자동 보강: 보류됨 — ","Auto-enrich: parked — ")+(en9.job.parkedReason||"");
+            else if(jp==="parked") msg=T("자동 보강: 보류됨 — ","Auto-enrich: parked — ")+parkReasonText(en9.job.parkedReason);
             else if(jp==="done") msg=T("자동 보강: 완료 — 적용 ","Auto-enrich: done — applied ")+String(en9.job.applied||0)+T("건 · 확인 대기 "," · awaiting verification ")+String(en9.awaitingVerification||0)+T("건 · 기각 "," · rejected ")+String(en9.job.rejected||0)+T("건 · 조사 대기 "," · investigation ")+String(en9.job.investigation||0)+T("건"," items");
             else if(jp==="open") msg=T("자동 보강: 진행 중","Auto-enrich: in progress");
             else msg=en9.queuePending?T("자동 보강: 대기 중(다음 관측 때 실행)","Auto-enrich: pending (runs on next observation)"):T("자동 보강: 대기 없음","Auto-enrich: nothing queued");

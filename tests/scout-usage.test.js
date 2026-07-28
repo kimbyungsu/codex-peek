@@ -59,8 +59,31 @@ ok(/scoutModelNow: \{ claude: string; codex: string; deepseek: string \}/.test(e
 ok(/claude: readClaudeSettingsModel\(\)/.test(ext), "Claude 정찰은 대화창 선택이 아니라 설정 파일 기본 모델을 쓰므로 그 값을 표시(별도 프로세스 실행 경로와 일치)");
 ok(/codex: scoutCodexPrefs\.model/.test(ext) && /deepseek: dsView\.model/.test(ext), "Codex는 정찰 두뇌 설정, DeepSeek는 고급설정 모델을 그대로 표시");
 ok(/const dsView = readDeepseekView\(\)/.test(ext) && /const scoutCodexPrefs = readScoutCodexPrefsExt\(\)/.test(ext) && !/scoutCodex: readScoutCodexPrefsExt\(\)/.test(ext), "같은 설정 파일을 한 번만 읽어 재사용(상태 조립마다 중복 판독 없음)");
-ok(/이 기록엔 모델 이름이 없어요 · 지금 설정: /.test(ext) && /No model name in these records · current setting: /.test(ext), "화면 문구가 '기록'이 아니라 '지금 설정'임을 못박음(한/영 — 기록 위장 금지)");
-ok(/기본값\(따로 지정 안 함\)/.test(ext) && /default \(nothing specified\)/.test(ext), "아무것도 지정 안 했으면 '기본값'으로 정직 표기(빈칸·추측 금지)");
+// 2026-07-28 사용자 지적: 이 담당들은 매번 고르는 게 아니라 설정값으로 고정돼 도니, '기록이 없다'로 시작하면
+// 실제 상황을 잘못 전달한다. 고정 사실을 앞에 두고 기록에 안 남는 이유는 괄호로 덧붙인다.
+ok(/설정한 모델로 고정됩니다: /.test(ext) && /Fixed to the configured model: /.test(ext), "지정이 있으면 '설정한 모델로 고정' 문구가 먼저 온다(한/영)");
+ok(/기본값으로 고정됩니다 \(따로 지정 안 함/.test(ext) && /Fixed to the default \(nothing specified/.test(ext), "지정이 없으면 '기본값으로 고정' 문구(빈칸·추측 금지)");
+ok(/호출이 모델을 알려주지 않아 기록엔 안 남아요/.test(ext) && /the call does not report a model, so records have none/.test(ext), "기록이 비는 이유를 함께 밝힘(기록 위장 금지)");
+ok(!/이 기록엔 모델 이름이 없어요/.test(ext) && !/모델 이름 기록 없음/.test(ext), "'기록 없음'으로 시작하던 옛 문구 잔재 0");
+
+console.log("[4c] 자동 보강 보류 사유를 사람 말로(2026-07-28 사용자 지적 — 화면에 영문 코드가 그대로 떴다)");
+ok(/var PARK_REASONS=\{/.test(ext) && /function parkReasonText\(raw\)/.test(ext), "보류 사유 표+변환 함수 존재");
+ok(/parkReasonText\(en9\.job\.parkedReason\)/.test(ext) && !/\+\(en9\.job\.parkedReason\|\|""\)/.test(ext), "보강 상태 줄이 원시 코드 대신 변환을 거침(직결 잔재 0)");
+ok(/"precision-not-ready": \["정밀형 담당이 아직 준비되지 않았어요"/.test(ext), "실제로 발생한 사유(정밀형 미준비)가 표에 있음");
+{
+  // 흐름 실행: 모르는 코드는 사라지지 않고 그대로, 공급자가 붙은 형태는 앞부분만 옮기고 뒤는 괄호로 남는다.
+  const src2 = fs.readFileSync(path.join(ROOT, "out", "extension.js"), "utf8");
+  const st = src2.indexOf("function parkReasonText(");
+  let i = src2.indexOf("{", st), d2 = 0, fnTxt = "";
+  for (; i < src2.length; i++) { if (src2[i] === "{") d2++; else if (src2[i] === "}") { d2--; if (d2 === 0) { fnTxt = src2.slice(st, i + 1); break; } } }
+  const tblSt = src2.indexOf("var PARK_REASONS=");
+  const tblTxt = src2.slice(tblSt, src2.indexOf("};", tblSt) + 2);
+  const f = new Function("T", tblTxt + "\n" + fnTxt + "\nreturn parkReasonText;")((ko) => ko);
+  ok(f("precision-not-ready") === "정밀형 담당이 아직 준비되지 않았어요", "표에 있는 코드는 사람 말로 옮겨짐");
+  ok(f("adapter-missing:codex") === "그 담당을 실행할 방법이 없어요 (codex)", "공급자가 붙은 형태는 앞부분 변환+뒤는 괄호 보존");
+  ok(f("brand-new-code") === "brand-new-code", "모르는 코드는 사라지지 않고 그대로 보임(정보 손실 금지)");
+  ok(f("") === "사유 기록 없음", "사유가 비면 빈칸 대신 그렇다고 밝힘");
+}
 ok(/if\(c\.models&&c\.models\.length\) models\.textContent=T\("기록된 모델: "/.test(ext), "기록이 있으면 종전대로 기록된 모델 우선(무회귀)");
 
 console.log("[5] 상태바(소스 잠금) — 감사 B 반영: flow 병기·툴팁 분기·게이트·평시 분기·워처");
