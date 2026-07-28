@@ -5512,13 +5512,21 @@ class Dashboard {
       return T(nf(c.calls)+"회 · 실제 토큰 확인 "+nf(c.tokenCoveredCalls)+"/"+nf(c.calls)+"회 · 확인된 입력 "+nf(c.tokenIn)+" / 출력 "+nf(c.tokenOut)+" tok · 토큰 미제공 호출의 입력 "+nf(c.charsWithoutTokensIn)+" / 출력 "+nf(c.charsWithoutTokensOut)+"자",
         nf(c.calls)+" call(s) · real tokens available for "+nf(c.tokenCoveredCalls)+"/"+nf(c.calls)+" · known in "+nf(c.tokenIn)+" / out "+nf(c.tokenOut)+" tok · calls without tokens: in "+nf(c.charsWithoutTokensIn)+" / out "+nf(c.charsWithoutTokensOut)+" chars");
     };
+    // 펼침 키의 프로젝트 축(1차 검증 [보완] 수용): 같은 창에서 정찰 대상을 바꾸면 재렌더만 일어나고 상태 모음은
+    // 그대로라, 대상 축이 없으면 A에서 펼친 담당이 B에서도 펼쳐진 채로 보인다(다른 프로젝트 숫자를 펼쳐진 줄로
+    // 오인). 최근 사건 타임라인과 같은 식별자를 써서 대상별로 분리한다.
+    var usageScope=(d.scoutTarget&&d.scoutTarget.repo)||"?";
     var addPurpose=function(title,source,prefix){
       var h=document.createElement("div"); h.className="map-ops-purpose"; h.textContent=title; usageBox.appendChild(h);
       var any=false;
       providers.forEach(function(p){
         var c=source&&source[prefix?prefix+"|"+p[0]:p[0]]; if(!c) return; any=true;
-        var detail=document.createElement("details"); detail.className="map-ops-detail";
-        var summary=document.createElement("summary"); summary.textContent=p[1]+" — "+usageText(c); detail.appendChild(summary);
+        // 재렌더에도 펼침 유지(2026-07-28 사용자 실보고: 담당을 펼치면 아주 잠깐 보였다가 곧바로 닫혔다).
+        // 원인은 상태 갱신마다 이 구획을 통째로 다시 만들면서 새 details가 기본 접힘으로 태어난 것 —
+        // 최신 지도·확정 장부에서 이미 고친 것과 같은 부류라 같은 해법(openPanels 기반 keyedDetails)을 쓴다.
+        // 키=대상+목적+담당이라 숫자가 갱신돼도 같은 줄로 이어지고, 접두사가 비는 전역 준비 점검만 고유 이름을 준다.
+        var dkey="usage:"+usageScope+"|"+(prefix||"global-readiness")+"|"+p[0];
+        var detail=keyedDetails(dkey, p[1]+" — "+usageText(c)); detail.className="map-ops-detail";
         var models=document.createElement("div"); models.className="muted"; models.textContent=(c.models&&c.models.length)?T("기록된 모델: ","Recorded models: ")+c.models.join(", "):T("모델 이름 기록 없음","No model name recorded"); detail.appendChild(models);
         usageBox.appendChild(detail);
       });

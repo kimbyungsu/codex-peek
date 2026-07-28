@@ -102,5 +102,45 @@ const timelineEnd = ext.indexOf('if(ml.mapSource==="legacy"', timelineStart);
 const timelineSrc = timelineStart >= 0 && timelineEnd > timelineStart ? ext.slice(timelineStart, timelineEnd) : "";
 ok(!!timelineSrc && !timelineSrc.includes('document.createElement("details")'), "타임라인 구간의 상태 없는 raw details 제거(재렌더 즉시 접힘 회귀 차단)");
 
+console.log("[5] 목적별 외부 호출·사용량 — 담당 펼침이 상태 갱신에도 유지(2026-07-28 사용자 실보고: 펼치면 아주 잠깐 보였다 닫힘)");
+ok(ext.includes('var dkey="usage:"+usageScope+"|"+(prefix||"global-readiness")+"|"+p[0]') && ext.includes("keyedDetails(dkey,"), "사용량 담당 줄=openPanels 기반 keyedDetails(키=대상+목적+담당 — 숫자 갱신에 불변)");
+ok(ext.includes('var usageScope=(d.scoutTarget&&d.scoutTarget.repo)||"?"'), "펼침 키에 정찰 대상 축 존재(1차 [보완] — 같은 창에서 프로젝트를 바꿔도 상태가 넘어오지 않음)");
+{
+  const usageStart = ext.indexOf("var addPurpose=function(title,source,prefix)");
+  const usageEnd = ext.indexOf("if(!any) addLine(usageBox", usageStart);
+  const usageSrc = usageStart >= 0 && usageEnd > usageStart ? ext.slice(usageStart, usageEnd) : "";
+  ok(!!usageSrc && !usageSrc.includes('document.createElement("details")'), "사용량 구간의 상태 없는 raw details 제거(재렌더 즉시 접힘 회귀 차단)");
+}
+// 흐름 실행(문자열 단언만으로는 '키가 갱신마다 달라지는' 오설계를 못 잡음): 산출물의 keyedDetails를 그대로
+// 꺼내 DOM 스텁 위에서 돌리고, 사용량 줄이 실제로 쓰는 키 산식으로 재렌더를 흉내 낸다.
+{
+  const kd = extractFn(outSrc, "keyedDetails");
+  ok(!!kd, "(전제) 산출물에서 keyedDetails 추출");
+  const openPanels = new Set();
+  const mkEl = (tag) => ({
+    tag, open: false, textContent: "", children: [], listeners: {},
+    appendChild(c) { this.children.push(c); },
+    addEventListener(ev, fn) { this.listeners[ev] = fn; },
+    userToggle(v) { this.open = v; if (this.listeners.toggle) this.listeners.toggle(); }
+  });
+  const keyedDetails = new Function("openPanels", "document", "return (" + kd + ");")(openPanels, { createElement: mkEl });
+  const dkeyOf = (scope, prefix, provider) => "usage:" + scope + "|" + (prefix || "global-readiness") + "|" + provider; // 소스 산식 사본(위 단언으로 원본과 결속)
+  const A = "D:/proj-A", B = "D:/proj-B";
+  const K = dkeyOf(A, "map-scout", "codex");
+  const d1 = keyedDetails(K, "Codex — 3회");
+  ok(d1.open === false, "첫 렌더는 접힘(기본 동작 무회귀)");
+  d1.userToggle(true);                          // 사용자가 담당을 펼침
+  const d2 = keyedDetails(K, "Codex — 4회");    // 호출 수만 갱신된 상태 푸시 재렌더
+  ok(d2.open === true, "숫자만 갱신된 재렌더에도 펼침 유지(수정 전=곧바로 닫히던 실보고 재현 차단)");
+  ok(keyedDetails(dkeyOf(A, "map-enrich", "codex"), "Codex — 1회").open === false, "다른 목적의 같은 담당은 영향 없음(키 격리)");
+  ok(keyedDetails(dkeyOf(A, "map-scout", "claude"), "Claude — 1회").open === false, "같은 목적의 다른 담당도 영향 없음(키 격리)");
+  ok(keyedDetails(dkeyOf(A, "", "codex"), "Codex — 2회").open === false, "접두사가 비는 전역 준비 점검도 고유 키(다른 목적과 상태 공유 없음)");
+  // 1차 검증 [보완] 반례: 같은 창에서 정찰 대상만 바꾼 재렌더 — 대상 축이 없으면 여기서 펼쳐진 채로 태어났다.
+  ok(keyedDetails(dkeyOf(B, "map-scout", "codex"), "Codex — 0회").open === false, "프로젝트를 바꾸면 같은 목적·담당이라도 접힘에서 시작(대상 축 격리)");
+  ok(keyedDetails(K, "Codex — 4회").open === true, "원래 프로젝트로 돌아오면 펼침이 그대로(대상 축이 상태를 지우지 않음)");
+  d2.userToggle(false);
+  ok(keyedDetails(K, "Codex — 5회").open === false, "사용자가 접으면 다음 재렌더도 접힘 유지(펼침만 고집하지 않음)");
+}
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
