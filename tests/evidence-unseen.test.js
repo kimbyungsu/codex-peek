@@ -255,6 +255,21 @@ console.log("[3-3] 문맥 보정(2026-07-28 실사고) — 인정 명령은 그�
     ck("다른 호출의 작업 폴더를 끌어와 인정하지 않음(호출별 폴더 격리)", rMX.checked === true && rMX.unseen.includes("foo.ts"));
   }
 
+  {
+    // 검증 1차 blocker①: 명령과 폴더가 **다른 객체**에 있으면 짝지으면 안 된다(글자 순서로만 묶으면
+    // 무관한 객체의 폴더가 끌려와, 읽지도 않은 폴더의 동명 파일이 판독으로 집계된다).
+    const id = "custom-stray-wd-" + (++callSeq);
+    const input = "const real = { command: \"Get-Content -LiteralPath foo.ts\" };\nconst unrelated = { workdir: " + JSON.stringify(ws) + " };\nconst r = await tools.shell_command(real);";
+    const result = [{ type: "input_text", text: "Script completed\nOutput:\nline1\nline2" }, { type: "input_text", text: "Exit code: 0\nOutput:\nline1\nline2" }];
+    writeRollout("cccccccc-stray-wd", [
+      userMsg("검증 요청"),
+      { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: id, input } },
+      { type: "response_item", payload: { type: "custom_tool_call_output", call_id: id, output: result } },
+    ]);
+    const rSW = citedFilesUnseen(answerAbs, wsOther, "cccccccc-stray-wd");
+    ck("다른 객체에 놓인 폴더는 짝짓지 않음(소속 확인 불가=폴더 없음으로 처리)", rSW.checked === true && rSW.unseen.includes("foo.ts"));
+  }
+
   // 2차 blocker②: 주석에 적힌 경로는 그 명령이 읽은 대상일 수 없다(실제로 읽은 것은 미끼 파일뿐).
   fs.writeFileSync(path.join(ws, "decoy.txt"), "line1\nline2\n", "utf8");
   writeRollout("cccccccc-comment-path", [userMsg("검증 요청"), ...pairW("Get-Content -LiteralPath decoy.txt # foo.ts", ws, "line1\nline2")]);

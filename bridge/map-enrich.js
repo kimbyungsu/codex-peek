@@ -1426,8 +1426,9 @@ function resumeJob(repo, oIn, env, j, st2) {
 
 // ── CLI 진입점(증분 4 — 발동 3지점이 공용으로 spawn하는 실행 표면) ────────────────
 // node bridge/map-enrich.js run <repo> [--ws <ws>] [--slot ko|en] [--trigger <t>]
-// 어댑터·Verifier 진입점은 scripts/enrich-providers.js(repo 전용 — 비배포)에서 로드: 마켓 설치본은 부재=
-// adapter-missing park(정직 한계 — P7 selfReady 계약 동형). mode·readiness는 P7 뷰로 산출.
+// 어댑터·Verifier 진입점은 bridge/enrich-providers.js에서 로드한다(설치본에도 함께 배포되므로 마켓
+// 설치본에서도 실행된다 — 옛 주석의 'scripts/ 전용·비배포' 설명은 P8에서 이동하며 무효가 됐다).
+// 파일이 없으면 adapter-missing park(설치가 온전하지 않다는 뜻). mode·readiness는 P7 뷰로 산출.
 function cliMain(argv) {
   const cmd = argv[2];
   if (cmd !== "run" || !argv[3]) { process.stderr.write("사용: node bridge/map-enrich.js run <repo> [--ws <ws>] [--slot ko|en] [--trigger <t>]\n"); return 2; }

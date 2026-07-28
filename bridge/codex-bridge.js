@@ -552,21 +552,37 @@ function splitShellStatements(text) {
 // functions.exec가 감싼 실제 호출들. 각 호출은 명령과 **자기 작업 폴더**를 같이 들고 있어서, 명령만 뽑고
 // 폴더를 버리면 그 호출이 쓴 상대경로를 풀 기준이 사라진다(사용자 실보고 2026-07-29: 이 형태로 읽은
 // 회차가 전부 '흔적 미확인'으로 남았다). 명령과 폴더를 짝지어 돌려준다.
-// 짝짓기는 **자기 명령 뒤, 다음 명령 앞** 구간에서만 찾는다 — 다른 호출의 폴더를 끌어오면 읽지도 않은
-// 폴더가 기준이 되므로, 못 찾으면 폴더 없음으로 두는 쪽(안전한 실패)을 택한다.
+// 짝짓기는 **같은 중괄호 블록에 들어 있을 때만** 인정한다(1차 blocker① — 글자 순서로만 짝지으면
+// 명령 사이에 놓인 무관한 객체의 폴더가 끌려와, 읽지도 않은 폴더가 경로 기준이 된다).
+// 소속을 확인할 수 없으면 폴더 없음으로 둔다(안전한 실패).
 // JSON 이중따옴표 리터럴만 받아 임의 JS를 평가하지 않는다.
+function braceOwnerIndex(s) {
+  const owner = new Int32Array(s.length).fill(-1);
+  const stack = [];
+  let quote = "";
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    const top = stack.length ? stack[stack.length - 1] : -1;
+    if (quote) { owner[i] = top; if (ch === "\\") { i++; if (i < s.length) owner[i] = top; continue; } if (ch === quote) quote = ""; continue; }
+    if (ch === '"' || ch === "'" || ch === "`") { owner[i] = top; quote = ch; continue; }
+    if (ch === "{") { owner[i] = top; stack.push(i); continue; }
+    if (ch === "}") { stack.pop(); owner[i] = stack.length ? stack[stack.length - 1] : -1; continue; }
+    owner[i] = top;
+  }
+  return owner;
+}
 function nestedShellCalls(text) {
   const s = String(text || "");
+  const owner = braceOwnerIndex(s);
   const cmdRe = /(?:["'](?:cmd|command)["']|\b(?:cmd|command))\s*:\s*("(?:\\.|[^"\\])*")/g;
   const cmds = [];
   let m;
-  while ((m = cmdRe.exec(s))) { let v; try { v = JSON.parse(m[1]); } catch { continue; } cmds.push({ command: v, at: m.index, end: cmdRe.lastIndex }); }
+  while ((m = cmdRe.exec(s))) { let v; try { v = JSON.parse(m[1]); } catch { continue; } cmds.push({ command: v, own: owner[m.index] }); }
   const wdRe = /(?:["'](?:workdir|cwd)["']|\b(?:workdir|cwd))\s*:\s*("(?:\\.|[^"\\])*")/g;
   const wds = [];
-  while ((m = wdRe.exec(s))) { let v; try { v = JSON.parse(m[1]); } catch { continue; } wds.push({ dir: v.replace(/\\/g, "/"), at: m.index }); }
-  return cmds.map((c, i) => {
-    const hi = i + 1 < cmds.length ? cmds[i + 1].at : s.length;
-    const own = wds.find((w) => w.at >= c.end && w.at < hi);
+  while ((m = wdRe.exec(s))) { let v; try { v = JSON.parse(m[1]); } catch { continue; } wds.push({ dir: v.replace(/\\/g, "/"), own: owner[m.index] }); }
+  return cmds.map((c) => {
+    const own = c.own >= 0 ? wds.find((w) => w.own === c.own) : null; // 같은 객체 안에서만 — 최상위(소속 없음)는 짝짓지 않음
     return { command: c.command, workdir: own ? own.dir : "" };
   });
 }
