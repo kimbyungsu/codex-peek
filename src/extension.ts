@@ -627,6 +627,15 @@ let cachedClaudeVer: string | null = null;
 // out/ 기준 상위=확장 루트. 의미 보강의 기본(Claude) 담당이 실제로 실행하는 어댑터를 가리킨다
 // (2026-07-29 사용자 실보고 — 종전엔 정찰용 scripts/scout-providers.js 를 가리켜, 설치본에서 그 파일이
 //  없다는 이유만으로 기본 담당이 늘 '점검 실패'로 보였다. 보강 어댑터는 설치본에 함께 배포된다).
+// 화면으로 내보내도 되는 파일 표기만 남긴다(옛 기록에 저장된 위험한 값 차단 — 3차 [보완]).
+function safeShowFile(v: any): string | null {
+  const s0 = String(v == null ? "" : v).replace(/\\\\/g, "/");
+  if (!s0 || s0.length > 260) return null;
+  if (/[\x00-\x1f\x7f<>:"|?*]/.test(s0)) return null;
+  if (/^([a-zA-Z]:|\/)/.test(s0)) return null;
+  if (s0.split("/").includes("..")) return null;
+  return s0;
+}
 function selfAdapterHintExt(): string { return path.join(__dirname, "..", "bridge", "enrich-providers.js"); }
 function selfFpNowExt(): string | null {
   try { const CLx: any = bridgeLib(); return CLx && CLx.selfExecFp ? CLx.selfExecFp(cachedClaudeVer, selfAdapterHintExt()) : null; } catch { return null; }
@@ -2258,7 +2267,9 @@ function computeState(turnsN: number): BridgeState {
           job: job9 ? {
             phase: job9.phase, parkedReason: job9.parkedReason || null, provider: last9 ? last9.provider : null,
             applied: applied9, rejected: rejected9, investigation: investigation9,
-            lastFailure: last9 && last9.failureCode ? { stage: last9.failureStage || null, code: last9.failureCode, file: last9.failureFile || null, provider: last9.provider || null } : null,
+            // 옛 기록에 위험한 파일 표기가 이미 저장돼 있을 수 있으므로, 화면으로 내보낼 때 한 번 더 거른다
+            // (3차 [보완]: 판독 검증은 옛 기록 호환을 위해 느슨한데, 표시는 느슨하면 안 된다).
+            lastFailure: last9 && last9.failureCode ? { stage: last9.failureStage || null, code: last9.failureCode, file: safeShowFile(last9.failureFile), provider: last9.provider || null } : null,
           } : { phase: jr9.st },
           awaitingVerification: awaiting9,
           previousRunAwaiting: counts9.otherAwaiting || 0,
@@ -4952,9 +4963,11 @@ class Dashboard {
     "precision-not-ready": ["정밀형 담당이 아직 준비되지 않았어요","the Precision provider is not ready yet"],
     "economy-not-ready": ["경제형 담당이 아직 준비되지 않았어요","the Economy provider is not ready yet"],
     "auto-not-ready": ["자동형은 두 담당이 모두 준비돼야 하는데 아직이에요","Auto needs both providers ready, and they are not"],
-    "precision-failed": ["정밀형 담당 실행이 실패했어요","the Precision run failed"],
-    "economy-failed": ["경제형 담당 실행이 실패했어요","the Economy run failed"],
-    "both-failed": ["두 담당 모두 실행이 실패했어요","both providers failed"],
+    // '실행이 실패'는 호출이 안 됐다는 뜻으로 읽힌다. 이 사유는 답이 거부된 경우에도 붙으므로
+    // 중립적으로 적고, 무슨 일이었는지는 뒤의 '마지막 시도'가 말한다(3차 [보완]).
+    "precision-failed": ["정밀형 담당에서 더 진행하지 못했어요","the Precision provider could not proceed"],
+    "economy-failed": ["경제형 담당에서 더 진행하지 못했어요","the Economy provider could not proceed"],
+    "both-failed": ["두 담당 모두 더 진행하지 못했어요","neither provider could proceed"],
     "corridor-unknown": ["바뀐 자리가 지도의 어느 구역인지 판단할 수 없었어요","the changed area could not be located on the map"],
     "provider-conflict": ["담당들이 낸 결과가 서로 충돌해요","the providers returned conflicting results"],
     "invalid-input": ["입력이 온전하지 않아요","the input was not well-formed"],
@@ -4972,7 +4985,8 @@ class Dashboard {
   var FAIL_TEXT={
     "process-failed": ["담당 호출을 끝내지 못했어요","the provider call did not complete"],
     "empty-output": ["담당이 답을 돌려주지 않았어요","the provider returned nothing"],
-    "parse-invalid": ["답은 돌아왔지만 결과 형식을 읽을 수 없어 버렸어요","an answer came back but its format could not be read, so it was discarded"],
+    // 담당에 따라 '읽기 실패'와 '형식 불일치'를 한 신호로만 알려주는 경우가 있어, 이 문구는 둘을 함께 담는다(3차 [보완]).
+    "parse-invalid": ["답은 돌아왔지만 결과를 읽거나 형식을 맞출 수 없어 버렸어요","an answer came back but could not be read or shaped as required, so it was discarded"],
     "schema-invalid": ["답은 돌아왔지만 필요한 결과 형식을 통과하지 못했어요","an answer came back but did not pass the required result shape"],
     "evidence-mismatch": ["답은 돌아왔지만 근거로 든 인용이 실제 파일과 맞지 않아 버렸어요","an answer came back but its quoted evidence did not match the real file, so it was discarded"],
     "evidence-unreadable": ["답은 돌아왔지만 근거 파일을 읽어 확인하지 못했어요","an answer came back but the evidence file could not be read to verify it"],
@@ -5665,7 +5679,7 @@ class Dashboard {
         // 다만 멈춤 사유 자체는 지우지 않고 앞에 남긴다 — 자동형의 '두 담당 모두 실패'가 마지막 하나에
         // 덮여 사라지던 문제(2차 [보완]).
         if(lf) return lead+T("자동 보강이 멈췄어요: ","Auto-enrichment stopped: ")+parkReasonText(en.job.parkedReason, d.mapReadiness)
-          +T(" · 마지막 시도: ","· last attempt: ")+failureText(lf)+retryNote+failureAdvice(lf);
+          +T(" · 마지막 시도: "," · last attempt: ")+failureText(lf)+retryNote+failureAdvice(lf);
         var started=!!(en.job&&en.job.provider);
         var head=started
           ? T("자동 보강이 담당 시도가 기록된 뒤 멈췄어요: ","Auto-enrichment stopped after an attempt was recorded: ")
@@ -6359,7 +6373,7 @@ class Dashboard {
             else if(jp==="damaged") msg=T("자동 보강: 작업 기록 손상 — 자동 실행 정지","Auto-enrich: job ledger damaged — automation halted");
             else if(en9.deferredSt==="damaged") msg=T("자동 보강: 확인 대기 기록 손상 — 수동 복구 필요","Auto-enrich: verification queue damaged — manual recovery required");
             else if(jp==="parked") msg=T("자동 보강: 보류됨 — ","Auto-enrich: parked — ")+parkReasonText(en9.job.parkedReason, d.mapReadiness)
-              +(en9.job.lastFailure?T(" · 마지막 시도: ","· last attempt: ")+failureText(en9.job.lastFailure)+failureAdvice(en9.job.lastFailure):"");
+              +(en9.job.lastFailure?T(" · 마지막 시도: "," · last attempt: ")+failureText(en9.job.lastFailure)+failureAdvice(en9.job.lastFailure):"");
             else if(jp==="done") msg=T("자동 보강: 완료 — 적용 ","Auto-enrich: done — applied ")+String(en9.job.applied||0)+T("건 · 확인 대기 "," · awaiting verification ")+String(en9.awaitingVerification||0)+T("건 · 기각 "," · rejected ")+String(en9.job.rejected||0)+T("건 · 조사 대기 "," · investigation ")+String(en9.job.investigation||0)+T("건"," items");
             else if(jp==="open") msg=T("자동 보강: 진행 중","Auto-enrich: in progress");
             else msg=en9.queuePending?T("자동 보강: 대기 중(다음 관측 때 실행)","Auto-enrich: pending (runs on next observation)"):T("자동 보강: 대기 없음","Auto-enrich: nothing queued");

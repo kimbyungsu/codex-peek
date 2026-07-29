@@ -1467,7 +1467,15 @@ function resumeJob(repo, oIn, env, j, st2) {
     const cor = st2 && st2.corridor ? st2.corridor : "unknown"; // ⑦a 산출값(3차 — 재개도 라우팅 재료 보유)
     const d = env.MRt.decideRoute({ mode: j.mode, ready: o.readiness, corridor: cor, economyFailed: eF, precisionFailed: pF, conflict: false });
     if (d.route === "park") return park((jj) => jj && { ...jj, phase: "parked", parkedReason: d.reason, finishedAt: nowIso() }, d.reason, { jobKey: j.jobKey });
-    return runAttempt(repo, o, env, { topo: st2.topo, idx: st2.idx, pol: st2.pol, ah: st2.ah, jobKey: j.jobKey, corridor: cor, changed: st2 ? st2.changed : null, srcFp: st2 ? st2.srcFp : null }, d.route);
+    const at2 = runAttempt(repo, o, env, { topo: st2.topo, idx: st2.idx, pol: st2.pol, ah: st2.ah, jobKey: j.jobKey, corridor: cor, changed: st2 ? st2.changed : null, srcFp: st2 ? st2.srcFp : null }, d.route);
+    // 재개에서 새 시도까지 실패하면 여기서 종결한다(3차 blocker①: 그냥 돌려주면 작업이 open으로 남아
+    // 화면이 '진행 중'이라 말하고 실패 설명과 다시 시도 버튼이 최대 한 주기 동안 사라졌다).
+    if (at2 && at2.outcome === "provider-failed") {
+      if (env.p10 && at2._p10Reason) env.p10.reasonCode = at2._p10Reason;
+      const reason2 = d.route + "-failed";
+      return park((jj) => jj && { ...jj, phase: "parked", parkedReason: reason2, finishedAt: nowIso() }, reason2, { jobKey: j.jobKey, provider: d.route });
+    }
+    return at2;
   }
   return park((jj) => jj && { ...jj, phase: "parked", parkedReason: "attempt-state:" + a.phase, finishedAt: nowIso() }, "attempt-state");
 }

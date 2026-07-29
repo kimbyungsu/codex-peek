@@ -120,6 +120,12 @@ ok(/"evidence-mismatch": \["답은 돌아왔지만 근거로 든 인용이 실�
 ok(/"evidence-unreadable": \["답은 돌아왔지만 근거 파일을 읽어 확인하지 못했어요"/.test(ext) && /"parse-invalid":/.test(ext) && /"schema-invalid":/.test(ext), "결과 거부를 형식·구조·근거로 갈라 표시(한 덩어리로 뭉치지 않음)");
 ok(/"process-failed": \["담당 호출을 끝내지 못했어요"/.test(ext) && !/담당을 부르지 못했어요/.test(ext), "호출 실패는 '끝내지 못했어요'(프로세스가 뜬 뒤 실패했을 수 있음)");
 ok(/사용량 소모/.test(ext) && /uses quota/.test(ext), "재시도 안내에 추가 사용량 발생을 명시([주의] 수용 — 비용 오판 방지)");
+// 3차 [보완] 반영: 멈춤 사유가 '실행이 실패'라고 먼저 말하면 뒤의 '답은 돌아왔지만…'과 모순된다.
+ok(/"precision-failed": \["정밀형 담당에서 더 진행하지 못했어요"/.test(ext) && !/정밀형 담당 실행이 실패했어요/.test(ext), "담당 실패 사유를 중립 표현으로(호출 실패 단정 잔재 0)");
+ok(/이미 사용량이 들었을 수 있고, 다시 시도하면 또 들 수 있어요/.test(ext), "호출 단계 실패에도 이미 든 사용량·추가 사용량 가능성 명시");
+ok(/답은 돌아왔지만 결과를 읽거나 형식을 맞출 수 없어 버렸어요/.test(ext), "담당이 읽기 실패와 형식 불일치를 한 신호로 주는 경우를 함께 담는 문구");
+ok(/function safeShowFile\(v: any\): string \| null/.test(ext) && /file: safeShowFile\(last9\.failureFile\)/.test(ext), "옛 기록의 위험한 파일 표기는 화면으로 나가기 전에 한 번 더 거름");
+ok(/T\(" · 마지막 시도: "," · last attempt: "\)/.test(ext), "영어 문구도 앞 공백을 지켜 붙임(구분 공백 누락 회귀 차단)");
 ok(/담당 실행 파일·설정·연결을 먼저 확인해 주세요/.test(ext), "호출 실패와 답 거부의 다음 행동을 갈라 안내");
 ok(/이 숫자는 담당을 부른 횟수예요 — 그 답이 채택됐다는 뜻은 아니에요/.test(ext) && /it does not mean the answers were accepted/.test(ext), "의미 보강 숫자의 뜻을 못박음(호출 수 ≠ 채택 수)");
 {

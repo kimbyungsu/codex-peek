@@ -278,7 +278,8 @@ console.log("[7b] 재개 경로의 결과 거부 — 감사 기록이 '못 불�
   const r2 = ME.runEnrich(ws, base(ws, { adapters: { self: fake }, trigger: "retry" }));
   const rows2 = fs.readFileSync(ME.ROUTE_LOG, "utf8").trim().split("\n").filter(Boolean).slice(before - 1).map(JSON.parse)
     .filter((x) => x.schema === "map-automation-v1" && (x.event === "enrich-job-terminal" || x.event === "enrich-run-terminal"));
-  ok(r2.outcome === "provider-failed", "재개는 라우터를 거치지 않고 곧바로 시도로 들어가 결과 거부를 그대로 돌려준다(이 경로가 실사고 지점)");
+  // 3차 blocker① 반영 후: 재개에서 새 시도도 실패하면 그 자리에서 보류로 종결한다(open 잔존 금지).
+  ok(r2.outcome === "parked", "재개에서 새 시도도 실패하면 보류로 종결(진행 중으로 남지 않음)");
   ok(rows2.length >= 1 && rows2.every((x) => x.reasonCode === "provider-result-invalid"), "재개 경로의 결과 거부도 provider-result-invalid로 기록(‘못 불렀다’ 오기록 차단)");
 }
 
@@ -297,8 +298,10 @@ console.log("[7c] 명시 재시도는 실제로 새 호출을 만든다(2026-07-
   ME.updateEnrichJob(ws, (jj) => { if (!jj || jj.phase !== "parked") return null; const nx = { ...jj, phase: "open", retryFrom: jj.attempts.length }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
   ME.runEnrich(ws, opts());
   ok(calls === 2, "명시 재시도는 새 호출을 실제로 만든다(안내 문구가 거짓이 되지 않음)");
-  // 표식이 없으면 종전처럼 옛 실패가 남아 곧바로 보류로 돌아간다(회귀 감시용 대조군)
-  ME.updateEnrichJob(ws, (jj) => { if (!jj || jj.phase !== "parked") return null; const nx = { ...jj, phase: "open" }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
+  ok(ME.readEnrichJob(ws).job.phase === "parked", "재시도한 답도 거부되면 그 자리에서 보류로 종결(진행 중으로 남지 않음 — 3차 blocker①)");
+  // 대조군: 표식을 지우고 열면 옛 실패가 라우팅을 막아 새 호출이 없다(표식이 실제로 작동함을 확인)
+  ME.updateEnrichJob(ws, (jj) => { if (!jj || jj.phase !== "parked") return null; const nx = { ...jj, phase: "open" }; delete nx.finishedAt; delete nx.parkedReason; delete nx.retryFrom; return nx; });
+  ok(ME.readEnrichJob(ws).job.retryFrom === undefined, "(전제) 대조군은 표식이 실제로 지워진 상태");
   const r3 = ME.runEnrich(ws, opts());
   ok(calls === 2 && r3.outcome === "parked", "표식 없이 열면 새 호출 없이 보류(표식이 실제로 작동함을 대조로 확인)");
 }
@@ -348,6 +351,27 @@ console.log("[7e] 위험한 파일 표기는 기록에서 생략하되 실패 �
   const a0 = ME.readEnrichJob(ws).job.attempts[0];
   ok(a0.phase === "failed", "실패 기록이 남아 시도가 running으로 방치되지 않음");
   ok(a0.failureCode === "evidence-unreadable" && a0.failureFile === "src/nope.js", "없는 파일은 판독 불가로 분류(인용 불일치와 구분)");
+}
+{
+  // 3차 [보완]: 원 blocker는 '위험한 표기'였는데 앞 반례는 안전한 상대경로만 썼다. 실제 위험 형태로 고정한다.
+  const NL = String.fromCharCode(10);
+  const cases = [
+    ["절대경로", "D:/somewhere/secret.js"],
+    ["상위 탈출", "../../etc/passwd"],
+    ["여러 줄", "src/a.js" + NL + "(연결 정상)"],
+  ];
+  for (const [label, bad] of cases) {
+    const { ws, nodeId } = setup("badfile-" + label.replace(/\s/g, ""));
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+    const fake = () => ({ ok: true, result: { schema: "enrich-result-v1", items: [
+      { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "n" } }, evidence: [{ file: bad, quote: "// 없는 인용" }] },
+    ] } });
+    ME.runEnrich(ws, base(ws, { adapters: { self: fake } }));
+    const jr = ME.readEnrichJob(ws);
+    const at = jr.st === "ok" ? jr.job.attempts[0] : null;
+    ok(!!at && at.phase === "failed", label + " — 실패 기록이 남는다(기록 쓰기가 통째로 거부돼 running으로 남지 않음)");
+    ok(!!at && at.failureFile === undefined, label + " — 위험한 파일 표기는 필드 자체를 생략한다");
+  }
 }
 {
   const { ws, topo } = setup("parse-invalid");
