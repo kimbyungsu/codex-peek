@@ -688,13 +688,18 @@ function toolCallNamesExactFile(p, fileKey, ws) {
     const re = new RegExp(`(^|[^a-z0-9_.\\/-])(?:\\./)?${esc}(?=$|[^a-z0-9_.\\/-])`, process.platform === "win32" ? "i" : "");
     return re.test(part);
   };
+  // 기준 폴더는 '실제 경로'로도 한 번 더 시도한다. 윈도는 같은 폴더를 짧은 이름(RUNNER~1)으로도 가리키는데,
+  // 인용에서 푼 파일 경로는 긴 이름이라 짧은 이름 기준으로 상대경로를 구하면 서로 다른 폴더로 계산된다
+  // (2026-07-29 CI 실측: ws=…\RUNNER~1\… vs 인용키=…/runneradmin/… — 이 때문에 판독이 전부 미인정됐다).
+  const realOf = (p0) => { try { return fs.realpathSync.native(p0); } catch { try { return fs.realpathSync(p0); } catch { return p0; } } };
+  const rootsOf = (r) => { const rr = realOf(r); return rr && rr !== r ? [r, rr] : [r]; };
   for (const item of readParts) {
     const part = item.text;
-    const baseRoots = [item.workdir || wd || ws || process.cwd()];
+    const baseRoots = rootsOf(item.workdir || wd || ws || process.cwd());
     const strength = item.weak ? "weak" : "strong";
     let matched = hit(fileKey, part);
     if (!matched) {
-      for (const root of [...baseRoots, ...gitDirRoots(part)]) {
+      for (const root of [...baseRoots, ...gitDirRoots(part).flatMap(rootsOf)]) {
         let rel = "";
         try { rel = path.relative(root, fileKey).replace(/\\/g, "/"); } catch { continue; }
         if (!rel || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel)) continue;

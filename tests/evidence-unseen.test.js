@@ -14,6 +14,12 @@ fs.writeFileSync(path.join(ws, "bar.ts"), "line1\nline2\n", "utf8"); // 인용 �
 
 const { citedFilesUnseen, citedFilesUnseenExact, citedResolvedBasenames } = require("../bridge/codex-bridge.js");
 
+// 2026-07-29 CI 실측: 윈도 러너의 임시 폴더는 짧은 이름(RUNNER~1)으로 오고, 인용에서 푼 파일 경로는
+// 긴 이름이라 서로 다른 폴더로 계산돼 판독이 전부 미인정됐다. 같은 폴더를 다른 표기로 넘겨도 인정돼야 한다.
+const wsAlias = (() => {
+  try { const r = fs.realpathSync.native(ws); return r && r !== ws ? r : null; } catch { return null; }
+})();
+
 let pass = 0, fail = 0;
 const ck = (n, c) => { (c ? pass++ : fail++); console.log((c ? "  ✅ " : "  ❌ ") + n); };
 
@@ -435,6 +441,20 @@ fs.writeFileSync(alignedFile, prefix + alignedTurn, "utf8");
 fs.truncateSync(alignedFile, Buffer.byteLength(prefix) + 16 * 1024 * 1024); // tail 시작=최신 user 행 시작, 나머지는 희소 패딩
 const aligned = citedFilesUnseen(answer, ws, alignedId);
 ck("16MiB 꼬리가 완전한 user 행 시작에 맞으면 첫 행을 보존해 checked=true", aligned.checked === true && aligned.unseen.length === 0);
+
+console.log("[7] 같은 폴더의 다른 표기(짧은 이름 등)로 기준을 줘도 판독을 인정한다");
+{
+  // 기준 폴더 표기가 인용 경로 표기와 달라도 실제로 같은 폴더면 인정해야 한다.
+  writeRollout("ffffffff-alias", [userMsg("검증 요청"), ...pair("cat foo.ts", "line1\nline2")]);
+  const viaSelf = citedFilesUnseen(answer, ws, "ffffffff-alias");
+  ck("기본 표기로는 종전대로 인정", viaSelf.checked === true && !viaSelf.unseen.includes("foo.ts"));
+  if (wsAlias) {
+    const viaAlias = citedFilesUnseen(answer, wsAlias, "ffffffff-alias");
+    ck("다른 표기(실제 경로)로 줘도 인정 — CI 윈도 짧은 이름 실사고 차단", viaAlias.checked === true && !viaAlias.unseen.includes("foo.ts"));
+  } else {
+    ck("(이 환경은 폴더의 다른 표기가 없어 건너뜀 — CI 윈도에서 실측됨)", true);
+  }
+}
 
 // 실패했을 때만 내부 상태를 찍는다(2026-07-29: 이 파일이 CI 윈도에서만 무더기로 실패했는데
 // 로컬 윈도·LF 체크아웃·Node 20 어디서도 재현되지 않아, 실행 환경의 무엇이 다른지 실측이 필요하다).
