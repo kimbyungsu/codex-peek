@@ -1471,23 +1471,29 @@ function resumeJob(repo, oIn, env, j, st2) {
     //  · 그냥 돌려주면 작업이 open으로 남아 화면이 '진행 중'이라 말한다(3차 blocker①).
     //  · 그렇다고 곧바로 park하면 자동형의 '경제형 실패 → 정밀형 승격'이 막힌다(4차 blocker①).
     // 그래서 driveAttempts와 같은 규칙으로 다음 담당을 정하고, park일 때만 멈춘다.
-    let eF2 = eF, pF2 = pF, route2 = d.route;
+    let eF2 = eF, pF2 = pF, route2 = d.route, lastP10R = null;
     const stR = { topo: st2.topo, idx: st2.idx, pol: st2.pol, ah: st2.ah, jobKey: j.jobKey, corridor: cor, changed: st2 ? st2.changed : null, srcFp: st2 ? st2.srcFp : null };
+    const parkR = (rn, prov) => {
+      if (env.p10 && lastP10R) env.p10.reasonCode = lastP10R; // 성공하면 실패 사유를 남기지 않는다(5차 blocker①)
+      return park((jj) => jj && { ...jj, phase: "parked", parkedReason: rn, finishedAt: nowIso() }, rn, { jobKey: j.jobKey, provider: prov });
+    };
     for (let guard = 0; guard < 4; guard++) {
+      // 상태를 바꾸기 전에 실행 잠금 소유를 다시 확인한다(5차 blocker② — 기존 루프와 같은 불변식).
+      if (env.fence && !env.fence()) return { outcome: "busy", reason: "run-lock-lost" };
       const at2 = runAttempt(repo, o, env, stR, route2);
       if (!at2 || at2.outcome !== "provider-failed") return at2;
-      if (env.p10 && at2._p10Reason) env.p10.reasonCode = at2._p10Reason;
+      if (at2._p10Reason) lastP10R = at2._p10Reason; // park할 때만 반영
       if (route2 === "economy") eF2 = true;
       else if (route2 === "precision") pF2 = true;
-      else return park((jj) => jj && { ...jj, phase: "parked", parkedReason: "self-failed", finishedAt: nowIso() }, "self-failed", { jobKey: j.jobKey, provider: route2 });
+      else return parkR("self-failed", route2);
+      if (env.fence && !env.fence()) return { outcome: "busy", reason: "run-lock-lost" };
       const dn = env.MRt.decideRoute({ mode: j.mode, ready: o.readiness, corridor: cor, economyFailed: eF2, precisionFailed: pF2, conflict: false });
-      if (dn.route === "park" || dn.route === "adjudicate") {
-        const rn = dn.route === "park" ? dn.reason : "adjudicate-unreachable";
-        return park((jj) => jj && { ...jj, phase: "parked", parkedReason: rn, finishedAt: nowIso() }, rn, { jobKey: j.jobKey, provider: route2 });
-      }
+      // 승격을 고른 이유도 감사에 남긴다(5차 [보완] — 기존 루프와 같은 형태).
+      log({ route: dn.route, reason: dn.reason, corridor: cor, changedCount: Array.isArray(stR.changed) ? stR.changed.length : null, jobKey: j.jobKey, escalated: eF2 && dn.route === "precision" });
+      if (dn.route === "park" || dn.route === "adjudicate") return parkR(dn.route === "park" ? dn.reason : "adjudicate-unreachable", route2);
       route2 = dn.route;
     }
-    return park((jj) => jj && { ...jj, phase: "parked", parkedReason: "route-loop-guard", finishedAt: nowIso() }, "route-loop-guard", { jobKey: j.jobKey });
+    return parkR("route-loop-guard", route2);
   }
   return park((jj) => jj && { ...jj, phase: "parked", parkedReason: "attempt-state:" + a.phase, finishedAt: nowIso() }, "attempt-state");
 }

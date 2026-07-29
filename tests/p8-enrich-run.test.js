@@ -323,6 +323,15 @@ console.log("[7c-2] 자동형 재시도에서도 경제형 실패 뒤 정밀형 
   const r = ME.runEnrich(ws, opts(true));
   ok(seen.join(",") === "economy,precision", "재시도에서도 경제형 실패 → 정밀형 승격이 실제로 일어남(" + seen.join(",") + ")");
   ok(r.outcome === "applied", "승격한 정밀형이 성공하면 적용까지 간다");
+  // 5차 blocker①: 중간 실패 사유가 성공 기록에 남으면 감사가 뒤집힌다.
+  const rowsA = fs.readFileSync(ME.ROUTE_LOG, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse)
+    .filter((x) => x.schema === "map-automation-v1" && (x.event === "enrich-job-terminal" || x.event === "enrich-run-terminal"));
+  const lastTwo = rowsA.slice(-2);
+  ok(lastTwo.length === 2 && lastTwo.every((x) => x.outcome === "applied" && x.reasonCode === "none"), "성공한 재시도는 실패 사유를 남기지 않는다(실제: " + lastTwo.map((x) => x.outcome + "/" + x.reasonCode).join(",") + ")");
+  // 5차 [보완]: 승격을 고른 이유가 감사에서 사라지면 안 된다.
+  const routeRows = fs.readFileSync(ME.ROUTE_LOG, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse)
+    .filter((x) => x.route === "precision" && x.reason === "escalated-from-economy");
+  ok(routeRows.length >= 1 && routeRows.some((x) => x.escalated === true), "재개 승격도 라우팅 결정 행(escalated)을 남긴다");
 }
 
 console.log("[7d] 변환 단계 거부도 구조 필드·감사 사유를 남긴다(2026-07-29 구현검증 blocker②③)");
