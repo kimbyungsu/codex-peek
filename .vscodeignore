@@ -8,6 +8,10 @@ tsconfig.json
 package-lock.json
 out/**/*.map
 *.vsix
+# 릴리스 자산은 저장소 루트에 잠깐 놓였다가 업로드된다 — 그 사이에 확장을 구우면 설치 파일 안에
+# 7MB짜리 설치 묶음이 통째로 들어간다(2026-07-29 실측: 55개 1.98MB → 57개 9.57MB).
+*.zip
+SHA256SUMS.txt
 .gitignore
 bridge/contract.example.json
 settings.example.json
@@ -15,8 +19,8 @@ tests/**
 install.js
 install.sh
 install.cmd
-# 내부 설계·인수인계 문서는 마켓 설치 파일에 넣지 않는다(2026-07-29 검증 [주의] 수용).
-# 런타임이 읽지 않는 작업 문서이고, 그 중 일부는 개발 PC의 홈 경로 같은 로컬 식별 정보를 담고 있다.
+# 내부 설계·인수인계 문서는 마켓 설치 파일에 넣지 않는다 — 런타임이 읽지 않는 작업 문서라
+# 배포물만 무겁게 한다(2026-07-29: 64개 2.25MB → 55개 1.98MB). 패키징 위생이지 보안 조치가 아니다.
 # 이미지·아이콘은 리드미 표시에 쓰이므로 남긴다. readme는 vsce --readme-path로 따로 들어간다.
 docs/*.md
 docs/ROADMAP.md

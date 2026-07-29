@@ -45,5 +45,18 @@ ok(publishGate(false, true) === false, "--no-push + PAT O → 게시 안 함(핵
 ok(publishGate(true, false) === false, "PAT 없음 → 게시 안 함(경로 안내)");
 ok(publishGate(false, false) === false, "둘 다 없음 → 게시 안 함");
 
+console.log("[패키징 제외] 릴리스 자산이 확장 설치 파일 안으로 들어가지 않는다(2026-07-29 실측 사고)");
+{
+  // 릴리스 자산(전체 설치 묶음·체크섬)은 저장소 루트에 잠깐 놓였다가 업로드된다. 그 사이에 확장을 구우면
+  // 7MB짜리 묶음이 설치 파일 안으로 통째로 들어갔다(55개 1.98MB → 57개 9.57MB 실측).
+  const fs2 = require("fs");
+  const p2 = require("path");
+  const ig = fs2.readFileSync(p2.join(__dirname, "..", ".vscodeignore"), "utf8").split(/\r?\n/).map((s) => s.trim());
+  ok(ig.includes("*.zip"), "전체 설치 묶음(zip) 제외");
+  ok(ig.includes("SHA256SUMS.txt"), "체크섬 파일 제외");
+  ok(ig.includes("*.vsix"), "다른 버전 확장 파일 제외(기존 계약 무회귀)");
+  ok(ig.includes("docs/*.md"), "런타임과 무관한 내부 작업 문서 제외(패키징 위생)");
+}
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
