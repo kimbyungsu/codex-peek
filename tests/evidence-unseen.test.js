@@ -436,5 +436,20 @@ fs.truncateSync(alignedFile, Buffer.byteLength(prefix) + 16 * 1024 * 1024); // t
 const aligned = citedFilesUnseen(answer, ws, alignedId);
 ck("16MiB 꼬리가 완전한 user 행 시작에 맞으면 첫 행을 보존해 checked=true", aligned.checked === true && aligned.unseen.length === 0);
 
+// 실패했을 때만 내부 상태를 찍는다(2026-07-29: 이 파일이 CI 윈도에서만 무더기로 실패했는데
+// 로컬 윈도·LF 체크아웃·Node 20 어디서도 재현되지 않아, 실행 환경의 무엇이 다른지 실측이 필요하다).
+if (fail > 0) {
+  try {
+    const B = require("../bridge/codex-bridge.js");
+    console.log("[진단] platform=" + process.platform + " node=" + process.version);
+    console.log("[진단] ws=" + JSON.stringify(ws) + " home=" + JSON.stringify(home));
+    console.log("[진단] tmpdir=" + JSON.stringify(os.tmpdir()) + " cwd=" + JSON.stringify(process.cwd()));
+    console.log("[진단] foo 내용=" + JSON.stringify(fs.readFileSync(path.join(ws, "foo.ts"), "utf8")));
+    console.log("[진단] basenames=" + JSON.stringify([...B.citedResolvedBasenames(answer, ws)]));
+    console.log("[진단] exact=" + JSON.stringify(B.citedFilesUnseenExact(answer, ws, "11111111-aaaa")));
+    console.log("[진단] 세션파일=" + JSON.stringify(fs.readdirSync(SESS)));
+  } catch (e) { console.log("[진단] 실패: " + (e && e.message)); }
+}
+
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
 process.exit(fail ? 1 : 0);
