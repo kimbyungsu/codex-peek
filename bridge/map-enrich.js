@@ -101,7 +101,9 @@ const JOB_PHASES = ["open", "done", "parked"];
 const ATTEMPT_PHASES = ["running", "applying", "done", "failed", "parked"];
 // 3a 검증 1차 blocker①: strict=미지 필드 거부+내용 검증(results·currentPatch·resolutions·UUID 배열)까지 —
 // 3b가 이 장부를 재개 정본으로 신뢰하므로 이형이 통과하면 item 건너뜀·오재개·잘못된 patch 재투입.
-const JOB_KEYS = ["schema", "jobKey", "mapId", "authorityHash", "decisionContextHash", "mode", "configWs", "slot", "phase", "startedAt", "finishedAt", "parkedReason", "sourceFp", "attempts"];
+// retryFrom: 사용자가 명시로 '다시 시도'한 시점의 시도 개수. 그 앞의 실패는 라우팅 판단에서 제외한다
+// (2차 blocker①: 옛 실패 플래그가 남아 명시 재시도가 새 호출 없이 곧바로 같은 보류로 돌아갔다).
+const JOB_KEYS = ["schema", "jobKey", "mapId", "authorityHash", "decisionContextHash", "mode", "configWs", "slot", "phase", "startedAt", "finishedAt", "parkedReason", "sourceFp", "retryFrom", "attempts"];
 // failureStage/failureCode/failureFile: 실패를 사람이 읽을 수 있게 '구조'로도 남긴다(2026-07-29 설계 상의 결론).
 // failReason 자유 문자열만 남기면 화면이 내부 표현을 그대로 노출하거나, 호출 실패와 결과 거부를 구분하지 못한다.
 const ATTEMPT_KEYS = ["attemptId", "provider", "consentGen", "phase", "startedAt", "sourceFp", "results", "cursor", "resolutions", "failReason", "failureStage", "failureCode", "failureFile", "parkedReason", "finishedAt"];
@@ -157,6 +159,7 @@ function validateJob(d) {
   if (d.parkedReason !== undefined && typeof d.parkedReason !== "string") return "parkedReason";
   if (!Array.isArray(d.attempts)) return "attempts";
   // 2차: attemptId=0..n-1 순번 유일(정본 — 중복 id는 유료 attempt 식별 혼선)
+  if (d.retryFrom !== undefined && (!Number.isInteger(d.retryFrom) || d.retryFrom < 0 || d.retryFrom > d.attempts.length)) return "retryFrom";
   for (let i9 = 0; i9 < d.attempts.length; i9++) { const a9 = d.attempts[i9]; if (!a9 || a9.attemptId !== i9) return "attemptId 순번(" + i9 + ")"; }
   for (const a of d.attempts) {
     if (!a || typeof a !== "object" || Array.isArray(a)) return "attempt 이형";
@@ -1086,7 +1089,8 @@ function runAttempt(repo, o, env, st, provider) {
     const fx0 = call && call.failureKind === "result-invalid"
       ? { failureStage: "response", failureCode: "parse-invalid" }
       : { failureStage: "call", failureCode: "process-failed" };
-    updateEnrichJob(repo, (j) => j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "failed", failReason: String((call && call.detail) || "adapter-failed").slice(0, 200), ...fx0, finishedAt: nowIso() } : a) });
+    const w0 = updateEnrichJob(repo, (j) => j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "failed", failReason: String((call && call.detail) || "adapter-failed").slice(0, 200), ...fx0, finishedAt: nowIso() } : a) });
+    if (!w0.ok) return park(null, "attempt-write:" + w0.reason, { provider, jobKey: st.jobKey });
     log({ route: provider, reason: failureReason, outcome: "error", provider, jobKey: st.jobKey, consentGen: g2.gen });
     return { outcome: "provider-failed", provider, _p10Reason: failureReason };
   }
@@ -1108,9 +1112,12 @@ function runAttempt(repo, o, env, st, provider) {
   }
   if (!vr.ok) {
     const fx1 = vr.kind === "evidence"
-      ? { failureStage: "validation", failureCode: vr.code || "evidence-mismatch", ...(vr.file ? { failureFile: String(vr.file).replace(/\\/g, "/").slice(0, 260) } : {}) }
+      ? { failureStage: "validation", failureCode: vr.code || "evidence-mismatch", ...safeFailureFile(vr.file) }
       : { failureStage: "validation", failureCode: "schema-invalid" };
-    updateEnrichJob(repo, (j) => j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "failed", failReason: (vr.kind + ": " + (vr.errors[0] || "")).slice(0, 200), ...fx1, finishedAt: nowIso() } : a) });
+    // 쓰기 결과를 확인한다(2차 blocker④: 실패 기록이 거부되면 시도가 running으로 남아, 다음 재개가
+    // 이를 '호출 여부 불확실'로 해석해 완료된 결과 거부가 uncertain-call로 변질됐다).
+    const w1 = updateEnrichJob(repo, (j) => j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "failed", failReason: (vr.kind + ": " + (vr.errors[0] || "")).slice(0, 200), ...fx1, finishedAt: nowIso() } : a) });
+    if (!w1.ok) return park(null, "attempt-write:" + w1.reason, { provider, jobKey: st.jobKey });
     log({ route: provider, reason: "result-" + vr.kind, outcome: "error", provider, jobKey: st.jobKey, consentGen: g2.gen });
     return { outcome: "provider-failed", provider, _p10Reason: "provider-result-invalid" };
   }
@@ -1261,8 +1268,25 @@ function convertItem(repo, env, j, a, item, index, rev) {
   return toPatchV2(itemEff, index, { repo, topo: topoNow.topo, idx: idxNow, pol: polNow, fileHashOf, jobKey: jobSeedOf(j.jobKey, j.startedAt), attemptId: a.attemptId, rev, provider: a.provider });
 }
 function failAttempt(repo, env, attemptId, conv, provider) {
-  updateEnrichJob(repo, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, phase: "failed", failReason: ("convert-" + conv.kind + ": " + (conv.errors[0] || "")).slice(0, 200), finishedAt: new Date().toISOString() } : x) });
-  return { outcome: "provider-failed", provider };
+  // 변환 단계 거부도 '호출은 됐고 답이 버려진 것'이다 — 구조 필드와 P10 사유를 함께 남긴다
+  // (2차 blocker②③: 이 경로만 자유 문자열이라 화면이 못 갈랐고 감사 기록도 '못 불렀다'가 됐다).
+  const fx = conv && conv.kind === "evidence"
+    ? { failureStage: "conversion", failureCode: conv.code || "evidence-mismatch", ...safeFailureFile(conv.file) }
+    : { failureStage: "conversion", failureCode: "convert-invalid" };
+  const w = updateEnrichJob(repo, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, phase: "failed", failReason: ("convert-" + conv.kind + ": " + (conv.errors[0] || "")).slice(0, 200), ...fx, finishedAt: new Date().toISOString() } : x) });
+  if (!w.ok) return env.park(null, "attempt-write:" + w.reason, { provider, jobKey: null }); // 실패 기록을 못 남기면 running 잔존 — 조용히 넘기지 않는다(2차 blocker④)
+  return { outcome: "provider-failed", provider, _p10Reason: "provider-result-invalid" };
+}
+// 화면으로 나갈 수 있는 파일 표기만 통과시킨다. 저장소 상대경로 형태가 아니면 파일 자체를 생략한다
+// (2차 blocker④: 거부되는 값을 그대로 쓰면 기록 저장이 통째로 실패해 시도가 running으로 남았다.
+//  2차 [보완]: 제어문자·여러 줄 문자열이 파일명 자리에 섞이는 것도 여기서 막는다).
+function safeFailureFile(v) {
+  const s = String(v == null ? "" : v).replace(/\\/g, "/");
+  if (!s || s.length > 260) return {};
+  if (/[\x00-\x1f\x7f<>:"|?*]/.test(s)) return {}; // 제어문자·여러 줄·윈도 금지문자
+  if (/^([a-zA-Z]:|\/)/.test(s)) return {};
+  if (s.split("/").includes("..")) return {};
+  return { failureFile: s };
 }
 
 // 격하 판정(설계 P8-4 결정론 열거 — 3b 1차 blocker① 충돌 감지 재료): set_state의 confidence 하향·lifecycle 강등
@@ -1436,8 +1460,10 @@ function resumeJob(repo, oIn, env, j, st2) {
   }
   // failed(승격 판단 중 사망)=driveAttempts 재진입 — 실패 플래그 복원
   if (a.phase === "failed") {
-    const eF = j.attempts.some((x) => x.provider === "economy" && x.phase === "failed");
-    const pF = j.attempts.some((x) => x.provider === "precision" && x.phase === "failed");
+    // 명시 재시도 이후의 실패만 라우팅 입력으로 쓴다 — 지난 세대의 실패가 남아 새 호출을 막지 않게(2차 blocker①).
+    const from9 = Number.isInteger(j.retryFrom) ? j.retryFrom : 0;
+    const eF = j.attempts.some((x) => x.attemptId >= from9 && x.provider === "economy" && x.phase === "failed");
+    const pF = j.attempts.some((x) => x.attemptId >= from9 && x.provider === "precision" && x.phase === "failed");
     const cor = st2 && st2.corridor ? st2.corridor : "unknown"; // ⑦a 산출값(3차 — 재개도 라우팅 재료 보유)
     const d = env.MRt.decideRoute({ mode: j.mode, ready: o.readiness, corridor: cor, economyFailed: eF, precisionFailed: pF, conflict: false });
     if (d.route === "park") return park((jj) => jj && { ...jj, phase: "parked", parkedReason: d.reason, finishedAt: nowIso() }, d.reason, { jobKey: j.jobKey });

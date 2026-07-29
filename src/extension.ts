@@ -594,7 +594,9 @@ async function retryEnrichFromUi(ws: string | null): Promise<void> {
     const ME9: any = require(path.join(BRIDGE_DIR, "map-enrich.js"));
     const repo9 = (((bridgeLib() as any) || {}).resolveScoutRepo ? ((bridgeLib() as any).resolveScoutRepo(ws, loadContract(ws)) || {}).repo : null) || ws;
     // 재시도=park 해제(open 복원 — 감사 attempt 열 보존) 후 동일 진입점(설계 P8-6)
-    ME9.updateEnrichJob(repo9, (jj: any) => { if (!jj || jj.phase !== "parked") return null; const nx = { ...jj, phase: "open" }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
+    // retryFrom=지금까지의 시도 수. 이 앞의 실패는 라우팅 판단에서 빼야 새 호출이 실제로 나간다
+    // (구현검증 2차 blocker①: 옛 실패 플래그가 남아 '다시 시도'가 곧바로 같은 보류로 되돌아왔다).
+    ME9.updateEnrichJob(repo9, (jj: any) => { if (!jj || jj.phase !== "parked") return null; const nx = { ...jj, phase: "open", retryFrom: Array.isArray(jj.attempts) ? jj.attempts.length : 0 }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
     enrichSpawnLastAt = 0;
     maybeSpawnEnrichExt(ws, "retry");
   } catch { /* 무해 — 상태 행 유지 */ }
@@ -4985,7 +4987,8 @@ class Dashboard {
   // 다음에 뭘 해야 하는지도 갈래별로 다르다. 다시 시도는 실제 호출이라 사용량이 또 든다 — 반드시 함께 밝힌다.
   function failureAdvice(lf){
     if(!lf||!lf.code) return "";
-    if(lf.stage==="call") return T(" 담당 실행 파일·설정·연결을 먼저 확인해 주세요(시간 초과나 비정상 종료였을 수도 있어요).","Check the provider's executable, settings, and connection first (it may also have timed out or exited abnormally).");
+    // 호출 단계도 프로세스가 뜬 뒤 실패하면 이미 사용량이 들었을 수 있다([주의] 수용 — 비용 오판 방지).
+    if(lf.stage==="call") return T(" 담당 실행 파일·설정·연결을 먼저 확인해 주세요(시간 초과나 비정상 종료였을 수도 있어요). 이미 사용량이 들었을 수 있고, 다시 시도하면 또 들 수 있어요.","Check the provider's executable, settings, and connection first (it may also have timed out or exited abnormally). Quota may already have been used, and a retry can use more.");
     return T(" 다시 시도하면 다른 답이 나올 수 있지만 같은 이유로 또 버려질 수도 있고, 그때마다 담당 호출이 한 번 더 나갑니다(사용량 소모).","A retry may produce a different answer, but it can be discarded for the same reason — and each retry makes another provider call (uses quota).");
   }
   function parkReasonText(raw, readiness){
@@ -5659,7 +5662,10 @@ class Dashboard {
         var lf=en.job&&en.job.lastFailure;
         var retryNote=T(" · 같은 일을 자동으로 반복하지 않으므로, 정찰 구역의 '다시 시도'를 눌러야 다시 진행돼요."," · it never retries on its own — press Retry in the recon area to resume it.");
         // 마지막 시도가 실제로 실패한 경우에는 그 실패를 그대로 말한다(park 사유는 두 경우를 한 이름으로 접는다).
-        if(lf) return lead+T("자동 보강이 멈췄어요: ","Auto-enrichment stopped: ")+failureText(lf)+retryNote+failureAdvice(lf);
+        // 다만 멈춤 사유 자체는 지우지 않고 앞에 남긴다 — 자동형의 '두 담당 모두 실패'가 마지막 하나에
+        // 덮여 사라지던 문제(2차 [보완]).
+        if(lf) return lead+T("자동 보강이 멈췄어요: ","Auto-enrichment stopped: ")+parkReasonText(en.job.parkedReason, d.mapReadiness)
+          +T(" · 마지막 시도: ","· last attempt: ")+failureText(lf)+retryNote+failureAdvice(lf);
         var started=!!(en.job&&en.job.provider);
         var head=started
           ? T("자동 보강이 담당 시도가 기록된 뒤 멈췄어요: ","Auto-enrichment stopped after an attempt was recorded: ")
@@ -6352,8 +6358,8 @@ class Dashboard {
             else if(!consented) msg=T("자동 보강: 꺼짐(이 담당의 자동 실행 동의 없음)","Auto-enrich: off (no consent for this provider)");
             else if(jp==="damaged") msg=T("자동 보강: 작업 기록 손상 — 자동 실행 정지","Auto-enrich: job ledger damaged — automation halted");
             else if(en9.deferredSt==="damaged") msg=T("자동 보강: 확인 대기 기록 손상 — 수동 복구 필요","Auto-enrich: verification queue damaged — manual recovery required");
-            else if(jp==="parked") msg=T("자동 보강: 보류됨 — ","Auto-enrich: parked — ")
-              +(en9.job.lastFailure?failureText(en9.job.lastFailure)+failureAdvice(en9.job.lastFailure):parkReasonText(en9.job.parkedReason, d.mapReadiness));
+            else if(jp==="parked") msg=T("자동 보강: 보류됨 — ","Auto-enrich: parked — ")+parkReasonText(en9.job.parkedReason, d.mapReadiness)
+              +(en9.job.lastFailure?T(" · 마지막 시도: ","· last attempt: ")+failureText(en9.job.lastFailure)+failureAdvice(en9.job.lastFailure):"");
             else if(jp==="done") msg=T("자동 보강: 완료 — 적용 ","Auto-enrich: done — applied ")+String(en9.job.applied||0)+T("건 · 확인 대기 "," · awaiting verification ")+String(en9.awaitingVerification||0)+T("건 · 기각 "," · rejected ")+String(en9.job.rejected||0)+T("건 · 조사 대기 "," · investigation ")+String(en9.job.investigation||0)+T("건"," items");
             else if(jp==="open") msg=T("자동 보강: 진행 중","Auto-enrich: in progress");
             else msg=en9.queuePending?T("자동 보강: 대기 중(다음 관측 때 실행)","Auto-enrich: pending (runs on next observation)"):T("자동 보강: 대기 없음","Auto-enrich: nothing queued");

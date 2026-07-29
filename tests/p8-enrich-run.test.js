@@ -281,6 +281,74 @@ console.log("[7b] 재개 경로의 결과 거부 — 감사 기록이 '못 불�
   ok(r2.outcome === "provider-failed", "재개는 라우터를 거치지 않고 곧바로 시도로 들어가 결과 거부를 그대로 돌려준다(이 경로가 실사고 지점)");
   ok(rows2.length >= 1 && rows2.every((x) => x.reasonCode === "provider-result-invalid"), "재개 경로의 결과 거부도 provider-result-invalid로 기록(‘못 불렀다’ 오기록 차단)");
 }
+
+console.log("[7c] 명시 재시도는 실제로 새 호출을 만든다(2026-07-29 구현검증 blocker① — 옛 실패가 라우팅을 막았다)");
+{
+  const { ws, nodeId } = setup("retry-newcall");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: false, paidMode: "precision" });
+  let calls = 0;
+  const bad = () => { calls++; return { ok: true, result: { schema: "enrich-result-v1", items: [
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "n" } }, evidence: [{ file: "src/a.js", quote: "// 없는 인용" }] },
+  ] } }; };
+  const opts = () => base(ws, { adapters: { precision: bad }, mode: "precision", readiness: { selfReady: true, economyReady: true, precisionReady: true, autoReady: true } });
+  ME.runEnrich(ws, opts());
+  ok(calls === 1, "1회차에서 담당 호출 1회");
+  // 대시보드 '다시 시도'와 같은 해제(옛 실패를 라우팅에서 제외하는 표식 포함)
+  ME.updateEnrichJob(ws, (jj) => { if (!jj || jj.phase !== "parked") return null; const nx = { ...jj, phase: "open", retryFrom: jj.attempts.length }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
+  ME.runEnrich(ws, opts());
+  ok(calls === 2, "명시 재시도는 새 호출을 실제로 만든다(안내 문구가 거짓이 되지 않음)");
+  // 표식이 없으면 종전처럼 옛 실패가 남아 곧바로 보류로 돌아간다(회귀 감시용 대조군)
+  ME.updateEnrichJob(ws, (jj) => { if (!jj || jj.phase !== "parked") return null; const nx = { ...jj, phase: "open" }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
+  const r3 = ME.runEnrich(ws, opts());
+  ok(calls === 2 && r3.outcome === "parked", "표식 없이 열면 새 호출 없이 보류(표식이 실제로 작동함을 대조로 확인)");
+}
+
+console.log("[7d] 변환 단계 거부도 구조 필드·감사 사유를 남긴다(2026-07-29 구현검증 blocker②③)");
+{
+  const { ws, nodeId } = setup("convert-fail");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  // 결과 검증은 통과하지만 변환 시점 재실증에서 떨어지도록: 호출 뒤 근거 파일 내용을 바꾼다.
+  const quote = "const A = 1;";
+  fs.writeFileSync(require("path").join(ws, "src", "a.js"), quote + "\n", "utf8");
+  const fake = () => { fs.writeFileSync(require("path").join(ws, "src", "a.js"), "완전히 다른 내용\n", "utf8"); return { ok: true, result: { schema: "enrich-result-v1", items: [
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "n" } }, evidence: [{ file: "src/a.js", quote }] },
+  ] } }; };
+  const before = fs.readFileSync(ME.ROUTE_LOG, "utf8").trim().split("\n").length;
+  const r = ME.runEnrich(ws, base(ws, { adapters: { self: fake } }));
+  const j = ME.readEnrichJob(ws).job;
+  const a0 = j && j.attempts[0];
+  ok(!!a0 && a0.phase === "failed" && ["validation", "conversion"].includes(a0.failureStage), "호출 뒤 근거가 바뀐 경우도 단계를 구조로 남김(" + (a0 && a0.failureStage) + ")");
+  ok(!!a0 && ["evidence-mismatch", "evidence-unreadable", "convert-invalid"].includes(a0.failureCode), "실패 코드 기록(" + (a0 && a0.failureCode) + ")");
+  const rows = fs.readFileSync(ME.ROUTE_LOG, "utf8").trim().split("\n").filter(Boolean).slice(before).map(JSON.parse)
+    .filter((x) => x.schema == "map-automation-v1" && (x.event === "enrich-job-terminal" || x.event === "enrich-run-terminal"));
+  ok(rows.length >= 1 && rows.every((x) => x.reasonCode === "provider-result-invalid"), "결과 거부는 '못 불렀다'가 아니라 결과 거부로 기록(실제: " + rows.map((x) => x.reasonCode).join(",") + ")");
+  ok(r.outcome === "parked" || r.outcome === "provider-failed", "결과 거부는 적용 없이 종료");
+}
+
+console.log("[7d-2] 변환 단계 거부의 기록 계약(소스 잠금 — 이 경로는 런타임 재현이 어려워 소스로 고정)");
+{
+  const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "map-enrich.js"), "utf8");
+  const st0 = src.indexOf("function failAttempt(");
+  const fn = st0 >= 0 ? src.slice(st0, src.indexOf(String.fromCharCode(10) + "}", st0)) : "";
+  ok(!!fn && /failureStage: "conversion"/.test(fn), "변환 단계 실패도 단계를 구조로 남긴다");
+  ok(/failureCode: conv\.code \|\| "evidence-mismatch"/.test(fn) && /failureCode: "convert-invalid"/.test(fn), "근거 계열과 그 밖을 코드로 갈라 남긴다");
+  ok(/_p10Reason: "provider-result-invalid"/.test(fn), "변환 단계 거부도 '못 불렀다'가 아니라 결과 거부로 감사 기록");
+  ok(/if \(!w\.ok\) return env\.park/.test(fn), "실패 기록 쓰기 실패를 삼키지 않는다(running 잔존 차단)");
+  ok(/safeFailureFile\(conv\.file\)/.test(fn), "파일 표기는 안전 검사를 거친 값만 남긴다");
+}
+
+console.log("[7e] 위험한 파일 표기는 기록에서 생략하되 실패 자체는 남는다(2026-07-29 blocker④·[보완])");
+{
+  const { ws, nodeId } = setup("badfile");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  const fake = () => ({ ok: true, result: { schema: "enrich-result-v1", items: [
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "n" } }, evidence: [{ file: "src/nope.js", quote: "// 없는 인용" }] },
+  ] } });
+  ME.runEnrich(ws, base(ws, { adapters: { self: fake } }));
+  const a0 = ME.readEnrichJob(ws).job.attempts[0];
+  ok(a0.phase === "failed", "실패 기록이 남아 시도가 running으로 방치되지 않음");
+  ok(a0.failureCode === "evidence-unreadable" && a0.failureFile === "src/nope.js", "없는 파일은 판독 불가로 분류(인용 불일치와 구분)");
+}
 {
   const { ws, topo } = setup("parse-invalid");
   ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
