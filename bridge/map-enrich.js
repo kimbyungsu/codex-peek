@@ -1467,15 +1467,27 @@ function resumeJob(repo, oIn, env, j, st2) {
     const cor = st2 && st2.corridor ? st2.corridor : "unknown"; // ⑦a 산출값(3차 — 재개도 라우팅 재료 보유)
     const d = env.MRt.decideRoute({ mode: j.mode, ready: o.readiness, corridor: cor, economyFailed: eF, precisionFailed: pF, conflict: false });
     if (d.route === "park") return park((jj) => jj && { ...jj, phase: "parked", parkedReason: d.reason, finishedAt: nowIso() }, d.reason, { jobKey: j.jobKey });
-    const at2 = runAttempt(repo, o, env, { topo: st2.topo, idx: st2.idx, pol: st2.pol, ah: st2.ah, jobKey: j.jobKey, corridor: cor, changed: st2 ? st2.changed : null, srcFp: st2 ? st2.srcFp : null }, d.route);
-    // 재개에서 새 시도까지 실패하면 여기서 종결한다(3차 blocker①: 그냥 돌려주면 작업이 open으로 남아
-    // 화면이 '진행 중'이라 말하고 실패 설명과 다시 시도 버튼이 최대 한 주기 동안 사라졌다).
-    if (at2 && at2.outcome === "provider-failed") {
+    // 재개에서 새 시도까지 실패하면 **라우터를 다시 태워** 종결한다.
+    //  · 그냥 돌려주면 작업이 open으로 남아 화면이 '진행 중'이라 말한다(3차 blocker①).
+    //  · 그렇다고 곧바로 park하면 자동형의 '경제형 실패 → 정밀형 승격'이 막힌다(4차 blocker①).
+    // 그래서 driveAttempts와 같은 규칙으로 다음 담당을 정하고, park일 때만 멈춘다.
+    let eF2 = eF, pF2 = pF, route2 = d.route;
+    const stR = { topo: st2.topo, idx: st2.idx, pol: st2.pol, ah: st2.ah, jobKey: j.jobKey, corridor: cor, changed: st2 ? st2.changed : null, srcFp: st2 ? st2.srcFp : null };
+    for (let guard = 0; guard < 4; guard++) {
+      const at2 = runAttempt(repo, o, env, stR, route2);
+      if (!at2 || at2.outcome !== "provider-failed") return at2;
       if (env.p10 && at2._p10Reason) env.p10.reasonCode = at2._p10Reason;
-      const reason2 = d.route + "-failed";
-      return park((jj) => jj && { ...jj, phase: "parked", parkedReason: reason2, finishedAt: nowIso() }, reason2, { jobKey: j.jobKey, provider: d.route });
+      if (route2 === "economy") eF2 = true;
+      else if (route2 === "precision") pF2 = true;
+      else return park((jj) => jj && { ...jj, phase: "parked", parkedReason: "self-failed", finishedAt: nowIso() }, "self-failed", { jobKey: j.jobKey, provider: route2 });
+      const dn = env.MRt.decideRoute({ mode: j.mode, ready: o.readiness, corridor: cor, economyFailed: eF2, precisionFailed: pF2, conflict: false });
+      if (dn.route === "park" || dn.route === "adjudicate") {
+        const rn = dn.route === "park" ? dn.reason : "adjudicate-unreachable";
+        return park((jj) => jj && { ...jj, phase: "parked", parkedReason: rn, finishedAt: nowIso() }, rn, { jobKey: j.jobKey, provider: route2 });
+      }
+      route2 = dn.route;
     }
-    return at2;
+    return park((jj) => jj && { ...jj, phase: "parked", parkedReason: "route-loop-guard", finishedAt: nowIso() }, "route-loop-guard", { jobKey: j.jobKey });
   }
   return park((jj) => jj && { ...jj, phase: "parked", parkedReason: "attempt-state:" + a.phase, finishedAt: nowIso() }, "attempt-state");
 }

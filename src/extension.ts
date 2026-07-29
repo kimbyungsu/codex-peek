@@ -629,7 +629,7 @@ let cachedClaudeVer: string | null = null;
 //  없다는 이유만으로 기본 담당이 늘 '점검 실패'로 보였다. 보강 어댑터는 설치본에 함께 배포된다).
 // 화면으로 내보내도 되는 파일 표기만 남긴다(옛 기록에 저장된 위험한 값 차단 — 3차 [보완]).
 function safeShowFile(v: any): string | null {
-  const s0 = String(v == null ? "" : v).replace(/\\\\/g, "/");
+  const s0 = String(v == null ? "" : v).replace(/\\/g, "/");
   if (!s0 || s0.length > 260) return null;
   if (/[\x00-\x1f\x7f<>:"|?*]/.test(s0)) return null;
   if (/^([a-zA-Z]:|\/)/.test(s0)) return null;
@@ -5002,8 +5002,8 @@ class Dashboard {
   function failureAdvice(lf){
     if(!lf||!lf.code) return "";
     // 호출 단계도 프로세스가 뜬 뒤 실패하면 이미 사용량이 들었을 수 있다([주의] 수용 — 비용 오판 방지).
-    if(lf.stage==="call") return T(" 담당 실행 파일·설정·연결을 먼저 확인해 주세요(시간 초과나 비정상 종료였을 수도 있어요). 이미 사용량이 들었을 수 있고, 다시 시도하면 또 들 수 있어요.","Check the provider's executable, settings, and connection first (it may also have timed out or exited abnormally). Quota may already have been used, and a retry can use more.");
-    return T(" 다시 시도하면 다른 답이 나올 수 있지만 같은 이유로 또 버려질 수도 있고, 그때마다 담당 호출이 한 번 더 나갑니다(사용량 소모).","A retry may produce a different answer, but it can be discarded for the same reason — and each retry makes another provider call (uses quota).");
+    if(lf.stage==="call") return T(" 담당 실행 파일·설정·연결을 먼저 확인해 주세요(시간 초과나 비정상 종료였을 수도 있어요). 이미 사용량이 들었을 수 있고, 다시 시도하면 또 들 수 있어요."," Check the provider's executable, settings, and connection first (it may also have timed out or exited abnormally). Quota may already have been used, and a retry can use more.");
+    return T(" 다시 시도하면 다른 답이 나올 수 있지만 같은 이유로 또 버려질 수도 있고, 그때마다 담당 호출이 한 번 더 나갑니다(사용량 소모)."," A retry may produce a different answer, but it can be discarded for the same reason — and each retry makes another provider call (uses quota).");
   }
   function parkReasonText(raw, readiness){
     var s=String(raw||"").trim();

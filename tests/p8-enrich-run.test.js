@@ -306,6 +306,25 @@ console.log("[7c] 명시 재시도는 실제로 새 호출을 만든다(2026-07-
   ok(calls === 2 && r3.outcome === "parked", "표식 없이 열면 새 호출 없이 보류(표식이 실제로 작동함을 대조로 확인)");
 }
 
+console.log("[7c-2] 자동형 재시도에서도 경제형 실패 뒤 정밀형 승격이 살아 있다(2026-07-29 4차 blocker①)");
+{
+  // 재개에서 실패하면 곧바로 보류하던 앞 수정이 자동형 승격을 막았다 — 라우터를 다시 태워 승격을 지킨다.
+  const { ws, nodeId } = setup("auto-retry");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: false, paidMode: "auto" });
+  const seen = [];
+  const opts = (precOk) => base(ws, { mode: "auto", readiness: READY, adapters: {
+    economy: () => { seen.push("economy"); return { ok: false, detail: "boom" }; },
+    precision: (c) => { seen.push("precision"); return precOk ? goodAdapter(nodeId)(c) : { ok: false, detail: "boom" }; },
+  } });
+  ME.runEnrich(ws, opts(false));
+  ok(ME.readEnrichJob(ws).job.phase === "parked", "(전제) 양쪽 실패로 보류");
+  seen.length = 0;
+  ME.updateEnrichJob(ws, (jj) => { if (!jj || jj.phase !== "parked") return null; const nx = { ...jj, phase: "open", retryFrom: jj.attempts.length }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
+  const r = ME.runEnrich(ws, opts(true));
+  ok(seen.join(",") === "economy,precision", "재시도에서도 경제형 실패 → 정밀형 승격이 실제로 일어남(" + seen.join(",") + ")");
+  ok(r.outcome === "applied", "승격한 정밀형이 성공하면 적용까지 간다");
+}
+
 console.log("[7d] 변환 단계 거부도 구조 필드·감사 사유를 남긴다(2026-07-29 구현검증 blocker②③)");
 {
   const { ws, nodeId } = setup("convert-fail");

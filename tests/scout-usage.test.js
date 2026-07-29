@@ -126,6 +126,21 @@ ok(/이미 사용량이 들었을 수 있고, 다시 시도하면 또 들 수 �
 ok(/답은 돌아왔지만 결과를 읽거나 형식을 맞출 수 없어 버렸어요/.test(ext), "담당이 읽기 실패와 형식 불일치를 한 신호로 주는 경우를 함께 담는 문구");
 ok(/function safeShowFile\(v: any\): string \| null/.test(ext) && /file: safeShowFile\(last9\.failureFile\)/.test(ext), "옛 기록의 위험한 파일 표기는 화면으로 나가기 전에 한 번 더 거름");
 ok(/T\(" · 마지막 시도: "," · last attempt: "\)/.test(ext), "영어 문구도 앞 공백을 지켜 붙임(구분 공백 누락 회귀 차단)");
+// 4차 [보완]: 영어 조언이 앞 문장에 붙어 "(...js)A retry"처럼 보였다.
+ok(/" Check the provider's executable/.test(ext) && /" A retry may produce a different answer/.test(ext), "영어 실패 안내도 앞 공백을 지켜 붙임");
+ok(/replace\(\/\\\\\/g, "\/"\)/.test(ext), "safeShowFile이 단일 역슬래시를 정규화(윈도 표기의 상위 탈출도 걸러짐)");
+{
+  const src5 = fs.readFileSync(path.join(ROOT, "out", "extension.js"), "utf8");
+  const s5 = src5.indexOf("function safeShowFile(");
+  let i5 = src5.indexOf("{", s5), d5 = 0, fn5 = "";
+  for (; i5 < src5.length; i5++) { if (src5[i5] === "{") d5++; else if (src5[i5] === "}") { d5--; if (d5 === 0) { fn5 = src5.slice(s5, i5 + 1); break; } } }
+  const safeShowFile = new Function(fn5 + "\nreturn safeShowFile;")();
+  ok(safeShowFile("src/a.js") === "src/a.js", "정상 상대경로는 그대로 통과");
+  ok(safeShowFile("..\\..\\secret.js") === null, "윈도 표기 상위 탈출 차단");
+  ok(safeShowFile("safe\\..\\secret.js") === null, "중간에 낀 윈도 표기 상위 탈출 차단");
+  ok(safeShowFile("D:/x/secret.js") === null && safeShowFile("/etc/passwd") === null, "절대경로 차단");
+  ok(safeShowFile("src/a.js" + String.fromCharCode(10) + "(연결 정상)") === null, "여러 줄 값 차단");
+}
 ok(/담당 실행 파일·설정·연결을 먼저 확인해 주세요/.test(ext), "호출 실패와 답 거부의 다음 행동을 갈라 안내");
 ok(/이 숫자는 담당을 부른 횟수예요 — 그 답이 채택됐다는 뜻은 아니에요/.test(ext) && /it does not mean the answers were accepted/.test(ext), "의미 보강 숫자의 뜻을 못박음(호출 수 ≠ 채택 수)");
 {
