@@ -2,7 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { extractVerdict, askJobIdOk, readBacklog, normBacklogTitle } = require("./contract-lib.js");
+const { extractVerdict, authoritativeVerdict, findingsBlockRange, askJobIdOk, readBacklog, normBacklogTitle } = require("./contract-lib.js");
 
 // 검증 상한은 검증 호출만 멈춘다. 마지막 검증 지적은 구현자가 먼저 네 갈래로 재판단한다.
 // 처리·반박·보관함 항목은 사용자에게 결정을 떠넘기지 않고, 실제 제품 선택만 한 번에 올린다.
@@ -39,33 +39,16 @@ function countNeedle(body, needle) {
   return count;
 }
 
-function verdictFromAnswer(answer) {
-  const text = String(answer || "");
-  // formatForClaude가 원 선언과 기계 실효 판정을 함께 싣는 경우 대시보드와 같은 실효 판정이 권위다.
-  if (/Machine reading:.*verdict demoted to ['"]inconclusive['"]/i.test(text)
-      || /기계 판독:.*판정을 ['"]보류['"]로 강등/i.test(text)) return "inconclusive";
-  const direct = extractVerdict(text);
-  if (direct) return direct;
-  let found = null;
-  for (const line of text.split(/\r?\n/)) {
-    const m = /^(?:Codex 선언|Codex declared)\s*:\s*(.*)$/i.exec(line.trim());
-    if (!m) continue;
-    const v = extractVerdict(m[1]);
-    if (v) found = v;
-  }
-  return found;
-}
+// 정본은 contract-lib으로 옮겼다(확인 검증 blocker①): footer에 붙는 재판단 문안의 '오염 여부'를 판정하는
+// 차단기와, 여기서 판정을 읽는 판독기가 서로 다른 규칙을 쓰면 어느 한쪽만 고쳐져 우회로가 생긴다.
+// 이 이름은 기존 소비처를 위해 그대로 유지하되 알맹이는 한 곳에서 온다.
+const verdictFromAnswer = authoritativeVerdict;
 
 const MAX_CONTEXT_FINDINGS = 64;
 function parseFindingEvidence(answer, round) {
   const lines = String(answer || "").split(/\r?\n/);
-  let start = -1, end = -1;
-  for (const pair of [["[지적 목록 v2]", "[지적 목록 끝]"], ["[findings v2]", "[findings end]"], ["[지적 목록 v1]", "[지적 목록 끝]"], ["[findings v1]", "[findings end]"]]) {
-    const s = lines.lastIndexOf(pair[0]);
-    if (s < 0) continue;
-    const e = lines.indexOf(pair[1], s + 1);
-    if (e > s) { start = s; end = e; break; }
-  }
+  // 블록 경계 탐색은 contract-lib이 정본(확인 검증 blocker① — 차단기와 판독기 단일 출처).
+  const { start, end } = findingsBlockRange(lines);
   if (start < 0 || end < 0) return { ok: false, evidence: [], reason: "block-missing" };
   const out = [];
   for (let i = start + 1; i < end; i++) {

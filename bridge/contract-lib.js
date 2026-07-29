@@ -3575,26 +3575,31 @@ function buildVerifyDirective(mode, lang, profile, progress) {
       mode === "always" ? "This turn (every response)" :
       mode === "plancode" ? "If this turn confirmed a plan (ExitPlanMode) or created/modified files" :
       "If this turn created/modified files"; // code
-    const round = progress && progress.tracked && progress.budget >= 1 ? ` Current recorded progress is ${progress.count}/${progress.budget}; the authoritative N/M for a new round is the receipt reserved immediately before the verifier model call.` : "";
+    const round = progress && progress.tracked && progress.budget >= 1 ? ` Recorded progress ${progress.count}/${progress.budget} (the authoritative round number is printed at the bottom of the verdict).` : "";
     return [
       `[Verify Mode ON(${mode}) · implement→verify two-track · no human relays between the models]`,
-      `${cond}, you MUST get Codex verification before reporting completion. At most one durable verification job may be queued/running at a time: start one with \`node "${BRIDGE}" ask-start --allow-new "..."\`, then repeat \`node "${BRIDGE}" ask-wait <job-id>\` while pending. After a completed fail or a subsequent edit, start the next round sequentially only after the previous job has ended; stop on pass. At M/M do not start another job: close only the latest findings as accepted-and-handled, evidence-backed rebuttal, receipt-backed parking, or genuine user decision. Ask one combined question only when the last lane is nonempty; otherwise invent no choices. When you do ask, present it through the choice tool — a question written out in the reply body does not count.${round} The dashboard verification wait (${verifyTimeoutMin()} min) is the actual Codex deadline; short outer tool windows do not terminate the verifier. (A linked verifier session is resumed; a new one is created only when none is linked.) [path is quoted so spaces are safe]`,
+      `${cond}, you MUST get Codex verification before reporting completion — start with \`node "${BRIDGE}" ask-start --allow-new "..."\`, then repeat \`node "${BRIDGE}" ask-wait <job-id>\` while pending (it returns every 45s; the real deadline is the dashboard wait of ${verifyTimeoutMin()} min, so do not give up in between). Stop on a pass verdict — nothing prevents starting another verification after a pass, so this single line is the only brake. The remaining flow rules (one job at a time, sequential rounds, session linking, closeout format at the cap) are actually enforced by the stop hook and the reservation wrapper, which tell you on the spot — do not try to memorize them. Ask one combined question only when a genuine user-decision item exists; otherwise invent no choices. When you do ask, present it through the choice tool — a question written out in the reply body does not count.${round}`,
       `[Remote checks] The verifier runs with network blocked by default (read-only sandbox). If the verification itself must confirm remote state (e.g., GitHub push/CI/remote refs, registries, live URLs), add \`--net\` to that one ask — that single run allows outbound network while files stay read-only. Do not use --net when local files suffice.`,
       b.transmit,
-      b.rejudge,
+      // 주입 구조화 2단계: [재판단] 본문은 판정이 도착할 때 footer로 함께 온다(ask 시작 시점 동결본).
+      // 검증 답을 받기 전에는 쓸모가 없는 규약이라 매 턴 자리를 차지할 이유가 없다. 상시로 남기는 것은
+      // '도착 전에는 임의 수용 금지'라는 태도 한 줄뿐 — 이건 기계가 잡을 수 없다.
+      `[Re-judgment] When a verdict arrives, the re-judgment protocol arrives with it, below the answer. Until then, do not pre-accept findings and do not copy the verifier's answer verbatim.`,
     ].join("\n");
   }
   const cond =
     mode === "always" ? "이번 턴(모든 응답)" :
     mode === "plancode" ? "이번 턴에 플랜을 확정(ExitPlanMode)했거나 파일을 생성/수정했다면" :
     "이번 턴에 파일을 생성/수정했다면"; // code
-  const round = progress && progress.tracked && progress.budget >= 1 ? ` 현재 저장된 진행은 ${progress.count}/${progress.budget}이며, 새 회차의 권위 있는 N/M은 검증 모델 호출 직전에 예약되는 영수증이다.` : "";
+  // 뒷문장('권위 있는 N/M은 호출 직전 예약 영수증')은 판정 답 하단 '[검증 왕복 N/M]' 줄이 이미 말한다 — 중복 제거.
+  const round = progress && progress.tracked && progress.budget >= 1 ? ` 저장된 진행 ${progress.count}/${progress.budget}(권위 있는 회차는 검증 답 하단에 표시된다).` : "";
   return [
     `[검증 모드 ON(${mode}) · 구현→검증 2트랙 · 사람이 턴을 중계하지 않음]`,
-    `${cond}, 사용자에게 완료를 보고하기 전에 Codex 검증을 받아라. queued/running 내구 검증 작업은 동시에 최대 1개만 둘 수 있다. \`node "${BRIDGE}" ask-start --allow-new "..."\` 로 1개를 시작하고 pending이면 \`node "${BRIDGE}" ask-wait <job-id>\` 를 반복하라. 완료된 실패 또는 그 뒤 수정이 있으면 앞 작업이 끝난 다음 회차를 순차적으로 시작하고, 통과하면 멈춰라. 기록이 M/M에 닿으면 새 작업을 만들지 말고 마지막 지적만 수용·처리/근거 있는 반박·종결/영수증 있는 보관함/진짜 사용자 판단으로 나눠 마감하라. 사용자 판단 항목이 있을 때만 한 번에 묻고, 없으면 선택지를 만들지 마라. 물을 때는 반드시 선택지 도구로 제시하라 — 답 본문에 풀어 쓴 질문은 질문으로 치지 않는다.${round} 대시보드 검증 대기시간(${verifyTimeoutMin()}분)이 실제 Codex 마감시간이며, 바깥 도구의 짧은 실행창이 검증자를 종료시키지 않는다. (연결된 검증 세션이 있으면 이어가고, 연결이 전혀 없을 때만 새 세션을 만들어 연결한다.) [경로에 공백이 있어도 되도록 따옴표로 감쌌음]`,
+    `${cond}, 사용자에게 완료를 보고하기 전에 Codex 검증을 받아라 — \`node "${BRIDGE}" ask-start --allow-new "..."\` 로 시작하고 pending이면 \`node "${BRIDGE}" ask-wait <job-id>\` 를 반복한다(45초씩 돌아오며 실제 마감은 대시보드 대기시간 ${verifyTimeoutMin()}분이니 중간에 포기하지 마라). 통과 판정을 받으면 거기서 멈춰라 — 통과 뒤 새 검증을 시작하는 것은 어떤 장치도 막지 않으므로 이 한 줄이 유일한 제동이다. 나머지 진행 규칙(동시 1개·순차 회차·세션 연결·상한 도달 시 마감문 형식)은 종료 훅과 예약기가 실제로 막고 그 자리에서 알려주니 외우려 하지 마라. 사용자 판단 항목이 있을 때만 한 번에 묻고, 없으면 선택지를 만들지 마라. 물을 때는 반드시 선택지 도구로 제시하라 — 답 본문에 풀어 쓴 질문은 질문으로 치지 않는다.${round}`,
     `[원격 확인] 검증자는 기본적으로 네트워크가 차단된 채(읽기 전용 샌드박스) 돈다. 검증 자체가 원격 상태 확인을 요구하면(예: GitHub 푸시/CI/원격 ref, 패키지 저장소, 라이브 URL) 그 1회의 ask에 \`--net\`을 붙여라 — 그 실행만 외부 통신이 허용되고 파일은 여전히 읽기 전용이다. 로컬 파일로 충분한 검증엔 --net을 쓰지 마라.`,
     b.transmit,
-    b.rejudge,
+    // 주입 구조화 2단계(위 영문 분기와 같은 논리): [재판단] 본문은 판정 도착 시 footer로 함께 온다.
+    `[재판단] 판정이 오면 재판단 규약이 그 답 아래에 함께 온다. 그 전에는 지적을 미리 수용하지도, 검증모델 답을 그대로 옮기지도 마라.`,
   ].join("\n");
 }
 
@@ -3673,13 +3678,13 @@ const VERDICT_ACTION_EN = {
 // (완료 시점 계약 재읽기 금지 — 계약 ⓓ). 미지정=integrity 문구(무회귀).
 const VERDICT_ACTION_CORE = {
   pass: "조치 없음 — 단, 본문에 보완·주의·수정 항목이 보이면 선언 결론보다 본문 항목을 우선 처리하라.",
-  "pass-notes": "보완 의견 있음 — 각 항목을 [수용/반박/보류]로 재판단하라(지적이라는 이유만으로 수용 금지·반박=실측 반례). 이 답이 '첫 판정'이면: 수용한 '[보완]'을 일괄 반영하고 확인 검증 1회로 마감하라. 이 답이 그 '확인 검증'의 판정이면: 새로 나온 비차단 지적은 반영하지 말고 미반영으로 보고하라. '[주의]'는 지금 고치거나(확인 1회 동승) 근거와 함께 승격해 보관함에 기록하고, '[백로그]'는 수정하지 말고 보관함 기록·목록 전달하라(자동 등록 거부/실패=수동 등록·갚을 의무 없음). 상세 절차는 주입된 재판단 규약을 따르라(미주입이면 이 문장들이 최소 규약이다).",
+  "pass-notes": "보완 의견 있음 — 각 항목을 [수용/반박/보류]로 재판단하라(지적이라는 이유만으로 수용 금지·반박=실측 반례). 이 답이 '첫 판정'이면: 수용한 '[보완]'을 일괄 반영하고 확인 검증 1회로 마감하라. 이 답이 그 '확인 검증'의 판정이면: 새로 나온 비차단 지적은 반영하지 말고 미반영으로 보고하라. '[주의]'는 지금 고치거나(확인 1회 동승) 근거와 함께 승격해 보관함에 기록하고, '[백로그]'는 수정하지 말고 보관함 기록·목록 전달하라(자동 등록 거부/실패=수동 등록·갚을 의무 없음). 상세 절차는 아래 [재판단 규약]을 따르라(붙어 있지 않으면 이 문장들이 최소 규약이다).",
   inconclusive: "추가 확인 필요 — 판단 보류 사유와 다음 확인 지점을 보고하라. blocker가 잔존한 교착이면 [분쟁|미해결 결함|외부 결정] 분류+근거를 붙여 사용자에게 선택을 넘겨라.",
   fail: "수정 필요 — blocker는 반박이 성립하지 않는 한 고치고, '[주의]' 재판단·수용 '[보완]' 일괄 동승 후 재검증하라(단 이 답이 '확인 검증'의 판정이면 새 blocker만 고치고 새 비차단은 미반영 보고). '[백로그]'는 수정하지 말고 보관함 기록·목록 전달(자동 등록 실패=수동 등록).",
 };
 const VERDICT_ACTION_CORE_EN = {
   pass: "No action — but if the body contains supplement/caution/fix items, prioritize those body items over the declared verdict.",
-  "pass-notes": "Notes present — re-judge every item as [accept/rebut/hold] (never accept merely because it was raised; rebuttal = measured counterexample). If this is the FIRST verdict: apply accepted '[notes]' as one batch closed by a single confirmation verification. If this is that CONFIRMATION's verdict: do NOT apply new non-blocking findings — report them as unapplied. '[caution]': fix now (rides the confirmation once) or escalate with your reasoning and record it in the parking lot; '[backlog]': do not fix — record in the parking lot and pass the list (auto-record refused/failed = register manually; no repayment duty). Details: the injected re-judgment protocol (if absent, these sentences are the minimum protocol).",
+  "pass-notes": "Notes present — re-judge every item as [accept/rebut/hold] (never accept merely because it was raised; rebuttal = measured counterexample). If this is the FIRST verdict: apply accepted '[notes]' as one batch closed by a single confirmation verification. If this is that CONFIRMATION's verdict: do NOT apply new non-blocking findings — report them as unapplied. '[caution]': fix now (rides the confirmation once) or escalate with your reasoning and record it in the parking lot; '[backlog]': do not fix — record in the parking lot and pass the list (auto-record refused/failed = register manually; no repayment duty). Details: the [Re-judgment protocol] attached below (if it is not attached, these sentences are the minimum protocol).",
   inconclusive: "Further verification needed — report the hold reason and next checkpoints. If blockers remain in a stalemate, escalate to the user with a [disputed|unresolved-defect|external-decision] class and evidence.",
   fail: "Fix required — fix blockers unless a rebuttal stands, re-judge '[caution]' for same-loop handling, apply accepted '[notes]' in the same batch, then re-verify (if this is a CONFIRMATION verdict, fix only new blockers and report new non-blocking findings as unapplied). '[backlog]': do not fix — record in the parking lot and pass the list (auto-record failed = register manually).",
 };
@@ -3700,7 +3705,94 @@ function machineReasonText(machine, en) {
 // machine(선택 4번째 인자·P-12 2c): judgeMachineVerdict 결과({effective, demoted, corrected, reasonKey, parse}).
 // 전달되면 처리 의무를 '실효 판정'으로 선택하고 강등·정정 사유 줄을 footer에 넣는다(core에서만 호출자가 전달 —
 // 미전달 호출은 기존과 바이트 동일=무회귀). 강등 시 표지 줄이 없어도 footer를 강제한다(fail-closed 구멍 봉합).
-function formatForClaude(answer, lang, profile, machine) {
+// ── 주입 구조화 2단계: 재판단 규약 동결 스냅샷 ───────────────────────────────────────────────
+// 무결성 프로필의 [재판단] 문안은 사용자가 대시보드에서 편집하는 값이라 길이·형태를 단정할 수 없다.
+// 과대·비문자열은 '무음 절단'(반쪽 규약) 대신 첨부 생략으로 떨어뜨린다.
+// 다만 '첨부 없음'이 곧 '구조화 이전과 같은 출력'인 것은 아니다 — 문안이 있었는데 거부된 경우에는
+// 아래 rjNote가 미첨부 사유를 한 줄 덧붙인다(조용한 누락 금지). 이전과 같은 출력이 되는 것은 애초에
+// 문안이 없던 경우(옛 job·미전달·비문자열)뿐이다.
+// 정규화(첨부 가능 여부 판정)는 formatForClaude 한 곳에서만 한다. codex-bridge는 시작 시점 '원문'을
+// 동결해 넘길 뿐 정규화하지 않는다 — 미리 걸러버리면 '문안이 없었다'와 '있었는데 거부됐다'를 구분할 수
+// 없어 조용한 누락이 된다. 브릿지가 하는 절단은 job 파일 비대를 막기 위한 상한+1자뿐이다.
+// ── .out 기계 판독의 정본(확인 검증 blocker① — 차단기·판독기 단일 출처) ─────────────────────────
+// verify-cap-handoff가 상한 마감의 '권위 있는 판정'을 읽는 규칙이 여기 하나로 있다. footer에 붙는 재판단
+// 문안이 이 규칙을 흔들 수 있는지 판정하는 차단기(rejudgeSnapPoisons)도 같은 함수를 쓴다 — 규칙을 두 곳에
+// 적으면 한쪽만 고쳐져 우회로가 생긴다(실제로 'Codex 선언:' 래퍼와 기계 강등 문장이 그렇게 새어나갔다).
+function authoritativeVerdict(answer) {
+  const text = String(answer || "");
+  // formatForClaude가 원 선언과 기계 실효 판정을 함께 싣는 경우 대시보드와 같은 실효 판정이 권위다.
+  if (/Machine reading:.*verdict demoted to ['"]inconclusive['"]/i.test(text)
+      || /기계 판독:.*판정을 ['"]보류['"]로 강등/i.test(text)) return "inconclusive";
+  const direct = extractVerdict(text);
+  if (direct) return direct;
+  let found = null;
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^(?:Codex 선언|Codex declared)\s*:\s*(.*)$/i.exec(line.trim());
+    if (!m) continue;
+    const v = extractVerdict(m[1]);
+    if (v) found = v;
+  }
+  return found;
+}
+// 지적 블록 경계. 시작 표지는 '줄 전체 일치'로만 인정한다(lastIndexOf 의미 그대로) — 본문에서 표지를
+// 설명하려고 문장 속에 끼워 쓴 경우는 블록이 아니다. 차단기도 이 기준을 그대로 써서 정상 설명 문안을
+// 통째로 버리지 않는다(확인 검증 [주의] 반영).
+const FINDINGS_BLOCK_PAIRS = [
+  [FINDINGS_MARKERS_V2.ko.start, FINDINGS_MARKERS_V2.ko.end],
+  [FINDINGS_MARKERS_V2.en.start, FINDINGS_MARKERS_V2.en.end],
+  [FINDINGS_MARKERS.ko.start, FINDINGS_MARKERS.ko.end],
+  [FINDINGS_MARKERS.en.start, FINDINGS_MARKERS.en.end],
+];
+function findingsBlockRange(lines) {
+  for (const [s0, e0] of FINDINGS_BLOCK_PAIRS) {
+    const s = lines.lastIndexOf(s0);
+    if (s < 0) continue;
+    const e = lines.indexOf(e0, s + 1);
+    if (e > s) return { start: s, end: e };
+  }
+  return { start: -1, end: -1 };
+}
+
+const REJUDGE_SNAP_MAX = 20000;
+// 첨부 거부 사유(기계 판독 오염 차단 — 1차 검증 blocker②):
+// footer가 붙는 자리는 .out 전체이고, 상한 마감 판독기는 그 전체에서 '마지막' 판정 줄과 '마지막' 지적 블록을
+// 권위로 삼는다(verify-cap-handoff.js verdictFromAnswer·parseFindingEvidence). 무결성 프로필의 이 문안은
+// 사용자가 대시보드에서 자유롭게 쓰는 값이라, 판정 줄이나 지적 블록처럼 보이는 내용이 들어가면 검증자의
+// 진짜 판정·지적을 덮어쓴다(실측 반례: 원답 fail+blocker인데 마감 판독이 pass+가짜 지적으로 뒤집힘).
+// 특정 단어를 막는 목록을 만들지 않고 '판독기가 쓰는 바로 그 판정 기준'을 재사용한다 — 판독기가 바뀌면
+// 거부 기준도 함께 바뀐다. 지금 캐논 문안이 우연히 깨끗한 것에 기대지 않는다.
+function rejudgeSnapPoisons(v) {
+  // 판독기가 이 문안 하나만 봐도 판정을 뽑아낸다면, .out 끝에 붙었을 때 진짜 판정을 덮을 수 있다.
+  // 직접 판정 줄뿐 아니라 'Codex 선언:' 래퍼·기계 강등 문장까지 같은 함수가 한 번에 잡는다.
+  if (authoritativeVerdict(v) !== null) return true;
+  // 지적 블록도 판독기와 같은 기준(줄 전체 일치)으로만 블록으로 본다.
+  const lines = v.split(/\r?\n/);
+  if (findingsBlockRange(lines).start >= 0) return true;
+  // 열린 표지만 있고 닫는 표지가 없어도, .out 뒤쪽에 이미 있는 닫는 표지와 짝이 맞아 새 블록이 된다.
+  for (const [s0] of FINDINGS_BLOCK_PAIRS) if (lines.includes(s0)) return true;
+  return false;
+}
+function normRejudgeSnap(s) {
+  if (typeof s !== "string") return "";
+  const v = s.trim();
+  if (!v || v.length > REJUDGE_SNAP_MAX) return "";
+  if (rejudgeSnapPoisons(v)) return ""; // 오염 가능 문안 = 첨부 생략(잘라 붙이지 않는다 — 반쪽 규약 금지와 같은 원칙)
+  return v;
+}
+// 주의: loadBaseDirective는 오버라이드 파일의 판독·파싱 실패를 자기 안에서 삼키고 기본값을 돌려준다
+// (3150 부근). 따라서 '손상 오버라이드'는 여기까지 예외로 오지 않고 기본 문안이 동결된다 — 구조화 이전에도
+// 손상 오버라이드는 기본값으로 주입됐으므로 동작은 같다(무회귀). 아래 try/catch가 잡는 것은 그 위쪽 경로
+// (모듈 상태·경로 계산 등)의 예외뿐이다.
+function safeLoadRejudge(lang, profile) {
+  try { const b = loadBaseDirective(lang, profile); return b && typeof b.rejudge === "string" ? b.rejudge : ""; }
+  catch { return ""; }
+}
+// rejudgeSnap(선택 5번째 인자 · 주입 구조화 2단계): ask 시작 시점에 동결된 [재판단] 원문.
+// 매 턴 주입 대신 '판정이 도착하는 이 자리'에서 배달한다 — 검증 답을 받기 전에는 쓸모가 없는 규약이라
+// 상시 주입 자리를 차지할 이유가 없었다. 출처는 여전히 편집 파일(loadBaseDirective)이라 무결성 프로필의
+// 사용자 편집이 그대로 살아 있다. 미전달·빈 문자열(옛 job·손상·판독 실패)=첨부 없음으로 기존 바이트 동일.
+// 우선순위: 처리 의무 한 줄(코드 소유)이 먼저이고 규약은 그 아래 '상세 절차' — 충돌 시 처리 의무가 이긴다.
+function formatForClaude(answer, lang, profile, machine, rejudgeSnap) {
   const text = String(answer || "");
   const en = (LANGS.includes(lang) ? lang : loadLang()) === "en";
   const table = profile === "core" ? (en ? VERDICT_ACTION_CORE_EN : VERDICT_ACTION_CORE) : (en ? VERDICT_ACTION_EN : VERDICT_ACTION);
@@ -3726,12 +3818,23 @@ function formatForClaude(answer, lang, profile, machine) {
   else if (m && m.corrected) machineLine = en
     ? `\nMachine reading: ${machineReasonText(m, true)} — 'pass' corrected to 'pass (notes)'.`
     : `\n기계 판독: ${machineReasonText(m, false)} — '통과' 선언을 '통과(보완)'로 정정.`;
+  // 동결본이 있을 때만 상세 절차를 덧붙인다(없으면 구조화 이전과 바이트 동일). 마지막 관문에서도 같은 가드를
+  // 통과시킨다 — 호출자가 정규화를 빠뜨려도 잘린 반쪽 규약이 출력으로 새지 않는다.
+  const rj = normRejudgeSnap(rejudgeSnap);
+  // 조용한 누락 금지(확인 검증 [주의]): 문안이 있었는데 첨부되지 않았으면 그 사실과 이유를 밝힌다.
+  // 사용자가 저장한 규약이 살아 있다고 오해한 채 다른 절차로 진행하는 것을 막는다.
+  const rjRaw = typeof rejudgeSnap === "string" ? rejudgeSnap.trim() : "";
+  const dropped = !rj && (rjRaw ? (rjRaw.length > REJUDGE_SNAP_MAX ? "too-long" : "machine-shape") : "");
+  const rjNote = !dropped ? "" : en
+    ? `\n\n[Re-judgment protocol not attached] ${dropped === "too-long" ? `The saved text exceeds ${REJUDGE_SNAP_MAX} characters, so it was left out whole rather than truncated.` : "The saved text contains something shaped like a verdict line or a findings block, which would override the verifier's real verdict when read from the end of this answer."} Fix it in the dashboard's re-judgment box; until then the obligation line above is the protocol.`
+    : `\n\n[재판단 규약 미첨부] ${dropped === "too-long" ? `저장된 문안이 ${REJUDGE_SNAP_MAX}자를 넘어, 잘라 붙이는 대신 통째로 뺐다.` : "저장된 문안에 판정 줄이나 지적 목록처럼 읽히는 부분이 있다. 이 답의 끝에서 읽히면 검증자의 진짜 판정을 덮으므로 첨부하지 않았다."} 대시보드의 재판단 칸에서 고쳐라 — 그 전까지는 위 처리 의무 줄이 규약이다.`;
+  const rjBlock = rj ? (en ? `\n\n[Re-judgment protocol — as frozen when this verification started]\n${rj}` : `\n\n[재판단 규약 — 이 검증이 시작될 때 확정된 문안]\n${rj}`) : rjNote;
   return en
-    ? `${body}\n\n---\n[Claude handling note — next action, not a color label]\nCodex declared: ${verdictLine || "(no verdict line)"}${machineLine}\nObligation: ${action}`
-    : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}${machineLine}\n처리 의무: ${action}`;
+    ? `${body}\n\n---\n[Claude handling note — next action, not a color label]\nCodex declared: ${verdictLine || "(no verdict line)"}${machineLine}\nObligation: ${action}${rjBlock}`
+    : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}${machineLine}\n처리 의무: ${action}${rjBlock}`;
 }
 
-module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, scoutCouplingAttach, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, verifyCampaignProgress, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, codexScoutExecEnv, TOOL_EXEC_ENV, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, selfAdapterSha, selfExecFp, precisionExecFp, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, formatForClaude, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, scoutCouplingAttach, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, verifyCampaignProgress, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, codexScoutExecEnv, TOOL_EXEC_ENV, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, selfAdapterSha, selfExecFp, precisionExecFp, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, authoritativeVerdict, findingsBlockRange, formatForClaude, normRejudgeSnap, safeLoadRejudge, REJUDGE_SNAP_MAX, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
 module.exports.codexImplementerSession = codexImplementerSession;
 module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
 // P-6 회수 영수증 계약(설계 v5.1)

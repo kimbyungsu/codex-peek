@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -1902,7 +1902,15 @@ function cmdAskStart(rest) {
     if(cSnap.harnessMode==="codex-codex")campaignId="cc:"+frozen.implementerSession+":"+frozen.implementerTurnId;
     else{const an=claudeCampaignAnchor();if(an.ok)campaignId=an.campaignId;}
     id="ask-"+Date.now().toString(36)+"-"+crypto.randomBytes(5).toString("hex");timeoutMin=verifyTimeoutMin();const now=Date.now();
-    job={schema:"ask-job-v1",id,state:"queued",workspace:ws,execCwd:process.cwd(),flags:req.flags,prompt:req.prompt,timeoutMin,createdAt:new Date(now).toISOString(),deadlineAt:new Date(now+timeoutMin*60*1000).toISOString(),workerPid:null,childPid:null,exitCode:null,harnessMode:cSnap.harnessMode,verifyProfile:effectiveVerifyProfile(cSnap),verifyLang:askLangSnap,campaignId,implementerSession:frozen.implementerSession,implementerTurnId:frozen.implementerTurnId,implementerRevision:frozen.implementerRevision};
+    // 주입 구조화 2단계: 재판단 규약을 '판정이 도착하는 자리'로 옮기면서, 같은 ask가 시작할 때 확정한 문안을
+    // 완료 처리에도 쓰도록 원문을 여기서 동결한다. 동결하지 않고 완료 시점에 파일을 다시 읽으면 검증이 도는
+    // 동안 다른 창이 문안을 저장했을 때 시작과 도착이 다른 세대가 된다(검증 지적 반영).
+    // 프로필·언어와 '같은 스냅샷'에서 뽑는다 — 교차 슬롯 결합 차단(위 askLangSnap 계약과 동일 원리).
+    const askProfileSnap=effectiveVerifyProfile(cSnap);
+    // 원문을 그대로 동결한다(정규화는 footer 한 곳에서만) — 첨부가 거부된 경우에도 '무엇이 있었는지'를 알아야
+    // 조용한 누락 대신 사유를 밝힐 수 있다. 파일 비대는 상한+1자 절단으로 막는다(길이 초과 판정에는 충분).
+    const rejudgeSnap=safeLoadRejudge(askLangSnap,askProfileSnap).trim().slice(0,REJUDGE_SNAP_MAX+1);
+    job={schema:"ask-job-v1",id,state:"queued",workspace:ws,execCwd:process.cwd(),flags:req.flags,prompt:req.prompt,timeoutMin,createdAt:new Date(now).toISOString(),deadlineAt:new Date(now+timeoutMin*60*1000).toISOString(),workerPid:null,childPid:null,exitCode:null,harnessMode:cSnap.harnessMode,verifyProfile:askProfileSnap,verifyLang:askLangSnap,rejudgeSnap,campaignId,implementerSession:frozen.implementerSession,implementerTurnId:frozen.implementerTurnId,implementerRevision:frozen.implementerRevision};
     file=askJobFile(id);
     if(!atomicWrite(file,JSON.stringify(job)))throw new Error(tB("검증 작업 저장 실패 — 새 검증을 시작하지 않았습니다.","Failed to save the verification job — no verification was started."));
   }); } catch(e) { die(String(e&&e.message||e),Number(e&&e.exitCode)||1); }
@@ -2633,11 +2641,15 @@ async function cmdAsk(rest) {
   const durableEnv = process.env.CODEX_BRIDGE_JOB_PROMPT_FILE ? readCanonicalEnvJob(ws) : null; // 모드 무관 정본 판독(CL-C job 포함 — P-6 판독기는 C-C proof 전용이라 여기서 쓰면 CL-C 동결값이 무시됨)
   const jobFrozen = (() => {
     if (!durableEnv) return null; // 직접 ask
-    if (!durableEnv.ok) return { profile: "integrity", lang: loadLang() }; // 비정본 env — 프로필 출처로 불신(fail-safe 최소값)
+    if (!durableEnv.ok) return { profile: "integrity", lang: loadLang(), rejudge: "" }; // 비정본 env — 프로필 출처로 불신(fail-safe 최소값)
     const j = durableEnv.job;
     return {
       profile: VERIFY_PROFILES.includes(j.verifyProfile) ? j.verifyProfile : "integrity",
       lang: (j.verifyLang === "ko" || j.verifyLang === "en") ? j.verifyLang : loadLang(),
+      // 옛 job(필드 없음)·비문자열 = 빈 문자열 → footer 첨부 없음(구조화 이전과 같은 출력·사유 고지도 없음).
+      // 여기서 파일을 '다시 읽어' 메우면 시작과 도착이 다른 세대가 되므로 폴백 재판독은 하지 않는다.
+      // 원문 그대로 넘긴다 — 첨부 가능 여부 판정과 미첨부 사유 고지는 formatForClaude 한 곳이 담당한다.
+      rejudge: typeof j.rejudgeSnap === "string" ? j.rejudgeSnap : "",
     };
   })();
   // 언어를 먼저 한 번 캡처하고 '같은 슬롯'의 계약을 읽는다 — 두 읽기 사이 언어 전환으로 ko 계약 프로필과
@@ -2649,6 +2661,9 @@ async function cmdAsk(rest) {
   // 모드별 분리(2026-07-15): 현재 운용 모드의 슬롯 스위치를 기록(통계 귀속 정확성).
   const modeSnap = (harnessModeSnap === "codex-codex" ? contractSnap.codexVerifyMode : contractSnap.verifyMode) || "";
   const profileSnap = jobFrozen ? jobFrozen.profile : effectiveVerifyProfile(contractSnap); // 직접 ask=시작 스냅샷(계약 ⓕ)
+  // 재판단 규약 동결본: 내구 job=ask-start 시점 동결값, 직접 ask=여기(프로필·언어와 같은 순간) 캡처.
+  // 직접 ask에는 job이 없어 동결 자리가 이 지점뿐이다 — 두 formatForClaude 호출이 같은 값을 쓴다.
+  const rejudgeSnap = jobFrozen ? jobFrozen.rejudge : safeLoadRejudge(langSnap, profileSnap).trim().slice(0, REJUDGE_SNAP_MAX + 1);
   const exec = process.cwd();   // 작업 폴더(실행/탐지/근거경로 기준) — 코덱스 spawn은 cwd 미지정이라 실제로 여기서 돈다
   const mArgs = modelArgs(modelPrefFor(links, ws, harnessModeSnap)); // 운용 모드별 검증 모델/생각강도를 매 호출 -c로 재적용
 
@@ -2690,7 +2705,7 @@ async function cmdAsk(rest) {
     collectScoutTargetEvidence(answer, ws, exec); // 정찰 대상 자기진단 증거(2026-07-10 — 판정 무관·3트랙만·실패 무해)
     const mfl = machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId); // P-12 2c: 판독·정합·[백로그] 자동 등록(core만·1회)
     flagVerdict(answer, ws, link.codexSession, modeSnap, mfl.machine, attempt); // 경보+2d accepted 1행 위임(비-깨끗=빨강/노랑·표지 누락·기계 강등 가시화)
-    process.stdout.write(`${langSnap === "en" ? "# Linked session" : "# 연결 세션"} ${link.codexSession} (${link.via})\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine)}\n`);
+    process.stdout.write(`${langSnap === "en" ? "# Linked session" : "# 연결 세션"} ${link.codexSession} (${link.via})\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine, rejudgeSnap)}\n`);
     process.stdout.write(mfl.notice); // 2c 영수증/거부/실패 줄(core 외·해당 없음="" — 바이트 동일)
     process.stdout.write(envelopeWarnLine(ws, langSnap)); // 거버넌스 증분 1 — 경계 손상/미승인 변경 경고(정상·부재·미승인="")
     process.stdout.write(budgetNoticeLines(budgetGate.res, langSnap, profileSnap));
@@ -2791,7 +2806,7 @@ async function cmdAsk(rest) {
     const head = earlyLinked
       ? (en ? `# New Codex session created·linked immediately: ${id}` : `# 새 Codex 세션 생성·즉시연결: ${id}`)
       : (en ? `# New Codex session created·linked: ${id}` : `# 새 Codex 세션 생성·연결: ${id}`);
-    process.stdout.write(`${head}\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine)}\n`);
+    process.stdout.write(`${head}\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine, rejudgeSnap)}\n`);
     process.stdout.write(mfl.notice); // 2c 영수증/거부/실패 줄(core 외·해당 없음="" — 바이트 동일)
     process.stdout.write(envelopeWarnLine(ws, langSnap)); // 거버넌스 증분 1 — 경계 손상/미승인 변경 경고(정상·부재·미승인="")
     process.stdout.write(budgetNoticeLines(budgetGate.res, langSnap, profileSnap));

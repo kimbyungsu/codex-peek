@@ -1,5 +1,7 @@
 "use strict";
 // 검증 회차 안내·Stop 안전밸브 회귀: 동시에 최대 1개, 완료 뒤 순차 N/M, 진행 시 Stop 카운터 리셋.
+// 주입 구조화 이후: '진행 규칙'의 정본은 Stop 훅 차단문이고 매 턴 주입문은 그것을 되풀이하지 않는다.
+// → [1]은 '주입문에서 빠졌다', [2]는 '훅이 실제로 말한다'를 각각 고정한다(둘이 짝).
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -15,10 +17,23 @@ let pass = 0, fail = 0;
 function ok(v, name) { if (v) { pass++; console.log("  ✅ " + name); } else { fail++; console.log("  ❌ " + name); } }
 const sha1 = (s) => crypto.createHash("sha1").update(s).digest("hex");
 
-console.log("[1] 공통 지시와 최종 출력은 실제 N/5·순차 실행을 명시");
+console.log("[1] 매 턴 주입문은 훅이 강제하는 진행 규칙을 되풀이하지 않는다(기계가 못 잡는 것만 남김)");
 const d = CL.buildVerifyDirective("always", "ko", "integrity", { tracked: true, count: 2, budget: 5 });
-ok(d.includes("동시에 최대 1개") && !d.includes("정확히 1개 시작"), "동시 작업 상한은 최대 1개");
-ok(d.includes("2/5") && d.includes("다음 회차를 순차적으로") && d.includes("통과하면 멈춰라"), "현재 N/5와 후속 행동 명시");
+ok(!d.includes("동시에 최대 1개") && !d.includes("통과하면 멈춰라") && !d.includes("연결된 검증 세션이 있으면") && !d.includes("정확히 1개 시작"),
+  "훅이 차단하며 알려주는 진행 규칙 산문이 주입문에서 빠짐");
+ok(d.includes("종료 훅과 예약기가 실제로 막고"), "대신 한 줄 표지가 어디서 알려주는지 가리킴");
+// 1차 검증 blocker① 반영: '통과하면 멈춰라'는 어떤 장치도 강제하지 않는다(훅은 통과 증명이 있으면 그냥
+// 종료를 허용하고, 예약기는 판정이 아니라 횟수만 본다). 따라서 이 한 줄은 뺄 수 없다.
+ok(d.includes("통과 판정을 받으면 거기서 멈춰라"), "통과 후 중지는 기계가 안 막으므로 주입문에 남김");
+ok(d.includes("ask-start --allow-new") && d.includes("ask-wait <job-id>"),
+  "먼저 스스로 시작할 수 있도록 실행 명령은 남김(훅은 턴 끝에만 작동)");
+ok(d.includes("2/5") && !d.includes("권위 있는 N/M은"), "현재 진행은 남기되 '권위 있는 회차' 설명은 판정 답 하단에 위임");
+ok(d.includes("선택지 도구로 제시하라"), "기계가 못 잡는 질문 형식 규칙은 그대로 유지");
+const dEn = CL.buildVerifyDirective("always", "en", "integrity", { tracked: true, count: 2, budget: 5 });
+ok(!dEn.includes("At most one durable") && !dEn.includes("start the next round sequentially only after") && !dEn.includes("path is quoted"),
+  "영문 주입문도 같은 중복이 빠짐");
+ok(dEn.includes("enforced by the stop hook") && dEn.includes("ask-start --allow-new") && dEn.includes("choice tool") && dEn.includes("Stop on a pass verdict"),
+  "영문도 표지·실행 명령·질문 형식·통과 후 중지는 유지");
 const notice = CB.budgetNoticeLines({ tracked: true, n: 2, budget: 5 }, "ko", "integrity");
 ok(notice.includes("검증 왕복 2/5") && notice.includes("호출 직전에 예약"), "중간 회차 ask-wait 출력에도 권위 있는 N/5 표시");
 
@@ -37,7 +52,16 @@ const run = () => cp.spawnSync(process.execPath, [guard], {
   env: { ...process.env, CODEX_BRIDGE_HOME: home, CLAUDE_CODE_SESSION_ID: sid, CLAUDE_PROJECT_DIR: ws },
 });
 const blocked = (r) => { try { return JSON.parse(r.stdout.trim()).decision === "block"; } catch { return false; } };
-ok(blocked(run()) && blocked(run()) && blocked(run()), "진행 없는 같은 상태는 유한 횟수 차단");
+const reasonOf = (r) => { try { return String(JSON.parse(r.stdout.trim()).reason || ""); } catch { return ""; } };
+const first = run();
+ok(blocked(first) && blocked(run()) && blocked(run()), "진행 없는 같은 상태는 유한 횟수 차단");
+// [1]의 짝: 주입문에서 뺀 진행 규칙이 실제로 훅 차단문에 살아 있어야 한다(양쪽 다 없으면 규칙이 사라진 것).
+const r1 = reasonOf(first);
+ok(r1.includes("동시에 최대 1개") && r1.includes("ask-start --allow-new") && r1.includes("ask-wait <job-id>"),
+  "Stop 훅 차단문이 동시 1개 제한과 실행 명령을 직접 전달");
+ok(r1.includes("순차적으로") && r1.includes("통과하면 멈춰라") && r1.includes("새 검증 세션을 만든다"),
+  "Stop 훅 차단문이 순차 진행·정지·세션 연결 규칙을 직접 전달");
+ok(/실제 deadline/.test(r1), "Stop 훅 차단문이 실제 마감시간을 직접 전달");
 const campaignId = "cl:" + sid + ":" + turnTs;
 fs.mkdirSync(CL.CAMPAIGN_DIR, { recursive: true });
 fs.writeFileSync(CL.campaignFileFor(ws), JSON.stringify({ schema: "vcamp-1", campaignId, count: 1, budget: 5, startedAt: turnTs, updatedAt: new Date().toISOString() }));

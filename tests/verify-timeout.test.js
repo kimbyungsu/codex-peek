@@ -23,13 +23,14 @@ setSetting(7);
 ck("설정 7 → 7", verifyTimeoutMin() === 7);
 ck("직접 호출 timeout도 같은 7분", minimumCallerTimeoutMs() === 7 * 60 * 1000);
 let directive = buildVerifyDirective("code", "ko");
-ck("구현자 지시에도 현재 7분 표시", directive.includes("검증 대기시간(7분)"));
+// 주입 구조화로 문안은 짧아졌지만 대기시간 정본값은 그대로 흘러야 한다(값 결속 고정 — 표현은 묶지 않음).
+ck("구현자 지시에도 현재 7분 표시", directive.includes("대기시간 7분"));
 ck("외부 호출창과 분리된 ask-start/ask-wait 사용", directive.includes("ask-start") && directive.includes("ask-wait"));
 setSetting(23);
 ck("설정 23 → 23", verifyTimeoutMin() === 23);
 ck("직접 호출 timeout도 같은 23분", minimumCallerTimeoutMs() === 23 * 60 * 1000);
 directive = buildVerifyDirective("always", "en");
-ck("영문 구현자 지시에도 현재 23 min 표시", directive.includes("verification wait (23 min)"));
+ck("영문 구현자 지시에도 현재 23 min 표시", directive.includes("dashboard wait of 23 min"));
 process.env.CODEX_BRIDGE_VERIFY_DEADLINE_AT = new Date(Date.now()+2500).toISOString();
 const remaining=minimumCallerTimeoutMs();
 ck("내구 job 절대 deadline이 분 설정값보다 우선", remaining>0&&remaining<=2500);

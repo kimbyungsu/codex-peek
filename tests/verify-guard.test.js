@@ -99,7 +99,8 @@ function clean(sb) { try { fs.rmSync(sb.dir, { recursive: true, force: true }); 
   const inject=path.join(__dirname,"..","bridge","contract-inject.js");
   const ir=cp.spawnSync(process.execPath,[inject],{input:JSON.stringify({cwd:sb.ws,session_id:sb.session,permission_mode:"default"}),encoding:"utf8",env:{...process.env,CODEX_BRIDGE_HOME:sb.bridgeDir,CLAUDE_PROJECT_DIR:sb.ws,CLAUDE_CODE_SESSION_ID:sb.session}});
   const ictx=JSON.parse(ir.stdout.trim()).hookSpecificOutput.additionalContext;
-  ok(/ask-start/.test(ictx)&&/ask-wait/.test(ictx)&&/검증 대기시간\(23분\)/.test(ictx), "Claude UserPrompt 주입도 같은 23분 내구 경로");
+  // 주입 구조화 이후 문안은 짧아졌지만 '실제 마감값'은 같은 정본(23분)을 써야 한다 — 값 결속만 고정하고 표현은 묶지 않는다.
+  ok(/ask-start/.test(ictx)&&/ask-wait/.test(ictx)&&/대기시간 23분/.test(ictx), "Claude UserPrompt 주입도 같은 23분 내구 경로");
   const koContract=contractFileForIn(sb.bridgeDir,sb.ws);fs.writeFileSync(koContract.replace(/\.json$/,".en.json"),JSON.stringify({verifyMode:"always"}));
   fs.writeFileSync(path.join(sb.bridgeDir,"language.json"),JSON.stringify({lang:"en"}));
   const er=JSON.parse(runGuard(sb).stdout.trim()).reason;
