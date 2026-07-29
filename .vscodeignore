@@ -15,6 +15,10 @@ tests/**
 install.js
 install.sh
 install.cmd
+# 내부 설계·인수인계 문서는 마켓 설치 파일에 넣지 않는다(2026-07-29 검증 [주의] 수용).
+# 런타임이 읽지 않는 작업 문서이고, 그 중 일부는 개발 PC의 홈 경로 같은 로컬 식별 정보를 담고 있다.
+# 이미지·아이콘은 리드미 표시에 쓰이므로 남긴다. readme는 vsce --readme-path로 따로 들어간다.
+docs/*.md
 docs/ROADMAP.md
 docs/README.en.md
 docs/logo.png
