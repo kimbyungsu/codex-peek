@@ -84,6 +84,10 @@ ok(/처리 의무:/.test(fmtKo) && /Codex 선언: 검증: 통과\(보완\)/.test
 const dirEn = L.buildVerifyDirective("always", "en");
 ok(/Verify Mode ON\(always\)/.test(dirEn) && dirEn.includes(L.BRIDGE) && /Transmission Principles/.test(dirEn) && /Re-judgment/.test(dirEn), "en directive: 헤더+브릿지 경로+전달/재판단 포함");
 ok(/검증 모드 ON\(always\)/.test(L.buildVerifyDirective("always", "ko")), "ko directive 기존 형식 유지");
+// 2026-07-29 사용자 지적: 언제 묻는지만 있고 어떻게 묻는지가 없어서, 결정 사항을 매번 텍스트로 풀어 물었다.
+// 형식까지 규약에 박아야 매 턴 기억에 기대지 않는다.
+ok(/물을 때는 반드시 선택지 도구로 제시하라/.test(L.buildVerifyDirective("always", "ko")), "ko directive: 사용자 질문은 선택지 도구로 제시(형식 명시)");
+ok(/present it through the choice tool/.test(dirEn), "en directive: 같은 형식 요구");
 const injEn = L.buildInjection(["rule one"], "Claude Code", true, "en");
 ok(/Standing Contract/.test(injEn) && /\[Contract Check\]/.test(injEn) && /complies\|violated\|n\/a/.test(injEn), "en 체크리스트 주입문");
 ok(/고정 계약/.test(L.buildInjection(["규칙"], "Claude Code", true, "ko")), "ko 주입문 기존 형식 유지");

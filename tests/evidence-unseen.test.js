@@ -95,8 +95,13 @@ writeRollout("abababab-fail", [userMsg("검증 요청"), ...pair("Get-Content fo
 const r35 = citedFilesUnseen(answer, ws, "abababab-fail");
 ck("오류 출력이 있어도 실패 종료면 읽은 증거가 아님", r35.checked === true && r35.unseen.includes("foo.ts"));
 writeRollout("abababab-unrelated", [userMsg("검증 요청"), ...pair("Get-Content foo.ts", "unrelated text", 0)]);
-const r36 = citedFilesUnseen(answer, ws, "abababab-unrelated");
-ck("성공한 읽기 호출의 반환물이 인용 줄 내용과 무관하면 증거가 아님", r36.checked === true && r36.unseen.includes("foo.ts"));
+// 2026-07-29 축 분리: 판독 명령이 그 파일을 지목하고 성공했으면 '다뤘다'(경보 축)로 본다.
+// 검증자가 파일을 읽고도 개수·해시만 출력하는 경우가 흔해서, 내용 대조를 경보 조건으로 쓰면 헛경보가 된다.
+// 반대로 승격 축은 종전대로 인용 줄 내용이 출력에 실재해야 한다 — 여기서 갈린다.
+const r36w = citedFilesUnseen(answer, ws, "abababab-unrelated");
+const r36s = citedFilesUnseenExact(answer, ws, "abababab-unrelated");
+ck("반환물이 인용 줄과 달라도 경보는 끄지 않는다(다룬 흔적은 있음)", r36w.checked === true && !r36w.unseen.includes("foo.ts"));
+ck("그러나 승격 축에는 남는다(인용 내용 대조 실패)", r36s.unseen.some((p) => p.endsWith("foo.ts")));
 writeRollout("abababab-custom", [userMsg("검증 요청"), ...customPair("Get-Content foo.ts", "line1\nline2", 0)]);
 const r37 = citedFilesUnseen(answer, ws, "abababab-custom");
 ck("functions.exec 중첩 명령도 호출 id·성공 출력·인용 내용이 결속되면 실제 읽기로 인정", r37.checked === true && !r37.unseen.includes("foo.ts"));
@@ -441,6 +446,19 @@ fs.writeFileSync(alignedFile, prefix + alignedTurn, "utf8");
 fs.truncateSync(alignedFile, Buffer.byteLength(prefix) + 16 * 1024 * 1024); // tail 시작=최신 user 행 시작, 나머지는 희소 패딩
 const aligned = citedFilesUnseen(answer, ws, alignedId);
 ck("16MiB 꼬리가 완전한 user 행 시작에 맞으면 첫 행을 보존해 checked=true", aligned.checked === true && aligned.unseen.length === 0);
+
+console.log("[6-2] 실사용에서 나온 판독 형태(2026-07-29 실측) — 괄호로 감싼 이력 조회");
+{
+  // 실측: 검증자가 `$t = (git show <판>:<경로>)` 로 과거 내용을 값으로 받아 개수만 출력했다.
+  // 괄호 하나 때문에 같은 git 조회가 통째로 안 보였고, 그 파일이 매번 '흔적 미확인'으로 남았다.
+  writeRollout("ffffffff-paren", [userMsg("검증 요청"), ...pair("$t = (git -c safe.directory=" + ws + " -C " + ws + " show HEAD:foo.ts); 'hits=' + $t.Length", "hits=12")]);
+  const rp = citedFilesUnseen(answer, ws, "ffffffff-paren");
+  ck("괄호로 감싼 이력 조회도 '다룬 흔적'으로 인정(경보 축)", rp.checked === true && !rp.unseen.includes("foo.ts"));
+  // 압축 파일 안에서 꺼낸 것은 저장소 파일을 읽은 것이 아니므로 종전대로 미인정이어야 한다.
+  writeRollout("ffffffff-tar", [userMsg("검증 요청"), ...pair("tar -xOf bundle.zip 'pkg/foo.ts'", "line1\nline2")]);
+  const rt = citedFilesUnseen(answer, ws, "ffffffff-tar");
+  ck("압축 파일에서 꺼낸 것은 저장소 파일 판독으로 인정하지 않음", rt.checked === true && rt.unseen.includes("foo.ts"));
+}
 
 console.log("[7] 같은 폴더의 다른 표기(짧은 이름 등)로 기준을 줘도 판독을 인정한다");
 {

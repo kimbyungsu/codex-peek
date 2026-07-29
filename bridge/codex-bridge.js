@@ -434,7 +434,9 @@ function toolCallCanReadFile(p, hay) {
   // 계속 제외한다 — 좁은 창구는 위조 방지의 대가이며, 놓친 판독은 unknown(기록만)으로 남는 안전한 실패다.
   // 변수 대입 접두(`$lines=Get-Content …`)는 벗겨서 **대입 오른쪽**을 판정한다. 오른쪽이 목록 밖이면
   // 그대로 탈락하므로(예: `$x = node -e "…"`) 인정 범위는 넓어지지 않는다.
-  const lead = text.replace(/^&\s*/, "").replace(/^\$[A-Za-z_][A-Za-z0-9_]*\s*=\s*/, "");
+  // 여는 괄호도 벗긴다 — `$t = (git show <판>:<경로>)` 처럼 출력을 값으로 받는 형태가 흔한데,
+  // 괄호 하나 때문에 같은 명령이 통째로 안 보였다(2026-07-29 실측). 안쪽이 목록 밖이면 그대로 탈락한다.
+  const lead = text.replace(/^&\s*/, "").replace(/^\$[A-Za-z_][A-Za-z0-9_]*\s*=\s*/, "").replace(/^\(\s*/, "");
   if (/^(rg|ripgrep)(?:\.exe)?\s+[^\r\n]*--files(?:\s|$)/i.test(lead)) return false;
   // [확장 시도 3회 전면 철회 — 목록은 종전 그대로] 3차 반증에서 더 근본적인 사실이 드러났다: 목록에 무엇을
   // 넣든 `Write-Output '<인용 줄>' | nl # A.js B.js`처럼 **표준 입력으로 받은 내용을 출력하면서 경로는
@@ -814,9 +816,12 @@ function citedFilesUnseenExact(answer, ws, sessionId) {
       // 성공 코드와 비어 있지 않은 출력만으로도 다른 문장의 출력일 수 있다. 답에서 인용한 실제 줄 내용이
       // 반환물 안에 들어 있는 파일만 이번 턴에 다룬 것으로 인정한다.
       for (const f of rec.files) {
-        if (!outputContainsCitedContent(proof.text, citedEvidence.get(f.fp))) continue;
+        // 경보 축(약한 증거): 판독 명령이 그 파일을 지목했고 호출이 성공했으면 '다뤘다'로 본다.
+        //   실측(2026-07-29): 검증자가 파일을 읽고도 개수·해시만 출력하는 경우가 흔한데, 그때도
+        //   그 파일을 다룬 것은 사실이다. 경보 문구 자체가 '흔적 확인'이지 '내용 대조'가 아니다.
         remainingWeak.delete(f.fp);
-        if (f.st === "strong") remaining.delete(f.fp);
+        // 승격 축(강한 증거): 종전 그대로 — 하네스가 기록한 인수 + 인용한 줄 내용이 출력에 실재해야 한다.
+        if (f.st === "strong" && outputContainsCitedContent(proof.text, citedEvidence.get(f.fp))) remaining.delete(f.fp);
       }
       if (!remaining.size && !remainingWeak.size) break; // 둘 다 비어야 끝 — 한쪽만 비었다고 멈추면 다른 축을 잃는다
     }
