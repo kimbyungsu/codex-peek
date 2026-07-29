@@ -100,7 +100,7 @@ writeRollout("abababab-unrelated", [userMsg("검증 요청"), ...pair("Get-Conte
 // 반대로 승격 축은 종전대로 인용 줄 내용이 출력에 실재해야 한다 — 여기서 갈린다.
 const r36w = citedFilesUnseen(answer, ws, "abababab-unrelated");
 const r36s = citedFilesUnseenExact(answer, ws, "abababab-unrelated");
-ck("반환물이 인용 줄과 달라도 경보는 끄지 않는다(다룬 흔적은 있음)", r36w.checked === true && !r36w.unseen.includes("foo.ts"));
+ck("반환물이 인용 줄과 달라도 다룬 흔적으로 보아 경보하지 않는다", r36w.checked === true && !r36w.unseen.includes("foo.ts"));
 ck("그러나 승격 축에는 남는다(인용 내용 대조 실패)", r36s.unseen.some((p) => p.endsWith("foo.ts")));
 writeRollout("abababab-custom", [userMsg("검증 요청"), ...customPair("Get-Content foo.ts", "line1\nline2", 0)]);
 const r37 = citedFilesUnseen(answer, ws, "abababab-custom");
@@ -454,6 +454,16 @@ console.log("[6-2] 실사용에서 나온 판독 형태(2026-07-29 실측) — �
   writeRollout("ffffffff-paren", [userMsg("검증 요청"), ...pair("$t = (git -c safe.directory=" + ws + " -C " + ws + " show HEAD:foo.ts); 'hits=' + $t.Length", "hits=12")]);
   const rp = citedFilesUnseen(answer, ws, "ffffffff-paren");
   ck("괄호로 감싼 이력 조회도 '다룬 흔적'으로 인정(경보 축)", rp.checked === true && !rp.unseen.includes("foo.ts"));
+  // 1차 [보완]: 괄호를 벗기는 자리가 두 곳(판독 판정·기준 폴더 수집)이라 한쪽만 고치면,
+  // 실행 폴더가 저장소와 다를 때 -C 로 준 기준이 사라져 경보가 그대로 남는다.
+  {
+    const other2 = path.join(os.tmpdir(), "no-such-exec-dir");
+    const id2 = "call-pc-" + (++callSeq);
+    const call2 = { type: "response_item", payload: { type: "function_call", name: "shell_command", call_id: id2, arguments: JSON.stringify({ command: "$t = (git -C " + ws + " show HEAD:foo.ts); 'len=' + $t.Length", workdir: other2 }) } };
+    writeRollout("ffffffff-paren-c", [userMsg("검증 요청"), call2, fo(id2, "len=12")]);
+    const rc2 = citedFilesUnseen(answer, ws, "ffffffff-paren-c");
+    ck("괄호 안 git -C 저장소도 경로 기준으로 인정(실행 폴더가 달라도 경보 없음)", rc2.checked === true && !rc2.unseen.includes("foo.ts"));
+  }
   // 압축 파일 안에서 꺼낸 것은 저장소 파일을 읽은 것이 아니므로 종전대로 미인정이어야 한다.
   writeRollout("ffffffff-tar", [userMsg("검증 요청"), ...pair("tar -xOf bundle.zip 'pkg/foo.ts'", "line1\nline2")]);
   const rt = citedFilesUnseen(answer, ws, "ffffffff-tar");

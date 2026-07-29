@@ -717,7 +717,9 @@ function toolCallNamesExactFile(p, fileKey, ws) {
 // `git -C <폴더>`로 지정한 저장소 — git이 인쇄하는 경로는 작업 폴더가 아니라 이 폴더 기준이다.
 // 옵션 구간에서 소비된 값만 돌려주므로, 주석·인수 자리에 적힌 -C 는 기준이 되지 않는다.
 function gitDirRoots(part) {
-  const lead = String(part || "").trim().replace(/^&\s*/, "").replace(/^\$[A-Za-z_][A-Za-z0-9_]*\s*=\s*/, "");
+  // 앞머리 벗기기는 toolCallCanReadFile과 같은 순서여야 한다 — 여기서 괄호를 안 벗기면 판독으로는
+  // 인정되는데 -C 로 준 저장소 기준만 사라져, 실행 폴더가 다를 때 경보가 남는다(1차 [보완]).
+  const lead = String(part || "").trim().replace(/^&\s*/, "").replace(/^\$[A-Za-z_][A-Za-z0-9_]*\s*=\s*/, "").replace(/^\(\s*/, "");
   const r = gitReadParse(lead);
   return r.ok ? r.roots : [];
 }
