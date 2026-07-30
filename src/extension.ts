@@ -7491,9 +7491,24 @@ async function runHookInstallFlow(): Promise<void> {
     if (!tok) { void vscode.window.showErrorMessage(tE("그 경로의 node를 셸에서 실행하지 못했습니다 — 경로를 확인해 주세요.", "Could not run node at that path from a shell — please check the path.")); return; }
   }
   const cmds = hookSetup.OUR_HOOKS.map((h) => "· " + hookSetup.hookCommand(tok!.token, BRIDGE_DIR, h.script)).join("\n");
+  // 미리보기는 한 번만 계산해 ko/en이 같은 판정을 쓴다. 'invalid'는 실제 설치가 거부될 입력이므로
+  // 적용 안내(언제 반영되나) 대신 중단 예고를 보여준다 — 안내와 실제 결과가 어긋나지 않게(검증 blocker).
+  // 미리보기 판정과 '거부 원인'을 한 판독에서 함께 받는다 — 나눠 읽으면 그 사이 잠금이 풀렸다 걸렸다
+  // 하면서 미리보기와 원인 안내가 서로 다른 순간을 말한다(검증 [주의] 반영).
+  // 'invalid'는 두 종류다 — 읽지 못함 / 내용·형태가 아님. 하나로 뭉개면 권한 문제에 형식 얘기를 한다.
+  const pv = hookSetup.previewRegistrationDetailed(settingsFile, BRIDGE_DIR, tok!.token);
+  const preview = pv.state;
+  const invalidSt = preview === "invalid" ? { kind: pv.kind, code: pv.code } : null;
+  const applyNote = (en: boolean) => (preview === "invalid"
+    ? (invalidSt && invalidSt.kind === "read"
+      ? (en
+        ? `Note: the settings file cannot be read (${hookUnreadableReason(invalidSt, true)}), so the install will stop without changing it. Check permissions and file locks.`
+        : `참고: 설정 파일을 읽을 수 없어(${hookUnreadableReason(invalidSt, false)}) 파일을 바꾸지 않고 중단됩니다. 권한과 파일 잠금을 확인해 주세요.`)
+      : (en ? "Note: the current settings.json is not in a shape this installer can merge, so the install will stop without changing the file." : "참고: 지금 settings.json이 이 설치기가 병합할 수 있는 형태가 아니라, 파일을 바꾸지 않고 중단됩니다."))
+    : hookSetup.claudeHookApplyNote({ registrationChanged: preview === "changed", settingsExisted: fs.existsSync(settingsFile) }, en));
   const detail = tE(
-    `바꾸는 파일: ${settingsFile}\n(수정 전 같은 폴더에 settings.json.bak.<시각> 백업을 먼저 만듭니다. 기존 다른 훅은 보존됩니다.)\n\n등록되는 훅 4줄(검증 3 + 탐색 게이트 1 — 게이트는 3트랙 프로젝트에서 기본 켜짐: 지도가 없거나 낡으면 플랜 확정 전 세션당 2회까지 안내 후 통과·오류 시 절대 안 막음·끄기는 scope-gate CLI. 2트랙 프로젝트에선 관측 기록만):\n${cmds}\n\n설치 후 Claude Code 새 세션부터 적용됩니다.`,
-    `File to change: ${settingsFile}\n(A settings.json.bak.<time> backup is created first. Other existing hooks are preserved.)\n\nHooks to register (3 verification + 1 recon gate — the gate is on by default in 3-track projects: if the map is missing/stale it prompts before plan confirmation up to 2×/session then passes, never blocks on errors, turn off via the scope-gate CLI. In 2-track projects it only logs observations):\n${cmds}\n\nTakes effect from the next Claude Code session.`,
+    `바꾸는 파일: ${settingsFile}\n(수정 전 같은 폴더에 settings.json.bak.<시각> 백업을 먼저 만듭니다. 기존 다른 훅은 보존됩니다.)\n\n등록되는 훅 4줄(검증 3 + 탐색 게이트 1 — 게이트는 3트랙 프로젝트에서 기본 켜짐: 지도가 없거나 낡으면 플랜 확정 전 세션당 2회까지 안내 후 통과·오류 시 절대 안 막음·끄기는 scope-gate CLI. 2트랙 프로젝트에선 관측 기록만):\n${cmds}\n\n${applyNote(false)}`,
+    `File to change: ${settingsFile}\n(A settings.json.bak.<time> backup is created first. Other existing hooks are preserved.)\n\nHooks to register (3 verification + 1 recon gate — the gate is on by default in 3-track projects: if the map is missing/stale it prompts before plan confirmation up to 2×/session then passes, never blocks on errors, turn off via the scope-gate CLI. In 2-track projects it only logs observations):\n${cmds}\n\n${applyNote(true)}`,
   );
   const yes = tE("설치", "Install");
   const pick = await vscode.window.showInformationMessage(tE("Claude Code 검증 훅 설치", "Install Claude Code verification hooks"), { modal: true, detail }, yes);
@@ -7502,7 +7517,10 @@ async function runHookInstallFlow(): Promise<void> {
   if (res.ok) {
     // '확장이 설치했다' 표식 — 확장 제거(vscode:uninstall) 시 이 표식이 있을 때만 훅을 자동 정리(레포 install.js 설치분은 안 건드림).
     try { fs.writeFileSync(path.join(BRIDGE_DIR, "hooks-installed-by-extension"), new Date().toISOString(), "utf8"); } catch { /* best-effort */ }
-    void vscode.window.showInformationMessage(tE(`검증 훅 설치 완료 — Claude Code 새 세션부터 적용됩니다.${res.backup ? ` (백업: ${res.backup})` : ""}`, `Hooks installed — takes effect from the next Claude Code session.${res.backup ? ` (backup: ${res.backup})` : ""}`));
+    // 설치 결과가 알려준 '설정 파일이 원래 있었는지'로 안내를 고른다 — 항상 '새 세션부터'라고 찍으면
+    // 파일이 있던 경우(대다수)에 틀린 안내가 된다(2026-07-30 사용자 실사고와 같은 결함).
+    const applied = { registrationChanged: res.registrationChanged !== false, settingsExisted: res.settingsExisted !== false };
+    void vscode.window.showInformationMessage(tE(`검증 훅 설치 완료 — ${hookSetup.claudeHookApplyNote(applied, false)}${res.backup ? ` (백업: ${res.backup})` : ""}`, `Hooks installed — ${hookSetup.claudeHookApplyNote(applied, true)}${res.backup ? ` (backup: ${res.backup})` : ""}`));
   } else {
     void vscode.window.showErrorMessage(tE(`검증 훅 설치 실패: ${res.reason || "알 수 없는 이유"}`, `Hook install failed: ${res.reason || "unknown reason"}`));
   }
@@ -7712,12 +7730,37 @@ async function maybeOfferCodexHookSetupBody(extensionRoot:string,auto:boolean):P
   if(pick===review)await runCodexHookInstallFlow(extensionRoot);
 }
 
+// 판독 실패 사유를 화면 언어로 만든다 — hook-setup의 unreadable 문장은 한국어라 영문에 그대로 넣으면
+// 언어가 섞인다(검증 [보완]). 언어 중립 값(kind·code)만 쓰고 문장은 여기서 만든다.
+function hookUnreadableReason(st: { kind?: "read" | "parse" | null; code?: string | null }, en: boolean): string {
+  const code = st && st.code ? String(st.code) : "";
+  if (st && st.kind === "parse") return en ? "the file content is not valid JSON" : "파일 내용이 올바른 JSON이 아님";
+  if (en) return code ? `read failed: ${code}` : "read failed";
+  return code ? `읽기 실패: ${code}` : "읽기 실패";
+}
+// 판독 실패는 두 종류다 — 읽지 못함 / 내용이 JSON이 아님. 둘 다 '훅 미등록'이 아니므로 미등록 안내로
+// 흘려보내면 안 된다. kind를 read로만 좁혔다가 parse가 미등록 경로로 새어나간 회귀를 봉합한 자리다.
+function hookStatusUnknownMsg(st: { kind?: "read" | "parse" | null; code?: string | null }, en: boolean): string {
+  const why = hookUnreadableReason(st, en);
+  return en
+    ? `Codex Bridge: could not determine hook registration from the Claude Code settings — ${why}`
+    : `Codex Bridge: Claude Code 설정을 판독하지 못해 훅 등록 상태를 확인할 수 없습니다 — ${why}`;
+}
+
 // 활성화 시: 훅 미등록이면 알림 1회(다시 묻지 않음 선택 가능). 명령 codexBridge.installHooks로 언제든 다시 실행 가능.
 const HOOKS_PROMPT_DISMISSED = path.join(BRIDGE_DIR, "hooks-prompt-dismissed");
 async function maybeOfferHookSetup(): Promise<void> {
   try {
     const st = hookSetup.detectHooks(claudeSettingsFile());
     if (st.installed) return;
+    // 설정을 '읽지 못한' 것과 '훅이 없는' 것은 다르다. 판독 실패에 미등록 안내를 띄우면 사용자가
+    // 이미 있는 훅을 다시 설치하려 하고, 설치 모달은 또 형식 문제라고 설명한다(검증 blocker 반례).
+    // ⚠ '다시 묻지 않음' 확인보다 앞에 둔다 — 그 표식은 '설치 제안을 그만 보겠다'는 뜻이고,
+    //   '설정을 읽지 못한다'는 사실 고지는 성격이 다르다(검증 [주의] 반영).
+    if (st.unreadable) {
+      void vscode.window.showWarningMessage(tE(hookStatusUnknownMsg(st, false), hookStatusUnknownMsg(st, true)));
+      return;
+    }
     if (fs.existsSync(HOOKS_PROMPT_DISMISSED)) return;
     const review = tE("설치 내용 보기", "Review & install");
     const never = tE("다시 묻지 않음", "Don't ask again");

@@ -469,5 +469,300 @@ function cleanup(sb) { try { fs.rmSync(sb.dir, { recursive: true, force: true })
   fs.rmSync(tmp, { recursive: true, force: true });
 })();
 
+// 설치 안내가 '무엇이 바뀌었는지'에 따라 사실대로 갈리는지(2026-07-30 사용자 지적 실사고):
+// 훅 스크립트 내용만 바뀐 재설치인데도 항상 "새 Claude Code 세션부터"라고 찍어, 이미 적용된 변경을
+// 아직 적용 안 된 것처럼 안내했다. 등록된 명령은 매 프롬프트마다 새 프로세스로 실행되므로
+// 등록이 그대로면 현재 세션의 다음 프롬프트부터 곧바로 적용된다.
+console.log("[9] 설치 완료 안내는 훅 '등록' 변화 여부에 따라 갈린다");
+(() => {
+  const sb = freshSandbox("hooknote");
+  const first = run(sb, ["install"]);
+  const firstOut = String(first.stdout || "") + String(first.stderr || "");
+  // 첫 설치는 설정 파일 자체를 새로 만든다 → 그 시점 이전에 시작한 세션은 감시 목록에 그 파일이 없으므로
+  // 새 세션이 맞다(조건이 하나뿐이라 이 갈래만 단정한다).
+  ok(/설정 파일을 이번에 새로 만들었습니다/.test(firstOut) && /새 Claude Code 세션에서 적용됩니다/.test(firstOut), "첫 설치(파일 신설)는 새 세션 필요라고 안내");
+  ok(!/등록이 그대로라/.test(firstOut), "첫 설치에서 '새 세션 불필요' 안내가 나오지 않음");
+
+  const before = fs.readFileSync(sb.settings, "utf8");
+  const second = run(sb, ["install"]);
+  const secondOut = String(second.stdout || "") + String(second.stderr || "");
+  ok(fs.readFileSync(sb.settings, "utf8") === before, "재설치가 훅 등록을 바꾸지 않음(전제 확인)");
+  ok(/등록이 그대로입니다/.test(secondOut) && /다음 프롬프트부터 바로 적용되고/.test(secondOut), "등록 불변 재설치는 '현재 세션 즉시 적용'을 조건과 함께 안내");
+  ok(!/새 Claude Code 세션부터/.test(secondOut), "등록 불변인데 '새 세션 필요'라고 잘못 안내하지 않음");
+
+  // 등록을 실제로 지우면 다시 '새 세션 필요'로 돌아와야 한다(안내가 상수가 아니라 사실을 따르는지).
+  const s = readJson(sb.settings);
+  delete s.hooks.UserPromptSubmit;
+  fs.writeFileSync(sb.settings, JSON.stringify(s, null, 2) + "\n");
+  const third = run(sb, ["install"]);
+  const thirdOut = String(third.stdout || "") + String(third.stderr || "");
+  // 등록이 바뀌어도 Claude Code의 설정 감시가 현재 세션에 반영한다 — 기준은 '이번 설치 시 존재 여부'가
+  // 아니라 '그 Claude 세션이 시작될 때 파일이 있었는지'다(2.0.22 실측: 감시 목록은 시작 시점의
+  // 실존 파일만 담는다). 설치기는 그 시점을 알 수 없으므로 안내가 두 조건을 함께 밝힌다.
+  ok(/등록이 바뀌었습니다/.test(thirdOut) && /재시작 없이 반영되고/.test(thirdOut) && /파일이 없던 상태에서 시작한 세션이면 새 세션/.test(thirdOut), "등록 변경 안내는 두 조건(파일 가지고 시작 / 없이 시작)을 함께 밝힘");
+  ok(!/새 Claude Code 세션에서 적용됩니다/.test(thirdOut), "실제 기준은 세션 시작 시 존재 여부라 '무조건 새 세션'으로 단정하지 않음");
+  cleanup(sb);
+})();
+
+// 순서만 달라진 등록은 '변경'이 아니다 — mergeHooks가 우리 훅을 떼었다 뒤에 붙이므로 위치가 바뀔 수 있다.
+console.log("[9b] 훅 명령 집합이 같으면 순서가 달라도 '등록 변경'으로 보지 않는다");
+(() => {
+  const sb = freshSandbox("hookorder");
+  run(sb, ["install"]);
+  const s = readJson(sb.settings);
+  for (const ev of Object.keys(s.hooks)) if (Array.isArray(s.hooks[ev])) s.hooks[ev].reverse();
+  s.hooks.zzOther = [{ matcher: "", hooks: [{ type: "command", command: "echo 타인훅" }] }];
+  fs.writeFileSync(sb.settings, JSON.stringify(s, null, 2) + "\n");
+  const r = run(sb, ["install"]);
+  const out = String(r.stdout || "") + String(r.stderr || "");
+  ok(/등록이 그대로입니다/.test(out), "그룹 순서만 뒤집히고 타인 훅이 있어도 '불변'으로 판정");
+  ok(countContaining(readJson(sb.settings), "UserPromptSubmit", "contract-inject.js") === 1, "그 판정이 실제 병합 결과를 왜곡하지 않음(우리 훅 1개 유지)");
+  cleanup(sb);
+})();
+
+// 문안 정본 패리티: install.js(복제본) ↔ src/hook-setup.ts(정본). 한쪽만 고치면 여기서 깨진다.
+console.log("[9c] 설치 안내 문구는 install.js와 hook-setup이 한 글자도 다르지 않다");
+(() => {
+  let HS = null;
+  try { HS = require(path.join(__dirname, "..", "out", "hook-setup.js")); } catch { /* 미빌드 */ }
+  if (!HS || typeof HS.claudeHookApplyNote !== "function") {
+    ok(false, "out/hook-setup.js의 claudeHookApplyNote를 불러오지 못함(빌드 필요) — 패리티 미검증");
+    return;
+  }
+  const INS = require(path.join(__dirname, "..", "install.js"));
+  const cases = [[false, true], [false, false], [true, true], [true, false]];
+  let same = 0;
+  for (const [changed, existed] of cases) {
+    if (INS.claudeHookApplyNote(changed, existed) === HS.claudeHookApplyNote({ registrationChanged: changed, settingsExisted: existed }, false)) same++;
+  }
+  ok(same === cases.length, "4경우 모두 한국어 문안이 정확히 일치(복제 드리프트 차단 — install.js는 한국어만 씀)");
+  // 영문은 install.js에 대응물이 없어 바이트 패리티 대상이 아니다. 대신 세 갈래가 서로 다르고
+  // 각 갈래의 핵심 의미가 실제로 담겼는지를 잠근다(한쪽만 바뀌어도 의미가 무너지지 않게).
+  const enUnchanged = HS.claudeHookApplyNote({ registrationChanged: false, settingsExisted: true }, true);
+  const enChangedExisted = HS.claudeHookApplyNote({ registrationChanged: true, settingsExisted: true }, true);
+  const enFresh = HS.claudeHookApplyNote({ registrationChanged: true, settingsExisted: false }, true);
+  ok(new Set([enUnchanged, enChangedExisted, enFresh]).size === 3, "영문 세 갈래가 서로 다름");
+  ok(/registration is unchanged/.test(enUnchanged) && /watches the settings file/.test(enChangedExisted) && /start a new Claude Code session/.test(enFresh), "영문 각 갈래가 제 의미를 담음");
+  ok(/did not exist needs a restart/.test(enUnchanged) && /did not exist needs a restart/.test(enChangedExisted) && !/did not exist needs a restart/.test(enFresh), "영문 ①②에만 감시 사각지대 조건이 함께 쓰임");
+  // 감시 사각지대 단서(한국어)도 ①②에만.
+  const koUnchanged = INS.claudeHookApplyNote(false, true), koChanged = INS.claudeHookApplyNote(true, true), koFresh = INS.claudeHookApplyNote(true, false);
+  ok(/없던 상태에서 시작한 세션이면 새 세션이 필요/.test(koUnchanged) && /없던 상태에서 시작한 세션이면 새 세션이 필요/.test(koChanged) && !/없던 상태에서 시작한 세션이면 새 세션이 필요/.test(koFresh), "한국어도 ①②에 조건이 함께 쓰이고 ③(파일 신설)에는 없음");
+})();
+
+// 정규화가 '실행 의미를 바꾸는 필드'를 흡수하면 진짜 등록 변경을 놓친다(검증 보완 지적).
+console.log("[9d] 등록 비교는 나열 순서만 흡수하고 실행 의미 필드는 흡수하지 않는다");
+(() => {
+  let HS = null;
+  try { HS = require(path.join(__dirname, "..", "out", "hook-setup.js")); } catch { /* 미빌드 */ }
+  if (!HS || typeof HS.hooksCanon !== "function") { ok(false, "out/hook-setup.js의 hooksCanon을 불러오지 못함(빌드 필요)"); return; }
+  const mk = (extra) => ({ Stop: [{ matcher: "", hooks: [Object.assign({ type: "command", command: "node x.js" }, extra)] }] });
+  ok(HS.hooksCanon(mk({})) !== HS.hooksCanon(mk({ timeout: 30 })), "timeout 추가는 '변경'으로 잡힘");
+  ok(HS.hooksCanon(mk({})) !== HS.hooksCanon(mk({ async: true })), "async 추가는 '변경'으로 잡힘");
+  ok(HS.hooksCanon(mk({ type: "command" })) !== HS.hooksCanon(mk({ type: "other" })), "type 변경은 '변경'으로 잡힘");
+  const two = (a, b) => ({ Stop: [{ matcher: "", hooks: [{ type: "command", command: a }, { type: "command", command: b }] }] });
+  ok(HS.hooksCanon(two("node a.js", "node b.js")) === HS.hooksCanon(two("node b.js", "node a.js")), "같은 엔트리의 나열 순서 차이는 흡수");
+  ok(HS.hooksCanon({ Stop: [{ matcher: "", hooks: [{ command: "node x.js" }] }] }) !== HS.hooksCanon({ Stop: [{ matcher: "Bash", hooks: [{ command: "node x.js" }] }] }), "matcher 변경은 '변경'으로 잡힘");
+})();
+
+// 제거 안내는 설치용 조건을 그대로 쓰면 반대 결론이 된다 — 설정 파일이 없던 상태에서 시작한 세션은
+// 애초에 훅을 로드하지 않았으므로 제거 쪽에서는 오히려 재시작이 불필요하다(검증 blocker 반례).
+console.log("[9e] 제거 안내는 사각지대에서 '이미 빠진 상태'라고 말한다");
+(() => {
+  const sb = freshSandbox("hookremove");
+  run(sb, ["install"]);
+  const r = run(sb, ["uninstall"]);
+  const out = String(r.stdout || "") + String(r.stderr || "");
+  ok(/이미 빠진 상태입니다/.test(out), "제거 안내가 사각지대 세션을 '이미 빠진 상태'로 설명");
+  ok(!/새 세션이 필요합니다/.test(out), "제거 안내에 설치용 '새 세션 필요' 조건이 섞이지 않음");
+  cleanup(sb);
+})();
+
+// 설치 '전' 모달의 판정도 실제 병합 결과를 미리 재야 한다(파일은 건드리지 않는다).
+console.log("[9f] 설치 전 미리보기는 실제 설치 결과와 어긋나지 않는다(입력 검증 공유)");
+(() => {
+  let HS = null;
+  try { HS = require(path.join(__dirname, "..", "out", "hook-setup.js")); } catch { /* 미빌드 */ }
+  if (!HS || typeof HS.previewRegistration !== "function") { ok(false, "previewRegistration을 불러오지 못함(빌드 필요)"); return; }
+  const sb = freshSandbox("hookpreview");
+  const tok = '"' + process.execPath.replace(/\\/g, "/") + '"';
+  ok(HS.previewRegistration(sb.settings, sb.bridgeDir, tok) === "changed", "설정 파일이 없으면 changed");
+  const r1 = HS.installHooks(sb.settings, sb.bridgeDir, tok);
+  ok(r1.ok === true && r1.registrationChanged === true, "첫 설치는 실제로 등록을 바꿈");
+  const before = fs.readFileSync(sb.settings, "utf8");
+  ok(HS.previewRegistration(sb.settings, sb.bridgeDir, tok) === "unchanged", "같은 훅 재설치는 unchanged");
+  ok(fs.readFileSync(sb.settings, "utf8") === before, "미리보기가 파일을 건드리지 않음");
+  const r2 = HS.installHooks(sb.settings, sb.bridgeDir, tok);
+  ok(r2.registrationChanged === false, "실제 재설치 결과도 변경 없음으로 일치");
+  // 실제 어긋남 반례: 설치가 '거부'하는 입력 4종에서 미리보기가 '변경됨'이라고 말하면 안 된다.
+  const bad = {
+    "손상 JSON": "{ this is : not json ,,, }",
+    "최상위 배열": "[]",
+    "hooks가 문자열": JSON.stringify({ hooks: "nope" }),
+    "대상 이벤트가 문자열": JSON.stringify({ hooks: { Stop: "nope" } }),
+  };
+  let agreed = 0;
+  for (const raw of Object.values(bad)) {
+    fs.writeFileSync(sb.settings, raw, "utf8");
+    const pv = HS.previewRegistration(sb.settings, sb.bridgeDir, tok);
+    const inst = HS.installHooks(sb.settings, sb.bridgeDir, tok);
+    if (pv === "invalid" && inst.ok === false) agreed++;
+  }
+  ok(agreed === 4, "설치가 거부하는 입력 4종을 미리보기도 invalid로 판정(변경됨으로 오안내 금지)");
+  cleanup(sb);
+})();
+
+// 읽기 오류를 '파일 없음'으로 축소하면 빈 설정으로 병합해 사용자 설정이 백업 없이 사라진다.
+// 또 원문을 두 번 읽으면 두 스냅샷이 생겨 '백업 없이 덮어쓰기'가 가능해진다(검증 blocker 반례 2건).
+console.log("[9g] 설정 읽기 오류는 파일 부재로 축소하지 않고, 원문은 한 번만 읽는다");
+(() => {
+  let HS = null;
+  try { HS = require(path.join(__dirname, "..", "out", "hook-setup.js")); } catch { /* 미빌드 */ }
+  if (!HS || typeof HS.installHooks !== "function") { ok(false, "hook-setup.js를 불러오지 못함(빌드 필요)"); return; }
+  const sb = freshSandbox("hookread");
+  const tok = '"' + process.execPath.replace(/\\/g, "/") + '"';
+  fs.mkdirSync(sb.claudeDir, { recursive: true });
+  const original = JSON.stringify({ model: "opus[1m]", hooks: { SessionStart: [{ matcher: "", hooks: [{ type: "command", command: "bash other.sh" }] }] } }, null, 2);
+  fs.writeFileSync(sb.settings, original, "utf8");
+
+  const realRead = fs.readFileSync;
+  // 그 설정 파일에 대한 읽기만 계측·조작한다(다른 파일 읽기는 그대로 통과).
+  let reads = 0, failFrom = 0; // failFrom>0 이면 그 번째 읽기부터 EACCES
+  fs.readFileSync = function (p, ...rest) {
+    if (typeof p === "string" && p === sb.settings) {
+      reads++;
+      if (failFrom > 0 && reads >= failFrom) { const e = new Error("denied"); e.code = "EACCES"; throw e; }
+    }
+    return realRead.call(fs, p, ...rest);
+  };
+  try {
+    // ⓐ 첫 읽기 실패(권한) → 중단·원본 보존. '없음'으로 축소하면 빈 설정으로 덮어쓴다.
+    reads = 0; failFrom = 1;
+    const r = HS.installHooks(sb.settings, sb.bridgeDir, tok);
+    ok(r.ok === false && /읽을 수 없습니다/.test(String(r.reason || "")), "읽기 오류(EACCES)는 설치를 중단하고 사유를 밝힘");
+    ok(realRead.call(fs, sb.settings, "utf8") === original, "원본 settings.json이 그대로 보존됨(빈 설정으로 덮어쓰지 않음)");
+    reads = 0; failFrom = 1;
+    ok(HS.previewRegistration(sb.settings, sb.bridgeDir, tok) === "invalid", "미리보기도 같은 입력을 invalid로 판정(설치와 일치)");
+
+    // ⓑ 핵심 회귀 증거: 첫 읽기는 성공하고 '두 번째' 읽기부터 실패시킨다.
+    //    이중 읽기 구현이면 백업용 두 번째 읽기가 실패해 백업 없이 덮어쓴다(과거 결함).
+    //    단일 스냅샷이면 두 번째 읽기가 아예 없으므로 정상 설치되고 백업도 남는다.
+    reads = 0; failFrom = 2;
+    const r2 = HS.installHooks(sb.settings, sb.bridgeDir, tok);
+    ok(reads === 1, "설정 파일 읽기가 정확히 1회(두 스냅샷 구조 부재 — 실제 호출 계측: " + reads + "회)");
+    ok(r2.ok === true && typeof r2.backup === "string" && realRead.call(fs, r2.backup, "utf8") === original, "그 1회 원문으로 백업이 남고 내용이 일치");
+    // 계측을 끊고 최종 상태를 확인한다.
+    fs.readFileSync = realRead;
+    ok(readJson(sb.settings).model === "opus[1m]" && countContaining(readJson(sb.settings), "SessionStart", "bash other.sh") === 1, "기타 설정·타인 훅 보존");
+    ok(countContaining(readJson(sb.settings), "Stop", "verify-guard.js") === 1, "우리 훅이 실제로 등록됨");
+  } finally { fs.readFileSync = realRead; }
+
+  // ⓒ 제거 경로도 같은 계약: 읽기 오류를 성공으로 돌리면 훅이 남은 채 브릿지가 지워진다.
+  if (typeof HS.removeHooks === "function") {
+    const realRead2 = fs.readFileSync;
+    fs.readFileSync = function (p, ...rest) {
+      if (typeof p === "string" && p === sb.settings) { const e = new Error("denied"); e.code = "EACCES"; throw e; }
+      return realRead2.call(fs, p, ...rest);
+    };
+    let rr = null;
+    try { rr = HS.removeHooks(sb.settings); } finally { fs.readFileSync = realRead2; }
+    ok(rr && rr.ok === false && /읽을 수 없습니다/.test(String(rr.reason || "")), "제거도 읽기 오류를 성공으로 돌리지 않음");
+    ok(countContaining(readJson(sb.settings), "Stop", "verify-guard.js") === 1, "제거 실패 시 훅이 그대로 남아 있음(표식·브릿지 삭제로 진행 금지)");
+    const rr2 = HS.removeHooks(path.join(sb.dir, "없는파일.json"));
+    ok(rr2 && rr2.ok === true, "파일이 정말 없으면(ENOENT) 제거할 것 없음으로 성공");
+  } else ok(false, "removeHooks를 불러오지 못함");
+  cleanup(sb);
+})();
+
+// 안내가 '중단한 진짜 이유'를 말해야 한다. 권한·잠금인데 'JSON을 고치세요'라고 하면 사용자가
+// 멀쩡한 설정을 건드린다. 감지도 읽기 실패를 '훅 미등록'으로 축소하면 잘못된 설치 안내가 뜬다.
+console.log("[9h] 중단 안내는 읽기 실패와 JSON 손상을 갈라 말한다");
+(() => {
+  const sb = freshSandbox("hookreason");
+  fs.mkdirSync(sb.claudeDir, { recursive: true });
+  // ⓐ 진짜 JSON 손상 → 손상 안내(수동 수정 권고)가 맞다.
+  fs.writeFileSync(sb.settings, "{ not json ,,, }", "utf8");
+  const bad = run(sb, ["install"]);
+  const badOut = String(bad.stdout || "") + String(bad.stderr || "");
+  ok(bad.status === 1 && /올바른 JSON이 아닙니다/.test(badOut) && /수동으로 JSON을 고친 뒤/.test(badOut), "JSON 손상은 손상 안내 + 수동 수정 권고");
+  ok(!/권한과 파일 잠금/.test(badOut), "손상인데 권한 얘기를 하지 않음");
+
+  // ⓑ 읽기 실패는 파일 내용 문제가 아니라고 밝혀야 한다(단위 검증 — 실제 권한 조작 없이 판독기로 확인).
+  let HS = null;
+  try { HS = require(path.join(__dirname, "..", "out", "hook-setup.js")); } catch { /* 미빌드 */ }
+  if (HS && typeof HS.detectHooks === "function") {
+    const realRead = fs.readFileSync;
+    fs.readFileSync = function (p, ...rest) {
+      if (typeof p === "string" && p === sb.settings) { const e = new Error("denied"); e.code = "EACCES"; throw e; }
+      return realRead.call(fs, p, ...rest);
+    };
+    let d = null;
+    try { d = HS.detectHooks(sb.settings); } finally { fs.readFileSync = realRead; }
+    ok(d && d.installed === false && typeof d.unreadable === "string" && /읽을 수 없음/.test(d.unreadable), "감지가 읽기 실패를 unreadable로 알림(부재로 축소하지 않음)");
+    ok(HS.detectHooks(path.join(sb.dir, "없는파일.json")).unreadable === null, "파일이 정말 없으면 unreadable=null(기존 의미 유지)");
+  } else ok(false, "detectHooks를 불러오지 못함(빌드 필요)");
+  cleanup(sb);
+})();
+
+// 반환값만 고치고 화면이 그 값을 버리면 사용자에게는 아무것도 달라지지 않는다.
+// 판독 실패에 '훅 미등록' 안내를 띄우면 사용자가 이미 있는 훅을 다시 설치하려 한다(검증 blocker 반례).
+console.log("[9i] 판독 실패는 화면에서도 '미등록'이 아니라 '확인 불가'로 안내된다");
+(() => {
+  const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
+  const offer = ext.slice(ext.indexOf("async function maybeOfferHookSetup"));
+  const offerBody = offer.slice(0, offer.indexOf("export function activate"));
+  // read로만 좁히면 손상 JSON(kind="parse")이 미등록 경로로 새어나간다 — 실제로 그 회귀가 있었다.
+  ok(/if \(st\.unreadable\)/.test(offerBody) && !/st\.kind === "read"/.test(offerBody), "훅 제안 흐름이 판독 실패 '전체'를 분기한다(read로 좁히면 손상 JSON이 미등록으로 샌다)");
+  // 문구는 공용 생성기(hookStatusUnknownMsg)로 옮겼다 — 호출은 분기 안에, 문장은 그 함수에 있다.
+  ok(/hookStatusUnknownMsg\(st, false\)/.test(offerBody) && /hookStatusUnknownMsg\(st, true\)/.test(offerBody), "판독 실패 분기가 ko/en 문구를 공용 생성기로 만든다");
+  ok(/훅 등록 상태를 확인할 수 없습니다/.test(ext) && /could not determine hook registration/.test(ext), "그 생성기가 ko/en 모두 '확인 불가'로 말한다");
+  const uIdx = offerBody.indexOf("if (st.unreadable)");
+  const nIdx = offerBody.indexOf("검증 훅이 아직 등록되지 않았습니다");
+  const dIdx = offerBody.indexOf("HOOKS_PROMPT_DISMISSED");
+  ok(uIdx >= 0 && nIdx >= 0 && uIdx < nIdx, "미등록 안내보다 먼저 갈라져 판독 실패에 미등록 문구가 나오지 않는다");
+  ok(dIdx >= 0 && uIdx < dIdx, "'다시 묻지 않음' 표식 확인보다도 먼저 갈라진다(설치 제안 거부가 사실 고지를 막지 않음)");
+  ok(/return;[\s\S]{0,80}\}/.test(offerBody.slice(uIdx, nIdx)), "분기 뒤 즉시 반환한다(미등록 경로로 흘러가지 않음)");
+
+  // 모달: 판독 상태를 한 번만 잡아 ko/en이 같은 원인을 말한다(재조회 경합 차단).
+  // 미리보기와 원인을 따로 읽으면 두 문장이 서로 다른 순간을 말한다 — 한 판독에서 함께 받아야 한다.
+  ok(/previewRegistrationDetailed\(settingsFile/.test(ext) && !/preview === "invalid" \? hookSetup\.detectHooks/.test(ext), "모달은 미리보기와 원인을 한 판독에서 받는다(따로 읽어 세대가 갈리지 않게)");
+  const noteIdx = ext.indexOf("const applyNote = (en: boolean)");
+  const noteBody = ext.slice(noteIdx, ext.indexOf("const detail = tE(", noteIdx));
+  ok(!/detectHooks\(/.test(noteBody), "문안 생성 안에서 다시 읽지 않는다(ko/en 원인 어긋남 차단)");
+  ok(/설정 파일을 읽을 수 없어/.test(noteBody) && /cannot be read/.test(noteBody), "모달도 판독 실패를 형식 문제로 뭉개지 않는다(ko/en)");
+  ok(/권한과 파일 잠금을 확인해 주세요/.test(noteBody) && /Check permissions and file locks/.test(noteBody), "무엇을 해야 하는지 알려준다");
+
+  // 사유 문장은 언어 중립 값(kind·code)에서 만든다 — 영문에 한국어가 섞이지 않게.
+  ok(/function hookUnreadableReason/.test(ext), "사유 문장 생성기가 화면 쪽에 있다");
+  const rIdx = ext.indexOf("function hookUnreadableReason");
+  const rBody = ext.slice(rIdx, ext.indexOf("\n}", rIdx));
+  ok(/읽기 실패/.test(rBody) && /read failed/.test(rBody) && !/st\.unreadable/.test(rBody), "사유를 ko/en 각각 만들고 한국어 원문(unreadable)을 쓰지 않는다");
+})();
+
+// 판독 실패 사유가 영문 화면에 한국어로 새지 않는지 실제 값으로 확인한다.
+console.log("[9j] 판독 실패 사유는 언어 중립 값으로 전달된다");
+(() => {
+  let HS = null;
+  try { HS = require(path.join(__dirname, "..", "out", "hook-setup.js")); } catch { /* 미빌드 */ }
+  if (!HS || typeof HS.detectHooks !== "function") { ok(false, "hook-setup.js를 불러오지 못함(빌드 필요)"); return; }
+  const sb = freshSandbox("hookkind");
+  fs.mkdirSync(sb.claudeDir, { recursive: true });
+  fs.writeFileSync(sb.settings, "{}", "utf8");
+  const realRead = fs.readFileSync;
+  fs.readFileSync = function (p, ...rest) {
+    if (typeof p === "string" && p === sb.settings) { const e = new Error("denied"); e.code = "EACCES"; throw e; }
+    return realRead.call(fs, p, ...rest);
+  };
+  let d = null;
+  try { d = HS.detectHooks(sb.settings); } finally { fs.readFileSync = realRead; }
+  ok(d && d.kind === "read" && d.code === "EACCES", "읽기 실패는 kind=read + 원인 코드를 함께 준다");
+  fs.writeFileSync(sb.settings, "{ not json", "utf8");
+  const d2 = HS.detectHooks(sb.settings);
+  ok(d2 && d2.kind === "parse", "내용이 JSON이 아니면 kind=parse(읽기 실패와 구분)");
+  fs.writeFileSync(sb.settings, "{}", "utf8");
+  const d3 = HS.detectHooks(sb.settings);
+  ok(d3 && !d3.kind && d3.unreadable === null, "정상 판독은 kind 없음·unreadable=null(기존 의미 유지)");
+  cleanup(sb);
+})();
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

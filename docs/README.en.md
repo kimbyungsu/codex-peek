@@ -38,7 +38,7 @@ If `0.1.89` is already installed, the bundled installer backs up and overlays on
 2. A notification appears if verification hooks aren't registered — click **Review & install**, check what will change (file, backup, 4 hook lines), then click **Install**. (Command palette: `Codex Bridge: Claude Code 검증 훅 설치` any time.)
    - Note (current limitation): marketplace builds do not bundle the scouting scripts (`scripts/`) — running the default (Claude) scout, and its "ready" status, requires a repo install (`git clone` + `node install.js`); the readiness check honestly reports "not ready" with the reason on marketplace builds. Verification (2-track) and the dashboard work fully from the marketplace build alone.
 3. Click the status bar item to open the dashboard: link a Codex session, write your contract, pick a verify mode.
-4. Verification takes effect from the next Claude Code session.
+4. Verification takes effect right away: Claude Code watches the settings file, so a session that already had this file picks the change up without restarting. One exception: a session that started when this settings file did not exist is not watching it, so that session needs a restart.
 
 ## Safety & privacy
 

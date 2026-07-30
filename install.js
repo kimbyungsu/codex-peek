@@ -99,7 +99,14 @@ function atomicWrite(file, data) {
   return false;
 }
 
-function readText(file) { try { return fs.readFileSync(file, "utf8"); } catch { return null; } }
+// ⚠ 읽기 실패를 전부 null(=없음)로 접으면 안 된다. 권한 오류·잠금인데 부모 폴더 쓰기는 되는 조합에서
+// '빈 설정'으로 병합해 사용자 설정을 백업 없이 지운다(검증 blocker 반례). ENOENT만 부재로 인정하고,
+// 그 외 오류는 sentinel(READ_ERR)로 올려 호출부가 중단하게 한다.
+const READ_ERR = Symbol("read-error");
+function readText(file) {
+  try { return fs.readFileSync(file, "utf8"); }
+  catch (e) { if (e && e.code === "ENOENT") return null; return READ_ERR; }
+}
 
 // 셸을 통해 node 토큰이 실제로 실행되는지 시험(훅 러너와 같은 OS 셸 경유 = shell:true).
 function shellRunsNode(nodeToken) {
@@ -197,16 +204,17 @@ function backupSettings() {
 // 파싱 실패 시 ok=false → 호출부는 절대 덮어쓰지 않는다(손상 방지).
 function readSettingsSafe() {
   const raw = readText(SETTINGS);
+  if (raw === READ_ERR) return { ok: false, settings: null, raw: null, existed: true, kind: "unreadable", err: "파일을 읽을 수 없음(권한·잠금) — 덮어쓰지 않음" };
   if (raw === null) return { ok: true, settings: {}, raw: null, existed: false };
   if (raw.trim() === "") return { ok: true, settings: {}, raw, existed: true }; // 빈 파일 = {} 취급(백업은 함)
   try {
     const parsed = JSON.parse(raw);
     // JSON 최상위가 객체가 아니면(배열·숫자 등) 병합 불가 — 손상으로 간주(덮어쓰지 않음).
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return { ok: false, settings: null, raw, existed: true, err: "최상위가 JSON 객체가 아님" };
+      return { ok: false, settings: null, raw, existed: true, kind: "corrupt", err: "최상위가 JSON 객체가 아님" };
     }
     return { ok: true, settings: parsed, raw, existed: true };
-  } catch (e) { return { ok: false, settings: null, raw, existed: true, err: e.message }; }
+  } catch (e) { return { ok: false, settings: null, raw, existed: true, kind: "corrupt", err: e.message }; }
 }
 
 function withDeployLock(fn) { // C-7 9차: wx 파일 잠금 — 검사기(map-cutover)·확장과 동일 프로토콜(".deploy.lock"·wx 원자 생성=신원 동시·read-back fence·자동 탈환 없음[contract-lock v10 결론]). 반환 {ok, why}
@@ -757,6 +765,18 @@ function runDoctor() {
   return parity.ok && doctorOk;
 }
 
+// 설치 뒤 "언제 적용되나" 안내 — hook-setup.ts claudeHookApplyNote(ko)와 같은 규칙·같은 문장(패리티 테스트로 잠금).
+// 실측 근거(Claude Code 2.0.22 cli.js): 설정 파일을 감시하다가 바뀌면 다시 읽는다("Watching for changes in
+// setting files …"). 감시 목록은 세션 시작 시 '실제로 존재하는 파일'만 담는다(statSync(...).isFile()).
+// 그래서 ①등록 불변=즉시 ②등록 변경+파일 원래 있었음=현재 세션 반영 ③파일을 이번에 새로 만듦=새 세션.
+// ⚠ 설치기는 '지금 파일이 있는가'만 알 뿐 '현재 세션 시작 때 있었는가'는 모른다.
+// 그래서 ①②는 조건을 먼저 쓰고 두 경우를 함께 밝힌다(단정 후 예외를 덧대면 읽는 순서가 꼬인다 — 검증 지적).
+function claudeHookApplyNote(registrationChanged, settingsExisted) {
+  if (!registrationChanged) return "Claude 훅은 등록이 그대로입니다. 이 설정 파일을 가지고 시작한 세션이면 새 스크립트가 다음 프롬프트부터 바로 적용되고, 파일이 아예 없던 상태에서 시작한 세션이면 새 세션이 필요합니다.";
+  if (settingsExisted) return "Claude 훅 등록이 바뀌었습니다. Claude Code가 설정 파일 변경을 감시하므로, 이 파일을 가지고 시작한 세션이면 재시작 없이 반영되고 파일이 없던 상태에서 시작한 세션이면 새 세션이 필요합니다.";
+  return "Claude 훅은 설정 파일을 이번에 새로 만들었습니다. 이미 실행 중인 세션은 그 파일을 감시하고 있지 않으니 새 Claude Code 세션에서 적용됩니다.";
+}
+
 function cmdInstall(dryRun) {
   log(`codex-bridge 설치${dryRun ? " (미리보기)" : ""}`);
   log(`  브릿지 폴더 : ${BRIDGE_DIR}`);
@@ -775,10 +795,17 @@ function cmdInstall(dryRun) {
   // 2) 설정 검증을 '모든 쓰기 전에' — 손상/형식 이상이면 브릿지 복사도 하지 않고 중단(원본 보존).
   const s = readSettingsSafe();
   if (!s.ok) {
-    log(`❌ 기존 settings.json이 올바른 JSON이 아닙니다 — 자동 병합을 중단합니다(손상 방지).`);
+    // 중단 사유가 "읽을 수 없음"인지 "JSON 손상"인지 갈라 안내한다 — 권한·잠금인데 JSON을 고치라고
+    // 하면 사용자가 멀쩡한 설정을 건드린다(검증 [주의] 반영).
+    const unreadable = s.kind === "unreadable";
+    log(unreadable
+      ? `❌ settings.json을 읽을 수 없습니다 — 자동 병합을 중단했습니다(원본 그대로).`
+      : `❌ 기존 settings.json이 올바른 JSON이 아닙니다 — 자동 병합을 중단합니다(손상 방지).`);
     log(`   파일: ${SETTINGS}`);
     log(`   사유: ${s.err}`);
-    log(`   → 수동으로 JSON을 고친 뒤 다시 실행하세요.`);
+    log(unreadable
+      ? `   → 파일 내용 문제가 아닙니다. 권한과 파일 잠금(다른 프로그램이 열고 있는지)을 확인한 뒤 다시 실행하세요.`
+      : `   → 수동으로 JSON을 고친 뒤 다시 실행하세요.`);
     process.exit(1);
   }
   const shapeErr = checkHooksShape(s.settings);
@@ -792,12 +819,40 @@ function cmdInstall(dryRun) {
   copyBridge(dryRun);
 
   // 4) 설정 백업 + 훅 병합
+  // mergeHooks는 넘긴 설정을 '그 자리에서' 고쳐 돌려준다 — 비교하려면 부르기 전에 원본을 떠 둬야 한다.
+  // (병합 후에 비교하면 같은 객체끼리 대는 셈이라 언제나 '불변'으로 나온다. 실행 반례로 잡힌 결함.)
+  // 순서만 다른 것은 '변경'이 아니다: mergeHooks가 우리 훅을 떼었다 뒤에 다시 붙이므로 내용이 같아도
+  // 위치가 달라질 수 있다. 다만 엔트리는 '통째로' 정규화한다 — command·matcher만 남기면 timeout·async·type
+  // 처럼 실행 의미를 바꾸는 필드가 달라져도 같은 것으로 보여 진짜 변경을 놓친다(검증 지적).
+  const canonVal = (v) => {
+    if (Array.isArray(v)) return "[" + v.map(canonVal).join(",") + "]";
+    if (v && typeof v === "object") return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canonVal(v[k])).join(",") + "}";
+    return JSON.stringify(v === undefined ? null : v);
+  };
+  const hooksCanon = (hooks) => {
+    if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return "";
+    const out = {};
+    for (const ev of Object.keys(hooks).sort()) {
+      const arr = Array.isArray(hooks[ev]) ? hooks[ev] : [];
+      // 그룹 경계는 유지(matcher는 그룹 속성) · 그룹과 엔트리의 '나열 순서'만 정렬로 흡수.
+      out[ev] = arr.map((g) => (g && typeof g === "object" && Array.isArray(g.hooks)
+        ? canonVal(Object.assign({}, g, { hooks: g.hooks.map(canonVal).sort() }))
+        : canonVal(g))).sort();
+    }
+    return JSON.stringify(out);
+  };
+  const hooksBefore = hooksCanon(s.settings && s.settings.hooks);
   const merged = mergeHooks(s.settings);
   const out = JSON.stringify(merged, null, 2) + "\n";
+  let hooksRegistrationChanged = true; // 미확정 상태 방어값(dryRun 경로는 이 안내를 출력하지 않는다)
   if (dryRun) {
     log("✅ 훅 병합 미리보기(타인 훅 보존, 우리 훅만 교체):");
     for (const { event, script } of OUR_HOOKS) log(`     ${event} ← ${hookCommand(script)}`);
   } else {
+    // 훅 '등록'이 실제로 바뀌었는지 여기서만 알 수 있다. 등록이 그대로면 현재 Claude 세션이 다음
+    // 프롬프트부터 새 스크립트를 그대로 읽는다(등록된 명령은 매번 새 프로세스를 띄운다) — 이 사실을
+    // 마지막 안내에서 갈라 쓰려고 결과를 남긴다. 항상 '새 세션 필요'라고 적으면 매번 틀린 안내가 된다.
+    hooksRegistrationChanged = !s.existed || hooksBefore !== hooksCanon(merged.hooks);
     if (s.existed) { const bak = backupSettings(); log(`🗂  설정 백업: ${bak}`); }
     const ok = atomicWrite(SETTINGS, out);
     if (!ok) { log(`❌ 설정 저장 실패 — 원본은 그대로 보존됨: ${SETTINGS}`); process.exit(1); }
@@ -812,9 +867,13 @@ function cmdInstall(dryRun) {
     return false;
   }
 
+  // 문안은 hook-setup.ts claudeHookApplyNote와 '같은 규칙'이다(이 파일은 빌드 산출물에 의존하지 않으려고
+  // 규칙을 복제하는 기존 관례를 따른다 — OUR_HOOKS·isOurHookCmd와 동일). 두 문장이 갈라지지 않도록
+  // 패리티 테스트로 잠근다. 한쪽만 고치면 테스트가 깨진다.
+  const claudeNote = claudeHookApplyNote(hooksRegistrationChanged, !!s.existed);
   log(dryRun
     ? "\n미리보기 끝(쓰기 없음)."
-    : "\n설치 완료. VS Code에서 'Developer: Reload Window'를 한 번 실행해야 새 확장·Codex 훅 상태가 현재 창에 적용됩니다. Claude 훅은 새 Claude Code 세션부터 적용됩니다.");
+    : `\n설치 완료. VS Code에서 'Developer: Reload Window'를 한 번 실행해야 새 확장·Codex 훅 상태가 현재 창에 적용됩니다. ${claudeNote}`);
   return true;
 }
 
@@ -822,8 +881,13 @@ function cmdUninstall(purge) {
   log("codex-bridge 제거");
   const s = readSettingsSafe();
   if (!s.ok) {
-    log(`❌ settings.json 파싱 실패 — 자동 수정 중단(손상 방지): ${SETTINGS}`);
-    log(`   사유: ${s.err} → 수동으로 우리 훅 항목만 지우세요.`);
+    const unreadable = s.kind === "unreadable";
+    log(unreadable
+      ? `❌ settings.json을 읽을 수 없습니다 — 자동 수정 중단(원본 그대로): ${SETTINGS}`
+      : `❌ settings.json 파싱 실패 — 자동 수정 중단(손상 방지): ${SETTINGS}`);
+    log(unreadable
+      ? `   사유: ${s.err} → 파일 내용 문제가 아닙니다. 권한과 파일 잠금을 확인한 뒤 다시 실행하세요.`
+      : `   사유: ${s.err} → 수동으로 우리 훅 항목만 지우세요.`);
     process.exit(1);
   }
   const shapeErr = checkHooksShape(s.settings);
@@ -852,7 +916,9 @@ function cmdUninstall(purge) {
   } else {
     log(`ℹ️  브릿지 파일은 남겨둡니다(${BRIDGE_DIR}). 완전 삭제는 'uninstall --purge'.`);
   }
-  log("제거 완료. 새 세션부터 훅이 빠집니다.");
+  // 제거도 설정 파일 '변경'이라 감시가 잡는다. 다만 설치용 단서를 그대로 쓰면 안 된다 — 설정 파일이 없던
+  // 상태에서 시작한 세션은 애초에 훅을 로드하지 않았으므로 제거 쪽에서는 오히려 재시작이 불필요하다(검증 반례).
+  log("제거 완료. Claude Code가 설정 파일 변경을 감시하므로 그 파일을 가지고 시작한 세션이면 재시작 없이 훅이 빠집니다. (그 파일이 없던 상태에서 시작한 세션은 애초에 훅을 들고 있지 않으니 이미 빠진 상태입니다.)");
 }
 
 function cmdHelp() {
@@ -882,4 +948,4 @@ if (require.main === module) {
   else if (!cmdInstall(has("--dry-run") || has("-n"))) process.exitCode = 1;
 }
 
-module.exports = { pickVsix, currentVsix, buildInstallCmd, installedExtensionVersionFromList, installVsixWithCli, extensionRootCandidates, findInstalledExtensionDir, sameVersionOverlayEntries, overlaySameVersionExtension, hasLocalPackageToolchain, resolveCommandOnPath, resolveCodeCli, candidateCodeClis, findRootUpwards, vscodeSignalClis, standardCodeClis, codeCliPriority, bridgeRuntimeParity, OUR_HOOKS, BRIDGE_SCRIPTS, isOurHookCmd }; // 뒤 3개: hook-setup.ts와의 규칙 패리티 테스트용
+module.exports = { pickVsix, currentVsix, buildInstallCmd, installedExtensionVersionFromList, installVsixWithCli, extensionRootCandidates, findInstalledExtensionDir, sameVersionOverlayEntries, overlaySameVersionExtension, hasLocalPackageToolchain, resolveCommandOnPath, resolveCodeCli, candidateCodeClis, findRootUpwards, vscodeSignalClis, standardCodeClis, codeCliPriority, bridgeRuntimeParity, OUR_HOOKS, BRIDGE_SCRIPTS, isOurHookCmd, claudeHookApplyNote }; // 뒤 3개: hook-setup.ts와의 규칙 패리티 테스트용
