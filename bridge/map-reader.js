@@ -259,31 +259,70 @@ function renderV2Slice(ws, c, lang, proj) {
   const changed = new Set(CL.changedFilesFor(target));
   const en = lang === "en" || (lang !== "ko" && CL.loadLang() === "en");
   const label = (id) => { const f = fresh.get(id); return f ? f.state : "unknown"; };
+  // 필드 상한(검증 [주의] 반영): node label과 anchor path에는 길이 제한이 없어, 이름이 긴 지도 하나가
+  // 검증자 프롬프트 머리를 무제한으로 부풀릴 수 있었다. legacy 동봉이 이미 쓰는 값과 같게 맞춘다
+  // (경로 200 · 설명 120) — 새 숫자를 만들지 않는다.
+  const PATH_MAX = 200, NOTE_MAX = 120;
+  // ⚠ 경로는 자르면 안 된다 — 잘린 경로는 실존하지 않는 파일이 되고, 신선도 라벨은 그대로 붙어
+  // 검증자가 없는 파일을 찾거나 다른 대상으로 오판한다. 후속 정확 경로 판독도 실존 파일만 인정해
+  // 그 항목이 결속 자료에서 통째로 사라진다(검증 [주의]). 설명(note)은 자연어라 잘라도 되지만
+  // 경로는 식별자다 → 상한을 넘는 경로는 '항목 제외'로 처리하고 생략 수에 더한다.
+  const clip = (s, n) => { const v = String(s || ""); return v.length > n ? v.slice(0, n) + "…" : v; };
   const items = [];
+  let overflow = 0; // 상한에 걸려 빠진 node 수 — 조용히 버리지 않고 아래에서 고지한다
   for (const nd of proj.nodes) {
-    const paths = (nd.anchors || []).map((a) => a && a.path).filter(Boolean);
+    const paths = (nd.anchors || []).map((a) => a && a.path).filter(Boolean).filter((p) => p.length <= PATH_MAX);
+    const dropped = (nd.anchors || []).map((a) => a && a.path).filter(Boolean).length - paths.length;
+    if (!paths.length) { if (dropped) overflow++; continue; } // 쓸 수 있는 경로가 없으면 그 node는 제외
     const hit = paths.find((p) => changed.has(p));
-    if (!hit && items.length >= 8) continue; // 변경 연결 우선·상한 8
-    if (paths.length) items.push({ path: hit || paths[0], note: (nd.label || "") + " · " + label(nd.id), _hit: !!hit });
+    if (!hit && items.length >= 8) { overflow++; continue; } // 변경 연결 우선·상한 8
+    items.push({ path: hit || paths[0], note: clip((nd.label || "") + " · " + label(nd.id), NOTE_MAX), _hit: !!hit });
   }
   items.sort((a, b) => (a._hit === b._hit ? 0 : a._hit ? -1 : 1));
+  if (items.length > 8) overflow += items.length - 8;
   const top = items.slice(0, 8).map(({ path: p, note }) => ({ path: p, note }));
-  if (!top.length) return CL.buildScoutAttach(ws, c, lang); // slice가 비면 기존 동봉으로(무손실)
+  // slice가 비면 기존 동봉으로(무손실). 단 '상한 때문에' 비었다면 그 사실을 잃지 않는다 —
+  // 조용히 되돌아가면 사용자·검증자 모두 지도가 통째로 빠진 줄 모른다(조용한 생략 금지).
+  if (!top.length) {
+    const fb = CL.buildScoutAttach(ws, c, lang);
+    if (!overflow) return fb;
+    // ⚠ 고지는 '실제로 실린 것'과 맞아야 한다. 기존 방식 동봉이 지도를 실었는데 '지도가 안 실렸다'고 하면
+    // 화면은 없다고 하고 검증자·결속 판정은 그 지도를 쓰는 상충이 된다(검증 [주의]).
+    const fbText = fb && typeof fb === "object" ? String(fb.text || "") : (typeof fb === "string" ? fb : "");
+    const fbHasMap = !!(fb && typeof fb === "object" && Array.isArray(fb.mapItems) && fb.mapItems.length) || !!fbText.trim();
+    const note = fbHasMap
+      ? (en
+        ? `[Project MAP v2 slice omitted] every v2 candidate was dropped by the caps (${overflow} node(s)); what is attached above is the legacy scout attachment, not the v2 slice.`
+        : `[Project MAP v2 조각 미첨부] v2 후보가 전부 상한에 걸려 빠졌다(node ${overflow}개). 위에 실린 것은 기존 방식 동봉이며 v2 조각이 아니다.`)
+      : (en
+        ? `[Project MAP slice omitted] every candidate was dropped by the caps (${overflow} node(s)) — no map is attached to this request.`
+        : `[Project MAP 조각 미첨부] 후보가 전부 상한에 걸려 빠졌다(node ${overflow}개) — 이 요청에는 지도가 실리지 않았다.`);
+    if (fb && typeof fb === "object") return { ...fb, text: [fb.text, note].filter(Boolean).join("\n") };
+    return { text: [fbText, note].filter(Boolean).join("\n"), mapItems: [], couplings: [] };
+  }
   const coupling = typeof CL.scoutCouplingAttach === "function" ? CL.scoutCouplingAttach(target, en) : { text: "", couplings: [] };
   const couplings = coupling.couplings;
   // edge 동봉(1차 blocker⑥ — 설계: '연결된 node/edge'): 동봉 node의 인접 edge를 effective만·신선도
   // 라벨과 함께 text에 실음(mapItems 계약 {path,note}는 파일 단위라 edge는 text 라인으로 — envelope 불변).
   const shownIds = new Set(proj.nodes.filter((nd) => (nd.anchors || []).some((a) => a && top.some((t) => t.path === a.path))).map((nd) => nd.id));
-  const labelOf = new Map(proj.nodes.map((nd) => [nd.id, nd.label || nd.id.slice(0, 8)]));
-  const edgeLines = proj.edges
-    .filter((e) => shownIds.has(e.from) || shownIds.has(e.to))
+  const labelOf = new Map(proj.nodes.map((nd) => [nd.id, clip(nd.label || nd.id.slice(0, 8), NOTE_MAX)]));
+  const edgeAll = proj.edges.filter((e) => shownIds.has(e.from) || shownIds.has(e.to));
+  const edgeOver = Math.max(0, edgeAll.length - 6); // 상한에 걸려 빠진 edge 수 — 아래에서 고지
+  const edgeLines = edgeAll
     .slice(0, 6)
-    .map((e) => "- [edge] " + (labelOf.get(e.from) || e.from.slice(0, 8)) + " -> " + (labelOf.get(e.to) || e.to.slice(0, 8)) + (e.relation ? " (" + e.relation + ")" : "") + " · " + label(e.id));
+    .map((e) => "- [edge] " + (labelOf.get(e.from) || e.from.slice(0, 8)) + " -> " + (labelOf.get(e.to) || e.to.slice(0, 8)) + (e.relation ? " (" + clip(e.relation, 40) + ")" : "") + " · " + label(e.id));
   const head = en
     ? "[Project MAP slice · advisory — not a verdict rule] Confirmed-structure nodes/edges connected to this change (freshness per item):"
     : "[Project MAP 조각 · 참고 — 판정 기준 아님] 이번 변경과 연결된 확정 구조 node/edge(항목별 신선도):";
   const health = CL.scoutHealthLine(target, en);
-  const text = [head, ...top.map((i) => `- ${i.path}${i.note ? ` — ${i.note}` : ""}`), ...edgeLines, ...(coupling.text ? [coupling.text] : []), ...(health ? [health] : [])].join("\n");
+  // 생략 고지(검증 [주의] 반영): 상한에 걸려 빠진 것이 있으면 '전부 실었다'로 보이지 않게 개수를 밝힌다.
+  // 검증자가 목록을 한계로 오해하지 않도록 tail의 '시작점일 뿐' 문구와 같은 취지다.
+  const omitted = (overflow || edgeOver)
+    ? [en
+        ? `(omitted by caps: ${overflow} node(s), ${edgeOver} edge(s) — this slice is not the whole map)`
+        : `(상한으로 생략: node ${overflow}개 · edge ${edgeOver}개 — 이 조각은 지도 전체가 아니다)`]
+    : [];
+  const text = [head, ...top.map((i) => `- ${i.path}${i.note ? ` — ${i.note}` : ""}`), ...edgeLines, ...omitted, ...(coupling.text ? [coupling.text] : []), ...(health ? [health] : [])].join("\n");
   return { text, mapItems: top, couplings };
 }
 

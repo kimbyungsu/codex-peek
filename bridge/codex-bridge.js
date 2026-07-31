@@ -41,7 +41,33 @@ function envelopeWarnLine(ws, lang) {
   } catch { /* 무해 — 경고 계층이 결과 전달을 막지 않음 */ }
   return "";
 }
-function withContract(prompt, ws, lang, carrier, profile) {
+// ── 검증자 프롬프트 머리의 상한(검증 [주의] 반영) ─────────────────────────────────────────
+// 이 머리는 매 회차 검증자에게 통째로 실려 간다. 지금까지 총량 상한이 없어, 열린 지적이 쌓이거나
+// 지도 이름이 길거나 계약 규칙이 늘면 머리가 계속 부풀고 정작 사용자 요청문이 뒤로 밀렸다.
+// 원칙 두 가지: ①조각별로 막는다(총량에서 통째로 잘라내면 승인 정책 같은 계약이 사라질 수 있다)
+//              ②조용히 자르지 않는다 — 생략한 개수와 사유를 항상 밝힌다.
+// ⚠ 열린 지적 목록에는 개수 상한을 두지 않는다 — 자르면 숨은 지적의 id를 인용할 수 없고
+//   '미인용=신규 취급'이라 이력이 끊긴다('구현모델 선별 금지' 계약). 그 자리 주석 참조.
+const CONTRACT_INJ_MAX = 4000;  // 계약 주입(사용자 규칙·체크리스트) 최대 문자
+const HEAD_SOFT_LIMIT = 12000;  // 이 값을 넘으면 조각별 길이를 stderr로 알린다(차단 아님 — 가시화)
+// 계약 규칙이 상한을 넘는지 '아무것도 예약하기 전에' 판정한다. 여기서 die하면 왕복도 phase도 그대로다.
+// 문구는 withContract의 throw와 같은 뜻이어야 한다(두 자리가 갈리면 사용자가 다른 안내를 받는다).
+function contractInjectionTooLongMsg(len, en) {
+  return en
+    ? `Contract rules/checklist are ${len} characters (cap ${CONTRACT_INJ_MAX}). Verification was NOT started and no round was consumed — running without your saved rules would stamp a pass that never applied them. Shorten them in the dashboard, then retry.`
+    : `계약 규칙·체크리스트가 ${len}자입니다(상한 ${CONTRACT_INJ_MAX}). 검증을 시작하지 않았고 왕복도 쓰지 않았습니다 — 저장한 규칙 없이 진행하면 그 규칙이 적용되지 않은 통과가 됩니다. 대시보드에서 줄인 뒤 다시 시도하세요.`;
+}
+function assertContractInjectionFits(ws, contractSnap, harnessModeSnap, lang) {
+  let len = 0;
+  try {
+    const c = contractSnap || {};
+    const rules = harnessModeSnap === "codex-codex" ? c.codexVerifier : c.codex;
+    const list = harnessModeSnap === "codex-codex" ? c.codexVerifierChecklist : c.codexChecklist;
+    len = String(buildInjection(rules, harnessModeSnap === "codex-codex" ? "Codex Verifier" : "Codex", list, lang) || "").length;
+  } catch { return; } // 판독 실패는 여기서 막지 않는다(withContract의 기존 try/catch가 담당)
+  if (len > CONTRACT_INJ_MAX) die(contractInjectionTooLongMsg(len, (lang || loadLang()) === "en"), 3);
+}
+function withContract(prompt, ws, lang, carrier, profile, contractSnap) {
   // lang: 언어 스냅샷(cmdAsk의 langSnap) — 미지정 시 전역 언어. 주입(기본지침·계약 지시문)과 헤더/footer 언어를 한 스냅샷으로 일관.
   // carrier(L1-A): 호출자가 준 객체에 '이번 ask에 실제로 실린 동봉 스냅샷'(mapItems·couplings)을 담아 준다 —
   // 확인 판정(flagLedgerConfirms)이 '지금 다시 계산한 동봉'이 아니라 '전송된 그 동봉'으로 echo를 판정하게(Codex 설계검증).
@@ -51,7 +77,10 @@ function withContract(prompt, ws, lang, carrier, profile) {
     // 계약은 '연 폴더(configWs)' 기준으로 로드 — cmdAsk가 modelPref·proof·라벨·withContract에 같은 configWs 스냅샷(ws)을
     // 넘겨, 작업 cwd가 외부 폴더로 흔들려도 사용자가 연 폴더에 건 계약이 일관 적용된다(인자 없으면 configWs()로 폴백).
     // (resolveLink/recordLink도 configWs 기준 — 세션은 작업 cwd가 아니라 이 대화의 연 폴더에 묶인다.)
-    c = loadContract(ws || configWs(), lang);
+    // 호출자가 이미 잡아둔 스냅샷이 있으면 그것을 쓴다 — 여기서 다시 읽으면 사전 검사(예약 전)와
+    // 조립(예약 후)이 서로 다른 계약을 볼 수 있다. 그 사이 대시보드가 계약을 늘리면 왕복은 이미
+    // 소진됐는데 '왕복도 쓰지 않았다'는 안내가 나간다(검증 blocker).
+    c = contractSnap && typeof contractSnap === "object" ? contractSnap : loadContract(ws || configWs(), lang);
     const verifierRules = c.harnessMode === "codex-codex" ? c.codexVerifier : c.codex;
     const verifierChecklist = c.harnessMode === "codex-codex" ? c.codexVerifierChecklist : c.codexChecklist;
     inj = buildInjection(verifierRules, c.harnessMode === "codex-codex" ? "Codex Verifier" : "Codex", verifierChecklist, lang);
@@ -73,7 +102,22 @@ function withContract(prompt, ws, lang, carrier, profile) {
     const es9 = envelopeSliceFor(ws || configWs(), lang, profile, c);
     envText = es9.envText; baseQual = es9.baseQual;
   } catch (e0) { if (e0 && e0.envelopeTransBusy) throw e0; /* 상호배제 실패=ask 정직 실패(경계 없는 프롬프트 생성 금지 — 재검증 blocker③). 그 외 경계 실패=주입만 생략(검증은 현행 규약으로 진행) */ }
+  // 계약 규칙은 사용자가 '이렇게 검증하라'고 저장한 요구다. 길어서 뺀 채로 검증을 진행하면
+  // 그 요구가 적용되지 않았는데 통과 도장이 찍힌다 — 검증 통과 위조 경로다(검증 blocker).
+  // 그래서 잘라 붙이지도, 빼고 진행하지도 않는다. ask 자체를 멈추고 줄이라고 요구한다(fail-closed).
+  // 같은 파일의 경계 판독 상호배제 실패와 같은 방식(정직 실패 — 규칙 없는 프롬프트 생성 금지).
+  // 이중 방어 — 정상 경로는 위 assertContractInjectionFits가 예약 전에 이미 막는다.
+  // 여기까지 온다면 그 사전 검사를 거치지 않은 호출자이므로, 프롬프트를 만들지 않고 올린다.
+  if (inj && inj.length > CONTRACT_INJ_MAX) {
+    throw Object.assign(new Error(contractInjectionTooLongMsg(inj.length, (lang || loadLang()) === "en")), { exitCode: 3, contractTooLong: true });
+  }
   const head = [baseline, baseQual, envText, inj, scout].filter(Boolean).join("\n\n");
+  // 총량은 막지 않고 '보이게' 한다 — 통째로 잘라내면 승인 정책 같은 계약이 사라질 수 있다.
+  // 어느 조각이 부풀었는지 알려야 사람이 그 자리를 줄일 수 있다.
+  if (head.length > HEAD_SOFT_LIMIT) {
+    const parts = `기본원칙 ${baseline.length} · 경계한정 ${baseQual.length} · 승인정책 ${envText.length} · 계약 ${inj.length} · 지도 ${scout.length}`;
+    try { process.stderr.write(`⚠️ 검증자 프롬프트 머리가 ${head.length}자입니다(권장 ${HEAD_SOFT_LIMIT} 이하) — ${parts}\n`); } catch { /* 안내 실패가 검증을 막지 않음 */ }
+  }
   const reqLabel = (lang || loadLang()) === "en" ? "[Work Request]" : "[작업 요청]";
   return `${head}\n\n---\n${reqLabel}\n${prompt}`;
 }
@@ -2245,6 +2289,10 @@ function v2DirectiveFor(ws, lang) {
   try {
     // 2차 미완수정③④ 반영: 상한 제거=전 목록 주입(구현모델 의존 복귀 금지 — 프롬프트 비대는 제목 60자
     // 절단으로 완화·id는 전부 보존) / 세대 필터=이 ask의 동결 세대 open만(구세대 id 주입 금지).
+    // ⚠ 여기에 개수 상한을 두면 안 된다. 자르는 순간 숨은 지적의 id를 인용할 수 없게 되고,
+    // 규약상 '미인용=신규 취급'이라 그 지적의 이력이 끊긴다. 목록을 누가 고르느냐의 문제이기도 하다 —
+    // '구현모델 선별 금지'가 이 자리의 계약이다(거버넌스 증분 2, 검증 7왕복). 비대는 제목 60자 절단으로만
+    // 완화한다. 2026-07-30에 상한을 넣으려다 tests/verify-admission.test.js가 이 계약으로 막았다.
     const opens = openFindingsFor(ws, currentCampaignIdFor(ws), readFrozenEnvelope(ws));
     if (opens.length) {
       L.push(en ? "[Open findings — cite these ids when re-raising or reporting an incomplete fix (uncited = treated as new)]" : "[열린 지적 — 재지적·미완 수정 보고 시 이 id를 인용하라(미인용=신규 취급)]");
@@ -2666,6 +2714,10 @@ async function cmdAsk(rest) {
   const rejudgeSnap = jobFrozen ? jobFrozen.rejudge : safeLoadRejudge(langSnap, profileSnap).trim().slice(0, REJUDGE_SNAP_MAX + 1);
   const exec = process.cwd();   // 작업 폴더(실행/탐지/근거경로 기준) — 코덱스 spawn은 cwd 미지정이라 실제로 여기서 돈다
   const mArgs = modelArgs(modelPrefFor(links, ws, harnessModeSnap)); // 운용 모드별 검증 모델/생각강도를 매 호출 -c로 재적용
+  // 계약 길이 검사는 '예약보다 앞'이어야 한다(검증 blocker). withContract 안에서만 막으면 이미 왕복이
+  // 예약되고 phase가 오른 뒤라, 마지막 허용 왕복에서 걸리면 계약을 줄여도 그 캠페인에서 검증을 못 한다.
+  // 여기서 걸러야 '검증을 시작하지 않았습니다'가 사실이 된다(withContract의 throw는 이중 방어로 유지).
+  assertContractInjectionFits(ws, contractSnap, harnessModeSnap, langSnap);
 
   if (link && !findRolloutById(link.codexSession)) {
     if (!allowNew) die(tB(`⚠️ 연결된 Codex 세션(${link.codexSession})을 찾을 수 없습니다. 새 세션을 임의로 만들지 않았습니다.\n→ 사용자가 새 검증 세션 생성을 승인할 때만 ask --allow-new "..."를 사용하세요.`, `⚠️ Linked Codex session (${link.codexSession}) was not found. No session was created automatically.\n→ Use ask --allow-new "..." only when the user approves creating a replacement verifier.`));
@@ -2689,7 +2741,7 @@ async function cmdAsk(rest) {
     const attempt = beginVerifyAttempt(ws, budgetGate.res, profileSnap, modeSnap); // 2d: 예약 직후 — 이후 모든 종결이 정확히 1회 기록 시도
     const askId = require("crypto").randomUUID(); // L1-A: '서로 다른 ask 실행' 판정 재료(지문·verdict ts는 재실행 구분에 부적합 — Codex)
     const attCarrier = {};                        // L1-A: 이번 ask에 실제로 실린 동봉 스냅샷(재계산 아님)
-    const promptText = withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier, profileSnap); // 프롬프트 조립은 측정 밖(1차 blocker①)
+    const promptText = withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier, profileSnap, contractSnap); // 프롬프트 조립은 측정 밖(1차 blocker①)
     attempt.markCallStart(); // duration=모델 호출 직전부터(7차 [보완])
     const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs, ...(net ? netArgs() : [])], promptText);
     if (error || !answer || (typeof status === "number" && status !== 0)) {
@@ -2771,7 +2823,7 @@ async function cmdAsk(rest) {
   const onDetect = (id) => { if (earlyLinked) return; try { if (recordLink(id)) earlyLinked = id; } catch { /* 다음 폴/최종 단계서 재시도 */ } };
   const askId = require("crypto").randomUUID(); // L1-A: '서로 다른 ask 실행' 판정 재료
   const attCarrier = {};                        // L1-A: 이번 ask에 실제로 실린 동봉 스냅샷
-  const promptText = withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier, profileSnap); // 프롬프트 조립은 측정 밖(1차 blocker①)
+  const promptText = withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier, profileSnap, contractSnap); // 프롬프트 조립은 측정 밖(1차 blocker①)
   attempt.markCallStart(); // duration=모델 호출 직전부터(7차 [보완])
   const { answer, error, status, stderr, detected } = await runCodexNewSessionAsync([...mArgs, ...(net ? netArgs() : [])], promptText, since, exec,
     (id) => { updateAskActive(ws, activeRec && activeRec.token, { sessionId: id }); onDetect(id); },
@@ -3028,7 +3080,9 @@ function main() {
   switch (cmd) {
     case "ask": {
       const p = cmdAsk(rest); // 새 세션 경로는 async(즉시연결). resume는 동기 흐름이라 즉시 resolve.
-      if (p && typeof p.then === "function") p.catch((e) => die(tB("ask 오류: ", "ask error: ") + (e && e.message ? e.message : String(e))));
+      // 오류가 구분 코드를 달고 오면 그대로 전달한다 — 1로 뭉개면 호출자가 '검증 안 함(3)'과
+      // 일반 실패(1)를 구별하지 못한다(검증 [보완]).
+      if (p && typeof p.then === "function") p.catch((e) => die(tB("ask 오류: ", "ask error: ") + (e && e.message ? e.message : String(e)), Number(e && e.exitCode) || 1));
       return p;
     }
     case "ask-start":
@@ -3092,4 +3146,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, v2DirectiveFor, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex };
+module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, v2DirectiveFor, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex };

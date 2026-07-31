@@ -161,7 +161,9 @@ ok(/const rejudgeSnap = jobFrozen \? jobFrozen\.rejudge : safeLoadRejudge\(langS
 ok(!/normRejudgeSnap\(/.test(src), "브릿지는 정규화하지 않고 원문만 넘김(미첨부 사유 고지를 위해 필요)");
 ok(/const langSnap = jobFrozen \? jobFrozen\.lang : loadLang\(\);\s*\n\s*const contractSnap = loadContract\(ws, langSnap\)/.test(src), "직접 ask — 언어 먼저 캡처 후 같은 슬롯 계약 읽기(프로필·언어 단일 스냅샷)");
 ok(/const profileSnap = jobFrozen \? jobFrozen\.profile : effectiveVerifyProfile\(contractSnap\);/.test(src), "직접 ask=시작 시점 계약 스냅샷·내구=job 동결값(계약 ⓕ)");
-ok(/withContract\(prompt \+ \(net \? netNote\(langSnap\) : ""\), ws, langSnap, attCarrier, profileSnap\)/.test(src), "주입(withContract)이 동결 프로필 사용");
+// 2026-07-30: 계약 스냅샷 인자가 뒤에 붙었다(사전 검사와 조립이 같은 계약을 보게 하려고).
+// 동결 프로필을 넘긴다는 원 의도는 그대로이므로 그 부분만 고정하고, 스냅샷 동반도 함께 못박는다.
+ok(/withContract\(prompt \+ \(net \? netNote\(langSnap\) : ""\), ws, langSnap, attCarrier, profileSnap, contractSnap\)/.test(src), "주입(withContract)이 동결 프로필 사용(+ 같은 계약 스냅샷 동반)");
 ok(src.split("formatForClaude(answer, langSnap, profileSnap, mfl.machine, rejudgeSnap)").length === 3, "footer 2경로(연결·새 세션) 모두 동결 프로필+동결 규약 사용(2c machine·재판단 동결본) — 완료 시점 재읽기 없음");
 const wk = fs.readFileSync(path.join(ROOT, "bridge", "ask-job-worker.js"), "utf8");
 ok(/Object\.assign\(\{\}, cur, extra\)/.test(wk), "worker patch=기존 필드 보존 병합(동결 필드 불변)");
