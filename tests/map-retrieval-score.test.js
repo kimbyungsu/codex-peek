@@ -73,8 +73,11 @@ console.log("[5] HL 복사값 잠금 — 명세 필수 반례(SPEC :324): 두 �
   // 추출해 잠근다. 추출 실패(구조 변경)도 실패로 드러나게 한다(조용한 통과 금지).
   const fs = require("fs");
   const src = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-package.js"), "utf8");
-  const m = [...src.matchAll(/maxScanFiles:\s*(\d+)/g)];
-  ok(m.length === 1, "scope-package.js에서 maxScanFiles 정의 정확히 1곳 추출");
+  // 보관 1980e204 반영: const HL 선언 줄 안에서만 추출 — 주석·다른 객체의 동명 키 오매칭 차단
+  const hlLine = [...src.matchAll(/^const HL = \{.*\};/gm)];
+  ok(hlLine.length === 1, "const HL 선언 정확히 1곳");
+  const m = hlLine.length === 1 ? [...hlLine[0][0].matchAll(/maxScanFiles:\s*(\d+)/g)] : [];
+  ok(m.length === 1, "HL 선언 안에서 maxScanFiles 정확히 1곳 추출");
   ok(m.length === 1 && Number(m[0][1]) === IDF_N_MAX, `HL.maxScanFiles(${m.length ? m[0][1] : "?"}) === IDF_N_MAX(${IDF_N_MAX}) — 복사값 일치 잠금`);
 }
 

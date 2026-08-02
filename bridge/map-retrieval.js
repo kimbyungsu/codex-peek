@@ -74,11 +74,9 @@ function seedEligible(value) {
 }
 function extractSeeds(text) {
   // URL은 경로 씨앗이 아니다(1차 검증 반례: example.com/docs/api.js 오인) — 추출 전 통째로 치운다.
-  // 자리 길이는 보존해 at(출현 위치)이 원문과 어긋나지 않게 한다. 2차 반례 반영:
-  // ①구분자(쉼표·세미콜론 등)에서 멈춰 인접 씨앗을 지우지 않는다 ②스킴은 대소문자 무시
-  // ③상대 URL(//host/...)은 호스트에 점이 있을 때만(코드 주석 //fooBar를 지우지 않기 위한 한정).
-  // 4차 반례 확정: 괄호·대괄호는 URL의 일부(IPv6 [::1]·경로 (a)) — 정지 문자는 공백·따옴표·쉼표·
-  // 세미콜론·<>뿐이고, 'url(word)'처럼 공백 없이 붙은 토큰은 URL 꼬리다(인접 보존=쉼표·공백 케이스).
+  // 자리 길이는 보존해 at(출현 위치)이 원문과 어긋나지 않게 한다. 정지 문자는 공백·따옴표·쉼표·
+  // 세미콜론·<>뿐(괄호·대괄호는 URL의 일부 — IPv6 [::1]·경로 (a)). 'url(word)'처럼 공백 없이 붙은
+  // 토큰은 URL 꼬리다(인접 보존=쉼표·공백 케이스).
   // 7차 확정: URL 문법을 정규식으로 흉내 내지 않는다 — 어휘 스캔으로 후보만 뜨고 '유효성 판정은
   // Node URL 파서에 위임'한다(과소·과잉 마스킹의 근원 제거·순수/결정론 유지). 상대(//…) 후보는
   // 유효 URL이면서 호스트에 점(도메인)·콜론(IPv6)이 있을 때만 URL — 단일 라벨(//fooBar)은 코드
@@ -139,4 +137,80 @@ function extractSeeds(text) {
   return { seeds, dropped: Math.max(0, ordered.length - SEED_MAX) };
 }
 
-module.exports = { idf1000, comparePaths, normPathForTie, IDF_CORPUS_MIN, IDF_N_MAX, extractSeeds, SEED_MAX, SEED_SHAPES, JS_RESERVED };
+// ── 로컬 검색기(명세 §3 '상한'·'점수' — 구현 3조각) ─────────────────────────────────────────
+// 씨앗으로 저장소 파일을 찾는다. 읽기 전용·출력 0(씨앗 sink 금지)·결정론(fs 상태 고정 시).
+// 상한 5종은 기존 정찰 HL 값의 복사(테스트가 원문 대조로 잠금 — 시간 상한은 명세대로 미확정):
+// 파일 1,500·깊이 6·파일당 512KiB·총 읽기 16MiB·(씨앗 8은 추출기 몫). 상한 도달=truncated로 남긴다
+// (조용히 자르지 않는다 — 그 회차 지표는 소비처에서 unknown 처리).
+// 민감 경로·건너뛸 디렉터리·바이너리 확장자도 기존 규칙의 복사다(각각 원문 대조 잠금).
+// fs는 여기서만 쓴다 — 위 추출·채점 함수들은 순수 유지.
+const SEARCH_CAPS = { maxScanFiles: 1500, maxDepth: 6, maxFileBytes: 512 * 1024, scanBudgetBytes: 16 * 1024 * 1024 };
+const SEARCH_SKIP_DIRS = new Set([".git", "node_modules", "dist", "build", "vendor", "out", ".vscode", ".idea", "__pycache__", ".venv", "venv"]);
+const SEARCH_BIN_RE = /\.(png|jpe?g|gif|webp|ico|pdf|zip|gz|7z|rar|exe|dll|vsix|woff2?|ttf|otf|mp3|mp4|mov|iso|bin|class|pyc|jar|db|sqlite)$/i;
+// src/scope-package.ts SENSITIVE_PATH_RE의 복사 — 갈리면 잠금 테스트가 깨진다
+const SEARCH_SENSITIVE_RE = /(^|\/)\.(env[^/]*|netrc|npmrc|pgpass|htpasswd)$|(^|[/._-])(secrets?|credentials?|tokens?|api[_-]?keys?|passwords?|passwd)([/._-]|$)|\.(pem|key|p12|pfx|jks|keystore|der|p8|ppk)$|(^|\/)id_(rsa|dsa|ecdsa|ed25519)|(^|\/)(node_modules|dist|build|vendor)\//i;
+const SEED_WEIGHTS = { path: 3, backtick: 2, identifier: 2, quote: 1 }; // 명세 '점수' 절 고정값
+
+// capsOverride는 테스트 전용이다(작은 픽스처로 상한 동작을 재현하기 위한 축소만) — 배선(생산 호출)은
+// 전달 금지가 계약이고, 배선 조각의 테스트가 이를 반례로 잠근다.
+function searchSeeds(rootDir, seeds, capsOverride) {
+  const caps = { ...SEARCH_CAPS, ...(capsOverride || {}) };
+  const root = String(rootDir == null ? "" : rootDir);
+  const list = Array.isArray(seeds) ? seeds.filter((s) => s && typeof s.value === "string" && SEED_SHAPES.includes(s.shape)) : [];
+  const fs = require("fs");
+  const path = require("path");
+  // ① 목록화 — 기존 walkFiles와 같은 규칙(상한 도달=truncated·민감/바이너리/스킵 디렉터리 제외)
+  const files = [];
+  let truncated = false;
+  const walk = (dir, depth) => {
+    if (depth > caps.maxDepth) { truncated = true; return; }
+    if (files.length >= caps.maxScanFiles) { truncated = true; return; }
+    let items;
+    try { items = fs.readdirSync(dir, { withFileTypes: true }); } catch { truncated = true; return; } // 접근 실패=부분 목록(검증 [주의] — 완료 위장 금지)
+    for (const it of items) {
+      if (files.length >= caps.maxScanFiles) { truncated = true; return; }
+      const abs = path.join(dir, it.name);
+      const rel = path.relative(root, abs).replace(/\\/g, "/");
+      if (it.isDirectory()) { if (!SEARCH_SKIP_DIRS.has(it.name) && !it.name.startsWith(".")) walk(abs, depth + 1); continue; }
+      if (!it.isFile() || SEARCH_BIN_RE.test(it.name) || SEARCH_SENSITIVE_RE.test(rel)) continue;
+      try { const st = fs.statSync(abs); if (st.size <= caps.maxFileBytes) files.push({ rel, abs, size: st.size }); else truncated = true; } catch { truncated = true; } // 접근 실패 제외도 잘림이다(검증 [주의]) // 파일당 상한 초과 제외도 잘림이다(검증 반례: src/extension.ts 846KB) — 부분 검색을 완료로 위장하지 않는다
+    }
+  };
+  if (root) walk(root, 0);
+  // ② 매칭 — 경로 씨앗은 상대경로(그 자체·조각 경계 접미)로도, 모든 씨앗은 내용 부분 문자열로.
+  //    총 읽기 예산 소진=truncated(남은 파일은 내용 미대조·경로 대조는 유지 — 읽지 않은 것을 읽은
+  //    것처럼 세지 않는다).
+  let budget = caps.scanBudgetBytes;
+  const dfBySeed = new Map(list.map((s) => [s, 0]));
+  const hitsByFile = new Map(); // rel → Set<seed>
+  for (const f of files) {
+    let content = null;
+    if (budget >= f.size) {
+      try { content = fs.readFileSync(f.abs, "utf8"); budget -= f.size; } catch { content = null; truncated = true; } // 읽기 실패=내용 미대조(검증 [주의])
+    } else { truncated = true; }
+    for (const s of list) {
+      const pathHit = s.shape === "path" && (f.rel === s.value || f.rel.endsWith("/" + s.value));
+      const contentHit = content !== null && content.includes(s.value);
+      if (pathHit || contentHit) {
+        dfBySeed.set(s, dfBySeed.get(s) + 1);
+        if (!hitsByFile.has(f.rel)) hitsByFile.set(f.rel, new Set());
+        hitsByFile.get(f.rel).add(s);
+      }
+    }
+  }
+  // ③ 점수 — Σ(모양 가중치 × idf1000). N=목록화된 파일 수(상한 내). 동점=코드 포인트 경로 순.
+  const N = files.length;
+  const matches = [];
+  for (const [rel, hitSeeds] of hitsByFile) {
+    let score = 0;
+    for (const s of hitSeeds) {
+      const idf = idf1000(N, dfBySeed.get(s));
+      if (idf !== null) score += (SEED_WEIGHTS[s.shape] || 0) * idf;
+    }
+    if (score > 0) matches.push({ path: rel, score });
+  }
+  matches.sort((a, b) => b.score - a.score || comparePaths(a.path, b.path));
+  return { matches, corpus: N, truncated };
+}
+
+module.exports = { idf1000, comparePaths, normPathForTie, IDF_CORPUS_MIN, IDF_N_MAX, extractSeeds, SEED_MAX, SEED_SHAPES, JS_RESERVED, searchSeeds, SEARCH_CAPS, SEED_WEIGHTS, SEARCH_SKIP_DIRS, SEARCH_BIN_RE, SEARCH_SENSITIVE_RE };

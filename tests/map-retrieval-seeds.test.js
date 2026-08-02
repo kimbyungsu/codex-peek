@@ -50,7 +50,9 @@ console.log("[4] 상한·선별 — 8개=HL.maxSeeds, 구체성 내림차순+출
   ok(values(r)[0] === "src/last.ts", "출현이 늦어도 경로가 식별자보다 앞(구체성 내림차순)");
   ok(values(r).slice(1, 4).join(",") === "aXa1,bXb1,cXc1", "같은 모양 안에서는 출현 순");
   const src = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-package.js"), "utf8");
-  const m = [...src.matchAll(/maxSeeds:\s*(\d+)/g)];
+  const hlLine = [...src.matchAll(/^const HL = \{.*\};/gm)];
+  ok(hlLine.length === 1, "const HL 선언 정확히 1곳(잠금 정규식 범위 한정 — 보관 1980e204)");
+  const m = hlLine.length === 1 ? [...hlLine[0][0].matchAll(/maxSeeds:\s*(\d+)/g)] : [];
   ok(m.length === 1 && Number(m[0][1]) === SEED_MAX, `HL.maxSeeds(${m.length ? m[0][1] : "?"}) === SEED_MAX(${SEED_MAX}) — 복사값 잠금`);
 }
 
