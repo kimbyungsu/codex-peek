@@ -213,4 +213,56 @@ function searchSeeds(rootDir, seeds, capsOverride) {
   return { matches, corpus: N, truncated };
 }
 
-module.exports = { idf1000, comparePaths, normPathForTie, IDF_CORPUS_MIN, IDF_N_MAX, extractSeeds, SEED_MAX, SEED_SHAPES, JS_RESERVED, searchSeeds, SEARCH_CAPS, SEED_WEIGHTS, SEARCH_SKIP_DIRS, SEARCH_BIN_RE, SEARCH_SENSITIVE_RE };
+// ── 4축 후보 선별(설계 3단계 — 구현 4조각) ──────────────────────────────────────────────────
+// 순수 함수. 입력: nodes=[{id, paths[]}]·seedScores=Map(경로→정수 점수)·changedPaths=Set·
+// ledgerPaths=Set·edges=[{from,to}]·cap(기본 8). 축 순서는 설계 표 고정(①의도 ②변경 ③장부 ④인접).
+// 몫: 라운드로빈 — 축별 최소 몫을 자연 예약하고 빈·모자란 축의 몫은 남는 축이 가져간다(재배분).
+// 같은 노드가 여러 축에 걸리면 먼저 뽑은 축 소유(중복 없음). 전 축 공백=fallback:true —
+// 재배분으로 무관 후보를 채우지 않는다(무선별을 선별로 위장 금지 — 설계 재배분 계약).
+// 의도 축 순위=씨앗 점수 합 내림차순(동점=코드 포인트 경로 순)·변경/장부/인접=투영 순서 유지.
+function selectCandidates(input) {
+  const cap = Number.isInteger(input && input.cap) && input.cap > 0 ? input.cap : 8;
+  const nodes = Array.isArray(input && input.nodes) ? input.nodes.filter((n) => n && typeof n.id === "string" && Array.isArray(n.paths)) : [];
+  const seedScores = input && input.seedScores instanceof Map ? input.seedScores : new Map();
+  const changed = input && input.changedPaths instanceof Set ? input.changedPaths : new Set();
+  const ledger = input && input.ledgerPaths instanceof Set ? input.ledgerPaths : new Set();
+  const edges = Array.isArray(input && input.edges) ? input.edges : [];
+  const intent = [];
+  for (const n of nodes) {
+    let score = 0;
+    for (const p of n.paths) if (seedScores.has(p)) score += seedScores.get(p);
+    if (score > 0) intent.push({ n, score });
+  }
+  intent.sort((a, b) => b.score - a.score || comparePaths(a.n.paths[0] || "", b.n.paths[0] || ""));
+  const changedAxis = nodes.filter((n) => n.paths.some((p) => changed.has(p)));
+  const ledgerAxis = nodes.filter((n) => n.paths.some((p) => ledger.has(p)));
+  const baseIds = new Set([...intent.map((x) => x.n.id), ...changedAxis.map((n) => n.id), ...ledgerAxis.map((n) => n.id)]);
+  const adj = new Set();
+  for (const e of edges) {
+    if (!e) continue;
+    if (baseIds.has(e.from) && !baseIds.has(e.to)) adj.add(e.to);
+    if (baseIds.has(e.to) && !baseIds.has(e.from)) adj.add(e.from);
+  }
+  const neighborAxis = nodes.filter((n) => adj.has(n.id));
+  const axes = [
+    { axis: "intent", list: intent.map((x) => x.n) },
+    { axis: "changed", list: changedAxis },
+    { axis: "ledger", list: ledgerAxis },
+    { axis: "neighbor", list: neighborAxis },
+  ].filter((a) => a.list.length);
+  if (!axes.length) return { selected: [], fallback: true, candidateIds: [] };
+  const candidateIds = [...new Set(axes.flatMap((a) => a.list.map((n2) => n2.id)))]; // 어느 축이든 후보였던 노드 — cap 탈락(상한 생략)과 무축 제외(선별 제외) 고지 분리 재료
+  const chosen = new Map(); // id → axis(먼저 뽑은 축 소유)
+  const idx = axes.map(() => 0);
+  while (chosen.size < cap) {
+    let progressed = false;
+    for (let i = 0; i < axes.length && chosen.size < cap; i++) {
+      while (idx[i] < axes[i].list.length && chosen.has(axes[i].list[idx[i]].id)) idx[i]++;
+      if (idx[i] < axes[i].list.length) { chosen.set(axes[i].list[idx[i]].id, axes[i].axis); idx[i]++; progressed = true; }
+    }
+    if (!progressed) break;
+  }
+  return { selected: [...chosen.entries()].map(([id, axis]) => ({ id, axis })), fallback: false, candidateIds };
+}
+
+module.exports = { idf1000, comparePaths, normPathForTie, IDF_CORPUS_MIN, IDF_N_MAX, extractSeeds, SEED_MAX, SEED_SHAPES, JS_RESERVED, searchSeeds, SEARCH_CAPS, SEED_WEIGHTS, SEARCH_SKIP_DIRS, SEARCH_BIN_RE, SEARCH_SENSITIVE_RE, selectCandidates };

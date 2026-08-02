@@ -89,7 +89,7 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap) {
   }
   // Phase 3 동봉은 별도 try — 새 기능(지도 동봉) 실패가 기존 계약 주입(inj)까지 지우지 않게(모든 ask의 급소 분리).
   try {
-    const att = c ? mapAttachSurface(ws || configWs(), c, lang) : null;
+    const att = c ? mapAttachSurface(ws || configWs(), c, lang, prompt) : null; // 검색 4조각: 요청문을 지도 선별까지 전달(설계 3단계)
     if (att && typeof att === "object") {
       scout = att.text || "";
       if (carrier && typeof carrier === "object") { carrier.mapItems = att.mapItems || []; carrier.couplings = att.couplings || []; }
@@ -166,8 +166,8 @@ function envelopeSliceFor(wsIn, lang, profile, cSnapshot) {
 // ── P3b B-5: scout-attach 표면 재배선 — buildMapAttach 경유(비v2=기존 동봉 위임·바이트 동일) ─────────
 // lazy require: map-reader가 없는/깨진 배포 사본이면 공통 원칙 (a) 읽기 폴백 — 대상 repo의 전환 표식(marker)
 // '또는' 전환 이력(authority-history)이 존재하면 legacy 데이터 공급 금지(고지 attach), 둘 다 부재=기존 동봉.
-function mapAttachSurface(ws, c, lang) {
-  try { return require(path.join(__dirname, "map-reader.js")).buildMapAttach(ws, c, lang); }
+function mapAttachSurface(ws, c, lang, reqText) {
+  try { return require(path.join(__dirname, "map-reader.js")).buildMapAttach(ws, c, lang, reqText); }
   catch { /* 낡은/손상 사본 — 아래 원시 검사 폴백 */ }
   // 3상태 원시 검사(구현검증 2차 #3): present/unreadable=legacy 공급 금지·absent만 기존 동봉.
   let trace = "unreadable"; // 검사 자체가 죽으면 보수(공급 금지)

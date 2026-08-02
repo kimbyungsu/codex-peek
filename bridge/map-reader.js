@@ -232,14 +232,14 @@ function cutoverTraceStateOf(repo, deps) {
   if (a === "unreadable" || b === "unreadable") return "unreadable";
   return "absent";
 }
-function buildMapAttach(ws, c, lang) {
+function buildMapAttach(ws, c, lang, reqText) {
   if (!ws || CL.normScoutMode(c) !== "on") return null; // 2트랙 게이트 최선행(출력 0·reader 미호출)
   const target = CL.resolveScoutRepo(ws, c).repo;
   let proj = null;
   try { proj = module.exports.readMapProjection(target); } catch { proj = null; } // exports 경유 — 테스트가 호출 수를 실측(2트랙 미호출 증명)
   // P3b 공통 (b) 개정(설계검증 2차 #2): legacy/none '판정 확인'시에만 기존 동봉 위임(바이트 동일).
   // blocked·error(lock/flap)·예외=marker 세대 판정 불가/차단 — legacy 데이터 공급 금지·고지 attach(무차단).
-  if (proj && proj.ok === true && proj.source === "v2") return renderV2Slice(ws, c, lang, proj);
+  if (proj && proj.ok === true && proj.source === "v2") return renderV2Slice(ws, c, lang, proj, reqText);
   if (proj && proj.ok === true && (proj.source === "legacy" || proj.source === "none")) return CL.buildScoutAttach(ws, c, lang);
   const en = lang === "en" || (lang !== "ko" && CL.loadLang() === "en");
   const why = attachReasonText(proj && proj.reasonKey, proj && proj.reason, en);
@@ -253,7 +253,7 @@ function buildMapAttach(ws, c, lang) {
   };
 }
 // v2 slice — envelope {text, mapItems, couplings} 승계(healthLine 별도 필드 금지 — text 포함)
-function renderV2Slice(ws, c, lang, proj) {
+function renderV2Slice(ws, c, lang, proj, reqText) {
   const target = CL.resolveScoutRepo(ws, c).repo;
   const fresh = new Map(deriveFreshness(target, proj).map((f) => [f.id, f]));
   const changed = new Set(CL.changedFilesFor(target));
@@ -268,18 +268,60 @@ function renderV2Slice(ws, c, lang, proj) {
   // 그 항목이 결속 자료에서 통째로 사라진다(검증 [주의]). 설명(note)은 자연어라 잘라도 되지만
   // 경로는 식별자다 → 상한을 넘는 경로는 '항목 제외'로 처리하고 생략 수에 더한다.
   const clip = (s, n) => { const v = String(s || ""); return v.length > n ? v.slice(0, n) + "…" : v; };
-  const items = [];
   let overflow = 0; // 상한에 걸려 빠진 node 수 — 조용히 버리지 않고 아래에서 고지한다
+  const eligible = []; // 적격 후보(경로 상한 통과) — 선별은 아래 두 갈래 중 하나
   for (const nd of proj.nodes) {
-    const paths = (nd.anchors || []).map((a) => a && a.path).filter(Boolean).filter((p) => p.length <= PATH_MAX);
-    const dropped = (nd.anchors || []).map((a) => a && a.path).filter(Boolean).length - paths.length;
-    if (!paths.length) { if (dropped) overflow++; continue; } // 쓸 수 있는 경로가 없으면 그 node는 제외
-    const hit = paths.find((p) => changed.has(p));
-    if (!hit && items.length >= 8) { overflow++; continue; } // 변경 연결 우선·상한 8
-    items.push({ path: hit || paths[0], note: clip((nd.label || "") + " · " + label(nd.id), NOTE_MAX), _hit: !!hit });
+    const all = (nd.anchors || []).map((a) => a && a.path).filter(Boolean);
+    const paths = all.filter((p) => p.length <= PATH_MAX);
+    if (!paths.length) { if (all.length) overflow++; continue; } // 쓸 수 있는 경로가 없으면 그 node는 제외
+    eligible.push({ id: nd.id, paths, labelText: nd.label || "" });
   }
-  items.sort((a, b) => (a._hit === b._hit ? 0 : a._hit ? -1 : 1));
-  if (items.length > 8) overflow += items.length - 8;
+  // ── 요청 기준 선별(검색 4조각) — reqText가 있을 때만 발동. 없으면 기존 동작 그대로(무회귀·바이트 동일).
+  // 입력 전제·전 축 공백 처리·fallback 고지는 설계 3단계 계약을 따른다. capsOverride는 여기서 절대
+  // 전달하지 않는다(테스트 전용 — 생산 경로 상한 우회 금지·잠금 테스트 있음).
+  let retrieval = null;
+  if (typeof reqText === "string" && reqText.trim()) {
+    try {
+      const MR = require(path.join(__dirname, "map-retrieval.js"));
+      const seeds = MR.extractSeeds(reqText).seeds;
+      const search = seeds.length ? MR.searchSeeds(target, seeds) : { matches: [], corpus: 0, truncated: false };
+      const seedScores = new Map(search.matches.map((m) => [m.path, m.score]));
+      // 장부 축 v1: 결합 후보 문안의 '경로 모양' 토큰만(자유 문장 — 검증된 추출기 재사용. 확장 여지 정직 표기)
+      const ledgerPaths = new Set();
+      try {
+        for (const cp of (typeof CL.ledgerCouplingCandidates === "function" ? CL.ledgerCouplingCandidates(target, 3) : [])) {
+          for (const s of MR.extractSeeds(String((cp && cp.text) || "")).seeds) if (s.shape === "path") ledgerPaths.add(s.value);
+        }
+      } catch { /* 장부 축 실패=빈 축(다른 축은 산다) */ }
+      const sel = MR.selectCandidates({ nodes: eligible.map((e) => ({ id: e.id, paths: e.paths })), seedScores, changedPaths: changed, ledgerPaths, edges: proj.edges, cap: 8 });
+      retrieval = { sel, seedScores, truncated: !!search.truncated };
+    } catch { retrieval = null; } // 선별 실패=기존 동작(지도 동봉 자체를 잃지 않는다)
+  }
+  const items = [];
+  if (retrieval && !retrieval.sel.fallback) {
+    const byId = new Map(eligible.map((e) => [e.id, e]));
+    for (const pick of retrieval.sel.selected) {
+      const e = byId.get(pick.id);
+      if (!e) continue;
+      // 표시 경로: 씨앗 최고점 경로 > 변경 경로 > 첫 경로 — 골라진 이유가 경로에 드러나게
+      const seedBest = e.paths.filter((p) => retrieval.seedScores.has(p)).sort((a, b) => retrieval.seedScores.get(b) - retrieval.seedScores.get(a))[0];
+      const hit = e.paths.find((p) => changed.has(p));
+      items.push({ path: seedBest || hit || e.paths[0], note: clip(e.labelText + " · " + label(e.id), NOTE_MAX), _hit: !!hit, _id: e.id });
+    }
+    // 고지 분리(검증 [보완] 계보 — cap 탈락과 무축 제외는 다른 사실이다):
+    // 축 후보였는데 상한(8)에 밀린 노드=상한 생략(overflow), 어느 축에도 안 걸린 노드=선별 제외.
+    const candSet = new Set(retrieval.sel.candidateIds || []);
+    overflow += Math.max(0, candSet.size - items.length);
+    retrieval.excluded = Math.max(0, eligible.length - candSet.size);
+  } else {
+    for (const e of eligible) {
+      const hit = e.paths.find((p) => changed.has(p));
+      if (!hit && items.length >= 8) { overflow++; continue; } // 변경 연결 우선·상한 8
+      items.push({ path: hit || e.paths[0], note: clip(e.labelText + " · " + label(e.id), NOTE_MAX), _hit: !!hit });
+    }
+    items.sort((a, b) => (a._hit === b._hit ? 0 : a._hit ? -1 : 1));
+    if (items.length > 8) overflow += items.length - 8;
+  }
   const top = items.slice(0, 8).map(({ path: p, note }) => ({ path: p, note }));
   // slice가 비면 기존 동봉으로(무손실). 단 '상한 때문에' 비었다면 그 사실을 잃지 않는다 —
   // 조용히 되돌아가면 사용자·검증자 모두 지도가 통째로 빠진 줄 모른다(조용한 생략 금지).
@@ -304,16 +346,35 @@ function renderV2Slice(ws, c, lang, proj) {
   const couplings = coupling.couplings;
   // edge 동봉(1차 blocker⑥ — 설계: '연결된 node/edge'): 동봉 node의 인접 edge를 effective만·신선도
   // 라벨과 함께 text에 실음(mapItems 계약 {path,note}는 파일 단위라 edge는 text 라인으로 — envelope 불변).
-  const shownIds = new Set(proj.nodes.filter((nd) => (nd.anchors || []).some((a) => a && top.some((t) => t.path === a.path))).map((nd) => nd.id));
+  // 선별 발동 시 edge 결속은 "선별된 노드 id"에만 건다 — 경로 역매칭은 같은 anchor를 공유하는 미선별
+  // 노드의 edge까지 끌어온다(검증 blocker 실행 반례: 상한 밖 노드의 edge 누출). 비선별 분기는 기존
+  // 경로 계산 그대로(무회귀 축).
+  const shownIds = retrieval && !retrieval.sel.fallback
+    ? new Set(items.slice(0, 8).map((i) => i._id))
+    : new Set(proj.nodes.filter((nd) => (nd.anchors || []).some((a) => a && top.some((t) => t.path === a.path))).map((nd) => nd.id));
   const labelOf = new Map(proj.nodes.map((nd) => [nd.id, clip(nd.label || nd.id.slice(0, 8), NOTE_MAX)]));
   const edgeAll = proj.edges.filter((e) => shownIds.has(e.from) || shownIds.has(e.to));
   const edgeOver = Math.max(0, edgeAll.length - 6); // 상한에 걸려 빠진 edge 수 — 아래에서 고지
   const edgeLines = edgeAll
     .slice(0, 6)
     .map((e) => "- [edge] " + (labelOf.get(e.from) || e.from.slice(0, 8)) + " -> " + (labelOf.get(e.to) || e.to.slice(0, 8)) + (e.relation ? " (" + clip(e.relation, 40) + ")" : "") + " · " + label(e.id));
-  const head = en
-    ? "[Project MAP slice · advisory — not a verdict rule] Confirmed-structure nodes/edges connected to this change (freshness per item):"
-    : "[Project MAP 조각 · 참고 — 판정 기준 아님] 이번 변경과 연결된 확정 구조 node/edge(항목별 신선도):";
+  const head = retrieval && !retrieval.sel.fallback
+    ? (en
+      ? "[Project MAP slice · advisory — not a verdict rule] Confirmed-structure nodes/edges selected for THIS REQUEST and change (freshness per item):"
+      : "[Project MAP 조각 · 참고 — 판정 기준 아님] 이번 요청·변경과 연결되어 선별된 확정 구조 node/edge(항목별 신선도):")
+    : (en
+      ? "[Project MAP slice · advisory — not a verdict rule] Confirmed-structure nodes/edges connected to this change (freshness per item):"
+      : "[Project MAP 조각 · 참고 — 판정 기준 아님] 이번 변경과 연결된 확정 구조 node/edge(항목별 신선도):");
+  const retrievalNotes = [];
+  if (retrieval && retrieval.sel.fallback) retrievalNotes.push(en
+    ? "(request-based selection not applied — no candidate matched any axis; the list above is the default order)"
+    : "(요청 기준 선별 미적용 — 어느 축에도 후보가 없어 위 목록은 기본 순서다)");
+  if (retrieval && !retrieval.sel.fallback && retrieval.excluded > 0) retrievalNotes.push(en
+    ? `(excluded by selection: ${retrieval.excluded} node(s) matched no axis — request/changed/ledger/neighbor)`
+    : `(선별 제외: node ${retrieval.excluded}개 — 요청·변경·장부·인접 어느 축에도 안 걸림)`);
+  if (retrieval && retrieval.truncated) retrievalNotes.push(en
+    ? "(seed search truncated by caps — selection is best-effort; this round's exposure metrics are unknown)"
+    : "(씨앗 검색이 상한에 걸려 잘렸다 — 선별은 최선 노력이며 이 회차 노출 지표는 unknown)");
   const health = CL.scoutHealthLine(target, en);
   // 생략 고지(검증 [주의] 반영): 상한에 걸려 빠진 것이 있으면 '전부 실었다'로 보이지 않게 개수를 밝힌다.
   // 검증자가 목록을 한계로 오해하지 않도록 tail의 '시작점일 뿐' 문구와 같은 취지다.
@@ -322,7 +383,7 @@ function renderV2Slice(ws, c, lang, proj) {
         ? `(omitted by caps: ${overflow} node(s), ${edgeOver} edge(s) — this slice is not the whole map)`
         : `(상한으로 생략: node ${overflow}개 · edge ${edgeOver}개 — 이 조각은 지도 전체가 아니다)`]
     : [];
-  const text = [head, ...top.map((i) => `- ${i.path}${i.note ? ` — ${i.note}` : ""}`), ...edgeLines, ...omitted, ...(coupling.text ? [coupling.text] : []), ...(health ? [health] : [])].join("\n");
+  const text = [head, ...top.map((i) => `- ${i.path}${i.note ? ` — ${i.note}` : ""}`), ...edgeLines, ...omitted, ...retrievalNotes, ...(coupling.text ? [coupling.text] : []), ...(health ? [health] : [])].join("\n");
   return { text, mapItems: top, couplings };
 }
 
