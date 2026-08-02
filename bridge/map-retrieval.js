@@ -49,4 +49,94 @@ function comparePaths(a, b) {
   return A.length === B.length ? 0 : A.length < B.length ? -1 : 1;
 }
 
-module.exports = { idf1000, comparePaths, normPathForTie, IDF_CORPUS_MIN, IDF_N_MAX };
+// ── 씨앗 추출(명세 §3 '추출 대상' — 구현 2조각) ────────────────────────────────────────────
+// '의미'가 아니라 '글자'다(설계 문서 정직 표기): 요청문에서 네 모양만 뽑는다 — 경로·백틱 토큰·
+// 식별자(낙타등/밑줄)·따옴표 인용문. 일반어 억제는 여기서 하지 않는다(그건 검색 단계의 흔함
+// 감점=idf1000 몫). 여기서 버리는 것은 둘뿐: 문자 다양성 3종 미만(aaa·=== 류)·JS/TS 예약어와
+// 기본 리터럴(언어 명세 고정 집합 — 프로젝트마다 늘어나지 않는다).
+// 상한 초과 선별=모양 구체성 내림차순(경로>백틱>식별자>인용)·같은 모양=출현 순·넘침은 개수로
+// 보고(침묵 절단 금지). 순수 함수 — 파일·프로세스 상태·출력 없음(씨앗 sink 금지의 전제).
+const SEED_MAX = 8; // HL.maxSeeds 복사 — 테스트가 scope-package.js 원문 대조로 잠근다
+const SEED_SHAPES = ["path", "backtick", "identifier", "quote"]; // 구체성 내림차순
+// ECMAScript 예약어(엄격 모드 포함)+기본 리터럴. 대소문자 그대로 비교(JS가 그렇다 — True는 예약어 아님).
+const JS_RESERVED = new Set([
+  "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do",
+  "else", "enum", "export", "extends", "false", "finally", "for", "function", "if", "import",
+  "in", "instanceof", "new", "null", "return", "super", "switch", "this", "throw", "true",
+  "try", "typeof", "var", "void", "while", "with", "yield", "let", "static", "await",
+  "implements", "interface", "package", "private", "protected", "public",
+  "undefined", "NaN", "Infinity",
+]);
+function seedEligible(value) {
+  if (typeof value !== "string") return false;
+  if (JS_RESERVED.has(value)) return false;
+  return new Set(value).size >= 3; // 문자 다양성 — 근거 없는 값임을 명세가 정직 표기(실측 후 조정)
+}
+function extractSeeds(text) {
+  // URL은 경로 씨앗이 아니다(1차 검증 반례: example.com/docs/api.js 오인) — 추출 전 통째로 치운다.
+  // 자리 길이는 보존해 at(출현 위치)이 원문과 어긋나지 않게 한다. 2차 반례 반영:
+  // ①구분자(쉼표·세미콜론 등)에서 멈춰 인접 씨앗을 지우지 않는다 ②스킴은 대소문자 무시
+  // ③상대 URL(//host/...)은 호스트에 점이 있을 때만(코드 주석 //fooBar를 지우지 않기 위한 한정).
+  // 4차 반례 확정: 괄호·대괄호는 URL의 일부(IPv6 [::1]·경로 (a)) — 정지 문자는 공백·따옴표·쉼표·
+  // 세미콜론·<>뿐이고, 'url(word)'처럼 공백 없이 붙은 토큰은 URL 꼬리다(인접 보존=쉼표·공백 케이스).
+  // 7차 확정: URL 문법을 정규식으로 흉내 내지 않는다 — 어휘 스캔으로 후보만 뜨고 '유효성 판정은
+  // Node URL 파서에 위임'한다(과소·과잉 마스킹의 근원 제거·순수/결정론 유지). 상대(//…) 후보는
+  // 유효 URL이면서 호스트에 점(도메인)·콜론(IPv6)이 있을 때만 URL — 단일 라벨(//fooBar)은 코드
+  // 주석으로 보존한다(모든 단일 토큰이 기술상 유효 호스트라 파서만으로는 주석과 못 가른다).
+  const blank = (u) => " ".repeat(u.length);
+  const tryUrl = (s) => { try { return new URL(s); } catch { return null; } };
+  const src = String(text == null ? "" : text)
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'`<>,;]+/gi, (u) => (tryUrl(u) ? blank(u) : u))
+    .replace(/(?<![\w:])\/\/[^\s"'`<>,;]+/g, (u) => {
+      const p = tryUrl("http:" + u);
+      return p && (p.hostname.includes(".") || p.hostname.includes(":")) ? blank(u) : u;
+    });
+  const found = []; // { value, shape, at } — at=원문 출현 위치(같은 모양 안 출현 순 정렬 재료)
+  const push = (value, shape, at) => { if (seedEligible(value)) found.push({ value, shape, at }); };
+  // ① 경로 — 확장자를 가진 상대경로(구분자 혼용·다점 파일명 global.d.ts·유니코드 이름 src/설정.ts·
+  //    숨김 파일 .env.local 허용·저장은 슬래시 통일). 확장자는 1~8자 영숫자이되 글자 1개 이상
+  //    (.c·.7z 허용, 버전 문자열 1.2.3의 순숫자 꼬리 배제). 경계는 \b 대신 lookaround(유니코드·선행점).
+  //    3차 반례 반영: 좌측 경계 — 앞이 구분자·콜론이면 절대경로(/src/…)·드라이브(C:\…)·URL 꼬리라
+  //    상대경로가 아니다(명세 :283 '상대경로' 계약). 문자 집합에 결합문자 \p{M} 허용(NFD 경로).
+  //    좌측 경계는 경로 구성 문자 전체 제외(한 글자 밀린 재진입 차단) — 단 콜론은 제외하지 않는다
+  //    (4차 반례: '경로:src/a.ts' 라벨 뒤 상대경로는 정상. 절대(/)·드라이브(C:\)는 구분자 차단으로
+  //    충분하고 file: 등 스킴 URL은 위에서 선제 마스킹됨). 우측 경계는 ASCII 단어문자·_-·구분자를
+  //    막아 접두 절단(src/a.ts_extra→src/a.ts)을 차단하되, 한글 조사 직결(src/a.ts를)은 허용한다.
+  //    5차 반례: 드라이브 상대경로(C:src\a.ts — 한 글자+콜론)는 차단하되 라벨 콜론(label:)은 허용 —
+  //    '콜론 앞이 단독 한 글자인가'를 중첩 lookbehind로 판정.
+  for (const m of src.matchAll(/(?<!(?<![\p{L}\p{N}])[A-Za-z]:)(?<![\p{L}\p{M}\p{N}_.\\/-])(?:[\p{L}\p{M}\p{N}_.-]+[\\/])+[\p{L}\p{M}\p{N}_.-]*\.[A-Za-z0-9]{1,8}(?![A-Za-z0-9_\p{M}\\/-])|(?<!(?<![\p{L}\p{N}])[A-Za-z]:)(?<![\p{L}\p{M}\p{N}_.\\/-])\.?[\p{L}\p{M}\p{N}_-]+(?:\.[\p{L}\p{M}\p{N}_-]+)*\.[A-Za-z0-9]{1,8}(?![A-Za-z0-9_\p{M}\\/-])/gu)) {
+    const ext = m[0].slice(m[0].lastIndexOf(".") + 1);
+    if (/[A-Za-z]/.test(ext)) push(m[0].replace(/\\+/g, "/"), "path", m.index);
+  }
+  // ② 백틱 토큰 — 공백 없는 2~80자
+  for (const m of src.matchAll(/`([^\s`]{2,80})`/g)) push(m[1].replace(/\\+/g, "/"), "backtick", m.index);
+  // ③ 식별자 — 낙타등 또는 밑줄 연결, 3자 이상. 유니코드 토큰을 훑고 코드로 판정한다(1차 검증
+  //    반례: parseURL처럼 전이로 끝나는 낙타등·사용자_설정처럼 비ASCII 밑줄을 정규식 한 방이 놓침).
+  //    2차 반례 반영: 첫 글자 숫자 금지(123_value·1parseURL은 식별자가 아니다) — lookbehind로 토큰
+  //    중간 진입도 차단.
+  for (const m of src.matchAll(/(?<![\p{L}\p{M}\p{N}_$])[\p{L}_$][\p{L}\p{M}\p{N}_$]{2,}/gu)) {
+    const t = m[0];
+    const camel = /[a-z0-9][A-Z]/.test(t) || /[A-Z][a-z]/.test(t.slice(1)); // 내부 전이(첫 글자 대문자만인 일반어 제외)
+    const snake = /[^\s_]_[^\s_]/.test(t); // 밑줄이 양쪽 글자를 잇는 경우(순수 밑줄·가장자리 제외)
+    if (camel || snake) push(t, "identifier", m.index);
+  }
+  // ④ 따옴표 인용문 — 3~80자(줄바꿈 제외·곧은/굽은 큰·작은따옴표 4쌍)
+  for (const m of src.matchAll(/"([^"\n]{3,80})"|'([^'\n]{3,80})'|“([^”\n]{3,80})”|‘([^’\n]{3,80})’/g)) {
+    push((m[1] || m[2] || m[3] || m[4]).trim(), "quote", m.index);
+  }
+  // 중복 제거 — 키는 슬래시 정규화 값(1차 검증 반례: "bridge\map-reader.js" 인용문이 정규화된 경로와
+  // 별건으로 계상). 같은 키는 구체성 높은 모양 하나로(모양 순위, 같으면 먼저 나온 것).
+  const rank = new Map(SEED_SHAPES.map((s, i) => [s, i]));
+  const byValue = new Map();
+  for (const s of found) {
+    const key = s.value.replace(/\\+/g, "/");
+    const prev = byValue.get(key);
+    if (!prev || rank.get(s.shape) < rank.get(prev.shape) || (s.shape === prev.shape && s.at < prev.at)) byValue.set(key, s);
+  }
+  // 선별 — 모양 구체성 내림차순 · 같은 모양=출현 순 · 상한 8 · 넘침은 개수 보고
+  const ordered = [...byValue.values()].sort((a, b) => rank.get(a.shape) - rank.get(b.shape) || a.at - b.at);
+  const seeds = ordered.slice(0, SEED_MAX).map(({ value, shape }) => ({ value, shape }));
+  return { seeds, dropped: Math.max(0, ordered.length - SEED_MAX) };
+}
+
+module.exports = { idf1000, comparePaths, normPathForTie, IDF_CORPUS_MIN, IDF_N_MAX, extractSeeds, SEED_MAX, SEED_SHAPES, JS_RESERVED };
