@@ -2028,11 +2028,17 @@ function resolveScoutRepo(ws, c) {
       // 반대 언어 슬롯 폴백(P1-④, 2026-07-10 감사): scoutRepo는 언어 '내용'(규칙·지침)이 아니라 '사실'(개발 레포
       // 위치)이라, ko에만 설정한 뒤 en으로 전환하면 정찰 축 전체가 세션 폴더로 조용히 회귀하던 결함. 현재 슬롯
       // 명시값이 항상 우선이고, 현재 슬롯이 비었을 때만 반대 슬롯 값을 빌린다(언어 슬롯 분리 원칙과 양립).
-      try {
-        const other = loadLang() === "en" ? "ko" : "en";
-        const oo = JSON.parse(fs.readFileSync(contractFileFor(ws, other), "utf8"));
-        if (oo && typeof oo.scoutRepo === "string" && oo.scoutRepo.trim()) { raw = oo.scoutRepo.trim(); source = "contract-other-lang"; }
-      } catch { /* 반대 슬롯 없음 */ }
+      // 동결 언어 실행(내구 job)에서는 '전달된 계약'이 전역 언어 슬롯이 아닐 수 있다 — 전역 기준 반대
+      // 슬롯 하나만 보면 값 있는 슬롯을 놓치고 세션 폴더로 회귀한다(3축 정합 점검 실행 반례 2026-08-03:
+      // 동결 en·전역 ko·ko 슬롯만 설정 → {repo:세션폴더}). scoutRepo는 언어 무관 '사실'이므로 양 슬롯을
+      // 순서대로 본다(전역 기준 반대 슬롯 우선 = 기존 동작 보존·둘 다 있으면 그 우선순위대로 결정론).
+      const first = loadLang() === "en" ? "ko" : "en";
+      for (const other of [first, first === "ko" ? "en" : "ko"]) {
+        try {
+          const oo = JSON.parse(fs.readFileSync(contractFileFor(ws, other), "utf8"));
+          if (oo && typeof oo.scoutRepo === "string" && oo.scoutRepo.trim()) { raw = oo.scoutRepo.trim(); source = "contract-other-lang"; break; }
+        } catch { /* 슬롯 없음 */ }
+      }
     }
     if (!raw) return { repo: ws, source: "ws" };
     if (!path.isAbsolute(raw)) return { repo: ws, source: "ws-fallback-invalid" }; // 상대경로 금지 — 훅·확장·CLI의 cwd가 제각각이라 기준이 흔들림(절대경로만 허용)
@@ -2703,7 +2709,7 @@ function ledgerPathsFromText(text) {
   return out;
 }
 
-// 검증 요청(ask)에 동봉할 지도 블록. 3트랙 프로젝트 + 지도 존재 + high 항목 있을 때만(그 외 null — 주입 비용 0·무회귀).
+// 검증 요청(ask)에 동봉할 지도 블록. 3트랙 프로젝트 전제 — 지도 블록은 지도 존재+high 항목 시, 결합 확인 문안은 일지 후보가 있으면 지도 없어도 독립 동봉(전부 없으면 null — 주입 비용 0·무회귀).
 // 낡은 지도는 버리지 않고 '낡음' 라벨로 정직 고지(시간 상수 0 — scoutMapStatus의 seed mtime 판정 재사용).
 // 동봉 항목 재랭킹(§6-7-1 — 2026-07-09 사용자 관찰 "참고 블록이 늘 비슷하다" 개선): 순수 함수(테스트 가능).
 // (a) 지금 바뀐 파일과 겹치는 항목 우선(경로 꼬리 일치 또는 8자 이상 basename 일치 — 지도 채점기와 동일 보수 규칙)

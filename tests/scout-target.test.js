@@ -23,6 +23,23 @@ fs.mkdirSync(repo, { recursive: true });
 const g = (args, cwd) => spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "-C", cwd, ...args], { encoding: "utf8", windowsHide: true });
 g(["init", "-q"], repo); g(["commit", "-q", "--allow-empty", "-m", "seed"], repo);
 
+console.log("[0] resolveScoutRepo 양 슬롯 폴백 — 동결 언어≠전역 언어에서도 대상 유지(3축 정합 반례 2026-08-03)");
+{
+  // 반례 재현: scoutRepo가 ko 슬롯에만 저장, 전달 계약(동결 en 슬롯)은 빈 값, 전역 언어=ko.
+  // 종전엔 '전역 기준 반대 슬롯(en)'만 봐서 ko 슬롯 값을 놓치고 세션 폴더로 회귀했다.
+  const wsL = fs.mkdtempSync(path.join(os.tmpdir(), "stlang_"));
+  const repoL = path.join(wsL, "devrepo");
+  fs.mkdirSync(repoL, { recursive: true });
+  fs.writeFileSync(CL.contractFileFor(wsL, "ko"), JSON.stringify({ scoutRepo: repoL }), "utf8");
+  CL.saveLang("ko");
+  const rKo = CL.resolveScoutRepo(wsL, {}); // 빈 계약(동결 en 슬롯이 비어 있던 상황)
+  ok(rKo.repo === repoL && rKo.source === "contract-other-lang", "전역 ko·값은 ko 슬롯 — 빈 계약 전달에도 대상 유지");
+  CL.saveLang("en");
+  const rEn = CL.resolveScoutRepo(wsL, {});
+  ok(rEn.repo === repoL && rEn.source === "contract-other-lang", "전역 en으로 전환해도 같은 대상(양 슬롯 순회)");
+  CL.saveLang("ko"); // 원복
+}
+
 console.log("[1] resolveScoutRepo — 지정 없음=ws / 유효 지정=대상 / 무효 지정=ws 폴백(정직 표시)");
 ok(CL.resolveScoutRepo(ws, {}).repo === ws && CL.resolveScoutRepo(ws, {}).source === "ws", "지정 없음 → ws");
 const r1 = CL.resolveScoutRepo(ws, { scoutRepo: repo });
