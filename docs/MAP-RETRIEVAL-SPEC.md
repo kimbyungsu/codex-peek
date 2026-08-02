@@ -328,7 +328,7 @@ subjectRef = { eventId } | { legacySubjectHash }
 ⚠ **시간 상한 3초는 철회한다.** 근거로 든 `changedEntriesFor`
 ([contract-lib.js:2733](../bridge/contract-lib.js))는 **`git status` 한 번**이라,
 파일 1,500개를 열고 읽고 검색하는 일과 부하가 다르다. **저장소 규모별 실측 뒤에 정한다.**
-그 전까지는 시간 상한 없이 나머지 네 상한으로만 묶고, 실측에서 지연이 확인되면 값을 넣는다.
+그 전까지는 시간 상한 없이 나머지 다섯 상한으로만 묶고, 실측에서 지연이 확인되면 값을 넣는다.
 
 민감 경로는 `isSensitivePath`와 같은 규칙으로 제외한다. 상한에 걸리면 **잘렸다고 남기고**
 그 회차 지표는 `unknown`.
@@ -529,7 +529,7 @@ retrieval이 거기에 씨앗 필드를 새로 추가하지 않는다는 것이 
 | **우선순위** | `status` | `banned` > `superseded` > `tombstone` > `disputed` > `verified` — 순서가 아니라 **어느 조건이 성립했나**([:230](../src/ledger-events.ts)) |
 | **루트 우선 + 대체는 전역 최초** | 대표 `text` | 루트 자체 첫 문구가 이김 — **루트에 문구가 없으면 전역 순서에서 처음 만난 별칭 문구가 대체**([:206~209](../src/ledger-events.ts)). 보존: 각 sig의 **최초 유효 문구와 그 seq**. 병합 = 루트 자체 문구 우선, 없으면 **별칭 첫 문구 중 최소 seq**. `autoEligible`은 그렇게 선택된 text에서 **재계산**([:220](../src/ledger-events.ts)) |
 | **처음이 이김** | `from` · `firstTs` | **최초 seq** |
-| **승격 가능만** | 증거 집합 | `promotableConfirm`·`promotableDispute`를 통과한 것만([:120·129](../src/ledger-events.ts)) |
+| **승격 가능만** | 증거 집합 | `promotableConfirm`·`promotableDispute`를 통과한 것만([:120·130](../src/ledger-events.ts)) |
 
 실측 반례 — `p` 문구가 나중이어도 `s→p` 합병에서 **대표 문구는 `p`**였다.
 `p`에 `superseded`, `s`에 나중 `tombstone`을 두고 합치면 마지막 기준으론 `tombstone`이지만
