@@ -164,7 +164,7 @@ console.log("[7] 쓰기 표면 폴백=fail-closed·재배선 정적 단언");
   ok(/MAP 런타임 판독 불가 — 확정층 기록을 거부한다/.test(rec), "reconcile 폴백=기록 거부(검사-후-쓰기 부재 — 공통 (a))");
   ok(/withMapLock\(repo,/.test(rec) && /a2\.st !== "legacy"/.test(rec) && /actionRef: "approve"/.test(rec), "reconcile — legacy 잠금 안 재판정+v2 promoteEntry 분기");
   const cb = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
-  ok(/mapAttachSurface\(ws \|\| configWs\(\), c, lang\)/.test(cb) && /authority-history/.test(cb), "동봉 표면=buildMapAttach 경유+원시 검사 폴백(B-5)");
+  ok(/mapAttachSurface\(ws \|\| configWs\(\), c, lang, prompt\)/.test(cb) && /authority-history/.test(cb), "동봉 표면=buildMapAttach 경유(요청문 전달 — 검색 4조각)+원시 검사 폴백(B-5)");
 }
 
 console.log("[8] 구현검증 1차 반영 — 경합·키·번역 봉합");
