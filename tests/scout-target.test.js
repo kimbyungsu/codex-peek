@@ -30,6 +30,7 @@ console.log("[0] resolveScoutRepo 양 슬롯 폴백 — 동결 언어≠전역 �
   const wsL = fs.mkdtempSync(path.join(os.tmpdir(), "stlang_"));
   const repoL = path.join(wsL, "devrepo");
   fs.mkdirSync(repoL, { recursive: true });
+  fs.mkdirSync(path.dirname(CL.contractFileFor(wsL, "ko")), { recursive: true }); // 신규 브릿지 홈엔 contracts/가 없다(체인 실측 ENOENT)
   fs.writeFileSync(CL.contractFileFor(wsL, "ko"), JSON.stringify({ scoutRepo: repoL }), "utf8");
   CL.saveLang("ko");
   const rKo = CL.resolveScoutRepo(wsL, {}); // 빈 계약(동결 en 슬롯이 비어 있던 상황)
