@@ -313,7 +313,7 @@ console.log("[7] 배선 소스 계약 — 양 분기·flagVerdict machine·같�
 {
   const src = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
   const askBody = src.slice(src.indexOf("async function cmdAsk(rest)"), src.indexOf("function cmdLink"));
-  ok((askBody.match(/machineFindingsLayer\(answer, ws, langSnap, profileSnap, harnessModeSnap, askId\)/g) || []).length === 2, "resume/new 양 분기가 같은 소비 계층 1곳을 지남(+askId 귀속 — 1차 blocker③)");
+  ok((askBody.match(/machineFindingsLayer\(answer, ws, langSnap, profileSnap, harnessModeSnap, askId, campSnap\)/g) || []).length === 2, "resume/new 양 분기가 같은 소비 계층 1곳을 지남(+askId·campSnap 귀속 — 1차 blocker③·처분 관문 blocker②)");
   ok(/source: askId \? String\(askId\) : "machine-2c"/.test(src), "장부 source=askId(실행 귀속·폴백 상수)");
   ok(/const vAlert = machine && machine\.effective \? machine\.effective : v;/.test(src) && /severity: vAlert === "fail"/.test(src), "경보 축=실효 판정 권위 — 강등된 실패가 빨강으로 병존하지 않음(1차 [주의] 동승)");
   ok(/\/\^\[a-z0-9-\]\{1,32\}\$\/\.test\(r\.error\) \? r\.error : "write-refused"/.test(src), "등록 실패 사유 키 — 짧은 키 화이트리스트(절대 잠금 경로 등 로컬 정보 비복사 · 2차 blocker③)");

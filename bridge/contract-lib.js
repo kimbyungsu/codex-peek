@@ -3468,6 +3468,73 @@ function newFindingId(campaignId, gen, round, titleNorm, seq) {
   return "f-" + crypto.createHash("sha1").update(campaignId + "|" + (gen || "none") + "|" + round + "|" + titleNorm + "|" + seq).digest("hex").slice(0, 8);
 }
 
+// ── 지적 처분 관문(2026-08-01 실사고): '판단 없는 자동 수용'으로 왕복이 새는 경로 차단 ────────────
+// 배경: 상한 5회 캠페인에서 다섯 지적 전부를 판단 없이 수용·수정하며 회차를 소진(blocker 4→2→2→2 정체).
+// 네 갈래 재판단은 상한 소진 뒤 마감문에서 1회만 요구돼 중간 회차에는 판단을 강제하는 지점이 없었다.
+// 계약: 같은 캠페인의 열린 지적마다 처분 1건이 장부에 있어야 다음 ask 허용(예약 전 거부=왕복 미소모).
+// fix-fact=사실 오류 인정(실측으로 반박됨) / fix-gap=보강 요구 수용(틀린 건 아님) / rebut=반박 종결(근거
+// 필수) / park=맞지만 이 묶음 밖(보관함 자동 등록). fix-gap 누적(FIX_GAP_NOTICE_AT)은 '틀려서 고치는 게
+// 아니라 더-자세히 요구가 반복되는 상태' — 종이 단계 수확 체감 신호로 집계·고지한다(차단 아님).
+// findingId가 캠페인·세대를 이미 지문에 포함하므로 처분 대조는 (campaignId, findingId)로 충분하다.
+const FINDING_DISPOSITIONS = ["fix-fact", "fix-gap", "rebut", "park"];
+const FIX_GAP_NOTICE_AT = 3;
+// 1차 검증 blocker① 반영: 처분은 '그 시점까지의 등장'에만 유효하다(asOfRound 결속). 같은 지적이 후속
+// 라운드에 재등장(occurrence)하면 과거 처분은 낡은 것 — 다시 판단해야 한다. 결속 없는 처분(legacy·수동
+// append)은 유효 처분으로 인정하지 않는다(무근거 1회 기록으로 영구 통과하는 우회 차단).
+// 확인 검증 blocker①(계보) 반영: occurrence는 루트 id에 기록되고 prevId에 인용된 자식 id가 실린다
+// (machineFindingsLayer rootOf 정규화). 자식이 열린 채 재등장하면 활동이 루트에만 쌓여 자식 처분이 영구
+// 유효해지는 우회 — prevId 일치도 그 자식의 활동으로 센다(실행 반례: child open·occurrence{root, prevId:child}).
+// 3회차 확인 blocker(변형 ③) 반영: 재지적이 id(자식)와 다른 prevId를 함께 실으면 occurrence가
+// {findingId: rootOf(cited), prevId: f.prevId}가 되어 자식이 두 필드 모두에서 사라진다(실행 반례:
+// childActivity=2·undisposed=[]). 생산자가 인용 대상을 subjectId로 별도 보존하고 여기서 그 축도 센다.
+function findingActivityRound(rows, campaignId, findingId) {
+  let r = 0;
+  for (const x of rows) {
+    if (!x || x.campaignId !== campaignId) continue;
+    const hits = ((x.type === "finding" || x.type === "occurrence") && x.findingId === findingId)
+      || (x.type === "occurrence" && (x.prevId === findingId || x.subjectId === findingId
+        || (Array.isArray(x.subjectIds) && x.subjectIds.indexOf(findingId) >= 0))); // 4회차: 같은 라운드 다자식 전원 보존
+    if (hits) r = Math.max(r, Number(x.round) || 0);
+  }
+  return r;
+}
+// 유효 처분 판정의 단일 출처(확인 검증 [보완]①② 동반 수정): 관문·현황 표시·fix-gap 집계가 같은 계산을
+// 쓰지 않으면 '관문은 막는데 화면은 전부 판단됨'인 모순이 생긴다(실행 대조로 확인된 상태).
+function dispositionValid(rows, campaignId, rec) {
+  if (!rec) return false;
+  const asOf = Number(rec.asOfRound);
+  return Number.isFinite(asOf) && asOf >= findingActivityRound(rows, campaignId, rec.findingId);
+}
+// 판독 실패 가시화(1차 검증 [주의]): 전 오류를 []로 접으면 관문이 '지적 0건'으로 오인하고 조용히 열린다.
+// ENOENT(장부 없음)=정상 빈 상태, 그 외=readError로 구분해 소비자가 경고를 낼 수 있게 한다.
+function readFindingsLedgerState(ws) {
+  try {
+    const rows = String(fs.readFileSync(findingsLedgerFileFor(ws), "utf8")).split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+    return { rows, readError: false };
+  } catch (e) { return { rows: [], readError: !(e && e.code === "ENOENT") }; }
+}
+function dispositionsFor(ws, campaignId) {
+  const m = new Map(); // 같은 id 재처분=마지막 기록 우선(append-only 장부의 자연 순서)
+  for (const r of readFindingsLedger(ws)) {
+    if (r && r.type === "disposition" && r.campaignId === campaignId && typeof r.findingId === "string" && FINDING_DISPOSITIONS.includes(r.choice)) m.set(r.findingId, r);
+  }
+  return m;
+}
+function undisposedOpenFindings(ws, campaignId, gen) {
+  const d = dispositionsFor(ws, campaignId);
+  const rows = readFindingsLedger(ws);
+  // asOfRound 미결속(legacy·수동)=미판단 취급 / 재등장이 처분보다 뒤면 낡은 처분=재판단 필요
+  return openFindingsFor(ws, campaignId, gen).filter((o) => !dispositionValid(rows, campaignId, d.get(o.id)));
+}
+function fixGapCount(ws, campaignId) {
+  // 1차 [보완]+확인 [보완]② 반영: 대체된 과거 레코드·낡은(재등장으로 무효) 처분 집계 금지 —
+  // '지금 유효한' fix-gap 처분의 고유 지적 수만(관문과 같은 유효성 계산).
+  const rows = readFindingsLedger(ws);
+  let n = 0;
+  for (const rec of dispositionsFor(ws, campaignId).values()) if (rec.choice === "fix-gap" && dispositionValid(rows, campaignId, rec)) n++;
+  return n;
+}
+
 // 경계 동결(§2.1 — ask 시작 시점의 승인 해시를 라운드에 결속·응답 후처리는 이 동결 세대로만 참조 검증).
 // ws당 활성 ask 1개(askActive 직렬화)가 전제라 단일 슬롯 파일이면 충분. null=경계 비활성(부재·손상·미승인).
 function envelopeFreezeFileFor(ws) { return path.join(VERIFY_FINDINGS_DIR, wsKeyFor(ws) + ".freeze.json"); }
@@ -3834,7 +3901,7 @@ function formatForClaude(answer, lang, profile, machine, rejudgeSnap) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}${machineLine}\n처리 의무: ${action}${rjBlock}`;
 }
 
-module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, scoutCouplingAttach, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, verifyCampaignProgress, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, codexScoutExecEnv, TOOL_EXEC_ENV, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, selfAdapterSha, selfExecFp, precisionExecFp, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, authoritativeVerdict, findingsBlockRange, formatForClaude, normRejudgeSnap, safeLoadRejudge, REJUDGE_SNAP_MAX, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, scoutCouplingAttach, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, verifyCampaignProgress, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, codexScoutExecEnv, TOOL_EXEC_ENV, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, selfAdapterSha, selfExecFp, precisionExecFp, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, authoritativeVerdict, findingsBlockRange, formatForClaude, normRejudgeSnap, safeLoadRejudge, REJUDGE_SNAP_MAX, appendVerdict, trimVerdicts, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
 module.exports.codexImplementerSession = codexImplementerSession;
 module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
 // P-6 회수 영수증 계약(설계 v5.1)
