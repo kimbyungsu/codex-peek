@@ -422,6 +422,129 @@ console.log("[3-4] 증거 세기 — 스크립트 글자는 경보를 끄되 신
   }
 }
 
+console.log("[3-5] 문맥 보정(2026-08-03 실측) — 명령 '문자열 배열' 스크립트의 판독도 약한 축으로 인정");
+{
+  // 실사고: 검증자가 exec에 const cmds=["git grep … -- 파일", …] 형태(이스케이프 따옴표 포함)로
+  // 판독을 싣자, 문장 선두 판정이 스크립트 본문에 안 걸려 정직한 회차마다 '근거 의심'이 붙었다
+  // (실측 12/12 오경보). 원시 인수에서 따옴표 리터럴을 풀어 '그 자체로 판독 명령'인 것만 약한 축에
+  // 추가한다 — 승격 축은 불변(하네스 기록 인수만).
+  const id = "cmds-arr-" + (++callSeq);
+  // workdir는 실제 인용 파일이 있는 ws로 결속(가짜 폴더면 결속 검사가 정당하게 미인정 — 아래 반례가 그 케이스)
+  const input = 'const cmds=[\n  "git -c safe.directory=D:/x grep -n -B 2 -A 4 \\"패턴 A + B\\" -- foo.ts",\n  "node tools/run.js bar.ts"\n];\nconst rs=await Promise.allSettled(cmds.map(command=>tools.shell_command({command,workdir:' + JSON.stringify(ws) + ',timeout_ms:30000})));';
+  const result = [{ type: "input_text", text: "Exit code: 0\nOutput:\nline1\nline2" }];
+  writeRollout("eeeeeeee-cmdsarr", [
+    userMsg("검증 요청"),
+    { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: id, input } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: id, output: result } },
+  ]);
+  const w = citedFilesUnseenExact(answer, ws, "eeeeeeee-cmdsarr");
+  ck("배열 리터럴 안 git grep 판독=약한 흔적 인정(이스케이프 따옴표 무해 — 경보 안 붙음)", w.checked === true && !w.unseenWeak.some((p) => p.endsWith("foo.ts")));
+  ck("승격 축은 불변 — 스크립트 글자는 여전히 승격 불가", w.unseen.some((p) => p.endsWith("foo.ts")));
+  ck("리터럴이어도 목록 밖 명령(node …)은 인정 안 함 — bar.ts는 흔적 미확인 유지(과대 인정 차단)", w.unseenWeak.some((p) => p.endsWith("bar.ts")));
+
+  // 재검증 blocker 반례 잠금 ①: 선언만 하고 shell_command와 연결되지 않은 배열은 미인정
+  const idU = "cmds-arr-unused-" + (++callSeq);
+  const inputU = 'const unusedArr=[\n  "git -c safe.directory=D:/x grep -n \\"p\\" -- foo.ts"\n];\nawait tools.shell_command({ command: "Write-Output line1", workdir: ' + JSON.stringify(ws) + ' });';
+  writeRollout("eeeeeeee-arr-unused", [
+    userMsg("검증 요청"),
+    { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: idU, input: inputU } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: idU, output: [{ type: "input_text", text: "Exit code: 0\nOutput:\nline1" }] } },
+  ]);
+  const wu = citedFilesUnseenExact(answer, ws, "eeeeeeee-arr-unused");
+  ck("실행 호출과 연결 안 된 배열 리터럴은 미인정 — 경보 유지(미실행 문자열 거짓 해제 차단)", wu.checked === true && wu.unseenWeak.some((p) => p.endsWith("foo.ts")));
+
+  // 재검증 blocker 반례 잠금 ②: workdir가 다른 폴더면 동명 파일이라도 미인정(교차 프로젝트 오인 차단)
+  const idX = "cmds-arr-xwd-" + (++callSeq);
+  const inputX = 'const cmds=[\n  "git -c safe.directory=D:/other grep -n \\"p\\" -- foo.ts"\n];\nconst rs=await Promise.allSettled(cmds.map(command=>tools.shell_command({command,workdir:"D:\\\\other-project",timeout_ms:30000})));';
+  writeRollout("eeeeeeee-arr-xwd", [
+    userMsg("검증 요청"),
+    { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: idX, input: inputX } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: idX, output: [{ type: "input_text", text: "Exit code: 0\nOutput:\nfoo" }] } },
+  ]);
+  const wx = citedFilesUnseenExact(answer, ws, "eeeeeeee-arr-xwd");
+  ck("타 폴더 workdir에 결속된 배열 판독은 이 프로젝트 동명 파일을 해제하지 못함", wx.checked === true && wx.unseenWeak.some((p) => p.endsWith("foo.ts")));
+
+  // 재검증 blocker 반례 잠금 ③: 서로 다른 workdir 복수 → 스캔 중단(fail-closed — 경보 유지)
+  const idM = "cmds-arr-multiwd-" + (++callSeq);
+  const inputM = 'const cmds=[\n  "git -c safe.directory=D:/x grep -n \\"p\\" -- foo.ts"\n];\nawait tools.shell_command({command:cmds[0],workdir:' + JSON.stringify(ws) + '});\nawait tools.shell_command({command:"Write-Output hi",workdir:"D:\\\\other"});';
+  writeRollout("eeeeeeee-arr-multiwd", [
+    userMsg("검증 요청"),
+    { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: idM, input: inputM } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: idM, output: [{ type: "input_text", text: "Exit code: 0\nOutput:\nfoo" }] } },
+  ]);
+  const wm = citedFilesUnseenExact(answer, ws, "eeeeeeee-arr-multiwd");
+  ck("workdir가 여럿(모호)이면 스캔 중단 — 경보 유지(fail-closed)", wm.checked === true && wm.unseenWeak.some((p) => p.endsWith("foo.ts")));
+
+  // 재확인 반례 잠금 ④: 키를 따옴표로 쓴 "workdir":"타 폴더"도 결속 대상 — 미인식이면 결속 우회
+  const idQ = "cmds-arr-qwd-" + (++callSeq);
+  const inputQ = 'const cmds=[\n  "git -c safe.directory=D:/o grep -n \\"p\\" -- foo.ts"\n];\nconst rs=await Promise.allSettled(cmds.map(command=>tools.shell_command({"command":command,"workdir":"D:\\\\other-project"})));';
+  writeRollout("eeeeeeee-arr-qwd", [
+    userMsg("검증 요청"),
+    { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: idQ, input: inputQ } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: idQ, output: [{ type: "input_text", text: "Exit code: 0\nOutput:\nx" }] } },
+  ]);
+  const wq = citedFilesUnseenExact(answer, ws, "eeeeeeee-arr-qwd");
+  ck('따옴표 키("workdir")의 타 폴더 결속도 인식 — 이 프로젝트 동명 파일 해제 안 됨', wq.checked === true && wq.unseenWeak.some((p) => p.endsWith("foo.ts")));
+
+  // 재확인 반례 잠금 ⑤: console.log(이름); 뒤 별개 shell_command 근접은 '사용'이 아님(표현식 연결·인수 참조만)
+  const idL = "cmds-arr-log-" + (++callSeq);
+  const inputL = 'const cmds=[\n  "git -c safe.directory=D:/x grep -n \\"p\\" -- foo.ts"\n];\nconsole.log(cmds);\nawait tools.shell_command({ command: "Write-Output line1", workdir: ' + JSON.stringify(ws) + ' });';
+  writeRollout("eeeeeeee-arr-log", [
+    userMsg("검증 요청"),
+    { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: idL, input: inputL } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: idL, output: [{ type: "input_text", text: "Exit code: 0\nOutput:\nline1" }] } },
+  ]);
+  const wl = citedFilesUnseenExact(answer, ws, "eeeeeeee-arr-log");
+  ck("로그 출력 근접은 사용이 아님 — 미실행 배열의 경보 거짓 해제 차단", wl.checked === true && wl.unseenWeak.some((p) => p.endsWith("foo.ts")));
+
+  // 재확인 반례 잠금 ⑥: 호출이 '끝난 뒤' 로그의 이름 — 고정 창이면 인수로 오인, 괄호 균형이면 탈락
+  const idA = "cmds-arr-after-" + (++callSeq);
+  const inputA = 'const cmds=[\n  "git -c safe.directory=D:/x grep -n \\"p\\" -- foo.ts"\n];\nawait tools.shell_command({ command: "Write-Output line1", workdir: ' + JSON.stringify(ws) + ' });\nconsole.log(cmds);';
+  writeRollout("eeeeeeee-arr-after", [
+    userMsg("검증 요청"),
+    { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: idA, input: inputA } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: idA, output: [{ type: "input_text", text: "Exit code: 0\nOutput:\nline1" }] } },
+  ]);
+  const wa = citedFilesUnseenExact(answer, ws, "eeeeeeee-arr-after");
+  ck("호출 종료 뒤 로그의 이름은 인수 참조가 아님(괄호 균형 한정) — 경보 유지", wa.checked === true && wa.unseenWeak.some((p) => p.endsWith("foo.ts")));
+
+  // 재확인 반례 잠금 ⑦: 변수형 workdir(리터럴로 안 풀림) — 폴백 금지·스캔 중단(fail-closed)
+  const idV = "cmds-arr-varwd-" + (++callSeq);
+  const inputV = 'const root="D:\\\\other" + suffix;\nconst cmds=[\n  "git -c safe.directory=D:/x grep -n \\"p\\" -- foo.ts"\n];\nawait Promise.all(cmds.map(command=>tools.shell_command({ command, workdir: root })));';
+  writeRollout("eeeeeeee-arr-varwd", [
+    userMsg("검증 요청"),
+    { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: idV, input: inputV } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: idV, output: [{ type: "input_text", text: "Exit code: 0\nOutput:\nx" }] } },
+  ]);
+  const wv = citedFilesUnseenExact(answer, ws, "eeeeeeee-arr-varwd");
+  ck("workdir 키가 있는데 리터럴로 안 풀리면 요청 폴더로 폴백하지 않음 — 경보 유지(fail-closed)", wv.checked === true && wv.unseenWeak.some((p) => p.endsWith("foo.ts")));
+
+  // 재확인 반례 잠금 ⑧: 키와 콜론 사이 공백 변형(workdir : root · "workdir" : root)도 키로 인식
+  for (const [suffix, wdExpr] of [["sp", "workdir : root"], ["qsp", '"workdir" : root']]) {
+    const idS = "cmds-arr-wdsp-" + suffix + "-" + (++callSeq);
+    const inputS = 'const root="D:\\\\other" + suffix;\nconst cmds=[\n  "git -c safe.directory=D:/x grep -n \\"p\\" -- foo.ts"\n];\nawait Promise.all(cmds.map(command=>tools.shell_command({ command, ' + wdExpr + ' })));';
+    writeRollout("eeeeeeee-arr-wdsp-" + suffix, [
+      userMsg("검증 요청"),
+      { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: idS, input: inputS } },
+      { type: "response_item", payload: { type: "custom_tool_call_output", call_id: idS, output: [{ type: "input_text", text: "Exit code: 0\nOutput:\nx" }] } },
+    ]);
+    const wsx = citedFilesUnseenExact(answer, ws, "eeeeeeee-arr-wdsp-" + suffix);
+    ck("공백 변형(" + wdExpr + ")도 workdir 키로 인식 — 폴백 없이 경보 유지", wsx.checked === true && wsx.unseenWeak.some((p) => p.endsWith("foo.ts")));
+  }
+
+  // 재확인 반례 잠금 ⑨: 같은 workdir를 두 호출에 반복 명시한 '정상' 스크립트는 오차단 금지
+  const idR = "cmds-arr-samewd-" + (++callSeq);
+  const wdJson = JSON.stringify(ws);
+  const inputR = 'const cmds=[\n  "git -c safe.directory=D:/x grep -n \\"p\\" -- foo.ts"\n];\nawait Promise.all(cmds.map(command=>tools.shell_command({ command, workdir: ' + wdJson + ' })));\nawait tools.shell_command({ command: "Write-Output done", workdir: ' + wdJson + ' });';
+  writeRollout("eeeeeeee-arr-samewd", [
+    userMsg("검증 요청"),
+    { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: idR, input: inputR } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: idR, output: [{ type: "input_text", text: "Exit code: 0\nOutput:\nline1" }] } },
+  ]);
+  const wr = citedFilesUnseenExact(answer, ws, "eeeeeeee-arr-samewd");
+  ck("같은 workdir 반복 명시=정상 인정 — foo.ts 판독 흔적 유지(키수 vs 리터럴 매치수 비교)", wr.checked === true && !wr.unseenWeak.some((p) => p.endsWith("foo.ts")));
+}
+
 console.log("[6] 장기 세션 — 파일 전체가 16MiB를 넘어도 최신 턴 경계와 도구 흔적은 판독");
 const largeId = "77777777-large";
 const largeFile = path.join(SESS, `rollout-${largeId}.jsonl`);

@@ -713,6 +713,81 @@ function toolReadParts(p) {
       if (tgt) vars.delete(tgt);
     }
   }
+  // [2026-08-03 문맥 보정 — 약한(경보) 축 한정] 검증자가 임의 코드 실행기(exec)에 '명령 문자열 배열'
+  // (const cmds=["git grep … -- 파일", …])로 판독을 싣는 형태가 상시화되면서, 스크립트 본문이 문장
+  // 선두 판정에 걸리지 않아 정직한 판독 회차마다 '근거 의심'이 붙었다(실측 2026-08-03 — 8/8 미인식).
+  // 스크립트 글자는 기존 원칙대로 강한 증거가 될 수 없지만(어느 줄이 실행됐는지 글자만으론 증명 불가
+  // — 위 3회 확장 철회 기록), '그 자체로 판독 명령 문장'인 따옴표 문자열 리터럴은 스크립트-글자 수준의
+  // 흔적으로는 실재한다 → 약한 축에만 추가한다. 승격(strong)은 불변: 하네스 기록 인수만.
+  // ⚠ 반드시 '원시 인수'에서 스캔한다 — toolArgumentValues는 백슬래시를 /로 바꾸므로 이스케이프 따옴표
+  // (\")가 깨져 리터럴 경계가 무너진다(같은 날 실측: 정규화본에선 추출 0·원시본에선 정상 추출).
+  // ⚠ 무결속 전체 스캔은 금지(재검증 blocker — 미실행 문자열·타 폴더 동명 파일이 경보를 거짓 해제):
+  //   ①배열-사용 결속 — '문자열 배열로 선언된 변수'가 같은 스크립트에서 shell 실행 호출과 연결된
+  //     경우에만 그 배열의 리터럴을 인정(선언만 하고 안 쓴 객체·정규식 표기=기존 미인정 계약 유지)
+  //   ②작업 폴더 결속 — 스크립트가 밝힌 workdir가 하나면 부품에 부착(그 폴더만 기준), 서로 다른
+  //     workdir가 여럿이면 어느 명령이 어느 폴더인지 글자로 못 가르므로 스캔 중단(fail-closed —
+  //     경보가 남는 안전한 방향).
+  const rawStrings = [];
+  for (const raw of [p && p.arguments, p && p.input]) {
+    if (typeof raw === "string") rawStrings.push(raw);
+    else if (raw && typeof raw === "object") { try { rawStrings.push(JSON.stringify(raw)); } catch { /* 무시 */ } }
+  }
+  for (const rawText of rawStrings) {
+    // workdir 결속: 밝혀진 workdir 값들을 수집 — 서로 다른 값이 2개 이상이면 이 스크립트는 건너뛴다
+    const wds = new Set();
+    let wdLitCount = 0; // 리터럴 '매치 수' — 고유값 수(Set)와 분리(같은 폴더 반복 명시는 정상·확인 반례 4)
+    // 키의 따옴표 표기("workdir":)도 유효한 JS — 미인식이면 결속 우회가 된다(확인 반례).
+    for (const wm of rawText.matchAll(/["']?workdir["']?\s*[:=]\s*"((?:[^"\\]|\\.)*)"|["']?workdir["']?\s*[:=]\s*'((?:[^'\\]|\\.)*)'/g)) {
+      wdLitCount++;
+      wds.add(((wm[1] !== undefined ? wm[1] : wm[2]) || "").replace(/\\(["'\\])/g, "$1").replace(/\\/g, "/"));
+    }
+    // 변수형 workdir(리터럴로 안 풀림)이 하나라도 있으면 결속 불가 — 폴백하면 교차 폴더 오인이
+    // 되살아나므로 스캔 중단(fail-closed·확인 반례 2). 비교는 '키 수 vs 리터럴 매치 수' — 고유값
+    // 수와 비교하면 같은 폴더를 두 호출에 반복 명시한 정상 스크립트가 오차단된다(확인 반례 4).
+    const wdKeyCount = (rawText.match(/["']?workdir["']?\s*[:=]/g) || []).length;
+    if (wds.size > 1 || wdKeyCount > wdLitCount) continue;
+    const boundWd = wds.size === 1 ? [...wds][0] : "";
+    // 배열-사용 결속: (const|let|var) 이름 = [ ... ] 로 선언된 배열 중, 그 이름이 shell 실행 호출과
+    // 연결된 것만. 연결 판정=이름과 shell_command 가 한 문장 범위(200자) 안에서 함께 등장.
+    for (const am of rawText.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*\[([\s\S]*?)\]\s*;/g)) {
+      const arrName = am[1];
+      const body = am[2];
+      // 사용 판정은 '선언 구간을 지운 텍스트'에서만 — 선언 뒤에 우연히 shell_command가 이어지는
+      // 미사용 배열이 '사용'으로 둔갑하는 헛점 차단(확인 반례 ①).
+      const usageText = rawText.slice(0, am.index) + " ".repeat(am[0].length) + rawText.slice(am.index + am[0].length);
+      const nameEsc = arrName.replace(/\$/g, "\\$");
+      // 사용 판정 조임(확인 반례 — console.log(이름); 뒤 별개 shell_command 근접이 '사용'으로 둔갑):
+      // ⓐ같은 표현식 연결 — 이름→(세미콜론 없이)→shell_command( (cmds.map(c=>tools.shell_command( 형)
+      // ⓑ호출 인수 내 참조 — shell_command( 뒤 300자 인수 구간 안에 이름 (shell_command({command:cmds[i]}) 형)
+      const usedChain = new RegExp("\\b" + nameEsc + "\\b[^;]{0,120}?shell_command\\s*\\(").test(usageText);
+      // 인수 구간은 '괄호 균형'으로 한정한다(확인 반례 2 — 고정 300자 창은 호출이 끝난 뒤의
+      // 로그·주석 속 이름까지 포섭해 미실행 배열을 되살림). 문자열 리터럴 안의 괄호는 건너뛴다.
+      let usedArg = false;
+      for (const cm of usageText.matchAll(/shell_command\s*\(/g)) {
+        const from = cm.index + cm[0].length;
+        let depth = 1, i2 = from, quote = "";
+        const cap = Math.min(usageText.length, from + 600);
+        while (i2 < cap && depth > 0) {
+          const ch = usageText[i2];
+          if (quote) { if (ch === "\\") i2++; else if (ch === quote) quote = ""; }
+          else if (ch === '"' || ch === "'" || ch === "`") quote = ch;
+          else if (ch === "(") depth++;
+          else if (ch === ")") depth--;
+          i2++;
+        }
+        if (depth !== 0) continue; // 괄호가 창 안에서 안 닫히면 인수 구간 미확정 — 인정하지 않음
+        if (new RegExp("\\b" + nameEsc + "\\b").test(usageText.slice(from, i2 - 1))) { usedArg = true; break; }
+      }
+      if (!usedChain && !usedArg) continue;
+      for (const m of body.matchAll(/"((?:[^"\\]|\\.)+)"|'((?:[^'\\]|\\.)+)'/g)) {
+        const lit2 = (m[1] !== undefined ? m[1] : m[2] || "").replace(/\\(["'\\])/g, "$1").replace(/\\/g, "/");
+        if (lit2.length < 4 || lit2.length > 4000) continue;
+        for (const s2 of splitShellStatements(lit2)) {
+          if (toolCallCanReadFile(p, s2)) out.push({ text: stripShellComment(s2), workdir: boundWd, weak: true });
+        }
+      }
+    }
+  }
   return out;
 }
 function toolCallNamesExactFile(p, fileKey, ws) {
