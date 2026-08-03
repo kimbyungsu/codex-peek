@@ -1684,7 +1684,8 @@ function syncBrainDriftFor(ws: string | null): void {
       );
       cbModel = intent ? intent.model : "";                  // 의도 산출 불가 → 빈값 → 아래 cf&&cfc 가드로 비교 skip
       // 선택 사건 시각 = 이긴 후보의 ts(settings 폴백은 파일 mtime — 재선택 없이는 불변이라 안정).
-      ccIntentTs = !intent ? 0 : intent.source === "command" ? (scan.cmd ? scan.cmd.ts : 0) : intent.source === "attributed" ? (attr ? attr.ts : 0) : (settingsMtime || 0);
+      // Math.round: settings 폴백의 mtimeMs는 소수점이 있어 sig에 그대로 넣으면 폴백 정규식(@\d+)이 못 뗀다(검증 보완).
+      ccIntentTs = Math.round(!intent ? 0 : intent.source === "command" ? (scan.cmd ? scan.cmd.ts : 0) : intent.source === "attributed" ? (attr ? attr.ts : 0) : (settingsMtime || 0));
     }
     const links = loadLinks();
     const mode = loadContract(ws).harnessMode;
