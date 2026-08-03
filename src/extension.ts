@@ -161,7 +161,7 @@ interface BridgeState {
   scoutPrompt: { baseline: string; overridden: boolean; directive: string; notes: string[]; version: string } | null; // §6-11 — 3트랙에서만(null=2트랙/판독 불가)
   // P-12 v2.4: 보관함(범위 밖 제안+판단 대기 [주의]) 읽기 전용 가시화 — 처분은 CLI(backlog done|dismiss). null=무폴더/구 런타임.
   backlog: { caution: number; backlog: number; corrupt: number; readError: boolean; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } | null; // readError: 판독 실패(ENOENT 외) — '비어 있음' 위장 금지(2026-07-18 확인 판정 [보완] 소화)
-  challenges: { open: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number }> } | null; // 재확인(증분 4b) — null=구 설치본/부재
+  challenges: { open: number; cleared: number; kept: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number; cleared: boolean }> } | null; // 재확인(증분 4b) — cleared=실제 ack 조건(전 파일 일치)·null=구 설치본/부재
   baseAvailable: boolean;
   permissionMode: string;
   codexReady: boolean;
@@ -1478,19 +1478,24 @@ function computeBacklogView(rawItems: any[], now: number): { caution: number; ba
 // 상태 의미: pending=동결됨(발송 전) · dispatched=재확인 요청 발송됨 · resolved=원문 일치(경보 자동 해소) ·
 // failed=불일치·무응답(태만 기록·경보 유지) · indeterminate=그 사이 파일 변경(판정 불가·태만 아님) ·
 // outcome-unknown=호출 실패·중단(재발송 없음). 표시 전용 — 어떤 판정·게이트에도 쓰지 않는다.
-function computeChallengeView(recs: any[], now: number): { open: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number }> } {
+// cleared=경고 자동 해소의 실제 조건(브릿지 eventFullyResolved와 동일 공식: resolved+전 파일 일치 —
+// skipped 잔존이면 경고가 유지되므로 '부분 일치'로 구분 표시. 확인 검증 blocker 반영).
+function computeChallengeView(recs: any[], now: number): { open: number; cleared: number; kept: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number; cleared: boolean }> } {
   const items = (recs || []).filter((r: any) => r && r.challengeId).map((r: any) => {
     const t = Date.parse(String(r.settledAt || r.dispatchedAt || r.createdAt || ""));
     const files = Array.isArray(r.files) ? r.files : [];
+    const resolvedFiles = files.filter((f: any) => f && f.status === "resolved").length;
     return {
-      id: String(r.challengeId), state: String(r.state || ""), files: files.length,
-      resolvedFiles: files.filter((f: any) => f && f.status === "resolved").length,
+      id: String(r.challengeId), state: String(r.state || ""), files: files.length, resolvedFiles,
       ageMin: Number.isFinite(t) ? Math.max(0, Math.floor((now - t) / 60000)) : 0,
+      cleared: String(r.state) === "resolved" && files.length > 0 && resolvedFiles === files.length,
     };
   }).sort((a, b) => a.ageMin - b.ageMin);
   const counts: Record<string, number> = {};
   for (const it of items) counts[it.state] = (counts[it.state] || 0) + 1;
-  return { open: items.filter((x) => x.state === "pending" || x.state === "dispatched").length, counts, items: items.slice(0, 10) };
+  const open = items.filter((x) => x.state === "pending" || x.state === "dispatched").length;
+  const cleared = items.filter((x) => x.cleared).length;
+  return { open, cleared, kept: items.length - open - cleared, counts, items: items.slice(0, 10) };
 }
 
 // 무결성 신호: 브릿지(verify-guard)가 '검증 미완' 등을 integrity.json에 기록 → 여기서 읽어 상태바/대시보드로 가시화.
@@ -4750,7 +4755,7 @@ class Dashboard {
   <details id="chSec" class="backlog-fold" style="display:none">
     <summary class="sec accent-rose">${t("근거 재확인 — 인용 판독 되묻기", "Evidence Recheck — re-asking about cited reads")} <span class="sub2" id="chSummary"></span></summary>
     <div class="card">
-      <div class="hint">${t("검증 답이 인용한 파일을 그 검증 기록에서 <b>읽은 흔적으로 확인하지 못하면</b>(노란 '근거 의심' 경고), 브릿지가 같은 검증 세션에 <b>재확인 요청을 1회</b> 자동으로 보내요 — 그 파일의 지정 구간 원문을 되돌려 받아 경고 시점에 봉인해 둔 지문과 대조합니다. <b>일치하면 경고가 자동으로 사라지고</b>, 불일치·무응답이면 경고가 남아요(검증자가 확인을 놓쳤다는 기록). 그 사이 파일이 바뀌었으면 '판정 불가'로 분류해 억울한 기록을 남기지 않아요. 이 카드는 그 재확인 기록의 열람 전용 — 어떤 판정도 바꾸지 않습니다. 추가 비용: 경고 1건당 Codex 호출 1회.", "When a cited file <b>shows no read trace</b> in that verification's log (the yellow evidence-suspicion warning), the bridge automatically sends <b>one recheck request</b> to the same verifier session — asking it to return the raw bytes of a sealed span, compared against the fingerprint frozen at alert time. <b>A match clears the warning automatically</b>; a mismatch or no answer keeps it (a record that the verifier missed the check). If the file changed in between, it's classed 'indeterminate' — no unfair record. This card is read-only and never changes any verdict. Extra cost: one Codex call per warning.")}</div>
+      <div class="hint">${t("검증 답이 인용한 파일을 그 검증 기록에서 <b>읽은 흔적으로 확인하지 못하면</b>(노란 '근거 의심' 경고), 브릿지가 같은 검증 세션에 <b>재확인 요청을 최대 1회</b> 보낼 수 있어요(마감 임박·발송할 안전 구간 없음 등이면 안 보냄) — 그 파일의 지정 구간 원문을 되돌려 받아 경고 시점에 봉인해 둔 지문과 대조합니다. <b>전 항목이 일치해야 경고가 자동으로 사라지고</b>, 일부만 일치·불일치·무응답이면 경고가 남아요(검증자가 확인을 놓쳤다는 기록). 그 사이 파일이 바뀌었으면 '판정 불가'로 분류해 억울한 기록을 남기지 않아요. 이 카드는 그 재확인 기록의 열람 전용 — 어떤 판정도 바꾸지 않습니다. 추가 비용: 발송된 경고당 최대 Codex 호출 1회.", "When a cited file <b>shows no read trace</b> in that verification's log (the yellow evidence-suspicion warning), the bridge may send <b>at most one recheck request</b> to the same verifier session (skipped near the deadline or when no safe span can be sent) — asking it to return the raw bytes of a sealed span, compared against the fingerprint frozen at alert time. <b>The warning clears automatically only when every item matches</b>; partial matches, mismatches or no answer keep it (a record that the verifier missed the check). If the file changed in between, it's classed 'indeterminate' — no unfair record. This card is read-only and never changes any verdict. Extra cost: at most one Codex call per dispatched warning.")}</div>
       <div id="chList" style="margin-top:6px"></div>
     </div>
   </details>
@@ -6296,22 +6301,25 @@ class Dashboard {
       sec.style.display="";
       const sum=$("chSummary"); const list=$("chList");
       const total=(ch.items||[]).length? Object.keys(ch.counts||{}).reduce(function(a,k){return a+ch.counts[k];},0) : 0;
-      const stLabel=function(s){
-        return s==="resolved"?T("해소(원문 일치)","cleared (bytes matched)")
+      const stLabel=function(it){
+        var s=it.state;
+        // resolved라도 skipped 잔존이면 경고는 유지된다(브릿지 ack 조건=전 파일 일치) — '해소'로 과대 표시 금지
+        return s==="resolved"?(it.cleared?T("해소(전 항목 일치 — 경고 자동 해소)","cleared (all matched — warning auto-cleared)"):T("부분 일치(경고 유지)","partial match (warning kept)"))
           : s==="failed"?T("불일치·무응답(경고 유지)","mismatch/no answer (warning kept)")
-          : s==="indeterminate"?T("판정 불가(파일 변경)","indeterminate (file changed)")
+          : s==="indeterminate"?T("판정 불가(파일 변경 — 경고 유지)","indeterminate (file changed — warning kept)")
           : s==="outcome-unknown"?T("결과 미상(호출 실패·중단)","unknown (call failed/interrupted)")
+          : s==="no-dispatch"?T("미발송(안전 구간 없음·범위 밖 등)","not sent (no safe span / out of scope etc.)")
           : s==="dispatched"?T("재확인 요청 발송됨","recheck sent")
           : s==="pending"?T("동결됨(발송 전)","frozen (before send)")
           : s;
       };
       if(sum) sum.textContent = total===0
         ? T("비어 있음 — 근거 의심 경고가 뜨면 재확인 기록이 여기 쌓입니다","empty — recheck records accumulate here when an evidence-suspicion warning fires")
-        : T("총 ","total ")+total+T("건","")+(ch.counts.resolved?T(" · 해소 "," · cleared ")+ch.counts.resolved:"")+(ch.counts.failed?T(" · 유지 "," · kept ")+ch.counts.failed:"")+(ch.open?T(" · 진행 "," · open ")+ch.open:"");
+        : T("총 ","total ")+total+T("건","")+(ch.cleared?T(" · 해소 "," · cleared ")+ch.cleared:"")+(ch.kept?T(" · 경고 유지 "," · warning kept ")+ch.kept:"")+(ch.open?T(" · 진행 "," · open ")+ch.open:"");
       if(!list) return; list.replaceChildren();
       (ch.items||[]).forEach(function(it){
         var row=el("div",""); row.style.margin="5px 0"; row.style.fontSize="12px"; row.style.lineHeight="1.5";
-        row.appendChild(el("span","badge "+(it.state==="resolved"?"b-always":(it.state==="failed"?"b-plancode":"b-off")), stLabel(it.state)));
+        row.appendChild(el("span","badge "+(it.cleared?"b-always":(it.state==="failed"?"b-plancode":"b-off")), stLabel(it)));
         var t1=el("span","", " "+T("파일 ","files ")+it.resolvedFiles+"/"+it.files+T(" 일치"," matched"));
         row.appendChild(t1);
         var meta=el("div","muted", it.id+" · "+T("경과 ","age ")+it.ageMin+T("분","m"));
