@@ -32,6 +32,8 @@ console.log("[② 과거 이벤트 — brain-drift] sig의 비교값 두 개로 
 const bdc = { kind: "brain-drift", severity: "warning", sig: "cc-model:opus!fable", detail: "옛 한국어" };
 ok(/configured model is 'opus'/.test(L(bdc, true)) && /'fable'/.test(L(bdc, true)), "cc-model sig → EN 재생성(값 보존)");
 ok(/설정한 모델은 'opus'/.test(L(bdc, false)), "cc-model sig → KO 재생성");
+const bdt = { kind: "brain-drift", severity: "warning", sig: "cc-model:fable!opus@1754300000000", detail: "옛 한국어" };
+ok(/configured model is 'fable'/.test(L(bdt, true)) && /'opus'/.test(L(bdt, true)) && !/@1754/.test(L(bdt, true)), "신 형식(@선택시각) sig → 시각을 떼고 모델명만 재생성");
 const bdx = { kind: "brain-drift", severity: "warning", sig: "cx-effort:high!medium", detail: "옛 한국어" };
 ok(/configured reasoning is 'high'/.test(L(bdx, true)), "cx-effort sig → EN 재생성");
 ok(/Codex: configured model is 'gpt-5.5'/.test(L({ kind: "brain-drift", sig: "cx-model:gpt-5.5!gpt-5", detail: "x" }, true)), "cx-model sig → EN 재생성");

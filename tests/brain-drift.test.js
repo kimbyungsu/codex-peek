@@ -188,6 +188,26 @@ ok(cxFreshGate("", NOW) === false, "cx 신선도: 이 폴더 turn 기록 없음(
 ok(cxEffortDrift("xhigh", cxFreshGate(oldTs, NOW) ? "high" : "") === false, "cx: stale 세션이면 mEffort='' → 가드로 경고 억제(설정 xhigh여도)");
 ok(cxModelDrift("gpt-5.5", cxFreshGate(oldTs, NOW) ? "gpt-5.1" : "") === false, "cx: stale 세션이면 mModel='' → 모델 가드로도 억제");
 
+// 9. 선택 사건 시각을 sig에 포함(2026-08-04 사용자 실측) — 같은 조합(fable!opus)의 acked 기록이 남아 있으면
+//    이후 같은 어긋남을 다시 골라도 재발행이 억제되고, 제3의 모델을 골라야만 되살아나는 함정의 재현+봉합.
+{
+  const sigOf = (a, b, pickTs) => `cc-model:${a}!${b}@${pickTs}`;
+  // 함정 재현(옛 형식=시각 없음): acked 기록이 있고 같은 어긋남을 다시 골라도(sig 동일) 새 경고가 안 나온다
+  let evs = [bd(sigOf("fable", "opus", 0), true)];
+  evs = reconcile(evs, "W", [{ sig: sigOf("fable", "opus", 0), detail: "d" }]);
+  ok(cnt(evs) === 1 && evs.every((e) => e.ack), "옛 형식: 재선택해도 acked 유지 → 경고 재발행 없음(함정)");
+  // 봉합(새 형식): 다시 고르면 pickTs가 달라져 새 사건 — 옛 acked는 정리되고 새 unacked 경고가 뜬다
+  evs = reconcile(evs, "W", [{ sig: sigOf("fable", "opus", 111), detail: "d" }]);
+  ok(cnt(evs) === 1 && evs[0].sig === sigOf("fable", "opus", 111) && !evs[0].ack, "새 형식: 재선택=새 사건 → 경고 재발행+옛 기록 정리");
+  // 같은 선택 안에서는 종전대로 — ack 후 조용(스팸 아님)
+  evs.forEach((e) => { e.ack = true; });
+  evs = reconcile(evs, "W", [{ sig: sigOf("fable", "opus", 111), detail: "d" }]);
+  ok(cnt(evs) === 1 && evs.every((e) => e.ack), "같은 선택 유지 중엔 ack 존중(재발행 없음)");
+  // 실제 소스가 이 형식을 쓰는지(사양↔구현 결속)
+  const extSrc2 = require("fs").readFileSync(require("path").join(__dirname, "..", "src", "extension.ts"), "utf8");
+  ok(extSrc2.includes("cc-model:${cf}!${cfc}@${ccIntentTs}"), "구현 결속: 소스 sig에 선택 시각 포함");
+}
+
 // 실제 확장 배선 회귀: 대시보드 저장 즉시 상태바 재계산, 프로젝트 매핑 실제값, Claude fs.watch 누락 보조 폴링,
 // 구현자 UserPromptSubmit 앵커가 모두 살아 있어야 네 경고 경로가 함께 유지된다.
 const fs = require("fs");

@@ -1667,6 +1667,7 @@ function syncBrainDriftFor(ws: string | null): void {
     // ★워크스페이스 격리(cwd 필터): intent·actual 모두 '이 폴더의 같은 대화'에서 읽는다(형제 폴더의 답/선택이 새지 않게).
     const ccT = ws ? currentTranscriptForWs(ws) : null;      // 이 폴더의 현재(또는 최근) 대화 transcript
     let claudeCur = "", cbModel = "";                        // 실제 답 모델 / 이 폴더 기준 '의도한' 모델
+    let ccIntentTs = 0;                                      // 그 의도를 '언제 골랐나'(선택 사건 시각 — 경고 신원에 포함)
     if (ccT) {
       const scan = scanCcTranscriptForProject(ccT, ws);      // 논리 프로젝트+명시된 실제 작업 폴더의 /model·실제 답
       claudeCur = scan.actual && Date.now() - scan.actual.ts < DRIFT_FRESH_MS ? scan.actual.model : ""; // 신선한 답만(옛 답 거짓 drift 차단)
@@ -1682,6 +1683,8 @@ function syncBrainDriftFor(ws: string | null): void {
         readClaudeSettingsModel(), settingsMtime, sessionStart,
       );
       cbModel = intent ? intent.model : "";                  // 의도 산출 불가 → 빈값 → 아래 cf&&cfc 가드로 비교 skip
+      // 선택 사건 시각 = 이긴 후보의 ts(settings 폴백은 파일 mtime — 재선택 없이는 불변이라 안정).
+      ccIntentTs = !intent ? 0 : intent.source === "command" ? (scan.cmd ? scan.cmd.ts : 0) : intent.source === "attributed" ? (attr ? attr.ts : 0) : (settingsMtime || 0);
     }
     const links = loadLinks();
     const mode = loadContract(ws).harnessMode;
@@ -1734,7 +1737,11 @@ function syncBrainDriftFor(ws: string | null): void {
     const bothD = (sig: string, ko: string, en: string) => bd.push({ sig, detail: tE(ko, en), detailKo: ko, detailEn: en });
     // Claude: 별칭(opus)↔정식ID(claude-opus-4-8)는 namespace가 달라 modelFamily 계열로 비교(둘 다 알 때만 → 빈값 오탐 방지).
     const cf = modelFamily(cbModel), cfc = modelFamily(claudeCur);
-    if (cf && cfc && cf !== cfc) bothD(`cc-model:${cf}!${cfc}`, `Claude: 설정한 모델은 '${cf}'인데 최근 답한 모델은 '${cfc}'예요. 고른 모델이 아직 안 먹었을 수 있어요(앱에서 모델을 다시 선택).`, `Claude: configured model is '${cf}' but the latest answer used '${cfc}'. Your selection may not have taken effect yet (re-select the model in the app).`);
+    // 경고 신원(sig)에 '선택 사건 시각'을 포함(사용자 실측 2026-08-04): 같은 조합(fable!opus)의 확인(ack)된
+    // 기록이 남아 있으면 이후 같은 어긋남을 몇 번 다시 골라도 재발행이 억제됐다 — 제3의 모델을 골라 조합이
+    // 바뀌어야만 옛 기록이 정리돼 되살아나는 함정. 시각을 넣으면 '모델을 다시 고른' 행위마다 새 사건이 되고,
+    // 같은 선택 안에서는 종전대로 확인 후 조용하다(스팸 아님 — 선택 1회당 경고 1회).
+    if (cf && cfc && cf !== cfc) bothD(`cc-model:${cf}!${cfc}@${ccIntentTs}`, `Claude: 설정한 모델은 '${cf}'인데 최근 답한 모델은 '${cfc}'예요. 고른 모델이 아직 안 먹었을 수 있어요(앱에서 모델을 다시 선택).`, `Claude: configured model is '${cf}' but the latest answer used '${cfc}'. Your selection may not have taken effect yet (re-select the model in the app).`);
     // Codex: pref와 rollout이 같은 slug 어휘라 정규화 raw 비교(modelFamily는 Claude 계열 전용이라 gpt-*를 ""로 떨궈 영영 못 잡음).
     const xm = (pref.model || "").trim().toLowerCase(), xmc = (mModel || "").trim().toLowerCase();
     if (xm && xmc && xm !== xmc) bothD(`cx-model:${xm}!${xmc}`, `코덱스: 설정한 모델은 '${pref.model}'인데 최근 답한 모델은 '${mModel}'예요. 바꾼 게 다음 답부터 반영될 수 있어요.`, `Codex: configured model is '${pref.model}' but the latest answer used '${mModel}'. The change may apply from the next answer.`);

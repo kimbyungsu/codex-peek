@@ -34,7 +34,8 @@ const STATIC: Record<string, { ko: string; en: string }> = {
 // brain-drift 과거 이벤트 폴백 — sig에 비교값 두 개가 들어 있어(`cc-model:a!b` 형식) 문구를 재생성할 수 있다.
 // (sig의 cx-model 값은 기록 시 소문자 정규화본이라 원문 표기와 다를 수 있음 — 과거 이벤트 한정 폴백이라 허용.)
 function brainDriftFromSig(sig: string, en: boolean): string | null {
-  const m = /^(cc-model|cx-model|cx-effort|ci-model|ci-effort):([^!]*)!(.*)$/.exec(sig || "");
+  // cc-model은 2026-08-04부터 sig 끝에 '@선택시각'이 붙는다(재선택마다 새 사건) — 문구 재생성에서는 떼어낸다.
+  const m = /^(cc-model|cx-model|cx-effort|ci-model|ci-effort):([^!]*)!(.*?)(?:@\d+)?$/.exec(sig || "");
   if (!m) return null;
   const a = m[2], b = m[3];
   if (m[1] === "cc-model") return en

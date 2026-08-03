@@ -128,6 +128,11 @@ console.log("[2] 작업 장부 — strict 판독·RMW·자기 산출 strict·손
     const cpDoc = { ...cpOK, patchId: ME.detPatchId(ME.jobSeedOf(okJob.jobKey, okJob.startedAt), 0, 0, 0), evidence: [{ kind: "code", ref: "docs/x.md" }] };
     ok(put({ ...okJob, attempts: [{ ...okJob.attempts[0], phase: "applying", results: RESDOC, cursor: { nextIndex: 0, rev: 0, appliedPatchIds: [], currentPatch: cpDoc } }] }) === "damaged", "doc 근거를 code kind로 기록한 currentPatch=damaged(P2 관문 세탁 차단)");
     ok(put({ ...okJob, attempts: [{ ...okJob.attempts[0], phase: "applying", results: RESDOC, cursor: { nextIndex: 0, rev: 0, appliedPatchIds: [], currentPatch: { ...cpDoc, evidence: [{ kind: "doc", ref: "docs/x.md" }] } } }] }) === "damaged", "(참고) doc 단독 근거 patch는 P2 validator 자체가 거부 — currentPatch로도 승인 불가");
+    // 2026-08-04 실사고 회귀: 종류가 섞인 정상 근거(code+doc)가 결속 위반으로 오판되면 안 된다 —
+    // 기대 전문을 '파일명 정렬 후 kind 부착'으로 만들면 canonical(kind,ref 정렬)과 순서가 갈린다.
+    const RESMIX = { schema: "enrich-result-v1", items: [{ op: "add_evidence", targetId: U(1), payload: RES1.items[0].payload, evidence: [{ file: "src/a.js", quote: "q" }, { file: "docs/x.md", quote: "q" }] }] };
+    const cpMix = { ...cpOK, evidence: [{ kind: "code", ref: "src/a.js" }, { kind: "doc", ref: "docs/x.md" }] };
+    ok(put({ ...okJob, attempts: [{ ...okJob.attempts[0], phase: "applying", results: RESMIX, cursor: { nextIndex: 0, rev: 0, appliedPatchIds: [], currentPatch: cpMix } }] }) === "ok", "code+doc 혼합 근거 currentPatch=승인(순서 오판 회귀 차단)");
   }
   ok(put(okJob) === "ok", "(복원) 정상 장부 재승인");
   ok(ME.updateEnrichJob(repo, () => null).ok === true, "mut null=무변경 성공");

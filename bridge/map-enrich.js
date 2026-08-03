@@ -232,7 +232,10 @@ function validateJob(d) {
         // 6차(ab-3): {kind, ref} 전문 일치 — ref만 대조하면 doc 근거가 code kind로 세탁돼 P2 관문(코드 근거
         // 최소 1개 — kind 기준 판정 실측)을 통과한다. 기대 전문=변환기 규칙 그대로(evidenceKindOf).
         const extra9 = Array.isArray(c.evExtra) ? c.evExtra : [];
-        const wantEv = [...new Set([...(it9.evidence || []).map((e) => e.file), ...((it9.claims || []).map((x) => x.file)), ...extra9])].sort().map((f9) => evidenceKindOf(f9) + ":" + f9).join("|"); // evExtra(범위 밖 인용 확장)도 결속 집합에 포함
+        // 정렬은 'kind:file' 변환 후에(2026-08-04 실사고): 파일명 정렬 뒤 kind를 붙이면 종류가 섞인
+        // 집합에서 haveEv('kind:ref' 정렬)와 순서가 갈려 정상 patch를 결속 위반으로 오판한다 — 이전엔
+        // 종류 섞인 답이 변환 단계에서 먼저 거부돼 잠복했던 버그.
+        const wantEv = [...new Set([...(it9.evidence || []).map((e) => e.file), ...((it9.claims || []).map((x) => x.file)), ...extra9])].map((f9) => evidenceKindOf(f9) + ":" + f9).sort().join("|"); // evExtra(범위 밖 인용 확장)도 결속 집합에 포함
         const haveEv = [...new Set((cp.evidence || []).map((e) => String(e.kind) + ":" + String(e.ref)))].sort().join("|");
         if (wantEv !== haveEv) return "currentPatch.evidence↔item 결속({kind,ref} 전문 — kind 세탁 차단)";
       }
