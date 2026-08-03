@@ -152,7 +152,7 @@ console.log("[7] cmdAsk 배선 순서(소스 잠금) — 경보 시점 동결→
     const iCond = src.indexOf("if (evAlert && evAlert.challengeId && ckptOk)");
     return iMaint > 0 && iCond > 0 && iMaint < iCond; // 조건문 '앞'의 독립 블록
   })());
-  ck("루트=동결 스냅샷 값 직접(helper 폴백 재판독 금지)", src.includes("contractSnap.scoutRepo.trim()) chRoots.push(contractSnap.scoutRepo.trim())") && !/const chRoots = \[exec, ws\];[\s\S]{0,300}?resolveScoutRepo\(/.test(src) && !/function maybeDispatchChallenge[\s\S]{0,2600}?loadContract\(/.test(src));
+  ck("루트=동결 스냅샷 값 직접·절대경로만(helper 폴백·상대값 편입 금지)", src.includes("if (chScout && path.isAbsolute(chScout)) chRoots.push(chScout)") && !/const chRoots = \[exec, ws\];[\s\S]{0,400}?resolveScoutRepo\(/.test(src) && !/function maybeDispatchChallenge[\s\S]{0,2600}?loadContract\(/.test(src));
   ck("동결은 이벤트 저장 확인 후(경보 없는 전송 금지)", src.includes("readIntegrityEvents().some((e) => e.id === evId)"));
   ck("발송은 예산 게이트·시도 기록을 안 씀(B — 격리)", !/function maybeDispatchChallenge[\s\S]{0,2600}?(reserveVerifyBudgetGate|beginVerifyAttempt|writeProof\(|machineFindingsLayer|flagVerdict)/.test(src));
 }

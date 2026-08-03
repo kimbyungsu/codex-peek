@@ -3124,7 +3124,10 @@ async function cmdAsk(rest) {
     // 파일(반대 언어 슬롯 포함)을 다시 읽는 폴백이 있어 쓰지 않는다(확인 검증 blocker — 원 턴 밖
     // 프로젝트 편입 경로). 동결 스냅샷의 값만 직접 사용 — 비면 루트 추가 없음(과소 포함=안전 방향).
     const chRoots = [exec, ws];
-    if (contractSnap && typeof contractSnap.scoutRepo === "string" && contractSnap.scoutRepo.trim()) chRoots.push(contractSnap.scoutRepo.trim());
+    // 절대경로만(확인 검증 blocker — 정본 해석기의 상대경로 무효화 조건 보존): 상대값('..' 등)은
+    // 실행 폴더 기준으로 풀리며 형제 프로젝트까지 루트가 넓어진다 — 편입하지 않음(과소 포함=안전).
+    const chScout = contractSnap && typeof contractSnap.scoutRepo === "string" ? contractSnap.scoutRepo.trim() : "";
+    if (chScout && path.isAbsolute(chScout)) chRoots.push(chScout);
     const evAlert = flagEvidence(answer, ws, link.codexSession, exec, {
       roots: chRoots, promptText, mode: harnessModeSnap, lang: langSnap,
       campaignId: (durableEnv && durableEnv.campaignId) || "direct", askId,
