@@ -66,22 +66,42 @@ function pickSpan(buf, exposedBufs) {
     const hit = okAt(off, len);
     if (hit) return hit;
   }
+  // 결정론 폴백(확인 검증 보완): 무작위 추첨이 빗나가도 len=64·보폭 32의 격자를 전부 스윕한다 —
+  // 격자 위 적격 후보가 있으면 반드시 발견. 오프셋 전수(보폭 1)는 아니며(대형 파일 비용),
+  // 그 한계는 설계 §2 수용 위험(발견법)과 같은 부류다. 여기서도 없을 때만 no-safe-span.
+  for (let off = 0; off + CH_SPAN_MIN <= buf.length; off += CH_SPAN_MIN >> 1) {
+    const hit = okAt(off, CH_SPAN_MIN);
+    if (hit) return hit;
+  }
   return null;
 }
 
 // §2 동결: 파일 목록을 받아 challenge 레코드를 만든다. 파일마다 '단일 읽기(한 Buffer)'에서 전체
 // SHA-256과 구간 digest를 함께 계산한다(세대 혼합 금지). 부적격·상한 초과·루트 밖은 발송하지 않고
 // 사유만 기록(경보 유지 — 안전한 실패 방향). 원문 바이트는 저장하지 않는다(digest·범위만).
+// 필수 결속(§5 — 확인 검증 blocker): 원 verifier session·모드/언어 동결·campaign/ask ID가 없으면
+// 재확인은 원 검증과 결속될 수 없다 — 결손 시 동결 자체를 거부(fail-closed).
+const REQUIRED_BINDINGS = ["verifierSession", "mode", "lang", "campaignId", "askId"];
 function freezeChallenge(opts) {
   const { eventId, ws, execCwd, roots, files, exposedTexts, meta } = opts || {};
+  const bind = {};
+  for (const k of REQUIRED_BINDINGS) {
+    const v = opts && typeof opts[k] === "string" ? opts[k].trim() : "";
+    if (!v) return null; // 결속 결손 — 동결 거부
+    bind[k] = v;
+  }
   const rootReals = (roots || []).map(realOf).filter(Boolean);
   const exposedBufs = (exposedTexts || []).map((t) => Buffer.from(String(t || ""), "utf8"));
+  const readFileFn = (opts && opts.readFile) || ((p) => fs.readFileSync(p)); // 시험 주입 지점(기본=실판독)
   const out = [];
+  const usedIds = new Set(); // pathId는 challenge 안에서 고유해야 응답 1줄=파일 1개 결속이 성립
+  const newPathId = () => {
+    for (;;) { const id = "p" + crypto.randomBytes(8).toString("hex"); if (!usedIds.has(id)) { usedIds.add(id); return id; } }
+  };
   let totalRead = 0, n = 0;
   for (const f of files || []) {
     n++;
-    const pathId = "p" + crypto.randomBytes(4).toString("hex");
-    const base = { pathId, path: String(f) };
+    const base = { pathId: newPathId(), path: String(f) };
     if (n > CH_MAX_FILES) { out.push({ ...base, status: "skipped", reason: "cap-exceeded" }); continue; }
     const real = realOf(f);
     if (!real) { out.push({ ...base, status: "skipped", reason: "read-fail" }); continue; }
@@ -92,7 +112,10 @@ function freezeChallenge(opts) {
     if (st.size > CH_MAX_FILE_BYTES) { out.push({ ...base, path: real, status: "skipped", reason: "too-large" }); continue; }
     if (totalRead + st.size > CH_MAX_TOTAL_BYTES) { out.push({ ...base, path: real, status: "skipped", reason: "cap-exceeded" }); continue; }
     let buf = null;
-    try { buf = fs.readFileSync(real); } catch { out.push({ ...base, path: real, status: "skipped", reason: "read-fail" }); continue; }
+    try { buf = readFileFn(real); } catch { out.push({ ...base, path: real, status: "skipped", reason: "read-fail" }); continue; }
+    // stat 이후 파일이 커졌을 수 있다(확인 검증 blocker) — 실제 읽은 바이트로 상한을 재검사한다.
+    if (buf.length > CH_MAX_FILE_BYTES) { out.push({ ...base, path: real, status: "skipped", reason: "too-large" }); continue; }
+    if (totalRead + buf.length > CH_MAX_TOTAL_BYTES) { out.push({ ...base, path: real, status: "skipped", reason: "cap-exceeded" }); continue; }
     totalRead += buf.length;
     const span = pickSpan(buf, exposedBufs);
     if (!span) { out.push({ ...base, path: real, status: "skipped", reason: "no-safe-span" }); continue; }
@@ -106,6 +129,7 @@ function freezeChallenge(opts) {
     challengeId: "ch-" + crypto.randomBytes(8).toString("hex"),
     eventId: String(eventId || ""),
     ws: String(ws || ""), execCwd: String(execCwd || ""),
+    ...bind,
     meta: meta && typeof meta === "object" ? meta : {},
     createdAt: nowIso(), attempt: 0,
     state: out.some((x) => x.status === "pending") ? "pending" : "no-dispatch",
@@ -117,9 +141,20 @@ function freezeChallenge(opts) {
 function challengeDirFor(ws) { return path.join(CHALLENGES_DIR, wsKeyFor(ws)); }
 function challengeFileFor(ws, challengeId) { return path.join(challengeDirFor(ws), String(challengeId) + ".json"); }
 function writeChallenge(rec) {
+  if (!rec || !rec.challengeId) return null;
   const dir = challengeDirFor(rec.ws);
   fs.mkdirSync(dir, { recursive: true });
-  return atomicWrite(challengeFileFor(rec.ws, rec.challengeId), JSON.stringify(rec, null, 1)) ? rec : null;
+  // create-only 원자 생성(확인 검증 blocker — atomicWrite의 rename은 덮어쓰기라 attempt 리셋 통로):
+  // tmp에 완전히 쓴 뒤 linkSync로 결속 — 대상이 이미 있으면 EEXIST로 거부되어 기존 레코드(상태·
+  // attempt)는 어떤 경로로도 되돌릴 수 없다. 갱신은 오직 transitionChallenge(잠금+전이 규칙)뿐.
+  const file = challengeFileFor(rec.ws, rec.challengeId);
+  const tmp = file + "." + crypto.randomBytes(4).toString("hex") + ".tmp";
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(rec, null, 1));
+    fs.linkSync(tmp, file);
+  } catch { try { fs.unlinkSync(tmp); } catch { /* 무해 */ } return null; }
+  try { fs.unlinkSync(tmp); } catch { /* 무해 */ }
+  return rec;
 }
 function readChallenge(ws, challengeId) {
   try { return JSON.parse(fs.readFileSync(challengeFileFor(ws, challengeId), "utf8")); } catch { return null; }
