@@ -297,12 +297,37 @@ function checkpointFileFor(jobsDir, jobId) { return path.join(String(jobsDir), S
 // 읽어 ①원문 SHA-256 == proofFp ②proof.jobId == 이 job 을 요구한다. proof는 실제 검증 수락 때만
 // writeProof v2가 만들므로, proof 없는 checkpoint는 어느 시점에도 유효해질 수 없다.
 function proofBasenameOk(name) { return typeof name === "string" && /^[A-Za-z0-9._-]+\.json$/.test(name) && !name.includes(".."); }
-function proofMatches(proofFile, proofFp, jobId) {
-  if (!proofBasenameOk(proofFile) || !String(proofFp || "").trim()) return false;
+// 확인 검증 blocker 2건 반영 — proof '실형식' 결속:
+//  공통: 성공 proof만(exit=0·status=success·answerChars>0), proof.codexSession == checkpoint의
+//        verifierSession(다른 검증자의 proof로 승인 불가), workspace 일치.
+//  v2(C-C): jobId·turnId·implementerRevision이 이 job과 정확히 일치.
+//  v1(CL-C): 실제 생산 형식에 jobId가 없다 — job.implementerTurnId=null(CL-C 형태)일 때만 인정하고,
+//        proof.ts >= job.createdAt 시간 결속으로 '이 job 시작 이후에 기록된 proof'만 인정(옛 proof
+//        stale 재사용 차단). C-C job은 v1 proof로 절대 승인되지 않는다.
+function wsEqSimple(a, b) {
+  const n = (s) => String(s || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return !!n(a) && n(a) === n(b);
+}
+function proofMatches(proofFile, proofFp, job, verifierSession) {
+  if (!proofBasenameOk(proofFile) || !String(proofFp || "").trim() || !String(verifierSession || "").trim()) return false;
   let raw = null;
   try { raw = fs.readFileSync(path.join(BRIDGE_DIR, "proofs", proofFile)); } catch { return false; }
   if (sha256(raw) !== proofFp) return false;
-  try { const p = JSON.parse(raw.toString("utf8")); return !!p && p.jobId === jobId; } catch { return false; }
+  let p = null;
+  try { p = JSON.parse(raw.toString("utf8")); } catch { return false; }
+  if (!p || p.exit !== 0 || p.status !== "success" || !(Number(p.answerChars) > 0)) return false;
+  if (String(p.codexSession || "") !== String(verifierSession)) return false;
+  if (!wsEqSimple(p.workspace, job.workspace)) return false;
+  if (p.v === 2) {
+    return p.jobId === job.id && String(p.turnId || "") === String(job.implementerTurnId || "")
+      && Number(p.implementerRevision) === Number(job.implementerRevision);
+  }
+  if (p.v === 1) {
+    if (job.implementerTurnId !== null && job.implementerTurnId !== undefined) return false; // C-C에 v1 금지
+    const pt = Date.parse(p.ts || ""), jt = Date.parse(job.createdAt || "");
+    return Number.isFinite(pt) && Number.isFinite(jt) && pt >= jt;
+  }
+  return false;
 }
 // 구현 턴/revision 결속은 'job에 실재하는 값 그대로'(확인 검증 blocker — CL-C는 null이 정상값):
 // null은 null과만 같고, 실값은 실값과 정확히 일치해야 한다. 빈 문자열로 눙치는 우회는 없다.
@@ -319,7 +344,7 @@ function writePrimaryComplete(jobsDir, job, answerText, bind) {
   const turnId = job.implementerTurnId === null || job.implementerTurnId === undefined ? null : String(job.implementerTurnId);
   const rev = job.implementerRevision === null || job.implementerRevision === undefined ? null : Number(job.implementerRevision);
   if (rev !== null && !Number.isFinite(rev)) return null;
-  if (!proofMatches(bind.proofFile, bind.proofFp, job.id)) return null; // proof 실물 결속 — 쓰기 시점부터 강제
+  if (!proofMatches(bind.proofFile, bind.proofFp, job, bind.verifierSession)) return null; // proof 실물 결속 — 쓰기 시점부터 강제
   const data = Buffer.from(String(answerText || ""), "utf8");
   if (!data.length) return null; // 빈 출력에 checkpoint 금지(성공 job이 빈 판정 본문으로 회수되는 상태 차단)
   const outFile = path.join(String(jobsDir), job.id + ".out");
@@ -347,7 +372,7 @@ function primaryCheckpointValid(jobsDir, job) {
   if (String(c.workspace || "") !== String(job.workspace || "")) return null;
   if (!turnBindEq(c.implementerTurnId, job.implementerTurnId) || !revBindEq(c.implementerRevision, job.implementerRevision)) return null;
   if (!String(c.verifierSession || "").trim()) return null;
-  if (!proofMatches(c.proofFile, c.proofFp, job.id)) return null;
+  if (!proofMatches(c.proofFile, c.proofFp, job, c.verifierSession)) return null;
   if (!c.outSha256 || !Number.isInteger(c.outBytes)) return null;
   let buf = null;
   try { buf = fs.readFileSync(path.join(String(jobsDir), job.id + ".out")); } catch { return null; }
