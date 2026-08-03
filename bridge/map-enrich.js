@@ -1005,7 +1005,9 @@ function runEnrichLocked(repo, o, env) {
       // 크고, 사용자가 정한 범위("답변이 거부돼 멈췄을 때")도 아니다 → 수동 재시도로만.
       const AUTO_RETRY_REASONS = ["precision-failed", "economy-failed", "both-failed"];
       const lastAtt = Array.isArray(j.attempts) && j.attempts.length ? j.attempts[j.attempts.length - 1] : null;
-      const answerRejected = !!lastAtt && ["validation", "response"].includes(String(lastAtt.failureStage || ""));
+      // 답이 도착한 뒤 거부된 단계 전부: response(형식)·validation(근거 대조)·conversion(변환·근거
+      // 재판독). call만 제외한다(확인 검증 blocker — conversion 누락으로 정작 그 경로가 재시도 밖이었다).
+      const answerRejected = !!lastAtt && ["response", "validation", "conversion"].includes(String(lastAtt.failureStage || ""));
       if (AUTO_RETRY_REASONS.includes(String(j.parkedReason || "")) && answerRejected && !Number.isInteger(j.retryFrom)) {
         const wAr = updateEnrichJob(repo, (jj) => {
           if (!jj || jj.phase !== "parked" || Number.isInteger(jj.retryFrom)) return null; // 경합 시 한쪽만 성공

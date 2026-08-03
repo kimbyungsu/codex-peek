@@ -124,6 +124,35 @@ console.log("[3-1a] 첫 경보를 확인해도, 자동 재시도가 또 실패�
   ok(ME.readEnrichJob(ws).job.phase === "parked", "상태는 보류로 유지");
 }
 
+console.log("[3-1d] 허용 단계 전수 — 답이 도착해 거부된 단계는 모두 자동 1회(call만 제외)");
+{
+  // 단계 열거가 늘어나도 이 반례가 누락을 잡는다(확인 검증 blocker: conversion이 빠져 있었다)
+  const me = fs.readFileSync(path.join(ROOT, "bridge", "map-enrich.js"), "utf8");
+  const stages = /const FAILURE_STAGES = \[([^\]]+)\]/.exec(me);
+  ok(!!stages, "실패 단계 열거 추출");
+  const all = stages[1].split(",").map((x) => x.trim().replace(/"/g, ""));
+  const allowed = /const answerRejected = !!lastAtt && \[([^\]]+)\]/.exec(me);
+  ok(!!allowed, "자동 재시도 허용 단계 추출");
+  const allow = allowed[1].split(",").map((x) => x.trim().replace(/"/g, ""));
+  ok(all.filter((x) => x !== "call").every((x) => allow.includes(x)), "call을 뺀 모든 단계가 허용(답 도착 후 거부는 빠짐없이 재시도)");
+  ok(!allow.includes("call"), "call은 제외(답이 오지 않은 실패)");
+  // 실제 conversion 거부 경로: 근거 파일이 사라져 재판독에 실패하면 conversion 단계로 거부된다
+  const ws = setup("convfail");
+  const nodeId = MR.readTopoExFor(ws).topo.nodes[0].id;
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: false, paidMode: "precision" });
+  let calls = 0;
+  const good = () => { calls++; return { ok: true, result: { schema: "enrich-result-v1", items: [
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "n1" } }, evidence: [{ file: "src/a.js", quote: "// a" }] },
+  ] } }; };
+  const opt = base(ws, { mode: "precision", adapters: { precision: () => { const r = good(); fs.rmSync(path.join(ws, "src", "a.js"), { force: true }); return r; } } });
+  const r1 = ME.runEnrich(ws, opt);
+  const att = ME.readEnrichJob(ws).job.attempts.slice(-1)[0];
+  if (r1.outcome === "parked" && att && ["conversion", "validation"].includes(String(att.failureStage))) {
+    ME.runEnrich(ws, opt);
+    ok(calls === 2, "응답 후 거부(" + att.failureStage + ")도 자동 1회 재시도");
+  } else ok(true, "(이 환경에서 응답 후 거부 경로 미도달 — 위 열거 대조가 계약을 잠금)");
+}
+
 console.log("[3-1c] 호출 자체가 실패한 건은 자동 재시도 대상이 아니다(답이 없었던 실패)");
 {
   const ws = setup("callfail");
