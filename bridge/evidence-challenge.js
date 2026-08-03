@@ -292,15 +292,34 @@ function eventFullyResolved(rec) {
 // 보존)로 확정하고, 부분 stdout으로 그 출력 파일을 덮어쓰지 않는다(checkpoint 결속본이 권위).
 const CKPT_SCHEMA = "primary-complete-v1";
 function checkpointFileFor(jobsDir, jobId) { return path.join(String(jobsDir), String(jobId) + ".checkpoint.json"); }
+// proof 실물 대조(확인 검증 blocker — 지문 문자열만 믿으면 실패 child·stale checkpoint가 성공으로
+// 승격된다): checkpoint는 proof 파일의 basename을 저장하고, 쓰기·판정 양쪽에서 그 파일을 실제로
+// 읽어 ①원문 SHA-256 == proofFp ②proof.jobId == 이 job 을 요구한다. proof는 실제 검증 수락 때만
+// writeProof v2가 만들므로, proof 없는 checkpoint는 어느 시점에도 유효해질 수 없다.
+function proofBasenameOk(name) { return typeof name === "string" && /^[A-Za-z0-9._-]+\.json$/.test(name) && !name.includes(".."); }
+function proofMatches(proofFile, proofFp, jobId) {
+  if (!proofBasenameOk(proofFile) || !String(proofFp || "").trim()) return false;
+  let raw = null;
+  try { raw = fs.readFileSync(path.join(BRIDGE_DIR, "proofs", proofFile)); } catch { return false; }
+  if (sha256(raw) !== proofFp) return false;
+  try { const p = JSON.parse(raw.toString("utf8")); return !!p && p.jobId === jobId; } catch { return false; }
+}
+// 구현 턴/revision 결속은 'job에 실재하는 값 그대로'(확인 검증 blocker — CL-C는 null이 정상값):
+// null은 null과만 같고, 실값은 실값과 정확히 일치해야 한다. 빈 문자열로 눙치는 우회는 없다.
+function turnBindEq(a, b) { return (a === null || a === undefined ? null : String(a)) === (b === null || b === undefined ? null : String(b)); }
+function revBindEq(a, b) {
+  const na = a === null || a === undefined ? null : Number(a);
+  const nb = b === null || b === undefined ? null : Number(b);
+  return na === null ? nb === null : Number.isFinite(na) && na === nb;
+}
 function writePrimaryComplete(jobsDir, job, answerText, bind) {
-  // 결속 필수(설계 N): job ID·workspace·구현 턴/revision·verifier session·proof 지문 — 결손=생성 거부
-  const need = {
-    jobId: job && job.id, workspace: job && job.workspace, implementerTurnId: job && job.implementerTurnId,
-    verifierSession: bind && bind.verifierSession, proofFp: bind && bind.proofFp,
-  };
-  for (const v of Object.values(need)) if (!String(v || "").trim()) return null;
-  const rev = Number(job.implementerRevision);
-  if (!Number.isFinite(rev)) return null;
+  if (!job || !String(job.id || "").trim() || !String(job.workspace || "").trim()) return null;
+  if (!bind || !String(bind.verifierSession || "").trim()) return null;
+  // 턴/revision은 job 값 그대로 동결(CL-C=null·null 허용, C-C=실값). revision이 실값이면 수치여야 한다.
+  const turnId = job.implementerTurnId === null || job.implementerTurnId === undefined ? null : String(job.implementerTurnId);
+  const rev = job.implementerRevision === null || job.implementerRevision === undefined ? null : Number(job.implementerRevision);
+  if (rev !== null && !Number.isFinite(rev)) return null;
+  if (!proofMatches(bind.proofFile, bind.proofFp, job.id)) return null; // proof 실물 결속 — 쓰기 시점부터 강제
   const data = Buffer.from(String(answerText || ""), "utf8");
   if (!data.length) return null; // 빈 출력에 checkpoint 금지(성공 job이 빈 판정 본문으로 회수되는 상태 차단)
   const outFile = path.join(String(jobsDir), job.id + ".out");
@@ -310,8 +329,8 @@ function writePrimaryComplete(jobsDir, job, answerText, bind) {
   if (back.length !== data.length || sha256(back) !== sha256(data)) return null; // read-back 불일치=생성 거부
   const ck = {
     schema: CKPT_SCHEMA, jobId: job.id, workspace: job.workspace,
-    implementerTurnId: job.implementerTurnId, implementerRevision: rev,
-    verifierSession: String(bind.verifierSession), proofFp: String(bind.proofFp),
+    implementerTurnId: turnId, implementerRevision: rev,
+    verifierSession: String(bind.verifierSession), proofFp: String(bind.proofFp), proofFile: String(bind.proofFile),
     outBytes: back.length, outSha256: sha256(back), createdAt: nowIso(),
   };
   return atomicWrite(checkpointFileFor(jobsDir, job.id), JSON.stringify(ck, null, 1)) ? ck : null;
@@ -319,12 +338,16 @@ function writePrimaryComplete(jobsDir, job, answerText, bind) {
 function readPrimaryCheckpoint(jobsDir, jobId) {
   try { return JSON.parse(fs.readFileSync(checkpointFileFor(jobsDir, jobId), "utf8")); } catch { return null; }
 }
-// worker와 같은 판정(테스트가 양쪽 드리프트를 잠근다): 스키마·jobId·workspace 결속 + 출력 파일의
-// 바이트 수·SHA-256이 checkpoint와 일치할 때만 유효. 불일치·부재=무효(기존 실패 경로 — 안전 방향).
+// worker와 같은 판정(테스트가 양쪽 드리프트를 잠근다): 스키마·jobId·workspace + 구현 턴/revision
+// (null 동등 포함 전량 대조) + verifier session + proof 실물(지문·jobId) + 출력 바이트·SHA 일치.
+// 하나라도 어긋나면 무효(기존 실패 경로 — 안전 방향).
 function primaryCheckpointValid(jobsDir, job) {
   const c = readPrimaryCheckpoint(jobsDir, job && job.id);
   if (!c || c.schema !== CKPT_SCHEMA || c.jobId !== job.id) return null;
   if (String(c.workspace || "") !== String(job.workspace || "")) return null;
+  if (!turnBindEq(c.implementerTurnId, job.implementerTurnId) || !revBindEq(c.implementerRevision, job.implementerRevision)) return null;
+  if (!String(c.verifierSession || "").trim()) return null;
+  if (!proofMatches(c.proofFile, c.proofFp, job.id)) return null;
   if (!c.outSha256 || !Number.isInteger(c.outBytes)) return null;
   let buf = null;
   try { buf = fs.readFileSync(path.join(String(jobsDir), job.id + ".out")); } catch { return null; }

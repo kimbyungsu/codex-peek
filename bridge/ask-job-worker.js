@@ -26,16 +26,29 @@ function patch(file, extra) {
 // primary-complete checkpoint 판정(설계 §6 — bridge/evidence-challenge.js primaryCheckpointValid와
 // 같은 규칙·의도적 사본: worker는 의존 최소 원칙이라 contract-lib 연쇄 로드를 피한다. 드리프트는
 // tests/evidence-checkpoint.test.js가 API로 만든 checkpoint를 이 worker로 판정시켜 잠근다).
-// 유효 조건: 스키마·jobId·workspace 결속 + <id>.out의 바이트 수·SHA-256이 checkpoint와 일치.
+// 유효 조건: 스키마·jobId·workspace + 구현 턴/revision(null 동등 포함 전량 대조) + verifier session
+// + proof 실물(BRIDGE_DIR/proofs/<basename> 원문 SHA-256=proofFp·proof.jobId=이 job) + 출력
+// 바이트 수·SHA-256 일치. proof는 실제 검증 수락 때만 만들어지므로 위조·stale checkpoint는 여기서 죽는다.
+function sha256Hex(buf) { return require("crypto").createHash("sha256").update(buf).digest("hex"); }
 function primaryCheckpoint(dir, job, outFile) {
   const c = read(path.join(dir, job.id + ".checkpoint.json"));
   if (!c || c.schema !== "primary-complete-v1" || c.jobId !== job.id) return null;
   if (String(c.workspace || "") !== String(job.workspace || "")) return null;
+  const nn = (v) => v === null || v === undefined ? null : String(v);
+  if (nn(c.implementerTurnId) !== nn(job.implementerTurnId)) return null;
+  const nrev = (v) => v === null || v === undefined ? null : Number(v);
+  const cr = nrev(c.implementerRevision), jr = nrev(job.implementerRevision);
+  if (cr === null ? jr !== null : !(Number.isFinite(cr) && cr === jr)) return null;
+  if (!String(c.verifierSession || "").trim()) return null;
+  if (typeof c.proofFile !== "string" || !/^[A-Za-z0-9._-]+\.json$/.test(c.proofFile) || c.proofFile.includes("..")) return null;
+  const bridgeDir = process.env.CODEX_BRIDGE_HOME || path.join(require("os").homedir(), ".codex-bridge");
+  let praw; try { praw = fs.readFileSync(path.join(bridgeDir, "proofs", c.proofFile)); } catch { return null; }
+  if (sha256Hex(praw) !== c.proofFp) return null;
+  try { const p = JSON.parse(praw.toString("utf8")); if (!p || p.jobId !== job.id) return null; } catch { return null; }
   if (!c.outSha256 || !Number.isInteger(c.outBytes)) return null;
   let buf; try { buf = fs.readFileSync(outFile); } catch { return null; }
   if (buf.length !== c.outBytes) return null;
-  const sha = require("crypto").createHash("sha256").update(buf).digest("hex");
-  return sha === c.outSha256 ? c : null;
+  return sha256Hex(buf) === c.outSha256 ? c : null;
 }
 
 function main() {

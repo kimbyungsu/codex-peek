@@ -1,4 +1,5 @@
 // primary-complete checkpoint(설계 §6·증분 2) — API 단위 + 실제 ask-job-worker e2e 실행 반례.
+// 결속 계약: jobId·workspace·구현 턴/revision(null 동등 포함)·verifier session·proof 실물(지문+jobId)·출력 지문.
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -7,6 +8,7 @@ const crypto = require("crypto");
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "evck_home_"));
 process.env.CODEX_BRIDGE_HOME = home;
+fs.mkdirSync(path.join(home, "proofs"), { recursive: true });
 
 const ch = require("../bridge/evidence-challenge.js");
 const WORKER = path.resolve(__dirname, "../bridge/ask-job-worker.js");
@@ -16,7 +18,63 @@ const sha = (b) => crypto.createHash("sha256").update(b).digest("hex");
 let pass = 0, fail = 0;
 const ck = (n, c) => { (c ? pass++ : fail++); console.log((c ? "  ✅ " : "  ❌ ") + n); };
 
-// ── 가짜 브릿지(worker가 spawn하는 자식): STUB_MODE로 4경로 재현 ─────────────────────
+// proof 실물 생성기: writeProof v2가 만드는 것과 같은 자리(BRIDGE_DIR/proofs)·jobId 결속만 모사
+let pseq = 0;
+function makeProof(jobId) {
+  const name = "proof-" + (++pseq) + ".json";
+  const raw = JSON.stringify({ schema: "cbx-proof-v2", jobId, ts: new Date().toISOString() });
+  fs.writeFileSync(path.join(home, "proofs", name), raw, "utf8");
+  return { proofFile: name, proofFp: sha(Buffer.from(raw, "utf8")) };
+}
+
+console.log("[1] API 단위 — proof 실물 결속·read-back·유효성");
+{
+  const jobs = fs.mkdtempSync(path.join(os.tmpdir(), "evck_api_"));
+  const job = { id: "ask-a1", workspace: "D:/w", implementerTurnId: "t1", implementerRevision: 2 };
+  const pr = makeProof("ask-a1");
+  const bind = { verifierSession: "vs1", ...pr };
+  const ckpt = ch.writePrimaryComplete(jobs, job, "판정 본문입니다. 근거와 결론.", bind);
+  ck("정상 생성(스키마·결속 필드)", !!ckpt && ckpt.schema === ch.CKPT_SCHEMA && ckpt.jobId === "ask-a1" && ckpt.implementerRevision === 2 && ckpt.verifierSession === "vs1" && ckpt.proofFile === pr.proofFile);
+  const outBuf = fs.readFileSync(path.join(jobs, "ask-a1.out"));
+  ck("출력 파일=원문 그대로·지문 일치", outBuf.toString("utf8") === "판정 본문입니다. 근거와 결론." && ckpt.outSha256 === sha(outBuf) && ckpt.outBytes === outBuf.length);
+  ck("유효성 판정 통과", !!ch.primaryCheckpointValid(jobs, job));
+  ck("빈 출력=생성 거부", ch.writePrimaryComplete(jobs, { ...job, id: "ask-a2" }, "", { verifierSession: "vs1", ...makeProof("ask-a2") }) === null);
+  ck("proof 없는 지문=생성 거부", ch.writePrimaryComplete(jobs, { ...job, id: "ask-a3" }, "x답변", { verifierSession: "vs1", proofFile: "no-such.json", proofFp: "f".repeat(64) }) === null);
+  ck("proof jobId 불일치=생성 거부", ch.writePrimaryComplete(jobs, { ...job, id: "ask-a4" }, "x답변", { verifierSession: "vs1", ...makeProof("ask-딴잡") }) === null);
+  ck("proofFile 경로 이탈 표기=거부", ch.writePrimaryComplete(jobs, { ...job, id: "ask-a5" }, "x답변", { verifierSession: "vs1", proofFile: "..\\..\\evil.json", proofFp: "f".repeat(64) }) === null);
+  ck("verifierSession 결손=거부", ch.writePrimaryComplete(jobs, { ...job, id: "ask-a6" }, "x답변", { verifierSession: " ", ...makeProof("ask-a6") }) === null);
+  ck("revision 비수치=거부", ch.writePrimaryComplete(jobs, { ...job, id: "ask-a7", implementerRevision: "많이" }, "x답변", { verifierSession: "vs1", ...makeProof("ask-a7") }) === null);
+
+  // CL-C 실형태(확인 검증 blocker): implementerTurnId·implementerRevision = null — 생성·판정 모두 통과해야 한다
+  const clc = { id: "ask-clc1", workspace: "D:/w", implementerSession: null, implementerTurnId: null, implementerRevision: null };
+  const ckc = ch.writePrimaryComplete(jobs, clc, "CL-C 판정 본문", { verifierSession: "vs1", ...makeProof("ask-clc1") });
+  ck("CL-C(null 턴/revision)=생성 성공", !!ckc && ckc.implementerTurnId === null && ckc.implementerRevision === null);
+  ck("CL-C 유효성 판정 통과(null 동등)", !!ch.primaryCheckpointValid(jobs, clc));
+  ck("null 턴 checkpoint를 실값 job에 재사용=무효", ch.primaryCheckpointValid(jobs, { ...clc, implementerTurnId: "t9", implementerRevision: 1 }) === null);
+
+  // 결속 불일치·변조=무효
+  fs.appendFileSync(path.join(jobs, "ask-a1.out"), "변조");
+  ck("출력 변조=유효성 무효", ch.primaryCheckpointValid(jobs, job) === null);
+  ck("턴 불일치=무효", (() => {
+    const j2 = { id: "ask-b1", workspace: "D:/w", implementerTurnId: "t1", implementerRevision: 1 };
+    ch.writePrimaryComplete(jobs, j2, "본문 바이트", { verifierSession: "vs1", ...makeProof("ask-b1") });
+    return ch.primaryCheckpointValid(jobs, { ...j2, implementerTurnId: "t2" }) === null;
+  })());
+  ck("workspace 불일치=무효", (() => {
+    const j3 = { id: "ask-b2", workspace: "D:/w", implementerTurnId: "t1", implementerRevision: 1 };
+    ch.writePrimaryComplete(jobs, j3, "본문 바이트", { verifierSession: "vs1", ...makeProof("ask-b2") });
+    return ch.primaryCheckpointValid(jobs, { ...j3, workspace: "D:/딴곳" }) === null;
+  })());
+  ck("proof 사후 변조=무효", (() => {
+    const j4 = { id: "ask-b3", workspace: "D:/w", implementerTurnId: null, implementerRevision: null };
+    const p4 = makeProof("ask-b3");
+    ch.writePrimaryComplete(jobs, j4, "본문 바이트", { verifierSession: "vs1", ...p4 });
+    fs.appendFileSync(path.join(home, "proofs", p4.proofFile), " ");
+    return ch.primaryCheckpointValid(jobs, j4) === null;
+  })());
+}
+
+// ── 가짜 브릿지(worker가 spawn하는 자식): STUB_MODE로 경로 재현. checkpoint 모드는 proof 실물도 만든다 ──
 const stub = path.join(home, "stub-bridge.js");
 fs.writeFileSync(stub, `
 const fs=require("fs"),path=require("path");
@@ -26,7 +84,14 @@ const job=JSON.parse(fs.readFileSync(jobFile,"utf8"));
 const dir=path.dirname(jobFile);
 if(mode==="ckpt-crash"||mode==="ckpt-tamper"){
   const ech=require(process.env.STUB_ECH);
-  const ok=ech.writePrimaryComplete(dir,job,"정답 본문 결속판 "+"x".repeat(200),{verifierSession:"vs-e2e",proofFp:"pf-e2e"});
+  const crypto=require("crypto");
+  const home=process.env.CODEX_BRIDGE_HOME;
+  const pname="proof-e2e-"+job.id+".json";
+  const raw=JSON.stringify({schema:"cbx-proof-v2",jobId:job.id,ts:new Date().toISOString()});
+  fs.mkdirSync(path.join(home,"proofs"),{recursive:true});
+  fs.writeFileSync(path.join(home,"proofs",pname),raw,"utf8");
+  const fp=crypto.createHash("sha256").update(Buffer.from(raw,"utf8")).digest("hex");
+  const ok=ech.writePrimaryComplete(dir,job,"정답 본문 결속판 "+"x".repeat(200),{verifierSession:"vs-e2e",proofFile:pname,proofFp:fp});
   if(!ok){process.stdout.write("CKPT-FAIL");process.exit(9);}
   if(mode==="ckpt-tamper") fs.appendFileSync(path.join(dir,job.id+".out"),"변조");
   process.stdout.write("PARTIAL-STDOUT");
@@ -37,14 +102,14 @@ process.stdout.write("전체 정답 출력");process.exit(0);
 `, "utf8");
 
 let seq = 0;
-function runWorker(mode) {
+function runWorker(mode, jobExtra) {
   const jobs = fs.mkdtempSync(path.join(os.tmpdir(), "evck_jobs_"));
   const id = "ask-ck" + (++seq);
-  const job = {
+  const job = Object.assign({
     schema: "ask-job-v1", id, execCwd: jobs, workspace: "D:/evck-ws",
     implementerTurnId: "turn-1", implementerRevision: 3,
     timeoutMin: 1, deadlineAt: new Date(Date.now() + 60_000).toISOString(), flags: [],
-  };
+  }, jobExtra || {});
   const jobFile = path.join(jobs, id + ".json");
   fs.writeFileSync(jobFile, JSON.stringify(job), "utf8");
   const r = cp.spawnSync(process.execPath, [WORKER, jobFile], {
@@ -54,30 +119,6 @@ function runWorker(mode) {
   return { jobs, id, exit: r.status, job: JSON.parse(fs.readFileSync(jobFile, "utf8")), out: (() => { try { return fs.readFileSync(path.join(jobs, id + ".out"), "utf8"); } catch { return null; } })() };
 }
 
-console.log("[1] API 단위 — 결속·read-back·유효성");
-{
-  const jobs = fs.mkdtempSync(path.join(os.tmpdir(), "evck_api_"));
-  const job = { id: "ask-a1", workspace: "D:/w", implementerTurnId: "t1", implementerRevision: 2 };
-  const bind = { verifierSession: "vs1", proofFp: "pf1" };
-  const ckpt = ch.writePrimaryComplete(jobs, job, "판정 본문입니다. 근거와 결론.", bind);
-  ck("정상 생성(스키마·결속 필드)", !!ckpt && ckpt.schema === ch.CKPT_SCHEMA && ckpt.jobId === "ask-a1" && ckpt.implementerRevision === 2 && ckpt.verifierSession === "vs1" && ckpt.proofFp === "pf1");
-  const outBuf = fs.readFileSync(path.join(jobs, "ask-a1.out"));
-  ck("출력 파일=원문 그대로·지문 일치", outBuf.toString("utf8") === "판정 본문입니다. 근거와 결론." && ckpt.outSha256 === sha(outBuf) && ckpt.outBytes === outBuf.length);
-  ck("유효성 판정 통과", !!ch.primaryCheckpointValid(jobs, job));
-  ck("빈 출력=생성 거부", ch.writePrimaryComplete(jobs, { ...job, id: "ask-a2" }, "", bind) === null);
-  ck("결속 결손(turnId)=거부", ch.writePrimaryComplete(jobs, { ...job, id: "ask-a3", implementerTurnId: "" }, "x답변", bind) === null);
-  ck("결속 결손(proofFp)=거부", ch.writePrimaryComplete(jobs, { ...job, id: "ask-a4" }, "x답변", { verifierSession: "vs1", proofFp: "" }) === null);
-  ck("revision 비수치=거부", ch.writePrimaryComplete(jobs, { ...job, id: "ask-a5", implementerRevision: "많이" }, "x답변", bind) === null);
-  // 변조·결속 불일치=무효
-  fs.appendFileSync(path.join(jobs, "ask-a1.out"), "변조");
-  ck("출력 변조=유효성 무효", ch.primaryCheckpointValid(jobs, job) === null);
-  ck("workspace 불일치=무효", (() => {
-    const j2 = { id: "ask-b1", workspace: "D:/w", implementerTurnId: "t1", implementerRevision: 1 };
-    ch.writePrimaryComplete(jobs, j2, "본문 바이트", bind);
-    return ch.primaryCheckpointValid(jobs, { ...j2, workspace: "D:/딴곳" }) === null;
-  })());
-}
-
 console.log("[2] worker e2e — checkpoint 복구(§6: challenge 크래시에도 원 job 성공 확정)");
 {
   const r = runWorker("ckpt-crash");
@@ -85,6 +126,13 @@ console.log("[2] worker e2e — checkpoint 복구(§6: challenge 크래시에도
   ck("실제 종료코드는 challengeExitCode로 정직 보존", r.job.challengeExitCode === 7 && r.job.checkpointRecovered === true);
   ck("worker 자체도 성공 종료", r.exit === 0);
   ck("출력 파일=결속본 유지(부분 stdout으로 덮어쓰지 않음)", typeof r.out === "string" && r.out.includes("정답 본문 결속판") && !r.out.includes("PARTIAL-STDOUT"));
+}
+
+console.log("[2-1] worker e2e — CL-C(null 턴/revision)도 checkpoint 복구 도달");
+{
+  const r = runWorker("ckpt-crash", { implementerSession: null, implementerTurnId: null, implementerRevision: null });
+  ck("CL-C job=succeeded·exitCode 0", r.job.state === "succeeded" && r.job.exitCode === 0 && r.job.challengeExitCode === 7);
+  ck("CL-C 출력=결속본 유지", typeof r.out === "string" && r.out.includes("정답 본문 결속판"));
 }
 
 console.log("[3] worker e2e — checkpoint 없는 크래시=기존 실패 경로(무회귀)");
@@ -106,6 +154,25 @@ console.log("[5] worker e2e — checkpoint 후 출력 변조=복구 거부(안�
   const r = runWorker("ckpt-tamper");
   ck("변조된 결속본=복구 안 함·기존 실패 경로", r.job.state === "failed" && r.job.exitCode === 7);
   ck("출력은 일반 경로대로 stdout으로 대체", r.out === "PARTIAL-STDOUT");
+}
+
+console.log("[6] worker e2e — proof 소멸=복구 거부(위조·stale 차단)");
+{
+  // checkpoint는 만들되 proof를 지워 '지문 문자열만 남은' 상태를 재현 — worker는 실물 대조로 거부해야 한다
+  const jobs = fs.mkdtempSync(path.join(os.tmpdir(), "evck_jobs_"));
+  const id = "ask-ck-noproof";
+  const job = { schema: "ask-job-v1", id, execCwd: jobs, workspace: "D:/evck-ws", implementerTurnId: null, implementerRevision: null, timeoutMin: 1, deadlineAt: new Date(Date.now() + 60_000).toISOString(), flags: [] };
+  const jobFile = path.join(jobs, id + ".json");
+  fs.writeFileSync(jobFile, JSON.stringify(job), "utf8");
+  const pr = makeProof(id);
+  ch.writePrimaryComplete(jobs, job, "결속 본문", { verifierSession: "vs1", ...pr });
+  fs.unlinkSync(path.join(home, "proofs", pr.proofFile)); // proof 소멸
+  const r = cp.spawnSync(process.execPath, [WORKER, jobFile], {
+    env: Object.assign({}, process.env, { CODEX_BRIDGE_WORKER_BRIDGE: stub, STUB_MODE: "plain-crash", STUB_ECH: ECH }),
+    encoding: "utf8", windowsHide: true, timeout: 30_000,
+  });
+  const j = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+  ck("proof 실물 없는 checkpoint=복구 거부(failed)", r.status !== 0 && j.state === "failed");
 }
 
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);
