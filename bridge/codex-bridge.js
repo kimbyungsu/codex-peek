@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -281,7 +281,8 @@ function writeProof(codexSession, answer, ws) {
     if (c.harnessMode !== "codex-codex") die(tB("⚠️ 이 검증 작업은 Codex-Codex 모드에서 시작됐는데 완료 시점 계약이 다른 모드입니다(stale). 현재 모드에서 새 검증을 시작하세요.", "⚠️ This verification job started in Codex-Codex mode but the contract has switched modes (stale). Start a new verification under the current mode."), 4);
     const r = writeDurableProofV2(ws, job, answer, codexSession);
     if (!r.ok) die(tB(`⚠️ 검증 증명 기록 실패(${r.reason}) — 이 검증은 성공으로 인정되지 않습니다. 역할·턴이 바뀌었으면 구현 대화의 현재 턴에서 새 검증을 시작하세요.`, `⚠️ Failed to record the verification proof (${r.reason}) — this verification is not accepted. If the role/turn changed, start a new verification from the implementer conversation's current turn.`), 4);
-    return;
+    // 재확인 배선(증분 4): checkpoint 결속용 proof 실물 좌표 반환(실패해도 proof 기록 자체는 유효)
+    try { return { proofFile: path.basename(r.file || ""), proofFp: crypto.createHash("sha256").update(fs.readFileSync(r.file)).digest("hex") }; } catch { return {}; }
   }
   if (c.harnessMode === "codex-codex") {
     // env job이 없거나(직접 ask) 스냅샷 없는 구버전 job — C-C 성공 계약은 내구 경로 v2만 인정.
@@ -300,7 +301,10 @@ function writeProof(codexSession, answer, ws) {
     answerChars: (answer || "").length,
   };
   const key = (cs || "_nosession").replace(/[^0-9a-zA-Z._-]/g, "_"); // 파일명 안전(UUID는 본래 안전)
-  atomicWrite(path.join(PROOFS_DIR, key + ".json"), JSON.stringify(proof)); // atomicWrite가 PROOFS_DIR 자동 생성
+  const rawProof = JSON.stringify(proof);
+  atomicWrite(path.join(PROOFS_DIR, key + ".json"), rawProof); // atomicWrite가 PROOFS_DIR 자동 생성
+  // 재확인 배선(증분 4): checkpoint 결속용 proof 실물 좌표 반환
+  return { proofFile: key + ".json", proofFp: crypto.createHash("sha256").update(Buffer.from(rawProof, "utf8")).digest("hex") };
 }
 
 // 결정2-2단계: Codex 답의 인용 근거(파일:라인)를 보수적으로 점검. 거짓경보(cry-wolf) 회피 최우선 —
@@ -1037,7 +1041,11 @@ function flagEvidence(answer, ws, sessionId, execCwd) {
     const seenChk = citedFilesUnseen(answer, pathWs, sessionId);
     const unseen = seenChk.checked ? seenChk.unseen : []; // 판단 보류(checked=false)는 경보 안 함 — 종전과 동일한 보수성
     if (unseen.length) {
+      // 재확인 배선(증분 4): 이벤트 id를 선생성해 challenge 장부와 결속(전체 경로 목록은 exact에서)
+      const evId = `${nowIso()}_${Math.random().toString(36).slice(2, 8)}`;
+      const exact = citedFilesUnseenExact(answer, pathWs, sessionId);
       appendIntegrityEvent({
+        id: evId,
         ts: nowIso(),
         session: claudeId() || ((readActive() || {}).claudeSession) || "",
         workspace: ws,
@@ -1048,9 +1056,52 @@ function flagEvidence(answer, ws, sessionId, execCwd) {
         detailKo: `검증 답이 인용한 파일 ${unseen.length}개를 이 검증 기록에서 다룬 흔적을 확인하지 못했습니다(이전 턴에서 봤거나 기록 형식 차이일 수 있음 — '안 읽음' 단정 아님): ${unseen.slice(0, 3).join(" / ")}`,
         detailEn: `${unseen.length} cited file(s) show no trace of being handled in this verification log (may be from an earlier turn or a log-format difference — not asserting 'unread'): ${unseen.slice(0, 3).join(" / ")}`,
       });
+      // 재확인 배선(증분 4): 발송 재료를 호출자에게 돌려준다(약한 축의 전체 경로 목록 — 경보 목록과 동일 산출)
+      return { eventId: evId, unseen: exact.checked ? exact.unseenWeak : [] };
     }
   } catch { /* best-effort — 점검 실패가 검증 흐름을 막지 않음 */ }
+  return null;
 }
+// ── 근거 재확인 발송(설계 §3·§4·§5 — 증분 4) ────────────────────────────────────────────
+// 원 턴의 모든 후처리(proof·flags·verdict·telemetry)와 출력 조립·(내구면 §6 checkpoint)이 끝난 뒤에만
+// 호출된다(H — 탐지·발송 분리). 예산·proof·판정·findings 파이프라인을 일절 건드리지 않고(B), 어떤
+// 실패도 원 검증 결과에 영향을 주지 않는다(G — 전체 best-effort). 같은 프로세스가 lease를 보유한 채
+// resume하므로 원 검증→재확인 사이 무잠금 구간이 없다(§7 token 이관). 응답은 CH 줄만 파싱(재귀 없음).
+function maybeDispatchChallenge(opts) {
+  try {
+    const { ws, exec, codexSession, alert, promptText, answer, harnessMode, lang, campaignId, askId, runCodexFn } = opts || {};
+    if (!alert || !alert.eventId || !Array.isArray(alert.unseen) || !alert.unseen.length) return { skipped: "no-alert" };
+    const ech = require("./evidence-challenge.js");
+    ech.convergeStaleChallenges(ws); // §5 강제 종료 잔재 수렴(재발송 없음)
+    if (ech.listChallenges(ws).some((r) => r.eventId === alert.eventId)) return { skipped: "already" }; // 이벤트당 1회
+    if (minimumCallerTimeoutMs() < 60_000) return { skipped: "no-time" }; // 마감 임박 — 발송 포기(경보 유지=안전)
+    const roots = [exec, ws];
+    try { const sr = resolveScoutRepo(ws, loadContract(ws)); if (sr && sr.repo) roots.push(sr.repo); } catch { /* 승인 루트 보강 실패=기본 루트만 */ }
+    const rec = ech.freezeChallenge({
+      eventId: alert.eventId, ws, execCwd: exec || ws, roots: roots.filter(Boolean),
+      files: alert.unseen, exposedTexts: [String(promptText || ""), String(answer || "")],
+      verifierSession: codexSession, mode: harnessMode, lang, campaignId: String(campaignId || "direct"), askId: String(askId || "direct"),
+    });
+    if (!rec) return { skipped: "freeze-refused" };
+    if (!ech.writeChallenge(rec)) return { skipped: "write-fail" };
+    if (rec.state !== "pending") return { skipped: "no-dispatch" }; // 전 파일이 사유 기록(경보 유지)
+    if (!ech.markDispatched(ws, rec.challengeId).ok) return { skipped: "dispatch-refused" }; // 호출 전 원자 선기록·시도 1
+    const run = runCodexFn || ((args, p) => runCodex(args, p));
+    const r = run(["resume", codexSession], ech.buildChallengePrompt(rec, lang));
+    if (!r || r.error || !r.answer || (typeof r.status === "number" && r.status !== 0)) {
+      ech.markOutcomeUnknown(ws, rec.challengeId); // 호출 실패=판정 대상 아님(태만 기록 금지 — §4)
+      return { challengeId: rec.challengeId, outcome: "outcome-unknown" };
+    }
+    const judged = ech.judgeChallenge(rec, ech.parseChallengeResponse(r.answer, rec));
+    const st = ech.settleChallenge(ws, rec.challengeId, judged);
+    if (st.ok && ech.eventFullyResolved(st.rec)) {
+      try { ackIntegrityEvents([alert.eventId]); } catch { /* 실패=경보 유지(안전) */ } // §5 resolved 선기록→ack 투영
+      return { challengeId: rec.challengeId, outcome: "resolved", acked: true };
+    }
+    return { challengeId: rec.challengeId, outcome: judged.overall, acked: false };
+  } catch { return { skipped: "error" }; }
+}
+
 function exactPathFromRoot(raw, root) {
   let p = normSepWin(String(raw || "")); // 장부측 바늘도 같은 플랫폼 규칙(POSIX=\ 보존)
   if (!p || /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(p)) return null;
@@ -3042,20 +3093,27 @@ async function cmdAsk(rest) {
     }
     attempt.answered(); // 답 수신(이후 예외=proof-rejected 매핑)
     try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
-    writeProof(link.codexSession, answer, ws); // 실제 성공 → 검증 증명 기록(verify-guard가 인정)
+    const proofBind = writeProof(link.codexSession, answer, ws) || {}; // 실제 성공 → 검증 증명 기록(verify-guard가 인정)+checkpoint 결속 좌표
     attempt.proofAccepted(); // 증명 실물 확정(이후 예외=postprocess-error — proof-rejected 오분류 차단·6차 blocker)
-    flagEvidence(answer, ws, link.codexSession, exec); // 결정2: 인용 근거 존재성+다룬 흔적 점검(경로해석=작업폴더 exec). 라벨=연 폴더 ws
+    const evAlert = flagEvidence(answer, ws, link.codexSession, exec); // 결정2: 인용 근거 존재성+다룬 흔적 점검(경로해석=작업폴더 exec). 라벨=연 폴더 ws. 반환=재확인 발송 재료
     flagLedgerConfirms(answer, ws, link.codexSession, exec, { askId, attach: attCarrier }); // 로드맵 ④ L1-A: 등급·echo·askId·seen을 이벤트에
     collectScoutTargetEvidence(answer, ws, exec); // 정찰 대상 자기진단 증거(2026-07-10 — 판정 무관·3트랙만·실패 무해)
     const mfl = machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId, campSnap); // P-12 2c: 판독·정합·[백로그] 자동 등록(core만·1회)
     flagVerdict(answer, ws, link.codexSession, modeSnap, mfl.machine, attempt); // 경보+2d accepted 1행 위임(비-깨끗=빨강/노랑·표지 누락·기계 강등 가시화)
-    process.stdout.write(`${langSnap === "en" ? "# Linked session" : "# 연결 세션"} ${link.codexSession} (${link.via})\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine, rejudgeSnap)}\n`);
-    process.stdout.write(mfl.notice); // 2c 영수증/거부/실패 줄(core 외·해당 없음="" — 바이트 동일)
-    process.stdout.write(envelopeWarnLine(ws, langSnap)); // 거버넌스 증분 1 — 경계 손상/미승인 변경 경고(정상·부재·미승인="")
-    process.stdout.write(budgetNoticeLines(budgetGate.res, langSnap, profileSnap));
-    process.stdout.write(breakdownNoticeFor(ws, langSnap, budgetGate.res)); // 증분 3 — 상한 마지막 왕복=원인 분해 병기
-    process.stdout.write(envelopeCandidateNoticeFor(ws, langSnap, budgetGate.res, profileSnap)); // §7 증분 1 — core 소진=수칙서 후보 재료+작성 의무 병기
-    process.stdout.write(integrityReviewLine(ws, langSnap, profileSnap)); // 증분 3 — 무결성=경계 재심 재료 병기 // 포맷 계층(⑻) — N=M 예고·미집계 1줄(무제한="")
+    // 재확인 배선(§3 H): 출력을 먼저 '조립'해 실물을 확정한다 — 내구 job이면 §6 checkpoint로 결속해
+    // 재확인 중 강제 종료에도 원 검증 출력·성공이 보존되게 한 뒤, 인쇄하고, 마지막에 발송한다.
+    const outText = `${langSnap === "en" ? "# Linked session" : "# 연결 세션"} ${link.codexSession} (${link.via})\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine, rejudgeSnap)}\n`
+      + mfl.notice // 2c 영수증/거부/실패 줄(core 외·해당 없음="" — 바이트 동일)
+      + envelopeWarnLine(ws, langSnap) // 거버넌스 증분 1 — 경계 손상/미승인 변경 경고(정상·부재·미승인="")
+      + budgetNoticeLines(budgetGate.res, langSnap, profileSnap)
+      + breakdownNoticeFor(ws, langSnap, budgetGate.res) // 증분 3 — 상한 마지막 왕복=원인 분해 병기
+      + envelopeCandidateNoticeFor(ws, langSnap, budgetGate.res, profileSnap) // §7 증분 1 — core 소진=수칙서 후보 재료+작성 의무 병기
+      + integrityReviewLine(ws, langSnap, profileSnap); // 증분 3 — 무결성=경계 재심 재료 병기 // 포맷 계층(⑻) — N=M 예고·미집계 1줄(무제한="")
+    if (durableEnv && evAlert && proofBind.proofFile) {
+      try { require("./evidence-challenge.js").writePrimaryComplete(path.dirname(String(process.env.CODEX_BRIDGE_JOB_PROMPT_FILE || "")), durableEnv, outText, { verifierSession: link.codexSession, proofFile: proofBind.proofFile, proofFp: proofBind.proofFp }); } catch { /* 무해 — checkpoint 없으면 기존 실패 경로 */ }
+    }
+    process.stdout.write(outText);
+    maybeDispatchChallenge({ ws, exec, codexSession: link.codexSession, alert: evAlert, promptText, answer, harnessMode: harnessModeSnap, lang: langSnap, campaignId: durableEnv ? durableEnv.campaignId : "direct", askId });
     return;
   }
 
@@ -3465,4 +3523,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex };
+module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex };

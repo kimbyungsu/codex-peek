@@ -205,8 +205,10 @@ function withFileLockStrict(lockPath, fn) {
 function appendIntegrityEvent(ev) {
   return withIntegrityLock(() => {
     const events = readIntegrityEvents();
-    const id = `${(ev && ev.ts) || ""}_${Math.random().toString(36).slice(2, 8)}`; // 일반 node(워크플로 아님)라 Math.random OK
-    events.push(Object.assign({ id, ack: false }, ev));
+    // 호출자가 id를 미리 만들어 넘기면 존중한다(재확인 배선 — 이벤트와 challenge 장부를 같은 id로
+    // 결속해야 해소 투영(ack)이 정확한 1건을 가리킨다). 없으면 종전대로 생성.
+    const id = (ev && typeof ev.id === "string" && ev.id) ? ev.id : `${(ev && ev.ts) || ""}_${Math.random().toString(36).slice(2, 8)}`; // 일반 node(워크플로 아님)라 Math.random OK
+    events.push(Object.assign({ ack: false }, ev, { id }));
     return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: events.slice(-50) })); // 최근 50건 상한
   });
 }

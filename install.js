@@ -66,6 +66,7 @@ const BRIDGE_SCRIPTS = [
   "map-enrich.js", // P8: 의미 보강 실행기(저장·순수+runEnrich+CLI — 발동 3지점이 spawn하는 표면)
   "map-intent.js", // P9: 정책 충돌 카드 파생 뷰+사용자 선택 선기록(자동 적용/UI 전 바닥 계층)
   "enrich-providers.js", // P8: 보강 어댑터 3종+Verifier 해소 진입점(설치본 자동 발동에서 실존해야 함)
+  "evidence-challenge.js", // 근거 재확인(증분 4): codex-bridge가 발송·판정에 require — 누락 시 설치본 로드 불능
 ];
 
 // 우리가 settings.json에 심는 훅. event → {matcher, script}

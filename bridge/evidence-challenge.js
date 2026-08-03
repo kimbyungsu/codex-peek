@@ -284,6 +284,31 @@ function eventFullyResolved(rec) {
   return rec && rec.state === "resolved" && (rec.files || []).length > 0 && rec.files.every((f) => f.status === "resolved");
 }
 
+// ── §3·§4 발송 재료 (증분 4) ───────────────────────────────────────────────────────────
+// 재확인 요청문: 사용자 문안은 langSnap, 응답 블록 형식은 언어 중립(설계 E). 판정문 형식을 요구하지
+// 않는다 — 이 호출은 검증이 아니라 판독 재확인이며, 응답은 CH 줄만 파싱된다(파이프라인 격리 B).
+function buildChallengePrompt(rec, lang) {
+  const live = (rec.files || []).filter((f) => f.status === "pending");
+  const head = lang === "en"
+    ? "[evidence recheck] This is a read re-confirmation for files your previous answer cited. For each item below, read the specified byte span from the file and reply with its raw bytes encoded as base64. Reply ONLY with lines of exactly this form (no verdict, no prose):"
+    : "[근거 재확인] 직전 답변이 인용한 파일의 판독 재확인입니다. 아래 각 항목의 파일에서 지정된 바이트 구간을 읽어 원문 바이트를 base64로 응답하세요. 판정·설명 없이 정확히 다음 형식의 줄만 출력하세요:";
+  const fmt = "CH <challengeId> <pathId> <base64>";
+  const items = live.map((f) => `- ${rec.challengeId} ${f.pathId} ${f.path} offset=${f.off} length=${f.len}`).join("\n");
+  return `${head}\n${fmt}\n${items}\n`;
+}
+// 강제 종료 복구(§5): dispatched로 남은 채 수명이 다한 레코드를 outcome-unknown으로 수렴(재발송 없음).
+// 발송자가 살아있는 최근 레코드는 건드리지 않는다 — 수명 기준은 검증 대기 상한과 같은 90분.
+const CH_DISPATCH_STALE_MS = 90 * 60 * 1000;
+function convergeStaleChallenges(ws) {
+  let n = 0;
+  for (const rec of listChallenges(ws)) {
+    if (rec.state !== "dispatched") continue;
+    const t = Date.parse(rec.dispatchedAt || rec.createdAt || "");
+    if (Number.isFinite(t) && Date.now() - t > CH_DISPATCH_STALE_MS) { if (markOutcomeUnknown(ws, rec.challengeId).ok) n++; }
+  }
+  return n;
+}
+
 // ── §6 primary-complete checkpoint (증분 2) ─────────────────────────────────────────────
 // 원 검증 성공의 3요소(proof·회수 가능한 원 출력·세션 소유권) 중 '원 출력'을 내구 확정한다.
 // 출력 파일(<jobId>.out)을 원자 기록하고 read-back으로 확인한 뒤에만 checkpoint를 만든다 — 이후
@@ -412,5 +437,6 @@ module.exports = {
   challengeDirFor, challengeFileFor, writeChallenge, readChallenge, listChallenges,
   markDispatched, settleChallenge, markOutcomeUnknown, cleanupSettled,
   parseChallengeResponse, judgeChallenge, eventFullyResolved,
+  buildChallengePrompt, convergeStaleChallenges, CH_DISPATCH_STALE_MS,
   CKPT_SCHEMA, checkpointFileFor, writePrimaryComplete, readPrimaryCheckpoint, primaryCheckpointValid,
 };
