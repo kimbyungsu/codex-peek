@@ -113,6 +113,56 @@ writeRollout("abababab-no-id", [
 const r38 = citedFilesUnseen(answer, ws, "abababab-no-id");
 ck("호출 id가 없는 구형·불완전 사건은 순서로 짝짓지 않고 fail-closed", r38.checked === true && r38.unseen.includes("foo.ts"));
 
+console.log("[3-6] 구분자 정규화(2026-08-03 실측) — 중첩 스크립트의 백슬래시 경로도 인정");
+{
+  // 실사고: 검증자 상시 습관 tools.shell_command({command:"Select-String -Path bridge\codex-bridge.js …"})
+  // 에서 스크립트 원문의 \\(JSON 이스케이프)가 인수 정규화로 //가 되어 바늘(bridge/…)과 영원히 불일치
+  // → 정직한 판독 회차마다 경보(매턴 반복 실측). 대조기 hit()이 양쪽 구분자를 접어 비교해야 한다.
+  const wsDir = path.join(ws, "sub"); fs.mkdirSync(wsDir, { recursive: true });
+  fs.writeFileSync(path.join(wsDir, "deep.ts"), "line1\nline2\n", "utf8");
+  const ansDeep = "확인. (sub/deep.ts:1) 참조.";
+  // ① 중첩 단일 호출 + 백슬래시 경로(실제 rollout 형태 그대로)
+  const idB = "bs-nested-" + (++callSeq);
+  const inputB = 'const r = await tools.shell_command({command:"Select-String -Path sub\\\\deep.ts -Pattern \'x\' -Context 0,5 | ForEach-Object { (\'{0}:{1}\' -f $_.LineNumber,$_.Line) }","workdir":' + JSON.stringify(ws).replace(/\//g, "\\\\") + ',"timeout_ms":10000});\ntext(r);\n';
+  writeRollout("eeeeeeee-bs-nested", [
+    userMsg("검증 요청"),
+    { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: idB, input: inputB } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: idB, output: [{ type: "input_text", text: "Exit code: 0\nOutput:\n1:line1" }] } },
+  ]);
+  const wb = citedFilesUnseenExact(ansDeep, ws, "eeeeeeee-bs-nested");
+  // 플랫폼 분기(확인 검증 blocker): POSIX에서 \는 파일명 문자 — 백슬래시 형태를 접어 인정하면 다른
+  // 파일 동일시(과대 인정). win=인정 / POSIX=불인정 잔존이 각각 정답.
+  if (process.platform === "win32") {
+    ck("win: 중첩 스크립트 백슬래시 경로=약한 흔적 인정(경보 안 붙음)", wb.checked === true && !wb.unseenWeak.some((p) => p.endsWith("deep.ts")));
+  } else {
+    ck("posix: 백슬래시는 파일명 문자 — 다른 경로라 흔적 불인정 유지", wb.checked === true && wb.unseenWeak.some((p) => p.endsWith("deep.ts")));
+  }
+  ck("중첩 스크립트는 약한 축만(승격 축 불변)", wb.unseen.some((p) => p.endsWith("deep.ts")));
+  // ② 하네스 기록 인수(강한 축)의 백슬래시 경로도 동일 인정
+  const idB2 = "bs-direct-" + (++callSeq);
+  writeRollout("eeeeeeee-bs-direct", [
+    userMsg("검증 요청"),
+    { type: "response_item", payload: { type: "function_call", name: "shell_command", call_id: idB2, arguments: JSON.stringify({ command: "cat sub\\deep.ts", workdir: ws }) } },
+    fo(idB2, "line1"),
+  ]);
+  const wb2 = citedFilesUnseenExact(ansDeep, ws, "eeeeeeee-bs-direct");
+  if (process.platform === "win32") {
+    ck("win: 직접 인수 백슬래시 경로=강한 축 인정", wb2.checked === true && !wb2.unseen.some((p) => p.endsWith("deep.ts")));
+  } else {
+    ck("posix: cat sub\\deep.ts는 sub/deep.ts 판독이 아님 — 강한 축 불인정 유지", wb2.checked === true && wb2.unseen.some((p) => p.endsWith("deep.ts")));
+  }
+  // ③ 다른 파일을 읽은 경우는 여전히 경보(정규화가 과대 인정으로 새지 않음)
+  const idB3 = "bs-other-" + (++callSeq);
+  const inputB3 = 'const r = await tools.shell_command({command:"Select-String -Path sub\\\\other.ts -Pattern \'x\'","workdir":' + JSON.stringify(ws).replace(/\//g, "\\\\") + '});\ntext(r);\n';
+  writeRollout("eeeeeeee-bs-other", [
+    userMsg("검증 요청"),
+    { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: idB3, input: inputB3 } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: idB3, output: [{ type: "input_text", text: "Exit code: 0\nOutput:\nok" }] } },
+  ]);
+  const wb3 = citedFilesUnseenExact(ansDeep, ws, "eeeeeeee-bs-other");
+  ck("다른 파일 판독은 여전히 흔적 미확인(과대 인정 없음)", wb3.checked === true && wb3.unseenWeak.some((p) => p.endsWith("deep.ts")));
+}
+
 console.log("[4] 판단 불가 사유들 → checked=false(경보·승격 재료 아님)");
 writeRollout("33333333-cccc", [userMsg("요청"), msg("foo.ts와 bar.ts를 봤습니다"), msg("끝")]);
 ck("이번 턴 도구활동 없음 → checked=false", citedFilesUnseen(answer, ws, "33333333-cccc").checked === false);
@@ -543,6 +593,53 @@ console.log("[3-5] 문맥 보정(2026-08-03 실측) — 명령 '문자열 배열
   ]);
   const wr = citedFilesUnseenExact(answer, ws, "eeeeeeee-arr-samewd");
   ck("같은 workdir 반복 명시=정상 인정 — foo.ts 판독 흔적 유지(키수 vs 리터럴 매치수 비교)", wr.checked === true && !wr.unseenWeak.some((p) => p.endsWith("foo.ts")));
+
+  // 2026-08-03 실측 잔여: git blame -L은 파일을 읽지 않고는 출력 불가(cat·grep 동일 의미론) — 목록 편입
+  writeRollout("eeeeeeee-blame", [userMsg("검증 요청"), ...pair("git -c safe.directory=D:/x blame -L 1,2 HEAD -- foo.ts", "line1\nline2")]);
+  const wb = citedFilesUnseenExact(answer, ws, "eeeeeeee-blame");
+  ck("git blame 직접 호출=판독 인정(경보 축)", wb.checked === true && !wb.unseenWeak.some((p) => p.endsWith("foo.ts")));
+  ck("git blame 직접 호출+인용 내용 실재=승격 축도 인정(의미론 기준 확장)", !wb.unseen.some((p) => p.endsWith("foo.ts")));
+  // 객체 배열({command:"git blame …",workdir:…}) 형태 — 실제 검증자 관용구(2026-08-03 rollout 실측)
+  const idB = "cmds-obj-blame-" + (++callSeq);
+  const inputB = 'const cmds=[\n  {command: "git -c safe.directory=D:/x blame -L 1,2 HEAD -- foo.ts", workdir: ' + JSON.stringify(ws) + ', timeout_ms: 10000}\n];\nconst rs=await Promise.all(cmds.map(c=>tools.shell_command(c)));';
+  writeRollout("eeeeeeee-obj-blame", [
+    userMsg("검증 요청"),
+    { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: idB, input: inputB } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: idB, output: [{ type: "input_text", text: "Exit code: 0\nOutput:\nline1" }] } },
+  ]);
+  const wob = citedFilesUnseenExact(answer, ws, "eeeeeeee-obj-blame");
+  ck("객체 배열 안 git blame도 약한 흔적 인정 — 경보 안 붙음", wob.checked === true && !wob.unseenWeak.some((p) => p.endsWith("foo.ts")));
+
+  // ab-3 반례(확인 검증 2회분): 옵션으로 '대상 경로+임의 내용'을 위조하는 경로 전부 인식 거부(fail-closed)
+  const FORGE_CMDS = [
+    ["blame-contents", "git -c safe.directory=D:/x blame --contents bar.ts -L 1,1 HEAD -- foo.ts"],
+    ["blame-quoted", 'git blame "--contents" bar.ts -L 1,1 HEAD -- foo.ts'],
+    ["blame-abbrev", "git blame --conten=bar.ts -L 1,1 HEAD -- foo.ts"],
+    ["show-format", 'git show --no-patch --format=format:"line1" abc1234 -- foo.ts'],
+    ["diff-lineprefix", 'git diff --line-prefix="line1" HEAD -- foo.ts'],
+    ["blame-envvar", "$env:OPT='--contents'; git blame $env:OPT bar.ts -L 1,1 HEAD -- foo.ts"],
+    ["blame-subexpr", "git blame $('--contents') bar.ts -L 1,1 HEAD -- foo.ts"],
+    ["show-optarray", "$opts=@('--no-patch','--format=format:line1'); git show $opts abc1234 -- foo.ts"],
+    ["blame-bareparen", "git blame ('--contents') bar.ts -L 1,1 HEAD -- foo.ts"],
+    ["show-castarray", "git show ([string[]]('--no-patch','--format=format:line1')) abc1234 -- foo.ts"],
+  ];
+  for (const [tag, cmd] of FORGE_CMDS) {
+    writeRollout(`eeeeeeee-${tag}`, [userMsg("검증 요청"), ...pair(cmd, "line1")]);
+    const wc = citedFilesUnseenExact(answer, ws, `eeeeeeee-${tag}`);
+    ck(`${tag}=인식 거부 — 승격 축에 남음(위조 차단)`, wc.unseen.some((p) => p.endsWith("foo.ts")));
+    ck(`${tag}=경보 축에도 흔적 불인정`, wc.checked === true && wc.unseenWeak.some((p) => p.endsWith("foo.ts")));
+  }
+  // 허용목록 안의 정상 형태는 유지: show REV -- path · diff -U0 · grep -n
+  const OK_CMDS = [
+    ["show-plain", "git show HEAD -- foo.ts"],
+    ["diff-u0", "git diff -U0 HEAD -- foo.ts"],
+    ["grep-n", 'git grep -n "line1" -- foo.ts'],
+  ];
+  for (const [tag, cmd] of OK_CMDS) {
+    writeRollout(`eeeeeeee-${tag}`, [userMsg("검증 요청"), ...pair(cmd, "line1")]);
+    const wk = citedFilesUnseenExact(answer, ws, `eeeeeeee-${tag}`);
+    ck(`${tag}=정상 형태 인식 유지 — 경보 안 붙음`, wk.checked === true && !wk.unseenWeak.some((p) => p.endsWith("foo.ts")));
+  }
 }
 
 console.log("[6] 장기 세션 — 파일 전체가 16MiB를 넘어도 최신 턴 경계와 도구 흔적은 판독");

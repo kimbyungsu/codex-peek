@@ -330,7 +330,7 @@ function findByBasename(root, base, maxDepth, maxFiles) {
   return hits;
 }
 function resolveCitedPath(raw, ws) {
-  let p = String(raw).replace(/\\/g, "/");
+  let p = normSepWin(String(raw)); // 인용측도 같은 플랫폼 규칙(POSIX=\ 보존 — 백슬래시 파일명이 타 경로로 둔갑 금지)
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(p)) return null; // URL(https:// 등)은 로컬 파일 아님 → 건너뜀(cry-wolf 방지)
   const mnt = p.match(/^\/mnt\/([a-zA-Z])\/(.*)$/); // /mnt/d/... → d:/...
   if (mnt) p = mnt[1] + ":/" + mnt[2];
@@ -370,7 +370,7 @@ function checkCitedEvidence(answer, ws) {
 function canonicalFileKey(file) {
   try {
     const real = fs.realpathSync.native ? fs.realpathSync.native(file) : fs.realpathSync(file);
-    const norm = path.resolve(real).replace(/\\/g, "/");
+    const norm = normSepWin(path.resolve(real)); // POSIX에서 \는 파일명 문자 — 보존(확인 검증 blocker 계보)
     return process.platform === "win32" ? norm.toLowerCase() : norm;
   } catch { return null; }
 }
@@ -442,6 +442,10 @@ function rolloutTailLines(file) {
   } catch { return null; }
   finally { if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* best-effort */ } } }
 }
+// 명령 텍스트의 \→/ 정규화는 win32 한정(확인 검증 blocker 계보 — POSIX에서 \는 경로 구분자가 아니라
+// 파일명 문자라, 플랫폼 무관 변환은 서로 다른 파일을 같은 판독 대상으로 합친다). 추출 계층(여기·중첩
+// workdir·원시 스캔)과 비교 계층(hit의 fold)이 같은 플랫폼 규칙을 써야 분기가 실효한다.
+const normSepWin = process.platform === "win32" ? (s) => String(s).replace(/\\/g, "/") : (s) => String(s);
 function toolArgumentValues(p) {
   const values = [];
   const collect = (v) => {
@@ -453,7 +457,7 @@ function toolArgumentValues(p) {
     if (typeof raw === "string") { try { collect(JSON.parse(raw)); } catch { collect(raw); } }
     else collect(raw);
   }
-  return values.map((v) => String(v).replace(/\\/g, "/"));
+  return values.map((v) => normSepWin(String(v)));
 }
 function toolArgumentText(p) { return toolArgumentValues(p).join("\n"); }
 function toolCallCanReadFile(p, hay) {
@@ -517,7 +521,7 @@ function gitReadParse(lead) {
   const roots = [];
   for (;;) {
     const c1 = rest.match(/^-C\s+("([^"]*)"|'([^']*)'|\S+)\s+/);
-    if (c1) { roots.push((c1[2] || c1[3] || c1[1]).replace(/\\/g, "/")); rest = rest.slice(c1[0].length); continue; }
+    if (c1) { roots.push(normSepWin(c1[2] || c1[3] || c1[1])); rest = rest.slice(c1[0].length); continue; }
     const c2 = rest.match(/^-c\s+([A-Za-z0-9_.-]+)=(?:"[^"]*"|'[^']*'|\S+)\s+/);
     if (c2) {
       if (!GIT_INERT_CONFIG_KEYS.includes(c2[1].toLowerCase())) return { ok: false, roots: [] }; // 실행 유발 가능 설정 → 인식 거부
@@ -526,7 +530,53 @@ function gitReadParse(lead) {
     }
     break;
   }
-  return { ok: /^(diff|show|grep)(?:\s|$)/i.test(rest), roots };
+  // blame 추가(2026-08-03 실측): 검증자가 판독을 git blame -L로 상시 수행 — blame은 지정 파일을 읽지
+  // 않고는 그 출력을 낼 수 없으므로(cat·grep과 같은 의미론 기준) 목록 원칙 안의 확장이다.
+  // 임의 실행기(node -e 등) 제외는 불변.
+  const subM = rest.match(/^(diff|show|grep|blame)(?:\s|$)/i);
+  if (!subM) return { ok: false, roots: [] };
+  // 옵션 fail-closed 허용목록(확인 검증 ab-3 실행 반례: blame --contents·따옴표/장옵션 축약 우회·
+  // show --format+--no-patch — 전부 '읽지 않고 대상 경로+임의 내용 출력'을 만들 수 있었다):
+  // 금지 열거는 따옴표("--contents")·축약(--conten)·미지 옵션에 계속 뚫리므로, 각 하위명령의
+  // '실제 파일 본문을 내는 안전한 형태'에 필요한 옵션만 허용하고 목록 밖 대시 토큰이 하나라도 있으면
+  // 인식 거부한다(과대 승격이 아니라 unknown — GIT_INERT_CONFIG_KEYS와 같은 허용목록 원칙).
+  // `--` 뒤는 경로 자리이므로 옵션 검사에서 제외한다.
+  //  - blame: 범위 지정 -L만. --contents류·미지 옵션 전부 거부.
+  //  - show: 옵션 전면 거부(판독 형태 `show REV:path`/`show REV -- path`엔 옵션이 불필요) — --format 위조 차단.
+  //  - diff: 문맥·통계·검사만. --line-prefix/--src-prefix류(임의 문자열 주입) 거부.
+  //  - grep: 검색 플래그만(출력은 파일의 실제 매칭 줄뿐).
+  const SAFE_GIT_OPTS = {
+    blame: (t) => /^-L\S*$/.test(t),
+    show: () => false,
+    diff: (t) => ["--check", "--stat", "--cached", "--staged", "--name-only", "--name-status", "--no-color"].includes(t) || /^-U\d*$/.test(t) || /^--unified=\d+$/.test(t),
+    grep: (t) => ["-e", "-A", "-B", "-C", "--line-number", "--fixed-strings", "--ignore-case"].includes(t) || /^-[niFwlchEv]+$/.test(t) || /^-[ABC]\d+$/.test(t),
+  };
+  const optOk = SAFE_GIT_OPTS[subM[1].toLowerCase()];
+  // 토큰화는 따옴표 인지(셸 의미와 일치): "패턴 A + B" 같은 다중 단어 문자열이 조각나 중간 조각이
+  // 비따옴표 토큰으로 오판되면 정상 grep 인식이 깨진다(회귀 실측). 따옴표 span=한 토큰.
+  const toks = (rest.match(/"(?:[^"\\]|\\.)*"|'[^']*'|\S+/g) || []).slice(1);
+  let pastDD = false;
+  for (const t0raw of toks) {
+    // 상위에서 $t=(git …) 그룹 괄호를 벗긴 잔여 닫는 괄호·세미콜론만 꼬리에서 제거 — 여는/내부 괄호는
+    // 아래 문자집합이 계속 거부하므로 표현식 우회 통로가 되지 않는다.
+    const t0 = t0raw.replace(/[);]+$/, "");
+    if (pastDD) continue;
+    if (t0 === "") continue;
+    const t = t0.replace(/^["']+/, "").replace(/["']+$/, ""); // 따옴표 감싼 옵션("--contents")도 옵션으로 본다
+    if (t === "--") { pastDD = true; continue; }
+    // 동적 확장 봉쇄(확인 검증 ab-3 실행 반례 누적: $env:OPT·$('--contents')·$opts=@(…)·맨괄호식
+    // ('--contents')·([string[]](…))). 위험 문자를 열거하면 표기법마다 계속 뚫리므로 반전한다:
+    //  ① $·백틱은 따옴표 안에서도 확장되므로 어디서든 거부.
+    //  ② 비따옴표 토큰은 옵션·리비전·경로에 필요한 불활성 문자만 허용 — 괄호식·배열·스플래팅(@선두)·
+    //     내부 따옴표·%VAR%·구분자 전부 집합 밖이라 자동 거부(미지 표기법도 unknown 방향 실패).
+    //  ③ 따옴표로 감싼 토큰은 셸이 문자열 리터럴로 넘기므로(①만 통과하면) 내용 문자를 제한하지 않는다.
+    // `--` 뒤는 git이 전부 경로로 해석하므로 옵션 주입 불가 — 검사 제외 유지.
+    if (/[$`]/.test(t0)) return { ok: false, roots: [] };
+    const quoted = /^["']/.test(t0);
+    if (!quoted && (t0.startsWith("@") || !/^[A-Za-z0-9,._:~^\/\\@{}=-]+$/.test(t0))) return { ok: false, roots: [] };
+    if (t.startsWith("-") && !optOk(t)) return { ok: false, roots: [] };
+  }
+  return { ok: true, roots };
 }
 function gitReadsFiles(lead) { return gitReadParse(lead).ok; }
 // 셸 호출이 스스로 밝힌 작업 폴더. 같은 검증 안에서도 도구 호출마다 폴더가 다를 수 있어(브릿지를 띄운
@@ -538,7 +588,7 @@ function toolCallWorkdir(p) {
     if (o && typeof o === "object" && !Array.isArray(o)) {
       for (const k of ["workdir", "cwd", "working_dir", "workingDirectory"]) {
         const v = o[k];
-        if (typeof v === "string" && v.trim()) return v.replace(/\\/g, "/");
+        if (typeof v === "string" && v.trim()) return normSepWin(v);
       }
     }
   }
@@ -681,7 +731,7 @@ function nestedShellCalls(text) {
   const isBound = (b) => { if (!boundCache.has(b)) boundCache.set(b, bound(b)); return boundCache.get(b); };
   return cmds.filter((c) => c.own >= 0 && cnt(cmds, c.own) === 1 && isBound(c.own)).map((c) => {
     const own = cnt(wds, c.own) === 1 ? wds.find((w) => w.own === c.own) : null;
-    return { command: c.value, workdir: own ? String(own.value).replace(/\\/g, "/") : "" };
+    return { command: c.value, workdir: own ? normSepWin(String(own.value)) : "" };
   });
 }
 function nestedShellCommands(text) { return nestedShellCalls(text).map((c) => c.command); }
@@ -739,7 +789,7 @@ function toolReadParts(p) {
     // 키의 따옴표 표기("workdir":)도 유효한 JS — 미인식이면 결속 우회가 된다(확인 반례).
     for (const wm of rawText.matchAll(/["']?workdir["']?\s*[:=]\s*"((?:[^"\\]|\\.)*)"|["']?workdir["']?\s*[:=]\s*'((?:[^'\\]|\\.)*)'/g)) {
       wdLitCount++;
-      wds.add(((wm[1] !== undefined ? wm[1] : wm[2]) || "").replace(/\\(["'\\])/g, "$1").replace(/\\/g, "/"));
+      wds.add(normSepWin(((wm[1] !== undefined ? wm[1] : wm[2]) || "").replace(/\\(["'\\])/g, "$1")));
     }
     // 변수형 workdir(리터럴로 안 풀림)이 하나라도 있으면 결속 불가 — 폴백하면 교차 폴더 오인이
     // 되살아나므로 스캔 중단(fail-closed·확인 반례 2). 비교는 '키 수 vs 리터럴 매치 수' — 고유값
@@ -780,7 +830,7 @@ function toolReadParts(p) {
       }
       if (!usedChain && !usedArg) continue;
       for (const m of body.matchAll(/"((?:[^"\\]|\\.)+)"|'((?:[^'\\]|\\.)+)'/g)) {
-        const lit2 = (m[1] !== undefined ? m[1] : m[2] || "").replace(/\\(["'\\])/g, "$1").replace(/\\/g, "/");
+        const lit2 = normSepWin((m[1] !== undefined ? m[1] : m[2] || "").replace(/\\(["'\\])/g, "$1"));
         if (lit2.length < 4 || lit2.length > 4000) continue;
         for (const s2 of splitShellStatements(lit2)) {
           if (toolCallCanReadFile(p, s2)) out.push({ text: stripShellComment(s2), workdir: boundWd, weak: true });
@@ -804,10 +854,19 @@ function toolCallNamesExactFile(p, fileKey, ws) {
   // 우선순위: 그 조각이 나온 호출의 폴더 → 도구 인수의 폴더 → 종전 기준(무회귀). 하나만 쓴다.
   const wd = toolCallWorkdir(p);
   const hit = (v0, part) => {
-    const v = String(v0).replace(/\\/g, "/");
+    // 구분자 정규화는 **양쪽 모두**(2026-08-03 실측 — 매턴 오경보의 근본 원인): 중첩 스크립트 원문의
+    // 백슬래시 경로(bridge\codex-bridge.js)는 JSON 이스케이프(\\)로 적혀 있고, 인수 정규화가 각 \를 /로
+    // 바꾸면 bridge//codex-bridge.js 가 된다. 바늘만 정규화하면 이 본문과 영원히 불일치 — 연속 구분자를
+    // 하나로 접어 비교한다(경로 의미 동일·모양 열거가 아니라 대조기 계층의 구조 수정).
+    // ⚠ 플랫폼 분기(확인 검증 blocker): POSIX에서 \\는 경로 구분자가 아니라 파일명 문자 — 접으면 서로
+    // 다른 파일(sub\deep.ts vs sub/deep.ts)을 동일시해 과대 인정이 된다. 백슬래시 접기는 win32 한정.
+    const fold = process.platform === "win32"
+      ? (s) => String(s).replace(/[\\/]+/g, "/")
+      : (s) => String(s).replace(/\/+/g, "/");
+    const v = fold(v0);
     const esc = v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const re = new RegExp(`(^|[^a-z0-9_.\\/-])(?:\\./)?${esc}(?=$|[^a-z0-9_.\\/-])`, process.platform === "win32" ? "i" : "");
-    return re.test(part);
+    return re.test(fold(part));
   };
   // 기준 폴더는 '실제 경로'로도 한 번 더 시도한다. 윈도는 같은 폴더를 짧은 이름(RUNNER~1)으로도 가리키는데,
   // 인용에서 푼 파일 경로는 긴 이름이라 짧은 이름 기준으로 상대경로를 구하면 서로 다른 폴더로 계산된다
@@ -822,7 +881,7 @@ function toolCallNamesExactFile(p, fileKey, ws) {
     if (!matched) {
       for (const root of [...baseRoots, ...gitDirRoots(part).flatMap(rootsOf)]) {
         let rel = "";
-        try { rel = path.relative(root, fileKey).replace(/\\/g, "/"); } catch { continue; }
+        try { rel = normSepWin(path.relative(root, fileKey)); } catch { continue; }
         if (!rel || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel)) continue;
         if (hit(rel, part)) { matched = true; break; }
       }
@@ -993,7 +1052,7 @@ function flagEvidence(answer, ws, sessionId, execCwd) {
   } catch { /* best-effort — 점검 실패가 검증 흐름을 막지 않음 */ }
 }
 function exactPathFromRoot(raw, root) {
-  let p = String(raw || "").replace(/\\/g, "/");
+  let p = normSepWin(String(raw || "")); // 장부측 바늘도 같은 플랫폼 규칙(POSIX=\ 보존)
   if (!p || /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(p)) return null;
   const mnt = p.match(/^\/mnt\/([a-zA-Z])\/(.*)$/);
   if (mnt) p = mnt[1] + ":/" + mnt[2];
