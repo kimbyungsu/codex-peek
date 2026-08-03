@@ -546,6 +546,9 @@ async function setMapModeFromUi(ws: string | null, mode: string, slotLang?: Lang
 // pending 관측이 완료 직후를 커버]): 창당 단일-flight+스로틀. 실행은 설치본 CLI를 detach spawn — 결과는
 // 실행기 장부·로그가 정본(확장은 발동만).
 let enrichSpawnBusy = false;
+// 보류된 작업에 '같은 지도 세대'로 재판단 기회를 준 저장소(창 수명 한정 — 창을 다시 열면 한 번 더 준다).
+// 반복 spawn을 막으면서도, 같은 지도에 새 결정만 붙은 경우를 영구 사각지대로 두지 않기 위한 최소 장치.
+const parkedRecheckDone = new Set<string>();
 let enrichSpawnLastAt = 0;
 function maybeSpawnEnrichExt(ws: string | null, trigger: string): void {
   try {
@@ -563,7 +566,21 @@ function maybeSpawnEnrichExt(ws: string | null, trigger: string): void {
     if (!eligible) return; // 동의 없음=발동 안 함(실행기도 park하지만 spawn 자체를 아낌)
     const jr9 = ME9.readEnrichJob(repo9);
     if (jr9.st === "ok" && (jr9.job.phase === "parked" || jr9.job.phase === "done")) { /* done=수렴은 실행기 판정·parked=재시도 버튼만 — 단 done은 소스 변경 재보강 판정이 실행기 소관이라 spawn 허용 */ }
-    if (jr9.st === "ok" && jr9.job.phase === "parked" && !trigger.startsWith("link:")) return; // 새 검증 연결은 별도 확인 대기 장부만 처리할 수 있어 parked 작업과 독립
+    // parked 차단은 '같은 입력'에만 걸려야 한다(사용자 실보고 2026-08-04 — 자동화 철학 위배):
+    // 실행기는 이미 `jobKey가 같을 때만` 보류를 유지하고 새 세대면 새 작업을 연다(map-enrich.js).
+    // 그런데 여기서 phase만 보고 무조건 막으면, 새 지도가 나와도 실행기가 그 판단을 할 기회를 못 얻어
+    // 자동 보강이 영구히 죽는다(사용자가 눈치채고 '다시 시도'를 누르기 전까지). 그래서 ①큐의 지도
+    // 세대가 보류 당시와 다르면 즉시 통과시키고, ②같은 세대라도 창 수명 중 1회는 통과시켜(같은 지도에
+    // 새 결정이 붙어 authorityHash만 바뀐 경우) 실행기가 스스로 재판단하게 한다. 같은 입력 반복
+    // 재과금은 실행기의 jobKey 비교가 그대로 막는다(비용 계약 불변).
+    if (jr9.st === "ok" && jr9.job.phase === "parked" && !trigger.startsWith("link:")) {
+      let sameGen = true;
+      try { const q = JSON.parse(fs.readFileSync(MB9.queueFileFor(repo9), "utf8")); sameGen = String(q && q.mapId || "") === String(jr9.job.mapId || ""); } catch { sameGen = true; }
+      if (sameGen) {
+        if (parkedRecheckDone.has(repo9)) return; // 이 창에서 이미 재판단 기회를 줬다 — 반복 spawn 금지
+        parkedRecheckDone.add(repo9);
+      }
+    }
     enrichSpawnBusy = true; enrichSpawnLastAt = Date.now();
     const cli = path.join(BRIDGE_DIR, "map-enrich.js");
     const child = spawn(process.execPath, [cli, "run", repo9, "--ws", ws, "--slot", lang, "--trigger", trigger], { stdio: "ignore", detached: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });

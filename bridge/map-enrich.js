@@ -791,6 +791,19 @@ function runEnrich(repo, opts) {
   const park = (jobMut, reason, extra) => {
     if (jobMut) updateEnrichJob(repo, jobMut);
     log({ route: "park", reason, outcome: "parked", ...(extra || {}) });
+    // 사용자 실보고(2026-08-04): 자동 보강이 스스로 멈춰도 상태바·경보 어디에도 안 떠서, 사용자는
+    // 대시보드의 특정 줄을 열어보기 전에는 '지도 자동화가 멈춘 것'을 알 방법이 없었다. 스스로 멈춘
+    // 사실은 스스로 알려야 한다 — 무결성 채널(노랑)에 1건 기록(같은 ws의 직전 보강 경보는 대체).
+    try {
+      const wsLbl = String(o.ws || repo);
+      CL.supersedeIntegrity(null, "enrich-parked", wsLbl); // 그 프로젝트의 최신 1건만 남긴다(누적 노랑 방지)
+      CL.appendIntegrityEvent({
+        ts: new Date().toISOString(), workspace: wsLbl, kind: "enrich-parked", severity: "warning",
+        detailKo: `지도 자동 보강이 멈췄습니다(사유: ${reason}) — 대시보드의 '자동 보강' 줄에서 원인과 다시 시도를 확인하세요.`,
+        detailEn: `Map auto-enrichment stopped (reason: ${reason}) — see the 'Auto-enrich' line in the dashboard for the cause and retry.`,
+        detail: `지도 자동 보강이 멈췄습니다(사유: ${reason}) — 대시보드의 '자동 보강' 줄에서 원인과 다시 시도를 확인하세요.`,
+      });
+    } catch { /* 알림 실패가 실행기를 막지 않는다 */ }
     return { outcome: "parked", reason };
   };
   // ⓪ 게이트 최선행: 3트랙 OFF=완전 무동작(파일 생성·로그 0)
@@ -1160,6 +1173,8 @@ function applyItems(repo, o, env, st, attemptId) {
       const investigationPending = awaitingVerification === null ? null : Math.max(0, skipped - awaitingVerification - rejected);
       const wD = updateEnrichJob(repo, (jj) => jj && { ...jj, phase: "done", finishedAt: nowIso(), ...(srcFp ? { sourceFp: srcFp } : {}), attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, phase: "done", finishedAt: nowIso(), cursor: { nextIndex: x.cursor.nextIndex, rev: 0, appliedPatchIds: x.cursor.appliedPatchIds } } : x) });
       if (!wD.ok) return park(null, "done-write:" + wD.reason);
+      // 멈춤을 알렸으면 풀림도 알려야 한다 — 완주 시 그 프로젝트의 '멈춤' 경보를 해소(대체)한다.
+      try { CL.supersedeIntegrity(null, "enrich-parked", String(o.ws || repo)); } catch { /* 무해 */ }
       log({ route: a.provider, reason: applied > 0 ? "enriched" : "settled-no-apply", outcome: applied > 0 ? "applied" : "settled", provider: a.provider, jobKey: j.jobKey, consentGen: a.consentGen, awaitingVerification, rejected, investigationPending });
       return { outcome: applied > 0 ? "applied" : "settled", jobKey: j.jobKey, applied, skipped, awaitingVerification, rejected, investigationPending };
     }
