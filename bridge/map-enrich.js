@@ -989,6 +989,25 @@ function runEnrichLocked(repo, o, env) {
           if (wRe.ok && !wRe.unchanged) { if (env.p10) env.p10.touch(wRe.job.jobKey, jobRunIdOf(wRe.job)); return resumeJob(repo, o, env, wRe.job, { topo, idx, pol, ah, corridor, changed, srcFp }); }
         }
       }
+      // 자동 재시도 1회(사용자 결정 2026-08-04): 담당이 실제로 답을 냈는데 그 답이 거부돼 멈춘 경우는
+      // 다시 물으면 다른 답이 나올 수 있다. 그래서 '같은 입력이라도 딱 한 번'은 스스로 다시 시도한다.
+      // 한도 관리는 retryFrom 재사용 — 이 값이 있으면 이미 한 번(자동이든 수동이든) 재시도한 것이므로
+      // 자동은 더 이상 걸리지 않는다(무한 재과금 차단). 사용자는 '다시 시도' 버튼으로 언제든 더 할 수 있다.
+      // 입력·설정 문제(동의·큐 손상·미준비·어댑터 부재 등)는 다시 물어도 같은 결과라 대상이 아니다.
+      const AUTO_RETRY_REASONS = ["precision-failed", "economy-failed", "both-failed"];
+      if (AUTO_RETRY_REASONS.includes(String(j.parkedReason || "")) && !Number.isInteger(j.retryFrom)) {
+        const wAr = updateEnrichJob(repo, (jj) => {
+          if (!jj || jj.phase !== "parked" || Number.isInteger(jj.retryFrom)) return null; // 경합 시 한쪽만 성공
+          const nx = { ...jj, phase: "open", retryFrom: Array.isArray(jj.attempts) ? jj.attempts.length : 0 };
+          delete nx.finishedAt; delete nx.parkedReason;
+          return nx;
+        });
+        if (wAr.ok && !wAr.unchanged) {
+          log({ route: "auto-retry", reason: "parked-once", outcome: "resumed", jobKey: j.jobKey, parkedReason: j.parkedReason || "" });
+          if (env.p10) env.p10.touch(wAr.job.jobKey, jobRunIdOf(wAr.job));
+          return resumeJob(repo, o, env, wAr.job, { topo, idx, pol, ah, corridor, changed, srcFp });
+        }
+      }
       return { outcome: "noop", reason: "parked", parkedReason: j.parkedReason || "" }; // 그 외=명시 재시도 버튼이 해제
     }
   }

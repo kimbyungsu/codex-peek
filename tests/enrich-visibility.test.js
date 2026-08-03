@@ -79,6 +79,43 @@ console.log("[3] 완주하면 그 경보를 해소한다 — 멈춤을 알렸으
   ok(evOf(ws).filter((x) => !x.ack).length === 0, "완주 시 열린 보류 경보 0(대체로 해소)");
 }
 
+console.log("[3-1] 자동 재시도 1회 — 답이 거부돼 멈춘 건은 스스로 한 번 더 물어본다(사용자 결정 2026-08-04)");
+{
+  const ws = setup("autoretry");
+  const nodeId = MR.readTopoExFor(ws).topo.nodes[0].id;
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: false, paidMode: "precision" });
+  let calls = 0;
+  // 근거 인용이 파일과 맞지 않는 답 → 결과 거부 → precision-failed park(사용자가 겪은 그 상태)
+  const bad = () => { calls++; return { ok: true, result: { schema: "enrich-result-v1", items: [
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "n1" } }, evidence: [{ file: "src/a.js", quote: "이 문장은 파일에 없다" }] },
+  ] } }; };
+  const opt = base(ws, { mode: "precision", adapters: { precision: bad } });
+  const r1 = ME.runEnrich(ws, opt);
+  const j1 = ME.readEnrichJob(ws).job;
+  ok(r1.outcome === "parked" && r1.reason === "precision-failed" && j1.phase === "parked", "전제: 답 거부로 보류(precision-failed)");
+  ok(calls === 1 && !Number.isInteger(j1.retryFrom), "전제: 1회 호출·재시도 한도 미사용");
+  const r2 = ME.runEnrich(ws, opt);
+  const j2 = ME.readEnrichJob(ws).job;
+  ok(calls === 2, "같은 입력이라도 자동으로 한 번 더 물어본다(사람 개입 없이)");
+  ok(Number.isInteger(j2.retryFrom), "재시도 한도 소모 기록(retryFrom)");
+  const r3 = ME.runEnrich(ws, opt);
+  const r4 = ME.runEnrich(ws, opt);
+  ok(calls === 2, "한도 소진 후 자동 호출 0(무한 재과금 차단)");
+  ok(r3.outcome === "noop" && r3.reason === "parked" && r4.reason === "parked", "그 이후는 보류 유지(명시 재시도만)");
+  ok(evOf(ws).filter((x) => !x.ack).length === 1, "멈춘 사실은 경보로 계속 보인다(최신 1건)");
+}
+
+console.log("[3-1b] 입력·설정 문제는 자동 재시도 대상이 아니다(다시 물어도 같은 결과)");
+{
+  const ws = setup("noretry");
+  let calls = 0;
+  const adapter = () => { calls++; return { ok: true, result: { schema: "enrich-result-v1", items: [] } }; };
+  const r1 = ME.runEnrich(ws, base(ws, { adapters: { self: adapter } })); // 동의 없음 → park(no-consent)
+  ok(r1.outcome === "parked" && r1.reason === "no-consent", "전제: 동의 없음으로 보류");
+  const r2 = ME.runEnrich(ws, base(ws, { adapters: { self: adapter } }));
+  ok(calls === 0 && r2.outcome === "parked" && r2.reason === "no-consent", "동의 없음은 자동 재시도 없음(호출 0)");
+}
+
 console.log("[4] 발동 게이트 — 보류라도 새 입력이면 실행기에 기회를 준다(컴파일 산출물 실행)");
 {
   const outSrc = fs.readFileSync(path.join(ROOT, "out", "extension.js"), "utf8");
