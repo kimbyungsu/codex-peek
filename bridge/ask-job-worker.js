@@ -44,22 +44,46 @@ function primaryCheckpoint(dir, job, outFile) {
   const bridgeDir = process.env.CODEX_BRIDGE_HOME || path.join(require("os").homedir(), ".codex-bridge");
   let praw; try { praw = fs.readFileSync(path.join(bridgeDir, "proofs", c.proofFile)); } catch { return null; }
   if (sha256Hex(praw) !== c.proofFp) return null;
-  // proof '실형식' 결속(evidence-challenge.js proofMatches와 같은 규칙): 성공 proof만, 검증자 세션·
-  // workspace 일치, v2=jobId·turn·revision 일치 / v1=CL-C(turn=null) 한정+ts>=job.createdAt 시간 결속.
+  // proof '실형식' 결속(evidence-challenge.js proofMatches와 같은 규칙): v2=strictProofV2 전체 규칙,
+  // v1=정확 키 9종(부분 필드 의사 proof 거부). 그 위에 검증자 세션·workspace(플랫폼 분기)·job 결속.
   try {
     const p = JSON.parse(praw.toString("utf8"));
-    if (!p || p.exit !== 0 || p.status !== "success" || !(Number(p.answerChars) > 0)) return null;
+    if (!p || typeof p !== "object" || Array.isArray(p)) return null;
+    const exact = (o, keys) => { const k = Object.keys(o); return k.length === keys.length && keys.every((x) => Object.prototype.hasOwnProperty.call(o, x)); };
+    if (p.v === 2) {
+      if (!exact(p, ["v", "implementerSession", "workspace", "ts", "codexSession", "exit", "status", "answerChars", "jobId", "turnId", "implementerRevision", "headState", "headOid"])) return null;
+      if (typeof p.implementerSession !== "string" || !p.implementerSession) return null;
+      if (typeof p.workspace !== "string" || !p.workspace) return null;
+      if (!Number.isFinite(Date.parse(p.ts || ""))) return null;
+      if (p.exit !== 0 || p.status !== "success" || !(Number(p.answerChars) > 0)) return null;
+      if (!/^ask-[a-z0-9]+-[0-9a-f]{10}$/.test(String(p.jobId || ""))) return null;
+      if (typeof p.turnId !== "string" || !p.turnId) return null;
+      if (!(Number(p.implementerRevision) > 0)) return null;
+      if (!["git", "non-git", "no-head"].includes(p.headState)) return null;
+      if (p.headState === "git" ? !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(String(p.headOid || "")) : p.headOid !== null) return null;
+    } else if (p.v === 1) {
+      if (!exact(p, ["v", "claudeSession", "implementerSession", "workspace", "ts", "codexSession", "exit", "status", "answerChars"])) return null;
+      if (typeof p.claudeSession !== "string" || !p.claudeSession) return null;
+      if (p.implementerSession !== "") return null;
+      if (typeof p.workspace !== "string" || !p.workspace) return null;
+      if (!Number.isFinite(Date.parse(p.ts || ""))) return null;
+      if (typeof p.codexSession !== "string" || !p.codexSession) return null;
+      if (p.exit !== 0 || p.status !== "success" || !(Number(p.answerChars) > 0)) return null;
+    } else return null;
     if (String(p.codexSession || "") !== String(c.verifierSession)) return null;
-    const nws = (s) => String(s || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    // workspace 비교 플랫폼 분기(POSIX에서 \=파일명 문자·대소문자 구별 — 접으면 타 프로젝트 동일시)
+    const nws = process.platform === "win32"
+      ? (s) => String(s || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()
+      : (s) => String(s || "").replace(/\/+$/, "");
     if (!nws(p.workspace) || nws(p.workspace) !== nws(job.workspace)) return null;
     if (p.v === 2) {
       if (p.jobId !== job.id || String(p.turnId || "") !== String(job.implementerTurnId || "")
         || Number(p.implementerRevision) !== Number(job.implementerRevision)) return null;
-    } else if (p.v === 1) {
+    } else {
       if (job.implementerTurnId !== null && job.implementerTurnId !== undefined) return null; // C-C에 v1 금지
       const pt = Date.parse(p.ts || ""), jt = Date.parse(job.createdAt || "");
       if (!Number.isFinite(pt) || !Number.isFinite(jt) || pt < jt) return null;
-    } else return null;
+    }
   } catch { return null; }
   if (!c.outSha256 || !Number.isInteger(c.outBytes)) return null;
   let buf; try { buf = fs.readFileSync(outFile); } catch { return null; }

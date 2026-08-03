@@ -5,7 +5,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { BRIDGE_DIR, wsKeyFor, atomicWrite, withFileLockStrict } = require("./contract-lib.js");
+const { BRIDGE_DIR, wsKeyFor, atomicWrite, withFileLockStrict, strictProofV2 } = require("./contract-lib.js");
 
 // §2 상한(구현 파라미터 — 설계 문서와 함께 개정)
 const CH_MAX_FILE_BYTES = 1024 * 1024;      // 파일별 읽기 상한
@@ -304,9 +304,31 @@ function proofBasenameOk(name) { return typeof name === "string" && /^[A-Za-z0-9
 //  v1(CL-C): 실제 생산 형식에 jobId가 없다 — job.implementerTurnId=null(CL-C 형태)일 때만 인정하고,
 //        proof.ts >= job.createdAt 시간 결속으로 '이 job 시작 이후에 기록된 proof'만 인정(옛 proof
 //        stale 재사용 차단). C-C job은 v1 proof로 절대 승인되지 않는다.
+// workspace 비교는 플랫폼 분기(확인 검증 blocker — normSepWin 계보와 동일 원칙): POSIX에서 \는
+// 파일명 문자·대소문자 구별이므로 접으면 다른 프로젝트가 동일시된다. win만 구분자·대소문자 접기.
 function wsEqSimple(a, b) {
-  const n = (s) => String(s || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const n = process.platform === "win32"
+    ? (s) => String(s || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()
+    : (s) => String(s || "").replace(/\/+$/, "");
   return !!n(a) && n(a) === n(b);
+}
+// v1 proof '실형식' 정확 키 집합(codex-bridge.js writeProof 산출물 그대로 — 부분 필드 의사 proof 거부)
+const PROOF_V1_KEYS = ["v", "claudeSession", "implementerSession", "workspace", "ts", "codexSession", "exit", "status", "answerChars"];
+function exactKeysLocal(o, keys) {
+  if (!o || typeof o !== "object" || Array.isArray(o)) return false;
+  const k = Object.keys(o);
+  return k.length === keys.length && keys.every((x) => Object.prototype.hasOwnProperty.call(o, x));
+}
+function strictProofV1(p) {
+  if (!exactKeysLocal(p, PROOF_V1_KEYS)) return false;
+  if (p.v !== 1) return false;
+  if (typeof p.claudeSession !== "string" || !p.claudeSession) return false;
+  if (p.implementerSession !== "") return false; // v1은 구현자 세션이 항상 빈 문자열(생산 코드 고정값)
+  if (typeof p.workspace !== "string" || !p.workspace) return false;
+  if (!Number.isFinite(Date.parse(p.ts || ""))) return false;
+  if (typeof p.codexSession !== "string" || !p.codexSession) return false;
+  if (p.exit !== 0 || p.status !== "success" || !(Number(p.answerChars) > 0)) return false;
+  return true;
 }
 function proofMatches(proofFile, proofFp, job, verifierSession) {
   if (!proofBasenameOk(proofFile) || !String(proofFp || "").trim() || !String(verifierSession || "").trim()) return false;
@@ -315,19 +337,21 @@ function proofMatches(proofFile, proofFp, job, verifierSession) {
   if (sha256(raw) !== proofFp) return false;
   let p = null;
   try { p = JSON.parse(raw.toString("utf8")); } catch { return false; }
-  if (!p || p.exit !== 0 || p.status !== "success" || !(Number(p.answerChars) > 0)) return false;
+  if (!p || typeof p !== "object") return false;
+  // 실형식 강제(확인 검증 blocker — 부분 필드 의사 proof 거부): v2=strictProofV2 전체 규칙, v1=정확 키 9종.
+  if (p.v === 2) { if (!strictProofV2(p).ok) return false; }
+  else if (p.v === 1) { if (!strictProofV1(p)) return false; }
+  else return false;
   if (String(p.codexSession || "") !== String(verifierSession)) return false;
   if (!wsEqSimple(p.workspace, job.workspace)) return false;
   if (p.v === 2) {
     return p.jobId === job.id && String(p.turnId || "") === String(job.implementerTurnId || "")
       && Number(p.implementerRevision) === Number(job.implementerRevision);
   }
-  if (p.v === 1) {
-    if (job.implementerTurnId !== null && job.implementerTurnId !== undefined) return false; // C-C에 v1 금지
-    const pt = Date.parse(p.ts || ""), jt = Date.parse(job.createdAt || "");
-    return Number.isFinite(pt) && Number.isFinite(jt) && pt >= jt;
-  }
-  return false;
+  // v1(CL-C): jobId가 없으므로 [CL-C 형태 한정+시간 결속]으로 이 job에 결속
+  if (job.implementerTurnId !== null && job.implementerTurnId !== undefined) return false; // C-C에 v1 금지
+  const pt = Date.parse(p.ts || ""), jt = Date.parse(job.createdAt || "");
+  return Number.isFinite(pt) && Number.isFinite(jt) && pt >= jt;
 }
 // 구현 턴/revision 결속은 'job에 실재하는 값 그대로'(확인 검증 blocker — CL-C는 null이 정상값):
 // null은 null과만 같고, 실값은 실값과 정확히 일치해야 한다. 빈 문자열로 눙치는 우회는 없다.
