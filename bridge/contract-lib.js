@@ -2135,27 +2135,10 @@ function leasePidAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try { process.kill(pid, 0); return true; } catch (e) { return !(e && e.code === "ESRCH"); } // EPERM 등=존재로 간주(보수)
 }
-// lease 전용 잠금(확인 검증 blocker — withFileLockStrict는 죽은 보유자 잠금을 '수동 삭제'로 넘기는
-// 설계라, lease의 강제 종료 후 자체 복구 계약과 충돌): 보유자 pid가 ESRCH 확정 사망이면 잠금을
-// 부수고 재시도한다. 임계구역이 짧고(판독·unlink·create) 파기 조건이 확정 사망뿐이라 안전.
-function withLeaseLock(lockPath, fn) {
-  const token = process.pid + "-" + Math.random().toString(36).slice(2, 8);
-  for (let i = 0; i < 60; i++) {
-    let locked = false;
-    try { fs.writeFileSync(lockPath, token, { flag: "wx" }); locked = true; } catch { /* 아래 사망 판정 */ }
-    if (!locked) {
-      try {
-        const pid = parseInt(String(fs.readFileSync(lockPath, "utf8")).split("-")[0], 10);
-        if (pid && pid !== process.pid) { try { process.kill(pid, 0); } catch (ke) { if (ke && ke.code === "ESRCH") { try { fs.unlinkSync(lockPath); } catch { /* 경합 — 재시도 */ } } } }
-      } catch { /* 판독 불가 — 재시도 */ }
-      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15); } catch { /* 즉시 재시도 */ }
-      continue;
-    }
-    try { return { ok: true, result: fn() }; }
-    finally { try { if (fs.readFileSync(lockPath, "utf8") === token) fs.unlinkSync(lockPath); } catch { /* 무해 */ } }
-  }
-  return { ok: false, error: "lease-lock-timeout: " + lockPath };
-}
+// 잠금은 withFileLockStrict 그대로(확인 검증 TOCTOU blocker 계보 — 죽은 잠금 '자동 파기'는 관측→삭제
+// 사이에 경쟁자의 신선 잠금을 지울 수 있어 평면 파일시스템에선 결정론적으로 못 닫는다. 이 저장소의
+// 교리대로 자동으로는 부수지 않는다). 강제 종료 잔재(죽은 잠금·죽은 lease)의 유일한 해소점은 사람
+// 확인 경로인 clearSessionLease(CLI session-lease clear --confirm) — 자동 경로는 그동안 busy(안전 방향).
 // 획득: create-only 원자 생성(tmp+linkSync — 있으면 EEXIST). 실패 시 자동 회수는 'childPid가 기록돼
 // 있고 owner·child 모두 확정 사망'일 때만(비동기 challenge runner 경로 — 증분 4). childPid 미기록
 // (동기 resume) lease는 자동 회수하지 않는다 — 고아 codex가 살아 있을 수 있고 그와의 동시 resume은
@@ -2180,7 +2163,7 @@ function acquireSessionLease(sid, meta) {
     return true;
   };
   if (tryCreate()) return { ok: true, token, session: s };
-  const held = withLeaseLock(file + ".reclaim.lock", () => {
+  const held = withFileLockStrict(file + ".reclaim.lock", () => {
     const cur = readSessionLease(s);
     if (!cur) return tryCreate() ? { ok: true, token, session: s } : { ok: false, reason: "busy", holder: null };
     const ownerDead = !leasePidAlive(Number(cur.ownerPid));
@@ -2198,7 +2181,7 @@ function acquireSessionLease(sid, meta) {
 // 해제·자식 PID 기록은 token 일치 시에만(타 소유자 lease를 건드릴 수 없다).
 function releaseSessionLease(sid, token) {
   const file = sessionLeaseFileFor(sid);
-  const held = withLeaseLock(file + ".reclaim.lock", () => {
+  const held = withFileLockStrict(file + ".reclaim.lock", () => {
     const cur = readSessionLease(sid);
     if (!cur || cur.token !== token) return false;
     try { fs.unlinkSync(file); return true; } catch { return false; }
@@ -2207,23 +2190,42 @@ function releaseSessionLease(sid, token) {
 }
 function setSessionLeaseChild(sid, token, childPid) {
   const file = sessionLeaseFileFor(sid);
-  const held = withLeaseLock(file + ".reclaim.lock", () => {
+  const held = withFileLockStrict(file + ".reclaim.lock", () => {
     const cur = readSessionLease(sid);
     if (!cur || cur.token !== token) return false;
     return atomicWrite(file, JSON.stringify({ ...cur, childPid: Number(childPid) || null }, null, 1));
   });
   return !!(held.ok && held.result);
 }
-// 수동 정리(사용자 확인 후) — 어떤 token이든 무조건 제거하고 직전 보유자 레코드를 돌려준다.
+// 수동 정리(사용자 확인 후) — 강제 종료 잔재의 유일한 해소점. 잠금을 쓰지 않는다(잠금 잔재 자체가
+// 해소 대상이라 잠금 경유는 영구 차단 — 확인 검증 blocker 계보). 안전장치 3중:
+//  ① 생존 거부: owner 또는 기록된 child가 살아 있으면 {blocked:"alive"} — 살아있는 세션의 lease를
+//     지울 수 없다([주의] 반영).
+//  ② 죽은 보유자의 reclaim.lock 잔재만 함께 정리(살아있는 잠금은 불가침).
+//  ③ 제거는 rename→토큰 재검증→확정: rename은 원자라 승자 1명뿐이고, 옮긴 파일의 토큰이 관측본과
+//     다르면(그 사이 신선 lease가 생김) 복원 후 {blocked:"raced"} — 신선 lease 오삭제 없음.
 function clearSessionLease(sid) {
   const file = sessionLeaseFileFor(sid);
-  const held = withLeaseLock(file + ".reclaim.lock", () => {
-    const cur = readSessionLease(sid);
-    if (!cur) return null;
-    try { fs.unlinkSync(file); } catch { /* 아래 재판독으로 확인 */ }
-    return readSessionLease(sid) === null ? cur : null;
-  });
-  return held.ok ? held.result : null;
+  const lock = file + ".reclaim.lock";
+  try {
+    const lp = parseInt(String(fs.readFileSync(lock, "utf8")).split("-")[0], 10);
+    if (lp && !leasePidAlive(lp)) { try { fs.unlinkSync(lock); } catch { /* 무해 */ } }
+  } catch { /* 잠금 없음 */ }
+  const cur = readSessionLease(sid);
+  if (!cur) return null;
+  if (leasePidAlive(Number(cur.ownerPid))) return { blocked: "alive" };
+  if (cur.childPid !== null && cur.childPid !== undefined && leasePidAlive(Number(cur.childPid))) return { blocked: "alive" };
+  const tmp = file + ".clear." + require("crypto").randomBytes(4).toString("hex");
+  try { fs.renameSync(file, tmp); } catch { return null; } // 경합 패배(이미 사라짐)
+  let moved = null;
+  try { moved = JSON.parse(fs.readFileSync(tmp, "utf8")); } catch { /* 아래 불일치 취급 */ }
+  if (!moved || moved.token !== cur.token) {
+    // 관측과 다른(신선) lease를 옮겼다 — 복원. 복원 실패(그 사이 새 lease 생성)면 wx로 재삽입 시도.
+    try { fs.renameSync(tmp, file); } catch { try { fs.writeFileSync(file, JSON.stringify(moved, null, 1), { flag: "wx" }); fs.unlinkSync(tmp); } catch { /* 최후: tmp 보존(증거) */ } }
+    return { blocked: "raced" };
+  }
+  try { fs.unlinkSync(tmp); } catch { /* 무해 */ }
+  return cur;
 }
 // TTL은 pid 생존 판정의 '보조'(좀비·pid 재사용 방어)일 뿐이며 검증 대기 최대치(60분)보다 커야 한다 —
 // Codex 반례: 30분이면 살아있는 정상 장기 검증의 후반이 무방비.

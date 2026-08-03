@@ -67,7 +67,7 @@ console.log("[3] 사망 회수 — owner 죽음+childPid 규칙");
   cl.releaseSessionLease("sess-D", r2.token);
 }
 
-console.log("[3-1] 죽은 보유자의 잠금 잔재=자체 파기 후 진행(영구 차단 없음)");
+console.log("[3-1] 잠금 잔재는 자동으로 부수지 않음(교리) — 해소는 clear 단일 경로");
 {
   const deadPid = cp.spawnSync(process.execPath, ["-e", "0"], { windowsHide: true }).pid;
   const file = cl.sessionLeaseFileFor("sess-F");
@@ -76,9 +76,29 @@ console.log("[3-1] 죽은 보유자의 잠금 잔재=자체 파기 후 진행(�
   fs.writeFileSync(file, JSON.stringify({ v: 1, session: "sess-F", token: "t".repeat(16), ownerPid: deadPid, childPid: deadPid, ws: "D:/dead", deadlineAt: "", createdAt: new Date().toISOString() }), "utf8");
   fs.writeFileSync(file + ".reclaim.lock", deadPid + "-zzzzzz", "utf8");
   const r = cl.acquireSessionLease("sess-F", { ws: "D:/new", deadlineAt: new Date(Date.now() + 60_000).toISOString() });
-  ck("죽은 잠금을 부수고 사망 회수 진행", r.ok === true && r.reclaimedFrom && r.reclaimedFrom.ws === "D:/dead");
-  cl.releaseSessionLease("sess-F", r.token);
-  ck("잠금 파일 잔존 없음", !fs.existsSync(file + ".reclaim.lock"));
+  ck("자동 경로는 잠금 잔재에서 busy(안전 방향 — 파기 없음)", r.ok === false);
+  ck("잠금 파일은 자동으로 안 부숨", fs.existsSync(file + ".reclaim.lock"));
+  const cleared = cl.clearSessionLease("sess-F");
+  ck("clear가 죽은 잠금+죽은 lease를 함께 정리", cleared && cleared.ws === "D:/dead" && !fs.existsSync(file) && !fs.existsSync(file + ".reclaim.lock"));
+  const r2 = cl.acquireSessionLease("sess-F", { ws: "D:/new", deadlineAt: new Date(Date.now() + 60_000).toISOString() });
+  ck("clear 후 재획득 가능", r2.ok === true);
+  cl.releaseSessionLease("sess-F", r2.token);
+}
+
+console.log("[3-1b] clear 안전장치 — 생존 거부·경합 복원");
+{
+  const file = cl.sessionLeaseFileFor("sess-H");
+  // owner가 살아 있는 lease(=이 프로세스) → clear 거부
+  fs.writeFileSync(file, JSON.stringify({ v: 1, session: "sess-H", token: "u".repeat(16), ownerPid: process.pid, childPid: null, ws: "D:/live", deadlineAt: "", createdAt: new Date().toISOString() }), "utf8");
+  const b1 = cl.clearSessionLease("sess-H");
+  ck("owner 생존=clear 거부(lease 보존)", b1 && b1.blocked === "alive" && cl.readSessionLease("sess-H") !== null);
+  fs.unlinkSync(file);
+  // child가 살아 있는 lease → 거부
+  const deadPid = cp.spawnSync(process.execPath, ["-e", "0"], { windowsHide: true }).pid;
+  fs.writeFileSync(file, JSON.stringify({ v: 1, session: "sess-H", token: "u".repeat(16), ownerPid: deadPid, childPid: process.pid, ws: "D:/live", deadlineAt: "", createdAt: new Date().toISOString() }), "utf8");
+  const b2 = cl.clearSessionLease("sess-H");
+  ck("child 생존=clear 거부", b2 && b2.blocked === "alive");
+  fs.unlinkSync(file);
 }
 
 console.log("[3-2] 수동 정리 CLI — session-lease show/clear(--confirm 필수)");
