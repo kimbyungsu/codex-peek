@@ -97,7 +97,7 @@ console.log("[3] 렌더 블록 실행 반례 — 숨김/빈 상태/요약·목�
   const row1 = n.chList.children[2];
   ok(row1.children.some((c) => /부분 일치 · 경고 유지/.test(c.textContent)), "CH-7 resolved+부분 일치=경고 유지 접미(과대 표시 금지)");
   const rowAck = n.chList.children[4];
-  ok(rowAck.children.some((c) => /불일치·무응답 · 경고 확인 처리됨/.test(c.textContent)), "CH-7b 실패+수동 확인=경고 확인 처리됨 접미(유지로 과대 표시 금지)");
+  ok(rowAck.children.some((c) => /불일치·무응답 · 경고 닫힘\(현재 열린 경고 없음\)/.test(c.textContent)), "CH-7b 실패+경고 닫힘=원인 중립 접미(확인 이력 단정·유지 과대 표시 금지)");
   const row3 = n.chList.children[5];
   ok(row3.children.some((c) => /미발송\(안전 구간 없음/.test(c.textContent)), "CH-8 no-dispatch=현지화 라벨(원시 문자열 노출 금지)");
 }

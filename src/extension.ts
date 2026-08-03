@@ -6312,7 +6312,8 @@ class Dashboard {
       const stLabel=function(it){
         var s=it.state;
         // 접미=그 경고의 '지금' 상태(수동 확인 반영 — 유지로 과대 표시 금지)
-        var warn=it.warnOpen?T(" · 경고 유지"," · warning kept"):T(" · 경고 확인 처리됨"," · warning acknowledged");
+        // 닫힘 원인은 단정하지 않는다(확인 검증 보완 — 수동 확인·50건 절단 소멸·구 레코드 모두 warnOpen=false)
+        var warn=it.warnOpen?T(" · 경고 유지"," · warning kept"):T(" · 경고 닫힘(현재 열린 경고 없음)"," · warning closed (no open warning)");
         // resolved라도 skipped 잔존이면 경고는 유지된다(브릿지 ack 조건=전 파일 일치) — '해소'로 과대 표시 금지
         return s==="resolved"?(it.cleared?T("해소(전 항목 일치 — 경고 자동 해소)","cleared (all matched — warning auto-cleared)"):(it.matchedAll?T("일치·해소 반영 대기(다음 검증에서 자동 재시도)","matched — clearing pending (auto-retried next verification)"):T("부분 일치","partial match")+warn))
           : s==="failed"?T("불일치·무응답","mismatch/no answer")+warn
