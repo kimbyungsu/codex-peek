@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -3018,7 +3018,12 @@ async function cmdAsk(rest) {
     });
     if (!lease.ok) {
       const h = lease.holder || {};
-      die(tB(`⚠️ 이 검증 세션(${link.codexSession})은 다른 작업이 사용 중입니다(소유 ws=${h.ws || "?"} · pid=${h.ownerPid || "?"}). 동시 resume은 기록을 섞을 수 있어 시작하지 않았습니다 — 그 작업이 끝난 뒤 다시 시도하세요.`, `⚠️ This verifier session (${link.codexSession}) is in use by another task (owner ws=${h.ws || "?"} · pid=${h.ownerPid || "?"}). Concurrent resume can interleave the session log, so nothing was started — retry after that task finishes.`), 3);
+      // 보유자 프로세스가 죽어 있어도 자동 회수하지 않는다(고아 codex 생존 가능 — ask-active와 같은
+      // 수동 clear 철학). 사용자에게 확인 후 정리 명령을 안내한다.
+      const staleHint = lease.staleOwner
+        ? tB(`\n(보유 프로세스는 종료된 상태입니다. 실행 중 codex가 없음을 확인했으면: node "${__filename}" session-lease clear ${link.codexSession} --confirm)`, `\n(The owning process has exited. If you confirmed no codex is still running: node "${__filename}" session-lease clear ${link.codexSession} --confirm)`)
+        : "";
+      die(tB(`⚠️ 이 검증 세션(${link.codexSession})은 다른 작업이 사용 중입니다(소유 ws=${h.ws || "?"} · pid=${h.ownerPid || "?"}). 동시 resume은 기록을 섞을 수 있어 시작하지 않았습니다 — 그 작업이 끝난 뒤 다시 시도하세요.`, `⚠️ This verifier session (${link.codexSession}) is in use by another task (owner ws=${h.ws || "?"} · pid=${h.ownerPid || "?"}). Concurrent resume can interleave the session log, so nothing was started — retry after that task finishes.`) + staleHint, 3);
     }
     process.on("exit", () => { try { releaseSessionLease(link.codexSession, lease.token); } catch { /* 무해 */ } });
     // P-12 2b: 예약=호출 직전 공통 래퍼 1곳(전처리 전부 통과 후). 소진 거부는 phase/round 불변 exit 3 —
@@ -3378,6 +3383,23 @@ function main() {
       return cmdAskWait(rest);
     case "ask-job":
       return cmdAskJob(rest);
+    case "session-lease": { // §7 증분 3 — 세션 lease 확인·수동 정리(자동 회수 없는 childPid 미기록 잔재용)
+      const sub = String(rest[0] || ""), sid = String(rest[1] || "");
+      if (sub === "show") {
+        const cur = sid ? readSessionLease(sid) : null;
+        console.log(cur ? JSON.stringify(cur, null, 1) : tB("lease 없음(그 세션은 지금 아무도 사용하지 않습니다).", "No lease (that session is not in use)."));
+        return;
+      }
+      if (sub === "clear") {
+        if (!sid) die(tB("사용법: session-lease clear <sessionId> --confirm", "Usage: session-lease clear <sessionId> --confirm"));
+        if (!rest.includes("--confirm")) die(tB("⚠️ 실행 중 codex가 없음을 확인한 뒤 --confirm 을 붙여 다시 실행하세요(동시 resume은 세션 기록을 섞습니다).", "⚠️ Confirm no codex is still running, then re-run with --confirm (concurrent resume interleaves the session log)."));
+        const old = clearSessionLease(sid);
+        console.log(old ? tB(`정리됨 — 직전 보유: ws=${old.ws || "?"} · pid=${old.ownerPid || "?"} · ${old.createdAt || ""}`, `Cleared — previous holder: ws=${old.ws || "?"} · pid=${old.ownerPid || "?"} · ${old.createdAt || ""}`) : tB("정리할 lease가 없습니다.", "No lease to clear."));
+        return;
+      }
+      die(tB("사용법: session-lease show <sessionId> | session-lease clear <sessionId> --confirm", "Usage: session-lease show <sessionId> | session-lease clear <sessionId> --confirm"));
+      return;
+    }
     case "backlog":
       return cmdBacklog(rest); // P-12 2a — 검증 백로그 장부
     case "finding-judge":

@@ -45,21 +45,55 @@ console.log("[3] 사망 회수 — owner 죽음+childPid 규칙");
   const file = cl.sessionLeaseFileFor("sess-D");
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const mk = (extra) => fs.writeFileSync(file, JSON.stringify(Object.assign({ v: 1, session: "sess-D", token: "t".repeat(16), ownerPid: deadPid, childPid: null, ws: "D:/dead", mode: "", jobId: "", deadlineAt: new Date(Date.now() - 1000).toISOString(), createdAt: new Date().toISOString() }, extra)), "utf8");
+  // childPid 미기록=자동 회수 금지(고아 codex 생존 가능 — 확인 검증 blocker): deadline 지나도 거부.
   mk({});
   const r1 = cl.acquireSessionLease("sess-D", { ws: "D:/new", deadlineAt: new Date(Date.now() + 60_000).toISOString() });
-  ck("owner 죽음+deadline 경과(child 미기록)=회수 성공", r1.ok === true && r1.reclaimedFrom && r1.reclaimedFrom.ws === "D:/dead");
-  cl.releaseSessionLease("sess-D", r1.token);
-  // deadline 미래 + child 미기록 → 회수 거부(동기 spawn 아이가 아직 살아있을 수 있음)
-  mk({ deadlineAt: new Date(Date.now() + 60_000).toISOString() });
-  ck("owner 죽음이라도 deadline 전(child 미기록)=거부", cl.acquireSessionLease("sess-D", { ws: "D:/new" }).ok === false);
-  // childPid 살아 있음 → deadline 지나도 거부
+  ck("owner 죽음+child 미기록=자동 회수 안 함(deadline 무관 busy)", r1.ok === false && r1.staleOwner === true);
+  ck("수동 clear 후에만 재획득", (() => {
+    const old = cl.clearSessionLease("sess-D");
+    if (!old || old.ws !== "D:/dead") return false;
+    const r = cl.acquireSessionLease("sess-D", { ws: "D:/new", deadlineAt: new Date(Date.now() + 60_000).toISOString() });
+    if (!r.ok) return false;
+    cl.releaseSessionLease("sess-D", r.token);
+    return true;
+  })());
+  // childPid 살아 있음 → 거부
   mk({ deadlineAt: new Date(Date.now() - 1000).toISOString(), childPid: process.pid });
   ck("child 생존=회수 거부(동시 resume 차단)", cl.acquireSessionLease("sess-D", { ws: "D:/new" }).ok === false);
-  // childPid 죽음 → 즉시 회수(deadline 무관)
+  // childPid 기록+owner·child 모두 죽음 → 자동 회수(비동기 runner 경로 — 증분 4)
   mk({ deadlineAt: new Date(Date.now() + 60_000).toISOString(), childPid: deadPid });
   const r2 = cl.acquireSessionLease("sess-D", { ws: "D:/new2", deadlineAt: new Date(Date.now() + 60_000).toISOString() });
-  ck("owner·child 모두 죽음=deadline 전이라도 회수", r2.ok === true);
+  ck("owner·child 모두 죽음(child 기록됨)=자동 회수", r2.ok === true && r2.reclaimedFrom && r2.reclaimedFrom.ws === "D:/dead");
   cl.releaseSessionLease("sess-D", r2.token);
+}
+
+console.log("[3-1] 죽은 보유자의 잠금 잔재=자체 파기 후 진행(영구 차단 없음)");
+{
+  const deadPid = cp.spawnSync(process.execPath, ["-e", "0"], { windowsHide: true }).pid;
+  const file = cl.sessionLeaseFileFor("sess-F");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  // 죽은 pid의 lease + 죽은 pid의 reclaim.lock 잔재를 함께 심는다(강제 종료 재현)
+  fs.writeFileSync(file, JSON.stringify({ v: 1, session: "sess-F", token: "t".repeat(16), ownerPid: deadPid, childPid: deadPid, ws: "D:/dead", deadlineAt: "", createdAt: new Date().toISOString() }), "utf8");
+  fs.writeFileSync(file + ".reclaim.lock", deadPid + "-zzzzzz", "utf8");
+  const r = cl.acquireSessionLease("sess-F", { ws: "D:/new", deadlineAt: new Date(Date.now() + 60_000).toISOString() });
+  ck("죽은 잠금을 부수고 사망 회수 진행", r.ok === true && r.reclaimedFrom && r.reclaimedFrom.ws === "D:/dead");
+  cl.releaseSessionLease("sess-F", r.token);
+  ck("잠금 파일 잔존 없음", !fs.existsSync(file + ".reclaim.lock"));
+}
+
+console.log("[3-2] 수동 정리 CLI — session-lease show/clear(--confirm 필수)");
+{
+  const BRIDGE = path.resolve(__dirname, "../bridge/codex-bridge.js");
+  const deadPid = cp.spawnSync(process.execPath, ["-e", "0"], { windowsHide: true }).pid;
+  const file = cl.sessionLeaseFileFor("sess-G");
+  fs.writeFileSync(file, JSON.stringify({ v: 1, session: "sess-G", token: "t".repeat(16), ownerPid: deadPid, childPid: null, ws: "D:/dead", deadlineAt: "", createdAt: new Date().toISOString() }), "utf8");
+  const run = (args) => cp.spawnSync(process.execPath, [BRIDGE, ...args], { env: Object.assign({}, process.env), windowsHide: true, encoding: "utf8" });
+  const noConfirm = run(["session-lease", "clear", "sess-G"]);
+  ck("--confirm 없이 clear=거부(lease 보존)", noConfirm.status !== 0 && cl.readSessionLease("sess-G") !== null);
+  const show = run(["session-lease", "show", "sess-G"]);
+  ck("show=보유자 표시", show.status === 0 && show.stdout.includes("D:/dead"));
+  const yes = run(["session-lease", "clear", "sess-G", "--confirm"]);
+  ck("--confirm clear=정리 성공", yes.status === 0 && cl.readSessionLease("sess-G") === null);
 }
 
 console.log("[4] exit 훅 해제 e2e — 프로세스 종료 시 자기 lease만 정리");
@@ -85,7 +119,8 @@ console.log("[5] cmdAsk 배선 — lease가 예산 게이트보다 먼저(소스
   const iResume = src.indexOf('runCodex(["resume", link.codexSession');
   ck("배선 실재", iLease > 0 && iGate > 0 && iResume > 0);
   ck("순서: lease → 예산 게이트 → resume", iLease < iGate && iGate < iResume);
-  ck("busy 거부는 exit 3(왕복 미소모 경로)", /acquireSessionLease\(link\.codexSession[\s\S]{0,900}?die\(tB\([\s\S]{0,700}?\), 3\)/.test(src));
+  ck("busy 거부는 exit 3(왕복 미소모 경로)", src.includes("+ staleHint, 3);"));
+  ck("죽은 보유자 안내에 수동 clear 명령 포함", src.includes("session-lease clear ${link.codexSession} --confirm"));
   ck("해제 exit 훅 등록", src.includes('process.on("exit", () => { try { releaseSessionLease(link.codexSession, lease.token); }'));
 }
 
