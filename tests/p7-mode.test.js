@@ -236,7 +236,12 @@ ok(ext.includes("의미 보강 담당(Project MAP) — 영향지도 탐색 담�
 ok(ext.includes("자동 보강 실행 담당") && ext.includes("runs automatic enrichment") && !ext.includes("routing applies from P8"), "실적용 문구(P8 증분 4 — 구 'P8부터' 배지 ko/en 모두 제거·발동 배선 완료)");
 ok(ext.includes("자동형은 경제형·정밀형이 모두 준비돼야 선택할 수 있어요(1-34)"), "자동형 선택 게이트(1-34 autoReady=AND — 유일한 비활성 버튼)");
 ok(ext.includes("선택은 그대로 유지·자동 전환 없음") && !/mapMode[^\n]*강등|mapMode[^\n]*degrade.*self/.test(ext), "조용한 전환 금지 — degraded 배지만·강등 코드 없음(scoutArm no-key 규칙 재사용 금지)");
-ok(ext.includes("DeepSeek 소형 요청 최대 2회") && ext.includes("Codex 계정 사용량 1회") && ext.includes("자동 실행은 없어요"), "과금 고지(최대 2회 — 설계 1차 [주의])+자동 probe 금지 명문");
+// 계약 개정(2026-08-04 사용자 실보고): '자동 probe 금지'는 폐기 — 담당을 고르면 그 담당만 자동 점검한다
+// (이원화가 "선택했는데 왜 또 눌러야 하나 · 선택만으로 설정이 끝난 줄 안다"는 오해를 만들었다).
+// 조용한 과금 금지는 그대로다: 점검 함수 안의 비용 모달 1회가 유지되고, 고르지 않은 담당은 호출되지 않는다.
+ok(ext.includes("DeepSeek(경제형)은 소형 요청 최대 2회") && ext.includes("Codex(정밀형)는 계정 사용량 1회"), "과금 고지(최대 2회 — 설계 1차 [주의]) 유지");
+ok(ext.includes("고르지 않은 담당은 부르지 않아요") && !ext.includes("자동 실행은 없어요"), "개정: 고른 담당만 호출·'자동 실행 없음' 문구 폐기");
+ok(/await runMapProbeFromUi\(ws, new Set\(pending\)\)/.test(ext), "개정: 선택 저장 직후 자동 점검(이원화 제거)");
 ok(/mapProbeBusy/.test(ext) && ext.includes("writeMapReadinessGuarded"), "probe 단일-flight+guarded 기록(TOCTOU) 사용");
 ok(ext.includes("precisionFpNowExt") && ext.includes("codexInvForProbe"), "precision 지문=호스트 실행 해석 주입(probe·뷰 동일 계산)");
 ok(ext.includes('require(path.join(BRIDGE_DIR, "map-probe.js"))') && ext.includes("MP.probeSelf(") && ext.includes("MP.probeEconomy(") && ext.includes("MP.probePrecision("), "probe 실행부=vscode 무관 계층(map-probe.js) 위임 — 테스트가 같은 실행기를 실행(2차 blocker④)");

@@ -541,6 +541,16 @@ async function setMapModeFromUi(ws: string | null, mode: string, slotLang?: Lang
   const pr = await patchContractRetryExt(ws, lang, { mapMode: mode });
   if (!pr.ok) { void offerLockRecoveryExt(pr, () => { void setMapModeFromUi(ws, mode, lang); }); return; }
   vscode.commands.executeCommand("codexBridge.refresh");
+  // 이원화 제거(사용자 실보고 2026-08-04): "선택했는데 왜 점검을 또 눌러야 하나 — 선택만으로 설정이
+  // 끝난 줄 알게 된다". 고른 순간 그 담당만 바로 점검한다(비용 확인은 점검 함수 안의 모달 1회 —
+  // 조용한 과금 없음). 이미 준비된 담당은 다시 부르지 않는다(불필요한 과금 방지).
+  try {
+    const CLr: any = bridgeLib();
+    const rv = CLr && CLr.mapReadinessView ? CLr.mapReadinessView({ precisionFpNow: precisionFpNowExt(), selfFpNow: selfFpNowExt() }) : null;
+    const need = mode === "auto" ? ["economy", "precision"] : [mode];
+    const pending = need.filter((k) => !(rv && rv[k] && rv[k].ok));
+    if (pending.length) await runMapProbeFromUi(ws, new Set(pending));
+  } catch { /* 점검 실패는 선택 저장을 되돌리지 않는다 — 카드가 미준비 사유를 그대로 보여준다 */ }
 }
 // P8 증분 4 — 자동 보강 발동(설계 3지점 중 ⓑ준비 점검 직후·ⓒ관측 tick[ⓐbootstrap 완료 직후 포함 — 큐
 // pending 관측이 완료 직후를 커버]): 창당 단일-flight+스로틀. 실행은 설치본 CLI를 detach spawn — 결과는
@@ -667,13 +677,26 @@ function selfFpNowExt(): string | null {
   try { const CLx: any = bridgeLib(); return CLx && CLx.selfExecFp ? CLx.selfExecFp(cachedClaudeVer, selfAdapterHintExt()) : null; } catch { return null; }
 }
 let mapProbeBusy = false; // 단일-flight(P6b 계보와 같은 규범 — 겹친 점검 금지)
-async function runMapProbeFromUi(ws: string | null): Promise<void> {
+// only: 점검할 담당 집합. 미지정=현재 선택된 담당만(사용자 실보고 2026-08-04: 정밀형을 골랐는데
+// DeepSeek까지 호출돼 '잔액 부족' 실패가 뜨고 무관한 과금이 났다 — 안 쓰는 담당은 부르지 않는다).
+// self는 무과금이라 항상 함께 본다(기본 담당·비교 기준).
+function probeTargetsFor(ws: string | null): Set<string> {
+  let mode = "self";
+  try { const CLm: any = bridgeLib(); if (CLm && CLm.mapModeView && ws) mode = CLm.mapModeView(ws).mode || "self"; } catch { mode = "self"; }
+  const t = new Set<string>(["self"]);
+  if (mode === "economy") t.add("economy");
+  else if (mode === "precision") t.add("precision");
+  else if (mode === "auto") { t.add("economy"); t.add("precision"); }
+  return t;
+}
+async function runMapProbeFromUi(ws: string | null, only?: Set<string>): Promise<void> {
   if (mapProbeBusy) return;
+  const want = only || probeTargetsFor(ws);
   const CLx: any = bridgeLib();
   if (!CLx || !CLx.writeMapReadinessGuarded) { vscode.window.showWarningMessage(tE("브릿지 판이 낮아 준비 점검을 지원하지 않아요 — 재설치 후 다시 시도하세요.", "The deployed bridge is too old for readiness checks — reinstall and retry.")); return; }
   const goOn = await vscode.window.showWarningMessage(
-    tE("의미 보강 담당의 준비 상태를 실제로 점검합니다. DeepSeek은 소형 요청 최대 2회(과금 대상 — 형식 실패 시 교정 재요청 1회 포함), Codex는 계정 사용량 1회를 씁니다(키·설정이 없는 항목은 건너뜀). 진행할까요?",
-       "This actually checks provider readiness. DeepSeek uses up to 2 small billed requests (incl. one repair retry on format failure); Codex uses 1 run within your account usage (unconfigured providers are skipped). Proceed?"),
+    tE(`선택한 담당(${[...want].join(", ")})의 준비 상태를 실제로 점검합니다 — 고르지 않은 담당은 부르지 않아요. DeepSeek(경제형)은 소형 요청 최대 2회(과금 대상 — 형식 실패 시 교정 재요청 1회 포함), Codex(정밀형)는 계정 사용량 1회를 씁니다(키·설정이 없는 항목은 건너뜀). 진행할까요?`,
+       `This checks readiness for the selected provider(s) only (${[...want].join(", ")}) — providers you did not choose are not called. DeepSeek (economy) uses up to 2 small billed requests (incl. one repair retry on format failure); Codex (precision) uses 1 run within your account usage (unconfigured providers are skipped). Proceed?`),
     { modal: true }, tE("점검 진행", "Run checks"));
   if (goOn !== tE("점검 진행", "Run checks")) return;
   mapProbeBusy = true;
@@ -687,20 +710,20 @@ async function runMapProbeFromUi(ws: string | null): Promise<void> {
     const notes: string[] = [];
     const wNote = (w: any) => w.reason === "fp-mismatch" ? tE("설정이 점검 중 바뀜 — 재점검 필요", "config changed during check — re-check") : w.reason === "stale-loser" ? tE("더 최신 점검 결과가 이미 저장돼 있어 이 결과는 반영 안 함", "a newer check result is already stored — this one was not applied") : tE("저장 실패(잠금/쓰기: " + (w.reason || "?") + ") — 잠시 후 재시도", "save failed (lock/write: " + (w.reason || "?") + ") — retry shortly"); // 1차 [보완]: 실패 사유 분리 / 5차 [보완]: stale-loser는 장애가 아니라 정상 폐기
     // self — 무과금. 버전 캐시는 '실패 포함' 그대로 반영(2차 blocker②: 실패 후 이전 캐시가 살아 있으면 옛 성공이 '준비됨'으로 잔존).
-    try {
+    if (want.has("self")) try {
       const rs = MP.probeSelf({ adapterHint: selfAdapterHintExt() });
       cachedClaudeVer = rs.ver; // null이면 null로 리셋 — view 재대조(selfFpNow)도 즉시 미준비로 뒤집힘
       const detS = rs.rec.detail === "adapter-missing" ? tE("보강 어댑터 파일을 찾지 못했어요 — 설치가 온전하지 않을 수 있어요(재설치 후 다시 점검)", "the enrichment adapter file was not found — the install may be incomplete (reinstall, then re-check)") : rs.rec.detail;
       notes.push("self: " + (rs.write.ok ? (rs.rec.ok ? "OK" : detS) : wNote(rs.write)));
     } catch (e: any) { notes.push("self: " + String(e && e.message)); }
     // economy — 과금 최대 2회. Electron→node 전환 env 필수(2차 blocker③ — 실행기는 stdout capability-ok까지 검사).
-    try {
+    if (want.has("economy")) try {
       const re = MP.probeEconomy({ nodeBin: process.execPath, bridgeDir: BRIDGE_DIR, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
       if (re.skipped) notes.push(tE("economy: 설정 없음(키 미등록 — 건너뜀)", "economy: not configured (no key — skipped)"));
       else notes.push("economy: " + (re.rec.ok && re.write.ok ? "OK" : re.write.ok ? "실패(" + re.rec.detail + ")" : wNote(re.write)));
     } catch (e: any) { notes.push("economy: " + String(e && e.message)); }
     // precision — 계정 사용량 1회: 실제 정찰과 동일 조립(공용 빌더는 실행기 내부)·.js 해석이면 Electron→node.
-    try {
+    if (want.has("precision")) try {
       const inv = codexInvForProbe();
       const rp = MP.probePrecision({ inv, prompt: tE("아무 도구도 쓰지 말고 'ready'라고만 답하라.", "Reply with only 'ready'; use no tools."), env: inv.electronNode ? { ...process.env, ELECTRON_RUN_AS_NODE: "1" } : process.env });
       notes.push("precision: " + (rp.rec.ok && rp.write.ok ? "OK" : rp.write.ok ? "실패(" + rp.rec.detail + ")" : wNote(rp.write)));
@@ -3590,7 +3613,7 @@ class Dashboard {
         if (m?.type === "setScoutTarget" && typeof m.repo === "string") setScoutTargetFromUi(dashboardWorkspace(), m.repo, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
         if (m?.type === "setScoutArm" && (m.arm === "self" || m.arm === "deepseek" || m.arm === "codex")) setScoutArmFromUi(dashboardWorkspace(), m.arm, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
         if (m?.type === "setMapMode" && typeof m.mode === "string") setMapModeFromUi(dashboardWorkspace(), m.mode, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post()); // P7 — 검증은 setMapModeFromUi의 MAP_MODES 화이트리스트
-        if (m?.type === "runMapProbe") runMapProbeFromUi(dashboardWorkspace()).then(() => this.post()); // P7 — 명시 버튼만(자동 probe 금지)·단일-flight는 함수 내부
+        if (m?.type === "runMapProbe") runMapProbeFromUi(dashboardWorkspace()).then(() => this.post()); // 버튼=선택 담당 재점검(선택 시 자동 점검이 기본 경로 — 이건 수동 재확인용)·단일-flight는 함수 내부
         if (m?.type === "grantEnrichSelf") grantEnrichSelfFromUi(dashboardWorkspace()).then(() => this.post()); // P8 — self 자동 보강 동의(1클릭·모달 고지)
         if (m?.type === "retryEnrich") retryEnrichFromUi(dashboardWorkspace()).then(() => this.post()); // P8 — parked 재시도(open 복원+동일 진입점)
         if (m?.type === "envelopeShow" && typeof m.repo === "string" && m.repo) { // 수칙서 열람 전용 — 승인 후에도 세부내용 재확인·제외 요청 판단 창구(2026-07-22 사용자 지적)
@@ -6481,8 +6504,8 @@ class Dashboard {
           gb9.addEventListener("click", function(){ vscode.postMessage({type:"openMapModeGuide"}); });
           row.appendChild(gb9);
           const pb=document.createElement("button"); pb.type="button"; pb.className="secondary"; pb.style.cssText="margin-left:8px;font-size:11px;padding:2px 8px";
-          pb.textContent=T("🔎 준비 점검","🔎 Check readiness");
-          pb.title=T("실제 점검을 돌려요 — DeepSeek 소형 요청 최대 2회(과금·형식 실패 시 교정 1회 포함)·Codex 계정 사용량 1회. 자동 실행은 없어요(이 버튼만).","Runs real checks — up to 2 small billed DeepSeek requests (incl. 1 repair) · 1 Codex run within account usage. Never runs automatically (this button only).");
+          pb.textContent=T("🔎 다시 점검","🔎 Re-check");
+          pb.title=T("담당을 고르면 그 담당은 자동으로 점검돼요. 이 버튼은 그 뒤 상태가 바뀌었을 때(프로그램 경로 변경·키 등록 등) 다시 확인하는 용도예요 — 고른 담당만 실제로 호출합니다(경제형=DeepSeek 소형 요청 최대 2회 과금·정밀형=Codex 계정 사용량 1회).","Choosing a provider checks it automatically. Use this to re-check after something changed (program path moved, key registered, …) — only the chosen provider is actually called (economy = up to 2 small billed DeepSeek requests · precision = 1 Codex run within account usage).");
           pb.addEventListener("click", function(){ pb.disabled=true; pb.textContent=T("점검 중…","Checking…"); vscode.postMessage({type:"runMapProbe"}); });
           row.appendChild(pb);
           // P8 — 자동 보강 상태 줄(동의·장부 표시+동의/재시도 버튼. 정본=실행기 장부 — 표시 전용)
