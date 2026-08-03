@@ -124,8 +124,19 @@ console.log("[4e] 실패를 '호출 실패'와 '답 거부'로 갈라 표시(202
   // 구형 기록 폴백(2026-08-04 실사고): failReason '존재 여부'만 보고 일반 코드로 바꾼다 —
   // 자유 문자열 자체는 여전히 화면 상태로 나가지 않아야 한다.
   ok(/code: "legacy-unstructured"/.test(jobBlk), "구형 기록도 사유가 있었음을 일반 코드로 전달");
-  ok(!/failReason: /.test(jobBlk) && !/last9\.failReason(?!\s*===|\s*\.trim|\s*\))/.test(jobBlk.replace(/typeof last9\.failReason/g, "")), "자유 문자열 값 자체는 상태에 안 실림(존재 검사·접두 판별만)");
+  ok(!/failReason: /.test(jobBlk) && !/last9\.failReason\b(?!\s*===|\s*\.trim|\s*\))/.test(jobBlk.replace(/typeof last9\.failReason/g, "")), "자유 문자열 값 자체는 상태에 안 실림(존재 검사·접두 판별만)");
   ok(/"legacy-unstructured": \[/.test(ext), "구형 코드의 사람 문구가 표에 존재(알 수 없는 실패로 뭉개지 않음)");
+  // ★실행 반례★(확인 검증 [보완] 2026-08-04): 소스 정규식 '문자열 존재' 검사만 하면 비가시 제어문자
+  // 오타(\b가 0x08로 저장)를 못 잡는다 — 컴파일 산출물의 실제 접두 분류를 꺼내 실행해 잠근다.
+  {
+    const outSrc = fs.readFileSync(path.join(ROOT, "out", "extension.js"), "utf8");
+    const m = /stage:\s*(\/\^[^/]*\/i)\.test\(last9\.failReason\)/.exec(outSrc);
+    ok(!!m, "컴파일 산출물에서 접두 분류 정규식 추출 가능");
+    const re = m ? new Function("return " + m[1] + ";")() : null;
+    ok(!!re && !/[\x00-\x1f]/.test(m[1]), "정규식 원문에 제어문자 없음(이스케이프 사고 잠금)");
+    ok(!!re && re.test("evidence: 근거 실패: a.js 인용 불일치") && re.test("  evidence mismatch"), "evidence 접두=validation 단계로 분류(실제 실행)");
+    ok(!!re && !re.test("evidences: 다른 말") && !re.test("adapter-failed: x"), "다른 접두는 미분류(null 단계)");
+  }
 }
 ok(/"evidence-mismatch": \["답은 돌아왔지만 근거로 든 인용이 실제 파일과 맞지 않아 버렸어요"/.test(ext), "인용 불일치 문구(이번 실사고의 실제 사유)");
 ok(/"evidence-unreadable": \["답은 돌아왔지만 근거 파일을 읽어 확인하지 못했어요"/.test(ext) && /"parse-invalid":/.test(ext) && /"schema-invalid":/.test(ext), "결과 거부를 형식·구조·근거로 갈라 표시(한 덩어리로 뭉치지 않음)");

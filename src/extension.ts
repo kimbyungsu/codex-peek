@@ -2319,7 +2319,7 @@ function computeState(turnsN: number): BridgeState {
               // 구형 기록(구조 필드 이전): 자유 문자열은 화면에 내보내지 않되 '사유가 기록돼 있음'은 알린다.
               // 접두가 evidence면 단계만 보수적으로 추정(그 외는 미상 — 추측 금지).
               : (last9 && typeof last9.failReason === "string" && last9.failReason.trim()
-                ? { stage: /^\s*evidence/i.test(last9.failReason) ? "validation" : null, code: "legacy-unstructured", file: null, provider: last9.provider || null }
+                ? { stage: /^\s*evidence(?![A-Za-z0-9_])/i.test(last9.failReason) ? "validation" : null, code: "legacy-unstructured", file: null, provider: last9.provider || null }
                 : null),
           } : { phase: jr9.st },
           awaitingVerification: awaiting9,
