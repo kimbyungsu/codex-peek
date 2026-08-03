@@ -89,6 +89,20 @@ console.log("[3-1] 잠금 잔재는 자동으로 부수지 않음(교리) — �
   cl.releaseSessionLease("sess-F", r2.token);
 }
 
+console.log("[3-1d] 잠금 안내 분기 — 삭제 안내는 사망 확정만([주의] 반영)");
+{
+  const src = fs.readFileSync(path.resolve(__dirname, "../bridge/codex-bridge.js"), "utf8");
+  ck("dead-lock-holder에만 '직접 삭제' 안내", src.includes('String(old.error || "").includes("dead-lock-holder")'));
+  ck("timeout엔 '지우지 말고 재시도' 안내", src.includes("잠금 파일을 지우지 말고 잠시 후 다시"));
+  // 살아있는 보유자의 잠금(timeout 경로) → blocked:lock에 dead-lock-holder 표지가 없어야 한다
+  const file2 = cl.sessionLeaseFileFor("sess-J");
+  fs.writeFileSync(file2, JSON.stringify({ v: 1, session: "sess-J", token: "x".repeat(16), ownerPid: 999999999, childPid: null, ws: "D:/x", deadlineAt: "", createdAt: new Date().toISOString() }), "utf8");
+  fs.writeFileSync(file2 + ".reclaim.lock", process.pid + "-live01", "utf8"); // 살아있는 보유자(이 프로세스)의 잠금
+  const bl = cl.clearSessionLease("sess-J");
+  ck("생존 보유 잠금=lock-timeout(사망 표지 없음)", bl && bl.blocked === "lock" && !String(bl.error || "").includes("dead-lock-holder"));
+  fs.unlinkSync(file2 + ".reclaim.lock"); fs.unlinkSync(file2);
+}
+
 console.log("[3-1c] 이중 보유 불가 — 삭제=잠금 직렬화·생성=wx 원자(변위 없음)");
 {
   const deadPid = cp.spawnSync(process.execPath, ["-e", "0"], { windowsHide: true }).pid;
