@@ -2314,7 +2314,13 @@ function computeState(turnsN: number): BridgeState {
             applied: applied9, rejected: rejected9, investigation: investigation9,
             // 옛 기록에 위험한 파일 표기가 이미 저장돼 있을 수 있으므로, 화면으로 내보낼 때 한 번 더 거른다
             // (3차 [보완]: 판독 검증은 옛 기록 호환을 위해 느슨한데, 표시는 느슨하면 안 된다).
-            lastFailure: last9 && last9.failureCode ? { stage: last9.failureStage || null, code: last9.failureCode, file: safeShowFile(last9.failureFile), provider: last9.provider || null } : null,
+            lastFailure: last9 && last9.failureCode
+              ? { stage: last9.failureStage || null, code: last9.failureCode, file: safeShowFile(last9.failureFile), provider: last9.provider || null }
+              // 구형 기록(구조 필드 이전): 자유 문자열은 화면에 내보내지 않되 '사유가 기록돼 있음'은 알린다.
+              // 접두가 evidence면 단계만 보수적으로 추정(그 외는 미상 — 추측 금지).
+              : (last9 && typeof last9.failReason === "string" && last9.failReason.trim()
+                ? { stage: /^\s*evidence/i.test(last9.failReason) ? "validation" : null, code: "legacy-unstructured", file: null, provider: last9.provider || null }
+                : null),
           } : { phase: jr9.st },
           awaitingVerification: awaiting9,
           previousRunAwaiting: counts9.otherAwaiting || 0,
@@ -5043,7 +5049,10 @@ class Dashboard {
     "schema-invalid": ["답은 돌아왔지만 필요한 결과 형식을 통과하지 못했어요","an answer came back but did not pass the required result shape"],
     "evidence-mismatch": ["답은 돌아왔지만 근거로 든 인용이 실제 파일과 맞지 않아 버렸어요","an answer came back but its quoted evidence did not match the real file, so it was discarded"],
     "evidence-unreadable": ["답은 돌아왔지만 근거 파일을 읽어 확인하지 못했어요","an answer came back but the evidence file could not be read to verify it"],
-    "convert-invalid": ["답은 돌아왔지만 지도 변경으로 바꾸는 데 실패했어요","an answer came back but could not be turned into a map change"]
+    "convert-invalid": ["답은 돌아왔지만 지도 변경으로 바꾸는 데 실패했어요","an answer came back but could not be turned into a map change"],
+    // 구조 실패 기록(2026-07-29) 이전에 멈춘 작업 — 사유는 작업 기록 파일에만 남아 있다. 자유 문자열을
+    // 화면에 그대로 내보내지 않는 원칙은 유지하되, '사유가 있었다'는 사실까지 지우지는 않는다(실사고 반영).
+    "legacy-unstructured": ["이전 판에서 멈춘 기록이라 구체 사유가 화면에 남지 않았어요(작업 기록 파일에는 있어요)","this was parked by an older build, so the specific reason is not shown here (it is in the job ledger file)"]
   };
   function failureText(lf){
     if(!lf||!lf.code) return "";
@@ -6463,8 +6472,13 @@ class Dashboard {
             else if(!consented) msg=T("자동 보강: 꺼짐(이 담당의 자동 실행 동의 없음)","Auto-enrich: off (no consent for this provider)");
             else if(jp==="damaged") msg=T("자동 보강: 작업 기록 손상 — 자동 실행 정지","Auto-enrich: job ledger damaged — automation halted");
             else if(en9.deferredSt==="damaged") msg=T("자동 보강: 확인 대기 기록 손상 — 수동 복구 필요","Auto-enrich: verification queue damaged — manual recovery required");
-            else if(jp==="parked") msg=T("자동 보강: 보류됨 — ","Auto-enrich: parked — ")+parkReasonText(en9.job.parkedReason, d.mapReadiness)
+            else if(jp==="parked"){ msg=T("자동 보강: 보류됨 — ","Auto-enrich: parked — ")+parkReasonText(en9.job.parkedReason, d.mapReadiness)
               +(en9.job.lastFailure?T(" · 마지막 시도: "," · last attempt: ")+failureText(en9.job.lastFailure)+failureAdvice(en9.job.lastFailure):"");
+              // 순서 안내(실사고 2026-08-04): 준비 점검만으로는 이미 보류된 작업이 열리지 않는다 —
+              // 선택한 담당이 미준비면 '점검 → 다시 시도' 순서를 그 자리에서 말해 준다.
+              var curRd0 = (d.mapReadiness||{})[modeNow]; 
+              if(modeNow!=="self" && curRd0 && curRd0.ok!==true) msg+=T(" · 지금은 선택한 담당이 미준비 상태예요 — 먼저 위의 🔎 준비 점검을 통과시킨 뒤 '다시 시도'를 눌러야 열립니다(점검만으로는 열리지 않아요)."," · the selected provider is currently not ready — first pass 🔎 Check readiness above, then press Retry (the check alone does not resume it).");
+            }
             else if(jp==="done") msg=T("자동 보강: 완료 — 적용 ","Auto-enrich: done — applied ")+String(en9.job.applied||0)+T("건 · 확인 대기 "," · awaiting verification ")+String(en9.awaitingVerification||0)+T("건 · 기각 "," · rejected ")+String(en9.job.rejected||0)+T("건 · 조사 대기 "," · investigation ")+String(en9.job.investigation||0)+T("건"," items");
             else if(jp==="open") msg=T("자동 보강: 진행 중","Auto-enrich: in progress");
             else msg=en9.queuePending?T("자동 보강: 대기 중(다음 관측 때 실행)","Auto-enrich: pending (runs on next observation)"):T("자동 보강: 대기 없음","Auto-enrich: nothing queued");

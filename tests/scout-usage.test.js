@@ -70,6 +70,9 @@ ok(!/이 기록엔 모델 이름이 없어요/.test(ext) && !/모델 이름 기�
 
 console.log("[4c] 자동 보강 보류 사유를 사람 말로(2026-07-28 사용자 지적 — 화면에 영문 코드가 그대로 떴다)");
 ok(/var PARK_REASONS=\{/.test(ext) && /function parkReasonText\(raw, readiness\)/.test(ext), "보류 사유 표+변환 함수 존재(현재 준비 상태도 함께 받음)");
+// 실사고 2026-08-04: 준비 점검만으로는 이미 보류된 작업이 열리지 않는다 — 순서를 그 자리에서 안내한다.
+ok(/먼저 위의 🔎 준비 점검을 통과시킨 뒤 '다시 시도'를 눌러야 열립니다/.test(ext) && /then press Retry \(the check alone does not resume it\)/.test(ext), "보류+담당 미준비=점검→다시 시도 순서 안내(ko/en)");
+ok(/if\(modeNow!=="self" && curRd0 && curRd0\.ok!==true\)/.test(ext), "순서 안내는 self 아님+미준비일 때만(정상 상태 잡음 금지)");
 ok(/parkReasonText\(en9\.job\.parkedReason, d\.mapReadiness\)/.test(ext) && !/\+\(en9\.job\.parkedReason\|\|""\)/.test(ext), "보강 상태 줄이 원시 코드 대신 변환을 거침(직결 잔재 0)");
 ok(/"precision-not-ready": \["정밀형 담당이 아직 준비되지 않았어요"/.test(ext), "실제로 발생한 사유(정밀형 미준비)가 표에 있음");
 // 1차 [보완] 수용 2건: provider-conflict는 '설정 불일치'가 아니라 '결과 충돌'이고, 사유 목록은 닫혀 있지 않다.
@@ -115,7 +118,15 @@ ok(/자동 보강 기록이 손상돼 자동 실행이 멈춰 있어요/.test(ex
 ok(/if\(c\.models&&c\.models\.length\) models\.textContent=T\("기록된 모델: "/.test(ext), "기록이 있으면 종전대로 기록된 모델 우선(무회귀)");
 
 console.log("[4e] 실패를 '호출 실패'와 '답 거부'로 갈라 표시(2026-07-29 설계 상의 결론 — 사용자 실사고)");
-ok(/lastFailure: last9 && last9\.failureCode/.test(ext) && !/failReason/.test(ext.slice(ext.indexOf("job: job9 ?"), ext.indexOf("awaitingVerification"))), "화면 상태에는 구조 필드만 싣고 자유 문자열 사유는 안 보냄");
+{
+  const jobBlk = ext.slice(ext.indexOf("job: job9 ?"), ext.indexOf("awaitingVerification"));
+  ok(/lastFailure: last9 && last9\.failureCode/.test(ext), "구조 필드가 있으면 그대로 싣는다");
+  // 구형 기록 폴백(2026-08-04 실사고): failReason '존재 여부'만 보고 일반 코드로 바꾼다 —
+  // 자유 문자열 자체는 여전히 화면 상태로 나가지 않아야 한다.
+  ok(/code: "legacy-unstructured"/.test(jobBlk), "구형 기록도 사유가 있었음을 일반 코드로 전달");
+  ok(!/failReason: /.test(jobBlk) && !/last9\.failReason(?!\s*===|\s*\.trim|\s*\))/.test(jobBlk.replace(/typeof last9\.failReason/g, "")), "자유 문자열 값 자체는 상태에 안 실림(존재 검사·접두 판별만)");
+  ok(/"legacy-unstructured": \[/.test(ext), "구형 코드의 사람 문구가 표에 존재(알 수 없는 실패로 뭉개지 않음)");
+}
 ok(/"evidence-mismatch": \["답은 돌아왔지만 근거로 든 인용이 실제 파일과 맞지 않아 버렸어요"/.test(ext), "인용 불일치 문구(이번 실사고의 실제 사유)");
 ok(/"evidence-unreadable": \["답은 돌아왔지만 근거 파일을 읽어 확인하지 못했어요"/.test(ext) && /"parse-invalid":/.test(ext) && /"schema-invalid":/.test(ext), "결과 거부를 형식·구조·근거로 갈라 표시(한 덩어리로 뭉치지 않음)");
 ok(/"process-failed": \["담당 호출을 끝내지 못했어요"/.test(ext) && !/담당을 부르지 못했어요/.test(ext), "호출 실패는 '끝내지 못했어요'(프로세스가 뜬 뒤 실패했을 수 있음)");
