@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -1021,7 +1021,11 @@ function citedFilesUnseen(answer, ws, sessionId) {
 }
 // ws=configWs(이벤트 workspace 라벨 — 대시보드 귀속), execCwd=실제 실행 폴더(인용 상대경로 해석 기준).
 // 분리 이유: 코덱스 답의 '(경로:라인)' 인용은 코덱스가 돈 폴더(execCwd) 기준 상대경로라, 라벨용 연 폴더로 해석하면 오탐.
-function flagEvidence(answer, ws, sessionId, execCwd) {
+function flagEvidence(answer, ws, sessionId, execCwd, chCtx) {
+  // chCtx(재확인 배선·증분 4): {roots, promptText, mode, lang, campaignId, askId} — 있으면 경보 기록
+  // '직후'에 challenge를 동결한다(설계 A — 경보 시점 세대 고정. 후처리 뒤에 읽으면 그 사이 편집된
+  // 세대가 최초 스냅샷으로 둔갑해 file-changed 판정이 무력화된다·확인 검증 blocker). 발송은 호출자가
+  // 후처리·checkpoint 뒤에 maybeDispatchChallenge로 수행한다(H — 탐지·발송 분리).
   const pathWs = execCwd || ws; // 경로 해석은 실행 폴더 기준(미지정 시 ws로 폴백=무회귀)
   try {
     const mism = checkCitedEvidence(answer, pathWs);
@@ -1056,8 +1060,23 @@ function flagEvidence(answer, ws, sessionId, execCwd) {
         detailKo: `검증 답이 인용한 파일 ${unseen.length}개를 이 검증 기록에서 다룬 흔적을 확인하지 못했습니다(이전 턴에서 봤거나 기록 형식 차이일 수 있음 — '안 읽음' 단정 아님): ${unseen.slice(0, 3).join(" / ")}`,
         detailEn: `${unseen.length} cited file(s) show no trace of being handled in this verification log (may be from an earlier turn or a log-format difference — not asserting 'unread'): ${unseen.slice(0, 3).join(" / ")}`,
       });
-      // 재확인 배선(증분 4): 발송 재료를 호출자에게 돌려준다(약한 축의 전체 경로 목록 — 경보 목록과 동일 산출)
-      return { eventId: evId, unseen: exact.checked ? exact.unseenWeak : [] };
+      // 재확인 배선(증분 4): 이벤트 '저장 확인' 후에만 동결([주의] 반영 — 경보가 실제로 남지 않았으면
+      // 어떤 추가 전송 재료도 만들지 않는다). 동결은 지금(경보 시점) — 루트·문맥은 원 턴 스냅샷(chCtx).
+      let challengeId = null;
+      if (chCtx && typeof chCtx === "object" && readIntegrityEvents().some((e) => e.id === evId)) {
+        try {
+          const ech = require("./evidence-challenge.js");
+          const rec = ech.freezeChallenge({
+            eventId: evId, ws, execCwd: pathWs, roots: (chCtx.roots || []).filter(Boolean),
+            files: exact.checked ? exact.unseenWeak : [],
+            exposedTexts: [String(chCtx.promptText || ""), String(answer || "")],
+            verifierSession: String(sessionId || ""), mode: chCtx.mode, lang: chCtx.lang,
+            campaignId: chCtx.campaignId, askId: chCtx.askId,
+          });
+          if (rec && ech.writeChallenge(rec)) challengeId = rec.challengeId;
+        } catch { /* best-effort — 동결 실패=발송 없음(경보 유지) */ }
+      }
+      return { eventId: evId, challengeId };
     }
   } catch { /* best-effort — 점검 실패가 검증 흐름을 막지 않음 */ }
   return null;
@@ -1067,38 +1086,44 @@ function flagEvidence(answer, ws, sessionId, execCwd) {
 // 호출된다(H — 탐지·발송 분리). 예산·proof·판정·findings 파이프라인을 일절 건드리지 않고(B), 어떤
 // 실패도 원 검증 결과에 영향을 주지 않는다(G — 전체 best-effort). 같은 프로세스가 lease를 보유한 채
 // resume하므로 원 검증→재확인 사이 무잠금 구간이 없다(§7 token 이관). 응답은 CH 줄만 파싱(재귀 없음).
+// §5 K — resolved→ack 재투영(복구·멱등): resolved로 종결됐지만 원 이벤트가 아직 미ack인 레코드를
+// ack한다. 'resolved 기록 후 ack 전 중단'이 dedupe에 걸려 영구 미해소가 되는 경로 봉합(확인 검증
+// blocker). 매 발송 진입 시 실행 — ack는 멱등이고 이벤트가 절단(50건 상한)으로 사라졌으면 할 일 없음.
+function projectResolvedAcks(ws, ech) {
+  for (const rec of ech.listChallenges(ws)) {
+    if (rec.state !== "resolved" || !ech.eventFullyResolved(rec)) continue;
+    try {
+      const ev = readIntegrityEvents().find((e) => e.id === rec.eventId);
+      if (ev && !ev.ack) ackIntegrityEvents([rec.eventId]);
+    } catch { /* 실패=경보 유지(안전) — 다음 진입에서 재시도 */ }
+  }
+}
 function maybeDispatchChallenge(opts) {
   try {
-    const { ws, exec, codexSession, alert, promptText, answer, harnessMode, lang, campaignId, askId, runCodexFn } = opts || {};
-    if (!alert || !alert.eventId || !Array.isArray(alert.unseen) || !alert.unseen.length) return { skipped: "no-alert" };
+    const { ws, codexSession, challengeId, lang, runCodexFn } = opts || {};
     const ech = require("./evidence-challenge.js");
-    ech.convergeStaleChallenges(ws); // §5 강제 종료 잔재 수렴(재발송 없음)
-    if (ech.listChallenges(ws).some((r) => r.eventId === alert.eventId)) return { skipped: "already" }; // 이벤트당 1회
-    if (minimumCallerTimeoutMs() < 60_000) return { skipped: "no-time" }; // 마감 임박 — 발송 포기(경보 유지=안전)
-    const roots = [exec, ws];
-    try { const sr = resolveScoutRepo(ws, loadContract(ws)); if (sr && sr.repo) roots.push(sr.repo); } catch { /* 승인 루트 보강 실패=기본 루트만 */ }
-    const rec = ech.freezeChallenge({
-      eventId: alert.eventId, ws, execCwd: exec || ws, roots: roots.filter(Boolean),
-      files: alert.unseen, exposedTexts: [String(promptText || ""), String(answer || "")],
-      verifierSession: codexSession, mode: harnessMode, lang, campaignId: String(campaignId || "direct"), askId: String(askId || "direct"),
-    });
-    if (!rec) return { skipped: "freeze-refused" };
-    if (!ech.writeChallenge(rec)) return { skipped: "write-fail" };
-    if (rec.state !== "pending") return { skipped: "no-dispatch" }; // 전 파일이 사유 기록(경보 유지)
-    if (!ech.markDispatched(ws, rec.challengeId).ok) return { skipped: "dispatch-refused" }; // 호출 전 원자 선기록·시도 1
+    ech.convergeStaleChallenges(ws); // §5 강제 종료 잔재 수렴(재발송 없음 — pending·dispatched 공통)
+    projectResolvedAcks(ws, ech);    // §5 K 복구 재투영(멱등)
+    if (!challengeId) return { skipped: "no-challenge" };
+    const rec = ech.readChallenge(ws, challengeId);
+    if (!rec || rec.state !== "pending") return { skipped: "not-pending" }; // 동결은 flagEvidence가 수행(경보 시점)
+    if (minimumCallerTimeoutMs() < 60_000) return { skipped: "no-time" };   // 마감 임박 — 발송 포기(경보 유지=안전·stale 수렴이 정리)
+    if (!ech.markDispatched(ws, challengeId).ok) return { skipped: "dispatch-refused" }; // 호출 전 원자 선기록·시도 1
     const run = runCodexFn || ((args, p) => runCodex(args, p));
-    const r = run(["resume", codexSession], ech.buildChallengePrompt(rec, lang));
+    const r = run(["resume", codexSession], ech.buildChallengePrompt(rec, lang || rec.lang));
     if (!r || r.error || !r.answer || (typeof r.status === "number" && r.status !== 0)) {
-      ech.markOutcomeUnknown(ws, rec.challengeId); // 호출 실패=판정 대상 아님(태만 기록 금지 — §4)
-      return { challengeId: rec.challengeId, outcome: "outcome-unknown" };
+      ech.markOutcomeUnknown(ws, challengeId); // 호출 실패=판정 대상 아님(태만 기록 금지 — §4)
+      return { challengeId, outcome: "outcome-unknown" };
     }
     const judged = ech.judgeChallenge(rec, ech.parseChallengeResponse(r.answer, rec));
-    const st = ech.settleChallenge(ws, rec.challengeId, judged);
+    const st = ech.settleChallenge(ws, challengeId, judged);
     if (st.ok && ech.eventFullyResolved(st.rec)) {
-      try { ackIntegrityEvents([alert.eventId]); } catch { /* 실패=경보 유지(안전) */ } // §5 resolved 선기록→ack 투영
-      return { challengeId: rec.challengeId, outcome: "resolved", acked: true };
+      // §5 K: resolved 선기록(settle) 뒤 ack 투영 — 재판독으로 실제 ack 여부를 확인해 정직 보고.
+      let acked = false;
+      try { ackIntegrityEvents([rec.eventId]); const ev = readIntegrityEvents().find((e) => e.id === rec.eventId); acked = !ev || ev.ack === true; } catch { /* 재투영이 재시도 */ }
+      return { challengeId, outcome: "resolved", acked };
     }
-    return { challengeId: rec.challengeId, outcome: judged.overall, acked: false };
+    return { challengeId, outcome: judged.overall, acked: false };
   } catch { return { skipped: "error" }; }
 }
 
@@ -3095,7 +3120,14 @@ async function cmdAsk(rest) {
     try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
     const proofBind = writeProof(link.codexSession, answer, ws) || {}; // 실제 성공 → 검증 증명 기록(verify-guard가 인정)+checkpoint 결속 좌표
     attempt.proofAccepted(); // 증명 실물 확정(이후 예외=postprocess-error — proof-rejected 오분류 차단·6차 blocker)
-    const evAlert = flagEvidence(answer, ws, link.codexSession, exec); // 결정2: 인용 근거 존재성+다룬 흔적 점검(경로해석=작업폴더 exec). 라벨=연 폴더 ws. 반환=재확인 발송 재료
+    // 재확인 ctx(§3 E): 루트·문맥은 '원 턴 스냅샷'에서만 — contractSnap 기반 정찰 대상(발송부의 전역
+    // 재판독 금지). 동결은 flagEvidence 안(경보 시점 세대 고정), 발송은 아래 후처리·checkpoint 뒤.
+    const chRoots = [exec, ws];
+    try { const srCh = resolveScoutRepo(ws, contractSnap); if (srCh && srCh.repo) chRoots.push(srCh.repo); } catch { /* 원 턴 루트만 */ }
+    const evAlert = flagEvidence(answer, ws, link.codexSession, exec, {
+      roots: chRoots, promptText, mode: harnessModeSnap, lang: langSnap,
+      campaignId: (durableEnv && durableEnv.campaignId) || "direct", askId,
+    }); // 결정2: 인용 근거 존재성+다룬 흔적 점검(경로해석=작업폴더 exec). 라벨=연 폴더 ws. 반환=경보 id+동결된 challenge id
     flagLedgerConfirms(answer, ws, link.codexSession, exec, { askId, attach: attCarrier }); // 로드맵 ④ L1-A: 등급·echo·askId·seen을 이벤트에
     collectScoutTargetEvidence(answer, ws, exec); // 정찰 대상 자기진단 증거(2026-07-10 — 판정 무관·3트랙만·실패 무해)
     const mfl = machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId, campSnap); // P-12 2c: 판독·정합·[백로그] 자동 등록(core만·1회)
@@ -3109,11 +3141,19 @@ async function cmdAsk(rest) {
       + breakdownNoticeFor(ws, langSnap, budgetGate.res) // 증분 3 — 상한 마지막 왕복=원인 분해 병기
       + envelopeCandidateNoticeFor(ws, langSnap, budgetGate.res, profileSnap) // §7 증분 1 — core 소진=수칙서 후보 재료+작성 의무 병기
       + integrityReviewLine(ws, langSnap, profileSnap); // 증분 3 — 무결성=경계 재심 재료 병기 // 포맷 계층(⑻) — N=M 예고·미집계 1줄(무제한="")
-    if (durableEnv && evAlert && proofBind.proofFile) {
-      try { require("./evidence-challenge.js").writePrimaryComplete(path.dirname(String(process.env.CODEX_BRIDGE_JOB_PROMPT_FILE || "")), durableEnv, outText, { verifierSession: link.codexSession, proofFile: proofBind.proofFile, proofFp: proofBind.proofFp }); } catch { /* 무해 — checkpoint 없으면 기존 실패 경로 */ }
+    // §6 게이트(확인 검증 blocker): 내구 job은 checkpoint '성공'이 확인될 때만 발송한다 — 실패 상태로
+    // 발송하다 죽으면 worker가 원 job을 실패로 확정해 버린다(원 성공 보호가 발송보다 우선).
+    let ckptOk = !durableEnv; // 직접 ask는 checkpoint 불요(보호할 내구 상태 없음)
+    if (durableEnv && evAlert && evAlert.challengeId) {
+      ckptOk = false;
+      if (proofBind.proofFile) {
+        try { ckptOk = !!require("./evidence-challenge.js").writePrimaryComplete(path.dirname(String(process.env.CODEX_BRIDGE_JOB_PROMPT_FILE || "")), durableEnv, outText, { verifierSession: link.codexSession, proofFile: proofBind.proofFile, proofFp: proofBind.proofFp }); } catch { ckptOk = false; }
+      }
     }
     process.stdout.write(outText);
-    maybeDispatchChallenge({ ws, exec, codexSession: link.codexSession, alert: evAlert, promptText, answer, harnessMode: harnessModeSnap, lang: langSnap, campaignId: durableEnv ? durableEnv.campaignId : "direct", askId });
+    if (evAlert && evAlert.challengeId && ckptOk) {
+      maybeDispatchChallenge({ ws, codexSession: link.codexSession, challengeId: evAlert.challengeId, lang: langSnap });
+    }
     return;
   }
 

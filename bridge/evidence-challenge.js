@@ -207,10 +207,11 @@ function settleChallenge(ws, challengeId, judged) {
     return { ok: true, rec: { ...rec, state: judged.overall, files, settledAt: nowIso() } };
   });
 }
-// 강제 종료 복구(§5): dispatched로 남은 레코드는 재발송하지 않고 outcome-unknown으로 수렴.
+// 강제 종료 복구(§5): dispatched(발송 중 사망)·pending(발송 전 사망/포기) 레코드를 재발송 없이
+// outcome-unknown으로 수렴(시도 1회 계약 유지 — 이 전이 뒤에는 어떤 발송도 불가).
 function markOutcomeUnknown(ws, challengeId) {
   return transitionChallenge(ws, challengeId, (rec) => {
-    if (rec.state !== "dispatched") return { ok: false, reason: "not-dispatched" };
+    if (rec.state !== "dispatched" && rec.state !== "pending") return { ok: false, reason: "not-open" };
     return { ok: true, rec: { ...rec, state: "outcome-unknown", settledAt: nowIso() } };
   });
 }
@@ -296,13 +297,14 @@ function buildChallengePrompt(rec, lang) {
   const items = live.map((f) => `- ${rec.challengeId} ${f.pathId} ${f.path} offset=${f.off} length=${f.len}`).join("\n");
   return `${head}\n${fmt}\n${items}\n`;
 }
-// 강제 종료 복구(§5): dispatched로 남은 채 수명이 다한 레코드를 outcome-unknown으로 수렴(재발송 없음).
+// 강제 종료 복구(§5): dispatched(발송 중 사망)뿐 아니라 pending(동결만 하고 발송 전 사망·checkpoint
+// 실패로 발송 포기)도 수명이 다하면 outcome-unknown으로 수렴한다(재발송 없음 — 시도 1회 계약 유지).
 // 발송자가 살아있는 최근 레코드는 건드리지 않는다 — 수명 기준은 검증 대기 상한과 같은 90분.
 const CH_DISPATCH_STALE_MS = 90 * 60 * 1000;
 function convergeStaleChallenges(ws) {
   let n = 0;
   for (const rec of listChallenges(ws)) {
-    if (rec.state !== "dispatched") continue;
+    if (rec.state !== "dispatched" && rec.state !== "pending") continue;
     const t = Date.parse(rec.dispatchedAt || rec.createdAt || "");
     if (Number.isFinite(t) && Date.now() - t > CH_DISPATCH_STALE_MS) { if (markOutcomeUnknown(ws, rec.challengeId).ok) n++; }
   }
