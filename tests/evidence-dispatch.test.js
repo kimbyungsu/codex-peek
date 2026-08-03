@@ -147,7 +147,12 @@ console.log("[7] cmdAsk 배선 순서(소스 잠금) — 경보 시점 동결→
   ck("배선 실재", [iProof, iCtx, iAlert, iVerdict, iOut, iGate, iPrint, iDisp].every((i) => i > 0));
   ck("순서 고정(A·H·§6·G)", iProof < iCtx && iCtx < iAlert && iAlert < iVerdict && iVerdict < iOut && iOut < iGate && iGate < iPrint && iPrint < iDisp);
   ck("발송 조건에 checkpoint 게이트 결속", src.includes("if (evAlert && evAlert.challengeId && ckptOk)"));
-  ck("루트=원 턴 contractSnap(전역 재판독 금지)", src.includes("resolveScoutRepo(ws, contractSnap); if (srCh && srCh.repo) chRoots.push(srCh.repo)") && !/function maybeDispatchChallenge[\s\S]{0,2600}?loadContract\(/.test(src));
+  ck("정비(수렴·재투영)는 발송 조건과 무관하게 매 검증 실행", (() => {
+    const iMaint = src.indexOf("echM.convergeStaleChallenges(ws); projectResolvedAcks(ws, echM);");
+    const iCond = src.indexOf("if (evAlert && evAlert.challengeId && ckptOk)");
+    return iMaint > 0 && iCond > 0 && iMaint < iCond; // 조건문 '앞'의 독립 블록
+  })());
+  ck("루트=동결 스냅샷 값 직접(helper 폴백 재판독 금지)", src.includes("contractSnap.scoutRepo.trim()) chRoots.push(contractSnap.scoutRepo.trim())") && !/const chRoots = \[exec, ws\];[\s\S]{0,300}?resolveScoutRepo\(/.test(src) && !/function maybeDispatchChallenge[\s\S]{0,2600}?loadContract\(/.test(src));
   ck("동결은 이벤트 저장 확인 후(경보 없는 전송 금지)", src.includes("readIntegrityEvents().some((e) => e.id === evId)"));
   ck("발송은 예산 게이트·시도 기록을 안 씀(B — 격리)", !/function maybeDispatchChallenge[\s\S]{0,2600}?(reserveVerifyBudgetGate|beginVerifyAttempt|writeProof\(|machineFindingsLayer|flagVerdict)/.test(src));
 }

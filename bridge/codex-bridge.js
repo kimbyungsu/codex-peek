@@ -3120,10 +3120,11 @@ async function cmdAsk(rest) {
     try { writePhase("rejudging", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // 검증 답 수신 → Claude 반영중
     const proofBind = writeProof(link.codexSession, answer, ws) || {}; // 실제 성공 → 검증 증명 기록(verify-guard가 인정)+checkpoint 결속 좌표
     attempt.proofAccepted(); // 증명 실물 확정(이후 예외=postprocess-error — proof-rejected 오분류 차단·6차 blocker)
-    // 재확인 ctx(§3 E): 루트·문맥은 '원 턴 스냅샷'에서만 — contractSnap 기반 정찰 대상(발송부의 전역
-    // 재판독 금지). 동결은 flagEvidence 안(경보 시점 세대 고정), 발송은 아래 후처리·checkpoint 뒤.
+    // 재확인 ctx(§3 E): 루트·문맥은 '원 턴 스냅샷'에서만. resolveScoutRepo는 값이 비면 현행 계약
+    // 파일(반대 언어 슬롯 포함)을 다시 읽는 폴백이 있어 쓰지 않는다(확인 검증 blocker — 원 턴 밖
+    // 프로젝트 편입 경로). 동결 스냅샷의 값만 직접 사용 — 비면 루트 추가 없음(과소 포함=안전 방향).
     const chRoots = [exec, ws];
-    try { const srCh = resolveScoutRepo(ws, contractSnap); if (srCh && srCh.repo) chRoots.push(srCh.repo); } catch { /* 원 턴 루트만 */ }
+    if (contractSnap && typeof contractSnap.scoutRepo === "string" && contractSnap.scoutRepo.trim()) chRoots.push(contractSnap.scoutRepo.trim());
     const evAlert = flagEvidence(answer, ws, link.codexSession, exec, {
       roots: chRoots, promptText, mode: harnessModeSnap, lang: langSnap,
       campaignId: (durableEnv && durableEnv.campaignId) || "direct", askId,
@@ -3151,6 +3152,9 @@ async function cmdAsk(rest) {
       }
     }
     process.stdout.write(outText);
+    // §5 정비는 '매 검증 무조건'(확인 검증 blocker — 새 경보 없는 정상 재시작에서도 미ack·pending
+    // 잔재를 수렴해야 한다): stale 수렴+resolved→ack 재투영. 발송 여부와 독립.
+    try { const echM = require("./evidence-challenge.js"); echM.convergeStaleChallenges(ws); projectResolvedAcks(ws, echM); } catch { /* best-effort */ }
     if (evAlert && evAlert.challengeId && ckptOk) {
       maybeDispatchChallenge({ ws, codexSession: link.codexSession, challengeId: evAlert.challengeId, lang: langSnap });
     }
