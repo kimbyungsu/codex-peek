@@ -796,13 +796,14 @@ function runEnrich(repo, opts) {
     // 사실은 스스로 알려야 한다 — 무결성 채널(노랑)에 1건 기록(같은 ws의 직전 보강 경보는 대체).
     try {
       const wsLbl = String(o.ws || repo);
-      CL.supersedeIntegrity(null, "enrich-parked", wsLbl); // 그 프로젝트의 최신 1건만 남긴다(누적 노랑 방지)
+      // 갈아끼우기는 한 잠금·한 쓰기로(확인 검증 [주의] — 삭제만 되고 추가가 실패하면 '멈췄는데
+      // 아무도 모르는' 상태가 생긴다). 누적 노랑 방지와 유실 방지를 동시에 만족시킨다.
       CL.appendIntegrityEvent({
         ts: new Date().toISOString(), workspace: wsLbl, kind: "enrich-parked", severity: "warning",
         detailKo: `지도 자동 보강이 멈췄습니다(사유: ${reason}) — 대시보드의 '자동 보강' 줄에서 원인과 다시 시도를 확인하세요.`,
         detailEn: `Map auto-enrichment stopped (reason: ${reason}) — see the 'Auto-enrich' line in the dashboard for the cause and retry.`,
         detail: `지도 자동 보강이 멈췄습니다(사유: ${reason}) — 대시보드의 '자동 보강' 줄에서 원인과 다시 시도를 확인하세요.`,
-      });
+      }, { supersedeSameKindWs: true });
     } catch { /* 알림 실패가 실행기를 막지 않는다 */ }
     return { outcome: "parked", reason };
   };

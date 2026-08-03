@@ -202,9 +202,16 @@ function withFileLockStrict(lockPath, fn) {
   try { return { ok: true, result: fn() }; }
   finally { try { if (fs.readFileSync(lockPath, "utf8") === token) fs.unlinkSync(lockPath); } catch { /* 무해 */ } }
 }
-function appendIntegrityEvent(ev) {
+// opts.supersedeSameKindWs=true: '같은 종류·같은 프로젝트의 미확인 경보를 갈아끼운다'를 한 잠금·한 번의
+// 쓰기로 수행한다(확인 검증 [주의]: supersede→append를 따로 부르면 삭제는 됐는데 추가가 실패하는 창에
+// 경보가 통째로 사라져, 실제로 멈춰 있는데 아무도 모르는 상태가 된다).
+function appendIntegrityEvent(ev, opts) {
   return withIntegrityLock(() => {
-    const events = readIntegrityEvents();
+    let events = readIntegrityEvents();
+    if (opts && opts.supersedeSameKindWs && ev && ev.kind && ev.workspace) {
+      const wsN = normWs(String(ev.workspace));
+      events = events.filter((e) => !(!e.ack && e.kind === ev.kind && e.workspace && normWs(e.workspace) === wsN));
+    }
     // 호출자가 id를 미리 만들어 넘기면 존중한다(재확인 배선 — 이벤트와 challenge 장부를 같은 id로
     // 결속해야 해소 투영(ack)이 정확한 1건을 가리킨다). 없으면 종전대로 생성.
     const id = (ev && typeof ev.id === "string" && ev.id) ? ev.id : `${(ev && ev.ts) || ""}_${Math.random().toString(36).slice(2, 8)}`; // 일반 node(워크플로 아님)라 Math.random OK

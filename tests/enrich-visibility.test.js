@@ -79,18 +79,50 @@ console.log("[3] 완주하면 그 경보를 해소한다 — 멈춤을 알렸으
   ok(evOf(ws).filter((x) => !x.ack).length === 0, "완주 시 열린 보류 경보 0(대체로 해소)");
 }
 
-console.log("[4] 발동 게이트 — 보류라도 '지도 세대가 바뀌면' 실행기에 기회를 준다");
+console.log("[4] 발동 게이트 — 보류라도 새 입력이면 실행기에 기회를 준다(컴파일 산출물 실행)");
 {
+  const outSrc = fs.readFileSync(path.join(ROOT, "out", "extension.js"), "utf8");
+  const b = outSrc.indexOf("function shouldSpawnWhenParked(");
+  const e = outSrc.indexOf("\nfunction ", b + 10);
+  ok(b > 0 && e > b, "컴파일 산출물에서 판단 함수 추출 가능");
+  const consts = "const PARKED_RECHECK_MS = 30 * 60 * 1000;\n";
+  const should = new Function(consts + outSrc.slice(b, e) + "\nreturn shouldSpawnWhenParked;")();
+  const T0 = 1_700_000_000_000;
+  // ① 새 지도 세대 = 즉시 통과(시간 무관)
+  ok(should("map-A", "map-B", T0, T0 + 1000) === true, "지도 세대가 다르면 즉시 통과(방금 재판단했어도)");
+  // ② 같은 세대: 첫 진입은 통과, 곧바로 다시 오면 차단, 주기가 지나면 다시 통과
+  ok(should("map-A", "map-A", undefined, T0) === true, "같은 세대 첫 진입=통과(재판단 기회)");
+  ok(should("map-A", "map-A", T0, T0 + 60_000) === false, "같은 세대 직후 반복=차단(spawn 폭주 금지)");
+  ok(should("map-A", "map-A", T0, T0 + 30 * 60 * 1000) === true, "주기 경과 후 재판단 기회(같은 지도에 새 결정이 붙은 경우 — 영구 사각지대 금지)");
+  // ★확인 검증 blocker 재현 반례★: 첫 tick이 기회를 소모해도, 이후 authority만 바뀐 입력이 영구 차단되면 안 된다
+  ok(should("map-A", "map-A", T0, T0 + 29 * 60 * 1000) === false && should("map-A", "map-A", T0, T0 + 31 * 60 * 1000) === true, "첫 진입 소모 후에도 시간이 지나면 반드시 다시 열린다(구 '창당 1회' 표지 회귀 반례)");
+  // 큐 판독 실패(빈 문자열)=세대 비교 불가 → 시간 기준만 적용(과도 통과 금지)
+  ok(should("map-A", "", T0, T0 + 60_000) === false && should("map-A", "", T0, T0 + 31 * 60 * 1000) === true, "큐 판독 실패=시간 기준만(무조건 통과 아님)");
+
   const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
-  const blk = ext.slice(ext.indexOf('if (jr9.st === "ok" && jr9.job.phase === "parked" && !trigger.startsWith("link:"))'), ext.indexOf("enrichSpawnBusy = true;"));
-  ok(blk.length > 0, "게이트 블록 추출");
-  ok(/q\.mapId \|\| ""\) === String\(jr9\.job\.mapId \|\| ""\)/.test(blk), "큐의 지도 세대와 보류 당시 세대를 비교(다르면 통과)");
-  ok(/if \(sameGen\) \{[\s\S]{0,200}parkedRecheckDone\.has\(repo9\)\) return;/.test(blk), "같은 세대는 창당 1회만 재판단 기회(반복 spawn 금지)");
-  ok(/const parkedRecheckDone = new Set<string>\(\);/.test(ext), "재판단 기회 기록 집합 실재");
+  ok(/shouldSpawnWhenParked\(String\(jr9\.job\.mapId \|\| ""\), qMapId, parkedRecheckAt\.get\(repo9\), Date\.now\(\)\)/.test(ext), "게이트가 그 판단 함수를 실제로 사용");
+  ok(/parkedRecheckAt\.set\(repo9, Date\.now\(\)\)/.test(ext), "통과 시 재판단 시각 갱신");
   ok(!/phase === "parked" && !trigger\.startsWith\("link:"\)\) return;/.test(ext), "무조건 차단(구 계약) 잔재 0");
   // 실행기 쪽 계약(같은 jobKey만 보류 유지)이 그대로인지 — 게이트 완화의 안전 근거
   const me = fs.readFileSync(path.join(ROOT, "bridge", "map-enrich.js"), "utf8");
   ok(/if \(j\.jobKey === jobKey && j\.phase === "parked"\)/.test(me), "실행기는 같은 입력(jobKey)일 때만 보류 유지 — 재과금 차단 불변");
+}
+
+console.log("[5] 경보 갈아끼우기는 원자적 — 삭제만 되고 추가가 실패하는 창이 없다");
+{
+  const cl = fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8");
+  ok(/function appendIntegrityEvent\(ev, opts\)/.test(cl) && /opts\.supersedeSameKindWs/.test(cl), "한 잠금 안에서 대체+추가를 수행하는 옵션 실재");
+  const me = fs.readFileSync(path.join(ROOT, "bridge", "map-enrich.js"), "utf8");
+  const parkBlk = me.slice(me.indexOf("const park = (jobMut, reason, extra)"), me.indexOf("// ⓪ 게이트 최선행"));
+  ok(/\{ supersedeSameKindWs: true \}/.test(parkBlk) && !/supersedeIntegrity/.test(parkBlk), "park는 별도 supersede 호출 없이 원자 옵션만 사용");
+  // 실제 동작: 같은 ws 반복 기록은 1건 유지, 다른 ws는 보존, ack된 건 보존
+  const wsX = "D:/atomic-x", wsY = "D:/atomic-y";
+  CL.appendIntegrityEvent({ ts: new Date().toISOString(), workspace: wsY, kind: "enrich-parked", severity: "warning", detail: "다른 프로젝트" }, { supersedeSameKindWs: true });
+  CL.appendIntegrityEvent({ ts: new Date().toISOString(), workspace: wsX, kind: "enrich-parked", severity: "warning", detail: "1차" }, { supersedeSameKindWs: true });
+  CL.appendIntegrityEvent({ ts: new Date().toISOString(), workspace: wsX, kind: "enrich-parked", severity: "warning", detail: "2차" }, { supersedeSameKindWs: true });
+  const openX = CL.readIntegrityEvents().filter((e) => !e.ack && e.kind === "enrich-parked" && CL.normWs(e.workspace || "") === CL.normWs(wsX));
+  ok(openX.length === 1 && /2차/.test(openX[0].detail || ""), "같은 프로젝트 반복=최신 1건만");
+  ok(CL.readIntegrityEvents().some((e) => !e.ack && CL.normWs(e.workspace || "") === CL.normWs(wsY)), "다른 프로젝트 경보는 보존");
 }
 
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);

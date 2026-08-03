@@ -546,9 +546,19 @@ async function setMapModeFromUi(ws: string | null, mode: string, slotLang?: Lang
 // pending 관측이 완료 직후를 커버]): 창당 단일-flight+스로틀. 실행은 설치본 CLI를 detach spawn — 결과는
 // 실행기 장부·로그가 정본(확장은 발동만).
 let enrichSpawnBusy = false;
-// 보류된 작업에 '같은 지도 세대'로 재판단 기회를 준 저장소(창 수명 한정 — 창을 다시 열면 한 번 더 준다).
-// 반복 spawn을 막으면서도, 같은 지도에 새 결정만 붙은 경우를 영구 사각지대로 두지 않기 위한 최소 장치.
-const parkedRecheckDone = new Set<string>();
+// 보류된 작업에 마지막으로 '재판단 기회'를 준 시각(저장소별). 창 수명 한정 메모리 — 창을 다시 열면
+// 즉시 한 번 더 준다(재시작은 자연스러운 재평가 시점).
+const parkedRecheckAt = new Map<string, number>();
+// 보류 상태에서 실행기를 다시 부를지 — 순수 판단(테스트가 수명주기를 실제로 실행해 잠근다).
+// ① 큐의 지도 세대가 보류 당시와 다르면 즉시(새 입력 = 새 작업 대상).
+// ② 같은 세대라도 주기적으로 한 번씩(같은 지도에 새 결정만 붙어 authorityHash만 바뀐 경우를 영구
+//    사각지대로 두지 않기 위함 — 확인 검증 blocker: '창당 1회' 표지는 첫 tick에 소모돼 이후를 막았다).
+// 같은 입력의 재과금은 실행기의 jobKey 비교가 그대로 막으므로, 여기서 통과시켜도 유료 호출로 이어지지 않는다.
+const PARKED_RECHECK_MS = 30 * 60 * 1000;
+export function shouldSpawnWhenParked(jobMapId: string, queueMapId: string, lastAt: number | undefined, now: number): boolean {
+  if (String(queueMapId || "") && String(queueMapId) !== String(jobMapId || "")) return true; // 새 지도 세대
+  return !(typeof lastAt === "number" && Number.isFinite(lastAt)) || now - lastAt >= PARKED_RECHECK_MS;
+}
 let enrichSpawnLastAt = 0;
 function maybeSpawnEnrichExt(ws: string | null, trigger: string): void {
   try {
@@ -574,12 +584,10 @@ function maybeSpawnEnrichExt(ws: string | null, trigger: string): void {
     // 새 결정이 붙어 authorityHash만 바뀐 경우) 실행기가 스스로 재판단하게 한다. 같은 입력 반복
     // 재과금은 실행기의 jobKey 비교가 그대로 막는다(비용 계약 불변).
     if (jr9.st === "ok" && jr9.job.phase === "parked" && !trigger.startsWith("link:")) {
-      let sameGen = true;
-      try { const q = JSON.parse(fs.readFileSync(MB9.queueFileFor(repo9), "utf8")); sameGen = String(q && q.mapId || "") === String(jr9.job.mapId || ""); } catch { sameGen = true; }
-      if (sameGen) {
-        if (parkedRecheckDone.has(repo9)) return; // 이 창에서 이미 재판단 기회를 줬다 — 반복 spawn 금지
-        parkedRecheckDone.add(repo9);
-      }
+      let qMapId = "";
+      try { const q = JSON.parse(fs.readFileSync(MB9.queueFileFor(repo9), "utf8")); qMapId = String((q && q.mapId) || ""); } catch { qMapId = ""; }
+      if (!shouldSpawnWhenParked(String(jr9.job.mapId || ""), qMapId, parkedRecheckAt.get(repo9), Date.now())) return;
+      parkedRecheckAt.set(repo9, Date.now());
     }
     enrichSpawnBusy = true; enrichSpawnLastAt = Date.now();
     const cli = path.join(BRIDGE_DIR, "map-enrich.js");
