@@ -1,0 +1,240 @@
+"use strict";
+// 근거 재확인(evidence challenge) — 순수 계층(증분 1). 정본: docs/EVIDENCE-RECONFIRM-DESIGN.md §2·§4·§5.
+// 이 파일은 '동결·적격성·상한·장부·응답 대조'만 안다. 발송(resume)·ack 투영·checkpoint·lease는
+// 이후 증분의 소관 — 여기서는 어떤 파이프라인 함수도 호출하지 않는다(설계 B의 격리 전제).
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+const { BRIDGE_DIR, wsKeyFor, atomicWrite, withFileLockStrict } = require("./contract-lib.js");
+
+// §2 상한(구현 파라미터 — 설계 문서와 함께 개정)
+const CH_MAX_FILE_BYTES = 1024 * 1024;      // 파일별 읽기 상한
+const CH_MAX_TOTAL_BYTES = 4 * 1024 * 1024; // 경보당 총 읽기 상한
+const CH_MAX_FILES = 8;                     // 경보당 challenge 파일 수 상한
+const CH_MAX_RESP_BYTES = 64 * 1024;        // 총 응답 바이트 상한
+const CH_SPAN_MIN = 64, CH_SPAN_MAX = 512;  // 구간 길이 범위
+const CH_MIN_ELIGIBLE = 16;                 // 이 미만 구간·파일은 항상 부적격(추측 가능 소형 차단)
+const CH_RETENTION_DAYS = 90;               // 종결 레코드 감사 보존기간(§5)
+const CHALLENGES_DIR = path.join(BRIDGE_DIR, "evidence-challenges");
+
+function sha256(buf) { return crypto.createHash("sha256").update(buf).digest("hex"); }
+function nowIso() { return new Date().toISOString(); }
+function realOf(p) { try { return fs.realpathSync.native ? fs.realpathSync.native(p) : fs.realpathSync(p); } catch { return null; } }
+
+// §2 루트 결속: realpath 기준 자손만(Windows 대소문자·구분자 경계는 path.relative가 처리, symlink는
+// 양쪽 realpath로 이탈 거부). 루트 자체와 같은 경로는 파일이 아니므로 불인정.
+function underRoot(fileReal, rootReal) {
+  if (!fileReal || !rootReal) return false;
+  const a = process.platform === "win32" ? String(fileReal).toLowerCase() : String(fileReal);
+  const b = process.platform === "win32" ? String(rootReal).toLowerCase() : String(rootReal);
+  const rel = path.relative(b, a);
+  return !!rel && rel !== ".." && !rel.startsWith(".." + path.sep) && !path.isAbsolute(rel);
+}
+
+// §2 저정보 판정 — 부적격 사유를 돌려준다("" = 적격).
+// 완전 반복은 '어떤 주기 p(1≤p≤길이/2)'의 일반 판정(임계 열거 금지 — 설계 [주의] 계보).
+function spanIneligible(buf) {
+  if (buf.length < CH_MIN_ELIGIBLE) return "too-short";
+  if (new Set(buf).size < 8) return "low-info";
+  let ws = 0;
+  for (const b of buf) if (b === 0x20 || b === 0x09 || b === 0x0a || b === 0x0d) ws++;
+  if (ws / buf.length >= 0.9) return "low-info";
+  for (let p = 1; p <= buf.length >> 1; p++) {
+    if (buf.length % p) continue; // 완전 반복 = 길이가 주기의 배수
+    let rep = true;
+    for (let i = p; i < buf.length; i++) if (buf[i] !== buf[i % p]) { rep = false; break; }
+    if (rep) return "low-info";
+  }
+  return "";
+}
+
+// §2 구간 선택: 적격성(기노출 제외+저정보) 선행 → 적격 후보에서 crypto.randomBytes 기반 선택.
+// exposedBufs = 원 요청문·답변의 바이트(기노출 구간 제외용). 반환 {off,len} 또는 null(no-safe-span).
+function pickSpan(buf, exposedBufs) {
+  const exposed = (span) => (exposedBufs || []).some((e) => e && e.includes(span));
+  const okAt = (off, len) => {
+    const span = buf.slice(off, off + len);
+    return !spanIneligible(span) && !exposed(span) ? { off, len } : null;
+  };
+  if (buf.length < CH_MIN_ELIGIBLE) return null;
+  if (buf.length < CH_SPAN_MIN) return okAt(0, buf.length); // 소형 파일=전체, 같은 적격성 검사
+  const maxLen = Math.min(CH_SPAN_MAX, buf.length);
+  const rnd = crypto.randomBytes(32 * 8);
+  for (let i = 0; i < 32; i++) {
+    const len = CH_SPAN_MIN + (rnd.readUInt32BE(i * 8) % (maxLen - CH_SPAN_MIN + 1));
+    const off = rnd.readUInt32BE(i * 8 + 4) % (buf.length - len + 1);
+    const hit = okAt(off, len);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+// §2 동결: 파일 목록을 받아 challenge 레코드를 만든다. 파일마다 '단일 읽기(한 Buffer)'에서 전체
+// SHA-256과 구간 digest를 함께 계산한다(세대 혼합 금지). 부적격·상한 초과·루트 밖은 발송하지 않고
+// 사유만 기록(경보 유지 — 안전한 실패 방향). 원문 바이트는 저장하지 않는다(digest·범위만).
+function freezeChallenge(opts) {
+  const { eventId, ws, execCwd, roots, files, exposedTexts, meta } = opts || {};
+  const rootReals = (roots || []).map(realOf).filter(Boolean);
+  const exposedBufs = (exposedTexts || []).map((t) => Buffer.from(String(t || ""), "utf8"));
+  const out = [];
+  let totalRead = 0, n = 0;
+  for (const f of files || []) {
+    n++;
+    const pathId = "p" + crypto.randomBytes(4).toString("hex");
+    const base = { pathId, path: String(f) };
+    if (n > CH_MAX_FILES) { out.push({ ...base, status: "skipped", reason: "cap-exceeded" }); continue; }
+    const real = realOf(f);
+    if (!real) { out.push({ ...base, status: "skipped", reason: "read-fail" }); continue; }
+    if (!rootReals.some((r) => underRoot(real, r))) { out.push({ ...base, path: real, status: "skipped", reason: "out-of-root" }); continue; }
+    let st = null;
+    try { st = fs.statSync(real); } catch { /* 아래 read-fail */ }
+    if (!st || !st.isFile()) { out.push({ ...base, path: real, status: "skipped", reason: "read-fail" }); continue; }
+    if (st.size > CH_MAX_FILE_BYTES) { out.push({ ...base, path: real, status: "skipped", reason: "too-large" }); continue; }
+    if (totalRead + st.size > CH_MAX_TOTAL_BYTES) { out.push({ ...base, path: real, status: "skipped", reason: "cap-exceeded" }); continue; }
+    let buf = null;
+    try { buf = fs.readFileSync(real); } catch { out.push({ ...base, path: real, status: "skipped", reason: "read-fail" }); continue; }
+    totalRead += buf.length;
+    const span = pickSpan(buf, exposedBufs);
+    if (!span) { out.push({ ...base, path: real, status: "skipped", reason: "no-safe-span" }); continue; }
+    out.push({
+      ...base, path: real, status: "pending",
+      fileSha: sha256(buf), off: span.off, len: span.len, spanSha: sha256(buf.slice(span.off, span.off + span.len)),
+    });
+  }
+  return {
+    v: 1,
+    challengeId: "ch-" + crypto.randomBytes(8).toString("hex"),
+    eventId: String(eventId || ""),
+    ws: String(ws || ""), execCwd: String(execCwd || ""),
+    meta: meta && typeof meta === "object" ? meta : {},
+    createdAt: nowIso(), attempt: 0,
+    state: out.some((x) => x.status === "pending") ? "pending" : "no-dispatch",
+    files: out,
+  };
+}
+
+// §5 권위 장부: ws 결속 디렉터리에 challenge 1건=파일 1개(비절단·50건 절단 이벤트와 별도).
+function challengeDirFor(ws) { return path.join(CHALLENGES_DIR, wsKeyFor(ws)); }
+function challengeFileFor(ws, challengeId) { return path.join(challengeDirFor(ws), String(challengeId) + ".json"); }
+function writeChallenge(rec) {
+  const dir = challengeDirFor(rec.ws);
+  fs.mkdirSync(dir, { recursive: true });
+  return atomicWrite(challengeFileFor(rec.ws, rec.challengeId), JSON.stringify(rec, null, 1)) ? rec : null;
+}
+function readChallenge(ws, challengeId) {
+  try { return JSON.parse(fs.readFileSync(challengeFileFor(ws, challengeId), "utf8")); } catch { return null; }
+}
+function listChallenges(ws) {
+  try {
+    return fs.readdirSync(challengeDirFor(ws)).filter((x) => x.endsWith(".json"))
+      .map((x) => readChallenge(ws, x.slice(0, -5))).filter(Boolean);
+  } catch { return []; }
+}
+
+const SETTLED = new Set(["resolved", "failed", "indeterminate", "outcome-unknown"]);
+// §5 상태 전이는 장부 파일 잠금 아래 원자적으로: pending→dispatched(호출 전 선기록·시도 최대 1),
+// dispatched→종결 4종. 그 외 전이는 거부(복구는 재발송이 아니라 outcome-unknown 방향).
+function transitionChallenge(ws, challengeId, fn) {
+  const file = challengeFileFor(ws, challengeId);
+  const held = withFileLockStrict(file + ".lock", () => {
+    let rec = null;
+    try { rec = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return { ok: false, reason: "not-found" }; }
+    const next = fn(rec);
+    if (!next || !next.ok) return next || { ok: false, reason: "rejected" };
+    if (!atomicWrite(file, JSON.stringify(next.rec, null, 1))) return { ok: false, reason: "write-fail" };
+    return { ok: true, rec: next.rec };
+  });
+  // withFileLockStrict는 {ok, result|error}로 감싼다 — 잠금 실패도 전이 실패로 평탄화
+  return held.ok ? held.result : { ok: false, reason: held.error || "lock-fail" };
+}
+function markDispatched(ws, challengeId) {
+  return transitionChallenge(ws, challengeId, (rec) => {
+    if (rec.state !== "pending") return { ok: false, reason: "not-pending" };
+    if (Number(rec.attempt) !== 0) return { ok: false, reason: "already-attempted" }; // 시도 최대 1
+    return { ok: true, rec: { ...rec, state: "dispatched", attempt: 1, dispatchedAt: nowIso() } };
+  });
+}
+function settleChallenge(ws, challengeId, judged) {
+  return transitionChallenge(ws, challengeId, (rec) => {
+    if (rec.state !== "dispatched") return { ok: false, reason: "not-dispatched" };
+    if (!SETTLED.has(judged.overall)) return { ok: false, reason: "bad-state" };
+    const byId = new Map((judged.files || []).map((f) => [f.pathId, f.status]));
+    const files = rec.files.map((f) => f.status === "pending" && byId.has(f.pathId) ? { ...f, status: byId.get(f.pathId) } : f);
+    return { ok: true, rec: { ...rec, state: judged.overall, files, settledAt: nowIso() } };
+  });
+}
+// 강제 종료 복구(§5): dispatched로 남은 레코드는 재발송하지 않고 outcome-unknown으로 수렴.
+function markOutcomeUnknown(ws, challengeId) {
+  return transitionChallenge(ws, challengeId, (rec) => {
+    if (rec.state !== "dispatched") return { ok: false, reason: "not-dispatched" };
+    return { ok: true, rec: { ...rec, state: "outcome-unknown", settledAt: nowIso() } };
+  });
+}
+// §5 수명: 미종결 삭제 금지 — 종결 레코드만 보존기간(90일) 지나면 정리.
+function cleanupSettled(ws, days = CH_RETENTION_DAYS) {
+  const cutoff = Date.now() - days * 86400_000;
+  let removed = 0;
+  for (const rec of listChallenges(ws)) {
+    if (!SETTLED.has(rec.state) && rec.state !== "no-dispatch") continue;
+    const t = Date.parse(rec.settledAt || rec.createdAt || "");
+    if (Number.isFinite(t) && t < cutoff) { try { fs.unlinkSync(challengeFileFor(ws, rec.challengeId)); removed++; } catch { /* best-effort */ } }
+  }
+  return removed;
+}
+
+// §4 응답 파싱: 줄 단위 `CH <challengeId> <pathId> <base64>`. challengeId 불일치·미지 pathId 줄은
+// 거부, 중복 pathId는 그 pathId 전체를 응답 누락 처리(어느 줄이 진짜인지 모르면 안 세는 쪽이 안전).
+// 총 응답 상한 초과는 전체를 누락 처리(overCap — fail-safe).
+function parseChallengeResponse(text, rec) {
+  const s = String(text || "");
+  if (Buffer.byteLength(s, "utf8") > CH_MAX_RESP_BYTES) return { overCap: true, byPath: new Map() };
+  const known = new Set((rec.files || []).map((f) => f.pathId));
+  const byPath = new Map(), dup = new Set();
+  for (const line of s.split(/\r?\n/)) {
+    const m = /^CH\s+(\S+)\s+(\S+)\s+([A-Za-z0-9+/=]+)$/.exec(line.trim());
+    if (!m || m[1] !== rec.challengeId || !known.has(m[2])) continue;
+    if (byPath.has(m[2])) { dup.add(m[2]); continue; }
+    byPath.set(m[2], m[3]);
+  }
+  for (const d of dup) byPath.delete(d);
+  return { overCap: false, byPath };
+}
+
+// §4 판정: 대조는 동결 스냅샷 기준(현재 파일 아님). 일치=resolved / 불일치·누락은 현재 파일을 다시
+// 읽어 전체 SHA가 동결값과 다르면 indeterminate(file-changed — 태만 아님), 같으면 failed(태만).
+// 읽기 실패(소멸 포함)=indeterminate. overall: 하나라도 failed→failed, 아니고 하나라도
+// indeterminate→indeterminate, 발송분 전부 resolved→resolved.
+function judgeChallenge(rec, parsed, readFile) {
+  const read = readFile || ((p) => fs.readFileSync(p));
+  const files = [];
+  for (const f of rec.files || []) {
+    if (f.status !== "pending") continue; // skipped는 판정 대상 아님(사유 유지)
+    const b64 = parsed && parsed.byPath ? parsed.byPath.get(f.pathId) : undefined;
+    if (b64 !== undefined) {
+      const buf = Buffer.from(b64, "base64");
+      if (buf.length === f.len && sha256(buf) === f.spanSha) { files.push({ pathId: f.pathId, status: "resolved" }); continue; }
+    }
+    let cur = null;
+    try { cur = read(f.path); } catch { files.push({ pathId: f.pathId, status: "indeterminate" }); continue; }
+    files.push({ pathId: f.pathId, status: sha256(cur) !== f.fileSha ? "indeterminate" : "failed" });
+  }
+  const overall = files.some((f) => f.status === "failed") ? "failed"
+    : files.some((f) => f.status === "indeterminate") ? "indeterminate"
+    : files.length ? "resolved" : "indeterminate";
+  return { overall, files };
+}
+
+// §5 이벤트 전체 해소 조건: 레코드의 '모든' 파일이 resolved여야 원 이벤트를 ack할 수 있다
+// (skipped가 하나라도 있으면 불충족 — 경보 유지). ack 투영 자체는 배선 증분(§9-4)의 소관.
+function eventFullyResolved(rec) {
+  return rec && rec.state === "resolved" && (rec.files || []).length > 0 && rec.files.every((f) => f.status === "resolved");
+}
+
+module.exports = {
+  CH_MAX_FILE_BYTES, CH_MAX_TOTAL_BYTES, CH_MAX_FILES, CH_MAX_RESP_BYTES,
+  CH_SPAN_MIN, CH_SPAN_MAX, CH_MIN_ELIGIBLE, CH_RETENTION_DAYS, CHALLENGES_DIR,
+  underRoot, spanIneligible, pickSpan, freezeChallenge,
+  challengeDirFor, challengeFileFor, writeChallenge, readChallenge, listChallenges,
+  markDispatched, settleChallenge, markOutcomeUnknown, cleanupSettled,
+  parseChallengeResponse, judgeChallenge, eventFullyResolved,
+};
