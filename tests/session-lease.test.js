@@ -78,11 +78,33 @@ console.log("[3-1] 잠금 잔재는 자동으로 부수지 않음(교리) — �
   const r = cl.acquireSessionLease("sess-F", { ws: "D:/new", deadlineAt: new Date(Date.now() + 60_000).toISOString() });
   ck("자동 경로는 잠금 잔재에서 busy(안전 방향 — 파기 없음)", r.ok === false);
   ck("잠금 파일은 자동으로 안 부숨", fs.existsSync(file + ".reclaim.lock"));
+  // clear도 잠금 파일을 스스로 지우지 않는다 — blocked:lock + 수동 삭제 안내(교리 원문)
+  const blockedByLock = cl.clearSessionLease("sess-F");
+  ck("clear=잠금 잔재에서 blocked:lock(자체 파기 없음)", blockedByLock && blockedByLock.blocked === "lock" && fs.existsSync(file + ".reclaim.lock"));
+  fs.unlinkSync(file + ".reclaim.lock"); // 안내대로 '사람이' 잠금 파일을 삭제
   const cleared = cl.clearSessionLease("sess-F");
-  ck("clear가 죽은 잠금+죽은 lease를 함께 정리", cleared && cleared.ws === "D:/dead" && !fs.existsSync(file) && !fs.existsSync(file + ".reclaim.lock"));
+  ck("수동 잠금 삭제 후 clear=죽은 lease 정리", cleared && cleared.ws === "D:/dead" && !fs.existsSync(file));
   const r2 = cl.acquireSessionLease("sess-F", { ws: "D:/new", deadlineAt: new Date(Date.now() + 60_000).toISOString() });
   ck("clear 후 재획득 가능", r2.ok === true);
   cl.releaseSessionLease("sess-F", r2.token);
+}
+
+console.log("[3-1c] 이중 보유 불가 — 삭제=잠금 직렬화·생성=wx 원자(변위 없음)");
+{
+  const deadPid = cp.spawnSync(process.execPath, ["-e", "0"], { windowsHide: true }).pid;
+  const file = cl.sessionLeaseFileFor("sess-I");
+  fs.writeFileSync(file, JSON.stringify({ v: 1, session: "sess-I", token: "w".repeat(16), ownerPid: deadPid, childPid: null, ws: "D:/dead", deadlineAt: "", createdAt: new Date().toISOString() }), "utf8");
+  // clear 직후 곧바로 두 acquire가 경쟁해도 wx 원자성 때문에 정확히 하나만 성공한다
+  const cleared = cl.clearSessionLease("sess-I");
+  const a = cl.acquireSessionLease("sess-I", { ws: "D:/A", deadlineAt: new Date(Date.now() + 60_000).toISOString() });
+  const b = cl.acquireSessionLease("sess-I", { ws: "D:/B", deadlineAt: new Date(Date.now() + 60_000).toISOString() });
+  ck("clear 성공 후 두 획득 중 정확히 하나만 성공", !!cleared && cleared.ws === "D:/dead" && (a.ok !== b.ok) && (a.ok || b.ok));
+  ck("패자는 승자 정보를 받음", (a.ok ? b : a).holder && (a.ok ? b : a).holder.ws === (a.ok ? "D:/A" : "D:/B"));
+  cl.releaseSessionLease("sess-I", (a.ok ? a : b).token);
+  // 살아있는(방금 생긴) lease는 clear가 잠금 안 재판독으로 alive 거부 — 신선 lease 오삭제 경로 없음
+  const c = cl.acquireSessionLease("sess-I", { ws: "D:/C", deadlineAt: new Date(Date.now() + 60_000).toISOString() });
+  ck("생존 lease에 clear=alive 거부(잠금 안 재판독 기준)", cl.clearSessionLease("sess-I").blocked === "alive");
+  cl.releaseSessionLease("sess-I", c.token);
 }
 
 console.log("[3-1b] clear 안전장치 — 생존 거부·경합 복원");

@@ -3395,7 +3395,7 @@ function main() {
         if (!rest.includes("--confirm")) die(tB("⚠️ 실행 중 codex가 없음을 확인한 뒤 --confirm 을 붙여 다시 실행하세요(동시 resume은 세션 기록을 섞습니다).", "⚠️ Confirm no codex is still running, then re-run with --confirm (concurrent resume interleaves the session log)."));
         const old = clearSessionLease(sid);
         if (old && old.blocked === "alive") die(tB("⚠️ 보유 프로세스(또는 기록된 자식)가 아직 살아 있습니다 — 살아있는 세션의 lease는 지울 수 없습니다. 그 작업이 끝난 뒤 다시 확인하세요.", "⚠️ The owning process (or its recorded child) is still alive — a live session lease cannot be cleared. Re-check after that task finishes."), 3);
-        if (old && old.blocked === "raced") die(tB("⚠️ 정리 중 새 lease가 생겼습니다(방금 다른 검증이 시작됨) — 아무것도 지우지 않았습니다.", "⚠️ A fresh lease appeared during clearing (another verification just started) — nothing was removed."), 3);
+        if (old && old.blocked === "lock") die(tB(`⚠️ 잠금 파일 잔재 때문에 진행할 수 없습니다(${old.error}). 표시된 잠금 파일을 직접 삭제한 뒤 이 명령을 다시 실행하세요 — 프로그램은 잠금 파일을 스스로 지우지 않습니다.`, `⚠️ Cannot proceed due to a leftover lock file (${old.error}). Delete the indicated lock file manually, then re-run this command — the program never removes lock files on its own.`), 3);
         console.log(old ? tB(`정리됨 — 직전 보유: ws=${old.ws || "?"} · pid=${old.ownerPid || "?"} · ${old.createdAt || ""}`, `Cleared — previous holder: ws=${old.ws || "?"} · pid=${old.ownerPid || "?"} · ${old.createdAt || ""}`) : tB("정리할 lease가 없습니다.", "No lease to clear."));
         return;
       }

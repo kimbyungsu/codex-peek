@@ -2197,35 +2197,26 @@ function setSessionLeaseChild(sid, token, childPid) {
   });
   return !!(held.ok && held.result);
 }
-// 수동 정리(사용자 확인 후) — 강제 종료 잔재의 유일한 해소점. 잠금을 쓰지 않는다(잠금 잔재 자체가
-// 해소 대상이라 잠금 경유는 영구 차단 — 확인 검증 blocker 계보). 안전장치 3중:
-//  ① 생존 거부: owner 또는 기록된 child가 살아 있으면 {blocked:"alive"} — 살아있는 세션의 lease를
-//     지울 수 없다([주의] 반영).
-//  ② 죽은 보유자의 reclaim.lock 잔재만 함께 정리(살아있는 잠금은 불가침).
-//  ③ 제거는 rename→토큰 재검증→확정: rename은 원자라 승자 1명뿐이고, 옮긴 파일의 토큰이 관측본과
-//     다르면(그 사이 신선 lease가 생김) 복원 후 {blocked:"raced"} — 신선 lease 오삭제 없음.
+// 수동 정리(사용자 확인 후) — 강제 종료 잔재의 해소점. 확인 검증 2왕복의 결론:
+//  · rename(변위)은 이중 보유의 유일한 원천이었다(신선 lease를 옮기면 경로가 비어 두 resume이 각각
+//    성공) → rename·잠금 우회·잠금 잔재 관측-삭제 전부 제거.
+//  · 생성은 전부 wx(원자)·삭제는 전부 이 잠금 안에서 재판독 검증 후 unlink — 이중 보유가 성립할
+//    수 없다(두 번째 wx는 항상 EEXIST).
+//  · 잠금 파일 자체의 잔재는 프로그램이 지우지 않는다(교리) — withFileLockStrict의 dead-lock-holder
+//    오류를 {blocked:"lock", error}로 올려 CLI가 '그 파일을 직접 삭제 후 재실행'을 안내한다.
+// 반환: 제거된 레코드 / null(없음·경합 소멸) / {blocked:"alive"}(owner·기록된 child 생존 — 잠금 안
+// 재판독 기준) / {blocked:"lock", error}(잠금 획득 불가 — 수동 삭제 안내 대상).
 function clearSessionLease(sid) {
   const file = sessionLeaseFileFor(sid);
-  const lock = file + ".reclaim.lock";
-  try {
-    const lp = parseInt(String(fs.readFileSync(lock, "utf8")).split("-")[0], 10);
-    if (lp && !leasePidAlive(lp)) { try { fs.unlinkSync(lock); } catch { /* 무해 */ } }
-  } catch { /* 잠금 없음 */ }
-  const cur = readSessionLease(sid);
-  if (!cur) return null;
-  if (leasePidAlive(Number(cur.ownerPid))) return { blocked: "alive" };
-  if (cur.childPid !== null && cur.childPid !== undefined && leasePidAlive(Number(cur.childPid))) return { blocked: "alive" };
-  const tmp = file + ".clear." + require("crypto").randomBytes(4).toString("hex");
-  try { fs.renameSync(file, tmp); } catch { return null; } // 경합 패배(이미 사라짐)
-  let moved = null;
-  try { moved = JSON.parse(fs.readFileSync(tmp, "utf8")); } catch { /* 아래 불일치 취급 */ }
-  if (!moved || moved.token !== cur.token) {
-    // 관측과 다른(신선) lease를 옮겼다 — 복원. 복원 실패(그 사이 새 lease 생성)면 wx로 재삽입 시도.
-    try { fs.renameSync(tmp, file); } catch { try { fs.writeFileSync(file, JSON.stringify(moved, null, 1), { flag: "wx" }); fs.unlinkSync(tmp); } catch { /* 최후: tmp 보존(증거) */ } }
-    return { blocked: "raced" };
-  }
-  try { fs.unlinkSync(tmp); } catch { /* 무해 */ }
-  return cur;
+  const held = withFileLockStrict(file + ".reclaim.lock", () => {
+    const cur = readSessionLease(sid); // 잠금 안 재판독이 권위(관측-삭제 시간차 없음)
+    if (!cur) return null;
+    if (leasePidAlive(Number(cur.ownerPid))) return { blocked: "alive" };
+    if (cur.childPid !== null && cur.childPid !== undefined && leasePidAlive(Number(cur.childPid))) return { blocked: "alive" };
+    try { fs.unlinkSync(file); } catch { return null; }
+    return cur;
+  });
+  return held.ok ? held.result : { blocked: "lock", error: held.error || "" };
 }
 // TTL은 pid 생존 판정의 '보조'(좀비·pid 재사용 방어)일 뿐이며 검증 대기 최대치(60분)보다 커야 한다 —
 // Codex 반례: 30분이면 살아있는 정상 장기 검증의 후반이 무방비.
