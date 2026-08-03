@@ -23,6 +23,20 @@ function patch(file, extra) {
   const cur = read(file);
   return !!cur && atomicWrite(file, JSON.stringify(Object.assign({}, cur, extra)));
 }
+// primary-complete checkpoint 판정(설계 §6 — bridge/evidence-challenge.js primaryCheckpointValid와
+// 같은 규칙·의도적 사본: worker는 의존 최소 원칙이라 contract-lib 연쇄 로드를 피한다. 드리프트는
+// tests/evidence-checkpoint.test.js가 API로 만든 checkpoint를 이 worker로 판정시켜 잠근다).
+// 유효 조건: 스키마·jobId·workspace 결속 + <id>.out의 바이트 수·SHA-256이 checkpoint와 일치.
+function primaryCheckpoint(dir, job, outFile) {
+  const c = read(path.join(dir, job.id + ".checkpoint.json"));
+  if (!c || c.schema !== "primary-complete-v1" || c.jobId !== job.id) return null;
+  if (String(c.workspace || "") !== String(job.workspace || "")) return null;
+  if (!c.outSha256 || !Number.isInteger(c.outBytes)) return null;
+  let buf; try { buf = fs.readFileSync(outFile); } catch { return null; }
+  if (buf.length !== c.outBytes) return null;
+  const sha = require("crypto").createHash("sha256").update(buf).digest("hex");
+  return sha === c.outSha256 ? c : null;
+}
 
 function main() {
   const jobFile = path.resolve(process.argv[2] || "");
@@ -62,6 +76,21 @@ function main() {
     fs.writeFileSync(errFile, String(e && e.stack || e), "utf8");
     patch(jobFile, { state: "failed", exitCode: 1, error: String(e && e.message || e), finishedAt: new Date().toISOString() });
     process.exit(1);
+  }
+  // checkpoint 복구(설계 §6): 원 검증이 출력·proof까지 확정한 뒤(challenge 단계에서) 죽었다면,
+  // 원 job은 성공이다 — .out 기록 '전'에 판정해야 부분 stdout이 결속본을 덮어쓰지 못한다.
+  const ckpt = primaryCheckpoint(dir, job, outFile);
+  if (ckpt) {
+    try { fs.writeFileSync(errFile, String(r.stderr || ""), "utf8"); } catch { /* ignore */ }
+    const realCode = Number.isInteger(r.status) ? r.status : 1;
+    // exitCode 0 확정=proof 회수 계약(writeRecoveryReceipt: succeeded+exitCode 0) 보존.
+    // 실제 종료코드는 challengeExitCode로 정직 보존 — challenge 쪽 상태 수렴(outcome-unknown)은
+    // challenge 장부의 소관(증분 4 배선·§5 복구)이지 원 job의 소관이 아니다.
+    patch(jobFile, {
+      state: "succeeded", exitCode: 0, challengeExitCode: realCode, checkpointRecovered: realCode !== 0,
+      signal: r.signal || null, error: null, finishedAt: new Date().toISOString(),
+    });
+    process.exit(0);
   }
   try { fs.writeFileSync(outFile, String(r.stdout || ""), "utf8"); } catch { /* status still records failure/success */ }
   try { fs.writeFileSync(errFile, String(r.stderr || ""), "utf8"); } catch { /* ignore */ }

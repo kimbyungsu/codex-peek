@@ -284,6 +284,54 @@ function eventFullyResolved(rec) {
   return rec && rec.state === "resolved" && (rec.files || []).length > 0 && rec.files.every((f) => f.status === "resolved");
 }
 
+// ── §6 primary-complete checkpoint (증분 2) ─────────────────────────────────────────────
+// 원 검증 성공의 3요소(proof·회수 가능한 원 출력·세션 소유권) 중 '원 출력'을 내구 확정한다.
+// 출력 파일(<jobId>.out)을 원자 기록하고 read-back으로 확인한 뒤에만 checkpoint를 만든다 — 이후
+// challenge 중 강제 종료가 나도 worker(ask-job-worker.js)는 checkpoint가 유효하면 원 job을
+// succeeded(exitCode 0 — writeRecoveryReceipt의 회수 계약 보존·실제 종료코드는 challengeExitCode에
+// 보존)로 확정하고, 부분 stdout으로 그 출력 파일을 덮어쓰지 않는다(checkpoint 결속본이 권위).
+const CKPT_SCHEMA = "primary-complete-v1";
+function checkpointFileFor(jobsDir, jobId) { return path.join(String(jobsDir), String(jobId) + ".checkpoint.json"); }
+function writePrimaryComplete(jobsDir, job, answerText, bind) {
+  // 결속 필수(설계 N): job ID·workspace·구현 턴/revision·verifier session·proof 지문 — 결손=생성 거부
+  const need = {
+    jobId: job && job.id, workspace: job && job.workspace, implementerTurnId: job && job.implementerTurnId,
+    verifierSession: bind && bind.verifierSession, proofFp: bind && bind.proofFp,
+  };
+  for (const v of Object.values(need)) if (!String(v || "").trim()) return null;
+  const rev = Number(job.implementerRevision);
+  if (!Number.isFinite(rev)) return null;
+  const data = Buffer.from(String(answerText || ""), "utf8");
+  if (!data.length) return null; // 빈 출력에 checkpoint 금지(성공 job이 빈 판정 본문으로 회수되는 상태 차단)
+  const outFile = path.join(String(jobsDir), job.id + ".out");
+  if (!atomicWrite(outFile, data.toString("utf8"))) return null;
+  let back = null;
+  try { back = fs.readFileSync(outFile); } catch { return null; }
+  if (back.length !== data.length || sha256(back) !== sha256(data)) return null; // read-back 불일치=생성 거부
+  const ck = {
+    schema: CKPT_SCHEMA, jobId: job.id, workspace: job.workspace,
+    implementerTurnId: job.implementerTurnId, implementerRevision: rev,
+    verifierSession: String(bind.verifierSession), proofFp: String(bind.proofFp),
+    outBytes: back.length, outSha256: sha256(back), createdAt: nowIso(),
+  };
+  return atomicWrite(checkpointFileFor(jobsDir, job.id), JSON.stringify(ck, null, 1)) ? ck : null;
+}
+function readPrimaryCheckpoint(jobsDir, jobId) {
+  try { return JSON.parse(fs.readFileSync(checkpointFileFor(jobsDir, jobId), "utf8")); } catch { return null; }
+}
+// worker와 같은 판정(테스트가 양쪽 드리프트를 잠근다): 스키마·jobId·workspace 결속 + 출력 파일의
+// 바이트 수·SHA-256이 checkpoint와 일치할 때만 유효. 불일치·부재=무효(기존 실패 경로 — 안전 방향).
+function primaryCheckpointValid(jobsDir, job) {
+  const c = readPrimaryCheckpoint(jobsDir, job && job.id);
+  if (!c || c.schema !== CKPT_SCHEMA || c.jobId !== job.id) return null;
+  if (String(c.workspace || "") !== String(job.workspace || "")) return null;
+  if (!c.outSha256 || !Number.isInteger(c.outBytes)) return null;
+  let buf = null;
+  try { buf = fs.readFileSync(path.join(String(jobsDir), job.id + ".out")); } catch { return null; }
+  if (buf.length !== c.outBytes || sha256(buf) !== c.outSha256) return null;
+  return c;
+}
+
 module.exports = {
   CH_MAX_FILE_BYTES, CH_MAX_TOTAL_BYTES, CH_MAX_FILES, CH_MAX_RESP_BYTES,
   CH_SPAN_MIN, CH_SPAN_MAX, CH_MIN_ELIGIBLE, CH_RETENTION_DAYS, CHALLENGES_DIR,
@@ -291,4 +339,5 @@ module.exports = {
   challengeDirFor, challengeFileFor, writeChallenge, readChallenge, listChallenges,
   markDispatched, settleChallenge, markOutcomeUnknown, cleanupSettled,
   parseChallengeResponse, judgeChallenge, eventFullyResolved,
+  CKPT_SCHEMA, checkpointFileFor, writePrimaryComplete, readPrimaryCheckpoint, primaryCheckpointValid,
 };
