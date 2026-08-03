@@ -1478,17 +1478,21 @@ function computeBacklogView(rawItems: any[], now: number): { caution: number; ba
 // 상태 의미: pending=동결됨(발송 전) · dispatched=재확인 요청 발송됨 · resolved=원문 일치(경보 자동 해소) ·
 // failed=불일치·무응답(태만 기록·경보 유지) · indeterminate=그 사이 파일 변경(판정 불가·태만 아님) ·
 // outcome-unknown=호출 실패·중단(재발송 없음). 표시 전용 — 어떤 판정·게이트에도 쓰지 않는다.
-// cleared=경고 자동 해소의 실제 조건(브릿지 eventFullyResolved와 동일 공식: resolved+전 파일 일치 —
-// skipped 잔존이면 경고가 유지되므로 '부분 일치'로 구분 표시. 확인 검증 blocker 반영).
-function computeChallengeView(recs: any[], now: number): { open: number; cleared: number; kept: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number; cleared: boolean }> } {
+// cleared=경고 자동 해소의 '표시 가능' 조건: 장부(전 파일 일치=브릿지 eventFullyResolved 공식)만으로는
+// 부족하다 — 종결 직후 강제 종료·ack 저장 실패면 경고가 아직 남아 있다(확인 검증 blocker 재등장).
+// 그래서 미ack 이벤트 id 집합(unacked)과 결속: 일치했어도 그 경고가 미ack면 '반영 대기'로 구분 표시.
+function computeChallengeView(recs: any[], now: number, unacked?: Set<string>): { open: number; cleared: number; kept: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number; cleared: boolean; matchedAll: boolean }> } {
+  const un = unacked || new Set<string>();
   const items = (recs || []).filter((r: any) => r && r.challengeId).map((r: any) => {
     const t = Date.parse(String(r.settledAt || r.dispatchedAt || r.createdAt || ""));
     const files = Array.isArray(r.files) ? r.files : [];
     const resolvedFiles = files.filter((f: any) => f && f.status === "resolved").length;
+    const matchedAll = String(r.state) === "resolved" && files.length > 0 && resolvedFiles === files.length;
     return {
       id: String(r.challengeId), state: String(r.state || ""), files: files.length, resolvedFiles,
       ageMin: Number.isFinite(t) ? Math.max(0, Math.floor((now - t) / 60000)) : 0,
-      cleared: String(r.state) === "resolved" && files.length > 0 && resolvedFiles === files.length,
+      matchedAll,
+      cleared: matchedAll && !un.has(String(r.eventId || "")), // 실제 ack(또는 경고 소멸)와 결속된 해소만
     };
   }).sort((a, b) => a.ageMin - b.ageMin);
   const counts: Record<string, number> = {};
@@ -2239,7 +2243,8 @@ function computeState(turnsN: number): BridgeState {
       try {
         const ech = evidenceChallengeLib();
         if (!ws || !ech || typeof ech.listChallenges !== "function") return null;
-        return computeChallengeView(ech.listChallenges(ws), Date.now());
+        const unacked = new Set<string>(readIntegrity().filter((e) => e && e.ack !== true && e.id).map((e) => String(e.id)));
+        return computeChallengeView(ech.listChallenges(ws), Date.now(), unacked);
       } catch { return null; }
     })(),
     baseAvailable: bridgeLib() !== null,
@@ -6304,7 +6309,7 @@ class Dashboard {
       const stLabel=function(it){
         var s=it.state;
         // resolved라도 skipped 잔존이면 경고는 유지된다(브릿지 ack 조건=전 파일 일치) — '해소'로 과대 표시 금지
-        return s==="resolved"?(it.cleared?T("해소(전 항목 일치 — 경고 자동 해소)","cleared (all matched — warning auto-cleared)"):T("부분 일치(경고 유지)","partial match (warning kept)"))
+        return s==="resolved"?(it.cleared?T("해소(전 항목 일치 — 경고 자동 해소)","cleared (all matched — warning auto-cleared)"):(it.matchedAll?T("일치·해소 반영 대기(다음 검증에서 자동 재시도)","matched — clearing pending (auto-retried next verification)"):T("부분 일치(경고 유지)","partial match (warning kept)")))
           : s==="failed"?T("불일치·무응답(경고 유지)","mismatch/no answer (warning kept)")
           : s==="indeterminate"?T("판정 불가(파일 변경 — 경고 유지)","indeterminate (file changed — warning kept)")
           : s==="outcome-unknown"?T("결과 미상(호출 실패·중단)","unknown (call failed/interrupted)")
