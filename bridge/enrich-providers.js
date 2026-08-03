@@ -119,7 +119,10 @@ function buildEnrichPrompt(ctx) {
     '- {"op":"add_evidence","targetId":"<실존 node/edge id>","payload":{"evidence":{"kind":"code","ref":"<파일>","note":"<근거 설명>"}},"evidence":[...]}',
     '- {"op":"set_state","targetId":"<실존 id>","payload":{"to":{"confidence":"confirmed"},"expect":{"confidence":"<현재 값>"}},"evidence":[...]} — 확신 상향(하향은 확실한 반증이 있을 때만)',
     '- {"op":"add_anchor","targetId":"<실존 node id>","payload":{"anchor":{"kind":"code","path":"<파일>"}},"evidence":[...]}',
-    '- {"op":"add_edge","payload":{"edge":{"id":"<새 UUID>","from":"<실존 node id>","to":"<실존 node id>","relation":"calls|stores|reads|configures|serves|tests","state":{"lifecycle":"active","implementation":"runtime","confidence":"candidate"}}},"evidence":[...]} — targetId 금지',
+    // relation 어휘는 정본(project-map RELATIONS)에서 그대로 — 2026-08-04 실사고: 여기 하드코딩된 견본
+    // 어휘(reads|configures|serves|tests)가 정본 닫힌 열거에 없어, 모델이 견본대로 답하고도 스키마
+    // 거부(convert-invalid)로 보강이 멈췄다. 어휘를 두 곳에 두면 또 갈라진다.
+    '- {"op":"add_edge","payload":{"edge":{"id":"<새 UUID>","from":"<실존 node id>","to":"<실존 node id>","relation":"' + require(path.join(BR, "project-map.js")).RELATIONS.join("|") + '","state":{"lifecycle":"active","implementation":"runtime","confidence":"candidate"}}},"evidence":[...]} — targetId 금지(relation은 이 목록 값만 허용)',
     '- {"op":"rewrite_label","targetId":"<실존 id>","payload":{"to":{"label":"<개선 라벨>"},"expect":{"label":"<현재 라벨>"}},"evidence":[...],"claims":[{"file":"<파일>","quote":"<원문>","stance":"support"}]}',
     "확실한 근거가 있는 항목만(1~10개 권장). 근거 없는 추측·발췌 밖 인용 금지.",
   ].join("\n");

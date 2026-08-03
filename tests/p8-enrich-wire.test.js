@@ -11,6 +11,7 @@ const path = require("path");
 const ROOT = path.join(__dirname, "..");
 const CL = require(path.join(ROOT, "bridge", "contract-lib.js"));
 const EP = require(path.join(ROOT, "bridge", "enrich-providers.js"));
+const PM = require(path.join(ROOT, "bridge", "project-map.js"));
 
 let pass = 0, fail = 0;
 function ok(cond, name) { if (cond) { pass++; console.log("  ✅ " + name); } else { fail++; console.log("  ❌ " + name); } }
@@ -28,6 +29,13 @@ console.log("[1] 민감 경로 제외(ab-7) — 정본(scope-package)과 동작 
   const prompt = EP.buildEnrichPrompt({ repo: ws0, topo: { nodes: [{ id: U(1), label: "L", entityType: "module", state: {}, anchors: [{ kind: "code", path: "app.js" }] }], edges: [] }, changed: [".env", "app.js"] });
   ok(!prompt.includes("do-not-send-this") && !prompt.includes("### .env"), "합성 비밀값이 프롬프트에 미포함(1차 blocker① 프로브 재현 차단)");
   ok(prompt.includes("### app.js"), "비민감 파일은 정상 발췌");
+  // 2026-08-04 실사고 회귀: 견본의 relation 어휘가 정본 닫힌 열거와 갈라지면 모델이 견본대로 답하고도
+  // 스키마 거부(convert-invalid)돼 보강이 멈춘다 — 견본=정본 RELATIONS 전문 일치를 잠근다.
+  {
+    const relM = prompt.match(/"relation":"([^"]+)"/);
+    ok(!!relM && relM[1] === PM.RELATIONS.join("|"), "add_edge 견본 relation 어휘=정본 RELATIONS 전문 일치(드리프트 잠금)");
+    ok(!/reads\|configures|configures\|serves|serves\|tests/.test(prompt), "구 불허 어휘(reads·configures·serves·tests) 잔재 0");
+  }
   // 2차 blocker①(ab-7): anchor '경로명'도 topology 직렬화에서 제외 — 수정 전엔 anchors= 줄로 누출됐다.
   const pT = EP.buildEnrichPrompt({ repo: ws0, topo: { nodes: [{ id: U(2), label: "S", entityType: "module", state: {}, anchors: [{ kind: "code", path: "config/secrets/leak-me.json" }, { kind: "code", path: "app.js" }] }], edges: [] }, changed: ["app.js"] });
   ok(!pT.includes("leak-me") && pT.includes("anchors=app.js"), "민감 anchor 경로명=topology 직렬화에서도 제외(2차 blocker① 프로브 재현 차단)");
