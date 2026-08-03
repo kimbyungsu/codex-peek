@@ -523,9 +523,16 @@ function toPatchV2(item, index, ctx) {
     ...(ENRICH_TARGET_OPS.includes(item.op) || item.op === "rewrite_label" ? { targetId: item.targetId } : {}),
   };
   base.readSet = MP.buildReadSetFor(ctx.topo, base, { idx: ctx.idx, pol: ctx.pol, repoRoot: ctx.repo, fileHashOf: ctx.fileHashOf });
-  const PMv = require(path.join(__dirname, "project-map.js")).validatePatchV2(base);
+  // canonical 정렬은 '정본 함수'로 한 번에(사용자 실보고 2026-08-04 실사고): 여기서 evidence를 파일
+  // 경로만으로 정렬해 두었는데 canonical 규칙은 (kind, ref, note) 순이라, 서로 다른 종류의 파일을
+  // 함께 인용한 정상 답변마다 '집합 배열 정렬 위반'으로 거부돼 자동 보강이 사실상 멈췄다.
+  // 정렬 규칙을 두 곳에 두면 또 갈라지므로, 조립이 끝난 patch에 canonicalPatchV2를 적용해 자기
+  // 동일성을 만든 뒤 검증한다(patchId는 결정론 입력이라 불변).
+  const PMx = require(path.join(__dirname, "project-map.js"));
+  const canon = PMx.canonicalPatchV2(base);
+  const PMv = PMx.validatePatchV2(canon);
   if (PMv.length) return { ok: false, kind: "schema", errors: PMv };
-  return { ok: true, patch: base };
+  return { ok: true, patch: canon };
 }
 
 // ── 라우팅 로그(P8-5 — append-only·기록 실패=비차단) ─────────────────────────────

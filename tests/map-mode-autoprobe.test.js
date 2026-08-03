@@ -57,6 +57,9 @@ console.log("[3] 선택=자동 점검(이원화 제거)");
   const iProbe = blk.indexOf("runMapProbeFromUi(ws, new Set(pending))");
   ok(iSave > 0 && iProbe > iSave, "저장 성공 뒤에 점검(저장 실패면 점검 안 함)");
   ok(/catch \{ \/\* 점검 실패는 선택 저장을 되돌리지 않는다/.test(blk), "점검 실패가 선택을 되돌리지 않음(정직 표시는 카드가 담당)");
+  // 사용자 실보고: 이미 준비된 담당을 고르면 아무 반응이 없어 '된 건지 안 된 건지' 구분 불가였다
+  ok(/else vscode\.window\.showInformationMessage/.test(blk) && /이미 준비돼 있어요 — 새로 점검하지 않았습니다/.test(blk), "점검이 불필요한 경우에도 결과를 말한다(무반응 금지·ko)");
+  ok(/is already ready — no new check was run/.test(blk), "영문 문안 쌍");
 }
 
 console.log("[3-1] auto도 선택 가능 — '고르면 점검' 흐름에 도달한다(확인 검증 blocker)");

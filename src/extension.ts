@@ -550,6 +550,9 @@ async function setMapModeFromUi(ws: string | null, mode: string, slotLang?: Lang
     const need = mode === "auto" ? ["economy", "precision"] : [mode];
     const pending = need.filter((k) => !(rv && rv[k] && rv[k].ok));
     if (pending.length) await runMapProbeFromUi(ws, new Set(pending));
+    // 아무 일도 안 일어난 것처럼 보이면 안 된다(사용자 실보고 2026-08-04: "코덱스를 누르면 아무 반응이
+    // 없어서 준비가 된 건지 안 된 건지 구분이 안 됨"). 점검이 필요 없었다는 사실도 결과로 말한다.
+    else vscode.window.showInformationMessage(tE(`${mode} 담당은 이미 준비돼 있어요 — 새로 점검하지 않았습니다(추가 호출·비용 0).`, `The ${mode} provider is already ready — no new check was run (no extra calls or cost).`));
   } catch { /* 점검 실패는 선택 저장을 되돌리지 않는다 — 카드가 미준비 사유를 그대로 보여준다 */ }
 }
 // P8 증분 4 — 자동 보강 발동(설계 3지점 중 ⓑ준비 점검 직후·ⓒ관측 tick[ⓐbootstrap 완료 직후 포함 — 큐
