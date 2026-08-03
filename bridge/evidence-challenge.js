@@ -66,12 +66,18 @@ function pickSpan(buf, exposedBufs) {
     const hit = okAt(off, len);
     if (hit) return hit;
   }
-  // 결정론 폴백(확인 검증 보완): 무작위 추첨이 빗나가도 len=64·보폭 32의 격자를 전부 스윕한다 —
-  // 격자 위 적격 후보가 있으면 반드시 발견. 오프셋 전수(보폭 1)는 아니며(대형 파일 비용),
-  // 그 한계는 설계 §2 수용 위험(발견법)과 같은 부류다. 여기서도 없을 때만 no-safe-span.
+  // 결정론 폴백(확인 검증 보완): 무작위 추첨이 빗나가도 격자 스윕이 잡는다. 아래 분리 함수 참조.
+  return pickSpanGrid(buf, exposedBufs);
+}
+// 결정론 격자 스윕(len=64·보폭 32) — 격자 위 적격 후보가 있으면 반드시 발견한다. 오프셋 전수
+// (보폭 1)는 아니며(대형 파일 비용), '격자 밖에만 적격 후보가 있는' 병리적 경우는 no-safe-span
+// = 경보 유지의 안전한 실패 방향으로 떨어진다(설계 §2에 같은 문구로 명문화 — 발견법 한계 부류).
+// pickSpan의 폴백이자, 테스트가 무작위 단계와 무관하게 폴백 자체를 잠그는 지점(분리 export).
+function pickSpanGrid(buf, exposedBufs) {
+  const exposed = (span) => (exposedBufs || []).some((e) => e && e.includes(span));
   for (let off = 0; off + CH_SPAN_MIN <= buf.length; off += CH_SPAN_MIN >> 1) {
-    const hit = okAt(off, CH_SPAN_MIN);
-    if (hit) return hit;
+    const span = buf.slice(off, off + CH_SPAN_MIN);
+    if (!spanIneligible(span) && !exposed(span)) return { off, len: CH_SPAN_MIN };
   }
   return null;
 }
@@ -84,6 +90,9 @@ function pickSpan(buf, exposedBufs) {
 const REQUIRED_BINDINGS = ["verifierSession", "mode", "lang", "campaignId", "askId"];
 function freezeChallenge(opts) {
   const { eventId, ws, execCwd, roots, files, exposedTexts, meta } = opts || {};
+  // eventId·ws·execCwd도 필수(확인 검증 blocker 재등장): ws가 비면 wsKeyFor("")의 '공용 장부'에
+  // 여러 프로젝트가 섞여 격리가 무너진다. 셋 중 하나라도 비면 동결 거부.
+  if (!String(eventId || "").trim() || !String(ws || "").trim() || !String(execCwd || "").trim()) return null;
   const bind = {};
   for (const k of REQUIRED_BINDINGS) {
     const v = opts && typeof opts[k] === "string" ? opts[k].trim() : "";
@@ -214,6 +223,16 @@ function cleanupSettled(ws, days = CH_RETENTION_DAYS) {
     const t = Date.parse(rec.settledAt || rec.createdAt || "");
     if (Number.isFinite(t) && t < cutoff) { try { fs.unlinkSync(challengeFileFor(ws, rec.challengeId)); removed++; } catch { /* best-effort */ } }
   }
+  // create-only 저장의 성공 후 tmp 삭제가 실패했을 수 있다(확인 검증 [주의] — 결속 정보가 정리
+  // 대상 밖에 영구 잔존). 1일 넘은 *.tmp를 함께 정리한다(진행 중 저장과의 경합은 1일 여유로 배제).
+  try {
+    const dir = challengeDirFor(ws);
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.endsWith(".tmp")) continue;
+      const p = path.join(dir, name);
+      try { if (fs.statSync(p).mtimeMs < Date.now() - 86400_000) { fs.unlinkSync(p); removed++; } } catch { /* best-effort */ }
+    }
+  } catch { /* 폴더 없음 등 — 무해 */ }
   return removed;
 }
 
@@ -268,7 +287,7 @@ function eventFullyResolved(rec) {
 module.exports = {
   CH_MAX_FILE_BYTES, CH_MAX_TOTAL_BYTES, CH_MAX_FILES, CH_MAX_RESP_BYTES,
   CH_SPAN_MIN, CH_SPAN_MAX, CH_MIN_ELIGIBLE, CH_RETENTION_DAYS, CHALLENGES_DIR,
-  underRoot, spanIneligible, pickSpan, freezeChallenge,
+  underRoot, spanIneligible, pickSpan, pickSpanGrid, freezeChallenge,
   challengeDirFor, challengeFileFor, writeChallenge, readChallenge, listChallenges,
   markDispatched, settleChallenge, markOutcomeUnknown, cleanupSettled,
   parseChallengeResponse, judgeChallenge, eventFullyResolved,

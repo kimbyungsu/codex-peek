@@ -60,6 +60,9 @@ const fRep = wfile("rep.txt", "abcd".repeat(100));
 const fBig = wfile("big.bin", Buffer.alloc(ch.CH_MAX_FILE_BYTES + 1, 7));
 {
   ck("필수 결속 결손=동결 거부(fail-closed)", ch.freezeChallenge({ eventId: "ev0", ws, execCwd: ws, roots: [ws], files: [fA], exposedTexts: [], mode: "claude-codex", lang: "ko", campaignId: "c", askId: "a" }) === null);
+  ck("ws 결손=동결 거부(빈 wsKey 공용 장부 차단)", ch.freezeChallenge({ ...BIND, eventId: "ev0", ws: "", execCwd: ws, roots: [ws], files: [fA], exposedTexts: [] }) === null);
+  ck("eventId 결손=동결 거부", ch.freezeChallenge({ ...BIND, eventId: " ", ws, execCwd: ws, roots: [ws], files: [fA], exposedTexts: [] }) === null);
+  ck("execCwd 결손=동결 거부", ch.freezeChallenge({ ...BIND, eventId: "ev0", ws, execCwd: "", roots: [ws], files: [fA], exposedTexts: [] }) === null);
   const rec = ch.freezeChallenge({
     ...BIND, eventId: "ev1", ws, execCwd: ws, roots: [ws],
     files: [fA, fB, fOut, fRep, fBig, path.join(ws, "no-such.js")],
@@ -129,6 +132,11 @@ const fBig = wfile("big.bin", Buffer.alloc(ch.CH_MAX_FILE_BYTES + 1, 7));
     const span = ch.pickSpan(noisy, []);
     // 무작위 32회는 확률적(구 코드는 실패 가능·flaky) — 폴백 스윕이 있으면 항상 발견된다.
     ck("적격 창을 결정론적으로 발견", !!span && ch.spanIneligible(noisy.slice(span.off, span.off + span.len)) === "");
+    // 폴백 자체를 무작위 단계와 무관하게 잠근다(확인 검증 보완 — 분리 export)
+    const g = ch.pickSpanGrid(noisy, []);
+    ck("격자 스윕 단독=적격 창 발견(결정론)", !!g && g.len === 64 && ch.spanIneligible(noisy.slice(g.off, g.off + g.len)) === "");
+    // 격자 전 지점 기노출이면 null(격자 밖 병리 사례=no-safe-span 안전 방향 — 설계 §2 명문 한계)
+    ck("격자 전부 기노출=null(안전 방향)", ch.pickSpanGrid(noisy, [noisy]) === null);
   }
 
   console.log("[6] 복구(§5) — dispatched 잔존=outcome-unknown·재발송 금지");
@@ -178,9 +186,16 @@ console.log("[8] 수명(§5) — 미종결 삭제 금지·종결만 보존기간
   const old = ch.freezeChallenge({ ...BIND, eventId: "ev6", ws, execCwd: ws, roots: [ws], files: [fB], exposedTexts: [] });
   old.state = "resolved"; old.settledAt = new Date(Date.now() - 200 * 86400_000).toISOString();
   ch.writeChallenge(old);
+  // 성공 후 tmp 삭제 실패 잔재(확인 검증 [주의]) — 1일 넘은 *.tmp도 정리 대상
+  const staleTmp = path.join(ch.challengeDirFor(ws), "ch-dead.json.abcd.tmp");
+  fs.writeFileSync(staleTmp, "{}");
+  fs.utimesSync(staleTmp, new Date(Date.now() - 2 * 86400_000), new Date(Date.now() - 2 * 86400_000));
+  const freshTmp = path.join(ch.challengeDirFor(ws), "ch-live.json.ef01.tmp");
+  fs.writeFileSync(freshTmp, "{}");
   const removed = ch.cleanupSettled(ws, 90);
-  ck("오래된 종결 1건만 정리", removed === 1 && ch.readChallenge(ws, old.challengeId) === null);
+  ck("오래된 종결 1건+오래된 tmp 1건 정리", removed === 2 && ch.readChallenge(ws, old.challengeId) === null && !fs.existsSync(staleTmp));
   ck("미종결(pending)은 보존", ch.readChallenge(ws, rec.challengeId) !== null);
+  ck("신선한 tmp는 보존(진행 중 저장 경합 배제)", fs.existsSync(freshTmp));
 }
 
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);
