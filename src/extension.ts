@@ -1684,8 +1684,10 @@ function syncBrainDriftFor(ws: string | null): void {
       );
       cbModel = intent ? intent.model : "";                  // 의도 산출 불가 → 빈값 → 아래 cf&&cfc 가드로 비교 skip
       // 선택 사건 시각 = 이긴 후보의 ts(settings 폴백은 파일 mtime — 재선택 없이는 불변이라 안정).
-      // Math.round: settings 폴백의 mtimeMs는 소수점이 있어 sig에 그대로 넣으면 폴백 정규식(@\d+)이 못 뗀다(검증 보완).
-      ccIntentTs = Math.round(!intent ? 0 : intent.source === "command" ? (scan.cmd ? scan.cmd.ts : 0) : intent.source === "attributed" ? (attr ? attr.ts : 0) : (settingsMtime || 0));
+      // ⚠ 원천 값을 절대 가공하지 않는다(정수화 금지 — 검증 blocker): sig는 문자열 전문 비교라, 반올림
+      // 등으로 값이 1이라도 달라지면 업데이트 전 확인(ack)한 같은 선택의 경고가 새 사건으로 재발행된다.
+      // settings 폴백의 mtimeMs 소수점은 표시 폴백 정규식(@[0-9.]+)이 흡수한다.
+      ccIntentTs = !intent ? 0 : intent.source === "command" ? (scan.cmd ? scan.cmd.ts : 0) : intent.source === "attributed" ? (attr ? attr.ts : 0) : (settingsMtime || 0);
     }
     const links = loadLinks();
     const mode = loadContract(ws).harnessMode;

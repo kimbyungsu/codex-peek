@@ -206,6 +206,9 @@ ok(cxModelDrift("gpt-5.5", cxFreshGate(oldTs, NOW) ? "gpt-5.1" : "") === false, 
   // 실제 소스가 이 형식을 쓰는지(사양↔구현 결속)
   const extSrc2 = require("fs").readFileSync(require("path").join(__dirname, "..", "src", "extension.ts"), "utf8");
   ok(extSrc2.includes("cc-model:${cf}!${cfc}@${ccIntentTs}"), "구현 결속: 소스 sig에 선택 시각 포함");
+  // 확인 검증 blocker: sig는 문자열 전문 비교 — 시각을 반올림 등으로 가공하면 업데이트 전 확인(ack)한
+  // 같은 선택의 경고가 새 사건으로 재발행된다. 원천 값 무가공을 소스에서 잠근다.
+  ok(!/ccIntentTs = Math\.round/.test(extSrc2), "구현 결속: 선택 시각 무가공(반올림 금지 — ack 이행 보존)");
 }
 
 // 실제 확장 배선 회귀: 대시보드 저장 즉시 상태바 재계산, 프로젝트 매핑 실제값, Claude fs.watch 누락 보조 폴링,
