@@ -118,7 +118,7 @@ ok(!/verify-backlog/.test(cl.split("function cleanupOldState")[1].split("functio
   ok(/<details id="backlogSec" class="backlog-fold" style="display:none">/.test(extSrc) && !/<details id="backlogSec"[^>]*\sopen(?:\s|=|>)/.test(extSrc) && /<summary class="sec accent-rose">/.test(extSrc), "보관함은 새 탭에서 기본 닫힘(details에 open 없음)·제목 클릭으로 펼침");
   ok(/id="backlogSec"/.test(extSrc) && /id="blSummary"/.test(extSrc) && /id="blList"/.test(extSrc) && /backlog done\|dismiss/.test(extSrc), "카드 HTML — backlogSec·blSummary·blList·CLI 처분 안내(읽기 전용)");
   ok(/핵심 프로필 전용/.test(extSrc) && /core profile only/.test(extSrc) && /무결성 프로필 검증에서는 지적이 여기로 유입되지 않아요/.test(extSrc), "카드 — 핵심 프로필 전용 명시(제목 배지+힌트 ko/en · 사용자 지적 07-19: 무결성 오해 방지)");
-  const rBeg = extSrc.indexOf('const sec=$("backlogSec")'); const rEnd = extSrc.indexOf("// ⑤ 범위 장부 카드", rBeg);
+  const rBeg = extSrc.indexOf('const sec=$("backlogSec")'); const rEnd = extSrc.indexOf("// 재확인(증분 4b): 근거 재확인 카드", rBeg); // 4b 카드 블록이 사이에 신설됨 — 경계 갱신
   const renderBlk = rBeg > 0 && rEnd > rBeg ? extSrc.slice(rBeg, rEnd) : "";
   ok(renderBlk.length > 0 && !/innerHTML/.test(renderBlk) && /replaceChildren\(\)/.test(renderBlk) && /bl\.corrupt\?T\(" · 손상 "/.test(renderBlk), "카드 렌더 — 동적 값 innerHTML 부재(텍스트 조립만)·손상 줄 경고");
   ok(/if\(!bl\)\{ sec\.style\.display="none"; return; \}/.test(renderBlk) && /비어 있음 — 검증에서 범위 밖 제안/.test(renderBlk), "빈 보관함=카드 유지+비어 있음 표시(기능 발견 가능 — 숨김은 무폴더/구 런타임만)");

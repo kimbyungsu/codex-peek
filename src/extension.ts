@@ -161,6 +161,7 @@ interface BridgeState {
   scoutPrompt: { baseline: string; overridden: boolean; directive: string; notes: string[]; version: string } | null; // §6-11 — 3트랙에서만(null=2트랙/판독 불가)
   // P-12 v2.4: 보관함(범위 밖 제안+판단 대기 [주의]) 읽기 전용 가시화 — 처분은 CLI(backlog done|dismiss). null=무폴더/구 런타임.
   backlog: { caution: number; backlog: number; corrupt: number; readError: boolean; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } | null; // readError: 판독 실패(ENOENT 외) — '비어 있음' 위장 금지(2026-07-18 확인 판정 [보완] 소화)
+  challenges: { open: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number }> } | null; // 재확인(증분 4b) — null=구 설치본/부재
   baseAvailable: boolean;
   permissionMode: string;
   codexReady: boolean;
@@ -1314,6 +1315,10 @@ function bridgeLib(): any | null {
 function mapAdapters(): any | null {
   try { return require(path.join(BRIDGE_DIR, "map-adapters.js")); } catch { return null; }
 }
+// 재확인(증분 4b): 근거 재확인 장부(배포 사본) lazy require — 동형 가드. 부재(구 설치본)=null.
+function evidenceChallengeLib(): any | null {
+  try { return require(path.join(BRIDGE_DIR, "evidence-challenge.js")); } catch { return null; }
+}
 function mapRuntimeLib(): any | null {
   try { return require(path.join(BRIDGE_DIR, "map-runtime.js")); } catch { return null; }
 }
@@ -1467,6 +1472,25 @@ function computeBacklogView(rawItems: any[], now: number): { caution: number; ba
     return { id: String(i.id), tag: i.tag === "주의" ? "주의" : "백로그", title: String(i.title || ""), file: String(i.file || ""), seenCount, ageDays, due: ageDays >= 30 || seenCount >= 3 };
   }).sort((a, b) => (a.due === b.due ? b.ageDays - a.ageDays : (a.due ? -1 : 1)));
   return { caution: items.filter((x) => x.tag === "주의").length, backlog: items.filter((x) => x.tag === "백로그").length, items: items.slice(0, 30) };
+}
+
+// 재확인(증분 4b): 근거 재확인 장부 카드 뷰(순수 함수 — 테스트가 컴파일 산출물에서 추출 실행·의존성 없음).
+// 상태 의미: pending=동결됨(발송 전) · dispatched=재확인 요청 발송됨 · resolved=원문 일치(경보 자동 해소) ·
+// failed=불일치·무응답(태만 기록·경보 유지) · indeterminate=그 사이 파일 변경(판정 불가·태만 아님) ·
+// outcome-unknown=호출 실패·중단(재발송 없음). 표시 전용 — 어떤 판정·게이트에도 쓰지 않는다.
+function computeChallengeView(recs: any[], now: number): { open: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number }> } {
+  const items = (recs || []).filter((r: any) => r && r.challengeId).map((r: any) => {
+    const t = Date.parse(String(r.settledAt || r.dispatchedAt || r.createdAt || ""));
+    const files = Array.isArray(r.files) ? r.files : [];
+    return {
+      id: String(r.challengeId), state: String(r.state || ""), files: files.length,
+      resolvedFiles: files.filter((f: any) => f && f.status === "resolved").length,
+      ageMin: Number.isFinite(t) ? Math.max(0, Math.floor((now - t) / 60000)) : 0,
+    };
+  }).sort((a, b) => a.ageMin - b.ageMin);
+  const counts: Record<string, number> = {};
+  for (const it of items) counts[it.state] = (counts[it.state] || 0) + 1;
+  return { open: items.filter((x) => x.state === "pending" || x.state === "dispatched").length, counts, items: items.slice(0, 10) };
 }
 
 // 무결성 신호: 브릿지(verify-guard)가 '검증 미완' 등을 integrity.json에 기록 → 여기서 읽어 상태바/대시보드로 가시화.
@@ -1691,7 +1715,7 @@ ${card("#d9a441", "👤", "확정 교범", "Field manual", [[tE("무엇", "what"
   <line class="ln" x1="134" y1="56" x2="166" y2="56" marker-end="url(#ah)"/><line class="ln" x1="310" y1="56" x2="342" y2="56" marker-end="url(#ah)"/><line class="ln" x1="506" y1="56" x2="538" y2="56" marker-end="url(#ah)"/><line class="ln" x1="692" y1="56" x2="724" y2="56" marker-end="url(#ah)"/>
   <rect class="bx" x="728" y="120" width="120" height="44" stroke="#7f8c9b"/><text class="t1" x="740" y="138">${tE("👁 게시판", "👁 Board")}</text><text class="t2" x="740" y="153">${tE("사람 열람 전용", "read-only for you")}</text>
   <line class="ln" x1="788" y1="82" x2="788" y2="116" marker-end="url(#ah)"/>
-  <rect class="bx" x="366" y="150" width="230" height="56" stroke="#2f6fb3"/><text class="t1" x="378" y="170">${tE("🔍 Codex 검증 ⚡ (기존 2트랙)", "🔍 Codex verify ⚡ (2-track)")}</text><text class="t2" x="378" y="186">${tE("지도 high 항목이 검증 요청에 자동 동봉", "map's high items auto-attach to verify asks")}</text><text class="t2" x="378" y="199">${tE("통과+실제 파일 인용 → 지식 '확인' 신호", "pass + real file citations → 'confirm' signal")}</text>
+  <rect class="bx" x="366" y="150" width="230" height="56" stroke="#2f6fb3"/><text class="t1" x="378" y="170">${tE("🔍 Codex 검증 ⚡ (기존 2트랙)", "🔍 Codex verify ⚡ (2-track)")}</text><text class="t2" x="378" y="186">${tE("요청·변경 관련 항목 우선(없으면 기본 동봉+고지)", "relevant first (else default attach + notice)")}</text><text class="t2" x="378" y="199">${tE("통과+실제 파일 인용 → 지식 '확인' 신호", "pass + real file citations → 'confirm' signal")}</text>
   <path class="ln" d="M 728 70 C 640 100 620 130 600 150" marker-end="url(#ah)"/><text class="lb" x="618" y="120">${tE("동봉", "attach")}</text>
   <rect class="bx" x="80" y="150" width="200" height="56" stroke="#d97a7a"/><text class="t1" x="92" y="170">${tE("🚧 플랜 게이트 (3트랙 기본 켜짐·끌 수 있음)", "🚧 Plan gate (on by default in 3-track, can be turned off)")}</text><text class="t2" x="92" y="186">${tE("플랜 확정 전 지도 신선한지 확인", "checks map freshness before plan exit")}</text><text class="t2" x="92" y="199">${tE("낡으면 '지도부터' 안내(세션 2회 상한)", "if stale: 'map first' (max 2/session)")}</text>
   <path class="ln" d="M 74 82 C 74 110 80 130 110 150" marker-end="url(#ah)"/>
@@ -1722,11 +1746,11 @@ ${card("#d9a441", "🌱", "신생 프로젝트", "Young project", [[tE("구조",
 <b>${tE("Q. 내가 일일이 승인해야 하나요?", "Q. Do I have to approve things one by one?")}</b>
 ${tE("아니요. 적재·승격·강등은 전부 자동입니다. 직접 확인·정정, 확정 교범 내보내기, 고정·차단만 예외적인 선택 개입이고 안 써도 아무것도 멈추지 않습니다.", "No. Accrual, promotion and demotion are fully automatic. Direct confirm/correct, manual export, and pin/ban are exceptional optional controls — skipping them stops nothing.")}
 <b>${tE("Q. 언제 비용(LLM 호출)이 나가나요?", "Q. When does an LLM call (cost) happen?")}</b>
-${tE("⚡ 단계(영향지도 생성)뿐입니다 — 기본 정찰은 별도 과금 없이 쓰시던 Claude로 실행되고(Claude 사용량 범위), DeepSeek 정찰은 키를 등록했을 때만, Codex 정찰은 쓰시는 Codex 계정 사용량 범위입니다. ⚙ 단계들은 LLM 없이 돌고, 상태바 호버에 '지금 실행 중인 LLM 호출' 여부가 항상 표시됩니다.", "Only the ⚡ step (map generation) — the default scout adds no separate billing and runs on the Claude you already use (within your Claude usage); the DeepSeek scout only with a registered key; the Codex scout runs within your existing Codex account usage. ⚙ steps run without LLM, and the status-bar hover always shows whether an LLM call is running.")}
+${tE("⚡ 표시가 붙은 단계들입니다 — ①영향지도 생성: 기본 정찰은 별도 과금 없이 쓰시던 Claude로 실행되고(Claude 사용량 범위), DeepSeek 정찰은 키를 등록했을 때만, Codex 정찰은 쓰시는 Codex 계정 사용량 범위 ②Codex 검증(기존 2트랙의 본체): 검증을 보낼 때마다 쓰시는 Codex 계정 사용량 범위로 호출됩니다. ⚙ 단계들은 LLM 없이 돌고, 상태바 호버에 '지금 실행 중인 LLM 호출' 여부가 항상 표시됩니다.", "The steps marked ⚡ — ① map generation: the default scout adds no separate billing and runs on the Claude you already use (within your Claude usage); the DeepSeek scout only with a registered key; the Codex scout within your existing Codex account usage ② Codex verification (the core of 2-track): every verification you send is a call within your existing Codex account usage. ⚙ steps run without LLM, and the status-bar hover always shows whether an LLM call is running.")}
 <b>${tE("Q. AI 정찰(⚡)을 한 번도 실행하지 않으면 어떻게 되나요?", "Q. What if the AI recon (⚡) never runs?")}</b>
 ${tE("①(변경 감지)의 힌트만 동작하고, ②③④는 계속 비어 있습니다 — 이 축의 실질 성과는 AI 정찰 실행에서 나옵니다. 즉 3트랙을 켜기만 하고 정찰을 안 돌리면 얻는 것이 거의 없습니다.", "Only ①'s hints work; ②③④ stay empty — this axis delivers real value through AI recon runs. Turning 3-track on without ever running recon yields very little.")}
 <b>${tE("Q. 데이터는 어디로 가나요?", "Q. Where does data go?")}</b>
-${tE("전부 이 컴퓨터의 브릿지 홈에 남습니다. 외부로 나가는 경로는 세 갈래 — ⑴ DeepSeek 키 등록 시: ① DeepSeek 정찰 '실행 순간'의 증거 꾸러미(민감 범주 파일은 내용도 이름도 가려짐) ② 3트랙을 켤 때 연결 점검 요청 1회(꾸러미 아님) ⑵ 기본 정찰 실행 시: 같은 꾸러미가 쓰시던 Claude CLI를 통해 Claude 서비스로 전달(별도 결제 없음 — 검증이 Codex로 가는 것과 같은 성격) ⑶ Codex 정찰 선택·실행 시: 같은 꾸러미가 쓰시던 codex CLI를 통해 Codex 서비스로 전달(검증과 분리된 독립 실행 1회·읽기 전용 강제 — 계정 사용량 범위). 상세는 PRIVACY.md.", "Everything stays in the bridge home on this machine. Data leaves via three routes — ⑴ with a DeepSeek key: ① the evidence package at the moment the DeepSeek scout runs (sensitive-category files excluded by content and by name) ② a single connection check when you switch on 3-track (not a package) ⑵ when the default scout runs: the same package travels through your existing Claude CLI to the Claude service (no separate billing — same nature as verification going to Codex) ⑶ when the Codex scout is selected and runs: the same package travels through your existing codex CLI to the Codex service (one independent run separate from verification, forced read-only — within your account usage). Details in PRIVACY.md.")}
+${tE("전부 이 컴퓨터의 브릿지 홈에 남습니다. 외부로 나가는 경로는 네 갈래 — ⑴ Codex 검증을 보낼 때(2트랙의 기본 동작): 검증 요청문과 자동 동봉(지도 조각[지도 있을 때]·결합 확인 문안[일지 후보 있으면 지도 없어도]·하네스 기본 지침)이 쓰시던 codex CLI를 통해 Codex 서비스로 전달 ⑵ DeepSeek 키 등록 시: ① DeepSeek 정찰 '실행 순간'의 증거 꾸러미(민감 범주 파일은 내용도 이름도 가려짐) ② 3트랙을 켤 때 연결 점검 요청 1회(꾸러미 아님) ⑶ 기본 정찰 실행 시: 같은 꾸러미가 쓰시던 Claude CLI를 통해 Claude 서비스로 전달(별도 결제 없음) ⑷ Codex 정찰 선택·실행 시: 같은 꾸러미가 쓰시던 codex CLI를 통해 Codex 서비스로 전달(검증과 분리된 독립 실행 1회·읽기 전용 강제 — 계정 사용량 범위). 상세는 PRIVACY.md.", "Everything stays in the bridge home on this machine. Data leaves via four routes — ⑴ whenever you send a Codex verification (the core of 2-track): the verification request plus its automatic attachments (map slice · coupling check lines · harness base directives) travel through your existing codex CLI to the Codex service ⑵ with a DeepSeek key: ① the evidence package at the moment the DeepSeek scout runs (sensitive-category files excluded by content and by name) ② a single connection check when you switch on 3-track (not a package) ⑶ when the default scout runs: the same package travels through your existing Claude CLI to the Claude service (no separate billing) ⑷ when the Codex scout is selected and runs: the same package travels through your existing codex CLI to the Codex service (one independent run separate from verification, forced read-only — within your account usage). Details in PRIVACY.md.")}
 </div>
 </body></html>`;
 }
@@ -2203,6 +2227,14 @@ function computeState(turnsN: number): BridgeState {
         if (!ws || !lib || typeof lib.readBacklog !== "function") return null;
         const r = lib.readBacklog(ws);
         return { ...computeBacklogView(r.items || [], Date.now()), corrupt: Number(r.corrupt) || 0, readError: r.readError === true };
+      } catch { return null; }
+    })(),
+    // 재확인(증분 4b): 근거 재확인 장부 요약(읽기 전용 표시 — 처분·발송은 브릿지 소관). null=구 설치본/부재.
+    challenges: (() => {
+      try {
+        const ech = evidenceChallengeLib();
+        if (!ws || !ech || typeof ech.listChallenges !== "function") return null;
+        return computeChallengeView(ech.listChallenges(ws), Date.now());
       } catch { return null; }
     })(),
     baseAvailable: bridgeLib() !== null,
@@ -4688,7 +4720,7 @@ class Dashboard {
         <button type="button" data-sm="off">${t("2트랙<small>구현↔검증 (기본)</small>", "2-track<small>implement↔verify (default)</small>")}</button><button type="button" data-sm="on">${t("3트랙<small>+정찰 (관찰)</small>", "3-track<small>+recon (advisory)</small>")}</button>
       </span>
     </label>
-    <div class="hint"><span class="ic" title="${t("정찰(3트랙) = 4단계 흐름 — ①변경 감지(기계·AI 없음): 지금 고치는 파일+예전에 같이 바뀌던 파일 힌트 ②영향지도(정찰 AI 호출): 이 변경이 어디까지 번질지 미리보기 ③관찰 일지(자동·추가 LLM 없음): 검증을 지나며 맞은 것/틀린 것이 저절로 쌓임 ④확정 교범(👤 선택): 원할 때만 도장 찍어 저장소 문서로 — 안 써도 ①~③은 자동. 관찰(advisory) 중심 — 단 하나의 예외는 플랜 게이트(3트랙 기본 켜짐): 지도가 없거나 낡으면 플랜 확정 전에 먼저 지도를 요청(세션당 2회까지·이후 통과·언제든 끌 수 있음), 그 외에는 아무것도 막거나 강제하지 않음. 외부로 나가는 경로는 세 갈래 — DeepSeek 키 등록 시(②의 꾸러미+연결 점검 1회, 키 등록=동의) / 기본 정찰 실행 시(같은 꾸러미가 쓰시던 Claude CLI 경유 — 별도 결제 없음) / Codex 정찰 선택·실행 시(같은 꾸러미가 쓰시던 codex CLI 경유 — 검증과 분리된 독립 실행·계정 사용량 범위). 이 설정은 프로젝트별 저장.", "Recon (3-track) = a 4-step flow — ① change sensing (machine, no AI): files you're editing + hints of files that changed together before ② impact map (scout AI call): preview how far this change reaches ③ field journal (auto, no extra LLM): right/wrong accrues by itself through verification ④ field manual (👤 optional): stamp items into repo docs only when you want — ①–③ run without it. Advisory-centred — the one exception is the plan gate (on by default in 3-track): if the map is missing/stale it asks for a map before plan confirmation (up to 2×/session, then passes · can be turned off anytime); everything else blocks/forces nothing. Data leaves via three routes — with a DeepSeek key (②'s package plus one connection check; key registration = consent) / when the default scout runs (the same package via your existing Claude CLI — no separate billing) / when the Codex scout is selected and runs (the same package via your existing codex CLI — one independent run separate from verification, within your account usage). Saved per project.")}">ⓘ ${t("정찰이란? (4단계 흐름)", "What is recon? (the 4-step flow)")}</span></div>
+    <div class="hint"><span class="ic" title="${t("정찰(3트랙) = 4단계 흐름 — ①변경 감지(기계·AI 없음): 지금 고치는 파일+예전에 같이 바뀌던 파일 힌트 ②영향지도(정찰 AI 호출): 이 변경이 어디까지 번질지 미리보기 ③관찰 일지(자동·추가 LLM 없음): 검증을 지나며 맞은 것/틀린 것이 저절로 쌓임 ④확정 교범(👤 선택): 원할 때만 도장 찍어 저장소 문서로 — 안 써도 ①~③은 자동. 관찰(advisory) 중심 — 단 하나의 예외는 플랜 게이트(3트랙 기본 켜짐): 지도가 없거나 낡으면 플랜 확정 전에 먼저 지도를 요청(세션당 2회까지·이후 통과·언제든 끌 수 있음), 그 외에는 아무것도 막거나 강제하지 않음. 외부로 나가는 경로는 네 갈래 — Codex 검증 시(요청문+자동 동봉이 쓰시던 codex CLI 경유) / DeepSeek 키 등록 시(②의 꾸러미+연결 점검 1회, 키 등록=동의) / 기본 정찰 실행 시(같은 꾸러미가 쓰시던 Claude CLI 경유 — 별도 결제 없음) / Codex 정찰 선택·실행 시(같은 꾸러미가 쓰시던 codex CLI 경유 — 검증과 분리된 독립 실행·계정 사용량 범위). 이 설정은 프로젝트별 저장.", "Recon (3-track) = a 4-step flow — ① change sensing (machine, no AI): files you're editing + hints of files that changed together before ② impact map (scout AI call): preview how far this change reaches ③ field journal (auto, no extra LLM): right/wrong accrues by itself through verification ④ field manual (👤 optional): stamp items into repo docs only when you want — ①–③ run without it. Advisory-centred — the one exception is the plan gate (on by default in 3-track): if the map is missing/stale it asks for a map before plan confirmation (up to 2×/session, then passes · can be turned off anytime); everything else blocks/forces nothing. Data leaves via four routes — whenever a Codex verification is sent (the request plus automatic attachments through your existing codex CLI) / with a DeepSeek key (②'s package plus one connection check; key registration = consent) / when the default scout runs (the same package via your existing Claude CLI — no separate billing) / when the Codex scout is selected and runs (the same package via your existing codex CLI — one independent run separate from verification, within your account usage). Saved per project.")}">ⓘ ${t("정찰이란? (4단계 흐름)", "What is recon? (the 4-step flow)")}</span></div>
     <div id="scoutApiLine" class="muted" style="display:none;font-size:11.5px;margin:4px 0 0 2px"></div>
     <div id="scoutArmRow" style="display:none;font-size:11.5px;margin:6px 0 0 2px"></div>
     <div id="mapModeRow" style="display:none;font-size:11.5px;margin:6px 0 0 2px"></div>
@@ -4712,6 +4744,14 @@ class Dashboard {
       <div class="hint">${t("<b>핵심 프로필 전용</b> — 무결성 프로필 검증에서는 지적이 여기로 유입되지 않아요(자동 등록·기록 규약 모두 핵심 전용 — 직접 명령으로 수동 등록만 가능). 검증이 낸 지적 중 <b>이번 작업 범위를 넘는 제안</b>(새 시나리오 방어·구조 재설계·커버리지 확장 등)이 여기 보관돼요 — 이론적 구멍을 계속 메우는 무한 검증 루프를 끊기 위한 주차장입니다(핵심 프로필 v2.4). <b>보관 항목엔 갚을 의무가 없고</b>, 채택할 때만 작업이 됩니다. 사용자 판단을 기다리도록 승격된 [주의] 항목도 여기에 함께 기록돼요. 즉시 고칠 자명한 보완([보완])은 애초에 여기 들어오지 않아요(그 루프에서 바로 반영). '검토 기한' 표시는 오래됐거나(30일+) 자주 재발견(3회+)된 항목 — 기한이 아니라 '채택 후보로 한번 살펴보라'는 환기예요.", "<b>Core profile only</b> — integrity-profile verifications never feed this parking lot (both auto-record and the recording protocol are core-only; manual CLI registration is the only other way in). Findings that go <b>beyond this work's scope</b> (new scenario hardening, redesign proposals, coverage expansion) are parked here — a parking lot that cuts the endless loop of patching theoretical holes (core profile v2.4). <b>Parked items carry no repayment duty</b>; they become work only when adopted. '[caution]' items escalated to await your judgment are also recorded here. Obvious mechanical notes ([notes]) never land here (they are applied in-loop). 'review due' marks old (30d+) or often-rediscovered (3×+) items — not a deadline, just a nudge to consider adoption.")}</div>
       <div id="blList" style="margin-top:6px"></div>
       <div class="hint">${t("처분은 CLI: <code>node codex-bridge.js backlog done|dismiss &lt;id&gt;</code> · 목록: <code>backlog list</code> · 이 카드는 읽기 전용(이 PC 로컬 장부)", "Dispose via CLI: <code>node codex-bridge.js backlog done|dismiss &lt;id&gt;</code> · list: <code>backlog list</code> · this card is read-only (local ledger of this PC)")}</div>
+    </div>
+  </details>
+
+  <details id="chSec" class="backlog-fold" style="display:none">
+    <summary class="sec accent-rose">${t("근거 재확인 — 인용 판독 되묻기", "Evidence Recheck — re-asking about cited reads")} <span class="sub2" id="chSummary"></span></summary>
+    <div class="card">
+      <div class="hint">${t("검증 답이 인용한 파일을 그 검증 기록에서 <b>읽은 흔적으로 확인하지 못하면</b>(노란 '근거 의심' 경고), 브릿지가 같은 검증 세션에 <b>재확인 요청을 1회</b> 자동으로 보내요 — 그 파일의 지정 구간 원문을 되돌려 받아 경고 시점에 봉인해 둔 지문과 대조합니다. <b>일치하면 경고가 자동으로 사라지고</b>, 불일치·무응답이면 경고가 남아요(검증자가 확인을 놓쳤다는 기록). 그 사이 파일이 바뀌었으면 '판정 불가'로 분류해 억울한 기록을 남기지 않아요. 이 카드는 그 재확인 기록의 열람 전용 — 어떤 판정도 바꾸지 않습니다. 추가 비용: 경고 1건당 Codex 호출 1회.", "When a cited file <b>shows no read trace</b> in that verification's log (the yellow evidence-suspicion warning), the bridge automatically sends <b>one recheck request</b> to the same verifier session — asking it to return the raw bytes of a sealed span, compared against the fingerprint frozen at alert time. <b>A match clears the warning automatically</b>; a mismatch or no answer keeps it (a record that the verifier missed the check). If the file changed in between, it's classed 'indeterminate' — no unfair record. This card is read-only and never changes any verdict. Extra cost: one Codex call per warning.")}</div>
+      <div id="chList" style="margin-top:6px"></div>
     </div>
   </details>
 
@@ -6243,6 +6283,38 @@ class Dashboard {
         if(it.due){ var dueB=el("span","badge b-always", T("검토 기한","review due")); dueB.style.marginLeft="4px"; row.appendChild(dueB); }
         var t1=el("span","", " "+it.title); row.appendChild(t1);
         var meta=el("div","muted", (it.file? it.file+" · ":"")+T("재발견 ","seen ")+it.seenCount+T("회","×")+" · D+"+it.ageDays+" · "+it.id);
+        meta.style.fontSize="11px"; row.appendChild(meta);
+        list.appendChild(row);
+      });
+    });
+    // 재확인(증분 4b): 근거 재확인 카드 — 읽기 전용 가시화. XSS 안전: 전부 createElement/textContent.
+    safe(function(){
+      const sec=$("chSec"); if(!sec) return;
+      const ch=d.challenges;
+      // 구 설치본(장부 모듈 부재)만 숨김 — 빈 장부는 '비어 있음'으로 표시(기능 발견 가능·보관함 실사고 교훈)
+      if(!ch){ sec.style.display="none"; return; }
+      sec.style.display="";
+      const sum=$("chSummary"); const list=$("chList");
+      const total=(ch.items||[]).length? Object.keys(ch.counts||{}).reduce(function(a,k){return a+ch.counts[k];},0) : 0;
+      const stLabel=function(s){
+        return s==="resolved"?T("해소(원문 일치)","cleared (bytes matched)")
+          : s==="failed"?T("불일치·무응답(경고 유지)","mismatch/no answer (warning kept)")
+          : s==="indeterminate"?T("판정 불가(파일 변경)","indeterminate (file changed)")
+          : s==="outcome-unknown"?T("결과 미상(호출 실패·중단)","unknown (call failed/interrupted)")
+          : s==="dispatched"?T("재확인 요청 발송됨","recheck sent")
+          : s==="pending"?T("동결됨(발송 전)","frozen (before send)")
+          : s;
+      };
+      if(sum) sum.textContent = total===0
+        ? T("비어 있음 — 근거 의심 경고가 뜨면 재확인 기록이 여기 쌓입니다","empty — recheck records accumulate here when an evidence-suspicion warning fires")
+        : T("총 ","total ")+total+T("건","")+(ch.counts.resolved?T(" · 해소 "," · cleared ")+ch.counts.resolved:"")+(ch.counts.failed?T(" · 유지 "," · kept ")+ch.counts.failed:"")+(ch.open?T(" · 진행 "," · open ")+ch.open:"");
+      if(!list) return; list.replaceChildren();
+      (ch.items||[]).forEach(function(it){
+        var row=el("div",""); row.style.margin="5px 0"; row.style.fontSize="12px"; row.style.lineHeight="1.5";
+        row.appendChild(el("span","badge "+(it.state==="resolved"?"b-always":(it.state==="failed"?"b-plancode":"b-off")), stLabel(it.state)));
+        var t1=el("span","", " "+T("파일 ","files ")+it.resolvedFiles+"/"+it.files+T(" 일치"," matched"));
+        row.appendChild(t1);
+        var meta=el("div","muted", it.id+" · "+T("경과 ","age ")+it.ageMin+T("분","m"));
         meta.style.fontSize="11px"; row.appendChild(meta);
         list.appendChild(row);
       });
