@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
+const { loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -3008,6 +3008,19 @@ async function cmdAsk(rest) {
   }
 
   if (link) {
+    // §7 전역 세션 lease(증분 3): 같은 verifier 세션의 동시 resume을 창·프로젝트 무관하게 차단
+    // (ask-active는 ws 단위 — 두 창이 같은 세션을 공유하면 못 막는다). 예산 게이트보다 먼저 —
+    // busy 거부는 왕복을 소모하지 않는다. 해제는 exit 훅(die 포함 모든 종료 경로에서 실행,
+    // 강제 종료 잔재는 acquire의 사망 회수 규칙이 수렴).
+    const lease = acquireSessionLease(link.codexSession, {
+      ws, mode: harnessModeSnap, jobId: String(process.env.CODEX_BRIDGE_ASK_JOB_ID || ""),
+      deadlineAt: new Date(Date.now() + minimumCallerTimeoutMs()).toISOString(),
+    });
+    if (!lease.ok) {
+      const h = lease.holder || {};
+      die(tB(`⚠️ 이 검증 세션(${link.codexSession})은 다른 작업이 사용 중입니다(소유 ws=${h.ws || "?"} · pid=${h.ownerPid || "?"}). 동시 resume은 기록을 섞을 수 있어 시작하지 않았습니다 — 그 작업이 끝난 뒤 다시 시도하세요.`, `⚠️ This verifier session (${link.codexSession}) is in use by another task (owner ws=${h.ws || "?"} · pid=${h.ownerPid || "?"}). Concurrent resume can interleave the session log, so nothing was started — retry after that task finishes.`), 3);
+    }
+    process.on("exit", () => { try { releaseSessionLease(link.codexSession, lease.token); } catch { /* 무해 */ } });
     // P-12 2b: 예약=호출 직전 공통 래퍼 1곳(전처리 전부 통과 후). 소진 거부는 phase/round 불변 exit 3 —
     // 내구 경로면 이 stderr가 worker .err에 보존돼 job failed(3)→ask-wait가 안내와 함께 exit 3 전달.
     const budgetGate = reserveVerifyBudgetGate(ws, durableEnv, contractSnap, harnessModeSnap, langSnap, profileSnap);
