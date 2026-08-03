@@ -59,6 +59,30 @@ console.log("[3] 선택=자동 점검(이원화 제거)");
   ok(/catch \{ \/\* 점검 실패는 선택 저장을 되돌리지 않는다/.test(blk), "점검 실패가 선택을 되돌리지 않음(정직 표시는 카드가 담당)");
 }
 
+console.log("[3-1] auto도 선택 가능 — '고르면 점검' 흐름에 도달한다(확인 검증 blocker)");
+{
+  ok(/mk\("auto", T\("자동형","Auto"\), autoOk\?T\("준비됨","ready"\):reasonT\(autoRd\|\|\{reason:"not-probed"\}\), false,/.test(ext), "auto 버튼 비활성 인자=false(경제형·정밀형과 같은 규칙)");
+  ok(/고르면 아직 준비 안 된 담당을 그 자리에서 점검해요/.test(ext) && /choosing it checks whichever provider is not ready yet/.test(ext), "안내가 '고르면 점검'을 밝힘(ko/en)");
+  ok(!/자동형은 경제형·정밀형이 모두 준비돼야 선택할 수 있어요/.test(ext), "구 '선택 불가' 문구 잔재 0");
+  // 클릭 핸들러가 비활성일 때만 무시하므로, dis=false면 setMapMode 메시지가 실제로 나간다
+  ok(/b\.addEventListener\("click", function\(\)\{ if\(dis\) return;/.test(ext), "비활성 시에만 클릭 무시(활성=선택 메시지 전송)");
+}
+
+console.log("[3-2] 수동 '다시 점검'은 미준비 담당만 — 준비된 유료 담당 재호출 금지(확인 검증 보완)");
+{
+  const b = outSrc.indexOf("function pendingTargetsFor(");
+  const e = outSrc.indexOf("\nasync function runMapProbeFromUi", b);
+  ok(b > 0 && e > b, "대상 축소 함수 추출 가능");
+  const mkFn = (mode, rv) => new Function("bridgeLib", "precisionFpNowExt", "selfFpNowExt",
+    outSrc.slice(outSrc.indexOf("function probeTargetsFor("), outSrc.indexOf("\nasync function runMapProbeFromUi")) + "\nreturn pendingTargetsFor;")
+    (() => ({ mapModeView: () => ({ mode }), mapReadinessView: () => rv }), () => null, () => null)("D:/x");
+  ok([...mkFn("auto", { self: { ok: true }, economy: { ok: true }, precision: { ok: false } })].join(",") === "precision", "auto·정밀형만 미준비=정밀형만 재호출");
+  ok([...mkFn("auto", { self: { ok: true }, economy: { ok: false }, precision: { ok: false } })].sort().join(",") === "economy,precision", "둘 다 미준비=둘 다");
+  ok([...mkFn("auto", { self: { ok: true }, economy: { ok: true }, precision: { ok: true } })].sort().join(",") === "economy,precision,self", "전부 준비=명시 재확인으로 전체");
+  ok([...mkFn("precision", { self: { ok: true }, economy: { ok: false }, precision: { ok: true } })].sort().join(",") === "precision,self", "고르지 않은 담당은 애초에 대상 밖(경제형 미준비 무관)");
+  ok(/runMapProbeFromUi\(wsP, pendingTargetsFor\(wsP\)\)/.test(ext), "버튼이 축소 대상을 실제로 넘김");
+}
+
 console.log("[4] 버튼은 '다시 점검'으로 — 선택만으로 끝난 줄 아는 오해 제거");
 {
   ok(/pb\.textContent=T\("🔎 다시 점검","🔎 Re-check"\)/.test(ext), "버튼 이름=다시 점검");

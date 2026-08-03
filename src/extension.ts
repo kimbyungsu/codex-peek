@@ -689,6 +689,18 @@ function probeTargetsFor(ws: string | null): Set<string> {
   else if (mode === "auto") { t.add("economy"); t.add("precision"); }
   return t;
 }
+// 수동 '다시 점검'의 대상: 선택 담당 중 아직 준비 안 된 것만(확인 검증 [보완] — 이미 준비된 유료
+// 담당까지 다시 부르면 낭비다). 전부 준비돼 있으면 사용자가 일부러 누른 재확인이므로 전체를 본다.
+function pendingTargetsFor(ws: string | null): Set<string> {
+  const all = probeTargetsFor(ws);
+  try {
+    const CLr: any = bridgeLib();
+    const rv = CLr && CLr.mapReadinessView ? CLr.mapReadinessView({ precisionFpNow: precisionFpNowExt(), selfFpNow: selfFpNowExt() }) : null;
+    if (!rv) return all;
+    const pend = new Set([...all].filter((k) => !(rv as any)[k] || !(rv as any)[k].ok));
+    return pend.size ? pend : all;
+  } catch { return all; }
+}
 async function runMapProbeFromUi(ws: string | null, only?: Set<string>): Promise<void> {
   if (mapProbeBusy) return;
   const want = only || probeTargetsFor(ws);
@@ -3613,7 +3625,7 @@ class Dashboard {
         if (m?.type === "setScoutTarget" && typeof m.repo === "string") setScoutTargetFromUi(dashboardWorkspace(), m.repo, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
         if (m?.type === "setScoutArm" && (m.arm === "self" || m.arm === "deepseek" || m.arm === "codex")) setScoutArmFromUi(dashboardWorkspace(), m.arm, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
         if (m?.type === "setMapMode" && typeof m.mode === "string") setMapModeFromUi(dashboardWorkspace(), m.mode, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post()); // P7 — 검증은 setMapModeFromUi의 MAP_MODES 화이트리스트
-        if (m?.type === "runMapProbe") runMapProbeFromUi(dashboardWorkspace()).then(() => this.post()); // 버튼=선택 담당 재점검(선택 시 자동 점검이 기본 경로 — 이건 수동 재확인용)·단일-flight는 함수 내부
+        if (m?.type === "runMapProbe") { const wsP = dashboardWorkspace(); runMapProbeFromUi(wsP, pendingTargetsFor(wsP)).then(() => this.post()); } // 버튼=선택 담당 중 미준비만 재점검(전부 준비면 전체=명시 재확인)·단일-flight는 함수 내부
         if (m?.type === "grantEnrichSelf") grantEnrichSelfFromUi(dashboardWorkspace()).then(() => this.post()); // P8 — self 자동 보강 동의(1클릭·모달 고지)
         if (m?.type === "retryEnrich") retryEnrichFromUi(dashboardWorkspace()).then(() => this.post()); // P8 — parked 재시도(open 복원+동일 진입점)
         if (m?.type === "envelopeShow" && typeof m.repo === "string" && m.repo) { // 수칙서 열람 전용 — 승인 후에도 세부내용 재확인·제외 요청 판단 창구(2026-07-22 사용자 지적)
@@ -6495,7 +6507,10 @@ class Dashboard {
           mk("economy", T("경제형","Economy"), "DeepSeek · "+rdChip("economy"), false, T("경제형=DeepSeek(키 등록=동의) — 준비 미성립이어도 선택은 저장돼요(조용한 전환 없음·상태 배지로 표시)","Economy=DeepSeek (key=consent) — selection persists even if not ready (no silent switching · shown as a badge)"));
           mk("precision", T("정밀형","Precision"), "Codex · "+rdChip("precision"), false, T("정밀형=Codex(계정 사용량) — 준비 미성립이어도 선택은 저장돼요","Precision=Codex (account usage) — selection persists even if not ready"));
           const autoRd=rd&&rd.auto; const autoOk=!!(autoRd&&autoRd.ok);
-          mk("auto", T("자동형","Auto"), autoOk?T("준비됨","ready"):reasonT(autoRd||{reason:"not-probed"}), !autoOk, autoOk?T("경제형+정밀형 조합(라우터가 배정·승격)","Economy+precision combo (router assigns/escalates)"):T("자동형은 경제형·정밀형이 모두 준비돼야 선택할 수 있어요(1-34): ","Auto requires both economy and precision ready (1-34): ")+reasonT(autoRd||{reason:"not-probed"}));
+          // 사용자 실보고 2026-08-04: auto만 '미준비면 비활성'이라, 고르는 순간 점검되는 새 흐름에
+          // 도달할 수 없었다(경제형·정밀형은 미준비여도 선택 가능). 셋을 같은 규칙으로 통일한다 —
+          // 선택은 저장되고(조용한 전환 없음), 고르면 부족한 담당을 그 자리에서 점검한다.
+          mk("auto", T("자동형","Auto"), autoOk?T("준비됨","ready"):reasonT(autoRd||{reason:"not-probed"}), false, autoOk?T("경제형+정밀형 조합(라우터가 배정·승격)","Economy+precision combo (router assigns/escalates)"):T("자동형=경제형+정밀형 조합 — 고르면 아직 준비 안 된 담당을 그 자리에서 점검해요(현재: ","Auto = economy+precision combo — choosing it checks whichever provider is not ready yet (now: ")+reasonT(autoRd||{reason:"not-probed"})+")");
           setOn9();
           row.appendChild(seg);
           const gb9=document.createElement("button"); gb9.type="button"; gb9.className="secondary"; gb9.style.cssText="margin-left:8px;font-size:11px;padding:2px 8px";

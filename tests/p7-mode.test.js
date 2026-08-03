@@ -234,7 +234,13 @@ ok(/mapModeRow/.test(ext) && /setMapMode/.test(ext) && /runMapProbe/.test(ext), 
 ok(ext.includes('MAP_MODES_EXT = ["self", "economy", "precision", "auto"]'), "확장 화이트리스트=contract-lib MAP_MODES 동일");
 ok(ext.includes("의미 보강 담당(Project MAP) — 영향지도 탐색 담당과 별개") && ext.includes("separate from the impact-map scout"), "별개 축 라벨 ko/en(1-26 부기 — scoutArm과 통합 금지)");
 ok(ext.includes("자동 보강 실행 담당") && ext.includes("runs automatic enrichment") && !ext.includes("routing applies from P8"), "실적용 문구(P8 증분 4 — 구 'P8부터' 배지 ko/en 모두 제거·발동 배선 완료)");
-ok(ext.includes("자동형은 경제형·정밀형이 모두 준비돼야 선택할 수 있어요(1-34)"), "자동형 선택 게이트(1-34 autoReady=AND — 유일한 비활성 버튼)");
+// 계약 개정(2026-08-04 확인 검증 blocker): auto만 비활성이라 '고르면 그 자리에서 점검' 흐름에 도달할
+// 수 없었다(경제형·정밀형은 미준비여도 선택 가능) → 셋을 같은 규칙으로 통일. autoReady=AND 판정 자체는
+// 그대로이고(라우터·배지의 근거), 달라진 것은 '선택을 막지 않는다'는 점뿐이다.
+ok(ext.includes("고르면 아직 준비 안 된 담당을 그 자리에서 점검해요"), "개정: auto도 선택 가능·고르면 부족한 담당 점검(ko)");
+ok(ext.includes("choosing it checks whichever provider is not ready yet"), "개정: 영문 문안 쌍");
+ok(!ext.includes("자동형은 경제형·정밀형이 모두 준비돼야 선택할 수 있어요"), "구 게이트 문구 잔재 0");
+ok(/mk\("auto", T\("자동형","Auto"\), autoOk\?T\("준비됨","ready"\):reasonT\(autoRd\|\|\{reason:"not-probed"\}\), false,/.test(ext), "auto 버튼 비활성 인자=false(선택 허용)");
 ok(ext.includes("선택은 그대로 유지·자동 전환 없음") && !/mapMode[^\n]*강등|mapMode[^\n]*degrade.*self/.test(ext), "조용한 전환 금지 — degraded 배지만·강등 코드 없음(scoutArm no-key 규칙 재사용 금지)");
 // 계약 개정(2026-08-04 사용자 실보고): '자동 probe 금지'는 폐기 — 담당을 고르면 그 담당만 자동 점검한다
 // (이원화가 "선택했는데 왜 또 눌러야 하나 · 선택만으로 설정이 끝난 줄 안다"는 오해를 만들었다).
