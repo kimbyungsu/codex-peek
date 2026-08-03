@@ -307,9 +307,10 @@ function proofBasenameOk(name) { return typeof name === "string" && /^[A-Za-z0-9
 // workspace 비교는 플랫폼 분기(확인 검증 blocker — normSepWin 계보와 동일 원칙): POSIX에서 \는
 // 파일명 문자·대소문자 구별이므로 접으면 다른 프로젝트가 동일시된다. win만 구분자·대소문자 접기.
 function wsEqSimple(a, b) {
+  // POSIX 루트 "/"는 꼬리 슬래시 제거로 빈 문자열이 되면 안 된다(확인 검증 보완 — 동일 workspace 오거부)
   const n = process.platform === "win32"
     ? (s) => String(s || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()
-    : (s) => String(s || "").replace(/\/+$/, "");
+    : (s) => { const t = String(s || "").replace(/\/+$/, ""); return t || (String(s || "").startsWith("/") ? "/" : ""); };
   return !!n(a) && n(a) === n(b);
 }
 // v1 proof '실형식' 정확 키 집합(codex-bridge.js writeProof 산출물 그대로 — 부분 필드 의사 proof 거부)

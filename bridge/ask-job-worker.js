@@ -74,7 +74,7 @@ function primaryCheckpoint(dir, job, outFile) {
     // workspace 비교 플랫폼 분기(POSIX에서 \=파일명 문자·대소문자 구별 — 접으면 타 프로젝트 동일시)
     const nws = process.platform === "win32"
       ? (s) => String(s || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()
-      : (s) => String(s || "").replace(/\/+$/, "");
+      : (s) => { const t = String(s || "").replace(/\/+$/, ""); return t || (String(s || "").startsWith("/") ? "/" : ""); }; // 루트 / 보존
     if (!nws(p.workspace) || nws(p.workspace) !== nws(job.workspace)) return null;
     if (p.v === 2) {
       if (p.jobId !== job.id || String(p.turnId || "") !== String(job.implementerTurnId || "")

@@ -94,6 +94,10 @@ console.log("[1] API 단위 — proof 실형식 결속(v2)·read-back·유효성
     ck("posix: 백슬래시=파일명 문자 — 다른 폴더로 거부", ch.writePrimaryComplete(jobs, jw, "x답변", { verifierSession: "vs1", ...pw }) === null);
     const pw2 = proofV1({ ...jw, workspace: "/tmp/A/B" }, "vs1");
     ck("posix: 대소문자 차이=다른 폴더로 거부", ch.writePrimaryComplete(jobs, { ...jw, id: "ask-w2-aaaaaaaaaa" }, "x답변", { verifierSession: "vs1", ...pw2 }) === null);
+    // 확인 검증 보완: 루트 workspace "/"는 꼬리 제거로 빈 문자열이 되면 안 된다(동일 workspace 오거부)
+    const jr = { id: "ask-w3-aaaaaaaaaa", workspace: "/", implementerTurnId: null, implementerRevision: null, createdAt: new Date(Date.now() - 60_000).toISOString() };
+    const pr = proofV1(jr, "vs1");
+    ck("posix: 루트 / 동일 workspace=인정(빈 문자열 오거부 해소)", ch.writePrimaryComplete(jobs, jr, "루트 답변 본문", { verifierSession: "vs1", ...pr }) !== null);
   }
 
   console.log("[1-2] 사후 변조·결속 불일치=무효");
