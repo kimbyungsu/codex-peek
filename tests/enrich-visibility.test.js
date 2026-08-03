@@ -105,6 +105,41 @@ console.log("[3-1] 자동 재시도 1회 — 답이 거부돼 멈춘 건은 스�
   ok(evOf(ws).filter((x) => !x.ack).length === 1, "멈춘 사실은 경보로 계속 보인다(최신 1건)");
 }
 
+console.log("[3-1a] 첫 경보를 확인해도, 자동 재시도가 또 실패하면 새 경보가 남는다(확인 검증 blocker)");
+{
+  const ws = setup("ackthenfail");
+  const nodeId = MR.readTopoExFor(ws).topo.nodes[0].id;
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: false, paidMode: "precision" });
+  const bad = () => ({ ok: true, result: { schema: "enrich-result-v1", items: [
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "n1" } }, evidence: [{ file: "src/a.js", quote: "이 문장은 파일에 없다" }] },
+  ] } });
+  const opt = base(ws, { mode: "precision", adapters: { precision: bad } });
+  ME.runEnrich(ws, opt); // 1차 보류 → 경보
+  const first = evOf(ws).filter((x) => !x.ack);
+  ok(first.length === 1, "전제: 첫 경보 1건");
+  CL.ackIntegrityEvents(first.map((x) => x.id)); // 사용자가 확인 처리
+  ok(evOf(ws).filter((x) => !x.ack).length === 0, "전제: 확인 처리로 열린 경보 0");
+  ME.runEnrich(ws, opt); // 자동 재시도 → 또 거부 → 재개 경로에서 park
+  ok(evOf(ws).filter((x) => !x.ack).length === 1, "자동 재시도 실패도 새 경보를 남긴다(재개 경로 park 포함)");
+  ok(ME.readEnrichJob(ws).job.phase === "parked", "상태는 보류로 유지");
+}
+
+console.log("[3-1c] 호출 자체가 실패한 건은 자동 재시도 대상이 아니다(답이 없었던 실패)");
+{
+  const ws = setup("callfail");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: false, paidMode: "precision" });
+  let calls = 0;
+  const dead = () => { calls++; return { ok: false, detail: "spawn 실패" }; }; // 호출 단계 실패
+  const opt = base(ws, { mode: "precision", adapters: { precision: dead } });
+  const r1 = ME.runEnrich(ws, opt);
+  ok(r1.outcome === "parked" && calls === 1, "전제: 호출 실패로 보류(1회 호출)");
+  const att = ME.readEnrichJob(ws).job.attempts.slice(-1)[0];
+  ok(att && att.failureStage === "call", "전제: 실패 단계=call(답이 도착하지 않음)");
+  ME.runEnrich(ws, opt);
+  ME.runEnrich(ws, opt);
+  ok(calls === 1, "호출 단계 실패는 자동 재호출 0(사용자가 정한 범위 밖·환경 문제일 공산)");
+}
+
 console.log("[3-1b] 입력·설정 문제는 자동 재시도 대상이 아니다(다시 물어도 같은 결과)");
 {
   const ws = setup("noretry");
@@ -150,8 +185,10 @@ console.log("[5] 경보 갈아끼우기는 원자적 — 삭제만 되고 추가
   const cl = fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8");
   ok(/function appendIntegrityEvent\(ev, opts\)/.test(cl) && /opts\.supersedeSameKindWs/.test(cl), "한 잠금 안에서 대체+추가를 수행하는 옵션 실재");
   const me = fs.readFileSync(path.join(ROOT, "bridge", "map-enrich.js"), "utf8");
-  const parkBlk = me.slice(me.indexOf("const park = (jobMut, reason, extra)"), me.indexOf("// ⓪ 게이트 최선행"));
-  ok(/\{ supersedeSameKindWs: true \}/.test(parkBlk) && !/supersedeIntegrity/.test(parkBlk), "park는 별도 supersede 호출 없이 원자 옵션만 사용");
+  const notifyBlk = me.slice(me.indexOf("function notifyEnrichParked("), me.indexOf("function jobKeyOf("));
+  ok(/\{ supersedeSameKindWs: true \}/.test(notifyBlk) && !/supersedeIntegrity/.test(notifyBlk), "통지 헬퍼는 별도 supersede 호출 없이 원자 옵션만 사용");
+  { const pb = me.slice(me.indexOf("const park = (jobMut, reason, extra)"), me.indexOf("// ⓪ 게이트 최선행")); ok(pb.includes("notifyEnrichParked("), "신규 보류 경로가 통지 헬퍼 사용"); }
+  ok(/const wrappedPark = [\s\S]{0,260}notifyEnrichParked\(/.test(me), "재개(자동 재시도) 경로의 보류도 통지 헬퍼 사용 — 경보 유실 창 0");
   // 실제 동작: 같은 ws 반복 기록은 1건 유지, 다른 ws는 보존, ack된 건 보존
   const wsX = "D:/atomic-x", wsY = "D:/atomic-y";
   CL.appendIntegrityEvent({ ts: new Date().toISOString(), workspace: wsY, kind: "enrich-parked", severity: "warning", detail: "다른 프로젝트" }, { supersedeSameKindWs: true });

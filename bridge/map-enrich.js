@@ -271,6 +271,22 @@ function updateEnrichJob(repo, mut) {
   if (!w.ok) return { ok: false, reason: "lock" };
   return w.result;
 }
+// 자동 보강이 멈춘 사실을 무결성 채널(노랑)에 남긴다 — 대시보드 특정 줄을 열어야만 아는 상태를
+// 없애기 위한 통지(2026-08-04 사용자 실보고). 같은 프로젝트의 미확인 동종 경보는 한 잠금·한 쓰기로
+// 갈아끼운다(누적 방지+유실 방지). 재개 경로(resumeJob)의 park도 반드시 이 함수를 거쳐야
+// '첫 경보를 확인한 뒤 자동 재시도가 다시 실패하면 경보가 사라지는' 창이 생기지 않는다.
+function notifyEnrichParked(wsLabel, reason) {
+  try {
+    const wsLbl = String(wsLabel || "");
+    if (!wsLbl) return;
+    CL.appendIntegrityEvent({
+      ts: new Date().toISOString(), workspace: wsLbl, kind: "enrich-parked", severity: "warning",
+      detailKo: `지도 자동 보강이 멈췄습니다(사유: ${reason}) — 대시보드의 '자동 보강' 줄에서 원인과 다시 시도를 확인하세요.`,
+      detailEn: `Map auto-enrichment stopped (reason: ${reason}) — see the 'Auto-enrich' line in the dashboard for the cause and retry.`,
+      detail: `지도 자동 보강이 멈췄습니다(사유: ${reason}) — 대시보드의 '자동 보강' 줄에서 원인과 다시 시도를 확인하세요.`,
+    }, { supersedeSameKindWs: true });
+  } catch { /* 알림 실패가 실행기를 막지 않는다 */ }
+}
 function jobKeyOf(mapId, authorityHash, decisionContextHash) {
   return sha1(String(mapId) + "|" + String(authorityHash) + (decisionContextHash ? "|" + decisionContextHash : ""));
 }
@@ -794,17 +810,7 @@ function runEnrich(repo, opts) {
     // 사용자 실보고(2026-08-04): 자동 보강이 스스로 멈춰도 상태바·경보 어디에도 안 떠서, 사용자는
     // 대시보드의 특정 줄을 열어보기 전에는 '지도 자동화가 멈춘 것'을 알 방법이 없었다. 스스로 멈춘
     // 사실은 스스로 알려야 한다 — 무결성 채널(노랑)에 1건 기록(같은 ws의 직전 보강 경보는 대체).
-    try {
-      const wsLbl = String(o.ws || repo);
-      // 갈아끼우기는 한 잠금·한 쓰기로(확인 검증 [주의] — 삭제만 되고 추가가 실패하면 '멈췄는데
-      // 아무도 모르는' 상태가 생긴다). 누적 노랑 방지와 유실 방지를 동시에 만족시킨다.
-      CL.appendIntegrityEvent({
-        ts: new Date().toISOString(), workspace: wsLbl, kind: "enrich-parked", severity: "warning",
-        detailKo: `지도 자동 보강이 멈췄습니다(사유: ${reason}) — 대시보드의 '자동 보강' 줄에서 원인과 다시 시도를 확인하세요.`,
-        detailEn: `Map auto-enrichment stopped (reason: ${reason}) — see the 'Auto-enrich' line in the dashboard for the cause and retry.`,
-        detail: `지도 자동 보강이 멈췄습니다(사유: ${reason}) — 대시보드의 '자동 보강' 줄에서 원인과 다시 시도를 확인하세요.`,
-      }, { supersedeSameKindWs: true });
-    } catch { /* 알림 실패가 실행기를 막지 않는다 */ }
+    notifyEnrichParked(String(o.ws || repo), reason);
     return { outcome: "parked", reason };
   };
   // ⓪ 게이트 최선행: 3트랙 OFF=완전 무동작(파일 생성·로그 0)
@@ -994,8 +1000,13 @@ function runEnrichLocked(repo, o, env) {
       // 한도 관리는 retryFrom 재사용 — 이 값이 있으면 이미 한 번(자동이든 수동이든) 재시도한 것이므로
       // 자동은 더 이상 걸리지 않는다(무한 재과금 차단). 사용자는 '다시 시도' 버튼으로 언제든 더 할 수 있다.
       // 입력·설정 문제(동의·큐 손상·미준비·어댑터 부재 등)는 다시 물어도 같은 결과라 대상이 아니다.
+      // 대상은 '답이 도착했는데 그 답이 거부된' 경우뿐(확인 검증 blocker): 호출 자체가 실패한
+      // 경우(failureStage="call" — 프로세스 사망·어댑터 예외)는 다시 불러도 같은 환경 문제일 공산이
+      // 크고, 사용자가 정한 범위("답변이 거부돼 멈췄을 때")도 아니다 → 수동 재시도로만.
       const AUTO_RETRY_REASONS = ["precision-failed", "economy-failed", "both-failed"];
-      if (AUTO_RETRY_REASONS.includes(String(j.parkedReason || "")) && !Number.isInteger(j.retryFrom)) {
+      const lastAtt = Array.isArray(j.attempts) && j.attempts.length ? j.attempts[j.attempts.length - 1] : null;
+      const answerRejected = !!lastAtt && ["validation", "response"].includes(String(lastAtt.failureStage || ""));
+      if (AUTO_RETRY_REASONS.includes(String(j.parkedReason || "")) && answerRejected && !Number.isInteger(j.retryFrom)) {
         const wAr = updateEnrichJob(repo, (jj) => {
           if (!jj || jj.phase !== "parked" || Number.isInteger(jj.retryFrom)) return null; // 경합 시 한쪽만 성공
           const nx = { ...jj, phase: "open", retryFrom: Array.isArray(jj.attempts) ? jj.attempts.length : 0 };
@@ -1458,7 +1469,7 @@ function resumeJob(repo, oIn, env, j, st2) {
   // 3~4차 [주의](f-cc94df4f): 감사 로그·park도 동결 주체로 — 구조분해는 래핑 '후'(적용 주체와 감사 행 일치)
   const baseLog = env.log;
   const wrappedLog = (e) => baseLog({ configWs: CL.normWs(j.configWs), slot: j.slot, mode: j.mode, ...e });
-  const wrappedPark = (jobMut, reason, extra) => { if (jobMut) updateEnrichJob(repo, jobMut); wrappedLog({ route: "park", reason, outcome: "parked", ...(extra || {}) }); return { outcome: "parked", reason }; };
+  const wrappedPark = (jobMut, reason, extra) => { if (jobMut) updateEnrichJob(repo, jobMut); wrappedLog({ route: "park", reason, outcome: "parked", ...(extra || {}) }); notifyEnrichParked(String(j.configWs || oIn.ws || repo), reason); return { outcome: "parked", reason }; };
   env = { ...env, log: wrappedLog, park: wrappedPark };
   const { MP, log, park } = env;
   const a = j.attempts[j.attempts.length - 1];
