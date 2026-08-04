@@ -221,7 +221,7 @@ console.log("[5b] P6 — 자동 지시·어긋남 분기의 codex 러너 반영"
   const clSrc9 = fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8");
   ok(/\.\.\.CL\.codexScoutExecArgs\(outFile\)/.test(provSrc9) && /"--sandbox", "read-only"/.test(clSrc9), "codex 호출 read-only 강제 — 공용 빌더(P7 이동)로 유지(1차 blocker① 계승)");
   ok(/"exec", "--ephemeral"/.test(clSrc9), "codex 호출 --ephemeral(rollout 무잔재 — 오링크 원천 차단·2차 blocker② 계승, 빌더 소재)");
-  // 고지 정합(2차 [주의] f-ecfbc8ae): '두 갈래' 단정 잔재 0 — 사용자 대면 고지 전부 세 갈래
+  // 고지 정합(2차 [주의] f-ecfbc8ae): '두 갈래' 단정 잔재 0 — 사용자 대면 고지 전부 정찰 3경로(현행 총계=검증 포함 네 갈래)
   ok(!/두 갈래/.test(extSrc) && !/two routes/.test(extSrc), "확장 고지 '두 갈래' 잔재 0");
   ok(!/두 갈래/.test(fs.readFileSync(path.join(ROOT, "PRIVACY.md"), "utf8")), "PRIVACY '두 갈래' 잔재 0");
   ok(!/두 갈래/.test(fs.readFileSync(path.join(ROOT, "README.md"), "utf8")) && !/two routes|Two exceptions/.test(fs.readFileSync(path.join(ROOT, "docs", "README.en.md"), "utf8")), "README ko/en '두 갈래' 단정 잔재 0");

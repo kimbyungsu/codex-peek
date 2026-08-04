@@ -144,6 +144,21 @@ console.log("[4b] 재검증 반례 잠금 — 공유 anchor edge 누출·선별 
   ok(!r2.text.includes("선별 제외"), "무축 노드 없음 — 선별 제외 고지 없음");
 }
 
+console.log("[4c] 빈 후보 조기 반환 — 고지 불소실(정합 점검 blocker 잠금)");
+{
+  const WS = fs.mkdtempSync(path.join(os.tmpdir(), "mrwirews4c_"));
+  mk(WS, "src/only.js", "내용");
+  // 전 노드 부적격(앵커 없음) → eligible 0 → top 0 → 기존 동봉 위임. reqText가 있으면 고지 합류.
+  const proj = { ok: true, source: "v2", mapId: "m1", nodes: [{ id: "N0", label: "무앵커", anchors: [] }], edges: [], approved: [], degraded: [], decisions: [] };
+  const r = RD.renderV2Slice(WS, {}, "ko", proj, "아무 축에도 안 걸리는 `missingTok` 요청");
+  ok(String(r && r.text || "").includes("요청 기준 선별 미적용"), "빈 후보 조기 반환에도 fallback 고지 실림");
+  mk(WS, "big.js", "x".repeat(600 * 1024));
+  const t = RD.renderV2Slice(WS, {}, "ko", proj, "`missingTok` 재요청");
+  ok(String(t && t.text || "").includes("씨앗 검색이 상한에 걸려 잘렸다"), "빈 후보 조기 반환에도 검색 잘림 고지 실림");
+  const noReq = RD.renderV2Slice(WS, {}, "ko", proj);
+  ok(!String(noReq && noReq.text || "").includes("선별"), "reqText 부재면 조기 반환 무변(무회귀)");
+}
+
 console.log("[5] 생산 경로 잠금 — capsOverride 미전달·배포 편입");
 {
   const rd = fs.readFileSync(path.join(ROOT, "bridge", "map-reader.js"), "utf8");

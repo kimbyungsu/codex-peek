@@ -327,6 +327,19 @@ function renderV2Slice(ws, c, lang, proj, reqText) {
   // 조용히 되돌아가면 사용자·검증자 모두 지도가 통째로 빠진 줄 모른다(조용한 생략 금지).
   if (!top.length) {
     const fb = CL.buildScoutAttach(ws, c, lang);
+    // 조기 반환도 고지를 잃지 않는다(정합 점검 blocker — 전 노드 부적격/degraded 지도에서 재현):
+    // fallback(선별 미적용)·검색 잘림은 '무엇이 실렸든' 사실이므로 기존 동봉 위임 텍스트에 합류한다.
+    const rNotes = [];
+    if (retrieval && retrieval.sel.fallback) rNotes.push(en
+      ? "(request-based selection not applied — no candidate matched any axis; what is attached is the default attachment)"
+      : "(요청 기준 선별 미적용 — 어느 축에도 후보가 없어 실린 것은 기본 동봉이다)");
+    if (retrieval && retrieval.truncated) rNotes.push(en
+      ? "(seed search truncated by caps — selection is best-effort; this round's exposure metrics are unknown)"
+      : "(씨앗 검색이 상한에 걸려 잘렸다 — 선별은 최선 노력이며 이 회차 노출 지표는 unknown)");
+    if (!overflow && rNotes.length) {
+      if (fb && typeof fb === "object") return { ...fb, text: [fb.text, ...rNotes].filter(Boolean).join("\n") };
+      return { text: [typeof fb === "string" ? fb : "", ...rNotes].filter(Boolean).join("\n"), mapItems: [], couplings: [] };
+    }
     if (!overflow) return fb;
     // ⚠ 고지는 '실제로 실린 것'과 맞아야 한다. 기존 방식 동봉이 지도를 실었는데 '지도가 안 실렸다'고 하면
     // 화면은 없다고 하고 검증자·결속 판정은 그 지도를 쓰는 상충이 된다(검증 [주의]).
@@ -339,8 +352,8 @@ function renderV2Slice(ws, c, lang, proj, reqText) {
       : (en
         ? `[Project MAP slice omitted] every candidate was dropped by the caps (${overflow} node(s)) — no map is attached to this request.`
         : `[Project MAP 조각 미첨부] 후보가 전부 상한에 걸려 빠졌다(node ${overflow}개) — 이 요청에는 지도가 실리지 않았다.`);
-    if (fb && typeof fb === "object") return { ...fb, text: [fb.text, note].filter(Boolean).join("\n") };
-    return { text: [fbText, note].filter(Boolean).join("\n"), mapItems: [], couplings: [] };
+    if (fb && typeof fb === "object") return { ...fb, text: [fb.text, note, ...rNotes].filter(Boolean).join("\n") };
+    return { text: [fbText, note, ...rNotes].filter(Boolean).join("\n"), mapItems: [], couplings: [] };
   }
   const coupling = typeof CL.scoutCouplingAttach === "function" ? CL.scoutCouplingAttach(target, en) : { text: "", couplings: [] };
   const couplings = coupling.couplings;

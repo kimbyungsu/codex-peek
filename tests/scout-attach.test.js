@@ -72,7 +72,7 @@ const capped = extractMapHighlights(many);
 ok(capped.length === 8, `12+중복1 → 상한 8 (실제 ${capped.length})`);
 ok(new Set(capped.map((i) => i.path)).size === capped.length, "중복 경로 없음");
 
-console.log("[3] buildScoutAttach — 게이트(2트랙/지도없음/high없음=null) · 동봉 본문 · 낡음 라벨");
+console.log("[3] buildScoutAttach — 게이트(2트랙=null·지도/high 없어도 일지 결합 후보는 독립 동봉) · 동봉 본문 · 낡음 라벨");
 const ws = path.join(dir, "proj");
 fs.mkdirSync(ws, { recursive: true });
 ok(buildScoutAttach(ws, { scoutMode: "on" }) === null, "지도 없음 → null");
