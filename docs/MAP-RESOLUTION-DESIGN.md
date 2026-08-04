@@ -122,7 +122,7 @@ buildEnrichPrompt에 add_node 견본 1줄 추가:
 있으므로(§2-2b), file 노드는 구조적으로 사고 자리부터 생긴다.
 (v1의 "관찰일지 confirmed 결합이 보강 프롬프트에 힌트로 실린다" 전제는 **삭제** — 1차 보완 수용:
 결합 동봉(scoutCouplingAttach)은 검증 ask 경로(map-reader) 전용이며 buildEnrichPrompt에는 실리지
-않는다. 보강 프롬프트에의 결합 동봉은 별도 후속 판단 항목으로 남긴다 — v2 비목표.)
+않는다. 보강 프롬프트에의 결합 동봉은 별도 후속 판단 항목으로 남긴다 — v3 비목표.)
 
 ## 3. 비목표(v3 범위 밖)
 
