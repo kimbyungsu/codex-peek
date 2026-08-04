@@ -124,7 +124,7 @@ buildEnrichPrompt에 add_node 견본 1줄 추가:
 결합 동봉(scoutCouplingAttach)은 검증 ask 경로(map-reader) 전용이며 buildEnrichPrompt에는 실리지
 않는다. 보강 프롬프트에의 결합 동봉은 별도 후속 판단 항목으로 남긴다 — v2 비목표.)
 
-## 3. 비목표(v2 범위 밖)
+## 3. 비목표(v3 범위 밖)
 
 - `split_node`/`merge_node`(edgeReroute 동반 대형 연산), 함수 수준 노드, 전면 파일 스캔 노드화,
   module 노드 자동 생성/개편, MAP.md 렌더러 개편(entityType은 그대로 표시), 기존 9노드·5엣지
@@ -164,6 +164,6 @@ buildEnrichPrompt에 add_node 견본 1줄 추가:
 - 모델이 상한·조건을 무시하면 item 거부→라운드 실패(answer-rejected)가 생길 수 있다 — 자동 재시도
   1회+input 자기치유가 받치고, 고지(§2-4)가 1차 방어다(어휘 드리프트 봉합에서 실증된 접근).
 - 파일 삭제 시 file 노드는 잔존한다(lifecycle 전이는 기존 tombstone/검증 해소·사용자 경로 소관 —
-  v2는 생성만 다룬다).
+  v3은 생성만 다룬다).
 - 임시 id 매핑은 결과(라운드) 스코프뿐이다 — 라운드를 넘는 참조는 설계상 불가하며, 필요한 엣지는
   양끝이 실존 노드가 된 뒤의 일반 add_edge 경로가 담당한다.
