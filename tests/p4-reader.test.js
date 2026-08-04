@@ -219,6 +219,13 @@ console.log("[3] attach — 2트랙 0·비v2 위임 바이트 동일·v2 envelop
   ok(aV && typeof aV.text === "string" && Array.isArray(aV.mapItems) && Array.isArray(aV.couplings) && Object.keys(aV).sort().join(",") === "couplings,mapItems,text", "v2 slice=envelope {text,mapItems,couplings}(healthLine 별도 필드 금지)");
   ok(aV.text.includes("Project MAP"), "v2 slice 머리말(advisory 명시)");
   ok(aV.couplings.some((cp) => cp.id === couplingId) && aV.text.includes("#" + couplingId) && aV.text.includes("결합확인 #id"), "v2 slice에도 과거 관찰 재확인 후보와 표기 규칙이 실제 본문으로 동봉됨");
+  // 2026-08-04 실측(도장 35건 중 승격 1건): 기계 승격 조건(표기+그 결합 파일 2개 실제 라인 인용)을
+  // 답하는 쪽에 고지해야 한다 — 인용 없는 표기=자기보고뿐이라는 사실까지(ko/en 쌍은 아래 en 동봉에서).
+  ok(aV.text.includes("두 파일 경로를 답 본문에서 실제 라인과 함께 인용하라") && aV.text.includes("인용 없는 표기는 자기보고로만 남고 승격되지 않는다"), "표기 규칙에 승격 조건(두 파일 실제 인용) 고지 — 도장만 찍고 승격 0 문제 봉합");
+  {
+    const aE = CL.scoutCouplingAttach(wsV, true);
+    ok(aE.text.includes("cite both file paths of that coupling") && aE.text.includes("never promoted"), "영문 동봉도 같은 승격 조건 고지(ko/en 쌍)");
+  }
 
   // cutover 흔적만 남은 blocked 지도에서도 불량 지도는 공급하지 않되, 독립적인 관찰 재확인 통로는 유지한다.
   const wsB = mkWs("atblocked", { "src/alpha-module.ts": "// a\n", "src/beta-consumer.ts": "// b\n" });

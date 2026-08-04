@@ -2868,8 +2868,11 @@ function scoutCouplingAttach(target, en) {
   try { couplings = ledgerCouplingCandidates(target, 3); } catch { couplings = []; }
   const text = couplings.length
     ? (en
-      ? ["[Coupling check requests — reply markers]", ...couplings.map((cp) => `- (#${cp.id}) ${String(cp.text).slice(0, 200)}`), `Only if you actually verified one of these couplings during this verification, write \`결합확인 #id\` on its own line; if you actually found it wrong, write \`결합반박 #id\`. If you did not check it, write nothing about it (no guessing).`]
-      : ["[결합 확인 요청 — 답 표기]", ...couplings.map((cp) => `- (#${cp.id}) ${String(cp.text).slice(0, 200)}`), `이번 검증에서 위 결합을 '실제로 확인'한 경우에만 \`결합확인 #id\` 를 한 줄로 명시하고, '실제로 틀렸음을 확인'했다면 \`결합반박 #id\` 를 명시하라. 확인하지 않았다면 아무것도 쓰지 마라(추측 금지).`]).join("\n")
+      // 승격 조건 고지(2026-08-04 실측 — 도장 35건 중 승격 1건): 기계 판정은 '표기+그 결합의 파일 경로
+      // 2개를 답 본문에서 실제 라인과 함께 인용'을 요구하는데(flagLedgerConfirms cited 판정), 이 요구를
+      // 답하는 쪽이 몰라 인용 없는 자기보고만 쌓였다 — 어휘·증거 관문 미고지와 같은 병(기계 규칙은 고지).
+      ? ["[Coupling check requests — reply markers]", ...couplings.map((cp) => `- (#${cp.id}) ${String(cp.text).slice(0, 200)}`), `Only if you actually verified one of these couplings during this verification, write \`결합확인 #id\` on its own line; if you actually found it wrong, write \`결합반박 #id\`. If you did not check it, write nothing about it (no guessing). For the marker to count as machine-promotable evidence, also cite both file paths of that coupling in your answer body with real line references — a marker without citations remains a self-report and is never promoted.`]
+      : ["[결합 확인 요청 — 답 표기]", ...couplings.map((cp) => `- (#${cp.id}) ${String(cp.text).slice(0, 200)}`), `이번 검증에서 위 결합을 '실제로 확인'한 경우에만 \`결합확인 #id\` 를 한 줄로 명시하고, '실제로 틀렸음을 확인'했다면 \`결합반박 #id\` 를 명시하라. 확인하지 않았다면 아무것도 쓰지 마라(추측 금지). 표기가 '승격 재료'로 인정되려면 그 결합의 두 파일 경로를 답 본문에서 실제 라인과 함께 인용하라 — 인용 없는 표기는 자기보고로만 남고 승격되지 않는다.`]).join("\n")
     : "";
   return { text, couplings };
 }

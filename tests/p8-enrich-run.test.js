@@ -657,5 +657,42 @@ console.log("[10] 입력 자기치유(2026-08-04 보류 반복 봉합) — 문�
   ok(ME.readEnrichJob(ws).job.phase === "done", "장부 done(자기치유 완주)");
 }
 
+console.log("[11] 소화 기준점 교체(2026-08-04 사용자 결정) — 커밋된 변경도 보강 입력에 합류");
+{
+  const cp = require("child_process");
+  const g = (repo, args) => cp.spawnSync("git", ["-c", "safe.directory=*", "-C", repo, ...args], { encoding: "utf8", windowsHide: true });
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "p8er_git_"));
+  fs.mkdirSync(path.join(repo, "src"), { recursive: true });
+  fs.writeFileSync(path.join(repo, "src", "a.js"), "// a\n");
+  g(repo, ["init", "-q"]); g(repo, ["config", "user.email", "t@t"]); g(repo, ["config", "user.name", "t"]);
+  g(repo, ["add", "-A"]); g(repo, ["commit", "-qm", "c1"]);
+  const h1 = g(repo, ["rev-parse", "HEAD"]).stdout.trim();
+  // 기준점 왕복(손상=무시)
+  ok(ME.readConsumedBaseline(repo) === null, "기준점 부재=null(폴백 재료)");
+  ok(ME.writeConsumedBaseline(repo, "짧은해시") === false, "형식 위반 head=기록 거부");
+  ok(ME.writeConsumedBaseline(repo, h1, "map-1") === true && ME.readConsumedBaseline(repo).head === h1, "기준점 기록·재판독");
+  fs.writeFileSync(ME.consumedFileFor(repo), "{깨진");
+  ok(ME.readConsumedBaseline(repo) === null, "손상 기준점=null(종전 입력 폴백)");
+  ok(ME.writeConsumedBaseline(repo, h1, "map-1") === true, "(복구) 재기록");
+  // 핵심 반례: 코드 변경을 '커밋해 버린' 뒤 작업트리에는 산출물만 남은 상태 — 종전 입력(작업트리뿐)이면
+  // 문서·산출물뿐이라 관문이 막지만, 기준점 합류가 커밋된 코드 파일을 입력에 되살린다.
+  fs.writeFileSync(path.join(repo, "src", "b.js"), "// b\n");
+  g(repo, ["add", "-A"]); g(repo, ["commit", "-qm", "c2"]);
+  fs.writeFileSync(path.join(repo, "bundle.zip"), "zzz\n"); // 미커밋 산출물만 잔존
+  const worktreeOnly = ["bundle.zip"];
+  const expanded = ME.expandChangedWithConsumedDelta(repo, worktreeOnly);
+  ok(expanded.includes("src/b.js") && expanded.includes("bundle.zip"), "기준점 이후 커밋 변경(src/b.js) 합류(작업트리 항목 보존)");
+  const mkTopo9 = (paths) => ({ nodes: [{ id: U(1), label: "L", entityType: "module", state: {}, anchors: paths.map((p) => ({ kind: "code", path: p })) }], edges: [] });
+  ok(ME.answerableInput(repo, mkTopo9(["src/a.js"]), worktreeOnly) === false && ME.answerableInput(repo, mkTopo9(["src/a.js"]), expanded) === true, "종전 입력=답 불가 차단 vs 합류 입력=답 가능(기아 해소 실증)");
+  ok(ME.expandChangedWithConsumedDelta(repo, null) === null, "changed=unknown(null)은 확장 안 함(추측 금지)");
+  fs.writeFileSync(ME.consumedFileFor(repo), JSON.stringify({ head: "f".repeat(40), mapId: "x", at: "t" }));
+  const gone = ME.expandChangedWithConsumedDelta(repo, worktreeOnly);
+  ok(Array.isArray(gone) && gone.join(",") === worktreeOnly.join(","), "기준 커밋 소실(diff 실패)=종전 입력 그대로(보수)");
+  // 배선: ⑦a 합류 + done 시 기준점 기록(소스 계약)
+  const meSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "map-enrich.js"), "utf8");
+  ok(/changed = expandChangedWithConsumedDelta\(repo, changed\);/.test(meSrc), "⑦a 배선 — 변경 산출 직후 합류");
+  ok(/if \(gh9\.status === 0\) writeConsumedBaseline\(repo, String\(gh9\.stdout \|\| ""\)\.trim\(\), j\.mapId\);/.test(meSrc), "done 도장과 함께 기준점 갱신 배선");
+}
+
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
 process.exit(fail ? 1 : 0);

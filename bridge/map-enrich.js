@@ -18,6 +18,40 @@ const repoKeyFor = (repo) => CL.repoKeyForStats(repo);
 const consentFileFor = (repo) => path.join(ENRICH_DIR, "consent-" + repoKeyFor(repo) + ".json");
 const jobFileFor = (repo) => path.join(ENRICH_DIR, repoKeyFor(repo) + ".job.json");
 const deferredFileFor = (repo) => path.join(ENRICH_DIR, repoKeyFor(repo) + ".deferred.json");
+// 소화 기준점(2026-08-04 사용자 결정 — 보강 입력 기준점 교체): 보강 입력이 '미커밋 작업트리 변경'뿐이면
+// 턴마다 곧바로 커밋하는 작업 방식에서 커밋된 코드 변경이 영영 입력에 안 보인다(조건부 입력 기아 —
+// 보관함 0fb9ce8c). 기준점을 '지도가 마지막으로 소화한 커밋'으로 옮겨, 그 이후의 커밋 변경도 입력에
+// 합류시킨다(자동커밋·수동작업 워크플로 무관 — 특수 분기 아님). git 기반 저장소 전용(historyless는
+// 인벤토리 내용 비교가 이미 전량 커버). 부속 파일=best-effort: 없거나 손상이면 종전 입력(무회귀).
+const consumedFileFor = (repo) => path.join(ENRICH_DIR, repoKeyFor(repo) + ".consumed.json");
+function readConsumedBaseline(repo) {
+  try {
+    const o = JSON.parse(fs.readFileSync(consumedFileFor(repo), "utf8"));
+    return o && typeof o === "object" && !Array.isArray(o) && /^[0-9a-f]{40}$/.test(String(o.head || "")) ? o : null;
+  } catch { return null; }
+}
+function writeConsumedBaseline(repo, head, mapId) {
+  try {
+    if (!/^[0-9a-f]{40}$/.test(String(head || ""))) return false;
+    fs.mkdirSync(ENRICH_DIR, { recursive: true });
+    fs.writeFileSync(consumedFileFor(repo), JSON.stringify({ head: String(head), mapId: String(mapId || ""), at: new Date().toISOString() }));
+    return true;
+  } catch { return false; }
+}
+// 기준점 이후의 커밋된 변경 파일을 입력에 합류(순수 계산은 아님 — git 호출·실패=종전 입력 그대로).
+function expandChangedWithConsumedDelta(repo, changed) {
+  if (!Array.isArray(changed)) return changed; // 산출 불가(unknown)는 그대로 — 추측 확장 금지
+  const base = readConsumedBaseline(repo);
+  if (!base) return changed;
+  try {
+    const { spawnSync } = require("child_process");
+    const g = spawnSync("git", ["-c", "safe.directory=*", "-C", repo, "diff", "--name-only", base.head + "..HEAD"], { encoding: "utf8", timeout: 5000, windowsHide: true });
+    if (g.status !== 0) return changed; // 기준 커밋 소실(리베이스 등)=종전 입력(보수)
+    const extra = String(g.stdout || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+      .filter((f) => !String(f).replace(/\\/g, "/").startsWith("project-map/")); // 자체 산출물 제외(⑦a 필터와 동형)
+    return [...new Set([...changed, ...extra])];
+  } catch { return changed; }
+}
 
 function readJson3(f) {
   let raw;
@@ -1015,6 +1049,7 @@ function runEnrichLocked(repo, o, env) {
       const MRd = require(path.join(__dirname, "map-reader.js"));
       const g9 = MRd.gitChangedEx(repo, { untrackedAll: true }); // 4차 blocker②: -uall — 미추적 디렉터리 내부 파일 열거
       changed = g9 && g9.ok && !g9.truncated ? (g9.paths || []).filter((f) => !String(f).replace(/\\/g, "/").startsWith("project-map/")) : null; // 2차 blocker⑥: paths·truncated=unknown·자체 산출물 제외
+      changed = expandChangedWithConsumedDelta(repo, changed); // 기준점 교체(2026-08-04): '지도가 마지막으로 소화한 커밋' 이후의 커밋 변경 합류
     } else changed = historylessChanges(repo, queue.invSnap, MR);
   } catch { changed = null; }
   const proj = { ok: true, source: "v2", nodes: topo.nodes || [] }; // corridor 판정 입력(node 소속만 — 같은 캡처 세트)
@@ -1282,6 +1317,13 @@ function applyItems(repo, o, env, st, attemptId) {
       const investigationPending = awaitingVerification === null ? null : Math.max(0, skipped - awaitingVerification - rejected);
       const wD = updateEnrichJob(repo, (jj) => jj && { ...jj, phase: "done", finishedAt: nowIso(), ...(srcFp ? { sourceFp: srcFp } : {}), attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, phase: "done", finishedAt: nowIso(), cursor: { nextIndex: x.cursor.nextIndex, rev: 0, appliedPatchIds: x.cursor.appliedPatchIds } } : x) });
       if (!wD.ok) return park(null, "done-write:" + wD.reason);
+      // 소화 기준점 갱신(기준점 교체 — done 도장과 함께): 이 완주가 소화한 HEAD를 기록해 다음 라운드가
+      // '그 이후의 커밋 변경'을 입력으로 받게 한다. rev-parse 실패(historyless 등)=미기록(무해).
+      try {
+        const { spawnSync: sp9 } = require("child_process");
+        const gh9 = sp9("git", ["-c", "safe.directory=*", "-C", repo, "rev-parse", "HEAD"], { encoding: "utf8", timeout: 3000, windowsHide: true });
+        if (gh9.status === 0) writeConsumedBaseline(repo, String(gh9.stdout || "").trim(), j.mapId);
+      } catch { /* best-effort */ }
       // 멈춤을 알렸으면 풀림도 알려야 한다 — 완주 시 그 프로젝트의 '멈춤' 경보를 해소(대체)한다.
       try { CL.supersedeIntegrity(null, "enrich-parked", String(o.ws || repo)); } catch { /* 무해 */ }
       log({ route: a.provider, reason: applied > 0 ? "enriched" : "settled-no-apply", outcome: applied > 0 ? "applied" : "settled", provider: a.provider, jobKey: j.jobKey, consentGen: a.consentGen, awaitingVerification, rejected, investigationPending });
@@ -1653,6 +1695,6 @@ function cliMain(argv) {
   return r.outcome === "applied" || r.outcome === "settled" || r.outcome === "noop" ? 0 : r.outcome === "busy" ? 3 : 1;
 }
 
-module.exports = { ENRICH_DIR, answerableInput, repoKeyFor, consentFileFor, jobFileFor, deferredFileFor, readEnrichConsent, grantEnrichConsent, revokeEnrichConsent, findGrant, readEnrichJob, updateEnrichJob, readDeferred, deferredSummary, enrichOutcomeSummary, recoverDeferredCalls, beginDeferredCall, finishDeferredCall, retryDeferredResolutions, jobKeyOf, jobSeedOf, jobRunIdOf, detPatchId, validateEnrichResult, toPatchV2, evidenceKindOf, appendRouteLog, historylessChanges, computeSourceFp, runEnrich, cliMain, ROUTE_LOG, JOB_PHASES, ATTEMPT_PHASES, ENRICH_TARGET_OPS };
+module.exports = { ENRICH_DIR, answerableInput, readConsumedBaseline, writeConsumedBaseline, expandChangedWithConsumedDelta, consumedFileFor, repoKeyFor, consentFileFor, jobFileFor, deferredFileFor, readEnrichConsent, grantEnrichConsent, revokeEnrichConsent, findGrant, readEnrichJob, updateEnrichJob, readDeferred, deferredSummary, enrichOutcomeSummary, recoverDeferredCalls, beginDeferredCall, finishDeferredCall, retryDeferredResolutions, jobKeyOf, jobSeedOf, jobRunIdOf, detPatchId, validateEnrichResult, toPatchV2, evidenceKindOf, appendRouteLog, historylessChanges, computeSourceFp, runEnrich, cliMain, ROUTE_LOG, JOB_PHASES, ATTEMPT_PHASES, ENRICH_TARGET_OPS };
 
 if (require.main === module) process.exit(cliMain(process.argv));
