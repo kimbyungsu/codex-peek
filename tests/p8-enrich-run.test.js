@@ -688,10 +688,52 @@ console.log("[11] 소화 기준점 교체(2026-08-04 사용자 결정) — 커�
   fs.writeFileSync(ME.consumedFileFor(repo), JSON.stringify({ head: "f".repeat(40), mapId: "x", at: "t" }));
   const gone = ME.expandChangedWithConsumedDelta(repo, worktreeOnly);
   ok(Array.isArray(gone) && gone.join(",") === worktreeOnly.join(","), "기준 커밋 소실(diff 실패)=종전 입력 그대로(보수)");
-  // 배선: ⑦a 합류 + done 시 기준점 기록(소스 계약)
+  // 검증 blocker ②: 비ASCII 파일명은 기본 quotePath로 C식 인용돼 확장자·판독이 어긋난다 — -z 원문 경로
+  ok(ME.writeConsumedBaseline(repo, h1, "map-1") === true, "(전제) 유효 기준점 복원(직전 소실 반례가 가짜 값으로 덮음)");
+  fs.writeFileSync(path.join(repo, "src", "한글모듈.js"), "// 한글\n");
+  g(repo, ["add", "-A"]); g(repo, ["commit", "-qm", "c3"]);
+  const expanded2 = ME.expandChangedWithConsumedDelta(repo, ["bundle.zip"]);
+  ok(expanded2.includes("src/한글모듈.js") && !expanded2.some((f) => f.startsWith('"')), "비ASCII 경로=원문 복원(-z — 인용 형식 잔재 0)");
+  ok(ME.answerableInput(repo, mkTopo9(["src/a.js"]), ["bundle.zip", "src/한글모듈.js"]) === true, "복원된 비ASCII 코드 파일이 관문 통과 재료가 됨");
+  // 배선: ⑦a 합류+입력 시점 srcHead 캡처+done 도장=완료 시점 재판독 금지(소스 계약 — 검증 blocker ①)
   const meSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "map-enrich.js"), "utf8");
   ok(/changed = expandChangedWithConsumedDelta\(repo, changed\);/.test(meSrc), "⑦a 배선 — 변경 산출 직후 합류");
-  ok(/if \(gh9\.status === 0\) writeConsumedBaseline\(repo, String\(gh9\.stdout \|\| ""\)\.trim\(\), j\.mapId\);/.test(meSrc), "done 도장과 함께 기준점 갱신 배선");
+  ok(/if \(st && st\.srcHead\) writeConsumedBaseline\(repo, st\.srcHead, j\.mapId\);/.test(meSrc), "done 도장=입력 시점 srcHead에만 결속");
+  {
+    const doneIdx = meSrc.indexOf("if (st && st.srcHead) writeConsumedBaseline");
+    const doneBlk = meSrc.slice(doneIdx - 600, doneIdx + 200);
+    ok(!/rev-parse/.test(doneBlk), "done 도장 주변에 완료 시점 HEAD 재판독 부재(실행 중 커밋 소화 오도장 차단)");
+  }
+}
+console.log("[11b] 실행 중 커밋 반례(검증 blocker ①) — 기준점은 '입력 계산 시점' 커밋에 결속(e2e)");
+{
+  const cp = require("child_process");
+  const g = (repo, args) => cp.spawnSync("git", ["-c", "safe.directory=*", "-C", repo, ...args], { encoding: "utf8", windowsHide: true });
+  const ws = mkRepo("midrun");
+  g(ws, ["init", "-q"]); g(ws, ["config", "user.email", "t@t"]); g(ws, ["config", "user.name", "t"]);
+  g(ws, ["add", "-A"]); g(ws, ["commit", "-qm", "c1"]);
+  fs.mkdirSync(CL.CONTRACTS_DIR, { recursive: true });
+  fs.writeFileSync(CL.contractFileFor(ws, "ko"), JSON.stringify({ scoutMode: "on" }));
+  MB.grantConsent(ws, "test");
+  const r0 = MR.initTopologyForBootstrap(ws);
+  if (r0.st !== "created") throw new Error("init 실패: " + r0.st);
+  const nodeId = MR.readTopoExFor(ws).topo.nodes[0].id;
+  ok(MB.ensureQueue(ws, PM) === true, "(전제) git 기반 큐 생성");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  const hBefore = g(ws, ["rev-parse", "HEAD"]).stdout.trim();
+  // 어댑터가 호출 '도중' 새 커밋을 만든다 — 완료 시점 HEAD 재판독이면 이 커밋이 발췌 없이 소화 처리된다
+  const midAdapter = (ctx) => {
+    fs.writeFileSync(path.join(ws, "src", "midrun.js"), "// mid\n");
+    g(ws, ["add", "-A"]); g(ws, ["commit", "-qm", "mid"]);
+    return goodAdapter(nodeId)(ctx);
+  };
+  fs.writeFileSync(path.join(ws, "src", "dirty.js"), "// dirty\n"); // 입력이 될 작업트리 코드 변경
+  const r = ME.runEnrich(ws, base(ws, { adapters: { self: midAdapter } }));
+  ok(r.outcome === "applied", "실행 자체는 정상 완주(applied)");
+  const baseRec = ME.readConsumedBaseline(ws);
+  ok(!!baseRec && baseRec.head === hBefore, "기준점=입력 계산 시점 커밋(실행 중 커밋으로 전진 금지)");
+  const after = ME.expandChangedWithConsumedDelta(ws, []);
+  ok(after.includes("src/midrun.js"), "실행 중 커밋 파일은 다음 라운드 입력에 남는다(발췌 없는 소화 0)");
 }
 
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
