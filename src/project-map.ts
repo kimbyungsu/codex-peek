@@ -1657,6 +1657,15 @@ export function semanticValidateV2(
       if (!tr || tr.kind !== "node") { errs.push("split_node: 대상 node 미실존"); break; }
       const nn = pl.newNodes as MapNode[];
       for (const n of nn) if (findEntity(t, n.id)) errs.push(`split_node: 신규 id 기존재(${n.id})`);
+      // 해상도 설계 v3 §2-3 — 노드를 '만드는' 다른 연산도 같은 상한을 본다(구현검증 1차 blocker:
+      // split_node로 file 노드 60→62 적용이 실증됨). 사후 수 = 현재 − (원본이 file이면 1) + 신규 file 수.
+      {
+        const curF = (t.nodes || []).filter((x) => x.entityType === "file").length;
+        const srcF = tr.kind === "node" && (tr.ent as MapNode).entityType === "file" ? 1 : 0;
+        const addF = nn.filter((x) => x && x.entityType === "file").length;
+        if (addF && curF - srcF + addF > MAX_FILE_NODES)
+          errs.push(`split_node: file 노드 전체 상한(${MAX_FILE_NODES}) 초과 예정(${curF - srcF + addF}) — 증분 세밀화 상한(해상도 설계 §2-3)`);
+      }
       // edgeReroute 전수성(§C-2): 원본의 모든 인접 edge가 재지향표에 정확히 1회씩.
       const adj = adjacentEdgeIds(t, p.targetId as string);
       const rr = (pl.edgeReroute as Array<{ edgeId: string; to: string }>).map((r) => r.edgeId).sort();

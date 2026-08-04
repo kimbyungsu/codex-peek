@@ -802,5 +802,82 @@ console.log("[12] 해상도 v3 — file 노드 증분 세밀화(add_node+owns �
   ok(!(semUnder && Array.isArray(semUnder.errors) && semUnder.errors.some((e) => /file 노드 전체 상한/.test(e))), "정본 상한 — 상한 미만이면 상한 사유 없음(무회귀)");
 }
 
+console.log("[12b] 해상도 v3 — 실제 재개 e2e(add_node 적용 직후 사망 상태의 영속 장부 → 재개가 owns를 결정론 결속)");
+{
+  const PM9 = MR.PM;
+  const { ws, nodeId } = setup("fnresume");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  const TMP = "11111111-2222-4333-8444-555555555555";
+  const mkFN = (tmpId, p9) => ({ op: "add_node", payload: { node: { id: tmpId, label: "역할", entityType: "file", roles: [], state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" }, anchors: [{ kind: "code", path: p9 }] } }, evidence: [{ file: "src/a.js", quote: "// a" }] });
+  const mkOwns = (tmpId) => ({ op: "add_edge", payload: { edge: { id: "99999999-8888-4777-8666-555555555544", from: nodeId, to: tmpId, relation: "owns", state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" } } }, evidence: [{ file: "src/a.js", quote: "// a" }] });
+  const rA = ME.runEnrich(ws, base(ws, { adapters: { self: () => ({ ok: true, result: { schema: "enrich-result-v1", items: [mkFN(TMP, "src/a.js")] } }) } }));
+  ok(rA.outcome === "applied", "(전제) 1라운드 — add_node만 적용(사망 직전까지의 실상태)");
+  ok(MB.ensureQueue(ws, PM) === true, "(전제) 큐 재작성");
+  const topoB = MR.readTopoExFor(ws).topo;
+  const idxB = MP.decisionIndexFor(ws, topoB.mapId);
+  const { ah } = MP.authorityOf(PM9.mapHashOf(topoB), idxB);
+  const consent = ME.readEnrichConsent(ws);
+  const gen = ME.findGrant(consent, ws, "ko").gen;
+  const startedAt = new Date().toISOString();
+  const jobKey = ME.jobKeyOf(topoB.mapId, ah, null);
+  const items = [mkFN(TMP, "src/a.js"), mkOwns(TMP)];
+  const w = ME.updateEnrichJob(ws, () => ({ schema: "enrich-job-v2", jobKey, mapId: topoB.mapId, authorityHash: ah, decisionContextHash: null, mode: "self", configWs: CL.normWs(ws), slot: "ko", phase: "open", startedAt, attempts: [{ attemptId: 0, provider: "self", consentGen: gen, phase: "applying", startedAt, results: { schema: "enrich-result-v1", items }, cursor: { nextIndex: 1, rev: 0, appliedPatchIds: [ME.detPatchId(ME.jobSeedOf(jobKey, startedAt), 0, 0, 0)] } }] }));
+  ok(w.ok === true, "사망 직후 영속 상태(applying·nextIndex=1)=strict 판독 승인");
+  let calledB = 0;
+  const rB = ME.runEnrich(ws, base(ws, { adapters: { self: () => { calledB++; return { ok: false, detail: "호출되면 안 됨" }; } } }));
+  ok(rB.outcome === "applied" && calledB === 0, "재개=새 호출 0으로 잔여 owns 적용(실제 resumeJob·cursor 경로)");
+  const tB = MR.readTopoExFor(ws).topo;
+  const det = ME.detFileNodeId(tB.mapId, "src/a.js");
+  ok(tB.edges.some((e) => e.relation === "owns" && e.to === det && e.from === nodeId), "재개 복원 매핑=결정론 endpoint(누락·오결속 0 — §5-2b)");
+}
+console.log("[12c] 해상도 v3 — 상한의 '실제 적용 잠금' 경로(propose→classify→apply)+우회 연산(split_node)");
+{
+  const PM9 = MR.PM;
+  const { ws } = setup("fncap");
+  // topology를 정본 파일로 확장: file 노드 60개(상한 도달 상태) — 이후 재판독·큐 재작성으로 정합 유지
+  const tf = path.join(ws, "project-map", "topology.json");
+  const t0 = JSON.parse(fs.readFileSync(tf, "utf8"));
+  for (let i = 0; i < PM9.MAX_FILE_NODES; i++) t0.nodes.push({ id: ME.detFileNodeId(t0.mapId, "src/m" + i + ".js"), label: "m" + i, entityType: "file", roles: [], state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" }, anchors: [{ kind: "code", path: "src/m" + i + ".js" }] });
+  fs.writeFileSync(tf, JSON.stringify(t0));
+  ok(PM9.validateTopology(JSON.parse(fs.readFileSync(tf, "utf8"))).length === 0, "(전제) 60개 file 노드 topology=스키마 유효");
+  const mkLive = (op, fields) => {
+    const topo = MR.readTopoExFor(ws).topo;
+    const idx = MP.decisionIndexFor(ws, topo.mapId);
+    const pol = MP.policyStateFor(ws, topo.mapId);
+    const { ah } = MP.authorityOf(PM9.mapHashOf(topo), idx);
+    const b = { schema: "map-patch-v2", patchId: require("crypto").randomUUID(), mapId: topo.mapId, basis: MP.patchBasisFor(ws, topo), baseMapHash: PM9.mapHashOf(topo), baseAuthorityHash: ah, baseDecisionContextHash: PM9.decisionContextHashOf(ah, pol.pfh), baseDirtyFp: "", operation: op, payload: {}, readSet: {}, rationale: "cap", evidence: [{ kind: "code", ref: "src/a.js" }], ...fields };
+    b.readSet = MP.buildReadSetFor(topo, b, { idx, pol, repoRoot: ws, fileHashOf: (ref) => { try { return sha(fs.readFileSync(path.join(ws, ref), "utf8")); } catch { return null; } } });
+    return PM9.canonicalPatchV2(b);
+  };
+  const capNode = { id: "77777777-6666-4555-8444-333333333333", label: "cap", entityType: "file", roles: [], state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" }, anchors: [{ kind: "code", path: "src/cap.js" }] };
+  const pAdd = mkLive("add_node", { payload: { node: capNode } });
+  ok(MP.proposePatch(ws, pAdd).ok === true, "(전제) 61개째 add_node 수납");
+  const cfAdd = MP.classifyPatch(ws, pAdd.mapId, pAdd.patchId);
+  const apAdd = MP.applyPatch(ws, pAdd.mapId, pAdd.patchId, { preCutover: true });
+  ok(apAdd.ok === false && (JSON.stringify(cfAdd) + JSON.stringify(apAdd)).includes("file 노드 전체 상한"), "61개째 add_node=실제 파이프라인 거부(분류·적용 어느 관문이든 상한 사유 명시 — 적용 0)");
+  ok(MR.readTopoExFor(ws).topo.nodes.filter((n) => n.entityType === "file").length === PM9.MAX_FILE_NODES, "topology file 노드 수=상한 유지(적용 0)");
+  // split_node 우회(구현검증 1차 blocker 재현→차단): file 노드 1개를 file 2개로 쪼개면 60-1+2=61>60 → 거부
+  const srcFile = MR.readTopoExFor(ws).topo.nodes.find((n) => n.entityType === "file");
+  const nn1 = { id: "88888888-7777-4666-8555-444444444444", label: "s1", entityType: "file", roles: [], state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" }, anchors: srcFile.anchors };
+  const nn2 = { id: "88888888-7777-4666-8555-444444444445", label: "s2", entityType: "file", roles: [], state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" }, anchors: [] };
+  const pSplit = mkLive("split_node", { targetId: srcFile.id, payload: { newNodes: [nn1, nn2], edgeReroute: [] } });
+  ok(MP.proposePatch(ws, pSplit).ok === true, "(전제) split_node 수납");
+  const cfSplit = MP.classifyPatch(ws, pSplit.mapId, pSplit.patchId);
+  const apSplit = MP.applyPatch(ws, pSplit.mapId, pSplit.patchId, { preCutover: true });
+  ok(apSplit.ok === false && (JSON.stringify(cfSplit) + JSON.stringify(apSplit)).includes("file 노드 전체 상한"), "split_node 우회=차단(60-1+2=61 거부·사유 명시)");
+  ok(MR.readTopoExFor(ws).topo.nodes.filter((n) => n.entityType === "file").length === PM9.MAX_FILE_NODES, "split 후에도 file 노드 수=상한 유지(우회 적용 0)");
+  // case 반례(§5-4)·변환 시점 판독 재검사(§5-5)
+  const mid = MR.readTopoExFor(ws).topo.mapId;
+  ok(ME.detFileNodeId(mid, "src/A.ts") !== ME.detFileNodeId(mid, "src/a.ts") && ME.detFileNodeId(mid, "src\\A.ts") === ME.detFileNodeId(mid, "src/A.ts"), "결정론 id — case 보존(별개 파일)·구분자만 정규화(같은 파일)");
+  fs.writeFileSync(path.join(ws, "src", "gone9.js"), "// g\n");
+  const topoC = MR.readTopoExFor(ws).topo; const idxC = MP.decisionIndexFor(ws, topoC.mapId); const polC = MP.policyStateFor(ws, topoC.mapId);
+  const itemsC = [{ op: "add_node", payload: { node: { id: "11111111-2222-4333-8444-555555555556", label: "g", entityType: "file", roles: [], state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" }, anchors: [{ kind: "code", path: "src/gone9.js" }] } }, evidence: [{ file: "src/gone9.js", quote: "// g" }] }];
+  const ctxC = { repo: ws, topo: topoC, idx: idxC, pol: polC, fileHashOf: () => sha("x"), jobKey: sha("jk"), attemptId: 0, rev: 0, provider: "self", items: itemsC };
+  ok(ME.toPatchV2(itemsC[0], 0, ctxC).ok === true, "판독 가능=변환 통과");
+  fs.rmSync(path.join(ws, "src", "gone9.js"), { force: true });
+  const convGone = ME.toPatchV2(itemsC[0], 0, ctxC);
+  ok(convGone.ok === false && JSON.stringify(convGone.errors).includes("판독 불가"), "응답 검증 후 anchor 삭제=변환 시점 재검사 거부(§5-5)");
+}
+
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
 process.exit(fail ? 1 : 0);
