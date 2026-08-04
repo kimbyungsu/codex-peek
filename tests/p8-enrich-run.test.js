@@ -879,5 +879,88 @@ console.log("[12c] 해상도 v3 — 상한의 '실제 적용 잠금' 경로(prop
   ok(convGone.ok === false && JSON.stringify(convGone.errors).includes("판독 불가"), "응답 검증 후 anchor 삭제=변환 시점 재검사 거부(§5-5)");
 }
 
+console.log("[12d] 해상도 v3 — '실제 프로세스 사망' e2e: 자식이 add_node 커서 기록 직후 죽고, 부모(딴 프로세스)가 잔재 장부로 재개");
+{
+  const cp = require("child_process");
+  const { ws, nodeId } = setup("fnkill");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  // 자식 러너: fs.renameSync에 개입(내부 atomicWrite도 같은 fs 모듈) — job 파일이 nextIndex:1(applying)로
+  // 갱신되는 '그 순간' exit(9). 몽키패치가 아니라 실제 실행 경로의 실제 쓰기 지점에서의 결정론 사망.
+  const childSrc = [
+    'const fs = require("fs");',
+    'const origRename = fs.renameSync;',
+    'const origUnlink = fs.unlinkSync;',
+    'let armed = false;', // 커서(nextIndex:1) 영속을 관측하면 무장 — 그 쓰기의 잠금 해제 직후 사망
+    'fs.renameSync = function (a, b) {',
+    '  const r = origRename.apply(fs, arguments);',
+    '  try { if (String(b).endsWith(".job.json")) { const s = fs.readFileSync(b, "utf8");',
+    '    if (/"nextIndex":\\s*1(?=[^\\d])/.test(s) && /"phase":\\s*"applying"/.test(s)) armed = true; } } catch { }',
+    '  return r;',
+    '};',
+    'fs.unlinkSync = function (a) {',
+    '  const r = origUnlink.apply(fs, arguments);',
+    '  if (armed && /\\.job\\.json/.test(String(a))) process.exit(9);', // 잠금 해제 직후=적용·영속 완료·해제까지 끝난 정확한 사망 창
+    '  return r;',
+    '};',
+    'const path = require("path");',
+    'const ROOT = process.argv[2], ws = process.argv[3], moduleId = process.argv[4];',
+    'const ME9 = require(path.join(ROOT, "bridge", "map-enrich.js"));',
+    'const TMP = "11111111-2222-4333-8444-555555555555";',
+    'const items = [',
+    '  { op: "add_node", payload: { node: { id: TMP, label: "역할", entityType: "file", roles: [], state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" }, anchors: [{ kind: "code", path: "src/a.js" }] } }, evidence: [{ file: "src/a.js", quote: "// a" }] },',
+    '  { op: "add_edge", payload: { edge: { id: "99999999-8888-4777-8666-555555555544", from: moduleId, to: TMP, relation: "owns", state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" } } }, evidence: [{ file: "src/a.js", quote: "// a" }] },',
+    '];',
+    'const r = ME9.runEnrich(ws, { ws, slot: "ko", mode: "self", readiness: { selfReady: true, economyReady: true, precisionReady: true, autoReady: true }, adapters: { self: () => ({ ok: true, result: { schema: "enrich-result-v1", items } }) }, trigger: "test" });',
+    'console.log("CHILD-DONE " + JSON.stringify(r));',
+  ].join("\n");
+  const childFile = path.join(os.tmpdir(), "p8er_killer_" + Date.now() + ".js");
+  fs.writeFileSync(childFile, childSrc);
+  const ROOT9 = path.join(__dirname, "..");
+  const rc = cp.spawnSync(process.execPath, [childFile, ROOT9, ws, nodeId], { encoding: "utf8", env: { ...process.env }, timeout: 120000, windowsHide: true });
+  ok(rc.status === 9 && !/CHILD-DONE/.test(String(rc.stdout || "")), "자식=add_node 커서 기록 직후 실제 사망(exit 9·완주 출력 없음)");
+  const jMid = ME.readEnrichJob(ws);
+  ok(jMid.st === "ok" && jMid.job.phase === "open" && jMid.job.attempts[0].phase === "applying" && jMid.job.attempts[0].cursor.nextIndex === 1, "잔재 장부=실제 중단 산물(applying·nextIndex=1·strict 판독)");
+  const tMid = MR.readTopoExFor(ws).topo;
+  const det9 = ME.detFileNodeId(tMid.mapId, "src/a.js");
+  ok(tMid.nodes.some((n) => n.id === det9) && !tMid.edges.some((e) => e.relation === "owns"), "사망 시점 실상태=노드만 적용·owns 미적용");
+  ok(MB.ensureQueue(ws, PM) === true, "(전제) 큐 재작성(부트스트랩 소관 — 실제 재개 tick의 선행 단계)");
+  let calledK = 0;
+  const rR = ME.runEnrich(ws, base(ws, { adapters: { self: () => { calledK++; return { ok: false }; } } }));
+  ok(rR.outcome === "applied" && calledK === 0, "부모(다른 프로세스)=잔재 장부 재개·새 호출 0으로 owns 적용");
+  const tEnd = MR.readTopoExFor(ws).topo;
+  ok(tEnd.edges.some((e) => e.relation === "owns" && e.to === det9 && e.from === nodeId), "재개 복원=결정론 endpoint(실사망·실재개 — §5-2b 전문)");
+  try { fs.unlinkSync(childFile); } catch { /* 무해 */ }
+}
+console.log("[12e] 해상도 v3 — '59개 기준' 두 적용 경합: 둘 다 분류를 통과해도 61 도달 불가(잠금 안 재판정)");
+{
+  const PM9 = MR.PM;
+  const { ws } = setup("fnrace");
+  const tf = path.join(ws, "project-map", "topology.json");
+  const t0 = JSON.parse(fs.readFileSync(tf, "utf8"));
+  for (let i = 0; i < PM9.MAX_FILE_NODES - 1; i++) t0.nodes.push({ id: ME.detFileNodeId(t0.mapId, "src/r" + i + ".js"), label: "r" + i, entityType: "file", roles: [], state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" }, anchors: [{ kind: "code", path: "src/r" + i + ".js" }] });
+  fs.writeFileSync(tf, JSON.stringify(t0));
+  const topo59 = MR.readTopoExFor(ws).topo;
+  ok(topo59.nodes.filter((n) => n.entityType === "file").length === PM9.MAX_FILE_NODES - 1, "(전제) 59개 file 노드 상태");
+  const idx59 = MP.decisionIndexFor(ws, topo59.mapId);
+  const pol59 = MP.policyStateFor(ws, topo59.mapId);
+  const { ah: ah59 } = MP.authorityOf(PM9.mapHashOf(topo59), idx59);
+  const mkAt59 = (label9, p9, pid9) => {
+    const b = { schema: "map-patch-v2", patchId: pid9, mapId: topo59.mapId, basis: MP.patchBasisFor(ws, topo59), baseMapHash: PM9.mapHashOf(topo59), baseAuthorityHash: ah59, baseDecisionContextHash: PM9.decisionContextHashOf(ah59, pol59.pfh), baseDirtyFp: "", operation: "add_node", payload: { node: { id: "77777777-6666-4555-8444-33333333333" + label9, label: "race" + label9, entityType: "file", roles: [], state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" }, anchors: [{ kind: "code", path: p9 }] } }, readSet: {}, rationale: "race", evidence: [{ kind: "code", ref: "src/a.js" }] };
+    b.readSet = MP.buildReadSetFor(topo59, b, { idx: idx59, pol: pol59, repoRoot: ws, fileHashOf: (ref) => { try { return sha(fs.readFileSync(path.join(ws, ref), "utf8")); } catch { return null; } } });
+    return PM9.canonicalPatchV2(b);
+  };
+  const pA = mkAt59("1", "src/raceA.js", "aaaaaaa1-0000-4000-8000-000000000001");
+  const pB = mkAt59("2", "src/raceB.js", "aaaaaaa2-0000-4000-8000-000000000002");
+  ok(MP.proposePatch(ws, pA).ok === true && MP.proposePatch(ws, pB).ok === true, "(전제) 두 패치 수납(둘 다 59 기준)");
+  const cA = MP.classifyPatch(ws, pA.mapId, pA.patchId);
+  const cB = MP.classifyPatch(ws, pB.mapId, pB.patchId);
+  ok(!JSON.stringify(cA).includes("file 노드 전체 상한") && !JSON.stringify(cB).includes("file 노드 전체 상한"), "둘 다 59 기준 분류=상한 사유 없음(경합 전제 성립)");
+  const aA = MP.applyPatch(ws, pA.mapId, pA.patchId, { preCutover: true });
+  const aB = MP.applyPatch(ws, pB.mapId, pB.patchId, { preCutover: true });
+  ok(aA.ok === true, "첫 적용=60개째 성공");
+  ok(aB.ok === false, "둘째 적용=잠금 안 재판정 거부(사유: " + String(aB.reasonCode || aB.error || "").slice(0, 60) + ")");
+  ok(MR.readTopoExFor(ws).topo.nodes.filter((n) => n.entityType === "file").length === PM9.MAX_FILE_NODES, "최종=정확히 60(61 도달 불가 실증)");
+}
+
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
 process.exit(fail ? 1 : 0);
