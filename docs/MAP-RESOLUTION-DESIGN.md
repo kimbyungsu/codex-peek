@@ -1,4 +1,4 @@
-# 지도 해상도 증분 상향(file 노드) — 설계 v2 (설계검증 1차 반영 · 확인 대기)
+# 지도 해상도 증분 상향(file 노드) — 설계 v3 (설계검증 2차 반영 · 확인 대기)
 
 > 2026-08-04 작성. 결정 계보: 3트랙 감사(검증 통과보완 — "모듈 9노드 지도는 실제 사고[함수 내부 결함]를
 > 표현할 해상도가 아니다") → 사용자 결정 "2번과 3번도 기능 축의 한계이자 직접적인 문제" + 진행 순서
@@ -6,6 +6,8 @@
 > 도장 승격 조건 고지) 커밋 221c014·166f996·1486c29, 자기치유 실전 완주(9/10 적용) 실증.
 > v2 개정: 설계검증 1차 blocker 4·보완 1 전부 수용(f-9f577fe4·f-7f91cc33·f-f7bfc665·f-3bae8d12·
 > f-aaec461e) — §2-2a 임시 id 결속·§2-2b 판독 실존·§2-3 정본 상한·§2-2c case 보존·§2-5 전제 정정.
+> v3 개정: 2차 재등장 blocker(f-9f577fe4 — 재개 복원·유일성)+보완(f-19cf7c77 — doc anchor 구멍) 수용
+> — §2-2a 매핑=영속 결과의 순수 함수+임시 id 유일성, §2-2b anchor kind∈CODE_EVIDENCE_KINDS.
 
 ## 0. 문제와 방향
 
@@ -56,10 +58,16 @@ item 형태: `{"op":"add_node","payload":{"node":{...}},"evidence":[...]}` — t
   집합에 순차 합류**(가상 topology) — add_edge endpoint는 (기존 노드 ∪ 앞선 add_node의 임시 id)면
   인정. **순서 제약**: 임시 id를 참조하는 item은 그 add_node보다 뒤에 와야 한다(적용이 cursor 순차라
   검증도 같은 순서 — 앞선 참조는 미실존 거부).
-- `toPatchV2` 변환: 라운드 스코프의 **임시 id→결정론 id 매핑**을 유지한다 — add_node의 node.id를
-  결정론 파생값(§2-2c)으로 교체하면서, 같은 결과의 add_edge payload에서 그 임시 id를 참조하는
-  from/to도 **함께 재작성**한다(모델 id와 결정론 id가 갈리는 경로 차단 — 1차 실측 반례). 매핑에 없는
-  미지 id는 기존 topology 실존 검사로 넘어간다(종전과 동일).
+- **임시 id 유일성(2차 blocker 반영)** — 응답 검증에서 강제: ①같은 결과의 add_node들끼리 임시 id
+  중복 금지 ②임시 id가 기존 topology의 노드·엣지 id와 충돌 금지. 어느 쪽이든 위반이면 결과 거부
+  (모호한 매핑 대상이 owns 엣지를 잘못된 노드에 결속하는 경로 차단).
+- `toPatchV2` 변환의 **임시 id→결정론 id 매핑은 별도 상태가 아니라 순수 함수**(2차 blocker 반영):
+  매 변환 호출마다 **장부에 영속된 `results.items[0..현재 index)`의 add_node 항목들로부터 재계산**한다
+  — 각 add_node의 (임시 id → §2-2c 결정론 파생값) 쌍은 영속 결과만으로 언제나 같은 값이 나오므로,
+  add_node 적용 직후 프로세스가 죽고 재개돼도 후속 add_edge 변환이 같은 매핑을 복원한다(별도 영속·
+  라운드 메모리 불요 — 재개 경로가 매핑을 전달하지 않아도 안전). add_node의 node.id를 결정론 파생값
+  으로 교체하고, 같은 결과의 add_edge payload에서 임시 id를 참조하는 from/to도 **함께 재작성**한다.
+  매핑에 없는 미지 id는 기존 topology 실존 검사로 넘어간다(종전과 동일).
 
 #### 2-2b. anchors 자격 — 판독 실존(1차 blocker② 반영)
 
@@ -68,6 +76,10 @@ item 형태: `{"op":"add_node","payload":{"node":{...}},"evidence":[...]}` — t
   성공하며 본문이 비어 있지 않아야** 한다 — 판정은 `excerptFilesFor`+`excerptBodyFor` 단일 경로
   재사용(answerableInput과 동형: 파일명 집합만 보면 "(판독 불가)"로 발췌된 삭제·빈 파일이 노드가 된다).
 - `anchor.kind === evidenceKindOf(path)` 강제(kind 세탁 차단 — currentPatch 결속 계보와 동형).
+- **anchor kind는 `CODE_EVIDENCE_KINDS`(정본 상수 — code/test/config) 소속이어야 한다**(2차 보완
+  반영): evidenceKindOf가 doc으로 분류하는 문서 파일(README 등)은 발췌에 실려 있어도 file 노드가 될 수
+  없다 — '소스 파일의 역할'이라는 정의와 전체 상한 소비를 계약으로 결속(검증·변환 양쪽에서 검사.
+  '자기확인 고리 차단' 관문과 같은 정본을 봄).
 - 이 검사는 **응답 검증(validateEnrichResult)과 변환 시점(toPatchV2) 양쪽**에서 수행한다(호출과 적용
   사이의 파일 소멸 — 재개 경로 포함 — 을 변환 재검사가 받는다. 기존 conversion 재판독 관례와 동형).
 - `node.state.confidence`는 `candidate` 강제(태생 confirmed 금지 — 승격은 이후 라운드·검증 해소 소관).
@@ -131,9 +143,12 @@ buildEnrichPrompt에 add_node 견본 1줄 추가:
 
 1. e2e: add_node(file)+같은 라운드 owns 엣지(임시 id 참조) → 둘 다 적용, topology에 노드·엣지 실재,
    edge endpoint=결정론 id로 재작성 확인, confidence=candidate.
-2. 거부 반례: 발췌 밖 anchor / 판독 불가·빈 본문 anchor / anchor.kind≠evidenceKindOf / entityType≠file
-   / anchors 2개 / confirmed 태생 / 중복 anchor(기존 file 노드 실존) / 라운드 6개째 / 임시 id를 add_node
-   보다 앞서 참조하는 add_edge.
+2. 거부 반례: 발췌 밖 anchor / 판독 불가·빈 본문 anchor / anchor.kind≠evidenceKindOf / doc 계열
+   anchor(README 등 — CODE_EVIDENCE_KINDS 밖) / entityType≠file / anchors 2개 / confirmed 태생 /
+   중복 anchor(기존 file 노드 실존) / 라운드 6개째 / 임시 id를 add_node보다 앞서 참조하는 add_edge /
+   임시 id 상호 중복 / 임시 id=기존 topology id 충돌.
+2b. 재개 복원(2차 blocker 반영): add_node 적용 직후 프로세스 종료 → 재개 → 후속 owns add_edge가
+   영속 결과에서 재계산된 매핑으로 결정론 id에 정확히 결속·적용(누락·오결속 0).
 3. 정본 상한: semanticValidateV2 — 60개째 허용·61개째 거부(보강 아닌 일반 add_node 패치 경로로도
    거부되는지 — 우회 차단 실증). 경합 시나리오: 59개 스냅샷 두 적용이 잠금 안 재검증으로 61 도달 불가.
 4. 결정론 id: 같은 (mapId, 경로) 두 라운드 → 같은 id → 두 번째는 "이미 존재" 거부(이중 방어).
