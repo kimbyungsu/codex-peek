@@ -2049,6 +2049,11 @@ function corruptAskJobFiles() {
   try { names = fs.readdirSync(ASK_JOBS_DIR); } catch { return []; }
   const bad = [];
   for (const n of names) {
+    // §6 checkpoint 부속물(<askId>.checkpoint.json)은 작업 파일이 아니다 — ask-job-v1 스키마 검사에
+    // 걸려 '손상'으로 오판되면 새 작업 생성이 전면 차단된다(2026-08-04 실사고: 재확인 배선이 처음
+    // 실전 작동한 직후 발생). 유효성은 전용 판독기(primaryCheckpointValid)가 자체 검증하고, 이 검사의
+    // 목적(활성 판정 우회 차단)과 무관하므로 제외가 정답.
+    if (n.endsWith(".checkpoint.json")) continue;
     if (n.endsWith(".json")) {
       try {
         const o = JSON.parse(fs.readFileSync(path.join(ASK_JOBS_DIR, n), "utf8"));

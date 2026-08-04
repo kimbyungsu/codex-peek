@@ -56,6 +56,11 @@ const bad = bridge.corruptAskJobFiles();
 ok(bad.includes("ask-broken.json") && bad.includes("ask-array.json") && bad.length === 2, "파싱 불가·비객체 job을 손상으로 진단");
 fs.writeFileSync(path.join(jobsDir, "ask-okjob-aaaaaaaaaa.json"), JSON.stringify({ schema: "ask-job-v1", id: "ask-okjob-aaaaaaaaaa", state: "succeeded", workspace: "D:/x" }));
 ok(bridge.corruptAskJobFiles().length === 2, "정상 job은 손상 목록에 안 들어감");
+// 2026-08-04 실사고: §6 checkpoint 부속물(<askId>.checkpoint.json)은 ask-job-v1 스키마가 아니다 —
+// 재확인 배선이 처음 실전 작동한 직후 이 파일이 '손상'으로 오판돼 새 검증 생성이 전면 차단됐다.
+fs.writeFileSync(path.join(jobsDir, "ask-okjob-aaaaaaaaaa.checkpoint.json"), JSON.stringify({ schema: "primary-complete-v1", jobId: "ask-okjob-aaaaaaaaaa" }));
+ok(bridge.corruptAskJobFiles().length === 2, "checkpoint 부속물은 손상 검사 대상 아님(신규 생성 무차단)");
+fs.unlinkSync(path.join(jobsDir, "ask-okjob-aaaaaaaaaa.checkpoint.json"));
 const src = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
 ok(/const corrupt=corruptAskJobFiles\(\);\s*\n\s*if\(corrupt\.length\)throw/.test(src), "ask-start — 손상 존재 시 신규 생성 차단(fail-closed·임계구역 안)");
 ok(/ask-job clear <id> --confirm/.test(src.split("corruptAskJobFiles();")[2] || src) && /판독 불가\(손상\) 검증 작업 파일/.test(src) && /Unreadable \(corrupt\) verification job file/.test(src), "차단 안내 — 진단·해소 절차(한/영)");
