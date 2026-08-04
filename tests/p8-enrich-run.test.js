@@ -603,5 +603,53 @@ console.log("[9] run-lock 사망 회수 — 동시 복구자 경합(4차: 시작
   ok(stable === true, "3회 반복 전부 — 정확히 1개만 임계구역 진입(장벽 동시 출발+300ms 임계 유지·이중 실행 0)");
 }
 
+console.log("[10] 입력 자기치유(2026-08-04 보류 반복 봉합) — 문서·산출물뿐=호출 0, 코드 오면 자동 재개");
+{
+  // (i) 신규 라운드: 변경이 문서·산출물뿐 → job조차 안 만들고 noop(호출 0·park 0·경보 0)
+  const { ws, nodeId } = setup("docOnly");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  fs.writeFileSync(path.join(ws, "RELEASE.txt"), "release notes\n");
+  fs.writeFileSync(path.join(ws, "bundle.zip"), "zzz\n");
+  let called = 0;
+  const spy = () => { called++; return goodAdapter(nodeId)({}); };
+  const r1 = ME.runEnrich(ws, base(ws, { adapters: { self: spy } }));
+  ok(r1.outcome === "noop" && r1.reason === "input-doc-only", "문서·산출물뿐=noop(input-doc-only)");
+  ok(called === 0 && !fs.existsSync(ME.jobFileFor(ws)), "호출 0·job 파일 미생성(과금 0·보류 경보 0)");
+  // (ii) 코드 변경이 생기면 같은 tick 흐름이 자연 진행 — 정상 적용
+  fs.writeFileSync(path.join(ws, "src", "b.js"), "// b\n");
+  const r2 = ME.runEnrich(ws, base(ws, { adapters: { self: spy } }));
+  ok(r2.outcome === "applied" && called === 1, "코드 변경 도착=자연 진행(applied·호출 1)");
+}
+{
+  // (iii) 답 거부로 park된 job이 '입력이 원천 불가능'해지면 사유를 input-doc-only로 재진단(추가 호출 0)
+  //       → 코드 변경이 오면 사람 없이 재개(retryFrom 이동=과거 실패 플래그 무되돌림).
+  const { ws, nodeId } = setup("heal");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: "economy" });
+  let calls = 0;
+  const badThenGood = () => { calls++; return calls === 1
+    ? { ok: true, result: { schema: "enrich-result-v1", items: [{ op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "doc", ref: "docs/x.md", note: "n" } }, evidence: [{ file: "RELEASE.txt", quote: "release" }] }] } } // doc 단독 근거=관문 거부(답 거부 park 유도)
+    : goodAdapter(nodeId)({}); };
+  fs.writeFileSync(path.join(ws, "src", "c.js"), "// c\n"); // 첫 라운드는 코드 변경 실재(입력 관문 통과)
+  const rA = ME.runEnrich(ws, base(ws, { mode: "economy", adapters: { economy: badThenGood } }));
+  ok(rA.outcome === "parked" && rA.reason === "economy-failed" && calls === 1, "답 거부=economy-failed park(1호출)");
+  // 코드 변경이 사라지고 산출물만 남은 상태(예: 커밋 후 릴리스 파일만 잔존)를 재현 — invSnap 재생성
+  fs.rmSync(path.join(ws, "src", "c.js"), { force: true });
+  ok(MB.ensureQueue(ws, PM) === true, "(전제) 큐 재작성(코드 변경 소진 후 상태)");
+  fs.writeFileSync(path.join(ws, "SHA256SUMS.txt"), "sums\n");
+  const rB = ME.runEnrich(ws, base(ws, { mode: "economy", adapters: { economy: badThenGood } }));
+  ok(rB.outcome === "noop" && rB.parkedReason === "input-doc-only" && calls === 1, "재진단=input-doc-only(자동재시도 과금 차단·추가 호출 0)");
+  const jB = ME.readEnrichJob(ws).job;
+  ok(jB.phase === "parked" && jB.parkedReason === "input-doc-only", "장부 사유 교체(phase parked 유지)");
+  const evB = JSON.parse(fs.readFileSync(path.join(process.env.CODEX_BRIDGE_HOME, "integrity.json"), "utf8")).events.filter((e) => e.kind === "enrich-parked" && !e.ack && CL.normWs(String(e.workspace || "")) === CL.normWs(ws));
+  ok(evB.length === 1 && /input-doc-only/.test(evB[0].detailKo || ""), "경보도 정확한 사유로 교체(이 작업장 동종 대체 — 중복 0)");
+  const rB2 = ME.runEnrich(ws, base(ws, { mode: "economy", adapters: { economy: badThenGood } }));
+  ok(rB2.outcome === "noop" && calls === 1, "여전히 불가능=조용한 대기(재경보·재호출 0)");
+  // (iv) 코드 변경 도착 → 사람 없이 재개·적용
+  fs.writeFileSync(path.join(ws, "src", "d.js"), "// d\n");
+  const rC = ME.runEnrich(ws, base(ws, { mode: "economy", adapters: { economy: badThenGood } }));
+  ok(rC.outcome === "applied" && calls === 2, "코드 변경 도착=자기 재개→적용(총 2호출)");
+  ok(ME.readEnrichJob(ws).job.phase === "done", "장부 done(자기치유 완주)");
+}
+
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
 process.exit(fail ? 1 : 0);

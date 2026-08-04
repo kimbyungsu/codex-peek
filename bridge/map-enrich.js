@@ -538,6 +538,17 @@ function toPatchV2(item, index, ctx) {
   return { ok: true, patch: canon };
 }
 
+// 답이 원천 불가능한 라운드 판정(2026-08-04 실사고 — 보류 반복의 4번째 원인): 발췌=변경 파일뿐이고
+// 근거 인용은 '전송한 발췌' 안에서만 인정되는데, 관문은 code/test/config 계열 증거 최소 1개를 요구한다.
+// 변경 목록이 문서·산출물(zip·체크섬 등)뿐이면 어떤 답도 통과할 수 없으므로 호출 자체를 하지 않는다.
+// changed=null(산출 불가)·빈 배열(발췌가 지도 anchor로 폴백=코드 인용 가능)은 '답 가능' 취급(보수 —
+// 호출 억제는 불가능이 증명될 때만).
+function answerableChanges(changed) {
+  if (!Array.isArray(changed) || !changed.length) return true;
+  const kinds = require(path.join(__dirname, "project-map.js")).CODE_EVIDENCE_KINDS;
+  return changed.some((f) => kinds.includes(evidenceKindOf(f)));
+}
+
 // ── 라우팅 로그(P8-5 — append-only·기록 실패=비차단) ─────────────────────────────
 const ROUTE_LOG = path.join(BRIDGE_DIR, "stats", "map-route.jsonl");
 const ROUTE_LOG_DAYS = 60;
@@ -1005,6 +1016,32 @@ function runEnrichLocked(repo, o, env) {
           if (wRe.ok && !wRe.unchanged) { if (env.p10) env.p10.touch(wRe.job.jobKey, jobRunIdOf(wRe.job)); return resumeJob(repo, o, env, wRe.job, { topo, idx, pol, ah, corridor, changed, srcFp }); }
         }
       }
+      // 입력 자기치유(2026-08-04 보류 반복 봉합 — consent-stale 자기 재개와 같은 관용구):
+      // ⓐ '문서·산출물뿐' 사유로 멈춘 job은 코드 변경이 생기면 사람 없이 재개하고, 여전히 불가능하면
+      //    조용히 대기한다(같은 사유 재경보 없음). ⓑ 답 거부로 멈췄는데 지금 입력이 원천 불가능해졌다면
+      //    사유를 정확한 것으로 바꿔 단다(재시도·자동재시도가 과금만 하고 또 실패할 상태 — 알림도 교체).
+      if (j.parkedReason === "input-doc-only") {
+        if (answerableChanges(changed)) {
+          // retryFrom 이동=수동 '다시 시도' 버튼과 같은 규칙 — 과거 실패 플래그가 재개 즉시 같은 park로
+          // 되돌리는 것 방지(입력이 바뀌었으니 이전 거부는 이 재개의 근거가 아니다).
+          const wIn = updateEnrichJob(repo, (jj) => { if (!jj || jj.phase !== "parked" || jj.parkedReason !== "input-doc-only") return null; const nx = { ...jj, phase: "open", retryFrom: Array.isArray(jj.attempts) ? jj.attempts.length : 0 }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
+          if (wIn.ok && !wIn.unchanged) {
+            log({ route: "input-heal", reason: "code-changes-arrived", outcome: "resumed", jobKey: j.jobKey });
+            if (env.p10) env.p10.touch(wIn.job.jobKey, jobRunIdOf(wIn.job));
+            return resumeJob(repo, o, env, wIn.job, { topo, idx, pol, ah, corridor, changed, srcFp });
+          }
+        }
+        return { outcome: "noop", reason: "parked", parkedReason: "input-doc-only" };
+      }
+      const ANSWER_REJECTED_REASONS = ["precision-failed", "economy-failed", "both-failed", "self-failed"];
+      if (ANSWER_REJECTED_REASONS.includes(String(j.parkedReason || "")) && !answerableChanges(changed)) {
+        const wTr = updateEnrichJob(repo, (jj) => { if (!jj || jj.phase !== "parked" || jj.parkedReason === "input-doc-only") return null; return { ...jj, parkedReason: "input-doc-only" }; });
+        if (wTr.ok && !wTr.unchanged) {
+          log({ route: "input-heal", reason: "rediagnosed-doc-only", outcome: "parked", jobKey: j.jobKey, parkedReason: j.parkedReason || "" });
+          notifyEnrichParked(String(j.configWs || o.ws || repo), "input-doc-only");
+        }
+        return { outcome: "noop", reason: "parked", parkedReason: "input-doc-only" };
+      }
       // 자동 재시도 1회(사용자 결정 2026-08-04): 담당이 실제로 답을 냈는데 그 답이 거부돼 멈춘 경우는
       // 다시 물으면 다른 답이 나올 수 있다. 그래서 '같은 입력이라도 딱 한 번'은 스스로 다시 시도한다.
       // 한도 관리는 retryFrom 재사용 — 이 값이 있으면 이미 한 번(자동이든 수동이든) 재시도한 것이므로
@@ -1047,6 +1084,12 @@ function runEnrichLocked(repo, o, env) {
   // 소스 지문이 같으면(자기 적용 산물) noop. sourceFp 산출 불가(null)=수렴 생략(재실행 허용 쪽 보수).
   if (jr.st === "ok" && jr.job.phase === "done" && srcFp !== null && jr.job.sourceFp === srcFp) return { outcome: "noop", reason: "already-enriched" };
   if (jr.st === "ok" && jr.job.phase === "done" && jr.job.jobKey === jobKey && srcFp === null && jr.job.sourceFp === undefined) return { outcome: "noop", reason: "already-enriched" }; // 폴백은 '둘 다' 산출 불가·기록 부재일 때만(AND — 6차: 한쪽이라도 지문이 있으면 대조 불가=보수적으로 재실행 허용)
+  // 답이 원천 불가능한 신규 라운드는 job조차 만들지 않는다(호출 0·park 0·경보 0 — 코드 변경이 오면
+  // 다음 tick의 새 라운드가 자연 진행. 위 parked/resume 경로보다 뒤라 기존 job 복구는 방해하지 않음).
+  if (!answerableChanges(changed)) {
+    log({ route: "skip", reason: "input-doc-only", outcome: "noop", changedCount: Array.isArray(changed) ? changed.length : null });
+    return { outcome: "noop", reason: "input-doc-only" };
+  }
   // ⑧ 신규 job 생성+attempt 루프(라우터 재호출·승격 1회)
   const nowIso = () => new Date().toISOString();
   const mk = updateEnrichJob(repo, (cur) => {
@@ -1125,6 +1168,9 @@ function runAttempt(repo, o, env, st, provider) {
   if (c2.st !== "ok" || !consentOk) return park((j) => j && { ...j, phase: "parked", parkedReason: "consent-stale", finishedAt: nowIso() }, "consent-stale", { provider, jobKey: st.jobKey });
   const adapter = (o.adapters || {})[provider];
   if (typeof adapter !== "function") return park((j) => j && { ...j, phase: "parked", parkedReason: "adapter-missing:" + provider, finishedAt: nowIso() }, "adapter-missing", { provider, jobKey: st.jobKey });
+  // 호출 직전 최종 관문(수동 '다시 시도'로 재개된 job까지 커버): 답이 원천 불가능한 입력이면 과금
+  // 호출 없이 정확한 사유로 세워 둔다 — 코드 변경이 오면 위 parked 자기치유가 사람 없이 재개한다.
+  if (!answerableChanges(st.changed)) return park((j) => j && { ...j, phase: "parked", parkedReason: "input-doc-only", finishedAt: nowIso() }, "input-doc-only", { provider, jobKey: st.jobKey });
   // attempt 생성(phase running — 호출 '전' 기록: uncertain-call 감사 재료)
   let attemptId = -1;
   const mk = updateEnrichJob(repo, (j) => {

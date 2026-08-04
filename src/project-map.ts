@@ -29,6 +29,9 @@ export const ROLES = ["producer", "consumer", "gate", "authority", "storage"] as
 export const RELATIONS = ["produces", "consumes", "stores", "filters", "calls", "validates", "mutates", "promotes", "mirrors", "owns", "supersedes", "imports"] as const;
 export const ANCHOR_KINDS = ["code", "test", "config", "doc"] as const;
 export const EVIDENCE_KINDS = ["ledger", "ask", "test", "code", "config", "doc"] as const;
+// '자기확인 고리 차단' 관문이 요구하는 실증 계열(2026-08-04 단일 출처화): validator 두 곳이 이 목록을
+// 하드코딩하고 있었고, 보강 요청문·발동 판정은 이 규칙을 모른 채 갈라져 있었다 — 넷이 같은 정본을 본다.
+export const CODE_EVIDENCE_KINDS: readonly string[] = ["code", "test", "config"];
 
 export type Lifecycle = typeof LIFECYCLES[number];
 export type Implementation = typeof IMPLEMENTATIONS[number];
@@ -515,7 +518,7 @@ export function validatePatch(p: MapPatch): string[] {
   if (!Array.isArray(p.evidence) || !p.evidence.length) errs.push("evidence 최소 1개 필요");
   else {
     for (const e of p.evidence) if (validateEvidence(e, "x").length) errs.push("evidence 항목 불량"); // topology와 같은 함수(note 타입 포함 — 7차: 계약 갈림)
-    if (!p.evidence.some((e) => e && typeof e === "object" && (e.kind === "code" || e.kind === "test" || e.kind === "config"))) errs.push("code/test/config 계열 증거 최소 1개(지도·문구 단독 근거 금지 — 자기확인 고리 차단)");
+    if (!p.evidence.some((e) => e && typeof e === "object" && CODE_EVIDENCE_KINDS.includes(e.kind))) errs.push("code/test/config 계열 증거 최소 1개(지도·문구 단독 근거 금지 — 자기확인 고리 차단)");
   }
   unknownKeys(p, PATCH_KEYS, "patch", errs);
   const pl = (p.payload && typeof p.payload === "object" ? p.payload : {}) as Record<string, unknown>;
@@ -931,7 +934,7 @@ export function validatePatchV2(p: MapPatchV2): string[] {
     if (!Array.isArray(p.evidence) || !p.evidence.length) errs.push("evidence 최소 1개 필요");
     else {
       for (const e of p.evidence) if (validateEvidence(e, "x").length) { errs.push("evidence 항목 불량"); break; }
-      if (!p.evidence.some((e) => e && typeof e === "object" && (e.kind === "code" || e.kind === "test" || e.kind === "config"))) errs.push("code/test/config 계열 증거 최소 1개(자기확인 고리 차단)");
+      if (!p.evidence.some((e) => e && typeof e === "object" && CODE_EVIDENCE_KINDS.includes(e.kind))) errs.push("code/test/config 계열 증거 최소 1개(자기확인 고리 차단)");
     }
   }
 

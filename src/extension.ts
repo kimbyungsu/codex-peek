@@ -5110,7 +5110,8 @@ class Dashboard {
     "retry-exhausted": ["재시도 횟수를 다 썼어요","retries were exhausted"],
     "rev-exhausted": ["세대 재시도를 다 썼어요","generation retries were exhausted"],
     "route-loop-guard": ["같은 자리를 맴돌아 멈췄어요","it looped and was stopped"],
-    "uncertain-call": ["호출 결과를 확신할 수 없어 멈췄어요","the call outcome was uncertain, so it stopped"]
+    "uncertain-call": ["호출 결과를 확신할 수 없어 멈췄어요","the call outcome was uncertain, so it stopped"],
+    "input-doc-only": ["최근 변경이 문서·배포 산출물뿐이라 코드 근거를 만들 수 없어요 — 코드 변경이 생기면 자동으로 다시 시작해요","recent changes are only docs/build artifacts, so no code evidence is possible — it will resume automatically when code changes arrive"]
   };
   // 마지막 시도가 왜 실패했는지 — 단계·코드로만 판단한다(자유 문자열은 화면에 오지 않는다).
   // '실행 실패'와 '답은 왔는데 버림'은 사용자가 할 일이 다르므로 문구도 안내도 갈린다.

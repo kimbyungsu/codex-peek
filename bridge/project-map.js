@@ -12,7 +12,7 @@
  * 생성 뷰(MAP.md)를 분리한다(같은 구조를 두 문서에 사람이 유지하면 한쪽이 반드시 낡는다 — HTML 미러 실증).
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PAYLOAD_KEYS_V2 = exports.READSET_RULES = exports.AUTHZ_KINDS = exports.PATCH_OPS_V2 = exports.POLICY_OPS_V2 = exports.PROPOSAL_ONLY_OPS_V2 = exports.TOPOLOGY_OPS_V2 = exports.FREE_FIELD_MAX_DEPTH = exports.PATCH_OPS = exports.EVIDENCE_KINDS = exports.ANCHOR_KINDS = exports.RELATIONS = exports.ROLES = exports.ENTITY_TYPES = exports.CONFIDENCES = exports.IMPLEMENTATIONS = exports.LIFECYCLES = exports.FRESHNESS_NOTE_V2 = exports.FRESHNESS_NOTE_V1_DEFAULT = exports.MAP_SCHEMA_VERSION = void 0;
+exports.PAYLOAD_KEYS_V2 = exports.READSET_RULES = exports.AUTHZ_KINDS = exports.PATCH_OPS_V2 = exports.POLICY_OPS_V2 = exports.PROPOSAL_ONLY_OPS_V2 = exports.TOPOLOGY_OPS_V2 = exports.FREE_FIELD_MAX_DEPTH = exports.PATCH_OPS = exports.CODE_EVIDENCE_KINDS = exports.EVIDENCE_KINDS = exports.ANCHOR_KINDS = exports.RELATIONS = exports.ROLES = exports.ENTITY_TYPES = exports.CONFIDENCES = exports.IMPLEMENTATIONS = exports.LIFECYCLES = exports.FRESHNESS_NOTE_V2 = exports.FRESHNESS_NOTE_V1_DEFAULT = exports.MAP_SCHEMA_VERSION = void 0;
 exports.validateTopology = validateTopology;
 exports.validateTopologyV1 = validateTopologyV1;
 exports.validateNode = validateNode;
@@ -74,6 +74,9 @@ exports.ROLES = ["producer", "consumer", "gate", "authority", "storage"];
 exports.RELATIONS = ["produces", "consumes", "stores", "filters", "calls", "validates", "mutates", "promotes", "mirrors", "owns", "supersedes", "imports"];
 exports.ANCHOR_KINDS = ["code", "test", "config", "doc"];
 exports.EVIDENCE_KINDS = ["ledger", "ask", "test", "code", "config", "doc"];
+// '자기확인 고리 차단' 관문이 요구하는 실증 계열(2026-08-04 단일 출처화): validator 두 곳이 이 목록을
+// 하드코딩하고 있었고, 보강 요청문·발동 판정은 이 규칙을 모른 채 갈라져 있었다 — 넷이 같은 정본을 본다.
+exports.CODE_EVIDENCE_KINDS = ["code", "test", "config"];
 // ── 스키마 검증(불변식) ─────────────────────────────────────────────
 // 예외 안전 표시 — {"toString":null} 같은 정상 JSON 객체는 템플릿 보간(String 변환) 자체가 TypeError
 // (6차 반례: 검증 '전' 값을 오류 문구에 직접 보간하면 validator가 진단 대신 사망). JSON 유래 값은
@@ -610,7 +613,7 @@ function validatePatch(p) {
         for (const e of p.evidence)
             if (validateEvidence(e, "x").length)
                 errs.push("evidence 항목 불량"); // topology와 같은 함수(note 타입 포함 — 7차: 계약 갈림)
-        if (!p.evidence.some((e) => e && typeof e === "object" && (e.kind === "code" || e.kind === "test" || e.kind === "config")))
+        if (!p.evidence.some((e) => e && typeof e === "object" && exports.CODE_EVIDENCE_KINDS.includes(e.kind)))
             errs.push("code/test/config 계열 증거 최소 1개(지도·문구 단독 근거 금지 — 자기확인 고리 차단)");
     }
     unknownKeys(p, PATCH_KEYS, "patch", errs);
@@ -1074,7 +1077,7 @@ function validatePatchV2(p) {
                     errs.push("evidence 항목 불량");
                     break;
                 }
-            if (!p.evidence.some((e) => e && typeof e === "object" && (e.kind === "code" || e.kind === "test" || e.kind === "config")))
+            if (!p.evidence.some((e) => e && typeof e === "object" && exports.CODE_EVIDENCE_KINDS.includes(e.kind)))
                 errs.push("code/test/config 계열 증거 최소 1개(자기확인 고리 차단)");
         }
     }

@@ -125,6 +125,9 @@ function buildEnrichPrompt(ctx) {
     '- {"op":"add_edge","payload":{"edge":{"id":"<새 UUID>","from":"<실존 node id>","to":"<실존 node id>","relation":"' + require(path.join(BR, "project-map.js")).RELATIONS.join("|") + '","state":{"lifecycle":"active","implementation":"runtime","confidence":"candidate"}}},"evidence":[...]} — targetId 금지(relation은 이 목록 값만 허용)',
     '- {"op":"rewrite_label","targetId":"<실존 id>","payload":{"to":{"label":"<개선 라벨>"},"expect":{"label":"<현재 라벨>"}},"evidence":[...],"claims":[{"file":"<파일>","quote":"<원문>","stance":"support"}]}',
     "확실한 근거가 있는 항목만(1~10개 권장). 근거 없는 추측·발췌 밖 인용 금지.",
+    // 관문 규칙 고지(2026-08-04 실사고 — 어휘 드리프트와 같은 병: 기계가 강제하는 규칙을 답하는 쪽이
+    // 몰라 정답이 불가능했다). 계열 목록은 정본 상수에서 생성 — 문서 파일만 인용한 항목은 전부 거부된다.
+    "필수: 각 항목의 evidence에는 코드/테스트/설정 계열 파일(" + require(path.join(BR, "project-map.js")).CODE_EVIDENCE_KINDS.join("/") + " — 확장자 기준 소스·테스트·설정 파일) 최소 1개를 포함하라. 문서(.md/.txt 등)·압축·산출물 파일만 인용한 항목은 자동 거부된다.",
   ].join("\n");
 }
 

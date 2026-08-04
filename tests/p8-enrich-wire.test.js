@@ -35,6 +35,9 @@ console.log("[1] 민감 경로 제외(ab-7) — 정본(scope-package)과 동작 
     const relM = prompt.match(/"relation":"([^"]+)"/);
     ok(!!relM && relM[1] === PM.RELATIONS.join("|"), "add_edge 견본 relation 어휘=정본 RELATIONS 전문 일치(드리프트 잠금)");
     ok(!/reads\|configures|configures\|serves|serves\|tests/.test(prompt), "구 불허 어휘(reads·configures·serves·tests) 잔재 0");
+    // 2026-08-04(2) 실사고 회귀: 기계가 강제하는 '코드 계열 증거 최소 1개' 관문을 요청문이 고지하는지 —
+    // 고지 목록도 정본 상수(CODE_EVIDENCE_KINDS)에서 생성돼야 한다(어휘 드리프트 재발 차단 동형).
+    ok(prompt.includes("필수: 각 항목의 evidence에는 코드/테스트/설정 계열 파일(" + PM.CODE_EVIDENCE_KINDS.join("/") + "") && /자동 거부된다/.test(prompt), "관문 고지=정본 상수 기반(코드 계열 최소 1개)");
   }
   // 2차 blocker①(ab-7): anchor '경로명'도 topology 직렬화에서 제외 — 수정 전엔 anchors= 줄로 누출됐다.
   const pT = EP.buildEnrichPrompt({ repo: ws0, topo: { nodes: [{ id: U(2), label: "S", entityType: "module", state: {}, anchors: [{ kind: "code", path: "config/secrets/leak-me.json" }, { kind: "code", path: "app.js" }] }], edges: [] }, changed: ["app.js"] });
