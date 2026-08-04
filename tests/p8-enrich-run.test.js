@@ -644,6 +644,12 @@ console.log("[10] 입력 자기치유(2026-08-04 보류 반복 봉합) — 문�
   ok(evB.length === 1 && /input-doc-only/.test(evB[0].detailKo || ""), "경보도 정확한 사유로 교체(이 작업장 동종 대체 — 중복 0)");
   const rB2 = ME.runEnrich(ws, base(ws, { mode: "economy", adapters: { economy: badThenGood } }));
   ok(rB2.outcome === "noop" && calls === 1, "여전히 불가능=조용한 대기(재경보·재호출 0)");
+  // 수동 '다시 시도' 반복=경보 중복 금지(2026-08-04 사용자 실보고): 같은 사유가 이미 열려 있으면 재발행 0
+  ME.updateEnrichJob(ws, (jj) => { if (!jj || jj.phase !== "parked") return null; const nx = { ...jj, phase: "open", retryFrom: jj.attempts.length }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
+  const rRe = ME.runEnrich(ws, base(ws, { mode: "economy", adapters: { economy: badThenGood } }));
+  ok(rRe.outcome === "parked" && rRe.reason === "input-doc-only" && calls === 1, "수동 재시도도 호출 직전 관문이 과금 없이 정지");
+  const evRe = JSON.parse(fs.readFileSync(path.join(process.env.CODEX_BRIDGE_HOME, "integrity.json"), "utf8")).events.filter((e) => e.kind === "enrich-parked" && !e.ack && CL.normWs(String(e.workspace || "")) === CL.normWs(ws));
+  ok(evRe.length === 1, "같은 사유 재멈춤=경보 재발행 0(열린 1건 유지 — 반복 체감 차단)");
   // (iv) 코드 변경 도착 → 사람 없이 재개·적용
   fs.writeFileSync(path.join(ws, "src", "d.js"), "// d\n");
   const rC = ME.runEnrich(ws, base(ws, { mode: "economy", adapters: { economy: badThenGood } }));

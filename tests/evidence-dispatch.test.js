@@ -155,6 +155,15 @@ console.log("[7] cmdAsk 배선 순서(소스 잠금) — 경보 시점 동결→
   ck("루트=동결 스냅샷 값 직접·절대경로만(helper 폴백·상대값 편입 금지)", src.includes("if (chScout && path.isAbsolute(chScout)) chRoots.push(chScout)") && !/const chRoots = \[exec, ws\];[\s\S]{0,400}?resolveScoutRepo\(/.test(src) && !/function maybeDispatchChallenge[\s\S]{0,2600}?loadContract\(/.test(src));
   ck("동결은 이벤트 저장 확인 후(경보 없는 전송 금지)", src.includes("readIntegrityEvents().some((e) => e.id === evId)"));
   ck("발송은 예산 게이트·시도 기록을 안 씀(B — 격리)", !/function maybeDispatchChallenge[\s\S]{0,2600}?(reserveVerifyBudgetGate|beginVerifyAttempt|writeProof\(|machineFindingsLayer|flagVerdict)/.test(src));
+  // 2026-08-04 실사고: durableEnv는 {ok, job} 감싸개 — 알맹이를 안 꺼내면 checkpoint가 job.id 부재로
+  // 전량 실패해 예약 검증 경로에서 발송이 0건이었다(동결→다음 턴 stale 수렴→outcome-unknown만 누적).
+  ck("checkpoint에는 알맹이(durableEnv.job)를 넘긴다(감싸개 금지)", /writePrimaryComplete\([^,]+, durableEnv\.job, outText/.test(src) && !/writePrimaryComplete\([^,]+, durableEnv, outText/.test(src));
+  ck("challenge 결속 campaignId도 알맹이에서(감싸개=항상 direct 오염 차단)", src.includes('campaignId: (durableEnv && durableEnv.ok && durableEnv.job.campaignId) || "direct"'));
+  // 실행 반례: 감싸개를 넘기면 writePrimaryComplete가 반드시 거부한다(이 계약이 위 배선 규칙의 근거)
+  {
+    const wrapper = { ok: true, job: { id: "ask-x-1", workspace: "D:/w", implementerTurnId: null, implementerRevision: null } };
+    ck("실행 반례 — 감싸개 입력=checkpoint 거부(null)", ech.writePrimaryComplete(os.tmpdir(), wrapper, "본문", { verifierSession: "s", proofFile: "p.json", proofFp: "f" }) === null);
+  }
 }
 
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);

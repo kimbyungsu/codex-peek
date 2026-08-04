@@ -3130,7 +3130,9 @@ async function cmdAsk(rest) {
     if (chScout && path.isAbsolute(chScout)) chRoots.push(chScout);
     const evAlert = flagEvidence(answer, ws, link.codexSession, exec, {
       roots: chRoots, promptText, mode: harnessModeSnap, lang: langSnap,
-      campaignId: (durableEnv && durableEnv.campaignId) || "direct", askId,
+      // durableEnv는 {ok, job} 감싸개(2026-08-04 실사고): 알맹이를 꺼내지 않으면 campaignId가 항상
+      // "direct"로 새고, 아래 checkpoint는 job.id 부재로 전량 실패해 재확인이 영영 발송되지 않았다.
+      campaignId: (durableEnv && durableEnv.ok && durableEnv.job.campaignId) || "direct", askId,
     }); // 결정2: 인용 근거 존재성+다룬 흔적 점검(경로해석=작업폴더 exec). 라벨=연 폴더 ws. 반환=경보 id+동결된 challenge id
     flagLedgerConfirms(answer, ws, link.codexSession, exec, { askId, attach: attCarrier }); // 로드맵 ④ L1-A: 등급·echo·askId·seen을 이벤트에
     collectScoutTargetEvidence(answer, ws, exec); // 정찰 대상 자기진단 증거(2026-07-10 — 판정 무관·3트랙만·실패 무해)
@@ -3150,8 +3152,11 @@ async function cmdAsk(rest) {
     let ckptOk = !durableEnv; // 직접 ask는 checkpoint 불요(보호할 내구 상태 없음)
     if (durableEnv && evAlert && evAlert.challengeId) {
       ckptOk = false;
-      if (proofBind.proofFile) {
-        try { ckptOk = !!require("./evidence-challenge.js").writePrimaryComplete(path.dirname(String(process.env.CODEX_BRIDGE_JOB_PROMPT_FILE || "")), durableEnv, outText, { verifierSession: link.codexSession, proofFile: proofBind.proofFile, proofFp: proofBind.proofFp }); } catch { ckptOk = false; }
+      // 알맹이(job)를 넘긴다(2026-08-04 실사고): 감싸개 {ok, job}을 그대로 넘기면 writePrimaryComplete가
+      // job.id 부재로 항상 null → ckptOk 영구 false → 예약 검증 경로에서 재확인이 한 번도 발송되지 못했다
+      // (동결만 되고 다음 턴 stale 수렴으로 전량 outcome-unknown — 경보만 남는 실측 패턴의 원인).
+      if (proofBind.proofFile && durableEnv.ok) {
+        try { ckptOk = !!require("./evidence-challenge.js").writePrimaryComplete(path.dirname(String(process.env.CODEX_BRIDGE_JOB_PROMPT_FILE || "")), durableEnv.job, outText, { verifierSession: link.codexSession, proofFile: proofBind.proofFile, proofFp: proofBind.proofFp }); } catch { ckptOk = false; }
       }
     }
     process.stdout.write(outText);

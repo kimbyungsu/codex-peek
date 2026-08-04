@@ -282,6 +282,15 @@ function notifyEnrichParked(wsLabel, reason) {
   try {
     const wsLbl = String(wsLabel || "");
     if (!wsLbl) return;
+    // 같은 사유의 열린 경보가 이미 있으면 재발행하지 않는다(2026-08-04 사용자 실보고: '다시 시도'를
+    // 누를 때마다 같은 멈춤 경보가 새로 떠 반복처럼 보임). 사유가 다르면 종전대로 동종 교체(정확한
+    // 최신 사유 1건 유지). 확인(ack)된 경보는 대상 아님 — 상태가 그대로면 조용, 새 사건이면 재발행.
+    try {
+      const openSame = (CL.readIntegrityEvents() || []).some((e) => e && !e.ack && e.kind === "enrich-parked"
+        && e.workspace && CL.normWs(String(e.workspace)) === CL.normWs(wsLbl)
+        && String(e.detailKo || e.detail || "").includes(`(사유: ${reason})`));
+      if (openSame) return;
+    } catch { /* 판독 실패=종전 동작(교체 발행) */ }
     CL.appendIntegrityEvent({
       ts: new Date().toISOString(), workspace: wsLbl, kind: "enrich-parked", severity: "warning",
       detailKo: `지도 자동 보강이 멈췄습니다(사유: ${reason}) — 대시보드의 '자동 보강' 줄에서 원인과 다시 시도를 확인하세요.`,
