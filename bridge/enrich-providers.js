@@ -69,9 +69,12 @@ function capLines(lines, budget) {
 // 5차 blocker①(f-d1ff694e): 초장 anchor 경로가 발췌 제목("### <경로>")으로 총량 상한을 우회 —
 // 경로 자체가 이 길이를 넘는 파일은 발췌 대상에서 제외(제목 절단은 모델의 file 인용과 어긋나므로 금지)+고지.
 const EXCERPT_PATH_MAX = 200;
-function buildEnrichPrompt(ctx) {
-  const t = sliceTopology(ctx.topo || {}, ctx.changed);
-  // 2차 blocker①(ab-7): 민감 경로는 '경로명 자체'도 topology 직렬화에서 제외 — 발췌만 걸러선 anchor 줄로 새어나간다.
+// 발췌 파일 선정(단일 경로 — 검증 blocker 2026-08-04(2)): 발동 관문(answerable 판정)이 '원시 변경
+// 목록'을 보면 실제 발송 발췌(민감·초장 경로 필터+상한 20+slice 앵커 우선 정렬)와 갈라져, 상한 밖
+// 코드·민감 경로 코드·앵커 폴백 같은 반례에서 답 불가능한 호출이 그대로 나간다. 그래서 선정 로직을
+// 이 한 함수로 추출해 프롬프트 조립과 관문이 '같은 함수'를 쓴다(복제 금지 — 정렬·어휘 드리프트와 동형).
+function excerptSelectionFor(topo, changed) {
+  const t = sliceTopology(topo || {}, changed);
   const anchorsOf = (n) => {
     const list = (n.anchors || []).map((a) => a.path).filter((p9) => !isSensitiveEnrichPath(p9));
     const shown = list.slice(0, NODE_ANCHORS_MAX).map((p9) => String(p9).slice(0, 200));
@@ -80,28 +83,33 @@ function buildEnrichPrompt(ctx) {
   const nodeLines = (t.nodes || []).map((n) => `- node ${n.id} [${String(n.label || "").slice(0, 120)}] ${n.entityType} conf=${(n.state || {}).confidence} anchors=${anchorsOf(n)}`);
   const nCap = capLines(nodeLines, Math.floor(TOPO_CHARS_MAX * 0.8));
   const shownNodes = nCap.keptIdx.map((i) => (t.nodes || [])[i]);
-  // 6차 blocker(ab-3): edge는 '실제 표시된 노드' 양끝만 직렬화 — 문자 예산으로 숨은 endpoint의 엣지가
-  // 남으면 모델이 표시 발췌를 그 엣지에 결속해 auto 적용되는 경로가 열린다(slice 자기완결).
   const shownIds9 = new Set(shownNodes.map((n) => n.id));
   const visEdges = (t.edges || []).filter((e) => shownIds9.has(e.from) && shownIds9.has(e.to));
   const edgeLines = visEdges.map((e) => `- edge ${e.id} ${e.from} -${String(e.relation || "").slice(0, 40)}-> ${e.to} conf=${(e.state || {}).confidence}`);
   const eCap = capLines(edgeLines, TOPO_CHARS_MAX - Math.min(TOPO_CHARS_MAX * 0.8, nCap.text.length));
-  const nodes = nCap.text, edges = eCap.text;
-  const shownN = nodeLines.length - nCap.dropped, shownE = edgeLines.length - eCap.dropped;
-  const truncNote = (t.totalNodes > shownN || t.totalEdges > shownE)
-    ? `(지도 일부만 표시: node ${shownN}/${t.totalNodes} · edge ${shownE}/${t.totalEdges} — 이번 변경과 연결된 항목 우선)` : "";
-  // 4차 blocker②(ab-3, fix-induced): 발췌 파일을 slice와 결속 — 변경 목록이 상한을 넘을 때 slice에
-  // 앵커된 파일을 먼저 취해, '직렬화된 노드'와 '발췌 파일'이 서로 무관해지는 분리 선택을 차단한다.
-  // 5차 blocker②(ab-3): 결속 기준은 '절단 전 slice'가 아니라 capLines가 실제로 유지한 표시 노드 —
-  // 문자 예산으로 탈락한 노드의 anchor가 발췌 우선순위를 차지하는 재분리를 막는다(shownNodes는 위에서 산출).
   const sliceAnchored = new Set(shownNodes.flatMap((n) => (n.anchors || []).map((a) => a.path)));
-  const changed9 = Array.isArray(ctx.changed) && ctx.changed.length ? ctx.changed : null;
+  const changed9 = Array.isArray(changed) && changed.length ? changed : null;
   const ordered = changed9
     ? [...changed9.filter((f) => sliceAnchored.has(f)), ...changed9.filter((f) => !sliceAnchored.has(f))]
     : [...sliceAnchored];
   const okPath = (f) => !isSensitiveEnrichPath(f) && String(f).length <= EXCERPT_PATH_MAX; // 민감 경로+초장 경로=목록에서부터 제외(ab-7·f-d1ff694e)
   const files = ordered.filter(okPath).slice(0, FILES_MAX);
   const longExcluded = ordered.filter((f) => !isSensitiveEnrichPath(f) && String(f).length > EXCERPT_PATH_MAX).length;
+  return { t, nCap, eCap, nodeLines, edgeLines, files, longExcluded };
+}
+// 관문용 공개 API: 이 topo·변경 목록으로 '실제로 발송될' 발췌 파일 목록(프롬프트와 같은 계산).
+function excerptFilesFor(topo, changed) { return excerptSelectionFor(topo, changed).files; }
+
+function buildEnrichPrompt(ctx) {
+  const sel = excerptSelectionFor(ctx.topo, ctx.changed);
+  const t = sel.t;
+  // 직렬화·발췌 선정은 전부 excerptSelectionFor 한 곳(위 주석 계보: ab-7 민감 경로·6차 표시 노드
+  // 자기완결·4~5차 slice 결속 — 관문과의 단일 경로 계약이 추가됨).
+  const { nCap, eCap, nodeLines, edgeLines, files, longExcluded } = sel;
+  const nodes = nCap.text, edges = eCap.text;
+  const shownN = nodeLines.length - nCap.dropped, shownE = edgeLines.length - eCap.dropped;
+  const truncNote = (t.totalNodes > shownN || t.totalEdges > shownE)
+    ? `(지도 일부만 표시: node ${shownN}/${t.totalNodes} · edge ${shownE}/${t.totalEdges} — 이번 변경과 연결된 항목 우선)` : "";
   const excerpts = files.map((f) => {
     let body = "";
     try { body = fs.readFileSync(path.join(ctx.repo, f), "utf8").slice(0, FILE_EXCERPT_MAX); } catch { body = "(판독 불가)"; }
@@ -253,4 +261,4 @@ function askVerifierResolution(req) {
   } finally { try { fs.rmSync(tmpCwd, { recursive: true, force: true }); } catch { /* 무해 */ } }
 }
 
-module.exports = { ENRICH_ADAPTERS, buildEnrichPrompt, parseResult, askVerifierResolution, sliceTopology, SELF_DENY, FILE_EXCERPT_MAX, FILES_MAX, SLICE_NODES_MAX, SLICE_EDGES_MAX, NODE_ANCHORS_MAX, TOPO_CHARS_MAX, EXCERPT_PATH_MAX };
+module.exports = { ENRICH_ADAPTERS, buildEnrichPrompt, excerptFilesFor, parseResult, askVerifierResolution, sliceTopology, SELF_DENY, FILE_EXCERPT_MAX, FILES_MAX, SLICE_NODES_MAX, SLICE_EDGES_MAX, NODE_ANCHORS_MAX, TOPO_CHARS_MAX, EXCERPT_PATH_MAX };

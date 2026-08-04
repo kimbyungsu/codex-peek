@@ -538,15 +538,18 @@ function toPatchV2(item, index, ctx) {
   return { ok: true, patch: canon };
 }
 
-// 답이 원천 불가능한 라운드 판정(2026-08-04 실사고 — 보류 반복의 4번째 원인): 발췌=변경 파일뿐이고
-// 근거 인용은 '전송한 발췌' 안에서만 인정되는데, 관문은 code/test/config 계열 증거 최소 1개를 요구한다.
-// 변경 목록이 문서·산출물(zip·체크섬 등)뿐이면 어떤 답도 통과할 수 없으므로 호출 자체를 하지 않는다.
-// changed=null(산출 불가)·빈 배열(발췌가 지도 anchor로 폴백=코드 인용 가능)은 '답 가능' 취급(보수 —
-// 호출 억제는 불가능이 증명될 때만).
-function answerableChanges(changed) {
-  if (!Array.isArray(changed) || !changed.length) return true;
-  const kinds = require(path.join(__dirname, "project-map.js")).CODE_EVIDENCE_KINDS;
-  return changed.some((f) => kinds.includes(evidenceKindOf(f)));
+// 답이 원천 불가능한 라운드 판정(2026-08-04 실사고 — 보류 반복의 4번째 원인): 근거 인용은 '전송한
+// 발췌' 안에서만 인정되는데, 관문은 code/test/config 계열 증거 최소 1개를 요구한다. 판정 기준은 원시
+// 변경 목록이 아니라 '실제로 발송될 발췌 파일'(검증 blocker — 필터·상한 20·앵커 폴백까지 프롬프트와
+// 같은 함수 excerptFilesFor로 계산: 상한 밖 코드·민감 경로 코드·문서 앵커 폴백 반례 전부 커버).
+// 발췌 0건=인용 가능한 원문 자체가 없음=불가. 판정 실패(예외)만 '답 가능' 취급(보수 — 억제는 확실할 때만).
+function answerableInput(topo, changed) {
+  try {
+    const files = require(path.join(__dirname, "enrich-providers.js")).excerptFilesFor(topo, changed);
+    if (!Array.isArray(files) || !files.length) return false;
+    const kinds = require(path.join(__dirname, "project-map.js")).CODE_EVIDENCE_KINDS;
+    return files.some((f) => kinds.includes(evidenceKindOf(f)));
+  } catch { return true; }
 }
 
 // ── 라우팅 로그(P8-5 — append-only·기록 실패=비차단) ─────────────────────────────
@@ -1021,7 +1024,7 @@ function runEnrichLocked(repo, o, env) {
       //    조용히 대기한다(같은 사유 재경보 없음). ⓑ 답 거부로 멈췄는데 지금 입력이 원천 불가능해졌다면
       //    사유를 정확한 것으로 바꿔 단다(재시도·자동재시도가 과금만 하고 또 실패할 상태 — 알림도 교체).
       if (j.parkedReason === "input-doc-only") {
-        if (answerableChanges(changed)) {
+        if (answerableInput(topo, changed)) {
           // retryFrom 이동=수동 '다시 시도' 버튼과 같은 규칙 — 과거 실패 플래그가 재개 즉시 같은 park로
           // 되돌리는 것 방지(입력이 바뀌었으니 이전 거부는 이 재개의 근거가 아니다).
           const wIn = updateEnrichJob(repo, (jj) => { if (!jj || jj.phase !== "parked" || jj.parkedReason !== "input-doc-only") return null; const nx = { ...jj, phase: "open", retryFrom: Array.isArray(jj.attempts) ? jj.attempts.length : 0 }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
@@ -1034,7 +1037,7 @@ function runEnrichLocked(repo, o, env) {
         return { outcome: "noop", reason: "parked", parkedReason: "input-doc-only" };
       }
       const ANSWER_REJECTED_REASONS = ["precision-failed", "economy-failed", "both-failed", "self-failed"];
-      if (ANSWER_REJECTED_REASONS.includes(String(j.parkedReason || "")) && !answerableChanges(changed)) {
+      if (ANSWER_REJECTED_REASONS.includes(String(j.parkedReason || "")) && !answerableInput(topo, changed)) {
         const wTr = updateEnrichJob(repo, (jj) => { if (!jj || jj.phase !== "parked" || jj.parkedReason === "input-doc-only") return null; return { ...jj, parkedReason: "input-doc-only" }; });
         if (wTr.ok && !wTr.unchanged) {
           log({ route: "input-heal", reason: "rediagnosed-doc-only", outcome: "parked", jobKey: j.jobKey, parkedReason: j.parkedReason || "" });
@@ -1086,7 +1089,7 @@ function runEnrichLocked(repo, o, env) {
   if (jr.st === "ok" && jr.job.phase === "done" && jr.job.jobKey === jobKey && srcFp === null && jr.job.sourceFp === undefined) return { outcome: "noop", reason: "already-enriched" }; // 폴백은 '둘 다' 산출 불가·기록 부재일 때만(AND — 6차: 한쪽이라도 지문이 있으면 대조 불가=보수적으로 재실행 허용)
   // 답이 원천 불가능한 신규 라운드는 job조차 만들지 않는다(호출 0·park 0·경보 0 — 코드 변경이 오면
   // 다음 tick의 새 라운드가 자연 진행. 위 parked/resume 경로보다 뒤라 기존 job 복구는 방해하지 않음).
-  if (!answerableChanges(changed)) {
+  if (!answerableInput(topo, changed)) {
     log({ route: "skip", reason: "input-doc-only", outcome: "noop", changedCount: Array.isArray(changed) ? changed.length : null });
     return { outcome: "noop", reason: "input-doc-only" };
   }
@@ -1170,7 +1173,7 @@ function runAttempt(repo, o, env, st, provider) {
   if (typeof adapter !== "function") return park((j) => j && { ...j, phase: "parked", parkedReason: "adapter-missing:" + provider, finishedAt: nowIso() }, "adapter-missing", { provider, jobKey: st.jobKey });
   // 호출 직전 최종 관문(수동 '다시 시도'로 재개된 job까지 커버): 답이 원천 불가능한 입력이면 과금
   // 호출 없이 정확한 사유로 세워 둔다 — 코드 변경이 오면 위 parked 자기치유가 사람 없이 재개한다.
-  if (!answerableChanges(st.changed)) return park((j) => j && { ...j, phase: "parked", parkedReason: "input-doc-only", finishedAt: nowIso() }, "input-doc-only", { provider, jobKey: st.jobKey });
+  if (!answerableInput(st.topo, st.changed)) return park((j) => j && { ...j, phase: "parked", parkedReason: "input-doc-only", finishedAt: nowIso() }, "input-doc-only", { provider, jobKey: st.jobKey });
   // attempt 생성(phase running — 호출 '전' 기록: uncertain-call 감사 재료)
   let attemptId = -1;
   const mk = updateEnrichJob(repo, (j) => {
@@ -1633,6 +1636,6 @@ function cliMain(argv) {
   return r.outcome === "applied" || r.outcome === "settled" || r.outcome === "noop" ? 0 : r.outcome === "busy" ? 3 : 1;
 }
 
-module.exports = { ENRICH_DIR, repoKeyFor, consentFileFor, jobFileFor, deferredFileFor, readEnrichConsent, grantEnrichConsent, revokeEnrichConsent, findGrant, readEnrichJob, updateEnrichJob, readDeferred, deferredSummary, enrichOutcomeSummary, recoverDeferredCalls, beginDeferredCall, finishDeferredCall, retryDeferredResolutions, jobKeyOf, jobSeedOf, jobRunIdOf, detPatchId, validateEnrichResult, toPatchV2, evidenceKindOf, appendRouteLog, historylessChanges, computeSourceFp, runEnrich, cliMain, ROUTE_LOG, JOB_PHASES, ATTEMPT_PHASES, ENRICH_TARGET_OPS };
+module.exports = { ENRICH_DIR, answerableInput, repoKeyFor, consentFileFor, jobFileFor, deferredFileFor, readEnrichConsent, grantEnrichConsent, revokeEnrichConsent, findGrant, readEnrichJob, updateEnrichJob, readDeferred, deferredSummary, enrichOutcomeSummary, recoverDeferredCalls, beginDeferredCall, finishDeferredCall, retryDeferredResolutions, jobKeyOf, jobSeedOf, jobRunIdOf, detPatchId, validateEnrichResult, toPatchV2, evidenceKindOf, appendRouteLog, historylessChanges, computeSourceFp, runEnrich, cliMain, ROUTE_LOG, JOB_PHASES, ATTEMPT_PHASES, ENRICH_TARGET_OPS };
 
 if (require.main === module) process.exit(cliMain(process.argv));
