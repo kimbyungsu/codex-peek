@@ -38,6 +38,10 @@ console.log("[1] 민감 경로 제외(ab-7) — 정본(scope-package)과 동작 
     // 2026-08-04(2) 실사고 회귀: 기계가 강제하는 '코드 계열 증거 최소 1개' 관문을 요청문이 고지하는지 —
     // 고지 목록도 정본 상수(CODE_EVIDENCE_KINDS)에서 생성돼야 한다(어휘 드리프트 재발 차단 동형).
     ok(prompt.includes("필수: 각 항목의 evidence에는 코드/테스트/설정 계열 파일(" + PM.CODE_EVIDENCE_KINDS.join("/") + "") && /자동 거부된다/.test(prompt), "관문 고지=정본 상수 기반(코드 계열 최소 1개)");
+    // 해상도 v3 §2-4 — add_node 견본·조건 고지(상한=정본 상수·roles 포함=스키마 미고지 거부 재발 방지)
+    ok(prompt.includes('"op":"add_node"') && prompt.includes('"entityType":"file"') && prompt.includes('"roles":[]'), "add_node 견본 실재(file·roles 포함 — 스키마 전문)");
+    ok(prompt.includes("라운드당 최대 " + PM.ENRICH_ADD_NODE_PER_ROUND + "개") && /confidence는 candidate만/.test(prompt), "고지=정본 상수 기반(라운드 상한·candidate 강제)");
+    ok(/add_node "뒤" 순서로 제안 권장/.test(prompt) && /임시 id 사용 가능/.test(prompt), "owns 동반·순서 제약·임시 id 규칙 고지");
   }
   // 검증 blocker(2026-08-04(2)): 발동 관문은 '실제 발송 발췌'와 같은 파일 집합·판독을 봐야 한다 —
   // 원시 changed 판정이면 상한 20 밖 코드·민감 경로 코드·앵커 폴백·삭제된 코드 반례에서 답 불가능한

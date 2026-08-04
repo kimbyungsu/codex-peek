@@ -22,7 +22,9 @@ export const IMPLEMENTATIONS = ["runtime", "partial", "deferred"] as const;
 export const CONFIDENCES = ["confirmed", "candidate", "unknown"] as const;
 // freshness는 '저장하지 않는다'(저장하면 즉시 낡는 값) — lastVerifiedAt/lastSeenAt만 저장, 판정은 유도.
 // v1 판정기는 미구현: 상태 표시는 '신선도 판정 미지원'(verifiedHead·anchor 내용 지문은 후속 — 설계검증 합의).
-export const ENTITY_TYPES = ["module", "store", "boundary", "external", "process"] as const;
+// "file"(2026-08-04 해상도 설계 v3 §2-1): 소스 파일 1개의 역할 노드 — 사고·수리 자리부터 증분 세밀화.
+// 어휘 확장 규칙(추가만 — schemaVersion 불변) 준수. anchors는 정확히 그 파일 1개(보강 계약이 강제).
+export const ENTITY_TYPES = ["module", "store", "boundary", "external", "process", "file"] as const;
 export const ROLES = ["producer", "consumer", "gate", "authority", "storage"] as const;
 // 관계 — 외부 평가 11종+imports(정적 의존 — 런타임 호출(calls)·신호 소비(consumes)와 섞으면 안 됨: 설계검증).
 // 확장 규칙: 추가만 허용(제거·의미 변경은 schemaVersion 상향과 마이그레이션 동반).
@@ -32,6 +34,11 @@ export const EVIDENCE_KINDS = ["ledger", "ask", "test", "code", "config", "doc"]
 // '자기확인 고리 차단' 관문이 요구하는 실증 계열(2026-08-04 단일 출처화): validator 두 곳이 이 목록을
 // 하드코딩하고 있었고, 보강 요청문·발동 판정은 이 규칙을 모른 채 갈라져 있었다 — 넷이 같은 정본을 본다.
 export const CODE_EVIDENCE_KINDS: readonly string[] = ["code", "test", "config"];
+// 해상도 설계 v3 §2-3 — 폭발 방지 상한(정본 소유: 검사 권위는 semanticValidateV2의 적용 잠금 안).
+// MAX_FILE_NODES=지도 전체 file 노드 상한(일반 add_node 패치 경로 포함 전 생산자 공통).
+// ENRICH_ADD_NODE_PER_ROUND=보강 결과 1회당 add_node 상한(응답 형태 검증·프롬프트 고지가 같은 값을 봄).
+export const MAX_FILE_NODES = 60;
+export const ENRICH_ADD_NODE_PER_ROUND = 5;
 
 export type Lifecycle = typeof LIFECYCLES[number];
 export type Implementation = typeof IMPLEMENTATIONS[number];
@@ -1595,6 +1602,11 @@ export function semanticValidateV2(
     case "add_node": {
       const n = pl.node as MapNode;
       if (findEntity(t, n.id)) errs.push("add_node: id가 이미 존재");
+      // 해상도 설계 v3 §2-3: 전체 file 노드 상한은 '여기(적용 잠금 안의 topology)'가 유일한 권위 —
+      // 보강 밖 일반 add_node 패치의 우회와 '각자 59개를 보고 61개까지' 경합을 모두 닫는다.
+      // (보강 쪽 검사는 조기 진단·과금 절약용일 뿐 권위가 아니다.)
+      if (n && n.entityType === "file" && (t.nodes || []).filter((x) => x.entityType === "file").length >= MAX_FILE_NODES)
+        errs.push(`add_node: file 노드 전체 상한(${MAX_FILE_NODES}) 도달 — 증분 세밀화 상한(해상도 설계 §2-3)`);
       break;
     }
     case "add_edge": {

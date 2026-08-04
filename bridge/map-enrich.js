@@ -158,7 +158,7 @@ function unknownKey(obj, allowed) { const k = Object.keys(obj).find((x) => !allo
 // 반환 null(정상)|오류 문자열.
 function itemShapeError(it) {
   if (!it || typeof it !== "object" || Array.isArray(it)) return "이형";
-  const ITEM_KEYS = { target: ["op", "targetId", "payload", "evidence"], add_edge: ["op", "payload", "evidence"], rewrite_label: ["op", "targetId", "payload", "evidence", "claims"] };
+  const ITEM_KEYS = { target: ["op", "targetId", "payload", "evidence"], add_edge: ["op", "payload", "evidence"], add_node: ["op", "payload", "evidence"], rewrite_label: ["op", "targetId", "payload", "evidence", "claims"] };
   const allow = ENRICH_TARGET_OPS.includes(it.op) ? ITEM_KEYS.target : ITEM_KEYS[it.op];
   if (!allow) return "미지 op(" + String(it.op) + ")";
   { const u = Object.keys(it).find((k) => !allow.includes(k)); if (u) return "미지 필드(" + u + ")"; }
@@ -174,6 +174,19 @@ function itemShapeError(it) {
     { const u = Object.keys(it.payload).find((k) => k !== "edge"); if (u) return "payload 미지 필드(" + u + ")"; }
     const e9 = it.payload.edge;
     if (!e9 || typeof e9 !== "object" || Array.isArray(e9)) return "payload.edge 필수";
+  }
+  if (it.op === "add_node") { // 해상도 설계 v3 §2-2b — 정적 자격(문맥 무관 부분: 장부 재판독도 같은 규칙)
+    const n9 = it.payload.node;
+    if (!n9 || typeof n9 !== "object" || Array.isArray(n9)) return "payload.node 필수";
+    const PM9 = (() => { try { return require(path.join(__dirname, "project-map.js")); } catch { return null; } })();
+    if (PM9) { const ne = PM9.validateNode(n9); if (ne.length) return "add_node: node 스키마 위반(" + ne[0] + ")"; }
+    if (n9.entityType !== "file") return "add_node: entityType=file만 허용(상위 구조 신설은 보강 권한 밖)";
+    if (!Array.isArray(n9.anchors) || n9.anchors.length !== 1) return "add_node: anchors는 정확히 1개";
+    const a9 = n9.anchors[0];
+    const kindWant = evidenceKindOf(a9.path);
+    if (a9.kind !== kindWant) return "add_node: anchor.kind 불일치(kind 세탁 차단 — 실제 분류=" + kindWant + ")";
+    if (PM9 && !PM9.CODE_EVIDENCE_KINDS.includes(a9.kind)) return "add_node: 코드 계열 파일만(code/test/config — 문서 파일 노드화 금지)";
+    if (!n9.state || n9.state.confidence !== "candidate") return "add_node: confidence=candidate 강제(태생 confirmed 금지)";
   }
   if (it.op === "rewrite_label") {
     const cOk = Array.isArray(it.claims) && it.claims.length > 0 && it.claims.every((c) => c && typeof c === "object" && typeof c.file === "string" && !!c.file && typeof c.quote === "string" && !!c.quote && ["support", "rebut"].includes(c.stance) && Object.keys(c).length === 3);
@@ -267,7 +280,9 @@ function validateJob(d) {
         const it9 = a.results.items[c.nextIndex];
         if (!it9 || cp.operation !== it9.op) return "currentPatch.operation↔item 결속";
         if ((it9.targetId !== undefined || cp.targetId !== undefined) && cp.targetId !== it9.targetId) return "currentPatch.targetId↔item 결속";
-        try { if (JSON.stringify(cp.payload) !== JSON.stringify(it9.payload)) return "currentPatch.payload↔item 결속"; } catch { return "currentPatch.payload 직렬화"; }
+        // 해상도 v3: payload 결속은 '결정론 id 재작성 후' 전문 비교 — 변환기와 같은 순수 함수
+        // (applyEnrichPayloadIds — 영속 items 기반이라 재개 후에도 같은 값. 감싸개·복제 드리프트 계보).
+        try { if (JSON.stringify(cp.payload) !== JSON.stringify(applyEnrichPayloadIds(a.results.items, c.nextIndex, d.mapId))) return "currentPatch.payload↔item 결속"; } catch { return "currentPatch.payload 직렬화"; }
         // 6차(ab-3): {kind, ref} 전문 일치 — ref만 대조하면 doc 근거가 code kind로 세탁돼 P2 관문(코드 근거
         // 최소 1개 — kind 기준 판정 실측)을 통과한다. 기대 전문=변환기 규칙 그대로(evidenceKindOf).
         const extra9 = Array.isArray(c.evExtra) ? c.evExtra : [];
@@ -507,16 +522,73 @@ function detPatchId(jobKey, attemptId, index, rev) {
   const x = b.toString("hex");
   return x.slice(0, 8) + "-" + x.slice(8, 12) + "-" + x.slice(12, 16) + "-" + x.slice(16, 20) + "-" + x.slice(20);
 }
+// ── 해상도 설계 v3 — file 노드 결정론 id·임시 id 매핑(순수 계층) ─────────────────────
+// 경로 정규화=구분자 통일만(§2-2c — case-fold는 Linux 별개 파일을 오합침하므로 금지·원문 case 보존).
+function fileNodePathKey(p) { return String(p || "").replace(/\\/g, "/"); }
+// 결정론 file 노드 id: 같은 (mapId, 경로)면 언제나 같은 UUID — 경합 라운드의 이중 생성을
+// 적용기 "id가 이미 존재" 거부와 이중 방어로 차단(§2-2c).
+function detFileNodeId(mapId, anchorPath) {
+  const h = crypto.createHash("sha1").update("file-node|" + String(mapId) + "|" + fileNodePathKey(anchorPath)).digest();
+  const b = Buffer.from(h.subarray(0, 16));
+  b[6] = (b[6] & 0x0f) | 0x50;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const x = b.toString("hex");
+  return x.slice(0, 8) + "-" + x.slice(8, 12) + "-" + x.slice(12, 16) + "-" + x.slice(16, 20) + "-" + x.slice(20);
+}
+// 임시 id→결정론 id 매핑=별도 상태가 아니라 '영속된 결과의 순수 함수'(§2-2a — 2차 설계 blocker):
+// items[0..uptoIndex)의 add_node들로부터 매 호출 재계산 — add_node 적용 직후 사망→재개돼도 후속
+// add_edge 변환·결속 검증이 같은 매핑을 복원한다(별도 영속·라운드 메모리·재개 전달 전부 불요).
+function enrichTempIdMap(items, uptoIndex, mapId) {
+  const m = new Map();
+  const n = Math.min(Array.isArray(items) ? items.length : 0, uptoIndex);
+  for (let i = 0; i < n; i++) {
+    const it = items[i];
+    if (!it || it.op !== "add_node") continue;
+    const node = it.payload && it.payload.node;
+    const p = node && Array.isArray(node.anchors) && node.anchors[0] ? node.anchors[0].path : null;
+    if (node && typeof node.id === "string" && p) m.set(node.id, detFileNodeId(mapId, p));
+  }
+  return m;
+}
+// items[index]의 payload를 결정론 id로 재작성한 사본을 반환(add_node=node.id 교체·add_edge=임시 id
+// endpoint 재작성·그 외=원본 그대로). 변환기(toPatchV2)와 cursor 결속 검증이 '같은 함수'를 쓴다
+// (복제 금지 — 정렬·선정·판독 단일 경로 계보).
+function applyEnrichPayloadIds(items, index, mapId) {
+  const it = Array.isArray(items) ? items[index] : null;
+  if (!it || !it.payload) return it ? it.payload : null;
+  if (it.op === "add_node") {
+    const node = it.payload.node;
+    const p = node && Array.isArray(node.anchors) && node.anchors[0] ? node.anchors[0].path : null;
+    if (!node || !p) return it.payload;
+    return { ...it.payload, node: { ...node, id: detFileNodeId(mapId, p) } };
+  }
+  if (it.op === "add_edge") {
+    const m = enrichTempIdMap(items, index, mapId); // 자기보다 앞선 add_node만(순서 제약 §2-2a)
+    const e = it.payload.edge;
+    if (!e) return it.payload;
+    const from = m.has(e.from) ? m.get(e.from) : e.from;
+    const to = m.has(e.to) ? m.get(e.to) : e.to;
+    if (from === e.from && to === e.to) return it.payload;
+    return { ...it.payload, edge: { ...e, from, to } };
+  }
+  return it.payload;
+}
 
 // ── enrich-result-v1 validator(P8-3 — op별 합타입·strict·크기 상한) ─────────────────
 const ENRICH_TARGET_OPS = ["add_evidence", "set_state", "add_anchor"];
 const RESULT_MAX_ITEMS = 200;
 const RESULT_MAX_CHARS = 400000;
 // 반환 {ok, items} / {ok:false, kind:"schema"|"id", errors:[...]} — 근거(evidence 실존) 검사는 실행기(파일계 접근)가 수행.
-function validateEnrichResult(obj, topo) {
+function validateEnrichResult(obj, topo, ctx) {
+  // ctx({repo, changed} — 해상도 설계 v3): 응답 검증 시 add_node의 발췌 실림·판독 자격까지 본다.
+  // 장부 재판독 등 ctx 없는 호출은 정적 규칙만(과거 결과를 나중 파일 상태로 소급 오판하지 않음).
   const errs = [];
   const ids = new Set([...((topo && topo.nodes) || []).map((n) => n && n.id), ...((topo && topo.edges) || []).map((e) => e && e.id)]);
   const nodeIds = new Set([...((topo && topo.nodes) || []).map((n) => n && n.id)]);
+  const pendingNodeIds = new Set(); // §2-2a 가상 topology — 이번 결과에서 '앞서' 생성된 임시 id만 순차 합류
+  const existingFilePaths = new Set(((topo && topo.nodes) || []).filter((n) => n && n.entityType === "file")
+    .flatMap((n) => (n.anchors || []).map((a) => fileNodePathKey(a && a.path))));
+  const excerptSet = ctx ? (() => { try { return new Set(require(path.join(__dirname, "enrich-providers.js")).excerptFilesFor(topo, ctx.changed).map(fileNodePathKey)); } catch { return null; } })() : null;
   try { if (JSON.stringify(obj).length > RESULT_MAX_CHARS) return { ok: false, kind: "schema", errors: ["크기 상한 초과"] }; } catch { return { ok: false, kind: "schema", errors: ["직렬화 불가"] }; }
   if (!obj || typeof obj !== "object" || Array.isArray(obj) || obj.schema !== "enrich-result-v1" || !Array.isArray(obj.items)) return { ok: false, kind: "schema", errors: ["enrich-result-v1 형식 위반"] };
   { const u = Object.keys(obj).find((k) => !["schema", "items"].includes(k)); if (u) return { ok: false, kind: "schema", errors: ["root 미지 필드(" + u + ")"] }; } // 2차: root strict
@@ -533,10 +605,35 @@ function validateEnrichResult(obj, topo) {
     }
     if (it.op === "add_edge") {
       const e9 = it.payload.edge;
-      if (!nodeIds.has(e9.from)) { errs.push(tag + " edge.from 미실존"); idErr = true; return; }
-      if (!nodeIds.has(e9.to)) { errs.push(tag + " edge.to 미실존"); idErr = true; return; }
+      // §2-2a 가상 topology: 이번 결과에서 '앞서' 생성된 file 노드의 임시 id도 endpoint로 인정
+      // (뒤의 add_node를 앞서 참조하면 미실존 — 적용이 cursor 순차라 검증도 같은 순서).
+      if (!nodeIds.has(e9.from) && !pendingNodeIds.has(e9.from)) { errs.push(tag + " edge.from 미실존"); idErr = true; return; }
+      if (!nodeIds.has(e9.to) && !pendingNodeIds.has(e9.to)) { errs.push(tag + " edge.to 미실존"); idErr = true; return; }
+    }
+    if (it.op === "add_node") { // 해상도 설계 v3 — 문맥·유일성·중복(정적 자격은 itemShapeError 소관)
+      const n9 = it.payload.node;
+      const p9 = fileNodePathKey(n9.anchors[0].path);
+      if (ids.has(n9.id)) { errs.push(tag + " add_node: 임시 id가 기존 topology id와 충돌"); idErr = true; return; }
+      if (pendingNodeIds.has(n9.id)) { errs.push(tag + " add_node: 임시 id가 이번 결과 안에서 중복"); idErr = true; return; }
+      if (existingFilePaths.has(p9)) { errs.push(tag + " add_node: 같은 파일의 file 노드 기존재(중복 노드 금지)"); idErr = true; return; }
+      if (excerptSet && !excerptSet.has(p9)) { errs.push(tag + " add_node: anchor가 이번 발췌에 없음(발췌 밖 노드화 금지)"); return; }
+      if (ctx && ctx.repo) {
+        try {
+          const rB = require(path.join(__dirname, "enrich-providers.js")).excerptBodyFor(ctx.repo, n9.anchors[0].path);
+          if (!rB.ok || !rB.body.trim()) { errs.push(tag + " add_node: anchor 판독 불가·빈 본문(인용 원문 없음)"); return; }
+        } catch { errs.push(tag + " add_node: anchor 판독 검사 실패"); return; }
+      }
+      pendingNodeIds.add(n9.id);
+      existingFilePaths.add(p9); // 같은 결과 안 중복 경로도 차단
     }
   });
+  { // §2-3 상한 — 라운드당(형태 규칙·fail-closed)+전체(조기 진단 — 권위는 정본 semanticValidateV2의 적용 잠금 안)
+    const addN = obj.items.filter((it) => it && it.op === "add_node").length;
+    const PM9 = (() => { try { return require(path.join(__dirname, "project-map.js")); } catch { return null; } })();
+    if (PM9 && addN > PM9.ENRICH_ADD_NODE_PER_ROUND) errs.push("add_node 라운드 상한 초과(" + addN + ">" + PM9.ENRICH_ADD_NODE_PER_ROUND + ")");
+    const existN = ((topo && topo.nodes) || []).filter((n) => n && n.entityType === "file").length;
+    if (PM9 && addN && existN + addN > PM9.MAX_FILE_NODES) errs.push("file 노드 전체 상한 초과 예정(" + (existN + addN) + ">" + PM9.MAX_FILE_NODES + " — 조기 진단·권위는 적용 잠금 안 정본)");
+  }
   if (errs.length) return { ok: false, kind: idErr && errs.every((e) => /미실존|실존 필수/.test(e)) ? "id" : "schema", errors: errs };
   return { ok: true, items: obj.items };
 }
@@ -564,11 +661,20 @@ function toPatchV2(item, index, ctx) {
   const MP = require(path.join(__dirname, "map-pipeline.js"));
   const { ah } = MP.authorityOf(PM.mapHashOf(ctx.topo), ctx.idx);
   const evFiles = [...new Set([...(item.evidence || []).map((e) => e.file), ...((item.claims || []).map((c) => c.file))])].sort();
+  // 해상도 설계 v3: ①add_node는 변환 시점에 anchor 판독을 재검사(응답 검증과 적용 사이 파일 소멸 —
+  // 재개 경로 포함. conversion 재판독 관례와 동형) ②payload의 임시 id를 결정론 id로 재작성 — 매핑은
+  // ctx.items(영속된 결과)의 순수 함수(applyEnrichPayloadIds — cursor 결속 검증과 같은 함수).
+  if (item.op === "add_node") {
+    const p9 = item.payload && item.payload.node && Array.isArray(item.payload.node.anchors) && item.payload.node.anchors[0] ? item.payload.node.anchors[0].path : null;
+    const rB = p9 ? require(path.join(__dirname, "enrich-providers.js")).excerptBodyFor(ctx.repo, p9) : { ok: false, body: "" };
+    if (!rB.ok || !rB.body.trim()) return { ok: false, kind: "schema", errors: ["add_node: anchor 판독 불가·빈 본문(변환 시점 재검사 — 인용 원문 없음)"] };
+  }
+  const payloadEff = Array.isArray(ctx.items) ? applyEnrichPayloadIds(ctx.items, index, ctx.topo.mapId) : item.payload;
   const base = {
     schema: "map-patch-v2", patchId: detPatchId(ctx.jobKey, ctx.attemptId, index, ctx.rev), mapId: ctx.topo.mapId,
     basis: MP.patchBasisFor(ctx.repo, ctx.topo), baseMapHash: PM.mapHashOf(ctx.topo),
     baseAuthorityHash: ah, baseDecisionContextHash: PM.decisionContextHashOf(ah, ctx.pol.pfh),
-    baseDirtyFp: "", operation: item.op, payload: item.payload, readSet: {},
+    baseDirtyFp: "", operation: item.op, payload: payloadEff, readSet: {},
     rationale: "P8 의미 보강(" + ctx.provider + ")", evidence: evFiles.map((f) => ({ kind: evidenceKindOf(f), ref: f })),
     provider: ctx.provider, // 충돌 감지 원천(P8-4 — decision에 patch 전문 영속=조회 가능)
     ...(ENRICH_TARGET_OPS.includes(item.op) || item.op === "rewrite_label" ? { targetId: item.targetId } : {}),
@@ -1270,7 +1376,7 @@ function runAttempt(repo, o, env, st, provider) {
   }
   // results 검증(strict — 실패 분류 3종은 provider 실패 플래그)+근거 실증(3b 1차 blocker④ ab-3:
   // quote가 실제 파일 내용에 존재하는지 대조 — 허위 인용으로 생성된 의미 변경이 P2 관문을 통과하는 경로 차단)
-  let vr = validateEnrichResult(call.result, st.topo);
+  let vr = validateEnrichResult(call.result, st.topo, { repo, changed: st.changed }); // 해상도 v3: add_node 발췌·판독 자격까지
   if (vr.ok) {
     for (const it of call.result.items) {
       const cites = [...(it.evidence || []), ...((it.claims || []).map((c) => ({ file: c.file, quote: c.quote })))];
@@ -1447,7 +1553,7 @@ function convertItem(repo, env, j, a, item, index, rev) {
     }
   }
   const itemEff = evExtra.length ? { ...item, evidence: [...(item.evidence || []), ...evExtra.filter((f) => !(item.evidence || []).some((e) => e.file === f)).map((f) => { const rec = readOnce(f); return { file: f, quote: rec && rec.body ? rec.body.slice(0, 80) : "" }; })] } : item;
-  return toPatchV2(itemEff, index, { repo, topo: topoNow.topo, idx: idxNow, pol: polNow, fileHashOf, jobKey: jobSeedOf(j.jobKey, j.startedAt), attemptId: a.attemptId, rev, provider: a.provider });
+  return toPatchV2(itemEff, index, { repo, topo: topoNow.topo, idx: idxNow, pol: polNow, fileHashOf, jobKey: jobSeedOf(j.jobKey, j.startedAt), attemptId: a.attemptId, rev, provider: a.provider, items: a.results.items }); // items=임시 id 매핑의 순수 입력(해상도 v3)
 }
 function failAttempt(repo, env, attemptId, conv, provider) {
   // 변환 단계 거부도 '호출은 됐고 답이 버려진 것'이다 — 구조 필드와 P10 사유를 함께 남긴다
@@ -1711,6 +1817,6 @@ function cliMain(argv) {
   return r.outcome === "applied" || r.outcome === "settled" || r.outcome === "noop" ? 0 : r.outcome === "busy" ? 3 : 1;
 }
 
-module.exports = { ENRICH_DIR, answerableInput, readConsumedBaseline, writeConsumedBaseline, expandChangedWithConsumedDelta, consumedFileFor, repoKeyFor, consentFileFor, jobFileFor, deferredFileFor, readEnrichConsent, grantEnrichConsent, revokeEnrichConsent, findGrant, readEnrichJob, updateEnrichJob, readDeferred, deferredSummary, enrichOutcomeSummary, recoverDeferredCalls, beginDeferredCall, finishDeferredCall, retryDeferredResolutions, jobKeyOf, jobSeedOf, jobRunIdOf, detPatchId, validateEnrichResult, toPatchV2, evidenceKindOf, appendRouteLog, historylessChanges, computeSourceFp, runEnrich, cliMain, ROUTE_LOG, JOB_PHASES, ATTEMPT_PHASES, ENRICH_TARGET_OPS };
+module.exports = { ENRICH_DIR, answerableInput, detFileNodeId, enrichTempIdMap, applyEnrichPayloadIds, fileNodePathKey, readConsumedBaseline, writeConsumedBaseline, expandChangedWithConsumedDelta, consumedFileFor, repoKeyFor, consentFileFor, jobFileFor, deferredFileFor, readEnrichConsent, grantEnrichConsent, revokeEnrichConsent, findGrant, readEnrichJob, updateEnrichJob, readDeferred, deferredSummary, enrichOutcomeSummary, recoverDeferredCalls, beginDeferredCall, finishDeferredCall, retryDeferredResolutions, jobKeyOf, jobSeedOf, jobRunIdOf, detPatchId, validateEnrichResult, toPatchV2, evidenceKindOf, appendRouteLog, historylessChanges, computeSourceFp, runEnrich, cliMain, ROUTE_LOG, JOB_PHASES, ATTEMPT_PHASES, ENRICH_TARGET_OPS };
 
 if (require.main === module) process.exit(cliMain(process.argv));

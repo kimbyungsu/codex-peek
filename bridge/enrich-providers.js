@@ -138,6 +138,8 @@ function buildEnrichPrompt(ctx) {
     // 거부(convert-invalid)로 보강이 멈췄다. 어휘를 두 곳에 두면 또 갈라진다.
     '- {"op":"add_edge","payload":{"edge":{"id":"<새 UUID>","from":"<실존 node id>","to":"<실존 node id>","relation":"' + require(path.join(BR, "project-map.js")).RELATIONS.join("|") + '","state":{"lifecycle":"active","implementation":"runtime","confidence":"candidate"}}},"evidence":[...]} — targetId 금지(relation은 이 목록 값만 허용)',
     '- {"op":"rewrite_label","targetId":"<실존 id>","payload":{"to":{"label":"<개선 라벨>"},"expect":{"label":"<현재 라벨>"}},"evidence":[...],"claims":[{"file":"<파일>","quote":"<원문>","stance":"support"}]}',
+    // 해상도 설계 v3 §2-4 — file 노드 견본·조건 고지(상한·유형은 정본 상수에서 생성: 복제 드리프트 금지)
+    '- {"op":"add_node","payload":{"node":{"id":"<임시 UUID — 변환기가 결정론 id로 교체>","label":"<파일 역할 한 줄(경로 반복 금지)>","entityType":"file","roles":[],"state":{"lifecycle":"active","implementation":"runtime","confidence":"candidate"},"anchors":[{"kind":"<실제 분류: code|test|config>","path":"<발췌에 실린 판독 가능한 코드 계열 파일>"}]}},"evidence":[...]} — targetId 금지·라운드당 최대 ' + require(path.join(BR, "project-map.js")).ENRICH_ADD_NODE_PER_ROUND + '개·anchors 정확히 1개·문서 파일 금지·confidence는 candidate만. 만든 file 노드의 소속 모듈 owns 엣지를 같은 결과에서 add_node "뒤" 순서로 제안 권장(edge from/to에 그 임시 id 사용 가능).',
     "확실한 근거가 있는 항목만(1~10개 권장). 근거 없는 추측·발췌 밖 인용 금지.",
     // 관문 규칙 고지(2026-08-04 실사고 — 어휘 드리프트와 같은 병: 기계가 강제하는 규칙을 답하는 쪽이
     // 몰라 정답이 불가능했다). 계열 목록은 정본 상수에서 생성 — 문서 파일만 인용한 항목은 전부 거부된다.

@@ -740,5 +740,67 @@ console.log("[11b] 실행 중 커밋 반례(검증 blocker ①) — 기준점은
   ok(after.includes("src/midrun.js"), "실행 중 커밋 파일은 다음 라운드 입력에 남는다(발췌 없는 소화 0)");
 }
 
+console.log("[12] 해상도 v3 — file 노드 증분 세밀화(add_node+owns 동반 e2e·결정론 id·거부 반례)");
+{
+  const PM9 = MR.PM;
+  const { ws, topo, nodeId } = setup("filenode");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  const TMP = "11111111-2222-4333-8444-555555555555"; // 모델의 임시 UUID
+  const mkFileNode = (tmpId, pathStr) => ({ op: "add_node", payload: { node: { id: tmpId, label: "a 모듈의 진입 파일", entityType: "file", roles: [], state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" }, anchors: [{ kind: "code", path: pathStr }] } }, evidence: [{ file: "src/a.js", quote: "// a" }] });
+  const ownsEdge = (tmpId) => ({ op: "add_edge", payload: { edge: { id: "99999999-8888-4777-8666-555555555544", from: nodeId, to: tmpId, relation: "owns", state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" } } }, evidence: [{ file: "src/a.js", quote: "// a" }] });
+  const adapter = () => ({ ok: true, result: { schema: "enrich-result-v1", items: [mkFileNode(TMP, "src/a.js"), ownsEdge(TMP)] } });
+  const r = ME.runEnrich(ws, base(ws, { adapters: { self: adapter } }));
+  ok(r.outcome === "applied" && r.applied === 2, "e2e — add_node(file)+같은 라운드 owns(임시 id 참조) 둘 다 적용");
+  const t2 = MR.readTopoExFor(ws).topo;
+  const detId = ME.detFileNodeId(t2.mapId, "src/a.js");
+  const fnode = t2.nodes.find((n) => n.entityType === "file");
+  ok(!!fnode && fnode.id === detId && fnode.state.confidence === "candidate", "file 노드 실재·id=결정론 파생·confidence=candidate");
+  const oedge = t2.edges.find((e) => e.relation === "owns");
+  ok(!!oedge && oedge.from === nodeId && oedge.to === detId, "owns 엣지 endpoint=결정론 id로 재작성(임시 id 잔재 0)");
+  // 결정론 id 재현+중복 차단: 같은 파일 재제안 → 응답 검증 단계에서 중복 거부(answer-rejected)
+  ok(MB.ensureQueue(ws, PM) === true, "(전제) 큐 재작성");
+  const r2 = ME.runEnrich(ws, base(ws, { adapters: { self: () => ({ ok: true, result: { schema: "enrich-result-v1", items: [mkFileNode("22222222-3333-4444-8555-666666666666", "src/a.js")] } }) } }));
+  ok(r2.outcome !== "applied", "같은 파일 재제안=중복 거부(결정론 id 이중 방어의 앞단)");
+}
+{
+  // 거부 반례 전수(응답 검증 — 순수 계층)
+  const { ws, topo, nodeId } = setup("fnreject");
+  const t0 = MR.readTopoExFor(ws).topo;
+  const V = (items, ctx) => ME.validateEnrichResult({ schema: "enrich-result-v1", items }, t0, ctx);
+  const node = (over, anchorOver) => ({ op: "add_node", payload: { node: { id: "11111111-2222-4333-8444-555555555555", label: "L", entityType: "file", roles: [], state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" }, anchors: [{ kind: "code", path: "src/a.js", ...(anchorOver || {}) }], ...(over || {}) } }, evidence: [{ file: "src/a.js", quote: "// a" }] });
+  const ctx = { repo: ws, changed: ["src/a.js"] };
+  ok(V([node()], ctx).ok === true, "정상 add_node=수용(발췌 실존·판독 가능)");
+  ok(V([node({ entityType: "module" })], ctx).ok === false, "entityType≠file 거부");
+  ok(V([node({ anchors: [{ kind: "code", path: "src/a.js" }, { kind: "code", path: "src/b.js" }] })], ctx).ok === false, "anchors 2개 거부");
+  ok(V([node({ state: { lifecycle: "active", implementation: "runtime", confidence: "confirmed" } })], ctx).ok === false, "confirmed 태생 거부");
+  ok(V([node(null, { kind: "doc" })], ctx).ok === false, "anchor.kind 세탁 거부(실제 분류와 불일치)");
+  fs.writeFileSync(path.join(ws, "README.md"), "docs\n");
+  const docNode = { op: "add_node", payload: { node: { id: "11111111-2222-4333-8444-555555555555", label: "L", entityType: "file", roles: [], state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" }, anchors: [{ kind: "doc", path: "README.md" }] } }, evidence: [{ file: "src/a.js", quote: "// a" }] };
+  ok(V([docNode], { repo: ws, changed: ["README.md", "src/a.js"] }).ok === false, "doc 계열 anchor 거부(문서 파일 노드화 금지)");
+  ok(V([node(null, { path: "src/ghost.js", kind: "code" })], { repo: ws, changed: ["src/ghost.js", "src/a.js"] }).ok === false, "판독 불가 anchor 거부(변경 목록에 있어도)");
+  ok(V([node()], { repo: ws, changed: ["src/other.js"] }).ok === false, "발췌 밖 anchor 거부");
+  ok(V([node({ id: nodeId })], ctx).ok === false, "임시 id=기존 topology id 충돌 거부");
+  const twin = node(); const twin2 = JSON.parse(JSON.stringify(node())); twin2.payload.node.anchors[0].path = "src/b.js"; fs.writeFileSync(path.join(ws, "src", "b.js"), "// b\n");
+  ok(V([twin, twin2], { repo: ws, changed: ["src/a.js", "src/b.js"] }).ok === false, "임시 id 상호 중복 거부");
+  const edgeFirst = { op: "add_edge", payload: { edge: { id: "99999999-8888-4777-8666-555555555544", from: nodeId, to: "11111111-2222-4333-8444-555555555555", relation: "owns", state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" } } }, evidence: [{ file: "src/a.js", quote: "// a" }] };
+  ok(V([edgeFirst, node()], ctx).ok === false, "임시 id를 add_node보다 앞서 참조하는 add_edge 거부(순차 가상 topology)");
+  const six = Array.from({ length: 6 }, (_, i) => { const n9 = JSON.parse(JSON.stringify(node())); n9.payload.node.id = "11111111-2222-4333-8444-55555555555" + i; n9.payload.node.anchors[0].path = "src/f" + i + ".js"; fs.writeFileSync(path.join(ws, "src", "f" + i + ".js"), "// f\n"); return n9; });
+  ok(V(six, { repo: ws, changed: six.map((x) => x.payload.node.anchors[0].path) }).ok === false, "라운드 상한(5) 초과=6개째 거부");
+  // 재개 복원(설계 5-2b 축약 실증): 매핑=영속 items의 순수 함수 — 재계산이 같은 값·결속 검증과 동일 경로
+  const items2 = [node(), edgeFirst]; items2[1] = { ...edgeFirst, payload: { edge: { ...edgeFirst.payload.edge, to: "11111111-2222-4333-8444-555555555555" } } };
+  const m1 = ME.enrichTempIdMap(items2, 1, t0.mapId); const m2 = ME.enrichTempIdMap(items2, 1, t0.mapId);
+  ok(m1.get("11111111-2222-4333-8444-555555555555") === ME.detFileNodeId(t0.mapId, "src/a.js") && m1.get("11111111-2222-4333-8444-555555555555") === m2.get("11111111-2222-4333-8444-555555555555"), "매핑=순수 함수(재계산 동일 — 재개 복원 근거)");
+  const pl1 = ME.applyEnrichPayloadIds(items2, 1, t0.mapId);
+  ok(pl1.edge.to === ME.detFileNodeId(t0.mapId, "src/a.js"), "add_edge endpoint 재작성=같은 함수(변환·결속 단일 경로)");
+  // 정본 상한(semanticValidateV2 — 적용 잠금 안 권위): 60개째 topology에서 file add_node 거부
+  const many = { ...t0, nodes: [...t0.nodes, ...Array.from({ length: MR.PM.MAX_FILE_NODES }, (_, i) => ({ id: ME.detFileNodeId(t0.mapId, "src/m" + i + ".js"), label: "m" + i, entityType: "file", roles: [], state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" }, anchors: [{ kind: "code", path: "src/m" + i + ".js" }] }))] };
+  const capPatch = { schema: "map-patch-v2", operation: "add_node", payload: { node: { id: "77777777-6666-4555-8444-333333333333", label: "cap", entityType: "file", roles: [], state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" }, anchors: [{ kind: "code", path: "src/cap.js" }] } } };
+  const capFull = { ...capPatch, mapId: many.mapId };
+  const semV = MR.PM.semanticValidateV2(many, capFull, {});
+  ok(semV && Array.isArray(semV.errors) && semV.errors.some((e) => /file 노드 전체 상한/.test(e)), "정본 상한 — 60개 상태에서 add_node(file) 거부(잠금 안 권위·실제: " + JSON.stringify((semV && semV.errors || []).slice(0, 1)) + ")");
+  const semUnder = MR.PM.semanticValidateV2(t0, capFull, {});
+  ok(!(semUnder && Array.isArray(semUnder.errors) && semUnder.errors.some((e) => /file 노드 전체 상한/.test(e))), "정본 상한 — 상한 미만이면 상한 사유 없음(무회귀)");
+}
+
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
 process.exit(fail ? 1 : 0);
