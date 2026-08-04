@@ -164,6 +164,20 @@ console.log("[7] cmdAsk 배선 순서(소스 잠금) — 경보 시점 동결→
     const wrapper = { ok: true, job: { id: "ask-x-1", workspace: "D:/w", implementerTurnId: null, implementerRevision: null } };
     ck("실행 반례 — 감싸개 입력=checkpoint 거부(null)", ech.writePrimaryComplete(os.tmpdir(), wrapper, "본문", { verifierSession: "s", proofFile: "p.json", proofFp: "f" }) === null);
   }
+  // 확인 검증 blocker(2026-08-04): --allow-new '첫 세션 생성' 분기에도 같은 배선이 있어야 한다 —
+  // 이 분기만 빠져 예약 검증의 첫 회차에서 재확인이 동결·발송되지 않았다. 새 세션 분기 블록을 추출해
+  // 문맥 전달→조립→checkpoint→인쇄→발송 순서를 연결 분기와 동형으로 잠근다.
+  {
+    const nb = src.indexOf("# 새 Codex 세션 생성·즉시연결");
+    const ne = src.indexOf("attempt.record(\"session-unresolved\")", nb);
+    const blk = nb > 0 && ne > nb ? src.slice(Math.max(0, nb - 3000), ne) : "";
+    ck("새 세션 분기 — flagEvidence에 chCtx 전달(동결 배선)", /flagEvidence\(answer, ws, id, exec, \{[\s\S]{0,200}roots: chRootsN/.test(blk));
+    ck("새 세션 분기 — campaignId도 알맹이에서", blk.includes('campaignId: (durableEnv && durableEnv.ok && durableEnv.job.campaignId) || "direct"'));
+    ck("새 세션 분기 — checkpoint는 durableEnv.job+출력 조립 후", /writePrimaryComplete\([^,]+, durableEnv\.job, outText/.test(blk));
+    const iOutN = blk.indexOf("const outText ="), iCkN = blk.indexOf("let ckptOk = !durableEnv"), iPrN = blk.indexOf("process.stdout.write(outText)"), iDpN = blk.indexOf("maybeDispatchChallenge({ ws, codexSession: id");
+    ck("새 세션 분기 — 조립→checkpoint→인쇄→발송 순서(연결 분기 동형)", iOutN > 0 && iCkN > iOutN && iPrN > iCkN && iDpN > iPrN);
+    ck("새 세션 분기 — 발송 조건에 checkpoint 게이트 결속", blk.includes("if (evAlert && evAlert.challengeId && ckptOk)"));
+  }
 }
 
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);

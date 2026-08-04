@@ -3249,9 +3249,18 @@ async function cmdAsk(rest) {
   let id = earlyLinked;
   if (!id) { const nid = resolveNew(); if (nid && recordLink(nid)) id = nid; } // 즉시연결 못했으면 지금 찾아 연결
   if (id) {
-    writeProof(id, answer, ws); // 실제 성공 → 검증 증명 기록
+    const proofBind = writeProof(id, answer, ws) || {}; // 실제 성공 → 검증 증명 기록(+checkpoint 결속 좌표)
     attempt.proofAccepted(); // 증명 실물 확정(이후 예외=postprocess-error·6차 blocker)
-    flagEvidence(answer, ws, id, exec); // 결정2: 인용 근거 존재성+다룬 흔적(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
+    // 재확인 배선(확인 검증 blocker 2026-08-04): --allow-new 첫 세션 분기에도 연결 분기와 같은 배선 —
+    // 문맥 전달(동결)→출력 '조립'→(내구면 §6 checkpoint)→인쇄→발송. 이 분기만 빠져 있어 예약 검증의
+    // 첫 회차에서 evidence-unseen 재확인이 동결·발송되지 않았다.
+    const chRootsN = [exec, ws];
+    const chScoutN = contractSnap && typeof contractSnap.scoutRepo === "string" ? contractSnap.scoutRepo.trim() : "";
+    if (chScoutN && path.isAbsolute(chScoutN)) chRootsN.push(chScoutN);
+    const evAlert = flagEvidence(answer, ws, id, exec, {
+      roots: chRootsN, promptText, mode: harnessModeSnap, lang: langSnap,
+      campaignId: (durableEnv && durableEnv.ok && durableEnv.job.campaignId) || "direct", askId,
+    }); // 결정2: 인용 근거 존재성+다룬 흔적(경로해석=작업폴더 exec, 라벨=연 폴더 ws)
     flagLedgerConfirms(answer, ws, id, exec, { askId, attach: attCarrier }); // 로드맵 ④ L1-A: 등급·echo·askId·seen
     collectScoutTargetEvidence(answer, ws, exec); // 정찰 대상 자기진단 증거(2026-07-10)
     const mfl = machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId, campSnap); // P-12 2c: 판독·정합·[백로그] 자동 등록(core만·1회)
@@ -3260,13 +3269,25 @@ async function cmdAsk(rest) {
     const head = earlyLinked
       ? (en ? `# New Codex session created·linked immediately: ${id}` : `# 새 Codex 세션 생성·즉시연결: ${id}`)
       : (en ? `# New Codex session created·linked: ${id}` : `# 새 Codex 세션 생성·연결: ${id}`);
-    process.stdout.write(`${head}\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine, rejudgeSnap)}\n`);
-    process.stdout.write(mfl.notice); // 2c 영수증/거부/실패 줄(core 외·해당 없음="" — 바이트 동일)
-    process.stdout.write(envelopeWarnLine(ws, langSnap)); // 거버넌스 증분 1 — 경계 손상/미승인 변경 경고(정상·부재·미승인="")
-    process.stdout.write(budgetNoticeLines(budgetGate.res, langSnap, profileSnap));
-    process.stdout.write(breakdownNoticeFor(ws, langSnap, budgetGate.res)); // 증분 3 — 상한 마지막 왕복=원인 분해 병기
-    process.stdout.write(envelopeCandidateNoticeFor(ws, langSnap, budgetGate.res, profileSnap)); // §7 증분 1 — core 소진=수칙서 후보 재료+작성 의무 병기
-    process.stdout.write(integrityReviewLine(ws, langSnap, profileSnap)); // 증분 3 — 무결성=경계 재심 재료 병기 // 포맷 계층(⑻) — 무제한=""(바이트 동일)
+    const outText = `${head}\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine, rejudgeSnap)}\n`
+      + mfl.notice // 2c 영수증/거부/실패 줄(core 외·해당 없음="" — 바이트 동일)
+      + envelopeWarnLine(ws, langSnap) // 거버넌스 증분 1 — 경계 손상/미승인 변경 경고(정상·부재·미승인="")
+      + budgetNoticeLines(budgetGate.res, langSnap, profileSnap)
+      + breakdownNoticeFor(ws, langSnap, budgetGate.res) // 증분 3 — 상한 마지막 왕복=원인 분해 병기
+      + envelopeCandidateNoticeFor(ws, langSnap, budgetGate.res, profileSnap) // §7 증분 1 — core 소진=수칙서 후보 재료+작성 의무 병기
+      + integrityReviewLine(ws, langSnap, profileSnap); // 증분 3 — 무결성=경계 재심 재료 병기 // 포맷 계층(⑻) — 무제한=""(바이트 동일)
+    let ckptOk = !durableEnv; // 직접 ask는 checkpoint 불요(연결 분기와 같은 규칙)
+    if (durableEnv && evAlert && evAlert.challengeId) {
+      ckptOk = false;
+      if (proofBind.proofFile && durableEnv.ok) {
+        try { ckptOk = !!require("./evidence-challenge.js").writePrimaryComplete(path.dirname(String(process.env.CODEX_BRIDGE_JOB_PROMPT_FILE || "")), durableEnv.job, outText, { verifierSession: id, proofFile: proofBind.proofFile, proofFp: proofBind.proofFp }); } catch { ckptOk = false; }
+      }
+    }
+    process.stdout.write(outText);
+    try { const echM = require("./evidence-challenge.js"); echM.convergeStaleChallenges(ws); projectResolvedAcks(ws, echM); } catch { /* best-effort */ }
+    if (evAlert && evAlert.challengeId && ckptOk) {
+      maybeDispatchChallenge({ ws, codexSession: id, challengeId: evAlert.challengeId, lang: langSnap });
+    }
   } else {
     attempt.record("session-unresolved"); // 2d: 답은 왔으나 세션 미결속 — 소비된 왕복 보존(승격·최근 무결성 미산입)
     updateLinks((o) => { o.autoNewFailed = o.autoNewFailed || {}; o.autoNewFailed[wsKey] = true; }); // 다음 자동 생성 차단 플래그
