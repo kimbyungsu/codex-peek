@@ -99,6 +99,13 @@ function excerptSelectionFor(topo, changed) {
 }
 // 관문용 공개 API: 이 topo·변경 목록으로 '실제로 발송될' 발췌 파일 목록(프롬프트와 같은 계산).
 function excerptFilesFor(topo, changed) { return excerptSelectionFor(topo, changed).files; }
+// 발췌 본문 판독(단일 경로 확장 — 확인 검증 blocker: 삭제된 코드 파일은 이름은 코드지만 본문이
+// "(판독 불가)"라 인용이 원천 불가능한데, 이름만 본 관문이 호출을 허용했다). 프롬프트 조립과 관문이
+// 같은 판독 규칙(utf8·FILE_EXCERPT_MAX 절단)을 쓴다.
+function excerptBodyFor(repo, f) {
+  try { return { ok: true, body: fs.readFileSync(path.join(repo, f), "utf8").slice(0, FILE_EXCERPT_MAX) }; }
+  catch { return { ok: false, body: "" }; }
+}
 
 function buildEnrichPrompt(ctx) {
   const sel = excerptSelectionFor(ctx.topo, ctx.changed);
@@ -111,9 +118,8 @@ function buildEnrichPrompt(ctx) {
   const truncNote = (t.totalNodes > shownN || t.totalEdges > shownE)
     ? `(지도 일부만 표시: node ${shownN}/${t.totalNodes} · edge ${shownE}/${t.totalEdges} — 이번 변경과 연결된 항목 우선)` : "";
   const excerpts = files.map((f) => {
-    let body = "";
-    try { body = fs.readFileSync(path.join(ctx.repo, f), "utf8").slice(0, FILE_EXCERPT_MAX); } catch { body = "(판독 불가)"; }
-    return "### " + f + "\n```\n" + body + "\n```";
+    const r = excerptBodyFor(ctx.repo, f); // 관문과 같은 판독 규칙(단일 경로)
+    return "### " + f + "\n```\n" + (r.ok ? r.body : "(판독 불가)") + "\n```";
   }).join("\n\n");
   return [
     "당신은 코드 구조 지도의 '의미 보강' 담당이다. 아래 지도 초안과 소스 발췌만 근거로, 지도 항목의 의미를 보강하는 제안을 JSON으로만 출력하라.",
@@ -261,4 +267,4 @@ function askVerifierResolution(req) {
   } finally { try { fs.rmSync(tmpCwd, { recursive: true, force: true }); } catch { /* 무해 */ } }
 }
 
-module.exports = { ENRICH_ADAPTERS, buildEnrichPrompt, excerptFilesFor, parseResult, askVerifierResolution, sliceTopology, SELF_DENY, FILE_EXCERPT_MAX, FILES_MAX, SLICE_NODES_MAX, SLICE_EDGES_MAX, NODE_ANCHORS_MAX, TOPO_CHARS_MAX, EXCERPT_PATH_MAX };
+module.exports = { ENRICH_ADAPTERS, buildEnrichPrompt, excerptFilesFor, excerptBodyFor, parseResult, askVerifierResolution, sliceTopology, SELF_DENY, FILE_EXCERPT_MAX, FILES_MAX, SLICE_NODES_MAX, SLICE_EDGES_MAX, NODE_ANCHORS_MAX, TOPO_CHARS_MAX, EXCERPT_PATH_MAX };

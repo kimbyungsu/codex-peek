@@ -39,20 +39,30 @@ console.log("[1] 민감 경로 제외(ab-7) — 정본(scope-package)과 동작 
     // 고지 목록도 정본 상수(CODE_EVIDENCE_KINDS)에서 생성돼야 한다(어휘 드리프트 재발 차단 동형).
     ok(prompt.includes("필수: 각 항목의 evidence에는 코드/테스트/설정 계열 파일(" + PM.CODE_EVIDENCE_KINDS.join("/") + "") && /자동 거부된다/.test(prompt), "관문 고지=정본 상수 기반(코드 계열 최소 1개)");
   }
-  // 검증 blocker(2026-08-04(2)): 발동 관문은 '실제 발송 발췌'와 같은 파일 집합을 봐야 한다 —
-  // 원시 changed 판정이면 상한 20 밖 코드·민감 경로 코드·앵커 폴백 반례에서 답 불가능한 호출이 나간다.
+  // 검증 blocker(2026-08-04(2)): 발동 관문은 '실제 발송 발췌'와 같은 파일 집합·판독을 봐야 한다 —
+  // 원시 changed 판정이면 상한 20 밖 코드·민감 경로 코드·앵커 폴백·삭제된 코드 반례에서 답 불가능한
+  // 호출이 나간다(관문·프롬프트=같은 선정+같은 판독 함수).
   {
     const ME = require(path.join(ROOT, "bridge", "map-enrich.js"));
+    const wsG = fs.mkdtempSync(path.join(os.tmpdir(), "p8ew_gate_"));
+    fs.mkdirSync(path.join(wsG, "src"), { recursive: true });
+    fs.writeFileSync(path.join(wsG, "src", "a.js"), "// a\n");
+    fs.writeFileSync(path.join(wsG, "src", "late.js"), "// late\n");
+    fs.writeFileSync(path.join(wsG, "src", "empty.js"), "");
     const mkTopo = (paths) => ({ nodes: [{ id: U(1), label: "L", entityType: "module", state: {}, anchors: paths.map((p) => ({ kind: "code", path: p })) }], edges: [] });
     const docs21 = Array.from({ length: 21 }, (_, i) => "notes-" + i + ".md");
-    ok(ME.answerableInput(mkTopo(["src/a.js"]), [...docs21, "src/late.js"]) === false, "반례① 문서 21개 뒤 코드=상한 20 밖 → 호출 차단(발췌에 코드 없음)");
-    ok(ME.answerableInput(mkTopo(["src/a.js"]), ["src/late.js", ...docs21]) === true, "반례① 대조 — 코드가 상한 안이면 호출 허용");
-    ok(ME.answerableInput(mkTopo(["src/a.js"]), ["config/secrets/k.js"]) === false, "반례② 민감 경로 코드뿐=발췌 0건 → 호출 차단");
-    ok(ME.answerableInput(mkTopo(["README.md", "docs/g.md"]), []) === false, "반례③ 변경 없음+문서 앵커 폴백=코드 발췌 없음 → 호출 차단");
-    ok(ME.answerableInput(mkTopo(["src/a.js", "README.md"]), []) === true, "반례③ 대조 — 앵커 폴백에 코드가 있으면 호출 허용");
-    const promptSel = EP.buildEnrichPrompt({ repo: ws0, topo: mkTopo(["src/a.js"]), changed: [...docs21, "src/late.js"] });
+    ok(ME.answerableInput(wsG, mkTopo(["src/a.js"]), [...docs21, "src/late.js"]) === false, "반례① 문서 21개 뒤 코드=상한 20 밖 → 호출 차단(발췌에 코드 없음)");
+    ok(ME.answerableInput(wsG, mkTopo(["src/a.js"]), ["src/late.js", ...docs21]) === true, "반례① 대조 — 코드가 상한 안(실재·판독 가능)이면 호출 허용");
+    ok(ME.answerableInput(wsG, mkTopo(["src/a.js"]), ["config/secrets/k.js"]) === false, "반례② 민감 경로 코드뿐=발췌 0건 → 호출 차단");
+    ok(ME.answerableInput(wsG, mkTopo(["README.md", "docs/g.md"]), []) === false, "반례③ 변경 없음+문서 앵커 폴백=코드 발췌 없음 → 호출 차단");
+    ok(ME.answerableInput(wsG, mkTopo(["src/a.js", "README.md"]), []) === true, "반례③ 대조 — 앵커 폴백에 실재 코드가 있으면 호출 허용");
+    ok(ME.answerableInput(wsG, mkTopo(["src/a.js"]), ["src/gone.js"]) === false, "반례④ 삭제된 코드 파일뿐=본문 판독 불가 → 호출 차단(확인 검증 blocker)");
+    ok(ME.answerableInput(wsG, mkTopo(["src/a.js"]), ["src/empty.js"]) === false, "반례④' 빈(0바이트) 코드 파일뿐=인용할 원문 없음 → 호출 차단");
+    ok(ME.answerableInput(wsG, mkTopo(["src/a.js"]), ["src/gone.js", "src/late.js"]) === true, "반례④ 대조 — 삭제+실재 혼합이면 실재 코드로 답 가능");
+    const promptSel = EP.buildEnrichPrompt({ repo: wsG, topo: mkTopo(["src/a.js"]), changed: [...docs21, "src/late.js"] });
     const selFiles = EP.excerptFilesFor(mkTopo(["src/a.js"]), [...docs21, "src/late.js"]);
     ok(selFiles.length === EP.FILES_MAX && selFiles.every((f) => promptSel.includes("### " + f)), "관문·프롬프트=같은 선정 함수(단일 경로 — 발송 파일 전수 일치)");
+    ok(/### src\/gone\.js\n```\n\(판독 불가\)/.test(EP.buildEnrichPrompt({ repo: wsG, topo: mkTopo(["src/a.js"]), changed: ["src/gone.js"] })), "프롬프트 판독도 같은 함수 경유(삭제 파일=판독 불가 표기 유지)");
   }
   // 2차 blocker①(ab-7): anchor '경로명'도 topology 직렬화에서 제외 — 수정 전엔 anchors= 줄로 누출됐다.
   const pT = EP.buildEnrichPrompt({ repo: ws0, topo: { nodes: [{ id: U(2), label: "S", entityType: "module", state: {}, anchors: [{ kind: "code", path: "config/secrets/leak-me.json" }, { kind: "code", path: "app.js" }] }], edges: [] }, changed: ["app.js"] });

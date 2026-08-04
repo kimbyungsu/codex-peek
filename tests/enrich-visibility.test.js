@@ -136,8 +136,11 @@ console.log("[3-1d] 허용 단계 전수 — 답이 도착해 거부된 단계�
   const allow = allowed[1].split(",").map((x) => x.trim().replace(/"/g, ""));
   ok(all.filter((x) => x !== "call").every((x) => allow.includes(x)), "call을 뺀 모든 단계가 허용(답 도착 후 거부는 빠짐없이 재시도)");
   ok(!allow.includes("call"), "call은 제외(답이 오지 않은 실패)");
-  // 실제 conversion 거부 경로: 근거 파일이 사라져 재판독에 실패하면 conversion 단계로 거부된다
+  // 실제 conversion 거부 경로: 근거 파일이 사라져 재판독에 실패하면 conversion 단계로 거부된다.
+  // 살아있는 코드 파일 1개를 함께 둔다 — 없으면 입력이 '답 원천 불가능'(input-doc-only)으로 정확히
+  // 재진단돼 자동 재시도 자체가 안 걸린다(2026-08-04(2) 관문 — 그 경로는 p8-enrich-run [10]이 잠금).
   const ws = setup("convfail");
+  fs.writeFileSync(path.join(ws, "src", "keep.js"), "// keep\n");
   const nodeId = MR.readTopoExFor(ws).topo.nodes[0].id;
   ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: false, paidMode: "precision" });
   let calls = 0;
