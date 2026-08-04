@@ -680,24 +680,28 @@ console.log("[11] 소화 기준점 교체(2026-08-04 사용자 결정) — 커�
   g(repo, ["add", "-A"]); g(repo, ["commit", "-qm", "c2"]);
   fs.writeFileSync(path.join(repo, "bundle.zip"), "zzz\n"); // 미커밋 산출물만 잔존
   const worktreeOnly = ["bundle.zip"];
-  const expanded = ME.expandChangedWithConsumedDelta(repo, worktreeOnly);
+  const headNow = () => g(repo, ["rev-parse", "HEAD"]).stdout.trim();
+  const expanded = ME.expandChangedWithConsumedDelta(repo, worktreeOnly, headNow());
   ok(expanded.includes("src/b.js") && expanded.includes("bundle.zip"), "기준점 이후 커밋 변경(src/b.js) 합류(작업트리 항목 보존)");
   const mkTopo9 = (paths) => ({ nodes: [{ id: U(1), label: "L", entityType: "module", state: {}, anchors: paths.map((p) => ({ kind: "code", path: p })) }], edges: [] });
   ok(ME.answerableInput(repo, mkTopo9(["src/a.js"]), worktreeOnly) === false && ME.answerableInput(repo, mkTopo9(["src/a.js"]), expanded) === true, "종전 입력=답 불가 차단 vs 합류 입력=답 가능(기아 해소 실증)");
-  ok(ME.expandChangedWithConsumedDelta(repo, null) === null, "changed=unknown(null)은 확장 안 함(추측 금지)");
+  ok(ME.expandChangedWithConsumedDelta(repo, null, headNow()) === null, "changed=unknown(null)은 확장 안 함(추측 금지)");
+  ok(ME.expandChangedWithConsumedDelta(repo, worktreeOnly).join(",") === worktreeOnly.join(","), "끝점 미지정=확장 안 함(경합 창 차단 — 자체 HEAD 재조회 금지)");
   fs.writeFileSync(ME.consumedFileFor(repo), JSON.stringify({ head: "f".repeat(40), mapId: "x", at: "t" }));
-  const gone = ME.expandChangedWithConsumedDelta(repo, worktreeOnly);
+  const gone = ME.expandChangedWithConsumedDelta(repo, worktreeOnly, headNow());
   ok(Array.isArray(gone) && gone.join(",") === worktreeOnly.join(","), "기준 커밋 소실(diff 실패)=종전 입력 그대로(보수)");
   // 검증 blocker ②: 비ASCII 파일명은 기본 quotePath로 C식 인용돼 확장자·판독이 어긋난다 — -z 원문 경로
   ok(ME.writeConsumedBaseline(repo, h1, "map-1") === true, "(전제) 유효 기준점 복원(직전 소실 반례가 가짜 값으로 덮음)");
   fs.writeFileSync(path.join(repo, "src", "한글모듈.js"), "// 한글\n");
   g(repo, ["add", "-A"]); g(repo, ["commit", "-qm", "c3"]);
-  const expanded2 = ME.expandChangedWithConsumedDelta(repo, ["bundle.zip"]);
+  const expanded2 = ME.expandChangedWithConsumedDelta(repo, ["bundle.zip"], headNow());
   ok(expanded2.includes("src/한글모듈.js") && !expanded2.some((f) => f.startsWith('"')), "비ASCII 경로=원문 복원(-z — 인용 형식 잔재 0)");
   ok(ME.answerableInput(repo, mkTopo9(["src/a.js"]), ["bundle.zip", "src/한글모듈.js"]) === true, "복원된 비ASCII 코드 파일이 관문 통과 재료가 됨");
   // 배선: ⑦a 합류+입력 시점 srcHead 캡처+done 도장=완료 시점 재판독 금지(소스 계약 — 검증 blocker ①)
   const meSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "map-enrich.js"), "utf8");
-  ok(/changed = expandChangedWithConsumedDelta\(repo, changed\);/.test(meSrc), "⑦a 배선 — 변경 산출 직후 합류");
+  ok(/changed = expandChangedWithConsumedDelta\(repo, changed, srcHead\);/.test(meSrc), "⑦a 배선 — 합류의 끝점=같은 시점에 캡처한 srcHead(경합 창 차단)");
+  ok(meSrc.includes('base.head + ".." + endHead') && !meSrc.includes('base.head + "..HEAD"'), "delta 끝점=고정 커밋(자체 HEAD 재조회 잔재 0)");
+  ok(!/\.map\(\(s\) => s\.trim\(\)\)\.filter\(Boolean\)/.test(meSrc.slice(meSrc.indexOf("function expandChangedWithConsumedDelta"), meSrc.indexOf("function expandChangedWithConsumedDelta") + 1600)), "NUL 파서 trim 금지(선행 공백 파일명 원문 보존 — 함수 본문 검사)");
   ok(/if \(st && st\.srcHead\) writeConsumedBaseline\(repo, st\.srcHead, j\.mapId\);/.test(meSrc), "done 도장=입력 시점 srcHead에만 결속");
   {
     const doneIdx = meSrc.indexOf("if (st && st.srcHead) writeConsumedBaseline");
@@ -732,7 +736,7 @@ console.log("[11b] 실행 중 커밋 반례(검증 blocker ①) — 기준점은
   ok(r.outcome === "applied", "실행 자체는 정상 완주(applied)");
   const baseRec = ME.readConsumedBaseline(ws);
   ok(!!baseRec && baseRec.head === hBefore, "기준점=입력 계산 시점 커밋(실행 중 커밋으로 전진 금지)");
-  const after = ME.expandChangedWithConsumedDelta(ws, []);
+  const after = ME.expandChangedWithConsumedDelta(ws, [], g(ws, ["rev-parse", "HEAD"]).stdout.trim());
   ok(after.includes("src/midrun.js"), "실행 중 커밋 파일은 다음 라운드 입력에 남는다(발췌 없는 소화 0)");
 }
 

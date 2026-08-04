@@ -39,17 +39,20 @@ function writeConsumedBaseline(repo, head, mapId) {
   } catch { return false; }
 }
 // 기준점 이후의 커밋된 변경 파일을 입력에 합류(순수 계산은 아님 — git 호출·실패=종전 입력 그대로).
-function expandChangedWithConsumedDelta(repo, changed) {
+function expandChangedWithConsumedDelta(repo, changed, endHead) {
   if (!Array.isArray(changed)) return changed; // 산출 불가(unknown)는 그대로 — 추측 확장 금지
+  // 끝점=호출자가 '한 번' 캡처한 커밋(확인 검증 blocker 재등장): 여기서 HEAD를 다시 조회하면 두 조회
+  // 사이에 낀 커밋이 발췌 없이 소화 처리된다. 끝점 부재=확장 안 함(기준점도 그때 안 찍히므로 무손실).
+  if (!/^[0-9a-f]{40}$/.test(String(endHead || ""))) return changed;
   const base = readConsumedBaseline(repo);
   if (!base) return changed;
   try {
     const { spawnSync } = require("child_process");
     // -z(NUL 구분·인용 해제 — 검증 blocker): 기본 core.quotePath=true면 비ASCII 경로가 C식 8진수+따옴표로
     // 인코딩돼 확장자 판정·판독이 전부 어긋난다(한글 파일명 .js가 doc으로 세탁). NUL 구분 출력은 원문 경로.
-    const g = spawnSync("git", ["-c", "safe.directory=*", "-C", repo, "diff", "--name-only", "-z", base.head + "..HEAD"], { encoding: "utf8", timeout: 5000, windowsHide: true });
+    const g = spawnSync("git", ["-c", "safe.directory=*", "-C", repo, "diff", "--name-only", "-z", base.head + ".." + endHead], { encoding: "utf8", timeout: 5000, windowsHide: true });
     if (g.status !== 0) return changed; // 기준 커밋 소실(리베이스 등)=종전 입력(보수)
-    const extra = String(g.stdout || "").split("\0").map((s) => s.trim()).filter(Boolean)
+    const extra = String(g.stdout || "").split("\0").filter(Boolean) // trim 금지(확인 보완 — 선행 공백 파일명 원문 보존)
       .filter((f) => !String(f).replace(/\\/g, "/").startsWith("project-map/")); // 자체 산출물 제외(⑦a 필터와 동형)
     return [...new Set([...changed, ...extra])];
   } catch { return changed; }
@@ -1046,19 +1049,9 @@ function runEnrichLocked(repo, o, env) {
   const jobKey = jobKeyOf(topo.mapId, ah, null); // v1 보강은 정책 비참조(dch 미포함 — 설계 jobKey 규칙)
   // ⑦a 변경 산출·corridor·소스 지문(⑥ 복구보다 먼저 — 3차 blocker⑤: 복구·재개도 라우팅 재료가 필요)
   let changed = null;
-  try {
-    if (queue.basis && queue.basis.kind === "git") {
-      const MRd = require(path.join(__dirname, "map-reader.js"));
-      const g9 = MRd.gitChangedEx(repo, { untrackedAll: true }); // 4차 blocker②: -uall — 미추적 디렉터리 내부 파일 열거
-      changed = g9 && g9.ok && !g9.truncated ? (g9.paths || []).filter((f) => !String(f).replace(/\\/g, "/").startsWith("project-map/")) : null; // 2차 blocker⑥: paths·truncated=unknown·자체 산출물 제외
-      changed = expandChangedWithConsumedDelta(repo, changed); // 기준점 교체(2026-08-04): '지도가 마지막으로 소화한 커밋' 이후의 커밋 변경 합류
-    } else changed = historylessChanges(repo, queue.invSnap, MR);
-  } catch { changed = null; }
-  const proj = { ok: true, source: "v2", nodes: topo.nodes || [] }; // corridor 판정 입력(node 소속만 — 같은 캡처 세트)
-  const corridor = MRt.corridorOf(proj, changed);
-  const srcFp = computeSourceFp(repo, queue, changed, MR);
-  // 입력 계산 시점의 HEAD 캡처(검증 blocker — 완료 시점 재판독 금지): 실행 중 생긴 커밋을 '본 것'으로
-  // 도장 찍으면 그 커밋의 파일이 발췌된 적 없이 소화 처리된다. 이 값이 done의 기준점 기록에 그대로 결속.
+  // 입력 계산 시점의 HEAD를 '한 번만' 캡처(검증 blocker 2회차 — 완료 시점 재판독도, 확장 함수의 자체
+  // 재조회도 금지): 이 값 하나가 ①커밋 delta의 끝점 ②done의 소화 기준점 기록에 함께 결속된다. 두 조회로
+  // 나누면 그 사이에 낀 커밋이 발췌 없이 소화 처리된다.
   let srcHead = null;
   try {
     if (queue.basis && queue.basis.kind === "git") {
@@ -1067,7 +1060,18 @@ function runEnrichLocked(repo, o, env) {
       const hH = ghH.status === 0 ? String(ghH.stdout || "").trim() : "";
       if (/^[0-9a-f]{40}$/.test(hH)) srcHead = hH;
     }
-  } catch { /* 캡처 실패=기준점 미기록(보수 — 다음 라운드가 다시 먹는다) */ }
+  } catch { /* 캡처 실패=확장·기준점 기록 모두 생략(보수 — 다음 라운드가 다시 먹는다) */ }
+  try {
+    if (queue.basis && queue.basis.kind === "git") {
+      const MRd = require(path.join(__dirname, "map-reader.js"));
+      const g9 = MRd.gitChangedEx(repo, { untrackedAll: true }); // 4차 blocker②: -uall — 미추적 디렉터리 내부 파일 열거
+      changed = g9 && g9.ok && !g9.truncated ? (g9.paths || []).filter((f) => !String(f).replace(/\\/g, "/").startsWith("project-map/")) : null; // 2차 blocker⑥: paths·truncated=unknown·자체 산출물 제외
+      changed = expandChangedWithConsumedDelta(repo, changed, srcHead); // 기준점 교체(2026-08-04): 소화 기준점 이후~srcHead까지의 커밋 변경 합류(끝점 고정)
+    } else changed = historylessChanges(repo, queue.invSnap, MR);
+  } catch { changed = null; }
+  const proj = { ok: true, source: "v2", nodes: topo.nodes || [] }; // corridor 판정 입력(node 소속만 — 같은 캡처 세트)
+  const corridor = MRt.corridorOf(proj, changed);
+  const srcFp = computeSourceFp(repo, queue, changed, MR);
   // ⑥ 멱등·복구 우선(수렴은 ⑦b — 설계 v11: authority 단독 결속은 자기 재보강/외부 억제 양쪽 실패라 폐기)
   if (jr.st === "ok") {
     const j = jr.job;
