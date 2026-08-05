@@ -1,6 +1,6 @@
 # 검증자 공급자 분리(VerifierProvider) — Phase1 설계
 
-상태: 설계 v1 (검증 통과 시 동결 — 동결 표기는 구현 첫 커밋 동승)
+상태: 설계 v2 (1차 설계검증 blocker 3·주의 1·보완 1 반영 — 검증 통과 시 동결 — 동결 표기는 구현 첫 커밋 동승)
 전제: Phase0 선검증 완료(2026-06-28 — Codex 훅 stdin 문서 확인·claude CLI 플래그 실측·변경감지 이식성 확인).
 사용자 승인: 2026-08-05 "3번 진행해" (1차 구현 잔여 3축 중 마지막 축).
 
@@ -11,8 +11,14 @@
 
 **Phase1 = "답+증명+판정만"**: 둘째 공급자는 답 텍스트·성공 증명(proof)·판정 판독·기계 지적
 블록·예산/캠페인/장부 연속성까지 전부 얻는다. 다음은 **codex 전용으로 유지**(공급자 능력 플래그로
-자연 비활성): 세션 목록/대시보드 대화 뷰·모델 picker·evidence-unseen(기록 다룬 흔적 대조)·근거
-재확인(바이트 프로브)·연결 세션(링크/임대/이어쓰기).
+자연 비활성): 세션 목록/대시보드 대화 뷰·모델 picker·evidence-unseen 중 '기록 다룬 흔적' 대조·근거
+재확인(바이트 프로브)·연결 세션(링크/임대/이어쓰기)·**관찰일지 결합 확인의 '승격'**(1차 설계검증
+blocker①: flagLedgerConfirms의 승격은 rollout 판독 seen="ok"가 필수(citedFilesUnseenExact →
+contract-lib 승격 조건) — 무상태 claude에선 seen="unknown"으로 기록 전용이 된다. 호출은 유지하되
+(감사 기록은 정직) 승격 불가를 상태 줄 결손 고지에 포함한다).
+단 **인용 '존재성' 검사(디스크 대조)는 공통 유지**(1차 설계검증 [주의]: flagEvidence 앞부분
+존재성 검사는 rollout 무관 — 통째 생략하면 존재하지 않는 파일·줄 인용이 무경보 통과한다. 생략
+대상은 rollout 의존 구간(다룬 흔적)과 challenge 동결뿐 — 능력 플래그로 그 구간만 게이트).
 
 ## 1. 계약·동결 (스냅샷 원칙)
 
@@ -47,21 +53,31 @@
 
 ## 3. 배선 (cmdAsk 수술 — 핵심 위험 지점)
 
-- **분기점**: cmdAsk에서 links 판독 직전. `providerSnap==="claude"`면 링크 해석·rollout 확인·
-  세션 임대·모델 인자·새 세션 비동기 감지 **전부 우회**(codex-shaped 기계 장치 — 진입 자체가 오류).
+- **분기 순서(1차 설계검증 blocker② 반영 — '링크 판독 직전 단일 분기'는 실물과 불일치)**:
+  ①공급자·harness 스냅샷을 계약 스냅샷과 같은 지점에서 확정 ②CL-C+claude=검증자 링크 해석·rollout
+  확인·세션 임대·모델 인자·새 세션 비동기 감지 생략, ask-active 클레임 모드는 명시적 "new" 취급
+  (링크 유무로 모드를 정하는 기존 식을 공급자 분기 뒤로) ③**C-C는 구현자 역할 저장소(links) 검사
+  유지**(proof가 구현자 역할 확인에 같은 저장소를 재판독 — 검증자 링크와 별개 축) ④requireLinksWritable:
+  C-C 유지(역할 기록 필수), CL-C+claude는 링크 기록이 없어 생략 가능하나 초기엔 유지(보수).
   ask-active 클레임·예산 예약·withContract 조립·attempt 기록은 공급자 무관 공통(순서 불변).
 - **후처리 꼬리 공유화(중복 금지)**: runCodex 이후의 인라인 꼬리(proof→플래그→기계층→판정→출력
   조립→checkpoint→인쇄→재확인 발송)를 `finishVerifyRun(answer, sessionKey, ctx)`로 추출해 두
   분기가 같은 함수를 쓴다. **추출은 이동만(로직 불변) — provider=codex 경로의 출력 바이트가 추출
   전과 동일함을 회귀로 고정**(가동 중 검증 시스템 리팩터의 1급 인수조건).
 - **공급자 능력 플래그로 codex 전용 단계 게이트**:
-  - `flagEvidence`(rollout 다룬 흔적+재확인 challenge 동결) — claude에서 **호출 생략**. 인용 파일
-    '존재성' 검사까지 함께 꺼지는 것은 Phase1 수용(과소 경보=안전 방향 — 허위 '근거의심' 경보를
-    매 ask 발행하는 것이 더 해롭다). 분리 재활성화는 Phase2(transcript 어댑터)와 함께.
-  - `flagLedgerConfirms`·`collectScoutTargetEvidence`·`machineFindingsLayer`·`flagVerdict`·
-    `formatForClaude`·예산/분해 고지 — 답 텍스트 기반이라 전부 공통 유지.
-  - `writeProof(sessionKey, answer, ws)` — 모델 무관(키 문자열). claude 키=`claude:<session_id||askId>`.
-    verify-guard·durableProofGate는 키 값을 해석하지 않으므로 무변경.
+  - `flagEvidence` — **분리 게이트**(1차 설계검증 [주의] 수용): 인용 존재성 검사(디스크 대조 —
+    rollout 무관)는 공통 유지, rollout '다룬 흔적' 대조와 재확인 challenge 동결만 능력 플래그로
+    생략(허위 '근거의심' 경보 방지). 통째 생략은 허위 인용 무경보 통과라 기각.
+  - `collectScoutTargetEvidence`·`machineFindingsLayer`·`formatForClaude`·예산/분해 고지 — 답
+    텍스트 기반 공통 유지. `flagLedgerConfirms`=호출 유지·승격 불가(§0 결손 — seen=unknown 기록).
+  - `flagVerdict`(1차 설계검증 [보완]): finishVerifyRun ctx에 provider·verifierSession을 분리해
+    전달 — 통계 필드의 세션 기록과 사용자 경보 문구("Codex 결론" 고정)를 공급자 중립으로 조건화
+    (codex 경로는 기존 문구·바이트 그대로 유지가 인수조건).
+  - proof(1차 설계검증 blocker③ 정정 — 저장 키와 메타데이터 혼동 금지): **저장 키는 종전대로
+    구현자 세션**(CL-C=구현자 Claude 세션·C-C=구현자 Codex 세션 — verify-guard·durableProofGate가
+    이 키로 파일을 찾는다·불변). writeProof 첫 인자는 proof 안의 검증자 세션 '메타데이터'
+    (codexSession 필드)이며 두 게이트는 이 필드 값을 해석하지 않는다 — claude에선 이 자리에
+    `claude:<session_id||askId>`를 기록(필드명 유지·값만 공급자 표기).
 - **세션 lease**: claude 무상태라 대상 없음(우회). ask-active(작업장 단위 동시 1)는 공통 유지.
 
 ## 4. 사용자 표면
@@ -82,6 +98,10 @@
 4. codex 전용 단계 생략: claude 실행에서 evidence-unseen·challenge·링크 기록이 발생하지 않음.
 5. 환경 격리: 자식 env에 호스트 훅 변수 부재 단언.
 6. C-C 모드에서 claude 공급자 조합(구현자 Codex+검증자 Claude) 스모크.
+6-1. **proof 결속 실증**(blocker③): CL-C+claude 실행 후 Stop 게이트(verify-guard)가 proof를
+   인정하는 e2e + C-C+claude에서 durableProofGate 인정 e2e(저장 키=구현자 세션 불변의 실증).
+6-2. 인용 존재성 검사 유지 실증: claude 답이 존재하지 않는 파일·줄 인용 시 evidence-mismatch
+   경보 발행(다룬 흔적·challenge는 미발동).
 7. doctor·CLI 전환 왕복.
 
 ## 6. 위험·한계 (정직 고지)
