@@ -37,8 +37,12 @@ ok(/\[caution\]/.test(coreEn.verifyBaseline) && /\[caution\]/.test(coreEn.rejudg
 ok(!/blocker\(실패 사유\)만 고치고/.test(coreKo.rejudge) && !/Fix only blockers/.test(coreEn.rejudge) && /이번 루프 처리로 결정한 항목만 함께 고쳐/.test(coreKo.rejudge), "재판단 내부 모순 부재 — 'blocker만' 문장 제거·3단 양립형(주의 동승) 잠금");
 ok(/구체 경로 1줄 필수/.test(coreKo.verifyBaseline) && /경로를 못 대면 다른 갈래로/.test(coreKo.verifyBaseline) && /one-line concrete path/.test(coreEn.verifyBaseline), "[주의] 남용 방지 — 위험 경로 1줄 필수(못 대면 다른 갈래 — v2.4)");
 ok(/실질 영향으로 판정/.test(coreKo.verifyBaseline) && /희귀 경합이라도/.test(coreKo.verifyBaseline), "blocker=종류 아닌 실질 영향(희귀 경합도 해당 시 blocker)");
-ok(/'검증: 통과' \/ '검증: 통과\(보완\)' \/ '검증: 보류' \/ '검증: 실패'/.test(coreKo.verifyBaseline), "판정 4단 출력 형식은 integrity와 동일(판독기 불변 — 계약 ⓖ)");
-ok(/Core profile/.test(coreEn.verifyBaseline) && /\[backlog\]/.test(coreEn.verifyBaseline) && /'Verdict: pass' \/ 'Verdict: pass \(notes\)' \/ 'Verdict: inconclusive' \/ 'Verdict: fail'/.test(coreEn.verifyBaseline), "core en — 동등 규약+영어 판독 문법 일치");
+// [편집 개방 2026-08-05] 판정 4단·지적 블록 서식은 캐논 '문안'에서 코드 고정 상수로 분리 — 두 프로필의
+// '실제 전달본'(verifierBaselineFor)에 항상 동봉되는지로 계약 ⓖ(판독기 불변)를 검사한다.
+ok(/'검증: 통과' \/ '검증: 통과\(보완\)' \/ '검증: 보류' \/ '검증: 실패'/.test(CL.verifierFormatDirective("ko")), "판정 4단 출력 형식=코드 고정 서식 상수(판독기 불변 — 계약 ⓖ)");
+ok(["core","integrity"].every((pf)=>CL.verifierBaselineFor("ko",pf).includes(CL.verifierFormatDirective("ko"))), "두 프로필 전달본 모두 같은 서식 동봉(문안 편집과 무관)");
+ok(!coreKo.verifyBaseline.includes("지적 목록") && !/맨 마지막 한 줄/.test(coreKo.verifyBaseline), "캐논 문안에는 기계 서식이 없다(편집 개방 안전 — 서식은 상수가 정본)");
+ok(/Core profile/.test(coreEn.verifyBaseline) && /'Verdict: pass' \/ 'Verdict: pass \(notes\)' \/ 'Verdict: inconclusive' \/ 'Verdict: fail'/.test(CL.verifierFormatDirective("en")) && CL.verifierBaselineFor("en","core").includes(CL.verifierFormatDirective("en")), "core en — 동등 규약+영어 판독 문법=코드 고정 상수·전달본 동봉");
 ok(/목표 \/ 인수조건/.test(coreKo.transmit) && /goal \/ acceptance criteria/.test(coreEn.transmit), "core 전달 원칙 — 요청문 구조화(ⓔ·한/영)");
 ok(/이 루프에서 수정하지 마라/.test(coreKo.rejudge) && /'보류'로 사용자에게 선택을 넘겨라/.test(coreKo.rejudge) && /무결성 프로필로 승격 검증 1회/.test(coreKo.rejudge), "core 재판단 — 백로그(범위 밖 제안) 수정 금지·교착 시 보류 승격·승격 게이트 권장");
 // [v2.3 2026-07-17] 보류 3분류 의무 + 백로그 단계 경계(마감 선별 승격) — ko/en 대칭(사용자 승인 개정)
@@ -54,8 +58,8 @@ ok(CL.loadBaseDirective("ko").verifyBaseline === CL.baseDefaultsFor("ko").verify
 ok(CL.loadBaseDirective("ko", "integrity").verifyBaseline === CL.loadBaseDirective("ko").verifyBaseline, "명시 integrity=미지정과 동일");
 // integrity 프리셋 1글자 불변(스냅샷 대조 — 5항 실질 영향 원칙 문구 앵커)
 const sha16 = (t) => require("crypto").createHash("sha256").update(t, "utf8").digest("hex").slice(0, 16);
-ok(sha16(CL.BASE_DEFAULTS.verifyBaseline) === "09245598a6d8fa0f" && sha16(CL.BASE_DEFAULTS.transmit) === "10938882fe841e0d" && sha16(CL.BASE_DEFAULTS.rejudge) === "f173809f9d2fb9b2", "integrity ko 캐논 3축 전문 해시 불변(스냅샷 갱신 2026-07-22: 거버넌스 증분 1 — 분쟁 경위 보고 서식 bullet 추가는 사용자 지시 개정)");
-ok(sha16(CL.BASE_DEFAULTS_EN.verifyBaseline) === "3c48e8f0d56bd2b8" && sha16(CL.BASE_DEFAULTS_EN.transmit) === "9175bd8183f9bee2" && sha16(CL.BASE_DEFAULTS_EN.rejudge) === "fe94b5f4383cdd8c", "integrity en 캐논 3축 전문 해시 불변(스냅샷 갱신 2026-07-22 — 동일 개정)");
+ok(sha16(CL.BASE_DEFAULTS.verifyBaseline) === "a9d57e907bdc3520" && sha16(CL.BASE_DEFAULTS.transmit) === "10938882fe841e0d" && sha16(CL.BASE_DEFAULTS.rejudge) === "f173809f9d2fb9b2", "integrity ko 캐논 3축 전문 해시 불변(스냅샷 갱신 2026-08-05: 편집 개방 — 판정 서식 항이 코드 고정 상수로 분리(verifierFormatDirective))");
+ok(sha16(CL.BASE_DEFAULTS_EN.verifyBaseline) === "53795d916fd47346" && sha16(CL.BASE_DEFAULTS_EN.transmit) === "9175bd8183f9bee2" && sha16(CL.BASE_DEFAULTS_EN.rejudge) === "fe94b5f4383cdd8c", "integrity en 캐논 3축 전문 해시 불변(스냅샷 갱신 2026-08-05 — 동일 분리)");
 // 오버라이드는 integrity에만 적용, core 전환이 오버라이드 파일 바이트를 건드리지 않음(ⓑ 불변 조건)
 CL.saveBaseDirective({ verifyBaseline: "사용자 커스텀 원칙", transmit: "", rejudge: "" }, "ko");
 const ovFile = CL.baseDirectiveFileFor("ko");

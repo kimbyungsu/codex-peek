@@ -35,5 +35,25 @@ console.log("[복원] resetBaseDirective → 기본값");
 ok(cl.resetBaseDirective() === true, "resetBaseDirective 반환 true");
 ok(cl.loadBaseDirective().verifyBaseline === def.verifyBaseline, "복원 후 기본 verifyBaseline");
 
+console.log("[프로필 축 — 편집 개방 2026-08-05] core 전용 슬롯 분리·격리·하위호환");
+ok(cl.BASE_PROFILE_AXIS === true, "capability 표지(BASE_PROFILE_AXIS) 노출 — 확장이 편집 개방 여부를 이걸로 판별");
+const fs2 = require("fs");
+ok(/base-directive\.core\.json$/.test(cl.baseDirectiveFileFor("ko", "core")) && /base-directive\.core\.en\.json$/.test(cl.baseDirectiveFileFor("en", "core")), "core 전용 파일명(기존 base-directive*.json=무결성 그대로 — 하위호환)");
+ok(cl.baseDirectiveFileFor("ko") === cl.baseDirectiveFileFor("ko", "integrity"), "프로필 미지정=무결성(기존 호출 전부 무회귀)");
+const coreDef = cl.baseDefaultsFor("ko", "core");
+ok(cl.saveBaseDirective({ verifyBaseline: "코어 커스텀 원칙", transmit: coreDef.transmit, rejudge: coreDef.rejudge }, "ko", "core") === true, "core 저장 성공(편집 개방)");
+ok(cl.loadBaseDirective("ko", "core").verifyBaseline === "코어 커스텀 원칙", "core 오버라이드 반영");
+ok(cl.loadBaseDirective("ko").verifyBaseline === def.verifyBaseline, "무결성 슬롯 무침투(프로필 격리 — 서로의 오버라이드를 덮지 않음)");
+ok(!fs2.existsSync(cl.baseDirectiveFileFor("ko", "integrity")) || JSON.stringify(cl.loadBaseDirective("ko")) === JSON.stringify({ verifyBaseline: def.verifyBaseline, transmit: def.transmit, rejudge: def.rejudge }), "무결성 파일 바이트 불변(core 저장이 건드리지 않음)");
+console.log("[기계 서식 분리] 문안을 어떻게 바꿔도 판정·지적 블록 서식은 전달본에 항상 동봉");
+const vbC = cl.verifierBaselineFor("ko", "core");
+ok(vbC.startsWith("코어 커스텀 원칙") && vbC.includes("[응답 서식") && vbC.includes("[지적 목록 v1]") && /맨 마지막 한 줄/.test(vbC), "서식 문구를 전부 지운 오버라이드에도 코드 고정 서식이 뒤에 동봉(판독 불파괴)");
+ok(cl.verifierBaselineFor("en", "integrity").includes("[findings v1]"), "영문·무결성도 동일(프로필·언어 무관 단일 계약)");
+ok(cl.resetBaseDirective("ko", "core") === true && cl.loadBaseDirective("ko", "core").verifyBaseline === coreDef.verifyBaseline, "core 복원=core 파일만(무결성 오버라이드 보존)");
+{ // 실전달 배선: codex-bridge 조립부가 verifierBaselineFor를 쓰는지(소스 계약 — 우회 조립 재발 차단)
+  const cbSrc = fs2.readFileSync(require("path").join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
+  ok(cbSrc.includes("verifierBaselineFor(lang, profile)") && !cbSrc.includes("loadBaseDirective(lang, profile).verifyBaseline"), "withContract 조립=verifierBaselineFor 경유(서식 동봉이 전달 경로에 실재)");
+}
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

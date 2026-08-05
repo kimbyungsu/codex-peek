@@ -329,8 +329,8 @@ console.log("[7] 배선 소스 계약 — 양 분기·flagVerdict machine·같�
   ok(/if \(profileSnap !== "core"\) return \{ machine: null, notice: "" \};/.test(src), "core 게이트 — integrity·legacy 무회귀(null)");
   ok(/effTag !== "백로그"\) continue;/.test(src) && src.includes("const effTag = f.demotedTo || f.tag"), "자동 등록 대상 — 실효 태그 [백로그]만(동결 D-1 유지·증분 2: 입장 심사 강등분 포함 — §3.3 강등 지적도 보관함 보존)");
   const canon = CL.BASE_CORE.verifyBaseline;
-  ok(canon.includes("[지적 목록 v1]") && canon.includes("[지적 목록 끝]") && /보류'로 강등한다\(fail-closed\)/.test(canon), "core 캐논 ko — 5) 블록 형식+강등 고지");
-  ok(CL.BASE_CORE_EN.verifyBaseline.includes("[findings v1]") && CL.BASE_CORE_EN.verifyBaseline.includes("[findings end]"), "core 캐논 en — 5) 블록 형식");
+  ok(CL.verifierFormatDirective("ko").includes("[지적 목록 v1]") && CL.verifierFormatDirective("ko").includes("[지적 목록 끝]") && /보류'로 강등한다\(fail-closed\)/.test(CL.verifierFormatDirective("ko")) && CL.verifierBaselineFor("ko","core").includes("[지적 목록 v1]"), "블록 형식+강등 고지=코드 고정 서식 상수(전달본 동봉 — 편집 개방 분리)");
+  ok(CL.verifierFormatDirective("en").includes("[findings v1]") && CL.verifierFormatDirective("en").includes("[findings end]") && CL.verifierBaselineFor("en","core").includes("[findings v1]"), "en 블록 형식=코드 고정 서식 상수(전달본 동봉)");
   ok(/지적이 하나도 없으면 판정은 '검증: 통과'/.test(canon), "캐논 3) — 지적 0건=통과·비차단≥1=통과(보완) 정정(2차 [보완])");
   ok(/\[장부 자동 등록\]/.test(CL.BASE_CORE.rejudge) && /ledger auto-record/.test(CL.BASE_CORE_EN.rejudge), "재판단 규약 — 자동 등록 영수증 인용 의무로 개정");
   ok(src.includes("④가 있을 때만 한 묶음으로 사용자에게 묻고") && src.includes("Ask one combined user question only when") && src.includes("[수용·처리]") && src.includes("[Rebutted and closed]"), "동승 — 2b 마지막 왕복 예고도 네 갈래 재판단 후 진짜 선택만 한 번에 질문");

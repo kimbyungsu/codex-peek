@@ -163,7 +163,7 @@ ok(/const on = !!\(d\.contract && d\.contract\.scoutMode === "on"\) && !!d\.work
 ok(/scoutOk = false;\s*\n\s*\}\s*\n\s*\}\s*\n\s*\} catch \{ sp = null; scoutOk = false; \}/.test(ext) && /구 런타임\(helper 부재\)/.test(ext), "9차1 — 구 런타임·조립 예외는 정찰 신뢰 fail-closed(3트랙이면 저장 잠김)");
 // [9차 지적 2] 언어 슬롯 단일 스냅샷 — 계약·기본값·파일 경로·라벨·lang 필드가 같은 캡처
 ok(/const langSnap = loadLangExt\(\);/.test(ext) && /const contract = loadContract\(ws, langSnap\);/.test(ext) && /\.\.\.computeBaseState\(ws, contract, langSnap\),/.test(ext) && /lang: langSnap,/.test(ext), "9차2 — computeState가 언어를 1회 캡처해 전 축에 전달");
-ok(/function loadBaseDirectiveSafe\(lang\?: Lang\)/.test(ext) && /lib\.baseDefaultsFor\(l\)/.test(ext) && /lib\.scoutBaselineFileFor\(lang\)/.test(ext) && /lib\.scoutBaselineDefaultFor\(lang\)/.test(ext), "9차2 — 파일·기본값 helper 모두 같은 슬롯 인자");
+ok(/function loadBaseDirectiveSafe\(lang\?: Lang, profile\?: string\)/.test(ext) && /lib\.baseDirectiveFileFor\(l, profile\)/.test(ext) && /lib\.baseDefaultsFor\(l, profile\)/.test(ext) && /lib\.scoutBaselineFileFor\(lang\)/.test(ext) && /lib\.scoutBaselineDefaultFor\(lang\)/.test(ext), "9차2 — 파일·기본값 helper 모두 같은 슬롯 인자(편집 개방: 프로필도 같은 스냅샷으로 관통)");
 // [8차 지적 2] 판독 불신 동안 저장·복원 버튼도 차단(안내와 실동작 일치 — 저장기는 신뢰 판독 없이 덮거나 삭제)
 ok(/\$\("saveB"\)\.disabled = !baseOk \|\| baseM\.locked\(\) \|\| !baseCanon;/.test(ext) && /\$\("resetB"\)\.disabled = !baseOk \|\| baseM\.locked\(\) \|\| !baseCanon;/.test(ext), "8차2 — !baseCanon이면 저장·복원 비활성(fail-closed)");
 // [8차 지적 5] 안내 우선순위 — 모드 hold(P-10)·언어 hold가 판독 안내를 덮이지 않음

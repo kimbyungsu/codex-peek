@@ -39,7 +39,7 @@ ok(L.loadContract(WS).claude[0] === "추측 금지", "전역 ko로 되돌리면 
 
 // ── 3) 기본지침 언어 슬롯 + 영문 기본값 ──
 ok(L.baseDefaultsFor("en") === L.BASE_DEFAULTS_EN && L.baseDefaultsFor("ko") === L.BASE_DEFAULTS, "언어별 기본값 선택");
-ok(/Verdict: pass/.test(L.BASE_DEFAULTS_EN.verifyBaseline) && /Verdict: fail/.test(L.BASE_DEFAULTS_EN.verifyBaseline) && /VERY LAST line/i.test(L.BASE_DEFAULTS_EN.verifyBaseline), "영문 지침이 판독기와 같은 판정 형식(Verdict: …)·verdict-last를 지시");
+ok(/Verdict: pass/.test(L.verifierFormatDirective("en")) && /Verdict: fail/.test(L.verifierFormatDirective("en")) && /VERY LAST line/i.test(L.verifierFormatDirective("en")) && L.verifierBaselineFor("en","integrity").includes(L.verifierFormatDirective("en")), "영문 판정 형식(Verdict: …)·verdict-last=코드 고정 서식 상수가 전달본에 동봉(편집 개방 분리)");
 ok(/accept\/rebut\/hold/.test(L.BASE_DEFAULTS_EN.rejudge) && /my claim/.test(L.BASE_DEFAULTS_EN.transmit), "영문 재판단·전달 원칙 핵심 구문 존재");
 ok(L.loadBaseDirective("en").verifyBaseline === L.BASE_DEFAULTS_EN.verifyBaseline, "en 기본지침 = 영문 기본값(오버라이드 없음)");
 ok(L.loadBaseDirective("ko").verifyBaseline === L.BASE_DEFAULTS.verifyBaseline, "ko 기본지침 = 한국어 기본값");
