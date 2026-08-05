@@ -1073,5 +1073,39 @@ console.log("[12g] ab-6 종결 — 죽은 job-잠금 회수는 검증된 실행 
   }
 }
 
+console.log("[12h] 7차 ab-6 변형 — 오탈취된 원 소유자는 provider 반환 후 장부를 덮어쓰지 못한다(무기록 물러남)");
+{
+  // 시나리오(도장 검증 blocker): B가 유료 호출 중 오탈취(grave)→C가 획득해 running 시도를 uncertain-call로
+  // park→B의 결과·실패 기록이 fence 없이 그 장부를 덮어쓰면 '자동 재시도 밖 불일치'(parked job+applying
+  // attempt) — 이제 provider 반환 직후·검증 대조 직후 소유 재검증으로 상실 시 아무것도 기록하지 않는다.
+  const sab = (ws) => {
+    const lockDir = path.dirname(ME.jobFileFor(ws) + ".lock");
+    const runLockP = path.join(lockDir, ME.repoKeyFor(ws) + ".run.funlock");
+    fs.renameSync(runLockP, runLockP + ".reclaim.h-testgrave"); // A의 오회수(산 소유자 grave)
+    fs.writeFileSync(runLockP, JSON.stringify({ pid: process.pid, token: "c-newowner", runId: "00000000-0000-4000-8000-00000000h1" })); // C 획득
+    const wC = ME.updateEnrichJob(ws, (jj) => jj && { ...jj, phase: "parked", parkedReason: "uncertain-call", attempts: jj.attempts.map((x) => x.phase === "running" ? { ...x, phase: "parked", parkedReason: "uncertain-call", finishedAt: new Date().toISOString() } : x), finishedAt: new Date().toISOString() }); // C의 park(resumeJob 동형)
+    if (!wC.ok) throw new Error("C park 실패: " + wC.reason);
+  };
+  { // ⓐ 유효 결과 도착(wR 창) — 결과 영속·applying 전이가 일어나면 안 된다
+    const { ws, nodeId } = setup("fenceh1");
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: false, paidMode: "economy" });
+    const r = ME.runEnrich(ws, base(ws, { mode: "economy", adapters: { economy: (c) => { sab(ws); return goodAdapter(nodeId)(c); } } }));
+    ok(r.outcome === "busy" && r.reason === "run-lock-lost", "유효 결과+오탈취=무기록 물러남(busy)");
+    const jh = ME.readEnrichJob(ws).job;
+    const ah = jh.attempts[jh.attempts.length - 1];
+    ok(jh.phase === "parked" && jh.parkedReason === "uncertain-call", "C의 park 장부 불변(덮어쓰기 0)");
+    ok(ah.phase === "parked" && !ah.results, "시도 applying 전이·결과 영속 없음(parked job+applying attempt 불일치 소멸)");
+  }
+  { // ⓑ 호출 실패 반환(w0 창) — failed 덮어쓰기도 금지
+    const { ws } = setup("fenceh2");
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: false, paidMode: "economy" });
+    const r = ME.runEnrich(ws, base(ws, { mode: "economy", adapters: { economy: () => { sab(ws); return { ok: false, detail: "late-fail" }; } } }));
+    ok(r.outcome === "busy" && r.reason === "run-lock-lost", "실패 반환+오탈취=무기록 물러남(busy)");
+    const jh2 = ME.readEnrichJob(ws).job;
+    const ah2 = jh2.attempts[jh2.attempts.length - 1];
+    ok(jh2.phase === "parked" && ah2.phase === "parked" && !ah2.failReason, "failed 기록도 미기입(C 장부 보존)");
+  }
+}
+
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
 process.exit(fail ? 1 : 0);

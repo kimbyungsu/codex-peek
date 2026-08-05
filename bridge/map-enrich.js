@@ -1419,6 +1419,10 @@ function runAttempt(repo, o, env, st, provider) {
   const usageContext = env.p10 ? env.p10.usage(st.jobKey, jobRunIdOf(jobForUsage)) : null;
   try { call = adapter({ repo, topo: st.topo, changed: st.changed, provider, usageContext }); }
   catch (e) { call = { ok: false, detail: "adapter-threw: " + String(e && e.message) }; }
+  // provider 반환 직후 소유 재검증(7차 ab-6 변형): 호출 동안 오탈취가 일어나 새 소유자가 이 running
+  // 시도를 uncertain-call로 park했다면, 아래 실패·결과 기록이 그 장부를 덮어써 '자동 재시도 대상 밖의
+  // 불일치'(parked job+applying attempt)를 만든다 — 상실 시 아무것도 기록하지 않고 물러난다(busy).
+  if (env.fence && !env.fence()) return { outcome: "busy", reason: "run-lock-lost" };
   if (!call || call.ok !== true) {
     const failureReason = call && call.failureKind === "result-invalid" ? "provider-result-invalid" : "provider-call-failed";
     // 어댑터가 '답은 왔는데 형태가 아니다'로 알려주면 응답 단계, 그 밖은 호출 단계로 남긴다.
@@ -1446,6 +1450,8 @@ function runAttempt(repo, o, env, st, provider) {
       if (!vr.ok) break;
     }
   }
+  // 검증 대조(파일 판독) 동안에도 같은 창이 열린다 — 실패 기록(w1)·결과 영속(wR) 직전 재검증(7차 ab-6 변형).
+  if (env.fence && !env.fence()) return { outcome: "busy", reason: "run-lock-lost" };
   if (!vr.ok) {
     const fx1 = vr.kind === "evidence"
       ? { failureStage: "validation", failureCode: vr.code || "evidence-mismatch", ...safeFailureFile(vr.file) }
