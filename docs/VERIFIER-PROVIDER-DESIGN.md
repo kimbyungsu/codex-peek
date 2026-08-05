@@ -1,6 +1,6 @@
 # 검증자 공급자 분리(VerifierProvider) — Phase1 설계
 
-상태: 설계 v2 (1차 설계검증 blocker 3·주의 1·보완 1 반영 — 검증 통과 시 동결 — 동결 표기는 구현 첫 커밋 동승)
+상태: 설계 v3 (1·2차 설계검증 반영 — 잔여: session_id 키 서술 정정·존재성 시험 계약 정합 — 검증 통과 시 동결 — 동결 표기는 구현 첫 커밋 동승)
 전제: Phase0 선검증 완료(2026-06-28 — Codex 훅 stdin 문서 확인·claude CLI 플래그 실측·변경감지 이식성 확인).
 사용자 승인: 2026-08-05 "3번 진행해" (1차 구현 잔여 3축 중 마지막 축).
 
@@ -42,7 +42,8 @@ contract-lib 승격 조건) — 무상태 claude에선 seen="unknown"으로 기�
   - **환경 격리**: spawn env에서 `CLAUDE_CODE_SESSION_ID`·`CLAUDE_PROJECT_DIR`·`CLAUDECODE` 류
     호스트 훅 변수 제거 — 구현 세션(Claude Code)의 훅·세션 문맥이 검증자 프로세스로 새어
     역할 오염(자기 세션 proof 키 충돌·훅 재귀)되는 경로 차단.
-  - **무상태(stateless)**: 매 ask가 새 `-p` 실행. `session_id`는 proof 키 재료로만 사용.
+  - **무상태(stateless)**: 매 ask가 새 `-p` 실행. `session_id`는 proof '메타데이터'(codexSession
+    필드 값)와 출력 헤더 표기 재료로만 사용 — **저장 키 아님**(§3 proof 항: 저장 키=구현자 세션 불변).
     연결 세션 연속성 없음 — 자연어 문맥 연속은 포기하되, 기계 연속성(findings 계보·입장 심사·
     캠페인 예산·재확인 규약 동결본)은 답 텍스트 기반이라 전부 유지된다. 출력 헤더는
     "# 연결 세션 <id>" 대신 "# 검증자: Claude(무상태) <askId>"로 정직 표기.
@@ -100,8 +101,10 @@ contract-lib 승격 조건) — 무상태 claude에선 seen="unknown"으로 기�
 6. C-C 모드에서 claude 공급자 조합(구현자 Codex+검증자 Claude) 스모크.
 6-1. **proof 결속 실증**(blocker③): CL-C+claude 실행 후 Stop 게이트(verify-guard)가 proof를
    인정하는 e2e + C-C+claude에서 durableProofGate 인정 e2e(저장 키=구현자 세션 불변의 실증).
-6-2. 인용 존재성 검사 유지 실증: claude 답이 존재하지 않는 파일·줄 인용 시 evidence-mismatch
-   경보 발행(다룬 흔적·challenge는 미발동).
+6-2. 인용 존재성 검사 유지 실증(2차 설계검증 [보완] — 정본 검사 계약 정합): claude 답이 '실재·유일
+   해석 가능한 파일'의 범위 초과 줄을 인용하면 evidence-mismatch 경보 발행. 존재하지 않는 파일은
+   정본 계약대로 경보하지 않음(cry-wolf 방지 — tests/evidence.test.js 고정)·다룬 흔적·challenge는
+   미발동.
 7. doctor·CLI 전환 왕복.
 
 ## 6. 위험·한계 (정직 고지)
