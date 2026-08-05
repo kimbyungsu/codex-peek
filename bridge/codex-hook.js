@@ -444,17 +444,17 @@ function onStop(j, ws, sid, c) {
   const n=bump(ATTEMPT_DIR,sid,turnId,progressEpoch);
   if(n===null){
     if(capReached){
-      const ko=`검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았고, 종료 안내 횟수도 기록하지 못했습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.`;
-      const en=`Verification cap ${round} was reached without the required accept/rebut/park/user-decision closeout, and the stop-reminder count could not be stored. Do not ignore this red alert: complete the four-way closeout before treating the work as closed.`;
-      try{appendIntegrityEvent({ts:new Date().toISOString(),session:sid,workspace:ws,kind:"verify-handoff-missing",severity:"error",detail:t(ko,en),detailKo:ko,detailEn:en});}catch{}
+      const ko=(handoffCtx&&handoffCtx.passNoFindings)?`검증 상한 ${round} 도달 — 마지막 판정은 통과였고 열린 지적도 없지만, 통과 이후의 수정이 검증되지 않은 채 턴이 끝났습니다(잔여 수정=미검증). 다음 턴 첫 검증이 이 잔여를 닫으면 해소됩니다.`:`검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았고, 종료 안내 횟수도 기록하지 못했습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.`;
+      const en=(handoffCtx&&handoffCtx.passNoFindings)?`Verification cap ${round} reached — the last verdict passed with no open findings, but edits made after that pass ended the turn unverified. The next turn's first verification clears this.`:`Verification cap ${round} was reached without the required accept/rebut/park/user-decision closeout, and the stop-reminder count could not be stored. Do not ignore this red alert: complete the four-way closeout before treating the work as closed.`;
+      try{appendIntegrityEvent({ts:new Date().toISOString(),session:sid,workspace:ws,kind:(handoffCtx&&handoffCtx.passNoFindings)?"verify-incomplete":"verify-handoff-missing",severity:"error",detail:t(ko,en),detailKo:ko,detailEn:en});}catch{}
     }
     try{writePhase("incomplete",{session:sid,workspace:ws});}catch{} return;
   }
   if(n>MAX_VERIFY_ATTEMPTS){
     if(capReached){
-      const ko=`검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.`;
-      const en=`Verification cap ${round} was reached, but the required accept/rebut/park/user-decision closeout was not shown. Do not ignore this red alert: complete the four-way closeout before treating the work as closed.`;
-      try{appendIntegrityEvent({ts:new Date().toISOString(),session:sid,workspace:ws,kind:"verify-handoff-missing",severity:"error",detail:t(ko,en),detailKo:ko,detailEn:en});}catch{}
+      const ko=(handoffCtx&&handoffCtx.passNoFindings)?`검증 상한 ${round} 도달 — 마지막 판정은 통과였고 열린 지적도 없지만, 통과 이후의 수정이 검증되지 않은 채 턴이 끝났습니다(잔여 수정=미검증). 다음 턴 첫 검증이 이 잔여를 닫으면 해소됩니다.`:`검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.`;
+      const en=(handoffCtx&&handoffCtx.passNoFindings)?`Verification cap ${round} reached — the last verdict passed with no open findings, but edits made after that pass ended the turn unverified. The next turn's first verification clears this.`:`Verification cap ${round} was reached, but the required accept/rebut/park/user-decision closeout was not shown. Do not ignore this red alert: complete the four-way closeout before treating the work as closed.`;
+      try{appendIntegrityEvent({ts:new Date().toISOString(),session:sid,workspace:ws,kind:(handoffCtx&&handoffCtx.passNoFindings)?"verify-incomplete":"verify-handoff-missing",severity:"error",detail:t(ko,en),detailKo:ko,detailEn:en});}catch{}
     }
     try{writePhase("incomplete",{session:sid,workspace:ws});}catch{} return;
   }

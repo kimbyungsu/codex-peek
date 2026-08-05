@@ -279,6 +279,23 @@ console.log("[PASS-사례] 2026-08-05 이중 실패 봉합 — 통과·지적 0�
   // 무회귀: 실패 사례는 종전대로 실제 판정 라벨 실패+지적 결속
   const failMsg = VH.capHandoffInstruction("ko", "5/5", evidenceCtx.verdict || "not-pass", evidenceCtx);
   ok(failMsg.includes("(마지막 판정: 실패)") && failMsg.includes("R5-F1"), "실패 사례=실패 라벨+실지적 결속(무회귀)");
+  // 재확인 blocker① — 손상된 지적 블록은 통과여도 판독 불가(깨끗한 무지적 승격 금지)
+  const corruptId = "ask-passcorrupt-000001", corruptCamp = "cl:passcorrupt:turn";
+  writeEvidenceJob(corruptId, corruptCamp, 5, ["본문...", "[지적 목록 v2]", "{깨진 JSON", "[지적 목록 끝]", "검증: 통과", ""].join("\n"));
+  const corruptCtx = VH.capHandoffContext(home, ws, corruptCamp);
+  ok(corruptCtx.unavailable === true && !corruptCtx.passNoFindings, "통과+블록 손상=판독 불가(승격 금지 — EVIDENCE-UNAVAILABLE 경로)");
+  // 재확인 blocker② — passNoFindings 문맥에서 허구 키·가짜 사용자 판단 거부
+  const passCtx2 = VH.capHandoffContext(home, ws, "cl:passcase:turn");
+  const fakeUser = ["[Verification cap closeout]", "[Accepted and handled]", "None", "[Rebutted and closed]", "None", "[Parked]", "None", "[User decision required]", "- R1-F1 fabricated finding — Target: the saved choice. Scenario: it may vanish. Risk: false completion. Option 1: keep. Option 2: fix next turn.", "[Alert meaning]", "The verify-incomplete yellow remains; this closeout is not a verification pass.", "[Recommendation]", "I recommend option 2 because it avoids a false signal."].join("\n");
+  ok(VH.validateCapHandoff(fakeUser, passCtx2).ok === false, "허구 키의 가짜 사용자 판단=거부(빈 허용 목록 무사통과 구멍 봉합)");
+  const fakeAccept = fakeUser.replace("- R1-F1 fabricated finding — Target: the saved choice. Scenario: it may vanish. Risk: false completion. Option 1: keep. Option 2: fix next turn.", "None").replace("[Accepted and handled]\nNone", "[Accepted and handled]\n- R1-F1 fabricated — Change: `x.js` tweak; Check: test=ok 1 case; Evidence: `x.js`");
+  ok(VH.validateCapHandoff(fakeAccept, passCtx2).ok === false, "허구 키의 가짜 수용 처리=거부");
+  // 재확인 blocker③·보완 — 소스 계약: codex-hook·guard의 상한 경보가 passNoFindings 진실화(종류·문구)
+  const hookSrc9 = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-hook.js"), "utf8");
+  ok((hookSrc9.match(/kind:\(handoffCtx&&handoffCtx\.passNoFindings\)\?"verify-incomplete":"verify-handoff-missing"/g) || []).length === 2, "codex-hook — 두 상한 경보 모두 통과-잔여=verify-incomplete");
+  ok((hookSrc9.match(/마지막 판정은 통과였고 열린 지적도 없지만/g) || []).length === 2, "codex-hook — 진실 문구 2곳");
+  const guardSrc9 = fs.readFileSync(path.join(__dirname, "..", "bridge", "verify-guard.js"), "utf8");
+  ok((guardSrc9.match(/passNoFindings\) \? "verify-incomplete" : "verify-handoff-missing"/g) || []).length >= 1 && (guardSrc9.match(/마지막 판정은 통과였고 열린 지적도 없지만/g) || []).length >= 2, "verify-guard — 카운트 실패 분기 포함 종류·문구 진실화");
 }
 try { fs.rmSync(home, { recursive: true, force: true }); } catch { /* ignore */ }
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);

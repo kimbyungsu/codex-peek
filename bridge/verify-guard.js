@@ -275,9 +275,9 @@ process.stdin.on("end", () => {
       // 상한 인계까지 저장 실패로 조용히 사라지면 사용자는 빨강의 의미도, 다음 선택도 받지 못한다.
       // 무한 차단은 피하되 상한 인계 누락만은 별도 빨강으로 남긴다.
       if (capReached) {
-        const ko = `검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았고, 종료 안내 횟수도 기록하지 못했습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.`;
-        const enMsg = `Verification cap ${round} was reached without the required accept/rebut/park/user-decision closeout, and the stop-reminder count could not be stored. Do not ignore this red alert: complete the four-way closeout before treating the work as closed.`;
-        try { appendIntegrityEvent({ ts: new Date().toISOString(), session: claudeSession || "", workspace: ws, kind: "verify-handoff-missing", severity: "error", detail: en ? enMsg : ko, detailKo: ko, detailEn: enMsg }); } catch { /* best-effort */ }
+        const ko = (handoffCtx && handoffCtx.passNoFindings) ? `검증 상한 ${round} 도달 — 마지막 판정은 통과였고 열린 지적도 없지만, 통과 이후의 수정이 검증되지 않은 채 턴이 끝났습니다(잔여 수정=미검증·안내 횟수 기록도 실패). 다음 턴 첫 검증이 이 잔여를 닫으면 해소됩니다.` : `검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았고, 종료 안내 횟수도 기록하지 못했습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.`;
+        const enMsg = (handoffCtx && handoffCtx.passNoFindings) ? `Verification cap ${round} reached — the last verdict passed with no open findings, but edits made after that pass ended the turn unverified (and the stop-reminder count could not be stored). The next turn's first verification clears this.` : `Verification cap ${round} was reached without the required accept/rebut/park/user-decision closeout, and the stop-reminder count could not be stored. Do not ignore this red alert: complete the four-way closeout before treating the work as closed.`;
+        try { appendIntegrityEvent({ ts: new Date().toISOString(), session: claudeSession || "", workspace: ws, kind: (handoffCtx && handoffCtx.passNoFindings) ? "verify-incomplete" : "verify-handoff-missing", severity: "error", detail: en ? enMsg : ko, detailKo: ko, detailEn: enMsg }); } catch { /* best-effort */ }
         try { writePhase("incomplete", { session: claudeSession, workspace: ws }); } catch { /* best-effort */ }
       }
       process.exit(0); // 저장 실패 등 카운트 불가 + 재진입 → 통과(무한 차단 방지)

@@ -100,7 +100,8 @@ function capHandoffContext(bridgeDir, ws, campaignId) {
   const passLike = verdict === "pass" || verdict === "pass-notes";
   const alertKind = verdict === "fail" || verdict === "inconclusive" ? "verdict-nonclean" : (passLike ? "verify-incomplete" : "verify-handoff-missing");
   const parsed = parseFindingEvidence(answer, rec.job.verifyRound);
-  if (passLike && (!parsed.ok || !parsed.evidence.length)) {
+  // 손상(파싱 실패)은 통과여도 '판독 불가'다(재확인 blocker①): 승격 조건은 '정상 파싱+빈 목록'뿐.
+  if (passLike && parsed.ok && parsed.evidence.length === 0) {
     // 통과·열린 지적 0 = 판독 실패가 아니라 정상 — '통과 이후 수정만 미검증' 사례로 정직 표기(보류 계열 경고)
     return { evidence: [], alertKind, source: rec.fileId, unavailable: false, passNoFindings: true, verdict, backlogItems, backlogHealthy };
   }
@@ -140,7 +141,10 @@ function categoryLines(schema, rawBodies, context) {
       const m = /^-\s*(EVIDENCE-UNAVAILABLE|R\d+-F\d+)\b/i.exec(line);
       if (!m) return false;
       const key = m[1].toLowerCase();
-      if ((allowed.size && !allowed.has(key)) || seen.has(key)) return false;
+      // 문맥이 '있는데' 허용 목록이 비면(요구 근거 0 — passNoFindings) 어떤 키도 인정하지 않는다
+      // (재확인 blocker②: 빈 목록=무사통과가 허구 지적·가짜 사용자 판단을 승인하던 구멍).
+      // 문맥 없는 호출(형식 전용 검사)은 종전대로 키 목록을 강제하지 않는다(기존 계약 무회귀).
+      if ((context ? (!allowed.size || !allowed.has(key)) : false) || seen.has(key)) return false;
       seen.add(key);
       const evidence = byKey.get(key);
       if (evidence && evidence.title && countNeedle(line, evidence.title) !== 1) return false;
