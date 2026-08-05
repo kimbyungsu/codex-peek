@@ -220,7 +220,7 @@ console.log("[5] 경보 갈아끼우기는 원자적 — 삭제만 되고 추가
   const notifyBlk = me.slice(me.indexOf("function notifyEnrichParked("), me.indexOf("function jobKeyOf("));
   ok(/\{ supersedeSameKindWs: true \}/.test(notifyBlk) && !/supersedeIntegrity/.test(notifyBlk), "통지 헬퍼는 별도 supersede 호출 없이 원자 옵션만 사용");
   { const pb = me.slice(me.indexOf("const park = (jobMut, reason, extra)"), me.indexOf("// ⓪ 게이트 최선행")); ok(pb.includes("notifyEnrichParked("), "신규 보류 경로가 통지 헬퍼 사용"); }
-  ok(/const wrappedPark = [\s\S]{0,260}notifyEnrichParked\(/.test(me), "재개(자동 재시도) 경로의 보류도 통지 헬퍼 사용 — 경보 유실 창 0");
+  ok(/const wrappedPark = [\s\S]{0,600}notifyEnrichParked\(/.test(me), "재개(자동 재시도) 경로의 보류도 통지 헬퍼 사용 — 경보 유실 창 0"); // 9차 ab-6 일반화로 wrappedPark에 소유 검증 2줄 추가 — 근접 창만 확장(의도 동일)
   // 실제 동작: 같은 ws 반복 기록은 1건 유지, 다른 ws는 보존, ack된 건 보존
   const wsX = "D:/atomic-x", wsY = "D:/atomic-y";
   CL.appendIntegrityEvent({ ts: new Date().toISOString(), workspace: wsY, kind: "enrich-parked", severity: "warning", detail: "다른 프로젝트" }, { supersedeSameKindWs: true });
