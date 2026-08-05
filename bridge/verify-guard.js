@@ -291,14 +291,14 @@ process.stdin.on("end", () => {
         ts: new Date().toISOString(),
         session: claudeSession || "",
         workspace: ws,
-        kind: capReached ? "verify-handoff-missing" : "verify-incomplete",
+        kind: capReached ? ((handoffCtx && handoffCtx.passNoFindings) ? "verify-incomplete" : "verify-handoff-missing") : "verify-incomplete", // 통과·지적 0=인계 누락이 아니라 잔여 미검증(보류 계열)
         severity: "error",
         // detailKo/detailEn 동시 저장 — 확장 표시부가 현재 언어를 고름. detail은 구버전 판독 폴백.
         detail: en
-          ? (capReached ? `Verification cap ${round} was reached, but the required accept/rebut/park/user-decision closeout was not shown. Do not ignore this red alert: complete the four-way closeout before treating the work as closed.` : `Verify mode:${c.verifyMode} — stop reminders repeated without progress, and this turn ended without completed verification (this turn's result is UNVERIFIED).`)
-          : (capReached ? `검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.` : `검증 모드:${c.verifyMode} — 진행 변화 없이 종료 차단 안내가 반복된 뒤 검증 미완료 상태로 이 턴이 종료됨(이 턴 결과는 미검증).`),
-        detailKo: capReached ? `검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.` : `검증 모드:${c.verifyMode} — 진행 변화 없이 종료 차단 안내가 반복된 뒤 검증 미완료 상태로 이 턴이 종료됨(이 턴 결과는 미검증).`,
-        detailEn: capReached ? `Verification cap ${round} was reached, but the required accept/rebut/park/user-decision closeout was not shown. Do not ignore this red alert: complete the four-way closeout before treating the work as closed.` : `Verify mode:${c.verifyMode} — stop reminders repeated without progress, and this turn ended without completed verification (this turn's result is UNVERIFIED).`,
+          ? (capReached ? `${(handoffCtx && handoffCtx.passNoFindings) ? `Verification cap ${round} reached — the last verdict passed with no open findings, but edits made after that pass ended the turn unverified. The next turn's first verification clears this.` : `Verification cap ${round} was reached, but the required accept/rebut/park/user-decision closeout was not shown. Do not ignore this red alert: complete the four-way closeout before treating the work as closed.`}` : `Verify mode:${c.verifyMode} — stop reminders repeated without progress, and this turn ended without completed verification (this turn's result is UNVERIFIED).`)
+          : (capReached ? `${(handoffCtx && handoffCtx.passNoFindings) ? `검증 상한 ${round} 도달 — 마지막 판정은 통과였고 열린 지적도 없지만, 통과 이후의 수정이 검증되지 않은 채 턴이 끝났습니다(잔여 수정=미검증). 다음 턴 첫 검증이 이 잔여를 닫으면 해소됩니다.` : `검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.`}` : `검증 모드:${c.verifyMode} — 진행 변화 없이 종료 차단 안내가 반복된 뒤 검증 미완료 상태로 이 턴이 종료됨(이 턴 결과는 미검증).`),
+        detailKo: capReached ? `${(handoffCtx && handoffCtx.passNoFindings) ? `검증 상한 ${round} 도달 — 마지막 판정은 통과였고 열린 지적도 없지만, 통과 이후의 수정이 검증되지 않은 채 턴이 끝났습니다(잔여 수정=미검증). 다음 턴 첫 검증이 이 잔여를 닫으면 해소됩니다.` : `검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.`}` : `검증 모드:${c.verifyMode} — 진행 변화 없이 종료 차단 안내가 반복된 뒤 검증 미완료 상태로 이 턴이 종료됨(이 턴 결과는 미검증).`,
+        detailEn: capReached ? `${(handoffCtx && handoffCtx.passNoFindings) ? `Verification cap ${round} reached — the last verdict passed with no open findings, but edits made after that pass ended the turn unverified. The next turn's first verification clears this.` : `Verification cap ${round} was reached, but the required accept/rebut/park/user-decision closeout was not shown. Do not ignore this red alert: complete the four-way closeout before treating the work as closed.`}` : `Verify mode:${c.verifyMode} — stop reminders repeated without progress, and this turn ended without completed verification (this turn's result is UNVERIFIED).`,
       });
     } catch { /* 이벤트 기록 실패는 종료를 막지 않음 */ }
     try { writePhase("incomplete", { session: claudeSession, workspace: ws }); } catch { /* best-effort */ } // 검증 미완 종료
@@ -313,7 +313,7 @@ process.stdin.on("end", () => {
     JSON.stringify({
       decision: "block",
       reason: capReached
-        ? capHandoffInstruction(en ? "en" : "ko", round, "not-pass", handoffCtx)
+        ? capHandoffInstruction(en ? "en" : "ko", round, (handoffCtx && handoffCtx.verdict) || "not-pass", handoffCtx) // 실제 판정 전달(2026-08-05 이중 실패 봉합 — 하드코딩 not-pass 폐기)
         : en
           ? `[Verify mode:${c.verifyMode} · actual round ${round}] ${what} there is no successful Codex verification response bound to this turn. At most one durable verification may be queued/running: start one via \`node "${BRIDGE}" ask-start --allow-new "<what to verify>"\`, then repeat \`node "${BRIDGE}" ask-wait <job-id>\` while pending. The dashboard verification wait (${waitMin} min) is the actual deadline. After a completed fail or a later edit, finish that job before starting the next round sequentially; stop on pass. A new verifier session is created only when none is linked.`
           : `[검증 모드:${c.verifyMode} · 실제 회차 ${round}] ${what} 이번 턴에 결속된 Codex 통과 증명이 없다. queued/running 내구 검증은 동시에 최대 1개만 둘 수 있다. \`node "${BRIDGE}" ask-start --allow-new "<무엇을 검증할지>"\` 로 시작하고 pending이면 \`node "${BRIDGE}" ask-wait <job-id>\` 를 반복하라. 대시보드 검증 대기시간(${waitMin}분)이 실제 deadline이다. 완료된 실패 또는 이후 수정이 있으면 앞 작업을 끝낸 뒤 다음 회차를 순차적으로 시작하고, 통과하면 멈춰라. 연결이 전혀 없을 때만 새 검증 세션을 만든다.`,

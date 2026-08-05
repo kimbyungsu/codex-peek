@@ -262,6 +262,24 @@ fs.appendFileSync(rollout, msg("assistant", acceptedCloseout) + "\n");
 ok(runC().stdout === "" && JSON.parse(fs.readFileSync(CL.PHASE_FILE, "utf8")).phase === "cap-settled", "C-C 실제 rollout도 사용자 판단 없는 마감을 자동 정리 완료(통과 아님)로 표시");
 ok(!CL.readIntegrityEvents().some((e) => e.workspace && CL.normWs(e.workspace) === CL.normWs(wsC) && (e.kind === "verify-handoff-missing" || e.kind === "verify-incomplete")), "인계문이 완성되면 누락 빨강이 자동 해소되고 일반 미검증도 없음");
 
+console.log("[PASS-사례] 2026-08-05 이중 실패 봉합 — 통과·지적 0을 not-pass/판독불가로 둔갑시키지 않는다");
+{
+  const passId = "ask-passcase-0000000001", passCamp = "cl:passcase:turn";
+  // 실사고 재현 픽스처: 마지막 회차가 깨끗한 통과(지적 목록 비어 있음) — ask-mse8h8mi와 동형
+  writeEvidenceJob(passId, passCamp, 5, "본문 근거...\n[지적 목록 v2]\n[지적 목록 끝]\n검증: 통과\n");
+  const passCtx = VH.capHandoffContext(home, ws, passCamp);
+  ok(passCtx.verdict === "pass" && passCtx.passNoFindings === true && passCtx.unavailable === false, "문맥=판정 동봉·통과+지적0=passNoFindings(판독 실패로 조작 금지)");
+  ok(passCtx.alertKind === "verify-incomplete", "경고 종류=잔여 미검증(보류 계열) — 인계 누락·판정 오염으로 위장하지 않음");
+  const passMsg = VH.capHandoffInstruction("ko", "5/5", (passCtx && passCtx.verdict) || "not-pass", passCtx);
+  ok(passMsg.includes("(마지막 판정: 통과)") && !passMsg.includes("not-pass") && !passMsg.includes("통과 아님"), "인계문=실제 판정 라벨(하드코딩 not-pass 거짓 전달 소멸)");
+  ok(passMsg.includes("PASS-NO-FINDINGS") && !passMsg.includes("- EVIDENCE-UNAVAILABLE"), "근거 줄=PASS-NO-FINDINGS(지적을 읽지 못했다는 조작 표기 소멸)");
+  // 전 절 없음 + 경고 키 명시 마감문이 승인되는지(지적이 없으니 행선지 요구도 없어야 함)
+  const passClose = "[검증 상한 인계]\n[수용·처리]\n없음\n[반박·종결]\n없음\n[보관함 이관]\n없음\n[사용자 판단 필요]\n없음\n[경고등 의미]\n현재 경고 키 verify-incomplete — 마지막 판정은 통과였고 통과 이후 수정만 미검증이라 이 마감은 검증 통과가 아니며, 남은 노랑에 사용자 행동은 필요 없고 다음 턴 검증이 해소합니다.\n[권장]\n다음 턴 첫 검증으로 잔여 수정을 닫는 것을 권장합니다 — 사용자 판단 없음.";
+  ok(VH.validateCapHandoff(passClose, passCtx).ok === true, "통과-잔여 마감문(전 절 없음)=승인(가짜 사용자 질문 강요 없음)");
+  // 무회귀: 실패 사례는 종전대로 실제 판정 라벨 실패+지적 결속
+  const failMsg = VH.capHandoffInstruction("ko", "5/5", evidenceCtx.verdict || "not-pass", evidenceCtx);
+  ok(failMsg.includes("(마지막 판정: 실패)") && failMsg.includes("R5-F1"), "실패 사례=실패 라벨+실지적 결속(무회귀)");
+}
 try { fs.rmSync(home, { recursive: true, force: true }); } catch { /* ignore */ }
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
