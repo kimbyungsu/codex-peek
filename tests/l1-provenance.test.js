@@ -404,7 +404,7 @@ console.log("[B-5] 장부 동시 쓰기(Codex 9차) — 트림 임계 직전 원
 console.log("[A-2] 소스 계약 — askId·envelope 배선·전역 합집합 echo 부재·러너 지문 전달(끝단)");
 {
   const cb = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
-  ok((cb.match(/flagLedgerConfirms\([^)]*\{ askId, attach: attCarrier \}/g) || []).length >= 3, "세 호출부 전부 askId+동봉 스냅샷 전달");
+  ok((cb.match(/flagLedgerConfirms\([^)]*\{ askId, attach: attCarrier \}/g) || []).length === 2 && (cb.match(/finishVerifyRun\(/g) || []).length === 3, "호출부=공유 꼬리 1곳(성공 세 분기 경유)+id 미식별 1곳 — 전부 askId+동봉 스냅샷 전달");
   ok(/randomUUID\(\)/.test(cb), "askId=UUID('서로 다른 ask 실행' 재료 — 지문·ts 아님)");
   ok(/itemSets\.some/.test(cb), "echo는 '항목 단위' 판정(전역 합집합 과도 판정 폐기 — Codex)");
   // 러너 끝단 배선(Codex #2 반례: 수집기는 지문을 만드는데 러너가 안 넘기면 판독기 비교가 영영 미실행)

@@ -168,7 +168,7 @@ ok(/const profileSnap = jobFrozen \? jobFrozen\.profile : effectiveVerifyProfile
 // 2026-07-30: 계약 스냅샷 인자가 뒤에 붙었다(사전 검사와 조립이 같은 계약을 보게 하려고).
 // 동결 프로필을 넘긴다는 원 의도는 그대로이므로 그 부분만 고정하고, 스냅샷 동반도 함께 못박는다.
 ok(/withContract\(prompt \+ \(net \? netNote\(langSnap\) : ""\), ws, langSnap, attCarrier, profileSnap, contractSnap\)/.test(src), "주입(withContract)이 동결 프로필 사용(+ 같은 계약 스냅샷 동반)");
-ok(src.split("formatForClaude(answer, langSnap, profileSnap, mfl.machine, rejudgeSnap)").length === 3, "footer 2경로(연결·새 세션) 모두 동결 프로필+동결 규약 사용(2c machine·재판단 동결본) — 완료 시점 재읽기 없음");
+ok(src.split("formatForClaude(answer, langSnap, profileSnap, mfl.machine, rejudgeSnap)").length === 2 && (src.match(/finishVerifyRun\(/g) || []).length === 3, "footer=공유 꼬리 1곳이 동결 프로필+동결 규약 사용(세 분기 호출 경유 — 완료 시점 재읽기 없음·VerifierProvider 단일화)");
 const wk = fs.readFileSync(path.join(ROOT, "bridge", "ask-job-worker.js"), "utf8");
 ok(/Object\.assign\(\{\}, cur, extra\)/.test(wk), "worker patch=기존 필드 보존 병합(동결 필드 불변)");
 

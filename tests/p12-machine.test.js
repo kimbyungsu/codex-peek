@@ -313,7 +313,8 @@ console.log("[7] 배선 소스 계약 — 양 분기·flagVerdict machine·같�
 {
   const src = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
   const askBody = src.slice(src.indexOf("async function cmdAsk(rest)"), src.indexOf("function cmdLink"));
-  ok((askBody.match(/machineFindingsLayer\(answer, ws, langSnap, profileSnap, harnessModeSnap, askId, campSnap\)/g) || []).length === 2, "resume/new 양 분기가 같은 소비 계층 1곳을 지남(+askId·campSnap 귀속 — 1차 blocker③·처분 관문 blocker②)");
+  // [VerifierProvider Phase1] 소비 계층은 공유 꼬리(finishVerifyRun) 1곳뿐 — 세 분기(resume·new·claude)가 호출로 지남(중복 소멸=더 강한 계약).
+  ok((askBody.match(/machineFindingsLayer\(answer, ws, langSnap, profileSnap, harnessModeSnap, askId, campSnap\)/g) || []).length === 1 && (askBody.match(/finishVerifyRun\(/g) || []).length === 3, "세 분기가 같은 소비 계층 1곳(공유 꼬리)을 지남(+askId·campSnap 귀속)");
   ok(/source: askId \? String\(askId\) : "machine-2c"/.test(src), "장부 source=askId(실행 귀속·폴백 상수)");
   ok(/const vAlert = machine && machine\.effective \? machine\.effective : v;/.test(src) && /severity: vAlert === "fail"/.test(src), "경보 축=실효 판정 권위 — 강등된 실패가 빨강으로 병존하지 않음(1차 [주의] 동승)");
   ok(/\/\^\[a-z0-9-\]\{1,32\}\$\/\.test\(r\.error\) \? r\.error : "write-refused"/.test(src), "등록 실패 사유 키 — 짧은 키 화이트리스트(절대 잠금 경로 등 로컬 정보 비복사 · 2차 blocker③)");
@@ -322,8 +323,8 @@ console.log("[7] 배선 소스 계약 — 양 분기·flagVerdict machine·같�
   const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
   ok(/machine-verdict/.test(ext) && /기계 판독 강등·정정/.test(ext), "확장 경보 분류 — machine-verdict를 '근거 의심'과 분리(2차 [주의])");
   ok(/machine\.reasonKey !== "no-verdict-line"/.test(src), "자동 등록 게이트 — 블록 뒤 판정 존재 시에만(형태 깨진 답 무부작용)");
-  ok((askBody.match(/formatForClaude\(answer, langSnap, profileSnap, mfl\.machine, rejudgeSnap\)/g) || []).length === 2, "footer — 실효 판정으로 처리 의무 선택+동결 규약 첨부(양 분기)");
-  ok((askBody.match(/flagVerdict\(answer, ws, [^,]+, modeSnap, mfl\.machine, attempt\)/g) || []).length === 2, "flagVerdict에 machine+attempt 전달(양 분기 — 2d accepted 1행 위임)");
+  ok((askBody.match(/formatForClaude\(answer, langSnap, profileSnap, mfl\.machine, rejudgeSnap\)/g) || []).length === 1, "footer — 실효 판정으로 처리 의무 선택+동결 규약 첨부(공유 꼬리 1곳)");
+  ok((askBody.match(/flagVerdict\(answer, ws, [^,]+, modeSnap, mfl\.machine, attempt, providerName\)/g) || []).length === 1, "flagVerdict에 machine+attempt(+공급자 라벨) 전달(공유 꼬리 1곳 — 2d accepted 1행 위임)");
   ok(/supersedeIntegrity\(session, "machine-verdict", ws\)/.test(src), "machine 경보 — 새 답마다 최신 1건 supersede 수명주기+ws 격리(2차 [주의]·3축 감사 blocker)");
   ok(/machineEffective: machine\.effective, machineDemoted: !!machine\.demoted, machineCorrected: !!machine\.corrected/.test(src), "통계 — 같은 appendVerdict 행에 machine 필드 추가(이중 집계 없음)");
   ok(/if \(profileSnap !== "core"\) return \{ machine: null, notice: "" \};/.test(src), "core 게이트 — integrity·legacy 무회귀(null)");

@@ -39,7 +39,7 @@ ok(/const net = rest\.includes\("--net"\)/.test(src), "--net 플래그 파싱");
 const parsed = askRequest(["--allow-new", "--net", "검증", "본문"]);
 ok(parsed.flags.includes("--net") && parsed.flags.includes("--allow-new") && parsed.prompt === "검증 본문", "--net과 제어 플래그가 프롬프트 본문에서 제거됨");
 ok((src.match(/net \? netArgs\(\) : \[\]/g) || []).length === 2, "resume + 새 세션 두 호출 모두 주입");
-ok((src.match(/net \? netNote\(langSnap\) : ""/g) || []).length === 2, "두 경로 모두 프롬프트에 netNote 첨부");
+ok((src.match(/net \? netNote\(langSnap\) : ""/g) || []).length === 3, "세 경로(resume·new·claude) 모두 프롬프트에 netNote 첨부");
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

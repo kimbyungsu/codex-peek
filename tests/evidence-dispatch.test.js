@@ -136,14 +136,15 @@ console.log("[6] 발송 안 함 경로 — 루트 밖·부적격 전부면 chall
 console.log("[7] cmdAsk 배선 순서(소스 잠금) — 경보 시점 동결→후처리→outText→checkpoint 게이트→인쇄→발송");
 {
   const src = fs.readFileSync(path.resolve(__dirname, "../bridge/codex-bridge.js"), "utf8");
-  const iProof = src.indexOf("const proofBind = writeProof(link.codexSession");
+  // [VerifierProvider Phase1] 인라인 꼬리 2중 구조 → 공유 꼬리 1곳(finishVerifyRun) — 같은 순서 계약을 단일 지점에서 검사(더 강한 계약).
+  const iProof = src.indexOf("const proofBind = writeProof(verifierSession");
   const iCtx = src.indexOf("const chRoots = [exec, ws];");
-  const iAlert = src.indexOf("const evAlert = flagEvidence(answer, ws, link.codexSession, exec, {");
-  const iVerdict = src.indexOf("flagVerdict(answer, ws, link.codexSession", iAlert);
+  const iAlert = src.indexOf("const evAlert = flagEvidence(answer, ws, verifierSession, exec, {");
+  const iVerdict = src.indexOf("flagVerdict(answer, ws, verifierSession", iAlert);
   const iOut = src.indexOf("const outText =", iVerdict);
   const iGate = src.indexOf("let ckptOk = !durableEnv;", iOut);
   const iPrint = src.indexOf("process.stdout.write(outText)", iGate);
-  const iDisp = src.indexOf("maybeDispatchChallenge({ ws, codexSession: link.codexSession", iPrint);
+  const iDisp = src.indexOf("maybeDispatchChallenge({ ws, codexSession: verifierSession", iPrint);
   ck("배선 실재", [iProof, iCtx, iAlert, iVerdict, iOut, iGate, iPrint, iDisp].every((i) => i > 0));
   ck("순서 고정(A·H·§6·G)", iProof < iCtx && iCtx < iAlert && iAlert < iVerdict && iVerdict < iOut && iOut < iGate && iGate < iPrint && iPrint < iDisp);
   ck("발송 조건에 checkpoint 게이트 결속", src.includes("if (evAlert && evAlert.challengeId && ckptOk)"));
@@ -167,16 +168,15 @@ console.log("[7] cmdAsk 배선 순서(소스 잠금) — 경보 시점 동결→
   // 확인 검증 blocker(2026-08-04): --allow-new '첫 세션 생성' 분기에도 같은 배선이 있어야 한다 —
   // 이 분기만 빠져 예약 검증의 첫 회차에서 재확인이 동결·발송되지 않았다. 새 세션 분기 블록을 추출해
   // 문맥 전달→조립→checkpoint→인쇄→발송 순서를 연결 분기와 동형으로 잠근다.
-  {
+  { // [VerifierProvider Phase1] 세 분기(연결·새 세션·claude)가 배선을 각자 복제하지 않고 공유 꼬리
+    // (finishVerifyRun — 위 절이 배선·순서를 잠금) 호출로 지난다. 동형 배선 계약이 '단일 지점'으로 승격.
     const nb = src.indexOf("# 새 Codex 세션 생성·즉시연결");
     const ne = src.indexOf("attempt.record(\"session-unresolved\")", nb);
-    const blk = nb > 0 && ne > nb ? src.slice(Math.max(0, nb - 3000), ne) : "";
-    ck("새 세션 분기 — flagEvidence에 chCtx 전달(동결 배선)", /flagEvidence\(answer, ws, id, exec, \{[\s\S]{0,200}roots: chRootsN/.test(blk));
-    ck("새 세션 분기 — campaignId도 알맹이에서", blk.includes('campaignId: (durableEnv && durableEnv.ok && durableEnv.job.campaignId) || "direct"'));
-    ck("새 세션 분기 — checkpoint는 durableEnv.job+출력 조립 후", /writePrimaryComplete\([^,]+, durableEnv\.job, outText/.test(blk));
-    const iOutN = blk.indexOf("const outText ="), iCkN = blk.indexOf("let ckptOk = !durableEnv"), iPrN = blk.indexOf("process.stdout.write(outText)"), iDpN = blk.indexOf("maybeDispatchChallenge({ ws, codexSession: id");
-    ck("새 세션 분기 — 조립→checkpoint→인쇄→발송 순서(연결 분기 동형)", iOutN > 0 && iCkN > iOutN && iPrN > iCkN && iDpN > iPrN);
-    ck("새 세션 분기 — 발송 조건에 checkpoint 게이트 결속", blk.includes("if (evAlert && evAlert.challengeId && ckptOk)"));
+    const blk = nb > 0 && ne > nb ? src.slice(Math.max(0, nb - 600), ne) : "";
+    ck("새 세션 분기 — 공유 꼬리 호출(finishVerifyRun(answer, id, head))", blk.includes("finishVerifyRun(answer, id, head"));
+    ck("claude 분기 — 같은 공유 꼬리 호출", /finishVerifyRun\(r9\.answer, vSess/.test(src));
+    ck("연결 분기 — 같은 공유 꼬리 호출", src.includes("finishVerifyRun(answer, link.codexSession"));
+    ck("배선 중복 소멸 — flagEvidence 호출은 공유 꼬리 1곳뿐", (src.match(/= flagEvidence\(answer, ws, /g) || []).length === 1);
   }
 }
 

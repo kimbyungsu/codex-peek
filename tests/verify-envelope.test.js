@@ -108,7 +108,7 @@ console.log("[5] 배선 — ask 조립·판정문 경고·확장 UI(소스 단�
   const cb = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
   ok(/\[baseline, baseQual, envText, inj, scout\]\.filter\(Boolean\)/.test(cb), "ask 프롬프트 조립에 경계 절+core 한정 문구 결합(부재=기존과 동일 조립)");
   ok(/envelopeInjectionFor\(target9, cFresh9\.envelopeHash, lang\)/.test(cb) && /profile === "core"/.test(cb), "주입=승인 지문 결속(§7 증분 2: 전이 잠금 안 신선 재판독 cFresh9 — 구 스냅샷 해시 경합 봉합)·한정 문구는 core만(integrity=전 범위 감사 유지)");
-  ok((cb.match(/envelopeWarnLine\(ws, langSnap\)/g) || []).length >= 2, "ask-wait 두 출력 경로에 경계 경고줄 병기(미승인 변경·손상 — 위장 금지)");
+  ok((cb.match(/envelopeWarnLine\(ws, langSnap\)/g) || []).length === 1 && (cb.match(/finishVerifyRun\(/g) || []).length === 3, "경계 경고줄=공유 꼬리 1곳(세 분기 출력 경로 호출 경유 — 위장 금지)");
   ok(cb.includes("검증 경계 미승인 변경") && cb.includes("검증 경계 판독 불가"), "경고 문구 ko(+en 쌍은 같은 함수 안)");
   const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
   ok(ext.includes('m?.type === "envelopeApprove"') && /normWs\(tgtE\) !== normWs\(m\.repo\)/.test(ext), "승인 핸들러 — 카드 대상 결속+클릭 시 재대조(B-3 전례)");

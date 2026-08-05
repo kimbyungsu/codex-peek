@@ -133,7 +133,7 @@ ok(r5.stderr.includes(`scope-scout-self.js "${devRepo}"`) && !r5.stderr.includes
 
 console.log("[6] 수집 배선·동형·문서 — 소스 계약");
 const bridgeSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
-ok(/function collectScoutTargetEvidence/.test(bridgeSrc) && (bridgeSrc.match(/collectScoutTargetEvidence\(answer, ws, exec\)/g) || []).length === 3, "ask 3분기 전부에서 증거 수집(성공 resume·새 세션·id 미식별)");
+ok(/function collectScoutTargetEvidence/.test(bridgeSrc) && (bridgeSrc.match(/collectScoutTargetEvidence\(answer, ws, exec\)/g) || []).length === 2 && (bridgeSrc.match(/finishVerifyRun\(/g) || []).length === 3, "증거 수집=공유 꼬리 1곳(성공 세 분기 호출 경유)+id 미식별 분기 직접 1곳");
 ok(/scoutMode !== "on"\) return;/.test(bridgeSrc.slice(bridgeSrc.indexOf("function collectScoutTargetEvidence"), bridgeSrc.indexOf("function collectScoutTargetEvidence") + 800)), "2트랙은 수집 0(무회귀)");
 ok(/resolveCitedPath\(m\[1\], execCwd \|\| ws\)/.test(bridgeSrc), "인용 해석은 execCwd 기준(세션 폴더 기준이면 어긋난 상황에서 증거가 빈 값 — Codex 반례 잠금)");
 ok(/rev-parse", "--show-toplevel"/.test(bridgeSrc), "git root 귀속(레포 단위 증거)");

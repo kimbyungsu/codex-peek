@@ -367,7 +367,7 @@ console.log("[8] 증분 3 — 범위 확장 통로(비차단·캠페인당 승�
   delete process.env.CODEX_BRIDGE_ASK_JOB_ID;
   const cb3 = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
   ok(cb3.includes("[범위 확장 통로]") && cb3.includes("[Scope-expansion channel]") && cb3.includes("[MAP 라우팅]") && cb3.includes("fresh 표시 조각만 경계 판정 참고 가능"), "v2 지시절=확장 통로+MAP 라우팅 ko/en(구역 자동화는 P5 이후 — 정본 명문)");
-  ok((cb3.match(/breakdownNoticeFor\(ws, langSnap, budgetGate\.res\)/g) || []).length === 2 && (cb3.match(/integrityReviewLine\(ws, langSnap, profileSnap\)/g) || []).length === 2, "두 출력 경로에 분해·재심 병기 배선");
+  ok((cb3.match(/breakdownNoticeFor\(ws, langSnap, budgetGate\.res\)/g) || []).length === 1 && (cb3.match(/integrityReviewLine\(ws, langSnap, profileSnap\)/g) || []).length === 1 && (cb3.match(/finishVerifyRun\(/g) || []).length === 3, "분해·재심 병기=공유 꼬리 1곳(세 출력 경로 호출 경유)");
   const ext3 = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
   ok(ext3.includes("이번 캠페인 심사: 인정") && ext3.includes("this campaign: kept") && /campaignId === camp9/.test(ext3) && /\(r\.envelopeHash \|\| null\) === \(hash9 \|\| null\)/.test(ext3), "수칙서 카드=이번 캠페인+현재 승인 세대 한정 통계(혼합 부풀림 차단 · 1차 [주의]②)");
   const doc3 = fs.readFileSync(path.join(ROOT, "docs", "VERIFY-GOVERNANCE.md"), "utf8");

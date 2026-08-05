@@ -223,8 +223,8 @@ console.log("[7] 배선 소스 계약 — 단일 계층·양 분기·flagVerdict
   const src = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
   const askBody = src.slice(src.indexOf("async function cmdAsk(rest)"), src.indexOf("function cmdLink"));
   ok((src.match(/function beginVerifyAttempt\(/g) || []).length === 1, "기록 계층 정의 1곳");
-  ok((askBody.match(/beginVerifyAttempt\(ws, budgetGate\.res, profileSnap, modeSnap\)/g) || []).length === 2, "양 분기 — 예약 직후 시도 생성");
-  ok((askBody.match(/attempt\.markCallStart\(\)/g) || []).length === 2 && (askBody.match(/attempt\.answered\(\)/g) || []).length === 2 && (askBody.match(/attempt\.proofAccepted\(\)/g) || []).length === 2, "단계 전이 — 호출 직전·답 수신·증명 확정(양 분기)");
+  ok((askBody.match(/beginVerifyAttempt\(ws, budgetGate\.res, profileSnap, modeSnap\)/g) || []).length === 3, "세 분기(resume·new·claude) — 예약 직후 시도 생성");
+  ok((askBody.match(/attempt\.markCallStart\(\)/g) || []).length === 3 && (askBody.match(/attempt\.answered\(\)/g) || []).length === 3 && (askBody.match(/attempt\.proofAccepted\(\)/g) || []).length === 1, "단계 전이 — 호출 직전·답 수신(세 분기)·증명 확정(공유 꼬리 1곳)");
   ok(/attempt\.record\("session-unresolved"\)/.test(askBody), "세션 미결속 — 명시 종결(3차 B1)");
   ok(/a\.stage === "pre-call" \? "run-error" : a\.stage === "answered" \? "proof-rejected" : "postprocess-error"/.test(src), "exit 훅 — 단계 기반 매핑(5·6차 blocker: proof 후 예외=postprocess-error)");
   ok(/if \(attempt\) attempt\.record\("accepted", row\);/.test(src), "flagVerdict — accepted 1행 위임(이중 append 없음)");
