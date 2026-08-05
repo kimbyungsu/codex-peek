@@ -308,10 +308,18 @@ console.log("[주입 구조화 3단계] 요청문 뼈대 — 코드 소유 단�
   ok(bare.ok === false && bare.missing.length === 4, "무형식 요청문=네 절 전부 누락 검출");
   const enShaped = CL.askShapeCheck("Goal: confirm the fix.\nAcceptance: all four resolved.\nScope: bridge/a.js only.\nOut of scope: new non-blockers.");
   ok(enShaped.ok === true, "영문 제목(Goal/Acceptance/Scope/Out of scope)도 인정(혼용 세션 안전)");
-  const partial = CL.askShapeCheck("목표: 검증. 인수조건: 통과.");
+  const partial = CL.askShapeCheck("목표: 검증.\n인수조건: 통과.");
   ok(partial.ok === false && partial.missing.map((m) => m.id).sort().join(",") === "exclusions,scope", "빠진 절만 정확히 특정");
+  // 재검증 blocker① — '절 제목'이지 '단어 출현'이 아니다: 본문 속 단어 나열·교차 매칭 배제
+  const wordList = CL.askShapeCheck("goal acceptance scope exclusions 전부 확인해줘");
+  ok(wordList.ok === false && wordList.missing.length === 4, "절 제목 없는 단어 나열=네 절 전부 누락(단어 출현 오인 소멸)");
+  const crossScope = CL.askShapeCheck("Goal: confirm.\nAcceptance: resolved.\nOut of scope: new non-blockers.");
+  ok(crossScope.ok === false && crossScope.missing.map((m) => m.id).join(",") === "scope", "'Out of scope' 제목이 scope 절을 겸하지 못함(교차 매칭 배제)");
+  ok(CL.askShapeCheck("본문 중간에 인수조건이라는 말과 직접 범위라는 말만 스치는 문장").missing.some((m) => m.id === "acceptance"), "줄 머리 앵커 — 본문 속 스치는 언급은 제목이 아님");
   const noticeKo = CL.askShapeNotice(bare.missing, "ko"), noticeEn = CL.askShapeNotice(bare.missing, "en");
-  ok(CL.ASK_SHAPE_SECTIONS.every((x) => noticeKo.includes(x.ko)) && CL.ASK_SHAPE_SECTIONS.every((x) => noticeEn.includes(x.en)), "안내문=같은 표에서 생성(단일 출처 — 목록·문구 이원화 금지)");
+  // 재검증 blocker② — 안내문 속 '전체 절 열거'까지 표에서 생성(표 밖 명칭 재하드코딩 금지)
+  ok(noticeKo.includes(CL.ASK_SHAPE_SECTIONS.map((x) => x.ko).join("/")) && noticeEn.includes(CL.ASK_SHAPE_SECTIONS.map((x) => x.en).join(" / ")), "전체 절 열거=표 조인 그대로(단일 출처 완전화)");
+  ok(CL.ASK_SHAPE_SECTIONS.every((x) => noticeKo.includes(x.ko)) && CL.ASK_SHAPE_SECTIONS.every((x) => noticeEn.includes(x.en)), "누락 목록도 같은 표에서 생성");
   ok(noticeKo.includes("경고 단계") && noticeKo.includes("그대로 시작") && noticeEn.includes("warn-only"), "경고 단계 명시(거부 아님)");
   // 통합: 실제 ask-start가 경고를 stderr로 내고(기계 stdout 오염 없이) 관측 기록을 남긴다 — 손상 links로 뒤 단계 조기 중단
   const homeS = fs.mkdtempSync(path.join(os.tmpdir(), "askshape_"));
@@ -329,17 +337,19 @@ console.log("[주입 구조화 3단계] 요청문 뼈대 — 코드 소유 단�
 
 console.log("[주입 구조화 4단계] 코드 소유 주입분 길이 예산 — 사용자 편집분(transmit)은 계산 제외");
 {
-  const CAPS = { ko: 1000, en: 1800 }; // 실측(2026-08-05) ko 944 · en 1727 — 넘기려면 같은 분량 제거·사건 자리 이동·검사 승격 중 하나(플랜 4단계)
+  const CAPS = { ko: 1000, en: 1800 }; // 실측(2026-08-05) 최장 ko 936(always)/en 1727 수준 — 넘기려면 같은 분량 제거·사건 자리 이동·검사 승격 중 하나(플랜 4단계)
   for (const lang of ["ko", "en"]) {
-    const lens = [];
-    for (const prof of ["core", "integrity"]) {
-      const d = CL.buildVerifyDirective("always", lang, prof, { tracked: true, count: 2, budget: 5 });
-      const b = CL.loadBaseDirective(lang, prof);
-      ok(d.includes(b.transmit), `${lang}/${prof} — transmit 포함(제외 계산의 전제)`);
-      lens.push(d.length - b.transmit.length);
-      ok(d.length - b.transmit.length <= CAPS[lang], `${lang}/${prof} — 코드 소유분 ${d.length - b.transmit.length}자 ≤ 예산 ${CAPS[lang]}`);
+    for (const mode of ["always", "code", "plancode"]) { // 재검증 [보완] — 최장 분기(plancode)까지 전 모드 고정
+      const lens = [];
+      for (const prof of ["core", "integrity"]) {
+        const d = CL.buildVerifyDirective(mode, lang, prof, { tracked: true, count: 2, budget: 5 });
+        const b = CL.loadBaseDirective(lang, prof);
+        ok(d.includes(b.transmit), `${lang}/${mode}/${prof} — transmit 포함(제외 계산의 전제)`);
+        lens.push(d.length - b.transmit.length);
+        ok(d.length - b.transmit.length <= CAPS[lang], `${lang}/${mode}/${prof} — 코드 소유분 ${d.length - b.transmit.length}자 ≤ 예산 ${CAPS[lang]}`);
+      }
+      ok(lens[0] === lens[1], `${lang}/${mode} — 코드 소유분은 프로필 불변(사용자 편집분만 프로필 차이)`);
     }
-    ok(lens[0] === lens[1], lang + " — 코드 소유분은 프로필 불변(사용자 편집분만 프로필 차이)");
   }
 }
 

@@ -2113,6 +2113,8 @@ function unretrievedSameTurnJob(ws, frozen) {
 }
 
 // 주입 구조화 3단계: 요청문 뼈대 경고(관측 단계) — stdout(기계 출력)을 오염시키지 않도록 stderr로만.
+// 플랜 3단계의 다른 축인 '지적 처리 확인 관문'은 신설하지 않는다 — findingDispositionGate(예산 예약 전
+// 실행)가 이미 그 기능이다(judgeAdmission은 검증자 '제출 지적'의 입장 심사 — 다른 축. 구현 검증 정정).
 function warnAskShape(prompt, cmd) {
   try {
     const shape = askShapeCheck(prompt);

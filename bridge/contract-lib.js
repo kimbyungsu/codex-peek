@@ -3749,28 +3749,33 @@ function judgeAdmission(findings, roundType, openIds, oosCount, abCount) {
 
 // 검증 모드 ON일 때 Claude(구현모델)에게 매 턴 주입하는 2트랙 지시. 전달원칙·재판단은 기본 지침에서 로드(오버라이드 가능).
 // [주입 구조화 3단계 — 검증 요청문 뼈대] 코드 소유 단일 출처: 검사기(askShapeCheck)와 경고 안내
-// (askShapeNotice)가 이 표 하나에서 나온다. 자연어 전달 원칙(transmit)에서 기준을 역추출하지 않으며,
-// 프로필·언어와 무관하게 같은 기준으로 판정한다(플랜 3단계 — 프로필로 가르면 한쪽만 검사 밖에 남는다).
-// 현재는 '경고 단계'(관측 우선): 빠진 절을 알리되 작업은 그대로 시작 — 거부 승격은 관측 데이터 후 결정.
-// goal은 명시 제목 외에 첫 줄의 '…검증(' 회차 선언(확인 검증(/구현 검증( 등 — 하네스 회차 어휘 자체가
-// 목적 선언)으로도 충족된다. 제목은 한/영 어느 쪽이든 인정(혼용 세션 안전).
+// (askShapeNotice)의 누락 목록·전체 절 열거가 전부 이 표 하나에서 나온다(표 밖 절 명칭 재하드코딩 금지 —
+// 구현 검증 blocker②). 자연어 전달 원칙(transmit)에서 기준을 역추출하지 않으며, 프로필·언어와 무관하게
+// 같은 기준으로 판정한다(플랜 3단계). 현재는 '경고 단계'(관측 우선): 빠진 절을 알리되 작업은 그대로
+// 시작 — 거부 승격은 관측 데이터 후 결정. 판정은 '단어 출현'이 아니라 '절 제목'이다(구현 검증 blocker①):
+// headRe는 줄 머리 앵커('[제목]'/'제목:'/마크다운 머리)만 인정해 본문 속 단어 나열("goal acceptance …")과
+// 교차 매칭("Out of scope" 속 scope)을 배제한다. 예외 두 가지만 문구 인정: goal의 첫 줄 '…검증(' 회차
+// 선언(하네스 회차 어휘=목적 선언), exclusions의 '미반영 보고' 정형구(확인 회차 규약이 요구하는 제외
+// 서약 문장 그 자체). 제목은 한/영 어느 쪽이든 인정(혼용 세션 안전).
+const shapeHead = (titles) => new RegExp("^[\\s\\[\\(#>*\\-·]*(?:" + titles + ")\\s*[\\]\\):：]", "im");
 const ASK_SHAPE_SECTIONS = [
-  { id: "goal", ko: "목표", en: "Goal", re: /(목\s*표\s*[\]:：/·]|\bgoal\b|\bobjective\b)/i, headRe: /^[^\n]{0,60}검증\s*[(（]/ },
-  { id: "acceptance", ko: "인수조건", en: "Acceptance criteria", re: /(인수\s*조건|성공\s*기준|\bacceptance\b|\bsuccess\s+criteria\b)/i },
-  { id: "scope", ko: "직접 범위", en: "Scope", re: /(직접\s*범위|검증\s*범위|대상\s*범위|\bscope\b)/i },
-  { id: "exclusions", ko: "제외 범위", en: "Out of scope", re: /(제외\s*범위|범위\s*밖|범위\s*제외|미반영|\bout\s+of\s+scope\b|\bexclusions?\b)/i },
+  { id: "goal", ko: "목표", en: "Goal", headRe: shapeHead("목\\s*표|goal|objective"), phraseRe: /^[^\n]{0,60}검증\s*[(（]/ },
+  { id: "acceptance", ko: "인수조건", en: "Acceptance criteria", headRe: shapeHead("인수\\s*조건|성공\\s*기준|acceptance(?:\\s+criteria)?|success\\s+criteria") },
+  { id: "scope", ko: "직접 범위", en: "Scope", headRe: shapeHead("직접\\s*범위|검증\\s*범위|대상\\s*범위|scope") },
+  { id: "exclusions", ko: "제외 범위", en: "Out of scope", headRe: shapeHead("제외\\s*범위|범위\\s*밖|미반영|out\\s+of\\s+scope|exclusions?"), phraseRe: /미반영\s*보고/ },
 ];
 function askShapeCheck(prompt) {
   const s = String(prompt || "");
-  const missing = ASK_SHAPE_SECTIONS.filter((x) => !(x.re.test(s) || (x.headRe && x.headRe.test(s))));
+  const missing = ASK_SHAPE_SECTIONS.filter((x) => !(x.headRe.test(s) || (x.phraseRe && x.phraseRe.test(s))));
   return { ok: missing.length === 0, missing };
 }
 function askShapeNotice(missing, lang) {
   const en = lang === "en";
   const names = (missing || []).map((m) => (en ? m.en : m.ko)).join(en ? ", " : "·");
+  const all = ASK_SHAPE_SECTIONS.map((m) => (en ? m.en : m.ko)).join(en ? " / " : "/");
   return en
-    ? `[request-shape notice · warn-only] This verification request is missing: ${names}. A well-formed request states goal / acceptance criteria / direct scope / out-of-scope so the verifier attacks the right target. Observation-stage warning — the job still starts.`
-    : `[요청문 뼈대 안내 · 경고 단계] 이 검증 요청문에 빠진 절: ${names}. 목표/인수조건/직접 범위/제외 범위를 명시해야 검증모델이 정확한 과녁을 공격한다. 지금은 관측 단계 경고라 작업은 그대로 시작된다.`;
+    ? `[request-shape notice · warn-only] This verification request is missing: ${names}. A well-formed request states ${all} so the verifier attacks the right target. Observation-stage warning — the job still starts.`
+    : `[요청문 뼈대 안내 · 경고 단계] 이 검증 요청문에 빠진 절: ${names}. ${all}를 명시해야 검증모델이 정확한 과녁을 공격한다. 지금은 관측 단계 경고라 작업은 그대로 시작된다.`;
 }
 // 관측 기록(거부 승격 판단 재료) — best-effort: 실패해도 시작을 막지 않는다.
 function appendAskShape(entry) {
