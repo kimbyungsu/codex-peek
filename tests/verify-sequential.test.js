@@ -300,6 +300,49 @@ console.log("[PASS-사례] 2026-08-05 이중 실패 봉합 — 통과·지적 0�
   const guardSrc9 = fs.readFileSync(path.join(__dirname, "..", "bridge", "verify-guard.js"), "utf8");
   ok((guardSrc9.match(/passNoFindings\) \? "verify-incomplete" : "verify-handoff-missing"/g) || []).length >= 1 && (guardSrc9.match(/마지막 판정은 통과였고 열린 지적도 없지만/g) || []).length >= 2, "verify-guard — 카운트 실패 분기 포함 종류·문구 진실화");
 }
+console.log("[주입 구조화 3단계] 요청문 뼈대 — 코드 소유 단일 출처 검사기(경고 단계)");
+{
+  const shaped = "확인 검증(직전 blocker 반영 — 커밋 abc). 저장소 D:\\x.\n[인수조건] 해소+회귀 없음이면 성공.\n[직접 범위] bridge/a.js 변경분(새 비차단은 미반영 보고 대상).";
+  ok(CL.askShapeCheck(shaped).ok === true, "실전형 요청문(회차 선언+인수조건+직접 범위+미반영)=통과");
+  const bare = CL.askShapeCheck("그냥 전체적으로 잘 됐는지 봐줘");
+  ok(bare.ok === false && bare.missing.length === 4, "무형식 요청문=네 절 전부 누락 검출");
+  const enShaped = CL.askShapeCheck("Goal: confirm the fix.\nAcceptance: all four resolved.\nScope: bridge/a.js only.\nOut of scope: new non-blockers.");
+  ok(enShaped.ok === true, "영문 제목(Goal/Acceptance/Scope/Out of scope)도 인정(혼용 세션 안전)");
+  const partial = CL.askShapeCheck("목표: 검증. 인수조건: 통과.");
+  ok(partial.ok === false && partial.missing.map((m) => m.id).sort().join(",") === "exclusions,scope", "빠진 절만 정확히 특정");
+  const noticeKo = CL.askShapeNotice(bare.missing, "ko"), noticeEn = CL.askShapeNotice(bare.missing, "en");
+  ok(CL.ASK_SHAPE_SECTIONS.every((x) => noticeKo.includes(x.ko)) && CL.ASK_SHAPE_SECTIONS.every((x) => noticeEn.includes(x.en)), "안내문=같은 표에서 생성(단일 출처 — 목록·문구 이원화 금지)");
+  ok(noticeKo.includes("경고 단계") && noticeKo.includes("그대로 시작") && noticeEn.includes("warn-only"), "경고 단계 명시(거부 아님)");
+  // 통합: 실제 ask-start가 경고를 stderr로 내고(기계 stdout 오염 없이) 관측 기록을 남긴다 — 손상 links로 뒤 단계 조기 중단
+  const homeS = fs.mkdtempSync(path.join(os.tmpdir(), "askshape_"));
+  fs.writeFileSync(path.join(homeS, "links.json"), "{broken!!", "utf8");
+  const bridgeBin = path.join(__dirname, "..", "bridge", "codex-bridge.js");
+  const runStart = (p) => cp.spawnSync(process.execPath, [bridgeBin, "ask-start", "--allow-new", p], { encoding: "utf8", env: { ...process.env, CODEX_BRIDGE_HOME: homeS, CLAUDE_PROJECT_DIR: ws }, timeout: 15000, windowsHide: true });
+  const rBare = runStart("전체적으로 봐줘");
+  ok(rBare.status !== 0 && rBare.stderr.includes("요청문 뼈대 안내"), "무형식 시작=경고 출력(작업 자체는 뒤 단계 사유로 중단된 것 — 경고는 차단 아님)");
+  const shapeLog = path.join(homeS, "stats", "ask-shape.jsonl");
+  ok(fs.existsSync(shapeLog) && JSON.parse(fs.readFileSync(shapeLog, "utf8").trim().split(/\n/)[0]).missing.length === 4, "관측 기록(ask-shape.jsonl)=거부 승격 판단 재료");
+  const rShaped = runStart(shaped);
+  ok(!rShaped.stderr.includes("요청문 뼈대 안내"), "정형 요청문=경고 없음");
+  try { fs.rmSync(homeS, { recursive: true, force: true }); } catch { /* ignore */ }
+}
+
+console.log("[주입 구조화 4단계] 코드 소유 주입분 길이 예산 — 사용자 편집분(transmit)은 계산 제외");
+{
+  const CAPS = { ko: 1000, en: 1800 }; // 실측(2026-08-05) ko 944 · en 1727 — 넘기려면 같은 분량 제거·사건 자리 이동·검사 승격 중 하나(플랜 4단계)
+  for (const lang of ["ko", "en"]) {
+    const lens = [];
+    for (const prof of ["core", "integrity"]) {
+      const d = CL.buildVerifyDirective("always", lang, prof, { tracked: true, count: 2, budget: 5 });
+      const b = CL.loadBaseDirective(lang, prof);
+      ok(d.includes(b.transmit), `${lang}/${prof} — transmit 포함(제외 계산의 전제)`);
+      lens.push(d.length - b.transmit.length);
+      ok(d.length - b.transmit.length <= CAPS[lang], `${lang}/${prof} — 코드 소유분 ${d.length - b.transmit.length}자 ≤ 예산 ${CAPS[lang]}`);
+    }
+    ok(lens[0] === lens[1], lang + " — 코드 소유분은 프로필 불변(사용자 편집분만 프로필 차이)");
+  }
+}
+
 console.log("[PASS-사례 e2e] 실제 codex-hook Stop 경로 — 통과-잔여 상한이 verify-incomplete 이벤트로 기록된다");
 {
   // 확인 검증 blocker(f-32e8b1ec) 해소: 소스 문자열 검사가 아니라 codex-hook.js를 실프로세스로 Stop 반복 실행해
