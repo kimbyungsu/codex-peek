@@ -317,31 +317,69 @@ function readEnrichJob(repo) {
 // POSIX rename은 대상 덮어쓰기라 제3 획득자의 산 잠금을 지울 수 있다(모델 밖 불일치=격리물만 남기고
 // 실패 취급). 표식 잔존(회수자 사망)은 '죽은 행위자는 더 이상 행위하지 않는다'라 사망 확정(ESRCH)+
 // 시효(10s)로만 청소한다(표식이 보호하는 것은 영속 상태가 아니라 rename 행위자 단일화뿐).
-function reclaimDeadJobLock(lp) {
-  const marker = lp + ".reclaim";
-  // 표식은 '어떤 경우에도' 남이 지우지 않는다(4차 재확인 blocker 종결 원칙): 낡은 지식 기반 삭제는
-  // 대상이 그 사이 교체됐을 가능성을 원리상 배제할 수 없어(같은 병의 무한 계단), 삭제 연산 자체를
-  // 없애 오삭제 계급을 소멸시킨다. 표식 획득=wx 성공뿐 — 실패면 보유자 생사 무관하게 양보한다.
-  // 결과 정책(유계 정직): 1중 사망(잠금만 잔존)=이 함수가 자동 회수. 2중 사망(회수 도중 회수자까지
-  // 사망해 표식 잔존 — 극희귀 이중 사고)=자동 복구를 포기하고 호출자의 기존 멈춤 경보(park)로 가시화,
-  // 해소는 수동(격리물·표식 파일 확인 후 제거). 자기 표식은 finally에서 자기 pid 확인 후에만 정리.
-  try { fs.writeFileSync(marker, String(process.pid), { flag: "wx" }); }
-  catch { return false; } // 표식 실재=다른 회수자 활동 중이든 잔존이든 양보(무획득 본문 진입 금지)
-  try {
+// ── 실행 잠금(run-lock) 획득 — runEnrich 본체와 죽은 job-잠금 회수가 '같은' 검증된 절차를 쓴다 ──
+// (5차 재확인 종결: 회수용 상호배제를 새로 발명하는 대신, 사망 회수+오탈취 복원+read-back fence까지
+//  이미 검증 통과([9] 3반복 경합)한 이 원시를 재사용. 잔존도 이 원시의 사망 회수가 자동 해소하므로
+//  '표식 영구 잔존' 계급이 소멸 — 별도 .reclaim 표식 개념은 폐기.)
+const HELD_RUN_LOCKS = new Map(); // repoKey → token (같은 프로세스 재진입 판별 — runEnrich 안의 회수는 이미 직렬화됨)
+function acquireEnrichRunLock(repo) {
+  const rKey = repoKeyFor(repo);
+  try { fs.mkdirSync(ENRICH_DIR, { recursive: true }); } catch { /* 잠금이 실패 판정 */ }
+  const runLock = path.join(ENRICH_DIR, rKey + ".run.funlock");
+  const tok = crypto.randomBytes(8).toString("hex");
+  const p10RunId = crypto.randomUUID();
+  try { fs.writeFileSync(runLock, JSON.stringify({ pid: process.pid, token: tok, runId: p10RunId }), { flag: "wx" }); }
+  catch {
+    // 사망 회수(3b 1차 강등분 d2deff57384881b8 즉시 수정 — 두 창이 같은 dead lock을 읽고 한쪽이 새로 취득한
+    // 뒤 다른 쪽이 그 새 잠금을 삭제하는 경합): unlink가 아니라 '고유 격리명으로의 원자 rename' — 이동에
+    // 성공한 단일 복구자만 재취득하고, 이동해 온 파일이 자기가 판독한 그 잔재(pid·token 동일)인지 재검증.
+    // 오탈취(그새 교체된 잠금)면 복원. bootstrap 잔재 회수 문법 동형.
+    const held = readJson3(runLock);
+    if (!(held.st === "ok" && Number.isInteger(held.data.pid) && typeof held.data.token === "string")) return { ok: false, reason: "run-lock-damaged" }; // 손상=수동 소관(판정 없는 삭제 금지)
+    let dead = false;
+    try { process.kill(held.data.pid, 0); } catch (e) { dead = !!(e && e.code === "ESRCH"); }
+    if (!dead) return { ok: false, reason: "run-lock" };
+    const grave = runLock + ".reclaim." + process.pid + "." + tok;
+    try { fs.renameSync(runLock, grave); } catch { return { ok: false, reason: "run-lock" }; } // 이동 실패=타 복구자 선점
+    const moved = readJson3(grave);
+    if (!(moved.st === "ok" && moved.data.pid === held.data.pid && moved.data.token === held.data.token)) {
+      try { fs.renameSync(grave, runLock); } catch { /* 복원 실패=격리 잔존(감사 흔적) */ }
+      return { ok: false, reason: "run-lock" }; // 오탈취(교체된 잠금) — 복원 후 물러남
+    }
+    try { fs.unlinkSync(grave); } catch { /* 격리 잔존 무해 */ }
+    try { fs.writeFileSync(runLock, JSON.stringify({ pid: process.pid, token: tok, runId: p10RunId }), { flag: "wx" }); } catch { return { ok: false, reason: "run-lock" }; }
+    const rb = readJson3(runLock); // read-back fence
+    if (!(rb.st === "ok" && rb.data.token === tok && rb.data.pid === process.pid)) return { ok: false, reason: "run-lock" };
+  }
+  HELD_RUN_LOCKS.set(rKey, tok);
+  return {
+    ok: true, runLock, token: tok, p10RunId,
+    fence: () => { const h = readJson3(runLock); return h.st === "ok" && h.data.token === tok && h.data.pid === process.pid; },
+    release: () => { try { HELD_RUN_LOCKS.delete(rKey); const h = readJson3(runLock); if (h.st === "ok" && h.data.token === tok) fs.unlinkSync(runLock); } catch { /* 무해 */ } },
+  };
+}
+// 죽은 job-잠금 회수 — 반드시 run-lock '아래'에서만(기계 전역 단일 회수자 보장): runEnrich 안(이미 보유)
+// 이면 그대로, 밖(확장 UI 직접 호출 등)이면 위 검증된 절차로 잠깐 획득 후 회수·해제. 획득 실패=양보
+// (다음 tick의 run-lock 사망 회수가 잔존까지 자동 해소 — '영구 잔존' 계급 소멸).
+function reclaimDeadJobLock(repo, lp) {
+  const rKey = repoKeyFor(repo);
+  const doReclaim = () => {
     let tok = null;
     try { tok = fs.readFileSync(lp, "utf8"); } catch { return true; } // 이미 회수됨 → 정상 재획득 루프
     const pid9 = parseInt(String(tok).split("-")[0], 10);
     let alive9 = true;
     try { if (pid9) process.kill(pid9, 0); } catch (ke) { alive9 = !(ke && ke.code === "ESRCH"); }
-    if (!pid9 || alive9) return false; // 표식 '안'에서의 재판독=산 잠금(낡은 지식에 의한 오탈취 원천 소거)
+    if (!pid9 || alive9) return false; // run-lock 아래 재판독=산 잠금(낡은 지식 오탈취 원천 소거)
     const stale9 = lp + ".stale-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
     try { fs.renameSync(lp, stale9); } catch { return false; }
     let moved9 = null;
     try { moved9 = fs.readFileSync(stale9, "utf8"); } catch { moved9 = null; }
     return moved9 === tok; // 모델 밖 간섭 불일치=회수 실패 취급(격리물 보존·복원 안 함)
-  } finally {
-    try { if (String(fs.readFileSync(marker, "utf8")) === String(process.pid)) fs.unlinkSync(marker); } catch { /* 무해 */ }
-  }
+  };
+  if (HELD_RUN_LOCKS.has(rKey)) return doReclaim(); // runEnrich 임계구역 안 — 이미 기계 전역 직렬화됨
+  const acq = acquireEnrichRunLock(repo);
+  if (!acq.ok) return false;
+  try { return doReclaim(); } finally { acq.release(); }
 }
 function withJobLock(repo, fn) {
   try { fs.mkdirSync(ENRICH_DIR, { recursive: true }); } catch { /* 잠금이 실패 판정 */ }
@@ -354,7 +392,7 @@ function withJobLock(repo, fn) {
   for (let i = 0; i < 2; i++) {
     const r = CL.withFileLockStrict(lp, fn);
     if (r.ok || !String(r.error || "").includes("dead-lock-holder")) return r;
-    if (!reclaimDeadJobLock(lp)) return r; // 회수 불가·타 회수자 활동 중=종전 실패 그대로(수동 안내 유지)
+    if (!reclaimDeadJobLock(repo, lp)) return r; // 회수 불가·타 회수자 활동 중=종전 실패 그대로(수동 안내 유지)
   }
   return CL.withFileLockStrict(lp, fn);
 }
@@ -1053,35 +1091,12 @@ function runEnrich(repo, opts) {
   if (q3.st !== "ok" || !["enrich-queue-v0", "enrich-queue-v1"].includes(q3.data.schema) || typeof q3.data.mapId !== "string") return park(null, "queue-damaged");
   const queue = q3.data;
   logBase.mapId = queue.mapId;
-  // ② 실행 잠금(repo당 동시 1 — bootstrap funlock 문법)
-  try { fs.mkdirSync(ENRICH_DIR, { recursive: true }); } catch { /* 잠금이 실패 판정 */ }
-  const runLock = path.join(ENRICH_DIR, rKey + ".run.funlock");
-  const tok = crypto.randomBytes(8).toString("hex");
-  const p10RunId = crypto.randomUUID();
-  try { fs.writeFileSync(runLock, JSON.stringify({ pid: process.pid, token: tok, runId: p10RunId }), { flag: "wx" }); }
-  catch {
-    // 사망 회수(3b 1차 강등분 d2deff57384881b8 즉시 수정 — 두 창이 같은 dead lock을 읽고 한쪽이 새로 취득한
-    // 뒤 다른 쪽이 그 새 잠금을 삭제하는 경합): unlink가 아니라 '고유 격리명으로의 원자 rename' — 이동에
-    // 성공한 단일 복구자만 재취득하고, 이동해 온 파일이 자기가 판독한 그 잔재(pid·token 동일)인지 재검증.
-    // 오탈취(그새 교체된 잠금)면 복원. bootstrap 잔재 회수 문법 동형.
-    const held = readJson3(runLock);
-    if (!(held.st === "ok" && Number.isInteger(held.data.pid) && typeof held.data.token === "string")) return { outcome: "busy", reason: "run-lock-damaged" }; // 손상=수동 소관(판정 없는 삭제 금지)
-    let dead = false;
-    try { process.kill(held.data.pid, 0); } catch (e) { dead = !!(e && e.code === "ESRCH"); }
-    if (!dead) return { outcome: "busy", reason: "run-lock" };
-    const grave = runLock + ".reclaim." + process.pid + "." + tok;
-    try { fs.renameSync(runLock, grave); } catch { return { outcome: "busy", reason: "run-lock" }; } // 이동 실패=타 복구자 선점
-    const moved = readJson3(grave);
-    if (!(moved.st === "ok" && moved.data.pid === held.data.pid && moved.data.token === held.data.token)) {
-      try { fs.renameSync(grave, runLock); } catch { /* 복원 실패=격리 잔존(감사 흔적) */ }
-      return { outcome: "busy", reason: "run-lock" }; // 오탈취(교체된 잠금) — 복원 후 물러남
-    }
-    try { fs.unlinkSync(grave); } catch { /* 격리 잔존 무해 */ }
-    try { fs.writeFileSync(runLock, JSON.stringify({ pid: process.pid, token: tok, runId: p10RunId }), { flag: "wx" }); } catch { return { outcome: "busy", reason: "run-lock" }; }
-    const rb = readJson3(runLock); // read-back fence
-    if (!(rb.st === "ok" && rb.data.token === tok && rb.data.pid === process.pid)) return { outcome: "busy", reason: "run-lock" };
-  }
-  const fence = () => { const h = readJson3(runLock); return h.st === "ok" && h.data.token === tok && h.data.pid === process.pid; };
+  // ② 실행 잠금(repo당 동시 1 — 획득·사망 회수·fence는 acquireEnrichRunLock 단일 경로: 죽은 job-잠금
+  //    회수(reclaimDeadJobLock)와 같은 검증된 절차를 공유한다 — 5차 재확인 종결)
+  const acq9 = acquireEnrichRunLock(repo);
+  if (!acq9.ok) return { outcome: "busy", reason: acq9.reason };
+  const p10RunId = acq9.p10RunId;
+  const fence = acq9.fence;
   try {
     if (!fence()) return { outcome: "busy", reason: "run-lock-lost" }; // 2차 blocker⑧: 회수 경합 뒤 임계구역 소유 재검증
     const startJob = readEnrichJob(repo);
@@ -1111,7 +1126,7 @@ function runEnrich(repo, opts) {
     appendP10Terminals(repo, p10, result);
     return result;
   } finally {
-    try { const h = readJson3(runLock); if (h.st === "ok" && h.data.token === tok) fs.unlinkSync(runLock); } catch { /* 무해 */ }
+    acq9.release(); // HELD_RUN_LOCKS 정리 포함(자기 토큰 확인 후 해제 — 종전과 동일 규칙)
   }
 }
 

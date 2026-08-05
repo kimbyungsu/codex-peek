@@ -1011,36 +1011,42 @@ console.log("[12f] ab-6 — 커서 영속과 잠금 해제 '사이' 사망: 잔�
   try { fs.unlinkSync(childFile); } catch { /* 무해 */ }
 }
 
-console.log("[12g] ab-6 회수 직렬화 — 표식은 wx 획득뿐(삭제 연산 자체 소멸·이중 사망=가시적 정지+수동)");
+console.log("[12g] ab-6 종결 — 죽은 job-잠금 회수는 검증된 실행 잠금(run-lock) 아래에서만(이중 사망도 자동 회수)");
 {
   const { ws } = setup("fnsteal");
   const lockP = ME.jobFileFor(ws) + ".lock";
-  const markerP = lockP + ".reclaim";
+  const runLockP = path.join(path.dirname(lockP), ME.repoKeyFor(ws) + ".run.funlock");
   fs.mkdirSync(path.dirname(lockP), { recursive: true });
   const staleOfThis = () => fs.readdirSync(path.dirname(lockP)).filter((f) => f.startsWith(path.basename(lockP) + ".stale-"));
+  // ① 산 보유자 잠금=회수 금지(격리물 0·보유 취급)
   fs.writeFileSync(lockP, process.pid + "-alive1");
   const rAlive = ME.updateEnrichJob(ws, (j) => j && { ...j });
   ok(rAlive.ok === false && fs.existsSync(lockP) && staleOfThis().length === 0, "산 보유자 잠금=회수 안 함(격리물 0·보유 취급)");
   fs.unlinkSync(lockP);
-  // 죽은 잠금+표식 잔존(생사·시효 무관)=양보 — 표식은 남이 지우지 않는다(오삭제 계급 소멸)
+  // ② 죽은 job-잠금+산 실행 잠금(다른 실행 진행 중)=양보(회수는 run-lock 아래에서만)
   fs.writeFileSync(lockP, "999999-deadtok");
-  fs.writeFileSync(markerP, "999998");
-  const past = new Date(Date.now() - 60000);
-  fs.utimesSync(markerP, past, past);
-  const rMark = ME.updateEnrichJob(ws, (j) => j && { ...j });
-  ok(rMark.ok === false && fs.existsSync(markerP) && fs.readFileSync(markerP, "utf8") === "999998" && fs.existsSync(lockP) && staleOfThis().length === 0, "잔존 표식(사망·시효 경과)도 삭제 금지 — 양보(이중 사망=수동 영역·기존 park 경보가 가시화)");
-  fs.unlinkSync(markerP);
-  // 표식 없는 죽은 잠금=정상 자동 회수(1중 사망 경로 보존)
-  const rDead = ME.updateEnrichJob(ws, (j) => j);
-  ok(rDead.ok === true, "죽은 잠금(표식 없음)=정상 자동 회수·재획득");
+  fs.writeFileSync(runLockP, JSON.stringify({ pid: process.pid, token: "othertok", runId: "00000000-0000-4000-8000-00000000r1" }));
+  const rBusy = ME.updateEnrichJob(ws, (j) => j && { ...j });
+  ok(rBusy.ok === false && fs.existsSync(lockP) && staleOfThis().length === 0, "산 실행 잠금 보유 중=회수 양보(잠금 원본 불변·격리물 0)");
+  fs.unlinkSync(runLockP);
+  // ③ 죽은 job-잠금+실행 잠금 자유=자동 회수·격리물 보존·실행 잠금 해제 복원
+  const rDead = ME.updateEnrichJob(ws, (j) => j); // j=null 무변경 — 잠금 획득 자체를 검증
+  ok(rDead.ok === true, "죽은 job-잠금(실행 잠금 자유)=자동 회수·재획득");
   ok(staleOfThis().length >= 1, "정상 회수=격리물 보존(삭제 아님)");
-  ok(!fs.existsSync(markerP), "자기 표식만 finally에서 정리(잔재 0)");
-  // 소스 계약 — 표식 unlink는 자기 pid 확인 finally 단 1곳(남의 표식 삭제 연산 0)+복원 부재
+  ok(!fs.existsSync(runLockP), "회수용 실행 잠금은 회수 후 해제(잔재 0)");
+  // ④ 이중 사망(job-잠금·실행 잠금 모두 죽은 pid 잔존)=실행 잠금의 검증된 사망 회수가 받쳐 자동 복구
+  //    — 직전 설계(전용 표식)의 영구 잔존 계급이 소멸했음을 실증(재확인 blocker 핵심 요구)
+  fs.writeFileSync(lockP, "999999-deadtok2");
+  fs.writeFileSync(runLockP, JSON.stringify({ pid: 999998, token: "deadrun", runId: "00000000-0000-4000-8000-00000000r2" }));
+  const rDouble = ME.updateEnrichJob(ws, (j) => j);
+  ok(rDouble.ok === true, "이중 사망 잔존=자동 회수(영구 정지 소멸 — run-lock 사망 회수 재사용)");
+  ok(staleOfThis().length >= 2 && !fs.existsSync(runLockP), "이중 사망도 격리물 보존+실행 잠금 정리");
+  // ⑤ 소스 계약 — 회수 본문은 run-lock 보유(HELD) 또는 acquireEnrichRunLock 성공 뒤에만·전용 표식 개념 부재·복원 부재
   const meSrc9 = fs.readFileSync(path.join(__dirname, "..", "bridge", "map-enrich.js"), "utf8");
   const fnBody9 = meSrc9.slice(meSrc9.indexOf("function reclaimDeadJobLock"), meSrc9.indexOf("function withJobLock"));
-  ok((fnBody9.match(/unlinkSync\(marker\)/g) || []).length === 1 && /String\(fs\.readFileSync\(marker, "utf8"\)\) === String\(process\.pid\)/.test(fnBody9), "표식 삭제=자기 pid 확인 finally 단 1곳");
-  ok(fnBody9.indexOf("renameSync(stale9, lp)") === -1, "복원(rename back) 부재");
-  ok(fnBody9.indexOf("wx") > 0 && fnBody9.indexOf("wx") < fnBody9.indexOf("fs.readFileSync(lp"), "판독은 표식(wx) 선점 뒤에만");
+  ok(/HELD_RUN_LOCKS\.has\(rKey\)/.test(fnBody9) && /acquireEnrichRunLock\(repo\)/.test(fnBody9) && /if \(!acq\.ok\) return false;/.test(fnBody9), "회수=보유 재진입 또는 획득 성공 뒤에만(무획득 본문 진입 0)");
+  ok(fnBody9.indexOf(".lock.reclaim") === -1 && meSrc9.indexOf(String.fromCharCode(108, 112) + String.fromCharCode(32) + String.fromCharCode(43) + " \".reclaim\"") === -1, "전용 표식(.reclaim) 개념 폐기(잔재 0)");
+  ok(fnBody9.indexOf("renameSync(stale9, lp)") === -1, "job-잠금 복원(rename back) 부재");
 }
 
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
