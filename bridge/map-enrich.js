@@ -317,22 +317,16 @@ function readEnrichJob(repo) {
 // POSIX rename은 대상 덮어쓰기라 제3 획득자의 산 잠금을 지울 수 있다(모델 밖 불일치=격리물만 남기고
 // 실패 취급). 표식 잔존(회수자 사망)은 '죽은 행위자는 더 이상 행위하지 않는다'라 사망 확정(ESRCH)+
 // 시효(10s)로만 청소한다(표식이 보호하는 것은 영속 상태가 아니라 rename 행위자 단일화뿐).
-const JOB_RECLAIM_TTL_MS = 10_000;
 function reclaimDeadJobLock(lp) {
   const marker = lp + ".reclaim";
-  for (let m = 0; m < 2; m++) {
-    try { fs.writeFileSync(marker, String(process.pid), { flag: "wx" }); break; }
-    catch {
-      try {
-        const st = fs.statSync(marker);
-        const mp = parseInt(String(fs.readFileSync(marker, "utf8")), 10);
-        let dead = false;
-        try { if (mp) process.kill(mp, 0); } catch (ke) { dead = !!(ke && ke.code === "ESRCH"); }
-        if (dead && Date.now() - st.mtimeMs > JOB_RECLAIM_TTL_MS) { try { fs.unlinkSync(marker); } catch { /* 경합=아래 재시도 */ } continue; }
-      } catch { /* 판독 불가=활동 중 취급 */ }
-      return false; // 다른 회수자 활동 중=보유 취급
-    }
-  }
+  // 표식은 '어떤 경우에도' 남이 지우지 않는다(4차 재확인 blocker 종결 원칙): 낡은 지식 기반 삭제는
+  // 대상이 그 사이 교체됐을 가능성을 원리상 배제할 수 없어(같은 병의 무한 계단), 삭제 연산 자체를
+  // 없애 오삭제 계급을 소멸시킨다. 표식 획득=wx 성공뿐 — 실패면 보유자 생사 무관하게 양보한다.
+  // 결과 정책(유계 정직): 1중 사망(잠금만 잔존)=이 함수가 자동 회수. 2중 사망(회수 도중 회수자까지
+  // 사망해 표식 잔존 — 극희귀 이중 사고)=자동 복구를 포기하고 호출자의 기존 멈춤 경보(park)로 가시화,
+  // 해소는 수동(격리물·표식 파일 확인 후 제거). 자기 표식은 finally에서 자기 pid 확인 후에만 정리.
+  try { fs.writeFileSync(marker, String(process.pid), { flag: "wx" }); }
+  catch { return false; } // 표식 실재=다른 회수자 활동 중이든 잔존이든 양보(무획득 본문 진입 금지)
   try {
     let tok = null;
     try { tok = fs.readFileSync(lp, "utf8"); } catch { return true; } // 이미 회수됨 → 정상 재획득 루프
