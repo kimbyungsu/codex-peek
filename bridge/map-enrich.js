@@ -312,7 +312,19 @@ function readEnrichJob(repo) {
 }
 function withJobLock(repo, fn) {
   try { fs.mkdirSync(ENRICH_DIR, { recursive: true }); } catch { /* 잠금이 실패 판정 */ }
-  return CL.withFileLockStrict(jobFileFor(repo) + ".lock", fn);
+  const lp = jobFileFor(repo) + ".lock";
+  // 사망 확정(ESRCH) 잔존 잠금=격리 개명 후 1회 재획득(확인 검증 blocker ab-6): 커서 영속과 잠금 해제
+  // '사이'에 프로세스가 죽으면 잔존 잠금이 자동 재개를 영구 차단했다. 전역 잠금(withFileLockStrict)의
+  // '죽은 보유자=즉시 실패' 계약은 과거 검증에서 동결(lost-update 차단 — project-map 소관 계약)이라
+  // 뒤집지 않고, 자기치유가 계약인 '보강 장부' 경계에서만 회수한다 — 실행 잠금(run-lock) 사망 회수와
+  // 같은 관용구: 삭제가 아닌 개명(잔존물 보존)·ESRCH 확정만(EPERM 등=보유 중 취급·pid 재사용=보수).
+  for (let i = 0; i < 2; i++) {
+    const r = CL.withFileLockStrict(lp, fn);
+    if (r.ok || !String(r.error || "").includes("dead-lock-holder")) return r;
+    try { fs.renameSync(lp, lp + ".stale-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6)); }
+    catch { return r; } // 개명 실패(경합·권한)=종전 실패 그대로(수동 안내 유지)
+  }
+  return CL.withFileLockStrict(lp, fn);
 }
 // RMW — mut(job|null)→job'(strict 재검증 후 기록·이형 산출=거부)
 function updateEnrichJob(repo, mut) {

@@ -958,8 +958,57 @@ console.log("[12e] 해상도 v3 — '59개 기준' 두 적용 경합: 둘 다 �
   const aA = MP.applyPatch(ws, pA.mapId, pA.patchId, { preCutover: true });
   const aB = MP.applyPatch(ws, pB.mapId, pB.patchId, { preCutover: true });
   ok(aA.ok === true, "첫 적용=60개째 성공");
-  ok(aB.ok === false, "둘째 적용=잠금 안 재판정 거부(사유: " + String(aB.reasonCode || aB.error || "").slice(0, 60) + ")");
+  ok(aB.ok === false && aB.reasonCode === "semantic-reject", "둘째 적용=잠금 안 '의미 재판정' 거부(reasonCode=semantic-reject — cas-stale 아님)");
+  { // 확인 검증 보완: 거부 사유가 'file 상한'임을 영속 기록/반환에서 직접 단언(간접 추정 금지)
+    let capHit = false;
+    try { capHit = JSON.stringify(aB).includes("file 노드 전체 상한"); } catch { /* 아래 폴백 */ }
+    if (!capHit) {
+      const pdir = path.join(ws, "project-map", "pipeline", topo59.mapId, "pending");
+      try { for (const f of fs.readdirSync(pdir)) { const s = fs.readFileSync(path.join(pdir, f), "utf8"); if (s.includes(pB.patchId)) capHit = capHit || s.includes("file 노드 전체 상한"); } } catch { /* 실패=false */ }
+    }
+    ok(capHit === true, "둘째 거부 사유=file 노드 전체 상한(명시 기록)");
+  }
   ok(MR.readTopoExFor(ws).topo.nodes.filter((n) => n.entityType === "file").length === PM9.MAX_FILE_NODES, "최종=정확히 60(61 도달 불가 실증)");
+}
+console.log("[12f] ab-6 — 커서 영속과 잠금 해제 '사이' 사망: 잔존 잠금을 격리 개명으로 회수해 자동 재개 유지");
+{
+  const cp = require("child_process");
+  const { ws, nodeId } = setup("fnlockdie");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  // [12d]와 같은 자식이되, 사망 지점=커서(nextIndex:1) rename '직후'(잠금 해제 전) — 잔존 잠금 재현
+  const childSrc = [
+    'const fs = require("fs");',
+    'const origRename = fs.renameSync;',
+    'fs.renameSync = function (a, b) {',
+    '  const r = origRename.apply(fs, arguments);',
+    '  try { if (String(b).endsWith(".job.json")) { const s = fs.readFileSync(b, "utf8");',
+    '    if (/"nextIndex":\\s*1(?=[^\\d])/.test(s) && /"phase":\\s*"applying"/.test(s)) process.exit(9); } } catch { }',
+    '  return r;',
+    '};',
+    'const path = require("path");',
+    'const ROOT = process.argv[2], ws = process.argv[3], moduleId = process.argv[4];',
+    'const ME9 = require(path.join(ROOT, "bridge", "map-enrich.js"));',
+    'const TMP = "11111111-2222-4333-8444-555555555555";',
+    'const items = [',
+    '  { op: "add_node", payload: { node: { id: TMP, label: "역할", entityType: "file", roles: [], state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" }, anchors: [{ kind: "code", path: "src/a.js" }] } }, evidence: [{ file: "src/a.js", quote: "// a" }] },',
+    '  { op: "add_edge", payload: { edge: { id: "99999999-8888-4777-8666-555555555544", from: moduleId, to: TMP, relation: "owns", state: { lifecycle: "active", implementation: "runtime", confidence: "candidate" } } }, evidence: [{ file: "src/a.js", quote: "// a" }] },',
+    '];',
+    'ME9.runEnrich(ws, { ws, slot: "ko", mode: "self", readiness: { selfReady: true, economyReady: true, precisionReady: true, autoReady: true }, adapters: { self: () => ({ ok: true, result: { schema: "enrich-result-v1", items } }) }, trigger: "test" });',
+    'console.log("CHILD-DONE");',
+  ].join("\n");
+  const childFile = path.join(os.tmpdir(), "p8er_lockdie_" + Date.now() + ".js");
+  fs.writeFileSync(childFile, childSrc);
+  const rc = cp.spawnSync(process.execPath, [childFile, path.join(__dirname, ".."), ws, nodeId], { encoding: "utf8", env: { ...process.env }, timeout: 120000, windowsHide: true });
+  const lockP = ME.jobFileFor(ws) + ".lock";
+  ok(rc.status === 9 && fs.existsSync(lockP), "자식=잠금 보유 채 사망(잔존 잠금 실재 — ab-6 재현)");
+  ok(MB.ensureQueue(ws, PM) === true, "(전제) 큐 재작성");
+  let calledL = 0;
+  const rL = ME.runEnrich(ws, base(ws, { adapters: { self: () => { calledL++; return { ok: false }; } } }));
+  ok(rL.outcome === "applied" && calledL === 0, "부모=잔존 잠금 격리 회수 후 자동 재개(수동 개입 0)");
+  ok(!fs.existsSync(lockP) && fs.readdirSync(path.dirname(lockP)).some((f) => f.includes(".lock.stale-")), "잔존 잠금=삭제 아닌 격리 개명(잔존물 보존)");
+  const tL = MR.readTopoExFor(ws).topo;
+  ok(tL.edges.some((e) => e.relation === "owns" && e.to === ME.detFileNodeId(tL.mapId, "src/a.js")), "재개 결과=owns 결정론 결속(ab-6 자동 재개 유지)");
+  try { fs.unlinkSync(childFile); } catch { /* 무해 */ }
 }
 
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
