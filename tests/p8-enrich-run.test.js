@@ -1011,5 +1011,40 @@ console.log("[12f] ab-6 — 커서 영속과 잠금 해제 '사이' 사망: 잔�
   try { fs.unlinkSync(childFile); } catch { /* 무해 */ }
 }
 
+console.log("[12g] ab-6 오탈취 방지 — 동시 회수 경합에서 '산 잠금'을 납치하지 않는다(복원·보유 취급)");
+{
+  const { ws } = setup("fnsteal");
+  const lockP = ME.jobFileFor(ws) + ".lock";
+  fs.mkdirSync(path.dirname(lockP), { recursive: true });
+  // 가드1: 살아있는 보유자(우리 자신 pid)의 잠금=회수 금지(격리물 0·실패 반환)
+  fs.writeFileSync(lockP, process.pid + "-alive1");
+  const rAlive = ME.updateEnrichJob(ws, (j) => j && { ...j });
+  const staleOfThis = () => fs.readdirSync(path.dirname(lockP)).filter((f) => f.startsWith(path.basename(lockP) + ".stale-")); // 장부 폴더는 전 픽스처 공용 — 이 저장소 몫만
+  ok(rAlive.ok === false && fs.existsSync(lockP) && staleOfThis().length === 0, "산 보유자 잠금=회수 안 함(격리물 0·보유 취급)");
+  fs.unlinkSync(lockP);
+  // 가드2(재확인 blocker 반례): 죽은 표를 읽은 '뒤' 다른 회수자가 회수·재획득한 상황 —
+  // rename 개입으로 그 창을 결정론 재현: 첫 .stale- 개명 직전에 잠금을 '산 토큰'으로 교체.
+  const deadTok = "999999-deadtok";
+  const liveTok = process.pid + "-liveNew";
+  fs.writeFileSync(lockP, deadTok);
+  const origRen = fs.renameSync;
+  let swapped = false;
+  fs.renameSync = function (a, b) {
+    if (!swapped && String(b).includes(".lock.stale-")) { swapped = true; fs.writeFileSync(String(a), liveTok); } // 다른 회수자의 회수+재획득이 먼저 끝남
+    return origRen.apply(fs, arguments);
+  };
+  let rSteal;
+  try { rSteal = ME.updateEnrichJob(ws, (j) => j && { ...j }); } finally { fs.renameSync = origRen; }
+  ok(rSteal.ok === false, "오탈취 시나리오=RMW 진입 없이 보유 취급(중첩 쓰기 0)");
+  ok(fs.existsSync(lockP) && fs.readFileSync(lockP, "utf8") === liveTok, "납치한 '산 잠금'을 원위치 복원(내용 보존)");
+  ok(staleOfThis().length === 0, "격리물 잔재 0(복원 완료)");
+  fs.unlinkSync(lockP);
+  // 정상 회수(무회귀): 죽은 표 그대로면 격리 개명+재획득 성공
+  fs.writeFileSync(lockP, deadTok);
+  const rDead = ME.updateEnrichJob(ws, (j) => j); // j=null(무변경) — 잠금 획득만 검증
+  ok(rDead.ok === true && !fs.existsSync(lockP) === false || rDead.ok === true, "죽은 표=정상 회수(무회귀·재획득 성공)");
+  ok(staleOfThis().length >= 1, "정상 회수=격리물 보존(삭제 아님)");
+}
+
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
 process.exit(fail ? 1 : 0);

@@ -321,8 +321,23 @@ function withJobLock(repo, fn) {
   for (let i = 0; i < 2; i++) {
     const r = CL.withFileLockStrict(lp, fn);
     if (r.ok || !String(r.error || "").includes("dead-lock-holder")) return r;
-    try { fs.renameSync(lp, lp + ".stale-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6)); }
-    catch { return r; } // 개명 실패(경합·권한)=종전 실패 그대로(수동 안내 유지)
+    // 오탈취 방지(재확인 blocker — run-lock 회수 관용구 동형): 개명 '전' 보유 토큰을 읽어 죽음을 재확정
+    // 하고, 개명 '후' 격리물이 '그 토큰'인지 재검증 — 다른 회수자가 그 사이 회수·재획득했다면(불일치)
+    // 산 잠금을 납치한 것이므로 즉시 복원하고 보유 중으로 취급한다(장부 RMW 중첩 차단).
+    let deadTok = null;
+    try { deadTok = fs.readFileSync(lp, "utf8"); } catch { continue; } // 이미 회수됨 → 재획득 루프
+    const pid9 = parseInt(String(deadTok).split("-")[0], 10);
+    let alive9 = true;
+    try { if (pid9) { process.kill(pid9, 0); } } catch (ke) { alive9 = !(ke && ke.code === "ESRCH"); }
+    if (!pid9 || alive9) continue; // 죽음 재확정 실패=보유 취급(재시도 — EPERM 등 불확실도 보수)
+    const stale9 = lp + ".stale-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
+    try { fs.renameSync(lp, stale9); } catch { continue; } // 경합으로 이미 사라짐 → 재시도
+    let moved9 = null;
+    try { moved9 = fs.readFileSync(stale9, "utf8"); } catch { moved9 = null; }
+    if (moved9 !== deadTok) { // 그 사이 교체된 '산 잠금'을 옮겼다 — 복원 후 보유 취급
+      try { fs.renameSync(stale9, lp); } catch { /* 복원 실패=격리물 잔존 — 다음 실패가 수동 안내 담당 */ }
+      continue;
+    }
   }
   return CL.withFileLockStrict(lp, fn);
 }
