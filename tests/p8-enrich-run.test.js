@@ -1047,6 +1047,30 @@ console.log("[12g] ab-6 종결 — 죽은 job-잠금 회수는 검증된 실행 
   ok(/HELD_RUN_LOCKS\.has\(rKey\)/.test(fnBody9) && /acquireEnrichRunLock\(repo\)/.test(fnBody9) && /if \(!acq\.ok\) return false;/.test(fnBody9), "회수=보유 재진입 또는 획득 성공 뒤에만(무획득 본문 진입 0)");
   ok(fnBody9.indexOf(".lock.reclaim") === -1 && meSrc9.indexOf(String.fromCharCode(108, 112) + String.fromCharCode(32) + String.fromCharCode(43) + " \".reclaim\"") === -1, "전용 표식(.reclaim) 개념 폐기(잔재 0)");
   ok(fnBody9.indexOf("renameSync(stale9, lp)") === -1, "job-잠금 복원(rename back) 부재");
+  // ⑥ 6차 재확인 blocker — run-lock 오탈취 시 '복원' 폐기: 복원은 원 소유자가 그새 release를 끝낸 경우
+  //    '주인 없는 산 pid 잠금'(영구 정지)을 만든다. 이제 격리물만 남기고 물러나며 경로는 비어 다음
+  //    획득자가 정상 진행(고아 불가능) — 판독~개명 사이 교체를 rename 개입으로 결정론 재현.
+  {
+    fs.writeFileSync(lockP, "999999-deadtok3"); // 죽은 job-잠금(회수 동기 유발)
+    fs.writeFileSync(runLockP, JSON.stringify({ pid: 999998, token: "deadrun3", runId: "00000000-0000-4000-8000-00000000r3" }));
+    const liveRun = JSON.stringify({ pid: process.pid, token: "liveTakenOver", runId: "00000000-0000-4000-8000-00000000r4" });
+    const origRen9 = fs.renameSync;
+    let swapped9 = false;
+    fs.renameSync = function (a, b) {
+      if (!swapped9 && /run\.funlock\.reclaim\./.test(String(b))) { swapped9 = true; fs.writeFileSync(String(a), liveRun); } // 다른 회수자의 회수+재획득이 판독~개명 사이에 끝남
+      return origRen9.apply(fs, arguments);
+    };
+    let rTake;
+    try { rTake = ME.updateEnrichJob(ws, (j) => j && { ...j }); } finally { fs.renameSync = origRen9; }
+    ok(rTake.ok === false, "오탈취 감지=회수 물러남(RMW 진입 0)");
+    ok(!fs.existsSync(runLockP), "복원 폐기 — 주인 없는 산 잠금 고아 0(경로 비움)");
+    const graves9 = fs.readdirSync(path.dirname(runLockP)).filter((f) => f.includes(".run.funlock.reclaim."));
+    ok(graves9.length >= 1, "격리물(grave) 보존=감사 흔적");
+    const rNext = ME.updateEnrichJob(ws, (j) => j); // 경로가 비었으니 다음 시도=정상 획득·죽은 job-잠금 회수
+    ok(rNext.ok === true, "다음 획득자=정상 진행(영구 정지 소멸 실증)");
+    const acqBody9 = meSrc9.slice(meSrc9.indexOf("function acquireEnrichRunLock"), meSrc9.indexOf("function reclaimDeadJobLock"));
+    ok(acqBody9.indexOf("renameSync(grave, runLock)") === -1, "소스 계약 — run-lock 복원 코드 부재");
+  }
 }
 
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");

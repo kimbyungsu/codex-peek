@@ -310,13 +310,6 @@ function readEnrichJob(repo) {
   const ve = validateJob(r.data);
   return ve ? { st: "damaged", detail: ve } : { st: "ok", job: r.data };
 }
-// 죽은 job 잠금 회수(3차 재확인 blocker — 회수 '행위' 자체를 전용 표식으로 직렬화): 오탈취·복원 창은
-// '읽은 지식이 낡을 수 있다'는 데서 나온다 — 표식(.reclaim)을 wx로 선점한 회수자만 판독→죽음 재확정→
-// 격리 개명을 수행하므로, 판독과 개명 사이에 다른 회수자가 회수·재획득하는 경로가 원천 소거된다
-// (비회수자는 잠금 파일이 존재하는 한 wx 획득이 막혀 간섭 불가). 복원(rename back)은 두지 않는다 —
-// POSIX rename은 대상 덮어쓰기라 제3 획득자의 산 잠금을 지울 수 있다(모델 밖 불일치=격리물만 남기고
-// 실패 취급). 표식 잔존(회수자 사망)은 '죽은 행위자는 더 이상 행위하지 않는다'라 사망 확정(ESRCH)+
-// 시효(10s)로만 청소한다(표식이 보호하는 것은 영속 상태가 아니라 rename 행위자 단일화뿐).
 // ── 실행 잠금(run-lock) 획득 — runEnrich 본체와 죽은 job-잠금 회수가 '같은' 검증된 절차를 쓴다 ──
 // (5차 재확인 종결: 회수용 상호배제를 새로 발명하는 대신, 사망 회수+오탈취 복원+read-back fence까지
 //  이미 검증 통과([9] 3반복 경합)한 이 원시를 재사용. 잔존도 이 원시의 사망 회수가 자동 해소하므로
@@ -343,8 +336,12 @@ function acquireEnrichRunLock(repo) {
     try { fs.renameSync(runLock, grave); } catch { return { ok: false, reason: "run-lock" }; } // 이동 실패=타 복구자 선점
     const moved = readJson3(grave);
     if (!(moved.st === "ok" && moved.data.pid === held.data.pid && moved.data.token === held.data.token)) {
-      try { fs.renameSync(grave, runLock); } catch { /* 복원 실패=격리 잔존(감사 흔적) */ }
-      return { ok: false, reason: "run-lock" }; // 오탈취(교체된 잠금) — 복원 후 물러남
+      // 오탈취(그새 교체된 산 잠금을 옮김) — '복원하지 않는다'(6차 재확인 blocker로 종전 복원 폐기):
+      // 복원은 원 소유자가 그 사이 release를 끝냈으면 '주인 없는 산 pid 잠금'을 만들어 영구 정지를
+      // 낳는다(살아있는 확장 호스트 pid는 사망 회수 불가). 대신 격리물만 남기고 물러난다 — 원 소유자는
+      // 설계된 fence(임계구역 소유 재검증 — 2차 blocker⑧ 계보)가 상실을 감지해 안전 중단하고, 잠금
+      // 경로는 비어 다음 획득자가 정상 진행한다(고아 없음·감사 흔적=grave 보존).
+      return { ok: false, reason: "run-lock" };
     }
     try { fs.unlinkSync(grave); } catch { /* 격리 잔존 무해 */ }
     try { fs.writeFileSync(runLock, JSON.stringify({ pid: process.pid, token: tok, runId: p10RunId }), { flag: "wx" }); } catch { return { ok: false, reason: "run-lock" }; }
