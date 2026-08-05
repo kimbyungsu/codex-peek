@@ -280,10 +280,13 @@ console.log("[PASS-사례] 2026-08-05 이중 실패 봉합 — 통과·지적 0�
   const failMsg = VH.capHandoffInstruction("ko", "5/5", evidenceCtx.verdict || "not-pass", evidenceCtx);
   ok(failMsg.includes("(마지막 판정: 실패)") && failMsg.includes("R5-F1"), "실패 사례=실패 라벨+실지적 결속(무회귀)");
   // 재확인 blocker① — 손상된 지적 블록은 통과여도 판독 불가(깨끗한 무지적 승격 금지)
-  const corruptId = "ask-passcorrupt-000001", corruptCamp = "cl:passcorrupt:turn";
+  // 확인 검증 보완②: job id는 정본 형식(마지막 16진 10자리)이어야 id 검사 전에 탈락하지 않고 목표 분기(파싱 실패)에 실제로 도달한다.
+  const corruptId = "ask-passcorrupt-0000000001", corruptCamp = "cl:passcorrupt:turn";
   writeEvidenceJob(corruptId, corruptCamp, 5, ["본문...", "[지적 목록 v2]", "{깨진 JSON", "[지적 목록 끝]", "검증: 통과", ""].join("\n"));
   const corruptCtx = VH.capHandoffContext(home, ws, corruptCamp);
-  ok(corruptCtx.unavailable === true && !corruptCtx.passNoFindings, "통과+블록 손상=판독 불가(승격 금지 — EVIDENCE-UNAVAILABLE 경로)");
+  ok(corruptCtx.verdict === "pass" && corruptCtx.unavailable === true && !corruptCtx.passNoFindings, "통과+블록 손상=판독 불가(승격 금지 — 판정 동봉으로 id 검사 통과·파싱 실패 분기 도달 입증)");
+  // 확인 검증 보완③: 손상-통과의 안내 경고 키는 실제 Stop 경보와 같은 verify-handoff-missing(문맥·이벤트 불일치 금지)
+  ok(corruptCtx.alertKind === "verify-handoff-missing", "손상-통과 경고 키=실제 Stop 이벤트와 동일(verify-incomplete는 깨끗한 통과·지적 0 전용)");
   // 재확인 blocker② — passNoFindings 문맥에서 허구 키·가짜 사용자 판단 거부
   const passCtx2 = VH.capHandoffContext(home, ws, "cl:passcase:turn");
   const fakeUser = ["[Verification cap closeout]", "[Accepted and handled]", "None", "[Rebutted and closed]", "None", "[Parked]", "None", "[User decision required]", "- R1-F1 fabricated finding — Target: the saved choice. Scenario: it may vanish. Risk: false completion. Option 1: keep. Option 2: fix next turn.", "[Alert meaning]", "The verify-incomplete yellow remains; this closeout is not a verification pass.", "[Recommendation]", "I recommend option 2 because it avoids a false signal."].join("\n");
@@ -296,6 +299,42 @@ console.log("[PASS-사례] 2026-08-05 이중 실패 봉합 — 통과·지적 0�
   ok((hookSrc9.match(/마지막 판정은 통과였고 열린 지적도 없지만/g) || []).length === 2, "codex-hook — 진실 문구 2곳");
   const guardSrc9 = fs.readFileSync(path.join(__dirname, "..", "bridge", "verify-guard.js"), "utf8");
   ok((guardSrc9.match(/passNoFindings\) \? "verify-incomplete" : "verify-handoff-missing"/g) || []).length >= 1 && (guardSrc9.match(/마지막 판정은 통과였고 열린 지적도 없지만/g) || []).length >= 2, "verify-guard — 카운트 실패 분기 포함 종류·문구 진실화");
+}
+console.log("[PASS-사례 e2e] 실제 codex-hook Stop 경로 — 통과-잔여 상한이 verify-incomplete 이벤트로 기록된다");
+{
+  // 확인 검증 blocker(f-32e8b1ec) 해소: 소스 문자열 검사가 아니라 codex-hook.js를 실프로세스로 Stop 반복 실행해
+  // ①실제 C-C 캠페인 job 선택 ②기록 이벤트=verify-incomplete ③verify-handoff-missing 미기록 ④한·영 문구·결속 보존을 입증한다.
+  const wsCc = path.join(home, "ws-cc"); fs.mkdirSync(wsCc, { recursive: true });
+  const sidCc = "dddddddd-1111-2222-3333-555555555555", turnCc = "turn-cc-1";
+  const ccCamp = "cc:" + sidCc + ":" + turnCc;
+  fs.writeFileSync(CL.contractFileFor(wsCc, "ko"), JSON.stringify({ workspace: wsCc, harnessMode: "codex-codex", verifyMode: "always" }));
+  fs.writeFileSync(path.join(home, "links.json"), JSON.stringify({ byWorkspace: { [CL.normWs(wsCc)]: { workspace: wsCc, implementerSession: sidCc, implementerRevision: 3, implementerEventAt: Date.now() - 50 } }, roleRevision: 3 }));
+  const turnsDirCc = path.join(home, "codex-turns"); fs.mkdirSync(turnsDirCc, { recursive: true });
+  fs.writeFileSync(path.join(turnsDirCc, sidCc + ".json"), JSON.stringify({ schema: "codex-turn-v1", turnId: turnCc, workspace: wsCc, startedAt: Date.now() - 1000, lastActionAt: 0, modified: true, permissionMode: "default" }));
+  fs.mkdirSync(CL.CAMPAIGN_DIR, { recursive: true });
+  fs.writeFileSync(CL.campaignFileFor(wsCc), JSON.stringify({ schema: "vcamp-1", campaignId: ccCamp, count: 5, budget: 5, startedAt: turnTs, updatedAt: turnTs }));
+  // 마지막 회차=깨끗한 통과 job(지적 0) — 실제 캠페인 결속으로 passNoFindings 문맥이 만들어져야 한다
+  writeEvidenceJob("ask-ccpass-0000000001", ccCamp, 5, "본문 근거...\n[지적 목록 v2]\n[지적 목록 끝]\n검증: 통과\n", "ask-ccpass-0000000001", wsCc);
+  // rollout 격리: 실사용자 홈의 Codex 세션을 걷지 않도록 빈 codex-home 지정(마감문 없음=capCloseout 실패 경로 고정)
+  const codexHomeCc = path.join(home, "codex-home-empty"); fs.mkdirSync(path.join(codexHomeCc, "sessions"), { recursive: true });
+  fs.writeFileSync(path.join(home, "codex-home.txt"), codexHomeCc);
+  const hookBin = path.join(__dirname, "..", "bridge", "codex-hook.js");
+  const runHook = () => cp.spawnSync(process.execPath, [hookBin], { input: JSON.stringify({ hook_event_name: "Stop", session_id: sidCc, turn_id: turnCc, cwd: wsCc, permission_mode: "default" }), encoding: "utf8", env: { ...process.env, CODEX_BRIDGE_HOME: home }, timeout: 20000, windowsHide: true });
+  const h1 = runHook();
+  let h1o = null; try { h1o = JSON.parse(h1.stdout.trim()); } catch { h1o = null; }
+  ok(!!h1o && h1o.decision === "block", "상한 도달 1회차=차단(마감 지시) " + (h1o ? "" : "stdout=" + h1.stdout + " stderr=" + h1.stderr));
+  const rCc = h1o ? String(h1o.reason || "") : "";
+  ok(rCc.includes("(마지막 판정: 통과)") && rCc.includes("PASS-NO-FINDINGS") && rCc.includes("ask-ccpass-0000000001"), "실경로 인계문=실제 캠페인 job 결속+통과 라벨+PASS-NO-FINDINGS");
+  runHook(); runHook();
+  const h4 = runHook();
+  ok(!/"decision":"block"/.test(String(h4.stdout || "")), "반복 초과(4회차)=차단 대신 경보 기록으로 전환");
+  const integEvs = (JSON.parse(fs.readFileSync(CL.INTEGRITY_FILE, "utf8")).events || []).filter((e) => e && e.session === sidCc);
+  const incEvs = integEvs.filter((e) => e.kind === "verify-incomplete");
+  ok(incEvs.length >= 1, "기록된 이벤트 종류=verify-incomplete(통과-잔여 진실 경보)");
+  ok(integEvs.every((e) => e.kind !== "verify-handoff-missing"), "verify-handoff-missing(인계 누락 거짓 경보)은 기록되지 않음");
+  const eCc = incEvs[incEvs.length - 1] || {};
+  ok(CL.normWs(String(eCc.workspace || "")) === CL.normWs(wsCc) && eCc.session === sidCc, "이벤트가 작업장·세션에 결속");
+  ok(String(eCc.detailKo || "").includes("마지막 판정은 통과였고 열린 지적도 없지만") && String(eCc.detailEn || "").includes("no open findings"), "한·영 진실 문구가 실제 이벤트에 보존");
 }
 try { fs.rmSync(home, { recursive: true, force: true }); } catch { /* ignore */ }
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);

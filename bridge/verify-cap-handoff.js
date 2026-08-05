@@ -98,10 +98,13 @@ function capHandoffContext(bridgeDir, ws, campaignId) {
   // alertKind에만 쓰고 버려, 인계문이 하드코딩 "not-pass"로 거짓 전달됐고, 마지막 판정이 '통과'라 지적이
   // 0건인 정상 상태를 "읽지 못함(EVIDENCE-UNAVAILABLE)"으로 조작 표기했다(판정 표지 무손실 원칙 위반).
   const passLike = verdict === "pass" || verdict === "pass-notes";
-  const alertKind = verdict === "fail" || verdict === "inconclusive" ? "verdict-nonclean" : (passLike ? "verify-incomplete" : "verify-handoff-missing");
   const parsed = parseFindingEvidence(answer, rec.job.verifyRound);
   // 손상(파싱 실패)은 통과여도 '판독 불가'다(재확인 blocker①): 승격 조건은 '정상 파싱+빈 목록'뿐.
-  if (passLike && parsed.ok && parsed.evidence.length === 0) {
+  // 경고 키도 같은 조건을 따른다(확인 검증 보완): verify-incomplete는 '깨끗한 통과·지적 0'에만 —
+  // 통과 선언+블록 손상까지 verify-incomplete로 안내하면 실제 Stop 경보(verify-handoff-missing)와 어긋난다.
+  const cleanPass = passLike && parsed.ok && parsed.evidence.length === 0;
+  const alertKind = verdict === "fail" || verdict === "inconclusive" ? "verdict-nonclean" : (cleanPass ? "verify-incomplete" : "verify-handoff-missing");
+  if (cleanPass) {
     // 통과·열린 지적 0 = 판독 실패가 아니라 정상 — '통과 이후 수정만 미검증' 사례로 정직 표기(보류 계열 경고)
     return { evidence: [], alertKind, source: rec.fileId, unavailable: false, passNoFindings: true, verdict, backlogItems, backlogHealthy };
   }
