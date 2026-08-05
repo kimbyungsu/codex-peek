@@ -1130,6 +1130,38 @@ console.log("[12h] 7차 ab-6 변형 — 오탈취된 원 소유자는 provider �
     const ah3 = jh3.attempts[jh3.attempts.length - 1];
     ok(jh3.phase === "parked" && jh3.parkedReason === "uncertain-call" && ah3.phase === "parked" && !ah3.results, "C 장부 불변(RMW 직전 창에서도 덮어쓰기 0)");
   }
+  { // ⓓ 9차 변형 — self 실패 기록(정당 소유 중) '후' 오탈취: stale parkR가 새 소유자의 장부를 못 덮는다.
+    //   결정론 재현: w0(실패 기록)의 job-lock '해제 직후' 개입(grave+C 획득+C park) → 이어지는 parkR는
+    //   기록·통지 없이 busy 물러남(park 경로의 소유 검증 — 일반화 봉합의 핵심 지점).
+    const { ws, nodeId } = setup("fenceh4");
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+    ME.runEnrich(ws, base(ws, { adapters: { self: () => { throw new Error("seed"); } } })); // attempt 1개 실패 생성
+    const j4 = ME.readEnrichJob(ws).job; // open+failed 시도로 재구성(재개 route 루프→parkR 분기 유도)
+    const j4o = { ...j4, phase: "open", attempts: [{ ...j4.attempts[0], phase: "failed" }] };
+    delete j4o.finishedAt; delete j4o.parkedReason;
+    fs.writeFileSync(ME.jobFileFor(ws), JSON.stringify(j4o, null, 1));
+    const jobLockP4 = ME.jobFileFor(ws) + ".lock";
+    const origUnlink = fs.unlinkSync;
+    let armed4 = false, fired4 = false;
+    fs.unlinkSync = function (p) {
+      const r = origUnlink.apply(fs, arguments);
+      if (armed4 && !fired4 && String(p) === jobLockP4) { fired4 = true; armed4 = false; fs.unlinkSync = origUnlink; sab(ws); } // w0 해제 직후=실패 기록은 정당·park만 상실 후
+      return r;
+    };
+    let r4;
+    try { r4 = ME.runEnrich(ws, base(ws, { adapters: { self: () => { armed4 = true; return { ok: false, detail: "self-late-fail" }; } } })); }
+    finally { fs.unlinkSync = origUnlink; }
+    ok(fired4 === true, "개입 실행됨(실패 기록 완료 후·parkR 직전 창 재현)");
+    ok(r4.outcome === "busy" && r4.reason === "run-lock-lost", "stale parkR=기록·통지 없이 물러남(busy)");
+    const jh4 = ME.readEnrichJob(ws).job;
+    ok(jh4.phase === "parked" && jh4.parkedReason === "uncertain-call", "C 장부 정본 유지(self-failed 덮어쓰기 0)");
+  }
+  { // ⓔ 소스 계약 — 실행 범위(runEnrich 이후)의 모든 장부 기록은 fencedUpdateEnrichJob 경유(맨 호출 0)
+    const meSrcH = fs.readFileSync(path.join(__dirname, "..", "bridge", "map-enrich.js"), "utf8");
+    const regionH = meSrcH.slice(meSrcH.indexOf("function runEnrich(repo, opts) {"));
+    ok((regionH.match(/(?<!fenced)updateEnrichJob\(repo,/g) || []).length === 0, "실행 범위 맨 updateEnrichJob 호출 0(일반화 불변식 — 새 기록 지점도 기본 방어)");
+    ok((meSrcH.match(/function fencedUpdateEnrichJob\(/g) || []).length === 1, "잠금 안 재검증 헬퍼 단일 정의");
+  }
 }
 
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");

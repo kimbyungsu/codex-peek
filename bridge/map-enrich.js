@@ -1059,6 +1059,15 @@ function retryDeferredResolutions(repo, o, env, topo, triggerKind, linkGeneratio
   const after = deferredSummary(repo, topo.mapId);
   return { handled, applied, settled, awaiting: after.awaiting };
 }
+// [ab-6 일반화(9차 종결)] 실행 소유권 아래의 '모든' 장부 기록은 잠금 안 재검증을 지나야 한다.
+// 지점별 사전 fence는 검사~기록 사이 창이 남는다(8차 계보) — 새 소유자의 유해 기록(park·새 attempt)은
+// 전부 같은 job-lock을 지나므로, 잠금 보유 중 재검증이면 그 선행이 반드시 관측된다. 상실=무기록
+// (fenceLost — 호출자는 busy 물러남·park 통지 금지). fenceFn 부재(사전 단계)=종전 동작.
+function fencedUpdateEnrichJob(repo, fenceFn, mut) {
+  let lost = false;
+  const w = updateEnrichJob(repo, (j) => { if (typeof fenceFn === "function" && !fenceFn()) { lost = true; return null; } return mut(j); });
+  return lost ? { ok: false, reason: "run-lock-lost", fenceLost: true } : w;
+}
 function runEnrich(repo, opts) {
   const o = opts || {};
   const MR = require(path.join(__dirname, "map-runtime.js"));
@@ -1069,8 +1078,10 @@ function runEnrich(repo, opts) {
   const rKey = repoKeyFor(repo);
   const logBase = { repoKey: rKey, mode: o.mode, configWs: o.ws || "", slot: o.slot || "", trigger: o.trigger || "", readinessFp: (() => { try { return sha1(JSON.stringify(o.readiness || null)); } catch { return null; } })() };
   const log = (e) => appendRouteLog({ ts: new Date().toISOString(), ...logBase, ...e });
+  const fenceBox = { f: null }; // 실행 잠금 획득 후 채워짐 — 사전 단계 park는 종전 동작(잠금 권위 없음)
   const park = (jobMut, reason, extra) => {
-    if (jobMut) updateEnrichJob(repo, jobMut);
+    if (fenceBox.f && !fenceBox.f()) return { outcome: "busy", reason: "run-lock-lost" }; // 상실=기록·통지 금지(9차)
+    if (jobMut) { const wP = fencedUpdateEnrichJob(repo, fenceBox.f, jobMut); if (wP.fenceLost) return { outcome: "busy", reason: "run-lock-lost" }; }
     log({ route: "park", reason, outcome: "parked", ...(extra || {}) });
     // 사용자 실보고(2026-08-04): 자동 보강이 스스로 멈춰도 상태바·경보 어디에도 안 떠서, 사용자는
     // 대시보드의 특정 줄을 열어보기 전에는 '지도 자동화가 멈춘 것'을 알 방법이 없었다. 스스로 멈춘
@@ -1094,6 +1105,7 @@ function runEnrich(repo, opts) {
   if (!acq9.ok) return { outcome: "busy", reason: acq9.reason };
   const p10RunId = acq9.p10RunId;
   const fence = acq9.fence;
+  fenceBox.f = fence; // park 경로도 같은 소유 검증을 공유(9차)
   try {
     if (!fence()) return { outcome: "busy", reason: "run-lock-lost" }; // 2차 blocker⑧: 회수 경합 뒤 임계구역 소유 재검증
     const startJob = readEnrichJob(repo);
@@ -1246,7 +1258,8 @@ function runEnrichLocked(repo, o, env) {
         const lastGen = j.attempts.length ? j.attempts[j.attempts.length - 1].consentGen : 0;
         const eligible = j.mode === "self" ? !!(gR && gR.selfAuto) : !!(gR && gR.paidMode === j.mode);
         if (cR.st === "ok" && eligible && gR.gen > lastGen) {
-          const wRe = updateEnrichJob(repo, (jj) => { if (!jj || jj.phase !== "parked") return null; const nx = { ...jj, phase: "open" }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
+          const wRe = fencedUpdateEnrichJob(repo, env.fence, (jj) => { if (!jj || jj.phase !== "parked") return null; const nx = { ...jj, phase: "open" }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
+          if (wRe.fenceLost) return { outcome: "busy", reason: "run-lock-lost" };
           if (wRe.ok && !wRe.unchanged) { if (env.p10) env.p10.touch(wRe.job.jobKey, jobRunIdOf(wRe.job)); return resumeJob(repo, o, env, wRe.job, { topo, idx, pol, ah, corridor, changed, srcFp, srcHead }); }
         }
       }
@@ -1258,7 +1271,8 @@ function runEnrichLocked(repo, o, env) {
         if (answerableInput(repo, topo, changed)) {
           // retryFrom 이동=수동 '다시 시도' 버튼과 같은 규칙 — 과거 실패 플래그가 재개 즉시 같은 park로
           // 되돌리는 것 방지(입력이 바뀌었으니 이전 거부는 이 재개의 근거가 아니다).
-          const wIn = updateEnrichJob(repo, (jj) => { if (!jj || jj.phase !== "parked" || jj.parkedReason !== "input-doc-only") return null; const nx = { ...jj, phase: "open", retryFrom: Array.isArray(jj.attempts) ? jj.attempts.length : 0 }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
+          const wIn = fencedUpdateEnrichJob(repo, env.fence, (jj) => { if (!jj || jj.phase !== "parked" || jj.parkedReason !== "input-doc-only") return null; const nx = { ...jj, phase: "open", retryFrom: Array.isArray(jj.attempts) ? jj.attempts.length : 0 }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
+          if (wIn.fenceLost) return { outcome: "busy", reason: "run-lock-lost" };
           if (wIn.ok && !wIn.unchanged) {
             log({ route: "input-heal", reason: "code-changes-arrived", outcome: "resumed", jobKey: j.jobKey });
             if (env.p10) env.p10.touch(wIn.job.jobKey, jobRunIdOf(wIn.job));
@@ -1269,7 +1283,8 @@ function runEnrichLocked(repo, o, env) {
       }
       const ANSWER_REJECTED_REASONS = ["precision-failed", "economy-failed", "both-failed", "self-failed"];
       if (ANSWER_REJECTED_REASONS.includes(String(j.parkedReason || "")) && !answerableInput(repo, topo, changed)) {
-        const wTr = updateEnrichJob(repo, (jj) => { if (!jj || jj.phase !== "parked" || jj.parkedReason === "input-doc-only") return null; return { ...jj, parkedReason: "input-doc-only" }; });
+        const wTr = fencedUpdateEnrichJob(repo, env.fence, (jj) => { if (!jj || jj.phase !== "parked" || jj.parkedReason === "input-doc-only") return null; return { ...jj, parkedReason: "input-doc-only" }; });
+        if (wTr.fenceLost) return { outcome: "busy", reason: "run-lock-lost" };
         if (wTr.ok && !wTr.unchanged) {
           log({ route: "input-heal", reason: "rediagnosed-doc-only", outcome: "parked", jobKey: j.jobKey, parkedReason: j.parkedReason || "" });
           notifyEnrichParked(String(j.configWs || o.ws || repo), "input-doc-only");
@@ -1290,12 +1305,13 @@ function runEnrichLocked(repo, o, env) {
       // 재판독). call만 제외한다(확인 검증 blocker — conversion 누락으로 정작 그 경로가 재시도 밖이었다).
       const answerRejected = !!lastAtt && ["response", "validation", "conversion"].includes(String(lastAtt.failureStage || ""));
       if (AUTO_RETRY_REASONS.includes(String(j.parkedReason || "")) && answerRejected && !Number.isInteger(j.retryFrom)) {
-        const wAr = updateEnrichJob(repo, (jj) => {
+        const wAr = fencedUpdateEnrichJob(repo, env.fence, (jj) => {
           if (!jj || jj.phase !== "parked" || Number.isInteger(jj.retryFrom)) return null; // 경합 시 한쪽만 성공
           const nx = { ...jj, phase: "open", retryFrom: Array.isArray(jj.attempts) ? jj.attempts.length : 0 };
           delete nx.finishedAt; delete nx.parkedReason;
           return nx;
         });
+        if (wAr.fenceLost) return { outcome: "busy", reason: "run-lock-lost" };
         if (wAr.ok && !wAr.unchanged) {
           log({ route: "auto-retry", reason: "parked-once", outcome: "resumed", jobKey: j.jobKey, parkedReason: j.parkedReason || "" });
           if (env.p10) env.p10.touch(wAr.job.jobKey, jobRunIdOf(wAr.job));
@@ -1326,7 +1342,7 @@ function runEnrichLocked(repo, o, env) {
   }
   // ⑧ 신규 job 생성+attempt 루프(라우터 재호출·승격 1회)
   const nowIso = () => new Date().toISOString();
-  const mk = updateEnrichJob(repo, (cur) => {
+  const mk = fencedUpdateEnrichJob(repo, env.fence, (cur) => {
     if (cur && cur.phase === "open") return null; // 경합 — resume 소관(무변경)
     return { schema: "enrich-job-v2", jobKey, mapId: topo.mapId, authorityHash: ah, decisionContextHash: null, mode, configWs: CL.normWs(o.ws || ""), slot: o.slot === "en" ? "en" : "ko", phase: "open", startedAt: nowIso(), attempts: [] };
   });
@@ -1407,7 +1423,7 @@ function runAttempt(repo, o, env, st, provider) {
   if (!answerableInput(repo, st.topo, st.changed)) return park((j) => j && { ...j, phase: "parked", parkedReason: "input-doc-only", finishedAt: nowIso() }, "input-doc-only", { provider, jobKey: st.jobKey });
   // attempt 생성(phase running — 호출 '전' 기록: uncertain-call 감사 재료)
   let attemptId = -1;
-  const mk = updateEnrichJob(repo, (j) => {
+  const mk = fencedUpdateEnrichJob(repo, env.fence, (j) => {
     if (!j || j.phase !== "open") return null;
     attemptId = j.attempts.length;
     return { ...j, attempts: [...j.attempts, { attemptId, provider, consentGen: g2.gen, phase: "running", startedAt: nowIso() }] };
@@ -1433,11 +1449,10 @@ function runAttempt(repo, o, env, st, provider) {
     // 새 소유자의 park(같은 job-lock 경유)와 직렬화되지 않아 덮어쓰기 창이 남는다. 잠금 안 재검증이면
     // park가 선행한 경우 반드시 상실이 관측되고(무기록 물러남), 잠금 중 획득만 된 경우의 기록은 아직
     // park 전이라 무해(이후 소유자가 failed/applying을 정상 재개). null 반환=unchanged=미기록.
-    const w0 = updateEnrichJob(repo, (j) => {
-      if (env.fence && !env.fence()) return null;
+    const w0 = fencedUpdateEnrichJob(repo, env.fence, (j) => {
       return j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "failed", failReason: String((call && call.detail) || "adapter-failed").slice(0, 200), ...fx0, finishedAt: nowIso() } : a) };
     });
-    if (w0.ok && w0.unchanged) return { outcome: "busy", reason: "run-lock-lost" };
+    if (w0.fenceLost) return { outcome: "busy", reason: "run-lock-lost" };
     if (!w0.ok) return park(null, "attempt-write:" + w0.reason, { provider, jobKey: st.jobKey });
     log({ route: provider, reason: failureReason, outcome: "error", provider, jobKey: st.jobKey, consentGen: g2.gen });
     return { outcome: "provider-failed", provider, _p10Reason: failureReason };
@@ -1466,21 +1481,19 @@ function runAttempt(repo, o, env, st, provider) {
       : { failureStage: "validation", failureCode: "schema-invalid" };
     // 쓰기 결과를 확인한다(2차 blocker④: 실패 기록이 거부되면 시도가 running으로 남아, 다음 재개가
     // 이를 '호출 여부 불확실'로 해석해 완료된 결과 거부가 uncertain-call로 변질됐다).
-    const w1 = updateEnrichJob(repo, (j) => {
-      if (env.fence && !env.fence()) return null; // 잠금 안 소유 재검증(8차 — w0과 동일 근거)
+    const w1 = fencedUpdateEnrichJob(repo, env.fence, (j) => {
       return j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "failed", failReason: (vr.kind + ": " + (vr.errors[0] || "")).slice(0, 200), ...fx1, finishedAt: nowIso() } : a) };
     });
-    if (w1.ok && w1.unchanged) return { outcome: "busy", reason: "run-lock-lost" };
+    if (w1.fenceLost) return { outcome: "busy", reason: "run-lock-lost" };
     if (!w1.ok) return park(null, "attempt-write:" + w1.reason, { provider, jobKey: st.jobKey });
     log({ route: provider, reason: "result-" + vr.kind, outcome: "error", provider, jobKey: st.jobKey, consentGen: g2.gen });
     return { outcome: "provider-failed", provider, _p10Reason: "provider-result-invalid" };
   }
   // results 영속(수신 즉시 — 이후 재개는 provider 재호출 0)
-  const wR = updateEnrichJob(repo, (j) => {
-    if (env.fence && !env.fence()) return null; // 잠금 안 소유 재검증(8차 — w0과 동일 근거)
+  const wR = fencedUpdateEnrichJob(repo, env.fence, (j) => {
     return j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "applying", results: call.result, ...(st.srcFp ? { sourceFp: st.srcFp } : {}), cursor: { nextIndex: 0, rev: 0, appliedPatchIds: [] } } : a) };
   }); // 호출 시점 지문 영속(5차 blocker — 재개 done의 도장 정본)
-  if (wR.ok && wR.unchanged) return { outcome: "busy", reason: "run-lock-lost" };
+  if (wR.fenceLost) return { outcome: "busy", reason: "run-lock-lost" };
   if (!wR.ok) return park(null, "results-write:" + wR.reason, { provider, jobKey: st.jobKey });
   return applyItems(repo, o, env, st, attemptId);
 }
@@ -1516,7 +1529,7 @@ function applyItems(repo, o, env, st, attemptId) {
       const awaitingVerification = ds9.st === "ok" ? ds9.records.filter((x) => x.jobKey === j.jobKey && runId9 && x.jobRunId === runId9).length : null;
       const rejected = (a.resolutions || []).filter((x) => x.verdict === "reject").length;
       const investigationPending = awaitingVerification === null ? null : Math.max(0, skipped - awaitingVerification - rejected);
-      const wD = updateEnrichJob(repo, (jj) => jj && { ...jj, phase: "done", finishedAt: nowIso(), ...(srcFp ? { sourceFp: srcFp } : {}), attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, phase: "done", finishedAt: nowIso(), cursor: { nextIndex: x.cursor.nextIndex, rev: 0, appliedPatchIds: x.cursor.appliedPatchIds } } : x) });
+      const wD = fencedUpdateEnrichJob(repo, env.fence, (jj) => jj && { ...jj, phase: "done", finishedAt: nowIso(), ...(srcFp ? { sourceFp: srcFp } : {}), attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, phase: "done", finishedAt: nowIso(), cursor: { nextIndex: x.cursor.nextIndex, rev: 0, appliedPatchIds: x.cursor.appliedPatchIds } } : x) });
       if (!wD.ok) return park(null, "done-write:" + wD.reason);
       // 소화 기준점 갱신(기준점 교체 — done 도장과 함께): 이 완주가 소화한 커밋을 기록해 다음 라운드가
       // '그 이후의 커밋 변경'을 입력으로 받게 한다(historyless 등 캡처 부재=미기록·무해).
@@ -1539,7 +1552,7 @@ function applyItems(repo, o, env, st, attemptId) {
       if (ex.reason === "busy") return park(null, "expire-busy");
       if (ex.reason === "lock") { retries++; if (retries > 5) return park((jj) => jj && { ...jj, phase: "parked", parkedReason: "retry-exhausted", finishedAt: nowIso() }, "retry-exhausted", { jobKey: j.jobKey }); continue; }
       if (ex.reason === "already-applied") { // 그새 적용 완료 — ⓑ 보충(적용 도장 포함)+super 소거
-        const wS = updateEnrichJob(repo, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, cursor: { nextIndex: x.cursor.nextIndex + 1, rev: 0, appliedPatchIds: [...x.cursor.appliedPatchIds, sup.fromPatchId], ...(x.cursor.evExtra ? {} : {}) } } : x) });
+        const wS = fencedUpdateEnrichJob(repo, env.fence, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, cursor: { nextIndex: x.cursor.nextIndex + 1, rev: 0, appliedPatchIds: [...x.cursor.appliedPatchIds, sup.fromPatchId], ...(x.cursor.evExtra ? {} : {}) } } : x) });
         if (!wS.ok) return park(null, "cursor-write:" + wS.reason);
         retries = 0; continue;
       }
@@ -1549,7 +1562,7 @@ function applyItems(repo, o, env, st, attemptId) {
       if (!convS.ok) return failAttempt(repo, env, attemptId, convS, a.provider);
       const itemFilesS = new Set([...(item.evidence || []).map((e) => e.file), ...((item.claims || []).map((c) => c.file))]);
       const extraS = [...new Set([...(a.cursor.evExtra || []), ...((convS.patch.evidence || []).map((e) => e.ref).filter((f) => !itemFilesS.has(f)))])];
-      const wC = updateEnrichJob(repo, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, cursor: { nextIndex: x.cursor.nextIndex, rev: sup.toRev, appliedPatchIds: x.cursor.appliedPatchIds, currentPatch: convS.patch, ...(extraS.length ? { evExtra: extraS } : {}), ...(x.cursor.oosUsed !== undefined ? { oosUsed: x.cursor.oosUsed } : {}) } } : x) });
+      const wC = fencedUpdateEnrichJob(repo, env.fence, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, cursor: { nextIndex: x.cursor.nextIndex, rev: sup.toRev, appliedPatchIds: x.cursor.appliedPatchIds, currentPatch: convS.patch, ...(extraS.length ? { evExtra: extraS } : {}), ...(x.cursor.oosUsed !== undefined ? { oosUsed: x.cursor.oosUsed } : {}) } } : x) });
       if (!wC.ok) return park(null, "cursor-write:" + wC.reason);
       patch = convS.patch;
     } else if (a.cursor.currentPatch) {
@@ -1559,7 +1572,7 @@ function applyItems(repo, o, env, st, attemptId) {
       if (!conv.ok) return failAttempt(repo, env, attemptId, conv, a.provider);
       const itemFiles = new Set([...(item.evidence || []).map((e) => e.file), ...((item.claims || []).map((c) => c.file))]);
       const extraNow = [...new Set([...(a.cursor.evExtra || []), ...((conv.patch.evidence || []).map((e) => e.ref).filter((f) => !itemFiles.has(f)))])];
-      const wA = updateEnrichJob(repo, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, cursor: { ...x.cursor, currentPatch: conv.patch, ...(extraNow.length ? { evExtra: extraNow } : {}) } } : x) }); // ⓐ 전이(+사전 결속분 evExtra 영속 — oosUsed는 spread로 보존)
+      const wA = fencedUpdateEnrichJob(repo, env.fence, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, cursor: { ...x.cursor, currentPatch: conv.patch, ...(extraNow.length ? { evExtra: extraNow } : {}) } } : x) }); // ⓐ 전이(+사전 결속분 evExtra 영속 — oosUsed는 spread로 보존)
       if (!wA.ok) return park(null, "cursor-write:" + wA.reason);
       patch = conv.patch;
     }
@@ -1568,7 +1581,7 @@ function applyItems(repo, o, env, st, attemptId) {
     const step = applyOnePatch(repo, o, env, { job: j, attempt: a, attemptId, item, patch, topoNow: topoNow.topo });
     if (step.done) {
       // ⓑ 전이: nextIndex+1+currentPatch·super 소거+rev=0 — 적용된 경우에만 appliedPatchIds 추가(도장 분리)
-      const wB = updateEnrichJob(repo, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, cursor: { nextIndex: x.cursor.nextIndex + 1, rev: 0, appliedPatchIds: step.applied ? [...x.cursor.appliedPatchIds, patch.patchId] : x.cursor.appliedPatchIds } } : x) });
+      const wB = fencedUpdateEnrichJob(repo, env.fence, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, cursor: { nextIndex: x.cursor.nextIndex + 1, rev: 0, appliedPatchIds: step.applied ? [...x.cursor.appliedPatchIds, patch.patchId] : x.cursor.appliedPatchIds } } : x) });
       if (!wB.ok) return park(null, "cursor-write:" + wB.reason);
       retries = 0;
       continue;
@@ -1587,7 +1600,7 @@ function applyItems(repo, o, env, st, attemptId) {
       if (!aR || !aR.cursor) return park(null, "attempt-state");
       if (step.evExpand && aR.cursor.oosUsed === true) return park((jj) => jj && { ...jj, phase: "parked", parkedReason: "resolution-out-of-scope", finishedAt: nowIso() }, "resolution-out-of-scope", { jobKey: j.jobKey }); // 재제안+재해소 정확 1회 — 표지는 전용 필드(4차 blocker④: evExtra는 충돌 사전 결속과 공유돼 오인)
       const sup = { fromPatchId: patch.patchId, fromOpHash: PM.opHashOf(patch), toRev: aR.cursor.rev + 1, phase: "marked" };
-      const w1 = updateEnrichJob(repo, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, cursor: { nextIndex: x.cursor.nextIndex, rev: x.cursor.rev, appliedPatchIds: x.cursor.appliedPatchIds, super: sup, ...(step.evExpand ? { evExtra: [...new Set([...(x.cursor.evExtra || []), ...step.evExpand])], oosUsed: true } : { ...(x.cursor.evExtra ? { evExtra: x.cursor.evExtra } : {}), ...(x.cursor.oosUsed !== undefined ? { oosUsed: x.cursor.oosUsed } : {}) }) } } : x) });
+      const w1 = fencedUpdateEnrichJob(repo, env.fence, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, cursor: { nextIndex: x.cursor.nextIndex, rev: x.cursor.rev, appliedPatchIds: x.cursor.appliedPatchIds, super: sup, ...(step.evExpand ? { evExtra: [...new Set([...(x.cursor.evExtra || []), ...step.evExpand])], oosUsed: true } : { ...(x.cursor.evExtra ? { evExtra: x.cursor.evExtra } : {}), ...(x.cursor.oosUsed !== undefined ? { oosUsed: x.cursor.oosUsed } : {}) }) } } : x) });
       if (!w1.ok) return park(null, "cursor-write:" + w1.reason);
       continue; // 다음 반복의 super 경로가 expire→재변환→전진을 원자 수행
     }
@@ -1639,7 +1652,7 @@ function failAttempt(repo, env, attemptId, conv, provider) {
   const fx = conv && conv.kind === "evidence"
     ? { failureStage: "conversion", failureCode: conv.code || "evidence-mismatch", ...safeFailureFile(conv.file) }
     : { failureStage: "conversion", failureCode: "convert-invalid" };
-  const w = updateEnrichJob(repo, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, phase: "failed", failReason: ("convert-" + conv.kind + ": " + (conv.errors[0] || "")).slice(0, 200), ...fx, finishedAt: new Date().toISOString() } : x) });
+  const w = fencedUpdateEnrichJob(repo, env.fence, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, phase: "failed", failReason: ("convert-" + conv.kind + ": " + (conv.errors[0] || "")).slice(0, 200), ...fx, finishedAt: new Date().toISOString() } : x) });
   if (!w.ok) return env.park(null, "attempt-write:" + w.reason, { provider, jobKey: null }); // 실패 기록을 못 남기면 running 잔존 — 조용히 넘기지 않는다(2차 blocker④)
   return { outcome: "provider-failed", provider, _p10Reason: "provider-result-invalid" };
 }
@@ -1749,7 +1762,7 @@ function applyOnePatch(repo, o, env, ctx) {
       }
       // 같은 실행의 적용 일시 실패는 이 support/reject를 재사용하고 verifier를 다시 부르지 않는다.
       const rec9 = res;
-      const wS = updateEnrichJob(repo, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, resolutions: [...(x.resolutions || []), rec9] } : x) });
+      const wS = fencedUpdateEnrichJob(repo, env.fence, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, resolutions: [...(x.resolutions || []), rec9] } : x) });
       if (!wS.ok) return { parkReason: "resolution-persist:" + wS.reason }; // 영속 실패=적용 진행 금지(재호출 멱등 깨짐)
     }
     if (res.verdict === "reject") {
@@ -1789,7 +1802,11 @@ function resumeJob(repo, oIn, env, j, st2) {
   // 3~4차 [주의](f-cc94df4f): 감사 로그·park도 동결 주체로 — 구조분해는 래핑 '후'(적용 주체와 감사 행 일치)
   const baseLog = env.log;
   const wrappedLog = (e) => baseLog({ configWs: CL.normWs(j.configWs), slot: j.slot, mode: j.mode, ...e });
-  const wrappedPark = (jobMut, reason, extra) => { if (jobMut) updateEnrichJob(repo, jobMut); wrappedLog({ route: "park", reason, outcome: "parked", ...(extra || {}) }); notifyEnrichParked(String(j.configWs || oIn.ws || repo), reason); return { outcome: "parked", reason }; };
+  const wrappedPark = (jobMut, reason, extra) => {
+    if (env.fence && !env.fence()) return { outcome: "busy", reason: "run-lock-lost" }; // 상실=기록·통지 금지(9차 — stale parkR 봉인)
+    if (jobMut) { const wP = fencedUpdateEnrichJob(repo, env.fence, jobMut); if (wP.fenceLost) return { outcome: "busy", reason: "run-lock-lost" }; }
+    wrappedLog({ route: "park", reason, outcome: "parked", ...(extra || {}) }); notifyEnrichParked(String(j.configWs || oIn.ws || repo), reason); return { outcome: "parked", reason };
+  };
   env = { ...env, log: wrappedLog, park: wrappedPark };
   const { MP, log, park } = env;
   const a = j.attempts[j.attempts.length - 1];
@@ -1804,7 +1821,7 @@ function resumeJob(repo, oIn, env, j, st2) {
     }
     // self=무과금 — attempt를 failed로 접고 '같은 실행에서' 신규 attempt 재진입(3b 1차 blocker② —
     // parked로 닫으면 이후 실행이 parked noop이라 self 자동 재실행 계약 위반)
-    const wF = updateEnrichJob(repo, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === a.attemptId ? { ...x, phase: "failed", failReason: "interrupted(self — 재실행 허용)", finishedAt: nowIso() } : x) });
+    const wF = fencedUpdateEnrichJob(repo, env.fence, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === a.attemptId ? { ...x, phase: "failed", failReason: "interrupted(self — 재실행 허용)", finishedAt: nowIso() } : x) });
     if (!wF.ok) return park(null, "attempt-write:" + wF.reason);
     log({ route: "self", reason: "self-interrupted-rerun", outcome: "routed", jobKey: j.jobKey });
     return runAttempt(repo, o, env, { topo: st2.topo, idx: st2.idx, pol: st2.pol, ah: st2.ah, jobKey: j.jobKey, corridor: "mapped", changed: null }, "self");
@@ -1817,7 +1834,7 @@ function resumeJob(repo, oIn, env, j, st2) {
       const idxR = MP.decisionIndexFor(repo, j.mapId);
       const seen9 = idxR.st === "ok" && (idxR.projections || []).some((d9) => d9.patchId === a.cursor.currentPatch.patchId);
       if (seen9) {
-        const wB = updateEnrichJob(repo, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === a.attemptId ? { ...x, cursor: { nextIndex: x.cursor.nextIndex + 1, rev: 0, appliedPatchIds: [...x.cursor.appliedPatchIds, x.cursor.currentPatch.patchId] } } : x) });
+        const wB = fencedUpdateEnrichJob(repo, env.fence, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === a.attemptId ? { ...x, cursor: { nextIndex: x.cursor.nextIndex + 1, rev: 0, appliedPatchIds: [...x.cursor.appliedPatchIds, x.cursor.currentPatch.patchId] } } : x) });
         if (!wB.ok) return park(null, "cursor-write:" + wB.reason);
       }
       // 미실존=applyItems가 저장본 재투입(propose 멱등)→상태표대로 진행
