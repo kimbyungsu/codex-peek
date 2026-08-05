@@ -277,17 +277,17 @@ ok(/does not guarantee absence of all defects/.test(ext) && /mechanical round-tr
 ok(/appVP = \(ccMode \? d\.contract\.codexVerifyProfile : d\.contract\.verifyProfile\) \|\| "integrity"/.test(ext), "상태 채움 — 모드별 슬롯·부재=integrity");
 
 console.log("[6] 기본 원칙 카드 — 실효 프로필의 '실제 주입 문안' 표시(사용자 지시 07-17)");
-ok(/profile: string \}; \/\/ profile: 표시 중 문안의 실효 프로필/.test(ext) && /shownProfile = "core";/.test(ext), "computeBaseState — 실효 core면 core 캐논을 표시용으로 제공(profile 필드)");
+ok(/profile: string; editable: boolean \}/.test(ext) && /shownProfile = "core";/.test(ext), "computeBaseState — 실효 core면 core 슬롯을 표시용으로 제공(profile+editable 필드 — 편집 개방)");
 ok(/Array\.isArray\(lib\.VERIFY_PROFILES\) && typeof lib\.loadBaseDirective === "function"/.test(ext), "구버전 판별 — VERIFY_PROFILES capability 확인(옛 로더가 2번째 인자를 무시하고 integrity를 core로 오표시하는 반례 차단)");
-ok(/readOk: true \}/.test(ext) && /integrity 오버라이드 파일 손상과 무관/.test(ext), "core 캐논 신뢰=코드 내장 — integrity 오버라이드 손상과 분리(readOk 결합 해제)");
-ok(/var baseCoreView = false;/.test(ext) && /e\.readOnly = on \|\| baseCoreView;/.test(ext), "core 표시 중 3칸 읽기 전용(정찰 ④칸은 무관)");
-ok(ext.split("baseLocked: baseCoreView").length === 3, "저장·복원 전송에 baseLocked 스코핑 — 버튼은 살아 있고 ④ 정찰 칸 통로 유지(전면 잠금 반례 봉합)");
+ok(/loadBaseDirectiveSafe\(lang, "core"\)/.test(ext) && /coreLocked = true;/.test(ext), "편집 개방: core도 전용 슬롯 strict 판독 — 구런타임만 코드 고정 폴백(coreLocked)");
+ok(/var baseCoreView = false;/.test(ext) && /e\.readOnly = on \|\| \(baseCoreView && !baseEditableNow\);/.test(ext), "편집 개방: 읽기 전용은 구런타임 core 폴백에서만(정찰 ④칸은 무관)");
+ok(ext.split("baseLocked: baseCoreView && !baseEditableNow").length === 3 && ext.split("profile: baseCoreView ? \"core\" : \"integrity\"").length === 3, "저장·복원 전송=잠금은 구런타임 한정+프로필 관통(편집 개방)");
 ok(/m\.baseLocked === true \? true : bridgeLib\(\)\?\.saveBaseDirective/.test(ext) && /m\.baseLocked === true \? true : bridgeLib\(\)\?\.resetBaseDirective/.test(ext), "호스트 — core 중 3칸 저장·복원 생략(무결성 오버라이드 불변)·정찰만 처리");
-ok(/baseDraftStash = \{ v: /.test(ext) && /baseDirty\.verify = baseDraftStash\.d\.verify;/.test(ext), "무결성 미저장 초안 — core 진입 시 보관·복귀 시 복원(소실 금지)");
-ok(ext.split("|| baseDraftStash").length === 5, "stash가 dirty 합성 4결선(호스트 보고·언어 버튼 가드·langHold·외부 언어 변경 holdB)에 편입 — 어느 경로의 웹뷰 재생성도 보관 초안을 파괴 못 함");
-ok(/baseDirty\.scout \|\| baseDraftStash \|\|[\s\S]{0,40}document\.activeElement === \$\("bVerify"\)/.test(ext), "외부 언어 변경 상태 푸시(holdB)도 stash 유지(4번째 결선 — 3차 blocker)");
-ok(/baseDraftStash = null; \/\/ P-12: '초안 폐기'는 core 표시 중 보관분\(stash\)도 폐기/.test(ext), "되돌리기=stash도 폐기(복귀 시 부활 방지)");
-ok(/핵심 프로필 문안 표시 중\(코드 고정·읽기 전용/.test(ext) && /showing Core profile text/.test(ext), "배지 한/영 — 표시 중 문안의 정체 고지");
+ok(/baseDraftStash\[oldK9\] = \{ v: /.test(ext) && /baseDirty\.verify = st9\.d\.verify;/.test(ext), "프로필 전환 초안 — 이전 프로필 보관·새 프로필 복원(양방향 stash — 소실 금지 일반화)");
+ok(ext.split("|| baseDraftStash.core || baseDraftStash.int").length === 5, "stash가 dirty 합성 4결선에 편입(빈 객체=참 오판 없는 키 검사 — 언어 전환 영구 차단 반례 봉합)");
+ok(/baseDirty\.scout \|\| baseDraftStash\.core \|\| baseDraftStash\.int \|\|[\s\S]{0,60}document\.activeElement === \$\("bVerify"\)/.test(ext), "외부 언어 변경 상태 푸시(holdB)도 stash 유지(4번째 결선 — 3차 blocker)");
+ok(/baseDraftStash = \{\}; \/\/ P-12: '초안 폐기'는 프로필별 보관 초안\(stash\)도 전부 폐기/.test(ext), "되돌리기=stash 전부 폐기(객체형 유지 — null 재대입의 .core 예외 반례 봉합 ab-2)");
+ok(/핵심 프로필 \(수정됨\)/.test(ext) && /Core profile \(modified\)/.test(ext) && /이 런타임에선 코드 고정·읽기 전용/.test(ext), "배지 한/영 — 편집 개방(수정됨/기본값)+구런타임 잠금 고지");
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

@@ -118,7 +118,7 @@ ok(/const forceSync = cardStLast\.first === true && !first;/.test(ext), "되돌�
 // 구현검증 1차 지적 1~4 봉합 배선
 ok(/function cardInputLock\(on\)\{/.test(ext) && /cardInputLock\(true\); \/\/ 응답 전 재편집 차단/.test(ext) && /cardInputLock\(false\); \/\/ 응답 도착/.test(ext) && /if \(cardM\.expire\(rid\)\.act === "fail"\) \{ cardInputLock\(false\);/.test(ext), "지적1 — 저장 대기 중 카드 입력 잠금(시작·응답·만료 3지점 배선, 무음 소실 봉합)");
 ok((ext.match(/if\(cardM\.saving\(\)\) return; const b=ev\.target\.closest/g) || []).length === 4, "지적1 — 세그 4종(검증 모드·주입·트랙·P-12 프로필)도 저장 대기 중 입력 차단");
-ok(/var baseDirtyAny = !!\(baseM\.locked\(\) \|\| baseDirty\.verify \|\| baseDirty\.transmit \|\| baseDirty\.rejudge \|\| baseDirty\.scout \|\| baseDraftStash\);/.test(ext) && /if \(cardDirtyNow\(\) \|\| cardM\.saving\(\) \|\| baseDirtyAny\) \{/.test(ext), "지적2 — 언어 전환도 미저장 초안·저장 대기 중 차단(HTML 재생성이 초안·상태기 파괴 — base 잠금+P-12 core 표시 중 보관 초안(stash) 포함)");
+ok(/var baseDirtyAny = !!\(baseM\.locked\(\) \|\| baseDirty\.verify \|\| baseDirty\.transmit \|\| baseDirty\.rejudge \|\| baseDirty\.scout \|\| baseDraftStash\.core \|\| baseDraftStash\.int\);/.test(ext) && /if \(cardDirtyNow\(\) \|\| cardM\.saving\(\) \|\| baseDirtyAny\) \{/.test(ext), "지적2 — 언어 전환도 미저장 초안·저장 대기 중 차단(편집 개방: 프로필별 stash 키 검사 — 빈 객체=참 오판으로 전환이 영구 차단되는 반례 봉합)");
 // [2차 지적 1] 자기치유는 fill 내부가 아니라 hold 판정 '전'(라벨 블록)에서, 렌더 슬롯(renderedMode) 기준으로 실행 —
 // 외부 전환 hold 중에도 디스크가 초안을 따라잡으면 dirty가 풀려 hold가 자연 해소된다(영구 잠금 차단).
 ok(/dirty 자기치유\(구현검증 2차 지적 1 — hold 판정보다 먼저\)/.test(ext) && /contractDirty\.claude = false;/.test(ext) && ext.indexOf("dirty 자기치유(구현검증 2차 지적 1") < ext.indexOf("cardStLast = d.contract ?"), "지적3→2차1 — 자기치유가 hold 판정 전·렌더 슬롯 기준으로 실행");

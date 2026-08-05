@@ -5452,7 +5452,7 @@ class Dashboard {
   // 15분 백스톱은 '살아있는 웹뷰의 장시간 편집'이 아니라 '죽은 웹뷰'(초안도 이미 소멸)만 fail-open으로 놓는다.
   var lastReportedDirty = null;
   function reportCardDirty(hb){
-    var v = !!(cardDirtyNow() || cardM.saving() || baseM.locked() || baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout || baseDraftStash); // stash=core 표시 중 보관된 무결성 초안 — 소실 방지 결속(P-12)
+    var v = !!(cardDirtyNow() || cardM.saving() || baseM.locked() || baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout || baseDraftStash.core || baseDraftStash.int); // stash=프로필별 보관 초안 — 소실 방지 결속(P-12·빈 객체=참 오판 금지)
     if (v === lastReportedDirty && !(hb && v)) return;
     lastReportedDirty = v;
     try { vscode.postMessage({ type: "cardDirtyState", dirty: v }); } catch(e){ /* 유실 시 심박·백스톱이 회복 */ }
@@ -5529,7 +5529,7 @@ class Dashboard {
     // 기본 원칙 되돌리기(구현검증 2차 지적 3): baseDirty는 저장 성공에만 풀려 '편집 취소' 수단이 없었고,
     // 언어 전환 잠금 안내('저장 또는 되돌리기')가 기본 원칙엔 거짓이 됐다 — 초안 폐기+적용값 재적재로 신설.
     if (baseM.saving()) { cardNotice(T("기본 원칙 저장 응답을 기다리는 중이에요 — 잠시 후 다시 시도하세요.","A stage-baseline save is still in flight — try again shortly.")); return; } // 응답 대기만 잠금 — refillWait(정본 확인 대기)엔 되돌리기가 유일 복구 수단이라 허용(6차 지적 1)
-    baseDraftStash = null; // P-12: '초안 폐기'는 core 표시 중 보관분(stash)도 폐기 — 복귀 시 부활 방지
+    baseDraftStash = {}; // P-12: '초안 폐기'는 프로필별 보관 초안(stash)도 전부 폐기 — 복귀 시 부활 방지(객체형 유지: null이면 .core 접근이 예외로 재적재를 끊는다 — 검증 blocker ab-2)
     baseDirty = {};
     try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch(e){ /* 무해 */ }
     hideCardNotice();
@@ -5645,7 +5645,7 @@ class Dashboard {
   // 전환 자체를 차단(모드 전환 잠금과 동일 fail-closed 계약 — 저장/되돌리기 후 전환).
   document.querySelectorAll(".langbtn").forEach(function(b){
     b.addEventListener("click", function(){
-      var baseDirtyAny = !!(baseM.locked() || baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout || baseDraftStash); // stash 포함(P-12 — 언어 전환이 웹뷰 메모리의 보관 초안을 파괴하는 경로 차단)
+      var baseDirtyAny = !!(baseM.locked() || baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout || baseDraftStash.core || baseDraftStash.int); // stash 포함(P-12 — 언어 전환이 웹뷰 메모리의 보관 초안을 파괴하는 경로 차단)
       if (cardDirtyNow() || cardM.saving() || baseDirtyAny) {
         cardNotice(T("저장하지 않은 변경(또는 저장 대기)이 있어요 — 언어를 바꾸면 편집 중인 내용이 사라집니다. '저장' 또는 '되돌리기' 후에 전환하세요.","There are unsaved edits (or a save in flight) — switching language would discard them. Save or Revert first."));
         return;
@@ -6265,7 +6265,7 @@ class Dashboard {
       // 보류 안내: 전역 언어 ≠ 렌더 언어인데 이 패널에 미저장 초안/저장대기가 있으면 이유를 표기(모드 hold 안내가
       // 이미 떠 있으면 그쪽이 우선 — 같은 자리라 겹침 방지). 해소(저장·되돌리기→재생성)는 새 문서라 자동 소멸.
       if (d.lang !== uiLangNow && cardNoticeKind !== "hold") {
-        var langHoldNow = !!(cardDirtyNow() || cardM.saving() || baseM.locked() || baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout || baseDraftStash); // baseM.locked 포함(5차 지적 2)·stash 포함(P-12)
+        var langHoldNow = !!(cardDirtyNow() || cardM.saving() || baseM.locked() || baseDirty.verify || baseDirty.transmit || baseDirty.rejudge || baseDirty.scout || baseDraftStash.core || baseDraftStash.int); // baseM.locked 포함(5차 지적 2)·stash 포함(P-12)
         if (langHoldNow) cardNotice(T("전역 언어가 바뀌었지만, 이 패널은 저장 안 된 편집 때문에 기존 언어 화면을 유지 중이에요 — '저장' 또는 '되돌리기' 후에 새 언어로 전환됩니다.","The global language changed, but this panel keeps its current language because of unsaved edits — Save or Revert to switch."), "langhold");
         else if (cardNoticeKind === "langhold") hideCardNotice();
       } else if (cardNoticeKind === "langhold" && d.lang === uiLangNow) hideCardNotice();
