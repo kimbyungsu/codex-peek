@@ -1429,7 +1429,15 @@ function runAttempt(repo, o, env, st, provider) {
     const fx0 = call && call.failureKind === "result-invalid"
       ? { failureStage: "response", failureCode: "parse-invalid" }
       : { failureStage: "call", failureCode: "process-failed" };
-    const w0 = updateEnrichJob(repo, (j) => j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "failed", failReason: String((call && call.detail) || "adapter-failed").slice(0, 200), ...fx0, finishedAt: nowIso() } : a) });
+    // 소유 재검증을 '잠금 보유 중'(mutator 안)에서 수행(8차 ab-6 변형): 사전 fence~RMW 사이의 오탈취는
+    // 새 소유자의 park(같은 job-lock 경유)와 직렬화되지 않아 덮어쓰기 창이 남는다. 잠금 안 재검증이면
+    // park가 선행한 경우 반드시 상실이 관측되고(무기록 물러남), 잠금 중 획득만 된 경우의 기록은 아직
+    // park 전이라 무해(이후 소유자가 failed/applying을 정상 재개). null 반환=unchanged=미기록.
+    const w0 = updateEnrichJob(repo, (j) => {
+      if (env.fence && !env.fence()) return null;
+      return j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "failed", failReason: String((call && call.detail) || "adapter-failed").slice(0, 200), ...fx0, finishedAt: nowIso() } : a) };
+    });
+    if (w0.ok && w0.unchanged) return { outcome: "busy", reason: "run-lock-lost" };
     if (!w0.ok) return park(null, "attempt-write:" + w0.reason, { provider, jobKey: st.jobKey });
     log({ route: provider, reason: failureReason, outcome: "error", provider, jobKey: st.jobKey, consentGen: g2.gen });
     return { outcome: "provider-failed", provider, _p10Reason: failureReason };
@@ -1458,13 +1466,21 @@ function runAttempt(repo, o, env, st, provider) {
       : { failureStage: "validation", failureCode: "schema-invalid" };
     // 쓰기 결과를 확인한다(2차 blocker④: 실패 기록이 거부되면 시도가 running으로 남아, 다음 재개가
     // 이를 '호출 여부 불확실'로 해석해 완료된 결과 거부가 uncertain-call로 변질됐다).
-    const w1 = updateEnrichJob(repo, (j) => j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "failed", failReason: (vr.kind + ": " + (vr.errors[0] || "")).slice(0, 200), ...fx1, finishedAt: nowIso() } : a) });
+    const w1 = updateEnrichJob(repo, (j) => {
+      if (env.fence && !env.fence()) return null; // 잠금 안 소유 재검증(8차 — w0과 동일 근거)
+      return j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "failed", failReason: (vr.kind + ": " + (vr.errors[0] || "")).slice(0, 200), ...fx1, finishedAt: nowIso() } : a) };
+    });
+    if (w1.ok && w1.unchanged) return { outcome: "busy", reason: "run-lock-lost" };
     if (!w1.ok) return park(null, "attempt-write:" + w1.reason, { provider, jobKey: st.jobKey });
     log({ route: provider, reason: "result-" + vr.kind, outcome: "error", provider, jobKey: st.jobKey, consentGen: g2.gen });
     return { outcome: "provider-failed", provider, _p10Reason: "provider-result-invalid" };
   }
   // results 영속(수신 즉시 — 이후 재개는 provider 재호출 0)
-  const wR = updateEnrichJob(repo, (j) => j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "applying", results: call.result, ...(st.srcFp ? { sourceFp: st.srcFp } : {}), cursor: { nextIndex: 0, rev: 0, appliedPatchIds: [] } } : a) }); // 호출 시점 지문 영속(5차 blocker — 재개 done의 도장 정본)
+  const wR = updateEnrichJob(repo, (j) => {
+    if (env.fence && !env.fence()) return null; // 잠금 안 소유 재검증(8차 — w0과 동일 근거)
+    return j && { ...j, attempts: j.attempts.map((a) => a.attemptId === attemptId ? { ...a, phase: "applying", results: call.result, ...(st.srcFp ? { sourceFp: st.srcFp } : {}), cursor: { nextIndex: 0, rev: 0, appliedPatchIds: [] } } : a) };
+  }); // 호출 시점 지문 영속(5차 blocker — 재개 done의 도장 정본)
+  if (wR.ok && wR.unchanged) return { outcome: "busy", reason: "run-lock-lost" };
   if (!wR.ok) return park(null, "results-write:" + wR.reason, { provider, jobKey: st.jobKey });
   return applyItems(repo, o, env, st, attemptId);
 }

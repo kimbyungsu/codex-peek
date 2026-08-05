@@ -1105,6 +1105,31 @@ console.log("[12h] 7차 ab-6 변형 — 오탈취된 원 소유자는 provider �
     const ah2 = jh2.attempts[jh2.attempts.length - 1];
     ok(jh2.phase === "parked" && ah2.phase === "parked" && !ah2.failReason, "failed 기록도 미기입(C 장부 보존)");
   }
+  { // ⓒ 8차 변형 — '사전 fence 통과 후~장부 RMW 직전' 창의 오탈취: 잠금 안 재검증이 잡는다.
+    //   결정론 재현: B의 job-lock 획득 쓰기(wx) 직전에 개입해 grave+C 획득+C park를 끝낸 뒤 획득을
+    //   진행시킨다 — 사전 fence 2곳은 이미 통과한 시점이므로 mutator 안 재검증만이 마지막 방어선.
+    const { ws, nodeId } = setup("fenceh3");
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: false, paidMode: "economy" });
+    const jobLockP = ME.jobFileFor(ws) + ".lock";
+    const origWrite = fs.writeFileSync;
+    let armed = false, fired = false;
+    fs.writeFileSync = function (p, data, opts) {
+      if (armed && !fired && String(p) === jobLockP && opts && opts.flag === "wx") {
+        fired = true; armed = false;
+        fs.writeFileSync = origWrite; // C의 park가 같은 잠금을 쓰므로 먼저 복원(재귀 차단)
+        sab(ws); // 이 시점=사전 fence 통과 후·RMW 직전(정확한 8차 창)
+      }
+      return origWrite.apply(fs, arguments);
+    };
+    let r3;
+    try { r3 = ME.runEnrich(ws, base(ws, { mode: "economy", adapters: { economy: (c) => { armed = true; return goodAdapter(nodeId)(c); } } })); }
+    finally { fs.writeFileSync = origWrite; }
+    ok(fired === true, "개입 실행됨(획득 직전 창 재현)");
+    ok(r3.outcome === "busy" && r3.reason === "run-lock-lost", "사전 fence 통과 후 오탈취=잠금 안 재검증이 무기록 물러남");
+    const jh3 = ME.readEnrichJob(ws).job;
+    const ah3 = jh3.attempts[jh3.attempts.length - 1];
+    ok(jh3.phase === "parked" && jh3.parkedReason === "uncertain-call" && ah3.phase === "parked" && !ah3.results, "C 장부 불변(RMW 직전 창에서도 덮어쓰기 0)");
+  }
 }
 
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
