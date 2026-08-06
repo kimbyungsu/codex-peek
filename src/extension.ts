@@ -162,6 +162,7 @@ interface BridgeState {
   // P-12 v2.4: 보관함(범위 밖 제안+판단 대기 [주의]) 읽기 전용 가시화 — 처분은 CLI(backlog done|dismiss). null=무폴더/구 런타임.
   backlog: { caution: number; backlog: number; corrupt: number; readError: boolean; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } | null; // readError: 판독 실패(ENOENT 외) — '비어 있음' 위장 금지(2026-07-18 확인 판정 [보완] 소화)
   challenges: { open: number; cleared: number; kept: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number; cleared: boolean; matchedAll: boolean; warnOpen: boolean }> } | null; // 재확인(증분 4b) — cleared=실제 ack 조건(전 파일 일치)·null=구 설치본/부재
+  usedMemory: { ts: string; items: Array<{ path: string; note: string }>; couplings: number; omitted: boolean } | null; // [UI 개편 2차] 직전 검증에 실린 지도 동봉 스냅샷(브릿지 stats/attach.jsonl 최신 1건). null=기록 없음/구 브릿지
   baseAvailable: boolean;
   permissionMode: string;
   codexReady: boolean;
@@ -2331,6 +2332,24 @@ function computeState(turnsN: number): BridgeState {
         return computeChallengeView(ech.listChallenges(ws), Date.now(), unacked);
       } catch { return null; }
     })(),
+    usedMemory: (() => {
+      // [UI 개편 2차] 브릿지 attach 장부(stats/attach.jsonl)의 이 폴더 최신 1건 — 개요 '이번 검증에 실린 기억'
+      try {
+        if (!ws) return null;
+        const raw = fs.readFileSync(path.join(BRIDGE_DIR, "stats", "attach.jsonl"), "utf8");
+        const lines = raw.split("\n").filter(Boolean);
+        const key = normWs(ws);
+        for (let i = lines.length - 1; i >= 0; i--) {
+          try {
+            const j = JSON.parse(lines[i]);
+            if (j && typeof j.ws === "string" && normWs(j.ws) === key) {
+              return { ts: String(j.ts || ""), items: Array.isArray(j.items) ? j.items.slice(0, 12).map((x: any) => ({ path: String(x?.path || ""), note: String(x?.note || "") })) : [], couplings: Number(j.couplings || 0), omitted: j.omitted === true };
+            }
+          } catch { /* 깨진 줄은 건너뜀 — 장부 오염이 화면을 막지 않게 */ }
+        }
+        return null;
+      } catch { return null; } // 부재=기록 없음(정상)
+    })(),
     baseAvailable: bridgeLib() !== null,
     permissionMode: activePermissionMode(ws),
     codexReady: !!resolveCodexPathForBridge(),
@@ -4458,6 +4477,12 @@ class Dashboard {
   #sbToggle{width:100%;background:none;border:none;color:var(--vscode-descriptionForeground);padding:6px 10px;border-radius:7px;cursor:pointer;font-size:11px;text-align:left;white-space:nowrap}
   #sbToggle:hover{color:var(--vscode-foreground);background:var(--vscode-editorWidget-background)}
   .app.rail .navgroup,.app.rail .sb-brandrow b,.app.rail .sb-label{display:none}
+  .nav-badge{margin-left:auto;min-width:18px;padding:1px 6px;border-radius:999px;background:var(--vscode-charts-orange);color:#fff;font-size:10px;text-align:center;font-weight:700}
+  .app.rail .nav-badge{display:none !important}
+  .ov-sm{font-size:15px !important;line-height:1.35 !important}
+  .ovact{margin:4px 0}
+  .ovline{font-size:12px;padding:3px 0;border-bottom:1px dashed var(--vscode-panel-border)}
+  .ovline:last-child{border-bottom:0}
   .app.rail .sidebar .tabbtn{justify-content:center;padding:8px 6px}
   .app.rail #sbToggle{text-align:center}
   .topbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 18px;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-editorWidget-background)}
@@ -4755,7 +4780,12 @@ class Dashboard {
 <aside class="sidebar">
   <div class="sb-brandrow"><span class="brand"></span><b>Codex Bridge</b></div>
   <p class="navgroup">${t("운영", "Operate")}</p>
-  <button type="button" class="tabbtn active" data-tab="main"><span class="sb-ico">📋</span><span class="sb-label">${t("현황", "Status")}</span></button>
+  <button type="button" class="tabbtn active" data-tab="overview"><span class="sb-ico">🏠</span><span class="sb-label">${t("개요", "Overview")}</span><span class="nav-badge" id="ovNavBadge" style="display:none"></span></button>
+  <button type="button" class="tabbtn" data-tab="verify"><span class="sb-ico">🔍</span><span class="sb-label">${t("실시간 검증", "Live Verify")}</span><span class="nav-badge" id="vNavBadge" style="display:none"></span></button>
+  <button type="button" class="tabbtn" data-tab="setup"><span class="sb-ico">🎛️</span><span class="sb-label">${t("검증 설정", "Verify Setup")}</span></button>
+  <button type="button" class="tabbtn" data-tab="sessions"><span class="sb-ico">🔗</span><span class="sb-label">${t("세션·연결", "Sessions")}</span></button>
+  <p class="navgroup">${t("3트랙", "3-track")}</p>
+  <button type="button" class="tabbtn" data-tab="map"><span class="sb-ico">🗺️</span><span class="sb-label">Project MAP</span></button>
   <p class="navgroup">${t("분석", "Analytics")}</p>
   <button type="button" class="tabbtn" data-tab="stats"><span class="sb-ico">📊</span><span class="sb-label">${t("검증 통계", "Verify Stats")}</span></button>
   <p class="navgroup">${t("관리", "Manage")}</p>
@@ -4773,7 +4803,6 @@ class Dashboard {
 </header>
 <main class="shell">
   <div id="modeSwitchNote" class="muted" style="display:none;font-size:11.5px;margin:2px 2px 10px"></div>
-  <div id="tab-main" class="tab-panel active">
   <section class="onboard" id="onboard" style="display:none">
     <button type="button" id="obReopen" class="obreopen" style="display:none">${t("시작하기 다시 보기", "Show Getting Started again")}</button>
     <div id="obMain">
@@ -4790,6 +4819,26 @@ class Dashboard {
 
   <div class="top"><h1><span class="brand"></span>Codex Bridge <span class="sub" id="heroTitle">${t("Claude ⇄ Codex 자동 연결·검증", "Claude ⇄ Codex auto link & verify")}</span></h1><button id="refresh" class="secondary">${t("↻ 새로고침", "↻ Refresh")}</button></div>
 
+  <div id="integrityBanner" class="integrity" style="display:none"></div>
+
+  <div id="tab-overview" class="tab-panel active">
+  <div class="stat-cards">
+    <div class="stat-card s-blue"><div class="stat-num ov-sm" id="ovMode">–</div><div class="stat-lbl">${t("현재 운용", "current mode")}</div></div>
+    <div class="stat-card s-green"><div class="stat-num ov-sm" id="ovVerify">–</div><div class="stat-lbl">${t("검증 상태", "verification")}</div></div>
+    <div class="stat-card s-purple"><div class="stat-num ov-sm" id="ovMap">–</div><div class="stat-lbl">${t("지도 신선도 (3트랙)", "map freshness (3-track)")}</div></div>
+    <div class="stat-card s-orange"><div class="stat-num" id="ovDecide">–</div><div class="stat-lbl">${t("사용자 결정 필요", "needs your decision")}</div></div>
+  </div>
+  <h2 class="sec accent-orange">${t("지금 필요한 행동", "What needs you now")} <span class="sub2">${t("사용자 판단이 필요한 것만 — 비어 있으면 하네스가 알아서 진행 중", "only items that need your judgment — empty means the harness is handling it")}</span></h2>
+  <div class="card">
+    <div id="ovActionEmpty" class="muted">${t("지금 정할 것이 없어요 ✓", "Nothing to decide right now ✓")}</div>
+    <div id="ovActionList"></div>
+  </div>
+  <h2 class="sec accent-yellow">${t("최근 검증 결과", "Recent verdicts")} <span class="sub2">${t("최근 3건 — 전체 대화는 '실시간 검증' 화면", "last 3 — full history in Live Verify")}</span></h2>
+  <div class="card"><div id="ovRecent" class="muted">${t("아직 기록 없음", "no records yet")}</div></div>
+  <h2 class="sec base">${t("이번 검증에 실린 기억", "Memory attached to the last verification")} <span class="sub2">${t("검증 요청에 자동 동봉된 지도 조각 — 이 폴더 최신 1건", "map slices auto-attached to the verify request — latest in this folder")}</span></h2>
+  <div class="card"><div id="ovMemory" class="muted">${t("아직 기록 없음 — 다음 검증부터 쌓여요", "no records yet — starts with the next verification")}</div></div>
+  </div><!-- /tab-overview -->
+  <div id="tab-verify" class="tab-panel">
   <div class="hero">
     <div class="agent claude"><div class="mono c" id="implMono">C</div><div class="nm" id="implName">Claude</div><div class="ro">${t("구현 · implement", "implement")}</div><div class="ro" id="ccActualRo" title="${t("구현 세션 기록의 실제 모델", "actual model from the implementer session log")}"></div></div>
     <div class="link" id="linkViz"><div class="bar"></div><div class="emo" id="linkEmo">●</div><div class="st" id="linkState">${t("연결 없음", "Not linked")}</div></div>
@@ -4798,8 +4847,6 @@ class Dashboard {
   </div>
   <div id="status" class="statusline"></div>
   <div id="freshNote" style="font-size:10px;color:var(--vscode-descriptionForeground);margin:2px 0 4px">${t("데이터 불러오는 중… (몇 초가 지나도 안 바뀌면 이 창을 닫고 상태바에서 다시 여세요)", "Loading… (if this doesn't change within seconds, close this tab and reopen from the status bar)")}</div>
-
-  <div id="integrityBanner" class="integrity" style="display:none"></div>
 
   <div id="liveStrip" class="livestrip" style="display:none">
     <div class="lsflow">
@@ -4810,6 +4857,27 @@ class Dashboard {
     <div class="lsstage" id="lsStage"></div>
   </div>
 
+  <h2 class="sec base accent-yellow">${t("Codex 검증 대화", "Codex Verify Conversation")} <span class="sub2">${t("실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인", "the actual exchange — see for yourself that verification really happened")}</span></h2>
+  <div id="conv"></div>
+  <details id="chSec" class="backlog-fold" style="display:none">
+    <summary class="sec accent-rose">${t("근거 재확인 — 인용 판독 되묻기", "Evidence Recheck — re-asking about cited reads")} <span class="sub2" id="chSummary"></span></summary>
+    <div class="card">
+      <div class="hint">${t("검증 답이 인용한 파일을 그 검증 기록에서 <b>읽은 흔적으로 확인하지 못하면</b>(노란 '근거 의심' 경고), 브릿지가 같은 검증 세션에 <b>재확인 요청을 최대 1회</b> 보낼 수 있어요(마감 임박·발송할 안전 구간 없음 등이면 안 보냄) — 그 파일의 지정 구간 원문을 되돌려 받아 경고 시점에 봉인해 둔 지문과 대조합니다. <b>전 항목이 일치해야 경고가 자동으로 사라지고</b>, 일부만 일치·불일치·무응답이면 경고가 남아요(검증자가 확인을 놓쳤다는 기록). 그 사이 파일이 바뀌었으면 '판정 불가'로 분류해 억울한 기록을 남기지 않아요. 이 카드는 그 재확인 기록의 열람 전용 — 어떤 판정도 바꾸지 않습니다. 추가 비용: 발송된 경고당 최대 Codex 호출 1회.", "When a cited file <b>shows no read trace</b> in that verification's log (the yellow evidence-suspicion warning), the bridge may send <b>at most one recheck request</b> to the same verifier session (skipped near the deadline or when no safe span can be sent) — asking it to return the raw bytes of a sealed span, compared against the fingerprint frozen at alert time. <b>The warning clears automatically only when every item matches</b>; partial matches, mismatches or no answer keep it (a record that the verifier missed the check). If the file changed in between, it's classed 'indeterminate' — no unfair record. This card is read-only and never changes any verdict. Extra cost: at most one Codex call per dispatched warning.")}</div>
+      <div id="chList" style="margin-top:6px"></div>
+    </div>
+  </details>
+
+  <details id="backlogSec" class="backlog-fold" style="display:none">
+    <summary class="sec accent-rose">${t("검증 확장 제안·판단 대기 — 보관함", "Verification-expansion Proposals & Pending Judgments — parking lot")} <span class="sub2">${t("핵심 프로필 전용", "core profile only")}</span> · <span class="sub2" id="blSummary"></span></summary>
+    <div class="card">
+      <div class="hint">${t("<b>핵심 프로필 전용</b> — 무결성 프로필 검증에서는 지적이 여기로 유입되지 않아요(자동 등록·기록 규약 모두 핵심 전용 — 직접 명령으로 수동 등록만 가능). 검증이 낸 지적 중 <b>이번 작업 범위를 넘는 제안</b>(새 시나리오 방어·구조 재설계·커버리지 확장 등)이 여기 보관돼요 — 이론적 구멍을 계속 메우는 무한 검증 루프를 끊기 위한 주차장입니다(핵심 프로필 v2.4). <b>보관 항목엔 갚을 의무가 없고</b>, 채택할 때만 작업이 됩니다. 사용자 판단을 기다리도록 승격된 [주의] 항목도 여기에 함께 기록돼요. 즉시 고칠 자명한 보완([보완])은 애초에 여기 들어오지 않아요(그 루프에서 바로 반영). '검토 기한' 표시는 오래됐거나(30일+) 자주 재발견(3회+)된 항목 — 기한이 아니라 '채택 후보로 한번 살펴보라'는 환기예요.", "<b>Core profile only</b> — integrity-profile verifications never feed this parking lot (both auto-record and the recording protocol are core-only; manual CLI registration is the only other way in). Findings that go <b>beyond this work's scope</b> (new scenario hardening, redesign proposals, coverage expansion) are parked here — a parking lot that cuts the endless loop of patching theoretical holes (core profile v2.4). <b>Parked items carry no repayment duty</b>; they become work only when adopted. '[caution]' items escalated to await your judgment are also recorded here. Obvious mechanical notes ([notes]) never land here (they are applied in-loop). 'review due' marks old (30d+) or often-rediscovered (3×+) items — not a deadline, just a nudge to consider adoption.")}</div>
+      <div id="blList" style="margin-top:6px"></div>
+      <div class="hint">${t("처분은 CLI: <code>node codex-bridge.js backlog done|dismiss &lt;id&gt;</code> · 목록: <code>backlog list</code> · 이 카드는 읽기 전용(이 PC 로컬 장부)", "Dispose via CLI: <code>node codex-bridge.js backlog done|dismiss &lt;id&gt;</code> · list: <code>backlog list</code> · this card is read-only (local ledger of this PC)")}</div>
+    </div>
+  </details>
+
+  </div><!-- /tab-verify -->
+  <div id="tab-setup" class="tab-panel">
   <h2 class="sec claude"><span id="implRulesTitle">${t("Claude 규칙", "Claude Rules")}</span> <span class="to claude" id="implRulesTo">${t("→ Claude에게", "→ to Claude")}</span> <span class="sub2" id="implRulesDesc">${t("Claude가 지킬 행동규칙 — 검증과 별개", "Behavior rules Claude must follow — separate from verification")}</span></h2>
   <div class="card">
     <div class="hint" id="slotNote" style="display:none;border-left:3px solid var(--vscode-charts-purple);padding-left:10px"></div>
@@ -4886,23 +4954,6 @@ class Dashboard {
   <div id="cardHold" class="hint" style="display:none;color:var(--vscode-editorWarning-foreground, var(--vscode-errorForeground))"></div>
   <div class="row"><button id="saveC">${t("저장", "Save")}</button><button id="revertC" type="button" class="secondary" title="${t("저장하지 않은 계약 변경을 버리고 현재 모드의 저장값을 다시 불러옵니다", "Discard unsaved contract edits and reload the saved values for the current mode")}">${t("되돌리기", "Revert")}</button><span id="savedAt" class="muted">${t("· 위 Claude 규칙 · Codex 규칙 · 검증 모드를 함께 저장 (체크리스트 강제는 켜고 끄는 즉시 저장)", "· saves the Claude rules, Codex rules and verify mode together (checklist enforcement saves instantly on toggle)")}</span></div>
 
-  <details id="backlogSec" class="backlog-fold" style="display:none">
-    <summary class="sec accent-rose">${t("검증 확장 제안·판단 대기 — 보관함", "Verification-expansion Proposals & Pending Judgments — parking lot")} <span class="sub2">${t("핵심 프로필 전용", "core profile only")}</span> · <span class="sub2" id="blSummary"></span></summary>
-    <div class="card">
-      <div class="hint">${t("<b>핵심 프로필 전용</b> — 무결성 프로필 검증에서는 지적이 여기로 유입되지 않아요(자동 등록·기록 규약 모두 핵심 전용 — 직접 명령으로 수동 등록만 가능). 검증이 낸 지적 중 <b>이번 작업 범위를 넘는 제안</b>(새 시나리오 방어·구조 재설계·커버리지 확장 등)이 여기 보관돼요 — 이론적 구멍을 계속 메우는 무한 검증 루프를 끊기 위한 주차장입니다(핵심 프로필 v2.4). <b>보관 항목엔 갚을 의무가 없고</b>, 채택할 때만 작업이 됩니다. 사용자 판단을 기다리도록 승격된 [주의] 항목도 여기에 함께 기록돼요. 즉시 고칠 자명한 보완([보완])은 애초에 여기 들어오지 않아요(그 루프에서 바로 반영). '검토 기한' 표시는 오래됐거나(30일+) 자주 재발견(3회+)된 항목 — 기한이 아니라 '채택 후보로 한번 살펴보라'는 환기예요.", "<b>Core profile only</b> — integrity-profile verifications never feed this parking lot (both auto-record and the recording protocol are core-only; manual CLI registration is the only other way in). Findings that go <b>beyond this work's scope</b> (new scenario hardening, redesign proposals, coverage expansion) are parked here — a parking lot that cuts the endless loop of patching theoretical holes (core profile v2.4). <b>Parked items carry no repayment duty</b>; they become work only when adopted. '[caution]' items escalated to await your judgment are also recorded here. Obvious mechanical notes ([notes]) never land here (they are applied in-loop). 'review due' marks old (30d+) or often-rediscovered (3×+) items — not a deadline, just a nudge to consider adoption.")}</div>
-      <div id="blList" style="margin-top:6px"></div>
-      <div class="hint">${t("처분은 CLI: <code>node codex-bridge.js backlog done|dismiss &lt;id&gt;</code> · 목록: <code>backlog list</code> · 이 카드는 읽기 전용(이 PC 로컬 장부)", "Dispose via CLI: <code>node codex-bridge.js backlog done|dismiss &lt;id&gt;</code> · list: <code>backlog list</code> · this card is read-only (local ledger of this PC)")}</div>
-    </div>
-  </details>
-
-  <details id="chSec" class="backlog-fold" style="display:none">
-    <summary class="sec accent-rose">${t("근거 재확인 — 인용 판독 되묻기", "Evidence Recheck — re-asking about cited reads")} <span class="sub2" id="chSummary"></span></summary>
-    <div class="card">
-      <div class="hint">${t("검증 답이 인용한 파일을 그 검증 기록에서 <b>읽은 흔적으로 확인하지 못하면</b>(노란 '근거 의심' 경고), 브릿지가 같은 검증 세션에 <b>재확인 요청을 최대 1회</b> 보낼 수 있어요(마감 임박·발송할 안전 구간 없음 등이면 안 보냄) — 그 파일의 지정 구간 원문을 되돌려 받아 경고 시점에 봉인해 둔 지문과 대조합니다. <b>전 항목이 일치해야 경고가 자동으로 사라지고</b>, 일부만 일치·불일치·무응답이면 경고가 남아요(검증자가 확인을 놓쳤다는 기록). 그 사이 파일이 바뀌었으면 '판정 불가'로 분류해 억울한 기록을 남기지 않아요. 이 카드는 그 재확인 기록의 열람 전용 — 어떤 판정도 바꾸지 않습니다. 추가 비용: 발송된 경고당 최대 Codex 호출 1회.", "When a cited file <b>shows no read trace</b> in that verification's log (the yellow evidence-suspicion warning), the bridge may send <b>at most one recheck request</b> to the same verifier session (skipped near the deadline or when no safe span can be sent) — asking it to return the raw bytes of a sealed span, compared against the fingerprint frozen at alert time. <b>The warning clears automatically only when every item matches</b>; partial matches, mismatches or no answer keep it (a record that the verifier missed the check). If the file changed in between, it's classed 'indeterminate' — no unfair record. This card is read-only and never changes any verdict. Extra cost: at most one Codex call per dispatched warning.")}</div>
-      <div id="chList" style="margin-top:6px"></div>
-    </div>
-  </details>
-
   <h2 class="sec accent-teal">${t("한눈에 보기", "At a Glance")} <span class="sub2">${t("누구에게 · 뭐가 · 언제 들어가나 — 지금 저장된 설정 기준 (저장하면 바뀐 곳이 깜빡여요)", "who gets what, and when — based on saved settings (changes flash on save)")}</span></h2>
   <section class="flowmap card" id="fmSection">
     <div class="flow">
@@ -4924,66 +4975,16 @@ class Dashboard {
     <div class="dirtyhint" id="dirtyHint" style="display:none">${t("● 토글을 바꿨어요 — <b>저장</b>해야 실제로 적용됩니다", "● Toggles changed — press <b>Save</b> to actually apply")}</div>
   </section>
 
-  <details class="card baseline" id="baseDetails" style="margin-top:10px">
-    <summary style="cursor:pointer;font-weight:600;font-size:13px">${t("단계별 기본 원칙", "Stage Baselines")} <span class="fixedbadge">${t("고정 기준 · 기본값 내장", "fixed baseline · defaults built-in")}</span> <span class="muted" style="font-weight:400">${t("· 검증 흐름 3단계의 기본값 (필요할 때만 편집)", "· defaults for the 3 verification stages (edit only if needed)")}</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
-    <div id="baseGlobalWarn" style="margin:8px 0 0 0;font-size:12px;line-height:1.55;border-left:3px solid var(--vscode-inputValidation-warningBorder,#c90);background:var(--vscode-inputValidation-warningBackground,rgba(204,153,0,0.12));border-radius:6px;padding:9px 12px">${t("⚠ <b>전역 공통값입니다.</b> 위 <b>Claude·Codex 규칙</b>(프로젝트마다 따로 적용)과 달리, 이건 하네스의 기본 동작을 보장하는 <b>전역 기준</b>이라 <b>여기서 고쳐 저장하면 모든 프로젝트에 공통으로 적용</b>됩니다. 평소엔 손댈 필요 없고, 잘못 고쳐도 아래 <b>기본값 복원</b>으로 되돌아갑니다.", "⚠ <b>This is a global value.</b> Unlike the <b>Claude/Codex rules</b> above (per-project), this is the <b>global baseline</b> that guarantees the harness's core behavior — <b>editing and saving here applies to every project</b>. Normally you never need to touch it, and <b>Restore defaults</b> below always brings it back.")}</div>
-    <div class="chead" style="margin-top:12px">${t("① 전달 원칙", "① Transmission principles")} <span class="muted" id="baseTransmitTo" style="font-weight:400">${t("→ Claude에게 · Claude가 Codex에 넘길 때 · 검증 ON일 때만", "→ to Claude · when handing off to Codex · only while verify is ON")}</span></div>
-    <textarea id="bTransmit" rows="4"></textarea>
-    <div class="chead" style="margin-top:12px">${t("② 검증 기본원칙", "② Verification baseline")} <span class="muted" style="font-weight:400">${t("→ Codex에게 · Codex 검증 때마다", "→ to Codex · on every Codex verification")}</span></div>
-    <textarea id="bVerify" rows="5"></textarea>
-    <div class="chead" style="margin-top:12px">${t("③ 재판단 원칙", "③ Re-judgment principles")} <span class="muted" id="baseRejudgeTo" style="font-weight:400">${t("→ Claude에게 · Codex 답을 되짚을 때 · 검증 ON일 때만", "→ to Claude · when re-judging Codex's answer · only while verify is ON")}</span></div>
-    <textarea id="bRejudge" rows="5"></textarea>
-    <div id="bScoutWrap" style="display:none">
-      <div class="chead" style="margin-top:12px">${t("④ 정찰 기본 원칙", "④ Scout baseline")} <span class="muted" style="font-weight:400">${t("→ 정찰 AI에게 · 지도를 그리기 직전 · 3트랙일 때만 (기본 정찰·DeepSeek 정찰·Codex 정찰 공통)", "→ to the scout AI · right before drawing a map · 3-track only (all scouts)")}</span> <span id="bScoutOv" class="muted" style="font-weight:400"></span></div>
-      <textarea id="bScout" rows="3"></textarea>
-      <div class="muted" style="margin-top:2px">${t("수정하면 이후 지도 기록에 '기본 프롬프트 아님' 서명이 남아요 — 나중에 명중률을 잴 때 기본 프롬프트 지도와 섞이지 않게 구분하는 표시입니다(자동으로 뭘 빼거나 막지는 않아요).", "Editing marks later map records as 'non-default prompt' — a marker so future hit-rate measurements can keep them apart from default-prompt maps (nothing is auto-excluded or blocked).")}</div>
-      <div class="chead" style="margin-top:8px">${t("④-형식 계약", "④ Format contract")} <span class="fixedbadge">${t("잠금", "locked")}</span> <span class="muted" style="font-weight:400">${t("· 지도의 ①~⑥ 구획·high 표기는 기계가 그대로 읽는 배선이라 수정 불가 — 내용은 공개", "· the map's ①~⑥ sections and 'high' tags are machine-read wiring — not editable, shown for transparency")}</span></div>
-      <div id="bScoutFmt" class="muted" style="white-space:pre-wrap;font-size:11px;border:1px dashed var(--vscode-panel-border);padding:6px;border-radius:4px"></div>
-    </div>
-    <div class="row"><button id="saveB">${t("단계별 기본 원칙 저장", "Save stage baselines")}</button><button id="resetB" class="secondary">${t("기본값 복원", "Restore defaults")}</button><button id="revertB" type="button" class="secondary" title="${t("저장하지 않은 편집을 버리고 저장된 값을 다시 불러옵니다", "Discard unsaved edits and reload the saved values")}">${t("되돌리기", "Revert")}</button><span id="savedB" class="muted"></span></div>
-  </details>
-  <h2 class="sec base accent-orange"><span id="brainTitle">${t("코덱스 두뇌 설정", "Codex Brain Settings")}</span> <span class="sub2" id="brainSub">${t("이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)", "model & reasoning effort Codex uses in this project (applies to the ongoing session too)")}</span></h2>
-  <div class="mcard">
-    <div class="muted">${t("지금 쓰는 값(최근 기록):", "Current values (latest record):")} <b id="mCur">—</b></div>
-    <div id="modelInheritance" class="modeinherit" style="display:none"><span id="modelInheritanceText"></span> <button type="button" id="resetModeModel" class="secondary" style="display:none;margin-left:6px">${t("Claude 모드 설정으로 되돌리기", "Return to Claude-mode settings")}</button></div>
-    <div id="mCacheWarn" class="hint" style="display:none;margin:6px 0 0 0"></div>
-    <!-- 코덱스 모델/생각강도 어긋남 인라인 경고(#mDrift) 제거: 두뇌 drift는 무결성 채널(상태바/배너+확인) 단일 경로로 일원화. (ack 불가·정책상이 중복 해소) -->
-    <div class="mrow"><span class="mlbl">${t("모델", "Model")}</span>
-      <select id="mModel" title="${t("이 프로젝트에서 코덱스가 쓸 모델 — 계정에서 받은 목록(없으면 기본값)", "Model Codex uses in this project — list comes from your account (default if empty)")}"></select>
-    </div>
-    <div class="mrow"><span class="mlbl">${t("생각강도", "Reasoning")}</span>
-      <span id="segReason" class="seg"></span>
-    </div>
-    <div class="row" style="margin-top:10px"><button id="saveModel">${t("두뇌 설정 저장", "Save brain settings")}</button><span id="savedModel" class="muted"></span></div>
-    <div class="muted" style="margin-top:6px">${t("선택은 <b>다음 코덱스 응답부터</b> 적용 · 비우면 코덱스 기본값 · 코덱스에 말 걸 때마다 자동으로 다시 실어줌", "Applies from the <b>next Codex response</b> · empty = Codex default · re-sent automatically on every Codex call")}</div>
-  </div>
-  <!-- Claude Code 두뇌 관리 카드 제거: 앱 /model·/effort가 이미 settings.json에 영속하고 모델별 effort도 정확히 다룬다(카드는 중복·충돌·effort표 부정확이었음). 모델 계열/추론 어긋남은 상태바 drift 경고로 표시(computeState의 syncBrainDrift). -->
-  <h2 class="sec base accent-teal">${t("검증 대기시간", "Verify Timeout")} <span class="sub2">${t("실제 내구 검증 작업의 deadline — 입력한 시간 그대로 대기 (전역·모든 프로젝트 공통)", "the durable verification job's real deadline — waits exactly the configured duration (global, all projects)")}</span></h2>
-  <div class="mcard">
-    <div class="mrow"><span class="mlbl">${t("대기시간", "Timeout")}</span>
-      <input id="vtMin" type="number" min="1" max="60" step="1" style="width:72px" title="${t("코덱스 검증이 이 시간을 넘기면 실패로 처리합니다. 깊은 추론이 길어지면 늘리세요(1~60분).", "Verification longer than this is treated as failed. Raise it for deep reasoning (1–60 min).")}">
-      <span class="muted">${t("분 · 기본 8", "min · default 8")}</span>
-    </div>
-    <div class="row" style="margin-top:10px"><button id="saveVT">${t("대기시간 저장", "Save timeout")}</button><span id="savedVT" class="muted"></span></div>
-    <div class="muted" style="margin-top:6px">${t("코덱스가 답하는 데 이 시간보다 오래 걸리면 검증이 실패로 끝나요. 추론이 8분을 넘는 경우가 있으면 늘려 두세요.", "If Codex takes longer than this, the verification ends as failed. Raise it if reasoning ever exceeds 8 minutes.")}</div>
-  </div>
-  <h2 class="sec base accent-yellow">${t("Codex 검증 대화", "Codex Verify Conversation")} <span class="sub2">${t("실제 주고받은 내용 — 검증이 진짜 일어났는지 눈으로 확인", "the actual exchange — see for yourself that verification really happened")}</span></h2>
-  <div id="conv"></div>
+  </div><!-- /tab-setup -->
+  <div id="tab-sessions" class="tab-panel">
   <h2 class="sec base accent-rose">${t("Codex 세션 연결", "Codex Session Link")} <span class="sub2" id="cwsLabel">${t("첫 발화로 식별", "identified by first message")}</span></h2>
   <div id="verifierInheritance" class="modeinherit" style="display:none"><span id="verifierInheritanceText"></span> <button type="button" id="resetModeVerifier" class="secondary" style="display:none;margin-left:6px">${t("Claude 모드 검증 세션으로 되돌리기", "Return to Claude-mode verifier")}</button></div>
   <div id="cands"></div>
   <div id="hiddenWrap"></div>
-  </div><!-- /tab-main -->
-  <section id="tab-stats" class="tab-panel">
-    <h2 class="sec base accent-yellow">${t("검증 통계", "Verify Stats")} <span class="sub2">${t("이 폴더에서 코덱스 검증이 어떻게 흘러왔는지 — 최근 흐름·통과율·막고 풀린 전환", "how Codex verification has gone in this folder — recent flow · pass rate · fail→pass turnarounds")}</span></h2>
-    <div id="statsEmpty" class="muted" style="display:none">${t("아직 이 폴더에 검증 기록이 없어요. 검증이 쌓이면 여기에 통계가 보여요.", "No verification records in this folder yet. Stats appear here as verifications accumulate.")}</div>
-    <div id="statsBody" class="card" style="display:none">
-      <div class="stat-cards">
-        <div class="stat-card s-blue"><div class="stat-num" id="st7total">–</div><div class="stat-lbl">${t("최근 7일 검증", "verifications (7d)")}</div></div>
-        <div class="stat-card s-green"><div class="stat-num" id="st7pass">–</div><div class="stat-lbl">${t("완전통과율 (7일)", "clean pass rate (7d)")}</div></div>
-        <div class="stat-card s-orange"><div class="stat-num" id="st7touch">–</div><div class="stat-lbl">${t("보완이상 비율 (7일)", "notes-or-worse (7d)")}</div></div>
-        <div class="stat-card s-purple"><div class="stat-num" id="st7res">–</div><div class="stat-lbl">${t("실패·보류→통과 전환 (7일)", "fail/hold→pass turnarounds (7d)")}</div></div>
-      </div>
+  </div><!-- /tab-sessions -->
+  <section id="tab-map" class="tab-panel">
+  <h2 class="sec accent-teal">Project MAP <span class="sub2">${t("3트랙 지도 운영 현황 — 상태·자동 보강·선택 대기·비용", "3-track map operations — state · auto-enrichment · pending choices · costs")}</span></h2>
+  <div class="muted" id="mapPanelOff" style="display:none">${t("2트랙에서는 지도를 쓰지 않아요 — '검증 설정'에서 3트랙을 켜면 여기가 채워져요.", "2-track does not use maps — turn on 3-track in Verify Setup to fill this panel.")}</div>
       <div id="scoutImpact" style="display:none">
         <div id="mapOps">
           <h3 class="chart-h" style="margin-top:12px">${t("Project MAP 운영 현황", "Project MAP operations")}</h3>
@@ -5039,6 +5040,18 @@ class Dashboard {
           </div>
           <div class="muted" style="font-size:11px">${t("ⓘ 정직 고지: 이건 '2트랙이었다면 놓쳤을 것'의 증명이 아니라, 정찰→검증→기억 루프가 실제로 돌았는지의 관찰 신호예요. '검증 지적이 동봉 지도를 짚었는지' 대조와 '게이트 차단→플랜 수정' 추적은 기록을 새로 심어야 해서 후속입니다.", "ⓘ Honest note: this doesn't prove 'what 2-track would have missed' — it observes whether the recon→verify→memory loop actually ran. Matching verify findings against attached maps, and gate-block→plan-change tracking, need new recording and come later.")}</div>
         </div>
+      </div>
+  </section>
+
+  <section id="tab-stats" class="tab-panel">
+    <h2 class="sec base accent-yellow">${t("검증 통계", "Verify Stats")} <span class="sub2">${t("이 폴더에서 코덱스 검증이 어떻게 흘러왔는지 — 최근 흐름·통과율·막고 풀린 전환", "how Codex verification has gone in this folder — recent flow · pass rate · fail→pass turnarounds")}</span></h2>
+    <div id="statsEmpty" class="muted" style="display:none">${t("아직 이 폴더에 검증 기록이 없어요. 검증이 쌓이면 여기에 통계가 보여요.", "No verification records in this folder yet. Stats appear here as verifications accumulate.")}</div>
+    <div id="statsBody" class="card" style="display:none">
+      <div class="stat-cards">
+        <div class="stat-card s-blue"><div class="stat-num" id="st7total">–</div><div class="stat-lbl">${t("최근 7일 검증", "verifications (7d)")}</div></div>
+        <div class="stat-card s-green"><div class="stat-num" id="st7pass">–</div><div class="stat-lbl">${t("완전통과율 (7일)", "clean pass rate (7d)")}</div></div>
+        <div class="stat-card s-orange"><div class="stat-num" id="st7touch">–</div><div class="stat-lbl">${t("보완이상 비율 (7일)", "notes-or-worse (7d)")}</div></div>
+        <div class="stat-card s-purple"><div class="stat-num" id="st7res">–</div><div class="stat-lbl">${t("실패·보류→통과 전환 (7일)", "fail/hold→pass turnarounds (7d)")}</div></div>
       </div>
       <div class="stat-chart">
         <div class="chart-box">
@@ -5124,6 +5137,49 @@ class Dashboard {
       </div>
       <div class="hint" id="scState" style="margin-top:6px"></div>
     </div>
+  <details class="card baseline" id="baseDetails" style="margin-top:10px">
+    <summary style="cursor:pointer;font-weight:600;font-size:13px">${t("단계별 기본 원칙", "Stage Baselines")} <span class="fixedbadge">${t("고정 기준 · 기본값 내장", "fixed baseline · defaults built-in")}</span> <span class="muted" style="font-weight:400">${t("· 검증 흐름 3단계의 기본값 (필요할 때만 편집)", "· defaults for the 3 verification stages (edit only if needed)")}</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
+    <div id="baseGlobalWarn" style="margin:8px 0 0 0;font-size:12px;line-height:1.55;border-left:3px solid var(--vscode-inputValidation-warningBorder,#c90);background:var(--vscode-inputValidation-warningBackground,rgba(204,153,0,0.12));border-radius:6px;padding:9px 12px">${t("⚠ <b>전역 공통값입니다.</b> 위 <b>Claude·Codex 규칙</b>(프로젝트마다 따로 적용)과 달리, 이건 하네스의 기본 동작을 보장하는 <b>전역 기준</b>이라 <b>여기서 고쳐 저장하면 모든 프로젝트에 공통으로 적용</b>됩니다. 평소엔 손댈 필요 없고, 잘못 고쳐도 아래 <b>기본값 복원</b>으로 되돌아갑니다.", "⚠ <b>This is a global value.</b> Unlike the <b>Claude/Codex rules</b> above (per-project), this is the <b>global baseline</b> that guarantees the harness's core behavior — <b>editing and saving here applies to every project</b>. Normally you never need to touch it, and <b>Restore defaults</b> below always brings it back.")}</div>
+    <div class="chead" style="margin-top:12px">${t("① 전달 원칙", "① Transmission principles")} <span class="muted" id="baseTransmitTo" style="font-weight:400">${t("→ Claude에게 · Claude가 Codex에 넘길 때 · 검증 ON일 때만", "→ to Claude · when handing off to Codex · only while verify is ON")}</span></div>
+    <textarea id="bTransmit" rows="4"></textarea>
+    <div class="chead" style="margin-top:12px">${t("② 검증 기본원칙", "② Verification baseline")} <span class="muted" style="font-weight:400">${t("→ Codex에게 · Codex 검증 때마다", "→ to Codex · on every Codex verification")}</span></div>
+    <textarea id="bVerify" rows="5"></textarea>
+    <div class="chead" style="margin-top:12px">${t("③ 재판단 원칙", "③ Re-judgment principles")} <span class="muted" id="baseRejudgeTo" style="font-weight:400">${t("→ Claude에게 · Codex 답을 되짚을 때 · 검증 ON일 때만", "→ to Claude · when re-judging Codex's answer · only while verify is ON")}</span></div>
+    <textarea id="bRejudge" rows="5"></textarea>
+    <div id="bScoutWrap" style="display:none">
+      <div class="chead" style="margin-top:12px">${t("④ 정찰 기본 원칙", "④ Scout baseline")} <span class="muted" style="font-weight:400">${t("→ 정찰 AI에게 · 지도를 그리기 직전 · 3트랙일 때만 (기본 정찰·DeepSeek 정찰·Codex 정찰 공통)", "→ to the scout AI · right before drawing a map · 3-track only (all scouts)")}</span> <span id="bScoutOv" class="muted" style="font-weight:400"></span></div>
+      <textarea id="bScout" rows="3"></textarea>
+      <div class="muted" style="margin-top:2px">${t("수정하면 이후 지도 기록에 '기본 프롬프트 아님' 서명이 남아요 — 나중에 명중률을 잴 때 기본 프롬프트 지도와 섞이지 않게 구분하는 표시입니다(자동으로 뭘 빼거나 막지는 않아요).", "Editing marks later map records as 'non-default prompt' — a marker so future hit-rate measurements can keep them apart from default-prompt maps (nothing is auto-excluded or blocked).")}</div>
+      <div class="chead" style="margin-top:8px">${t("④-형식 계약", "④ Format contract")} <span class="fixedbadge">${t("잠금", "locked")}</span> <span class="muted" style="font-weight:400">${t("· 지도의 ①~⑥ 구획·high 표기는 기계가 그대로 읽는 배선이라 수정 불가 — 내용은 공개", "· the map's ①~⑥ sections and 'high' tags are machine-read wiring — not editable, shown for transparency")}</span></div>
+      <div id="bScoutFmt" class="muted" style="white-space:pre-wrap;font-size:11px;border:1px dashed var(--vscode-panel-border);padding:6px;border-radius:4px"></div>
+    </div>
+    <div class="row"><button id="saveB">${t("단계별 기본 원칙 저장", "Save stage baselines")}</button><button id="resetB" class="secondary">${t("기본값 복원", "Restore defaults")}</button><button id="revertB" type="button" class="secondary" title="${t("저장하지 않은 편집을 버리고 저장된 값을 다시 불러옵니다", "Discard unsaved edits and reload the saved values")}">${t("되돌리기", "Revert")}</button><span id="savedB" class="muted"></span></div>
+  </details>
+  <h2 class="sec base accent-orange"><span id="brainTitle">${t("코덱스 두뇌 설정", "Codex Brain Settings")}</span> <span class="sub2" id="brainSub">${t("이 프로젝트에서 코덱스가 쓰는 모델·생각강도 (진행 중 대화에도 적용)", "model & reasoning effort Codex uses in this project (applies to the ongoing session too)")}</span></h2>
+  <div class="mcard">
+    <div class="muted">${t("지금 쓰는 값(최근 기록):", "Current values (latest record):")} <b id="mCur">—</b></div>
+    <div id="modelInheritance" class="modeinherit" style="display:none"><span id="modelInheritanceText"></span> <button type="button" id="resetModeModel" class="secondary" style="display:none;margin-left:6px">${t("Claude 모드 설정으로 되돌리기", "Return to Claude-mode settings")}</button></div>
+    <div id="mCacheWarn" class="hint" style="display:none;margin:6px 0 0 0"></div>
+    <!-- 코덱스 모델/생각강도 어긋남 인라인 경고(#mDrift) 제거: 두뇌 drift는 무결성 채널(상태바/배너+확인) 단일 경로로 일원화. (ack 불가·정책상이 중복 해소) -->
+    <div class="mrow"><span class="mlbl">${t("모델", "Model")}</span>
+      <select id="mModel" title="${t("이 프로젝트에서 코덱스가 쓸 모델 — 계정에서 받은 목록(없으면 기본값)", "Model Codex uses in this project — list comes from your account (default if empty)")}"></select>
+    </div>
+    <div class="mrow"><span class="mlbl">${t("생각강도", "Reasoning")}</span>
+      <span id="segReason" class="seg"></span>
+    </div>
+    <div class="row" style="margin-top:10px"><button id="saveModel">${t("두뇌 설정 저장", "Save brain settings")}</button><span id="savedModel" class="muted"></span></div>
+    <div class="muted" style="margin-top:6px">${t("선택은 <b>다음 코덱스 응답부터</b> 적용 · 비우면 코덱스 기본값 · 코덱스에 말 걸 때마다 자동으로 다시 실어줌", "Applies from the <b>next Codex response</b> · empty = Codex default · re-sent automatically on every Codex call")}</div>
+  </div>
+  <!-- Claude Code 두뇌 관리 카드 제거: 앱 /model·/effort가 이미 settings.json에 영속하고 모델별 effort도 정확히 다룬다(카드는 중복·충돌·effort표 부정확이었음). 모델 계열/추론 어긋남은 상태바 drift 경고로 표시(computeState의 syncBrainDrift). -->
+  <h2 class="sec base accent-teal">${t("검증 대기시간", "Verify Timeout")} <span class="sub2">${t("실제 내구 검증 작업의 deadline — 입력한 시간 그대로 대기 (전역·모든 프로젝트 공통)", "the durable verification job's real deadline — waits exactly the configured duration (global, all projects)")}</span></h2>
+  <div class="mcard">
+    <div class="mrow"><span class="mlbl">${t("대기시간", "Timeout")}</span>
+      <input id="vtMin" type="number" min="1" max="60" step="1" style="width:72px" title="${t("코덱스 검증이 이 시간을 넘기면 실패로 처리합니다. 깊은 추론이 길어지면 늘리세요(1~60분).", "Verification longer than this is treated as failed. Raise it for deep reasoning (1–60 min).")}">
+      <span class="muted">${t("분 · 기본 8", "min · default 8")}</span>
+    </div>
+    <div class="row" style="margin-top:10px"><button id="saveVT">${t("대기시간 저장", "Save timeout")}</button><span id="savedVT" class="muted"></span></div>
+    <div class="muted" style="margin-top:6px">${t("코덱스가 답하는 데 이 시간보다 오래 걸리면 검증이 실패로 끝나요. 추론이 8분을 넘는 경우가 있으면 늘려 두세요.", "If Codex takes longer than this, the verification ends as failed. Raise it if reasoning ever exceeds 8 minutes.")}</div>
+  </div>
   </section>
 </main>
 </div>
@@ -5277,8 +5333,7 @@ class Dashboard {
   function T(ko, en){ return UI_EN ? en : ko; }
   // P10 화면 계약: Project MAP 운영 카드는 기존 검증 결과·토큰·프로필 뒤에 온다.
   // 템플릿에서는 3트랙 묶음을 한 덩어리로 유지하고, 초기 DOM에서 최종 표시 위치만 확정한다.
-  const statsNoteNode=$("statsNote"), mapOpsNode=$("scoutImpact");
-  if(statsNoteNode&&mapOpsNode) statsNoteNode.insertAdjacentElement("afterend",mapOpsNode);
+  // [UI 개편 2차] scoutImpact 부팅 재배치 제거 — 이제 Project MAP 패널 마크업에 직접 산다(재배치 목적이던 "통계 무기록에도 표시"는 패널 분리로 소멸).
   document.getElementById("refresh").addEventListener("click", () => vscode.postMessage({type:"refresh"}));
   function el(tag, cls, text){ const e=document.createElement(tag); if(cls)e.className=cls; if(text!=null)e.textContent=text; return e; }
   // 폼에서 고른 값(curVM/curIM, 저장 시 전송) vs 저장돼 실제 적용 중인 값(appVM/appIM, 지도·'지금 받는 것'에 표시).
@@ -5658,6 +5713,57 @@ class Dashboard {
       document.querySelectorAll(".tab-panel").forEach(function(p){ p.classList.toggle("active", p.id===("tab-"+t)); });
     });
   });
+  // [UI 개편 2차] 개요 패널 — 전부 기존 상태값 재조립(새 계산·새 메시지 없음). 표시는 textContent만(innerHTML 금지).
+  // '사용자 결정 필요'는 사람 판단이 필요한 것만 합산: 미확인 경보·보관함 [주의]·근거 재확인 열린 경고·MAP 대기 선택·수칙서 승인 대기.
+  function renderOverview(d){
+    var set9=function(id,v){ var e=$(id); if(e) e.textContent=v; };
+    var cc9 = !!(d.contract && d.contract.harnessMode==="codex-codex");
+    set9("ovMode", cc9?"Codex ↔ Codex":"Claude ↔ Codex");
+    var vm9 = d.contract ? ((cc9 ? d.contract.codexVerifyMode : d.contract.verifyMode) || "off") : null;
+    set9("ovVerify", d.live ? (T("진행 중 · 회차 ","running · round ")+(d.live.round||1)) : (vm9===null?"–":(vm9==="off"?T("꺼짐","off"):T("대기 · ","idle · ")+lblVM(vm9))));
+    var son9 = !!(d.contract && d.contract.scoutMode==="on");
+    var h9 = d.mapCurrent && d.mapCurrent.source==="v2" ? d.mapCurrent.health : null;
+    set9("ovMap", !son9 ? T("2트랙 — 지도 없음","2-track — no map") : (h9 ? (h9.fresh+"/"+h9.total+(h9.ratios&&h9.ratios.fresh!==null?" · "+Math.round(h9.ratios.fresh*100)+"%":"")) : T("자료 없음","no data")));
+    var acts9=[];
+    var integ9=(d.integrity||[]).filter(function(e){ return e && e.ack!==true; }).length;
+    if(integ9) acts9.push({n:integ9, tab:null, label:T("미확인 경보 — 위 경보 배너에서 내용 확인 후 '확인'","unacknowledged alerts — review & ack in the banner above")});
+    var bl9=d.backlog&&d.backlog.caution?d.backlog.caution:0;
+    if(bl9) acts9.push({n:bl9, tab:"verify", label:T("보관함 판단 대기 항목","parked items awaiting your judgment")});
+    var ch9=d.challenges&&d.challenges.kept?d.challenges.kept:0;
+    if(ch9) acts9.push({n:ch9, tab:"verify", label:T("근거 재확인 경고 열림","evidence-recheck warnings still open")});
+    var ic9=d.mapCurrent&&d.mapCurrent.intent&&Number.isFinite(d.mapCurrent.intent.choicePending)?d.mapCurrent.intent.choicePending:0;
+    if(ic9) acts9.push({n:ic9, tab:"setup", label:T("MAP 대기 선택","MAP choices waiting")});
+    if(d.envelope&&d.envelope.btn) acts9.push({n:1, tab:"setup", label:T("검증 경계(수칙서) 승인 대기","verify-envelope approval pending")});
+    var tot9=0; acts9.forEach(function(a9){ tot9+=a9.n; });
+    set9("ovDecide", String(tot9));
+    var nb9=$("ovNavBadge"); if(nb9){ nb9.textContent=String(tot9); nb9.style.display=tot9?"":"none"; }
+    var vb9=$("vNavBadge"); if(vb9){ if(d.live){ vb9.textContent=String(d.live.round||1); vb9.style.display=""; } else { vb9.style.display="none"; } }
+    var listBox9=$("ovActionList"), empty9=$("ovActionEmpty");
+    if(listBox9){ listBox9.replaceChildren();
+      acts9.forEach(function(a9){
+        var row9=el("div","ovact"); var btn9=document.createElement("button"); btn9.type="button"; btn9.className="secondary";
+        btn9.textContent=a9.n+" · "+a9.label+(a9.tab?" →":"");
+        if(a9.tab) btn9.addEventListener("click", function(){ var b9=document.querySelector('.tabbtn[data-tab="'+a9.tab+'"]'); if(b9) b9.click(); });
+        row9.appendChild(btn9); listBox9.appendChild(row9);
+      });
+    }
+    if(empty9) empty9.style.display=acts9.length?"none":"";
+    var rec9=$("ovRecent");
+    if(rec9){ var lab9={"pass":T("통과","pass"),"pass-notes":T("통과(보완)","pass (notes)"),"fail":T("실패","fail"),"inconclusive":T("보류·표지 없음","hold / no verdict")};
+      var vs9=(d.turns||[]).filter(function(t9){ return t9 && t9.verdict; }).slice(-3).reverse();
+      rec9.replaceChildren();
+      if(!vs9.length){ rec9.textContent=T("아직 기록 없음","no records yet"); }
+      else vs9.forEach(function(t9){ var ln9=el("div","ovline"); ln9.textContent=(lab9[t9.verdict]||t9.verdict)+" — "+String(t9.user||"").replace(/\s+/g," ").slice(0,80); rec9.appendChild(ln9); });
+    }
+    var mem9=$("ovMemory"), um9=d.usedMemory;
+    if(mem9){ mem9.replaceChildren();
+      if(!um9) mem9.textContent=T("아직 기록 없음 — 다음 검증부터 쌓여요","no records yet — starts with the next verification");
+      else if(um9.omitted) mem9.textContent=T("직전 검증은 코드와 무관한 요청이라 지도 동봉을 생략했어요(요청 축 게이트).","last verification skipped map attachments — the request wasn't code-related (request-axis gate).");
+      else if(!um9.items || !um9.items.length) mem9.textContent=T("직전 검증에 실린 지도 조각 없음","no map slices attached to the last verification");
+      else { um9.items.slice(0,6).forEach(function(it9){ var ln9=el("div","ovline"); var p9=String(it9.path||"").split(/[\\\/]/).pop(); ln9.textContent=p9+(it9.note?" — "+String(it9.note).slice(0,80):""); mem9.appendChild(ln9); });
+        if(um9.couplings){ var cl9=el("div","ovline muted"); cl9.textContent=T("결합 확인 요청 ","coupling checks: ")+um9.couplings+T("건 동봉"," attached"); mem9.appendChild(cl9); } }
+    }
+  }
   // [UI 개편 1차] 사이드바 접기 — 웹뷰 메모리(언어 재렌더 시 초기화 허용, 파일 영속화는 후속 단계)
   (function(){ var tg=$("sbToggle"); if(!tg) return; tg.addEventListener("click", function(){
     var app=$("appShell"); if(!app) return; var r=app.classList.toggle("rail");
@@ -5665,7 +5771,7 @@ class Dashboard {
   }); })();
   // [UI 개편 1차] 상단바 '작업 깊이' 미러 클릭 — 즉시 토글이 아니라 실제 설정 위치(검증 카드 segScout)로 이동
   (function(){ var tb=$("tbTrack"); if(!tb) return; tb.addEventListener("click", function(){
-    var mb=document.querySelector('.tabbtn[data-tab="main"]'); if(mb) mb.click();
+    var mb=document.querySelector('.tabbtn[data-tab="setup"]'); if(mb) mb.click();
     var sg=$("segScout"); if(sg){ sg.scrollIntoView({behavior:"smooth", block:"center"}); flashNode(sg); }
   }); })();
   // 고급설정: DeepSeek 키 저장/삭제 — 원문은 저장 메시지로만 나가고, 표시는 state의 마스킹만.
@@ -5747,6 +5853,7 @@ class Dashboard {
     var root=$("scoutImpact"); if(!root) return;
     var on=!!(d && d.contract && d.contract.scoutMode === "on");
     root.style.display=on?"":"none";
+    { var off9=$("mapPanelOff"); if(off9) off9.style.display=on?"none":""; } // MAP 패널 2트랙 안내
     if(!on) return;
     var nf=function(n){ return Number(n||0).toLocaleString(); };
     var set=function(id,v){ var e=$(id); if(e) e.textContent=String(v); };
@@ -5926,7 +6033,7 @@ class Dashboard {
     var emptyEl = $("statsEmpty"), bodyEl = $("statsBody");
     if(!emptyEl || !bodyEl) return;
     emptyEl.style.display=vs.month.total===0?"block":"none";
-    bodyEl.style.display=(vs.month.total>0||mapOn)?"block":"none";
+    bodyEl.style.display=(vs.month.total>0)?"block":"none"; // [UI 개편 2차] mapOn 예외 제거 — P10 카드는 MAP 패널로 분리됨
     if(bodyEl.style.display==="none") return;
     // ② KPI — 통과(보완)을 통과와 분리. 분모 jw = 판정 표지 있는 것만(표지없음 제외)
     var w = vs.week, jw = w.pass + w.passNotes + w.inconclusive + w.fail;
@@ -7491,6 +7598,7 @@ class Dashboard {
     // (Claude 두뇌 카드 렌더도 제거됨 — 동일하게 상태바 drift(무결성 채널)로 이동.)
     // 스크롤 복원(②의 나머지 반쪽): 재구성이 끝나 높이가 돌아온 시점에 캡처 좌표로 되돌린다. 명시 이동
     // (scrollIntoView smooth)은 비동기 애니메이션이라 이 동기 복원 뒤에도 제 목표로 진행 — 충돌 없음.
+    safe(function(){ renderOverview(d); }); // [UI 개편 2차] 개요 패널 — 같은 상태 푸시 재조립
     safe(function(){ if (Math.abs(window.scrollY - keepY) > 1) window.scrollTo(0, keepY); });
   });
   // 부팅 자가 치유(3요원 조사 합의): 이 화면은 원래 스스로 데이터를 요청하지 않아(push 전용), 초기 post가 어떤 이유로든

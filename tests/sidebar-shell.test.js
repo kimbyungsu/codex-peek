@@ -11,17 +11,28 @@ const src = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "
 let pass = 0, fail = 0;
 const ok = (c, n) => { (c ? pass++ : fail++); console.log((c ? "  ✅ " : "  ❌ ") + n); };
 
-console.log("[1] 세로 레일 — 기존 탭 이음새 유지");
+console.log("[1] 세로 레일 — 탭 이음새 유지(2차: 패널 7개)");
 ok(src.includes('<aside class="sidebar">'), "사이드바 컨테이너 존재");
-for (const tab of ["main", "stats", "adv"]) {
+const TABS = ["overview", "verify", "setup", "sessions", "map", "stats", "adv"];
+for (const tab of TABS) {
   const re = new RegExp('class="tabbtn[^"]*" data-tab="' + tab + '"');
-  ok(re.test(src), `data-tab="${tab}" 버튼 유지(호스트 switchTab·전환 로직 무접촉)`);
+  ok(re.test(src), `data-tab="${tab}" 버튼 존재(전환 로직·호스트 switchTab 무접촉)`);
+  ok(src.includes(`id="tab-${tab}"`), `패널 컨테이너 tab-${tab} 존재`);
 }
+ok(!/data-tab="main"/.test(src) && !src.includes('id="tab-main"'), "구 main 탭 잔재 없음(참조 끊김 방지)");
 {
   const aside = src.slice(src.indexOf('<aside class="sidebar">'), src.indexOf("</aside>"));
-  ok((aside.match(/class="tabbtn/g) || []).length === 3, "탭 버튼 3종이 전부 사이드바 안에 있다");
-  ok((aside.match(/class="navgroup"/g) || []).length === 3, "그룹 라벨(운영/분석/관리) 3개");
+  ok((aside.match(/class="tabbtn/g) || []).length === 7, "탭 버튼 7종이 전부 사이드바 안에 있다");
+  ok((aside.match(/class="navgroup"/g) || []).length === 4, "그룹 라벨(운영/3트랙/분석/관리) 4개");
   ok(aside.includes('id="sbToggle"'), "접기 버튼");
+  ok(aside.includes('id="ovNavBadge"') && aside.includes('id="vNavBadge"'), "개요 결정 수·검증 회차 배지 자리");
+}
+{
+  // 전역부 계약 — 경보 배너·온보딩은 어느 패널이 활성이어도 보인다(패널 뒤로 숨는 사고 방지)
+  const firstPanel = src.indexOf('id="tab-overview"');
+  const shellStart = src.indexOf('<main class="shell">');
+  const globalPart = src.slice(shellStart, firstPanel);
+  ok(globalPart.includes('id="integrityBanner"') && globalPart.includes('id="onboard"'), "경보 배너·온보딩은 패널 밖 전역부");
 }
 ok(src.includes(".app{display:grid;grid-template-columns:200px minmax(0,1fr)"), "그리드 골격");
 ok(src.includes(".app.rail{grid-template-columns:58px"), "접힘 레일 폭");
@@ -42,8 +53,22 @@ console.log("[3] 작업 깊이 미러 — 표시 전용(쓰기 경로 없음)");
   const blk = b > 0 && e > b ? src.slice(b, e) : "";
   ok(blk.length > 0, "미러 클릭 핸들러 존재");
   ok(!blk.includes("postMessage"), "클릭이 저장 메시지를 보내지 않는다(초안 보호 우회 금지)");
-  ok(blk.includes('data-tab="main"') && blk.includes('$("segScout")'), "클릭=현황 탭의 실제 설정 위치로 이동");
+  ok(blk.includes('data-tab="setup"') && blk.includes('$("segScout")'), "클릭=검증 설정 탭의 실제 설정 위치로 이동");
   ok(/appSM===null\?"none":""/.test(src) && src.includes('x.getAttribute("data-tbsm")===(son?"on":"off")'), "renderApplied가 적용값만 반영(미러 갱신)");
+}
+
+console.log("[3b] 개요 패널 — 기존 상태값 재조립·안전 표시 계약");
+{
+  const b = src.indexOf("function renderOverview(d){");
+  const e = src.indexOf("\n  }", b);
+  const blk = b > 0 && e > b ? src.slice(b, e) : "";
+  ok(blk.length > 0, "renderOverview 함수 존재(호이스팅 함수 선언)");
+  ok(!blk.includes("innerHTML"), "개요 렌더에 innerHTML 없음(textContent·replaceChildren만)");
+  ok(!blk.includes("postMessage"), "개요 렌더가 저장·요청 메시지를 보내지 않는다(표시 전용)");
+  ok(blk.includes("d.integrity") && blk.includes("d.backlog") && blk.includes("d.challenges") && blk.includes("choicePending") && blk.includes("d.envelope"), "결정 필요 합산 5원천(경보·보관함·재확인·MAP 선택·수칙서)");
+  ok(blk.includes("d.usedMemory"), "'실린 기억' 카드가 상태값(usedMemory)만 읽는다");
+  ok(src.includes("safe(function(){ renderOverview(d); });"), "data 핸들러에 safe 결속(구획 실패 격리)");
+  ok(src.includes("usedMemory: (() => {") && src.includes('"stats", "attach.jsonl"'), "computeState가 브릿지 attach 장부를 읽어 usedMemory 공급");
 }
 
 console.log("[4] 래퍼 짝 — 골격이 본문을 삼키지 않는다");

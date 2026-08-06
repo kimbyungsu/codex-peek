@@ -89,10 +89,18 @@ ok(ext.includes("실제 토큰 확인 ") && ext.includes("real tokens available 
 ok(ext.includes("최근 28일") && ext.includes("60일 보존") && ext.includes("service bill") && ext.includes("서비스 청구서"), "28일 화면·60일 보존·청구서 아님 한계 고정");
 
 console.log("[5] 검증 통계 무기록과 기존 관찰 신호 무회귀");
-ok(/bodyEl\.style\.display=\(vs\.month\.total>0\|\|mapOn\)\?"block":"none"/.test(ext), "검증 기록 0건이어도 3트랙 운영 카드는 표시");
+// [UI 개편 2차] P10 카드가 Project MAP 패널로 분리 — 통계 본문은 검증 기록에만 결속되고,
+// '통계 무기록에도 3트랙 카드 표시' 요구는 부팅 재배치가 아니라 전용 패널이 담당한다.
+ok(/bodyEl\.style\.display=\(vs\.month\.total>0\)\?"block":"none"/.test(ext), "통계 본문은 검증 기록 존재에만 결속(P10 카드는 MAP 패널로 분리)");
 ok(/renderStats\(d\.verifyStats,!!\(d\.contract&&d\.contract\.scoutMode==="on"\)\)/.test(ext) && /renderMapOps\(d\)/.test(ext), "같은 상태 푸시에서 검증 통계와 P10 카드를 독립 렌더");
 ok(ext.includes('id="scoutSignals"') && ext.includes('id="siProposed"') && ext.includes('id="siGuard"'), "기존 3트랙 관찰 신호 카드를 그대로 유지");
-ok(/statsNoteNode\.insertAdjacentElement\("afterend",mapOpsNode\)/.test(ext), "렌더된 P10 묶음은 기존 검증 결과·토큰·프로필 뒤에 배치");
+ok(!/insertAdjacentElement\("afterend",mapOpsNode\)/.test(ext), "부팅 DOM 재배치 소멸(마크업이 곧 렌더 순서)");
+{
+  const mp = ext.indexOf('<section id="tab-map" class="tab-panel">');
+  const mpEnd = ext.indexOf("</section>", mp);
+  const mpBody = mp > 0 && mpEnd > mp ? ext.slice(mp, mpEnd) : "";
+  ok(mpBody.includes('id="scoutImpact"') && mpBody.includes('id="mapOps"'), "P10 묶음(scoutImpact)이 Project MAP 패널 안에 산다");
+}
 
 console.log("[6] 사용자 문서 — 저장 항목·귀속·기간·한계");
 const privacy = fs.readFileSync(path.join(ROOT, "PRIVACY.md"), "utf8");
