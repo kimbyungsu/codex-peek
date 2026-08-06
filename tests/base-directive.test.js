@@ -52,7 +52,7 @@ ok(cl.verifierBaselineFor("en", "integrity").includes("[findings v1]"), "영문�
 ok(cl.resetBaseDirective("ko", "core") === true && cl.loadBaseDirective("ko", "core").verifyBaseline === coreDef.verifyBaseline, "core 복원=core 파일만(무결성 오버라이드 보존)");
 { // 실전달 배선: codex-bridge 조립부가 verifierBaselineFor를 쓰는지(소스 계약 — 우회 조립 재발 차단)
   const cbSrc = fs2.readFileSync(require("path").join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
-  ok(cbSrc.includes("verifierBaselineFor(lang, profile)") && !cbSrc.includes("loadBaseDirective(lang, profile).verifyBaseline"), "withContract 조립=verifierBaselineFor 경유(서식 동봉이 전달 경로에 실재)");
+  ok(cbSrc.includes("verifierBaselineFor(lang, profile, v2Attached") && !cbSrc.includes("loadBaseDirective(lang, profile).verifyBaseline"), "withContract 조립=verifierBaselineFor 경유(서식 동봉 실재 — v2 실물 동봉 시 위임 변형·머리 다이어트 2026-08-06)");
 }
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);

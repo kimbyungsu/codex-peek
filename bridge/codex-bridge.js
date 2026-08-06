@@ -71,7 +71,7 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap) {
   // lang: 언어 스냅샷(cmdAsk의 langSnap) — 미지정 시 전역 언어. 주입(기본지침·계약 지시문)과 헤더/footer 언어를 한 스냅샷으로 일관.
   // carrier(L1-A): 호출자가 준 객체에 '이번 ask에 실제로 실린 동봉 스냅샷'(mapItems·couplings)을 담아 준다 —
   // 확인 판정(flagLedgerConfirms)이 '지금 다시 계산한 동봉'이 아니라 '전송된 그 동봉'으로 echo를 판정하게(Codex 설계검증).
-  const baseline = verifierBaselineFor(lang, profile); // 자유 문안(프로필별 오버라이드 포함)+기계 서식(코드 고정 — 편집 개방과 무관하게 항상 동봉)
+  // [머리 다이어트] baseline은 경계 절 산출 뒤에 조립한다 — v2 서식 절이 실제로 실리는지(envText 실물)를 보고 블록 서식을 위임/전문으로 고른다(아래).
   let inj = "", scout = "", c = null;
   try {
     // 계약은 '연 폴더(configWs)' 기준으로 로드 — cmdAsk가 modelPref·proof·라벨·withContract에 같은 configWs 스냅샷(ws)을
@@ -111,6 +111,10 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap) {
   if (inj && inj.length > CONTRACT_INJ_MAX) {
     throw Object.assign(new Error(contractInjectionTooLongMsg(inj.length, (lang || loadLang()) === "en")), { exitCode: 3, contractTooLong: true });
   }
+  // [머리 다이어트 2026-08-06] 같은 머리에 [지적 서식 v2] 절이 실물로 실리면 기계 서식의 v1 블록 설명은
+  // 중복이다(같은 규칙 2회 설명·~400자/ask) — 위임 1줄로 교체. 판정은 가정이 아니라 envText 내용 실물로.
+  const v2Attached = typeof envText === "string" && (envText.includes("[지적 서식 v2") || envText.includes("[Finding format v2"));
+  const baseline = verifierBaselineFor(lang, profile, v2Attached ? "delegated" : undefined); // 자유 문안+기계 서식(코드 고정 — 편집 개방과 무관하게 항상 동봉)
   const head = [baseline, baseQual, envText, inj, scout].filter(Boolean).join("\n\n");
   // 총량은 막지 않고 '보이게' 한다 — 통째로 잘라내면 승인 정책 같은 계약이 사라질 수 있다.
   // 어느 조각이 부풀었는지 알려야 사람이 그 자리를 줄일 수 있다.

@@ -3261,9 +3261,22 @@ const VERIFIER_FORMAT_EN = [
   "1) Write the review details FIRST in the body with per-item evidence (path·line). Output the verdict only as the VERY LAST line, as exactly one of: 'Verdict: pass' / 'Verdict: pass (notes)' / 'Verdict: inconclusive' / 'Verdict: fail'. Do not write any other line starting with 'Verdict:'.",
   "2) Immediately BEFORE the verdict line, attach a machine-readable findings block: a line '[findings v1]' (that exact string as the whole line) → every finding you raised, one JSON object per line as {\"tag\":\"blocker|caution|notes|backlog\",\"title\":\"one line (never secret/PII/absolute-path originals)\",\"file\":\"related file path (optional)\"} → a line '[findings end]'. With no findings, output just the two marker lines (empty block). Between the end marker and the final verdict line write nothing but blank lines. If the block is missing, corrupt, or contradicts the verdict (e.g. blockers listed under 'pass'), the harness demotes the verdict to 'inconclusive' (fail-closed).",
 ].join("\n");
-function verifierFormatDirective(lang) { return (LANGS.includes(lang) ? lang : loadLang()) === "en" ? VERIFIER_FORMAT_EN : VERIFIER_FORMAT_KO; }
+// [검증자 머리 다이어트 2026-08-06] blockMode: "v1"(기본 — 블록 서식 전문 포함·무회귀) |
+// "delegated"(경계 활성 등으로 [지적 서식 v2] 절이 같은 머리에 실릴 때 — v1 블록 설명을 반복하지 않고
+// 그 절에 위임하는 1줄만). 같은 규칙을 한 머리에 두 번 싣던 중복(~400자/ask)을 제거하되, 위임은
+// 호출자가 v2 절의 실제 동봉을 확인한 경우에만 선택한다(가정 금지 — withContract가 envText 실물로 판정).
+const VERIFIER_FORMAT_DELEGATE_KO = "2) 기계 판독용 지적 블록은 아래 [지적 서식 v2] 절이 정본이다 — 그 마커·필드 그대로, 판정 줄 '바로 앞'에 제출하라(블록 없음·손상·판정 모순=하네스가 '보류'로 강등, fail-closed).";
+const VERIFIER_FORMAT_DELEGATE_EN = "2) For the machine-readable findings block, the [Finding format v2] section below is authoritative — submit it with exactly those markers/fields, immediately BEFORE the verdict line (missing/corrupt/contradicting block = the harness demotes the verdict to 'inconclusive', fail-closed).";
+function verifierFormatDirective(lang, blockMode) {
+  const en = (LANGS.includes(lang) ? lang : loadLang()) === "en";
+  if (blockMode !== "delegated") return en ? VERIFIER_FORMAT_EN : VERIFIER_FORMAT_KO;
+  // 조각 재조립(단일 출처): 전문 상수의 헤더+1)판정 줄 항목을 그대로 쓰고 2)블록 항목만 위임 줄로 교체.
+  const full = en ? VERIFIER_FORMAT_EN : VERIFIER_FORMAT_KO;
+  const cut = full.indexOf("\n2) ");
+  return (cut > 0 ? full.slice(0, cut) : full) + "\n" + (en ? VERIFIER_FORMAT_DELEGATE_EN : VERIFIER_FORMAT_DELEGATE_KO);
+}
 // 검증자에게 실제로 실리는 기본 원칙 = 자유 문안(프로필별 기본값+오버라이드) + 기계 서식(코드 고정).
-function verifierBaselineFor(lang, profile) { return loadBaseDirective(lang, profile).verifyBaseline + "\n\n" + verifierFormatDirective(lang); }
+function verifierBaselineFor(lang, profile, blockMode) { return loadBaseDirective(lang, profile).verifyBaseline + "\n\n" + verifierFormatDirective(lang, blockMode); }
 const BASE_PROFILE_AXIS = true; // 확장 capability 표지: 기본지침 load/save/reset이 프로필 축을 지원
 // 프로필·언어별 기본값/오버라이드 파일 선택. 기존 base-directive*.json은 전부 무결성 슬롯 그대로(하위호환 —
 // 프로필 미지정 호출도 무결성). core는 전용 파일로 분리해 프리셋 전환이 서로의 오버라이드를 덮지 않는다.
