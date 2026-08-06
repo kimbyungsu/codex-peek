@@ -5761,12 +5761,17 @@ class Dashboard {
     var mem9=$("ovMemory"), um9=d.usedMemory;
     if(mem9){ mem9.replaceChildren();
       if(!um9) mem9.textContent=T("아직 기록 없음 — 다음 검증부터 쌓여요","no records yet — starts with the next verification");
-      else if(um9.omitted) mem9.textContent=T("직전 검증은 코드와 무관한 요청이라 지도 동봉을 생략했어요(요청 축 게이트).","last verification skipped map attachments — the request wasn't code-related (request-axis gate).");
-      else if(!um9.items || !um9.items.length) mem9.textContent=T("직전 검증에 실린 지도 조각 없음","no map slices attached to the last verification");
-      else { // 기록 시각을 함께 표시 — '직전 검증' 단정 대신 언제의 동봉인지 정직화(기록·발송 실패 잔여 위험 고지 — 검증 [주의])
+      else {
+        // 기록이 있으면 어느 분기든 '기록 시각'을 먼저 표시 — '직전 검증' 단정 대신 언제의 기록인지 정직화
+        // (기록·발송 실패로 이전 행이 최신일 수 있는 잔여 위험 고지 — 검증 [주의] 완결분: omitted·빈 기록 포함).
         var ts9=Date.parse(um9.ts||""); if(Number.isFinite(ts9)){ var ago9=Math.max(0,Math.round((Date.now()-ts9)/60000)); var hd9=el("div","ovline muted"); hd9.textContent=T("마지막 동봉 기록 · ","last attach record · ")+(ago9<60?ago9+T("분 전","m ago"):Math.round(ago9/60)+T("시간 전","h ago")); mem9.appendChild(hd9); }
-        um9.items.slice(0,6).forEach(function(it9){ var ln9=el("div","ovline"); var p9=String(it9.path||"").split(/[\\\/]/).pop(); ln9.textContent=p9+(it9.note?" — "+String(it9.note).slice(0,80):""); mem9.appendChild(ln9); });
-        if(um9.couplings){ var cl9=el("div","ovline muted"); cl9.textContent=T("결합 확인 요청 ","coupling checks: ")+um9.couplings+T("건 동봉"," attached"); mem9.appendChild(cl9); } }
+        if(um9.omitted){ var tx9=el("div","ovline"); tx9.textContent=T("그 검증은 코드와 무관한 요청이라 지도 동봉을 생략했어요(요청 축 게이트).","that verification skipped map attachments — the request wasn't code-related (request-axis gate)."); mem9.appendChild(tx9); }
+        else if(!um9.items || !um9.items.length){ var ty9=el("div","ovline"); ty9.textContent=T("그 검증에 실린 지도 조각 없음","no map slices attached in that verification"); mem9.appendChild(ty9); }
+        else {
+          um9.items.slice(0,6).forEach(function(it9){ var ln9=el("div","ovline"); var p9=String(it9.path||"").split(/[\\\/]/).pop(); ln9.textContent=p9+(it9.note?" — "+String(it9.note).slice(0,80):""); mem9.appendChild(ln9); });
+          if(um9.couplings){ var cl9=el("div","ovline muted"); cl9.textContent=T("결합 확인 요청 ","coupling checks: ")+um9.couplings+T("건 동봉"," attached"); mem9.appendChild(cl9); }
+        }
+      }
     }
   }
   // [UI 개편 1차] 사이드바 접기 — 웹뷰 메모리(언어 재렌더 시 초기화 허용, 파일 영속화는 후속 단계)
