@@ -56,7 +56,7 @@ function parseArgs(args) {
 function publishGate(doPush, hasPat) { return !!(doPush && hasPat); }
 
 function run(cmd, opts = {}) {
-  const r = spawnSync(cmd, { shell: true, stdio: "inherit", cwd: ROOT, timeout: opts.timeout || 600000 });
+  const r = spawnSync(cmd, { shell: true, stdio: "inherit", cwd: ROOT, timeout: opts.timeout || 1800000 }); // 기본 30분(2026-08-06: 전체 테스트 체인 성장으로 10분 초과 — pretest+본체가 연속 실행됨)
   if (r.status !== 0) throw new Error(`실패: ${cmd} (exit ${r.status})`);
 }
 function runOut(cmd) {
