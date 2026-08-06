@@ -279,10 +279,20 @@ function judgeChallenge(rec, parsed, readFile) {
   return { overall, files };
 }
 
-// §5 이벤트 전체 해소 조건: 레코드의 '모든' 파일이 resolved여야 원 이벤트를 ack할 수 있다
-// (skipped가 하나라도 있으면 불충족 — 경보 유지). ack 투영 자체는 배선 증분(§9-4)의 소관.
+// §5 이벤트 해소 조건(2026-08-06 정렬): 판정 권위는 judgeChallenge — skipped(범위 밖=재확인 원천 불능)는
+// 판정 제외 대상이므로 여기서도 해소 저지자가 아니다. 예전 '전 파일 resolved' 요구는 skip 혼합 정상 해소를
+// 어느 경로(즉시 ack·재투영)에서도 영원히 안 닫는 실전 결함이었다(경보가 회신 후에도 잔존).
+// 단 실검증 0건(전량 skipped)은 의심이 하나도 확인되지 않은 것 — 해소 아님(사람 몫으로 유지).
 function eventFullyResolved(rec) {
-  return rec && rec.state === "resolved" && (rec.files || []).length > 0 && rec.files.every((f) => f.status === "resolved");
+  if (!rec || rec.state !== "resolved") return false;
+  const files = rec.files || [];
+  if (!files.length) return false;
+  let resolved = 0;
+  for (const f of files) {
+    if (f.status === "resolved") resolved++;
+    else if (f.status !== "skipped") return false;
+  }
+  return resolved > 0;
 }
 
 // ── §3·§4 발송 재료 (증분 4) ───────────────────────────────────────────────────────────

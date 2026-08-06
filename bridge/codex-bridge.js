@@ -2271,6 +2271,10 @@ function cmdAskWait(rest) {
     try { err = fs.readFileSync(errFile, "utf8"); } catch { /* 빈 오류 */ }
     if (out) process.stdout.write(out.endsWith("\n") ? out : out + "\n");
     if (err) process.stderr.write(err.endsWith("\n") ? err : err + "\n");
+    // [회수 시점 재투영 2026-08-06 — 실전 재현 봉합] worker가 재확인을 resolved로 기록한 직후 종료·ack
+    // 실패하면 경보가 '회신을 받았는데도' 열려 남는다(다음 검증 진입까지 — 세션 마지막 검증이면 무기한).
+    // 회수(ask-wait)는 반드시 그 뒤에 오므로 여기서 멱등 재투영 — 사용자 화면 기준 '답 회수=경보 정리'.
+    try { const echW = require("./evidence-challenge.js"); const wsW = j.workspace || configWs(); echW.convergeStaleChallenges(wsW); projectResolvedAcks(wsW, echW); } catch { /* best-effort — 다음 검증의 정비가 최후 방어선 */ }
     if (j.state === "failed") process.exit(Number.isInteger(j.exitCode) && j.exitCode !== 0 ? j.exitCode : 1);
     return;
   }
@@ -3648,4 +3652,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex };
+module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex };

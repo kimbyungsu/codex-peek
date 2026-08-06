@@ -35,23 +35,26 @@ console.log("[2] 순수 함수 실행 — 컴파일 산출물에서 computeChall
     { challengeId: "ch-2", state: "failed", settledAt: new Date(now - 60000).toISOString(), files: [{ status: "resolved" }, { status: "failed" }] },
     { challengeId: "ch-3", state: "dispatched", dispatchedAt: new Date(now - 300000).toISOString(), files: [{ status: "pending" }] },
     { challengeId: "ch-4", state: "pending", createdAt: new Date(now - 30000).toISOString(), files: [{ status: "pending" }] },
-    { challengeId: "ch-5", state: "resolved", settledAt: new Date(now - 90000).toISOString(), files: [{ status: "resolved" }, { status: "skipped", reason: "no-safe-span" }] }, // 부분 일치 — 경고 유지
+    { challengeId: "ch-5", state: "resolved", settledAt: new Date(now - 90000).toISOString(), files: [{ status: "resolved" }, { status: "skipped", reason: "no-safe-span" }] }, // skip 혼합+실검증 1 — 해소(2026-08-06 정렬)
+    { challengeId: "ch-8", state: "resolved", settledAt: new Date(now - 150000).toISOString(), files: [{ status: "skipped" }, { status: "skipped" }] }, // 전량 skipped=실검증 0 — 해소 아님
     { challengeId: "ch-6", state: "resolved", eventId: "ev-open-1", settledAt: new Date(now - 45000).toISOString(), files: [{ status: "resolved" }] }, // 전 파일 일치인데 경고 미ack(반영 대기)
     { challengeId: "ch-7", state: "failed", eventId: "ev-acked-1", settledAt: new Date(now - 40000).toISOString(), files: [{ status: "failed" }] }, // 실패했지만 사용자가 경고를 수동 확인함
     { bogus: true }, // challengeId 없는 오염 줄=무시
   ];
   const unacked = new Set(["ev-open-1"]); // ch-6의 경고만 아직 미ack(ev-acked-1은 수동 확인됨·eventId 없는 구 레코드=열림 아님)
   const v = view(recs, now, unacked);
-  ok(v.counts.resolved === 3 && v.counts.failed === 2 && v.counts.dispatched === 1 && v.counts.pending === 1, "상태별 집계 정확");
+  ok(v.counts.resolved === 4 && v.counts.failed === 2 && v.counts.dispatched === 1 && v.counts.pending === 1, "상태별 집계 정확");
   ok(v.open === 2, "진행 중=pending+dispatched");
-  ok(v.cleared === 1 && v.kept === 1, "cleared=전 파일 일치+실제 ack만 · kept=경고가 실제로 열린 종결분만(수동 확인·구 레코드 제외)");
+  ok(v.cleared === 2 && v.kept === 1, "cleared=검증 가능분 일치(skip 제외)+실제 ack만 · kept=경고가 실제로 열린 종결분만(수동 확인·구 레코드 제외)");
   const ra = v.items.find((x) => x.id === "ch-7");
   ok(ra.warnOpen === false && ra.cleared === false, "실패+수동 확인=경고 열림 아님(유지로 과대 표시 금지 재료)");
   const rw = v.items.find((x) => x.id === "ch-6");
   ok(rw.matchedAll === true && rw.cleared === false, "전 파일 일치라도 경고 미ack면 해소 표시 금지(반영 대기)");
   const rp = v.items.find((x) => x.id === "ch-5");
-  ok(rp.cleared === false && rp.resolvedFiles === 1 && rp.files === 2, "resolved+skipped 잔존=부분 일치(cleared 아님 — 실제 ack 조건과 동일)");
-  ok(v.items.length === 7 && v.items[0].id === "ch-4", "오염 줄 무시·최신(경과 짧은) 순 정렬");
+  ok(rp.cleared === true && rp.matchedAll === true && rp.resolvedFiles === 1 && rp.files === 2, "skip 혼합+실검증≥1=해소 표시(브릿지 eventFullyResolved 정렬 2026-08-06)");
+  const rz = v.items.find((x) => x.id === "ch-8");
+  ok(rz.matchedAll === false && rz.cleared === false, "전량 skipped(실검증 0)=해소 표시 금지");
+  ok(v.items.length === 8 && v.items[0].id === "ch-4", "오염 줄 무시·최신(경과 짧은) 순 정렬");
   const r1 = v.items.find((x) => x.id === "ch-1");
   ok(r1.files === 2 && r1.resolvedFiles === 2 && r1.ageMin === 2, "파일 수·일치 수·경과(분) 계산");
   const many = Array.from({ length: 15 }, (_, i) => ({ challengeId: "ch-m" + i, state: "resolved", settledAt: new Date(now - i * 1000).toISOString(), files: [] }));
@@ -82,23 +85,26 @@ console.log("[3] 렌더 블록 실행 반례 — 숨김/빈 상태/요약·목�
   const items = [
     { id: "ch-a", state: "resolved", files: 2, resolvedFiles: 2, ageMin: 3, cleared: true, matchedAll: true, warnOpen: false },
     { id: "ch-a2", state: "resolved", files: 1, resolvedFiles: 1, ageMin: 4, cleared: false, matchedAll: true, warnOpen: true },
-    { id: "ch-b", state: "resolved", files: 2, resolvedFiles: 1, ageMin: 5, cleared: false, matchedAll: false, warnOpen: true },
+    { id: "ch-b", state: "resolved", files: 5, resolvedFiles: 1, ageMin: 5, cleared: true, matchedAll: true, warnOpen: false }, // skip 혼합 해소(2026-08-06 정렬)
+    { id: "ch-b2", state: "resolved", files: 2, resolvedFiles: 0, ageMin: 6, cleared: false, matchedAll: false, warnOpen: true }, // 전량 범위 밖=실검증 0
     { id: "ch-c", state: "failed", files: 1, resolvedFiles: 0, ageMin: 9, cleared: false, matchedAll: false, warnOpen: true },
     { id: "ch-c2", state: "failed", files: 1, resolvedFiles: 0, ageMin: 10, cleared: false, matchedAll: false, warnOpen: false },
     { id: "ch-d", state: "no-dispatch", files: 1, resolvedFiles: 0, ageMin: 12, cleared: false, matchedAll: false, warnOpen: true },
   ];
-  n = runRender({ open: 0, cleared: 1, kept: 4, counts: { resolved: 3, failed: 2, "no-dispatch": 1 }, items }, "ko");
-  ok(/총 6건/.test(n.chSummary.textContent) && /해소 1/.test(n.chSummary.textContent) && /경고 유지 4/.test(n.chSummary.textContent), "CH-4 요약 — 해소=cleared만·경고 유지=실제 열린 종결분만");
-  ok(n.chList.children.length === 6, "CH-5 목록 렌더 6건");
+  n = runRender({ open: 0, cleared: 2, kept: 4, counts: { resolved: 4, failed: 2, "no-dispatch": 1 }, items }, "ko");
+  ok(/총 7건/.test(n.chSummary.textContent) && /해소 2/.test(n.chSummary.textContent) && /경고 유지 4/.test(n.chSummary.textContent), "CH-4 요약 — 해소=cleared만·경고 유지=실제 열린 종결분만");
+  ok(n.chList.children.length === 7, "CH-5 목록 렌더 7건");
   const row0 = n.chList.children[0];
   ok(row0.children.some((c) => /해소\(전 항목 일치/.test(c.textContent)) && row0.children.some((c) => /파일 2\/2 일치/.test(c.textContent)), "CH-6 전부 일치=해소 라벨");
   const rowW = n.chList.children[1];
-  ok(rowW.children.some((c) => /일치·해소 반영 대기/.test(c.textContent)), "CH-7a 전 파일 일치+미ack=반영 대기 라벨(해소 과대 표시 금지)");
+  ok(rowW.children.some((c) => /전 항목 일치 · 해소 반영 대기/.test(c.textContent)), "CH-7a 전 파일 일치+미ack=반영 대기 라벨(해소 과대 표시 금지)");
   const row1 = n.chList.children[2];
-  ok(row1.children.some((c) => /부분 일치 · 경고 유지/.test(c.textContent)), "CH-7 resolved+부분 일치=경고 유지 접미(과대 표시 금지)");
-  const rowAck = n.chList.children[4];
+  ok(row1.children.some((c) => /해소\(검증 가능분 일치·범위 밖 4건 제외/.test(c.textContent)), "CH-7 skip 혼합 해소=범위 밖 제외 건수 명시(전 항목 일치 과대 표시 금지)");
+  const rowB2 = n.chList.children[3];
+  ok(rowB2.children.some((c) => /실검증 0\(전량 범위 밖\) · 경고 유지/.test(c.textContent)), "CH-7c 전량 범위 밖=실검증 0 라벨+경고 유지 접미");
+  const rowAck = n.chList.children[5];
   ok(rowAck.children.some((c) => /불일치·무응답 · 경고 닫힘\(현재 열린 경고 없음\)/.test(c.textContent)), "CH-7b 실패+경고 닫힘=원인 중립 접미(확인 이력 단정·유지 과대 표시 금지)");
-  const row3 = n.chList.children[5];
+  const row3 = n.chList.children[6];
   ok(row3.children.some((c) => /미발송\(안전 구간 없음/.test(c.textContent)), "CH-8 no-dispatch=현지화 라벨(원시 문자열 노출 금지)");
 }
 

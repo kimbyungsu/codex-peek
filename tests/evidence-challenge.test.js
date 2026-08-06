@@ -198,5 +198,16 @@ console.log("[8] 수명(§5) — 미종결 삭제 금지·종결만 보존기간
   ck("신선한 tmp는 보존(진행 중 저장 경합 배제)", fs.existsSync(freshTmp));
 }
 
+console.log("[9] 이벤트 해소 술어(2026-08-06 정렬) — skipped는 판정 제외·실검증 0건은 해소 아님");
+{
+  // 실전 재현 결함: 인용 5파일 중 4개가 범위 밖(skipped)·1개 실검증 일치인데 구 술어('전 파일 resolved')가
+  // 즉시 ack·재투영 양쪽에서 해소를 영원히 거부 → 회신을 받고도 경보 잔존. judge 권위와 정렬한다.
+  ck("skip 혼합+실검증≥1=해소", ch.eventFullyResolved({ state: "resolved", files: [{ status: "skipped" }, { status: "skipped" }, { status: "resolved" }] }) === true);
+  ck("전량 skipped=해소 아님(의심 미확인)", ch.eventFullyResolved({ state: "resolved", files: [{ status: "skipped" }, { status: "skipped" }] }) === false);
+  ck("state 미해소면 skip 혼합도 아님", ch.eventFullyResolved({ state: "failed", files: [{ status: "resolved" }, { status: "skipped" }] }) === false);
+  ck("failed 잔존=해소 아님", ch.eventFullyResolved({ state: "resolved", files: [{ status: "resolved" }, { status: "failed" }] }) === false);
+  ck("파일 0건=해소 아님", ch.eventFullyResolved({ state: "resolved", files: [] }) === false);
+}
+
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

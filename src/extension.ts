@@ -1547,7 +1547,8 @@ function computeBacklogView(rawItems: any[], now: number): { caution: number; ba
 // 상태 의미: pending=동결됨(발송 전) · dispatched=재확인 요청 발송됨 · resolved=원문 일치(경보 자동 해소) ·
 // failed=불일치·무응답(태만 기록·경보 유지) · indeterminate=그 사이 파일 변경(판정 불가·태만 아님) ·
 // outcome-unknown=호출 실패·중단(재발송 없음). 표시 전용 — 어떤 판정·게이트에도 쓰지 않는다.
-// cleared=경고 자동 해소의 '표시 가능' 조건: 장부(전 파일 일치=브릿지 eventFullyResolved 공식)만으로는
+// cleared=경고 자동 해소의 '표시 가능' 조건: 장부(브릿지 eventFullyResolved 공식 — 검증 가능분 전부 일치
+// +실검증≥1, skipped는 판정 제외)만으로는
 // 부족하다 — 종결 직후 강제 종료·ack 저장 실패면 경고가 아직 남아 있다(확인 검증 blocker 재등장).
 // 그래서 미ack 이벤트 id 집합(unacked)과 결속: 일치했어도 그 경고가 미ack면 '반영 대기'로 구분 표시.
 function computeChallengeView(recs: any[], now: number, unacked?: Set<string>): { open: number; cleared: number; kept: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number; cleared: boolean; matchedAll: boolean; warnOpen: boolean }> } {
@@ -1556,7 +1557,8 @@ function computeChallengeView(recs: any[], now: number, unacked?: Set<string>): 
     const t = Date.parse(String(r.settledAt || r.dispatchedAt || r.createdAt || ""));
     const files = Array.isArray(r.files) ? r.files : [];
     const resolvedFiles = files.filter((f: any) => f && f.status === "resolved").length;
-    const matchedAll = String(r.state) === "resolved" && files.length > 0 && resolvedFiles === files.length;
+    const matchedAll = String(r.state) === "resolved" && files.length > 0 && resolvedFiles > 0
+      && files.every((f: any) => f && (f.status === "resolved" || f.status === "skipped")); // 브릿지 eventFullyResolved와 동일 공식
     const warnOpen = un.has(String(r.eventId || "")); // 그 경고가 '지금도' 열려 있나(수동 ack·소멸 반영)
     return {
       id: String(r.challengeId), state: String(r.state || ""), files: files.length, resolvedFiles,
@@ -6413,8 +6415,11 @@ class Dashboard {
         // 접미=그 경고의 '지금' 상태(수동 확인 반영 — 유지로 과대 표시 금지)
         // 닫힘 원인은 단정하지 않는다(확인 검증 보완 — 수동 확인·50건 절단 소멸·구 레코드 모두 warnOpen=false)
         var warn=it.warnOpen?T(" · 경고 유지"," · warning kept"):T(" · 경고 닫힘(현재 열린 경고 없음)"," · warning closed (no open warning)");
-        // resolved라도 skipped 잔존이면 경고는 유지된다(브릿지 ack 조건=전 파일 일치) — '해소'로 과대 표시 금지
-        return s==="resolved"?(it.cleared?T("해소(전 항목 일치 — 경고 자동 해소)","cleared (all matched — warning auto-cleared)"):(it.matchedAll?T("일치·해소 반영 대기(다음 검증에서 자동 재시도)","matched — clearing pending (auto-retried next verification)"):T("부분 일치","partial match")+warn))
+        // 2026-08-06 정렬: skipped(범위 밖)는 판정 제외라 해소를 막지 않는다 — 단 '전 항목 일치'로
+        // 과대 표시하지 않고 범위 밖 제외 건수를 명시한다(확인 못 한 파일을 확인한 것처럼 보이기 금지).
+        var outN=it.files-it.resolvedFiles;
+        var scope=outN===0?T("전 항목 일치","all matched"):T("검증 가능분 일치·범위 밖 "+outN+"건 제외","verifiable matched, "+outN+" out-of-scope excluded");
+        return s==="resolved"?(it.cleared?T("해소(","cleared (")+scope+T(" — 경고 자동 해소)"," — warning auto-cleared)"):(it.matchedAll?scope+T(" · 해소 반영 대기(다음 검증·답 회수에서 자동 재시도)"," · clearing pending (auto-retried at next verification/retrieval)"):T("실검증 0(전량 범위 밖)","0 verified (all out of scope)")+warn))
           : s==="failed"?T("불일치·무응답","mismatch/no answer")+warn
           : s==="indeterminate"?T("판정 불가(파일 변경)","indeterminate (file changed)")+warn
           : s==="outcome-unknown"?T("결과 미상(호출 실패·중단)","unknown (call failed/interrupted)")+warn

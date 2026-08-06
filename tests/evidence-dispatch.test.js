@@ -180,5 +180,61 @@ console.log("[7] cmdAsk 배선 순서(소스 잠금) — 경보 시점 동결→
   }
 }
 
+console.log("[10] skip 혼합 해소(2026-08-06 실전 재현 봉합) — 즉시 ack·재투영·회수 결속");
+{
+  // 실전: 인용 파일 대부분이 범위 밖(skipped)이고 1건만 실검증 가능 — 구 술어는 양 경로 모두 ack를 영원히 거부했다.
+  const fOut = path.join(home, "outside-roots.js"); fs.writeFileSync(fOut, richText(800));
+  const a = plantAlertAndFreeze([fA, fOut]);
+  ck("전제 — 범위 밖 파일=skipped 동결", a.rec.files.some((f) => f.status === "skipped") && a.rec.files.some((f) => f.status === "pending"));
+  const r = cb.maybeDispatchChallenge({ ...base, challengeId: a.challengeId, runCodexFn: () => ({ answer: respFromRec(a.rec), status: 0 }) });
+  const ev = cl.readIntegrityEvents().find((e) => e.id === a.eventId);
+  ck("즉시 경로 — skip 혼합+실검증 일치=resolved+ack", r.outcome === "resolved" && r.acked === true && ev && ev.ack === true);
+
+  // 복구 경로: worker가 settle까지 쓰고 ack 전에 죽은 상황 재현 → projectResolvedAcks가 닫는다
+  const b = plantAlertAndFreeze([fB, fOut]);
+  ech.markDispatched(ws, b.challengeId);
+  const rec2 = ech.readChallenge(ws, b.challengeId);
+  ech.settleChallenge(ws, b.challengeId, ech.judgeChallenge(rec2, ech.parseChallengeResponse(respFromRec(rec2), rec2)));
+  ck("전제 — settle=resolved인데 이벤트는 미ack(ack 유실 창)", ech.readChallenge(ws, b.challengeId).state === "resolved" && cl.readIntegrityEvents().find((e) => e.id === b.eventId).ack === false);
+  cb.projectResolvedAcks(ws, ech);
+  ck("재투영 — skip 혼합 resolved도 ack(경보 자동 해소)", cl.readIntegrityEvents().find((e) => e.id === b.eventId).ack === true);
+
+  // 회수 결속: 답 회수(ask-wait) 성공 지점에서 stale 수렴+재투영이 돈다 — 세션 마지막 검증이어도
+  // '답을 받았는데 경보가 남는' 창이 닫힌다(다음 검증 진입을 기다리지 않음).
+  const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
+  ck("ask-wait 회수 성공 지점 — 수렴+재투영 결속(소스 계약)", /회수 시점 재투영[\s\S]{0,400}convergeStaleChallenges\(wsW\); projectResolvedAcks\(wsW, echW\)/.test(src));
+}
+
+console.log("[11] 회수 결속 실행 증명 — 실제 ask-wait CLI가 회수하면서 미ack 이벤트를 닫는다");
+{
+  const cp = require("child_process");
+  const cli = path.join(__dirname, "..", "bridge", "codex-bridge.js");
+  const jobDir = path.join(home, "ask-jobs"); fs.mkdirSync(jobDir, { recursive: true });
+  const mkDoneJob = (jid, jws) => {
+    fs.writeFileSync(path.join(jobDir, jid + ".json"), JSON.stringify({ schema: "ask-job-v1", id: jid, state: "succeeded", workspace: jws, execCwd: jws, timeoutMin: 7, deadlineAt: new Date(Date.now() + 60000).toISOString(), workerPid: null, finishedAt: new Date().toISOString() }));
+    fs.writeFileSync(path.join(jobDir, jid + ".out"), "검증 답 원문 " + jid + "\n");
+  };
+  // worker 사망 창 재현: settle=resolved(skip 혼합)까지 기록됐는데 이벤트는 미ack
+  const fOut2 = path.join(home, "outside-roots-2.js"); fs.writeFileSync(fOut2, richText(820));
+  const c = plantAlertAndFreeze([fA, fOut2]);
+  ech.markDispatched(ws, c.challengeId);
+  const rc3 = ech.readChallenge(ws, c.challengeId);
+  ech.settleChallenge(ws, c.challengeId, ech.judgeChallenge(rc3, ech.parseChallengeResponse(respFromRec(rc3), rc3)));
+  ck("전제 — resolved 선기록·이벤트 미ack", ech.readChallenge(ws, c.challengeId).state === "resolved" && cl.readIntegrityEvents().find((e) => e.id === c.eventId).ack === false);
+  mkDoneJob("ask-retr-aaaaaaaaaa", ws); // job.workspace=challenge ws — 회수 지점의 작업공간 선택이 이 값을 써야 ack된다
+  const w = cp.spawnSync(process.execPath, [cli, "ask-wait", "ask-retr-aaaaaaaaaa"], { encoding: "utf8", env: { ...process.env, CODEX_BRIDGE_HOME: home, CODEX_BRIDGE_JOB_WAIT_SLICE_MS: "0" }, timeout: 15000, windowsHide: true });
+  ck("실행 — 회수 성공(출력 원문·exit 0)", w.status === 0 && w.stdout.includes("검증 답 원문 ask-retr-aaaaaaaaaa"));
+  ck("실행 — 회수 시점 재투영이 미ack 이벤트를 ack(경보 자동 해소)", cl.readIntegrityEvents().find((e) => e.id === c.eventId).ack === true);
+
+  // 격리 증명: 장부 저장소가 오염돼도(워크스페이스 장부 경로가 디렉터리가 아니라 파일) 회수 출력은 보존된다
+  const wsBad = path.join(os.tmpdir(), "evdp_bad_ws_" + Date.now());
+  const badDir = ech.challengeDirFor(wsBad);
+  fs.mkdirSync(path.dirname(badDir), { recursive: true });
+  if (!fs.existsSync(badDir)) fs.writeFileSync(badDir, "포이즌 — 디렉터리 자리에 파일");
+  mkDoneJob("ask-retr-bbbbbbbbbb", wsBad);
+  const w2 = cp.spawnSync(process.execPath, [cli, "ask-wait", "ask-retr-bbbbbbbbbb"], { encoding: "utf8", env: { ...process.env, CODEX_BRIDGE_HOME: home, CODEX_BRIDGE_JOB_WAIT_SLICE_MS: "0" }, timeout: 15000, windowsHide: true });
+  ck("실행 — 장부 오염에도 회수 출력 보존(best-effort 격리)", w2.status === 0 && w2.stdout.includes("검증 답 원문 ask-retr-bbbbbbbbbb"));
+}
+
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
