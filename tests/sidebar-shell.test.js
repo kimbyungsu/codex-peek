@@ -65,7 +65,9 @@ console.log("[3b] 개요 패널 — 기존 상태값 재조립·안전 표시 �
   ok(blk.length > 0, "renderOverview 함수 존재(호이스팅 함수 선언)");
   ok(!blk.includes("innerHTML"), "개요 렌더에 innerHTML 없음(textContent·replaceChildren만)");
   ok(!blk.includes("postMessage"), "개요 렌더가 저장·요청 메시지를 보내지 않는다(표시 전용)");
-  ok(blk.includes("d.integrity") && blk.includes("d.backlog") && blk.includes("d.challenges") && blk.includes("choicePending") && blk.includes("d.envelope"), "결정 필요 합산 5원천(경보·보관함·재확인·MAP 선택·수칙서)");
+  ok(blk.includes("d.integrity") && blk.includes("d.backlog") && blk.includes("choicePending") && blk.includes("d.envelope"), "결정 필요 합산 원천(경보 2종·보관함·MAP 선택·수칙서)");
+  ok(blk.includes('e.kind==="evidence-unseen"') && !blk.includes("d.challenges"), "근거 재확인은 경보 종류 분리로 1회만 집계 — kept 가산 금지(같은 eventId 이중 집계 blocker 2026-08-07)");
+  ok(blk.includes("integAll9.length-ev9"), "일반 경보 수 = 전체 미확인 − evidence-unseen(분리 후 합=전체·과소/과대 없음)");
   ok(blk.includes("d.usedMemory"), "'실린 기억' 카드가 상태값(usedMemory)만 읽는다");
   ok(src.includes("safe(function(){ renderOverview(d); });"), "data 핸들러에 safe 결속(구획 실패 격리)");
   ok(src.includes("usedMemory: (() => {") && src.includes('"stats", "attach.jsonl"'), "computeState가 브릿지 attach 장부를 읽어 usedMemory 공급");

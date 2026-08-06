@@ -72,7 +72,7 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap) {
   // carrier(L1-A): 호출자가 준 객체에 '이번 ask에 실제로 실린 동봉 스냅샷'(mapItems·couplings)을 담아 준다 —
   // 확인 판정(flagLedgerConfirms)이 '지금 다시 계산한 동봉'이 아니라 '전송된 그 동봉'으로 echo를 판정하게(Codex 설계검증).
   // [머리 다이어트] baseline은 경계 절 산출 뒤에 조립한다 — v2 서식 절이 실제로 실리는지(envText 실물)를 보고 블록 서식을 위임/전문으로 고른다(아래).
-  let inj = "", scout = "", c = null;
+  let inj = "", scout = "", c = null, attSnap9 = null;
   try {
     // 계약은 '연 폴더(configWs)' 기준으로 로드 — cmdAsk가 modelPref·proof·라벨·withContract에 같은 configWs 스냅샷(ws)을
     // 넘겨, 작업 cwd가 외부 폴더로 흔들려도 사용자가 연 폴더에 건 계약이 일관 적용된다(인자 없으면 configWs()로 폴백).
@@ -93,8 +93,8 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap) {
     if (att && typeof att === "object") {
       scout = att.text || "";
       if (carrier && typeof carrier === "object") { carrier.mapItems = att.mapItems || []; carrier.couplings = att.couplings || []; }
-      // [개요 카드] 이번 ask에 실제 실린 동봉을 구조화 기록(best-effort) — 대시보드 '이번 검증에 실린 기억'.
-      try { appendAttachUsage({ ts: new Date().toISOString(), ws: ws || configWs(), items: (att.mapItems || []).slice(0, 12).map((it) => ({ path: String(it.path || ""), note: String(it.note || "").slice(0, 160) })), couplings: (att.couplings || []).length, omitted: /\[Project MAP (동봉 생략|omitted)\]/.test(att.text || "") }); } catch { /* best-effort */ }
+      // [개요 카드] 동봉 스냅샷 캡처만 — 기록은 아래 조립 검사(fail-closed) 통과 뒤에(차단된 ask의 미전송 행 방지·검증 [주의]).
+      attSnap9 = { items: (att.mapItems || []).slice(0, 12).map((it) => ({ path: String(it.path || ""), note: String(it.note || "").slice(0, 160) })), couplings: (att.couplings || []).length, omitted: /\[Project MAP (동봉 생략|omitted)\]/.test(att.text || "") };
     } else scout = att || ""; // 구형 문자열 반환 호환(테스트 목·부분 배포)
   } catch { scout = ""; }
   // 거버넌스 증분 1: 검증 경계(사용자 승인 수칙서) — 승인 지문 일치 시에만 주입(데이터 절=두 프로필 공통·한정 문구=core만).
@@ -125,6 +125,9 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap) {
     const parts = `기본원칙 ${baseline.length} · 경계한정 ${baseQual.length} · 승인정책 ${envText.length} · 계약 ${inj.length} · 지도 ${scout.length}`;
     try { process.stderr.write(`⚠️ 검증자 프롬프트 머리가 ${head.length}자입니다(권장 ${HEAD_SOFT_LIMIT} 이하) — ${parts}\n`); } catch { /* 안내 실패가 검증을 막지 않음 */ }
   }
+  // [개요 카드] 조립 검사(경계 상호배제·계약 상한) 통과 뒤에만 기록 — 차단된 ask는 행을 남기지 않는다.
+  // 기록 실패·이후 발송 실패의 잔여 위험은 화면이 '마지막 동봉 기록 시각'을 함께 표시해 정직화(단정 금지).
+  if (attSnap9) { try { appendAttachUsage({ ts: new Date().toISOString(), ws: ws || configWs(), items: attSnap9.items, couplings: attSnap9.couplings, omitted: attSnap9.omitted }); } catch { /* best-effort */ } }
   const reqLabel = (lang || loadLang()) === "en" ? "[Work Request]" : "[작업 요청]";
   return `${head}\n\n---\n${reqLabel}\n${prompt}`;
 }

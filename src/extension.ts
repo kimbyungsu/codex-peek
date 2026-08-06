@@ -5725,12 +5725,15 @@ class Dashboard {
     var h9 = d.mapCurrent && d.mapCurrent.source==="v2" ? d.mapCurrent.health : null;
     set9("ovMap", !son9 ? T("2트랙 — 지도 없음","2-track — no map") : (h9 ? (h9.fresh+"/"+h9.total+(h9.ratios&&h9.ratios.fresh!==null?" · "+Math.round(h9.ratios.fresh*100)+"%":"")) : T("자료 없음","no data")));
     var acts9=[];
-    var integ9=(d.integrity||[]).filter(function(e){ return e && e.ack!==true; }).length;
+    // 근거 재확인 카드의 kept는 미확인 evidence-unseen 경보의 부분집합(같은 eventId 결속) — 별도 가산은
+    // 한 사건을 두 결정으로 세는 이중 집계다(검증 blocker 2026-08-07). 경보를 종류로 나눠 각 1회만 센다.
+    var integAll9=(d.integrity||[]).filter(function(e){ return e && e.ack!==true; });
+    var ev9=integAll9.filter(function(e){ return e.kind==="evidence-unseen"; }).length;
+    var integ9=integAll9.length-ev9;
     if(integ9) acts9.push({n:integ9, tab:null, label:T("미확인 경보 — 위 경보 배너에서 내용 확인 후 '확인'","unacknowledged alerts — review & ack in the banner above")});
+    if(ev9) acts9.push({n:ev9, tab:"verify", label:T("근거 재확인 경고 열림 — 배너 '확인' 또는 자동 해소 대기","evidence-recheck warnings open — ack in the banner or await auto-clear")});
     var bl9=d.backlog&&d.backlog.caution?d.backlog.caution:0;
     if(bl9) acts9.push({n:bl9, tab:"verify", label:T("보관함 판단 대기 항목","parked items awaiting your judgment")});
-    var ch9=d.challenges&&d.challenges.kept?d.challenges.kept:0;
-    if(ch9) acts9.push({n:ch9, tab:"verify", label:T("근거 재확인 경고 열림","evidence-recheck warnings still open")});
     var ic9=d.mapCurrent&&d.mapCurrent.intent&&Number.isFinite(d.mapCurrent.intent.choicePending)?d.mapCurrent.intent.choicePending:0;
     if(ic9) acts9.push({n:ic9, tab:"setup", label:T("MAP 대기 선택","MAP choices waiting")});
     if(d.envelope&&d.envelope.btn) acts9.push({n:1, tab:"setup", label:T("검증 경계(수칙서) 승인 대기","verify-envelope approval pending")});
@@ -5760,7 +5763,9 @@ class Dashboard {
       if(!um9) mem9.textContent=T("아직 기록 없음 — 다음 검증부터 쌓여요","no records yet — starts with the next verification");
       else if(um9.omitted) mem9.textContent=T("직전 검증은 코드와 무관한 요청이라 지도 동봉을 생략했어요(요청 축 게이트).","last verification skipped map attachments — the request wasn't code-related (request-axis gate).");
       else if(!um9.items || !um9.items.length) mem9.textContent=T("직전 검증에 실린 지도 조각 없음","no map slices attached to the last verification");
-      else { um9.items.slice(0,6).forEach(function(it9){ var ln9=el("div","ovline"); var p9=String(it9.path||"").split(/[\\\/]/).pop(); ln9.textContent=p9+(it9.note?" — "+String(it9.note).slice(0,80):""); mem9.appendChild(ln9); });
+      else { // 기록 시각을 함께 표시 — '직전 검증' 단정 대신 언제의 동봉인지 정직화(기록·발송 실패 잔여 위험 고지 — 검증 [주의])
+        var ts9=Date.parse(um9.ts||""); if(Number.isFinite(ts9)){ var ago9=Math.max(0,Math.round((Date.now()-ts9)/60000)); var hd9=el("div","ovline muted"); hd9.textContent=T("마지막 동봉 기록 · ","last attach record · ")+(ago9<60?ago9+T("분 전","m ago"):Math.round(ago9/60)+T("시간 전","h ago")); mem9.appendChild(hd9); }
+        um9.items.slice(0,6).forEach(function(it9){ var ln9=el("div","ovline"); var p9=String(it9.path||"").split(/[\\\/]/).pop(); ln9.textContent=p9+(it9.note?" — "+String(it9.note).slice(0,80):""); mem9.appendChild(ln9); });
         if(um9.couplings){ var cl9=el("div","ovline muted"); cl9.textContent=T("결합 확인 요청 ","coupling checks: ")+um9.couplings+T("건 동봉"," attached"); mem9.appendChild(cl9); } }
     }
   }
