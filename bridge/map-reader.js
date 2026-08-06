@@ -283,7 +283,12 @@ function renderV2Slice(ws, c, lang, proj, reqText) {
   if (typeof reqText === "string" && reqText.trim()) {
     try {
       const MR = require(path.join(__dirname, "map-retrieval.js"));
-      const seeds = MR.extractSeeds(reqText).seeds;
+      // 규약 어휘 씨앗 제외(첫 실전 관측 2026-08-06): 요청문의 서식 안내('[지적 목록 v2]' 인용 등)가
+      // 씨앗으로 추출되면 하네스 소스 전반에 그 마커가 있어 의도 축이 항상 살아난다 — 규약 어휘는 코드
+      // 대상이 아니다. 정본 상수(FINDINGS_MARKERS)에서 단일 출처로 제외 목록을 만든다(문구 이원화 금지).
+      const protoSeeds = new Set();
+      for (const M of [CL.FINDINGS_MARKERS, CL.FINDINGS_MARKERS_V2]) for (const L of Object.values(M || {})) for (const v of Object.values(L || {})) protoSeeds.add(v);
+      const seeds = MR.extractSeeds(reqText).seeds.filter((s) => !protoSeeds.has(s.value));
       const search = seeds.length ? MR.searchSeeds(target, seeds) : { matches: [], corpus: 0, truncated: false };
       const seedScores = new Map(search.matches.map((m) => [m.path, m.score]));
       // 장부 축 v1: 결합 후보 문안의 '경로 모양' 토큰만(자유 문장 — 검증된 추출기 재사용. 확장 여지 정직 표기)

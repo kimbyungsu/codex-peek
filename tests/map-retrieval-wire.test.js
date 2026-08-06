@@ -117,6 +117,11 @@ console.log("[4] renderV2Slice 배선 — 전 축 공백=fallback 고지·잘림
   ok(changed9.some((f) => String(f).includes("m1.js")), "(전제) 변경 축 후보 실물 성립 — m1.js가 변경 목록에 실림");
   const c9 = RD.renderV2Slice(WS, {}, "ko", proj, "원격 브랜치 상태만 확인해줘 — 코드 무관");
   ok(c9.text.includes("[Project MAP 동봉 생략]") && c9.mapItems.length === 0, "변경 축만 후보(의도 0)=게이트 발동 — 변경 축이 자리를 채우지 않음(실사고 조건 재현)");
+  // 첫 실전 관측 반례(2026-08-06): 요청문 서식 안내가 규약 마커('[지적 목록 v2]' 인용)를 담으면 그
+  // 씨앗이 소스 전반과 매칭돼 의도 축이 위장 생존 — 규약 어휘는 코드 대상이 아니므로 씨앗에서 제외.
+  fs.writeFileSync(path.join(WS, "src", "m2.js"), "본문에 [지적 목록 v2] 마커 문자열 포함"); // 저장소에 마커 실재(매칭 조건 성립)
+  const p9 = RD.renderV2Slice(WS, {}, "ko", proj, "상태 확인 요청 — 판정 줄 바로 앞에 '[지적 목록 v2]' 블록을 붙여 주세요");
+  ok(p9.text.includes("[Project MAP 동봉 생략]") && p9.mapItems.length === 0, "규약 마커 인용만 있는 요청=게이트 유지(규약 어휘 씨앗 제외 — 의도 축 위장 생존 봉합)");
 }
 
 console.log("[4b] 재검증 반례 잠금 — 공유 anchor edge 누출·선별 제외 고지 분리");
