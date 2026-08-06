@@ -4444,6 +4444,32 @@ class Dashboard {
   .tabbtn.active{color:#fff;background:var(--vscode-charts-blue);box-shadow:0 1px 5px color-mix(in srgb,var(--vscode-charts-blue) 45%,transparent)}
   .tab-panel{display:none}
   .tab-panel.active{display:block}
+  /* 사이드바 골격(2026-08-07 UI 개편 1차): 기존 탭 이음새(.tabbtn/data-tab) 위에 세로 레일을 씌운다 —
+     전환 로직·호스트 switchTab·시험 계약(querySelectorAll(".tabbtn")) 무변경. 콘텐츠 컬럼(.shell)은 그대로. */
+  .app{display:grid;grid-template-columns:200px minmax(0,1fr);min-height:100vh}
+  .app.rail{grid-template-columns:58px minmax(0,1fr)}
+  .sidebar{position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;box-sizing:border-box;display:flex;flex-direction:column;gap:2px;padding:14px 8px 10px;background:var(--vscode-sideBar-background);border-right:1px solid var(--vscode-panel-border)}
+  .sb-brandrow{display:flex;align-items:center;gap:9px;padding:2px 8px 12px;border-bottom:1px solid var(--vscode-panel-border);margin-bottom:6px}
+  .sb-brandrow b{font-size:13px;white-space:nowrap}
+  .navgroup{font-size:9.5px;color:var(--vscode-descriptionForeground);text-transform:uppercase;letter-spacing:.08em;margin:10px 8px 3px;white-space:nowrap}
+  .sidebar .tabbtn{width:100%;justify-content:flex-start;padding:8px 10px;white-space:nowrap;overflow:hidden;box-sizing:border-box}
+  .sb-ico{width:18px;text-align:center;flex:none}
+  .sb-foot{margin-top:auto;padding-top:8px;border-top:1px solid var(--vscode-panel-border)}
+  #sbToggle{width:100%;background:none;border:none;color:var(--vscode-descriptionForeground);padding:6px 10px;border-radius:7px;cursor:pointer;font-size:11px;text-align:left;white-space:nowrap}
+  #sbToggle:hover{color:var(--vscode-foreground);background:var(--vscode-editorWidget-background)}
+  .app.rail .navgroup,.app.rail .sb-brandrow b,.app.rail .sb-label{display:none}
+  .app.rail .sidebar .tabbtn{justify-content:center;padding:8px 6px}
+  .app.rail #sbToggle{text-align:center}
+  .topbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 18px;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-editorWidget-background)}
+  .topbar .modebar{margin:0;flex:0 1 460px;min-width:260px}
+  .trackseg{display:flex;align-items:center;gap:6px;padding:6px;border:1px solid var(--vscode-panel-border);border-radius:10px;background:var(--vscode-sideBar-background);cursor:pointer}
+  .trackseg button{background:transparent;border:1px solid transparent;color:var(--vscode-descriptionForeground);padding:6px 10px;border-radius:7px;font-weight:650;cursor:pointer;font-size:12px}
+  .trackseg button.on{background:var(--vscode-editor-background);border-color:var(--vscode-charts-green);color:var(--vscode-foreground)}
+  @media (max-width:700px){
+    .app{grid-template-columns:58px minmax(0,1fr)}
+    .navgroup,.sb-brandrow b,.sb-label,#sbToggle{display:none}
+    .sidebar .tabbtn{justify-content:center;padding:8px 6px}
+  }
   .stat-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin:6px 0 14px}
   .stat-card{border:1px solid var(--vscode-panel-border);border-left:5px solid var(--accent,var(--vscode-charts-blue));border-radius:10px;padding:14px 16px;background:color-mix(in srgb,var(--accent,var(--vscode-charts-blue)) 7%,var(--vscode-editor-background))}
   .stat-card.s-blue{--accent:var(--vscode-charts-blue)}
@@ -4722,18 +4748,28 @@ class Dashboard {
   .flashpulse{animation:flashpulse 1.5s ease-out}
   @keyframes flashpulse{0%,22%{background:var(--vscode-charts-orange);color:#fff;border-radius:5px}100%{background:transparent}}
 </style></head>
-<body><main class="shell">
-  <nav class="tabbar">
-    <button type="button" class="tabbtn active" data-tab="main">${t("📋 현황", "📋 Status")}</button>
-    <button type="button" class="tabbtn" data-tab="stats">${t("📊 검증 통계", "📊 Verify Stats")}</button>
-    <button type="button" class="tabbtn" data-tab="adv">${t("⚙️ 고급설정", "⚙️ Advanced")}</button>
-    <span class="langseg" title="${t("전역 언어 — UI·주입 지침·규칙 슬롯의 언어(모든 프로젝트 공통)", "Global language — UI · injected directives · rule slots (shared by all projects)")}">
-      <button type="button" class="langbtn" id="langKo" data-lang="ko">한국어</button>
-      <button type="button" class="langbtn" id="langEn" data-lang="en">English</button>
-    </span>
-  </nav>
+<body><div class="app" id="appShell">
+<aside class="sidebar">
+  <div class="sb-brandrow"><span class="brand"></span><b>Codex Bridge</b></div>
+  <p class="navgroup">${t("운영", "Operate")}</p>
+  <button type="button" class="tabbtn active" data-tab="main"><span class="sb-ico">📋</span><span class="sb-label">${t("현황", "Status")}</span></button>
+  <p class="navgroup">${t("분석", "Analytics")}</p>
+  <button type="button" class="tabbtn" data-tab="stats"><span class="sb-ico">📊</span><span class="sb-label">${t("검증 통계", "Verify Stats")}</span></button>
+  <p class="navgroup">${t("관리", "Manage")}</p>
+  <button type="button" class="tabbtn" data-tab="adv"><span class="sb-ico">⚙️</span><span class="sb-label">${t("고급설정", "Advanced")}</span></button>
+  <div class="sb-foot"><button type="button" id="sbToggle" title="${t("메뉴 접기/펼치기", "Collapse/expand menu")}">◀ ${t("접기", "Collapse")}</button></div>
+</aside>
+<div class="maincol">
+<header class="topbar">
   <div class="modebar"><span class="ml">${t("운용", "Mode")}</span><button type="button" class="modebtn" id="modeClaude" data-mode="claude-codex">Claude Code ↔ Codex</button><button type="button" class="modebtn" id="modeCodex" data-mode="codex-codex">Codex ↔ Codex</button></div>
-  <div id="modeSwitchNote" class="muted" style="display:none;font-size:11.5px;margin:2px 2px 0"></div>
+  <div class="trackseg" id="tbTrack" style="display:none" title="${t("작업 깊이(적용값) — 누르면 설정 위치로 이동", "Track depth (applied) — click to jump to the setting")}"><span class="ml">${t("깊이", "Depth")}</span><button type="button" data-tbsm="off">${t("2트랙", "2-track")}</button><button type="button" data-tbsm="on">${t("3트랙", "3-track")}</button></div>
+  <span class="langseg" title="${t("전역 언어 — UI·주입 지침·규칙 슬롯의 언어(모든 프로젝트 공통)", "Global language — UI · injected directives · rule slots (shared by all projects)")}">
+    <button type="button" class="langbtn" id="langKo" data-lang="ko">한국어</button>
+    <button type="button" class="langbtn" id="langEn" data-lang="en">English</button>
+  </span>
+</header>
+<main class="shell">
+  <div id="modeSwitchNote" class="muted" style="display:none;font-size:11.5px;margin:2px 2px 10px"></div>
   <div id="tab-main" class="tab-panel active">
   <section class="onboard" id="onboard" style="display:none">
     <button type="button" id="obReopen" class="obreopen" style="display:none">${t("시작하기 다시 보기", "Show Getting Started again")}</button>
@@ -5087,6 +5123,8 @@ class Dashboard {
     </div>
   </section>
 </main>
+</div>
+</div>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   // 펼친 Codex 답변 키 모음 — postMessage 재렌더(작업/검증/반영 상태·파일·주기 변화)에도 펼침을 유지한다.
@@ -5293,6 +5331,9 @@ class Dashboard {
     const sf=$("scoutFlow"); if(sf) sf.style.display = son?"":"none";
     const hs=$("heroScout"); if(hs) hs.style.display = son?"":"none";
     const sv=$("faScoutVal"); if(sv) sv.textContent = son?T("켜짐 · 지도는 직접/자동 지시 실행","on · maps run directly or via auto-directive"):T("꺼짐","off");
+    // [UI 개편 1차] 상단바 '작업 깊이' 미러 — 표시 전용(적용값만 반영). 쓰기 경로는 검증 카드 segScout의
+    // 초안·저장 상태기계 그대로다(상단 즉시 토글은 초안 보호를 우회하므로 만들지 않는다 — 클릭=설정 위치로 이동).
+    { const tb=$("tbTrack"); if(tb){ tb.style.display = appSM===null?"none":""; tb.querySelectorAll("button[data-tbsm]").forEach(function(x){ x.classList.toggle("on", x.getAttribute("data-tbsm")===(son?"on":"off")); }); } }
     // 검증 토글 직하 단계 패널: 검증 ON이면 ①③ 켜짐, ②는 검증할 때. OFF면 ①③ 꺼짐, ②는 수동 ask 때만.
     const von = appVM!=="off";
     const st=$("sbState"); if(st) st.textContent = von ? lblVM(appVM) : T("꺼짐","off");
@@ -5614,6 +5655,16 @@ class Dashboard {
       document.querySelectorAll(".tab-panel").forEach(function(p){ p.classList.toggle("active", p.id===("tab-"+t)); });
     });
   });
+  // [UI 개편 1차] 사이드바 접기 — 웹뷰 메모리(언어 재렌더 시 초기화 허용, 파일 영속화는 후속 단계)
+  (function(){ var tg=$("sbToggle"); if(!tg) return; tg.addEventListener("click", function(){
+    var app=$("appShell"); if(!app) return; var r=app.classList.toggle("rail");
+    tg.textContent = r ? "▶" : ("◀ " + T("접기","Collapse"));
+  }); })();
+  // [UI 개편 1차] 상단바 '작업 깊이' 미러 클릭 — 즉시 토글이 아니라 실제 설정 위치(검증 카드 segScout)로 이동
+  (function(){ var tb=$("tbTrack"); if(!tb) return; tb.addEventListener("click", function(){
+    var mb=document.querySelector('.tabbtn[data-tab="main"]'); if(mb) mb.click();
+    var sg=$("segScout"); if(sg){ sg.scrollIntoView({behavior:"smooth", block:"center"}); flashNode(sg); }
+  }); })();
   // 고급설정: DeepSeek 키 저장/삭제 — 원문은 저장 메시지로만 나가고, 표시는 state의 마스킹만.
   $("dsSave").addEventListener("click", ()=>{ const v=$("dsKey").value.trim(); if(!v){ return; } pendingSave={target:"deepseek", msg:T("키 저장됨 ✓","Key saved ✓")}; vscode.postMessage({type:"saveDeepseekKey", key:v}); $("dsKey").value=""; });
   $("dsClear").addEventListener("click", ()=>{ pendingSave={target:"deepseek", msg:T("키 삭제됨 ✓","Key removed ✓")}; vscode.postMessage({type:"saveDeepseekKey", key:""}); $("dsKey").value=""; });
