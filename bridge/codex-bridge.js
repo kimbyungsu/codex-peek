@@ -1411,9 +1411,9 @@ function flagVerdict(answer, ws, codexSession, modeSnapshot, machine, attempt, p
         kind: "verdict-missing",
         severity: "warning", // 노랑 — '통과 아님'이 아니라 '판정 표지가 없어 색 표시가 빔'
         // detailKo/detailEn 동시 저장 — 확장 표시부(readVisibleIntegrity)가 '그때그때 현재 언어'를 고른다(기록 시점 언어로 굳는 것 방지). detail은 구버전 판독 폴백.
-        detail: tB("Codex 답에 마지막 '검증: 통과/통과(보완)/보류/실패' 판정 줄이 없습니다 — 대시보드 색 표시가 비고, 결론을 직접 확인해야 합니다.", "Codex's answer has no final verdict line ('Verdict: pass/pass (notes)/inconclusive/fail') — the dashboard chip stays empty; check the conclusion yourself."),
-        detailKo: "Codex 답에 마지막 '검증: 통과/통과(보완)/보류/실패' 판정 줄이 없습니다 — 대시보드 색 표시가 비고, 결론을 직접 확인해야 합니다.",
-        detailEn: "Codex's answer has no final verdict line ('Verdict: pass/pass (notes)/inconclusive/fail') — the dashboard chip stays empty; check the conclusion yourself.",
+        detail: tB(`${provLabel} 답에 마지막 '검증: 통과/통과(보완)/보류/실패' 판정 줄이 없습니다 — 대시보드 색 표시가 비고, 결론을 직접 확인해야 합니다.`, `${provLabel}'s answer has no final verdict line ('Verdict: pass/pass (notes)/inconclusive/fail') — the dashboard chip stays empty; check the conclusion yourself.`),
+        detailKo: `${provLabel} 답에 마지막 '검증: 통과/통과(보완)/보류/실패' 판정 줄이 없습니다 — 대시보드 색 표시가 비고, 결론을 직접 확인해야 합니다.`,
+        detailEn: `${provLabel}'s answer has no final verdict line ('Verdict: pass/pass (notes)/inconclusive/fail') — the dashboard chip stays empty; check the conclusion yourself.`,
       });
       return; // verdict-nonclean(직전 실패 빨강·보류 노랑)은 유지
     }
@@ -1438,8 +1438,8 @@ function flagVerdict(answer, ws, codexSession, modeSnapshot, machine, attempt, p
         ? `${provLabel} 결론이 '검증 실패'입니다 — 통과가 아닙니다. 대시보드 대화에서 결론과 근거를 확인하세요.`
         : `${provLabel} 결론이 '통과'가 아닙니다(보류·불가·정보 부족 등 — 결론을 못 냄). 대시보드 대화에서 결론을 확인하세요.`,
       detailEn: vAlert === "fail"
-        ? "Codex's verdict is FAIL — not a pass. Check the conclusion and evidence in the dashboard conversation."
-        : "Codex's verdict is not a pass (hold/unable/insufficient info — no conclusion). Check the conclusion in the dashboard conversation.",
+        ? `${provLabel}'s verdict is FAIL — not a pass. Check the conclusion and evidence in the dashboard conversation.`
+        : `${provLabel}'s verdict is not a pass (hold/unable/insufficient info — no conclusion). Check the conclusion in the dashboard conversation.`,
     });
   } catch { /* best-effort — 점검 실패가 검증 흐름을 막지 않음 */ }
 }
@@ -2216,10 +2216,11 @@ function cmdAskStart(rest) {
     // 동안 다른 창이 문안을 저장했을 때 시작과 도착이 다른 세대가 된다(검증 지적 반영).
     // 프로필·언어와 '같은 스냅샷'에서 뽑는다 — 교차 슬롯 결합 차단(위 askLangSnap 계약과 동일 원리).
     const askProfileSnap=effectiveVerifyProfile(cSnap);
+    const askProviderSnap=normVerifierProvider(cSnap); // [VerifierProvider §1] 같은 임계구역·같은 계약 스냅샷에서 동결(재확인 blocker①)
     // 원문을 그대로 동결한다(정규화는 footer 한 곳에서만) — 첨부가 거부된 경우에도 '무엇이 있었는지'를 알아야
     // 조용한 누락 대신 사유를 밝힐 수 있다. 파일 비대는 상한+1자 절단으로 막는다(길이 초과 판정에는 충분).
     const rejudgeSnap=safeLoadRejudge(askLangSnap,askProfileSnap).trim().slice(0,REJUDGE_SNAP_MAX+1);
-    job={schema:"ask-job-v1",id,state:"queued",workspace:ws,execCwd:process.cwd(),flags:req.flags,prompt:req.prompt,timeoutMin,createdAt:new Date(now).toISOString(),deadlineAt:new Date(now+timeoutMin*60*1000).toISOString(),workerPid:null,childPid:null,exitCode:null,harnessMode:cSnap.harnessMode,verifyProfile:askProfileSnap,verifyLang:askLangSnap,rejudgeSnap,campaignId,implementerSession:frozen.implementerSession,implementerTurnId:frozen.implementerTurnId,implementerRevision:frozen.implementerRevision};
+    job={schema:"ask-job-v1",id,state:"queued",workspace:ws,execCwd:process.cwd(),flags:req.flags,prompt:req.prompt,timeoutMin,createdAt:new Date(now).toISOString(),deadlineAt:new Date(now+timeoutMin*60*1000).toISOString(),workerPid:null,childPid:null,exitCode:null,harnessMode:cSnap.harnessMode,verifyProfile:askProfileSnap,verifyLang:askLangSnap,verifyProvider:askProviderSnap,rejudgeSnap,campaignId,implementerSession:frozen.implementerSession,implementerTurnId:frozen.implementerTurnId,implementerRevision:frozen.implementerRevision};
     file=askJobFile(id);
     if(!atomicWrite(file,JSON.stringify(job)))throw new Error(tB("검증 작업 저장 실패 — 새 검증을 시작하지 않았습니다.","Failed to save the verification job — no verification was started."));
   }); } catch(e) { die(String(e&&e.message||e),Number(e&&e.exitCode)||1); }

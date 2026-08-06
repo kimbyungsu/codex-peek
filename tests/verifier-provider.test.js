@@ -47,6 +47,7 @@ process.stdin.on("end",()=>{
   const mode=process.env.FAKE_CLAUDE_MODE||"ok";
   if(mode==="err"){ process.stdout.write(JSON.stringify({type:"result",is_error:true,result:"API Error: 401 login required",session_id:"fake-err"})); process.exit(1); }
   if(mode==="corrupt"){ process.stdout.write("{broken json"); process.exit(0); }
+  if(mode==="cite"){ const ans=["근거: 시험 파일 확인 (tests/verifier-provider.test.js:999999)","[지적 목록 v2]","[지적 목록 끝]","검증: 통과",""].join("\\n"); process.stdout.write(JSON.stringify({type:"result",is_error:false,result:ans,session_id:"fake-cite"})); return; }
   const answer="본문 근거: tests/verifier-provider.test.js 검토.\\n[지적 목록 v2]\\n[지적 목록 끝]\\n검증: 통과\\n";
   process.stdout.write(JSON.stringify({type:"result",subtype:"success",is_error:false,result:answer,session_id:"fake-sess-0001"}));
 });
@@ -90,6 +91,36 @@ const jobFile = path.join(jobDir, jobId + ".json");
 fs.writeFileSync(jobFile, JSON.stringify({ schema: "ask-job-v1", id: jobId, state: "running", workspace: ws, execCwd: ws, flags: [], prompt: "동결 검증", timeoutMin: 7, createdAt: new Date().toISOString(), deadlineAt: new Date(Date.now() + 7 * 60 * 1000).toISOString(), workerPid: process.pid, childPid: null, exitCode: null, harnessMode: "claude-codex", verifyProfile: "core", verifyLang: "ko", verifyProvider: "claude", rejudgeSnap: "", campaignId: null }));
 r = run(["ask", "동결 검증"], { CODEX_BRIDGE_CLAUDE_BIN: fakeBin, CODEX_BRIDGE_JOB_PROMPT_FILE: jobFile, CODEX_BRIDGE_ASK_JOB_ID: jobId });
 ok(r.status === 0 && r.stdout.includes("# 검증자: Claude(무상태)"), "동결값(claude)이 현재 계약(codex)을 이김 — 실행 중 전환 무영향 stderr=" + (r.status !== 0 ? r.stderr.slice(-300) : ""));
+
+console.log("[5b] 정본 생성 경로 — ask-start가 verifyProvider를 job에 동결 저장(재확인 blocker①)");
+{
+  run(["verifier-provider", "claude"]);
+  clearActive();
+  try { fs.unlinkSync(jobFile); } catch { /* [5]의 수제 running job 정리 — 활성 작업 거부 방지 */ }
+  // 실제 worker 실행은 무해한 가짜 브릿지로 대체(체인 시험 관용구) — 여기서는 '생성 시점 저장'만 실증.
+  const noopBridge = path.join(fakeDir, "noop-bridge.js");
+  fs.writeFileSync(noopBridge, "process.exit(0);");
+  const rs = run(["ask-start", "--allow-new", "정본 생성 경로 동결 실증"], { CODEX_BRIDGE_WORKER_BRIDGE: noopBridge, CODEX_BRIDGE_CLAUDE_BIN: fakeBin });
+  ok(rs.status === 0, "ask-start 성공 stderr=" + (rs.status !== 0 ? rs.stderr.slice(-200) : ""));
+  const newId = JSON.parse(rs.stdout).jobId;
+  const jobJson = JSON.parse(fs.readFileSync(path.join(home, "ask-jobs", newId + ".json"), "utf8"));
+  ok(jobJson.verifyProvider === "claude", "생성된 job에 verifyProvider=claude 동결(계약 스냅샷과 같은 임계구역)");
+  // 동결 승리는 [5](정본 판독 요건을 갖춘 running job — 계약을 codex로 되돌린 상태)가 실행 축으로 실증 —
+  // 생성 축(여기)+실행 축([5])의 합으로 '시작 시점 동결' 전 구간을 덮는다.
+  run(["verifier-provider", "codex"]);
+}
+
+console.log("[5c] claude 경로 인용 존재성 경보 유지(설계 시험 6-2 — 실재 파일의 범위 초과 줄=evidence-mismatch)");
+{
+  run(["verifier-provider", "claude"]);
+  clearActive();
+  const r6 = run(["ask", "존재성 검사 실증"], { CODEX_BRIDGE_CLAUDE_BIN: fakeBin, FAKE_CLAUDE_MODE: "cite" });
+  ok(r6.status === 0, "인용 포함 답 완주 stderr=" + (r6.status !== 0 ? r6.stderr.slice(-200) : ""));
+  const integ6 = (() => { try { return JSON.parse(fs.readFileSync(path.join(home, "integrity.json"), "utf8")).events || []; } catch { return []; } })();
+  ok(integ6.some((e) => e.kind === "evidence-mismatch"), "실재 파일 범위 초과 줄 인용=evidence-mismatch 경보(존재성 검사는 claude에서도 유지)");
+  ok(integ6.every((e) => e.kind !== "evidence-unseen"), "다룬 흔적 경보는 여전히 0(축퇴 — 존재성과 분리)");
+  run(["verifier-provider", "codex"]);
+}
 
 console.log("[6] 소스 계약 — 꼬리 단일화·legacy job=codex 고정");
 const src = fs.readFileSync(bridgeBin, "utf8");

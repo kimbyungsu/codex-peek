@@ -120,7 +120,7 @@ ok(CL.extractVerdict("x\n검증: 통과(보완)") === "pass-notes" && CL.extract
 
 console.log("[4] ask 시작 시점 동결(계약 ⓕ · 구현검증 1차 정정 반영)");
 const src = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
-ok(/const askLangSnap=loadLang\(\);/.test(src) && /const cSnap=loadContract\(ws, askLangSnap\);/.test(src) && /verifyProfile:askProfileSnap,verifyLang:askLangSnap,rejudgeSnap,/.test(src), "cmdAskStart — 언어 먼저 캡처→같은 슬롯 계약→job에 단일 스냅샷 동결(프로필·언어·재판단 규약 한 묶음 — 교차 슬롯 결합 차단)");
+ok(/const askLangSnap=loadLang\(\);/.test(src) && /const cSnap=loadContract\(ws, askLangSnap\);/.test(src) && /verifyProfile:askProfileSnap,verifyLang:askLangSnap,verifyProvider:askProviderSnap,rejudgeSnap,/.test(src), "cmdAskStart — 언어 먼저 캡처→같은 슬롯 계약→job에 단일 스냅샷 동결(프로필·언어·공급자·재판단 규약 한 묶음 — 교차 슬롯 결합 차단)");
 // 재판단 규약 동결도 '같은 스냅샷'에서 뽑혀야 한다 — 다른 순간에 다시 읽으면 세대가 갈린다.
 ok(/const askProfileSnap=effectiveVerifyProfile\(cSnap\);[\s\S]{0,400}?const rejudgeSnap=safeLoadRejudge\(askLangSnap,askProfileSnap\)\.trim\(\)\.slice\(0,REJUDGE_SNAP_MAX\+1\);/.test(src), "재판단 동결본도 같은 언어·프로필 스냅샷에서 캡처(원문 동결·상한+1 절단으로 job 비대 방지)");
 ok(/const durableEnv = process\.env\.CODEX_BRIDGE_JOB_PROMPT_FILE \? readCanonicalEnvJob\(ws\) : null;/.test(src), "cmdAsk — 내구 env는 '모드 무관' 정본 판독(readCanonicalEnvJob)만 신뢰(P-6 판독기는 C-C 전용이라 CL-C job을 job-mode 거부 — 2차 회귀 봉합)");
