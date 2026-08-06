@@ -105,6 +105,12 @@ console.log("[4] renderV2Slice 배선 — 전 축 공백=fallback 고지·잘림
   mk(WS, "big.js", "x".repeat(600 * 1024)); // 파일당 상한(512KiB) 초과 → 검색 truncated
   const t = RD.renderV2Slice(WS, {}, "ko", proj, "`missingToken` 재요청");
   ok(t.text.includes("[Project MAP 동봉 생략]") && t.text.includes("씨앗 검색이 상한에 걸려 잘렸다"), "게이트에서도 검색 잘림 고지 불소실(지표 unknown 안내)");
+  // 확인 검증 [보완] 반영 — 핵심 반례: '변경 축만 후보'(의도 0+최근 변경 있음 — 실사고 재현 조건).
+  // 대량 푸시 직후의 무관 질문 상황: 종전에는 변경 축이 자리를 전부 채워 무관 지도가 실렸다.
+  const fs9 = require("fs");
+  fs9.writeFileSync(path.join(WS, "src", "m1.js"), "변경된 내용"); // changedFilesFor가 잡을 실변경
+  const c9 = RD.renderV2Slice(WS, {}, "ko", proj, "원격 브랜치 상태만 확인해줘 — 코드 무관");
+  ok(c9.text.includes("[Project MAP 동봉 생략]") && c9.mapItems.length === 0, "변경 축만 후보(의도 0)=게이트 발동 — 변경 축이 자리를 채우지 않음(실사고 조건 재현)");
 }
 
 console.log("[4b] 재검증 반례 잠금 — 공유 anchor edge 누출·선별 제외 고지 분리");
