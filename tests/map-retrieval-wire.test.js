@@ -97,11 +97,14 @@ console.log("[4] renderV2Slice 배선 — 전 축 공백=fallback 고지·잘림
     edges: [], approved: [], degraded: [], decisions: [],
   };
   const r = RD.renderV2Slice(WS, {}, "ko", proj, "아무 데도 안 걸리는 `missingToken` 요청");
-  ok(r.text.includes("요청 기준 선별 미적용"), "전 축 공백 — fallback 고지 실재");
-  ok(r.mapItems.length === 4 && r.mapItems[0].path === "src/m0.js", "fallback 목록=기존 순서 그대로");
+  // [요청 축 게이트 2026-08-06] 의도 축 0=동봉 전체 생략+1줄 고지(종전 fallback '기본 순서 동봉' 계약 대체 —
+  // 비코드 검증에 무관 지도 ~2.9천자 실리던 실측 봉합·사용자 승인 처방)
+  ok(r.text.includes("[Project MAP 동봉 생략]") && r.text.includes("의도 축 0"), "의도 축 0=게이트 발동·1줄 고지(침묵 생략 아님)");
+  ok(r.mapItems.length === 0 && !r.text.includes("- src/m0.js"), "다른 축이 자리를 채우지 않음(기본 순서 동봉 소멸)");
+  ok(!r.text.includes("[결합 확인 요청") && !r.text.includes("[정찰 관찰 신호") && !r.text.includes("확인 항목"), "부속 블록 2종도 함께 생략(게이트 결속 — 고지문 언급과 실제 블록 머리글 구분)");
   mk(WS, "big.js", "x".repeat(600 * 1024)); // 파일당 상한(512KiB) 초과 → 검색 truncated
   const t = RD.renderV2Slice(WS, {}, "ko", proj, "`missingToken` 재요청");
-  ok(t.text.includes("씨앗 검색이 상한에 걸려 잘렸다"), "검색 잘림 고지(지표 unknown 안내)");
+  ok(t.text.includes("[Project MAP 동봉 생략]") && t.text.includes("씨앗 검색이 상한에 걸려 잘렸다"), "게이트에서도 검색 잘림 고지 불소실(지표 unknown 안내)");
 }
 
 console.log("[4b] 재검증 반례 잠금 — 공유 anchor edge 누출·선별 제외 고지 분리");
@@ -151,10 +154,10 @@ console.log("[4c] 빈 후보 조기 반환 — 고지 불소실(정합 점검 bl
   // 전 노드 부적격(앵커 없음) → eligible 0 → top 0 → 기존 동봉 위임. reqText가 있으면 고지 합류.
   const proj = { ok: true, source: "v2", mapId: "m1", nodes: [{ id: "N0", label: "무앵커", anchors: [] }], edges: [], approved: [], degraded: [], decisions: [] };
   const r = RD.renderV2Slice(WS, {}, "ko", proj, "아무 축에도 안 걸리는 `missingTok` 요청");
-  ok(String(r && r.text || "").includes("요청 기준 선별 미적용"), "빈 후보 조기 반환에도 fallback 고지 실림");
+  ok(String(r && r.text || "").includes("[Project MAP 동봉 생략]"), "빈 후보+reqText=게이트 발동(기본 동봉 위임으로 새지 않음)");
   mk(WS, "big.js", "x".repeat(600 * 1024));
   const t = RD.renderV2Slice(WS, {}, "ko", proj, "`missingTok` 재요청");
-  ok(String(t && t.text || "").includes("씨앗 검색이 상한에 걸려 잘렸다"), "빈 후보 조기 반환에도 검색 잘림 고지 실림");
+  ok(String(t && t.text || "").includes("씨앗 검색이 상한에 걸려 잘렸다"), "게이트에서도 검색 잘림 고지 실림");
   const noReq = RD.renderV2Slice(WS, {}, "ko", proj);
   ok(!String(noReq && noReq.text || "").includes("선별"), "reqText 부재면 조기 반환 무변(무회귀)");
 }

@@ -297,6 +297,22 @@ function renderV2Slice(ws, c, lang, proj, reqText) {
       retrieval = { sel, seedScores, truncated: !!search.truncated };
     } catch { retrieval = null; } // 선별 실패=기존 동작(지도 동봉 자체를 잃지 않는다)
   }
+  // [요청 축 게이트 2026-08-06 — 사용자 승인 처방] 선별이 실행됐는데(요청문 존재) '의도 축'(요청문
+  // 씨앗 매칭) 선출이 0이면, 다른 축(최근 변경·장부·인접)이 자리를 채우지 않고 동봉 전체(지도 조각·
+  // 결합 확인 요청·정찰 신호)를 생략한다 — 비코드 검증(원격 상태·문서·무변경 결속류)에 직전 커밋의
+  // 지도가 통째로 실리던 무관 동봉(~2.9천자/ask 실측)의 구조적 봉합. 전 축 공백(fallback)도 의도 축
+  // 0이므로 같은 게이트에 수렴(기본 순서 동봉으로 위장하지 않는다). 생략은 침묵이 아니라 1줄 고지
+  // (조용한 생략 금지 계약). reqText 부재(legacy 호출)=종전 동작 그대로(무회귀).
+  if (retrieval && !(retrieval.sel.selected || []).some((p) => p.axis === "intent")) {
+    const gateNote = en
+      ? "[Project MAP omitted] No map candidate matched this request's text (intent axis empty) — map slices, coupling-confirmation request, and scout signals are not attached for this verification. Cite code targets (paths/identifiers) in the direct scope to re-enable the attachment."
+      : "[Project MAP 동봉 생략] 요청문과 관련된 지도 후보가 없어(의도 축 0) 이번 검증에는 지도 조각·결합 확인 요청·정찰 신호를 싣지 않는다. 코드 대상(경로·식별자)을 직접 범위에 인용하면 다시 실린다.";
+    const gateNotes = [gateNote];
+    if (retrieval.truncated) gateNotes.push(en
+      ? "(seed search truncated by caps — selection is best-effort; this round's exposure metrics are unknown)"
+      : "(씨앗 검색이 상한에 걸려 잘렸다 — 선별은 최선 노력이며 이 회차 노출 지표는 unknown)"); // 잘림 사실은 게이트에서도 불소실
+    return { text: gateNotes.join("\n"), mapItems: [], couplings: [] };
+  }
   const items = [];
   if (retrieval && !retrieval.sel.fallback) {
     const byId = new Map(eligible.map((e) => [e.id, e]));
