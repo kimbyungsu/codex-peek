@@ -256,7 +256,7 @@ console.log("[6] 배선 소스 단언 — codex-bridge·캐논·정본");
   const cb = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
   ok(cb.includes("writeEnvelopeFreeze(wsIn, evi.st === \"ok\" ? evi.sha1 : null, jid9)") && cb.includes("경계 동결 기록 실패"), "ask 조립=주입에 쓴 지문을 재판독 없이 동결+잡 id 결속(원자 결속)+실패 가시화(1차 blocker②·5차 ① — §7 증분 2: 전이 잠금 함수 envelopeSliceFor 안·wsIn)");
   ok(cb.includes('cNow.envelopeHash === frozen'), "후처리=파일 세대+현재 계약 도장까지 동결과 3자 일치 시에만 참조 유효(재승인·철회 경합 차단)");
-  ok(cb.includes('if (profile === "core") out9.envText += ') , "v2 서식 지시절=core 한정(무결성=문구 준수 감사 — 1차 [보완]② 지시·후처리 정합)");
+  ok(cb.includes('if (profile === "core") { out9.envText += ') && cb.includes('out9.v2Attached = true; }'), "v2 서식 지시절=core 한정+구조적 표지(무결성=문구 준수 감사 — 머리 다이어트 위임 판정 결속)");
   ok(!cb.includes("opens.slice(0, 50)") && !cb.includes("열린 지적 미표시") && cb.includes("for (const o of opens) L.push"), "열린 지적=상한 없이 전부 주입(2차 미완수정③ — 구현모델 의존 복귀 금지·제목 60자 절단으로 비대 완화)");
   ok(cb.includes("openFindingsFor(ws, currentCampaignIdFor(ws), readFrozenEnvelope(ws))") && cb.includes("openFindingsFor(ws, camp, frozen)"), "주입·심사 양쪽 open 조회=동결 세대 필터(2차 미완수정④)");
   ok(cb.includes("newFindingId(camp, frozen, roundNo, tn, seq)") && cb.includes("newFindingId(camp, null, roundNo, tn, seq)"), "id 생성=세대 결속(3차 미완수정②)");

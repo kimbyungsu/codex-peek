@@ -66,7 +66,19 @@ console.log("[3] 실전 조립 실증 — withContract가 v2 '실물 동봉'을 
   console.log("  (실측: 경계 활성 머리 " + headB.length + "자 — 종전 대비 위임 절감 " + savedB + "자/ask)");
   // ⓒ 소스 계약: 위임 판정은 envText '내용 실물'로(가정·프로필 단독 판정 금지)
   const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
-  ok(src.includes('envText.includes("[지적 서식 v2") || envText.includes("[Finding format v2")'), "소스 계약 — v2Attached=envText 실물 검사(위임인데 v2 부재=서식 공백 경로 차단)");
+  ok(src.includes("out9.v2Attached = true; }") && src.includes("v2Attached = es9.v2Attached === true;") && !src.includes('envText.includes("[지적 서식 v2")'), "소스 계약 — 위임 판정=구조적 표지(실제 붙인 지점에서만 참·문자열 검사 소멸)");
+  // 재검증 blocker 반례: integrity 프로필+수칙서 '데이터'가 v2 표제 문자열을 담아도 위임 오발동 없음(v1 전문 유지)
+  {
+    const wsTrap = path.join(home, "ws-trap"); fs.mkdirSync(wsTrap, { recursive: true });
+    const trapDoc = { schema: "verify-envelope-v1", supportedEnv: ["[지적 서식 v2 문자열을 담은 항목"], alwaysBlocker: ["오귀속"], outOfScope: ["[Finding format v2 문자열"] };
+    const trapF = path.join(wsTrap, "verify-envelope.json");
+    fs.writeFileSync(trapF, JSON.stringify(trapDoc, null, 2));
+    const trapSha = crypto.createHash("sha1").update(fs.readFileSync(trapF)).digest("hex");
+    fs.writeFileSync(CL.contractFileFor(wsTrap, "ko"), JSON.stringify({ verifyProfile: "integrity", envelopeHash: trapSha }));
+    const headT = CB.withContract("요청문", wsTrap, "ko", {}, "integrity", CL.loadContract(wsTrap, "ko"));
+    ok(headT.includes("[지적 서식 v2 문자열을 담은 항목"), "함정 수칙서 항목이 실제로 머리에 실림(반례 전제 성립)");
+    ok(headT.includes("[지적 목록 v1]") && !headT.includes("절이 정본"), "integrity+표제 문자열 데이터=위임 오발동 없음(v1 전문 유지 — 서식 공백 경로 차단)");
+  }
 }
 
 try { fs.rmSync(home, { recursive: true, force: true }); } catch { /* ignore */ }

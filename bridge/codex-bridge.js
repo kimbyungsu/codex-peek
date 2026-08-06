@@ -97,10 +97,10 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap) {
   } catch { scout = ""; }
   // 거버넌스 증분 1: 검증 경계(사용자 승인 수칙서) — 승인 지문 일치 시에만 주입(데이터 절=두 프로필 공통·한정 문구=core만).
   // 부재·미승인=주입 없음(현행 그대로)·손상/미승인 변경=주입 생략+stderr 1줄 경고(ask 시작 출력 — 위장 금지).
-  let envText = "", baseQual = "";
+  let envText = "", baseQual = "", v2Attached = false;
   try {
     const es9 = envelopeSliceFor(ws || configWs(), lang, profile, c);
-    envText = es9.envText; baseQual = es9.baseQual;
+    envText = es9.envText; baseQual = es9.baseQual; v2Attached = es9.v2Attached === true;
   } catch (e0) { if (e0 && e0.envelopeTransBusy) throw e0; /* 상호배제 실패=ask 정직 실패(경계 없는 프롬프트 생성 금지 — 재검증 blocker③). 그 외 경계 실패=주입만 생략(검증은 현행 규약으로 진행) */ }
   // 계약 규칙은 사용자가 '이렇게 검증하라'고 저장한 요구다. 길어서 뺀 채로 검증을 진행하면
   // 그 요구가 적용되지 않았는데 통과 도장이 찍힌다 — 검증 통과 위조 경로다(검증 blocker).
@@ -113,7 +113,8 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap) {
   }
   // [머리 다이어트 2026-08-06] 같은 머리에 [지적 서식 v2] 절이 실물로 실리면 기계 서식의 v1 블록 설명은
   // 중복이다(같은 규칙 2회 설명·~400자/ask) — 위임 1줄로 교체. 판정은 가정이 아니라 envText 내용 실물로.
-  const v2Attached = typeof envText === "string" && (envText.includes("[지적 서식 v2") || envText.includes("[Finding format v2"));
+  // 위임 판정=envelopeSliceFor가 v2 절을 실제로 붙인 지점의 구조적 표지(재검증 blocker: envText 문자열
+  // 검사는 수칙서 데이터의 표제 문자열로 오발동해 integrity 경로의 블록 서식을 비웠다 — 데이터로 산문 판정 금지).
   const baseline = verifierBaselineFor(lang, profile, v2Attached ? "delegated" : undefined); // 자유 문안+기계 서식(코드 고정 — 편집 개방과 무관하게 항상 동봉)
   const head = [baseline, baseQual, envText, inj, scout].filter(Boolean).join("\n\n");
   // 총량은 막지 않고 '보이게' 한다 — 통째로 잘라내면 승인 정책 같은 계약이 사라질 수 있다.
@@ -130,7 +131,7 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap) {
 // 축에는 사용하지 않는다(잠금 안 신선 재판독 — f-b6db1bbd 인터리빙 봉합). 함수로 분리한 이유: 테스트가
 // 낡은 스냅샷(구 해시)을 인자로 직접 주입해 '스냅샷을 썼다면 실패했을' 결정론 반례를 실행하기 위함(f-789aadc5).
 function envelopeSliceFor(wsIn, lang, profile, cSnapshot) {
-  const out9 = { envText: "", baseQual: "" };
+  const out9 = { envText: "", baseQual: "", v2Attached: false };
   const c = cSnapshot;
   {
     if (c && typeof envelopeInjectionFor === "function") {
@@ -157,7 +158,7 @@ function envelopeSliceFor(wsIn, lang, profile, cSnapshot) {
         out9.envText = evi.text;
         out9.baseQual = profile === "core" ? envelopeCoreQualifier(lang) : envelopeIntegrityQualifier(lang); // 증분 2(사용자 결정): 경계=프로필 공통 — 무결성=재소환 금지+경계 재심 관점([주의]로 제출)
         if (evi.warn === "truncated") console.error(en9 ? "[verification envelope: some items exceeded the caps (12/axis · 200 chars) and were truncated — the injected boundary omits the excess; trim the file and re-approve]" : "[검증 경계: 일부 항목이 상한(축 12·항목 200자) 초과로 절삭된 채 주입됨 — 초과분은 경계에서 빠짐. 파일을 줄여 재승인 권장]"); // 1차 blocker④: 절삭의 침묵 금지
-        if (profile === "core") out9.envText += "\n\n" + v2DirectiveFor(wsIn, lang); // 증분 2 §3.1: 경계 활성+core=v2 서식 요구+열린 지적 자동 동봉(하네스 직접). integrity=문구 준수 감사(기계화는 증분 3 검토 — 1차 [보완]② 지시·후처리 정합)
+        if (profile === "core") { out9.envText += "\n\n" + v2DirectiveFor(wsIn, lang); out9.v2Attached = true; } // v2Attached=구조적 표지(재검증 blocker: 수칙서 '데이터'가 표제 문자열을 담아도 오발동 금지 — 실제로 붙인 지점에서만 참). // 증분 2 §3.1: 경계 활성+core=v2 서식 요구+열린 지적 자동 동봉(하네스 직접). integrity=문구 준수 감사(기계화는 증분 3 검토 — 1차 [보완]② 지시·후처리 정합)
       }
       else if (evi.warn === "mismatch") console.error(en9 ? "[verification envelope changed without approval — skipped this ask; re-approve on the dashboard]" : "[검증 경계 미승인 변경 — 이번 검증에 주입 생략. 대시보드에서 재승인 필요]");
       else if (evi.warn === "corrupt") console.error(en9 ? "[verification envelope unreadable — skipped]" : "[검증 경계 판독 불가 — 주입 생략]");
