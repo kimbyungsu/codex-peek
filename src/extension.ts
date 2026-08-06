@@ -4469,6 +4469,9 @@ class Dashboard {
     .app{grid-template-columns:58px minmax(0,1fr)}
     .navgroup,.sb-brandrow b,.sb-label,#sbToggle{display:none}
     .sidebar .tabbtn{justify-content:center;padding:8px 6px}
+    /* 검증 [보완] 반영: modebar 최소폭 260px+레일 58px+패딩이 좁은 창(<약 354px)에서 수평 넘침 → 폭 해제 */
+    .topbar{padding:10px 12px}
+    .topbar .modebar{min-width:0;flex:1 1 100%}
   }
   .stat-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin:6px 0 14px}
   .stat-card{border:1px solid var(--vscode-panel-border);border-left:5px solid var(--accent,var(--vscode-charts-blue));border-radius:10px;padding:14px 16px;background:color-mix(in srgb,var(--accent,var(--vscode-charts-blue)) 7%,var(--vscode-editor-background))}
