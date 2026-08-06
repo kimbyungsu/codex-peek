@@ -28,9 +28,9 @@ Connect **Claude Code or a dedicated Codex session** (implementation) to **a sep
 
 ## Install from GitHub
 
-For the complete extension, bridge, hooks, and 3-track scouting scripts, download **[codex-peek-0.1.89-installer.zip](https://github.com/kimbyungsu/codex-peek/releases/download/v0.1.89/codex-peek-0.1.89-installer.zip)**, extract it, then run `install.cmd` on Windows or `sh install.sh` on macOS/Linux. Node.js 20+ is the only prerequisite; the bundle includes a prebuilt VSIX, so `npm install` is not required. Finish with **Developer: Reload Window** in VS Code.
+For the complete extension, bridge, hooks, and 3-track scouting scripts, download **[codex-peek-0.1.90-installer.zip](https://github.com/kimbyungsu/codex-peek/releases/download/v0.1.90/codex-peek-0.1.90-installer.zip)**, extract it, then run `install.cmd` on Windows or `sh install.sh` on macOS/Linux. Node.js 20+ is the only prerequisite; the bundle includes a prebuilt VSIX, so `npm install` is not required. Finish with **Developer: Reload Window** in VS Code.
 
-If `0.1.89` is already installed, the bundled installer backs up and overlays only the changed runtime files instead of asking VS Code to force-delete the live extension directory. For extension-only/2-track use, install **[codex-bridge-0.1.89.vsix](https://github.com/kimbyungsu/codex-peek/releases/download/v0.1.89/codex-bridge-0.1.89.vsix)** with **Extensions: Install from VSIX...**; existing `0.1.89` installations should use the full bundle for a safe same-version refresh. Checksums are published as `SHA256SUMS.txt` on the **[v0.1.89 release page](https://github.com/kimbyungsu/codex-peek/releases/tag/v0.1.89)**.
+If `0.1.90` is already installed, the bundled installer backs up and overlays only the changed runtime files instead of asking VS Code to force-delete the live extension directory. For extension-only/2-track use, install **[codex-bridge-0.1.90.vsix](https://github.com/kimbyungsu/codex-peek/releases/download/v0.1.90/codex-bridge-0.1.90.vsix)** with **Extensions: Install from VSIX...**; existing `0.1.90` installations should use the full bundle for a safe same-version refresh. Checksums are published as `SHA256SUMS.txt` on the **[v0.1.90 release page](https://github.com/kimbyungsu/codex-peek/releases/tag/v0.1.90)**.
 
 ## Getting started
 
