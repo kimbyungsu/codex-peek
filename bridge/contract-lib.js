@@ -385,7 +385,10 @@ function parseLockToken(raw) {
 }
 function withContractLockV10(lockPath, fn, maxTries) {
   const mine = JSON.stringify({ v: 1, pid: process.pid, rnd: Math.random().toString(36).slice(2, 10), ts: new Date().toISOString() });
-  const N = Number.isInteger(maxTries) && maxTries >= 1 ? maxTries : 40; // CLI=동기 짧은 재시도(기본 40×15ms) / 확장=1회 시도+비동기 재시도(호스트 블록 금지 — v10)
+  // 기본 재시도 창 40×15ms(0.6초)는 느린 공용 러너에서 부족했다 — 보유자가 콜드 시작·느린 디스크로 임계구역을
+  // 0.6초 넘게 쥐면 경쟁자가 lock-timeout으로 포기(CI 동시성 시험 반복 실패의 근본 원인, ubuntu·windows 각 2회 관측
+  // 2026-08-06~07). 200×15ms(3초)로 확대 — 여전히 유한(무한 대기 아님)이고 확장(1회 시도) 경로는 무변경.
+  const N = Number.isInteger(maxTries) && maxTries >= 1 ? maxTries : 200; // CLI=동기 재시도(기본 200×15ms) / 확장=1회 시도+비동기 재시도(호스트 블록 금지 — v10)
   let lastState = "alive";
   for (let i = 0; i < N; i++) {
     let locked = false;
