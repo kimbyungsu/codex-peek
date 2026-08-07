@@ -5754,7 +5754,10 @@ class Dashboard {
     set9("ovDecide", String(tot9));
     var nb9=$("ovNavBadge"); if(nb9){ nb9.textContent=String(tot9); nb9.style.display=tot9?"":"none"; }
     // 검증 배지: 숫자만 있으면 '미확인 개수'로 오독(사용자 지적 2026-08-07) — '회차 N/상한' 표기로.
-    var vb9=$("vNavBadge"); if(vb9){ if(d.live){ vb9.textContent=T("회차 ","rd ")+String(d.live.round||1)+(appVB?"/"+appVB:""); vb9.style.display=""; } else { vb9.style.display="none"; } }
+    // 상한은 편집용 문자열(appVB: ""=상속·"0"=명시 무제한)이 아니라 계약의 실효 숫자로 — C-C는
+    // codexVerifyBudget(부재=CL-C 상속·0=무제한 반영 완료), CL-C는 verifyBudget. 0(무제한)=분모 생략(blocker 반영).
+    var cap9 = d.contract ? Number(cc9 ? d.contract.codexVerifyBudget : d.contract.verifyBudget) : NaN;
+    var vb9=$("vNavBadge"); if(vb9){ if(d.live){ vb9.textContent=T("회차 ","rd ")+String(d.live.round||1)+((Number.isFinite(cap9)&&cap9>=1)?"/"+cap9:""); vb9.style.display=""; } else { vb9.style.display="none"; } }
     var listBox9=$("ovActionList"), empty9=$("ovActionEmpty");
     if(listBox9){ listBox9.replaceChildren();
       acts9.forEach(function(a9){
