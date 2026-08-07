@@ -5448,10 +5448,18 @@ class Dashboard {
     const x = ev.target.closest("[data-del]");
     if (x) { vscode.postMessage({type:"hideSession", id:x.getAttribute("data-del")}); return; }
   });
-  // 온보딩: '이동' 버튼=대상 스크롤+강조, 끄기=기억 dismiss, 다시 보기=복원
+  // [UI 개편 2차 보수] 교차 패널 이동 단일 경로 — 패널 재편 후 대상이 비활성 패널 안이면 scrollIntoView가
+  // 조용히 무효(display:none)라, 담는 패널을 먼저 활성화(기존 tabbtn 클릭=단일 전환 경로)한 뒤 스크롤한다.
+  function gotoEl(t){
+    if(!t) return;
+    var p9=t.closest(".tab-panel");
+    if(p9 && !p9.classList.contains("active")){ var tb9=document.querySelector('.tabbtn[data-tab="'+p9.id.replace(/^tab-/,"")+'"]'); if(tb9) tb9.click(); }
+    t.scrollIntoView({behavior:"smooth",block:"center"});
+  }
+  // 온보딩: '이동' 버튼=대상 패널 활성화+스크롤+강조, 끄기=기억 dismiss, 다시 보기=복원
   $("onboard").addEventListener("click", (ev) => {
     const g = ev.target.closest("[data-go]");
-    if (g) { const t=$(g.getAttribute("data-go")); if(t){ clearTimeout(pendingScroll); t.scrollIntoView({behavior:"smooth",block:"center"}); t.classList.remove("glow"); void t.offsetWidth; t.classList.add("glow"); } return; }
+    if (g) { const t=$(g.getAttribute("data-go")); if(t){ clearTimeout(pendingScroll); gotoEl(t); t.classList.remove("glow"); void t.offsetWidth; t.classList.add("glow"); } return; }
     const c = ev.target.closest("[data-cmd]");
     if (c) { vscode.postMessage({type:c.getAttribute("data-cmd")}); return; }
     if (ev.target.closest("#obClose")) { vscode.postMessage({type:"dismissOnboard"}); return; }
@@ -5780,9 +5788,9 @@ class Dashboard {
     tg.textContent = r ? "▶" : ("◀ " + T("접기","Collapse"));
   }); })();
   // [UI 개편 1차] 상단바 '작업 깊이' 미러 클릭 — 즉시 토글이 아니라 실제 설정 위치(검증 카드 segScout)로 이동
+  // (2차 보수: 교차 패널 이동은 gotoEl 단일 경로 — 패널 활성화 후 스크롤)
   (function(){ var tb=$("tbTrack"); if(!tb) return; tb.addEventListener("click", function(){
-    var mb=document.querySelector('.tabbtn[data-tab="setup"]'); if(mb) mb.click();
-    var sg=$("segScout"); if(sg){ sg.scrollIntoView({behavior:"smooth", block:"center"}); flashNode(sg); }
+    var sg=$("segScout"); if(sg){ gotoEl(sg); flashNode(sg); }
   }); })();
   // 고급설정: DeepSeek 키 저장/삭제 — 원문은 저장 메시지로만 나가고, 표시는 state의 마스킹만.
   $("dsSave").addEventListener("click", ()=>{ const v=$("dsKey").value.trim(); if(!v){ return; } pendingSave={target:"deepseek", msg:T("키 저장됨 ✓","Key saved ✓")}; vscode.postMessage({type:"saveDeepseekKey", key:v}); $("dsKey").value=""; });

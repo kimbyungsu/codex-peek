@@ -53,7 +53,7 @@ console.log("[3] 작업 깊이 미러 — 표시 전용(쓰기 경로 없음)");
   const blk = b > 0 && e > b ? src.slice(b, e) : "";
   ok(blk.length > 0, "미러 클릭 핸들러 존재");
   ok(!blk.includes("postMessage"), "클릭이 저장 메시지를 보내지 않는다(초안 보호 우회 금지)");
-  ok(blk.includes('data-tab="setup"') && blk.includes('$("segScout")'), "클릭=검증 설정 탭의 실제 설정 위치로 이동");
+  ok(blk.includes('$("segScout")') && blk.includes("gotoEl("), "클릭=실제 설정 위치로 이동(gotoEl 단일 경로 — 패널 활성화+스크롤)");
   ok(/appSM===null\?"none":""/.test(src) && src.includes('x.getAttribute("data-tbsm")===(son?"on":"off")'), "renderApplied가 적용값만 반영(미러 갱신)");
 }
 
@@ -71,6 +71,18 @@ console.log("[3b] 개요 패널 — 기존 상태값 재조립·안전 표시 �
   ok(blk.includes("d.usedMemory"), "'실린 기억' 카드가 상태값(usedMemory)만 읽는다");
   ok(src.includes("safe(function(){ renderOverview(d); });"), "data 핸들러에 safe 결속(구획 실패 격리)");
   ok(src.includes("usedMemory: (() => {") && src.includes('"stats", "attach.jsonl"'), "computeState가 브릿지 attach 장부를 읽어 usedMemory 공급");
+}
+
+console.log("[3c] 교차 패널 이동 — 비활성 패널 안 대상도 도달(실사용 결함 2026-08-07 봉합)");
+{
+  const b = src.indexOf("function gotoEl(t){");
+  const e = src.indexOf("\n  }", b);
+  const blk = b > 0 && e > b ? src.slice(b, e) : "";
+  ok(blk.length > 0, "gotoEl 단일 경로 존재");
+  ok(/closest\("\.tab-panel"\)[\s\S]{0,200}classList\.contains\("active"\)[\s\S]{0,300}scrollIntoView/.test(blk), "패널 활성화가 스크롤보다 먼저(비활성 패널=스크롤 무효 원인 제거)");
+  ok(/replace\(\/\^tab-\/,""\)/.test(blk), "패널 id에서 탭 이름 유도 — 기존 tabbtn 클릭(단일 전환 경로) 재사용");
+  ok(/const g = ev\.target\.closest\("\[data-go\]"\);[\s\S]{0,200}gotoEl\(t\)/.test(src), "온보딩 '이동' 버튼이 gotoEl 경유(검증 꺼짐→설정 이동 실사용 결함)");
+  ok(/var sg=\$\("segScout"\); if\(sg\)\{ gotoEl\(sg\);/.test(src), "상단 '작업 깊이' 미러도 gotoEl 경유(중복 전환 코드 소멸)");
 }
 
 console.log("[4] 래퍼 짝 — 골격이 본문을 삼키지 않는다");
