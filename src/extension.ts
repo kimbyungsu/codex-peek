@@ -160,7 +160,7 @@ interface BridgeState {
   baseReadOk: boolean; // 기본 원칙(+3트랙 정찰) 오버라이드 파일 판독 신뢰(부재=정상) — false면 웹뷰가 canonical fill·잠금 해제 보류(7차 지적 2)
   scoutPrompt: { baseline: string; overridden: boolean; directive: string; notes: string[]; version: string } | null; // §6-11 — 3트랙에서만(null=2트랙/판독 불가)
   // P-12 v2.4: 보관함(범위 밖 제안+판단 대기 [주의]) 읽기 전용 가시화 — 처분은 CLI(backlog done|dismiss). null=무폴더/구 런타임.
-  backlog: { caution: number; backlog: number; corrupt: number; readError: boolean; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } | null; // readError: 판독 실패(ENOENT 외) — '비어 있음' 위장 금지(2026-07-18 확인 판정 [보완] 소화)
+  backlog: { caution: number; cautionDue: number; backlog: number; corrupt: number; readError: boolean; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } | null; // readError: 판독 실패(ENOENT 외) — '비어 있음' 위장 금지(2026-07-18 확인 판정 [보완] 소화)
   challenges: { open: number; cleared: number; kept: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number; cleared: boolean; matchedAll: boolean; warnOpen: boolean }> } | null; // 재확인(증분 4b) — cleared=실제 ack 조건(전 파일 일치)·null=구 설치본/부재
   usedMemory: { ts: string; items: Array<{ path: string; note: string }>; couplings: number; omitted: boolean } | null; // [UI 개편 2차] 직전 검증에 실린 지도 동봉 스냅샷(브릿지 stats/attach.jsonl 최신 1건). null=기록 없음/구 브릿지
   baseAvailable: boolean;
@@ -1533,7 +1533,7 @@ function computeBaseState(ws: string | null, contract: Contract, lang: Lang): { 
 // P-12 v2.4: 보관함 카드 뷰 계산(순수 함수 — 테스트가 컴파일 산출물에서 추출 실행·의존성 없음).
 // ★나이 기준=firstSeen★(구현검증 1차 blocker: lastSeen 기준이면 재발견이 나이를 되감아 40일 묵은 항목이
 // D+1로 표시되며 30일 검토 기한을 회피) — firstSeen 부재·무효 시에만 lastSeen fallback.
-function computeBacklogView(rawItems: any[], now: number): { caution: number; backlog: number; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } {
+function computeBacklogView(rawItems: any[], now: number): { caution: number; cautionDue: number; backlog: number; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } {
   const items = (rawItems || []).filter((i: any) => i && i.status === "open").map((i: any) => {
     const first = Date.parse(String(i.firstSeen || ""));
     const seen = Number.isFinite(first) ? first : Date.parse(String(i.lastSeen || ""));
@@ -1541,7 +1541,8 @@ function computeBacklogView(rawItems: any[], now: number): { caution: number; ba
     const seenCount = Number(i.seenCount) || 1;
     return { id: String(i.id), tag: i.tag === "주의" ? "주의" : "백로그", title: String(i.title || ""), file: String(i.file || ""), seenCount, ageDays, due: ageDays >= 30 || seenCount >= 3 };
   }).sort((a, b) => (a.due === b.due ? b.ageDays - a.ageDays : (a.due ? -1 : 1)));
-  return { caution: items.filter((x) => x.tag === "주의").length, backlog: items.filter((x) => x.tag === "백로그").length, items: items.slice(0, 30) };
+  // cautionDue: 표시 상한(30) 적용 전 전체 기준 — 개요의 '지금 정할 것' 합산은 잘린 목록이 아니라 전량으로 센다.
+  return { caution: items.filter((x) => x.tag === "주의").length, cautionDue: items.filter((x) => x.tag === "주의" && x.due).length, backlog: items.filter((x) => x.tag === "백로그").length, items: items.slice(0, 30) };
 }
 
 // 재확인(증분 4b): 근거 재확인 장부 카드 뷰(순수 함수 — 테스트가 컴파일 산출물에서 추출 실행·의존성 없음).
@@ -4481,6 +4482,7 @@ class Dashboard {
   .app.rail .nav-badge{display:none !important}
   .ov-sm{font-size:15px !important;line-height:1.35 !important}
   .ovact{margin:4px 0}
+  .ovact.relaxed button{color:var(--vscode-descriptionForeground);font-size:11px}
   .ovline{font-size:12px;padding:3px 0;border-bottom:1px dashed var(--vscode-panel-border)}
   .ovline:last-child{border-bottom:0}
   .app.rail .sidebar .tabbtn{justify-content:center;padding:8px 6px}
@@ -4780,8 +4782,8 @@ class Dashboard {
 <aside class="sidebar">
   <div class="sb-brandrow"><span class="brand"></span><b>Codex Bridge</b></div>
   <p class="navgroup">${t("운영", "Operate")}</p>
-  <button type="button" class="tabbtn active" data-tab="overview"><span class="sb-ico">🏠</span><span class="sb-label">${t("개요", "Overview")}</span><span class="nav-badge" id="ovNavBadge" style="display:none"></span></button>
-  <button type="button" class="tabbtn" data-tab="verify"><span class="sb-ico">🔍</span><span class="sb-label">${t("실시간 검증", "Live Verify")}</span><span class="nav-badge" id="vNavBadge" style="display:none"></span></button>
+  <button type="button" class="tabbtn active" data-tab="overview"><span class="sb-ico">🏠</span><span class="sb-label">${t("개요", "Overview")}</span><span class="nav-badge" id="ovNavBadge" style="display:none" title="${t("지금 정할 것 합계 — 기한 없는 보관함 항목은 제외", "decisions needed now — parked items without a review due are excluded")}"></span></button>
+  <button type="button" class="tabbtn" data-tab="verify"><span class="sb-ico">🔍</span><span class="sb-label">${t("실시간 검증", "Live Verify")}</span><span class="nav-badge" id="vNavBadge" style="display:none" title="${t("진행 중 검증의 왕복 회차/상한 — 근거 재확인(인용 되묻기) 왕복은 세지 않아요", "current verification round/cap — evidence-recheck exchanges are not counted")}"></span></button>
   <button type="button" class="tabbtn" data-tab="setup"><span class="sb-ico">🎛️</span><span class="sb-label">${t("검증 설정", "Verify Setup")}</span></button>
   <button type="button" class="tabbtn" data-tab="sessions"><span class="sb-ico">🔗</span><span class="sb-label">${t("세션·연결", "Sessions")}</span></button>
   <p class="navgroup">${t("3트랙", "3-track")}</p>
@@ -4826,7 +4828,7 @@ class Dashboard {
     <div class="stat-card s-blue"><div class="stat-num ov-sm" id="ovMode">–</div><div class="stat-lbl">${t("현재 운용", "current mode")}</div></div>
     <div class="stat-card s-green"><div class="stat-num ov-sm" id="ovVerify">–</div><div class="stat-lbl">${t("검증 상태", "verification")}</div></div>
     <div class="stat-card s-purple"><div class="stat-num ov-sm" id="ovMap">–</div><div class="stat-lbl">${t("지도 신선도 (3트랙)", "map freshness (3-track)")}</div></div>
-    <div class="stat-card s-orange"><div class="stat-num" id="ovDecide">–</div><div class="stat-lbl">${t("사용자 결정 필요", "needs your decision")}</div></div>
+    <div class="stat-card s-orange"><div class="stat-num" id="ovDecide">–</div><div class="stat-lbl">${t("지금 정할 것 (기한 없는 보관함 제외)", "decide now (undue parked excluded)")}</div></div>
   </div>
   <h2 class="sec accent-orange">${t("지금 필요한 행동", "What needs you now")} <span class="sub2">${t("사용자 판단이 필요한 것만 — 비어 있으면 하네스가 알아서 진행 중", "only items that need your judgment — empty means the harness is handling it")}</span></h2>
   <div class="card">
@@ -5740,15 +5742,19 @@ class Dashboard {
     var integ9=integAll9.length-ev9;
     if(integ9) acts9.push({n:integ9, tab:null, label:T("미확인 경보 — 위 경보 배너에서 내용 확인 후 '확인'","unacknowledged alerts — review & ack in the banner above")});
     if(ev9) acts9.push({n:ev9, tab:"verify", label:T("근거 재확인 경고 열림 — 배너 '확인' 또는 자동 해소 대기","evidence-recheck warnings open — ack in the banner or await auto-clear")});
-    var bl9=d.backlog&&d.backlog.caution?d.backlog.caution:0;
-    if(bl9) acts9.push({n:bl9, tab:"verify", label:T("보관함 판단 대기 항목","parked items awaiting your judgment")});
+    // 보관함은 '갚을 의무 없음' 주차장 — 전량을 '지금 정할 것'으로 세면 급한 일이 묻힌다(사용자 결정 2026-08-07).
+    // 검토 기한(due=30일+ 경과 또는 3회+ 재발견) 항목만 긴급 합산에 넣고, 나머지는 합산 밖 '여유' 줄로만 안내.
+    var blDue9=d.backlog&&d.backlog.cautionDue?d.backlog.cautionDue:0;
+    var blRest9=Math.max(0,(d.backlog&&d.backlog.caution?d.backlog.caution:0)-blDue9);
+    if(blDue9) acts9.push({n:blDue9, tab:"verify", label:T("보관함 검토 기한 항목(오래됨·자주 재발견)","parked items due for review (old or often rediscovered)")});
     var ic9=d.mapCurrent&&d.mapCurrent.intent&&Number.isFinite(d.mapCurrent.intent.choicePending)?d.mapCurrent.intent.choicePending:0;
     if(ic9) acts9.push({n:ic9, tab:"setup", label:T("MAP 대기 선택","MAP choices waiting")});
     if(d.envelope&&d.envelope.btn) acts9.push({n:1, tab:"setup", label:T("검증 경계(수칙서) 승인 대기","verify-envelope approval pending")});
     var tot9=0; acts9.forEach(function(a9){ tot9+=a9.n; });
     set9("ovDecide", String(tot9));
     var nb9=$("ovNavBadge"); if(nb9){ nb9.textContent=String(tot9); nb9.style.display=tot9?"":"none"; }
-    var vb9=$("vNavBadge"); if(vb9){ if(d.live){ vb9.textContent=String(d.live.round||1); vb9.style.display=""; } else { vb9.style.display="none"; } }
+    // 검증 배지: 숫자만 있으면 '미확인 개수'로 오독(사용자 지적 2026-08-07) — '회차 N/상한' 표기로.
+    var vb9=$("vNavBadge"); if(vb9){ if(d.live){ vb9.textContent=T("회차 ","rd ")+String(d.live.round||1)+(appVB?"/"+appVB:""); vb9.style.display=""; } else { vb9.style.display="none"; } }
     var listBox9=$("ovActionList"), empty9=$("ovActionEmpty");
     if(listBox9){ listBox9.replaceChildren();
       acts9.forEach(function(a9){
@@ -5757,6 +5763,11 @@ class Dashboard {
         if(a9.tab) btn9.addEventListener("click", function(){ var b9=document.querySelector('.tabbtn[data-tab="'+a9.tab+'"]'); if(b9) b9.click(); });
         row9.appendChild(btn9); listBox9.appendChild(row9);
       });
+      // 기한 없는 보관함 잔여 — 합산 제외 '여유' 줄(눌러서 보관함으로 이동만). 급한 일과 시각적으로 구분.
+      if(blRest9){ var rx9=el("div","ovact relaxed"); var rb9=document.createElement("button"); rb9.type="button"; rb9.className="secondary";
+        rb9.textContent=T("여유 · ","later · ")+blRest9+T("건 — 보관함 판단 대기(기한 없음 · 위 합산 제외 · 채택할 때만 작업) →"," parked — no deadline · not counted above · work only when adopted →");
+        rb9.addEventListener("click", function(){ var b9=document.querySelector('.tabbtn[data-tab="verify"]'); if(b9) b9.click(); });
+        rx9.appendChild(rb9); listBox9.appendChild(rx9); }
     }
     if(empty9) empty9.style.display=acts9.length?"none":"";
     var rec9=$("ovRecent");

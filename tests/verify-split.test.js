@@ -231,7 +231,7 @@ ok(/var same = cardNoticeKind === \(kind \|\| "warn"\) && n\.textContent === msg
 ok((ext.match(/reportCardDirty\(/g) || []).length >= 10, "2차2 — 웹뷰가 전이 시 결속 전송(입력·세그·저장 시작/응답/만료·되돌리기 2종·base·push 심박 배선)");
 // [2차 지적 3] 기본 원칙 되돌리기 + 안내 가시화
 ok(/id="revertB"/.test(ext) && /\$\("revertB"\)\.addEventListener/.test(ext) && /baseDirty = \{\};/.test(ext), "2차3 — 기본 원칙 되돌리기 신설('저장 또는 되돌리기' 안내가 거짓이 되지 않게)");
-ok(/n\.scrollIntoView\(\{ block: "center", behavior: "smooth" \}\)/.test(ext), "2차3 — 차단 안내로 스크롤(상단 버튼 옆 비가시 문제)");
+ok(/cardNoticeKind === "warn"\) \{ try \{ gotoEl\(n\); \}/.test(ext), "2차3 — 차단 안내로 이동(gotoEl 경유 — 패널 재편 후 다른 패널에서도 안내 가시)");
 ok(/\$\("flowImplRules"\)\.innerHTML=ccCard\?/.test(ext) && /\$\("flowImplMono"\)\.textContent=ccCard\?/.test(ext) && /\$\("baseTransmitTo"\)\.textContent=ccCard\?/.test(ext), "지적4 — 흐름도·단계원칙 라벨도 카드 슬롯(ccCard) 권위로 통일");
 ok(/const vOn = !!\(vmEffOb && vmEffOb!=="off"\);/.test(ext) && !/holdC \? !!\(appVM && appVM!=="off"\)/.test(ext), "지적4 — 온보딩은 런타임 단일 권위(옛 appVM 혼합 제거)");
 
