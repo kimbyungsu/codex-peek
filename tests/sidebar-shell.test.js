@@ -83,6 +83,7 @@ console.log("[3c] 교차 패널 이동 — 비활성 패널 안 대상도 도달
   ok(/replace\(\/\^tab-\/,""\)/.test(blk), "패널 id에서 탭 이름 유도 — 기존 tabbtn 클릭(단일 전환 경로) 재사용");
   ok(/const g = ev\.target\.closest\("\[data-go\]"\);[\s\S]{0,200}gotoEl\(t\)/.test(src), "온보딩 '이동' 버튼이 gotoEl 경유(검증 꺼짐→설정 이동 실사용 결함)");
   ok(/var sg=\$\("segScout"\); if\(sg\)\{ gotoEl\(sg\);/.test(src), "상단 '작업 깊이' 미러도 gotoEl 경유(중복 전환 코드 소멸)");
+  ok(/cardNoticeKind === "warn"\) \{ try \{ gotoEl\(n\); \}/.test(src), "전환 차단 안내(cardNotice)도 gotoEl 경유 — 다른 패널에서 차단돼도 안내가 보인다(검증 [보완])");
 }
 
 console.log("[4] 래퍼 짝 — 골격이 본문을 삼키지 않는다");

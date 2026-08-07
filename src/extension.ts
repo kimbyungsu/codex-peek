@@ -5540,7 +5540,7 @@ class Dashboard {
     var same = cardNoticeKind === (kind || "warn") && n.textContent === msg && n.style.display !== "none";
     n.style.display=""; n.textContent=msg; cardNoticeKind = kind || "warn";
     if (same) return;
-    if (cardNoticeKind === "warn") { try { n.scrollIntoView({ block: "center", behavior: "smooth" }); } catch(e){ /* 무해 */ } } // 상단 버튼(언어·모드) 옆에서 안 보이는 문제 — 안내로 스크롤(2차 지적 3)
+    if (cardNoticeKind === "warn") { try { gotoEl(n); } catch(e){ /* 무해 */ } } // 안내로 이동(2차 지적 3) — 다른 패널에서 전환 차단 시에도 숨은 설정 패널을 먼저 활성화(교차 패널 이동 [보완] 완결)
     flashNode(n); }
   function hideCardNotice(){ var n=$("cardHold"); if(n) n.style.display="none"; cardNoticeKind = null; }
   // 저장 대기 중 카드 입력 잠금(구현검증 1차 지적 1): 저장은 클릭 시점 DOM 스냅샷을 보내므로, 응답 전 재편집을
