@@ -46,6 +46,10 @@ console.log("[3] 적용 계층 — 변수 3개+클래스만·colorful=무테마�
   ok(css.includes("--vscode-charts-blue:var(--tAccA)") && css.includes("--vscode-charts-green:var(--tAccB)"), "액센트도 두 색 파생으로 교차(A/B 번갈아)");
   ok(!css.includes("--vscode-charts-red") && !css.includes("errorForeground") && !css.includes("inputValidation"), "경고·오류 빨강 계열은 재정의 안 함(위험 신호 보존)");
   ok(src.includes(".app.themed .sb-ico") && src.includes("grayscale(1)"), "컬러풀 외 테마=좌측 이모지 무채색(시안성 — 사용자 지적)");
+  // 검증 반영분(blocker+보완): 상단바=색A 직접 결속·액센트 25% 혼합(AA 대비)·라이브 스트립 고정색 수렴
+  ok(src.includes(".app.themed .topbar{background:var(--tA)}"), "상단바=색A 직접 결속(editorWidget 혼합색 대체 — blocker)");
+  ok(src.includes("var(--tA) 25%,var(--tFg)") && src.includes("var(--tB) 25%,var(--tFg)"), "액센트=원색 25%만 혼합(버튼 글자 AA 대비 — 보완)");
+  ok(/\.app\.themed \.lsarrow\.tocodex[\s\S]{0,200}var\(--tAccB\)/.test(src) && !/\.app\.themed[^}]*#3a9/.test(src), "라이브 스트립 고정 상태색도 두 색 파생 수렴(빨강만 원색 — 보완)");
 }
 
 console.log("[4] 선택 카드 — 12개 스와치·즉시 적용+저장");

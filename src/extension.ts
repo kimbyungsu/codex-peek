@@ -4524,8 +4524,9 @@ class Dashboard {
     --tMuted:color-mix(in srgb,var(--tFg) 64%,var(--tB));
     --tWidget:color-mix(in srgb,var(--tA) 55%,var(--tB));
     --tField:color-mix(in srgb,var(--tB) 72%,var(--tA));
-    --tAccA:color-mix(in srgb,var(--tA) 40%,var(--tFg));
-    --tAccB:color-mix(in srgb,var(--tB) 40%,var(--tFg));
+    /* 액센트는 fg 쪽으로 깊게(25%만 원색) — 40% 혼합은 버튼 글자(tB) 대비가 2.7~3.9:1로 AA 미달(검증 실측 [보완]) */
+    --tAccA:color-mix(in srgb,var(--tA) 25%,var(--tFg));
+    --tAccB:color-mix(in srgb,var(--tB) 25%,var(--tFg));
     --vscode-foreground:var(--tFg);
     --vscode-editor-background:var(--tB);
     --vscode-sideBar-background:var(--tA);
@@ -4554,9 +4555,15 @@ class Dashboard {
     --vscode-inputOption-activeBackground:var(--tWidget);
     color:var(--tFg);background:var(--tB);
   }
+  /* '사이드바·상단바=색A' 계약 명시 — 상단바 기본 배경(editorWidget=A/B 혼합)을 A로 직접 결속(검증 blocker) */
+  .app.themed .topbar{background:var(--tA)}
   /* 고정 hex 액센트(teal·rose)도 테마 두 색으로 수렴 — colorful에서만 원색 */
   .app.themed h2.sec.accent-teal{--accent:var(--tAccB)}
   .app.themed h2.sec.accent-rose,.app.themed summary.sec{--accent:var(--tAccA)}
+  /* 라이브 스트립의 고정 상태색(#3a9·#a73·#58f)도 두 색 파생으로 수렴 — 빨강(incomplete)만 원색 유지 */
+  .app.themed .lsarrow.tocodex,.app.themed .lschip.codex-gen,.app.themed .lschip.codex-req,.app.themed .lschip.done{color:var(--tAccB)}
+  .app.themed .lsarrow.toclaude,.app.themed .lschip.rejudge{color:var(--tAccA)}
+  .app.themed .lschip.claude{color:var(--tAccA)}
   /* 이모지 시안성(사용자 지적): 컬러풀 외 테마에선 좌측 아이콘을 무채색·차분한 톤으로 */
   .app.themed .sb-ico,.app.themed .tabbtn .sb-ico{filter:grayscale(1);opacity:.72}
   .app.themed .tabbtn.active{color:var(--tB);background:var(--tAccA);box-shadow:none}
