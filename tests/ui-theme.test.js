@@ -51,24 +51,33 @@ console.log("[3] 적용 계층 — 변수 3개+클래스만·colorful=무테마�
   ok(/\.app\.themed \.langbtn\.on\{color:var\(--tB\);background:var\(--tAccB\)\}/.test(src), "언어 세그=액센트B 채움+본문색 글자(고정 흰 글자 대비 붕괴 방지)");
   // 검증 반영분(blocker+보완): 상단바=색A 직접 결속·액센트 25% 혼합(AA 대비)·라이브 스트립 고정색 수렴
   ok(src.includes(".app.themed .topbar{background:var(--tA)}"), "상단바=색A 직접 결속(editorWidget 혼합색 대체 — blocker)");
-  // 대비는 문자열 존재가 아니라 실측 계산으로 잠근다(검증 blocker: '25% 존재'만 검사해 미달을 통과시켰음)
+  // 대비는 문자열 존재가 아니라 실측 계산으로 잠근다(검증 blocker 2연: '비율 존재' 검사는 미달을 통과시켰고,
+  // tAccA 비율을 tAccB·tMuted에 가정하면 독립 퇴행을 놓친다 — 변수마다 소스에서 따로 추출).
   {
     const tb = src.indexOf("const UI_THEMES:"); const te = src.indexOf("];", tb);
     const defs = [...src.slice(tb, te).matchAll(/id: "([a-z-]+)".*?a: "(#[0-9a-f]{6})", b: "(#[0-9a-f]{6})", fg: "(#[0-9a-f]{6})"/g)];
-    const mixM = src.match(/--tAccA:color-mix\(in srgb,var\(--tA\) (\d+)%,var\(--tFg\)\)/);
-    ok(!!mixM && defs.length === 11, "혼합비·테마 정의 추출(colorful 제외 11종)");
-    const m = Number(mixM ? mixM[1] : 0);
+    const mA = src.match(/--tAccA:color-mix\(in srgb,var\(--tA\) (\d+)%,var\(--tFg\)\)/);
+    const mB = src.match(/--tAccB:color-mix\(in srgb,var\(--tB\) (\d+)%,var\(--tFg\)\)/);
+    const mMu = src.match(/--tMuted:color-mix\(in srgb,var\(--tFg\) (\d+)%,var\(--tB\)\)/);
+    const mWg = src.match(/--tWidget:color-mix\(in srgb,var\(--tA\) (\d+)%,var\(--tB\)\)/);
+    const mBan = src.match(/\.app\.themed \.integrity\{background:color-mix\(in srgb,#d44 (\d+)%,var\(--tB\)\)/);
+    ok(!!mA && !!mB && !!mMu && !!mWg && !!mBan && defs.length === 11, "변수별 혼합비 독립 추출(가정 금지)+테마 11종");
     const h2c = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
     const mixc = (c1, c2, p) => c1.map((v, i) => Math.round(v * p / 100 + c2[i] * (100 - p) / 100));
     const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; const [r, g, b] = c.map(f); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
     const ctr = (c1, c2) => { const a = lum(c1), b = lum(c2); return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05); };
-    let worst = Infinity, worstName = "";
+    const RED = h2c("#dd4444");
+    let worstAcc = Infinity, worstAccName = "", worstMu = Infinity, worstMuName = "";
     for (const d of defs) {
       const A = h2c(d[2]), B = h2c(d[3]), F = h2c(d[4]);
-      const accA = mixc(A, F, m), accB = mixc(B, F, m);
-      for (const v of [ctr(accA, B), ctr(accB, B), ctr(accA, A), ctr(accB, A)]) if (v < worst) { worst = v; worstName = d[1]; }
+      const accA = mixc(A, F, Number(mA[1])), accB = mixc(B, F, Number(mB[1]));
+      const muted = mixc(F, B, Number(mMu[1]));
+      const widget = mixc(A, B, Number(mWg[1])), banner = mixc(RED, B, Number(mBan[1]));
+      for (const v of [ctr(accA, B), ctr(accB, B), ctr(accA, A), ctr(accB, A)]) if (v < worstAcc) { worstAcc = v; worstAccName = d[1]; }
+      for (const s of [B, A, widget, banner]) { const v = ctr(muted, s); if (v < worstMu) { worstMu = v; worstMuName = d[1]; } }
     }
-    ok(worst >= 4.5, `전 테마 액센트 대비 ≥4.5:1 실측(최악 ${worstName} ${worst.toFixed(2)}:1 — 두 표면 tA·tB 모두)`);
+    ok(worstAcc >= 4.5, `전 테마 액센트 대비 ≥4.5:1 실측(최악 ${worstAccName} ${worstAcc.toFixed(2)}:1 — tA·tB 두 표면)`);
+    ok(worstMu >= 4.5, `전 테마 보조 글자 대비 ≥4.5:1 실측(최악 ${worstMuName} ${worstMu.toFixed(2)}:1 — 본문·사이드바·위젯·경보 배너 4표면)`);
   }
   ok(/\.app\.themed \.lsarrow\.tocodex[\s\S]{0,200}var\(--tAccB\)/.test(src) && !/\.app\.themed[^}]*#3a9/.test(src), "라이브 스트립 고정 상태색도 두 색 파생 수렴(빨강만 원색 — 보완)");
 }

@@ -4521,7 +4521,8 @@ class Dashboard {
      어느 테마에서도 원색 유지(위험 신호를 톤에 묻지 않음). */
   .app.themed{
     --tLine:color-mix(in srgb,var(--tFg) 16%,transparent);
-    --tMuted:color-mix(in srgb,var(--tFg) 64%,var(--tB));
+    /* 보조 글자: 64%는 파스텔 배너·연한 표면에서 2.9~3.4:1(blocker 실측) — 86%=4표면(본문·사이드바·위젯·경보 배너) 최악 4.73:1 */
+    --tMuted:color-mix(in srgb,var(--tFg) 86%,var(--tB));
     --tWidget:color-mix(in srgb,var(--tA) 55%,var(--tB));
     --tField:color-mix(in srgb,var(--tB) 72%,var(--tA));
     /* 액센트는 fg 쪽으로 깊게(12%만 원색) — 25%도 파스텔 6종이 4.5:1 미달(검증 재실측 blocker).
