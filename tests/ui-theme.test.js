@@ -45,7 +45,10 @@ console.log("[3] 적용 계층 — 변수 3개+클래스만·colorful=무테마�
   const css = src.slice(cssB, cssE);
   ok(css.includes("--vscode-charts-blue:var(--tAccA)") && css.includes("--vscode-charts-green:var(--tAccB)"), "액센트도 두 색 파생으로 교차(A/B 번갈아)");
   ok(!css.includes("--vscode-charts-red") && !css.includes("errorForeground") && !css.includes("inputValidation"), "경고·오류 빨강 계열은 재정의 안 함(위험 신호 보존)");
-  ok(src.includes(".app.themed .sb-ico") && src.includes("grayscale(1)"), "컬러풀 외 테마=좌측 이모지 무채색(시안성 — 사용자 지적)");
+  ok(!src.includes("grayscale(1)"), "이모지 원색 유지(무채색 철회 — 실사용 피드백 2026-08-08)");
+  ok(/\.app\.themed \.integrity\{background:color-mix\(in srgb,#d44 9%,var\(--tB\)\)/.test(src), "경보 배너=테마 밝은 면+빨강 테두리(다크 변수 배경의 글자 실종 봉합 — 실보고)");
+  ok(/\.app\.themed button\.secondary\{background:transparent;[^}]*color:var\(--tAccA\)/.test(src), "보조 버튼=글자색 액센트(테두리만 바꾸는 어색함 제거 — 실보고)");
+  ok(/\.app\.themed \.langbtn\.on\{color:var\(--tB\);background:var\(--tAccB\)\}/.test(src), "언어 세그=액센트B 채움+본문색 글자(고정 흰 글자 대비 붕괴 방지)");
   // 검증 반영분(blocker+보완): 상단바=색A 직접 결속·액센트 25% 혼합(AA 대비)·라이브 스트립 고정색 수렴
   ok(src.includes(".app.themed .topbar{background:var(--tA)}"), "상단바=색A 직접 결속(editorWidget 혼합색 대체 — blocker)");
   // 대비는 문자열 존재가 아니라 실측 계산으로 잠근다(검증 blocker: '25% 존재'만 검사해 미달을 통과시켰음)

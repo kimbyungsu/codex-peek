@@ -4565,10 +4565,17 @@ class Dashboard {
   .app.themed .lsarrow.tocodex,.app.themed .lschip.codex-gen,.app.themed .lschip.codex-req,.app.themed .lschip.done{color:var(--tAccB)}
   .app.themed .lsarrow.toclaude,.app.themed .lschip.rejudge{color:var(--tAccA)}
   .app.themed .lschip.claude{color:var(--tAccA)}
-  /* 이모지 시안성(사용자 지적): 컬러풀 외 테마에선 좌측 아이콘을 무채색·차분한 톤으로 */
-  .app.themed .sb-ico,.app.themed .tabbtn .sb-ico{filter:grayscale(1);opacity:.72}
+  /* 이모지: 원색 유지(무채색은 흐릿하다는 실사용 피드백으로 철회) — 가독성은 활성 알약·배경 대비가 담당 */
   .app.themed .tabbtn.active{color:var(--tB);background:var(--tAccA);box-shadow:none}
-  .app.themed .tabbtn.active .sb-ico{opacity:1}
+  /* 경보 배너: 빨강 배경 변수는 VS Code 다크 테마 값이라 파스텔 위에서 '어두운 상자에 어두운 글자'가 됨(실보고)
+     — 테마 본문색에 빨강을 살짝 섞은 밝은 면 + 빨강 테두리로 재구성(위험 신호는 테두리·제목이 유지) */
+  .app.themed .integrity{background:color-mix(in srgb,#d44 9%,var(--tB));border-color:#d44;border-left-color:#d44}
+  /* 버튼 톤(실보고): 보조 버튼('고급설정 열기'·'다시 점검' 등)은 상자 테두리가 아니라 글자색이 액센트여야 자연스럽다 */
+  .app.themed button.secondary{background:transparent;border:1px solid var(--tLine);color:var(--tAccA);font-weight:600}
+  .app.themed button.secondary:hover{background:var(--tWidget)}
+  /* 언어 세그: 보라 고정칠+흰 글자 → 액센트B 채움+본문색 글자(다크 테마에서 흰 글자 대비 붕괴 방지) */
+  .app.themed .langbtn{color:var(--tMuted)}
+  .app.themed .langbtn.on{color:var(--tB);background:var(--tAccB)}
   /* 테마 선택 카드(관리 패널) */
   .theme-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:9px;margin-top:8px}
   .thbtn{display:flex;flex-direction:column;align-items:center;gap:5px;background:none;border:1px solid var(--vscode-panel-border);border-radius:9px;padding:8px 6px;cursor:pointer;color:var(--vscode-foreground)}
