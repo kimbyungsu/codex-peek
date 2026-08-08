@@ -106,6 +106,35 @@ function saveLangExt(lang: Lang): boolean {
 function tE(ko: string, en: string): string {
   return loadLangExt() === "en" ? en : ko;
 }
+// ── 화면 색상 테마(2026-08-08 · 사용자 요청): 두 색감 교차(사이드바·상단바=색A / 본문=색B) 12종 ──
+// 기본=다크 그레이 2색. 파스텔 10종은 톤앤톤이 아닌 '어울리는 두 색' 조합. colorful=기존 다색(무테마).
+// 파생색(액센트·경계·보조 글자)은 테마별 하드코딩 없이 CSS color-mix로 유도 — 목록이 단일 출처(웹뷰에 JSON 주입).
+const UI_THEMES: Array<{ id: string; ko: string; en: string; a: string; b: string; fg: string }> = [
+  { id: "dark", ko: "다크 그레이 (기본)", en: "Dark gray (default)", a: "#2a2c31", b: "#1e2023", fg: "#d7d9de" },
+  { id: "lavender-pink", ko: "라벤더 · 핑크", en: "Lavender · Pink", a: "#e9e4f5", b: "#ffc3cd", fg: "#3a3440" },
+  { id: "mint-cream", ko: "민트 · 크림", en: "Mint · Cream", a: "#cdeedd", b: "#fdf3cf", fg: "#31423a" },
+  { id: "sky-peach", ko: "하늘 · 피치", en: "Sky · Peach", a: "#cfe4f7", b: "#ffddc9", fg: "#33404d" },
+  { id: "butter-sage", ko: "버터 · 세이지", en: "Butter · Sage", a: "#fbeec0", b: "#d5e8cd", fg: "#45412f" },
+  { id: "rose-mist", ko: "로즈 · 안개", en: "Rose · Mist", a: "#f7d3dc", b: "#e2ebf2", fg: "#463640" },
+  { id: "lilac-lemon", ko: "라일락 · 레몬", en: "Lilac · Lemon", a: "#e6d7f5", b: "#fbf3c8", fg: "#3e3547" },
+  { id: "aqua-coral", ko: "아쿠아 · 코랄", en: "Aqua · Coral", a: "#c8eae8", b: "#ffcdbd", fg: "#31444a" },
+  { id: "blush-periwinkle", ko: "블러시 · 페리윙클", en: "Blush · Periwinkle", a: "#fcdce2", b: "#ccd7f5", fg: "#41374a" },
+  { id: "sand-seafoam", ko: "모래 · 바다거품", en: "Sand · Seafoam", a: "#f2e3cd", b: "#cfeadf", fg: "#463e30" },
+  { id: "grape-honeydew", ko: "포도 · 허니듀", en: "Grape · Honeydew", a: "#ddd0f0", b: "#e2f4d7", fg: "#3b3247" },
+  { id: "colorful", ko: "컬러풀 (기존 톤)", en: "Colorful (classic)", a: "", b: "", fg: "" },
+];
+const UI_THEME_FILE = path.join(BRIDGE_DIR, "ui-theme.json");
+function loadUiTheme(): string {
+  try {
+    const o = JSON.parse(fs.readFileSync(UI_THEME_FILE, "utf8"));
+    if (o && UI_THEMES.some((t) => t.id === o.theme)) return String(o.theme);
+  } catch { /* 없음/손상 → 기본 */ }
+  return "dark"; // 사용자 결정: 기본은 다크 그레이 2색
+}
+function saveUiThemeExt(id: string): boolean {
+  if (!UI_THEMES.some((t) => t.id === id)) return false;
+  return atomicWrite(UI_THEME_FILE, JSON.stringify({ theme: id }));
+}
 // 첫 실행 초기화: language.json이 없으면 VS Code UI 언어로 정해 '저장'까지 한다(auto를 동적으로 계속 해석하지 않고
 // 첫 실행 값 고정 — 프로젝트/창 이동 시 예측 가능, Codex 검증 권고). 이미 있으면 손대지 않음.
 function ensureLangInitialized(): void {
@@ -155,6 +184,7 @@ interface BridgeState {
   hiddenCandidates: Candidate[];
   contract: Contract;
   lang: Lang;              // 전역 언어(ko/en)
+  uiTheme: string;         // 화면 색상 테마 id(전역 ui-theme.json — 기본 "dark")
   otherSlotRules: boolean; // 반대 언어 슬롯에만 규칙 있음(빈칸 안내)
   baseDirective: { verifyBaseline: string; transmit: string; rejudge: string; overridden: boolean; profile: string; editable: boolean }; // profile: 표시 중 문안의 실효 프로필. editable=false는 구런타임의 core 표시(코드 고정 폴백)뿐 — 편집 개방(2026-08-05) 후 정상 경로는 항상 편집 가능
   baseReadOk: boolean; // 기본 원칙(+3트랙 정찰) 오버라이드 파일 판독 신뢰(부재=정상) — false면 웹뷰가 canonical fill·잠금 해제 보류(7차 지적 2)
@@ -2351,6 +2381,7 @@ function computeState(turnsN: number): BridgeState {
         return null;
       } catch { return null; } // 부재=기록 없음(정상)
     })(),
+    uiTheme: loadUiTheme(),
     baseAvailable: bridgeLib() !== null,
     permissionMode: activePermissionMode(ws),
     codexReady: !!resolveCodexPathForBridge(),
@@ -4278,6 +4309,12 @@ class Dashboard {
           this.post();
           this.panel?.webview.postMessage({ type: "saveResult", target: "deepseek", ok });
         }
+        if (m?.type === "saveUiTheme" && typeof m.theme === "string") {
+          // 화면 색상 테마 — 전역 파일 저장(모든 창 공유). 웹뷰가 즉시 적용하므로 응답은 state 재푸시로 충분.
+          saveUiThemeExt(m.theme);
+          this.post();
+          return;
+        }
         if (m?.type === "saveBase") {
           let ok = false;
           try {
@@ -4478,6 +4515,59 @@ class Dashboard {
   #sbToggle{width:100%;background:none;border:none;color:var(--vscode-descriptionForeground);padding:6px 10px;border-radius:7px;cursor:pointer;font-size:11px;text-align:left;white-space:nowrap}
   #sbToggle:hover{color:var(--vscode-foreground);background:var(--vscode-editorWidget-background)}
   .app.rail .navgroup,.app.rail .sb-brandrow b,.app.rail .sb-label{display:none}
+  /* 색상 테마(12종 · 2026-08-08): 두 색감 교차 — 사이드바·상단바=색A, 본문=색B. colorful=무테마(기존 다색 유지).
+     구조 변경 없이 색만 갈아입힌다: 화면 전체가 쓰는 vscode 변수들을 .app.themed 범위에서 재정의(간접층).
+     파생값(액센트·경계·보조 글자·입력창)은 테마별 하드코딩 없이 color-mix로 유도. 경고·오류의 빨강 계열은
+     어느 테마에서도 원색 유지(위험 신호를 톤에 묻지 않음). */
+  .app.themed{
+    --tLine:color-mix(in srgb,var(--tFg) 16%,transparent);
+    --tMuted:color-mix(in srgb,var(--tFg) 64%,var(--tB));
+    --tWidget:color-mix(in srgb,var(--tA) 55%,var(--tB));
+    --tField:color-mix(in srgb,var(--tB) 72%,var(--tA));
+    --tAccA:color-mix(in srgb,var(--tA) 40%,var(--tFg));
+    --tAccB:color-mix(in srgb,var(--tB) 40%,var(--tFg));
+    --vscode-foreground:var(--tFg);
+    --vscode-editor-background:var(--tB);
+    --vscode-sideBar-background:var(--tA);
+    --vscode-editorWidget-background:var(--tWidget);
+    --vscode-panel-border:var(--tLine);
+    --vscode-descriptionForeground:var(--tMuted);
+    --vscode-charts-blue:var(--tAccA);
+    --vscode-charts-green:var(--tAccB);
+    --vscode-charts-purple:var(--tAccA);
+    --vscode-charts-orange:var(--tAccB);
+    --vscode-charts-yellow:var(--tAccA);
+    --vscode-textLink-foreground:var(--tAccA);
+    --vscode-focusBorder:var(--tAccA);
+    --vscode-input-background:var(--tField);
+    --vscode-input-foreground:var(--tFg);
+    --vscode-input-border:var(--tLine);
+    --vscode-dropdown-background:var(--tField);
+    --vscode-dropdown-foreground:var(--tFg);
+    --vscode-dropdown-border:var(--tLine);
+    --vscode-button-background:var(--tAccA);
+    --vscode-button-foreground:var(--tB);
+    --vscode-button-secondaryBackground:var(--tWidget);
+    --vscode-button-secondaryForeground:var(--tFg);
+    --vscode-textCodeBlock-background:var(--tField);
+    --vscode-textBlockQuote-background:var(--tField);
+    --vscode-inputOption-activeBackground:var(--tWidget);
+    color:var(--tFg);background:var(--tB);
+  }
+  /* 고정 hex 액센트(teal·rose)도 테마 두 색으로 수렴 — colorful에서만 원색 */
+  .app.themed h2.sec.accent-teal{--accent:var(--tAccB)}
+  .app.themed h2.sec.accent-rose,.app.themed summary.sec{--accent:var(--tAccA)}
+  /* 이모지 시안성(사용자 지적): 컬러풀 외 테마에선 좌측 아이콘을 무채색·차분한 톤으로 */
+  .app.themed .sb-ico,.app.themed .tabbtn .sb-ico{filter:grayscale(1);opacity:.72}
+  .app.themed .tabbtn.active{color:var(--tB);background:var(--tAccA);box-shadow:none}
+  .app.themed .tabbtn.active .sb-ico{opacity:1}
+  /* 테마 선택 카드(관리 패널) */
+  .theme-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:9px;margin-top:8px}
+  .thbtn{display:flex;flex-direction:column;align-items:center;gap:5px;background:none;border:1px solid var(--vscode-panel-border);border-radius:9px;padding:8px 6px;cursor:pointer;color:var(--vscode-foreground)}
+  .thbtn:hover{border-color:var(--vscode-charts-blue)}
+  .thbtn.on{border-color:var(--vscode-charts-blue);box-shadow:0 0 0 1px var(--vscode-charts-blue)}
+  .thsw{width:56px;height:30px;border-radius:6px;border:1px solid rgba(0,0,0,.18)}
+  .thname{font-size:10px;text-align:center;line-height:1.3}
   .nav-badge{margin-left:auto;min-width:18px;padding:1px 6px;border-radius:999px;background:var(--vscode-charts-orange);color:#fff;font-size:10px;text-align:center;font-weight:700}
   .app.rail .nav-badge{display:none !important}
   .ov-sm{font-size:15px !important;line-height:1.35 !important}
@@ -5113,6 +5203,11 @@ class Dashboard {
     </div>
   </section>
   <section id="tab-adv" class="tab-panel">
+    <h2 class="sec accent-teal">${t("화면 색상 테마", "Color Theme")} <span class="sub2">${t("두 색감이 교차하는 12가지 조합 — 전역 설정(모든 프로젝트·창 공통)", "12 two-tone pairings — global (all projects & windows)")}</span></h2>
+    <div class="card">
+      <div class="hint">${t("기본은 다크 그레이 2색이에요. 파스텔 10종은 서로 어울리는 두 색이 사이드바와 본문에서 교차하고, '컬러풀'은 지금까지의 여러 색 조합 그대로예요. 누르면 바로 적용·저장됩니다.", "Default is two dark grays. The 10 pastels pair two matching colors across the sidebar and body; 'Colorful' keeps the classic multi-color look. Click to apply & save instantly.")}</div>
+      <div id="themeGrid" class="theme-grid">${UI_THEMES.map((th) => `<button type="button" class="thbtn" data-theme="${th.id}" title="${EN ? th.en : th.ko}"><span class="thsw" style="background:${th.id === "colorful" ? "linear-gradient(105deg,#4fc1ff 0 25%,#89d185 25% 50%,#d18fb0 50% 75%,#e2c08d 75% 100%)" : `linear-gradient(105deg,${th.a} 0 50%,${th.b} 50% 100%)`}"></span><span class="thname">${EN ? th.en : th.ko}</span></button>`).join("")}</div>
+    </div>
     <h2 class="sec base accent-yellow">${t("고급설정", "Advanced Settings")} <span class="sub2">${t("정찰(3트랙) 고급 단계용 — 전역 설정(모든 프로젝트 공통)", "for the advanced recon stage (3-track) — global (shared by all projects)")}</span></h2>
     <div class="card">
       <div class="chead">${t("DeepSeek API 키", "DeepSeek API key")} <span class="muted" style="font-weight:400">${t("· 3트랙의 'DeepSeek 비교 정찰'(두 번째 정찰자)에만 필요 — 키 없이도 변경 감지와 기본 정찰(Claude) 영향지도(별도 과금 없음)는 동작해요", "· only needed for 3-track's DeepSeek comparison scout (the second scout) — change sensing and default-scout (Claude) impact maps (no separate billing) work without it")}</span></div>
@@ -5796,6 +5891,27 @@ class Dashboard {
       }
     }
   }
+  // [색상 테마 2026-08-08] 두 색감 교차 12종 — 적용은 CSS 변수 3개(--tA/--tB/--tFg)+.themed 클래스뿐(간접층).
+  // colorful=클래스 제거(기존 다색 그대로). 목록은 호스트 UI_THEMES가 단일 출처(JSON 주입).
+  var UI_THEMES = ${JSON.stringify(UI_THEMES)};
+  var curTheme = ${JSON.stringify(loadUiTheme())};
+  function applyTheme(id){
+    var t9=null, dk=null;
+    for(var i=0;i<UI_THEMES.length;i++){ if(UI_THEMES[i].id===id) t9=UI_THEMES[i]; if(UI_THEMES[i].id==="dark") dk=UI_THEMES[i]; }
+    if(!t9) t9=dk; if(!t9) return;
+    var app=$("appShell"); if(!app) return;
+    curTheme=t9.id;
+    if(t9.id==="colorful"){ app.classList.remove("themed"); app.style.removeProperty("--tA"); app.style.removeProperty("--tB"); app.style.removeProperty("--tFg"); }
+    else { app.classList.add("themed"); app.style.setProperty("--tA",t9.a); app.style.setProperty("--tB",t9.b); app.style.setProperty("--tFg",t9.fg); }
+    document.querySelectorAll("#themeGrid .thbtn").forEach(function(x){ x.classList.toggle("on", x.getAttribute("data-theme")===t9.id); });
+  }
+  applyTheme(curTheme); // 부팅 즉시 — 저장된 테마로 시작(깜빡임 방지)
+  (function(){ var g=$("themeGrid"); if(!g) return; g.addEventListener("click", function(ev){
+    var b=ev.target.closest("[data-theme]"); if(!b) return;
+    var id=b.getAttribute("data-theme");
+    applyTheme(id); // 즉시 적용(눈으로 확인) 후 저장 — 실패해도 화면은 이미 반영, 다음 푸시가 저장값으로 수렴
+    vscode.postMessage({type:"saveUiTheme", theme:id});
+  }); })();
   // [UI 개편 1차] 사이드바 접기 — 웹뷰 메모리(언어 재렌더 시 초기화 허용, 파일 영속화는 후속 단계)
   (function(){ var tg=$("sbToggle"); if(!tg) return; tg.addEventListener("click", function(){
     var app=$("appShell"); if(!app) return; var r=app.classList.toggle("rail");
@@ -7630,6 +7746,7 @@ class Dashboard {
     // (Claude 두뇌 카드 렌더도 제거됨 — 동일하게 상태바 drift(무결성 채널)로 이동.)
     // 스크롤 복원(②의 나머지 반쪽): 재구성이 끝나 높이가 돌아온 시점에 캡처 좌표로 되돌린다. 명시 이동
     // (scrollIntoView smooth)은 비동기 애니메이션이라 이 동기 복원 뒤에도 제 목표로 진행 — 충돌 없음.
+    safe(function(){ if (d.uiTheme && d.uiTheme !== curTheme) applyTheme(d.uiTheme); }); // 다른 창의 테마 변경 동기화(같은 전역 파일)
     safe(function(){ renderOverview(d); }); // [UI 개편 2차] 개요 패널 — 같은 상태 푸시 재조립
     safe(function(){ if (Math.abs(window.scrollY - keepY) > 1) window.scrollTo(0, keepY); });
   });
