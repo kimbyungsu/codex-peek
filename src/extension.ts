@@ -4524,9 +4524,10 @@ class Dashboard {
     --tMuted:color-mix(in srgb,var(--tFg) 64%,var(--tB));
     --tWidget:color-mix(in srgb,var(--tA) 55%,var(--tB));
     --tField:color-mix(in srgb,var(--tB) 72%,var(--tA));
-    /* 액센트는 fg 쪽으로 깊게(25%만 원색) — 40% 혼합은 버튼 글자(tB) 대비가 2.7~3.9:1로 AA 미달(검증 실측 [보완]) */
-    --tAccA:color-mix(in srgb,var(--tA) 25%,var(--tFg));
-    --tAccB:color-mix(in srgb,var(--tB) 25%,var(--tFg));
+    /* 액센트는 fg 쪽으로 깊게(12%만 원색) — 25%도 파스텔 6종이 4.5:1 미달(검증 재실측 blocker).
+       12%는 12테마 전부에서 최악 5.27:1(aqua-coral · tB/tA 두 표면 대비 모두 포함한 보수 계산)로 AA 여유 통과. */
+    --tAccA:color-mix(in srgb,var(--tA) 12%,var(--tFg));
+    --tAccB:color-mix(in srgb,var(--tB) 12%,var(--tFg));
     --vscode-foreground:var(--tFg);
     --vscode-editor-background:var(--tB);
     --vscode-sideBar-background:var(--tA);

@@ -48,7 +48,25 @@ console.log("[3] 적용 계층 — 변수 3개+클래스만·colorful=무테마�
   ok(src.includes(".app.themed .sb-ico") && src.includes("grayscale(1)"), "컬러풀 외 테마=좌측 이모지 무채색(시안성 — 사용자 지적)");
   // 검증 반영분(blocker+보완): 상단바=색A 직접 결속·액센트 25% 혼합(AA 대비)·라이브 스트립 고정색 수렴
   ok(src.includes(".app.themed .topbar{background:var(--tA)}"), "상단바=색A 직접 결속(editorWidget 혼합색 대체 — blocker)");
-  ok(src.includes("var(--tA) 25%,var(--tFg)") && src.includes("var(--tB) 25%,var(--tFg)"), "액센트=원색 25%만 혼합(버튼 글자 AA 대비 — 보완)");
+  // 대비는 문자열 존재가 아니라 실측 계산으로 잠근다(검증 blocker: '25% 존재'만 검사해 미달을 통과시켰음)
+  {
+    const tb = src.indexOf("const UI_THEMES:"); const te = src.indexOf("];", tb);
+    const defs = [...src.slice(tb, te).matchAll(/id: "([a-z-]+)".*?a: "(#[0-9a-f]{6})", b: "(#[0-9a-f]{6})", fg: "(#[0-9a-f]{6})"/g)];
+    const mixM = src.match(/--tAccA:color-mix\(in srgb,var\(--tA\) (\d+)%,var\(--tFg\)\)/);
+    ok(!!mixM && defs.length === 11, "혼합비·테마 정의 추출(colorful 제외 11종)");
+    const m = Number(mixM ? mixM[1] : 0);
+    const h2c = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+    const mixc = (c1, c2, p) => c1.map((v, i) => Math.round(v * p / 100 + c2[i] * (100 - p) / 100));
+    const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; const [r, g, b] = c.map(f); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    const ctr = (c1, c2) => { const a = lum(c1), b = lum(c2); return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05); };
+    let worst = Infinity, worstName = "";
+    for (const d of defs) {
+      const A = h2c(d[2]), B = h2c(d[3]), F = h2c(d[4]);
+      const accA = mixc(A, F, m), accB = mixc(B, F, m);
+      for (const v of [ctr(accA, B), ctr(accB, B), ctr(accA, A), ctr(accB, A)]) if (v < worst) { worst = v; worstName = d[1]; }
+    }
+    ok(worst >= 4.5, `전 테마 액센트 대비 ≥4.5:1 실측(최악 ${worstName} ${worst.toFixed(2)}:1 — 두 표면 tA·tB 모두)`);
+  }
   ok(/\.app\.themed \.lsarrow\.tocodex[\s\S]{0,200}var\(--tAccB\)/.test(src) && !/\.app\.themed[^}]*#3a9/.test(src), "라이브 스트립 고정 상태색도 두 색 파생 수렴(빨강만 원색 — 보완)");
 }
 
