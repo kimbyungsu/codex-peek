@@ -110,7 +110,9 @@ function tE(ko: string, en: string): string {
 // 기본=다크 그레이 2색. 파스텔 10종은 톤앤톤이 아닌 '어울리는 두 색' 조합. colorful=기존 다색(무테마).
 // 파생색(액센트·경계·보조 글자)은 테마별 하드코딩 없이 CSS color-mix로 유도 — 목록이 단일 출처(웹뷰에 JSON 주입).
 const UI_THEMES: Array<{ id: string; ko: string; en: string; a: string; b: string; fg: string }> = [
-  { id: "dark", ko: "다크 그레이 (기본)", en: "Dark gray (default)", a: "#2a2c31", b: "#1e2023", fg: "#d7d9de" },
+  // 다크: 본문(b)을 한층 더 어둡게 내리고 사이드바(a)를 밝혀 표면 대조를 벌림(대화 상자가 배경에 묻힌다는
+  // 실보고 2026-08-08 — 위젯/본문 1.09→1.32배·사이드바/본문 1.80배 실측)
+  { id: "dark", ko: "다크 그레이 (기본)", en: "Dark gray (default)", a: "#3a3f48", b: "#0f1013", fg: "#dcdee3" },
   { id: "lavender-pink", ko: "라벤더 · 핑크", en: "Lavender · Pink", a: "#e9e4f5", b: "#ffc3cd", fg: "#3a3440" },
   { id: "mint-cream", ko: "민트 · 크림", en: "Mint · Cream", a: "#cdeedd", b: "#fdf3cf", fg: "#31423a" },
   { id: "sky-peach", ko: "하늘 · 피치", en: "Sky · Peach", a: "#cfe4f7", b: "#ffddc9", fg: "#33404d" },
@@ -121,7 +123,7 @@ const UI_THEMES: Array<{ id: string; ko: string; en: string; a: string; b: strin
   { id: "blush-periwinkle", ko: "블러시 · 페리윙클", en: "Blush · Periwinkle", a: "#fcdce2", b: "#ccd7f5", fg: "#41374a" },
   { id: "sand-seafoam", ko: "모래 · 바다거품", en: "Sand · Seafoam", a: "#f2e3cd", b: "#cfeadf", fg: "#463e30" },
   { id: "grape-honeydew", ko: "포도 · 허니듀", en: "Grape · Honeydew", a: "#ddd0f0", b: "#e2f4d7", fg: "#3b3247" },
-  { id: "colorful", ko: "컬러풀 (기존 톤)", en: "Colorful (classic)", a: "", b: "", fg: "" },
+  { id: "colorful", ko: "컬러풀", en: "Colorful", a: "", b: "", fg: "" },
 ];
 const UI_THEME_FILE = path.join(BRIDGE_DIR, "ui-theme.json");
 function loadUiTheme(): string {
