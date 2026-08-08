@@ -15,7 +15,7 @@ console.log("[1] 테마 목록 — 12종·중복 없음·기본 다크·컬러�
   const ids = [...blk.matchAll(/id: "([a-z-]+)"/g)].map((m) => m[1]);
   ok(ids.length === 12, "테마 12종 (실측 " + ids.length + ")");
   ok(new Set(ids).size === ids.length, "id 중복 없음");
-  ok(ids[0] === "dark" && ids.includes("colorful"), "다크(기본)+컬러풀(기존 톤) 포함");
+  ok(ids[0] === "dark" && ids.includes("colorful"), "다크(기본)+컬러풀 포함");
   const hexes = [...blk.matchAll(/[ab]: "(#[0-9a-f]{6})"/g)].map((m) => m[1]);
   ok(hexes.length === 22 && new Set(hexes).size >= 20, "파스텔 10쌍+다크 1쌍의 두 색(a·b) 실재·사실상 전부 상이(톤앤톤 아님)");
   ok(/return "dark"; \/\/ 사용자 결정: 기본은 다크 그레이 2색/.test(src), "저장 없음·손상=다크 기본");
