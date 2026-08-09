@@ -4564,6 +4564,18 @@ class Dashboard {
   /* 고정 hex 액센트(teal·rose)도 테마 두 색으로 수렴 — colorful에서만 원색 */
   .app.themed h2.sec.accent-teal{--accent:var(--tAccB)}
   .app.themed h2.sec.accent-rose,.app.themed summary.sec{--accent:var(--tAccA)}
+  /* 전달 말풍선: 액센트 배경+고정 흰 글자는 다크(밝은 액센트)에서 글자 실종(실보고) — 글자=본문색으로 결속(대비 기측정 ≥5.27:1) */
+  .app.themed .umsg{background:var(--tAccA);color:var(--tB)}
+  /* 판정 표시(통과·보완·보류·실패)는 어느 테마에서든 컬러풀과 같은 의미색으로(사용자 결정 2026-08-08).
+     칩=채움형(고정 색 배경+고정 글자색)이라 테마 표면과 무관하게 대비가 상수로 보장된다(쌍별 실측 ≥4.6:1). */
+  .app.themed .vchip.pass{color:#fff;background:#1f7a44;border-color:transparent}
+  .app.themed .vchip.notes{color:#1c1c1c;background:#d4a70a;border-color:transparent}
+  .app.themed .vchip.inconc{color:#fff;background:#a85715;border-color:transparent}
+  .app.themed .vchip.fail{color:#fff;background:#b8321f;border-color:transparent}
+  .app.themed .vmsg.pass{border-left-color:#1f7a44}
+  .app.themed .vmsg.notes{border-left-color:#d4a70a}
+  .app.themed .vmsg.inconc{border-left-color:#a85715}
+  .app.themed .vmsg.fail{border-left-color:#b8321f}
   /* 라이브 스트립의 고정 상태색(#3a9·#a73·#58f)도 두 색 파생으로 수렴 — 빨강(incomplete)만 원색 유지 */
   .app.themed .lsarrow.tocodex,.app.themed .lschip.codex-gen,.app.themed .lschip.codex-req,.app.themed .lschip.done{color:var(--tAccB)}
   .app.themed .lsarrow.toclaude,.app.themed .lschip.rejudge{color:var(--tAccA)}

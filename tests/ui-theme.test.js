@@ -80,6 +80,19 @@ console.log("[3] 적용 계층 — 변수 3개+클래스만·colorful=무테마�
     ok(worstMu >= 4.5, `전 테마 보조 글자 대비 ≥4.5:1 실측(최악 ${worstMuName} ${worstMu.toFixed(2)}:1 — 본문·사이드바·위젯·경보 배너 4표면)`);
   }
   ok(/\.app\.themed \.lsarrow\.tocodex[\s\S]{0,200}var\(--tAccB\)/.test(src) && !/\.app\.themed[^}]*#3a9/.test(src), "라이브 스트립 고정 상태색도 두 색 파생 수렴(빨강만 원색 — 보완)");
+  // 전달 말풍선·판정 색(실보고 2026-08-08): 말풍선 글자=본문색 결속(고정 #fff 금지), 판정 칩=채움형 고정 쌍(전 테마 동일 의미색)
+  ok(src.includes(".app.themed .umsg{background:var(--tAccA);color:var(--tB)}"), "전달 말풍선=액센트 배경+본문색 글자(다크의 흰 글자 실종 봉합)");
+  {
+    const chips = [...src.matchAll(/\.app\.themed \.vchip\.(pass|notes|inconc|fail)\{color:(#[0-9a-f]{3,6});background:(#[0-9a-f]{6});border-color:transparent\}/g)];
+    ok(chips.length === 4, "판정 칩 4종=채움형 고정 쌍(통과·보완·보류·실패 — 전 테마 동일)");
+    const h2c6 = (h) => { const x = h.length === 4 ? "#" + [...h.slice(1)].map((c) => c + c).join("") : h; return [1, 3, 5].map((i) => parseInt(x.slice(i, i + 2), 16)); };
+    const lum2 = (c) => { const f = (v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; const [r, g, b] = c.map(f); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    const ctr2 = (c1, c2) => { const a = lum2(c1), b = lum2(c2); return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05); };
+    let worstChip = Infinity, worstChipName = "";
+    for (const m of chips) { const v = ctr2(h2c6(m[2]), h2c6(m[3])); if (v < worstChip) { worstChip = v; worstChipName = m[1]; } }
+    ok(worstChip >= 4.5, `판정 칩 글자 대비 ≥4.5:1 실측(최악 ${worstChipName} ${worstChip.toFixed(2)}:1 — 채움형이라 테마 무관 상수)`);
+    ok([...src.matchAll(/\.app\.themed \.vmsg\.(pass|notes|inconc|fail)\{border-left-color:#[0-9a-f]{6}\}/g)].length === 4, "답변 상자 좌측 띠도 같은 의미색 4종");
+  }
 }
 
 console.log("[4] 선택 카드 — 12개 스와치·즉시 적용+저장");
