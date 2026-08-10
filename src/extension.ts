@@ -193,7 +193,7 @@ interface BridgeState {
   scoutPrompt: { baseline: string; overridden: boolean; directive: string; notes: string[]; version: string } | null; // §6-11 — 3트랙에서만(null=2트랙/판독 불가)
   // P-12 v2.4: 보관함(범위 밖 제안+판단 대기 [주의]) 읽기 전용 가시화 — 처분은 CLI(backlog done|dismiss). null=무폴더/구 런타임.
   backlog: { caution: number; cautionDue: number; backlog: number; corrupt: number; readError: boolean; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } | null; // readError: 판독 실패(ENOENT 외) — '비어 있음' 위장 금지(2026-07-18 확인 판정 [보완] 소화)
-  challenges: { open: number; cleared: number; kept: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number; cleared: boolean; matchedAll: boolean; warnOpen: boolean }> } | null; // 재확인(증분 4b) — cleared=실제 ack 조건(전 파일 일치)·null=구 설치본/부재
+  challenges: { open: number; cleared: number; kept: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number; cleared: boolean; matchedAll: boolean; warnOpen: boolean; eventId: string }>; ndEventIds: string[] } | null; // 재확인(증분 4b) — cleared=실제 ack 조건(전 파일 일치)·null=구 설치본/부재
   usedMemory: { ts: string; items: Array<{ path: string; note: string }>; couplings: number; omitted: boolean } | null; // [UI 개편 2차] 직전 검증에 실린 지도 동봉 스냅샷(브릿지 stats/attach.jsonl 최신 1건). null=기록 없음/구 브릿지
   baseAvailable: boolean;
   permissionMode: string;
