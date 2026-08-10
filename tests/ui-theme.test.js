@@ -47,7 +47,7 @@ console.log("[3] 적용 계층 — 변수 3개+클래스만·colorful=무테마�
   ok(!css.includes("--vscode-charts-red") && !css.includes("errorForeground") && !css.includes("inputValidation"), "경고·오류 빨강 계열은 재정의 안 함(위험 신호 보존)");
   ok(!src.includes("grayscale(1)"), "이모지 원색 유지(무채색 철회 — 실사용 피드백 2026-08-08)");
   ok(/\.app\.themed \.integrity\{background:color-mix\(in srgb,#d44 9%,var\(--tB\)\)/.test(src), "경보 배너=테마 밝은 면+빨강 테두리(다크 변수 배경의 글자 실종 봉합 — 실보고)");
-  // 심각도 색 구분(사용자 지적 2026-08-10): 경고(근거의심 등)=주황 변형 — 세 클래스라 기본 .integrity.warn을 확실히 이김
+  // 심각도 색 구분(사용자 지적 2026-08-10): 경고(근거의심 등)=주황 변형 — 더 높은 특이도(네 클래스 선택자)로 기본 .integrity.warn을 확실히 이김
   ok(/\.app\.themed \.integrity\.warn\{background:color-mix\(in srgb,#c90 12%,var\(--tB\)\);border-color:#b8860b/.test(src), "경고 배너=주황 변형(근거의심이 빨강으로 보이던 미완 수정 봉합)");
   ok(/\.app\.themed button\.secondary\{background:transparent;[^}]*color:var\(--tAccA\)/.test(src), "보조 버튼=글자색 액센트(테두리만 바꾸는 어색함 제거 — 실보고)");
   ok(/\.app\.themed \.langbtn\.on\{color:var\(--tB\);background:var\(--tAccB\)\}/.test(src), "언어 세그=액센트B 채움+본문색 글자(고정 흰 글자 대비 붕괴 방지)");

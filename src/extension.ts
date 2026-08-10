@@ -4584,7 +4584,7 @@ class Dashboard {
   .app.themed .tabbtn.active{color:var(--tB);background:var(--tAccA);box-shadow:none}
   /* 경보 배너: VS Code 다크 값 배경은 파스텔 위에서 '어두운 상자에 어두운 글자'(실보고) — 테마 본문색에
      의미색을 살짝 섞은 밝은 면+의미색 테두리로 재구성. 심각도 구분 유지(사용자 지적 2026-08-10):
-     오류(err)=빨강 / 경고(warn·근거의심 등)=주황 — .warn은 세 클래스로 기본 .integrity.warn(두 클래스)보다 우선. */
+     오류(err)=빨강 / 경고(warn·근거의심 등)=주황 — .warn 변형은 더 높은 특이도(네 클래스 선택자)로 기본 .integrity.warn을 확실히 이김. */
   .app.themed .integrity{background:color-mix(in srgb,#d44 9%,var(--tB));border-color:#d44;border-left-color:#d44}
   .app.themed .integrity.warn{background:color-mix(in srgb,#c90 12%,var(--tB));border-color:#b8860b;border-left-color:#b8860b}
   /* 버튼 톤(실보고): 보조 버튼('고급설정 열기'·'다시 점검' 등)은 상자 테두리가 아니라 글자색이 액센트여야 자연스럽다 */
