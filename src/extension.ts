@@ -4582,9 +4582,11 @@ class Dashboard {
   .app.themed .lschip.claude{color:var(--tAccA)}
   /* 이모지: 원색 유지(무채색은 흐릿하다는 실사용 피드백으로 철회) — 가독성은 활성 알약·배경 대비가 담당 */
   .app.themed .tabbtn.active{color:var(--tB);background:var(--tAccA);box-shadow:none}
-  /* 경보 배너: 빨강 배경 변수는 VS Code 다크 테마 값이라 파스텔 위에서 '어두운 상자에 어두운 글자'가 됨(실보고)
-     — 테마 본문색에 빨강을 살짝 섞은 밝은 면 + 빨강 테두리로 재구성(위험 신호는 테두리·제목이 유지) */
+  /* 경보 배너: VS Code 다크 값 배경은 파스텔 위에서 '어두운 상자에 어두운 글자'(실보고) — 테마 본문색에
+     의미색을 살짝 섞은 밝은 면+의미색 테두리로 재구성. 심각도 구분 유지(사용자 지적 2026-08-10):
+     오류(err)=빨강 / 경고(warn·근거의심 등)=주황 — .warn은 세 클래스로 기본 .integrity.warn(두 클래스)보다 우선. */
   .app.themed .integrity{background:color-mix(in srgb,#d44 9%,var(--tB));border-color:#d44;border-left-color:#d44}
+  .app.themed .integrity.warn{background:color-mix(in srgb,#c90 12%,var(--tB));border-color:#b8860b;border-left-color:#b8860b}
   /* 버튼 톤(실보고): 보조 버튼('고급설정 열기'·'다시 점검' 등)은 상자 테두리가 아니라 글자색이 액센트여야 자연스럽다 */
   .app.themed button.secondary{background:transparent;border:1px solid var(--tLine);color:var(--tAccA);font-weight:600}
   .app.themed button.secondary:hover{background:var(--tWidget)}

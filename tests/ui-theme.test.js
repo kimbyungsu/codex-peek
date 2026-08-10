@@ -47,6 +47,8 @@ console.log("[3] 적용 계층 — 변수 3개+클래스만·colorful=무테마�
   ok(!css.includes("--vscode-charts-red") && !css.includes("errorForeground") && !css.includes("inputValidation"), "경고·오류 빨강 계열은 재정의 안 함(위험 신호 보존)");
   ok(!src.includes("grayscale(1)"), "이모지 원색 유지(무채색 철회 — 실사용 피드백 2026-08-08)");
   ok(/\.app\.themed \.integrity\{background:color-mix\(in srgb,#d44 9%,var\(--tB\)\)/.test(src), "경보 배너=테마 밝은 면+빨강 테두리(다크 변수 배경의 글자 실종 봉합 — 실보고)");
+  // 심각도 색 구분(사용자 지적 2026-08-10): 경고(근거의심 등)=주황 변형 — 세 클래스라 기본 .integrity.warn을 확실히 이김
+  ok(/\.app\.themed \.integrity\.warn\{background:color-mix\(in srgb,#c90 12%,var\(--tB\)\);border-color:#b8860b/.test(src), "경고 배너=주황 변형(근거의심이 빨강으로 보이던 미완 수정 봉합)");
   ok(/\.app\.themed button\.secondary\{background:transparent;[^}]*color:var\(--tAccA\)/.test(src), "보조 버튼=글자색 액센트(테두리만 바꾸는 어색함 제거 — 실보고)");
   ok(/\.app\.themed \.langbtn\.on\{color:var\(--tB\);background:var\(--tAccB\)\}/.test(src), "언어 세그=액센트B 채움+본문색 글자(고정 흰 글자 대비 붕괴 방지)");
   // 검증 반영분(blocker+보완): 상단바=색A 직접 결속·액센트 25% 혼합(AA 대비)·라이브 스트립 고정색 수렴
@@ -61,23 +63,24 @@ console.log("[3] 적용 계층 — 변수 3개+클래스만·colorful=무테마�
     const mMu = src.match(/--tMuted:color-mix\(in srgb,var\(--tFg\) (\d+)%,var\(--tB\)\)/);
     const mWg = src.match(/--tWidget:color-mix\(in srgb,var\(--tA\) (\d+)%,var\(--tB\)\)/);
     const mBan = src.match(/\.app\.themed \.integrity\{background:color-mix\(in srgb,#d44 (\d+)%,var\(--tB\)\)/);
-    ok(!!mA && !!mB && !!mMu && !!mWg && !!mBan && defs.length === 11, "변수별 혼합비 독립 추출(가정 금지)+테마 11종");
+    const mWan = src.match(/\.app\.themed \.integrity\.warn\{background:color-mix\(in srgb,#c90 (\d+)%,var\(--tB\)\)/);
+    ok(!!mA && !!mB && !!mMu && !!mWg && !!mBan && !!mWan && defs.length === 11, "변수별 혼합비 독립 추출(가정 금지)+테마 11종");
     const h2c = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
     const mixc = (c1, c2, p) => c1.map((v, i) => Math.round(v * p / 100 + c2[i] * (100 - p) / 100));
     const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; const [r, g, b] = c.map(f); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
     const ctr = (c1, c2) => { const a = lum(c1), b = lum(c2); return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05); };
-    const RED = h2c("#dd4444");
+    const RED = h2c("#dd4444"), AMBER = h2c("#cc9900");
     let worstAcc = Infinity, worstAccName = "", worstMu = Infinity, worstMuName = "";
     for (const d of defs) {
       const A = h2c(d[2]), B = h2c(d[3]), F = h2c(d[4]);
       const accA = mixc(A, F, Number(mA[1])), accB = mixc(B, F, Number(mB[1]));
       const muted = mixc(F, B, Number(mMu[1]));
-      const widget = mixc(A, B, Number(mWg[1])), banner = mixc(RED, B, Number(mBan[1]));
+      const widget = mixc(A, B, Number(mWg[1])), banner = mixc(RED, B, Number(mBan[1])), warnBan = mixc(AMBER, B, Number(mWan[1]));
       for (const v of [ctr(accA, B), ctr(accB, B), ctr(accA, A), ctr(accB, A)]) if (v < worstAcc) { worstAcc = v; worstAccName = d[1]; }
-      for (const s of [B, A, widget, banner]) { const v = ctr(muted, s); if (v < worstMu) { worstMu = v; worstMuName = d[1]; } }
+      for (const s of [B, A, widget, banner, warnBan]) { const v = ctr(muted, s); if (v < worstMu) { worstMu = v; worstMuName = d[1]; } }
     }
     ok(worstAcc >= 4.5, `전 테마 액센트 대비 ≥4.5:1 실측(최악 ${worstAccName} ${worstAcc.toFixed(2)}:1 — tA·tB 두 표면)`);
-    ok(worstMu >= 4.5, `전 테마 보조 글자 대비 ≥4.5:1 실측(최악 ${worstMuName} ${worstMu.toFixed(2)}:1 — 본문·사이드바·위젯·경보 배너 4표면)`);
+    ok(worstMu >= 4.5, `전 테마 보조 글자 대비 ≥4.5:1 실측(최악 ${worstMuName} ${worstMu.toFixed(2)}:1 — 본문·사이드바·위젯·경보 배너(빨강·주황) 5표면)`);
   }
   ok(/\.app\.themed \.lsarrow\.tocodex[\s\S]{0,200}var\(--tAccB\)/.test(src) && !/\.app\.themed[^}]*#3a9/.test(src), "라이브 스트립 고정 상태색도 두 색 파생 수렴(빨강만 원색 — 보완)");
   // 전달 말풍선·판정 색(실보고 2026-08-08): 말풍선 글자=본문색 결속(고정 #fff 금지), 판정 칩=채움형 고정 쌍(전 테마 동일 의미색)
