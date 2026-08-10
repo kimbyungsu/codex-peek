@@ -151,17 +151,23 @@ console.log("[4c] 2차 blocker 반영 — 공백 토큰·복원 무클로버·�
 
 console.log("[5] 2프로세스 동시 patch — 서로 다른 필드 무유실(v10 잠금 직렬화)");
 {
-  const drv = (field) => "const p=require(" + JSON.stringify(path.join(ROOT, "bridge", "contract-lib.js")) + ");const r=p.updateContractPatch(" + JSON.stringify(WS) + ",'ko',{" + field + ":true});process.exit(r.ok?0:1);";
+  // 실패 시 사유를 stderr로 — CI 간헐 실패(공용 러너)에서 '잠금 포기(lock-timeout)'인지 '필드 유실'인지 판별 재료
+  const drv = (field) => "const p=require(" + JSON.stringify(path.join(ROOT, "bridge", "contract-lib.js")) + ");const r=p.updateContractPatch(" + JSON.stringify(WS) + ",'ko',{" + field + ":true});if(!r.ok){console.error('patch-fail:'+JSON.stringify({state:r.state,error:String(r.error||'').slice(0,120)}));}process.exit(r.ok?0:1);";
   const env = { ...process.env, CODEX_BRIDGE_HOME: H };
   const a = cp.spawn(process.execPath, ["-e", drv("boxA")], { env, windowsHide: true });
   const b = cp.spawn(process.execPath, ["-e", drv("boxB")], { env, windowsHide: true });
+  const errs5 = { a: "", b: "" };
+  if (a.stderr) a.stderr.on("data", (d) => { errs5.a += String(d); });
+  if (b.stderr) b.stderr.on("data", (d) => { errs5.b += String(d); });
   const codes = [];
   const wait = new Promise((res) => { let n = 0; const done = (c) => { codes.push(c); if (++n === 2) res(null); }; a.on("exit", done); b.on("exit", done); });
   const timer = new Promise((res) => setTimeout(res, 15000));
   require("node:worker_threads"); // no-op(가독) — 아래 await는 최상위 async 아님이라 then 체인
   wait.then(() => {
     const o = JSON.parse(fs.readFileSync(FILE, "utf8"));
-    ok(codes.length === 2 && codes.every((c) => c === 0) && o.boxA === true && o.boxB === true, "동시 저장(서로 다른 필드) — 두 필드 모두 보존(lost-update 없음)");
+    const pass5 = codes.length === 2 && codes.every((c) => c === 0) && o.boxA === true && o.boxB === true;
+    if (!pass5) console.log("  (진단) codes=" + JSON.stringify(codes) + " · fields={boxA:" + o.boxA + ",boxB:" + o.boxB + "} · stderrA=" + (errs5.a.trim() || "-") + " · stderrB=" + (errs5.b.trim() || "-"));
+    ok(pass5, "동시 저장(서로 다른 필드) — 두 필드 모두 보존(lost-update 없음)");
     // 1차 blocker①·⑧ — '체크박스 vs 낡은 전체 저장' 되돌림 재현: dirty 제한이 없으면 낡은 창의 전체 저장이
     // 방금 저장된 다른 필드를 옛값으로 덮는다 → touched-gated patch(변경 필드만)면 미변경 필드는 페이로드에
     // 아예 없어 보존된다(관문 수준 실동작 — 웹뷰 touched 산출은 [7] 배선 단언이 잠금).
