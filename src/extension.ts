@@ -1585,7 +1585,7 @@ function computeBacklogView(rawItems: any[], now: number): { caution: number; ca
 // +실검증≥1, skipped는 판정 제외)만으로는
 // 부족하다 — 종결 직후 강제 종료·ack 저장 실패면 경고가 아직 남아 있다(확인 검증 blocker 재등장).
 // 그래서 미ack 이벤트 id 집합(unacked)과 결속: 일치했어도 그 경고가 미ack면 '반영 대기'로 구분 표시.
-function computeChallengeView(recs: any[], now: number, unacked?: Set<string>): { open: number; cleared: number; kept: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number; cleared: boolean; matchedAll: boolean; warnOpen: boolean }> } {
+function computeChallengeView(recs: any[], now: number, unacked?: Set<string>): { open: number; cleared: number; kept: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number; cleared: boolean; matchedAll: boolean; warnOpen: boolean; eventId: string }>; ndEventIds: string[] } {
   const un = unacked || new Set<string>();
   const items = (recs || []).filter((r: any) => r && r.challengeId).map((r: any) => {
     const t = Date.parse(String(r.settledAt || r.dispatchedAt || r.createdAt || ""));
@@ -1599,6 +1599,7 @@ function computeChallengeView(recs: any[], now: number, unacked?: Set<string>): 
       ageMin: Number.isFinite(t) ? Math.max(0, Math.floor((now - t) / 60000)) : 0,
       matchedAll, warnOpen,
       cleared: matchedAll && !warnOpen, // 실제 ack(또는 경고 소멸)와 결속된 해소만
+      eventId: String(r.eventId || ""), // 경보(배너)와의 결속 키 — 재확인 불가 표시(보관함 채택 2026-08-11)
     };
   }).sort((a, b) => a.ageMin - b.ageMin);
   const counts: Record<string, number> = {};
@@ -1607,7 +1608,9 @@ function computeChallengeView(recs: any[], now: number, unacked?: Set<string>): 
   const cleared = items.filter((x) => x.cleared).length;
   // kept='경고가 실제로 열려 있는' 종결분만(사용자가 수동 확인한 경고를 유지로 과대 표시 금지)
   const kept = items.filter((x) => x.state !== "pending" && x.state !== "dispatched" && !x.cleared && x.warnOpen).length;
-  return { open, cleared, kept, counts, items: items.slice(0, 10) };
+  // ndEventIds: 표시 상한(10) 적용 전 전량 기준 — '재확인 불가(no-dispatch)' 경보 표시가 잘린 목록에 안 걸리게
+  const ndEventIds = items.filter((x) => x.state === "no-dispatch" && x.eventId).map((x) => x.eventId);
+  return { open, cleared, kept, counts, items: items.slice(0, 10), ndEventIds };
 }
 
 // 무결성 신호: 브릿지(verify-guard)가 '검증 미완' 등을 integrity.json에 기록 → 여기서 읽어 상태바/대시보드로 가시화.
@@ -7633,11 +7636,15 @@ class Dashboard {
           ih.appendChild(gh);
         }
         ib.appendChild(ih);
+        // 재확인 원천 불가 표시(보관함 채택 2026-08-11): 인용 파일 전부가 검증 범위 밖(no-dispatch)인 근거의심은
+        // 자동 해소가 없음을 그 줄에서 바로 알린다 — 같은 상태 푸시의 재확인 뷰(ndEventIds·상한 전 전량)와 결속.
+        const nd9 = {}; ((d.challenges && d.challenges.ndEventIds) || []).forEach(function(x){ nd9[x] = true; });
         const ul = el("ul");
         iev.slice(-6).forEach(function(e){
           const li = el("li");
           li.appendChild(el("span","sevdot " + (e.severity==="error"?"err":"warn")));
           li.appendChild(document.createTextNode(e.detail || e.kind || T("무결성 신호","integrity signal")));
+          if (e.kind === "evidence-unseen" && e.id && nd9[e.id]) li.appendChild(el("span","muted"," — " + T("재확인 불가 항목(인용 파일이 검증 범위 밖이라 자동 해소 없음 · '확인함'으로 정리)","recheck not possible (cited files outside the verifiable scope — no auto-clear · resolve via 'Acknowledged')")));
           if (e.ts) li.appendChild(el("span","when","  ("+new Date(e.ts).toLocaleString()+")"));
           ul.appendChild(li);
         });

@@ -59,6 +59,20 @@ console.log("[2] 순수 함수 실행 — 컴파일 산출물에서 computeChall
   ok(r1.files === 2 && r1.resolvedFiles === 2 && r1.ageMin === 2, "파일 수·일치 수·경과(분) 계산");
   const many = Array.from({ length: 15 }, (_, i) => ({ challengeId: "ch-m" + i, state: "resolved", settledAt: new Date(now - i * 1000).toISOString(), files: [] }));
   ok(view(many, now).items.length === 10, "표시 상한 10건");
+  // 재확인 불가 표시(보관함 채택 2026-08-11): no-dispatch의 eventId 집합은 표시 상한(10) '전' 전량 기준
+  {
+    const ndMany = Array.from({ length: 12 }, (_, i) => ({ challengeId: "ch-nd" + i, state: "no-dispatch", eventId: "ev-nd-" + i, createdAt: new Date(now - i * 1000).toISOString(), files: [{ status: "skipped" }] }));
+    const vnd = view(ndMany, now);
+    ok(vnd.items.length === 10 && Array.isArray(vnd.ndEventIds) && vnd.ndEventIds.length === 12 && vnd.ndEventIds.includes("ev-nd-11"), "ndEventIds=상한 전 전량(12건 — 잘린 목록에 안 걸림)");
+    ok(vnd.items.every((x) => typeof x.eventId === "string"), "items에 eventId 결속 키 동봉");
+  }
+}
+
+console.log("[3b] 배너 '재확인 불가' 결속 — 같은 상태 푸시의 ndEventIds로 그 줄에 표시");
+{
+  ok(/const nd9 = \{\}; \(\(d\.challenges && d\.challenges\.ndEventIds\) \|\| \[\]\)/.test(extSrc), "배너가 재확인 뷰의 전량 집합과 결속(경보 배열 자체는 무가공)");
+  ok(/e\.kind === "evidence-unseen" && e\.id && nd9\[e\.id\]/.test(extSrc), "evidence-unseen이면서 no-dispatch 결속된 줄에만 표시(타 경보 오염 금지)");
+  ok(extSrc.includes("재확인 불가 항목(인용 파일이 검증 범위 밖이라 자동 해소 없음 · '확인함'으로 정리)") && extSrc.includes("recheck not possible (cited files outside the verifiable scope"), "안내 문구 ko/en 쌍");
 }
 
 console.log("[3] 렌더 블록 실행 반례 — 숨김/빈 상태/요약·목록·상태 라벨");
