@@ -146,13 +146,13 @@ $(warning) Codex 근거 의심 2                  ← 검증 답이 인용한 '�
 
 개발 도구를 따로 내려받거나 버전 숫자를 올리지 않아도 되는 설치 묶음입니다.
 
-1. **[codex-peek-0.1.94-installer.zip 내려받기](https://github.com/kimbyungsu/codex-peek/releases/download/v0.1.94/codex-peek-0.1.94-installer.zip)** → 압축 풀기.
+1. **[codex-peek-0.1.95-installer.zip 내려받기](https://github.com/kimbyungsu/codex-peek/releases/download/v0.1.95/codex-peek-0.1.95-installer.zip)** → 압축 풀기.
 2. Windows는 `install.cmd`를 더블클릭하고, macOS/Linux는 압축을 푼 폴더에서 `sh install.sh`를 실행합니다. Node.js 20+만 있으면 되며, 묶음 안에 미리 빌드된 VSIX가 들어 있어 `npm install`은 필요 없습니다.
 3. VS Code에서 `Developer: Reload Window`를 한 번 실행합니다.
 
-이 경로는 확장·브릿지·훅과 정찰(3트랙) 스크립트까지 함께 둡니다. 이미 `0.1.94`이 설치된 PC에서도 설치기가 기존 확장 폴더를 강제 삭제하지 않고, 바뀐 런타임만 백업한 뒤 같은 버전에 안전하게 갱신합니다. 비표준 `extensions` 폴더를 쓰는 환경만 `CODEX_BRIDGE_EXTENSIONS_DIR`로 그 폴더를 지정하면 됩니다.
+이 경로는 확장·브릿지·훅과 정찰(3트랙) 스크립트까지 함께 둡니다. 이미 `0.1.95`이 설치된 PC에서도 설치기가 기존 확장 폴더를 강제 삭제하지 않고, 바뀐 런타임만 백업한 뒤 같은 버전에 안전하게 갱신합니다. 비표준 `extensions` 폴더를 쓰는 환경만 `CODEX_BRIDGE_EXTENSIONS_DIR`로 그 폴더를 지정하면 됩니다.
 
-확장과 2트랙 검증만 빠르게 설치하려면 **[codex-bridge-0.1.94.vsix](https://github.com/kimbyungsu/codex-peek/releases/download/v0.1.94/codex-bridge-0.1.94.vsix)**를 받아 VS Code의 `확장: VSIX에서 설치...`로 여세요. 같은 `0.1.94`을 이미 쓰는 PC는 VSIX 강제 재설치 대신 위 전체 설치 묶음을 사용해야 안전하게 최신 코드가 반영됩니다. 파일 지문은 [v0.1.94 릴리스 페이지](https://github.com/kimbyungsu/codex-peek/releases/tag/v0.1.94)의 `SHA256SUMS.txt`에서 확인할 수 있습니다.
+확장과 2트랙 검증만 빠르게 설치하려면 **[codex-bridge-0.1.95.vsix](https://github.com/kimbyungsu/codex-peek/releases/download/v0.1.95/codex-bridge-0.1.95.vsix)**를 받아 VS Code의 `확장: VSIX에서 설치...`로 여세요. 같은 `0.1.95`을 이미 쓰는 PC는 VSIX 강제 재설치 대신 위 전체 설치 묶음을 사용해야 안전하게 최신 코드가 반영됩니다. 파일 지문은 [v0.1.95 릴리스 페이지](https://github.com/kimbyungsu/codex-peek/releases/tag/v0.1.95)의 `SHA256SUMS.txt`에서 확인할 수 있습니다.
 
 ### 마켓플레이스 설치 (확장 → 알림 1클릭)
 VS Code 마켓플레이스(또는 vsix)로 확장을 설치하면:
