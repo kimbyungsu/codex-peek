@@ -279,7 +279,10 @@ function copyBridge(dryRun) {
       const crypto = require("crypto");
       const files = {};
       for (const f of BRIDGE_SCRIPTS) files[f] = crypto.createHash("sha1").update(fs.readFileSync(path.join(SRC_BRIDGE, f))).digest("hex");
-      fs.writeFileSync(path.join(BRIDGE_DIR, "deploy-manifest.json"), JSON.stringify({ schema: "deploy-manifest-v1", ts: new Date().toISOString(), files }, null, 1));
+      // version: 이 배포 세대의 패키지 버전 — 확장 활성화가 '무수정 설치기 배포본+구세대'를 판별해 마켓 업데이트 때
+      // 안전 자동 동기화하는 기준(혼합 설치 드리프트 고착 봉합 2026-08-12). 판독 실패=빈값(자동 동기화 없음 — fail-safe).
+      let mVer = ""; try { mVer = String(JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8")).version || ""); } catch { mVer = ""; }
+      fs.writeFileSync(path.join(BRIDGE_DIR, "deploy-manifest.json"), JSON.stringify({ schema: "deploy-manifest-v1", version: mVer, ts: new Date().toISOString(), files }, null, 1));
     }
     // 확장 자동배치 stamp 제거 = '수동(레포) 설치 모드' 표시 — 확장이 개발자의 최신 수동본을 옛 번들본으로 덮지 않게 한다(src/extension.ts deployBridgeRuntime 대칭).
     try { fs.unlinkSync(path.join(BRIDGE_DIR, ".bridge-deployed-by.json")); } catch { /* 없으면 무시 */ }

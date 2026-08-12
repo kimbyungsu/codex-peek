@@ -4390,6 +4390,18 @@ class Dashboard {
         if (m?.type === "installCodexHooks") {
           void runCodexHookInstallFlow(this.uri.fsPath).then(() => this.post());
         }
+        if (m?.type === "syncBridge") {
+          // 배너 1클릭 — 사용자가 직접 눌러 실행부를 확장 세대에 맞춤(백업 후 갱신·관리 모드 전환 — 혼합 설치 드리프트 봉합)
+          const r9 = forceSyncBridgeRuntime(this.uri.fsPath);
+          if (r9.ok) {
+            syncBridgeDriftEvents(dashboardWorkspace(), []); // 해소 — 드리프트 경보 자기치유 소거
+            vscode.window.showInformationMessage(tE(`실행부를 확장 세대로 맞췄어요(기존본 백업: ${r9.backup}). 창을 한 번 리로드하면 완전히 적용됩니다.`, `Bridge runtime aligned to this extension (previous copy backed up: ${r9.backup}). Reload the window once to fully apply.`));
+          } else {
+            vscode.window.showErrorMessage(tE("실행부 맞추기 실패 — 파일이 잠겨 있을 수 있어요. 잠시 후 다시 시도해 주세요.", "Runtime sync failed — files may be locked. Try again shortly."));
+          }
+          this.post(); this.onChange?.();
+          return;
+        }
         if (m?.type === "ackIntegrity") {
           // 무결성 경보 확인(해제). id 배열이면 그것만, 없으면 전체.
           const ok = ackIntegrity(Array.isArray(m.ids) ? m.ids : "all"); // 빈 배열([])은 그대로 → no-op. 배너가 session-missing만 빼 []를 보낼 때 'all'로 변질돼 전체(다른 빨강 포함)가 ack되던 회귀 방지.
@@ -7629,6 +7641,12 @@ class Dashboard {
         } else {
           ih.appendChild(el("span","muted",T("원인을 복구하면 사라져요 (확인으론 안 닫혀요)","clears when the underlying problem is fixed (cannot be dismissed)")));
         }
+        if (iev.some(function(e){return e.kind==="bridge-drift";})) { // 혼합 설치 드리프트 — 1클릭 복구(백업 후 확장 세대로)
+          const sync9 = el("button","secondary",T("실행부 맞추기(백업 후 갱신)","Sync runtime (backup first)"));
+          sync9.style.marginLeft = "8px";
+          sync9.addEventListener("click", function(){ vscode.postMessage({type:"syncBridge"}); });
+          ih.appendChild(sync9);
+        }
         if (iev.some(function(e){return e.sig==="session-missing:blocked";})) { // 자동 생성이 멈춤 → GitHub 이슈로 안내(클릭 시 외부 브라우저)
           const gh = el("a","muted",T("🔗 GitHub에 문제 신고","🔗 Report on GitHub"));
           gh.setAttribute("href","https://github.com/kimbyungsu/codex-peek/issues");
@@ -7958,10 +7976,66 @@ function writeDeployManifest(src: string): void { // install.js와 동일 규약
   try {
     const files: Record<string, string> = {};
     for (const f of hookSetup.BRIDGE_SCRIPTS) files[f] = crypto.createHash("sha1").update(fs.readFileSync(path.join(src, f))).digest("hex");
-    hookSetup.atomicWriteFile(path.join(BRIDGE_DIR, "deploy-manifest.json"), JSON.stringify({ schema: "deploy-manifest-v1", ts: new Date().toISOString(), files }, null, 1));
+    // version: 배포 세대 기록(install.js와 동일 규약) — 수동 모드 전환 후에도 '무수정+구세대' 자동 동기화 판정 기준이 남게
+    let mVer = ""; try { mVer = String(JSON.parse(fs.readFileSync(path.join(src, "..", "package.json"), "utf8")).version || ""); } catch { mVer = ""; }
+    hookSetup.atomicWriteFile(path.join(BRIDGE_DIR, "deploy-manifest.json"), JSON.stringify({ schema: "deploy-manifest-v1", version: mVer, ts: new Date().toISOString(), files }, null, 1));
   } catch { /* 실패=검사 fail-closed가 안내(다음 활성화 재시도) */ }
 }
 function ensureDeployManifest(src: string): void { if (!fs.existsSync(path.join(BRIDGE_DIR, "deploy-manifest.json"))) writeDeployManifest(src); }
+// ── 혼합 설치 세대 불일치 봉합(2026-08-12 실사고 → 사용자 결정: 다중 사용자 하네스로서 재발 금지) ──
+// 문제: 레포 설치기(전체 설치 묶음 포함)가 stamp를 지워 '수동 모드'가 되면, 이후 마켓 업데이트가 실행부를
+// 영영 안 덮어 '확장=신형·실행부=구형' 고착(다시 점검·다시 시도 전부 무효). 처방 3면:
+//  ①설치기가 배포한 그대로(=manifest 전 파일 일치·무수정)이고 그 세대가 확장보다 낮으면 → 자동 동기화(+관리 모드 승격)
+//  ②수정 감지·세대 판정 불가면 → 조용한 고착 금지: 가시 경보+배너 1클릭 복구(백업 후 갱신 — 덮어쓰기는 사용자 클릭으로만)
+//  ③실행부가 이미 같은 세대면 → 관리 모드로만 승격(다음 업데이트부터 자동)
+// 판정은 순수 함수 — 시험이 컴파일 산출물에서 추출 실행한다.
+function versionLt(a: string, b: string): boolean { // x.y.z 숫자 비교 — 해석 불가=false(자동 덮기 금지 방향 fail-safe)
+  const pa = String(a).split(".").map((n) => parseInt(n, 10)), pb = String(b).split(".").map((n) => parseInt(n, 10));
+  if (pa.length !== 3 || pb.length !== 3 || pa.some((n) => !Number.isFinite(n)) || pb.some((n) => !Number.isFinite(n))) return false;
+  for (let i = 0; i < 3; i++) { if (pa[i] < pb[i]) return true; if (pa[i] > pb[i]) return false; }
+  return false;
+}
+function decideManualBridgeSync(homeVsBundleDrift: number, homeVsManifestMismatch: number | null, manifestVersion: string | null, extVersion: string): "none" | "auto" | "notice" {
+  if (homeVsBundleDrift === 0) return "none"; // 같은 세대 — 덮을 것 없음(호출자가 관리 모드 승격만)
+  if (homeVsManifestMismatch === 0 && manifestVersion && versionLt(manifestVersion, extVersion)) return "auto"; // 설치기 배포본 그대로+구세대 → 안전 자동
+  return "notice"; // 수정 감지·manifest 부재·개발자의 더 새로운 수동 빌드(세대 역전 포함) → 자동 금지+가시 안내
+}
+// bridge-drift 경보 동기화 — brain-drift와 같은 자기치유 계약(유효 sig만 보존·해소되면 자동 소거·ack 유지)
+function syncBridgeDriftEvents(ws: string | null, drifts: { sig: string; detailKo: string; detailEn: string }[]): void {
+  withIntegrityLockExt(() => {
+    if (!ws) return;
+    const KIND = "bridge-drift";
+    const events = readIntegrity() as any[];
+    const wsMatch = (e: any) => !e.workspace || normWs(e.workspace) === normWs(ws);
+    const curSigs = new Set(drifts.map((d) => d.sig));
+    const kept = events.filter((e) => e.kind !== KIND || !wsMatch(e) || curSigs.has(e.sig));
+    const present = new Set(kept.filter((e) => e.kind === KIND && wsMatch(e)).map((e) => e.sig));
+    for (const d of drifts) {
+      if (present.has(d.sig)) continue;
+      kept.push({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, ack: false, ts: new Date().toISOString(), session: "", workspace: ws, kind: KIND, severity: "warning", detail: tE(d.detailKo, d.detailEn), detailKo: d.detailKo, detailEn: d.detailEn, sig: d.sig });
+    }
+    if (kept.length !== events.length || kept.some((e, i) => e !== events[i])) atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: kept.slice(-50) }));
+  });
+}
+// 배너 1클릭 복구 — 기존 실행부를 백업 폴더로 옮겨 두고 번들 세대로 전체 배치+관리 모드 전환(이후 자동)
+function forceSyncBridgeRuntime(extRoot: string): { ok: boolean; backup: string } {
+  try {
+    const src = path.join(extRoot, "bridge");
+    let ver = ""; try { ver = String(JSON.parse(fs.readFileSync(path.join(extRoot, "package.json"), "utf8")).version || ""); } catch { ver = ""; }
+    const lk = withDeployLockSync<{ ok: boolean; backup: string }>(() => {
+      const backup = path.join(BRIDGE_DIR, `runtime-backup-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+      try { fs.mkdirSync(backup, { recursive: true }); for (const f of hookSetup.BRIDGE_SCRIPTS) { try { fs.copyFileSync(path.join(BRIDGE_DIR, f), path.join(backup, f)); } catch { /* 원본 없으면 백업 생략 */ } } } catch { /* 백업 실패해도 진행은 사람이 누른 명시 복구 */ }
+      let allOk = true;
+      for (const f of hookSetup.BRIDGE_SCRIPTS) {
+        const body = fs.readFileSync(path.join(src, f), "utf8");
+        if (!hookSetup.atomicWriteFile(path.join(BRIDGE_DIR, f), body)) allOk = false;
+      }
+      if (allOk) { writeDeployManifest(src); if (ver) hookSetup.atomicWriteFile(BRIDGE_STAMP, JSON.stringify({ version: ver, ts: new Date().toISOString() }) + "\n"); }
+      return { ok: allOk, backup };
+    });
+    return lk === null ? { ok: false, backup: "" } : lk;
+  } catch { return { ok: false, backup: "" }; }
+}
 function deployBridgeRuntime(context: vscode.ExtensionContext): boolean {
   try {
     const src = path.join(context.extensionPath, "bridge");
@@ -7985,7 +8059,36 @@ function deployBridgeRuntime(context: vscode.ExtensionContext): boolean {
     } else if (absent.length > 0) {
       targets = absent; writeStamp = false;                            // 손상 수동 설치: 누락분만 보충(수동 모드 유지)
     } else {
-      return false;                                                    // 정상 수동 설치 존중
+      // ④ stamp 없음+전부 있음 — '무조건 존중'은 혼합 설치 드리프트 고착의 원인이었다(실사고 2026-08-12).
+      //    판정(decideManualBridgeSync): 무수정 설치기 배포본+구세대=자동 동기화 / 그 외 불일치=가시 경보+1클릭 / 동세대=승격만.
+      const wsA = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || null;
+      const drift = bundleDriftFiles(src);
+      if (drift.length === 0) {
+        targets = []; writeStamp = true;                               // 같은 세대 → 관리 모드 승격만(다음 업데이트부터 자동)
+        syncBridgeDriftEvents(wsA, []);                                // 잔존 드리프트 경보 자기치유 소거
+      } else {
+        let mani: any = null; try { mani = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, "deploy-manifest.json"), "utf8")); } catch { mani = null; }
+        let mismatch: number | null = null;
+        if (mani && mani.files && typeof mani.files === "object") {
+          mismatch = 0;
+          for (const f of hookSetup.BRIDGE_SCRIPTS) {
+            try { if (crypto.createHash("sha1").update(fs.readFileSync(path.join(BRIDGE_DIR, f))).digest("hex") !== mani.files[f]) mismatch++; } catch { mismatch++; }
+          }
+        }
+        const decision = decideManualBridgeSync(drift.length, mismatch, mani && typeof mani.version === "string" && mani.version ? mani.version : null, ver);
+        if (decision === "auto") {
+          targets = hookSetup.BRIDGE_SCRIPTS; writeStamp = true;       // 설치기 배포본 그대로(무수정)+구세대 → 안전 자동 동기화
+          syncBridgeDriftEvents(wsA, []);
+        } else {
+          // 자동 금지(수정 감지·manifest 부재·세대 역전) — 조용한 고착 대신 가시 경보+배너 1클릭 복구 안내
+          syncBridgeDriftEvents(wsA, [{
+            sig: `bridge-drift:${ver}:${drift.length}`,
+            detailKo: `실행부(브릿지)가 확장과 다른 세대예요(파일 ${drift.length}개) — 직접 설치·수정 이력을 존중해 자동으로 덮지 않았어요. 이 상태로는 지도 점검·자동 보강이 계속 보류될 수 있어요. 배너의 '실행부 맞추기'를 누르면 백업 후 확장 세대로 맞춥니다.`,
+            detailEn: `The bridge runtime differs from this extension's generation (${drift.length} file(s)) — not overwritten automatically out of respect for a manual install/edits. Map checks and auto-enrichment may stay parked in this state. Click 'Sync runtime' in the banner to back up and align it.`,
+          }]);
+          return false;
+        }
+      }
     }
     let allOk = true;
     for (const f of targets) {
