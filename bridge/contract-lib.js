@@ -1859,6 +1859,19 @@ function writeMapReadinessGuarded(provider, rec, currentFpFn) {
     const prev = cur[provider];
     if (rec && rec.ok !== true && prev && prev.ok === true && typeof rec.startedAt === "string" && typeof prev.probedAt === "string" && rec.startedAt < prev.probedAt) return "stale-loser";
     const next = { ...cur, version: MAP_READINESS_VER, probeVer: MAP_PROBE_VER, [provider]: rec };
+    // 지문별 성공 증명 보존(7차 blocker f-8c217e4a — B→C→B 정상 순환): 담당별 최신 1건만 남기면 B로
+    // 복귀했을 때 예약 장부 done(B)과 결합해 자동 재점검이 영구 차단된다. 교체로 밀려나는 '성공' 레코드를
+    // 담당별 이력에 보관해, 뷰가 같은 지문 복귀를 재과금 없이 즉시 '준비됨'으로 복원한다. 지문=설정+실행
+    // 전체 서명이라 증명 강도는 최신 1건 검사와 동일하고, 컨테이너 세대(probeVer) 리셋 시 이력도 함께
+    // 소멸한다. 같은 지문의 새 레코드(성공/실패 불문)는 이력의 그 지문을 대체(최신 증거 우선).
+    const histAll = cur.hist && typeof cur.hist === "object" && !Array.isArray(cur.hist) ? { ...cur.hist } : {};
+    let hp = Array.isArray(histAll[provider]) ? histAll[provider].filter((h) => h && typeof h.fp === "string" && !(rec && h.fp === rec.fp)) : [];
+    if (prev && prev.ok === true && typeof prev.fp === "string" && (!rec || prev.fp !== rec.fp)) {
+      hp = hp.filter((h) => h.fp !== prev.fp);
+      hp.push({ ok: true, fp: prev.fp, probedAt: prev.probedAt });
+    }
+    histAll[provider] = hp.slice(-8); // 담당별 이력 상한(현실적 설정 순환 커버 — 밀려난 지문 복귀는 유계 자동 재점검 1회)
+    next.hist = histAll;
     return atomicWrite(MAP_READINESS_FILE, JSON.stringify(next, null, 2)) ? "ok" : "write-failed";
   });
   if (!r.ok) return { ok: false, reason: r.error || "lock" };
@@ -1893,6 +1906,17 @@ function readAutoReprobeLedger() {
   try { const j = JSON.parse(fs.readFileSync(AUTO_REPROBE_FILE, "utf8")); if (Array.isArray(j)) return j; } catch { /* 부재·파손=빈 장부(과거 예약 소실=최대 시도 상한만큼 추가 점검 — 무한 반복 아님) */ }
   return [];
 }
+// done 만료 판정 재료(7차): 그 점검이 남긴 증명(최신 레코드 또는 지문별 이력)이 아직 살아있는가.
+// 증명이 교체·이력 밀림·세대(probeVer) 리셋으로 사라졌으면 done의 거부 근거도 사라진 것 — 재점검이 정당.
+function readinessProvesFp(provider, fp) {
+  if (!provider || !fp) return false;
+  const raw = readMapReadinessRaw();
+  if (!raw || raw.probeVer !== MAP_PROBE_VER) return false;
+  const r = raw[provider];
+  if (r && r.ok === true && r.fp === fp) return true;
+  const hl = raw.hist && Array.isArray(raw.hist[provider]) ? raw.hist[provider] : [];
+  return hl.some((h) => h && h.ok === true && h.fp === fp);
+}
 function claimAutoReprobe(key) {
   if (!key || typeof key !== "string") return false;
   const now = Date.now();
@@ -1902,12 +1926,19 @@ function claimAutoReprobe(key) {
     let tries = 1;
     if (i >= 0) {
       const e = cur[i];
-      if (e.state === "done") return "deny"; // 이 지문은 이미 점검 완료 — 영구 확정
-      const age = now - (Date.parse(e.ts) || 0);
-      const t = Number.isSafeInteger(e.tries) && e.tries >= 1 ? e.tries : 1;
-      if (age < AUTO_REPROBE_TTL_MS) return "wait"; // 다른 창이 진행 중(자식 킬 타이머 6분 < TTL 10분) — 일시 거부(null): TTL 경과 후 승계 가능해야 함
-      if (t >= AUTO_REPROBE_MAX_TRIES) return "deny"; // 완료 표식 없이 반복 사망 — 수동 경로로
-      tries = t + 1; cur.splice(i, 1); // 사망 승계 — 시도 수 누적
+      if (e.state === "done") {
+        // done=영구가 아니라 '증명이 살아있는 동안' 거부(7차 blocker f-8c217e4a): 증명이 살아있으면 뷰가
+        // 준비됨이라 애초에 여기 올 일이 없고, 왔다면(교체+이력 밀림·세대 리셋) 재점검이 정당하다.
+        // 새 순환은 tries=1부터 — 매 재개가 실제 증명 소실 사건을 전제하므로 과금은 유계다.
+        if (readinessProvesFp(key.slice(0, key.indexOf(":")), key.slice(key.indexOf(":") + 1))) return "deny";
+        cur.splice(i, 1); // 만료된 done — 새 started로 교체
+      } else {
+        const age = now - (Date.parse(e.ts) || 0);
+        const t = Number.isSafeInteger(e.tries) && e.tries >= 1 ? e.tries : 1;
+        if (age < AUTO_REPROBE_TTL_MS) return "wait"; // 다른 창이 진행 중(자식 킬 타이머 6분 < TTL 10분) — 일시 거부(null): TTL 경과 후 승계 가능해야 함
+        if (t >= AUTO_REPROBE_MAX_TRIES) return "deny"; // 완료 표식 없이 반복 사망 — 수동 경로로
+        tries = t + 1; cur.splice(i, 1); // 사망 승계 — 시도 수 누적
+      }
     }
     cur.push({ sig: key, ts: new Date(now).toISOString(), state: "started", tries });
     if (cur.length > 40) cur = cur.slice(-40); // 무한 성장 방지(밀려난 옛 fp 재등장=최대 상한만큼 재점검)
@@ -2009,9 +2040,23 @@ function mapReadinessView(opts) {
     const r = ent(p);
     if (!r) return { ok: false, reason: "not-probed" };
     if (!verOk) return { ok: false, reason: "probe-ver-changed" };
-    if (r.ok !== true) return { ok: false, reason: "probe-failed", probedAt: r.probedAt, detail: r.detail };
+    // 지문별 이력 복원 재료(7차): '이 지문 그대로' 성공한 증명이 보존돼 있으면 설정 복귀=즉시 준비됨(재과금 0).
+    // 같은 지문의 최신 레코드(성공/실패)는 이력의 그 지문을 대체하므로(write 쪽 규칙) 실패를 성공으로 되살릴 일 없음.
+    const hist9 = (fp) => {
+      const hl = rec.hist && Array.isArray(rec.hist[p]) ? rec.hist[p] : [];
+      return hl.find((x) => x && x.ok === true && x.fp === fp) || null;
+    };
+    if (r.ok !== true) {
+      // 최신이 '다른 지문'의 실패라도 현재 지문의 성공 증명이 살아있으면 복원 — 타 설정의 실패가 현 설정을 가리지 않음
+      if (typeof fpNow === "string" && r[fpKey] !== fpNow) { const h = hist9(fpNow); if (h) return { ok: true, probedAt: h.probedAt, restored: true }; }
+      return { ok: false, reason: "probe-failed", probedAt: r.probedAt, detail: r.detail };
+    }
     if (fpNow === null) return { ok: false, reason: "config-missing" };
-    if (fpNow !== undefined && r[fpKey] !== fpNow) return { ok: false, reason: "config-changed", probedAt: r.probedAt };
+    if (fpNow !== undefined && r[fpKey] !== fpNow) {
+      const h = hist9(fpNow);
+      if (h) return { ok: true, probedAt: h.probedAt, restored: true };
+      return { ok: false, reason: "config-changed", probedAt: r.probedAt };
+    }
     return { ok: true, probedAt: r.probedAt };
   };
   // self 재대조 지문도 호출자 주입(1차 blocker② — CLI 버전 성분은 spawn이 필요해 뷰가 직접 못 만든다:

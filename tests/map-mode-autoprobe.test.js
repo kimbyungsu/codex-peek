@@ -155,7 +155,10 @@ console.log("[8] 전역 예약 장부 — 담당별 fp당 1회·2단계(started/
   const CL2 = require(path.join(ROOT, "bridge", "contract-lib.js")); // 두 번째 창 재현(독립 모듈 인스턴스 — 검증자 반례 구도)
   ok(CL2.claimAutoReprobe("precision:fpA") === null, "다른 창(독립 인스턴스)도 진행 중엔 일시 양보 — 같은 담당 중복 과금 0");
   ok(CL2.claimAutoReprobe("economy:fpE") === true, "다른 담당 키=독립 예약(창 A precision·창 B economy 공존)");
-  ok(CL2.completeAutoReprobe("precision:fpA") === true && CL2.claimAutoReprobe("precision:fpA") === false, "done 확정 후=영구 거부");
+  ok(CL2.completeAutoReprobe("precision:fpA") === true, "done 확정 기록");
+  // 7차: done의 거부는 '증명(readiness) 생존' 조건부 — 이 tmp 홈에는 fpA 증명이 없으므로 만료 재개가 정확
+  // (증명 생존 시 거부·복원과의 결합은 [11]에서 검증)
+  ok(CL2.claimAutoReprobe("precision:fpA") === true, "done인데 증명 소실=만료 재개(B-C-B 순환 영구 잠금 금지)");
   // 3차 blocker③: 실행 주체 사망 재현 — started가 TTL을 넘기면 승계 허용(사람 클릭 없는 복귀), 시도 상한으로 과금 유계
   const lf = path.join(home, "auto-reprobe.json");
   const stale = (tries) => [{ sig: "precision:fpDead", ts: new Date(Date.now() - 11 * 60 * 1000).toISOString(), state: "started", tries }];
@@ -263,6 +266,31 @@ console.log("[10b] 정산 기능 실행 — 저장 실패=done 금지·창 회�
   // 배치 실행기가 결속 재료(실제 점검·저장 지문)를 실제로 반환하는지 — 세 담당 모두
   const mb = fs.readFileSync(path.join(ROOT, "bridge", "map-probe-batch.js"), "utf8");
   ok((mb.match(/fp: r\.rec\.fp/g) || []).length === 3, "배치 응답에 rec.fp 동봉(self·economy·precision — 부모 정산의 결속 재료)");
+}
+
+console.log("[11] 지문별 증명 보존·복원+done 만료 — B→C→B 정상 순환 영구 차단 소멸(7차 blocker 반례·기능 실행)");
+{
+  const CL = require(path.join(ROOT, "bridge", "contract-lib.js"));
+  const home = process.env.CODEX_BRIDGE_HOME;
+  const rf = path.join(home, "map-readiness.json");
+  try { fs.unlinkSync(rf); } catch { /* 초기화 */ }
+  ok(CL.writeMapReadinessGuarded("precision", { ok: true, probedAt: "2026-01-01T00:00:00.000Z", fp: "fpB" }, () => "fpB").ok === true, "B 성공 기록");
+  ok(CL.claimAutoReprobe("precision:fpB") === true && CL.completeAutoReprobe("precision:fpB") === true, "B 예약·완료(done)");
+  ok(CL.claimAutoReprobe("precision:fpB") === false, "done+증명 생존=거부(불필요 재과금 0)");
+  ok(CL.writeMapReadinessGuarded("precision", { ok: true, probedAt: "2026-01-02T00:00:00.000Z", fp: "fpC" }, () => "fpC").ok === true, "C 성공 기록(최신 교체)");
+  const vB = CL.mapReadinessView({ precisionFpNow: "fpB" }).precision;
+  ok(vB.ok === true && vB.restored === true, "B 복귀=이력 복원으로 즉시 준비됨(재점검·재과금 0 — 검증자 반례 3~5단계 소멸)");
+  ok(CL.mapReadinessView({ precisionFpNow: "fpC" }).precision.ok === true, "C(최신)도 준비됨");
+  ok(CL.mapReadinessView({ precisionFpNow: "fpD" }).precision.ok === false && CL.mapReadinessView({ precisionFpNow: "fpD" }).precision.reason === "config-changed", "미점검 지문 D=config-changed 유지(복원 남용 없음)");
+  // 같은 지문의 최신 실패가 이력의 옛 성공을 대체 — 실패를 성공으로 되살리지 않음
+  ok(CL.writeMapReadinessGuarded("precision", { ok: false, probedAt: "2026-01-03T00:01:00.000Z", startedAt: "2026-01-03T00:00:00.000Z", fp: "fpB", detail: "x" }, () => "fpB").ok === true, "B 최신 실패 기록(최신 증거 우선)");
+  const vB2 = CL.mapReadinessView({ precisionFpNow: "fpB" }).precision;
+  ok(vB2.ok === false && vB2.reason === "probe-failed", "B=probe-failed(이력의 옛 성공이 실패를 가리지 않음)");
+  const vC2 = CL.mapReadinessView({ precisionFpNow: "fpC" }).precision;
+  ok(vC2.ok === true && vC2.restored === true, "C 증명은 이력에서 생존(실패 기록이 타 지문 증명을 안 죽임)");
+  // 증명 소실(이력 밀림·세대 리셋 재현) — done은 만료 재개(영구 잠금 금지·재점검은 실제 소실 사건 전제라 유계)
+  const rd = JSON.parse(fs.readFileSync(rf, "utf8")); delete rd.hist; rd.precision = { ok: true, probedAt: "2026-01-04T00:00:00.000Z", fp: "fpZ" }; fs.writeFileSync(rf, JSON.stringify(rd));
+  ok(CL.claimAutoReprobe("precision:fpB") === true, "done인데 증명 소실=만료 재개(사람 클릭 없는 복귀 유지)");
 }
 
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);
