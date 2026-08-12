@@ -39,6 +39,36 @@ console.log("[2] 배치 흐름 ④ 재작성 — 무조건 존중 폐기·판정
   ok(/syncBridgeDriftEvents\(wsA, \[\{[\s\S]{0,80}sig: `bridge-drift:\$\{ver\}:\$\{drift\.length\}`/.test(fn), "자동 불가=가시 경보 발행(재발행 방지 sig)");
   ok(/drift\.length === 0[\s\S]{0,120}writeStamp = true/.test(fn), "동세대=관리 모드 승격(다음 업데이트부터 자동)");
   ok(fn.includes("syncBridgeDriftEvents(wsA, [])"), "해소 경로=드리프트 경보 자기치유 소거");
+  // 재검증 blocker① 반례: 새 파일 추가 업데이트가 판정을 우회하지 않는다 — 부재·기존 파일을 한 판정으로 통합
+  ok(!/absent\.length > 0[\s\S]{0,80}targets = absent; writeStamp = false;\s*\/\/ 손상 수동 설치/.test(fn), "구 '누락분만 조용히 보충' 분기 소멸(판정 우회 차단)");
+  ok(/if \(!fs\.existsSync\(path\.join\(BRIDGE_DIR, f\)\)\) continue;\s*\/\/ 부재=수정 증거 아님/.test(fn), "부재 파일=드리프트로만(수정 증거 아님 — 자동 경로 유지)");
+  ok(/if \(typeof mh !== "string"\) continue;\s*\/\/ manifest에 없는 새 세대 파일=수정 증거 아님/.test(fn), "manifest 밖 새 파일=수정 증거 아님(새 파일 추가 업데이트도 자동 동기화)");
+  ok(/if \(absent\.length === 0\) return false;\s*targets = absent; writeStamp = false;/.test(fn), "경보 경로=부재분만 보충(기존 파일 무접촉)");
+}
+
+console.log("[2b] 1클릭 복구 — 백업 실패=중단(실행 반례·재검증 blocker②)");
+{
+  // 컴파일 산출물에서 forceSyncBridgeRuntime 추출, 의존성 주입으로 '백업 copy 실패' 시나리오 실행
+  const b = outSrc.indexOf("function forceSyncBridgeRuntime(");
+  const e = outSrc.indexOf("\nfunction ", b + 10);
+  ok(b > 0 && e > b, "복구 함수 추출 가능");
+  const body = outSrc.slice(b, e);
+  const writes = [];
+  const fakeFs = {
+    mkdirSync: () => {},
+    existsSync: () => true,
+    copyFileSync: () => { throw new Error("EACCES"); }, // 백업 실패 주입
+    readFileSync: (p) => (String(p).endsWith("package.json") ? '{"version":"9.9.9"}' : "body"),
+  };
+  const fakeHook = { BRIDGE_SCRIPTS: ["a.js", "b.js"], atomicWriteFile: (p) => { writes.push(String(p)); return true; } };
+  const fn = new Function("fs", "path", "hookSetup", "BRIDGE_DIR", "BRIDGE_STAMP", "withDeployLockSync", "writeDeployManifest",
+    body + "\nreturn forceSyncBridgeRuntime;")(fakeFs, path, fakeHook, "H:", "H:\\\\stamp", (f) => f(), () => { writes.push("MANIFEST"); });
+  const r = fn("X:");
+  ok(r.ok === false && writes.length === 0, "백업 실패=아무것도 안 덮고 중단(ok:false·쓰기 0건 — 실행 반례)");
+  // 백업 성공 시나리오 — 덮어쓰기·manifest·stamp까지 진행
+  fakeFs.copyFileSync = () => {};
+  const r2 = fn("X:");
+  ok(r2.ok === true && writes.some((w) => w === "MANIFEST") && writes.some((w) => String(w).includes("stamp")), "백업 성공=배치+관리 모드 전환 진행");
 }
 
 console.log("[3] 1클릭 복구·배너·manifest 세대 기록");

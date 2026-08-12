@@ -8024,7 +8024,17 @@ function forceSyncBridgeRuntime(extRoot: string): { ok: boolean; backup: string 
     let ver = ""; try { ver = String(JSON.parse(fs.readFileSync(path.join(extRoot, "package.json"), "utf8")).version || ""); } catch { ver = ""; }
     const lk = withDeployLockSync<{ ok: boolean; backup: string }>(() => {
       const backup = path.join(BRIDGE_DIR, `runtime-backup-${new Date().toISOString().replace(/[:.]/g, "-")}`);
-      try { fs.mkdirSync(backup, { recursive: true }); for (const f of hookSetup.BRIDGE_SCRIPTS) { try { fs.copyFileSync(path.join(BRIDGE_DIR, f), path.join(backup, f)); } catch { /* 원본 없으면 백업 생략 */ } } } catch { /* 백업 실패해도 진행은 사람이 누른 명시 복구 */ }
+      // 백업은 전제 조건(재검증 blocker②): 존재하는 파일이 하나라도 백업에 실패하면 아무것도 덮지 않고 중단 —
+      // '백업 후 갱신' 약속이 문구가 아니라 실행 순서로 보장된다(백업 실패=수정본 소실 위험이므로 fail-closed).
+      let backupOk = true;
+      try { fs.mkdirSync(backup, { recursive: true }); } catch { backupOk = false; }
+      if (backupOk) {
+        for (const f of hookSetup.BRIDGE_SCRIPTS) {
+          if (!fs.existsSync(path.join(BRIDGE_DIR, f))) continue;      // 원본 없음=백업 대상 아님
+          try { fs.copyFileSync(path.join(BRIDGE_DIR, f), path.join(backup, f)); } catch { backupOk = false; break; }
+        }
+      }
+      if (!backupOk) return { ok: false, backup: "" };                 // 덮어쓰기 진입 전 중단(파괴 0)
       let allOk = true;
       for (const f of hookSetup.BRIDGE_SCRIPTS) {
         const body = fs.readFileSync(path.join(src, f), "utf8");
@@ -8056,13 +8066,12 @@ function deployBridgeRuntime(context: vscode.ExtensionContext): boolean {
       targets = hookSetup.BRIDGE_SCRIPTS; writeStamp = true;          // 업그레이드/복구/드리프트: 전체 재배치
     } else if (absent.length === hookSetup.BRIDGE_SCRIPTS.length) {
       targets = hookSetup.BRIDGE_SCRIPTS; writeStamp = true;          // 마켓 fresh 설치
-    } else if (absent.length > 0) {
-      targets = absent; writeStamp = false;                            // 손상 수동 설치: 누락분만 보충(수동 모드 유지)
     } else {
-      // ④ stamp 없음+전부 있음 — '무조건 존중'은 혼합 설치 드리프트 고착의 원인이었다(실사고 2026-08-12).
-      //    판정(decideManualBridgeSync): 무수정 설치기 배포본+구세대=자동 동기화 / 그 외 불일치=가시 경보+1클릭 / 동세대=승격만.
+      // stamp 없음(수동 모드)+일부 또는 전부 존재 — '무조건 존중'과 '누락분만 조용히 보충'은 혼합 설치 드리프트
+      // 고착의 원인이었다(실사고 2026-08-12 + 재검증 blocker: 새 파일이 추가되는 업데이트가 판정을 우회해 혼합 세대).
+      // 부재·기존 파일을 한 판정으로 통합: 무수정 설치기 배포본+구세대=자동 전체 동기화 / 불일치=경보+부재분만 보충 / 동세대=승격만.
       const wsA = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || null;
-      const drift = bundleDriftFiles(src);
+      const drift = bundleDriftFiles(src);                             // 부재·판독 불가 포함 전수 대조
       if (drift.length === 0) {
         targets = []; writeStamp = true;                               // 같은 세대 → 관리 모드 승격만(다음 업데이트부터 자동)
         syncBridgeDriftEvents(wsA, []);                                // 잔존 드리프트 경보 자기치유 소거
@@ -8072,21 +8081,26 @@ function deployBridgeRuntime(context: vscode.ExtensionContext): boolean {
         if (mani && mani.files && typeof mani.files === "object") {
           mismatch = 0;
           for (const f of hookSetup.BRIDGE_SCRIPTS) {
-            try { if (crypto.createHash("sha1").update(fs.readFileSync(path.join(BRIDGE_DIR, f))).digest("hex") !== mani.files[f]) mismatch++; } catch { mismatch++; }
+            if (!fs.existsSync(path.join(BRIDGE_DIR, f))) continue;    // 부재=수정 증거 아님(드리프트로만 집계 — 재배치가 채움)
+            const mh = mani.files[f];
+            if (typeof mh !== "string") continue;                      // manifest에 없는 새 세대 파일=수정 증거 아님(blocker① 반례)
+            try { if (crypto.createHash("sha1").update(fs.readFileSync(path.join(BRIDGE_DIR, f))).digest("hex") !== mh) mismatch++; } catch { mismatch++; }
           }
         }
         const decision = decideManualBridgeSync(drift.length, mismatch, mani && typeof mani.version === "string" && mani.version ? mani.version : null, ver);
         if (decision === "auto") {
-          targets = hookSetup.BRIDGE_SCRIPTS; writeStamp = true;       // 설치기 배포본 그대로(무수정)+구세대 → 안전 자동 동기화
+          targets = hookSetup.BRIDGE_SCRIPTS; writeStamp = true;       // 설치기 배포본 그대로(무수정)+구세대 → 안전 자동 전체 동기화(새 파일 포함)
           syncBridgeDriftEvents(wsA, []);
         } else {
-          // 자동 금지(수정 감지·manifest 부재·세대 역전) — 조용한 고착 대신 가시 경보+배너 1클릭 복구 안내
+          // 자동 금지(수정 감지·manifest 부재·세대 역전) — 조용한 고착 대신 가시 경보+배너 1클릭 복구 안내.
+          // 부재 파일만 보충(기능 회복·기존 파일은 안 덮음 — 종전 '손상 수동 설치' 보충의 안전 부분만 유지).
           syncBridgeDriftEvents(wsA, [{
             sig: `bridge-drift:${ver}:${drift.length}`,
             detailKo: `실행부(브릿지)가 확장과 다른 세대예요(파일 ${drift.length}개) — 직접 설치·수정 이력을 존중해 자동으로 덮지 않았어요. 이 상태로는 지도 점검·자동 보강이 계속 보류될 수 있어요. 배너의 '실행부 맞추기'를 누르면 백업 후 확장 세대로 맞춥니다.`,
             detailEn: `The bridge runtime differs from this extension's generation (${drift.length} file(s)) — not overwritten automatically out of respect for a manual install/edits. Map checks and auto-enrichment may stay parked in this state. Click 'Sync runtime' in the banner to back up and align it.`,
           }]);
-          return false;
+          if (absent.length === 0) return false;
+          targets = absent; writeStamp = false;
         }
       }
     }
