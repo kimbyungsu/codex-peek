@@ -94,5 +94,41 @@ console.log("[4] 버튼은 '다시 점검'으로 — 선택만으로 끝난 줄 
   ok(/고른 담당만 실제로 호출합니다/.test(ext), "고른 담당만 호출한다는 사실 명시");
 }
 
+console.log("[6] 지문=내용 기반(2026-08-12) — 같은 내용 재기록이 거짓 '설정 변경'을 못 낸다(기능 실행)");
+{
+  const os = require("os");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "fp_home_"));
+  process.env.CODEX_BRIDGE_HOME = home;
+  const CL = require(path.join(ROOT, "bridge", "contract-lib.js"));
+  const scFile = path.join(home, "scout-codex.json");
+  const binFile = path.join(home, "codex-bin.txt");
+  fs.writeFileSync(scFile, '{"model":"gpt-5"}'); fs.writeFileSync(binFile, "C:/codex.exe");
+  const inv = { file: "C:/codex.exe", args: [] };
+  const fp1 = CL.precisionExecFp(inv);
+  // 같은 내용 재기록+mtime 강제 전진(설치기·경로 재확인 재현) — 지문 불변이어야 반복 보류가 사라진다
+  fs.writeFileSync(scFile, '{"model":"gpt-5"}'); fs.writeFileSync(binFile, "C:/codex.exe");
+  const past = new Date(Date.now() + 5000);
+  fs.utimesSync(scFile, past, past); fs.utimesSync(binFile, past, past);
+  const fp2 = CL.precisionExecFp(inv);
+  ok(fp1 === fp2, "같은 내용 재기록(mtime 전진)=지문 불변(거짓 '설정 변경' 소멸)");
+  fs.writeFileSync(scFile, '{"model":"gpt-5-mini"}');
+  const fp3 = CL.precisionExecFp(inv);
+  ok(fp3 !== fp1, "내용이 실제로 바뀌면 지문 변경(재점검 요구는 그대로 정확)");
+  const lib = fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8");
+  ok(!lib.includes("mtimeSig"), "mtime 서명 잔재 0(economy·precision 모두 contentSig)");
+}
+
+console.log("[7] 지문 변경=자동 재점검(fp당 1회) — 사람 클릭 반복 제거 배선");
+{
+  const b = ext.indexOf("function maybeAutoReprobe(");
+  const e = ext.indexOf("\nasync function runMapProbeFromUi", b) > 0 ? ext.indexOf("\nasync function runMapProbeFromUi", b) : ext.indexOf("\nfunction ", b + 10);
+  const fn = b > 0 ? ext.slice(b, e) : "";
+  ok(fn.length > 0, "maybeAutoReprobe 존재");
+  ok(fn.includes('"config-changed"') && fn.includes('"probe-ver-changed"') && !fn.includes('"not-probed"') && !fn.includes('"probe-failed"'), "자동 대상=설정 변경·계약 개정만(최초·실패는 기존 경로 — 추측 과금 금지)");
+  ok(fn.includes("autoReprobeTried.has(sig)") && fn.includes("autoReprobeTried.add(sig)"), "상태 조합(fp)당 1회 — 무한 재시도 금지");
+  ok(fn.includes("probeTargetsFor(ws)") && fn.includes("runMapProbeFromUi(ws, new Set(need))"), "고른 담당의 필요분만 재점검(기존 단일-flight 재사용)");
+  ok(/maybeAutoReprobe\(ws, rv9\); return rv9;/.test(ext), "computeState 결속 — 상태 계산 때 자동 발동");
+}
+
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

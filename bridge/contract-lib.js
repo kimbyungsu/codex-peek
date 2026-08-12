@@ -1859,11 +1859,13 @@ function writeMapReadinessGuarded(provider, rec, currentFpFn) {
 // 기준·키 원문 미포함(키 sha1 앞 12) / self=어댑터 배포 지문(+기록용 CLI 버전) / precision=실행 해석+실효
 // home+두뇌 설정 조립+어댑터 계약 버전(실행 해석 inv는 호출자가 주입 — 순환 require 회피). ──
 function sha1Of(s) { return crypto.createHash("sha1").update(String(s)).digest("hex"); }
-// 관련 설정 파일의 mtimeMs 서명(구현검증 1차 blocker⑥ — A→B→A 경합 차단): 내용 지문이 같아도 파일이
-// 다시 쓰이면 mtime이 전진해 지문이 바뀐다(probe 실행 중 설정을 B로 바꿨다 A로 되돌리는 오결속 봉합).
-// 부작용 정직 고지: 내용 무변경 touch에도 '재점검 필요'가 뜰 수 있음(안전 우선 — 준비 증명 오결속보다 낫다).
-function mtimeSig(files) {
-  return files.map((f) => { try { return String(fs.statSync(f).mtimeMs); } catch { return "-"; } }).join(",");
+// mtime→내용 기반(2026-08-12 사용자 실보고 봉합): 설치·재배치·경로 재확인이 '같은 내용'을 다시 써도 mtime이
+// 바뀌어 거짓 '설정 변경'→자동 보강 보류가 반복됐다. 판정의 의미는 '점검 당시와 같은 설정인가'이므로
+// 내용 등가가 정확한 기준이다(내용이 실제로 바뀌면 지문도 바뀜 — 재점검 요구는 그대로 정확).
+// 구 mtime 논거(1차 blocker⑥ A→B→A) 잔여 정직 고지: probe 실행 도중 설정을 B로 바꿨다 A로 되돌리는
+// 극단 경합은 내용 기준으로는 안 잡힌다 — 창이 초 단위로 좁고, 반복 거짓 경보(매 설치마다)보다 작은 위험으로 수용.
+function contentSig(files) {
+  return files.map((f) => { try { return crypto.createHash("sha1").update(fs.readFileSync(f)).digest("hex"); } catch { return "-"; } }).join(",");
 }
 function economyConfigFp() {
   try {
@@ -1873,7 +1875,7 @@ function economyConfigFp() {
     try { fileJson = JSON.parse(fs.readFileSync(dsFile, "utf8")); } catch { /* 부재 */ }
     const cfg = db.resolveDeepseekConfig(process.env, fileJson);
     if (!cfg.apiKey) return null; // 설정 부재(economyReady 1조건 미충족)
-    return sha1Of(cfg.baseUrl + "|" + cfg.model + "|" + sha1Of(cfg.apiKey).slice(0, 12) + "|" + mtimeSig([dsFile]));
+    return sha1Of(cfg.baseUrl + "|" + cfg.model + "|" + sha1Of(cfg.apiKey).slice(0, 12) + "|" + contentSig([dsFile]));
   } catch { return null; }
 }
 // self 어댑터 지문(1차 blocker① 반영 — 설치본 contract-lib 기준 상대경로만으론 dev 창에서도 null):
@@ -1902,7 +1904,7 @@ function precisionExecFp(inv) {
   try { if (!home) home = fs.readFileSync(path.join(BRIDGE_DIR, "codex-home.txt"), "utf8").trim(); } catch { /* 미기록 */ }
   // env CODEX_BIN 문자열+설정 파일 mtime 포함(blocker③ 해석 일치·blocker⑥ A-B-A — env 자체의 A-B-A는
   // mtime이 없어 잔여 수용 위험: 창 프로세스별 env라 실행 중 교체 가능성이 파일 대비 현저히 낮음).
-  return sha1Of(inv.file + "|" + (inv.args || []).join(" ") + "|" + home + "|" + (process.env.CODEX_BIN || "") + "|" + codexScoutExecArgs("<out>").join(" ") + "|" + CODEX_SCOUT_ADAPTER_VER + "|" + mtimeSig([SCOUT_CODEX_FILE, path.join(BRIDGE_DIR, "codex-bin.txt")]));
+  return sha1Of(inv.file + "|" + (inv.args || []).join(" ") + "|" + home + "|" + (process.env.CODEX_BIN || "") + "|" + codexScoutExecArgs("<out>").join(" ") + "|" + CODEX_SCOUT_ADAPTER_VER + "|" + contentSig([SCOUT_CODEX_FILE, path.join(BRIDGE_DIR, "codex-bin.txt")]));
 }
 // ── readiness 뷰(1-34): 저장 레코드+현재 지문 재대조. precision 재대조 지문은 호출자가 주입(실행 해석 보유자
 // — 확장). 반환: { damaged, self|economy|precision:{ok,reason,probedAt}, auto:{ok,reason} } — ok=true는 재대조

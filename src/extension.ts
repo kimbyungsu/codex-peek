@@ -713,6 +713,24 @@ function selfFpNowExt(): string | null {
   try { const CLx: any = bridgeLib(); return CLx && CLx.selfExecFp ? CLx.selfExecFp(cachedClaudeVer, selfAdapterHintExt()) : null; } catch { return null; }
 }
 let mapProbeBusy = false; // 단일-flight(P6b 계보와 같은 규범 — 겹친 점검 금지)
+// 지문 변경 자동 재점검(2026-08-12 사용자 실보고: 업데이트·설치마다 '자동 보강 보류'+수동 다시점검 반복):
+// '설정 변경(config-changed)·점검 계약 개정(probe-ver-changed)'은 사람이 판단할 일이 아니라 같은 담당의
+// 재점검일 뿐 — 상태 조합당 1회 자동 실행(무한 재시도 금지). 최초 미점검·점검 실패·설정 없음은
+// 기존 경로(담당 선택 시 자동 점검·수동 '다시 점검') 유지 — 과금 담당을 추측으로 새로 부르지 않는다.
+const autoReprobeTried = new Set<string>();
+function maybeAutoReprobe(ws: string | null, rv: any): void {
+  try {
+    if (!ws || !rv || mapProbeBusy) return;
+    const AUTO = new Set(["config-changed", "probe-ver-changed"]);
+    const need = [...probeTargetsFor(ws)].filter((k) => (rv as any)[k] && !(rv as any)[k].ok && AUTO.has(String((rv as any)[k].reason || "")));
+    if (!need.length) return;
+    const CLs: any = bridgeLib();
+    const sig = need.map((k) => k + ":" + (k === "precision" ? String(precisionFpNowExt()) : k === "self" ? String(selfFpNowExt()) : String(CLs && CLs.economyConfigFp ? CLs.economyConfigFp() : "eco"))).join("|");
+    if (autoReprobeTried.has(sig)) return;
+    autoReprobeTried.add(sig);
+    void runMapProbeFromUi(ws, new Set(need)); // fire-and-forget(내부 단일-flight) — 성공하면 다음 상태 푸시에서 자동 복귀·실패는 probe-failed로 남아 기존 경로가 안내
+  } catch { /* 자동 편의 실패=기존 수동 경로 그대로(기능 저하 없음) */ }
+}
 // only: 점검할 담당 집합. 미지정=현재 선택된 담당만(사용자 실보고 2026-08-04: 정밀형을 골랐는데
 // DeepSeek까지 호출돼 '잔액 부족' 실패가 뜨고 무관한 과금이 났다 — 안 쓰는 담당은 부르지 않는다).
 // self는 무과금이라 항상 함께 본다(기본 담당·비교 기준).
@@ -2422,7 +2440,7 @@ function computeState(turnsN: number): BridgeState {
     scoutGate: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; return effectiveScoutGate(ws); } catch { return null; } })(),
     scoutArm: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; return scoutArmViewExt(ws); } catch { return null; } })(), // slot은 뷰가 계산과 원자 결속해 반환(3차 blocker — 사후 재판독 금지)
     mapMode: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const CLx: any = bridgeLib(); return CLx && CLx.mapModeView ? CLx.mapModeView(ws) : null; } catch { return null; } })(), // P7 — 3트랙에서만
-    mapReadiness: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const CLx: any = bridgeLib(); return CLx && CLx.mapReadinessView ? CLx.mapReadinessView({ precisionFpNow: precisionFpNowExt(), selfFpNow: selfFpNowExt() }) : null; } catch { return null; } })(), // P7 — 저장 레코드+현재 지문 재대조(precision·self 지문은 호스트 주입)
+    mapReadiness: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const CLx: any = bridgeLib(); const rv9 = CLx && CLx.mapReadinessView ? CLx.mapReadinessView({ precisionFpNow: precisionFpNowExt(), selfFpNow: selfFpNowExt() }) : null; maybeAutoReprobe(ws, rv9); return rv9; } catch { return null; } })(), // P7 — 저장 레코드+현재 지문 재대조(precision·self 지문은 호스트 주입)+지문 변경 자동 재점검(fp당 1회)
     enrich: (() => { // P8 증분 4 — 자동 보강 상태(동의·장부 요약)+ⓒ tick 발동
       if (!ws) return null;
       try {
