@@ -795,7 +795,13 @@ function runAutoProbeDetached(ws: string | null, need: string[], keys: string[])
         // 담당별 정산(4차 blocker①②): 기록 남은 키만 done 확정, 미기록 키는 창 Set 회수 — 크래시·킬·저장
         // 실패가 '완료'로 굳지 않고, 예약(started)이 TTL 후 자동 승계된다(사람 클릭 불필요).
         const st = autoProbeSettlement(need, keys, code, r);
-        for (const key of st.complete) { try { if (CLs && CLs.completeAutoReprobe) CLs.completeAutoReprobe(key); } catch { /* 무해 */ } }
+        for (const key of st.complete) {
+          // 완료 '장부 기록'까지 성공해야 창 Set 유지(6차 blocker: 잠금 경합 등으로 done 기록이 실패하면
+          // 장부는 started인데 Set만 남아, 설정이 떠났다 이 지문으로 복귀했을 때 이 창의 TTL 재예약이 영구 차단).
+          let done9 = false;
+          try { done9 = !!(CLs && CLs.completeAutoReprobe && CLs.completeAutoReprobe(key)); } catch { done9 = false; }
+          if (!done9) autoReprobeTried.delete(key);
+        }
         for (const key of st.release) autoReprobeTried.delete(key);
         if (code !== 0 || !r) return; // 크래시·킬·파손 응답 — 위 정산에서 회수 완료
         const notes = need.map((k) => {

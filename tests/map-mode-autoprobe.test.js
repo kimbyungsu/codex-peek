@@ -222,7 +222,9 @@ console.log("[10] 자동 실행=비동기 자식(호스트 무정지·3차 block
   ok(fn.length > 0, "자동 실행부 존재(수동 경로와 분리)");
   ok(/spawn\(process\.execPath, \[runner\], \{ windowsHide: true, stdio: \["pipe", "pipe", "ignore"\]/.test(fn) && !fn.includes("spawnSync") && !/MP\.probe/.test(fn), "비동기 자식 spawn — 호스트에서 동기 probe 0(ab-6)");
   // 4차 blocker①②: 완료 확정은 배치 exit 0이 아니라 '담당별 정산' — 기록 남은 키만 done, 미기록은 창 Set 회수
-  ok(fn.includes("autoProbeSettlement(need, keys, code, r)") && /for \(const key of st\.complete\)[\s\S]{0,120}completeAutoReprobe\(key\)/.test(fn), "정산 결과의 complete만 done 확정(전 키 일괄 확정 폐기)");
+  ok(fn.includes("autoProbeSettlement(need, keys, code, r)") && /for \(const key of st\.complete\)[\s\S]{0,300}completeAutoReprobe\(key\)/.test(fn), "정산 결과의 complete만 done 확정(전 키 일괄 확정 폐기)");
+  // 6차 blocker: 완료 '장부 기록' 실패(잠금 경합 등)=Set 회수 — done 기록 성공(true)만 창 Set 유지
+  ok(/done9 = !!\(CLs && CLs\.completeAutoReprobe && CLs\.completeAutoReprobe\(key\)\); \} catch \{ done9 = false; \}\s*\n\s*if \(!done9\) autoReprobeTried\.delete\(key\);/.test(fn), "완료 기록 실패·예외=창 Set 회수(장부 started와 Set의 불일치 고착 금지)");
   ok(/for \(const key of st\.release\) autoReprobeTried\.delete\(key\);/.test(fn) && fn.includes('child.on("error", () => { clearTimeout(killer); releaseAll(); finish(); })'), "미기록·크래시=창 Set 회수 — 단일 창도 TTL 승계 수령(영구 고착 금지)");
   ok(fn.includes("if (code !== 0 || !r) return;"), "크래시·킬·파손 응답=완료 표식 없음(예약 TTL 승계로 자동 복귀)");
   ok(/setTimeout\(\(\) => \{ try \{ child\.kill\(\); \} catch \{[^}]*\} \}, 6 \* 60 \* 1000\)/.test(fn), "자식 킬 타이머 6분(행 방지 — 예약 TTL 10분보다 짧게)");
