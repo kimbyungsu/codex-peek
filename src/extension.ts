@@ -715,26 +715,79 @@ function selfFpNowExt(): string | null {
 let mapProbeBusy = false; // 단일-flight(P6b 계보와 같은 규범 — 겹친 점검 금지)
 // 지문 변경 자동 재점검(2026-08-12 사용자 실보고: 업데이트·설치마다 '자동 보강 보류'+수동 다시점검 반복):
 // '설정 변경(config-changed)·점검 계약 개정(probe-ver-changed)'은 사람이 판단할 일이 아니라 같은 담당의
-// 재점검일 뿐 — 상태 조합당 1회, 모달 없이 자동 실행(무한 재시도 금지·결과는 알림으로 고지=과금 투명성).
+// 재점검일 뿐 — 담당별 지문(fp)당 1회, 모달 없이 자동 실행(결과는 알림으로 고지=과금 투명성).
 // 최초 미점검·점검 실패·설정 없음은 기존 경로(담당 선택 시 자동 점검·수동 '다시 점검') 유지 — 과금
-// 담당을 추측으로 새로 부르지 않는다. '1회'의 정본은 브릿지 전역 예약(claimAutoReprobe — 파일 잠금)이라
-// 여러 창이 떠 있어도 같은 fp를 중복 점검하지 않는다(재검증 blocker③). 아래 Set은 창 안 빠른 경로
-// (상태 계산 15초마다 잠금 파일을 두드리지 않기 위한 소음 차단)일 뿐 권위가 아니다.
+// 담당을 추측으로 새로 부르지 않는다. '1회'의 정본은 브릿지 전역 예약(claimAutoReprobe — 담당별 키:
+// 3차 blocker① need 조합 키는 창마다 조합이 달라 같은 유료 담당이 중복 실행됐다)이고, 실행 완료 시
+// completeAutoReprobe로 확정한다(미완 사망=TTL 후 자동 승계 — 3차 blocker③ 영구 억제 금지).
+// 아래 Set은 창 안 빠른 경로(상태 계산 15초마다 잠금 파일을 두드리지 않기 위한 소음 차단)일 뿐 권위가 아니다.
 const autoReprobeTried = new Set<string>();
 function maybeAutoReprobe(ws: string | null, rv: any): void {
   try {
     if (!ws || !rv || mapProbeBusy) return;
     const AUTO = new Set(["config-changed", "probe-ver-changed"]);
-    const need = [...probeTargetsFor(ws)].filter((k) => (rv as any)[k] && !(rv as any)[k].ok && AUTO.has(String((rv as any)[k].reason || "")));
-    if (!need.length) return;
+    const need0 = [...probeTargetsFor(ws)].filter((k) => (rv as any)[k] && !(rv as any)[k].ok && AUTO.has(String((rv as any)[k].reason || "")));
+    if (!need0.length) return;
     const CLs: any = bridgeLib();
     if (!CLs || typeof CLs.claimAutoReprobe !== "function") return; // 구 배포본=자동 없음(기존 수동 경로 그대로)
-    const sig = need.map((k) => k + ":" + (k === "precision" ? String(precisionFpNowExt()) : k === "self" ? String(selfFpNowExt()) : String(CLs.economyConfigFp ? CLs.economyConfigFp() : "eco"))).join("|");
-    if (autoReprobeTried.has(sig)) return;
-    autoReprobeTried.add(sig);
-    if (!CLs.claimAutoReprobe(sig)) return; // 전역 fp당 1회 — 다른 창 선점·잠금 실패=양보(중복 과금 0, fail-closed)
-    void runMapProbeFromUi(ws, new Set(need), { auto: true }); // fire-and-forget(내부 단일-flight) — 성공하면 다음 상태 푸시에서 자동 복귀·실패는 probe-failed로 남아 기존 경로가 안내
+    const need: string[] = [], keys: string[] = [];
+    for (const k of need0) {
+      const key = k + ":" + (k === "precision" ? String(precisionFpNowExt()) : k === "self" ? String(selfFpNowExt()) : String(CLs.economyConfigFp ? CLs.economyConfigFp() : "eco"));
+      if (autoReprobeTried.has(key)) continue;
+      const c = CLs.claimAutoReprobe(key); // true=획득 / false=확정 거부(완료·진행 중·시도 상한) / null=잠금 일시 불가
+      if (c === true) { autoReprobeTried.add(key); need.push(k); keys.push(key); }
+      else if (c === false) autoReprobeTried.add(key);
+      // null이면 Set에 안 넣는다 — 다음 상태 계산에서 재시도(일시 장애가 영구 억제로 굳는 것 금지)
+    }
+    if (!need.length) return;
+    runAutoProbeDetached(ws, need, keys); // 비동기 자식(호스트 무정지) — 성공하면 다음 상태 푸시에서 자동 복귀·실패는 probe-failed로 남아 기존 경로가 안내
   } catch { /* 자동 편의 실패=기존 수동 경로 그대로(기능 저하 없음) */ }
+}
+// 자동 재점검 실행부(3차 blocker② ab-6): probe는 spawnSync 기반이라 확장 호스트에서 직접 돌리면
+// self 20s·economy 150s·precision 120s 동안 UI 전체가 멈춘다 — 자동 경로는 배치 실행기(map-probe-batch.js)를
+// '비동기 자식'으로 띄워 무정지. 수동 경로(모달 승인 후 대기)는 기존 동작 그대로 — 사용자가 명시한 대기다.
+// 기록(writeMapReadinessGuarded)은 map-probe 내부(자식)에서 일어나므로 자식이 중간에 죽어도 이미 끝난
+// 담당의 기록은 정직하게 남는다. 완료 표식(completeAutoReprobe)은 자식 정상 종료 때만 — 크래시는 TTL 승계.
+function runAutoProbeDetached(ws: string | null, need: string[], keys: string[]): void {
+  if (mapProbeBusy) return;
+  mapProbeBusy = true; // 수동 점검과 겹침 방지 — 자식 종료 시 해제
+  let done = false;
+  const finish = () => { if (!done) { done = true; mapProbeBusy = false; } };
+  try {
+    const CLs: any = bridgeLib();
+    const runner = path.join(BRIDGE_DIR, "map-probe-batch.js");
+    if (!fs.existsSync(runner)) { finish(); return; } // 구 설치본=자동 없음(수동 경로 그대로)
+    const payload = {
+      targets: need,
+      adapterHint: selfAdapterHintExt(),
+      inv: need.includes("precision") ? codexInvForProbe() : null,
+      prompt: tE("아무 도구도 쓰지 말고 'ready'라고만 답하라.", "Reply with only 'ready'; use no tools."),
+    };
+    const child = spawn(process.execPath, [runner], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"], env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
+    let out = "";
+    child.stdout!.on("data", (d: any) => { out += String(d); });
+    const killer = setTimeout(() => { try { child.kill(); } catch { /* 무해 */ } }, 6 * 60 * 1000); // 개별 probe 타임아웃 합(≈290s)+여유 — 행 방지(예약 TTL 10분보다 짧게)
+    child.on("error", () => { clearTimeout(killer); finish(); });
+    child.on("close", (code: number | null) => {
+      clearTimeout(killer); finish();
+      try {
+        if (code !== 0) return; // 크래시·킬=완료 표식 없음 — 예약이 TTL 후 자동 승계(사람 클릭 불필요)
+        const r = JSON.parse(out);
+        if (r && r.self && "ver" in r.self) cachedClaudeVer = r.self.ver || null; // probeSelf 계약: 실패=null 리셋
+        for (const key of keys) { try { if (CLs && CLs.completeAutoReprobe) CLs.completeAutoReprobe(key); } catch { /* 무해 */ } }
+        const notes = need.map((k) => {
+          const e = r ? r[k] : null;
+          if (!e) return k + ": ?";
+          if (e.skipped) return k + ": " + tE("설정 없음(건너뜀)", "not configured (skipped)");
+          return k + ": " + (e.ok && e.write && e.write.ok ? "OK" : String(e.detail || e.err || (e.write && e.write.reason) || tE("실패", "failed")).slice(0, 120));
+        });
+        vscode.window.showInformationMessage(tE("설정 변경을 감지해 준비 점검을 자동으로 다시 했어요 — ", "Config change detected — readiness was re-checked automatically: ") + notes.join(" · "));
+        maybeSpawnEnrichExt(ws, "probe"); // 수동 경로와 동일한 후속(P8 발동 ⓑ — 게이트·동의는 함수 내부)
+        vscode.commands.executeCommand("codexBridge.refresh");
+      } catch { /* 표시 실패=다음 상태 푸시가 복귀를 보여줌 */ }
+    });
+    child.stdin!.end(JSON.stringify(payload));
+  } catch { finish(); }
 }
 // only: 점검할 담당 집합. 미지정=현재 선택된 담당만(사용자 실보고 2026-08-04: 정밀형을 골랐는데
 // DeepSeek까지 호출돼 '잔액 부족' 실패가 뜨고 무관한 과금이 났다 — 안 쓰는 담당은 부르지 않는다).
@@ -760,20 +813,16 @@ function pendingTargetsFor(ws: string | null): Set<string> {
     return pend.size ? pend : all;
   } catch { return all; }
 }
-async function runMapProbeFromUi(ws: string | null, only?: Set<string>, opts?: { auto?: boolean }): Promise<void> {
+async function runMapProbeFromUi(ws: string | null, only?: Set<string>): Promise<void> {
   if (mapProbeBusy) return;
   const want = only || probeTargetsFor(ws);
   const CLx: any = bridgeLib();
   if (!CLx || !CLx.writeMapReadinessGuarded) { vscode.window.showWarningMessage(tE("브릿지 판이 낮아 준비 점검을 지원하지 않아요 — 재설치 후 다시 시도하세요.", "The deployed bridge is too old for readiness checks — reinstall and retry.")); return; }
-  // 자동 재점검(설정 변경·계약 개정 — maybeAutoReprobe)은 모달 없이 진행(재검증 blocker①: 모달을 띄우면
-  // 결국 사람 클릭 반복이고, 닫으면 예약만 소진돼 영구 보류). 과금 상한은 전역 예약이 'fp당 1회'로 보증.
-  if (!(opts && opts.auto)) {
-    const goOn = await vscode.window.showWarningMessage(
-      tE(`선택한 담당(${[...want].join(", ")})의 준비 상태를 실제로 점검합니다 — 고르지 않은 담당은 부르지 않아요. DeepSeek(경제형)은 소형 요청 최대 2회(과금 대상 — 형식 실패 시 교정 재요청 1회 포함), Codex(정밀형)는 계정 사용량 1회를 씁니다(키·설정이 없는 항목은 건너뜀). 진행할까요?`,
-         `This checks readiness for the selected provider(s) only (${[...want].join(", ")}) — providers you did not choose are not called. DeepSeek (economy) uses up to 2 small billed requests (incl. one repair retry on format failure); Codex (precision) uses 1 run within your account usage (unconfigured providers are skipped). Proceed?`),
-      { modal: true }, tE("점검 진행", "Run checks"));
-    if (goOn !== tE("점검 진행", "Run checks")) return;
-  }
+  const goOn = await vscode.window.showWarningMessage(
+    tE(`선택한 담당(${[...want].join(", ")})의 준비 상태를 실제로 점검합니다 — 고르지 않은 담당은 부르지 않아요. DeepSeek(경제형)은 소형 요청 최대 2회(과금 대상 — 형식 실패 시 교정 재요청 1회 포함), Codex(정밀형)는 계정 사용량 1회를 씁니다(키·설정이 없는 항목은 건너뜀). 진행할까요?`,
+       `This checks readiness for the selected provider(s) only (${[...want].join(", ")}) — providers you did not choose are not called. DeepSeek (economy) uses up to 2 small billed requests (incl. one repair retry on format failure); Codex (precision) uses 1 run within your account usage (unconfigured providers are skipped). Proceed?`),
+    { modal: true }, tE("점검 진행", "Run checks"));
+  if (goOn !== tE("점검 진행", "Run checks")) return;
   mapProbeBusy = true;
   try {
     // 실행부는 vscode 무관 계층(bridge/map-probe.js — 설치본 사본)에 위임(구현검증 2차 blocker④: 테스트가
@@ -803,9 +852,7 @@ async function runMapProbeFromUi(ws: string | null, only?: Set<string>, opts?: {
       const rp = MP.probePrecision({ inv, prompt: tE("아무 도구도 쓰지 말고 'ready'라고만 답하라.", "Reply with only 'ready'; use no tools."), env: inv.electronNode ? { ...process.env, ELECTRON_RUN_AS_NODE: "1" } : process.env });
       notes.push("precision: " + (rp.rec.ok && rp.write.ok ? "OK" : rp.write.ok ? "실패(" + rp.rec.detail + ")" : wNote(rp.write)));
     } catch (e: any) { notes.push("precision: " + String(e && e.message)); }
-    vscode.window.showInformationMessage((opts && opts.auto
-      ? tE("설정 변경을 감지해 준비 점검을 자동으로 다시 했어요 — ", "Config change detected — readiness was re-checked automatically: ")
-      : tE("준비 점검 결과 — ", "Readiness check — ")) + notes.join(" · "));
+    vscode.window.showInformationMessage(tE("준비 점검 결과 — ", "Readiness check — ") + notes.join(" · "));
   } finally { mapProbeBusy = false; }
   maybeSpawnEnrichExt(ws, "probe"); // P8 발동 ⓑ — 준비 점검 직후(readiness 성립 순간·게이트·동의는 함수 내부)
 }

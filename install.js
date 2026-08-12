@@ -62,6 +62,7 @@ const BRIDGE_SCRIPTS = [
   "map-retrieval.js", // 검색 4조각: map-reader가 요청 기준 선별에 require — 누락 시 설치본 v2 동봉 로드 불능
   "map-cutover.js", // P3b 증분 2: cutover 본체+frozen-ledger probe(대시보드 lazy 소비 — 설치본 부재 시 probe 불능)
   "map-probe.js", // P7: readiness probe 실행기(vscode 무관 계층 — 확장이 설치본 사본을 lazy require)
+  "map-probe-batch.js", // 자동 재점검 배치 실행기(비동기 자식 — 호스트 무정지·3차 blocker② ab-6)
   "map-router.js", // P8: 결정론 라우터(1-34 표 — 실행기·테스트 공용 순수 계층)
   "map-enrich.js", // P8: 의미 보강 실행기(저장·순수+runEnrich+CLI — 발동 3지점이 spawn하는 표면)
   "map-intent.js", // P9: 정책 충돌 카드 파생 뷰+사용자 선택 선기록(자동 적용/UI 전 바닥 계층)

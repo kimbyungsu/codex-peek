@@ -1864,20 +1864,65 @@ function writeMapReadinessGuarded(provider, rec, currentFpFn) {
   if (!r.ok) return { ok: false, reason: r.error || "lock" };
   return r.result === "ok" ? { ok: true } : { ok: false, reason: r.result };
 }
-// 자동 재점검 전역 예약(재검증 blocker③): 창 메모리 Set은 창마다 따로라 다중 창이 같은 fp를 중복
-// 과금 점검할 수 있다 — 전역 파일+잠금으로 'fp 조합당 1회'를 기계 보증. true=이번 창이 첫 예약(실행 권한),
-// false=이미 예약됨(다른 창 선점) 또는 잠금·기록 실패(fail-closed: 실행 안 함=중복 과금 0, 수동 경로는 그대로).
+// 자동 재점검 전역 예약(2차 blocker③→3차 blocker①③ 개정): 창 메모리 Set은 창마다 따로라 다중 창이
+// 같은 담당·같은 지문을 중복 과금 점검할 수 있다 — 전역 파일+잠금으로 '담당별 fp당 1회'를 기계 보증.
+// 2단계 계약(3차 blocker③ — 실행 전 영구 기록 금지): claim=started 기록(실행 권한), 실행 완료 시
+// completeAutoReprobe=done 확정. started가 TTL(개별 probe 타임아웃 합≈290s+여유)을 넘기면 실행 주체
+// 사망으로 보고 승계 허용 — 단 시도 수 상한(반복 사망 병리의 과금 상한). 반환 3값:
+//   true=이번 창이 예약 획득(실행하라) / false=확정 거부(done·진행 중·시도 상한 — 다시 두드릴 필요 없음)
+//   / null=일시 불가(잠금 실패 등 — 다음 상태 계산에서 재시도: 일시 장애가 영구 억제로 굳는 것 금지).
 const AUTO_REPROBE_FILE = path.join(BRIDGE_DIR, "auto-reprobe.json");
-function claimAutoReprobe(sig) {
-  if (!sig || typeof sig !== "string") return false;
+const AUTO_REPROBE_TTL_MS = 10 * 60 * 1000;
+const AUTO_REPROBE_MAX_TRIES = 3;
+function autoReprobeLedgerOp(fn) {
   try { fs.mkdirSync(BRIDGE_DIR, { recursive: true }); } catch { /* 잠금이 실패 판정 */ }
-  const r = withFileLockStrict(AUTO_REPROBE_FILE + ".lock", () => {
-    let cur = [];
-    try { const j = JSON.parse(fs.readFileSync(AUTO_REPROBE_FILE, "utf8")); if (Array.isArray(j)) cur = j; } catch { /* 부재·파손=빈 장부(과거 예약을 잃으면 최대 1회 추가 점검 — 무한 반복 아님) */ }
-    if (cur.some((e) => e && e.sig === sig)) return "dup";
-    cur.push({ sig, ts: new Date().toISOString() });
-    if (cur.length > 40) cur = cur.slice(-40); // 설정 상태 이력만 — 무한 성장 방지(밀려난 옛 fp 재등장=최대 1회 재점검)
-    return atomicWrite(AUTO_REPROBE_FILE, JSON.stringify(cur)) ? "ok" : "write-failed";
+  const lockP = AUTO_REPROBE_FILE + ".lock";
+  let r = withFileLockStrict(lockP, fn);
+  // 죽은 보유자(ESRCH 확정)만 격리 후 1회 재시도(3차 blocker③ 후단 — 잠금 보유 중 사망이 자동 경로를
+  // 영원히 막지 않게). quarantineContractLock과 같은 계보: 사망 '증거' 기반만 회수, 나이 추측 탈취 금지
+  // (pid 재사용으로 살아 있어 보이면 보수적으로 양보 — null 반환이라 다음 틱 재시도가 남는다).
+  if (!r.ok && /dead-lock-holder/.test(String(r.error || ""))) {
+    try { fs.renameSync(lockP, lockP + ".dead-" + Date.now()); } catch { /* 격리 실패=이번 틱 양보 */ }
+    r = withFileLockStrict(lockP, fn);
+  }
+  return r;
+}
+function readAutoReprobeLedger() {
+  try { const j = JSON.parse(fs.readFileSync(AUTO_REPROBE_FILE, "utf8")); if (Array.isArray(j)) return j; } catch { /* 부재·파손=빈 장부(과거 예약 소실=최대 시도 상한만큼 추가 점검 — 무한 반복 아님) */ }
+  return [];
+}
+function claimAutoReprobe(key) {
+  if (!key || typeof key !== "string") return false;
+  const now = Date.now();
+  const r = autoReprobeLedgerOp(() => {
+    let cur = readAutoReprobeLedger();
+    const i = cur.findIndex((e) => e && e.sig === key);
+    let tries = 1;
+    if (i >= 0) {
+      const e = cur[i];
+      if (e.state === "done") return "deny"; // 이 지문은 이미 점검 완료 — 영구 확정
+      const age = now - (Date.parse(e.ts) || 0);
+      const t = Number.isSafeInteger(e.tries) && e.tries >= 1 ? e.tries : 1;
+      if (age < AUTO_REPROBE_TTL_MS) return "deny"; // 다른 창이 진행 중(자식 킬 타이머 6분 < TTL 10분)
+      if (t >= AUTO_REPROBE_MAX_TRIES) return "deny"; // 완료 표식 없이 반복 사망 — 수동 경로로
+      tries = t + 1; cur.splice(i, 1); // 사망 승계 — 시도 수 누적
+    }
+    cur.push({ sig: key, ts: new Date(now).toISOString(), state: "started", tries });
+    if (cur.length > 40) cur = cur.slice(-40); // 무한 성장 방지(밀려난 옛 fp 재등장=최대 상한만큼 재점검)
+    return atomicWrite(AUTO_REPROBE_FILE, JSON.stringify(cur)) ? "ok" : "io";
+  });
+  if (!r.ok) return null; // 잠금 일시 불가 — 실행 안 함(fail-closed)이되 영구 아님
+  return r.result === "ok" ? true : r.result === "deny" ? false : null; // io 실패도 재시도 가능으로
+}
+// 실행 완료 확정 — 이걸 찍어야 예약이 영구가 된다(자식 정상 종료 시에만 호출·크래시는 TTL 승계).
+function completeAutoReprobe(key) {
+  if (!key || typeof key !== "string") return false;
+  const r = autoReprobeLedgerOp(() => {
+    let cur = readAutoReprobeLedger();
+    const i = cur.findIndex((e) => e && e.sig === key);
+    if (i >= 0) cur[i] = Object.assign({}, cur[i], { state: "done", doneTs: new Date().toISOString() });
+    else { cur.push({ sig: key, ts: new Date().toISOString(), state: "done", tries: 1 }); if (cur.length > 40) cur = cur.slice(-40); } // 밀려난 뒤 완료 — 재등록
+    return atomicWrite(AUTO_REPROBE_FILE, JSON.stringify(cur)) ? "ok" : "io";
   });
   return !!(r.ok && r.result === "ok");
 }
@@ -4139,7 +4184,7 @@ function formatForClaude(answer, lang, profile, machine, rejudgeSnap) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}${machineLine}\n처리 의무: ${action}${rjBlock}`;
 }
 
-module.exports = { VERIFIER_PROVIDERS, normVerifierProvider, BASE_PROFILE_AXIS, verifierFormatDirective, verifierBaselineFor, ASK_SHAPE_SECTIONS, askShapeCheck, askShapeNotice, appendAskShape, loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, scoutCouplingAttach, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, verifyCampaignProgress, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, codexScoutExecEnv, TOOL_EXEC_ENV, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, economyConfigFpFrom, readEconomySnapshot, DS_SNAPSHOT_ENV, selfAdapterSha, selfExecFp, precisionExecFp, precisionExecFpFrom, readPrecisionConfigSnapshot, codexScoutExecArgsFromSnapshot, claimAutoReprobe, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, SESSION_LEASES_DIR, sessionLeaseFileFor, readSessionLease, acquireSessionLease, releaseSessionLease, setSessionLeaseChild, clearSessionLease, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, authoritativeVerdict, findingsBlockRange, formatForClaude, normRejudgeSnap, safeLoadRejudge, REJUDGE_SNAP_MAX, appendVerdict, trimVerdicts, appendAttachUsage, trimAttachUsage, ATTACH_USAGE_FILE, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { VERIFIER_PROVIDERS, normVerifierProvider, BASE_PROFILE_AXIS, verifierFormatDirective, verifierBaselineFor, ASK_SHAPE_SECTIONS, askShapeCheck, askShapeNotice, appendAskShape, loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, scoutCouplingAttach, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, verifyCampaignProgress, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, codexScoutExecEnv, TOOL_EXEC_ENV, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, economyConfigFpFrom, readEconomySnapshot, DS_SNAPSHOT_ENV, selfAdapterSha, selfExecFp, precisionExecFp, precisionExecFpFrom, readPrecisionConfigSnapshot, codexScoutExecArgsFromSnapshot, claimAutoReprobe, completeAutoReprobe, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, SESSION_LEASES_DIR, sessionLeaseFileFor, readSessionLease, acquireSessionLease, releaseSessionLease, setSessionLeaseChild, clearSessionLease, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, authoritativeVerdict, findingsBlockRange, formatForClaude, normRejudgeSnap, safeLoadRejudge, REJUDGE_SNAP_MAX, appendVerdict, trimVerdicts, appendAttachUsage, trimAttachUsage, ATTACH_USAGE_FILE, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
 module.exports.codexImplementerSession = codexImplementerSession;
 module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
 // P-6 회수 영수증 계약(설계 v5.1)
