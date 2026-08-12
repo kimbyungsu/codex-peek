@@ -42,7 +42,8 @@ console.log("[2] 배치 흐름 ④ 재작성 — 무조건 존중 폐기·판정
   // 재검증 blocker① 반례: 새 파일 추가 업데이트가 판정을 우회하지 않는다 — 부재·기존 파일을 한 판정으로 통합
   ok(!/absent\.length > 0[\s\S]{0,80}targets = absent; writeStamp = false;\s*\/\/ 손상 수동 설치/.test(fn), "구 '누락분만 조용히 보충' 분기 소멸(판정 우회 차단)");
   ok(/if \(!fs\.existsSync\(path\.join\(BRIDGE_DIR, f\)\)\) continue;\s*\/\/ 부재=수정 증거 아님/.test(fn), "부재 파일=드리프트로만(수정 증거 아님 — 자동 경로 유지)");
-  ok(/if \(typeof mh !== "string"\) continue;\s*\/\/ manifest에 없는 새 세대 파일=수정 증거 아님/.test(fn), "manifest 밖 새 파일=수정 증거 아님(새 파일 추가 업데이트도 자동 동기화)");
+  // 재확인 blocker 반례: manifest 키가 빠진 '존재' 파일은 번들과 같을 때만 무해 — 다르면 수정 증거(자동 덮기 금지)
+  ok(/typeof mh !== "string"[\s\S]{0,700}if \(curK !== wantK\) mismatch\+\+;/.test(fn), "manifest 키 없는 존재 파일=번들 대조(다르면 수정 증거 — 손상 manifest 오인 덮기 차단)");
   ok(/if \(absent\.length === 0\) return false;\s*targets = absent; writeStamp = false;/.test(fn), "경보 경로=부재분만 보충(기존 파일 무접촉)");
 }
 

@@ -8083,7 +8083,17 @@ function deployBridgeRuntime(context: vscode.ExtensionContext): boolean {
           for (const f of hookSetup.BRIDGE_SCRIPTS) {
             if (!fs.existsSync(path.join(BRIDGE_DIR, f))) continue;    // 부재=수정 증거 아님(드리프트로만 집계 — 재배치가 채움)
             const mh = mani.files[f];
-            if (typeof mh !== "string") continue;                      // manifest에 없는 새 세대 파일=수정 증거 아님(blocker① 반례)
+            if (typeof mh !== "string") {
+              // manifest에 키가 없는 '존재' 파일: 번들과 같으면 무해(새 세대 파일이 이미 채워진 상태).
+              // 번들과 '다르면' 출처 불명 — 해시 키가 빠진 손상 manifest의 기존 수정본일 수 있어 수정 증거로
+              // 취급한다(자동 덮기 금지 방향 fail-safe — 재확인 blocker: 새 파일 오인 자동 덮어쓰기 반례).
+              try {
+                const curK = crypto.createHash("sha1").update(fs.readFileSync(path.join(BRIDGE_DIR, f))).digest("hex");
+                const wantK = crypto.createHash("sha1").update(fs.readFileSync(path.join(src, f))).digest("hex");
+                if (curK !== wantK) mismatch++;
+              } catch { mismatch++; }
+              continue;
+            }
             try { if (crypto.createHash("sha1").update(fs.readFileSync(path.join(BRIDGE_DIR, f))).digest("hex") !== mh) mismatch++; } catch { mismatch++; }
           }
         }
