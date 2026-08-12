@@ -748,17 +748,20 @@ function maybeAutoReprobe(ws: string | null, rv: any): void {
 // '비동기 자식'으로 띄워 무정지. 수동 경로(모달 승인 후 대기)는 기존 동작 그대로 — 사용자가 명시한 대기다.
 // 기록(writeMapReadinessGuarded)은 map-probe 내부(자식)에서 일어나므로 자식이 중간에 죽어도 이미 끝난
 // 담당의 기록은 정직하게 남는다. 예약 확정(completeAutoReprobe)은 담당별 정산(autoProbeSettlement)이 결정.
-// 자동 재점검 정산(4차 blocker①② 순수 판정): '기록이 실제로 남았을 때만' 예약을 done으로 확정한다.
-// 기록됨 = skipped(설정 없음 — 자동 대상 사유 아님) 또는 readiness 저장 성공(write.ok===true — 실패 기록도
-// 정직 기록이면 확정: probe-failed는 자동 대상이 아니라 루프 없음). 저장 실패(잠금 등)·크래시·킬·파손
-// 응답은 미기록 — 예약은 started로 남고 창 Set에서도 회수해, 이 창 포함 어느 창이든 TTL 후 시도 상한
-// 안에서 자동 승계한다(배치 exit 0만 보고 전 키를 done으로 굳히면 저장 실패가 영구 보류로 확정된다).
+// 자동 재점검 정산(4차 blocker①②→5차 blocker 개정 — 순수 판정): 예약 done 확정 조건은
+// '기록 실존(write.ok===true)' 그리고 '자식이 실제 점검·저장한 지문(e.fp)이 예약 키와 일치'다.
+// 부모가 키를 만든 뒤 자식이 설정을 다시 판독하기까지 설정이 바뀌면(B→C) 자식은 C를 점검·저장하는데,
+// 지문 대조 없이 B 키를 done으로 굳히면 설정이 B로 돌아왔을 때 자동 복귀가 다시 영구 고착된다
+// (실행·증명 결속 원칙을 예약 완료에도 동일 적용). 실패 '기록'도 지문 일치면 확정 — probe-failed는
+// 자동 대상이 아니라 루프 없음. skipped(자식 시점 설정 없음)는 확정하지 않음 — 설정이 되돌아오면
+// TTL·시도 상한 안에서 재점검. 저장 실패·크래시·킬·파손 응답=미기록 — 예약은 started로 남고 창 Set에서도
+// 회수해, 이 창 포함 어느 창이든 TTL 후 시도 상한 안에서 자동 승계한다.
 function autoProbeSettlement(need: string[], keys: string[], code: number | null, r: any): { complete: string[]; release: string[] } {
   const complete: string[] = [], release: string[] = [];
   need.forEach((k, idx) => {
     const e = code === 0 && r ? (r as any)[k] : null;
-    const recorded = !!(e && (e.skipped === true || (e.write && e.write.ok === true)));
-    (recorded ? complete : release).push(keys[idx]);
+    const bound = !!(e && e.write && e.write.ok === true && typeof e.fp === "string" && keys[idx] === k + ":" + e.fp);
+    (bound ? complete : release).push(keys[idx]);
   });
   return { complete, release };
 }

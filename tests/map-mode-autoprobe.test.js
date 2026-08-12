@@ -235,23 +235,32 @@ console.log("[10] 자동 실행=비동기 자식(호스트 무정지·3차 block
   ok(fs.readFileSync(path.join(ROOT, "src", "hook-setup.ts"), "utf8").includes('"map-probe-batch.js"'), "hook-setup.ts 배포 목록 편입(확장 배포 경로)");
 }
 
-console.log("[10b] 정산 기능 실행 — 저장 실패=done 금지·창 회수(4차 blocker①② 반례)");
+console.log("[10b] 정산 기능 실행 — 저장 실패=done 금지·창 회수·지문 결속(4차 blocker①②+5차 blocker 반례)");
 {
   const b = outSrc.indexOf("function autoProbeSettlement(");
   const e = outSrc.indexOf("\nfunction runAutoProbeDetached", b);
   ok(b > 0 && e > b, "정산 함수 추출 가능(컴파일 산출물)");
   const fnS = new Function(outSrc.slice(b, e) + "\nreturn autoProbeSettlement;")();
-  // 검증자 반례 원형: exit 0인데 readiness 저장 실패(lock-timeout) — done으로 굳으면 자동 복귀 영구 차단
-  const s1 = fnS(["precision"], ["precision:P"], 0, { precision: { ok: true, write: { ok: false, reason: "lock-timeout" } } });
+  // 4차 반례 원형: exit 0인데 readiness 저장 실패(lock-timeout) — done으로 굳으면 자동 복귀 영구 차단
+  const s1 = fnS(["precision"], ["precision:P"], 0, { precision: { ok: true, fp: "P", write: { ok: false, reason: "lock-timeout" } } });
   ok(s1.complete.length === 0 && s1.release.join() === "precision:P", "저장 실패=예약 미확정+창 Set 회수(TTL 승계로 자동 복귀 유지)");
-  const s2 = fnS(["precision"], ["precision:P"], 0, { precision: { ok: false, detail: "x", write: { ok: true } } });
-  ok(s2.complete.join() === "precision:P" && s2.release.length === 0, "정직한 실패 '기록'=확정(probe-failed는 자동 대상 아님 — 루프 없음)");
+  const s2 = fnS(["precision"], ["precision:P"], 0, { precision: { ok: false, detail: "x", fp: "P", write: { ok: true } } });
+  ok(s2.complete.join() === "precision:P" && s2.release.length === 0, "정직한 실패 '기록'(지문 일치)=확정(probe-failed는 자동 대상 아님 — 루프 없음)");
+  // 5차 blocker 반례 원형: 부모 예약 키=fpB인데 자식이 판독한 설정은 fpC(예약~자식 판독 사이 교체) —
+  // 다른 지문의 성공으로 B 키를 done으로 굳히면 설정이 B로 복귀했을 때 자동 재점검이 다시 영구 고착
+  const s2b = fnS(["precision"], ["precision:fpB"], 0, { precision: { ok: true, fp: "fpC", write: { ok: true } } });
+  ok(s2b.complete.length === 0 && s2b.release.join() === "precision:fpB", "자식 실제 지문≠예약 키=미확정+회수(다른 설정의 성공이 원래 키를 못 잠금)");
+  const s2c = fnS(["precision"], ["precision:fpB"], 0, { precision: { ok: true, write: { ok: true } } });
+  ok(s2c.complete.length === 0 && s2c.release.join() === "precision:fpB", "지문 미반환(구 배치 실행기)=확정 금지(결속 증거 없이 영구화 안 함)");
   const s3 = fnS(["economy"], ["economy:E"], 0, { economy: { skipped: true } });
-  ok(s3.complete.join() === "economy:E" && s3.release.length === 0, "설정 없음(건너뜀)=확정(자동 대상 사유 아님)");
+  ok(s3.complete.length === 0 && s3.release.join() === "economy:E", "설정 없음(건너뜀)=확정 안 함 — 설정이 되돌아오면 TTL·시도 상한 안에서 재점검");
   const s4 = fnS(["self", "precision"], ["self:S", "precision:P"], 1, null);
   ok(s4.complete.length === 0 && s4.release.length === 2, "크래시·킬(exit≠0)=전 키 회수(단일 창도 TTL 승계 수령)");
   const s5 = fnS(["precision"], ["precision:P"], 0, null);
   ok(s5.complete.length === 0 && s5.release.join() === "precision:P", "파손 응답(JSON 불가)=회수");
+  // 배치 실행기가 결속 재료(실제 점검·저장 지문)를 실제로 반환하는지 — 세 담당 모두
+  const mb = fs.readFileSync(path.join(ROOT, "bridge", "map-probe-batch.js"), "utf8");
+  ok((mb.match(/fp: r\.rec\.fp/g) || []).length === 3, "배치 응답에 rec.fp 동봉(self·economy·precision — 부모 정산의 결속 재료)");
 }
 
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);

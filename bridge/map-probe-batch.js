@@ -22,21 +22,21 @@ process.stdin.on("end", () => {
   if (t.has("self")) {
     try {
       const r = MP.probeSelf({ adapterHint: p.adapterHint, claudeCmd: p.claudeCmd, claudeArgs: p.claudeArgs, shell: p.shell });
-      out.self = { ok: r.rec.ok, detail: r.rec.detail, write: r.write, ver: r.ver };
+      out.self = { ok: r.rec.ok, detail: r.rec.detail, write: r.write, ver: r.ver, fp: r.rec.fp }; // fp=실제 점검·저장한 지문(부모 예약 키 결속 재료 — 5차 blocker)
     } catch (e) { out.self = { ok: false, err: String(e && e.message) }; }
   }
   // economy — 이 프로세스는 이미 node(ELECTRON_RUN_AS_NODE 상속)라 execPath 전달로 충분.
   if (t.has("economy")) {
     try {
       const r = MP.probeEconomy({ nodeBin: process.execPath, bridgeDir: p.bridgeDir || __dirname, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
-      out.economy = r.skipped ? { skipped: true } : { ok: r.rec.ok, detail: r.rec.detail, write: r.write };
+      out.economy = r.skipped ? { skipped: true } : { ok: r.rec.ok, detail: r.rec.detail, write: r.write, fp: r.rec.fp };
     } catch (e) { out.economy = { ok: false, err: String(e && e.message) }; }
   }
   // precision — 실행 해석(inv)은 호출자(확장)가 주입(수동 경로와 동일 조립).
   if (t.has("precision")) {
     try {
       const r = MP.probePrecision({ inv: p.inv, prompt: p.prompt, env: p.inv && p.inv.electronNode ? { ...process.env, ELECTRON_RUN_AS_NODE: "1" } : process.env });
-      out.precision = { ok: r.rec.ok, detail: r.rec.detail, write: r.write };
+      out.precision = { ok: r.rec.ok, detail: r.rec.detail, write: r.write, fp: r.rec.fp };
     } catch (e) { out.precision = { ok: false, err: String(e && e.message) }; }
   }
   process.stdout.write(JSON.stringify(out));
