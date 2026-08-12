@@ -56,7 +56,15 @@ function buildMapRequest(pkgMd, model) {
 
 function loadConfig() {
   let fileJson = null;
-  try { fileJson = JSON.parse(fs.readFileSync(DEEPSEEK_FILE, "utf8")); } catch { /* 파일 없음/파손 — env만으로 진행 */ }
+  // 준비 점검(map-probe)이 지문 계산과 '같은 설정 스냅샷'을 env로 주입하면 파일 대신 그것을 쓴다
+  // (실행·증명 결속 — 점검 도중 다른 창이 파일을 바꿔도 기록된 지문=실제 점검한 설정). 빈 문자열=
+  // '파일 부재' 스냅샷(파손과 동일하게 env 키만으로 진행). 일반 실행(지도 등)은 env 미설정=기존 그대로.
+  const snap = process.env.CODEX_PEEK_DS_SNAPSHOT;
+  if (snap !== undefined) {
+    try { fileJson = JSON.parse(snap); } catch { /* 부재·파손 스냅샷 — env만으로 진행 */ }
+  } else {
+    try { fileJson = JSON.parse(fs.readFileSync(DEEPSEEK_FILE, "utf8")); } catch { /* 파일 없음/파손 — env만으로 진행 */ }
+  }
   return resolveDeepseekConfig(process.env, fileJson);
 }
 

@@ -41,10 +41,14 @@ function probeSelf(opts) {
 // (출력 미확인이면 엉뚱한 프로세스의 exit 0이 typed 증명으로 위조될 수 있음 — 2차 blocker③ 후단).
 function probeEconomy(opts) {
   const o = opts || {};
-  const fpE = CL.economyConfigFp();
+  // 스냅샷 결속(재검증 blocker② 일반화): 지문 계산과 자식(capability)이 '같은 설정 원문'을 쓰도록
+  // 파일을 1회만 읽어 env로 전달 — 실행 도중 다른 창이 deepseek.json을 바꿔도(A→B→A 포함) 기록된
+  // 지문은 실제로 점검한 설정과 항상 같다. env DEEPSEEK_API_KEY 우선순위는 자식에서도 동일하게 유지.
+  const snapE = CL.readEconomySnapshot();
+  const fpE = CL.economyConfigFpFrom(snapE);
   if (fpE === null) return { skipped: true, reason: "not-configured" };
   const startedAt = new Date().toISOString();
-  const rc = spawnSync(o.nodeBin || process.execPath, [path.join(o.bridgeDir || __dirname, "deepseek-bridge.js"), "capability"], { encoding: "utf8", timeout: 150000, windowsHide: true, env: o.env || process.env });
+  const rc = spawnSync(o.nodeBin || process.execPath, [path.join(o.bridgeDir || __dirname, "deepseek-bridge.js"), "capability"], { encoding: "utf8", timeout: 150000, windowsHide: true, env: { ...(o.env || process.env), [CL.DS_SNAPSHOT_ENV]: snapE.raw === null ? "" : String(snapE.raw) } });
   const okE = !rc.error && rc.status === 0 && /capability-ok/.test(String(rc.stdout || ""));
   const rec = { ok: okE, probedAt: new Date().toISOString(), startedAt, fp: fpE, detail: okE ? "" : String(rc.stdout || rc.stderr || ((rc.error && rc.error.message) || "")).trim().slice(-160) };
   const w = CL.writeMapReadinessGuarded("economy", rec, () => CL.economyConfigFp());
@@ -54,7 +58,10 @@ function probeEconomy(opts) {
 function probePrecision(opts) {
   const o = opts || {};
   const inv = o.inv;
-  const fpP = CL.precisionExecFp(inv);
+  // 스냅샷 결속(재검증 blocker②): 지문과 실행 인자를 같은 판독에서 도출 — 실행 직전 다른 창이
+  // scout-codex.json을 B로 바꿔도 실제 실행은 스냅샷(A) 인자이므로 'A 지문에 B 실행 성공' 오결속이 없다.
+  const snapP = CL.readPrecisionConfigSnapshot();
+  const fpP = CL.precisionExecFpFrom(inv, snapP);
   const startedAt = new Date().toISOString();
   const tmpC = fs.mkdtempSync(path.join(os.tmpdir(), "map-probe-"));
   const outF = path.join(tmpC, "probe-out.txt");
@@ -65,7 +72,7 @@ function probePrecision(opts) {
     const target = inv && CL.resolveExecutableForSpawn(inv.file, o.env || process.env);
     callId = target ? crypto.randomUUID() : null;
     const rp = target
-      ? spawnSync(target, [...(inv.args || []), ...CL.codexScoutExecArgs(outF)], { input: probeIn, cwd: tmpC, encoding: "utf8", timeout: o.timeoutMs || 120000, windowsHide: true, shell: !!inv.shell, stdio: ["pipe", "ignore", "pipe"], env: CL.codexScoutExecEnv(o.env || process.env, "probe") })
+      ? spawnSync(target, [...(inv.args || []), ...CL.codexScoutExecArgsFromSnapshot(snapP, outF)], { input: probeIn, cwd: tmpC, encoding: "utf8", timeout: o.timeoutMs || 120000, windowsHide: true, shell: !!inv.shell, stdio: ["pipe", "ignore", "pipe"], env: CL.codexScoutExecEnv(o.env || process.env, "probe") })
       : { error: new Error("cli-not-found"), status: null, stdout: "", stderr: "", pid: null };
     launched = Number.isSafeInteger(rp.pid) && rp.pid > 0;
     let outTxt = ""; try { outTxt = fs.readFileSync(outF, "utf8").trim(); } catch { /* 실패 판정 */ }
