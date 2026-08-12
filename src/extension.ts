@@ -720,8 +720,18 @@ let mapProbeBusy = false; // 단일-flight(P6b 계보와 같은 규범 — 겹�
 // 담당을 추측으로 새로 부르지 않는다. '1회'의 정본은 브릿지 전역 예약(claimAutoReprobe — 담당별 키:
 // 3차 blocker① need 조합 키는 창마다 조합이 달라 같은 유료 담당이 중복 실행됐다)이고, 실행 완료 시
 // completeAutoReprobe로 확정한다(미완 사망=TTL 후 자동 승계 — 3차 blocker③ 영구 억제 금지).
-// 아래 Set은 창 안 빠른 경로(상태 계산 15초마다 잠금 파일을 두드리지 않기 위한 소음 차단)일 뿐 권위가 아니다.
-const autoReprobeTried = new Set<string>();
+// 아래 지도(Map)는 창 안 빠른 경로(상태 계산 15초마다 잠금 파일을 두드리지 않기 위한 소음 차단)일 뿐
+// 권위가 아니다 — 그래서 항목 자체가 시한부(10분)다(8차 blocker f-54cf031a: 무기한 항목은 증명 축출·세대
+// 리셋 뒤 claim의 done 만료 경로보다 먼저 차단해, 같은 창이 사람 클릭 없이는 영원히 복귀하지 못했다).
+// 만료 후에는 전역 장부(claimAutoReprobe)가 다시 권위로 판정한다 — 잠금 접촉은 키당 10분에 1회로 유계.
+const autoReprobeTried = new Map<string, number>(); // key → 항목 만료 시각(ms)
+const AUTO_RETRIED_TTL_MS = 10 * 60 * 1000;
+function triedRecently(key: string): boolean {
+  const t = autoReprobeTried.get(key);
+  if (t === undefined) return false;
+  if (Date.now() >= t) { autoReprobeTried.delete(key); return false; }
+  return true;
+}
 function maybeAutoReprobe(ws: string | null, rv: any): void {
   try {
     if (!ws || !rv || mapProbeBusy) return;
@@ -733,11 +743,11 @@ function maybeAutoReprobe(ws: string | null, rv: any): void {
     const need: string[] = [], keys: string[] = [];
     for (const k of need0) {
       const key = k + ":" + (k === "precision" ? String(precisionFpNowExt()) : k === "self" ? String(selfFpNowExt()) : String(CLs.economyConfigFp ? CLs.economyConfigFp() : "eco"));
-      if (autoReprobeTried.has(key)) continue;
-      const c = CLs.claimAutoReprobe(key); // true=획득 / false=영구 확정 거부(done·시도 상한) / null=일시(진행 중[TTL 이내]·잠금 불가)
-      if (c === true) { autoReprobeTried.add(key); need.push(k); keys.push(key); }
-      else if (c === false) autoReprobeTried.add(key);
-      // null이면 Set에 안 넣는다 — 다음 상태 계산에서 재시도(일시 장애가 영구 억제로 굳는 것 금지)
+      if (triedRecently(key)) continue;
+      const c = CLs.claimAutoReprobe(key); // true=획득 / false=확정 거부(done+증명 생존·시도 상한) / null=일시(진행 중[TTL 이내]·잠금 불가)
+      if (c === true) { autoReprobeTried.set(key, Date.now() + AUTO_RETRIED_TTL_MS); need.push(k); keys.push(key); }
+      else if (c === false) autoReprobeTried.set(key, Date.now() + AUTO_RETRIED_TTL_MS);
+      // null이면 지도에 안 넣는다 — 다음 상태 계산에서 재시도(일시 장애가 영구 억제로 굳는 것 금지)
     }
     if (!need.length) return;
     runAutoProbeDetached(ws, need, keys); // 비동기 자식(호스트 무정지) — 성공하면 다음 상태 푸시에서 자동 복귀·실패는 probe-failed로 남아 기존 경로가 안내

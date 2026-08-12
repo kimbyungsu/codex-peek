@@ -129,14 +129,16 @@ console.log("[7] 지문 변경=자동 재점검(fp당 1회) — 사람 클릭 �
   const fn = b > 0 ? ext.slice(b, e) : "";
   ok(fn.length > 0, "maybeAutoReprobe 존재");
   ok(fn.includes('"config-changed"') && fn.includes('"probe-ver-changed"') && !fn.includes('"not-probed"') && !fn.includes('"probe-failed"'), "자동 대상=설정 변경·계약 개정만(최초·실패는 기존 경로 — 추측 과금 금지)");
-  ok(fn.includes("autoReprobeTried.has(key)"), "창 내 빠른 경로 — 상태 계산마다 잠금 파일을 두드리지 않음");
+  ok(fn.includes("triedRecently(key)"), "창 내 빠른 경로 — 상태 계산마다 잠금 파일을 두드리지 않음");
+  // 8차 blocker: 창 지도는 시한부(10분) — 무기한이면 증명 축출·세대 리셋 뒤 claim의 done 만료 경로를 영원히 차단
+  ok(/const autoReprobeTried = new Map<string, number>\(\)/.test(ext) && /AUTO_RETRIED_TTL_MS = 10 \* 60 \* 1000/.test(ext) && /if \(Date\.now\(\) >= t\) \{ autoReprobeTried\.delete\(key\); return false; \}/.test(ext), "지도 항목=시한부(만료 후 전역 장부가 재판정 — 잠금 접촉 키당 10분 1회 유계)");
   // 3차 blocker①: 예약 키=담당별 지문(need 조합 키는 창마다 조합이 달라 같은 유료 담당이 중복 실행됐다)
   ok(/for \(const k of need0\) \{\s*\n\s*const key = k \+ ":" \+/.test(fn), "예약 키=담당별(k+':'+fp) — 조합 문자열 키 폐기");
   ok(!/\.join\("\|"\)/.test(fn), "need 조합 키 잔재 0");
   const iClaim = fn.indexOf("CLs.claimAutoReprobe(key)");
   const iRun = fn.indexOf("runAutoProbeDetached(ws, need, keys)");
   ok(iClaim > 0 && iRun > iClaim, "전역 예약 성공 후에만 자동 실행(예약이 실행보다 먼저)");
-  ok(/if \(c === true\) \{ autoReprobeTried\.add\(key\); need\.push\(k\); keys\.push\(key\); \}\s*\n\s*else if \(c === false\) autoReprobeTried\.add\(key\);/.test(fn), "true=실행·false=확정 거부만 Set 기록 — null(잠금 일시 불가)은 다음 틱 재시도(영구 억제 금지)");
+  ok(/if \(c === true\) \{ autoReprobeTried\.set\(key, Date\.now\(\) \+ AUTO_RETRIED_TTL_MS\); need\.push\(k\); keys\.push\(key\); \}\s*\n\s*else if \(c === false\) autoReprobeTried\.set\(key, Date\.now\(\) \+ AUTO_RETRIED_TTL_MS\);/.test(fn), "true=실행·false=확정 거부만 시한부 기록 — null(잠금 일시 불가)은 다음 틱 재시도(영구 억제 금지)");
   ok(fn.includes('typeof CLs.claimAutoReprobe !== "function"'), "구 배포본(예약 함수 없음)=자동 진입 자체를 안 함(기존 수동 경로 무회귀)");
   ok(fn.includes("probeTargetsFor(ws)") && iRun > 0, "고른 담당의 필요분만 재점검");
   ok(/maybeAutoReprobe\(ws, rv9\); return rv9;/.test(ext), "computeState 결속 — 상태 계산 때 자동 발동");
@@ -291,6 +293,29 @@ console.log("[11] 지문별 증명 보존·복원+done 만료 — B→C→B 정�
   // 증명 소실(이력 밀림·세대 리셋 재현) — done은 만료 재개(영구 잠금 금지·재점검은 실제 소실 사건 전제라 유계)
   const rd = JSON.parse(fs.readFileSync(rf, "utf8")); delete rd.hist; rd.precision = { ok: true, probedAt: "2026-01-04T00:00:00.000Z", fp: "fpZ" }; fs.writeFileSync(rf, JSON.stringify(rd));
   ok(CL.claimAutoReprobe("precision:fpB") === true, "done인데 증명 소실=만료 재개(사람 클릭 없는 복귀 유지)");
+}
+
+console.log("[12] 창 지도 시한부+done 만료 결합 — 증명 축출 후 복귀도 사람 클릭 0(8차 blocker 반례·maybeAutoReprobe 실행)");
+{
+  const CL = require(path.join(ROOT, "bridge", "contract-lib.js"));
+  // 과거에 자동 점검을 '완료'한 지문(fpEv)인데 증명은 소실된 상황(이력 밀림·세대 리셋과 동형)
+  ok(CL.claimAutoReprobe("precision:fpEv") === true && CL.completeAutoReprobe("precision:fpEv") === true, "fpEv 예약·완료(done — 증명은 없음)");
+  const b = outSrc.indexOf("const autoReprobeTried");
+  const e = outSrc.indexOf("\nfunction autoProbeSettlement");
+  ok(b > 0 && e > b, "창 지도+판단 함수 추출 가능(컴파일 산출물)");
+  const runs = [];
+  const mk = new Function("bridgeLib", "probeTargetsFor", "precisionFpNowExt", "selfFpNowExt", "runAutoProbeDetached",
+    "let mapProbeBusy=false;\n" + outSrc.slice(b, e) + "\nreturn { maybeAutoReprobe, autoReprobeTried };");
+  const envX = mk(() => CL, () => new Set(["precision"]), () => "fpEv", () => null, (ws, need, keys) => { runs.push(keys.join()); });
+  const rv = { precision: { ok: false, reason: "config-changed" } };
+  // 검증자 반례 구도: 같은 창 지도에 과거 완료 항목이 남아 있음(구현이 무기한이면 여기서 영구 차단)
+  envX.autoReprobeTried.set("precision:fpEv", Date.now() + 10 * 60 * 1000);
+  envX.maybeAutoReprobe("D:/x", rv);
+  ok(runs.length === 0, "항목 유효 기간 내=소음 차단(잠금 무접촉·중복 과금 0)");
+  envX.autoReprobeTried.set("precision:fpEv", Date.now() - 1); // 시한 경과 재현
+  envX.maybeAutoReprobe("D:/x", rv);
+  ok(runs.length === 1 && runs[0] === "precision:fpEv", "시한 경과=전역 장부 재판정 → done+증명 소실=만료 재개·자동 실행(사람 클릭 0 — 8차 반례 소멸)");
+  ok(Number(envX.autoReprobeTried.get("precision:fpEv")) > Date.now(), "재실행 후 지도 재기록(다음 10분 소음 차단 복원)");
 }
 
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);
