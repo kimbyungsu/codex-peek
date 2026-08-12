@@ -603,6 +603,26 @@ console.log("[9] run-lock 사망 회수 — 동시 복구자 경합(4차: 시작
   ok(stable === true, "3회 반복 전부 — 정확히 1개만 임계구역 진입(장벽 동시 출발+300ms 임계 유지·이중 실행 0)");
 }
 
+console.log("[9c] 준비 자기치유(2026-08-12 사용자 실보고) — 미준비 park는 준비 회복 시 사람 없이 재개");
+{
+  // 실사고 재현: 담당 미준비로 park → (자동 재점검 성공 등으로) 준비 회복 → 종전엔 '명시 재시도 버튼' 전용이라
+  // 준비가 돌아와도 보류 배지가 영구 잔존했다. ready-heal 분기가 P7 뷰(o.readiness) 회복을 보고 자동 재개한다.
+  const { ws, nodeId } = setup("readyHeal");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: false, paidMode: "precision" });
+  fs.writeFileSync(path.join(ws, "src", "rh.js"), "// rh\n");
+  let callsRh = 0;
+  const adPr = () => { callsRh++; return goodAdapter(nodeId)({}); };
+  const notReady = { selfReady: true, economyReady: true, precisionReady: false, autoReady: false };
+  const rP = ME.runEnrich(ws, base(ws, { mode: "precision", readiness: notReady, adapters: { precision: adPr } }));
+  ok(rP.outcome === "parked" && rP.reason === "precision-not-ready" && callsRh === 0, "미준비=park(호출 0)");
+  const rP2 = ME.runEnrich(ws, base(ws, { mode: "precision", readiness: notReady, adapters: { precision: adPr } }));
+  ok(rP2.outcome === "noop" && rP2.parkedReason === "precision-not-ready" && callsRh === 0, "여전히 미준비=조용한 대기(재과금 0)");
+  const ready9 = { selfReady: true, economyReady: true, precisionReady: true, autoReady: true };
+  const rP3 = ME.runEnrich(ws, base(ws, { mode: "precision", readiness: ready9, adapters: { precision: adPr } }));
+  ok(rP3.outcome === "applied" && callsRh === 1, "준비 회복=자동 재개→적용(사람 클릭 0 — 실사고 소멸)");
+  ok(ME.readEnrichJob(ws).job.phase === "done", "장부 done(보류 배지 해소)");
+}
+
 console.log("[10] 입력 자기치유(2026-08-04 보류 반복 봉합) — 문서·산출물뿐=호출 0, 코드 오면 자동 재개");
 {
   // (i) 신규 라운드: 변경이 문서·산출물뿐 → job조차 안 만들고 noop(호출 0·park 0·경보 0)

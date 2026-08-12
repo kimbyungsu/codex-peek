@@ -629,7 +629,9 @@ function maybeSpawnEnrichExt(ws: string | null, trigger: string): void {
     // 세대가 보류 당시와 다르면 즉시 통과시키고, ②같은 세대라도 창 수명 중 1회는 통과시켜(같은 지도에
     // 새 결정이 붙어 authorityHash만 바뀐 경우) 실행기가 스스로 재판단하게 한다. 같은 입력 반복
     // 재과금은 실행기의 jobKey 비교가 그대로 막는다(비용 계약 불변).
-    if (jr9.st === "ok" && jr9.job.phase === "parked" && !trigger.startsWith("link:")) {
+    // probe 직후는 준비 상태가 방금 바뀐 '새 신호'라 보류 재확인 스로틀(30분)을 우회한다(2026-08-12
+    // 사용자 실보고 — 미준비 보류가 준비 회복 후에도 최대 30분 남아 보임). 재과금은 실행기 판정이 막는다.
+    if (jr9.st === "ok" && jr9.job.phase === "parked" && !trigger.startsWith("link:") && trigger !== "probe") {
       let qMapId = "";
       try { const q = JSON.parse(fs.readFileSync(MB9.queueFileFor(repo9), "utf8")); qMapId = String((q && q.mapId) || ""); } catch { qMapId = ""; }
       if (!shouldSpawnWhenParked(String(jr9.job.mapId || ""), qMapId, parkedRecheckAt.get(repo9), Date.now())) return;

@@ -1281,6 +1281,25 @@ function runEnrichLocked(repo, o, env) {
         }
         return { outcome: "noop", reason: "parked", parkedReason: "input-doc-only" };
       }
+      // 준비 자기치유(2026-08-12 사용자 실보고 — 자동 재점검 캠페인의 마지막 고리): '담당 미준비'로 멈춘
+      // job은 준비가 회복되면(자동 재점검 성공·설정 복귀 이력 복원) 사람 없이 재개한다 — consent-stale
+      // 자기 재개와 같은 관용구. 준비 상태는 이 프로세스가 방금 산출한 P7 뷰(o.readiness)로 판정하므로
+      // 재개는 실제 준비 회복 사건을 전제한다(여전히 미준비면 조용히 대기 — 재과금 0·재경보 0).
+      // retryFrom 이동=수동 '다시 시도'와 같은 규칙(과거 park 표지가 재개를 즉시 같은 park로 되돌리는 것 방지).
+      const NOT_READY_REASONS = { "precision-not-ready": "precisionReady", "economy-not-ready": "economyReady", "auto-not-ready": "autoReady" };
+      const rdKey = NOT_READY_REASONS[String(j.parkedReason || "")];
+      if (rdKey) {
+        if (o.readiness && o.readiness[rdKey] === true) {
+          const wRd = fencedUpdateEnrichJob(repo, env.fence, (jj) => { if (!jj || jj.phase !== "parked" || !NOT_READY_REASONS[String(jj.parkedReason || "")]) return null; const nx = { ...jj, phase: "open", retryFrom: Array.isArray(jj.attempts) ? jj.attempts.length : 0 }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
+          if (wRd.fenceLost) return { outcome: "busy", reason: "run-lock-lost" };
+          if (wRd.ok && !wRd.unchanged) {
+            log({ route: "ready-heal", reason: "readiness-recovered", outcome: "resumed", jobKey: j.jobKey, parkedReason: j.parkedReason || "" });
+            if (env.p10) env.p10.touch(wRd.job.jobKey, jobRunIdOf(wRd.job));
+            return resumeJob(repo, o, env, wRd.job, { topo, idx, pol, ah, corridor, changed, srcFp, srcHead });
+          }
+        }
+        return { outcome: "noop", reason: "parked", parkedReason: j.parkedReason || "" };
+      }
       const ANSWER_REJECTED_REASONS = ["precision-failed", "economy-failed", "both-failed", "self-failed"];
       if (ANSWER_REJECTED_REASONS.includes(String(j.parkedReason || "")) && !answerableInput(repo, topo, changed)) {
         const wTr = fencedUpdateEnrichJob(repo, env.fence, (jj) => { if (!jj || jj.phase !== "parked" || jj.parkedReason === "input-doc-only") return null; return { ...jj, parkedReason: "input-doc-only" }; });
