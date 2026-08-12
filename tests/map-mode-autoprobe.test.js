@@ -147,11 +147,13 @@ console.log("[8] 전역 예약 장부 — 담당별 fp당 1회·2단계(started/
   const CL = require(path.join(ROOT, "bridge", "contract-lib.js")); // [6]의 tmp 홈 재사용
   const home = process.env.CODEX_BRIDGE_HOME;
   ok(CL.claimAutoReprobe("precision:fpA") === true, "첫 예약=실행 권한(started)");
-  ok(CL.claimAutoReprobe("precision:fpA") === false, "진행 중(TTL 이내)=거부 — 중복 실행 0");
+  // 4차 blocker①·[보완]: 진행 중(TTL 이내)은 '영구 거부(false)'가 아니라 '일시 양보(null)' — false면 호출자가
+  // 창 Set에 굳혀, 실행 주체가 죽고 TTL이 지나도 그 창은 claim을 다시 두드리지 않아 승계가 영원히 안 일어난다.
+  ok(CL.claimAutoReprobe("precision:fpA") === null, "진행 중(TTL 이내)=일시 양보(null) — 중복 실행 0·TTL 후 승계 길 유지");
   const key = require.resolve(path.join(ROOT, "bridge", "contract-lib.js"));
   delete require.cache[key];
   const CL2 = require(path.join(ROOT, "bridge", "contract-lib.js")); // 두 번째 창 재현(독립 모듈 인스턴스 — 검증자 반례 구도)
-  ok(CL2.claimAutoReprobe("precision:fpA") === false, "다른 창(독립 인스턴스)도 거부 — 같은 담당 중복 과금 0");
+  ok(CL2.claimAutoReprobe("precision:fpA") === null, "다른 창(독립 인스턴스)도 진행 중엔 일시 양보 — 같은 담당 중복 과금 0");
   ok(CL2.claimAutoReprobe("economy:fpE") === true, "다른 담당 키=독립 예약(창 A precision·창 B economy 공존)");
   ok(CL2.completeAutoReprobe("precision:fpA") === true && CL2.claimAutoReprobe("precision:fpA") === false, "done 확정 후=영구 거부");
   // 3차 blocker③: 실행 주체 사망 재현 — started가 TTL을 넘기면 승계 허용(사람 클릭 없는 복귀), 시도 상한으로 과금 유계
@@ -219,17 +221,37 @@ console.log("[10] 자동 실행=비동기 자식(호스트 무정지·3차 block
   const fn = b > 0 && e > b ? ext.slice(b, e) : "";
   ok(fn.length > 0, "자동 실행부 존재(수동 경로와 분리)");
   ok(/spawn\(process\.execPath, \[runner\], \{ windowsHide: true, stdio: \["pipe", "pipe", "ignore"\]/.test(fn) && !fn.includes("spawnSync") && !/MP\.probe/.test(fn), "비동기 자식 spawn — 호스트에서 동기 probe 0(ab-6)");
-  ok(fn.includes('child.on("close"') && fn.includes("if (code !== 0) return;"), "크래시·킬=완료 표식 없음(예약 TTL 승계로 자동 복귀)");
-  const iC = fn.indexOf("if (code !== 0) return;"), iD = fn.indexOf("completeAutoReprobe(key)");
-  ok(iC > 0 && iD > iC, "정상 종료 후에만 예약 done 확정");
+  // 4차 blocker①②: 완료 확정은 배치 exit 0이 아니라 '담당별 정산' — 기록 남은 키만 done, 미기록은 창 Set 회수
+  ok(fn.includes("autoProbeSettlement(need, keys, code, r)") && /for \(const key of st\.complete\)[\s\S]{0,120}completeAutoReprobe\(key\)/.test(fn), "정산 결과의 complete만 done 확정(전 키 일괄 확정 폐기)");
+  ok(/for \(const key of st\.release\) autoReprobeTried\.delete\(key\);/.test(fn) && fn.includes('child.on("error", () => { clearTimeout(killer); releaseAll(); finish(); })'), "미기록·크래시=창 Set 회수 — 단일 창도 TTL 승계 수령(영구 고착 금지)");
+  ok(fn.includes("if (code !== 0 || !r) return;"), "크래시·킬·파손 응답=완료 표식 없음(예약 TTL 승계로 자동 복귀)");
   ok(/setTimeout\(\(\) => \{ try \{ child\.kill\(\); \} catch \{[^}]*\} \}, 6 \* 60 \* 1000\)/.test(fn), "자식 킬 타이머 6분(행 방지 — 예약 TTL 10분보다 짧게)");
   ok(fn.includes("mapProbeBusy = true") && fn.includes("const finish = () => { if (!done) { done = true; mapProbeBusy = false; } }"), "수동 점검과 겹침 방지(단일-flight) — 종료 시 해제");
   ok(fn.includes("설정 변경을 감지해 준비 점검을 자동으로 다시 했어요") && fn.includes("readiness was re-checked automatically"), "자동 실행 결과 알림(과금 투명성·ko/en)");
   ok(fn.includes('maybeSpawnEnrichExt(ws, "probe")'), "수동 경로와 동일한 후속(자동 보강 발동 ⓑ)");
-  ok(fn.includes("if (!fs.existsSync(runner)) { finish(); return; }"), "구 설치본(실행기 부재)=자동 양보(수동 경로 그대로)");
+  ok(fn.includes("if (!fs.existsSync(runner)) { releaseAll(); finish(); return; }"), "구 설치본(실행기 부재)=자동 양보+창 Set 회수(수동 경로 그대로)");
   // 배포 목록 두 정본(install.js·hook-setup.ts) 모두에 실행기 편입 — 설치본 부재로 자동이 조용히 죽는 것 방지
   ok(fs.readFileSync(path.join(ROOT, "install.js"), "utf8").includes('"map-probe-batch.js"'), "install.js 배포 목록 편입");
   ok(fs.readFileSync(path.join(ROOT, "src", "hook-setup.ts"), "utf8").includes('"map-probe-batch.js"'), "hook-setup.ts 배포 목록 편입(확장 배포 경로)");
+}
+
+console.log("[10b] 정산 기능 실행 — 저장 실패=done 금지·창 회수(4차 blocker①② 반례)");
+{
+  const b = outSrc.indexOf("function autoProbeSettlement(");
+  const e = outSrc.indexOf("\nfunction runAutoProbeDetached", b);
+  ok(b > 0 && e > b, "정산 함수 추출 가능(컴파일 산출물)");
+  const fnS = new Function(outSrc.slice(b, e) + "\nreturn autoProbeSettlement;")();
+  // 검증자 반례 원형: exit 0인데 readiness 저장 실패(lock-timeout) — done으로 굳으면 자동 복귀 영구 차단
+  const s1 = fnS(["precision"], ["precision:P"], 0, { precision: { ok: true, write: { ok: false, reason: "lock-timeout" } } });
+  ok(s1.complete.length === 0 && s1.release.join() === "precision:P", "저장 실패=예약 미확정+창 Set 회수(TTL 승계로 자동 복귀 유지)");
+  const s2 = fnS(["precision"], ["precision:P"], 0, { precision: { ok: false, detail: "x", write: { ok: true } } });
+  ok(s2.complete.join() === "precision:P" && s2.release.length === 0, "정직한 실패 '기록'=확정(probe-failed는 자동 대상 아님 — 루프 없음)");
+  const s3 = fnS(["economy"], ["economy:E"], 0, { economy: { skipped: true } });
+  ok(s3.complete.join() === "economy:E" && s3.release.length === 0, "설정 없음(건너뜀)=확정(자동 대상 사유 아님)");
+  const s4 = fnS(["self", "precision"], ["self:S", "precision:P"], 1, null);
+  ok(s4.complete.length === 0 && s4.release.length === 2, "크래시·킬(exit≠0)=전 키 회수(단일 창도 TTL 승계 수령)");
+  const s5 = fnS(["precision"], ["precision:P"], 0, null);
+  ok(s5.complete.length === 0 && s5.release.join() === "precision:P", "파손 응답(JSON 불가)=회수");
 }
 
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);

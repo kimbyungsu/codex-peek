@@ -734,7 +734,7 @@ function maybeAutoReprobe(ws: string | null, rv: any): void {
     for (const k of need0) {
       const key = k + ":" + (k === "precision" ? String(precisionFpNowExt()) : k === "self" ? String(selfFpNowExt()) : String(CLs.economyConfigFp ? CLs.economyConfigFp() : "eco"));
       if (autoReprobeTried.has(key)) continue;
-      const c = CLs.claimAutoReprobe(key); // true=획득 / false=확정 거부(완료·진행 중·시도 상한) / null=잠금 일시 불가
+      const c = CLs.claimAutoReprobe(key); // true=획득 / false=영구 확정 거부(done·시도 상한) / null=일시(진행 중[TTL 이내]·잠금 불가)
       if (c === true) { autoReprobeTried.add(key); need.push(k); keys.push(key); }
       else if (c === false) autoReprobeTried.add(key);
       // null이면 Set에 안 넣는다 — 다음 상태 계산에서 재시도(일시 장애가 영구 억제로 굳는 것 금지)
@@ -747,16 +747,31 @@ function maybeAutoReprobe(ws: string | null, rv: any): void {
 // self 20s·economy 150s·precision 120s 동안 UI 전체가 멈춘다 — 자동 경로는 배치 실행기(map-probe-batch.js)를
 // '비동기 자식'으로 띄워 무정지. 수동 경로(모달 승인 후 대기)는 기존 동작 그대로 — 사용자가 명시한 대기다.
 // 기록(writeMapReadinessGuarded)은 map-probe 내부(자식)에서 일어나므로 자식이 중간에 죽어도 이미 끝난
-// 담당의 기록은 정직하게 남는다. 완료 표식(completeAutoReprobe)은 자식 정상 종료 때만 — 크래시는 TTL 승계.
+// 담당의 기록은 정직하게 남는다. 예약 확정(completeAutoReprobe)은 담당별 정산(autoProbeSettlement)이 결정.
+// 자동 재점검 정산(4차 blocker①② 순수 판정): '기록이 실제로 남았을 때만' 예약을 done으로 확정한다.
+// 기록됨 = skipped(설정 없음 — 자동 대상 사유 아님) 또는 readiness 저장 성공(write.ok===true — 실패 기록도
+// 정직 기록이면 확정: probe-failed는 자동 대상이 아니라 루프 없음). 저장 실패(잠금 등)·크래시·킬·파손
+// 응답은 미기록 — 예약은 started로 남고 창 Set에서도 회수해, 이 창 포함 어느 창이든 TTL 후 시도 상한
+// 안에서 자동 승계한다(배치 exit 0만 보고 전 키를 done으로 굳히면 저장 실패가 영구 보류로 확정된다).
+function autoProbeSettlement(need: string[], keys: string[], code: number | null, r: any): { complete: string[]; release: string[] } {
+  const complete: string[] = [], release: string[] = [];
+  need.forEach((k, idx) => {
+    const e = code === 0 && r ? (r as any)[k] : null;
+    const recorded = !!(e && (e.skipped === true || (e.write && e.write.ok === true)));
+    (recorded ? complete : release).push(keys[idx]);
+  });
+  return { complete, release };
+}
 function runAutoProbeDetached(ws: string | null, need: string[], keys: string[]): void {
-  if (mapProbeBusy) return;
+  const releaseAll = () => { for (const key of keys) autoReprobeTried.delete(key); }; // 실행 미도달=창 Set 회수(TTL 승계를 이 창도 받는다 — 4차 blocker①)
+  if (mapProbeBusy) { releaseAll(); return; }
   mapProbeBusy = true; // 수동 점검과 겹침 방지 — 자식 종료 시 해제
   let done = false;
   const finish = () => { if (!done) { done = true; mapProbeBusy = false; } };
   try {
     const CLs: any = bridgeLib();
     const runner = path.join(BRIDGE_DIR, "map-probe-batch.js");
-    if (!fs.existsSync(runner)) { finish(); return; } // 구 설치본=자동 없음(수동 경로 그대로)
+    if (!fs.existsSync(runner)) { releaseAll(); finish(); return; } // 구 설치본=자동 없음(수동 경로 그대로 — 예약은 TTL·시도 상한이 정리)
     const payload = {
       targets: need,
       adapterHint: selfAdapterHintExt(),
@@ -767,14 +782,19 @@ function runAutoProbeDetached(ws: string | null, need: string[], keys: string[])
     let out = "";
     child.stdout!.on("data", (d: any) => { out += String(d); });
     const killer = setTimeout(() => { try { child.kill(); } catch { /* 무해 */ } }, 6 * 60 * 1000); // 개별 probe 타임아웃 합(≈290s)+여유 — 행 방지(예약 TTL 10분보다 짧게)
-    child.on("error", () => { clearTimeout(killer); finish(); });
+    child.on("error", () => { clearTimeout(killer); releaseAll(); finish(); });
     child.on("close", (code: number | null) => {
       clearTimeout(killer); finish();
       try {
-        if (code !== 0) return; // 크래시·킬=완료 표식 없음 — 예약이 TTL 후 자동 승계(사람 클릭 불필요)
-        const r = JSON.parse(out);
+        let r: any = null;
+        if (code === 0) { try { r = JSON.parse(out); } catch { r = null; } }
         if (r && r.self && "ver" in r.self) cachedClaudeVer = r.self.ver || null; // probeSelf 계약: 실패=null 리셋
-        for (const key of keys) { try { if (CLs && CLs.completeAutoReprobe) CLs.completeAutoReprobe(key); } catch { /* 무해 */ } }
+        // 담당별 정산(4차 blocker①②): 기록 남은 키만 done 확정, 미기록 키는 창 Set 회수 — 크래시·킬·저장
+        // 실패가 '완료'로 굳지 않고, 예약(started)이 TTL 후 자동 승계된다(사람 클릭 불필요).
+        const st = autoProbeSettlement(need, keys, code, r);
+        for (const key of st.complete) { try { if (CLs && CLs.completeAutoReprobe) CLs.completeAutoReprobe(key); } catch { /* 무해 */ } }
+        for (const key of st.release) autoReprobeTried.delete(key);
+        if (code !== 0 || !r) return; // 크래시·킬·파손 응답 — 위 정산에서 회수 완료
         const notes = need.map((k) => {
           const e = r ? r[k] : null;
           if (!e) return k + ": ?";
@@ -787,7 +807,7 @@ function runAutoProbeDetached(ws: string | null, need: string[], keys: string[])
       } catch { /* 표시 실패=다음 상태 푸시가 복귀를 보여줌 */ }
     });
     child.stdin!.end(JSON.stringify(payload));
-  } catch { finish(); }
+  } catch { releaseAll(); finish(); }
 }
 // only: 점검할 담당 집합. 미지정=현재 선택된 담당만(사용자 실보고 2026-08-04: 정밀형을 골랐는데
 // DeepSeek까지 호출돼 '잔액 부족' 실패가 뜨고 무관한 과금이 났다 — 안 쓰는 담당은 부르지 않는다).

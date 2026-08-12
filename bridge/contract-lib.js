@@ -1869,8 +1869,10 @@ function writeMapReadinessGuarded(provider, rec, currentFpFn) {
 // 2단계 계약(3차 blocker③ — 실행 전 영구 기록 금지): claim=started 기록(실행 권한), 실행 완료 시
 // completeAutoReprobe=done 확정. started가 TTL(개별 probe 타임아웃 합≈290s+여유)을 넘기면 실행 주체
 // 사망으로 보고 승계 허용 — 단 시도 수 상한(반복 사망 병리의 과금 상한). 반환 3값:
-//   true=이번 창이 예약 획득(실행하라) / false=확정 거부(done·진행 중·시도 상한 — 다시 두드릴 필요 없음)
-//   / null=일시 불가(잠금 실패 등 — 다음 상태 계산에서 재시도: 일시 장애가 영구 억제로 굳는 것 금지).
+//   true=이번 창이 예약 획득(실행하라) / false=영구 확정 거부(done·시도 상한 — 다시 두드릴 필요 없음)
+//   / null=일시 불가(다른 실행 진행 중[TTL 이내]·잠금 실패·기록 실패 — 다음 상태 계산에서 재시도).
+// '진행 중'을 false로 굳히면 안 된다(4차 blocker①): 호출자가 창별 Set에 기록해 버려, 실행 주체가
+// 죽고 TTL이 지나도 기존 창들이 claim 자체를 건너뛰어 승계가 영원히 일어나지 않는다.
 const AUTO_REPROBE_FILE = path.join(BRIDGE_DIR, "auto-reprobe.json");
 const AUTO_REPROBE_TTL_MS = 10 * 60 * 1000;
 const AUTO_REPROBE_MAX_TRIES = 3;
@@ -1903,7 +1905,7 @@ function claimAutoReprobe(key) {
       if (e.state === "done") return "deny"; // 이 지문은 이미 점검 완료 — 영구 확정
       const age = now - (Date.parse(e.ts) || 0);
       const t = Number.isSafeInteger(e.tries) && e.tries >= 1 ? e.tries : 1;
-      if (age < AUTO_REPROBE_TTL_MS) return "deny"; // 다른 창이 진행 중(자식 킬 타이머 6분 < TTL 10분)
+      if (age < AUTO_REPROBE_TTL_MS) return "wait"; // 다른 창이 진행 중(자식 킬 타이머 6분 < TTL 10분) — 일시 거부(null): TTL 경과 후 승계 가능해야 함
       if (t >= AUTO_REPROBE_MAX_TRIES) return "deny"; // 완료 표식 없이 반복 사망 — 수동 경로로
       tries = t + 1; cur.splice(i, 1); // 사망 승계 — 시도 수 누적
     }
