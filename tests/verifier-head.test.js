@@ -31,7 +31,7 @@ console.log("[2] 코드 소유 고정 산문 예산 — 늘리려면 같은 분�
 // 실측(2026-08-06): canon ko 777/en 1682 · FORMAT v1 ko 563/en 1056 · v2 고정 산문 ko 639/en 1163 · baseQual ko 213/en 391
 const wsEmpty = path.join(home, "ws-empty"); fs.mkdirSync(wsEmpty, { recursive: true });
 const CAPS = {
-  canonPlusFormat: { ko: 1450, en: 2950 },  // 자유 문안 캐논+기계 서식 v1(실측 1340/2738)
+  canonPlusFormat: { ko: 1530, en: 3160 },  // 자유 문안 캐논+기계 서식 v1. [기억 권위 B-1 의식적 개정 2026-08-14] ab 직접 충돌 판정 규칙 ⑥+처리 표기 지시 추가(실측 1509/3134 — 드리프트 아닌 기능 추가·MEMORY-AUTHORITY-DESIGN §3). 이전 예산 1450/2950(실측 1340/2738).
   v2Fixed: { ko: 700, en: 1250 },           // v2 서식·범위확장·MAP 라우팅 3덩이(열린 지적 0 기준 — 실측 639/1163)
   baseQual: { ko: 250, en: 450 },           // 경계 한정 문구(실측 213/391)
 };

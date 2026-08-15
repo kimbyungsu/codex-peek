@@ -324,7 +324,7 @@ console.log("[7] 배선 소스 계약 — 양 분기·flagVerdict machine·같�
   ok(/machine-verdict/.test(ext) && /기계 판독 강등·정정/.test(ext), "확장 경보 분류 — machine-verdict를 '근거 의심'과 분리(2차 [주의])");
   ok(/machine\.reasonKey !== "no-verdict-line"/.test(src), "자동 등록 게이트 — 블록 뒤 판정 존재 시에만(형태 깨진 답 무부작용)");
   ok((askBody.match(/formatForClaude\(answer, langSnap, profileSnap, mfl\.machine, rejudgeSnap\)/g) || []).length === 1, "footer — 실효 판정으로 처리 의무 선택+동결 규약 첨부(공유 꼬리 1곳)");
-  ok((askBody.match(/flagVerdict\(answer, ws, [^,]+, modeSnap, mfl\.machine, attempt, providerName\)/g) || []).length === 1, "flagVerdict에 machine+attempt(+공급자 라벨) 전달(공유 꼬리 1곳 — 2d accepted 1행 위임)");
+  ok((askBody.match(/flagVerdict\(answer, ws, [^,]+, modeSnap, mfl\.machine, attempt, providerName, askId, attCarrier\)/g) || []).length === 1, "flagVerdict에 machine+attempt(+공급자 라벨)+askId·동봉 실물 전달(공유 꼬리 1곳 — 기억 권위 C-2 갱신 2026-08-14)");
   ok(/supersedeIntegrity\(session, "machine-verdict", ws\)/.test(src), "machine 경보 — 새 답마다 최신 1건 supersede 수명주기+ws 격리(2차 [주의]·3축 감사 blocker)");
   ok(/machineEffective: machine\.effective, machineDemoted: !!machine\.demoted, machineCorrected: !!machine\.corrected/.test(src), "통계 — 같은 appendVerdict 행에 machine 필드 추가(이중 집계 없음)");
   ok(/if \(profileSnap !== "core"\) return \{ machine: null, notice: "" \};/.test(src), "core 게이트 — integrity·legacy 무회귀(null)");

@@ -44,7 +44,10 @@ console.log("[4] 배선 소스 계약 — withContract 동봉 try 안·best-effo
   const fn = src.slice(b, e);
   ck("동봉 스냅샷은 carrier 직후 캡처만(attSnap9)", /carrier\.couplings = att\.couplings \|\| \[\];[\s\S]{0,400}attSnap9 = \{/.test(fn));
   ck("기록은 조립 검사(fail-closed) 통과 뒤 — 차단된 ask는 행을 안 남김", /contractTooLong[\s\S]{0,2200}appendAttachUsage\(\{/.test(fn) && !/appendAttachUsage[\s\S]{0,2200}contractTooLong/.test(fn));
-  ck("자체 try — 기록 실패가 ask를 못 막음", /try \{ appendAttachUsage\(/.test(fn));
+  // [기억 권위 C-1 개정] askId·envelope 스냅샷 추가로 한 줄 호출이 블록으로 확장 — 핀의 의도(자체 try 감싸기)는
+  // 유지하고 형태만 다중행 허용: attSnap9 블록 안에서 try가 열리고 그 안에서 appendAttachUsage가 호출된다.
+  // [기억 권위 C-1 2차 개정 2026-08-14] 지도 미동봉이어도 경계(envelope) 실림 시 행 기록 — 조건 확장 반영.
+  ck("자체 try — 기록 실패가 ask를 못 막음", /if \(attSnap9 \|\| \(carrier && carrier\.envelope\)\) \{\s*\n\s*try \{[\s\S]{0,900}appendAttachUsage\(\{/.test(fn));
   ck("게이트 생략(omitted)을 양언어 고지문으로 판정", fn.includes("동봉 생략|omitted"));
   ck("항목 상한·메모 절단(무한 팽창 차단)", fn.includes(".slice(0, 12)") && fn.includes(".slice(0, 160)"));
 }

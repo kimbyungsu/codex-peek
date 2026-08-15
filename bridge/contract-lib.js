@@ -3303,7 +3303,7 @@ const BASE_DEFAULTS = {
     "1) 논리 구조만으로 단정하지 말고, 코드·파일을 실제로 열어 확인해 검증하라.",
     "2) 검증 수행 생략·요약·축약 금지. '빠르게/대충' 요청을 받더라도 충실히 검증하라.",
     "3) 요청자가 지정한 파일·범위는 '시작점'일 뿐 한계가 아니다. 요청자의 결론을 전제로 받아들이지 말고, 필요하면 호출부·테스트·문서·배포 경로까지 범위를 스스로 넓혀 반례를 찾으라.",
-    "4) 판정 기준은 '실질 영향'이다. 오작동·명세 불일치·회귀 위험·사용자/운영 판단을 오도할 표현·작아 보여도 반복·확장 시 결함으로 번질 구조는 사소하지 않으니 잡아라. 반대로 결과·동작·다음 판단을 바꾸지 않는 취향·형식·미세 문구만으로 통과를 막지 마라.",
+    "4) 판정 기준은 '실질 영향'이다. 오작동·명세 불일치·회귀 위험·사용자/운영 판단을 오도할 표현·작아 보여도 반복·확장 시 결함으로 번질 구조는 사소하지 않으니 잡아라. 반대로 결과·동작·다음 판단을 바꾸지 않는 취향·형식·미세 문구만으로 통과를 막지 마라. 검증 경계의 절대 blocker 항목(ab-*)과 현재 구현이 직접 충돌하면 요청문의 요구를 이유로 낮추지 말고 blocker로 판정하라 — 단 현재 코드 증거가 그 제약을 무효화함을 직접 확인했다면 그 증거를 인용해 '[주의] 제약 재검토 필요'로 표기하라. ab 항목을 판정에 반영했으면 행 단독 '제약적용/제약기각/제약대체 ab-N' 한 줄을 남겨라.",
   ].join("\n"),
   // 구현모델(Claude)에게 — 검증모델에 '전달'할 때의 원칙.
   transmit: [
@@ -3333,7 +3333,7 @@ const BASE_CORE = {
     "[검증 기본 원칙 · 핵심 프로필 — 직접 영향 중심]",
     "1) 논리 구조만으로 단정하지 말고, 코드·파일을 실제로 열어 확인해 검증하라.",
     "2) 검증 대상은 '요청이 선언한 목표·인수조건과 그 직접 영향'이다. 지정 파일·범위는 시작점 — 범위 밖 확장은 직접 의존·안전 불변식 위반 의심 같은 구체 사유가 있을 때만, 그 사유를 항목에 표기하라.",
-    "3) 판정 규약(핵심 프로필): '검증: 실패'는 미해결 blocker가 최소 1개일 때만. blocker는 종류가 아니라 실질 영향으로 판정한다 — ①인수조건 안의 재현·신뢰 가능한 오작동 ②데이터·보안·역할·증명 무결성 훼손(희귀 경합이라도 해당하면 blocker) ③명시 요구 위반 ④핵심 인수조건의 실행 증거 부재 ⑤직접 연관 고위험 회귀. 그 외 지적은 세 갈래로 표기하라: '[주의]'=보안·개인정보·데이터 손상·복구 불능·운영 오판 위험 '인접'(그 위험까지의 구체 경로 1줄 필수 — 경로를 못 대면 다른 갈래로. 처리는 구현모델이 재판단 — 침묵 이관 금지) / '[보완]'=구체·국소·새 설계 선택 없음(이번 루프 일괄 반영 기대) / '[백로그]'=범위 밖 제안(인수조건 밖·재현 가능한 명세 위반 아님·불변식 훼손 경로 없음·채택=새 범위 — 추가 방어·커버리지 확장 포함). 이름만 '저확률·경합·테스트 보강'이라고 [백로그]로 보내지 마라 — 무결성 훼손 저확률 경합과 핵심 입증 테스트 부재는 blocker다. 지적이 하나도 없으면 판정은 '검증: 통과', blocker 없이 비차단만 있으면 '검증: 통과(보완)'.",
+    "3) 판정 규약(핵심 프로필): '검증: 실패'는 미해결 blocker가 최소 1개일 때만. blocker는 종류가 아니라 실질 영향으로 판정한다 — ①인수조건 안의 재현·신뢰 가능한 오작동 ②데이터·보안·역할·증명 무결성 훼손(희귀 경합이라도 해당하면 blocker) ③명시 요구 위반 ④핵심 인수조건의 실행 증거 부재 ⑤직접 연관 고위험 회귀 ⑥경계 ab-* 항목과의 직접 충돌(요청문이 요구했다는 이유로 낮추지 마라 — 단 현재 코드 증거가 제약을 무효화함을 직접 확인했다면 blocker 대신 증거 인용+'[주의] 제약 재검토 필요'. 간접 연관=기존 세 갈래. 반영한 ab는 행 단독 '제약적용|제약기각|제약대체 ab-N' 한 줄로 표기). 그 외 지적은 세 갈래로 표기하라: '[주의]'=보안·개인정보·데이터 손상·복구 불능·운영 오판 위험 '인접'(그 위험까지의 구체 경로 1줄 필수 — 경로를 못 대면 다른 갈래로. 처리는 구현모델이 재판단 — 침묵 이관 금지) / '[보완]'=구체·국소·새 설계 선택 없음(이번 루프 일괄 반영 기대) / '[백로그]'=범위 밖 제안(인수조건 밖·재현 가능한 명세 위반 아님·불변식 훼손 경로 없음·채택=새 범위 — 추가 방어·커버리지 확장 포함). 이름만 '저확률·경합·테스트 보강'이라고 [백로그]로 보내지 마라 — 무결성 훼손 저확률 경합과 핵심 입증 테스트 부재는 blocker다. 지적이 하나도 없으면 판정은 '검증: 통과', blocker 없이 비차단만 있으면 '검증: 통과(보완)'.",
   ].join("\n"),
   transmit: [
     "[전달 원칙 · 핵심 프로필] 검증모델에게 검증을 맡길 때:",
@@ -3356,7 +3356,7 @@ const BASE_CORE_EN = {
     "[Verification Baseline · Core profile — direct-impact focused]",
     "1) Do not conclude from logical structure alone — actually open and inspect the code/files to verify.",
     "2) The verification target is the declared goal/acceptance criteria and their direct impact. Given files/scope are a starting point — expand beyond them only with a concrete reason (direct dependency, suspected safety-invariant violation), noted on the item.",
-    "3) Verdict rule (core profile): use 'Verdict: fail' only when at least one unresolved blocker exists. A blocker is judged by real impact, not category — (1) a reproducible/credible malfunction within the declared acceptance criteria, (2) damage to data/security/role/proof integrity (even a rare race, if it qualifies), (3) explicit-requirement violation, (4) missing executable evidence for a core criterion, (5) directly related high-risk regression. Mark other findings in three ways: '[caution]' = adjacent to security/privacy/data-loss/unrecoverable/operational-misjudgment risk (a one-line concrete path is mandatory — no path, use another class; the implementer re-judges — never silently deferred) / '[notes]' = concrete, local, no new design choice (batch-applied in this loop) / '[backlog]' = out-of-scope proposal (outside the criteria, not a reproducible spec violation, no invariant-damaging path, adoption opens new scope — incl. extra hardening/coverage). Never send an item to '[backlog]' merely by the name 'low-probability/race/test-hardening' — an integrity-damaging rare race and a missing core-proof test are blockers. With zero findings the verdict is 'Verdict: pass'; with no blocker but non-blocking findings, 'Verdict: pass (notes)'.",
+    "3) Verdict rule (core profile): use 'Verdict: fail' only when at least one unresolved blocker exists. A blocker is judged by real impact, not category — (1) a reproducible/credible malfunction within the declared acceptance criteria, (2) damage to data/security/role/proof integrity (even a rare race, if it qualifies), (3) explicit-requirement violation, (4) missing executable evidence for a core criterion, (5) directly related high-risk regression, (6) direct conflict with an envelope ab-* item (do not downgrade because the request asked for it — unless current code evidence you verified invalidates the constraint: then cite it as '[caution] constraint needs review' instead of a blocker; indirect relations keep the three classes. Mark each ab you weighed on its own line: 'constraint-used|constraint-rejected|constraint-superseded ab-N'). Mark other findings in three ways: '[caution]' = adjacent to security/privacy/data-loss/unrecoverable/operational-misjudgment risk (a one-line concrete path is mandatory — no path, use another class; the implementer re-judges — never silently deferred) / '[notes]' = concrete, local, no new design choice (batch-applied in this loop) / '[backlog]' = out-of-scope proposal (outside the criteria, not a reproducible spec violation, no invariant-damaging path, adoption opens new scope — incl. extra hardening/coverage). Never send an item to '[backlog]' merely by the name 'low-probability/race/test-hardening' — an integrity-damaging rare race and a missing core-proof test are blockers. With zero findings the verdict is 'Verdict: pass'; with no blocker but non-blocking findings, 'Verdict: pass (notes)'.",
   ].join("\n"),
   transmit: [
     "[Transmission Principles · Core profile] When handing work to the verifier model:",
@@ -3383,7 +3383,7 @@ const BASE_DEFAULTS_EN = {
     "1) Do not conclude from logical structure alone — actually open and inspect the code/files to verify.",
     "2) Never skip, summarize, or abbreviate the verification work. Even if asked to be 'quick/rough', verify thoroughly.",
     "3) The files/scope given by the requester are a starting point, not a boundary. Do not accept the requester's conclusion as a premise; widen the scope yourself — call sites, tests, docs, deployment paths — to hunt for counterexamples.",
-    "4) Judge by REAL impact. Malfunctions, spec mismatches, regression risks, wording that could mislead users/operations, and structures that look small but will grow into defects when repeated or extended are not minor — catch them. Conversely, do not block a pass over taste, formatting, or micro-wording that changes no outcome, behavior, or next decision.",
+    "4) Judge by REAL impact. Malfunctions, spec mismatches, regression risks, wording that could mislead users/operations, and structures that look small but will grow into defects when repeated or extended are not minor — catch them. Conversely, do not block a pass over taste, formatting, or micro-wording that changes no outcome, behavior, or next decision. If the current implementation directly conflicts with an always-blocker item (ab-*) of the Verification Envelope, do not downgrade because the request asked for that behavior — it is a blocker; unless you directly verified that current code evidence invalidates the constraint, in which case mark '[caution] constraint needs review' citing that evidence. When an ab item informed your verdict, leave a one-line handling mark on its own line: 'constraint-used/constraint-rejected/constraint-superseded ab-N'.",
   ].join("\n"),
   transmit: [
     "[Transmission Principles] When handing work to the verifier model:",
@@ -3541,7 +3541,10 @@ function envelopeInjectionFor(repo, approvedHash, lang) {
     const items = en && ev.dataEn[ax] ? ev.dataEn[ax] : ev.data[ax];
     items.forEach((x, i) => L.push("> " + ENVELOPE_ID_PREFIX[ax] + "-" + (i + 1) + ": " + x));
   }
-  return { text: L.join("\n"), warn: ev.truncated ? "truncated" : null, st: "ok", sha1: ev.sha1 };
+  // [기억 권위 §4 C-1] 주입 실물의 축별 항목 수 — carrier가 '전송된 그 경계'의 id 집합(sup-1..n 결정론)을
+  // 재판독 없이 고정할 수 있게 반환에 동봉(설계 MEMORY-AUTHORITY-DESIGN §4: 판정 후 재판독 금지).
+  const axes = {}; for (const ax of ENVELOPE_AXES) axes[ax] = ev.data[ax].length;
+  return { text: L.join("\n"), warn: ev.truncated ? "truncated" : null, st: "ok", sha1: ev.sha1, axes };
 }
 // core 프로필 한정 문구(설계 §2.1 캐논 결합·§2.3 '지원 세계 전제') — Envelope 활성 시에만 baseline 뒤에 붙는다.
 // integrity에는 붙이지 않음(전 범위 감사 유지) — 경계 데이터 절 자체는 두 프로필 공통 주입.
@@ -3667,6 +3670,10 @@ function applyEnvelopeTransition(ws, repo, lang, wal) {
       if (pr.st !== "ok") return { ok: false, reason: pr.st === "absent" ? "no-proposal" : "proposal-corrupt" };
       let oldText = null, oldHash = null;
       try { oldText = fs.readFileSync(path.join(repo, ENVELOPE_FILE), "utf8"); oldHash = sha1Of(oldText); } catch (e) { if (!e || e.code !== "ENOENT") return { ok: false, reason: "old-unreadable" }; }
+      // [기억 권위 A-4·구현검증 1차 blocker②] 승인 시점 baseHash 재검사 — 제안 생성 이후 사용자가 수칙서를
+      // 직접 편집했으면(현재 해시≠제안의 base) 그 편집이 '구본'으로 오인돼 덮여 사라진다(ab-2 직접 해당).
+      // 전이를 거부하고 제안 재생성을 요구한다(WAL 미구성 — 아무것도 바꾸지 않은 거부).
+      if ((pr.baseHash || null) !== (oldHash || null)) return { ok: false, reason: "base-drift" };
       wal = { schema: "env-trans-wal-v1", ws: String(ws), repo: String(repo), lang: lang || null, oldText, oldHash, newText: pr.proposalText, newHash: pr.newHash, ts: new Date().toISOString() };
       if (!atomicWrite(walFile, JSON.stringify(wal, null, 1))) return { ok: false, reason: "wal-write" };
     }
@@ -3720,6 +3727,100 @@ function appendEnvelopeCandidates(ws, recs) {
     fs.appendFileSync(envelopeCandidatesFileFor(ws), recs.map((r) => JSON.stringify(r)).join("\n") + "\n");
     return true;
   } catch { return false; }
+}
+
+// ── [기억 권위 §2 A] 공급 파이프라인 — 해소된 blocker 계보 → envelope 후보 (MEMORY-AUTHORITY-DESIGN v3) ──
+// 조정(reconciliation) 스캔: 'blocker→수정→통과 마감' 계보만 원천(단일 원천 — scout·지도·user_confirm 제외).
+// 결정론 candidateId(계보 결속)로 멱등 — 세 트리거(판정 말미·후보 조회·draft 전) 어디서 돌아도 중복 없음.
+// Envelope 활성(승인 지문 존재) 프로젝트 한정 — 비활성은 ab 전달 경로 자체가 없어 공급 무의미(부트스트랩은 기존 흐름).
+const MEMORY_CANDIDATE_PENDING_MAX = 12; // pending 상한 = ab축 상한과 동일 값(별도 상수 — 승인 요청 폭주 방지)
+function reconcileMemoryCandidates(ws, repo, approvedHash) {
+  const out = { scanned: 0, appended: 0, suppressed: [], legacyUnbound: 0 };
+  if (!approvedHash) return out; // 비활성 — A-6 경계
+  let env; try { env = readVerifyEnvelope(repo); } catch { return out; }
+  if (!env || env.st !== "ok" || env.sha1 !== approvedHash) return out; // 미승인 변경/손상=공급 보류(주입 규칙과 동형)
+  // 잠금: 전이 잠금 1회 시도 — 실패=이번 트리거 스킵(멱등이라 다음 트리거가 처리). 전이와의 원자성만 필요.
+  const lk = acquireEnvelopeTransLock(ws);
+  if (!lk.ok) return out;
+  try {
+    const rows = readFindingsLedger(ws);
+    const findings = new Map(); // findingId → finding rec
+    for (const r of rows) if (r.type === "finding" && r.findingId) findings.set(r.findingId, r);
+    const { latest } = readEnvelopeCandidates(ws);
+    const normSet = new Set(); // 현행 ab·oos 정규화 문안 — 정확 일치 억제(유사도 판정 없음 — 설계 v3)
+    for (const ax of ["alwaysBlocker", "outOfScope"]) for (const x of env.data[ax] || []) normSet.add(normBacklogTitle(x));
+    // [A-5 stale 생명주기·구현 2차 blocker] 승인 세대가 바뀌면 구세대 pending을 명시적으로 정리(declined+사유) —
+    // 방치하면 구세대 행이 화면에서만 사라진 채 장부에 pending으로 남는다. 새 세대 재평가(아래 본 스캔의 재제안)와 짝.
+    const staleRecs = [];
+    for (const [, rec] of latest) {
+      if (!rec || rec.kind !== "resolved-blocker" || rec.status !== "proposed") continue;
+      if (String(rec.envelopeHash || "") === approvedHash) continue;
+      staleRecs.push({ candidateId: rec.candidateId, envelopeHash: rec.envelopeHash || "", status: "declined", kind: "resolved-blocker", note: "승인 세대 변경 — stale 정리(새 세대에서 재평가)", findingId: rec.findingId || "", ts: new Date().toISOString() });
+    }
+    if (staleRecs.length) appendEnvelopeCandidates(ws, staleRecs); // 실패=다음 트리거 재시도(멱등 — declined 재기록 무해)
+    let pending = 0;
+    for (const [, rec] of latest) if (rec.status === "proposed" && String(rec.envelopeHash || "") === approvedHash) pending++;
+    const recs = [];
+    for (const r of rows) {
+      if (r.type !== "close" || r.closeReason !== "resolved" || !r.findingId) continue;
+      const f = findings.get(r.findingId);
+      if (!f || f.tag !== "blocker") continue;
+      out.scanned++;
+      // legacy fail-closed(설계 v3): A-2 보강 이전 행(title 원문 부재·close askId 부재)=후보 생성 제외+기록
+      if (typeof f.title !== "string" || !f.title || typeof r.askId !== "string" || !r.askId) { out.legacyUnbound++; continue; }
+      const cid = envelopeCandidateId("resolved-blocker", wsKeyFor(ws) + "|" + String(f.campaignId || "") + "|" + f.findingId);
+      if (latest.has(cid + "@" + approvedHash)) continue; // 이미 제안/처분됨(이 승인 세대)
+      const tn = normBacklogTitle(f.title);
+      if (normSet.has(tn)) {
+        // [A-5 stale 재평가] 등재 확인=자동 declined 기록(사유 포함) — 재승인 후 재스캔에서 같은 문안이 이미
+        // 수칙서에 있으면 pending으로 되살리지 않고 장부에 정리 근거를 남긴다(다음 스캔은 latest.has로 조기 스킵).
+        recs.push({ candidateId: cid, envelopeHash: approvedHash, status: "declined", kind: "resolved-blocker", note: "이미 수칙서에 등재 — 자동 정리(재승인 재평가)", findingId: f.findingId, ts: new Date().toISOString() });
+        out.suppressed.push({ id: cid, why: "already-in-envelope" });
+        continue;
+      }
+      if (pending >= MEMORY_CANDIDATE_PENDING_MAX) { out.suppressed.push({ id: cid, why: "pending-cap" }); continue; } // 침묵 누락 금지 — 호출자가 로그 1줄
+      recs.push({ candidateId: cid, envelopeHash: approvedHash, status: "proposed", kind: "resolved-blocker", title: f.title, findingId: f.findingId, campaignId: f.campaignId || "", askId: r.askId, ts: new Date().toISOString() });
+      pending++;
+    }
+    if (recs.length && appendEnvelopeCandidates(ws, recs)) out.appended = recs.filter((r) => r.status === "proposed").length; // 자동 declined(정리 기록)는 appended 집계 밖
+  } catch { /* 스캔 실패=이번 트리거 무공급(멱등 — 다음 트리거 재시도) */ }
+  finally { releaseEnvelopeTransLock(ws, lk.token); }
+  return out;
+}
+// A-4 병합 초안: 현행 envelope 전문+후보 1건 → ab축 병합 proposalText → 기존 제안 저장(승인 전이는 기존 경로 그대로).
+// 병렬 축(En/Ex) 존재 시 후보 원문 그대로 복제(결정론 — 번역·예시 작문 금지)·note에 '편집 필요' 플래그(설계 v3).
+function draftEnvelopeCandidate(ws, repo, candidateId, approvedHash) {
+  const fail = (error) => { try { appendEnvelopeCandidates(ws, [{ candidateId, envelopeHash: approvedHash || "", status: "failed", note: String(error).slice(0, 200), ts: new Date().toISOString() }]); } catch { /* 기록 실패=반환 오류가 정본 */ } return { ok: false, error }; };
+  if (!approvedHash) return { ok: false, error: "승인된 수칙서 없음(Envelope 비활성) — draft 대상 아님" };
+  const { latest } = readEnvelopeCandidates(ws);
+  const cand = latest.get(candidateId + "@" + approvedHash);
+  if (!cand) return { ok: false, error: "이 승인 세대에 해당 후보 없음(조정 스캔 후 재시도)" };
+  if (cand.status !== "proposed") return { ok: false, error: "후보 상태가 proposed 아님(현재: " + cand.status + ")" };
+  if (typeof cand.title !== "string" || !cand.title) return fail("후보에 문안(title) 없음");
+  let raw, o;
+  try { raw = fs.readFileSync(path.join(repo, ENVELOPE_FILE), "utf8"); o = JSON.parse(raw); } catch { return fail("현행 수칙서 판독 실패"); }
+  if (crypto.createHash("sha1").update(raw).digest("hex") !== approvedHash) return fail("수칙서가 승인 세대와 다름(재승인 후 재시도)"); // baseHash 결속(설계 A-4)
+  if (!Array.isArray(o.alwaysBlocker)) return fail("수칙서 ab축 형식 이상");
+  if (o.alwaysBlocker.length >= ENVELOPE_ITEM_MAX) return fail("ab축 12항 상한 — 어떤 항목을 뺄지는 사용자 결정(자동 삭제 금지)");
+  const tn = normBacklogTitle(cand.title);
+  if (o.alwaysBlocker.some((x) => normBacklogTitle(x) === tn)) return fail("동일 정규화 문안이 이미 ab축에 존재");
+  // [기억 권위 A-2·구현검증 1차 blocker③] 200자 초과=절단 '표식과 함께' 보존 — 사용자가 문장이 잘린 사실을
+  // 모른 채 의미 끊긴 제약을 승인하는 경로 차단. 표식 포함 총장은 상한 준수(표식이 상한을 뚫지 않음).
+  const MARK9 = "…[절단]";
+  const t9 = String(cand.title);
+  const item = t9.length > ENVELOPE_CHAR_MAX ? t9.slice(0, ENVELOPE_CHAR_MAX - MARK9.length) + MARK9 : t9;
+  const next = { ...o, alwaysBlocker: [...o.alwaysBlocker, item] };
+  let dup = false; // 병렬 축 결정론 복제 — 길이 일치 정본 검사(writeEnvelopeProposal) 충족
+  for (const sfx of ["En", "Ex"]) {
+    const k = "alwaysBlocker" + sfx;
+    if (Array.isArray(o[k]) && o[k].length === o.alwaysBlocker.length) { next[k] = [...o[k], item]; dup = true; }
+  }
+  const proposalText = JSON.stringify(next, null, 1);
+  const note = "후보 병합 " + candidateId + (dup ? " · 병렬 축 복제됨 — 사용자 편집 필요(번역·예시)" : "");
+  const w = writeEnvelopeProposal(ws, repo, proposalText, note);
+  if (!w.ok) return fail("제안본 저장 거부: " + w.error);
+  try { appendEnvelopeCandidates(ws, [{ candidateId, envelopeHash: approvedHash, status: "adopted", note: "draft " + w.newHash, ts: new Date().toISOString() }]); } catch { /* 상태 기록 실패해도 제안본은 유효 */ }
+  return { ok: true, newHash: w.newHash, parallelCopied: dup };
 }
 // roundType 유도(§3.2 규칙 4 계약 — ask 텍스트 표기 미사용): 캠페인 첫 라운드=discovery /
 // 직전 verdict 실패·보류 계열("fail"|"inconclusive")=fix-verify / 통과 계열=confirm / "error"=fix-verify(안전 방향).
@@ -4231,7 +4332,7 @@ function formatForClaude(answer, lang, profile, machine, rejudgeSnap) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}${machineLine}\n처리 의무: ${action}${rjBlock}`;
 }
 
-module.exports = { VERIFIER_PROVIDERS, normVerifierProvider, BASE_PROFILE_AXIS, verifierFormatDirective, verifierBaselineFor, ASK_SHAPE_SECTIONS, askShapeCheck, askShapeNotice, appendAskShape, loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, scoutCouplingAttach, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, verifyCampaignProgress, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, codexScoutExecEnv, TOOL_EXEC_ENV, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, economyConfigFpFrom, readEconomySnapshot, DS_SNAPSHOT_ENV, selfAdapterSha, selfExecFp, precisionExecFp, precisionExecFpFrom, readPrecisionConfigSnapshot, codexScoutExecArgsFromSnapshot, claimAutoReprobe, completeAutoReprobe, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, SESSION_LEASES_DIR, sessionLeaseFileFor, readSessionLease, acquireSessionLease, releaseSessionLease, setSessionLeaseChild, clearSessionLease, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, authoritativeVerdict, findingsBlockRange, formatForClaude, normRejudgeSnap, safeLoadRejudge, REJUDGE_SNAP_MAX, appendVerdict, trimVerdicts, appendAttachUsage, trimAttachUsage, ATTACH_USAGE_FILE, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { VERIFIER_PROVIDERS, normVerifierProvider, BASE_PROFILE_AXIS, verifierFormatDirective, verifierBaselineFor, ASK_SHAPE_SECTIONS, askShapeCheck, askShapeNotice, appendAskShape, loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, scoutCouplingAttach, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, MEMORY_CANDIDATE_PENDING_MAX, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, verifyCampaignProgress, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, codexScoutExecEnv, TOOL_EXEC_ENV, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, economyConfigFpFrom, readEconomySnapshot, DS_SNAPSHOT_ENV, selfAdapterSha, selfExecFp, precisionExecFp, precisionExecFpFrom, readPrecisionConfigSnapshot, codexScoutExecArgsFromSnapshot, claimAutoReprobe, completeAutoReprobe, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, SESSION_LEASES_DIR, sessionLeaseFileFor, readSessionLease, acquireSessionLease, releaseSessionLease, setSessionLeaseChild, clearSessionLease, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, authoritativeVerdict, findingsBlockRange, formatForClaude, normRejudgeSnap, safeLoadRejudge, REJUDGE_SNAP_MAX, appendVerdict, trimVerdicts, appendAttachUsage, trimAttachUsage, ATTACH_USAGE_FILE, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
 module.exports.codexImplementerSession = codexImplementerSession;
 module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
 // P-6 회수 영수증 계약(설계 v5.1)

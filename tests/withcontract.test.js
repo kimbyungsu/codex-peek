@@ -106,9 +106,10 @@ console.log("[상한] 계약 규칙이 지나치게 길면 프롬프트를 만�
   // 사전 검사와 조립이 '같은 계약 스냅샷'을 봐야 한다 — 각자 읽으면 그 사이 저장으로 판정이 갈린다.
   // 두 조립 호출 '각각'이 스냅샷을 받아야 한다(하나만 받으면 다른 분기가 옛 결함으로 되돌아간다).
   const asmAll = body.split("withContract(").length - 1;
-  const asmSnap = body.split("profileSnap, contractSnap)").length - 1;
+  // [기억 권위 C-1 2026-08-14] 조립 호출이 askId(실행 UUID)까지 전달 — 스냅샷+askId 짝을 함께 핀.
+  const asmSnap = body.split("profileSnap, contractSnap, askId)").length - 1;
   // [VerifierProvider Phase1] claude 분기 추가로 조립 호출 3개 — 여전히 전부 같은 스냅샷이어야 한다.
-  ok(asmAll === 3 && asmSnap === 3, "조립 호출 3개(resume·new·claude)가 '모두' 같은 스냅샷을 넘겨받는다(실측 " + asmSnap + "/" + asmAll + ")");
+  ok(asmAll === 3 && asmSnap === 3, "조립 호출 3개(resume·new·claude)가 '모두' 같은 스냅샷+askId를 넘겨받는다(실측 " + asmSnap + "/" + asmAll + ")");
   ok(cbSrc.indexOf("contractSnap && typeof contractSnap === \"object\" ? contractSnap : loadContract(") >= 0, "스냅샷이 오면 withContract가 계약을 다시 읽지 않는다");
 
   // 사전 검사가 실제로 상한을 넘는 계약에서 발동하는지(문자열이 아니라 동작으로).

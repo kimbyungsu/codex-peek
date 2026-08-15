@@ -58,8 +58,8 @@ ok(CL.loadBaseDirective("ko").verifyBaseline === CL.baseDefaultsFor("ko").verify
 ok(CL.loadBaseDirective("ko", "integrity").verifyBaseline === CL.loadBaseDirective("ko").verifyBaseline, "명시 integrity=미지정과 동일");
 // integrity 프리셋 1글자 불변(스냅샷 대조 — 5항 실질 영향 원칙 문구 앵커)
 const sha16 = (t) => require("crypto").createHash("sha256").update(t, "utf8").digest("hex").slice(0, 16);
-ok(sha16(CL.BASE_DEFAULTS.verifyBaseline) === "a9d57e907bdc3520" && sha16(CL.BASE_DEFAULTS.transmit) === "10938882fe841e0d" && sha16(CL.BASE_DEFAULTS.rejudge) === "f173809f9d2fb9b2", "integrity ko 캐논 3축 전문 해시 불변(스냅샷 갱신 2026-08-05: 편집 개방 — 판정 서식 항이 코드 고정 상수로 분리(verifierFormatDirective))");
-ok(sha16(CL.BASE_DEFAULTS_EN.verifyBaseline) === "53795d916fd47346" && sha16(CL.BASE_DEFAULTS_EN.transmit) === "9175bd8183f9bee2" && sha16(CL.BASE_DEFAULTS_EN.rejudge) === "fe94b5f4383cdd8c", "integrity en 캐논 3축 전문 해시 불변(스냅샷 갱신 2026-08-05 — 동일 분리)");
+ok(sha16(CL.BASE_DEFAULTS.verifyBaseline) === "461511a18371d19a" && sha16(CL.BASE_DEFAULTS.transmit) === "10938882fe841e0d" && sha16(CL.BASE_DEFAULTS.rejudge) === "f173809f9d2fb9b2", "integrity ko 캐논 3축 전문 해시 불변(스냅샷 갱신 2026-08-14: 기억 권위 B-1 — ab 직접 충돌 판정 규칙 추가(MEMORY-AUTHORITY-DESIGN §3))");
+ok(sha16(CL.BASE_DEFAULTS_EN.verifyBaseline) === "813dbad1d5a5eba1" && sha16(CL.BASE_DEFAULTS_EN.transmit) === "9175bd8183f9bee2" && sha16(CL.BASE_DEFAULTS_EN.rejudge) === "fe94b5f4383cdd8c", "integrity en 캐논 3축 전문 해시 불변(스냅샷 갱신 2026-08-14 — 동일 B-1 추가)");
 // 오버라이드는 integrity에만 적용, core 전환이 오버라이드 파일 바이트를 건드리지 않음(ⓑ 불변 조건)
 CL.saveBaseDirective({ verifyBaseline: "사용자 커스텀 원칙", transmit: "", rejudge: "" }, "ko");
 const ovFile = CL.baseDirectiveFileFor("ko");
@@ -167,7 +167,7 @@ ok(/const langSnap = jobFrozen \? jobFrozen\.lang : loadLang\(\);\s*\n\s*const c
 ok(/const profileSnap = jobFrozen \? jobFrozen\.profile : effectiveVerifyProfile\(contractSnap\);/.test(src), "직접 ask=시작 시점 계약 스냅샷·내구=job 동결값(계약 ⓕ)");
 // 2026-07-30: 계약 스냅샷 인자가 뒤에 붙었다(사전 검사와 조립이 같은 계약을 보게 하려고).
 // 동결 프로필을 넘긴다는 원 의도는 그대로이므로 그 부분만 고정하고, 스냅샷 동반도 함께 못박는다.
-ok(/withContract\(prompt \+ \(net \? netNote\(langSnap\) : ""\), ws, langSnap, attCarrier, profileSnap, contractSnap\)/.test(src), "주입(withContract)이 동결 프로필 사용(+ 같은 계약 스냅샷 동반)");
+ok(/withContract\(prompt \+ \(net \? netNote\(langSnap\) : ""\), ws, langSnap, attCarrier, profileSnap, contractSnap, askId\)/.test(src), "주입(withContract)이 동결 프로필 사용(+ 같은 계약 스냅샷·askId 동반 — 기억 권위 C-1 2026-08-14)");
 ok(src.split("formatForClaude(answer, langSnap, profileSnap, mfl.machine, rejudgeSnap)").length === 2 && (src.match(/finishVerifyRun\(/g) || []).length === 3, "footer=공유 꼬리 1곳이 동결 프로필+동결 규약 사용(세 분기 호출 경유 — 완료 시점 재읽기 없음·VerifierProvider 단일화)");
 const wk = fs.readFileSync(path.join(ROOT, "bridge", "ask-job-worker.js"), "utf8");
 ok(/Object\.assign\(\{\}, cur, extra\)/.test(wk), "worker patch=기존 필드 보존 병합(동결 필드 불변)");

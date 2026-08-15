@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
+const { askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -67,7 +67,7 @@ function assertContractInjectionFits(ws, contractSnap, harnessModeSnap, lang) {
   } catch { return; } // 판독 실패는 여기서 막지 않는다(withContract의 기존 try/catch가 담당)
   if (len > CONTRACT_INJ_MAX) die(contractInjectionTooLongMsg(len, (lang || loadLang()) === "en"), 3);
 }
-function withContract(prompt, ws, lang, carrier, profile, contractSnap) {
+function withContract(prompt, ws, lang, carrier, profile, contractSnap, askId9p) {
   // lang: 언어 스냅샷(cmdAsk의 langSnap) — 미지정 시 전역 언어. 주입(기본지침·계약 지시문)과 헤더/footer 언어를 한 스냅샷으로 일관.
   // carrier(L1-A): 호출자가 준 객체에 '이번 ask에 실제로 실린 동봉 스냅샷'(mapItems·couplings)을 담아 준다 —
   // 확인 판정(flagLedgerConfirms)이 '지금 다시 계산한 동봉'이 아니라 '전송된 그 동봉'으로 echo를 판정하게(Codex 설계검증).
@@ -103,6 +103,12 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap) {
   try {
     const es9 = envelopeSliceFor(ws || configWs(), lang, profile, c);
     envText = es9.envText; baseQual = es9.baseQual; v2Attached = es9.v2Attached === true;
+    // [기억 권위 C-1] 전송된 그 경계의 실물을 carrier에 고정 — 판정 후 파서(제약 처리 표기)가 '동봉된 abId만'
+    // 인정하게(결합확인 byId 결속과 동형). id는 위치 결정론(ab-1..n)이라 축별 개수+지문이면 재구성 충분.
+    if (carrier && typeof carrier === "object" && es9.envAxes) {
+      const mk9 = (pfx, n) => Array.from({ length: n }, (_, i) => pfx + "-" + (i + 1));
+      carrier.envelope = { hash: es9.envSha || null, sup: mk9("sup", es9.envAxes.supportedEnv || 0), ab: mk9("ab", es9.envAxes.alwaysBlocker || 0), oos: mk9("oos", es9.envAxes.outOfScope || 0) };
+    }
   } catch (e0) { if (e0 && e0.envelopeTransBusy) throw e0; /* 상호배제 실패=ask 정직 실패(경계 없는 프롬프트 생성 금지 — 재검증 blocker③). 그 외 경계 실패=주입만 생략(검증은 현행 규약으로 진행) */ }
   // 계약 규칙은 사용자가 '이렇게 검증하라'고 저장한 요구다. 길어서 뺀 채로 검증을 진행하면
   // 그 요구가 적용되지 않았는데 통과 도장이 찍힌다 — 검증 통과 위조 경로다(검증 blocker).
@@ -127,7 +133,16 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap) {
   }
   // [개요 카드] 조립 검사(경계 상호배제·계약 상한) 통과 뒤에만 기록 — 차단된 ask는 행을 남기지 않는다.
   // 기록 실패·이후 발송 실패의 잔여 위험은 화면이 '마지막 동봉 기록 시각'을 함께 표시해 정직화(단정 금지).
-  if (attSnap9) { try { appendAttachUsage({ ts: new Date().toISOString(), ws: ws || configWs(), items: attSnap9.items, couplings: attSnap9.couplings, omitted: attSnap9.omitted }); } catch { /* best-effort */ } }
+  if (attSnap9 || (carrier && carrier.envelope)) {
+    try {
+      // [기억 권위 C-1·구현검증 1차 blocker①] askId=실행 UUID(호출자가 verdicts 행과 같은 값을 전달 — 두 원장 조인 키).
+      // env 잡 id는 폴백(내구 경로 감사용). 경계 실물은 '개수'가 아니라 축별 id 배열 그대로(어떤 ab-N이 실렸는지 결속).
+      // 지도 미동봉(mapMode off 등)이어도 경계(envelope)가 실렸으면 행을 남긴다 — 경계 영수증이 지도에 종속되지 않게.
+      const askId9 = askId9p || (typeof process.env.CODEX_BRIDGE_ASK_JOB_ID === "string" && process.env.CODEX_BRIDGE_ASK_JOB_ID ? process.env.CODEX_BRIDGE_ASK_JOB_ID : "");
+      const env9 = carrier && carrier.envelope ? { hash: carrier.envelope.hash, sup: carrier.envelope.sup.slice(), ab: carrier.envelope.ab.slice(), oos: carrier.envelope.oos.slice() } : null;
+      appendAttachUsage({ ts: new Date().toISOString(), ws: ws || configWs(), askId: askId9, items: attSnap9 ? attSnap9.items : [], couplings: attSnap9 ? attSnap9.couplings : 0, omitted: attSnap9 ? attSnap9.omitted : false, mapAbsent: !attSnap9, ...(env9 ? { envelope: env9 } : {}) });
+    } catch { /* best-effort */ }
+  }
   const reqLabel = (lang || loadLang()) === "en" ? "[Work Request]" : "[작업 요청]";
   return `${head}\n\n---\n${reqLabel}\n${prompt}`;
 }
@@ -136,7 +151,7 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap) {
 // 축에는 사용하지 않는다(잠금 안 신선 재판독 — f-b6db1bbd 인터리빙 봉합). 함수로 분리한 이유: 테스트가
 // 낡은 스냅샷(구 해시)을 인자로 직접 주입해 '스냅샷을 썼다면 실패했을' 결정론 반례를 실행하기 위함(f-789aadc5).
 function envelopeSliceFor(wsIn, lang, profile, cSnapshot) {
-  const out9 = { envText: "", baseQual: "", v2Attached: false };
+  const out9 = { envText: "", baseQual: "", v2Attached: false, envAxes: null, envSha: null }; // [기억 권위 C-1] 주입 실물(축별 항목 수+지문) — 잠금 안에서 고정
   const c = cSnapshot;
   {
     if (c && typeof envelopeInjectionFor === "function") {
@@ -161,6 +176,7 @@ function envelopeSliceFor(wsIn, lang, profile, cSnapshot) {
       } catch { /* 안전 방향 */ }
       if (evi.text) {
         out9.envText = evi.text;
+        out9.envAxes = evi.axes || null; out9.envSha = evi.sha1 || null; // [기억 권위 C-1] 전송된 그 경계의 실물(재판독 금지 — 잠금 안 값)
         out9.baseQual = profile === "core" ? envelopeCoreQualifier(lang) : envelopeIntegrityQualifier(lang); // 증분 2(사용자 결정): 경계=프로필 공통 — 무결성=재소환 금지+경계 재심 관점([주의]로 제출)
         if (evi.warn === "truncated") console.error(en9 ? "[verification envelope: some items exceeded the caps (12/axis · 200 chars) and were truncated — the injected boundary omits the excess; trim the file and re-approve]" : "[검증 경계: 일부 항목이 상한(축 12·항목 200자) 초과로 절삭된 채 주입됨 — 초과분은 경계에서 빠짐. 파일을 줄여 재승인 권장]"); // 1차 blocker④: 절삭의 침묵 금지
         if (profile === "core") { out9.envText += "\n\n" + v2DirectiveFor(wsIn, lang); out9.v2Attached = true; } // v2Attached=구조적 표지(재검증 blocker: 수칙서 '데이터'가 표제 문자열을 담아도 오발동 금지 — 실제로 붙인 지점에서만 참). // 증분 2 §3.1: 경계 활성+core=v2 서식 요구+열린 지적 자동 동봉(하네스 직접). integrity=문구 준수 감사(기계화는 증분 3 검토 — 1차 [보완]② 지시·후처리 정합)
@@ -1380,7 +1396,39 @@ function beginVerifyAttempt(ws, gateRes, profileSnap, modeSnap) {
   });
   return a;
 }
-function flagVerdict(answer, ws, codexSession, modeSnapshot, machine, attempt, providerName) {
+// [기억 권위 §4 C-2] 검증자 답의 '제약 처리 표기' 파서 — 행 단독 `제약적용|제약기각|제약대체 <abId>`만 인정
+// (결합확인 #id 규약과 동형 — flagLedgerConfirms:행 단독·동봉 결속·상충 거부). 동봉되지 않은 abId는 무시
+// (carrier.envelope.ab가 '전송된 그 경계'의 정본), 같은 id에 서로 다른 표기=상충 → 둘 다 거부.
+// 무표기 동봉 ab 항목은 irrelevant로 집계 — '찾았지만 버림'과 '무관'을 검증자 자기보고로 구분한다.
+function parseConstraintHandling(answerText, attCarrier) {
+  const abIds = attCarrier && attCarrier.envelope && Array.isArray(attCarrier.envelope.ab) ? attCarrier.envelope.ab : [];
+  if (!abIds.length) return null; // ab 동봉 없음=처리 표기 채널 자체가 비활성(빈 배열 기록도 하지 않음 — 분모 오염 방지)
+  const KIND = { "적용": "used", "기각": "rejected", "대체": "superseded", "used": "used", "rejected": "rejected", "superseded": "superseded" };
+  const seen = new Map(); // abId → handling | "conflict"
+  for (const line of String(answerText || "").split(/\r?\n/)) {
+    const m = line.match(/^\s*(?:제약(적용|기각|대체)|constraint-(used|rejected|superseded))\s+(ab-\d+)\s*$/);
+    if (!m) continue;
+    const id = m[3], h = KIND[m[1] || m[2]];
+    if (!abIds.includes(id)) continue;
+    if (seen.has(id) && seen.get(id) !== h) seen.set(id, "conflict");
+    else if (!seen.has(id)) seen.set(id, h);
+  }
+  return abIds.map((id) => ({ id, handling: seen.get(id) === "conflict" ? "conflict" : (seen.get(id) || "irrelevant") }));
+}
+// [기억 권위 C-3·구현검증 1차 blocker⑤] 사용자 가시 영수증 1줄 — 동봉 경계(ab)가 있을 때만.
+// verdicts 행(C-2)과 같은 파서를 재사용(순수 함수 재계산 — 이중 기록 아님·표시 전용).
+function memReceiptLine(answerText, attCarrier, lang) {
+  try {
+    const h = parseConstraintHandling(answerText, attCarrier);
+    if (!h) return "";
+    const n = (k) => h.filter((x) => x.handling === k).length;
+    const en = lang === "en";
+    return en
+      ? `\n[memory receipt] ${h.length} ab constraint(s) enclosed — used ${n("used")} · rejected ${n("rejected")} · superseded ${n("superseded")} · unmarked ${n("irrelevant")}${n("conflict") ? ` · conflict ${n("conflict")}` : ""}\n`
+      : `\n[기억 영수증] 경계 제약 ${h.length}건 동봉 — 적용 ${n("used")} · 기각 ${n("rejected")} · 대체 ${n("superseded")} · 무표기 ${n("irrelevant")}${n("conflict") ? ` · 상충 ${n("conflict")}` : ""}\n`;
+  } catch { return ""; }
+}
+function flagVerdict(answer, ws, codexSession, modeSnapshot, machine, attempt, providerName, askId, attCarrier) {
   const provLabel = providerName || "Codex"; // 미지정=Codex(기존 문구 바이트 불변)
   try {
     const text = String(answer || "");
@@ -1397,7 +1445,16 @@ function flagVerdict(answer, ws, codexSession, modeSnapshot, machine, attempt, p
     const mFields = machine && machine.effective ? { machineEffective: machine.effective, machineDemoted: !!machine.demoted, machineCorrected: !!machine.corrected, machineReason: machine.reasonKey || "" } : {};
     // 2d([보완]1): blockerCount는 블록 정상 판독(core) 행만 — 손상·부재는 필드 생략(집계에서 '판독 불가' 분리).
     const bc = machine && machine.parse && machine.parse.ok ? { blockerCount: machine.parse.findings.filter((f) => f.tag === "blocker").length } : {};
-    const row = { codexSession: codexSession || "", verdict: v || "unparsed", answerChars: text.length, model: model, mode: mode, effort: effort, codexTokens: codexTok, ...mFields, ...bc };
+    // [기억 권위 C-2] askId+동봉 요약+제약 처리(같은 행 필드 추가 — '검증 1회=통계 1행' 계약 준수·별도 append 금지).
+    const memA = attCarrier && typeof attCarrier === "object" ? {
+      memAttached: {
+        map: Array.isArray(attCarrier.mapItems) ? attCarrier.mapItems.length : 0,
+        couplings: Array.isArray(attCarrier.couplings) ? attCarrier.couplings.length : 0,
+        ...(attCarrier.envelope ? { envelope: { sup: attCarrier.envelope.sup.length, ab: attCarrier.envelope.ab.length, oos: attCarrier.envelope.oos.length, hash: attCarrier.envelope.hash || null } } : {}),
+      },
+    } : {};
+    const memH = (() => { try { const h = parseConstraintHandling(text, attCarrier); return h ? { memHandling: h } : {}; } catch { return {}; } })();
+    const row = { codexSession: codexSession || "", verdict: v || "unparsed", answerChars: text.length, model: model, mode: mode, effort: effort, codexTokens: codexTok, ...(askId ? { askId } : {}), ...memA, ...memH, ...mFields, ...bc };
     // 2d: 시도 계층이 있으면 accepted 1행으로 위임(검증 1회=통계 1행 유지 — 이중 append 없음). 없으면 기존 직접 기록(무회귀).
     if (attempt) attempt.record("accepted", row);
     else { try { appendVerdict({ ts: nowIso(), workspace: ws, claudeSession: session, ...row }); } catch { /* 통계 실패가 검증 흐름을 막지 않음 */ } }
@@ -2340,11 +2397,25 @@ function cmdEnvelopeCandidate(rest) {
   const ws = configWs();
   const sub = rest[0];
   const gen = (() => { try { return loadContract(ws).envelopeHash || null; } catch { return null; } })();
+  // [기억 권위 A-3] 조정 트리거 ②후보 조회·③draft 전 — 멱등 스캔(중단 복구: 마지막 판정 후 죽어도 여기서 회수)
+  const recon9 = (() => { try { const repo9 = resolveScoutRepo(ws, loadContract(ws)).repo; return reconcileMemoryCandidates(ws, repo9, gen); } catch { return null; } })();
+  if (recon9 && (recon9.appended || recon9.suppressed.length || recon9.legacyUnbound)) {
+    console.error((en ? "[memory candidates] " : "[기억 후보 조정] ") + `+${recon9.appended}` + (recon9.suppressed.length ? ` · ${en ? "suppressed" : "억제"} ${recon9.suppressed.length}(${recon9.suppressed.map((s) => s.why).join(",")})` : "") + (recon9.legacyUnbound ? ` · legacy-unbound ${recon9.legacyUnbound}` : "")); // 침묵 누락 금지(설계 A-5)
+  }
   if (sub === "list") {
     const { latest } = readEnvelopeCandidates(ws);
     const rows = [...latest.entries()].filter(([k]) => k.endsWith("@" + String(gen || "")));
     if (!rows.length) { console.log(en ? "(no candidate records for the current approval generation)" : "(현 승인 세대의 후보 기록 없음)"); return 0; }
-    for (const [, r] of rows) console.log(`${r.candidateId} ${r.status} ${r.ts || ""}${r.note ? " — " + r.note : ""}`);
+    for (const [, r] of rows) console.log(`${r.candidateId} ${r.status} ${r.ts || ""}${r.title ? " — " + String(r.title).slice(0, 80) : r.note ? " — " + r.note : ""}`);
+    return 0;
+  }
+  if (sub === "draft") { // [기억 권위 A-4] 후보 1건 → 현행 수칙서 병합 proposalText 초안(승인은 기존 도장 경로)
+    const id = String(rest[1] || "");
+    if (!/^[0-9a-f]{16}$/.test(id)) { console.error(en ? "usage: envelope-candidate draft <16hex-id>" : "사용: envelope-candidate draft <16자리 id>"); return 2; }
+    const repo = resolveScoutRepo(ws, loadContract(ws)).repo;
+    const r = draftEnvelopeCandidate(ws, repo, id, gen);
+    if (!r.ok) { console.error((en ? "draft failed: " : "draft 실패: ") + r.error); return 1; }
+    console.log((en ? "draft saved (approve via the existing dashboard stamp): " : "제안본 저장됨(승인은 기존 대시보드 도장 경로): ") + r.newHash + (r.parallelCopied ? (en ? " · parallel axes copied — user edit needed" : " · 병렬 축 복제됨 — 사용자 편집 필요") : ""));
     return 0;
   }
   if (sub === "mark") {
@@ -2361,7 +2432,7 @@ function cmdEnvelopeCandidate(rest) {
     console.log((en ? "recorded: " : "기록됨: ") + id + " " + status);
     return 0;
   }
-  console.error(en ? "usage: envelope-candidate <list|mark ...>" : "사용: envelope-candidate <list|mark ...>");
+  console.error(en ? "usage: envelope-candidate <list|draft|mark ...>" : "사용: envelope-candidate <list|draft|mark ...>");
   return 2;
 }
 // ── finding-judge — 열린 지적 처분 기록(관문 findingDispositionGate의 해제 수단·2026-08-01) ──────────
@@ -2749,7 +2820,22 @@ function computeEnvelopeCandidatesFor(ws) {
       envForCleanup.data.outOfScope.forEach((txt, i) => { const id9 = "oos-" + (i + 1); if (!usedOos.has(id9)) cands.push({ candidateId: envelopeCandidateId("unused-oos", id9 + "@" + envForCleanup.sha1), kind: "unused-oos", key: id9, n: 0, titles: [String(txt).slice(0, 60)] }); });
     } catch { /* 원본 판독 실패=빼기 후보 생략(추가 후보는 유지) */ }
   }
-  const { latest } = readEnvelopeCandidates(ws);
+  const { rows: candRows9, latest } = readEnvelopeCandidates(ws);
+  { // ⑤ [기억 권위 A·구현검증 1차 blocker④] 해소 blocker 계보 후보(조정 스캔이 장부에 proposed로 적재) —
+    // 계산기 산출에 합류해야 대시보드 목록·채택 표면에 나타난다(장부 단독 적재=화면 미표시 공백 봉합).
+    // kind·title은 append-only 이력 전체에서 보강 — 상태 전이 행(adopted/declined)이 메타를 안 실어도 유실되지 않게.
+    const meta5 = new Map();
+    for (const r of candRows9) if (r && r.candidateId && (r.kind || r.title) && !meta5.has(r.candidateId)) meta5.set(r.candidateId, { kind: r.kind || "", title: r.title || "", findingId: r.findingId || "" });
+    const seen5 = new Set(cands.map((c) => c.candidateId));
+    for (const [, rec] of latest) {
+      const m5 = meta5.get(rec && rec.candidateId) || {};
+      if (!rec || (rec.kind || m5.kind) !== "resolved-blocker" || String(rec.envelopeHash || "") !== String(gen || "")) continue;
+      if (rec.status !== "proposed" && rec.status !== "adopted") continue; // declined/failed는 아래 live 필터와 동일 취급
+      if (seen5.has(rec.candidateId)) continue;
+      seen5.add(rec.candidateId);
+      cands.push({ candidateId: rec.candidateId, kind: "resolved-blocker", key: rec.findingId || m5.findingId || "", n: 1, titles: [String(rec.title || m5.title || "")].filter(Boolean) });
+    }
+  }
   let skipped = 0;
   const live = cands.filter((c) => {
     const cur = latest.get(c.candidateId + "@" + String(gen || ""));
@@ -2962,12 +3048,14 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
           else if (f.tag !== prevTag) recs.push({ type: "close", campaignId: camp, findingId: cited, closeReason: "reclassified", round: roundNo, envelopeHash: frozen, ts: now });
           continue;
         }
-        recs.push({ type: "finding", findingId: newFindingId(camp, frozen, roundNo, tn, seq), campaignId: camp, round: roundNo, tag: f.demotedTo || f.tag, titleNorm: tn, origin: f.origin || "", oosId: f.oosId || "", prevId: f.prevId || "", envelopeHash: frozen, demoted: !!f.demotedTo, status: f.demotedTo ? "closed" : "open", closeReason: f.demotedTo ? "demoted" : "", ts: now });
+        // [기억 권위 A-2] title=표시용 원문(절단 시 표식) — 후보 공급의 문안 원천(자동 작문 금지 계약). 구행(title 부재)은 조정 스캔이 legacy-unbound로 제외.
+        const rawT9 = String(f.title || "");
+        recs.push({ type: "finding", findingId: newFindingId(camp, frozen, roundNo, tn, seq), campaignId: camp, round: roundNo, tag: f.demotedTo || f.tag, titleNorm: tn, title: rawT9.length > 300 ? rawT9.slice(0, 300) + "…[절단]" : rawT9, origin: f.origin || "", oosId: f.oosId || "", prevId: f.prevId || "", envelopeHash: frozen, demoted: !!f.demotedTo, status: f.demotedTo ? "closed" : "open", closeReason: f.demotedTo ? "demoted" : "", ts: now });
       }
       // 루트당 1건 확정 — subjectIds=이 라운드에 인용된 자식 전체(중복 제거). subjectId(첫 자식)는 하위 호환 유지.
       for (const [, agg] of occAgg) { agg.rec.subjectIds = [...agg.subjects]; recs.push(agg.rec); }
       if (machine.effective === "pass" || machine.effective === "pass-notes") {
-        for (const o of openList) if (o.round < roundNo) recs.push({ type: "close", campaignId: camp, findingId: o.id, closeReason: "resolved", round: roundNo, envelopeHash: frozen, ts: now }); // 같은 라운드 첫 등장은 open 유지(4차 설계 blocker②)·close도 세대 결속(3차 미완수정②)
+        for (const o of openList) if (o.round < roundNo) recs.push({ type: "close", campaignId: camp, findingId: o.id, closeReason: "resolved", round: roundNo, envelopeHash: frozen, askId: askId || "", ts: now }); // 같은 라운드 첫 등장은 open 유지(4차 설계 blocker②)·close도 세대 결속(3차 미완수정②) · [기억 권위 A-2] 마감 askId 결속(후보 근거)
       }
       appendFindingsLedger(ws, recs);
     } catch { /* 장부 실패가 판정 전달을 막지 않음 */ }
@@ -3160,9 +3248,16 @@ async function cmdAsk(rest) {
     flagLedgerConfirms(answer, ws, verifierSession, exec, { askId, attach: attCarrier });
     collectScoutTargetEvidence(answer, ws, exec);
     const mfl = machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId, campSnap);
-    flagVerdict(answer, ws, verifierSession, modeSnap, mfl.machine, attempt, providerName);
+    flagVerdict(answer, ws, verifierSession, modeSnap, mfl.machine, attempt, providerName, askId, attCarrier); // [기억 권위 C-2] askId·동봉 실물 결속
+    // [기억 권위 A-3] 조정 트리거 ①판정 말미 — 해소된 blocker 계보를 envelope 후보로(멱등·best-effort — 실패=다음 트리거가 회수)
+    try {
+      const gen9m = (contractSnap && contractSnap.envelopeHash) || null;
+      const rc9m = reconcileMemoryCandidates(ws, resolveScoutRepo(ws, contractSnap || loadContract(ws)).repo, gen9m);
+      if (rc9m && (rc9m.appended || rc9m.suppressed.length)) process.stderr.write(`[기억 후보 조정] +${rc9m.appended}${rc9m.suppressed.length ? ` · 억제 ${rc9m.suppressed.length}(${rc9m.suppressed.map((s) => s.why).join(",")})` : ""}\n`);
+    } catch { /* 공급 실패가 판정 전달을 막지 않음 */ }
     const outText = `${headText}\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine, rejudgeSnap)}\n`
       + mfl.notice
+      + memReceiptLine(answer, attCarrier, langSnap) // [기억 권위 C-3] 동봉 경계 처리 영수증(표시 전용 — 기록은 C-2 verdicts 행)
       + envelopeWarnLine(ws, langSnap)
       + budgetNoticeLines(budgetGate.res, langSnap, profileSnap)
       + breakdownNoticeFor(ws, langSnap, budgetGate.res)
@@ -3189,7 +3284,7 @@ async function cmdAsk(rest) {
     const attempt = beginVerifyAttempt(ws, budgetGate.res, profileSnap, modeSnap);
     const askId = require("crypto").randomUUID();
     const attCarrier = {};
-    const promptText = withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier, profileSnap, contractSnap);
+    const promptText = withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier, profileSnap, contractSnap, askId);
     attempt.markCallStart();
     const r9 = runClaudeVerifier(promptText);
     if (!r9.ok) {
@@ -3243,7 +3338,7 @@ async function cmdAsk(rest) {
     const attempt = beginVerifyAttempt(ws, budgetGate.res, profileSnap, modeSnap); // 2d: 예약 직후 — 이후 모든 종결이 정확히 1회 기록 시도
     const askId = require("crypto").randomUUID(); // L1-A: '서로 다른 ask 실행' 판정 재료(지문·verdict ts는 재실행 구분에 부적합 — Codex)
     const attCarrier = {};                        // L1-A: 이번 ask에 실제로 실린 동봉 스냅샷(재계산 아님)
-    const promptText = withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier, profileSnap, contractSnap); // 프롬프트 조립은 측정 밖(1차 blocker①)
+    const promptText = withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier, profileSnap, contractSnap, askId); // 프롬프트 조립은 측정 밖(1차 blocker①)
     attempt.markCallStart(); // duration=모델 호출 직전부터(7차 [보완])
     const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs, ...(net ? netArgs() : [])], promptText);
     if (error || !answer || (typeof status === "number" && status !== 0)) {
@@ -3312,7 +3407,7 @@ async function cmdAsk(rest) {
   const onDetect = (id) => { if (earlyLinked) return; try { if (recordLink(id)) earlyLinked = id; } catch { /* 다음 폴/최종 단계서 재시도 */ } };
   const askId = require("crypto").randomUUID(); // L1-A: '서로 다른 ask 실행' 판정 재료
   const attCarrier = {};                        // L1-A: 이번 ask에 실제로 실린 동봉 스냅샷
-  const promptText = withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier, profileSnap, contractSnap); // 프롬프트 조립은 측정 밖(1차 blocker①)
+  const promptText = withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier, profileSnap, contractSnap, askId); // 프롬프트 조립은 측정 밖(1차 blocker①)
   attempt.markCallStart(); // duration=모델 호출 직전부터(7차 [보완])
   const { answer, error, status, stderr, detected } = await runCodexNewSessionAsync([...mArgs, ...(net ? netArgs() : [])], promptText, since, exec,
     (id) => { updateAskActive(ws, activeRec && activeRec.token, { sessionId: id }); onDetect(id); },
@@ -3657,4 +3752,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex };
+module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine };

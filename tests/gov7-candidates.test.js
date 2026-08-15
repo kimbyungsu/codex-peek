@@ -271,7 +271,8 @@ console.log("[10] 배선 소스 계약 — ask 상호배제·대시보드 배지
   const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
   ok(ext.includes("수칙서 개정 초안이 승인을 기다려요") && ext.includes('proposal: "pending"'), "대기 배지(🔔·원본 무변 명시 — 사용자 요구)");
   ok(ext.includes('m?.type === "proposalApprove"') && ext.includes("applyEnvelopeTransition(wsA, tgtA, apL, null)") && ext.includes("pr2.newHash !== hashAt"), "도장 핸들러 — 모달 전문·도장 직전 해시 재확인·전이 실행");
-  ok(!/proposalText\.slice\(0, 6000\)/.test(ext) && (ext.match(/detail: prA\.proposalText/g) || []).length === 1 && (ext.match(/detail: prP\.proposalText/g) || []).length === 1, "모달 전문 절단 금지(재검증 blocker② — 상한은 제안 strict가 보증)");
+  // [기억 권위 A-4 2026-08-14] detail이 note 접두(병렬 축 복제 경고)+전문 결합으로 확장 — 전문 절단 금지 의도는 유지.
+  ok(!/proposalText\.slice\(0, 6000\)/.test(ext) && (ext.match(/ \+ prA\.proposalText \}/g) || []).length === 1 && (ext.match(/ \+ prP\.proposalText \}/g) || []).length === 1, "모달 전문 절단 금지+note 접두 결합(재검증 blocker②·기억 권위 A-4)");
   ok(ext.includes("normWs(tgtNow2) !== normWs(tgtA)"), "도장 확인 후 현재 대상 재대조(재검증 blocker④ — 직접 승인 경로 동형)");
   ok(ext.includes('m?.type === "proposalRecover"') && ext.includes('envelopeTransState(ws0) === "recover-needed"'), "복구 버튼+기동 자가 복구");
 }
@@ -335,8 +336,10 @@ console.log("[11] §7 증분 3 — 해소 계보 제외·빼기 후보·항목 �
 console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 전용)·소진 임계 문구");
 {
   const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
-  ok(ext.includes("computeEnvelopeCandidatesFor(ws)") && ext.includes("수칙서 후보 — 판단 대기(버튼은 기록만"), "후보 목록=소진 보고와 같은 집계 공유+기록 전용 명시(§8)");
-  ok(ext.includes('m?.type === "candMark"') && ext.includes('note: "dashboard-record"') && !/candMark[\s\S]{0,900}applyEnvelopeTransition/.test(ext.slice(ext.indexOf('m?.type === "candMark"'))), "기록 버튼=장부 기록만(작업·전이 발동 없음 — §7 완화 계약)");
+  // [기억 권위 A-4 2026-08-14] 해소 blocker 채택=병합 초안 생성 — '기록만' 문구 계약을 '도장 전 무효력' 계약으로 개정.
+  ok(ext.includes("computeEnvelopeCandidatesFor(ws)") && ext.includes("수칙서 후보 — 판단 대기(기록 또는 병합 초안 생성"), "후보 목록=소진 보고와 같은 집계 공유+도장 전 무효력 명시(§8·기억 권위 A-4)");
+  // draft는 제안본 생성일 뿐 전이(도장)가 아님 — candMark 경로에 applyEnvelopeTransition 부재 계약은 유지.
+  ok(ext.includes('m?.type === "candMark"') && ext.includes('note: "dashboard-record"') && !/candMark[\s\S]{0,2400}applyEnvelopeTransition/.test(ext.slice(ext.indexOf('m?.type === "candMark"'))), "채택 경로에 승인 전이 발동 없음(초안 생성까지만 — 효력은 도장부터·§7 개정 계약)");
   ok(ext.includes('m.status === "adopted" || m.status === "declined"') && ext.includes("/^[0-9a-f]{16}$/.test(m.id)"), "기록 인자 strict(16hex·상태 2종만)");
   const src = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
   ok(src.includes("30항목 이상 — 추가보다 빼기/병합 후보를 우선하라") && src.includes('kind: "unused-oos"'), "임계 문구+빼기 후보 kind 존재");
