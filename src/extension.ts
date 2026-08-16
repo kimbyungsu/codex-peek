@@ -605,6 +605,58 @@ export function shouldSpawnWhenParked(jobMapId: string, queueMapId: string, last
   if (String(queueMapId || "") && String(queueMapId) !== String(jobMapId || "")) return true; // 새 지도 세대
   return !(typeof lastAt === "number" && Number.isFinite(lastAt)) || now - lastAt >= PARKED_RECHECK_MS;
 }
+// [상시 표출 2026-08-16 — 사용자 결정] 사용자가 고른 담당의 자동 보강이 '사람 조치로만' 재개 가능한 보류인지.
+// 판정 기준(검증 합의)은 사유 이름이 아니라 **지금 상태에서 사람 입력 없이 도달 가능한 자동 전이의 존재**이며,
+// 각 분기는 실행기(map-enrich.js)의 자동 전이 조건과 '동형'이어야 한다(넓으면 사람 몫을 숨기고 좁으면 양치기):
+//  · X-not-ready + 준비 회복됨 → ready-heal 자동 재개(조용) / 준비 사유가 자동 재점검 대상
+//    (config-changed·probe-ver-changed — maybeAutoReprobe와 같은 집합)이면 재점검이 자동(조용)
+//  · 자동 재시도(실행기 AUTO_RETRY_REASONS와 동형): precision/economy/both-failed 3종 한정 + 마지막 실패가
+//    '답 거부' 단계(response/validation/conversion — call 제외) + retryFrom 미정수일 때만 자동 전이(조용).
+//    self-failed·call 단계 실패는 자동 재시도 대상이 아니므로 사람 몫(R11 blocker① — 넓은 판정이 숨겼다).
+//  · consent-stale(실행기 자동 재개와 동형): job 모드에 유효한 '더 새로운' 동의 세대(gen>lastGen)가 있으면
+//    다음 진입에서 자동 재개(조용), 없으면 새 동의=사람 몫(R11 blocker② — 자격 선필터가 양방향 오분류).
+//  · input-doc-only(코드 오면 자동 재개)·no-consent(자동 실행 대상 아님 — 동의 안내 행이 담당)=조용.
+//  · 그 외(준비 미회복·재시도 소진·adapter-missing 등)와 미지 사유는 자동 전이를 증명할 수 없으므로
+//    사람 몫으로 표시(조용한 미동작 금지 — 정직 기본값).
+// 반환: null=조용(자동 경로 생존) / "probe"=준비 점검·설정 복구 필요 / "action"=화면 조치(다시 시도·동의 등) 필요.
+const AUTO_REPROBE_REASONS = new Set(["config-changed", "probe-ver-changed"]);
+export function enrichHumanActionNeeded(job: any, readiness: any, consent: any): string | null {
+  if (!job || job.phase !== "parked") return null;
+  const p = String(job.parkedReason || "");
+  const m = /^(self|economy|precision|auto)-not-ready$/.exec(p);
+  if (m) {
+    const rd = (readiness || {})[m[1]] || null;
+    if (rd && rd.ok === true) return null; // ready-heal 임박(다음 발동에서 자동 재개)
+    if (rd && AUTO_REPROBE_REASONS.has(String(rd.reason || ""))) return null; // 자동 재점검 경로 생존
+    return "probe";
+  }
+  const lastA = Array.isArray(job.attempts) && job.attempts.length ? job.attempts[job.attempts.length - 1] : null;
+  if (/^(economy|precision|both)-failed$/.test(p)) {
+    const answerRejected = !!lastA && ["response", "validation", "conversion"].includes(String(lastA.failureStage || ""));
+    return (answerRejected && !Number.isInteger(job.retryFrom)) ? null : "action";
+  }
+  if (p === "consent-stale") {
+    const g = consent && consent.st === "ok" ? consent.grant : null;
+    const lastGen = lastA ? lastA.consentGen : 0;
+    const eligible = String(job.mode || "") === "self" ? !!(g && g.selfAuto) : !!(g && g.paidMode === job.mode);
+    return (eligible && (g as any).gen > lastGen) ? null : "action";
+  }
+  if (p === "input-doc-only" || p === "no-consent") return null;
+  return "action"; // self-failed(자동 재시도 대상 아님)·adapter-missing·retry-exhausted 등+미지 사유
+}
+// [R12] 게이트+판정 결속을 한 함수로(실행 가능 계약): 선게이트가 판정을 가리는 순서 결함(R11 확인 blocker —
+// consent-stale+현재 grant 부재에서 분류기는 "action"인데 optedIn 선필터가 null로 덮음)을 구조로 봉합.
+//  · consent-stale은 '동의 자체'가 쟁점 — 현재 grant 부재는 옵트아웃이 아니라 '새 동의 필요'일 수 있으므로
+//    게이트를 적용하지 않고 판정 함수가 job 결속 동의로 직접 판단한다.
+//  · 그 외 사유는 옵트인(selfAuto 또는 paidMode 보유) 상태에서만 표시 — 자동 보강을 끈 사용자에게
+//    자동 실행 경고를 하지 않는다(no-consent 조용과 같은 철학).
+// gCur=현재 작업 폴더 기준 grant(옵트인 판정) / gJob=job 동결 주체(configWs·slot) 기준 grant(consent-stale 판정).
+export function enrichHumanActionState(job: any, readiness: any, consentSt: string, gCur: any, gJob: any): string | null {
+  const p = job ? String(job.parkedReason || "") : "";
+  const optedIn = !!(gCur && (gCur.selfAuto || gCur.paidMode));
+  if (!optedIn && p !== "consent-stale") return null;
+  return enrichHumanActionNeeded(job, readiness, { st: consentSt, grant: gJob });
+}
 let enrichSpawnLastAt = 0;
 function maybeSpawnEnrichExt(ws: string | null, trigger: string): void {
   try {
@@ -2403,6 +2455,7 @@ function computeState(turnsN: number): BridgeState {
   // 기존 P9 순서와 부작용은 정확히 한 번 유지한다. P10은 이 결과만 재사용하며
   // 향후 통계 화면을 열거나 새로 고친다는 이유로 별도 스윕을 시작하지 않는다.
   let intentState: any | null = null;
+  let rvSnap: any | null = null; // mapReadiness 스냅샷 — enrich.humanAction 판정이 같은 푸시의 준비 상태를 봄
   const collectIntentState = () => {
     if (!ws) return null;
     try {
@@ -2542,7 +2595,7 @@ function computeState(turnsN: number): BridgeState {
     scoutGate: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; return effectiveScoutGate(ws); } catch { return null; } })(),
     scoutArm: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; return scoutArmViewExt(ws); } catch { return null; } })(), // slot은 뷰가 계산과 원자 결속해 반환(3차 blocker — 사후 재판독 금지)
     mapMode: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const CLx: any = bridgeLib(); return CLx && CLx.mapModeView ? CLx.mapModeView(ws) : null; } catch { return null; } })(), // P7 — 3트랙에서만
-    mapReadiness: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const CLx: any = bridgeLib(); const rv9 = CLx && CLx.mapReadinessView ? CLx.mapReadinessView({ precisionFpNow: precisionFpNowExt(), selfFpNow: selfFpNowExt() }) : null; maybeAutoReprobe(ws, rv9); return rv9; } catch { return null; } })(), // P7 — 저장 레코드+현재 지문 재대조(precision·self 지문은 호스트 주입)+지문 변경 자동 재점검(fp당 1회)
+    mapReadiness: (rvSnap = (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const CLx: any = bridgeLib(); const rv9 = CLx && CLx.mapReadinessView ? CLx.mapReadinessView({ precisionFpNow: precisionFpNowExt(), selfFpNow: selfFpNowExt() }) : null; maybeAutoReprobe(ws, rv9); return rv9; } catch { return null; } })()), // P7 — 저장 레코드+현재 지문 재대조(precision·self 지문은 호스트 주입)+지문 변경 자동 재점검(fp당 1회). rvSnap=아래 enrich의 사람 조치 판정이 같은 스냅샷을 쓰도록 보관(재계산 금지)
     enrich: (() => { // P8 증분 4 — 자동 보강 상태(동의·장부 요약)+ⓒ tick 발동
       if (!ws) return null;
       try {
@@ -2562,8 +2615,14 @@ function computeState(turnsN: number): BridgeState {
         const last9 = job9 && job9.attempts.length ? job9.attempts[job9.attempts.length - 1] : null;
         const investigation9 = counts9.investigation;
         maybeSpawnEnrichExt(ws, "tick"); // 발동 ⓒ(내부 게이트·동의·스로틀·단일-flight)
+        // [상시 표출] 사람 조치로만 재개되는 보류를 개요 합산에 올린다(경보 '확인'과 무관하게 상태가 근거·
+        // 해소되면 스스로 사라짐). 게이트·판정은 단일 실행 가능 함수 enrichHumanActionState에 결속(R12 —
+        // 선게이트가 consent-stale 판정을 가리던 순서 결함 봉합). 입력: 현재 폴더 grant(옵트인)+job 동결
+        // 주체(configWs·slot) 기준 grant(consent-stale 세대 판정 — 실행기 ab-1 동형).
+        const gJob0 = job9 ? ME9.findGrant(c9, (job9 as any).configWs || ws, (job9 as any).slot || lang9) : null;
         return {
           consentSt: c9.st, selfAuto: !!(g9 && g9.selfAuto), paidMode: g9 ? g9.paidMode : null,
+          humanAction: enrichHumanActionState(job9, rvSnap, c9.st, g9, gJob0),
           // 마지막 시도의 실패를 '구조'로만 싣는다(자유 문자열 failReason은 내부 진단용으로 남긴다 —
           // 2026-07-29 설계 상의: 화면에 내부 표현이 새면 안 되고, 호출 실패와 결과 거부는 갈라 보여야 한다).
           job: job9 ? {
@@ -5996,7 +6055,37 @@ class Dashboard {
     });
   });
   // [UI 개편 2차] 개요 패널 — 전부 기존 상태값 재조립(새 계산·새 메시지 없음). 표시는 textContent만(innerHTML 금지).
-  // '사용자 결정 필요'는 사람 판단이 필요한 것만 합산: 미확인 경보·보관함 [주의]·근거 재확인 열린 경고·MAP 대기 선택·수칙서 승인 대기.
+  // '사용자 결정 필요'는 사람 판단이 필요한 것만 합산: 미확인 경보·보관함 [주의]·근거 재확인 열린 경고·MAP 대기 선택·수칙서 승인 대기·사람 조치 보강 보류.
+  // 합산 구성은 순수 함수 decideActs로 분리 — 테스트가 컴파일 산출물에서 추출해 '합계'까지 실행으로 잠근다(R11 blocker③).
+  function decideActs(d){
+    var acts9=[];
+    // 근거 재확인 카드의 kept는 미확인 evidence-unseen 경보의 부분집합(같은 eventId 결속) — 별도 가산은
+    // 한 사건을 두 결정으로 세는 이중 집계다(검증 blocker 2026-08-07). 경보를 종류로 나눠 각 1회만 센다.
+    var integAll9=(d.integrity||[]).filter(function(e){ return e && e.ack!==true; });
+    var ev9=integAll9.filter(function(e){ return e.kind==="evidence-unseen"; }).length;
+    var ha9=d.enrich?d.enrich.humanAction:null;
+    // [이중 집계 금지 — R11 blocker③] 사람 조치 보류 항목이 표시될 때, 같은 상태를 알리는 미확인
+    // enrich-parked 경보는 일반 경보 합산에서 제외(한 사건=한 결정 — evidence-unseen 분리와 같은 규칙).
+    // 경보 배너 자체에는 그대로 남는다(확인 채널 유지). d.integrity는 호스트에서 이미 이 작업 폴더로 필터됨.
+    var ep9=ha9?integAll9.filter(function(e){ return e.kind==="enrich-parked"; }).length:0;
+    var integ9=integAll9.length-ev9-ep9;
+    if(integ9) acts9.push({n:integ9, tab:null, label:T("미확인 경보 — 위 경보 배너에서 내용 확인 후 '확인'","unacknowledged alerts — review & ack in the banner above")});
+    if(ev9) acts9.push({n:ev9, tab:"verify", label:T("근거 재확인 경고 열림 — 배너 '확인' 또는 자동 해소 대기","evidence-recheck warnings open — ack in the banner or await auto-clear")});
+    // 보관함은 '갚을 의무 없음' 주차장 — 전량을 '지금 정할 것'으로 세면 급한 일이 묻힌다(사용자 결정 2026-08-07).
+    // 검토 기한(due=30일+ 경과 또는 3회+ 재발견) 항목만 긴급 합산에 넣고, 나머지는 합산 밖 '여유' 줄로만 안내.
+    var blDue9=d.backlog&&d.backlog.cautionDue?d.backlog.cautionDue:0;
+    if(blDue9) acts9.push({n:blDue9, tab:"verify", label:T("보관함 검토 기한 항목(오래됨·자주 재발견)","parked items due for review (old or often rediscovered)")});
+    var ic9=d.mapCurrent&&d.mapCurrent.intent&&Number.isFinite(d.mapCurrent.intent.choicePending)?d.mapCurrent.intent.choicePending:0;
+    if(ic9) acts9.push({n:ic9, tab:"setup", label:T("MAP 대기 선택","MAP choices waiting")});
+    // [상시 표출 2026-08-16 사용자 결정] 선택한 보강 담당이 사람 조치로만 재개되는 보류 — 경보 '확인'을
+    // 눌러도 상태가 남아 있는 한 여기 계속 표시(호스트 판정 enrichHumanActionNeeded — 자동 재개 경로가
+    // 살아 있는 보류는 애초에 이 값이 비어 조용).
+    if(ha9) acts9.push({n:1, tab:"map", label:ha9==="probe"
+      ?T("자동 보강 멈춤 — 담당 준비 점검이 필요해요","auto-enrichment stalled — the provider needs a readiness check")
+      :T("자동 보강 멈춤 — 사람 조치로만 재개돼요(다시 시도 등 · 재호출은 사용량 소모)","auto-enrichment stalled — only human action resumes it (e.g. retry · a re-call uses quota)")});
+    if(d.envelope&&d.envelope.btn) acts9.push({n:1, tab:"setup", label:T("검증 경계(수칙서) 승인 대기","verify-envelope approval pending")});
+    return acts9;
+  }
   function renderOverview(d){
     var set9=function(id,v){ var e=$(id); if(e) e.textContent=v; };
     var cc9 = !!(d.contract && d.contract.harnessMode==="codex-codex");
@@ -6006,22 +6095,9 @@ class Dashboard {
     var son9 = !!(d.contract && d.contract.scoutMode==="on");
     var h9 = d.mapCurrent && d.mapCurrent.source==="v2" ? d.mapCurrent.health : null;
     set9("ovMap", !son9 ? T("2트랙 — 지도 없음","2-track — no map") : (h9 ? (h9.fresh+"/"+h9.total+(h9.ratios&&h9.ratios.fresh!==null?" · "+Math.round(h9.ratios.fresh*100)+"%":"")) : T("자료 없음","no data")));
-    var acts9=[];
-    // 근거 재확인 카드의 kept는 미확인 evidence-unseen 경보의 부분집합(같은 eventId 결속) — 별도 가산은
-    // 한 사건을 두 결정으로 세는 이중 집계다(검증 blocker 2026-08-07). 경보를 종류로 나눠 각 1회만 센다.
-    var integAll9=(d.integrity||[]).filter(function(e){ return e && e.ack!==true; });
-    var ev9=integAll9.filter(function(e){ return e.kind==="evidence-unseen"; }).length;
-    var integ9=integAll9.length-ev9;
-    if(integ9) acts9.push({n:integ9, tab:null, label:T("미확인 경보 — 위 경보 배너에서 내용 확인 후 '확인'","unacknowledged alerts — review & ack in the banner above")});
-    if(ev9) acts9.push({n:ev9, tab:"verify", label:T("근거 재확인 경고 열림 — 배너 '확인' 또는 자동 해소 대기","evidence-recheck warnings open — ack in the banner or await auto-clear")});
-    // 보관함은 '갚을 의무 없음' 주차장 — 전량을 '지금 정할 것'으로 세면 급한 일이 묻힌다(사용자 결정 2026-08-07).
-    // 검토 기한(due=30일+ 경과 또는 3회+ 재발견) 항목만 긴급 합산에 넣고, 나머지는 합산 밖 '여유' 줄로만 안내.
+    var acts9=decideActs(d);
     var blDue9=d.backlog&&d.backlog.cautionDue?d.backlog.cautionDue:0;
     var blRest9=Math.max(0,(d.backlog&&d.backlog.caution?d.backlog.caution:0)-blDue9);
-    if(blDue9) acts9.push({n:blDue9, tab:"verify", label:T("보관함 검토 기한 항목(오래됨·자주 재발견)","parked items due for review (old or often rediscovered)")});
-    var ic9=d.mapCurrent&&d.mapCurrent.intent&&Number.isFinite(d.mapCurrent.intent.choicePending)?d.mapCurrent.intent.choicePending:0;
-    if(ic9) acts9.push({n:ic9, tab:"setup", label:T("MAP 대기 선택","MAP choices waiting")});
-    if(d.envelope&&d.envelope.btn) acts9.push({n:1, tab:"setup", label:T("검증 경계(수칙서) 승인 대기","verify-envelope approval pending")});
     var tot9=0; acts9.forEach(function(a9){ tot9+=a9.n; });
     set9("ovDecide", String(tot9));
     var nb9=$("ovNavBadge"); if(nb9){ nb9.textContent=String(tot9); nb9.style.display=tot9?"":"none"; }

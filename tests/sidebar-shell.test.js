@@ -59,21 +59,28 @@ console.log("[3] 작업 깊이 미러 — 표시 전용(쓰기 경로 없음)");
 
 console.log("[3b] 개요 패널 — 기존 상태값 재조립·안전 표시 계약");
 {
+  // 합산 구성은 순수 함수 decideActs로 분리(2026-08-16 상시 표출 — enrich-visibility [6]가 추출 '실행'으로 합계까지 잠금).
+  const bA = src.indexOf("function decideActs(d){");
+  const eA = src.indexOf("function renderOverview(d){", bA);
+  const blkA = bA > 0 && eA > bA ? src.slice(bA, eA) : "";
+  ok(blkA.length > 0, "decideActs 합산 함수 존재(renderOverview 앞 분리)");
+  ok(!blkA.includes("innerHTML") && !blkA.includes("postMessage"), "합산 함수는 순수(DOM 주입·메시지 없음)");
   const b = src.indexOf("function renderOverview(d){");
   const e = src.indexOf("\n  }", b);
   const blk = b > 0 && e > b ? src.slice(b, e) : "";
   ok(blk.length > 0, "renderOverview 함수 존재(호이스팅 함수 선언)");
   ok(!blk.includes("innerHTML"), "개요 렌더에 innerHTML 없음(textContent·replaceChildren만)");
   ok(!blk.includes("postMessage"), "개요 렌더가 저장·요청 메시지를 보내지 않는다(표시 전용)");
-  ok(blk.includes("d.integrity") && blk.includes("d.backlog") && blk.includes("choicePending") && blk.includes("d.envelope"), "결정 필요 합산 원천(경보 2종·보관함·MAP 선택·수칙서)");
+  ok(blkA.includes("d.integrity") && blkA.includes("d.backlog") && blkA.includes("choicePending") && blkA.includes("d.envelope") && blkA.includes("d.enrich"), "결정 필요 합산 원천(경보 2종·보관함·MAP 선택·수칙서·사람 조치 보강 보류)");
+  ok(blk.includes("var acts9=decideActs(d);"), "renderOverview는 분리된 합산 함수를 사용");
   // 보관함 긴급/여유 분리(사용자 결정 2026-08-07): 기한(due) 항목만 합산·잔여는 합산 밖 '여유' 줄
   ok(blk.includes("d.backlog.cautionDue") && blk.includes("blRest9=Math.max(0,"), "보관함은 검토 기한 항목만 긴급 합산(잔여=여유)");
   ok(!/tot9\+=blRest9|acts9\.push\(\{n:blRest9/.test(blk) && /blRest9\)\{ var rx9=el\("div","ovact relaxed"\)/.test(blk), "여유 줄은 합산·행동 목록 밖 별도 렌더(과장 집계 금지)");
   ok(/cautionDue: items\.filter\(\(x\) => x\.tag === "주의" && x\.due\)\.length/.test(src), "cautionDue는 표시 상한(30) 적용 전 전량 기준");
   ok(/vb9\.textContent=T\("회차 ","rd "\)/.test(blk) && blk.includes("cc9 ? d.contract.codexVerifyBudget : d.contract.verifyBudget"), "검증 배지='회차 N/상한' — 상한은 계약 실효 숫자(편집용 appVB 문자열 금지)");
   ok(blk.includes("cap9>=1)?\"/\"+cap9:\"\"") && !blk.includes('(appVB?"/"+appVB:"")'), "무제한(0)·미정=분모 생략(존재하지 않는 상한 0 표시 금지 — blocker 반영)");
-  ok(blk.includes('e.kind==="evidence-unseen"') && !blk.includes("d.challenges"), "근거 재확인은 경보 종류 분리로 1회만 집계 — kept 가산 금지(같은 eventId 이중 집계 blocker 2026-08-07)");
-  ok(blk.includes("integAll9.length-ev9"), "일반 경보 수 = 전체 미확인 − evidence-unseen(분리 후 합=전체·과소/과대 없음)");
+  ok(blkA.includes('e.kind==="evidence-unseen"') && !blkA.includes("d.challenges") && !blk.includes("d.challenges"), "근거 재확인은 경보 종류 분리로 1회만 집계 — kept 가산 금지(같은 eventId 이중 집계 blocker 2026-08-07)");
+  ok(blkA.includes("integAll9.length-ev9-ep9"), "일반 경보 수 = 전체 미확인 − evidence-unseen − (항목 표시 중인) enrich-parked(한 사건=한 결정 — R11 이중 집계 봉합)");
   ok(blk.includes("d.usedMemory"), "'실린 기억' 카드가 상태값(usedMemory)만 읽는다");
   ok(src.includes("safe(function(){ renderOverview(d); });"), "data 핸들러에 safe 결속(구획 실패 격리)");
   ok(src.includes("usedMemory: (() => {") && src.includes('"stats", "attach.jsonl"'), "computeState가 브릿지 attach 장부를 읽어 usedMemory 공급");

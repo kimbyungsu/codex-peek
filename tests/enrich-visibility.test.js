@@ -231,5 +231,64 @@ console.log("[5] 경보 갈아끼우기는 원자적 — 삭제만 되고 추가
   ok(CL.readIntegrityEvents().some((e) => !e.ack && CL.normWs(e.workspace || "") === CL.normWs(wsY)), "다른 프로젝트 경보는 보존");
 }
 
+console.log("[6] 상시 표출(2026-08-16 사용자 결정) — '사람 조치로만 재개되는 보류'만 개요 합산에 올린다(컴파일 산출물 실행)");
+{
+  const outSrc = fs.readFileSync(path.join(ROOT, "out", "extension.js"), "utf8");
+  const b = outSrc.indexOf("const AUTO_REPROBE_REASONS");
+  const b2 = outSrc.indexOf("function enrichHumanActionNeeded(", b);
+  const e = outSrc.indexOf("\nfunction ", b2 + 10);
+  ok(b > 0 && b2 > b && e > b2, "컴파일 산출물에서 판정 함수 추출 가능");
+  const need = new Function(outSrc.slice(b, e) + "\nreturn enrichHumanActionNeeded;")();
+  const att = (stage, gen) => [{ attemptId: 0, failureStage: stage, consentGen: gen }];
+  // 자동 전이가 살아 있는 보류 = 조용(null)
+  ok(need(null, {}, null) === null && need({ phase: "open" }, {}, null) === null, "보류 아님=조용");
+  ok(need({ phase: "parked", parkedReason: "precision-not-ready" }, { precision: { ok: true } }, null) === null, "미준비였는데 준비 회복됨 → ready-heal 자동 재개 임박=조용");
+  ok(need({ phase: "parked", parkedReason: "precision-not-ready" }, { precision: { ok: false, reason: "config-changed" } }, null) === null, "설정 변경 미준비 → 자동 재점검 경로 생존=조용");
+  ok(need({ phase: "parked", parkedReason: "precision-failed", attempts: att("validation") }, {}, null) === null, "답 거부 실패+자동 재시도 미소진(retryFrom 미정수)=조용(실행기 auto-retry와 동형)");
+  ok(need({ phase: "parked", parkedReason: "input-doc-only" }, {}, null) === null, "문서 전용 입력 → 코드 오면 자동 재개=조용(설계상 정상 대기)");
+  ok(need({ phase: "parked", parkedReason: "no-consent" }, {}, null) === null, "동의 없음 → 자동 실행 대상 아님=조용(동의 안내 행이 담당)");
+  // ★R11 blocker② 반례: job 모드에 유효한 '더 새로운' 동의 세대가 있으면 실행기가 자동 재개 → 조용
+  ok(need({ phase: "parked", parkedReason: "consent-stale", mode: "precision", attempts: att("validation", 5) }, {}, { st: "ok", grant: { paidMode: "precision", gen: 6 } }) === null, "consent-stale+새 동의 세대(gen 6>5) → 자동 재개=조용");
+  // 사람 조치로만 재개 = 표시
+  ok(need({ phase: "parked", parkedReason: "precision-not-ready" }, { precision: { ok: false, reason: "probe-failed" } }, null) === "probe", "점검 실패 미준비 → 사람 점검 필요");
+  ok(need({ phase: "parked", parkedReason: "auto-not-ready" }, { auto: { ok: false, reason: "economy-not-ready" } }, null) === "probe", "자동형 미준비(하위 담당 미준비) → 사람 점검 필요");
+  ok(need({ phase: "parked", parkedReason: "precision-failed", retryFrom: 1, attempts: att("validation") }, {}, null) === "action", "실호출 실패+자동 재시도 소진 → 사람 조치(이 PC 실사고 재현 — 정밀형 2회 근거 불일치)");
+  // ★R11 blocker① 반례 2종: 실행기 자동 재시도의 사유·단계 한정과 동형이어야 함
+  ok(need({ phase: "parked", parkedReason: "self-failed", attempts: att("validation") }, {}, null) === "action", "self-failed는 실행기 자동 재시도 대상이 아님(retryFrom 없어도 사람 몫)");
+  ok(need({ phase: "parked", parkedReason: "precision-failed", attempts: att("call") }, {}, null) === "action", "호출 단계(call) 실패는 자동 재시도 대상이 아님(환경 문제 — 사람 몫)");
+  ok(need({ phase: "parked", parkedReason: "consent-stale", mode: "precision", attempts: att("validation", 5) }, {}, { st: "ok", grant: { paidMode: "economy", gen: 9 } }) === "action", "consent-stale+다른 모드 grant → 새 동의(사람) 필요(R11 blocker② 반대 방향)");
+  ok(need({ phase: "parked", parkedReason: "consent-stale", mode: "precision", attempts: att("validation", 5) }, {}, { st: "ok", grant: null }) === "action", "consent-stale+동의 없음 → 사람 조치");
+  ok(need({ phase: "parked", parkedReason: "adapter-missing" }, {}, null) === "action", "실행 방법 없음 → 사람 조치");
+  ok(need({ phase: "parked", parkedReason: "unknown-future-reason" }, {}, null) === "action", "미지 사유=사람 몫(자동 전이 증명 불가 → 조용한 미동작 금지)");
+  // 개요 합산 순수 함수(decideActs) 추출 실행 — R11 blocker③: 같은 보류가 경보+항목으로 2건 합산되면 안 된다
+  const b3 = outSrc.indexOf("function decideActs(d){");
+  const e3 = outSrc.indexOf("function renderOverview(d){", b3);
+  ok(b3 > 0 && e3 > b3, "컴파일 산출물에서 합산 함수 추출 가능(웹뷰 순수 함수)");
+  const acts = new Function("var T=function(a,b){return a;};\n" + outSrc.slice(b3, e3) + "\nreturn decideActs;")();
+  const sum = (d) => acts(d).reduce((s, a) => s + a.n, 0);
+  ok(sum({ integrity: [{ ack: false, kind: "enrich-parked" }], enrich: { humanAction: "action" } }) === 1, "★미확인 enrich-parked 경보+사람 조치 항목=합계 1(이중 집계 금지 — R11 반례)");
+  ok(sum({ integrity: [{ ack: true, kind: "enrich-parked" }], enrich: { humanAction: "action" } }) === 1, "경보 확인 후에도 사람 조치 항목은 유지=합계 1(사용자 결정의 핵심)");
+  ok(sum({ integrity: [{ ack: false, kind: "enrich-parked" }], enrich: { humanAction: null } }) === 1, "사람 조치 항목이 없으면 경보는 그대로 1건 합산(기존 채널 무회귀)");
+  ok(sum({ integrity: [{ ack: false, kind: "bridge-drift" }], enrich: { humanAction: "action" } }) === 2, "다른 종류 경보는 제외 대상 아님(경보 1+항목 1)");
+  ok(sum({ integrity: [{ ack: false, kind: "evidence-unseen" }] }) === 1, "근거 재확인 분리 합산 무회귀(각 1회)");
+  ok(sum({ envelope: { btn: true }, backlog: { caution: 3, cautionDue: 2 } }) === 3, "수칙서 1+기한 보관함 2(기한 없는 잔여 1은 합산 밖) 무회귀");
+  // [R12] 게이트+판정 결속 함수를 추출 '실행' — 선게이트가 판정을 가리던 순서 결함(R11 확인 blocker)의 반례
+  const b4 = outSrc.indexOf("function enrichHumanActionState(");
+  const e4 = outSrc.indexOf("\nfunction ", b4 + 10);
+  ok(b4 > b2 && e4 > b4, "컴파일 산출물에서 게이트+판정 결속 함수 추출 가능");
+  const state = new Function(outSrc.slice(b, e) + "\n" + outSrc.slice(b4, e4) + "\nreturn enrichHumanActionState;")();
+  const csJob = { phase: "parked", parkedReason: "consent-stale", mode: "precision", attempts: att("validation", 5) };
+  ok(state(csJob, {}, "ok", null, null) === "action", "★R12 반례: consent-stale+현재 grant 부재 → 게이트가 판정을 가리지 않고 '새 동의 필요' 표시");
+  ok(state(csJob, {}, "ok", null, { paidMode: "precision", gen: 6 }) === null, "consent-stale+새 동의 세대(job 주체) → 자동 재개=조용(게이트 우회에도 판정은 동형)");
+  ok(state({ phase: "parked", parkedReason: "precision-failed", retryFrom: 1, attempts: att("validation") }, {}, "ok", null, null) === null, "동의를 끈 사용자(옵트아웃)의 실패 보류=조용(자동 실행 경고 안 함)");
+  ok(state({ phase: "parked", parkedReason: "precision-failed", retryFrom: 1, attempts: att("validation") }, {}, "ok", { paidMode: "precision", gen: 5 }, { paidMode: "precision", gen: 5 }) === "action", "옵트인 사용자의 실패 보류(이 PC 상태)=표시");
+  // 배선 계약: 상태 계산이 결속 함수 하나로 판정을 싣고(선게이트 삼항식 잔재 0), 개요가 순수 함수 합산을 쓴다
+  const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
+  ok(/humanAction: enrichHumanActionState\(job9, rvSnap, c9\.st, g9, gJob0\)/.test(ext), "상태 계산 — 게이트+판정 결속 함수 단일 호출(같은 푸시 준비 스냅샷+현재·job 결속 grant)");
+  ok(!/optedIn0 \?/.test(ext), "선게이트 삼항식 잔재 0(판정을 가리는 경로 소멸)");
+  ok(/mapReadiness: \(rvSnap = /.test(ext), "준비 스냅샷 보관(재계산 없이 같은 값 사용)");
+  ok(/var acts9=decideActs\(d\);/.test(ext), "개요가 순수 합산 함수를 실제로 사용");
+}
+
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
