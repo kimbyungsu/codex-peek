@@ -2936,21 +2936,105 @@ function appendLedgerEvent(ws, ev) {
           if (o.type === "refuted") return trimDispute(o); // 강등 재료 반박만 우선 보존(기록 전용은 일반 최신 이벤트로)
           return trimPromotable(o) && lastDisputeIdx.has(trimRoot(o.sig)) && i > lastDisputeIdx.get(trimRoot(o.sig)); // 복권 증거 — 승격 가능 종류만
         });
-        const budget = Math.max(0, LEDGER_EVENTS_CAP - compact.length - identityIdx.size); // 압축본+대표 원문 자리 선확보. ⚠활성 상태가 상한을 넘는 극단에선 상한 예외(의미 보존 우선 — PRIVACY 고지)
+        const budget = Math.max(0, LEDGER_EVENTS_CAP - compact.length - identityIdx.size - 1); // 압축본+대표 원문+재작성 증표(trim-rewrite 1줄) 자리 선확보. ⚠활성 상태가 상한을 넘는 극단에선 상한 예외(의미 보존 우선 — PRIVACY 고지)
         let firstKeep = Math.min(isKeepFirst.filter(Boolean).length, budget);
         let othersKeep = budget - firstKeep;
         const kept = [];
+        const keptIdx = new Set(); // [기억 권위 ab-5] 보존된 '원문 줄'의 인덱스 — 아카이브 대상(=잘리는 원시 줄) 산출용
         for (let i = lines.length - 1; i >= 0; i--) {
           const o = parsedLines[i];
-          if (identityIdx.has(i)) { kept.push(lines[i]); continue; } // 대표 원문 — 예산과 무관 보존
+          if (identityIdx.has(i)) { kept.push(lines[i]); keptIdx.add(i); continue; } // 대표 원문 — 예산과 무관 보존
           if (o && REVERSIBLE.has(o.type)) continue; // 압축본으로 대체됨
-          if (isKeepFirst[i]) { if (firstKeep > 0) { kept.push(lines[i]); firstKeep--; } }
-          else if (othersKeep > 0) { kept.push(lines[i]); othersKeep--; }
+          if (isKeepFirst[i]) { if (firstKeep > 0) { kept.push(lines[i]); keptIdx.add(i); firstKeep--; } }
+          else if (othersKeep > 0) { kept.push(lines[i]); keptIdx.add(i); othersKeep--; }
         }
         const out = kept.reverse().concat(compact);
         // 무익 재작성 생략(Codex 7차 #4): 활성 상태가 상한을 넘는 극단에선 압축해도 줄지 않는다 — 매 append마다
         // 같은 전량 재작성을 반복하는 낭비 차단(파일은 사람 개입 속도로만 성장 — 의미 보존 우선·PRIVACY 상한 예외 고지).
-        if (out.length < lines.length) atomicWrite(f, out.join("\n") + "\n");
+        if (out.length < lines.length) { // 증표(trim-rewrite 1줄) 포함 순 감소가 0인 극단에서도 재작성해야 압축 기준점(trim-compact)이 심어져 위 유예 가드가 다음 append들의 재트림을 막는다(B-4)
+          // [기억 권위 ab-5] 트림 전 아카이브 — 잘리는 원시 이벤트를 같은 폴더의 <wsKey>.archive.jsonl에
+          // 먼저 옮겨 적은 뒤에만 재작성한다. 아카이브 append 실패=이번 트림 자체를 건너뜀(fail-closed —
+          // 백업 없는 비가역 절단 금지·수칙서 ab-5 결속). 적재는 이미 성공했으므로 다음 append가 재시도.
+          // 아카이브는 콜드 저장소: 유도기·판독기 어디도 읽지 않으며(디렉터리 전역 판독기 부재 확인) 상한 없음.
+          const dropped = [];
+          for (let i = 0; i < lines.length; i++) if (!keptIdx.has(i)) dropped.push(lines[i]);
+          const preMainSha = sha1Of(lines.join("\n") + "\n"); // 재작성 전 본문 상태(진단·구형 마커 폴백 키)
+          const batchSha = sha1Of(dropped.join("\n"));
+          // 재작성 실행 증표: 마커와 재작성 본문 양쪽에 심는 1회용 무작위 값 — 회수 판별의 결정 근거(R9).
+          // 증표 줄은 일반 소비자(유도기·건강지표)가 허용목록 밖 타입으로 건너뛰며, 본문 '맨 앞'(가장 오래된 쪽)에
+          // 두어 말미=최신 이벤트 의미를 보존하고 다음 트림에서 자연히 원시줄로 아카이브되게 한다.
+          const rewriteNonce = crypto.randomBytes(16).toString("hex");
+          const out2 = [JSON.stringify({ ts: compactTs, type: "trim-rewrite", nonce: rewriteNonce, from: "ledger-trim(재작성 증표)" })].concat(out);
+          const af = f.replace(/\.jsonl$/, "") + ".archive.jsonl";
+          try {
+            // 2단 커밋 회수 규약(재검증 blocker: append 후·재작성 전 크래시 → 재시도가 겹치는 배치를 중복 보관):
+            // 배치 마커에 1회용 무작위 증표(nonce)를 적고, 재작성된 본문 '맨 앞'(가장 오래된 쪽)에 같은
+            // nonce를 담은 trim-rewrite 줄을 포함시킨 뒤, 재작성 '성공 후' trim-commit 줄을 덧붙인다. 트림 진입 시 말미
+            // 마커가 미커밋이면 — 현재 본문에 그 nonce 줄이 존재⇔재작성 성공(커밋 보수·절단 금지 — 유일 사본),
+            // 부재⇔미교체(그 배치를 절단 후 새로 적재 — 잘린 줄들이 본문에 그대로 있으므로 유실 없음).
+            // R9: 콘텐츠 해시(pre/post 접두) 추론은 원리적으로 모호 — 이관기 재복사가 재작성 후 본문을 pre와
+            // 바이트 동일하게 재구성할 수 있음(pre·post 동시 일치). 무작위 nonce는 재작성 실행 자체의 증거라
+            // 본문 내용과 무관하게 결정적. 구형(nonce 없는) 마커만 pre→post 접두 순서 판별로 회수.
+            if (fs.existsSync(af)) {
+              const sz = fs.statSync(af).size;
+              // R6 blocker②-b: 고정 16MB 창은 초대형 배치에서 마지막 마커를 놓칠 수 있음 — 마커가 잡힐 때까지
+              // 창을 배로 확장(최대 파일 전체). 트림은 드문 연산이라 비용 무시 가능.
+              // R7 blocker③: 창 시작이 UTF-8 다바이트 문자 중간이면 문자열 디코딩이 대체문자(U+FFFD, 3바이트)를
+              // 만들어 문자열 기반 오프셋 환산이 실제 바이트 위치와 어긋남(선행 커밋 배치 경계 파괴) —
+              // 판독·검색·절단 오프셋을 전부 Buffer '바이트'로 수행해 디코딩 자체를 오프셋 계산에서 배제.
+              let want = Math.min(sz, 16 << 20);
+              let buf = null, miB = -1, lsB = 0;
+              for (;;) {
+                buf = Buffer.alloc(want);
+                const fd = fs.openSync(af, "r");
+                fs.readSync(fd, buf, 0, want, sz - want);
+                fs.closeSync(fd);
+                miB = buf.lastIndexOf('"type":"trim-archive"');
+                lsB = miB >= 0 ? buf.lastIndexOf(0x0a, miB) + 1 : 0;
+                // 마커를 찾아도 그 줄의 시작 개행이 창 밖이면 마커 줄이 잘렸을 수 있음 — 창 확장(파일 첫 줄은 예외)
+                if ((miB >= 0 && (lsB > 0 || sz - want === 0)) || want >= sz) break;
+                want = Math.min(sz, want * 2);
+              }
+              if (miB >= 0) {
+                const leB = buf.indexOf(0x0a, miB);
+                let mk = null;
+                try { mk = JSON.parse(buf.slice(lsB, leB < 0 ? buf.length : leB).toString("utf8")); } catch { mk = null; }
+                if (mk && mk.batchSha) {
+                  const ciB = buf.indexOf('"trim-commit"', miB);
+                  const committed = ciB >= 0 && buf.indexOf(mk.batchSha, ciB) >= 0;
+                  if (!committed) {
+                    // R8→R9: 접두 해시 추론(pre 우선→post)은 이관기 재복사가 pre를 바이트 재구성하는 경로에서
+                    // pre·post 동시 일치가 가능해 원리적으로 모호(실제 커밋 배치를 절단=한 세대 유실) — 판별을
+                    // '재작성 실행의 직접 증거'인 nonce로 교체: 재작성 본문에만 심어지는 1회용 무작위 증표 줄의
+                    // 존재⇔재작성 성공. 본문 내용이 무엇으로 재구성되든 nonce는 재작성 없이는 본문에 못 들어감
+                    // (마커별 신선 발급·회수는 다음 트림 진입 시 즉시 1회 수행되므로 그 전에 소실될 경로 없음).
+                    let rewriteHappened;
+                    if (typeof mk.nonce === "string" && mk.nonce.length >= 16) {
+                      const nTok = '"nonce":"' + mk.nonce + '"';
+                      rewriteHappened = lines.some((l) => l.indexOf('"type":"trim-rewrite"') >= 0 && l.indexOf(nTok) >= 0);
+                    } else {
+                      // 구형 마커(nonce 부재 — 미출시 개발본 잔재) 폴백: ①pre 접두 생존=미교체 확정 ②아니고
+                      // post 접두 일치=커밋 보수 ③둘 다 아니면 절단·재적재.
+                      const stillPre = Number.isInteger(mk.preLines) && mk.preLines > 0 && lines.length >= mk.preLines
+                        && typeof mk.preMainSha === "string" && sha1Of(lines.slice(0, mk.preLines).join("\n") + "\n") === mk.preMainSha;
+                      rewriteHappened = !stillPre && Number.isInteger(mk.postLines) && mk.postLines > 0 && lines.length >= mk.postLines
+                        && typeof mk.postMainSha === "string" && sha1Of(lines.slice(0, mk.postLines).join("\n") + "\n") === mk.postMainSha;
+                    }
+                    if (rewriteHappened) fs.appendFileSync(af, JSON.stringify({ ts: compactTs, type: "trim-commit", batchSha: mk.batchSha, from: "recover(커밋 보수)" }) + "\n", "utf8");
+                    else fs.truncateSync(af, sz - want + lsB); // 미교체 — 바이트 오프셋 직접 절단(stale/부분 배치 제거 후 재적재)
+                  }
+                }
+              }
+            }
+            fs.appendFileSync(af, JSON.stringify({ ts: compactTs, type: "trim-archive", n: dropped.length, batchSha, nonce: rewriteNonce, preLines: lines.length, preMainSha, postLines: out2.length, postMainSha: sha1Of(out2.join("\n") + "\n"), from: "ledger-trim(원시 보존)" }) + "\n" + dropped.join("\n") + "\n", "utf8");
+          } catch { return true; } // 아카이브 실패 → 트림 보류(원본 무손실 유지)
+          // R6 blocker①: atomicWrite는 실패 시 예외가 아니라 false 반환 — 반환 검사 없이 커밋하면
+          // '본문 미교체+커밋된 배치'가 돼 다음 트림이 겹치는 줄을 다시 보관(중복 부활). 실패=커밋 미기록
+          // (미커밋 배치로 남김 — 본문에 nonce 줄이 없으므로 다음 트림의 회수가 절단 후 재적재).
+          if (atomicWrite(f, out2.join("\n") + "\n")) {
+            try { fs.appendFileSync(af, JSON.stringify({ ts: compactTs, type: "trim-commit", batchSha }) + "\n", "utf8"); } catch { /* 커밋 실패 → 다음 트림이 보수(위 ②) */ }
+          }
+        }
       }
     } catch { /* 트림 실패 — 다음 append에서 재시도(적재 자체는 성공) */ }
     return true;

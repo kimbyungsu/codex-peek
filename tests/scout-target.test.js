@@ -136,6 +136,11 @@ ok(again.status === 0 && /복사 예정 0건 · 중복 스킵 2건/.test(again.s
 CL.appendLedgerEvent(ws, { ts: "m3-다른시각", type: "proposed", sig: "mig-a", text: "A ↔ B" }); // 같은 유형·항목, 시각만 다름
 const loose = runMg("--dry");
 ok(/1건은 대상에 '같은 유형·같은 항목'이 다른 시각으로/.test(loose.stdout), "시각만 다른 같은 사건 → 카운트 부풀림 정직 고지(회귀 잠금)");
+// 하네스 부속물(장부 append 계약 밖: sig 없는 행 — 예: 트림 재작성 증표) — 복사 후보 집계·부분 실패 오판 금지
+fs.appendFileSync(CL.ledgerEventsFileFor(ws), JSON.stringify({ ts: "tr1", type: "trim-rewrite", nonce: "f".repeat(32), from: "ledger-trim(재작성 증표)" }) + "\n", "utf8");
+const art = runMg();
+ok(art.status === 0 && /부속물 제외 1건/.test(art.stdout), "sig 없는 부속물 행 → 후보 제외·정직 고지·종료 코드 0(부분 실패 오판 없음)");
+ok(!CL.readLedgerEventsText(repo).includes('"type":"trim-rewrite"'), "증표는 대상에 복사되지 않음(다른 서랍의 재작성 증거 오염 금지)");
 
 console.log("[7] 확장 패리티(소스 계약) — scoutTargetFor가 resolveScoutRepo와 동일 규칙 + 정찰 판독기들이 대상 사용");
 const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
