@@ -251,6 +251,61 @@ function collectPolicyConflictCards(repo, mapId, opts) {
   }
 }
 
+// [실적 표시 2026-08-17 사용자 결정 — 진단 검증 3왕복 귀결]
+// ① 의미 지문: 재제안 동일성 판별 — 실행 세대 필드(patchId·basis·base*Hash·readSet·provider·rationale)를
+//    제외한 {operation, targetId, payload}만 깊은 키 정렬 해시. opHashV2Of(패치 전체 지문)는 patchId를
+//    포함해 같은 내용의 재제안도 못 묶는다(확인 검증 실측 — 해시 상이). 이 지문은 표시 묶음 전용.
+function semanticFpOf(patch) {
+  const p = patch || {};
+  return PM.opHashOf({ operation: p.operation, targetId: p.targetId, payload: p.payload });
+}
+// ② payload 힌트: '무엇을 제안했는지' 한 줄 — 화면이 payload를 안 보여줘 서로 다른 제안이 같은 줄로
+//    보이던 문제(진단 실측: 같은 대상 add_anchor 3건=서로 다른 파일 제안)의 해소. 범주 규칙(구체 op별
+//    하드코딩 금지): 경로류(ref/file/path) > 이름류(label/name/title) > 서술류(note/text/desc) > 첫 문자열 잎.
+const HINT_TIER1 = new Set(["ref", "file", "path"]), HINT_TIER2 = new Set(["label", "name", "title"]), HINT_TIER3 = new Set(["note", "text", "desc"]);
+function payloadHintOf(patch) {
+  const tiers = [[], [], [], []], seen = new Set();
+  const walk = (v) => {
+    if (!v || typeof v !== "object" || seen.has(v)) return;
+    seen.add(v);
+    for (const [k, x] of Object.entries(v)) {
+      if (typeof x === "string" && x.trim()) (HINT_TIER1.has(k) ? tiers[0] : HINT_TIER2.has(k) ? tiers[1] : HINT_TIER3.has(k) ? tiers[2] : tiers[3]).push(x.trim());
+      else if (x && typeof x === "object") walk(x);
+    }
+  };
+  walk((patch || {}).payload);
+  const hit = tiers.find((t) => t.length);
+  if (!hit) return "";
+  return hit[0].length > 60 ? hit[0].slice(0, 57) + "…" : hit[0];
+}
+// ③ 결정 장부 자동화 실적: 사문화된 정책 카운터 대신 '실제 돌아가는 자동 처리'를 보여준다(사용자 결정).
+//    원천=decisions/*.json의 classification 집계(확인 검증 보완: sweep 수치는 정책 0 상태의 verifier-resolved
+//    자동화를 측정 못 함 — 결정 장부가 정직한 원천). 결정은 불변 append 전용이라 파일 수가 캐시 키
+//    (15초 상태 푸시마다 수백 파일 재파싱 방지 — 수가 같으면 재사용).
+const automationCache = new Map(); // normWs(repo) → { count, summary }
+function decisionAutomationSummary(repo) {
+  try {
+    const dir = path.join(repo, "project-map", "decisions");
+    let names = [];
+    try { names = fs.readdirSync(dir).filter((n) => n.endsWith(".json")); } catch { names = []; }
+    const key = CL.normWs(repo);
+    const hit = automationCache.get(key);
+    if (hit && hit.count === names.length) return hit.summary;
+    const s = { total: 0, auto: 0, verifierResolved: 0, policy: 0, other: 0 };
+    for (const n of names) {
+      let rec; try { rec = JSON.parse(fs.readFileSync(path.join(dir, n), "utf8")); } catch { continue; }
+      s.total++;
+      const c = String(rec.classification || "");
+      if (c === "auto") s.auto++;
+      else if (c === "verifier-resolved") s.verifierResolved++;
+      else if (c === "intent-choice") s.policy++;
+      else s.other++;
+    }
+    automationCache.set(key, { count: names.length, summary: s });
+    return s;
+  } catch { return null; }
+}
+
 function collectIntentDashboard(repo, mapId, opts) {
   if (!UUID_RE.test(String(mapId))) return { ok: false, error: "mapId 형식 위반" };
   const ctx = contextFor(repo, mapId);
@@ -264,6 +319,8 @@ function collectIntentDashboard(repo, mapId, opts) {
     .map((rec) => ({
       kind: "needs-investigation", patchId: rec.patch.patchId, operation: rec.patch.operation,
       ...targetSummary(ctx.topo, rec.patch), rationale: rec.patch.rationale, classifiedAt: rec.classifiedAt,
+      // [실적 표시] 화면 묶음·내용 힌트 — 의미 지문(실행 세대 무관)과 payload 요약(서로 다른 제안의 구분 표시)
+      fp: semanticFpOf(rec.patch), hint: payloadHintOf(rec.patch),
     })).sort((a, b) => a.patchId.localeCompare(b.patchId));
   const frontierById = new Set((ctx.pol.frontier || []).map((x) => x.policyId));
   const policies = (ctx.pol.policies || []).filter((x) => frontierById.has(x.rec.policyId)).map(policySummary)
@@ -287,6 +344,7 @@ function collectIntentDashboard(repo, mapId, opts) {
   }
   return {
     ok: true, mapId, conflictCards: conflicts, information, policies,
+    automation: decisionAutomationSummary(repo), // [실적 표시] 결정 장부 집계 — 사문화 카운터 대신 실동작 지표
     policySummary: { activeLeafCount: policies.length, supersedingLeafCount: policies.filter((x) => {
       const stored = (ctx.pol.policies || []).find((p) => p.rec.policyId === x.policyId);
       return !!(stored && stored.rec.supersedesPolicyIds && stored.rec.supersedesPolicyIds.length);
@@ -1450,6 +1508,7 @@ module.exports = {
   resumeDelegation,
   retryDelegation,
   sweepIntentAuto,
+  semanticFpOf, payloadHintOf, decisionAutomationSummary,
   recoveryCandidatesFor,
   recoveryPlanFileFor,
   readRecoveryPlan,

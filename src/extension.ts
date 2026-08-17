@@ -7188,8 +7188,19 @@ class Dashboard {
         const intro=document.createElement("div"); intro.className="muted"; intro.style.cssText="font-size:11px;margin-bottom:7px";
         intro.textContent=T("대부분은 검증·정책에 따라 자동으로 끝납니다. 여기에는 서로 반대인 정책처럼 사람의 뜻이 꼭 필요한 경우와 복구 작업만 남습니다.","Most work finishes automatically from verification and policy. Only cases that require your meaning—such as opposing policies—and recovery actions appear here."); ib.appendChild(intro);
         const send=function(msg,btn){ if(intentBusyWeb) return; intentBusyWeb=true; ib.querySelectorAll("button").forEach(function(b){b.disabled=true;}); if(btn)btn.textContent=T("처리 중…","Working…"); vscode.postMessage(Object.assign({type:"intentAct",repo:iv.repo},msg)); };
-        if(dv&&dv.policySummary){
-          const ps=document.createElement("div"); ps.className="hint"; ps.textContent=T("현재 재사용 정책 ","Reusable policies: ")+dv.policySummary.activeLeafCount+T("개 · 충돌을 정리해 교체한 정책 "," · conflict-resolving replacements: ")+dv.policySummary.supersedingLeafCount; ib.appendChild(ps);
+        // [실적 표시 2026-08-17 사용자 결정] 사문화된 정책 카운터(최초 수립 경로 미제공 — 자동화 설계로
+        // 카드 폐기) 대신 결정 장부의 '실제 자동 처리 실적'을 보여준다. 정책 수치는 정책이 생기면만 병기.
+        if(dv&&(dv.automation||dv.policySummary)){
+          const au=dv.automation||null;
+          const ps=document.createElement("div"); ps.className="hint";
+          ps.textContent=au
+            ?T("자동 반영 ","Auto-applied: ")+au.auto+T("건 · 검증 판정 반영 "," · verifier-resolved: ")+au.verifierResolved+T("건","")
+            :T("현재 재사용 정책 ","Reusable policies: ")+dv.policySummary.activeLeafCount+T("개 · 충돌을 정리해 교체한 정책 "," · conflict-resolving replacements: ")+dv.policySummary.supersedingLeafCount;
+          if(au&&dv.policySummary&&dv.policySummary.activeLeafCount>0){
+            ps.textContent+=T(" · 재사용 정책 "," · policies: ")+dv.policySummary.activeLeafCount+T("개(교체 ","(replacements ")+dv.policySummary.supersedingLeafCount+")";
+          }
+          ps.title=T("대기 변경은 검증 근거로 자동 처리됩니다(자동화 설계·2026-07-24 결정). '재사용 정책'은 서로 반대인 정책을 사람이 정리할 때만 생기는 기록이라 정책이 생기면 여기에 함께 표시됩니다.","Pending changes are auto-resolved from verification evidence (automation decision, 2026-07-24). Reusable policies are created only when a person resolves opposing policies; counts appear here once any exist.");
+          ib.appendChild(ps);
         }
         conflicts.forEach(function(card){
           const row=document.createElement("div"); row.className="card"; row.style.cssText="margin:8px 0;padding:10px;border-left:3px solid var(--vscode-charts-orange)";
@@ -7201,7 +7212,27 @@ class Dashboard {
           const bd=document.createElement("button"); bd.className="secondary"; bd.style.cssText="margin:7px 0 0 5px"; bd.textContent=T("앞으로 거부","Decline going forward"); bd.onclick=function(){send({act:"conflict-decline",mapId:card.mapId,cardId:card.cardId,conflictKey:card.conflictKey},bd);}; row.appendChild(bd);
           ib.appendChild(row);
         });
-        infos.forEach(function(info){ const row=document.createElement("div"); row.className="hint"; row.style.marginTop="7px"; row.textContent=T("조사 필요(선택 버튼 없음): ","Needs investigation (no action button): ")+String(info.operation)+" · "+((info.targetLabels||[]).join(", ")||String(info.patchId).slice(0,8))+" — "+String(info.rationale||""); ib.appendChild(row); });
+        // [유계 표시 2026-08-17 사용자 결정] ①payload 힌트 표시(서로 다른 제안이 같은 줄로 보이던 문제 해소)
+        // ②의미 지문(fp — 실행 세대 필드 제외)이 같은 재제안만 최신 1건+반복 횟수로 묶기 ③최근 5묶음 외
+        // '더 보기' 접기 — 기록은 무손실(표시만 유계). rationale은 툴팁으로 강등(반복 보일러플레이트).
+        (function(){
+          if(!infos.length) return;
+          var groups=[], byFp={};
+          infos.forEach(function(info){ var k=String(info.fp||info.patchId); var g=byFp[k]; if(!g){ g={latest:info,count:0}; byFp[k]=g; groups.push(g); } g.count++; if(String(info.classifiedAt||"")>String(g.latest.classifiedAt||"")) g.latest=info; });
+          groups.sort(function(a,b){ return String(b.latest.classifiedAt||"").localeCompare(String(a.latest.classifiedAt||"")); });
+          var VIS=5;
+          var renderInfo=function(g,host){ var info=g.latest; var row=document.createElement("div"); row.className="hint"; row.style.marginTop="7px";
+            row.textContent=T("조사 필요(선택 버튼 없음): ","Needs investigation (no action button): ")+String(info.operation)+" · "+((info.targetLabels||[]).join(", ")||String(info.patchId).slice(0,8))+(info.hint?" — "+String(info.hint):"")+(g.count>1?T(" · 같은 제안 반복 ×"," · repeated ×")+g.count:"");
+            if(info.rationale) row.title=String(info.rationale);
+            host.appendChild(row); };
+          groups.slice(0,VIS).forEach(function(g){ renderInfo(g,ib); });
+          if(groups.length>VIS){
+            var det=keyedDetails("intentInfoMore", T("이전 조사 항목 "+(groups.length-VIS)+"건 더 보기","Show "+(groups.length-VIS)+" older investigation items"));
+            det.style.marginTop="7px";
+            groups.slice(VIS).forEach(function(g){ renderInfo(g,det); });
+            ib.appendChild(det);
+          }
+        })();
         if(attention&&(attention.parkedChoices||attention.parkedDelegations||attention.damaged)){
           const at=document.createElement("div"); at.className="integrity"; at.style.marginTop="7px"; at.textContent=attention.damaged?T("선택/위임 기록을 읽을 수 없어 자동 마무리가 정지했습니다. 기록 파일을 수동 확인해 주세요.","Choice/delegation records are unreadable; automatic completion stopped. Inspect the record files manually."):T("자동 마무리 보류: 정책 선택 ","Parked automatic completion: choices ")+attention.parkedChoices+T("건 · 위임 "," · delegations ")+attention.parkedDelegations+T("건 — 같은 작업을 반복하지 않고 사람 확인을 기다립니다."," — no repeated retries; awaiting human review."); ib.appendChild(at);
           if(!attention.damaged){

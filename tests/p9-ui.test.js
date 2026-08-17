@@ -49,5 +49,43 @@ ok(ext.includes("정책 충돌을 정리") && ext.includes("선택은 보존됐�
   && ext.includes("Policy conflict resolved") && ext.includes("automatic completion stopped"),
   "결과 알림은 성공·부분 중단을 구분하는 사람 문장");
 
+console.log("[6] 실적 표시·유계 조사 목록(2026-08-17 사용자 결정 — 진단 검증 3왕복 귀결)");
+{
+  const os = require("os");
+  const MI = require(path.join(ROOT, "bridge", "map-intent.js"));
+  // 의미 지문 — 실행 세대 필드(patchId·basis·readSet·provider·rationale) 무관: 같은 내용 재제안=같은 지문
+  const base = { patchId: "11111111-1111-1111-1111-111111111111", basis: { baseHead: "aaa" }, readSet: { targets: [{ id: "x" }] }, provider: "precision", rationale: "r1", operation: "add_anchor", targetId: "t-1", payload: { anchor: { file: "src/a.ts" } } };
+  const regen = { ...base, patchId: "22222222-2222-2222-2222-222222222222", basis: { baseHead: "bbb" }, readSet: { targets: [] }, rationale: "r2" };
+  ok(MI.semanticFpOf(base) === MI.semanticFpOf(regen), "재제안(세대 필드만 상이)=같은 의미 지문(확인 검증 보완 — opHashV2는 patchId 포함이라 불가)");
+  ok(MI.semanticFpOf(base) !== MI.semanticFpOf({ ...base, payload: { anchor: { file: "src/b.ts" } } }), "payload 다르면 다른 지문(별개 제안 오은닉 금지 — 주의 반영)");
+  // payload 힌트 — 범주 규칙: 경로류 > 이름류 > 서술류 > 첫 문자열 잎(op별 하드코딩 없음)
+  ok(MI.payloadHintOf(base) === "src/a.ts", "힌트=경로류(ref/file/path) 우선");
+  ok(MI.payloadHintOf({ payload: { x: { note: "긴 설명", label: "이름표" } } }) === "이름표", "경로 없으면 이름류(label/name/title)");
+  ok(MI.payloadHintOf({ payload: { deep: { misc: "잎 문자열" } } }) === "잎 문자열", "계층 없으면 첫 문자열 잎");
+  ok(MI.payloadHintOf({ payload: {} }) === "" && MI.payloadHintOf(null) === "", "빈 payload=빈 힌트(예외 없음)");
+  // 결정 장부 실적 집계 — 픽스처 repo·캐시(파일 수 동일=재사용, 추가=재계산)
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "p9auto_"));
+  const dd = path.join(tmp, "project-map", "decisions");
+  fs.mkdirSync(dd, { recursive: true });
+  fs.writeFileSync(path.join(dd, "1.json"), JSON.stringify({ classification: "auto" }));
+  fs.writeFileSync(path.join(dd, "2.json"), JSON.stringify({ classification: "verifier-resolved" }));
+  fs.writeFileSync(path.join(dd, "3.json"), JSON.stringify({ classification: "intent-choice" }));
+  const s1 = MI.decisionAutomationSummary(tmp);
+  ok(!!s1 && s1.total === 3 && s1.auto === 1 && s1.verifierResolved === 1 && s1.policy === 1, "결정 장부 classification 집계(sweep 아님 — 확인 검증 보완 반영)");
+  fs.writeFileSync(path.join(dd, "4.json"), JSON.stringify({ classification: "auto" }));
+  const s2 = MI.decisionAutomationSummary(tmp);
+  ok(s2.total === 4 && s2.auto === 2, "파일 수 변화=재계산(불변 append 전용이라 수=세대 신호)");
+  ok(MI.decisionAutomationSummary(path.join(tmp, "no-such")) !== null && MI.decisionAutomationSummary(path.join(tmp, "no-such")).total === 0, "결정 폴더 없음=0 집계(예외 없음)");
+  // 배선 핀 — 브릿지: information에 지문·힌트, 대시보드에 automation
+  const mi = fs.readFileSync(path.join(ROOT, "bridge", "map-intent.js"), "utf8");
+  ok(/fp: semanticFpOf\(rec\.patch\), hint: payloadHintOf\(rec\.patch\)/.test(mi), "information 항목에 지문·힌트 결속");
+  ok(/automation: decisionAutomationSummary\(repo\)/.test(mi), "대시보드 응답에 실적 집계 결속");
+  // 배선 핀 — 웹뷰: 실적 줄 대체(정책은 생기면만 병기)·의미 지문 묶음·최근 5 외 접기
+  ok(ext.includes("info.fp||info.patchId") && ext.includes("같은 제안 반복 ×"), "웹뷰 — 의미 지문 묶음+반복 횟수 표기");
+  ok(ext.includes('keyedDetails("intentInfoMore"') && ext.includes("var VIS=5;"), "웹뷰 — 최근 5묶음 외 '더 보기' 접기(기록 무손실)");
+  ok(ext.includes("자동 반영 ") && ext.includes("dv.policySummary.activeLeafCount>0"), "웹뷰 — 정책 카운터 대신 실적 줄(정책은 생기면만 병기)");
+  ok(!ext.includes('ps.textContent=T("현재 재사용 정책 ')," 구 정책 단독 줄 잔재 0(automation 부재 폴백 분기만 허용)");
+}
+
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
 process.exit(fail ? 1 : 0);
