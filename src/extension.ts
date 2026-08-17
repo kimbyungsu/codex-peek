@@ -4660,7 +4660,12 @@ class Dashboard {
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <style>
-  body{margin:0;color:var(--vscode-foreground);background:var(--vscode-editor-background);font-family:var(--vscode-font-family);font-size:var(--vscode-font-size)}
+  body{margin:0;color:var(--vscode-foreground);background:var(--vscode-editor-background);font-family:var(--vscode-font-family);font-size:var(--vscode-font-size);
+    /* [판정 의미색 고정 2026-08-17 사용자 결정] 통계의 판정 4색은 테마 무관 — body(테마 간접층 밖)에서
+       VS Code 원색을 '캡처'해 두면 .app.themed가 charts-* 를 재정의해도 이 값은 원색으로 남는다
+       (커스텀 속성은 선언 요소에서 치환된 계산값이 상속됨). 컬러풀과 전 테마가 같은 판정색을 보게 됨.
+       빨강을 재정의 안 하는 기존 '위험 신호 원색 유지' 원칙을 통과·보완·보류까지 확장한 것. */
+    --chPass:var(--vscode-charts-green,#89d185);--chNotes:var(--vscode-charts-yellow,#d7ba7d);--chHold:var(--vscode-charts-orange,#d18616);--chFail:var(--vscode-charts-red,#f14c4c)}
   .shell{max-width:960px;margin:0 auto;padding:28px 26px 40px}
   .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;padding-bottom:16px;border-bottom:1px solid var(--vscode-panel-border)}
   h1{font-size:20px;font-weight:800;margin:0;display:flex;align-items:center;gap:11px;letter-spacing:.2px}
@@ -6445,11 +6450,12 @@ class Dashboard {
     $("st7res").textContent = vs.resolved7;
     // ③ 도넛(최근 28일, 판정 표지 있는 것만) + 우측 가로막대. 색 계약: 통과=초록/보완=노랑/보류=주황/실패=빨강
     var m = vs.month, R=50, CX=60, CY=60, C=2*Math.PI*R;
+    // 판정 4색은 테마 무관 고정(--ch* = body에서 캡처한 원색 — 테마가 charts-*를 액센트로 눌러도 구분 유지)
     var segs = [
-      {n:m.pass, c:"var(--vscode-charts-green)", lbl:T("완전통과","pass")},
-      {n:m.passNotes, c:"var(--vscode-charts-yellow,#d7ba7d)", lbl:T("통과(보완)","pass (notes)")},
-      {n:m.inconclusive, c:"var(--vscode-charts-orange)", lbl:T("보류","hold")},
-      {n:m.fail, c:"var(--vscode-charts-red)", lbl:T("실패","fail")}
+      {n:m.pass, c:"var(--chPass)", lbl:T("완전통과","pass")},
+      {n:m.passNotes, c:"var(--chNotes)", lbl:T("통과(보완)","pass (notes)")},
+      {n:m.inconclusive, c:"var(--chHold)", lbl:T("보류","hold")},
+      {n:m.fail, c:"var(--chFail)", lbl:T("실패","fail")}
     ];
     var judged = m.pass + m.passNotes + m.inconclusive + m.fail; // 도넛 분모 = 표지 있는 것만(표지없음 제외)
     var svg="", off=0;
@@ -6477,7 +6483,7 @@ class Dashboard {
     // ④ 추이 막대 — 최근 14일, verdict 5색 세분 스택(아래부터 통과→보완→보류→실패→표지없음). 값은 전부 숫자·내부 상수라 innerHTML 안전
     var d14 = vs.daily14, maxd = 1;
     d14.forEach(function(b){ if(b.total>maxd) maxd=b.total; });
-    var sc = [["pass","var(--vscode-charts-green)"],["passNotes","var(--vscode-charts-yellow,#d7ba7d)"],["inconclusive","var(--vscode-charts-orange)"],["fail","var(--vscode-charts-red)"],["unparsed","var(--vscode-descriptionForeground)"]];
+    var sc = [["pass","var(--chPass)"],["passNotes","var(--chNotes)"],["inconclusive","var(--chHold)"],["fail","var(--chFail)"],["unparsed","var(--vscode-descriptionForeground)"]];
     $("trendBars").innerHTML = d14.map(function(b,i){
       var ago=13-i, lbl=ago===0?T("최근","now"):(ago+"d");
       var tt=ago===0?T("최근 24시간","last 24h"):(ago+T("일 전 24시간 구간","d ago, 24h window"));

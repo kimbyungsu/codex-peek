@@ -105,5 +105,19 @@ console.log("[4] 선택 카드 — 12개 스와치·즉시 적용+저장");
   ok(/applyTheme\(id\); \/\/ 즉시 적용[\s\S]{0,200}saveUiTheme/.test(src), "클릭=즉시 적용 후 저장");
 }
 
+console.log("[5] 판정 의미색 고정(2026-08-17 사용자 결정) — 통계 판정 4색은 테마 간접층 밖 캡처(전 테마=컬러풀과 동일)");
+{
+  // 캡처 선언: body(테마 간접층 밖)에서 charts 원색을 --ch*로 치환·상속 — .app.themed의 charts-* 재정의가 못 미침
+  ok(/body\{[\s\S]{0,900}--chPass:var\(--vscode-charts-green,#89d185\);--chNotes:var\(--vscode-charts-yellow,#d7ba7d\);--chHold:var\(--vscode-charts-orange,#d18616\);--chFail:var\(--vscode-charts-red,#f14c4c\)\}/.test(src), "body에서 판정 4색 캡처(+폴백)");
+  // 테마 블록은 --ch*를 건드리지 않는다(재정의하면 캡처 원칙 붕괴)
+  const themedBlk = src.slice(src.indexOf(".app.themed{"), src.indexOf("}", src.indexOf(".app.themed{")) + 1);
+  ok(!/--ch(Pass|Notes|Hold|Fail)/.test(themedBlk), ".app.themed는 --ch* 미재정의(캡처 원칙 유지)");
+  // 사용처: 분포 도넛·범례와 14일 추이 스택이 캡처 변수만 사용(직접 charts-* 참조 잔재 0)
+  const rs = src.slice(src.indexOf("function renderStats("), src.indexOf("function renderTokens("));
+  ok(rs.length > 100, "renderStats 블록 추출");
+  for (const v of ["--chPass", "--chNotes", "--chHold", "--chFail"]) ok(rs.includes("var(" + v + ")"), "판정 차트가 " + v + " 사용");
+  ok(!/var\(--vscode-charts-(green|yellow|orange|red)[,)]/.test(rs), "판정 차트에 charts-* 직접 참조 잔재 0(히트맵 blue는 밀도용이라 대상 아님)");
+}
+
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
