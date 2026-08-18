@@ -60,6 +60,7 @@ const BRIDGE_SCRIPTS = [
   "map-bootstrap.js", "map-pipeline.js", "map-bindings.js", "map-adapters.js", // P1: 비차단 bootstrap(훅이 lazy require — 훅 아님·detach 자식 실행기)
   "map-freshness.js", "map-reader.js", // P3b: P4 신설분 배포 편입 — map-adapters가 map-reader를 require하므로 누락 시 설치본 어댑터 전체 로드 불능(P3b 설계 A-3 실측 결함 봉합)
   "map-retrieval.js", // 검색 4조각: map-reader가 요청 기준 선별에 require — 누락 시 설치본 v2 동봉 로드 불능
+  "map-provenance.js", // 설계 경위 색인·선조회: map-reader 경위 구획+훅 안내+why CLI가 require — 누락 시 동봉·안내 로드 불능
   "map-cutover.js", // P3b 증분 2: cutover 본체+frozen-ledger probe(대시보드 lazy 소비 — 설치본 부재 시 probe 불능)
   "map-probe.js", // P7: readiness probe 실행기(vscode 무관 계층 — 확장이 설치본 사본을 lazy require)
   "map-probe-batch.js", // 자동 재점검 배치 실행기(비동기 자식 — 호스트 무정지·3차 blocker② ab-6)

@@ -103,6 +103,9 @@ function implementerContext(j, ws, c) {
     parts.push(buildVerifyDirective(c.codexVerifyMode, undefined, c.codexVerifyProfile, verifyCampaignProgress(ws,campaignId,effectiveVerifyBudget(c))));
   }
   try { const x=buildScoutDirective(ws,c); if(x)parts.push(x); } catch { /* advisory */ }
+  // 설계 경위 선조회 안내(MAP-PROVENANCE-DESIGN §3) — Claude 훅(contract-inject.js)과 동형 결속
+  // (설계검증 blocker: 한쪽만 결속하면 Codex 구현자에서 얕은 '없다' 종료 재발). scoutMode 독립.
+  try { const x=require("./map-provenance.js").buildProvenanceNotice(ws,c); if(x)parts.push(x); } catch { /* advisory */ }
   try { const x=require("./map-bootstrap.js").hookTick(ws); if(x)parts.push(x); } catch { /* advisory */ }
   return parts.join("\n\n");
 }

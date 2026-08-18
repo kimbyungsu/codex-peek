@@ -235,22 +235,34 @@ function cutoverTraceStateOf(repo, deps) {
 function buildMapAttach(ws, c, lang, reqText) {
   if (!ws || CL.normScoutMode(c) !== "on") return null; // 2트랙 게이트 최선행(출력 0·reader 미호출)
   const target = CL.resolveScoutRepo(ws, c).repo;
+  // [설계 경위] 게이트 '앞' 독립 구획(MAP-PROVENANCE-DESIGN §2) — 지도 판독 결과·의도 축 게이트와
+  // 무관하게 색인 매칭이 있으면 부착(설계검증 blocker②: 의도 축 0 조기 반환이 경위를 가리면 안 됨).
+  // 색인 부재/매칭 0=null=현행 바이트 동일(무회귀). mapItems는 불변(attach.jsonl 소비자 무접촉).
+  let prov = null;
+  try { prov = require(path.join(__dirname, "map-provenance.js")).provenanceSectionFor(target, reqText, (lang === "en" || (lang !== "ko" && CL.loadLang() === "en")) ? "en" : "ko"); } catch { prov = null; }
+  // 구현검증 blocker: 기존 동봉이 null(예: source none에서 buildScoutAttach 무동봉)이어도 경위
+  // 매칭이 있으면 경위 구획 단독 봉투로 부착 — '지도 생략에도 독립 부착' 계약을 전 경로에 적용.
+  const withProv = (r) => {
+    if (!prov) return r;
+    if (!r) return { text: prov.text, mapItems: [], couplings: [] };
+    return { ...r, text: prov.text + "\n" + r.text };
+  };
   let proj = null;
   try { proj = module.exports.readMapProjection(target); } catch { proj = null; } // exports 경유 — 테스트가 호출 수를 실측(2트랙 미호출 증명)
   // P3b 공통 (b) 개정(설계검증 2차 #2): legacy/none '판정 확인'시에만 기존 동봉 위임(바이트 동일).
   // blocked·error(lock/flap)·예외=marker 세대 판정 불가/차단 — legacy 데이터 공급 금지·고지 attach(무차단).
-  if (proj && proj.ok === true && proj.source === "v2") return renderV2Slice(ws, c, lang, proj, reqText);
-  if (proj && proj.ok === true && (proj.source === "legacy" || proj.source === "none")) return CL.buildScoutAttach(ws, c, lang);
+  if (proj && proj.ok === true && proj.source === "v2") return withProv(renderV2Slice(ws, c, lang, proj, reqText));
+  if (proj && proj.ok === true && (proj.source === "legacy" || proj.source === "none")) return withProv(CL.buildScoutAttach(ws, c, lang));
   const en = lang === "en" || (lang !== "ko" && CL.loadLang() === "en");
   const why = attachReasonText(proj && proj.reasonKey, proj && proj.reason, en);
   const coupling = typeof CL.scoutCouplingAttach === "function" ? CL.scoutCouplingAttach(target, en) : { text: "", couplings: [] };
   const mapNotice = en
     ? "[Project MAP] Unreadable right now (" + why + ") — no map slice attached this time (advisory only; not a verdict rule)."
     : "[Project MAP] 지금은 판독 불가(" + why + ") — 이번에는 지도 조각을 동봉하지 않습니다(참고 정보일 뿐 판정 기준 아님).";
-  return {
+  return withProv({
     text: [mapNotice, ...(coupling.text ? [coupling.text] : [])].join("\n"),
     mapItems: [], couplings: coupling.couplings,
-  };
+  });
 }
 // v2 slice — envelope {text, mapItems, couplings} 승계(healthLine 별도 필드 금지 — text 포함)
 function renderV2Slice(ws, c, lang, proj, reqText) {

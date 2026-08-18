@@ -3715,6 +3715,23 @@ function main() {
       return cmdTimeout();
     case "find":
       return cmdFind();
+    case "why": { // 설계 경위 선조회(MAP-PROVENANCE-DESIGN §3) — 2트랙에서도 색인 검색만(지도 부품 미접촉)
+      const q = rest.join(" ").trim();
+      if (!q) die(tB('사용법: why "<질문/주제>" — 결정 이력 색인(docs/DECISIONS.md) 선조회', 'Usage: why "<question/topic>" — query the design-provenance index (docs/DECISIONS.md)'), 2);
+      const MPV = require(path.join(__dirname, "map-provenance.js"));
+      const ws9 = configWs();
+      const repo9 = ((resolveScoutRepo(ws9, loadContract(ws9)) || {}).repo) || ws9; // R3 blocker②: CL 미선언 참조로 즉사하던 경로 — 구조분해 임포트 사용(CLI 실행 시험으로 잠금)
+      const r9 = MPV.queryProvenance(repo9, q);
+      // R3 blocker③: 성패 고지 모순 금지 — 영수증 문구는 receiptOk에 따라 한 가지만.
+      const rcpt = r9.receiptOk === false
+        ? tB("조회 영수증 기록 실패 — 잠금 파일 상태를 확인하세요(" + MPV.PROVENANCE_USAGE_FILE + ".lock)", "query receipt FAILED — check the lock file (" + MPV.PROVENANCE_USAGE_FILE + ".lock)")
+        : tB("조회 영수증 기록됨", "query receipted");
+      if (r9.receiptOk === false) process.stdout.write(tB("[주의] ", "[caution] ") + rcpt + "\n");
+      if (r9.index !== "ok") { process.stdout.write(tB("결정 색인 없음(" + MPV.INDEX_REL + ") — ", "No decisions index (" + MPV.INDEX_REL + ") — ") + rcpt + "\n"); break; }
+      if (!r9.matches.length) { process.stdout.write(tB("매칭 0건 — ", "0 matches — ") + rcpt + tB("(얕은 '없다' 종료 방지: 정본 설계 문서 개정 이력도 확인하세요)\n", " (also check design-doc revision history before concluding 'absent')\n")); break; }
+      for (const m of r9.matches) process.stdout.write("  " + m.entry.id + " · " + m.entry.title + "\n    " + tB("결정: ", "decision: ") + m.entry.decision + "\n    " + tB("정본: ", "source: ") + m.entry.source + "\n");
+      break;
+    }
     case "verifier-provider": { // [VerifierProvider §4] 현재값 표시/전환(계약 patch 경유)
       const vpv = (rest[0] || "").trim();
       if (!vpv) { process.stdout.write(JSON.stringify({ verifierProvider: normVerifierProvider(loadContract(configWs())) }) + "\n"); break; }

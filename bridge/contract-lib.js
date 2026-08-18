@@ -55,7 +55,7 @@ function cleanupOldState(now) {
   sweep(path.join(BRIDGE_DIR, "verify-campaigns", "corrupt"), ATTEMPTS_TTL_MS);
   // P-8 2단(v10): 승인 사다리로 '격리된' 잠금 잔재(*.lock.stale-<ts>)만 TTL 청소 — 활성 .lock은 절대 sweep
   // 금지(자동 회수 없음 계약). 격리물은 이름에 시각이 있어도 mtime 기준 7일(단명 진단 재료).
-  for (const dir of [CONTRACTS_DIR, BRIDGE_DIR]) { // BRIDGE_DIR=무폴더 창 전역 계약(contract.json)의 격리물(1차 blocker⑦)
+  for (const dir of [CONTRACTS_DIR, BRIDGE_DIR, STATS_DIR]) { // BRIDGE_DIR=무폴더 창 전역 계약(contract.json)의 격리물(1차 blocker⑦) · STATS_DIR=경위 영수증 잠금 격리물(R5 보완 — TTL 누락으로 무기한 누적되던 서랍)
     try {
       for (const n of fs.readdirSync(dir)) {
         if (!/\.lock\.stale-\d+$/.test(n)) continue;
