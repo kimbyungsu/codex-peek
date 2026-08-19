@@ -1008,6 +1008,13 @@ function sweepIntentAuto(repo, mapId, opts) {
   }
   out.ok = out.errors === 0;
   if (!out.ok) out.outcome = "partial";
+  // [경위 v2 2차] sweep 말미 intent 수확 자동 배선 — done 완결 선택을 경위 색인 자동층에 등재(advisory:
+  // 실패·미자격은 sweep 결과를 바꾸지 않음·registerAutoEntries 멱등이라 매 sweep 반복 호출 안전).
+  try {
+    const MPV = require(path.join(__dirname, "map-provenance.js"));
+    const hv = MPV.harvestFromIntentChoices(repo);
+    if (hv && hv.ok && Array.isArray(hv.results)) out.provenanceHarvested = hv.results.length;
+  } catch { /* advisory — 경위 등재 실패가 sweep을 막지 않음 */ }
   const line = "[map-intent] scanned=" + out.scanned + " applied=" + out.applied + " declined=" + out.declined + " conflicts=" + out.conflicts + " errors=" + out.errors;
   out.summary = line;
   try { if (typeof o.log === "function") o.log(line, out); } catch { /* 로그 실패는 전이 결과를 바꾸지 않음 */ }

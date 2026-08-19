@@ -364,5 +364,92 @@ console.log("[10] v2 수확 자격 — close 라운드 게이트·dispositionVal
   ok(rNoVal.status === 2 && /--source에 값이 없습니다|--source needs a value/.test(rNoVal.stdout + rNoVal.stderr), "★값 없는 --source=형식 오류 즉시 거부(처분 미기록 — R2 반례의 정방향)");
 }
 
+console.log("[11] v2 2차 — 자동층 compaction(soft cap·트림 아카이브 관용구·의미 전량 보존)");
+{
+  const rk11 = "compact-test-key";
+  const f11 = MPV.autoLedgerFileFor(rk11);
+  const af11 = f11.replace(/\.jsonl$/, "") + ".archive.jsonl";
+  // 의미 레코드 5(entry 3·tombstone 1·retract 1)+정확 중복 2+손상 1을 만들고 낮은 상한으로 트림 유도
+  const e11 = (n) => JSON.stringify({ kind: "entry", id: "A-e" + n, subjectKey: "s".repeat(0) + String(n).padStart(40, "0"), gen: 1, ts: "t" + n, title: "제목" + n, source: { file: "docs/x.md", anchor: "lines:1-1", excerptSha: "0".repeat(40) }, excerpt: "본문", keywords: [], origin: { eventKind: "x", eventRef: "ev" + n, repoKey: rk11, registeredAt: "t" + n } });
+  const tb11 = JSON.stringify({ kind: "tombstone", tombstoneId: "11111111-2222-3333-4444-555555555555", subjectKey: "0".repeat(40), scope: "subject", ts: "t9" });
+  const rt11 = JSON.stringify({ kind: "tombstone-retract", subjectKey: "0".repeat(40), targetTombstoneId: "11111111-2222-3333-4444-555555555555", ts: "t10" });
+  fs.mkdirSync(path.dirname(f11), { recursive: true });
+  fs.writeFileSync(f11, [e11(1), e11(2), e11(1), "손상{{{", e11(3), e11(2), tb11, rt11].join("\n") + "\n", "utf8");
+  const okA = MPV.appendAutoRecords(rk11, [JSON.parse(e11(4))], { trimAt: 5, step: 3 });
+  ok(okA === true, "상한 초과 append=적재 성공+compaction 발동");
+  const after11 = fs.readFileSync(f11, "utf8").split(/\r?\n/).filter(Boolean);
+  const parsed11 = after11.map((l) => { try { return JSON.parse(l); } catch { return null; } });
+  ok(parsed11[0] && parsed11[0].kind === "trim-rewrite" && String(parsed11[0].nonce || "").length >= 16, "재작성 증표(nonce)가 본문 맨 앞");
+  const kinds11 = parsed11.filter(Boolean).map((r) => r.kind);
+  ok(kinds11.filter((k) => k === "entry").length === 4 && kinds11.includes("tombstone") && kinds11.includes("tombstone-retract"), "★의미 레코드 전량 보존(entry 4·tombstone·retract — 철회된 tombstone도 절대 미제거)");
+  ok(!after11.some((l) => l.indexOf("손상{{{") >= 0) && after11.filter((l) => l === e11(1)).length === 1, "손상 줄·정확 중복만 본문에서 절단");
+  const arch11 = fs.readFileSync(af11, "utf8");
+  const aLines11 = arch11.split(/\r?\n/).filter((l) => l.length);
+  const payloads11 = aLines11.filter((l) => l.startsWith('"')).map((l) => JSON.parse(l)); // 원시줄=JSON 문자열 프레이밍(복원=parse 1회)
+  ok(arch11.indexOf('"type":"trim-archive"') >= 0 && arch11.indexOf('"type":"trim-commit"') >= 0 && payloads11.includes("손상{{{") && payloads11.includes(e11(1)), "★잘린 원시줄=아카이브 무손실 보존(문자열 프레이밍·복원 가능)+2단 커밋(trim-archive→trim-commit)");
+  // reducer 의미 동일: compaction 전후 활성 판정 불변(tombstone 철회로 subject 전부 생존)
+  const red11 = MPV.reduceAutoCandidates(MPV.readAutoLedger(rk11));
+  ok(red11.length === 4, "compaction 후 reducer 결과=활성 subject 4(의미 불변)");
+  // 히스테리시스: STEP 미만 추가 append는 재트림하지 않음(증표 줄 수 유지)
+  const linesBefore = after11.length;
+  MPV.appendAutoRecords(rk11, [JSON.parse(e11(5))], { trimAt: 5, step: 3 });
+  const after11b = fs.readFileSync(f11, "utf8").split(/\r?\n/).filter(Boolean);
+  ok(after11b.length === linesBefore + 1 && after11b.filter((l) => l.indexOf('"kind":"trim-rewrite"') >= 0).length === 1, "히스테리시스 — STEP 미만 새 줄에선 재작성 없음(증표 1개 유지)");
+  // 2단 커밋 회수: 미커밋 배치(마커만·본문에 그 nonce 없음)=절단 후 재적재 — 중복 보관 없음
+  const preArch = fs.readFileSync(af11, "utf8");
+  fs.appendFileSync(af11, JSON.stringify({ ts: "tX", type: "trim-archive", n: 1, batchSha: "f".repeat(40), nonce: "deadbeefdeadbeefdeadbeefdeadbeef", preLines: 9, postLines: 9, from: "auto-ledger-trim(원시 보존)" }) + "\n" + JSON.stringify("유령배치줄") + "\n", "utf8");
+  fs.writeFileSync(f11, [e11(1), e11(2), e11(3), e11(4), e11(5), tb11, rt11, e11(6), e11(7), e11(8)].join("\n") + "\n", "utf8"); // 증표 없는 본문(재작성 미실행 상태 재현)
+  MPV.appendAutoRecords(rk11, [JSON.parse(e11(9))], { trimAt: 5, step: 3 });
+  const arch11c = fs.readFileSync(af11, "utf8");
+  ok(arch11c.indexOf("유령배치줄") < 0 && arch11c.indexOf(preArch.trim().split("\n")[0]) === 0, "★미커밋 배치=절단 후 재적재(nonce 부재⇔미교체 판별 — 이전 커밋 배치는 무접촉)");
+  // R1 blocker①(ab-5) 정방향: 보존 원시줄이 '마커 모양'(type:trim-archive·batchSha 포함)이어도 문자열
+  // 프레이밍이라 회수기가 마커로 오인하지 않는다 — 두 번째 compaction 진입 후에도 아카이브에 생존
+  const rk11b = "compact-test-key-b";
+  const f11b = MPV.autoLedgerFileFor(rk11b);
+  const af11b = f11b.replace(/\.jsonl$/, "") + ".archive.jsonl";
+  const markerLike = JSON.stringify({ kind: "legacy-x", type: "trim-archive", batchSha: "a".repeat(40), nonce: "cafebabecafebabecafebabecafebabe", payload: "must-survive" }); // 미지 kind=절단 대상·내용은 마커 모양(오인 유도)
+  fs.mkdirSync(path.dirname(f11b), { recursive: true });
+  fs.writeFileSync(f11b, [e11(1), e11(2), markerLike, e11(3), e11(1), e11(2)].join("\n") + "\n", "utf8");
+  MPV.appendAutoRecords(rk11b, [JSON.parse(e11(4))], { trimAt: 4, step: 2 }); // 1차: markerLike가 아카이브로
+  const aMid = fs.readFileSync(af11b, "utf8");
+  ok(aMid.split(/\r?\n/).filter((l) => l.startsWith('"')).map((l) => JSON.parse(l)).includes(markerLike), "마커 모양 원시줄=1차 compaction에서 문자열로 보존(전제)");
+  MPV.appendAutoRecords(rk11b, [JSON.parse(e11(5)), JSON.parse(e11(6))], { trimAt: 4, step: 2 }); // 2차 진입(회수기 통과)
+  const aEnd = fs.readFileSync(af11b, "utf8");
+  ok(aEnd.split(/\r?\n/).filter((l) => l.startsWith('"')).map((l) => JSON.parse(l)).includes(markerLike) && aEnd.indexOf("must-survive") >= 0, "★마커 모양 보존 원시줄이 2차 compaction 회수를 통과해 생존(오인 절단 소멸 — R1 반례의 정방향)");
+  // R1 blocker② 정방향: 활성 의미 상태가 상한 초과(soft cap 예외)여도 STEP 미만 append는 재작성하지 않음
+  const nonceOf = (file) => { const l0 = fs.readFileSync(file, "utf8").split(/\r?\n/).find((l) => l.indexOf('"kind":"trim-rewrite"') >= 0); return l0 ? JSON.parse(l0).nonce : null; };
+  const rk11c = "compact-test-key-c";
+  const f11c = MPV.autoLedgerFileFor(rk11c);
+  fs.mkdirSync(path.dirname(f11c), { recursive: true });
+  fs.writeFileSync(f11c, [e11(1), e11(2), e11(3), e11(4), e11(5), e11(6)].join("\n") + "\n", "utf8"); // 전부 의미(중복·손상 0)=상한 초과 상태
+  MPV.appendAutoRecords(rk11c, [JSON.parse(e11(7))], { trimAt: 4, step: 3 }); // 첫 재작성(절단분 0·증표만)
+  const n1 = nonceOf(f11c);
+  ok(typeof n1 === "string" && n1.length >= 16, "soft cap 예외 상태 첫 재작성=증표 기준점(전제)");
+  MPV.appendAutoRecords(rk11c, [JSON.parse(e11(8))], { trimAt: 4, step: 3 });
+  MPV.appendAutoRecords(rk11c, [JSON.parse(e11(9))], { trimAt: 4, step: 3 });
+  ok(nonceOf(f11c) === n1, "★상한 초과 상태에서 STEP 미만 append=재작성 없음(nonce 불변 — 매 append 전량 재작성 반례의 정방향)");
+  MPV.appendAutoRecords(rk11c, [JSON.parse(e11(10))], { trimAt: 4, step: 3 }); // postLines 기준 +3 도달
+  ok(nonceOf(f11c) !== n1, "STEP 도달 시에만 재작성(증표 postLines 기준 추가분 계수)");
+}
+
+console.log("[12] v2 2차 — sweep 수확 배선·대시보드 표면 핀(소스 계약)");
+{
+  const mi12 = fs.readFileSync(path.join(ROOT, "bridge", "map-intent.js"), "utf8");
+  ok(/harvestFromIntentChoices\(repo\)/.test(mi12) && mi12.indexOf("provenanceHarvested") >= 0, "sweepIntentAuto 말미 intent 수확 자동 배선(advisory)");
+  const ext12 = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
+  ok(/provReject/.test(ext12) && /provRetract/.test(ext12) && /appendTombstone\(repoH/.test(ext12) && /retractTombstone\(repoR/.test(ext12), "대시보드 거부(scope)·철회 핸들러 배선");
+  ok(/repoKeyFor\(repoH\)\) !== m\.repoKey/.test(ext12) && /repoKeyFor\(repoR\)\) !== m\.repoKey/.test(ext12), "핸들러 2종 모두 repoKey 스냅샷 재대조(대상 전환 오귀속 차단 — B-3 전례)");
+  ok(/provCard/.test(ext12) && /provAutoRows/.test(ext12) && /provTombRows/.test(ext12) && /provenance: any \| null/.test(ext12), "MAP 패널 카드·상태 인터페이스 선언 동기");
+  // 병합 행에 거부 결속 필드(eventRef·gen) 노출 — 기능 확인(repo8 픽스처 재사용 없이 독립 실행)
+  const repo12 = fs.mkdtempSync(path.join(os.tmpdir(), "prov12_"));
+  fs.mkdirSync(path.join(repo12, "docs"), { recursive: true });
+  fs.writeFileSync(path.join(repo12, "docs", "z.md"), "# 결정\n내용 한 줄\n", "utf8");
+  const rv12 = MPV.resolveAnchor(repo12, "docs/z.md", "lines:1-2");
+  const r12 = MPV.registerAutoEntries(repo12, [{ file: "docs/z.md", anchor: "lines:1-2", contentHash: MPV.excerptShaOf(rv12.text), repoKey: MPV.repoKeyFor(repo12) }], { eventKind: "finding-resolved", eventRef: "f-z12", title: "제목" });
+  ok(r12.ok === true, "독립 등재 성공(전제)");
+  const m12 = MPV.mergedEntriesFor(repo12);
+  ok(m12.auto.length === 1 && m12.auto[0].eventRef === "f-z12" && m12.auto[0].gen === 1, "병합 행에 eventRef·gen 노출(거부 버튼 결속 재료)");
+}
+
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

@@ -235,6 +235,7 @@ interface BridgeState {
   mapReadiness: any | null; // P7 — readiness 뷰(contract-lib mapReadinessView 산출·precision 지문은 호스트 주입)
   enrich: any | null; // P8 — 자동 보강 상태(동의·장부 요약 — 표시 전용·정본은 실행기 장부)
   intent: any | null; // P9 — 정책 충돌 선택·조사 정보·손상 복구(3트랙에서만)
+  provenance: any | null; // 경위 v2 2차 — 왜-이렇게-됐나 색인 자동 등재 목록·유효 거부 표식(트랙 무관·표시 전용)
   mapCurrent: CurrentMapState | null; // P10 증분 2 — 현재 지도 건강도와 재사용한 P9 판단 스냅샷
   mapAutomation: MapAutomationStats | null; // P10 증분 3 — 실제 저장소의 최근 28일 자동 의미 보강
   mapUsage: MapUsageStats | null; // P10 증분 3 — 목적·공급자별 외부 호출과 사용량
@@ -2647,6 +2648,36 @@ function computeState(turnsN: number): BridgeState {
       } catch { return null; }
     })(),
     intent: (intentState = collectIntentState()),
+    // [경위 v2 2차] 왜-이렇게-됐나 색인 자동 등재 표면(표시 전용 — 쓰기는 provReject/provRetract 핸들러).
+    // 트랙 무관(2트랙의 fix-fact 수확도 대상). 클릭 시 오귀속 방지: repoKey 스냅샷을 함께 실어
+    // 핸들러가 현재 대상 재해석과 대조한다(B-3 대상 스냅샷 결속 전례).
+    provenance: (() => {
+      try {
+        if (!ws) return null;
+        const MPVs: any = require(path.join(BRIDGE_DIR, "map-provenance.js"));
+        const repoPv = (((bridgeLib() as any) || {}).resolveScoutRepo ? ((bridgeLib() as any).resolveScoutRepo(ws, loadContract(ws)) || {}).repo : null) || ws;
+        const rkPv = String(MPVs.repoKeyFor(repoPv));
+        const mPv = MPVs.mergedEntriesFor(repoPv);
+        const recsPv = MPVs.readAutoLedger(rkPv);
+        const retractedPv = new Set(recsPv.filter((r: any) => r && r.kind === "tombstone-retract").map((r: any) => String(r.targetTombstoneId)));
+        const tombsPv = recsPv.filter((r: any) => r && r.kind === "tombstone" && !retractedPv.has(String(r.tombstoneId)));
+        const titleBySubject = new Map<string, string>();
+        for (const r of recsPv) if (r && (!r.kind || r.kind === "entry") && r.subjectKey && r.title) titleBySubject.set(String(r.subjectKey), String(r.title));
+        return {
+          repoKey: rkPv,
+          humanCount: (mPv.human || []).length, autoTotal: (mPv.auto || []).length, staleCount: Number(mPv.staleCount) || 0,
+          auto: (mPv.auto || []).slice(0, 8).map((e: any) => ({
+            id: String(e.id), title: String(e.title || "").slice(0, 120), source: String(e.source || ""),
+            decision: String(e.decision || "").slice(0, 160), subjectKey: String(e.subjectKey), eventRef: String(e.eventRef || ""), gen: Number(e.gen) || 0,
+          })),
+          tombstones: tombsPv.slice(-5).reverse().map((r: any) => ({
+            tombstoneId: String(r.tombstoneId), scope: String(r.scope), ts: String(r.ts || ""),
+            title: titleBySubject.get(String(r.subjectKey)) || String(r.subjectKey).slice(0, 8),
+          })),
+          tombTotal: tombsPv.length,
+        };
+      } catch { return null; }
+    })(),
     mapCurrent: collectMapCurrent(intentState),
     mapAutomation: (mapHistoryState = collectMapHistory()) ? mapHistoryState.automation : null,
     mapUsage: mapHistoryState ? mapHistoryState.usage : null,
@@ -3971,6 +4002,37 @@ class Dashboard {
             if (okM) vscode.window.showInformationMessage(enM ? "Recorded. Nothing runs from this click — tell the implementer in chat to apply it (a stamp is still required for effect)." : "기록했어요. 이 클릭으로 실행되는 것은 없습니다 — 반영은 대화에서 지시해 주세요(효력은 도장부터).");
             else vscode.window.showWarningMessage(enM ? "Record failed — please try again." : "기록에 실패했어요 — 다시 시도해 주세요.");
           } catch { vscode.window.showWarningMessage(enM ? "Record failed." : "기록에 실패했어요."); }
+          this.post(); return;
+        }
+        // [경위 v2 2차] 자동 등재 거부(tombstone — 비모달·기록만): repoKey 스냅샷 결속으로 클릭 사이
+        // 정찰 대상 전환 시 타 파티션 오귀속 차단(B-3 전례). scope=event(이 기록만)/subject(이 자리 전체).
+        if (m?.type === "provReject" && typeof m.subjectKey === "string" && /^[0-9a-f]{40}$/.test(m.subjectKey)
+          && (m.scope === "event" || m.scope === "subject") && typeof m.repoKey === "string" && m.repoKey) {
+          const wsPv = dashboardWorkspace(); if (!wsPv) return;
+          const enPv = loadLangExt() === "en";
+          try {
+            const MPVh: any = require(path.join(BRIDGE_DIR, "map-provenance.js"));
+            const repoH = (((bridgeLib() as any) || {}).resolveScoutRepo ? ((bridgeLib() as any).resolveScoutRepo(wsPv, loadContract(wsPv)) || {}).repo : null) || wsPv;
+            if (String(MPVh.repoKeyFor(repoH)) !== m.repoKey) { vscode.window.showWarningMessage(enPv ? "The scout target changed while this list was open — it refreshes; please try again." : "목록이 떠 있는 사이 정찰 대상이 바뀌었어요 — 목록이 갱신됩니다. 다시 시도해 주세요."); this.post(); return; }
+            const rTb = MPVh.appendTombstone(repoH, { subjectKey: m.subjectKey, scope: m.scope,
+              ...(m.scope === "event" ? { eventRef: String(m.eventRef || "") } : {}), ...(Number.isInteger(m.gen) ? { gen: m.gen } : {}) });
+            if (rTb && rTb.ok) vscode.window.showInformationMessage(enPv ? "Hidden. Nothing else runs — use 'Show again' below to undo." : "숨겼어요. 이 클릭으로 실행되는 다른 일은 없고, 아래 '다시 보이기'로 되돌릴 수 있어요.");
+            else vscode.window.showWarningMessage((enPv ? "Hide failed: " : "숨기기에 실패했어요: ") + ((rTb && rTb.reason) || "unknown"));
+          } catch { vscode.window.showWarningMessage(enPv ? "Hide failed." : "숨기기에 실패했어요."); }
+          this.post(); return;
+        }
+        if (m?.type === "provRetract" && typeof m.tombstoneId === "string" && /^[0-9a-f-]{36}$/.test(m.tombstoneId)
+          && typeof m.repoKey === "string" && m.repoKey) { // [경위 v2 2차] 거부 철회(다시 보이기) — 실존 tombstoneId 결속
+          const wsPr = dashboardWorkspace(); if (!wsPr) return;
+          const enPr = loadLangExt() === "en";
+          try {
+            const MPVr: any = require(path.join(BRIDGE_DIR, "map-provenance.js"));
+            const repoR = (((bridgeLib() as any) || {}).resolveScoutRepo ? ((bridgeLib() as any).resolveScoutRepo(wsPr, loadContract(wsPr)) || {}).repo : null) || wsPr;
+            if (String(MPVr.repoKeyFor(repoR)) !== m.repoKey) { vscode.window.showWarningMessage(enPr ? "The scout target changed while this list was open — it refreshes; please try again." : "목록이 떠 있는 사이 정찰 대상이 바뀌었어요 — 목록이 갱신됩니다. 다시 시도해 주세요."); this.post(); return; }
+            const rRt = MPVr.retractTombstone(repoR, m.tombstoneId);
+            if (rRt && rRt.ok) vscode.window.showInformationMessage(enPr ? "It will show again." : "다시 보이게 했어요.");
+            else vscode.window.showWarningMessage((enPr ? "Undo failed: " : "되돌리기에 실패했어요: ") + ((rRt && rRt.reason) || "unknown"));
+          } catch { vscode.window.showWarningMessage(enPr ? "Undo failed." : "되돌리기에 실패했어요."); }
           this.post(); return;
         }
         if (m?.type === "proposalShow" && typeof m.repo === "string" && m.repo) { // §7 증분 2 — 초안 열람(승인 아님)
@@ -5328,6 +5390,12 @@ class Dashboard {
   <section id="tab-map" class="tab-panel">
   <h2 class="sec accent-teal">Project MAP <span class="sub2">${t("3트랙 지도 운영 현황 — 상태·자동 보강·선택 대기·비용", "3-track map operations — state · auto-enrichment · pending choices · costs")}</span></h2>
   <div class="muted" id="mapPanelOff" style="display:none">${t("2트랙에서는 지도를 쓰지 않아요 — '검증 설정'에서 3트랙을 켜면 여기가 채워져요.", "2-track does not use maps — turn on 3-track in Verify Setup to fill this panel.")}</div>
+      <div class="map-ops-card" id="provCard" style="display:none"><!-- 경위 v2 2차 — 트랙 무관(2트랙 수확도 대상)이라 scoutImpact 밖 -->
+        <h4>${t("왜-이렇게-됐나 색인 — 자동 등재", "Why-it-became-this index — automatic entries")}</h4>
+        <p class="muted">${t("검증에서 확정된 결정이 자동으로 실리는 목록이에요. 참고 표시일 뿐 아무것도 강제하지 않으며, 원문이 바뀌면 스스로 빠집니다. 잘못 실렸으면 숨길 수 있고 언제든 되돌릴 수 있어요.", "Decisions confirmed through verification are listed here automatically. It is reference-only, enforces nothing, and drops out by itself when the source text changes. You can hide wrong entries and undo anytime.")}</p>
+        <div id="provAutoRows" class="map-ops-lines"></div>
+        <div id="provTombRows" class="map-ops-lines"></div>
+      </div>
       <div id="scoutImpact" style="display:none">
         <div id="mapOps">
           <h3 class="chart-h" style="margin-top:12px">${t("Project MAP 운영 현황", "Project MAP operations")}</h3>
@@ -6333,6 +6401,37 @@ class Dashboard {
       var reasonParts=[]; Object.keys(au.noopByReason||{}).forEach(function(k){ reasonParts.push((reasonLabels[k]||T("그 밖의 정상 사유","other normal reason"))+" "+nf(au.noopByReason[k])); });
       if(reasonParts.length) addLine(autoBox,T("실행할 일 없음의 사유","Reasons nothing ran"),reasonParts.join(" · "));
     }
+
+    // [경위 v2 2차] 자동 등재 목록·숨김 표식 — 표시 전용, 버튼은 기록만(candMark 계보의 비모달 규약)
+    (function(){
+      var prov=cur&&cur.provenance?cur.provenance:null;
+      var card=$("provCard"); if(!card) return;
+      var rowsA=$("provAutoRows"), rowsT=$("provTombRows"); clear(rowsA); clear(rowsT);
+      if(!prov||((prov.auto||[]).length===0&&(prov.tombstones||[]).length===0&&!(prov.autoTotal>0))){ card.style.display="none"; return; }
+      card.style.display="";
+      (prov.auto||[]).forEach(function(e){
+        var row=document.createElement("div"); row.className="map-ops-line";
+        var tx=document.createElement("span"); tx.textContent="📌 "+e.title+" — "+e.decision+" ("+e.source+")"; row.appendChild(tx);
+        var mkB=function(lab,tip,scope){ var b=document.createElement("button"); b.style.cssText="margin-left:4px;font-size:10px"; b.textContent=lab; b.title=tip;
+          b.onclick=function(){ vscode.postMessage({type:"provReject", subjectKey:e.subjectKey, scope:scope, eventRef:e.eventRef, gen:e.gen, repoKey:prov.repoKey}); }; row.appendChild(b); };
+        mkB(T("이 기록만 숨기기","Hide this entry"),T("이번 사건에서 실린 이 기록만 숨겨요 — 같은 자리에 새 확정이 오면 다시 실립니다.","Hides only this entry from this event — a new confirmation at the same spot will list again."),"event");
+        mkB(T("이 자리 전체 숨기기","Hide this spot entirely"),T("이 문서 자리의 자동 등재를 모두 숨겨요 — 아래 '다시 보이기'로 되돌릴 수 있어요.","Hides all automatic entries for this document spot — undo below with 'Show again'."),"subject");
+        rowsA.appendChild(row);
+      });
+      if((prov.autoTotal||0)>(prov.auto||[]).length||prov.staleCount>0||prov.humanCount>0){
+        var sm=document.createElement("div"); sm.className="muted"; sm.style.fontSize="11px";
+        sm.textContent=T("자동 "+nf(prov.autoTotal||0)+"건"+((prov.autoTotal||0)>(prov.auto||[]).length?" 중 최근 "+nf((prov.auto||[]).length)+"건 표시":"")+" · 사람 확정 "+nf(prov.humanCount||0)+"건 · 원문 변경으로 잠시 빠진 "+nf(prov.staleCount||0)+"건",
+          nf(prov.autoTotal||0)+" automatic"+((prov.autoTotal||0)>(prov.auto||[]).length?" (showing latest "+nf((prov.auto||[]).length)+")":"")+" · "+nf(prov.humanCount||0)+" human-confirmed · "+nf(prov.staleCount||0)+" out temporarily (source changed)");
+        rowsA.appendChild(sm);
+      }
+      (prov.tombstones||[]).forEach(function(tb){
+        var row=document.createElement("div"); row.className="map-ops-line muted";
+        var tx=document.createElement("span"); tx.textContent="🚫 "+tb.title+" — "+(tb.scope==="subject"?T("자리 전체 숨김","spot hidden entirely"):T("한 기록 숨김","one entry hidden")); row.appendChild(tx);
+        var b=document.createElement("button"); b.style.cssText="margin-left:4px;font-size:10px"; b.textContent=T("다시 보이기","Show again");
+        b.onclick=function(){ vscode.postMessage({type:"provRetract", tombstoneId:tb.tombstoneId, repoKey:prov.repoKey}); }; row.appendChild(b);
+        rowsT.appendChild(row);
+      });
+    })();
 
     var intent=cur&&cur.intent?cur.intent:null;
     var known=function(v){ return Number.isFinite(v)?nf(v):T("자료 없음","no data"); };

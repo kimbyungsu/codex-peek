@@ -269,11 +269,90 @@ function readAutoLedger(repoKey) {
       .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
   } catch { return []; }
 }
-function appendAutoRecords(repoKey, recs) {
+// 자동층 soft cap(V2-4·V2-5): 상한 진입 시 compaction — 의미 레코드(entry·tombstone·tombstone-retract)는
+// '전부' 본문에 보존하고(활성 판독=본문 담당·fresh 후보 전열까지 필요해 어떤 세대도 못 버림),
+// 잘리는 원시줄(형식 손상·정확 중복·옛 재작성 증표)만 트림 아카이브 관용구(별도 archive 파일·
+// 2단 커밋·nonce 재작성 증표 — 일지 :2955 계보)로 무손실 보관한다. 활성 의미 상태가 상한을 넘는
+// 극단에선 보존 우선 예외(파일은 사람·사건 결정 속도로만 성장). 히스테리시스: 마지막 재작성 증표
+// 이후 STEP만큼 새 줄이 쌓이기 전엔 재진입하지 않는다(매 append 전량 재작성 방지).
+const AUTO_TRIM_AT = 2000;
+const AUTO_TRIM_STEP = 400;
+const AUTO_KINDS = new Set(["entry", "tombstone", "tombstone-retract"]);
+function compactAutoLedgerLocked(f, opts) {
+  const o = opts || {};
+  const trimAt = Number.isInteger(o.trimAt) ? o.trimAt : AUTO_TRIM_AT;
+  const step = Number.isInteger(o.step) ? o.step : AUTO_TRIM_STEP;
+  let raw; try { raw = fs.readFileSync(f, "utf8"); } catch { return; }
+  const lines = raw.split(/\r?\n/).filter(Boolean);
+  if (lines.length <= trimAt) return;
+  // 히스테리시스(R1 blocker②): 증표는 재작성 직후 '전체 줄 수'(postLines)를 기록하고, 재진입은
+  // '현재 줄 수 − postLines ≥ STEP'(마지막 재작성 이후 실제 추가분)일 때만. 증표 위치(항상 맨 앞)로
+  // 세면 활성 의미 상태가 상한을 넘는 soft cap 예외 상태에서 매 append 전량 재작성이 된다(반례 실측).
+  let lastMk = null;
+  for (let i = lines.length - 1; i >= 0; i--) if (lines[i].indexOf('"kind":"trim-rewrite"') >= 0) {
+    try { const p = JSON.parse(lines[i]); if (p && p.kind === "trim-rewrite") lastMk = p; } catch { /* 손상 증표=무시 */ }
+    break;
+  }
+  if (lastMk && Number.isInteger(lastMk.postLines) && lines.length - lastMk.postLines < step) return;
+  const af = f.replace(/\.jsonl$/, "") + ".archive.jsonl";
+  const nowTs = new Date().toISOString();
+  // 아카이브 프레이밍(R1 blocker① ab-5): 마커(trim-archive/trim-commit)는 '{'로 시작하는 JSON 객체 줄,
+  // 보존 원시줄은 JSON.stringify(원문 줄) — 항상 '"'로 시작하는 문자열 줄. 원시줄이 어떤 내용이든
+  // (마커 모양 포함) 문자열로 감싸져 마커와 구조적으로 절대 혼동되지 않는다(복원=JSON.parse 1회 —
+  // 무손실). 문자열 검색(lastIndexOf) 기반 마커 탐지는 보존 payload 오인·절단 사고라 금지.
+  // 2단 커밋 회수: 말미 마커가 미커밋이면 — 본문에 그 nonce의 재작성 증표 존재⇔커밋 보수 /
+  // 부재⇔미교체(그 배치를 절단 후 재적재 — 잘린 줄들이 본문에 그대로 있어 유실 없음).
+  try {
+    if (fs.existsSync(af)) {
+      const aLines = fs.readFileSync(af, "utf8").split(/\r?\n/).filter((l) => l.length);
+      let mi = -1, mk = null;
+      for (let i = aLines.length - 1; i >= 0; i--) {
+        if (!aLines[i].startsWith("{")) continue; // 원시줄('"' 시작)은 구조상 마커 후보에서 제외
+        let p = null; try { p = JSON.parse(aLines[i]); } catch { p = null; }
+        if (p && p.type === "trim-archive" && p.batchSha) { mi = i; mk = p; break; }
+      }
+      if (mk) {
+        const committed = aLines.slice(mi + 1).some((l) => {
+          if (!l.startsWith("{")) return false;
+          try { const p = JSON.parse(l); return p && p.type === "trim-commit" && p.batchSha === mk.batchSha; } catch { return false; }
+        });
+        if (!committed) {
+          const nTok = '"nonce":"' + String(mk.nonce || "") + '"';
+          const rewriteHappened = typeof mk.nonce === "string" && mk.nonce.length >= 16
+            && lines.some((l) => l.indexOf('"kind":"trim-rewrite"') >= 0 && l.indexOf(nTok) >= 0);
+          if (rewriteHappened) fs.appendFileSync(af, JSON.stringify({ ts: nowTs, type: "trim-commit", batchSha: mk.batchSha, from: "recover(커밋 보수)" }) + "\n", "utf8");
+          else fs.writeFileSync(af, aLines.slice(0, mi).map((l) => l + "\n").join(""), "utf8"); // 미교체 배치만 절단(앞선 커밋 배치 무접촉)
+        }
+      }
+    }
+  } catch { return; } // 회수 실패=이번 트림 보류(원본 무손실)
+  const seen = new Set();
+  const kept = [], dropped = [];
+  for (const l of lines) {
+    let rec = null; try { rec = JSON.parse(l); } catch { rec = null; }
+    const semantic = rec && AUTO_KINDS.has(String(rec.kind || "entry")); // kind 부재=초기 entry 호환
+    if (semantic && !seen.has(l)) { seen.add(l); kept.push(l); } else dropped.push(l); // 손상·미지 kind(옛 증표 포함)·정확 중복만 절단
+  }
+  const nonce = crypto.randomBytes(16).toString("hex");
+  const outHead = (n) => JSON.stringify({ kind: "trim-rewrite", nonce, postLines: n, ts: nowTs });
+  const out = [outHead(kept.length + 1)].concat(kept); // postLines=재작성 직후 전체 줄 수(증표 포함)
+  try {
+    if (dropped.length) {
+      const batchSha = excerptShaOf(dropped.join("\n"));
+      fs.appendFileSync(af, JSON.stringify({ ts: nowTs, type: "trim-archive", n: dropped.length, batchSha, nonce, preLines: lines.length, postLines: out.length, from: "auto-ledger-trim(원시 보존)" }) + "\n"
+        + dropped.map((l) => JSON.stringify(l)).join("\n") + "\n", "utf8");
+      if (CL.atomicWrite(f, out.join("\n") + "\n")) {
+        try { fs.appendFileSync(af, JSON.stringify({ ts: nowTs, type: "trim-commit", batchSha }) + "\n", "utf8"); } catch { /* 다음 트림이 보수 */ }
+      }
+    } else CL.atomicWrite(f, out.join("\n") + "\n"); // 절단분 0 — 증표만 심어 히스테리시스 기준점(soft cap 예외 상태)
+  } catch { /* 아카이브 실패=트림 보류(fail-closed — 적재는 이미 성공) */ }
+}
+function appendAutoRecords(repoKey, recs, opts) {
   const f = autoLedgerFileFor(repoKey);
   try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { return false; }
   const w = lockedWrite(f + ".lock", () => {
     fs.appendFileSync(f, recs.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8");
+    try { compactAutoLedgerLocked(f, opts); } catch { /* compaction 실패는 적재 성공을 바꾸지 않음 */ }
     return true;
   });
   return !!(w && w.ok);
@@ -385,7 +464,8 @@ function mergedEntriesFor(repoRoot) {
     if (!picked) { stale++; continue; }
     const e = picked;
     auto.push({ id: e.id, title: e.title, decision: String(e.excerpt || ""),
-      source: (e.source || {}).file + " " + (e.source || {}).anchor, keywords: e.keywords || [], subjectKey: e.subjectKey, auto: true });
+      source: (e.source || {}).file + " " + (e.source || {}).anchor, keywords: e.keywords || [], subjectKey: e.subjectKey, auto: true,
+      eventRef: String((e.origin || {}).eventRef || ""), gen: Number(e.gen) || 0 }); // 대시보드 거부(scope) 결속용(V2-4 표면)
   }
   return { index: (idx.ok || auto.length) ? "ok" : idx.reason, human, auto, staleCount: stale };
 }
@@ -492,7 +572,7 @@ function harvestFromApprovals(ws, repoRoot) {
 }
 
 module.exports = {
-  INDEX_REL, PROVENANCE_USAGE_FILE, USAGE_TRIM_AT, ATTACH_MAX, AUTO_BASE,
+  INDEX_REL, PROVENANCE_USAGE_FILE, USAGE_TRIM_AT, ATTACH_MAX, AUTO_BASE, AUTO_TRIM_AT, AUTO_TRIM_STEP,
   indexFileFor, parseDecisionsIndex, tokenize, matchDecisions, lockedWrite,
   appendProvenanceUsage, queryProvenance, provenanceSectionFor, buildProvenanceNotice,
   // v2 자동층
