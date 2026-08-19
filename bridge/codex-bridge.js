@@ -2454,7 +2454,7 @@ function cmdFindingJudge(rest) {
   const disp = dispositionsFor(ws, camp);
   // 위치 인자=플래그와 그 값을 제외한 나머지(--campaign이 첫 인자여도 목록 모드가 되도록)
   const pos = [];
-  for (let i = 0; i < rest.length; i++) { const a = String(rest[i] || ""); if (a === "--note" || a === "--campaign") { i++; continue; } pos.push(a.trim()); }
+  for (let i = 0; i < rest.length; i++) { const a = String(rest[i] || ""); if (a === "--note" || a === "--campaign" || a === "--source") { i++; continue; } pos.push(a.trim()); }
   const id = pos[0] || "";
   if (!id) {
     if (!opens.length) { process.stdout.write(tB(`열린 지적 없음(캠페인 ${camp}) — 판단할 것이 없습니다. 관문 거부문의 캠페인이 다르면 --campaign "<그 id>"를 붙이세요.\n`, `No open findings (campaign ${camp}) — nothing to judge. If the gate refusal names a different campaign, pass --campaign "<that id>".\n`)); return; }
@@ -2481,6 +2481,33 @@ function cmdFindingJudge(rest) {
     die(tB(`사용법: finding-judge <id> <fix-fact|fix-gap|rebut|park> --note "근거(12자+)" [--campaign "<관문 거부문의 캠페인 id>"]\n  fix-fact=사실 오류 인정(고침·근거 필수) / fix-gap=보강 요구 수용(고침·이유 필수) / rebut=반박 종결(근거 필수) / park=보관함 이관(근거=영수증)`,
            `Usage: finding-judge <id> <fix-fact|fix-gap|rebut|park> --note "evidence (12+ chars)" [--campaign "<campaign id from the gate refusal>"]\n  fix-fact=proven wrong (fix, note required) / fix-gap=enrichment accepted (fix, note required) / rebut=rebutted (note required) / park=parked (receipt is the evidence)`), 2);
   }
+  // [경위 v2 생산자 결속] --source "<file>#<anchor>" (선택·반복 가능): 판단이 가리키는 정본 구간을
+  // 구조 필드로 기록 — 검증(경계·containment·민감 제외·anchor 해석) 실패=즉시 거부(침묵 기록 금지).
+  // repoKey는 기록 시점 결속(ab-1) — 수확기가 이 키로 파티션·containment를 재검증한다.
+  let sourceRefs;
+  {
+    const srcArgs = [];
+    for (let si = 0; si < rest.length; si++) {
+      if (String(rest[si] || "") !== "--source") continue;
+      const val = si + 1 < rest.length ? String(rest[si + 1] || "") : "";
+      // R2 blocker⑥: 값이 없거나 다음 토큰이 플래그면 형식 오류로 즉시 거부(침묵 통과 금지)
+      if (!val || val.startsWith("--")) die(tB('--source에 값이 없습니다 — 형식: --source "<repo 상대경로>#<heading:제목|lines:s-e>"', '--source needs a value — format: --source "<repo-relative path>#<heading:title|lines:s-e>"'), 2);
+      srcArgs.push(val);
+    }
+    if (srcArgs.length) {
+      const MPV9 = require(path.join(__dirname, "map-provenance.js"));
+      const repo9 = (resolveScoutRepo(ws, loadContract(ws)) || {}).repo || ws;
+      sourceRefs = [];
+      for (const sa of srcArgs) {
+        const hi = sa.indexOf("#");
+        if (hi <= 0) die(tB(`--source 형식: "<repo 상대경로>#<heading:제목|lines:s-e>" — 받은 값: ${sa}`, `--source format: "<repo-relative path>#<heading:title|lines:s-e>" — got: ${sa}`), 2);
+        const file = sa.slice(0, hi), anchor = sa.slice(hi + 1);
+        const rv = MPV9.resolveAnchor(repo9, file, anchor);
+        if (!rv.ok) die(tB(`--source 검증 실패(${rv.reason}): ${sa} — 정본 구간이 해석돼야 기록합니다.`, `--source validation failed (${rv.reason}): ${sa}`), 2);
+        sourceRefs.push({ file: file.replace(/\\/g, "/"), anchor, contentHash: MPV9.excerptShaOf(rv.text), repoKey: MPV9.repoKeyFor(repo9) });
+      }
+    }
+  }
   const target = opens.find((o) => o.id === id);
   if (!target) die(tB(`열린 지적에 ${id}가 없습니다(캠페인 ${camp}·현재 세대 기준). 현황: node codex-bridge.js finding-judge${campFlag ? ` --campaign "${camp}"` : ""}`, `${id} is not an open finding (campaign ${camp}, current generation). Status: node codex-bridge.js finding-judge${campFlag ? ` --campaign "${camp}"` : ""}`), 2);
   // 1차 검증 blocker① 반영: 수용에도 근거 의무 — 수용이 '싼 기본값'이면 판단 강제가 무력화된다(실사고의
@@ -2498,7 +2525,15 @@ function cmdFindingJudge(rest) {
   // asOfRound 결속(1차 blocker①): 이 처분은 '지금까지의 마지막 등장'까지만 유효 — 이후 재등장하면
   // undisposedOpenFindings가 낡은 처분으로 판정해 관문이 다시 닫힌다(재판단 강제).
   const asOfRound = findingActivityRound(readFindingsLedger(ws), camp, id);
-  const wrote = appendFindingsLedger(ws, [{ type: "disposition", campaignId: camp, findingId: id, choice, note: note.slice(0, 400), backlogId: parkedId, asOfRound, envelopeHash: gen || null, ts: new Date().toISOString() }]);
+  // R2 blocker⑤(ab-1): 사건 최상위에 기록 시점 저장소 정체성(repoKey+repoPath) 결속 — 수확기는
+  // close 시점의 현재 대상이 아니라 이 값으로 파티션·검증(대상 전환 후에도 A 사건=A 저장소).
+  let evRepoTop;
+  if (sourceRefs) {
+    const MPV9b = require(path.join(__dirname, "map-provenance.js"));
+    const repo9b = (resolveScoutRepo(ws, loadContract(ws)) || {}).repo || ws;
+    evRepoTop = { repoKey: MPV9b.repoKeyFor(repo9b), repoPath: String(repo9b) };
+  }
+  const wrote = appendFindingsLedger(ws, [{ type: "disposition", campaignId: camp, findingId: id, choice, note: note.slice(0, 400), backlogId: parkedId, asOfRound, envelopeHash: gen || null, ...(sourceRefs ? { sourceRefs, ...evRepoTop } : {}), ts: new Date().toISOString() }]);
   if (!wrote) die(tB("장부 기록 실패 — 처분이 저장되지 않았습니다.", "Ledger write failed — judgment not saved."), 1);
   const remain = undisposedOpenFindings(ws, camp, gen).length;
   process.stdout.write(tB(`기록됨: ${id} → ${choice}${parkedId ? ` (보관함 영수증 ${parkedId})` : ""}${disp.has(id) ? " (재판단 — 이전 기록 대체)" : ""}\n남은 미판단 ${remain}건${remain ? "" : " — 다음 검증을 시작할 수 있습니다"}\n`,
@@ -3058,6 +3093,15 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
         for (const o of openList) if (o.round < roundNo) recs.push({ type: "close", campaignId: camp, findingId: o.id, closeReason: "resolved", round: roundNo, envelopeHash: frozen, askId: askId || "", ts: now }); // 같은 라운드 첫 등장은 open 유지(4차 설계 blocker②)·close도 세대 결속(3차 미완수정②) · [기억 권위 A-2] 마감 askId 결속(후보 근거)
       }
       appendFindingsLedger(ws, recs);
+      // [경위 v2 수확기 배선] 해소 마감 직후 — 자격(최신 처분 fix-fact+dispositionValid+close.round
+      // 게이트+sourceRefs)은 수확기가 판정. advisory(실패가 판정 경로를 막지 않음).
+      try {
+        const MPV9 = require(path.join(__dirname, "map-provenance.js"));
+        // R2 blocker⑤: 수확 대상 저장소는 수확기가 '사건(처분)에 저장된 repoPath·repoKey'로 결정 —
+        // 여기서는 현재 대상을 폴백으로만 전달(사건에 저장소 기록이 없는 구행 호환).
+        const repo9 = (resolveScoutRepo(ws, loadContract(ws)) || {}).repo || ws;
+        for (const r9 of recs) if (r9.type === "close" && r9.closeReason === "resolved") MPV9.harvestFromResolvedFinding(ws, repo9, camp, r9.findingId);
+      } catch { /* 수확은 참고 계층 — 실패 무해 */ }
     } catch { /* 장부 실패가 판정 전달을 막지 않음 */ }
   } else if (frozen && blockShaped && parse.ver === "v1") {
     out.push(en ? "[admission not applied — v1 response (the directive requested v2); recorded for statistics]" : "[입장 심사 미적용 — v1 응답(지시문은 v2 요구) · 통계 기록]"); // 활성 행렬 fail-open

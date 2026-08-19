@@ -45,8 +45,10 @@ function parseDecisionsIndex(repoRoot) {
     const span = (name) => { const r = new RegExp("^- " + name + ":\\s*([\\s\\S]*?)(?=^- |$(?![\\s\\S]))", "m").exec(b); return r ? r[1].replace(/\s+/g, " ").trim() : ""; };
     const kw = line("찾는말").split(/[,·]/).map((s) => s.trim()).filter(Boolean);
     const decision = span("결정"), source = span("정본");
+    // [v2] 사람 정정의 자동층 가림(reducer 5단계 — '가림: <subjectKey hex40>[, ...]' 선택 줄)
+    const overrides = line("가림").split(/[,\s]+/).map((s) => s.trim().toLowerCase()).filter((s) => /^[0-9a-f]{40}$/.test(s));
     if (kw.some((k) => proto.has(k))) { rejected.push({ id, reason: "protocol-vocab" }); continue; } // 규약 어휘 거부
-    entries.push({ id, title, decision, source, keywords: kw });
+    entries.push({ id, title, decision, source, keywords: kw, overrides });
   }
   return { ok: true, entries, rejected, file: f };
 }
@@ -95,40 +97,43 @@ function matchDecisions(entries, queryText, seeds) {
 // R2 blocker(fix-induced): withFileLockStrict는 보유자 사망(ESRCH 확정)을 'dead-lock-holder'로
 // 보고만 하고 회수하지 않아, 강제 종료(sup-5) 한 번 뒤 모든 영수증이 조용히 영구 실패했다 —
 // 사망 확정 잠금은 잔존 파일을 회수(unlink)하고 1회 재시도(확립된 dead=pid 확인 회수 규약의 적용).
+// 공용 잠금 쓰기(v2 자동층과 공유): withFileLockStrict+사망 격리 회수+선회수 absent 재획득 —
+// R2~R5 왕복으로 확정된 관용구의 단일 구현(경위 영수증·자동층 장부가 같은 정의를 참조).
+function lockedWrite(lockF, fn) {
+  const attempt = () => CL.withFileLockStrict(lockF, fn);
+  let w = attempt();
+  if (!w.ok && /dead-lock-holder/.test(String(w.error || ""))) {
+    try {
+      const raw = fs.readFileSync(lockF, "utf8");
+      const q = CL.quarantineContractLock(lockF, raw);
+      // 격리 성공+'이미 없음(absent — 타 창 선회수)'만 재획득 — changed/alive/owner-unverified는
+      // 활성 잠금 불가침(회수·재시도 없이 실패 유지). 확립 관용구 단일 경로.
+      if (q && (q.ok || q.reason === "absent")) w = attempt();
+    } catch (e) {
+      if (e && e.code === "ENOENT") w = attempt(); // 첫 판독 자체가 선회수 이후 — 정상 재획득만
+    }
+  }
+  return w;
+}
 function appendProvenanceUsage(rec) {
   try {
     fs.mkdirSync(path.dirname(PROVENANCE_USAGE_FILE), { recursive: true });
     const lockF = PROVENANCE_USAGE_FILE + ".lock";
-    const attempt = () => CL.withFileLockStrict(lockF, () => {
+    const w = lockedWrite(lockF, () => {
       fs.appendFileSync(PROVENANCE_USAGE_FILE, JSON.stringify(rec) + "\n", "utf8");
       const lines = fs.readFileSync(PROVENANCE_USAGE_FILE, "utf8").split(/\r?\n/).filter(Boolean);
       if (lines.length > USAGE_TRIM_AT) CL.atomicWrite(PROVENANCE_USAGE_FILE, lines.slice(-USAGE_TRIM_AT).join("\n") + "\n");
       return true;
     });
-    let w = attempt();
-    if (!w.ok && /dead-lock-holder/.test(String(w.error || ""))) {
-      // R3 TOCTOU 반례: 판정~삭제 사이에 다른 창이 사망 잠금을 회수하고 '새 활성 잠금'을 만들면
-      // 직접 unlink가 그 활성 잠금을 지운다(실측 deletedToken:"live-B") — 회수는 확립된 격리
-      // 관용구(quarantineContractLock: 원문 expect 대조+사망 재판정+rename 후 실물 재확인+무클로버
-      // 복원)로만 수행하고, 실패(changed/alive 등)면 회수 없이 실패로 끝낸다(활성 잠금 불가침).
-      try {
-        const raw = fs.readFileSync(lockF, "utf8");
-        const q = CL.quarantineContractLock(lockF, raw);
-        // R5 blocker: 격리 성공뿐 아니라 '이미 없음(absent — 타 창이 먼저 회수)'도 재획득 시도 —
-        // 첫 판독과 격리 내부 판독 사이의 선회수 창에서 영수증이 누락되던 인터리빙 봉합.
-        // changed/alive/owner-unverified는 활성 잠금 불가침 — 회수·재시도 없이 실패 유지.
-        if (q && (q.ok || q.reason === "absent")) w = attempt();
-      } catch (e) {
-        if (e && e.code === "ENOENT") w = attempt(); // 첫 판독 자체가 선회수 이후 — 정상 재획득 시도만
-      }
-    }
     return !!(w && w.ok);
   } catch { return false; }
 }
 
 // ── why 선조회(2트랙에서도 동작 — 색인 검색만·지도 부품 미접촉) ────────────────
 function queryProvenance(repoRoot, queryText, opts) {
-  const idx = parseDecisionsIndex(repoRoot);
+  // [v2] 병합 조회: 사람층+자동층(fresh만·사람 가림 우선 — reducer·지문 실효는 mergedEntriesFor 담당)
+  const merged = mergedEntriesFor(repoRoot);
+  const idx = { ok: merged.index === "ok", reason: merged.index, entries: merged.human.concat(merged.auto) };
   // 씨앗 가점을 why 경로에도 결속(구현검증 보완 — 동봉 경로와 정렬키 동형)
   let seeds = [];
   try { const MR = require(path.join(__dirname, "map-retrieval.js")); seeds = MR.extractSeeds(String(queryText || "")).seeds || []; } catch { seeds = []; }
@@ -150,7 +155,9 @@ function queryProvenance(repoRoot, queryText, opts) {
 // ── 동봉 구획(설계 §2 — 게이트 앞 독립·상한 2건·색인 부재=null=현행 바이트 동일) ──
 function provenanceSectionFor(repoRoot, reqText, lang) {
   if (typeof reqText !== "string" || !reqText.trim()) return null;
-  const idx = parseDecisionsIndex(repoRoot);
+  // [v2] 병합 동봉: 사람층+자동층(fresh만) — 색인·자동층 모두 비면 구획 부재(v1 무회귀)
+  const merged = mergedEntriesFor(repoRoot);
+  const idx = { ok: merged.index === "ok", entries: merged.human.concat(merged.auto) };
   if (!idx.ok || !idx.entries.length) return null;
   let seeds = [];
   try { const MR = require(path.join(__dirname, "map-retrieval.js")); seeds = MR.extractSeeds(reqText).seeds || []; } catch { seeds = []; }
@@ -177,8 +184,321 @@ function buildProvenanceNotice(ws, c) {
   } catch { return null; }
 }
 
+
+// =============== v2 자동층 — 등재 자동화 (설계 V2-0~V2-6 · 5왕복 동결) ===============
+// 권위 경계: 이 장부는 비정책·비차단 참고 뷰 — 수칙서·정책 op 권위와 무관(자동 승격 없음).
+const AUTO_BASE = path.join(CL.BRIDGE_DIR, "map-provenance");
+function repoKeyFor(repo) {
+  let r = String(repo || "");
+  try { r = fs.realpathSync(r); } catch { /* 실경로 불가=원문 키(결정론 유지) */ }
+  return CL.wsKeyFor(r);
+}
+function autoLedgerFileFor(repoKey) { return path.join(AUTO_BASE, String(repoKey) + ".jsonl"); }
+
+// 민감 경로 판정 — enrich-providers의 공용 정의를 참조(복사 금지·로드 실패=보수적으로 민감 취급)
+function isSensitiveProvenancePath(p) {
+  try { const EP = require(path.join(__dirname, "enrich-providers.js")); return !!EP.isSensitiveEnrichPath(p); }
+  catch { return true; }
+}
+
+// sourceRef 안전 경계(V2-2 ab-7): repo 상대 경로만·절대/.. 거부·realpath containment·민감 제외
+function validateSourceFile(repoRoot, file) {
+  const f = String(file || "").replace(/\\/g, "/");
+  if (!f || path.isAbsolute(f) || /^[A-Za-z]:/.test(f) || f.split("/").includes("..")) return { ok: false, reason: "path-form" };
+  if (isSensitiveProvenancePath(f)) return { ok: false, reason: "sensitive" };
+  let real, rootReal;
+  try { real = fs.realpathSync(path.join(repoRoot, f)); } catch { return { ok: false, reason: "missing" }; }
+  try { rootReal = fs.realpathSync(repoRoot); } catch { return { ok: false, reason: "repo-missing" }; }
+  const rel = path.relative(rootReal, real);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return { ok: false, reason: "escape" }; // symlink/junction 탈출 거부
+  // R2 blocker①(ab-7): 선언 경로가 무해해도 실경로가 저장소 '내부 민감 파일'을 가리키는 별칭
+  // (docs/public.md → .env symlink)을 우회 못 하게 — 실경로의 repo 상대 표기에 민감 판정 재적용.
+  if (isSensitiveProvenancePath(rel.replace(/\\/g, "/"))) return { ok: false, reason: "sensitive-target" };
+  return { ok: true, real: real };
+}
+
+// anchor 해석(V2-2): heading:<원문>[#k](유일 또는 서수) | lines:<s>-<e>(끝줄 포함·개행 바이트 포함)
+function resolveAnchor(repoRoot, file, anchor) {
+  const v = validateSourceFile(repoRoot, file);
+  if (!v.ok) return { ok: false, reason: v.reason };
+  let raw; try { raw = fs.readFileSync(v.real, "utf8"); } catch { return { ok: false, reason: "unreadable" }; }
+  const hasTrail = raw.endsWith("\n");
+  const lines = raw.split("\n");
+  if (hasTrail) lines.pop();
+  const joinSpan = (s, e) => lines.slice(s, e).join("\n") + (e < lines.length || hasTrail ? "\n" : "");
+  const a = String(anchor || "");
+  if (a.startsWith("heading:")) {
+    let h = a.slice(8), k = 0;
+    const om = /^(.*)#([0-9]+)$/.exec(h);
+    if (om) { h = om[1]; k = parseInt(om[2], 10); }
+    const idxs = [];
+    for (let i = 0; i < lines.length; i++) {
+      const L = lines[i].replace(/\r$/, "");
+      if (/^#{1,6}\s/.test(L) && L.replace(/^#{1,6}\s+/, "").trim() === h.trim()) idxs.push(i);
+    }
+    if (!idxs.length) return { ok: false, reason: "anchor-missing" };
+    if (idxs.length > 1 && !om) return { ok: false, reason: "anchor-ambiguous" }; // 중복 헤딩=서수 필수
+    if (om && (k < 1 || k > idxs.length)) return { ok: false, reason: "anchor-ordinal" };
+    const s = idxs[om ? k - 1 : 0];
+    const lvl = (lines[s].match(/^#+/) || ["#"])[0].length;
+    let e = lines.length;
+    for (let i = s + 1; i < lines.length; i++) {
+      const mm = lines[i].replace(/\r$/, "").match(/^(#{1,6})\s/);
+      if (mm && mm[1].length <= lvl) { e = i; break; }
+    }
+    return { ok: true, text: joinSpan(s, e) };
+  }
+  const lm = /^lines:([0-9]+)-([0-9]+)$/.exec(a);
+  if (lm) {
+    const s = parseInt(lm[1], 10), e = parseInt(lm[2], 10);
+    if (!(s >= 1 && e >= s)) return { ok: false, reason: "anchor-form" };
+    if (e > lines.length) return { ok: false, reason: "anchor-range" };
+    return { ok: true, text: joinSpan(s - 1, e) };
+  }
+  return { ok: false, reason: "anchor-form" };
+}
+
+function excerptShaOf(text) { return crypto.createHash("sha1").update(String(text), "utf8").digest("hex"); }
+function subjectKeyOf(file, anchor) {
+  return crypto.createHash("sha1").update(String(file || "").replace(/\\/g, "/") + "#" + String(anchor || ""), "utf8").digest("hex");
+}
+
+function readAutoLedger(repoKey) {
+  try {
+    return fs.readFileSync(autoLedgerFileFor(repoKey), "utf8").split(/\r?\n/).filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  } catch { return []; }
+}
+function appendAutoRecords(repoKey, recs) {
+  const f = autoLedgerFileFor(repoKey);
+  try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { return false; }
+  const w = lockedWrite(f + ".lock", () => {
+    fs.appendFileSync(f, recs.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8");
+    return true;
+  });
+  return !!(w && w.ok);
+}
+
+// 병합 reducer(V2-4 — 5단·append 순서 무관 결정론). 순수 함수(시험이 직접 실행).
+function reduceAutoCandidates(records) {
+  const retracted = new Set(records.filter((r) => r && r.kind === "tombstone-retract").map((r) => String(r.targetTombstoneId)));
+  const tombs = records.filter((r) => r && r.kind === "tombstone" && !retracted.has(String(r.tombstoneId)))
+    .filter((r) => !(r.scope === "event" && !r.eventRef)); // 유효성: event scope는 eventRef 필수
+  const bySubject = new Map();
+  for (const r of records) {
+    if (!r || (r.kind && r.kind !== "entry") || !r.subjectKey) continue;
+    if (!bySubject.has(r.subjectKey)) bySubject.set(r.subjectKey, []);
+    bySubject.get(r.subjectKey).push(r);
+  }
+  const out = [];
+  for (const [sk, list] of bySubject) {
+    if (tombs.some((tb) => tb.subjectKey === sk && tb.scope === "subject")) continue; // (2) subject 억제
+    const evT = tombs.filter((tb) => tb.subjectKey === sk && tb.scope === "event");
+    const cands = list.filter((e) => !evT.some((tb) =>
+      String(tb.eventRef) === String((e.origin || {}).eventRef) && (tb.gen === undefined || Number(tb.gen) === Number(e.gen)))); // (3) event 세대 제거
+    if (!cands.length) continue;
+    // (4) gen 수치 내림차순(사전순 금지 — 10>2)·동률 (subjectKey,eventRef,ts) 사전순 tie-break
+    cands.sort((a, b) => (Number(b.gen) - Number(a.gen))
+      || String((a.origin || {}).eventRef).localeCompare(String((b.origin || {}).eventRef))
+      || String(a.ts).localeCompare(String(b.ts)));
+    out.push(cands);
+  }
+  return out.sort((a, b) => String(a[0].subjectKey).localeCompare(String(b[0].subjectKey)));
+}
+// subject별 대표 1건(순수 논리 시험용) — 선발 순서만: freshness는 mergedEntriesFor가 후보 전열에서 판정
+function reduceAutoEntries(records) { return reduceAutoCandidates(records).map((c) => c[0]); }
+
+// 등재(수확 공용 꼬리): repoKey 재검증(ab-1)·지문 대조(기록 시점과 다르면 대기 — 옛 증명 승계 금지)·멱등
+function registerAutoEntries(repoRoot, refs, origin) {
+  const rkNow = repoKeyFor(repoRoot);
+  const results = [];
+  for (const ref of Array.isArray(refs) ? refs : []) {
+    if (String((ref && ref.repoKey) || "") !== rkNow) { results.push({ ok: false, reason: "repo-mismatch" }); continue; }
+    // R2 blocker②: contentHash는 필수 — 없으면 사건이 어떤 바이트를 증명했는지 알 수 없어
+    // 과거 사건이 '현재' 원문을 재수확하는 승계 경로가 열린다(설계 V2-2 계약).
+    if (!/^[0-9a-f]{40}$/.test(String((ref && ref.contentHash) || ""))) { results.push({ ok: false, reason: "no-content-hash" }); continue; }
+    const rv = resolveAnchor(repoRoot, ref.file, ref.anchor);
+    if (!rv.ok) { results.push({ ok: false, reason: rv.reason }); continue; }
+    const sha = excerptShaOf(rv.text);
+    if (ref.contentHash !== sha) { results.push({ ok: false, reason: "content-drift" }); continue; } // 새 사건 결속만(재수확 게이트)
+    const sk = subjectKeyOf(ref.file, ref.anchor);
+    const recs = readAutoLedger(rkNow);
+    const dupe = recs.some((r) => (!r.kind || r.kind === "entry") && r.subjectKey === sk
+      && String((r.origin || {}).eventRef) === String(origin.eventRef) && (r.source || {}).excerptSha === sha);
+    if (dupe) { results.push({ ok: true, skipped: "dup" }); continue; } // 멱등(같은 사건·같은 내용)
+    const gen = recs.filter((r) => (!r.kind || r.kind === "entry") && r.subjectKey === sk)
+      .reduce((m, r) => Math.max(m, Number(r.gen) || 0), 0) + 1;
+    const entry = {
+      kind: "entry", id: "A-" + sk.slice(0, 8) + "-g" + gen, subjectKey: sk, gen, ts: new Date().toISOString(),
+      title: String(origin.title || "").slice(0, 200),
+      source: { file: String(ref.file).replace(/\\/g, "/"), anchor: String(ref.anchor), excerptSha: sha },
+      excerpt: rv.text.slice(0, 240), // 표시용 절단(지문은 구간 전체 — V2-2)
+      // keywords 안전 원천(ab-7): 발췌 토큰+사건 구조 필드만 — 질의 원문 토큰 금지
+      keywords: [...new Set([...tokenize(rv.text.slice(0, 400)), ...tokenize(String(origin.title || ""))])].slice(0, 24),
+      origin: { eventKind: String(origin.eventKind || ""), eventRef: String(origin.eventRef || ""), repoKey: rkNow, registeredAt: new Date().toISOString() },
+    };
+    results.push(appendAutoRecords(rkNow, [entry]) ? { ok: true, id: entry.id, gen } : { ok: false, reason: "write" });
+  }
+  return { ok: results.every((x) => x.ok !== false), results };
+}
+
+// 사람 거부·철회(V2-4 — 대시보드·시험 표면)
+function appendTombstone(repoRoot, opts) {
+  const o = opts || {};
+  if (o.scope !== "event" && o.scope !== "subject") return { ok: false, reason: "scope" };
+  if (o.scope === "event" && !o.eventRef) return { ok: false, reason: "eventRef-required" };
+  if (!/^[0-9a-f]{40}$/.test(String(o.subjectKey || ""))) return { ok: false, reason: "subjectKey" };
+  const rec = { kind: "tombstone", tombstoneId: crypto.randomUUID(), subjectKey: o.subjectKey, scope: o.scope };
+  if (o.eventRef) rec.eventRef = String(o.eventRef);
+  if (Number.isInteger(o.gen)) rec.gen = o.gen;
+  rec.ts = new Date().toISOString();
+  return appendAutoRecords(repoKeyFor(repoRoot), [rec]) ? { ok: true, tombstoneId: rec.tombstoneId } : { ok: false, reason: "write" };
+}
+function retractTombstone(repoRoot, targetTombstoneId) {
+  const rk = repoKeyFor(repoRoot);
+  const recs = readAutoLedger(rk);
+  const target = recs.find((r) => r.kind === "tombstone" && String(r.tombstoneId) === String(targetTombstoneId));
+  if (!target) return { ok: false, reason: "target-missing" }; // 철회는 실존 tombstoneId 결속(V2-1 유효성)
+  const rec = { kind: "tombstone-retract", subjectKey: target.subjectKey, targetTombstoneId: String(targetTombstoneId), ts: new Date().toISOString() };
+  return appendAutoRecords(rk, [rec]) ? { ok: true } : { ok: false, reason: "write" };
+}
+
+// 병합 조회(사람층 우선·자동층은 fresh만 — 지문 불일치=자동 실효·매칭 제외·재수확은 새 사건만)
+function mergedEntriesFor(repoRoot) {
+  const idx = parseDecisionsIndex(repoRoot);
+  const human = idx.ok ? idx.entries : [];
+  const hidden = new Set();
+  for (const h of human) for (const s of h.overrides || []) hidden.add(s);
+  const rk = repoKeyFor(repoRoot);
+  const perSubject = reduceAutoCandidates(readAutoLedger(rk));
+  const auto = [];
+  let stale = 0;
+  for (const cands of perSubject) {
+    if (hidden.has(cands[0].subjectKey)) continue; // (5) 사람 가림 우선
+    // R2 blocker③: 최신 gen 1건만 보지 않고 후보 전열에서 '첫 fresh'를 선발 — 정본이 이전 검증
+    // 내용으로 되돌아온 정상 흐름에서 이전 fresh 세대가 살아남는다. 전부 stale일 때만 실효 집계.
+    let picked = null;
+    for (const e of cands) {
+      const rv = resolveAnchor(repoRoot, (e.source || {}).file, (e.source || {}).anchor);
+      if (rv.ok && excerptShaOf(rv.text) === (e.source || {}).excerptSha) { picked = e; break; }
+    }
+    if (!picked) { stale++; continue; }
+    const e = picked;
+    auto.push({ id: e.id, title: e.title, decision: String(e.excerpt || ""),
+      source: (e.source || {}).file + " " + (e.source || {}).anchor, keywords: e.keywords || [], subjectKey: e.subjectKey, auto: true });
+  }
+  return { index: (idx.ok || auto.length) ? "ok" : idx.reason, human, auto, staleCount: stale };
+}
+
+// 수확기 (a): 해소 완결 finding(자격=최신 처분 fix-fact+dispositionValid+resolved close.round>=최신 활동)
+function harvestFromResolvedFinding(ws, repoRoot, campaignId, findingId) {
+  try {
+    const rows = CL.readFindingsLedger(ws);
+    const disps = rows.filter((r) => r.type === "disposition" && r.campaignId === campaignId && r.findingId === findingId);
+    const latest = disps[disps.length - 1];
+    if (!latest || latest.choice !== "fix-fact") return { ok: false, reason: "disposition" };
+    if (!CL.dispositionValid(rows, campaignId, latest)) return { ok: false, reason: "disposition-stale" };
+    const closes = rows.filter((r) => r.type === "close" && r.campaignId === campaignId && r.findingId === findingId && r.closeReason === "resolved");
+    const lastClose = closes[closes.length - 1];
+    const act = CL.findingActivityRound(rows, campaignId, findingId);
+    if (!lastClose || !(Number(lastClose.round) >= act)) return { ok: false, reason: "close-round" }; // 옛 close 재사용 차단(R4)
+    const refs = Array.isArray(latest.sourceRefs) ? latest.sourceRefs : [];
+    if (!refs.length) return { ok: false, reason: "no-source" }; // 후보 대기(휴리스틱 추측 금지)
+    // R2 blocker⑤(ab-1): 수확 대상=사건에 저장된 저장소(처분 기록 시점 repoPath·repoKey) —
+    // close 시점의 '현재 정찰 대상'이 아님(A에서 처분→정상적으로 B 전환 후 close돼도 A 사건은
+    // A 저장소로 수확). repoKey 지문 재검증으로 경로 이동·오귀속 차단(불일치=후보 대기).
+    const evRepo = String(latest.repoPath || repoRoot || "");
+    if (!evRepo) return { ok: false, reason: "no-repo" };
+    if (latest.repoKey && repoKeyFor(evRepo) !== String(latest.repoKey)) return { ok: false, reason: "repo-mismatch" };
+    const f0 = rows.filter((r) => r.type === "finding" && r.findingId === findingId).pop();
+    return registerAutoEntries(evRepo, refs, { eventKind: "finding-resolved", eventRef: findingId, title: (f0 && f0.title) || findingId });
+  } catch { return { ok: false, reason: "exception" }; }
+}
+
+// intent 사건의 증명 참조 — 증명 바이트=사건 레코드(선택 시점 canonical 정책)의 파이프라인 직렬화
+// (map-pipeline 정책 기록기와 동일 서식 JSON.stringify(policy,null,1)·무꼬리개행 — lines:1-N은 그런
+// 파일의 전체 바이트와 정확히 일치). 수확 시점의 '현재 파일'은 지문 원천이 아니라 등재 게이트의
+// 대조 대상일 뿐: 서식만 바뀐 파일(canonical 동일=done 판독은 유지)은 content-drift로 후보 대기가
+// 되고, 옛 사건이 새 원문 바이트를 증명하는 경로가 없다. 직렬화가 어긋난 정상 파일도 미수확(후보
+// 대기)으로만 기울며 거짓 증명 방향으로는 열리지 않는다(fail-closed).
+function intentPolicyRefFor(repoRoot, policy) {
+  const expected = JSON.stringify(policy, null, 1);
+  return { file: "project-map/policies/" + policy.policyId + ".json", anchor: "lines:1-" + expected.split("\n").length,
+    contentHash: excerptShaOf(expected), repoKey: repoKeyFor(repoRoot) };
+}
+
+// 수확기 (b): intent-choice 완결(자격=phase=done+applied decision·정책 파일 일치 — 완결 판독기 재사용)
+function harvestFromIntentChoices(repoRoot) {
+  try {
+    const MI = require(path.join(__dirname, "map-intent.js"));
+    const read = MI.readConflictChoices(repoRoot);
+    if (!read || read.st !== "ok") return { ok: false, reason: "choices-" + String(read && read.st) };
+    const results = [];
+    for (const rec of read.records || []) {
+      if (rec.phase !== "done") continue;
+      const done = MI.completedConflictDecisionFor(repoRoot, rec);
+      if (!done || !done.ok) continue; // 적용·정책 파일 일치 전=자격 없음
+      const policy = rec.patchCanonical && rec.patchCanonical.payload && rec.patchCanonical.payload.policy;
+      if (!policy || !policy.policyId) continue;
+      const ref = intentPolicyRefFor(repoRoot, policy); // 지문=사건 유도(현재 파일 판독 없음)
+      const title = String(policy.predicateDescription || policy.policyId).slice(0, 200);
+      results.push(registerAutoEntries(repoRoot, [ref], { eventKind: "intent-choice", eventRef: rec.cardId, title }));
+    }
+    return { ok: true, results };
+  } catch { return { ok: false, reason: "exception" }; }
+}
+
+// 수확기 (c): 수칙서 승인 사건 — 승인 시 선기록된 append-only 사건 레코드(도장 실존 검사는 수확 시)
+function approvalEventsFileFor(repoKey) { return path.join(AUTO_BASE, String(repoKey) + ".approvals.jsonl"); }
+// 승인 원자 결속(설계 V2-2): 사건 append와 도장을 '같은 잠금 구간'에서 선기록→도장. 도장 함수는
+// 잠금 보유 중 실행되며(중첩 순서는 승인 사건 잠금→계약/전이 잠금 한 방향뿐 — 역순 획득 지점이
+// 없어 교착 불가), 도장 실패·예외여도 사건은 잔존한다(계약의 도장 지문과 불일치=수확 미자격이
+// 그 자체로 미완 표지 — harvestFromApprovals가 승인 지문 일치를 재확인).
+function recordApprovalWithStamp(repoRoot, ev, stampFn) {
+  const rk = repoKeyFor(repoRoot);
+  const f = approvalEventsFileFor(rk);
+  try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { return { ok: false, recorded: false, stamped: false }; }
+  const rec = { approvalTs: new Date().toISOString(), envelopeHash: String((ev && ev.envelopeHash) || ""),
+    candidateId: (ev && ev.candidateId) || null, askId: (ev && ev.askId) || null, repoKey: rk,
+    sourceRefs: Array.isArray(ev && ev.sourceRefs) ? ev.sourceRefs : [] };
+  const w = lockedWrite(f + ".lock", () => {
+    fs.appendFileSync(f, JSON.stringify(rec) + "\n", "utf8");
+    let stamped = false;
+    try { stamped = typeof stampFn === "function" ? !!stampFn() : true; } catch { stamped = false; }
+    return { recorded: true, stamped };
+  });
+  if (!(w && w.ok)) return { ok: false, recorded: false, stamped: false };
+  return { ok: true, recorded: true, stamped: !!(w.result && w.result.stamped) };
+}
+function appendApprovalEvent(repoRoot, ev) { return recordApprovalWithStamp(repoRoot, ev, () => true).recorded; }
+function harvestFromApprovals(ws, repoRoot) {
+  try {
+    const rk = repoKeyFor(repoRoot);
+    let rows = [];
+    try {
+      rows = fs.readFileSync(approvalEventsFileFor(rk), "utf8").split(/\r?\n/).filter(Boolean)
+        .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+    } catch { return { ok: true, results: [] }; }
+    const c = CL.loadContract(ws);
+    const stamped = String((c && c.envelopeHash) || ""); // 도장 실존: 승인 지문 일치 사건만 자격(선기록 후 도장 실패=미자격)
+    const results = [];
+    for (const ev of rows) {
+      if (!ev.envelopeHash || ev.envelopeHash !== stamped) continue;
+      if (!Array.isArray(ev.sourceRefs) || !ev.sourceRefs.length) continue; // 후보 대기
+      results.push(registerAutoEntries(repoRoot, ev.sourceRefs, { eventKind: "envelope-approval", eventRef: ev.envelopeHash.slice(0, 16), title: "검증 경계 승인 결정" }));
+    }
+    return { ok: true, results };
+  } catch { return { ok: false, reason: "exception" }; }
+}
+
 module.exports = {
-  INDEX_REL, PROVENANCE_USAGE_FILE, USAGE_TRIM_AT, ATTACH_MAX,
-  indexFileFor, parseDecisionsIndex, tokenize, matchDecisions,
+  INDEX_REL, PROVENANCE_USAGE_FILE, USAGE_TRIM_AT, ATTACH_MAX, AUTO_BASE,
+  indexFileFor, parseDecisionsIndex, tokenize, matchDecisions, lockedWrite,
   appendProvenanceUsage, queryProvenance, provenanceSectionFor, buildProvenanceNotice,
+  // v2 자동층
+  repoKeyFor, autoLedgerFileFor, approvalEventsFileFor, validateSourceFile, resolveAnchor, excerptShaOf, subjectKeyOf,
+  readAutoLedger, appendAutoRecords, reduceAutoEntries, reduceAutoCandidates, registerAutoEntries,
+  appendTombstone, retractTombstone, mergedEntriesFor,
+  harvestFromResolvedFinding, intentPolicyRefFor, harvestFromIntentChoices,
+  recordApprovalWithStamp, appendApprovalEvent, harvestFromApprovals,
 };

@@ -3930,7 +3930,14 @@ class Dashboard {
             let ev2: any = null;
             try { const CL9: any = require(path.join(BRIDGE_DIR, "contract-lib.js")); ev2 = typeof CL9.readVerifyEnvelope === "function" ? CL9.readVerifyEnvelope(tgtNow) : null; } catch { ev2 = null; }
             if (!ev2 || ev2.st !== "ok" || ev2.sha1 !== shaAt) { vscode.window.showWarningMessage(en9 ? "The rulebook changed while approving — not approved. Please review again." : "승인하는 사이 수칙서 파일이 바뀌어 승인하지 않았습니다 — 내용을 다시 확인해 주세요."); this.post(); return; }
-            if (patchContractExt(wsE, apLang, { envelopeHash: shaAt })) vscode.window.showInformationMessage(en9 ? "Rulebook approved — applies from the next verification." : "수칙서 승인됨 — 다음 검증부터 적용됩니다.");
+            // [경위 v2 생산자 결속] 승인 사건과 도장을 '같은 잠금 구간'에서 선기록→도장(설계 V2-2 원자
+            // 결속 — 잠금 밖 인터리빙으로 사건·도장이 갈라지는 창 제거). 선기록 실패=도장 진행 금지,
+            // 도장 실패=사건 잔존(계약의 도장 지문 불일치=수확 미자격이 미완 표지). sourceRefs는 현재
+            // 비어 후보 대기(자동 등재는 sourceRefs 결속 사건만 — 점진 보급 구조).
+            let bind9: any = null;
+            try { const MPV9: any = require(path.join(BRIDGE_DIR, "map-provenance.js")); bind9 = MPV9.recordApprovalWithStamp(tgtNow, { envelopeHash: shaAt, sourceRefs: [] }, () => patchContractExt(wsE, apLang, { envelopeHash: shaAt })); } catch { bind9 = null; }
+            if (!bind9 || !bind9.recorded) { vscode.window.showWarningMessage(en9 ? "Failed to record the approval event — approval aborted (no stamp written)." : "승인 사건 기록에 실패해 승인을 중단했어요(도장 미기록 — 다시 시도해 주세요)."); this.post(); return; }
+            if (bind9.stamped) vscode.window.showInformationMessage(en9 ? "Rulebook approved — applies from the next verification." : "수칙서 승인됨 — 다음 검증부터 적용됩니다.");
             else vscode.window.showWarningMessage(en9 ? "Failed to store the approval — please try again." : "승인 기록 저장에 실패했어요 — 잠시 후 다시 시도해 주세요.");
             this.post();
           });
@@ -4007,8 +4014,11 @@ class Dashboard {
             let pr2: any = null;
             try { pr2 = CLA.readEnvelopeProposal(wsA, tgtA); } catch { pr2 = null; }
             if (!pr2 || pr2.st !== "ok" || pr2.newHash !== hashAt) { vscode.window.showWarningMessage(enA ? "The draft changed while approving — not applied. Please review again." : "승인하는 사이 초안이 바뀌어 적용하지 않았습니다 — 다시 확인해 주세요."); this.post(); return; }
-            let tr: any = null;
-            try { tr = CLA.applyEnvelopeTransition(wsA, tgtA, apL, null); } catch { tr = null; }
+            // [경위 v2] 개정 승인 경로도 사건·도장을 같은 잠금 구간에서 선기록→도장(직접 경로 동형 —
+            // 선기록 실패=중단·도장 실패=사건 잔존). sourceRefs 빈 배열=후보 대기.
+            let bindA: any = null; let tr: any = null;
+            try { const MPVA: any = require(path.join(BRIDGE_DIR, "map-provenance.js")); bindA = MPVA.recordApprovalWithStamp(tgtNow2, { envelopeHash: hashAt, sourceRefs: [] }, () => { try { tr = CLA.applyEnvelopeTransition(wsA, tgtA, apL, null); } catch { tr = null; } return !!(tr && tr.ok); }); } catch { bindA = null; }
+            if (!bindA || !bindA.recorded) { vscode.window.showWarningMessage(enA ? "Failed to record the approval event — stamp aborted (nothing applied)." : "승인 사건 기록에 실패해 도장을 중단했어요(아무것도 적용되지 않음 — 다시 시도해 주세요)."); this.post(); return; }
             if (tr && tr.ok) vscode.window.showInformationMessage(enA ? "Draft stamped — the revised rulebook applies from the next verification." : "초안 도장 완료 — 개정 수칙서가 다음 검증부터 적용됩니다.");
             else vscode.window.showWarningMessage((enA ? "Transition failed: " : "전이 실패: ") + ((tr && tr.reason) || "unknown") + (enA ? " — nothing is half-applied (the WAL/lock keeps it recoverable); try again or press Recover." : " — 반쯤 적용된 상태는 없습니다(기록·잠금이 복구를 보장). 다시 시도하거나 '전이 복구'를 눌러 주세요."));
             this.post();

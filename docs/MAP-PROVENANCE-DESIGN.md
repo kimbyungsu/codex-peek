@@ -93,3 +93,126 @@
   반례의 정방향 재현) · 교집합 0=매칭 없음(무관 동봉 0).
 - why CLI: 매칭/0건 양쪽 영수증이 provenance-usage.jsonl에만 기록(attach.jsonl 바이트 무변경 —
   대시보드 '실린 기억' 카드 무회귀 시험) · 2트랙(scoutMode off)에선 색인 검색만(지도 부품 미접촉).
+
+## v2 — 등재 자동화 설계 (2026-08-19 사용자 결정 · 초안 v1)
+
+### V2-0. 목적·권위 경계 (3왕복 검증으로 확정된 문장)
+v1의 '사람만 등재'는 수칙서(판정 권위 — ab-3 도장 불가침) 관용구의 과적용이었다. 확정 경계:
+**금지되는 것은 수칙서의 자동 권위 승격과 정책 op의 자동 생성뿐이다.** confirmed subgraph는
+권위 입력이지만 검증 계보를 갖춘 비정책 변경은 자동 적용된다(v12 ⓒ). 경위 색인은 정책 op가
+아닌 **비차단 참고 뷰**이므로, 아래 무결성 4조건을 갖추면 자동 등재가 자동화 철학(7/24)과
+정합한다. 사람 몫은 등재가 아니라 **거부·정정권**이다.
+
+### V2-1. 항목 형태 개정 — 재서술 폐지·원문 발췌
+- v1의 `결정:`(요지 재서술 — 자동화 시 자동 작문이 되는 지점) 폐지. 항목의 본문은
+  **정본 원문 발췌(excerpt)** 바이트 그대로(작문 0 — 벤치 정직성 원칙과 동형).
+- 항목 스키마(자동층): `{id, subjectKey, gen(정수 — 같은 subjectKey 재등재마다 +1), ts(등재 시각 —
+  reducer 동률 비교키), title, source{file, anchor, excerptSha}, excerpt(표시용 절단), keywords,
+  origin{eventKind, eventRef, repoKey, registeredAt}}` (R4 blocker③: reducer가 비교하는 gen·ts를
+  최상위 명시 필드로 — origin.registeredAt은 감사용).
+- tombstone 전체 스키마: `{kind:"tombstone", tombstoneId(고유), subjectKey, scope:"event"|"subject",
+  eventRef(scope=event면 필수·subject면 생략), gen?(scope=event에서 특정 세대만 겨냥할 때), ts}` —
+  유효성: scope=event인데 eventRef 부재=무효, 철회는 targetTombstoneId 실존 대조.
+  **subjectKey = sha1(정규화 file + "#" + anchor)** — '같은 결정'의 정체성은 정본 구간이며,
+  eventRef(어느 사건이 등재했나)와 분리한다(설계검증 R1 blocker④: 중복·가림·tombstone 범위의
+  판정 기준). 같은 subjectKey의 재등재=새 세대(gen 증가)로 기록.
+- `찾는말` 수작업 의존 해소 — **안전 원천 한정(R1 blocker② ab-7)**: keywords = 발췌 토큰(정본
+  공개 문서) + 사건의 **구조 필드**(finding 제목·정책 predicateDescription 등 — 이미 평문 계약이
+  있는 필드만). **질의 원문 토큰은 금지** — v1 영수증 계약(질의=지문+길이만)과 동일한 이유로,
+  질의에 실릴 수 있는 비밀값·개인정보가 자동 장부에 평문 잔존하는 경로를 열지 않는다. 사람 추가 가능.
+
+### V2-2. 등재 원천 — 하네스가 관측 가능한 '검증 계보 있는 사건'만
+**sourceRefs 파일 안전 경계(R3 blocker③ ab-7)**: file은 repo 상대 경로만 — 절대경로·`..` 거부,
+realpath가 repo 내부임을 확인(containment), 민감 경로(.env·credentials·token·키 파일 등)는 기존
+외부 전송 발췌 계층(enrich-providers)의 제외 규칙을 **공용 함수로 추출해 양쪽이 같은 정의를
+참조**(복사 금지 — R4 보완: 규칙 이원화 드리프트 차단)한다(발췌가 장부·동봉으로 복제되는
+경로이므로 v1 질의 지문화와 같은 급의 경계).
+
+**저장소 정체성 결속(R4 blocker② ab-1)**: 모든 생산자 사건 레코드와 sourceRefs에는 **기록 시점의
+정규 저장소 키(repoKey=wsKeyFor(realpath(repo)))**를 함께 저장한다 — 수확기는 클릭·수확 시점의
+현재 대상이 아니라 **사건에 저장된 repoKey**로 파티션을 정하고 containment를 재검증한다(사건 기록
+후 대상 저장소가 바뀐 채 재시작해도 오귀속 없음 — repoKey 불일치=자격 없음·후보 대기).
+
+**전제(R1 blocker① — 생산자 결속이 1단계)**: 현행 사건 레코드는 file+anchor를 보유하지 않는다
+(fix-fact=자유서식 note·수칙서 승인=envelopeHash만·intent-choice=patchCanonical만). 따라서 수확기
+이전에 **각 생산자에 `sourceRefs: [{file, anchor, contentHash}]` 선택 필드를 결속**하는 확장이
+선행돼야 하며, 자동 등재는 sourceRefs 보유 사건만 대상이다(휴리스틱 경로 추측 금지 — 결정론).
+
+| 사건 | 생산자 확장(1단계) | 자동 등재 내용 | 계보 증명 |
+|---|---|---|---|
+| 수칙서 승인 도장(사용자 선택) | 승인 기록에 candidateId·askId·원 finding 참조+sourceRefs 보존(현행 envelopeHash 단독에서 확장) | 승격 규칙의 정본 구간 발췌 | 승인 지문+askId |
+| 캠페인 blocker 해소(fix-fact 종결) | fix-fact 처분에 구조 필드 sourceRefs(선택 — CLI 인자) 추가 | 판단이 가리키는 정본 구간 발췌 | finding id+해소 라운드 |
+| MAP intent-choice 선택 레코드 | patchCanonical→정책 파일 경로+결정 필드의 결정론 locator 어댑터 | 선택된 정책 뜻의 정본 구간 | cardId+decision |
+- **구간 결속 정의(R2 blocker①·R3 blocker① 반영)**: anchor 정규 형식=`heading:<정확한 헤딩 원문>`
+  (md — **문서 내 그 헤딩이 유일할 때만 유효**·중복 시 `heading:<원문>#<k>`(k번째 출현·1부터)로만
+  결속 가능) 또는 `lines:<시작>-<끝>`(비-md — **끝줄 포함(inclusive)·각 줄의 개행 바이트 포함**,
+  마지막 줄 무개행이면 그대로). contentHash=**그 anchor가 해석하는 구간의 바이트 그대로 sha1** —
+  자동층 excerptSha는 그 구간의 앞 N자(발췌 상한) 해시가 아니라 **contentHash와 동일 값**(발췌는
+  표시용 절단, 지문은 구간 전체 — 표시 절단이 지문을 바꾸면 안 됨).
+- **수확 자격(유효 완료 사건만 — R2 blocker①·R3 blocker①·R4 blocker①)**: ⓐfix-fact는 close(resolved)
+  조인에 더해 **수확 시점에 그 finding의 최신 처분이 choice=fix-fact이고 dispositionValid(...)===true이며,
+  그 resolved close의 round가 같은 캠페인·승인 세대 안에서 finding의 최신 활동 라운드(occurrence·
+  asOfRound) 이상**이어야 한다(R4 실측 반례: 재등장 후 새 fix-fact가 유효해도 옛 round의 close와
+  조인되면 미해소 상태를 수확 — close가 최신 활동보다 앞서면 자격 없음·새 종결을 기다린다)
+  ⓑintent-choice는 **phase=done+applied decision 실존** 확인 후에만(chosen·stale·parked 제외)
+  ⓒ수칙서 승인은 **승인 사건 레코드 append를 도장(계약 저장)과 같은 잠금 구간에서 '선기록→도장'
+  순서로** 수행(선기록 후 도장 실패=사건 레코드에 미완 표지 잔존→수확기가 도장 실존(envelopeHash
+  일치) 확인 후에만 자격 인정 — 중간 종료의 허위 승인 사건·사건 없는 승인 분리 상태 양방 차단).
+  레코드={approvalTs, envelopeHash, candidateId?, askId?, repoKey, sourceRefs} — sourceRefs 각
+  항목에도 repoKey 명시(R5 park① — 축약 스키마 표기의 해석 여지 제거).
+- 스캔 후보(문서 헤딩 나열)는 **여전히 사람 판단** — 사건 계보가 없는 원천의 자동 등재 금지.
+- sourceRefs 없는 사건은 자동 등재하지 않고 후보 대기(사람 확정) — 초기에는 자동 등재가 드물고
+  생산자 확장이 보급될수록 늘어나는 점진 구조를 의도로 명시한다(공백≠결함).
+
+### V2-3. 지문 계약 — 자동 실효·새 사건 재수확 (드리프트 이슈의 해소 지점)
+- 조회·동봉 시 `excerptSha`를 정본 현재 구간과 대조: **불일치=자동 실효**(항목 보존·stale
+  마킹·동봉/매칭 제외·화면에 '정본이 바뀜' 표시).
+- **재수확은 새 지문에 결속된 '새 사건'(새 검증 통과·새 사용자 선택)이 생긴 뒤에만** —
+  옛 사건의 증명을 새 내용에 승계 금지(MAP confirmed→unknown 강등 계약 :364와 동형).
+- 정본 표기 엄격화: file+anchor 필수('기억 노트' 류 금지). 기존 v1 3항목은 마이그레이션 시
+  사람 재확정(느슨 표기 2건 포함).
+
+### V2-4. 저장 2층·사람 거부권
+- 자동층=기계 장부 — **위치·파티션(R2 blocker② ab-1·R5 park① 표기 정합)**: 브릿지 홈
+  `map-provenance/<repoKey>.jsonl`(repoKey=wsKeyFor(realpath(repo)) — V2-2 결속 키와 동일 정의) — subjectKey는 상대
+  file#anchor 해시라 **파티션 안에서만** 유일(전역 단일 장부 금지 — 타 프로젝트 동일 경로 오귀속
+  차단). 사람층=기존 DECISIONS.md 유지(repo tracked — 파일 충돌 원천 차단·ledger stable 2층 관용구).
+- **동시성·유계 계약(R1 blocker③ ab-5 — 경위 영수증·일지 관용구 재사용 확정)**: 모든 쓰기
+  (append·compaction)는 단일 엄격 잠금(withFileLockStrict+사망 잠금은 quarantine 격리 회수·활성
+  불가침·선회수 absent 재획득 — 경위 영수증과 동일 계보) 안에서 수행. 유계 compaction 시
+  **tombstone·사람 가림 관련 레코드는 절대 제거하지 않고**(활성 판독 보존 — 제거되면 거부 사건이
+  재등재됨), 잘리는 원시줄은 일지 트림 아카이브 관용구(별도 archive 파일·2단 커밋·재작성 증표)를
+  재사용해 무손실 보존한다('검토'가 아니라 확정). **유계와 보존의 양립(R2 blocker③ — 기존 일지
+  관용구 :2939와 동형)**: compaction은 '활성 의미 상태'(subject별 최신 유효 세대·유효 tombstone·
+  철회·가림 참조)를 compact snapshot으로 항상 본문에 보존하고, 그 수가 상한을 넘는 극단에선
+  **상한 예외**(의미 보존 우선 — 파일은 사람 결정 속도로만 성장). archive는 콜드 저장소(판독기
+  미접촉)이므로 활성 판정에 필요한 상태는 본문 snapshot이 담당한다.
+- **병합 reducer(R1 blocker④+R2 blocker④ — append 순서 무관 결정론·5단 완결)**: subjectKey별로
+  ①철회 대조 — tombstone은 발급 시 **고유 tombstoneId**를 가지며(같은 사건 중복 거부도 각자 id),
+  철회 레코드 `{kind:"tombstone-retract", subjectKey, targetTombstoneId, ts}`가 그 id를 무효화
+  (R3 blocker②: eventRef 참조는 subject tombstone(대응 사건 없음)·중복 거부에서 다의적 — id 결속·
+  중복 철회=멱등)
+  ②유효 subject tombstone 존재=자동층 전체 억제(사람 항목은 불변)
+  ③유효 event tombstone은 그 eventRef의 세대만 후보 집합에서 제거(같은 결정의 다른 사건은 허용)
+  ④남은 자동 세대 중 fresh(지문 일치) 최신 gen 선택 — 없으면 최신 stale을 'stale 표시'로만
+  ⑤사람 정정 항목(DECISIONS.md `가림: <subjectKey>` 선택 줄) 존재=자동 결과 대신 사람 항목.
+  모든 단계의 비교 키: **gen은 수치 비교**(사전순 금지 — gen=10이 2보다 앞서는 R3 반례), 동률은
+  (subjectKey, eventRef, ts) 사전순 tie-break — append 순서와 무관한 유일 결과.
+- 대시보드 MAP 패널에 자동 등재분 목록+거부(scope 선택)·철회 버튼(비모달).
+
+### V2-5. 검수 기준
+- 실행 시험: 사건→자동 등재 왕복 / 지문 불일치=실효·매칭 제외 / 실효 후 옛 계보 재수확 거부·
+  새 사건 후 재수확 허용 / tombstone scope 2종(event=그 사건만·subject=후속 사건까지) 억제·철회 /
+  병합 reducer 결정론(append 순서 뒤섞기 반례) / keywords에 질의 토큰 부재(ab-7 핀) / 동시 쓰기
+  잠금·사망 회수·compaction의 tombstone 보존 / 민감 경로 공용 판정기 배선(비공개→export)+경로 탈출
+  반례(절대경로·`..`·.env류·**symlink/junction으로 repo 밖을 가리키는 경로의 realpath containment 거부**)
+  / **과거 close 재사용 반례**(old close.round<최신 활동=거부·새 close=허용 — R4 실행 반례의 정방향)
+  / repoKey 불일치=후보 대기 / v1 무회귀(md 항목·매칭·영수증·동봉 전부). 체인 EXIT=0.
+- 무게 상한: 자동층 장부는 **soft cap**(활성 의미 상태가 상한 초과 시 보존 우선 예외 — V2-4와 문구
+  정합·R3 보완 반영) · compaction 시 원시줄=트림 아카이브 관용구로 무손실 보존(확정).
+
+### V2-6. 구현 순서(승인 후)
+1) 생산자 sourceRefs 결속 3종(수칙서 승인 기록 확장·fix-fact 구조 필드·intent-choice locator) →
+2) 스키마·파서(자동층 장부+subjectKey+병합 reducer) → 3) 지문 대조·실효·재수확 게이트 →
+4) 수확기(사건→등재) 배선 → 5) tombstone·대시보드 표면 → 6) v1 마이그레이션(사람 재확정) →
+7) 시험·체인.

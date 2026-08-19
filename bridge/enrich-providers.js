@@ -269,4 +269,4 @@ function askVerifierResolution(req) {
   } finally { try { fs.rmSync(tmpCwd, { recursive: true, force: true }); } catch { /* 무해 */ } }
 }
 
-module.exports = { ENRICH_ADAPTERS, buildEnrichPrompt, excerptFilesFor, excerptBodyFor, parseResult, askVerifierResolution, sliceTopology, SELF_DENY, FILE_EXCERPT_MAX, FILES_MAX, SLICE_NODES_MAX, SLICE_EDGES_MAX, NODE_ANCHORS_MAX, TOPO_CHARS_MAX, EXCERPT_PATH_MAX };
+module.exports = { isSensitiveEnrichPath, ENRICH_ADAPTERS, buildEnrichPrompt, excerptFilesFor, excerptBodyFor, parseResult, askVerifierResolution, sliceTopology, SELF_DENY, FILE_EXCERPT_MAX, FILES_MAX, SLICE_NODES_MAX, SLICE_EDGES_MAX, NODE_ANCHORS_MAX, TOPO_CHARS_MAX, EXCERPT_PATH_MAX };

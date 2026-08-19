@@ -1509,6 +1509,7 @@ module.exports = {
   retryDelegation,
   sweepIntentAuto,
   semanticFpOf, payloadHintOf, decisionAutomationSummary,
+  readConflictChoices, completedConflictDecisionFor, // [경위 v2] 수확기 자격 검사(phase=done+정책 파일 일치) 판독 전용
   recoveryCandidatesFor,
   recoveryPlanFileFor,
   readRecoveryPlan,
