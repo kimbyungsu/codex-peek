@@ -18,5 +18,6 @@ for (const name of fs.readdirSync(path.join(ROOT, "docs"))) {
 if (require.main === module) {
   console.log("결정 표지 후보 " + rows.length + "건 — 색인 등재는 docs/DECISIONS.md에 사람이 확정:");
   for (const r of rows) console.log("  " + r);
+  console.log("등재 문체(§1): '결정'은 겪은 상황부터 — \"무슨 일이 있었고 → 그래서 무엇을 정했다\"를 기술용어 없이 상황예시로. 코드 식별자는 '정본' 줄에만.");
 }
 module.exports = { scan: () => rows };
