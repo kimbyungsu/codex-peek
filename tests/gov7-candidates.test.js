@@ -337,7 +337,17 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
 {
   const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
   // [기억 권위 A-4 2026-08-14] 해소 blocker 채택=병합 초안 생성 — '기록만' 문구 계약을 '도장 전 무효력' 계약으로 개정.
-  ok(ext.includes("computeEnvelopeCandidatesFor(ws)") && ext.includes("수칙서 후보 — 판단 대기(기록 또는 병합 초안 생성"), "후보 목록=소진 보고와 같은 집계 공유+도장 전 무효력 명시(§8·기억 권위 A-4)");
+  // [UX 개편 2026-08-20 사용자 실보고] 헤더 문구를 쉬운 말+건수 표기로 재개정(도장 전 무효력 문구는 유지가 계약).
+  ok(ext.includes("computeEnvelopeCandidatesFor(ws)") && ext.includes("수칙서 후보 — 사람 판단 대기 ") && ext.includes("어느 쪽도 도장 전에는 효력 없음"), "후보 목록=소진 보고와 같은 집계 공유+도장 전 무효력 명시(§8·기억 권위 A-4·UX 개편)");
+  // UX 개편 핀: 상황 설명 조립(구조 데이터)·쉬운 버튼 라벨·원문 보조 보존·개요 벨(합산+gotoEl 딥링크)·MAP 할일/실적 분리
+  ok(ext.includes('T("수칙서 초안 만들기"') && ext.includes('T("이번엔 안 올림"') && ext.includes('T("원문: "'), "후보 줄=쉬운 버튼 라벨+원문 보조 보존(요약 작문 금지)");
+  ok(ext.includes('data-cands-box') && /ec0\) acts9\.push\(\{n:ec0, tab:"setup", el:"\[data-cands-box\]"/.test(ext), "개요 '지금 정할 것'에 후보 대기 편입+정확 위치 딥링크(초인종)");
+  // R1 blocker①(2026-08-20): 장부 유래 후보의 대기 상태='proposed' — 빈 상태와 함께 '미판단'으로 취급해야
+  // 버튼·벨이 산다(빈 상태만 세면 resolved-blocker 후보 전체가 버튼 없이 [proposed] 라벨로만 렌더되는 오작동).
+  ok(ext.includes('var undecided9=!cd.status||cd.status==="proposed";') && ext.includes("if(undecided9){ if(cd.kind"), "proposed=판단 대기 — 버튼 렌더 조건");
+  ok(ext.includes('return !c9.status||c9.status==="proposed";'), "proposed=판단 대기 — 개요 벨 계수 조건");
+  ok(/if\(a9\.el\)\{ var t0=document\.querySelector\(a9\.el\); if\(t0\)\{ gotoEl\(t0\); return; \} \}/.test(ext), "교차 패널 이동=gotoEl 경유(규칙)+대상 부재 시 탭 폴백");
+  ok(ext.includes("자동으로 끝난 일(참고 — 하실 일 아님)") && ext.includes("지금 여기서 하실 일은 없습니다"), "MAP 구획=할 일/끝난 일 시각 분리(실적을 대기로 오독하는 흐름 봉합)");
   // draft는 제안본 생성일 뿐 전이(도장)가 아님 — candMark 경로에 applyEnvelopeTransition 부재 계약은 유지.
   ok(ext.includes('m?.type === "candMark"') && ext.includes('note: "dashboard-record"') && !/candMark[\s\S]{0,2400}applyEnvelopeTransition/.test(ext.slice(ext.indexOf('m?.type === "candMark"'))), "채택 경로에 승인 전이 발동 없음(초안 생성까지만 — 효력은 도장부터·§7 개정 계약)");
   ok(ext.includes('m.status === "adopted" || m.status === "declined"') && ext.includes("/^[0-9a-f]{16}$/.test(m.id)"), "기록 인자 strict(16hex·상태 2종만)");

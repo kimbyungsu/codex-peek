@@ -1104,7 +1104,7 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
         }
       }
     } catch { adm9 = ""; }
-    let cands9: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string }> | undefined;
+    let cands9: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string }> | undefined;
     try { // §7 증분 3 — 수칙서 후보(판단 대기) 목록: 소진 보고와 같은 집계(codex-bridge 설치본)를 공유. 버튼=기록만(작업 발동 금지 계약)
       const CB9: any = require(path.join(BRIDGE_DIR, "codex-bridge.js"));
       // [기억 권위 A-3] 조정 트리거 ②대시보드 로드 — 해소 blocker 계보→후보 멱등 스캔(중단 복구: 마지막 판정 후 종료돼도 화면 열람이 회수)
@@ -1116,7 +1116,7 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
         if ((cc9.gen || null) === (hash9 || null)) {
           const lat9 = typeof CL9.readEnvelopeCandidates === "function" ? CL9.readEnvelopeCandidates(ws).latest : new Map();
           // [기억 권위 A-5] 절단 없이 전량 전달 — 표시 공정성(웹뷰가 8건+'더 보기'로 렌더·화면 절단은 표시 제한일 뿐이라는 1차 구현검증 blocker④ 봉합)
-          cands9 = (cc9.live || []).map((c: any) => ({ id: c.candidateId, kind: c.kind, n: c.n, title: (c.titles && c.titles[0]) || "", status: (lat9.get(c.candidateId + "@" + String(hash9 || "")) || {}).status || "", gen: cc9.gen || "", wsKey: typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : "" })); // wsKey=원본 프로젝트 내구 키(재재검증 ab-1 — 같은 수칙서 해시를 쓰는 타 프로젝트 장부 오귀속 차단)
+          cands9 = (cc9.live || []).map((c: any) => ({ id: c.candidateId, kind: c.kind, n: c.n, title: (c.titles && c.titles[0]) || "", status: (lat9.get(c.candidateId + "@" + String(hash9 || "")) || {}).status || "", gen: cc9.gen || "", wsKey: typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : "", ts: String(c.ts || "") })); // wsKey=원본 프로젝트 내구 키(재재검증 ab-1 — 같은 수칙서 해시를 쓰는 타 프로젝트 장부 오귀속 차단)
           if (cands9 && !cands9.length) cands9 = undefined;
         }
       }
@@ -6167,6 +6167,10 @@ class Dashboard {
       ?T("자동 보강 멈춤 — 담당 준비 점검이 필요해요","auto-enrichment stalled — the provider needs a readiness check")
       :T("자동 보강 멈춤 — 사람 조치로만 재개돼요(다시 시도 등 · 재호출은 사용량 소모)","auto-enrichment stalled — only human action resumes it (e.g. retry · a re-call uses quota)")});
     if(d.envelope&&d.envelope.btn) acts9.push({n:1, tab:"setup", label:T("검증 경계(수칙서) 승인 대기","verify-envelope approval pending")});
+    // [초인종 2026-08-20 사용자 실보고] 수칙서 후보(판단 대기)가 검증 설정 탭 안에만 있어 존재를 알 길이
+    // 없었음 — 개요 합산에 편입+해당 위치로 이동(el=교차 패널 스크롤은 gotoEl 경유 규칙).
+    var ec0=d.envelope&&d.envelope.cands?d.envelope.cands.filter(function(c9){return !c9.status||c9.status==="proposed";}).length:0; // proposed=장부 유래 후보의 '판단 대기' 상태(R1 blocker①)
+    if(ec0) acts9.push({n:ec0, tab:"setup", el:"[data-cands-box]", label:T("수칙서 후보 — 올릴지 판단 대기(효력은 도장부터)","rulebook candidates awaiting your call (effect only after stamp)")});
     return acts9;
   }
   function renderOverview(d){
@@ -6194,7 +6198,10 @@ class Dashboard {
       acts9.forEach(function(a9){
         var row9=el("div","ovact"); var btn9=document.createElement("button"); btn9.type="button"; btn9.className="secondary";
         btn9.textContent=a9.n+" · "+a9.label+(a9.tab?" →":"");
-        if(a9.tab) btn9.addEventListener("click", function(){ var b9=document.querySelector('.tabbtn[data-tab="'+a9.tab+'"]'); if(b9) b9.click(); });
+        if(a9.tab) btn9.addEventListener("click", function(){
+          if(a9.el){ var t0=document.querySelector(a9.el); if(t0){ gotoEl(t0); return; } } // 대상 실존 시 정확 위치로(gotoEl=담는 패널 활성화+스크롤) — 부재면 탭 폴백
+          var b9=document.querySelector('.tabbtn[data-tab="'+a9.tab+'"]'); if(b9) b9.click();
+        });
         row9.appendChild(btn9); listBox9.appendChild(row9);
       });
       // 기한 없는 보관함 잔여 — 합산 제외 '여유' 줄(눌러서 보관함으로 이동만). 급한 일과 시각적으로 구분.
@@ -7016,19 +7023,30 @@ class Dashboard {
         var act2T=e9.proposal==="pending"?"proposalShow":"envelopeShow";
         if(e9.btn){ var ab=document.createElement("button"); ab.style.cssText="margin-top:4px;font-weight:700"; ab.textContent=e9.btn; ab.addEventListener("click", function(){ vscode.postMessage({type:actT, repo: e9.repo, lang: e9.lang}); }); ec.appendChild(ab); }
         if(e9.btn2){ var vb2=document.createElement("button"); vb2.style.cssText="margin-top:4px;margin-left:4px"; vb2.textContent=e9.btn2; vb2.addEventListener("click", function(){ vscode.postMessage({type:act2T, repo: e9.repo, lang: e9.lang}); }); ec.appendChild(vb2); }
-        if(e9.cands && e9.cands.length){ // §7 증분 3 — 수칙서 후보(판단 대기): 버튼은 '기록만'(반영은 대화에서·효력은 도장부터)
-          var ch9=document.createElement("div"); ch9.style.cssText="margin-top:6px;font-weight:600"; ch9.textContent=T("수칙서 후보 — 판단 대기(기록 또는 병합 초안 생성 — 어느 쪽도 도장 전에는 효력 없음)","Rulebook candidates — awaiting judgment (record or create a merge draft; neither takes effect before the stamp)"); ec.appendChild(ch9); // [기억 권위 A-4] 해소 blocker 채택=병합 초안 생성이라 '기록만' 문구는 부정확(구현 2차 [보완])
+        if(e9.cands && e9.cands.length){ // §7 증분 3+2026-08-20 UX 개편 — 수칙서 후보: 상황 설명 조립(구조 데이터)·쉬운 버튼·원문은 보조 보존(요약 작문 금지 — 오염 방지)
+          var ch9=document.createElement("div"); ch9.style.cssText="margin-top:8px;font-weight:600"; ch9.setAttribute("data-cands-box","1"); ch9.textContent=T("수칙서 후보 — 사람 판단 대기 "+e9.cands.length+"건(기록 또는 병합 초안 생성 — 어느 쪽도 도장 전에는 효력 없음)","Rulebook candidates — awaiting your call ("+e9.cands.length+") (record or create a merge draft; neither takes effect before the stamp)"); ec.appendChild(ch9); // [기억 권위 A-4] 채택=초안 생성·효력은 도장부터(§8 계약 유지)
+          var chSub9=document.createElement("div"); chSub9.className="muted"; chSub9.style.cssText="font-size:11px;margin-top:2px";
+          chSub9.textContent=T("검증에서 잡혀 이미 고친 실수들이에요. 올리면 앞으로 같은 실수를 항상 차단하는 규칙 초안이 만들어지고, 도장을 찍어야만 실제로 적용됩니다.","These were caught and fixed in past verifications. Adopting drafts a rule that always blocks the same mistake; it only applies after you stamp it."); ec.appendChild(chSub9);
           var more9=null; // [기억 권위 A-5] 8건 초과=접힘 — '더 보기'로 전량 접근(절단은 표시 제한일 뿐이라는 blocker④ 봉합)
           e9.cands.forEach(function(cd, ix9){
-            var row9=document.createElement("div"); row9.style.cssText="font-size:11px;margin-top:2px";
-            var kl9=cd.kind==="oos-repeat"?T("치워둔 항목이 반복 등장","waived scenario keeps appearing"):cd.kind==="escalation"?T("한 번 봐준 항목","one-time expanded item"):cd.kind==="unused-oos"?T("이 세대에서 발동 0회 — 빼기 검토","never triggered — consider removal"):cd.kind==="resolved-blocker"?T("해소된 차단 지적 — 상시 제약 후보","resolved blocker — standing-constraint candidate"):T("같은 지적 계보 반복","repeated finding lineage");
-            row9.textContent=(cd.status?"["+cd.status+"] ":"")+kl9+(cd.n&&cd.kind!=="resolved-blocker"?" ×"+cd.n:"")+(cd.title?" — "+cd.title:"");
-            var mb9=function(lab,st){ var b9=document.createElement("button"); b9.style.cssText="margin-left:4px;font-size:10px"; b9.textContent=lab; b9.onclick=function(){ vscode.postMessage({type:"candMark", id: cd.id, kind: cd.kind, status: st, gen: cd.gen, wsKey: cd.wsKey, lang: e9.lang}); }; row9.appendChild(b9); };
-            if(!cd.status){ if(cd.kind==="resolved-blocker"){ mb9(T("채택 → 병합 초안","adopt → merge draft"),"adopted"); mb9(T("거절 기록","record: decline"),"declined"); } else { mb9(T("채택 기록","record: adopt"),"adopted"); mb9(T("거절 기록","record: decline"),"declined"); } }
+            var row9=document.createElement("div"); row9.style.cssText="font-size:12px;margin-top:7px;padding:6px 8px;border-radius:5px;background:var(--vscode-editorWidget-background)";
+            var when9=""; if(cd.ts){ var dt9=new Date(cd.ts); if(!isNaN(dt9.getTime())) when9=(dt9.getMonth()+1)+"/"+dt9.getDate(); }
+            var kl9=cd.kind==="oos-repeat"?T("'범위 밖'으로 치워둔 시나리오가 "+(cd.n||2)+"번 다시 나왔어요 — 계속 치워둘지 재검토","a waived scenario reappeared "+(cd.n||2)+" times — reconsider waiving it")
+              :cd.kind==="escalation"?T("심사에서 한 번 넓혀 봐준 항목이에요 — 정식으로 지킬 범위에 넣을지","an item expanded once during admission — consider adopting it formally")
+              :cd.kind==="unused-oos"?T("이번 승인 이후 한 번도 안 쓰인 예외예요 — 빼거나 합칠지","an exception never used since this approval — consider removing/merging")
+              :cd.kind==="resolved-blocker"?T((when9?when9+" 검증에서 ":"검증에서 ")+"잡혀 이미 고친 실수예요 — 올리면 앞으로 같은 실수를 항상 차단해요",(when9?"caught in the "+when9+" verification":"caught in a verification")+" and already fixed — adopt to always block this mistake")
+              :T("같은 실수가 "+(cd.n||2)+"번 반복됐어요 — 항상 차단할지","the same mistake repeated "+(cd.n||2)+" times — consider always blocking");
+            // R1 blocker①: 장부 유래 후보(resolved-blocker)의 대기 상태값은 'proposed' — 빈 문자열과 함께
+            // '아직 판단 안 됨'으로 취급해야 버튼·벨이 산다(§7 기계 집계 후보는 상태가 비어 있음 — 두 원천 통일).
+            var undecided9=!cd.status||cd.status==="proposed";
+            var sit9=document.createElement("div"); sit9.textContent=(undecided9?"":"["+(cd.status==="adopted"?T("채택됨","adopted"):cd.status==="declined"?T("안 올림","declined"):cd.status)+"] ")+kl9; row9.appendChild(sit9);
+            if(cd.title){ var org9=document.createElement("div"); org9.className="muted"; org9.style.cssText="font-size:11px;margin-top:2px"; org9.textContent=T("원문: ","original: ")+cd.title; org9.title=cd.title; row9.appendChild(org9); }
+            var mb9=function(lab,st,strong){ var b9=document.createElement("button"); b9.style.cssText="margin-top:5px;margin-right:5px;font-size:12px"+(strong?";font-weight:600":""); if(!strong)b9.className="secondary"; b9.textContent=lab; b9.onclick=function(){ vscode.postMessage({type:"candMark", id: cd.id, kind: cd.kind, status: st, gen: cd.gen, wsKey: cd.wsKey, lang: e9.lang}); }; row9.appendChild(b9); };
+            if(undecided9){ if(cd.kind==="resolved-blocker"){ mb9(T("수칙서 초안 만들기","Draft into rulebook"),"adopted",true); mb9(T("이번엔 안 올림","Not this time"),"declined"); } else { mb9(T("올리기로 기록","Record: adopt"),"adopted",true); mb9(T("안 올림 기록","Record: decline"),"declined"); } }
             if(ix9>=8){ row9.style.display="none"; row9.setAttribute("data-candmore","1"); more9=more9||0; more9++; }
             ec.appendChild(row9);
           });
-          if(more9){ var mt9=document.createElement("button"); mt9.style.cssText="margin-top:3px;font-size:10px"; mt9.textContent=T("더 보기 (+"+more9+")","Show more (+"+more9+")"); mt9.onclick=function(){ ec.querySelectorAll("[data-candmore]").forEach(function(el){ el.style.display=""; }); mt9.remove(); }; ec.appendChild(mt9); }
+          if(more9){ var mt9=document.createElement("button"); mt9.style.cssText="margin-top:5px;font-size:12px"; mt9.className="secondary"; mt9.textContent=T("더 보기 (+"+more9+")","Show more (+"+more9+")"); mt9.onclick=function(){ ec.querySelectorAll("[data-candmore]").forEach(function(el){ el.style.display=""; }); mt9.remove(); }; ec.appendChild(mt9); }
         }
       });
       safe(function(){ var n=$("vBudgetNote"); if(!n) return;
@@ -7296,6 +7314,10 @@ class Dashboard {
         const head=document.createElement("div"); head.className="sbhead"; head.textContent=T("Project MAP 대기 선택·복구","Project MAP choices & recovery"); ib.appendChild(head);
         const intro=document.createElement("div"); intro.className="muted"; intro.style.cssText="font-size:11px;margin-bottom:7px";
         intro.textContent=T("대부분은 검증·정책에 따라 자동으로 끝납니다. 여기에는 서로 반대인 정책처럼 사람의 뜻이 꼭 필요한 경우와 복구 작업만 남습니다.","Most work finishes automatically from verification and policy. Only cases that require your meaning—such as opposing policies—and recovery actions appear here."); ib.appendChild(intro);
+        // [할 일/끝난 일 분리 2026-08-20 사용자 실보고] '대기' 구획 안의 실적 숫자가 대기 항목처럼 읽힘 —
+        // 버튼 있는 항목(선택 카드·복구·보관 주의)이 0이면 "하실 일 없음"을 먼저 명시.
+        var actionable0=conflicts.length+((rv&&rv.needed)?1:0)+((attention&&(attention.parkedChoices||attention.parkedDelegations||attention.damaged))?1:0);
+        if(!actionable0){ var idle0=document.createElement("div"); idle0.style.cssText="font-size:11.5px;margin-bottom:6px;color:var(--vscode-charts-green,#89d185)"; idle0.textContent=T("✓ 지금 여기서 하실 일은 없습니다 — 아래는 참고 정보예요.","✓ Nothing for you to do here right now — the rest is reference info."); ib.appendChild(idle0); }
         const send=function(msg,btn){ if(intentBusyWeb) return; intentBusyWeb=true; ib.querySelectorAll("button").forEach(function(b){b.disabled=true;}); if(btn)btn.textContent=T("처리 중…","Working…"); vscode.postMessage(Object.assign({type:"intentAct",repo:iv.repo},msg)); };
         // [실적 표시 2026-08-17 사용자 결정] 사문화된 정책 카운터(최초 수립 경로 미제공 — 자동화 설계로
         // 카드 폐기) 대신 결정 장부의 '실제 자동 처리 실적'을 보여준다. 정책 수치는 정책이 생기면만 병기.
@@ -7303,7 +7325,7 @@ class Dashboard {
           const au=dv.automation||null;
           const ps=document.createElement("div"); ps.className="hint";
           ps.textContent=au
-            ?T("자동 반영 ","Auto-applied: ")+au.auto+T("건 · 검증 판정 반영 "," · verifier-resolved: ")+au.verifierResolved+T("건","")
+            ?T("✓ 자동으로 끝난 일(참고 — 하실 일 아님): 자동 반영 ","✓ Already finished automatically (reference — nothing to do): auto-applied ")+au.auto+T("건 · 검증 판정 반영 "," · verifier-resolved ")+au.verifierResolved+T("건","")
             :T("현재 재사용 정책 ","Reusable policies: ")+dv.policySummary.activeLeafCount+T("개 · 충돌을 정리해 교체한 정책 "," · conflict-resolving replacements: ")+dv.policySummary.supersedingLeafCount;
           if(au&&dv.policySummary&&dv.policySummary.activeLeafCount>0){
             ps.textContent+=T(" · 재사용 정책 "," · policies: ")+dv.policySummary.activeLeafCount+T("개(교체 ","(replacements ")+dv.policySummary.supersedingLeafCount+")";

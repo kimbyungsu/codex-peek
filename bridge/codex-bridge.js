@@ -2816,7 +2816,9 @@ function computeEnvelopeCandidatesFor(ws) {
   const gen = readFrozenEnvelope(ws);
   const rows = readFindingsLedger(ws).filter((r) => r.campaignId === camp && (r.envelopeHash || null) === (gen || null));
   const titleOf = new Map();
-  for (const r of rows) if (r.type === "finding" && r.findingId) titleOf.set(r.findingId, String(r.titleNorm || "").slice(0, 60));
+  // 원문 무절단(2026-08-20 UX 검증 blocker②): 집계 단계 60자 절단은 식별 정보를 영구 소실시킴 —
+  // 절단은 표시 지점(ask 재료 절)에서만. 원천 titleNorm은 기록 시 이미 유계.
+  for (const r of rows) if (r.type === "finding" && r.findingId) titleOf.set(r.findingId, String(r.titleNorm || ""));
   // §7 증분 3(실전 첫 발동의 교훈 2026-07-24): '이미 해소된 계보'는 후보에서 제외 — 반복됐어도 이번 캠페인에서
   // 수정 완료된 지적은 "앞으로 지킬 약속" 후보가 아니다. open 판정=현 세대 열린 지적 목록.
   const openIds9 = new Set();
@@ -2852,7 +2854,7 @@ function computeEnvelopeCandidatesFor(ws) {
     // 미인용=미발동으로 단정할 수 없어 제외(정직 한정 — 캐논 재료로만).
     try {
       const usedOos = new Set(readFindingsLedger(ws).filter((r) => r.type === "finding" && (r.envelopeHash || null) === (gen || null) && r.oosId).map((r) => r.oosId));
-      envForCleanup.data.outOfScope.forEach((txt, i) => { const id9 = "oos-" + (i + 1); if (!usedOos.has(id9)) cands.push({ candidateId: envelopeCandidateId("unused-oos", id9 + "@" + envForCleanup.sha1), kind: "unused-oos", key: id9, n: 0, titles: [String(txt).slice(0, 60)] }); });
+      envForCleanup.data.outOfScope.forEach((txt, i) => { const id9 = "oos-" + (i + 1); if (!usedOos.has(id9)) cands.push({ candidateId: envelopeCandidateId("unused-oos", id9 + "@" + envForCleanup.sha1), kind: "unused-oos", key: id9, n: 0, titles: [String(txt)] }); }); // 무절단(수칙서 항목은 승인 절삭 규칙상 이미 200자 유계)
     } catch { /* 원본 판독 실패=빼기 후보 생략(추가 후보는 유지) */ }
   }
   const { rows: candRows9, latest } = readEnvelopeCandidates(ws);
@@ -2868,7 +2870,7 @@ function computeEnvelopeCandidatesFor(ws) {
       if (rec.status !== "proposed" && rec.status !== "adopted") continue; // declined/failed는 아래 live 필터와 동일 취급
       if (seen5.has(rec.candidateId)) continue;
       seen5.add(rec.candidateId);
-      cands.push({ candidateId: rec.candidateId, kind: "resolved-blocker", key: rec.findingId || m5.findingId || "", n: 1, titles: [String(rec.title || m5.title || "")].filter(Boolean) });
+      cands.push({ candidateId: rec.candidateId, kind: "resolved-blocker", key: rec.findingId || m5.findingId || "", n: 1, titles: [String(rec.title || m5.title || "")].filter(Boolean), ts: String(rec.ts || "") }); // ts=제안 시각(대시보드 상황 설명 조립 재료 — 2026-08-20 UX 개편)
     }
   }
   let skipped = 0;
@@ -2893,7 +2895,7 @@ function envelopeCandidateNoticeFor(ws, lang, res, profile = "core") {
     if (overCap) L.push(en ? "> ⚠ the rulebook already holds 30+ items — prioritize removal/merge candidates over additions (§7 growth control)." : "> ⚠ 수칙서가 이미 30항목 이상 — 추가보다 빼기/병합 후보를 우선하라(§7 성장 억제).");
     if (!live.length) L.push(en ? "> no machine-aggregated candidate from this exhaustion. Any item parked by the implementer must still carry its real receipt in [Parked]." + (skipped ? ` (${skipped} previously declined/failed candidate(s) skipped this generation)` : "") : "> 이번 소진의 기계 집계로는 수칙서로 올릴 후보가 없습니다. 구현 담당이 보류한 항목은 [보관함 이관]에 실제 영수증과 별도로 밝혀야 합니다." + (skipped ? ` (이 승인 세대에서 이미 거절·실패한 후보 ${skipped}건 스킵)` : ""));
     else {
-      for (const c of live) L.push(`> ${c.candidateId} [${c.kind} ×${c.n}] ${kindLabel(c.kind)}${c.titles.length ? " — " + c.titles.join(" / ") : ""}`);
+      for (const c of live) L.push(`> ${c.candidateId} [${c.kind} ×${c.n}] ${kindLabel(c.kind)}${c.titles.length ? " — " + c.titles.map((t9) => String(t9).slice(0, 60)).join(" / ") : ""}`); // 절단은 이 표시 지점만(집계는 무절단 — 대시보드 원문 보존)
       if (skipped) L.push(en ? `> (${skipped} previously declined/failed candidate(s) skipped this generation)` : `> (이 승인 세대에서 이미 거절·실패한 후보 ${skipped}건 스킵)`);
       L.push(en
         ? "[duty] Write a 'rulebook candidates' section in the exhaustion report from the material above, per the global presentation contract (§8): no jargon · a concrete situation example per candidate · what changes if adopted / what stays if not · one-line recommendation with grounds · include a draft clause the user can approve as-is. Selection is confirmed via chat reply (a dashboard click may only record a selection); adoption still requires the user's stamp. Record outcomes with: envelope-candidate mark <id> <adopted|declined|failed>."
