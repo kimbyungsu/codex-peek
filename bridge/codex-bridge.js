@@ -1045,6 +1045,21 @@ function citedFilesUnseen(answer, ws, sessionId) {
   const r = citedFilesUnseenExact(answer, ws, sessionId);
   return r.checked ? { checked: true, unseen: (r.unseenWeak || r.unseen).map((p) => path.basename(p)) } : r;
 }
+// [반복 억제 술어 2026-08-21 — 순수 함수(시험이 직접 실행)] 같은 세션의 '미ack' 근거의심 경보가 이번
+// unseen 집합(basename)을 전부 덮고 있으면 재발행 억제. files 필드 없는 구형 이벤트=비교 불가라 억제 안 함
+// (보수적 — 위장 억제 금지). ack된 경보는 대상 아님(사용자가 확인한 뒤 재발생하면 새 경보가 정당).
+function shouldSuppressUnseenRepeat(events, implVal, wsVal, unseenBasenames) {
+  const want = (unseenBasenames || []).map((f) => String(f));
+  if (!want.length) return false;
+  // R2 blocker(f-7f21c6a4)+R3: 억제 신원은 이벤트 전용 implId(implementerId 산출 — 모드 인지)로만 대조.
+  // ①신원 미상(빈 값)=억제 금지 ②legacy session 필드는 C-C 전환 후 stale Claude 세션이 비어 있지 않게
+  // 남는 오염 원천이라 억제 키로 쓰지 않는다(R3 실행 반례) ③implId 없는 구형 이벤트=비교 불가=억제 안 함
+  // ④workspace 대조 결속(전역 장부 교차 오억제 차단).
+  if (!String(implVal || "") || !String(wsVal || "")) return false;
+  return (events || []).some((e) => e && e.kind === "evidence-unseen" && e.ack !== true
+    && String(e.implId || "") === String(implVal) && String(e.workspace || "") === String(wsVal)
+    && Array.isArray(e.files) && want.every((f) => e.files.includes(f)));
+}
 // ws=configWs(이벤트 workspace 라벨 — 대시보드 귀속), execCwd=실제 실행 폴더(인용 상대경로 해석 기준).
 // 분리 이유: 코덱스 답의 '(경로:라인)' 인용은 코덱스가 돈 폴더(execCwd) 기준 상대경로라, 라벨용 연 폴더로 해석하면 오탐.
 function flagEvidence(answer, ws, sessionId, execCwd, chCtx) {
@@ -1070,6 +1085,14 @@ function flagEvidence(answer, ws, sessionId, execCwd, chCtx) {
     }
     const seenChk = citedFilesUnseen(answer, pathWs, sessionId);
     const unseen = seenChk.checked ? seenChk.unseen : []; // 판단 보류(checked=false)는 경보 안 함 — 종전과 동일한 보수성
+    // [반복 억제 2026-08-21 사용자 실보고] 같은 세션에서 아직 확인 안 된(미ack) 같은 파일 집합의 근거의심이
+    // 이미 열려 있으면 새 경보를 또 만들지 않는다(같은 사유 경보 재발행 금지 관용구 — 08-04 계보).
+    // 첫 발생은 그대로 경보·재확인이 돌고, 후속 회차의 동일 사유 반복만 조용해진다(ack되면 재발생 시 새 경보).
+    const sessNow = claudeId() || ((readActive() || {}).claudeSession) || ""; // legacy 표시 필드(event.session — 억제 키 아님)
+    const implNow = implementerId(ws); // 억제 신원(R3): 모드 인지·stale active 폴백 없음 — C-C에서 codex 스레드가 신원
+    if (unseen.length && shouldSuppressUnseenRepeat(readIntegrityEvents(), implNow, ws, unseen)) {
+      return { eventId: null, challengeId: null, suppressed: true }; // 호출자 계약(eventId/challengeId) 유지 — 억제는 부작용 0
+    }
     if (unseen.length) {
       // 재확인 배선(증분 4): 이벤트 id를 선생성해 challenge 장부와 결속(전체 경로 목록은 exact에서)
       const evId = `${nowIso()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -1077,8 +1100,10 @@ function flagEvidence(answer, ws, sessionId, execCwd, chCtx) {
       appendIntegrityEvent({
         id: evId,
         ts: nowIso(),
-        session: claudeId() || ((readActive() || {}).claudeSession) || "",
+        session: sessNow,
         workspace: ws,
+        implId: implNow, // 억제 신원 결속(R3 — legacy session과 분리·모드 인지)
+        files: unseen.slice(), // 전체 basename 목록(반복 억제 대조 재료 — detail의 앞 3개 절단과 별개)
         kind: "evidence-unseen",
         severity: "warning", // 노랑(의심) — '안 읽음' 단정이 아니라 '기록에서 다룬 흔적 미확인'
         // detailKo/detailEn 동시 저장(동적 목록 포함) — 표시부가 현재 언어 선택. detail은 구버전 판독 폴백.
@@ -3815,4 +3840,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine };
+module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, shouldSuppressUnseenRepeat, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine };

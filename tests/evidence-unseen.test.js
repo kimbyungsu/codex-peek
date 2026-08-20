@@ -720,5 +720,26 @@ if (fail > 0) {
   } catch (e) { console.log("[진단] 실패: " + (e && e.message)); }
 }
 
+console.log("[6] 반복 억제 술어(2026-08-21) — 같은 세션 미ack 동일 사유 경보의 재발행 금지");
+{
+  const { shouldSuppressUnseenRepeat } = require("../bridge/codex-bridge.js");
+  const S = "impl-1", W = "d:/ws-a";
+  const evOpen = { kind: "evidence-unseen", ack: false, implId: S, session: "legacy-x", workspace: W, files: ["a.js", "b.js", "c.js"] };
+  ck("미ack 경보가 새 집합을 전부 덮음=억제", shouldSuppressUnseenRepeat([evOpen], S, W, ["a.js", "b.js"]) === true);
+  ck("새 파일 포함=억제 안 함(새 사유)", shouldSuppressUnseenRepeat([evOpen], S, W, ["a.js", "z.js"]) === false);
+  ck("ack된 경보=대상 아님(재발생은 새 경보 정당)", shouldSuppressUnseenRepeat([{ ...evOpen, ack: true }], S, W, ["a.js"]) === false);
+  ck("타 신원 경보=대상 아님", shouldSuppressUnseenRepeat([{ ...evOpen, implId: "impl-other" }], S, W, ["a.js"]) === false);
+  ck("files 없는 구형 이벤트=비교 불가·억제 안 함(보수)", shouldSuppressUnseenRepeat([{ kind: "evidence-unseen", ack: false, implId: S, workspace: W }], S, W, ["a.js"]) === false);
+  ck("빈 집합=억제 판단 자체 없음", shouldSuppressUnseenRepeat([evOpen], S, W, []) === false);
+  // R2 blocker(f-7f21c6a4): 신원 미상·전역 장부 반례 — C-C 경로에서 빈 세션끼리 매칭돼 타 창 경보가 가리던 오억제
+  ck("★빈 신원(미상)=억제 금지(빈 문자열끼리 매칭 오억제 반례의 정방향)", shouldSuppressUnseenRepeat([{ ...evOpen, implId: "" }], "", W, ["a.js"]) === false);
+  // R3 blocker: 억제 키=implId 전용 — legacy session이 stale Claude 세션으로 남아 일치해도(C-C 전환 반례)
+  // implId가 다르면 억제하지 않는다.
+  ck("★legacy session 일치+implId 불일치=억제 금지(stale Claude 세션 오인 반례의 정방향)", shouldSuppressUnseenRepeat([{ ...evOpen, session: "stale-claude", implId: "impl-old" }], "impl-new", W, ["a.js"]) === false);
+  ck("implId 없는 구형 이벤트=session이 일치해도 억제 안 함(보수)", shouldSuppressUnseenRepeat([{ kind: "evidence-unseen", ack: false, session: "impl-1", workspace: W, files: ["a.js"] }], "impl-1", W, ["a.js"]) === false);
+  ck("★타 workspace 경보=대상 아님(전역 장부 교차 억제 차단)", shouldSuppressUnseenRepeat([{ ...evOpen, workspace: "d:/ws-b" }], S, W, ["a.js"]) === false);
+  ck("빈 workspace=억제 금지(결속 불가)", shouldSuppressUnseenRepeat([evOpen], S, "", ["a.js"]) === false);
+}
+
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
 process.exit(fail ? 1 : 0);

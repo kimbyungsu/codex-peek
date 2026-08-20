@@ -192,7 +192,7 @@ interface BridgeState {
   baseReadOk: boolean; // 기본 원칙(+3트랙 정찰) 오버라이드 파일 판독 신뢰(부재=정상) — false면 웹뷰가 canonical fill·잠금 해제 보류(7차 지적 2)
   scoutPrompt: { baseline: string; overridden: boolean; directive: string; notes: string[]; version: string } | null; // §6-11 — 3트랙에서만(null=2트랙/판독 불가)
   // P-12 v2.4: 보관함(범위 밖 제안+판단 대기 [주의]) 읽기 전용 가시화 — 처분은 CLI(backlog done|dismiss). null=무폴더/구 런타임.
-  backlog: { caution: number; cautionDue: number; backlog: number; corrupt: number; readError: boolean; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } | null; // readError: 판독 실패(ENOENT 외) — '비어 있음' 위장 금지(2026-07-18 확인 판정 [보완] 소화)
+  backlog: { caution: number; cautionDue: number; backlog: number; corrupt: number; readError: boolean; wsKey?: string; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } | null; // readError: 판독 실패(ENOENT 외) — '비어 있음' 위장 금지(2026-07-18 확인 판정 [보완] 소화)
   challenges: { open: number; cleared: number; kept: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number; cleared: boolean; matchedAll: boolean; warnOpen: boolean; eventId: string }>; ndEventIds: string[] } | null; // 재확인(증분 4b) — cleared=실제 ack 조건(전 파일 일치)·null=구 설치본/부재
   usedMemory: { ts: string; items: Array<{ path: string; note: string }>; couplings: number; omitted: boolean } | null; // [UI 개편 2차] 직전 검증에 실린 지도 동봉 스냅샷(브릿지 stats/attach.jsonl 최신 1건). null=기록 없음/구 브릿지
   baseAvailable: boolean;
@@ -1056,7 +1056,7 @@ function envelopeDetailText(evv: any, en9: boolean): string {
 }
 // 거버넌스 증분 1(2차 배치 정정 — 구현검증 1차 blocker①②): 검증 경계는 정찰(3트랙)이 아니라 '검증' 계층이다 —
 // MAP 카드가 아닌 최상위 뷰 필드로 항상 계산(2트랙 기본 프로젝트에서도 승인 가능). lang=렌더 슬롯 결속(도장도 그 슬롯 계약에).
-function readEnvelopeView(ws: string | null): { label: string; btn: string | null; btn2: string | null; repo: string; tone: string; lang: Lang; proposal?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string }> } | null {
+function readEnvelopeView(ws: string | null): { label: string; btn: string | null; btn2: string | null; repo: string; tone: string; lang: Lang; proposal?: string; candsView?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string }> } | null {
   if (!ws) return null;
   try {
     const CL9: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
@@ -1068,6 +1068,23 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
     if (evv.st === "corrupt") return { label: tE("수칙서 파일이 깨져 있어 적용을 멈췄어요(verify-envelope.json 판독 불가 — 검증엔 주입 안 됨)", "The rulebook file is unreadable — not applied (verify-envelope.json is not injected)"), btn: null, btn2: null, repo: repo9, tone: "warn", lang: slot };
     let hash9: string | null = null;
     try { hash9 = (CL9.loadContract(ws, slot) || {}).envelopeHash || null; } catch { hash9 = null; }
+    // [후보 목록 계산 — 2026-08-21 사용자 실보고로 헬퍼화] 초안 대기 분기에서도 같은 목록을 열람용으로
+    // 동봉해야 "채택 하나 눌렀더니 14개가 사라짐" 혼란이 없다(초안=한 번에 하나·나머지는 대기 표시).
+    const candsFor9 = (): Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string }> | undefined => {
+      try { // §7 증분 3 — 소진 보고와 같은 집계(codex-bridge 설치본) 공유. 버튼=기록만(작업 발동 금지 계약)
+        const CB9: any = require(path.join(BRIDGE_DIR, "codex-bridge.js"));
+        // [기억 권위 A-3] 조정 트리거 ②대시보드 로드 — 해소 blocker 계보→후보 멱등 스캔(중단 복구)
+        try { if (typeof (CL9 as any).reconcileMemoryCandidates === "function") (CL9 as any).reconcileMemoryCandidates(ws, repo9, hash9 || null); } catch { /* best-effort */ }
+        if (typeof CB9.computeEnvelopeCandidatesFor !== "function") return undefined;
+        const cc9 = CB9.computeEnvelopeCandidatesFor(ws);
+        // 증분 3 재검증 blocker: 산출 세대≠현 승인 해시면 미표시(승인 전이 직후 오귀속 창 차단)
+        if ((cc9.gen || null) !== (hash9 || null)) return undefined;
+        const lat9 = typeof CL9.readEnvelopeCandidates === "function" ? CL9.readEnvelopeCandidates(ws).latest : new Map();
+        // [기억 권위 A-5] 절단 없이 전량 전달(화면 절단은 표시 제한일 뿐)
+        const out9 = (cc9.live || []).map((c: any) => ({ id: c.candidateId, kind: c.kind, n: c.n, title: (c.titles && c.titles[0]) || "", status: (lat9.get(c.candidateId + "@" + String(hash9 || "")) || {}).status || "", gen: cc9.gen || "", wsKey: typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : "", ts: String(c.ts || "") })); // wsKey=원본 프로젝트 내구 키(재재검증 ab-1)
+        return out9.length ? out9 : undefined;
+      } catch { return undefined; }
+    };
     // §7 증분 2: 개정 초안(제안본) 대기 — 원본·주입은 무변이지만 대시보드만 봐도 알 수 있게 강조(사용자 요구 2026-07-24).
     // 중단된 전이(WAL)는 기동 복구가 수렴시키지만, 잔존하면 최우선 표시(경계 없는 검증 시작이 차단된 상태).
     try {
@@ -1075,8 +1092,10 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
         return { label: tE("수칙서 승인 전이가 중단된 흔적이 있어요 — '전이 복구'를 누르면 승인 순간의 내용으로 마무리됩니다(그 전까지 새 검증 시작이 차단돼요)", "An interrupted rulebook approval transition exists — press 'Recover' to complete it with the stamped content (new verifications are blocked until then)"), btn: tE("전이 복구", "Recover"), btn2: null, repo: repo9, tone: "warn", lang: slot, proposal: "recover" };
       if (typeof CL9.readEnvelopeProposal === "function") {
         const pr9 = CL9.readEnvelopeProposal(ws, repo9);
-        if (pr9 && pr9.st === "ok")
-          return { label: tE("🔔 수칙서 개정 초안이 승인을 기다려요 — 지금 적용 중인 수칙서는 그대로이고, 초안 내용을 확인한 뒤 도장을 찍어야만 바뀝니다", "🔔 A rulebook revision draft awaits approval — the active rulebook is unchanged; it changes only after you review and stamp the draft") + (pr9.note ? tE(" (메모: ", " (note: ") + pr9.note + ")" : ""), btn: tE("초안 확인·승인", "Review & approve draft"), btn2: tE("초안 보기", "View draft"), repo: repo9, tone: "warn", lang: slot, proposal: "pending" };
+        if (pr9 && pr9.st === "ok") {
+          const cp9 = candsFor9(); // 초안 대기 중에도 남은 후보 열람(2026-08-21 실보고 — 사라진 게 아님을 표시)
+          return { label: tE("🔔 수칙서 개정 초안이 승인을 기다려요 — 지금 적용 중인 수칙서는 그대로이고, 초안 내용을 확인한 뒤 도장을 찍어야만 바뀝니다", "🔔 A rulebook revision draft awaits approval — the active rulebook is unchanged; it changes only after you review and stamp the draft") + (pr9.note ? tE(" (메모: ", " (note: ") + pr9.note + ")" : ""), btn: tE("초안 확인·승인", "Review & approve draft"), btn2: tE("초안 보기", "View draft"), repo: repo9, tone: "warn", lang: slot, proposal: "pending", candsView: "pending-draft", ...(cp9 ? { cands: cp9 } : {}) };
+        }
         if (pr9 && pr9.st === "corrupt")
           return { label: tE("수칙서 개정 초안 파일이 손상돼 승인 화면에 올릴 수 없어요 — 초안을 다시 작성해 달라고 요청하세요(적용 중인 수칙서는 무사)", "The rulebook draft file is corrupt and cannot be shown for approval — ask for the draft to be rewritten (the active rulebook is intact)"), btn: null, btn2: null, repo: repo9, tone: "warn", lang: slot, proposal: "corrupt" };
       }
@@ -1104,23 +1123,7 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
         }
       }
     } catch { adm9 = ""; }
-    let cands9: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string }> | undefined;
-    try { // §7 증분 3 — 수칙서 후보(판단 대기) 목록: 소진 보고와 같은 집계(codex-bridge 설치본)를 공유. 버튼=기록만(작업 발동 금지 계약)
-      const CB9: any = require(path.join(BRIDGE_DIR, "codex-bridge.js"));
-      // [기억 권위 A-3] 조정 트리거 ②대시보드 로드 — 해소 blocker 계보→후보 멱등 스캔(중단 복구: 마지막 판정 후 종료돼도 화면 열람이 회수)
-      try { if (typeof (CL9 as any).reconcileMemoryCandidates === "function") (CL9 as any).reconcileMemoryCandidates(ws, repo9, hash9 || null); } catch { /* best-effort — CLI·판정 말미 트리거가 동일 스캔 */ }
-      if (typeof CB9.computeEnvelopeCandidatesFor === "function") {
-        const cc9 = CB9.computeEnvelopeCandidatesFor(ws);
-        // 증분 3 재검증 blocker: 산출 세대(마지막 ask 동결)≠현 승인 해시면 카드 미표시 — 승인 전이 직후
-        // '동결=구·승인=신' 창에서 구세대 후보 판단이 신세대 장부에 오귀속되는 경로 차단(다음 ask부터 재표시).
-        if ((cc9.gen || null) === (hash9 || null)) {
-          const lat9 = typeof CL9.readEnvelopeCandidates === "function" ? CL9.readEnvelopeCandidates(ws).latest : new Map();
-          // [기억 권위 A-5] 절단 없이 전량 전달 — 표시 공정성(웹뷰가 8건+'더 보기'로 렌더·화면 절단은 표시 제한일 뿐이라는 1차 구현검증 blocker④ 봉합)
-          cands9 = (cc9.live || []).map((c: any) => ({ id: c.candidateId, kind: c.kind, n: c.n, title: (c.titles && c.titles[0]) || "", status: (lat9.get(c.candidateId + "@" + String(hash9 || "")) || {}).status || "", gen: cc9.gen || "", wsKey: typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : "", ts: String(c.ts || "") })); // wsKey=원본 프로젝트 내구 키(재재검증 ab-1 — 같은 수칙서 해시를 쓰는 타 프로젝트 장부 오귀속 차단)
-          if (cands9 && !cands9.length) cands9 = undefined;
-        }
-      }
-    } catch { cands9 = undefined; }
+    const cands9 = candsFor9(); // 헬퍼 단일 경로(초안 대기 분기와 같은 계산 — 2026-08-21)
     return { label: tE(`적용 중 — 지원 ${n9[0]}·절대 ${n9[1]}·범위밖 ${n9[2]}항목이 검증 판정 경계로 주입돼요(파일을 고치면 재승인 전까지 중단)`, `Active — ${n9[0]}/${n9[1]}/${n9[2]} items injected as the judging boundary (edits suspend it until re-approval)`) + adm9, btn: null, btn2: tE("내용 보기", "View details"), repo: repo9, tone: "ok", lang: slot, ...(cands9 ? { cands: cands9 } : {}) };
   } catch { return null; }
 }
@@ -2530,7 +2533,7 @@ function computeState(turnsN: number): BridgeState {
         const lib = bridgeLib();
         if (!ws || !lib || typeof lib.readBacklog !== "function") return null;
         const r = lib.readBacklog(ws);
-        return { ...computeBacklogView(r.items || [], Date.now()), corrupt: Number(r.corrupt) || 0, readError: r.readError === true };
+        return { ...computeBacklogView(r.items || [], Date.now()), corrupt: Number(r.corrupt) || 0, readError: r.readError === true, wsKey: typeof lib.wsKeyFor === "function" ? String(lib.wsKeyFor(ws)) : "" }; // wsKey=행 처리 버튼의 오귀속 방지 결속(2026-08-21)
       } catch { return null; }
     })(),
     // 재확인(증분 4b): 근거 재확인 장부 요약(읽기 전용 표시 — 처분·발송은 브릿지 소관). null=구 설치본/부재.
@@ -4002,6 +4005,19 @@ class Dashboard {
             if (okM) vscode.window.showInformationMessage(enM ? "Recorded. Nothing runs from this click — tell the implementer in chat to apply it (a stamp is still required for effect)." : "기록했어요. 이 클릭으로 실행되는 것은 없습니다 — 반영은 대화에서 지시해 주세요(효력은 도장부터).");
             else vscode.window.showWarningMessage(enM ? "Record failed — please try again." : "기록에 실패했어요 — 다시 시도해 주세요.");
           } catch { vscode.window.showWarningMessage(enM ? "Record failed." : "기록에 실패했어요."); }
+          this.post(); return;
+        }
+        // [처리 장치 2026-08-21] 보관함 행 처리(기록만 — 장부 상태 변경·작업 발동 없음). wsKey 재대조=오귀속 차단(candMark 계보).
+        if (m?.type === "backlogMark" && typeof m.id === "string" && /^[0-9a-f]{16}$/.test(m.id) && (m.status === "done" || m.status === "dismissed") && typeof m.wsKey === "string" && m.wsKey) {
+          const wsB = dashboardWorkspace(); if (!wsB) return;
+          const enB = loadLangExt() === "en";
+          try {
+            const libB: any = bridgeLib();
+            if (!libB || typeof libB.wsKeyFor !== "function" || String(libB.wsKeyFor(wsB)) !== m.wsKey) { vscode.window.showWarningMessage(enB ? "The active project changed while this list was open — it refreshes; please try again." : "목록이 떠 있는 사이 활성 프로젝트가 바뀌었어요 — 목록이 갱신됩니다. 다시 시도해 주세요."); this.post(); return; }
+            const rB = typeof libB.backlogSetStatus === "function" ? libB.backlogSetStatus(wsB, m.id, m.status) : { ok: false, error: "old-runtime" };
+            if (rB && rB.ok) vscode.window.showInformationMessage(m.status === "done" ? (enB ? "Closed as resolved — history preserved." : "해결됨으로 닫았어요 — 기록은 보존됩니다.") : (enB ? "Dismissed — history preserved." : "안 하기로 종결했어요 — 기록은 보존됩니다."));
+            else vscode.window.showWarningMessage((enB ? "Update failed: " : "처리에 실패했어요: ") + String((rB && rB.error) || "unknown"));
+          } catch { vscode.window.showWarningMessage(enB ? "Update failed." : "처리에 실패했어요."); }
           this.post(); return;
         }
         // [경위 v2 2차] 자동 등재 거부(tombstone — 비모달·기록만): repoKey 스냅샷 결속으로 클릭 사이
@@ -7027,7 +7043,10 @@ class Dashboard {
         if(e9.cands && e9.cands.length){ // §7 증분 3+2026-08-20 UX 개편 — 수칙서 후보: 상황 설명 조립(구조 데이터)·쉬운 버튼·원문은 보조 보존(요약 작문 금지 — 오염 방지)
           var ch9=document.createElement("div"); ch9.style.cssText="margin-top:8px;font-weight:600"; ch9.setAttribute("data-cands-box","1"); ch9.textContent=T("수칙서 후보 — 사람 판단 대기 "+e9.cands.length+"건(기록 또는 병합 초안 생성 — 어느 쪽도 도장 전에는 효력 없음)","Rulebook candidates — awaiting your call ("+e9.cands.length+") (record or create a merge draft; neither takes effect before the stamp)"); ec.appendChild(ch9); // [기억 권위 A-4] 채택=초안 생성·효력은 도장부터(§8 계약 유지)
           var chSub9=document.createElement("div"); chSub9.className="muted"; chSub9.style.cssText="font-size:11px;margin-top:2px";
-          chSub9.textContent=T("검증에서 잡혀 이미 고친 실수들이에요. 올리면 앞으로 같은 실수를 항상 차단하는 규칙 초안이 만들어지고, 도장을 찍어야만 실제로 적용됩니다.","These were caught and fixed in past verifications. Adopting drafts a rule that always blocks the same mistake; it only applies after you stamp it."); ec.appendChild(chSub9);
+          var viewOnly9=e9.candsView==="pending-draft"; // 초안 대기 중=열람 전용(2026-08-21 실보고 — '14개가 사라짐' 혼란 봉합)
+          chSub9.textContent=viewOnly9
+            ?T("남은 후보들은 사라진 게 아니에요 — 위 초안을 도장/폐기로 먼저 처리하면 이어서 하나씩 판단할 수 있습니다(초안은 한 번에 하나).","The remaining candidates are not gone — stamp or discard the draft above first, then judge them one by one (one draft at a time).")
+            :T("검증에서 잡혀 이미 고친 실수들이에요. 올리면 앞으로 같은 실수를 항상 차단하는 규칙 초안이 만들어지고, 도장을 찍어야만 실제로 적용됩니다.","These were caught and fixed in past verifications. Adopting drafts a rule that always blocks the same mistake; it only applies after you stamp it."); ec.appendChild(chSub9);
           var more9=null; // [기억 권위 A-5] 8건 초과=접힘 — '더 보기'로 전량 접근(절단은 표시 제한일 뿐이라는 blocker④ 봉합)
           e9.cands.forEach(function(cd, ix9){
             var row9=document.createElement("div"); row9.style.cssText="font-size:12px;margin-top:7px;padding:6px 8px;border-radius:5px;background:var(--vscode-editorWidget-background)";
@@ -7043,7 +7062,7 @@ class Dashboard {
             var sit9=document.createElement("div"); sit9.textContent=(undecided9?"":"["+(cd.status==="adopted"?T("채택됨","adopted"):cd.status==="declined"?T("안 올림","declined"):cd.status)+"] ")+kl9; row9.appendChild(sit9);
             if(cd.title){ var org9=document.createElement("div"); org9.className="muted"; org9.style.cssText="font-size:11px;margin-top:2px"; org9.textContent=T("원문: ","original: ")+cd.title; org9.title=cd.title; row9.appendChild(org9); }
             var mb9=function(lab,st,strong){ var b9=document.createElement("button"); b9.style.cssText="margin-top:5px;margin-right:5px;font-size:12px"+(strong?";font-weight:600":""); if(!strong)b9.className="secondary"; b9.textContent=lab; b9.onclick=function(){ vscode.postMessage({type:"candMark", id: cd.id, kind: cd.kind, status: st, gen: cd.gen, wsKey: cd.wsKey, lang: e9.lang}); }; row9.appendChild(b9); };
-            if(undecided9){ if(cd.kind==="resolved-blocker"){ mb9(T("수칙서 초안 만들기","Draft into rulebook"),"adopted",true); mb9(T("이번엔 안 올림","Not this time"),"declined"); } else { mb9(T("올리기로 기록","Record: adopt"),"adopted",true); mb9(T("안 올림 기록","Record: decline"),"declined"); } }
+            if(undecided9 && !viewOnly9){ if(cd.kind==="resolved-blocker"){ mb9(T("수칙서 초안 만들기","Draft into rulebook"),"adopted",true); mb9(T("이번엔 안 올림","Not this time"),"declined"); } else { mb9(T("올리기로 기록","Record: adopt"),"adopted",true); mb9(T("안 올림 기록","Record: decline"),"declined"); } } // 초안 대기 중=버튼 없음(열람만)
             if(ix9>=8 && !candsMoreOpenWeb){ row9.style.display="none"; row9.setAttribute("data-candmore","1"); more9=more9||0; more9++; } // 펼침 기억 시 숨김 없음(재렌더 생존)
             ec.appendChild(row9);
           });
@@ -7097,6 +7116,10 @@ class Dashboard {
         var t1=el("span","", " "+it.title); row.appendChild(t1);
         var meta=el("div","muted", (it.file? it.file+" · ":"")+T("재발견 ","seen ")+it.seenCount+T("회","×")+" · D+"+it.ageDays+" · "+it.id);
         meta.style.fontSize="11px"; row.appendChild(meta);
+        // [처리 장치 2026-08-21 사용자 실보고] 해결·기각을 화면에서 바로 기록(장부 상태 변경만 — 작업 발동 없음).
+        var bm9=function(lab,tip,st){ var b9=el("button","secondary",lab); b9.title=tip; b9.style.cssText="margin:3px 6px 0 0;font-size:11px"; b9.onclick=function(){ vscode.postMessage({type:"backlogMark", id: it.id, status: st, wsKey: bl.wsKey||""}); }; row.appendChild(b9); }; // el 헬퍼 사용(p12 렌더 샌드박스 실행 호환 — document 직접 참조 금지)
+        bm9(T("해결됨(장부 닫기)","Resolved (close)"),T("이미 코드·문서로 해소된 항목의 장부를 닫아요 — 기록은 보존되고 목록·기한 알림에서만 빠집니다.","Closes the ledger row for an item already resolved in code/docs — history preserved, removed from the list and due alerts."),"done");
+        bm9(T("안 하기로 종결","Won't do (dismiss)"),T("수용 위험·범위 밖 등 '하지 않기로' 정한 항목을 종결해요 — 기록은 보존됩니다.","Dismisses an item you decided not to act on (accepted risk / out of scope) — history preserved."),"dismissed");
         list.appendChild(row);
       });
     });

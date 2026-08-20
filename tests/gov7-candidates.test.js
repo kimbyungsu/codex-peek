@@ -326,7 +326,7 @@ console.log("[11] §7 증분 3 — 해소 계보 제외·빼기 후보·항목 �
   ok((CB.computeEnvelopeCandidatesFor(wsR).gen || null) === GEN, "집계 반환에 산출 세대(gen=동결 해시) 결속");
   {
     const ext2 = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
-    ok(ext2.includes("(cc9.gen || null) === (hash9 || null)") && ext2.includes("gen: cc9.gen"), "대시보드=산출 세대≠현 승인 해시면 카드 미표시+DTO에 세대 동봉");
+    ok(ext2.includes("(cc9.gen || null) !== (hash9 || null)") /* 헬퍼화로 조기 반환 형태(2026-08-21) — 계약 동일 */ && ext2.includes("gen: cc9.gen"), "대시보드=산출 세대≠현 승인 해시면 카드 미표시+DTO에 세대 동봉");
     ok(ext2.includes('typeof m.gen === "string"') && ext2.includes("(m.gen || null) !== (genM || null)"), "기록 핸들러=클릭 시점 세대 재대조(불일치=기록 거부 — 구세대 판단의 신세대 오귀속 차단)");
     ok(ext2.includes("wsKey: typeof CL9.wsKeyFor") && ext2.includes('String(CLM.wsKeyFor(wsM)) !== m.wsKey'), "DTO에 원본 프로젝트 내구 키 결속+클릭 시 재대조(멀티루트 활성 전환 오귀속 차단 — ab-1)");
     ok(ext2.includes("computeEnvelopeCandidatesFor(wsM)") && ext2.includes("c.candidateId === m.id"), "기록 전 후보 실존 재검사(유령 id·낡은 카드 차단)");
@@ -344,13 +344,17 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   ok(ext.includes('data-cands-box') && /ec0\) acts9\.push\(\{n:ec0, tab:"setup", el:"\[data-cands-box\]"/.test(ext), "개요 '지금 정할 것'에 후보 대기 편입+정확 위치 딥링크(초인종)");
   // R1 blocker①(2026-08-20): 장부 유래 후보의 대기 상태='proposed' — 빈 상태와 함께 '미판단'으로 취급해야
   // 버튼·벨이 산다(빈 상태만 세면 resolved-blocker 후보 전체가 버튼 없이 [proposed] 라벨로만 렌더되는 오작동).
-  ok(ext.includes('var undecided9=!cd.status||cd.status==="proposed";') && ext.includes("if(undecided9){ if(cd.kind"), "proposed=판단 대기 — 버튼 렌더 조건");
+  ok(ext.includes('var undecided9=!cd.status||cd.status==="proposed";') && ext.includes("if(undecided9 && !viewOnly9){ if(cd.kind") /* 초안 대기 열람 전용 분기 추가(2026-08-21) */, "proposed=판단 대기 — 버튼 렌더 조건");
   ok(ext.includes('return !c9.status||c9.status==="proposed";'), "proposed=판단 대기 — 개요 벨 계수 조건");
   ok(/if\(a9\.el\)\{ var t0=document\.querySelector\(a9\.el\); if\(t0\)\{ if\(t0\.tagName==="DETAILS"\) t0\.open=true; gotoEl\(t0\); return; \} \}/.test(ext), "교차 패널 이동=gotoEl 경유(규칙)+접힌 상자 펼침+대상 부재 시 탭 폴백");
   // 2026-08-20 사용자 실보고 3건: 보관함 두 줄의 오착지·더보기 재렌더 접힘
   ok(/blDue9, tab:"verify", el:"#backlogSec"/.test(ext), "보관함 검토 기한 줄=보관함 실위치 딥링크(탭 상단 오착지 봉합)");
   ok(/rb9\.addEventListener\("click", function\(\)\{ var t0=document\.querySelector\("#backlogSec"\); if\(t0\)\{ t0\.open=true; gotoEl\(t0\); return; \}/.test(ext), "'여유' 줄도 보관함 실위치+펼침(동일 봉합)");
   ok(ext.includes("var candsMoreOpenWeb=false;") && ext.includes("candsMoreOpenWeb=true;") && ext.includes('ix9>=8 && !candsMoreOpenWeb'), "후보 '더 보기' 펼침이 재렌더에도 유지(expandedConv 전례 — 2초 접힘 실보고 봉합)");
+  // 2026-08-21 사용자 실보고 3건: 초안 대기 중 후보 소실·보관함 처리 장치·근거의심 반복
+  ok(ext.includes('candsView: "pending-draft"') && ext.includes('viewOnly9=e9.candsView==="pending-draft"') && ext.includes("undecided9 && !viewOnly9"), "초안 대기 중에도 후보 목록 열람(버튼 없음·'사라진 게 아님' 안내) — 14건 소실 혼란 봉합");
+  ok(ext.includes('m?.type === "backlogMark"') && ext.includes('m.status === "done" || m.status === "dismissed"') && /wsKeyFor\(wsB\)\) !== m\.wsKey/.test(ext) && ext.includes("backlogSetStatus"), "보관함 행 처리 핸들러(완료/기각·wsKey 재대조·기록만)");
+  ok(ext.includes('T("해결됨(장부 닫기)"') && ext.includes('T("안 하기로 종결"'), "보관함 행에 처리 버튼 2종(화면에서 바로 장부 닫기)");
   ok(ext.includes("자동으로 끝난 일(참고 — 하실 일 아님)") && ext.includes("지금 여기서 하실 일은 없습니다"), "MAP 구획=할 일/끝난 일 시각 분리(실적을 대기로 오독하는 흐름 봉합)");
   // draft는 제안본 생성일 뿐 전이(도장)가 아님 — candMark 경로에 applyEnvelopeTransition 부재 계약은 유지.
   ok(ext.includes('m?.type === "candMark"') && ext.includes('note: "dashboard-record"') && !/candMark[\s\S]{0,2400}applyEnvelopeTransition/.test(ext.slice(ext.indexOf('m?.type === "candMark"'))), "채택 경로에 승인 전이 발동 없음(초안 생성까지만 — 효력은 도장부터·§7 개정 계약)");
