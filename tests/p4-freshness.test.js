@@ -630,6 +630,41 @@ console.log("[8] 이중 실패·자가 수리 — 마커 없는 상시 탐지(5�
       }
       ok(hit2 >= 1, "missing-first — 삽입 중에도 실후보가 2 전이 내 판독·수리(상대 위치 고착 반례 소멸): hit2=" + hit2);
     }
+    // [보관함 abec10d4 수리 2026-08-20] 신입 오인 방지 — 이번 전이가 곧 기록할 노드(pendingUpdates)는
+    // '명백 후보'가 아니다. 반례 쌍: 신입 A(id 사전순 선두)+진짜 누락 실노드, budget=1.
+    {
+      const wsP = fs.mkdtempSync(path.join(os.tmpdir(), "p4fresh_pend_"));
+      const newbie = { id: "00000000-0000-4000-8000-00000000000a", provenance: { basis: { kind: "git", objectFormat: "sha1", head: "d".repeat(40) }, decisionId: crypto.randomUUID() }, anchors: [{ kind: "code", path: "src/p0.js" }] };
+      const pendKey = "a:" + newbie.id + "|src/p0.js";
+      const topoP = { revision: 0, nodes: [newbie, realNode] };
+      const without = MF.repairUpdatesFor(wsP, t2.mapId, topoP, decDir2, { indexByDecision: idxM0, budget: 1 });
+      ok(!without.updates["a:" + nid2 + "|src/a.js"] && without.budgetHit === true, "(전제·구동작 재현) 신입이 후보로 오인되면 budget=1이 신입 판독에 소진 — 진짜 누락 미수리");
+      const withPend = MF.repairUpdatesFor(wsP, t2.mapId, topoP, decDir2, { indexByDecision: idxM0, budget: 1, pendingUpdates: { [pendKey]: { fp: "3".repeat(40), seenAt: NOW, basisDecisionId: newbie.provenance.decisionId } } });
+      ok(!!withPend.updates["a:" + nid2 + "|src/a.js"] && !withPend.updates[pendKey], "★pendingUpdates 겹침=신입 제외 → 같은 예산으로 진짜 누락이 수리됨(오인 지연 반례의 정방향)");
+      // R2 blocker: '갱신 노드' — 같은 key의 구세대 store 결속이 남은 상태에서 새 decision의 pend가 있으면
+      // pend가 권위(store 우선이면 구세대 불일치로 후보 오인 지속 — R1 실행 반례).
+      {
+        const wsP2 = fs.mkdtempSync(path.join(os.tmpdir(), "p4fresh_pend2_"));
+        const oldDid = newbie.provenance.decisionId;
+        const updNode = { id: "00000000-0000-4000-8000-00000000000b", provenance: { basis: { kind: "git", objectFormat: "sha1", head: "d".repeat(40) }, decisionId: crypto.randomUUID() }, anchors: [{ kind: "code", path: "src/u0.js" }] };
+        const updKey = "a:" + updNode.id + "|src/u0.js";
+        ok(MF.mergeWrite(wsP2, t2.mapId, { [updKey]: { fp: "4".repeat(40), seenAt: NOW, basisDecisionId: oldDid } }).ok === true, "(전제) 갱신 노드의 구세대 store 결속 존재");
+        const topoU = { revision: 0, nodes: [updNode, realNode] };
+        const rU = MF.repairUpdatesFor(wsP2, t2.mapId, topoU, decDir2, { indexByDecision: idxM0, budget: 1, pendingUpdates: { [updKey]: { fp: "5".repeat(40), seenAt: NOW, basisDecisionId: updNode.provenance.decisionId } } });
+        ok(!!rU.updates["a:" + nid2 + "|src/a.js"] && !rU.updates[updKey], "★갱신 노드(구세대 store+새 pend)=pend 권위로 제외 → 진짜 누락 수리(R2 반례의 정방향)");
+      }
+      // R2 blocker: 'store 일치+pend 재기록' 노드는 감사에서도 제외 — 감사 예약(read·touch)이 진짜 누락의
+      // 예산을 밀어내지 않는다(budget=1에서 감사 예약 1이 후보 창을 0으로 만들던 R1 실행 반례).
+      {
+        const wsP3 = fs.mkdtempSync(path.join(os.tmpdir(), "p4fresh_pend3_"));
+        const audNode = { id: "00000000-0000-4000-8000-00000000000c", provenance: { basis: { kind: "git", objectFormat: "sha1", head: "d".repeat(40) }, decisionId: crypto.randomUUID() }, anchors: [{ kind: "code", path: "src/v0.js" }] };
+        const audKey = "a:" + audNode.id + "|src/v0.js";
+        ok(MF.mergeWrite(wsP3, t2.mapId, { [audKey]: { fp: "6".repeat(40), seenAt: NOW, basisDecisionId: audNode.provenance.decisionId } }).ok === true, "(전제) store가 현 decision과 일치하는 노드 존재");
+        const topoA = { revision: 0, nodes: [audNode, realNode] };
+        const rA = MF.repairUpdatesFor(wsP3, t2.mapId, topoA, decDir2, { indexByDecision: idxM0, budget: 1, pendingUpdates: { [audKey]: { fp: "7".repeat(40), seenAt: NOW, basisDecisionId: audNode.provenance.decisionId } } });
+        ok(!!rA.updates["a:" + nid2 + "|src/a.js"], "★pend 재기록 노드=감사 제외 → 감사 예약이 사라져 budget=1이 진짜 누락에 감(감사 오염 반례의 정방향)");
+      }
+    }
   }
   // 6차 blocker①: 미래 seenAt 구세대 retry가 신세대 수리를 덮지 못한다
   {

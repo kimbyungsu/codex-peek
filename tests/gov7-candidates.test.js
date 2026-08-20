@@ -346,7 +346,11 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   // 버튼·벨이 산다(빈 상태만 세면 resolved-blocker 후보 전체가 버튼 없이 [proposed] 라벨로만 렌더되는 오작동).
   ok(ext.includes('var undecided9=!cd.status||cd.status==="proposed";') && ext.includes("if(undecided9){ if(cd.kind"), "proposed=판단 대기 — 버튼 렌더 조건");
   ok(ext.includes('return !c9.status||c9.status==="proposed";'), "proposed=판단 대기 — 개요 벨 계수 조건");
-  ok(/if\(a9\.el\)\{ var t0=document\.querySelector\(a9\.el\); if\(t0\)\{ gotoEl\(t0\); return; \} \}/.test(ext), "교차 패널 이동=gotoEl 경유(규칙)+대상 부재 시 탭 폴백");
+  ok(/if\(a9\.el\)\{ var t0=document\.querySelector\(a9\.el\); if\(t0\)\{ if\(t0\.tagName==="DETAILS"\) t0\.open=true; gotoEl\(t0\); return; \} \}/.test(ext), "교차 패널 이동=gotoEl 경유(규칙)+접힌 상자 펼침+대상 부재 시 탭 폴백");
+  // 2026-08-20 사용자 실보고 3건: 보관함 두 줄의 오착지·더보기 재렌더 접힘
+  ok(/blDue9, tab:"verify", el:"#backlogSec"/.test(ext), "보관함 검토 기한 줄=보관함 실위치 딥링크(탭 상단 오착지 봉합)");
+  ok(/rb9\.addEventListener\("click", function\(\)\{ var t0=document\.querySelector\("#backlogSec"\); if\(t0\)\{ t0\.open=true; gotoEl\(t0\); return; \}/.test(ext), "'여유' 줄도 보관함 실위치+펼침(동일 봉합)");
+  ok(ext.includes("var candsMoreOpenWeb=false;") && ext.includes("candsMoreOpenWeb=true;") && ext.includes('ix9>=8 && !candsMoreOpenWeb'), "후보 '더 보기' 펼침이 재렌더에도 유지(expandedConv 전례 — 2초 접힘 실보고 봉합)");
   ok(ext.includes("자동으로 끝난 일(참고 — 하실 일 아님)") && ext.includes("지금 여기서 하실 일은 없습니다"), "MAP 구획=할 일/끝난 일 시각 분리(실적을 대기로 오독하는 흐름 봉합)");
   // draft는 제안본 생성일 뿐 전이(도장)가 아님 — candMark 경로에 applyEnvelopeTransition 부재 계약은 유지.
   ok(ext.includes('m?.type === "candMark"') && ext.includes('note: "dashboard-record"') && !/candMark[\s\S]{0,2400}applyEnvelopeTransition/.test(ext.slice(ext.indexOf('m?.type === "candMark"'))), "채택 경로에 승인 전이 발동 없음(초안 생성까지만 — 효력은 도장부터·§7 개정 계약)");

@@ -300,6 +300,7 @@ function repairUpdatesFor(ws, mapId, topo, decisionsDir, opts) {
   if (!idxMap) return { updates: {}, touches: {}, reads: 0, budgetHit: false }; // 권위 스냅샷 없이는 수리하지 않음(결속 필수)
   const budget = o.budget === undefined ? 25 : o.budget;
   const store = readFreshnessFor(ws, mapId).entries;
+  const pend = o.pendingUpdates || {}; // 이번 전이에서 곧 기록될 분(보관함 abec10d4 수리 — 신입 오인 방지)
   const seenAt = new Date().toISOString(); // 순수 기록 시각(11차 — 순서는 seq가 담당·시각 산술 없음)
   const decCache = new Map();
   const out = {}, touches = {};
@@ -310,9 +311,16 @@ function repairUpdatesFor(ws, mapId, topo, decisionsDir, opts) {
     if (!did0 || !UUID_RE.test(String(did0))) continue;
     const as0 = (nd0.anchors || []).filter((a) => a && a.path);
     if (!as0.length) continue;
-    const bound = as0.map((a) => store["a:" + nd0.id + "|" + a.path]).filter((c0) => c0 && c0.basisDecisionId === did0);
-    if (bound.length < as0.length) cands.push(nd0); // 어떤 anchor든 부재/결속 불일치=명백 후보
-    else audits.push({ nd: nd0, lru: Math.min(...bound.map((c0) => (Number.isSafeInteger(c0.seq) ? c0.seq : 0))) }); // 감사 LRU 키=최소 seq(11차 — 시각 비의존·seq 부재[구 파일]=0 최우선)
+    // [보관함 abec10d4 수리 2026-08-20·R2] 이번 전이가 곧 기록할 분(pendingUpdates)은 '권위 겹침' —
+    // pend가 store보다 우선한다(pend||store 순서: 갱신 노드는 같은 key의 구세대 store 결속이 남아
+    // 있으므로 store 우선이면 오인이 그대로 남는 R1 반례). 전 anchor가 유효하고 그중 하나라도
+    // pend 유래면 그 노드는 방금 기록됨 — 이번 회차 후보도 '감사도' 아님(감사 read·touch가
+    // 진짜 누락의 예산을 밀어내는 R1 반례 봉합). 다음 전이부터 store 기반 정상 순환.
+    const pair = as0.map((a) => { const k = "a:" + nd0.id + "|" + a.path; return { p: pend[k], s: store[k] }; });
+    const eff = pair.map((e) => e.p || e.s).filter((c0) => c0 && c0.basisDecisionId === did0);
+    if (eff.length < as0.length) { cands.push(nd0); continue; } // pend 겹쳐도 부재/불일치=진짜 후보
+    if (pair.some((e) => e.p && e.p.basisDecisionId === did0)) continue; // 방금 기록됨 — 후보·감사 모두 제외
+    audits.push({ nd: nd0, lru: Math.min(...eff.map((c0) => (Number.isSafeInteger(c0.seq) ? c0.seq : 0))) }); // 감사 LRU 키=최소 seq(11차 — 시각 비의존·seq 부재[구 파일]=0 최우선·pend 제외라 eff=전부 store 유래)
   }
   // 후보는 id 정렬+revision 순환 offset(수리 불능 후보 잔존 시 공정 순회 — 새 정상 노드는 후보가 아니라
   // 목록을 밀지 못함: 7차). 감사는 LRU(위 주석 — 9차).
@@ -370,7 +378,7 @@ function recordBaselines(ws, mapId, updates, opts) {
   let repair = {}, touches = {}, repairReads = 0, repairBudgetHit = false;
   if (o.topo && o.decisionsDir && o.indexByDecision) {
     try {
-      const rp = repairUpdatesFor(ws, mapId, o.topo, o.decisionsDir, { indexByDecision: o.indexByDecision, budget: o.repairBudget });
+      const rp = repairUpdatesFor(ws, mapId, o.topo, o.decisionsDir, { indexByDecision: o.indexByDecision, budget: o.repairBudget, pendingUpdates: updates || {} }); // 신입 오인 방지(abec10d4)
       repair = rp.updates; touches = rp.touches || {}; repairReads = rp.reads; repairBudgetHit = rp.budgetHit;
     } catch { repair = {}; touches = {}; }
   }

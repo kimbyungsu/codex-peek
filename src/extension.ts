@@ -5605,6 +5605,7 @@ class Dashboard {
   // 펼친 Codex 답변 키 모음 — postMessage 재렌더(작업/검증/반영 상태·파일·주기 변화)에도 펼침을 유지한다.
   // 모듈 레벨이라 이 webview가 사는 동안 유지되고, 대시보드를 닫았다 다시 열면 새 webview라 리셋(=기본 접힘).
   const expandedConv = new Set();
+  var candsMoreOpenWeb=false; // 수칙서 후보 '더 보기' 펼침 기억 — 15초 재렌더가 2초 만에 도로 접던 실보고(2026-08-20) 봉합(expandedConv 전례·웹뷰 수명)
   // 펼친 정찰 구역 패널 키 모음(정찰 흐름·최신 지도) — 매 재렌더가 #scoutBox를 통째 재생성해 details 펼침이
   // 저절로 접히던 실버그(사용자 실측 2026-07-08 — 검증 대화에서 고친 것과 같은 부류)의 동형 해법.
   const openPanels = new Set();
@@ -6157,7 +6158,7 @@ class Dashboard {
     // 보관함은 '갚을 의무 없음' 주차장 — 전량을 '지금 정할 것'으로 세면 급한 일이 묻힌다(사용자 결정 2026-08-07).
     // 검토 기한(due=30일+ 경과 또는 3회+ 재발견) 항목만 긴급 합산에 넣고, 나머지는 합산 밖 '여유' 줄로만 안내.
     var blDue9=d.backlog&&d.backlog.cautionDue?d.backlog.cautionDue:0;
-    if(blDue9) acts9.push({n:blDue9, tab:"verify", label:T("보관함 검토 기한 항목(오래됨·자주 재발견)","parked items due for review (old or often rediscovered)")});
+    if(blDue9) acts9.push({n:blDue9, tab:"verify", el:"#backlogSec", label:T("보관함 검토 기한 항목(오래됨·자주 재발견)","parked items due for review (old or often rediscovered)")}); // el=보관함 실위치(사용자 실보고 2026-08-20: 탭 전환만으로는 접힌 하단 상자에 못 닿음)
     var ic9=d.mapCurrent&&d.mapCurrent.intent&&Number.isFinite(d.mapCurrent.intent.choicePending)?d.mapCurrent.intent.choicePending:0;
     if(ic9) acts9.push({n:ic9, tab:"setup", label:T("MAP 대기 선택","MAP choices waiting")});
     // [상시 표출 2026-08-16 사용자 결정] 선택한 보강 담당이 사람 조치로만 재개되는 보류 — 경보 '확인'을
@@ -6199,7 +6200,7 @@ class Dashboard {
         var row9=el("div","ovact"); var btn9=document.createElement("button"); btn9.type="button"; btn9.className="secondary";
         btn9.textContent=a9.n+" · "+a9.label+(a9.tab?" →":"");
         if(a9.tab) btn9.addEventListener("click", function(){
-          if(a9.el){ var t0=document.querySelector(a9.el); if(t0){ gotoEl(t0); return; } } // 대상 실존 시 정확 위치로(gotoEl=담는 패널 활성화+스크롤) — 부재면 탭 폴백
+          if(a9.el){ var t0=document.querySelector(a9.el); if(t0){ if(t0.tagName==="DETAILS") t0.open=true; gotoEl(t0); return; } } // 대상 실존 시 정확 위치로+접힌 상자는 펼침(보관함 실보고) — 부재면 탭 폴백
           var b9=document.querySelector('.tabbtn[data-tab="'+a9.tab+'"]'); if(b9) b9.click();
         });
         row9.appendChild(btn9); listBox9.appendChild(row9);
@@ -6207,7 +6208,7 @@ class Dashboard {
       // 기한 없는 보관함 잔여 — 합산 제외 '여유' 줄(눌러서 보관함으로 이동만). 급한 일과 시각적으로 구분.
       if(blRest9){ var rx9=el("div","ovact relaxed"); var rb9=document.createElement("button"); rb9.type="button"; rb9.className="secondary";
         rb9.textContent=T("여유 · ","later · ")+blRest9+T("건 — 보관함 판단 대기(기한 없음 · 위 합산 제외 · 채택할 때만 작업) →"," parked — no deadline · not counted above · work only when adopted →");
-        rb9.addEventListener("click", function(){ var b9=document.querySelector('.tabbtn[data-tab="verify"]'); if(b9) b9.click(); });
+        rb9.addEventListener("click", function(){ var t0=document.querySelector("#backlogSec"); if(t0){ t0.open=true; gotoEl(t0); return; } var b9=document.querySelector('.tabbtn[data-tab="verify"]'); if(b9) b9.click(); }); // 보관함 실위치로(펼침 포함) — 실보고 2026-08-20
         rx9.appendChild(rb9); listBox9.appendChild(rx9); }
     }
     if(empty9) empty9.style.display=acts9.length?"none":"";
@@ -7043,10 +7044,10 @@ class Dashboard {
             if(cd.title){ var org9=document.createElement("div"); org9.className="muted"; org9.style.cssText="font-size:11px;margin-top:2px"; org9.textContent=T("원문: ","original: ")+cd.title; org9.title=cd.title; row9.appendChild(org9); }
             var mb9=function(lab,st,strong){ var b9=document.createElement("button"); b9.style.cssText="margin-top:5px;margin-right:5px;font-size:12px"+(strong?";font-weight:600":""); if(!strong)b9.className="secondary"; b9.textContent=lab; b9.onclick=function(){ vscode.postMessage({type:"candMark", id: cd.id, kind: cd.kind, status: st, gen: cd.gen, wsKey: cd.wsKey, lang: e9.lang}); }; row9.appendChild(b9); };
             if(undecided9){ if(cd.kind==="resolved-blocker"){ mb9(T("수칙서 초안 만들기","Draft into rulebook"),"adopted",true); mb9(T("이번엔 안 올림","Not this time"),"declined"); } else { mb9(T("올리기로 기록","Record: adopt"),"adopted",true); mb9(T("안 올림 기록","Record: decline"),"declined"); } }
-            if(ix9>=8){ row9.style.display="none"; row9.setAttribute("data-candmore","1"); more9=more9||0; more9++; }
+            if(ix9>=8 && !candsMoreOpenWeb){ row9.style.display="none"; row9.setAttribute("data-candmore","1"); more9=more9||0; more9++; } // 펼침 기억 시 숨김 없음(재렌더 생존)
             ec.appendChild(row9);
           });
-          if(more9){ var mt9=document.createElement("button"); mt9.style.cssText="margin-top:5px;font-size:12px"; mt9.className="secondary"; mt9.textContent=T("더 보기 (+"+more9+")","Show more (+"+more9+")"); mt9.onclick=function(){ ec.querySelectorAll("[data-candmore]").forEach(function(el){ el.style.display=""; }); mt9.remove(); }; ec.appendChild(mt9); }
+          if(more9){ var mt9=document.createElement("button"); mt9.style.cssText="margin-top:5px;font-size:12px"; mt9.className="secondary"; mt9.textContent=T("더 보기 (+"+more9+")","Show more (+"+more9+")"); mt9.onclick=function(){ candsMoreOpenWeb=true; ec.querySelectorAll("[data-candmore]").forEach(function(el){ el.style.display=""; }); mt9.remove(); }; ec.appendChild(mt9); }
         }
       });
       safe(function(){ var n=$("vBudgetNote"); if(!n) return;
