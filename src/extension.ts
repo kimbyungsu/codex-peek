@@ -6227,7 +6227,7 @@ class Dashboard {
     if(ha9) acts9.push({n:1, tab:"map", label:ha9==="probe"
       ?T("자동 보강 멈춤 — 담당 준비 점검이 필요해요","auto-enrichment stalled — the provider needs a readiness check")
       :T("자동 보강 멈춤 — 사람 조치로만 재개돼요(다시 시도 등 · 재호출은 사용량 소모)","auto-enrichment stalled — only human action resumes it (e.g. retry · a re-call uses quota)")});
-    if(d.envelope&&d.envelope.btn) acts9.push({n:1, tab:"setup", label:T("검증 경계(수칙서) 승인 대기","verify-envelope approval pending")});
+    if(d.envelope&&d.envelope.btn) acts9.push({n:1, tab:"setup", el:"#envCard", label:T("검증 경계(수칙서) 승인 대기","verify-envelope approval pending")}); // el=수칙서 카드 실위치(2026-08-22 실보고 — 탭 상단 오착지 봉합·보관함 두 줄과 동일 계보)
     // [초인종 2026-08-20 사용자 실보고] 수칙서 후보(판단 대기)가 검증 설정 탭 안에만 있어 존재를 알 길이
     // 없었음 — 개요 합산에 편입+해당 위치로 이동(el=교차 패널 스크롤은 gotoEl 경유 규칙).
     var ec0=d.envelope&&d.envelope.cands?d.envelope.cands.filter(function(c9){return !c9.status||c9.status==="proposed";}).length:0; // proposed=장부 유래 후보의 '판단 대기' 상태(R1 blocker①)

@@ -349,6 +349,7 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   ok(/if\(a9\.el\)\{ var t0=document\.querySelector\(a9\.el\); if\(t0\)\{ if\(t0\.tagName==="DETAILS"\) t0\.open=true; gotoEl\(t0\); return; \} \}/.test(ext), "교차 패널 이동=gotoEl 경유(규칙)+접힌 상자 펼침+대상 부재 시 탭 폴백");
   // 2026-08-20 사용자 실보고 3건: 보관함 두 줄의 오착지·더보기 재렌더 접힘
   ok(/blDue9, tab:"verify", el:"#backlogSec"/.test(ext), "보관함 검토 기한 줄=보관함 실위치 딥링크(탭 상단 오착지 봉합)");
+  ok(/acts9\.push\(\{n:1, tab:"setup", el:"#envCard"/.test(ext), "'수칙서 승인 대기' 줄=수칙서 카드 실위치 딥링크(2026-08-22 실보고 — 동일 계보)");
   ok(/rb9\.addEventListener\("click", function\(\)\{ var t0=document\.querySelector\("#backlogSec"\); if\(t0\)\{ t0\.open=true; gotoEl\(t0\); return; \}/.test(ext), "'여유' 줄도 보관함 실위치+펼침(동일 봉합)");
   ok(ext.includes("var candsMoreOpenWeb=false;") && ext.includes("candsMoreOpenWeb=true;") && ext.includes('ix9>=8 && !candsMoreOpenWeb'), "후보 '더 보기' 펼침이 재렌더에도 유지(expandedConv 전례 — 2초 접힘 실보고 봉합)");
   // 2026-08-21 사용자 실보고 3건: 초안 대기 중 후보 소실·보관함 처리 장치·근거의심 반복
