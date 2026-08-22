@@ -51,7 +51,12 @@
   유지). 사람 표면=대시보드 후보 줄의 보조 줄(textContent — 2026-08-20 개편 표면의 '원문:' 줄과
   같은 방식·"근거: <why>"). 경위 색인 조회 명령(why CLI)과는 무관 — v2의 "why 조회" 표현 삭제.
 - **영수증(1차 blocker②·2차 blocker① 반영)**: 성공·거부 공통 스키마로 별도 장부
-  (`constraint-usage.jsonl` — 경위 영수증 관용구·유계): `{ts, provider, wsKey, outcome:
+  (~~`constraint-usage.jsonl`~~ → **파일 서랍 `stats/constraint-usage/` — 2026-08-23 구현검증 개정**:
+  공유 jsonl은 어떤 변형(trim 재작성·회전 rename)이든 다중 창 열린 append 핸들과 경합해 성공 반환된
+  영수증을 지울 수 있음이 결정적으로 실측돼(개수 기반 정리의 최신성 판정 TOCTOU 4연속 계보), 영수증
+  1건=고유 이름 파일 1개(기록 경로에 삭제·정리 코드 없음)+유계는 일일 스윕 mtime 90일 TTL로 개정.
+  판독은 `readConstraintUsage()` — 후속 부품 B/C 구현자는 jsonl이 아니라 이 판독기를 쓸 것):
+  `{ts, provider, wsKey, outcome:
   registered|rejected, reason?, quoteFp(sha1-16), quoteLen, whyLen, sessionId, turnAnchor}` —
   **원문 비복사**(지문+길이만·ab-7 계보). provider·wsKey 포함으로 TTL 후에도 출처 프로젝트 복원.
   **scope는 영수증에서 제외**(후보 레코드에만 저장 — 표면 표시는 후보 레코드가 원천·영수증은

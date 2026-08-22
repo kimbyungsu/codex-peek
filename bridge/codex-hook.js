@@ -14,7 +14,7 @@ const {
   registerCodexImplementer, codexImplementerSnapshot, codexRoleRevision, writeCodexActive, readCodexActive, atomicWrite, writePhase, resolveScoutRepo, scoutMapStatus,
   scoutHealthLine, maybeCleanupState, configWs, readImplementerRecordLocked, durableProofGate, readCodexTurnStrict, contractReadState,
   patchContractFields, activeAskJobFor, phaseBusy, contractLockIssue, withRoleLock, implementerRecordOf, validLinksShape, scoutArmView,
-  verifyCampaignProgress, effectiveVerifyBudget,
+  verifyCampaignProgress, effectiveVerifyBudget, writeConstraintTurnSnapshot,
 } = require("./contract-lib.js");
 const { validateCapHandoff, capHandoffInstruction, capHandoffContext, codexAssistantText } = require("./verify-cap-handoff.js");
 
@@ -83,14 +83,22 @@ function isVscodeUserSession(j, sid) {
 function effortOf(j, fallback) {
   return j.reasoning_effort || j.effort || j.reasoning || j.collaboration_mode?.settings?.reasoning_effort || fallback || "";
 }
-function heartbeat(j, ws, sid, eventName) {
+function heartbeat(j, ws, sid, eventName, extraFields) {
   const prev = readCodexActive(sid) || {};
+  const turnId = j.turn_id || j.turnId || prev.turnId || "";
+  // [약속 발화 포착 1단계 blocker①] 턴 스냅샷 결속 필드는 '같은 턴' 안에서만 승계 — 도구 이벤트 heartbeat가
+  // 지우면 constraint add가 그 턴의 첫 도구가 아니면 snapshot-missing이 된다(실행 반례). 턴이 바뀌면 폐기
+  // (스냅샷 없는 새 턴에 옛 앵커가 살아남아 다른 턴 원문에 오결속되는 것이 더 위험 — fail-closed 방향 유지).
+  const keepCap = prev.constraintAnchor && prev.constraintSourceHash && String(prev.turnId || "") === String(turnId)
+    ? { constraintAnchor: prev.constraintAnchor, constraintSourceHash: prev.constraintSourceHash } : {};
   writeCodexActive(sid, ws, {
     source:"codex-hook", hookEvent:eventName, hookVersion:2,
-    turnId:j.turn_id || j.turnId || prev.turnId || "",
+    turnId,
     permissionMode:j.permission_mode || prev.permissionMode || "",
     model:j.model || prev.model || "",
     effort:effortOf(j, prev.effort),
+    ...keepCap,
+    ...(extraFields || {}),
   });
 }
 function implementerContext(j, ws, c) {
@@ -366,7 +374,16 @@ function onPrompt(j, ws, sid, c, roleRevision, preface, prePinned) {
   const pinned = prePinned || pinImplementer(j, ws, sid, expectedSession);
   if (!pinned.ok) { context("UserPromptSubmit", preface + "[Codex Bridge] " + pinned.why); return; }
   const turnId = pinned.turnId;
-  heartbeat(j, ws, sid, "UserPromptSubmit");
+  // [약속 발화 포착 §1] Codex 경로 turnAnchor=훅이 이미 가진 turnId. 스냅샷 성공 시에만 anchor 필드 기록(fail-closed).
+  let capFields = null;
+  try {
+    const ptxt = typeof j.prompt === "string" ? j.prompt : "";
+    if (ptxt && turnId) {
+      const snap = writeConstraintTurnSnapshot(ws, turnId, ptxt);
+      if (snap.ok) capFields = { constraintAnchor: String(turnId), constraintSourceHash: snap.sourceHash };
+    }
+  } catch { /* best-effort — 훅 동작 막지 않음 */ }
+  heartbeat(j, ws, sid, "UserPromptSubmit", capFields);
   // 턴 상태 저장 실패를 무시하면 Stop이 turn-missing으로 차단될 때 원인을 알 수 없다 — 1회 재시도 후에도
   // 실패면 주입 컨텍스트에 고지(구현 검증 1차 지적: 상태 기록 실패의 침묵 금지).
   const turnState = { schema:"codex-turn-v1", turnId, workspace:ws, startedAt:Date.now(), lastActionAt:0, modified:false, permissionMode:j.permission_mode||"" };
@@ -517,7 +534,7 @@ function main(raw){
 // [P-9 4차] 테스트 주입구: 훅 실행(require.main)일 때만 stdin을 구동 — 테스트는 require로 내부 결정 함수
 // (역할 세대 CAS 원복 등)를 실행 반례로 검증한다(두 프로세스 경합을 단일 프로세스에서 결정론 재현).
 if (require.main !== module) {
-  module.exports = { classifyPromptSource, revertOnPinFailure, revertSwitchIfRoleUnchanged };
+  module.exports = { classifyPromptSource, revertOnPinFailure, revertSwitchIfRoleUnchanged, heartbeat };
 } else {
 let buf="";process.stdin.on("data",d=>buf+=d);process.stdin.on("end",()=>{try{main(buf);}catch(e){
   try{

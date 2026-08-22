@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled } = require("./contract-lib.js");
+const { askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled, constraintTurnContext, constraintAdd, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -2427,6 +2427,60 @@ function cmdEnvelopeTransition(rest) {
 }
 // 거버넌스 §7 증분 1 — 수칙서 후보 장부 CLI: list=현 승인 세대 기준 후보 상태 조회 / mark=결과 기록(append 전용).
 // 기록 세대=현 승인 세대(계약 envelopeHash) — 소진 재료의 스킵 판정과 같은 축.
+// ── constraint — 약속 발화 포착 부품 A(설계 §1): 구현자가 사용자 발화 원문을 같은 턴에 상신 ────────────
+// 사용: constraint add --quote "<사용자 발화 원문 연속 구절>" --why "<한 줄 근거>" [--scope <파일|영역>]
+// 대조 권위=훅 턴 스냅샷(작문·재구성 fail-closed). 성공해도 '후보'일 뿐 — 판정 경계 반영은 사용자 도장 후.
+function cmdConstraint(rest) {
+  const en = loadLang() === "en";
+  const ws = configWs();
+  if (String(rest[0] || "") !== "add") {
+    console.error(en ? 'usage: constraint add --quote "<verbatim user words>" --why "<one-line reason>" [--scope <file|area>]' : '사용: constraint add --quote "<사용자 발화 원문 연속 구절>" --why "<한 줄 근거>" [--scope <파일|영역>]');
+    return 2;
+  }
+  const flagText = (name) => { // 값이 공백 포함 다단 토큰이어도 다음 --플래그 전까지 합류(따옴표 유실 관용)
+    const i = rest.indexOf(name);
+    if (i < 0) return "";
+    const vals = [];
+    for (let k = i + 1; k < rest.length && !String(rest[k]).startsWith("--"); k++) vals.push(String(rest[k]));
+    return vals.join(" ");
+  };
+  const quote = flagText("--quote");
+  const why = flagText("--why");
+  const scope = flagText("--scope");
+  const ctx = constraintTurnContext();
+  const r = constraintAdd(ws, quote, why, scope, ctx);
+  if (r.ok) {
+    console.log((en ? "registered as a rulebook candidate: " : "수칙서 후보로 상신됨: ") + r.candidateId + (en
+      ? " — recorded in the candidate ledger; it becomes judging authority ONLY after the user stamps it."
+      : " — 후보 장부에 기록됐습니다. 사용자가 도장을 찍어야만 판정 경계에 반영됩니다."));
+    return 0;
+  }
+  const M = {
+    "no-session": [en ? "no implementer session detected (CLAUDE_CODE_SESSION_ID/CODEX_THREAD_ID missing)." : "구현자 세션을 찾지 못했습니다(CLAUDE_CODE_SESSION_ID/CODEX_THREAD_ID 부재).", 2],
+    "no-turn-anchor": [en ? "no turn anchor — send this in the same turn as the user's words (hook records the anchor at turn start)." : "턴 앵커가 없습니다 — 사용자 발화가 있던 '같은 턴'에서 상신하세요(훅이 턴 시작에 앵커를 기록합니다).", 2],
+    "snapshot-missing": [en ? "no prompt snapshot for this turn — the hook could not capture the user's words (old hook or empty prompt). Cannot verify verbatim quoting; not registered." : "이 턴의 원문 스냅샷이 없습니다 — 훅이 사용자 발화를 못 남긴 턴(구훅·빈 프롬프트)이라 원문 대조가 불가능해 상신하지 않았습니다.", 1],
+    "snapshot-mismatch": [en ? "snapshot fingerprint mismatch — the turn record and snapshot disagree; not registered (fail-closed)." : "스냅샷 지문 불일치 — 턴 기록과 스냅샷이 어긋나 상신하지 않았습니다(fail-closed).", 1],
+    "not-in-prompt": [en ? "the quote is not a verbatim contiguous passage of this turn's user prompt — copy the user's words exactly (no paraphrase)." : "인용문이 이 턴 사용자 발화의 '연속 구절'이 아닙니다 — 바꿔 쓰지 말고 원문 그대로 옮기세요.", 1],
+    "too-short": [en ? `quote too short (min ${CONSTRAINT_QUOTE_MIN} chars).` : `인용문이 너무 짧습니다(최소 ${CONSTRAINT_QUOTE_MIN}자).`, 1],
+    "too-long": [en ? `quote over ${CONSTRAINT_QUOTE_MAX} chars — a rulebook item cannot exceed this; ask the user to restate it shorter, then resubmit (no truncated save).` : `인용문이 ${CONSTRAINT_QUOTE_MAX}자를 넘습니다 — 수칙서 항목 상한이라 승격 자체가 불가하니, 줄인 문장으로 다시 말씀받아 재상신하세요(절단 저장은 하지 않습니다).`, 1],
+    "multiline": [en ? "quote spans multiple lines — a rulebook item is one line; pick the single decisive sentence." : "인용문에 줄바꿈이 있습니다 — 수칙서 항목은 1줄 계약이라, 핵심이 담긴 한 문장을 고르세요.", 1],
+    "protocol-vocab": [en ? "quote contains harness protocol markers — rejected (injection guard)." : "인용문에 하네스 규약 어휘가 들어 있어 거부했습니다(주입 방어).", 1],
+    "why-missing": [en ? "--why is required (one-line non-authoritative reason)." : "--why는 필수입니다(비권위 판단 근거 한 줄).", 2],
+    "why-format": [en ? `--why must be a single line within ${CONSTRAINT_WHY_MAX} chars.` : `--why는 개행 없는 ${CONSTRAINT_WHY_MAX}자 이내 한 줄이어야 합니다.`, 2],
+    "envelope-inactive": [en ? "the rulebook is not approved in this workspace yet — approve it first, then candidates can be filed." : "이 작업공간은 수칙서가 아직 승인 전입니다 — 수칙서를 먼저 승인해야 올릴 수 있어요.", 1],
+    "duplicate": [en ? "already filed for this approval generation (same quote fingerprint)." : "이미 이 승인 세대에 같은 원문 지문으로 상신돼 있습니다.", 1],
+    "declined-suppressed": [en ? "the user already declined this in the current approval generation — not re-filed (a new generation resets this)." : "사용자가 현 승인 세대에서 이미 거절한 문안입니다 — 재상신하지 않습니다(새 승인 세대에서 자연 리셋).", 1],
+    "turn-cap": [en ? `per-turn cap reached (${CONSTRAINT_TURN_CAP}).` : `턴당 상신 상한(${CONSTRAINT_TURN_CAP}건)에 도달했습니다.`, 1],
+    "pending-cap": [en ? "pending candidate cap reached — ask the user to triage existing candidates first." : "대기 후보 상한에 도달했습니다 — 기존 후보를 먼저 정리(도장/거절)해야 새로 올릴 수 있어요.", 1],
+    "ledger-write": [en ? "ledger write failed." : "장부 기록에 실패했습니다.", 1],
+  };
+  const m = M[r.reason] || (r.reason && r.reason.startsWith("sensitive-") ? [en ? "quote rejected by the sensitive-form guard (paths/emails/tokens) — never quote secrets; pick a different passage." : "인용문이 민감정보 형태 방어(경로·이메일·토큰류)에 걸렸습니다 — 비밀값은 옮기지 말고 다른 구절을 고르세요.", 1]
+    : r.reason && r.reason.startsWith("why-sensitive-") ? [en ? "--why rejected by the sensitive-form guard." : "--why가 민감정보 형태 방어에 걸렸습니다.", 2]
+    : r.reason && r.reason.startsWith("scope-sensitive-") ? [en ? "--scope rejected by the sensitive-form guard." : "--scope가 민감정보 형태 방어에 걸렸습니다.", 2]
+    : [en ? "rejected: " + r.reason : "거부됨: " + r.reason, 1]);
+  console.error((en ? "not registered (" : "상신 안 됨(") + r.reason + ") — " + m[0] + (en ? " A durable receipt was recorded either way." : " 성공·거부 모두 내구 영수증으로 남았습니다."));
+  return m[1];
+}
 function cmdEnvelopeCandidate(rest) {
   const en = loadLang() === "en";
   const ws = configWs();
@@ -3779,6 +3833,11 @@ function main() {
     case "envelope-transition": { // §7 증분 2 — 중단된 승인 전이 복구(WAL 수렴)
       const rc7 = cmdEnvelopeTransition(rest);
       if (rc7) process.exitCode = rc7;
+      return;
+    }
+    case "constraint": { // 약속 발화 포착 부품 A(CONSTRAINT-CAPTURE-DESIGN v3 §1) — 사용자 발화 원문 상신
+      const rcC = cmdConstraint(rest);
+      if (rcC) process.exitCode = rcC;
       return;
     }
     case "envelope-candidate": { // 거버넌스 §7 증분 1 — 수칙서 후보 장부(list/mark)

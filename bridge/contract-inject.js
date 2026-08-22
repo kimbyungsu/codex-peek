@@ -6,7 +6,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, loadLang, buildInjection, buildVerifyDirective, buildScoutDirective, verifyCampaignProgress, atomicWrite, BRIDGE_DIR, ACTIVE_DIR, writePhase, patchContractFields, contractReadState, activeAskJobFor, phaseBusy, contractLockIssue } = require("./contract-lib.js");
+const { loadContract, loadLang, buildInjection, buildVerifyDirective, buildScoutDirective, verifyCampaignProgress, atomicWrite, BRIDGE_DIR, ACTIVE_DIR, writePhase, patchContractFields, contractReadState, activeAskJobFor, phaseBusy, contractLockIssue, turnAnchorOf, writeConstraintTurnSnapshot } = require("./contract-lib.js");
 
 let input = "";
 process.stdin.on("data", (d) => (input += d));
@@ -23,12 +23,25 @@ process.stdin.on("end", () => {
   // 활성 작업 폴더 기록 → 대시보드/configWs가 VS Code 첫 폴더가 아니라 이 폴더(연 폴더)를 따라가게.
   const sid = hook.session_id || process.env.CLAUDE_CODE_SESSION_ID || "";
   const activeTs = new Date().toISOString();
+  // [약속 발화 포착 §1] 턴 원문 스냅샷 — `constraint add` CLI의 유일 대조 권위(구현모델 작문·기억 재구성 차단).
+  // anchor=sha1(sessionId|active.ts) 앞 16자(캠페인 앵커와 동일 원천·턴마다 유일). 실패=필드 미기록(그 턴 상신 불가
+  // — fail-closed)·훅 동작은 막지 않음(best-effort).
+  let constraintAnchor = "", constraintSourceHash = "";
+  try {
+    const ptxt = (hook && typeof hook.prompt === "string") ? hook.prompt : "";
+    if (ptxt && sid) {
+      const anc = turnAnchorOf(sid, activeTs);
+      const snap = writeConstraintTurnSnapshot(ws, anc, ptxt);
+      if (snap.ok) { constraintAnchor = anc; constraintSourceHash = snap.sourceHash; }
+    }
+  } catch { /* best-effort */ }
   const activePayload = JSON.stringify({
     workspace: ws,
     claudeSession: sid,
     // §5.3: 플랜 모드 감지·라이브표시용. Claude Code UserPromptSubmit 입력의 permission_mode
     // ("plan"이면 플랜 모드). 문서 예시는 "default"라 실제 값은 실로그로 확인(빈값=미노출).
     permissionMode: (hook && typeof hook.permission_mode === "string") ? hook.permission_mode : "",
+    ...(constraintAnchor ? { constraintAnchor, constraintSourceHash } : {}), // 약속 발화 포착 — CLI가 이 턴의 스냅샷을 찾는 열쇠
     ts: activeTs,
   });
   // (1) 레거시 단일 active.json — 확장(activeWorkspace)·세션ID 없는 폴백 경로가 읽음.
