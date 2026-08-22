@@ -105,6 +105,62 @@ t("draft: 병렬 En/Ex 축 원문 복제로 정본 검사 통과+adopted 전이+
   assert.strictEqual(pr.baseHash, HASH, "생성 시점 승인 세대 결속");
   const after = CL.readEnvelopeCandidates(WS).latest.get(cand.candidateId + "@" + HASH);
   assert.strictEqual(after.status, "adopted");
+  // [2026-08-21 초안 폐기 복원] 제안본에 candidateId 결속 → 복원형 폐기가 채택 후보를 proposed로 되돌림
+  assert.strictEqual(pr.candidateId, cand.candidateId, "제안본에 후보 결속(candidateId — 폐기 복원 재료)");
+  const rD = CL.discardEnvelopeProposalRestoring(WS);
+  assert.strictEqual(rD.ok, true, "복원형 폐기 성공");
+  assert.strictEqual(rD.restored, true, "채택 후보 복원 보고");
+  assert.strictEqual(CL.readEnvelopeProposal(WS, REPO).st, "absent", "제안본 파일 제거됨(수칙서 원본 무변)");
+  const back = CL.readEnvelopeCandidates(WS).latest.get(cand.candidateId + "@" + HASH);
+  assert.strictEqual(back.status, "proposed", "★폐기 후 후보=proposed 복원(adopted 고아 반례의 정방향) — 재초안 가능");
+  const r2d = CL.draftEnvelopeCandidate(WS, REPO, cand.candidateId, HASH);
+  assert.strictEqual(r2d.ok, true, "복원된 후보로 재초안 성공(왕복 완결)");
+  // 다음 시험들의 전제(제안본 상태)에 영향 없도록 재폐기·재복원 상태 유지
+  CL.discardEnvelopeProposalRestoring(WS);
+});
+t("복원형 폐기 R2: 다세대 공존 시 '초안의 승인 세대'만 복원(과거 세대 오복원 반례의 정방향)", () => {
+  // 검증자 실행 반례 재현: 같은 후보가 H1(과거)·현 세대(HASH) 양쪽에 adopted로 공존 — 초안 baseHash=HASH.
+  const { latest } = CL.readEnvelopeCandidates(WS);
+  const cand = [...latest.values()].find((x) => x.status === "proposed" && x.title && x.envelopeHash === HASH);
+  const H1 = "9".repeat(40);
+  CL.appendEnvelopeCandidates(WS, [{ candidateId: cand.candidateId, envelopeHash: H1, status: "proposed", title: cand.title, ts: "t" }]);
+  CL.appendEnvelopeCandidates(WS, [{ candidateId: cand.candidateId, envelopeHash: H1, status: "adopted", note: "과거 세대 채택", ts: "t" }]);
+  const rDr = CL.draftEnvelopeCandidate(WS, REPO, cand.candidateId, HASH); // 현 세대 초안(baseHash=HASH)
+  assert.strictEqual(rDr.ok, true, "현 세대 재초안 성공(전제): " + (rDr.error || ""));
+  const rD2 = CL.discardEnvelopeProposalRestoring(WS);
+  assert.strictEqual(rD2.ok === true && rD2.restored === true, true, "복원형 폐기 성공");
+  const lat2 = CL.readEnvelopeCandidates(WS).latest;
+  assert.strictEqual(lat2.get(cand.candidateId + "@" + HASH).status, "proposed", "★현 세대(baseHash)만 proposed 복원");
+  assert.strictEqual(lat2.get(cand.candidateId + "@" + H1).status, "adopted", "과거 세대(H1)는 무접촉(오복원 없음)");
+  const rDr2 = CL.draftEnvelopeCandidate(WS, REPO, cand.candidateId, HASH);
+  assert.strictEqual(rDr2.ok, true, "현 세대 후보로 재초안 가능(왕복 완결)");
+  CL.discardEnvelopeProposalRestoring(WS); // 후속 시험 전제 정리
+});
+t("복원형 폐기 R3: 전이 잠금 직렬화 — 잠금 보유 중엔 폐기·draft 모두 무접촉 실패(경합 창 소멸)", () => {
+  // 검증자 인터리빙 반례의 직렬화 증명: 다른 보유자가 잠금을 쥔 동안 폐기는 파일을 지우지 않고,
+  // draft는 proposal을 쓰지 않는다 — 두 쓰기가 한 잠금을 공유하므로 '폐기가 읽은 뒤 draft가 끼어드는' 창 자체가 없다.
+  const { latest } = CL.readEnvelopeCandidates(WS);
+  const cand = [...latest.values()].find((x) => x.status === "proposed" && x.title && x.envelopeHash === HASH);
+  const rDr = CL.draftEnvelopeCandidate(WS, REPO, cand.candidateId, HASH);
+  assert.strictEqual(rDr.ok, true, "전제: 초안 존재");
+  const lk = CL.acquireEnvelopeTransLock(WS);
+  assert.strictEqual(lk.ok, true, "전제: 외부 보유자가 잠금 획득");
+  try {
+    const rD = CL.discardEnvelopeProposalRestoring(WS);
+    assert.strictEqual(rD.ok === false && rD.restored === false, true, "★잠금 보유 중 폐기=무접촉 실패(파일·장부 불변)");
+    assert.strictEqual(CL.readEnvelopeProposal(WS, REPO).st, "ok", "proposal 파일 보존(삭제 안 됨)");
+    const rDr2 = CL.draftEnvelopeCandidate(WS, REPO, cand.candidateId, HASH);
+    assert.strictEqual(rDr2.ok, false, "★잠금 보유 중 draft=실패(경합 안내)");
+  } finally { CL.releaseEnvelopeTransLock(WS, lk.token); }
+  const rD3 = CL.discardEnvelopeProposalRestoring(WS);
+  assert.strictEqual(rD3.ok === true && rD3.restored === true, true, "잠금 해제 후 정상 폐기·복원(무회귀)");
+});
+t("복원형 폐기: candidateId 없는 구형/수동 제안본=복원 없이 폐기만(보수)", () => {
+  const cur = JSON.parse(fs.readFileSync(path.join(REPO, "verify-envelope.json"), "utf8"));
+  const w = CL.writeEnvelopeProposal(WS, REPO, JSON.stringify(cur, null, 1), "수동 초안"); // meta 없음
+  assert.strictEqual(w.ok, true);
+  const rD = CL.discardEnvelopeProposalRestoring(WS);
+  assert.strictEqual(rD.ok === true && rD.restored === false, true, "결속 없음=복원 없음·폐기만(기존 동작 보존)");
 });
 t("draft: 수칙서가 승인 세대와 다르면 거부(baseHash 결속·§5-3)", () => {
   const cid = crypto.createHash("sha1").update("x1").digest("hex").slice(0, 16);

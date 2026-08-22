@@ -2386,7 +2386,13 @@ function cmdEnvelopeProposal(rest) {
     if (!fp) { console.error(en ? "usage: envelope-proposal propose --file <draft.json> [--note ...]" : "사용: envelope-proposal propose --file <초안.json> [--note ...]"); return 2; }
     let txt; try { txt = fs.readFileSync(fp, "utf8"); } catch { console.error(en ? "cannot read draft file" : "초안 파일을 읽을 수 없음"); return 2; }
     const ni = rest.indexOf("--note");
-    const r = writeEnvelopeProposal(ws, repo, txt, ni >= 0 ? rest.slice(ni + 1).join(" ") : "");
+    // R3(f-cbaf266d 잔여): 수동 propose도 전이 잠금 아래 — draft의 'proposal 쓰기→adopted 기록' 임계구역
+    // 안으로 끼어들어 결속 proposal을 무결속 M으로 교체하는 우회 봉합(모든 proposal writer=한 잠금).
+    const lkP = acquireEnvelopeTransLock(ws);
+    if (!lkP.ok) { console.error(en ? "rulebook busy (another draft/discard/stamp in progress) — retry shortly" : "수칙서 작업 잠금 경합(다른 초안/폐기/도장 진행 중) — 잠시 후 재시도"); return 3; }
+    let r;
+    try { r = writeEnvelopeProposal(ws, repo, txt, ni >= 0 ? rest.slice(ni + 1).join(" ") : ""); }
+    finally { releaseEnvelopeTransLock(ws, lkP.token); }
     if (!r.ok) { console.error((en ? "proposal rejected: " : "제안본 거부: ") + r.error); return 2; }
     console.log((en ? "proposal saved (original & injection unchanged until the dashboard stamp): " : "제안본 저장됨(대시보드 도장 전까지 원본·주입 무변): ") + r.newHash);
     return 0;
@@ -2399,8 +2405,12 @@ function cmdEnvelopeProposal(rest) {
     return 0;
   }
   if (sub === "discard") {
-    discardEnvelopeProposal(ws);
-    console.log(en ? "proposal discarded (original was never touched)" : "제안본 폐기됨(원본은 애초에 무변)");
+    const rD = require("./contract-lib.js").discardEnvelopeProposalRestoring(ws); // 복원형(2026-08-21) — 채택 후보를 판단 대기로 되돌림
+    if (!rD.ok) { // R4 [주의]: 잠금 경합·삭제 실패를 성공으로 출력하던 거짓 보고 봉합
+      console.error(rD.reason === "lock" ? (en ? "rulebook busy (another draft/discard/stamp in progress) — retry shortly" : "수칙서 작업 잠금 경합(다른 초안/폐기/도장 진행 중) — 잠시 후 재시도") : (en ? "discard failed — retry" : "폐기 실패 — 다시 시도"));
+      return 3;
+    }
+    console.log((en ? "proposal discarded (original was never touched)" : "제안본 폐기됨(원본은 애초에 무변)") + (rD.restored ? (en ? " · the adopted candidate was restored to pending" : " · 채택했던 후보는 판단 대기로 복원됨") : ""));
     return 0;
   }
   console.error(en ? "usage: envelope-proposal <propose|show|discard>" : "사용: envelope-proposal <propose|show|discard>");

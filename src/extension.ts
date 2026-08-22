@@ -247,7 +247,7 @@ interface BridgeState {
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
   brainActual: { cc: string; cx: string; scout: string }; // 두뇌 '실제 답'(대화 기록 실측) 표시 문구 — 경고 아닌 평시 정보(피커 표시 결함 실사고 2026-07-08). 기록 없으면 '기록 없음' 문구. scout=마지막 정찰 실행(비용 장부 lastTs — 감사 일치 2026-07-10)
   hasTestsDir: boolean; // 표준 테스트 폴더(tests|test) '감지' 여부 — 성격 프로필용(미감지≠없음, 관행 밖은 못 봄)
-  envelope: { label: string; btn: string | null; btn2: string | null; repo: string; tone: string; lang: Lang; proposal?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string }> } | null; // 거버넌스 증분 1(2차 배치 정정) — 검증 경계(수칙서). 최상위=2트랙 기본 프로젝트 포함·lang=렌더 슬롯 결속. null=부재/ws 없음
+  envelope: { label: string; btn: string | null; btn2: string | null; btn3?: string; repo: string; tone: string; lang: Lang; proposal?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string }> } | null; // 거버넌스 증분 1(2차 배치 정정) — 검증 경계(수칙서). 최상위=2트랙 기본 프로젝트 포함·lang=렌더 슬롯 결속. null=부재/ws 없음
 }
 
 function normWs(p: string): string {
@@ -1056,7 +1056,7 @@ function envelopeDetailText(evv: any, en9: boolean): string {
 }
 // 거버넌스 증분 1(2차 배치 정정 — 구현검증 1차 blocker①②): 검증 경계는 정찰(3트랙)이 아니라 '검증' 계층이다 —
 // MAP 카드가 아닌 최상위 뷰 필드로 항상 계산(2트랙 기본 프로젝트에서도 승인 가능). lang=렌더 슬롯 결속(도장도 그 슬롯 계약에).
-function readEnvelopeView(ws: string | null): { label: string; btn: string | null; btn2: string | null; repo: string; tone: string; lang: Lang; proposal?: string; candsView?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string }> } | null {
+function readEnvelopeView(ws: string | null): { label: string; btn: string | null; btn2: string | null; btn3?: string; repo: string; tone: string; lang: Lang; proposal?: string; candsView?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string }> } | null {
   if (!ws) return null;
   try {
     const CL9: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
@@ -1094,7 +1094,7 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
         const pr9 = CL9.readEnvelopeProposal(ws, repo9);
         if (pr9 && pr9.st === "ok") {
           const cp9 = candsFor9(); // 초안 대기 중에도 남은 후보 열람(2026-08-21 실보고 — 사라진 게 아님을 표시)
-          return { label: tE("🔔 수칙서 개정 초안이 승인을 기다려요 — 지금 적용 중인 수칙서는 그대로이고, 초안 내용을 확인한 뒤 도장을 찍어야만 바뀝니다", "🔔 A rulebook revision draft awaits approval — the active rulebook is unchanged; it changes only after you review and stamp the draft") + (pr9.note ? tE(" (메모: ", " (note: ") + pr9.note + ")" : ""), btn: tE("초안 확인·승인", "Review & approve draft"), btn2: tE("초안 보기", "View draft"), repo: repo9, tone: "warn", lang: slot, proposal: "pending", candsView: "pending-draft", ...(cp9 ? { cands: cp9 } : {}) };
+          return { label: tE("🔔 수칙서 개정 초안이 승인을 기다려요 — 지금 적용 중인 수칙서는 그대로이고, 초안 내용을 확인한 뒤 도장을 찍어야만 바뀝니다", "🔔 A rulebook revision draft awaits approval — the active rulebook is unchanged; it changes only after you review and stamp the draft") + (pr9.note ? tE(" (메모: ", " (note: ") + pr9.note + ")" : ""), btn: tE("초안 확인·승인", "Review & approve draft"), btn2: tE("초안 보기", "View draft"), btn3: tE("초안 폐기(수칙서 무변)", "Discard draft (rulebook unchanged)"), repo: repo9, tone: "warn", lang: slot, proposal: "pending", candsView: "pending-draft", ...(cp9 ? { cands: cp9 } : {}) }; // btn3=폐기(2026-08-21 실보고 — 화면에 폐기 경로 부재 봉합)
         }
         if (pr9 && pr9.st === "corrupt")
           return { label: tE("수칙서 개정 초안 파일이 손상돼 승인 화면에 올릴 수 없어요 — 초안을 다시 작성해 달라고 요청하세요(적용 중인 수칙서는 무사)", "The rulebook draft file is corrupt and cannot be shown for approval — ask for the draft to be rewritten (the active rulebook is intact)"), btn: null, btn2: null, repo: repo9, tone: "warn", lang: slot, proposal: "corrupt" };
@@ -4050,6 +4050,24 @@ class Dashboard {
             else vscode.window.showWarningMessage((enPr ? "Undo failed: " : "되돌리기에 실패했어요: ") + ((rRt && rRt.reason) || "unknown"));
           } catch { vscode.window.showWarningMessage(enPr ? "Undo failed." : "되돌리기에 실패했어요."); }
           this.post(); return;
+        }
+        if (m?.type === "proposalDiscard" && typeof m.repo === "string" && m.repo) { // 초안 폐기(2026-08-21 실보고) — 수칙서 무변·채택 후보 복원
+          const wsD = dashboardWorkspace(); if (!wsD) return;
+          const enD = loadLangExt() === "en";
+          const tgtD = scoutTargetFor(wsD).repo;
+          if (normWs(tgtD) !== normWs(m.repo)) { vscode.window.showWarningMessage(enD ? "The target changed — the card refreshes." : "정찰 대상이 바뀌었어요 — 카드가 갱신됩니다."); this.post(); return; }
+          const okD = enD ? "Discard draft" : "초안 폐기";
+          vscode.window.showInformationMessage(
+            enD ? "Discard this revision draft? The active rulebook was never touched and stays as-is. The adopted candidate returns to 'awaiting your call' so you can judge it again later." : "이 개정 초안을 폐기할까요? 적용 중인 수칙서는 애초에 건드린 적이 없어 그대로입니다. 채택했던 후보는 '판단 대기'로 되돌아가 나중에 다시 판단할 수 있어요.",
+            { modal: true }, okD).then((sel) => {
+            if (sel !== okD) return;
+            let rD: any = null;
+            try { const CLD: any = require(path.join(BRIDGE_DIR, "contract-lib.js")); rD = typeof CLD.discardEnvelopeProposalRestoring === "function" ? CLD.discardEnvelopeProposalRestoring(wsD) : { ok: CLD.discardEnvelopeProposal(wsD), restored: false }; } catch { rD = { ok: false, restored: false }; }
+            if (rD && rD.ok) vscode.window.showInformationMessage((enD ? "Draft discarded — rulebook unchanged." : "초안을 폐기했어요 — 수칙서는 그대로입니다.") + (rD.restored ? (enD ? " The candidate is back to awaiting your call." : " 후보는 판단 대기로 복원됐어요.") : ""));
+            else vscode.window.showWarningMessage(enD ? "Discard failed — please try again." : "폐기에 실패했어요 — 다시 시도해 주세요.");
+            this.post();
+          });
+          return;
         }
         if (m?.type === "proposalShow" && typeof m.repo === "string" && m.repo) { // §7 증분 2 — 초안 열람(승인 아님)
           const wsP = dashboardWorkspace(); if (!wsP) return;
@@ -7040,12 +7058,13 @@ class Dashboard {
         var act2T=e9.proposal==="pending"?"proposalShow":"envelopeShow";
         if(e9.btn){ var ab=document.createElement("button"); ab.style.cssText="margin-top:4px;font-weight:700"; ab.textContent=e9.btn; ab.addEventListener("click", function(){ vscode.postMessage({type:actT, repo: e9.repo, lang: e9.lang}); }); ec.appendChild(ab); }
         if(e9.btn2){ var vb2=document.createElement("button"); vb2.style.cssText="margin-top:4px;margin-left:4px"; vb2.textContent=e9.btn2; vb2.addEventListener("click", function(){ vscode.postMessage({type:act2T, repo: e9.repo, lang: e9.lang}); }); ec.appendChild(vb2); }
+        if(e9.btn3){ var vb3=document.createElement("button"); vb3.className="secondary"; vb3.style.cssText="margin-top:4px;margin-left:4px"; vb3.textContent=e9.btn3; vb3.addEventListener("click", function(){ vscode.postMessage({type:"proposalDiscard", repo: e9.repo, lang: e9.lang}); }); ec.appendChild(vb3); } // 초안 폐기(2026-08-21) — 수칙서 무변·채택 후보는 판단 대기로 복원
         if(e9.cands && e9.cands.length){ // §7 증분 3+2026-08-20 UX 개편 — 수칙서 후보: 상황 설명 조립(구조 데이터)·쉬운 버튼·원문은 보조 보존(요약 작문 금지 — 오염 방지)
           var ch9=document.createElement("div"); ch9.style.cssText="margin-top:8px;font-weight:600"; ch9.setAttribute("data-cands-box","1"); ch9.textContent=T("수칙서 후보 — 사람 판단 대기 "+e9.cands.length+"건(기록 또는 병합 초안 생성 — 어느 쪽도 도장 전에는 효력 없음)","Rulebook candidates — awaiting your call ("+e9.cands.length+") (record or create a merge draft; neither takes effect before the stamp)"); ec.appendChild(ch9); // [기억 권위 A-4] 채택=초안 생성·효력은 도장부터(§8 계약 유지)
           var chSub9=document.createElement("div"); chSub9.className="muted"; chSub9.style.cssText="font-size:11px;margin-top:2px";
           var viewOnly9=e9.candsView==="pending-draft"; // 초안 대기 중=열람 전용(2026-08-21 실보고 — '14개가 사라짐' 혼란 봉합)
           chSub9.textContent=viewOnly9
-            ?T("남은 후보들은 사라진 게 아니에요 — 위 초안을 도장/폐기로 먼저 처리하면 이어서 하나씩 판단할 수 있습니다(초안은 한 번에 하나).","The remaining candidates are not gone — stamp or discard the draft above first, then judge them one by one (one draft at a time).")
+            ?T("남은 후보들은 사라진 게 아니에요 — 초안은 한 번에 하나라, 위 초안을 '확인·승인'(도장) 또는 '초안 폐기' 버튼으로 먼저 처리해 주세요. 폐기하면 바로 이 자리에서 이어집니다(채택했던 후보도 판단 대기로 복원). 도장하면 승인 세대가 바뀌어 다음 검증 1회 후 남은 후보가 새로 상신돼요.","The remaining candidates are not gone — one draft at a time: stamp it or press 'Discard draft' first. After discard you continue right here (the adopted candidate is restored); after a stamp, remaining candidates re-propose after the next verification.")
             :T("검증에서 잡혀 이미 고친 실수들이에요. 올리면 앞으로 같은 실수를 항상 차단하는 규칙 초안이 만들어지고, 도장을 찍어야만 실제로 적용됩니다.","These were caught and fixed in past verifications. Adopting drafts a rule that always blocks the same mistake; it only applies after you stamp it."); ec.appendChild(chSub9);
           var more9=null; // [기억 권위 A-5] 8건 초과=접힘 — '더 보기'로 전량 접근(절단은 표시 제한일 뿐이라는 blocker④ 봉합)
           e9.cands.forEach(function(cd, ix9){

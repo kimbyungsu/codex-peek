@@ -355,6 +355,11 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   ok(ext.includes('candsView: "pending-draft"') && ext.includes('viewOnly9=e9.candsView==="pending-draft"') && ext.includes("undecided9 && !viewOnly9"), "초안 대기 중에도 후보 목록 열람(버튼 없음·'사라진 게 아님' 안내) — 14건 소실 혼란 봉합");
   ok(ext.includes('m?.type === "backlogMark"') && ext.includes('m.status === "done" || m.status === "dismissed"') && /wsKeyFor\(wsB\)\) !== m\.wsKey/.test(ext) && ext.includes("backlogSetStatus"), "보관함 행 처리 핸들러(완료/기각·wsKey 재대조·기록만)");
   ok(ext.includes('T("해결됨(장부 닫기)"') && ext.includes('T("안 하기로 종결"'), "보관함 행에 처리 버튼 2종(화면에서 바로 장부 닫기)");
+  // 2026-08-21(2) 초안 폐기 경로: 화면 버튼 부재+폐기 시 채택 후보 고아 실보고 봉합
+  ok(ext.includes('btn3: tE("초안 폐기(수칙서 무변)"') && ext.includes('m?.type === "proposalDiscard"') && ext.includes("discardEnvelopeProposalRestoring"), "초안 대기 카드에 폐기 버튼+복원형 폐기 핸들러(확인 모달·수칙서 무변 명시)");
+  // R4(f-a65cacd8): 수동 propose CLI도 전이 잠금 — 모든 proposal writer가 한 잠금(임계구역 침입 봉합)
+  const cb21 = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
+  ok(/const lkP = acquireEnvelopeTransLock\(ws\);/.test(cb21) && /finally \{ releaseEnvelopeTransLock\(ws, lkP\.token\); \}/.test(cb21), "수동 envelope-proposal propose=전이 잠금 아래(우회 writer 0)");
   ok(ext.includes("자동으로 끝난 일(참고 — 하실 일 아님)") && ext.includes("지금 여기서 하실 일은 없습니다"), "MAP 구획=할 일/끝난 일 시각 분리(실적을 대기로 오독하는 흐름 봉합)");
   // draft는 제안본 생성일 뿐 전이(도장)가 아님 — candMark 경로에 applyEnvelopeTransition 부재 계약은 유지.
   ok(ext.includes('m?.type === "candMark"') && ext.includes('note: "dashboard-record"') && !/candMark[\s\S]{0,2400}applyEnvelopeTransition/.test(ext.slice(ext.indexOf('m?.type === "candMark"'))), "채택 경로에 승인 전이 발동 없음(초안 생성까지만 — 효력은 도장부터·§7 개정 계약)");
