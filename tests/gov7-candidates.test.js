@@ -350,6 +350,9 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   // 2026-08-20 사용자 실보고 3건: 보관함 두 줄의 오착지·더보기 재렌더 접힘
   ok(/blDue9, tab:"verify", el:"#backlogSec"/.test(ext), "보관함 검토 기한 줄=보관함 실위치 딥링크(탭 상단 오착지 봉합)");
   ok(/acts9\.push\(\{n:1, tab:"setup", el:"#envCard"/.test(ext), "'수칙서 승인 대기' 줄=수칙서 카드 실위치 딥링크(2026-08-22 실보고 — 동일 계보)");
+  // 2026-08-22(2) 승인 지문 언어 공유: 직접 승인 도장=양 슬롯·대시보드 자기치유(반대 슬롯 지문=현행 파일 sha 일치 시 표기 정렬)
+  ok(ext.includes('if (typeof CLS.stampEnvelopeAllSlots !== "function") return false;') && ext.includes("stampEnvelopeAllSlots(wsE, tgtNow, shaAt)") && ext.includes("rS && rS.ok"), "직접 승인=WAL 경유 트랜잭션 도장(부분 기록 영속 금지)·구세대 브릿지=거부 fail-closed(f-71d4c2a8 연속분)");
+  ok(ext.includes("setEnvelopeHashAllSlots(ws, oh9) === 2") && ext.includes("oh9 === evv.sha1"), "자기치유=2슬롯 성공만 표기 정렬(지문 일치 조건부 — 새 권위 부여 아님)");
   ok(/rb9\.addEventListener\("click", function\(\)\{ var t0=document\.querySelector\("#backlogSec"\); if\(t0\)\{ t0\.open=true; gotoEl\(t0\); return; \}/.test(ext), "'여유' 줄도 보관함 실위치+펼침(동일 봉합)");
   ok(ext.includes("var candsMoreOpenWeb=false;") && ext.includes("candsMoreOpenWeb=true;") && ext.includes('ix9>=8 && !candsMoreOpenWeb'), "후보 '더 보기' 펼침이 재렌더에도 유지(expandedConv 전례 — 2초 접힘 실보고 봉합)");
   // 2026-08-21 사용자 실보고 3건: 초안 대기 중 후보 소실·보관함 처리 장치·근거의심 반복

@@ -192,6 +192,121 @@ t("개정판 빌더 반례: 범위 밖 번호·중복 빼기·빈 선택·세대
   try { assert.match(String(CL.draftEnvelopeRevision(WS, REPO, { removeItems: [{ axis: "supportedEnv", index: 0 }], approvedHash: HASH }).error || ""), /잠금 경합/, "잠금 보유 중=무접촉 실패(writer 직렬화 합류)"); }
   finally { CL.releaseEnvelopeTransLock(WS, lk.token); }
 });
+t("승인 지문 언어 공유(2026-08-22): setEnvelopeHashAllSlots=양 슬롯 기록", () => {
+  const H9 = "e".repeat(40);
+  assert.strictEqual(CL.setEnvelopeHashAllSlots(WS, H9), 2, "ko·en 두 슬롯 모두 성공");
+  assert.strictEqual((CL.loadContract(WS, "ko") || {}).envelopeHash, H9, "ko 슬롯 기록");
+  assert.strictEqual((CL.loadContract(WS, "en") || {}).envelopeHash, H9, "en 슬롯 기록 — 도장은 문서 전문에 찍히므로 언어 무관(비의도 분리 봉합)");
+  const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
+  assert.ok(/const upN = setEnvelopeHashAllSlots\(ws, wal\.newHash\)/.test(src), "전이(도장) 경로도 양 슬롯(소스 계약)");
+});
+t("승인 지문 언어 공유 R2(f-71d4c2a8 반례): 부분 성공(1슬롯)=실패·WAL 보존 → 장애 해소 후 복구 재시도로 2슬롯 수렴", () => {
+  const WS3 = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-ws3-"));
+  const REPO3 = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-repo3-"));
+  fs.writeFileSync(path.join(REPO3, CL.ENVELOPE_FILE), envRaw);
+  const newObj = JSON.parse(envRaw); newObj.outOfScope = newObj.outOfScope.concat(["부분 실패 반례 항목"]);
+  const newText = JSON.stringify(newObj, null, 1);
+  const newHash = crypto.createHash("sha1").update(newText).digest("hex");
+  const walFile = CL.envelopeTransWalFileFor(WS3);
+  fs.mkdirSync(path.dirname(walFile), { recursive: true });
+  fs.writeFileSync(walFile, JSON.stringify({ schema: "env-trans-wal-v1", ws: WS3, repo: REPO3, lang: "ko", oldText: envRaw, oldHash: HASH, newText, newHash, ts: "T" }));
+  // en 슬롯 장애 주입: 계약 파일 경로를 디렉터리로 점유 → 쓰기 실패(실행 반례 — 모킹 없음)
+  const enF = CL.contractFileFor(WS3, "en");
+  fs.mkdirSync(enF, { recursive: true });
+  const r1 = CL.recoverEnvelopeTransition(WS3);
+  assert.strictEqual(r1.st, "failed", "부분 성공=완료 확정 금지(실패 반환)");
+  assert.strictEqual(r1.reason, "contract-write-partial", "사유=부분 기록(0슬롯 실패와 구분)");
+  assert.ok(fs.existsSync(walFile), "WAL 보존 — 재시도로 수렴할 때까지 정리 금지");
+  assert.strictEqual((CL.loadContract(WS3, "ko") || {}).envelopeHash, newHash, "성공 슬롯(ko)은 기록됨(멱등 재시도 전제)");
+  assert.notStrictEqual((CL.loadContract(WS3, "en") || {}).envelopeHash, newHash, "장애 슬롯(en)=미기록");
+  fs.rmdirSync(enF); // 장애 해소
+  const r2 = CL.recoverEnvelopeTransition(WS3);
+  assert.strictEqual(r2.st, "recovered", "복구 재시도=완료(원본 교체는 멱등 통과)");
+  assert.strictEqual((CL.loadContract(WS3, "en") || {}).envelopeHash, newHash, "en 슬롯 수렴");
+  assert.strictEqual((CL.loadContract(WS3, "ko") || {}).envelopeHash, newHash, "ko 슬롯 유지");
+  assert.ok(!fs.existsSync(walFile), "완료 후 WAL 정리");
+});
+t("직접 승인 R3(확인검증 blocker 연속분): stampEnvelopeAllSlots=WAL 경유 트랜잭션 — 부분 실패=WAL 잔존·복구 수렴, 경합 변경=거부", () => {
+  const WS4 = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-ws4-"));
+  const REPO4 = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-repo4-"));
+  fs.writeFileSync(path.join(REPO4, CL.ENVELOPE_FILE), envRaw);
+  assert.strictEqual(CL.stampEnvelopeAllSlots(WS4, REPO4, "0".repeat(40)).reason, "sha-drift", "사용자가 본 전문과 다른 지문=거부");
+  const r1 = CL.stampEnvelopeAllSlots(WS4, REPO4, HASH);
+  assert.strictEqual(r1.ok, true, "정상 도장 성공: " + (r1.reason || ""));
+  assert.strictEqual((CL.loadContract(WS4, "ko") || {}).envelopeHash, HASH, "ko 슬롯 기록");
+  assert.strictEqual((CL.loadContract(WS4, "en") || {}).envelopeHash, HASH, "en 슬롯 기록");
+  assert.strictEqual(CL.envelopeTransState(WS4), "clear", "성공 후 WAL 정리(원본 무변 — 순수 지문 트랜잭션)");
+  // 부분 실패: en 계약 경로 디렉터리 점유 + 새 전문으로 재도장 시도
+  const WS5 = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-ws5-"));
+  fs.mkdirSync(CL.contractFileFor(WS5, "en"), { recursive: true });
+  const r2 = CL.stampEnvelopeAllSlots(WS5, REPO4, HASH);
+  assert.strictEqual(r2.ok, false, "부분 성공=완료 금지");
+  assert.strictEqual(r2.reason, "contract-write-partial", "사유=부분 기록");
+  assert.strictEqual(CL.envelopeTransState(WS5), "recover-needed", "★WAL 잔존=검증 시작 차단 상태(조용한 반쪽 승인 금지)");
+  assert.strictEqual(CL.stampEnvelopeAllSlots(WS5, REPO4, HASH).reason, "recover-needed", "WAL 잔존 중 재도장=거부(복구 우선)");
+  fs.rmdirSync(CL.contractFileFor(WS5, "en"));
+  assert.strictEqual(CL.recoverEnvelopeTransition(WS5).st, "recovered", "장애 해소 후 복구=수렴");
+  assert.strictEqual((CL.loadContract(WS5, "en") || {}).envelopeHash, HASH, "en 슬롯 수렴");
+  assert.strictEqual(CL.envelopeTransState(WS5), "clear", "수렴 후 WAL 정리");
+});
+t("직접 승인 R4(f-6c81a2d4 반례): 도장 정리가 병행 초안을 삭제하지 않음+proposal 존재=도장 거부+한 잠금 계약", () => {
+  const WS6 = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-ws6-"));
+  const REPO6 = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-repo6-"));
+  fs.writeFileSync(path.join(REPO6, CL.ENVELOPE_FILE), envRaw);
+  const pObj = JSON.parse(envRaw); pObj.outOfScope = pObj.outOfScope.concat(["병행 초안 항목"]);
+  const pText = JSON.stringify(pObj, null, 1);
+  // ① proposal 존재=도장 거부(잠금 안 재확인 — 초안 폐기 오발 방지)
+  assert.strictEqual(CL.writeEnvelopeProposal(WS6, REPO6, pText, "t", {}).ok, true, "초안 픽스처 기록");
+  assert.strictEqual(CL.stampEnvelopeAllSlots(WS6, REPO6, HASH).reason, "proposal-pending", "초안 대기 중 직접 도장=거부");
+  CL.discardEnvelopeProposal(WS6);
+  // ② 부분 실패로 도장 WAL 잔존 → 그 사이 초안 생성(병행 writer 시나리오) → 복구 완료 후 초안 생존
+  fs.mkdirSync(CL.contractFileFor(WS6, "en"), { recursive: true });
+  assert.strictEqual(CL.stampEnvelopeAllSlots(WS6, REPO6, HASH).reason, "contract-write-partial", "부분 실패=WAL 잔존");
+  assert.strictEqual(CL.writeEnvelopeProposal(WS6, REPO6, pText, "t2", {}).ok, true, "WAL 잔존 창에서 초안 생성(병행 재현)");
+  fs.rmdirSync(CL.contractFileFor(WS6, "en"));
+  assert.strictEqual(CL.recoverEnvelopeTransition(WS6).st, "recovered", "복구 수렴");
+  assert.strictEqual(CL.readEnvelopeProposal(WS6, REPO6).st, "ok", "★도장 WAL(kind:stamp) 정리가 무관한 초안을 삭제하지 않음(채택 후보 고아화 금지)");
+  assert.strictEqual((CL.loadContract(WS6, "ko") || {}).envelopeHash, HASH, "ko 수렴");
+  assert.strictEqual((CL.loadContract(WS6, "en") || {}).envelopeHash, HASH, "en 수렴");
+  // ③ 소스 계약: 확인·WAL·전이=한 전이 잠금 아래(잠금 보유형 본체 직접 호출)·정리=제안본 소비 전이만 폐기
+  const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
+  assert.ok(/function stampEnvelopeAllSlots\(ws, repo, sha\) \{[\s\S]{0,400}acquireEnvelopeTransLock\(ws\)/.test(src) && src.includes("return applyEnvelopeTransitionLocked(ws, repo, null, wal);"), "도장=잠금 보유 구간 안 확인→WAL→전이");
+  assert.ok(src.includes('if (wal.kind !== "stamp") {') && src.includes('pOwn.st === "ok" && pOwn.newHash === wal.newHash'), "정리 분기=도장 WAL 제외+소유(전문 지문) 결속 확인부만 폐기");
+});
+t("개정 전이 R5(f-9b7c4e21 반례): 소비한 제안본만 폐기 — recover 창에서 생긴 다른 초안은 복구가 삭제하지 않음", () => {
+  const WS7 = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-ws7-"));
+  const REPO7 = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-repo7-"));
+  fs.writeFileSync(path.join(REPO7, CL.ENVELOPE_FILE), envRaw);
+  // ① 정상 개정 전이: 자기 제안본(P1)은 종전대로 소비·폐기(소유 결속 일치 경로 무회귀)
+  const o1 = JSON.parse(envRaw); o1.outOfScope = o1.outOfScope.concat(["개정 1"]);
+  const t1 = JSON.stringify(o1, null, 1);
+  assert.strictEqual(CL.writeEnvelopeProposal(WS7, REPO7, t1, "p1", {}).ok, true);
+  const rA = CL.applyEnvelopeTransition(WS7, REPO7, "ko", null);
+  assert.strictEqual(rA.ok, true, "정상 전이 성공: " + (rA.reason || ""));
+  assert.strictEqual(CL.readEnvelopeProposal(WS7, REPO7).st, "absent", "소비한 P1=폐기(무회귀)");
+  // ② 개정 WAL 부분 실패 → recover 창에서 '다른' 초안 P3 생성 → 복구 완료 후 P3 생존
+  const o2 = JSON.parse(t1); o2.outOfScope = o2.outOfScope.concat(["개정 2"]);
+  const t2 = JSON.stringify(o2, null, 1);
+  const h1 = crypto.createHash("sha1").update(t1).digest("hex");
+  const h2 = crypto.createHash("sha1").update(t2).digest("hex");
+  const walFile = CL.envelopeTransWalFileFor(WS7);
+  fs.writeFileSync(walFile, JSON.stringify({ schema: "env-trans-wal-v1", ws: WS7, repo: REPO7, lang: "ko", oldText: t1, oldHash: h1, newText: t2, newHash: h2, ts: "T" }));
+  // ①의 정상 전이가 en 계약 '파일'을 이미 만들었으므로, 파일 제거 후 경로를 디렉터리로 점유해 쓰기 장애 주입
+  fs.rmSync(CL.contractFileFor(WS7, "en"), { force: true });
+  fs.mkdirSync(CL.contractFileFor(WS7, "en"), { recursive: true });
+  assert.strictEqual(CL.recoverEnvelopeTransition(WS7).reason, "contract-write-partial", "부분 실패=WAL 잔존");
+  const o3 = JSON.parse(t2); o3.outOfScope = o3.outOfScope.concat(["개정 3 — 병행 초안"]);
+  const t3 = JSON.stringify(o3, null, 1);
+  assert.strictEqual(CL.writeEnvelopeProposal(WS7, REPO7, t3, "p3", {}).ok, true, "recover 창에서 다른 초안 생성(병행 재현)");
+  fs.rmdirSync(CL.contractFileFor(WS7, "en"));
+  assert.strictEqual(CL.recoverEnvelopeTransition(WS7).st, "recovered", "복구 수렴");
+  const pAfter = CL.readEnvelopeProposal(WS7, REPO7);
+  assert.strictEqual(pAfter.st, "ok", "★소유 불일치 초안=보존(복구가 삭제하지 않음)");
+  assert.strictEqual(pAfter.newHash, crypto.createHash("sha1").update(t3).digest("hex"), "생존본=P3 그대로");
+  assert.strictEqual((CL.loadContract(WS7, "en") || {}).envelopeHash, h2, "슬롯은 WAL 전이대로 수렴");
+  const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
+  assert.ok(src.includes("pOwn.st === \"ok\" && pOwn.newHash === wal.newHash"), "정리=전문 지문 결속 확인부만 폐기(소스 계약)");
+});
 t("복원형 폐기: candidateId 없는 구형/수동 제안본=복원 없이 폐기만(보수)", () => {
   const cur = JSON.parse(fs.readFileSync(path.join(REPO, "verify-envelope.json"), "utf8"));
   const w = CL.writeEnvelopeProposal(WS, REPO, JSON.stringify(cur, null, 1), "수동 초안"); // meta 없음

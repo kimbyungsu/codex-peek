@@ -3785,10 +3785,24 @@ function envelopeTransState(ws) {
 }
 // 도장 전이 본체(§7 승인 도장 전이 계약): ⓪잠금+WAL 선기록(구·신 전문) ①원본 교체 ②계약 해시 기록 ③정리.
 // 호출자=확장 승인 핸들러(도장 직후)·복구 스캐너. lang=계약 슬롯(확장 렌더 슬롯과 결속).
+// [승인 지문 언어 공유 2026-08-22 사용자 실보고] 수칙서 파일은 병렬 축(En/Ex)을 가진 '한 문서'인데
+// 승인 지문이 언어 슬롯별 계약 파일에 따로 저장돼, ko에서 도장 찍으면 en은 미승인 취급(카드 '승인 대기'·
+// en 검증 무주입)이 되던 비의도 분리 봉합 — 도장은 문서 전문에 찍히므로 지문 기록도 양 슬롯 동시.
+// 반환: 성공 슬롯 수(2=완전·1=부분[호출자가 경고]·0=실패).
+function setEnvelopeHashAllSlots(ws, hash) {
+  let okN = 0;
+  for (const lg of LANGS) { try { if (updateContractPatch(ws, lg, { envelopeHash: hash }).ok) okN++; } catch { /* 부분 실패=okN에 반영 */ } }
+  return okN;
+}
 function applyEnvelopeTransition(ws, repo, lang, wal) {
   const lk = acquireEnvelopeTransLock(ws);
   if (!lk.ok) return { ok: false, reason: lk.reason };
-  try {
+  try { return applyEnvelopeTransitionLocked(ws, repo, lang, wal); } finally { releaseEnvelopeTransLock(ws, lk.token); }
+}
+// 잠금 보유형 본체(확인검증 blocker f-6c81a2d4): 호출자가 전이 잠금을 이미 보유한 구간 전용 — 모듈 밖 공개 금지.
+// 도장 래퍼가 '확인→WAL→전이'를 한 잠금 아래 묶을 수 있게 분리(잠금 밖 확인=TOCTOU로 병행 초안 삭제 위험).
+function applyEnvelopeTransitionLocked(ws, repo, lang, wal) {
+  {
     const walFile = envelopeTransWalFileFor(ws);
     if (!wal) { // 신규 전이: 제안본에서 WAL 구성(복구 재개는 기존 WAL 전달)
       const pr = readEnvelopeProposal(ws, repo);
@@ -3809,12 +3823,43 @@ function applyEnvelopeTransition(ws, repo, lang, wal) {
       if (!atomicWrite(path.join(repo, ENVELOPE_FILE), wal.newText)) return { ok: false, reason: "replace-failed" };
     }
     // ② 계약 해시 기록(멱등)
-    const up = updateContractPatch(ws, wal.lang || undefined, { envelopeHash: wal.newHash });
-    if (!up || !up.ok) return { ok: false, reason: "contract-write" };
-    // ③ 정리 — WAL 완료·제안본 폐기
+    // [재검증 blocker f-71d4c2a8] 부분 성공(1슬롯)을 완료로 확정하면 반대 언어 검증이 수칙서를 계속 누락한다
+    // — 전 슬롯 미만=실패 반환·WAL 보존(복구 스캐너의 멱등 재시도가 전 슬롯 수렴할 때까지 정리 금지).
+    const upN = setEnvelopeHashAllSlots(ws, wal.newHash); // 양 슬롯(언어 공유 — 2026-08-22)
+    if (upN < LANGS.length) return { ok: false, reason: upN >= 1 ? "contract-write-partial" : "contract-write" };
+    // ③ 정리 — WAL 완료. 제안본 폐기는 '이 WAL이 소비한 그 제안본'만: 도장 WAL(kind:stamp)은 proposal과 무관
+    // (f-6c81a2d4), 개정 WAL도 recover-needed 창에서 생성된 '다른' 초안(newHash 불일치)을 소유 확인 없이
+    // 삭제하면 채택 후보가 고아가 된다(f-9b7c4e21) — 전문 지문 결속(newHash===wal.newHash·같은 repo·판독 ok)이
+    // 확인될 때만 폐기하고, 그 외(다른 초안·corrupt·부재)는 보존.
     try { fs.rmSync(walFile, { force: true }); } catch { /* 잔존=다음 복구가 멱등 완료 */ }
-    discardEnvelopeProposal(ws);
+    if (wal.kind !== "stamp") {
+      let pOwn = null; try { pOwn = readEnvelopeProposal(ws, repo); } catch { pOwn = null; }
+      if (pOwn && pOwn.st === "ok" && pOwn.newHash === wal.newHash) discardEnvelopeProposal(ws);
+    }
     return { ok: true, newHash: wal.newHash };
+  }
+}
+// [직접 승인 도장 2026-08-22 확인검증 blocker f-71d4c2a8 연속분] 파일 무변 도장도 전이 계약(WAL)을 재사용 —
+// 슬롯 직접 기록은 부분 성공(ko만 영속)이 '조용한 반쪽 승인'으로 남는다: 성공 슬롯은 즉시 승인 표시·주입되고
+// 승인 버튼이 사라져 재시도 수렴도 없다. WAL 경유면 부분 실패=WAL 잔존 → 검증 시작·주입 차단(recover-needed)
+// +복구 스캐너 멱등 재시도로 전 슬롯 수렴. old==new라 원본 교체는 멱등 통과, 순수 지문 기록 트랜잭션이 된다.
+function stampEnvelopeAllSlots(ws, repo, sha) {
+  // [f-6c81a2d4] 확인(proposal 부재·WAL 부재)→WAL 기록→전이를 '한 전이 잠금' 아래 수행 — 잠금 밖 확인이면
+  // draft·수동 propose writer(같은 잠금 사용)가 사이에 초안을 만들고, 정리 단계가 그 초안을 삭제하는 TOCTOU.
+  const lk = acquireEnvelopeTransLock(ws);
+  if (!lk.ok) return { ok: false, reason: lk.reason };
+  try {
+    let txt = null;
+    try { txt = fs.readFileSync(path.join(repo, ENVELOPE_FILE), "utf8"); } catch { return { ok: false, reason: "file-unreadable" }; }
+    if (sha1Of(txt) !== sha) return { ok: false, reason: "sha-drift" }; // 도장 대상=사용자가 본 전문(경합 변경=거부)
+    let prSt = "corrupt"; try { prSt = readEnvelopeProposal(ws, repo).st; } catch { /* 판독 불가=fail-closed */ }
+    if (prSt !== "absent") return { ok: false, reason: "proposal-pending" }; // 초안 폐기 오발 방지(corrupt 포함 거부)
+    try { fs.accessSync(envelopeTransWalFileFor(ws)); return { ok: false, reason: "recover-needed" }; } catch { /* WAL 없음=진행 */ }
+    const wal = { schema: "env-trans-wal-v1", kind: "stamp", ws: String(ws), repo: String(repo), lang: null, oldText: txt, oldHash: sha, newText: txt, newHash: sha, ts: new Date().toISOString() };
+    const walFile = envelopeTransWalFileFor(ws);
+    try { fs.mkdirSync(path.dirname(walFile), { recursive: true }); } catch { /* atomicWrite가 실패 반환 */ }
+    if (!atomicWrite(walFile, JSON.stringify(wal, null, 1))) return { ok: false, reason: "wal-write" };
+    return applyEnvelopeTransitionLocked(ws, repo, null, wal);
   } finally { releaseEnvelopeTransLock(ws, lk.token); }
 }
 // 복구 스캐너: WAL 잔존 시 상태별 수렴(§7 복구 규칙 — 완료 방향 재개. 원복은 사용자 판단 영역이라 자동 실행하지 않고
@@ -4537,7 +4582,7 @@ function formatForClaude(answer, lang, profile, machine, rejudgeSnap) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}${machineLine}\n처리 의무: ${action}${rjBlock}`;
 }
 
-module.exports = { VERIFIER_PROVIDERS, normVerifierProvider, BASE_PROFILE_AXIS, verifierFormatDirective, verifierBaselineFor, ASK_SHAPE_SECTIONS, askShapeCheck, askShapeNotice, appendAskShape, loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, scoutCouplingAttach, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, discardEnvelopeProposalRestoring, draftEnvelopeRevision, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, MEMORY_CANDIDATE_PENDING_MAX, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, verifyCampaignProgress, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, codexScoutExecEnv, TOOL_EXEC_ENV, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, economyConfigFpFrom, readEconomySnapshot, DS_SNAPSHOT_ENV, selfAdapterSha, selfExecFp, precisionExecFp, precisionExecFpFrom, readPrecisionConfigSnapshot, codexScoutExecArgsFromSnapshot, claimAutoReprobe, completeAutoReprobe, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, SESSION_LEASES_DIR, sessionLeaseFileFor, readSessionLease, acquireSessionLease, releaseSessionLease, setSessionLeaseChild, clearSessionLease, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, authoritativeVerdict, findingsBlockRange, formatForClaude, normRejudgeSnap, safeLoadRejudge, REJUDGE_SNAP_MAX, appendVerdict, trimVerdicts, appendAttachUsage, trimAttachUsage, ATTACH_USAGE_FILE, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { VERIFIER_PROVIDERS, normVerifierProvider, BASE_PROFILE_AXIS, verifierFormatDirective, verifierBaselineFor, ASK_SHAPE_SECTIONS, askShapeCheck, askShapeNotice, appendAskShape, loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, scoutCouplingAttach, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, discardEnvelopeProposalRestoring, draftEnvelopeRevision, setEnvelopeHashAllSlots, stampEnvelopeAllSlots, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, MEMORY_CANDIDATE_PENDING_MAX, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, verifyCampaignProgress, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, codexScoutExecEnv, TOOL_EXEC_ENV, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, economyConfigFpFrom, readEconomySnapshot, DS_SNAPSHOT_ENV, selfAdapterSha, selfExecFp, precisionExecFp, precisionExecFpFrom, readPrecisionConfigSnapshot, codexScoutExecArgsFromSnapshot, claimAutoReprobe, completeAutoReprobe, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, SESSION_LEASES_DIR, sessionLeaseFileFor, readSessionLease, acquireSessionLease, releaseSessionLease, setSessionLeaseChild, clearSessionLease, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, authoritativeVerdict, findingsBlockRange, formatForClaude, normRejudgeSnap, safeLoadRejudge, REJUDGE_SNAP_MAX, appendVerdict, trimVerdicts, appendAttachUsage, trimAttachUsage, ATTACH_USAGE_FILE, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
 module.exports.codexImplementerSession = codexImplementerSession;
 module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
 // P-6 회수 영수증 계약(설계 v5.1)

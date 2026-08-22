@@ -115,7 +115,7 @@ console.log("[5] 배선 — ask 조립·판정문 경고·확장 UI(소스 단�
   ok(/ev2\.sha1 !== shaAt/.test(ext) && ext.includes("envelopeHash: shaAt"), "모달 사이 파일 변경 재확인(지문 재대조) 후에만 도장 기록");
   ok(ext.includes("envelope: readEnvelopeView(ws)") && !ext.includes("envelope: envelopeView"), "카드 재료=최상위 뷰 필드 — 2트랙 기본 프로젝트 포함(1차 blocker① 배치 정정·정찰 종속 제거)");
   ok(/function readEnvelopeView[^]{0,1600}loadLangExt\(\)[^]{0,1600}loadContract\(ws, slot\)/.test(ext), "상태 판독=렌더 언어 슬롯 결속(1차 blocker②)");
-  ok(/type:actT, repo: e9\.repo, lang: e9\.lang/.test(ext) && /actT=e9\.proposal==="recover"\?"proposalRecover":e9\.proposal==="pending"\?"proposalApprove":"envelopeApprove"/.test(ext) && ext.includes("patchContractExt(wsE, apLang"), "승인 도장=카드가 렌더된 슬롯 계약에 기록(전역 언어 전환 경합 차단·§7 증분 2 분기: 초안=proposalApprove·기본=envelopeApprove)");
+  ok(/type:actT, repo: e9\.repo, lang: e9\.lang/.test(ext) && /actT=e9\.proposal==="recover"\?"proposalRecover":e9\.proposal==="pending"\?"proposalApprove":"envelopeApprove"/.test(ext) && ext.includes("stampEnvelopeAllSlots(wsE, tgtNow, shaAt)"), "승인 도장=WAL 경유 양 슬롯 트랜잭션(2026-08-22 지문 슬롯 분리+부분 영속 봉합·§7 증분 2 분기: 초안=proposalApprove·기본=envelopeApprove)");
   ok(ext.includes("modal: true, detail: detail9") && /pre9\[ax\] \+ "-" \+ \(i9 \+ 1\)/.test(ext), "승인 모달=항목 전문+ID 제시(1차 blocker③ — 공용 생성기 경유)");
   ok(ext.includes("초과로 절삭돼 초과분은 주입에서 빠져요"), "카드=절삭 상태 경고 tone(1차 blocker④)");
   ok(ext.includes("const cutNote9 = evv.truncated === true") && ext.includes('cutNote9 ? "warn" : "info"') && /달라졌어요[^]{0,200}\+ cutNote9/.test(ext), "승인 전(대기·재승인) 라벨에도 절삭 경고 병기(2차 blocker① — 숨김 금지)");
@@ -189,7 +189,10 @@ console.log("[8] 승인 UX — 부분 부동의 경로·상황예시 문안");
   const dr = CL.readVerifyEnvelope(ROOT);
   ok(dr.st === "ok" && dr.truncated !== true, "개정 제안본=스키마 유효·상한 안");
   const all8 = [...dr.data.supportedEnv, ...dr.data.alwaysBlocker, ...dr.data.outOfScope];
-  ok(all8.length === 17 && all8.every((x) => x.includes("예:") || x.includes("전제")), "전 항목 상황예시 병기(추상·기술 문구 제거 — 2026-07-22 사용자 지시)");
+  const styled8 = all8.filter((x) => x.includes("예:") || x.includes("전제"));
+  // [2026-08-22 살아있는 문서 계약] 작업대 도장으로 후보 원문(사용자 편집 대기)이 실등재됨 — 정확 17항 고정은
+  // 사용자 승인마다 체인이 깨지는 못박기라 기준선(작성 17항=상황예시 병기)만 유지·승격 원문 항목은 예외.
+  ok(styled8.length >= 17 && all8.length - styled8.length <= 1, "작성 기준선 17항=상황예시 병기 유지+무예시 항목=현재 승인분 1건 이하(추가 무예시 등재=이 핀을 의식적으로 갱신해야 통과 — 확인검증 보완 f-2d8b7c91)");
 }
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

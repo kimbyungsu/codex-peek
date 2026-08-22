@@ -1068,6 +1068,15 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
     if (evv.st === "corrupt") return { label: tE("수칙서 파일이 깨져 있어 적용을 멈췄어요(verify-envelope.json 판독 불가 — 검증엔 주입 안 됨)", "The rulebook file is unreadable — not applied (verify-envelope.json is not injected)"), btn: null, btn2: null, repo: repo9, tone: "warn", lang: slot };
     let hash9: string | null = null;
     try { hash9 = (CL9.loadContract(ws, slot) || {}).envelopeHash || null; } catch { hash9 = null; }
+    // [자기치유 2026-08-22] 슬롯별 승인 지문 비대칭 정렬: 이 슬롯이 미승인인데 '반대 슬롯' 지문이 현행 파일
+    // 전문과 일치하면 같은 문서에 이미 찍힌 도장의 표기 누락 — 양 슬롯 동기(새 권위 부여 아님·지문 불일치면 무동작).
+    if (!hash9 && evv.st === "ok") {
+      try {
+        const other9: Lang = slot === "ko" ? "en" : "ko";
+        const oh9 = (CL9.loadContract(ws, other9) || {}).envelopeHash || null;
+        if (oh9 && oh9 === evv.sha1 && typeof CL9.setEnvelopeHashAllSlots === "function" && CL9.setEnvelopeHashAllSlots(ws, oh9) === 2) hash9 = oh9; // 2슬롯 성공만 치유 확정(부분=현 슬롯 미기록인데 화면만 적용 표시되는 오표시 금지 — f-71d4c2a8)
+      } catch { /* 치유 실패=종전 표시(승인 대기) */ }
+    }
     // [후보 목록 계산 — 2026-08-21 사용자 실보고로 헬퍼화] 초안 대기 분기에서도 같은 목록을 열람용으로
     // 동봉해야 "채택 하나 눌렀더니 14개가 사라짐" 혼란이 없다(초안=한 번에 하나·나머지는 대기 표시).
     const candsFor9 = (): Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string }> | undefined => {
@@ -3932,8 +3941,8 @@ class Dashboard {
           try { const CL9: any = require(path.join(BRIDGE_DIR, "contract-lib.js")); evvV = typeof CL9.readVerifyEnvelope === "function" ? CL9.readVerifyEnvelope(tgtV) : null; } catch { evvV = null; }
           if (!evvV || evvV.st !== "ok") { vscode.window.showWarningMessage(enV ? "Cannot read the rulebook file." : "수칙서 파일을 읽을 수 없어요."); return; }
           const msgV = enV
-            ? "Verification envelope — current contents (read-only). To drop or reword an item, tell the implementer its id (e.g., oos-2); the file gets revised and re-proposed for approval."
-            : "검증 경계(수칙서) — 현재 내용입니다(열람 전용). 빼거나 고치고 싶은 항목이 생기면 번호(예: oos-2)를 구현모델에게 말씀해 주세요 — 파일을 고쳐 다시 승인 요청을 드립니다.";
+            ? "Verification envelope — current contents (read-only). This is the currently approved version: add/remove marks in the workbench are NOT reflected here until you build a revision draft and stamp it. To drop or reword an item, tell the implementer its id (e.g., oos-2); the file gets revised and re-proposed for approval."
+            : "검증 경계(수칙서) — 현재 내용입니다(열람 전용). 이 창은 현행 승인본이라 작업대의 올림·빼기 표시는 아직 반영되지 않아요 — '개정판 초안 만들기' 후 도장까지 마쳐야 바뀝니다. 빼거나 고치고 싶은 항목이 생기면 번호(예: oos-2)를 구현모델에게 말씀해 주세요 — 파일을 고쳐 다시 승인 요청을 드립니다.";
           vscode.window.showInformationMessage(msgV, { modal: true, detail: envelopeDetailText(evvV, enV) });
           return;
         }
@@ -3972,7 +3981,8 @@ class Dashboard {
             // 도장 실패=사건 잔존(계약의 도장 지문 불일치=수확 미자격이 미완 표지). sourceRefs는 현재
             // 비어 후보 대기(자동 등재는 sourceRefs 결속 사건만 — 점진 보급 구조).
             let bind9: any = null;
-            try { const MPV9: any = require(path.join(BRIDGE_DIR, "map-provenance.js")); bind9 = MPV9.recordApprovalWithStamp(tgtNow, { envelopeHash: shaAt, sourceRefs: [] }, () => patchContractExt(wsE, apLang, { envelopeHash: shaAt })); } catch { bind9 = null; }
+            // 도장=양 슬롯 기록(언어 공유 — 2026-08-22 실보고: 슬롯별 지문 분리로 en이 미승인 취급되던 비의도 분리 봉합)
+            try { const MPV9: any = require(path.join(BRIDGE_DIR, "map-provenance.js")); bind9 = MPV9.recordApprovalWithStamp(tgtNow, { envelopeHash: shaAt, sourceRefs: [] }, () => { try { const CLS: any = require(path.join(BRIDGE_DIR, "contract-lib.js")); if (typeof CLS.stampEnvelopeAllSlots !== "function") return false; const rS = CLS.stampEnvelopeAllSlots(wsE, tgtNow, shaAt); return !!(rS && rS.ok); } catch { return false; } }); } catch { bind9 = null; } // 도장=WAL 경유 양 슬롯 트랜잭션(부분 기록 영속 금지)·구세대 브릿지=거부 fail-closed(자동 동기화가 세대를 맞춘다)
             if (!bind9 || !bind9.recorded) { vscode.window.showWarningMessage(en9 ? "Failed to record the approval event — approval aborted (no stamp written)." : "승인 사건 기록에 실패해 승인을 중단했어요(도장 미기록 — 다시 시도해 주세요)."); this.post(); return; }
             if (bind9.stamped) vscode.window.showInformationMessage(en9 ? "Rulebook approved — applies from the next verification." : "수칙서 승인됨 — 다음 검증부터 적용됩니다.");
             else vscode.window.showWarningMessage(en9 ? "Failed to store the approval — please try again." : "승인 기록 저장에 실패했어요 — 잠시 후 다시 시도해 주세요.");
