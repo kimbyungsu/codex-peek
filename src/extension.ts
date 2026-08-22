@@ -247,7 +247,7 @@ interface BridgeState {
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
   brainActual: { cc: string; cx: string; scout: string }; // 두뇌 '실제 답'(대화 기록 실측) 표시 문구 — 경고 아닌 평시 정보(피커 표시 결함 실사고 2026-07-08). 기록 없으면 '기록 없음' 문구. scout=마지막 정찰 실행(비용 장부 lastTs — 감사 일치 2026-07-10)
   hasTestsDir: boolean; // 표준 테스트 폴더(tests|test) '감지' 여부 — 성격 프로필용(미감지≠없음, 관행 밖은 못 봄)
-  envelope: { label: string; btn: string | null; btn2: string | null; btn3?: string; repo: string; tone: string; lang: Lang; proposal?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string }> } | null; // 거버넌스 증분 1(2차 배치 정정) — 검증 경계(수칙서). 최상위=2트랙 기본 프로젝트 포함·lang=렌더 슬롯 결속. null=부재/ws 없음
+  envelope: { label: string; btn: string | null; btn2: string | null; btn3?: string; repo: string; tone: string; lang: Lang; proposal?: string; gen?: string; axes?: Record<string, string[]>; wsKey?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string }> } | null; // 거버넌스 증분 1(2차 배치 정정) — 검증 경계(수칙서). 최상위=2트랙 기본 프로젝트 포함·lang=렌더 슬롯 결속. null=부재/ws 없음
 }
 
 function normWs(p: string): string {
@@ -1056,7 +1056,7 @@ function envelopeDetailText(evv: any, en9: boolean): string {
 }
 // 거버넌스 증분 1(2차 배치 정정 — 구현검증 1차 blocker①②): 검증 경계는 정찰(3트랙)이 아니라 '검증' 계층이다 —
 // MAP 카드가 아닌 최상위 뷰 필드로 항상 계산(2트랙 기본 프로젝트에서도 승인 가능). lang=렌더 슬롯 결속(도장도 그 슬롯 계약에).
-function readEnvelopeView(ws: string | null): { label: string; btn: string | null; btn2: string | null; btn3?: string; repo: string; tone: string; lang: Lang; proposal?: string; candsView?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string }> } | null {
+function readEnvelopeView(ws: string | null): { label: string; btn: string | null; btn2: string | null; btn3?: string; repo: string; tone: string; lang: Lang; proposal?: string; candsView?: string; gen?: string; axes?: Record<string, string[]>; wsKey?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string }> } | null {
   if (!ws) return null;
   try {
     const CL9: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
@@ -1124,7 +1124,10 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
       }
     } catch { adm9 = ""; }
     const cands9 = candsFor9(); // 헬퍼 단일 경로(초안 대기 분기와 같은 계산 — 2026-08-21)
-    return { label: tE(`적용 중 — 지원 ${n9[0]}·절대 ${n9[1]}·범위밖 ${n9[2]}항목이 검증 판정 경계로 주입돼요(파일을 고치면 재승인 전까지 중단)`, `Active — ${n9[0]}/${n9[1]}/${n9[2]} items injected as the judging boundary (edits suspend it until re-approval)`) + adm9, btn: null, btn2: tE("내용 보기", "View details"), repo: repo9, tone: "ok", lang: slot, ...(cands9 ? { cands: cands9 } : {}) };
+    // [개정 작업대 2026-08-22] 현행 항목을 축별로 동봉(표시·빼기 선택용 — 원문 그대로·index는 파일 순서)
+    const axes9: Record<string, string[]> = {};
+    try { for (const ax of ["supportedEnv", "alwaysBlocker", "outOfScope"]) axes9[ax] = (evv.data[ax] || []).map((x: string) => String(x)); } catch { /* 표시 생략 */ }
+    return { label: tE(`적용 중 — 지원 ${n9[0]}·절대 ${n9[1]}·범위밖 ${n9[2]}항목이 검증 판정 경계로 주입돼요(파일을 고치면 재승인 전까지 중단)`, `Active — ${n9[0]}/${n9[1]}/${n9[2]} items injected as the judging boundary (edits suspend it until re-approval)`) + adm9, btn: null, btn2: tE("내용 보기", "View details"), repo: repo9, tone: "ok", lang: slot, gen: hash9 || "", axes: axes9, wsKey: (() => { try { return typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : ""; } catch { return ""; } })(), ...(cands9 ? { cands: cands9 } : {}) };
   } catch { return null; }
 }
 function patchContractOnceExt(ws: string | null, lang: Lang | undefined, patch: Record<string, unknown>): ContractPatchRes {
@@ -4051,6 +4054,26 @@ class Dashboard {
           } catch { vscode.window.showWarningMessage(enPr ? "Undo failed." : "되돌리기에 실패했어요."); }
           this.post(); return;
         }
+        // [개정 작업대 2026-08-22] 개정판 초안 생성(올림 N+빼기 M → 도장 1번) — strict 인자·gen/wsKey 재대조.
+        if (m?.type === "envelopeRevise" && Array.isArray(m.adds) && Array.isArray(m.removes) && typeof m.gen === "string" && m.gen && typeof m.wsKey === "string" && m.wsKey) {
+          const wsR9 = dashboardWorkspace(); if (!wsR9) return;
+          const enR9 = loadLangExt() === "en";
+          try {
+            const CLR: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
+            if (typeof CLR.wsKeyFor !== "function" || String(CLR.wsKeyFor(wsR9)) !== m.wsKey) { vscode.window.showWarningMessage(enR9 ? "The active project changed — the card refreshes; please mark again." : "화면이 떠 있는 사이 활성 프로젝트가 바뀌었어요 — 카드가 갱신됩니다. 다시 표시해 주세요."); this.post(); return; }
+            const genNow9 = (CLR.loadContract(wsR9) || {}).envelopeHash || null;
+            if ((m.gen || null) !== (genNow9 || null)) { vscode.window.showWarningMessage(enR9 ? "The rulebook was re-approved while marking — selections reset; please mark again." : "표시하는 사이 수칙서가 재승인됐어요 — 선택이 초기화됩니다. 다시 표시해 주세요."); this.post(); return; }
+            const adds9 = m.adds.filter((x: any) => typeof x === "string" && /^[0-9a-f]{16}$/.test(x)).slice(0, 12);
+            const rem9 = m.removes.filter((r: any) => r && typeof r.axis === "string" && ["supportedEnv", "alwaysBlocker", "outOfScope"].includes(r.axis) && Number.isInteger(r.index) && r.index >= 0).slice(0, 36);
+            if (adds9.length !== m.adds.length || rem9.length !== m.removes.length || (!adds9.length && !rem9.length)) { vscode.window.showWarningMessage(enR9 ? "Invalid selection — the card refreshes." : "선택 형식이 올바르지 않아요 — 카드가 갱신됩니다."); this.post(); return; }
+            const repoR9 = scoutTargetFor(wsR9).repo;
+            let rv9: any = null;
+            try { rv9 = typeof CLR.draftEnvelopeRevision === "function" ? CLR.draftEnvelopeRevision(wsR9, repoR9, { addCandidateIds: adds9, removeItems: rem9, approvedHash: m.gen }) : { ok: false, error: "old-runtime(node install.js 필요)" }; } catch { rv9 = { ok: false, error: "exception" }; }
+            if (rv9 && rv9.ok) vscode.window.showInformationMessage((enR9 ? `Revision draft created (add ${rv9.adds} · remove ${rv9.removes}) — review via 'View draft' and stamp to apply.` : `개정판 초안을 만들었어요(올림 ${rv9.adds}·빼기 ${rv9.removes}) — '초안 보기'로 확인 후 도장을 찍어야 적용됩니다.`) + (rv9.parallelCopied ? (enR9 ? " Parallel axes copied verbatim — edit translations before stamping." : " 병렬 축은 원문 그대로 복제됐어요 — 도장 전에 번역·예시를 다듬어 주세요.") : ""));
+            else vscode.window.showWarningMessage((enR9 ? "Draft failed: " : "개정판 생성 실패: ") + String((rv9 && rv9.error) || "unknown"));
+          } catch { vscode.window.showWarningMessage(enR9 ? "Draft failed." : "개정판 생성에 실패했어요."); }
+          this.post(); return;
+        }
         if (m?.type === "proposalDiscard" && typeof m.repo === "string" && m.repo) { // 초안 폐기(2026-08-21 실보고) — 수칙서 무변·채택 후보 복원
           const wsD = dashboardWorkspace(); if (!wsD) return;
           const enD = loadLangExt() === "en";
@@ -5640,6 +5663,9 @@ class Dashboard {
   // 모듈 레벨이라 이 webview가 사는 동안 유지되고, 대시보드를 닫았다 다시 열면 새 webview라 리셋(=기본 접힘).
   const expandedConv = new Set();
   var candsMoreOpenWeb=false; // 수칙서 후보 '더 보기' 펼침 기억 — 15초 재렌더가 2초 만에 도로 접던 실보고(2026-08-20) 봉합(expandedConv 전례·웹뷰 수명)
+  // [개정 작업대 2026-08-22] 올림·빼기 선택 상태(재렌더 생존·웹뷰 수명) — 승인 세대(gen)에 결속: 세대가
+  // 바뀌면 자동 초기화(구세대 선택이 신세대 개정에 오적용되는 경로 차단).
+  var wbAdds=new Set(); var wbRemoves=new Set(); var wbGen=""; // wbGen=wsKey+"|"+승인지문 복합키(R2 blocker ab-1 — 같은 지문을 쓰는 타 작업공간으로 선택 이월 차단)
   // 펼친 정찰 구역 패널 키 모음(정찰 흐름·최신 지도) — 매 재렌더가 #scoutBox를 통째 재생성해 details 펼침이
   // 저절로 접히던 실버그(사용자 실측 2026-07-08 — 검증 대화에서 고친 것과 같은 부류)의 동형 해법.
   const openPanels = new Set();
@@ -7052,6 +7078,8 @@ class Dashboard {
       if (!segTouched.vb){ curVB=appVB; if($("vBudget")&&document.activeElement!==$("vBudget")) $("vBudget").value=curVB; }
       // P-12 2b: 상속·적용 시점 안내(표시 전용 — 저장 경로 미포함). C-C 모드에서 원시 슬롯 값이 없으면 CL-C 상속임을 표기.
       safe(function(){ var ec=$("envCard"); if(!ec) return; var e9=d.envelope; ec.innerHTML=""; if(!e9){ ec.style.display="none"; return; } ec.style.display="block";
+        var wbKey0=String(e9.wsKey||"")+"|"+String(e9.gen||""); // 작업공간+세대 복합 결속(R2 blocker ab-1)
+        if(e9.gen!==undefined && wbGen!==wbKey0){ wbGen=wbKey0; wbAdds.clear(); wbRemoves.clear(); } // 어느 축이 바뀌어도 초기화
         var h9=document.createElement("div"); h9.style.fontWeight="600"; h9.textContent=(d.lang==="en"?"Verification envelope (rulebook)":"검증 경계(수칙서)"); ec.appendChild(h9);
         var s9=document.createElement("div"); if(e9.tone==="warn"){ s9.style.cssText="color:var(--vscode-editorWarning-foreground,#d9a441)"; } else { s9.className="muted"; } s9.textContent=e9.label; ec.appendChild(s9);
         var actT=e9.proposal==="recover"?"proposalRecover":e9.proposal==="pending"?"proposalApprove":"envelopeApprove"; // §7 증분 2 — 초안·복구는 별도 채널(도장=사용자 전용 표면)
@@ -7059,6 +7087,7 @@ class Dashboard {
         if(e9.btn){ var ab=document.createElement("button"); ab.style.cssText="margin-top:4px;font-weight:700"; ab.textContent=e9.btn; ab.addEventListener("click", function(){ vscode.postMessage({type:actT, repo: e9.repo, lang: e9.lang}); }); ec.appendChild(ab); }
         if(e9.btn2){ var vb2=document.createElement("button"); vb2.style.cssText="margin-top:4px;margin-left:4px"; vb2.textContent=e9.btn2; vb2.addEventListener("click", function(){ vscode.postMessage({type:act2T, repo: e9.repo, lang: e9.lang}); }); ec.appendChild(vb2); }
         if(e9.btn3){ var vb3=document.createElement("button"); vb3.className="secondary"; vb3.style.cssText="margin-top:4px;margin-left:4px"; vb3.textContent=e9.btn3; vb3.addEventListener("click", function(){ vscode.postMessage({type:"proposalDiscard", repo: e9.repo, lang: e9.lang}); }); ec.appendChild(vb3); } // 초안 폐기(2026-08-21) — 수칙서 무변·채택 후보는 판단 대기로 복원
+        (function(){ var valid9=new Set(); (e9.cands||[]).forEach(function(c9){ if(!c9.status||c9.status==="proposed") valid9.add(c9.id); }); [...wbAdds].forEach(function(id9){ if(!valid9.has(id9)) wbAdds.delete(id9); }); })(); // 가지치기(R2·R3 보완) — 후보가 '전부' 사라진 경우 포함 무조건 실행(외부 처분 경계)
         if(e9.cands && e9.cands.length){ // §7 증분 3+2026-08-20 UX 개편 — 수칙서 후보: 상황 설명 조립(구조 데이터)·쉬운 버튼·원문은 보조 보존(요약 작문 금지 — 오염 방지)
           var ch9=document.createElement("div"); ch9.style.cssText="margin-top:8px;font-weight:600"; ch9.setAttribute("data-cands-box","1"); ch9.textContent=T("수칙서 후보 — 사람 판단 대기 "+e9.cands.length+"건(기록 또는 병합 초안 생성 — 어느 쪽도 도장 전에는 효력 없음)","Rulebook candidates — awaiting your call ("+e9.cands.length+") (record or create a merge draft; neither takes effect before the stamp)"); ec.appendChild(ch9); // [기억 권위 A-4] 채택=초안 생성·효력은 도장부터(§8 계약 유지)
           var chSub9=document.createElement("div"); chSub9.className="muted"; chSub9.style.cssText="font-size:11px;margin-top:2px";
@@ -7080,12 +7109,47 @@ class Dashboard {
             var undecided9=!cd.status||cd.status==="proposed";
             var sit9=document.createElement("div"); sit9.textContent=(undecided9?"":"["+(cd.status==="adopted"?T("채택됨","adopted"):cd.status==="declined"?T("안 올림","declined"):cd.status)+"] ")+kl9; row9.appendChild(sit9);
             if(cd.title){ var org9=document.createElement("div"); org9.className="muted"; org9.style.cssText="font-size:11px;margin-top:2px"; org9.textContent=T("원문: ","original: ")+cd.title; org9.title=cd.title; row9.appendChild(org9); }
-            var mb9=function(lab,st,strong){ var b9=document.createElement("button"); b9.style.cssText="margin-top:5px;margin-right:5px;font-size:12px"+(strong?";font-weight:600":""); if(!strong)b9.className="secondary"; b9.textContent=lab; b9.onclick=function(){ vscode.postMessage({type:"candMark", id: cd.id, kind: cd.kind, status: st, gen: cd.gen, wsKey: cd.wsKey, lang: e9.lang}); }; row9.appendChild(b9); };
-            if(undecided9 && !viewOnly9){ if(cd.kind==="resolved-blocker"){ mb9(T("수칙서 초안 만들기","Draft into rulebook"),"adopted",true); mb9(T("이번엔 안 올림","Not this time"),"declined"); } else { mb9(T("올리기로 기록","Record: adopt"),"adopted",true); mb9(T("안 올림 기록","Record: decline"),"declined"); } } // 초안 대기 중=버튼 없음(열람만)
+            var mb9=function(lab,st,strong){ var b9=document.createElement("button"); b9.style.cssText="margin-top:5px;margin-right:5px;font-size:12px"+(strong?";font-weight:600":""); if(!strong)b9.className="secondary"; b9.textContent=lab; b9.onclick=function(){ if(st==="declined"){ wbAdds.delete(cd.id); if(typeof wbSync9==="function") wbSync9(); } vscode.postMessage({type:"candMark", id: cd.id, kind: cd.kind, status: st, gen: cd.gen, wsKey: cd.wsKey, lang: e9.lang}); }; row9.appendChild(b9); }; // declined=올림 표시 자동 해제(R2 보완 — stale 선택 잔존 차단)
+            // [개정 작업대 2026-08-22] resolved-blocker의 즉시 단건 초안을 '올림 표시' 토글로 교체 —
+            // 표시해 두고 아래 '개정판 초안 만들기' 1번으로 N건+빼기 M건을 한 도장에 싣는다(1건 단독도 동일 경로).
+            if(undecided9 && !viewOnly9){
+              if(cd.kind==="resolved-blocker"){
+                var on9=wbAdds.has(cd.id);
+                var tg9=document.createElement("button"); tg9.style.cssText="margin-top:5px;margin-right:5px;font-size:12px"+(on9?";font-weight:600":""); if(!on9)tg9.className="secondary";
+                tg9.textContent=on9?T("✓ 올림 표시됨(누르면 해제)","✓ marked to add (click to unmark)"):T("올림 표시","Mark to add");
+                tg9.onclick=function(){ var on=!wbAdds.has(cd.id); if(on) wbAdds.add(cd.id); else wbAdds.delete(cd.id); tg9.textContent=on?T("✓ 올림 표시됨(누르면 해제)","✓ marked to add (click to unmark)"):T("올림 표시","Mark to add"); tg9.className=on?"":"secondary"; tg9.style.fontWeight=on?"600":""; if(typeof wbSync9==="function") wbSync9(); };
+                row9.appendChild(tg9);
+                mb9(T("이번엔 안 올림","Not this time"),"declined");
+              } else { mb9(T("올리기로 기록","Record: adopt"),"adopted",true); mb9(T("안 올림 기록","Record: decline"),"declined"); }
+            } // 초안 대기 중=버튼 없음(열람만)
             if(ix9>=8 && !candsMoreOpenWeb){ row9.style.display="none"; row9.setAttribute("data-candmore","1"); more9=more9||0; more9++; } // 펼침 기억 시 숨김 없음(재렌더 생존)
             ec.appendChild(row9);
           });
           if(more9){ var mt9=document.createElement("button"); mt9.style.cssText="margin-top:5px;font-size:12px"; mt9.className="secondary"; mt9.textContent=T("더 보기 (+"+more9+")","Show more (+"+more9+")"); mt9.onclick=function(){ candsMoreOpenWeb=true; ec.querySelectorAll("[data-candmore]").forEach(function(el){ el.style.display=""; }); mt9.remove(); }; ec.appendChild(mt9); }
+        }
+        var wbSync9=null; // 개정판 버튼 동기(토글 onclick에서 호출 — 아래 작업대 블록이 정의)
+        if(e9.axes && e9.proposal===undefined){ // [개정 작업대 2026-08-22] 적용 중 상태에서만(초안 대기·복구 중=비표시)
+          var wbH=document.createElement("div"); wbH.style.cssText="margin-top:10px;font-weight:600"; wbH.textContent=T("현행 수칙서 항목 — 빼거나 고칠 것 표시","Current rulebook items — mark removals"); ec.appendChild(wbH);
+          var wbSub=document.createElement("div"); wbSub.className="muted"; wbSub.style.cssText="font-size:11px;margin-top:2px";
+          wbSub.textContent=T("사실과 다르거나 더 안 지킬 항목에 '빼기 표시'를 하세요. 표시는 기록일 뿐이고, 아래 '개정판 초안 만들기'를 눌러 도장을 찍어야만 실제로 바뀝니다. 고치기는 빼기+대화로 새 문안 지시(입력란은 후속).","Mark items to remove. Nothing changes until you build the revision draft below and stamp it."); ec.appendChild(wbSub);
+          var axLbl={supportedEnv:T("지원 환경","supported env"),alwaysBlocker:T("항상 차단","always block"),outOfScope:T("범위 밖","out of scope")};
+          ["supportedEnv","alwaysBlocker","outOfScope"].forEach(function(ax){
+            (e9.axes[ax]||[]).forEach(function(txt,ix){
+              var key=ax+"|"+ix;
+              var row=document.createElement("div"); row.style.cssText="font-size:12px;margin-top:5px;padding:5px 8px;border-radius:5px;background:var(--vscode-editorWidget-background)";
+              var tx=document.createElement("span"); tx.textContent="["+axLbl[ax]+" #"+(ix+1)+"] "+(txt.length>90?txt.slice(0,90)+"…":txt); tx.title=txt; row.appendChild(tx);
+              var on0=wbRemoves.has(key);
+              var rb=document.createElement("button"); rb.style.cssText="margin-left:6px;font-size:11px"+(on0?";font-weight:600":""); if(!on0)rb.className="secondary";
+              rb.textContent=on0?T("✓ 빼기 표시됨(누르면 해제)","✓ marked to remove (click to unmark)"):T("빼기 표시","Mark to remove");
+              rb.onclick=function(){ var on=!wbRemoves.has(key); if(on) wbRemoves.add(key); else wbRemoves.delete(key); rb.textContent=on?T("✓ 빼기 표시됨(누르면 해제)","✓ marked to remove (click to unmark)"):T("빼기 표시","Mark to remove"); rb.className=on?"":"secondary"; rb.style.fontWeight=on?"600":""; if(typeof wbSync9==="function") wbSync9(); };
+              row.appendChild(rb); ec.appendChild(row);
+            });
+          });
+          var wbBar=document.createElement("button"); wbBar.style.cssText="margin-top:8px;font-weight:700"; ec.appendChild(wbBar);
+          var wbNote=document.createElement("div"); wbNote.className="muted"; wbNote.style.cssText="font-size:11px;margin-top:2px"; wbNote.textContent=T("올림·빼기를 원하는 만큼(1건 단독도) 담아 개정판 초안 1개를 만들고, 도장 1번으로 적용합니다.","Bundle any number of adds/removals (a single change is fine) into one revision draft, then one stamp."); ec.appendChild(wbNote);
+          wbSync9=function(){ var n=wbAdds.size, m=wbRemoves.size; if(n+m>0){ wbBar.style.display=""; wbNote.style.display=""; wbBar.textContent=T("개정판 초안 만들기 (올림 "+n+" · 빼기 "+m+")","Build revision draft (add "+n+" · remove "+m+")"); } else { wbBar.style.display="none"; wbNote.style.display="none"; } };
+          wbBar.onclick=function(){ var removes=[...wbRemoves].map(function(k){ var i=k.lastIndexOf("|"); return { axis:k.slice(0,i), index:Number(k.slice(i+1)) }; }); vscode.postMessage({type:"envelopeRevise", adds:[...wbAdds], removes:removes, gen:String(e9.gen||""), wsKey:String(e9.wsKey||""), lang:e9.lang}); };
+          wbSync9();
         }
       });
       safe(function(){ var n=$("vBudgetNote"); if(!n) return;

@@ -340,11 +340,11 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   // [UX 개편 2026-08-20 사용자 실보고] 헤더 문구를 쉬운 말+건수 표기로 재개정(도장 전 무효력 문구는 유지가 계약).
   ok(ext.includes("computeEnvelopeCandidatesFor(ws)") && ext.includes("수칙서 후보 — 사람 판단 대기 ") && ext.includes("어느 쪽도 도장 전에는 효력 없음"), "후보 목록=소진 보고와 같은 집계 공유+도장 전 무효력 명시(§8·기억 권위 A-4·UX 개편)");
   // UX 개편 핀: 상황 설명 조립(구조 데이터)·쉬운 버튼 라벨·원문 보조 보존·개요 벨(합산+gotoEl 딥링크)·MAP 할일/실적 분리
-  ok(ext.includes('T("수칙서 초안 만들기"') && ext.includes('T("이번엔 안 올림"') && ext.includes('T("원문: "'), "후보 줄=쉬운 버튼 라벨+원문 보조 보존(요약 작문 금지)");
+  ok(ext.includes('T("올림 표시"') && ext.includes('T("이번엔 안 올림"') && ext.includes('T("원문: "'), "후보 줄=쉬운 버튼 라벨+원문 보조 보존(요약 작문 금지) — 개정 작업대(2026-08-22)로 즉시 단건 초안→올림 표시 토글 개정");
   ok(ext.includes('data-cands-box') && /ec0\) acts9\.push\(\{n:ec0, tab:"setup", el:"\[data-cands-box\]"/.test(ext), "개요 '지금 정할 것'에 후보 대기 편입+정확 위치 딥링크(초인종)");
   // R1 blocker①(2026-08-20): 장부 유래 후보의 대기 상태='proposed' — 빈 상태와 함께 '미판단'으로 취급해야
   // 버튼·벨이 산다(빈 상태만 세면 resolved-blocker 후보 전체가 버튼 없이 [proposed] 라벨로만 렌더되는 오작동).
-  ok(ext.includes('var undecided9=!cd.status||cd.status==="proposed";') && ext.includes("if(undecided9 && !viewOnly9){ if(cd.kind") /* 초안 대기 열람 전용 분기 추가(2026-08-21) */, "proposed=판단 대기 — 버튼 렌더 조건");
+  ok(ext.includes('var undecided9=!cd.status||cd.status==="proposed";') && /if\(undecided9 && !viewOnly9\)\{[\s\S]{0,80}if\(cd\.kind/.test(ext) /* 작업대 개정(2026-08-22)으로 블록 개행 */, "proposed=판단 대기 — 버튼 렌더 조건");
   ok(ext.includes('return !c9.status||c9.status==="proposed";'), "proposed=판단 대기 — 개요 벨 계수 조건");
   ok(/if\(a9\.el\)\{ var t0=document\.querySelector\(a9\.el\); if\(t0\)\{ if\(t0\.tagName==="DETAILS"\) t0\.open=true; gotoEl\(t0\); return; \} \}/.test(ext), "교차 패널 이동=gotoEl 경유(규칙)+접힌 상자 펼침+대상 부재 시 탭 폴백");
   // 2026-08-20 사용자 실보고 3건: 보관함 두 줄의 오착지·더보기 재렌더 접힘
@@ -360,6 +360,11 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   // R4(f-a65cacd8): 수동 propose CLI도 전이 잠금 — 모든 proposal writer가 한 잠금(임계구역 침입 봉합)
   const cb21 = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
   ok(/const lkP = acquireEnvelopeTransLock\(ws\);/.test(cb21) && /finally \{ releaseEnvelopeTransLock\(ws, lkP\.token\); \}/.test(cb21), "수동 envelope-proposal propose=전이 잠금 아래(우회 writer 0)");
+  // [개정 작업대 2026-08-22] 올림 N+빼기 M→개정판 초안 1개→도장 1번
+  ok(ext.includes('m?.type === "envelopeRevise"') && /wsKeyFor\(wsR9\)\) !== m\.wsKey/.test(ext) && ext.includes("(m.gen || null) !== (genNow9 || null)") && ext.includes("draftEnvelopeRevision"), "개정판 핸들러=strict 인자+wsKey·gen 재대조+빌더 호출");
+  ok(ext.includes('T("빼기 표시"') && ext.includes("개정판 초안 만들기 (올림 ") && ext.includes("wbAdds") && ext.includes("wbRemoves") && ext.includes("wbGen"), "작업대 UI=빼기 토글·집계 버튼·선택 상태 세대 결속(재렌더 생존)");
+  const clWB = fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8");
+  ok(clWB.includes("function draftEnvelopeRevision(") && /draftEnvelopeRevision[\s\S]{0,900}acquireEnvelopeTransLock\(ws\)/.test(clWB), "개정판 빌더=전이 잠금 아래(writer 직렬화 계약 합류)");
   ok(ext.includes("자동으로 끝난 일(참고 — 하실 일 아님)") && ext.includes("지금 여기서 하실 일은 없습니다"), "MAP 구획=할 일/끝난 일 시각 분리(실적을 대기로 오독하는 흐름 봉합)");
   // draft는 제안본 생성일 뿐 전이(도장)가 아님 — candMark 경로에 applyEnvelopeTransition 부재 계약은 유지.
   ok(ext.includes('m?.type === "candMark"') && ext.includes('note: "dashboard-record"') && !/candMark[\s\S]{0,2400}applyEnvelopeTransition/.test(ext.slice(ext.indexOf('m?.type === "candMark"'))), "채택 경로에 승인 전이 발동 없음(초안 생성까지만 — 효력은 도장부터·§7 개정 계약)");

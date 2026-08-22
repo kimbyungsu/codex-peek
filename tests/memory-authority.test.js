@@ -155,6 +155,43 @@ t("복원형 폐기 R3: 전이 잠금 직렬화 — 잠금 보유 중엔 폐기�
   const rD3 = CL.discardEnvelopeProposalRestoring(WS);
   assert.strictEqual(rD3.ok === true && rD3.restored === true, true, "잠금 해제 후 정상 폐기·복원(무회귀)");
 });
+t("개정판 빌더(작업대 2026-08-22): 올림 N+빼기 M 동시·병렬 축 미러·다건 복원 왕복", () => {
+  // R2 보완(f-1c89d722): 다건 결속·복원을 실제 '2건'으로 고정 — 두 번째 후보를 합성 상신
+  const cid2x = crypto.createHash("sha1").update("wb-second").digest("hex").slice(0, 16);
+  CL.appendEnvelopeCandidates(WS, [{ candidateId: cid2x, envelopeHash: HASH, status: "proposed", kind: "resolved-blocker", title: "작업대 두 번째 후보 문안 — 다건 복원 고정용", ts: "t" }]);
+  const { latest } = CL.readEnvelopeCandidates(WS);
+  const cands = [...latest.values()].filter((x) => x.status === "proposed" && x.title && x.envelopeHash === HASH);
+  assert.ok(cands.length >= 2, "전제: proposed 후보 2건 이상");
+  const two = [cands[0].candidateId, cands.find((c) => c.candidateId !== cands[0].candidateId).candidateId];
+  const cur0 = JSON.parse(fs.readFileSync(path.join(REPO, "verify-envelope.json"), "utf8"));
+  const seLen0 = cur0.supportedEnv.length, abLen0 = cur0.alwaysBlocker.length;
+  assert.ok(seLen0 >= 1, "전제: se축 항목 존재");
+  const r = CL.draftEnvelopeRevision(WS, REPO, { addCandidateIds: two, removeItems: [{ axis: "supportedEnv", index: 0 }], approvedHash: HASH });
+  assert.strictEqual(r.ok, true, "올림 2+빼기 1 동시 성공: " + (r.error || ""));
+  const pr = CL.readEnvelopeProposal(WS, REPO);
+  assert.strictEqual(pr.st, "ok");
+  const inner = JSON.parse(pr.proposalText);
+  assert.strictEqual(inner.supportedEnv.length, seLen0 - 1, "se축 1건 제거");
+  assert.strictEqual(inner.alwaysBlocker.length, abLen0 + 2, "ab축 2건 추가");
+  if (Array.isArray(cur0.supportedEnvEn) && cur0.supportedEnvEn.length === seLen0) assert.strictEqual(inner.supportedEnvEn.length, seLen0 - 1, "병렬 축 같은 index 미러 제거(길이 일치 유지)");
+  assert.deepStrictEqual([...pr.candidateIds].sort(), [...two].sort(), "제안본에 다건 결속 필드(candidateIds — 2건)");
+  for (const c9 of two) assert.strictEqual(CL.readEnvelopeCandidates(WS).latest.get(c9 + "@" + HASH).status, "adopted", "올림 후보=adopted 기록(" + c9 + ")");
+  // 다건 복원 왕복: 폐기 → candidateIds '전량' proposed 복원(R2 보완 — 2건 고정)
+  const rD = CL.discardEnvelopeProposalRestoring(WS);
+  assert.strictEqual(rD.ok === true && rD.restored === true, true, "폐기·복원 성공");
+  for (const c9 of two) assert.strictEqual(CL.readEnvelopeCandidates(WS).latest.get(c9 + "@" + HASH).status, "proposed", "★폐기 후 2건 전량 복원(" + c9 + ")");
+});
+t("개정판 빌더 반례: 범위 밖 번호·중복 빼기·빈 선택·세대 불일치·잠금 경합=무접촉 거부", () => {
+  const cur0 = JSON.parse(fs.readFileSync(path.join(REPO, "verify-envelope.json"), "utf8"));
+  const nSe = cur0.supportedEnv.length;
+  assert.strictEqual(CL.draftEnvelopeRevision(WS, REPO, { removeItems: [{ axis: "supportedEnv", index: nSe }], approvedHash: HASH }).ok, false, "범위 밖 번호=거부(선점 화면 낡음 안내)");
+  assert.strictEqual(CL.draftEnvelopeRevision(WS, REPO, { removeItems: [{ axis: "outOfScope", index: 0 }, { axis: "outOfScope", index: 0 }], approvedHash: HASH }).ok, false, "같은 항목 중복 빼기=거부(의도 모호)");
+  assert.strictEqual(CL.draftEnvelopeRevision(WS, REPO, { approvedHash: HASH }).ok, false, "빈 선택=거부");
+  assert.strictEqual(CL.draftEnvelopeRevision(WS, REPO, { removeItems: [{ axis: "supportedEnv", index: 0 }], approvedHash: "0".repeat(40) }).ok, false, "세대 불일치=거부(baseHash 결속)");
+  const lk = CL.acquireEnvelopeTransLock(WS);
+  try { assert.match(String(CL.draftEnvelopeRevision(WS, REPO, { removeItems: [{ axis: "supportedEnv", index: 0 }], approvedHash: HASH }).error || ""), /잠금 경합/, "잠금 보유 중=무접촉 실패(writer 직렬화 합류)"); }
+  finally { CL.releaseEnvelopeTransLock(WS, lk.token); }
+});
 t("복원형 폐기: candidateId 없는 구형/수동 제안본=복원 없이 폐기만(보수)", () => {
   const cur = JSON.parse(fs.readFileSync(path.join(REPO, "verify-envelope.json"), "utf8"));
   const w = CL.writeEnvelopeProposal(WS, REPO, JSON.stringify(cur, null, 1), "수동 초안"); // meta 없음
