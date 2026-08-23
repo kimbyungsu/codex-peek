@@ -1,4 +1,4 @@
-# 수칙서 2층화 + 3트랙 선별자 (Envelope Selector) — 설계 v6 (2026-08-23 · 5차 잔여 blocker 반영 — 확인은 다음 캠페인 첫 검증)
+# 수칙서 2층화 + 3트랙 선별자 (Envelope Selector) — 설계 v7 (2026-08-23 · 구현 1단계 재검증 반영 — Codex 미호출=중단·후퇴 금지)
 
 > 배경: ab축 12칸 상한 도달과 '매 지시마다 사용자가 올리고 내리는' 운영 부담 실측. 사용자 확정 방향:
 > **수칙은 쌓이되, '이번 작업에 실질적으로 필요한 수칙'을 LLM이 판단해 전달한다** — 사용자는 도장만.
@@ -108,9 +108,11 @@
   ③**Codex 경로 동등 관문(5차 blocker — 약화 철회)**: 설치기(codex-plugin-install)가 Codex에도
   PreToolUse 등록을 추가하고(현행 SessionStart·UserPromptSubmit·PostToolUse·Stop 4종에 5종째 —
   codex-hook dispatcher는 PreToolUse 입력을 이미 처리 가능[실측]), Claude와 동일 게이트(영수증
-  까지 지속 차단·판독 실패=차단·preview 예외)를 태운다. **fail-back 한정**: Codex 런타임이 해당
-  이벤트 등록을 거부/미호출하는 실측이 나오면 그때만 ask-start 관문 한정으로 후퇴하되, 그 한계를
-  코드 주석·문서에 명시하고 §8 확장 항목으로 남긴다(검수: 등록 실효 여부를 실전 스모크로 확인).
+  까지 지속 차단·판독 실패=차단·preview 예외)를 태운다. **미호출=중단(1단계 재검증 blocker —
+  후퇴 금지)**: Codex가 PreToolUse를 미호출하는 상태(신규 훅 신뢰 재검토 구간 포함)가 실측되면
+  ask-start 관문으로 후퇴하는 것이 아니라 **승인 서고 활성 Codex 구현 작업 자체를 중단**하고, 훅
+  신뢰 승인+PreToolUse 실전 스모크 통과를 재개 조건으로 요구한다(첫 변경 무영수증 경로는 어떤
+  구간에도 열리지 않음). 검수=등록 실효 실전 스모크+미호출 중단 반례.
   preview=같은 selector-runner·같은 입력·영수증 purpose:"preview"·판정 권위 없음. 훅 동기 LLM
   호출 금지 유지(관문은 영수증 존재 검사뿐).
 - **훅 주입(양 훅 공통)**: ①코어 ab 전문(상시·≤12항) ②**현재 턴 결속 캐시**: 이 턴의 스냅샷 지문+
@@ -143,9 +145,10 @@ boundaryGen 경계 표식(생명주기는 캠페인 축)·preview 기계 관문�
 - 3차 반영분: 캠페인 열린 지적이 boundaryGen 변경 후에도 생존(처분 관문 유지 반례)·confirm은
   boundaryGen 일치에서만·팔 고정=교차 불가 소스 계약·selector/verifier deadline 분리(선별 소진이
   검증 예산을 잠식하지 않는 반례)·비동기 spawn+intent 폴링+트리 종료 실행 반례·PreToolUse preview
-  게이트(무영수증=차단·영수증 후=무접촉·미도입=무발동)·캐시 자격(실패 ask 선별=배제) 반례.
-- 5차 반영분: Codex PreToolUse 등록 실효(실전 스모크 — 미호출 실측 시 fail-back 한정 발동+문서화)·
-  Claude와 동일 게이트 계약 공유(런타임별 분기 없음이 기본).
+  게이트(무영수증=차단·영수증 후=무접촉·미도입=무발동 — **양 런타임 공통·Codex 미호출=중단이
+  유일한 예외 처리**)·캐시 자격(실패 ask 선별=배제) 반례.
+- 5차 반영분: Codex PreToolUse 등록 실효(실전 스모크 — 미호출 실측=승인 서고 활성 Codex 작업 중단·
+  후퇴 금지)·Claude와 동일 게이트 계약 공유(런타임별 분기 없음이 기본).
 - 4차 반영분: 활성 manifest 판에서 legacy 행=confirm 불가(폴백은 legacy freeze 판만) 반례·
   intent 기록↔전이 CAS(같은 잠금 임계구역 — 전환 경계 취소 유실 반례의 정방향)·preview 게이트=
   영수증까지 지속 차단+Claude matcher 전종+판독 실패 차단+preview 명령 예외·Codex=ask-start 관문
