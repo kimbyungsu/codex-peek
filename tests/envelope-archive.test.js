@@ -165,4 +165,41 @@ t("legacy 호환: target·이중 결속 필드 없는 구형 제안본/WAL=core 
   assert.strictEqual((CL.loadContract(WS3, "ko") || {}).archiveHash, null, "archiveHash 무접촉(null 유지)");
 });
 
+t("v7 §2 manifest·boundaryGen: 결정성·freeze 왕복·legacy 동결=null(strict 판독)", () => {
+  const mf = CL.buildAbManifest(["규칙 하나", "규칙 둘"], ["서고 규칙"]);
+  assert.deepStrictEqual(mf.map((r) => [r.n, r.source]), [[1, "core"], [2, "core"], [3, "archive"]], "합본 번호=코어 다음 서고 연속");
+  assert.ok(mf.every((r) => /^[0-9a-f]{16}$/.test(r.textFp)), "textFp=문안 지문(과거 판 복원 재료)");
+  const bg = CL.boundaryGenOf(CORE_HASH, "", mf);
+  assert.strictEqual(bg, CL.boundaryGenOf(CORE_HASH, "", mf), "결정성");
+  assert.notStrictEqual(bg, CL.boundaryGenOf(CORE_HASH, "", mf.slice(0, 2)), "manifest 다르면 다른 경계");
+  const WSF = fs.mkdtempSync(path.join(os.tmpdir(), "envarc-fz-"));
+  assert.ok(CL.writeEnvelopeFreeze(WSF, CORE_HASH, "ask-x", { manifest: mf, boundaryGen: bg, appliedArchiveHash: "" }));
+  const rec = CL.readFrozenEnvelopeRec(WSF);
+  assert.ok(rec.boundaryGen === bg && Array.isArray(rec.manifest) && rec.manifest.length === 3 && rec.appliedArchiveHash === "", "동결 왕복");
+  assert.ok(CL.writeEnvelopeFreeze(WSF, CORE_HASH, "ask-y")); // legacy 동결(extra 없음)
+  const rec2 = CL.readFrozenEnvelopeRec(WSF);
+  assert.ok(rec2.manifest === null && rec2.boundaryGen === null, "legacy=null(코어만 시절 — confirm은 envelopeHash 폴백)");
+  assert.ok(CL.writeEnvelopeFreeze(WSF, CORE_HASH, "ask-z", { manifest: [{ n: 1, source: "bad-src", textFp: "zz" }], boundaryGen: bg }));
+  assert.strictEqual(CL.readFrozenEnvelopeRec(WSF).boundaryGen, null, "손상 manifest=legacy 취급(strict — fail-closed 방향)");
+});
+t("v7 §2 deriveRoundType: 같은 경계 통과=confirm·다른 선별판/legacy 행=confirm 불가·legacy 판=기존 동작", () => {
+  const WSB = fs.mkdtempSync(path.join(os.tmpdir(), "envarc-bg-"));
+  const CAMP = "cl:bg-test";
+  const G1 = "1".repeat(40), G2 = "2".repeat(40);
+  CL.appendFindingsLedger(WSB, [{ type: "round", campaignId: CAMP, round: 1, roundType: "discovery", verdict: "pass", envelopeHash: CORE_HASH, boundaryGen: G1, ts: "T" }]);
+  assert.strictEqual(CL.deriveRoundType(WSB, CAMP, CORE_HASH, G1), "confirm", "같은 경계의 통과=confirm");
+  assert.strictEqual(CL.deriveRoundType(WSB, CAMP, CORE_HASH, G2), "fix-verify", "★다른 선별판의 통과=confirm 불가(A판 통과가 B판 신규 blocker를 confirm-scope로 강등하는 경로 차단)");
+  assert.strictEqual(CL.deriveRoundType(WSB, CAMP, CORE_HASH), "fix-verify", "★현재 판이 legacy인데 직전 통과가 활성 manifest 판=confirm 불가(대칭 한정 — 손상·legacy freeze가 활성 통과를 재사용하는 경로 차단)");
+  const WSC = fs.mkdtempSync(path.join(os.tmpdir(), "envarc-bg2-"));
+  CL.appendFindingsLedger(WSC, [{ type: "round", campaignId: CAMP, round: 1, roundType: "discovery", verdict: "pass", envelopeHash: CORE_HASH, ts: "T" }]); // legacy 행(경계 없음)
+  assert.strictEqual(CL.deriveRoundType(WSC, CAMP, CORE_HASH, G1), "fix-verify", "★활성 manifest 판에서 legacy 통과 행=confirm 재료 불가(4차 blocker① 정방향)");
+  assert.strictEqual(CL.deriveRoundType(WSC, CAMP, CORE_HASH), "confirm", "legacy 판끼리는 기존 동작");
+});
+t("v7 §2 배선 소스 계약: freeze 동결(잠금 안 sha 결속)·roundType 경계 인자·abCount=manifest 판독처·round/finding 경계 표기", () => {
+  const cb = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
+  assert.ok(cb.includes("boundaryGen: boundaryGenOf(evi.sha1, \"\", mf9)") && cb.includes("evM.sha1 === evi.sha1"), "freeze 지점: 같은 잠금 안 재판독+주입 지문 결속일 때만 manifest 구성(불일치=legacy 동결)");
+  assert.ok(cb.includes("deriveRoundType(ws, camp, frozen, bg9 || undefined)"), "confirm 판정에 이번 판 경계 전달");
+  assert.ok(cb.includes("abCount = frozenManifest ? frozenManifest.length : evNow.data.alwaysBlocker.length"), "ab 범위 판독처=동결 합본 manifest(§2 — 부재·askId 불일치=legacy 코어 개수)");
+  assert.strictEqual((cb.match(/boundaryGen: bg9/g) || []).length, 6, "round 3경로+일반 finding+범위확장 신규 blocker·상한 소진 주의 finding 전 경로에 경계 표기(§2-① — 2단계 재검증 blocker②)");
+});
 console.log(`결과: ${n}/${n} 통과`);
