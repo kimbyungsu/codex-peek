@@ -151,8 +151,8 @@ boundaryGen 경계 표식(생명주기는 캠페인 축)·preview 기계 관문�
   후퇴 금지)·Claude와 동일 게이트 계약 공유(런타임별 분기 없음이 기본).
 - 4차 반영분: 활성 manifest 판에서 legacy 행=confirm 불가(폴백은 legacy freeze 판만) 반례·
   intent 기록↔전이 CAS(같은 잠금 임계구역 — 전환 경계 취소 유실 반례의 정방향)·preview 게이트=
-  영수증까지 지속 차단+Claude matcher 전종+판독 실패 차단+preview 명령 예외·Codex=ask-start 관문
-  한정(정직 한계 문구)·verifierDeadlineAt=전이 시점 확정·PRIVACY 고지 문구 실존.
+  영수증까지 지속 차단+Claude matcher 전종+판독 실패 차단+preview 명령 예외·Codex 미호출=승인 서고
+  활성 작업 중단(§4-③과 동일 계약·후퇴 금지)·verifierDeadlineAt=전이 시점 확정·PRIVACY 고지 문구 실존.
 - 전체 체인 EXIT=0.
 
 ## 7. 구현 순서 (설계 동결 후)
