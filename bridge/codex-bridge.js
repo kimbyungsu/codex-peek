@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled, constraintTurnContext, constraintAdd, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP } = require("./contract-lib.js");
+const { askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled, constraintTurnContext, constraintAdd, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -2516,6 +2516,14 @@ function cmdEnvelopeCandidate(rest) {
       console.error(en ? "usage: envelope-candidate mark <16hex-id> <proposed|adopted|declined|failed> [--note ...]" : "사용: envelope-candidate mark <16자리 id> <proposed|adopted|declined|failed> [--note ...]");
       return 2;
     }
+    // [부품 C §3-3b] draftable kind의 직접 adopted 기록=초안 미결속 고아 생성 경로 — 거부+draft 안내(declined/failed는 허용)
+    const g9 = envelopeMarkGuard(ws, id, status);
+    if (!g9.ok) {
+      console.error(en
+        ? "adopted for this candidate (" + g9.kind + ") cannot be recorded via mark — adoption must be bound to a draft: use `envelope-candidate draft " + id + "` or the dashboard 'Mark to add → Build revision draft'. (declined/failed records still use mark.)"
+        : "이 후보(" + g9.kind + ")의 채택은 mark로 기록할 수 없어요 — 채택은 초안 생성과 결속돼야 합니다: `envelope-candidate draft " + id + "` 또는 대시보드 '올림 표시 → 개정판 초안 만들기'를 쓰세요(안 올림/실패 기록은 mark 그대로).");
+      return 2;
+    }
     const okW = appendEnvelopeCandidates(ws, [{ candidateId: id, envelopeHash: gen, status, ts: new Date().toISOString(), ...(note ? { note: note.slice(0, 200) } : {}) }]);
     if (!okW) { console.error(en ? "record failed (ledger write error)" : "기록 실패(장부 쓰기 오류)"); return 1; }
     console.log((en ? "recorded: " : "기록됨: ") + id + " " + status);
@@ -2951,15 +2959,18 @@ function computeEnvelopeCandidatesFor(ws) {
     // 계산기 산출에 합류해야 대시보드 목록·채택 표면에 나타난다(장부 단독 적재=화면 미표시 공백 봉합).
     // kind·title은 append-only 이력 전체에서 보강 — 상태 전이 행(adopted/declined)이 메타를 안 실어도 유실되지 않게.
     const meta5 = new Map();
-    for (const r of candRows9) if (r && r.candidateId && (r.kind || r.title) && !meta5.has(r.candidateId)) meta5.set(r.candidateId, { kind: r.kind || "", title: r.title || "", findingId: r.findingId || "" });
+    for (const r of candRows9) if (r && r.candidateId && (r.kind || r.title) && !meta5.has(r.candidateId)) meta5.set(r.candidateId, { kind: r.kind || "", title: r.title || "", findingId: r.findingId || "", why: r.why || "" });
     const seen5 = new Set(cands.map((c) => c.candidateId));
     for (const [, rec] of latest) {
       const m5 = meta5.get(rec && rec.candidateId) || {};
-      if (!rec || (rec.kind || m5.kind) !== "resolved-blocker" || String(rec.envelopeHash || "") !== String(gen || "")) continue;
+      const k5 = (rec && rec.kind) || m5.kind || "";
+      // [부품 C §3-1] 합류 allowlist=draftable kinds 공통 — user-constraint(약속 발화 상신)도 같은 dedupe·
+      // live 필터로 대시보드 목록·채택 표면에 나타난다(장부 단독 적재=화면 미표시 공백의 kind 확장).
+      if (!rec || !ENVELOPE_DRAFTABLE_KINDS.includes(k5) || String(rec.envelopeHash || "") !== String(gen || "")) continue;
       if (rec.status !== "proposed" && rec.status !== "adopted") continue; // declined/failed는 아래 live 필터와 동일 취급
       if (seen5.has(rec.candidateId)) continue;
       seen5.add(rec.candidateId);
-      cands.push({ candidateId: rec.candidateId, kind: "resolved-blocker", key: rec.findingId || m5.findingId || "", n: 1, titles: [String(rec.title || m5.title || "")].filter(Boolean), ts: String(rec.ts || "") }); // ts=제안 시각(대시보드 상황 설명 조립 재료 — 2026-08-20 UX 개편)
+      cands.push({ candidateId: rec.candidateId, kind: k5, key: rec.findingId || m5.findingId || "", n: 1, titles: [String(rec.title || m5.title || "")].filter(Boolean), ts: String(rec.ts || ""), ...(k5 === "user-constraint" ? { why: String(rec.why || m5.why || "") } : {}) }); // ts=제안 시각·why=상신 근거(§1 사람 표면 보조 줄 재료)
     }
   }
   let skipped = 0;
@@ -2977,8 +2988,8 @@ function envelopeCandidateNoticeFor(ws, lang, res, profile = "core") {
     const en = lang === "en";
     const { live, skipped, overCap } = computeEnvelopeCandidatesFor(ws);
     const kindLabel = (k) => en
-      ? (k === "oos-repeat" ? "repeated out-of-scope demotions — reconsider defending this scenario" : k === "escalation" ? "admission-escalated scope expansion — consider formal adoption" : k === "unused-oos" ? "never triggered this approval generation — consider removing/merging" : "repeated blocker lineage — consider an always-block entry")
-      : (k === "oos-repeat" ? "범위 밖 강등 반복 — 이 시나리오를 계속 치워둘지 재검토" : k === "escalation" ? "입장 심사 승격 확장 — 정식 편입 검토" : k === "unused-oos" ? "이 승인 세대에서 한 번도 발동 안 됨 — 빼기/병합 검토" : "같은 계보 blocker 반복 — 항상 차단 명시 검토");
+      ? (k === "oos-repeat" ? "repeated out-of-scope demotions — reconsider defending this scenario" : k === "escalation" ? "admission-escalated scope expansion — consider formal adoption" : k === "unused-oos" ? "never triggered this approval generation — consider removing/merging" : k === "user-constraint" ? "a promise the user stated directly in chat (no verification lineage) — consider adopting into the rulebook" : k === "resolved-blocker" ? "a blocker caught and fixed in verification — consider an always-block entry" : "repeated blocker lineage — consider an always-block entry")
+      : (k === "oos-repeat" ? "범위 밖 강등 반복 — 이 시나리오를 계속 치워둘지 재검토" : k === "escalation" ? "입장 심사 승격 확장 — 정식 편입 검토" : k === "unused-oos" ? "이 승인 세대에서 한 번도 발동 안 됨 — 빼기/병합 검토" : k === "user-constraint" ? "사용자가 대화에서 직접 말한 약속(검증 계보 아님) — 수칙서 편입 검토" : k === "resolved-blocker" ? "검증에서 잡혀 이미 고친 blocker — 항상 차단 명시 검토" : "같은 계보 blocker 반복 — 항상 차단 명시 검토"); // [주의 수용] user-constraint를 반복 blocker로 오표시하면 미검증 발화에 검증 계보가 있다고 오인시킴
     const L = [];
     L.push(en ? "\n[rulebook candidates · this campaign — machine material]" : "\n[수칙서 후보 재료 · 이번 캠페인 — 기계 집계]");
     if (overCap) L.push(en ? "> ⚠ the rulebook already holds 30+ items — prioritize removal/merge candidates over additions (§7 growth control)." : "> ⚠ 수칙서가 이미 30항목 이상 — 추가보다 빼기/병합 후보를 우선하라(§7 성장 억제).");
@@ -2987,8 +2998,8 @@ function envelopeCandidateNoticeFor(ws, lang, res, profile = "core") {
       for (const c of live) L.push(`> ${c.candidateId} [${c.kind} ×${c.n}] ${kindLabel(c.kind)}${c.titles.length ? " — " + c.titles.map((t9) => String(t9).slice(0, 60)).join(" / ") : ""}`); // 절단은 이 표시 지점만(집계는 무절단 — 대시보드 원문 보존)
       if (skipped) L.push(en ? `> (${skipped} previously declined/failed candidate(s) skipped this generation)` : `> (이 승인 세대에서 이미 거절·실패한 후보 ${skipped}건 스킵)`);
       L.push(en
-        ? "[duty] Write a 'rulebook candidates' section in the exhaustion report from the material above, per the global presentation contract (§8): no jargon · a concrete situation example per candidate · what changes if adopted / what stays if not · one-line recommendation with grounds · include a draft clause the user can approve as-is. Selection is confirmed via chat reply (a dashboard click may only record a selection); adoption still requires the user's stamp. Record outcomes with: envelope-candidate mark <id> <adopted|declined|failed>."
-        : "[의무] 위 재료로 소진 보고에 '수칙서 후보' 절을 §8 전역 표현 계약대로 작성하라: 기술용어 금지 · 후보마다 상황예시 · 채택 시 달라지는 것/미채택 시 유지되는 것 · 권장+근거 1줄 · 사용자가 '이대로 올려'만 하면 되는 문안 초안 포함. 선택 확정=대화 응답(대시보드 클릭은 선택 기록까지만) · 채택돼도 효력은 사용자 도장부터. 결과 기록: envelope-candidate mark <id> <adopted|declined|failed>.");
+        ? "[duty] Write a 'rulebook candidates' section in the exhaustion report from the material above, per the global presentation contract (§8): no jargon · a concrete situation example per candidate · what changes if adopted / what stays if not · one-line recommendation with grounds · include a draft clause the user can approve as-is. Selection is confirmed via chat reply (a dashboard click may only record a selection); adoption still requires the user's stamp. Record outcomes with: adoption via `envelope-candidate draft <id>` (draft-bound; direct mark adopted is refused for these kinds), decline/failure via `envelope-candidate mark <id> <declined|failed>`."
+        : "[의무] 위 재료로 소진 보고에 '수칙서 후보' 절을 §8 전역 표현 계약대로 작성하라: 기술용어 금지 · 후보마다 상황예시 · 채택 시 달라지는 것/미채택 시 유지되는 것 · 권장+근거 1줄 · 사용자가 '이대로 올려'만 하면 되는 문안 초안 포함. 선택 확정=대화 응답(대시보드 클릭은 선택 기록까지만) · 채택돼도 효력은 사용자 도장부터. 결과 기록: 채택은 `envelope-candidate draft <id>`(초안 결속 — 이 후보들은 mark adopted 직접 기록이 거부됨)·안 올림/실패는 `envelope-candidate mark <id> <declined|failed>`.");
     }
     return L.join("\n") + "\n";
   } catch { return ""; } // 재료 산출 실패가 판정 전달을 막지 않음

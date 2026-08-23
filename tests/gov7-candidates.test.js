@@ -351,6 +351,13 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   ok(/blDue9, tab:"verify", el:"#backlogSec"/.test(ext), "보관함 검토 기한 줄=보관함 실위치 딥링크(탭 상단 오착지 봉합)");
   ok(/acts9\.push\(\{n:1, tab:"setup", el:"#envCard"/.test(ext), "'수칙서 승인 대기' 줄=수칙서 카드 실위치 딥링크(2026-08-22 실보고 — 동일 계보)");
   // 2026-08-22(2) 승인 지문 언어 공유: 직접 승인 도장=양 슬롯·대시보드 자기치유(반대 슬롯 지문=현행 파일 sha 일치 시 표기 정렬)
+  // [부품 C 2026-08-23] draftable kinds 공통 표면 — 채택 분기·올림 토글·kind 문구·why 보조줄·mark 가드·소진 안내
+  ok(ext.includes('(m.kind === "resolved-blocker" || m.kind === "user-constraint") && m.status === "adopted"'), "candMark 채택=draftable kinds 공통(초안 생성 결속)");
+  ok(ext.includes('cd.kind==="resolved-blocker"||cd.kind==="user-constraint"') && ext.includes("대화에서 직접 말씀하신 약속이에요") && ext.includes('T("근거: ","reason: ")+cd.why'), "UI: user-constraint 문구+올림 토글 공통+근거 보조줄(textContent)");
+  const cb7 = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
+  ok(cb7.includes("ENVELOPE_DRAFTABLE_KINDS.includes(k5)"), "계산기 ⑤ 합류 allowlist=draftable kinds 단일 정본");
+  ok(cb7.includes("envelopeMarkGuard(ws, id, status)") && cb7.includes("envelope-candidate draft"), "mark 우회 가드 배선+draft 안내(§3-3b)");
+  ok(cb7.includes("사용자가 대화에서 직접 말한 약속(검증 계보 아님)"), "소진 보고 kindLabel: user-constraint 전용 분기(미검증 발화를 blocker 반복으로 오표시 금지 — 주의 수용)");
   ok(ext.includes('if (typeof CLS.stampEnvelopeAllSlots !== "function") return false;') && ext.includes("stampEnvelopeAllSlots(wsE, tgtNow, shaAt)") && ext.includes("rS && rS.ok"), "직접 승인=WAL 경유 트랜잭션 도장(부분 기록 영속 금지)·구세대 브릿지=거부 fail-closed(f-71d4c2a8 연속분)");
   ok(ext.includes("setEnvelopeHashAllSlots(ws, oh9) === 2") && ext.includes("oh9 === evv.sha1"), "자기치유=2슬롯 성공만 표기 정렬(지문 일치 조건부 — 새 권위 부여 아님)");
   ok(/rb9\.addEventListener\("click", function\(\)\{ var t0=document\.querySelector\("#backlogSec"\); if\(t0\)\{ t0\.open=true; gotoEl\(t0\); return; \}/.test(ext), "'여유' 줄도 보관함 실위치+펼침(동일 봉합)");

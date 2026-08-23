@@ -1079,7 +1079,7 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
     }
     // [후보 목록 계산 — 2026-08-21 사용자 실보고로 헬퍼화] 초안 대기 분기에서도 같은 목록을 열람용으로
     // 동봉해야 "채택 하나 눌렀더니 14개가 사라짐" 혼란이 없다(초안=한 번에 하나·나머지는 대기 표시).
-    const candsFor9 = (): Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string }> | undefined => {
+    const candsFor9 = (): Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string; why: string }> | undefined => {
       try { // §7 증분 3 — 소진 보고와 같은 집계(codex-bridge 설치본) 공유. 버튼=기록만(작업 발동 금지 계약)
         const CB9: any = require(path.join(BRIDGE_DIR, "codex-bridge.js"));
         // [기억 권위 A-3] 조정 트리거 ②대시보드 로드 — 해소 blocker 계보→후보 멱등 스캔(중단 복구)
@@ -1090,7 +1090,7 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
         if ((cc9.gen || null) !== (hash9 || null)) return undefined;
         const lat9 = typeof CL9.readEnvelopeCandidates === "function" ? CL9.readEnvelopeCandidates(ws).latest : new Map();
         // [기억 권위 A-5] 절단 없이 전량 전달(화면 절단은 표시 제한일 뿐)
-        const out9 = (cc9.live || []).map((c: any) => ({ id: c.candidateId, kind: c.kind, n: c.n, title: (c.titles && c.titles[0]) || "", status: (lat9.get(c.candidateId + "@" + String(hash9 || "")) || {}).status || "", gen: cc9.gen || "", wsKey: typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : "", ts: String(c.ts || "") })); // wsKey=원본 프로젝트 내구 키(재재검증 ab-1)
+        const out9 = (cc9.live || []).map((c: any) => ({ id: c.candidateId, kind: c.kind, n: c.n, title: (c.titles && c.titles[0]) || "", status: (lat9.get(c.candidateId + "@" + String(hash9 || "")) || {}).status || "", gen: cc9.gen || "", wsKey: typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : "", ts: String(c.ts || ""), why: String(c.why || "") })); // wsKey=원본 프로젝트 내구 키(재재검증 ab-1)·why=user-constraint 상신 근거(§1 보조 줄)
         return out9.length ? out9 : undefined;
       } catch { return undefined; }
     };
@@ -4006,7 +4006,7 @@ class Dashboard {
             if ((m.gen || null) !== (genM || null)) { vscode.window.showWarningMessage(enM ? "The rulebook was re-approved while this card was open — the candidate list refreshes; please judge again." : "카드가 떠 있는 사이 수칙서가 재승인됐어요 — 후보 목록이 갱신됩니다. 다시 판단해 주세요."); this.post(); return; }
             // [기억 권위 A-4·구현검증 1차 blocker④] 해소 blocker 후보의 '채택'은 기록이 아니라 병합 초안 생성
             // (draft 명령의 대시보드 표면 — 기존 '기록만' 계약의 의식적 개정. 효력은 여전히 승인 도장부터).
-            if (m.kind === "resolved-blocker" && m.status === "adopted" && typeof CLM.draftEnvelopeCandidate === "function") {
+            if ((m.kind === "resolved-blocker" || m.kind === "user-constraint") && m.status === "adopted" && typeof CLM.draftEnvelopeCandidate === "function") { // [부품 C §3-3] draftable kinds 공통 — 채택=병합 초안 생성과 결속
               const repoM = (((bridgeLib() as any) || {}).resolveScoutRepo ? ((bridgeLib() as any).resolveScoutRepo(wsM, loadContract(wsM)) || {}).repo : null) || wsM;
               let dr: any = null;
               try { dr = CLM.draftEnvelopeCandidate(wsM, repoM, m.id, genM); } catch { dr = null; }
@@ -7113,17 +7113,19 @@ class Dashboard {
               :cd.kind==="escalation"?T("심사에서 한 번 넓혀 봐준 항목이에요 — 정식으로 지킬 범위에 넣을지","an item expanded once during admission — consider adopting it formally")
               :cd.kind==="unused-oos"?T("이번 승인 이후 한 번도 안 쓰인 예외예요 — 빼거나 합칠지","an exception never used since this approval — consider removing/merging")
               :cd.kind==="resolved-blocker"?T((when9?when9+" 검증에서 ":"검증에서 ")+"잡혀 이미 고친 실수예요 — 올리면 앞으로 같은 실수를 항상 차단해요",(when9?"caught in the "+when9+" verification":"caught in a verification")+" and already fixed — adopt to always block this mistake")
+              :cd.kind==="user-constraint"?T((when9?when9+" ":"")+"대화에서 직접 말씀하신 약속이에요 — 수칙서로 올릴까요?",(when9?"on "+when9+" ":"")+"a promise you stated in chat — adopt it into the rulebook?")
               :T("같은 실수가 "+(cd.n||2)+"번 반복됐어요 — 항상 차단할지","the same mistake repeated "+(cd.n||2)+" times — consider always blocking");
             // R1 blocker①: 장부 유래 후보(resolved-blocker)의 대기 상태값은 'proposed' — 빈 문자열과 함께
             // '아직 판단 안 됨'으로 취급해야 버튼·벨이 산다(§7 기계 집계 후보는 상태가 비어 있음 — 두 원천 통일).
             var undecided9=!cd.status||cd.status==="proposed";
             var sit9=document.createElement("div"); sit9.textContent=(undecided9?"":"["+(cd.status==="adopted"?T("채택됨","adopted"):cd.status==="declined"?T("안 올림","declined"):cd.status)+"] ")+kl9; row9.appendChild(sit9);
             if(cd.title){ var org9=document.createElement("div"); org9.className="muted"; org9.style.cssText="font-size:11px;margin-top:2px"; org9.textContent=T("원문: ","original: ")+cd.title; org9.title=cd.title; row9.appendChild(org9); }
+            if(cd.why){ var why9=document.createElement("div"); why9.className="muted"; why9.style.cssText="font-size:11px;margin-top:2px"; why9.textContent=T("근거: ","reason: ")+cd.why; row9.appendChild(why9); } // §1 why 표면 — textContent(작문·마크업 없음)
             var mb9=function(lab,st,strong){ var b9=document.createElement("button"); b9.style.cssText="margin-top:5px;margin-right:5px;font-size:12px"+(strong?";font-weight:600":""); if(!strong)b9.className="secondary"; b9.textContent=lab; b9.onclick=function(){ if(st==="declined"){ wbAdds.delete(cd.id); if(typeof wbSync9==="function") wbSync9(); } vscode.postMessage({type:"candMark", id: cd.id, kind: cd.kind, status: st, gen: cd.gen, wsKey: cd.wsKey, lang: e9.lang}); }; row9.appendChild(b9); }; // declined=올림 표시 자동 해제(R2 보완 — stale 선택 잔존 차단)
             // [개정 작업대 2026-08-22] resolved-blocker의 즉시 단건 초안을 '올림 표시' 토글로 교체 —
             // 표시해 두고 아래 '개정판 초안 만들기' 1번으로 N건+빼기 M건을 한 도장에 싣는다(1건 단독도 동일 경로).
             if(undecided9 && !viewOnly9){
-              if(cd.kind==="resolved-blocker"){
+              if(cd.kind==="resolved-blocker"||cd.kind==="user-constraint"){ // [부품 C §3-4] draftable kinds=올림 표시 토글 공통(버튼 분기 자동 상속)
                 var on9=wbAdds.has(cd.id);
                 var tg9=document.createElement("button"); tg9.style.cssText="margin-top:5px;margin-right:5px;font-size:12px"+(on9?";font-weight:600":""); if(!on9)tg9.className="secondary";
                 tg9.textContent=on9?T("✓ 올림 표시됨(누르면 해제)","✓ marked to add (click to unmark)"):T("올림 표시","Mark to add");

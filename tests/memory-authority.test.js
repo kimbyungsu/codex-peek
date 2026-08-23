@@ -307,6 +307,69 @@ t("개정 전이 R5(f-9b7c4e21 반례): 소비한 제안본만 폐기 — recove
   const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
   assert.ok(src.includes("pOwn.st === \"ok\" && pOwn.newHash === wal.newHash"), "정리=전문 지문 결속 확인부만 폐기(소스 계약)");
 });
+t("부품 C R1: user-constraint 세대 이월(carry-forward) — proposed·adopted 미등재 각 1회·이미 등재=정리·멱등", () => {
+  const WS8 = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-ws8-"));
+  const REPO8 = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-repo8-"));
+  fs.writeFileSync(path.join(REPO8, CL.ENVELOPE_FILE), envRaw);
+  const H_OLD = "b".repeat(40);
+  const uc = (i) => crypto.createHash("sha1").update("uc" + i).digest("hex").slice(0, 16);
+  CL.appendEnvelopeCandidates(WS8, [
+    { candidateId: uc(1), envelopeHash: H_OLD, status: "proposed", kind: "user-constraint", title: "배포 전에는 반드시 백업부터 남겨야 한다", why: "사용자 약속", provider: "claude", ts: "T" },
+    { candidateId: uc(2), envelopeHash: H_OLD, status: "adopted", kind: "user-constraint", title: "고객 차단 기록은 지우지 않는다", ts: "T" },
+    { candidateId: uc(3), envelopeHash: H_OLD, status: "proposed", kind: "user-constraint", title: envObj.alwaysBlocker[0], ts: "T" },
+  ]);
+  const r1 = CL.reconcileMemoryCandidates(WS8, REPO8, HASH);
+  const { latest } = CL.readEnvelopeCandidates(WS8);
+  const g1 = latest.get(uc(1) + "@" + HASH), g2 = latest.get(uc(2) + "@" + HASH), g3 = latest.get(uc(3) + "@" + HASH);
+  assert.ok(g1 && g1.status === "proposed" && g1.title === "배포 전에는 반드시 백업부터 남겨야 한다" && g1.why === "사용자 약속", "★구세대 proposed=새 세대 이월(문안·근거 승계 — 소실 금지)");
+  assert.ok(g2 && g2.status === "proposed", "★구세대 adopted-but-unstamped=새 세대 proposed 재발급(도장 안 된 채택의 소실 금지)");
+  assert.ok(g3 && g3.status === "declined", "이미 수칙서에 등재된 문안=이월 대신 declined 정리");
+  const before = CL.readEnvelopeCandidates(WS8).rows.length;
+  CL.reconcileMemoryCandidates(WS8, REPO8, HASH);
+  assert.strictEqual(CL.readEnvelopeCandidates(WS8).rows.length, before, "★재실행 멱등 — candidateId별 새 세대 정확히 1회(latest.has 규칙)");
+  assert.ok(r1, "반환 존재(정보)");
+  // [재검증 blocker 반례] 다중 구세대 공존: 같은 후보가 H1·H2 두 구세대 키로 남아 있어도 새 세대 발급은 1회
+  const H2 = "c".repeat(40);
+  const ucM = crypto.createHash("sha1").update("ucMulti").digest("hex").slice(0, 16);
+  CL.appendEnvelopeCandidates(WS8, [
+    { candidateId: ucM, envelopeHash: H_OLD, status: "proposed", kind: "user-constraint", title: "다중 세대 공존 약속", ts: "T" },
+    { candidateId: ucM, envelopeHash: H2, status: "proposed", kind: "user-constraint", title: "다중 세대 공존 약속", ts: "T" },
+  ]);
+  CL.reconcileMemoryCandidates(WS8, REPO8, HASH);
+  const dupRows = CL.readEnvelopeCandidates(WS8).rows.filter((r) => r.candidateId === ucM && String(r.envelopeHash || "") === HASH);
+  assert.strictEqual(dupRows.length, 1, "★H1·H2 공존 후보=현 세대 재발급 정확히 1행(중복=pending 허위 소진 반례의 정방향)");
+});
+t("부품 C R2: 같은 세대 adopted 고아 복원 — proposal 미결속만 복원·결속/등재는 무접촉", () => {
+  const WS9 = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-ws9-"));
+  const REPO9 = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-repo9-"));
+  fs.writeFileSync(path.join(REPO9, CL.ENVELOPE_FILE), envRaw);
+  const ud = (i) => crypto.createHash("sha1").update("ud" + i).digest("hex").slice(0, 16);
+  CL.appendEnvelopeCandidates(WS9, [
+    { candidateId: ud(4), envelopeHash: HASH, status: "adopted", kind: "user-constraint", title: "복구 시험은 매주 한 번 돌린다", ts: "T" },
+    { candidateId: ud(5), envelopeHash: HASH, status: "adopted", kind: "resolved-blocker", title: "초안에 결속된 채택", ts: "T" },
+    { candidateId: ud(6), envelopeHash: HASH, status: "adopted", kind: "user-constraint", title: envObj.alwaysBlocker[0], ts: "T" },
+  ]);
+  const o6 = JSON.parse(envRaw); o6.outOfScope = o6.outOfScope.concat(["초안 픽스처 항목"]);
+  assert.strictEqual(CL.writeEnvelopeProposal(WS9, REPO9, JSON.stringify(o6, null, 1), "t", { candidateIds: [ud(5)] }).ok, true, "진행 중 초안(ud5 결속) 픽스처");
+  CL.reconcileMemoryCandidates(WS9, REPO9, HASH);
+  const { latest: l9 } = CL.readEnvelopeCandidates(WS9);
+  assert.strictEqual(l9.get(ud(4) + "@" + HASH).status, "proposed", "★초안 미결속 adopted=proposed 복원(덮어쓰기 고아 봉합 — 재채택 가능)");
+  assert.strictEqual(l9.get(ud(5) + "@" + HASH).status, "adopted", "진행 중 초안에 결속된 adopted=무접촉");
+  assert.strictEqual(l9.get(ud(6) + "@" + HASH).status, "adopted", "문안이 이미 수칙서에 등재(도장 완료 형상)=무접촉");
+});
+t("부품 C R3: mark 우회 가드 — draftable adopted=거부·declined 허용·비 draftable 허용", () => {
+  const WS10 = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-ws10-"));
+  const ue = (i) => crypto.createHash("sha1").update("ue" + i).digest("hex").slice(0, 16);
+  CL.appendEnvelopeCandidates(WS10, [
+    { candidateId: ue(1), envelopeHash: HASH, status: "proposed", kind: "user-constraint", title: "t", ts: "T" },
+    { candidateId: ue(2), envelopeHash: HASH, status: "proposed", kind: "oos-repeat", ts: "T" },
+  ]);
+  const gA = CL.envelopeMarkGuard(WS10, ue(1), "adopted");
+  assert.ok(!gA.ok && gA.reason === "draftable-adopt-via-draft" && gA.kind === "user-constraint", "★draftable 채택 직접 기록=거부(초안 결속 강제 — §3-3b)");
+  assert.strictEqual(CL.envelopeMarkGuard(WS10, ue(1), "declined").ok, true, "declined는 mark 허용");
+  assert.strictEqual(CL.envelopeMarkGuard(WS10, ue(2), "adopted").ok, true, "비 draftable kind=기존 계약 유지");
+  assert.deepStrictEqual(CL.ENVELOPE_DRAFTABLE_KINDS, ["resolved-blocker", "user-constraint"], "allowlist 단일 정본");
+});
 t("복원형 폐기: candidateId 없는 구형/수동 제안본=복원 없이 폐기만(보수)", () => {
   const cur = JSON.parse(fs.readFileSync(path.join(REPO, "verify-envelope.json"), "utf8"));
   const w = CL.writeEnvelopeProposal(WS, REPO, JSON.stringify(cur, null, 1), "수동 초안"); // meta 없음

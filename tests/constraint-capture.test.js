@@ -206,6 +206,17 @@ t("유계=TTL 스윕만(blocker③ 최종 정방향): 90일 지난 영수증만 
   assert.ok(fs.existsSync(path.join(D, "00000000000001-0000000001-000000-strg.json")), "★이름이 아무리 낡아도 mtime이 최신이면 생존 — 이름·벽시계 기반 최신성 판정 자체가 없음(4연속 TOCTOU 계보의 정방향)");
   assert.ok(CL.readConstraintUsage().some((r) => r.marker === "straggler"), "낙오자 판독 가능");
 });
+t("부품 C 합류: 상신된 약속이 후보 계산기 live에 kind·원문·근거와 함께 나타남·declined=스킵", () => {
+  const CB = require("../bridge/codex-bridge.js");
+  CL.writeEnvelopeFreeze(WS, GEN, "ask-cc-1"); // 계산기 gen=동결 파일
+  const cc = CB.computeEnvelopeCandidatesFor(WS);
+  const mine = (cc.live || []).find((c) => c.titles && c.titles[0] === QUOTE);
+  assert.ok(mine, "★상신 후보가 대시보드 계산기 live에 합류(장부 단독 적재 공백의 kind 확장)");
+  assert.strictEqual(mine.kind, "user-constraint");
+  assert.ok(typeof mine.why === "string" && mine.why.length > 0, "why 동봉(§1 사람 표면 보조 줄 재료)");
+  const q2 = "이건 앞으로 계속 지켜야 하는 약속이야.";
+  assert.ok(!(cc.live || []).some((c) => c.titles && c.titles[0] === q2), "declined 문안=live 제외(거부권 — 기존 필터 공유)");
+});
 t("소스 계약: CLI 스위치·훅 배선(양 경로)·anchor 필드 결속", () => {
   const cb = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
   assert.ok(cb.includes('case "constraint":') && cb.includes("function cmdConstraint(rest)") && cb.includes("constraintTurnContext()"), "CLI 스위치+문맥 해석 경유");
