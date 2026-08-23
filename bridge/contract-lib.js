@@ -3519,13 +3519,18 @@ const VERIFIER_FORMAT_EN = [
 // 호출자가 v2 절의 실제 동봉을 확인한 경우에만 선택한다(가정 금지 — withContract가 envText 실물로 판정).
 const VERIFIER_FORMAT_DELEGATE_KO = "2) 기계 판독용 지적 블록은 아래 [지적 서식 v2] 절이 정본이다 — 그 마커·필드 그대로, 판정 줄 '바로 앞'에 제출하라(블록 없음·손상·판정 모순=하네스가 '보류'로 강등, fail-closed).";
 const VERIFIER_FORMAT_DELEGATE_EN = "2) For the machine-readable findings block, the [Finding format v2] section below is authoritative — submit it with exactly those markers/fields, immediately BEFORE the verdict line (missing/corrupt/contradicting block = the harness demotes the verdict to 'inconclusive', fail-closed).";
+// [약속 발화 포착 부품 B §2·§7-3 '프롬프트 범주 규칙 1줄'] 범주 수준 안내(문구 패턴 목록 아님 — 판단은 검증자
+// LLM). 선택 절이라 블록 부재=정상, 회수 게이트(원문 스냅샷 대조·형태 방어)는 하네스가 별도 수행.
+const VERIFIER_FORMAT_CONSTRAINT_KO = "3) (선택) 사용자 발화 원문에 '앞으로 계속 지킬 약속'으로 보이는 구절이 있으면, 지적 블록보다 앞에 '[제약 후보 v1]' 한 줄 → 줄당 {\"quote\":\"<사용자 원문 연속 구절>\",\"why\":\"<한 줄>\"}(최대 4행) → '[제약 후보 끝]' 한 줄로 제출하라. 원문 그대로만 — 요약·작문·계약/지도 문구 인용은 하네스가 거부한다.";
+const VERIFIER_FORMAT_CONSTRAINT_EN = "3) (Optional) If the user's own words contain a lasting promise, submit BEFORE the findings block: a line '[제약 후보 v1]' → per line {\"quote\":\"<verbatim contiguous span of the user's words>\",\"why\":\"<one line>\"} (max 4 rows) → a line '[제약 후보 끝]'. Verbatim only — summaries, rewrites, or quotes from contracts/maps are rejected by the harness.";
 function verifierFormatDirective(lang, blockMode) {
   const en = (LANGS.includes(lang) ? lang : loadLang()) === "en";
-  if (blockMode !== "delegated") return en ? VERIFIER_FORMAT_EN : VERIFIER_FORMAT_KO;
+  const tail9 = "\n" + (en ? VERIFIER_FORMAT_CONSTRAINT_EN : VERIFIER_FORMAT_CONSTRAINT_KO); // 두 blockMode 공통(위임 모드에서 소실 금지)
+  if (blockMode !== "delegated") return (en ? VERIFIER_FORMAT_EN : VERIFIER_FORMAT_KO) + tail9;
   // 조각 재조립(단일 출처): 전문 상수의 헤더+1)판정 줄 항목을 그대로 쓰고 2)블록 항목만 위임 줄로 교체.
   const full = en ? VERIFIER_FORMAT_EN : VERIFIER_FORMAT_KO;
   const cut = full.indexOf("\n2) ");
-  return (cut > 0 ? full.slice(0, cut) : full) + "\n" + (en ? VERIFIER_FORMAT_DELEGATE_EN : VERIFIER_FORMAT_DELEGATE_KO);
+  return (cut > 0 ? full.slice(0, cut) : full) + "\n" + (en ? VERIFIER_FORMAT_DELEGATE_EN : VERIFIER_FORMAT_DELEGATE_KO) + tail9;
 }
 // 검증자에게 실제로 실리는 기본 원칙 = 자유 문안(프로필별 기본값+오버라이드) + 기계 서식(코드 고정).
 function verifierBaselineFor(lang, profile, blockMode) { return loadBaseDirective(lang, profile).verifyBaseline + "\n\n" + verifierFormatDirective(lang, blockMode); }
@@ -3991,8 +3996,114 @@ function constraintTurnContext() {
   }
   return { ok: false, reason: "no-session" };
 }
+// ── [부품 B §2] 검증자 회수 그물 — 규격 블록 파서(문법 동결분) ────────────────────────
+// 여는/닫는 마커는 언어 무관 단일 세트(동결). 위치=지적 블록보다 '앞'(지적 파서가 블록 뒤 잔여를 손상 처리).
+// 줄당 JSON {"quote","why"}만·최대 4행·행당 1KB. 손상 하나=블록 전량 거부(부분 수용 없음 — fail-closed).
+const CONSTRAINT_BLOCK_MARKERS = { start: "[제약 후보 v1]", end: "[제약 후보 끝]" };
+const CONSTRAINT_BLOCK_MAX_ROWS = 4;
+const CONSTRAINT_BLOCK_LINE_MAX = 1024;
+// [확인검증 blocker] 중복 키를 원문 정규식 출현 횟수로 세면 이스케이프 키("quo\\u0074e")가 우회한다 —
+// JSON 문자열 토큰을 실제로 해독해 최상위 키 목록을 회수하는 스캐너(구조 이상=null → 상위가 전량 거부).
+function jsonTopLevelKeys(ln) {
+  let i = 0; const n = ln.length; const keys = [];
+  const ws = () => { while (i < n && /\s/.test(ln[i])) i++; };
+  const str = () => { const s0 = i; i++; while (i < n) { const ch = ln[i]; if (ch === "\\") { i += 2; continue; } if (ch === '"') { i++; return ln.slice(s0, i); } i++; } return null; };
+  const skipValue = () => {
+    ws();
+    if (ln[i] === '"') return str() !== null;
+    let depth = 0;
+    while (i < n) {
+      const ch = ln[i];
+      if (ch === '"') { if (str() === null) return false; continue; }
+      if (ch === "{" || ch === "[") depth++;
+      else if (ch === "}" || ch === "]") { if (depth === 0) return true; depth--; }
+      else if (ch === "," && depth === 0) return true;
+      i++;
+    }
+    return true;
+  };
+  ws(); if (ln[i] !== "{") return null; i++;
+  ws(); if (ln[i] === "}") return keys;
+  while (i < n) {
+    ws(); if (ln[i] !== '"') return null;
+    const tok = str(); if (tok === null) return null;
+    let key; try { key = JSON.parse(tok); } catch { return null; }
+    keys.push(key);
+    ws(); if (ln[i] !== ":") return null; i++;
+    if (!skipValue()) return null;
+    ws();
+    if (ln[i] === ",") { i++; continue; }
+    if (ln[i] === "}") return keys;
+    return null;
+  }
+  return null;
+}
+function parseConstraintBlock(text) {
+  const out = { present: false, ok: false, items: [], reason: "" };
+  const lines = String(text || "").split(/\r?\n/);
+  let s = -1, e = -1, extra = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i] === CONSTRAINT_BLOCK_MARKERS.start) { if (s >= 0) extra = true; s = i; }
+    else if (lines[i] === CONSTRAINT_BLOCK_MARKERS.end) { if (e >= 0) extra = true; e = i; }
+  }
+  if (s < 0 && e < 0) return out; // 부재=정상(선택 절)
+  out.present = true;
+  if (extra || s < 0 || e < 0 || e < s) { out.reason = "marker"; return out; }
+  for (let i = 0; i < lines.length; i++) { // 위치 계약: 지적 블록 시작 마커보다 앞
+    const ln = lines[i];
+    if (ln === FINDINGS_MARKERS.ko.start || ln === FINDINGS_MARKERS.en.start || ln === FINDINGS_MARKERS_V2.ko.start || ln === FINDINGS_MARKERS_V2.en.start) {
+      if (e > i) { out.reason = "position"; return out; }
+      break;
+    }
+  }
+  const rows = [];
+  for (let i = s + 1; i < e; i++) {
+    const ln = lines[i];
+    if (!ln.trim()) continue;
+    if (Buffer.byteLength(ln, "utf8") > CONSTRAINT_BLOCK_LINE_MAX) { out.reason = "line-too-long"; return out; } // 상한=UTF-8 바이트(코드 단위 아님 — 한글 행 우회 봉합)
+    // 중복 키는 JSON.parse가 마지막 값으로 삼켜 검출 불가 — 이스케이프 키까지 해독하는 최상위 키 스캐너로
+    // 검사(정규식 출현 횟수는 "quo\\u0074e" 우회가 실측됨 — 확인검증 blocker).
+    const keys9 = jsonTopLevelKeys(ln);
+    if (!keys9 || new Set(keys9).size !== keys9.length) { out.reason = "dup-or-missing-key"; return out; } // 구조 이상·중복 키(이스케이프 해독 후)
+    if (keys9.length !== 2 || !keys9.includes("quote") || !keys9.includes("why")) { out.reason = "unknown-field"; return out; } // 키 집합={quote,why} 정확히
+    let o; try { o = JSON.parse(ln); } catch { out.reason = "bad-json"; return out; }
+    if (!o || typeof o !== "object" || Array.isArray(o)) { out.reason = "not-object"; return out; }
+    if (Object.keys(o).length !== 2 || typeof o.quote !== "string" || typeof o.why !== "string") { out.reason = "unknown-field"; return out; }
+    if (/[\r\n\u2028\u2029]/.test(o.quote) || /[\r\n\u2028\u2029]/.test(o.why)) { out.reason = "newline-value"; return out; }
+    rows.push({ quote: o.quote, why: o.why });
+    if (rows.length > CONSTRAINT_BLOCK_MAX_ROWS) { out.reason = "too-many-rows"; return out; }
+  }
+  out.items = rows; out.ok = true; return out; // 빈 블록(0행)=ok(무해)
+}
+// [부품 B §2] 회수 본체 — 대조 권위=부품 A와 같은 훅 원문 스냅샷뿐(검증 요청문·주입문 대조 금지: 구현자
+// 작문·계약/지도 문구 위장 차단). ctx=ask 생성 시 job에 동결된 {provider, sessionId, turnAnchor, sourceHash}.
+// ctx 부재(직접 ask — 시작 시점 동결 carrier 없음)=블록 전량 무시+direct-ask 거부 영수증(§2 의식적 한정).
+function constraintHarvestFromAnswer(ws, answerText, ctx) {
+  const out = { present: false, ok: false, accepted: 0, rejected: 0, ignored: false, reason: "" };
+  let pb; try { pb = parseConstraintBlock(answerText); } catch { return out; }
+  if (!pb.present) return out;
+  out.present = true;
+  const base = { ts: new Date().toISOString(), provider: (ctx && ctx.provider) || "", wsKey: wsKeyFor(ws), sessionId: (ctx && ctx.sessionId) || "", turnAnchor: (ctx && ctx.turnAnchor) || "", quoteFp: "", quoteLen: 0, whyLen: 0, via: "verifier-block" };
+  if (!ctx || !ctx.turnAnchor || !ctx.sourceHash) {
+    out.ignored = true; out.reason = "direct-ask";
+    appendConstraintUsage({ ...base, outcome: "rejected", reason: "direct-ask" });
+    return out;
+  }
+  if (!pb.ok) { out.reason = pb.reason; appendConstraintUsage({ ...base, outcome: "rejected", reason: "block-" + pb.reason }); return out; } // 손상=전량 거부
+  // job 결속 선검사(§6): 스냅샷 부재·지문 불일치=전량 거부 단일 영수증(행별 게이트가 재확인하지만 사유를 블록 단위로 명확화).
+  let snap9 = null; try { snap9 = fs.readFileSync(constraintTurnFileFor(ws, ctx.turnAnchor), "utf8"); } catch { snap9 = null; }
+  if (snap9 === null) { out.reason = "snapshot-missing"; appendConstraintUsage({ ...base, outcome: "rejected", reason: "block-snapshot-missing" }); return out; }
+  if (sha1Of(snap9) !== ctx.sourceHash) { out.reason = "snapshot-mismatch"; appendConstraintUsage({ ...base, outcome: "rejected", reason: "block-snapshot-mismatch" }); return out; }
+  out.ok = true;
+  for (const it of pb.items) {
+    const r = constraintAdd(ws, it.quote, it.why, "", { ok: true, provider: (ctx.provider || ""), sessionId: (ctx.sessionId || ""), turnAnchor: ctx.turnAnchor, sourceHash: ctx.sourceHash, via: "verifier-block" });
+    if (r.ok) out.accepted++; else out.rejected++; // duplicate=구현자 상신과 자연 합류(지문 dedupe — 거부 영수증이 근거)
+  }
+  return out;
+}
 // 상신 게이트 본체(§1) — 모든 거부가 내구 영수증으로 남는다(§4: 미포착과 버림을 측정 가능하게).
 // ctx={ok, provider, sessionId, turnAnchor, sourceHash} 또는 {ok:false, reason}(문맥 실패도 같은 영수증 채널).
+// ctx.via="verifier-block"(부품 B 회수)=턴당 상한 비적용(블록 자체가 4행 유계·§2)·영수증에 via 표기.
 function constraintAdd(ws, quote, why, scope, ctx) {
   const q = typeof quote === "string" ? quote : "";
   const w = typeof why === "string" ? why.trim() : "";
@@ -4003,6 +4114,7 @@ function constraintAdd(ws, quote, why, scope, ctx) {
     ts: new Date().toISOString(), provider: String(cid.provider || ""), wsKey: wsKeyFor(ws),
     sessionId: String(cid.sessionId || ""), turnAnchor: String(cid.turnAnchor || ""),
     quoteFp: q ? sha1Of(q).slice(0, 16) : "", quoteLen: q.length, whyLen: w.length,
+    ...(cid.via ? { via: String(cid.via) } : {}), // 부품 B 회수 경로 표기(출처 감사)
   });
   const reject = (reason) => { appendConstraintUsage({ ...base(), outcome: "rejected", reason }); return { ok: false, reason }; };
   if (!c) return reject(ctx && ctx.reason ? ctx.reason : "no-turn-anchor");
@@ -4043,9 +4155,12 @@ function constraintAdd(ws, quote, why, scope, ctx) {
   const cur = latest.get(candidateId + "@" + gen);
   if (cur && (cur.status === "proposed" || cur.status === "adopted")) return reject("duplicate");
   if (cur && (cur.status === "declined" || cur.status === "failed")) return reject("declined-suppressed"); // 거부권=같은 세대 억제(§4)
-  // 턴당 상한(§1-⑦): 같은 turnAnchor로 등록 성공한 distinct 후보 수.
-  const turnIds = new Set(rows.filter((r) => r && r.kind === "user-constraint" && r.turnAnchor === c.turnAnchor && typeof r.candidateId === "string").map((r) => r.candidateId));
-  if (turnIds.size >= CONSTRAINT_TURN_CAP) return reject("turn-cap");
+  // 턴당 상한(§1-⑦): 같은 turnAnchor로 등록 성공한 distinct 후보 수. 부품 B 회수(via=verifier-block)는
+  // 블록 자체가 4행 유계라 비적용(§2 — A 상한과 별개 채널·둘 다 pending 12 합산 상한은 아래에서 공유).
+  if (c.via !== "verifier-block") {
+    const turnIds = new Set(rows.filter((r) => r && r.kind === "user-constraint" && r.turnAnchor === c.turnAnchor && typeof r.candidateId === "string").map((r) => r.candidateId));
+    if (turnIds.size >= CONSTRAINT_TURN_CAP) return reject("turn-cap");
+  }
   // pending 상한: A/B 합산 기존 12 유지(§1-⑦ — kind 무관 proposed 합산·현 승인 세대 기준).
   let pending = 0;
   for (const [, rec] of latest) if (rec.status === "proposed" && String(rec.envelopeHash || "") === gen) pending++;
@@ -4054,6 +4169,7 @@ function constraintAdd(ws, quote, why, scope, ctx) {
     candidateId, envelopeHash: gen, status: "proposed", kind: "user-constraint",
     title: q, why: w, ...(scopeNorm ? { scope: scopeNorm } : {}),
     provider: c.provider, sessionId: c.sessionId, turnAnchor: c.turnAnchor, sourceHash: c.sourceHash,
+    ...(c.via ? { via: String(c.via) } : {}),
     ts: new Date().toISOString(),
   };
   if (!appendEnvelopeCandidates(ws, [rec])) return reject("ledger-write");
@@ -4791,7 +4907,7 @@ function formatForClaude(answer, lang, profile, machine, rejudgeSnap) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}${machineLine}\n처리 의무: ${action}${rjBlock}`;
 }
 
-module.exports = { VERIFIER_PROVIDERS, normVerifierProvider, BASE_PROFILE_AXIS, verifierFormatDirective, verifierBaselineFor, ASK_SHAPE_SECTIONS, askShapeCheck, askShapeNotice, appendAskShape, loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, scoutCouplingAttach, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, discardEnvelopeProposalRestoring, draftEnvelopeRevision, setEnvelopeHashAllSlots, stampEnvelopeAllSlots, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, MEMORY_CANDIDATE_PENDING_MAX, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, CONSTRAINT_TURNS_DIR, CONSTRAINT_USAGE_DIR, readConstraintUsage, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, turnAnchorOf, constraintTurnFileFor, writeConstraintTurnSnapshot, appendConstraintUsage, constraintTurnContext, constraintAdd, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, verifyCampaignProgress, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, codexScoutExecEnv, TOOL_EXEC_ENV, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, economyConfigFpFrom, readEconomySnapshot, DS_SNAPSHOT_ENV, selfAdapterSha, selfExecFp, precisionExecFp, precisionExecFpFrom, readPrecisionConfigSnapshot, codexScoutExecArgsFromSnapshot, claimAutoReprobe, completeAutoReprobe, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, SESSION_LEASES_DIR, sessionLeaseFileFor, readSessionLease, acquireSessionLease, releaseSessionLease, setSessionLeaseChild, clearSessionLease, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, authoritativeVerdict, findingsBlockRange, formatForClaude, normRejudgeSnap, safeLoadRejudge, REJUDGE_SNAP_MAX, appendVerdict, trimVerdicts, appendAttachUsage, trimAttachUsage, ATTACH_USAGE_FILE, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { VERIFIER_PROVIDERS, normVerifierProvider, BASE_PROFILE_AXIS, verifierFormatDirective, verifierBaselineFor, ASK_SHAPE_SECTIONS, askShapeCheck, askShapeNotice, appendAskShape, loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, scoutCouplingAttach, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, discardEnvelopeProposalRestoring, draftEnvelopeRevision, setEnvelopeHashAllSlots, stampEnvelopeAllSlots, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, MEMORY_CANDIDATE_PENDING_MAX, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, CONSTRAINT_TURNS_DIR, CONSTRAINT_USAGE_DIR, readConstraintUsage, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, turnAnchorOf, constraintTurnFileFor, writeConstraintTurnSnapshot, appendConstraintUsage, constraintTurnContext, constraintAdd, CONSTRAINT_BLOCK_MARKERS, CONSTRAINT_BLOCK_MAX_ROWS, parseConstraintBlock, constraintHarvestFromAnswer, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, verifyCampaignProgress, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, codexScoutExecEnv, TOOL_EXEC_ENV, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, economyConfigFpFrom, readEconomySnapshot, DS_SNAPSHOT_ENV, selfAdapterSha, selfExecFp, precisionExecFp, precisionExecFpFrom, readPrecisionConfigSnapshot, codexScoutExecArgsFromSnapshot, claimAutoReprobe, completeAutoReprobe, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, SESSION_LEASES_DIR, sessionLeaseFileFor, readSessionLease, acquireSessionLease, releaseSessionLease, setSessionLeaseChild, clearSessionLease, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, authoritativeVerdict, findingsBlockRange, formatForClaude, normRejudgeSnap, safeLoadRejudge, REJUDGE_SNAP_MAX, appendVerdict, trimVerdicts, appendAttachUsage, trimAttachUsage, ATTACH_USAGE_FILE, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
 module.exports.codexImplementerSession = codexImplementerSession;
 module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
 // P-6 회수 영수증 계약(설계 v5.1)

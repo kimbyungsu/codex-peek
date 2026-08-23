@@ -217,12 +217,82 @@ t("부품 C 합류: 상신된 약속이 후보 계산기 live에 kind·원문·�
   const q2 = "이건 앞으로 계속 지켜야 하는 약속이야.";
   assert.ok(!(cc.live || []).some((c) => c.titles && c.titles[0] === q2), "declined 문안=live 제외(거부권 — 기존 필터 공유)");
 });
+t("부품 B 파서: 부재=정상·정상 2행·빈 블록 ok·위치(지적 블록 앞) 규격", () => {
+  assert.strictEqual(CL.parseConstraintBlock("본문뿐").present, false, "블록 부재=정상(선택 절)");
+  const B = CL.CONSTRAINT_BLOCK_MARKERS;
+  const row = (q, w) => JSON.stringify({ quote: q, why: w });
+  const good = "본문\n" + B.start + "\n" + row("약속 하나", "근거") + "\n" + row("약속 둘", "근거") + "\n" + B.end + "\n[지적 목록 v2]\n[지적 목록 끝]\n\n검증: 통과\n";
+  const p1 = CL.parseConstraintBlock(good);
+  assert.ok(p1.present && p1.ok && p1.items.length === 2 && p1.items[0].quote === "약속 하나", "정상 2행 판독");
+  const empty = B.start + "\n" + B.end + "\n";
+  assert.ok(CL.parseConstraintBlock(empty).ok, "빈 블록=무해 ok");
+  const after = "[지적 목록 v2]\n[지적 목록 끝]\n" + B.start + "\n" + row("약속", "근거") + "\n" + B.end;
+  const pA = CL.parseConstraintBlock(after);
+  assert.ok(pA.present && !pA.ok && pA.reason === "position", "지적 블록 '뒤' 위치=전량 거부(지적 파서 손상 유발 차단)");
+});
+t("부품 B 파서: 손상 하나=블록 전량 거부(부분 수용 없음) — 5행·미지 필드·개행 값·중복 키·JSON 파손·1KB 초과", () => {
+  const B = CL.CONSTRAINT_BLOCK_MARKERS;
+  const row = (q, w) => JSON.stringify({ quote: q, why: w });
+  const wrap = (body) => B.start + "\n" + body + "\n" + B.end;
+  const five = wrap([1, 2, 3, 4, 5].map((i) => row("약속 " + i, "근거")).join("\n"));
+  assert.strictEqual(CL.parseConstraintBlock(five).reason, "too-many-rows", "최대 4행");
+  assert.strictEqual(CL.parseConstraintBlock(wrap('{"quote":"약속","why":"근거","x":1}')).reason, "unknown-field", "미지 필드=전량 거부");
+  assert.strictEqual(CL.parseConstraintBlock(wrap('{"quote":"약\\n속","why":"근거"}')).reason, "newline-value", "개행 값=거부");
+  assert.strictEqual(CL.parseConstraintBlock(wrap('{"quote":"a","quote":"b","why":"근거"}')).reason, "dup-or-missing-key", "중복 키=거부(파서가 삼키기 전 원문 검사)");
+  assert.strictEqual(CL.parseConstraintBlock(wrap('{"quote":"first","quo\\u0074e":"second","why":"reason"}')).reason, "dup-or-missing-key", "★이스케이프 중복 키(quo\\u0074e)도 해독 후 거부(확인검증 blocker 정방향)");
+  assert.strictEqual(CL.parseConstraintBlock(wrap('{"quote":"약속" "why"')).reason, "dup-or-missing-key", "행 형식 파손=거부");
+  assert.strictEqual(CL.parseConstraintBlock(wrap('{"quote":"' + "가".repeat(1024) + '","why":"근거"}')).reason, "line-too-long", "행당 1KB 상한");
+  const kr400 = JSON.stringify({ quote: "가".repeat(400), why: "근거" });
+  assert.ok(kr400.length < 1024 && Buffer.byteLength(kr400, "utf8") > 1024, "반례 전제: 코드 단위<1024·UTF-8 바이트>1024");
+  assert.strictEqual(CL.parseConstraintBlock(wrap(kr400)).reason, "line-too-long", "★1KB 상한=UTF-8 바이트 기준(한글 행 우회 봉합 — 확인검증 blocker 정방향)");
+  assert.ok(CL.parseConstraintBlock(wrap('{ "quote" : "공백 있는 정상 행", "why" : "근거" }')).ok, "키 사이 공백=정상 수용(스캐너가 형식 아닌 키 의미를 검사)");
+});
+t("부품 B 회수: 훅 스냅샷만 대조 권위 — 정상 적재+작문/지문 불일치/직접 ask 반례·구현자 상신과 지문 dedupe 합류", () => {
+  const WSB = fs.mkdtempSync(path.join(os.tmpdir(), "ccap-b-"));
+  assert.strictEqual(CL.setEnvelopeHashAllSlots(WSB, GEN), 2);
+  const TSB = "2026-08-23T12:00:00.000Z";
+  const AB = CL.turnAnchorOf(SID, TSB);
+  const PB = "약속 하나를 지켜야 한다 — 배포 전 백업. 그리고 약속 둘 — 고객 기록 보존. 셋째 약속 — 복구 시험 매주.";
+  const wB = CL.writeConstraintTurnSnapshot(WSB, AB, PB);
+  const ctxB = { provider: "claude", sessionId: SID, turnAnchor: AB, sourceHash: wB.sourceHash };
+  const B = CL.CONSTRAINT_BLOCK_MARKERS;
+  const row = (q, w) => JSON.stringify({ quote: q, why: w });
+  // 정상 3행(턴당 2건 상한 비적용 확인 — via=verifier-block은 블록 4행 유계가 상한)
+  const ans1 = "검토 본문\n" + B.start + "\n" + row("약속 하나를 지켜야 한다 — 배포 전 백업.", "지속 약속") + "\n" + row("그리고 약속 둘 — 고객 기록 보존.", "지속 약속") + "\n" + row("셋째 약속 — 복구 시험 매주.", "지속 약속") + "\n" + B.end + "\n[지적 목록 v2]\n[지적 목록 끝]\n\n검증: 통과\n";
+  const h1 = CL.constraintHarvestFromAnswer(WSB, ans1, ctxB);
+  assert.ok(h1.present && h1.ok && h1.accepted === 3 && h1.rejected === 0, "★정상 적재 3건(턴당 2건 상한 비적용 — A 채널과 별개): " + JSON.stringify(h1));
+  const { latest: lB } = CL.readEnvelopeCandidates(WSB);
+  const recB = [...lB.values()].find((r) => r.title === "그리고 약속 둘 — 고객 기록 보존.");
+  assert.ok(recB && recB.kind === "user-constraint" && recB.via === "verifier-block" && recB.turnAnchor === AB, "후보 레코드=같은 장부·출처 결속+via 표기");
+  // 작문 반례(§6): 검증 요청문에 새로 쓴 문장=스냅샷에 없음 → 행 거부(전량 아님 — 행별 게이트)
+  const ans2 = B.start + "\n" + row("검증 요청문에서 가져온 것처럼 보이는 새 문장이다.", "위장") + "\n" + B.end;
+  const h2 = CL.constraintHarvestFromAnswer(WSB, ans2, ctxB);
+  assert.ok(h2.ok && h2.accepted === 0 && h2.rejected === 1, "구현자 작문·주입문 위장=거부(대조 권위=훅 스냅샷뿐)");
+  assert.strictEqual(lastUsage().reason, "not-in-prompt");
+  // job 결속: sourceHash 불일치=전량 거부 단일 영수증
+  const h3 = CL.constraintHarvestFromAnswer(WSB, ans1, { ...ctxB, sourceHash: "f".repeat(40) });
+  assert.ok(h3.present && !h3.ok && h3.reason === "snapshot-mismatch", "지문 불일치=블록 전량 거부");
+  assert.strictEqual(lastUsage().reason, "block-snapshot-mismatch");
+  // 직접 ask(ctx 없음)=전량 무시+direct-ask 영수증
+  const h4 = CL.constraintHarvestFromAnswer(WSB, ans1, null);
+  assert.ok(h4.present && h4.ignored && h4.reason === "direct-ask", "직접 ask=블록 무시(의식적 한정)");
+  assert.ok(lastUsage().reason === "direct-ask" && lastUsage().via === "verifier-block", "direct-ask 거부 영수증 실존");
+  // dedupe 자연 합류: 같은 원문 재회수=duplicate 거부(중복 후보 없음)
+  const h5 = CL.constraintHarvestFromAnswer(WSB, ans1, ctxB);
+  assert.ok(h5.ok && h5.accepted === 0 && h5.rejected === 3, "재회수=지문 dedupe로 전건 duplicate(자연 합류)");
+});
 t("소스 계약: CLI 스위치·훅 배선(양 경로)·anchor 필드 결속", () => {
   const cb = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
   assert.ok(cb.includes('case "constraint":') && cb.includes("function cmdConstraint(rest)") && cb.includes("constraintTurnContext()"), "CLI 스위치+문맥 해석 경유");
   const ci = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-inject.js"), "utf8");
   assert.ok(ci.includes("writeConstraintTurnSnapshot(ws, anc, ptxt)") && ci.includes("turnAnchorOf(sid, activeTs)") && ci.includes("constraintAnchor, constraintSourceHash"), "Claude 훅: 스냅샷+active 병기(캠페인 앵커 동일 원천)");
   const ch = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-hook.js"), "utf8");
+  const cbB = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
+  assert.ok(cbB.includes("constraintCtx={provider:cc9.provider,sessionId:cc9.sessionId,turnAnchor:cc9.turnAnchor,sourceHash:cc9.sourceHash}") && cbB.includes("rejudgeSnap,campaignId,constraintCtx,"), "부품 B: ask 생성 시 턴 원문 결속을 job에 동결(완료 시점 재판독 금지)");
+  assert.ok(cbB.includes("constraintHarvestFromAnswer(ws, answer, ccJob9)") && cbB.includes("durableEnv.job.constraintCtx"), "부품 B: finishVerifyRun 회수 배선=내구 job 동결 ctx만 권위");
+  const clB = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
+  assert.ok(clB.includes("VERIFIER_FORMAT_CONSTRAINT_KO") && clB.includes("tail9"), "부품 B: 검증자 서식 범주 규칙 1줄(두 blockMode 공통 — 위임 모드 소실 금지)");
+  assert.ok(CL.verifierFormatDirective("ko").includes("[제약 후보 v1]") && CL.verifierFormatDirective("ko", "delegated").includes("[제약 후보 v1]"), "서식 실출력 양 모드에 범주 규칙 실림");
   assert.ok(ch.includes("writeConstraintTurnSnapshot(ws, turnId, ptxt)") && ch.includes("constraintAnchor: String(turnId)") && ch.includes('heartbeat(j, ws, sid, "UserPromptSubmit", capFields)') && ch.includes("keepCap"), "Codex 훅: turnId 앵커+heartbeat 결속+같은 턴 승계");
 });
 
