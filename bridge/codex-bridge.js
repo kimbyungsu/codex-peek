@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled, constraintTurnContext, constraintAdd, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, constraintHarvestFromAnswer, buildAbManifest, boundaryGenOf } = require("./contract-lib.js");
+const { askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled, constraintTurnContext, constraintAdd, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, constraintHarvestFromAnswer, buildAbManifest, boundaryGenOf, readVerifyEnvelopeArchive, SELECTOR_PAGE_ITEMS, selectorDeadlineMsFor, selectorScopeMaterial, SELECTOR_UNION_MAX, SELECTOR_UNION_BYTES_MAX } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -109,7 +109,7 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap, askId9p)
       const mk9 = (pfx, n) => Array.from({ length: n }, (_, i) => pfx + "-" + (i + 1));
       carrier.envelope = { hash: es9.envSha || null, sup: mk9("sup", es9.envAxes.supportedEnv || 0), ab: mk9("ab", es9.envAxes.alwaysBlocker || 0), oos: mk9("oos", es9.envAxes.outOfScope || 0) };
     }
-  } catch (e0) { if (e0 && e0.envelopeTransBusy) throw e0; /* 상호배제 실패=ask 정직 실패(경계 없는 프롬프트 생성 금지 — 재검증 blocker③). 그 외 경계 실패=주입만 생략(검증은 현행 규약으로 진행) */ }
+  } catch (e0) { if (e0 && (e0.envelopeTransBusy || e0.selectorDrift)) throw e0; /* 상호배제 실패·[3b] 서고 선별 드리프트=ask 정직 실패(경계 없는/선별 없는 프롬프트 생성 금지 — 삼키면 '선별 없는 판'이 조용히 진행된다). 그 외 경계 실패=주입만 생략(검증은 현행 규약으로 진행) */ }
   // 계약 규칙은 사용자가 '이렇게 검증하라'고 저장한 요구다. 길어서 뺀 채로 검증을 진행하면
   // 그 요구가 적용되지 않았는데 통과 도장이 찍힌다 — 검증 통과 위조 경로다(검증 blocker).
   // 그래서 잘라 붙이지도, 빼고 진행하지도 않는다. ask 자체를 멈추고 줄이라고 요구한다(fail-closed).
@@ -170,28 +170,79 @@ function envelopeSliceFor(wsIn, lang, profile, cSnapshot) {
       const target9 = resolveScoutRepo(wsIn, cFresh9).repo;
       const evi = envelopeInjectionFor(target9, cFresh9.envelopeHash, lang);
       const en9 = (lang || loadLang()) === "en";
+      // [Envelope Selector v7 §3 — 3b] 서고 선별 결과 결속: 내구 job의 worker 선별을 '주입 직전' 같은 전이
+      // 잠금 안에서 재검사(서고 지문·변경물 지문 — 어느 쪽 드리프트든 중단)하고, 절 주입·manifest 합류를
+      // 준비한다. 실패=정직 예외(선별자가 본 규칙·코드와 검증자가 볼 규칙·코드의 동일성 결속 — 위장 금지).
+      let sel9 = null, selArc9 = null; const selTexts9 = []; let selTextsEn9 = null;
+      {
+        const failSel = (why) => { throw Object.assign(new Error((en9 ? "[archive rules] " : "[서고 수칙] ") + why + (en9 ? " — this verification was not started (a fresh selection is required; restart with ask-start)." : " — 이번 검증을 시작하지 않았습니다(새 선별 필요 — ask-start로 다시 시작하세요).")), { selectorDrift: true }); };
+        const dj9 = process.env.CODEX_BRIDGE_JOB_PROMPT_FILE ? readCanonicalEnvJob(wsIn) : null;
+        const rawSel9 = dj9 && dj9.ok && dj9.job && dj9.job.selection && typeof dj9.job.selection === "object" && !Array.isArray(dj9.job.selection) ? dj9.job.selection : null;
+        const archActive9 = typeof cFresh9.archiveHash === "string" && !!cFresh9.archiveHash;
+        if (archActive9 || rawSel9) {
+          if (!rawSel9) failSel(en9 ? "approved archive active but this run carries no selection result (non-durable or pre-selector job)" : "승인 서고 활성인데 이 실행에 선별 결과가 없습니다(내구 경로 밖 또는 선별 이전 job)");
+          if (!archActive9) failSel(en9 ? "a selection result exists but the contract has no archive stamp (unstamp drift)" : "선별 결과가 있는데 계약의 서고 승인 지문이 없습니다(도장 해제 드리프트)");
+          if (evi.st !== "ok") failSel((en9 ? "core rulebook not injectable (" : "코어 수칙서가 주입 불가 상태(") + evi.st + (en9 ? ") while an archive selection is bound" : ")인데 서고 선별이 결합돼 있습니다"));
+          const arc9 = readVerifyEnvelopeArchive(target9);
+          if (arc9.st !== "ok" || arc9.sha1 !== cFresh9.archiveHash || arc9.sha1 !== rawSel9.archiveHash) failSel(en9 ? "the archive file differs from selection time (drift)" : "서고 파일이 선별 시점과 다릅니다(드리프트)");
+          const sc9 = selectorScopeMaterial(target9);
+          if (sc9.st !== "ok") failSel((en9 ? "changed-files bundle unreadable (" : "변경물 꾸러미 판독 실패(") + String(sc9.reason) + ")"); // [1차 blocker 봉합] 판독 실패=중단 — 빈 지문 동률로 drift 관문을 통과하는 fail-open 차단
+          if (sc9.hash !== rawSel9.scopePackageHash) failSel(en9 ? "the changed-files bundle differs from selection time (drift)" : "변경물 꾸러미가 선별 시점과 다릅니다(드리프트)");
+          if (!Array.isArray(rawSel9.selectedIds)) failSel(en9 ? "selection record malformed" : "선별 결과 형식 손상");
+          for (const idd of rawSel9.selectedIds) {
+            const nm9 = /^arc-(\d+)$/.exec(String(idd));
+            const tx9 = nm9 ? arc9.data.alwaysBlocker[Number(nm9[1]) - 1] : undefined;
+            if (typeof tx9 !== "string") failSel(en9 ? "a selected id falls outside the archive range" : "선별 id가 서고 범위를 벗어났습니다");
+            selTexts9.push(tx9);
+          }
+          if (selTexts9.length > SELECTOR_UNION_MAX || selTexts9.reduce((a, t) => a + Buffer.byteLength(t, "utf8"), 0) > SELECTOR_UNION_BYTES_MAX) failSel(en9 ? "the selection exceeds the injection caps" : "선별 결과가 주입 상한을 초과합니다");
+          selArc9 = arc9; sel9 = rawSel9;
+          if (en9 && arc9.dataEn.alwaysBlocker) selTextsEn9 = rawSel9.selectedIds.map((idd) => arc9.dataEn.alwaysBlocker[Number(/^arc-(\d+)$/.exec(String(idd))[1]) - 1]);
+        }
+      }
       try { // 1차 blocker②+5차 미완수정①: 주입에 쓴 지문을 재판독 없이 동결하고 '이 ask의 잡 id'를 동등 결속(시계 무관 — 후처리가 id 일치로만 인정)
         const jid9 = typeof process.env.CODEX_BRIDGE_ASK_JOB_ID === "string" && process.env.CODEX_BRIDGE_ASK_JOB_ID ? process.env.CODEX_BRIDGE_ASK_JOB_ID : null;
         // [Envelope Selector v7 §2] ab 합본 manifest+boundaryGen 동결 — 같은 전이 잠금 '안'에서 재판독하고
         // 주입 지문(evi.sha1)과 일치할 때만 구성(불일치·실패=legacy 동결: manifest 없음 → confirm은 envelopeHash 폴백).
-        // 선별 미도입 단계라 appliedArchiveHash=""(서고 미주입 — 선별 도입 시 selectedIds 문안이 여기 합류).
+        // 선별 판(sel9)은 선별분이 manifest에 합류하고 appliedArchiveHash=실값 — 아래 strict 관문이 legacy 위장을 막는다.
         let fx9 = undefined;
         try {
           if (evi.st === "ok") {
             const evM = readVerifyEnvelope(target9);
             if (evM.st === "ok" && evM.sha1 === evi.sha1) {
-              const mf9 = buildAbManifest(evM.data.alwaysBlocker, []);
-              fx9 = { manifest: mf9, boundaryGen: boundaryGenOf(evi.sha1, "", mf9), appliedArchiveHash: "" };
+              const mf9 = buildAbManifest(evM.data.alwaysBlocker, selTexts9);
+              fx9 = { manifest: mf9, boundaryGen: boundaryGenOf(evi.sha1, sel9 ? selArc9.sha1 : "", mf9), appliedArchiveHash: sel9 ? selArc9.sha1 : "" };
             }
           }
         } catch { fx9 = undefined; }
-        if (!writeEnvelopeFreeze(wsIn, evi.st === "ok" ? evi.sha1 : null, jid9, fx9)) console.error(en9 ? "[envelope freeze write failed — admission disabled this ask]" : "[경계 동결 기록 실패 — 이번 ask 입장 심사 미발동]");
-      } catch { /* 안전 방향 */ }
+        // [3b strict] 선별 판인데 manifest 구성 실패=중단 — legacy 동결로 넘기면 입장 심사의 ab 범위·경계
+        // 표식이 선별분을 모르는 채 판정한다(조용한 축소 금지).
+        if (sel9 && !fx9) throw Object.assign(new Error(en9 ? "[archive rules] failed to freeze the combined manifest — this verification was not started." : "[서고 수칙] 합본 manifest 동결 실패 — 이번 검증을 시작하지 않았습니다."), { selectorDrift: true });
+        if (!writeEnvelopeFreeze(wsIn, evi.st === "ok" ? evi.sha1 : null, jid9, fx9)) {
+          if (sel9) throw Object.assign(new Error(en9 ? "[archive rules] envelope freeze write failed — this verification was not started (admission must see the combined boundary)." : "[서고 수칙] 경계 동결 기록 실패 — 이번 검증을 시작하지 않았습니다(입장 심사가 합본 경계를 봐야 함)."), { selectorDrift: true });
+          console.error(en9 ? "[envelope freeze write failed — admission disabled this ask]" : "[경계 동결 기록 실패 — 이번 ask 입장 심사 미발동]");
+        }
+      } catch (eF9) { if (eF9 && eF9.selectorDrift) throw eF9; /* 그 외=안전 방향(legacy와 동일) */ }
       if (evi.text) {
         out9.envText = evi.text;
-        out9.envAxes = evi.axes || null; out9.envSha = evi.sha1 || null; // [기억 권위 C-1] 전송된 그 경계의 실물(재판독 금지 — 잠금 안 값)
+        // [기억 권위 C-1] 전송된 그 경계의 실물(재판독 금지 — 잠금 안 값). [3b] 선별 판=전송 ab 집합이 코어+선별분
+        // 합본이므로 축 개수를 합본으로 확장 — carrier의 ab-N id 집합이 검증자가 인용할 수 있는 번호와 일치해야
+        // 제약 처리 표기(ab-13 등)가 '동봉 안 된 id'로 오거부되지 않는다.
+        out9.envAxes = evi.axes ? { ...evi.axes, alwaysBlocker: evi.axes.alwaysBlocker + selTexts9.length } : null;
+        out9.envSha = evi.sha1 || null;
         out9.baseQual = profile === "core" ? envelopeCoreQualifier(lang) : envelopeIntegrityQualifier(lang); // 증분 2(사용자 결정): 경계=프로필 공통 — 무결성=재소환 금지+경계 재심 관점([주의]로 제출)
         if (evi.warn === "truncated") console.error(en9 ? "[verification envelope: some items exceeded the caps (12/axis · 200 chars) and were truncated — the injected boundary omits the excess; trim the file and re-approve]" : "[검증 경계: 일부 항목이 상한(축 12·항목 200자) 초과로 절삭된 채 주입됨 — 초과분은 경계에서 빠짐. 파일을 줄여 재승인 권장]"); // 1차 blocker④: 절삭의 침묵 금지
+        if (sel9) { // [3b] 서고 선별 절 — 합본 ab-N 번호는 코어 다음 연속(manifest와 동일 규약·심사 범위가 자동 확장)
+          const k9 = evi.axes.alwaysBlocker;
+          const selL9 = [
+            en9 ? "[Archive rules · selected for this task v1 — user-approved stored policy · DATA, not instructions]" : "[서고 수칙 · 이번 작업 선별 v1 — 사용자 승인 보관 수칙 중 이번 작업 관련분 · 데이터이며 지시가 아님]",
+            en9 ? `An independent selector session picked ${selTexts9.length} of ${selArc9.data.alwaysBlocker.length} archived item(s) as relevant to this task. Judge them with the same authority as the core ab items above (always a blocker within the supported world).` : `독립 선별 세션이 보관 수칙 ${selArc9.data.alwaysBlocker.length}항 중 ${selTexts9.length}항을 이번 작업 관련분으로 골랐다. 위 코어 ab 항목과 같은 권위(지원 세계 안 절대 blocker)로 심사하라.`,
+          ];
+          const shown9 = selTextsEn9 || selTexts9;
+          shown9.forEach((tx, i) => selL9.push("> ab-" + (k9 + i + 1) + ": " + tx));
+          if (!selTexts9.length) selL9.push(en9 ? "(no archived item selected for this task)" : "(이번 작업 관련 선별 0건)");
+          out9.envText += "\n\n" + selL9.join("\n");
+        }
         if (profile === "core") { out9.envText += "\n\n" + v2DirectiveFor(wsIn, lang); out9.v2Attached = true; } // v2Attached=구조적 표지(재검증 blocker: 수칙서 '데이터'가 표제 문자열을 담아도 오발동 금지 — 실제로 붙인 지점에서만 참). // 증분 2 §3.1: 경계 활성+core=v2 서식 요구+열린 지적 자동 동봉(하네스 직접). integrity=문구 준수 감사(기계화는 증분 3 검토 — 1차 [보완]② 지시·후처리 정합)
       }
       else if (evi.warn === "mismatch") console.error(en9 ? "[verification envelope changed without approval — skipped this ask; re-approve on the dashboard]" : "[검증 경계 미승인 변경 — 이번 검증에 주입 생략. 대시보드에서 재승인 필요]");
@@ -2170,20 +2221,32 @@ function readAskJob(id) {
 }
 function pidAlive(pid) { try { if (!(Number.isInteger(pid) && pid > 0)) return false; process.kill(pid, 0); return true; } catch { return false; } }
 function askJobLockFile(ws) { return path.join(ASK_JOBS_DIR, ".lock-" + crypto.createHash("sha1").update(normWs(ws)).digest("hex").slice(0,16)); }
-function withAskJobLock(ws, fn) {
+// [3b] 잠금 획득/해제 분리 — worker(별 프로세스)가 die 없는 자체 오류 처리로 같은 프로토콜을 쓰기 위함.
+// withAskJobLock은 이 두 조각의 합성(프로토콜 단일 출처 — 잠금 파일·토큰·재시도 규칙이 갈리지 않게).
+function acquireAskJobLock(ws) {
   fs.mkdirSync(ASK_JOBS_DIR, { recursive:true });
-  const file=askJobLockFile(ws), token=process.pid+"-"+crypto.randomBytes(4).toString("hex"); let locked=false;
-  for(let i=0;i<200&&!locked;i++){
-    try{fs.writeFileSync(file,token,{flag:"wx"});locked=true;}
+  const file=askJobLockFile(ws), token=process.pid+"-"+crypto.randomBytes(4).toString("hex");
+  for(let i=0;i<200;i++){
+    try{fs.writeFileSync(file,token,{flag:"wx"});return {ok:true,token};}
     catch{
       // 죽은 보유자라도 자동 삭제하지 않는다. read→delete 사이 다른 프로세스가 새 잠금을 얻는 ABA 경합에서
       // 그 새 잠금을 지워 이중 진입할 수 있기 때문이다. 짧은 잠금 잔재는 명시 진단 후 수동 복구가 안전하다.
       try{Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);}catch{/* retry */}
     }
   }
-  if(!locked)die(tB("검증 작업 잠금 획득 실패 — 새 작업을 만들지 않았습니다.","Could not acquire the verification job lock — no job was created."),3);
-  try{return fn();}finally{try{if(fs.readFileSync(file,"utf8")===token)fs.unlinkSync(file);}catch{/* 무해 */}}
+  return {ok:false};
 }
+function releaseAskJobLock(ws, token) {
+  try{const f=askJobLockFile(ws);if(fs.readFileSync(f,"utf8")===token)fs.unlinkSync(f);}catch{/* 무해 */}
+}
+function withAskJobLock(ws, fn) {
+  const a=acquireAskJobLock(ws);
+  if(!a.ok)die(tB("검증 작업 잠금 획득 실패 — 새 작업을 만들지 않았습니다.","Could not acquire the verification job lock — no job was created."),3);
+  try{return fn();}finally{releaseAskJobLock(ws,a.token);}
+}
+// [3b] 취소 의사 내구 파일 — .json 확장자 금지(corruptAskJobFiles가 job 파일로 오인해 신규 생성을 차단).
+// 기록은 ask-job clear가 잠금 안에서, 관측·회수는 selecting worker가 페이지 경계와 전이 직전(같은 잠금)에서.
+function askJobCancelIntentFile(id) { return path.join(ASK_JOBS_DIR, id + ".cancel-intent"); }
 // P-4: 손상(파싱 불가·비객체) job 파일 목록 — activeAskJob은 손상 파일을 건너뛰므로(타 작업 보호)
 // '실행 중 job이 손상되면 활성 없음으로 축소→중복 worker 생성' 구멍이 있었다. 신규 생성 전에 진단해 차단.
 const QUARANTINE_BLOCK_MS = 60 * 60 * 1000; // verifyTimeoutMin의 기존 코드 상한(60분) 재사용 — 새 상수 아님(P-12 ⓚ)
@@ -2203,9 +2266,9 @@ function corruptAskJobFiles() {
         // 의미 손상(P-4 3차 blocker): 파싱은 되지만 정본 필드가 깨진 객체(schema·id↔파일명·state)는
         // activeAskJob의 활성 판정을 우회해 중복 worker를 허용하므로 함께 차단. 구스키마 잔존 job도
         // 여기 걸린다 — 확인 후 clear로 해소(안내 메시지에 명시).
-        const stOk = ["queued", "running", "succeeded", "failed"].includes(o && o.state); // 상태 오타=활성 판정 우회 차단(구현검증 1차 blocker)
+        const stOk = ["queued", "selecting", "running", "succeeded", "failed"].includes(o && o.state); // 상태 오타=활성 판정 우회 차단(구현검증 1차 blocker) · selecting=서고 선별(3b)
         const wsOk = o && typeof o.workspace === "string" && o.workspace.trim(); // workspace 소실·공백뿐=활성 판정 우회 차단(재검증 2차 blocker)
-        const dlOk = !(o && (o.state === "queued" || o.state === "running")) || Number.isFinite(Date.parse(o && o.deadlineAt || "")); // 진행형은 deadline 필수
+        const dlOk = !(o && (o.state === "queued" || o.state === "selecting" || o.state === "running")) || Number.isFinite(Date.parse(o && o.deadlineAt || "")); // 진행형은 deadline 필수
         if (!o || typeof o !== "object" || Array.isArray(o) || o.schema !== "ask-job-v1" || typeof o.id !== "string" || !askJobIdOk(o.id) || o.id + ".json" !== n || !stOk || !wsOk || !dlOk) bad.push(n);
       } catch { bad.push(n); }
       continue;
@@ -2223,7 +2286,7 @@ function activeAskJob(ws) {
   for (const n of names) {
     try {
       const j = JSON.parse(fs.readFileSync(path.join(ASK_JOBS_DIR, n), "utf8"));
-      if (normWs(j.workspace || "") !== key || !["queued", "running"].includes(j.state)) continue;
+      if (normWs(j.workspace || "") !== key || !["queued", "selecting", "running"].includes(j.state)) continue;
       // queued는 workerPid가 기록되기 전의 짧은 창도 살아있는 작업으로 본다. 죽은 worker라도 자동 재전송하지 않고
       // 사용자가 상태를 확인해 명시 clear하도록 보수 차단(ask-active의 abandoned 정책과 동일).
       return j;
@@ -2319,6 +2382,20 @@ function cmdAskStart(rest) {
     // 이 스냅샷 지문뿐(완료 시점 active 재판독=다른 턴 원문 오결속 위험이라 금지). 부재=null(직접 ask와 동일 취급).
     let constraintCtx=null;
     try{const cc9=constraintTurnContext();if(cc9.ok)constraintCtx={provider:cc9.provider,sessionId:cc9.sessionId,turnAnchor:cc9.turnAnchor,sourceHash:cc9.sourceHash};}catch{constraintCtx=null;}
+    // [Envelope Selector v7 §3 — 3b] 승인 서고 활성 게이트: 소실≠미도입(지문 있는데 파일 부재/불일치=중단)·
+    // 스냅샷 부재=시작 중단('구현 대화에서 새 프롬프트 1회' 기존 관용구)·선별 계획(팔·페이지·예산)을 job에
+    // 동결. 팔=구현 턴 provider 고정(constraintCtx.provider 외 다른 출처 인자 없음 — 교차 불가 소스 계약).
+    // 미도입(archiveHash null)=selector 미기록·deadline 산식 무변(완전 무회귀).
+    let selector=null,selBudgetMs=0;
+    if(typeof cSnap.archiveHash==="string"&&cSnap.archiveHash){
+      const selTarget=resolveScoutRepo(ws,cSnap).repo;
+      const arc0=readVerifyEnvelopeArchive(selTarget);
+      if(arc0.st!=="ok"||arc0.sha1!==cSnap.archiveHash)throw Object.assign(new Error(tB(`⚠️ 승인 서고가 도장 시점과 다릅니다(${arc0.st==="ok"?"내용 불일치":arc0.st}) — 검증을 시작하지 않았습니다. 대시보드에서 서고를 확인·재승인한 뒤 재시도하세요.`,`⚠️ The approved archive differs from its stamped state (${arc0.st==="ok"?"content mismatch":arc0.st}) — no verification was started. Review/re-approve the archive on the dashboard, then retry.`)),{exitCode:3});
+      if(!constraintCtx)throw Object.assign(new Error(tB("⚠️ 승인 서고 활성 프로젝트인데 이번 턴의 사용자 원문 스냅샷이 없어 선별을 시작할 수 없습니다 — 검증을 시작하지 않았습니다. 구현 대화에서 새 프롬프트를 한 번 보내 턴을 다시 기록한 뒤 재시도하세요.","⚠️ The approved archive is active but this turn has no user-prompt snapshot, so selection cannot start — no verification was started. Send one new prompt in the implementer conversation to re-record the turn, then retry.")),{exitCode:3});
+      const pages0=Math.ceil(arc0.data.alwaysBlocker.length/SELECTOR_PAGE_ITEMS);
+      selector={archiveHash:arc0.sha1,itemCount:arc0.data.alwaysBlocker.length,pages:pages0,arm:constraintCtx.provider==="codex"?"codex":"self"};
+      selBudgetMs=selectorDeadlineMsFor(pages0);
+    }
     id="ask-"+Date.now().toString(36)+"-"+crypto.randomBytes(5).toString("hex");timeoutMin=verifyTimeoutMin();const now=Date.now();
     // 주입 구조화 2단계: 재판단 규약을 '판정이 도착하는 자리'로 옮기면서, 같은 ask가 시작할 때 확정한 문안을
     // 완료 처리에도 쓰도록 원문을 여기서 동결한다. 동결하지 않고 완료 시점에 파일을 다시 읽으면 검증이 도는
@@ -2329,7 +2406,9 @@ function cmdAskStart(rest) {
     // 원문을 그대로 동결한다(정규화는 footer 한 곳에서만) — 첨부가 거부된 경우에도 '무엇이 있었는지'를 알아야
     // 조용한 누락 대신 사유를 밝힐 수 있다. 파일 비대는 상한+1자 절단으로 막는다(길이 초과 판정에는 충분).
     const rejudgeSnap=safeLoadRejudge(askLangSnap,askProfileSnap).trim().slice(0,REJUDGE_SNAP_MAX+1);
-    job={schema:"ask-job-v1",id,state:"queued",workspace:ws,execCwd:process.cwd(),flags:req.flags,prompt:req.prompt,timeoutMin,createdAt:new Date(now).toISOString(),deadlineAt:new Date(now+timeoutMin*60*1000).toISOString(),workerPid:null,childPid:null,exitCode:null,harnessMode:cSnap.harnessMode,verifyProfile:askProfileSnap,verifyLang:askLangSnap,verifyProvider:askProviderSnap,rejudgeSnap,campaignId,constraintCtx,implementerSession:frozen.implementerSession,implementerTurnId:frozen.implementerTurnId,implementerRevision:frozen.implementerRevision};
+    // [3b] deadline=두 예산의 합(선별 예산+검증 예산 — 선별이 검증 몫을 잠식하지 않음). verifierDeadlineAt은
+    // selecting→running 전이 시점에 worker가 절대 시각으로 확정(생성 시점 단일 deadline 전달 방식의 교체).
+    job={schema:"ask-job-v1",id,state:"queued",workspace:ws,execCwd:process.cwd(),flags:req.flags,prompt:req.prompt,timeoutMin,createdAt:new Date(now).toISOString(),deadlineAt:new Date(now+selBudgetMs+timeoutMin*60*1000).toISOString(),selector,selectorDeadlineAt:selector?new Date(now+selBudgetMs).toISOString():null,verifierDeadlineAt:null,workerPid:null,childPid:null,exitCode:null,harnessMode:cSnap.harnessMode,verifyProfile:askProfileSnap,verifyLang:askLangSnap,verifyProvider:askProviderSnap,rejudgeSnap,campaignId,constraintCtx,implementerSession:frozen.implementerSession,implementerTurnId:frozen.implementerTurnId,implementerRevision:frozen.implementerRevision};
     file=askJobFile(id);
     if(!atomicWrite(file,JSON.stringify(job)))throw new Error(tB("검증 작업 저장 실패 — 새 검증을 시작하지 않았습니다.","Failed to save the verification job — no verification was started."));
   }); } catch(e) { die(String(e&&e.message||e),Number(e&&e.exitCode)||1); }
@@ -2355,7 +2434,7 @@ function cmdAskWait(rest) {
   const sliceEnv = Number(process.env.CODEX_BRIDGE_JOB_WAIT_SLICE_MS);
   const sliceMs = Number.isFinite(sliceEnv) && sliceEnv >= 0 ? Math.min(sliceEnv, 55000) : 45000;
   const until = Date.now() + sliceMs;
-  while (["queued", "running"].includes(j.state) && Date.now() < until) {
+  while (["queued", "selecting", "running"].includes(j.state) && Date.now() < until) {
     try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500); } catch { /* 즉시 재조회 */ }
     j = readAskJob(id) || j;
   }
@@ -2386,7 +2465,7 @@ function cmdAskWait(rest) {
   let spawnPid=0;try{spawnPid=parseInt(fs.readFileSync(askJobPidFile(id),"utf8"),10)||0;}catch{/* worker patch 전/옛 job */}
   const effectivePid=j.workerPid||spawnPid,alive=pidAlive(effectivePid),remaining=Number.isFinite(deadline)?Math.max(0,deadline-Date.now()):null;
   if((effectivePid&&!alive)||remaining===0){j={...j,state:"failed",workerPid:j.workerPid||spawnPid||null,exitCode:1,error:remaining===0?"verification deadline elapsed":"durable worker exited before recording a final state",finishedAt:new Date().toISOString()};atomicWrite(askJobFile(id),JSON.stringify(j));die(remaining===0?tB("검증 작업이 저장된 절대 deadline을 넘겨 실패했습니다.","The verification job exceeded its stored absolute deadline."):tB("검증 worker가 최종 상태 없이 종료됐습니다. 같은 작업을 재전송하지 말고 job/rollout을 확인하세요.","The verification worker exited without a final state. Do not resend; inspect the job/rollout."));}
-  process.stdout.write(JSON.stringify({ jobId: id, state: j.state, workerAlive: alive, childPid: j.childPid || null, verifyTimeoutMin: j.timeoutMin, remainingMs: remaining, next: `node "${__filename}" ask-wait ${id}` }, null, 2) + "\n");
+  process.stdout.write(JSON.stringify({ jobId: id, state: j.state, workerAlive: alive, childPid: j.childPid || null, verifyTimeoutMin: j.timeoutMin, remainingMs: remaining, ...(j.selector ? { selectorDeadlineAt: j.selectorDeadlineAt || null, verifierDeadlineAt: j.verifierDeadlineAt || null } : {}), next: `node "${__filename}" ask-wait ${id}` }, null, 2) + "\n"); // [3b] 선별 판=두 예산 구분 표시(선별/검증 절대 시각)
 }
 
 // P-12 2a — 검증 백로그 장부 CLI(설계 동결 ⓚ): add/list/done/dismiss/clear. 프로젝트별·로컬 전용.
@@ -2722,16 +2801,25 @@ function cmdAskJob(rest) {
     if (!j) return;
     // P-2(1차 blocker)+queued 경합(설계 ⓚ ⑸①): 생성과 같은 ask-job 잠금 안에서 판정 —
     // 생성 잠금 해제~spawn~.pid 기록 공백에선 두 PID 모두 부재라 생존 검사로 못 닫는다.
+    let intent9 = false;
     try {
       withAskJobLock(String(j.workspace || configWs()), () => {
         const cur = readAskJob(id) || j;
         const dl = Date.parse(cur.deadlineAt || "");
         if (cur.state === "queued" && Number.isFinite(dl) && Date.now() < dl) throw Object.assign(new Error(tB("대기(queued) 상태이고 deadline이 지나지 않아 지우지 않았습니다 — worker가 곧 붙을 수 있습니다. deadline 경과 후 다시 시도하세요.", "Job is queued and its deadline has not passed; not cleared — a worker may still attach. Retry after the deadline.")), { exitCode: 3 });
         let spawnPid = 0; try { spawnPid = parseInt(fs.readFileSync(path.join(ASK_JOBS_DIR, id + ".pid"), "utf8"), 10) || 0; } catch { /* 없음 */ }
-        if (pidAlive(cur.workerPid) || pidAlive(spawnPid)) throw Object.assign(new Error(tB("worker가 살아 있어 지우지 않았습니다.", "Worker is still alive; job was not cleared.")), { exitCode: 3 });
-        for (const ext of [".json", ".out", ".err", ".pid"]) try { fs.unlinkSync(path.join(ASK_JOBS_DIR, id + ext)); } catch { /* 없음 */ }
+        const alive9 = pidAlive(cur.workerPid) || pidAlive(spawnPid);
+        if (cur.state === "selecting" && alive9) {
+          // [3b 취소 계약] 살아있는 선별 worker는 죽이지 않는다(죽음-안전 규칙 유지) — 같은 잠금 안에서 취소
+          // 의사만 기록. worker가 페이지 경계/전이 직전(같은 잠금)에 관측해 failed(cancelled)로 정착한다.
+          if (!atomicWrite(askJobCancelIntentFile(id), JSON.stringify({ ts: new Date().toISOString(), by: "ask-job-clear" }))) throw Object.assign(new Error(tB("취소 의사 기록 실패 — 다시 시도하세요.", "Failed to record the cancel intent — retry.")), { exitCode: 3 });
+          intent9 = true; return;
+        }
+        if (alive9) throw Object.assign(new Error(tB("worker가 살아 있어 지우지 않았습니다.", "Worker is still alive; job was not cleared.")), { exitCode: 3 });
+        for (const ext of [".json", ".out", ".err", ".pid", ".cancel-intent"]) try { fs.unlinkSync(path.join(ASK_JOBS_DIR, id + ext)); } catch { /* 없음 */ }
       });
     } catch (e) { die(String(e && e.message || e), Number(e && e.exitCode) || 3); }
+    if (intent9) { process.stdout.write(tB("취소 의사를 기록했습니다 — 진행 중인 선별이 회수되는 대로 이 작업은 failed(cancelled)로 정착합니다. 정착 후 같은 명령으로 기록을 정리하세요.\n", "Cancel intent recorded — the running selection will be reclaimed and this job will settle as failed(cancelled). Clear the record with the same command afterwards.\n")); return; }
     process.stdout.write(tB("확인된 검증 작업 기록을 지웠습니다.\n", "Cleared the reviewed verification job record.\n")); return;
   }
   die(tB("사용법: ask-job status [id] | ask-job clear <id> --confirm", "Usage: ask-job status [id] | ask-job clear <id> --confirm"), 2);
@@ -3295,6 +3383,14 @@ async function cmdAsk(rest) {
   // 모드·workspace)까지 확인한 경우에만 실행을 허용한다.
   if (loadContract(ws).harnessMode === "codex-codex" && !readDurableEnvJob(ws).ok) {
     die(tB("⚠️ Codex-Codex 모드에서는 직접 ask가 성공 증명으로 인정되지 않아 실행하지 않았습니다. 내구 작업을 사용하세요: ask-start --allow-new \"<검증 요청>\" → ask-wait <job-id>.", "⚠️ In Codex-Codex mode a direct ask is not accepted as a success proof, so it was not executed. Use the durable path: ask-start --allow-new \"<request>\" → ask-wait <job-id>."), 4);
+  }
+  // [Envelope Selector v7 §3 — 3b] 승인 서고 활성=직접 ask 거부(모드 무관): 선별·세대 동결·영수증 관문이
+  // 내구 작업(worker) 경로에만 있어, 직접 ask를 허용하면 '선별 없는 판'이 승인 규칙 일부를 빼고 판정한다.
+  if (!process.env.CODEX_BRIDGE_JOB_PROMPT_FILE) {
+    const cD9 = loadContract(ws);
+    if (typeof cD9.archiveHash === "string" && cD9.archiveHash) {
+      die(tB("⚠️ 승인 서고(2층 수칙서)가 활성인 프로젝트에서는 직접 ask를 실행하지 않습니다 — 서고 선별이 내구 작업에서만 수행됩니다. ask-start --allow-new \"<검증 요청>\" → ask-wait <job-id> 를 사용하세요.", "⚠️ With the approved archive (two-tier rulebook) active, a direct ask is not executed — archive selection runs only in the durable job path. Use ask-start --allow-new \"<request>\" → ask-wait <job-id>."), 4);
+    }
   }
   // P-12 동결(계약 ⓕ · 구현검증 1~2차 정정): 내구 경로는 '모드 무관 정본 판독'(readCanonicalEnvJob —
   // 경로·id·schema·workspace·running까지, C-C proof 전용 조건은 미적용: P-6 판독기 readDurableEnvJob은
@@ -3948,4 +4044,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, shouldSuppressUnseenRepeat, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine };
+module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, shouldSuppressUnseenRepeat, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };

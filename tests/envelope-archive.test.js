@@ -197,7 +197,8 @@ t("v7 §2 deriveRoundType: 같은 경계 통과=confirm·다른 선별판/legacy
 });
 t("v7 §2 배선 소스 계약: freeze 동결(잠금 안 sha 결속)·roundType 경계 인자·abCount=manifest 판독처·round/finding 경계 표기", () => {
   const cb = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
-  assert.ok(cb.includes("boundaryGen: boundaryGenOf(evi.sha1, \"\", mf9)") && cb.includes("evM.sha1 === evi.sha1"), "freeze 지점: 같은 잠금 안 재판독+주입 지문 결속일 때만 manifest 구성(불일치=legacy 동결)");
+  assert.ok(cb.includes("boundaryGen: boundaryGenOf(evi.sha1, sel9 ? selArc9.sha1 : \"\", mf9)") && cb.includes("evM.sha1 === evi.sha1"), "freeze 지점: 같은 잠금 안 재판독+주입 지문 결속일 때만 manifest 구성(불일치=legacy 동결·3b: 선별 판=appliedArchiveHash 실값 결속)");
+  assert.ok(cb.includes("buildAbManifest(evM.data.alwaysBlocker, selTexts9)"), "manifest에 선별분 합류(3b — 코어 다음 연속 ab-N)");
   assert.ok(cb.includes("deriveRoundType(ws, camp, frozen, bg9 || undefined)"), "confirm 판정에 이번 판 경계 전달");
   assert.ok(cb.includes("abCount = frozenManifest ? frozenManifest.length : evNow.data.alwaysBlocker.length"), "ab 범위 판독처=동결 합본 manifest(§2 — 부재·askId 불일치=legacy 코어 개수)");
   assert.strictEqual((cb.match(/boundaryGen: bg9/g) || []).length, 6, "round 3경로+일반 finding+범위확장 신규 blocker·상한 소진 주의 finding 전 경로에 경계 표기(§2-① — 2단계 재검증 blocker②)");
