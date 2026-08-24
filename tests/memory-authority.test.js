@@ -198,7 +198,7 @@ t("승인 지문 언어 공유(2026-08-22): setEnvelopeHashAllSlots=양 슬롯 �
   assert.strictEqual((CL.loadContract(WS, "ko") || {}).envelopeHash, H9, "ko 슬롯 기록");
   assert.strictEqual((CL.loadContract(WS, "en") || {}).envelopeHash, H9, "en 슬롯 기록 — 도장은 문서 전문에 찍히므로 언어 무관(비의도 분리 봉합)");
   const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
-  assert.ok(/const upN = setEnvelopeHashAllSlots\(ws, wal\.newHash\)/.test(src), "전이(도장) 경로도 양 슬롯(소스 계약)");
+  assert.ok(src.includes("const upN = setContractHashAllSlots(ws, tgtW.hashField, wal.newHash)"), "전이(도장) 경로도 양 슬롯+대상 필드 표 분기(소스 계약 — v6 target 차원)");
 });
 t("승인 지문 언어 공유 R2(f-71d4c2a8 반례): 부분 성공(1슬롯)=실패·WAL 보존 → 장애 해소 후 복구 재시도로 2슬롯 수렴", () => {
   const WS3 = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-ws3-"));
@@ -270,7 +270,7 @@ t("직접 승인 R4(f-6c81a2d4 반례): 도장 정리가 병행 초안을 삭제
   assert.strictEqual((CL.loadContract(WS6, "en") || {}).envelopeHash, HASH, "en 수렴");
   // ③ 소스 계약: 확인·WAL·전이=한 전이 잠금 아래(잠금 보유형 본체 직접 호출)·정리=제안본 소비 전이만 폐기
   const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
-  assert.ok(/function stampEnvelopeAllSlots\(ws, repo, sha\) \{[\s\S]{0,400}acquireEnvelopeTransLock\(ws\)/.test(src) && src.includes("return applyEnvelopeTransitionLocked(ws, repo, null, wal);"), "도장=잠금 보유 구간 안 확인→WAL→전이");
+  assert.ok(/function stampEnvelopeAllSlots\(ws, repo, sha, target\) \{[\s\S]{0,600}acquireEnvelopeTransLock\(ws\)/.test(src) && src.includes("return applyEnvelopeTransitionLocked(ws, repo, null, wal);"), "도장=잠금 보유 구간 안 확인→WAL→전이(target 인자 확장 — v6)");
   assert.ok(src.includes('if (wal.kind !== "stamp") {') && src.includes('pOwn.st === "ok" && pOwn.newHash === wal.newHash'), "정리 분기=도장 WAL 제외+소유(전문 지문) 결속 확인부만 폐기");
 });
 t("개정 전이 R5(f-9b7c4e21 반례): 소비한 제안본만 폐기 — recover 창에서 생긴 다른 초안은 복구가 삭제하지 않음", () => {
