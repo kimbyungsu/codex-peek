@@ -53,6 +53,7 @@ function cleanupOldState(now) {
   // 약속 발화 포착 영수증 서랍(1건=1파일) — 유일한 삭제 경로(mtime 90일 TTL·경위 영수증 관용). append 쪽에
   // 삭제·정리 로직이 없어야 '성공 반환된 영수증 소멸 불가'가 구조로 성립한다(f-162099b0 4연속 계보).
   sweep(path.join(STATS_DIR, "constraint-usage"), PROOF_TTL_MS);
+  sweep(path.join(STATS_DIR, "selector-usage"), PROOF_TTL_MS); // 선별 영수증 — 같은 무유실 계보(v7 §3)
   // 약속 발화 포착 턴 스냅샷(.txt) — 턴 단명 사용자 프롬프트 원문(설계 §1: TTL 청소 대상). 공용 sweep은
   // .json만 보므로 전용 스윕. 원문 파일이라 재검증 카운터와 같은 7일(민감 최소화 방향 — 짧게).
   try {
@@ -4569,6 +4570,95 @@ function fixGapCount(ws, campaignId) {
   return n;
 }
 
+// ── [Envelope Selector v7 §3] 선별 순수 계약 — 페이지·strict 출력·합집합 상한·예산 산식·영수증 서랍 ──
+// 실행(spawn)은 selector-runner.js가, 배선(worker)은 3b가 담당 — 여기는 결정론 계산·판독만.
+const SELECTOR_PAGE_ITEMS = 16;              // 페이지=항목 수 상수(완전성: 전 항목이 정확히 한 페이지에)
+const SELECTOR_PAGE_TIMEOUT_MS = 8 * 60 * 1000; // 페이지당 timeout(정찰 팔 상한과 동형)
+const SELECTOR_PARALLEL = 3;                 // 병렬 P(v7 §3 — 3b worker가 사용)
+const SELECTOR_DEADLINE_MARGIN_MS = 60 * 1000;
+const SELECTOR_UNION_MAX = 12;               // 합집합 항목 상한 K(코어와 동형 감각)
+const SELECTOR_UNION_BYTES_MAX = 4000;       // 선별 전문 합계 바이트 상한
+function selectorDeadlineMsFor(pages) { return Math.ceil(Math.max(0, pages) / SELECTOR_PARALLEL) * SELECTOR_PAGE_TIMEOUT_MS + SELECTOR_DEADLINE_MARGIN_MS; }
+// 서고 ab 항목 → 페이지 분할. id=arc-N(파일 순서·1기점) — 세대(archiveHash)에 결속된 위치 결정론.
+function buildSelectorPages(abItems) {
+  const items = (Array.isArray(abItems) ? abItems : []).map((x, i) => ({ id: "arc-" + (i + 1), text: String(x) }));
+  const pages = [];
+  for (let i = 0; i < items.length; i += SELECTOR_PAGE_ITEMS) pages.push(items.slice(i, i + SELECTOR_PAGE_ITEMS));
+  return pages;
+}
+// 페이지 프롬프트 — 범주 지시(문구 패턴 목록 아님)·중립 재료만(사용자 원문 스냅샷+변경 파일+diff — 검증
+// 요청문(구현자 작문)은 계약상 입력 금지: 호출자가 애초에 전달할 수 없게 인자에 없음).
+function buildSelectorPagePrompt({ snapshotText, changedFiles, diffText, pageItems }) {
+  const L = [];
+  L.push("[서고 수칙 선별] 아래 '승인 수칙 후보 페이지'에서 '이번 작업'과 실질적으로 관련된 항목의 id만 고르라.");
+  L.push("판단 기준: 이번 작업이 그 수칙을 위반할 수 있거나, 그 수칙이 이번 작업의 판정에 필요하면 관련이다. 확신이 없으면 포함하라(누락이 과선별보다 위험).");
+  L.push("출력은 JSON 한 줄뿐: {\"relevant\":[\"arc-3\"]} — 다른 텍스트·설명·마크다운 금지. 관련 없음={\"relevant\":[]}.");
+  if (typeof snapshotText === "string" && snapshotText) { L.push("", "[이번 작업 — 사용자 원문]", snapshotText.slice(0, 4000)); }
+  if (Array.isArray(changedFiles) && changedFiles.length) { L.push("", "[변경 파일]", changedFiles.slice(0, 60).join("\n")); }
+  if (typeof diffText === "string" && diffText) { L.push("", "[변경 내용(유계 절단)]", diffText.slice(0, 20000)); }
+  L.push("", "[승인 수칙 후보 페이지]");
+  for (const it of Array.isArray(pageItems) ? pageItems : []) L.push(it.id + ": " + it.text);
+  return L.join("\n");
+}
+// 페이지 출력 strict 판독(§3): 전체가 JSON 하나·{"relevant": [유효 id...]}만 — 미지 필드·비배열·범위 밖
+// id·중복·파싱 실패=실패(부분 수용 없음). 산문 섞임=실패(프롬프트가 JSON 한 줄을 지시 — fail-closed).
+function parseSelectorPageOutput(raw, validIds) {
+  const out = { ok: false, ids: [], reason: "" };
+  const line = String(raw || "").trim();
+  if (/[\r\n]/.test(line)) { out.reason = "multiline"; return out; } // 'JSON 한 줄' 계약(3a 재검증 blocker — 다중행 수용 차단) // 'JSON 한 줄' 계약(3a 재검증 blocker — 다중행 수용 차단)
+  // 중복 키는 JSON.parse가 후승 값으로 삼킨다 — 이스케이프 키까지 해독하는 기존 스캐너 재사용(제약 블록 계보).
+  const keys9 = jsonTopLevelKeys(line);
+  if (!keys9) { out.reason = "bad-json"; return out; } // 산문 섞임·배열 루트 등 구조 이상
+  if (new Set(keys9).size !== keys9.length) { out.reason = "dup-key"; return out; } // 이스케이프 키 해독 후 중복
+  if (keys9.length !== 1 || keys9[0] !== "relevant") { out.reason = "unknown-field"; return out; }
+  let o;
+  try { o = JSON.parse(line); } catch { out.reason = "bad-json"; return out; }
+  if (!o || typeof o !== "object" || Array.isArray(o)) { out.reason = "not-object"; return out; }
+  if (!Array.isArray(o.relevant)) { out.reason = "unknown-field"; return out; }
+  const valid = new Set(Array.isArray(validIds) ? validIds : []);
+  const seen = new Set();
+  for (const id of o.relevant) {
+    if (typeof id !== "string" || !valid.has(id)) { out.reason = "invalid-id"; return out; }
+    if (seen.has(id)) { out.reason = "dup-id"; return out; }
+    seen.add(id);
+  }
+  out.ok = true; out.ids = [...seen]; return out;
+}
+// 합집합+상한 관문(§3 — 조용한 절단·요약·재선별 금지): 초과=overflow(호출자가 판정 없이 정직 종료).
+function selectorUnion(pageIdLists, abItems) {
+  const all = new Set();
+  for (const ids of Array.isArray(pageIdLists) ? pageIdLists : []) for (const id of ids || []) all.add(id);
+  const ordered = [...all].sort((a, b) => Number(a.slice(4)) - Number(b.slice(4))); // arc-N 파일 순서
+  if (ordered.length > SELECTOR_UNION_MAX) return { ok: false, reason: "overflow-items", count: ordered.length };
+  let bytes = 0;
+  const texts = [];
+  for (const id of ordered) { const tx = String((abItems || [])[Number(id.slice(4)) - 1] || ""); bytes += Buffer.byteLength(tx, "utf8"); texts.push({ id, text: tx }); }
+  if (bytes > SELECTOR_UNION_BYTES_MAX) return { ok: false, reason: "overflow-bytes", bytes };
+  return { ok: true, selected: texts, bytes };
+}
+// 선별 영수증 서랍 — constraint-usage 무유실 계보(1건=1파일·배타 생성·삭제는 TTL 스윕만). read-back 선행
+// 관문(§3)은 3b worker가 이 두 함수(기록→재판독 확인)로 수행한다.
+const SELECTOR_USAGE_DIR = path.join(STATS_DIR, "selector-usage");
+let selectorUsageSeq = 0;
+function appendSelectorUsage(rec) {
+  try {
+    fs.mkdirSync(SELECTOR_USAGE_DIR, { recursive: true });
+    for (let k = 0; k < 5; k++) {
+      const name = String(Date.now()).padStart(14, "0") + "-" + String(process.pid).padStart(10, "0") + "-" + (selectorUsageSeq++).toString(36).padStart(6, "0") + "-" + Math.random().toString(36).slice(2, 6) + ".json";
+      try { fs.writeFileSync(path.join(SELECTOR_USAGE_DIR, name), JSON.stringify(rec), { flag: "wx" }); return name; }
+      catch (e) { if (!(e && e.code === "EEXIST")) return null; }
+    }
+    return null;
+  } catch { return null; }
+}
+function readSelectorUsage() {
+  let names;
+  try { names = fs.readdirSync(SELECTOR_USAGE_DIR).filter((x) => x.endsWith(".json")).sort(); } catch { return []; }
+  const out = [];
+  for (const nm of names) { try { const o = JSON.parse(fs.readFileSync(path.join(SELECTOR_USAGE_DIR, nm), "utf8")); if (o && typeof o === "object") out.push({ ...o, _file: nm }); } catch { /* 손상=무시 */ } }
+  return out;
+}
+
 // ── [Envelope Selector v7 §2] ab 합본 manifest·boundaryGen — '이번 판의 판정 경계' 표식 ──────────
 // manifest=[{n(합본 ab-N 번호), source:"core"|"archive", textFp(sha1-16)}] — 코어 1..k 다음 선별 서고분 연속.
 // boundaryGen=sha1(coreHash|appliedArchiveHash|manifestFp): 용도 한정(§2) — ①신규 지적 경계 표기
@@ -4993,7 +5083,7 @@ function formatForClaude(answer, lang, profile, machine, rejudgeSnap) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}${machineLine}\n처리 의무: ${action}${rjBlock}`;
 }
 
-module.exports = { VERIFIER_PROVIDERS, normVerifierProvider, BASE_PROFILE_AXIS, verifierFormatDirective, verifierBaselineFor, ASK_SHAPE_SECTIONS, askShapeCheck, askShapeNotice, appendAskShape, loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, scoutCouplingAttach, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, ARCHIVE_FILE, ARCHIVE_ITEM_MAX, readVerifyEnvelopeArchive, validEnvelopeArchiveInner, normEnvelopeTarget, envelopeTargetDef, setContractHashAllSlots, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, discardEnvelopeProposalRestoring, draftEnvelopeRevision, setEnvelopeHashAllSlots, stampEnvelopeAllSlots, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, MEMORY_CANDIDATE_PENDING_MAX, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, buildAbManifest, boundaryGenOf, CONSTRAINT_TURNS_DIR, CONSTRAINT_USAGE_DIR, readConstraintUsage, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, turnAnchorOf, constraintTurnFileFor, writeConstraintTurnSnapshot, appendConstraintUsage, constraintTurnContext, constraintAdd, CONSTRAINT_BLOCK_MARKERS, CONSTRAINT_BLOCK_MAX_ROWS, parseConstraintBlock, constraintHarvestFromAnswer, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, verifyCampaignProgress, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, codexScoutExecEnv, TOOL_EXEC_ENV, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, economyConfigFpFrom, readEconomySnapshot, DS_SNAPSHOT_ENV, selfAdapterSha, selfExecFp, precisionExecFp, precisionExecFpFrom, readPrecisionConfigSnapshot, codexScoutExecArgsFromSnapshot, claimAutoReprobe, completeAutoReprobe, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, SESSION_LEASES_DIR, sessionLeaseFileFor, readSessionLease, acquireSessionLease, releaseSessionLease, setSessionLeaseChild, clearSessionLease, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, authoritativeVerdict, findingsBlockRange, formatForClaude, normRejudgeSnap, safeLoadRejudge, REJUDGE_SNAP_MAX, appendVerdict, trimVerdicts, appendAttachUsage, trimAttachUsage, ATTACH_USAGE_FILE, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { VERIFIER_PROVIDERS, normVerifierProvider, BASE_PROFILE_AXIS, verifierFormatDirective, verifierBaselineFor, ASK_SHAPE_SECTIONS, askShapeCheck, askShapeNotice, appendAskShape, loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, scoutCouplingAttach, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, ARCHIVE_FILE, ARCHIVE_ITEM_MAX, readVerifyEnvelopeArchive, validEnvelopeArchiveInner, normEnvelopeTarget, envelopeTargetDef, setContractHashAllSlots, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, discardEnvelopeProposalRestoring, draftEnvelopeRevision, setEnvelopeHashAllSlots, stampEnvelopeAllSlots, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, MEMORY_CANDIDATE_PENDING_MAX, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, buildAbManifest, boundaryGenOf, SELECTOR_PAGE_ITEMS, SELECTOR_PAGE_TIMEOUT_MS, SELECTOR_PARALLEL, SELECTOR_UNION_MAX, SELECTOR_UNION_BYTES_MAX, selectorDeadlineMsFor, buildSelectorPages, buildSelectorPagePrompt, parseSelectorPageOutput, selectorUnion, SELECTOR_USAGE_DIR, appendSelectorUsage, readSelectorUsage, CONSTRAINT_TURNS_DIR, CONSTRAINT_USAGE_DIR, readConstraintUsage, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, turnAnchorOf, constraintTurnFileFor, writeConstraintTurnSnapshot, appendConstraintUsage, constraintTurnContext, constraintAdd, CONSTRAINT_BLOCK_MARKERS, CONSTRAINT_BLOCK_MAX_ROWS, parseConstraintBlock, constraintHarvestFromAnswer, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, verifyCampaignProgress, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, codexScoutExecEnv, TOOL_EXEC_ENV, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, economyConfigFpFrom, readEconomySnapshot, DS_SNAPSHOT_ENV, selfAdapterSha, selfExecFp, precisionExecFp, precisionExecFpFrom, readPrecisionConfigSnapshot, codexScoutExecArgsFromSnapshot, claimAutoReprobe, completeAutoReprobe, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, SESSION_LEASES_DIR, sessionLeaseFileFor, readSessionLease, acquireSessionLease, releaseSessionLease, setSessionLeaseChild, clearSessionLease, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, authoritativeVerdict, findingsBlockRange, formatForClaude, normRejudgeSnap, safeLoadRejudge, REJUDGE_SNAP_MAX, appendVerdict, trimVerdicts, appendAttachUsage, trimAttachUsage, ATTACH_USAGE_FILE, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
 module.exports.codexImplementerSession = codexImplementerSession;
 module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
 // P-6 회수 영수증 계약(설계 v5.1)
