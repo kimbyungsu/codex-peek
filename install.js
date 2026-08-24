@@ -69,6 +69,8 @@ const BRIDGE_SCRIPTS = [
   "map-intent.js", // P9: 정책 충돌 카드 파생 뷰+사용자 선택 선기록(자동 적용/UI 전 바닥 계층)
   "enrich-providers.js", // P8: 보강 어댑터 3종+Verifier 해소 진입점(설치본 자동 발동에서 실존해야 함)
   "evidence-challenge.js", // 근거 재확인(증분 4): codex-bridge가 발송·판정에 require — 누락 시 설치본 로드 불능
+  "selector-runner.js", // [Envelope Selector 3a] 선별 실행기 — worker·selector-preview가 require(3a 신설분의 배포 편입 누락을 4b에서 봉합)
+  "preview-gate.js", // [4b 이중 배달] PreToolUse 게이트 — 서고 활성 시 preview 영수증까지 변경 도구 차단
 ];
 
 // 우리가 settings.json에 심는 훅. event → {matcher, script}
@@ -76,10 +78,11 @@ const OUR_HOOKS = [
   { event: "UserPromptSubmit", matcher: "", script: "contract-inject.js" },
   { event: "PreToolUse", matcher: "Bash", script: "codex-guard.js" },
   { event: "PreToolUse", matcher: "ExitPlanMode", script: "scout-gate.js" }, // ⑥ 지도 preflight — 3트랙 기본 켜짐(실효 scoutGate·2026-07-09 승격, 2트랙은 관측만)·fail-open·관측 로그
+  { event: "PreToolUse", matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit|mcp__.*", script: "preview-gate.js" }, // [4b 이중 배달] 서고 활성 시 preview 영수증까지 변경 도구 지속 차단(MCP=이름으로 읽기/쓰기 구분 불가라 보수 전종)
   { event: "Stop", matcher: "", script: "verify-guard.js" },
 ];
 // "우리 훅"을 식별하는 파일명(경로·따옴표·node표기 무관하게 basename으로 매칭).
-const OUR_SCRIPT_NAMES = ["contract-inject.js", "codex-guard.js", "verify-guard.js", "scout-gate.js"];
+const OUR_SCRIPT_NAMES = ["contract-inject.js", "codex-guard.js", "verify-guard.js", "scout-gate.js", "preview-gate.js"];
 
 // ── 유틸 ──────────────────────────────────────────────
 function log(s) { process.stdout.write(s + "\n"); }
@@ -139,8 +142,11 @@ function hookCommand(script) {
 // 명령 하나가 "우리 훅"인가 — 경로 경계가 있는 스크립트 파일명으로만 매칭(부분문자열 오탐 방지).
 // 예: ".../contract-inject.js"는 매칭, "mycontract-inject.js.bak"이나 인자 속 우연 일치는 비매칭.
 // 후행 경계엔 셸 구분자(; & | ) , )도 포함 — `node verify-guard.js; echo x` 같은 복합 명령도 식별.
+// [4b] 식별 regex를 OUR_SCRIPT_NAMES에서 파생 — 하드코딩 사본이 목록과 갈리면 재설치가 기존 우리 훅을
+// 못 알아보고 중복 등록한다(preview-gate 추가 때 실측된 함정: 재설치 비멱등).
+const OUR_SCRIPT_RE = new RegExp("(^|[\\\\/\\s\"'])(" + OUR_SCRIPT_NAMES.map((s) => s.replace(/\.js$/, "")).join("|") + ")\\.js(?=$|[\"'\\s;,&|)])");
 function isOurHookCmd(cmd) {
-  return /(^|[\\/\s"'])(contract-inject|codex-guard|verify-guard|scout-gate)\.js(?=$|["'\s;,&|)])/.test(String(cmd || ""));
+  return OUR_SCRIPT_RE.test(String(cmd || ""));
 }
 // 그룹에서 '우리 hook 엔트리'만 제거. 같은 그룹에 타인 hook이 섞여 있어도 그건 보존.
 // group.hooks가 배열이 아니면(예상 못한 형식) 건드리지 않고 그대로 보존(손실 방지).
@@ -863,7 +869,7 @@ function cmdInstall(dryRun) {
     if (s.existed) { const bak = backupSettings(); log(`🗂  설정 백업: ${bak}`); }
     const ok = atomicWrite(SETTINGS, out);
     if (!ok) { log(`❌ 설정 저장 실패 — 원본은 그대로 보존됨: ${SETTINGS}`); process.exit(1); }
-    log("✅ 훅 병합 완료(타인 훅 보존): UserPromptSubmit / PreToolUse:Bash / PreToolUse:ExitPlanMode / Stop");
+    log("✅ 훅 병합 완료(타인 훅 보존): UserPromptSubmit / PreToolUse:Bash / PreToolUse:ExitPlanMode / PreToolUse:변경도구(preview-gate) / Stop");
   }
 
   // 5) 확장 + 점검

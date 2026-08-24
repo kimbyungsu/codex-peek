@@ -158,6 +158,9 @@ process.stdin.on("end", () => {
     // MAP-V2-DESIGN 1-3). 2트랙 게이트는 hookTick 내부 최선행(scoutMode!=='on'→즉시 null — 파일 0·spawn 0).
     // 구버전 브릿지(map-bootstrap.js 부재)·실패는 advisory(훅을 막지 않음).
     try { const adv = require("./map-bootstrap.js").hookTick(ws); if (adv) parts.push(adv); } catch { /* advisory */ }
+    // [4b 이중 배달 §4] 구현자 인지 — 코어 ab 전문(수칙서 활성 시 상시)+이번 턴 결속 선별 캐시/미리보기 안내.
+    // LLM 호출 없음(파일 판독뿐)·실패=advisory(훅을 막지 않음).
+    try { const ei = require("./contract-lib.js").implementerEnvelopeInject(ws, c, lang, constraintSourceHash || "", constraintAnchor || ""); if (ei) parts.push(ei); } catch { /* advisory */ }
   } catch {
     parts = switchNotice ? [switchNotice] : []; // 주입 조립 실패에도 전환 고지는 유지(사용자 인지 채널)
   }

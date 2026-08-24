@@ -100,12 +100,14 @@ function failJob(jobFile, errFile, msg, extra) {
 // strict 판독→합집합 상한→영수증 read-back 관문→selecting→running(CAS·verifierDeadlineAt 확정).
 // 의존은 이 분기에서만 lazy 로드(미도입 job=이 함수 미진입·완전 무회귀) — 로드 실패=정직 실패(fail-closed).
 async function runSelectionPhase(jobFile, dir, job, errFile) {
-  let CL, SR, CB;
+  let CL, SR, CB, fakePage = null;
   try {
     CL = require(path.join(__dirname, "contract-lib.js"));
-    SR = require(process.env.CODEX_BRIDGE_SELECTOR_RUNNER || path.join(__dirname, "selector-runner.js")); // env는 격리 테스트용(가짜 선별자)
+    SR = require(path.join(__dirname, "selector-runner.js"));
+    // env는 격리 테스트용 — '페이지 실행기'만 대체(공용 루프 runSelectorPages는 항상 실물이 시험 대상).
+    if (process.env.CODEX_BRIDGE_SELECTOR_RUNNER) fakePage = require(process.env.CODEX_BRIDGE_SELECTOR_RUNNER).runSelectorPage;
     CB = require(path.join(__dirname, "codex-bridge.js"));
-    if (typeof CB.acquireAskJobLock !== "function" || typeof CL.selectorScopeMaterial !== "function") throw new Error("runtime too old");
+    if (typeof CB.acquireAskJobLock !== "function" || typeof CL.selectorScopeMaterial !== "function" || typeof SR.runSelectorPages !== "function") throw new Error("runtime too old");
   } catch (e) { failJob(jobFile, errFile, "selector deps unavailable: " + String((e && e.message) || e), { selectorOutcome: "deps" }); return { ok: false }; }
   const sha1 = (s) => require("crypto").createHash("sha1").update(String(s)).digest("hex");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -142,34 +144,23 @@ async function runSelectionPhase(jobFile, dir, job, errFile) {
   // 같은 빈 지문으로 주입 관문까지 통과한다(비-git 정상 축퇴는 st:"ok"·nonGit로 구분돼 계속 진행).
   if (scope.st !== "ok") { failJob(jobFile, errFile, "selector: scope material failed (" + String(scope.reason) + ")", { selectorOutcome: "selector-scope" }); return { ok: false }; }
   patch(jobFile, { selectorCtx: { archiveHash: arc.sha1, scopePackageHash: scope.hash, head: scope.head, worktreeFp: scope.worktreeFp, snapshotHash: ctx.sourceHash } }); // 감사 가시화(권위는 전이 시 selection 결속)
-  // ③ 페이지 병렬 실행(P 상한·취소 폴링·선별 예산 — 검증 예산 무잠식)
+  // ③ 페이지 병렬 실행(P 상한·취소 폴링·선별 예산 — 검증 예산 무잠식). [4b] 실행 루프는 selector-preview와
+  // 공용 함수(SR.runSelectorPages) — 두 경로의 실행 규약이 갈리지 않게 단일 출처.
   const items = arc.data.alwaysBlocker;
   const pages = CL.buildSelectorPages(items);
-  const results = new Array(pages.length).fill(null);
-  const running = new Map();
-  let next = 0, fail = null, cancelled = false;
-  const cancelAll = () => { for (const h of running.values()) { try { h.cancel(); } catch { /* promise가 정착 */ } } };
-  while ((next < pages.length || running.size) && !fail && !cancelled) {
-    while (next < pages.length && running.size < CL.SELECTOR_PARALLEL) {
-      const idx = next++;
-      const pg = pages[idx];
-      const prompt = CL.buildSelectorPagePrompt({ snapshotText: snapText, changedFiles: scope.files, diffText: scope.diffText, pageItems: pg });
-      const h = SR.runSelectorPage({ arm: job.selector.arm === "codex" ? "codex" : "self", prompt, timeoutMs: CL.SELECTOR_PAGE_TIMEOUT_MS });
-      running.set(idx, h);
-      h.promise.then((r) => { running.delete(idx); results[idx] = { r, ids: pg.map((it) => it.id) }; });
-    }
-    await sleep(250);
-    if (fs.existsSync(intentFile)) { cancelled = true; cancelAll(); break; }
-    if (Date.now() > selDeadline) { fail = { key: "selector-timeout", msg: "selector budget elapsed (verification budget untouched)" }; cancelAll(); break; }
-    for (const it of results) if (it && it.r && !it.r.ok && !fail) { fail = { key: "selector-page", msg: "selector page failed: " + String(it.r.key || "") + " " + String(it.r.detail || "").slice(0, 200) }; }
-    if (fail) cancelAll();
-  }
-  { // 회수 drain — 취소/실패 후에도 프로세스 종료가 promise 정착으로 확인될 때까지 유계 대기
-    const hardStop = Date.now() + 30000;
-    while (running.size && Date.now() < hardStop) await sleep(100);
-  }
-  if (cancelled) { failJob(jobFile, errFile, "cancelled", { selectorOutcome: "cancelled" }); return { ok: false }; }
-  if (fail) { failJob(jobFile, errFile, fail.msg, { selectorOutcome: fail.key }); return { ok: false }; }
+  const run9 = await SR.runSelectorPages({
+    arm: job.selector.arm === "codex" ? "codex" : "self",
+    pages,
+    buildPrompt: (pg) => CL.buildSelectorPagePrompt({ snapshotText: snapText, changedFiles: scope.files, diffText: scope.diffText, pageItems: pg }),
+    timeoutMs: CL.SELECTOR_PAGE_TIMEOUT_MS,
+    parallel: CL.SELECTOR_PARALLEL,
+    deadlineAt: selDeadline,
+    shouldCancel: () => fs.existsSync(intentFile),
+    ...(fakePage ? { pageRunner: fakePage } : {}),
+  });
+  if (run9.st === "cancelled") { failJob(jobFile, errFile, "cancelled", { selectorOutcome: "cancelled" }); return { ok: false }; }
+  if (run9.st !== "ok") { failJob(jobFile, errFile, String(run9.msg || run9.st), { selectorOutcome: run9.st }); return { ok: false }; }
+  const results = run9.results;
   const idLists = [];
   for (const it of results) { // 완전성: 전 페이지 성공+strict 판독(부분 수용 없음)
     if (!it || !it.r || !it.r.ok) { failJob(jobFile, errFile, "selector: incomplete page results", { selectorOutcome: "selector-page" }); return { ok: false }; }
@@ -181,7 +172,7 @@ async function runSelectionPhase(jobFile, dir, job, errFile) {
   if (!un.ok) { failJob(jobFile, errFile, "selector union over cap (" + un.reason + ") — organize the archive (remove/merge items) and retry; no truncation/summarize/reselect", { selectorOutcome: "selector-overflow" }); return { ok: false }; }
   const selectedIds = un.selected.map((s) => s.id);
   // ④ 영수증 기록+read-back 선행 관문 — 성공 전 프롬프트 조립 금지(§3)
-  const rec = { ts: new Date().toISOString(), wsKey: CL.wsKeyFor(ws), askId: job.id, archiveHash: arc.sha1, scopePackageHash: scope.hash, snapshotHash: ctx.sourceHash, itemCount: items.length, pages: pages.length, selectedIds, arm: job.selector.arm, durationMs: Date.now() - t0 };
+  const rec = { ts: new Date().toISOString(), wsKey: CL.wsKeyFor(ws), askId: job.id, turnAnchor: String(ctx.turnAnchor || ""), archiveHash: arc.sha1, scopePackageHash: scope.hash, snapshotHash: ctx.sourceHash, itemCount: items.length, pages: pages.length, selectedIds, arm: job.selector.arm, durationMs: Date.now() - t0 }; // turnAnchor=턴 결속(preview 영수증과 동형 — 주입 캐시 자격 대조용)
   const fname = CL.appendSelectorUsage(rec);
   let back = null;
   try { back = fname ? JSON.parse(fs.readFileSync(path.join(CL.SELECTOR_USAGE_DIR, fname), "utf8")) : null; } catch { back = null; }

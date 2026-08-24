@@ -92,4 +92,39 @@ function runSelectorPage({ arm, prompt, timeoutMs }) {
   return { promise, cancel };
 }
 
-module.exports = { selectorArmForTurn, runSelectorPage, killTree, SELF_DENY };
+// [4b] 페이지 풀 실행 공용 루프 — worker(내구 검증 선별)와 selector-preview(구현자 인지 채널)가 같은 함수를
+// 쓴다(실행 규약 분기 금지: 병렬 상한·취소 폴링·예산·한 페이지 실패=전체 실패·유계 drain이 두 경로에서 동일).
+// 반환 {st:"ok"|"cancelled"|"selector-timeout"|"selector-page", results, msg?} — results[i]={r,ids}(미정착=null).
+async function runSelectorPages(opts) {
+  const pages = Array.isArray(opts.pages) ? opts.pages : [];
+  const parallel = Math.max(1, Number(opts.parallel) || 1);
+  const pageRunner = typeof opts.pageRunner === "function" ? opts.pageRunner : runSelectorPage; // 시험 주입점: 가짜는 '페이지 실행기'만 대체 — 루프(시험 대상)는 항상 실물
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const results = new Array(pages.length).fill(null);
+  const running = new Map();
+  let next = 0, fail = null, cancelled = false;
+  const cancelAll = () => { for (const h of running.values()) { try { h.cancel(); } catch { /* promise가 정착 */ } } };
+  while ((next < pages.length || running.size) && !fail && !cancelled) {
+    while (next < pages.length && running.size < parallel) {
+      const idx = next++;
+      const pg = pages[idx];
+      const h = pageRunner({ arm: opts.arm, prompt: opts.buildPrompt(pg), timeoutMs: opts.timeoutMs });
+      running.set(idx, h);
+      h.promise.then((r) => { running.delete(idx); results[idx] = { r, ids: pg.map((it) => it.id) }; });
+    }
+    await sleep(Math.max(50, Number(opts.pollMs) || 250));
+    if (typeof opts.shouldCancel === "function" && opts.shouldCancel()) { cancelled = true; cancelAll(); break; }
+    if (Number.isFinite(opts.deadlineAt) && Date.now() > opts.deadlineAt) { fail = { key: "selector-timeout", msg: "selector budget elapsed (verification budget untouched)" }; cancelAll(); break; }
+    for (const it of results) if (it && it.r && !it.r.ok && !fail) fail = { key: "selector-page", msg: "selector page failed: " + String(it.r.key || "") + " " + String(it.r.detail || "").slice(0, 200) };
+    if (fail) cancelAll();
+  }
+  { // 회수 drain — 취소/실패 후에도 프로세스 종료가 promise 정착으로 확인될 때까지 유계 대기
+    const hardStop = Date.now() + 30000;
+    while (running.size && Date.now() < hardStop) await sleep(100);
+  }
+  if (cancelled) return { st: "cancelled", results };
+  if (fail) return { st: fail.key, msg: fail.msg, results };
+  return { st: "ok", results };
+}
+
+module.exports = { selectorArmForTurn, runSelectorPage, runSelectorPages, killTree, SELF_DENY };

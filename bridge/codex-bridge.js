@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled, constraintTurnContext, constraintAdd, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, constraintHarvestFromAnswer, buildAbManifest, boundaryGenOf, readVerifyEnvelopeArchive, SELECTOR_PAGE_ITEMS, selectorDeadlineMsFor, selectorScopeMaterial, SELECTOR_UNION_MAX, SELECTOR_UNION_BYTES_MAX } = require("./contract-lib.js");
+const { askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled, constraintTurnContext, constraintAdd, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, constraintHarvestFromAnswer, buildAbManifest, boundaryGenOf, readVerifyEnvelopeArchive, SELECTOR_PAGE_ITEMS, selectorDeadlineMsFor, selectorScopeMaterial, SELECTOR_UNION_MAX, SELECTOR_UNION_BYTES_MAX, readSelectorUsage } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -2329,6 +2329,67 @@ function warnAskShape(prompt, cmd) {
     appendAskShape({ ts: new Date().toISOString(), cmd, missing: shape.missing.map((m) => m.id) });
   } catch { /* 경고 실패=시작 방해 금지 */ }
 }
+// [4b 이중 배달 §4] selector-preview — 검증에 앞서 '이번 작업에 실릴 보관 수칙'을 구현자가 미리 본다.
+// 같은 실행기·같은 중립 입력(사용자 원문 스냅샷+변경물 — 검증 요청문 없음)·같은 상한. 판정 권위 없음 —
+// 산출은 영수증(purpose:"preview"·이 턴 스냅샷 지문 결속)뿐이고, 그 영수증이 preview 게이트와 ask-start의
+// 선행 조건을 푼다. 검증 판은 worker가 fresh 선별을 따로 돈다(이 결과를 재사용하지 않음 — 오염 차단).
+async function cmdSelectorPreview() {
+  const en = loadLang() === "en";
+  const ws = configWs();
+  const c = loadContract(ws);
+  if (!(typeof c.archiveHash === "string" && c.archiveHash)) {
+    process.stdout.write(tB("서고(2층 수칙서) 미도입 — 미리보기가 필요 없습니다(코어 수칙은 매 검증 전량 주입).\n", "Archive (two-tier rulebook) not adopted — no preview needed (core rules are always fully injected).\n"));
+    return;
+  }
+  const ctx = constraintTurnContext();
+  if (!ctx.ok) die(tB(`⚠️ 이번 턴의 사용자 원문 스냅샷이 없어 선별할 수 없습니다(${ctx.reason}) — 구현 대화에서 새 프롬프트를 한 번 보내 턴을 다시 기록한 뒤 재시도하세요.`, `⚠️ No user-prompt snapshot for this turn (${ctx.reason}) — send one new prompt in the implementer conversation, then retry.`), 3);
+  const target = resolveScoutRepo(ws, c).repo;
+  const arc = readVerifyEnvelopeArchive(target);
+  if (arc.st !== "ok" || arc.sha1 !== c.archiveHash) die(tB(`⚠️ 승인 서고가 도장 시점과 다릅니다(${arc.st === "ok" ? "내용 불일치" : arc.st}) — 대시보드에서 확인·재승인 후 재시도하세요.`, `⚠️ The approved archive differs from its stamped state (${arc.st === "ok" ? "content mismatch" : arc.st}) — review/re-approve on the dashboard, then retry.`), 3);
+  let snapText = null;
+  try { snapText = fs.readFileSync(require("./contract-lib.js").constraintTurnFileFor(ws, ctx.turnAnchor), "utf8"); } catch { snapText = null; }
+  const sha1p = (s) => crypto.createHash("sha1").update(String(s)).digest("hex");
+  if (snapText === null || sha1p(snapText) !== ctx.sourceHash) die(tB("⚠️ 턴 스냅샷 판독 실패/불일치 — 새 프롬프트를 한 번 보내 턴을 다시 기록한 뒤 재시도하세요.", "⚠️ Turn snapshot unreadable/mismatched — send one new prompt to re-record the turn, then retry."), 3);
+  const scope = selectorScopeMaterial(target);
+  if (scope.st !== "ok") die(tB(`⚠️ 변경물 꾸러미 판독 실패(${scope.reason}) — 저장소 상태를 확인한 뒤 재시도하세요(빈 재료로 선별하지 않습니다).`, `⚠️ Changed-files bundle unreadable (${scope.reason}) — check the repository state and retry (no selection on empty material).`), 3);
+  const SRp = require(path.join(__dirname, "selector-runner.js"));
+  const fakePage = process.env.CODEX_BRIDGE_SELECTOR_RUNNER ? require(process.env.CODEX_BRIDGE_SELECTOR_RUNNER).runSelectorPage : undefined; // 격리 테스트용(worker와 같은 주입점)
+  const CLx = require("./contract-lib.js");
+  const items = arc.data.alwaysBlocker;
+  const pages = CLx.buildSelectorPages(items);
+  const arm = ctx.provider === "codex" ? "codex" : "self";
+  const t0 = Date.now();
+  process.stderr.write(tB(`[서고 선별 미리보기] 보관 수칙 ${items.length}항 · 페이지 ${pages.length}장 — 독립 세션이 이번 작업 관련분을 고릅니다(수 분 걸릴 수 있음)...\n`, `[archive preview] ${items.length} item(s) · ${pages.length} page(s) — an independent session is selecting (may take minutes)...\n`));
+  const run = await SRp.runSelectorPages({
+    arm, pages,
+    buildPrompt: (pg) => CLx.buildSelectorPagePrompt({ snapshotText: snapText, changedFiles: scope.files, diffText: scope.diffText, pageItems: pg }),
+    timeoutMs: CLx.SELECTOR_PAGE_TIMEOUT_MS, parallel: CLx.SELECTOR_PARALLEL,
+    deadlineAt: t0 + selectorDeadlineMsFor(pages.length),
+    ...(fakePage ? { pageRunner: fakePage } : {}),
+  });
+  if (run.st !== "ok") die(tB(`⚠️ 선별 실패(${run.st}${run.msg ? ": " + run.msg : ""}) — 재시도하거나 서고 상태를 확인하세요.`, `⚠️ Selection failed (${run.st}${run.msg ? ": " + run.msg : ""}) — retry or inspect the archive.`), 3);
+  const idLists = [];
+  for (const it of run.results) {
+    if (!it || !it.r || !it.r.ok) die(tB("⚠️ 선별 페이지 결과 불완전 — 재시도하세요(부분 선별로 진행하지 않습니다).", "⚠️ Incomplete page results — retry (no partial selection)."), 3);
+    const parsed = CLx.parseSelectorPageOutput(it.r.output, it.ids);
+    if (!parsed.ok) die(tB(`⚠️ 선별 출력 형식 위반(${parsed.reason}) — 재시도하세요.`, `⚠️ Selector output rejected (${parsed.reason}) — retry.`), 3);
+    idLists.push(parsed.ids);
+  }
+  const un = CLx.selectorUnion(idLists, items);
+  if (!un.ok) die(tB(`⚠️ 선별 합집합 상한 초과(${un.reason}) — 서고 정리(빼기·병합) 후 재시도하세요(절단·요약 없음).`, `⚠️ Selection union over cap (${un.reason}) — organize the archive and retry (no truncation).`), 3);
+  const selectedIds = un.selected.map((s) => s.id);
+  // 영수증(read-back 관문) — purpose:"preview"가 게이트·ask-start 조건의 자격 표식
+  const rec = { ts: new Date().toISOString(), wsKey: CLx.wsKeyFor(ws), askId: "", purpose: "preview", turnAnchor: ctx.turnAnchor, archiveHash: arc.sha1, scopePackageHash: scope.hash, snapshotHash: ctx.sourceHash, itemCount: items.length, pages: pages.length, selectedIds, arm, durationMs: Date.now() - t0 }; // turnAnchor=턴 결속(1차 blocker① — 재사용 차단 4중 결속의 한 축)
+  const fname = CLx.appendSelectorUsage(rec);
+  let back = null;
+  try { back = fname ? JSON.parse(fs.readFileSync(path.join(CLx.SELECTOR_USAGE_DIR, fname), "utf8")) : null; } catch { back = null; }
+  if (!back || JSON.stringify(back) !== JSON.stringify(rec)) die(tB("⚠️ 미리보기 영수증 기록 실패 — 재시도하세요(영수증 없이는 게이트가 열리지 않습니다).", "⚠️ Failed to record the preview receipt — retry (the gate stays closed without it)."), 3);
+  const L = [en ? "[Selected archive rules for this task (reference — not a verdict authority)]" : "[이번 작업 선별 수칙(참고 — 판정 권위 없음)]"];
+  un.selected.forEach((s) => L.push("> " + s.id + ": " + s.text));
+  if (!un.selected.length) L.push(en ? "(no archived rule selected for this task)" : "(이번 작업 관련 선별 0건)");
+  L.push(en ? `receipt: ${fname} · verification runs its own fresh selection` : `영수증: ${fname} · 검증 판은 별도 fresh 선별로 돕니다`);
+  process.stdout.write(L.join("\n") + "\n");
+}
 function cmdAskStart(rest) {
   const req = askRequest(rest);
   if (!req.prompt) die('사용법: ask-start [--allow-new] "<프롬프트>"', 2);
@@ -2392,6 +2453,13 @@ function cmdAskStart(rest) {
       const arc0=readVerifyEnvelopeArchive(selTarget);
       if(arc0.st!=="ok"||arc0.sha1!==cSnap.archiveHash)throw Object.assign(new Error(tB(`⚠️ 승인 서고가 도장 시점과 다릅니다(${arc0.st==="ok"?"내용 불일치":arc0.st}) — 검증을 시작하지 않았습니다. 대시보드에서 서고를 확인·재승인한 뒤 재시도하세요.`,`⚠️ The approved archive differs from its stamped state (${arc0.st==="ok"?"content mismatch":arc0.st}) — no verification was started. Review/re-approve the archive on the dashboard, then retry.`)),{exitCode:3});
       if(!constraintCtx)throw Object.assign(new Error(tB("⚠️ 승인 서고 활성 프로젝트인데 이번 턴의 사용자 원문 스냅샷이 없어 선별을 시작할 수 없습니다 — 검증을 시작하지 않았습니다. 구현 대화에서 새 프롬프트를 한 번 보내 턴을 다시 기록한 뒤 재시도하세요.","⚠️ The approved archive is active but this turn has no user-prompt snapshot, so selection cannot start — no verification was started. Send one new prompt in the implementer conversation to re-record the turn, then retry.")),{exitCode:3});
+      // [4b §4-②] 구현자 인지 선행 조건: 이 턴 스냅샷+현행 서고에 결속된 preview 영수증이 있어야 시작 —
+      // 구현하는 쪽이 '이번 작업 선별 수칙'을 못 본 채 검증만 도는 경로 차단(이중 배달의 ask-start 측 관문).
+      // 4중 결속(1차 blocker①): 프로젝트(wsKey)+턴(turnAnchor)+원문(snapshotHash)+서고(archiveHash) —
+      // 같은 서고·같은 문구의 타 프로젝트/과거 턴 영수증이 이 관문을 열지 못한다.
+      let pv0=false;
+      try{const wk0=require("./contract-lib.js").wsKeyFor(ws);pv0=readSelectorUsage().some((r0)=>r0&&r0.purpose==="preview"&&r0.wsKey===wk0&&r0.turnAnchor===constraintCtx.turnAnchor&&r0.snapshotHash===constraintCtx.sourceHash&&r0.archiveHash===arc0.sha1);}catch{pv0=false;}
+      if(!pv0)throw Object.assign(new Error(tB(`⚠️ 이번 턴의 선별 미리보기 영수증이 없습니다 — 구현 측 인지 채널이 비어 있어 검증을 시작하지 않았습니다. 먼저 실행하세요: node "${__filename}" selector-preview`,`⚠️ No preview receipt for this turn — the implementer-awareness channel is empty, so no verification was started. Run first: node "${__filename}" selector-preview`)),{exitCode:3});
       const pages0=Math.ceil(arc0.data.alwaysBlocker.length/SELECTOR_PAGE_ITEMS);
       selector={archiveHash:arc0.sha1,itemCount:arc0.data.alwaysBlocker.length,pages:pages0,arm:constraintCtx.provider==="codex"?"codex":"self"};
       selBudgetMs=selectorDeadlineMsFor(pages0);
@@ -3933,6 +4001,8 @@ function main() {
     }
     case "ask-start":
       return cmdAskStart(rest);
+    case "selector-preview": // [4b 이중 배달] 구현 시작 전 '이번 작업 선별' 미리보기 — 영수증(purpose:preview)이 게이트·ask-start 선행 조건
+      return void cmdSelectorPreview(rest);
     case "ask-wait":
       return cmdAskWait(rest);
     case "ask-job":

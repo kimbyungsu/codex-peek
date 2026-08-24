@@ -119,6 +119,11 @@ async function runWorkerAndWait(file, ms) {
   let e2eJob = null;
   {
     setMode("ok");
+    // [4b] ask-start 선행 조건: 이 턴 결속 preview 영수증 없으면 시작 거부(구현자 인지 채널 관문)
+    const rNo = cp.spawnSync(process.execPath, [CLI, "ask-start", "--allow-new", "sel-e2e-check"], { cwd: WS, encoding: "utf8", env: { ...ENV, CLAUDE_CODE_SESSION_ID: SESS }, timeout: 20000 });
+    assert.notStrictEqual(rNo.status, 0, "★미리보기 영수증 없음=시작 중단");
+    assert.match(rNo.stderr, /selector-preview/);
+    CL.appendSelectorUsage({ ts: new Date().toISOString(), wsKey: CL.wsKeyFor(WS), askId: "", purpose: "preview", turnAnchor: ANCHOR, archiveHash: ARC_HASH, scopePackageHash: "pv", snapshotHash: SNAP_HASH, itemCount: 2, pages: 1, selectedIds: ["arc-1"], arm: "self", durationMs: 1 });
     const r = cp.spawnSync(process.execPath, [CLI, "ask-start", "--allow-new", "sel-e2e-check"], { cwd: WS, encoding: "utf8", env: { ...ENV, CLAUDE_CODE_SESSION_ID: SESS }, timeout: 20000 });
     assert.strictEqual(r.status, 0, r.stderr);
     const started = JSON.parse(r.stdout);

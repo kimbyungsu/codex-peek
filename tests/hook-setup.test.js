@@ -19,7 +19,7 @@ ok(hs.isOurHookCmd("node contract-inject.js; echo x"), "복합 명령 매칭");
 
 console.log("[detectHooks] 파일 없음/깨짐/부분/완비");
 let st = hs.detectHooks(SET);
-ok(!st.installed && st.missing.length === 4 && st.unreadable === null, "파일 없음 → 미설치·4개 누락(scout-gate 포함)");
+ok(!st.installed && st.missing.length === 5 && st.unreadable === null, "파일 없음 → 미설치·5개 누락(scout-gate·preview-gate 포함 — 4b)");
 fs.writeFileSync(SET, "{broken", "utf8");
 st = hs.detectHooks(SET);
 ok(!st.installed && st.unreadable !== null, "JSON 깨짐 → unreadable 표시");
