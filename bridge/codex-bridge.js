@@ -2454,6 +2454,11 @@ function cmdAskWait(rest) {
     try { err = fs.readFileSync(errFile, "utf8"); } catch { /* 빈 오류 */ }
     if (out) process.stdout.write(out.endsWith("\n") ? out : out + "\n");
     if (err) process.stderr.write(err.endsWith("\n") ? err : err + "\n");
+    // [4a §4 라운드 2+] 선별 요약 1줄(worker 선별 결과 기반) — 수정 루프의 구현자가 이번 판에 어떤 보관
+    // 수칙이 실렸는지 본다. stderr로만(기계 출력 오염 금지).
+    if (j.state === "succeeded" && j.selection && typeof j.selection === "object" && Array.isArray(j.selection.selectedIds)) {
+      try { const s9 = j.selection; process.stderr.write(tB(`[서고 선별] 이번 판 보관 수칙 ${s9.selectedIds.length}건 동봉(서고 ${Number(s9.itemCount) || 0}항 중)${s9.selectedIds.length ? " — " + s9.selectedIds.join(", ") : ""}\n`, `[archive selection] ${s9.selectedIds.length} stored rule(s) attached (of ${Number(s9.itemCount) || 0} archived)${s9.selectedIds.length ? " — " + s9.selectedIds.join(", ") : ""}\n`)); } catch { /* 요약 실패=회수 방해 금지 */ }
+    }
     // [회수 시점 재투영 2026-08-06 — 실전 재현 봉합] worker가 재확인을 resolved로 기록한 직후 종료·ack
     // 실패하면 경보가 '회신을 받았는데도' 열려 남는다(다음 검증 진입까지 — 세션 마지막 검증이면 무기한).
     // 회수(ask-wait)는 반드시 그 뒤에 오므로 여기서 멱등 재투영 — 사용자 화면 기준 '답 회수=경보 정리'.
@@ -2931,7 +2936,7 @@ function reserveVerifyBudgetGate(ws, durableEnv, contractSnap, harnessModeSnap, 
   // 이 patch마저 실패해도 미집계 1줄이 child 로컬 stdout·worker .out에 남는다(최후 fallback).
   if (job && res && res.tracked !== true && res.unlimited !== true) patchAskJobFile(job.id, { budgetUntracked: true });
   // 호출 진행 확정(⑶: tracked 성공 '또는' 가시화된 untracked 진행 결정·무제한) → phase/round 정확히 1회.
-  try { writePhase("codex-verifying", { round: (readPhase().round || 0) + 1, session: claudeId(), workspace: ws }); } catch { /* 진행표시 best-effort */ }
+  try { writePhase("codex-verifying", { round: (readPhase(ws).round || 0) + 1, session: claudeId(), workspace: ws }); } catch { /* 진행표시 best-effort — [4a] 회차도 ws별 기록 기준(타 프로젝트 회차 승계 차단) */ }
   return { proceed: true, res };
 }
 // 포맷 계층(⑻) — formatForClaude 소비자 stdout 전용 안내(raw answer·proof·rollout 불변). 무제한·침묵·중간 왕복="".

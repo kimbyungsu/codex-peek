@@ -77,7 +77,7 @@ console.log("[3b] 개요 패널 — 기존 상태값 재조립·안전 표시 �
   ok(blk.includes("d.backlog.cautionDue") && blk.includes("blRest9=Math.max(0,"), "보관함은 검토 기한 항목만 긴급 합산(잔여=여유)");
   ok(!/tot9\+=blRest9|acts9\.push\(\{n:blRest9/.test(blk) && /blRest9\)\{ var rx9=el\("div","ovact relaxed"\)/.test(blk), "여유 줄은 합산·행동 목록 밖 별도 렌더(과장 집계 금지)");
   ok(/cautionDue: items\.filter\(\(x\) => x\.tag === "주의" && x\.due\)\.length/.test(src), "cautionDue는 표시 상한(30) 적용 전 전량 기준");
-  ok(/vb9\.textContent=T\("회차 ","rd "\)/.test(blk) && blk.includes("cc9 ? d.contract.codexVerifyBudget : d.contract.verifyBudget"), "검증 배지='회차 N/상한' — 상한은 계약 실효 숫자(편집용 appVB 문자열 금지)");
+  ok(/vb9\.textContent=\(d\.live\.round>0 \? T\("회차 ","rd "\)/.test(blk) && blk.includes("cc9 ? d.contract.codexVerifyBudget : d.contract.verifyBudget"), "검증 배지='회차 N/상한' — 상한은 계약 실효 숫자(편집용 appVB 문자열 금지) · [4a] round 0=회차 미표기(선별/준비)");
   ok(blk.includes("cap9>=1)?\"/\"+cap9:\"\"") && !blk.includes('(appVB?"/"+appVB:"")'), "무제한(0)·미정=분모 생략(존재하지 않는 상한 0 표시 금지 — blocker 반영)");
   ok(blkA.includes('e.kind==="evidence-unseen"') && !blkA.includes("d.challenges") && !blk.includes("d.challenges"), "근거 재확인은 경보 종류 분리로 1회만 집계 — kept 가산 금지(같은 eventId 이중 집계 blocker 2026-08-07)");
   ok(blkA.includes("integAll9.length-ev9-ep9"), "일반 경보 수 = 전체 미확인 − evidence-unseen − (항목 표시 중인) enrich-parked(한 사건=한 결정 — R11 이중 집계 봉합)");

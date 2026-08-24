@@ -148,6 +148,8 @@ async function runWorkerAndWait(file, ms) {
   // [4] 취소 계약: hang 선별 중 ask-job clear → 의사 기록(즉시 삭제 없음) → worker가 회수해 failed(cancelled)
   {
     setMode("hang");
+    // [4a blocker② 반례] 직전 '다른 프로젝트'의 회차·세션이 새 selecting 기록에 승계되면 안 됨 — 오염 선주입
+    fs.writeFileSync(CL.PHASE_FILE, JSON.stringify({ phase: "done", round: 4, session: "other-project-session", workspace: "D:/other-project", ts: new Date().toISOString() }));
     const id = "ask-selhang-aaaaaaaaaa";
     const file = craftJob(id);
     const c = cp.spawn(process.execPath, [WORKER, file], { env: ENV, windowsHide: true, stdio: "ignore" });
@@ -160,10 +162,22 @@ async function runWorkerAndWait(file, ms) {
     assert.strictEqual(clr.status, 0, clr.stderr);
     assert.match(clr.stdout, /취소 의사|Cancel intent/, "살아있는 선별=삭제 대신 의사 기록");
     assert.ok(fs.existsSync(path.join(JOBS, id + ".cancel-intent")), "취소 의사 내구 파일(.json 아님 — 손상 스캐너 무접촉)");
+    {
+      const ph = CL.readPhase(WS);
+      assert.strictEqual(ph.phase, "selecting", "[4a] 선별 중=진행 표기 selecting(대시보드 라이브 재료)");
+      assert.ok(ph.workspace === WS && ph.round === 0 && ph.session === null, "★필드 전량 명시 — 직전 타 프로젝트의 round(4)·session 승계 오염 차단(blocker②): " + JSON.stringify({ r: ph.round, s: ph.session }));
+      // [4a 확인검증 blocker] ws별 기록 분리 — 다른 프로젝트가 동시에 진행을 기록해도 이 ws의 selecting이 소거되지 않음
+      CL.writePhase("codex-verifying", { workspace: "D:/other-project", round: 7, session: "other" });
+      const ph2 = CL.readPhase(WS);
+      assert.ok(ph2.phase === "selecting" && ph2.round === 0, "★타 프로젝트 동시 기록 후에도 이 ws 표기 생존(단일 파일 덮어쓰기 소거 봉합)");
+      assert.strictEqual(CL.readPhase("D:/other-project").round, 7, "타 프로젝트 기록은 자기 ws 파일에");
+      assert.strictEqual(CL.readPhase().phase, "codex-verifying", "legacy 전역=마지막 기록 미러(구형 확장 호환)");
+    }
     const u2 = Date.now() + 15000;
     while (!closed && Date.now() < u2) await sleep(100);
     const jd = JSON.parse(fs.readFileSync(file, "utf8"));
     assert.ok(jd.state === "failed" && jd.selectorOutcome === "cancelled", "worker가 의사 관측→트리 회수→failed(cancelled) 정착: " + JSON.stringify({ st: jd.state, o: jd.selectorOutcome }));
+    assert.strictEqual(CL.readPhase().phase, "claude-working", "[4a] 선별 실패 정착=진행 표기 복귀(selecting 잔존 방지)");
     const clr2 = cp.spawnSync(process.execPath, [CLI, "ask-job", "clear", id, "--confirm"], { encoding: "utf8", env: ENV, cwd: WS, timeout: 10000 });
     assert.strictEqual(clr2.status, 0, clr2.stderr);
     assert.ok(!fs.existsSync(file) && !fs.existsSync(path.join(JOBS, id + ".cancel-intent")), "정착 후 clear=기록·의사 파일 정리");
@@ -312,6 +326,31 @@ async function runWorkerAndWait(file, ms) {
     const jd = await runWorkerAndWait(file);
     assert.ok(jd.state === "failed" && jd.selectorOutcome === "selector-scope" && /scope material failed/.test(String(jd.error)), "★판독 실패=중단(빈 지문으로 선별·전이 진행 금지): " + JSON.stringify({ st: jd.state, o: jd.selectorOutcome }));
     t("worker: git 판독 실패=failed(selector-scope) — fail-open 축퇴 봉합 실행 반례");
+  }
+  // [14] [4a] 회수 출력 선별 요약 1줄(라운드 2+ 구현자 가시화 — stderr·기계 출력 무오염)
+  {
+    const id = "ask-selsumm-aaaaaaaaaa";
+    const file = craftJob(id, { state: "succeeded", exitCode: 0, harnessMode: "claude-codex", finishedAt: new Date().toISOString(), selection: { archiveHash: ARC_HASH, scopePackageHash: "x", snapshotHash: SNAP_HASH, selectedIds: ["arc-2"], itemCount: 2, pages: 1, arm: "self", receiptFile: "r.json" } });
+    fs.writeFileSync(path.join(JOBS, id + ".out"), "verifier answer body");
+    const r = cp.spawnSync(process.execPath, [CLI, "ask-wait", id], { encoding: "utf8", env: { ...ENV, CODEX_BRIDGE_JOB_WAIT_SLICE_MS: "0" }, timeout: 15000 });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.ok(r.stdout.includes("verifier answer body") && !r.stdout.includes("[서고 선별]"), "기계 출력(stdout)은 답 원문 그대로");
+    assert.match(r.stderr, /\[서고 선별\] 이번 판 보관 수칙 1건 동봉\(서고 2항 중\) — arc-2/, "요약 1줄=stderr(선별 실물 기반)");
+    fs.unlinkSync(file); fs.unlinkSync(path.join(JOBS, id + ".out"));
+    t("회수 출력 선별 요약 1줄(stderr·수정 루프 구현자가 이번 판 기준을 봄)");
+  }
+  // [15] [4a] extension 결선 소스 핀: selecting 라벨·작업대 목적지(기본=서고·빼기=코어 고정)·서고 현황 동봉
+  {
+    const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
+    assert.ok(ext.includes('case "selecting":'), "라이브 진행 단계에 selecting 라벨");
+    assert.ok(ext.includes("dest:wbDest") && ext.includes('var wbDest=e9.arc?"archive":"core"'), "작업대 목적지 세그(기본=서고·구 런타임=코어 강등)");
+    assert.ok(ext.includes('const dest9 = m.dest === "core" ? "core" : "archive"') && ext.includes("approvedHash: m.gen, target: dest9"), "핸들러=명시 코어만 코어·기본 서고+빌더 target 전달");
+    assert.ok(ext.includes('if (dest9 === "archive" && rem9.length)'), "빼기+서고 혼합=거부(판 어긋남 방어 — 화면 잠금과 이중)");
+    assert.ok(ext.includes("readVerifyEnvelopeArchive(repo9)") && ext.includes("arc?: { state: string; count: number; max: number }"), "서고 현황(arc) 카드 동봉+상태 타입");
+    assert.ok(ext.includes("if(lock)wbDest=\"core\""), "빼기 표시 존재=목적지 코어 고정(코어 항목 대상)");
+    assert.ok(ext.includes("d.live.round>0 ?") && !ext.includes("d.live.round||1") && !ext.includes("(d.live.round || 1)"), "★round 0='회차 1' 오표기 금지(선별/준비 표기 — 확인검증 blocker)");
+    assert.ok(ext.includes("lib.phaseFileFor === \"function\"") , "진행 판독=이 창 ws 전용 기록 우선(타 프로젝트 덮어쓰기 소거 봉합)");
+    t("extension 결선 소스 핀: selecting 라벨·목적지 세그·혼합 거부·서고 현황·round0 표기·ws별 진행 판독");
   }
   console.log(`envelope-selector-wire: ${n} groups passed`);
 })().catch((e) => { console.error(e); process.exit(1); });

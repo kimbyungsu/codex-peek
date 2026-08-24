@@ -36,6 +36,8 @@ function setContract(mode, extra) {
 function clearState() {
   for (const d of ["ask-jobs"]) { try { fs.rmSync(path.join(dir, d), { recursive: true, force: true }); } catch { /* 없음 */ } }
   try { fs.rmSync(path.join(dir, "phase.json"), { force: true }); } catch { /* 없음 */ }
+  // [4a] 진행 표기가 ws별 파일(phase-<wsKey>.json)로 분리됨 — 초기화도 같은 범위(legacy만 지우면 ws 기록이 잔존해 가드가 낡은 흔적을 봄)
+  try { for (const f of fs.readdirSync(dir)) if (/^phase-[0-9a-f]+\.json$/.test(f)) fs.rmSync(path.join(dir, f), { force: true }); } catch { /* 없음 */ }
 }
 function runInject(payload) {
   const r = cp.spawnSync(process.execPath, [INJECT], { encoding: "utf8", env, input: JSON.stringify(payload), timeout: 30000, windowsHide: true });

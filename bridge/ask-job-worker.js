@@ -124,6 +124,10 @@ async function runSelectionPhase(jobFile, dir, job, errFile) {
       if (!patch(jobFile, { state: "selecting", workerPid: process.pid, startedAt: new Date().toISOString() })) { failJob(jobFile, errFile, "selector: state write failed", { selectorOutcome: "state" }); return { ok: false }; }
     } finally { CB.releaseAskJobLock(ws, lk.token); }
   }
+  // [4a 1차 blocker② 봉합] 필드 전량 명시 — writePhase는 직전 전역 레코드를 병합하므로, 명시하지 않은 round·
+  // session이 '다른 프로젝트의 직전 값'으로 승계돼 이 워크스페이스 표기에 교차 오염된다. round=0(선별은 회차
+  // 예약 전 단계 — 실제 회차는 검증 호출 직전 예약이 정함)·session=null.
+  try { CL.writePhase("selecting", { workspace: ws, round: 0, session: null }); } catch { /* 진행 표시 best-effort — 실패 시 검증 요청 표기가 잠시 늦을 뿐 */ } // 대시보드 라이브 표기(§3 selecting)
   // ② archiveCtx 동결 — 서고 재판독(생성 시점 지문과 대조·드리프트=중단)+스냅샷 결속 재검증+변경물 꾸러미.
   let target = ws; try { target = CL.resolveScoutRepo(ws, CL.loadContract(ws)).repo; } catch { /* ws 유지 */ }
   const arc = CL.readVerifyEnvelopeArchive(target);
@@ -207,9 +211,10 @@ function main() {
   // [3b] 선별 판이면 selection phase가 running 전이를 소유한다(verifierDeadlineAt=전이 시점 확정) —
   // 미도입 job은 아래 legacy 경로 그대로(무회귀).
   if (job.selector && typeof job.selector === "object" && !Array.isArray(job.selector) && job.selector.archiveHash) {
+    const resetPhase = () => { try { const CL0 = require(path.join(__dirname, "contract-lib.js")); CL0.writePhase("claude-working", { workspace: String(job.workspace || ""), round: 0, session: null }); } catch { /* 표시 best-effort */ } }; // [4a] 선별 실패 시 진행 표기 잔존(selecting) 방지 — 필드 전량 명시(직전 전역 round·session 승계 오염 차단, blocker②)
     runSelectionPhase(jobFile, dir, job, errFile)
-      .then((res) => { if (!res.ok) process.exit(1); runVerification(jobFile, dir, job, outFile, errFile, res.verifierDeadlineAt); })
-      .catch((e) => { failJob(jobFile, errFile, "selector crashed: " + String((e && e.message) || e), { selectorOutcome: "crash" }); process.exit(1); });
+      .then((res) => { if (!res.ok) { resetPhase(); process.exit(1); } runVerification(jobFile, dir, job, outFile, errFile, res.verifierDeadlineAt); })
+      .catch((e) => { failJob(jobFile, errFile, "selector crashed: " + String((e && e.message) || e), { selectorOutcome: "crash" }); resetPhase(); process.exit(1); });
     return;
   }
   patch(jobFile, { state: "running", workerPid: process.pid, startedAt: new Date().toISOString() });

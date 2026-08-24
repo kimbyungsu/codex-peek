@@ -247,7 +247,7 @@ interface BridgeState {
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
   brainActual: { cc: string; cx: string; scout: string }; // 두뇌 '실제 답'(대화 기록 실측) 표시 문구 — 경고 아닌 평시 정보(피커 표시 결함 실사고 2026-07-08). 기록 없으면 '기록 없음' 문구. scout=마지막 정찰 실행(비용 장부 lastTs — 감사 일치 2026-07-10)
   hasTestsDir: boolean; // 표준 테스트 폴더(tests|test) '감지' 여부 — 성격 프로필용(미감지≠없음, 관행 밖은 못 봄)
-  envelope: { label: string; btn: string | null; btn2: string | null; btn3?: string; repo: string; tone: string; lang: Lang; proposal?: string; gen?: string; axes?: Record<string, string[]>; wsKey?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string }> } | null; // 거버넌스 증분 1(2차 배치 정정) — 검증 경계(수칙서). 최상위=2트랙 기본 프로젝트 포함·lang=렌더 슬롯 결속. null=부재/ws 없음
+  envelope: { label: string; btn: string | null; btn2: string | null; btn3?: string; repo: string; tone: string; lang: Lang; proposal?: string; gen?: string; axes?: Record<string, string[]>; wsKey?: string; arc?: { state: string; count: number; max: number }; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string }> } | null; // 거버넌스 증분 1(2차 배치 정정) — 검증 경계(수칙서). 최상위=2트랙 기본 프로젝트 포함·lang=렌더 슬롯 결속. null=부재/ws 없음. arc=[4a] 서고(2층) 현황
 }
 
 function normWs(p: string): string {
@@ -1136,7 +1136,21 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
     // [개정 작업대 2026-08-22] 현행 항목을 축별로 동봉(표시·빼기 선택용 — 원문 그대로·index는 파일 순서)
     const axes9: Record<string, string[]> = {};
     try { for (const ax of ["supportedEnv", "alwaysBlocker", "outOfScope"]) axes9[ax] = (evv.data[ax] || []).map((x: string) => String(x)); } catch { /* 표시 생략 */ }
-    return { label: tE(`적용 중 — 지원 ${n9[0]}·절대 ${n9[1]}·범위밖 ${n9[2]}항목이 검증 판정 경계로 주입돼요(파일을 고치면 재승인 전까지 중단)`, `Active — ${n9[0]}/${n9[1]}/${n9[2]} items injected as the judging boundary (edits suspend it until re-approval)`) + adm9, btn: null, btn2: tE("내용 보기", "View details"), repo: repo9, tone: "ok", lang: slot, gen: hash9 || "", axes: axes9, wsKey: (() => { try { return typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : ""; } catch { return ""; } })(), ...(cands9 ? { cands: cands9 } : {}) };
+    // [4a] 서고(2층) 현황 — 작업대 목적지 세그·잔여 용량 표시 재료. none=미도입(첫 올림이 서고를 만든다)·
+    // active=도장 일치·broken=도장은 있는데 파일 소실/불일치(검증 시작이 차단되는 상태)·stray=도장 없는 파일.
+    const arc9 = (() => {
+      try {
+        if (typeof CL9.readVerifyEnvelopeArchive !== "function") return undefined; // 구 런타임=표시 생략(목적지 세그도 숨김)
+        let ah9: string | null = null;
+        try { ah9 = (CL9.loadContract(ws, slot) || {}).archiveHash || null; } catch { ah9 = null; }
+        const ar9 = CL9.readVerifyEnvelopeArchive(repo9);
+        const max9 = Number(CL9.ARCHIVE_ITEM_MAX) || 96;
+        if (!ah9) return { state: ar9.st === "absent" ? "none" : "stray", count: 0, max: max9 };
+        if (ar9.st !== "ok" || ar9.sha1 !== ah9) return { state: "broken", count: 0, max: max9 };
+        return { state: "active", count: ar9.data.alwaysBlocker.length, max: max9 };
+      } catch { return undefined; }
+    })();
+    return { label: tE(`적용 중 — 지원 ${n9[0]}·절대 ${n9[1]}·범위밖 ${n9[2]}항목이 검증 판정 경계로 주입돼요(파일을 고치면 재승인 전까지 중단)`, `Active — ${n9[0]}/${n9[1]}/${n9[2]} items injected as the judging boundary (edits suspend it until re-approval)`) + adm9, btn: null, btn2: tE("내용 보기", "View details"), repo: repo9, tone: "ok", lang: slot, gen: hash9 || "", axes: axes9, wsKey: (() => { try { return typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : ""; } catch { return ""; } })(), ...(arc9 ? { arc: arc9 } : {}), ...(cands9 ? { cands: cands9 } : {}) };
   } catch { return null; }
 }
 function patchContractOnceExt(ws: string | null, lang: Lang | undefined, patch: Record<string, unknown>): ContractPatchRes {
@@ -2283,6 +2297,15 @@ function alertTooltip(headMd: string): vscode.MarkdownString {
 // 사용자에게 진행을 보여준다(토큰 스트림 아님, 파일변화 기반). 단계: 대기/Claude작업중/검증요청됨/Codex생성중/반영중/완료/판단대기/미완.
 interface LiveStage { key: string; label: string; icon: string; spin: boolean; round: number; color: string }
 function readPhaseRaw(): { phase?: string; round?: number; session?: string; workspace?: string; ts?: string } {
+  // [4a f-3c20a5da] 이 창 워크스페이스 전용 진행 기록 우선 — 다른 프로젝트의 동시 진행이 전역 파일을 덮어써도
+  // 이 창의 라이브 표시(selecting 등)가 소거되지 않는다. ws 파일 부재(구 런타임)=legacy 전역 폴백.
+  try {
+    const ws = dashboardWorkspace();
+    const lib: any = bridgeLib();
+    if (ws && lib && typeof lib.phaseFileFor === "function") {
+      try { return JSON.parse(fs.readFileSync(String(lib.phaseFileFor(ws)), "utf8")) || {}; } catch { /* legacy 폴백 */ }
+    }
+  } catch { /* legacy 폴백 */ }
   try { return JSON.parse(fs.readFileSync(PHASE_FILE, "utf8")) || {}; } catch { return {}; }
 }
 // 연결 세션 rollout이 '최근 쓰인' 상태인가(mtime 최근 N초) → 코덱스가 지금 답을 쓰는 중으로 추정.
@@ -2313,6 +2336,7 @@ function computeLiveStage(linkedId: string | null): LiveStage | null {
       return linkedRolloutRecentlyWritten(linkedId)
         ? { key: "codex-gen", label: tE("Codex 생성중","Codex generating"), icon: "$(sync~spin)", spin: true, round, color: "charts.green" }
         : { key: "codex-req", label: tE("코덱스에 검증 요청","verify requested to Codex"), icon: "$(sync~spin)", spin: true, round, color: "charts.yellow" };
+    case "selecting": return { key: "selecting", label: tE("서고 수칙 선별중","selecting archive rules"), icon: "$(sync~spin)", spin: true, round, color: "charts.blue" }; // [4a] worker 선별 단계(§3 selecting)
     case "rejudging": return { key: "rejudge", label: tE("검증 답 반영중","applying verify answer"), icon: "$(pencil)", spin: false, round, color: "charts.orange" };
     case "done": return { key: "done", label: tE("검증 완료","verify done"), icon: "$(check)", spin: false, round, color: "charts.green" };
     case "held": return { key: "held", label: tE("검증 상한 · 사용자 판단 대기","verification cap · awaiting user decision"), icon: "$(question)", spin: false, round, color: "charts.yellow" };
@@ -4077,9 +4101,13 @@ class Dashboard {
             const rem9 = m.removes.filter((r: any) => r && typeof r.axis === "string" && ["supportedEnv", "alwaysBlocker", "outOfScope"].includes(r.axis) && Number.isInteger(r.index) && r.index >= 0).slice(0, 36);
             if (adds9.length !== m.adds.length || rem9.length !== m.removes.length || (!adds9.length && !rem9.length)) { vscode.window.showWarningMessage(enR9 ? "Invalid selection — the card refreshes." : "선택 형식이 올바르지 않아요 — 카드가 갱신됩니다."); this.post(); return; }
             const repoR9 = scoutTargetFor(wsR9).repo;
+            // [4a] 목적지: 기본=서고(설계 §1 — 코어 승격은 명시 선택). 빼기 표시는 현행 수칙서(코어) 항목 대상이라
+            // 서고 목적지와 한 초안에 섞일 수 없음 — 화면이 잠그지만 판 어긋남(구 화면) 방어로 여기서도 거부.
+            const dest9 = m.dest === "core" ? "core" : "archive";
+            if (dest9 === "archive" && rem9.length) { vscode.window.showWarningMessage(enR9 ? "Removals target the core rulebook — they cannot ride an archive draft. The card refreshes; please retry." : "빼기 표시는 현행 수칙서(코어) 대상이라 서고 초안에 실을 수 없어요 — 카드가 갱신됩니다. 다시 시도해 주세요."); this.post(); return; }
             let rv9: any = null;
-            try { rv9 = typeof CLR.draftEnvelopeRevision === "function" ? CLR.draftEnvelopeRevision(wsR9, repoR9, { addCandidateIds: adds9, removeItems: rem9, approvedHash: m.gen }) : { ok: false, error: "old-runtime(node install.js 필요)" }; } catch { rv9 = { ok: false, error: "exception" }; }
-            if (rv9 && rv9.ok) vscode.window.showInformationMessage((enR9 ? `Revision draft created (add ${rv9.adds} · remove ${rv9.removes}) — review via 'View draft' and stamp to apply.` : `개정판 초안을 만들었어요(올림 ${rv9.adds}·빼기 ${rv9.removes}) — '초안 보기'로 확인 후 도장을 찍어야 적용됩니다.`) + (rv9.parallelCopied ? (enR9 ? " Parallel axes copied verbatim — edit translations before stamping." : " 병렬 축은 원문 그대로 복제됐어요 — 도장 전에 번역·예시를 다듬어 주세요.") : ""));
+            try { rv9 = typeof CLR.draftEnvelopeRevision === "function" ? CLR.draftEnvelopeRevision(wsR9, repoR9, { addCandidateIds: adds9, removeItems: rem9, approvedHash: m.gen, target: dest9 }) : { ok: false, error: "old-runtime(node install.js 필요)" }; } catch { rv9 = { ok: false, error: "exception" }; }
+            if (rv9 && rv9.ok) vscode.window.showInformationMessage((enR9 ? `Revision draft created (${rv9.target === "archive" ? "→ archive" : "→ core"} · add ${rv9.adds} · remove ${rv9.removes}) — review via 'View draft' and stamp to apply.` : `개정판 초안을 만들었어요(${rv9.target === "archive" ? "→서고" : "→코어"} · 올림 ${rv9.adds}·빼기 ${rv9.removes}) — '초안 보기'로 확인 후 도장을 찍어야 적용됩니다.`) + (rv9.parallelCopied ? (enR9 ? " Parallel axes copied verbatim — edit translations before stamping." : " 병렬 축은 원문 그대로 복제됐어요 — 도장 전에 번역·예시를 다듬어 주세요.") : ""));
             else vscode.window.showWarningMessage((enR9 ? "Draft failed: " : "개정판 생성 실패: ") + String((rv9 && rv9.error) || "unknown"));
           } catch { vscode.window.showWarningMessage(enR9 ? "Draft failed." : "개정판 생성에 실패했어요."); }
           this.post(); return;
@@ -6249,7 +6277,7 @@ class Dashboard {
     var cc9 = !!(d.contract && d.contract.harnessMode==="codex-codex");
     set9("ovMode", cc9?"Codex ↔ Codex":"Claude ↔ Codex");
     var vm9 = d.contract ? ((cc9 ? d.contract.codexVerifyMode : d.contract.verifyMode) || "off") : null;
-    set9("ovVerify", d.live ? (T("진행 중 · 회차 ","running · round ")+(d.live.round||1)) : (vm9===null?"–":(vm9==="off"?T("꺼짐","off"):T("대기 · ","idle · ")+lblVM(vm9))));
+    set9("ovVerify", d.live ? (d.live.round>0 ? T("진행 중 · 회차 ","running · round ")+d.live.round : (d.live.key==="selecting"?T("진행 중 · 서고 선별","running · selecting"):T("진행 중 · 준비","running · prep"))) : (vm9===null?"–":(vm9==="off"?T("꺼짐","off"):T("대기 · ","idle · ")+lblVM(vm9)))); // [4a] round 0=회차 예약 전 단계 — '회차 1' 오표기 금지
     var son9 = !!(d.contract && d.contract.scoutMode==="on");
     var h9 = d.mapCurrent && d.mapCurrent.source==="v2" ? d.mapCurrent.health : null;
     set9("ovMap", !son9 ? T("2트랙 — 지도 없음","2-track — no map") : (h9 ? (h9.fresh+"/"+h9.total+(h9.ratios&&h9.ratios.fresh!==null?" · "+Math.round(h9.ratios.fresh*100)+"%":"")) : T("자료 없음","no data")));
@@ -6263,7 +6291,7 @@ class Dashboard {
     // 상한은 편집용 문자열(appVB: ""=상속·"0"=명시 무제한)이 아니라 계약의 실효 숫자로 — C-C는
     // codexVerifyBudget(부재=CL-C 상속·0=무제한 반영 완료), CL-C는 verifyBudget. 0(무제한)=분모 생략(blocker 반영).
     var cap9 = d.contract ? Number(cc9 ? d.contract.codexVerifyBudget : d.contract.verifyBudget) : NaN;
-    var vb9=$("vNavBadge"); if(vb9){ if(d.live){ vb9.textContent=T("회차 ","rd ")+String(d.live.round||1)+((Number.isFinite(cap9)&&cap9>=1)?"/"+cap9:""); vb9.style.display=""; } else { vb9.style.display="none"; } }
+    var vb9=$("vNavBadge"); if(vb9){ if(d.live){ vb9.textContent=(d.live.round>0 ? T("회차 ","rd ")+String(d.live.round)+((Number.isFinite(cap9)&&cap9>=1)?"/"+cap9:"") : (d.live.key==="selecting"?T("선별","sel"):T("준비","prep"))); vb9.style.display=""; } else { vb9.style.display="none"; } } // [4a] round 0=회차 미표기(선별/준비)
     var listBox9=$("ovActionList"), empty9=$("ovActionEmpty");
     if(listBox9){ listBox9.replaceChildren();
       acts9.forEach(function(a9){
@@ -7157,10 +7185,23 @@ class Dashboard {
               row.appendChild(rb); ec.appendChild(row);
             });
           });
+          // [4a] 서고 이상 경고 — broken=도장은 있는데 파일 소실/불일치(새 검증 시작 차단)·stray=도장 없는 파일
+          if(e9.arc && (e9.arc.state==="broken"||e9.arc.state==="stray")){ var arcWarn=document.createElement("div"); arcWarn.style.cssText="margin-top:8px;font-size:12px;color:var(--vscode-editorWarning-foreground,#d4a017)"; arcWarn.textContent=e9.arc.state==="broken"?T("⚠ 서고(보관 수칙)가 도장 시점과 달라요 — 재승인 전까지 새 검증 시작이 막힙니다","⚠ the archive differs from its stamped state — new verifications are blocked until re-approval"):T("⚠ 도장 없는 서고 파일이 있어요 — 파일을 정리하기 전까지 서고 올림이 막힙니다","⚠ an unstamped archive file exists — archive adds are blocked until it is cleaned"); ec.appendChild(arcWarn); }
+          // [4a] 올림 목적지 — 기본=서고(2층·쌓아두면 작업마다 관련분만 자동 선별)·코어 승격=명시 선택.
+          // 빼기 표시는 현행 수칙서(코어) 항목 대상이라 서고 초안과 한 도장에 못 실림 → 빼기 존재 시 코어 고정.
+          var wbDest=e9.arc?"archive":"core"; var wbDestSync=null;
+          var wbDestWrap=document.createElement("div"); wbDestWrap.style.cssText="margin-top:8px;font-size:12px"; ec.appendChild(wbDestWrap);
+          var wbDestLbl=document.createElement("div"); wbDestLbl.className="muted"; wbDestLbl.style.cssText="font-size:11px;margin-bottom:2px"; wbDestWrap.appendChild(wbDestLbl);
+          var wbDestBtns={};
+          var mkDest=function(id,lab){ var b=document.createElement("button"); b.style.cssText="margin-right:6px;font-size:11px"; b.textContent=lab; b.onclick=function(){ if(b.disabled) return; wbDest=id; if(typeof wbSync9==="function") wbSync9(); }; wbDestWrap.appendChild(b); wbDestBtns[id]=b; };
+          var arcN9=e9.arc&&e9.arc.state==="active"?e9.arc.count:0, arcMax9=e9.arc?e9.arc.max:96, coreAb9=(e9.axes.alwaysBlocker||[]).length;
+          mkDest("archive",T("서고에 올림 (보관 "+arcN9+"/"+arcMax9+")","to archive ("+arcN9+"/"+arcMax9+")"));
+          mkDest("core",T("코어에 올림 (전량 주입 "+coreAb9+"/12)","to core ("+coreAb9+"/12)"));
+          wbDestSync=function(){ var lock=wbRemoves.size>0; if(lock)wbDest="core"; if(!e9.arc)wbDest="core"; wbDestBtns.archive.disabled=lock||!e9.arc; Object.keys(wbDestBtns).forEach(function(k){ var b=wbDestBtns[k], on=(wbDest===k); b.className=on?"":"secondary"; b.style.fontWeight=on?"600":""; }); wbDestLbl.textContent=lock?T("올림 목적지: 코어 고정 — 빼기 표시가 현행 수칙서(코어) 대상이라서요","destination: core (removals target the core rulebook)"):(!e9.arc?T("올림 목적지: 코어(구 런타임 — 서고는 node install.js 후)","destination: core (old runtime — archive after node install.js)"):T("올림 목적지 — 서고: 쌓아두면 작업마다 관련분만 자동 선별 · 코어: 매 검증 전량 주입(12칸)","destination — archive: stored, auto-selected per task · core: always fully injected (12 slots)")); };
           var wbBar=document.createElement("button"); wbBar.style.cssText="margin-top:8px;font-weight:700"; ec.appendChild(wbBar);
           var wbNote=document.createElement("div"); wbNote.className="muted"; wbNote.style.cssText="font-size:11px;margin-top:2px"; wbNote.textContent=T("올림·빼기를 원하는 만큼(1건 단독도) 담아 개정판 초안 1개를 만들고, 도장 1번으로 적용합니다.","Bundle any number of adds/removals (a single change is fine) into one revision draft, then one stamp."); ec.appendChild(wbNote);
-          wbSync9=function(){ var n=wbAdds.size, m=wbRemoves.size; if(n+m>0){ wbBar.style.display=""; wbNote.style.display=""; wbBar.textContent=T("개정판 초안 만들기 (올림 "+n+" · 빼기 "+m+")","Build revision draft (add "+n+" · remove "+m+")"); } else { wbBar.style.display="none"; wbNote.style.display="none"; } };
-          wbBar.onclick=function(){ var removes=[...wbRemoves].map(function(k){ var i=k.lastIndexOf("|"); return { axis:k.slice(0,i), index:Number(k.slice(i+1)) }; }); vscode.postMessage({type:"envelopeRevise", adds:[...wbAdds], removes:removes, gen:String(e9.gen||""), wsKey:String(e9.wsKey||""), lang:e9.lang}); };
+          wbSync9=function(){ if(typeof wbDestSync==="function") wbDestSync(); var n=wbAdds.size, m=wbRemoves.size; if(n+m>0){ wbBar.style.display=""; wbNote.style.display=""; wbBar.textContent=T("개정판 초안 만들기 ("+(wbDest==="archive"?"→서고":"→코어")+" · 올림 "+n+" · 빼기 "+m+")","Build revision draft ("+(wbDest==="archive"?"→archive":"→core")+" · add "+n+" · remove "+m+")"); } else { wbBar.style.display="none"; wbNote.style.display="none"; } };
+          wbBar.onclick=function(){ var removes=[...wbRemoves].map(function(k){ var i=k.lastIndexOf("|"); return { axis:k.slice(0,i), index:Number(k.slice(i+1)) }; }); vscode.postMessage({type:"envelopeRevise", adds:[...wbAdds], removes:removes, dest:wbDest, gen:String(e9.gen||""), wsKey:String(e9.wsKey||""), lang:e9.lang}); };
           wbSync9();
         }
       });
