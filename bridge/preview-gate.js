@@ -27,27 +27,18 @@ process.stdin.on("end", () => {
     let a = null;
     try { a = JSON.parse(fs.readFileSync(path.join(CL.ACTIVE_DIR, sid + ".json"), "utf8")); } catch { a = null; }
     if (!a || typeof a.constraintAnchor !== "string" || !a.constraintAnchor || typeof a.constraintSourceHash !== "string" || !a.constraintSourceHash) return process.exit(0);
-    // 허용 예외: preview 실행 명령 '전체가 정확히' 그 호출일 때만(연결·후행 인자·리다이렉트 불허) —
-    // 그리고 두 토큰의 '정체'를 basename 정확 일치로 검증(2차 blocker: \S* 접미사 일치는 ts-node·
-    // fake-codex-bridge.js 같은 유사 이름 실행을 통과시킴). 잔여(다른 위치에 똑같은 이름의 파일)는
-    // 그 파일을 만드는 쓰기 자체가 이 게이트에 막히고, 기성 악성 파일 전제는 경계 범위 밖(악의 공격).
-    const cmd = String((o.tool_input && o.tool_input.command) || "");
-    if (o.tool_name === "Bash") {
-      const mx = /^\s*("[^"]+"|\S+)\s+("[^"]+"|\S+)\s+selector-preview\s*$/.exec(cmd);
-      if (mx) {
-        const tok = (s) => String(s).replace(/^"|"$/g, "");
-        const base = (p) => tok(p).replace(/[\\/]+$/, "").split(/[\\/]/).pop().toLowerCase();
-        if (["node", "node.exe"].includes(base(mx[1])) && base(mx[2]) === "codex-bridge.js") return process.exit(0);
-      }
-    }
-    // 이 프로젝트(wsKey)+이 턴(turnAnchor)+이 턴 원문(snapshotHash)+현행 서고(archiveHash) 4중 결속 영수증만
-    // 통과(1차 blocker① — 같은 서고·같은 문구의 타 프로젝트/과거 턴 영수증 재사용 차단).
-    let pass = false;
-    try {
-      const wsKey = CL.wsKeyFor(ws);
-      pass = CL.readSelectorUsage().some((r) => r && r.purpose === "preview" && r.wsKey === wsKey && r.turnAnchor === a.constraintAnchor && r.snapshotHash === a.constraintSourceHash && r.archiveHash === c.archiveHash);
-    } catch { pass = false; }
-    if (pass) return process.exit(0);
+    // [4b-2] 판정=공용 previewGateDecision(Claude·Codex 동일 게이트 계약 공유 — 런타임별 분기 없음):
+    // 예외=미리보기 명령 전체 정확 일치(토큰 basename 결속)·통과=4중 결속(wsKey·turnAnchor·snapshot·archive)
+    // 영수증·잔여(타 위치 동명 파일)는 그 파일을 만드는 쓰기 자체가 이 게이트에 막힘(기성 악성 파일=경계 밖).
+    const d9 = CL.previewGateDecision({
+      archiveHash: c.archiveHash,
+      turnAnchor: a.constraintAnchor,
+      snapshotHash: a.constraintSourceHash,
+      wsKey: CL.wsKeyFor(ws),
+      toolName: String(o.tool_name || ""),
+      command: String((o.tool_input && o.tool_input.command) || ""),
+    });
+    if (d9 !== "block") return process.exit(0);
     const en = CL.loadLang() === "en";
     process.stderr.write(
       (en

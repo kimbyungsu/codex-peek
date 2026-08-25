@@ -164,4 +164,50 @@ const runGate = (payload, env) => cp.spawnSync(process.execPath, [GATE], { encod
   assert.ok(priv.includes("서고 수칙 자동 선별") && priv.includes("구현 턴과 같은 경로로만"), "PRIVACY 고지 확장(같은 provider 한정·목적·내용·기록)");
   t("설치기 등록·배포 편입 봉합·공용 루프·ask-start 조건·PRIVACY 소스 핀");
 }
+// [7] [4b-2] 공용 관문 판정기(previewGateDecision) — Claude·Codex가 같은 함수(런타임별 분기 없음)
+{
+  const base = { archiveHash: ARC_HASH, turnAnchor: ANCHOR, snapshotHash: SNAP_HASH, wsKey: CL.wsKeyFor(WS) };
+  const rec = { purpose: "preview", wsKey: CL.wsKeyFor(WS), turnAnchor: ANCHOR, snapshotHash: SNAP_HASH, archiveHash: ARC_HASH };
+  assert.strictEqual(CL.previewGateDecision({ ...base, archiveHash: "", toolName: "Edit" }), "allow-inactive", "미도입=무발동");
+  assert.strictEqual(CL.previewGateDecision({ ...base, turnAnchor: "", toolName: "Edit" }), "allow-nosnapshot", "스냅샷 부재=무발동(ask-start fail-closed)");
+  assert.strictEqual(CL.previewGateDecision({ ...base, toolName: "Read" }), "allow-readonly", "읽기 도구=허용");
+  assert.strictEqual(CL.previewGateDecision({ ...base, toolName: "apply_patch", receipts: [] }), "block", "Codex 변경 도구(apply_patch)=차단");
+  assert.strictEqual(CL.previewGateDecision({ ...base, toolName: "Bash", command: `node "${CLI}" selector-preview`, receipts: [] }), "allow-preview-cmd", "예외=미리보기 명령 전체 정확 일치");
+  assert.strictEqual(CL.previewGateDecision({ ...base, toolName: "Bash", command: "node fake-codex-bridge.js selector-preview", receipts: [] }), "block", "유사 이름=차단(공용 판정)");
+  assert.strictEqual(CL.previewGateDecision({ ...base, toolName: "Edit", receipts: [rec] }), "allow-receipt", "4중 결속 영수증=통과");
+  assert.strictEqual(CL.previewGateDecision({ ...base, toolName: "Edit", receipts: [{ ...rec, turnAnchor: "otherTurn" }] }), "block", "다른 턴 영수증=차단");
+  assert.strictEqual(CL.previewGateDecision({ ...base, toolName: "Edit", receipts: [{ ...rec, wsKey: "deadbeefdeadbeef" }] }), "block", "타 프로젝트 영수증=차단");
+  const pg = fs.readFileSync(path.join(__dirname, "..", "bridge", "preview-gate.js"), "utf8");
+  assert.ok(pg.includes("CL.previewGateDecision({") && !pg.includes("selector-preview\\b"), "Claude 게이트=공용 판정기 사용(자체 regex 사본 폐기)");
+  t("공용 관문 판정기: 미도입/스냅샷/읽기/예외/4중 결속 전 분기+Claude 게이트 단일 출처");
+}
+// [8] [4b-2] Codex 경로: PreToolUse 표식·불신 플래그 왕복+등록 5종+배선 소스 핀
+{
+  const CH = require("../bridge/codex-hook.js");
+  const PI = require("../bridge/codex-plugin-install.js");
+  // [확인검증 blocker① 반례] 구현자 아닌 세션의 PreToolUse는 표식만 남기고 '불신 플래그를 지우지 못한다'
+  // (타 세션 실측이 구현 세션의 중단을 풀어주는 경로 차단 — 해제는 sameImplementer 세션의 실측만).
+  fs.mkdirSync(CH.PRETOOL_DIR, { recursive: true });
+  fs.writeFileSync(CH.pretoolDistrustFileFor(WS), JSON.stringify({ schema: "codex-pretool-distrust-v1", ts: "T", session: "sX", tool: "Edit" }));
+  CH.onPreTool({ tool_name: "Edit", turn_id: "t1" }, WS, "sessCodexPre01", CL.loadContract(WS, "ko"));
+  assert.ok(fs.existsSync(CH.pretoolMarkerFile("sessCodexPre01")), "★PreToolUse 실측 표식 기록(세션별 파일)");
+  assert.ok(fs.existsSync(CH.pretoolDistrustFileFor(WS)), "★비구현자 세션의 실측=불신 플래그 존속(교차 세션 해제 차단)");
+  fs.rmSync(CH.pretoolDistrustFileFor(WS), { force: true });
+  // 등록 5종(사전 관문 편입)
+  assert.ok(PI.CODEX_PEEK_HOOK_EVENTS.includes("preToolUse") && PI.CODEX_PEEK_USER_HOOKS.some((h) => h.event === "PreToolUse" && /Bash\|apply_patch\|Edit\|Write\|MultiEdit\|NotebookEdit\|mcp__\.\*/.test(h.matcher)), "Codex 훅 등록=5종(사전 관문·변경 도구 matcher)");
+  // 배선 소스 핀: dispatcher 분리·게이트=공용 판정기·미호출 감지·Stop 중단·주입 공용 함수
+  const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-hook.js"), "utf8");
+  assert.ok(src.includes('if(ev==="PreToolUse")return onPreTool(') && src.includes("previewGateDecision({"), "사전 관문=공용 판정기(Claude와 동일 게이트 계약)");
+  assert.ok(src.includes("if (!pretoolObserveMarker(sid, j))") && src.includes("pretoolDistrustFileFor(ws)"), "★미호출 감지=호출별 표식 대조+소비(같은 턴 이전 호출 표식이 뒤 호출을 못 가림 — 2차 확인검증 blocker)");
+  assert.ok(/if \(!sameImplementer\(ws, sid\)\) return;\s*\n\s*try \{ if \(fs\.existsSync\(pretoolDistrustFileFor\(ws\)\)\)/.test(src), "★불신 해제=구현자 세션 실측 뒤에만(순서 소스 계약)");
+  // [2차 확인검증 blocker 반례 — 실행] 호출별 결속+소비
+  CH.onPreTool({ tool_name: "Edit", turn_id: "tA", tool_use_id: "call-A" }, WS, "sessPair01", CL.loadContract(WS, "ko"));
+  assert.strictEqual(CH.pretoolObserveMarker("sessPair01", { turn_id: "tA", tool_use_id: "call-B" }), false, "★같은 턴 다른 호출(tool_use_id)=미호출 판정(이전 호출 표식이 뒤 호출을 못 가림)");
+  assert.strictEqual(CH.pretoolObserveMarker("sessPair01", { turn_id: "tB", tool_use_id: "call-A" }), false, "다른 턴=미호출 판정");
+  assert.strictEqual(CH.pretoolObserveMarker("sessPair01", { turn_id: "tA", tool_use_id: "call-A" }), true, "같은 호출·같은 턴=실측 인정");
+  assert.strictEqual(CH.pretoolObserveMarker("sessPair01", { turn_id: "tA", tool_use_id: "call-A" }), false, "★소비 후 재사용 불가(사전 1회=사후 1회 — id 미제공 플랫폼도 호출 짝 강제)");
+  assert.ok(src.includes("Codex 구현 작업을 중단합니다") && /if \(typeof c\.archiveHash === "string" && c\.archiveHash\) \{\s*\n\s*let dis9/.test(src), "★미호출=중단(Stop 차단·ask-start 후퇴 금지)+실측 회복 시 자동 재개");
+  assert.ok(src.includes("implementerEnvelopeInject(ws, c, loadLang()"), "Codex 턴 시작 주입=Claude와 같은 함수(양 훅 공통)");
+  t("Codex 경로: 표식/불신 왕복 실행·등록 5종·공용 판정기·미호출=중단·주입 공용(이중 배달 완성)");
+}
 console.log(`envelope-preview: ${n} groups passed`);

@@ -87,7 +87,7 @@ for(const f of hs.BRIDGE_SCRIPTS)fs.writeFileSync(path.join(BR4,f),"//x","utf8")
 fs.writeFileSync(path.join(BR4,".bridge-deployed-by.json"),'{"version":"x"}',"utf8");
 res=un.doUninstall(BR4,CL4,HOME_NOW);
 ok(res.codexHooksRemoved&&res.bridgeRemoved,"현재 홈과 달라도 기록된 Codex 훅과 브릿지 정리");
-ok(pi.detectCodexPeekUserHooks(path.join(HOME_A,"hooks.json"),BR4).missing.length===4&&pi.detectCodexPeekUserHooks(path.join(HOME_B,"hooks.json"),BR4).missing.length===4,"옛·새 Codex 홈 양쪽에서 우리 훅 제거");
+ok(pi.detectCodexPeekUserHooks(path.join(HOME_A,"hooks.json"),BR4).missing.length===5&&pi.detectCodexPeekUserHooks(path.join(HOME_B,"hooks.json"),BR4).missing.length===5,"옛·새 Codex 홈 양쪽에서 우리 훅 제거");
 ok(!fs.existsSync(codexFlag),"모든 훅 제거 확인 뒤 Codex 소유 표식 제거");
 
 console.log("[doUninstall] Codex 소유 표식 손상 — 런타임 보존");

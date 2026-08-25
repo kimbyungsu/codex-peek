@@ -36,7 +36,7 @@ function writeHooks(cmd) {
 }
 writeHooks(legacy.replace("C:/Users/tester/.codex-bridge", fwd(dir)));
 let mig = pi.detectCodexPeekHookMigration(hooksFile, dir);
-ok(mig.needed && mig.count === 4, "옛 형식 4훅 → needed·count=4");
+ok(mig.needed && mig.count === 5, "옛 형식 5훅 → needed·count=5(4b-2: 사전 관문 편입)");
 writeHooks(pi.codexPeekHookCommand("node", dir));
 mig = pi.detectCodexPeekHookMigration(hooksFile, dir);
 ok(!mig.needed && mig.count === 0, "새 형식 → 마이그레이션 불필요");

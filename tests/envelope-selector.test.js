@@ -30,7 +30,7 @@ t("페이지 분할: 항목 수 상수 경계·arc-N=파일 순서 위치 결정
 t("페이지 프롬프트: 중립 재료만 서명에 존재(검증 요청문 인자 자체가 없음)·JSON 한 줄 지시·재료 유계 절단", () => {
   const p = CL.buildSelectorPagePrompt({ snapshotText: "약속 원문", changedFiles: ["a.js"], diffText: "d".repeat(30000), pageItems: [{ id: "arc-1", text: "규칙" }] });
   assert.ok(p.includes("약속 원문") && p.includes("a.js") && p.includes("arc-1: 규칙"), "세 중립 재료+항목 id 병기");
-  assert.ok(p.includes('{"relevant":["arc-3"]}') && p.includes("다른 텍스트·설명·마크다운 금지"), "strict 출력 지시(범주 지시 — 문구 패턴 목록 아님)");
+  assert.ok(p.includes('{"relevant":["arc-3"]}') && p.includes("코드 펜스(```)·다른 텍스트·설명·마크다운 금지"), "strict 출력 지시(범주 지시 — 4b-2 실측 후 펜스 금지 명시)");
   assert.ok(p.length < 26000, "diff 유계 절단(20000자)");
   const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
   assert.ok(src.includes("buildSelectorPagePrompt({ snapshotText, changedFiles, diffText, pageItems })"), "★입력 서명에 검증 요청문 인자 없음 — 구현자 작문은 계약상 전달 불가(§3 입력 중립)");
@@ -49,6 +49,12 @@ t("strict 출력 판독: 정상·빈 배열 ok / 산문 섞임·미지 필드·�
   assert.strictEqual(CL.parseSelectorPageOutput('{"relevant":[],"relevant":["arc-1"]}', valid).reason, "dup-key", "★중복 relevant 키=거부(JSON.parse 후승 삼킴 우회 — 재검증 blocker)");
   assert.strictEqual(CL.parseSelectorPageOutput('{"relev' + '\\' + 'u0061nt":[],"relevant":["arc-1"]}', valid).reason, "dup-key", "이스케이프 키 해독 후에도 중복=거부(JSON escape 실바이트 — 확인검증 보완: JS 선해석 반례 무력화 교정)");
   assert.strictEqual(CL.parseSelectorPageOutput('{"relevant":' + String.fromCharCode(10) + ' ["arc-1"]}', valid).reason, "multiline", "★다중행 JSON=거부('한 줄' 계약 — 재검증 blocker)");
+  // [4b-2 실전 스모크 실측] 실제 모델의 펜스 포장(```json) — '펜스 하나로 감싼 정확히 한 줄'만 결정론 언랩
+  const NL = String.fromCharCode(10);
+  assert.deepStrictEqual(CL.parseSelectorPageOutput("```json" + NL + '{"relevant":["arc-1"]}' + NL + "```", valid).ids, ["arc-1"], "★펜스 한 줄=언랩 후 정상(실측 포장 정규화)");
+  assert.strictEqual(CL.parseSelectorPageOutput("```" + NL + '{"relevant":' + NL + '["arc-1"]}' + NL + "```", valid).reason, "multiline", "펜스 안 다중행=여전히 거부(strict 무변)");
+  assert.strictEqual(CL.parseSelectorPageOutput("선택 결과:" + NL + "```json" + NL + '{"relevant":["arc-1"]}' + NL + "```", valid).reason, "multiline", "산문+펜스=여전히 거부(부분 수용 없음)");
+  assert.strictEqual(CL.parseSelectorPageOutput("```json" + NL + NL + '{"relevant":["arc-1"]}' + NL + "```", valid).reason, "multiline", "★펜스 안 선행 빈 줄=거부(\\s가 개행을 삼키던 확인검증 blocker② 반례)");
 });
 
 t("합집합 상한 관문: K 이내=선별 전문(파일 순서 정렬)·K+1=overflow-items·바이트 초과=overflow-bytes(절단·요약 금지)", () => {

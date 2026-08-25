@@ -15,11 +15,30 @@ const {
   scoutHealthLine, maybeCleanupState, configWs, readImplementerRecordLocked, durableProofGate, readCodexTurnStrict, contractReadState,
   patchContractFields, activeAskJobFor, phaseBusy, contractLockIssue, withRoleLock, implementerRecordOf, validLinksShape, scoutArmView,
   verifyCampaignProgress, effectiveVerifyBudget, writeConstraintTurnSnapshot,
+  wsKeyFor, previewGateDecision, implementerEnvelopeInject,
 } = require("./contract-lib.js");
 const { validateCapHandoff, capHandoffInstruction, capHandoffContext, codexAssistantText } = require("./verify-cap-handoff.js");
 
 const TURN_DIR = path.join(BRIDGE_DIR, "codex-turns");
 const ATTEMPT_DIR = path.join(BRIDGE_DIR, "codex-verify-attempts");
+// [4b-2 §4-③] Codex PreToolUse 실측 표식·미호출 불신 플래그 — '미호출=중단'의 재료.
+// marker=세션별(PreToolUse가 실제 발화했다는 증거) / distrust=ws별(사후 훅이 사전 표식 없이 관측된 실측 —
+// Codex가 새 훅(PreToolUse)을 신뢰 미승인 등으로 안 부르는 상태). distrust는 PreToolUse 실측 시 자동 해제.
+const PRETOOL_DIR = path.join(BRIDGE_DIR, "codex-pretool");
+// 표식=호출별 파일(sid+tool_use_id — 2차 확인검증 blocker: 턴 결속만으로는 같은 턴의 두 번째 호출에서 사전
+// 관문 누락이 가려짐). id 미제공 플랫폼=세션 공용 파일로 축퇴하되 아래 '소비' 규칙이 호출 짝(사전 1회=사후
+// 1회)을 여전히 강제한다.
+function pretoolMarkerFile(sid, toolUseId) { return path.join(PRETOOL_DIR, safe(sid) + (toolUseId ? "-" + safe(String(toolUseId)) : "") + ".json"); }
+function pretoolDistrustFileFor(ws) { return path.join(PRETOOL_DIR, "distrust-" + wsKeyFor(ws) + ".json"); }
+// 사후 훅의 표식 관측: '이 호출(tool_use_id)·이 턴' 표식을 대조하고 성공 시 소비(삭제) — 표식 하나가 정확히
+// 사후 하나만 보증(과거 호출·과거 턴 표식의 재사용 불가). 반환 true=사전 관문 실측 확인.
+function pretoolObserveMarker(sid, j) {
+  const f = pretoolMarkerFile(sid, String((j && j.tool_use_id) || ""));
+  const mk = read(f);
+  if (!mk || String(mk.turnId || "") !== String((j && j.turn_id) || "")) return false;
+  try { fs.rmSync(f, { force: true }); } catch { /* 소비 실패=다음 관측이 재사용 위험 — 파일 시스템 오류는 국소 */ }
+  return true;
+}
 const SCOUT_ATTEMPT_DIR = path.join(BRIDGE_DIR, "codex-scout-attempts");
 const MAX_VERIFY_ATTEMPTS = 3, MAX_SCOUT_ATTEMPTS = 2;
 function safe(s) { return String(s || "").replace(/[^0-9a-zA-Z._-]/g, "_"); }
@@ -389,9 +408,37 @@ function onPrompt(j, ws, sid, c, roleRevision, preface, prePinned) {
   const turnState = { schema:"codex-turn-v1", turnId, workspace:ws, startedAt:Date.now(), lastActionAt:0, modified:false, permissionMode:j.permission_mode||"" };
   const turnSaved = save(stateFile(TURN_DIR,sid), turnState) || save(stateFile(TURN_DIR,sid), turnState);
   try { writePhase("codex-implementing", { round:0, session:sid, workspace:ws }); } catch { /* display only */ }
-  const ctx = implementerContext(j, ws, c);
+  let ctx = implementerContext(j, ws, c);
+  // [4b-2 이중 배달 §4] Codex 구현자 주입 — 코어 ab 전문(상시)+턴 결속 선별 캐시/미리보기 안내.
+  // Claude 훅(contract-inject)과 '같은 함수'(implementerEnvelopeInject) — 양 훅 공통 계약·advisory(실패=미주입).
+  try { const ei9 = implementerEnvelopeInject(ws, c, loadLang(), capFields ? capFields.constraintSourceHash : "", capFields ? capFields.constraintAnchor : ""); if (ei9) ctx += (ctx ? "\n\n" : "") + ei9; } catch { /* advisory */ }
+  try { // [미호출=중단] 턴 시작 시점 고지(강제는 Stop 차단이 담당 — 사람이 이유를 먼저 보게)
+    if (typeof c.archiveHash === "string" && c.archiveHash && fs.existsSync(pretoolDistrustFileFor(ws))) ctx += (ctx ? "\n\n" : "") + t("[서고 관문 중단] 변경 도구 호출 전 관문(PreToolUse)이 불리지 않는 상태가 실측돼 이 프로젝트의 Codex 구현 작업이 중단 상태입니다 — Codex 훅 신뢰(/hooks)에서 승인하면 관문 호출 관측 시 자동 재개됩니다.", "[Archive gate halted] The pre-tool gate (PreToolUse) was measured as not firing — Codex implementation work is halted for this project. Approve it in Codex hook trust (/hooks); work resumes when the gate is observed firing.");
+  } catch { /* 고지 실패 무해 */ }
   const body = turnSaved ? ctx : t("[Codex Bridge] 턴 상태 기록에 실패했습니다 — 이 턴 종료 시 검증 게이트가 턴 상태 재기록을 요구할 수 있습니다.\n\n","[Codex Bridge] Failed to record the turn state — the verification gate may ask to rewrite it when this turn stops.\n\n") + ctx;
   context("UserPromptSubmit", preface ? preface + body : body); // [P-9] body가 비어도 전환 고지는 단독 출력
+}
+// [4b-2 §4-③] Codex PreToolUse — ①실측 표식 기록+불신 플래그 자동 해제(신뢰 회복=실측) ②Claude와 '같은'
+// 게이트 판정(previewGateDecision 공용 — 서고 활성 시 preview 영수증까지 변경 도구 지속 차단·예외=미리보기
+// 명령 자체·미도입/스냅샷 부재=무발동). 훅 안 LLM 호출 없음(존재 검사뿐).
+function onPreTool(j, ws, sid, c) {
+  // 표식=세션별(자기 sid 파일에만 씀 — 사후 훅이 같은 sid+같은 턴으로만 대조). 불신 해제는 '구현자 세션의
+  // 실측'만 인정(1차 blocker① — 타 세션의 PreToolUse가 구현 세션이 만든 불신 플래그를 지우는 경로 차단).
+  try { save(pretoolMarkerFile(sid, String(j.tool_use_id || "")), { schema: "codex-pretool-v1", ts: Date.now(), turnId: String(j.turn_id || ""), toolUseId: String(j.tool_use_id || "") }); } catch { /* 표식 실패=불신 감지가 보수적으로 남음 */ }
+  if (!sameImplementer(ws, sid)) return;
+  try { if (fs.existsSync(pretoolDistrustFileFor(ws))) fs.rmSync(pretoolDistrustFileFor(ws), { force: true }); } catch { /* 해제 실패=Stop 안내 유지 */ }
+  const act = readCodexActive(sid) || {};
+  const d9 = previewGateDecision({
+    archiveHash: c.archiveHash,
+    turnAnchor: act.constraintAnchor || "",
+    snapshotHash: act.constraintSourceHash || "",
+    wsKey: wsKeyFor(ws),
+    toolName: String(j.tool_name || j.tool || ""),
+    command: String((j.tool_input && j.tool_input.command) || ""),
+  });
+  if (d9 === "block") block(t(
+    `⛔ 승인 서고(2층 수칙서) 활성 — 변경 도구를 쓰기 전에 '이번 작업 선별 수칙'을 먼저 받아야 합니다. 실행: node "${path.join(BRIDGE_DIR, "codex-bridge.js")}" selector-preview (그 영수증이 이 턴의 나머지 작업에 대해 이 관문을 엽니다)`,
+    `⛔ Approved archive (two-tier rulebook) is active — pull the rules selected for THIS task before changing anything. Run: node "${path.join(BRIDGE_DIR, "codex-bridge.js")}" selector-preview (its receipt opens this gate for the rest of the turn)`));
 }
 function onTool(j, ws, sid, c) {
   if(!sameImplementer(ws,sid)) return;
@@ -400,7 +447,20 @@ function onTool(j, ws, sid, c) {
   const name=String(j.tool_name||j.tool||"");
   // PostToolUse에는 사전 스냅샷이 없으므로 Bash/MCP는 보수적으로 변경 가능 신호로 본다. 실제 git dirty만
   // 보다가 같은 턴 commit이나 비-git 쓰기를 놓쳐 검증을 우회하는 것보다 필요 시 한 번 더 검증하는 편이 안전하다.
-  if(/^(Bash|apply_patch|Edit|Write|MultiEdit|NotebookEdit)$/i.test(name)||/^mcp__/i.test(name)){s.modified=true;s.lastActionAt=Date.now();}
+  if(/^(Bash|apply_patch|Edit|Write|MultiEdit|NotebookEdit)$/i.test(name)||/^mcp__/i.test(name)){
+    s.modified=true;s.lastActionAt=Date.now();
+    // [4b-2 §4-③ 미호출=중단 감지] 서고 활성인데 '이 세션·이 턴'의 PreToolUse 표식 없이 변경 도구의 사후
+    // 훅만 관측됨=사전 관문이 안 불리고 있다는 실측(신규 훅 신뢰 미승인 구간 포함) → ws 불신 플래그 기록.
+    // 턴 결속(1차 blocker①): 과거 턴의 표식이 영구 신뢰로 남지 않게 marker.turnId=현재 턴 대조(사전·사후가
+    // 같은 유도식 j.turn_id — 플랫폼이 도구 이벤트에 턴 id를 안 실으면 양쪽 다 빈 값으로 세션 결속 축퇴·결정론).
+    // Stop이 이 플래그를 보고 승인 서고 활성 Codex 구현 작업을 중단시킨다(ask-start 후퇴 금지 — 설계 §4-③).
+    if (typeof c.archiveHash === "string" && c.archiveHash) {
+      try {
+        // 호출별 대조+소비(pretoolObserveMarker) — 같은 턴의 이전 호출 표식이 뒤 호출의 미호출을 못 가림(2차 확인검증 blocker).
+        if (!pretoolObserveMarker(sid, j)) { fs.mkdirSync(PRETOOL_DIR, { recursive: true }); atomicWrite(pretoolDistrustFileFor(ws), JSON.stringify({ schema: "codex-pretool-distrust-v1", ts: new Date().toISOString(), session: sid, tool: name, toolUseId: String(j.tool_use_id || ""), turn: String(j.turn_id || "") })); }
+      } catch { /* 기록 실패=다음 관측이 재시도 */ }
+    }
+  }
   if(!save(f,s))save(f,s); // 저장 실패 침묵 금지 — 1회 재시도(끝내 실패하면 Stop의 정확 판독이 차단으로 잡는다)
 }
 function scoutGate(j, ws, sid, c, s) {
@@ -432,6 +492,14 @@ function onStop(j, ws, sid, c) {
   const sRes = readCodexTurnStrict(sid, ws);
   if (!sRes.ok) { block(t(`이번 턴 상태를 읽을 수 없습니다(${sRes.reason}). 구현 대화에서 새 프롬프트를 한 번 보내 턴 상태를 재기록한 뒤 이어가세요.`, `Cannot read this turn's state (${sRes.reason}). Send one new prompt in the implementer conversation to rewrite the turn state, then continue.`)); return; }
   const s = sRes.turn;
+  // [4b-2 §4-③ 미호출=중단] 서고 활성+불신 플래그=이 프로젝트의 Codex 구현 작업 중단(후퇴 금지) —
+  // 재개 조건=Codex 훅 신뢰 승인 후 PreToolUse가 실제 관측되면(onPreTool이 플래그 자동 해제) 재개.
+  if (typeof c.archiveHash === "string" && c.archiveHash) {
+    let dis9 = false; try { dis9 = fs.existsSync(pretoolDistrustFileFor(ws)); } catch { dis9 = false; }
+    if (dis9) { block(t(
+      "⛔ 승인 서고 활성인데 변경 도구 호출 전 관문(PreToolUse)이 불리지 않는 상태가 실측됐습니다 — 이 프로젝트의 Codex 구현 작업을 중단합니다. Codex의 훅 신뢰 승인(/hooks)에서 codex-hook의 PreToolUse를 승인하세요. 관문 호출이 다시 관측되면 자동으로 재개됩니다.",
+      "⛔ The approved archive is active but the pre-tool gate (PreToolUse) was measured as not firing — Codex implementation work on this project is halted. Approve codex-hook's PreToolUse in Codex hook trust (/hooks). Work resumes automatically once the gate is observed firing again.")); return; }
+  }
   if(scoutGate(j,ws,sid,c,s)) return;
   const gitTs=gitChangedMaxMtime(ws); const edited=!!s.modified || gitTs>Number(s.startedAt||0);
   const planned=j.permission_mode==="plan";
@@ -520,7 +588,8 @@ function main(raw){
   }
   if(ev==="SessionStart")return onSessionStart(j,ws,sid,c,roleRevision);
   if(ev==="UserPromptSubmit")return onPrompt(j,ws,sid,c,roleRevision,preface,prePinned);
-  if(ev==="PreToolUse"||ev==="PostToolUse")return onTool(j,ws,sid,c);
+  if(ev==="PreToolUse")return onPreTool(j,ws,sid,c); // [4b-2] 사전 관문(실측 표식+게이트) — 사후(onTool)와 분리
+  if(ev==="PostToolUse")return onTool(j,ws,sid,c);
   if(ev==="Stop"){
     // 검증 게이트만은 미지 예외도 성공으로 새면 안 된다(sReal 잔재 ReferenceError 무음 통과 실사고 —
     // 구현 검증 2차 지적 1). 상세는 stderr, 사용자에겐 사유 코드만.
@@ -534,7 +603,7 @@ function main(raw){
 // [P-9 4차] 테스트 주입구: 훅 실행(require.main)일 때만 stdin을 구동 — 테스트는 require로 내부 결정 함수
 // (역할 세대 CAS 원복 등)를 실행 반례로 검증한다(두 프로세스 경합을 단일 프로세스에서 결정론 재현).
 if (require.main !== module) {
-  module.exports = { classifyPromptSource, revertOnPinFailure, revertSwitchIfRoleUnchanged, heartbeat };
+  module.exports = { classifyPromptSource, revertOnPinFailure, revertSwitchIfRoleUnchanged, heartbeat, onPreTool, pretoolMarkerFile, pretoolDistrustFileFor, pretoolObserveMarker, PRETOOL_DIR };
 } else {
 let buf="";process.stdin.on("data",d=>buf+=d);process.stdin.on("end",()=>{try{main(buf);}catch(e){
   try{

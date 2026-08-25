@@ -27,10 +27,13 @@ function codexPeekPluginState(stdout){
     return p?{present:true,enabled:p.enabled!==false,pluginId:String(p.pluginId||"")}:{present:false,enabled:false,pluginId:""};
   }catch{return{present:false,enabled:false,pluginId:""};}
 }
-const CODEX_PEEK_HOOK_EVENTS=["sessionStart","userPromptSubmit","postToolUse","stop"];
+const CODEX_PEEK_HOOK_EVENTS=["sessionStart","userPromptSubmit","preToolUse","postToolUse","stop"];
 const CODEX_PEEK_USER_HOOKS=[
   {event:"SessionStart",eventName:"sessionStart",matcher:"startup|resume",statusMessage:"Pinning the active Codex implementer session"},
   {event:"UserPromptSubmit",eventName:"userPromptSubmit",statusMessage:"Loading Codex Peek project rules"},
+  // [4b-2 §4-③] 사전 관문(5종째) — 서고 활성 시 preview 영수증까지 변경 도구 차단(Claude와 동일 게이트 계약).
+  // 미호출(신뢰 미승인 등)이 실측되면 codex-hook이 ws 불신 플래그를 세워 Stop이 구현 작업을 중단시킨다(후퇴 금지).
+  {event:"PreToolUse",eventName:"preToolUse",matcher:"Bash|apply_patch|Edit|Write|MultiEdit|NotebookEdit|mcp__.*",statusMessage:"Codex Peek archive-rules preview gate"},
   {event:"PostToolUse",eventName:"postToolUse",matcher:"Bash|apply_patch|Edit|Write|MultiEdit|NotebookEdit|mcp__.*",statusMessage:"Recording Codex Peek work signals"},
   {event:"Stop",eventName:"stop",statusMessage:"Checking Codex Peek verification gate"},
 ];
