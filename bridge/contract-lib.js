@@ -3771,7 +3771,7 @@ function readEnvelopeProposal(ws, repo) {
   const tb9 = typeof o.targetBaseHash === "string" ? o.targetBaseHash : (typeof o.baseHash === "string" ? o.baseHash : null);
   const cg9 = typeof o.candidateGeneration === "string" ? o.candidateGeneration : (typeof o.baseHash === "string" ? o.baseHash : null);
   return { st: "ok", proposalText: o.proposalText, newHash: o.newHash, baseHash: typeof o.baseHash === "string" ? o.baseHash : null, target: tgt9.target, targetBaseHash: tb9, candidateGeneration: cg9, note: typeof o.note === "string" ? o.note.slice(0, 300) : "", ts: typeof o.ts === "string" ? o.ts : null, candidateId: typeof o.candidateId === "string" && /^[0-9a-f]{16}$/.test(o.candidateId) ? o.candidateId : null,
-    candidateIds: Array.isArray(o.candidateIds) ? o.candidateIds.filter((x) => typeof x === "string" && /^[0-9a-f]{16}$/.test(x)).slice(0, ENVELOPE_ITEM_MAX) : [] };
+    candidateIds: Array.isArray(o.candidateIds) ? o.candidateIds.filter((x) => typeof x === "string" && /^[0-9a-f]{16}$/.test(x)).slice(0, ARCHIVE_ITEM_MAX) : [] }; // [4d blocker] 상한=서고 총용량(96) — 코어 12로 자르면 13번째부터 폐기 복원이 누락돼 adopted 고아화
 }
 function writeEnvelopeProposal(ws, repo, proposalText, note, meta) {
   const tgt9 = envelopeTargetDef(meta && meta.target); // [v6 §1] 대상=core(기본)|archive
@@ -3785,7 +3785,7 @@ function writeEnvelopeProposal(ws, repo, proposalText, note, meta) {
   // candidateId(2026-08-21 초안 폐기 복원): 초안이 어느 후보의 채택에서 왔는지 구조 결속 — 폐기 시 그 후보를
   // 판단 대기로 복원할 수 있게(고아 봉합·Constraint-Capture 설계 §3 복원 규칙의 선행 구현분).
   const cid9 = meta && typeof meta.candidateId === "string" && /^[0-9a-f]{16}$/.test(meta.candidateId) ? meta.candidateId : null;
-  const cids9 = meta && Array.isArray(meta.candidateIds) ? meta.candidateIds.filter((x) => typeof x === "string" && /^[0-9a-f]{16}$/.test(x)).slice(0, ENVELOPE_ITEM_MAX) : []; // 개정 작업대(2026-08-22) — 다건 결속
+  const cids9 = meta && Array.isArray(meta.candidateIds) ? meta.candidateIds.filter((x) => typeof x === "string" && /^[0-9a-f]{16}$/.test(x)).slice(0, ARCHIVE_ITEM_MAX) : []; // 개정 작업대(2026-08-22) 다건 결속 — [4d blocker] 상한=서고 총용량(96): 코어 12로 자르면 13번째부터 폐기 복원 누락(adopted 고아)
   const rec = { schema: "env-proposal-v1", repo: String(repo), proposalText: String(proposalText), newHash: sha1Of(String(proposalText)), baseHash, ...(tgt9.target === "archive" ? { target: "archive" } : {}), targetBaseHash: baseHash, ...(candidateGeneration ? { candidateGeneration } : {}), ...(note ? { note: String(note).slice(0, 300) } : {}), ...(cid9 ? { candidateId: cid9 } : {}), ...(cids9.length ? { candidateIds: cids9 } : {}), ts: new Date().toISOString() };
   try { fs.mkdirSync(ENVELOPE_PROPOSED_DIR, { recursive: true }); } catch { /* atomicWrite가 실패 판정 */ }
   return atomicWrite(envelopeProposedFileFor(ws), JSON.stringify(rec, null, 1)) ? { ok: true, newHash: rec.newHash } : { ok: false, error: "제안본 기록 실패" };

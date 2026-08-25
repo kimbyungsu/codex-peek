@@ -325,4 +325,21 @@ t("[4c UX] 승인 화면 배선 소스 핀: 요약 선행·'교체' 헤드라인
   assert.ok(ext.includes("다음 할 일: '초안 확인·승인'"), "대기 카드·생성 안내에 다음 단계 지시");
   assert.ok(/if \(lines\.length\) parts\.push\(lines\.join\("\\n"\)\);\s*\n\s*if \(pr\.note\) parts\.push\(/.test(ext), "★표시 순서=요약→note→전문(note 선행이면 '한눈 요약'이 첫 구조가 못 됨 — 1차 blocker③)");
 });
+t("★[4d blocker 반례] 13건 이상 서고 올림 초안→폐기=전 후보 판단 대기 복원(12 상한 절단의 adopted 고아 봉합)", () => {
+  const W6 = fs.mkdtempSync(path.join(os.tmpdir(), "envarc-many-ws-"));
+  const R6 = fs.mkdtempSync(path.join(os.tmpdir(), "envarc-many-repo-"));
+  fs.writeFileSync(path.join(R6, CL.ENVELOPE_FILE), coreRaw);
+  assert.strictEqual(CL.setEnvelopeHashAllSlots(W6, CORE_HASH), 2);
+  const ids6 = Array.from({ length: 13 }, (_, i) => "cc" + String(i).padStart(2, "0") + "000000000000");
+  CL.appendEnvelopeCandidates(W6, ids6.map((cid, i) => ({ candidateId: cid, envelopeHash: CORE_HASH, status: "proposed", kind: "resolved-blocker", title: "많은 수칙 " + (i + 1), ts: "T" })));
+  const r = CL.draftEnvelopeRevision(W6, R6, { addCandidateIds: ids6, removeItems: [], approvedHash: CORE_HASH, target: "archive" });
+  assert.strictEqual(r.ok, true, String(r.error || ""));
+  const pr = CL.readEnvelopeProposal(W6, R6);
+  assert.strictEqual(pr.candidateIds.length, 13, "★영수증 후보 결속=전량(코어 12 상한으로 절단 금지): " + pr.candidateIds.length);
+  const d = CL.discardEnvelopeProposalRestoring(W6);
+  assert.ok(d.ok && d.restored, "복원형 폐기 성공");
+  const { latest } = CL.readEnvelopeCandidates(W6);
+  const back = ids6.filter((cid) => (latest.get(cid + "@" + CORE_HASH) || {}).status === "proposed");
+  assert.strictEqual(back.length, 13, "★13건 전원 판단 대기 복원(13번째 이후 adopted 고아 없음): " + back.length + "/13");
+});
 console.log(`결과: ${n}/${n} 통과`);

@@ -373,7 +373,7 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   ok(/const lkP = acquireEnvelopeTransLock\(ws\);/.test(cb21) && /finally \{ releaseEnvelopeTransLock\(ws, lkP\.token\); \}/.test(cb21), "수동 envelope-proposal propose=전이 잠금 아래(우회 writer 0)");
   // [개정 작업대 2026-08-22] 올림 N+빼기 M→개정판 초안 1개→도장 1번
   ok(ext.includes('m?.type === "envelopeRevise"') && /wsKeyFor\(wsR9\)\) !== m\.wsKey/.test(ext) && ext.includes("(m.gen || null) !== (genNow9 || null)") && ext.includes("draftEnvelopeRevision"), "개정판 핸들러=strict 인자+wsKey·gen 재대조+빌더 호출");
-  ok(ext.includes('T("빼기 표시"') && ext.includes('개정판 초안 만들기 ("+(wbDest==="archive"?"→서고":"→코어")+" · 올림 "') && ext.includes("wbAdds") && ext.includes("wbRemoves") && ext.includes("wbGen"), "작업대 UI=빼기 토글·집계 버튼(4a: 목적지 표기)·선택 상태 세대 결속(재렌더 생존)");
+  ok(ext.includes('T("빼기 표시"') && ext.includes('초안 만들기 — 서고에 "+n+"건 올리기') && ext.includes("wbAdds") && ext.includes("wbRemoves") && ext.includes("wbGen"), "작업대 UI=빼기 토글·행동형 버튼 문구(4d: 목적지 자동)·선택 상태 세대 결속(재렌더 생존)");
   const clWB = fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8");
   ok(clWB.includes("function draftEnvelopeRevision(") && /draftEnvelopeRevision[\s\S]{0,1600}acquireEnvelopeTransLock\(ws\)/.test(clWB), "개정판 빌더=전이 잠금 아래(writer 직렬화 계약 합류 — 4a 목적지 분기로 머리 확장·잠금 계약 무변)");
   ok(ext.includes("자동으로 끝난 일(참고 — 하실 일 아님)") && ext.includes("지금 여기서 하실 일은 없습니다"), "MAP 구획=할 일/끝난 일 시각 분리(실적을 대기로 오독하는 흐름 봉합)");

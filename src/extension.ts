@@ -4119,14 +4119,18 @@ class Dashboard {
             if (typeof CLR.wsKeyFor !== "function" || String(CLR.wsKeyFor(wsR9)) !== m.wsKey) { vscode.window.showWarningMessage(enR9 ? "The active project changed — the card refreshes; please mark again." : "화면이 떠 있는 사이 활성 프로젝트가 바뀌었어요 — 카드가 갱신됩니다. 다시 표시해 주세요."); this.post(); return; }
             const genNow9 = (CLR.loadContract(wsR9) || {}).envelopeHash || null;
             if ((m.gen || null) !== (genNow9 || null)) { vscode.window.showWarningMessage(enR9 ? "The rulebook was re-approved while marking — selections reset; please mark again." : "표시하는 사이 수칙서가 재승인됐어요 — 선택이 초기화됩니다. 다시 표시해 주세요."); this.post(); return; }
-            const adds9 = m.adds.filter((x: any) => typeof x === "string" && /^[0-9a-f]{16}$/.test(x)).slice(0, 12);
-            const rem9 = m.removes.filter((r: any) => r && typeof r.axis === "string" && ["supportedEnv", "alwaysBlocker", "outOfScope"].includes(r.axis) && Number.isInteger(r.index) && r.index >= 0).slice(0, 36);
-            if (adds9.length !== m.adds.length || rem9.length !== m.removes.length || (!adds9.length && !rem9.length)) { vscode.window.showWarningMessage(enR9 ? "Invalid selection — the card refreshes." : "선택 형식이 올바르지 않아요 — 카드가 갱신됩니다."); this.post(); return; }
+            // [4d 실보고 봉합] 코어 시절 잔재 .slice(0,12)가 13건 이상 올림을 자르고는 '형식 오류'로 위장하던
+            // 버그 제거 — 형식 검사는 진짜 형식만, 개수는 서고 상한(96)으로 정직한 문구.
+            const adds9 = m.adds.filter((x: any) => typeof x === "string" && /^[0-9a-f]{16}$/.test(x));
+            const rem9 = m.removes.filter((r: any) => r && typeof r.axis === "string" && ["supportedEnv", "alwaysBlocker", "outOfScope"].includes(r.axis) && Number.isInteger(r.index) && r.index >= 0);
+            if (adds9.length !== m.adds.length || rem9.length !== m.removes.length) { vscode.window.showWarningMessage(enR9 ? "Invalid selection — the card refreshes." : "선택 형식이 올바르지 않아요 — 카드가 갱신됩니다."); this.post(); return; }
+            if (!adds9.length && !rem9.length) { vscode.window.showWarningMessage(enR9 ? "Nothing is marked — mark candidates or removals first." : "표시된 항목이 없어요 — 올림 또는 빼기를 먼저 표시해 주세요."); this.post(); return; }
+            if (adds9.length > 96) { vscode.window.showWarningMessage(enR9 ? `Up to 96 items per draft (archive capacity) — ${adds9.length} marked. Unmark some and retry.` : `한 초안에 최대 96건(서고 총 용량)까지 올릴 수 있어요 — 지금 ${adds9.length}건이 표시돼 있습니다. 일부를 해제하고 다시 시도해 주세요.`); this.post(); return; }
             const repoR9 = scoutTargetFor(wsR9).repo;
-            // [4a] 목적지: 기본=서고(설계 §1 — 코어 승격은 명시 선택). 빼기 표시는 현행 수칙서(코어) 항목 대상이라
-            // 서고 목적지와 한 초안에 섞일 수 없음 — 화면이 잠그지만 판 어긋남(구 화면) 방어로 여기서도 거부.
-            const dest9 = m.dest === "core" ? "core" : "archive";
-            if (dest9 === "archive" && rem9.length) { vscode.window.showWarningMessage(enR9 ? "Removals target the core rulebook — they cannot ride an archive draft. The card refreshes; please retry." : "빼기 표시는 현행 수칙서(코어) 대상이라 서고 초안에 실을 수 없어요 — 카드가 갱신됩니다. 다시 시도해 주세요."); this.post(); return; }
+            // [4d 실보고 봉합] 목적지=자동(사용자 선택 제거): 올림=서고(보관·작업마다 자동 선별)·빼기=현행
+            // 수칙서(코어). 두 목적지가 한 초안(도장 1번)에 못 실리므로 혼합 표시는 순서 안내로 갈라 처리.
+            if (adds9.length && rem9.length) { vscode.window.showWarningMessage(enR9 ? "Adds go to the archive and removals to the core rulebook — they need separate stamps. Build the adds draft first (removal marks stay), then the removal draft." : "올림(서고행)과 빼기(현행 수칙서)는 도장이 따로 필요해요. 먼저 한 쪽만 담아 주세요 — 올림 초안을 먼저 만들고(빼기 표시는 남아 있어요), 이어서 빼기 초안을 만들면 됩니다."); this.post(); return; }
+            const dest9 = adds9.length ? (m.dest === "core" ? "core" : "archive") : "core"; // 올림=서고 자동(구 런타임 폴백만 core)·빼기=코어 자동
             let rv9: any = null;
             try { rv9 = typeof CLR.draftEnvelopeRevision === "function" ? CLR.draftEnvelopeRevision(wsR9, repoR9, { addCandidateIds: adds9, removeItems: rem9, approvedHash: m.gen, target: dest9 }) : { ok: false, error: "old-runtime(node install.js 필요)" }; } catch { rv9 = { ok: false, error: "exception" }; }
             if (rv9 && rv9.ok) vscode.window.showInformationMessage((enR9 ? `Revision draft created (${rv9.target === "archive" ? "→ archive" : "→ core"} · add ${rv9.adds} · remove ${rv9.removes}). Existing items stay as-is. Next: press 'Review & approve draft' on the rulebook card — you'll see the change summary, then one stamp applies it.` : `개정판 초안을 만들었어요(${rv9.target === "archive" ? "→서고" : "→코어"} · 올림 ${rv9.adds}·빼기 ${rv9.removes}). 기존 항목은 그대로예요. 다음 할 일: 수칙서 카드의 '초안 확인·승인'을 누르면 바뀌는 것 요약이 보이고, 도장 1번으로 적용됩니다.`) + (rv9.parallelCopied ? (enR9 ? " Parallel axes copied verbatim — edit translations before stamping." : " 병렬 축은 원문 그대로 복제됐어요 — 도장 전에 번역·예시를 다듬어 주세요.") : ""));
@@ -7209,20 +7213,24 @@ class Dashboard {
           });
           // [4a] 서고 이상 경고 — broken=도장은 있는데 파일 소실/불일치(새 검증 시작 차단)·stray=도장 없는 파일
           if(e9.arc && (e9.arc.state==="broken"||e9.arc.state==="stray")){ var arcWarn=document.createElement("div"); arcWarn.style.cssText="margin-top:8px;font-size:12px;color:var(--vscode-editorWarning-foreground,#d4a017)"; arcWarn.textContent=e9.arc.state==="broken"?T("⚠ 서고(보관 수칙)가 도장 시점과 달라요 — 재승인 전까지 새 검증 시작이 막힙니다","⚠ the archive differs from its stamped state — new verifications are blocked until re-approval"):T("⚠ 도장 없는 서고 파일이 있어요 — 파일을 정리하기 전까지 서고 올림이 막힙니다","⚠ an unstamped archive file exists — archive adds are blocked until it is cleaned"); ec.appendChild(arcWarn); }
-          // [4a] 올림 목적지 — 기본=서고(2층·쌓아두면 작업마다 관련분만 자동 선별)·코어 승격=명시 선택.
-          // 빼기 표시는 현행 수칙서(코어) 항목 대상이라 서고 초안과 한 도장에 못 실림 → 빼기 존재 시 코어 고정.
-          var wbDest=e9.arc?"archive":"core"; var wbDestSync=null;
-          var wbDestWrap=document.createElement("div"); wbDestWrap.style.cssText="margin-top:8px;font-size:12px"; ec.appendChild(wbDestWrap);
-          var wbDestLbl=document.createElement("div"); wbDestLbl.className="muted"; wbDestLbl.style.cssText="font-size:11px;margin-bottom:2px"; wbDestWrap.appendChild(wbDestLbl);
-          var wbDestBtns={};
-          var mkDest=function(id,lab){ var b=document.createElement("button"); b.style.cssText="margin-right:6px;font-size:11px"; b.textContent=lab; b.onclick=function(){ if(b.disabled) return; wbDest=id; if(typeof wbSync9==="function") wbSync9(); }; wbDestWrap.appendChild(b); wbDestBtns[id]=b; };
-          var arcN9=e9.arc&&e9.arc.state==="active"?e9.arc.count:0, arcMax9=e9.arc?e9.arc.max:96, coreAb9=(e9.axes.alwaysBlocker||[]).length;
-          mkDest("archive",T("서고에 올림 (보관 "+arcN9+"/"+arcMax9+")","to archive ("+arcN9+"/"+arcMax9+")"));
-          mkDest("core",T("코어에 올림 (전량 주입 "+coreAb9+"/12)","to core ("+coreAb9+"/12)"));
-          wbDestSync=function(){ var lock=wbRemoves.size>0; if(lock)wbDest="core"; if(!e9.arc)wbDest="core"; wbDestBtns.archive.disabled=lock||!e9.arc; Object.keys(wbDestBtns).forEach(function(k){ var b=wbDestBtns[k], on=(wbDest===k); b.className=on?"":"secondary"; b.style.fontWeight=on?"600":""; }); wbDestLbl.textContent=lock?T("올림 목적지: 코어 고정 — 빼기 표시가 현행 수칙서(코어) 대상이라서요","destination: core (removals target the core rulebook)"):(!e9.arc?T("올림 목적지: 코어(구 런타임 — 서고는 node install.js 후)","destination: core (old runtime — archive after node install.js)"):T("올림 목적지 — 서고: 쌓아두면 작업마다 관련분만 자동 선별 · 코어: 매 검증 전량 주입(12칸)","destination — archive: stored, auto-selected per task · core: always fully injected (12 slots)")); };
+          // [4d 실보고 봉합 2026-08-25] 목적지 선택 제거 — 자동 규칙: 올림=서고(보관·작업마다 자동 선별)·
+          // 빼기=현행 수칙서. 사용자가 고를 것은 '무엇을 올리고 뺄지'뿐, 어디로 가는지는 시스템이 정한다.
+          // 구 런타임(서고 미지원)=코어 폴백(안내 1줄). 혼합 표시=버튼 문구가 순서를 안내(호스트도 갈라 안내).
+          var wbDest=e9.arc?"archive":"core";
+          var arcN9=e9.arc&&e9.arc.state==="active"?e9.arc.count:0, arcMax9=e9.arc?e9.arc.max:96;
+          var wbInfo=document.createElement("div"); wbInfo.className="muted"; wbInfo.style.cssText="font-size:11px;margin-top:8px"; ec.appendChild(wbInfo);
+          wbInfo.textContent=e9.arc
+            ? T("올린 후보는 서고(보관함 "+arcN9+"/"+arcMax9+")에 쌓이고, 작업마다 관련된 것만 자동으로 골라 실립니다. 빼기 표시는 현행 수칙서 항목에서 뺍니다.","Marked candidates go to the archive ("+arcN9+"/"+arcMax9+") and only the relevant ones are auto-selected per task; removal marks take items out of the current rulebook.")
+            : T("이 설치본은 서고 미지원 — 올림은 현행 수칙서(전량 주입 12칸)로 갑니다. node install.js 후 서고를 쓸 수 있어요.","This runtime lacks the archive — adds go to the core rulebook (12 slots). Run node install.js to enable the archive.");
           var wbBar=document.createElement("button"); wbBar.style.cssText="margin-top:8px;font-weight:700"; ec.appendChild(wbBar);
-          var wbNote=document.createElement("div"); wbNote.className="muted"; wbNote.style.cssText="font-size:11px;margin-top:2px"; wbNote.textContent=T("올림·빼기를 원하는 만큼(1건 단독도) 담아 개정판 초안 1개를 만들고, 도장 1번으로 적용합니다.","Bundle any number of adds/removals (a single change is fine) into one revision draft, then one stamp."); ec.appendChild(wbNote);
-          wbSync9=function(){ if(typeof wbDestSync==="function") wbDestSync(); var n=wbAdds.size, m=wbRemoves.size; if(n+m>0){ wbBar.style.display=""; wbNote.style.display=""; wbBar.textContent=T("개정판 초안 만들기 ("+(wbDest==="archive"?"→서고":"→코어")+" · 올림 "+n+" · 빼기 "+m+")","Build revision draft ("+(wbDest==="archive"?"→archive":"→core")+" · add "+n+" · remove "+m+")"); } else { wbBar.style.display="none"; wbNote.style.display="none"; } };
+          var wbNote=document.createElement("div"); wbNote.className="muted"; wbNote.style.cssText="font-size:11px;margin-top:2px"; wbNote.textContent=T("초안을 만들어도 아직 아무것도 바뀌지 않아요 — 요약을 확인하고 도장 1번을 찍어야 적용됩니다.","Building a draft changes nothing yet — review the summary, then one stamp applies it."); ec.appendChild(wbNote);
+          wbSync9=function(){ var n=wbAdds.size, m=wbRemoves.size; wbDest=e9.arc?"archive":"core";
+            if(n+m>0){ wbBar.style.display=""; wbNote.style.display="";
+              wbBar.textContent=(n&&m)
+                ? T("한 쪽만 먼저: 올림 "+n+"건(서고행)과 빼기 "+m+"건은 도장이 따로예요","One side first: "+n+" add(s) and "+m+" removal(s) need separate stamps")
+                : n ? (e9.arc?T("초안 만들기 — 서고에 "+n+"건 올리기","Build draft — add "+n+" to the archive"):T("초안 만들기 — 수칙서에 "+n+"건 올리기","Build draft — add "+n+" to the rulebook"))
+                : T("초안 만들기 — 현행 수칙서에서 "+m+"건 빼기","Build draft — remove "+m+" from the rulebook");
+            } else { wbBar.style.display="none"; wbNote.style.display="none"; } };
           wbBar.onclick=function(){ var removes=[...wbRemoves].map(function(k){ var i=k.lastIndexOf("|"); return { axis:k.slice(0,i), index:Number(k.slice(i+1)) }; }); vscode.postMessage({type:"envelopeRevise", adds:[...wbAdds], removes:removes, dest:wbDest, gen:String(e9.gen||""), wsKey:String(e9.wsKey||""), lang:e9.lang}); };
           wbSync9();
         }
