@@ -1103,7 +1103,7 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
         const pr9 = CL9.readEnvelopeProposal(ws, repo9);
         if (pr9 && pr9.st === "ok") {
           const cp9 = candsFor9(); // 초안 대기 중에도 남은 후보 열람(2026-08-21 실보고 — 사라진 게 아님을 표시)
-          return { label: tE("🔔 수칙서 개정 초안이 승인을 기다려요 — 지금 적용 중인 수칙서는 그대로이고, 초안 내용을 확인한 뒤 도장을 찍어야만 바뀝니다", "🔔 A rulebook revision draft awaits approval — the active rulebook is unchanged; it changes only after you review and stamp the draft") + (pr9.note ? tE(" (메모: ", " (note: ") + pr9.note + ")" : ""), btn: tE("초안 확인·승인", "Review & approve draft"), btn2: tE("초안 보기", "View draft"), btn3: tE("초안 폐기(수칙서 무변)", "Discard draft (rulebook unchanged)"), repo: repo9, tone: "warn", lang: slot, proposal: "pending", candsView: "pending-draft", ...(cp9 ? { cands: cp9 } : {}) }; // btn3=폐기(2026-08-21 실보고 — 화면에 폐기 경로 부재 봉합)
+          return { label: tE("🔔 개정 초안이 승인을 기다려요 — 기존 항목은 그대로 있고, 표시하신 올림·빼기만 반영됩니다. 다음 할 일: '초안 확인·승인'을 누르면 바뀌는 것 요약(유지/올림/빼기)이 보이고, 도장 1번으로 적용돼요(그 전까지 수칙서 무변)", "🔔 A revision draft awaits approval — existing items stay; only your marked adds/removals apply. Next: press 'Review & approve' to see the at-a-glance change summary (kept/added/removed), then one stamp applies it (nothing changes before that)") + (pr9.note ? tE(" (메모: ", " (note: ") + pr9.note + ")" : ""), btn: tE("초안 확인·승인", "Review & approve draft"), btn2: tE("초안 보기", "View draft"), btn3: tE("초안 폐기(수칙서 무변)", "Discard draft (rulebook unchanged)"), repo: repo9, tone: "warn", lang: slot, proposal: "pending", candsView: "pending-draft", ...(cp9 ? { cands: cp9 } : {}) }; // btn3=폐기(2026-08-21 실보고) · [4c UX] '다음 할 일'+유지 보장 문구(교체 오해 봉합 — 사용자 실보고 2026-08-25)
         }
         if (pr9 && pr9.st === "corrupt")
           return { label: tE("수칙서 개정 초안 파일이 손상돼 승인 화면에 올릴 수 없어요 — 초안을 다시 작성해 달라고 요청하세요(적용 중인 수칙서는 무사)", "The rulebook draft file is corrupt and cannot be shown for approval — ask for the draft to be rewritten (the active rulebook is intact)"), btn: null, btn2: null, repo: repo9, tone: "warn", lang: slot, proposal: "corrupt" };
@@ -1152,6 +1152,28 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
     })();
     return { label: tE(`적용 중 — 지원 ${n9[0]}·절대 ${n9[1]}·범위밖 ${n9[2]}항목이 검증 판정 경계로 주입돼요(파일을 고치면 재승인 전까지 중단)`, `Active — ${n9[0]}/${n9[1]}/${n9[2]} items injected as the judging boundary (edits suspend it until re-approval)`) + adm9, btn: null, btn2: tE("내용 보기", "View details"), repo: repo9, tone: "ok", lang: slot, gen: hash9 || "", axes: axes9, wsKey: (() => { try { return typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : ""; } catch { return ""; } })(), ...(arc9 ? { arc: arc9 } : {}), ...(cands9 ? { cands: cands9 } : {}) };
   } catch { return null; }
+}
+// [4c UX] 초안 승인·열람 모달의 '바뀌는 것 요약' — 전문 벽 대신 유지/올림/빼기를 먼저 보여준다(사용자 실보고
+// 2026-08-25: '교체' 문구가 기존 수칙 삭제로 오해됨). 요약 계산 실패=전문만(요약이 승인을 막지 않음).
+function draftSummaryDetail(CLA: any, repo: string, pr: any, en: boolean): string {
+  let d: any = null;
+  try { d = typeof CLA.envelopeDraftDiff === "function" ? CLA.envelopeDraftDiff(repo, pr) : null; } catch { d = null; }
+  const lines: string[] = [];
+  if (d) {
+    const dest = d.target === "archive" ? (en ? "archive (stored rules)" : "서고(보관 수칙)") : (en ? "core (always fully injected)" : "코어(매 검증 전량 주입)");
+    lines.push(en ? `[What changes — at a glance · destination: ${dest}]` : `[바뀌는 것 — 한눈 요약 · 목적지: ${dest}]`);
+    if (d.firstTime) lines.push(en ? `First adoption — a new document is created holding ${d.added.length} item(s).` : `첫 등재 — 문서가 새로 만들어지고 아래 ${d.added.length}항이 담깁니다.`);
+    else lines.push(en ? `kept as-is: ${d.kept} · newly added: ${d.added.length} · removed: ${d.removed.length}` : `그대로 유지 ${d.kept}항 · 새로 올림 ${d.added.length}항 · 빼기 ${d.removed.length}항`);
+    for (const a of d.added) lines.push("＋ " + a.text);
+    for (const r of d.removed) lines.push("－ " + r.text);
+    if (!d.removed.length && !d.firstTime) lines.push(en ? "(nothing is removed — every existing item stays)" : "(빼는 항목 없음 — 기존 항목은 전부 그대로예요)");
+  }
+  // [1차 blocker③] 순서=요약 → note → 전문 — 개정 초안은 note가 항상 있어 note 선행이면 '한눈 요약'이 첫 구조가 못 됨
+  const parts: string[] = [];
+  if (lines.length) parts.push(lines.join("\n"));
+  if (pr.note) parts.push((en ? "[note] " : "[안내] ") + pr.note);
+  parts.push((en ? "──── full text (for audit) ────" : "──── 전문(감사용) ────") + "\n" + pr.proposalText);
+  return parts.join("\n\n");
 }
 function patchContractOnceExt(ws: string | null, lang: Lang | undefined, patch: Record<string, unknown>): ContractPatchRes {
   const lib = bridgeLib();
@@ -4107,7 +4129,7 @@ class Dashboard {
             if (dest9 === "archive" && rem9.length) { vscode.window.showWarningMessage(enR9 ? "Removals target the core rulebook — they cannot ride an archive draft. The card refreshes; please retry." : "빼기 표시는 현행 수칙서(코어) 대상이라 서고 초안에 실을 수 없어요 — 카드가 갱신됩니다. 다시 시도해 주세요."); this.post(); return; }
             let rv9: any = null;
             try { rv9 = typeof CLR.draftEnvelopeRevision === "function" ? CLR.draftEnvelopeRevision(wsR9, repoR9, { addCandidateIds: adds9, removeItems: rem9, approvedHash: m.gen, target: dest9 }) : { ok: false, error: "old-runtime(node install.js 필요)" }; } catch { rv9 = { ok: false, error: "exception" }; }
-            if (rv9 && rv9.ok) vscode.window.showInformationMessage((enR9 ? `Revision draft created (${rv9.target === "archive" ? "→ archive" : "→ core"} · add ${rv9.adds} · remove ${rv9.removes}) — review via 'View draft' and stamp to apply.` : `개정판 초안을 만들었어요(${rv9.target === "archive" ? "→서고" : "→코어"} · 올림 ${rv9.adds}·빼기 ${rv9.removes}) — '초안 보기'로 확인 후 도장을 찍어야 적용됩니다.`) + (rv9.parallelCopied ? (enR9 ? " Parallel axes copied verbatim — edit translations before stamping." : " 병렬 축은 원문 그대로 복제됐어요 — 도장 전에 번역·예시를 다듬어 주세요.") : ""));
+            if (rv9 && rv9.ok) vscode.window.showInformationMessage((enR9 ? `Revision draft created (${rv9.target === "archive" ? "→ archive" : "→ core"} · add ${rv9.adds} · remove ${rv9.removes}). Existing items stay as-is. Next: press 'Review & approve draft' on the rulebook card — you'll see the change summary, then one stamp applies it.` : `개정판 초안을 만들었어요(${rv9.target === "archive" ? "→서고" : "→코어"} · 올림 ${rv9.adds}·빼기 ${rv9.removes}). 기존 항목은 그대로예요. 다음 할 일: 수칙서 카드의 '초안 확인·승인'을 누르면 바뀌는 것 요약이 보이고, 도장 1번으로 적용됩니다.`) + (rv9.parallelCopied ? (enR9 ? " Parallel axes copied verbatim — edit translations before stamping." : " 병렬 축은 원문 그대로 복제됐어요 — 도장 전에 번역·예시를 다듬어 주세요.") : ""));
             else vscode.window.showWarningMessage((enR9 ? "Draft failed: " : "개정판 생성 실패: ") + String((rv9 && rv9.error) || "unknown"));
           } catch { vscode.window.showWarningMessage(enR9 ? "Draft failed." : "개정판 생성에 실패했어요."); }
           this.post(); return;
@@ -4133,10 +4155,10 @@ class Dashboard {
         if (m?.type === "proposalShow" && typeof m.repo === "string" && m.repo) { // §7 증분 2 — 초안 열람(승인 아님)
           const wsP = dashboardWorkspace(); if (!wsP) return;
           const enP = (m.lang === "en");
-          let prP: any = null;
-          try { const CL9: any = require(path.join(BRIDGE_DIR, "contract-lib.js")); prP = typeof CL9.readEnvelopeProposal === "function" ? CL9.readEnvelopeProposal(wsP, m.repo) : null; } catch { prP = null; }
+          let prP: any = null, CLP9: any = null;
+          try { CLP9 = require(path.join(BRIDGE_DIR, "contract-lib.js")); prP = typeof CLP9.readEnvelopeProposal === "function" ? CLP9.readEnvelopeProposal(wsP, m.repo) : null; } catch { prP = null; }
           if (!prP || prP.st !== "ok") { vscode.window.showWarningMessage(enP ? "Cannot read the draft." : "초안을 읽을 수 없어요."); this.post(); return; }
-          vscode.window.showInformationMessage(enP ? "Rulebook revision draft (view only — the active rulebook is unchanged)" : "수칙서 개정 초안(열람 전용 — 지금 적용 중인 수칙서는 그대로예요)", { modal: true, detail: (prP.note ? (enP ? "[note] " : "[안내] ") + prP.note + "\n\n" : "") + prP.proposalText }, enP ? "Close" : "닫기"); // [기억 권위 A-4] 병렬 축 복제 경고(note)를 열람 모달에 동반 · 절단 금지(재검증 blocker② — 상한은 제안본 strict가 보증해 전문이 유계)
+          vscode.window.showInformationMessage(enP ? "Rulebook revision draft (view only — the active rulebook is unchanged)" : "수칙서 개정 초안(열람 전용 — 지금 적용 중인 수칙서는 그대로예요)", { modal: true, detail: draftSummaryDetail(CLP9, m.repo, prP, enP) }, enP ? "Close" : "닫기"); // [기억 권위 A-4] note 경고 동반 · 절단 금지 · [4c UX] 요약 선행(유지/올림/빼기)
           return;
         }
         if (m?.type === "proposalRecover") { // §7 증분 2 — 중단 전이 복구(승인 순간의 내용으로 수렴 — 새 도장 아님)
@@ -4159,11 +4181,11 @@ class Dashboard {
           try { CLA = require(path.join(BRIDGE_DIR, "contract-lib.js")); prA = typeof CLA.readEnvelopeProposal === "function" ? CLA.readEnvelopeProposal(wsA, tgtA) : null; } catch { prA = null; }
           if (!prA || prA.st !== "ok" || typeof CLA.applyEnvelopeTransition !== "function") { vscode.window.showWarningMessage(enA ? "Cannot read the draft — approval aborted." : "초안을 읽을 수 없어 승인할 수 없어요."); this.post(); return; }
           const hashAt = String(prA.newHash);
-          const okA = enA ? "Reviewed the draft — stamp & apply" : "초안을 확인했고 도장을 찍어 적용합니다";
+          const okA = enA ? "Reviewed the summary — stamp & apply" : "요약을 확인했고 도장을 찍어 적용합니다";
           const msgA = enA
-            ? "Approve the rulebook REVISION draft — the full text below replaces the current rulebook the moment you stamp (until then nothing changes). If you disagree with any item, cancel and tell the implementer what to change; the draft gets rewritten. To withdraw entirely: ask to discard the draft — the current rulebook stays as is."
-            : "수칙서 '개정 초안' 승인 — 도장을 찍는 순간 아래 전문이 현재 수칙서를 교체합니다(그 전까지는 아무것도 바뀌지 않아요). 동의하지 않는 항목이 있으면 취소하고 바꿀 점을 구현모델에게 말씀해 주세요 — 초안을 다시 씁니다. 전체 철회를 원하면 초안 폐기를 요청하시면 되고, 현재 수칙서는 그대로 유지됩니다.";
-          vscode.window.showInformationMessage(msgA, { modal: true, detail: (prA.note ? (enA ? "[note] " : "[안내] ") + prA.note + "\n\n" : "") + prA.proposalText }, okA).then((sel) => { // [기억 권위 A-4] 승인 모달에도 note 경고 노출(구현검증 1차 blocker④) · 절단 금지 — 못 본 후반부에 도장이 찍히는 경로 차단(재검증 blocker②)
+            ? "Stamp the rulebook revision — existing items stay as they are; only the adds/removals in the summary below apply (until you stamp, nothing changes). Disagree with an item? Cancel and tell the implementer what to change — the draft gets rewritten. To withdraw entirely, ask to discard the draft (the rulebook stays untouched)."
+            : "수칙서 개정판 도장 — 기존 항목은 그대로 있고, 아래 요약의 올림·빼기만 반영됩니다(도장 전까지는 아무것도 바뀌지 않아요). 동의하지 않는 항목이 있으면 취소하고 바꿀 점을 구현모델에게 말씀해 주세요 — 초안을 다시 씁니다. 전체 철회를 원하면 초안 폐기(수칙서 무변)를 요청하시면 됩니다.";
+          vscode.window.showInformationMessage(msgA, { modal: true, detail: draftSummaryDetail(CLA, tgtA, prA, enA) }, okA).then((sel) => { // [기억 권위 A-4] note 경고 노출·절단 금지(전문은 요약 아래 감사용으로 유지 — 재검증 blocker②) · [4c UX] 요약 선행
             if (sel !== okA) return;
             const wsNow2 = dashboardWorkspace(); // 재검증 blocker④(ab-1): 모달 사이 대상 변경=중단(직접 승인 경로 동형)
             const tgtNow2 = wsNow2 ? scoutTargetFor(wsNow2).repo : null;

@@ -530,7 +530,7 @@ t("B4·B5 소스 계약: 출력 합류·대시보드 표면(더 보기·draft �
   assert.ok(!/\(cc9\.live \|\| \[\]\)\.slice\(0, 8\)/.test(ext), "8건 절단 제거(전량 전달)");
   assert.ok(ext.includes("data-candmore"), "웹뷰 더 보기 접힘");
   assert.ok(ext.includes('m.kind === "resolved-blocker"') && ext.includes("CLM.draftEnvelopeCandidate"), "채택 버튼=draft 실행 표면");
-  assert.ok((ext.match(/prP\.note|prA\.note/g) || []).length >= 2, "열람·승인 모달 note 노출");
+  assert.ok(/function draftSummaryDetail[\s\S]{0,1600}pr\.note/.test(ext) && ext.includes("draftSummaryDetail(CLP9, m.repo, prP") && ext.includes("draftSummaryDetail(CLA, tgtA, prA"), "열람·승인 모달 note 노출 — 공용 요약 렌더러 경유(4c UX: 두 모달이 같은 함수로 note+요약+전문)");
   assert.ok(ext.includes("kind: cd.kind"), "candMark에 kind 전달");
 });
 

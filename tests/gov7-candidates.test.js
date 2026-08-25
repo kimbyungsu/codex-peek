@@ -269,10 +269,10 @@ console.log("[10] 배선 소스 계약 — ask 상호배제·대시보드 배지
   ok(src.includes("envelopeTransState(ws)") && src.includes('st9 === "busy"') && src.includes('st9 === "recover-needed"'), "ask-start에 전이 상호배제(산 잠금=재시도 후 거부·WAL=복구 안내)");
   ok(src.includes('case "envelope-proposal"') && src.includes('case "envelope-transition"') && !/cmdEnvelopeProposal[\s\S]{0,3000}approve/.test(src.slice(src.indexOf("function cmdEnvelopeProposal"))), "CLI=propose/show/discard·recover만 — approve 없음(도장=대시보드 전용)");
   const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
-  ok(ext.includes("수칙서 개정 초안이 승인을 기다려요") && ext.includes('proposal: "pending"'), "대기 배지(🔔·원본 무변 명시 — 사용자 요구)");
+  ok(ext.includes("개정 초안이 승인을 기다려요 — 기존 항목은 그대로 있고") && ext.includes('proposal: "pending"'), "대기 배지(🔔·기존 유지 보장+다음 할 일 — 4c UX 사용자 실보고)");
   ok(ext.includes('m?.type === "proposalApprove"') && ext.includes("applyEnvelopeTransition(wsA, tgtA, apL, null)") && ext.includes("pr2.newHash !== hashAt"), "도장 핸들러 — 모달 전문·도장 직전 해시 재확인·전이 실행");
   // [기억 권위 A-4 2026-08-14] detail이 note 접두(병렬 축 복제 경고)+전문 결합으로 확장 — 전문 절단 금지 의도는 유지.
-  ok(!/proposalText\.slice\(0, 6000\)/.test(ext) && (ext.match(/ \+ prA\.proposalText \}/g) || []).length === 1 && (ext.match(/ \+ prP\.proposalText \}/g) || []).length === 1, "모달 전문 절단 금지+note 접두 결합(재검증 blocker②·기억 권위 A-4)");
+  ok(!/proposalText\.slice\(0, 6000\)/.test(ext) && /function draftSummaryDetail[\s\S]{0,2400}\+ pr\.proposalText\)/.test(ext) && ext.includes("draftSummaryDetail(CLA, tgtA, prA") && ext.includes("draftSummaryDetail(CLP9, m.repo, prP"), "모달 전문 절단 금지+note 접두 결합 — 공용 요약 렌더러 경유(4c UX·기억 권위 A-4 계약 유지)");
   ok(ext.includes("normWs(tgtNow2) !== normWs(tgtA)"), "도장 확인 후 현재 대상 재대조(재검증 blocker④ — 직접 승인 경로 동형)");
   ok(ext.includes('m?.type === "proposalRecover"') && ext.includes('envelopeTransState(ws0) === "recover-needed"'), "복구 버튼+기동 자가 복구");
 }

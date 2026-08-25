@@ -286,4 +286,43 @@ t("★[4a] 소실·무단 파일·96 상한=정직 거부", () => {
   const rD = CL.draftEnvelopeRevision(W5, R5, { addCandidateIds: ["bbbb000000000001"], removeItems: [], approvedHash: G4, target: "archive" });
   assert.ok(!rD.ok && /도장 없이 존재/.test(rD.error), "무단 서고 파일=덮어쓰기 거부: " + String(rD.error));
 });
+t("★[4c UX] 초안 차이 요약(envelopeDraftDiff): 유지·올림·빼기·최초 생성·판독 실패=null", () => {
+  const RD = fs.mkdtempSync(path.join(os.tmpdir(), "envarc-diff-"));
+  const curArr = ["기존 수칙 하나", "기존 수칙 둘"];
+  fs.writeFileSync(path.join(RD, CL.ARCHIVE_FILE), JSON.stringify({ schema: "verify-envelope-archive-v1", alwaysBlocker: curArr }, null, 1));
+  const prAdd = { st: "ok", target: "archive", proposalText: JSON.stringify({ schema: "verify-envelope-archive-v1", alwaysBlocker: [...curArr, "새로 올린 수칙"] }, null, 1) };
+  const d1 = CL.envelopeDraftDiff(RD, prAdd);
+  assert.ok(d1 && d1.kept === 2 && d1.added.length === 1 && d1.added[0].text === "새로 올린 수칙" && d1.removed.length === 0 && !d1.firstTime, "올림만=유지 2·추가 1·빼기 0(기존 삭제 없음이 수치로 보임): " + JSON.stringify(d1));
+  const prDel = { st: "ok", target: "archive", proposalText: JSON.stringify({ schema: "verify-envelope-archive-v1", alwaysBlocker: [curArr[0]] }, null, 1) };
+  const d2 = CL.envelopeDraftDiff(RD, prDel);
+  assert.ok(d2 && d2.kept === 1 && d2.removed.length === 1 && d2.removed[0].text === curArr[1], "빼기=제거 목록에 그 항목");
+  const RD2 = fs.mkdtempSync(path.join(os.tmpdir(), "envarc-diff2-"));
+  const d3 = CL.envelopeDraftDiff(RD2, prAdd);
+  assert.ok(d3 && d3.firstTime && d3.added.length === 3, "대상 파일 부재=최초 생성(전부 추가)");
+  assert.strictEqual(CL.envelopeDraftDiff(RD, { st: "ok", target: "archive", proposalText: "{broken" }), null, "초안 판독 실패=null(요약 실패가 승인을 막지 않음 — 호출자는 전문만 표시)");
+  // [1차 blocker① 반례] 현행 파일 '손상'(부재 아님)=null — '첫 등재·전부 추가'로 위장 금지
+  const RD3 = fs.mkdtempSync(path.join(os.tmpdir(), "envarc-diff3-"));
+  fs.writeFileSync(path.join(RD3, CL.ARCHIVE_FILE), "{corrupt json");
+  assert.strictEqual(CL.envelopeDraftDiff(RD3, prAdd), null, "★현행 손상=null(부재(ENOENT)만 최초 생성)");
+  // [2차 확인검증 blocker 반례] 문법 유효·정본 계약 손상(스키마 오기/축 비배열)=null — strict 판독기와 같은 눈
+  const RD5 = fs.mkdtempSync(path.join(os.tmpdir(), "envarc-diff5-"));
+  fs.writeFileSync(path.join(RD5, CL.ARCHIVE_FILE), JSON.stringify({ schema: "wrong", alwaysBlocker: ["기존"] }, null, 1));
+  assert.strictEqual(CL.envelopeDraftDiff(RD5, prAdd), null, "★스키마 오기 현행=null(정상 요약 위장 금지)");
+  fs.writeFileSync(path.join(RD5, CL.ARCHIVE_FILE), JSON.stringify({ schema: "verify-envelope-archive-v1", alwaysBlocker: "기존" }, null, 1));
+  assert.strictEqual(CL.envelopeDraftDiff(RD5, prAdd), null, "★축 비배열 현행=null");
+  assert.strictEqual(CL.envelopeDraftDiff(RD, { st: "ok", target: "archive", proposalText: JSON.stringify({ schema: "wrong", alwaysBlocker: ["x"] }) }), null, "초안 정본 계약 손상=null");
+  // [1차 blocker② 반례] 중복 문안 축소=빼기로 계상(집합 비교의 거짓 '빼기 0' 차단)
+  const RD4 = fs.mkdtempSync(path.join(os.tmpdir(), "envarc-diff4-"));
+  fs.writeFileSync(path.join(RD4, CL.ARCHIVE_FILE), JSON.stringify({ schema: "verify-envelope-archive-v1", alwaysBlocker: ["같은 문안", "같은 문안"] }, null, 1));
+  const d5 = CL.envelopeDraftDiff(RD4, { st: "ok", target: "archive", proposalText: JSON.stringify({ schema: "verify-envelope-archive-v1", alwaysBlocker: ["같은 문안"] }, null, 1) });
+  assert.ok(d5 && d5.kept === 1 && d5.removed.length === 1 && d5.removed[0].text === "같은 문안", "★중복 2→1 축소=빼기 1(다중집합 대조): " + JSON.stringify(d5));
+});
+t("[4c UX] 승인 화면 배선 소스 핀: 요약 선행·'교체' 헤드라인 폐기·다음 할 일 안내", () => {
+  const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
+  assert.ok((ext.match(/draftSummaryDetail\(/g) || []).length >= 3, "열람·승인 두 모달이 같은 요약 렌더러 사용(정의 포함 3회 이상)");
+  assert.ok(ext.includes("[바뀌는 것 — 한눈 요약") && ext.includes("그대로 유지 ${d.kept}항"), "요약=유지/올림/빼기 수치+항목 나열");
+  assert.ok(!ext.includes("전문이 현재 수칙서를 교체합니다") && ext.includes("기존 항목은 그대로 있고, 아래 요약의 올림·빼기만 반영됩니다"), "★'교체' 오해 문구 폐기 — 유지 보장 문구로(사용자 실보고 2026-08-25)");
+  assert.ok(ext.includes("다음 할 일: '초안 확인·승인'"), "대기 카드·생성 안내에 다음 단계 지시");
+  assert.ok(/if \(lines\.length\) parts\.push\(lines\.join\("\\n"\)\);\s*\n\s*if \(pr\.note\) parts\.push\(/.test(ext), "★표시 순서=요약→note→전문(note 선행이면 '한눈 요약'이 첫 구조가 못 됨 — 1차 blocker③)");
+});
 console.log(`결과: ${n}/${n} 통과`);
