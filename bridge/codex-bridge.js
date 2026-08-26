@@ -1124,6 +1124,27 @@ function shouldSuppressUnseenRepeat(events, implVal, wsVal, unseenBasenames) {
     && String(e.implId || "") === String(implVal) && String(e.workspace || "") === String(wsVal)
     && Array.isArray(e.files) && want.every((f) => e.files.includes(f)));
 }
+// [지문 결속 재발행 억제 2026-08-27 — 순수 함수(시험이 직접 실행)] 사용자 실보고: 같은 검증 세션을
+// 이어 쓰는 구조에서 직전 회차에 재확인까지 끝난 파일들이 다음 회차마다 다시 '흔적 없음' 의심으로
+// 떠 매 턴 경고가 반복됐다. 억제 조건(전부 충족·1차 검증 blocker 3건 반영):
+// ① 이전 경보가 ack이고 **그 재확인이 실제로 resolved로 종결**된 것(resolvedEventIds — 사용자가
+//    배너 '확인' 버튼으로 닫은 일반 ack는 재확인 성공이 아니므로 억제 근거가 아니다·ab-3).
+// ② 같은 implId·workspace, 그리고 이번 의심 전 파일이 **실경로(절대경로) 단위**로 당시와 동일한
+//    내용 지문(fileSha) — basename 축약은 타 경로 동명·동내용 파일의 정당한 경보를 숨긴다(ab-3).
+// 지문·경로·신원·집합 어느 하나라도 결손이면 억제하지 않는다(보수).
+function shouldSuppressUnseenAcked(events, implVal, wsVal, fpMap, resolvedEventIds) {
+  if (!fpMap || typeof fpMap !== "object" || Array.isArray(fpMap)) return false;
+  const names = Object.keys(fpMap);
+  if (!names.length) return false;
+  if (names.some((p) => typeof fpMap[p] !== "string" || !fpMap[p])) return false; // 지문 결손=억제 금지(보수)
+  if (!String(implVal || "") || !String(wsVal || "")) return false;
+  const resolved = resolvedEventIds instanceof Set ? resolvedEventIds : new Set(Array.isArray(resolvedEventIds) ? resolvedEventIds : []);
+  return (events || []).some((e) => e && e.kind === "evidence-unseen" && e.ack === true
+    && e.id && resolved.has(e.id) // 재확인 resolved 결속 — 일반 ack만으로는 억제 금지(blocker①)
+    && String(e.implId || "") === String(implVal) && String(e.workspace || "") === String(wsVal)
+    && e.filesFp && typeof e.filesFp === "object" && !Array.isArray(e.filesFp)
+    && names.every((p) => typeof e.filesFp[p] === "string" && e.filesFp[p] === fpMap[p]));
+}
 // ws=configWs(이벤트 workspace 라벨 — 대시보드 귀속), execCwd=실제 실행 폴더(인용 상대경로 해석 기준).
 // 분리 이유: 코덱스 답의 '(경로:라인)' 인용은 코덱스가 돈 폴더(execCwd) 기준 상대경로라, 라벨용 연 폴더로 해석하면 오탐.
 function flagEvidence(answer, ws, sessionId, execCwd, chCtx) {
@@ -1161,6 +1182,57 @@ function flagEvidence(answer, ws, sessionId, execCwd, chCtx) {
       // 재확인 배선(증분 4): 이벤트 id를 선생성해 challenge 장부와 결속(전체 경로 목록은 exact에서)
       const evId = `${nowIso()}_${Math.random().toString(36).slice(2, 8)}`;
       const exact = citedFilesUnseenExact(answer, pathWs, sessionId);
+      // [2026-08-27 매 턴 반복 경고 봉합 — 사용자 실보고] 동결(순수 계산·쓰기 없음)을 이벤트 기록보다
+      // 먼저 수행해 두 판정 재료를 얻는다: ①전량 범위 밖/판독 불능(state no-dispatch)=사용자가 할 수
+      // 있는 행동이 0인 경고 → 배너 대신 '자동 확인' 기록만 남긴다 ②대기(pending) 파일별 내용 지문
+      // (fileSha) → 직전 ack 경보와 지문까지 같으면 재발행 억제(shouldSuppressUnseenAcked — 파일이
+      // 바뀌면 지문 불일치로 다시 경보). 감지 계약([2-1] 턴 한정)은 무변경 — 발행 정책만 바꾼다.
+      let frozen = null;
+      if (chCtx && typeof chCtx === "object") {
+        try {
+          const ech0 = require("./evidence-challenge.js");
+          frozen = ech0.freezeChallenge({
+            eventId: evId, ws, execCwd: pathWs, roots: (chCtx.roots || []).filter(Boolean),
+            files: exact.checked ? exact.unseenWeak : [],
+            exposedTexts: [String(chCtx.promptText || ""), String(answer || "")],
+            verifierSession: String(sessionId || ""), mode: chCtx.mode, lang: chCtx.lang,
+            campaignId: chCtx.campaignId, askId: chCtx.askId,
+          });
+        } catch { frozen = null; /* 동결 실패=legacy 흐름(경보 유지) */ }
+      }
+      // 지문 지도: 동결의 pending 파일별 fileSha를 **실경로(절대경로) 키**로 접는다(1차 검증 blocker② —
+      // basename 축약은 타 경로 동명·동내용 파일의 정당한 경보를 오억제). 경로가 키라 충돌이 없다.
+      let fpMap = null;
+      if (frozen && Array.isArray(frozen.files)) {
+        fpMap = {};
+        for (const f of frozen.files) {
+          if (!f || f.status !== "pending" || !f.fileSha) continue;
+          const p9 = String(f.path || "");
+          if (!p9) continue;
+          fpMap[p9] = f.fileSha;
+        }
+      }
+      // ① 사전 확인 기록은 skipped 사유 **전원이 out-of-root**일 때만(1차 검증 blocker③ — too-large·
+      //    read-fail·cap-exceeded·no-safe-span은 '지원 범위인데 판독 못 한' 상태라 배너 유지가 정직).
+      const noDispatch = !!(frozen && frozen.state === "no-dispatch"
+        && Array.isArray(frozen.files) && frozen.files.length > 0
+        && frozen.files.every((f) => f && f.status === "skipped" && f.reason === "out-of-root"));
+      // ② 지문 결속 억제 — 이번 의심 전 파일이 pending 지문을 갖고, '재확인이 resolved로 끝난'(1차 검증
+      //    blocker① — 일반 확인 ack 제외) 직전 경보와 실경로·지문 전부 일치할 때만.
+      if (!noDispatch && fpMap && Object.keys(fpMap).length === unseen.length) {
+        let resolvedIds = new Set();
+        try {
+          const echS = require("./evidence-challenge.js");
+          for (const rc of echS.listChallenges(ws)) if (rc && rc.state === "resolved" && echS.eventFullyResolved(rc) && rc.eventId) resolvedIds.add(rc.eventId);
+        } catch { resolvedIds = new Set(); /* 판독 실패=억제 근거 없음(보수) */ }
+        if (shouldSuppressUnseenAcked(readIntegrityEvents(), implNow, ws, fpMap, resolvedIds)) {
+          return { eventId: null, challengeId: null, suppressed: true }; // 호출자 계약 유지 — 억제는 부작용 0
+        }
+      }
+      const detKo = `검증 답이 인용한 파일 ${unseen.length}개를 이 검증 기록에서 다룬 흔적을 확인하지 못했습니다(이전 턴에서 봤거나 기록 형식 차이일 수 있음 — '안 읽음' 단정 아님): ${unseen.slice(0, 3).join(" / ")}`
+        + (noDispatch ? " · 재확인 가능한 안전 구간이 없어 자동 확인으로 기록만 남깁니다(행동 불필요)" : "");
+      const detEn = `${unseen.length} cited file(s) show no trace of being handled in this verification log (may be from an earlier turn or a log-format difference — not asserting 'unread'): ${unseen.slice(0, 3).join(" / ")}`
+        + (noDispatch ? " · no safely re-checkable span exists, so this is auto-acknowledged as a record only (no action needed)" : "");
       appendIntegrityEvent({
         id: evId,
         ts: nowIso(),
@@ -1168,30 +1240,26 @@ function flagEvidence(answer, ws, sessionId, execCwd, chCtx) {
         workspace: ws,
         implId: implNow, // 억제 신원 결속(R3 — legacy session과 분리·모드 인지)
         files: unseen.slice(), // 전체 basename 목록(반복 억제 대조 재료 — detail의 앞 3개 절단과 별개)
+        ...(fpMap && Object.keys(fpMap).length ? { filesFp: fpMap } : {}), // 지문 결속 억제 재료(다음 회차 대조)
+        // ① 전량 범위 밖=사전 확인 기록(배너 제외) — 삭제가 아니라 ack 상태로 남는 기록(ab-5).
+        ...(noDispatch ? { ack: true, autoAcked: "no-dispatch" } : {}),
         kind: "evidence-unseen",
         severity: "warning", // 노랑(의심) — '안 읽음' 단정이 아니라 '기록에서 다룬 흔적 미확인'
         // detailKo/detailEn 동시 저장(동적 목록 포함) — 표시부가 현재 언어 선택. detail은 구버전 판독 폴백.
-        detail: tB(`검증 답이 인용한 파일 ${unseen.length}개를 이 검증 기록에서 다룬 흔적을 확인하지 못했습니다(이전 턴에서 봤거나 기록 형식 차이일 수 있음 — '안 읽음' 단정 아님): ${unseen.slice(0, 3).join(" / ")}`, `${unseen.length} cited file(s) show no trace of being handled in this verification log (may be from an earlier turn or a log-format difference — not asserting 'unread'): ${unseen.slice(0, 3).join(" / ")}`),
-        detailKo: `검증 답이 인용한 파일 ${unseen.length}개를 이 검증 기록에서 다룬 흔적을 확인하지 못했습니다(이전 턴에서 봤거나 기록 형식 차이일 수 있음 — '안 읽음' 단정 아님): ${unseen.slice(0, 3).join(" / ")}`,
-        detailEn: `${unseen.length} cited file(s) show no trace of being handled in this verification log (may be from an earlier turn or a log-format difference — not asserting 'unread'): ${unseen.slice(0, 3).join(" / ")}`,
+        detail: tB(detKo, detEn),
+        detailKo: detKo,
+        detailEn: detEn,
       });
-      // 재확인 배선(증분 4): 이벤트 '저장 확인' 후에만 동결([주의] 반영 — 경보가 실제로 남지 않았으면
-      // 어떤 추가 전송 재료도 만들지 않는다). 동결은 지금(경보 시점) — 루트·문맥은 원 턴 스냅샷(chCtx).
+      // 재확인 배선(증분 4): 이벤트 '저장 확인' 후에만 동결 기록([주의] 반영 — 경보가 실제로 남지 않았으면
+      // 어떤 추가 전송 재료도 만들지 않는다). 동결 계산은 위에서 끝났고, 장부 쓰기만 저장 확인 뒤에 한다.
       let challengeId = null;
-      if (chCtx && typeof chCtx === "object" && readIntegrityEvents().some((e) => e.id === evId)) {
+      if (frozen && readIntegrityEvents().some((e) => e.id === evId)) {
         try {
           const ech = require("./evidence-challenge.js");
-          const rec = ech.freezeChallenge({
-            eventId: evId, ws, execCwd: pathWs, roots: (chCtx.roots || []).filter(Boolean),
-            files: exact.checked ? exact.unseenWeak : [],
-            exposedTexts: [String(chCtx.promptText || ""), String(answer || "")],
-            verifierSession: String(sessionId || ""), mode: chCtx.mode, lang: chCtx.lang,
-            campaignId: chCtx.campaignId, askId: chCtx.askId,
-          });
-          if (rec && ech.writeChallenge(rec)) challengeId = rec.challengeId;
-        } catch { /* best-effort — 동결 실패=발송 없음(경보 유지) */ }
+          if (ech.writeChallenge(frozen)) challengeId = frozen.challengeId;
+        } catch { /* best-effort — 기록 실패=발송 없음(경보 유지) */ }
       }
-      return { eventId: evId, challengeId };
+      return { eventId: evId, challengeId, ...(noDispatch ? { autoAcked: true } : {}) };
     }
   } catch { /* best-effort — 점검 실패가 검증 흐름을 막지 않음 */ }
   return null;
@@ -4119,4 +4187,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, shouldSuppressUnseenRepeat, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
+module.exports = { readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };

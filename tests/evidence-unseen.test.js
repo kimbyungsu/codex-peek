@@ -741,5 +741,89 @@ console.log("[6] 반복 억제 술어(2026-08-21) — 같은 세션 미ack 동�
   ck("빈 workspace=억제 금지(결속 불가)", shouldSuppressUnseenRepeat([evOpen], S, "", ["a.js"]) === false);
 }
 
+console.log("[7] 지문 결속 재발행 억제 술어(2026-08-27) — resolved 재확인 결속·실경로 지문(1차 검증 blocker①② 반례 포함)");
+{
+  const { shouldSuppressUnseenAcked } = require("../bridge/codex-bridge.js");
+  const S = "impl-1", W = "d:/ws-a";
+  const PA = "d:/ws-a/src/a.js", PB = "d:/ws-a/lib/b.js";
+  const acked = { id: "ev-1", kind: "evidence-unseen", ack: true, implId: S, workspace: W, files: ["a.js", "b.js"], filesFp: { [PA]: "fp-a", [PB]: "fp-b" } };
+  const R = new Set(["ev-1"]); // 재확인이 resolved로 끝난 이벤트 집합
+  ck("resolved 결속 ack+전 경로 지문 일치=억제", shouldSuppressUnseenAcked([acked], S, W, { [PA]: "fp-a", [PB]: "fp-b" }, R) === true);
+  ck("부분집합(현 의심이 더 적음)도 지문 일치면 억제", shouldSuppressUnseenAcked([acked], S, W, { [PA]: "fp-a" }, R) === true);
+  ck("★blocker① 반례: 일반 확인 ack(resolved 집합 밖)=억제 금지", shouldSuppressUnseenAcked([acked], S, W, { [PA]: "fp-a" }, new Set()) === false);
+  ck("★blocker② 반례: 타 경로 동명·동내용 파일=억제 금지(실경로 키)", shouldSuppressUnseenAcked([acked], S, W, { "d:/ws-a/tests/a.js": "fp-a" }, R) === false);
+  ck("★지문 하나라도 다르면(파일 변경) 억제 금지=새 경보 정당", shouldSuppressUnseenAcked([acked], S, W, { [PA]: "fp-a", [PB]: "fp-CHANGED" }, R) === false);
+  ck("미ack 경보=이 술어 대상 아님(기존 미ack 억제가 별도 담당)", shouldSuppressUnseenAcked([{ ...acked, ack: false }], S, W, { [PA]: "fp-a" }, R) === false);
+  ck("id 없는 구형 이벤트=resolved 결속 불가·억제 안 함(보수)", shouldSuppressUnseenAcked([{ ...acked, id: undefined }], S, W, { [PA]: "fp-a" }, R) === false);
+  ck("filesFp 없는 구형 ack 이벤트=비교 불가·억제 안 함(보수)", shouldSuppressUnseenAcked([{ ...acked, filesFp: undefined }], S, W, { [PA]: "fp-a" }, R) === false);
+  ck("현 지문 결손(빈 값 포함)=억제 금지(범위 밖·판독 실패 보수)", shouldSuppressUnseenAcked([acked], S, W, { [PA]: "" }, R) === false);
+  ck("타 신원=억제 금지", shouldSuppressUnseenAcked([acked], "impl-other", W, { [PA]: "fp-a" }, R) === false);
+  ck("타 workspace=억제 금지", shouldSuppressUnseenAcked([acked], S, "d:/ws-b", { [PA]: "fp-a" }, R) === false);
+  ck("빈 신원·빈 ws=억제 금지", shouldSuppressUnseenAcked([acked], "", "", { [PA]: "fp-a" }, R) === false);
+  ck("빈 지도=판단 없음", shouldSuppressUnseenAcked([acked], S, W, {}, R) === false);
+  ck("resolved 집합 미전달=억제 금지(보수 기본값)", shouldSuppressUnseenAcked([acked], S, W, { [PA]: "fp-a" }) === false);
+}
+
+console.log("[8] 발행 정책 실행(2026-08-27 매 턴 반복 경고 봉합) — 지문 저장·전량 범위 밖 자동 확인");
+{
+  const B = require("../bridge/codex-bridge.js");
+  const crypto = require("crypto");
+  const INTEG = path.join(home, "integrity.json");
+  const readEvs = () => { try { return JSON.parse(fs.readFileSync(INTEG, "utf8")).events || []; } catch { return []; } };
+  // 동결의 안전 구간 선택은 최소 크기(CH_MIN_ELIGIBLE) 미만 파일을 no-safe-span으로 건너뛴다 —
+  // 소형 foo.ts(12B)로는 pending 지문이 안 생기므로, 이 그룹은 충분히 큰 별도 파일로 검사한다.
+  const ws8 = fs.mkdtempSync(path.join(os.tmpdir(), "ev_ws8_"));
+  const big = (seed) => Array.from({ length: 40 }, (_, i) => `const ${seed}_v${i} = compute_${seed}(${i}, "payload-${seed}-${i}");`).join("\n") + "\n";
+  fs.writeFileSync(path.join(ws8, "foo8.ts"), big("foo"), "utf8");
+  fs.writeFileSync(path.join(ws8, "bar8.ts"), big("bar"), "utf8");
+  const answer8 = "확인했습니다. (foo8.ts:1) 과 (bar8.ts:1) 을 봤습니다.";
+  const chCtx = { roots: [ws8], promptText: "검증 프롬프트", mode: "claude-codex", lang: "ko", campaignId: "cl:test", askId: "ask-test-1" };
+  // A) 정상 경보: 인용 파일이 이번 턴 기록에 없음 → 경보 생성 + filesFp(내용 sha256) 저장 + 미ack
+  writeRollout("88888888-fp", [userMsg("검증 요청"), ...pair("echo hi", "hi")]);
+  const rA = B.flagEvidence(answer8, ws8, "88888888-fp", ws8, chCtx);
+  ck("A: 경보 생성(eventId)", !!(rA && rA.eventId));
+  const evA = readEvs().find((e) => e.id === (rA && rA.eventId));
+  ck("A: 미ack(배너 대상)", !!evA && evA.ack !== true);
+  const shaFoo = crypto.createHash("sha256").update(fs.readFileSync(path.join(ws8, "foo8.ts"))).digest("hex");
+  const fpKeys = evA && evA.filesFp ? Object.keys(evA.filesFp) : [];
+  const keyFoo = fpKeys.find((k) => /foo8\.ts$/.test(k)), keyBar = fpKeys.find((k) => /bar8\.ts$/.test(k));
+  ck("A: filesFp 키=실경로(basename 아님)+내용 지문 저장(동결 fileSha와 동형)", !!evA && !!keyFoo && !!keyBar && keyFoo !== "foo8.ts" && evA.filesFp[keyFoo] === shaFoo);
+  // A-2) 저장 지문×술어 왕복(스키마 드리프트 잠금): resolved 결속 ack=억제 / 같은 이벤트라도 일반 확인
+  //   ack(resolved 집합 밖)=억제 금지(blocker① 실행 반례). implId는 이벤트 실물 값으로 왕복.
+  const implA = String((evA && evA.implId) || "") || "impl-x";
+  const evAforPred = { ...evA, ack: true, implId: implA, workspace: ws8 };
+  const RA = new Set([evA && evA.id]);
+  ck("A-2: resolved 결속 ack=억제", B.shouldSuppressUnseenAcked([evAforPred], implA, ws8, evA.filesFp, RA) === true);
+  ck("A-2b: ★일반 확인 ack(resolved 밖)=억제 금지(blocker① 반례)", B.shouldSuppressUnseenAcked([evAforPred], implA, ws8, evA.filesFp, new Set()) === false);
+  // A-3) 파일 변경=지문 불일치 → 억제 금지(파일이 바뀌면 새 의심 정당)
+  const fpChanged = { ...evA.filesFp, [keyFoo]: crypto.createHash("sha256").update("changed").digest("hex") };
+  ck("A-3: 지문 변경=억제 금지", B.shouldSuppressUnseenAcked([evAforPred], implA, ws8, fpChanged, RA) === false);
+  // D) 전량 범위 밖(roots가 다른 폴더) → 자동 확인 기록(ack 사전 설정·배너 제외·행동 불필요 문구)
+  //   A가 남긴 미ack 경보의 기존 반복 억제(같은 ws·같은 파일 집합)에 걸리지 않게 별도 ws로 검사한다.
+  const ws9 = fs.mkdtempSync(path.join(os.tmpdir(), "ev_ws9_"));
+  fs.writeFileSync(path.join(ws9, "foo9.ts"), big("nine"), "utf8");
+  const answer9 = "확인했습니다. (foo9.ts:1) 을 봤습니다.";
+  const otherRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ev_other_"));
+  writeRollout("99999999-nd", [userMsg("검증 요청"), ...pair("echo hi", "hi")]);
+  const rD = B.flagEvidence(answer9, ws9, "99999999-nd", ws9, { ...chCtx, roots: [otherRoot], askId: "ask-test-2" });
+  ck("D: 이벤트는 남되(기록 보존) 반환에 autoAcked", !!(rD && rD.eventId && rD.autoAcked === true));
+  const evD = readEvs().find((e) => e.id === (rD && rD.eventId));
+  ck("D: ack 사전 설정=배너 제외", !!evD && evD.ack === true && evD.autoAcked === "no-dispatch");
+  ck("D: 문구에 '행동 불필요' 명시(ko/en)", !!evD && /행동 불필요/.test(evD.detailKo || "") && /no action needed/.test(evD.detailEn || ""));
+  // D-2) ★blocker③ 반례: 지원 범위인데 판독 못 한 no-dispatch(no-safe-span 등)는 자동 확인 금지=배너 유지
+  const ws9b = fs.mkdtempSync(path.join(os.tmpdir(), "ev_ws9b_"));
+  fs.writeFileSync(path.join(ws9b, "tiny.ts"), "line1\n", "utf8"); // 최소 크기 미만 → no-safe-span
+  writeRollout("aaaaaaaa-ns", [userMsg("검증 요청"), ...pair("echo hi", "hi")]);
+  const rD2 = B.flagEvidence("확인. (tiny.ts:1) 봤습니다.", ws9b, "aaaaaaaa-ns", ws9b, { ...chCtx, roots: [ws9b], askId: "ask-test-3" });
+  const evD2 = readEvs().find((e) => e.id === (rD2 && rD2.eventId));
+  ck("D-2: ★in-root 판독 불가(no-safe-span)=자동 확인 금지·배너 유지(blocker③ 반례)", !!evD2 && evD2.ack !== true && !(rD2 && rD2.autoAcked));
+  // 배선 핀: 동결 계산이 이벤트 기록보다 앞·사전 ack는 out-of-root 전원일 때만·억제는 resolved 집합 결속
+  const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
+  ck("배선: 동결 선행 후 지문 지도·no-dispatch 판정", /frozen = ech0\.freezeChallenge\(/.test(src) && /frozen\.state === "no-dispatch"/.test(src));
+  ck("배선: 사전 ack 조건=skipped 전원 out-of-root", /frozen\.files\.every\(\(f\) => f && f\.status === "skipped" && f\.reason === "out-of-root"\)/.test(src));
+  ck("배선: 지문 억제는 noDispatch 아닐 때+전 파일 지문 보유 시만", /if \(!noDispatch && fpMap && Object\.keys\(fpMap\)\.length === unseen\.length\)/.test(src));
+  ck("배선: 억제 전 resolved 챌린지 eventId 집합을 실장부에서 수집", /rc\.state === "resolved" && echS\.eventFullyResolved\(rc\) && rc\.eventId/.test(src));
+}
+
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
 process.exit(fail ? 1 : 0);
