@@ -4269,6 +4269,9 @@ function reconcileMemoryCandidates(ws, repo, approvedHash) {
     const { rows: candRows, latest } = readEnvelopeCandidates(ws);
     const normSet = new Set(); // 현행 ab·oos 정규화 문안 — 정확 일치 억제(유사도 판정 없음 — 설계 v3)
     for (const ax of ["alwaysBlocker", "outOfScope"]) for (const x of env.data[ax] || []) normSet.add(normBacklogTitle(x));
+    // [4f 실보고 봉합 2026-08-26] 서고 문안도 억제 집합에 편입 — 코어만 보면 서고 등재분의 후보가 '판단 대기'로
+    // 계속 남아 사용자가 중복만 골라 빈 초안 실패를 반복(도장 지문 일치 시에만 — 소실 서고는 보수적으로 제외).
+    try { const ah9 = (loadContract(ws) || {}).archiveHash; if (typeof ah9 === "string" && ah9) { const ar9 = readVerifyEnvelopeArchive(repo); if (ar9.st === "ok" && ar9.sha1 === ah9) for (const x of ar9.data.alwaysBlocker) { normSet.add(normBacklogTitle(x)); } } } catch { /* 서고 판독 실패=코어만(보수) */ }
     // 메타 보강 — 상태 전이 행(adopted/declined)이 title·why를 안 실어도 append-only 이력 최초 행에서 회수.
     const metaAll = new Map();
     for (const r of candRows) if (r && r.candidateId && (r.title || r.kind) && !metaAll.has(r.candidateId)) metaAll.set(r.candidateId, r);
@@ -4305,6 +4308,15 @@ function reconcileMemoryCandidates(ws, repo, approvedHash) {
         staleRecs.push({ candidateId: rec.candidateId, envelopeHash: approvedHash, status: "proposed", kind: "user-constraint", title, why: rec.why || meta.why || "", provider: rec.provider || meta.provider || "", sessionId: rec.sessionId || meta.sessionId || "", turnAnchor: rec.turnAnchor || meta.turnAnchor || "", sourceHash: rec.sourceHash || meta.sourceHash || "", note: "승인 세대 이월(carry-forward — 사용자 판단 전 소실 금지)", ts: new Date().toISOString() });
         continue;
       }
+      // [4f] 같은 세대 '대기 중' 중복 스윕 — 이미 코어∪서고에 있는 문안의 proposed는 자동 정리(대기열이
+      // 기등재분을 계속 보여줘 사용자가 중복만 고르는 경로 차단). 원문·절단 실물 양쪽 정규화 대조(draft와 동형).
+      if (rec.status === "proposed" && title) {
+        const cut9 = title.length > ENVELOPE_CHAR_MAX ? title.slice(0, ENVELOPE_CHAR_MAX - "…[절단]".length) + "…[절단]" : title;
+        if (normSet.has(normBacklogTitle(title)) || normSet.has(normBacklogTitle(cut9))) {
+          staleRecs.push({ candidateId: rec.candidateId, envelopeHash: approvedHash, status: "declined", kind: kindR, note: "이미 등재된 문안 — 대기열 자동 정리", ...(rec.findingId ? { findingId: rec.findingId } : {}), ts: new Date().toISOString() });
+          continue;
+        }
+      }
       if (rec.status !== "adopted") continue; // ── 같은 세대: adopted 고아 복원
       if (title && normSet.has(normBacklogTitle(title))) continue; // 도장 완료(문안 등재됨)=고아 아님
       if (boundIds === null) continue; // proposal 손상=소유 판정 불가(보수 — 사용자 처리 후 다음 스캔)
@@ -4326,7 +4338,10 @@ function reconcileMemoryCandidates(ws, repo, approvedHash) {
       const cid = envelopeCandidateId("resolved-blocker", wsKeyFor(ws) + "|" + String(f.campaignId || "") + "|" + f.findingId);
       if (latest.has(cid + "@" + approvedHash)) continue; // 이미 제안/처분됨(이 승인 세대)
       const tn = normBacklogTitle(f.title);
-      if (normSet.has(tn)) {
+      // [4f 확인검증 blocker] 생성 억제도 절단 실물 대조 — 등재분은 200자 절단(…[절단])으로 저장되므로 장문
+      // 원문만 대조하면 억제를 통과해 한 스캔 동안 중복이 대기로 재노출된다(스윕과 동형 양쪽 대조).
+      const tCut9 = f.title.length > ENVELOPE_CHAR_MAX ? f.title.slice(0, ENVELOPE_CHAR_MAX - "…[절단]".length) + "…[절단]" : f.title;
+      if (normSet.has(tn) || normSet.has(normBacklogTitle(tCut9))) {
         // [A-5 stale 재평가] 등재 확인=자동 declined 기록(사유 포함) — 재승인 후 재스캔에서 같은 문안이 이미
         // 수칙서에 있으면 pending으로 되살리지 않고 장부에 정리 근거를 남긴다(다음 스캔은 latest.has로 조기 스킵).
         recs.push({ candidateId: cid, envelopeHash: approvedHash, status: "declined", kind: "resolved-blocker", note: "이미 수칙서에 등재 — 자동 정리(재승인 재평가)", findingId: f.findingId, ts: new Date().toISOString() });

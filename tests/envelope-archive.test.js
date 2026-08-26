@@ -373,4 +373,42 @@ t("★[4d blocker 반례] 13건 이상 서고 올림 초안→폐기=전 후보 
   const back = ids6.filter((cid) => (latest.get(cid + "@" + CORE_HASH) || {}).status === "proposed");
   assert.strictEqual(back.length, 13, "★13건 전원 판단 대기 복원(13번째 이후 adopted 고아 없음): " + back.length + "/13");
 });
+t("★[4f 실보고 반례] 대기열 정리기(reconcile)가 서고 문안까지 보고 기등재 후보를 자동 정리(중복이 '판단 대기'로 잔존 금지)", () => {
+  const W9 = fs.mkdtempSync(path.join(os.tmpdir(), "envarc-rec-ws-"));
+  const R9 = fs.mkdtempSync(path.join(os.tmpdir(), "envarc-rec-repo-"));
+  fs.writeFileSync(path.join(R9, CL.ENVELOPE_FILE), coreRaw);
+  assert.strictEqual(CL.setEnvelopeHashAllSlots(W9, CORE_HASH), 2);
+  fs.writeFileSync(path.join(R9, CL.ARCHIVE_FILE), arcText); // 서고 2항
+  assert.strictEqual(CL.setContractHashAllSlots(W9, "archiveHash", sha1(arcText)), 2);
+  const mk9 = (cid, title) => ({ candidateId: cid, envelopeHash: CORE_HASH, status: "proposed", kind: "resolved-blocker", title, ts: "T" });
+  CL.appendEnvelopeCandidates(W9, [mk9("ff00000000000001", arcObj.alwaysBlocker[0]), mk9("ff00000000000002", "진짜 새로운 수칙"), mk9("ff00000000000003", coreObj.outOfScope[0])]);
+  CL.reconcileMemoryCandidates(W9, R9, CORE_HASH);
+  const { latest } = CL.readEnvelopeCandidates(W9);
+  assert.strictEqual(latest.get("ff00000000000001@" + CORE_HASH).status, "declined", "★서고 등재 문안의 대기 후보=자동 정리");
+  assert.strictEqual(latest.get("ff00000000000003@" + CORE_HASH).status, "declined", "코어(oos) 등재 문안의 대기 후보=자동 정리");
+  assert.strictEqual(latest.get("ff00000000000002@" + CORE_HASH).status, "proposed", "신규 문안=대기 유지(오정리 없음)");
+  // [확인검증 blocker 반례] 장문 기등재의 '신규 생성' 억제 — 서고에 절단 실물로 저장된 장문과 같은 blocker가
+  // 새로 해소되면 declined로 억제(한 스캔도 대기 노출 금지)
+  const longT9 = "긴 수칙 문안 ".repeat(30).trim(); // 240자+
+  const cut9 = longT9.slice(0, 200 - "…[절단]".length) + "…[절단]";
+  const arcLong = JSON.stringify({ schema: "verify-envelope-archive-v1", alwaysBlocker: [...arcObj.alwaysBlocker, cut9] }, null, 1);
+  fs.writeFileSync(path.join(R9, CL.ARCHIVE_FILE), arcLong);
+  assert.strictEqual(CL.setContractHashAllSlots(W9, "archiveHash", sha1(arcLong)), 2);
+  const CAMP9 = "cl:test:rec";
+  CL.appendFindingsLedger(W9, [
+    { type: "finding", findingId: "f-long9", campaignId: CAMP9, round: 1, tag: "blocker", title: longT9, titleNorm: longT9, envelopeHash: CORE_HASH, demoted: false, status: "open", ts: "T" },
+    { type: "close", findingId: "f-long9", campaignId: CAMP9, closeReason: "resolved", askId: "ask-x", ts: "T" },
+  ]);
+  CL.reconcileMemoryCandidates(W9, R9, CORE_HASH);
+  const cidLong = CL.envelopeCandidateId("resolved-blocker", CL.wsKeyFor(W9) + "|" + CAMP9 + "|f-long9");
+  const recLong = CL.readEnvelopeCandidates(W9).latest.get(cidLong + "@" + CORE_HASH);
+  assert.ok(recLong && recLong.status === "declined", "★장문(절단 등재)과 같은 신규 blocker=생성 시점 억제(declined — 한 스캔도 대기 노출 없음): " + JSON.stringify(recLong && recLong.status));
+  // 소실 서고(도장 불일치)=보수: 서고 문안을 억제 집합에 안 넣음(코어만) — 신규가 서고 문안과 겹쳐도 대기 유지
+  const keep9 = fs.readFileSync(path.join(R9, CL.ARCHIVE_FILE), "utf8");
+  fs.writeFileSync(path.join(R9, CL.ARCHIVE_FILE), JSON.stringify({ schema: "verify-envelope-archive-v1", alwaysBlocker: ["바뀐 판"] }, null, 1));
+  CL.appendEnvelopeCandidates(W9, [mk9("ff00000000000004", arcObj.alwaysBlocker[1])]);
+  CL.reconcileMemoryCandidates(W9, R9, CORE_HASH);
+  assert.strictEqual(CL.readEnvelopeCandidates(W9).latest.get("ff00000000000004@" + CORE_HASH).status, "proposed", "소실 서고=보수(코어만 대조 — 오정리 없음)");
+  fs.writeFileSync(path.join(R9, CL.ARCHIVE_FILE), keep9);
+});
 console.log(`결과: ${n}/${n} 통과`);
