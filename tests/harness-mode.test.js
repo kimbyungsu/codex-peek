@@ -93,7 +93,7 @@ assert.match(extSrc,/codexHomeIsReady=true;codexHookTrustCache\.reset\(\)[\s\S]{
 assert.match(extSrc,/const e=codexHookOfferGate\.enter\(auto\);[\s\S]{0,120}if\(e\.act==="queued"\)\{codexHookOfferQueuedRoot=extensionRoot;return;\}/,"활성화와 C-C 선택의 비동기 경합 — 순수 게이트가 선점·큐 판정(P-5 4차: 순서 계약은 게이트 실행 테스트가 잠금)");
 assert.match(extSrc,/\["app-server","--stdio"\][\s\S]{0,2400}"hooks\/list"/,"설치 목록이 아니라 app-server hooks/list로 실제 훅 신뢰 상태 조회");
 assert.match(extSrc,/state\.present&&state\.enabled[\s\S]{0,700}refreshCodexPeekHookTrust[\s\S]{0,400}showCodexHookTrustWarning/,"설치·활성 상태여도 미신뢰면 자동 경고(P-5: 마이그레이션 선확인·조회 실패는 auto 진입에서 팝업 억제)");
-assert.match(extSrc,/if\(state\.present&&!state\.enabled\)[\s\S]{0,900}활성화한 뒤 Hook에서 네 훅을 검토·신뢰[\s\S]{0,300}구현 연결이 자동 이동/,"비활성 자동 경고도 활성화·네 훅 신뢰→현재 대화 자동 이동을 안내");
+assert.match(extSrc,/if\(state\.present&&!state\.enabled\)[\s\S]{0,900}활성화한 뒤 Hook에서 훅 전부를 검토·신뢰[\s\S]{0,300}구현 연결이 자동 이동/,"비활성 자동 경고도 활성화·훅 전부 신뢰→현재 대화 자동 이동을 안내(개수 무관 표현 2026-08-26)");
 assert.doesNotMatch(extSrc,/기존 구현 세션을 숨겨 연결을 (?:명시적으로 )?해제|hide the old implementer session/,"구현 자동귀속 전에 수동 unlink가 필요하다는 오안내 제거");
 const healthSrc=fs.readFileSync(path.join(__dirname,"..","src","codex-hook-health.ts"),"utf8"),pkg=JSON.parse(fs.readFileSync(path.join(__dirname,"..","package.json"),"utf8"));assert.match(healthSrc,/snapshot\.queried !== true[\s\S]{0,120}hooks-unverified/,"hooks/list 조회 전·실패도 fail-closed");assert.match(pkg.scripts.test,/tests\/codex-hook-health\.test\.js/,"훅 생존·신뢰 테스트가 전체 npm test 체인에 포함");
 assert.match(extSrc,/new CodexHookTrustCache[\s\S]{0,500}codexHookTrustCwd/,"훅 신뢰 캐시는 실제 조회 CWD별로 분리");assert.match(extSrc,/refreshCodexPeekHookTrust\(context\.extensionUri\.fsPath, codexHookTrustCwd\(ws\)\)/,"주기 조회도 논리 폴더가 아닌 명시 scoutRepo를 우선");

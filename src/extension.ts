@@ -2954,6 +2954,11 @@ function unlinkSession(id: string, ws: string): boolean {
 // C↔C의 '연결됨'은 세션 id 두 개만으로 충분하지 않다. 현재 구현 대화의 최신 turn과 같은
 // 현재 세션의 실제 lifecycle heartbeat가 있어야 플러그인 Stop 강제가 붙은 것으로 본다. 이 경보는 확인으로
 // 숨길 수 없고, 훅이 실제로 실행되거나 C↔C를 끌 때만 해소된다.
+// 안내 문구의 훅 이름·개수는 정본(codex-plugin-install CODEX_PEEK_USER_HOOKS)에서 파생 — '네 훅' 식 개수
+// 하드코딩은 훅이 늘어나는 릴리스마다 낡는다(실보고 2026-08-26: PreToolUse 추가 후 '훅 4개' 잔존).
+const CODEX_PEEK_HOOK_EVENT_NAMES = ((require("../bridge/codex-plugin-install.js") as { CODEX_PEEK_USER_HOOKS: Array<{ event: string }> }).CODEX_PEEK_USER_HOOKS || []).map((h) => h.event);
+const CODEX_PEEK_HOOK_NAME_LIST = CODEX_PEEK_HOOK_EVENT_NAMES.join("·");
+const CODEX_PEEK_HOOK_COUNT = CODEX_PEEK_HOOK_EVENT_NAMES.length;
 function syncCodexHookHealth(ws: string | null): void {
   if (!ws || !codexHomeIsReady) return; // doctor 전의 기본·옛 home으로 거짓 경보/캐시를 만들지 않는다.
   try {
@@ -2965,27 +2970,27 @@ function syncCodexHookHealth(ws: string | null): void {
       const problem = health.required && !health.ready && health.reason !== "implementer-missing";
       const sig = `codex-hook:${health.reason}`;
       const dKo = health.reason === "hooks-unverified"
-        ? "Codex Peek 훅의 신뢰 상태를 확인하지 못했습니다. 조회 전·시간 초과·app-server 오류를 정상으로 승인하지 않습니다. Codex 실행 상태를 확인하고 Codex 설정 → Hook에서 네 훅의 신뢰 여부를 검토하세요."
+        ? "Codex Peek 훅의 신뢰 상태를 확인하지 못했습니다. 조회 전·시간 초과·app-server 오류를 정상으로 승인하지 않습니다. Codex 실행 상태를 확인하고 Codex 설정 → Hook에서 등록된 훅 전부의 신뢰 여부를 검토하세요."
         : health.reason === "hooks-untrusted"
-        ? "Codex Peek 사용자 훅(hooks.json)이 등록돼 있지만 SessionStart·UserPromptSubmit·PostToolUse·Stop 네 훅이 모두 신뢰된 실행 상태가 아닙니다(실행 권위는 플러그인 번들이 아니라 이 사용자 훅). Codex 설정 → Hook에서 실행 내용을 검토·신뢰하고 창을 리로드하세요 — 이후 Codex 대화를 시작·재개할 때 구현 연결이 자동 이동합니다."
+        ? `Codex Peek 사용자 훅(hooks.json)이 등록돼 있지만 ${CODEX_PEEK_HOOK_NAME_LIST} 훅이 모두 신뢰된 실행 상태가 아닙니다(실행 권위는 플러그인 번들이 아니라 이 사용자 훅). Codex 설정 → Hook에서 실행 내용을 검토·신뢰하고 창을 리로드하세요 — 이후 Codex 대화를 시작·재개할 때 구현 연결이 자동 이동합니다.`
         : health.reason === "heartbeat-stale"
-        ? "Codex Peek 네 훅의 신뢰 상태는 확인됐지만 현재 구현 세션의 최신 턴에서 lifecycle 훅 실행이 확인되지 않았습니다. rollout 보조 감지는 초록 구현 연결만 옮기므로 '모든 턴 검증'을 정상으로 승인하지 않습니다. 사용하려는 Codex 대화를 다시 열거나 프롬프트를 보내 실제 훅 신호를 확인하세요."
+        ? "Codex Peek 훅 전부의 신뢰 상태는 확인됐지만 현재 구현 세션의 최신 턴에서 lifecycle 훅 실행이 확인되지 않았습니다. rollout 보조 감지는 초록 구현 연결만 옮기므로 '모든 턴 검증'을 정상으로 승인하지 않습니다. 사용하려는 Codex 대화를 다시 열거나 프롬프트를 보내 실제 훅 신호를 확인하세요."
         : health.reason === "turn-unverifiable"
         ? "Codex↔Codex 구현 세션의 최신 turn id를 읽지 못해 훅 생존을 검증할 수 없습니다. 비교 불능 상태를 정상으로 승인하지 않습니다. 플러그인·Codex 버전과 Codex 설정 → Hook의 신뢰 상태를 확인하세요."
         : health.reason === "session-missing"
         ? "Codex↔Codex 구현 세션 파일을 찾을 수 없어 훅 생존을 확인할 수 없습니다. 사용하려는 Codex 대화를 시작·재개하거나 프롬프트를 보내면 그 세션으로 구현 연결을 다시 고정합니다. 하네스가 새 세션을 임의 생성하지는 않습니다."
-        : "Codex Peek 네 훅의 신뢰 상태는 확인됐지만 현재 구현 세션에서 실제 lifecycle 훅 실행 기록이 없습니다. rollout 보조 감지는 초록 구현 연결만 옮기므로 '모든 턴 검증'을 정상으로 승인하지 않습니다. 사용하려는 Codex 대화를 다시 열거나 프롬프트를 보내 실제 훅 신호를 확인하세요.";
+        : "Codex Peek 훅 전부의 신뢰 상태는 확인됐지만 현재 구현 세션에서 실제 lifecycle 훅 실행 기록이 없습니다. rollout 보조 감지는 초록 구현 연결만 옮기므로 '모든 턴 검증'을 정상으로 승인하지 않습니다. 사용하려는 Codex 대화를 다시 열거나 프롬프트를 보내 실제 훅 신호를 확인하세요.";
       const dEn = health.reason === "hooks-unverified"
-        ? "The Codex Peek hook trust state could not be verified. Pre-query, timeout, and app-server errors are not approved as healthy. Check Codex and review all four hooks under Codex Settings → Hooks."
+        ? "The Codex Peek hook trust state could not be verified. Pre-query, timeout, and app-server errors are not approved as healthy. Check Codex and review all registered hooks under Codex Settings → Hooks."
         : health.reason === "hooks-untrusted"
-        ? "The Codex Peek user hooks (hooks.json) are registered, but the four SessionStart, UserPromptSubmit, PostToolUse, and Stop entries are not all trusted and runnable (the runtime authority is these user hooks, not the plugin bundle). Review and trust them under Codex Settings → Hooks and reload the window — afterwards, starting or resuming a Codex conversation automatically moves the implementer link."
+        ? `The Codex Peek user hooks (hooks.json) are registered, but the ${CODEX_PEEK_HOOK_NAME_LIST} entries are not all trusted and runnable (the runtime authority is these user hooks, not the plugin bundle). Review and trust them under Codex Settings → Hooks and reload the window — afterwards, starting or resuming a Codex conversation automatically moves the implementer link.`
         : health.reason === "heartbeat-stale"
-        ? "All four Codex Peek hooks are trusted, but no lifecycle hook ran for the latest turn in the current implementer session. The rollout fallback moves only the green implementer link and does not approve 'verify every turn' as enforced. Reopen the Codex conversation or send a prompt to obtain a real hook signal."
+        ? "All Codex Peek hooks are trusted, but no lifecycle hook ran for the latest turn in the current implementer session. The rollout fallback moves only the green implementer link and does not approve 'verify every turn' as enforced. Reopen the Codex conversation or send a prompt to obtain a real hook signal."
         : health.reason === "turn-unverifiable"
         ? "The latest rollout turn id cannot be read, so implementer-hook liveness is unverifiable and is not approved as healthy. Check the plugin/Codex version and the trust state under Codex Settings → Hooks."
         : health.reason === "session-missing"
         ? "The Codex↔Codex implementer session file is missing, so hook liveness cannot be verified. Send a prompt in the Codex conversation you want to use to pin that session again. The harness does not create a new session on its own."
-        : "All four Codex Peek hooks are trusted, but no lifecycle execution exists for the current implementer session. The rollout fallback moves only the green implementer link and does not approve 'verify every turn' as enforced. Reopen the Codex conversation or send a prompt to obtain a real hook signal.";
+        : "All Codex Peek hooks are trusted, but no lifecycle execution exists for the current implementer session. The rollout fallback moves only the green implementer link and does not approve 'verify every turn' as enforced. Reopen the Codex conversation or send a prompt to obtain a real hook signal.";
       const kept = events.filter((e) => e.kind !== KIND || !wsMatch(e) || (problem && e.sig === sig && !e.ack));
       const present = kept.some((e) => e.kind === KIND && wsMatch(e));
       if (problem && !present) kept.push({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, ack: false, ts: new Date().toISOString(), session: "", workspace: ws, kind: KIND, severity: "error", detail: tE(dKo, dEn), detailKo: dKo, detailEn: dEn, sig });
@@ -6278,17 +6283,19 @@ class Dashboard {
     var ep9=ha9?integAll9.filter(function(e){ return e.kind==="enrich-parked"; }).length:0;
     var integ9=integAll9.length-ev9-ep9;
     if(integ9) acts9.push({n:integ9, tab:null, label:T("미확인 경보 — 위 경보 배너에서 내용 확인 후 '확인'","unacknowledged alerts — review & ack in the banner above")});
-    if(ev9) acts9.push({n:ev9, tab:"verify", label:T("근거 재확인 경고 열림 — 배너 '확인' 또는 자동 해소 대기","evidence-recheck warnings open — ack in the banner or await auto-clear")});
+    if(ev9) acts9.push({n:ev9, tab:"verify", el:"#chSec", label:T("근거 재확인 경고 열림 — 배너 '확인' 또는 자동 해소 대기","evidence-recheck warnings open — ack in the banner or await auto-clear")}); // el=근거 재확인 카드 실위치(접힘 상자 — 이동 전면 점검 2026-08-26)
     // 보관함은 '갚을 의무 없음' 주차장 — 전량을 '지금 정할 것'으로 세면 급한 일이 묻힌다(사용자 결정 2026-08-07).
     // 검토 기한(due=30일+ 경과 또는 3회+ 재발견) 항목만 긴급 합산에 넣고, 나머지는 합산 밖 '여유' 줄로만 안내.
     var blDue9=d.backlog&&d.backlog.cautionDue?d.backlog.cautionDue:0;
     if(blDue9) acts9.push({n:blDue9, tab:"verify", el:"#backlogSec", label:T("보관함 검토 기한 항목(오래됨·자주 재발견)","parked items due for review (old or often rediscovered)")}); // el=보관함 실위치(사용자 실보고 2026-08-20: 탭 전환만으로는 접힌 하단 상자에 못 닿음)
     var ic9=d.mapCurrent&&d.mapCurrent.intent&&Number.isFinite(d.mapCurrent.intent.choicePending)?d.mapCurrent.intent.choicePending:0;
-    if(ic9) acts9.push({n:ic9, tab:"setup", label:T("MAP 대기 선택","MAP choices waiting")});
+    if(ic9) acts9.push({n:ic9, tab:"setup", el:"#intentBox", label:T("MAP 대기 선택","MAP choices waiting")}); // el=선택 대기 상자 실위치(이동 전면 점검 2026-08-26)
     // [상시 표출 2026-08-16 사용자 결정] 선택한 보강 담당이 사람 조치로만 재개되는 보류 — 경보 '확인'을
     // 눌러도 상태가 남아 있는 한 여기 계속 표시(호스트 판정 enrichHumanActionNeeded — 자동 재개 경로가
     // 살아 있는 보류는 애초에 이 값이 비어 조용).
-    if(ha9) acts9.push({n:1, tab:"map", label:ha9==="probe"
+    // ⚠목적지=검증 설정 탭의 #mapModeRow — '다시 시도'·'🔎 다시 점검' 버튼이 실제로 있는 곳. Project MAP
+    //   탭은 통계뿐이라 tab:"map"으로 보내면 조치 지점이 없다(사용자 실보고 2026-08-26: 눌러도 그 자리로 못 감).
+    if(ha9) acts9.push({n:1, tab:"setup", el:"#mapModeRow", label:ha9==="probe"
       ?T("자동 보강 멈춤 — 담당 준비 점검이 필요해요","auto-enrichment stalled — the provider needs a readiness check")
       :T("자동 보강 멈춤 — 사람 조치로만 재개돼요(다시 시도 등 · 재호출은 사용량 소모)","auto-enrichment stalled — only human action resumes it (e.g. retry · a re-call uses quota)")});
     if(d.envelope&&d.envelope.btn) acts9.push({n:1, tab:"setup", el:"#envCard", label:T("검증 경계(수칙서) 승인 대기","verify-envelope approval pending")}); // el=수칙서 카드 실위치(2026-08-22 실보고 — 탭 상단 오착지 봉합·보관함 두 줄과 동일 계보)
@@ -8034,7 +8041,7 @@ class Dashboard {
         step("ob1", codexReady, codexReady?T("Codex 준비됨","Codex ready"):T("Codex 경로 미고정 — PATH의 codex로 시도","Codex path not pinned — trying codex on PATH"), {cmd:"openSettings"}, codexReady?"":T("openai.chatgpt 확장이 있으면 보통 자동 · standalone CLI면 PATH로 동작(안 뜨면 codexBridge.codexPath 지정)","usually automatic with the openai.chatgpt extension · standalone CLI works via PATH (set codexBridge.codexPath if not detected)"));
         step("ob2", linked, linked?T("Codex 세션 연결됨","Codex session linked"):T("Codex 세션 미연결","No Codex session linked"), {go:"cands"}, linked?"":T("연결할 세션 고르기","pick a session to link"));
         step("ob3", vOn, vOn?(T("검증 켜짐 (","verify on (")+(vmEffOb||"off")+")"):T("검증 꺼짐","verify off"), {go:"segVerify"}, vOn?"":T("검증 모드 켜고 저장","turn on a verify mode and save"));
-        const ob4=$("ob4"); if(ob4){ ob4.style.display=ccMode?"":"none"; if(ccMode)step("ob4",hookReady,hookReady?T("현재 구현 세션에서 Codex 강제 훅 확인됨","Codex enforcement hook confirmed in the current implementer session"):T("Codex 강제 훅 미확인 — 이 상태에선 모든 턴 검증이 강제되지 않음","Codex enforcement hook not confirmed — verify-every-turn is not enforced"),{cmd:"installCodexHooks"},hookReady?"":T("플러그인 설치·네 훅 신뢰·창 리로드 → 사용할 대화 시작·재개 시 자동 고정","install the plugin, trust all four hooks, reload the window → starting or resuming a conversation auto-pins it")); }
+        const ob4=$("ob4"); if(ob4){ ob4.style.display=ccMode?"":"none"; if(ccMode)step("ob4",hookReady,hookReady?T("현재 구현 세션에서 Codex 강제 훅 확인됨","Codex enforcement hook confirmed in the current implementer session"):T("Codex 강제 훅 미확인 — 이 상태에선 모든 턴 검증이 강제되지 않음","Codex enforcement hook not confirmed — verify-every-turn is not enforced"),{cmd:"installCodexHooks"},hookReady?"":T("플러그인 설치·훅 전부 신뢰·창 리로드 → 사용할 대화 시작·재개 시 자동 고정","install the plugin, trust all its hooks, reload the window → starting or resuming a conversation auto-pins it")); }
       }
     });
     // 기본지침도 언어 전환 hold(계약 카드와 동일 원리) — 편집 중 언어가 바뀌면 보던 언어 화면 유지, 저장은 보던 슬롯으로.
@@ -8729,7 +8736,7 @@ function spawn_sync_where(cmd: string): string | undefined {
   } catch { return undefined; }
 }
 
-// 훅 설치 흐름(동의 1클릭): 무엇을 바꾸는지·백업 위치·훅 4줄을 보여주고, [설치]를 눌러야만 병합한다.
+// 훅 설치 흐름(동의 1클릭): 무엇을 바꾸는지·백업 위치·등록될 훅 전체(OUR_HOOKS)를 보여주고, [설치]를 눌러야만 병합한다.
 async function runHookInstallFlow(): Promise<void> {
   const settingsFile = claudeSettingsFile();
   let tok = hookSetup.resolveNodeToken(nodeTokenCandidates());
@@ -8759,8 +8766,8 @@ async function runHookInstallFlow(): Promise<void> {
       : (en ? "Note: the current settings.json is not in a shape this installer can merge, so the install will stop without changing the file." : "참고: 지금 settings.json이 이 설치기가 병합할 수 있는 형태가 아니라, 파일을 바꾸지 않고 중단됩니다."))
     : hookSetup.claudeHookApplyNote({ registrationChanged: preview === "changed", settingsExisted: fs.existsSync(settingsFile) }, en));
   const detail = tE(
-    `바꾸는 파일: ${settingsFile}\n(수정 전 같은 폴더에 settings.json.bak.<시각> 백업을 먼저 만듭니다. 기존 다른 훅은 보존됩니다.)\n\n등록되는 훅 4줄(검증 3 + 탐색 게이트 1 — 게이트는 3트랙 프로젝트에서 기본 켜짐: 지도가 없거나 낡으면 플랜 확정 전 세션당 2회까지 안내 후 통과·오류 시 절대 안 막음·끄기는 scope-gate CLI. 2트랙 프로젝트에선 관측 기록만):\n${cmds}\n\n${applyNote(false)}`,
-    `File to change: ${settingsFile}\n(A settings.json.bak.<time> backup is created first. Other existing hooks are preserved.)\n\nHooks to register (3 verification + 1 recon gate — the gate is on by default in 3-track projects: if the map is missing/stale it prompts before plan confirmation up to 2×/session then passes, never blocks on errors, turn off via the scope-gate CLI. In 2-track projects it only logs observations):\n${cmds}\n\n${applyNote(true)}`,
+    `바꾸는 파일: ${settingsFile}\n(수정 전 같은 폴더에 settings.json.bak.<시각> 백업을 먼저 만듭니다. 기존 다른 훅은 보존됩니다.)\n\n등록되는 훅 ${hookSetup.OUR_HOOKS.length}줄(검증·기록 + 탐색 게이트 + 서고 미리보기 관문 — 게이트는 3트랙 프로젝트에서 기본 켜짐: 지도가 없거나 낡으면 플랜 확정 전 세션당 2회까지 안내 후 통과·오류 시 절대 안 막음·끄기는 scope-gate CLI. 2트랙 프로젝트에선 관측 기록만. 미리보기 관문은 서고 승인 프로젝트에서만 동작):\n${cmds}\n\n${applyNote(false)}`,
+    `File to change: ${settingsFile}\n(A settings.json.bak.<time> backup is created first. Other existing hooks are preserved.)\n\nHooks to register (${hookSetup.OUR_HOOKS.length} lines: verification/recording + recon gate + archive-preview gate — the recon gate is on by default in 3-track projects: if the map is missing/stale it prompts before plan confirmation up to 2×/session then passes, never blocks on errors, turn off via the scope-gate CLI. In 2-track projects it only logs observations. The preview gate acts only in projects with an approved rulebook archive):\n${cmds}\n\n${applyNote(true)}`,
   );
   const yes = tE("설치", "Install");
   const pick = await vscode.window.showInformationMessage(tE("Claude Code 검증 훅 설치", "Install Claude Code verification hooks"), { modal: true, detail }, yes);
@@ -8783,10 +8790,12 @@ function runCodexPluginCommand(extensionRoot: string, args: string[]): Promise<{
   const pi=require("../bridge/codex-plugin-install.js") as {buildCodexPluginSpawn:(p:string,a:string[])=>{file:string;args:string[];shell:false;windowsVerbatimArguments:boolean;env:Record<string,string>}};
   return new Promise((resolve)=>{let out="",err="",done=false;const finish=(v:{code:number;out:string;err:string})=>{if(!done){done=true;resolve(v);}};const inv=pi.buildCodexPluginSpawn(codex,args);let c:ReturnType<typeof spawn>;try{c=spawn(inv.file,inv.args,{cwd:extensionRoot,windowsHide:true,shell:false,windowsVerbatimArguments:inv.windowsVerbatimArguments,env:{...process.env,...inv.env}});}catch(e){finish({code:1,out,err:String(e)});return;}c.stdout?.on("data",d=>{if(out.length<65536)out+=d.toString();});c.stderr?.on("data",d=>{if(err.length<65536)err+=d.toString();});c.on("error",e=>finish({code:1,out,err:String(e.message||e)}));c.on("close",code=>finish({code:typeof code==="number"?code:1,out,err}));});
 }
-type CodexPeekPluginState = { present: boolean; enabled: boolean; pluginId: string };
+// queryFailed: CLI 조회가 답을 못 준 상태(plugin 하위명령 미지원·실행 실패·타임아웃) — '패키지 없음'이라는
+// 사실이 아니므로 부재로 접어 설치를 권하면 매 창 로드 오경고가 된다(사용자 실보고 2026-08-26).
+type CodexPeekPluginState = { present: boolean; enabled: boolean; pluginId: string; queryFailed?: boolean };
 async function codexPeekPluginState(extensionRoot: string): Promise<CodexPeekPluginState> {
   const r=await runCodexPluginCommand(extensionRoot,["plugin","list","--json"]);
-  if(r.code!==0)return {present:false,enabled:false,pluginId:""};
+  if(r.code!==0)return {present:false,enabled:false,pluginId:"",queryFailed:true};
   const pi=require("../bridge/codex-plugin-install.js") as {codexPeekPluginState:(s:string)=>CodexPeekPluginState};
   return pi.codexPeekPluginState(r.out);
 }
@@ -8837,15 +8846,15 @@ function codexHookMigrationStatus():{needed:boolean;count:number}{
 }
 async function offerCodexHookMigration(extensionRoot:string,count:number):Promise<void>{
   const fix=tE("지금 교체","Update now");
-  const pick=await vscode.window.showWarningMessage(tE(`Codex 훅 ${count}개가 옛 명령 형식(따옴표 절대경로)입니다. Windows 기본 셸이 PowerShell이면 이 형식은 조용히 실행 실패합니다(로그 없음). PowerShell·cmd 양쪽에서 실행되는 형식으로 교체하세요 — 교체 후 Codex 설정 → Hook 재신뢰와 창 리로드가 필요합니다.`,`${count} Codex hook command(s) use the legacy quoted absolute-path form. When Windows' default shell is PowerShell this form silently fails to run (no log). Update them to a form that runs in both PowerShell and cmd — afterwards re-trust the four hooks under Codex Settings → Hooks and reload the window.`),fix);
+  const pick=await vscode.window.showWarningMessage(tE(`Codex 훅 ${count}개가 옛 명령 형식(따옴표 절대경로)입니다. Windows 기본 셸이 PowerShell이면 이 형식은 조용히 실행 실패합니다(로그 없음). PowerShell·cmd 양쪽에서 실행되는 형식으로 교체하세요 — 교체 후 Codex 설정 → Hook 재신뢰와 창 리로드가 필요합니다.`,`${count} Codex hook command(s) use the legacy quoted absolute-path form. When Windows' default shell is PowerShell this form silently fails to run (no log). Update them to a form that runs in both PowerShell and cmd — afterwards re-trust the hooks under Codex Settings → Hooks and reload the window.`),fix);
   if(pick!==fix)return;
   if(!codexUserHooksOwned()){
-    void vscode.window.showWarningMessage(tE(`이 훅들은 확장이 설치했다는 소유 표식이 없어 자동으로 바꾸지 않습니다(다른 설치 경로 보호). ${codexUserHooksFile()}에서 네 훅의 command·commandWindows를 node "<브릿지 경로>/codex-hook.js" 형식으로 직접 바꾼 뒤 재신뢰·창 리로드하세요.`,`These hooks carry no ownership marker from this extension, so they are not changed automatically (protecting other install paths). In ${codexUserHooksFile()}, change the four hooks' command/commandWindows to the form node "<bridge dir>/codex-hook.js", then re-trust and reload the window.`));
+    void vscode.window.showWarningMessage(tE(`이 훅들은 확장이 설치했다는 소유 표식이 없어 자동으로 바꾸지 않습니다(다른 설치 경로 보호). ${codexUserHooksFile()}에서 우리 훅 전부의 command·commandWindows를 node "<브릿지 경로>/codex-hook.js" 형식으로 직접 바꾼 뒤 재신뢰·창 리로드하세요.`,`These hooks carry no ownership marker from this extension, so they are not changed automatically (protecting other install paths). In ${codexUserHooksFile()}, change our hooks' command/commandWindows to the form node "<bridge dir>/codex-hook.js", then re-trust and reload the window.`));
     return;
   }
   const res=installCodexUserRuntimeHooks();
   if(!res.ok){void vscode.window.showErrorMessage(tE(`Codex 훅 명령 교체 실패: ${res.reason||"알 수 없는 이유"}`,`Failed to update Codex hook commands: ${res.reason||"unknown reason"}`));return;}
-  void vscode.window.showInformationMessage(tE("Codex 훅 명령을 교체했습니다. 명령이 바뀌었으므로 Codex 설정 → Hook에서 네 훅을 다시 신뢰한 뒤 창을 리로드하세요 — 리로드 전까지 훅은 실행되지 않습니다.","Codex hook commands were updated. Because the commands changed, re-trust the four hooks under Codex Settings → Hooks, then reload the window — hooks do not execute until the reload."));
+  void vscode.window.showInformationMessage(tE("Codex 훅 명령을 교체했습니다. 명령이 바뀌었으므로 Codex 설정 → Hook에서 훅 전부를 다시 신뢰한 뒤 창을 리로드하세요 — 리로드 전까지 훅은 실행되지 않습니다.","Codex hook commands were updated. Because the commands changed, re-trust the hooks under Codex Settings → Hooks, then reload the window — hooks do not execute until the reload."));
   try{const trust=await refreshCodexPeekHookTrust(extensionRoot,dashboardCodexHookTrustCwd(extensionRoot),true);if(!trust.ready)await showCodexHookTrustWarning(trust,extensionRoot);}catch{/* 대시보드 경보가 fail-closed 유지 */}
 }
 function queryCodexPeekHookTrust(extensionRoot: string, projectCwd: string): Promise<CodexHookTrustSnapshot> {
@@ -8857,7 +8866,7 @@ function queryCodexPeekHookTrust(extensionRoot: string, projectCwd: string): Pro
   return new Promise((resolve)=>{
     let out="",err="",done=false,initialized=false;
     const checkedAt=Date.now();
-    const fallback=(why:string):CodexHookTrustSnapshot=>({queried:false,found:false,ready:false,required:4,trusted:0,untrusted:0,disabled:0,missingEvents:[],statuses:[],pluginIds:[],error:why,checkedAt});
+    const fallback=(why:string):CodexHookTrustSnapshot=>({queried:false,found:false,ready:false,required:CODEX_PEEK_HOOK_COUNT,trusted:0,untrusted:0,disabled:0,missingEvents:[],statuses:[],pluginIds:[],error:why,checkedAt});
     const inv=pi.buildCodexPluginSpawn(codex,["app-server","--stdio"]);
     let c:ReturnType<typeof spawn>;
     const finish=(v:CodexHookTrustSnapshot)=>{if(done)return;done=true;clearTimeout(timer);try{c.stdin?.end();}catch{}try{c.kill();}catch{}resolve(v);};
@@ -8904,7 +8913,7 @@ async function showCodexHookTrustWarning(state:CodexHookTrustSnapshot,extensionR
     const pick=await vscode.window.showWarningMessage(tE(`Codex 훅 신뢰 상태를 확인하지 못했습니다(${state.error||"응답 없음"}). 확인 실패를 정상으로 승인하지 않지만, 훅 설정이 바뀐 것도 아닙니다 — Codex가 실행 중인지 확인한 뒤 다시 확인하세요.`,`Could not verify the Codex hook trust state (${state.error||"no response"}). The failed check is not approved as healthy, but it also does not mean your hooks changed — make sure Codex is running, then check again.`),retry);
     if(pick===retry&&extensionRoot){
       try{const t=await refreshCodexPeekHookTrust(extensionRoot,dashboardCodexHookTrustCwd(extensionRoot),true);
-        if(t.ready)void vscode.window.showInformationMessage(tE("설정상 네 훅의 신뢰가 확인됐습니다. 이 창의 Codex 실행 코어에는 창 리로드 후 반영됩니다(조회는 별도 프로세스라 현재 코어의 실행을 증명하지 않음).","All four hooks are confirmed trusted in configuration. This window's Codex core picks them up after a window reload (the query runs in a separate process and does not prove the current core executes them)."));
+        if(t.ready)void vscode.window.showInformationMessage(tE("설정상 훅 전부의 신뢰가 확인됐습니다. 이 창의 Codex 실행 코어에는 창 리로드 후 반영됩니다(조회는 별도 프로세스라 현재 코어의 실행을 증명하지 않음).","All hooks are confirmed trusted in configuration. This window's Codex core picks them up after a window reload (the query runs in a separate process and does not prove the current core executes them)."));
         else await showCodexHookTrustWarning(t,extensionRoot);}catch{/* 재시도 실패 — 대시보드 경보 유지 */}
     }
     return;
@@ -8913,8 +8922,8 @@ async function showCodexHookTrustWarning(state:CodexHookTrustSnapshot,extensionR
   const status=state.found
     ? tE(`발견 ${state.required}개 중 신뢰 ${state.trusted}개 · 검토 필요 ${state.untrusted}개`,`found ${state.required}; trusted ${state.trusted}; review required ${state.untrusted}`)
     : tE("Codex Peek 훅 정의를 찾지 못함","Codex Peek hook definitions were not discovered");
-  const pick=await vscode.window.showWarningMessage(tE(`Codex Peek 패키지는 설치됐지만 사용자 실행 훅(${hooksFile})은 아직 준비되지 않았습니다(${status}). Codex 설정 → Hook에서 SessionStart·UserPromptSubmit·PostToolUse·Stop 네 훅을 검토하고 신뢰하세요.`,`The Codex Peek package is installed, but its user-level runtime hooks (${hooksFile}) are not ready (${status}). In Codex Settings → Hooks, review and trust the four SessionStart, UserPromptSubmit, PostToolUse, and Stop entries.`),review);
-  if(pick===review)void vscode.window.showInformationMessage(tE(`Codex 설정 → Hook을 열어 ${hooksFile}에서 온 Codex Peek 네 명령을 확인한 뒤 신뢰하세요. 플러그인 번들 훅은 일부 Codex 버전에서 목록에만 나타나고 실행되지 않아 사용자 훅을 실행 권위로 사용합니다. 신뢰를 마친 뒤 창을 리로드해야 훅이 실행되며, 이후 시작·재개한 Codex 대화로 구현 연결과 초록 표시가 자동 이동합니다.`,`Open Codex Settings → Hooks, inspect and trust the four Codex Peek commands sourced from ${hooksFile}. Some Codex versions list plugin-bundled hooks without executing them, so the user hooks are the runtime authority. After trusting, reload the window so the hooks actually execute; afterwards, starting or resuming a Codex conversation moves the implementer link and green marker automatically.`),{modal:true});
+  const pick=await vscode.window.showWarningMessage(tE(`Codex Peek 패키지는 설치됐지만 사용자 실행 훅(${hooksFile})은 아직 준비되지 않았습니다(${status}). Codex 설정 → Hook에서 ${CODEX_PEEK_HOOK_NAME_LIST} 훅을 검토하고 신뢰하세요.`,`The Codex Peek package is installed, but its user-level runtime hooks (${hooksFile}) are not ready (${status}). In Codex Settings → Hooks, review and trust the ${CODEX_PEEK_HOOK_NAME_LIST} entries.`),review);
+  if(pick===review)void vscode.window.showInformationMessage(tE(`Codex 설정 → Hook을 열어 ${hooksFile}에서 온 Codex Peek 명령 전부를 확인한 뒤 신뢰하세요. 플러그인 번들 훅은 일부 Codex 버전에서 목록에만 나타나고 실행되지 않아 사용자 훅을 실행 권위로 사용합니다. 신뢰를 마친 뒤 창을 리로드해야 훅이 실행되며, 이후 시작·재개한 Codex 대화로 구현 연결과 초록 표시가 자동 이동합니다.`,`Open Codex Settings → Hooks, inspect and trust the Codex Peek commands sourced from ${hooksFile}. Some Codex versions list plugin-bundled hooks without executing them, so the user hooks are the runtime authority. After trusting, reload the window so the hooks actually execute; afterwards, starting or resuming a Codex conversation moves the implementer link and green marker automatically.`),{modal:true});
 }
 async function runCodexHookInstallFlow(extensionRoot: string): Promise<boolean> {
   await codexHomeReady; // 대시보드·명령 팔레트·자동 제안 어느 입구든 실제 CODEX_HOME 확정이 중앙 선행조건이다.
@@ -8925,15 +8934,18 @@ async function runCodexHookInstallFlow(extensionRoot: string): Promise<boolean> 
   // owned/unowned 분기는 offerCodexHookMigration 내부(무표식=수동 안내만).
   {const mig=codexHookMigrationStatus();if(mig.needed){await offerCodexHookMigration(extensionRoot,mig.count);return false;}}
   const existing=await codexPeekPluginState(extensionRoot);
+  // 조회 실패(plugin 하위명령 미지원 등)는 명시 진입에서도 '패키지 없음'이 아니다 — 설치 모달·marketplace
+  // add로 직행하면 같은 CLI에서 어차피 실패하는 잘못된 흐름이 열린다(검증 blocker 2026-08-26). 정직 중단.
+  if(existing.queryFailed){void vscode.window.showWarningMessage(tE("Codex CLI에서 플러그인 상태를 확인하지 못했습니다(plugin 명령 미지원·실행 실패 등) — 설치 여부를 판정할 수 없어 설치를 진행하지 않습니다. codex 버전을 확인해 주세요.","Could not read the plugin state from the Codex CLI (plugin subcommand unsupported, or the call failed) — cannot tell whether the package is installed, so no install was attempted. Check your codex version."));return false;}
   const userHooks=codexUserHookStatus();
   if(existing.present&&existing.enabled&&userHooks.installed){
     const trust=await refreshCodexPeekHookTrust(extensionRoot,dashboardCodexHookTrustCwd(extensionRoot),true);
-    if(trust.ready)void vscode.window.showInformationMessage(tE("Codex Peek 패키지와 네 사용자 훅이 모두 활성·신뢰 상태입니다. 이 창에서 방금 설치·신뢰를 바꿨다면 창 리로드 후부터 훅이 실행되고, 이후 시작·재개한 Codex 대화가 구현 세션으로 자동 고정됩니다.","The Codex Peek package and all four user hooks are enabled and trusted. If you just changed install/trust in this window, hooks execute after a window reload; afterwards a started or resumed Codex conversation is auto-pinned as the implementer."));
+    if(trust.ready)void vscode.window.showInformationMessage(tE("Codex Peek 패키지와 사용자 훅 전부가 활성·신뢰 상태입니다. 이 창에서 방금 설치·신뢰를 바꿨다면 창 리로드 후부터 훅이 실행되고, 이후 시작·재개한 Codex 대화가 구현 세션으로 자동 고정됩니다.","The Codex Peek package and all its user hooks are enabled and trusted. If you just changed install/trust in this window, hooks execute after a window reload; afterwards a started or resumed Codex conversation is auto-pinned as the implementer."));
     else await showCodexHookTrustWarning(trust,extensionRoot);
     return trust.ready;}
-  if(existing.present&&!existing.enabled){void vscode.window.showWarningMessage(tE(`Codex Peek 플러그인(${existing.pluginId||"기존 설치"})이 설치되어 있지만 비활성화되어 있습니다. 기존 설치를 덮어쓰지 않습니다. Codex 설정 → 플러그인에서 활성화한 뒤 Hook에서 네 훅을 검토·신뢰하고 창을 리로드하세요. 이후 사용하려는 Codex 대화를 시작·재개하면 구현 연결이 자동 이동합니다.`,`The Codex Peek plugin (${existing.pluginId||"existing install"}) is installed but disabled. The extension will not overwrite it. Enable it under Codex Settings → Plugins, then review/trust all four hooks under Hooks and reload the window. Afterwards, starting or resuming the Codex conversation moves the implementer link automatically.`));return false;}
+  if(existing.present&&!existing.enabled){void vscode.window.showWarningMessage(tE(`Codex Peek 플러그인(${existing.pluginId||"기존 설치"})이 설치되어 있지만 비활성화되어 있습니다. 기존 설치를 덮어쓰지 않습니다. Codex 설정 → 플러그인에서 활성화한 뒤 Hook에서 훅 전부를 검토·신뢰하고 창을 리로드하세요. 이후 사용하려는 Codex 대화를 시작·재개하면 구현 연결이 자동 이동합니다.`,`The Codex Peek plugin (${existing.pluginId||"existing install"}) is installed but disabled. The extension will not overwrite it. Enable it under Codex Settings → Plugins, then review/trust all its hooks under Hooks and reload the window. Afterwards, starting or resuming the Codex conversation moves the implementer link automatically.`));return false;}
   const yes=tE("설치","Install");
-  const pick=await vscode.window.showInformationMessage(tE("Codex 구현 훅 설치","Install Codex implementer hooks"),{modal:true,detail:tE(`로컬 마켓플레이스: ${extensionRoot}\n패키지: codex-peek@codex-peek-local\n실행 훅 파일: ${codexUserHooksFile()}\n\nCodex Peek 패키지를 설치·활성화하고, 기존 사용자 훅을 보존한 채 네 lifecycle 명령을 hooks.json에 병합합니다(기존 파일은 먼저 백업). 플러그인 번들 훅이 목록에만 보이고 실행되지 않는 Codex 버전에서도 이 사용자 훅 경로는 실제로 실행됩니다. 설치 후 Codex 설정 → Hook에서 네 훅을 별도로 검토·신뢰하고, 창을 리로드해야 훅이 실행됩니다.`,`Local marketplace: ${extensionRoot}\nPackage: codex-peek@codex-peek-local\nRuntime hook file: ${codexUserHooksFile()}\n\nThis installs/enables the Codex Peek package and merges four lifecycle commands into hooks.json while preserving existing user hooks and backing up the file first. This user-hook path executes even on Codex versions that list plugin-bundled hooks without running them. Afterwards, review and trust the four hooks separately under Codex Settings → Hooks, then reload the window so they execute.`)},yes);
+  const pick=await vscode.window.showInformationMessage(tE("Codex 구현 훅 설치","Install Codex implementer hooks"),{modal:true,detail:tE(`로컬 마켓플레이스: ${extensionRoot}\n패키지: codex-peek@codex-peek-local\n실행 훅 파일: ${codexUserHooksFile()}\n\nCodex Peek 패키지를 설치·활성화하고, 기존 사용자 훅을 보존한 채 우리 lifecycle 명령 전부를 hooks.json에 병합합니다(기존 파일은 먼저 백업). 플러그인 번들 훅이 목록에만 보이고 실행되지 않는 Codex 버전에서도 이 사용자 훅 경로는 실제로 실행됩니다. 설치 후 Codex 설정 → Hook에서 훅 전부를 별도로 검토·신뢰하고, 창을 리로드해야 훅이 실행됩니다.`,`Local marketplace: ${extensionRoot}\nPackage: codex-peek@codex-peek-local\nRuntime hook file: ${codexUserHooksFile()}\n\nThis installs/enables the Codex Peek package and merges our lifecycle commands into hooks.json while preserving existing user hooks and backing up the file first. This user-hook path executes even on Codex versions that list plugin-bundled hooks without running them. Afterwards, review and trust the hooks separately under Codex Settings → Hooks, then reload the window so they execute.`)},yes);
   if(pick!==yes)return false;
   const pi=require("../bridge/codex-plugin-install.js") as {buildCodexPluginSpawn:(p:string,a:string[])=>{file:string;args:string[];shell:false;windowsVerbatimArguments:boolean;env:Record<string,string>};marketplaceStepOk:(a:number,l:number,s:string,n:string,r:string)=>boolean};
   const result=await vscode.window.withProgress({location:vscode.ProgressLocation.Notification,title:tE("Codex Peek 구현 훅 설치 중…","Installing Codex Peek implementer hooks…"),cancellable:false},async()=>{
@@ -8964,11 +8976,23 @@ async function maybeOfferCodexHookSetup(extensionRoot:string,auto=false):Promise
   }
 }
 async function maybeOfferCodexHookSetupBody(extensionRoot:string,auto:boolean):Promise<void>{
-  // P-5 마이그레이션 최선행(Codex 반례 봉합): 플러그인 부재·부분 legacy(4개 미만)여도 hooks.json에 옛 형식
+  // 부팅 자동 안내는 Codex가 구현자인 프로젝트(C-C)에서만 의미가 있다 — Claude↔Codex 사용자에게 매 창
+  // 로드마다 플러그인 설치를 권하면 소음일 뿐이다(사용자 실보고 2026-08-26: 리로드마다 반복). 명시 진입
+  // (C-C 모드 클릭·installCodexHooks 명령)은 auto=false라 그대로 안내한다. 게이트 auto 1회는 되돌려
+  // 이후 C-C 전환 시 이 창에서도 안내가 살아 있게 한다.
+  if(auto){const ws0=dashboardWorkspace();if(!(ws0&&loadContract(ws0).harnessMode==="codex-codex")){codexHookOfferGate.silentAutoFail();return;}}
+  // P-5 마이그레이션 최선행(Codex 반례 봉합): 플러그인 부재·부분 legacy(개수 미달)여도 hooks.json에 옛 형식
   // 우리 훅이 하나라도 있으면 일반 설치 모달(소유권 인수+자동 재기입)보다 먼저 소유권 판정 경로로 보낸다.
   const mig=codexHookMigrationStatus();
   if(mig.needed){await offerCodexHookMigration(extensionRoot,mig.count);return;}
-  let state:CodexPeekPluginState={present:false,enabled:false,pluginId:""};try{state=await codexPeekPluginState(extensionRoot);}catch{/* 아래 제안 */}
+  let state:CodexPeekPluginState={present:false,enabled:false,pluginId:"",queryFailed:true};try{state=await codexPeekPluginState(extensionRoot);}catch{/* 조회 실패=queryFailed 유지 */}
+  // 조회 실패는 '패키지 없음'이 아니다 — 자동 진입은 조용히 물러나고(trust 조회 실패와 동일 계약 P-5),
+  // 명시 진입은 판정 불가 사실을 정직하게 알린다(설치 흐름도 같은 CLI라 어차피 진행 불가).
+  if(state.queryFailed){
+    if(auto){codexHookOfferGate.silentAutoFail();return;}
+    void vscode.window.showWarningMessage(tE("Codex CLI에서 플러그인 상태를 확인하지 못했습니다(plugin 명령 미지원·실행 실패 등) — 설치 여부를 판정할 수 없어 설치를 진행하지 않습니다. codex 버전을 확인해 주세요.","Could not read the plugin state from the Codex CLI (plugin subcommand unsupported, or the call failed) — cannot tell whether the package is installed, so no install was attempted. Check your codex version."));
+    return;
+  }
   if(state.present&&state.enabled&&codexUserHookStatus().installed){
     const trust=await refreshCodexPeekHookTrust(extensionRoot,dashboardCodexHookTrustCwd(extensionRoot),true);
     // 창로드 오경고 방지(P-5): 자동 진입에서 조회 실패(타임아웃·Codex 미실행)는 '미신뢰 사실'이 아니므로
@@ -8976,7 +9000,7 @@ async function maybeOfferCodexHookSetupBody(extensionRoot:string,auto:boolean):P
     // 팝업을 안 보여줬으므로 게이트의 auto 1회 소진을 되돌린다(이후 명시 진입·auto 재시도 모두 안내 가능).
     if(!trust.ready){if(auto&&!trust.queried){codexHookOfferGate.silentAutoFail();return;}await showCodexHookTrustWarning(trust,extensionRoot);}
     return;}
-  if(state.present&&!state.enabled){void vscode.window.showWarningMessage(tE(`Codex Peek 플러그인(${state.pluginId||"기존 설치"})이 설치되어 있지만 비활성화되어 있습니다. Codex 설정 → 플러그인에서 활성화한 뒤 Hook에서 네 훅을 검토·신뢰하고 창을 리로드하세요. 이후 사용하려는 Codex 대화를 시작·재개하면 구현 연결이 자동 이동합니다.`,`The Codex Peek plugin (${state.pluginId||"existing install"}) is installed but disabled. Enable it under Codex Settings → Plugins, then review/trust all four hooks under Hooks and reload the window. Afterwards, starting or resuming the Codex conversation moves the implementer link automatically.`));return;}
+  if(state.present&&!state.enabled){void vscode.window.showWarningMessage(tE(`Codex Peek 플러그인(${state.pluginId||"기존 설치"})이 설치되어 있지만 비활성화되어 있습니다. Codex 설정 → 플러그인에서 활성화한 뒤 Hook에서 훅 전부를 검토·신뢰하고 창을 리로드하세요. 이후 사용하려는 Codex 대화를 시작·재개하면 구현 연결이 자동 이동합니다.`,`The Codex Peek plugin (${state.pluginId||"existing install"}) is installed but disabled. Enable it under Codex Settings → Plugins, then review/trust all its hooks under Hooks and reload the window. Afterwards, starting or resuming the Codex conversation moves the implementer link automatically.`));return;}
   const review=tE("설치 내용 보기","Review & install"),later=tE("나중에","Later");
   const pick=await vscode.window.showInformationMessage(tE("Codex Bridge: Codex↔Codex에서 매 턴 검증을 강제하려면 Codex Peek 패키지와 실제 실행되는 사용자 lifecycle 훅이 모두 필요합니다. 설치가 없거나, 플러그인 훅이 목록에만 잡히는 Codex 버전용 사용자 훅 보완이 아직 없습니다.","Codex Bridge: enforcing every Codex↔Codex turn requires both the Codex Peek package and executable user-level lifecycle hooks. The package is missing, or the user-hook runtime fallback for Codex versions that only list plugin hooks has not been installed."),review,later);
   if(pick===review)await runCodexHookInstallFlow(extensionRoot);
@@ -9013,11 +9037,33 @@ async function maybeOfferHookSetup(): Promise<void> {
       void vscode.window.showWarningMessage(tE(hookStatusUnknownMsg(st, false), hookStatusUnknownMsg(st, true)));
       return;
     }
+    const total = hookSetup.OUR_HOOKS.length;
+    // 부분 미등록(일부는 이미 우리 훅)은 '확장 업데이트로 기대 훅이 늘어난 세대 드리프트'다 — 이미 훅 관리에
+    // 동의한 사용자에게 매 창 로드 안내를 반복하는 대신(실보고 2026-08-26), 설치와 같은 병합 루틴으로 조용히
+    // 채우고(수정 전 백업 생성·타인 훅 보존 — install.js 재배포의 기존 계약과 동일) 결과만 1회 알린다.
+    // 전무(0개 등록)는 최초 설치 동의가 없는 상태이므로 아래 제안 경로를 유지한다.
+    if (st.missing.length < total) {
+      const tok = hookSetup.resolveNodeToken(nodeTokenCandidates());
+      const healed = tok ? hookSetup.installHooks(claudeSettingsFile(), BRIDGE_DIR, tok.token) : null;
+      if (healed && healed.ok && hookSetup.detectHooks(claudeSettingsFile()).installed) {
+        void vscode.window.showInformationMessage(tE(`Codex Bridge: 확장 업데이트로 추가된 검증 훅 ${st.missing.length}개를 자동 등록했어요(기존 등록 동의의 연장 · 수정 전 백업 생성). 새로 시작하는 Claude Code 세션부터 적용됩니다.`, `Codex Bridge: auto-registered ${st.missing.length} verification hook(s) added by an extension update (extends your existing registration · a backup was made first). Applies from newly started Claude Code sessions.`));
+        return;
+      }
+      // 자가치유 실패는 '설치 제안'이 아니라 '고장 사실 고지'다 — '다시 묻지 않음' 표지(제안 거절 의사)로
+      // 막지 않는다(unreadable 고지가 표지보다 앞서는 것과 같은 계보 — 검증 blocker 2026-08-26: 표지가 있으면
+      // 미완 등록이 조용히 남는 침묵 유실). 수동 등록 입구를 함께 연다. 문구는 언어 혼합 금지 — ko/en 각자 생성.
+      const whyKo = !tok ? "훅을 실행할 node를 찾지 못함" : (healed && !healed.ok ? "설정 병합 실패" : "병합 후에도 등록 미완");
+      const whyEn = !tok ? "no usable node executable" : (healed && !healed.ok ? "settings merge failed" : "registration still incomplete after merge");
+      const manual = tE("설치 내용 보기", "Review & install");
+      const pickHeal = await vscode.window.showWarningMessage(tE(`Codex Bridge: 확장 업데이트로 필요한 검증 훅 ${total}개 중 ${st.missing.length}개가 미등록인데 자동 등록에 실패했습니다(${whyKo}) — 수동 등록이 필요합니다.`, `Codex Bridge: ${st.missing.length} of ${total} required verification hooks are unregistered and auto-registration failed (${whyEn}) — manual registration is needed.`), manual);
+      if (pickHeal === manual) await runHookInstallFlow();
+      return;
+    }
     if (fs.existsSync(HOOKS_PROMPT_DISMISSED)) return;
     const review = tE("설치 내용 보기", "Review & install");
     const never = tE("다시 묻지 않음", "Don't ask again");
     const pick = await vscode.window.showInformationMessage(
-      tE("Codex Bridge: 검증 훅이 아직 등록되지 않았습니다 — Claude Code가 검증을 부르려면 훅 4개가 필요합니다.", "Codex Bridge: verification hooks are not registered yet — Claude Code needs 4 hooks to run verification."),
+      tE(`Codex Bridge: 검증 훅 ${total}개 중 ${st.missing.length}개가 아직 등록되지 않았습니다 — Claude Code가 매 턴 검증을 부르려면 전부 필요합니다.`, `Codex Bridge: ${st.missing.length} of ${total} verification hooks are not registered yet — Claude Code needs all of them to run verification.`),
       review, never,
     );
     if (pick === never) { try { fs.writeFileSync(HOOKS_PROMPT_DISMISSED, new Date().toISOString(), "utf8"); } catch { /* ignore */ } return; }
@@ -9277,7 +9323,7 @@ export function activate(context: vscode.ExtensionContext): void {
           lines.join("\n\n") +
           (nFail ? tE(`\n\n검증 실패: 고쳐서 다시 검증해 통과하면 빨강이 사라집니다.`,`\n\nVerify failed: fix, re-verify to pass, and the red clears.`) : ``) +
           (nSession ? tE(`\n\nCodex 세션 없음: 'Codex 세션 연결'에서 수동 연결하거나, 검증을 계속 진행하면 자동 연결을 시도해요(연결되면 사라짐 · '확인함'으론 안 닫힘).`,`\n\nNo Codex session: link manually under 'Codex Session Link', or keep verifying for auto-link (clears when linked · cannot be dismissed).`) : ``) +
-          (nHook ? tE(`\n\nCodex 구현 훅 미작동: 플러그인을 설치·활성화하고 Codex 설정 → Hook에서 네 훅을 신뢰한 뒤, 사용하려는 Codex 대화를 다시 열거나 프롬프트를 보내 실제 lifecycle heartbeat를 확인하세요. 구현 연결과 초록 표시는 그 대화로 자동 이동합니다. 이 상태에서는 모든 턴 검증이 강제되지 않습니다.`,`\n\nCodex implementer hook inactive: install/enable the plugin, trust all four hooks under Codex Settings → Hooks, then reopen the Codex conversation or send a prompt and confirm a real lifecycle heartbeat. The implementer link and green marker move there automatically. Verify-every-turn is not enforced in this state.`) : ``) +
+          (nHook ? tE(`\n\nCodex 구현 훅 미작동: 플러그인을 설치·활성화하고 Codex 설정 → Hook에서 훅 전부를 신뢰한 뒤, 사용하려는 Codex 대화를 다시 열거나 프롬프트를 보내 실제 lifecycle heartbeat를 확인하세요. 구현 연결과 초록 표시는 그 대화로 자동 이동합니다. 이 상태에서는 모든 턴 검증이 강제되지 않습니다.`,`\n\nCodex implementer hook inactive: install/enable the plugin, trust all the hooks under Codex Settings → Hooks, then reopen the Codex conversation or send a prompt and confirm a real lifecycle heartbeat. The implementer link and green marker move there automatically. Verify-every-turn is not enforced in this state.`) : ``) +
           (nHandoff ? tE(`\n\n상한 마감 누락: 마지막 검증 지적이 수용·반박·보관함·사용자 판단 중 어디로 갔는지 정리되지 않았습니다. 그냥 지나치면 안 되며, 구현 대화에서 네 갈래 마감문을 마치면 자동으로 사라집니다.`,`\n\nCap closeout missing: the latest verification findings were not assigned to accepted, rebutted, parked, or user-decision lanes. Do not ignore it; it clears automatically after the implementer conversation completes the four-way closeout.`) : ``) +
           (errs.some((e) => e.sig === "session-missing:blocked") ? tE(`\n\n자동 생성이 멈춰 있어요 — 계속되면 `,`\n\nAuto-creation is paused — if it persists, `) + `[${tE("GitHub에 문제 신고","report on GitHub")}](https://github.com/kimbyungsu/codex-peek/issues)` : ``) +
           (nIncomplete ? tE(`\n\n검증 미완: 이 턴이 '검증 없이' 종료됐을 수 있어요(확인 필요).`,`\n\nUnverified: this turn may have ended WITHOUT verification (needs review).`) : ``),

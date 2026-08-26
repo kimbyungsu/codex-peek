@@ -1,5 +1,5 @@
 // ── 훅 1클릭 설치(마켓 설치 경로)의 정본 로직 — vscode 의존 없음(테스트가 out/hook-setup.js를 직접 실행) ──
-// 레포 한방 설치기 install.js와 '같은 규칙'을 쓴다(훅 4개·명령 표기(node "경로", 슬래시 통일)·우리훅 식별 regex·병합 시 타인 훅 보존).
+// 레포 한방 설치기 install.js와 '같은 규칙'을 쓴다(OUR_HOOKS 전체·명령 표기(node "경로", 슬래시 통일)·우리훅 식별 regex·병합 시 타인 훅 보존).
 // 한쪽 규칙을 바꾸면 반드시 같이 바꿀 것: install.js(OUR_HOOKS·isOurHookCmd·hookCommand·mergeHooks) ↔ 이 파일.
 import * as fs from "fs";
 import * as path from "path";
@@ -73,7 +73,7 @@ export function resolveNodeTokenDual(candidates: Array<string | undefined | null
   return null;
 }
 
-// settings.json에서 우리 훅 4개가 다 걸려 있는지 감지. 파일 없음=미설치(정상 설치 제안 경로),
+// settings.json에서 우리 훅(OUR_HOOKS) 전부가 걸려 있는지 감지. 파일 없음=미설치(정상 설치 제안 경로),
 // 읽지 못함·JSON 깨짐=unreadable. unreadable이면 화면은 설치 제안을 띄우지 않고 '등록 상태 확인 불가'만
 // 알린다 — 판독하지 못한 것을 '훅이 없다'로 말하면 사용자가 이미 있는 훅을 다시 설치하려 한다.
 // unreadable은 한국어 문장이라 영문 화면에 그대로 넣으면 언어가 섞인다(검증 [보완]).
@@ -124,7 +124,7 @@ export function atomicWriteFile(file: string, data: string): boolean {
   return false;
 }
 
-// 훅 4개를 settings.json에 병합 — install.js mergeHooks와 동일 의미(우리 옛 엔트리 제거→새로 추가, 타인 훅·그룹 보존).
+// 우리 훅 전부를 settings.json에 병합 — install.js mergeHooks와 동일 의미(우리 옛 엔트리 제거→새로 추가, 타인 훅·그룹 보존).
 // 백업: 기존 파일이 있으면 settings.json.bak.<시각> 사본을 먼저 남긴다(README·install.js와 동일 관례).
 // 훅 등록이 '실제로' 바뀌었는지 — install.js hooksCanon과 같은 규칙(엔트리 통째 비교, 나열 순서만 흡수).
 // command·matcher만 보면 timeout·async·type 변경을 놓치므로 엔트리 전체를 정규화한다.

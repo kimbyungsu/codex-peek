@@ -716,7 +716,7 @@ console.log("[9i] 판독 실패는 화면에서도 '미등록'이 아니라 '확
   ok(/hookStatusUnknownMsg\(st, false\)/.test(offerBody) && /hookStatusUnknownMsg\(st, true\)/.test(offerBody), "판독 실패 분기가 ko/en 문구를 공용 생성기로 만든다");
   ok(/훅 등록 상태를 확인할 수 없습니다/.test(ext) && /could not determine hook registration/.test(ext), "그 생성기가 ko/en 모두 '확인 불가'로 말한다");
   const uIdx = offerBody.indexOf("if (st.unreadable)");
-  const nIdx = offerBody.indexOf("검증 훅이 아직 등록되지 않았습니다");
+  const nIdx = offerBody.indexOf("개가 아직 등록되지 않았습니다"); // 2026-08-26 개수 파생 문구로 개정(훅 N개 중 M개) — 앵커만 갱신, 분기 순서 계약은 동일
   const dIdx = offerBody.indexOf("HOOKS_PROMPT_DISMISSED");
   ok(uIdx >= 0 && nIdx >= 0 && uIdx < nIdx, "미등록 안내보다 먼저 갈라져 판독 실패에 미등록 문구가 나오지 않는다");
   ok(dIdx >= 0 && uIdx < dIdx, "'다시 묻지 않음' 표식 확인보다도 먼저 갈라진다(설치 제안 거부가 사실 고지를 막지 않음)");

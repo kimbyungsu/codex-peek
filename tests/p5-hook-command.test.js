@@ -86,16 +86,25 @@ ok(/const e=codexHookOfferGate\.enter\(auto\);/.test(ext) && /if\(e\.act==="queu
 ok(/async function maybeOfferCodexHookSetupBody\(extensionRoot:string,auto:boolean\)[\s\S]{0,700}const mig=codexHookMigrationStatus\(\);\s*\n\s*if\(mig\.needed\)\{await offerCodexHookMigration\(extensionRoot,mig\.count\);return;\}[\s\S]{1,600}codexPeekPluginState\(extensionRoot\)/.test(ext), "자동 제안 — 마이그레이션 검사가 플러그인 상태·installed(4/4) 판정보다 앞(플러그인 부재·부분 legacy도 소유권 판정 경로 · Codex 반례)");
 ok(/\{const mig=codexHookMigrationStatus\(\);if\(mig\.needed\)\{await offerCodexHookMigration\(extensionRoot,mig\.count\);return false;\}\}\s*\n\s*const existing=await codexPeekPluginState/.test(ext), "설치 흐름 — 동일하게 마이그레이션 최선행(일반 설치 모달의 소유권 인수+재기입에 도달 불가)");
 ok(/codexHookReloadTracker\.observe\(s\.queried,s\.ready,codexHooksFileHash\(\),codexHooksGenAtLoad,s\.trusted,s\.untrusted\)/.test(ext) && /if\(r\.prompt\)void promptCodexHookReload\(\);/.test(ext), "리로드 관찰 배선 — 모든 조회 결과가 순수 추적기 판정을 소비");
-ok(/설정상 네 훅의 신뢰가 확인됐습니다/.test(ext) && /confirmed trusted in configuration/.test(ext) && !/신뢰된 실행 상태로 확인됐습니다/.test(ext), "재확인 성공 문구 — hooks\/list는 설정상 신뢰만 증명(현재 코어 runnable 단정 제거·한/영)");
+ok(/설정상 훅 전부의 신뢰가 확인됐습니다/.test(ext) && /confirmed trusted in configuration/.test(ext) && !/신뢰된 실행 상태로 확인됐습니다/.test(ext), "재확인 성공 문구 — hooks\/list는 설정상 신뢰만 증명(현재 코어 runnable 단정 제거·한/영, 개수 무관 표현 2026-08-26)");
 ok(/훅 설치·신뢰·창 리로드가 끝난 상태라면/.test(ext) && /installed, trusted, and the window reloaded/.test(ext), "C-C 모드 클릭 안내 — 무조건 자동 고정 단정 제거(한/영)");
 ok(/훅이 설치·신뢰되고 창 리로드로 반영된 상태에서/.test(ext) && /applied via a window reload/.test(ext), "구현 미고정 경보 — 훅 선행조건 명시(한/영)");
 ok(/async function maybeOfferCodexHookSetup\(extensionRoot:string,auto=false\)/.test(ext), "명시 진입(모드 클릭 등)은 auto=false — 조회 실패도 안내");
 ok(/if\(!state\.queried\)\{/.test(ext) && /훅 설정이 바뀐 것도 아닙니다/.test(ext) && /does not mean your hooks changed/.test(ext), "조회 실패 문구 분리 — 재신뢰로 오도하지 않음(한/영)");
 ok(/codexHookMigrationStatus\(\)/.test(ext) && /offerCodexHookMigration\(extensionRoot,mig\.count\)/.test(ext) && ext.split("offerCodexHookMigration(extensionRoot,mig.count)").length === 3, "마이그레이션 — 자동 제안·설치 흐름 두 입구 모두 선확인");
 ok(/소유 표식이 없어 자동으로 바꾸지 않습니다/.test(ext) && /no ownership marker/.test(ext), "소유 표식 없으면 자동 교체 금지(타 설치 경로 보호·한/영)");
-ok(/다시 신뢰한 뒤 창을 리로드하세요/.test(ext) && /re-trust the four hooks/.test(ext), "마이그레이션 후 재신뢰+리로드 안내(한/영)");
+ok(/다시 신뢰한 뒤 창을 리로드하세요/.test(ext) && /re-trust the hooks/.test(ext), "마이그레이션 후 재신뢰+리로드 안내(한/영)");
 ok(/사용자 훅\(hooks\.json\)이 등록돼 있지만/.test(ext) && /user hooks \(hooks\.json\) are registered/.test(ext), "경고 주어를 실제 실행 권위(사용자 hooks.json)로 정정(P-5 머리 항목·한/영)");
-ok(/플러그인 설치·네 훅 신뢰·창 리로드/.test(ext) && /trust all four hooks, reload the window/.test(ext), "온보딩 힌트에 창 리로드 단계 명시(문구 정정 ⑤·한/영)");
+ok(/플러그인 설치·훅 전부 신뢰·창 리로드/.test(ext) && /trust all its hooks, reload the window/.test(ext), "온보딩 힌트에 창 리로드 단계 명시(문구 정정 ⑤·한/영)");
+// [2026-08-26 부팅 오경고 봉합 — 사용자 실보고: 창 로드·리로드마다 안내 2종 반복]
+ok(/if\(auto\)\{const ws0=dashboardWorkspace\(\);if\(!\(ws0&&loadContract\(ws0\)\.harnessMode==="codex-codex"\)\)\{codexHookOfferGate\.silentAutoFail\(\);return;\}\}/.test(ext), "①부팅 자동 제안은 C-C 프로젝트 한정 — Claude↔Codex 사용자에게 매 창 설치 권유 금지(게이트 auto는 되돌림·명시 진입 무영향)");
+ok(/queryFailed:true/.test(ext) && /if\(state\.queryFailed\)\{/.test(ext) && /if\(auto\)\{codexHookOfferGate\.silentAutoFail\(\);return;\}/.test(ext) && /plugin 명령 미지원·실행 실패/.test(ext) && /plugin subcommand unsupported/.test(ext), "②플러그인 조회 실패≠패키지 없음 — 자동=조용 후퇴·명시=판정 불가 정직 안내(한/영, 이 PC 실사고: codex CLI가 plugin 하위명령 미지원)");
+ok(/const total = hookSetup\.OUR_HOOKS\.length;/.test(ext) && /검증 훅 \$\{total\}개 중 \$\{st\.missing\.length\}개가 아직 등록되지 않았습니다/.test(ext) && !ext.includes("훅 4개가 필요합니다"), "③Claude 훅 미등록 안내 — 개수는 OUR_HOOKS 파생(낡은 '훅 4개' 문구 소멸·한/영)");
+ok(/if \(st\.missing\.length < total\) \{/.test(ext) && /hookSetup\.installHooks\(claudeSettingsFile\(\), BRIDGE_DIR, tok\.token\)/.test(ext) && /detectHooks\(claudeSettingsFile\(\)\)\.installed/.test(ext) && /자동 등록했어요/.test(ext), "④부분 미등록(확장 업데이트 드리프트)=설치와 같은 병합 루틴으로 자가치유+결과 1회 알림 — 전무(0개 등록)는 기존 제안 경로 유지");
+// [2026-08-26 1회차 검증 blocker 3건 반례 — 보완 f-e188b320 수용]
+ok(/const existing=await codexPeekPluginState\(extensionRoot\);[\s\S]{0,700}if\(existing\.queryFailed\)\{[\s\S]{0,700}return false;\}/.test(ext), "⑤명시 설치 흐름(runCodexHookInstallFlow)도 조회 실패=판정 불가 안내 후 중단 — marketplace add 직행 금지(blocker① 반례)");
+ok(/if \(pickHeal === manual\) await runHookInstallFlow\(\);\s*\n\s*return;\s*\n\s*\}\s*\n\s*if \(fs\.existsSync\(HOOKS_PROMPT_DISMISSED\)\) return;/.test(ext) && /자동 등록에 실패했습니다/.test(ext) && /auto-registration failed/.test(ext), "⑥자가치유 실패=다시-묻지-않음 표지 검사보다 앞서는 사실 고지+수동 등록 입구(blocker② 반례 — 표지는 '제안 거절'이지 '고장 은폐'가 아님·한/영)");
+ok(!/네 명령|four Codex Peek commands|네 사용자 훅|all four user hooks/.test(ext) && !/required:4,/.test(ext) && /required:CODEX_PEEK_HOOK_COUNT/.test(ext), "⑦고정 개수 잔존 0 — 네 명령·four commands·required:4 소멸+실패 스냅샷 required도 정본 파생(blocker③ 반례)");
 ok(/신뢰를 마친 뒤 창을 리로드해야 훅이 실행되며/.test(ext) && /reload the window so the hooks actually execute/.test(ext), "신뢰 방법 안내에 리로드 조건(한/영)");
 const hsSrc = fs.readFileSync(path.join(ROOT, "src", "hook-setup.ts"), "utf8");
 ok(/shellRunsNodePowerShell/.test(hsSrc) && /-NoProfile/.test(hsSrc) && /resolveNodeTokenDual/.test(hsSrc), "hook-setup 사전검사에 PowerShell 검증 추가(ⓑ)");

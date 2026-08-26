@@ -350,6 +350,24 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   // 2026-08-20 사용자 실보고 3건: 보관함 두 줄의 오착지·더보기 재렌더 접힘
   ok(/blDue9, tab:"verify", el:"#backlogSec"/.test(ext), "보관함 검토 기한 줄=보관함 실위치 딥링크(탭 상단 오착지 봉합)");
   ok(/acts9\.push\(\{n:1, tab:"setup", el:"#envCard"/.test(ext), "'수칙서 승인 대기' 줄=수칙서 카드 실위치 딥링크(2026-08-22 실보고 — 동일 계보)");
+  // 2026-08-26 사용자 실보고: '자동 보강 멈춤' 클릭이 조치 지점으로 못 감 — 다시 시도·재점검 버튼은 검증 설정
+  // #mapModeRow에 있는데 Project MAP 통계 탭으로 보냈다. 이동 전면 점검으로 나머지 줄도 실위치 딥링크.
+  ok(/ha9\) acts9\.push\(\{n:1, tab:"setup", el:"#mapModeRow"/.test(ext) && !/ha9\) acts9\.push\(\{n:1, tab:"map"/.test(ext), "'자동 보강 멈춤' 줄=조치 버튼 실위치(검증 설정 #mapModeRow) — 통계 탭 오착지 봉합");
+  ok(/ev9\) acts9\.push\(\{n:ev9, tab:"verify", el:"#chSec"/.test(ext) && /ic9\) acts9\.push\(\{n:ic9, tab:"setup", el:"#intentBox"/.test(ext), "근거 재확인·MAP 대기 선택 줄도 실위치 딥링크(이동 전면 점검 2026-08-26)");
+  // [보완 f-807cfd86] 딥링크 목적지 문자열만 고정하면 요소가 다른 패널로 이사해도 시험이 통과한다 —
+  // 대상 id가 '실제로 그 탭 패널 마크업 안'에 있는지(소속)와, #mapModeRow가 렌더에서 실제로 열리고
+  // 조치 버튼(다시 시도)이 그 안에 부착되는지(렌더 제어)까지 결속한다.
+  {
+    const setupIdx = ext.indexOf('<div id="tab-setup" class="tab-panel">');
+    const setupEnd = ext.indexOf('<div id="tab-sessions" class="tab-panel">', setupIdx);
+    const verifyIdx = ext.indexOf('<div id="tab-verify" class="tab-panel">');
+    const mmIdx = ext.indexOf('id="mapModeRow"');
+    const ibIdx = ext.indexOf('id="intentBox"');
+    const chIdx = ext.indexOf('id="chSec"');
+    ok(setupIdx > 0 && setupEnd > setupIdx && mmIdx > setupIdx && mmIdx < setupEnd && ibIdx > setupIdx && ibIdx < setupEnd, "#mapModeRow·#intentBox는 실제 tab-setup 패널 마크업 안(소속 결속)");
+    ok(verifyIdx > 0 && chIdx > verifyIdx && chIdx < setupIdx, "#chSec은 실제 tab-verify 패널 마크업 안(소속 결속)");
+    ok(/const row=\$\("mapModeRow"\); if\(!row\) return;/.test(ext) && /row\.style\.display=""; row\.replaceChildren\(\);/.test(ext) && /vscode\.postMessage\(\{type:"retryEnrich"\}\)/.test(ext) && /row\.appendChild\(st9\);/.test(ext), "#mapModeRow 렌더가 실제로 열리고(display 해제) 자동 보강 상태줄+다시 시도 버튼이 그 행에 부착(렌더 제어 결속)");
+  }
   // 2026-08-22(2) 승인 지문 언어 공유: 직접 승인 도장=양 슬롯·대시보드 자기치유(반대 슬롯 지문=현행 파일 sha 일치 시 표기 정렬)
   // [부품 C 2026-08-23] draftable kinds 공통 표면 — 채택 분기·올림 토글·kind 문구·why 보조줄·mark 가드·소진 안내
   ok(ext.includes('(m.kind === "resolved-blocker" || m.kind === "user-constraint") && m.status === "adopted"'), "candMark 채택=draftable kinds 공통(초안 생성 결속)");
