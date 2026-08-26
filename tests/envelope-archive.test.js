@@ -227,17 +227,18 @@ t("★[4a] 미도입 최초 서고 올림: 빈 서고에서 초안→도장 전�
   assert.ok(c4.archiveHash === ar.sha1 && c4e.archiveHash === ar.sha1, "archiveHash 양 슬롯");
   assert.ok(c4.envelopeHash === G4 && fs.readFileSync(path.join(R4, CL.ENVELOPE_FILE), "utf8") === core4, "★코어 무접촉");
 });
-t("★[4a] normSet=코어∪서고: 코어에 있는 문안→서고 올림 거부·서고에 있는 문안→코어 올림 거부(두 층 동시 등재 금지)", () => {
+t("★[4a→4e] normSet=코어∪서고: 중복=배치 거부가 아니라 자동 제외+declined 정리(두 층 동시 등재 금지 유지)", () => {
   const r1 = CL.draftEnvelopeRevision(W4, R4, { addCandidateIds: ["aaaa000000000002"], removeItems: [], approvedHash: G4, target: "archive" });
-  assert.ok(!r1.ok && /코어에 존재/.test(r1.error), "코어 중복→서고 거부: " + String(r1.error));
+  assert.ok(!r1.ok && r1.skippedDup === 1 && /자동 정리/.test(r1.error), "코어 중복 1건뿐=초안 없음+자동 정리 보고: " + String(r1.error));
+  assert.strictEqual(CL.readEnvelopeCandidates(W4).latest.get("aaaa000000000002@" + G4).status, "declined", "★중복 후보=declined 자동 기록(대기열 정돈)");
   // 서고에 '서고에 이미 있는 수칙'을 먼저 등재
   const r2 = CL.draftEnvelopeRevision(W4, R4, { addCandidateIds: ["aaaa000000000003"], removeItems: [], approvedHash: G4, target: "archive" });
   assert.strictEqual(r2.ok, true, String(r2.error || ""));
   assert.strictEqual(CL.applyEnvelopeTransition(W4, R4, "ko", null).ok, true);
-  // 같은 문안 후보를 코어로 — 거부되어야 함(서고 중복)
+  // 같은 문안 후보를 코어로 — 자동 제외(서고 중복 — 두 층 동시 등재는 여전히 불가)
   CL.appendEnvelopeCandidates(W4, [cand4("aaaa000000000005", "서고에 이미 있는 수칙")]);
   const r3 = CL.draftEnvelopeRevision(W4, R4, { addCandidateIds: ["aaaa000000000005"], removeItems: [], approvedHash: G4, target: "core" });
-  assert.ok(!r3.ok && /서고에 존재/.test(r3.error), "서고 중복→코어 거부: " + String(r3.error));
+  assert.ok(!r3.ok && r3.skippedDup === 1, "서고 중복→코어 자동 제외(등재 안 됨): " + String(r3.error));
 });
 t("[4a] 서고 빼기(ab 전용)+코어 축 빼기 지정=형식 오류·전이 반영", () => {
   const bad = CL.draftEnvelopeRevision(W4, R4, { addCandidateIds: [], removeItems: [{ axis: "supportedEnv", index: 0 }], approvedHash: G4, target: "archive" });
@@ -248,12 +249,12 @@ t("[4a] 서고 빼기(ab 전용)+코어 축 빼기 지정=형식 오류·전이 
   const ar = CL.readVerifyEnvelopeArchive(R4);
   assert.ok(ar.data.alwaysBlocker.length === 1 && ar.data.alwaysBlocker[0] === "배포 전 백업을 남긴다", "빼기 반영(#2 제거)");
 });
-t("★[4a-보강 blocker①] 코어 '범위 밖' 축 중복→서고 거부·같은 장문(절단 저장) 재등재 거부", () => {
+t("★[4a-보강→4e] 코어 '범위 밖' 축 중복→자동 제외·같은 장문(절단 저장) 재등재=자동 제외(저장 실물 대조 유지)", () => {
   // 코어 outOfScope와 같은 문안 — ab만 보면 통과하던 반례(의미 충돌: '방어 안 함'과 '절대 차단' 동시 존재)
   CL.appendEnvelopeCandidates(W4, [cand4("aaaa000000000006", "범위 밖")]);
   const rO = CL.draftEnvelopeRevision(W4, R4, { addCandidateIds: ["aaaa000000000006"], removeItems: [], approvedHash: G4, target: "archive" });
-  assert.ok(!rO.ok && /코어에 존재/.test(rO.error), "코어 3축 전체와 대조(oos 중복=거부): " + String(rO.error));
-  // 200자 초과 장문 — 절단 저장 후 같은 장문이 다시 오면 '저장 실물' 기준으로 거부돼야 함(원문 비교만 하면 통과)
+  assert.ok(!rO.ok && rO.skippedDup === 1, "코어 3축 전체와 대조(oos 중복=자동 제외·등재 안 됨): " + String(rO.error));
+  // 200자 초과 장문 — 절단 저장 후 같은 장문이 다시 오면 '저장 실물' 기준으로 제외돼야 함(원문 비교만 하면 통과)
   const long9 = "장문 수칙 ".repeat(40).trim(); // 240자 — 항목 상한 200자 초과(절단 저장 경로)
   CL.appendEnvelopeCandidates(W4, [cand4("aaaa000000000007", long9), cand4("aaaa000000000008", long9)]);
   const rL = CL.draftEnvelopeRevision(W4, R4, { addCandidateIds: ["aaaa000000000007"], removeItems: [], approvedHash: G4, target: "archive" });
@@ -261,7 +262,37 @@ t("★[4a-보강 blocker①] 코어 '범위 밖' 축 중복→서고 거부·같
   assert.strictEqual(CL.applyEnvelopeTransition(W4, R4, "ko", null).ok, true);
   assert.ok(CL.readVerifyEnvelopeArchive(R4).data.alwaysBlocker.some((x) => x.endsWith("…[절단]")), "장문=절단 저장 확인");
   const rL2 = CL.draftEnvelopeRevision(W4, R4, { addCandidateIds: ["aaaa000000000008"], removeItems: [], approvedHash: G4, target: "archive" });
-  assert.ok(!rL2.ok && /서고에 존재|존재/.test(rL2.error), "★같은 장문 재등재=거부(저장 실물(절단 후) 기준 대조): " + String(rL2.error));
+  assert.ok(!rL2.ok && rL2.skippedDup === 1, "★같은 장문 재등재=자동 제외(저장 실물(절단 후) 기준 대조): " + String(rL2.error));
+});
+t("★[4e 실보고 반례] 혼합 배치(신규+중복)=중복만 자동 제외하고 신규는 올림(1건 중복이 배치를 죽이지 않음)", () => {
+  const W7 = fs.mkdtempSync(path.join(os.tmpdir(), "envarc-mix-ws-"));
+  const R7 = fs.mkdtempSync(path.join(os.tmpdir(), "envarc-mix-repo-"));
+  fs.writeFileSync(path.join(R7, CL.ENVELOPE_FILE), coreRaw);
+  assert.strictEqual(CL.setEnvelopeHashAllSlots(W7, CORE_HASH), 2);
+  fs.writeFileSync(path.join(R7, CL.ARCHIVE_FILE), arcText); // 기존 서고 2항
+  assert.strictEqual(CL.setContractHashAllSlots(W7, "archiveHash", sha1(arcText)), 2);
+  const mk7 = (cid, title) => ({ candidateId: cid, envelopeHash: CORE_HASH, status: "proposed", kind: "resolved-blocker", title, ts: "T" });
+  CL.appendEnvelopeCandidates(W7, [mk7("dd00000000000001", arcObj.alwaysBlocker[0]), mk7("dd00000000000002", "완전히 새로운 수칙 하나"), mk7("dd00000000000003", arcObj.alwaysBlocker[1]), mk7("dd00000000000004", "완전히 새로운 수칙 둘"), mk7("dd00000000000005", "완전히 새로운 수칙 하나")]);
+  const r = CL.draftEnvelopeRevision(W7, R7, { addCandidateIds: ["dd00000000000001", "dd00000000000002", "dd00000000000003", "dd00000000000004", "dd00000000000005"], removeItems: [], approvedHash: CORE_HASH, target: "archive" });
+  assert.ok(r.ok && r.adds === 2 && r.skippedDup === 3, "★신규 2건만 올림·서고 중복 2+배치 내부 중복 1=제외 3: " + JSON.stringify({ ok: r.ok, adds: r.adds, skip: r.skippedDup, err: r.error }));
+  const inner = JSON.parse(CL.readEnvelopeProposal(W7, R7).proposalText);
+  assert.ok(inner.alwaysBlocker.length === 4 && inner.alwaysBlocker.includes("완전히 새로운 수칙 하나") && inner.alwaysBlocker.includes("완전히 새로운 수칙 둘"), "초안=기존 2+신규 2(중복 미포함)");
+  const { latest } = CL.readEnvelopeCandidates(W7);
+  assert.ok(latest.get("dd00000000000001@" + CORE_HASH).status === "declined" && latest.get("dd00000000000005@" + CORE_HASH).status === "declined", "제외분=declined 자동 정리");
+  assert.ok(latest.get("dd00000000000002@" + CORE_HASH).status === "adopted", "올림분=adopted");
+  // [4e 확인검증 blocker① 반례] 뒤쪽 후보의 하드 오류(95항 서고에서 상한 도달)가 앞서 발견한 중복 정리를 못 막음
+  const W8 = fs.mkdtempSync(path.join(os.tmpdir(), "envarc-cap-ws-"));
+  const R8 = fs.mkdtempSync(path.join(os.tmpdir(), "envarc-cap-repo-"));
+  fs.writeFileSync(path.join(R8, CL.ENVELOPE_FILE), coreRaw);
+  assert.strictEqual(CL.setEnvelopeHashAllSlots(W8, CORE_HASH), 2);
+  const items95 = Array.from({ length: 95 }, (_, i) => "채워진 수칙 " + (i + 1));
+  const full95 = JSON.stringify({ schema: "verify-envelope-archive-v1", alwaysBlocker: items95 }, null, 1);
+  fs.writeFileSync(path.join(R8, CL.ARCHIVE_FILE), full95);
+  assert.strictEqual(CL.setContractHashAllSlots(W8, "archiveHash", sha1(full95)), 2);
+  CL.appendEnvelopeCandidates(W8, [mk7("ee00000000000001", "채워진 수칙 1"), mk7("ee00000000000002", "새 수칙 A"), mk7("ee00000000000003", "새 수칙 B")]);
+  const rc8 = CL.draftEnvelopeRevision(W8, R8, { addCandidateIds: ["ee00000000000001", "ee00000000000002", "ee00000000000003"], removeItems: [], approvedHash: CORE_HASH, target: "archive" });
+  assert.ok(!rc8.ok && /96항 상한/.test(rc8.error) && rc8.skippedDup === 1, "95항+[중복,A,B]=A가 96번째 채운 뒤 B에서 상한 중단: " + JSON.stringify({ err: rc8.error, skip: rc8.skippedDup }));
+  assert.strictEqual(CL.readEnvelopeCandidates(W8).latest.get("ee00000000000001@" + CORE_HASH).status, "declined", "★상한 중단에도 앞서 발견한 중복=declined 정리(반환 전 flush)");
 });
 t("★[4a] 소실·무단 파일·96 상한=정직 거부", () => {
   // 소실(도장과 다름): 파일 직접 편집 → 어느 목적지든 거부

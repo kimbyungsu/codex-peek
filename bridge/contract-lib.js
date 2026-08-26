@@ -4423,18 +4423,27 @@ function draftEnvelopeRevision(ws, repo, opts) {
       if (arcHash9 && arcRead9.st === "ok") for (const x of arcRead9.data.alwaysBlocker) othSet9.add(normBacklogTitle(String(x)));
     }
     let dup = false;
+    // [4e 실보고 봉합 2026-08-25] 중복=배치 실패가 아니라 '자동 제외': 이미 코어∪서고(또는 이번 초안 안)에
+    // 같은 정규화 문안이 있으면 그 수칙은 이미 효력 중 — 재등재는 무의미하고, 1건 중복이 23건 배치를 죽이는
+    // 것은 사용자에게 원인 추적 불가능한 벽. 제외분은 장부에 declined(중복 사유)로 자동 정리해 대기열에서
+    // 내려보내고, 개수는 반환값으로 정직 보고(침묵 제외 금지).
+    const skippedDup = [];
+    // [4e 확인검증 blocker①] 중복 정리는 '어떤 반환 경로에서도' 수행 — 뒤쪽 후보의 하드 오류(상한·세대·상태)가
+    // 앞서 발견된 중복의 declined 기록을 건너뛰면 '초안 성패와 무관한 진실 기록' 계약 위반.
+    let dupFlushed9 = false;
+    const flushDup9 = () => { if (!dupFlushed9 && skippedDup.length) { dupFlushed9 = true; try { appendEnvelopeCandidates(ws, skippedDup.map((cid) => ({ candidateId: cid, envelopeHash: approvedHash, status: "declined", note: "중복(이미 등재 문안) 자동 정리", ts: new Date().toISOString() }))); } catch { /* 정리 실패=다음 스캔에 다시 보일 뿐 */ } } };
+    const bail9 = (msg) => { flushDup9(); return { ok: false, skippedDup: skippedDup.length, error: msg }; };
     for (const cid of adds) {
       const cand = latest.get(cid + "@" + approvedHash);
-      if (!cand) return { ok: false, error: "이 승인 세대에 없는 후보(" + cid + ") — 조정 스캔 후 재시도" };
-      if (cand.status !== "proposed") return { ok: false, error: "후보 상태가 proposed 아님(" + cid + ": " + cand.status + ")" };
-      if (typeof cand.title !== "string" || !cand.title) return { ok: false, error: "후보에 문안 없음(" + cid + ")" };
-      if (!Array.isArray(next.alwaysBlocker)) return { ok: false, error: "수칙서 ab축 형식 이상" };
-      if (next.alwaysBlocker.length >= capMax9) return { ok: false, error: tgt9.target === "archive" ? "서고 96항 상한 도달 — 정리(빼기·병합) 후 재시도(자동 삭제 금지)" : "ab축 12항 상한 도달 — 먼저 뺄 항목을 정하세요(자동 삭제 금지)" };
+      if (!cand) return bail9("이 승인 세대에 없는 후보(" + cid + ") — 조정 스캔 후 재시도");
+      if (cand.status !== "proposed") return bail9("후보 상태가 proposed 아님(" + cid + ": " + cand.status + ")");
+      if (typeof cand.title !== "string" || !cand.title) return bail9("후보에 문안 없음(" + cid + ")");
+      if (!Array.isArray(next.alwaysBlocker)) return bail9("수칙서 ab축 형식 이상");
       const t9 = String(cand.title);
       const item = t9.length > ENVELOPE_CHAR_MAX ? t9.slice(0, ENVELOPE_CHAR_MAX - MARK9.length) + MARK9 : t9;
       const tnI = normBacklogTitle(item), tnO = normBacklogTitle(t9); // 저장 실물(절단 후)+원문 양쪽 대조(blocker① 반례)
-      if (tgtSet9.has(tnI) || tgtSet9.has(tnO)) return { ok: false, error: "동일 정규화 문안이 이미 " + tgt9.label + "에 존재(" + cid + ")" };
-      if (othSet9.has(tnI) || othSet9.has(tnO)) return { ok: false, error: "동일 정규화 문안이 이미 " + (tgt9.target === "archive" ? "코어" : "서고") + "에 존재(" + cid + ") — 두 층 동시 등재 금지" };
+      if (tgtSet9.has(tnI) || tgtSet9.has(tnO) || othSet9.has(tnI) || othSet9.has(tnO)) { skippedDup.push(cid); continue; }
+      if (next.alwaysBlocker.length >= capMax9) return bail9(tgt9.target === "archive" ? "서고 96항 상한 도달 — 정리(빼기·병합) 후 재시도(자동 삭제 금지)" : "ab축 12항 상한 도달 — 먼저 뺄 항목을 정하세요(자동 삭제 금지)");
       tgtSet9.add(tnI); tgtSet9.add(tnO); // 이번 초안 누적분도 집합에(다건 올림 내부 중복 차단)
       const prevLen = next.alwaysBlocker.length;
       next.alwaysBlocker = [...next.alwaysBlocker, item];
@@ -4443,12 +4452,16 @@ function draftEnvelopeRevision(ws, repo, opts) {
         if (Array.isArray(next[k]) && next[k].length === prevLen) { next[k] = [...next[k], item]; dup = true; }
       }
     }
+    // [4e] 중복 제외분=초안 성패와 무관한 진실 — declined(중복 사유)로 자동 정리(대기열 정돈·재제시 스킵)
+    const realAdds = adds.filter((cid) => !skippedDup.includes(cid));
+    flushDup9();
+    if (!realAdds.length && !removes.length) return { ok: false, skippedDup: skippedDup.length, error: "올림 표시분이 모두 이미 등재된 문안이라 새로 올릴 것이 없어요(중복 " + skippedDup.length + "건은 '이미 등재'로 자동 정리) — 초안은 만들지 않았습니다" };
     const proposalText = JSON.stringify(next, null, 1);
-    const note = (tgt9.target === "archive" ? "서고 " : "") + "개정판(올림 " + adds.length + "·빼기 " + removes.length + (removedTitles.length ? " — " + removedTitles.join(",") : "") + ")" + (dup ? " · 병렬 축 복제됨 — 사용자 편집 필요(번역·예시)" : "");
-    const w = writeEnvelopeProposal(ws, repo, proposalText, note, { candidateIds: adds, target: tgt9.target });
+    const note = (tgt9.target === "archive" ? "서고 " : "") + "개정판(올림 " + realAdds.length + "·빼기 " + removes.length + (removedTitles.length ? " — " + removedTitles.join(",") : "") + ")" + (skippedDup.length ? " · 중복 " + skippedDup.length + "건 자동 제외" : "") + (dup ? " · 병렬 축 복제됨 — 사용자 편집 필요(번역·예시)" : "");
+    const w = writeEnvelopeProposal(ws, repo, proposalText, note, { candidateIds: realAdds, target: tgt9.target });
     if (!w.ok) return { ok: false, error: "제안본 저장 거부: " + w.error };
-    if (adds.length) { try { appendEnvelopeCandidates(ws, adds.map((cid) => ({ candidateId: cid, envelopeHash: approvedHash, status: "adopted", note: "draft " + w.newHash, ts: new Date().toISOString() }))); } catch { /* 상태 기록 실패해도 제안본은 유효 */ } }
-    return { ok: true, newHash: w.newHash, parallelCopied: dup, adds: adds.length, removes: removes.length, target: tgt9.target };
+    if (realAdds.length) { try { appendEnvelopeCandidates(ws, realAdds.map((cid) => ({ candidateId: cid, envelopeHash: approvedHash, status: "adopted", note: "draft " + w.newHash, ts: new Date().toISOString() }))); } catch { /* 상태 기록 실패해도 제안본은 유효 */ } }
+    return { ok: true, newHash: w.newHash, parallelCopied: dup, adds: realAdds.length, removes: removes.length, skippedDup: skippedDup.length, target: tgt9.target };
   } finally { releaseEnvelopeTransLock(ws, lk9.token); }
 }
 // A-4 병합 초안: 현행 envelope 전문+후보 1건 → ab축 병합 proposalText → 기존 제안 저장(승인 전이는 기존 경로 그대로).
