@@ -4057,7 +4057,7 @@ class Dashboard {
             if ((m.gen || null) !== (genM || null)) { vscode.window.showWarningMessage(enM ? "The rulebook was re-approved while this card was open — the candidate list refreshes; please judge again." : "카드가 떠 있는 사이 수칙서가 재승인됐어요 — 후보 목록이 갱신됩니다. 다시 판단해 주세요."); this.post(); return; }
             // [기억 권위 A-4·구현검증 1차 blocker④] 해소 blocker 후보의 '채택'은 기록이 아니라 병합 초안 생성
             // (draft 명령의 대시보드 표면 — 기존 '기록만' 계약의 의식적 개정. 효력은 여전히 승인 도장부터).
-            if ((m.kind === "resolved-blocker" || m.kind === "user-constraint") && m.status === "adopted" && typeof CLM.draftEnvelopeCandidate === "function") { // [부품 C §3-3] draftable kinds 공통 — 채택=병합 초안 생성과 결속
+            if ((m.kind === "resolved-blocker" || m.kind === "user-constraint" || m.kind === "rule-manual") && m.status === "adopted" && typeof CLM.draftEnvelopeCandidate === "function") { // [부품 C §3-3] draftable kinds 공통 — 채택=병합 초안 생성과 결속(재편 A: rule-manual 편입)
               const repoM = (((bridgeLib() as any) || {}).resolveScoutRepo ? ((bridgeLib() as any).resolveScoutRepo(wsM, loadContract(wsM)) || {}).repo : null) || wsM;
               let dr: any = null;
               try { dr = CLM.draftEnvelopeCandidate(wsM, repoM, m.id, genM); } catch { dr = null; }
@@ -4203,9 +4203,55 @@ class Dashboard {
             try { pr2 = CLA.readEnvelopeProposal(wsA, tgtA); } catch { pr2 = null; }
             if (!pr2 || pr2.st !== "ok" || pr2.newHash !== hashAt) { vscode.window.showWarningMessage(enA ? "The draft changed while approving — not applied. Please review again." : "승인하는 사이 초안이 바뀌어 적용하지 않았습니다 — 다시 확인해 주세요."); this.post(); return; }
             // [경위 v2] 개정 승인 경로도 사건·도장을 같은 잠금 구간에서 선기록→도장(직접 경로 동형 —
-            // 선기록 실패=중단·도장 실패=사건 잔존). sourceRefs 빈 배열=후보 대기.
+            // 선기록 실패=중단·도장 실패=사건 잔존). sourceRefs 빈 배열=후보 대기(수확기 입력 계약 무접촉).
+            // [재편 A §2-2] 승인 사건에 target(core|archive)과 후보 계보 candidateRefs{candidateId,titleFp,
+            // whyFp?}를 결속 — whyFp는 why 보유 kind(rule-manual·user-constraint)만(legacy=부재가 정상 표식).
+            // 전문은 후보 장부가 보존하므로 사건에는 지문만(개인정보 잔존 최소화).
+            const targetA = (pr2 && pr2.target === "archive") ? "archive" : "core";
+            // [재편 A §2-2 — 1차 검증 blocker② fail-closed] 올림 후보가 있는 초안은 후보별 계보 지문
+            // (titleFp 필수·why 보유 kind는 whyFp 필수)이 전부 결속돼야 도장 진행. 하나라도 못 만들면
+            // 중단(빈 참조로 도장하는 fail-open 금지). 빼기 전용 초안(후보 0)만 candidateRefs 생략 정당.
+            let cRefsA: Array<{ candidateId: string; titleFp: string; whyFp?: string }> = [];
+            let refsFailA: string | null = null;
+            try {
+              const idsA: string[] = [...new Set([pr2.candidateId, ...((pr2.candidateIds as string[] | undefined) || [])].filter(Boolean))] as string[];
+              if (idsA.length) {
+                if (typeof CLA.readEnvelopeCandidates !== "function") { refsFailA = "old-runtime"; }
+                else {
+                  // [확인검증 2차 blocker(f-daf2d02f)] 메타는 초안의 후보 세대(candidateGeneration)에 결속 —
+                  // 결정적 ID가 세대 무관이라 전 세대 병합은 재상신 후보의 '과거 why' 지문을 현재 도장에
+                  // 오결속한다. 같은 세대 안에서는 뒤 행이 덮는다(append-only 최신 우선). 세대 미상=중단.
+                  const gen2A = String((pr2 as any).candidateGeneration || ((CLA.loadContract(wsA) || {}) as any).envelopeHash || "");
+                  if (!gen2A) { refsFailA = "gen-missing"; }
+                  const metaA = new Map<string, { title?: string; why?: string; kind?: string }>();
+                  if (!refsFailA) for (const r of (CLA.readEnvelopeCandidates(wsA).rows || [])) {
+                    if (!r || !r.candidateId) continue;
+                    if (String(r.envelopeHash || "") !== gen2A) continue; // 세대 결속(교차 세대 메타 금지)
+                    const m0 = metaA.get(r.candidateId) || {};
+                    if (r.title) m0.title = r.title;
+                    if (r.why) m0.why = r.why;
+                    if (r.kind) m0.kind = r.kind;
+                    metaA.set(r.candidateId, m0);
+                  }
+                  const sha1A = (s: string) => crypto.createHash("sha1").update(String(s), "utf8").digest("hex");
+                  if (!refsFailA) for (const id of idsA) {
+                    const m0 = metaA.get(id);
+                    if (!m0 || !m0.title) { refsFailA = "title-missing"; break; }
+                    const ref: { candidateId: string; titleFp: string; whyFp?: string } = { candidateId: id, titleFp: sha1A(m0.title) };
+                    const kind0 = String(m0.kind || "");
+                    if (kind0 === "rule-manual" || kind0 === "user-constraint") {
+                      if (!m0.why) { refsFailA = "why-missing"; break; }
+                      ref.whyFp = sha1A(m0.why);
+                    } else if (m0.why) ref.whyFp = sha1A(m0.why);
+                    cRefsA.push(ref);
+                  }
+                  if (!refsFailA && cRefsA.length !== idsA.length) refsFailA = "partial";
+                }
+              }
+            } catch { refsFailA = "ledger-read"; }
+            if (refsFailA) { vscode.window.showWarningMessage(enA ? "Could not bind the candidate provenance (" + refsFailA + ") — stamp aborted (nothing applied). Try again." : "후보 계보 결속에 실패해(" + refsFailA + ") 도장을 중단했어요 — 아무것도 적용되지 않았습니다. 다시 시도해 주세요."); this.post(); return; }
             let bindA: any = null; let tr: any = null;
-            try { const MPVA: any = require(path.join(BRIDGE_DIR, "map-provenance.js")); bindA = MPVA.recordApprovalWithStamp(tgtNow2, { envelopeHash: hashAt, sourceRefs: [] }, () => { try { tr = CLA.applyEnvelopeTransition(wsA, tgtA, apL, null); } catch { tr = null; } return !!(tr && tr.ok); }); } catch { bindA = null; }
+            try { const MPVA: any = require(path.join(BRIDGE_DIR, "map-provenance.js")); bindA = MPVA.recordApprovalWithStamp(tgtNow2, { envelopeHash: hashAt, target: targetA, sourceRefs: [], ...(cRefsA.length ? { candidateRefs: cRefsA } : {}) }, () => { try { tr = CLA.applyEnvelopeTransition(wsA, tgtA, apL, null); } catch { tr = null; } return !!(tr && tr.ok); }); } catch { bindA = null; }
             if (!bindA || !bindA.recorded) { vscode.window.showWarningMessage(enA ? "Failed to record the approval event — stamp aborted (nothing applied)." : "승인 사건 기록에 실패해 도장을 중단했어요(아무것도 적용되지 않음 — 다시 시도해 주세요)."); this.post(); return; }
             if (tr && tr.ok) vscode.window.showInformationMessage(enA ? "Draft stamped — the revised rulebook applies from the next verification." : "초안 도장 완료 — 개정 수칙서가 다음 검증부터 적용됩니다.");
             else vscode.window.showWarningMessage((enA ? "Transition failed: " : "전이 실패: ") + ((tr && tr.reason) || "unknown") + (enA ? " — nothing is half-applied (the WAL/lock keeps it recoverable); try again or press Recover." : " — 반쯤 적용된 상태는 없습니다(기록·잠금이 복구를 보장). 다시 시도하거나 '전이 복구'를 눌러 주세요."));
@@ -7175,6 +7221,7 @@ class Dashboard {
               :cd.kind==="unused-oos"?T("이번 승인 이후 한 번도 안 쓰인 예외예요 — 빼거나 합칠지","an exception never used since this approval — consider removing/merging")
               :cd.kind==="resolved-blocker"?T((when9?when9+" 검증에서 ":"검증에서 ")+"잡혀 이미 고친 실수예요 — 올리면 앞으로 같은 실수를 항상 차단해요",(when9?"caught in the "+when9+" verification":"caught in a verification")+" and already fixed — adopt to always block this mistake")
               :cd.kind==="user-constraint"?T((when9?when9+" ":"")+"대화에서 직접 말씀하신 약속이에요 — 수칙서로 올릴까요?",(when9?"on "+when9+" ":"")+"a promise you stated in chat — adopt it into the rulebook?")
+              :cd.kind==="rule-manual"?T("구현 담당이 마감 판단에서 '프로젝트를 관통하는 지침'으로 골라 올린 제안이에요 — 아래 '왜'를 보고 결정하세요",'proposed by the implementer at campaign closing as a project-spanning principle — see the "reason" line below')
               :T("같은 실수가 "+(cd.n||2)+"번 반복됐어요 — 항상 차단할지","the same mistake repeated "+(cd.n||2)+" times — consider always blocking");
             // R1 blocker①: 장부 유래 후보(resolved-blocker)의 대기 상태값은 'proposed' — 빈 문자열과 함께
             // '아직 판단 안 됨'으로 취급해야 버튼·벨이 산다(§7 기계 집계 후보는 상태가 비어 있음 — 두 원천 통일).
@@ -7186,7 +7233,7 @@ class Dashboard {
             // [개정 작업대 2026-08-22] resolved-blocker의 즉시 단건 초안을 '올림 표시' 토글로 교체 —
             // 표시해 두고 아래 '개정판 초안 만들기' 1번으로 N건+빼기 M건을 한 도장에 싣는다(1건 단독도 동일 경로).
             if(undecided9 && !viewOnly9){
-              if(cd.kind==="resolved-blocker"||cd.kind==="user-constraint"){ // [부품 C §3-4] draftable kinds=올림 표시 토글 공통(버튼 분기 자동 상속)
+              if(cd.kind==="resolved-blocker"||cd.kind==="user-constraint"||cd.kind==="rule-manual"){ // [부품 C §3-4] draftable kinds=올림 표시 토글 공통(버튼 분기 자동 상속 — 재편 A: rule-manual 편입)
                 var on9=wbAdds.has(cd.id);
                 var tg9=document.createElement("button"); tg9.style.cssText="margin-top:5px;margin-right:5px;font-size:12px"+(on9?";font-weight:600":""); if(!on9)tg9.className="secondary";
                 tg9.textContent=on9?T("✓ 올림 표시됨(누르면 해제)","✓ marked to add (click to unmark)"):T("올림 표시","Mark to add");

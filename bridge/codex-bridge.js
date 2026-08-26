@@ -2776,6 +2776,50 @@ function cmdEnvelopeCandidate(rest) {
 // --campaign(확인 검증 blocker② 반영): 관문은 job 동결 캠페인을 보는데 이 명령이 현재 캠페인 파일만
 // 읽으면, 미집계 진행처럼 둘이 갈린 상태에서 '관문은 막는데 해제 명령은 열린 지적 없음'인 교착이 된다.
 // 관문 거부문이 자기 캠페인 id를 인쇄하고, 여기서 --campaign으로 그 id를 그대로 받는다.
+// [재편 A §2-1] rule-propose <findingId> --why "<왜 관통 지침인지 1줄>" [--campaign <id>]
+// 헌법: 상신 자격은 성격(관통)이지 이력(고쳐졌음)이 아니다 — 마감 판단(a 그자리한정/b 참고/c 관통)에서
+// (c)로 분류한 교훈만 이 명령으로 올린다. 등재 효력은 사용자 도장부터(후보=판정 권위 없음).
+function cmdRulePropose(rest) {
+  const ws = configWs();
+  const en = loadLang() === "en";
+  const flagVal = (flag) => { const i = rest.indexOf(flag); return i >= 0 && rest[i + 1] !== undefined ? String(rest[i + 1]).trim() : ""; };
+  const why = flagVal("--why");
+  const camp = flagVal("--campaign") || currentCampaignIdFor(ws);
+  const pos = [];
+  for (let i = 0; i < rest.length; i++) { const a = String(rest[i] || ""); if (a === "--why" || a === "--campaign") { i++; continue; } pos.push(a.trim()); }
+  const findingId = (pos[0] || "").trim();
+  if (!findingId) { console.log(en ? "usage: rule-propose <findingId> --why \"<one line>\"" : "사용법: rule-propose <findingId> --why \"<왜 관통 지침인지 1줄>\""); process.exitCode = 2; return; }
+  const repo = resolveScoutRepo(ws, loadContract(ws)).repo;
+  const CLany = require("./contract-lib.js");
+  const r = CLany.ruleProposeCandidate(ws, repo, { findingId, why, campaignId: camp });
+  if (!r.ok) {
+    const msgs = {
+      "finding-missing": ["findingId가 비었습니다", "findingId is empty"],
+      "campaign-missing": ["캠페인을 결정하지 못했습니다(--campaign 지정)", "cannot resolve campaign (pass --campaign)"],
+      "envelope-inactive": ["승인된 수칙서가 없어(비활성) 상신 대상이 아닙니다", "no approved rulebook (inactive)"],
+      "why-missing": ["--why(왜 관통 지침인지 1줄)는 필수입니다", "--why is required (one line)"],
+      "why-format": ["why는 개행 없는 120자 이내 1줄이어야 합니다", "why must be a single line ≤120 chars"],
+      "finding-not-found": ["그 findingId의 지적이 장부에 없습니다", "finding not found in the ledger"],
+      "other-campaign": ["이번 캠페인의 지적이 아닙니다(--campaign으로 그 캠페인을 지정)", "finding belongs to another campaign"],
+      "legacy-unbound": ["기록 결속(title·askId)이 없는 구형 지적이라 상신 불가", "legacy finding without binding (title/askId)"],
+      "not-eligible": ["해소(resolved)로 닫혔거나 강등(demoted) 닫힘인 지적만 상신할 수 있습니다", "only resolved-closed or demoted-closed findings are eligible"],
+      "not-blocker": ["blocker였던 지적만 상신할 수 있습니다", "only blocker findings are eligible"],
+      "envelope-read": ["수칙서 실물 판독 실패", "failed to read the rulebook"],
+      "envelope-drift": ["수칙서가 승인 세대와 다릅니다(재승인 후 재시도)", "rulebook differs from the approved generation"],
+      "already-in-envelope": ["이미 수칙서(코어·서고)에 있는 문안입니다", "already in the rulebook (core/archive)"],
+      "duplicate": ["같은 지적이 이미 후보로 올라가 있습니다", "already proposed for this generation"],
+      "declined-suppressed": ["같은 세대에서 이미 '안 올림' 처분된 지적입니다(거부권 존중)", "declined in this generation (veto respected)"],
+      "ledger-write": ["후보 장부 기록 실패", "candidate ledger write failed"],
+    };
+    const m = msgs[r.reason] || [r.reason, r.reason];
+    const sens = String(r.reason || "").startsWith("why-sensitive-") ? (en ? "why contains a sensitive-looking value — rewrite it" : "why에 비밀값 형태가 있어 거부됐습니다 — 문구를 바꿔 주세요") : null;
+    console.log((en ? "rejected: " : "상신 거부: ") + (sens || (en ? m[1] : m[0])));
+    process.exitCode = 2;
+    return;
+  }
+  console.log((en ? "proposed: " : "상신됨: ") + r.candidateId + (en ? " — takes effect only after the user stamps it" : " — 효력은 사용자 도장부터(대시보드 '제안'에서 승인/안 올림)"));
+  if (r.warn === "pending-cap") console.log(en ? "note: pending queue is over the guide cap — consider fewer, more general proposals" : "참고: 대기 후보가 안내 상한을 넘었습니다 — 상신은 더 적고 더 일반적인 원칙 위주로");
+}
 function cmdFindingJudge(rest) {
   const ws = configWs();
   const en = loadLang() === "en";
@@ -3216,7 +3260,7 @@ function computeEnvelopeCandidatesFor(ws) {
       if (rec.status !== "proposed" && rec.status !== "adopted") continue; // declined/failed는 아래 live 필터와 동일 취급
       if (seen5.has(rec.candidateId)) continue;
       seen5.add(rec.candidateId);
-      cands.push({ candidateId: rec.candidateId, kind: k5, key: rec.findingId || m5.findingId || "", n: 1, titles: [String(rec.title || m5.title || "")].filter(Boolean), ts: String(rec.ts || ""), ...(k5 === "user-constraint" ? { why: String(rec.why || m5.why || "") } : {}) }); // ts=제안 시각·why=상신 근거(§1 사람 표면 보조 줄 재료)
+      cands.push({ candidateId: rec.candidateId, kind: k5, key: rec.findingId || m5.findingId || "", n: 1, titles: [String(rec.title || m5.title || "")].filter(Boolean), ts: String(rec.ts || ""), ...(k5 === "user-constraint" || k5 === "rule-manual" ? { why: String(rec.why || m5.why || "") } : {}) }); // ts=제안 시각·why=상신 근거(사람 표면 보조 줄 — rule-manual도 '왜 관통 지침인지' 동봉·재편 A §2-2)
     }
   }
   let skipped = 0;
@@ -4103,6 +4147,8 @@ function main() {
       return cmdBacklog(rest); // P-12 2a — 검증 백로그 장부
     case "finding-judge":
       return cmdFindingJudge(rest); // 지적 처분 관문 해제 수단(2026-08-01) — 열린 지적 판단 기록
+    case "rule-propose":
+      return cmdRulePropose(rest); // [재편 A §2-1] 마감 판단의 명시 상신 — 관통 지침만 수칙서 후보로
     case "envelope-proposal": { // §7 증분 2 — 제안본(초안) 작성·열람·폐기. 승인(도장)은 대시보드 전용 — CLI에 없음.
       const rc8 = cmdEnvelopeProposal(rest);
       if (rc8) process.exitCode = rc8;
@@ -4177,6 +4223,7 @@ function main() {
           '  node codex-bridge.js ask --force-resend "<프롬프트>" (같은 요청 진행 중 차단을 의식적으로 우회)\n' +
           "  node codex-bridge.js ask-active status | ask-active clear --confirm\n" +
           '  node codex-bridge.js finding-judge [<id> <fix-fact|fix-gap|rebut|park> --note "근거(12자+·park 제외)"] [--campaign <id>]  (열린 지적 판단 기록 — 미판단이 남으면 다음 검증이 시작되지 않음)\n' +
+          '  node codex-bridge.js rule-propose <findingId> --why "<왜 관통 지침인지 1줄>"  (마감 판단 (c)관통 지침만 수칙서 후보로 — 효력은 사용자 도장부터)\n' +
           "  node codex-bridge.js timeout  (대시보드 검증 대기시간과 외부 호출 최소 timeout 확인)\n" +
           "  node codex-bridge.js link <id> | link --last\n" +
           "  node codex-bridge.js status | find | doctor | detect-home\n" +

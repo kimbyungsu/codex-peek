@@ -380,7 +380,8 @@ t("★[4f 실보고 반례] 대기열 정리기(reconcile)가 서고 문안까�
   assert.strictEqual(CL.setEnvelopeHashAllSlots(W9, CORE_HASH), 2);
   fs.writeFileSync(path.join(R9, CL.ARCHIVE_FILE), arcText); // 서고 2항
   assert.strictEqual(CL.setContractHashAllSlots(W9, "archiveHash", sha1(arcText)), 2);
-  const mk9 = (cid, title) => ({ candidateId: cid, envelopeHash: CORE_HASH, status: "proposed", kind: "resolved-blocker", title, ts: "T" });
+  // [재편 A] legacy resolved-blocker proposed는 정책 개정 정리 대상 — 스윕 계약은 현행 공급 kind(rule-manual)로 검사(스윕은 draftable 공통·계약 보존).
+  const mk9 = (cid, title) => ({ candidateId: cid, envelopeHash: CORE_HASH, status: "proposed", kind: "rule-manual", origin: "manual", policyVersion: 2, title, ts: "T" });
   CL.appendEnvelopeCandidates(W9, [mk9("ff00000000000001", arcObj.alwaysBlocker[0]), mk9("ff00000000000002", "진짜 새로운 수칙"), mk9("ff00000000000003", coreObj.outOfScope[0])]);
   CL.reconcileMemoryCandidates(W9, R9, CORE_HASH);
   const { latest } = CL.readEnvelopeCandidates(W9);
@@ -399,10 +400,11 @@ t("★[4f 실보고 반례] 대기열 정리기(reconcile)가 서고 문안까�
     { type: "finding", findingId: "f-long9", campaignId: CAMP9, round: 1, tag: "blocker", title: longT9, titleNorm: longT9, envelopeHash: CORE_HASH, demoted: false, status: "open", ts: "T" },
     { type: "close", findingId: "f-long9", campaignId: CAMP9, closeReason: "resolved", askId: "ask-x", ts: "T" },
   ]);
-  CL.reconcileMemoryCandidates(W9, R9, CORE_HASH);
-  const cidLong = CL.envelopeCandidateId("resolved-blocker", CL.wsKeyFor(W9) + "|" + CAMP9 + "|f-long9");
-  const recLong = CL.readEnvelopeCandidates(W9).latest.get(cidLong + "@" + CORE_HASH);
-  assert.ok(recLong && recLong.status === "declined", "★장문(절단 등재)과 같은 신규 blocker=생성 시점 억제(declined — 한 스캔도 대기 노출 없음): " + JSON.stringify(recLong && recLong.status));
+  // [재편 A] 생성 시점 억제의 새 계약: 자동 스캔이 아니라 명시 상신(rule-propose)이 절단 실물 대조로 거부
+  const rpLong = CL.ruleProposeCandidate(W9, R9, { findingId: "f-long9", why: "절단 등재 대조 반례용 관통 이유", campaignId: CAMP9, approvedHash: CORE_HASH });
+  assert.strictEqual(rpLong.reason, "already-in-envelope", "장문(절단 등재)과 같은 신규 blocker=상신 시점 거부(한 스캔도 대기 노출 없음)");
+  const cidLong = CL.envelopeCandidateId("rule-manual", CL.wsKeyFor(W9) + "|" + CAMP9 + "|f-long9");
+  assert.ok(!CL.readEnvelopeCandidates(W9).latest.has(cidLong + "@" + CORE_HASH), "거부=장부 무기록(대기열 오염 없음)");
   // 소실 서고(도장 불일치)=보수: 서고 문안을 억제 집합에 안 넣음(코어만) — 신규가 서고 문안과 겹쳐도 대기 유지
   const keep9 = fs.readFileSync(path.join(R9, CL.ARCHIVE_FILE), "utf8");
   fs.writeFileSync(path.join(R9, CL.ARCHIVE_FILE), JSON.stringify({ schema: "verify-envelope-archive-v1", alwaysBlocker: ["바뀐 판"] }, null, 1));

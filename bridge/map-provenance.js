@@ -538,8 +538,16 @@ function recordApprovalWithStamp(repoRoot, ev, stampFn) {
   const rk = repoKeyFor(repoRoot);
   const f = approvalEventsFileFor(rk);
   try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch { return { ok: false, recorded: false, stamped: false }; }
+  // [재편 A §2-2] target(core|archive)·candidateRefs{candidateId,titleFp,whyFp?}를 스키마에 편입 —
+  // whyFp는 why 보유 kind만(legacy=부재가 정상 표식). 지문만 저장(전문은 후보 장부가 정본·ab-7 최소화).
+  const cRefs = Array.isArray(ev && ev.candidateRefs)
+    ? ev.candidateRefs.filter((r) => r && typeof r.candidateId === "string" && r.candidateId)
+      .map((r) => ({ candidateId: r.candidateId, ...(typeof r.titleFp === "string" && r.titleFp ? { titleFp: r.titleFp } : {}), ...(typeof r.whyFp === "string" && r.whyFp ? { whyFp: r.whyFp } : {}) }))
+    : [];
   const rec = { approvalTs: new Date().toISOString(), envelopeHash: String((ev && ev.envelopeHash) || ""),
     candidateId: (ev && ev.candidateId) || null, askId: (ev && ev.askId) || null, repoKey: rk,
+    ...(ev && (ev.target === "archive" || ev.target === "core") ? { target: ev.target } : {}),
+    ...(cRefs.length ? { candidateRefs: cRefs } : {}),
     sourceRefs: Array.isArray(ev && ev.sourceRefs) ? ev.sourceRefs : [] };
   const w = lockedWrite(f + ".lock", () => {
     fs.appendFileSync(f, JSON.stringify(rec) + "\n", "utf8");
@@ -560,10 +568,14 @@ function harvestFromApprovals(ws, repoRoot) {
         .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
     } catch { return { ok: true, results: [] }; }
     const c = CL.loadContract(ws);
-    const stamped = String((c && c.envelopeHash) || ""); // 도장 실존: 승인 지문 일치 사건만 자격(선기록 후 도장 실패=미자격)
+    // [재편 A §2-2] 자격 대조 target-aware — 서고(target archive) 승인 사건의 지문은 archiveHash와 대조해야
+    // 한다(코어 지문 단일 대조는 서고 사건을 영구 미자격으로 만들던 결함). target 없는 legacy 사건=코어 대조(무회귀).
+    const stampedCore = String((c && c.envelopeHash) || ""); // 도장 실존: 승인 지문 일치 사건만 자격(선기록 후 도장 실패=미자격)
+    const stampedArc = String((c && c.archiveHash) || "");
     const results = [];
     for (const ev of rows) {
-      if (!ev.envelopeHash || ev.envelopeHash !== stamped) continue;
+      const want = ev.target === "archive" ? stampedArc : stampedCore;
+      if (!ev.envelopeHash || !want || ev.envelopeHash !== want) continue;
       if (!Array.isArray(ev.sourceRefs) || !ev.sourceRefs.length) continue; // 후보 대기
       results.push(registerAutoEntries(repoRoot, ev.sourceRefs, { eventKind: "envelope-approval", eventRef: ev.envelopeHash.slice(0, 16), title: "검증 경계 승인 결정" }));
     }

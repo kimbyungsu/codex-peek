@@ -50,30 +50,52 @@ const led = [
 fs.mkdirSync(path.dirname(CL.findingsLedgerFileFor(WS)), { recursive: true });
 fs.writeFileSync(CL.findingsLedgerFileFor(WS), led.map((r) => JSON.stringify(r)).join("\n") + "\n");
 
-// ── A-3 조정 스캔 ────────────────────────────────────────────────────────────
-t("조정 스캔: 신행 blocker 해소 계보만 후보화(비blocker·기등재 제외)+legacy-unbound 기록", () => {
+// ── [재편 A §2-1] 공급=명시 상신(rule-propose)뿐 — 본 스캔 폐지 반례+자격·결속 ──
+t("본 스캔 폐지: 해소 blocker가 자동으로 후보가 되지 않음(헌법 — 이력≠자격)", () => {
   const r = CL.reconcileMemoryCandidates(WS, REPO, HASH);
-  assert.strictEqual(r.appended, 1, "신행 1건만 append");
-  assert.strictEqual(r.legacyUnbound, 1, "구행(title/askId 부재) 제외 기록");
-  assert.ok(r.suppressed.some((s) => s.why === "already-in-envelope"), "ab축 정확 일치 억제");
+  assert.strictEqual(r.appended, 0, "자동 공급 0(폐지)");
+  assert.strictEqual(r.scanned, 0, "본 스캔 자체가 없음");
+  const { latest } = CL.readEnvelopeCandidates(WS);
+  assert.strictEqual([...latest.values()].filter((x) => x.status === "proposed").length, 0, "proposed 0");
+});
+t("rule-propose: resolved 자격+askId 결속+원문 보존+rule-manual 스키마", () => {
+  const r = CL.ruleProposeCandidate(WS, REPO, { findingId: "f-aaaa0001", why: "특정 파일을 넘어 반복될 수 있는 로그 유출 부류라 관통 지침", campaignId: camp, approvedHash: HASH });
+  assert.strictEqual(r.ok, true, "상신 성공: " + (r.reason || ""));
   const { latest } = CL.readEnvelopeCandidates(WS);
   const rows = [...latest.values()].filter((x) => x.status === "proposed");
   assert.strictEqual(rows.length, 1);
   assert.ok(/^[0-9a-f]{16}$/.test(rows[0].candidateId), "16hex 계약(기존 판독기 호환)");
+  assert.strictEqual(rows[0].kind, "rule-manual");
+  assert.strictEqual(rows[0].origin, "manual");
+  assert.strictEqual(rows[0].policyVersion, 2);
   assert.strictEqual(rows[0].title, "결제 실패 시 카드번호가 평문 로그에 남음", "문안=지적 원문(자동 작문 금지)");
   assert.strictEqual(rows[0].askId, "ask-test-1", "마감 askId 결속");
+  assert.ok(rows[0].why && rows[0].why.length <= 120, "why 보존");
 });
-t("조정 스캔 멱등: 재실행(중단 복구 트리거 동형)이 중복 후보를 만들지 않음", () => {
+t("rule-propose 자격 거부: 비blocker=not-blocker·legacy(title 부재)=legacy-unbound·기등재=already-in-envelope", () => {
+  assert.strictEqual(CL.ruleProposeCandidate(WS, REPO, { findingId: "f-cccc0003", why: "이유", campaignId: camp, approvedHash: HASH }).reason, "not-blocker");
+  assert.strictEqual(CL.ruleProposeCandidate(WS, REPO, { findingId: "f-bbbb0002", why: "이유", campaignId: camp, approvedHash: HASH }).reason, "legacy-unbound");
+  assert.strictEqual(CL.ruleProposeCandidate(WS, REPO, { findingId: "f-dddd0004", why: "이유", campaignId: camp, approvedHash: HASH }).reason, "already-in-envelope");
+  assert.strictEqual(CL.ruleProposeCandidate(WS, REPO, { findingId: "f-aaaa0001", why: "이유", campaignId: "cl:other:1", approvedHash: HASH }).reason, "other-campaign");
+});
+t("rule-propose why 방어: 누락·다행·120자 초과·민감 형태=거부(user-constraint 동형)", () => {
+  assert.strictEqual(CL.ruleProposeCandidate(WS, REPO, { findingId: "f-aaaa0001", why: "", campaignId: camp, approvedHash: HASH }).reason, "why-missing");
+  assert.strictEqual(CL.ruleProposeCandidate(WS, REPO, { findingId: "f-aaaa0001", why: "줄1\n줄2", campaignId: camp, approvedHash: HASH }).reason, "why-format");
+  assert.strictEqual(CL.ruleProposeCandidate(WS, REPO, { findingId: "f-aaaa0001", why: "가".repeat(121), campaignId: camp, approvedHash: HASH }).reason, "why-format");
+  assert.ok(String(CL.ruleProposeCandidate(WS, REPO, { findingId: "f-aaaa0001", why: "sk-ant-api03-abcdefghijklmnopqrstuvwx 키", campaignId: camp, approvedHash: HASH }).reason).startsWith("why-sensitive-"), "민감 형태 거부");
+});
+t("rule-propose 멱등: 같은 세대 재상신=duplicate·reconcile 재실행도 중복 없음", () => {
+  assert.strictEqual(CL.ruleProposeCandidate(WS, REPO, { findingId: "f-aaaa0001", why: "다시 이유", campaignId: camp, approvedHash: HASH }).reason, "duplicate");
   const r2 = CL.reconcileMemoryCandidates(WS, REPO, HASH);
   assert.strictEqual(r2.appended, 0);
   const { rows } = CL.readEnvelopeCandidates(WS);
   assert.strictEqual(rows.filter((x) => x.status === "proposed").length, 1, "append-only 원장에도 proposed 1건뿐");
 });
-t("조정 스캔: Envelope 비활성(지문 없음)=무공급(A-6 경계)", () => {
+t("비활성(지문 없음): reconcile 무공급(A-6)+rule-propose envelope-inactive", () => {
   const r3 = CL.reconcileMemoryCandidates(WS, REPO, null);
   assert.strictEqual(r3.appended + r3.scanned, 0);
 });
-t("조정 스캔: pending 상한 초과=신규 억제+사유 기록(승인 남발 방지 §5-9)", () => {
+t("rule-propose pending 상한=차단이 아니라 경고(수동 판단 산출·설계 v4 §2-1)", () => {
   const many = [];
   for (let i = 0; i < CL.MEMORY_CANDIDATE_PENDING_MAX; i++) many.push({ candidateId: crypto.createHash("sha1").update("pad" + i).digest("hex").slice(0, 16), envelopeHash: HASH, status: "proposed", ts: "t" });
   CL.appendEnvelopeCandidates(WS, many);
@@ -82,9 +104,9 @@ t("조정 스캔: pending 상한 초과=신규 억제+사유 기록(승인 남�
     { type: "close", campaignId: camp, findingId: "f-eeee0005", closeReason: "resolved", round: 6, envelopeHash: HASH, askId: "ask-test-3", ts: "t" },
   ];
   fs.appendFileSync(CL.findingsLedgerFileFor(WS), extra.map((r) => JSON.stringify(r)).join("\n") + "\n");
-  const r4 = CL.reconcileMemoryCandidates(WS, REPO, HASH);
-  assert.strictEqual(r4.appended, 0);
-  assert.ok(r4.suppressed.some((s) => s.why === "pending-cap"), "억제 사유 반환(침묵 누락 금지)");
+  const r4 = CL.ruleProposeCandidate(WS, REPO, { findingId: "f-eeee0005", why: "상한 경고 확인용 관통 이유", campaignId: camp, approvedHash: HASH });
+  assert.strictEqual(r4.ok, true, "상한이 수동 상신을 막지 않음");
+  assert.strictEqual(r4.warn, "pending-cap", "경고 동봉(침묵 금지)");
 });
 
 // ── A-4 draft 병합 ───────────────────────────────────────────────────────────
@@ -368,7 +390,7 @@ t("부품 C R3: mark 우회 가드 — draftable adopted=거부·declined 허용
   assert.ok(!gA.ok && gA.reason === "draftable-adopt-via-draft" && gA.kind === "user-constraint", "★draftable 채택 직접 기록=거부(초안 결속 강제 — §3-3b)");
   assert.strictEqual(CL.envelopeMarkGuard(WS10, ue(1), "declined").ok, true, "declined는 mark 허용");
   assert.strictEqual(CL.envelopeMarkGuard(WS10, ue(2), "adopted").ok, true, "비 draftable kind=기존 계약 유지");
-  assert.deepStrictEqual(CL.ENVELOPE_DRAFTABLE_KINDS, ["resolved-blocker", "user-constraint"], "allowlist 단일 정본");
+  assert.deepStrictEqual(CL.ENVELOPE_DRAFTABLE_KINDS, ["resolved-blocker", "user-constraint", "rule-manual"], "allowlist 단일 정본(재편 A: rule-manual 편입·legacy 호환 유지)");
 });
 t("복원형 폐기: candidateId 없는 구형/수동 제안본=복원 없이 폐기만(보수)", () => {
   const cur = JSON.parse(fs.readFileSync(path.join(REPO, "verify-envelope.json"), "utf8"));
@@ -476,8 +498,8 @@ t("B3 실행: 200자 초과 title=절단 표식과 함께 병합(무표식 절�
   ];
   fs.mkdirSync(path.dirname(CL.findingsLedgerFileFor(ws3)), { recursive: true });
   fs.writeFileSync(CL.findingsLedgerFileFor(ws3), led3.map((r) => JSON.stringify(r)).join("\n") + "\n");
-  const rc = CL.reconcileMemoryCandidates(ws3, rp3, h3);
-  assert.strictEqual(rc.appended, 1);
+  const rp0 = CL.ruleProposeCandidate(ws3, rp3, { findingId: "f-eeee0005", why: "절단 표식 검사용 관통 이유", campaignId: "cl:b3", approvedHash: h3 });
+  assert.strictEqual(rp0.ok, true, "상신 성공: " + (rp0.reason || ""));
   const cid3 = [...CL.readEnvelopeCandidates(ws3).latest.values()].find((x) => x.status === "proposed").candidateId;
   const dr = CL.draftEnvelopeCandidate(ws3, rp3, cid3, h3);
   assert.ok(dr.ok, "draft 성공: " + (dr.error || ""));
@@ -487,19 +509,26 @@ t("B3 실행: 200자 초과 title=절단 표식과 함께 병합(무표식 절�
   assert.ok(last.endsWith("…[절단]"), "절단 표식 보존");
   assert.ok(last.length <= 200, "상한 준수(표식 포함)");
 });
-t("B4 실행: 계산기에 resolved-blocker 후보 합류(장부→화면 경로)+기등재 억제=자동 declined 기록", () => {
+t("B4 실행(재편 A): 계산기에 rule-manual 후보 합류(why 동봉)+legacy 자동상신 잔여=정책 개정 declined(§5-3)", () => {
   CL.updateContractPatch(WS, undefined, { envelopeHash: HASH });
   // 계산기 세대=마지막 ask 동결(readFrozenEnvelope) — 시험도 실경로로 동결을 만든다(WS 자체가 정찰 대상·수칙서는 아래 B1 시험과 공유)
   fs.writeFileSync(path.join(WS, CL.ENVELOPE_FILE), envRaw);
   const frozen = CL.freezeEnvelopeForAsk(WS, WS, "ko");
   assert.strictEqual(frozen, HASH, "동결=승인 세대");
   const cc = CB.computeEnvelopeCandidatesFor(WS);
-  const rb = (cc.live || []).filter((c) => c.kind === "resolved-blocker");
-  assert.ok(rb.length >= 1, "resolved-blocker 후보가 live 목록에 합류");
+  const rb = (cc.live || []).filter((c) => c.kind === "rule-manual");
+  assert.ok(rb.length >= 1, "rule-manual 후보가 live 목록에 합류");
   assert.ok(rb.some((c) => c.titles && c.titles[0] && c.titles[0].includes("카드번호")), "문안=지적 원문");
+  assert.ok(rb.some((c) => typeof c.why === "string" && c.why.includes("관통")), "why(왜 관통 지침인지) 화면 전달");
+  // legacy 자동 상신 잔여(policyVersion 부재 resolved-blocker proposed) → reconcile이 정책 개정 사유로 정리
+  const legacyId = crypto.createHash("sha1").update("legacy-auto-1").digest("hex").slice(0, 16);
+  CL.appendEnvelopeCandidates(WS, [{ candidateId: legacyId, envelopeHash: HASH, status: "proposed", kind: "resolved-blocker", title: "legacy 자동 상신 잔여 문안", findingId: "f-legacy01", ts: "t" }]);
+  CL.reconcileMemoryCandidates(WS, REPO, HASH);
   const { latest } = CL.readEnvelopeCandidates(WS);
-  const dec = [...latest.values()].filter((x) => x.status === "declined" && x.kind === "resolved-blocker");
-  assert.ok(dec.length >= 1 && /등재/.test(dec[0].note || ""), "자동 declined+사유 기록");
+  const lg = latest.get(legacyId + "@" + HASH);
+  assert.ok(lg && lg.status === "declined" && /공급 정책 개정/.test(lg.note || ""), "legacy 한정 declined+사유(재상신 경로 안내)");
+  const rm = [...latest.values()].filter((x) => x.status === "proposed" && x.kind === "rule-manual");
+  assert.ok(rm.length >= 1, "rule-manual proposed는 무접촉(한정 정리의 경계)");
 });
 t("B1 실행: withContract askId 전달 → attach 행에 같은 askId+경계 축 id '배열' 기록(개수 아님)", () => {
   fs.writeFileSync(path.join(WS, CL.ENVELOPE_FILE), envRaw);
@@ -547,21 +576,45 @@ t("A-5 stale 실행: 승인 세대 변경 → 구세대 pending=자동 declined(
   ];
   fs.mkdirSync(path.dirname(CL.findingsLedgerFileFor(wsS)), { recursive: true });
   fs.writeFileSync(CL.findingsLedgerFileFor(wsS), ledS.map((r) => JSON.stringify(r)).join("\n") + "\n");
-  const r1 = CL.reconcileMemoryCandidates(wsS, rpS, H1);
-  assert.strictEqual(r1.appended, 1, "H1 세대에 proposed");
+  const rp1 = CL.ruleProposeCandidate(wsS, rpS, { findingId: "f-ffff0006", why: "임시 산출물 위치 규율은 파일 하나를 넘는 관통 지침", campaignId: "cl:st", approvedHash: H1 });
+  assert.strictEqual(rp1.ok, true, "H1 세대에 rule-manual proposed: " + (rp1.reason || ""));
+  // legacy 자동 상신 잔여도 함께 심어 재승인 뒤 두 kind의 운명이 갈리는지 본다(재편 A §2-1·§5-3)
+  const legacyS = crypto.createHash("sha1").update("legacy-stale-1").digest("hex").slice(0, 16);
+  CL.appendEnvelopeCandidates(wsS, [{ candidateId: legacyS, envelopeHash: H1, status: "proposed", kind: "resolved-blocker", title: "legacy 구세대 자동 상신", ts: "t" }]);
   // 재승인: 무관 항목만 바꿔 새 세대 H2 (검증자 반례 재현)
   const e2 = { ...e1, outOfScope: ["다른 항목"] };
   const raw2 = JSON.stringify(e2, null, 1);
   fs.writeFileSync(path.join(rpS, CL.ENVELOPE_FILE), raw2);
   const H2 = crypto.createHash("sha1").update(raw2).digest("hex");
-  const r2 = CL.reconcileMemoryCandidates(wsS, rpS, H2);
-  assert.strictEqual(r2.appended, 1, "새 세대 재평가=재제안");
+  CL.reconcileMemoryCandidates(wsS, rpS, H2);
   const { latest } = CL.readEnvelopeCandidates(wsS);
-  const cid = [...latest.values()].find((x) => x.status === "proposed").candidateId;
-  const old = latest.get(cid + "@" + H1);
-  assert.strictEqual(old.status, "declined", "구세대 pending=자동 declined(stale 정리)");
-  assert.ok(/세대 변경/.test(old.note || ""), "정리 사유 기록");
-  assert.strictEqual(latest.get(cid + "@" + H2).status, "proposed", "새 세대 pending 유효");
+  const cid = [...latest.values()].find((x) => x.status === "proposed" && x.kind === "rule-manual").candidateId;
+  assert.strictEqual(latest.get(cid + "@" + H2).status, "proposed", "rule-manual=세대 이월(carry-forward)로 새 세대 유효");
+  assert.ok(/이월/.test(latest.get(cid + "@" + H2).note || ""), "이월 사유 기록");
+  assert.strictEqual(latest.get(cid + "@" + H2).policyVersion, 2, "이월분도 정책 버전 보존");
+  const lgOld = latest.get(legacyS + "@" + H1);
+  assert.ok(lgOld && lgOld.status === "declined" && /공급 정책 개정/.test(lgOld.note || ""), "legacy 구세대=정책 개정 declined(재제안 없음)");
+  assert.ok(!latest.has(legacyS + "@" + H2), "legacy는 새 세대 재발급 없음(본 스캔 폐지)");
+});
+
+t("rule-propose 자격(재검증 blocker① 반례): 인용형 강등 종결(close demoted)도 상신 가능·oosId 없으면 결속 생략", () => {
+  const extra2 = [
+    { type: "finding", findingId: "f-gggg0007", campaignId: camp, round: 7, tag: "blocker", titleNorm: "t7", title: "범위 밖으로 강등된 지적 문안", envelopeHash: HASH, status: "open", ts: "t" },
+    { type: "close", campaignId: camp, findingId: "f-gggg0007", closeReason: "demoted", round: 8, envelopeHash: HASH, ts: "t" },
+  ];
+  fs.appendFileSync(CL.findingsLedgerFileFor(WS), extra2.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  const r = CL.ruleProposeCandidate(WS, REPO, { findingId: "f-gggg0007", why: "강등돼도 관통 지침 성격이면 상신 가능해야 함", campaignId: camp, approvedHash: HASH });
+  assert.strictEqual(r.ok, true, "인용형 강등 종결=자격 인정: " + (r.reason || ""));
+  const rec7 = CL.readEnvelopeCandidates(WS).latest.get(r.candidateId + "@" + HASH);
+  assert.strictEqual(rec7.kind, "rule-manual");
+  assert.ok(!("askId" in rec7) && !("oosId" in rec7), "인용형 close에는 askId·oos 결속 실물이 없음 — 허위 결속 금지");
+});
+
+t("CLI 배선: rule-propose 인자 없음=사용법+exit 2(dispatch 실재)", () => {
+  const { spawnSync } = require("child_process");
+  const r = spawnSync(process.execPath, [path.join(__dirname, "..", "bridge", "codex-bridge.js"), "rule-propose"], { encoding: "utf8", env: { ...process.env, CODEX_BRIDGE_HOME: HOME } });
+  assert.strictEqual(r.status, 2, "exit 2: " + (r.stdout || "") + (r.stderr || ""));
+  assert.ok(/rule-propose/.test(r.stdout + r.stderr), "usage 출력");
 });
 
 console.log(`\n결과: ${n}/${n} 통과`);

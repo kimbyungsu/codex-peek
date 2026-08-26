@@ -357,7 +357,13 @@ console.log("[10] v2 수확 자격 — close 라운드 게이트·dispositionVal
   const ext10 = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
   ok(/recordApprovalWithStamp\(tgtNow, \{ envelopeHash: shaAt, sourceRefs: \[\] \}/.test(ext10), "직접 승인 — 사건·도장 같은 잠금 결속 호출");
   ok(/if \(!bind9 \|\| !bind9\.recorded\) \{[^}]*return;/.test(ext10) && /승인 사건 기록에 실패해 승인을 중단/.test(ext10), "직접 승인 — 사건 기록 실패=도장 진행 금지");
-  ok(/recordApprovalWithStamp\(tgtNow2, \{ envelopeHash: hashAt, sourceRefs: \[\] \}/.test(ext10) && /if \(!bindA \|\| !bindA\.recorded\) \{[^}]*return;/.test(ext10), "개정 승인 경로도 같은 잠금 결속+실패=중단(경로 2종 동형)");
+  ok(/recordApprovalWithStamp\(tgtNow2, \{ envelopeHash: hashAt, target: targetA, sourceRefs: \[\], \.\.\.\(cRefsA\.length \? \{ candidateRefs: cRefsA \} : \{\}\) \}/.test(ext10) && /if \(!bindA \|\| !bindA\.recorded\) \{[^}]*return;/.test(ext10), "개정 승인 경로도 같은 잠금 결속+실패=중단(경로 2종 동형 — 재편 A §2-2: target+candidateRefs 결속)");
+  // [재편 A §2-2] 후보 계보=별도 candidateRefs(지문만·sourceRefs 무접촉)+why 보유 kind는 whyFp 필수 —
+  // 결속 실패=도장 중단(fail-closed·1차 검증 blocker② 반례). 빼기 전용(후보 0)만 생략 정당.
+  ok(/const sha1A = \(s: string\) => crypto\.createHash\("sha1"\)/.test(ext10) && /refsFailA = "title-missing"/.test(ext10) && /refsFailA = "why-missing"/.test(ext10) && /refsFailA = "ledger-read"/.test(ext10), "candidateRefs — title 필수·why 보유 kind는 why 필수·판독 실패 분류(지문만 저장)");
+  ok(/if \(refsFailA\) \{ vscode\.window\.showWarningMessage[\s\S]{0,300}this\.post\(\); return; \}/.test(ext10), "★결속 실패=도장 중단(fail-closed — 빈 참조 도장 금지)");
+  // [확인검증 2차 blocker f-daf2d02f] 메타=초안 후보 세대 결속+같은 세대 최신 우선 — 교차 세대 과거 why 오결속 차단
+  ok(/const gen2A = String\(\(pr2 as any\)\.candidateGeneration/.test(ext10) && /String\(r\.envelopeHash \|\| ""\) !== gen2A\) continue;/.test(ext10) && /refsFailA = "gen-missing"/.test(ext10) && /if \(r\.title\) m0\.title = r\.title;/.test(ext10), "★메타 세대 결속(candidateGeneration 필터·최신 우선·세대 미상=중단)");
   // R2 blocker⑥: 값 없는 --source=즉시 거부(침묵 통과 금지) — 실제 CLI 실행 반례
   const { spawnSync: sp10 } = require("child_process");
   const rNoVal = sp10(process.execPath, [path.join(ROOT, "bridge", "codex-bridge.js"), "finding-judge", "f-zzzz", "fix-fact", "--note", "열두자넘는근거문장입니다", "--source"], { encoding: "utf8", env: { ...process.env, CODEX_BRIDGE_HOME: process.env.CODEX_BRIDGE_HOME } });
@@ -449,6 +455,20 @@ console.log("[12] v2 2차 — sweep 수확 배선·대시보드 표면 핀(소�
   ok(r12.ok === true, "독립 등재 성공(전제)");
   const m12 = MPV.mergedEntriesFor(repo12);
   ok(m12.auto.length === 1 && m12.auto[0].eventRef === "f-z12" && m12.auto[0].gen === 1, "병합 행에 eventRef·gen 노출(거부 버튼 결속 재료)");
+}
+
+console.log("[13] 재편 A §2-2 — 승인 수확 자격 target-aware(서고 사건=archiveHash 대조·legacy 무회귀)");
+{
+  const wsH = fs.mkdtempSync(path.join(os.tmpdir(), "mp13-ws-"));
+  const repoH = fs.mkdtempSync(path.join(os.tmpdir(), "mp13-rp-"));
+  const HC13 = "c0".repeat(20), HA13 = "ab".repeat(20);
+  CL.updateContractPatch(wsH, undefined, { envelopeHash: HC13, archiveHash: HA13 });
+  const fakeRef = { repoKey: "rk", contentHash: "ch", file: "f.js", anchor: "a" };
+  ok(MPV.appendApprovalEvent(repoH, { envelopeHash: HC13, sourceRefs: [fakeRef] }), "core 사건(legacy 무 target) 기록");
+  ok(MPV.appendApprovalEvent(repoH, { envelopeHash: HA13, target: "archive", sourceRefs: [fakeRef] }), "archive 사건(target 명시) 기록");
+  ok(MPV.appendApprovalEvent(repoH, { envelopeHash: HA13, sourceRefs: [fakeRef] }), "archive 지문인데 target 없는 사건(legacy 형식) 기록");
+  const rH = MPV.harvestFromApprovals(wsH, repoH);
+  ok(rH.ok === true && Array.isArray(rH.results) && rH.results.length === 2, "자격=core(legacy 대조 무회귀)+archive(target 대조 신설) 2건 — 무 target archive 지문은 미자격(위조 승인 차단): " + (rH.results || []).length);
 }
 
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);
