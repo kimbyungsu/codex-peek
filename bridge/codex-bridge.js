@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, repoKeyOf, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled, constraintTurnContext, constraintAdd, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, constraintHarvestFromAnswer, buildAbManifest, boundaryGenOf, readVerifyEnvelopeArchive, SELECTOR_PAGE_ITEMS, selectorDeadlineMsFor, selectorScopeMaterial, SELECTOR_UNION_MAX, SELECTOR_UNION_BYTES_MAX, readSelectorUsage } = require("./contract-lib.js");
+const { askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, contractReadState, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, repoKeyOf, constraintRepoKeyFor, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled, constraintTurnContext, constraintAdd, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, constraintHarvestFromAnswer, buildAbManifest, boundaryGenOf, readVerifyEnvelopeArchive, SELECTOR_PAGE_ITEMS, selectorDeadlineMsFor, selectorScopeMaterial, SELECTOR_UNION_MAX, SELECTOR_UNION_BYTES_MAX, readSelectorUsage } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -109,7 +109,7 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap, askId9p)
       const mk9 = (pfx, n) => Array.from({ length: n }, (_, i) => pfx + "-" + (i + 1));
       carrier.envelope = { hash: es9.envSha || null, sup: mk9("sup", es9.envAxes.supportedEnv || 0), ab: mk9("ab", es9.envAxes.alwaysBlocker || 0), oos: mk9("oos", es9.envAxes.outOfScope || 0) };
     }
-  } catch (e0) { if (e0 && (e0.envelopeTransBusy || e0.selectorDrift)) throw e0; /* 상호배제 실패·[3b] 서고 선별 드리프트=ask 정직 실패(경계 없는/선별 없는 프롬프트 생성 금지 — 삼키면 '선별 없는 판'이 조용히 진행된다). 그 외 경계 실패=주입만 생략(검증은 현행 규약으로 진행) */ }
+  } catch (e0) { if (e0 && (e0.envelopeTransBusy || e0.selectorDrift || e0.envelopeDrift)) throw e0; /* envelopeDrift=승인 없는 변경(경계 통일·ab-3)=정직 실패 */ /* 상호배제 실패·[3b] 서고 선별 드리프트=ask 정직 실패(경계 없는/선별 없는 프롬프트 생성 금지 — 삼키면 '선별 없는 판'이 조용히 진행된다). 그 외 경계 실패=주입만 생략(검증은 현행 규약으로 진행) */ }
   // 계약 규칙은 사용자가 '이렇게 검증하라'고 저장한 요구다. 길어서 뺀 채로 검증을 진행하면
   // 그 요구가 적용되지 않았는데 통과 도장이 찍힌다 — 검증 통과 위조 경로다(검증 blocker).
   // 그래서 잘라 붙이지도, 빼고 진행하지도 않는다. ask 자체를 멈추고 줄이라고 요구한다(fail-closed).
@@ -166,7 +166,13 @@ function envelopeSliceFor(wsIn, lang, profile, cSnapshot) {
       // 재재검증 blocker②(ab-3): 계약 해시·대상 산출을 잠금 '안'에서 신선 재판독 — 잠금 밖 스냅샷 c의
       // envelopeHash를 쓰면 '구 계약 읽기→전이 완료→잠금 획득→구 해시로 신 원본 판독=mismatch 무주입' 경합.
       let cFresh9 = c;
-      try { cFresh9 = loadContract(wsIn, lang) || c; } catch { /* 재판독 실패=기존 스냅샷(전이 직후라면 다음 방어선인 mismatch 경고가 위장을 막음) */ }
+      { // [경계 통일 · 검증 5회차 blocker(ab-3)] loadContract는 부재·손상을 기본 계약(승인 지문 null)으로 정규화해 `|| c` 폴백이 작동하지
+        // 않는다 → 엄격 판독기로 먼저 상태를 본다: 손상=검증 미실행 / 부재인데 스냅샷엔 승인 지문이 있었음=검증 미실행(승인 소실) /
+        // 부재+승인 이력 없음=legacy 기본값(정상 진행).
+        const st9 = contractReadState(wsIn, lang);
+        if (st9 === "corrupt" || (st9 === "absent" && c && typeof c.envelopeHash === "string" && c.envelopeHash)) throw Object.assign(new Error(lang === "en" ? `⚠️ The project contract file is ${st9 === "corrupt" ? "unreadable" : "missing"} at send time — verification was not run (the approved rules cannot be resolved).` : `⚠️ 전송 직전 프로젝트 계약 파일이 ${st9 === "corrupt" ? "손상" : "사라짐"}돼 승인 수칙을 판정할 수 없어 검증을 실행하지 않았습니다.`), { envelopeDrift: true, exitCode: 3 });
+        try { cFresh9 = loadContract(wsIn, lang) || c; } catch { throw Object.assign(new Error("전송 직전 계약 재판독 실패 — 검증을 실행하지 않았습니다"), { envelopeDrift: true, exitCode: 3 }); }
+      }
       const target9 = resolveScoutRepo(wsIn, cFresh9).repo;
       const evi = envelopeInjectionFor(target9, cFresh9.envelopeHash, lang);
       const en9 = (lang || loadLang()) === "en";
@@ -245,7 +251,11 @@ function envelopeSliceFor(wsIn, lang, profile, cSnapshot) {
         }
         if (profile === "core") { out9.envText += "\n\n" + v2DirectiveFor(wsIn, lang); out9.v2Attached = true; } // v2Attached=구조적 표지(재검증 blocker: 수칙서 '데이터'가 표제 문자열을 담아도 오발동 금지 — 실제로 붙인 지점에서만 참). // 증분 2 §3.1: 경계 활성+core=v2 서식 요구+열린 지적 자동 동봉(하네스 직접). integrity=문구 준수 감사(기계화는 증분 3 검토 — 1차 [보완]② 지시·후처리 정합)
       }
-      else if (evi.warn === "mismatch") console.error(en9 ? "[verification envelope changed without approval — skipped this ask; re-approve on the dashboard]" : "[검증 경계 미승인 변경 — 이번 검증에 주입 생략. 대시보드에서 재승인 필요]");
+      // [경계 통일 2026-08-29 · 검증 3회차 blocker①(ab-3)] 전송 직전 잠금 안 판독에서 승인 없는 변경/손상이면 여기서 중단 —
+      // 선행 게이트 통과 뒤 다른 창이 파일을 바꿔도 "수칙 없는 검증"이 조용히 진행되지 않는다(종전=경고+무주입). 승인 지문이 없는
+      // 미도입 프로젝트의 손상은 종전대로 경고만(차단할 승인본이 없음). 승인 지문 판정도 잠금 안 신선 계약(cFresh9) 기준 — 잠금 밖 스냅샷 c는
+      // 구·신 계약 교차(다른 창 승인 직후 손상)에서 fail-open/오차단을 만든다(4회차 blocker).
+      else if (evi.warn === "mismatch" || (evi.warn === "corrupt" && typeof cFresh9.envelopeHash === "string" && cFresh9.envelopeHash)) throw Object.assign(new Error(en9 ? `⚠️ The always-applied rules file changed without approval (${evi.warn === "corrupt" ? "unreadable" : "content mismatch"}) — this verification was not run. Open 'View unapproved changes' on the Rules card to approve or restore, then retry.` : `⚠️ 항상 적용되는 수칙 파일이 승인 없이 바뀌어(${evi.warn === "corrupt" ? "판독 불가" : "내용 불일치"}) 검증을 실행하지 않았습니다 — 대시보드 수칙 카드의 '승인 없이 바뀐 내용 보기'에서 승인하거나 마지막 승인 목록으로 복구한 뒤 다시 시도하세요.`), { envelopeDrift: true, exitCode: 3 });
       else if (evi.warn === "corrupt") console.error(en9 ? "[verification envelope unreadable — skipped]" : "[검증 경계 판독 불가 — 주입 생략]");
       } finally { releaseEnvelopeTransLock(wsIn, lk9.token); } // 판독·동결·조립까지 잠금 보유(전이와 원자 상호배제)
     }
@@ -2510,11 +2520,17 @@ function cmdAskStart(rest) {
     // [약속 발화 포착 부품 B §2] 턴 원문 결속을 job에 불변 동결 — 답 후처리의 [제약 후보 v1] 대조 권위는
     // 이 스냅샷 지문뿐(완료 시점 active 재판독=다른 턴 원문 오결속 위험이라 금지). 부재=null(직접 ask와 동일 취급).
     let constraintCtx=null;
-    try{const cc9=constraintTurnContext();if(cc9.ok)constraintCtx={provider:cc9.provider,sessionId:cc9.sessionId,turnAnchor:cc9.turnAnchor,sourceHash:cc9.sourceHash,repoKey:constraintRepoKeyFor(ws,cSnap)};}catch{constraintCtx=null;} // [ab-1] repoKey=원문 턴의 정찰 대상(회수 시 재계산 금지)
+    try{const cc9=constraintTurnContext();if(cc9.ok)constraintCtx={provider:cc9.provider,sessionId:cc9.sessionId,turnAnchor:cc9.turnAnchor,sourceHash:cc9.sourceHash,repoKey:cc9.repoKey||null};}catch{constraintCtx=null;} // [ab-1] repoKey=훅이 원문 스냅숏 시점에 기록한 값만(ask-start 시점 재계산 금지 — 스냅숏~ask 사이 대상 전환 경합)
     // [Envelope Selector v7 §3 — 3b] 승인 서고 활성 게이트: 소실≠미도입(지문 있는데 파일 부재/불일치=중단)·
     // 스냅샷 부재=시작 중단('구현 대화에서 새 프롬프트 1회' 기존 관용구)·선별 계획(팔·페이지·예산)을 job에
     // 동결. 팔=구현 턴 provider 고정(constraintCtx.provider 외 다른 출처 인자 없음 — 교차 불가 소스 계약).
     // 미도입(archiveHash null)=selector 미기록·deadline 산식 무변(완전 무회귀).
+    // [경계 통일 2026-08-29] 1층(항상 적용 수칙)도 2층과 같은 태도: 승인 없이 파일이 바뀌면 검증을 시작하지 않는다
+    // (종전=수칙만 빼고 조용히 진행+경고 — 사용자가 눈치채기 어려움). 해소=대시보드 카드 "승인 없이 바뀐 내용 보기"에서 승인/복구.
+    if(typeof cSnap.envelopeHash==="string"&&cSnap.envelopeHash){
+      const core0=readVerifyEnvelope(resolveScoutRepo(ws,cSnap).repo);
+      if(core0.st!=="ok"||core0.sha1!==cSnap.envelopeHash)throw Object.assign(new Error(tB(`⚠️ 항상 적용되는 수칙 파일이 승인 없이 바뀌어(${core0.st==="ok"?"내용 불일치":core0.st}) 검증을 시작하지 않았습니다 — 대시보드 수칙 카드의 '승인 없이 바뀐 내용 보기'에서 승인하거나 마지막 승인 목록으로 복구한 뒤 다시 시도하세요.`,`⚠️ The always-applied rules file changed without approval (${core0.st==="ok"?"content mismatch":core0.st}) — no verification was started. Open 'View unapproved changes' on the Rules card to approve or restore, then retry.`)),{exitCode:3});
+    }
     let selector=null,selBudgetMs=0;
     if(typeof cSnap.archiveHash==="string"&&cSnap.archiveHash){
       const selTarget=resolveScoutRepo(ws,cSnap).repo;
@@ -2684,8 +2700,7 @@ function cmdConstraint(rest) {
   const quote = flagText("--quote");
   const why = flagText("--why");
   const scope = flagText("--scope");
-  const ctx = constraintTurnContext();
-  if (ctx && ctx.ok) ctx.repoKey = constraintRepoKeyFor(ws, null); // [ab-1] 상신 턴의 정찰 대상 결속(원문과 같은 턴)
+  const ctx = constraintTurnContext(); // [ab-1] repoKey=훅이 원문 스냅숏 시점에 기록한 값(ctx.repoKey) — 여기서 재계산하지 않는다
   const r = constraintAdd(ws, quote, why, scope, ctx);
   if (r.ok) {
     console.log((en ? "registered as a rulebook candidate: " : "수칙서 후보로 상신됨: ") + r.candidateId + (en
@@ -3300,8 +3315,6 @@ function computeEnvelopeCandidatesFor(ws) {
   // 있으면 표시·소멸하면 사라짐). 과거에 기록된 합성 처분 행은 판독에서 무시되어 자연 무효.
   return { live, signals, skipped, overCap, unmarked: unmarked5, gen: gen || null }; // gen=산출 세대(동결) — 소비자(대시보드)는 이 값과 현 승인 해시의 일치를 결속해야 함(증분 3 재검증 blocker)
 }
-// [ab-1] 약속 발화 후보의 저장소 결속 — 원문 턴 시점의 정찰 대상 지문(계약 스냅샷 우선·없으면 현재 계약). 판독 불가=null(기록 거부).
-function constraintRepoKeyFor(ws, cSnap) { try { return repoKeyOf(resolveScoutRepo(ws, cSnap || loadContract(ws)).repo); } catch { return null; } }
 function envelopeCandidateNoticeFor(ws, lang, res, profile = "core") {
   try {
     if (profile !== "core") return ""; // integrity 검증에는 core 전용 수칙서 후보·입장 심사 어휘를 붙이지 않는다.
@@ -3606,6 +3619,12 @@ async function cmdAsk(rest) {
   // 내구 작업(worker) 경로에만 있어, 직접 ask를 허용하면 '선별 없는 판'이 승인 규칙 일부를 빼고 판정한다.
   if (!process.env.CODEX_BRIDGE_JOB_PROMPT_FILE) {
     const cD9 = loadContract(ws);
+    // [경계 통일 2026-08-29 · 검증 2회차 blocker①(ab-3)] 직접 ask도 ask-start와 같은 관문: 항상 적용 수칙 파일이 승인 없이
+    // 바뀌었으면 검증을 실행하지 않는다(종전=수칙 빼고 경고만 — 승인 수칙 없이 통과 판정을 만들 수 있는 길).
+    if (typeof cD9.envelopeHash === "string" && cD9.envelopeHash) {
+      const coreD9 = readVerifyEnvelope(resolveScoutRepo(ws, cD9).repo);
+      if (coreD9.st !== "ok" || coreD9.sha1 !== cD9.envelopeHash) die(tB(`⚠️ 항상 적용되는 수칙 파일이 승인 없이 바뀌어(${coreD9.st === "ok" ? "내용 불일치" : coreD9.st}) 검증을 실행하지 않았습니다 — 대시보드 수칙 카드의 '승인 없이 바뀐 내용 보기'에서 승인하거나 마지막 승인 목록으로 복구한 뒤 다시 시도하세요.`, `⚠️ The always-applied rules file changed without approval (${coreD9.st === "ok" ? "content mismatch" : coreD9.st}) — verification not run. Open 'View unapproved changes' on the Rules card to approve or restore, then retry.`), 3);
+    }
     if (typeof cD9.archiveHash === "string" && cD9.archiveHash) {
       die(tB("⚠️ 승인 서고(2층 수칙서)가 활성인 프로젝트에서는 직접 ask를 실행하지 않습니다 — 서고 선별이 내구 작업에서만 수행됩니다. ask-start --allow-new \"<검증 요청>\" → ask-wait <job-id> 를 사용하세요.", "⚠️ With the approved archive (two-tier rulebook) active, a direct ask is not executed — archive selection runs only in the durable job path. Use ask-start --allow-new \"<request>\" → ask-wait <job-id>."), 4);
     }

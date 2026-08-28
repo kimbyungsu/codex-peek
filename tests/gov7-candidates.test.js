@@ -421,7 +421,7 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   ok(!ext.includes('T("빼기 표시"') && !ext.includes('T("올림 표시"') && !ext.includes("현행 수칙서 항목 — 빼거나"), "구 작업대 어휘 정상 흐름 소멸(빼기 표시·올림 표시·현행 수칙서 항목)");
   ok(ext.includes('T("반복 신호 "+e9.signals.length+"건 — 참고(처리할 일 아님)"'), "반복 신호=참고 접힘 줄(버튼 없음)");
   // [재편 B 2차 blocker②③] 정상 흐름 어휘 잔존 0·ride=영수증 실측치만
-  ok(!ext.includes("검증 판정 경계로 주입돼요") && ext.includes("승인 1번으로 적용돼요") && ext.includes("항상 적용되는 수칙 ${n9[0] + n9[1] + n9[2]}개"), "활성 카드·제안 안내 어휘=수칙·승인(검증 경계·재승인·도장 소멸)");
+  ok(!ext.includes("검증 판정 경계로 주입돼요") && ext.includes("승인 1번으로 적용돼요") && ext.includes("항상 적용되는 수칙 ${n9[0] + n9[1] + n9[2]}개") && ext.includes("수칙은 검증마다 자동으로 적용돼요 · 사용자는 목록 변경만 승인해요"), "활성 카드·제안 안내 어휘=수칙·승인(검증 경계·재승인·도장 소멸)+자동/수동 경계 명시(2026-08-29)");
   ok(ext.includes("관련 수칙 ${r.selectedIds.length}개가 함께 실렸어요(영수증 실측)") && !ext.includes("그때 관련분 ${r.selectedIds.length}"), "ride=영수증 실측치만(현재 코어 개수 혼합 금지)");
   ok(ext.includes("String(prA.draftId || prA.newHash)") && ext.includes("String(prD0.draftId || prD0.newHash || \"\")"), "취소·폐기 결속 토큰=draftId(legacy=newHash)");
   ok(/approve === true.*runProposalApprove|runProposalApprove\(scoutTargetFor\(wsM\)\.repo, m\.lang, true\)/.test(ext) && ext.includes("runProposalApprove(repoR9, m.lang, true)"), "1클릭 체인=승인·빼기 모두 같은 도장 모달 공유(취소=복원형 폐기)");

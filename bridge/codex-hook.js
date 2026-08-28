@@ -15,7 +15,7 @@ const {
   scoutHealthLine, maybeCleanupState, configWs, readImplementerRecordLocked, durableProofGate, readCodexTurnStrict, contractReadState,
   patchContractFields, activeAskJobFor, phaseBusy, contractLockIssue, withRoleLock, implementerRecordOf, validLinksShape, scoutArmView,
   verifyCampaignProgress, effectiveVerifyBudget, writeConstraintTurnSnapshot,
-  wsKeyFor, previewGateDecision, implementerEnvelopeInject,
+  wsKeyFor, previewGateDecision, implementerEnvelopeInject, constraintRepoKeyFor,
 } = require("./contract-lib.js");
 const { validateCapHandoff, capHandoffInstruction, capHandoffContext, codexAssistantText } = require("./verify-cap-handoff.js");
 
@@ -109,7 +109,7 @@ function heartbeat(j, ws, sid, eventName, extraFields) {
   // 지우면 constraint add가 그 턴의 첫 도구가 아니면 snapshot-missing이 된다(실행 반례). 턴이 바뀌면 폐기
   // (스냅샷 없는 새 턴에 옛 앵커가 살아남아 다른 턴 원문에 오결속되는 것이 더 위험 — fail-closed 방향 유지).
   const keepCap = prev.constraintAnchor && prev.constraintSourceHash && String(prev.turnId || "") === String(turnId)
-    ? { constraintAnchor: prev.constraintAnchor, constraintSourceHash: prev.constraintSourceHash } : {};
+    ? { constraintAnchor: prev.constraintAnchor, constraintSourceHash: prev.constraintSourceHash, ...(prev.constraintRepoKey ? { constraintRepoKey: prev.constraintRepoKey } : {}) } : {}; // [ab-1] 저장소 결속도 같은 턴 안에서만 승계
   writeCodexActive(sid, ws, {
     source:"codex-hook", hookEvent:eventName, hookVersion:2,
     turnId,
@@ -398,8 +398,11 @@ function onPrompt(j, ws, sid, c, roleRevision, preface, prePinned) {
   try {
     const ptxt = typeof j.prompt === "string" ? j.prompt : "";
     if (ptxt && turnId) {
+      // [검증 2·3회차 blocker②] 표식(정찰 대상 지문)은 스냅숏 "이전"에 이 훅의 계약 스냅샷(c)으로 확정 — 스냅숏 뒤에는 계약(반대 언어
+      // 슬롯 폴백 포함)을 읽지 않는다. Claude 훅(contract-inject)과 같은 순서.
+      let rk9 = ""; try { rk9 = constraintRepoKeyFor(ws, c) || ""; } catch { rk9 = ""; }
       const snap = writeConstraintTurnSnapshot(ws, turnId, ptxt);
-      if (snap.ok) capFields = { constraintAnchor: String(turnId), constraintSourceHash: snap.sourceHash };
+      if (snap.ok) capFields = { constraintAnchor: String(turnId), constraintSourceHash: snap.sourceHash, ...(rk9 ? { constraintRepoKey: rk9 } : {}) }; // [ab-1] 원문 시점 정찰 대상 지문
     }
   } catch { /* best-effort — 훅 동작 막지 않음 */ }
   heartbeat(j, ws, sid, "UserPromptSubmit", capFields);

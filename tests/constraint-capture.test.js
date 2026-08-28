@@ -60,7 +60,15 @@ t("문맥 해석(Claude 경로): active의 constraintAnchor/sourceHash 판독·�
     assert.ok(cf.provider === "claude" && cf.sessionId === SID, "실패 반환에도 식별 가능 신원 동반(blocker②)");
     fs.writeFileSync(af, JSON.stringify({ workspace: WS, claudeSession: SID, ts: TS, constraintAnchor: ANCHOR, constraintSourceHash: sha1(PROMPT) }));
     const c = CL.constraintTurnContext();
-    assert.deepStrictEqual({ ok: c.ok, provider: c.provider, turnAnchor: c.turnAnchor, sourceHash: c.sourceHash }, { ok: true, provider: "claude", turnAnchor: ANCHOR, sourceHash: sha1(PROMPT) });
+    assert.deepStrictEqual({ ok: c.ok, provider: c.provider, turnAnchor: c.turnAnchor, sourceHash: c.sourceHash, repoKey: c.repoKey }, { ok: true, provider: "claude", turnAnchor: ANCHOR, sourceHash: sha1(PROMPT), repoKey: null }, "[ab-1] 구훅(저장소 표식 없음)=repoKey null(재계산 없음)");
+    // [ab-1 도장 검증 blocker] 훅이 스냅숏 시점에 기록한 constraintRepoKey만 권위 — 그 뒤 정찰 대상을 B로 바꿔도 문맥은 A
+    const rpAq = fs.mkdtempSync(path.join(os.tmpdir(), "cc-ctx-A-")); const keyAq = CL.repoKeyOf(rpAq);
+    fs.writeFileSync(af, JSON.stringify({ workspace: WS, claudeSession: SID, ts: TS, constraintAnchor: ANCHOR, constraintSourceHash: sha1(PROMPT), constraintRepoKey: keyAq }));
+    CL.updateContractPatch(WS, undefined, { scoutRepo: fs.mkdtempSync(path.join(os.tmpdir(), "cc-ctx-B-")) });
+    assert.strictEqual(CL.constraintTurnContext().repoKey, keyAq, "★대상 전환 후에도 문맥 repoKey=훅 기록값 A");
+    fs.writeFileSync(af, JSON.stringify({ workspace: WS, claudeSession: SID, ts: TS, constraintAnchor: ANCHOR, constraintSourceHash: sha1(PROMPT), constraintRepoKey: "bad" }));
+    assert.strictEqual(CL.constraintTurnContext().repoKey, null, "형식 이상=null(constraintAdd가 거부)");
+    CL.updateContractPatch(WS, undefined, { scoutRepo: null }); fs.writeFileSync(af, JSON.stringify({ workspace: WS, claudeSession: SID, ts: TS, constraintAnchor: ANCHOR, constraintSourceHash: sha1(PROMPT) }));
   } finally { delete process.env.CLAUDE_CODE_SESSION_ID; }
 });
 
@@ -290,8 +298,9 @@ t("소스 계약: CLI 스위치·훅 배선(양 경로)·anchor 필드 결속", 
   assert.ok(ci.includes("writeConstraintTurnSnapshot(ws, anc, ptxt)") && ci.includes("turnAnchorOf(sid, activeTs)") && ci.includes("constraintAnchor, constraintSourceHash"), "Claude 훅: 스냅샷+active 병기(캠페인 앵커 동일 원천)");
   const ch = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-hook.js"), "utf8");
   const cbB = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
-  assert.ok(cbB.includes("constraintCtx={provider:cc9.provider,sessionId:cc9.sessionId,turnAnchor:cc9.turnAnchor,sourceHash:cc9.sourceHash,repoKey:constraintRepoKeyFor(ws,cSnap)}") && cbB.includes("rejudgeSnap,campaignId,constraintCtx,"), "부품 B: ask 생성 시 턴 원문 결속을 job에 동결(완료 시점 재판독 금지)");
-  assert.ok(cbB.includes("if (ctx && ctx.ok) ctx.repoKey = constraintRepoKeyFor(ws, null);") && fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8").includes('repoKey: ctx.repoKey, via: "verifier-block"'), "[ab-1 5회차] CLI 상신·회수 경로 모두 동결/턴 repoKey를 constraintAdd에 전달(재계산 없음)");
+  assert.ok(cbB.includes("constraintCtx={provider:cc9.provider,sessionId:cc9.sessionId,turnAnchor:cc9.turnAnchor,sourceHash:cc9.sourceHash,repoKey:cc9.repoKey||null}") && cbB.includes("rejudgeSnap,campaignId,constraintCtx,"), "부품 B: ask 생성 시 턴 원문 결속을 job에 동결(완료 시점 재판독 금지)");
+  assert.ok(!cbB.includes("ctx.repoKey = constraintRepoKeyFor") && !cbB.includes("repoKey:constraintRepoKeyFor(ws,cSnap)") && fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8").includes('repoKey: ctx.repoKey, via: "verifier-block"'), "[ab-1 도장 검증] ask-start·CLI 어느 쪽도 repoKey를 재계산하지 않음(훅 기록값 pass-through)·회수도 동결값");
+  assert.ok(ci.includes("constraintRepoKey = rk0;") && ci.includes("...(constraintRepoKey ? { constraintRepoKey } : {})") && ch.includes("constraintRepoKey: rk9") && ch.includes("constraintRepoKey: prev.constraintRepoKey"), "[ab-1 도장 검증] Claude·Codex 훅이 원문 스냅숏과 같은 active 레코드에 정찰 대상 지문을 기록·같은 턴 승계");
   assert.ok(cbB.includes("constraintHarvestFromAnswer(ws, answer, ccJob9)") && cbB.includes("durableEnv.job.constraintCtx"), "부품 B: finishVerifyRun 회수 배선=내구 job 동결 ctx만 권위");
   const clB = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
   assert.ok(clB.includes("VERIFIER_FORMAT_CONSTRAINT_KO") && clB.includes("tail9"), "부품 B: 검증자 서식 범주 규칙 1줄(두 blockMode 공통 — 위임 모드 소실 금지)");

@@ -6,7 +6,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, loadLang, buildInjection, buildVerifyDirective, buildScoutDirective, verifyCampaignProgress, atomicWrite, BRIDGE_DIR, ACTIVE_DIR, writePhase, patchContractFields, contractReadState, activeAskJobFor, phaseBusy, contractLockIssue, turnAnchorOf, writeConstraintTurnSnapshot } = require("./contract-lib.js");
+const { loadContract, loadLang, buildInjection, buildVerifyDirective, buildScoutDirective, verifyCampaignProgress, atomicWrite, BRIDGE_DIR, ACTIVE_DIR, writePhase, patchContractFields, contractReadState, activeAskJobFor, phaseBusy, contractLockIssue, turnAnchorOf, writeConstraintTurnSnapshot, constraintRepoKeyFor } = require("./contract-lib.js");
 
 let input = "";
 process.stdin.on("data", (d) => (input += d));
@@ -26,13 +26,17 @@ process.stdin.on("end", () => {
   // [약속 발화 포착 §1] 턴 원문 스냅샷 — `constraint add` CLI의 유일 대조 권위(구현모델 작문·기억 재구성 차단).
   // anchor=sha1(sessionId|active.ts) 앞 16자(캠페인 앵커와 동일 원천·턴마다 유일). 실패=필드 미기록(그 턴 상신 불가
   // — fail-closed)·훅 동작은 막지 않음(best-effort).
-  let constraintAnchor = "", constraintSourceHash = "";
+  let constraintAnchor = "", constraintSourceHash = "", constraintRepoKey = ""; // [ab-1] 원문 시점 정찰 대상 지문 — 스냅숏과 같은 active 레코드에 기록(ask-start 재계산 금지)
   try {
     const ptxt = (hook && typeof hook.prompt === "string") ? hook.prompt : "";
     if (ptxt && sid) {
+      // [검증 2회차 blocker②] 계약 판독은 이 훅에서 한 번(cSnap0) — 스냅숏 기록 뒤 계약을 다시 읽지 않는다
+      // (두 판독 사이 다른 창의 정찰 대상 전환=A 원문+B 표식 경합). 표식은 스냅숏 "이전"에 확정하고 같은 레코드에 쓴다.
+      let cSnap0 = null; try { cSnap0 = loadContract(ws); } catch { cSnap0 = null; }
+      const rk0 = cSnap0 ? (constraintRepoKeyFor(ws, cSnap0) || "") : "";
       const anc = turnAnchorOf(sid, activeTs);
       const snap = writeConstraintTurnSnapshot(ws, anc, ptxt);
-      if (snap.ok) { constraintAnchor = anc; constraintSourceHash = snap.sourceHash; }
+      if (snap.ok) { constraintAnchor = anc; constraintSourceHash = snap.sourceHash; constraintRepoKey = rk0; }
     }
   } catch { /* best-effort */ }
   const activePayload = JSON.stringify({
@@ -41,7 +45,7 @@ process.stdin.on("end", () => {
     // §5.3: 플랜 모드 감지·라이브표시용. Claude Code UserPromptSubmit 입력의 permission_mode
     // ("plan"이면 플랜 모드). 문서 예시는 "default"라 실제 값은 실로그로 확인(빈값=미노출).
     permissionMode: (hook && typeof hook.permission_mode === "string") ? hook.permission_mode : "",
-    ...(constraintAnchor ? { constraintAnchor, constraintSourceHash } : {}), // 약속 발화 포착 — CLI가 이 턴의 스냅샷을 찾는 열쇠
+    ...(constraintAnchor ? { constraintAnchor, constraintSourceHash, ...(constraintRepoKey ? { constraintRepoKey } : {}) } : {}), // 약속 발화 포착 — CLI가 이 턴의 스냅샷을 찾는 열쇠(+저장소 결속 ab-1)
     ts: activeTs,
   });
   // (1) 레거시 단일 active.json — 확장(activeWorkspace)·세션ID 없는 폴백 경로가 읽음.

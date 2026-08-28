@@ -1056,7 +1056,7 @@ function envelopeDetailText(evv: any, en9: boolean): string {
 }
 // 거버넌스 증분 1(2차 배치 정정 — 구현검증 1차 blocker①②): 검증 경계는 정찰(3트랙)이 아니라 '검증' 계층이다 —
 // MAP 카드가 아닌 최상위 뷰 필드로 항상 계산(2트랙 기본 프로젝트에서도 승인 가능). lang=렌더 슬롯 결속(도장도 그 슬롯 계약에).
-function readEnvelopeView(ws: string | null): { label: string; btn: string | null; btn2: string | null; btn3?: string; repo: string; tone: string; lang: Lang; proposal?: string; candsView?: string; gen?: string; axes?: Record<string, string[]>; wsKey?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string }> } | null {
+function readEnvelopeView(ws: string | null): { label: string; btn: string | null; btn2: string | null; btn3?: string; act?: string; driftTarget?: string; repo: string; tone: string; lang: Lang; proposal?: string; candsView?: string; gen?: string; axes?: Record<string, string[]>; wsKey?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string }> } | null {
   if (!ws) return null;
   try {
     const CL9: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
@@ -1064,10 +1064,12 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
     const slot: Lang = loadLangExt();
     const repo9 = scoutTargetFor(ws).repo;
     const evv = CL9.readVerifyEnvelope(repo9);
-    if (!evv || evv.st === "absent") return null; // 도입 전 프로젝트=카드 없음(무변화)
-    if (evv.st === "corrupt") return { label: tE("수칙서 파일이 깨져 있어 적용을 멈췄어요(verify-envelope.json 판독 불가 — 검증엔 주입 안 됨)", "The rulebook file is unreadable — not applied (verify-envelope.json is not injected)"), btn: null, btn2: null, repo: repo9, tone: "warn", lang: slot };
     let hash9: string | null = null;
     try { hash9 = (CL9.loadContract(ws, slot) || {}).envelopeHash || null; } catch { hash9 = null; }
+    // [경계 통일 · 검증 2회차 blocker④] 승인 지문이 있는데 파일이 없거나 깨졌으면 그것도 "승인 없이 바뀐 상태" — 같은 카드·같은 버튼
+    // (복구=승인본 사본으로 되살림). 승인 지문도 없고 파일도 없으면 도입 전=카드 없음(무변화).
+    if (!evv || evv.st === "absent") { if (!hash9) return null; return { label: tE("승인된 수칙 파일이 사라졌어요 — 검증이 시작되지 않아요. '승인 없이 바뀐 내용 보기'에서 마지막 승인 목록으로 복구하세요", "The approved rules file is missing — verification will not start. Use 'View unapproved changes' to restore the last approved list"), btn: tE("승인 없이 바뀐 내용 보기", "View unapproved changes"), act: "envelopeDriftShow", driftTarget: "core", btn2: null, repo: repo9, tone: "warn", lang: slot }; }
+    if (evv.st === "corrupt") { if (hash9) return { label: tE("수칙 파일이 깨져 있어 검증이 시작되지 않아요 — '승인 없이 바뀐 내용 보기'에서 마지막 승인 목록으로 복구하세요", "The rules file is unreadable — verification will not start. Use 'View unapproved changes' to restore the last approved list"), btn: tE("승인 없이 바뀐 내용 보기", "View unapproved changes"), act: "envelopeDriftShow", driftTarget: "core", btn2: null, repo: repo9, tone: "warn", lang: slot }; return { label: tE("수칙서 파일이 깨져 있어 적용을 멈췄어요(verify-envelope.json 판독 불가 — 검증엔 주입 안 됨)", "The rulebook file is unreadable — not applied (verify-envelope.json is not injected)"), btn: null, btn2: null, repo: repo9, tone: "warn", lang: slot }; }
     // [자기치유 2026-08-22] 슬롯별 승인 지문 비대칭 정렬: 이 슬롯이 미승인인데 '반대 슬롯' 지문이 현행 파일
     // 전문과 일치하면 같은 문서에 이미 찍힌 도장의 표기 누락 — 양 슬롯 동기(새 권위 부여 아님·지문 불일치면 무동작).
     if (!hash9 && evv.st === "ok") {
@@ -1115,7 +1117,8 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
     // 2차 blocker①: 절삭 사실은 승인 '전' 상태에서도 숨기지 않는다 — 잘린 내용을 못 본 채 원본 지문을 승인하는 경로 차단(핸들러가 승인 거부).
     const cutNote9 = evv.truncated === true ? tE(" ⚠ 일부 항목이 상한(축 12·항목 200자)을 넘어 잘립니다 — 파일을 줄이기 전에는 승인할 수 없어요.", " ⚠ Some items exceed the caps (12/axis · 200 chars) — approval is blocked until the file is trimmed.") : "";
     if (!hash9) return { label: tE(`승인 대기 — 지원 ${n9[0]}·절대 ${n9[1]}·범위밖 ${n9[2]}항목. 내용을 확인하고 승인하면 다음 검증부터 판정 경계로 적용돼요`, `Awaiting approval — ${n9[0]}/${n9[1]}/${n9[2]} items. Review and approve to apply from the next verification`) + cutNote9, btn: tE("내용 확인·승인", "Review & approve"), btn2: tE("내용 보기", "View details"), repo: repo9, tone: cutNote9 ? "warn" : "info", lang: slot };
-    if (hash9 !== evv.sha1) return { label: tE("수칙서가 승인본과 달라졌어요 — 재승인 전까지 적용 중단(검증엔 주입 안 됨)", "The rulebook differs from the approved copy — suspended until re-approval (not injected)") + cutNote9, btn: tE("재승인", "Re-approve"), btn2: tE("내용 보기", "View details"), repo: repo9, tone: "warn", lang: slot };
+    // [경계 통일 2026-08-29] 승인 없이 바뀐 파일=검증 시작 안 함(1층·2층 동일). 버튼 하나 → 창에서 차이를 본 뒤 승인/복구.
+    if (hash9 !== evv.sha1) return { label: tE("승인 없이 수칙 파일이 바뀌어 검증이 시작되지 않아요 — 바뀐 내용을 확인한 뒤 승인하거나 마지막 승인 목록으로 복구하세요", "The rules file changed without approval — verification will not start. Review the change, then approve it or restore the last approved list") + cutNote9, btn: tE("승인 없이 바뀐 내용 보기", "View unapproved changes"), act: "envelopeDriftShow", driftTarget: "core", btn2: tE("내용 보기", "View details"), repo: repo9, tone: "warn", lang: slot };
     if (evv.truncated === true) return { label: tE("적용 중 — 단 일부 항목이 상한(축 12·항목 200자) 초과로 절삭돼 초과분은 주입에서 빠져요. 파일을 줄여 재승인 권장", "Active — but some items exceeded the caps (12/axis · 200 chars) and were truncated; trim the file and re-approve"), btn: null, btn2: tE("내용 보기", "View details"), repo: repo9, tone: "warn", lang: slot };
     // 증분 3(§4 대시보드 최소): 이번 캠페인 심사 통계 1줄 — 장부 집계(구 런타임=생략·계산 실패=생략)
     let adm9 = "";
@@ -1174,7 +1177,8 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
         return { state: "active", count: ar9.data.alwaysBlocker.length, max: max9 };
       } catch { return undefined; }
     })();
-    return { label: tE(`적용 중 — 항상 적용되는 수칙 ${n9[0] + n9[1] + n9[2]}개(전제 ${n9[0]}·금지 ${n9[1]}·제외 ${n9[2]}). 파일을 직접 고치면 다시 승인하기 전까지 멈춰요`, `Active — ${n9[0] + n9[1] + n9[2]} always-applied rules (premise ${n9[0]} · block ${n9[1]} · waived ${n9[2]}). Editing the file pauses them until you approve again`) + adm9, btn: null, btn2: tE("내용 보기", "View details"), repo: repo9, tone: "ok", lang: slot, gen: hash9 || "", axes: axes9, wsKey: (() => { try { return typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : ""; } catch { return ""; } })(), ...(arc9 ? { arc: arc9 } : {}), ...(cands9 ? { cands: cands9 } : {}), ...({ rules: rules9 }), ...(envSignals9.length ? { signals: envSignals9 } : {}), ...(ride9 ? { ride: ride9 } : {}) };
+    if (arc9 && arc9.state === "broken") return { label: tE("승인 없이 보관 수칙 파일이 바뀌어 검증이 시작되지 않아요 — 바뀐 내용을 확인한 뒤 승인하거나 마지막 승인 목록으로 복구하세요", "The stored rules file changed without approval — verification will not start. Review the change, then approve it or restore the last approved list"), btn: tE("승인 없이 바뀐 내용 보기", "View unapproved changes"), act: "envelopeDriftShow", driftTarget: "archive", btn2: tE("내용 보기", "View details"), repo: repo9, tone: "warn", lang: slot, gen: hash9 || "", axes: axes9, wsKey: (() => { try { return typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : ""; } catch { return ""; } })(), ...({ arc: arc9 }) };
+    return { label: tE(`수칙은 검증마다 자동으로 적용돼요 · 사용자는 목록 변경만 승인해요 — 항상 적용되는 수칙 ${n9[0] + n9[1] + n9[2]}개(전제 ${n9[0]}·금지 ${n9[1]}·제외 ${n9[2]})`, `Rules apply automatically to every verification · you only approve list changes — ${n9[0] + n9[1] + n9[2]} always-applied rules (premise ${n9[0]} · block ${n9[1]} · waived ${n9[2]})`) + adm9, btn: null, btn2: tE("내용 보기", "View details"), repo: repo9, tone: "ok", lang: slot, gen: hash9 || "", axes: axes9, wsKey: (() => { try { return typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : ""; } catch { return ""; } })(), ...(arc9 ? { arc: arc9 } : {}), ...(cands9 ? { cands: cands9 } : {}), ...({ rules: rules9 }), ...(envSignals9.length ? { signals: envSignals9 } : {}), ...(ride9 ? { ride: ride9 } : {}) };
   } catch { return null; }
 }
 // [4c UX] 초안 승인·열람 모달의 '바뀌는 것 요약' — 전문 벽 대신 유지/올림/빼기를 먼저 보여준다(사용자 실보고
@@ -4005,6 +4009,40 @@ class Dashboard {
         if (m?.type === "runMapProbe") { const wsP = dashboardWorkspace(); runMapProbeFromUi(wsP, pendingTargetsFor(wsP)).then(() => this.post()); } // 버튼=선택 담당 중 미준비만 재점검(전부 준비면 전체=명시 재확인)·단일-flight는 함수 내부
         if (m?.type === "grantEnrichSelf") grantEnrichSelfFromUi(dashboardWorkspace()).then(() => this.post()); // P8 — self 자동 보강 동의(1클릭·모달 고지)
         if (m?.type === "retryEnrich") retryEnrichFromUi(dashboardWorkspace()).then(() => this.post()); // P8 — parked 재시도(open 복원+동일 진입점)
+        // [경계 통일 2026-08-29] 승인 없이 바뀐 수칙 파일 — 창 하나에서 차이(추가/빠짐)를 보고 [이 변경을 승인] 또는 [승인 안 함 — 마지막 승인 목록으로 복구].
+        // 확인 없이 지우는 버튼은 없다(사용자 지적). 복구=현재 파일 백업 후 승인본 사본 기록(브릿지 restoreEnvelopeApproved·fail-closed).
+        if (m?.type === "envelopeDriftShow" && typeof m.repo === "string" && m.repo && (m.target === "core" || m.target === "archive")) {
+          if (m.lang !== "en" && m.lang !== "ko") return;
+          const enD = m.lang === "en"; const tgD: "core" | "archive" = m.target; const langD: Lang = m.lang;
+          const wsD = dashboardWorkspace(); const tgtD = wsD ? scoutTargetFor(wsD).repo : null; if (!wsD || !tgtD) return;
+          if (normWs(tgtD) !== normWs(m.repo)) { vscode.window.showWarningMessage(enD ? "The scout target changed — the card refreshes. Please open it again." : "정찰 대상이 바뀌었어요 — 카드가 갱신됩니다. 다시 열어 주세요."); this.post(); return; }
+          let CLD: any = null; try { CLD = require(path.join(BRIDGE_DIR, "contract-lib.js")); } catch { CLD = null; }
+          if (!CLD || typeof CLD.envelopeDriftView !== "function" || typeof CLD.restoreEnvelopeApproved !== "function") { vscode.window.showWarningMessage(enD ? "This runtime lacks the drift view — run node install.js." : "이 설치본은 바뀐 내용 보기를 지원하지 않아요 — node install.js 후 다시 시도하세요."); return; }
+          let dv: any = null; try { dv = CLD.envelopeDriftView(wsD, tgtD, tgD); } catch { dv = null; }
+          if (!dv || !dv.ok) { vscode.window.showWarningMessage(enD ? "Cannot read the rules state." : "수칙 상태를 읽을 수 없어요."); this.post(); return; }
+          if (!dv.drift) { vscode.window.showInformationMessage(enD ? "The rules file matches the approved copy now — nothing to decide." : "수칙 파일이 지금은 승인본과 같아요 — 정할 것이 없습니다."); this.post(); return; }
+          const lines: string[] = [];
+          if (!dv.currentReadable) lines.push(enD ? "⚠ the current file is unreadable (corrupt) — only restore is possible" : "⚠ 현재 파일을 읽을 수 없어요(손상) — 복구만 가능합니다");
+          else if (dv.currentAbsent) lines.push(enD ? "⚠ the rules file is missing — only restore is possible" : "⚠ 수칙 파일이 없어요 — 복구만 가능합니다");
+          if (dv.hasCopy) { lines.push(enD ? `Added ${dv.added.length} · Removed ${dv.removed.length}` : `추가된 줄 ${dv.added.length} · 빠진 줄 ${dv.removed.length}`); for (const a of dv.added) lines.push("+ " + String(a.text)); for (const r of dv.removed) lines.push("− " + String(r.text)); }
+          else { lines.push(enD ? "No approved copy is stored (older approval) — showing the current file contents; restore is not available:" : "저장된 승인본 사본이 없어(이전 방식 승인) 현재 파일 내용을 보여드려요 — 복구는 불가, 승인만 가능:"); for (const x of dv.currentItems) lines.push("· " + String(x.text)); }
+          const okA = enD ? "Approve this change" : "이 변경을 승인"; const okR = enD ? "Don't approve — restore last approved list" : "승인 안 함 — 마지막 승인 목록으로 복구";
+          const btns: string[] = []; if (dv.currentReadable && !dv.currentAbsent) btns.push(okA); if (dv.hasCopy) btns.push(okR); // 부재=승인할 파일이 없음(3회차 보완: 실행 불가 버튼 비노출)
+          if (!btns.length) { vscode.window.showWarningMessage(enD ? "Neither approve nor restore is possible — fix verify-envelope*.json by hand." : "승인도 복구도 할 수 없는 상태예요 — 수칙 파일을 손으로 고쳐 주세요.", { modal: true, detail: lines.join("\n") }); return; }
+          const msgD = enD ? "Rules changed without approval — verification will not start until you decide." : "승인 없이 바뀐 수칙이에요 — 아래를 확인하고 정할 때까지 검증이 시작되지 않아요.";
+          const shaD = String(dv.currentHash || "");
+          vscode.window.showInformationMessage(msgD, { modal: true, detail: lines.join("\n") }, ...btns).then((sel) => {
+            if (sel === okA) { this.stampEnvelopeCurrent(tgtD, tgD, langD, shaD); return; }
+            if (sel !== okR) return;
+            const wsR = dashboardWorkspace(); const tgtR = wsR ? scoutTargetFor(wsR).repo : null;
+            if (!wsR || !tgtR || normWs(tgtR) !== normWs(tgtD)) { vscode.window.showWarningMessage(enD ? "The target changed meanwhile — nothing restored." : "그 사이 정찰 대상이 바뀌어 복구하지 않았어요."); this.post(); return; }
+            let r: any = null; try { r = CLD.restoreEnvelopeApproved(wsR, tgtR, tgD); } catch { r = null; }
+            if (r && r.ok) vscode.window.showInformationMessage((enD ? "Restored the last approved list." : "마지막 승인 목록으로 복구했어요.") + (r.backup ? (enD ? ` A copy of the changed file was kept: ${r.backup}` : ` 바뀌었던 파일 사본: ${r.backup}`) : ""));
+            else { const why: Record<string, [string, string]> = { "recover-needed": ["중단된 승인 전이가 남아 있어요 — 먼저 '전이 복구'", "an interrupted approval transition exists — recover it first"], "proposal-pending": ["승인 대기 중인 변경안이 있어요 — 먼저 처리", "a pending draft exists — handle it first"], "no-approved-copy": ["저장된 승인본 사본이 없어요", "no approved copy stored"], "stale-copy": ["저장된 사본이 현재 승인본과 달라요", "stored copy is stale"], "backup-failed": ["바뀐 파일 백업에 실패해 중단했어요(파괴 0)", "backup failed — aborted (nothing overwritten)"], "write-failed": ["파일 쓰기 실패", "write failed"], "verify-failed": ["복구 후 지문이 승인본과 달라요", "post-restore fingerprint mismatch"] }; const k = String((r && r.reason) || "unknown"); const p = why[k] || [k, k]; vscode.window.showWarningMessage((enD ? "Could not restore: " : "복구하지 못했어요: ") + (enD ? p[1] : p[0])); }
+            this.post();
+          });
+          return;
+        }
         if (m?.type === "envelopeShow" && typeof m.repo === "string" && m.repo) { // 수칙서 열람 전용 — 승인 후에도 세부내용 재확인·제외 요청 판단 창구(2026-07-22 사용자 지적)
           if (m.lang !== "en" && m.lang !== "ko") return;
           const enV = m.lang === "en";
@@ -4843,6 +4881,23 @@ class Dashboard {
   // [재편 B §3-2] 초안 도장 흐름 단일화 — 초안 카드 버튼(기존)과 1클릭 승인·빼기 체인(신규)이 같은
   // 모달·재검사·도장(WAL·candidateRefs fail-closed)을 공유한다. autoDiscardOnCancel=1클릭 체인 전용:
   // 모달 취소가 초안을 남기면 정상 흐름 표면에 기계 상태가 새므로 복원형 폐기로 수렴(§3-4 상태표).
+  // [경계 통일 2026-08-29] "이 변경을 승인" — 사용자가 창에서 본 현재 파일 지문(shaAt)에 도장. 모달 사이 대상·파일 재검사(B-3 전례).
+  stampEnvelopeCurrent(repoAt: string, target: "core" | "archive", lang: Lang, shaAt: string): void {
+    const en9 = lang === "en";
+    const wsS = dashboardWorkspace(); const tgtS = wsS ? scoutTargetFor(wsS).repo : null;
+    if (!wsS || !tgtS || normWs(tgtS) !== normWs(repoAt)) { vscode.window.showWarningMessage(en9 ? "The target changed during approval — not approved." : "승인하는 사이 정찰 대상이 바뀌어 승인하지 않았습니다."); this.post(); return; }
+    let CLS: any = null; try { CLS = require(path.join(BRIDGE_DIR, "contract-lib.js")); } catch { CLS = null; }
+    if (!CLS || typeof CLS.stampEnvelopeAllSlots !== "function") { vscode.window.showWarningMessage(en9 ? "This runtime cannot stamp — run node install.js." : "이 설치본은 도장을 지원하지 않아요 — node install.js 후 다시 시도하세요."); return; }
+    let ev2: any = null; try { ev2 = target === "archive" ? CLS.readVerifyEnvelopeArchive(tgtS) : CLS.readVerifyEnvelope(tgtS); } catch { ev2 = null; }
+    if (!ev2 || ev2.st !== "ok" || String(ev2.sha1) !== shaAt) { vscode.window.showWarningMessage(en9 ? "The rules file changed while approving — not approved. Please review again." : "승인하는 사이 수칙 파일이 바뀌어 승인하지 않았습니다 — 다시 확인해 주세요."); this.post(); return; }
+    if (target === "core" && ev2.truncated === true) { vscode.window.showWarningMessage(en9 ? "Some items exceed the caps and are cut off — approval is blocked until the file is trimmed." : "일부 항목이 상한을 넘어 잘려요 — 파일을 줄이기 전에는 승인할 수 없어요."); this.post(); return; }
+    let bind9: any = null;
+    try { const MPV9: any = require(path.join(BRIDGE_DIR, "map-provenance.js")); bind9 = MPV9.recordApprovalWithStamp(tgtS, { envelopeHash: shaAt, target, sourceRefs: [] }, () => { try { const rS = CLS.stampEnvelopeAllSlots(wsS, tgtS, shaAt, target); return !!(rS && rS.ok); } catch { return false; } }); } catch { bind9 = null; }
+    if (!bind9 || !bind9.recorded) { vscode.window.showWarningMessage(en9 ? "Failed to record the approval event — approval aborted (no stamp written)." : "승인 사건 기록에 실패해 승인을 중단했어요(도장 미기록 — 다시 시도해 주세요)."); this.post(); return; }
+    if (bind9.stamped) vscode.window.showInformationMessage(en9 ? "Approved — applies from the next verification." : "승인됨 — 다음 검증부터 적용됩니다.");
+    else vscode.window.showWarningMessage(en9 ? "Failed to store the approval — please try again." : "승인 기록 저장에 실패했어요 — 잠시 후 다시 시도해 주세요.");
+    this.post();
+  }
   runProposalApprove(repoMsg: string, langMsg: unknown, autoDiscardOnCancel: boolean): void {
     const m = { repo: repoMsg, lang: langMsg } as { repo: string; lang: unknown };
 
@@ -7277,9 +7332,9 @@ class Dashboard {
         if(e9.gen!==undefined && wbGen!==wbKey0){ wbGen=wbKey0; wbAdds.clear(); wbRemoves.clear(); } // 어느 축이 바뀌어도 초기화
         var h9=document.createElement("div"); h9.style.fontWeight="600"; h9.textContent=(d.lang==="en"?"Rules":"수칙"); ec.appendChild(h9); // [재편 B] 어휘 4종 — 정상 흐름 헤더
         var s9=document.createElement("div"); if(e9.tone==="warn"){ s9.style.cssText="color:var(--vscode-editorWarning-foreground,#d9a441)"; } else { s9.className="muted"; } s9.textContent=e9.label; ec.appendChild(s9);
-        var actT=e9.proposal==="recover"?"proposalRecover":e9.proposal==="pending"?"proposalApprove":"envelopeApprove"; // §7 증분 2 — 초안·복구는 별도 채널(도장=사용자 전용 표면)
+        var actT=e9.act?e9.act:(e9.proposal==="recover"?"proposalRecover":e9.proposal==="pending"?"proposalApprove":"envelopeApprove"); // §7 증분 2 — 초안·복구는 별도 채널(도장=사용자 전용 표면)·act=카드가 지정한 행동(승인 없이 바뀐 내용 보기)
         var act2T=e9.proposal==="pending"?"proposalShow":"envelopeShow";
-        if(e9.btn){ var ab=document.createElement("button"); ab.style.cssText="margin-top:4px;font-weight:700"; ab.textContent=e9.btn; ab.addEventListener("click", function(){ vscode.postMessage({type:actT, repo: e9.repo, lang: e9.lang}); }); ec.appendChild(ab); }
+        if(e9.btn){ var ab=document.createElement("button"); ab.style.cssText="margin-top:4px;font-weight:700"; ab.textContent=e9.btn; ab.addEventListener("click", function(){ vscode.postMessage({type:actT, repo: e9.repo, lang: e9.lang, target: String(e9.driftTarget||"")}); }); ec.appendChild(ab); }
         if(e9.btn2){ var vb2=document.createElement("button"); vb2.style.cssText="margin-top:4px;margin-left:4px"; vb2.textContent=e9.btn2; vb2.addEventListener("click", function(){ vscode.postMessage({type:act2T, repo: e9.repo, lang: e9.lang}); }); ec.appendChild(vb2); }
         if(e9.btn3){ var vb3=document.createElement("button"); vb3.className="secondary"; vb3.style.cssText="margin-top:4px;margin-left:4px"; vb3.textContent=e9.btn3; vb3.addEventListener("click", function(){ vscode.postMessage({type:"proposalDiscard", repo: e9.repo, lang: e9.lang}); }); ec.appendChild(vb3); } // 초안 폐기(2026-08-21) — 수칙서 무변·채택 후보는 판단 대기로 복원
         (function(){ var valid9=new Set(); (e9.cands||[]).forEach(function(c9){ if(!c9.status||c9.status==="proposed") valid9.add(c9.id); }); [...wbAdds].forEach(function(id9){ if(!valid9.has(id9)) wbAdds.delete(id9); }); })(); // 가지치기(R2·R3 보완) — 후보가 '전부' 사라진 경우 포함 무조건 실행(외부 처분 경계)
@@ -7345,7 +7400,7 @@ class Dashboard {
             row.appendChild(rb); rl9.appendChild(row);
           });
           ec.appendChild(rl9);
-          if(e9.arc && (e9.arc.state==="broken"||e9.arc.state==="stray")){ var arcWarn=document.createElement("div"); arcWarn.style.cssText="margin-top:8px;font-size:12px;color:var(--vscode-editorWarning-foreground,#d4a017)"; arcWarn.textContent=e9.arc.state==="broken"?T("⚠ 보관 수칙 파일이 도장 시점과 달라요 — 재승인 전까지 새 검증 시작이 막힙니다","⚠ the stored rules file differs from its stamped state — new verifications are blocked until re-approval"):T("⚠ 도장 없는 보관 파일이 있어요 — 정리 전까지 올림이 막힙니다","⚠ an unstamped stored-rules file exists — adds are blocked until it is cleaned"); ec.appendChild(arcWarn); }
+          if(e9.arc && (e9.arc.state==="broken"||e9.arc.state==="stray")){ var arcWarn=document.createElement("div"); arcWarn.style.cssText="margin-top:8px;font-size:12px;color:var(--vscode-editorWarning-foreground,#d4a017)"; arcWarn.textContent=e9.arc.state==="broken"?T("⚠ 보관 수칙 파일이 승인 없이 바뀌어 새 검증이 시작되지 않아요 — 위 '승인 없이 바뀐 내용 보기'에서 승인하거나 복구","⚠ the stored rules file changed without approval — new verifications will not start; use 'View unapproved changes' above"):T("⚠ 도장 없는 보관 파일이 있어요 — 정리 전까지 올림이 막힙니다","⚠ an unstamped stored-rules file exists — adds are blocked until it is cleaned"); ec.appendChild(arcWarn); }
         }
       });
       safe(function(){ var n=$("vBudgetNote"); if(!n) return;

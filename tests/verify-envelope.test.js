@@ -109,16 +109,16 @@ console.log("[5] 배선 — ask 조립·판정문 경고·확장 UI(소스 단�
   ok(/\[baseline, baseQual, envText, inj, scout\]\.filter\(Boolean\)/.test(cb), "ask 프롬프트 조립에 경계 절+core 한정 문구 결합(부재=기존과 동일 조립)");
   ok(/envelopeInjectionFor\(target9, cFresh9\.envelopeHash, lang\)/.test(cb) && /profile === "core"/.test(cb), "주입=승인 지문 결속(§7 증분 2: 전이 잠금 안 신선 재판독 cFresh9 — 구 스냅샷 해시 경합 봉합)·한정 문구는 core만(integrity=전 범위 감사 유지)");
   ok((cb.match(/envelopeWarnLine\(ws, langSnap\)/g) || []).length === 1 && (cb.match(/finishVerifyRun\(/g) || []).length === 3, "경계 경고줄=공유 꼬리 1곳(세 분기 출력 경로 호출 경유 — 위장 금지)");
-  ok(cb.includes("검증 경계 미승인 변경") && cb.includes("검증 경계 판독 불가"), "경고 문구 ko(+en 쌍은 같은 함수 안)");
+  ok(cb.includes("항상 적용되는 수칙 파일이 승인 없이 바뀌어") && cb.includes("검증 경계 판독 불가"), "경고 문구 ko(+en 쌍은 같은 함수 안) — 승인 없는 변경=중단 문구(경계 통일 2026-08-29)·미도입 손상=경고 유지");
   const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
   ok(ext.includes('m?.type === "envelopeApprove"') && /normWs\(tgtE\) !== normWs\(m\.repo\)/.test(ext), "승인 핸들러 — 카드 대상 결속+클릭 시 재대조(B-3 전례)");
   ok(/ev2\.sha1 !== shaAt/.test(ext) && ext.includes("envelopeHash: shaAt"), "모달 사이 파일 변경 재확인(지문 재대조) 후에만 도장 기록");
   ok(ext.includes("envelope: readEnvelopeView(ws)") && !ext.includes("envelope: envelopeView"), "카드 재료=최상위 뷰 필드 — 2트랙 기본 프로젝트 포함(1차 blocker① 배치 정정·정찰 종속 제거)");
   ok(/function readEnvelopeView[^]{0,1600}loadLangExt\(\)[^]{0,1600}loadContract\(ws, slot\)/.test(ext), "상태 판독=렌더 언어 슬롯 결속(1차 blocker②)");
-  ok(/type:actT, repo: e9\.repo, lang: e9\.lang/.test(ext) && /actT=e9\.proposal==="recover"\?"proposalRecover":e9\.proposal==="pending"\?"proposalApprove":"envelopeApprove"/.test(ext) && ext.includes("stampEnvelopeAllSlots(wsE, tgtNow, shaAt)"), "승인 도장=WAL 경유 양 슬롯 트랜잭션(2026-08-22 지문 슬롯 분리+부분 영속 봉합·§7 증분 2 분기: 초안=proposalApprove·기본=envelopeApprove)");
+  ok(/type:actT, repo: e9\.repo, lang: e9\.lang/.test(ext) && /actT=e9\.act\?e9\.act:\(e9\.proposal==="recover"\?"proposalRecover":e9\.proposal==="pending"\?"proposalApprove":"envelopeApprove"\)/.test(ext) && ext.includes("stampEnvelopeAllSlots(wsE, tgtNow, shaAt)"), "승인 도장=WAL 경유 양 슬롯 트랜잭션(2026-08-22 지문 슬롯 분리+부분 영속 봉합·§7 증분 2 분기: 초안=proposalApprove·기본=envelopeApprove)");
   ok(ext.includes("modal: true, detail: detail9") && /pre9\[ax\] \+ "-" \+ \(i9 \+ 1\)/.test(ext), "승인 모달=항목 전문+ID 제시(1차 blocker③ — 공용 생성기 경유)");
   ok(ext.includes("초과로 절삭돼 초과분은 주입에서 빠져요"), "카드=절삭 상태 경고 tone(1차 blocker④)");
-  ok(ext.includes("const cutNote9 = evv.truncated === true") && ext.includes('cutNote9 ? "warn" : "info"') && /달라졌어요[^]{0,200}\+ cutNote9/.test(ext), "승인 전(대기·재승인) 라벨에도 절삭 경고 병기(2차 blocker① — 숨김 금지)");
+  ok(ext.includes("const cutNote9 = evv.truncated === true") && ext.includes('cutNote9 ? "warn" : "info"') && /승인 없이 수칙 파일이 바뀌어 검증이 시작되지 않아요[^]{0,400}\+ cutNote9/.test(ext), "승인 전(대기·재승인) 라벨에도 절삭 경고 병기(2차 blocker① — 숨김 금지)");
   ok(/evv\.truncated === true[^]{0,500}잘려서 보이지 않는 내용까지 승인할 수는 없어요/.test(ext), "절삭 상태=승인 거부(모달이 못 보여주는 내용의 지문 도장 차단 — 2차 blocker①)");
   ok(ext.includes('if (m.lang !== "en" && m.lang !== "ko") return;'), "무효 언어값=기록 없이 거부(2차 [보완] — ko 강제 금지)");
   { // 실사고 반례(2026-07-22): 추천 버튼 연결이 const safe(뒤에 정의)를 초기화 구간에서 호출 → TDZ로 웹뷰 전체 즉사(전 버튼 무반응)
@@ -177,7 +177,7 @@ console.log("[7.5] 하네스 표현 계층 — 축 해설·쉬운 예시 슬롯(
   ok(ext75.includes('"      ↳ " + (en9 ? "e.g." : "예:")'), "항목별 쉬운 예시를 승인 화면에 병기(<axis>Ex 슬롯)");
   ok((ext75.match(/function envelopeDetailText/g) || []).length === 1 && (ext75.match(/envelopeDetailText\(evv/g) || []).length >= 2, "승인·열람 모달=공용 본문 생성기 1개 공유(두 화면이 다른 내용을 보여주는 분기 금지)");
   ok(ext75.includes('m?.type === "envelopeShow"') && ext75.includes("열람 전용") && ext75.includes("read-only"), "열람 전용 모달 — 승인 후에도 세부내용 재확인 창구(2026-07-22 사용자 지적) ko/en");
-  ok((ext75.match(/btn2: tE\("내용 보기", "View details"\)/g) || []).length === 4 && ext75.includes('btn: null, btn2: null'), "'내용 보기' 버튼=판독 가능한 모든 상태(승인 대기·재승인·절삭·적용 중) 상시 제공·판독 불가만 제외");
+  ok((ext75.match(/btn2: tE\("내용 보기", "View details"\)/g) || []).length === 5 && ext75.includes('btn: null, btn2: null'), "'내용 보기' 버튼=판독 가능한 모든 상태(승인 대기·재승인·절삭·적용 중) 상시 제공·판독 불가만 제외");
   ok(ext75.includes('vscode.postMessage({type:act2T, repo: e9.repo, lang: e9.lang})') && ext75.includes('act2T=e9.proposal==="pending"?"proposalShow":"envelopeShow"'), "카드에 열람 버튼 배선(렌더 언어 슬롯 동봉·초안 상태=proposalShow 분기)");
   ok(ext75.includes("빼거나 고치고 싶은 항목이 생기면 번호(예: oos-2)"), "열람 화면에도 제외 요청 경로 안내(항목 번호 지정 → 파일 수정 → 재승인)");
   ok(/normWs\(tgtV\) !== normWs\(m\.repo\)/.test(ext75), "열람도 카드 대상 재대조 — 다른 프로젝트 수칙서 침묵 표시 차단([주의] 수용·승인 핸들러와 동형)");
