@@ -83,11 +83,22 @@ const handoffKo = `[검증 상한 인계]
 없음
 [사용자 판단 필요]
 - EVIDENCE-UNAVAILABLE — 대상: 저장한 선택값. 상황: 화면을 다시 열면 그 선택이 사라질 수 있습니다. 위험: 사용자가 끝난 작업으로 오해할 수 있습니다. 선택 1: 위험을 감수하고 현재 상태를 유지합니다. 선택 2: 다음 턴에 원인을 다시 확인하고 수정합니다.
+[잔여 위험 판단]
+다음 캠페인 도장 — 이유: 미검증 수정은 시험 한 줄 문구뿐이라 회귀 시험이 덮습니다.
 [경고등 의미]
 verdict-nonclean 빨간 경고는 통과 인증이 없다는 뜻이라 남습니다. verify-handoff-missing 빨강은 이 마감문으로 해소되지만, 이 마감 자체는 검증 통과가 아닙니다.
 [권장]
 사용자가 끝난 작업으로 오인하는 위험을 막기 위해 선택 2로 다음 턴에 다시 확인하는 것을 권장합니다.`;
 ok(VH.validateCapHandoff(handoffKo).ok, "필수 내용을 채운 한국어 상한 인계문 판독");
+// [잔여 위험 판단 2026-08-29] 절 부재·셋 밖 시작·이유 없음·'즉시 재검증'인데 권장이 검증을 말하지 않음=거부 / 정상 3종=승인
+ok(!VH.validateCapHandoff(handoffKo.replace(/\[잔여 위험 판단\]\n[^\n]*\n/, "")).ok, "잔여 위험 판단 절 부재=거부(판단 없이 사실 적시만 하는 마감 차단)");
+ok(!VH.validateCapHandoff(handoffKo.replace("다음 캠페인 도장 — 이유:", "나중에 보자 — 이유:")).ok, "셋 밖 문구로 시작=거부");
+ok(!VH.validateCapHandoff(handoffKo.replace("다음 캠페인 도장 — 이유: 미검증 수정은 시험 한 줄 문구뿐이라 회귀 시험이 덮습니다.", "다음 캠페인 도장 — 그냥 그렇게 하겠습니다 이번엔 넘어갑니다")).ok, "이유 없음=거부");
+ok(!VH.validateCapHandoff(handoffKo.replace("다음 캠페인 도장 — 이유:", "즉시 재검증 — 이유:")).ok, "즉시 재검증인데 권장 절이 새 검증을 말하지 않음=거부(판단과 권장 불일치)");
+{ const nowKo = handoffKo.replace("다음 캠페인 도장 — 이유:", "즉시 재검증 — 이유:").replace(/\[권장\]\n[^\n]*/, "[권장]\n이 턴에서 새 검증 캠페인을 바로 시작하기를 권장합니다(경계 수정이 미검증이기 때문).");
+  const rNow = VH.validateCapHandoff(nowKo); ok(rNow.ok && rNow.residualRisk === "now", "즉시 재검증+권장 일치=승인·판정 반환");
+  const rIgn = VH.validateCapHandoff(handoffKo.replace("다음 캠페인 도장 — 이유: 미검증 수정은 시험 한 줄 문구뿐이라 회귀 시험이 덮습니다.", "무시 가능 — 이유: 마지막 판정 뒤 코드 수정이 없고 보고 문구만 바뀌었습니다.")); ok(rIgn.ok && rIgn.residualRisk === "ignore", "무시 가능+이유=승인");
+  ok(VH.capHandoffInstruction("ko", "5/5", "실패").includes("[잔여 위험 판단]") && VH.capHandoffInstruction("en", "5/5", "fail").includes("[Residual risk call]"), "안내문 ko/en에 절 포함"); }
 ok(VH.validateCapHandoff(handoffKo).needsUserDecision, "실제 선택 항목이 있을 때만 사용자 판단 대기로 분류");
 ok(!VH.validateCapHandoff("[검증 상한 인계]\n[사용자 판단 필요]").ok, "제목·내용이 빠진 형식 흉내는 거부");
 ok(!VH.validateCapHandoff(VH.capHandoffInstruction("ko", "5/5", "실패")).ok, "훅 안내문을 그대로 되풀이한 것은 실제 판단 인계로 인정하지 않음");
@@ -95,11 +106,11 @@ const editedEchoKo = VH.capHandoffInstruction("ko", "5/5", "실패").replace("�
 ok(!VH.validateCapHandoff(editedEchoKo).ok, "보류 선택지만 지운 수정 안내문 echo도 실제 판단 인계로 인정하지 않음");
 const partialEchoKo = handoffKo.replace("EVIDENCE-UNAVAILABLE — 대상: 저장한 선택값.", "각 근거는 아래 네 절 중 정확히 한 곳에만 두고 대상: 저장한 선택값.");
 ok(!VH.validateCapHandoff(partialEchoKo).ok, "안내문 한 절만 남은 부분 echo도 거부");
-const fillerEn = `[Verification cap closeout]\n[Accepted and handled]\nplaceholder content here\n[Rebutted and closed]\nplaceholder content here\n[Parked]\nplaceholder content here\n[User decision required]\nplaceholder content here\n[Alert meaning]\nplaceholder content here\n[Recommendation]\nplaceholder content here`;
+const fillerEn = `[Verification cap closeout]\n[Accepted and handled]\nplaceholder content here\n[Rebutted and closed]\nplaceholder content here\n[Parked]\nplaceholder content here\n[User decision required]\nplaceholder content here\n[Residual risk call]\nNext campaign — Reason: the unverified edit is a single test wording line covered by regression tests.\n[Alert meaning]\nplaceholder content here\n[Recommendation]\nplaceholder content here`;
 ok(!VH.validateCapHandoff(fillerEn).ok, "모든 절을 일반 filler로 채운 형식 흉내 거부");
-const genericEn = `[Verification cap closeout]\n[Accepted and handled]\nNone\n[Rebutted and closed]\nNone\n[Parked]\nNone\n[User decision required]\nTarget: a problem. Scenario: a situation may cause an issue. Risk: this problem could create a risk. Option 1: keep it. Option 2: change it.\n[Alert meaning]\nThe red alert remains because there is no pass certification.\n[Recommendation]\nThe recommended action is to fix it because a risk exists.`;
+const genericEn = `[Verification cap closeout]\n[Accepted and handled]\nNone\n[Rebutted and closed]\nNone\n[Parked]\nNone\n[User decision required]\nTarget: a problem. Scenario: a situation may cause an issue. Risk: this problem could create a risk. Option 1: keep it. Option 2: change it.\n[Residual risk call]\nNext campaign — Reason: the unverified edit is a single test wording line covered by regression tests.\n[Alert meaning]\nThe red alert remains because there is no pass certification.\n[Recommendation]\nThe recommended action is to fix it because a risk exists.`;
 ok(!VH.validateCapHandoff(genericEn).ok, "문제·상황·위험 키워드만 배치한 대상 없는 일반론 거부");
-const handoffEn = `[Verification cap closeout]\n[Accepted and handled]\nNone\n[Rebutted and closed]\nNone\n[Parked]\nNone\n[User decision required]\n- EVIDENCE-UNAVAILABLE — Target: the saved dashboard choice. Scenario: it may disappear after reopening. Risk: the user could mistake unfinished work for completion. Option 1: keep the known risk. Option 2: inspect and fix it next turn.\n[Alert meaning]\nThe red alert remains because there is no pass certification; this closeout does not clear that verdict.\n[Recommendation]\nI recommend option 2 because it avoids a false completion signal.`;
+const handoffEn = `[Verification cap closeout]\n[Accepted and handled]\nNone\n[Rebutted and closed]\nNone\n[Parked]\nNone\n[User decision required]\n- EVIDENCE-UNAVAILABLE — Target: the saved dashboard choice. Scenario: it may disappear after reopening. Risk: the user could mistake unfinished work for completion. Option 1: keep the known risk. Option 2: inspect and fix it next turn.\n[Residual risk call]\nNext campaign — Reason: the unverified edit is a single test wording line covered by regression tests.\n[Alert meaning]\nThe red alert remains because there is no pass certification; this closeout does not clear that verdict.\n[Recommendation]\nI recommend option 2 because it avoids a false completion signal.`;
 ok(VH.validateCapHandoff(handoffEn).ok, "영어 슬롯도 같은 내용의 상한 인계문을 판독");
 const evidenceDir = path.join(home, "ask-jobs"), evidenceId = "ask-evidence-0000000001", evidenceCampaign = "cc:evidence:turn";
 fs.mkdirSync(evidenceDir, { recursive: true });
@@ -125,6 +136,8 @@ const acceptedCloseout = `[검증 상한 인계]
 없음
 [사용자 판단 필요]
 없음
+[잔여 위험 판단]
+다음 캠페인 도장 — 이유: 미검증 수정은 시험 한 줄 문구뿐이라 회귀 시험이 덮습니다.
 [경고등 의미]
 verdict-nonclean 빨강은 마지막 검증이 통과가 아니었음을 남기며 이번 마감은 통과 인증이 아닙니다. 사용자 행동은 필요 없고 나중의 정상 검증 통과 때 해소됩니다.
 [권장]
@@ -149,7 +162,7 @@ const genericAccepted = acceptedCloseout.replace("변경: `restoreSavedChoice` �
 ok(!VH.validateCapHandoff(genericAccepted, evidenceCtx).ok, "대상·결과 없는 수용 일반론은 자동 정리로 승인하지 않음");
 const genericRebutted = rebuttedCloseout.replace("관측: 재진입 시험 20회에서 값이 모두 유지됐습니다; 이유: `savedChoice` 소실 재현 0회라 종결합니다; 근거: 재진입 시험 20회", "관측: 어떤 결과가 관측됐습니다; 이유: 근거 때문에 이유가 있습니다; 근거: 어떤 근거");
 ok(!VH.validateCapHandoff(genericRebutted, evidenceCtx).ok, "관측 결과·종결 이유 없는 반박 일반론은 승인하지 않음");
-const connectorOnlyEn = `[Verification cap closeout]\n[Accepted and handled]\n- R5-F1 저장한 선택값이 화면 재진입 뒤 사라진다 — Change: the issue was fixed somehow; Check: it was checked successfully; Evidence: tests/verify-sequential.test.js\n[Rebutted and closed]\nNone\n[Parked]\nNone\n[User decision required]\nNone\n[Alert meaning]\nThe verdict-nonclean red alert remains because this closeout is not a verification pass and clears after a later pass.\n[Recommendation]\nNo user decision is needed because the item was handled.`;
+const connectorOnlyEn = `[Verification cap closeout]\n[Accepted and handled]\n- R5-F1 저장한 선택값이 화면 재진입 뒤 사라진다 — Change: the issue was fixed somehow; Check: it was checked successfully; Evidence: tests/verify-sequential.test.js\n[Rebutted and closed]\nNone\n[Parked]\nNone\n[User decision required]\nNone\n[Residual risk call]\nNext campaign — Reason: the unverified edit is a single test wording line covered by regression tests.\n[Alert meaning]\nThe verdict-nonclean red alert remains because this closeout is not a verification pass and clears after a later pass.\n[Recommendation]\nNo user decision is needed because the item was handled.`;
 ok(!VH.validateCapHandoff(connectorOnlyEn, evidenceCtx).ok, "유효한 파일 근거를 빌려도 변경·확인 자체가 연결어뿐이면 거부");
 const quotedPlaceholderEn = connectorOnlyEn.replace("Evidence: tests/verify-sequential.test.js", "Evidence: `some evidence`");
 ok(!VH.validateCapHandoff(quotedPlaceholderEn, evidenceCtx).ok, "백틱으로 감싼 some evidence도 식별 근거로 승인하지 않음");
@@ -191,7 +204,7 @@ writeEvidenceJob("ask-thirteen-0000000005", manyCampaign, 5, `[지적 목록 v1]
 const manyCtx = VH.capHandoffContext(home, ws, manyCampaign);
 ok(!manyCtx.unavailable && manyCtx.evidence.length === 13 && manyCtx.evidence[12].key === "R5-F13", "13개 지적을 12개에서 침묵 절단하지 않고 전부 결속");
 const manyAccepted = manyCtx.evidence.map((e, i) => `- ${e.key} ${e.title} — 변경: ${i + 1}번 저장 분기의 복원 조건을 수정했습니다; 확인: ${i + 1}번 재진입 시험에서 값 유지 결과를 확인했습니다; 근거: tests/verify-sequential.test.js`).join("\n");
-const manyCloseout = `[검증 상한 인계]\n[수용·처리]\n${manyAccepted}\n[반박·종결]\n없음\n[보관함 이관]\n없음\n[사용자 판단 필요]\n없음\n[경고등 의미]\nverdict-nonclean 빨강은 마지막 검증의 통과 인증이 없음을 남기며 이 마감은 통과가 아닙니다. 사용자 행동은 필요 없고 나중 통과 때 해소됩니다.\n[권장]\n사용자 판단 없이 처리 결과를 유지하고 다음 정상 검증에서 확인하기를 권장합니다.`;
+const manyCloseout = `[검증 상한 인계]\n[수용·처리]\n${manyAccepted}\n[반박·종결]\n없음\n[보관함 이관]\n없음\n[사용자 판단 필요]\n없음\n[잔여 위험 판단]\n다음 캠페인 도장 — 이유: 미검증 수정은 시험 한 줄 문구뿐이라 회귀 시험이 덮습니다.\n[경고등 의미]\nverdict-nonclean 빨강은 마지막 검증의 통과 인증이 없음을 남기며 이 마감은 통과가 아닙니다. 사용자 행동은 필요 없고 나중 통과 때 해소됩니다.\n[권장]\n사용자 판단 없이 처리 결과를 유지하고 다음 정상 검증에서 확인하기를 권장합니다.`;
 ok(VH.validateCapHandoff(manyCloseout, manyCtx).ok, "R5-F1과 R5-F10을 포함한 13개 정상 마감도 부분문자열 충돌 없이 승인");
 const holdCampaign = "cc:hold-verdict:turn";
 writeEvidenceJob("ask-hold-0000000005", holdCampaign, 5, `[findings v1]\n{"tag":"blocker","title":"A concrete held finding"}\n[findings end]\nVerdict: inconclusive\n`);
@@ -274,7 +287,7 @@ console.log("[PASS-사례] 2026-08-05 이중 실패 봉합 — 통과·지적 0�
   ok(passMsg.includes("(마지막 판정: 통과)") && !passMsg.includes("not-pass") && !passMsg.includes("통과 아님"), "인계문=실제 판정 라벨(하드코딩 not-pass 거짓 전달 소멸)");
   ok(passMsg.includes("PASS-NO-FINDINGS") && !passMsg.includes("- EVIDENCE-UNAVAILABLE"), "근거 줄=PASS-NO-FINDINGS(지적을 읽지 못했다는 조작 표기 소멸)");
   // 전 절 없음 + 경고 키 명시 마감문이 승인되는지(지적이 없으니 행선지 요구도 없어야 함)
-  const passClose = "[검증 상한 인계]\n[수용·처리]\n없음\n[반박·종결]\n없음\n[보관함 이관]\n없음\n[사용자 판단 필요]\n없음\n[경고등 의미]\n현재 경고 키 verify-incomplete — 마지막 판정은 통과였고 통과 이후 수정만 미검증이라 이 마감은 검증 통과가 아니며, 남은 노랑에 사용자 행동은 필요 없고 다음 턴 검증이 해소합니다.\n[권장]\n다음 턴 첫 검증으로 잔여 수정을 닫는 것을 권장합니다 — 사용자 판단 없음.";
+  const passClose = "[검증 상한 인계]\n[수용·처리]\n없음\n[반박·종결]\n없음\n[보관함 이관]\n없음\n[사용자 판단 필요]\n없음\n[잔여 위험 판단]\n다음 캠페인 도장 — 이유: 미검증 수정은 시험 한 줄 문구뿐이라 회귀 시험이 덮습니다.\n[경고등 의미]\n현재 경고 키 verify-incomplete — 마지막 판정은 통과였고 통과 이후 수정만 미검증이라 이 마감은 검증 통과가 아니며, 남은 노랑에 사용자 행동은 필요 없고 다음 턴 검증이 해소합니다.\n[권장]\n다음 턴 첫 검증으로 잔여 수정을 닫는 것을 권장합니다 — 사용자 판단 없음.";
   ok(VH.validateCapHandoff(passClose, passCtx).ok === true, "통과-잔여 마감문(전 절 없음)=승인(가짜 사용자 질문 강요 없음)");
   // 무회귀: 실패 사례는 종전대로 실제 판정 라벨 실패+지적 결속
   const failMsg = VH.capHandoffInstruction("ko", "5/5", evidenceCtx.verdict || "not-pass", evidenceCtx);

@@ -1133,7 +1133,7 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
         if (rows9.length) {
           const dem9 = rows9.filter((r: any) => r.demoted).length;
           const esc9 = all9.filter((r: any) => r && r.type === "escalation" && r.campaignId === camp9 && (r.envelopeHash || null) === (hash9 || null)).length;
-          adm9 = tE(` · 이번 캠페인 심사: 인정 ${rows9.length - dem9}·강등 ${dem9}${esc9 ? `·승격 ${esc9}` : ""}`, ` · this campaign: kept ${rows9.length - dem9} · demoted ${dem9}${esc9 ? ` · escalated ${esc9}` : ""}`);
+          adm9 = ""; void dem9; void esc9; // [2026-08-29 실보고] "인정·강등·승격" 집계는 기계 사정(지적 입장 심사 결과)이라 수칙 카드에 비노출 — 사용자가 수칙 자체가 자동 폐기되는 것으로 오해
         }
       }
     } catch { adm9 = ""; }
@@ -4103,34 +4103,8 @@ class Dashboard {
           });
           return;
         }
-        // [넣기 입력칸 2026-08-28] 사용자가 직접 친 수칙 — 후보(user-direct) 기록 → 서고행 변경안 → 같은 승인 창(1클릭·취소=자동 정리).
-        // 사용자 행위가 권위이므로 대화 원문 결속 없음. 형식 방어·중복·같은 세대 거부권은 브릿지(directRuleCandidate)가 담당.
-        if (m?.type === "ruleAdd" && typeof m.text === "string" && typeof m.repo === "string" && m.repo && typeof m.gen === "string" && typeof m.wsKey === "string" && m.wsKey) {
-          const wsA0 = dashboardWorkspace(); if (!wsA0) return;
-          const enA0 = loadLangExt() === "en";
-          try {
-            const CLA0: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
-            // [확인검증 blocker ab-1] 렌더 당시 정찰 대상(m.repo)과 클릭 시점 대상 재대조 — 다르면 기록 0(B-3 전례)
-            if (normWs(scoutTargetFor(wsA0).repo) !== normWs(m.repo)) { vscode.window.showWarningMessage(enA0 ? "The scout target changed — the card refreshes; please try again." : "정찰 대상이 바뀌었어요 — 카드가 갱신됩니다. 다시 시도해 주세요."); this.post(); return; }
-            if (typeof CLA0.wsKeyFor !== "function" || String(CLA0.wsKeyFor(wsA0)) !== m.wsKey) { vscode.window.showWarningMessage(enA0 ? "The active project changed — the card refreshes; please try again." : "화면이 떠 있는 사이 활성 프로젝트가 바뀌었어요 — 카드가 갱신됩니다. 다시 시도해 주세요."); this.post(); return; }
-            const genA0 = (CLA0.loadContract(wsA0) || {}).envelopeHash || null;
-            if ((m.gen || null) !== (genA0 || null)) { vscode.window.showWarningMessage(enA0 ? "The rules were re-approved meanwhile — the card refreshes; please try again." : "그 사이 수칙이 다시 승인됐어요 — 카드가 갱신됩니다. 다시 시도해 주세요."); this.post(); return; }
-            if (typeof CLA0.directRuleCandidate !== "function") { vscode.window.showWarningMessage(enA0 ? "This runtime lacks direct add — run node install.js." : "이 설치본은 직접 넣기를 지원하지 않아요 — node install.js 후 다시 시도하세요."); this.post(); return; }
-            const repoA0 = scoutTargetFor(wsA0).repo;
-            const r0 = CLA0.directRuleCandidate(wsA0, repoA0, { text: m.text, approvedHash: genA0 });
-            if (!r0 || !r0.ok) {
-              const why0: Record<string, [string, string]> = { "too-short": ["12자 이상으로 적어 주세요", "at least 12 characters"], "too-long": ["200자 이내로 줄여 주세요", "at most 200 characters"], "multiline": ["한 줄로 적어 주세요", "one line only"], "protocol-vocab": ["검증 규약 표식 문구는 수칙에 쓸 수 없어요", "protocol marker text is not allowed"], "already-in-envelope": ["이미 같은 수칙이 있어요", "an identical rule already exists"], "duplicate": ["같은 문안이 이미 제안 중이에요", "the same text is already proposed"], "declined-suppressed": ["같은 문안을 이번 세대에 '안 올림'으로 정한 적이 있어요", "this text was declined in this generation"], "envelope-inactive": ["승인된 수칙서가 없어 넣을 수 없어요", "no approved rulebook"], "envelope-drift": ["수칙 파일이 승인본과 달라 넣을 수 없어요 — 다시 승인 후 시도", "the rules file differs from the approved copy"], "ledger-write": ["기록에 실패했어요 — 다시 시도", "record failed — retry"] };
-              const rs0 = String((r0 && r0.reason) || "unknown");
-              const pair0 = why0[rs0] || (rs0.startsWith("sensitive-") ? ["비밀값·개인정보 형태가 섞여 있어요 — 문구를 바꿔 주세요", "looks like a secret/PII — reword it"] : [rs0, rs0]);
-              vscode.window.showWarningMessage((enA0 ? "Could not add: " : "넣을 수 없어요: ") + (enA0 ? pair0[1] : pair0[0])); this.post(); return;
-            }
-            let dr0: any = null;
-            try { dr0 = CLA0.draftEnvelopeRevision(wsA0, repoA0, { addCandidateIds: [r0.candidateId], removeItems: [], approvedHash: genA0, target: "archive" }); } catch { dr0 = null; }
-            if (dr0 && dr0.ok) { this.runProposalApprove(repoA0, m.lang, true); return; } // 승인 창(취소=자동 정리 → 제안 줄로 복귀)
-            vscode.window.showWarningMessage((enA0 ? "Could not prepare the change: " : "변경안을 만들지 못했어요: ") + String((dr0 && dr0.error) || "unknown") + (enA0 ? " — your text is kept as a proposal above." : " — 입력하신 문안은 위 '제안'에 남아 있어요."));
-          } catch { vscode.window.showWarningMessage(enA0 ? "Could not add." : "넣지 못했어요."); }
-          this.post(); return;
-        }
+        // [2026-08-29 사용자 결정] 대시보드 직접 입력(넣기 입력칸·ruleAdd)은 제거 — 수칙은 대화에서 한 약속의 포착과 구현 담당의 마감 상신 두 경로로만 제안되고,
+        // 사용자는 승인/안 올림/빼기만 한다(자동 적용 체계에 수동 입력칸이 섞이면 "왜 있는지" 설명이 없어 혼란 — 실보고). 브릿지 directRuleCandidate·user-direct kind는 과거 레코드 호환용으로만 남는다.
         if (m?.type === "candMark" && typeof m.id === "string" && /^[0-9a-f]{16}$/.test(m.id) && (m.status === "adopted" || m.status === "declined") && typeof m.gen === "string" && typeof m.wsKey === "string" && m.wsKey) { // §7 증분 3 — 후보 선택 '기록만'(작업 발동 금지·반영은 다음 대화 턴)
           const wsM = dashboardWorkspace(); if (!wsM) return;
           const enM = loadLangExt() === "en";
@@ -6955,7 +6929,7 @@ class Dashboard {
       var chip=function(lbl,val,cls){ var z=(val===0||val==="0")?" z":""; return '<span class="pfm '+(cls||'')+z+'">'+lbl+' <b>'+val+'</b></span>'; };
       return '<div class="vrow"><span class="vlbl">'+(profLbl[k]||k)+'</span><b class="vnum">'+b.count+T("건"," runs")+'</b><span>'
         + chip(T("실효 실패","eff-fail"), b.effFail, "bad") + chip(T("실효 보류","eff-hold"), b.effInconclusive, "warn")
-        + chip(T("기계 강등","demoted"), b.demoted, "note") + chip(T("기계 정정","corrected"), b.corrected, "note")
+        + chip(T("범위 밖이라 메모로 낮춤","out-of-scope→note"), b.demoted, "note") + chip(T("기계 정정","corrected"), b.corrected, "note")
         + chip(T("평균 소요","avg dur"), avgDur, "") + (att?'<span class="pfm warn">'+att.replace(/^ · /,'')+'</span>':'')
         + '</span></div>';
     }).join("");
@@ -7344,14 +7318,14 @@ class Dashboard {
           var viewOnly9=e9.candsView==="pending-draft"; // 초안 대기 중=열람 전용(2026-08-21 실보고)
           chSub9.textContent=viewOnly9
             ?T("남은 제안은 사라진 게 아니에요 — 처리 중인 변경(위)을 먼저 승인하거나 취소하면 이 자리에서 이어집니다.","Remaining proposals are not gone — approve or cancel the pending change above first, then continue here.")
-            :T("구현 담당이 '왜 지킬 규칙인지'와 함께 올린 제안과, 직접 넣다가 취소한 문안이 여기 옵니다. [승인]을 누르면 바뀌는 내용을 확인한 뒤 승인 1번으로 적용돼요.","Proposals from the implementer (with a reason) and rules you typed but cancelled appear here. Press [Approve] to review the change, then one approval applies it."); ec.appendChild(chSub9);
+            :T("대화에서 하신 약속을 시스템이 포착한 것과, 구현 담당이 '왜 지킬 규칙인지'와 함께 올린 제안만 여기 옵니다. [승인]을 누르면 바뀌는 내용을 확인한 뒤 승인 1번으로 적용돼요.","Only promises captured from the conversation and proposals from the implementer (with a reason) appear here. Press [Approve] to review the change, then one approval applies it."); ec.appendChild(chSub9);
           var more9=null; // 8건 초과=접힘 — '더 보기'로 전량 접근
           e9.cands.forEach(function(cd, ix9){
             var row9=document.createElement("div"); row9.style.cssText="font-size:12px;margin-top:7px;padding:6px 8px;border-radius:5px;background:var(--vscode-editorWidget-background)";
             var when9=""; if(cd.ts){ var dt9=new Date(cd.ts); if(!isNaN(dt9.getTime())) when9=(dt9.getMonth()+1)+"/"+dt9.getDate(); }
             var kl9=cd.kind==="user-constraint"?T((when9?when9+" ":"")+"대화에서 직접 말씀하신 약속이에요","(a promise you stated in chat"+(when9?" on "+when9:"")+")")
               :cd.kind==="rule-manual"?T("구현 담당이 마감 판단에서 '프로젝트를 관통하는 지침'으로 골라 올렸어요","proposed by the implementer at campaign closing as a project-spanning principle")
-              :cd.kind==="user-direct"?T("직접 입력하신 수칙이에요(넣기 취소분 — 다시 승인하거나 안 올림)","a rule you typed (cancelled earlier — approve again or drop it)")
+              :cd.kind==="user-direct"?T("예전 직접 입력 기능으로 올라온 수칙이에요(승인하거나 안 올림)","a rule from the former direct-input feature (approve or drop it)")
               :T((when9?when9+" 검증에서 ":"검증에서 ")+"잡혀 이미 고친 실수예요","caught"+(when9?" in the "+when9+" verification":" in a verification")+" and already fixed");
             var undecided9=!cd.status||cd.status==="proposed";
             var sit9=document.createElement("div"); sit9.textContent=(undecided9?"":"["+(cd.status==="adopted"?T("승인 대기 — 위 카드에서 승인하거나 취소하세요","awaiting approval — approve or cancel in the card above"):cd.status)+"] ")+kl9; row9.appendChild(sit9);
@@ -7379,17 +7353,10 @@ class Dashboard {
           var sgFoot9=document.createElement("div"); sgFoot9.className="muted"; sgFoot9.style.cssText="font-size:11px;margin-top:3px"; sgFoot9.textContent=T("규칙으로 올릴 가치가 있으면 구현 담당이 마감 때 '제안'으로 올립니다.","If worth a rule, the implementer proposes it at campaign closing."); sg9.appendChild(sgFoot9);
           ec.appendChild(sg9);
         }
-        if(e9.rules && e9.proposal===undefined){ // rules 빈 배열도 렌더 — 수칙 0개에서도 [넣기] 유지(검증 blocker) // [재편 B §3-1] 수칙 목록 — 승인된 것 전부 한 곳(줄마다 빼기·직접 추가 안내). 어휘=수칙·빼기.
+        if(e9.rules && e9.proposal===undefined){ // rules 빈 배열도 렌더 — 수칙 0개여도 목록 틀(요약 줄)을 보여 상태를 알린다 // [재편 B §3-1] 수칙 목록 — 승인된 것 전부 한 곳(줄마다 빼기·직접 추가 안내). 어휘=수칙·빼기.
           var rl9=document.createElement("details"); rl9.style.cssText="margin-top:10px"; rl9.open=rulesOpenWeb; rl9.addEventListener("toggle", function(){ rulesOpenWeb=rl9.open; });
           var rlN9={always:0, rel:0}; e9.rules.forEach(function(r){ if(r.tag==="always") rlN9.always++; else rlN9.rel++; });
           var rlSum9=document.createElement("summary"); rlSum9.style.cssText="font-weight:600;cursor:pointer"; rlSum9.textContent=T("수칙 "+e9.rules.length+"개","Rules ("+e9.rules.length+")"); rl9.appendChild(rlSum9); // [실보고 2026-08-28] 기계 분류(항상/관련·전제/금지/제외) 비노출 — 사용자에겐 그냥 수칙 N개
-          // [넣기 입력칸] 목록 위 입력칸+[넣기] — 사용자 행위가 권위(브릿지 형식 방어·중복 거부) → 승인 창 1번
-          var adRow9=document.createElement("div"); adRow9.style.cssText="display:flex;gap:6px;margin-top:6px;align-items:center";
-          var adIn9=document.createElement("input"); adIn9.type="text"; adIn9.maxLength=200; adIn9.style.cssText="flex:1;min-width:0;font-size:12px;padding:4px 6px"; adIn9.placeholder=T("새 수칙 한 줄(12~200자) — 예: 배포 전에는 반드시 백업을 남긴다","new rule in one line (12–200 chars)"); adIn9.setAttribute("data-rule-add","1");
-          var adBt9=document.createElement("button"); adBt9.style.cssText="flex:none;font-size:12px;font-weight:600"; adBt9.textContent=T("넣기","Add");
-          var adGo9=function(){ var v=(adIn9.value||"").trim(); if(!v){ adIn9.focus(); return; } adBt9.disabled=true; vscode.postMessage({type:"ruleAdd", text:v, repo:String(e9.repo||""), gen:String(e9.gen||""), wsKey:String(e9.wsKey||""), lang:e9.lang}); }; // repo=렌더 당시 정찰 대상(ab-1 결속)
-          adBt9.onclick=adGo9; adIn9.addEventListener("keydown", function(ev){ if(ev.key==="Enter"){ ev.preventDefault(); adGo9(); } });
-          adRow9.appendChild(adIn9); adRow9.appendChild(adBt9); rl9.appendChild(adRow9);
           if(e9.ride){ var rd9=document.createElement("div"); rd9.className="muted"; rd9.style.cssText="font-size:11px;margin-top:2px"; rd9.textContent=e9.ride; rl9.appendChild(rd9); } // "이번 검증에 실린 수칙 N개" — 자동 표시(관리 대상 아님)
           if(rlN9.rel>25){ var rw9=document.createElement("div"); rw9.style.cssText="font-size:11px;margin-top:3px;color:var(--vscode-editorWarning-foreground,#d4a017)"; rw9.textContent=T("⚠ 수칙이 많아지면 채점이 무뎌집니다 — 병합·정리를 권장해요.","⚠ Too many rules dull the judging — consider merging/removing."); rl9.appendChild(rw9); } // §3-3 성장 억제(서고 25항 기준)
           e9.rules.forEach(function(r){

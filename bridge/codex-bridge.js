@@ -3171,8 +3171,8 @@ function budgetNoticeLines(res, lang, profile) {
       ? `\n[verify round cap ${res.n}/${res.budget}] This was the last reserved round. Re-judge its findings into accepted-and-handled, evidence-backed rebuttal, receipt-backed parking, or genuine user decision. Ask one combined question only for the last lane; otherwise close triage without inventing options. This is never a verification pass.\n`
       : `\n[검증 왕복 상한 ${res.n}/${res.budget}] 마지막 예약 왕복입니다. 이 판정의 지적을 수용·처리, 근거 있는 반박, 영수증 있는 보관함, 진짜 사용자 결정으로 나누세요. 마지막 갈래가 있을 때만 한 번에 묻고, 없으면 선택지를 만들지 말고 정리하세요. 어느 쪽도 검증 통과는 아닙니다.\n`;
     if (res.last) s += en
-      ? "\n[cap closeout format] If this final verdict is not pass, one response must contain: [Verification cap closeout] [Accepted and handled] [Rebutted and closed] [Parked] [User decision required] [Alert meaning] [Recommendation]. Each latest finding belongs to exactly one of the first four sections.\n"
-      : "\n[상한 마감 형식] 이 마지막 판정이 통과가 아니라면 한 응답에 다음 제목을 모두 넣으세요: [검증 상한 인계] [수용·처리] [반박·종결] [보관함 이관] [사용자 판단 필요] [경고등 의미] [권장]. 마지막 지적마다 앞 네 절 중 정확히 한 곳만 배정합니다.\n";
+      ? "\n[cap closeout format] If this final verdict is not pass, one response must contain: [Verification cap closeout] [Accepted and handled] [Rebutted and closed] [Parked] [User decision required] [Residual risk call] [Alert meaning] [Recommendation]. Each latest finding belongs to exactly one of the first four sections; the residual risk call starts with Verify now / Next campaign / Ignorable.\n"
+      : "\n[상한 마감 형식] 이 마지막 판정이 통과가 아니라면 한 응답에 다음 제목을 모두 넣으세요: [검증 상한 인계] [수용·처리] [반박·종결] [보관함 이관] [사용자 판단 필요] [잔여 위험 판단] [경고등 의미] [권장]. 마지막 지적마다 앞 네 절 중 정확히 한 곳만 배정하고, 잔여 위험 판단은 즉시 재검증/다음 캠페인 도장/무시 가능 셋 중 하나로 시작합니다.\n";
     return s;
   }
   const why = String(res.untracked || "unknown");

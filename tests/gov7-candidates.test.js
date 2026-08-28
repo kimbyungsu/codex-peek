@@ -407,13 +407,12 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   ok(ext.includes('m?.type === "envelopeRevise"') && /wsKeyFor\(wsR9\)\) !== m\.wsKey/.test(ext) && ext.includes("(m.gen || null) !== (genNow9 || null)") && ext.includes("draftEnvelopeRevision"), "개정판 핸들러=strict 인자+wsKey·gen 재대조+빌더 호출");
   // [재편 B] 작업대(올림·빼기 표시+초안 만들기) 폐지 → 수칙 목록(줄마다 1클릭 빼기·행 지문 결속)+직접 추가 안내
   ok(ext.includes('T("수칙 "+e9.rules.length+"개"') && ext.includes('T("빼기","Remove")') && ext.includes("itemFp:r.itemFp") && ext.includes("expectedTargetHash:String(r.targetHash||"), "수칙 목록=수칙 N개(기계 분류 비노출)+1클릭 빼기(행 지문·대상 판 결속)");
-  // [넣기 입력칸 2026-08-28] 입력칸+[넣기]=ruleAdd → directRuleCandidate → 서고행 변경안 → 같은 승인 창(취소=자동 정리)
-  ok(ext.includes('vscode.postMessage({type:"ruleAdd", text:v, repo:String(e9.repo||""), gen:String(e9.gen||""), wsKey:String(e9.wsKey||""), lang:e9.lang})') && ext.includes('adIn9.setAttribute("data-rule-add","1")'), "입력칸+[넣기]가 ruleAdd를 세대·프로젝트 키·렌더 당시 repo 결속으로 전송");
-  ok(ext.includes('typeof m.repo === "string" && m.repo && typeof m.gen === "string"') && ext.includes("if (normWs(scoutTargetFor(wsA0).repo) !== normWs(m.repo))"), "[ab-1] ruleAdd 핸들러=렌더 당시 대상과 클릭 시점 대상 재대조");
-  ok(ext.includes('if (m?.type === "ruleAdd" && typeof m.text === "string"') && ext.includes("CLA0.directRuleCandidate(wsA0, repoA0, { text: m.text, approvedHash: genA0 })") && ext.includes('draftEnvelopeRevision(wsA0, repoA0, { addCandidateIds: [r0.candidateId], removeItems: [], approvedHash: genA0, target: "archive" })') && ext.includes("this.runProposalApprove(repoA0, m.lang, true)"), "ruleAdd 핸들러=wsKey/세대 재대조→후보 기록→서고행 변경안→1클릭 승인 창(취소=복원형 폐기)");
+  // [2026-08-29 사용자 결정] 넣기 입력칸·ruleAdd 제거 — 수칙 제안은 대화 약속 포착+마감 상신 두 경로뿐(사용자=승인/안 올림/빼기)
+  ok(!ext.includes('type:"ruleAdd"') && !ext.includes('m?.type === "ruleAdd"') && !ext.includes('data-rule-add') && !ext.includes("CLA0.directRuleCandidate("), "입력칸·ruleAdd 핸들러 소멸(수동 입력칸이 자동 체계에 섞이는 혼란 제거)");
+  ok(!ext.includes("이번 캠페인 심사: 인정") && !ext.includes('T("기계 강등","demoted")'), "'강등' 기계 용어 비노출(수칙 카드 통계 줄 제거·통계 칩은 '범위 밖이라 메모로 낮춤')");
   ok(!ext.includes('tag.textContent=(r.tag==="always"') && !ext.includes("새 수칙을 넣고 싶으면 대화에서 말씀해 주세요"), "행 태그(항상/관련·축)·채팅 유도 안내 소멸(사용자에겐 수칙과 넣기·빼기만)");
   ok(ext.includes('m.kind === "user-direct") && m.status === "adopted"') && ext.includes('cd.kind==="user-direct"?T('), "user-direct kind가 채택 분기·제안 문구에 편입");
-  ok(ext.includes("...({ rules: rules9 })") && ext.includes("if(e9.rules && e9.proposal===undefined){") && ext.includes("직접 넣다가 취소한 문안이 여기 옵니다"), "[검증 blocker] 수칙 0개에도 rules 필드·입력칸 유지+제안함 안내에 취소분 명시");
+  ok(ext.includes("...({ rules: rules9 })") && ext.includes("if(e9.rules && e9.proposal===undefined){") && ext.includes("대화에서 하신 약속을 시스템이 포착한 것과"), "수칙 0개에도 rules 필드·목록 틀 유지+제안함 안내=포착·상신 두 경로(2026-08-29 입력칸 제거 반영)");
   // [실보고 2026-08-28] 접힘 상태 기억(재렌더가 2초 만에 접던 결함)·승인 대기 라벨·legacy 문구 정직화
   ok(ext.includes("rl9.open=rulesOpenWeb; rl9.addEventListener(\"toggle\"") && ext.includes("sg9.open=signalsOpenWeb; sg9.addEventListener(\"toggle\""), "수칙 목록·참고 신호 접힘 상태를 재렌더 너머로 기억");
   ok(ext.includes("승인 대기 — 위 카드에서 승인하거나 취소하세요") && !ext.includes("처리 중(위 초안)") && !ext.includes("승인하면 앞으로 항상 차단해요"), "adopted 라벨=승인 대기(위 카드 안내)·'처리 중'·'승인하면 항상 차단' 문구 소멸");
