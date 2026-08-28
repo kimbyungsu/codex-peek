@@ -64,12 +64,14 @@ console.log("[3] 소진 보고 후보 재료 — 집계·스킵·0건 명시·�
   const idOos = CL.envelopeCandidateId("oos-repeat", "oos-2");
   const idEsc = CL.envelopeCandidateId("escalation", "f-esc");
   const idLin = CL.envelopeCandidateId("lineage", "f-aaa");
-  ok(notice.includes(idEsc) && notice.includes(idLin), "escalation·계보 반복 후보 포함(결정론 id 표기)");
-  ok(!notice.includes(idOos), "declined 기록된 oos-2 후보=이 세대에서 스킵([1]에서 declined 기록)");
-  ok(notice.includes("스킵"), "스킵 수 명시(침묵 제외 금지)");
-  ok(!notice.includes(CL.envelopeCandidateId("lineage", "f-bbb")), "보완 effectiveTag 재등장=blocker 계보로 오집계 안 함(§7 effectiveTag 계약)");
+  { const cc3 = CB.computeEnvelopeCandidatesFor(ws); const sid3 = (cc3.signals || []).map((s) => s.candidateId);
+    ok(sid3.includes(idEsc) && sid3.includes(idLin), "[재편 B] escalation·계보 반복=참고 신호(signals)로 산출(권위 후보 아님)");
+    ok(sid3.includes(idOos), "★처분 필터 비적용 — 과거 declined된 합성 신호도 참고로 계속 표시(참고는 처분 상태가 없음)");
+    ok(!(cc3.live || []).some((c) => [idEsc, idLin, idOos].includes(c.candidateId)), "합성은 live(권위 후보)에 미합류(구조 분리)"); }
+  ok(notice.includes("참고 신호"), "소진 보고=참고 신호 병기(판단 의무 아님 표기)");
+  ok(!(CB.computeEnvelopeCandidatesFor(ws).signals || []).some((s) => s.candidateId === CL.envelopeCandidateId("lineage", "f-bbb")), "보완 effectiveTag 재등장=blocker 계보로 오집계 안 함(§7 effectiveTag 계약)");
   ok(!notice.includes("딴캠페인"), "다른 캠페인 기록은 미집계(캠페인 축)");
-  ok(notice.includes("[의무]") && notice.includes("§8") && notice.includes("문안 초안") && notice.includes("envelope-candidate mark"), "작성 의무 문구(§8 계약·문안 초안·결과 기록 명령)");
+  ok(notice.includes("후보가 없습니다"), "장부 후보 0=0건 명시(합성은 의무 대상 아님 — 재편 B: 의무 문구는 장부 후보 있을 때만)");
   ok(CB.envelopeCandidateNoticeFor(ws, "ko", { tracked: true, last: false, n: 1, budget: 3 }) === "", "비소진=0바이트(무회귀)");
   ok(CB.envelopeCandidateNoticeFor(ws, "ko", null) === "", "res 부재=0바이트");
   // 전 후보 스킵 반례 → 0건 명시 문구
@@ -78,7 +80,7 @@ console.log("[3] 소진 보고 후보 재료 — 집계·스킵·0건 명시·�
     { candidateId: idLin, envelopeHash: GEN, status: "declined", ts: "T5" },
   ]);
   const n2 = CB.envelopeCandidateNoticeFor(ws, "ko", { tracked: true, last: true, n: 3, budget: 3 });
-  ok(n2.includes("후보가 없습니다") && n2.includes("3건 스킵"), "전 후보 스킵=0건 명시+스킵 수(침묵 생략 금지)");
+  ok(n2.includes("후보가 없습니다") && n2.includes("참고 신호"), "[재편 B] 합성 처분 기록이 있어도 참고 신호는 계속 표시(장부 개입 소멸·0건 명시 유지)");
 }
 
 console.log("[4] CLI — list·mark 실행(설치본 동형 소스 직접 호출은 스위치 계약으로)");
@@ -86,6 +88,18 @@ console.log("[4] CLI — list·mark 실행(설치본 동형 소스 직접 호출
   const src = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
   ok(src.includes('case "envelope-candidate":') && src.includes("function cmdEnvelopeCandidate(rest)"), "CLI 스위치·명령 함수 존재");
   ok(src.includes('ENVELOPE_CANDIDATE_STATUSES.includes(status)') && src.includes("/^[0-9a-f]{16}$/.test(id)"), "mark 인자 strict(16hex id·닫힌 status 열거)");
+}
+
+console.log("[4b] [재편 B §3-1b] mark 실행 반례 — 합성(장부 밖) id의 adopted|declined 기록 거부");
+{
+  const { spawnSync } = require("child_process");
+  const fakeId = "ab12cd34ef56ab12"; // 장부에 없는 16hex(합성 신호와 동형 조건)
+  const r = spawnSync(process.execPath, [path.join(ROOT, "bridge", "codex-bridge.js"), "envelope-candidate", "mark", fakeId, "declined"], { encoding: "utf8", env: { ...process.env, CODEX_BRIDGE_HOME: process.env.CODEX_BRIDGE_HOME }, cwd: ws });
+  ok(r.status === 2 && /참고 신호|reference signal/.test((r.stderr || "") + (r.stdout || "")), "장부 밖 id의 declined=거부+rule-propose 안내(exit 2): " + r.status);
+  // [1차 blocker④ 반례] 과거 합성 처분 행(kind 무기록)이 있어도 우회 불가 — 판정 기준은 draftable kind
+  const pastId = CL.envelopeCandidateId("oos-repeat", "oos-2"); // [1]에서 proposed→declined 행이 이미 존재
+  const r2 = spawnSync(process.execPath, [path.join(ROOT, "bridge", "codex-bridge.js"), "envelope-candidate", "mark", pastId, "declined"], { encoding: "utf8", env: { ...process.env, CODEX_BRIDGE_HOME: process.env.CODEX_BRIDGE_HOME }, cwd: ws });
+  ok(r2.status === 2 && /참고 신호|reference signal/.test((r2.stderr || "") + (r2.stdout || "")), "★과거 처분 행 존재해도 kind 무기록=거부(존재 검사 우회 봉합): " + r2.status);
 }
 
 console.log("[5] 출력부 병기 — 두 경로(내구 회수·직결) 모두");
@@ -115,8 +129,7 @@ console.log("[6] 실경로 반례(재검증 blocker①②) — machineFindingsLa
   const occ2 = led2.filter((r) => r.type === "occurrence" && r.findingId === rootId);
   ok(occ2.length === 1 && occ2[0].round === 2 && occ2[0].prevId === rootId, "prevId만 인용해도 계보 뿌리로 occurrence 기록+같은 라운드 중복=1건(blocker①② 기록 측)");
   ok(led2.some((r) => r.type === "finding" && r.prevId === rootId), "신규 finding 레코드에 prevId 저장(계보 사슬 보존)");
-  const nAfterR2 = CB.envelopeCandidateNoticeFor(ws2, "ko", { tracked: true, last: true, n: 9, budget: 9 });
-  ok(!nAfterR2.includes(CL.envelopeCandidateId("lineage", rootId)), "고유 라운드 2회(원 등장 포함)뿐이면 아직 후보 아님(중복 제출 조기 후보 차단 — 집계 측)");
+  ok(!(CB.computeEnvelopeCandidatesFor(ws2).signals || []).some((s) => s.candidateId === CL.envelopeCandidateId("lineage", rootId)), "고유 라운드 2회(원 등장 포함)뿐이면 아직 신호 아님(중복 제출 조기 신호 차단 — 집계 측)");
   // R3: 실제 사슬(재재검증 f-2344e4d8) — '직전 자식' id를 prevId로 인용(root→child→grandchild)해도 뿌리로 수렴해야 함
   const childId = (led2.find((r) => r.type === "finding" && r.prevId === rootId) || {}).findingId;
   ok(!!childId && childId !== rootId, "(전제) R2 자식 finding id 확보(사슬 중간 고리)");
@@ -135,8 +148,8 @@ console.log("[6] 실경로 반례(재검증 blocker①②) — machineFindingsLa
   withAsk3("ask-g2", () => CB.machineFindingsLayer(block([{ tag: "blocker", title: "고아 재등장", origin: "incomplete-fix", supported: true, id: gRoot }], "실패"), ws3, "ko", "core", "claude-codex", "ask-g2"));
   const gOcc = CL.readFindingsLedger(ws3).filter((r) => r.type === "occurrence");
   ok(gOcc.length === 1 && gOcc[0].findingId === gRoot && !gOcc.some((r) => r.findingId === "f-deadbeef"), "실존하지 않는 prevId로는 전진 안 함 — occurrence가 실존 finding에 귀속(제목 없는 유령 후보 차단)");
-  const nAfterR3 = CB.envelopeCandidateNoticeFor(ws2, "ko", { tracked: true, last: true, n: 9, budget: 9 });
-  ok(nAfterR3.includes(CL.envelopeCandidateId("lineage", rootId)) && nAfterR3.includes("×3"), "고유 라운드 3회=계보 후보 생성(실경로 — prevId 사슬이 뿌리 기준으로 수렴)");
+  { const sg6 = (CB.computeEnvelopeCandidatesFor(ws2).signals || []).find((s) => s.candidateId === CL.envelopeCandidateId("lineage", rootId));
+    ok(!!sg6 && sg6.n === 3, "고유 라운드 3회=계보 신호 생성(실경로 — prevId 사슬이 뿌리 기준으로 수렴·재편 B: signals)"); }
 }
 
 console.log("[7] CLI 종료 코드(재검증 보완) — 오류가 0으로 위장 금지");
@@ -299,10 +312,10 @@ console.log("[11] §7 증분 3 — 해소 계보 제외·빼기 후보·항목 �
     { type: "close", campaignId: CAMP, findingId: "f-esc2", closeReason: "resolved", round: 4, envelopeHash: GEN, ts: "T" },
   ]);
   const cc = CB.computeEnvelopeCandidatesFor(wsR);
-  const ids = cc.live.map((c) => c.candidateId);
-  ok(ids.includes(CL.envelopeCandidateId("lineage", "f-live")), "미해결 반복=후보 유지");
-  ok(!ids.includes(CL.envelopeCandidateId("lineage", "f-done")), "해소된 반복 계보=후보 제외(실전 첫 발동의 교훈 — '이미 지키는 약속'은 후보 아님)");
-  ok(!ids.includes(CL.envelopeCandidateId("escalation", "f-esc2")), "해소된 승격 확장=후보 제외");
+  const ids = (cc.signals || []).map((c) => c.candidateId);
+  ok(ids.includes(CL.envelopeCandidateId("lineage", "f-live")), "미해결 반복=신호 유지(재편 B: signals)");
+  ok(!ids.includes(CL.envelopeCandidateId("lineage", "f-done")), "해소된 반복 계보=신호 제외(실전 첫 발동의 교훈 — '이미 지키는 약속'은 신호 아님)");
+  ok(!ids.includes(CL.envelopeCandidateId("escalation", "f-esc2")), "해소된 승격 확장=신호 제외");
   ok(before.live !== undefined && typeof before.skipped === "number", "분리 집계 함수=소진 보고와 공유 산출(live·skipped)");
   ok(before.overCap === false, "소형 수칙서=임계 미달(overCap=false)");
   { // 미사용만으로 사용자 선택을 만들지 않음: 3항목은 그대로 보존, 30항목에 닿았을 때만 정리 후보
@@ -318,9 +331,9 @@ console.log("[11] §7 증분 3 — 해소 계보 제외·빼기 후보·항목 �
       return w;
     };
     const small = CB.computeEnvelopeCandidatesFor(mkCandidateWs(1));
-    ok(!small.overCap && !small.live.some((c)=>c.kind === "unused-oos"), "30항목 미만=미사용 제외 규칙을 판단 후보로 올리지 않음");
+    ok(!small.overCap && !(small.signals || []).some((c)=>c.kind === "unused-oos"), "30항목 미만=미사용 제외 신호 없음");
     const large = CB.computeEnvelopeCandidatesFor(mkCandidateWs(10));
-    ok(large.overCap && large.live.filter((c)=>c.kind === "unused-oos").length === 10, "30항목 도달=미사용 제외 규칙만 정리 후보로 제시");
+    ok(large.overCap && (large.signals || []).filter((c)=>c.kind === "unused-oos").length === 10, "30항목 도달=미사용 제외를 참고 신호로 제시(재편 B: 처분·버튼 없음, 빼기 참고 재료)");
   }
   // 재검증 blocker(세대 오귀속) 반례: 산출 세대(gen)가 반환에 결속되고, 소비자는 현 승인 해시와 일치할 때만 표시
   ok((CB.computeEnvelopeCandidatesFor(wsR).gen || null) === GEN, "집계 반환에 산출 세대(gen=동결 해시) 결속");
@@ -338,13 +351,13 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
   // [기억 권위 A-4 2026-08-14] 해소 blocker 채택=병합 초안 생성 — '기록만' 문구 계약을 '도장 전 무효력' 계약으로 개정.
   // [UX 개편 2026-08-20 사용자 실보고] 헤더 문구를 쉬운 말+건수 표기로 재개정(도장 전 무효력 문구는 유지가 계약).
-  ok(ext.includes("computeEnvelopeCandidatesFor(ws)") && ext.includes("수칙서 후보 — 사람 판단 대기 ") && ext.includes("어느 쪽도 도장 전에는 효력 없음"), "후보 목록=소진 보고와 같은 집계 공유+도장 전 무효력 명시(§8·기억 권위 A-4·UX 개편)");
+  ok(ext.includes("computeEnvelopeCandidatesFor(ws)") && ext.includes('T("제안 — "+e9.cands.length+"건 (승인해야만 효력이 생겨요)"'), "[재편 B] 제안함=같은 집계 공유+승인 전 무효력 명시(어휘: 제안)");
   // UX 개편 핀: 상황 설명 조립(구조 데이터)·쉬운 버튼 라벨·원문 보조 보존·개요 벨(합산+gotoEl 딥링크)·MAP 할일/실적 분리
-  ok(ext.includes('T("올림 표시"') && ext.includes('T("이번엔 안 올림"') && ext.includes('T("원문: "'), "후보 줄=쉬운 버튼 라벨+원문 보조 보존(요약 작문 금지) — 개정 작업대(2026-08-22)로 즉시 단건 초안→올림 표시 토글 개정");
+  ok(ext.includes('T("승인","Approve")') && ext.includes('T("안 올림","Not this one")') && ext.includes('T("문안: ","text: ")'), "[재편 B] 제안 줄=승인/안 올림 2버튼+문안 보조 보존(요약 작문 금지·올림 표시 토글 폐지)");
   ok(ext.includes('data-cands-box') && /ec0\) acts9\.push\(\{n:ec0, tab:"setup", el:"\[data-cands-box\]"/.test(ext), "개요 '지금 정할 것'에 후보 대기 편입+정확 위치 딥링크(초인종)");
   // R1 blocker①(2026-08-20): 장부 유래 후보의 대기 상태='proposed' — 빈 상태와 함께 '미판단'으로 취급해야
   // 버튼·벨이 산다(빈 상태만 세면 resolved-blocker 후보 전체가 버튼 없이 [proposed] 라벨로만 렌더되는 오작동).
-  ok(ext.includes('var undecided9=!cd.status||cd.status==="proposed";') && /if\(undecided9 && !viewOnly9\)\{[\s\S]{0,80}if\(cd\.kind/.test(ext) /* 작업대 개정(2026-08-22)으로 블록 개행 */, "proposed=판단 대기 — 버튼 렌더 조건");
+  ok(ext.includes('var undecided9=!cd.status||cd.status==="proposed";') && /if\(undecided9 && !viewOnly9\)\{[\s\S]{0,500}approve: true/.test(ext), "proposed=판단 대기 — [승인] 1클릭 버튼 렌더 조건(재편 B)");
   ok(ext.includes('return !c9.status||c9.status==="proposed";'), "proposed=판단 대기 — 개요 벨 계수 조건");
   ok(/if\(a9\.el\)\{ var t0=document\.querySelector\(a9\.el\); if\(t0\)\{ if\(t0\.tagName==="DETAILS"\) t0\.open=true; gotoEl\(t0\); return; \} \}/.test(ext), "교차 패널 이동=gotoEl 경유(규칙)+접힌 상자 펼침+대상 부재 시 탭 폴백");
   // 2026-08-20 사용자 실보고 3건: 보관함 두 줄의 오착지·더보기 재렌더 접힘
@@ -371,7 +384,7 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   // 2026-08-22(2) 승인 지문 언어 공유: 직접 승인 도장=양 슬롯·대시보드 자기치유(반대 슬롯 지문=현행 파일 sha 일치 시 표기 정렬)
   // [부품 C 2026-08-23] draftable kinds 공통 표면 — 채택 분기·올림 토글·kind 문구·why 보조줄·mark 가드·소진 안내
   ok(ext.includes('(m.kind === "resolved-blocker" || m.kind === "user-constraint" || m.kind === "rule-manual") && m.status === "adopted"'), "candMark 채택=draftable kinds 공통(초안 생성 결속 — 재편 A: rule-manual 편입)");
-  ok(ext.includes('cd.kind==="resolved-blocker"||cd.kind==="user-constraint"') && ext.includes("대화에서 직접 말씀하신 약속이에요") && ext.includes('T("근거: ","reason: ")+cd.why'), "UI: user-constraint 문구+올림 토글 공통+근거 보조줄(textContent)");
+  ok(ext.includes("대화에서 직접 말씀하신 약속이에요") && ext.includes('T("왜: ","why: ")+cd.why'), "UI: user-constraint 문구+왜 보조줄(textContent — 재편 B 어휘)");
   const cb7 = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
   ok(cb7.includes("ENVELOPE_DRAFTABLE_KINDS.includes(k5)"), "계산기 ⑤ 합류 allowlist=draftable kinds 단일 정본");
   ok(cb7.includes("envelopeMarkGuard(ws, id, status)") && cb7.includes("envelope-candidate draft"), "mark 우회 가드 배선+draft 안내(§3-3b)");
@@ -391,7 +404,15 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   ok(/const lkP = acquireEnvelopeTransLock\(ws\);/.test(cb21) && /finally \{ releaseEnvelopeTransLock\(ws, lkP\.token\); \}/.test(cb21), "수동 envelope-proposal propose=전이 잠금 아래(우회 writer 0)");
   // [개정 작업대 2026-08-22] 올림 N+빼기 M→개정판 초안 1개→도장 1번
   ok(ext.includes('m?.type === "envelopeRevise"') && /wsKeyFor\(wsR9\)\) !== m\.wsKey/.test(ext) && ext.includes("(m.gen || null) !== (genNow9 || null)") && ext.includes("draftEnvelopeRevision"), "개정판 핸들러=strict 인자+wsKey·gen 재대조+빌더 호출");
-  ok(ext.includes('T("빼기 표시"') && ext.includes('초안 만들기 — 서고에 "+n+"건 올리기') && ext.includes("wbAdds") && ext.includes("wbRemoves") && ext.includes("wbGen"), "작업대 UI=빼기 토글·행동형 버튼 문구(4d: 목적지 자동)·선택 상태 세대 결속(재렌더 생존)");
+  // [재편 B] 작업대(올림·빼기 표시+초안 만들기) 폐지 → 수칙 목록(줄마다 1클릭 빼기·행 지문 결속)+직접 추가 안내
+  ok(ext.includes('T("수칙 목록 — 항상 "') && ext.includes('T("빼기","Remove")') && ext.includes("itemFp:r.itemFp") && ext.includes("expectedTargetHash:String(r.targetHash||") && ext.includes('T("직접 추가","Add my own")'), "수칙 목록=통합 표시+1클릭 빼기(행 지문·대상 판 결속)+직접 추가=채팅 유도");
+  ok(!ext.includes('T("빼기 표시"') && !ext.includes('T("올림 표시"') && !ext.includes("현행 수칙서 항목 — 빼거나"), "구 작업대 어휘 정상 흐름 소멸(빼기 표시·올림 표시·현행 수칙서 항목)");
+  ok(ext.includes('T("반복 신호 "+e9.signals.length+"건 — 참고(처리할 일 아님)"'), "반복 신호=참고 접힘 줄(버튼 없음)");
+  // [재편 B 2차 blocker②③] 정상 흐름 어휘 잔존 0·ride=영수증 실측치만
+  ok(!ext.includes("검증 판정 경계로 주입돼요") && ext.includes("승인 1번으로 적용돼요") && ext.includes("항상 적용되는 수칙 ${n9[0] + n9[1] + n9[2]}개"), "활성 카드·제안 안내 어휘=수칙·승인(검증 경계·재승인·도장 소멸)");
+  ok(ext.includes("관련 수칙 ${r.selectedIds.length}개가 함께 실렸어요(영수증 실측)") && !ext.includes("그때 관련분 ${r.selectedIds.length}"), "ride=영수증 실측치만(현재 코어 개수 혼합 금지)");
+  ok(ext.includes("String(prA.draftId || prA.newHash)") && ext.includes("String(prD0.draftId || prD0.newHash || \"\")"), "취소·폐기 결속 토큰=draftId(legacy=newHash)");
+  ok(/approve === true.*runProposalApprove|runProposalApprove\(scoutTargetFor\(wsM\)\.repo, m\.lang, true\)/.test(ext) && ext.includes("runProposalApprove(repoR9, m.lang, true)"), "1클릭 체인=승인·빼기 모두 같은 도장 모달 공유(취소=복원형 폐기)");
   const clWB = fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8");
   ok(clWB.includes("function draftEnvelopeRevision(") && /draftEnvelopeRevision[\s\S]{0,1600}acquireEnvelopeTransLock\(ws\)/.test(clWB), "개정판 빌더=전이 잠금 아래(writer 직렬화 계약 합류 — 4a 목적지 분기로 머리 확장·잠금 계약 무변)");
   ok(ext.includes("자동으로 끝난 일(참고 — 하실 일 아님)") && ext.includes("지금 여기서 하실 일은 없습니다"), "MAP 구획=할 일/끝난 일 시각 분리(실적을 대기로 오독하는 흐름 봉합)");

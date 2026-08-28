@@ -2753,6 +2753,20 @@ function cmdEnvelopeCandidate(rest) {
       console.error(en ? "usage: envelope-candidate mark <16hex-id> <proposed|adopted|declined|failed> [--note ...]" : "사용: envelope-candidate mark <16자리 id> <proposed|adopted|declined|failed> [--note ...]");
       return 2;
     }
+    // [재편 B §3-1b · f-3144cbc9] 합성 신호(장부에 없는 조회 시 계산물)는 처분 대상이 아니다 — 참고 표시
+    // 전용이라 adopted|declined 기록 경로를 차단(과거처럼 기록만 남기는 장부 개입 소멸). 장부 실존 후보만 mark.
+    if (status === "adopted" || status === "declined") {
+      // [1차 blocker④ 재봉합] '존재' 검사는 과거 합성 처분 행으로 우회된다 — 판정 기준은 kind: draftable
+      // kind가 기록된 장부 후보만 처분 대상(합성·kind 무기록 잔재=거부, 과거 처분 행은 판독 무시라 자연 무효).
+      let inLedger9 = false;
+      try { for (const r of readEnvelopeCandidates(ws).rows) if (r && r.candidateId === id && ENVELOPE_DRAFTABLE_KINDS.includes(r.kind)) { inLedger9 = true; break; } } catch { inLedger9 = false; }
+      if (!inLedger9) {
+        console.error(en
+          ? "this id is a computed reference signal (not a ledger candidate) — signals take no disposition. To promote a lesson to a rule, use `rule-propose <findingId> --why \"...\"` at campaign closing."
+          : "이 id는 조회 시 계산되는 참고 신호라 처분 대상이 아니에요(장부 후보 아님). 지침으로 올리려면 마감 때 `rule-propose <findingId> --why \"...\"`를 쓰세요.");
+        return 2;
+      }
+    }
     // [부품 C §3-3b] draftable kind의 직접 adopted 기록=초안 미결속 고아 생성 경로 — 거부+draft 안내(declined/failed는 허용)
     const g9 = envelopeMarkGuard(ws, id, status);
     if (!g9.ok) {
@@ -3211,6 +3225,9 @@ function computeEnvelopeCandidatesFor(ws) {
   const openIds9 = new Set();
   try { for (const o of openFindingsFor(ws, camp, gen)) openIds9.add(o.id); } catch { /* 판독 실패=제외 없이 전체(보수) */ }
   const cands = [];
+  // [재편 B §3-1b] 합성 신호(반복·기계 집계)는 권위 후보와 구조 분리 — 장부 처분·초안·판단 의무 밖의
+  // 참고 표시 전용(f-3144cbc9). 아래 ①~④는 signals로만 산출된다.
+  const signals = [];
   // 빼기 후보는 수칙서가 실제 정리 임계(30항목)에 닿았을 때만 의미가 있다. 작은 수칙서에서 단지
   // "아직 발동 안 됨"만으로 전 항목을 사용자 판단으로 올리면 사용하지 않은 소화기를 버리자고 매번 묻는 셈이다.
   let overCap = false, envForCleanup = null;
@@ -3224,24 +3241,24 @@ function computeEnvelopeCandidatesFor(ws) {
   { // ① oos 강등 반복(강등=닫힘이 정상이라 open 조건 비적용 — 반복 자체가 신호)
     const byOos = new Map();
     for (const r of rows) if (r.type === "finding" && r.demoted && r.oosId) { const a = byOos.get(r.oosId) || []; a.push(r); byOos.set(r.oosId, a); }
-    for (const [oosId, list] of byOos) if (list.length >= 2) cands.push({ candidateId: envelopeCandidateId("oos-repeat", oosId), kind: "oos-repeat", key: oosId, n: list.length, titles: list.map((x) => titleOf.get(x.findingId) || x.titleNorm || "").filter(Boolean).slice(0, 3) });
+    for (const [oosId, list] of byOos) if (list.length >= 2) signals.push({ candidateId: envelopeCandidateId("oos-repeat", oosId), kind: "oos-repeat", key: oosId, n: list.length, titles: list.map((x) => titleOf.get(x.findingId) || x.titleNorm || "").filter(Boolean).slice(0, 3) });
   }
   { // ② 입장 심사 승격 범위확장(기계 승격 — 사용자 승인 아님·§2 승인과 구분)·해소됐으면 제외
-    for (const r of rows) if (r.type === "escalation" && r.findingId && openIds9.has(r.findingId)) cands.push({ candidateId: envelopeCandidateId("escalation", r.findingId), kind: "escalation", key: r.findingId, n: 1, titles: [titleOf.get(r.findingId) || ""].filter(Boolean) });
+    for (const r of rows) if (r.type === "escalation" && r.findingId && openIds9.has(r.findingId)) signals.push({ candidateId: envelopeCandidateId("escalation", r.findingId), kind: "escalation", key: r.findingId, n: 1, titles: [titleOf.get(r.findingId) || ""].filter(Boolean) });
   }
   { // ③ 같은 계보 반복(occurrence — 원 등장 포함 3회+)·effectiveTag가 blocker인 재등장만·**고유 라운드 수**로
     // 집계(재검증 blocker② — 같은 라운드 중복 레코드를 별도 반복으로 세는 조기 후보 차단·기록 측 억제와 이중 방어)·
     // 해소된(open 아님) 계보=제외(증분 3).
     const byF = new Map();
     for (const r of rows) if (r.type === "occurrence" && r.findingId && r.effectiveTag === "blocker") { const st9 = byF.get(r.findingId) || new Set(); st9.add(r.round); byF.set(r.findingId, st9); }
-    for (const [fid, st9] of byF) if (st9.size >= 2 && openIds9.has(fid)) cands.push({ candidateId: envelopeCandidateId("lineage", fid), kind: "lineage", key: fid, n: st9.size + 1, titles: [titleOf.get(fid) || ""].filter(Boolean) });
+    for (const [fid, st9] of byF) if (st9.size >= 2 && openIds9.has(fid)) signals.push({ candidateId: envelopeCandidateId("lineage", fid), kind: "lineage", key: fid, n: st9.size + 1, titles: [titleOf.get(fid) || ""].filter(Boolean) });
   }
   if (overCap && envForCleanup) { // ④ 빼기 후보(§7 성장 억제 — 30항목 이상일 때만, 현 승인 세대 '전체'에서 한 번도 발동 안 한 범위-밖 항목): 세대 전 캠페인의
     // finding에서 oosId 인용이 0회인 oos-N=빼기/병합 검토 재료. 항상-차단(ab)은 발동 데이터가 심사 면제 축이라
     // 미인용=미발동으로 단정할 수 없어 제외(정직 한정 — 캐논 재료로만).
     try {
       const usedOos = new Set(readFindingsLedger(ws).filter((r) => r.type === "finding" && (r.envelopeHash || null) === (gen || null) && r.oosId).map((r) => r.oosId));
-      envForCleanup.data.outOfScope.forEach((txt, i) => { const id9 = "oos-" + (i + 1); if (!usedOos.has(id9)) cands.push({ candidateId: envelopeCandidateId("unused-oos", id9 + "@" + envForCleanup.sha1), kind: "unused-oos", key: id9, n: 0, titles: [String(txt)] }); }); // 무절단(수칙서 항목은 승인 절삭 규칙상 이미 200자 유계)
+      envForCleanup.data.outOfScope.forEach((txt, i) => { const id9 = "oos-" + (i + 1); if (!usedOos.has(id9)) signals.push({ candidateId: envelopeCandidateId("unused-oos", id9 + "@" + envForCleanup.sha1), kind: "unused-oos", key: id9, n: 0, titles: [String(txt)] }); }); // 무절단(수칙서 항목은 승인 절삭 규칙상 이미 200자 유계)
     } catch { /* 원본 판독 실패=빼기 후보 생략(추가 후보는 유지) */ }
   }
   const { rows: candRows9, latest } = readEnvelopeCandidates(ws);
@@ -3269,14 +3286,16 @@ function computeEnvelopeCandidatesFor(ws) {
     if (cur && (cur.status === "declined" || cur.status === "failed")) { skipped++; return false; }
     return true;
   });
-  return { live, skipped, overCap, gen: gen || null }; // gen=산출 세대(동결) — 소비자(대시보드)는 이 값과 현 승인 해시의 일치를 결속해야 함(증분 3 재검증 blocker)
+  // [재편 B §3-1b] signals에는 장부 처분 필터를 적용하지 않는다 — 참고는 처분 상태가 없다(신호가 살아
+  // 있으면 표시·소멸하면 사라짐). 과거에 기록된 합성 처분 행은 판독에서 무시되어 자연 무효.
+  return { live, signals, skipped, overCap, gen: gen || null }; // gen=산출 세대(동결) — 소비자(대시보드)는 이 값과 현 승인 해시의 일치를 결속해야 함(증분 3 재검증 blocker)
 }
 function envelopeCandidateNoticeFor(ws, lang, res, profile = "core") {
   try {
     if (profile !== "core") return ""; // integrity 검증에는 core 전용 수칙서 후보·입장 심사 어휘를 붙이지 않는다.
     if (!res || !res.tracked || !res.last) return "";
     const en = lang === "en";
-    const { live, skipped, overCap } = computeEnvelopeCandidatesFor(ws);
+    const { live, signals, skipped, overCap } = computeEnvelopeCandidatesFor(ws);
     const kindLabel = (k) => en
       ? (k === "oos-repeat" ? "repeated out-of-scope demotions — reconsider defending this scenario" : k === "escalation" ? "admission-escalated scope expansion — consider formal adoption" : k === "unused-oos" ? "never triggered this approval generation — consider removing/merging" : k === "user-constraint" ? "a promise the user stated directly in chat (no verification lineage) — consider adopting into the rulebook" : k === "resolved-blocker" ? "a blocker caught and fixed in verification — consider an always-block entry" : "repeated blocker lineage — consider an always-block entry")
       : (k === "oos-repeat" ? "범위 밖 강등 반복 — 이 시나리오를 계속 치워둘지 재검토" : k === "escalation" ? "입장 심사 승격 확장 — 정식 편입 검토" : k === "unused-oos" ? "이 승인 세대에서 한 번도 발동 안 됨 — 빼기/병합 검토" : k === "user-constraint" ? "사용자가 대화에서 직접 말한 약속(검증 계보 아님) — 수칙서 편입 검토" : k === "resolved-blocker" ? "검증에서 잡혀 이미 고친 blocker — 항상 차단 명시 검토" : "같은 계보 blocker 반복 — 항상 차단 명시 검토"); // [주의 수용] user-constraint를 반복 blocker로 오표시하면 미검증 발화에 검증 계보가 있다고 오인시킴
@@ -3291,6 +3310,7 @@ function envelopeCandidateNoticeFor(ws, lang, res, profile = "core") {
         ? "[duty] Write a 'rulebook candidates' section in the exhaustion report from the material above, per the global presentation contract (§8): no jargon · a concrete situation example per candidate · what changes if adopted / what stays if not · one-line recommendation with grounds · include a draft clause the user can approve as-is. Selection is confirmed via chat reply (a dashboard click may only record a selection); adoption still requires the user's stamp. Record outcomes with: adoption via `envelope-candidate draft <id>` (draft-bound; direct mark adopted is refused for these kinds), decline/failure via `envelope-candidate mark <id> <declined|failed>`."
         : "[의무] 위 재료로 소진 보고에 '수칙서 후보' 절을 §8 전역 표현 계약대로 작성하라: 기술용어 금지 · 후보마다 상황예시 · 채택 시 달라지는 것/미채택 시 유지되는 것 · 권장+근거 1줄 · 사용자가 '이대로 올려'만 하면 되는 문안 초안 포함. 선택 확정=대화 응답(대시보드 클릭은 선택 기록까지만) · 채택돼도 효력은 사용자 도장부터. 결과 기록: 채택은 `envelope-candidate draft <id>`(초안 결속 — 이 후보들은 mark adopted 직접 기록이 거부됨)·안 올림/실패는 `envelope-candidate mark <id> <declined|failed>`.");
     }
+    if (signals && signals.length) L.push(en ? `> [reference signals - not decisions] ${signals.length} repetition signal(s): ` + signals.map((s) => s.kind + "×" + s.n).join(", ") + " (no ledger disposition - promote only via rule-propose at campaign closing)" : `> [참고 신호 — 판단 대상 아님] 반복 신호 ${signals.length}건: ` + signals.map((s) => s.kind + "×" + s.n).join(", ") + " (장부 처분 없음 — 지침 승격은 마감 rule-propose로만)");
     return L.join("\n") + "\n";
   } catch { return ""; } // 재료 산출 실패가 판정 전달을 막지 않음
 }

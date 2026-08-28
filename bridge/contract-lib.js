@@ -3770,7 +3770,7 @@ function readEnvelopeProposal(ws, repo) {
   // 후보 복원·adopted 조회용(항상 core envelopeHash). legacy(두 필드 부재)=기존 baseHash 의미(core 단일 겸용).
   const tb9 = typeof o.targetBaseHash === "string" ? o.targetBaseHash : (typeof o.baseHash === "string" ? o.baseHash : null);
   const cg9 = typeof o.candidateGeneration === "string" ? o.candidateGeneration : (typeof o.baseHash === "string" ? o.baseHash : null);
-  return { st: "ok", proposalText: o.proposalText, newHash: o.newHash, baseHash: typeof o.baseHash === "string" ? o.baseHash : null, target: tgt9.target, targetBaseHash: tb9, candidateGeneration: cg9, note: typeof o.note === "string" ? o.note.slice(0, 300) : "", ts: typeof o.ts === "string" ? o.ts : null, candidateId: typeof o.candidateId === "string" && /^[0-9a-f]{16}$/.test(o.candidateId) ? o.candidateId : null,
+  return { st: "ok", proposalText: o.proposalText, newHash: o.newHash, draftId: typeof o.draftId === "string" && o.draftId ? o.draftId : null, baseHash: typeof o.baseHash === "string" ? o.baseHash : null, target: tgt9.target, targetBaseHash: tb9, candidateGeneration: cg9, note: typeof o.note === "string" ? o.note.slice(0, 300) : "", ts: typeof o.ts === "string" ? o.ts : null, candidateId: typeof o.candidateId === "string" && /^[0-9a-f]{16}$/.test(o.candidateId) ? o.candidateId : null,
     candidateIds: Array.isArray(o.candidateIds) ? o.candidateIds.filter((x) => typeof x === "string" && /^[0-9a-f]{16}$/.test(x)).slice(0, ARCHIVE_ITEM_MAX) : [] }; // [4d blocker] 상한=서고 총용량(96) — 코어 12로 자르면 13번째부터 폐기 복원이 누락돼 adopted 고아화
 }
 function writeEnvelopeProposal(ws, repo, proposalText, note, meta) {
@@ -3786,7 +3786,8 @@ function writeEnvelopeProposal(ws, repo, proposalText, note, meta) {
   // 판단 대기로 복원할 수 있게(고아 봉합·Constraint-Capture 설계 §3 복원 규칙의 선행 구현분).
   const cid9 = meta && typeof meta.candidateId === "string" && /^[0-9a-f]{16}$/.test(meta.candidateId) ? meta.candidateId : null;
   const cids9 = meta && Array.isArray(meta.candidateIds) ? meta.candidateIds.filter((x) => typeof x === "string" && /^[0-9a-f]{16}$/.test(x)).slice(0, ARCHIVE_ITEM_MAX) : []; // 개정 작업대(2026-08-22) 다건 결속 — [4d blocker] 상한=서고 총용량(96): 코어 12로 자르면 13번째부터 폐기 복원 누락(adopted 고아)
-  const rec = { schema: "env-proposal-v1", repo: String(repo), proposalText: String(proposalText), newHash: sha1Of(String(proposalText)), baseHash, ...(tgt9.target === "archive" ? { target: "archive" } : {}), targetBaseHash: baseHash, ...(candidateGeneration ? { candidateGeneration } : {}), ...(note ? { note: String(note).slice(0, 300) } : {}), ...(cid9 ? { candidateId: cid9 } : {}), ...(cids9.length ? { candidateIds: cids9 } : {}), ts: new Date().toISOString() };
+  // [재편 B 2차 blocker①] draftId=이 wrapper의 신원(uuid) — newHash는 문안 지문뿐이라 같은 문안·다른 후보의 초안과 충돌.
+  const rec = { schema: "env-proposal-v1", repo: String(repo), draftId: crypto.randomUUID(), proposalText: String(proposalText), newHash: sha1Of(String(proposalText)), baseHash, ...(tgt9.target === "archive" ? { target: "archive" } : {}), targetBaseHash: baseHash, ...(candidateGeneration ? { candidateGeneration } : {}), ...(note ? { note: String(note).slice(0, 300) } : {}), ...(cid9 ? { candidateId: cid9 } : {}), ...(cids9.length ? { candidateIds: cids9 } : {}), ts: new Date().toISOString() };
   try { fs.mkdirSync(ENVELOPE_PROPOSED_DIR, { recursive: true }); } catch { /* atomicWrite가 실패 판정 */ }
   return atomicWrite(envelopeProposedFileFor(ws), JSON.stringify(rec, null, 1)) ? { ok: true, newHash: rec.newHash } : { ok: false, error: "제안본 기록 실패" };
 }
@@ -3794,21 +3795,32 @@ function discardEnvelopeProposal(ws) { try { fs.rmSync(envelopeProposedFileFor(w
 // 복원형 폐기(2026-08-21): 초안이 후보 채택에서 왔으면(candidateId 결속) 그 후보를 proposed로 되돌린 뒤
 // 파일을 지운다 — 폐기가 후보를 'adopted 고아'(재초안 불가)로 남기던 결함 봉합. 결속 없는 구형/수동 초안=
 // 기존 동작(복원 없음·보수). 반환 {ok, restored}.
-function discardEnvelopeProposalRestoring(ws) {
+function discardEnvelopeProposalRestoring(ws, expectedHash) {
   // R3 blocker(f-abbe97fd): 폐기(읽기→복원→삭제)를 승인 전이와 같은 잠금으로 직렬화 — 병행 draft가
   // 새 proposal을 쓴 직후 이 함수가 그 파일을 지우고 새 후보를 adopted 고아로 남기던 인터리빙 봉합.
   // 잠금 실패=아무것도 안 하고 실패 반환(fail-closed — 재시도가 안전).
   const lk9 = acquireEnvelopeTransLock(ws);
   if (!lk9.ok) return { ok: false, restored: false, reason: "lock" };
-  try { return discardRestoringLocked(ws); } finally { releaseEnvelopeTransLock(ws, lk9.token); }
+  try { return discardRestoringLocked(ws, expectedHash); } finally { releaseEnvelopeTransLock(ws, lk9.token); }
 }
-function discardRestoringLocked(ws) {
+function discardRestoringLocked(ws, expectedHash) {
   let restored = false;
-  try {
-    const pr = readEnvelopeProposal(ws);
-    // 다건 결속(개정 작업대 2026-08-22): candidateIds 전량+구형 단건 candidateId 합집합을 복원 대상으로.
-    const cids = pr && pr.st === "ok" ? [...new Set([...(pr.candidateIds || []), ...(pr.candidateId ? [pr.candidateId] : [])])] : [];
-    if (pr && pr.st === "ok" && cids.length) {
+  let pr = null;
+  try { pr = readEnvelopeProposal(ws); } catch { pr = null; }
+  // [재편 B 1차 blocker②] 폐기는 '내가 연 그 초안'에만 — 호출자가 본 지문(expectedHash)과 잠금 안 현재
+  // 초안이 다르면 무접촉 실패(모달이 떠 있는 사이 다른 창이 폐기·재작성한 새 초안을 오폐기하는 창 소멸).
+  if (typeof expectedHash === "string" && expectedHash) {
+    // 신원 토큰=draftId(wrapper uuid — 2차 blocker①: 같은 문안·다른 후보 초안 충돌 차단) · legacy 초안(draftId 부재)=newHash 폴백
+    const tok9 = pr && pr.st === "ok" ? String(pr.draftId || pr.newHash || "") : "";
+    if (!tok9 || tok9 !== expectedHash) return { ok: false, restored: false, reason: "draft-changed" };
+  }
+  // 다건 결속(개정 작업대 2026-08-22): candidateIds 전량+구형 단건 candidateId 합집합을 복원 대상으로.
+  const cids = pr && pr.st === "ok" ? [...new Set([...(pr.candidateIds || []), ...(pr.candidateId ? [pr.candidateId] : [])])] : [];
+  if (pr && pr.st === "ok" && cids.length) {
+    // [재편 B §3-4 · f-47c1c6bc] 원자 순서: 복원 기록이 '성공한 뒤에만' 초안을 삭제한다 — 복원 경로의
+    // 판독·기록 실패는 초안을 보존한 채 실패 반환(재시도 가능·adopted 고아 생성 금지). 손상/부재 초안
+    // (아래 분기 밖)은 결속을 알 수 없으므로 기존 계약대로 폐기 진행(복구 표면 담당).
+    try {
       const { rows, latest } = readEnvelopeCandidates(ws);
       const gen0 = String(pr.candidateGeneration || pr.baseHash || ""); // [v6 §1] 복원 조회=후보 장부 축(core 세대) — archive 초안도 후보는 core 축에 있음(2차 blocker①)
       const recs9 = [];
@@ -3822,9 +3834,12 @@ function discardRestoringLocked(ws) {
       // 복원 규칙(R2 blocker f-7b7dfbf6 계보): 대상=정확히 '이 초안의 승인 세대'(candidateId@baseHash) —
       // 삽입 순서 첫 adopted를 잡으면 다세대 공존 시 과거 세대를 복원하고 현재 후보가 고아로 남는다.
       // 메타 승계: adopted 행은 title·kind를 안 실으므로 같은 세대 메타 행 우선(미승계=재초안 거부 실측).
-      if (recs9.length && appendEnvelopeCandidates(ws, recs9)) restored = true;
-    }
-  } catch { /* 복원 실패해도 폐기는 진행(파일 잔존이 더 나쁨) — restored=false로 정직 보고 */ }
+      if (recs9.length) {
+        if (!appendEnvelopeCandidates(ws, recs9)) return { ok: false, restored: false, reason: "restore-write" };
+        restored = true;
+      }
+    } catch { return { ok: false, restored: false, reason: "restore-read" }; }
+  }
   return { ok: discardEnvelopeProposal(ws), restored };
 }
 // 전이 잠금 — 구조화 토큰{pid, ts, token}·wx 생성. 사망 소유자만 rename 격리 후 재선점(P8 run-lock 문법)·산 소유자=거부.
@@ -4451,12 +4466,32 @@ function draftEnvelopeRevision(ws, repo, opts) {
       if (arcHash9) { try { cur = JSON.parse(fs.readFileSync(path.join(repo, ARCHIVE_FILE), "utf8")); } catch { return { ok: false, error: "서고 파일 판독 실패" }; } }
       else cur = { schema: "verify-envelope-archive-v1", alwaysBlocker: [] }; // 미도입=빈 서고에서 최초 생성(제안본 baseHash null 경로)
     } else cur = coreCur9;
+    // [재편 B §3-2 · f-554d1d42 TOCTOU] 화면이 본 판과 지금 판의 결속 — 기대 지문은 '전이 잠금 안'에서
+    // 대조해야 한다(핸들러의 잠금 밖 재검사는 참고일 뿐). expectedTargetHash=행이 본 대상 파일 지문,
+    // removeItems[].itemFp=행이 본 항목의 정규화 문안 sha1. 하나라도 불일치=거부(숫자 index 단독 신뢰 금지).
+    const expTgt9 = typeof o9.expectedTargetHash === "string" && o9.expectedTargetHash ? o9.expectedTargetHash : null;
+    // [재편 B 1차 blocker③ fail-closed] 빼기가 있으면 대상 판 지문과 행별 항목 지문이 '필수'다 — 선택적이면
+    // index 단독 경로가 존속해 §3-2 계약이 장식이 된다(구 화면·직접 호출=거부·새로고침 유도).
+    if (removes.length) {
+      if (!expTgt9) return { ok: false, error: "빼기 결속 지문 누락(대상 판) — 화면을 새로고침한 뒤 다시 시도해 주세요" };
+      for (const r of removes) if (!(typeof r.itemFp === "string" && /^[0-9a-f]{40}$/.test(r.itemFp))) return { ok: false, error: "빼기 결속 지문 누락(항목) — 화면을 새로고침한 뒤 다시 시도해 주세요" };
+    }
+    if (expTgt9) {
+      const curTgtHash9 = tgt9.target === "archive" ? (arcHash9 ? arcRead9.sha1 : null) : approvedHash;
+      if (!curTgtHash9 || curTgtHash9 !== expTgt9) return { ok: false, error: "목록이 갱신됐어요 — 화면 새로고침 후 다시 시도해 주세요(대상 판 불일치)" };
+    }
     const next = { ...cur };
     // ① 빼기 — 축별 내림차순. 같은 (axis,index) 중복 지정=오류(의도 모호). 병렬 축은 '제거 전' 길이 일치 시 미러.
     const byAxis = new Map();
     for (const r of removes) {
       const set9 = byAxis.get(r.axis) || new Set();
       if (set9.has(r.index)) return { ok: false, error: "같은 항목이 두 번 빼기 지정됨(" + r.axis + " #" + (r.index + 1) + ")" };
+      if (typeof r.itemFp === "string" && r.itemFp) {
+        const arrF = cur[r.axis];
+        const txtF = Array.isArray(arrF) && r.index < arrF.length ? String(arrF[r.index]) : null;
+        const fpF = txtF === null ? null : crypto.createHash("sha1").update(normBacklogTitle(txtF), "utf8").digest("hex");
+        if (!fpF || fpF !== r.itemFp) return { ok: false, error: "목록이 갱신됐어요 — 화면 새로고침 후 다시 시도해 주세요(항목 지문 불일치: " + r.axis + " #" + (r.index + 1) + ")" };
+      }
       set9.add(r.index); byAxis.set(r.axis, set9);
     }
     const removedTitles = [];

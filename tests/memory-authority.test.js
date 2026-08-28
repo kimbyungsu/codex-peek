@@ -188,7 +188,8 @@ t("개정판 빌더(작업대 2026-08-22): 올림 N+빼기 M 동시·병렬 축 
   const cur0 = JSON.parse(fs.readFileSync(path.join(REPO, "verify-envelope.json"), "utf8"));
   const seLen0 = cur0.supportedEnv.length, abLen0 = cur0.alwaysBlocker.length;
   assert.ok(seLen0 >= 1, "전제: se축 항목 존재");
-  const r = CL.draftEnvelopeRevision(WS, REPO, { addCandidateIds: two, removeItems: [{ axis: "supportedEnv", index: 0 }], approvedHash: HASH });
+  const fpW=(s)=>crypto.createHash("sha1").update(CL.normBacklogTitle(s),"utf8").digest("hex"); // [재편 B] 빼기=행 지문 필수
+  const r = CL.draftEnvelopeRevision(WS, REPO, { addCandidateIds: two, removeItems: [{ axis: "supportedEnv", index: 0, itemFp: fpW(cur0.supportedEnv[0]) }], approvedHash: HASH, expectedTargetHash: HASH });
   assert.strictEqual(r.ok, true, "올림 2+빼기 1 동시 성공: " + (r.error || ""));
   const pr = CL.readEnvelopeProposal(WS, REPO);
   assert.strictEqual(pr.st, "ok");
@@ -558,7 +559,7 @@ t("B4·B5 소스 계약: 출력 합류·대시보드 표면(더 보기·draft �
   const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
   assert.ok(!/\(cc9\.live \|\| \[\]\)\.slice\(0, 8\)/.test(ext), "8건 절단 제거(전량 전달)");
   assert.ok(ext.includes("data-candmore"), "웹뷰 더 보기 접힘");
-  assert.ok(ext.includes('m.kind === "resolved-blocker"') && ext.includes("CLM.draftEnvelopeCandidate"), "채택 버튼=draft 실행 표면");
+  assert.ok(ext.includes('m.kind === "resolved-blocker"') && ext.includes('CLM.draftEnvelopeRevision(wsM, repoM, { addCandidateIds: [m.id], removeItems: [], approvedHash: genM, target: "archive" })'), "채택 버튼=서고행 revision 초안 실행 표면(재편 B 1차 blocker① — 코어 오유입 봉합)");
   assert.ok(/function draftSummaryDetail[\s\S]{0,1600}pr\.note/.test(ext) && ext.includes("draftSummaryDetail(CLP9, m.repo, prP") && ext.includes("draftSummaryDetail(CLA, tgtA, prA"), "열람·승인 모달 note 노출 — 공용 요약 렌더러 경유(4c UX: 두 모달이 같은 함수로 note+요약+전문)");
   assert.ok(ext.includes("kind: cd.kind"), "candMark에 kind 전달");
 });

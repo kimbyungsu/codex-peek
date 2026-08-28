@@ -348,10 +348,10 @@ async function runWorkerAndWait(file, ms) {
   {
     const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
     assert.ok(ext.includes('case "selecting":'), "라이브 진행 단계에 selecting 라벨");
-    assert.ok(ext.includes("dest:wbDest") && ext.includes('var wbDest=e9.arc?"archive":"core"') && !ext.includes("mkDest("), "[4d] 목적지=자동(선택 UI 제거 — 올림=서고·구 런타임=코어 폴백)");
-    assert.ok(ext.includes('const dest9 = adds9.length ? (m.dest === "core" ? "core" : "archive") : "core"') && ext.includes("approvedHash: m.gen, target: dest9"), "핸들러=올림만 서고·빼기=코어 자동+빌더 target 전달");
+    assert.ok(ext.includes("dest:r.target") && !ext.includes("mkDest(") && !ext.includes("dest:wbDest"), "[재편 B] 목적지=행 소속 자동 분기(작업대 wbDest 폐지 — 빼기 1클릭이 행의 target을 그대로 전달)");
+    assert.ok(ext.includes('const dest9 = adds9.length ? (m.dest === "core" ? "core" : "archive") : (m.dest === "archive" ? "archive" : "core")') && ext.includes("approvedHash: m.gen, target: dest9"), "[재편 B] 핸들러=올림은 서고·빼기는 행 소속(m.dest) 자동 분기+빌더 target 전달(서고 빼기 문 신설)");
     assert.ok(!/\.filter\(\(x: any\) => typeof x === "string" && \/\^\[0-9a-f\]\{16\}\$\/\.test\(x\)\)\.slice\(0, 12\)/.test(ext) && ext.includes("한 초안에 최대 96건"), "★13건+ 올림이 '형식 오류'로 위장되던 slice(0,12) 잔재 제거+정직한 상한 문구(4d 실보고 버그)");
-    assert.ok(ext.includes("도장이 따로 필요해요") && ext.includes("한 쪽만 먼저"), "혼합 표시=순서 안내(형식 오류로 위장 금지 — 버튼·호스트 이중)");
+    assert.ok(ext.includes("도장이 따로 필요해요"), "혼합 요청=호스트 순서 안내 유지(형식 오류로 위장 금지 — 재편 B: 새 표면은 혼합을 만들지 않지만 방어는 존속)");
     assert.ok(ext.includes("readVerifyEnvelopeArchive(repo9)") && ext.includes("arc?: { state: string; count: number; max: number }"), "서고 현황(arc) 카드 동봉+상태 타입");
     assert.ok(ext.includes("d.live.round>0 ?") && !ext.includes("d.live.round||1") && !ext.includes("(d.live.round || 1)"), "★round 0='회차 1' 오표기 금지(선별/준비 표기 — 확인검증 blocker)");
     assert.ok(ext.includes("lib.phaseFileFor === \"function\"") , "진행 판독=이 창 ws 전용 기록 우선(타 프로젝트 덮어쓰기 소거 봉합)");

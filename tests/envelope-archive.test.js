@@ -240,10 +240,17 @@ t("★[4a→4e] normSet=코어∪서고: 중복=배치 거부가 아니라 자�
   const r3 = CL.draftEnvelopeRevision(W4, R4, { addCandidateIds: ["aaaa000000000005"], removeItems: [], approvedHash: G4, target: "core" });
   assert.ok(!r3.ok && r3.skippedDup === 1, "서고 중복→코어 자동 제외(등재 안 됨): " + String(r3.error));
 });
-t("[4a] 서고 빼기(ab 전용)+코어 축 빼기 지정=형식 오류·전이 반영", () => {
-  const bad = CL.draftEnvelopeRevision(W4, R4, { addCandidateIds: [], removeItems: [{ axis: "supportedEnv", index: 0 }], approvedHash: G4, target: "archive" });
+t("[4a→재편 B] 서고 빼기(ab 전용)+코어 축 빼기 지정=형식 오류·지문 필수·전이 반영", () => {
+  const fp4=(s)=>require("crypto").createHash("sha1").update(CL.normBacklogTitle(s),"utf8").digest("hex");
+  const AH4=CL.readVerifyEnvelopeArchive(R4).sha1;
+  const bad = CL.draftEnvelopeRevision(W4, R4, { addCandidateIds: [], removeItems: [{ axis: "supportedEnv", index: 0, itemFp: "0".repeat(40) }], approvedHash: G4, target: "archive", expectedTargetHash: AH4 });
   assert.ok(!bad.ok && /ab축만/.test(bad.error), "서고 빼기는 ab축만");
-  const r = CL.draftEnvelopeRevision(W4, R4, { addCandidateIds: [], removeItems: [{ axis: "alwaysBlocker", index: 1 }], approvedHash: G4, target: "archive" });
+  // [재편 B 1차 blocker③] 지문 없는 빼기=거부(fail-closed — index 단독 경로 소멸)
+  const noFp = CL.draftEnvelopeRevision(W4, R4, { addCandidateIds: [], removeItems: [{ axis: "alwaysBlocker", index: 1 }], approvedHash: G4, target: "archive", expectedTargetHash: AH4 });
+  assert.ok(!noFp.ok && /결속 지문 누락/.test(noFp.error), "행 지문 누락=거부: " + noFp.error);
+  const noTgt = CL.draftEnvelopeRevision(W4, R4, { addCandidateIds: [], removeItems: [{ axis: "alwaysBlocker", index: 1, itemFp: fp4(CL.readVerifyEnvelopeArchive(R4).data.alwaysBlocker[1]) }], approvedHash: G4, target: "archive" });
+  assert.ok(!noTgt.ok && /결속 지문 누락/.test(noTgt.error), "대상 판 지문 누락=거부: " + noTgt.error);
+  const r = CL.draftEnvelopeRevision(W4, R4, { addCandidateIds: [], removeItems: [{ axis: "alwaysBlocker", index: 1, itemFp: fp4(CL.readVerifyEnvelopeArchive(R4).data.alwaysBlocker[1]) }], approvedHash: G4, target: "archive", expectedTargetHash: AH4 });
   assert.strictEqual(r.ok, true, String(r.error || ""));
   assert.strictEqual(CL.applyEnvelopeTransition(W4, R4, "ko", null).ok, true);
   const ar = CL.readVerifyEnvelopeArchive(R4);
@@ -352,7 +359,7 @@ t("[4c UX] 승인 화면 배선 소스 핀: 요약 선행·'교체' 헤드라인
   const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
   assert.ok((ext.match(/draftSummaryDetail\(/g) || []).length >= 3, "열람·승인 두 모달이 같은 요약 렌더러 사용(정의 포함 3회 이상)");
   assert.ok(ext.includes("[바뀌는 것 — 한눈 요약") && ext.includes("그대로 유지 ${d.kept}항"), "요약=유지/올림/빼기 수치+항목 나열");
-  assert.ok(!ext.includes("전문이 현재 수칙서를 교체합니다") && ext.includes("기존 항목은 그대로 있고, 아래 요약의 올림·빼기만 반영됩니다"), "★'교체' 오해 문구 폐기 — 유지 보장 문구로(사용자 실보고 2026-08-25)");
+  assert.ok(!ext.includes("전문이 현재 수칙서를 교체합니다") && ext.includes("기존 수칙은 그대로 있고, 아래 요약의 추가·빼기만 반영됩니다"), "★'교체' 오해 문구 폐기 — 유지 보장 문구로(재편 B 어휘: 추가·빼기)");
   assert.ok(ext.includes("다음 할 일: '초안 확인·승인'"), "대기 카드·생성 안내에 다음 단계 지시");
   assert.ok(/if \(lines\.length\) parts\.push\(lines\.join\("\\n"\)\);\s*\n\s*if \(pr\.note\) parts\.push\(/.test(ext), "★표시 순서=요약→note→전문(note 선행이면 '한눈 요약'이 첫 구조가 못 됨 — 1차 blocker③)");
 });
@@ -412,5 +419,62 @@ t("★[4f 실보고 반례] 대기열 정리기(reconcile)가 서고 문안까�
   CL.reconcileMemoryCandidates(W9, R9, CORE_HASH);
   assert.strictEqual(CL.readEnvelopeCandidates(W9).latest.get("ff00000000000004@" + CORE_HASH).status, "proposed", "소실 서고=보수(코어만 대조 — 오정리 없음)");
   fs.writeFileSync(path.join(R9, CL.ARCHIVE_FILE), keep9);
+});
+t("★[재편 B §3-2] 빼기 기대 지문=빌더 잠금 안 대조 — 대상 판·항목 지문 불일치=거부·일치=성공(TOCTOU 반례)", () => {
+  const W=fs.mkdtempSync(path.join(os.tmpdir(),"envarc-toctou-ws-"));
+  const R=fs.mkdtempSync(path.join(os.tmpdir(),"envarc-toctou-repo-"));
+  fs.writeFileSync(path.join(R, CL.ENVELOPE_FILE), coreRaw);
+  CL.setEnvelopeHashAllSlots(W, CORE_HASH);
+  fs.writeFileSync(path.join(R, CL.ARCHIVE_FILE), arcText);
+  const AH=sha1(arcText);
+  CL.setContractHashAllSlots(W, "archiveHash", AH);
+  const fpOf=(s)=>require("crypto").createHash("sha1").update(CL.normBacklogTitle(s),"utf8").digest("hex");
+  // ① 대상 판 불일치=거부
+  const r1=CL.draftEnvelopeRevision(W,R,{target:"archive",removeItems:[{axis:"alwaysBlocker",index:0,itemFp:fpOf(arcObj.alwaysBlocker[0])}],approvedHash:CORE_HASH,expectedTargetHash:"f".repeat(40)});
+  assert.strictEqual(r1.ok,false); assert.ok(/목록이 갱신/.test(r1.error||""),"대상 판 불일치=거부: "+r1.error);
+  // ② 항목 지문 불일치(다른 항목의 지문)=거부
+  const r2=CL.draftEnvelopeRevision(W,R,{target:"archive",removeItems:[{axis:"alwaysBlocker",index:0,itemFp:fpOf(arcObj.alwaysBlocker[1])}],approvedHash:CORE_HASH,expectedTargetHash:AH});
+  assert.strictEqual(r2.ok,false); assert.ok(/항목 지문 불일치/.test(r2.error||""),"항목 지문 불일치=거부: "+r2.error);
+  // ③ 전부 일치=성공(서고 빼기 문 — 재편 B 신설 경로)
+  const r3=CL.draftEnvelopeRevision(W,R,{target:"archive",removeItems:[{axis:"alwaysBlocker",index:0,itemFp:fpOf(arcObj.alwaysBlocker[0])}],approvedHash:CORE_HASH,expectedTargetHash:AH});
+  assert.strictEqual(r3.ok,true,"일치=초안 성공: "+(r3.error||"")); assert.strictEqual(r3.removes,1);
+  const pr=CL.readEnvelopeProposal(W,R);
+  assert.strictEqual(JSON.parse(pr.proposalText).alwaysBlocker.length, arcObj.alwaysBlocker.length-1, "서고에서 1건 빠진 제안본");
+  CL.discardEnvelopeProposal(W);
+});
+t("[재편 B §3-4] 취소 원자 순서 — 소스 계약: 복원 기록 성공 후에만 초안 삭제·실패=초안 보존 반환", () => {
+  const src=fs.readFileSync(path.join(__dirname,"..","bridge","contract-lib.js"),"utf8");
+  const i1=src.indexOf('return { ok: false, restored: false, reason: "restore-write" }');
+  const i2=src.indexOf('return { ok: false, restored: false, reason: "restore-read" }');
+  const i3=src.indexOf("return { ok: discardEnvelopeProposal(ws), restored };");
+  assert.ok(i1>0 && i2>0 && i3>i1 && i3>i2, "복원 실패 반환 2종이 초안 삭제 호출보다 앞(원자 순서 — f-47c1c6bc)");
+});
+t("★[재편 B 2차 blocker①] 취소 결속=wrapper 신원(draftId) — 같은 문안·다른 후보의 새 초안은 옛 모달 취소로 폐기되지 않음", () => {
+  const W=fs.mkdtempSync(path.join(os.tmpdir(),"envarc-did-ws-"));
+  const R=fs.mkdtempSync(path.join(os.tmpdir(),"envarc-did-repo-"));
+  fs.writeFileSync(path.join(R, CL.ENVELOPE_FILE), coreRaw);
+  CL.setEnvelopeHashAllSlots(W, CORE_HASH);
+  // 초안 A: 후보 X(문안 T) 올림 → 서고 신규 생성
+  const mk=(cid,title)=>({ candidateId: cid, envelopeHash: CORE_HASH, status: "proposed", kind: "rule-manual", origin: "manual", policyVersion: 2, title, ts: "T" });
+  CL.appendEnvelopeCandidates(W, [mk("dd00000000000001","같은 문안 수칙"), mk("dd00000000000002","같은 문안 수칙")]);
+  const a=CL.draftEnvelopeRevision(W,R,{addCandidateIds:["dd00000000000001"],removeItems:[],approvedHash:CORE_HASH,target:"archive"});
+  assert.strictEqual(a.ok,true,"초안 A: "+(a.error||""));
+  const prA=CL.readEnvelopeProposal(W,R); const tokA=String(prA.draftId||prA.newHash); assert.ok(prA.draftId, "wrapper 신원 draftId 존재");
+  // 다른 창: A 폐기 후 후보 Y(같은 문안)로 초안 B 재작성 → proposalText·newHash 동일, draftId 다름
+  assert.ok(CL.discardEnvelopeProposalRestoring(W, tokA).ok, "A 폐기(자기 신원)");
+  const b=CL.draftEnvelopeRevision(W,R,{addCandidateIds:["dd00000000000002"],removeItems:[],approvedHash:CORE_HASH,target:"archive"});
+  assert.strictEqual(b.ok,true,"초안 B: "+(b.error||""));
+  const prB=CL.readEnvelopeProposal(W,R);
+  assert.strictEqual(prB.newHash, prA.newHash, "(전제) 같은 문안=같은 newHash");
+  assert.notStrictEqual(prB.draftId, prA.draftId, "(전제) wrapper 신원은 다름");
+  // 옛 모달(A 토큰)의 취소 → B는 무접촉
+  const d=CL.discardEnvelopeProposalRestoring(W, tokA);
+  assert.strictEqual(d.ok,false); assert.strictEqual(d.reason,"draft-changed","옛 신원으로는 새 초안 폐기 불가");
+  assert.strictEqual(CL.readEnvelopeProposal(W,R).st,"ok","B 초안 보존");
+  assert.strictEqual(CL.readEnvelopeCandidates(W).latest.get("dd00000000000002@"+CORE_HASH).status,"adopted","B 후보 adopted 유지(오복원 없음)");
+  // legacy 초안(draftId 부재)=newHash 폴백 — 판독기 계약
+  const src=fs.readFileSync(path.join(__dirname,"..","bridge","contract-lib.js"),"utf8");
+  assert.ok(/String\(pr\.draftId \|\| pr\.newHash \|\| ""\)/.test(src), "legacy 초안=newHash 폴백");
+  CL.discardEnvelopeProposalRestoring(W, String(prB.draftId));
 });
 console.log(`결과: ${n}/${n} 통과`);
