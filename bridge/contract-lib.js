@@ -4350,6 +4350,7 @@ function reconcileMemoryCandidates(ws, repo, approvedHash) {
       if (title && normSet.has(normBacklogTitle(title))) continue; // 도장 완료(문안 등재됨)=고아 아님
       if (boundIds === null) continue; // proposal 손상=소유 판정 불가(보수 — 사용자 처리 후 다음 스캔)
       if (boundIds.has(rec.candidateId)) continue; // 진행 중 초안에 결속 — 고아 아님
+      if (kindR === "resolved-blocker" && !rec.policyVersion) { staleRecs.push({ candidateId: rec.candidateId, envelopeHash: approvedHash, status: "declined", kind: "resolved-blocker", note: "공급 정책 개정(v2) — 자동 상신 폐지·필요 시 rule-propose로 재상신", ...(rec.findingId || meta.findingId ? { findingId: rec.findingId || meta.findingId } : {}), ts: new Date().toISOString() }); continue; } // [재편 B] legacy 고아는 복원(대기 재노출)이 아니라 정책 정리
       staleRecs.push({ candidateId: rec.candidateId, envelopeHash: approvedHash, status: "proposed", kind: kindR, ...(title ? { title } : {}), ...(rec.why || meta.why ? { why: rec.why || meta.why } : {}), ...(rec.findingId || meta.findingId ? { findingId: rec.findingId || meta.findingId } : {}), note: "채택 고아 복원(진행 초안에 미결속 — 재채택 가능)", ts: new Date().toISOString() });
     }
     if (staleRecs.length) appendEnvelopeCandidates(ws, staleRecs); // 실패=다음 트리거 재시도(멱등 — 재기록 무해)

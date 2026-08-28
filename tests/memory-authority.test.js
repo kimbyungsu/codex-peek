@@ -618,4 +618,19 @@ t("CLI 배선: rule-propose 인자 없음=사용법+exit 2(dispatch 실재)", ()
   assert.ok(/rule-propose/.test(r.stdout + r.stderr), "usage 출력");
 });
 
+t("[재편 B 실보고] legacy resolved-blocker adopted 고아(초안 없음·미등재)=복원이 아니라 정책 정리 declined", () => {
+  const wsO = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-orphan-"));
+  const rpO = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-orphanr-"));
+  const eO = { schema: "verify-envelope-v1", supportedEnv: ["로컬"], alwaysBlocker: ["기존"], outOfScope: [] };
+  const rawO = JSON.stringify(eO, null, 1); fs.writeFileSync(path.join(rpO, CL.ENVELOPE_FILE), rawO);
+  const HO = crypto.createHash("sha1").update(rawO).digest("hex");
+  const idO = crypto.createHash("sha1").update("legacy-orphan").digest("hex").slice(0, 16);
+  CL.appendEnvelopeCandidates(wsO, [
+    { candidateId: idO, envelopeHash: HO, status: "proposed", kind: "resolved-blocker", title: "등재되지 않은 legacy 문안", ts: "t" },
+    { candidateId: idO, envelopeHash: HO, status: "adopted", ts: "t2" },
+  ]);
+  CL.reconcileMemoryCandidates(wsO, rpO, HO);
+  const rec = CL.readEnvelopeCandidates(wsO).latest.get(idO + "@" + HO);
+  assert.ok(rec && rec.status === "declined" && /공급 정책 개정/.test(rec.note || ""), "legacy 고아=declined(정책 사유) — 대기 재노출 없음: " + JSON.stringify(rec && rec.status));
+});
 console.log(`\n결과: ${n}/${n} 통과`);

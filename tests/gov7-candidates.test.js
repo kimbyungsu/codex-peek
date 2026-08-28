@@ -405,7 +405,11 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   // [개정 작업대 2026-08-22] 올림 N+빼기 M→개정판 초안 1개→도장 1번
   ok(ext.includes('m?.type === "envelopeRevise"') && /wsKeyFor\(wsR9\)\) !== m\.wsKey/.test(ext) && ext.includes("(m.gen || null) !== (genNow9 || null)") && ext.includes("draftEnvelopeRevision"), "개정판 핸들러=strict 인자+wsKey·gen 재대조+빌더 호출");
   // [재편 B] 작업대(올림·빼기 표시+초안 만들기) 폐지 → 수칙 목록(줄마다 1클릭 빼기·행 지문 결속)+직접 추가 안내
-  ok(ext.includes('T("수칙 목록 — 항상 "') && ext.includes('T("빼기","Remove")') && ext.includes("itemFp:r.itemFp") && ext.includes("expectedTargetHash:String(r.targetHash||") && ext.includes('T("직접 추가","Add my own")'), "수칙 목록=통합 표시+1클릭 빼기(행 지문·대상 판 결속)+직접 추가=채팅 유도");
+  ok(ext.includes('T("수칙 목록 — 항상 "') && ext.includes('T("빼기","Remove")') && ext.includes("itemFp:r.itemFp") && ext.includes("expectedTargetHash:String(r.targetHash||") && ext.includes("새 수칙을 넣고 싶으면 대화에서 말씀해 주세요"), "수칙 목록=통합 표시+1클릭 빼기(행 지문·대상 판 결속)+새 수칙=채팅 안내 한 줄(실보고 2026-08-28: 버튼·템플릿 문구 폐지)");
+  // [실보고 2026-08-28] 접힘 상태 기억(재렌더가 2초 만에 접던 결함)·승인 대기 라벨·legacy 문구 정직화
+  ok(ext.includes("rl9.open=rulesOpenWeb; rl9.addEventListener(\"toggle\"") && ext.includes("sg9.open=signalsOpenWeb; sg9.addEventListener(\"toggle\""), "수칙 목록·참고 신호 접힘 상태를 재렌더 너머로 기억");
+  ok(ext.includes("승인 대기 — 위 카드에서 승인하거나 취소하세요") && !ext.includes("처리 중(위 초안)") && !ext.includes("승인하면 앞으로 항상 차단해요"), "adopted 라벨=승인 대기(위 카드 안내)·'처리 중'·'승인하면 항상 차단' 문구 소멸");
+  { const cb = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8"); ok(/if \(rec\.status === "adopted" && !bound5\.has\(rec\.candidateId\)\) continue;/.test(cb), "계산기: 결속 초안 없는 adopted(등재 완료·고아)는 화면 후보에서 제외"); }
   ok(!ext.includes('T("빼기 표시"') && !ext.includes('T("올림 표시"') && !ext.includes("현행 수칙서 항목 — 빼거나"), "구 작업대 어휘 정상 흐름 소멸(빼기 표시·올림 표시·현행 수칙서 항목)");
   ok(ext.includes('T("반복 신호 "+e9.signals.length+"건 — 참고(처리할 일 아님)"'), "반복 신호=참고 접힘 줄(버튼 없음)");
   // [재편 B 2차 blocker②③] 정상 흐름 어휘 잔존 0·ride=영수증 실측치만

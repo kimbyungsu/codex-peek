@@ -5826,6 +5826,7 @@ class Dashboard {
   // 펼친 Codex 답변 키 모음 — postMessage 재렌더(작업/검증/반영 상태·파일·주기 변화)에도 펼침을 유지한다.
   // 모듈 레벨이라 이 webview가 사는 동안 유지되고, 대시보드를 닫았다 다시 열면 새 webview라 리셋(=기본 접힘).
   const expandedConv = new Set();
+  var rulesOpenWeb=false, signalsOpenWeb=false; // [재편 B 실보고 2026-08-28] 수칙 목록·참고 신호 접힘 상태 기억 — 재렌더가 2초 만에 도로 접던 결함(candsMoreOpenWeb 전례)
   var candsMoreOpenWeb=false; // 수칙서 후보 '더 보기' 펼침 기억 — 15초 재렌더가 2초 만에 도로 접던 실보고(2026-08-20) 봉합(expandedConv 전례·웹뷰 수명)
   // [개정 작업대 2026-08-22] 올림·빼기 선택 상태(재렌더 생존·웹뷰 수명) — 승인 세대(gen)에 결속: 세대가
   // 바뀌면 자동 초기화(구세대 선택이 신세대 개정에 오적용되는 경로 차단).
@@ -7267,9 +7268,9 @@ class Dashboard {
             var when9=""; if(cd.ts){ var dt9=new Date(cd.ts); if(!isNaN(dt9.getTime())) when9=(dt9.getMonth()+1)+"/"+dt9.getDate(); }
             var kl9=cd.kind==="user-constraint"?T((when9?when9+" ":"")+"대화에서 직접 말씀하신 약속이에요","(a promise you stated in chat"+(when9?" on "+when9:"")+")")
               :cd.kind==="rule-manual"?T("구현 담당이 마감 판단에서 '프로젝트를 관통하는 지침'으로 골라 올렸어요","proposed by the implementer at campaign closing as a project-spanning principle")
-              :T((when9?when9+" 검증에서 ":"검증에서 ")+"잡혀 이미 고친 실수예요 — 승인하면 앞으로 항상 차단해요","caught"+(when9?" in the "+when9+" verification":" in a verification")+" and already fixed — approve to always block it");
+              :T((when9?when9+" 검증에서 ":"검증에서 ")+"잡혀 이미 고친 실수예요","caught"+(when9?" in the "+when9+" verification":" in a verification")+" and already fixed");
             var undecided9=!cd.status||cd.status==="proposed";
-            var sit9=document.createElement("div"); sit9.textContent=(undecided9?"":"["+(cd.status==="adopted"?T("처리 중(위 초안)","in the draft above"):cd.status)+"] ")+kl9; row9.appendChild(sit9);
+            var sit9=document.createElement("div"); sit9.textContent=(undecided9?"":"["+(cd.status==="adopted"?T("승인 대기 — 위 카드에서 승인하거나 취소하세요","awaiting approval — approve or cancel in the card above"):cd.status)+"] ")+kl9; row9.appendChild(sit9);
             if(cd.title){ var org9=document.createElement("div"); org9.className="muted"; org9.style.cssText="font-size:11px;margin-top:2px"; org9.textContent=T("문안: ","text: ")+cd.title; org9.title=cd.title; row9.appendChild(org9); }
             if(cd.why){ var why9=document.createElement("div"); why9.className="muted"; why9.style.cssText="font-size:11px;margin-top:2px"; why9.textContent=T("왜: ","why: ")+cd.why; row9.appendChild(why9); } // why 표면 — textContent(작문·마크업 없음)
             if(undecided9 && !viewOnly9){
@@ -7286,7 +7287,7 @@ class Dashboard {
           if(more9){ var mt9=document.createElement("button"); mt9.style.cssText="margin-top:5px;font-size:12px"; mt9.className="secondary"; mt9.textContent=T("더 보기 (+"+more9+")","Show more (+"+more9+")"); mt9.onclick=function(){ candsMoreOpenWeb=true; ec.querySelectorAll("[data-candmore]").forEach(function(el){ el.style.display=""; }); mt9.remove(); }; ec.appendChild(mt9); }
         }
         if(e9.signals && e9.signals.length){ // [재편 B §3-1b] 반복 신호=참고 표시 전용(버튼·처분·판단 의무 없음)
-          var sg9=document.createElement("details"); sg9.style.cssText="margin-top:8px;font-size:12px";
+          var sg9=document.createElement("details"); sg9.style.cssText="margin-top:8px;font-size:12px"; sg9.open=signalsOpenWeb; sg9.addEventListener("toggle", function(){ signalsOpenWeb=sg9.open; });
           var sgSum9=document.createElement("summary"); sgSum9.className="muted"; sgSum9.style.cursor="pointer"; sgSum9.textContent=T("반복 신호 "+e9.signals.length+"건 — 참고(처리할 일 아님)","Repetition signals — "+e9.signals.length+" (reference only, nothing to do)"); sg9.appendChild(sgSum9);
           e9.signals.forEach(function(sg){ var ln9=document.createElement("div"); ln9.className="muted"; ln9.style.cssText="font-size:11px;margin-top:3px";
             var sk9=sg.kind==="oos-repeat"?T("치워둔 시나리오가 다시 나옴","a waived scenario reappeared"):sg.kind==="escalation"?T("심사에서 범위를 한 번 넓혀 봐줌","scope expanded once during admission"):sg.kind==="unused-oos"?T("오래 안 쓰인 예외","a long-unused exception"):T("같은 지적이 반복됨","the same finding repeated");
@@ -7295,7 +7296,7 @@ class Dashboard {
           ec.appendChild(sg9);
         }
         if(e9.rules && e9.rules.length && e9.proposal===undefined){ // [재편 B §3-1] 수칙 목록 — 승인된 것 전부 한 곳(줄마다 빼기·직접 추가 안내). 어휘=수칙·빼기.
-          var rl9=document.createElement("details"); rl9.style.cssText="margin-top:10px";
+          var rl9=document.createElement("details"); rl9.style.cssText="margin-top:10px"; rl9.open=rulesOpenWeb; rl9.addEventListener("toggle", function(){ rulesOpenWeb=rl9.open; });
           var rlN9={always:0, rel:0}; e9.rules.forEach(function(r){ if(r.tag==="always") rlN9.always++; else rlN9.rel++; });
           var rlSum9=document.createElement("summary"); rlSum9.style.cssText="font-weight:600;cursor:pointer"; rlSum9.textContent=T("수칙 목록 — 항상 "+rlN9.always+" · 관련될 때 "+rlN9.rel,"Rules — always "+rlN9.always+" · when relevant "+rlN9.rel); rl9.appendChild(rlSum9);
           if(e9.ride){ var rd9=document.createElement("div"); rd9.className="muted"; rd9.style.cssText="font-size:11px;margin-top:2px"; rd9.textContent=e9.ride; rl9.appendChild(rd9); } // "이번 검증에 실린 수칙 N개" — 자동 표시(관리 대상 아님)
@@ -7309,11 +7310,9 @@ class Dashboard {
             rb.onclick=function(){ vscode.postMessage({type:"envelopeRevise", adds:[], removes:[{axis:r.axis, index:r.index, itemFp:r.itemFp}], dest:r.target, expectedTargetHash:String(r.targetHash||""), approve:true, gen:String(e9.gen||""), wsKey:String(e9.wsKey||""), lang:e9.lang}); }; // [재편 B §3-2] 1클릭 빼기 — 소속 자동 분기+행 지문 결속(TOCTOU)·도장 모달(취소=자동 정리)
             row.appendChild(rb); rl9.appendChild(row);
           });
-          var adB9=document.createElement("button"); adB9.className="secondary"; adB9.style.cssText="margin-top:6px;font-size:12px"; adB9.textContent=T("직접 추가","Add my own");
-          var adT9=document.createElement("div"); adT9.className="muted"; adT9.style.cssText="font-size:11px;margin-top:3px;display:none";
-          adT9.textContent=T("대화에 '앞으로는 ~하기로 해요'처럼 적어 주세요 — 다음 턴에 여기 '제안'으로 나타나 승인만 하면 됩니다(별도 입력창 없음 — 약속은 대화 원문에 결속돼야 안전).","Write it in chat like 'from now on, let's ...' — it appears here as a proposal next turn (no input box: promises must bind to your chat words).");
-          adB9.onclick=function(){ adT9.style.display=adT9.style.display==="none"?"":"none"; };
-          rl9.appendChild(adB9); rl9.appendChild(adT9);
+          var adT9=document.createElement("div"); adT9.className="muted"; adT9.style.cssText="font-size:11px;margin-top:6px";
+          adT9.textContent=T("새 수칙을 넣고 싶으면 대화에서 말씀해 주세요 — 다음 턴에 위 '제안'으로 올라와 승인만 하면 됩니다.","To add a rule, just say it in chat — it shows up above as a proposal next turn; you only approve.");
+          rl9.appendChild(adT9);
           ec.appendChild(rl9);
           if(e9.arc && (e9.arc.state==="broken"||e9.arc.state==="stray")){ var arcWarn=document.createElement("div"); arcWarn.style.cssText="margin-top:8px;font-size:12px;color:var(--vscode-editorWarning-foreground,#d4a017)"; arcWarn.textContent=e9.arc.state==="broken"?T("⚠ 보관 수칙 파일이 도장 시점과 달라요 — 재승인 전까지 새 검증 시작이 막힙니다","⚠ the stored rules file differs from its stamped state — new verifications are blocked until re-approval"):T("⚠ 도장 없는 보관 파일이 있어요 — 정리 전까지 올림이 막힙니다","⚠ an unstamped stored-rules file exists — adds are blocked until it is cleaned"); ec.appendChild(arcWarn); }
         }

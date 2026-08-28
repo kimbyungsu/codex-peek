@@ -3262,6 +3262,10 @@ function computeEnvelopeCandidatesFor(ws) {
     } catch { /* 원본 판독 실패=빼기 후보 생략(추가 후보는 유지) */ }
   }
   const { rows: candRows9, latest } = readEnvelopeCandidates(ws);
+  // [재편 B 실보고 2026-08-28] adopted는 "진행 중 초안에 결속된 것"만 화면에 — 도장 완료(문안 등재)·고아 adopted가
+  // "처리 중" 줄로 남아 승인 버튼 없는 문구만 보이던 혼란 봉합. 초안 부재·손상=adopted 전부 숨김(보수).
+  let bound5 = new Set();
+  try { const c5 = loadContract(ws); const pr5 = readEnvelopeProposal(ws, resolveScoutRepo(ws, c5).repo); if (pr5 && pr5.st === "ok") bound5 = new Set([pr5.candidateId, ...(pr5.candidateIds || [])].filter(Boolean)); } catch { bound5 = new Set(); }
   { // ⑤ [기억 권위 A·구현검증 1차 blocker④] 해소 blocker 계보 후보(조정 스캔이 장부에 proposed로 적재) —
     // 계산기 산출에 합류해야 대시보드 목록·채택 표면에 나타난다(장부 단독 적재=화면 미표시 공백 봉합).
     // kind·title은 append-only 이력 전체에서 보강 — 상태 전이 행(adopted/declined)이 메타를 안 실어도 유실되지 않게.
@@ -3275,6 +3279,7 @@ function computeEnvelopeCandidatesFor(ws) {
       // live 필터로 대시보드 목록·채택 표면에 나타난다(장부 단독 적재=화면 미표시 공백의 kind 확장).
       if (!rec || !ENVELOPE_DRAFTABLE_KINDS.includes(k5) || String(rec.envelopeHash || "") !== String(gen || "")) continue;
       if (rec.status !== "proposed" && rec.status !== "adopted") continue; // declined/failed는 아래 live 필터와 동일 취급
+      if (rec.status === "adopted" && !bound5.has(rec.candidateId)) continue; // 결속 초안 없는 adopted=등재 완료/고아 — 표시 안 함
       if (seen5.has(rec.candidateId)) continue;
       seen5.add(rec.candidateId);
       cands.push({ candidateId: rec.candidateId, kind: k5, key: rec.findingId || m5.findingId || "", n: 1, titles: [String(rec.title || m5.title || "")].filter(Boolean), ts: String(rec.ts || ""), ...(k5 === "user-constraint" || k5 === "rule-manual" ? { why: String(rec.why || m5.why || "") } : {}) }); // ts=제안 시각·why=상신 근거(사람 표면 보조 줄 — rule-manual도 '왜 관통 지침인지' 동봉·재편 A §2-2)
