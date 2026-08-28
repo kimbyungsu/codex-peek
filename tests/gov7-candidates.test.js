@@ -384,7 +384,7 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   }
   // 2026-08-22(2) 승인 지문 언어 공유: 직접 승인 도장=양 슬롯·대시보드 자기치유(반대 슬롯 지문=현행 파일 sha 일치 시 표기 정렬)
   // [부품 C 2026-08-23] draftable kinds 공통 표면 — 채택 분기·올림 토글·kind 문구·why 보조줄·mark 가드·소진 안내
-  ok(ext.includes('(m.kind === "resolved-blocker" || m.kind === "user-constraint" || m.kind === "rule-manual") && m.status === "adopted"'), "candMark 채택=draftable kinds 공통(초안 생성 결속 — 재편 A: rule-manual 편입)");
+  ok(ext.includes('(m.kind === "resolved-blocker" || m.kind === "user-constraint" || m.kind === "rule-manual" || m.kind === "user-direct") && m.status === "adopted"'), "candMark 채택=draftable kinds 공통(초안 생성 결속 — rule-manual·user-direct 편입)");
   ok(ext.includes("대화에서 직접 말씀하신 약속이에요") && ext.includes('T("왜: ","why: ")+cd.why'), "UI: user-constraint 문구+왜 보조줄(textContent — 재편 B 어휘)");
   const cb7 = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
   ok(cb7.includes("ENVELOPE_DRAFTABLE_KINDS.includes(k5)"), "계산기 ⑤ 합류 allowlist=draftable kinds 단일 정본");
@@ -406,7 +406,14 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   // [개정 작업대 2026-08-22] 올림 N+빼기 M→개정판 초안 1개→도장 1번
   ok(ext.includes('m?.type === "envelopeRevise"') && /wsKeyFor\(wsR9\)\) !== m\.wsKey/.test(ext) && ext.includes("(m.gen || null) !== (genNow9 || null)") && ext.includes("draftEnvelopeRevision"), "개정판 핸들러=strict 인자+wsKey·gen 재대조+빌더 호출");
   // [재편 B] 작업대(올림·빼기 표시+초안 만들기) 폐지 → 수칙 목록(줄마다 1클릭 빼기·행 지문 결속)+직접 추가 안내
-  ok(ext.includes('T("수칙 목록 — 항상 "') && ext.includes('T("빼기","Remove")') && ext.includes("itemFp:r.itemFp") && ext.includes("expectedTargetHash:String(r.targetHash||") && ext.includes("새 수칙을 넣고 싶으면 대화에서 말씀해 주세요"), "수칙 목록=통합 표시+1클릭 빼기(행 지문·대상 판 결속)+새 수칙=채팅 안내 한 줄(실보고 2026-08-28: 버튼·템플릿 문구 폐지)");
+  ok(ext.includes('T("수칙 "+e9.rules.length+"개"') && ext.includes('T("빼기","Remove")') && ext.includes("itemFp:r.itemFp") && ext.includes("expectedTargetHash:String(r.targetHash||"), "수칙 목록=수칙 N개(기계 분류 비노출)+1클릭 빼기(행 지문·대상 판 결속)");
+  // [넣기 입력칸 2026-08-28] 입력칸+[넣기]=ruleAdd → directRuleCandidate → 서고행 변경안 → 같은 승인 창(취소=자동 정리)
+  ok(ext.includes('vscode.postMessage({type:"ruleAdd", text:v, repo:String(e9.repo||""), gen:String(e9.gen||""), wsKey:String(e9.wsKey||""), lang:e9.lang})') && ext.includes('adIn9.setAttribute("data-rule-add","1")'), "입력칸+[넣기]가 ruleAdd를 세대·프로젝트 키·렌더 당시 repo 결속으로 전송");
+  ok(ext.includes('typeof m.repo === "string" && m.repo && typeof m.gen === "string"') && ext.includes("if (normWs(scoutTargetFor(wsA0).repo) !== normWs(m.repo))"), "[ab-1] ruleAdd 핸들러=렌더 당시 대상과 클릭 시점 대상 재대조");
+  ok(ext.includes('if (m?.type === "ruleAdd" && typeof m.text === "string"') && ext.includes("CLA0.directRuleCandidate(wsA0, repoA0, { text: m.text, approvedHash: genA0 })") && ext.includes('draftEnvelopeRevision(wsA0, repoA0, { addCandidateIds: [r0.candidateId], removeItems: [], approvedHash: genA0, target: "archive" })') && ext.includes("this.runProposalApprove(repoA0, m.lang, true)"), "ruleAdd 핸들러=wsKey/세대 재대조→후보 기록→서고행 변경안→1클릭 승인 창(취소=복원형 폐기)");
+  ok(!ext.includes('tag.textContent=(r.tag==="always"') && !ext.includes("새 수칙을 넣고 싶으면 대화에서 말씀해 주세요"), "행 태그(항상/관련·축)·채팅 유도 안내 소멸(사용자에겐 수칙과 넣기·빼기만)");
+  ok(ext.includes('m.kind === "user-direct") && m.status === "adopted"') && ext.includes('cd.kind==="user-direct"?T('), "user-direct kind가 채택 분기·제안 문구에 편입");
+  ok(ext.includes("...({ rules: rules9 })") && ext.includes("if(e9.rules && e9.proposal===undefined){") && ext.includes("직접 넣다가 취소한 문안이 여기 옵니다"), "[검증 blocker] 수칙 0개에도 rules 필드·입력칸 유지+제안함 안내에 취소분 명시");
   // [실보고 2026-08-28] 접힘 상태 기억(재렌더가 2초 만에 접던 결함)·승인 대기 라벨·legacy 문구 정직화
   ok(ext.includes("rl9.open=rulesOpenWeb; rl9.addEventListener(\"toggle\"") && ext.includes("sg9.open=signalsOpenWeb; sg9.addEventListener(\"toggle\""), "수칙 목록·참고 신호 접힘 상태를 재렌더 너머로 기억");
   ok(ext.includes("승인 대기 — 위 카드에서 승인하거나 취소하세요") && !ext.includes("처리 중(위 초안)") && !ext.includes("승인하면 앞으로 항상 차단해요"), "adopted 라벨=승인 대기(위 카드 안내)·'처리 중'·'승인하면 항상 차단' 문구 소멸");

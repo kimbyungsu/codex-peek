@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled, constraintTurnContext, constraintAdd, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, constraintHarvestFromAnswer, buildAbManifest, boundaryGenOf, readVerifyEnvelopeArchive, SELECTOR_PAGE_ITEMS, selectorDeadlineMsFor, selectorScopeMaterial, SELECTOR_UNION_MAX, SELECTOR_UNION_BYTES_MAX, readSelectorUsage } = require("./contract-lib.js");
+const { askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, repoKeyOf, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled, constraintTurnContext, constraintAdd, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, constraintHarvestFromAnswer, buildAbManifest, boundaryGenOf, readVerifyEnvelopeArchive, SELECTOR_PAGE_ITEMS, selectorDeadlineMsFor, selectorScopeMaterial, SELECTOR_UNION_MAX, SELECTOR_UNION_BYTES_MAX, readSelectorUsage } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -2510,7 +2510,7 @@ function cmdAskStart(rest) {
     // [약속 발화 포착 부품 B §2] 턴 원문 결속을 job에 불변 동결 — 답 후처리의 [제약 후보 v1] 대조 권위는
     // 이 스냅샷 지문뿐(완료 시점 active 재판독=다른 턴 원문 오결속 위험이라 금지). 부재=null(직접 ask와 동일 취급).
     let constraintCtx=null;
-    try{const cc9=constraintTurnContext();if(cc9.ok)constraintCtx={provider:cc9.provider,sessionId:cc9.sessionId,turnAnchor:cc9.turnAnchor,sourceHash:cc9.sourceHash};}catch{constraintCtx=null;}
+    try{const cc9=constraintTurnContext();if(cc9.ok)constraintCtx={provider:cc9.provider,sessionId:cc9.sessionId,turnAnchor:cc9.turnAnchor,sourceHash:cc9.sourceHash,repoKey:constraintRepoKeyFor(ws,cSnap)};}catch{constraintCtx=null;} // [ab-1] repoKey=원문 턴의 정찰 대상(회수 시 재계산 금지)
     // [Envelope Selector v7 §3 — 3b] 승인 서고 활성 게이트: 소실≠미도입(지문 있는데 파일 부재/불일치=중단)·
     // 스냅샷 부재=시작 중단('구현 대화에서 새 프롬프트 1회' 기존 관용구)·선별 계획(팔·페이지·예산)을 job에
     // 동결. 팔=구현 턴 provider 고정(constraintCtx.provider 외 다른 출처 인자 없음 — 교차 불가 소스 계약).
@@ -2685,6 +2685,7 @@ function cmdConstraint(rest) {
   const why = flagText("--why");
   const scope = flagText("--scope");
   const ctx = constraintTurnContext();
+  if (ctx && ctx.ok) ctx.repoKey = constraintRepoKeyFor(ws, null); // [ab-1] 상신 턴의 정찰 대상 결속(원문과 같은 턴)
   const r = constraintAdd(ws, quote, why, scope, ctx);
   if (r.ok) {
     console.log((en ? "registered as a rulebook candidate: " : "수칙서 후보로 상신됨: ") + r.candidateId + (en
@@ -3266,13 +3267,14 @@ function computeEnvelopeCandidatesFor(ws) {
   const { rows: candRows9, latest } = readEnvelopeCandidates(ws);
   // [재편 B 실보고 2026-08-28] adopted는 "진행 중 초안에 결속된 것"만 화면에 — 도장 완료(문안 등재)·고아 adopted가
   // "처리 중" 줄로 남아 승인 버튼 없는 문구만 보이던 혼란 봉합. 초안 부재·손상=adopted 전부 숨김(보수).
-  let bound5 = new Set();
+  let bound5 = new Set(); let unmarked5 = 0; // [ab-1] 저장소 표식 없는 대기 행(숨김 건수 — 고지용)
+  let repoKey5 = null; try { const c5r = loadContract(ws); repoKey5 = repoKeyOf(resolveScoutRepo(ws, c5r).repo); } catch { repoKey5 = null; } // [ab-1] 현재 정찰 대상 파티션
   try { const c5 = loadContract(ws); const pr5 = readEnvelopeProposal(ws, resolveScoutRepo(ws, c5).repo); if (pr5 && pr5.st === "ok") bound5 = new Set([pr5.candidateId, ...(pr5.candidateIds || [])].filter(Boolean)); } catch { bound5 = new Set(); }
   { // ⑤ [기억 권위 A·구현검증 1차 blocker④] 해소 blocker 계보 후보(조정 스캔이 장부에 proposed로 적재) —
     // 계산기 산출에 합류해야 대시보드 목록·채택 표면에 나타난다(장부 단독 적재=화면 미표시 공백 봉합).
     // kind·title은 append-only 이력 전체에서 보강 — 상태 전이 행(adopted/declined)이 메타를 안 실어도 유실되지 않게.
     const meta5 = new Map();
-    for (const r of candRows9) if (r && r.candidateId && (r.kind || r.title) && !meta5.has(r.candidateId)) meta5.set(r.candidateId, { kind: r.kind || "", title: r.title || "", findingId: r.findingId || "", why: r.why || "" });
+    for (const r of candRows9) if (r && r.candidateId && (r.kind || r.title) && !meta5.has(r.candidateId)) meta5.set(r.candidateId, { kind: r.kind || "", title: r.title || "", findingId: r.findingId || "", why: r.why || "", repoKey: r.repoKey || "" });
     const seen5 = new Set(cands.map((c) => c.candidateId));
     for (const [, rec] of latest) {
       const m5 = meta5.get(rec && rec.candidateId) || {};
@@ -3282,9 +3284,10 @@ function computeEnvelopeCandidatesFor(ws) {
       if (!rec || !ENVELOPE_DRAFTABLE_KINDS.includes(k5) || String(rec.envelopeHash || "") !== String(gen || "")) continue;
       if (rec.status !== "proposed" && rec.status !== "adopted") continue; // declined/failed는 아래 live 필터와 동일 취급
       if (rec.status === "adopted" && !bound5.has(rec.candidateId)) continue; // 결속 초안 없는 adopted=등재 완료/고아 — 표시 안 함
+      { const rk5 = rec.repoKey || m5.repoKey || ""; if (!rk5) { unmarked5++; continue; } if (!repoKey5 || rk5 !== repoKey5) continue; } // [ab-1] fail-closed: 무표기(판정 불가)·현재 대상 판독 불가·다른 저장소 태생=합류 안 함
       if (seen5.has(rec.candidateId)) continue;
       seen5.add(rec.candidateId);
-      cands.push({ candidateId: rec.candidateId, kind: k5, key: rec.findingId || m5.findingId || "", n: 1, titles: [String(rec.title || m5.title || "")].filter(Boolean), ts: String(rec.ts || ""), ...(k5 === "user-constraint" || k5 === "rule-manual" ? { why: String(rec.why || m5.why || "") } : {}) }); // ts=제안 시각·why=상신 근거(사람 표면 보조 줄 — rule-manual도 '왜 관통 지침인지' 동봉·재편 A §2-2)
+      cands.push({ candidateId: rec.candidateId, kind: k5, key: rec.findingId || m5.findingId || "", n: 1, titles: [String(rec.title || m5.title || "")].filter(Boolean), ts: String(rec.ts || ""), ...(k5 === "user-constraint" || k5 === "rule-manual" || k5 === "user-direct" ? { why: String(rec.why || m5.why || "") } : {}) }); // ts=제안 시각·why=상신 근거(사람 표면 보조 줄 — rule-manual도 '왜 관통 지침인지' 동봉·재편 A §2-2)
     }
   }
   let skipped = 0;
@@ -3295,19 +3298,22 @@ function computeEnvelopeCandidatesFor(ws) {
   });
   // [재편 B §3-1b] signals에는 장부 처분 필터를 적용하지 않는다 — 참고는 처분 상태가 없다(신호가 살아
   // 있으면 표시·소멸하면 사라짐). 과거에 기록된 합성 처분 행은 판독에서 무시되어 자연 무효.
-  return { live, signals, skipped, overCap, gen: gen || null }; // gen=산출 세대(동결) — 소비자(대시보드)는 이 값과 현 승인 해시의 일치를 결속해야 함(증분 3 재검증 blocker)
+  return { live, signals, skipped, overCap, unmarked: unmarked5, gen: gen || null }; // gen=산출 세대(동결) — 소비자(대시보드)는 이 값과 현 승인 해시의 일치를 결속해야 함(증분 3 재검증 blocker)
 }
+// [ab-1] 약속 발화 후보의 저장소 결속 — 원문 턴 시점의 정찰 대상 지문(계약 스냅샷 우선·없으면 현재 계약). 판독 불가=null(기록 거부).
+function constraintRepoKeyFor(ws, cSnap) { try { return repoKeyOf(resolveScoutRepo(ws, cSnap || loadContract(ws)).repo); } catch { return null; } }
 function envelopeCandidateNoticeFor(ws, lang, res, profile = "core") {
   try {
     if (profile !== "core") return ""; // integrity 검증에는 core 전용 수칙서 후보·입장 심사 어휘를 붙이지 않는다.
     if (!res || !res.tracked || !res.last) return "";
     const en = lang === "en";
-    const { live, signals, skipped, overCap } = computeEnvelopeCandidatesFor(ws);
+    const { live, signals, skipped, overCap, unmarked } = computeEnvelopeCandidatesFor(ws);
     const kindLabel = (k) => en
       ? (k === "oos-repeat" ? "repeated out-of-scope demotions — reconsider defending this scenario" : k === "escalation" ? "admission-escalated scope expansion — consider formal adoption" : k === "unused-oos" ? "never triggered this approval generation — consider removing/merging" : k === "user-constraint" ? "a promise the user stated directly in chat (no verification lineage) — consider adopting into the rulebook" : k === "resolved-blocker" ? "a blocker caught and fixed in verification — consider an always-block entry" : "repeated blocker lineage — consider an always-block entry")
       : (k === "oos-repeat" ? "범위 밖 강등 반복 — 이 시나리오를 계속 치워둘지 재검토" : k === "escalation" ? "입장 심사 승격 확장 — 정식 편입 검토" : k === "unused-oos" ? "이 승인 세대에서 한 번도 발동 안 됨 — 빼기/병합 검토" : k === "user-constraint" ? "사용자가 대화에서 직접 말한 약속(검증 계보 아님) — 수칙서 편입 검토" : k === "resolved-blocker" ? "검증에서 잡혀 이미 고친 blocker — 항상 차단 명시 검토" : "같은 계보 blocker 반복 — 항상 차단 명시 검토"); // [주의 수용] user-constraint를 반복 blocker로 오표시하면 미검증 발화에 검증 계보가 있다고 오인시킴
     const L = [];
     L.push(en ? "\n[rulebook candidates · this campaign — machine material]" : "\n[수칙서 후보 재료 · 이번 캠페인 — 기계 집계]");
+    if (unmarked) L.push(en ? `> ${unmarked} older proposal(s) without a repository mark are hidden from display/approval (cleaned at the next reconcile — re-enter if still needed).` : `> 저장소 표식 없는 이전 제안 ${unmarked}건은 표시·승인 대상에서 제외(다음 조정 때 자동 정리 — 필요하면 다시 넣기).`);
     if (overCap) L.push(en ? "> ⚠ the rulebook already holds 30+ items — prioritize removal/merge candidates over additions (§7 growth control)." : "> ⚠ 수칙서가 이미 30항목 이상 — 추가보다 빼기/병합 후보를 우선하라(§7 성장 억제).");
     if (!live.length) L.push(en ? "> no machine-aggregated candidate from this exhaustion. Any item parked by the implementer must still carry its real receipt in [Parked]." + (skipped ? ` (${skipped} previously declined/failed candidate(s) skipped this generation)` : "") : "> 이번 소진의 기계 집계로는 수칙서로 올릴 후보가 없습니다. 구현 담당이 보류한 항목은 [보관함 이관]에 실제 영수증과 별도로 밝혀야 합니다." + (skipped ? ` (이 승인 세대에서 이미 거절·실패한 후보 ${skipped}건 스킵)` : ""));
     else {
@@ -3728,6 +3734,7 @@ async function cmdAsk(rest) {
     // 직접 ask(동결 carrier 없음)=블록 전량 무시+direct-ask 영수증(§2 의식적 한정). best-effort — 실패가 판정 흐름을 막지 않음.
     try {
       const ccJob9 = (durableEnv && durableEnv.ok && durableEnv.job && durableEnv.job.constraintCtx) || null;
+      if (ccJob9 && ccJob9.repoKey && constraintRepoKeyFor(ws, null) !== ccJob9.repoKey) console.error(langSnap === "en" ? "[constraint harvest] scout target changed while waiting - captured items stay bound to the original repository" : "[제약 후보 회수] 기다리는 사이 정찰 대상이 바뀜 — 포착 항목은 원문 당시 저장소에 결속 기록(현재 대상 화면에는 안 보임)"); // [ab-1] 재대조=고지(기록 권위는 동결값)
       const hv9 = constraintHarvestFromAnswer(ws, answer, ccJob9);
       if (hv9 && hv9.present) console.error((langSnap === "en" ? "[constraint harvest] " : "[제약 후보 회수] ") + (hv9.ignored ? (langSnap === "en" ? "direct ask - block ignored (receipt kept)" : "직접 ask — 블록 전량 무시(영수증 기록)") : `+${hv9.accepted}` + (hv9.rejected ? (langSnap === "en" ? ` · rejected ${hv9.rejected}` : ` · 거부 ${hv9.rejected}`) : "") + (hv9.reason ? ` · ${hv9.reason}` : "")));
     } catch { /* best-effort */ }

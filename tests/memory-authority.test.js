@@ -59,6 +59,9 @@ t("본 스캔 폐지: 해소 blocker가 자동으로 후보가 되지 않음(헌
   assert.strictEqual([...latest.values()].filter((x) => x.status === "proposed").length, 0, "proposed 0");
 });
 t("rule-propose: resolved 자격+askId 결속+원문 보존+rule-manual 스키마", () => {
+  CL.setEnvelopeHashAllSlots(WS, HASH); // [검증 blocker] 승인 세대는 계약 슬롯이 유일 권위 — 주입 지문은 일치 확인용
+  CL.updateContractPatch(WS, undefined, { scoutRepo: REPO }); // [ab-1] 상신·직접입력은 계약 정찰 대상과 repo 일치 요구
+  assert.strictEqual(CL.ruleProposeCandidate(WS, REPO, { findingId: "f-aaaa0001", why: "이유", campaignId: camp, approvedHash: "f".repeat(40) }).reason, "gen-mismatch", "계약 세대와 다른 주입 지문=거부");
   const r = CL.ruleProposeCandidate(WS, REPO, { findingId: "f-aaaa0001", why: "특정 파일을 넘어 반복될 수 있는 로그 유출 부류라 관통 지침", campaignId: camp, approvedHash: HASH });
   assert.strictEqual(r.ok, true, "상신 성공: " + (r.reason || ""));
   const { latest } = CL.readEnvelopeCandidates(WS);
@@ -345,9 +348,9 @@ t("부품 C R1: user-constraint 세대 이월(carry-forward) — proposed·adopt
   const H_OLD = "b".repeat(40);
   const uc = (i) => crypto.createHash("sha1").update("uc" + i).digest("hex").slice(0, 16);
   CL.appendEnvelopeCandidates(WS8, [
-    { candidateId: uc(1), envelopeHash: H_OLD, status: "proposed", kind: "user-constraint", title: "배포 전에는 반드시 백업부터 남겨야 한다", why: "사용자 약속", provider: "claude", ts: "T" },
-    { candidateId: uc(2), envelopeHash: H_OLD, status: "adopted", kind: "user-constraint", title: "고객 차단 기록은 지우지 않는다", ts: "T" },
-    { candidateId: uc(3), envelopeHash: H_OLD, status: "proposed", kind: "user-constraint", title: envObj.alwaysBlocker[0], ts: "T" },
+    { candidateId: uc(1), envelopeHash: H_OLD, status: "proposed", kind: "user-constraint", repoKey: CL.repoKeyOf(REPO8), title: "배포 전에는 반드시 백업부터 남겨야 한다", why: "사용자 약속", provider: "claude", ts: "T" },
+    { candidateId: uc(2), envelopeHash: H_OLD, status: "adopted", kind: "user-constraint", repoKey: CL.repoKeyOf(REPO8), title: "고객 차단 기록은 지우지 않는다", ts: "T" },
+    { candidateId: uc(3), envelopeHash: H_OLD, status: "proposed", kind: "user-constraint", repoKey: CL.repoKeyOf(REPO8), title: envObj.alwaysBlocker[0], ts: "T" },
   ]);
   const r1 = CL.reconcileMemoryCandidates(WS8, REPO8, HASH);
   const { latest } = CL.readEnvelopeCandidates(WS8);
@@ -363,8 +366,8 @@ t("부품 C R1: user-constraint 세대 이월(carry-forward) — proposed·adopt
   const H2 = "c".repeat(40);
   const ucM = crypto.createHash("sha1").update("ucMulti").digest("hex").slice(0, 16);
   CL.appendEnvelopeCandidates(WS8, [
-    { candidateId: ucM, envelopeHash: H_OLD, status: "proposed", kind: "user-constraint", title: "다중 세대 공존 약속", ts: "T" },
-    { candidateId: ucM, envelopeHash: H2, status: "proposed", kind: "user-constraint", title: "다중 세대 공존 약속", ts: "T" },
+    { candidateId: ucM, envelopeHash: H_OLD, status: "proposed", kind: "user-constraint", repoKey: CL.repoKeyOf(REPO8), title: "다중 세대 공존 약속", ts: "T" },
+    { candidateId: ucM, envelopeHash: H2, status: "proposed", kind: "user-constraint", repoKey: CL.repoKeyOf(REPO8), title: "다중 세대 공존 약속", ts: "T" },
   ]);
   CL.reconcileMemoryCandidates(WS8, REPO8, HASH);
   const dupRows = CL.readEnvelopeCandidates(WS8).rows.filter((r) => r.candidateId === ucM && String(r.envelopeHash || "") === HASH);
@@ -399,7 +402,7 @@ t("부품 C R3: mark 우회 가드 — draftable adopted=거부·declined 허용
   assert.ok(!gA.ok && gA.reason === "draftable-adopt-via-draft" && gA.kind === "user-constraint", "★draftable 채택 직접 기록=거부(초안 결속 강제 — §3-3b)");
   assert.strictEqual(CL.envelopeMarkGuard(WS10, ue(1), "declined").ok, true, "declined는 mark 허용");
   assert.strictEqual(CL.envelopeMarkGuard(WS10, ue(2), "adopted").ok, true, "비 draftable kind=기존 계약 유지");
-  assert.deepStrictEqual(CL.ENVELOPE_DRAFTABLE_KINDS, ["resolved-blocker", "user-constraint", "rule-manual"], "allowlist 단일 정본(재편 A: rule-manual 편입·legacy 호환 유지)");
+  assert.deepStrictEqual(CL.ENVELOPE_DRAFTABLE_KINDS, ["resolved-blocker", "user-constraint", "rule-manual", "user-direct"], "allowlist 단일 정본(rule-manual·user-direct 편입·legacy 호환 유지)");
 });
 t("복원형 폐기: candidateId 없는 구형/수동 제안본=복원 없이 폐기만(보수)", () => {
   const cur = JSON.parse(fs.readFileSync(path.join(REPO, "verify-envelope.json"), "utf8"));
@@ -507,6 +510,7 @@ t("B3 실행: 200자 초과 title=절단 표식과 함께 병합(무표식 절�
   ];
   fs.mkdirSync(path.dirname(CL.findingsLedgerFileFor(ws3)), { recursive: true });
   fs.writeFileSync(CL.findingsLedgerFileFor(ws3), led3.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  CL.setEnvelopeHashAllSlots(ws3, h3); CL.updateContractPatch(ws3, undefined, { scoutRepo: rp3 });
   const rp0 = CL.ruleProposeCandidate(ws3, rp3, { findingId: "f-eeee0005", why: "절단 표식 검사용 관통 이유", campaignId: "cl:b3", approvedHash: h3 });
   assert.strictEqual(rp0.ok, true, "상신 성공: " + (rp0.reason || ""));
   const cid3 = [...CL.readEnvelopeCandidates(ws3).latest.values()].find((x) => x.status === "proposed").candidateId;
@@ -585,6 +589,7 @@ t("A-5 stale 실행: 승인 세대 변경 → 구세대 pending=자동 declined(
   ];
   fs.mkdirSync(path.dirname(CL.findingsLedgerFileFor(wsS)), { recursive: true });
   fs.writeFileSync(CL.findingsLedgerFileFor(wsS), ledS.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  CL.setEnvelopeHashAllSlots(wsS, H1); CL.updateContractPatch(wsS, undefined, { scoutRepo: rpS });
   const rp1 = CL.ruleProposeCandidate(wsS, rpS, { findingId: "f-ffff0006", why: "임시 산출물 위치 규율은 파일 하나를 넘는 관통 지침", campaignId: "cl:st", approvedHash: H1 });
   assert.strictEqual(rp1.ok, true, "H1 세대에 rule-manual proposed: " + (rp1.reason || ""));
   // legacy 자동 상신 잔여도 함께 심어 재승인 뒤 두 kind의 운명이 갈리는지 본다(재편 A §2-1·§5-3)
@@ -640,5 +645,87 @@ t("[재편 B 실보고] legacy resolved-blocker adopted 고아(초안 없음·�
   CL.reconcileMemoryCandidates(wsO, rpO, HO);
   const rec = CL.readEnvelopeCandidates(wsO).latest.get(idO + "@" + HO);
   assert.ok(rec && rec.status === "declined" && /공급 정책 개정/.test(rec.note || ""), "legacy 고아=declined(정책 사유) — 대기 재노출 없음: " + JSON.stringify(rec && rec.status));
+});
+t("[넣기 입력칸] directRuleCandidate — 형식 방어(12~200·단일행·규약 어휘·민감 형태)·기등재 거부·같은 세대 중복/거부권·정상 기록", () => {
+  const wsD = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-direct-"));
+  const rpD = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-directr-"));
+  const eD = { schema: "verify-envelope-v1", supportedEnv: ["로컬 개인 PC 전제 조건"], alwaysBlocker: ["배포 전 백업을 남긴다"], outOfScope: [] };
+  const rawD = JSON.stringify(eD, null, 1); fs.writeFileSync(path.join(rpD, CL.ENVELOPE_FILE), rawD);
+  const HD = crypto.createHash("sha1").update(rawD).digest("hex");
+  const go = (text) => CL.directRuleCandidate(wsD, rpD, { text, approvedHash: HD });
+  assert.strictEqual(go("계약 슬롯 세팅 전에는 비활성").reason, "envelope-inactive", "[검증 blocker] 주입 지문만으로는 세대 결속 불가");
+  CL.setEnvelopeHashAllSlots(wsD, HD); CL.updateContractPatch(wsD, undefined, { scoutRepo: rpD });
+  assert.strictEqual(CL.directRuleCandidate(wsD, rpD, { text: "지문 불일치 주입 반례 문안", approvedHash: "0".repeat(40) }).reason, "gen-mismatch");
+  { const rpX = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-otherrepo-")); fs.writeFileSync(path.join(rpX, CL.ENVELOPE_FILE), rawD);
+    assert.strictEqual(CL.directRuleCandidate(wsD, rpX, { text: "다른 저장소로 넣기 시도 반례 문안", approvedHash: HD }).reason, "repo-mismatch", "[ab-1] 봉투 지문이 같아도 계약 정찰 대상이 아닌 repo=거부"); }
+  assert.strictEqual(go("짧다").reason, "too-short");
+  assert.strictEqual(go("가".repeat(201)).reason, "too-long");
+  assert.strictEqual(go("첫 줄 수칙 문안입니다\n둘째 줄").reason, "multiline");
+  assert.ok(String(go("sk-ant-api03-abcdefghijklmnopqrstuvwx 키를 쓴다").reason).startsWith("sensitive-"), "민감 형태 거부");
+  assert.strictEqual(go("배포 전 백업을 남긴다").reason, "already-in-envelope", "코어 ab 기등재");
+  assert.strictEqual(go("로컬 개인 PC 전제 조건").reason, "already-in-envelope", "코어 sup 기등재(3축 대조)");
+  assert.strictEqual(go("수칙", ).reason, "too-short");
+  const ok1 = go("검증 통과 없이 완료 보고를 하지 않는다");
+  assert.strictEqual(ok1.ok, true, "정상 기록: " + (ok1.reason || ""));
+  const rec = CL.readEnvelopeCandidates(wsD).latest.get(ok1.candidateId + "@" + HD);
+  assert.strictEqual(rec.kind, "user-direct"); assert.strictEqual(rec.origin, "dashboard"); assert.strictEqual(rec.status, "proposed");
+  assert.ok(rec.why && rec.title === "검증 통과 없이 완료 보고를 하지 않는다", "문안 원문·why 보존");
+  assert.strictEqual(go("검증 통과 없이  완료 보고를 하지 않는다").reason, "duplicate", "공백 정규화 후 같은 문안=duplicate");
+  assert.strictEqual(go("검증 통과 없이 완료 보고를 하지 않는다").reason, "duplicate", "★NBSP 등 유니코드 공백 변형도 같은 문안(우회 반례)");
+  CL.appendEnvelopeCandidates(wsD, [{ candidateId: ok1.candidateId, envelopeHash: HD, status: "declined", ts: "t" }]);
+  assert.strictEqual(go("검증 통과 없이 완료 보고를 하지 않는다").reason, "declined-suppressed", "같은 세대 거부권");
+  assert.strictEqual(go("검증 통과 없이 완료 보고를 하지 않는다").reason, "declined-suppressed", "★NBSP 변형으로 거부권 우회 불가");
+  assert.ok(CL.ENVELOPE_DRAFTABLE_KINDS.includes("user-direct"), "draftable allowlist 편입(초안·승인 경로 공유)");
+  // 초안 경로 실물: 서고행 revision으로 올림 가능
+  const ok2 = go("완료 보고 전에 실제 결과 데이터를 검증한다");
+  const dr = CL.draftEnvelopeRevision(wsD, rpD, { addCandidateIds: [ok2.candidateId], removeItems: [], approvedHash: HD, target: "archive" });
+  assert.strictEqual(dr.ok, true, "user-direct 후보=서고행 초안 성공: " + (dr.error || ""));
+  assert.strictEqual(CL.readEnvelopeCandidates(wsD).latest.get(ok2.candidateId + "@" + HD).status, "adopted", "초안 결속=adopted 전이");
+});
+t("[ab-1 후보 파티션] 직접 입력 후보는 태어난 저장소(정찰 대상)에 결속 — A에서 취소된 후보가 B 화면·초안으로 새지 않음", () => {
+  const CB = require("../bridge/codex-bridge.js");
+  const wsP = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-part-"));
+  const rpA = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-partA-"));
+  const rpB = fs.mkdtempSync(path.join(os.tmpdir(), "mem-auth-partB-"));
+  const eP = { schema: "verify-envelope-v1", supportedEnv: ["공통 전제 조건 한 줄"], alwaysBlocker: ["공통 금지 한 줄"], outOfScope: [] };
+  const rawP = JSON.stringify(eP, null, 1); fs.writeFileSync(path.join(rpA, CL.ENVELOPE_FILE), rawP); fs.writeFileSync(path.join(rpB, CL.ENVELOPE_FILE), rawP);
+  const HP = crypto.createHash("sha1").update(rawP).digest("hex");
+  CL.setEnvelopeHashAllSlots(wsP, HP); CL.updateContractPatch(wsP, undefined, { scoutRepo: rpA }); CL.writeEnvelopeFreeze(wsP, HP, "ask-part-1"); // 계산기 gen=동결 파일
+  const TXT = "A 저장소에서 넣다가 취소한 수칙 문안";
+  const a1 = CL.directRuleCandidate(wsP, rpA, { text: TXT, approvedHash: HP });
+  assert.strictEqual(a1.ok, true, "A 기록: " + (a1.reason || ""));
+  const recA = CL.readEnvelopeCandidates(wsP).latest.get(a1.candidateId + "@" + HP);
+  assert.strictEqual(recA.repoKey, CL.repoKeyOf(rpA), "레코드에 태어난 저장소 지문");
+  // 초안 → 취소(복원) — 복원 레코드도 repoKey 승계
+  const dA = CL.draftEnvelopeRevision(wsP, rpA, { addCandidateIds: [a1.candidateId], removeItems: [], approvedHash: HP, target: "archive" });
+  assert.strictEqual(dA.ok, true, "A 초안: " + (dA.error || ""));
+  const dc = CL.discardEnvelopeProposalRestoring(wsP, String(CL.readEnvelopeProposal(wsP).draftId));
+  assert.strictEqual(dc.ok, true, "취소 복원: " + (dc.reason || ""));
+  const recA2 = CL.readEnvelopeCandidates(wsP).latest.get(a1.candidateId + "@" + HP);
+  assert.strictEqual(recA2.status, "proposed"); assert.strictEqual(recA2.repoKey, CL.repoKeyOf(rpA), "복원분도 저장소 지문 승계");
+  assert.ok((CB.computeEnvelopeCandidatesFor(wsP).live || []).some((c) => c.candidateId === a1.candidateId), "A 대상일 때는 A 화면에 보임");
+  // 정찰 대상을 B로 변경(같은 세대 — 같은 수칙서 내용)
+  CL.updateContractPatch(wsP, undefined, { scoutRepo: rpB });
+  assert.ok(!(CB.computeEnvelopeCandidatesFor(wsP).live || []).some((c) => c.candidateId === a1.candidateId), "★B 대상 화면에 A 후보 미합류");
+  const dB = CL.draftEnvelopeRevision(wsP, rpB, { addCandidateIds: [a1.candidateId], removeItems: [], approvedHash: HP, target: "archive" });
+  assert.strictEqual(dB.ok, false, "★A 후보로 B 초안 거부"); assert.ok(/다른 프로젝트/.test(String(dB.error || "")), dB.error);
+  assert.strictEqual(CL.readEnvelopeCandidates(wsP).latest.get(a1.candidateId + "@" + HP).status, "proposed", "거부 시 A 후보 상태 무변경");
+  // 같은 문안을 B에서 직접 넣으면 A의 취소 이력과 무관한 별도 후보(ID 파티션)
+  const b1 = CL.directRuleCandidate(wsP, rpB, { text: TXT, approvedHash: HP });
+  assert.strictEqual(b1.ok, true, "B 별도 후보: " + (b1.reason || "")); assert.notStrictEqual(b1.candidateId, a1.candidateId, "저장소별 후보 ID");
+  assert.strictEqual(CL.readEnvelopeCandidates(wsP).latest.get(b1.candidateId + "@" + HP).repoKey, CL.repoKeyOf(rpB));
+  // [확인검증 4회차 blocker] 무표기(repoKey 없음) 행=판정 불가 → 화면·빌더 fail-closed + 조정기가 정책 정리(고지 건수)
+  const legacyId = CL.envelopeCandidateId("user-direct", "legacy-no-repo");
+  CL.appendEnvelopeCandidates(wsP, [{ candidateId: legacyId, envelopeHash: HP, status: "proposed", kind: "user-direct", origin: "dashboard", policyVersion: 2, title: "저장소 지문 없는 구세대 직접 입력 문안", why: "w", ts: "t" }]);
+  const ccL = CB.computeEnvelopeCandidatesFor(wsP);
+  assert.ok(!(ccL.live || []).some((c) => c.candidateId === legacyId), "★무표기 행=B 화면 미합류(fail-closed)"); assert.strictEqual(ccL.unmarked, 1, "숨김 건수 고지");
+  const dL = CL.draftEnvelopeRevision(wsP, rpB, { addCandidateIds: [legacyId], removeItems: [], approvedHash: HP, target: "archive" });
+  assert.strictEqual(dL.ok, false, "★무표기 행=초안 거부"); assert.ok(/저장소 표식이 없는/.test(String(dL.error || "")), dL.error);
+  CL.reconcileMemoryCandidates(wsP, rpB, HP);
+  const recL = CL.readEnvelopeCandidates(wsP).latest.get(legacyId + "@" + HP);
+  assert.strictEqual(recL.status, "declined", "조정기=무표기 대기 행 정책 정리"); assert.ok(/저장소 표식 없음/.test(String(recL.note || "")), recL.note);
+  assert.strictEqual(CL.readEnvelopeCandidates(wsP).latest.get(b1.candidateId + "@" + HP).status, "proposed", "표식 있는 B 후보는 조정 후에도 대기 유지");
+  // user-constraint(대화 포착)도 repoKey 결속·ID 파티션 — 생산 3경로 전부 표식
+  assert.ok(String(fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8")).includes('envelopeCandidateId("user-constraint", wsKeyFor(ws) + "|" + repoKeyC + "|" + sha1Of(qNorm))'), "constraintAdd ID 파티션 핀(실행 반례는 constraint-capture)");
 });
 console.log(`\n결과: ${n}/${n} 통과`);

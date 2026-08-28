@@ -28,7 +28,8 @@ const QUOTE = "고객 차단 기록은 지우지 마, 그리고 오래된 것들
 const GEN = "a".repeat(40);
 const usageText = () => JSON.stringify(CL.readConstraintUsage()); // 서랍 전체를 직렬화(원문 비복사 검사용)
 const lastUsage = () => { const L = CL.readConstraintUsage(); return L.length ? L[L.length - 1] : null; };
-const ctxOk = { ok: true, provider: "claude", sessionId: SID, turnAnchor: ANCHOR, sourceHash: sha1(PROMPT) };
+const RKC = CL.repoKeyOf(CL.resolveScoutRepo(WS, CL.loadContract(WS)).repo); // [ab-1] 원문 턴의 정찰 대상 지문(동결 문맥에 실림)
+const ctxOk = { ok: true, provider: "claude", sessionId: SID, turnAnchor: ANCHOR, sourceHash: sha1(PROMPT), repoKey: RKC };
 
 t("turnAnchor 결정성: 같은 (sessionId, ts)=같은 앵커·다른 턴=다른 앵커·16hex", () => {
   assert.strictEqual(CL.turnAnchorOf(SID, TS), ANCHOR);
@@ -77,7 +78,8 @@ t("상신 성공: 후보 레코드(kind/원문/why/출처 결속)+registered 영
   assert.strictEqual(u.outcome, "registered");
   assert.ok(u.quoteFp === sha1(QUOTE).slice(0, 16) && u.quoteLen === QUOTE.length && u.wsKey && u.provider === "claude", "영수증=지문+길이+출처");
   assert.ok(!usageText().includes("고객 차단"), "★영수증 원문 비복사(ab-7 계보)");
-  const expectId = CL.envelopeCandidateId("user-constraint", CL.wsKeyFor(WS) + "|" + sha1(QUOTE.normalize("NFC").replace(/\s+/g, " ").trim()));
+  const RK = CL.repoKeyOf(CL.resolveScoutRepo(WS, CL.loadContract(WS)).repo); // [ab-1] 후보=태어난 정찰 대상에 결속(ID 파티션+레코드 repoKey)
+  const expectId = CL.envelopeCandidateId("user-constraint", CL.wsKeyFor(WS) + "|" + RK + "|" + sha1(QUOTE.normalize("NFC").replace(/\s+/g, " ").trim()));
   assert.strictEqual(r.candidateId, expectId, "candidateId=전체 원문 지문(scope 미포함)");
 });
 
@@ -118,7 +120,7 @@ t("거부 반례 전종 C — 중복 지문·거부권(declined=같은 세대 �
   const r1 = CL.constraintAdd(WS, QUOTE, "근거근거근거", "", ctxOk);
   assert.strictEqual(r1.reason, "duplicate", "같은 원문 지문 재상신=거부");
   const q2 = "이건 앞으로 계속 지켜야 하는 약속이야.";
-  const id2 = CL.envelopeCandidateId("user-constraint", CL.wsKeyFor(WS) + "|" + sha1(q2.normalize("NFC").replace(/\s+/g, " ").trim()));
+  const id2 = CL.envelopeCandidateId("user-constraint", CL.wsKeyFor(WS) + "|" + CL.repoKeyOf(CL.resolveScoutRepo(WS, CL.loadContract(WS)).repo) + "|" + sha1(q2.normalize("NFC").replace(/\s+/g, " ").trim()));
   CL.appendEnvelopeCandidates(WS, [{ candidateId: id2, envelopeHash: GEN, status: "declined", kind: "user-constraint", ts: "T" }]);
   const r2 = CL.constraintAdd(WS, q2, "근거근거근거", "", ctxOk);
   assert.strictEqual(r2.reason, "declined-suppressed", "사용자 거절 문안=같은 승인 세대 재상신 금지(§4 거부권)");
@@ -127,7 +129,7 @@ t("거부 반례 전종 C — 중복 지문·거부권(declined=같은 세대 �
   const A2 = CL.turnAnchorOf(SID, TS2);
   const P2 = "첫째 백업은 매일 자정에 자동으로 남겨야 한다. 둘째 백업 파일은 절대 덮어쓰지 않는다. 셋째 복구 시험은 매주 한 번 돌린다.";
   CL.writeConstraintTurnSnapshot(WS, A2, P2);
-  const ctx2 = { ok: true, provider: "claude", sessionId: SID, turnAnchor: A2, sourceHash: sha1(P2) };
+  const ctx2 = { ok: true, provider: "claude", sessionId: SID, turnAnchor: A2, sourceHash: sha1(P2), repoKey: RKC };
   assert.strictEqual(CL.constraintAdd(WS, "첫째 백업은 매일 자정에 자동으로 남겨야 한다.", "근거근거근거", "", ctx2).ok, true);
   assert.strictEqual(CL.constraintAdd(WS, "둘째 백업 파일은 절대 덮어쓰지 않는다.", "근거근거근거", "", ctx2).ok, true);
   const r3 = CL.constraintAdd(WS, "셋째 복구 시험은 매주 한 번 돌린다.", "근거근거근거", "", ctx2);
@@ -254,7 +256,7 @@ t("부품 B 회수: 훅 스냅샷만 대조 권위 — 정상 적재+작문/지�
   const AB = CL.turnAnchorOf(SID, TSB);
   const PB = "약속 하나를 지켜야 한다 — 배포 전 백업. 그리고 약속 둘 — 고객 기록 보존. 셋째 약속 — 복구 시험 매주.";
   const wB = CL.writeConstraintTurnSnapshot(WSB, AB, PB);
-  const ctxB = { provider: "claude", sessionId: SID, turnAnchor: AB, sourceHash: wB.sourceHash };
+  const ctxB = { provider: "claude", sessionId: SID, turnAnchor: AB, sourceHash: wB.sourceHash, repoKey: CL.repoKeyOf(CL.resolveScoutRepo(WSB, CL.loadContract(WSB)).repo) }; // [ab-1] job 동결 문맥에 실린 원문 턴 저장소 지문
   const B = CL.CONSTRAINT_BLOCK_MARKERS;
   const row = (q, w) => JSON.stringify({ quote: q, why: w });
   // 정상 3행(턴당 2건 상한 비적용 확인 — via=verifier-block은 블록 4행 유계가 상한)
@@ -288,7 +290,8 @@ t("소스 계약: CLI 스위치·훅 배선(양 경로)·anchor 필드 결속", 
   assert.ok(ci.includes("writeConstraintTurnSnapshot(ws, anc, ptxt)") && ci.includes("turnAnchorOf(sid, activeTs)") && ci.includes("constraintAnchor, constraintSourceHash"), "Claude 훅: 스냅샷+active 병기(캠페인 앵커 동일 원천)");
   const ch = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-hook.js"), "utf8");
   const cbB = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
-  assert.ok(cbB.includes("constraintCtx={provider:cc9.provider,sessionId:cc9.sessionId,turnAnchor:cc9.turnAnchor,sourceHash:cc9.sourceHash}") && cbB.includes("rejudgeSnap,campaignId,constraintCtx,"), "부품 B: ask 생성 시 턴 원문 결속을 job에 동결(완료 시점 재판독 금지)");
+  assert.ok(cbB.includes("constraintCtx={provider:cc9.provider,sessionId:cc9.sessionId,turnAnchor:cc9.turnAnchor,sourceHash:cc9.sourceHash,repoKey:constraintRepoKeyFor(ws,cSnap)}") && cbB.includes("rejudgeSnap,campaignId,constraintCtx,"), "부품 B: ask 생성 시 턴 원문 결속을 job에 동결(완료 시점 재판독 금지)");
+  assert.ok(cbB.includes("if (ctx && ctx.ok) ctx.repoKey = constraintRepoKeyFor(ws, null);") && fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8").includes('repoKey: ctx.repoKey, via: "verifier-block"'), "[ab-1 5회차] CLI 상신·회수 경로 모두 동결/턴 repoKey를 constraintAdd에 전달(재계산 없음)");
   assert.ok(cbB.includes("constraintHarvestFromAnswer(ws, answer, ccJob9)") && cbB.includes("durableEnv.job.constraintCtx"), "부품 B: finishVerifyRun 회수 배선=내구 job 동결 ctx만 권위");
   const clB = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
   assert.ok(clB.includes("VERIFIER_FORMAT_CONSTRAINT_KO") && clB.includes("tail9"), "부품 B: 검증자 서식 범주 규칙 1줄(두 blockMode 공통 — 위임 모드 소실 금지)");
@@ -296,4 +299,34 @@ t("소스 계약: CLI 스위치·훅 배선(양 경로)·anchor 필드 결속", 
   assert.ok(ch.includes("writeConstraintTurnSnapshot(ws, turnId, ptxt)") && ch.includes("constraintAnchor: String(turnId)") && ch.includes('heartbeat(j, ws, sid, "UserPromptSubmit", capFields)') && ch.includes("keepCap"), "Codex 훅: turnId 앵커+heartbeat 결속+같은 턴 승계");
 });
 
+t("[ab-1 5회차 blocker] 원문 저장소 결속=동결 문맥 권위 — 응답 대기 중 정찰 대상 A→B 전환에도 A 원문 후보는 A 표식·B 화면 미합류; 표식 없는 문맥=거부", () => {
+  const CB = require("../bridge/codex-bridge.js");
+  const wsQ = fs.mkdtempSync(path.join(os.tmpdir(), "cc-repo-ws-"));
+  const rpA = fs.mkdtempSync(path.join(os.tmpdir(), "cc-repo-A-"));
+  const rpB = fs.mkdtempSync(path.join(os.tmpdir(), "cc-repo-B-"));
+  const sidQ = "sess-repo-q"; const tsQ = "2026-08-29T00:00:00.000Z"; const ancQ = CL.turnAnchorOf(sidQ, tsQ);
+  const PQ = "배포 전에는 반드시 백업을 남겨! 이건 계속 지켜야 하는 약속이야.";
+  const QQ = "배포 전에는 반드시 백업을 남겨!";
+  CL.writeConstraintTurnSnapshot(wsQ, ancQ, PQ);
+  const eQ = { schema: "verify-envelope-v1", supportedEnv: ["공통 전제"], alwaysBlocker: ["공통 금지"], outOfScope: [] };
+  const rawQ = JSON.stringify(eQ, null, 1); fs.writeFileSync(path.join(rpA, CL.ENVELOPE_FILE), rawQ); fs.writeFileSync(path.join(rpB, CL.ENVELOPE_FILE), rawQ);
+  const HQ = sha1(rawQ); CL.setEnvelopeHashAllSlots(wsQ, HQ); CL.updateContractPatch(wsQ, undefined, { scoutRepo: rpA }); CL.writeEnvelopeFreeze(wsQ, HQ, "ask-repo-q");
+  const keyA = CL.repoKeyOf(rpA);
+  // 원문 턴(A)에서 동결된 문맥 — 응답을 기다리는 사이 사용자가 정찰 대상을 B로 바꿈
+  const ctxFrozen = { ok: true, provider: "claude", sessionId: sidQ, turnAnchor: ancQ, sourceHash: sha1(PQ), repoKey: keyA };
+  CL.updateContractPatch(wsQ, undefined, { scoutRepo: rpB });
+  const r = CL.constraintAdd(wsQ, QQ, "사용자 약속", "", ctxFrozen);
+  assert.strictEqual(r.ok, true, "회수 기록: " + (r.reason || ""));
+  const rec = CL.readEnvelopeCandidates(wsQ).latest.get(r.candidateId + "@" + HQ);
+  assert.strictEqual(rec.repoKey, keyA, "★기록 표식=원문 당시 A(현재 B 재계산 아님)");
+  assert.strictEqual(r.candidateId, CL.envelopeCandidateId("user-constraint", CL.wsKeyFor(wsQ) + "|" + keyA + "|" + sha1(QQ)), "ID 파티션도 A");
+  assert.ok(!(CB.computeEnvelopeCandidatesFor(wsQ).live || []).some((c) => c.candidateId === r.candidateId), "★B 화면 미합류");
+  CL.updateContractPatch(wsQ, undefined, { scoutRepo: rpA });
+  assert.ok((CB.computeEnvelopeCandidatesFor(wsQ).live || []).some((c) => c.candidateId === r.candidateId), "A로 돌아오면 보임");
+  // 표식 없는 문맥(구형 job 동결·판독 불가)=기록 거부
+  const QQ2 = "이건 계속 지켜야 하는 약속이야."; // 원문에 있는 구절(원문 결속 통과 → 저장소 결속 검사까지 도달)
+  const r0 = CL.constraintAdd(wsQ, QQ2, "사용자 약속", "", { ok: true, provider: "claude", sessionId: sidQ, turnAnchor: ancQ, sourceHash: sha1(PQ) });
+  assert.strictEqual(r0.reason, "repo-unknown", "무표기 문맥=거부(무표기 생산 0)");
+  assert.strictEqual(CL.constraintAdd(wsQ, QQ2, "사용자 약속", "", { ...ctxFrozen, repoKey: "not-hex" }).reason, "repo-unknown", "형식 이상=거부");
+});
 console.log(`결과: ${n}/${n} 통과`);

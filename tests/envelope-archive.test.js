@@ -136,7 +136,7 @@ t("도장 strict 검증(f-d9c9930d 반례): 96항 초과·손상 서고는 실�
 t("archive 초안 폐기=candidateGeneration(core 세대)으로 후보 복원(2차 blocker① 정방향)", () => {
   const cid = crypto.createHash("sha1").update("arc-cand").digest("hex").slice(0, 16);
   CL.appendEnvelopeCandidates(WS, [
-    { candidateId: cid, envelopeHash: CORE_HASH, status: "proposed", kind: "user-constraint", title: "서고행 약속 후보", ts: "T" },
+    { candidateId: cid, envelopeHash: CORE_HASH, status: "proposed", kind: "user-constraint", repoKey: CL.repoKeyOf(REPO), title: "서고행 약속 후보", ts: "T" },
     { candidateId: cid, envelopeHash: CORE_HASH, status: "adopted", ts: "T2" },
   ]);
   const arcNow = fs.readFileSync(path.join(REPO, CL.ARCHIVE_FILE), "utf8");
@@ -210,7 +210,7 @@ const core4 = JSON.stringify({ schema: "verify-envelope-v1", supportedEnv: ["로
 fs.writeFileSync(path.join(R4, CL.ENVELOPE_FILE), core4);
 const G4 = sha1(core4);
 assert.strictEqual(CL.setEnvelopeHashAllSlots(W4, G4), 2);
-const cand4 = (cid, title) => ({ candidateId: cid, envelopeHash: G4, status: "proposed", kind: "resolved-blocker", title, ts: new Date().toISOString() });
+const cand4 = (cid, title, rp) => ({ candidateId: cid, envelopeHash: G4, status: "proposed", kind: "resolved-blocker", repoKey: CL.repoKeyOf(rp || R4), title, ts: new Date().toISOString() }); // [ab-1] 픽스처도 태어난 저장소 표식 필수
 CL.appendEnvelopeCandidates(W4, [cand4("aaaa000000000001", "배포 전 백업을 남긴다"), cand4("aaaa000000000002", "코어에 이미 있는 수칙"), cand4("aaaa000000000003", "서고에 이미 있는 수칙"), cand4("aaaa000000000004", "고객 기록은 지우지 않는다")]);
 
 t("★[4a] 미도입 최초 서고 올림: 빈 서고에서 초안→도장 전이=서고 파일 생성+archiveHash 양 슬롯·코어 무접촉", () => {
@@ -278,7 +278,7 @@ t("★[4e 실보고 반례] 혼합 배치(신규+중복)=중복만 자동 제외
   assert.strictEqual(CL.setEnvelopeHashAllSlots(W7, CORE_HASH), 2);
   fs.writeFileSync(path.join(R7, CL.ARCHIVE_FILE), arcText); // 기존 서고 2항
   assert.strictEqual(CL.setContractHashAllSlots(W7, "archiveHash", sha1(arcText)), 2);
-  const mk7 = (cid, title) => ({ candidateId: cid, envelopeHash: CORE_HASH, status: "proposed", kind: "resolved-blocker", title, ts: "T" });
+  const mk7 = (cid, title, rp) => ({ candidateId: cid, envelopeHash: CORE_HASH, status: "proposed", kind: "resolved-blocker", repoKey: CL.repoKeyOf(rp || R7), title, ts: "T" }); // [ab-1] 픽스처도 태어난 저장소 표식 필수
   CL.appendEnvelopeCandidates(W7, [mk7("dd00000000000001", arcObj.alwaysBlocker[0]), mk7("dd00000000000002", "완전히 새로운 수칙 하나"), mk7("dd00000000000003", arcObj.alwaysBlocker[1]), mk7("dd00000000000004", "완전히 새로운 수칙 둘"), mk7("dd00000000000005", "완전히 새로운 수칙 하나")]);
   const r = CL.draftEnvelopeRevision(W7, R7, { addCandidateIds: ["dd00000000000001", "dd00000000000002", "dd00000000000003", "dd00000000000004", "dd00000000000005"], removeItems: [], approvedHash: CORE_HASH, target: "archive" });
   assert.ok(r.ok && r.adds === 2 && r.skippedDup === 3, "★신규 2건만 올림·서고 중복 2+배치 내부 중복 1=제외 3: " + JSON.stringify({ ok: r.ok, adds: r.adds, skip: r.skippedDup, err: r.error }));
@@ -296,7 +296,7 @@ t("★[4e 실보고 반례] 혼합 배치(신규+중복)=중복만 자동 제외
   const full95 = JSON.stringify({ schema: "verify-envelope-archive-v1", alwaysBlocker: items95 }, null, 1);
   fs.writeFileSync(path.join(R8, CL.ARCHIVE_FILE), full95);
   assert.strictEqual(CL.setContractHashAllSlots(W8, "archiveHash", sha1(full95)), 2);
-  CL.appendEnvelopeCandidates(W8, [mk7("ee00000000000001", "채워진 수칙 1"), mk7("ee00000000000002", "새 수칙 A"), mk7("ee00000000000003", "새 수칙 B")]);
+  CL.appendEnvelopeCandidates(W8, [mk7("ee00000000000001", "채워진 수칙 1", R8), mk7("ee00000000000002", "새 수칙 A", R8), mk7("ee00000000000003", "새 수칙 B", R8)]);
   const rc8 = CL.draftEnvelopeRevision(W8, R8, { addCandidateIds: ["ee00000000000001", "ee00000000000002", "ee00000000000003"], removeItems: [], approvedHash: CORE_HASH, target: "archive" });
   assert.ok(!rc8.ok && /96항 상한/.test(rc8.error) && rc8.skippedDup === 1, "95항+[중복,A,B]=A가 96번째 채운 뒤 B에서 상한 중단: " + JSON.stringify({ err: rc8.error, skip: rc8.skippedDup }));
   assert.strictEqual(CL.readEnvelopeCandidates(W8).latest.get("ee00000000000001@" + CORE_HASH).status, "declined", "★상한 중단에도 앞서 발견한 중복=declined 정리(반환 전 flush)");
@@ -320,7 +320,7 @@ t("★[4a] 소실·무단 파일·96 상한=정직 거부", () => {
   fs.writeFileSync(path.join(R5, CL.ENVELOPE_FILE), core4);
   assert.strictEqual(CL.setEnvelopeHashAllSlots(W5, G4), 2);
   fs.writeFileSync(path.join(R5, CL.ARCHIVE_FILE), keep);
-  CL.appendEnvelopeCandidates(W5, [cand4("bbbb000000000001", "새 수칙")]);
+  CL.appendEnvelopeCandidates(W5, [cand4("bbbb000000000001", "새 수칙", R5)]);
   const rD = CL.draftEnvelopeRevision(W5, R5, { addCandidateIds: ["bbbb000000000001"], removeItems: [], approvedHash: G4, target: "archive" });
   assert.ok(!rD.ok && /도장 없이 존재/.test(rD.error), "무단 서고 파일=덮어쓰기 거부: " + String(rD.error));
 });
@@ -369,7 +369,7 @@ t("★[4d blocker 반례] 13건 이상 서고 올림 초안→폐기=전 후보 
   fs.writeFileSync(path.join(R6, CL.ENVELOPE_FILE), coreRaw);
   assert.strictEqual(CL.setEnvelopeHashAllSlots(W6, CORE_HASH), 2);
   const ids6 = Array.from({ length: 13 }, (_, i) => "cc" + String(i).padStart(2, "0") + "000000000000");
-  CL.appendEnvelopeCandidates(W6, ids6.map((cid, i) => ({ candidateId: cid, envelopeHash: CORE_HASH, status: "proposed", kind: "resolved-blocker", title: "많은 수칙 " + (i + 1), ts: "T" })));
+  CL.appendEnvelopeCandidates(W6, ids6.map((cid, i) => ({ candidateId: cid, envelopeHash: CORE_HASH, status: "proposed", kind: "resolved-blocker", repoKey: CL.repoKeyOf(R6), title: "많은 수칙 " + (i + 1), ts: "T" })));
   const r = CL.draftEnvelopeRevision(W6, R6, { addCandidateIds: ids6, removeItems: [], approvedHash: CORE_HASH, target: "archive" });
   assert.strictEqual(r.ok, true, String(r.error || ""));
   const pr = CL.readEnvelopeProposal(W6, R6);
@@ -384,11 +384,11 @@ t("★[4f 실보고 반례] 대기열 정리기(reconcile)가 서고 문안까�
   const W9 = fs.mkdtempSync(path.join(os.tmpdir(), "envarc-rec-ws-"));
   const R9 = fs.mkdtempSync(path.join(os.tmpdir(), "envarc-rec-repo-"));
   fs.writeFileSync(path.join(R9, CL.ENVELOPE_FILE), coreRaw);
-  assert.strictEqual(CL.setEnvelopeHashAllSlots(W9, CORE_HASH), 2);
+  assert.strictEqual(CL.setEnvelopeHashAllSlots(W9, CORE_HASH), 2); CL.updateContractPatch(W9, undefined, { scoutRepo: R9 }); // [ab-1] 상신은 계약 정찰 대상과 repo 일치 요구
   fs.writeFileSync(path.join(R9, CL.ARCHIVE_FILE), arcText); // 서고 2항
   assert.strictEqual(CL.setContractHashAllSlots(W9, "archiveHash", sha1(arcText)), 2);
   // [재편 A] legacy resolved-blocker proposed는 정책 개정 정리 대상 — 스윕 계약은 현행 공급 kind(rule-manual)로 검사(스윕은 draftable 공통·계약 보존).
-  const mk9 = (cid, title) => ({ candidateId: cid, envelopeHash: CORE_HASH, status: "proposed", kind: "rule-manual", origin: "manual", policyVersion: 2, title, ts: "T" });
+  const mk9 = (cid, title) => ({ candidateId: cid, envelopeHash: CORE_HASH, status: "proposed", kind: "rule-manual", origin: "manual", policyVersion: 2, repoKey: CL.repoKeyOf(R9), title, ts: "T" });
   CL.appendEnvelopeCandidates(W9, [mk9("ff00000000000001", arcObj.alwaysBlocker[0]), mk9("ff00000000000002", "진짜 새로운 수칙"), mk9("ff00000000000003", coreObj.outOfScope[0])]);
   CL.reconcileMemoryCandidates(W9, R9, CORE_HASH);
   const { latest } = CL.readEnvelopeCandidates(W9);
@@ -455,7 +455,7 @@ t("★[재편 B 2차 blocker①] 취소 결속=wrapper 신원(draftId) — 같�
   fs.writeFileSync(path.join(R, CL.ENVELOPE_FILE), coreRaw);
   CL.setEnvelopeHashAllSlots(W, CORE_HASH);
   // 초안 A: 후보 X(문안 T) 올림 → 서고 신규 생성
-  const mk=(cid,title)=>({ candidateId: cid, envelopeHash: CORE_HASH, status: "proposed", kind: "rule-manual", origin: "manual", policyVersion: 2, title, ts: "T" });
+  const mk=(cid,title)=>({ candidateId: cid, envelopeHash: CORE_HASH, status: "proposed", kind: "rule-manual", origin: "manual", policyVersion: 2, repoKey: CL.repoKeyOf(R), title, ts: "T" });
   CL.appendEnvelopeCandidates(W, [mk("dd00000000000001","같은 문안 수칙"), mk("dd00000000000002","같은 문안 수칙")]);
   const a=CL.draftEnvelopeRevision(W,R,{addCandidateIds:["dd00000000000001"],removeItems:[],approvedHash:CORE_HASH,target:"archive"});
   assert.strictEqual(a.ok,true,"초안 A: "+(a.error||""));
