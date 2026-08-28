@@ -76,6 +76,14 @@ t("rule-propose 자격 거부: 비blocker=not-blocker·legacy(title 부재)=lega
   assert.strictEqual(CL.ruleProposeCandidate(WS, REPO, { findingId: "f-cccc0003", why: "이유", campaignId: camp, approvedHash: HASH }).reason, "not-blocker");
   assert.strictEqual(CL.ruleProposeCandidate(WS, REPO, { findingId: "f-bbbb0002", why: "이유", campaignId: camp, approvedHash: HASH }).reason, "legacy-unbound");
   assert.strictEqual(CL.ruleProposeCandidate(WS, REPO, { findingId: "f-dddd0004", why: "이유", campaignId: camp, approvedHash: HASH }).reason, "already-in-envelope");
+  { // [사실확인 blocker] 상신 시 억제 집합=코어 3축 전체 — supportedEnv 문안도 거부(초안 단계와 동형)
+    const supT = JSON.parse(fs.readFileSync(path.join(REPO, CL.ENVELOPE_FILE), "utf8")).supportedEnv[0];
+    fs.appendFileSync(CL.findingsLedgerFileFor(WS), [
+      { type: "finding", findingId: "f-supdup1", campaignId: camp, round: 9, tag: "blocker", titleNorm: "sd", title: supT, envelopeHash: HASH, status: "open", ts: "t" },
+      { type: "close", campaignId: camp, findingId: "f-supdup1", closeReason: "resolved", round: 9, envelopeHash: HASH, askId: "ask-sd", ts: "t" },
+    ].map((r) => JSON.stringify(r)).join("\n") + "\n");
+    assert.strictEqual(CL.ruleProposeCandidate(WS, REPO, { findingId: "f-supdup1", why: "전제 축 중복 반례", campaignId: camp, approvedHash: HASH }).reason, "already-in-envelope", "supportedEnv 기등재 문안=상신 거부");
+  }
   assert.strictEqual(CL.ruleProposeCandidate(WS, REPO, { findingId: "f-aaaa0001", why: "이유", campaignId: "cl:other:1", approvedHash: HASH }).reason, "other-campaign");
 });
 t("rule-propose why 방어: 누락·다행·120자 초과·민감 형태=거부(user-constraint 동형)", () => {

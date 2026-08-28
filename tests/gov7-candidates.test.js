@@ -88,6 +88,7 @@ console.log("[4] CLI — list·mark 실행(설치본 동형 소스 직접 호출
   const src = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
   ok(src.includes('case "envelope-candidate":') && src.includes("function cmdEnvelopeCandidate(rest)"), "CLI 스위치·명령 함수 존재");
   ok(src.includes('ENVELOPE_CANDIDATE_STATUSES.includes(status)') && src.includes("/^[0-9a-f]{16}$/.test(id)"), "mark 인자 strict(16hex id·닫힌 status 열거)");
+  ok(src.includes('CLd.draftEnvelopeRevision(ws, repo, { addCandidateIds: [id], removeItems: [], approvedHash: gen, target: "archive" })') && !/const r = draftEnvelopeCandidate\(ws, repo, id, gen\)/.test(src), "[재편 B] CLI draft=서고행 revision(코어 전용 draftEnvelopeCandidate 경로 폐기 — 승인 항목은 관련 시 적용 층으로만)");
 }
 
 console.log("[4b] [재편 B §3-1b] mark 실행 반례 — 합성(장부 밖) id의 adopted|declined 기록 거부");

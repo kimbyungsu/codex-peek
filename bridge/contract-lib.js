@@ -4408,8 +4408,8 @@ function ruleProposeCandidate(ws, repo, opts) {
   // 중복 억제 집합 — 승인 세대 실물 결속(reconcile·draft와 동형: 드리프트=거부).
   let env; try { env = readVerifyEnvelope(repo); } catch { return reject("envelope-read"); }
   if (!env || env.st !== "ok" || env.sha1 !== gen) return reject("envelope-drift");
-  const normSet = new Set();
-  for (const ax of ["alwaysBlocker", "outOfScope"]) for (const x of env.data[ax] || []) normSet.add(normBacklogTitle(x));
+  const normSet = new Set(); // 코어 3축 전체∪도장 서고 — 초안 단계 대조와 동형(사실확인 blocker: supportedEnv 누락 봉합)
+  for (const ax of ["supportedEnv", "alwaysBlocker", "outOfScope"]) for (const x of env.data[ax] || []) normSet.add(normBacklogTitle(x));
   try { const ah = (loadContract(ws) || {}).archiveHash; if (typeof ah === "string" && ah) { const ar = readVerifyEnvelopeArchive(repo); if (ar.st === "ok" && ar.sha1 === ah) for (const x of ar.data.alwaysBlocker) normSet.add(normBacklogTitle(x)); } } catch { /* 서고 판독 실패=코어만(보수) */ }
   const cut = title.length > ENVELOPE_CHAR_MAX ? title.slice(0, ENVELOPE_CHAR_MAX - "…[절단]".length) + "…[절단]" : title;
   if (normSet.has(normBacklogTitle(title)) || normSet.has(normBacklogTitle(cut))) return reject("already-in-envelope");

@@ -2739,7 +2739,9 @@ function cmdEnvelopeCandidate(rest) {
     const id = String(rest[1] || "");
     if (!/^[0-9a-f]{16}$/.test(id)) { console.error(en ? "usage: envelope-candidate draft <16hex-id>" : "사용: envelope-candidate draft <16자리 id>"); return 2; }
     const repo = resolveScoutRepo(ws, loadContract(ws)).repo;
-    const r = draftEnvelopeCandidate(ws, repo, id, gen);
+    // [재편 B 사실확인 blocker] 코어 전용 draftEnvelopeCandidate 잔존 경로 폐기 — 대시보드 [승인]과 동형(서고행 revision)
+    const CLd = require("./contract-lib.js");
+    const r = CLd.draftEnvelopeRevision(ws, repo, { addCandidateIds: [id], removeItems: [], approvedHash: gen, target: "archive" });
     if (!r.ok) { console.error((en ? "draft failed: " : "draft 실패: ") + r.error); return 1; }
     console.log((en ? "draft saved (approve via the existing dashboard stamp): " : "제안본 저장됨(승인은 기존 대시보드 도장 경로): ") + r.newHash + (r.parallelCopied ? (en ? " · parallel axes copied — user edit needed" : " · 병렬 축 복제됨 — 사용자 편집 필요") : ""));
     return 0;
