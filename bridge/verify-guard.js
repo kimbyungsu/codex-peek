@@ -8,7 +8,7 @@ const fs = require("fs");
 const path = require("path");
 const cp = require("child_process");
 const crypto = require("crypto");
-const { loadContract, BRIDGE, BRIDGE_DIR, atomicWrite, appendIntegrityEvent, supersedeIntegrity, writePhase, maybeCleanupState, loadLang, verifyTimeoutMin, claudeCampaignAnchor, verifyCampaignProgress } = require("./contract-lib.js");
+const { loadContract, BRIDGE, BRIDGE_DIR, atomicWrite, appendIntegrityEvent, supersedeIntegrity, writePhase, maybeCleanupState, loadLang, verifyTimeoutMin, claudeCampaignAnchor, verifyCampaignProgress, readResidual, addResidual, removeResidualItems, residualPending } = require("./contract-lib.js");
 const { validateCapHandoff, capHandoffInstruction, capHandoffContext, claudeAssistantText } = require("./verify-cap-handoff.js");
 try { maybeCleanupState(); } catch { /* 오래된 상태파일 정리는 best-effort — 검증 흐름 방해 금지 */ } // 매 턴 끝(Stop 훅)에 들르되 실제 청소는 하루 1회
 const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs");
@@ -244,8 +244,21 @@ process.stdin.on("end", () => {
     c.verifyMode === "plancode" ? (editedReal || planned) :
     editedReal;
 
+  // [잔여 재검증 강제] 직전 캠페인 마감의 "즉시 재검증" 마커가 있으면, 이 턴에 그 캠페인 id를 담은 통과 검증이 결속돼야 종료 —
+  // 결속되면 마커·경보를 해소(한 번 소비). 없으면 아래 차단문이 정확한 요청 형식을 알려준다(무한 차단은 기존 카운터로 바운드).
+  // 목록형 마커(정본=contract-lib): 항목별로 이 턴의 결속 통과를 찾아 소비 확정 — 남은 항목이 하나라도 있으면 종료 불가.
+  // 소비 기록 실패=미소비 취급(fail-closed). 전량 소비돼야 경보 해소.
+  let residual = readResidual(ws);
+  let residualOk = true;
+  if (residual) {
+    const rp = residualPending(ws, lastUserTs);
+    if (rp.consumed.length && !removeResidualItems(ws, rp.consumed.map((x) => x.campaignId))) residualOk = false;
+    else if (rp.items.length) residualOk = false;
+    if (residualOk) { residual = null; try { supersedeIntegrity(claudeSession, "verify-residual-now", ws); } catch { /* best-effort */ } }
+    else residual = { items: rp.items.length ? rp.items : residual.items };
+  }
   // 검증 불필요 또는 검증됨 → 통과 + 이번 턴 재검증 카운터 리셋.
-  if (!needVerify || verified) {
+  if ((!needVerify || verified) && residualOk) {
     clearAttempts(attemptKey);
     try { writePhase("done", { session: claudeSession, workspace: ws }); } catch { /* 진행표시 best-effort */ } // 턴 정상 종료(완료)
     process.exit(0);
@@ -255,7 +268,7 @@ process.stdin.on("end", () => {
   // 여기의 안전밸브는 '아무 진행도 없는 같은 상태'에서만 누적한다. 새 예약·실제 수정이 생기면 epoch가 바뀌어 리셋된다.
   const anchor = claudeCampaignAnchor(claudeSession);
   const progress = anchor.ok ? verifyCampaignProgress(ws, anchor.campaignId, c.verifyBudget) : { tracked: false, count: 0, budget: c.verifyBudget || 0, source: anchor.reason || "no-anchor" };
-  const progressEpoch = crypto.createHash("sha1").update(JSON.stringify({ campaignId: anchor.campaignId || "", count: progress.count || 0, budget: progress.budget || 0, sinceTs, editedReal, planned })).digest("hex");
+  const progressEpoch = crypto.createHash("sha1").update(JSON.stringify({ campaignId: anchor.campaignId || "", count: progress.count || 0, budget: progress.budget || 0, sinceTs, editedReal, planned, residual: residual ? residual.items.map((x) => x.campaignId).join(",") : "" })).digest("hex");
   const en = loadLang() === "en"; // 차단 사유는 Claude(모델)가 읽는 지시문 — 전역 언어를 따른다
   const round = progress.tracked && progress.budget >= 1 ? `${progress.count}/${progress.budget}` : (progress.budget === 0 ? (en ? "unlimited" : "무제한") : (en ? "untracked" : "미집계"));
   const capReached = progress.tracked && progress.budget >= 1 && progress.count >= progress.budget;
@@ -263,11 +276,25 @@ process.stdin.on("end", () => {
   // 상한에서는 새 검증 대신 마지막 지적의 네 갈래 마감을 요구한다. 사용자 판단 항목이 있을 때만 held,
   // 처리·반박·보관함으로 모두 닫혔으면 cap-settled다. 어느 쪽도 검증 통과로 위장하지 않는다.
   const capCloseout = capReached ? validateCapHandoff(claudeAssistantText(lines, lastUser), handoffCtx) : null;
+  let residualWriteFailed = false;
   if (capReached && capCloseout.ok) {
+    let wroteOk = true;
+    if (capCloseout.residualRisk === "now") { // 판단을 실행으로 결속: 마커(다음 턴 종료 차단 재료)+노랑 경보 — 기록 실패=마감 미수락(fail-closed·1회차 blocker②)
+      const evLines = (handoffCtx && Array.isArray(handoffCtx.evidence) ? handoffCtx.evidence : []).map((e) => `${e.key} ${e.title}`);
+      wroteOk = addResidual(ws, { campaignId: String(anchor.campaignId || ""), sourceAsk: (handoffCtx && handoffCtx.source) || "", evidence: evLines, ts: new Date().toISOString() });
+      // [2회차 blocker①] 노랑 경보 기록도 성공 조건 — appendIntegrityEvent는 atomicWrite 결과를 반환하므로 반환값을 검사(예외만 잡으면 false를 놓침)
+      if (wroteOk) { let evOk = false; try { evOk = appendIntegrityEvent({ ts: new Date().toISOString(), session: claudeSession || "", workspace: ws, kind: "verify-residual-now", severity: "warning",
+        detail: `마감문 판단 "즉시 재검증" — 다음 턴 첫 검증이 통과할 때까지 완료 보고가 차단됩니다(요청문에 캠페인 id ${anchor.campaignId} 포함).`,
+        detailKo: `마감문 판단 "즉시 재검증" — 다음 턴 첫 검증이 통과할 때까지 완료 보고가 차단됩니다(요청문에 캠페인 id ${anchor.campaignId} 포함).`,
+        detailEn: `Closeout call "Verify now" — completion reports stay blocked until the next turn's first verification passes (its request must include campaign id ${anchor.campaignId}).` }, { supersedeSameKindWs: true }) === true; } catch { evOk = false; } wroteOk = evOk; }
+    }
+    if (wroteOk) {
     clearAttempts(attemptKey);
     try { supersedeIntegrity(claudeSession, "verify-handoff-missing", ws); } catch { /* best-effort */ }
     try { writePhase(capCloseout.needsUserDecision ? "held" : "cap-settled", { session: claudeSession, workspace: ws, round: progress.count }); } catch { /* best-effort */ }
     process.exit(0);
+    }
+    residualWriteFailed = true; // 마커를 못 남기면 마감을 수락하지 않는다(아래 차단문이 재출력 요구·카운터로 유한)
   }
   const n = bumpAttempts(attemptKey, lastUserTs, progressEpoch);
   if (n === null) {
@@ -286,6 +313,15 @@ process.stdin.on("end", () => {
     // 같은 진행 상태에서 충분히 알렸으나 여전히 미검증 → 무한정지 방지로 종료 허용.
     // 단 '침묵'으로 넘기지 않는다: 무결성 이벤트로 기록해 확장이 상태바 빨강 + 대시보드로 사용자에게 보인다(결정2 가시화 1단계).
     process.stderr.write(`[verify-guard] 같은 진행 상태에서 종료 차단 안내가 반복됐으나 검증이 완료되지 않음 — 무한정지 방지로 종료를 허용합니다.\n`);
+    if ((residual && !residualOk) || residualWriteFailed) {
+      const ids9 = residualWriteFailed ? String(anchor.campaignId || "") : residual.items.map((x) => x.campaignId).join(", ");
+      const ko9 = residualWriteFailed ? `"즉시 재검증" 판단(캠페인 ${ids9})의 마커 기록에 실패해 실행 강제를 걸지 못한 채 턴이 끝났습니다 — 디스크 확인 후 마감문을 다시 출력하세요.` : `"즉시 재검증" 판단(캠페인 ${ids9})이 이행되지 않은 채 턴이 끝났습니다 — 다음 턴에도 계속 차단됩니다.`;
+      const en9 = residualWriteFailed ? `The "Verify now" marker for campaign ${ids9} could not be written, so enforcement is not armed — check the disk and re-emit the closeout.` : `The "Verify now" call (campaign ${ids9}) was not carried out before the turn ended — it keeps blocking next turns.`;
+      try { appendIntegrityEvent({ ts: new Date().toISOString(), session: claudeSession || "", workspace: ws, kind: "verify-residual-now", severity: "error", detail: ko9, detailKo: ko9, detailEn: en9 }, { supersedeSameKindWs: true }); } catch { /* best-effort */ }
+      try { writePhase("incomplete", { session: claudeSession, workspace: ws }); } catch { /* best-effort */ }
+      clearAttempts(attemptKey);
+      process.exit(0); // 마커는 유지(소비 없이 사라지지 않음)
+    }
     try {
       appendIntegrityEvent({
         ts: new Date().toISOString(),
@@ -312,8 +348,14 @@ process.stdin.on("end", () => {
   process.stdout.write(
     JSON.stringify({
       decision: "block",
-      reason: capReached
+      reason: residualWriteFailed // 마커 기록 실패는 상한 안내보다 우선(마감문은 이미 맞게 썼고 저장만 실패 — 재출력 요구)
+        ? (en ? `[Residual marker/alert write failed] Your closeout called "Verify now" but the marker or the yellow alert could not be written (disk). Re-emit the same closeout so the write is retried; the turn is not settled until both the marker and the alert exist.` : `[잔여 재검증 마커 기록 실패] 마감문의 "즉시 재검증" 판단(마커 또는 노랑 경보)을 저장하지 못했다(디스크). 같은 마감문을 다시 출력해 저장을 재시도하라 — 마커·경보가 남기 전에는 마감이 인정되지 않는다.`)
+        : capReached
         ? capHandoffInstruction(en ? "en" : "ko", round, (handoffCtx && handoffCtx.verdict) || "not-pass", handoffCtx) // 실제 판정 전달(2026-08-05 이중 실패 봉합 — 하드코딩 not-pass 폐기)
+        : (residual && !residualOk)
+        ? (en
+          ? `[Residual re-verification pending · actual round ${round}] The previous campaign(s) ${residual.items.map((x) => x.campaignId).join(", ")} closed with the call "Verify now", and those unverified changes have not been verified yet. In this turn start \`node "${BRIDGE}" ask-start --allow-new "[residual re-verification ${residual.items[0].campaignId}] <what to verify>"\` for each pending campaign id — the request text must contain that campaign id verbatim (this binds the pass to the call) — then repeat \`ask-wait <job-id>\` until it passes. Unverified items: ${residual.items.map((x) => `[${x.campaignId}] ${(x.evidence || []).join(" / ") || "(see the closeout)"}`).join(" ‖ ")}`
+          : `[잔여 재검증 미이행 · 실제 회차 ${round}] 직전 캠페인 ${residual.items.map((x) => x.campaignId).join(", ")} 마감에서 "즉시 재검증"으로 판단한 미검증분이 아직 검증되지 않았다. 남은 캠페인 id마다 이번 턴에서 \`node "${BRIDGE}" ask-start --allow-new "[잔여 재검증 ${residual.items[0].campaignId}] <무엇을 검증할지>"\` 로 시작하라 — 요청문에 그 캠페인 id 문자열이 그대로 들어가야 통과가 이 판단에 결속된다 — 그리고 \`ask-wait <job-id>\` 를 통과까지 반복하라. 미검증분: ${residual.items.map((x) => `[${x.campaignId}] ${(x.evidence || []).join(" / ") || "(마감문 참조)"}`).join(" ‖ ")}`)
         : en
           ? `[Verify mode:${c.verifyMode} · actual round ${round}] ${what} there is no successful Codex verification response bound to this turn. At most one durable verification may be queued/running: start one via \`node "${BRIDGE}" ask-start --allow-new "<what to verify>"\`, then repeat \`node "${BRIDGE}" ask-wait <job-id>\` while pending. The dashboard verification wait (${waitMin} min) is the actual deadline. After a completed fail or a later edit, finish that job before starting the next round sequentially; stop on pass. A new verifier session is created only when none is linked.`
           : `[검증 모드:${c.verifyMode} · 실제 회차 ${round}] ${what} 이번 턴에 결속된 Codex 통과 증명이 없다. queued/running 내구 검증은 동시에 최대 1개만 둘 수 있다. \`node "${BRIDGE}" ask-start --allow-new "<무엇을 검증할지>"\` 로 시작하고 pending이면 \`node "${BRIDGE}" ask-wait <job-id>\` 를 반복하라. 대시보드 검증 대기시간(${waitMin}분)이 실제 deadline이다. 완료된 실패 또는 이후 수정이 있으면 앞 작업을 끝낸 뒤 다음 회차를 순차적으로 시작하고, 통과하면 멈춰라. 연결이 전혀 없을 때만 새 검증 세션을 만든다.`,

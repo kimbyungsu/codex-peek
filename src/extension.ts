@@ -9435,13 +9435,15 @@ export function activate(context: vscode.ExtensionContext): void {
       const nSession = errs.filter((e) => e.kind === "session-missing").length; // 연결 세션 없음(빨강·연결되면 자동 해소, ack 아님)
       const nHook = errs.filter((e) => e.kind === "codex-hook-missing").length; // C-C 구현 훅 미작동(heartbeat로만 해소)
       const nHandoff = errs.filter((e) => e.kind === "verify-handoff-missing").length; // 상한 뒤 네 갈래 마감문 누락
-      const nIncomplete = errs.length - nFail - nSession - nHook - nHandoff;            // 검증 미완(검증 자체가 안 일어남·ack 필요)
-      const ekinds = [nFail > 0, nSession > 0, nHook > 0, nHandoff > 0, nIncomplete > 0].filter(Boolean).length;
+      const nResidual = errs.filter((e) => e.kind === "verify-residual-now").length; // 마감문 "즉시 재검증" 판단 미이행(다음 턴 종료 차단 중)
+      const nIncomplete = errs.length - nFail - nSession - nHook - nHandoff - nResidual; // 검증 미완(검증 자체가 안 일어남·ack 필요)
+      const ekinds = [nFail > 0, nSession > 0, nHook > 0, nHandoff > 0, nResidual > 0, nIncomplete > 0].filter(Boolean).length;
       const label = ekinds > 1 ? tE("Codex 검증 문제","Codex verify issues")
                   : nFail ? tE("Codex 검증 실패","Codex verify failed")
                   : nSession ? tE("Codex 세션 없음","no Codex session")
                   : nHook ? tE("Codex 구현 훅 미작동","Codex implementer hook inactive")
                   : nHandoff ? tE("검증 상한 마감 누락","verification cap closeout missing")
+                  : nResidual ? tE("즉시 재검증 미이행","re-verification pending")
                   : tE("Codex 검증 미완","Codex verify incomplete");
       const warnTail = warns.length ? ` · 🟡${warns.length}` : ""; // 같이 뜬 노랑(두뇌 어긋남·근거 의심 등)도 건수로 노출
       status.text = `$(alert) ${label} ${errs.length}${warnTail}`;
