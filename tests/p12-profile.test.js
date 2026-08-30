@@ -44,22 +44,22 @@ ok(["core","integrity"].every((pf)=>CL.verifierBaselineFor("ko",pf).includes(CL.
 ok(!coreKo.verifyBaseline.includes("지적 목록") && !/맨 마지막 한 줄/.test(coreKo.verifyBaseline), "캐논 문안에는 기계 서식이 없다(편집 개방 안전 — 서식은 상수가 정본)");
 ok(/Core profile/.test(coreEn.verifyBaseline) && /'Verdict: pass' \/ 'Verdict: pass \(notes\)' \/ 'Verdict: inconclusive' \/ 'Verdict: fail'/.test(CL.verifierFormatDirective("en")) && CL.verifierBaselineFor("en","core").includes(CL.verifierFormatDirective("en")), "core en — 동등 규약+영어 판독 문법=코드 고정 상수·전달본 동봉");
 ok(/목표 \/ 인수조건/.test(coreKo.transmit) && /goal \/ acceptance criteria/.test(coreEn.transmit), "core 전달 원칙 — 요청문 구조화(ⓔ·한/영)");
-ok(/이 루프에서 수정하지 마라/.test(coreKo.rejudge) && /'보류'로 사용자에게 선택을 넘겨라/.test(coreKo.rejudge) && /무결성 프로필로 승격 검증 1회/.test(coreKo.rejudge), "core 재판단 — 백로그(범위 밖 제안) 수정 금지·교착 시 보류 승격·승격 게이트 권장");
+ok(/이 루프에서 수정하지 마라/.test(coreKo.rejudge) && /decisions raise/.test(coreKo.rejudge) && /무결성 프로필로 승격 검증 1회/.test(coreKo.rejudge), "core 재판단 — 백로그(범위 밖 제안) 수정 금지·교착 시 보류 승격·승격 게이트 권장");
 // [v2.3 2026-07-17] 보류 3분류 의무 + 백로그 단계 경계(마감 선별 승격) — ko/en 대칭(사용자 승인 개정)
-ok(/\[분쟁 보류\]/.test(coreKo.rejudge) && /\[미해결 결함 보류\]/.test(coreKo.rejudge) && /\[외부 결정 보류\]/.test(coreKo.rejudge) && /그냥 보류'는 금지/.test(coreKo.rejudge) && /대상 지적·최종 상태·사용자 선택지/.test(coreKo.rejudge), "v2.3 — 보류 이관은 3분류+근거 의무('그냥 보류' 금지)");
+ok(/산문으로 '보류\/선택해 주세요'를 쓰지 마라/.test(coreKo.rejudge) && /escalate --decision/.test(coreKo.rejudge) && /구현자가 못 정하는 이유/.test(coreKo.rejudge) && /관문이 받지 않는다/.test(coreKo.rejudge), "v2.3 — 보류 이관은 3분류+근거 의무('그냥 보류' 금지)");
 ok(/갚을 의무가 없다/.test(coreKo.rejudge) && /채택할 때만 작업이 된다/.test(coreKo.rejudge) && !/묶음 마감\(최종 커밋 전\)에는 열린 장부를 선별하라/.test(coreKo.rejudge), "v2.4 — 보관함=의무 없음(마감 선별 의무 조항 제거·순환 차단)");
 ok(/\[보완\]/.test(coreKo.rejudge) && /일괄 반영하고 확인 검증 1회로 마감/.test(coreKo.rejudge) && /추가 왕복은 새 blocker에만 허용/.test(coreKo.rejudge) && /\[보완\]을 보관함으로 미루지 마라/.test(coreKo.rejudge), "v2.4 — [보완]=이번 루프 일괄 반영+확인 1회(연쇄 차단·보관 금지)");
 ok(/지적이라는 이유만으로 수용하지도 마라/.test(coreKo.rejudge) && /반박에는 실측 반례가 필요/.test(coreKo.rejudge) && /반박이 성립하지 않는 한 반드시 고치고/.test(coreKo.rejudge), "v2.4 — 수동 전건 흡수 금지·blocker도 반박 대상(사용자 강조)");
 ok(/처리표를 첨부하라/.test(coreKo.rejudge) && /'보관' 분류를 기각할 수 있다/.test(coreKo.rejudge) && /disposition table/.test(coreEn.rejudge) && /may reject a 'parked' classification/.test(coreEn.rejudge), "v2.4 — 처리표+검증자 분류 기각권(자기 면제 차단·ko/en)");
 ok(/세 갈래로 표기하라/.test(coreKo.verifyBaseline) && /\[보완\]/.test(coreKo.verifyBaseline) && /범위 밖 제안/.test(coreKo.verifyBaseline) && /이름만 '저확률·경합·테스트 보강'이라고/.test(coreKo.verifyBaseline) && /three ways/.test(coreEn.verifyBaseline) && /\[notes\]/.test(coreEn.verifyBaseline), "v2.4 — 비차단 3분류([주의]/[보완]/[백로그]=범위 밖)·오분류 방지(ko/en)");
-ok(/\[disputed hold\]/.test(coreEn.rejudge) && /\[unresolved-defect hold\]/.test(coreEn.rejudge) && /\[external-decision hold\]/.test(coreEn.rejudge) && /Never a bare hold/.test(coreEn.rejudge) && /no repayment duty/.test(coreEn.rejudge), "v2.3+v2.4 en — 3분류 보류·보관 의무 없음 동등 규약");
-ok(/allowed immediately even with budget left/.test(coreEn.rejudge) && /예산·왕복이 남아도 즉시 가능/.test(coreKo.rejudge), "v2.3 — 외부 결정 보류는 예산 소진 전 즉시 가능(예산 소진=충분조건, 유일 정의 아님)");
+ok(/never as prose 'hold\/please choose'/.test(coreEn.rejudge) && /escalate --decision/.test(coreEn.rejudge) && /why the implementer cannot decide/.test(coreEn.rejudge) && /the gate rejects it/.test(coreEn.rejudge) && /no repayment duty/.test(coreEn.rejudge), "v2.3+v2.4 en — 3분류 보류·보관 의무 없음 동등 규약");
+ok(/round-judge <askId> escalate/.test(coreEn.rejudge) && /round-judge <askId> escalate/.test(coreKo.rejudge), "v2.3 — 외부 결정 보류는 예산 소진 전 즉시 가능(예산 소진=충분조건, 유일 정의 아님)");
 ok(CL.loadBaseDirective("ko").verifyBaseline === CL.baseDefaultsFor("ko").verifyBaseline, "integrity(미지정)=현행 캐논 그대로(무회귀)");
 ok(CL.loadBaseDirective("ko", "integrity").verifyBaseline === CL.loadBaseDirective("ko").verifyBaseline, "명시 integrity=미지정과 동일");
 // integrity 프리셋 1글자 불변(스냅샷 대조 — 5항 실질 영향 원칙 문구 앵커)
 const sha16 = (t) => require("crypto").createHash("sha256").update(t, "utf8").digest("hex").slice(0, 16);
-ok(sha16(CL.BASE_DEFAULTS.verifyBaseline) === "461511a18371d19a" && sha16(CL.BASE_DEFAULTS.transmit) === "10938882fe841e0d" && sha16(CL.BASE_DEFAULTS.rejudge) === "f173809f9d2fb9b2", "integrity ko 캐논 3축 전문 해시 불변(스냅샷 갱신 2026-08-14: 기억 권위 B-1 — ab 직접 충돌 판정 규칙 추가(MEMORY-AUTHORITY-DESIGN §3))");
-ok(sha16(CL.BASE_DEFAULTS_EN.verifyBaseline) === "813dbad1d5a5eba1" && sha16(CL.BASE_DEFAULTS_EN.transmit) === "9175bd8183f9bee2" && sha16(CL.BASE_DEFAULTS_EN.rejudge) === "fe94b5f4383cdd8c", "integrity en 캐논 3축 전문 해시 불변(스냅샷 갱신 2026-08-14 — 동일 B-1 추가)");
+ok(sha16(CL.BASE_DEFAULTS.verifyBaseline) === "461511a18371d19a" && sha16(CL.BASE_DEFAULTS.transmit) === "10938882fe841e0d" && sha16(CL.BASE_DEFAULTS.rejudge) === "1a8db4f90e9f4057" /* 2026-08-30 장치화 */, "integrity ko 캐논 3축 전문 해시 불변(스냅샷 갱신 2026-08-14: 기억 권위 B-1 — ab 직접 충돌 판정 규칙 추가(MEMORY-AUTHORITY-DESIGN §3))");
+ok(sha16(CL.BASE_DEFAULTS_EN.verifyBaseline) === "813dbad1d5a5eba1" && sha16(CL.BASE_DEFAULTS_EN.transmit) === "9175bd8183f9bee2" && sha16(CL.BASE_DEFAULTS_EN.rejudge) === "58bdb66677a49b77" /* 2026-08-30 장치화: 보류 산문→decisions raise/escalate 절차 */, "integrity en 캐논 3축 전문 해시 불변(스냅샷 갱신 2026-08-14 — 동일 B-1 추가)");
 // 오버라이드는 integrity에만 적용, core 전환이 오버라이드 파일 바이트를 건드리지 않음(ⓑ 불변 조건)
 CL.saveBaseDirective({ verifyBaseline: "사용자 커스텀 원칙", transmit: "", rejudge: "" }, "ko");
 const ovFile = CL.baseDirectiveFileFor("ko");
@@ -77,7 +77,7 @@ console.log("[2b] v2.6 프롬프트 축소(2026-07-19 사용자 승인) — 기�
   ok(eLen <= 6200, "핵심 캐논 en 총량 상한 6,200자(v2.5 7,414→현재 " + eLen + ")");
   ok(CL.formatForClaude(ans2b(), "ko", "core").includes("상세 절차는 아래 [재판단 규약]을 따르라"), "footer 축소 — 행동 요약+재판단 규약 위임(중복 재서술 제거)");
   // v2.6 1차 blocker 봉합 잠금: ①보류 3분류의 고유 첨부 의무(왕복 이력·잔여 위험)는 압축에도 보존
-  ok(/왕복 이력 첨부/.test(coreKo.rejudge) && /잔여 위험 첨부/.test(coreKo.rejudge) && /round-trip history/.test(coreEn.rejudge) && /residual risk/.test(coreEn.rejudge), "보류 3분류 고유 첨부(왕복 이력·잔여 위험) 보존 — 사용자 결정 정보 삭제 금지(ko/en)");
+  ok(/일상 상황예시로/.test(coreKo.rejudge) && /decisions list/.test(coreKo.rejudge) && /plain everyday scenarios/.test(coreEn.rejudge) && /decisions list/.test(coreEn.rejudge), "보류 3분류 고유 첨부(왕복 이력·잔여 위험) 보존 — 사용자 결정 정보 삭제 금지(ko/en)");
   // ②footer는 재판단 규약 미주입 경로(검증 모드 off의 직접 ask)에서도 최소 규약으로 자립
   const fkoB = CL.formatForClaude(ans2b(), "ko", "core"), fenB = CL.formatForClaude("x\nVerdict: pass (notes)", "en", "core");
   ok(/수정하지 말고 보관함 기록·목록 전달/.test(fkoB) && /자동 등록 거부\/실패=수동 등록/.test(fkoB) && /붙어 있지 않으면 이 문장들이 최소 규약/.test(fkoB), "footer 자립 fallback ko — [백로그] 수정 금지·수동 등록·미첨부 최소 규약 명시");
@@ -114,7 +114,7 @@ ok(CL.formatForClaude(ans, "ko").includes("[수용/반박/보류]로 최종 보�
 ok(CL.formatForClaude(ans, "ko", "core").includes("'첫 판정'이면: 수용한 '[보완]'을 일괄 반영하고 확인 검증 1회로 마감") && CL.formatForClaude(ans, "ko", "core").includes("'확인 검증'의 판정이면: 새로 나온 비차단 지적") && CL.formatForClaude(ans, "ko", "core").includes("갚을 의무 없음") && CL.formatForClaude(ans, "en", "core").includes("If this is the FIRST verdict") && CL.formatForClaude(ans, "en", "core").includes("CONFIRMATION's verdict"), "core pass-notes footer=v2.4 양분기(첫 판정=일괄 반영·확인 판정=미반영 보고 — 확인 루프 재개방 차단·ko/en)");
 ok(CL.formatForClaude("x\n검증: 실패", "ko", "core").includes("반박이 성립하지 않는 한 고치고") && CL.formatForClaude("x\n검증: 실패", "ko", "core").includes("'확인 검증'의 판정이면 새 blocker만"), "core fail footer=v2.4(blocker 반박 대등·확인 판정 분기)");
 ok(CL.formatForClaude("x\nVerdict: fail", "en", "core").includes("unless a rebuttal stands") && CL.formatForClaude("x\nVerdict: fail", "en", "core").includes("[notes]"), "core en fail footer=v2.4 대칭");
-ok(CL.formatForClaude("x\n검증: 보류", "ko", "core").includes("[분쟁|미해결 결함|외부 결정]"), "core inconclusive footer=보류 3분류 안내(v2.4)");
+ok(CL.formatForClaude("x\n검증: 보류", "ko", "core").includes("decisions raise + escalate"), "core inconclusive footer=구현자 선판단+방향 질문만 장치로(2026-08-30 — 옛 보류 3분류 산문 안내 폐기)");
 ok(CL.formatForClaude(ans, "ko", "core").includes("검증: 통과(보완)"), "footer에 원문 판정 줄 보존(판독·재판단 원칙 불변)");
 ok(CL.extractVerdict("x\n검증: 통과(보완)") === "pass-notes" && CL.extractVerdict("x\nVerdict: fail") === "fail", "판독기 4단 판정 불변(계약 ⓖ)");
 

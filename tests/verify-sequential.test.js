@@ -82,14 +82,32 @@ const handoffKo = `[검증 상한 인계]
 [보관함 이관]
 없음
 [사용자 판단 필요]
-- EVIDENCE-UNAVAILABLE — 대상: 저장한 선택값. 상황: 화면을 다시 열면 그 선택이 사라질 수 있습니다. 위험: 사용자가 끝난 작업으로 오해할 수 있습니다. 선택 1: 위험을 감수하고 현재 상태를 유지합니다. 선택 2: 다음 턴에 원인을 다시 확인하고 수정합니다.
+없음
 [잔여 위험 판단]
 다음 캠페인 도장 — 이유: 미검증 수정은 시험 한 줄 문구뿐이라 회귀 시험이 덮습니다.
 [경고등 의미]
 verdict-nonclean 빨간 경고는 통과 인증이 없다는 뜻이라 남습니다. verify-handoff-missing 빨강은 이 마감문으로 해소되지만, 이 마감 자체는 검증 통과가 아닙니다.
 [권장]
-사용자가 끝난 작업으로 오인하는 위험을 막기 위해 선택 2로 다음 턴에 다시 확인하는 것을 권장합니다.`;
+사용자 판단 없이 처리 내용을 유지하고 다음 변경 때 다시 확인하기를 권장합니다.`;
 ok(VH.validateCapHandoff(handoffKo).ok, "필수 내용을 채운 한국어 상한 인계문 판독");
+// 검증자 답을 읽지 못한 마감(EVIDENCE-UNAVAILABLE): 사용자 판단이 아니라 [잔여 위험 판단] '즉시 재검증'
+const unavailableKo = handoffKo
+  .replace("다음 캠페인 도장 — 이유: 미검증 수정은 시험 한 줄 문구뿐이라 회귀 시험이 덮습니다.", "즉시 재검증 — 이유: EVIDENCE-UNAVAILABLE 마지막 검증자 답을 읽지 못했으므로 서식을 다시 받아 검증해야 합니다.")
+  .replace("사용자 판단 없이 처리 내용을 유지하고 다음 변경 때 다시 확인하기를 권장합니다.", "검증자 답을 읽지 못했으니 이 턴에서 서식 재발급을 요청해 새 검증을 시작하기를 권장합니다.");
+ok(VH.validateCapHandoff(unavailableKo).ok, "판독 불가 마감(즉시 재검증+EVIDENCE 표기)도 형식 승인");
+// [개선 2 · 2026-08-30] 사용자 판단 절 = 결정 장부 렌더 블록만(산문 질문·근거 키 나열 거부) · EVIDENCE-UNAVAILABLE 은 잔여 위험 절
+const decisionBlockKo = `- 결정 0123456789abcdef: 저장한 선택값 복원 방식을 바꿀까요?
+  왜: 재진입 시 값이 사라지는 지적이 반복됨
+  구현자가 못 정하는 이유: 저장 방식은 제품 방향이라 구현자가 대신 정할 수 없음
+  선택 1 (keep): 현재 방식 유지 — 고르면: 재진입 시 값이 사라질 수 있음
+  선택 2 (persist): 저장소에 영속 — 고르면: 다음 검증에서 영속 방식을 검증
+  권장: persist — 저장소에 영속
+  답하기: node codex-bridge.js decisions choose 0123456789abcdef <키> | decisions delegate 0123456789abcdef (네가 정해라)`;
+const decisionKo = handoffKo.replace("[사용자 판단 필요]\n없음", "[사용자 판단 필요]\n" + decisionBlockKo);
+{ const rD = VH.validateCapHandoff(decisionKo); ok(rD.ok && rD.needsUserDecision && rD.decisionCount === 1, "결정 장부 렌더 블록이 있는 마감=사용자 판단 대기(형식 검사)"); }
+ok(!VH.validateCapHandoff(handoffKo.replace("[사용자 판단 필요]\n없음", "[사용자 판단 필요]\n- 대상: 저장한 선택값. 상황: 사라질 수 있음. 위험: 오해. 선택 1: 유지. 선택 2: 수정.")).ok, "옛 산문 질문 형식은 거부(장부 블록만)");
+ok(!VH.validateCapHandoff(handoffKo.replace("[사용자 판단 필요]\n없음", "[사용자 판단 필요]\n" + decisionBlockKo.replace("  구현자가 못 정하는 이유: 저장 방식은 제품 방향이라 구현자가 대신 정할 수 없음\n", ""))).ok, "블록에 '구현자가 못 정하는 이유'가 빠지면 거부");
+
 // [잔여 위험 판단 2026-08-29] 절 부재·셋 밖 시작·이유 없음·'즉시 재검증'인데 권장이 검증을 말하지 않음=거부 / 정상 3종=승인
 ok(!VH.validateCapHandoff(handoffKo.replace(/\[잔여 위험 판단\]\n[^\n]*\n/, "")).ok, "잔여 위험 판단 절 부재=거부(판단 없이 사실 적시만 하는 마감 차단)");
 ok(!VH.validateCapHandoff(handoffKo.replace("다음 캠페인 도장 — 이유:", "나중에 보자 — 이유:")).ok, "셋 밖 문구로 시작=거부");
@@ -99,18 +117,18 @@ ok(!VH.validateCapHandoff(handoffKo.replace("다음 캠페인 도장 — 이유:
   const rNow = VH.validateCapHandoff(nowKo); ok(rNow.ok && rNow.residualRisk === "now", "즉시 재검증+권장 일치=승인·판정 반환");
   const rIgn = VH.validateCapHandoff(handoffKo.replace("다음 캠페인 도장 — 이유: 미검증 수정은 시험 한 줄 문구뿐이라 회귀 시험이 덮습니다.", "무시 가능 — 이유: 마지막 판정 뒤 코드 수정이 없고 보고 문구만 바뀌었습니다.")); ok(rIgn.ok && rIgn.residualRisk === "ignore", "무시 가능+이유=승인");
   ok(VH.capHandoffInstruction("ko", "5/5", "실패").includes("[잔여 위험 판단]") && VH.capHandoffInstruction("en", "5/5", "fail").includes("[Residual risk call]"), "안내문 ko/en에 절 포함"); }
-ok(VH.validateCapHandoff(handoffKo).needsUserDecision, "실제 선택 항목이 있을 때만 사용자 판단 대기로 분류");
+ok(!VH.validateCapHandoff(handoffKo).needsUserDecision && VH.validateCapHandoff(decisionKo).needsUserDecision, "실제 결정 장부 블록이 있을 때만 사용자 판단 대기로 분류");
 ok(!VH.validateCapHandoff("[검증 상한 인계]\n[사용자 판단 필요]").ok, "제목·내용이 빠진 형식 흉내는 거부");
 ok(!VH.validateCapHandoff(VH.capHandoffInstruction("ko", "5/5", "실패")).ok, "훅 안내문을 그대로 되풀이한 것은 실제 판단 인계로 인정하지 않음");
 const editedEchoKo = VH.capHandoffInstruction("ko", "5/5", "실패").replace("없으면 없음.", "없음.");
 ok(!VH.validateCapHandoff(editedEchoKo).ok, "보류 선택지만 지운 수정 안내문 echo도 실제 판단 인계로 인정하지 않음");
-const partialEchoKo = handoffKo.replace("EVIDENCE-UNAVAILABLE — 대상: 저장한 선택값.", "각 근거는 아래 네 절 중 정확히 한 곳에만 두고 대상: 저장한 선택값.");
+const partialEchoKo = handoffKo.replace("다음 캠페인 도장 — 이유:", "각 근거는 아래 네 절 중 정확히 한 곳에만 두고 다음 캠페인 도장 — 이유:");
 ok(!VH.validateCapHandoff(partialEchoKo).ok, "안내문 한 절만 남은 부분 echo도 거부");
 const fillerEn = `[Verification cap closeout]\n[Accepted and handled]\nplaceholder content here\n[Rebutted and closed]\nplaceholder content here\n[Parked]\nplaceholder content here\n[User decision required]\nplaceholder content here\n[Residual risk call]\nNext campaign — Reason: the unverified edit is a single test wording line covered by regression tests.\n[Alert meaning]\nplaceholder content here\n[Recommendation]\nplaceholder content here`;
 ok(!VH.validateCapHandoff(fillerEn).ok, "모든 절을 일반 filler로 채운 형식 흉내 거부");
 const genericEn = `[Verification cap closeout]\n[Accepted and handled]\nNone\n[Rebutted and closed]\nNone\n[Parked]\nNone\n[User decision required]\nTarget: a problem. Scenario: a situation may cause an issue. Risk: this problem could create a risk. Option 1: keep it. Option 2: change it.\n[Residual risk call]\nNext campaign — Reason: the unverified edit is a single test wording line covered by regression tests.\n[Alert meaning]\nThe red alert remains because there is no pass certification.\n[Recommendation]\nThe recommended action is to fix it because a risk exists.`;
 ok(!VH.validateCapHandoff(genericEn).ok, "문제·상황·위험 키워드만 배치한 대상 없는 일반론 거부");
-const handoffEn = `[Verification cap closeout]\n[Accepted and handled]\nNone\n[Rebutted and closed]\nNone\n[Parked]\nNone\n[User decision required]\n- EVIDENCE-UNAVAILABLE — Target: the saved dashboard choice. Scenario: it may disappear after reopening. Risk: the user could mistake unfinished work for completion. Option 1: keep the known risk. Option 2: inspect and fix it next turn.\n[Residual risk call]\nNext campaign — Reason: the unverified edit is a single test wording line covered by regression tests.\n[Alert meaning]\nThe red alert remains because there is no pass certification; this closeout does not clear that verdict.\n[Recommendation]\nI recommend option 2 because it avoids a false completion signal.`;
+const handoffEn = `[Verification cap closeout]\n[Accepted and handled]\nNone\n[Rebutted and closed]\nNone\n[Parked]\nNone\n[User decision required]\nNone\n[Residual risk call]\nNext campaign — Reason: the unverified edit is a single test wording line covered by regression tests.\n[Alert meaning]\nThe red alert remains because there is no pass certification; this closeout does not clear that verdict.\n[Recommendation]\nI recommend keeping the handled state and re-checking it in the next change's normal verification.`;
 ok(VH.validateCapHandoff(handoffEn).ok, "영어 슬롯도 같은 내용의 상한 인계문을 판독");
 const evidenceDir = path.join(home, "ask-jobs"), evidenceId = "ask-evidence-0000000001", evidenceCampaign = "cc:evidence:turn";
 fs.mkdirSync(evidenceDir, { recursive: true });
@@ -120,12 +138,25 @@ const writeEvidenceJob = (id, campaignId, roundNo, answer, innerId = id, jobWs =
 };
 writeEvidenceJob(evidenceId, evidenceCampaign, 5, `[지적 목록 v1]\n{"tag":"blocker","title":"저장한 선택값이 화면 재진입 뒤 사라진다"}\n[지적 목록 끝]\n검증: 실패\n`);
 const parkReceipt = CL.backlogAdd(ws, { tag: "백로그", title: "저장한 선택값이 화면 재진입 뒤 사라진다", lang: "ko", mode: "test", profile: "core", source: "verify-sequential" });
+const escDecision = CL.openDecision(ws, { origin: "implementer", kind: "product", campaignId: evidenceCampaign, sourceAsk: evidenceId, targetFp: "", question: "저장한 선택값 복원 방식을 영속 저장으로 바꿀까요?", why: "재진입 시 값이 사라지는 지적(R5-F1)", noDefault: "저장 방식은 제품 방향이라 구현자가 대신 정할 수 없음", choices: [{ key: "keep", label: "현재 방식 유지", ifChosen: "재진입 시 값이 사라질 수 있음" }, { key: "persist", label: "저장소에 영속", ifChosen: "다음 검증에서 영속 방식을 검증" }], recommend: "persist" });
+ok(escDecision.ok, "사용자 판단용 결정 항목을 장부에 만든다(구현자 판단의 구조 채널)");
 const evidenceCtx = VH.capHandoffContext(home, ws, evidenceCampaign);
 ok(evidenceCtx.evidence.length === 1 && evidenceCtx.evidence[0].key === "R5-F1" && evidenceCtx.alertKind === "verdict-nonclean" && !evidenceCtx.unavailable, "실제 캠페인 검증 출력에서 근거 키·제목·경고 종류를 결속");
+ok(Array.isArray(evidenceCtx.decisions) && evidenceCtx.decisions.some((d) => d.id === escDecision.decisionId), "마감 문맥에 열린 결정 장부 항목이 동봉된다");
+const escBlockKo = CL.renderDecisionBlock(CL.readDecisions(ws).latest.get(escDecision.decisionId), false); // 정본 렌더 그대로(검사기가 글자 단위 대조)
+ok(/^- 결정 [a-f0-9]{16}: 저장한 선택값 복원 방식을 영속 저장으로 바꿀까요\?/.test(escBlockKo) && escBlockKo.includes("R5-F1") && escBlockKo.includes("답하기:"), "정본 렌더=쉬운 말 블록(질문·왜·못 정하는 이유·선택·권장·답하기)");
 const evidenceHandoff = handoffKo
-  .replace("EVIDENCE-UNAVAILABLE — 대상: 저장한 선택값.", "R5-F1 저장한 선택값이 화면 재진입 뒤 사라진다 — 대상: 저장한 선택값.")
+  .replace("[사용자 판단 필요]\n없음", "[사용자 판단 필요]\n" + escBlockKo)
   .replace("verify-handoff-missing 빨강은 이 마감문으로 해소되지만", "verify-handoff-missing 빨강은 없고 verdict-nonclean은 나중의 통과 검증으로 해소되며");
-ok(VH.validateCapHandoff(evidenceHandoff, evidenceCtx).ok, "인계문이 실제 지적 키·제목과 경고에 결속되면 승인");
+ok(VH.validateCapHandoff(evidenceHandoff, evidenceCtx).ok, "인계문이 실제 지적 키를 결정 블록 안에 인용하고 장부 항목과 일치하면 승인");
+ok(!VH.validateCapHandoff(evidenceHandoff.replace(escDecision.decisionId, "0123456789abcdef"), evidenceCtx).ok, "장부에 없는 결정 id 블록은 거부(산문 질문 차단)");
+ok(!VH.validateCapHandoff(evidenceHandoff.replace("저장한 선택값 복원 방식을 영속 저장으로 바꿀까요?", "다른 질문으로 바꿔치기?"), evidenceCtx).ok, "장부 질문과 다른 블록은 거부");
+// [1회차 blocker ab-3] 헤더만 바꾸고 원래 질문을 본문에 숨기거나, 선택지·권장만 바꿔치기해도 거부(정본 렌더와 글자 단위 대조)
+const forgedHeader = evidenceHandoff.replace(`- 결정 ${escDecision.decisionId}: 저장한 선택값 복원 방식을 영속 저장으로 바꿀까요?`, `- 결정 ${escDecision.decisionId}: 저장소를 지울까요?`).replace("  왜: 재진입 시 값이 사라지는 지적(R5-F1)", "  왜: 저장한 선택값 복원 방식을 영속 저장으로 바꿀까요? 재진입 시 값이 사라지는 지적(R5-F1)");
+ok(!VH.validateCapHandoff(forgedHeader, evidenceCtx).ok, "헤더 질문 바꿔치기+원 질문 본문 은닉=거부");
+ok(!VH.validateCapHandoff(evidenceHandoff.replace("선택 2 (persist): 저장소에 영속", "선택 2 (erase): 저장소 삭제"), evidenceCtx).ok, "선택지 바꿔치기=거부");
+ok(!VH.validateCapHandoff(evidenceHandoff.replace("권장: persist — 저장소에 영속", "권장: keep — 현재 방식 유지"), evidenceCtx).ok, "권장 바꿔치기=거부");
+ok(VH.validateCapHandoff(evidenceHandoff.replace("\n  왜:", "\n\n  왜:"), evidenceCtx).ok, "공백·빈 줄 차이는 대조에 영향 없음(정규화)");
 ok(!VH.validateCapHandoff(handoffKo, evidenceCtx).ok, "형식이 완전해도 실제 지적 키·제목이 없으면 승인하지 않음");
 const acceptedCloseout = `[검증 상한 인계]
 [수용·처리]
@@ -183,8 +214,11 @@ writeEvidenceJob("ask-missingr4-0000000004", missingCampaign, 4, `[지적 목록
 writeEvidenceJob("ask-missingr5-0000000005", missingCampaign, 5, null);
 const missingCtx = VH.capHandoffContext(home, ws, missingCampaign);
 ok(missingCtx.unavailable && missingCtx.source === "ask-missingr5-0000000005" && missingCtx.evidence.length === 0, "최신 성공 출력 누락은 과거 근거로 은폐하거나 되살리지 않음");
-const missingHandoffWithoutFlag = handoffKo.replace("EVIDENCE-UNAVAILABLE — ", "");
-ok(!VH.validateCapHandoff(missingHandoffWithoutFlag, missingCtx).ok, "최신 출력 누락 시 EVIDENCE-UNAVAILABLE 없는 인계 승인 거부");
+const missingHandoffWithoutFlag = unavailableKo.replace("즉시 재검증 — 이유: EVIDENCE-UNAVAILABLE ", "즉시 재검증 — 이유: ");
+ok(!VH.validateCapHandoff(missingHandoffWithoutFlag, missingCtx).ok, "최신 출력 누락 시 잔여 위험 절에 EVIDENCE-UNAVAILABLE 없는 인계 승인 거부");
+ok(!VH.validateCapHandoff(handoffKo, missingCtx).ok, "누락인데 '다음 캠페인 도장'으로 닫는 마감은 거부(판독 불가=재검증 판단)");
+ok(VH.validateCapHandoff(unavailableKo, missingCtx).ok, "누락 시 정상 마감=사용자 판단 없음+잔여 위험 '즉시 재검증'+EVIDENCE-UNAVAILABLE 표기");
+ok(!VH.validateCapHandoff(unavailableKo.replace("즉시 재검증 — 이유: EVIDENCE-UNAVAILABLE 마지막 검증자 답을 읽지 못했으므로 서식을 다시 받아 검증해야 합니다.", "무시 가능 — 이유: EVIDENCE-UNAVAILABLE 읽지 못했지만 괜찮습니다."), missingCtx).ok, "판독 불가를 '무시 가능'으로 닫는 마감은 거부");
 const corruptCampaign = "cc:partial-corrupt:turn";
 writeEvidenceJob("ask-partial-0000000005", corruptCampaign, 5, `[지적 목록 v1]\n{"tag":"blocker","title":"첫 지적"}\n{broken json\n[지적 목록 끝]\n검증: 실패\n`);
 const corruptCtx = VH.capHandoffContext(home, ws, corruptCampaign);
@@ -363,8 +397,10 @@ fs.appendFileSync(rollout, msg("assistant", genericEn) + "\n");
 runC();
 const genericPhaseC = JSON.parse(fs.readFileSync(CL.PHASE_FILE, "utf8"));
 ok(genericPhaseC.phase !== "held" && CL.readIntegrityEvents().some((e) => e.workspace && CL.normWs(e.workspace) === CL.normWs(wsC) && e.kind === "verify-handoff-missing"), "C-C 실제 rollout에서도 키워드형 일반론은 held로 우회하거나 누락 빨강을 지우지 못함");
-fs.appendFileSync(rollout, msg("assistant", handoffKo) + "\n");
-ok(runC().stdout === "", "C-C 실제 rollout에 인계문이 생기면 정상 종료");
+const dC = CL.openDecision(wsC, { origin: "implementer", kind: "product", campaignId: campC, sourceAsk: "", targetFp: "", question: "저장한 선택값 복원 방식을 영속 저장으로 바꿀까요?", why: "재진입 시 값이 사라짐", noDefault: "저장 방식은 제품 방향이라 구현자가 대신 정할 수 없음", choices: [{ key: "keep", label: "현재 방식 유지", ifChosen: "값이 사라질 수 있음" }, { key: "persist", label: "저장소에 영속", ifChosen: "다음 검증에서 확인" }], recommend: "persist" });
+const decisionKoC = unavailableKo.replace("[사용자 판단 필요]\n없음", "[사용자 판단 필요]\n" + CL.renderDecisionBlock(CL.readDecisions(wsC).latest.get(dC.decisionId), false));
+fs.appendFileSync(rollout, msg("assistant", decisionKoC) + "\n");
+ok(runC().stdout === "", "C-C 실제 rollout에 인계문(결정 장부 블록)이 생기면 정상 종료");
 const heldC = JSON.parse(fs.readFileSync(CL.PHASE_FILE, "utf8"));
 ok(heldC.phase === "held" && heldC.round === 5 && CL.normWs(heldC.workspace) === CL.normWs(wsC), "C-C도 사용자 판단 대기로 표시");
 writeEvidenceJob("ask-cccloseout-0000000005", campC, 5, `[지적 목록 v1]\n{"tag":"blocker","title":"저장한 선택값이 화면 재진입 뒤 사라진다"}\n[지적 목록 끝]\n검증: 실패\n`, "ask-cccloseout-0000000005", wsC);

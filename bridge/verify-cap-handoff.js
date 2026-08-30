@@ -2,7 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { extractVerdict, authoritativeVerdict, findingsBlockRange, askJobIdOk, readBacklog, normBacklogTitle } = require("./contract-lib.js");
+const { extractVerdict, authoritativeVerdict, findingsBlockRange, askJobIdOk, readBacklog, normBacklogTitle, readDecisions, renderDecisionBlock } = require("./contract-lib.js");
 
 // 검증 상한은 검증 호출만 멈춘다. 마지막 검증 지적은 구현자가 먼저 네 갈래로 재판단한다.
 // 처리·반박·보관함 항목은 사용자에게 결정을 떠넘기지 않고, 실제 제품 선택만 한 번에 올린다.
@@ -69,6 +69,9 @@ function capHandoffContext(bridgeDir, ws, campaignId) {
   const dir = path.join(String(bridgeDir || ""), "ask-jobs");
   const jobs = [];
   let backlogItems = [], backlogHealthy = false;
+  // [개선 2 · 마감문 사용자 판단 절 2026-08-30] 결정 장부의 열린 항목만 사용자 판단으로 인정 — 구현자 산문 질문 차단(스크립트 출력 강제)
+  let decisions = [];
+  try { decisions = readDecisions(ws).open.map((d) => ({ id: String(d.decisionId), question: String(d.question || ""), renderKo: renderDecisionBlock(d, false), renderEn: renderDecisionBlock(d, true) })); } catch { decisions = []; }
   try {
     const backlog = readBacklog(ws);
     backlogHealthy = !backlog.readError && Number(backlog.corrupt || 0) === 0;
@@ -83,16 +86,16 @@ function capHandoffContext(bridgeDir, ws, campaignId) {
       if (!j || j.state !== "succeeded" || j.campaignId !== campaignId || localNormWs(j.workspace) !== localNormWs(ws)) continue;
       jobs.push({ job: j, fileId: fm[1] });
     }
-  } catch { return { evidence: [], alertKind: "verify-handoff-missing", source: "unavailable", unavailable: true, backlogItems, backlogHealthy }; }
+  } catch { return { evidence: [], alertKind: "verify-handoff-missing", source: "unavailable", unavailable: true, backlogItems, backlogHealthy, decisions }; }
   jobs.sort((a, b) => (Number(a.job.verifyRound) || 0) - (Number(b.job.verifyRound) || 0)
     || Date.parse(a.job.finishedAt || a.job.startedAt || 0) - Date.parse(b.job.finishedAt || b.job.startedAt || 0));
   const rec = jobs[jobs.length - 1];
   if (!rec || !askJobIdOk(rec.fileId) || rec.job.id !== rec.fileId) {
-    return { evidence: [], alertKind: "verify-handoff-missing", source: rec ? rec.fileId : "unavailable", unavailable: true, backlogItems, backlogHealthy };
+    return { evidence: [], alertKind: "verify-handoff-missing", source: rec ? rec.fileId : "unavailable", unavailable: true, backlogItems, backlogHealthy, decisions };
   }
   let answer = "";
   try { answer = fs.readFileSync(path.join(dir, rec.fileId + ".out"), "utf8"); }
-  catch { return { evidence: [], alertKind: "verify-handoff-missing", source: rec.fileId, unavailable: true, backlogItems, backlogHealthy }; }
+  catch { return { evidence: [], alertKind: "verify-handoff-missing", source: rec.fileId, unavailable: true, backlogItems, backlogHealthy, decisions }; }
   const verdict = verdictFromAnswer(answer);
   // 판정을 문맥에 '동봉'한다(2026-08-05 사용자 실보고 — 이중 실패 봉합): 종전에는 여기서 판정을 계산해
   // alertKind에만 쓰고 버려, 인계문이 하드코딩 "not-pass"로 거짓 전달됐고, 마지막 판정이 '통과'라 지적이
@@ -106,15 +109,48 @@ function capHandoffContext(bridgeDir, ws, campaignId) {
   const alertKind = verdict === "fail" || verdict === "inconclusive" ? "verdict-nonclean" : (cleanPass ? "verify-incomplete" : "verify-handoff-missing");
   if (cleanPass) {
     // 통과·열린 지적 0 = 판독 실패가 아니라 정상 — '통과 이후 수정만 미검증' 사례로 정직 표기(보류 계열 경고)
-    return { evidence: [], alertKind, source: rec.fileId, unavailable: false, passNoFindings: true, verdict, backlogItems, backlogHealthy };
+    return { evidence: [], alertKind, source: rec.fileId, unavailable: false, passNoFindings: true, verdict, backlogItems, backlogHealthy, decisions };
   }
-  if (!parsed.ok || !parsed.evidence.length) return { evidence: [], alertKind, source: rec.fileId, unavailable: true, verdict, backlogItems, backlogHealthy };
-  return { evidence: parsed.evidence, alertKind, source: rec.fileId, unavailable: false, verdict, backlogItems, backlogHealthy };
+  if (!parsed.ok || !parsed.evidence.length) return { evidence: [], alertKind, source: rec.fileId, unavailable: true, verdict, backlogItems, backlogHealthy, decisions };
+  return { evidence: parsed.evidence, alertKind, source: rec.fileId, unavailable: false, verdict, backlogItems, backlogHealthy, decisions };
 }
 
 function requiredEvidence(context) {
-  const evidence = context && Array.isArray(context.evidence) ? context.evidence : [];
-  return evidence.length ? evidence : (context && context.unavailable ? [{ key: "EVIDENCE-UNAVAILABLE", title: "" }] : []);
+  // EVIDENCE-UNAVAILABLE(검증자 답 판독 불가)은 더 이상 '사용자 판단' 항목이 아니다 — [잔여 위험 판단] 절에서 재검증 판단으로 다룬다(P5②).
+  return context && Array.isArray(context.evidence) ? context.evidence : [];
+}
+
+// [사용자 판단 필요] 절 = 결정 장부에서 렌더한 블록만("- 결정 <id>: 질문" + 왜/구현자가 못 정하는 이유/선택 1·2/답하기). 산문 질문·근거 키 나열은 거부.
+// context.decisions(열린 장부 항목)가 있으면 id 실존·질문 일치까지 결속. 블록 안에 인용된 지적 키(R5-F1)는 그 지적의 유일한 행선지로 센다.
+function decisionBlocksOk(schema, body, context) {
+  const head = schema.lang === "en" ? /^-\s*Decision\s+([a-f0-9]{16})\s*:\s*(.+)$/i : /^-\s*결정\s+([a-f0-9]{16})\s*:\s*(.+)$/;
+  const blocks = []; let cur = null;
+  for (const raw of String(body || "").split(/\r?\n/)) {
+    const line = raw.trim(); if (!line) continue;
+    const m = head.exec(line);
+    if (m) { cur = { id: m[1].toLowerCase(), question: m[2].trim(), header: line, body: "" }; blocks.push(cur); continue; }
+    if (!cur) return { ok: false };
+    cur.body += "\n" + line;
+  }
+  if (!blocks.length) return { ok: false };
+  const need = schema.lang === "en"
+    ? [/why\s*:/i, /why the implementer cannot decide\s*:/i, /option\s*1\b/i, /option\s*2\b/i, /answer\s*:/i]
+    : [/왜\s*:/, /구현자가 못 정하는 이유\s*:/, /선택\s*1\b/, /선택\s*2\b/, /답하기\s*:/];
+  const known = context && Array.isArray(context.decisions) ? new Map(context.decisions.map((d) => [String(d.id).toLowerCase(), d])) : null;
+  const ids = new Set();
+  for (const b of blocks) {
+    if (ids.has(b.id)) return { ok: false };
+    ids.add(b.id);
+    if (!need.every((re) => re.test(b.body))) return { ok: false };
+    if (known) {
+      const d = known.get(b.id);
+      if (!d) return { ok: false };
+      // 정본 렌더와 글자 단위 대조(공백 정규화) — 질문·이유·선택지·권장·답하기 어느 하나라도 장부와 다르면 위조(1회차 blocker·ab-3).
+      const canon = normBody(schema.lang === "en" ? d.renderEn : d.renderKo);
+      if (!canon || normBody(b.header + " " + b.body) !== canon) return { ok: false };
+    }
+  }
+  return { ok: true, count: blocks.length };
 }
 
 function machineEvidence(value) {
@@ -135,7 +171,7 @@ function categoryLines(schema, rawBodies, context) {
   const allowed = new Set(required.map((e) => String(e.key).toLowerCase()));
   const byKey = new Map(required.map((e) => [String(e.key).toLowerCase(), e]));
   const seen = new Set();
-  for (let lane = 0; lane < 4; lane++) {
+  for (let lane = 0; lane < 3; lane++) {
     const raw = String(rawBodies[lane] || "").trim();
     if (isNone(schema, raw)) continue;
     const lines = raw.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
@@ -151,7 +187,6 @@ function categoryLines(schema, rawBodies, context) {
       seen.add(key);
       const evidence = byKey.get(key);
       if (evidence && evidence.title && countNeedle(line, evidence.title) !== 1) return false;
-      if (context && context.unavailable && key === "evidence-unavailable" && lane !== 3) return false;
       if (lane === 0) {
         const f = schema.lang === "en" ? /\bChange\s*:\s*(.+?)\s*;\s*Check\s*:\s*(.+?)\s*;\s*Evidence\s*:\s*(.+)$/i.exec(line) : /변경\s*:\s*(.+?)\s*;\s*확인\s*:\s*(.+?)\s*;\s*근거\s*:\s*(.+)$/i.exec(line);
         if (!f || !machineEvidence(f[1]) || !machineEvidence(f[2]) || !machineEvidence(f[3])) return false;
@@ -166,6 +201,12 @@ function categoryLines(schema, rawBodies, context) {
         if (!item || !evidence || normBacklogTitle(item.title).toLowerCase() !== normBacklogTitle(evidence.title).toLowerCase()) return false;
       }
     }
+  }
+  // 네 번째 절(결정 블록) 안에 인용된 지적 키 = 그 지적의 행선지(escalate). 최신 집합 밖 키·중복은 거부.
+  for (const m of String(rawBodies[3] || "").matchAll(/\b(R\d+-F\d+)\b/g)) {
+    const key = m[1].toLowerCase();
+    if ((context ? (!allowed.size || !allowed.has(key)) : false) || seen.has(key)) return false;
+    seen.add(key);
   }
   return !allowed.size || seen.size === allowed.size;
 }
@@ -186,16 +227,14 @@ function meaningfulSections(schema, rawBodies, context) {
     if (accepted && !(b[0].length >= 28 && /fixed|implemented|changed|removed|completed|handled|tested|confirmed|evidence/i.test(b[0]))) return null;
     if (rebutted && !(b[1].length >= 36 && /because|reason|rebut|counterexample|measured|reproduced|test|evidence|observed/i.test(b[1]))) return null;
     if (parked && !(b[2].length >= 30 && /\b[a-f0-9]{16}\b/i.test(b[2]) && /receipt|park|backlog|caution/i.test(b[2]))) return null;
-    if (needsUserDecision && (!(b[3].length >= 60 && /target\s*:/i.test(b[3]) && /scenario\s*:/i.test(b[3]) && /risk\s*:/i.test(b[3]) && /option\s*1\s*:/i.test(b[3]) && /option\s*2\s*:/i.test(b[3]))
-      || /target\s*:\s*(?:(?:a|an|the|this|that|some)\s+)?(?:problem|issue|finding|situation|something|risk)\b/i.test(b[3]))) return null;
+    if (needsUserDecision && !decisionBlocksOk(schema, rawBodies[3], context).ok) return null;
     if (!/alert|red|yellow/i.test(b[5]) || !/pass|certif|clear|remain|ignore|acknowledge|later/i.test(b[5])) return null;
     if (b[6].length < 20 || !/recommend|recommended|because|reason|therefore|no user decision/i.test(b[6])) return null;
   } else {
     if (accepted && !(b[0].length >= 20 && /수정|구현|변경|제거|완료|처리|시험|테스트|확인|근거/i.test(b[0]))) return null;
     if (rebutted && !(b[1].length >= 24 && /때문|이유|반박|반례|측정|재현|시험|테스트|근거|확인/i.test(b[1]))) return null;
     if (parked && !(b[2].length >= 22 && /\b[a-f0-9]{16}\b/i.test(b[2]) && /영수증|보관함|백로그|주의|이관/i.test(b[2]))) return null;
-    if (needsUserDecision && (!(b[3].length >= 45 && /대상\s*:/i.test(b[3]) && /상황\s*:/i.test(b[3]) && /위험\s*:/i.test(b[3]) && /선택\s*1\s*:/i.test(b[3]) && /선택\s*2\s*:/i.test(b[3]))
-      || /대상\s*:\s*(?:(?:해당|위|이|그|어떤)\s*)?(?:문제|지적|상황|위험|무언가)(?:\s|[.,;]|$)/i.test(b[3]))) return null;
+    if (needsUserDecision && !decisionBlocksOk(schema, rawBodies[3], context).ok) return null;
     if (!/경고|빨강|노랑/i.test(b[5]) || !/통과|인증|해소|남|무시|확인|나중/i.test(b[5])) return null;
     if (b[6].length < 16 || !/권장|추천|때문|이유|따라서|사용자 판단 없/i.test(b[6])) return null;
   }
@@ -211,8 +250,11 @@ function meaningfulSections(schema, rawBodies, context) {
   if (!rrKind) return null;
   if (schema.lang === "en" ? !(rr.length >= 30 && /reason\s*:/i.test(rr)) : !(rr.length >= 20 && /이유\s*:/.test(rr))) return null;
   if (rrKind === "now" && (schema.lang === "en" ? !/verif/i.test(b[6]) : !/검증/.test(b[6]))) return null; // 즉시 재검증이면 권장도 새 검증을 말해야 한다
+  // 검증자 답을 읽지 못한 마감(P5②): 사용자 판단이 아니라 재검증 판단 — 잔여 위험 절이 그 사실(EVIDENCE-UNAVAILABLE)을 담고 '무시 가능'일 수 없다.
+  if (context && context.unavailable && (rrKind === "ignore" || !/EVIDENCE-UNAVAILABLE/.test(rr))) return null;
   if (context && context.alertKind && !b[5].toLowerCase().includes(String(context.alertKind).toLowerCase())) return null;
-  return { needsUserDecision, decisionCount: needsUserDecision ? 1 : 0, residualRisk: rrKind };
+  const dcount = needsUserDecision ? (decisionBlocksOk(schema, rawBodies[3], context).count || 0) : 0;
+  return { needsUserDecision, decisionCount: dcount, residualRisk: rrKind };
 }
 
 function validateCapHandoff(text, context) {
@@ -249,9 +291,9 @@ function capHandoffInstruction(lang, round, verdict, context) {
     : "- PASS-NO-FINDINGS (마지막 판정 통과 — 열린 지적 없음·통과 이후의 수정만 미검증)");
   else if (ctx.unavailable || !evidenceLines.length) evidenceLines.push("- EVIDENCE-UNAVAILABLE (the latest verification findings could not be read completely)");
   const evidence = evidenceLines.join("\n");
-  if (lang === "en") return `[Verify mode · actual round ${round}] The verification-call cap is exhausted and there is no pass proof bound to this turn (last verdict: ${vEn}). Do not start another verification job. Re-judge only the latest findings below and write one closeout using the exact headings. Put each evidence item in exactly one of the first four sections. The Stop hook accepts the closeout only when every item has one destination.\nLatest evidence (${ctx.source || "unavailable"}):\n${evidence}\nExpected dashboard alert key: ${ctx.alertKind || "verify-handoff-missing"}\n\n[Verification cap closeout]\n[Accepted and handled]\nOne item per line: - <key> <exact title> — Change: <specific change containing a file, backticked identifier, test/setting key, or measured value>; Check: <specific result with one of those anchors>; Evidence: <one of those anchors again>. Every field needs its own anchor. Write None if empty.\n[Rebutted and closed]\nOne item per line: - <key> <exact title> — Observation: <counterexample with its own anchor>; Reason: <closing reason with its own anchor>; Evidence: <one anchor again>. Every field needs its own anchor. Write None if empty.\n[Parked]\nOne item per line. Park only after backlog add with the exact finding title; include that open item's real 16-hex receipt id. Write None if empty.\n[User decision required]\nOne item per line beginning with its key. Use this only for a real product-direction, risk-acceptance, or external choice that the implementer cannot decide. For each item give Target:, Scenario:, Risk:, then one combined Option 1: and Option 2:. EVIDENCE-UNAVAILABLE must go here. If the only evidence line above is PASS-NO-FINDINGS, write None in all four sections. Write None if empty; do not invent a user question.\n[Residual risk call]\nOne line that starts with exactly one of these three, then Reason: — "Verify now" (the unverified edits touch a boundary, integrity, or data: start a new verification campaign in this turn and say so in Recommendation), "Next campaign" (local edits covered by regression tests: stamp them in the next campaign's first verification), "Ignorable" (no unverified code change, wording only).\n[Alert meaning]\nInclude the expected alert key verbatim. Explain whether the remaining red/yellow alert needs user action and that this closeout is not a verification pass.\n[Recommendation]\nRecommend one next action, or explicitly say no user decision is needed. Do not split this into several questions.`;
+  if (lang === "en") return `[Verify mode · actual round ${round}] The verification-call cap is exhausted and there is no pass proof bound to this turn (last verdict: ${vEn}). Do not start another verification job. Re-judge only the latest findings below and write one closeout using the exact headings. Put each evidence item in exactly one of the first four sections. The Stop hook accepts the closeout only when every item has one destination.\nLatest evidence (${ctx.source || "unavailable"}):\n${evidence}\nExpected dashboard alert key: ${ctx.alertKind || "verify-handoff-missing"}\n\n[Verification cap closeout]\n[Accepted and handled]\nOne item per line: - <key> <exact title> — Change: <specific change containing a file, backticked identifier, test/setting key, or measured value>; Check: <specific result with one of those anchors>; Evidence: <one of those anchors again>. Every field needs its own anchor. Write None if empty.\n[Rebutted and closed]\nOne item per line: - <key> <exact title> — Observation: <counterexample with its own anchor>; Reason: <closing reason with its own anchor>; Evidence: <one anchor again>. Every field needs its own anchor. Write None if empty.\n[Parked]\nOne item per line. Park only after backlog add with the exact finding title; include that open item's real 16-hex receipt id. Write None if empty.\n[User decision required]\nOnly open items of the decision ledger, pasted from \`node codex-bridge.js decisions render\` (block: - Decision <id>: <question> / Why: / Why the implementer cannot decide: / Option 1 (key): … — if chosen: … / Option 2 … / Recommended: / Answer: …). Use user decision required only for a boundary, product-direction, risk-acceptance, or external choice the implementer cannot decide — create it first with decisions raise and record it with finding-judge/round-judge escalate --decision <id>; a finding escalated this way is cited inside its block by key. Prose questions are rejected. If the only evidence line above is PASS-NO-FINDINGS, write None in all four sections. Write None if empty; do not invent a user question. EVIDENCE-UNAVAILABLE (the verifier's answer could not be read) is NOT a user decision — put it in [Residual risk call] as "Verify now — Reason: EVIDENCE-UNAVAILABLE …" (request the findings format again).\n[Residual risk call]\nOne line that starts with exactly one of these three, then Reason: — "Verify now" (the unverified edits touch a boundary, integrity, or data: start a new verification campaign in this turn and say so in Recommendation), "Next campaign" (local edits covered by regression tests: stamp them in the next campaign's first verification), "Ignorable" (no unverified code change, wording only).\n[Alert meaning]\nInclude the expected alert key verbatim. Explain whether the remaining red/yellow alert needs user action and that this closeout is not a verification pass.\n[Recommendation]\nRecommend one next action, or explicitly say no user decision is needed. Do not split this into several questions.`;
   const evidenceKo = evidence.replace("(the latest verification findings could not be read completely)", "(마지막 검증 지적을 완전하게 읽지 못함)");
-  return `[검증 모드 · 실제 회차 ${round}] 검증 호출 상한이 소진됐고 결속된 통과 증명이 없습니다(마지막 판정: ${vKo}). 새 검증 작업은 만들지 마세요. 아래 마지막 검증 지적만 다시 판단해 정확한 제목으로 마감문 하나를 쓰세요. 각 근거는 아래 네 절 중 정확히 한 곳에만 들어가야 하며, 모든 항목의 행선지가 정해져야 Stop 훅이 인정합니다.\n마지막 검증 근거(${ctx.source || "판독 불가"}):\n${evidenceKo}\n현재 대시보드 경고 키: ${ctx.alertKind || "verify-handoff-missing"}\n\n[검증 상한 인계]\n[수용·처리]\n한 항목을 한 줄로 씁니다: - <키> <정확한 제목> — 변경: <파일·백틱 식별자·시험/설정 키·측정값 중 하나를 포함한 구체 변경>; 확인: <그런 식별 근거를 자체 포함한 구체 결과>; 근거: <식별 근거 하나>. 세 칸 각각 자기 근거가 필요합니다. 없으면 없음.\n[반박·종결]\n한 항목을 한 줄로 씁니다: - <키> <정확한 제목> — 관측: <자기 식별 근거를 포함한 반례>; 이유: <자기 식별 근거를 포함한 종결 이유>; 근거: <식별 근거 하나>. 세 칸 각각 자기 근거가 필요합니다. 없으면 없음.\n[보관함 이관]\n한 항목을 한 줄로 씁니다. 정확한 지적 제목으로 backlog add를 먼저 실행하고 그 열린 항목의 실제 16자리 영수증 id를 씁니다. 없으면 없음.\n[사용자 판단 필요]\n각 항목을 키로 시작하는 한 줄로 씁니다. 구현자가 대신 정할 수 없는 제품 방향·위험 수용·외부 결정만 두고, 각 항목에 대상:, 상황:, 위험:을 쓴 뒤 전체를 묶은 선택 1:, 선택 2:를 제시하세요. EVIDENCE-UNAVAILABLE은 이 절에 둡니다. 위 근거가 PASS-NO-FINDINGS뿐이면 네 절을 모두 없음으로 쓰면 됩니다. 없으면 없음이라고 쓰고 사용자 질문을 만들지 마세요.\n[잔여 위험 판단]\n검증자가 못 본 마지막 수정분을 어떻게 볼지 한 줄로 판단합니다. 셋 중 하나로 시작하고 이유를 답니다: "즉시 재검증"(경계·무결성·데이터에 닿는 수정 — 이 턴에서 새 검증 캠페인을 시작하고 권장 절에도 그렇게 씀) / "다음 캠페인 도장"(국소 수정·회귀 시험으로 덮임 — 다음 작업 첫 검증에 동승) / "무시 가능"(미검증 코드 수정 없음·문구뿐). 이유: 를 반드시 포함.\n[경고등 의미]\n현재 경고 키를 그대로 포함하고, 남은 빨강·노랑에 사용자 행동이 필요한지와 이 마감이 검증 통과는 아니라는 점을 밝히세요.\n[권장]\n다음 행동 하나를 권장하거나 사용자 판단이 필요 없다고 명시하세요. 질문을 여러 개로 쪼개지 마세요.`;
+  return `[검증 모드 · 실제 회차 ${round}] 검증 호출 상한이 소진됐고 결속된 통과 증명이 없습니다(마지막 판정: ${vKo}). 새 검증 작업은 만들지 마세요. 아래 마지막 검증 지적만 다시 판단해 정확한 제목으로 마감문 하나를 쓰세요. 각 근거는 아래 네 절 중 정확히 한 곳에만 들어가야 하며, 모든 항목의 행선지가 정해져야 Stop 훅이 인정합니다.\n마지막 검증 근거(${ctx.source || "판독 불가"}):\n${evidenceKo}\n현재 대시보드 경고 키: ${ctx.alertKind || "verify-handoff-missing"}\n\n[검증 상한 인계]\n[수용·처리]\n한 항목을 한 줄로 씁니다: - <키> <정확한 제목> — 변경: <파일·백틱 식별자·시험/설정 키·측정값 중 하나를 포함한 구체 변경>; 확인: <그런 식별 근거를 자체 포함한 구체 결과>; 근거: <식별 근거 하나>. 세 칸 각각 자기 근거가 필요합니다. 없으면 없음.\n[반박·종결]\n한 항목을 한 줄로 씁니다: - <키> <정확한 제목> — 관측: <자기 식별 근거를 포함한 반례>; 이유: <자기 식별 근거를 포함한 종결 이유>; 근거: <식별 근거 하나>. 세 칸 각각 자기 근거가 필요합니다. 없으면 없음.\n[보관함 이관]\n한 항목을 한 줄로 씁니다. 정확한 지적 제목으로 backlog add를 먼저 실행하고 그 열린 항목의 실제 16자리 영수증 id를 씁니다. 없으면 없음.\n[사용자 판단 필요]\n결정 장부의 열린 항목만, \`node codex-bridge.js decisions render\` 출력을 그대로 붙입니다(블록: - 결정 <id>: <질문> / 왜: / 구현자가 못 정하는 이유: / 선택 1 (키): … — 고르면: … / 선택 2 … / 권장: / 답하기: …). 사용자 판단은 구현자가 대신 정할 수 없는 범위표·제품 방향·위험 수용·외부 결정만 — 먼저 decisions raise 로 항목을 만들고 finding-judge/round-judge escalate --decision <id> 로 기록하며, 그렇게 올린 지적은 블록 안에 키로 인용합니다. 산문 질문은 거부됩니다. 위 근거가 PASS-NO-FINDINGS뿐이면 네 절을 모두 없음으로 쓰면 됩니다. 없으면 없음이라고 쓰고 사용자 질문을 만들지 마세요. EVIDENCE-UNAVAILABLE(검증자 답을 읽지 못함)은 사용자 판단이 아니라 [잔여 위험 판단]에 "즉시 재검증 — 이유: EVIDENCE-UNAVAILABLE …"로 씁니다(서식 재발급 요청).\n[잔여 위험 판단]\n검증자가 못 본 마지막 수정분을 어떻게 볼지 한 줄로 판단합니다. 셋 중 하나로 시작하고 이유를 답니다: "즉시 재검증"(경계·무결성·데이터에 닿는 수정 — 이 턴에서 새 검증 캠페인을 시작하고 권장 절에도 그렇게 씀) / "다음 캠페인 도장"(국소 수정·회귀 시험으로 덮임 — 다음 작업 첫 검증에 동승) / "무시 가능"(미검증 코드 수정 없음·문구뿐). 이유: 를 반드시 포함.\n[경고등 의미]\n현재 경고 키를 그대로 포함하고, 남은 빨강·노랑에 사용자 행동이 필요한지와 이 마감이 검증 통과는 아니라는 점을 밝히세요.\n[권장]\n다음 행동 하나를 권장하거나 사용자 판단이 필요 없다고 명시하세요. 질문을 여러 개로 쪼개지 마세요.`;
 }
 
 function textOfContent(content) {
