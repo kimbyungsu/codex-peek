@@ -216,4 +216,67 @@ t("소스 핀 — 하네스 자동 생산자 없음(openDecision 호출은 CLI r
   assert.deepStrictEqual(CL.DECISION_ORIGINS, ["implementer"]);
 });
 
+t("결정 블록 서식 — 사용자 편집(기본지침 파일의 decisionBlock)이 렌더·마감 검사에 함께 반영, 자리표시자 빠진 서식은 거부·기본 폴백", () => {
+  const VH = require("../bridge/verify-cap-handoff.js");
+  const WS7 = fs.mkdtempSync(path.join(os.tmpdir(), "decisions-ws7-"));
+  const d0 = CL.openDecision(WS7, spec({ targetFp: "" }));
+  const before = CL.renderDecisionBlock(CL.readDecisions(WS7).latest.get(d0.decisionId), false);
+  assert.ok(before.includes("구현자가 못 정하는 이유:"), before);
+  // 사용자가 낱말을 고침: '왜:' → '배경:', '구현자가 못 정하는 이유:' → '제가 정할 수 없는 까닭:'
+  const tpl = Object.assign({}, CL.DECISION_TEMPLATE_DEFAULTS.ko, { why: "  배경: {{why}}", noDefault: "  제가 정할 수 없는 까닭: {{noDefault}}" });
+  assert.strictEqual(CL.saveDecisionTemplate(tpl, "ko").ok, true);
+  assert.strictEqual(CL.loadDecisionTemplate("ko").overridden, true);
+  const after = CL.renderDecisionBlock(CL.readDecisions(WS7).latest.get(d0.decisionId), false);
+  assert.ok(after.includes("제가 정할 수 없는 까닭:") && after.includes("배경:") && !after.includes("구현자가 못 정하는 이유:"), after);
+  // 마감 검사기도 같은 서식을 따른다: 새 서식 블록=승인 / 옛 낱말 블록=거부
+  const ctx = { evidence: [], alertKind: "verdict-nonclean", unavailable: false, decisions: [{ id: d0.decisionId, question: spec().question, renderKo: after, renderEn: "" }], backlogItems: [], backlogHealthy: true };
+  const closeout = (block) => `[검증 상한 인계]\n[수용·처리]\n없음\n[반박·종결]\n없음\n[보관함 이관]\n없음\n[사용자 판단 필요]\n${block}\n[잔여 위험 판단]\n다음 캠페인 도장 — 이유: 미검증 수정은 시험 한 줄 문구뿐이라 회귀 시험이 덮습니다.\n[경고등 의미]\nverdict-nonclean 빨강은 통과 인증이 없다는 뜻이라 남고, 이 마감은 검증 통과가 아닙니다.\n[권장]\n사용자 판단 없이 처리 내용을 유지하고 다음 변경 때 다시 확인하기를 권장합니다.`;
+  assert.strictEqual(VH.validateCapHandoff(closeout(after), ctx).ok, true, "new-template block accepted");
+  assert.strictEqual(VH.validateCapHandoff(closeout(before), ctx).ok, false, "old-label block rejected after the user edited the template");
+  // 세 축 저장이 서식 오버라이드를 지우지 않는다(ab-2)
+  const def = CL.baseDefaultsFor("ko", "core");
+  assert.strictEqual(CL.saveBaseDirective({ verifyBaseline: def.verifyBaseline + "\n사용자 추가 원칙", transmit: def.transmit, rejudge: def.rejudge }, "ko", "core"), true);
+  assert.strictEqual(CL.loadDecisionTemplate("ko").overridden, true, "template override survives base-directive save");
+  assert.ok(CL.loadBaseDirective("ko", "core").verifyBaseline.includes("사용자 추가 원칙"));
+  // [3회차] 자리표시자 재배치 서식도 렌더=검사: 헤더 "- 사용자 선택: {{question}} [{{id}}]"
+  assert.strictEqual(CL.saveDecisionTemplate(Object.assign({}, tpl, { choice: "  {{n}}번 {{label}} ({{key}}) → {{ifChosen}}" }), "ko").reason, "prefix-required:choice", "자리표시자로 시작하는 줄은 본문 내용이 헤더로 위장할 수 있어 거부");
+  const rearranged = Object.assign({}, tpl, { header: "- 사용자 선택: {{question}} [{{id}}]", choice: "  선택지 {{n}}번 {{label}} ({{key}}) → {{ifChosen}}" });
+  assert.strictEqual(CL.saveDecisionTemplate(rearranged, "ko").ok, true);
+  const rr = CL.renderDecisionBlock(CL.readDecisions(WS7).latest.get(d0.decisionId), false);
+  assert.ok(rr.startsWith("- 사용자 선택: ") && rr.includes("[" + d0.decisionId + "]") && rr.includes("선택지 1번 "), rr);
+  const ctxR = Object.assign({}, ctx, { decisions: [{ id: d0.decisionId, question: spec().question, renderKo: rr, renderEn: "" }] });
+  assert.strictEqual(VH.validateCapHandoff(closeout(rr), ctxR).ok, true, "rearranged-template block accepted by the checker");
+  assert.strictEqual(VH.validateCapHandoff(closeout(after), ctxR).ok, false, "previous-template block rejected once the template changed");
+  assert.strictEqual(CL.saveDecisionTemplate(tpl, "ko").ok, true); // 원래 편집본으로 복귀
+  // [4회차] 줄 구분 계약: 머리말 없는 헤더·헤더 머리말과 겹치는 답하기 줄은 저장 거부(모호 서식 원천 차단 → 렌더=검사 불일치 불가)
+  assert.strictEqual(CL.saveDecisionTemplate(Object.assign({}, tpl, { header: "{{question}} {{id}}", answer: "답하기 {{id}}" }), "ko").reason, "prefix-required:header");
+  assert.strictEqual(CL.saveDecisionTemplate(Object.assign({}, tpl, { header: "- 결정 {{id}}: {{question}}", answer: "- 결정 답하기 {{id}}" }), "ko").reason, "prefix-ambiguous:answer");
+  assert.strictEqual(CL.saveDecisionTemplate(Object.assign({}, tpl, { header: "- {{id}} {{question}}", why: "- {{why}}" }), "ko").reason, "prefix-ambiguous:why");
+  assert.strictEqual(CL.validateDecisionTemplate(CL.DECISION_TEMPLATE_DEFAULTS.en).ok, true);
+  // [3회차 ab-3] 선택 결과({{ifChosen}})를 뺀 서식=정보 누락 → 저장 거부
+  assert.strictEqual(CL.saveDecisionTemplate(Object.assign({}, tpl, { choice: "  선택 ({{key}}): {{label}}" }), "ko").reason, "slot:choice:{{ifChosen}}");
+  // 자리표시자 빠진 서식=저장 거부·파일에 직접 넣어도 기본 폴백+경고
+  assert.strictEqual(CL.saveDecisionTemplate(Object.assign({}, tpl, { noDefault: "  까닭: 없음" }), "ko").ok, false);
+  const file = CL.baseDirectiveFileFor("ko", "core");
+  const raw = JSON.parse(fs.readFileSync(file, "utf8")); raw.decisionBlock = Object.assign({}, tpl, { header: "- 결정: {{question}}" }); fs.writeFileSync(file, JSON.stringify(raw));
+  const bad = CL.loadDecisionTemplate("ko");
+  assert.strictEqual(bad.overridden, false); assert.ok(bad.warn.startsWith("decision-template-invalid:slot:header"), bad.warn);
+  assert.ok(CL.renderDecisionBlock(CL.readDecisions(WS7).latest.get(d0.decisionId), false).includes("구현자가 못 정하는 이유:"), "fallback to default render");
+  // [3회차] 비객체·문법 손상도 경고(fail-visible)
+  fs.writeFileSync(file, JSON.stringify({ decisionBlock: "broken" }));
+  assert.strictEqual(CL.loadDecisionTemplate("ko").warn, "decision-template-invalid:not-object");
+  fs.writeFileSync(file, '{"decisionBlock":');
+  assert.strictEqual(CL.loadDecisionTemplate("ko").warn, "decision-template-file-corrupt");
+  fs.writeFileSync(file, JSON.stringify(Object.assign({}, raw, { decisionBlock: Object.assign({}, tpl, { header: "- 결정: {{question}}" }) })));
+  // CLI: template show/set/reset
+  const run = runIn(WS7);
+  const shown = run(["decisions", "template", "show"]); assert.strictEqual(shown.status, 3, "invalid override → warn exit 3"); assert.ok(shown.stdout.includes("decision-template-invalid"));
+  const tf = path.join(WS7, "tpl.json"); fs.writeFileSync(tf, JSON.stringify(tpl));
+  assert.strictEqual(run(["decisions", "template", "set", tf]).status, 0);
+  assert.ok(run(["decisions", "render", d0.decisionId]).stdout.includes("제가 정할 수 없는 까닭:"));
+  assert.strictEqual(run(["decisions", "template", "reset"]).status, 0);
+  assert.strictEqual(CL.loadDecisionTemplate("ko").overridden, false);
+  assert.ok(CL.loadBaseDirective("ko", "core").verifyBaseline.includes("사용자 추가 원칙"), "reset keeps the other axes");
+});
+
 console.log(`\n결과: ${n} 통과 / 0 실패`);

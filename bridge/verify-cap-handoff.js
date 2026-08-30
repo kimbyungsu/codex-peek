@@ -2,7 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { extractVerdict, authoritativeVerdict, findingsBlockRange, askJobIdOk, readBacklog, normBacklogTitle, readDecisions, renderDecisionBlock } = require("./contract-lib.js");
+const { extractVerdict, authoritativeVerdict, findingsBlockRange, askJobIdOk, readBacklog, normBacklogTitle, readDecisions, renderDecisionBlock, decisionTemplateLabels } = require("./contract-lib.js");
 
 // 검증 상한은 검증 호출만 멈춘다. 마지막 검증 지적은 구현자가 먼저 네 갈래로 재판단한다.
 // 처리·반박·보관함 항목은 사용자에게 결정을 떠넘기지 않고, 실제 제품 선택만 한 번에 올린다.
@@ -123,25 +123,27 @@ function requiredEvidence(context) {
 // [사용자 판단 필요] 절 = 결정 장부에서 렌더한 블록만("- 결정 <id>: 질문" + 왜/구현자가 못 정하는 이유/선택 1·2/답하기). 산문 질문·근거 키 나열은 거부.
 // context.decisions(열린 장부 항목)가 있으면 id 실존·질문 일치까지 결속. 블록 안에 인용된 지적 키(R5-F1)는 그 지적의 유일한 행선지로 센다.
 function decisionBlocksOk(schema, body, context) {
-  const head = schema.lang === "en" ? /^-\s*Decision\s+([a-f0-9]{16})\s*:\s*(.+)$/i : /^-\s*결정\s+([a-f0-9]{16})\s*:\s*(.+)$/;
+  // 머리말·라벨은 코드 상수가 아니라 편집 가능한 결정 블록 서식에서 온다(사용자가 낱말을 고치면 렌더와 검사가 함께 따라감)
+  let LB; try { LB = decisionTemplateLabels(schema.lang); } catch { LB = null; }
+  if (!LB) return { ok: false };
+  const head = LB.header.re, headOrder = LB.header.order;
   const blocks = []; let cur = null;
   for (const raw of String(body || "").split(/\r?\n/)) {
     const line = raw.trim(); if (!line) continue;
     const m = head.exec(line);
-    if (m) { cur = { id: m[1].toLowerCase(), question: m[2].trim(), header: line, body: "" }; blocks.push(cur); continue; }
+    if (m) { const idAt = headOrder.indexOf("id") + 1, qAt = headOrder.indexOf("question") + 1; cur = { id: String(m[idAt] || "").toLowerCase(), question: String(m[qAt] || "").trim(), header: line, body: "" }; blocks.push(cur); continue; }
     if (!cur) return { ok: false };
     cur.body += "\n" + line;
   }
   if (!blocks.length) return { ok: false };
-  const need = schema.lang === "en"
-    ? [/why\s*:/i, /why the implementer cannot decide\s*:/i, /option\s*1\b/i, /option\s*2\b/i, /answer\s*:/i]
-    : [/왜\s*:/, /구현자가 못 정하는 이유\s*:/, /선택\s*1\b/, /선택\s*2\b/, /답하기\s*:/];
+  const need = [LB.why.re, LB.noDefault.re, LB.choice.re, LB.recommend.re, LB.answer.re]; // 서식 줄 정규식 — 본문의 어느 줄이든 하나가 맞으면 충족
   const known = context && Array.isArray(context.decisions) ? new Map(context.decisions.map((d) => [String(d.id).toLowerCase(), d])) : null;
   const ids = new Set();
   for (const b of blocks) {
     if (ids.has(b.id)) return { ok: false };
     ids.add(b.id);
-    if (!need.every((re) => re.test(b.body))) return { ok: false };
+    const bodyLines = b.body.split("\n").map((x) => x.trim()).filter(Boolean);
+    if (!need.every((re) => bodyLines.some((ln) => re.test(ln)))) return { ok: false };
     if (known) {
       const d = known.get(b.id);
       if (!d) return { ok: false };
