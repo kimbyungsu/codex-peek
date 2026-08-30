@@ -20,6 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { undisposedOpenFindingsFromRows } = require("./contract-lib.js");
 const { readDecisions, openDecision, resolveDecision, decisionMetrics, renderDecisionBlock, loadDecisionTemplate, saveDecisionTemplate, DECISION_TEMPLATE_DEFAULTS, DECISION_DELEGATE_KEY, DECISION_KINDS, DECISION_NO_DEFAULT_MIN, JUDGE_CHOICES, readJudgeRequired, addJudgeRequired, resolveJudgeRequired, askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, contractReadState, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, repoKeyOf, constraintRepoKeyFor, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled, constraintTurnContext, constraintAdd, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, constraintHarvestFromAnswer, buildAbManifest, boundaryGenOf, readVerifyEnvelopeArchive, SELECTOR_PAGE_ITEMS, selectorDeadlineMsFor, selectorScopeMaterial, SELECTOR_UNION_MAX, SELECTOR_UNION_BYTES_MAX, readSelectorUsage } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
@@ -217,7 +218,8 @@ function envelopeSliceFor(wsIn, lang, profile, cSnapshot) {
             const evM = readVerifyEnvelope(target9);
             if (evM.st === "ok" && evM.sha1 === evi.sha1) {
               const mf9 = buildAbManifest(evM.data.alwaysBlocker, selTexts9);
-              fx9 = { manifest: mf9, boundaryGen: boundaryGenOf(evi.sha1, sel9 ? selArc9.sha1 : "", mf9), appliedArchiveHash: sel9 ? selArc9.sha1 : "" };
+              fx9 = { manifest: mf9, boundaryGen: boundaryGenOf(evi.sha1, sel9 ? selArc9.sha1 : "", mf9), appliedArchiveHash: sel9 ? selArc9.sha1 : "",
+                oos: (Array.isArray(evM.data.outOfScope) ? evM.data.outOfScope : []).map((t9, i9) => ({ id: "oos-" + (i9 + 1), title: String(t9).slice(0, 60) })) }; // [개선 1-A] 판마다 제외 칸 동결
             }
           }
         } catch { fx9 = undefined; }
@@ -2357,6 +2359,23 @@ function corruptAskJobFiles() {
   }
   return bad;
 }
+// [개선 1-B 확인 blocker②] 이 작업공간의 가장 최근 검증 잡 id — finding-judge --oos·--list-oos가 동결 레코드의 askId와 대조해
+// '다른 판(이전 판)의 번호'를 거부한다(입장 심사의 envJid 결속과 같은 방향·CLI는 잡 env가 없어 장부에서 최신 잡을 찾는다).
+function latestAskJobIdFor(ws) {
+  let names = [];
+  try { names = fs.readdirSync(ASK_JOBS_DIR).filter((n) => n.endsWith(".json") && !n.endsWith(".checkpoint.json")); } catch { return null; }
+  const key = normWs(ws);
+  let best = null;
+  for (const n of names) {
+    try {
+      const j = JSON.parse(fs.readFileSync(path.join(ASK_JOBS_DIR, n), "utf8"));
+      if (!j || j.schema !== "ask-job-v1" || typeof j.id !== "string" || normWs(j.workspace || "") !== key) continue;
+      const ts = Date.parse(j.createdAt || "") || 0;
+      if (!best || ts > best.ts) best = { id: j.id, ts };
+    } catch { /* 깨진 타 작업은 건너뜀 */ }
+  }
+  return best ? best.id : null;
+}
 function activeAskJob(ws) {
   let names = [];
   try { names = fs.readdirSync(ASK_JOBS_DIR).filter((n) => n.endsWith(".json")); } catch { return null; }
@@ -2999,9 +3018,19 @@ function cmdFindingJudge(rest) {
   const opens = openFindingsFor(ws, camp, gen);
   const rows = readFindingsLedger(ws);
   const disp = dispositionsFor(ws, camp);
+  // [개선 1-A 조회 옵션] --list-oos: 이 판에 동결된 제외 칸 전문(번호+제목)과 결속 상태 — 판정 자리의 재료 줄(≤200자)에서 잘린 항목의 원천
+  if (rest.includes("--list-oos")) {
+    const fzL = readFrozenEnvelopeRec(ws);
+    const lastL = latestAskJobIdFor(ws);
+    const bound = !!(fzL && fzL.askId && lastL && fzL.askId === lastL);
+    if (!fzL || !Array.isArray(fzL.oos)) { process.stdout.write(tB("동결된 제외 칸 없음(이 판의 검증 시작 기록이 없거나 구 형식).\n", "No frozen out-of-scope items (no freeze for this round or legacy format).\n")); return; }
+    process.stdout.write(tB(`이 판의 제외 칸 ${fzL.oos.length}건 — 동결 잡 ${fzL.askId || "?"} · 마지막 검증 잡 ${lastL || "없음"} · ${bound ? "결속됨(되받아침 가능)" : "결속 안 됨(--oos 거부됨 — 다음 검증 시작 후 다시)"}\n`, `Out-of-scope items of this round: ${fzL.oos.length} — frozen job ${fzL.askId || "?"} · latest job ${lastL || "none"} · ${bound ? "bound (rebut allowed)" : "not bound (--oos rejected — start the next verification first)"}\n`));
+    for (const o of fzL.oos) process.stdout.write("  " + o.id + "  " + String(o.title || "") + "\n");
+    return;
+  }
   // 위치 인자=플래그와 그 값을 제외한 나머지(--campaign이 첫 인자여도 목록 모드가 되도록)
   const pos = [];
-  for (let i = 0; i < rest.length; i++) { const a = String(rest[i] || ""); if (a === "--note" || a === "--campaign" || a === "--source" || a === "--decision") { i++; continue; } pos.push(a.trim()); }
+  for (let i = 0; i < rest.length; i++) { const a = String(rest[i] || ""); if (a === "--note" || a === "--campaign" || a === "--source" || a === "--decision" || a === "--oos") { i++; continue; } pos.push(a.trim()); }
   const id = pos[0] || "";
   if (!id) {
     if (!opens.length) { process.stdout.write(tB(`열린 지적 없음(캠페인 ${camp}) — 판단할 것이 없습니다. 관문 거부문의 캠페인이 다르면 --campaign "<그 id>"를 붙이세요.\n`, `No open findings (campaign ${camp}) — nothing to judge. If the gate refusal names a different campaign, pass --campaign "<that id>".\n`)); return; }
@@ -3018,15 +3047,15 @@ function cmdFindingJudge(rest) {
     }
     const remain = undisposedOpenFindings(ws, camp, gen).length;
     process.stdout.write(remain
-      ? tB(`미판단 ${remain}건 — 기록: node codex-bridge.js finding-judge <id> <fix-fact|fix-gap|rebut|park|escalate> --note "근거"${campFlag ? ` --campaign "${camp}"` : ""}\n`, `${remain} unjudged — record: node codex-bridge.js finding-judge <id> <fix-fact|fix-gap|rebut|park|escalate> --note "evidence"${campFlag ? ` --campaign "${camp}"` : ""}\n`)
+      ? tB(`미판단 ${remain}건 — 기록: node codex-bridge.js finding-judge <id> <fix-fact|fix-gap|rebut[ --oos oos-n]|park|escalate> --note "근거"${campFlag ? ` --campaign "${camp}"` : ""}\n`, `${remain} unjudged — record: node codex-bridge.js finding-judge <id> <fix-fact|fix-gap|rebut[ --oos oos-n]|park|escalate> --note "evidence"${campFlag ? ` --campaign "${camp}"` : ""}\n`)
       : tB("전부 판단됨 — 다음 검증을 시작할 수 있습니다.\n", "All judged — the next verification can start.\n"));
     return;
   }
   const choice = pos[1] || "";
   const note = flagVal("--note");
   if (!FINDING_DISPOSITIONS.includes(choice)) {
-    die(tB(`사용법: finding-judge <id> <fix-fact|fix-gap|rebut|park|escalate> --note "근거(12자+)" [--campaign "<관문 거부문의 캠페인 id>"]\n  fix-fact=사실 오류 인정(고침·근거 필수) / fix-gap=보강 요구 수용(고침·이유 필수) / rebut=반박 종결(근거 필수) / park=보관함 이관(근거=영수증)`,
-           `Usage: finding-judge <id> <fix-fact|fix-gap|rebut|park|escalate> --note "evidence (12+ chars)" [--campaign "<campaign id from the gate refusal>"]\n  fix-fact=proven wrong (fix, note required) / fix-gap=enrichment accepted (fix, note required) / rebut=rebutted (note required) / park=parked (receipt is the evidence)`), 2);
+    die(tB(`사용법: finding-judge <id> <fix-fact|fix-gap|rebut[ --oos oos-n]|park|escalate> --note "근거(12자+)" (제외 칸 전문: finding-judge --list-oos) [--campaign "<관문 거부문의 캠페인 id>"]\n  fix-fact=사실 오류 인정(고침·근거 필수) / fix-gap=보강 요구 수용(고침·이유 필수) / rebut=반박 종결(근거 필수) / park=보관함 이관(근거=영수증)`,
+           `Usage: finding-judge <id> <fix-fact|fix-gap|rebut[ --oos oos-n]|park|escalate> --note "evidence (12+ chars)" (out-of-scope list: finding-judge --list-oos) [--campaign "<campaign id from the gate refusal>"]\n  fix-fact=proven wrong (fix, note required) / fix-gap=enrichment accepted (fix, note required) / rebut=rebutted (note required) / park=parked (receipt is the evidence)`), 2);
   }
   // [경위 v2 생산자 결속] --source "<file>#<anchor>" (선택·반복 가능): 판단이 가리키는 정본 구간을
   // 구조 필드로 기록 — 검증(경계·containment·민감 제외·anchor 해석) 실패=즉시 거부(침묵 기록 금지).
@@ -3070,6 +3099,21 @@ function cmdFindingJudge(rest) {
     const d9 = escDecisionId ? readDecisions(ws).latest.get(escDecisionId) : null;
     if (!d9) die(tB("escalate 는 결정 장부 항목이 필요합니다 — 먼저 node codex-bridge.js decisions raise ... 로 항목을 만들고 --decision <id> 를 지정하세요.", "escalate requires a decision — create one with decisions raise, then pass --decision <id>."), 2);
   }
+  // [개선 1-B · 되받아침 명령] rebut --oos oos-n: 이 판에 동결된 제외 칸 번호로 되받아친다 — 효력=범위 밖 강등과 동일(지적은 '구현자 되받아침'
+  // 사유로 닫히고 기록에 남으며, 검증자는 반증 없이는 다시 올릴 수 없다). 번호 판단은 구현자 몫·하네스는 번호 유효성만.
+  let rebutOos = "";
+  if (choice === "rebut") {
+    const oosArg = flagVal("--oos");
+    if (oosArg) {
+      const fz9 = readFrozenEnvelopeRec(ws);
+      // 확인 blocker②: 동결이 '이 작업공간의 마지막 검증 잡'에 결속돼 있어야 그 판의 번호다 — 새 판의 동결 쓰기가 실패해 이전 파일이 남은 경우 거부
+      const last9 = latestAskJobIdFor(ws);
+      if (!fz9 || !fz9.askId || !last9 || fz9.askId !== last9) die(tB(`동결된 제외 칸이 마지막 검증 잡에 결속되지 않았습니다(동결 ${fz9 && fz9.askId ? fz9.askId : "없음"} · 마지막 잡 ${last9 || "없음"}) — 이전 판의 번호로는 되받아칠 수 없습니다. 다음 검증을 시작한 뒤 finding-judge --list-oos 로 확인하세요.`, `Frozen out-of-scope items are not bound to the latest verification job (freeze ${fz9 && fz9.askId ? fz9.askId : "none"} · latest ${last9 || "none"}) — cannot rebut with a previous round's numbers.`), 2);
+      const okOos = Array.isArray(fz9.oos) && fz9.oos.some((o) => o.id === oosArg);
+      if (!okOos) die(tB(`--oos ${oosArg} 는 이 판에 동결된 제외 칸 번호가 아닙니다(유효: ${Array.isArray(fz9.oos) ? fz9.oos.map((o) => o.id).join(", ") || "없음" : "동결 없음"} — 전문: finding-judge --list-oos).`, `--oos ${oosArg} is not an out-of-scope item frozen for this round (see finding-judge --list-oos).`), 2);
+      rebutOos = oosArg;
+    }
+  }
   let parkedId = "";
   if (choice === "park") {
     const r = backlogAdd(ws, { title: target.titleNorm, tag: "백로그", lang: loadLang(), source: "finding-judge" });
@@ -3087,8 +3131,23 @@ function cmdFindingJudge(rest) {
     const repo9b = (resolveScoutRepo(ws, loadContract(ws)) || {}).repo || ws;
     evRepoTop = { repoKey: MPV9b.repoKeyFor(repo9b), repoPath: String(repo9b) };
   }
-  const wrote = appendFindingsLedger(ws, [{ type: "disposition", campaignId: camp, findingId: id, choice, note: note.slice(0, 400), backlogId: parkedId, ...(escDecisionId ? { decisionId: escDecisionId } : {}), asOfRound, envelopeHash: gen || null, ...(sourceRefs ? { sourceRefs, ...evRepoTop } : {}), ts: new Date().toISOString() }]);
-  if (!wrote) die(tB("장부 기록 실패 — 처분이 저장되지 않았습니다.", "Ledger write failed — judgment not saved."), 1);
+  const rowsJ = [{ type: "disposition", campaignId: camp, findingId: id, choice, note: note.slice(0, 400), backlogId: parkedId, ...(escDecisionId ? { decisionId: escDecisionId } : {}), ...(rebutOos ? { oosId: rebutOos } : {}), asOfRound, envelopeHash: gen || null, ...(sourceRefs ? { sourceRefs, ...evRepoTop } : {}), ts: new Date().toISOString() }];
+  // 확인 blocker③(2차): 되받아침은 종결 행을 '먼저' 놓고 처분 행을 뒤에 둔 한 번의 쓰기 — 꼬리가 부분 기록돼도 살아남는 쪽이 종결 행이라
+  // 지적은 implementer-oos 계보로 닫힌 채 남고(관문 fail-open 없음·다음 통과 판이 resolved로 덮지 않음), 잃는 것은 메모뿐. 쓰기 뒤 장부를
+  // 다시 읽어 두 행이 실재하는지 확인(read-back)하고, 없으면 기록 실패로 보고한다.
+  const tsJ = new Date().toISOString();
+  if (rebutOos) rowsJ.unshift({ type: "close", campaignId: camp, findingId: id, closeReason: "implementer-oos", oosId: rebutOos, round: asOfRound, envelopeHash: gen || null, ts: tsJ });
+  rowsJ[rowsJ.length - 1].ts = tsJ; // 처분 행도 같은 쓰기 도장(read-back 대조 키)
+  let wrote = appendFindingsLedger(ws, rowsJ);
+  if (wrote) {
+    const back = readFindingsLedger(ws);
+    const has = (r0) => back.some((r) => r && r.type === r0.type && r.campaignId === r0.campaignId && r.findingId === r0.findingId && r.ts === r0.ts && (r0.type !== "close" || r.closeReason === r0.closeReason));
+    if (!rowsJ.every(has)) wrote = false;
+  }
+  if (!wrote) die(tB("장부 기록 실패(쓰기 또는 읽기 확인 실패) — 처분이 저장되지 않았습니다. 같은 명령을 다시 실행하세요(되받아침이 이미 종결됐다면 목록에서 사라져 있음).", "Ledger write failed (write or read-back) — judgment not saved. Rerun the same command."), 1);
+  if (rebutOos) { // 되받아침 효력=범위 밖 강등과 동일: 지적을 '구현자 되받아침' 사유로 닫는다(기록 보존·삭제 없음 — 종결 행은 위 한 번의 쓰기에 포함)
+    process.stdout.write(tB(`되받아침: ${id} → 제외 ${rebutOos} 전제(범위 밖) — 검증자가 다시 올리려면 반증(contest)이 필요합니다.\n`, `Rebutted: ${id} → out-of-scope ${rebutOos} — the verifier needs contest evidence to re-raise.\n`));
+  }
   const remain = undisposedOpenFindings(ws, camp, gen).length;
   process.stdout.write(tB(`기록됨: ${id} → ${choice}${parkedId ? ` (보관함 영수증 ${parkedId})` : ""}${disp.has(id) ? " (재판단 — 이전 기록 대체)" : ""}\n남은 미판단 ${remain}건${remain ? "" : " — 다음 검증을 시작할 수 있습니다"}\n`,
                           `Recorded: ${id} → ${choice}${parkedId ? ` (backlog receipt ${parkedId})` : ""}${disp.has(id) ? " (re-judged — supersedes previous)" : ""}\n${remain} unjudged remaining${remain ? "" : " — the next verification can start"}\n`));
@@ -3230,20 +3289,27 @@ function findingDispositionGate(ws, durableEnv, langSnap, campSnap) {
   const en = langSnap === "en";
   const camp = typeof campSnap === "string" && campSnap ? campSnap : campaignSnapFor(durableEnv);
   if (!camp) return { proceed: true, warn: "" };
-  // 판독 실패=미발동이되 침묵 금지(1차 검증 [주의]): 경고를 호출자에게 넘겨 stderr로 가시화한다.
+  // 판독 실패=차단(4회차 확인 blocker — ab-3): 장부를 못 읽으면 '미판단 지적 0'으로 보일 뿐 실제로는 알 수 없다 — 경고만 내고 진행하면
+  // 판독 오류가 이어지는 동안 통과 증명이 만들어진다. 검증을 시작하지 않고(왕복 미소모) 장부 파일 점검을 요구한다.
   const st = readFindingsLedgerState(ws);
   if (st.readError) {
-    return { proceed: true, warn: en
-      ? "[finding-judge] findings ledger unreadable — the disposition gate did NOT run this time (not a pass; check the ledger file)\n"
-      : "[finding-judge] 지적 장부를 읽지 못해 이번에는 처분 관문이 동작하지 않았습니다(통과 아님 — 장부 파일을 점검하세요)\n" };
+    return { proceed: false, exitCode: 3, msg: en
+      ? "⚠️ Verification NOT started (no round consumed) — the findings ledger could not be read (permission/lock), so open findings cannot be judged. Fix access to the ledger file, then retry.\n"
+      : "⚠️ 검증을 시작하지 않았습니다(왕복 미소모) — 지적 장부를 읽지 못해(권한/잠금) 열린 지적 유무를 판정할 수 없습니다. 장부 파일 접근을 복구한 뒤 다시 시작하세요.\n" };
   }
+  // 5회차 확인 blocker(ab-3): 관문 계산은 위에서 한 번 읽은 st.rows 스냅샷만 쓴다(장부 재판독 0회) — 첫 판독 성공 뒤 후속 판독이 실패해
+  // '열린 지적 0'으로 위장되는 경합 차단. 계산 자체가 던지면 미발동이 아니라 차단(알 수 없음=시작 안 함).
   let und = [];
-  try { und = undisposedOpenFindings(ws, camp, readFrozenEnvelope(ws)); } catch { return { proceed: true, warn: "" }; }
+  try { und = undisposedOpenFindingsFromRows(st.rows, camp, readFrozenEnvelope(ws)); } catch {
+    return { proceed: false, exitCode: 3, msg: en
+      ? "⚠️ Verification NOT started (no round consumed) — the findings ledger could not be evaluated (unexpected ledger shape). Inspect the ledger file, then retry." + "\n"
+      : "⚠️ 검증을 시작하지 않았습니다(왕복 미소모) — 지적 장부를 계산하지 못했습니다(예상 밖 장부 형태). 장부 파일을 점검한 뒤 다시 시작하세요." + "\n" };
+  }
   if (!und.length) return { proceed: true, warn: "" };
   const rows = und.map((o) => `   - ${o.id} [${o.tag}] ${String(o.titleNorm || "").slice(0, 60)}`).join("\n");
   // 확인 검증 blocker② 반영: 관문이 본 캠페인 id를 명령에 그대로 결속 — 현재 캠페인 파일과 갈린 상태
   // (미집계 진행 등)에서 '관문은 막는데 해제 명령은 열린 지적 없음'인 교착 차단.
-  const cmd = `   node codex-bridge.js finding-judge <id> <fix-fact|fix-gap|rebut|park|escalate> --note "..." --campaign "${camp}"`;
+  const cmd = `   node codex-bridge.js finding-judge <id> <fix-fact|fix-gap|rebut[ --oos oos-n]|park|escalate> --note "..." --campaign "${camp}"   (제외 칸 전문: finding-judge --list-oos)`;
   return {
     proceed: false, exitCode: 3,
     msg: en
@@ -3342,12 +3408,26 @@ function currentCampaignIdFor(ws) {
 }
 // 증분 2 §3.1: 경계 활성 시 v2 서식 요구+열린 지적 자동 동봉. 열린 목록은 하네스가 장부에서 직접 뽑아
 // 주입한다(구현모델이 목록을 선별·누락해 기존 결함을 '신규'로 위장 분류시키는 경로 차단 — 설계 2차 blocker①).
+// [개선 1-B] 캠페인·세대 안에서 구현자가 제외 n번으로 되받아쳐 닫은 지적 목록 — restores=그 계보에서 반증으로 복귀한 횟수(두 번째 복귀=분쟁)
+function implementerRebuttalsFor(ws, camp, gen) {
+  const rows = readFindingsLedger(ws).filter((r) => r && r.campaignId === camp && (r.envelopeHash || null) === (gen || null));
+  const finding = new Map(); for (const r of rows) if (r.type === "finding") finding.set(r.findingId, r);
+  const out = [];
+  for (const r of rows) {
+    if (r.type !== "close" || r.closeReason !== "implementer-oos") continue;
+    let restores = 0, cur = r.findingId, guard = 0;
+    while (cur && guard++ < 20) { const fr = finding.get(cur); if (!fr || fr.origin !== "boundary-contest" || fr.demoted) break; restores++; cur = fr.prevId || ""; }
+    const fr0 = finding.get(r.findingId);
+    out.push({ findingId: r.findingId, oosId: String(r.oosId || ""), title: fr0 ? fr0.titleNorm : "", restores });
+  }
+  return out;
+}
 function v2DirectiveFor(ws, lang) {
   const en = (lang || loadLang()) === "en";
   const L = [];
   L.push(en
-    ? '[Finding format v2 — envelope active] Submit the machine block with the "[findings v2]" marker (fields beyond v1): "origin":"baseline|fix-induced|incomplete-fix|new-evidence" (required on every blocker), "supported":true|false, an out-of-scope claim must cite "oosId":"oos-<n>" exactly, an invariant-breach blocker MUST cite "abId":"ab-<n>" (uncited = no exemption), a re-raised finding cites "id":"f-xxxxxxxx", an incomplete fix cites "prevId". Missing or invalid fields are treated as absent by the admission gate.'
-    : '[지적 서식 v2 — 검증 경계 활성] 기계 판독 블록은 "[지적 목록 v2]" 마커로 제출하라(v1 대비 추가 필드): "origin":"baseline|fix-induced|incomplete-fix|new-evidence"(모든 blocker에 필수), "supported":true|false, 범위 밖 주장은 "oosId":"oos-<n>" 정확 인용, 불변식 침해 blocker는 "abId":"ab-<n>" 인용 필수(미인용=면제 없음), 재지적은 "id":"f-xxxxxxxx", 미완 수정은 "prevId" 인용. 누락·무효 형식은 입장 심사에서 미기재로 취급된다.');
+    ? '[Finding format v2 — envelope active] Submit the machine block with the "[findings v2]" marker (fields beyond v1): "origin":"baseline|fix-induced|incomplete-fix|new-evidence|boundary-contest" (required on every blocker), "supported":true|false, an out-of-scope claim must cite "oosId":"oos-<n>" exactly, an invariant-breach blocker MUST cite "abId":"ab-<n>" (uncited = no exemption), a re-raised finding cites "id":"f-xxxxxxxx", an incomplete fix cites "prevId". Missing or invalid fields are treated as absent by the admission gate.'
+    : '[지적 서식 v2 — 검증 경계 활성] 기계 판독 블록은 "[지적 목록 v2]" 마커로 제출하라(v1 대비 추가 필드): "origin":"baseline|fix-induced|incomplete-fix|new-evidence|boundary-contest"(모든 blocker에 필수), "supported":true|false, 범위 밖 주장은 "oosId":"oos-<n>" 정확 인용, 불변식 침해 blocker는 "abId":"ab-<n>" 인용 필수(미인용=면제 없음), 재지적은 "id":"f-xxxxxxxx", 미완 수정은 "prevId" 인용. 누락·무효 형식은 입장 심사에서 미기재로 취급된다.');
   L.push(en
     ? '[Scope-expansion channel] A finding OUTSIDE the boundary that deserves reconsideration: submit "tag":"scope-expansion" with a mandatory "abId":"ab-<n>" and a concrete causal path. It is a non-blocking submission (never a failure reason by itself). If valid, the harness escalates it to an open blocker for the NEXT round (limit: once per campaign AND approval generation); invalid/uncited goes to [backlog]. Boundary revisions themselves remain user-only.'
     : '[범위 확장 통로] 경계 밖이지만 재검토가 필요한 중대 발견: "tag":"범위확장"으로 제출하되 "abId":"ab-<n>" 인용+구체 인과 경로 필수. 비차단 제출이다(그 자체로 실패 사유 아님). 유효하면 하네스가 다음 라운드의 열린 blocker로 승격한다(캠페인·승인 세대당 1회 상한). 무효·미인용=[백로그]. 경계 개정 자체는 사용자만 한다.');
@@ -3365,6 +3445,13 @@ function v2DirectiveFor(ws, lang) {
     if (opens.length) {
       L.push(en ? "[Open findings — cite these ids when re-raising or reporting an incomplete fix (uncited = treated as new)]" : "[열린 지적 — 재지적·미완 수정 보고 시 이 id를 인용하라(미인용=신규 취급)]");
       for (const o of opens) L.push("> " + o.id + " [" + o.tag + "] " + String(o.titleNorm || "").slice(0, 60));
+    }
+    // [개선 1-B] 구현자가 제외 n번으로 되받아쳐 닫은 지적 — 검증자가 다시 올리려면 반증(contest) 필수. 규칙 문장은 이 목록의 머리줄에만
+    // (되받아침이 있을 때만 실림 — 고정 산문 예산 밖·tests/verifier-head CAPS.v2Fixed 준수)
+    const rb = implementerRebuttalsFor(ws, currentCampaignIdFor(ws), readFrozenEnvelope(ws));
+    if (rb.length) {
+      L.push(en ? '[Rebutted by the implementer as out-of-scope] Re-raise only with "origin":"boundary-contest" + "prevId" + "contest":"one line of evidence that the problem occurs INSIDE the approved boundary" (20-300 chars, single line) — otherwise it is demoted. Re-submitting the same title under a new id/origin is judged as the same finding.' : '[구현자 되받아침(범위 밖)] 다시 올리려면 "origin":"boundary-contest"+"prevId"+"contest":"승인 범위 안에서도 이 문제가 난다는 근거 한 줄"(20~300자·단일행) 필수 — 없으면 강등된다. 같은 제목을 새 id·다른 origin으로 올려도 같은 지적으로 심사한다.');
+      for (const r of rb) L.push("> " + r.findingId + " ← " + r.oosId + (r.title ? " [" + String(r.title).slice(0, 60) + "]" : "") + (r.restores ? (en ? " (restored ×" + r.restores + ")" : " (복귀 " + r.restores + "회)") : ""));
     }
   } catch { /* 장부 판독 실패=목록 생략(서식 요구는 유지) */ }
   return L.join("\n");
@@ -3585,7 +3672,9 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
     } catch { oosCount = null; abCount = null; }
     const openList = openFindingsFor(ws, camp, frozen); // 2차 미완수정④: 같은 동결 세대의 open만(구세대 id=재지적 인정 금지)
     const openIds = new Set(openList.map((o) => o.id));
-    const adm = judgeAdmission(parse.findings, roundType, openIds, oosCount, abCount);
+    const rebutted9 = new Map(); // [개선 1-B] 되받아친 지적 → {oosId, restores}
+    try { for (const r9 of implementerRebuttalsFor(ws, camp, frozen)) rebutted9.set(r9.findingId, { oosId: r9.oosId, restores: r9.restores, titleNorm: r9.title }); } catch { /* 장부 판독 실패=되받아침 없음으로 심사(강등 방향 아님·기존 규칙만) */ }
+    const adm = judgeAdmission(parse.findings, roundType, openIds, oosCount, abCount, rebutted9);
     machine.admission = { kept: adm.keptBlockers, demoted: adm.demotedBlockers, roundType };
     effItems = adm.items;
     const RK = {
@@ -3598,8 +3687,35 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
       "ab-invalid": en ? "abId cites an invalid index — exemption not applied (other rules evaluated)" : "abId가 무효 인덱스 — 면제 미발동(다른 규칙으로 계속 평가)",
       "expansion-candidate": en ? "scope-expansion with a valid abId — escalation candidate (once per campaign)" : "범위 확장 — 유효 abId 인용(승격 후보·캠페인당 1회)",
       "expansion-unproven": en ? "scope-expansion without a valid abId → [backlog]" : "범위 확장 — abId 무효/미인용 → [백로그] 강등",
+      "contest-unproven": en ? "re-raised a rebutted finding without a valid contest line → [backlog]" : "되받아친 지적의 재소환 — 반증(contest 20~300자) 없음 → [백로그] 강등",
+      "contest-restored": en ? "rebutted finding restored — contest evidence supplied (re-judge it)" : "되받아친 지적 복귀 — 반증 제시(다시 판단하라)",
+      "contest-dispute": en ? "restored a second time in the same lineage — DISPUTE (judgment gate armed)" : "같은 계보에서 두 번째 복귀 — 분쟁(판단 관문 장전)",
     };
     for (const r of adm.receipts) out.push((en ? "[admission] finding #" + r.idx + ": " : "[입장 심사] " + r.idx + "번째 항목: ") + (RK[r.key] || r.key) + (r.detail ? " (" + r.detail + ")" : ""));
+    // [개선 1-A] 판정 도착 자리의 되받아침 재료 — 이 판에 동결된 제외 칸 번호+한 줄 제목(≤200자·4-d 예산: 처리 안내·규약 절차문 축약으로 상쇄)
+    try {
+      // 확인 blocker②: 입장 심사가 이 잡에 결속했다고 확인한 동결(frozen≠null)만 재료로 쓴다 — stale 동결(askId 불일치)은 재료도 없음
+      const fzO = frozen ? readFrozenEnvelopeRec(ws) : null;
+      if (fzO && fzO.hash === frozen && Array.isArray(fzO.oos) && fzO.oos.length) {
+        // 머리말 예산: 번호 전량 폴백이 축 상한 12칸(ENVELOPE_ITEM_MAX)에서도 200자 안에 들도록 머리말 ≤ 125자(12칸 번호 74자) — tests/rebuttal [3]이 ko/en 12칸 실측
+        const head = en ? "[rebuttal material — out-of-scope items of this round · finding-judge <id> rebut --oos oos-n · finding-judge --list-oos] " : "[되받아침 재료 — 이 판의 제외 칸 · 되받아침: finding-judge <id> rebut --oos oos-n · 전문: finding-judge --list-oos] ";
+        let line = head + fzO.oos.map((o) => o.id + " " + String(o.title || "").slice(0, 30)).join(" · ");
+        // 예산 200(개선 전 꼬리 대비 규약 절차문·처리 안내 축약분 안 — tests/rebuttal [8]): 넘치면 제목을 버리고 번호 전량만(뒤 번호 소실 금지·전문은 --list-oos)
+        if (line.length > 200) line = head + fzO.oos.map((o) => o.id).join("·");
+        if (line.length > 200) line = line.slice(0, 197) + "…";
+        out.push(line);
+      }
+    } catch { /* 재료 부재=생략 */ }
+    // [개선 1-B] 분쟁(같은 계보 두 번째 복귀) — 사용자 결정 자동 생성 없음: 판단 관문 마커(구현자가 round-judge로 정함)
+    try {
+      for (const f of adm.items) {
+        if (!f.dispute) continue;
+        const okD = askId ? addJudgeRequired(ws, { askId, campaignId: String(camp || ""), reason: "dispute:" + String(f.contestOf || "") }) : false;
+        out.push(okD
+          ? (en ? "[dispute] " + (f.contestOf || "") + " restored twice — this turn cannot end until the implementer records a judgment: node codex-bridge.js round-judge " + askId + " <close-oos|re-verify|escalate --decision <id>> --note \"...\"" : "[분쟁] " + (f.contestOf || "") + " 계보가 두 번 복귀 — 구현자 판단이 기록되기 전에는 이 턴을 끝낼 수 없다: node codex-bridge.js round-judge " + askId + " <close-oos|re-verify|escalate --decision <id>> --note \"근거\"")
+          : (en ? "[dispute] judgment gate NOT armed (marker write failed / no askId) — judge manually" : "[분쟁] 판단 관문 미장전(마커 기록 실패/askId 없음) — 수동으로 판단 기록"));
+      }
+    } catch { /* 관문 실패가 판정 전달을 막지 않음 */ }
     // 증분 3(§4): 범위 확장 승격 — 유효 후보(escalateCandidate)를 캠페인·세대당 1회 blocker로 승격해 '다음
     // 라운드'의 열린 지적으로 등록(이번 판정은 불변 — 기계는 판정을 만들지도 뒤집지도 않는다). 상한 소진=주의 기록.
     try {
@@ -4448,4 +4564,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
+module.exports = { implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };

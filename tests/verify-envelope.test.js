@@ -97,9 +97,11 @@ console.log("[4] core 한정 문구·계약 필드·캐논(분쟁 경위 서식 
   const norm = (o) => { const f = path.join(process.env.CODEX_BRIDGE_HOME, "contracts"); fs.mkdirSync(f, { recursive: true }); return o; };
   void c1; void norm;
   ok((() => { const s = fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8"); return /envelopeHash: typeof o\?\.envelopeHash === "string" && \/\^\[0-9a-f\]\{40\}\$\/\.test\(o\.envelopeHash\) \? o\.envelopeHash : null/.test(s); })(), "계약 envelopeHash 정규화 — 유효 40hex만·그 외 null(미승인)");
-  for (const [lang, prof, needle] of [["ko", "core", "분쟁 경위"], ["en", "core", "dispute-context"], ["ko", "integrity", "분쟁 경위"], ["en", "integrity", "dispute-context"]]) {
+  // 핀 갱신 2026-08-31: d10c5db(결정 장부)에서 '분쟁 경위 산문 서식'이 '구현자 선판단 → decisions raise(질문·이유·선택지는 일상 상황예시로)'로
+  // 교체됨 — 2026-07-22 지시의 뜻(분쟁은 경위·상황예시로 사용자에게)은 장부 항목의 질문·왜·선택지 슬롯이 잇는다. 옛 문구 핀은 그 커밋에서 갱신 누락.
+  for (const [lang, prof, needle] of [["ko", "core", "분쟁"], ["en", "core", "disputes"], ["ko", "integrity", "분쟁"], ["en", "integrity", "disputes"]]) {
     const rj = CL.loadBaseDirective(lang, prof).rejudge;
-    ok(rj.includes(needle) && /상황예시|everyday scenarios/.test(rj), `rejudge 캐논 ${prof}/${lang} — 분쟁 경위·상황예시 보고 서식(2026-07-22 사용자 지시)`);
+    ok(rj.includes(needle) && /일상 상황예시|everyday scenarios/.test(rj) && /decisions raise/.test(rj), `rejudge 캐논 ${prof}/${lang} — 분쟁=구현자 선판단·사용자 질문은 상황예시(2026-07-22 지시의 장부 계승)`);
   }
 }
 

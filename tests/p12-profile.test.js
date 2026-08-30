@@ -58,8 +58,8 @@ ok(CL.loadBaseDirective("ko").verifyBaseline === CL.baseDefaultsFor("ko").verify
 ok(CL.loadBaseDirective("ko", "integrity").verifyBaseline === CL.loadBaseDirective("ko").verifyBaseline, "명시 integrity=미지정과 동일");
 // integrity 프리셋 1글자 불변(스냅샷 대조 — 5항 실질 영향 원칙 문구 앵커)
 const sha16 = (t) => require("crypto").createHash("sha256").update(t, "utf8").digest("hex").slice(0, 16);
-ok(sha16(CL.BASE_DEFAULTS.verifyBaseline) === "461511a18371d19a" && sha16(CL.BASE_DEFAULTS.transmit) === "10938882fe841e0d" && sha16(CL.BASE_DEFAULTS.rejudge) === "1a8db4f90e9f4057" /* 2026-08-30 장치화 */, "integrity ko 캐논 3축 전문 해시 불변(스냅샷 갱신 2026-08-14: 기억 권위 B-1 — ab 직접 충돌 판정 규칙 추가(MEMORY-AUTHORITY-DESIGN §3))");
-ok(sha16(CL.BASE_DEFAULTS_EN.verifyBaseline) === "813dbad1d5a5eba1" && sha16(CL.BASE_DEFAULTS_EN.transmit) === "9175bd8183f9bee2" && sha16(CL.BASE_DEFAULTS_EN.rejudge) === "58bdb66677a49b77" /* 2026-08-30 장치화: 보류 산문→decisions raise/escalate 절차 */, "integrity en 캐논 3축 전문 해시 불변(스냅샷 갱신 2026-08-14 — 동일 B-1 추가)");
+ok(sha16(CL.BASE_DEFAULTS.verifyBaseline) === "461511a18371d19a" && sha16(CL.BASE_DEFAULTS.transmit) === "10938882fe841e0d" && sha16(CL.BASE_DEFAULTS.rejudge) === "63d94f5c8b982b8f" /* 2026-08-30 장치화 */, "integrity ko 캐논 3축 전문 해시 불변(스냅샷 갱신 2026-08-14: 기억 권위 B-1 — ab 직접 충돌 판정 규칙 추가(MEMORY-AUTHORITY-DESIGN §3))");
+ok(sha16(CL.BASE_DEFAULTS_EN.verifyBaseline) === "813dbad1d5a5eba1" && sha16(CL.BASE_DEFAULTS_EN.transmit) === "9175bd8183f9bee2" && sha16(CL.BASE_DEFAULTS_EN.rejudge) === "cb911a9cdec71752" /* 2026-08-30 장치화: 보류 산문→decisions raise/escalate 절차 */, "integrity en 캐논 3축 전문 해시 불변(스냅샷 갱신 2026-08-14 — 동일 B-1 추가)");
 // 오버라이드는 integrity에만 적용, core 전환이 오버라이드 파일 바이트를 건드리지 않음(ⓑ 불변 조건)
 CL.saveBaseDirective({ verifyBaseline: "사용자 커스텀 원칙", transmit: "", rejudge: "" }, "ko");
 const ovFile = CL.baseDirectiveFileFor("ko");

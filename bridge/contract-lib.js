@@ -811,7 +811,7 @@ const FINDINGS_MARKERS_V2 = {
   ko: { start: "[지적 목록 v2]", end: "[지적 목록 끝]" },
   en: { start: "[findings v2]", end: "[findings end]" },
 };
-const FINDING_ORIGINS = ["baseline", "fix-induced", "incomplete-fix", "new-evidence"];
+const FINDING_ORIGINS = ["baseline", "fix-induced", "incomplete-fix", "new-evidence", "boundary-contest"]; // boundary-contest=구현자가 제외 n번으로 되받아친 지적의 재소환(개선 1-B · 반증 contest 필수)
 // 태그 정규화: en 동의어→ko 정본. 미지 태그=null(손상).
 function normFindingTag(t) {
   const s = typeof t === "string" ? t.trim().toLowerCase() : "";
@@ -866,6 +866,10 @@ function parseFindingsBlock(text) {
       if (typeof o.abId === "string" && /^ab-[1-9][0-9]{0,2}$/.test(o.abId)) rec.abId = o.abId;
       if (typeof o.id === "string" && /^f-[0-9a-f]{8}$/.test(o.id)) rec.id = o.id;
       if (typeof o.prevId === "string" && /^f-[0-9a-f]{8}$/.test(o.prevId)) rec.prevId = o.prevId;
+      if (typeof o.contest === "string") { // 개선 1-B: 되받아침 재소환의 반증 — 단일행·20~300자만 보존(초과·다행=부재 취급 → 규칙 2b 강등, 잘라서 살리지 않음)
+        const c9 = o.contest.trim();
+        if (c9.length >= 20 && c9.length <= 300 && !/[\r\n\u2028\u2029]/.test(c9)) rec.contest = c9;
+      }
     }
     out.findings.push(rec);
   }
@@ -3426,7 +3430,7 @@ const BASE_DEFAULTS = {
     "- 근거는 논리 추정이 아니라 코드/파일에서 직접 확인 가능한 사실(경로·라인·실제 출력/동작)로. 검증모델과 의견이 갈리면 이유를 명시하라.",
     "- 완료 보고는 Codex 판정이 '통과' 또는 '통과(보완)'인 검증 결과를 반영한 뒤에만 하라. 예시 하나·분기 하나·테스트 몇 개·구체어 덧붙임을 '전체 해결'로 포장하지 마라 — 그 자체는 완료가 아니다.",
     "- 검증 후 추가로 수정했으면(검증모델 권고를 적용한 수정 포함) 보고·커밋 전에 그 최종본을 다시 검증하라. 검증받은 상태가 곧 배포 상태다.",
-    "- 사용자에게 올리는 것은 정말 방향이 필요한 것(범위표·제품 방향·위험 감수·외부 결정)뿐이다 — 산문으로 '보류/선택해 주세요'를 쓰지 마라(관문이 받지 않는다). 교착·분쟁도 먼저 구현자가 정한다(수용·반박·보관함·수칙 후보·재검증). 절차: ① `decisions raise --kind … --question … --why … --no-default \"구현자가 못 정하는 이유\" --choice key=라벨|고르면 (2개 이상)` — 질문·이유·선택지는 기술용어 없이 일상 상황예시로 ② `finding-judge <지적 id> escalate --decision <id>` 또는 `round-judge <askId> escalate --decision <id>`. 사용자는 `decisions list`로 보고 `choose`/`delegate`로 답한다.",
+    "- 사용자에게 올리는 것은 정말 방향이 필요한 것(범위표·제품 방향·위험 감수·외부 결정)뿐이다 — 산문으로 '보류/선택해 주세요'를 쓰지 마라(관문이 받지 않는다). 교착·분쟁도 먼저 구현자가 정한다(수용·반박·보관함·수칙 후보·재검증). 절차: `decisions raise`(질문·이유·선택지는 기술용어 없이 일상 상황예시로 · --no-default에 '구현자가 못 정하는 이유')로 항목을 만들고 그 id로 `finding-judge <지적 id> escalate --decision <id>` 또는 `round-judge <askId> escalate --decision <id>` — 인자는 명령이 안내한다. 사용자는 `decisions list`로 보고 `choose`/`delegate`로 답한다.",
   ].join("\n"),
 };
 
@@ -3452,7 +3456,7 @@ const BASE_CORE = {
     "- '[주의]'(보안·데이터 인접)는 심각성을 스스로 재판단하라: 실질 위험이면 blocker 수정과 같은 루프에서 함께 고치고(추가 재검증은 1회에 동승), 아니면 그 근거를 달아 사용자 보고로 승격하라 — 조용한 이관 금지.",
     "- 수용한 '[보완]'(구체·국소·새 설계 선택 없음)은 이번 루프에서 일괄 반영하고 확인 검증 1회로 마감하라(범위=그 변경+직접 회귀·대상은 첫 판정 수용분뿐 — 확인 단계의 새 비차단은 미반영 보고). 추가 왕복은 새 blocker에만 허용한다. 첫 판정의 [보완]을 보관함으로 미루지 마라.",
     "- '[백로그]'(범위 밖 제안)는 이 루프에서 수정하지 마라 — 하네스가 보관함에 자동 등록하니 '[장부 자동 등록]' 영수증 id를 보고에 인용하고, '거부/실패' 경고 항목만 제목을 일반화해 수동 등록하라. 보관함=범위 밖 제안+승격 [주의] 두 종류뿐, 갚을 의무가 없다 — 채택할 때만 작업이 된다(대형 실작업은 정식 계획 문서에). 승격 '[주의]'는 직접 \`node \"" + BRIDGE + "\" backlog add --tag 백로그|주의 --title \"<지적 1줄 — 비밀값·개인정보 원문 금지>\" [--file <경로>]\`로 기록해 출력된 id를 보고에 인용하라.",
-    "- 사용자 판단이 정말 필요한 것(범위표·제품 방향·위험 감수·외부 결정)만 사용자에게 올려라 — 산문으로 '보류/선택해 주세요'를 쓰지 마라(관문이 받지 않는다). 교착·분쟁·미해결도 먼저 구현자가 정한다(수용·반박·보관함·수칙 후보·재검증). 절차: ① `node \"" + BRIDGE + "\" decisions raise --kind <boundary|product|risk|external> --question … --why … --no-default \"구현자가 못 정하는 이유\" --choice key=라벨|고르면 (2개 이상) [--recommend key]` — 질문·이유·선택지는 기술용어 없이 일상 상황예시로 ② 그 id로 `finding-judge <지적 id> escalate --decision <id>` 또는 `round-judge <askId> escalate --decision <id>`. 사용자는 `decisions list`로 보고 `choose`/`delegate(네가 정해라)`로 답한다.",
+    "- 사용자 판단이 정말 필요한 것(범위표·제품 방향·위험 감수·외부 결정)만 사용자에게 올려라 — 산문으로 '보류/선택해 주세요'를 쓰지 마라(관문이 받지 않는다). 교착·분쟁·미해결도 먼저 구현자가 정한다(수용·반박·보관함·수칙 후보·재검증). 절차: `decisions raise`(질문·이유·선택지는 기술용어 없이 일상 상황예시로 · --no-default에 '구현자가 못 정하는 이유')로 항목을 만들고 그 id로 `finding-judge <지적 id> escalate --decision <id>` 또는 `round-judge <askId> escalate --decision <id>` — 인자는 명령이 안내한다. 사용자는 `decisions list`로 보고 `choose`/`delegate`로 답한다.",
     "- 마감 검증 요청에는 처리표를 첨부하라(①즉시 수정 ②보관+제외 근거 ③계획 승격 ④수용 위험) — 검증자는 직접 영향이 있는 항목의 '보관' 분류를 기각할 수 있다. push·배포 전 무결성 프로필로 승격 검증 1회 권장.",
   ].join("\n"),
 };
@@ -3475,7 +3479,7 @@ const BASE_CORE_EN = {
     "- Re-judge '[caution]' (security/data-adjacent) yourself: real risk → fix in the same loop as the blockers (extra re-verification rides along once); otherwise escalate to the user's report with your reasoning — never silently deferred.",
     "- Apply accepted '[notes]' (concrete, local, no new design choice) in this loop as one batch closed by a single confirmation verification (scoped to the change + direct regressions; only first-verdict acceptances — new non-blocking findings during confirmation are reported as unapplied). Extra round-trips only for new blockers. Never defer first-verdict '[notes]' to the parking lot.",
     "- Do NOT fix '[backlog]' (out-of-scope proposals) in this loop — the harness auto-records them; cite the '[ledger auto-record]' receipt ids, and on a 'refused/failed' warning register just that item manually with a generalized title. The parking lot holds exactly two kinds ('[backlog]' and user-escalated '[caution]') and carries no repayment duty — items become work only when adopted (large real work goes to the formal plan document). Record user-escalated '[caution]' yourself with \`node \"" + BRIDGE + "\" backlog add --tag 백로그|주의 --title \"<one line — never secret/PII originals>\" [--file <path>]\` and cite the printed id.",
-    "- Escalate to the user only what truly needs their direction (boundary, product direction, risk acceptance, external decision) — never as prose 'hold/please choose' (the gate rejects it). Stalemates and disputes are judged by the implementer first (accept, rebut, park, rule candidate, re-verify). Procedure: (1) `decisions raise --kind <boundary|product|risk|external> --question … --why … --no-default \"why the implementer cannot decide\" --choice key=label|if-chosen (2+) [--recommend key]` — question, reasons and options in plain everyday scenarios, no jargon; (2) record it with `finding-judge <finding id> escalate --decision <id>` or `round-judge <askId> escalate --decision <id>`. The user reads `decisions list` and answers with `choose`/`delegate`.",
+    "- Escalate to the user only what truly needs their direction (boundary, product direction, risk acceptance, external decision) — never as prose 'hold/please choose' (the gate rejects it). Stalemates and disputes are judged by the implementer first (accept, rebut, park, rule candidate, re-verify). Procedure: create the item with `decisions raise` (question, reasons and options in plain everyday scenarios, no jargon; --no-default = why the implementer cannot decide), then record its id with `finding-judge <finding id> escalate --decision <id>` or `round-judge <askId> escalate --decision <id>` — the command explains its arguments. The user reads `decisions list` and answers with `choose`/`delegate`.",
     "- Attach a disposition table to the closing request ((1) fixed now (2) parked + exclusion reason (3) promoted to the formal plan (4) user-accepted risks) — the verifier may reject a 'parked' classification where direct impact exists. One integrity-profile escalation verification before push/deploy is recommended.",
   ].join("\n"),
 };
@@ -3504,7 +3508,7 @@ const BASE_DEFAULTS_EN = {
     "- Evidence must be facts directly verifiable in code/files (paths, lines, actual output/behavior), not logical conjecture. If you disagree with the verifier, state why.",
     "- Report completion only after reflecting a verification whose verdict is 'pass' or 'pass (notes)'. Never package one example, one branch, a few tests, or an added specific as a 'full resolution' — that alone is not completion.",
     "- If you modified anything after verification (including applying the verifier's advice), re-verify the final state before reporting/committing. The verified state is the shipped state.",
-    "- Escalate to the user only what truly needs their direction (boundary, product direction, risk acceptance, external decision) — never as prose 'hold/please choose' (the gate rejects it). Stalemates and disputes are judged by the implementer first (accept, rebut, park, rule candidate, re-verify). Procedure: (1) `decisions raise --kind <boundary|product|risk|external> --question … --why … --no-default \"why the implementer cannot decide\" --choice key=label|if-chosen (2+) [--recommend key]` — question, reasons and options in plain everyday scenarios, no jargon; (2) record it with `finding-judge <finding id> escalate --decision <id>` or `round-judge <askId> escalate --decision <id>`. The user reads `decisions list` and answers with `choose`/`delegate`.",
+    "- Escalate to the user only what truly needs their direction (boundary, product direction, risk acceptance, external decision) — never as prose 'hold/please choose' (the gate rejects it). Stalemates and disputes are judged by the implementer first (accept, rebut, park, rule candidate, re-verify). Procedure: create the item with `decisions raise` (question, reasons and options in plain everyday scenarios, no jargon; --no-default = why the implementer cannot decide), then record its id with `finding-judge <finding id> escalate --decision <id>` or `round-judge <askId> escalate --decision <id>` — the command explains its arguments. The user reads `decisions list` and answers with `choose`/`delegate`.",
   ].join("\n"),
 };
 
@@ -3722,7 +3726,15 @@ function readFindingsLedger(ws) {
 function appendFindingsLedger(ws, recs) {
   try {
     fs.mkdirSync(VERIFY_FINDINGS_DIR, { recursive: true });
-    fs.appendFileSync(findingsLedgerFileFor(ws), recs.map((r) => JSON.stringify(r)).join("\n") + "\n");
+    // 손상 꼬리 격리(3회차 확인 blocker — ab-3): 직전 쓰기가 줄 중간에서 끊겨 개행 없이 끝났으면 새 행을 그 조각에 이어 붙이지 않고
+    // 개행으로 먼저 끊는다 — 조각은 판독기가 버리고(무효 JSON) 새 행은 온전한 줄로 남는다(재시도가 옛 조각과 결합해 무효화되는 경로 차단).
+    const file = findingsLedgerFileFor(ws);
+    let lead = "";
+    try {
+      const st = fs.statSync(file);
+      if (st.size > 0) { const fd = fs.openSync(file, "r"); try { const b = Buffer.alloc(1); fs.readSync(fd, b, 0, 1, st.size - 1); if (b[0] !== 0x0a) lead = "\n"; } finally { fs.closeSync(fd); } }
+    } catch (e) { if (!(e && e.code === "ENOENT")) return false; /* 파일 없음=첫 쓰기 · 그 외 꼬리 판독 실패(권한·잠금)=쓰지 않음(fail-closed — 4회차 확인) */ }
+    fs.appendFileSync(file, lead + recs.map((r) => JSON.stringify(r)).join("\n") + "\n");
     return true;
   } catch { return false; }
 }
@@ -4990,10 +5002,13 @@ function deriveRoundType(ws, campaignId, gen, curBoundaryGen) {
   }
   return "fix-verify"; // fail·inconclusive·error 전부(실패한 시도를 확인 라운드로 오인해 강한 강등 발동 금지)
 }
-function openFindingsFor(ws, campaignId, gen) {
+function openFindingsFor(ws, campaignId, gen) { return openFindingsFromRows(readFindingsLedger(ws), campaignId, gen); }
+// 단일 스냅샷 판독(5회차 확인 blocker — ab-3): 관문은 한 번 읽은 rows로만 계산해야 한다 — 첫 판독 성공 뒤 후속 재판독이 실패하면
+// 일반 판독기가 []를 돌려 '열린 지적 0'으로 위장되므로, 장부를 다시 읽는 경로를 관문 계산에서 없앤다.
+function openFindingsFromRows(allRows, campaignId, gen) {
   // 2차 미완수정④ 반영: gen 전달 시 '같은 동결 세대'의 finding만 — 비활성·구세대 open id가 새 세대의
   // 재지적으로 인정돼 신규성 심사를 우회하는 오염 차단(roundType 세대 필터와 동일 축). 미전달=전체(통계용).
-  const rows = readFindingsLedger(ws).filter((r) => r.campaignId === campaignId);
+  const rows = (Array.isArray(allRows) ? allRows : []).filter((r) => r && r.campaignId === campaignId);
   // 5차 미완수정② 반영: 과도기(세대 미포함 id)의 교차 세대 동일 id 대비 — id별 '등장 세대 집합'을 선계산.
   const idGens = new Map();
   for (const r of rows) if (r.type === "finding") { if (!idGens.has(r.findingId)) idGens.set(r.findingId, new Set()); idGens.get(r.findingId).add(r.envelopeHash || null); }
@@ -5055,7 +5070,13 @@ function findingActivityRound(rows, campaignId, findingId) {
 function dispositionValid(rows, campaignId, rec) {
   if (!rec) return false;
   const asOf = Number(rec.asOfRound);
-  return Number.isFinite(asOf) && asOf >= findingActivityRound(rows, campaignId, rec.findingId);
+  if (!(Number.isFinite(asOf) && asOf >= findingActivityRound(rows, campaignId, rec.findingId))) return false;
+  // 되받아침 처분(rebut+oosId)은 대응하는 implementer-oos 종결 행이 실재할 때만 유효 — 종결 없이 처분만 남은 장부(부분 기록·재시도 결합)는
+  // '미판단'으로 되돌려 관문이 열리지 않게 한다(3회차 확인 blocker — 장부 의미와 관문 결속).
+  if (rec.choice === "rebut" && rec.oosId) {
+    return rows.some((r) => r && r.type === "close" && r.campaignId === campaignId && r.findingId === rec.findingId && r.closeReason === "implementer-oos" && r.oosId === rec.oosId);
+  }
+  return true;
 }
 // 판독 실패 가시화(1차 검증 [주의]): 전 오류를 []로 접으면 관문이 '지적 0건'으로 오인하고 조용히 열린다.
 // ENOENT(장부 없음)=정상 빈 상태, 그 외=readError로 구분해 소비자가 경고를 낼 수 있게 한다.
@@ -5065,12 +5086,18 @@ function readFindingsLedgerState(ws) {
     return { rows, readError: false };
   } catch (e) { return { rows: [], readError: !(e && e.code === "ENOENT") }; }
 }
-function dispositionsFor(ws, campaignId) {
+function dispositionsFor(ws, campaignId) { return dispositionsFromRows(readFindingsLedger(ws), campaignId); }
+function dispositionsFromRows(rows, campaignId) {
   const m = new Map(); // 같은 id 재처분=마지막 기록 우선(append-only 장부의 자연 순서)
-  for (const r of readFindingsLedger(ws)) {
+  for (const r of (Array.isArray(rows) ? rows : [])) {
     if (r && r.type === "disposition" && r.campaignId === campaignId && typeof r.findingId === "string" && FINDING_DISPOSITIONS.includes(r.choice)) m.set(r.findingId, r);
   }
   return m;
+}
+// 관문용 단일 스냅샷 계산(장부 재판독 0회) — 호출자가 readFindingsLedgerState로 읽은 rows를 넘긴다.
+function undisposedOpenFindingsFromRows(rows, campaignId, gen) {
+  const d = dispositionsFromRows(rows, campaignId);
+  return openFindingsFromRows(rows, campaignId, gen).filter((o) => !dispositionValid(rows, campaignId, d.get(o.id)));
 }
 function undisposedOpenFindings(ws, campaignId, gen) {
   const d = dispositionsFor(ws, campaignId);
@@ -5408,7 +5435,7 @@ function writeEnvelopeFreeze(ws, hash, askJobId, extra) {
   // askId 동등 비교로만 이 ask의 동결임을 인정한다(불일치·부재=심사 미발동).
   // [v7 §2] extra={manifest, boundaryGen, appliedArchiveHash} — 부재=legacy 동결(코어만 시절·confirm은 envelopeHash 폴백)
   const ex9 = extra && typeof extra === "object" ? extra : {};
-  return atomicWrite(fzF, JSON.stringify({ schema: "env-freeze-v1", hash, askId: askJobId || null, ...(Array.isArray(ex9.manifest) ? { manifest: ex9.manifest } : {}), ...(typeof ex9.boundaryGen === "string" ? { boundaryGen: ex9.boundaryGen } : {}), ...(typeof ex9.appliedArchiveHash === "string" ? { appliedArchiveHash: ex9.appliedArchiveHash } : {}), ts: new Date().toISOString() }));
+  return atomicWrite(fzF, JSON.stringify({ schema: "env-freeze-v1", hash, askId: askJobId || null, ...(Array.isArray(ex9.manifest) ? { manifest: ex9.manifest } : {}), ...(Array.isArray(ex9.oos) ? { oos: ex9.oos } : {}), ...(typeof ex9.boundaryGen === "string" ? { boundaryGen: ex9.boundaryGen } : {}), ...(typeof ex9.appliedArchiveHash === "string" ? { appliedArchiveHash: ex9.appliedArchiveHash } : {}), ts: new Date().toISOString() }));
 }
 function readFrozenEnvelopeRec(ws) {
   try {
@@ -5417,9 +5444,11 @@ function readFrozenEnvelopeRec(ws) {
       // [v7 §2] manifest·boundaryGen strict 판독 — 형식 이상=legacy 취급(null·confirm 폴백 fail-closed 방향)
       const mfOk = Array.isArray(o.manifest) && o.manifest.every((r) => r && Number.isInteger(r.n) && (r.source === "core" || r.source === "archive") && typeof r.textFp === "string" && /^[0-9a-f]{16}$/.test(r.textFp));
       const bgOk = typeof o.boundaryGen === "string" && /^[0-9a-f]{40}$/.test(o.boundaryGen);
+      // [개선 1-A] 이 판에 실린 제외 칸(번호+한 줄 제목) — 판정 도착 자리의 되받아침 재료·되받아침 명령의 유효 번호 원천(판마다 동결)
+      const oosOk = Array.isArray(o.oos) && o.oos.every((x) => x && typeof x.id === "string" && /^oos-[1-9][0-9]{0,2}$/.test(x.id) && typeof x.title === "string");
       return { hash: o.hash, ts: typeof o.ts === "string" ? o.ts : null, askId: typeof o.askId === "string" && o.askId ? o.askId : null,
         manifest: mfOk ? o.manifest : null, boundaryGen: mfOk && bgOk ? o.boundaryGen : null,
-        appliedArchiveHash: typeof o.appliedArchiveHash === "string" ? o.appliedArchiveHash : null };
+        appliedArchiveHash: typeof o.appliedArchiveHash === "string" ? o.appliedArchiveHash : null, oos: oosOk ? o.oos : null };
     }
   } catch { /* 부재/손상 */ }
   return null;
@@ -5531,7 +5560,8 @@ function resolveJudgeRequired(ws, askId, choice, opts) {
 // 항목 수(경계 비활성=null → 규칙 2 미발동). 반환: { items:[{...f, demotedTo?, receiptKey}], flips, receipts }.
 // 규칙 순서(첫 매칭이 결정 — §3.2 동결): 0 abId 인용=면제 / 1 incomplete-fix=면제(prevId 유무는 영수증만) /
 // 2 supported:false+유효 oosId=백로그 강등 / 3 비discovery 신규+origin 부적격=백로그 / 4 confirm 신규+비유발=백로그.
-function judgeAdmission(findings, roundType, openIds, oosCount, abCount) {
+// rebutted(개선 1-B): Map<findingId, {oosId, restores}> — 구현자가 제외 n번으로 되받아쳐 닫은 지적. 재소환은 규칙 2b가 심사한다.
+function judgeAdmission(findings, roundType, openIds, oosCount, abCount, rebutted) {
   const items = [];
   const receipts = [];
   let kept = 0, demoted = 0;
@@ -5554,6 +5584,27 @@ function judgeAdmission(findings, roundType, openIds, oosCount, abCount) {
       const an = parseInt(f.abId.slice(3), 10);
       if (Number.isInteger(an) && an >= 1 && an <= abCount) { it.receiptKey = "ab-exempt"; kept++; items.push(it); receipts.push({ idx, key: "ab-exempt", detail: f.abId }); continue; }
       receipts.push({ idx, key: "ab-invalid", detail: f.abId }); // 무효 인덱스=면제 미발동(영수증만) — 이후 규칙 계속 평가
+    }
+    // 규칙 2b(개선 1-B · 되받아침 복귀): 구현자가 제외 n번으로 되받아친 지적을 다시 올리려면 "범위 안에서도 이 문제가 난다"는 반증
+    // (origin boundary-contest + contest 20~300자)이 필수 — 없으면 강등, 있으면 복귀. 같은 계보에서 두 번째 복귀=분쟁(판단 관문 재료).
+    let rbKey = (f.prevId && rebutted && rebutted.has(f.prevId)) ? f.prevId : ((f.id && rebutted && rebutted.has(f.id)) ? f.id : "");
+    if (!rbKey && rebutted && rebutted.size) { // 우회 차단(확인 blocker①): id·origin을 바꿔 새 지적처럼 올려도 정규화 제목이 같으면 같은 지적으로 심사
+      const tn9 = normBacklogTitle(f.title);
+      if (tn9) for (const [k9, v9] of rebutted) { if (v9 && typeof v9.titleNorm === "string" && v9.titleNorm === tn9) { rbKey = k9; break; } }
+    }
+    if (rbKey) {
+      const rb = rebutted.get(rbKey) || {};
+      const c9 = typeof f.contest === "string" ? f.contest.trim() : "";
+      // 복귀 조건=세 필드 전부(REJUDGE §3 B): origin boundary-contest + prevId(되받아친 그 id) + contest 20~300자.
+      // 제목만 같은 재소환(prevId 없음·다른 id)은 우회로 보고 강등 — 복귀시키지 않는다(확인 blocker① 반영).
+      if (f.origin === "boundary-contest" && f.prevId && f.prevId === rbKey && c9.length >= 20 && c9.length <= 300) {
+        it.contestOf = rbKey; it.dispute = (Number(rb.restores) || 0) >= 1; it.receiptKey = it.dispute ? "contest-dispute" : "contest-restored";
+        kept++; items.push(it); receipts.push({ idx, key: it.receiptKey, detail: rbKey + " ← " + String(rb.oosId || "") });
+        continue;
+      }
+      it.demotedTo = "백로그"; it.receiptKey = "contest-unproven"; demoted++;
+      items.push(it); receipts.push({ idx, key: "contest-unproven", detail: rbKey + " ← " + String(rb.oosId || "") });
+      continue;
     }
     if (f.origin === "incomplete-fix") { // 규칙 1(면제 — prevId는 영수증만·형식 오류가 해소 둔갑 금지)
       it.receiptKey = f.prevId && openIds.has(f.prevId) ? "lineage-bound" : "lineage-unproven";
@@ -5731,13 +5782,13 @@ const VERDICT_ACTION_CORE = {
   pass: "조치 없음 — 단, 본문에 보완·주의·수정 항목이 보이면 선언 결론보다 본문 항목을 우선 처리하라.",
   "pass-notes": "보완 의견 있음 — 각 항목을 [수용/반박/보류]로 재판단하라(지적이라는 이유만으로 수용 금지·반박=실측 반례). 이 답이 '첫 판정'이면: 수용한 '[보완]'을 일괄 반영하고 확인 검증 1회로 마감하라. 이 답이 그 '확인 검증'의 판정이면: 새로 나온 비차단 지적은 반영하지 말고 미반영으로 보고하라. '[주의]'는 지금 고치거나(확인 1회 동승) 근거와 함께 승격해 보관함에 기록하고, '[백로그]'는 수정하지 말고 보관함 기록·목록 전달하라(자동 등록 거부/실패=수동 등록·갚을 의무 없음). 상세 절차는 아래 [재판단 규약]을 따르라(붙어 있지 않으면 이 문장들이 최소 규약이다).",
   inconclusive: "추가 확인 필요 — 판단 보류 사유와 다음 확인 지점을 보고하라. blocker가 잔존한 교착이면 구현자가 먼저 정하고(수용·반박·보관함·수칙 후보·재검증), 사용자 방향이 필요한 것만 decisions raise + escalate 로 올려라(산문 보류 금지 — 관문이 거부).",
-  fail: "수정 필요 — blocker는 반박이 성립하지 않는 한 고치고, '[주의]' 재판단·수용 '[보완]' 일괄 동승 후 재검증하라(단 이 답이 '확인 검증'의 판정이면 새 blocker만 고치고 새 비차단은 미반영 보고). '[백로그]'는 수정하지 말고 보관함 기록·목록 전달(자동 등록 실패=수동 등록).",
+  fail: "수정 필요 — blocker는 반박이 성립하지 않는 한 고치고, 수용한 [보완]을 동승해 재검증하라('확인 검증'의 판정이면 새 blocker만). 상세=[재판단 규약].",
 };
 const VERDICT_ACTION_CORE_EN = {
   pass: "No action — but if the body contains supplement/caution/fix items, prioritize those body items over the declared verdict.",
   "pass-notes": "Notes present — re-judge every item as [accept/rebut/hold] (never accept merely because it was raised; rebuttal = measured counterexample). If this is the FIRST verdict: apply accepted '[notes]' as one batch closed by a single confirmation verification. If this is that CONFIRMATION's verdict: do NOT apply new non-blocking findings — report them as unapplied. '[caution]': fix now (rides the confirmation once) or escalate with your reasoning and record it in the parking lot; '[backlog]': do not fix — record in the parking lot and pass the list (auto-record refused/failed = register manually; no repayment duty). Details: the [Re-judgment protocol] attached below (if it is not attached, these sentences are the minimum protocol).",
   inconclusive: "Further verification needed — report the hold reason and next checkpoints. If blockers remain in a stalemate, the implementer judges first (accept, rebut, park, rule candidate, re-verify) and escalates only real direction questions via decisions raise + escalate (prose holds are rejected by the gate).",
-  fail: "Fix required — fix blockers unless a rebuttal stands, re-judge '[caution]' for same-loop handling, apply accepted '[notes]' in the same batch, then re-verify (if this is a CONFIRMATION verdict, fix only new blockers and report new non-blocking findings as unapplied). '[backlog]': do not fix — record in the parking lot and pass the list (auto-record failed = register manually).",
+  fail: "Fix required — fix blockers unless a rebuttal stands, apply accepted [notes] in the same batch, then re-verify (confirmation verdict: new blockers only). Details: [Re-judgment protocol] below.",
 };
 // P-12 2c: 강등·정정 사유 키 → 사람 문장(원문 비복사 — 손상 줄 내용은 절대 안 담김. corrupt는 개수·좌표만).
 function machineReasonText(machine, en) {
@@ -5885,7 +5936,7 @@ function formatForClaude(answer, lang, profile, machine, rejudgeSnap) {
     : `${body}\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: ${verdictLine || "(표지 줄 없음)"}${machineLine}\n처리 의무: ${action}${rjBlock}`;
 }
 
-module.exports = { JUDGE_CHOICES, judgeFileFor, readJudgeRequired, addJudgeRequired, judgeRequiredPending, resolveJudgeRequired, DECISIONS_DIR, DECISION_ORIGINS, DECISION_KINDS, DECISION_NO_DEFAULT_MIN, DECISION_STATUSES, DECISION_DELEGATE_KEY, decisionsFileFor, decisionIdFor, decisionIdKeyFor, readDecisions, appendDecisionRows, openDecision, resolveDecision, decisionMetrics, renderDecisionBlock, DECISION_TEMPLATE_DEFAULTS, DECISION_TEMPLATE_SLOTS, validateDecisionTemplate, loadDecisionTemplate, saveDecisionTemplate, decisionTemplateLabels, repoKeyOf, constraintRepoKeyFor, residualFileFor, readResidual, addResidual, removeResidualItems, residualJobFor, residualPending, envelopeApprovedCopyFileFor, readEnvelopeApprovedCopy, envelopeDriftView, restoreEnvelopeApproved, VERIFIER_PROVIDERS, normVerifierProvider, BASE_PROFILE_AXIS, verifierFormatDirective, verifierBaselineFor, ASK_SHAPE_SECTIONS, askShapeCheck, askShapeNotice, appendAskShape, loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, scoutCouplingAttach, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, ARCHIVE_FILE, ARCHIVE_ITEM_MAX, readVerifyEnvelopeArchive, validEnvelopeArchiveInner, normEnvelopeTarget, envelopeTargetDef, setContractHashAllSlots, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, discardEnvelopeProposalRestoring, draftEnvelopeRevision, setEnvelopeHashAllSlots, stampEnvelopeAllSlots, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ruleProposeCandidate, directRuleCandidate, MEMORY_CANDIDATE_PENDING_MAX, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, buildAbManifest, boundaryGenOf, SELECTOR_PAGE_ITEMS, SELECTOR_PAGE_TIMEOUT_MS, SELECTOR_PARALLEL, SELECTOR_UNION_MAX, SELECTOR_UNION_BYTES_MAX, selectorDeadlineMsFor, buildSelectorPages, buildSelectorPagePrompt, parseSelectorPageOutput, selectorUnion, SELECTOR_USAGE_DIR, appendSelectorUsage, readSelectorUsage, SELECTOR_DIFF_MAX, selectorScopeMaterial, implementerEnvelopeInject, previewGateDecision, envelopeDraftDiff, CONSTRAINT_TURNS_DIR, CONSTRAINT_USAGE_DIR, readConstraintUsage, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, turnAnchorOf, constraintTurnFileFor, writeConstraintTurnSnapshot, appendConstraintUsage, constraintTurnContext, constraintAdd, CONSTRAINT_BLOCK_MARKERS, CONSTRAINT_BLOCK_MAX_ROWS, parseConstraintBlock, constraintHarvestFromAnswer, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, verifyCampaignProgress, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, codexScoutExecEnv, TOOL_EXEC_ENV, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, economyConfigFpFrom, readEconomySnapshot, DS_SNAPSHOT_ENV, selfAdapterSha, selfExecFp, precisionExecFp, precisionExecFpFrom, readPrecisionConfigSnapshot, codexScoutExecArgsFromSnapshot, claimAutoReprobe, completeAutoReprobe, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, SESSION_LEASES_DIR, sessionLeaseFileFor, readSessionLease, acquireSessionLease, releaseSessionLease, setSessionLeaseChild, clearSessionLease, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, phaseFileFor, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, authoritativeVerdict, findingsBlockRange, formatForClaude, normRejudgeSnap, safeLoadRejudge, REJUDGE_SNAP_MAX, appendVerdict, trimVerdicts, appendAttachUsage, trimAttachUsage, ATTACH_USAGE_FILE, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
+module.exports = { openFindingsFromRows, dispositionsFromRows, undisposedOpenFindingsFromRows, JUDGE_CHOICES, judgeFileFor, readJudgeRequired, addJudgeRequired, judgeRequiredPending, resolveJudgeRequired, DECISIONS_DIR, DECISION_ORIGINS, DECISION_KINDS, DECISION_NO_DEFAULT_MIN, DECISION_STATUSES, DECISION_DELEGATE_KEY, decisionsFileFor, decisionIdFor, decisionIdKeyFor, readDecisions, appendDecisionRows, openDecision, resolveDecision, decisionMetrics, renderDecisionBlock, DECISION_TEMPLATE_DEFAULTS, DECISION_TEMPLATE_SLOTS, validateDecisionTemplate, loadDecisionTemplate, saveDecisionTemplate, decisionTemplateLabels, repoKeyOf, constraintRepoKeyFor, residualFileFor, readResidual, addResidual, removeResidualItems, residualJobFor, residualPending, envelopeApprovedCopyFileFor, readEnvelopeApprovedCopy, envelopeDriftView, restoreEnvelopeApproved, VERIFIER_PROVIDERS, normVerifierProvider, BASE_PROFILE_AXIS, verifierFormatDirective, verifierBaselineFor, ASK_SHAPE_SECTIONS, askShapeCheck, askShapeNotice, appendAskShape, loadContract, patchContractFields, buildInjection, buildVerifyDirective, buildScoutDirective, rankScoutItems, changedFilesFor, computeScoutHealthMini, scoutHealthLine, scoutCouplingAttach, HEALTH_MIN_SAMPLE, SCOUT_FORMAT_VERSION, scoutBaselineDefaultFor, scoutBaselineFileFor, loadScoutBaseline, saveScoutBaseline, resetScoutBaseline, buildScoutPreface, scoutPromptSignature, extractMapHighlights, extractMapPatches, buildScoutAttach, resolveScoutRepo, withFileLockStrict, withRoleLock, ledgerCouplingCandidates, ledgerItemId, miniLedgerEntries, mapLooksValid, nonGitChangedSince, ledgerSig, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, ledgerEventsFileFor, LEDGER_EVENTS_DIR, LEDGER_EVENTS_CAP, LEDGER_EVENTS_TRIM_AT, scoutMapStatus, wsKeyFor, BACKLOG_DIR, backlogFileFor, normBacklogTitle, normBacklogFile, backlogId, foldBacklogRaw, readBacklog, backlogAdd, backlogSetStatus, backlogClearDone, updateContractPatch, withContractLockV10, quarantineContractLock, parseLockToken, SCOUTS_DIR, SCOUT_ADVICE_DIR, VERIFY_MODES, HARNESS_MODES, normHarnessMode, VERIFY_PROFILES, normVerifyProfile, normCodexVerifyProfile, effectiveVerifyProfile, normVerifyBudget, normCodexVerifyBudget, effectiveVerifyBudget, readVerifyEnvelope, ARCHIVE_FILE, ARCHIVE_ITEM_MAX, readVerifyEnvelopeArchive, validEnvelopeArchiveInner, normEnvelopeTarget, envelopeTargetDef, setContractHashAllSlots, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, ENVELOPE_FILE, ENVELOPE_PROPOSED_DIR, ENVELOPE_TRANS_DIR, envelopeProposedFileFor, envelopeTransWalFileFor, envelopeTransLockFileFor, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, discardEnvelopeProposalRestoring, draftEnvelopeRevision, setEnvelopeHashAllSlots, stampEnvelopeAllSlots, envelopeTransState, applyEnvelopeTransition, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, ENVELOPE_CANDIDATES_DIR, ENVELOPE_CANDIDATE_STATUSES, envelopeCandidatesFileFor, envelopeCandidateId, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ruleProposeCandidate, directRuleCandidate, MEMORY_CANDIDATE_PENDING_MAX, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, buildAbManifest, boundaryGenOf, SELECTOR_PAGE_ITEMS, SELECTOR_PAGE_TIMEOUT_MS, SELECTOR_PARALLEL, SELECTOR_UNION_MAX, SELECTOR_UNION_BYTES_MAX, selectorDeadlineMsFor, buildSelectorPages, buildSelectorPagePrompt, parseSelectorPageOutput, selectorUnion, SELECTOR_USAGE_DIR, appendSelectorUsage, readSelectorUsage, SELECTOR_DIFF_MAX, selectorScopeMaterial, implementerEnvelopeInject, previewGateDecision, envelopeDraftDiff, CONSTRAINT_TURNS_DIR, CONSTRAINT_USAGE_DIR, readConstraintUsage, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, turnAnchorOf, constraintTurnFileFor, writeConstraintTurnSnapshot, appendConstraintUsage, constraintTurnContext, constraintAdd, CONSTRAINT_BLOCK_MARKERS, CONSTRAINT_BLOCK_MAX_ROWS, parseConstraintBlock, constraintHarvestFromAnswer, FINDINGS_MARKERS_V2, FINDING_ORIGINS, VERIFY_FINDINGS_DIR, findingsLedgerFileFor, readFindingsLedger, appendFindingsLedger, deriveRoundType, openFindingsFor, newFindingId, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, envelopeFreezeFileFor, judgeAdmission, CAMPAIGN_DIR, CAMPAIGN_CORRUPT_DIR, CAMPAIGN_HISTORY_DAYS, campaignFileFor, campaignHistoryFileFor, claudeCampaignAnchor, reserveVerifyCampaign, findCampaignInHistory, verifyCampaignProgress, BASE_CORE, BASE_CORE_EN, FINDINGS_MARKERS, normFindingTag, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, SCOUT_MODES, SCOUT_GATES, SCOUT_ARMS, normScoutGate, normScoutMode, normScoutArm, scoutArmView, deepseekKeyPresent, SCOUT_CODEX_FILE, readScoutCodexPrefs, saveScoutCodexPrefs, scoutCodexArgs, MAP_MODES, normMapMode, mapModeView, codexScoutExecArgs, codexScoutExecEnv, TOOL_EXEC_ENV, CODEX_SCOUT_ADAPTER_VER, MAP_READINESS_FILE, MAP_READINESS_VER, MAP_PROBE_VER, readMapReadinessRaw, writeMapReadinessGuarded, economyConfigFp, economyConfigFpFrom, readEconomySnapshot, DS_SNAPSHOT_ENV, selfAdapterSha, selfExecFp, precisionExecFp, precisionExecFpFrom, readPrecisionConfigSnapshot, codexScoutExecArgsFromSnapshot, claimAutoReprobe, completeAutoReprobe, mapReadinessView, readScoutTargetEvidence, appendScoutTargetEvidence, detectScoutTargetDrift, gitTopLevelFor, changedEntriesFor, scoutEvidenceFileFor, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, ASKS_INFLIGHT_DIR, INFLIGHT_TTL_MS, askActiveFileFor, readAskActive, SESSION_LEASES_DIR, sessionLeaseFileFor, readSessionLease, acquireSessionLease, releaseSessionLease, setSessionLeaseChild, clearSessionLease, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, ASK_ACTIVE_DIR, SCOUT_TARGET_EVIDENCE_DIR, EVIDENCE_KEEP, CONTRACT_FILE, CONTRACTS_DIR, contractFileFor, normWs, currentWs, configWs, codexActiveFileFor, writeCodexActive, readCodexActive, registerCodexImplementer, CODEX_ACTIVE_DIR, CODEX_ACTIVE_FILE, BRIDGE, BRIDGE_DIR, BASE_DEFAULTS, BASE_DEFAULTS_EN, baseDefaultsFor, baseDirectiveFileFor, BASE_DIRECTIVE_FILE, loadBaseDirective, saveBaseDirective, resetBaseDirective, LANG_FILE, LANGS, loadLang, saveLang, verifyTimeoutMin, atomicWrite, INTEGRITY_FILE, readIntegrityEvents, appendIntegrityEvent, ackIntegrityEvents, supersedeIntegrity, withIntegrityLock, PHASE_FILE, phaseFileFor, readPhase, writePhase, PROOFS_DIR, ATTEMPTS_DIR, ACTIVE_DIR, PROOF_TTL_MS, ATTEMPTS_TTL_MS, ACTIVE_TTL_MS, cleanupOldState, maybeCleanupState, extractVerdict, authoritativeVerdict, findingsBlockRange, formatForClaude, normRejudgeSnap, safeLoadRejudge, REJUDGE_SNAP_MAX, appendVerdict, trimVerdicts, appendAttachUsage, trimAttachUsage, ATTACH_USAGE_FILE, appendScoutUsage, trimScoutUsage, SCOUT_USAGE_FILE, STATS_DIR, VERDICTS_FILE };
 module.exports.codexImplementerSession = codexImplementerSession;
 module.exports.codexImplementerSnapshot = codexImplementerSnapshot;
 // P-6 회수 영수증 계약(설계 v5.1)

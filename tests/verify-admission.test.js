@@ -264,7 +264,7 @@ console.log("[6] 배선 소스 단언 — codex-bridge·캐논·정본");
   ok(cb.includes("인용 필수(미인용=면제 없음)") && cb.includes("MUST cite \"abId\""), "v2 지시절=abId 인용 필수 계약(2차 미완수정① — 정본 규칙 0 개정과 정합)");
   ok(cb.includes('profile === "core" ? envelopeCoreQualifier(lang) : envelopeIntegrityQualifier(lang)'), "경계=프로필 공통(무결성=재소환 금지+재심 관점 문구 — 사용자 결정 2026-07-22)");
   ok(cb.includes("v2DirectiveFor(wsIn, lang)") && cb.includes("[열린 지적 — 재지적·미완 수정 보고 시 이 id를 인용하라(미인용=신규 취급)]"), "경계 활성=v2 서식 요구+열린 지적 하네스 직접 주입(구현모델 선별 금지)");
-  ok(/judgeAdmission\(parse\.findings, roundType, openIds, oosCount, abCount\)/.test(cb), "후처리=입장 심사 발동(v2+동결 승인·abCount 결속 — 1차 blocker①)");
+  ok(/judgeAdmission\(parse\.findings, roundType, openIds, oosCount, abCount, rebutted9\)/.test(cb), "후처리=입장 심사 발동(v2+동결 승인·abCount 결속 — 1차 blocker①)");
   ok(cb.includes('machine.effective = "inconclusive"; machine.demoted = true; machine.reasonKey = "scope-demoted"') && cb.includes("①범위 밖 수용(종결) ②재심 요청"), "규칙 5: 반전=자동 통과 금지·정본 '보류'+사용자 선택지");
   ok(cb.includes("[입장 심사 미적용 — v1 응답(지시문은 v2 요구) · 통계 기록]"), "활성 행렬: 승인+v1=fail-open+경고 병기");
   ok(cb.includes('verdict: "error", envelopeHash: frozen'), "판정 추출 실패 라운드도 회차 기록(error — 다음 라운드 fix-verify 유도)");

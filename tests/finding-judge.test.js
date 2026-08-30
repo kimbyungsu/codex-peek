@@ -92,13 +92,13 @@ console.log("[5] 관문 — 세대 결속·판독 실패 가시화(1차 [주의]
   const WS5 = fs.mkdtempSync(path.join(os.tmpdir(), "fjudgews4_"));
   CL.appendFindingsLedger(WS5, [{ ...seed("f-dddd0001", "구세대 지적"), envelopeHash: "sha-old" }]);
   ok(CB.findingDispositionGate(WS5, { ok: true, job: { campaignId: CAMP } }, "ko").proceed === true, "동결 세대 불일치 open → 관문 대상 제외");
-  // 판독 실패=미발동이되 경고 반환(빈 장부 위장 금지)
+  // 판독 실패=차단(2026-08-31 되받아침 고리 4회차 확인 — ab-3): 경고만 내고 진행하면 판독 오류 동안 '지적 0' 위장 통과 증명이 생김
   const WS5b = fs.mkdtempSync(path.join(os.tmpdir(), "fjudgews4b_"));
   fs.mkdirSync(CL.findingsLedgerFileFor(WS5b), { recursive: true }); // 파일 자리에 디렉터리=EISDIR
   const st = CL.readFindingsLedgerState(WS5b);
   ok(st.readError === true && st.rows.length === 0, "readFindingsLedgerState — EISDIR=readError(빈 장부와 구분)");
   const gErr = CB.findingDispositionGate(WS5b, { ok: true, job: { campaignId: CAMP } }, "ko");
-  ok(gErr.proceed === true && /관문이 동작하지 않았습니다/.test(gErr.warn), "판독 실패=미발동+경고 문구(침묵 통과 금지)");
+  ok(gErr.proceed === false && gErr.exitCode === 3 && /장부를 읽지 못해/.test(gErr.msg), "판독 실패=검증 시작 차단(경고만 내고 진행 금지 — 위장 통과 차단)");
   const WS5c = fs.mkdtempSync(path.join(os.tmpdir(), "fjudgews4c_"));
   ok(CL.readFindingsLedgerState(WS5c).readError === false, "장부 없음(ENOENT)=정상 빈 상태(경고 아님)");
 }

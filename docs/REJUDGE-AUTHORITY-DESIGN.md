@@ -76,11 +76,16 @@
   `--oos`는 **그 판 freeze v2의 유효 번호만**(무효=거부·`ab-invalid` 문법과 동형), `--path`는 필수(120자·단일행·민감 형태
   검사=safeBacklogAutoTitle) — 번호의 존재가 아니라 "어느 범위 밖 상황을 전제하는지"를 구현자가 적는다.
   처분 레코드에 `boundaryRef{kind:"oos", index, textFp, boundaryGen, askId}` 결속.
+  **구현됨 2026-08-31(HARNESS-REALIGNMENT §4 개선 1)** — 실제 명령은 `finding-judge <id> rebut --oos oos-n --note "<전제하는 범위 밖 상황 한 줄>"`
+  (`--path` 대신 기존 `--note` 채널 재사용·12자 이상), 번호는 그 판 동결 레코드의 `oos` 목록만 유효, 처분 행에 `oosId`+장부 close 행
+  `implementer-oos`(boundaryRef 구조체 대신 동결 세대 `envelopeHash`로 결속). 재소환·복귀·분쟁은 입장 심사 규칙 2b(`tests/rebuttal.test.js`).
 - 기계 효력(즉시·장부): 입장 심사 규칙 2와 **같은 강등 결과**(`demotedTo:"백로그"`·영수증 `implementer-oos`·finding 즉시
   closed=reclassified). 판정 재산출은 기존 규칙 그대로: 남은 blocker가 전부 강등이면 **'보류'**(사용자 선택 ①범위 밖
   수용 ②재심) — 통과로 재산출되는 경로 없음(P6·ab-3).
 - 다음 검증 요청 자동 동봉: ask-start가 요청문 뼈대에 **[경계 반박 — 하네스 동봉]** 절을 붙인다:
   `f-xxxx: <지적 제목> ← oos-3 <전문> / 전제 상황: <path> (구현자 반박·세대 <boundaryGen>)`. 구현자가 손으로 옮기지 않는다.
+  **구현본(2026-08-31)의 실제 동봉 행**: `> f-xxxx ← oos-3 [지적 제목] (복귀 N회)` — 전제 상황(path)은 처분 행의 `--note`에, 세대는 장부
+  close 행의 `envelopeHash`에 있고 요청문에는 싣지 않는다(검증자에게 필요한 건 '어느 지적이 어느 번호로 되받아쳐졌나'뿐 — 글 예산).
 - 검증자 서식 확장(v2 서식·`FINDING_ORIGINS`에 `boundary-contest` 추가·파서 동시 확장 — **기계 판독 스키마 v2 blocker① 반영**):
   경계 반박된 지적을 다시 blocker로 올리려면 지적 행에 다음 세 필드가 모두 있어야 한다:
   `"origin":"boundary-contest"` · `"prevId":"f-…"`(같은 캠페인에서 구현자 `implementer-oos` 강등 처분이 결속된 지적 id) ·
