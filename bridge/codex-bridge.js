@@ -3292,7 +3292,11 @@ function reserveVerifyBudgetGate(ws, durableEnv, contractSnap, harnessModeSnap, 
   // 이 patch마저 실패해도 미집계 1줄이 child 로컬 stdout·worker .out에 남는다(최후 fallback).
   if (job && res && res.tracked !== true && res.unlimited !== true) patchAskJobFile(job.id, { budgetUntracked: true });
   // 호출 진행 확정(⑶: tracked 성공 '또는' 가시화된 untracked 진행 결정·무제한) → phase/round 정확히 1회.
-  try { writePhase("codex-verifying", { round: (readPhase(ws).round || 0) + 1, session: claudeId(), workspace: ws }); } catch { /* 진행표시 best-effort — [4a] 회차도 ws별 기록 기준(타 프로젝트 회차 승계 차단) */ }
+  // [회차 단일 원천 2026-08-30 — 사용자 실보고 "화면은 1/5인데 보고는 5/5"] 진행 파일의 round는 워커가 선별 단계에서 0으로 되돌리므로
+  // '이전 값+1'은 매 판 1이 된다(장부와 다른 숫자를 두 곳에서 셈 — P10의 화면판). 화면 회차=캠페인 장부의 예약 서수(res.n)만 쓴다.
+  // 미집계·무제한이면 서수 권위가 없으므로 종전처럼 '이전 값+1'(가시화용 진행 표시일 뿐 회차 권위 아님 — p12-budget 가시화 계약 유지).
+  const roundShown = (res && res.tracked === true && Number.isFinite(Number(res.n))) ? Number(res.n) : ((readPhase(ws).round || 0) + 1);
+  try { writePhase("codex-verifying", { round: roundShown, session: claudeId(), workspace: ws }); } catch { /* 진행표시 best-effort — [4a] 회차도 ws별 기록 기준(타 프로젝트 회차 승계 차단) */ }
   return { proceed: true, res };
 }
 // 포맷 계층(⑻) — formatForClaude 소비자 stdout 전용 안내(raw answer·proof·rollout 불변). 무제한·침묵·중간 왕복="".

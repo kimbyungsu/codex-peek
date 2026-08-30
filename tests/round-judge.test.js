@@ -205,4 +205,28 @@ t("소스 핀 — Codex 종료 훅(codex-hook)에도 같은 관문·전량 강�
   assert.ok(CL.FINDING_DISPOSITIONS.includes("escalate"));
 });
 
+t("화면 회차=캠페인 장부 서수 — 선별 단계가 진행 파일 round를 0으로 되돌려도 다음 예약은 장부 N을 쓴다(매 판 1/5 오표기 봉합)", () => {
+  const WS9 = fs.mkdtempSync(path.join(os.tmpdir(), "rjudge-ws9-"));
+  const sid = "sess-round-9";
+  const prevSid = process.env.CLAUDE_CODE_SESSION_ID; process.env.CLAUDE_CODE_SESSION_ID = sid;
+  fs.mkdirSync(CL.ACTIVE_DIR, { recursive: true });
+  fs.writeFileSync(path.join(CL.ACTIVE_DIR, sid + ".json"), JSON.stringify({ workspace: WS9, claudeSession: sid, ts: "2026-08-30T14:00:00.000Z" }));
+  const snap = { verifyBudget: 5, codexVerifyBudget: 5, harnessMode: "claude-codex" };
+  const g1 = CB.reserveVerifyBudgetGate(WS9, null, snap, "claude-codex", "ko", "core");
+  assert.strictEqual(g1.proceed, true); assert.strictEqual(g1.res.n, 1);
+  assert.strictEqual(CL.readPhase(WS9).round, 1);
+  CL.writePhase("selecting", { workspace: WS9, round: 0, session: null }); // 워커 선별 단계(예약 전) — 0으로 되돌림(현행 유지)
+  assert.strictEqual(CL.readPhase(WS9).round, 0);
+  const g2 = CB.reserveVerifyBudgetGate(WS9, null, snap, "claude-codex", "ko", "core");
+  assert.strictEqual(g2.res.n, 2);
+  assert.strictEqual(CL.readPhase(WS9).round, 2, "phase round must equal the ledger ordinal, not prev+1 (which would be 1)");
+  CL.writePhase("selecting", { workspace: WS9, round: 0, session: null });
+  const g3 = CB.reserveVerifyBudgetGate(WS9, null, snap, "claude-codex", "ko", "core");
+  assert.strictEqual(g3.res.n, 3); assert.strictEqual(CL.readPhase(WS9).round, 3);
+  const src = fs.readFileSync(BRIDGE, "utf8");
+  assert.ok(!src.includes('writePhase("codex-verifying", { round: (readPhase(ws).round || 0) + 1'), "tracked path must not use prev+1 counting");
+  assert.ok(src.includes("const roundShown = (res && res.tracked === true"), "ledger ordinal is the single source");
+  if (prevSid === undefined) delete process.env.CLAUDE_CODE_SESSION_ID; else process.env.CLAUDE_CODE_SESSION_ID = prevSid;
+});
+
 console.log(`\n결과: ${n} 통과 / 0 실패`);
