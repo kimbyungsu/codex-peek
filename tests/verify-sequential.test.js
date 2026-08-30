@@ -378,7 +378,7 @@ ok(!CL.readIntegrityEvents().some((e) => e.workspace && CL.normWs(e.workspace) =
   ok(runC().stdout === "" && fs.existsSync(resC) && JSON.parse(fs.readFileSync(resC, "utf8")).items[0].campaignId === campC, "C-C 즉시 재검증 마감=같은 정본 마커(캠페인 id 결속)");
   ok(CL.readIntegrityEvents().some((e) => e.workspace && CL.normWs(e.workspace) === CL.normWs(wsC) && e.kind === "verify-residual-now" && e.severity === "warning"), "C-C 노랑 경보");
   const hookSrc2 = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-hook.js"), "utf8");
-  ok(hookSrc2.includes("if(gate.ok&&residualOk)") && hookSrc2.includes("residualPending(ws,Number(s.startedAt||0))") && hookSrc2.includes('[잔여 재검증 미이행 · 실제 회차'), "C-C 다음 턴 종료도 잔여 결속 통과 전엔 차단(소스 계약 — 정본 헬퍼 공유)");
+  ok(hookSrc2.includes("if(gate.ok&&residualOk&&judgeOk)") && hookSrc2.includes("residualPending(ws,Number(s.startedAt||0))") && hookSrc2.includes('[잔여 재검증 미이행 · 실제 회차'), "C-C 다음 턴 종료도 잔여 결속 통과 전엔 차단(소스 계약 — 정본 헬퍼 공유)");
   // [2회차 blocker②] 다음 턴이 '검증 불필요'(codexVerifyMode=code·수정 없음)여도 잔여 미소비면 종료 차단 → 결속 통과로 소비
   fs.writeFileSync(CL.contractFileFor(wsC, "ko"), JSON.stringify({ workspace: wsC, harnessMode: "codex-codex", codexVerifyMode: "code", codexVerifyBudget: 5 }));
   const turnN = "turn-next"; const startN = Date.now();

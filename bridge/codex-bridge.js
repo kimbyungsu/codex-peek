@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { readDecisions, openDecision, resolveDecision, decisionMetrics, DECISION_DELEGATE_KEY, DECISION_KINDS, DECISION_NO_DEFAULT_MIN, askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, contractReadState, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, repoKeyOf, constraintRepoKeyFor, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled, constraintTurnContext, constraintAdd, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, constraintHarvestFromAnswer, buildAbManifest, boundaryGenOf, readVerifyEnvelopeArchive, SELECTOR_PAGE_ITEMS, selectorDeadlineMsFor, selectorScopeMaterial, SELECTOR_UNION_MAX, SELECTOR_UNION_BYTES_MAX, readSelectorUsage } = require("./contract-lib.js");
+const { readDecisions, openDecision, resolveDecision, decisionMetrics, DECISION_DELEGATE_KEY, DECISION_KINDS, DECISION_NO_DEFAULT_MIN, JUDGE_CHOICES, readJudgeRequired, addJudgeRequired, resolveJudgeRequired, askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, contractReadState, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, repoKeyOf, constraintRepoKeyFor, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled, constraintTurnContext, constraintAdd, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, constraintHarvestFromAnswer, buildAbManifest, boundaryGenOf, readVerifyEnvelopeArchive, SELECTOR_PAGE_ITEMS, selectorDeadlineMsFor, selectorScopeMaterial, SELECTOR_UNION_MAX, SELECTOR_UNION_BYTES_MAX, readSelectorUsage } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -2852,11 +2852,47 @@ function cmdRulePropose(rest) {
   console.log((en ? "proposed: " : "상신됨: ") + r.candidateId + (en ? " — takes effect only after the user stamps it" : " — 효력은 사용자 도장부터(대시보드 '제안'에서 승인/안 올림)"));
   if (r.warn === "pending-cap") console.log(en ? "note: pending queue is over the guide cap — consider fewer, more general proposals" : "참고: 대기 후보가 안내 상한을 넘었습니다 — 상신은 더 적고 더 일반적인 원칙 위주로");
 }
-// [개선 2 · 결정 장부] 전량 강등 보류 = 구현자 판단 촉구(사용자 결정 자동 생성 없음 — 사용자 방향 2026-08-30).
-function scopeDemotedJudgeNotice(en) {
+// [개선 2 · 판단 관문 — 장치화 2026-08-30] 전량 강등 보류 = 구현자 판단이 필요한 상태. 촉구 문장 대신 마커를 걸어 종료 훅이 판단 기록(round-judge)
+// 전에는 턴을 못 끝내게 한다. 사용자 결정은 자동으로 만들지 않는다 — escalate를 고르면 그때 결정 장부 항목(decisions raise)이 있어야 기록된다.
+function armScopeDemotedJudge(ws, camp, askId, en) {
+  const cmd = `node codex-bridge.js round-judge ${askId || "<askId>"} <close-oos|re-verify|escalate --decision <id>> --note "..."`;
+  const ok = askId ? addJudgeRequired(ws, { askId, campaignId: String(camp || ""), reason: "scope-demoted" }) : false;
+  if (!ok) return en
+    ? "[judgment gate NOT armed] (" + (askId ? "marker write failed" : "no askId") + ") — record the judgment manually: " + cmd
+    : "[판단 관문 미장전] (" + (askId ? "마커 기록 실패" : "askId 없음") + ") — 관문이 걸리지 않았으니 수동으로 판단을 기록하라: " + cmd;
   return en
-    ? "[re-judge now] every remaining blocker is out of the approved boundary — the implementer decides: (1) close as out-of-scope (finding-judge park → parking lot) (2) request re-verification (3) only if the boundary itself must change, raise a direction question: node codex-bridge.js decisions raise --kind boundary ..."
-    : "[재판단 촉구] 남은 지적이 전부 승인된 범위 밖 — 구현자가 정한다: ①범위 밖으로 종결(finding-judge park → 보관함) ②재검증 요청 ③범위표 자체를 바꿔야 하는 방향 질문일 때만 사용자에게: node codex-bridge.js decisions raise --kind boundary …";
+    ? "[judgment gate armed] every remaining blocker is out of the approved boundary — this turn cannot end until the implementer records a judgment: " + cmd + " (close-oos=close as out-of-scope · re-verify=request re-verification · escalate=direction question for the user — needs a decision id made by decisions raise)"
+    : "[판단 관문 걸림] 남은 지적이 전부 승인된 범위 밖 — 구현자 판단이 기록되기 전에는 이 턴을 끝낼 수 없다: " + cmd + " (close-oos=범위 밖 종결 · re-verify=재검증 요청 · escalate=사용자 방향 질문 — decisions raise로 만든 항목 id 필수)";
+}
+// CLI round-judge — 판단 관문 해제 수단. 인자 없으면 대기 목록.
+function cmdRoundJudge(rest) {
+  const ws = configWs();
+  const val = (f) => { const k = rest.indexOf(f); return k >= 0 && rest[k + 1] !== undefined ? String(rest[k + 1]) : ""; };
+  const pos = [];
+  for (let k = 0; k < rest.length; k++) { const a = String(rest[k] || ""); if (a === "--note" || a === "--decision") { k++; continue; } pos.push(a.trim()); }
+  const askId = pos[0] || "", choice = pos[1] || "";
+  const usage = tB('사용법: round-judge [<askId> <close-oos|re-verify|escalate> --note "판단 근거(12자+)" [--decision <결정 장부 id>]]', 'Usage: round-judge [<askId> <close-oos|re-verify|escalate> --note "reason (12+ chars)" [--decision <decision id>]]');
+  if (!askId) {
+    const cur = readJudgeRequired(ws);
+    if (!cur) { process.stdout.write(tB("판단 대기 없음 — 관문이 걸린 판정이 없습니다.\n", "No judgment pending.\n")); return 0; }
+    process.stdout.write(tB(`판단 대기 ${cur.items.length}건\n`, `Judgments pending: ${cur.items.length}\n`));
+    for (const it of cur.items) process.stdout.write(`  ⬜ ${it.askId} [${it.reason}] ${it.campaignId}\n`);
+    process.stdout.write(usage + "\n");
+    return 0;
+  }
+  const r = resolveJudgeRequired(ws, askId, choice, { note: val("--note"), decisionId: val("--decision") });
+  if (r.ok) { process.stdout.write(tB(`기록됨: ${askId} → ${choice}${r.decisionId ? ` (결정 장부 ${r.decisionId})` : ""}\n`, `Recorded: ${askId} → ${choice}${r.decisionId ? ` (decision ${r.decisionId})` : ""}\n`)); return 0; }
+  const M = {
+    "unknown-choice": usage,
+    "not-pending": tB(`${askId}는 판단 대기 항목이 아닙니다(round-judge 로 목록 확인).`, `${askId} is not pending (see round-judge).`),
+    "note-required": tB("--note 에 판단 근거를 12자 이상 적으세요 — 근거 없는 판단은 통과 의식입니다.", "--note needs a reason (12+ chars)."),
+    "decision-required": tB("escalate 는 결정 장부의 실존 항목이 필요합니다 — 먼저 decisions raise 로 항목을 만들고 --decision <id> 로 지정하세요(사용자 판단 필요 = 스크립트 출력 강제).", "escalate requires an existing decision — create one with decisions raise, then pass --decision <id>."),
+    "ledger-write-failed": tB("장부 기록 실패 — 판단이 저장되지 않았습니다(디스크 확인).", "Ledger write failed — judgment not saved."),
+    "already-judged": tB(`이 판정엔 이미 판단(${r.choice}${r.decisionId ? " · 결정 " + r.decisionId : ""})이 기록돼 있습니다 — 마커만 남은 상태라면 같은 선택으로 다시 실행하면 정리됩니다. 다른 판단으로 바꾸는 중복 기록은 하지 않습니다.`, `Already judged (${r.choice}${r.decisionId ? " · decision " + r.decisionId : ""}) — rerun with the same choice to clear a leftover marker; conflicting duplicates are refused.`),
+    "marker-remove-failed": tB("판단은 기록됐지만 마커 제거에 실패했습니다 — 다시 실행하세요.", "Recorded but the marker could not be removed — rerun."),
+  };
+  process.stderr.write((M[r.reason] || tB(`실패(${r.reason})`, `Failed (${r.reason})`)) + "\n");
+  return r.reason === "unknown-choice" ? 2 : 3;
 }
 // [개선 2 · 결정 장부 — HARNESS-REALIGNMENT §4] 결정은 장부 행으로만 존재하고 이 명령이 양식으로 출력한다. 행을 만드는 곳은 여기의
 // raise(구현자 판단의 구조 채널)뿐. 선택 시 전제 지문(targetFp, 예: 승인 수칙서 지문)이 있는 결정은 지금 계약의 지문과 같아야 닫힌다(다른 세대 항목 종결 금지).
@@ -2941,11 +2977,11 @@ function cmdFindingJudge(rest) {
   const disp = dispositionsFor(ws, camp);
   // 위치 인자=플래그와 그 값을 제외한 나머지(--campaign이 첫 인자여도 목록 모드가 되도록)
   const pos = [];
-  for (let i = 0; i < rest.length; i++) { const a = String(rest[i] || ""); if (a === "--note" || a === "--campaign" || a === "--source") { i++; continue; } pos.push(a.trim()); }
+  for (let i = 0; i < rest.length; i++) { const a = String(rest[i] || ""); if (a === "--note" || a === "--campaign" || a === "--source" || a === "--decision") { i++; continue; } pos.push(a.trim()); }
   const id = pos[0] || "";
   if (!id) {
     if (!opens.length) { process.stdout.write(tB(`열린 지적 없음(캠페인 ${camp}) — 판단할 것이 없습니다. 관문 거부문의 캠페인이 다르면 --campaign "<그 id>"를 붙이세요.\n`, `No open findings (campaign ${camp}) — nothing to judge. If the gate refusal names a different campaign, pass --campaign "<that id>".\n`)); return; }
-    const CH = { "fix-fact": en ? "fix (proven wrong)" : "수용(사실 오류)", "fix-gap": en ? "fix (enrichment)" : "수용(보강 요구)", rebut: en ? "rebutted" : "반박 종결", park: en ? "parked" : "보관함 이관" };
+    const CH = { "fix-fact": en ? "fix (proven wrong)" : "수용(사실 오류)", "fix-gap": en ? "fix (enrichment)" : "수용(보강 요구)", rebut: en ? "rebutted" : "반박 종결", park: en ? "parked" : "보관함 이관", escalate: en ? "escalated to the user (decision ledger)" : "사용자 방향 질문(결정 장부)" };
     process.stdout.write(tB(`열린 지적 ${opens.length}건 — 캠페인 ${camp}\n`, `Open findings: ${opens.length} — campaign ${camp}\n`));
     // 유효성 표시=관문과 같은 계산(확인 검증 [보완]① — 낡은 처분을 ✅로 보이면 '관문은 막는데 화면은 전부
     // 판단됨' 모순): ✅=지금 유효한 처분만. 재등장으로 낡은 처분은 🔁(재판단 필요)로 구분.
@@ -2958,15 +2994,15 @@ function cmdFindingJudge(rest) {
     }
     const remain = undisposedOpenFindings(ws, camp, gen).length;
     process.stdout.write(remain
-      ? tB(`미판단 ${remain}건 — 기록: node codex-bridge.js finding-judge <id> <fix-fact|fix-gap|rebut|park> --note "근거"${campFlag ? ` --campaign "${camp}"` : ""}\n`, `${remain} unjudged — record: node codex-bridge.js finding-judge <id> <fix-fact|fix-gap|rebut|park> --note "evidence"${campFlag ? ` --campaign "${camp}"` : ""}\n`)
+      ? tB(`미판단 ${remain}건 — 기록: node codex-bridge.js finding-judge <id> <fix-fact|fix-gap|rebut|park|escalate> --note "근거"${campFlag ? ` --campaign "${camp}"` : ""}\n`, `${remain} unjudged — record: node codex-bridge.js finding-judge <id> <fix-fact|fix-gap|rebut|park|escalate> --note "evidence"${campFlag ? ` --campaign "${camp}"` : ""}\n`)
       : tB("전부 판단됨 — 다음 검증을 시작할 수 있습니다.\n", "All judged — the next verification can start.\n"));
     return;
   }
   const choice = pos[1] || "";
   const note = flagVal("--note");
   if (!FINDING_DISPOSITIONS.includes(choice)) {
-    die(tB(`사용법: finding-judge <id> <fix-fact|fix-gap|rebut|park> --note "근거(12자+)" [--campaign "<관문 거부문의 캠페인 id>"]\n  fix-fact=사실 오류 인정(고침·근거 필수) / fix-gap=보강 요구 수용(고침·이유 필수) / rebut=반박 종결(근거 필수) / park=보관함 이관(근거=영수증)`,
-           `Usage: finding-judge <id> <fix-fact|fix-gap|rebut|park> --note "evidence (12+ chars)" [--campaign "<campaign id from the gate refusal>"]\n  fix-fact=proven wrong (fix, note required) / fix-gap=enrichment accepted (fix, note required) / rebut=rebutted (note required) / park=parked (receipt is the evidence)`), 2);
+    die(tB(`사용법: finding-judge <id> <fix-fact|fix-gap|rebut|park|escalate> --note "근거(12자+)" [--campaign "<관문 거부문의 캠페인 id>"]\n  fix-fact=사실 오류 인정(고침·근거 필수) / fix-gap=보강 요구 수용(고침·이유 필수) / rebut=반박 종결(근거 필수) / park=보관함 이관(근거=영수증)`,
+           `Usage: finding-judge <id> <fix-fact|fix-gap|rebut|park|escalate> --note "evidence (12+ chars)" [--campaign "<campaign id from the gate refusal>"]\n  fix-fact=proven wrong (fix, note required) / fix-gap=enrichment accepted (fix, note required) / rebut=rebutted (note required) / park=parked (receipt is the evidence)`), 2);
   }
   // [경위 v2 생산자 결속] --source "<file>#<anchor>" (선택·반복 가능): 판단이 가리키는 정본 구간을
   // 구조 필드로 기록 — 검증(경계·containment·민감 제외·anchor 해석) 실패=즉시 거부(침묵 기록 금지).
@@ -3000,8 +3036,15 @@ function cmdFindingJudge(rest) {
   // 1차 검증 blocker① 반영: 수용에도 근거 의무 — 수용이 '싼 기본값'이면 판단 강제가 무력화된다(실사고의
   // 원인 그 자체). park만 예외(보관함 영수증이 실물 근거). 12자는 rebut과 같은 최소 기준.
   if (choice !== "park" && note.length < 12) {
-    const why = { "fix-fact": tB("무엇이 어떻게 틀렸다고 증명됐는지", "what was proven wrong and how"), "fix-gap": tB("틀린 게 아닌데 왜 받아들이는지", "why you accept it although nothing is wrong"), rebut: tB("측정·재현 근거", "measured/reproduced evidence") }[choice];
+    const why = { "fix-fact": tB("무엇이 어떻게 틀렸다고 증명됐는지", "what was proven wrong and how"), "fix-gap": tB("틀린 게 아닌데 왜 받아들이는지", "why you accept it although nothing is wrong"), rebut: tB("측정·재현 근거", "measured/reproduced evidence"), escalate: tB("왜 구현자가 정할 수 없고 사용자 방향이 필요한지", "why the implementer cannot decide and the user's direction is needed") }[choice];
     die(tB(`${choice}에는 근거가 필요합니다 — --note "${why}"(12자 이상). 근거 없는 처분은 판단이 아니라 통과 의식입니다.`, `${choice} needs a note — --note "${why}" (12+ chars). A note-free judgment is a ritual, not a judgment.`), 2);
+  }
+  // [장치화 2026-08-30] escalate=사용자 판단 필요 — 결정 장부의 실존 항목 없이는 기록 불가(산문으로 "정해 주세요"를 쓰는 길 차단·스크립트 출력 강제)
+  let escDecisionId = "";
+  if (choice === "escalate") {
+    escDecisionId = flagVal("--decision");
+    const d9 = escDecisionId ? readDecisions(ws).latest.get(escDecisionId) : null;
+    if (!d9) die(tB("escalate 는 결정 장부 항목이 필요합니다 — 먼저 node codex-bridge.js decisions raise ... 로 항목을 만들고 --decision <id> 를 지정하세요.", "escalate requires a decision — create one with decisions raise, then pass --decision <id>."), 2);
   }
   let parkedId = "";
   if (choice === "park") {
@@ -3020,7 +3063,7 @@ function cmdFindingJudge(rest) {
     const repo9b = (resolveScoutRepo(ws, loadContract(ws)) || {}).repo || ws;
     evRepoTop = { repoKey: MPV9b.repoKeyFor(repo9b), repoPath: String(repo9b) };
   }
-  const wrote = appendFindingsLedger(ws, [{ type: "disposition", campaignId: camp, findingId: id, choice, note: note.slice(0, 400), backlogId: parkedId, asOfRound, envelopeHash: gen || null, ...(sourceRefs ? { sourceRefs, ...evRepoTop } : {}), ts: new Date().toISOString() }]);
+  const wrote = appendFindingsLedger(ws, [{ type: "disposition", campaignId: camp, findingId: id, choice, note: note.slice(0, 400), backlogId: parkedId, ...(escDecisionId ? { decisionId: escDecisionId } : {}), asOfRound, envelopeHash: gen || null, ...(sourceRefs ? { sourceRefs, ...evRepoTop } : {}), ts: new Date().toISOString() }]);
   if (!wrote) die(tB("장부 기록 실패 — 처분이 저장되지 않았습니다.", "Ledger write failed — judgment not saved."), 1);
   const remain = undisposedOpenFindings(ws, camp, gen).length;
   process.stdout.write(tB(`기록됨: ${id} → ${choice}${parkedId ? ` (보관함 영수증 ${parkedId})` : ""}${disp.has(id) ? " (재판단 — 이전 기록 대체)" : ""}\n남은 미판단 ${remain}건${remain ? "" : " — 다음 검증을 시작할 수 있습니다"}\n`,
@@ -3176,7 +3219,7 @@ function findingDispositionGate(ws, durableEnv, langSnap, campSnap) {
   const rows = und.map((o) => `   - ${o.id} [${o.tag}] ${String(o.titleNorm || "").slice(0, 60)}`).join("\n");
   // 확인 검증 blocker② 반영: 관문이 본 캠페인 id를 명령에 그대로 결속 — 현재 캠페인 파일과 갈린 상태
   // (미집계 진행 등)에서 '관문은 막는데 해제 명령은 열린 지적 없음'인 교착 차단.
-  const cmd = `   node codex-bridge.js finding-judge <id> <fix-fact|fix-gap|rebut|park> --note "..." --campaign "${camp}"`;
+  const cmd = `   node codex-bridge.js finding-judge <id> <fix-fact|fix-gap|rebut|park|escalate> --note "..." --campaign "${camp}"`;
   return {
     proceed: false, exitCode: 3,
     msg: en
@@ -3557,9 +3600,9 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
       out.push(en
         ? "[admission] every remaining blocker was demoted as out-of-scope — verdict re-derived as HOLD. Choices: (1) accept as out-of-scope and close (2) request re-review"
         : "[입장 심사] 남은 blocker가 전부 범위 강등되어 판정을 '보류'로 재산출했습니다 — 선택지: ①범위 밖 수용(종결) ②재심 요청");
-      // [개선 2 · 결정 장부 — 사용자 방향 2026-08-30] 하네스는 여기서 사용자 결정을 '만들지 않는다'. 구현자가 판단한다 — 범위 밖 종결(보관함)·
-      // 재검증·범위표 자체를 바꿔야 하는 방향 질문(그때만 decisions raise). 이 한 줄은 그 자리에서의 판단 촉구(동적 상태)이지 규칙 추가가 아니다.
-      out.push(scopeDemotedJudgeNotice(en));
+      // [개선 2 · 판단 관문 — 장치화 2026-08-30] 하네스는 여기서 사용자 결정을 '만들지 않는다'. 대신 마커를 걸어 종료 훅이 구현자 판단
+      // (round-judge: 범위 밖 종결·재검증·escalate=결정 장부 항목 필수)이 기록되기 전에는 턴을 못 끝내게 한다 — 촉구 문장이 아니라 관문.
+      out.push(armScopeDemotedJudge(ws, camp, askId, en));
     }
     // 장부 기록(§3.2): round 1건+finding(신규만·강등=즉시 closed)+close(통과 계열=round<N 개설분만·재분류)
     try {
@@ -4280,6 +4323,11 @@ function main() {
       return cmdBacklog(rest); // P-12 2a — 검증 백로그 장부
     case "finding-judge":
       return cmdFindingJudge(rest); // 지적 처분 관문 해제 수단(2026-08-01) — 열린 지적 판단 기록
+    case "round-judge": { // [개선 2 · 판단 관문] 구현자 판단 기록(관문 해제)
+      const rcJ = cmdRoundJudge(rest);
+      if (rcJ) process.exitCode = rcJ;
+      return;
+    }
     case "decisions": { // [개선 2 · 결정 장부] 사용자 결정 목록·선택·위임을 양식으로 출력(산문 결정 칸의 대체)
       const rcD = cmdDecisions(rest);
       if (rcD) process.exitCode = rcD;
@@ -4372,4 +4420,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { scopeDemotedJudgeNotice, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
+module.exports = { armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };

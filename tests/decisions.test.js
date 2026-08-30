@@ -184,7 +184,7 @@ t("CLI list/choose/delegate/metrics — 양식 출력·전제 지문 재대조(�
   assert.ok(e.stdout.includes("열린 결정 없음") || e.stdout.includes("No open decisions"), e.stdout);
 });
 
-t("실경로 — 전량 강등 보류 판정은 사용자 결정을 만들지 않고 구현자 판단 촉구 한 줄만 붙인다(판정 '보류' 유지)", () => {
+t("실경로 — 전량 강등 보류 판정은 사용자 결정을 만들지 않고 판단 관문 마커를 건다(판정 '보류' 유지)", () => {
   const CB = require("../bridge/codex-bridge.js");
   const NLc = String.fromCharCode(10);
   const repoE = fs.mkdtempSync(path.join(os.tmpdir(), "decisions-repo-"));
@@ -197,21 +197,21 @@ t("실경로 — 전량 강등 보류 판정은 사용자 결정을 만들지 �
     JSON.stringify({ tag: "blocker", title: "범위 밖 경합", origin: "baseline", supported: false, oosId: "oos-2" }),
     "[지적 목록 끝]", "", "검증: 실패"].join(NLc), wsE, "ko", "core", "claude-codex", "ask-d3");
   assert.strictEqual(r.machine.effective, "inconclusive"); assert.strictEqual(r.machine.reasonKey, "scope-demoted");
-  assert.ok(r.notice.includes("[재판단 촉구]") && r.notice.includes("decisions raise"), r.notice);
+  assert.ok(r.notice.includes("[판단 관문 걸림]") && r.notice.includes("round-judge ask-d3"), r.notice);
   assert.ok(!r.notice.includes("[결정 장부]"), "no auto decision notice");
   assert.strictEqual(CL.readDecisions(wsE).rows.length, 0, "harness must not create a user decision");
-  assert.ok(CB.scopeDemotedJudgeNotice(true).startsWith("[re-judge now]"));
+  assert.deepStrictEqual(CL.judgeRequiredPending(wsE).map((x) => x.askId), ["ask-d3"], "judgment gate marker armed");
   delete process.env.CODEX_BRIDGE_ASK_JOB_ID;
 });
 
-t("소스 핀 — 하네스 자동 생산자 없음(openDecision 호출은 CLI raise 1곳뿐)·전량 강등 분기는 촉구 함수만·decisions 분기 존재", () => {
+t("소스 핀 — 하네스 자동 생산자 없음(openDecision 호출은 CLI raise 1곳뿐)·전량 강등 분기는 관문 장전만·decisions 분기 존재", () => {
   const src = fs.readFileSync(bridge, "utf8");
   assert.strictEqual((src.match(/openDecision\(/g) || []).length, 1, "openDecision must be called only from decisions raise");
   assert.ok(src.includes('origin: "implementer"'));
-  assert.ok(!src.includes('origin: "all-oos-demoted"') && !src.includes("recordAllOosDemotedDecision"));
+  assert.ok(!src.includes('origin: "all-oos-demoted"') && !src.includes("recordAllOosDemotedDecision") && !src.includes("scopeDemotedJudgeNotice"));
   const i = src.indexOf('machine.reasonKey = "scope-demoted";');
   assert.ok(i > 0);
-  assert.ok(src.slice(i, i + 900).includes("out.push(scopeDemotedJudgeNotice(en));"));
+  assert.ok(src.slice(i, i + 900).includes("out.push(armScopeDemotedJudge(ws, camp, askId, en));"));
   assert.ok(src.includes('case "decisions":'));
   assert.deepStrictEqual(CL.DECISION_ORIGINS, ["implementer"]);
 });

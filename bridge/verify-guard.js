@@ -8,7 +8,7 @@ const fs = require("fs");
 const path = require("path");
 const cp = require("child_process");
 const crypto = require("crypto");
-const { loadContract, BRIDGE, BRIDGE_DIR, atomicWrite, appendIntegrityEvent, supersedeIntegrity, writePhase, maybeCleanupState, loadLang, verifyTimeoutMin, claudeCampaignAnchor, verifyCampaignProgress, readResidual, addResidual, removeResidualItems, residualPending } = require("./contract-lib.js");
+const { loadContract, BRIDGE, BRIDGE_DIR, atomicWrite, appendIntegrityEvent, supersedeIntegrity, writePhase, maybeCleanupState, loadLang, verifyTimeoutMin, claudeCampaignAnchor, verifyCampaignProgress, readResidual, addResidual, removeResidualItems, residualPending, judgeRequiredPending } = require("./contract-lib.js");
 const { validateCapHandoff, capHandoffInstruction, capHandoffContext, claudeAssistantText } = require("./verify-cap-handoff.js");
 try { maybeCleanupState(); } catch { /* 오래된 상태파일 정리는 best-effort — 검증 흐름 방해 금지 */ } // 매 턴 끝(Stop 훅)에 들르되 실제 청소는 하루 1회
 const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs");
@@ -257,8 +257,12 @@ process.stdin.on("end", () => {
     if (residualOk) { residual = null; try { supersedeIntegrity(claudeSession, "verify-residual-now", ws); } catch { /* best-effort */ } }
     else residual = { items: rp.items.length ? rp.items : residual.items };
   }
+  // [판단 관문 — 장치화 2026-08-30] 구현자 판단이 필요한 판정(전량 강등 보류 등)의 마커가 남아 있으면 판단(round-judge)이 장부에
+  // 기록되기 전에는 턴을 끝내지 못한다 — "네가 정하라" 촉구 문장 대신 관문. 검증 불필요 턴도 동일(잔여 마커와 같은 자리).
+  const judgePending = judgeRequiredPending(ws);
+  const judgeOk = judgePending.length === 0;
   // 검증 불필요 또는 검증됨 → 통과 + 이번 턴 재검증 카운터 리셋.
-  if ((!needVerify || verified) && residualOk) {
+  if ((!needVerify || verified) && residualOk && judgeOk) {
     clearAttempts(attemptKey);
     try { writePhase("done", { session: claudeSession, workspace: ws }); } catch { /* 진행표시 best-effort */ } // 턴 정상 종료(완료)
     process.exit(0);
@@ -268,7 +272,7 @@ process.stdin.on("end", () => {
   // 여기의 안전밸브는 '아무 진행도 없는 같은 상태'에서만 누적한다. 새 예약·실제 수정이 생기면 epoch가 바뀌어 리셋된다.
   const anchor = claudeCampaignAnchor(claudeSession);
   const progress = anchor.ok ? verifyCampaignProgress(ws, anchor.campaignId, c.verifyBudget) : { tracked: false, count: 0, budget: c.verifyBudget || 0, source: anchor.reason || "no-anchor" };
-  const progressEpoch = crypto.createHash("sha1").update(JSON.stringify({ campaignId: anchor.campaignId || "", count: progress.count || 0, budget: progress.budget || 0, sinceTs, editedReal, planned, residual: residual ? residual.items.map((x) => x.campaignId).join(",") : "" })).digest("hex");
+  const progressEpoch = crypto.createHash("sha1").update(JSON.stringify({ campaignId: anchor.campaignId || "", count: progress.count || 0, budget: progress.budget || 0, sinceTs, editedReal, planned, residual: residual ? residual.items.map((x) => x.campaignId).join(",") : "", judge: judgePending.map((x) => x.askId).join(",") })).digest("hex");
   const en = loadLang() === "en"; // 차단 사유는 Claude(모델)가 읽는 지시문 — 전역 언어를 따른다
   const round = progress.tracked && progress.budget >= 1 ? `${progress.count}/${progress.budget}` : (progress.budget === 0 ? (en ? "unlimited" : "무제한") : (en ? "untracked" : "미집계"));
   const capReached = progress.tracked && progress.budget >= 1 && progress.count >= progress.budget;
@@ -348,7 +352,11 @@ process.stdin.on("end", () => {
   process.stdout.write(
     JSON.stringify({
       decision: "block",
-      reason: residualWriteFailed // 마커 기록 실패는 상한 안내보다 우선(마감문은 이미 맞게 썼고 저장만 실패 — 재출력 요구)
+      reason: !judgeOk
+        ? (en
+          ? `[Judgment gate · actual round ${round}] ${judgePending.length} verdict(s) still need the implementer's judgment before this turn can end: ${judgePending.map((x) => `${x.askId} [${x.reason}]`).join(", ")}. Record it: node "${BRIDGE}" round-judge <askId> <close-oos|re-verify|escalate --decision <id>> --note "..." — escalate (a direction question for the user) needs a decision made first with: node "${BRIDGE}" decisions raise --kind ... (decisions list shows it to the user).`
+          : `[판단 관문 · 실제 회차 ${round}] 구현자 판단이 기록되지 않은 판정이 ${judgePending.length}건 있어 이 턴을 끝낼 수 없다: ${judgePending.map((x) => `${x.askId} [${x.reason}]`).join(", ")}. 기록: node "${BRIDGE}" round-judge <askId> <close-oos|re-verify|escalate --decision <id>> --note "근거" — escalate(사용자 방향 질문)는 먼저 node "${BRIDGE}" decisions raise --kind ... 로 결정 장부 항목을 만들어야 한다(사용자는 decisions list 로 본다).`)
+        : residualWriteFailed // 마커 기록 실패는 상한 안내보다 우선(마감문은 이미 맞게 썼고 저장만 실패 — 재출력 요구)
         ? (en ? `[Residual marker/alert write failed] Your closeout called "Verify now" but the marker or the yellow alert could not be written (disk). Re-emit the same closeout so the write is retried; the turn is not settled until both the marker and the alert exist.` : `[잔여 재검증 마커 기록 실패] 마감문의 "즉시 재검증" 판단(마커 또는 노랑 경보)을 저장하지 못했다(디스크). 같은 마감문을 다시 출력해 저장을 재시도하라 — 마커·경보가 남기 전에는 마감이 인정되지 않는다.`)
         : capReached
         ? capHandoffInstruction(en ? "en" : "ko", round, (handoffCtx && handoffCtx.verdict) || "not-pass", handoffCtx) // 실제 판정 전달(2026-08-05 이중 실패 봉합 — 하드코딩 not-pass 폐기)
