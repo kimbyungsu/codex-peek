@@ -202,17 +202,20 @@ async function runWorkerAndWait(file, ms) {
     assert.ok(jd.state === "failed" && String(jd.selectorOutcome).startsWith("selector-output:"), JSON.stringify({ st: jd.state, o: jd.selectorOutcome }));
     t("strict 출력 위반(산문)=전체 실패(선별 임의 해석 금지)");
   }
-  // [7] 합집합 상한 초과=overflow 정직 중단(절단·요약 없음)
+  // [7] 합집합 상한 초과 — [§4-B ④ 2026-08-31 격하] 실패가 아니라 '정상 범위 초과' 표시: 승인 수칙 13항 전량 선별·job 진행·.err에 정보 1줄(누락 0·절단 0)
   {
     const big = { schema: "verify-envelope-archive-v1", alwaysBlocker: Array.from({ length: 13 }, (_, i) => "보관 수칙 " + (i + 1)) };
     const bigText = JSON.stringify(big, null, 1);
     fs.writeFileSync(path.join(WS, CL.ARCHIVE_FILE), bigText);
     setMode("all");
-    const jd = await runWorkerAndWait(craftJob("ask-selover-aaaaaaaaaa", { selector: { archiveHash: sha1(bigText), itemCount: 13, pages: 1, arm: "self" } }));
-    assert.ok(jd.state === "failed" && jd.selectorOutcome === "selector-overflow", JSON.stringify({ st: jd.state, o: jd.selectorOutcome }));
-    assert.match(String(jd.error), /no truncation|절단/i);
+    const idOver = "ask-selover-aaaaaaaaaa";
+    const jd = await runWorkerAndWait(craftJob(idOver, { selector: { archiveHash: sha1(bigText), itemCount: 13, pages: 1, arm: "self" } }));
+    assert.notStrictEqual(jd.selectorOutcome, "selector-overflow", "overflow no longer fails the job");
+    assert.ok(jd.selection && Array.isArray(jd.selection.selectedIds) && jd.selection.selectedIds.length === 13, "all 13 approved items selected — none dropped: " + JSON.stringify({ st: jd.state, o: jd.selectorOutcome, n: jd.selection && jd.selection.selectedIds && jd.selection.selectedIds.length }));
+    let errTxt = ""; try { errTxt = fs.readFileSync(path.join(JOBS, idOver + ".err"), "utf8"); } catch { errTxt = ""; }
+    assert.ok(errTxt.includes("above the normal range") && errTxt.includes("13"), "info line (not an alert) records the overflow: " + errTxt.slice(0, 200));
     fs.writeFileSync(path.join(WS, CL.ARCHIVE_FILE), arcText); // 원복
-    t("합집합 K 초과=selector-overflow 정직 중단+정리 안내(조용한 절단 금지)");
+    t("합집합 K 초과=실패 아님 — 13항 전량 선별+정보 행(권위 자료 때문에 하네스가 멈추지 않음·절단 없음)");
   }
   // [8] 주입 절+합본 manifest: 주입 직전 재검사 통과 시 [서고 수칙] 절이 코어 다음 ab-N 연속 번호로 합류
   {

@@ -92,6 +92,8 @@ function primaryCheckpoint(dir, job, outFile) {
 }
 
 // [3b] 선별 실패의 단일 정착점 — errFile 기록+terminal failed patch(selectorOutcome=사유 키).
+// [§4-B ④] 서고 선별 정상 범위 초과 정보 줄 — 자식 stderr 앞에 붙여 .err에 남긴다(경보 아님)
+let selectionNote = "";
 function failJob(jobFile, errFile, msg, extra) {
   try { fs.writeFileSync(errFile, msg, "utf8"); } catch { /* patch가 사유를 보존 */ }
   patch(jobFile, Object.assign({ state: "failed", exitCode: 1, error: msg, finishedAt: new Date().toISOString() }, extra || {}));
@@ -169,7 +171,10 @@ async function runSelectionPhase(jobFile, dir, job, errFile) {
     idLists.push(parsed.ids);
   }
   const un = CL.selectorUnion(idLists, items);
-  if (!un.ok) { failJob(jobFile, errFile, "selector union over cap (" + un.reason + ") — organize the archive (remove/merge items) and retry; no truncation/summarize/reselect", { selectorOutcome: "selector-overflow" }); return { ok: false }; }
+  // [§4-B ④ 2026-08-31] 합집합 초과는 실패가 아니다 — 승인 수칙 전량 동봉(격하: 정상 범위 초과 표시). 손상 반환만 실패.
+  if (!un.ok) { failJob(jobFile, errFile, "selector union rejected (" + un.reason + ")", { selectorOutcome: "selector-union" }); return { ok: false }; }
+  // 정보 줄은 마지막 .err 기록에 합류(자식 종료 시 .err를 stderr로 덮어쓰므로 여기서 append하면 사라짐 — 시험 [7] 반례)
+  if (un.over && (un.over.items || un.over.bytes)) selectionNote = "[archive rules] related items " + un.over.count + " · " + un.over.bytesTotal + " bytes — above the normal range (" + CL.SELECTOR_UNION_MAX + " · " + CL.SELECTOR_UNION_BYTES_MAX + "); all included — none omitted\n";
   const selectedIds = un.selected.map((s) => s.id);
   // ④ 영수증 기록+read-back 선행 관문 — 성공 전 프롬프트 조립 금지(§3)
   const rec = { ts: new Date().toISOString(), wsKey: CL.wsKeyFor(ws), askId: job.id, turnAnchor: String(ctx.turnAnchor || ""), archiveHash: arc.sha1, scopePackageHash: scope.hash, snapshotHash: ctx.sourceHash, itemCount: items.length, pages: pages.length, selectedIds, arm: job.selector.arm, durationMs: Date.now() - t0 }; // turnAnchor=턴 결속(preview 영수증과 동형 — 주입 캐시 자격 대조용)
@@ -247,7 +252,7 @@ function runVerification(jobFile, dir, job, outFile, errFile, deadlineAtIso) {
   // 원 job은 성공이다 — .out 기록 '전'에 판정해야 부분 stdout이 결속본을 덮어쓰지 못한다.
   const ckpt = primaryCheckpoint(dir, job, outFile);
   if (ckpt) {
-    try { fs.writeFileSync(errFile, String(r.stderr || ""), "utf8"); } catch { /* ignore */ }
+    try { fs.writeFileSync(errFile, selectionNote + String(r.stderr || ""), "utf8"); } catch { /* ignore */ }
     const realCode = Number.isInteger(r.status) ? r.status : 1;
     // exitCode 0 확정=proof 회수 계약(writeRecoveryReceipt: succeeded+exitCode 0) 보존.
     // 실제 종료코드는 challengeExitCode로 정직 보존 — challenge 쪽 상태 수렴(outcome-unknown)은
@@ -259,7 +264,7 @@ function runVerification(jobFile, dir, job, outFile, errFile, deadlineAtIso) {
     process.exit(0);
   }
   try { fs.writeFileSync(outFile, String(r.stdout || ""), "utf8"); } catch { /* status still records failure/success */ }
-  try { fs.writeFileSync(errFile, String(r.stderr || ""), "utf8"); } catch { /* ignore */ }
+  try { fs.writeFileSync(errFile, selectionNote + String(r.stderr || ""), "utf8"); } catch { /* ignore */ }
   const code = Number.isInteger(r.status) ? r.status : 1;
   const ok = code === 0 && !r.error;
   patch(jobFile, {

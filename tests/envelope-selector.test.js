@@ -57,17 +57,19 @@ t("strict 출력 판독: 정상·빈 배열 ok / 산문 섞임·미지 필드·�
   assert.strictEqual(CL.parseSelectorPageOutput("```json" + NL + NL + '{"relevant":["arc-1"]}' + NL + "```", valid).reason, "multiline", "★펜스 안 선행 빈 줄=거부(\\s가 개행을 삼키던 확인검증 blocker② 반례)");
 });
 
-t("합집합 상한 관문: K 이내=선별 전문(파일 순서 정렬)·K+1=overflow-items·바이트 초과=overflow-bytes(절단·요약 금지)", () => {
-  const items = Array.from({ length: 20 }, (_, i) => "규칙 " + i);
-  const u1 = CL.selectorUnion([["arc-3"], ["arc-1", "arc-3"]], items);
-  assert.ok(u1.ok && u1.selected.map((s) => s.id).join(",") === "arc-1,arc-3", "dedupe+파일 순서 정렬");
+t("합집합 관문: K 이내=선별 전문(파일 순서 정렬) · [§4-B ④ 2026-08-31 격하] K+1·바이트 초과=실패 아님 — 전량 선별+over 표시(누락 0)", () => {
+  const items = Array.from({ length: CL.SELECTOR_UNION_MAX + 1 }, (_, i) => "수칙 " + (i + 1));
+  const u = CL.selectorUnion([["arc-3", "arc-1"], ["arc-2"]], items);
+  assert.strictEqual(u.ok, true); assert.deepStrictEqual(u.selected.map((s) => s.id), ["arc-1", "arc-2", "arc-3"]);
+  assert.strictEqual(u.over.items, false); assert.strictEqual(u.over.bytes, false);
   const over = CL.selectorUnion([Array.from({ length: CL.SELECTOR_UNION_MAX + 1 }, (_, i) => "arc-" + (i + 1))], items);
-  assert.strictEqual(over.reason, "overflow-items", "K+1=정직 중단 재료(조용한 절단 금지)");
-  const fat = ["가".repeat(190), "나".repeat(190)]; // 2항 합계 UTF-8 1140B×2 — 기본 4000B 안이므로 상한 축소 검증은 항 수로
-  const bigItems = Array.from({ length: 12 }, () => "가".repeat(150));
-  const u2 = CL.selectorUnion([bigItems.map((_, i) => "arc-" + (i + 1))], bigItems);
-  assert.strictEqual(u2.reason, "overflow-bytes", "바이트 상한(UTF-8) 초과=정직 중단");
-  assert.ok(fat.length === 2, "정보");
+  assert.strictEqual(over.ok, true, "K+1=실패 아님(권위 자료 때문에 하네스가 멈추지 않음)");
+  assert.strictEqual(over.selected.length, CL.SELECTOR_UNION_MAX + 1, "한 항목도 빼지 않음");
+  assert.strictEqual(over.over.items, true); assert.strictEqual(over.over.count, CL.SELECTOR_UNION_MAX + 1);
+  const big = ["x".repeat(CL.SELECTOR_UNION_BYTES_MAX + 10)];
+  const u2 = CL.selectorUnion([["arc-1"]], big);
+  assert.strictEqual(u2.ok, true); assert.strictEqual(u2.over.bytes, true); assert.strictEqual(u2.over.excessBytes, 10);
+  assert.strictEqual(u2.selected[0].text.length, big[0].length, "바이트 초과도 절단 없이 전문");
 });
 
 t("예산 산식: ceil(pages/P)×페이지timeout+여유 — 서고 상한 96항 전제 유한", () => {

@@ -235,7 +235,7 @@ console.log("[예외] 열린 지적 목록에는 상한을 두지 않는다 — 
 console.log("[상한] 총량은 막지 않고 어느 조각이 부풀었는지 알린다");
 {
   const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
-  ok(src.indexOf("const HEAD_SOFT_LIMIT = 12000;") >= 0 && src.indexOf("검증자 프롬프트 머리가") >= 0, "총량이 크면 조각별 길이를 알려 사람이 줄일 자리를 알게 한다");
+  ok(src.indexOf("const HEAD_SOFT_LIMIT = headBudgetTotal();") >= 0 && src.indexOf("검증자 프롬프트 머리가") >= 0, "총량이 크면 조각별 길이를 알려 사람이 줄일 자리를 알게 한다"); // [개선 4 (c) 2026-08-31] 상한=조각 상한의 합(파생)
   ok(src.indexOf("head = head.slice(") < 0, "총량으로 통째 잘라내지 않는다(승인 정책 같은 계약이 사라지면 안 됨)");
 }
 

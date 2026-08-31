@@ -232,6 +232,9 @@ function cutoverTraceStateOf(repo, deps) {
   if (a === "unreadable" || b === "unreadable") return "unreadable";
   return "absent";
 }
+// [개선 4 (c)] 예산용 조각(parts)은 봉투 모양을 바꾸지 않는 비열거 속성으로 싣는다 — 봉투 계약 {text,mapItems,couplings}(tests/p4-reader
+// "healthLine 별도 필드 금지")과 attach.jsonl 소비자는 무접촉, withContract만 r.parts로 읽는다.
+function withParts(env, parts) { try { Object.defineProperty(env, "parts", { value: parts, enumerable: false, configurable: true, writable: true }); } catch { /* 봉투는 그대로 */ } return env; }
 function buildMapAttach(ws, c, lang, reqText) {
   if (!ws || CL.normScoutMode(c) !== "on") return null; // 2트랙 게이트 최선행(출력 0·reader 미호출)
   const target = CL.resolveScoutRepo(ws, c).repo;
@@ -244,8 +247,9 @@ function buildMapAttach(ws, c, lang, reqText) {
   // 매칭이 있으면 경위 구획 단독 봉투로 부착 — '지도 생략에도 독립 부착' 계약을 전 경로에 적용.
   const withProv = (r) => {
     if (!prov) return r;
-    if (!r) return { text: prov.text, mapItems: [], couplings: [] };
-    return { ...r, text: prov.text + "\n" + r.text };
+    if (!r) return withParts({ text: prov.text, mapItems: [], couplings: [] }, { provenance: prov.text });
+    // [개선 4 (c)] 경위는 별도 예산 조각 — 조각 분리 없는 동봉(legacy)은 map 하나로 감싼다(r.parts는 비열거라 spread에 안 실림 → 명시 판독)
+    return withParts({ ...r, text: prov.text + "\n" + r.text }, { provenance: prov.text, ...(r.parts || { map: r.text }) });
   };
   let proj = null;
   try { proj = module.exports.readMapProjection(target); } catch { proj = null; } // exports 경유 — 테스트가 호출 수를 실측(2트랙 미호출 증명)
@@ -300,7 +304,11 @@ function renderV2Slice(ws, c, lang, proj, reqText) {
       // 대상이 아니다. 정본 상수(FINDINGS_MARKERS)에서 단일 출처로 제외 목록을 만든다(문구 이원화 금지).
       const protoSeeds = new Set();
       for (const M of [CL.FINDINGS_MARKERS, CL.FINDINGS_MARKERS_V2]) for (const L of Object.values(M || {})) for (const v of Object.values(L || {})) protoSeeds.add(v);
-      const seeds = MR.extractSeeds(reqText).seeds.filter((s) => !protoSeeds.has(s.value));
+      // [개선 4 (b)] 요청문 뼈대의 [직접 범위] 절이 있으면 그 절에서만 씨앗을 뽑는다(문서·설계뿐이면 씨앗 0→의도 축 0→동봉 생략).
+      // 절이 없으면 종전대로 요청문 전체(무회귀). 새 판정 규칙이 아니라 이미 있는 절 구조를 쓴다.
+      const scopeBody9 = typeof CL.askSectionBody === "function" ? CL.askSectionBody(reqText, "scope") : null;
+      const seedText = scopeBody9 === null ? reqText : scopeBody9; // 절 있음·본문 없음("")=씨앗 0(전체로 폴백하지 않음 — 확인 검증 blocker②)
+      const seeds = MR.extractSeeds(seedText).seeds.filter((s) => !protoSeeds.has(s.value));
       const search = seeds.length ? MR.searchSeeds(target, seeds) : { matches: [], corpus: 0, truncated: false };
       const seedScores = new Map(search.matches.map((m) => [m.path, m.score]));
       // 장부 축 v1: 결합 후보 문안의 '경로 모양' 토큰만(자유 문장 — 검증된 추출기 재사용. 확장 여지 정직 표기)
@@ -328,7 +336,7 @@ function renderV2Slice(ws, c, lang, proj, reqText) {
     if (retrieval.truncated) gateNotes.push(en
       ? "(seed search truncated by caps — selection is best-effort; this round's exposure metrics are unknown)"
       : "(씨앗 검색이 상한에 걸려 잘렸다 — 선별은 최선 노력이며 이 회차 노출 지표는 unknown)"); // 잘림 사실은 게이트에서도 불소실
-    return { text: gateNotes.join("\n"), mapItems: [], couplings: [] };
+    return withParts({ text: gateNotes.join("\n"), mapItems: [], couplings: [] }, { map: gateNotes.join("\n") });
   }
   const items = [];
   if (retrieval && !retrieval.sel.fallback) {
@@ -429,8 +437,10 @@ function renderV2Slice(ws, c, lang, proj, reqText) {
         ? `(omitted by caps: ${overflow} node(s), ${edgeOver} edge(s) — this slice is not the whole map)`
         : `(상한으로 생략: node ${overflow}개 · edge ${edgeOver}개 — 이 조각은 지도 전체가 아니다)`]
     : [];
-  const text = [head, ...top.map((i) => `- ${i.path}${i.note ? ` — ${i.note}` : ""}`), ...edgeLines, ...omitted, ...retrievalNotes, ...(coupling.text ? [coupling.text] : []), ...(health ? [health] : [])].join("\n");
-  return { text, mapItems: top, couplings };
+  const mapText = [head, ...top.map((i) => `- ${i.path}${i.note ? ` — ${i.note}` : ""}`), ...edgeLines, ...omitted, ...retrievalNotes].join("\n");
+  const text = [mapText, ...(coupling.text ? [coupling.text] : []), ...(health ? [health] : [])].join("\n"); // 종전 바이트 그대로
+  // [개선 4 (c)] 조각별 예산 적용용 분리(text는 무회귀 — 예산은 withContract가 parts로만 적용)
+  return withParts({ text, mapItems: top, couplings }, { map: mapText, coupling: coupling.text || "", scout: health || "" });
 }
 
 // ── P4-5 게이트 준비(비활성 — cutover 전 어떤 런타임 경로도 호출하지 않는다) ────────────────

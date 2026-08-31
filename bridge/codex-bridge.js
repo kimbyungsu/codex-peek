@@ -21,7 +21,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { undisposedOpenFindingsFromRows } = require("./contract-lib.js");
-const { deliveryPlanFor, deliveryStatusLine, writeDirectiveDelivery, readDirectiveDelivery, rolloutCompactedAfter, readDecisions, openDecision, resolveDecision, decisionMetrics, renderDecisionBlock, loadDecisionTemplate, saveDecisionTemplate, DECISION_TEMPLATE_DEFAULTS, DECISION_DELEGATE_KEY, DECISION_KINDS, DECISION_NO_DEFAULT_MIN, JUDGE_CHOICES, readJudgeRequired, addJudgeRequired, resolveJudgeRequired, askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, contractReadState, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, repoKeyOf, constraintRepoKeyFor, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled, constraintTurnContext, constraintAdd, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, constraintHarvestFromAnswer, buildAbManifest, boundaryGenOf, readVerifyEnvelopeArchive, SELECTOR_PAGE_ITEMS, selectorDeadlineMsFor, selectorScopeMaterial, SELECTOR_UNION_MAX, SELECTOR_UNION_BYTES_MAX, readSelectorUsage } = require("./contract-lib.js");
+const { HEAD_BUDGET, headBudgetTotal, applyReferenceBudgets, deliveryPlanFor, deliveryStatusLine, writeDirectiveDelivery, readDirectiveDelivery, rolloutCompactedAfter, readDecisions, openDecision, resolveDecision, decisionMetrics, renderDecisionBlock, loadDecisionTemplate, saveDecisionTemplate, DECISION_TEMPLATE_DEFAULTS, DECISION_DELEGATE_KEY, DECISION_KINDS, DECISION_NO_DEFAULT_MIN, JUDGE_CHOICES, readJudgeRequired, addJudgeRequired, resolveJudgeRequired, askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, contractReadState, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, repoKeyOf, constraintRepoKeyFor, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled, constraintTurnContext, constraintAdd, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, constraintHarvestFromAnswer, buildAbManifest, boundaryGenOf, readVerifyEnvelopeArchive, SELECTOR_PAGE_ITEMS, selectorDeadlineMsFor, selectorScopeMaterial, SELECTOR_UNION_MAX, SELECTOR_UNION_BYTES_MAX, readSelectorUsage } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -49,12 +49,12 @@ function envelopeWarnLine(ws, lang) {
 //              ②조용히 자르지 않는다 — 생략한 개수와 사유를 항상 밝힌다.
 // ⚠ 열린 지적 목록에는 개수 상한을 두지 않는다 — 자르면 숨은 지적의 id를 인용할 수 없고
 //   '미인용=신규 취급'이라 이력이 끊긴다('구현모델 선별 금지' 계약). 그 자리 주석 참조.
-const CONTRACT_INJ_MAX = 4000;  // 계약 주입(사용자 규칙·체크리스트) 최대 문자
+const CONTRACT_INJ_MAX = HEAD_BUDGET.contract;  // 계약 주입(사용자 규칙·체크리스트) 최대 문자 — 파생 총량(HEAD_BUDGET)과 같은 출처
 // [§4-B ② · 확인 검증 2회차 blocker(ab-6)] postflight 보류(검증 도중 압축/기록 판독 불가)는 '정직 실패'로 닫는다 — 출력은 그대로 내고 비0 종료.
 // 내구 경로에서 worker가 job을 failed로 기록하므로 ask-wait이 영수증 없이 출력을 돌려주고(succeeded+proof 없음=영원한 proof-missing 순환 차단),
 // 같은 턴의 새 ask-start도 막히지 않는다(미회수 검사는 succeeded만 본다). 통과 증명·체크포인트는 기록되지 않는다.
 const HOLD_EXIT_CODE = 4;
-const HEAD_SOFT_LIMIT = 12000;  // 이 값을 넘으면 조각별 길이를 stderr로 알린다(차단 아님 — 가시화)
+const HEAD_SOFT_LIMIT = headBudgetTotal();  // [개선 4 (c)] 총량=조각 상한의 합(파생) — 넘으면 조각별 길이를 stderr+경보 1건으로 알린다(차단 아님·시작 거부 없음)
 // 계약 규칙이 상한을 넘는지 '아무것도 예약하기 전에' 판정한다. 여기서 die하면 왕복도 phase도 그대로다.
 // 문구는 withContract의 throw와 같은 뜻이어야 한다(두 자리가 갈리면 사용자가 다른 안내를 받는다).
 function contractInjectionTooLongMsg(len, en) {
@@ -97,6 +97,7 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap, askId9p)
     const att = c ? mapAttachSurface(ws || configWs(), c, lang, prompt) : null; // 검색 4조각: 요청문을 지도 선별까지 전달(설계 3단계)
     if (att && typeof att === "object") {
       scout = att.text || "";
+      if (carrier && typeof carrier === "object") carrier.attachParts = att.parts && typeof att.parts === "object" ? att.parts : (scout ? { map: scout, _legacy: true } : null); // [개선 4 (c)] 예산 적용은 아래(선별 초과분 확정 뒤)
       if (carrier && typeof carrier === "object") { carrier.mapItems = att.mapItems || []; carrier.couplings = att.couplings || []; }
       // [개요 카드] 동봉 스냅샷 캡처만 — 기록은 아래 조립 검사(fail-closed) 통과 뒤에(차단된 ask의 미전송 행 방지·검증 [주의]).
       attSnap9 = { items: (att.mapItems || []).slice(0, 12).map((it) => ({ path: String(it.path || ""), note: String(it.note || "").slice(0, 160) })), couplings: (att.couplings || []).length, omitted: /\[Project MAP (동봉 생략|omitted)\]/.test(att.text || "") };
@@ -109,6 +110,7 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap, askId9p)
     const es9 = envelopeSliceFor(ws || configWs(), lang, profile, c);
     envText = es9.envText; baseQual = es9.baseQual; v2Attached = es9.v2Attached === true;
     envData = es9.envData || ""; v2Static = es9.v2Static || ""; v2Data = es9.v2Data || "";
+    if (carrier && typeof carrier === "object") carrier.selOver = es9.selOver || null; // [§4-B ④] 서고 선별 정상 범위 초과 표시(판정 하단 정보 행)
     // [기억 권위 C-1] 전송된 그 경계의 실물을 carrier에 고정 — 판정 후 파서(제약 처리 표기)가 '동봉된 abId만'
     // 인정하게(결합확인 byId 결속과 동형). id는 위치 결정론(ab-1..n)이라 축별 개수+지문이면 재구성 충분.
     if (carrier && typeof carrier === "object" && es9.envAxes) {
@@ -139,6 +141,13 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap, askId9p)
     statusLine = deliveryStatusLine(dlvPlan, lang || loadLang());
     carrier.deliveryOut = { mode: dlvPlan.mode, reason: dlvPlan.reason, gen: dlvPlan.gen, parts: dlvPlan.parts, changed: dlvPlan.changed || [], compactedAt: dlvPlan.compactedAt || null, prevSentAt: dlvPlan.prev ? dlvPlan.prev.sentAt : null, statusLine };
   }
+  // [개선 4 (c)] 참고 자료(경위·지도·결합·정찰)에만 조각별 예산 — 권위 자료는 절단 없음. 선별 초과분(바이트)은 참고 예산에서 순서대로 차감.
+  if (carrier && typeof carrier === "object" && carrier.attachParts) {
+    const parts9 = carrier.attachParts; const legacy9 = parts9._legacy === true;
+    const rb9 = applyReferenceBudgets(legacy9 ? { map: parts9.map } : parts9, lang || loadLang(), { shrinkBytes: carrier.selOver ? carrier.selOver.excessBytes : 0, singleCap: legacy9 });
+    scout = rb9.text; carrier.refClipped = rb9.clipped;
+    if (rb9.clipped.length) { try { process.stderr.write((lang === "en" ? "[reference budget] clipped: " : "[참고 자료 예산] 절단: ") + rb9.clipped.map((c9) => `${c9.part} ${c9.from}→${c9.to}`).join(" · ") + "\n"); } catch { /* 안내 실패 무해 */ } }
+  }
   const slim9 = !!(dlvPlan && dlvPlan.mode === "slim");
   // slim=상태 줄+데이터(경계 데이터·서고 선별·열린 지적·되받아침·지도)만 / full=상태 줄+전문(종전 머리 그대로)
   const head = slim9
@@ -146,9 +155,12 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap, askId9p)
     : [statusLine, baseline, baseQual, envText, inj, scout].filter(Boolean).join("\n\n");
   // 총량은 막지 않고 '보이게' 한다 — 통째로 잘라내면 승인 정책 같은 계약이 사라질 수 있다.
   // 어느 조각이 부풀었는지 알려야 사람이 그 자리를 줄일 수 있다.
-  if (head.length > HEAD_SOFT_LIMIT) {
-    const parts = `기본원칙 ${baseline.length} · 경계한정 ${baseQual.length} · 승인정책 ${envText.length} · 계약 ${inj.length} · 지도 ${scout.length} · 규약전달 ${slim9 ? "상태줄" : "전문"}`;
-    try { process.stderr.write(`⚠️ 검증자 프롬프트 머리가 ${head.length}자입니다(권장 ${HEAD_SOFT_LIMIT} 이하) — ${parts}\n`); } catch { /* 안내 실패가 검증을 막지 않음 */ }
+  // [개선 4 (c)] 총량 측정=열린 지적 데이터(v2Data) 제외 — 열린 지적은 예산 밖·캠페인 유계(회차 ≤5 × 판당 행 상한). 파생 상한 초과=코드 결함 신호(경보 1건·차단 없음).
+  const headMeasured9 = head.length - (slim9 || v2Attached ? v2Data.length : 0);
+  if (headMeasured9 > HEAD_SOFT_LIMIT) {
+    const parts = `기본원칙 ${baseline.length} · 경계한정 ${baseQual.length} · 승인정책 ${envText.length} · 계약 ${inj.length} · 지도 ${scout.length} · 규약전달 ${slim9 ? "상태줄" : "전문"} · 열린지적(예산 밖) ${v2Data.length}`;
+    try { process.stderr.write(`⚠️ 검증자 프롬프트 머리가 ${headMeasured9}자입니다(파생 상한 ${HEAD_SOFT_LIMIT} — 조각 상한의 합) — ${parts}\n`); } catch { /* 안내 실패가 검증을 막지 않음 */ }
+    try { appendIntegrityEvent({ ts: new Date().toISOString(), session: claudeId(), workspace: ws || configWs(), kind: "head-budget", severity: "warning", detailKo: `검증자 머리 ${headMeasured9}자가 파생 상한 ${HEAD_SOFT_LIMIT}을 넘음(코드 결함 신호·검증은 진행) — ${parts}`, detailEn: `verifier head ${headMeasured9} chars exceeds the derived cap ${HEAD_SOFT_LIMIT} (code-defect signal; verification proceeds) — ${parts}` }); } catch { /* best-effort */ }
   }
   // [개요 카드] 조립 검사(경계 상호배제·계약 상한) 통과 뒤에만 기록 — 차단된 ask는 행을 남기지 않는다.
   // 기록 실패·이후 발송 실패의 잔여 위험은 화면이 '마지막 동봉 기록 시각'을 함께 표시해 정직화(단정 금지).
@@ -170,7 +182,7 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap, askId9p)
 // 축에는 사용하지 않는다(잠금 안 신선 재판독 — f-b6db1bbd 인터리빙 봉합). 함수로 분리한 이유: 테스트가
 // 낡은 스냅샷(구 해시)을 인자로 직접 주입해 '스냅샷을 썼다면 실패했을' 결정론 반례를 실행하기 위함(f-789aadc5).
 function envelopeSliceFor(wsIn, lang, profile, cSnapshot) {
-  const out9 = { envText: "", baseQual: "", v2Attached: false, envAxes: null, envSha: null, envData: "", v2Static: "", v2Data: "" }; // [§4-B] envData=데이터 절만·v2Static=고정 산문·v2Data=열린 지적 등 데이터 // [기억 권위 C-1] 주입 실물(축별 항목 수+지문) — 잠금 안에서 고정
+  const out9 = { envText: "", baseQual: "", v2Attached: false, envAxes: null, envSha: null, envData: "", v2Static: "", v2Data: "", selOver: null }; // [§4-B] envData=데이터 절만·v2Static=고정 산문·v2Data=열린 지적 등 데이터 // [기억 권위 C-1] 주입 실물(축별 항목 수+지문) — 잠금 안에서 고정
   const c = cSnapshot;
   {
     if (c && typeof envelopeInjectionFor === "function") {
@@ -220,7 +232,8 @@ function envelopeSliceFor(wsIn, lang, profile, cSnapshot) {
             if (typeof tx9 !== "string") failSel(en9 ? "a selected id falls outside the archive range" : "선별 id가 서고 범위를 벗어났습니다");
             selTexts9.push(tx9);
           }
-          if (selTexts9.length > SELECTOR_UNION_MAX || selTexts9.reduce((a, t) => a + Buffer.byteLength(t, "utf8"), 0) > SELECTOR_UNION_BYTES_MAX) failSel(en9 ? "the selection exceeds the injection caps" : "선별 결과가 주입 상한을 초과합니다");
+          // [§4-B ④ 격하] 12항·4,000바이트 초과=실패가 아니라 '정상 범위 초과' 표시 — 승인 수칙은 한 항목도 빼지 않고 전량 싣는다(초과분은 참고 예산에서 차감).
+          // 바이트 산출은 아래 '실제로 실리는 문안'(shown9 — en 판은 번역문) 기준으로 sel9 절에서 한다(확인 검증 blocker③).
           selArc9 = arc9; sel9 = rawSel9;
           if (en9 && arc9.dataEn.alwaysBlocker) selTextsEn9 = rawSel9.selectedIds.map((idd) => arc9.dataEn.alwaysBlocker[Number(/^arc-(\d+)$/.exec(String(idd))[1]) - 1]);
         }
@@ -265,8 +278,14 @@ function envelopeSliceFor(wsIn, lang, profile, cSnapshot) {
             en9 ? `An independent selector session picked ${selTexts9.length} of ${selArc9.data.alwaysBlocker.length} archived item(s) as relevant to this task. Judge them with the same authority as the core ab items above (always a blocker within the supported world).` : `독립 선별 세션이 보관 수칙 ${selArc9.data.alwaysBlocker.length}항 중 ${selTexts9.length}항을 이번 작업 관련분으로 골랐다. 위 코어 ab 항목과 같은 권위(지원 세계 안 절대 blocker)로 심사하라.`,
           ];
           const shown9 = selTextsEn9 || selTexts9;
+          { // [§4-B ④] 실제 주입 문안 기준 초과 산출(en=번역문 바이트) — 참고 예산 차감·정보 행·stderr 1줄
+            const selBytes9 = shown9.reduce((a, t) => a + Buffer.byteLength(String(t), "utf8"), 0);
+            out9.selOver = { items: shown9.length > SELECTOR_UNION_MAX, bytes: selBytes9 > SELECTOR_UNION_BYTES_MAX, count: shown9.length, bytesTotal: selBytes9, excessBytes: Math.max(0, selBytes9 - SELECTOR_UNION_BYTES_MAX) };
+            if (out9.selOver.items || out9.selOver.bytes) console.error(en9 ? `[archive rules] ${shown9.length} related item(s) · ${selBytes9} bytes — above the normal range (${SELECTOR_UNION_MAX} items · ${SELECTOR_UNION_BYTES_MAX} bytes); all included, reference budget reduced — consider tidying the archive` : `[서고 수칙] 관련 수칙 ${shown9.length}항 · ${selBytes9}바이트 — 정상 범위(${SELECTOR_UNION_MAX}항 · ${SELECTOR_UNION_BYTES_MAX}바이트) 초과, 전량 동봉·참고 자료 예산 축소 — 서고 정리 권장`);
+          }
           shown9.forEach((tx, i) => selL9.push("> ab-" + (k9 + i + 1) + ": " + tx));
           if (!selTexts9.length) selL9.push(en9 ? "(no archived item selected for this task)" : "(이번 작업 관련 선별 0건)");
+          if (out9.selOver && (out9.selOver.items || out9.selOver.bytes)) selL9.push(en9 ? `(related rules ${out9.selOver.count} item(s) · ${out9.selOver.bytesTotal} bytes — above the normal range (${SELECTOR_UNION_MAX} · ${SELECTOR_UNION_BYTES_MAX}); ALL included — none omitted)` : `(관련 수칙 ${out9.selOver.count}항 · ${out9.selOver.bytesTotal}바이트 — 정상 범위(${SELECTOR_UNION_MAX}항 · ${SELECTOR_UNION_BYTES_MAX}바이트) 초과, 전량 동봉 — 누락 없음)`);
           out9.envText += "\n\n" + selL9.join("\n");
         }
         out9.envData = out9.envText;
@@ -3487,8 +3506,8 @@ function v2StaticDirective(lang) {
   const en = (lang || loadLang()) === "en";
   const L = [];
   L.push(en
-    ? '[Finding format v2 — envelope active] Submit the machine block with the "[findings v2]" marker (fields beyond v1): "origin":"baseline|fix-induced|incomplete-fix|new-evidence|boundary-contest" (required on every blocker), "supported":true|false, an out-of-scope claim must cite "oosId":"oos-<n>" exactly, an invariant-breach blocker MUST cite "abId":"ab-<n>" (uncited = no exemption), a re-raised finding cites "id":"f-xxxxxxxx", an incomplete fix cites "prevId". Missing or invalid fields are treated as absent by the admission gate.'
-    : '[지적 서식 v2 — 검증 경계 활성] 기계 판독 블록은 "[지적 목록 v2]" 마커로 제출하라(v1 대비 추가 필드): "origin":"baseline|fix-induced|incomplete-fix|new-evidence|boundary-contest"(모든 blocker에 필수), "supported":true|false, 범위 밖 주장은 "oosId":"oos-<n>" 정확 인용, 불변식 침해 blocker는 "abId":"ab-<n>" 인용 필수(미인용=면제 없음), 재지적은 "id":"f-xxxxxxxx", 미완 수정은 "prevId" 인용. 누락·무효 형식은 입장 심사에서 미기재로 취급된다.');
+    ? '[Finding format v2 — envelope active] Submit the machine block with the "[findings v2]" marker (at most 40 rows per round — the rest next round · fields beyond v1): "origin":"baseline|fix-induced|incomplete-fix|new-evidence|boundary-contest" (required on every blocker), "supported":true|false, an out-of-scope claim must cite "oosId":"oos-<n>" exactly, an invariant-breach blocker MUST cite "abId":"ab-<n>" (uncited = no exemption), a re-raised finding cites "id":"f-xxxxxxxx", an incomplete fix cites "prevId". Missing or invalid fields are treated as absent by the admission gate.'
+    : '[지적 서식 v2 — 검증 경계 활성] 기계 판독 블록은 "[지적 목록 v2]" 마커로 제출하라(한 판 최대 40행 — 초과분은 다음 판 · v1 대비 추가 필드): "origin":"baseline|fix-induced|incomplete-fix|new-evidence|boundary-contest"(모든 blocker에 필수), "supported":true|false, 범위 밖 주장은 "oosId":"oos-<n>" 정확 인용, 불변식 침해 blocker는 "abId":"ab-<n>" 인용 필수(미인용=면제 없음), 재지적은 "id":"f-xxxxxxxx", 미완 수정은 "prevId" 인용. 누락·무효 형식은 입장 심사에서 미기재로 취급된다.');
   L.push(en
     ? '[Scope-expansion channel] A finding OUTSIDE the boundary that deserves reconsideration: submit "tag":"scope-expansion" with a mandatory "abId":"ab-<n>" and a concrete causal path. It is a non-blocking submission (never a failure reason by itself). If valid, the harness escalates it to an open blocker for the NEXT round (limit: once per campaign AND approval generation); invalid/uncited goes to [backlog]. Boundary revisions themselves remain user-only.'
     : '[범위 확장 통로] 경계 밖이지만 재검토가 필요한 중대 발견: "tag":"범위확장"으로 제출하되 "abId":"ab-<n>" 인용+구체 인과 경로 필수. 비차단 제출이다(그 자체로 실패 사유 아님). 유효하면 하네스가 다음 라운드의 열린 blocker로 승격한다(캠페인·승인 세대당 1회 상한). 무효·미인용=[백로그]. 경계 개정 자체는 사용자만 한다.');
@@ -4106,6 +4125,7 @@ async function cmdAsk(rest) {
       + mfl.notice
       + memReceiptLine(answer, attCarrier, langSnap) // [기억 권위 C-3] 동봉 경계 처리 영수증(표시 전용 — 기록은 C-2 verdicts 행)
       + (attCarrier && attCarrier.deliveryOut && attCarrier.deliveryOut.statusLine ? "\n" + attCarrier.deliveryOut.statusLine : "") // [§4-B ②] 규약 전달 상태 줄(머리 첫 줄과 같은 문자열)
+      + (attCarrier && attCarrier.selOver && (attCarrier.selOver.items || attCarrier.selOver.bytes) ? "\n" + (langSnap === "en" ? `[archive rules] related items ${attCarrier.selOver.count} · ${attCarrier.selOver.bytesTotal} bytes — above the normal range, ALL included · consider tidying the archive` : `[서고 수칙] 관련 수칙 ${attCarrier.selOver.count}항 · ${attCarrier.selOver.bytesTotal}바이트 — 정상 범위 초과, 전량 동봉 · 서고 정리 권장`) : "") // [§4-B ④] 정보 행(경보 아님)
       + envelopeWarnLine(ws, langSnap)
       + budgetNoticeLines(budgetGate.res, langSnap, profileSnap)
       + breakdownNoticeFor(ws, langSnap, budgetGate.res)
