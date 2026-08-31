@@ -6003,7 +6003,9 @@ class Dashboard {
     // 공유 차단 + 최근 N턴 표시 창이 밀려도 전역 순번은 불변(host가 turnsStart로 전달)이라 펼침 유지. 답변
     // 성장에도 불변(새 턴은 뒤에만 붙음). 예외=보관 상한(4,000메시지) 절삭 시 전역 순번 이동(기존 고지 배너 케이스·희귀).
     var fkey=injKeyOf(t.user)+":"+turnIdx;
-    var det=keyedDetails(fkey, T("🔒 하네스 주입 지침 "+sp.head.length+"자 (규약·경계·서식 — 매 검증에 자동 첨부) — 펼쳐서 원문 보기","🔒 harness-injected directives, "+sp.head.length+" chars (rules · boundary · format — auto-attached to every ask) — expand for full text"));
+    // [§4-B ② 표시 ⓑ] 머리 첫 줄이 '[규약 전달]' 상태 줄이면 접힘 제목에 그대로 병기 — 판정 하단·개요 배지와 같은 문자열(전달 레코드 한 곳 파생)
+    var dl9=String(sp.head.split("\\n")[0]||""); if(!(dl9.indexOf("[규약 전달]")===0||dl9.indexOf("[directive delivery]")===0)) dl9="";
+    var det=keyedDetails(fkey, T("🔒 하네스 주입 지침 "+sp.head.length+"자 (규약·경계·서식 — 매 검증에 자동 첨부) — 펼쳐서 원문 보기","🔒 harness-injected directives, "+sp.head.length+" chars (rules · boundary · format — auto-attached to every ask) — expand for full text")+(dl9?" · "+dl9:""));
     var pre=document.createElement("pre");
     pre.style.cssText="white-space:pre-wrap;max-height:280px;overflow:auto;font-size:11px;margin:4px 0 0 0";
     pre.textContent=sp.head+sp.marker; // 구분자까지 포함 — '접힘 원문+아래 본문=전송 원문 전체' 복원 계약(바이트 결합 동일)
@@ -6501,7 +6503,10 @@ class Dashboard {
       var vs9=(d.turns||[]).filter(function(t9){ return t9 && t9.verdict; }).slice(-3).reverse();
       rec9.replaceChildren();
       if(!vs9.length){ rec9.textContent=T("아직 기록 없음","no records yet"); }
-      else vs9.forEach(function(t9){ var ln9=el("div","ovline"); ln9.textContent=(lab9[t9.verdict]||t9.verdict)+" — "+String(t9.user||"").replace(/\s+/g," ").slice(0,80); rec9.appendChild(ln9); });
+      else vs9.forEach(function(t9){ var ln9=el("div","ovline"); var u9=String(t9.user||""); var f9=u9.split("\\n")[0]||""; var dl9=(f9.indexOf("[규약 전달]")===0||f9.indexOf("[directive delivery]")===0)?f9:"";
+        // [§4-B ② 표시 ⓒ] 개요 배지=같은 상태 줄에서 파생(전문 전송/재전송 없음)
+        var badge9=dl9?(" · "+((dl9.indexOf("전문 전송")>=0||dl9.indexOf("full directives sent")>=0)?T("규약 전문 전송","directives resent"):T("규약 재전송 없음","directives not resent"))):"";
+        ln9.textContent=(lab9[t9.verdict]||t9.verdict)+" — "+u9.replace(/\s+/g," ").slice(0,80)+badge9; rec9.appendChild(ln9); });
     }
     var mem9=$("ovMemory"), um9=d.usedMemory;
     if(mem9){ mem9.replaceChildren();

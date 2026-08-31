@@ -137,7 +137,7 @@ console.log("[7] cmdAsk 배선 순서(소스 잠금) — 경보 시점 동결→
 {
   const src = fs.readFileSync(path.resolve(__dirname, "../bridge/codex-bridge.js"), "utf8");
   // [VerifierProvider Phase1] 인라인 꼬리 2중 구조 → 공유 꼬리 1곳(finishVerifyRun) — 같은 순서 계약을 단일 지점에서 검사(더 강한 계약).
-  const iProof = src.indexOf("const proofBind = writeProof(verifierSession");
+  const iProof = src.indexOf("const proofBind = held9 ? {} : (writeProof(verifierSession"); // [§4-B ② 2026-08-31] postflight 보류=증명 미기록(조건부 줄) — 순서 계약은 동일
   const iCtx = src.indexOf("const chRoots = [exec, ws];");
   const iAlert = src.indexOf("const evAlert = flagEvidence(answer, ws, verifierSession, exec, {");
   const iVerdict = src.indexOf("flagVerdict(answer, ws, verifierSession", iAlert);

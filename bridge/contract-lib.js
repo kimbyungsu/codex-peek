@@ -5535,6 +5535,10 @@ function resolveJudgeRequired(ws, askId, choice, opts) {
   if (!item) return { ok: false, reason: "not-pending" };
   const note = String(opts.note || "").trim();
   if (note.length < 12) return { ok: false, reason: "note-required" };
+  // [§4-B ② · 확인 검증 blocker①(ab-3)] 검증 도중 압축/기록 판독 불가로 권위 없음이 된 판정은 '범위 밖 종결'로 닫을 수 없다 —
+  // 재판(re-verify) 또는 방향 질문(escalate)만. 안 그러면 압축 판의 답이 close-oos 한 번으로 통과 도장이 된다.
+  const holdReason = /^(compacted-mid-ask|postflight-unreadable)/.test(String(item.reason || ""));
+  if (holdReason && choice === "close-oos") return { ok: false, reason: "choice-not-allowed", allowed: ["re-verify", "escalate"] };
   let decisionId = "";
   if (choice === "escalate") {
     decisionId = String(opts.decisionId || "").trim();
@@ -5800,6 +5804,8 @@ function machineReasonText(machine, en) {
     "fail-without-blocker": en ? "'fail' declared but zero blocker findings" : "'실패' 선언인데 blocker 지적 0건",
     "pass-with-blocker": en ? "pass-class verdict declared but blocker findings listed" : "통과류 선언인데 blocker 지적 존재",
     "pass-with-notes": en ? "non-blocking findings listed" : "비차단 지적 존재",
+    "compacted-mid-ask": en ? "verifier memory was compacted DURING this verification — verdict has no authority (hold); the full directives are resent on the next ask" : "검증 도중 검증자 기억 압축 감지 — 이 판정은 권위 없음(보류) · 다음 검증에 규약 전문 재전송",
+    "postflight-unreadable": en ? "verifier thread record unreadable after the call — compaction unknown, verdict has no authority (hold); directives resent on the next ask" : "답 수신 뒤 검증자 기록 판독 불가 — 압축 여부 미상이라 이 판정은 권위 없음(보류) · 다음 검증에 규약 전문 재전송",
     "scope-demoted": en ? "all remaining blockers demoted as out-of-scope (approved boundary) — choose: accept & close / request re-review" : "남은 blocker 전부 범위 강등(승인 경계) — 선택: 범위 밖 수용(종결)/재심 요청",
   };
   return M[machine && machine.reasonKey] || (en ? "verdict/findings mismatch" : "판정·지적 불일치");
@@ -5976,3 +5982,115 @@ module.exports.validateMapAutomationV1 = validateMapAutomationV1;
 module.exports.MAP_ROUTE_FILE = MAP_ROUTE_FILE;
 module.exports.repoKeyForStats = repoKeyForStats;
 module.exports.resolveExecutableForSpawn = resolveExecutableForSpawn;
+
+// ── [HARNESS-REALIGNMENT §4-B ①② · 규약 1회 전달 2026-08-31] 검증자 세션별 전달 레코드 + 압축 감지 ──
+// 원칙: 매번 같은 문장(기본 원칙·응답 서식·경계 규칙·지적 서식·계약의 검증자 지시)은 검증자 세션을 만드는 첫 메시지에
+// 1회만 보내고, 이후 이어 쓰기(resume)에는 상태 줄 1개만 싣는다. 재전송 조건(전부 기록 기반·예/아니오): ⓐ 세대 지문 G가
+// 기록과 다름(성분별 지문으로 무엇이 바뀌었는지 표기) ⓑ 보낸 시각 뒤 검증자 스레드 기록(rollout)에 compacted 줄이 있음
+// ⓒ 직전 전달이 미확정(pending — 호출 실패·검증 도중 압축) ⓓ 기록·rollout 판독 실패(안전 방향=재전송). 검증자 자기신고
+// 필드는 두지 않는다(상태 줄에서 베껴 쓸 수 있어 증명이 아님) — 증명은 호스트(브릿지) 기록뿐.
+const DIRECTIVE_DELIVERY_DIR = path.join(BRIDGE_DIR, "directive-delivery");
+const DIRECTIVE_PART_KEYS = ["baseline", "qual", "v2fixed", "contract", "profile", "lang"];
+const DIRECTIVE_PART_LABEL = {
+  ko: { baseline: "기본 원칙·응답 서식", qual: "경계 규칙", v2fixed: "지적 서식", contract: "계약의 검증자 지시", profile: "프로필", lang: "언어" },
+  en: { baseline: "baseline+format", qual: "boundary rule", v2fixed: "finding format", contract: "contract verifier rules", profile: "profile", lang: "language" },
+};
+function directiveDeliveryFileFor(session) { return path.join(DIRECTIVE_DELIVERY_DIR, String(session || "").replace(/[^0-9a-zA-Z._-]/g, "_") + ".json"); }
+function directiveGenOf(parts) {
+  const fp = {};
+  for (const k of DIRECTIVE_PART_KEYS) fp[k] = sha1Of(String(parts && parts[k] != null ? parts[k] : "")).slice(0, 16);
+  return { gen: sha1Of(JSON.stringify(DIRECTIVE_PART_KEYS.map((k) => k + "=" + fp[k]))).slice(0, 16), parts: fp };
+}
+// 판독 상태를 구분한다(확인 검증 1회차 blocker③): 부재=전달 기록 없음 / 손상·권한=판독 실패 — 둘 다 전문 재전송이지만 상태 줄 사유가 다르다.
+function readDirectiveDeliveryState(session) {
+  let raw;
+  try { raw = fs.readFileSync(directiveDeliveryFileFor(session), "utf8"); }
+  catch (e) { return { st: e && e.code === "ENOENT" ? "absent" : "unreadable", rec: null }; }
+  let o;
+  try { o = JSON.parse(raw); } catch { return { st: "corrupt", rec: null }; }
+  if (!o || o.schema !== "directive-delivery-v1" || typeof o.gen !== "string" || !o.parts || typeof o.parts !== "object" || typeof o.sentAt !== "string") return { st: "corrupt", rec: null };
+  return { st: "ok", rec: o };
+}
+function readDirectiveDelivery(session) { return readDirectiveDeliveryState(session).rec; }
+function writeDirectiveDelivery(session, rec) {
+  if (!session) return false;
+  try { return atomicWrite(directiveDeliveryFileFor(session), JSON.stringify({ schema: "directive-delivery-v1", session: String(session), ...(rec || {}) })); } catch { return false; }
+}
+// rollout(검증자 스레드 기록)에서 sinceIso '이후'의 compacted 줄 — 끝 16MiB만 판독(장기 세션). 판독 실패=unreadable.
+// 시각 없는 compacted 줄은 보수적으로 '이후'로 친다(오판 방향=재전송뿐).
+const ROLLOUT_COMPACT_TAIL_MAX = 16 * 1024 * 1024;
+function rolloutCompactedAfter(file, sinceIso) {
+  if (!file) return { st: "unreadable", compacted: false, ts: null };
+  let text;
+  try {
+    const size = fs.statSync(file).size;
+    if (size <= ROLLOUT_COMPACT_TAIL_MAX) text = fs.readFileSync(file, "utf8");
+    else {
+      const fd = fs.openSync(file, "r");
+      try {
+        const buf = Buffer.allocUnsafe(ROLLOUT_COMPACT_TAIL_MAX); let got = 0;
+        while (got < buf.length) { const n = fs.readSync(fd, buf, got, buf.length - got, size - ROLLOUT_COMPACT_TAIL_MAX + got); if (!n) break; got += n; }
+        text = buf.subarray(0, got).toString("utf8");
+        const nl = text.indexOf("\n"); text = nl >= 0 ? text.slice(nl + 1) : "";
+      } finally { fs.closeSync(fd); }
+    }
+  } catch { return { st: "unreadable", compacted: false, ts: null }; }
+  const since = Date.parse(String(sinceIso || ""));
+  let latest = null;
+  for (const ln of text.split(/\r?\n/)) {
+    if (!ln.includes('"compacted"')) continue;
+    let o; try { o = JSON.parse(ln); } catch { continue; }
+    if (!o || o.type !== "compacted") continue;
+    const ts = Date.parse(String(o.timestamp || ""));
+    if (!Number.isFinite(ts)) { if (latest === null) latest = "unknown-time"; continue; }
+    if (!Number.isFinite(since) || ts > since) latest = String(o.timestamp);
+  }
+  return { st: "ok", compacted: latest !== null, ts: latest };
+}
+// 전달 계획 — mode full(전문) | slim(상태 줄만). reason ∈ first|no-record|pending|gen-changed|compacted|rollout-unreadable|delivered
+function deliveryPlanFor(input) {
+  const { session, rolloutFile, parts, first } = input || {};
+  const g = directiveGenOf(parts);
+  const base = { gen: g.gen, parts: g.parts, changed: [], prev: null, compactedAt: null };
+  if (first || !session) return { ...base, mode: "full", reason: "first" };
+  const rs = readDirectiveDeliveryState(session);
+  if (rs.st === "absent") return { ...base, mode: "full", reason: "no-record" };
+  if (rs.st !== "ok") return { ...base, mode: "full", reason: "record-unreadable", recordState: rs.st };
+  const prev = rs.rec;
+  if (prev.pending === true) return { ...base, mode: "full", reason: "pending", prev, pendingWhy: prev.pendingWhy || "" };
+  if (prev.gen !== g.gen) return { ...base, mode: "full", reason: "gen-changed", changed: DIRECTIVE_PART_KEYS.filter((k) => (prev.parts || {})[k] !== g.parts[k]), prev };
+  const rc = rolloutCompactedAfter(rolloutFile || prev.rolloutFile || "", prev.sentAt);
+  if (rc.st !== "ok") return { ...base, mode: "full", reason: "rollout-unreadable", prev };
+  if (rc.compacted) return { ...base, mode: "full", reason: "compacted", prev, compactedAt: rc.ts };
+  return { ...base, mode: "slim", reason: "delivered", prev };
+}
+// 사용자가 보는 상태 줄 1개 — 검증자 머리 첫 줄·판정 하단·대시보드 카드/개요 배지가 전부 이 문자열 하나에서 파생(세 곳 불일치 없음)
+function deliveryStatusLine(plan, lang) {
+  const en = lang === "en"; const g = String(plan && plan.gen || "").slice(0, 8);
+  if (!plan) return "";
+  if (plan.mode === "slim") {
+    const at = plan.prev && plan.prev.sentAt ? plan.prev.sentAt : "?";
+    return en ? `[directive delivery] gen ${g} · not resent — the full directives were sent in this session's message at ${at}; they still apply`
+      : `[규약 전달] 세대 ${g} · 재전송 없음 — 규약 전문은 이 세션 ${at} 메시지에 있고 그대로 적용된다`;
+  }
+  const L = DIRECTIVE_PART_LABEL[en ? "en" : "ko"];
+  const why = plan.reason === "first" ? (en ? "first message of this session" : "이 세션 첫 메시지")
+    : plan.reason === "no-record" ? (en ? "no delivery record" : "전달 기록 없음")
+    : plan.reason === "pending" ? ((en ? "previous delivery unconfirmed" : "직전 전달 미확정") + (plan.pendingWhy ? ` (${plan.pendingWhy})` : ""))
+    : plan.reason === "record-unreadable" ? ((en ? "delivery record unreadable (" : "전달 기록 판독 실패(") + String(plan.recordState || "") + (en ? " — safe side)" : " — 안전 방향)"))
+    : plan.reason === "gen-changed" ? ((en ? "directives changed: " : "규약 변경: ") + (plan.changed || []).map((k) => L[k] || k).join("·"))
+    : plan.reason === "compacted" ? ((en ? "compaction detected " : "압축 감지 ") + String(plan.compactedAt || ""))
+    : plan.reason === "rollout-unreadable" ? (en ? "thread record unreadable (safe side)" : "기록 판독 실패(안전 방향)")
+    : String(plan.reason || "");
+  return en ? `[directive delivery] gen ${g} · full directives sent this round (reason: ${why})` : `[규약 전달] 세대 ${g} · 이번 판 전문 전송(사유: ${why})`;
+}
+module.exports.DIRECTIVE_DELIVERY_DIR = DIRECTIVE_DELIVERY_DIR;
+module.exports.DIRECTIVE_PART_KEYS = DIRECTIVE_PART_KEYS;
+module.exports.directiveDeliveryFileFor = directiveDeliveryFileFor;
+module.exports.directiveGenOf = directiveGenOf;
+module.exports.readDirectiveDelivery = readDirectiveDelivery;
+module.exports.readDirectiveDeliveryState = readDirectiveDeliveryState;
+module.exports.writeDirectiveDelivery = writeDirectiveDelivery;
+module.exports.rolloutCompactedAfter = rolloutCompactedAfter;
+module.exports.deliveryPlanFor = deliveryPlanFor;
+module.exports.deliveryStatusLine = deliveryStatusLine;

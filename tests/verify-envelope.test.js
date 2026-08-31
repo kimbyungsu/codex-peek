@@ -105,10 +105,10 @@ console.log("[4] core 한정 문구·계약 필드·캐논(분쟁 경위 서식 
   }
 }
 
-console.log("[5] 배선 — ask 조립·판정문 경고·확장 UI(소스 단언)");
+console.log("[5] 배선 — ask 조립·판정문 경고·확장 UI(소스 단언)"); // [§4-B ①② 2026-08-31] 전문 판 조립 줄에 규약 전달 상태 줄이 앞에 붙음(결합 계약 동일)
 {
   const cb = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
-  ok(/\[baseline, baseQual, envText, inj, scout\]\.filter\(Boolean\)/.test(cb), "ask 프롬프트 조립에 경계 절+core 한정 문구 결합(부재=기존과 동일 조립)");
+  ok(/\[statusLine, baseline, baseQual, envText, inj, scout\]\.filter\(Boolean\)/.test(cb), "ask 프롬프트 조립에 경계 절+core 한정 문구 결합(부재=기존과 동일 조립)");
   ok(/envelopeInjectionFor\(target9, cFresh9\.envelopeHash, lang\)/.test(cb) && /profile === "core"/.test(cb), "주입=승인 지문 결속(§7 증분 2: 전이 잠금 안 신선 재판독 cFresh9 — 구 스냅샷 해시 경합 봉합)·한정 문구는 core만(integrity=전 범위 감사 유지)");
   ok((cb.match(/envelopeWarnLine\(ws, langSnap\)/g) || []).length === 1 && (cb.match(/finishVerifyRun\(/g) || []).length === 3, "경계 경고줄=공유 꼬리 1곳(세 분기 출력 경로 호출 경유 — 위장 금지)");
   ok(cb.includes("항상 적용되는 수칙 파일이 승인 없이 바뀌어") && cb.includes("검증 경계 판독 불가"), "경고 문구 ko(+en 쌍은 같은 함수 안) — 승인 없는 변경=중단 문구(경계 통일 2026-08-29)·미도입 손상=경고 유지");
