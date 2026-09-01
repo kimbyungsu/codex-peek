@@ -3465,6 +3465,21 @@ function implementerRebuttalsFor(ws, camp, gen) {
 // [§4-B ①] 지적 서식 절의 '고정 산문'(세션 1회 전달 대상) — 데이터(열린 지적·되받아침)는 v2DynamicData로 분리
 // [§4-B ②] 전달 레코드 — 전문을 보내는 판이면 호출 '직전'에 pending으로 적고(호출 실패=미확정→다음 판 재전송), 답 수신 후
 // postflight(보낸 시각 뒤 compacted 유무)로 확정한다. 판단은 검증자 자기신고가 아니라 브릿지 기록+rollout 실물.
+// [§4-B ① Claude 쪽 · 개선 4 (d)] 판정 꼬리의 재판단 규약: 이 Claude 세션 앵커의 전달 기록(directive.parts.rejudge)이 동결 문안과 같은 지문이면
+// 전문 대신 포인터 1줄(세대·전달 턴 시각). 압축·재개는 SessionStart 훅이 기록을 리셋하므로 그 뒤 첫 판정은 다시 전문. 판독 실패=전문(안전 방향).
+function rejudgeTailFor(rejudgeSnap, lang) {
+  try {
+    const sid = claudeId(); if (!sid || !rejudgeSnap) return rejudgeSnap;
+    const safe = String(sid).replace(/[^a-zA-Z0-9_-]/g, ""); if (!safe) return rejudgeSnap;
+    const a = JSON.parse(fs.readFileSync(path.join(require("./contract-lib.js").ACTIVE_DIR, safe + ".json"), "utf8"));
+    const d = a && a.directive; if (!d || !d.parts || typeof d.gen !== "string") return rejudgeSnap;
+    const fp = crypto.createHash("sha1").update(String(rejudgeSnap)).digest("hex").slice(0, 16);
+    if (d.parts.rejudge !== fp) return rejudgeSnap;
+    return lang === "en"
+      ? `gen ${d.gen.slice(0, 8)} — identical to the protocol delivered in this session's turn at ${d.sentAt} (same fingerprint); full text is in that turn's injected note or the dashboard base directive.`
+      : `세대 ${d.gen.slice(0, 8)} — 이 세션 ${d.sentAt} 턴에 전달된 규약 문안 그대로(같은 지문). 전문은 그 턴 주입문 또는 대시보드 기본 지침.`;
+  } catch { return rejudgeSnap; }
+}
 function recordDeliveryBeforeCall(session, carrier, callStartIso, rolloutFile, askId, ws) {
   const p = carrier && carrier.deliveryOut; if (!p || !session) return false;
   if (p.mode !== "full") return true;
@@ -4121,7 +4136,7 @@ async function cmdAsk(rest) {
       const rc9m = reconcileMemoryCandidates(ws, resolveScoutRepo(ws, contractSnap || loadContract(ws)).repo, gen9m);
       if (rc9m && (rc9m.appended || rc9m.suppressed.length)) process.stderr.write(`[기억 후보 조정] +${rc9m.appended}${rc9m.suppressed.length ? ` · 억제 ${rc9m.suppressed.length}(${rc9m.suppressed.map((s) => s.why).join(",")})` : ""}\n`);
     } catch { /* 공급 실패가 판정 전달을 막지 않음 */ }
-    const outText = `${headText}\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine, rejudgeSnap)}\n`
+    const outText = `${headText}\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine, rejudgeTailFor(rejudgeSnap, langSnap))}\n` // [§4-B ① Claude 쪽] 규약이 이 세션에 이미 전달됐으면 꼬리는 지문 포인터 1줄
       + mfl.notice
       + memReceiptLine(answer, attCarrier, langSnap) // [기억 권위 C-3] 동봉 경계 처리 영수증(표시 전용 — 기록은 C-2 verdicts 행)
       + (attCarrier && attCarrier.deliveryOut && attCarrier.deliveryOut.statusLine ? "\n" + attCarrier.deliveryOut.statusLine : "") // [§4-B ②] 규약 전달 상태 줄(머리 첫 줄과 같은 문자열)
@@ -4669,4 +4684,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
+module.exports = { rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };

@@ -6,7 +6,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, loadLang, buildInjection, buildVerifyDirective, buildScoutDirective, verifyCampaignProgress, atomicWrite, BRIDGE_DIR, ACTIVE_DIR, writePhase, patchContractFields, contractReadState, activeAskJobFor, phaseBusy, contractLockIssue, turnAnchorOf, writeConstraintTurnSnapshot, constraintRepoKeyFor } = require("./contract-lib.js");
+const { loadContract, loadLang, buildInjection, buildVerifyDirective, buildVerifyDirectiveSlim, claudeStaticParts, claudeDeliveryPlan, claudeStaticBlock, claudeDeliveryStatusLine, implementerEnvelopeInjectParts, readClaudeDirectiveReset, clearClaudeDirectiveResetMarker, applyClaudeTurnBudget, harnessModeSwitchNotice, buildScoutDirective, verifyCampaignProgress, atomicWrite, BRIDGE_DIR, ACTIVE_DIR, writePhase, patchContractFields, contractReadState, activeAskJobFor, phaseBusy, contractLockIssue, turnAnchorOf, writeConstraintTurnSnapshot, constraintRepoKeyFor } = require("./contract-lib.js");
 
 let input = "";
 process.stdin.on("data", (d) => (input += d));
@@ -39,7 +39,17 @@ process.stdin.on("end", () => {
       if (snap.ok) { constraintAnchor = anc; constraintSourceHash = snap.sourceHash; constraintRepoKey = rk0; }
     }
   } catch { /* best-effort */ }
-  const activePayload = JSON.stringify({
+  // [§4-B ① Claude 쪽] 이 세션 앵커의 규약 전달 기록(directive)·세션 시작 훅 리셋(directiveReset)을 덮어쓰기 전에 읽어 보존한다
+  let prevDirective = null, prevReset = null;
+  const safeSid = String(sid).replace(/[^a-zA-Z0-9_-]/g, "");
+  try {
+    if (safeSid) {
+      let prev0 = null; try { prev0 = JSON.parse(fs.readFileSync(path.join(ACTIVE_DIR, safeSid + ".json"), "utf8")); } catch { prev0 = null; }
+      if (prev0 && typeof prev0 === "object") prevDirective = prev0.directive && typeof prev0.directive === "object" ? prev0.directive : null;
+      prevReset = readClaudeDirectiveReset(safeSid, prev0); // 앵커의 리셋 표시 또는 폴백 마커(세션 시작 훅이 앵커를 못 썼을 때)
+    }
+  } catch { prevDirective = null; prevReset = null; }
+  const anchorBase = {
     workspace: ws,
     claudeSession: sid,
     // §5.3: 플랜 모드 감지·라이브표시용. Claude Code UserPromptSubmit 입력의 permission_mode
@@ -47,17 +57,16 @@ process.stdin.on("end", () => {
     permissionMode: (hook && typeof hook.permission_mode === "string") ? hook.permission_mode : "",
     ...(constraintAnchor ? { constraintAnchor, constraintSourceHash, ...(constraintRepoKey ? { constraintRepoKey } : {}) } : {}), // 약속 발화 포착 — CLI가 이 턴의 스냅샷을 찾는 열쇠(+저장소 결속 ab-1)
     ts: activeTs,
-  });
+  };
+  const activePayload = JSON.stringify({ ...anchorBase, ...(prevDirective ? { directive: prevDirective } : {}), ...(prevReset ? { directiveReset: prevReset } : {}) }); // 전달 기록 보존(계획 확정 전 덮어쓰기 손실 방지)
+  const writeAnchors = (payload) => {
+    try { atomicWrite(path.join(BRIDGE_DIR, "active.json"), payload); } catch { /* ignore */ }
+    if (sid) { try { const safe = String(sid).replace(/[^a-zA-Z0-9_-]/g, ""); if (safe) atomicWrite(path.join(ACTIVE_DIR, safe + ".json"), payload); } catch { /* ignore */ } }
+  };
   // (1) 레거시 단일 active.json — 확장(activeWorkspace)·세션ID 없는 폴백 경로가 읽음.
-  try { atomicWrite(path.join(BRIDGE_DIR, "active.json"), activePayload); } catch { /* ignore */ }
   // (2) 세션별 active(active/<claudeSession>.json) — configWs가 1순위로 읽어, 다른 창이 단일 active.json을
   //     덮어써도 '이 대화'의 연 폴더를 레이스 없이 얻는다. 파일명은 traversal 방지로 안전 문자만.
-  if (sid) {
-    try {
-      const safe = String(sid).replace(/[^a-zA-Z0-9_-]/g, "");
-      if (safe) atomicWrite(path.join(ACTIVE_DIR, safe + ".json"), activePayload);
-    } catch { /* ignore */ }
-  }
+  writeAnchors(activePayload);
 
   // 환경 적응(확장의 CLAUDE_HOME 해석용 — 이슈#1 CODEX_HOME 자동탐지와 '동일하게'): 확장 호스트는 CLAUDE_CONFIG_DIR을 못 볼 수
   // 있으나(특히 *nix GUI 실행), 이 훅은 Claude 프로세스에서 실제 transcript_path를 받는다. 거기서 Claude 설정폴더(= projects의 부모)를
@@ -124,9 +133,7 @@ process.stdin.on("end", () => {
     if (!contract || contract.harnessMode !== "claude-codex") blockPrompt(T(
       "[Codex Bridge] 운용 모드 자동 전환 결과를 확인하지 못했습니다. 대시보드에서 모드를 확인·전환한 뒤 프롬프트를 다시 보내세요.",
       "[Codex Bridge] Could not confirm the auto-switched harness mode. Check/switch the mode from the dashboard, then resend the prompt."));
-    switchNotice = T(
-      "[Codex Bridge] 운용 모드 자동 전환: 설정은 코덱스-코덱스였지만 이 질문이 Claude에서 시작되어 클로드-코덱스로 전환했습니다(질문 호스트 기준). 의도와 다르면 대시보드에서 되돌리세요. 이번 턴부터 클로드-코덱스 규칙·검증 설정이 적용됩니다.",
-      "[Codex Bridge] Harness mode auto-switched: the setting was Codex-Codex, but this prompt started in Claude, so it switched to Claude-Codex (prompt host wins). Revert from the dashboard if unintended. Claude-Codex rules and verification apply from this turn.");
+    switchNotice = harnessModeSwitchNotice(lang); // 코드 소유 문장 단일 출처(길이 상한 300 — 매 턴 예산의 고정 조각)
   }
 
   // 라이브 진행: 턴 시작 = 'Claude 작업중' + 라운드 0 리셋(이 턴의 ask 횟수는 codex-bridge가 증가시킴).
@@ -139,6 +146,8 @@ process.stdin.on("end", () => {
   } catch { /* 진행표시는 best-effort — 실패해도 훅 동작 막지 않음 */ }
 
   let parts = [];
+  let dlvPlan = null; // 전달 계획(try 밖에서도 finalize가 읽는다)
+  const advisories = []; // [§4-B ④] 안내(지도 상태·부트스트랩) — 검증 모드면 매 턴 예산 안에서 순서대로(참고 자료 절단), 아니면 종전대로
   if (switchNotice) parts.push(switchNotice); // 자동 전환 고지는 항상 최상단(다른 주입이 없어도 단독 출력)
   try {
     const c = contract || loadContract(ws, lang);
@@ -150,29 +159,62 @@ process.stdin.on("end", () => {
       const rules = buildInjection(c.claude, "Claude Code", c.claudeChecklist);
       if (rules) parts.push(rules);
     }
+    dlvPlan = null; // [§4-B ① Claude 쪽] 정적 지시=세션 1회(첫 턴·리셋·세대 변경에만 전문), 매 턴=명령 줄+진행도+상태 줄
+    let provenanceInStatic = false, envelopeDynOnly = false;
     if (c.verifyMode && c.verifyMode !== "off") {
       const campaignId = sid ? "cl:" + sid + ":" + activeTs : "";
-      parts.push(buildVerifyDirective(c.verifyMode, undefined, c.verifyProfile, verifyCampaignProgress(ws, campaignId, c.verifyBudget)));
+      const progress9 = verifyCampaignProgress(ws, campaignId, c.verifyBudget);
+      let pn9 = ""; try { pn9 = require("./map-provenance.js").buildProvenanceNotice(ws, c) || ""; } catch { pn9 = ""; }
+      const sp9 = claudeStaticParts(ws, c, lang, { provenance: pn9 });
+      dlvPlan = claudeDeliveryPlan(prevDirective, prevReset, sp9);
+      if (dlvPlan.mode === "full") parts.push(claudeStaticBlock(sp9, lang));
+      const slimText9 = buildVerifyDirectiveSlim(c.verifyMode, undefined, c.verifyProfile, progress9);
+      parts.push(slimText9);
+      const sentAt9 = dlvPlan.mode === "full" ? activeTs : String((prevDirective && prevDirective.sentAt) || activeTs);
+      const statusText9 = claudeDeliveryStatusLine(dlvPlan, lang, sentAt9);
+      parts.push(statusText9);
+      dlvPlan.budget = { fixed: [...(switchNotice ? [switchNotice] : []), slimText9, statusText9] }; // 고정 조각(전환 고지 포함)·구분자까지 예산 계산
+      dlvPlan.record = { gen: dlvPlan.gen, parts: dlvPlan.parts, sentAt: sentAt9, lastTurnTs: activeTs, reason: dlvPlan.reason };
+      provenanceInStatic = true; envelopeDynOnly = true; // 경위 안내·수칙 인지 전문은 정적 블록에 속함(세대 결속)
     }
     // 탐색(3트랙) 자동 지시 — 지도 없음/낡음일 때 그 상태에 1회만(상태 서명 기반·advisory). 실패해도 훅을 막지 않음.
-    try { const sd = buildScoutDirective(ws, c); if (sd) parts.push(sd); } catch { /* advisory */ }
+    try { const sd = buildScoutDirective(ws, c); if (sd) advisories.push(sd); } catch { /* advisory */ }
     // 설계 경위 선조회 안내(MAP-PROVENANCE-DESIGN §3) — scoutMode 독립(2트랙에서도 why 동작)·색인 존재 시만 1줄.
-    try { const pn = require("./map-provenance.js").buildProvenanceNotice(ws, c); if (pn) parts.push(pn); } catch { /* advisory */ }
+    if (!provenanceInStatic) { try { const pn = require("./map-provenance.js").buildProvenanceNotice(ws, c); if (pn) parts.push(pn); } catch { /* advisory */ } }
     // P1: Project MAP 비차단 bootstrap — 훅은 유계 신호+상태 고지(1회)+detach 기동만(실행·전수 판독 금지:
     // MAP-V2-DESIGN 1-3). 2트랙 게이트는 hookTick 내부 최선행(scoutMode!=='on'→즉시 null — 파일 0·spawn 0).
     // 구버전 브릿지(map-bootstrap.js 부재)·실패는 advisory(훅을 막지 않음).
-    try { const adv = require("./map-bootstrap.js").hookTick(ws); if (adv) parts.push(adv); } catch { /* advisory */ }
+    try { const adv = require("./map-bootstrap.js").hookTick(ws); if (adv) advisories.push(adv); } catch { /* advisory */ }
+    // [§4-B ④] 안내는 매 턴 예산(하네스 소유분 1,500=slim 700+상태 250+안내 550) 안에서만 — 검증 모드 밖(전달 계획 없음)은 종전 그대로
+    if (dlvPlan && dlvPlan.budget) {
+      const bt9 = applyClaudeTurnBudget({ fixed: dlvPlan.budget.fixed, advisories }, lang);
+      for (const tx of bt9.texts) parts.push(tx); dlvPlan.budget.clipped = bt9.clipped;
+      if (bt9.overflow) { try { process.stderr.write((lang === "en" ? "[Codex Bridge] per-turn fixed pieces exceed the budget (" : "[Codex Bridge] 매 턴 고정 조각이 예산을 넘음(") + bt9.fixedLen + "/" + require("./contract-lib.js").claudeTurnBudgetTotal() + (lang === "en" ? ") — code-defect signal; advisories omitted\n" : ") — 코드 결함 신호·안내 전량 생략\n")); } catch { /* 안내 실패 무해 */ } }
+    }
+    else for (const tx of advisories) parts.push(tx);
     // [4b 이중 배달 §4] 구현자 인지 — 코어 ab 전문(수칙서 활성 시 상시)+이번 턴 결속 선별 캐시/미리보기 안내.
     // LLM 호출 없음(파일 판독뿐)·실패=advisory(훅을 막지 않음).
-    try { const ei = require("./contract-lib.js").implementerEnvelopeInject(ws, c, lang, constraintSourceHash || "", constraintAnchor || ""); if (ei) parts.push(ei); } catch { /* advisory */ }
+    try {
+      const ep = implementerEnvelopeInjectParts(ws, c, lang, constraintSourceHash || "", constraintAnchor || "");
+      if (ep) { if (envelopeDynOnly) { const dyn9 = String(ep.dyn || "").replace(/^\n+/, ""); if (dyn9) parts.push(dyn9); } else { const ei = ep.dyn ? ep.ab + "\n" + ep.dyn : ep.ab; if (ei) parts.push(ei); } }
+    } catch { /* advisory */ }
   } catch {
     parts = switchNotice ? [switchNotice] : []; // 주입 조립 실패에도 전환 고지는 유지(사용자 인지 채널)
+    dlvPlan = null; // 조립 실패=전달 기록 갱신 없음(다음 턴 전문 — 안전 방향)
   }
   if (!parts.length) process.exit(0);
-  process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: parts.join("\n\n") },
-    }),
-  );
-  process.exit(0);
+  // 전달 기록 확정은 '출력이 실제로 전달된 뒤'(stdout write 콜백) — 출력 전 종료·파이프 실패면 기록하지 않아 다음 턴이 전문을 다시 보낸다
+  // (확인 검증 1회차 blocker②: 기록 선행이면 '기록 있음=전문 수신'이 성립하지 않는다). 리셋 마커도 그때 소거.
+  const outJson = JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: parts.join("\n\n") } });
+  const finalize = (err) => {
+    if (!err && dlvPlan && dlvPlan.record) {
+      try { writeAnchors(JSON.stringify({ ...anchorBase, directive: dlvPlan.record })); if (safeSid) clearClaudeDirectiveResetMarker(safeSid); } catch { /* 기록 실패=다음 턴 전문 */ }
+    }
+    process.exit(0);
+  };
+  try {
+    const flushed = process.stdout.write(outJson, (err) => finalize(err));
+    process.stdout.once("error", () => finalize(new Error("stdout-error")));
+    void flushed;
+  } catch (e) { finalize(e); }
 });

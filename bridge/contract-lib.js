@@ -5362,6 +5362,12 @@ function previewGateDecision(inp) {
 // 선별 불변 사본)이 있으면 '이번 작업 선별 수칙(참고)' — 없으면 selector-preview 안내 1줄(관문 예고).
 // 타 작업·구세대 영수증=지문 불일치로 자연 배제. 실패=null(advisory — 훅을 막지 않음).
 function implementerEnvelopeInject(ws, c, lang, snapshotHash, turnAnchor) {
+  const p = implementerEnvelopeInjectParts(ws, c, lang, snapshotHash, turnAnchor);
+  if (!p) return null;
+  return p.dyn ? p.ab + "\n" + p.dyn : p.ab; // 종전 바이트 그대로(ab 3줄 + "\n" + ["", …dyn].join)
+}
+// [§4-B ①] 정적(ab 전문 — 세대 결속·세션 1회)과 동적(이번 턴 선별 캐시·미리보기 안내) 분리
+function implementerEnvelopeInjectParts(ws, c, lang, snapshotHash, turnAnchor) {
   try {
     if (!c || typeof c.envelopeHash !== "string" || !c.envelopeHash) return null; // 수칙서 미활성=무주입
     const en = lang === "en";
@@ -5373,6 +5379,7 @@ function implementerEnvelopeInject(ws, c, lang, snapshotHash, turnAnchor) {
     L.push(en ? "[Rule awareness — core always-blocker (ab) items · DATA · user-approved judging boundary]" : "[수칙 인지 — 코어 절대 차단(ab) 전문 · 데이터 · 사용자 승인 판정 경계]");
     L.push(en ? "Verification judges against these — an implementation that violates one is always a blocker." : "검증이 이 경계로 판정한다 — 구현이 아래를 위반하면 언제나 blocker다.");
     items.forEach((x, i) => L.push("> ab-" + (i + 1) + ": " + x));
+    const abEnd = L.length; // 여기까지=정적(수칙 인지 전문) · 이하=이번 턴 동적
     const arcActive = typeof c.archiveHash === "string" && !!c.archiveHash;
     if (arcActive && snapshotHash) { // turnAnchor 부재=아래 필터가 자격 0으로 수렴(안내 줄은 유지)
       const arc = readVerifyEnvelopeArchive(target);
@@ -5399,7 +5406,7 @@ function implementerEnvelopeInject(ws, c, lang, snapshotHash, turnAnchor) {
         L.push("", en ? "[Archive active but unreadable/mismatched — new verifications are blocked until re-approval]" : "[서고 활성인데 판독 불가/도장 불일치 — 재승인 전까지 새 검증이 차단됩니다]");
       }
     }
-    return L.join("\n");
+    return { ab: L.slice(0, abEnd).join("\n"), dyn: L.slice(abEnd).join("\n") };
   } catch { return null; }
 }
 
@@ -5710,7 +5717,9 @@ function appendAskShape(entry) {
   try { fs.mkdirSync(STATS_DIR, { recursive: true }); fs.appendFileSync(path.join(STATS_DIR, "ask-shape.jsonl"), JSON.stringify(entry) + "\n"); } catch { /* 무해 */ }
 }
 
-function buildVerifyDirective(mode, lang, profile, progress) {
+// [§4-B ① Claude 쪽 2026-08-31] 문장 조각의 단일 출처 — full(종전 매 턴 전문)=slim(명령 줄+진행도)+static(세션 1회 전달분).
+// 훅이 실제로 막는 문장은 DIRECTIVE_MOVED 장부로 옮기고 여기서 뺀다(§4-B ③ — 문장별 훅·시험 id가 있을 때만). 사용자 글(transmit)은 그대로.
+function verifyDirectivePieces(mode, lang, profile, progress) {
   const l = LANGS.includes(lang) ? lang : loadLang();
   const b = loadBaseDirective(l, profile); // P-12: 주입 시점의 실효 프로필(미지정=integrity — 무회귀)
   if (l === "en") {
@@ -5719,31 +5728,95 @@ function buildVerifyDirective(mode, lang, profile, progress) {
       mode === "plancode" ? "If this turn confirmed a plan (ExitPlanMode) or created/modified files" :
       "If this turn created/modified files"; // code
     const round = progress && progress.tracked && progress.budget >= 1 ? ` Recorded progress ${progress.count}/${progress.budget} (the authoritative round number is printed at the bottom of the verdict).` : "";
-    return [
-      `[Verify Mode ON(${mode}) · implement→verify two-track · no human relays between the models]`,
-      `${cond}, you MUST get Codex verification before reporting completion — start with \`node "${BRIDGE}" ask-start --allow-new "..."\`, then repeat \`node "${BRIDGE}" ask-wait <job-id>\` while pending (it returns every 45s; the real deadline is the dashboard wait of ${verifyTimeoutMin()} min, so do not give up in between). Stop on a pass verdict — nothing prevents starting another verification after a pass, so this single line is the only brake. The remaining flow rules (one job at a time, sequential rounds, session linking, closeout format at the cap) are actually enforced by the stop hook and the reservation wrapper, which tell you on the spot — do not try to memorize them. Ask one combined question only when a genuine user-decision item exists; otherwise invent no choices. When you do ask, present it through the choice tool — a question written out in the reply body does not count.${round}`,
-      `[Remote checks] The verifier runs with network blocked by default (read-only sandbox). If the verification itself must confirm remote state (e.g., GitHub push/CI/remote refs, registries, live URLs), add \`--net\` to that one ask — that single run allows outbound network while files stay read-only. Do not use --net when local files suffice.`,
-      b.transmit,
+    return {
+      header: `[Verify Mode ON(${mode}) · implement→verify two-track · no human relays between the models]`,
+      command: `${cond}, you MUST get Codex verification before reporting completion — start with \`node "${BRIDGE}" ask-start --allow-new "..."\`, then repeat \`node "${BRIDGE}" ask-wait <job-id>\` while pending (it returns every 45s; the real deadline is the dashboard wait of ${verifyTimeoutMin()} min, so do not give up in between).${round}`,
+      rules: `Stop on a pass verdict — nothing prevents starting another verification after a pass, so this single line is the only brake. The remaining flow rules (one job at a time, sequential rounds, session linking, closeout format at the cap) are actually enforced by the stop hook and the reservation wrapper, which tell you on the spot — do not try to memorize them. Ask one combined question only when a genuine user-decision item exists; otherwise invent no choices. When you do ask, present it through the choice tool — a question written out in the reply body does not count.`,
+      remote: `[Remote checks] The verifier runs with network blocked by default (read-only sandbox). If the verification itself must confirm remote state (e.g., GitHub push/CI/remote refs, registries, live URLs), add \`--net\` to that one ask — that single run allows outbound network while files stay read-only. Do not use --net when local files suffice.`,
+      transmit: b.transmit,
       // 주입 구조화 2단계: [재판단] 본문은 판정이 도착할 때 footer로 함께 온다(ask 시작 시점 동결본).
-      // 검증 답을 받기 전에는 쓸모가 없는 규약이라 매 턴 자리를 차지할 이유가 없다. 상시로 남기는 것은
-      // '도착 전에는 임의 수용 금지'라는 태도 한 줄뿐 — 이건 기계가 잡을 수 없다.
-      `[Re-judgment] When a verdict arrives, the re-judgment protocol arrives with it, below the answer. Until then, do not pre-accept findings and do not copy the verifier's answer verbatim.`,
-    ].join("\n");
+      rejudgeLine: `[Re-judgment] When a verdict arrives, the re-judgment protocol arrives with it, below the answer. Until then, do not pre-accept findings and do not copy the verifier's answer verbatim.`,
+    };
   }
   const cond =
     mode === "always" ? "이번 턴(모든 응답)" :
     mode === "plancode" ? "이번 턴에 플랜을 확정(ExitPlanMode)했거나 파일을 생성/수정했다면" :
     "이번 턴에 파일을 생성/수정했다면"; // code
-  // 뒷문장('권위 있는 N/M은 호출 직전 예약 영수증')은 판정 답 하단 '[검증 왕복 N/M]' 줄이 이미 말한다 — 중복 제거.
   const round = progress && progress.tracked && progress.budget >= 1 ? ` 저장된 진행 ${progress.count}/${progress.budget}(권위 있는 회차는 검증 답 하단에 표시된다).` : "";
-  return [
-    `[검증 모드 ON(${mode}) · 구현→검증 2트랙 · 사람이 턴을 중계하지 않음]`,
-    `${cond}, 사용자에게 완료를 보고하기 전에 Codex 검증을 받아라 — \`node "${BRIDGE}" ask-start --allow-new "..."\` 로 시작하고 pending이면 \`node "${BRIDGE}" ask-wait <job-id>\` 를 반복한다(45초씩 돌아오며 실제 마감은 대시보드 대기시간 ${verifyTimeoutMin()}분이니 중간에 포기하지 마라). 통과 판정을 받으면 거기서 멈춰라 — 통과 뒤 새 검증을 시작하는 것은 어떤 장치도 막지 않으므로 이 한 줄이 유일한 제동이다. 나머지 진행 규칙(동시 1개·순차 회차·세션 연결·상한 도달 시 마감문 형식)은 종료 훅과 예약기가 실제로 막고 그 자리에서 알려주니 외우려 하지 마라. 사용자 판단 항목이 있을 때만 한 번에 묻고, 없으면 선택지를 만들지 마라. 물을 때는 반드시 선택지 도구로 제시하라 — 답 본문에 풀어 쓴 질문은 질문으로 치지 않는다.${round}`,
-    `[원격 확인] 검증자는 기본적으로 네트워크가 차단된 채(읽기 전용 샌드박스) 돈다. 검증 자체가 원격 상태 확인을 요구하면(예: GitHub 푸시/CI/원격 ref, 패키지 저장소, 라이브 URL) 그 1회의 ask에 \`--net\`을 붙여라 — 그 실행만 외부 통신이 허용되고 파일은 여전히 읽기 전용이다. 로컬 파일로 충분한 검증엔 --net을 쓰지 마라.`,
-    b.transmit,
-    // 주입 구조화 2단계(위 영문 분기와 같은 논리): [재판단] 본문은 판정 도착 시 footer로 함께 온다.
-    `[재판단] 판정이 오면 재판단 규약이 그 답 아래에 함께 온다. 그 전에는 지적을 미리 수용하지도, 검증모델 답을 그대로 옮기지도 마라.`,
-  ].join("\n");
+  return {
+    header: `[검증 모드 ON(${mode}) · 구현→검증 2트랙 · 사람이 턴을 중계하지 않음]`,
+    command: `${cond}, 사용자에게 완료를 보고하기 전에 Codex 검증을 받아라 — \`node "${BRIDGE}" ask-start --allow-new "..."\` 로 시작하고 pending이면 \`node "${BRIDGE}" ask-wait <job-id>\` 를 반복한다(45초씩 돌아오며 실제 마감은 대시보드 대기시간 ${verifyTimeoutMin()}분이니 중간에 포기하지 마라).${round}`,
+    rules: `통과 판정을 받으면 거기서 멈춰라 — 통과 뒤 새 검증을 시작하는 것은 어떤 장치도 막지 않으므로 이 한 줄이 유일한 제동이다. 나머지 진행 규칙(동시 1개·순차 회차·세션 연결·상한 도달 시 마감문 형식)은 종료 훅과 예약기가 실제로 막고 그 자리에서 알려주니 외우려 하지 마라. 사용자 판단 항목이 있을 때만 한 번에 묻고, 없으면 선택지를 만들지 마라. 물을 때는 반드시 선택지 도구로 제시하라 — 답 본문에 풀어 쓴 질문은 질문으로 치지 않는다.`,
+    remote: `[원격 확인] 검증자는 기본적으로 네트워크가 차단된 채(읽기 전용 샌드박스) 돈다. 검증 자체가 원격 상태 확인을 요구하면(예: GitHub 푸시/CI/원격 ref, 패키지 저장소, 라이브 URL) 그 1회의 ask에 \`--net\`을 붙여라 — 그 실행만 외부 통신이 허용되고 파일은 여전히 읽기 전용이다. 로컬 파일로 충분한 검증엔 --net을 쓰지 마라.`,
+    transmit: b.transmit,
+    rejudgeLine: `[재판단] 판정이 오면 재판단 규약이 그 답 아래에 함께 온다. 그 전에는 지적을 미리 수용하지도, 검증모델 답을 그대로 옮기지도 마라.`,
+  };
+}
+// 종전 매 턴 전문(구성 동일 — 명령 줄 뒤에 규칙 문장이 붙고, 원격 확인·전달 원칙·재판단 한 줄이 따른다)
+function buildVerifyDirective(mode, lang, profile, progress) {
+  const p = verifyDirectivePieces(mode, lang, profile, progress);
+  return [p.header, `${p.command} ${p.rules}`, p.remote, p.transmit, p.rejudgeLine].join("\n");
+}
+// 매 턴 유지분(개선 4 (e)): 머리 1줄+시작·대기 명령+진행도 — 규칙 문장은 세션 1회 전달(static)로
+function buildVerifyDirectiveSlim(mode, lang, profile, progress) {
+  const p = verifyDirectivePieces(mode, lang, profile, progress);
+  return [p.header, p.command].join("\n");
+}
+// 세션 1회 전달분(정적 지시): 규칙 문장·원격 확인·전달 원칙(사용자 편집=세대 결속)·재판단 한 줄
+function buildVerifyDirectiveStatic(mode, lang, profile) {
+  const p = verifyDirectivePieces(mode, lang, profile, null);
+  return [p.rules, p.remote, p.transmit, p.rejudgeLine].join("\n");
+}
+// [§4-B ③] '구조로 옮김' 장부 — 하네스 소유 문장 중 훅이 실제로 막아 지시문에서 뺀 것(문장별 훅·실행 반례 시험 결속). 사용자 글은 대상이 아니다.
+const DIRECTIVE_MOVED = [
+  // (2026-08-31 확인 검증 1회차 blocker④로 0건) 후보였던 "사용자 판단 항목이 있을 때만 묻고 없으면 선택지를 만들지 마라"는 훅이 상한 마감문·escalate 경로에서만
+  // 막고 평범한 턴의 선택지 생성은 막지 못하므로 지시문(정적 블록)에 유지한다. 행을 넣으려면 그 문장의 위반을 '모든 경로'에서 실제로 막는 훅과 실행 반례 시험이 먼저 있어야 한다.
+];
+// ── [§4-B ① Claude 쪽] 정적 지시 세션 1회 전달 — 성분·세대·전달 계획·상태 줄(검증자 쪽 directive-delivery와 같은 원칙) ──
+const CLAUDE_STATIC_KEYS = ["verifyStatic", "envelopeAb", "provenance", "rejudge", "mode", "profile", "lang"];
+const CLAUDE_STATIC_LABEL = {
+  ko: { verifyStatic: "검증 지시·원격 확인·전달 원칙", envelopeAb: "수칙 인지", provenance: "설계 경위", rejudge: "재판단 규약", mode: "검증 모드", profile: "프로필", lang: "언어" },
+  en: { verifyStatic: "verify rules·remote·transmit", envelopeAb: "rule awareness", provenance: "design provenance", rejudge: "re-judgment protocol", mode: "verify mode", profile: "profile", lang: "language" },
+};
+function claudeStaticParts(ws, c, lang, extra) {
+  const l = LANGS.includes(lang) ? lang : loadLang();
+  const mode = String((c && c.verifyMode) || ""), profile = String((c && c.verifyProfile) || "");
+  let envelopeAb = "";
+  try { const ep = implementerEnvelopeInjectParts(ws, c, l, "", ""); envelopeAb = ep && ep.ab ? ep.ab : ""; } catch { envelopeAb = ""; }
+  return { verifyStatic: buildVerifyDirectiveStatic(mode, l, profile), envelopeAb, provenance: String((extra && extra.provenance) || ""), rejudge: safeLoadRejudge(l, profile), mode, profile, lang: l };
+}
+function claudeStaticGen(parts) {
+  const fp = {};
+  for (const k of CLAUDE_STATIC_KEYS) fp[k] = sha1Of(String(parts && parts[k] != null ? parts[k] : "")).slice(0, 16);
+  return { gen: sha1Of(JSON.stringify(CLAUDE_STATIC_KEYS.map((k) => k + "=" + fp[k]))).slice(0, 16), parts: fp };
+}
+function claudeStaticBlock(parts, lang) {
+  const en = lang === "en";
+  const L = [];
+  if (parts.verifyStatic) L.push(parts.verifyStatic);
+  if (parts.envelopeAb) L.push(parts.envelopeAb);
+  if (parts.provenance) L.push(parts.provenance);
+  if (parts.rejudge) L.push((en ? "[Re-judgment protocol — delivered once per session; when a verdict arrives, its tail points back to this text by fingerprint]" : "[재판단 규약 — 이 세션에 1회 전달 · 판정이 오면 꼬리가 이 문안을 지문으로 가리킨다]") + "\n" + parts.rejudge);
+  return L.join("\n\n");
+}
+// prev=앵커의 directive 기록({gen,parts,sentAt}) · reset=SessionStart 훅 리셋({source,ts}) · parts=이번 턴 조립 성분
+function claudeDeliveryPlan(prev, reset, parts) {
+  const g = claudeStaticGen(parts);
+  const base = { gen: g.gen, parts: g.parts, changed: [] };
+  if (reset && typeof reset === "object") return { ...base, mode: "full", reason: "reset", source: String(reset.source || "unknown") };
+  if (!prev || typeof prev !== "object" || typeof prev.gen !== "string" || !prev.parts) return { ...base, mode: "full", reason: "first" };
+  if (prev.gen !== g.gen) return { ...base, mode: "full", reason: "gen-changed", changed: CLAUDE_STATIC_KEYS.filter((k) => (prev.parts || {})[k] !== g.parts[k]) };
+  return { ...base, mode: "slim", reason: "delivered" };
+}
+function claudeDeliveryStatusLine(plan, lang, sentAt) {
+  const en = lang === "en"; const g = String(plan && plan.gen || "").slice(0, 8);
+  if (plan.mode === "slim") return en ? `[directive delivery · Claude] gen ${g} · not resent — the standing directives were delivered in this session's turn at ${sentAt}; they still apply` : `[규약 전달 · Claude] 세대 ${g} · 재전송 없음 — 정적 지시는 이 세션 ${sentAt} 턴에 전달됐고 그대로 적용된다`;
+  const L = CLAUDE_STATIC_LABEL[en ? "en" : "ko"];
+  const why = plan.reason === "first" ? (en ? "first turn of this session (no delivery record)" : "이 세션 첫 턴(전달 기록 없음)")
+    : plan.reason === "reset" ? ((en ? "session " : "세션 ") + String(plan.source || "") + (en ? " (compaction/resume/start detected by the SessionStart hook)" : "(세션 시작 훅이 감지한 압축/재개/시작)"))
+    : plan.reason === "gen-changed" ? ((en ? "directives changed: " : "규약 변경: ") + (plan.changed || []).map((k) => L[k] || k).join("·"))
+    : String(plan.reason || "");
+  return en ? `[directive delivery · Claude] gen ${g} · standing directives sent this turn (reason: ${why})` : `[규약 전달 · Claude] 세대 ${g} · 이번 턴 정적 지시 전문 전송(사유: ${why})`;
 }
 
 // Codex 답에서 '결론(verdict)'을 보수적으로 분류한다. '첫 줄'이 아니라 '검증'을 포함한 줄을 모두 훑어
@@ -6206,3 +6279,82 @@ module.exports.FINDINGS_ROWS_MAX = FINDINGS_ROWS_MAX;
 module.exports.ENVELOPE_OOS_TITLE_MAX = ENVELOPE_OOS_TITLE_MAX;
 module.exports.FIXED_PROSE_CAPS = FIXED_PROSE_CAPS;
 module.exports.GENERIC_HEAD_RE = GENERIC_HEAD_RE;
+module.exports.verifyDirectivePieces = verifyDirectivePieces;
+module.exports.buildVerifyDirectiveSlim = buildVerifyDirectiveSlim;
+module.exports.buildVerifyDirectiveStatic = buildVerifyDirectiveStatic;
+module.exports.DIRECTIVE_MOVED = DIRECTIVE_MOVED;
+module.exports.CLAUDE_STATIC_KEYS = CLAUDE_STATIC_KEYS;
+module.exports.claudeStaticParts = claudeStaticParts;
+module.exports.claudeStaticGen = claudeStaticGen;
+module.exports.claudeStaticBlock = claudeStaticBlock;
+module.exports.claudeDeliveryPlan = claudeDeliveryPlan;
+module.exports.claudeDeliveryStatusLine = claudeDeliveryStatusLine;
+module.exports.implementerEnvelopeInjectParts = implementerEnvelopeInjectParts;
+// [§4-B ① Claude 쪽] 세션 시작 훅용 리셋 — 앵커의 전달 기록을 지운다. 앵커 쓰기가 실패하면(잠금·권한) 별도 마커 파일로 폴백(두 채널 중 하나만 있어도
+// 다음 턴은 전문). 둘 다 실패=ok:false(훅이 비0 종료·stderr로 드러냄 — 조용한 fail-open 금지). 앵커 부재=아무것도 안 씀(기록 없음=전문·안전 방향).
+function claudeDirectiveResetMarkerFor(safeSid) { return path.join(ACTIVE_DIR, safeSid + ".directive-reset.json"); }
+function resetClaudeDirectiveDelivery(sid, source) {
+  const safe = String(sid || "").replace(/[^a-zA-Z0-9_-]/g, "");
+  if (!safe) return { ok: true, via: "no-session" };
+  const file = path.join(ACTIVE_DIR, safe + ".json");
+  // 부재(ENOENT)만 '앵커 없음=기록 없음=전문'으로 성공 처리. 그 외 판독 오류(잠금·권한·EISDIR)·손상 JSON은 옛 기록이 남아 있을 수 있으므로
+  // 마커 채널로 리셋을 남긴다(확인 검증 2회차 blocker: 일시 판독 오류를 no-anchor로 삼키면 복구 뒤 옛 directive가 되살아나 slim으로 감).
+  let prev = null, readErr = null;
+  try { prev = JSON.parse(fs.readFileSync(file, "utf8")); }
+  catch (e) { if (e && e.code === "ENOENT") return { ok: true, via: "no-anchor" }; readErr = e; }
+  const reset = { source: String(source || "unknown"), ts: new Date().toISOString() };
+  if (!readErr && prev && typeof prev === "object") {
+    if (atomicWrite(file, JSON.stringify(Object.assign({}, prev, { directive: null, directiveReset: reset })))) return { ok: true, via: "anchor" };
+  }
+  if (atomicWrite(claudeDirectiveResetMarkerFor(safe), JSON.stringify({ schema: "claude-directive-reset-v1", session: safe, ...reset }))) return { ok: true, via: "marker" };
+  return { ok: false, via: "none" };
+}
+function readClaudeDirectiveReset(safeSid, anchorObj) {
+  if (anchorObj && anchorObj.directiveReset && typeof anchorObj.directiveReset === "object") return anchorObj.directiveReset;
+  try { const m = JSON.parse(fs.readFileSync(claudeDirectiveResetMarkerFor(safeSid), "utf8")); if (m && m.schema === "claude-directive-reset-v1") return { source: String(m.source || "unknown"), ts: String(m.ts || ""), marker: true }; } catch { /* 없음 */ }
+  return null;
+}
+function clearClaudeDirectiveResetMarker(safeSid) { try { fs.unlinkSync(claudeDirectiveResetMarkerFor(safeSid)); } catch { /* 없음 */ } }
+module.exports.claudeDirectiveResetMarkerFor = claudeDirectiveResetMarkerFor;
+module.exports.resetClaudeDirectiveDelivery = resetClaudeDirectiveDelivery;
+module.exports.readClaudeDirectiveReset = readClaudeDirectiveReset;
+module.exports.clearClaudeDirectiveResetMarker = clearClaudeDirectiveResetMarker;
+// [§4-B ④ Claude 쪽 · 개선 4 (e)] 매 턴 하네스 소유분 예산 — 사용자 규칙(사용자 글)·수칙 인지/선별 캐시(권위 데이터)는 예산 밖. 안내(지도 상태·부트스트랩)는
+// 참고 자료라 순서대로 절단(고지 포함 상한 안). 총량 1,500=문서 지표('구현자 매 턴 주입 1.5천 이하').
+const CLAUDE_TURN_BUDGET = { slim: 700, status: 250, advisory: 550 };
+function claudeTurnBudgetTotal() { return Object.values(CLAUDE_TURN_BUDGET).reduce((a, v) => a + v, 0); }
+// 조립 결과 '전체'(고정 조각: 자동 전환 고지·slim·상태 줄 + 안내 + 조각 사이 "\n\n" 구분자)가 총량 1,500을 넘지 않는다(확인 검증 3회차 blocker:
+// 핵심 조각·구분자·전환 고지가 예산 밖이던 반례). 고정 조각은 코드 소유 문장이라 시험이 각 상한(slim 700·상태 250·전환 고지 300)을 구성으로 보장하고,
+// 그래도 넘으면 overflow 표시+안내 전량 생략(코드 결함 신호·차단 없음). 안내는 남은 자리 안에서 순서대로 절단·생략(고지 포함).
+function applyClaudeTurnBudget(input, lang) {
+  const en = lang === "en";
+  const total = claudeTurnBudgetTotal();
+  const fixed = Array.isArray(input && input.fixed) ? input.fixed.map((s) => String(s || "")).filter(Boolean) : [];
+  const advisories = Array.isArray(input && input.advisories) ? input.advisories.map((s) => String(s || "")).filter(Boolean) : [];
+  const fixedLen = fixed.reduce((a, s) => a + s.length, 0) + Math.max(0, fixed.length - 1) * 2; // 구분자 포함
+  let room = total - fixedLen;
+  const overflow = fixedLen > total;
+  const SHORT = en ? "…[clipped]" : "…[절단]";
+  const texts = [], clipped = [];
+  let count = fixed.length;
+  for (const a of advisories) {
+    const sep = count ? 2 : 0; // 앞 조각과의 "\n\n"
+    const r = room - sep;
+    if (r <= 0) { clipped.push({ from: a.length, to: 0, omitted: true }); continue; }
+    if (a.length <= r) { texts.push(a); room -= a.length + sep; count++; continue; }
+    const notice = en ? `(advisory clipped to the per-turn budget: ${a.length} → ${r} chars)` : `(안내가 매 턴 예산으로 절단: ${a.length} → ${r}자)`;
+    const piece = r >= notice.length + 20 ? a.slice(0, r - notice.length - 1) + "\n" + notice : (r > SHORT.length ? a.slice(0, r - SHORT.length) + SHORT : SHORT.slice(0, r));
+    texts.push(piece); clipped.push({ from: a.length, to: r }); room -= piece.length + sep; count++;
+  }
+  return { texts, clipped, fixedLen, overflow, assembledLen: fixedLen + texts.reduce((a, s) => a + s.length + 2, 0) };
+}
+// 자동 모드 전환 고지 — 코드 소유 문장(길이 상한 300·시험 고정) · 매 턴 예산의 고정 조각
+function harnessModeSwitchNotice(lang) {
+  return lang === "en"
+    ? "[Codex Bridge] Harness mode auto-switched: the setting was Codex-Codex, but this prompt started in Claude, so it switched to Claude-Codex (prompt host wins). Revert from the dashboard if unintended. Claude-Codex rules and verification apply from this turn."
+    : "[Codex Bridge] 운용 모드 자동 전환: 설정은 코덱스-코덱스였지만 이 질문이 Claude에서 시작되어 클로드-코덱스로 전환했습니다(질문 호스트 기준). 의도와 다르면 대시보드에서 되돌리세요. 이 턴부터 클로드-코덱스 규칙·검증이 적용됩니다.";
+}
+module.exports.harnessModeSwitchNotice = harnessModeSwitchNotice;
+module.exports.CLAUDE_TURN_BUDGET = CLAUDE_TURN_BUDGET;
+module.exports.claudeTurnBudgetTotal = claudeTurnBudgetTotal;
+module.exports.applyClaudeTurnBudget = applyClaudeTurnBudget;

@@ -58,7 +58,7 @@ for (const f of hs.BRIDGE_SCRIPTS) fs.writeFileSync(path.join(BR2, f), "//x", "u
 res = un.doUninstall(BR2, CL2);
 ok(!res.hooksRemoved && !res.bridgeRemoved, "표식 없음 → 아무것도 안 함");
 s = JSON.parse(fs.readFileSync(path.join(CL2, "settings.json"), "utf8"));
-ok(Object.keys(s.hooks).length === 3, "레포 설치 훅 그대로 보존");
+ok(Object.keys(s.hooks).length === 4, "레포 설치 훅 그대로 보존(이벤트 4종 — SessionStart 포함)");
 ok(fs.existsSync(path.join(BR2, "codex-bridge.js")), "레포 설치 브릿지 그대로 보존");
 
 console.log("[doUninstall] 훅 제거 실패(깨진 설정) → 브릿지도 보존(고아 훅 방지)");

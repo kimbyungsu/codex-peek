@@ -71,6 +71,7 @@ const BRIDGE_SCRIPTS = [
   "evidence-challenge.js", // 근거 재확인(증분 4): codex-bridge가 발송·판정에 require — 누락 시 설치본 로드 불능
   "selector-runner.js", // [Envelope Selector 3a] 선별 실행기 — worker·selector-preview가 require(3a 신설분의 배포 편입 누락을 4b에서 봉합)
   "preview-gate.js", // [4b 이중 배달] PreToolUse 게이트 — 서고 활성 시 preview 영수증까지 변경 도구 차단
+  "session-start.js", // [§4-B ① Claude 쪽] SessionStart 훅 — 시작/재개/압축 시 규약 전달 기록 리셋(다음 프롬프트 전문 재전송)
 ];
 
 // 우리가 settings.json에 심는 훅. event → {matcher, script}
@@ -80,9 +81,10 @@ const OUR_HOOKS = [
   { event: "PreToolUse", matcher: "ExitPlanMode", script: "scout-gate.js" }, // ⑥ 지도 preflight — 3트랙 기본 켜짐(실효 scoutGate·2026-07-09 승격, 2트랙은 관측만)·fail-open·관측 로그
   { event: "PreToolUse", matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit|mcp__.*", script: "preview-gate.js" }, // [4b 이중 배달] 서고 활성 시 preview 영수증까지 변경 도구 지속 차단(MCP=이름으로 읽기/쓰기 구분 불가라 보수 전종)
   { event: "Stop", matcher: "", script: "verify-guard.js" },
+  { event: "SessionStart", matcher: "", script: "session-start.js" }, // [§4-B ① Claude 쪽] 압축·재개·시작=규약 전달 기록 리셋
 ];
 // "우리 훅"을 식별하는 파일명(경로·따옴표·node표기 무관하게 basename으로 매칭).
-const OUR_SCRIPT_NAMES = ["contract-inject.js", "codex-guard.js", "verify-guard.js", "scout-gate.js", "preview-gate.js"];
+const OUR_SCRIPT_NAMES = ["contract-inject.js", "codex-guard.js", "verify-guard.js", "scout-gate.js", "preview-gate.js", "session-start.js"];
 
 // ── 유틸 ──────────────────────────────────────────────
 function log(s) { process.stdout.write(s + "\n"); }

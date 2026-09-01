@@ -5,16 +5,17 @@ import * as fs from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
 
-export const BRIDGE_SCRIPTS = ["contract-lib.js", "verify-cap-handoff.js", "codex-bridge.js", "ask-job-worker.js", "codex-hook.js", "codex-plugin-install.js", "contract-inject.js", "verify-guard.js", "codex-guard.js", "deepseek-bridge.js", "scout-gate.js", "project-map.js", "map-runtime.js", "map-bootstrap.js", "map-pipeline.js", "map-bindings.js", "map-adapters.js", "map-freshness.js", "map-reader.js", "map-retrieval.js", "map-provenance.js", "map-cutover.js", "map-probe.js", "map-probe-batch.js", "map-router.js", "map-enrich.js", "map-intent.js", "enrich-providers.js", "evidence-challenge.js", "selector-runner.js", "preview-gate.js"]; // ask-job-worker=내구 검증, codex-hook=Codex 구현자 lifecycle. 뒤 MAP 파일=P0.5/P1/P4/P8/P9 런타임(map-adapters→map-reader→map-freshness require 사슬 — P3b 배포 편입). selector-runner/preview-gate=[Envelope Selector 3a·4b]
+export const BRIDGE_SCRIPTS = ["contract-lib.js", "verify-cap-handoff.js", "codex-bridge.js", "ask-job-worker.js", "codex-hook.js", "codex-plugin-install.js", "contract-inject.js", "verify-guard.js", "codex-guard.js", "deepseek-bridge.js", "scout-gate.js", "project-map.js", "map-runtime.js", "map-bootstrap.js", "map-pipeline.js", "map-bindings.js", "map-adapters.js", "map-freshness.js", "map-reader.js", "map-retrieval.js", "map-provenance.js", "map-cutover.js", "map-probe.js", "map-probe-batch.js", "map-router.js", "map-enrich.js", "map-intent.js", "enrich-providers.js", "evidence-challenge.js", "selector-runner.js", "preview-gate.js", "session-start.js"]; // ask-job-worker=내구 검증, codex-hook=Codex 구현자 lifecycle. 뒤 MAP 파일=P0.5/P1/P4/P8/P9 런타임(map-adapters→map-reader→map-freshness require 사슬 — P3b 배포 편입). selector-runner/preview-gate=[Envelope Selector 3a·4b]
 export const OUR_HOOKS = [
   { event: "UserPromptSubmit", matcher: "", script: "contract-inject.js" },
   { event: "PreToolUse", matcher: "Bash", script: "codex-guard.js" },
   { event: "PreToolUse", matcher: "ExitPlanMode", script: "scout-gate.js" }, // ⑥ 지도 preflight — 3트랙 기본 켜짐(실효 scoutGate·2026-07-09 승격, 2트랙은 관측만)·fail-open·관측 로그
   { event: "PreToolUse", matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit|mcp__.*", script: "preview-gate.js" }, // [4b 이중 배달] 서고 활성 시 preview 영수증까지 변경 도구 지속 차단
   { event: "Stop", matcher: "", script: "verify-guard.js" },
+  { event: "SessionStart", matcher: "", script: "session-start.js" }, // [§4-B ① Claude 쪽] 압축·재개·시작=규약 전달 기록 리셋
 ];
 // "우리 훅" 스크립트 이름 — 식별 regex의 단일 출처(install.js OUR_SCRIPT_NAMES 대칭·갈리면 재설치 중복 등록).
-export const OUR_SCRIPT_NAMES = ["contract-inject.js", "codex-guard.js", "verify-guard.js", "scout-gate.js", "preview-gate.js"];
+export const OUR_SCRIPT_NAMES = ["contract-inject.js", "codex-guard.js", "verify-guard.js", "scout-gate.js", "preview-gate.js", "session-start.js"];
 
 const fwd = (s: string) => String(s).replace(/\\/g, "/");
 const q = (s: string) => '"' + s + '"';

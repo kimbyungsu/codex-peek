@@ -168,7 +168,7 @@ ok(/const profileSnap = jobFrozen \? jobFrozen\.profile : effectiveVerifyProfile
 // 2026-07-30: 계약 스냅샷 인자가 뒤에 붙었다(사전 검사와 조립이 같은 계약을 보게 하려고).
 // 동결 프로필을 넘긴다는 원 의도는 그대로이므로 그 부분만 고정하고, 스냅샷 동반도 함께 못박는다.
 ok(/withContract\(prompt \+ \(net \? netNote\(langSnap\) : ""\), ws, langSnap, attCarrier, profileSnap, contractSnap, askId\)/.test(src), "주입(withContract)이 동결 프로필 사용(+ 같은 계약 스냅샷·askId 동반 — 기억 권위 C-1 2026-08-14)");
-ok(src.split("formatForClaude(answer, langSnap, profileSnap, mfl.machine, rejudgeSnap)").length === 2 && (src.match(/finishVerifyRun\(/g) || []).length === 3, "footer=공유 꼬리 1곳이 동결 프로필+동결 규약 사용(세 분기 호출 경유 — 완료 시점 재읽기 없음·VerifierProvider 단일화)");
+ok(src.split("formatForClaude(answer, langSnap, profileSnap, mfl.machine, rejudgeTailFor(rejudgeSnap, langSnap))").length === 2 && (src.match(/finishVerifyRun\(/g) || []).length === 3, "footer=공유 꼬리 1곳이 동결 프로필+동결 규약 사용(세 분기 호출 경유 — 완료 시점 재읽기 없음·VerifierProvider 단일화)");
 const wk = fs.readFileSync(path.join(ROOT, "bridge", "ask-job-worker.js"), "utf8");
 ok(/Object\.assign\(\{\}, cur, extra\)/.test(wk), "worker patch=기존 필드 보존 병합(동결 필드 불변)");
 
@@ -264,7 +264,7 @@ console.log("[4b] 재판단 규약 동결 — 실행 반례(세대 혼합·legac
 
 console.log("[5] 주입자·P-6·UI 배선(소스 잠금)");
 ok(/buildVerifyDirective\(c\.codexVerifyMode, undefined, c\.codexVerifyProfile, verifyCampaignProgress/.test(fs.readFileSync(path.join(ROOT, "bridge", "codex-hook.js"), "utf8")), "C-C 주입 — 그 시점 실효 프로필+실제 회차 전달");
-ok(/buildVerifyDirective\(c\.verifyMode, undefined, c\.verifyProfile, verifyCampaignProgress/.test(fs.readFileSync(path.join(ROOT, "bridge", "contract-inject.js"), "utf8")), "CL-C 주입 — 동일");
+ok(/buildVerifyDirectiveSlim\(c\.verifyMode, undefined, c\.verifyProfile, progress9\)/.test(fs.readFileSync(path.join(ROOT, "bridge", "contract-inject.js"), "utf8")), "CL-C 주입 — 동일");
 ok(/writeDurableProofV2/.test(src) && !/verifyProfile/.test(String((CL.writeDurableProofV2 || "").toString())), "P-6 proof 서명에 프로필 미포함(영수증 바이트 불변 — 계약 ⓖ)");
 const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
 ok(/id="segProfile"/.test(ext) && /data-vp="integrity"/.test(ext) && /data-vp="core"/.test(ext), "UI — 프로필 세그먼트(무결성 기본/핵심)");

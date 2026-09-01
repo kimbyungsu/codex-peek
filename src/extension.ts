@@ -194,6 +194,7 @@ interface BridgeState {
   // P-12 v2.4: 보관함(범위 밖 제안+판단 대기 [주의]) 읽기 전용 가시화 — 처분은 CLI(backlog done|dismiss). null=무폴더/구 런타임.
   backlog: { caution: number; cautionDue: number; backlog: number; corrupt: number; readError: boolean; wsKey?: string; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } | null; // readError: 판독 실패(ENOENT 외) — '비어 있음' 위장 금지(2026-07-18 확인 판정 [보완] 소화)
   challenges: { open: number; cleared: number; kept: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number; cleared: boolean; matchedAll: boolean; warnOpen: boolean; eventId: string }>; ndEventIds: string[] } | null; // 재확인(증분 4b) — cleared=실제 ack 조건(전 파일 일치)·null=구 설치본/부재
+  movedRules: { count: number; items: Array<{ id: string; ko: string; en: string; hooks: string[] }> }; // [§4-B ③] 훅으로 옮긴 하네스 문장 장부(DIRECTIVE_MOVED)
   usedMemory: { ts: string; items: Array<{ path: string; note: string }>; couplings: number; omitted: boolean } | null; // [UI 개편 2차] 직전 검증에 실린 지도 동봉 스냅샷(브릿지 stats/attach.jsonl 최신 1건). null=기록 없음/구 브릿지
   baseAvailable: boolean;
   permissionMode: string;
@@ -2630,6 +2631,14 @@ function computeState(turnsN: number): BridgeState {
         const unacked = new Set<string>(readIntegrity().filter((e) => e && e.ack !== true && e.id).map((e) => String(e.id)));
         return computeChallengeView(ech.listChallenges(ws), Date.now(), unacked);
       } catch { return null; }
+    })(),
+    movedRules: (() => {
+      // [§4-B ③] 하네스 문장 중 훅이 막아 지시문에서 뺀 것 — 배포된 contract-lib의 장부 상수(코드 소유 데이터)를 그대로 보인다
+      try {
+        const CLm: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
+        const arr: any[] = Array.isArray(CLm.DIRECTIVE_MOVED) ? CLm.DIRECTIVE_MOVED : [];
+        return { count: arr.length, items: arr.map((it: any) => ({ id: String(it?.id || ""), ko: String(it?.ko || ""), en: String(it?.en || ""), hooks: Array.isArray(it?.hooks) ? it.hooks.map((h: any) => String(h)) : [] })) };
+      } catch { return { count: 0, items: [] }; }
     })(),
     usedMemory: (() => {
       // [UI 개편 2차] 브릿지 attach 장부(stats/attach.jsonl)의 이 폴더 최신 1건 — 개요 '이번 검증에 실린 기억'
@@ -5562,6 +5571,7 @@ class Dashboard {
   </div><!-- /tab-verify -->
   <div id="tab-setup" class="tab-panel">
   <h2 class="sec claude"><span id="implRulesTitle">${t("Claude 규칙", "Claude Rules")}</span> <span class="to claude" id="implRulesTo">${t("→ Claude에게", "→ to Claude")}</span> <span class="sub2" id="implRulesDesc">${t("Claude가 지킬 행동규칙 — 검증과 별개", "Behavior rules Claude must follow — separate from verification")}</span></h2>
+  <details id="movedRulesFold" class="backlog-fold" style="display:none"><summary class="sec" id="movedRulesSum"></summary><div class="card"><div class="hint">${t("이 문장들은 글로 시키지 않습니다 — 종료·판단 관문이 실제로 막고, 그 자리에서 알려줍니다.", "These sentences are no longer given as prose — the stop/judgment gates enforce them and say so on the spot.")}</div><div id="movedRulesList"></div></div></details>
   <div class="card">
     <div class="hint" id="slotNote" style="display:none;border-left:3px solid var(--vscode-charts-purple);padding-left:10px"></div>
     <div class="cblock claude">
@@ -6508,6 +6518,8 @@ class Dashboard {
         var badge9=dl9?(" · "+((dl9.indexOf("전문 전송")>=0||dl9.indexOf("full directives sent")>=0)?T("규약 전문 전송","directives resent"):T("규약 재전송 없음","directives not resent"))):"";
         ln9.textContent=(lab9[t9.verdict]||t9.verdict)+" — "+u9.replace(/\s+/g," ").slice(0,80)+badge9; rec9.appendChild(ln9); });
     }
+    var mrF=$("movedRulesFold"), mr9=d.movedRules; // [§4-B ③] 훅으로 옮긴 규칙 N개(보기)
+    if(mrF){ if(mr9&&mr9.count){ mrF.style.display=""; $("movedRulesSum").textContent=T("훅으로 옮긴 규칙 "+mr9.count+"개(보기)","rules moved to hooks: "+mr9.count+" (show)"); var ml9=$("movedRulesList"); ml9.replaceChildren(); mr9.items.forEach(function(it9){ var ln9=el("div","ovline"); ln9.textContent=T(it9.ko,it9.en)+" — "+it9.hooks.join(" · "); ml9.appendChild(ln9); }); } else mrF.style.display="none"; }
     var mem9=$("ovMemory"), um9=d.usedMemory;
     if(mem9){ mem9.replaceChildren();
       if(!um9) mem9.textContent=T("아직 기록 없음 — 다음 검증부터 쌓여요","no records yet — starts with the next verification");

@@ -19,7 +19,7 @@ ok(hs.isOurHookCmd("node contract-inject.js; echo x"), "복합 명령 매칭");
 
 console.log("[detectHooks] 파일 없음/깨짐/부분/완비");
 let st = hs.detectHooks(SET);
-ok(!st.installed && st.missing.length === 5 && st.unreadable === null, "파일 없음 → 미설치·5개 누락(scout-gate·preview-gate 포함 — 4b)");
+ok(!st.installed && st.missing.length === 6 && st.unreadable === null, "파일 없음 → 미설치·6개 누락(scout-gate·preview-gate·session-start 포함 — 4b·§4-B ①)");
 fs.writeFileSync(SET, "{broken", "utf8");
 st = hs.detectHooks(SET);
 ok(!st.installed && st.unreadable !== null, "JSON 깨짐 → unreadable 표시");
@@ -29,7 +29,7 @@ console.log("[installHooks] 새 파일 생성(백업 없음) + 3훅 등록");
 let r = hs.installHooks(SET, BR, "node");
 ok(r.ok && !r.backup, "파일 없던 경우 ok·백업 없음");
 let s = read();
-ok(Array.isArray(s.hooks.UserPromptSubmit) && Array.isArray(s.hooks.PreToolUse) && Array.isArray(s.hooks.Stop), "3개 이벤트 배열 생성");
+ok(Array.isArray(s.hooks.UserPromptSubmit) && Array.isArray(s.hooks.PreToolUse) && Array.isArray(s.hooks.Stop) && Array.isArray(s.hooks.SessionStart), "4개 이벤트 배열 생성(SessionStart 포함)");
 ok(s.hooks.PreToolUse[0].matcher === "Bash" && s.hooks.PreToolUse[0].hooks[0].command.indexOf("codex-guard.js") >= 0, "PreToolUse=Bash matcher+codex-guard");
 ok(hs.detectHooks(SET).installed, "설치 후 detectHooks=installed");
 
