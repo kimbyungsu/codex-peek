@@ -6384,3 +6384,168 @@ module.exports.writeReissue = writeReissue;
 module.exports.readReissue = readReissue;
 module.exports.clearReissue = clearReissue;
 module.exports.reissueSectionFor = reissueSectionFor;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [HARNESS-REALIGNMENT §7 4-2a · P7 앵커 이탈 3종 + §4-B Codex 구현자 쪽 규약 1회 전달 — 2026-09-01]
+// ─────────────────────────────────────────────────────────────────────────────
+// [P7 ⓐ] 진짜 훅 입력 판정 — stdin JSON에 이벤트 이름·세션 id가 모두 있을 때만 훅 스크립트가 앵커를 쓴다. 불러오기(require)만 됐거나
+// 빈/부분 입력(수동 실행·로드 시험)이면 아무것도 쓰지 않는다(2026-08-28 실사고: 로드 시험이 '이 대화의 폴더'를 셸 위치로 덮어 판정 4건이
+// 다른 프로젝트 공책으로 감 — ab-1). 환경변수의 세션 id는 판정 근거가 아니다(그 사고에서 살아 있던 바로 그 값).
+function isRealHookInput(hook) {
+  return !!(hook && typeof hook === "object" && typeof hook.hook_event_name === "string" && hook.hook_event_name.trim()
+    && typeof hook.session_id === "string" && hook.session_id.trim());
+}
+// [P7 ⓑ] 세션 도중 앵커의 폴더가 바뀐 기록 — 이전 앵커의 workspace와 이번 턴 폴더가 다르면 {from,to,ts}를 앵커에 남기고(해제 전까지 승계),
+// ask-start는 이 기록이 있으면 시작하지 않는다(--folder-changed-ok 로만 진행·그때 해제). 같은 세션에서 폴더가 바뀌는 정상 경로는 없으므로
+// 이 기록은 언제나 '확인이 필요한 이상 신호'다.
+function folderChangeOf(prevAnchor, ws) {
+  if (!prevAnchor || typeof prevAnchor !== "object") return null;
+  const from = typeof prevAnchor.workspace === "string" ? prevAnchor.workspace : "";
+  if (from && ws && normWs(from) !== normWs(ws)) return { from, to: String(ws), ts: new Date().toISOString() };
+  const fc = prevAnchor.folderChange;
+  return fc && typeof fc === "object" && typeof fc.from === "string" && fc.from && typeof fc.to === "string" ? { from: fc.from, to: fc.to, ts: String(fc.ts || "") } : null;
+}
+function folderChangeNotice(fc, lang) {
+  if (!fc) return "";
+  return lang === "en"
+    ? `[anchor] This conversation's folder changed during the session: ${fc.from} → ${fc.to}. Verification will not start until you confirm (ask-start --folder-changed-ok) — the change is recorded as an anomaly, not a normal path.`
+    : `[앵커] 이 대화의 폴더가 세션 도중 바뀌었습니다: ${fc.from} → ${fc.to}. 확인 전에는 검증이 시작되지 않습니다(ask-start --folder-changed-ok 로 진행) — 정상 경로가 아니라 이상 신호로 기록됩니다.`;
+}
+function folderChangeRefusal(fc, lang) {
+  return lang === "en"
+    ? `⚠️ This conversation's folder changed during the session (${fc.from} → ${fc.to}) — verification was NOT started. If the change is intended, rerun with --folder-changed-ok (the record is cleared then); otherwise send one more prompt from the intended folder's window first.`
+    : `⚠️ 이 대화의 폴더가 세션 도중 바뀌었습니다(${fc.from} → ${fc.to}) — 검증을 시작하지 않았습니다. 의도한 변경이면 --folder-changed-ok 를 붙여 다시 시작하세요(그때 기록이 해제됩니다). 아니면 원래 폴더 창에서 프롬프트를 한 번 보낸 뒤 시작하세요.`;
+}
+function claudeAnchorFileFor(sid) {
+  const safe = String(sid || "").replace(/[^a-zA-Z0-9_-]/g, "");
+  return safe ? path.join(ACTIVE_DIR, safe + ".json") : "";
+}
+// 이 세션 앵커의 folderChange(없음=null). 세션 id 부재·앵커 부재·판독 불가=null(ask-start의 다른 관문이 처리).
+function claudeAnchorFolderChange(sid) {
+  const s = String(sid || process.env.CLAUDE_CODE_SESSION_ID || "");
+  const f = claudeAnchorFileFor(s);
+  if (!f) return null;
+  try { const a = JSON.parse(fs.readFileSync(f, "utf8")); return a && a.claudeSession === s ? folderChangeOf(a, a.workspace) : null; } catch { return null; }
+}
+function clearClaudeFolderChange(sid) {
+  const s = String(sid || process.env.CLAUDE_CODE_SESSION_ID || "");
+  const f = claudeAnchorFileFor(s);
+  if (!f) return { ok: false, reason: "no-session" };
+  let a; try { a = JSON.parse(fs.readFileSync(f, "utf8")); } catch { return { ok: false, reason: "anchor-unreadable" }; }
+  if (!a || typeof a !== "object") return { ok: false, reason: "anchor-invalid" };
+  delete a.folderChange;
+  return atomicWrite(f, JSON.stringify(a)) ? { ok: true } : { ok: false, reason: "write-failed" };
+}
+// [P7 ⓒ] 프로필·상한 설정이 없는 폴더에서 검증이 시작되면 "기본값으로 돈다"를 요청 머리·판정 꼬리 양쪽에 1줄 고지(조용한 기본값 금지 —
+// 2026-08-28 실사고에서 기본값 계약(무결성=감사 프로필·상한 없음)이 기계 판독·왕복 줄 없이 돌았는데 아무 표시도 없었다). 판정은 정규화 전
+// 원본 파일(raw)로 — 정규화된 계약은 '부재'와 '명시 기본값'을 구분하지 못한다. 명시 상한 0(무제한 선택)은 설정 있음으로 본다.
+function contractDefaultsNotice(ws, lang, c) {
+  const l = LANGS.includes(lang) ? lang : loadLang(); const en = l === "en";
+  let raw = null;
+  for (const L of [l, ...LANGS.filter((x) => x !== l)]) { try { raw = JSON.parse(fs.readFileSync(contractFileFor(ws, L), "utf8")); if (raw && typeof raw === "object") break; raw = null; } catch { raw = null; } }
+  const cc = !!(c && c.harnessMode === "codex-codex");
+  const hasProfile = !!(raw && (VERIFY_PROFILES.includes(raw.verifyProfile) || (cc && VERIFY_PROFILES.includes(raw.codexVerifyProfile))));
+  const bud = raw ? ((cc && Number.isInteger(raw.codexVerifyBudget)) ? raw.codexVerifyBudget : raw.verifyBudget) : undefined;
+  const hasBudget = Number.isInteger(bud) && bud >= 0;
+  if (hasProfile && hasBudget) return "";
+  const miss = [], defs = [];
+  if (!hasProfile) { miss.push(en ? "verify profile" : "검증 프로필"); defs.push(en ? "integrity(audit) profile" : "무결성(감사) 프로필"); }
+  if (!hasBudget) { miss.push(en ? "round cap" : "왕복 상한"); defs.push(en ? "no cap" : "상한 없음"); }
+  // 폴더는 끝 2단만(절대 경로 전체는 머리 예산을 넘길 수 있음 — 확인 검증 1회차 blocker) · 식별은 충분(같은 이름의 형제 폴더는 부모 1단으로 구분)
+  const segs = String(ws || "").split(/[\\/]+/).filter(Boolean); let short = segs.length > 2 ? "…/" + segs.slice(-2).join("/") : segs.join("/");
+  if (short.length > 40) short = "…" + short.slice(-39); // 표시 40자 캡(끝 유지) — 고지 전체 ≤ 200자(ko/en) 보장
+  return en
+    ? `[defaults notice] folder ${short}: no ${miss.join("/")} setting — defaults apply (${defs.join(" · ")}). Set it in the dashboard's verify settings.`
+    : `[기본값 고지] 폴더 ${short}: ${miss.join("·")} 설정 없음 → 기본값(${defs.join("·")})으로 돕니다. 대시보드 검증 설정에서 정하세요.`;
+}
+// 상태 줄(HEAD_BUDGET.statusLine 400 안)과 고지를 합쳐도 같은 상한 안이게 — 넘치면 고지를 절단("…"). 상태 줄이 예산을 이미 다 쓰면 고지 생략(빈 문자열).
+function fitDefaultsNotice(statusLine, notice) {
+  const cap = HEAD_BUDGET.statusLine;
+  const s = String(statusLine || ""), n = String(notice || "");
+  if (!n) return "";
+  const room = cap - (s ? s.length + 2 : 0);
+  if (n.length <= room) return n;
+  return room >= 24 ? n.slice(0, room - 1) + "…" : "";
+}
+module.exports.fitDefaultsNotice = fitDefaultsNotice;
+module.exports.isRealHookInput = isRealHookInput;
+module.exports.folderChangeOf = folderChangeOf;
+module.exports.folderChangeNotice = folderChangeNotice;
+module.exports.folderChangeRefusal = folderChangeRefusal;
+module.exports.claudeAnchorFolderChange = claudeAnchorFolderChange;
+module.exports.clearClaudeFolderChange = clearClaudeFolderChange;
+module.exports.contractDefaultsNotice = contractDefaultsNotice;
+
+// [§4-B Codex 구현자 쪽 · 규약 1회 전달] Claude 쪽(claudeStaticParts 등)과 같은 성분·같은 지문 규칙 — 슬롯만 C-C(codexVerifyMode·codexVerifyProfile).
+// 전달 기록은 구현자 세션 앵커(codex-active/<codexSession>.json).directive에, 리셋은 같은 파일 또는 마커 파일에. 압축 감지는 추측이 아니라
+// 그 세션의 rollout 파일에 남는 "compacted" 레코드(검증자 쪽과 같은 판독기 rolloutCompactedAfter) — 마지막 전달 뒤 압축이면 다음 턴 전문.
+function codexStaticParts(ws, c, lang, extra) {
+  const l = LANGS.includes(lang) ? lang : loadLang();
+  const mode = String((c && c.codexVerifyMode) || ""), profile = normCodexVerifyProfile(c || {});
+  let envelopeAb = "";
+  try { const ep = implementerEnvelopeInjectParts(ws, c, l, "", ""); envelopeAb = ep && ep.ab ? ep.ab : ""; } catch { envelopeAb = ""; }
+  return { verifyStatic: buildVerifyDirectiveStatic(mode, l, profile), envelopeAb, provenance: String((extra && extra.provenance) || ""), rejudge: safeLoadRejudge(l, profile), mode, profile, lang: l };
+}
+// reason ∈ first|reset|gen-changed|compacted|rollout-unreadable|delivered (+호출자 강제 session-start)
+function codexDeliveryPlan(prev, reset, parts, rolloutFile) {
+  const plan = claudeDeliveryPlan(prev, reset, parts);
+  if (plan.mode !== "slim") return plan;
+  if (rolloutFile) {
+    const rc = rolloutCompactedAfter(rolloutFile, prev && prev.sentAt);
+    if (rc.st !== "ok") return { ...plan, mode: "full", reason: "rollout-unreadable" };
+    if (rc.compacted) return { ...plan, mode: "full", reason: "compacted", compactedAt: rc.ts };
+  }
+  return plan;
+}
+function codexDeliveryStatusLine(plan, lang, sentAt) {
+  const en = lang === "en"; const g = String(plan && plan.gen || "").slice(0, 8);
+  if (plan.mode === "slim") return en ? `[directive delivery · Codex implementer] gen ${g} · not resent — the standing directives were delivered in this session's turn at ${sentAt}; they still apply` : `[규약 전달 · Codex 구현자] 세대 ${g} · 재전송 없음 — 정적 지시는 이 세션 ${sentAt} 턴에 전달됐고 지금도 유효하다`;
+  const L = CLAUDE_STATIC_LABEL[en ? "en" : "ko"];
+  const why = plan.reason === "first" ? (en ? "first turn of this session (no delivery record)" : "이 세션 첫 턴(전달 기록 없음)")
+    : plan.reason === "session-start" ? (en ? "session start hook (new session or resume)" : "세션 시작 훅(새 세션·재개)")
+    : plan.reason === "reset" ? ((en ? "session " : "세션 ") + String(plan.source || "") + (en ? " (reset recorded by the session-start hook)" : "(세션 시작 훅이 기록한 리셋)"))
+    : plan.reason === "compacted" ? (en ? `session memory compacted after the last delivery (${plan.compactedAt || "?"})` : `마지막 전달 뒤 세션 기억 압축 감지(${plan.compactedAt || "?"})`)
+    : plan.reason === "rollout-unreadable" ? (en ? "session record unreadable (safe direction = full text)" : "세션 기록 판독 불가(안전 방향=전문)")
+    : plan.reason === "gen-changed" ? ((en ? "directives changed: " : "규약 변경: ") + (plan.changed || []).map((k) => L[k] || k).join("·"))
+    : String(plan.reason || "");
+  return en ? `[directive delivery · Codex implementer] gen ${g} · standing directives sent this turn (reason: ${why})` : `[규약 전달 · Codex 구현자] 세대 ${g} · 이번 턴 정적 지시 전문 전송(사유: ${why})`;
+}
+function codexDirectiveResetMarkerFor(safeSid) { return path.join(CODEX_ACTIVE_DIR, safeSid + ".directive-reset.json"); }
+function resetCodexDirectiveDelivery(sid, source) {
+  const safe = String(sid || "").replace(/[^a-zA-Z0-9_-]/g, "");
+  if (!safe) return { ok: true, via: "no-session" };
+  const file = codexActiveFileFor(sid);
+  let prev = null, readErr = null;
+  try { prev = JSON.parse(fs.readFileSync(file, "utf8")); }
+  catch (e) { if (e && e.code === "ENOENT") return { ok: true, via: "no-anchor" }; readErr = e; }
+  const reset = { source: String(source || "unknown"), ts: new Date().toISOString() };
+  if (!readErr && prev && typeof prev === "object") {
+    if (atomicWrite(file, JSON.stringify(Object.assign({}, prev, { directive: null, directiveReset: reset })))) return { ok: true, via: "anchor" };
+  }
+  if (atomicWrite(codexDirectiveResetMarkerFor(safe), JSON.stringify({ schema: "codex-directive-reset-v1", session: safe, ...reset }))) return { ok: true, via: "marker" };
+  return { ok: false, via: "none" };
+}
+function readCodexDirectiveReset(safeSid, anchorObj) {
+  if (anchorObj && anchorObj.directiveReset && typeof anchorObj.directiveReset === "object") return anchorObj.directiveReset;
+  try { const m = JSON.parse(fs.readFileSync(codexDirectiveResetMarkerFor(safeSid), "utf8")); if (m && m.schema === "codex-directive-reset-v1") return { source: String(m.source || "unknown"), ts: String(m.ts || ""), marker: true }; } catch { /* 없음 */ }
+  return null;
+}
+function clearCodexDirectiveResetMarker(safeSid) { try { fs.unlinkSync(codexDirectiveResetMarkerFor(safeSid)); } catch { /* 없음 */ } }
+// 전달 기록 — 훅 출력(stdout) 콜백 뒤에만 호출(출력이 실패하면 기록 없음=다음 턴 전문). 앵커의 다른 필드는 보존, directiveReset은 소비.
+function recordCodexDirective(sid, ws, record) {
+  if (!sid || !ws || !record || typeof record !== "object") return false;
+  const safe = String(sid).replace(/[^a-zA-Z0-9_-]/g, "");
+  const cur = readCodexActive(sid) || {};
+  const rest = Object.assign({}, cur); delete rest.schema; delete rest.codexSession; delete rest.workspace; delete rest.ts; delete rest.directiveReset;
+  const ok = writeCodexActive(sid, ws, Object.assign(rest, { directive: record }));
+  if (ok && safe) clearCodexDirectiveResetMarker(safe);
+  return ok;
+}
+module.exports.codexStaticParts = codexStaticParts;
+module.exports.codexDeliveryPlan = codexDeliveryPlan;
+module.exports.codexDeliveryStatusLine = codexDeliveryStatusLine;
+module.exports.codexDirectiveResetMarkerFor = codexDirectiveResetMarkerFor;
+module.exports.resetCodexDirectiveDelivery = resetCodexDirectiveDelivery;
+module.exports.readCodexDirectiveReset = readCodexDirectiveReset;
+module.exports.clearCodexDirectiveResetMarker = clearCodexDirectiveResetMarker;
+module.exports.recordCodexDirective = recordCodexDirective;

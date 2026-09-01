@@ -40,6 +40,7 @@ function clearState() {
   try { for (const f of fs.readdirSync(dir)) if (/^phase-[0-9a-f]+\.json$/.test(f)) fs.rmSync(path.join(dir, f), { force: true }); } catch { /* 없음 */ }
 }
 function runInject(payload) {
+  payload = Object.assign({ hook_event_name: "UserPromptSubmit" }, payload || {}); // [P7 ⓐ] 진짜 훅 입력 모양(이벤트 이름+세션 id)만 앵커·주입
   const r = cp.spawnSync(process.execPath, [INJECT], { encoding: "utf8", env, input: JSON.stringify(payload), timeout: 30000, windowsHide: true });
   let out = null; try { out = JSON.parse(r.stdout); } catch { out = null; }
   return { r, out };

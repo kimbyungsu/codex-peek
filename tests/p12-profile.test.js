@@ -263,7 +263,7 @@ console.log("[4b] 재판단 규약 동결 — 실행 반례(세대 혼합·legac
 }
 
 console.log("[5] 주입자·P-6·UI 배선(소스 잠금)");
-ok(/buildVerifyDirective\(c\.codexVerifyMode, undefined, c\.codexVerifyProfile, verifyCampaignProgress/.test(fs.readFileSync(path.join(ROOT, "bridge", "codex-hook.js"), "utf8")), "C-C 주입 — 그 시점 실효 프로필+실제 회차 전달");
+{ const hk9 = fs.readFileSync(path.join(ROOT, "bridge", "codex-hook.js"), "utf8"); ok(/const profile=normCodexVerifyProfile\(c\);/.test(hk9) && /buildVerifyDirectiveSlim\(c\.codexVerifyMode, lang, profile, verifyCampaignProgress\(ws,campaignId,effectiveVerifyBudget\(c\)\)\)/.test(hk9) && /claudeStaticBlock\(sp,lang\)/.test(hk9), "C-C 주입 — 그 시점 실효 프로필+실제 회차 전달(4-2a: 슬림 명령 줄 매 턴+정적 블록 세션 1회)"); }
 ok(/buildVerifyDirectiveSlim\(c\.verifyMode, undefined, c\.verifyProfile, progress9\)/.test(fs.readFileSync(path.join(ROOT, "bridge", "contract-inject.js"), "utf8")), "CL-C 주입 — 동일");
 ok(/writeDurableProofV2/.test(src) && !/verifyProfile/.test(String((CL.writeDurableProofV2 || "").toString())), "P-6 proof 서명에 프로필 미포함(영수증 바이트 불변 — 계약 ⓖ)");
 const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");

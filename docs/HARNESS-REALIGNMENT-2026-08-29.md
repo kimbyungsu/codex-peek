@@ -229,7 +229,15 @@ Claude 규칙 자체는 그대로 두되, 이 양식이 "지키는지 보는 경
 사유 한글/영문 라벨) · `codex-bridge.js` machineFindingsLayer가 손상 판독 뒤 기록·정상 판독 뒤 소거, v2DynamicData가 절을 동봉 ·
 (P7 앵커 이탈 3종) ⓐ 훅 스크립트는 진짜 훅 입력(stdin에 이벤트 이름·세션 id)이 있을 때만 앵커를 쓰고, 불러오기만 됐을 때는 아무것도 쓰지
 않는다 ⓑ 세션 도중 앵커의 폴더가 바뀌면 `ask-start`가 "이 대화의 폴더가 A에서 B로 바뀌었다"를 알리고 시작하지 않는다(명시 플래그로만
-진행) ⓒ 프로필·상한 설정이 없는 폴더에서 검증이 시작되면 "기본값(감사 프로필·상한 없음)으로 돈다"를 요청·판정 양쪽에 1줄 고지 ·
+진행) ⓒ 프로필·상한 설정이 없는 폴더에서 검증이 시작되면 "기본값(감사 프로필·상한 없음)으로 돈다"를 요청·판정 양쪽에 1줄 고지 — **구현됨
+2026-09-01(4-2a)**: ⓐ `contract-inject.js`·`session-start.js`는 `require.main` 아니면 즉시 반환(stdin도 안 읽음)+`isRealHookInput`(stdin에
+hook_event_name·session_id 둘 다)일 때만 진행(환경변수 세션 id 폴백 제거·부분 입력=주입도 없음) — 시험 `tests/anchor-guard.test.js`가 2026-08-28 실사고(로드
+시험+환경변수 세션 id)를 그대로 재현해 앵커 미기록 확인 ⓑ contract-inject가 이전 앵커 workspace와 다르면 `folderChange{from,to,ts}`를 앵커에 남기고(해제
+전까지 승계) 구현자에게 `[앵커]` 고지 1줄, `ask-start`(CL-C)는 기록이 있으면 두 폴더를 적고 종료코드 3으로 시작하지 않음 — `--folder-changed-ok`로만
+진행(그때 `clearClaudeFolderChange`·해제 실패=시작 안 함). C-C는 구현자 세션 앵커가 폴더를 정하므로 대상 아님 ⓒ `contractDefaultsNotice`가 정규화 전
+원본 계약 파일로 프로필·상한 부재를 판정(명시 상한 0=설정 있음·C-C는 codex 슬롯 우선)해 `[기본값 고지]` 1줄(폴더는 끝 2단만)을 요청 머리(상태 줄 다음의
+독립 줄 — 상태 줄 '세 곳 한 문자열' 불변식은 그대로·`fitDefaultsNotice`로 상태 줄+고지 ≤ HEAD_BUDGET.statusLine 400, 넘치면 고지만 절단/생략)와 판정 꼬리(독립 줄)에
+같은 문자열로 동봉 · 확인 검증 1회차 blocker 2건 반영(session-start.js도 같은 판별기·고지 길이 상한) ·
 (P10) 마감문의 "N/M" 문구는 캠페인 장부와 대조해 다르면 마감 미수락(산문이 장부를 덮어쓰지 못함) — **구현됨 2026-09-01**: 두 종료 훅이 handoffCtx에 장부
 roundCount/roundBudget을 실어 `validateCapHandoff`→`roundFigureMismatch`가 마감 머리부터 끝까지 "키워드(회차·round·상한·cap)가 숫자 바로 앞이거나 숫자 바로 뒤에
 회차/round" 꼴의 N/M만 대조(키워드~숫자 사이 조사·콜론·굵게 6자 이내 허용 — "회차는 3/5입니다"·"round is 3/5"도 회차 문구; 영문 키워드는 단어 경계 필수 —
@@ -425,10 +433,14 @@ succeeded인데 proof가 없어 `proof-missing`↔`먼저 ask-wait` 순환이 �
 3. **개선 4 + §4-B(글이 자라지 않는 구조)** — (a)~(e)에 더해 정적 지시 세션 1회 전달(전달 레코드·압축 감지·postflight)·규모 시험. 측정
    있는 작업이라 1·2와 독립, 먼저 해도 됨. **분할(2026-08-31)**: 3-1=검증자 쪽 §4-B ①②(세션 1회 전달·전달 레코드·압축 감지·postflight·표시 3곳)
    **구현됨** / 3-2a=개선 4 (a)(b)(c)+§4-B ④(파생 총량·참고 예산·판당 행 상한·선별 초과 전량 동봉) **구현됨 2026-08-31** / 3-2b=개선 4 (e)+§4-B ③
-   (하네스 문장→훅 장부·사용자 글 불변 시험)+Claude 쪽 ①(재판단 규약 꼬리·검증 지시 명령 줄만) **구현됨 2026-08-31** / 대시보드 서고 카드 초과 표기는
+   (하네스 문장→훅 장부·사용자 글 불변 시험)+Claude 쪽 ①(재판단 규약 꼬리·검증 지시 명령 줄만) **구현됨 2026-08-31** / **Codex 구현자 쪽 ① 구현됨 2026-09-01(4-2a)**:
+   같은 성분 7종·같은 지문, 기록=`codex-active/<세션>.json`.directive(출력 뒤), 전문 사유=첫 턴·세션 시작 훅·규약 변경·rollout 압축 감지·기록 판독 불가 /
+   대시보드 서고 카드 초과 표기는
    4번 소형으로.
 4. **개선 3(보고 양식 검사)** + P6·P7(앵커 이탈 3종)·P9·P10 소형. **분할(2026-09-01)**: 4-1=개선 3(보고 양식 경비원·Claude/Codex 구현자 양쪽·마감문 포함)+P6+P10
    **구현됨** / 4-2=P7 앵커 가드 3종+P9 경위 등재+대시보드 결정 장부 '지금 정할 것' 합류+서고 카드 초과 표기+**코덱스-코덱스 구현자 세션 1회 전달**(사용자
+   결정 2026-09-01) — **재분할**: 4-2a=브릿지 쪽(P7 ⓐⓑⓒ+C-C 구현자 1회 전달) **구현됨 2026-09-01** / 4-2b=문서·대시보드(P9 등재·결정 장부 합류·서고 카드) 다음.
+   (원문 계속:
    결정 2026-09-01: 3-2b의 Claude 쪽과 같은 방식을 구현 Codex에도) — 다음.
 5. (2차) 큐레이션 트랙 + 항상/관련(§5 C·D).
 
@@ -569,6 +581,12 @@ succeeded인데 proof가 없어 `proof-missing`↔`먼저 ask-wait` 순환이 �
   pending)·postflightDelivery(확정/미확정)·postflightHeld/applyPostflightHold(보류 강등+판단 관문)·finishVerifyRun(보류=proof·체크포인트 미기록+HOLD_EXIT_CODE 4 비0
   종결)·resume/new 분기 배선·finishVerifyRun 상태 줄·flagVerdict 행 `delivery` ·
   `src/extension.ts` 카드 제목 병기+개요 배지(같은 상태 줄) · `tests/directive-delivery.test.js` 10단언.
+- **§7 4-2a 구현(2026-09-01 · P7 ⓐⓑⓒ+§4-B Codex 구현자 쪽 규약 1회 전달)**: `contract-lib.js` isRealHookInput·folderChangeOf/folderChangeNotice/
+  folderChangeRefusal·claudeAnchorFolderChange/clearClaudeFolderChange·contractDefaultsNotice·codexStaticParts/codexDeliveryPlan(rollout `compacted` 판독=
+  검증자 쪽과 같은 rolloutCompactedAfter)/codexDeliveryStatusLine·resetCodexDirectiveDelivery/readCodexDirectiveReset/clearCodexDirectiveResetMarker·
+  recordCodexDirective · `contract-inject.js`/`session-start.js` require.main 가드+진짜 훅 입력만 · `codex-bridge.js` ask-start 폴더 변경 거부(`--folder-changed-ok`)·
+  기본값 고지 머리/꼬리 · `codex-hook.js` implementerContext(정적 블록=세션 1회·슬림+상태 줄 매 턴·안내 예산 1,500·`contextThen` 출력 뒤 기록)·SessionStart=전문+
+  기록·heartbeat가 기록 보존·수칙 인지 ab는 정적 블록 소속(매 턴 dyn만) · 시험 `tests/anchor-guard.test.js` 6·`tests/codex-directive-delivery.test.js` 5.
 - **§7 4-1 구현(2026-09-01 · 개선 3+P6+P10)**: `verify-cap-handoff.js` REPORT_SECTIONS·reportShapeCheck·reportShapeInstruction·lastAssistantText·lastCodexAssistantText·
   roundFigureMismatch(머리 포함·인접 키워드) 회차 대조·capHandoffInstruction 회차/세 칸 안내 · `verify-guard.js`/`codex-hook.js` reportOk 종료 조건(검증 모드 off 포함)·
   마감 수락 조건(마지막 답)·차단 사다리·epoch ·

@@ -21,7 +21,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { undisposedOpenFindingsFromRows } = require("./contract-lib.js");
-const { HEAD_BUDGET, headBudgetTotal, applyReferenceBudgets, deliveryPlanFor, deliveryStatusLine, writeDirectiveDelivery, readDirectiveDelivery, rolloutCompactedAfter, readDecisions, openDecision, resolveDecision, decisionMetrics, renderDecisionBlock, loadDecisionTemplate, saveDecisionTemplate, DECISION_TEMPLATE_DEFAULTS, DECISION_DELEGATE_KEY, DECISION_KINDS, DECISION_NO_DEFAULT_MIN, JUDGE_CHOICES, readJudgeRequired, addJudgeRequired, resolveJudgeRequired, askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, contractReadState, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, repoKeyOf, constraintRepoKeyFor, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled, constraintTurnContext, constraintAdd, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, constraintHarvestFromAnswer, buildAbManifest, boundaryGenOf, readVerifyEnvelopeArchive, SELECTOR_PAGE_ITEMS, selectorDeadlineMsFor, selectorScopeMaterial, SELECTOR_UNION_MAX, SELECTOR_UNION_BYTES_MAX, readSelectorUsage } = require("./contract-lib.js");
+const { claudeAnchorFolderChange, folderChangeRefusal, clearClaudeFolderChange, contractDefaultsNotice, fitDefaultsNotice, HEAD_BUDGET, headBudgetTotal, applyReferenceBudgets, deliveryPlanFor, deliveryStatusLine, writeDirectiveDelivery, readDirectiveDelivery, rolloutCompactedAfter, readDecisions, openDecision, resolveDecision, decisionMetrics, renderDecisionBlock, loadDecisionTemplate, saveDecisionTemplate, DECISION_TEMPLATE_DEFAULTS, DECISION_DELEGATE_KEY, DECISION_KINDS, DECISION_NO_DEFAULT_MIN, JUDGE_CHOICES, readJudgeRequired, addJudgeRequired, resolveJudgeRequired, askShapeCheck, askShapeNotice, appendAskShape, appendAttachUsage, verifierBaselineFor, VERIFIER_PROVIDERS, normVerifierProvider, patchContractFields, loadContract, contractReadState, buildInjection, buildScoutAttach, loadBaseDirective, atomicWrite, readPhase, writePhase, appendIntegrityEvent, supersedeIntegrity, maybeCleanupState, extractVerdict, formatForClaude, safeLoadRejudge, REJUDGE_SNAP_MAX, parseFindingsBlock, judgeMachineVerdict, safeBacklogAutoTitle, safeBacklogAutoFile, machineReasonText, backlogAdd, configWs, appendVerdict, loadLang, appendLedgerEvent, readLedgerEventsText, ledgerPathsFromText, resolveScoutRepo, envelopeInjectionFor, envelopeCoreQualifier, envelopeIntegrityQualifier, readVerifyEnvelope, readEnvelopeProposal, writeEnvelopeProposal, discardEnvelopeProposal, envelopeTransState, recoverEnvelopeTransition, acquireEnvelopeTransLock, releaseEnvelopeTransLock, envelopeTransWalFileFor, envelopeCandidateId, repoKeyOf, constraintRepoKeyFor, readEnvelopeCandidates, appendEnvelopeCandidates, reconcileMemoryCandidates, draftEnvelopeCandidate, ENVELOPE_CANDIDATE_STATUSES, freezeEnvelopeForAsk, writeEnvelopeFreeze, readFrozenEnvelope, readFrozenEnvelopeRec, judgeAdmission, deriveRoundType, openFindingsFor, newFindingId, appendFindingsLedger, readFindingsLedger, FINDING_DISPOSITIONS, FIX_GAP_NOTICE_AT, dispositionsFor, undisposedOpenFindings, fixGapCount, findingActivityRound, dispositionValid, readFindingsLedgerState, campaignFileFor, normBacklogTitle, appendScoutTargetEvidence, askInflightGuard, askInflightFileFor, claimAskInflight, reclaimAskInflight, overwriteAskInflight, clearAskInflight, readAskActive, askActiveGuard, claimAskActive, updateAskActive, clearAskActive, askActiveFileFor, acquireSessionLease, releaseSessionLease, readSessionLease, clearSessionLease, ackIntegrityEvents, readIntegrityEvents, verifyTimeoutMin, readCodexActive, withRoleLock, freezeImplementerContext, effectiveVerifyProfile, VERIFY_PROFILES, claudeCampaignAnchor, reserveVerifyCampaign, writeDurableProofV2, writeRecoveryReceipt, durableJobSnapshotOk, askJobIdOk, recoveryReceiptFileFor, receiptSettled, constraintTurnContext, constraintAdd, CONSTRAINT_QUOTE_MIN, CONSTRAINT_QUOTE_MAX, CONSTRAINT_WHY_MAX, CONSTRAINT_TURN_CAP, ENVELOPE_DRAFTABLE_KINDS, envelopeMarkGuard, constraintHarvestFromAnswer, buildAbManifest, boundaryGenOf, readVerifyEnvelopeArchive, SELECTOR_PAGE_ITEMS, selectorDeadlineMsFor, selectorScopeMaterial, SELECTOR_UNION_MAX, SELECTOR_UNION_BYTES_MAX, readSelectorUsage } = require("./contract-lib.js");
 
 // 사용자 요청 앞에 [검증 기본 원칙](기본 지침, 오버라이드 가능) + Codex 고정 계약을 prepend(매 ask마다).
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
@@ -141,6 +141,10 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap, askId9p)
     statusLine = deliveryStatusLine(dlvPlan, lang || loadLang());
     carrier.deliveryOut = { mode: dlvPlan.mode, reason: dlvPlan.reason, gen: dlvPlan.gen, parts: dlvPlan.parts, changed: dlvPlan.changed || [], compactedAt: dlvPlan.compactedAt || null, prevSentAt: dlvPlan.prev ? dlvPlan.prev.sentAt : null, statusLine };
   }
+  // [P7 ⓒ 2026-09-01] 프로필·상한 설정이 없는 폴더=기본값으로 도는 검증 — 요청 머리(상태 줄 자리)·판정 꼬리 양쪽에 같은 1줄 고지(조용한 기본값 금지).
+  // 상태 줄은 '머리 첫 줄=판정 꼬리=기록' 한 문자열 불변식이 있어 고지를 그 안에 붙이지 않는다 — 머리에서는 상태 줄 다음의 독립 줄, 꼬리에서는 독립 줄.
+  const defaultsNotice = fitDefaultsNotice(statusLine, contractDefaultsNotice(ws || configWs(), lang || loadLang(), c)); // 상태 줄+고지 ≤ HEAD_BUDGET.statusLine(확인 검증 1회차 blocker)
+  if (defaultsNotice && carrier && typeof carrier === "object") carrier.defaultsNotice = defaultsNotice;
   // [개선 4 (c)] 참고 자료(경위·지도·결합·정찰)에만 조각별 예산 — 권위 자료는 절단 없음. 선별 초과분(바이트)은 참고 예산에서 순서대로 차감.
   if (carrier && typeof carrier === "object" && carrier.attachParts) {
     const parts9 = carrier.attachParts; const legacy9 = parts9._legacy === true;
@@ -151,8 +155,8 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap, askId9p)
   const slim9 = !!(dlvPlan && dlvPlan.mode === "slim");
   // slim=상태 줄+데이터(경계 데이터·서고 선별·열린 지적·되받아침·지도)만 / full=상태 줄+전문(종전 머리 그대로)
   const head = slim9
-    ? [statusLine, envData, v2Data, scout].filter(Boolean).join("\n\n")
-    : [statusLine, baseline, baseQual, envText, inj, scout].filter(Boolean).join("\n\n");
+    ? [statusLine, defaultsNotice, envData, v2Data, scout].filter(Boolean).join("\n\n")
+    : [statusLine, defaultsNotice, baseline, baseQual, envText, inj, scout].filter(Boolean).join("\n\n"); // [P7 ⓒ] 기본값 고지=상태 줄 다음 독립 줄
   // 총량은 막지 않고 '보이게' 한다 — 통째로 잘라내면 승인 정책 같은 계약이 사라질 수 있다.
   // 어느 조각이 부풀었는지 알려야 사람이 그 자리를 줄일 수 있다.
   // [개선 4 (c)] 총량 측정=열린 지적 데이터(v2Data) 제외 — 열린 지적은 예산 밖·캠페인 유계(회차 ≤5 × 판당 행 상한). 파생 상한 초과=코드 결함 신호(경보 1건·차단 없음).
@@ -2315,7 +2319,7 @@ function die(msg, code = 1) {
   process.exit(code);
 }
 
-const ASK_FLAGS = new Set(["--allow-new", "--force-new", "--net", "--force-resend"]);
+const ASK_FLAGS = new Set(["--allow-new", "--force-new", "--net", "--force-resend", "--folder-changed-ok"]); // --folder-changed-ok=[P7 ⓑ] 폴더 변경 기록 확인 후 진행
 function askRequest(rest) {
   const flags = (rest || []).filter((x) => ASK_FLAGS.has(x));
   let prompt = (rest || []).filter((x) => !ASK_FLAGS.has(x) && x !== "--job-prompt").join(" ").trim();
@@ -2532,6 +2536,19 @@ function cmdAskStart(rest) {
   warnAskShape(req.prompt, "ask-start"); // 주입 구조화 3단계 — 요청문 뼈대 검사(경고 단계·관측 기록, 기준=코드 소유 구조 데이터)
   requireLinksWritable(); // P-1: 손상 links 상태에서 worker를 만들면 연결·기록이 반복 실패 — 시작 전 중단
   const ws = configWs();
+  { // [P7 ⓑ 2026-09-01] 이 대화의 폴더가 세션 도중 바뀐 기록(앵커 folderChange)이 있으면 시작하지 않는다 — 명시 플래그로만 진행(그때 기록 해제).
+    // C-C는 구현자 세션 앵커가 폴더를 정하므로(cwd 변화 무관) 대상 아님. 앵커·세션 부재=다른 관문이 처리.
+    const lang0 = loadLang();
+    if (loadContract(ws, lang0).harnessMode !== "codex-codex") {
+      const fc0 = claudeAnchorFolderChange();
+      if (fc0) {
+        if (!rest.includes("--folder-changed-ok")) die(folderChangeRefusal(fc0, lang0), 3);
+        const cl0 = clearClaudeFolderChange();
+        if (!cl0.ok) die(tB(`⚠️ 폴더 변경 기록을 해제하지 못했습니다(${cl0.reason}) — 검증을 시작하지 않았습니다.`, `⚠️ Could not clear the folder-change record (${cl0.reason}) — verification was not started.`), 3);
+        process.stderr.write(tB(`[앵커] 폴더 변경(${fc0.from} → ${fc0.to})을 확인하고 진행합니다 — 기록 해제.\n`, `[anchor] folder change (${fc0.from} → ${fc0.to}) acknowledged — record cleared.\n`));
+      }
+    }
+  }
   { // §7 승인 전이 상호배제: 도장 전이(원본↔계약 두 저장소 교체)의 순간 불일치 창에 '경계 없는 검증'이
     // 시작되는 것 차단 — 산 잠금=짧은 재시도(전이는 수 초 규모) 후 정직 오류·WAL 잔존=복구 안내(위장 금지).
     let st9 = envelopeTransState(ws);
@@ -4145,7 +4162,8 @@ async function cmdAsk(rest) {
     const outText = `${headText}\n\n${formatForClaude(answer, langSnap, profileSnap, mfl.machine, rejudgeTailFor(rejudgeSnap, langSnap))}\n` // [§4-B ① Claude 쪽] 규약이 이 세션에 이미 전달됐으면 꼬리는 지문 포인터 1줄
       + mfl.notice
       + memReceiptLine(answer, attCarrier, langSnap) // [기억 권위 C-3] 동봉 경계 처리 영수증(표시 전용 — 기록은 C-2 verdicts 행)
-      + (attCarrier && attCarrier.deliveryOut && attCarrier.deliveryOut.statusLine ? "\n" + attCarrier.deliveryOut.statusLine : "") // [§4-B ②] 규약 전달 상태 줄(머리 첫 줄과 같은 문자열)
+      + (attCarrier && attCarrier.deliveryOut && attCarrier.deliveryOut.statusLine ? "\n" + attCarrier.deliveryOut.statusLine : "")
+      + (attCarrier && attCarrier.defaultsNotice ? "\n" + attCarrier.defaultsNotice : "") // [P7 ⓒ] 기본값 고지 — 머리와 같은 문자열의 독립 줄
       + (attCarrier && attCarrier.selOver && (attCarrier.selOver.items || attCarrier.selOver.bytes) ? "\n" + (langSnap === "en" ? `[archive rules] related items ${attCarrier.selOver.count} · ${attCarrier.selOver.bytesTotal} bytes — above the normal range, ALL included · consider tidying the archive` : `[서고 수칙] 관련 수칙 ${attCarrier.selOver.count}항 · ${attCarrier.selOver.bytesTotal}바이트 — 정상 범위 초과, 전량 동봉 · 서고 정리 권장`) : "") // [§4-B ④] 정보 행(경보 아님)
       + envelopeWarnLine(ws, langSnap)
       + budgetNoticeLines(budgetGate.res, langSnap, profileSnap)

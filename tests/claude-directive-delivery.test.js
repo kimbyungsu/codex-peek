@@ -30,7 +30,7 @@ const RULES = ["기술용어를 제외하고 상황예시로 정리하라", "모
 CL.updateContractPatch(ws, "ko", { envelopeHash: sha, scoutRepo: repo, claude: RULES, claudeInjectMode: "always", verifyMode: "always", verifyProfile: "core", verifyBudget: 5 }, { tries: 3 });
 const SID = "cdlv-session-0001";
 const runInject = (prompt, sid) => {
-  const r = cp.spawnSync(process.execPath, [INJECT], { input: JSON.stringify({ session_id: sid || SID, cwd: ws, prompt, permission_mode: "default" }), encoding: "utf8", env: Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME, CLAUDE_PROJECT_DIR: ws, CLAUDE_CODE_SESSION_ID: sid || SID }), cwd: ws });
+  const r = cp.spawnSync(process.execPath, [INJECT], { input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: sid || SID, cwd: ws, prompt, permission_mode: "default" }), encoding: "utf8", env: Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME, CLAUDE_PROJECT_DIR: ws, CLAUDE_CODE_SESSION_ID: sid || SID }), cwd: ws });
   assert.strictEqual(r.status, 0, r.stderr);
   const o = r.stdout.trim() ? JSON.parse(r.stdout) : null;
   return o && o.hookSpecificOutput ? String(o.hookSpecificOutput.additionalContext || "") : "";
@@ -153,7 +153,7 @@ t("세대 변경 — 사용자가 기본 지침(전달 원칙)을 고치면 다�
 });
 
 t("세션 시작 훅(compact/resume) — 앵커 기록 리셋 → 다음 턴 전문(사유: 세션 compact) · 앵커 없는 세션은 무동작", () => {
-  const r = cp.spawnSync(process.execPath, [SSTART], { input: JSON.stringify({ session_id: SID, source: "compact", cwd: ws }), encoding: "utf8", env: Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME }) });
+  const r = cp.spawnSync(process.execPath, [SSTART], { input: JSON.stringify({ hook_event_name: "SessionStart", session_id: SID, source: "compact", cwd: ws }), encoding: "utf8", env: Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME }) });
   assert.strictEqual(r.status, 0, r.stderr);
   const a = anchor();
   assert.strictEqual(a.directive, null); assert.strictEqual(a.directiveReset.source, "compact"); assert.strictEqual(a.workspace, ws, "anchor workspace preserved");
@@ -161,7 +161,7 @@ t("세션 시작 훅(compact/resume) — 앵커 기록 리셋 → 다음 턴 전
   assert.ok(out.includes("전문 전송(사유: 세션 compact(세션 시작 훅이 감지한 압축/재개/시작))") && out.includes("[원격 확인]") && out.includes("[재판단 규약 — 이 세션에 1회 전달"), out.split(NL).find((l) => l.startsWith("[규약 전달")));
   assert.ok(!anchor().directiveReset, "reset flag consumed");
   assert.ok(runInject("그 다음 질문").includes("재전송 없음"));
-  const r2 = cp.spawnSync(process.execPath, [SSTART], { input: JSON.stringify({ session_id: "no-anchor-session", source: "startup" }), encoding: "utf8", env: Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME }) });
+  const r2 = cp.spawnSync(process.execPath, [SSTART], { input: JSON.stringify({ hook_event_name: "SessionStart", session_id: "no-anchor-session", source: "startup" }), encoding: "utf8", env: Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME }) });
   assert.strictEqual(r2.status, 0); assert.ok(!fs.existsSync(path.join(CL.ACTIVE_DIR, "no-anchor-session.json")), "no anchor → nothing written");
   // [확인 검증 1회차 blocker③] 앵커 쓰기 실패=마커 폴백(다음 턴 전문)·둘 다 실패=ok:false(훅 비0 종료)
   runInject("마커 시험 전 정상 턴"); // 기록 있음(slim 상태)
@@ -206,7 +206,7 @@ t("판정 꼬리 — 이 세션에 전달된 재판단 규약과 같은 지문�
   process.env.CLAUDE_CODE_SESSION_ID = "cdlv-session-9999";
   assert.strictEqual(CB.rejudgeTailFor(rj, "ko"), rj, "no anchor for this session → full");
   process.env.CLAUDE_CODE_SESSION_ID = SID;
-  cp.spawnSync(process.execPath, [SSTART], { input: JSON.stringify({ session_id: SID, source: "compact" }), encoding: "utf8", env: Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME }) });
+  cp.spawnSync(process.execPath, [SSTART], { input: JSON.stringify({ hook_event_name: "SessionStart", session_id: SID, source: "compact" }), encoding: "utf8", env: Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME }) });
   assert.strictEqual(CB.rejudgeTailFor(rj, "ko"), rj, "after a compaction reset → full until the next turn re-delivers");
   delete process.env.CLAUDE_CODE_SESSION_ID;
 });
@@ -216,7 +216,7 @@ t("전달 기록은 '출력이 실제로 전달된 뒤'에만 — stdout 파이�
   const sidP = "cdlv-session-pipe";
   const child = cp.spawn(process.execPath, [INJECT], { env: Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME, CLAUDE_PROJECT_DIR: ws, CLAUDE_CODE_SESSION_ID: sidP }), cwd: ws, stdio: ["pipe", "pipe", "pipe"] });
   child.stdout.destroy(); // 읽기 끝 즉시 폐기(EPIPE/EOF 유도)
-  child.stdin.end(JSON.stringify({ session_id: sidP, cwd: ws, prompt: "파이프 시험", permission_mode: "default" }));
+  child.stdin.end(JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: sidP, cwd: ws, prompt: "파이프 시험", permission_mode: "default" }));
   const done = cp.spawnSync(process.execPath, ["-e", "setTimeout(()=>{}, 1500)"]); void done; // 자식 종료 대기(단순 지연)
   const a = fs.existsSync(path.join(CL.ACTIVE_DIR, sidP + ".json")) ? JSON.parse(fs.readFileSync(path.join(CL.ACTIVE_DIR, sidP + ".json"), "utf8")) : null;
   assert.ok(!a || !a.directive, "no delivery record when the output could not be delivered: " + JSON.stringify(a && a.directive));

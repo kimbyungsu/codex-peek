@@ -207,7 +207,7 @@ const runGate = (payload, env) => cp.spawnSync(process.execPath, [GATE], { encod
   assert.strictEqual(CH.pretoolObserveMarker("sessPair01", { turn_id: "tA", tool_use_id: "call-A" }), true, "같은 호출·같은 턴=실측 인정");
   assert.strictEqual(CH.pretoolObserveMarker("sessPair01", { turn_id: "tA", tool_use_id: "call-A" }), false, "★소비 후 재사용 불가(사전 1회=사후 1회 — id 미제공 플랫폼도 호출 짝 강제)");
   assert.ok(src.includes("Codex 구현 작업을 중단합니다") && /if \(typeof c\.archiveHash === "string" && c\.archiveHash\) \{\s*\n\s*let dis9/.test(src), "★미호출=중단(Stop 차단·ask-start 후퇴 금지)+실측 회복 시 자동 재개");
-  assert.ok(src.includes("implementerEnvelopeInject(ws, c, loadLang()"), "Codex 턴 시작 주입=Claude와 같은 함수(양 훅 공통)");
+  assert.ok(src.includes("implementerEnvelopeInjectParts(ws, c, loadLang()"), "Codex 턴 시작 주입=Claude와 같은 함수(양 훅 공통 — 4-2a: 정적/동적 분리형 Parts)");
   t("Codex 경로: 표식/불신 왕복 실행·등록 5종·공용 판정기·미호출=중단·주입 공용(이중 배달 완성)");
 }
 console.log(`envelope-preview: ${n} groups passed`);

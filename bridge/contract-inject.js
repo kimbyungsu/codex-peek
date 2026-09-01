@@ -6,8 +6,10 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, loadLang, buildInjection, buildVerifyDirective, buildVerifyDirectiveSlim, claudeStaticParts, claudeDeliveryPlan, claudeStaticBlock, claudeDeliveryStatusLine, implementerEnvelopeInjectParts, readClaudeDirectiveReset, clearClaudeDirectiveResetMarker, applyClaudeTurnBudget, harnessModeSwitchNotice, buildScoutDirective, verifyCampaignProgress, atomicWrite, BRIDGE_DIR, ACTIVE_DIR, writePhase, patchContractFields, contractReadState, activeAskJobFor, phaseBusy, contractLockIssue, turnAnchorOf, writeConstraintTurnSnapshot, constraintRepoKeyFor } = require("./contract-lib.js");
+const { isRealHookInput, folderChangeOf, folderChangeNotice, loadContract, loadLang, buildInjection, buildVerifyDirective, buildVerifyDirectiveSlim, claudeStaticParts, claudeDeliveryPlan, claudeStaticBlock, claudeDeliveryStatusLine, implementerEnvelopeInjectParts, readClaudeDirectiveReset, clearClaudeDirectiveResetMarker, applyClaudeTurnBudget, harnessModeSwitchNotice, buildScoutDirective, verifyCampaignProgress, atomicWrite, BRIDGE_DIR, ACTIVE_DIR, writePhase, patchContractFields, contractReadState, activeAskJobFor, phaseBusy, contractLockIssue, turnAnchorOf, writeConstraintTurnSnapshot, constraintRepoKeyFor } = require("./contract-lib.js");
 
+// [P7 ⓐ 2026-09-01] 불러오기(require)만 됐을 때는 아무것도 하지 않는다 — stdin도 읽지 않고 앵커도 쓰지 않는다(2026-08-28 로드 시험이 앵커를 덮은 실사고).
+if (require.main !== module) return;
 let input = "";
 process.stdin.on("data", (d) => (input += d));
 process.stdin.on("end", () => {
@@ -17,6 +19,9 @@ process.stdin.on("end", () => {
   } catch {
     /* ignore */
   }
+  // [P7 ⓐ] 진짜 훅 입력(stdin에 이벤트 이름·세션 id)일 때만 진행 — 빈/부분 입력(수동 실행·로드 시험)은 무동작 종료(앵커 없이 주입만 하면 이후 ask-start가
+  // 엉뚱 폴더를 읽으므로 주입도 하지 않는다). 환경변수의 세션 id는 판정 근거가 아니다.
+  if (!isRealHookInput(hook)) process.exit(0);
   // 이 턴의 작업 폴더 — active.json 기록과 계약 로드에 '동일하게' 적용해 둘의 키가 어긋나지 않게 한다.
   const ws = process.env.CLAUDE_PROJECT_DIR || hook.cwd || process.cwd();
 
@@ -40,18 +45,21 @@ process.stdin.on("end", () => {
     }
   } catch { /* best-effort */ }
   // [§4-B ① Claude 쪽] 이 세션 앵커의 규약 전달 기록(directive)·세션 시작 훅 리셋(directiveReset)을 덮어쓰기 전에 읽어 보존한다
-  let prevDirective = null, prevReset = null;
+  let prevDirective = null, prevReset = null, prevAnchor0 = null;
   const safeSid = String(sid).replace(/[^a-zA-Z0-9_-]/g, "");
   try {
     if (safeSid) {
       let prev0 = null; try { prev0 = JSON.parse(fs.readFileSync(path.join(ACTIVE_DIR, safeSid + ".json"), "utf8")); } catch { prev0 = null; }
-      if (prev0 && typeof prev0 === "object") prevDirective = prev0.directive && typeof prev0.directive === "object" ? prev0.directive : null;
+      if (prev0 && typeof prev0 === "object") { prevAnchor0 = prev0; prevDirective = prev0.directive && typeof prev0.directive === "object" ? prev0.directive : null; }
       prevReset = readClaudeDirectiveReset(safeSid, prev0); // 앵커의 리셋 표시 또는 폴백 마커(세션 시작 훅이 앵커를 못 썼을 때)
     }
   } catch { prevDirective = null; prevReset = null; }
+  // [P7 ⓑ] 이전 앵커의 폴더와 다르면 변경 기록(해제 전까지 승계) — ask-start가 이 기록을 보면 시작하지 않는다(--folder-changed-ok 로만).
+  const folderChange = folderChangeOf(prevAnchor0, ws);
   const anchorBase = {
     workspace: ws,
     claudeSession: sid,
+    ...(folderChange ? { folderChange } : {}),
     // §5.3: 플랜 모드 감지·라이브표시용. Claude Code UserPromptSubmit 입력의 permission_mode
     // ("plan"이면 플랜 모드). 문서 예시는 "default"라 실제 값은 실로그로 확인(빈값=미노출).
     permissionMode: (hook && typeof hook.permission_mode === "string") ? hook.permission_mode : "",
@@ -147,7 +155,8 @@ process.stdin.on("end", () => {
 
   let parts = [];
   let dlvPlan = null; // 전달 계획(try 밖에서도 finalize가 읽는다)
-  const advisories = []; // [§4-B ④] 안내(지도 상태·부트스트랩) — 검증 모드면 매 턴 예산 안에서 순서대로(참고 자료 절단), 아니면 종전대로
+  const advisories = []; // [§4-B ④] 안내(지도 상태·부트스트랩)
+  if (folderChange) advisories.push(folderChangeNotice(folderChange, lang)); // [P7 ⓑ] 구현자에게도 같은 사실을 1줄로(검증 시작 시 거부되는 이유를 미리) — 검증 모드면 매 턴 예산 안에서 순서대로(참고 자료 절단), 아니면 종전대로
   if (switchNotice) parts.push(switchNotice); // 자동 전환 고지는 항상 최상단(다른 주입이 없어도 단독 출력)
   try {
     const c = contract || loadContract(ws, lang);

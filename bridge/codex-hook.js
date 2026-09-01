@@ -16,6 +16,7 @@ const {
   patchContractFields, activeAskJobFor, phaseBusy, contractLockIssue, withRoleLock, implementerRecordOf, validLinksShape, scoutArmView,
   verifyCampaignProgress, effectiveVerifyBudget, writeConstraintTurnSnapshot,
   wsKeyFor, previewGateDecision, implementerEnvelopeInject, constraintRepoKeyFor, readResidual, addResidual, removeResidualItems, residualPending, judgeRequiredPending,
+  implementerEnvelopeInjectParts, codexStaticParts, codexDeliveryPlan, codexDeliveryStatusLine, readCodexDirectiveReset, recordCodexDirective, applyClaudeTurnBudget, buildVerifyDirectiveSlim, claudeStaticBlock, normCodexVerifyProfile,
 } = require("./contract-lib.js");
 const { validateCapHandoff, capHandoffInstruction, capHandoffContext, codexAssistantText, reportShapeCheck, reportShapeInstruction, lastCodexAssistantText } = require("./verify-cap-handoff.js");
 
@@ -48,6 +49,11 @@ function save(file, obj) { return atomicWrite(file, JSON.stringify(obj)); }
 function t(ko, en) { return loadLang() === "en" ? en : ko; }
 function jsonOut(obj) { process.stdout.write(JSON.stringify(obj)); }
 function context(eventName, text) { if (text) jsonOut({ hookSpecificOutput: { hookEventName: eventName, additionalContext: text } }); }
+// [§4-B Codex 구현자 쪽] 출력이 실제로 나간 뒤(stdout 콜백)에만 after(전달 기록) — 출력 실패=기록 없음=다음 턴 전문(Claude 훅 finalize와 같은 순서).
+function contextThen(eventName, text, after) {
+  if (!text) return;
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, additionalContext: text } }), (err) => { if (!err && typeof after === "function") { try { after(); } catch { /* 기록 실패=다음 턴 전문 */ } } });
+}
 function block(reason) { jsonOut({ decision: "block", reason }); }
 
 function readFirstJsonLine(file, maxBytes = 1024 * 1024) {
@@ -116,25 +122,46 @@ function heartbeat(j, ws, sid, eventName, extraFields) {
     permissionMode:j.permission_mode || prev.permissionMode || "",
     model:j.model || prev.model || "",
     effort:effortOf(j, prev.effort),
+    ...(prev.directive && typeof prev.directive === "object" ? { directive: prev.directive } : {}), // [§4-B Codex 쪽] 규약 전달 기록·리셋은 도구 이벤트 heartbeat가 지우지 않는다
+    ...(prev.directiveReset && typeof prev.directiveReset === "object" ? { directiveReset: prev.directiveReset } : {}),
     ...keepCap,
     ...(extraFields || {}),
   });
 }
-function implementerContext(j, ws, c) {
+// [§4-B Codex 구현자 쪽 · 규약 1회 전달 2026-09-01] Claude 훅(contract-inject)과 같은 구조 — 정적 지시(검증 규칙·원격·전달 원칙·재판단 규약·수칙 인지 ab
+// 전문·설계 경위 안내)는 세션 1회(첫 턴·세션 시작 훅·세대 변경·rollout 압축 감지·기록 판독 불가에만 전문), 매 턴은 명령 줄+진행도+상태 줄. 사용자 글(구현자
+// 규칙)과 권위 데이터(정적 블록·수칙 선별 캐시)는 예산 밖, 안내(정찰·부트스트랩)는 매 턴 예산(1,500) 안에서 절단. 반환={text, record} — 기록은 출력 뒤(contextThen).
+function implementerContext(j, ws, c, sid, opts) {
+  opts = opts || {};
   const parts=[]; const plan=j.permission_mode==="plan";
   const inject=c.codexInjectMode==="always" || (c.codexInjectMode==="plan" && plan);
-  if(inject){ const x=buildInjection(c.codexImplementer,"Codex Implementer",c.codexImplementerChecklist); if(x)parts.push(x); }
+  if(inject){ const x=buildInjection(c.codexImplementer,"Codex Implementer",c.codexImplementerChecklist); if(x)parts.push(x); } // 사용자 글 — 예산 밖
+  const lang=loadLang();
+  let provenance=""; try { provenance=String(require("./map-provenance.js").buildProvenanceNotice(ws,c)||""); } catch { provenance=""; } // 설계 경위 안내 — Claude 훅과 동형 결속
+  const fixed=[], advisories=[]; let record=null;
   if(c.codexVerifyMode!=="off") {
     const turnId=String(j.turn_id||j.turnId||"");
     const campaignId=turnId ? "cc:"+String(j.session_id||process.env.CODEX_THREAD_ID||"")+":"+turnId : "";
-    parts.push(buildVerifyDirective(c.codexVerifyMode, undefined, c.codexVerifyProfile, verifyCampaignProgress(ws,campaignId,effectiveVerifyBudget(c))));
-  }
-  try { const x=buildScoutDirective(ws,c); if(x)parts.push(x); } catch { /* advisory */ }
-  // 설계 경위 선조회 안내(MAP-PROVENANCE-DESIGN §3) — Claude 훅(contract-inject.js)과 동형 결속
-  // (설계검증 blocker: 한쪽만 결속하면 Codex 구현자에서 얕은 '없다' 종료 재발). scoutMode 독립.
-  try { const x=require("./map-provenance.js").buildProvenanceNotice(ws,c); if(x)parts.push(x); } catch { /* advisory */ }
-  try { const x=require("./map-bootstrap.js").hookTick(ws); if(x)parts.push(x); } catch { /* advisory */ }
-  return parts.join("\n\n");
+    const profile=normCodexVerifyProfile(c);
+    const sp=codexStaticParts(ws,c,lang,{provenance});
+    const safeSid=String(sid||"").replace(/[^a-zA-Z0-9_-]/g,"");
+    const prev=sid?readCodexActive(sid):null;
+    const prevDirective=prev&&prev.directive&&typeof prev.directive==="object"?prev.directive:null;
+    const prevReset=safeSid?readCodexDirectiveReset(safeSid,prev):null;
+    const dplan=opts.forceFull?Object.assign(codexDeliveryPlan(null,null,sp,""),{reason:String(opts.forceFull)}):codexDeliveryPlan(prevDirective,prevReset,sp,rolloutForSession(j,sid));
+    const nowIso=new Date().toISOString();
+    if(dplan.mode==="full") parts.push(claudeStaticBlock(sp,lang)); // 정적 지시 전문(권위 — 예산 밖)
+    fixed.push(buildVerifyDirectiveSlim(c.codexVerifyMode, lang, profile, verifyCampaignProgress(ws,campaignId,effectiveVerifyBudget(c))));
+    const sentAt=dplan.mode==="full"?nowIso:String((prevDirective&&prevDirective.sentAt)||nowIso);
+    fixed.push(codexDeliveryStatusLine(dplan,lang,sentAt));
+    record={gen:dplan.gen,parts:dplan.parts,sentAt,lastTurnTs:nowIso,reason:dplan.reason};
+  } else if(provenance) advisories.push(provenance);
+  try { const x=buildScoutDirective(ws,c); if(x)advisories.push(x); } catch { /* advisory */ }
+  try { const x=require("./map-bootstrap.js").hookTick(ws); if(x)advisories.push(x); } catch { /* advisory */ }
+  const bt=applyClaudeTurnBudget({fixed,advisories},lang);
+  for(const f of fixed)parts.push(f); for(const tx of bt.texts)parts.push(tx);
+  if(bt.overflow){ try{process.stderr.write("[Codex Bridge] implementer per-turn fixed pieces exceed the budget ("+bt.fixedLen+")\n");}catch{/* 진단 실패 무해 */} }
+  return { text: parts.join("\n\n"), record };
 }
 
 function gitChangedMaxMtime(ws) {
@@ -380,7 +407,9 @@ function onSessionStart(j, ws, sid, c, roleRevision) {
   if (!pinned.ok) { context("SessionStart", "[Codex Bridge] " + pinned.why); return; }
   heartbeat(j, ws, sid, "SessionStart");
   try { writePhase("codex-implementing", { round:0, session:sid, workspace:ws }); } catch { /* display only */ }
-  context("SessionStart", implementerContext(j, ws, c));
+  // 세션 시작 훅=정적 지시 전문(새 세션·재개 — Claude 쪽의 리셋과 같은 역할)·출력 뒤 전달 기록 → 다음 프롬프트부터 명령 줄+상태 줄만
+  const ic0 = implementerContext(j, ws, c, sid, { forceFull: "session-start" });
+  contextThen("SessionStart", ic0.text, () => recordCodexDirective(sid, ws, ic0.record));
 }
 function onPrompt(j, ws, sid, c, roleRevision, preface, prePinned) {
   preface = preface || ""; // [P-9] 자동 전환 고지 — 이 턴 주입의 최상단에 붙는다
@@ -411,15 +440,16 @@ function onPrompt(j, ws, sid, c, roleRevision, preface, prePinned) {
   const turnState = { schema:"codex-turn-v1", turnId, workspace:ws, startedAt:Date.now(), lastActionAt:0, modified:false, permissionMode:j.permission_mode||"" };
   const turnSaved = save(stateFile(TURN_DIR,sid), turnState) || save(stateFile(TURN_DIR,sid), turnState);
   try { writePhase("codex-implementing", { round:0, session:sid, workspace:ws }); } catch { /* display only */ }
-  let ctx = implementerContext(j, ws, c);
+  const ic9 = implementerContext(j, ws, c, sid); let ctx = ic9.text;
   // [4b-2 이중 배달 §4] Codex 구현자 주입 — 코어 ab 전문(상시)+턴 결속 선별 캐시/미리보기 안내.
   // Claude 훅(contract-inject)과 '같은 함수'(implementerEnvelopeInject) — 양 훅 공통 계약·advisory(실패=미주입).
-  try { const ei9 = implementerEnvelopeInject(ws, c, loadLang(), capFields ? capFields.constraintSourceHash : "", capFields ? capFields.constraintAnchor : ""); if (ei9) ctx += (ctx ? "\n\n" : "") + ei9; } catch { /* advisory */ }
+  // [§4-B Codex 쪽] 규약 전달이 있는 턴(검증 모드 on)엔 ab 전문은 정적 블록 소속(세대 결속) — 매 턴은 선별 캐시/미리보기 안내(dyn)만. 검증 off=종전 그대로(ab+dyn).
+  try { const ep9 = implementerEnvelopeInjectParts(ws, c, loadLang(), capFields ? capFields.constraintSourceHash : "", capFields ? capFields.constraintAnchor : ""); if (ep9) { const ei9 = ic9.record ? String(ep9.dyn || "").replace(/^\n+/, "") : (ep9.dyn ? ep9.ab + "\n" + ep9.dyn : ep9.ab); if (ei9) ctx += (ctx ? "\n\n" : "") + ei9; } } catch { /* advisory */ }
   try { // [미호출=중단] 턴 시작 시점 고지(강제는 Stop 차단이 담당 — 사람이 이유를 먼저 보게)
     if (typeof c.archiveHash === "string" && c.archiveHash && fs.existsSync(pretoolDistrustFileFor(ws))) ctx += (ctx ? "\n\n" : "") + t("[서고 관문 중단] 변경 도구 호출 전 관문(PreToolUse)이 불리지 않는 상태가 실측돼 이 프로젝트의 Codex 구현 작업이 중단 상태입니다 — Codex 훅 신뢰(/hooks)에서 승인하면 관문 호출 관측 시 자동 재개됩니다.", "[Archive gate halted] The pre-tool gate (PreToolUse) was measured as not firing — Codex implementation work is halted for this project. Approve it in Codex hook trust (/hooks); work resumes when the gate is observed firing.");
   } catch { /* 고지 실패 무해 */ }
   const body = turnSaved ? ctx : t("[Codex Bridge] 턴 상태 기록에 실패했습니다 — 이 턴 종료 시 검증 게이트가 턴 상태 재기록을 요구할 수 있습니다.\n\n","[Codex Bridge] Failed to record the turn state — the verification gate may ask to rewrite it when this turn stops.\n\n") + ctx;
-  context("UserPromptSubmit", preface ? preface + body : body); // [P-9] body가 비어도 전환 고지는 단독 출력
+  contextThen("UserPromptSubmit", preface ? preface + body : body, () => recordCodexDirective(sid, ws, ic9.record)); // [P-9] body가 비어도 전환 고지는 단독 출력 · 전달 기록은 출력 뒤
 }
 // [4b-2 §4-③] Codex PreToolUse — ①실측 표식 기록+불신 플래그 자동 해제(신뢰 회복=실측) ②Claude와 '같은'
 // 게이트 판정(previewGateDecision 공용 — 서고 활성 시 preview 영수증까지 변경 도구 지속 차단·예외=미리보기
@@ -629,7 +659,7 @@ function main(raw){
 // [P-9 4차] 테스트 주입구: 훅 실행(require.main)일 때만 stdin을 구동 — 테스트는 require로 내부 결정 함수
 // (역할 세대 CAS 원복 등)를 실행 반례로 검증한다(두 프로세스 경합을 단일 프로세스에서 결정론 재현).
 if (require.main !== module) {
-  module.exports = { classifyPromptSource, revertOnPinFailure, revertSwitchIfRoleUnchanged, heartbeat, onPreTool, pretoolMarkerFile, pretoolDistrustFileFor, pretoolObserveMarker, PRETOOL_DIR };
+  module.exports = { classifyPromptSource, revertOnPinFailure, revertSwitchIfRoleUnchanged, heartbeat, implementerContext, onPreTool, pretoolMarkerFile, pretoolDistrustFileFor, pretoolObserveMarker, PRETOOL_DIR };
 } else {
 let buf="";process.stdin.on("data",d=>buf+=d);process.stdin.on("end",()=>{try{main(buf);}catch(e){
   try{
