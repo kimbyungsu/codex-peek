@@ -139,7 +139,7 @@ ck("A8 계약 불변", readContract().o.harnessMode === "codex-codex");
 
 // A9 — 성공 Stop은 done 종결(후보③ — rejudging 잔존이 다음 Claude 질문을 25분 오차단하던 원인 제거)
 const hookSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-hook.js"), "utf8");
-ck("A9 성공 Stop=done 종결(소스 계약)", /if\(gate\.ok&&residualOk&&judgeOk\)\{try\{writePhase\("done",\{session:sid,workspace:ws\}\);\}catch\{\} return;\}/.test(hookSrc)); // [잔여 재검증 강제 2026-08-29] 성공 Stop=done은 잔여 마커가 없을 때(residualOk)에만 · [판단 관문 2026-08-30 9c60456] 구현자 판단 마커가 없을 때(judgeOk)에만 — 핀 갱신 2026-08-31
+ck("A9 성공 Stop=done 종결(소스 계약)", /if\(gate\.ok&&residualOk&&judgeOk&&report\.ok\)\{try\{writePhase\("done",\{session:sid,workspace:ws\}\);\}catch\{\} return;\}/.test(hookSrc)); // [잔여 재검증 강제 2026-08-29] 성공 Stop=done은 잔여 마커가 없을 때(residualOk)에만 · [판단 관문 2026-08-30 9c60456] 구현자 판단 마커가 없을 때(judgeOk)에만 — 핀 갱신 2026-08-31
 setContract("codex-codex"); clearState();
 lib.writePhase("done", { session: "impl-sess-9", workspace: ws }); // 정상 완료 직후의 Claude 질문 — 오차단 없어야 함
 ({ out } = runInject({ session_id: SID_CL, cwd: ws }));

@@ -3555,6 +3555,7 @@ function v2DynamicData(ws, lang) {
       for (const r of rb) L.push("> " + r.findingId + " ← " + r.oosId + (r.title ? " [" + String(r.title).slice(0, 60) + "]" : "") + (r.restores ? (en ? " (restored ×" + r.restores + ")" : " (복귀 " + r.restores + "회)") : ""));
     }
   } catch { /* 장부 판독 실패=목록 생략(서식 요구는 유지) */ }
+  try { const rs = require("./contract-lib.js").reissueSectionFor(ws, currentCampaignIdFor(ws), lang || loadLang()); if (rs) L.push(rs); } catch { /* 재발급 절 실패=생략 */ } // [P6]
   return L.join("\n");
 }
 function v2DirectiveFor(ws, lang) { return [v2StaticDirective(lang), v2DynamicData(ws, lang)].filter(Boolean).join("\n"); } // 종전 바이트 그대로(무회귀)
@@ -3729,6 +3730,11 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
   // 위치 결속(구현검증 1차 blocker①): 정합 판정은 '종료 마커 뒤의 판정 선언'에만 결속 — 블록 앞 본문의 옛 판정
   // 줄을 전체 재판독으로 재사용하지 않는다(tail 부재=no-verdict-line 강등). 블록 부재/손상은 어차피 그 사유로 강등.
   const verdict = parse.present && parse.ok ? extractVerdict(parse.tailVerdictLine || "") : extractVerdict(String(answer || ""));
+  // [P6] 블록 손상=줄 좌표·사유 키를 ws 단위 파일에 남겨 다음 요청에 재발급 절로 자동 동봉(원문 비복사) · 정상 판독=지움
+  try {
+    if (parse.present && !parse.ok) require("./contract-lib.js").writeReissue(ws, { askId: String(askId || ""), campaignId: String(campSnap || ""), ts: new Date().toISOString(), ver: parse.ver, items: parse.corrupt.items });
+    else if (parse.present && parse.ok) require("./contract-lib.js").clearReissue(ws);
+  } catch { /* 기록 실패=다음 요청에 재발급 절 없음(경고 경로는 기존 손상 강등이 담당) */ }
   const machine = { ...judgeMachineVerdict(verdict, parse), parse };
   const out = [];
   // ── 증분 2(§3.2): 입장 심사+계보 장부 — 동결 경계(ask 시작 스냅샷) 기준 ─────────────────────────

@@ -215,12 +215,26 @@ N/M]`으로 알려 준다. 저는 요청문 제목에 "검증 5회차(최종)"�
 다음에 할 일". 종료 훅이 세 칸 제목 존재만 검사(마감문 검사기의 제목 위치 추출부만 재사용 — 절 내용·근거 형식 검사는 하지 않음).
 기술 내용은 문서에 두고 링크만.
 Claude 규칙 자체는 그대로 두되, 이 양식이 "지키는지 보는 경비원" 역할을 한다.
+- **구현됨 2026-09-01(4-1)**: `verify-cap-handoff.js` REPORT_SECTIONS(ko/en 3제목·코드 소유 상수)·reportShapeCheck(줄 머리 앵커 — 마크다운 #·굵게·대괄호·글머리
+  뒤 제목, 뒤에 글자·숫자가 바로 이어지면 불인정; 내용 무검사)·reportShapeInstruction(빠진 칸 목록+예시 1줄)·lastAssistantText/lastCodexAssistantText(마지막 답 1개).
+  `verify-guard.js`(Claude Stop)·`codex-hook.js`(Codex 구현자 Stop) 양쪽: 파일을 바꾼 턴은 마지막 답에 세 제목이 있어야 종료(마지막 답이 없는 도구만 턴은 대상
+  아님·검증 증명이 없으면 그 요구가 먼저), 상한 마감 턴은 마감문 7절 수락 조건에 세 제목을 추가(빠지면 그 칸만 요구). 반복 차단은 기존 상한(epoch에
+  reportOk 포함). 사용자 규칙(고정 규약 JSON)은 그대로 — 경비원은 하네스 소유 양식만 본다. 시험 `tests/report-shape.test.js`(종료 훅 실행 반례 6종).
+  **확인 검증 1·2회차 blocker 반영**: ①검증 모드 off라도 경비원은 적용(off는 검증·잔여 마커·판단 관문·상한을 보지 않고 세 칸만 검사 — 종전 조기 종료가
+  경비원을 통째로 건너뛰던 결함; Claude 경로 verifyOff·Codex 구현자 경로 vmOff 동일 경계 — 2회차: C-C가 off에서도 잔여/판단 장부를 읽던 불일치 정렬) ②마감 턴의 세 칸도 일반 턴과 같이 '마지막 답'에서만 검사(누적 텍스트면 앞선 답의 제목으로 통과하던 결함 — verify-sequential
+  Claude·Codex 양쪽 반례).
 
-**같이 처리(코드 작은 것)**: (P6) 검증자 블록 손상 시 다음 요청에 "n번째 줄·사유 키 — 서식 재발급" 절을 자동 동봉(원문 비복사 유지) ·
+**같이 처리(코드 작은 것)**: (P6) 검증자 블록 손상 시 다음 요청에 "n번째 줄·사유 키 — 서식 재발급" 절을 자동 동봉(원문 비복사 유지) — **구현됨 2026-09-01**:
+`contract-lib.js` writeReissue/readReissue/clearReissue(`verify-findings/<wsKey>.reissue.json`·좌표+사유 키 8개 이하·원문 없음)·reissueSectionFor(같은 캠페인일 때만·
+사유 한글/영문 라벨) · `codex-bridge.js` machineFindingsLayer가 손상 판독 뒤 기록·정상 판독 뒤 소거, v2DynamicData가 절을 동봉 ·
 (P7 앵커 이탈 3종) ⓐ 훅 스크립트는 진짜 훅 입력(stdin에 이벤트 이름·세션 id)이 있을 때만 앵커를 쓰고, 불러오기만 됐을 때는 아무것도 쓰지
 않는다 ⓑ 세션 도중 앵커의 폴더가 바뀌면 `ask-start`가 "이 대화의 폴더가 A에서 B로 바뀌었다"를 알리고 시작하지 않는다(명시 플래그로만
 진행) ⓒ 프로필·상한 설정이 없는 폴더에서 검증이 시작되면 "기본값(감사 프로필·상한 없음)으로 돈다"를 요청·판정 양쪽에 1줄 고지 ·
-(P10) 마감문의 "N/M" 문구는 캠페인 장부와 대조해 다르면 마감 미수락(산문이 장부를 덮어쓰지 못함) · (P9) 설계 경위 색인에 오늘 문서
+(P10) 마감문의 "N/M" 문구는 캠페인 장부와 대조해 다르면 마감 미수락(산문이 장부를 덮어쓰지 못함) — **구현됨 2026-09-01**: 두 종료 훅이 handoffCtx에 장부
+roundCount/roundBudget을 실어 `validateCapHandoff`→`roundFigureMismatch`가 마감 머리부터 끝까지 "키워드(회차·round·상한·cap)가 숫자 바로 앞이거나 숫자 바로 뒤에
+회차/round" 꼴의 N/M만 대조(키워드~숫자 사이 조사·콜론·굵게 6자 이내 허용 — "회차는 3/5입니다"·"round is 3/5"도 회차 문구; 영문 키워드는 단어 경계 필수 —
+recap·background·roundtrip·pre_cap·round_trip은 키워드 아님(\w 경계); 다르면 미수락 `round-figure-mismatch`·숫자 없으면 검사 없음·"성공 확률 3/4" 같은 일반 분수는 회차 아님 — 1·2회차 blocker:
+일곱 절 본문만 보면 머리의 숫자를 놓치고, 12자 근접 규칙은 일반 분수를 오인하고, 경계 없는 영문 키워드는 단어 안 cap/round를 오인), 안내문에 실제값 명시 · (P9) 설계 경위 색인에 오늘 문서
 3편(검증 거버넌스·재판단 권위·이 문서)의 결정 이력을 등재.
 
 **개선 4. 글 다이어트를 구조로(P11) — 프롬프트를 늘리는 항목은 0, 줄이는 항목만** (아래 (a)~(e)는 §4-B 원칙의 첫 적용분이다 —
@@ -413,7 +427,9 @@ succeeded인데 proof가 없어 `proof-missing`↔`먼저 ask-wait` 순환이 �
    **구현됨** / 3-2a=개선 4 (a)(b)(c)+§4-B ④(파생 총량·참고 예산·판당 행 상한·선별 초과 전량 동봉) **구현됨 2026-08-31** / 3-2b=개선 4 (e)+§4-B ③
    (하네스 문장→훅 장부·사용자 글 불변 시험)+Claude 쪽 ①(재판단 규약 꼬리·검증 지시 명령 줄만) **구현됨 2026-08-31** / 대시보드 서고 카드 초과 표기는
    4번 소형으로.
-4. **개선 3(보고 양식 검사)** + P6·P7(앵커 이탈 3종)·P9·P10 소형.
+4. **개선 3(보고 양식 검사)** + P6·P7(앵커 이탈 3종)·P9·P10 소형. **분할(2026-09-01)**: 4-1=개선 3(보고 양식 경비원·Claude/Codex 구현자 양쪽·마감문 포함)+P6+P10
+   **구현됨** / 4-2=P7 앵커 가드 3종+P9 경위 등재+대시보드 결정 장부 '지금 정할 것' 합류+서고 카드 초과 표기+**코덱스-코덱스 구현자 세션 1회 전달**(사용자
+   결정 2026-09-01: 3-2b의 Claude 쪽과 같은 방식을 구현 Codex에도) — 다음.
 5. (2차) 큐레이션 트랙 + 항상/관련(§5 C·D).
 
 **같은 순서를 쉬운 말로(보고에는 이 문장을 쓴다 — 위 항목명을 그대로 옮기지 않는다, 사용자 지적 2026-08-30)**
@@ -458,6 +474,10 @@ succeeded인데 proof가 없어 `proof-missing`↔`먼저 ask-wait` 순환이 �
    글에 남기고 장부는 0건으로 시작합니다(대시보드 'Claude 규칙' 카드의 "훅으로 옮긴 규칙 N개(보기)"는 행이 생기면 나타남). 사용자가 적은 글은 한 글자도
    건드리지 않습니다. 남은 것: 대시보드 서고 카드 초과 표기(4번).
 4. 보고 양식 — 제 보고가 세 칸(무엇이 바뀌었나 / 상황 하나 / 다음 할 일) 제목을 갖췄는지 종료 시 검사 + 작은 안전장치들(검증자 답이 깨졌을 때
+   **앞부분 끝남(2026-09-01, 4-1)**: 상황예시 — 제가 파일을 고친 턴의 마지막 답에 "무엇이 바뀌었나 / 이런 상황이 이렇게 됨 / 다음에 할 일" 세 제목이 없으면
+   종료 장치가 "빠진 칸: …" 하고 돌려보내고, 검증 상한 마감 보고서에도 이 세 칸이 있어야 받아 줍니다(내용은 검사하지 않음 — 사용자가 적은 규칙은 그대로).
+   코덱스-코덱스 모드의 구현 Codex도 같은 장치를 탑니다. 검증자 답의 지적 블록이 깨졌으면 다음 검증 요청에 "3번째 줄: JSON 형식 아님" 같은 좌표·사유가
+   자동으로 붙고(원문은 옮기지 않음), 마감 보고서에 회차 숫자를 적으면 장부 실제값과 다를 때 받아 주지 않습니다. 남은 뒷부분(4-2):
    다시 요청·폴더가 바뀌면 검증 시작 안 함·"몇 회차" 손셈 방지(장부에 오른 검증의 화면 회차는 장부 숫자만 — 끝남; 장부에 못 오른 검증은
    권위 없는 진행 표시)·"왜 이렇게 됐나" 물으면 찾아볼 수 있게 이번 문서들의 결정 이력 등재·대시보드 첫 화면 "지금 정할 것"에 결정 장부
    항목 보이기(1번에서 넘어온 꼬리)).
@@ -549,6 +569,11 @@ succeeded인데 proof가 없어 `proof-missing`↔`먼저 ask-wait` 순환이 �
   pending)·postflightDelivery(확정/미확정)·postflightHeld/applyPostflightHold(보류 강등+판단 관문)·finishVerifyRun(보류=proof·체크포인트 미기록+HOLD_EXIT_CODE 4 비0
   종결)·resume/new 분기 배선·finishVerifyRun 상태 줄·flagVerdict 행 `delivery` ·
   `src/extension.ts` 카드 제목 병기+개요 배지(같은 상태 줄) · `tests/directive-delivery.test.js` 10단언.
+- **§7 4-1 구현(2026-09-01 · 개선 3+P6+P10)**: `verify-cap-handoff.js` REPORT_SECTIONS·reportShapeCheck·reportShapeInstruction·lastAssistantText·lastCodexAssistantText·
+  roundFigureMismatch(머리 포함·인접 키워드) 회차 대조·capHandoffInstruction 회차/세 칸 안내 · `verify-guard.js`/`codex-hook.js` reportOk 종료 조건(검증 모드 off 포함)·
+  마감 수락 조건(마지막 답)·차단 사다리·epoch ·
+  `contract-lib.js` REISSUE_REASON_LABEL·reissueFileFor/writeReissue/readReissue/clearReissue/reissueSectionFor · `codex-bridge.js` machineFindingsLayer 기록/소거·
+  v2DynamicData 동봉 · `tests/report-shape.test.js` 6단언(종료 훅 실행 반례·off 모드·P10 반례 꼴 포함)·verify-sequential 마감 픽스처 R3 앞붙임+마지막 답 반례 2종.
 - **§7 3-2b 구현(2026-08-31 · 개선 4 (e)(d)+§4-B ①③ Claude 쪽)**: `contract-lib.js` verifyDirectivePieces/buildVerifyDirective(=slim+static)/
   buildVerifyDirectiveSlim/buildVerifyDirectiveStatic·DIRECTIVE_MOVED·CLAUDE_STATIC_KEYS·claudeStaticParts/claudeStaticGen/claudeStaticBlock/
   claudeDeliveryPlan/claudeDeliveryStatusLine·implementerEnvelopeInjectParts(ab 정적/dyn 동적 — implementerEnvelopeInject는 바이트 동일 join) ·

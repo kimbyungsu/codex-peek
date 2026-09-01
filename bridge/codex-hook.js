@@ -17,7 +17,7 @@ const {
   verifyCampaignProgress, effectiveVerifyBudget, writeConstraintTurnSnapshot,
   wsKeyFor, previewGateDecision, implementerEnvelopeInject, constraintRepoKeyFor, readResidual, addResidual, removeResidualItems, residualPending, judgeRequiredPending,
 } = require("./contract-lib.js");
-const { validateCapHandoff, capHandoffInstruction, capHandoffContext, codexAssistantText } = require("./verify-cap-handoff.js");
+const { validateCapHandoff, capHandoffInstruction, capHandoffContext, codexAssistantText, reportShapeCheck, reportShapeInstruction, lastCodexAssistantText } = require("./verify-cap-handoff.js");
 
 const TURN_DIR = path.join(BRIDGE_DIR, "codex-turns");
 const ATTEMPT_DIR = path.join(BRIDGE_DIR, "codex-verify-attempts");
@@ -507,12 +507,17 @@ function onStop(j, ws, sid, c) {
   const gitTs=gitChangedMaxMtime(ws); const edited=!!s.modified || gitTs>Number(s.startedAt||0);
   const planned=j.permission_mode==="plan";
   // [잔여 재검증 강제 2026-08-29] Claude 경로(verify-guard)와 같은 정본 마커 — needed 판정보다 앞(검증 불필요 턴도 잔여 미소비면 종료 불가 · 2회차 blocker②) — 앞 캠페인 마감의 "즉시 재검증"이 결속 통과로 소비되기 전엔 종료 불가.
-  let residual=readResidual(ws); let residualOk=true;
-  if(residual){const rp=residualPending(ws,Number(s.startedAt||0)); if(rp.consumed.length&&!removeResidualItems(ws,rp.consumed.map((x)=>x.campaignId))) residualOk=false; else if(rp.items.length) residualOk=false; if(residualOk){residual=null;try{supersedeIntegrity(sid,"verify-residual-now",ws);}catch{}} else residual={items:rp.items.length?rp.items:residual.items};}
   const vmCc=c.codexVerifyMode; // C-C 슬롯 스위치(모드별 분리 2026-07-15) — CL-C의 verifyMode와 독립
+  const vmOff=vmCc==="off"; // [개선 3 · 확인 검증 2회차 blocker] off 모드=Claude 경로(verifyOff)와 같은 경계 — 검증·잔여 마커·판단 관문·상한을 보지 않고 보고 양식만 검사
+  let residual=vmOff?null:readResidual(ws); let residualOk=true;
+  if(residual){const rp=residualPending(ws,Number(s.startedAt||0)); if(rp.consumed.length&&!removeResidualItems(ws,rp.consumed.map((x)=>x.campaignId))) residualOk=false; else if(rp.items.length) residualOk=false; if(residualOk){residual=null;try{supersedeIntegrity(sid,"verify-residual-now",ws);}catch{}} else residual={items:rp.items.length?rp.items:residual.items};}
   const needed=vmCc==="always" || ((vmCc==="code"||vmCc==="plancode")&&edited) || (vmCc==="plancode"&&planned);
-  const judgePending=judgeRequiredPending(ws); const judgeOk=judgePending.length===0; // [판단 관문 — 장치화 2026-08-30] Claude 경로(verify-guard)와 같은 정본 마커
-  if(!needed&&residualOk&&judgeOk){try{writePhase("done",{session:sid,workspace:ws});}catch{} return;} // 잔여 미소비면 검증 불필요 턴이라도 아래 차단 흐름으로
+  const judgePending=vmOff?[]:judgeRequiredPending(ws); const judgeOk=judgePending.length===0; // [판단 관문 — 장치화 2026-08-30] Claude 경로(verify-guard)와 같은 정본 마커
+  // [개선 3 · 보고 양식 경비원] Claude 경로(verify-guard)와 같은 검사 — 파일을 바꾼 턴의 마지막 답에 세 칸 제목(제목 존재만·마지막 답 없는 턴은 대상 아님).
+  // 검증 불필요 턴(codexVerifyMode off 포함)의 조기 종료보다 앞에 둔다 — 종전엔 off면 경비원을 통째로 건너뛰었다(확인 검증 1회차 blocker).
+  const lastReply=lastCodexAssistantText(rolloutForSession(j,sid));
+  const report=edited&&lastReply?reportShapeCheck(lastReply):{ok:true,lang:"",missing:[]};
+  if(!needed&&residualOk&&judgeOk&&report.ok){try{writePhase("done",{session:sid,workspace:ws});}catch{} return;} // 잔여 미소비·세 칸 누락이면 검증 불필요 턴이라도 아래 차단 흐름으로
   // 신선도에서 lastActionAt 제거(P-6 자기무효화 해소) — 검증 결과를 '회수하는' 도구 호출이 proof를 낡게
   // 만들지 않는다. 실제 파일 변경(dirty mtime)과 턴 시작만 본다. 커밋 은닉·회수 정당성은 durableProofGate의
   // HEAD OID·영수증 결속이 담당한다.
@@ -522,17 +527,18 @@ function onStop(j, ws, sid, c) {
   // '반영중' 고아 잔존(모드 불일치 없이도) ②자동 전환 가드(phaseBusy)가 정상 완료 직후를 활성 턴으로 오인해
   // 다음 Claude 질문을 최대 25분 오차단(구현검증 1차 지적 2)의 원인. 검증 답 회수~Stop 사이의 '반영중'은
   // cmdAsk가 그대로 기록하므로 표시 흐름은 유지된다.
-  if(gate.ok&&residualOk&&judgeOk){try{writePhase("done",{session:sid,workspace:ws});}catch{} return;}
+  if(gate.ok&&residualOk&&judgeOk&&report.ok){try{writePhase("done",{session:sid,workspace:ws});}catch{} return;}
   const turnId=String(j.turn_id||s.turnId||"");
   const campaignId=turnId ? "cc:"+sid+":"+turnId : "";
   const progress=verifyCampaignProgress(ws,campaignId,effectiveVerifyBudget(c));
-  const progressEpoch=crypto.createHash("sha1").update(JSON.stringify({campaignId,count:progress.count||0,budget:progress.budget||0,since,edited,planned,roleRevision:role.revision,residual:residual?residual.items.map((x)=>x.campaignId).join(","):"",judge:judgePending.map((x)=>x.askId).join(",")})).digest("hex");
+  const progressEpoch=crypto.createHash("sha1").update(JSON.stringify({campaignId,count:progress.count||0,budget:progress.budget||0,since,edited,planned,reportOk:report.ok,roleRevision:role.revision,residual:residual?residual.items.map((x)=>x.campaignId).join(","):"",judge:judgePending.map((x)=>x.askId).join(",")})).digest("hex");
   const round=progress.tracked&&progress.budget>=1?`${progress.count}/${progress.budget}`:(progress.budget===0?t("무제한","unlimited"):t("미집계","untracked"));
-  const capReached=progress.tracked&&progress.budget>=1&&progress.count>=progress.budget;
-  const handoffCtx=capReached?capHandoffContext(BRIDGE_DIR,ws,campaignId):null;
+  const capReached=!vmOff&&progress.tracked&&progress.budget>=1&&progress.count>=progress.budget; // off 모드=상한 마감 흐름 없음
+  const handoffCtx=capReached?Object.assign(capHandoffContext(BRIDGE_DIR,ws,campaignId),{roundCount:progress.count,roundBudget:progress.budget}):null; // [P10] 마감문 회차 숫자 대조 재료
   const capCloseout=capReached?validateCapHandoff(codexAssistantText(rolloutForSession(j,sid)),handoffCtx):null;
+  const closeReport=capReached?reportShapeCheck(lastReply):{ok:true,missing:[]}; // [개선 3] 마감문 턴도 쉬운 말 세 칸 필수 — '마지막 답'만(누적 텍스트면 앞선 답의 제목으로 통과 — 1회차 blocker)
   let residualWriteFailed=false;
-  if(capReached&&capCloseout.ok){
+  if(capReached&&capCloseout.ok&&closeReport.ok){
     let wroteOk=true;
     if(capCloseout.residualRisk==="now"){ const evLines=(handoffCtx&&Array.isArray(handoffCtx.evidence)?handoffCtx.evidence:[]).map((e)=>`${e.key} ${e.title}`); wroteOk=addResidual(ws,{campaignId,sourceAsk:(handoffCtx&&handoffCtx.source)||"",evidence:evLines,ts:new Date().toISOString()}); }
     if(wroteOk&&capCloseout.residualRisk==="now"){ const ko=`마감문 판단 "즉시 재검증" — 다음 턴 첫 검증이 통과할 때까지 완료 보고가 차단됩니다(요청문에 캠페인 id ${campaignId} 포함).`; const en=`Closeout call "Verify now" — completion reports stay blocked until the next turn's first verification passes (its request must include campaign id ${campaignId}).`; let evOk=false; try{ evOk=appendIntegrityEvent({ts:new Date().toISOString(),session:sid,workspace:ws,kind:"verify-residual-now",severity:"warning",detail:t(ko,en),detailKo:ko,detailEn:en},{supersedeSameKindWs:true})===true; }catch{ evOk=false; } wroteOk=evOk; } // [2회차 blocker①] 노랑 경보 기록도 성공 조건(반환값 검사)
@@ -562,6 +568,8 @@ function onStop(j, ws, sid, c) {
     try{writePhase("incomplete",{session:sid,workspace:ws});}catch{} return;
   }
   if(!judgeOk){block(t(`[판단 관문 · 실제 회차 ${round}] 구현자 판단이 기록되지 않은 판정이 ${judgePending.length}건 있어 이 턴을 끝낼 수 없습니다: ${judgePending.map((x)=>`${x.askId} [${x.reason}]`).join(", ")}. 기록: node "${path.join(BRIDGE_DIR,"codex-bridge.js")}" round-judge <askId> <close-oos|re-verify|escalate --decision <id>> --note "근거" — escalate(사용자 방향 질문)는 먼저 decisions raise 로 결정 장부 항목을 만들어야 합니다.`,`[Judgment gate · actual round ${round}] ${judgePending.length} verdict(s) still need the implementer's judgment: ${judgePending.map((x)=>`${x.askId} [${x.reason}]`).join(", ")}. Record: node "${path.join(BRIDGE_DIR,"codex-bridge.js")}" round-judge <askId> <close-oos|re-verify|escalate --decision <id>> --note "..." — escalate needs a decision made first with decisions raise.`));return;}
+  if(capReached&&capCloseout&&capCloseout.ok&&!closeReport.ok){block(reportShapeInstruction(loadLang()==="en"?"en":"ko",closeReport.missing,true));return;} // [개선 3] 마감문은 맞는데 세 칸 없음
+  if(!capReached&&!report.ok&&(gate.ok||!needed)&&residualOk){block(reportShapeInstruction(loadLang()==="en"?"en":"ko",report.missing,false));return;} // [개선 3] 검증은 됐거나 불필요(off)한데 보고 양식만 빠짐
   if(residualWriteFailed){block(t(`[잔여 재검증 마커 기록 실패] 마감문의 "즉시 재검증" 판단(마커 또는 노랑 경보)을 저장하지 못했습니다(디스크). 같은 마감문을 다시 출력해 저장을 재시도하세요 — 마커·경보가 남기 전에는 마감이 인정되지 않습니다.`,`[Residual marker/alert write failed] Your closeout called "Verify now" but the marker or the yellow alert could not be written (disk). Re-emit the same closeout to retry; the turn is not settled until both the marker and the alert exist.`));return;}
   if(capReached){block(capHandoffInstruction(loadLang()==="en"?"en":"ko",round,gate.reason,handoffCtx));return;}
   if(residual&&!residualOk){block(t(`[잔여 재검증 미이행 · 실제 회차 ${round}] 직전 캠페인 ${residual.items.map((x)=>x.campaignId).join(", ")} 마감에서 "즉시 재검증"으로 판단한 미검증분이 아직 검증되지 않았습니다. 남은 캠페인 id마다 이번 턴에서 \`node "${path.join(BRIDGE_DIR,"codex-bridge.js")}" ask-start --allow-new "[잔여 재검증 ${residual.items[0].campaignId}] <무엇을 검증할지>"\` 로 시작하세요 — 요청문에 그 캠페인 id 문자열이 그대로 들어가야 통과가 이 판단에 결속됩니다 — 그리고 \`ask-wait <job-id>\` 를 통과까지 반복하세요. 미검증분: ${residual.items.map((x)=>`[${x.campaignId}] ${(x.evidence||[]).join(" / ")||"(마감문 참조)"}`).join(" ‖ ")}`,`[Residual re-verification pending · actual round ${round}] The previous campaign(s) ${residual.items.map((x)=>x.campaignId).join(", ")} closed with the call "Verify now" and those changes are still unverified. For each pending campaign id start \`node "${path.join(BRIDGE_DIR,"codex-bridge.js")}" ask-start --allow-new "[residual re-verification ${residual.items[0].campaignId}] <what to verify>"\` — the request must contain the campaign id verbatim — then repeat \`ask-wait <job-id>\` until it passes. Unverified: ${residual.items.map((x)=>`[${x.campaignId}] ${(x.evidence||[]).join(" / ")||"(see the closeout)"}`).join(" ‖ ")}`));return;}

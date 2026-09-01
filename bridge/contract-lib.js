@@ -6358,3 +6358,29 @@ module.exports.harnessModeSwitchNotice = harnessModeSwitchNotice;
 module.exports.CLAUDE_TURN_BUDGET = CLAUDE_TURN_BUDGET;
 module.exports.claudeTurnBudgetTotal = claudeTurnBudgetTotal;
 module.exports.applyClaudeTurnBudget = applyClaudeTurnBudget;
+// ── [P6 · 검증자 블록 손상 시 다음 요청에 재발급 절 자동 동봉 2026-09-01] 원문 비복사 — 줄 번호·사유 키만(ws 단위 파일·캠페인 결속) ──
+const REISSUE_REASON_LABEL = {
+  ko: { marker: "시작·종료 마커 짝 불일치", "bad-json": "JSON 한 줄 형식 아님", "not-object": "객체가 아닌 JSON", "bad-tag": "tag 값 무효", "bad-title": "title 누락/다행", "bad-file": "file 형식 무효", "too-many-rows": "판당 행 상한(40) 초과" },
+  en: { marker: "start/end marker pair mismatch", "bad-json": "not one JSON object per line", "not-object": "JSON is not an object", "bad-tag": "invalid tag", "bad-title": "title missing/multi-line", "bad-file": "invalid file field", "too-many-rows": "over the per-round row cap (40)" },
+};
+function reissueFileFor(ws) { return path.join(VERIFY_FINDINGS_DIR, wsKeyFor(ws) + ".reissue.json"); }
+function writeReissue(ws, rec) {
+  try { fs.mkdirSync(VERIFY_FINDINGS_DIR, { recursive: true }); return atomicWrite(reissueFileFor(ws), JSON.stringify({ schema: "findings-reissue-v1", ...rec, items: (Array.isArray(rec.items) ? rec.items : []).slice(0, 8).map((x) => ({ lineNo: Number(x.lineNo) || 0, reasonKey: String(x.reasonKey || "") })) })); } catch { return false; }
+}
+function readReissue(ws) { try { const o = JSON.parse(fs.readFileSync(reissueFileFor(ws), "utf8")); return o && o.schema === "findings-reissue-v1" && Array.isArray(o.items) ? o : null; } catch { return null; } }
+function clearReissue(ws) { try { fs.unlinkSync(reissueFileFor(ws)); } catch { /* 없음 */ } }
+// 다음 검증 요청에 붙는 절(같은 캠페인일 때만) — 줄 좌표+사유, 원문 없음. 재발급이 오면(정상 판독) machineFindingsLayer가 파일을 지운다.
+function reissueSectionFor(ws, campaignId, lang) {
+  const r = readReissue(ws); if (!r || !r.items.length) return "";
+  if (campaignId && r.campaignId && r.campaignId !== campaignId) return "";
+  const en = lang === "en"; const L = REISSUE_REASON_LABEL[en ? "en" : "ko"];
+  const rows = r.items.map((x) => (en ? `line ${x.lineNo}: ${L[x.reasonKey] || x.reasonKey}` : `${x.lineNo}번째 줄: ${L[x.reasonKey] || x.reasonKey}`));
+  return (en ? "[Findings block reissue — the previous round's machine block was corrupt; the whole list was discarded] " : "[서식 재발급 — 직전 판의 지적 블록이 손상돼 목록 전체를 버렸다] ")
+    + rows.join(" · ") + (en ? " — resubmit the same findings in the exact block format (marker lines, one JSON object per line, at most 40 rows)." : " — 같은 지적을 정확한 블록 서식(마커 줄·줄당 JSON 1개·40행 이하)으로 다시 제출하라.");
+}
+module.exports.REISSUE_REASON_LABEL = REISSUE_REASON_LABEL;
+module.exports.reissueFileFor = reissueFileFor;
+module.exports.writeReissue = writeReissue;
+module.exports.readReissue = readReissue;
+module.exports.clearReissue = clearReissue;
+module.exports.reissueSectionFor = reissueSectionFor;
