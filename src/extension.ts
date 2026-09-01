@@ -195,7 +195,8 @@ interface BridgeState {
   backlog: { caution: number; cautionDue: number; backlog: number; corrupt: number; readError: boolean; wsKey?: string; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } | null; // readError: 판독 실패(ENOENT 외) — '비어 있음' 위장 금지(2026-07-18 확인 판정 [보완] 소화)
   challenges: { open: number; cleared: number; kept: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number; cleared: boolean; matchedAll: boolean; warnOpen: boolean; eventId: string }>; ndEventIds: string[] } | null; // 재확인(증분 4b) — cleared=실제 ack 조건(전 파일 일치)·null=구 설치본/부재
   movedRules: { count: number; items: Array<{ id: string; ko: string; en: string; hooks: string[] }> }; // [§4-B ③] 훅으로 옮긴 하네스 문장 장부(DIRECTIVE_MOVED)
-  usedMemory: { ts: string; items: Array<{ path: string; note: string }>; couplings: number; omitted: boolean } | null; // [UI 개편 2차] 직전 검증에 실린 지도 동봉 스냅샷(브릿지 stats/attach.jsonl 최신 1건). null=기록 없음/구 브릿지
+  usedMemory: { ts: string; items: Array<{ path: string; note: string }>; couplings: number; omitted: boolean; selOver: { count: number; bytesTotal: number; itemsMax: number; bytesMax: number } | null } | null; // selOver=[§7 4-2b] 직전 검증의 서고 선별 정상 범위 초과(전량 동봉) — 서고 카드 표기 재료
+  decisions: { open: number; items: Array<{ id: string; question: string; kind: string; origin: string; ts: string; block: string }> } | null; // [§7 4-2b] 결정 장부(사용자 답 대기) — 읽기 전용·답은 CLI decisions choose|delegate. null=무폴더/구 런타임 // [UI 개편 2차] 직전 검증에 실린 지도 동봉 스냅샷(브릿지 stats/attach.jsonl 최신 1건). null=기록 없음/구 브릿지
   baseAvailable: boolean;
   permissionMode: string;
   codexReady: boolean;
@@ -2651,12 +2652,27 @@ function computeState(turnsN: number): BridgeState {
           try {
             const j = JSON.parse(lines[i]);
             if (j && typeof j.ws === "string" && normWs(j.ws) === key) {
-              return { ts: String(j.ts || ""), items: Array.isArray(j.items) ? j.items.slice(0, 12).map((x: any) => ({ path: String(x?.path || ""), note: String(x?.note || "") })) : [], couplings: Number(j.couplings || 0), omitted: j.omitted === true };
+              return { ts: String(j.ts || ""), items: Array.isArray(j.items) ? j.items.slice(0, 12).map((x: any) => ({ path: String(x?.path || ""), note: String(x?.note || "") })) : [], couplings: Number(j.couplings || 0), selOver: j.selOver && typeof j.selOver === "object" ? { count: Number(j.selOver.count || 0), bytesTotal: Number(j.selOver.bytesTotal || 0), itemsMax: Number(j.selOver.itemsMax || 0), bytesMax: Number(j.selOver.bytesMax || 0) } : null, omitted: j.omitted === true };
             }
           } catch { /* 깨진 줄은 건너뜀 — 장부 오염이 화면을 막지 않게 */ }
         }
         return null;
       } catch { return null; } // 부재=기록 없음(정상)
+    })(),
+    decisions: (() => {
+      // [§7 4-2b] 결정 장부의 열린 항목 — 개요 '지금 정할 것' 합산+검증 탭 카드(읽기 전용 · 답은 CLI decisions choose|delegate — 장부가 단일 권위).
+      try {
+        const lib = bridgeLib() as any;
+        if (!ws || !lib || typeof lib.readDecisions !== "function") return null;
+        const r = lib.readDecisions(ws);
+        const open: any[] = Array.isArray(r && r.open) ? r.open : [];
+        const en = typeof lib.loadLang === "function" && lib.loadLang() === "en";
+        const items = open.map((x: any) => ({ // 전량(장부에 상한이 없으므로 화면도 상한 없음 — 조용한 절단은 31번째부터 CLI 전용으로 되돌리는 결함·1회차 blocker)
+          id: String(x?.decisionId || ""), question: String(x?.question || ""), kind: String(x?.kind || ""), origin: String(x?.origin || ""), ts: String(x?.ts || ""),
+          block: (() => { try { return typeof lib.renderDecisionBlock === "function" ? String(lib.renderDecisionBlock(x, en)) : ""; } catch { return ""; } })(),
+        }));
+        return { open: open.length, items };
+      } catch { return null; }
     })(),
     uiTheme: loadUiTheme(),
     baseAvailable: bridgeLib() !== null,
@@ -5559,6 +5575,14 @@ class Dashboard {
     </div>
   </details>
 
+  <details id="decisionsSec" class="backlog-fold" style="display:none">
+    <summary class="sec accent-rose">${t("결정 장부 — 사용자가 정할 것", "Decision Ledger — for you to decide")} · <span class="sub2" id="dcSummary"></span></summary>
+    <div class="card">
+      <div class="hint">${t("구현자가 스스로 정할 수 없는 것만 여기 올라와요(제품 방향·위험 감수·범위). 각 항목의 <b>답하기</b> 줄 명령으로 고르거나 '네가 정해라'로 넘기면 다음 검증부터 반영돼요 — 이 카드는 읽기 전용(이 PC 로컬 장부).", "Only what the implementer cannot decide alone lands here (product direction, accepted risk, scope). Answer with the <b>answer</b> command in each item (choose, or delegate); it applies from the next verification — this card is read-only (local ledger).")}</div>
+      <div id="dcList" style="margin-top:6px"></div>
+    </div>
+  </details>
+
   <details id="backlogSec" class="backlog-fold" style="display:none">
     <summary class="sec accent-rose">${t("검증 확장 제안·판단 대기 — 보관함", "Verification-expansion Proposals & Pending Judgments — parking lot")} <span class="sub2">${t("핵심 프로필 전용", "core profile only")}</span> · <span class="sub2" id="blSummary"></span></summary>
     <div class="card">
@@ -6468,6 +6492,9 @@ class Dashboard {
     // 없었음 — 개요 합산에 편입+해당 위치로 이동(el=교차 패널 스크롤은 gotoEl 경유 규칙).
     var ec0=d.envelope&&d.envelope.cands?d.envelope.cands.filter(function(c9){return !c9.status||c9.status==="proposed";}).length:0; // proposed=장부 유래 후보의 '판단 대기' 상태(R1 blocker①)
     if(ec0) acts9.push({n:ec0, tab:"setup", el:"[data-cands-box]", label:T("수칙서 후보 — 올릴지 판단 대기(효력은 도장부터)","rulebook candidates awaiting your call (effect only after stamp)")});
+    // [§7 4-2b] 결정 장부 — 구현자가 못 정하는 것(제품 방향·위험·범위)만 장부에 오르고, 사용자가 고르거나 "네가 정해라"로 답해야 다음 검증이 이어진다.
+    var dc9=d.decisions&&d.decisions.open?d.decisions.open:0;
+    if(dc9) acts9.push({n:dc9, tab:"verify", el:"#decisionsSec", label:T("결정 장부 — 사용자 답 대기(고르기 또는 '네가 정해라')","decision ledger — awaiting your answer (choose or delegate)")});
     return acts9;
   }
   function renderOverview(d){
@@ -7323,6 +7350,7 @@ class Dashboard {
         if(e9.gen!==undefined && wbGen!==wbKey0){ wbGen=wbKey0; wbAdds.clear(); wbRemoves.clear(); } // 어느 축이 바뀌어도 초기화
         var h9=document.createElement("div"); h9.style.fontWeight="600"; h9.textContent=(d.lang==="en"?"Rules":"수칙"); ec.appendChild(h9); // [재편 B] 어휘 4종 — 정상 흐름 헤더
         var s9=document.createElement("div"); if(e9.tone==="warn"){ s9.style.cssText="color:var(--vscode-editorWarning-foreground,#d9a441)"; } else { s9.className="muted"; } s9.textContent=e9.label; ec.appendChild(s9);
+        if(d.usedMemory&&d.usedMemory.selOver){ var so9=d.usedMemory.selOver; var ov9=document.createElement("div"); ov9.style.cssText="color:var(--vscode-editorWarning-foreground,#d9a441);font-size:11px;margin-top:2px"; ov9.textContent=T("관련 수칙이 정상 범위("+so9.itemsMax+"항 · "+so9.bytesMax+"바이트)를 넘음 — 최근 검증 "+so9.count+"항 · "+so9.bytesTotal+"바이트 전량 동봉(누락 없음) · 서고 정리 권장","related rules exceed the normal range ("+so9.itemsMax+" items · "+so9.bytesMax+" bytes) — last verification carried "+so9.count+" items · "+so9.bytesTotal+" bytes, all included · consider tidying the archive"); ec.appendChild(ov9); } // [§7 4-2b] 서고 카드 초과 표기(정보 — 경보 아님)
         var actT=e9.act?e9.act:(e9.proposal==="recover"?"proposalRecover":e9.proposal==="pending"?"proposalApprove":"envelopeApprove"); // §7 증분 2 — 초안·복구는 별도 채널(도장=사용자 전용 표면)·act=카드가 지정한 행동(승인 없이 바뀐 내용 보기)
         var act2T=e9.proposal==="pending"?"proposalShow":"envelopeShow";
         if(e9.btn){ var ab=document.createElement("button"); ab.style.cssText="margin-top:4px;font-weight:700"; ab.textContent=e9.btn; ab.addEventListener("click", function(){ vscode.postMessage({type:actT, repo: e9.repo, lang: e9.lang, target: String(e9.driftTarget||"")}); }); ec.appendChild(ab); }
@@ -7407,6 +7435,23 @@ class Dashboard {
         pn.textContent = d.permissionMode==="plan" ? T("지금 플랜 모드예요 ✓","Plan mode is on now ✓") : T("지금은 플랜 모드 아니에요","Not in plan mode right now");
       } else { pn.style.display="none"; }
     }
+    // [§7 4-2b] 결정 장부 카드 — 읽기 전용(답은 CLI decisions choose|delegate · 장부 단일 권위). XSS 안전: createElement/textContent.
+    safe(function(){
+      const sec=$("decisionsSec"); if(!sec) return;
+      const dc=d.decisions;
+      if(!dc){ sec.style.display="none"; return; } // 무폴더·구 런타임만 숨김 — 빈 장부는 '비어 있음'으로 표시(기능 발견 가능)
+      sec.style.display="";
+      const sum=$("dcSummary"); if(sum) sum.textContent = dc.open ? T("답 대기 ","awaiting ")+dc.open+T("건"," item(s)") : T("비어 있음 — 구현자가 못 정하는 것이 생기면 여기 올라와요","empty — items appear when the implementer cannot decide alone");
+      const list=$("dcList"); if(!list) return; list.replaceChildren();
+      dc.items.forEach(function(it){
+        var row=el("div",""); row.style.margin="6px 0"; row.style.fontSize="12px"; row.style.lineHeight="1.5";
+        row.appendChild(el("span","badge b-always", it.kind||T("결정","decision")));
+        row.appendChild(el("span",""," "+it.question));
+        var pre=document.createElement("pre"); pre.style.cssText="white-space:pre-wrap;font-size:11px;margin:4px 0 0;padding:6px;border:1px solid var(--vscode-widget-border,#555);border-radius:6px"; pre.textContent=it.block||""; row.appendChild(pre);
+        var meta=el("div","muted", it.id+" · "+(it.origin||"")+" · "+(it.ts||"")); meta.style.fontSize="11px"; row.appendChild(meta);
+        list.appendChild(row);
+      });
+    });
     // P-12 v2.4: 보관함 카드 — 읽기 전용 가시화. XSS 안전: 전부 createElement/textContent.
     safe(function(){
       const sec=$("backlogSec"); if(!sec) return;

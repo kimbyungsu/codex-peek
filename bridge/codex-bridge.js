@@ -168,6 +168,7 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap, askId9p)
   }
   // [개요 카드] 조립 검사(경계 상호배제·계약 상한) 통과 뒤에만 기록 — 차단된 ask는 행을 남기지 않는다.
   // 기록 실패·이후 발송 실패의 잔여 위험은 화면이 '마지막 동봉 기록 시각'을 함께 표시해 정직화(단정 금지).
+  const so9 = carrier && carrier.selOver && (carrier.selOver.items || carrier.selOver.bytes) ? { count: Number(carrier.selOver.count || 0), bytesTotal: Number(carrier.selOver.bytesTotal || 0), itemsMax: SELECTOR_UNION_MAX, bytesMax: SELECTOR_UNION_BYTES_MAX } : null; // [§7 4-2b] 대시보드 서고 카드 초과 표기 재료(행 기록 조건은 아래 그대로)
   if (attSnap9 || (carrier && carrier.envelope)) {
     try {
       // [기억 권위 C-1·구현검증 1차 blocker①] askId=실행 UUID(호출자가 verdicts 행과 같은 값을 전달 — 두 원장 조인 키).
@@ -175,7 +176,7 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap, askId9p)
       // 지도 미동봉(mapMode off 등)이어도 경계(envelope)가 실렸으면 행을 남긴다 — 경계 영수증이 지도에 종속되지 않게.
       const askId9 = askId9p || (typeof process.env.CODEX_BRIDGE_ASK_JOB_ID === "string" && process.env.CODEX_BRIDGE_ASK_JOB_ID ? process.env.CODEX_BRIDGE_ASK_JOB_ID : "");
       const env9 = carrier && carrier.envelope ? { hash: carrier.envelope.hash, sup: carrier.envelope.sup.slice(), ab: carrier.envelope.ab.slice(), oos: carrier.envelope.oos.slice() } : null;
-      appendAttachUsage({ ts: new Date().toISOString(), ws: ws || configWs(), askId: askId9, items: attSnap9 ? attSnap9.items : [], couplings: attSnap9 ? attSnap9.couplings : 0, omitted: attSnap9 ? attSnap9.omitted : false, mapAbsent: !attSnap9, ...(env9 ? { envelope: env9 } : {}) });
+      appendAttachUsage({ ts: new Date().toISOString(), ws: ws || configWs(), askId: askId9, items: attSnap9 ? attSnap9.items : [], couplings: attSnap9 ? attSnap9.couplings : 0, omitted: attSnap9 ? attSnap9.omitted : false, mapAbsent: !attSnap9, ...(env9 ? { envelope: env9 } : {}), ...(so9 ? { selOver: so9 } : {}) });
     } catch { /* best-effort */ }
   }
   const reqLabel = (lang || loadLang()) === "en" ? "[Work Request]" : "[작업 요청]";
