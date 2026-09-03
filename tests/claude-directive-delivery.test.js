@@ -88,7 +88,8 @@ t("둘째 턴=명령 줄+상태 줄(재전송 없음)+사용자 규칙+동적 �
   assert.ok(!out.includes("[원격 확인]") && !out.includes("[전달 원칙") && !out.includes("[재판단 규약") && !out.includes("[수칙 인지 —") && !out.includes("유일한 제동"), "static directives not resent");
   assert.ok(out.includes(JSON.stringify({ n: 1, r: RULES[0] }).slice(1, -1)), "user rules still every turn (user's own setting)");
   // [확인 검증 1회차 blocker①] 사용자 규칙은 사용자 글이라 예산 밖(길이 제한 없음 — 그 사용자의 선택). 하네스 소유분(명령 줄+상태 줄+동적 신호)만 잰다.
-  const rulesBlock = CL.buildInjection(RULES, "Claude Code", CL.loadContract(ws, "ko").claudeChecklist, "ko");
+  const cRB = CL.loadContract(ws, "ko"); const effRB = CL.effectiveRuleCheck(cRB, "claude", "normal"); // [RULE-COMPLIANCE §3 A] 점검 블록 머리에 규칙 목록 지문(required일 때)
+  const rulesBlock = CL.buildInjection(RULES, "Claude Code", cRB.claudeChecklist, "ko", effRB.mode === "required" ? CL.ruleCheckFp8(effRB) : "");
   assert.ok(out.includes(rulesBlock), "user rules block present verbatim");
   slimLen = out.length - rulesBlock.length;
   assert.ok(slimLen <= CL.claudeTurnBudgetTotal(), `harness-owned per-turn injection ${slimLen} ≤ ${CL.claudeTurnBudgetTotal()} (user rules excluded — user text, unbounded by design)`);

@@ -3375,11 +3375,13 @@ function scoutHealthLine(target, en) {
 
 // rules(문자열 배열) → 매 턴 주입 텍스트. checklist=false면 규약만, true면 [계약점검] 강제.
 // 비어 있으면 "" 반환(주입 비용 0). lang: 주입 지시문 언어(규칙 '내용'은 사용자가 쓴 그대로).
-function buildInjection(rules, who, checklist, lang) {
+function buildInjection(rules, who, checklist, lang, fp8) {
   const r = (rules || []).map((s) => String(s).trim()).filter(Boolean);
   if (!r.length) return "";
   const json = JSON.stringify({ rules: r.map((t, i) => ({ n: i + 1, r: t })) });
   const en = (LANGS.includes(lang) ? lang : loadLang()) === "en";
+  // [RULE-COMPLIANCE §3 A 2026-09-03] 점검 블록 머리에 규칙 목록 지문 8자 — 종료 훅이 "주입된 그 목록에 대한 점검표"임을 구조로 대조한다(내용 무해석).
+  const headTag = fp8 ? (en ? `[Contract Check ${fp8}]` : `[계약점검 ${fp8}]`) : (en ? "[Contract Check]" : "[계약점검]");
   if (!checklist) {
     // 체크 해제: 규약/지침만 상수로 주입 (TODO 강제 없음).
     return en
@@ -3391,8 +3393,8 @@ function buildInjection(rules, who, checklist, lang) {
     return [
       `[Standing Contract · ${who} · constants applied every turn — do not ignore or omit]`,
       json,
-      `Instruction: this response MUST include the [Contract Check] block below. Do not skip items.`,
-      `[Contract Check]`,
+      `Instruction: this response MUST include the ${headTag} block below (keep the fingerprint in the header). Do not skip items.`,
+      headTag,
       ...r.map((_, i) => `- ${i + 1}) <complies|violated|n/a> — <one-line reason>`),
       `The rules are constants. If you violated one, do not hide it — mark it 'violated' and state why.`,
     ].join("\n");
@@ -3400,8 +3402,8 @@ function buildInjection(rules, who, checklist, lang) {
   return [
     `[고정 계약 · ${who} · 매 턴 적용되는 상수 — 무시·생략 금지]`,
     json,
-    `지시: 이번 응답 안에 아래 [계약점검] 블록을 반드시 포함하라. 항목을 건너뛰지 말 것.`,
-    `[계약점검]`,
+    `지시: 이번 응답 안에 아래 ${headTag} 블록을 반드시 포함하라(머리의 지문 그대로). 항목을 건너뛰지 말 것.`,
+    headTag,
     ...r.map((_, i) => `- ${i + 1}) <준수|위반|해당없음> — <한 줄 근거>`),
     `규칙은 상수다. 위반했다면 숨기지 말고 '위반'으로 표기하고 이유를 적어라.`,
   ].join("\n");
@@ -6549,3 +6551,150 @@ module.exports.resetCodexDirectiveDelivery = resetCodexDirectiveDelivery;
 module.exports.readCodexDirectiveReset = readCodexDirectiveReset;
 module.exports.clearCodexDirectiveResetMarker = clearCodexDirectiveResetMarker;
 module.exports.recordCodexDirective = recordCodexDirective;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [RULE-COMPLIANCE v5 §3 — 2026-09-03] 구현자 규칙 준수 구조: 하네스는 규칙 내용을 해석하지 않는다(개수·번호·목록 지문만). 답 끝의 [계약점검 <지문8>]
+// 블록을 두 종료 훅이 구조만 검사하고, 없으면 규칙 원문을 다시 실어 돌려보낸다(답 쓰는 순간 재독). 위반 표기 허용·장부에 남김·검증자 무관.
+// ─────────────────────────────────────────────────────────────────────────────
+const RULE_CHECK_DIR = path.join(BRIDGE_DIR, "rule-check");
+const RULE_CHECK_REASON_MIN = 8, RULE_CHECK_REASON_MAX = 200;
+function normRules(rules) { return (Array.isArray(rules) ? rules : []).map((s) => String(s).trim()).filter(Boolean); }
+function rulesFpOf(rules) { return sha1Of(JSON.stringify(normRules(rules))); }
+// 유효 설정 — 주입 훅과 종료 훅이 같은 함수로 계산한다. turnKind: "plan" | "normal" | "unknown"(앵커 미상=주입됐을 수 있다로 봄 — 안전 방향).
+function effectiveRuleCheck(c, host, turnKind) {
+  const codex = host === "codex";
+  const rules = normRules(codex ? (c && c.codexImplementer) : (c && c.claude));
+  const checklist = codex ? !(c && c.codexImplementerChecklist === false) : !(c && c.claudeChecklist === false);
+  const injectMode = String((codex ? (c && c.codexInjectMode) : (c && c.claudeInjectMode)) || "");
+  const injected = injectMode === "always" || (injectMode === "plan" && turnKind !== "normal");
+  if (checklist && injected && rules.length) return { mode: "required", rulesFp: rulesFpOf(rules), rulesN: rules.length, rules };
+  return { mode: "disabled", rulesFp: null, rulesN: 0, rules: [] };
+}
+function ruleCheckSame(a, b) { return !!(a && b && a.mode === b.mode && String(a.rulesFp || "") === String(b.rulesFp || "") && Number(a.rulesN || 0) === Number(b.rulesN || 0)); }
+function ruleCheckRecord(eff, turnId) { return { mode: eff.mode, rulesFp: eff.rulesFp, rulesN: eff.rulesN, turnId: String(turnId || ""), ts: new Date().toISOString() }; }
+function ruleCheckFp8(eff) { return String((eff && eff.rulesFp) || "").slice(0, 8); }
+const RULE_CHECK_HEAD_SRC = "\\[(?:계약점검|Contract Check)\\s+([0-9a-f]{8})\\]";
+const RULE_CHECK_LINE_RE = /^\s*(?:[-*•]\s*)?(\d{1,3})\)\s*(준수|위반|해당없음|complies|violated|n\/a)\s*[—–\-:·]\s*(\S.*)$/i; // 상태—근거 구분자 필수(1회차 blocker①)
+function normRuleMark(x) { const v = String(x || "").toLowerCase(); return (v === "준수" || v === "complies") ? "complies" : (v === "위반" || v === "violated") ? "violated" : "n/a"; }
+// 마지막 블록만 본다(답 안에 여러 번 나오면 마지막 것). 블록은 답의 '맨 끝'이어야 한다(1회차 blocker①): 머리 뒤에는 점검 줄과 빈 줄만 허용 —
+// 다른 줄이 나오면 trailing(끝이 아님·비연속)으로 기록해 판정이 거부한다. 중복 번호=마지막 것.
+function parseRuleCheckBlock(text) {
+  const s = String(text || ""); const re = new RegExp(RULE_CHECK_HEAD_SRC, "gi"); let m, last = null;
+  while ((m = re.exec(s))) last = { fp8: m[1].toLowerCase(), at: m.index + m[0].length };
+  if (!last) return { found: false, fp8: null, marks: new Map(), trailing: false };
+  const marks = new Map(); let trailing = false;
+  for (const line of s.slice(last.at).split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const lm = RULE_CHECK_LINE_RE.exec(line);
+    if (!lm) { trailing = true; break; }
+    marks.set(Number(lm[1]), { mark: normRuleMark(lm[2]), reason: String(lm[3] || "").trim() });
+  }
+  return { found: true, fp8: last.fp8, marks, trailing };
+}
+function ruleCheckReasonIssue(reason) {
+  const r = String(reason || "").trim();
+  if (r.length < RULE_CHECK_REASON_MIN) return "reason-short";
+  if (r.length > RULE_CHECK_REASON_MAX) return "reason-long";
+  const sf = safeBacklogAutoTitle(r); // 민감정보 '형태' 방어(의미 검출 아님 — ab-7)
+  return sf.ok ? null : "reason-sensitive-" + sf.reasonKey;
+}
+// 구조 판정 — ok | missing-block | fp-mismatch | incomplete(빠진 번호·근거 형식). 내용은 판정하지 않는다.
+function ruleCheckVerdict(lastReply, eff) {
+  if (!eff || eff.mode !== "required") return { ok: true, skipped: "disabled", marks: [] };
+  const fp8 = ruleCheckFp8(eff);
+  const all = Array.from({ length: eff.rulesN }, (_, i) => i + 1);
+  const p = parseRuleCheckBlock(lastReply);
+  if (!p.found) return { ok: false, reason: "missing-block", fp8, missing: all, bad: [], marks: [] };
+  if (p.fp8 !== fp8) return { ok: false, reason: "fp-mismatch", fp8, blockFp8: p.fp8, missing: all, bad: [], marks: [] };
+  if (p.trailing) return { ok: false, reason: "not-at-end", fp8, missing: all, bad: [], marks: [] };
+  const missing = [], bad = [], marks = [];
+  for (const n of all) {
+    const mk = p.marks.get(n);
+    if (!mk) { missing.push(n); continue; }
+    const issue = ruleCheckReasonIssue(mk.reason);
+    if (issue) { bad.push({ n, issue }); continue; }
+    marks.push({ n, mark: mk.mark, reasonFp: sha1Of(mk.reason).slice(0, 16) });
+  }
+  if (missing.length || bad.length) return { ok: false, reason: "incomplete", fp8, missing, bad, marks };
+  return { ok: true, fp8, marks };
+}
+// 차단문(코드 소유·언어 2종) + 규칙 JSON 원문(데이터 — 사용자 글 불변·해석 없음). why: rules-changed | verdict.reason
+function ruleCheckInstruction(lang, eff, verdict, why) {
+  const en = lang === "en"; const fp8 = ruleCheckFp8(eff);
+  const rulesJson = JSON.stringify({ rules: (eff.rules || []).map((t, i) => ({ n: i + 1, r: t })) });
+  const v = verdict || {};
+  const missList = (v.missing || []).concat((v.bad || []).map((b) => `${b.n}(${b.issue})`)).join(", ");
+  let head;
+  if (why === "rules-changed") head = en ? `[Rule self-check] The rule list changed during this turn (fingerprint ${fp8}) — re-read the rules below and rewrite the check block against them.` : `[규칙 자가점검] 이 턴 중 규칙 목록이 바뀌었습니다(지문 ${fp8}) — 아래 규칙을 다시 읽고 그 목록 기준으로 점검 블록을 다시 쓰세요.`;
+  else if (v.reason === "fp-mismatch") head = en ? `[Rule self-check] The check block refers to another rule list (${v.blockFp8}) — the current list's fingerprint is ${fp8}.` : `[규칙 자가점검] 점검 블록이 다른 규칙 목록(${v.blockFp8}) 기준입니다 — 현재 목록 지문은 ${fp8}입니다.`;
+  else if (v.reason === "missing-block") head = en ? `[Rule self-check] The last reply has no check block · rule-list fingerprint ${fp8}.` : `[규칙 자가점검] 마지막 답에 점검 블록이 없습니다 · 규칙 목록 지문 ${fp8}.`;
+  else if (v.reason === "not-at-end") head = en ? `[Rule self-check] The check block must be the very end of the reply — only check lines (and blank lines) may follow its header · fingerprint ${fp8}.` : `[규칙 자가점검] 점검 블록은 답의 맨 끝이어야 합니다 — 머리 뒤에는 점검 줄(과 빈 줄)만 올 수 있습니다 · 지문 ${fp8}.`;
+  else head = en ? `[Rule self-check] Missing or malformed lines: ${missList} · rule-list fingerprint ${fp8}.` : `[규칙 자가점검] 빠지거나 형식이 맞지 않는 줄: ${missList} · 규칙 목록 지문 ${fp8}.`;
+  const how = en
+    ? `End the reply with a block headed "[Contract Check ${fp8}]" and one line per rule: "n) complies|violated|n/a — reason (${RULE_CHECK_REASON_MIN}–${RULE_CHECK_REASON_MAX} chars, no secrets)". Marking "violated" is allowed — do not hide it.`
+    : `답 끝에 "[계약점검 ${fp8}]" 머리와 규칙마다 한 줄 "n) 준수|위반|해당없음 — 근거(${RULE_CHECK_REASON_MIN}~${RULE_CHECK_REASON_MAX}자·비밀값 금지)"를 쓰세요. '위반'으로 적는 것은 허용됩니다 — 숨기지 마세요.`;
+  return `${head} ${how}\n${rulesJson}`;
+}
+// 자가점검 장부 — 근거 원문은 저장하지 않고 지문만. 같은 (host, session, turnAnchor, rulesFp)는 마지막 행이 이긴다(fold). 기록 실패는 종료를 막지 않는다.
+function ruleCheckFileFor(ws) { return path.join(RULE_CHECK_DIR, wsKeyFor(ws) + ".jsonl"); }
+function appendRuleCheckRow(ws, row) {
+  try { fs.mkdirSync(RULE_CHECK_DIR, { recursive: true }); fs.appendFileSync(ruleCheckFileFor(ws), JSON.stringify(row) + "\n"); return true; } catch { return false; }
+}
+function ruleCheckRowKey(r) { return [String(r.host || ""), String(r.session || ""), String(r.turnAnchor || ""), String(r.rulesFp || "")].join("|"); }
+function readRuleCheckRows(ws) {
+  let raw = ""; try { raw = fs.readFileSync(ruleCheckFileFor(ws), "utf8"); } catch { return []; }
+  const latest = new Map();
+  for (const l of raw.split(/\r?\n/)) { if (!l.trim()) continue; let o; try { o = JSON.parse(l); } catch { continue; } if (!o || typeof o !== "object") continue; latest.set(ruleCheckRowKey(o), o); }
+  return [...latest.values()];
+}
+function latestRuleCheckRow(ws, host, session) {
+  const rows = readRuleCheckRows(ws).filter((r) => r.host === host && String(r.session || "") === String(session || ""));
+  return rows.length ? rows[rows.length - 1] : null;
+}
+// 대시보드 요약 — 최근 limit턴(fold 기준)·현재 규칙 지문 행과 옛 지문 행 분리·규칙 번호별 준수/위반/해당없음/미기재
+function ruleCheckSummary(ws, host, rulesFp, rulesN, limit) { // host 필터(1회차 blocker②: 운용 모드 전환 뒤 다른 구현자 기록 합산 금지)
+  const rows = readRuleCheckRows(ws).filter((r) => !host || r.host === host).slice(-(limit || 30));
+  const cur = rows.filter((r) => String(r.rulesFp || "") === String(rulesFp || ""));
+  const older = rows.length - cur.length;
+  const counts = Array.from({ length: Number(rulesN) || 0 }, (_, i) => ({ n: i + 1, complies: 0, violated: 0, na: 0, missing: 0 }));
+  for (const r of cur) {
+    const byN = new Map((Array.isArray(r.marks) ? r.marks : []).map((m) => [Number(m.n), m]));
+    for (const cnt of counts) { const m = byN.get(cnt.n); if (!m || r.closedBy === "attempt-cap") cnt.missing++; else if (m.mark === "complies") cnt.complies++; else if (m.mark === "violated") cnt.violated++; else cnt.na++; }
+  }
+  return { turns: cur.length, older, counts, lastTs: rows.length ? String(rows[rows.length - 1].ts || "") : "" };
+}
+// 앵커 갱신 — Claude(active/<sid>.json)·Codex(codex-active/<sid>.json). 다른 필드는 보존, ruleCheck만 교체(원자 쓰기).
+function readClaudeAnchorFile(sid) { const f = claudeAnchorFileFor(sid); if (!f) return null; try { const a = JSON.parse(fs.readFileSync(f, "utf8")); return a && typeof a === "object" ? a : null; } catch { return null; } }
+function writeClaudeAnchorRuleCheck(sid, rc) {
+  const f = claudeAnchorFileFor(sid); if (!f) return false;
+  let a; try { a = JSON.parse(fs.readFileSync(f, "utf8")); } catch { return false; }
+  if (!a || typeof a !== "object") return false;
+  return atomicWrite(f, JSON.stringify(Object.assign({}, a, { ruleCheck: rc })));
+}
+function writeCodexRuleCheck(sid, ws, rc) {
+  if (!sid || !ws) return false;
+  const cur = readCodexActive(sid) || {};
+  const rest = Object.assign({}, cur); delete rest.schema; delete rest.codexSession; delete rest.workspace; delete rest.ts;
+  return writeCodexActive(sid, ws, Object.assign(rest, { ruleCheck: rc }));
+}
+module.exports.RULE_CHECK_DIR = RULE_CHECK_DIR;
+module.exports.RULE_CHECK_REASON_MIN = RULE_CHECK_REASON_MIN;
+module.exports.RULE_CHECK_REASON_MAX = RULE_CHECK_REASON_MAX;
+module.exports.normRules = normRules;
+module.exports.rulesFpOf = rulesFpOf;
+module.exports.effectiveRuleCheck = effectiveRuleCheck;
+module.exports.ruleCheckSame = ruleCheckSame;
+module.exports.ruleCheckRecord = ruleCheckRecord;
+module.exports.ruleCheckFp8 = ruleCheckFp8;
+module.exports.parseRuleCheckBlock = parseRuleCheckBlock;
+module.exports.ruleCheckReasonIssue = ruleCheckReasonIssue;
+module.exports.ruleCheckVerdict = ruleCheckVerdict;
+module.exports.ruleCheckInstruction = ruleCheckInstruction;
+module.exports.ruleCheckFileFor = ruleCheckFileFor;
+module.exports.appendRuleCheckRow = appendRuleCheckRow;
+module.exports.readRuleCheckRows = readRuleCheckRows;
+module.exports.latestRuleCheckRow = latestRuleCheckRow;
+module.exports.ruleCheckSummary = ruleCheckSummary;
+module.exports.readClaudeAnchorFile = readClaudeAnchorFile;
+module.exports.writeClaudeAnchorRuleCheck = writeClaudeAnchorRuleCheck;
+module.exports.writeCodexRuleCheck = writeCodexRuleCheck;

@@ -311,7 +311,7 @@ function capHandoffInstruction(lang, round, verdict, context) {
     : "- PASS-NO-FINDINGS (마지막 판정 통과 — 열린 지적 없음·통과 이후의 수정만 미검증)");
   else if (ctx.unavailable || !evidenceLines.length) evidenceLines.push("- EVIDENCE-UNAVAILABLE (the latest verification findings could not be read completely)");
   const evidence = evidenceLines.join("\n");
-  const roundNote = lang === "en" ? ` If you quote a round figure, it must be the ledger's actual value (${round}); the closeout must also carry the three plain report titles (What changed / One scenario / Next steps).` : ` 회차 숫자를 쓰면 장부 실제값(${round}) 그대로여야 하고, 마감문에도 쉬운 말 세 칸 제목(무엇이 바뀌었나 / 이런 상황이 이렇게 됨 / 다음에 할 일)이 있어야 합니다.`;
+  const roundNote = lang === "en" ? ` If you quote a round figure, it must be the ledger's actual value (${round}).` : ` 회차 숫자를 쓰면 장부 실제값(${round}) 그대로여야 합니다.`;
   if (lang === "en") return roundNote + "\n" + `[Verify mode · actual round ${round}] The verification-call cap is exhausted and there is no pass proof bound to this turn (last verdict: ${vEn}). Do not start another verification job. Re-judge only the latest findings below and write one closeout using the exact headings. Put each evidence item in exactly one of the first four sections. The Stop hook accepts the closeout only when every item has one destination.\nLatest evidence (${ctx.source || "unavailable"}):\n${evidence}\nExpected dashboard alert key: ${ctx.alertKind || "verify-handoff-missing"}\n\n[Verification cap closeout]\n[Accepted and handled]\nOne item per line: - <key> <exact title> — Change: <specific change containing a file, backticked identifier, test/setting key, or measured value>; Check: <specific result with one of those anchors>; Evidence: <one of those anchors again>. Every field needs its own anchor. Write None if empty.\n[Rebutted and closed]\nOne item per line: - <key> <exact title> — Observation: <counterexample with its own anchor>; Reason: <closing reason with its own anchor>; Evidence: <one anchor again>. Every field needs its own anchor. Write None if empty.\n[Parked]\nOne item per line. Park only after backlog add with the exact finding title; include that open item's real 16-hex receipt id. Write None if empty.\n[User decision required]\nOnly open items of the decision ledger, pasted from \`node codex-bridge.js decisions render\` (block: - Decision <id>: <question> / Why: / Why the implementer cannot decide: / Option 1 (key): … — if chosen: … / Option 2 … / Recommended: / Answer: …). Use user decision required only for a boundary, product-direction, risk-acceptance, or external choice the implementer cannot decide — create it first with decisions raise and record it with finding-judge/round-judge escalate --decision <id>; a finding escalated this way is cited inside its block by key. Prose questions are rejected. If the only evidence line above is PASS-NO-FINDINGS, write None in all four sections. Write None if empty; do not invent a user question. EVIDENCE-UNAVAILABLE (the verifier's answer could not be read) is NOT a user decision — put it in [Residual risk call] as "Verify now — Reason: EVIDENCE-UNAVAILABLE …" (request the findings format again).\n[Residual risk call]\nOne line that starts with exactly one of these three, then Reason: — "Verify now" (the unverified edits touch a boundary, integrity, or data: start a new verification campaign in this turn and say so in Recommendation), "Next campaign" (local edits covered by regression tests: stamp them in the next campaign's first verification), "Ignorable" (no unverified code change, wording only).\n[Alert meaning]\nInclude the expected alert key verbatim. Explain whether the remaining red/yellow alert needs user action and that this closeout is not a verification pass.\n[Recommendation]\nRecommend one next action, or explicitly say no user decision is needed. Do not split this into several questions.`;
   const evidenceKo = evidence.replace("(the latest verification findings could not be read completely)", "(마지막 검증 지적을 완전하게 읽지 못함)");
   return roundNote + "\n" + `[검증 모드 · 실제 회차 ${round}] 검증 호출 상한이 소진됐고 결속된 통과 증명이 없습니다(마지막 판정: ${vKo}). 새 검증 작업은 만들지 마세요. 아래 마지막 검증 지적만 다시 판단해 정확한 제목으로 마감문 하나를 쓰세요. 각 근거는 아래 네 절 중 정확히 한 곳에만 들어가야 하며, 모든 항목의 행선지가 정해져야 Stop 훅이 인정합니다.\n마지막 검증 근거(${ctx.source || "판독 불가"}):\n${evidenceKo}\n현재 대시보드 경고 키: ${ctx.alertKind || "verify-handoff-missing"}\n\n[검증 상한 인계]\n[수용·처리]\n한 항목을 한 줄로 씁니다: - <키> <정확한 제목> — 변경: <파일·백틱 식별자·시험/설정 키·측정값 중 하나를 포함한 구체 변경>; 확인: <그런 식별 근거를 자체 포함한 구체 결과>; 근거: <식별 근거 하나>. 세 칸 각각 자기 근거가 필요합니다. 없으면 없음.\n[반박·종결]\n한 항목을 한 줄로 씁니다: - <키> <정확한 제목> — 관측: <자기 식별 근거를 포함한 반례>; 이유: <자기 식별 근거를 포함한 종결 이유>; 근거: <식별 근거 하나>. 세 칸 각각 자기 근거가 필요합니다. 없으면 없음.\n[보관함 이관]\n한 항목을 한 줄로 씁니다. 정확한 지적 제목으로 backlog add를 먼저 실행하고 그 열린 항목의 실제 16자리 영수증 id를 씁니다. 없으면 없음.\n[사용자 판단 필요]\n결정 장부의 열린 항목만, \`node codex-bridge.js decisions render\` 출력을 그대로 붙입니다(블록: - 결정 <id>: <질문> / 왜: / 구현자가 못 정하는 이유: / 선택 1 (키): … — 고르면: … / 선택 2 … / 권장: / 답하기: …). 사용자 판단은 구현자가 대신 정할 수 없는 범위표·제품 방향·위험 수용·외부 결정만 — 먼저 decisions raise 로 항목을 만들고 finding-judge/round-judge escalate --decision <id> 로 기록하며, 그렇게 올린 지적은 블록 안에 키로 인용합니다. 산문 질문은 거부됩니다. 위 근거가 PASS-NO-FINDINGS뿐이면 네 절을 모두 없음으로 쓰면 됩니다. 없으면 없음이라고 쓰고 사용자 질문을 만들지 마세요. EVIDENCE-UNAVAILABLE(검증자 답을 읽지 못함)은 사용자 판단이 아니라 [잔여 위험 판단]에 "즉시 재검증 — 이유: EVIDENCE-UNAVAILABLE …"로 씁니다(서식 재발급 요청).\n[잔여 위험 판단]\n검증자가 못 본 마지막 수정분을 어떻게 볼지 한 줄로 판단합니다. 셋 중 하나로 시작하고 이유를 답니다: "즉시 재검증"(경계·무결성·데이터에 닿는 수정 — 이 턴에서 새 검증 캠페인을 시작하고 권장 절에도 그렇게 씀) / "다음 캠페인 도장"(국소 수정·회귀 시험으로 덮임 — 다음 작업 첫 검증에 동승) / "무시 가능"(미검증 코드 수정 없음·문구뿐). 이유: 를 반드시 포함.\n[경고등 의미]\n현재 경고 키를 그대로 포함하고, 남은 빨강·노랑에 사용자 행동이 필요한지와 이 마감이 검증 통과는 아니라는 점을 밝히세요.\n[권장]\n다음 행동 하나를 권장하거나 사용자 판단이 필요 없다고 명시하세요. 질문을 여러 개로 쪼개지 마세요.`;
@@ -356,26 +356,9 @@ function codexAssistantText(file) {
 }
 
 
-// ── [HARNESS-REALIGNMENT §4 개선 3 · 보고 양식 경비원 2026-09-01] 파일을 바꾼 턴·상한 마감 턴의 '마지막 답'에 세 칸 제목이 있는지만 본다 ──
-// 절 내용·근거 형식은 검사하지 않는다(사용자 규칙은 그대로 — 이 양식은 "지키는지 보는 경비원"). 제목은 코드 소유 상수(ko/en 어느 쪽이든 3개 전부).
-// 제목 줄 인식=마감문 검사기와 같은 '줄 머리 앵커'(마크다운 #·굵게·대괄호·글머리 기호 뒤의 제목, 뒤에 글자·숫자가 바로 이어지지 않으면 인정).
-const REPORT_SECTIONS = { ko: ["무엇이 바뀌었나", "이런 상황이 이렇게 됨", "다음에 할 일"], en: ["What changed", "One scenario", "Next steps"] };
-function reportShapeCheck(text) {
-  const lines = String(text || "").split(/\r?\n/).map((l) => l.replace(/^[\s#>*\-•·\[]+/, "").replace(/[\]\*:：\s]+$/, "").trim()).filter(Boolean);
-  const has = (title) => { const re = new RegExp("^" + title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![\\p{L}\\p{N}])", "iu"); return lines.some((l) => re.test(l)); };
-  const miss = { ko: REPORT_SECTIONS.ko.filter((x) => !has(x)), en: REPORT_SECTIONS.en.filter((x) => !has(x)) };
-  if (!miss.ko.length) return { ok: true, lang: "ko", missing: [] };
-  if (!miss.en.length) return { ok: true, lang: "en", missing: [] };
-  return miss.ko.length <= miss.en.length ? { ok: false, lang: "ko", missing: miss.ko } : { ok: false, lang: "en", missing: miss.en };
-}
-function reportShapeInstruction(lang, missing, closeout) {
-  const en = lang === "en";
-  const titles = REPORT_SECTIONS[en ? "en" : "ko"];
-  const miss = Array.isArray(missing) && missing.length ? missing : titles;
-  return en
-    ? `[Report format · guard] ${closeout ? "A cap-closeout turn" : "A turn that changed files"} must end with a reply that carries these three section titles, one per line (e.g. "## What changed"): ${titles.join(" / ")}. Missing: ${miss.join(", ")}. Write each section in plain language for the user (what changed / one concrete scenario of how it now behaves / what comes next); keep the technical detail in the documents. This turn cannot end until the last reply has all three titles.`
-    : `[보고 양식 · 경비원] ${closeout ? "상한 마감 턴" : "파일을 바꾼 턴"}의 마지막 답에는 다음 세 칸 제목이 한 줄씩(예: "## 무엇이 바뀌었나") 있어야 합니다: ${titles.join(" / ")}. 빠진 칸: ${miss.join(", ")}. 각 칸은 사용자가 읽는 쉬운 말로(무엇이 바뀌었나 / 이렇게 동작하는 상황 예 하나 / 다음에 할 일) 쓰고 기술 내용은 문서에 두세요. 마지막 답에 세 제목이 모두 있어야 이 턴이 끝납니다.`;
-}
+// ── (연혁) 2026-09-01 개선 3 '보고 양식 경비원'(세 칸 제목 존재 검사)이 여기 있었다 — 2026-09-03 폐지. ──
+// [RULE-COMPLIANCE §3 E 2026-09-03] 보고 세 칸 상수(REPORT_SECTIONS)·reportShapeCheck·reportShapeInstruction 폐지 — 특정 사용자 선호의 전역 고정이었다.
+// 대체=사용자 규칙 칸+[계약점검] 구조 검사(contract-lib ruleCheckVerdict). 마지막 답 추출기는 그 검사가 재사용한다.
 // 마지막 답 1개(사람 발화 뒤의 마지막 assistant 텍스트) — 경비원은 '마지막 답'만 본다
 function lastAssistantText(lines, lastUser) {
   let last = "";
@@ -399,4 +382,4 @@ function lastCodexAssistantText(file) {
   return last;
 }
 module.exports = {
-  roundFigureMismatch, validateCapHandoff, capHandoffInstruction, capHandoffContext, findingsFromAnswer, parseFindingEvidence, verdictFromAnswer, claudeAssistantText, codexAssistantText, REPORT_SECTIONS, reportShapeCheck, reportShapeInstruction, lastAssistantText, lastCodexAssistantText };
+  roundFigureMismatch, validateCapHandoff, capHandoffInstruction, capHandoffContext, findingsFromAnswer, parseFindingEvidence, verdictFromAnswer, claudeAssistantText, codexAssistantText, lastAssistantText, lastCodexAssistantText };

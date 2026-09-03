@@ -196,7 +196,8 @@ interface BridgeState {
   challenges: { open: number; cleared: number; kept: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number; cleared: boolean; matchedAll: boolean; warnOpen: boolean; eventId: string }>; ndEventIds: string[] } | null; // 재확인(증분 4b) — cleared=실제 ack 조건(전 파일 일치)·null=구 설치본/부재
   movedRules: { count: number; items: Array<{ id: string; ko: string; en: string; hooks: string[] }> }; // [§4-B ③] 훅으로 옮긴 하네스 문장 장부(DIRECTIVE_MOVED)
   usedMemory: { ts: string; items: Array<{ path: string; note: string }>; couplings: number; omitted: boolean; selOver: { count: number; bytesTotal: number; itemsMax: number; bytesMax: number } | null } | null; // selOver=[§7 4-2b] 직전 검증의 서고 선별 정상 범위 초과(전량 동봉) — 서고 카드 표기 재료
-  decisions: { open: number; items: Array<{ id: string; question: string; kind: string; origin: string; ts: string; block: string }> } | null; // [§7 4-2b] 결정 장부(사용자 답 대기) — 읽기 전용·답은 CLI decisions choose|delegate. null=무폴더/구 런타임 // [UI 개편 2차] 직전 검증에 실린 지도 동봉 스냅샷(브릿지 stats/attach.jsonl 최신 1건). null=기록 없음/구 브릿지
+  decisions: { open: number; items: Array<{ id: string; question: string; kind: string; origin: string; ts: string; block: string }> } | null; // [§7 4-2b] 결정 장부(사용자 답 대기) — 읽기 전용·답은 CLI decisions choose|delegate. null=무폴더/구 런타임
+  ruleCheck: { host: "claude" | "codex"; checklist: boolean; rules: string[]; rulesFp: string; summary: { turns: number; older: number; counts: Array<{ n: number; complies: number; violated: number; na: number; missing: number }>; lastTs: string } } | null; // [RULE-COMPLIANCE §3 D] 규칙 자가점검 장부 요약(관찰 자료 — 판정·합산 아님). null=무폴더/구 런타임 // [UI 개편 2차] 직전 검증에 실린 지도 동봉 스냅샷(브릿지 stats/attach.jsonl 최신 1건). null=기록 없음/구 브릿지
   baseAvailable: boolean;
   permissionMode: string;
   codexReady: boolean;
@@ -2672,6 +2673,19 @@ function computeState(turnsN: number): BridgeState {
           block: (() => { try { return typeof lib.renderDecisionBlock === "function" ? String(lib.renderDecisionBlock(x, en)) : ""; } catch { return ""; } })(),
         }));
         return { open: open.length, items };
+      } catch { return null; }
+    })(),
+    ruleCheck: (() => {
+      // [RULE-COMPLIANCE §3 D] 규칙 자가점검 요약 — 현재 운용 모드의 구현자 규칙(사용자 글 그대로)·체크리스트 옵션·최근 30턴 fold 집계. 개요 '지금 정할 것'엔 합산하지 않는다.
+      try {
+        const lib = bridgeLib() as any;
+        if (!ws || !lib || typeof lib.rulesFpOf !== "function" || typeof lib.ruleCheckSummary !== "function" || typeof lib.normRules !== "function") return null;
+        const c9 = lib.loadContract(ws);
+        const host: "claude" | "codex" = c9 && c9.harnessMode === "codex-codex" ? "codex" : "claude";
+        const rules: string[] = lib.normRules(host === "codex" ? c9.codexImplementer : c9.claude);
+        const checklist = host === "codex" ? c9.codexImplementerChecklist !== false : c9.claudeChecklist !== false;
+        const rulesFp = String(lib.rulesFpOf(rules));
+        return { host, checklist, rules, rulesFp, summary: lib.ruleCheckSummary(ws, host, rulesFp, rules.length, 30) };
       } catch { return null; }
     })(),
     uiTheme: loadUiTheme(),
@@ -5575,6 +5589,14 @@ class Dashboard {
     </div>
   </details>
 
+  <details id="ruleCheckSec" class="backlog-fold" style="display:none">
+    <summary class="sec accent-rose">${t("규칙 자가점검 — 내가 적은 규칙을 구현자가 지켰다고 스스로 적은 기록", "Rule Self-check — what the implementer wrote against your rules")} · <span class="sub2" id="rcSummary"></span></summary>
+    <div class="card">
+      <div class="hint">${t("체크리스트 옵션이 켜져 있으면 구현자는 답을 끝낼 때 규칙마다 '준수/위반/해당없음+근거' 한 줄을 적어야 합니다(안 적으면 규칙 원문을 다시 받고 돌아감). 하네스는 내용을 판정하지 않고 <b>적었는지만</b> 봅니다 — 아래는 최근 30턴의 자가 기록 집계(위반 표기는 허용·미기재=상한 해제로 끝난 턴). 판단은 사용자 몫입니다.", "With the checklist option on, the implementer must end each reply with one line per rule (complies/violated/n/a + reason); otherwise the rules are resent and the reply is bounced. The harness never judges content — only whether the lines exist. Below: the last 30 turns of self-reports (violated is allowed; missing = turn ended by the repeat cap). Judgment is yours.")}</div>
+      <div id="rcList" style="margin-top:6px"></div>
+    </div>
+  </details>
+
   <details id="decisionsSec" class="backlog-fold" style="display:none">
     <summary class="sec accent-rose">${t("결정 장부 — 사용자가 정할 것", "Decision Ledger — for you to decide")} · <span class="sub2" id="dcSummary"></span></summary>
     <div class="card">
@@ -7435,6 +7457,26 @@ class Dashboard {
         pn.textContent = d.permissionMode==="plan" ? T("지금 플랜 모드예요 ✓","Plan mode is on now ✓") : T("지금은 플랜 모드 아니에요","Not in plan mode right now");
       } else { pn.style.display="none"; }
     }
+    // [RULE-COMPLIANCE §3 D] 규칙 자가점검 카드 — 관찰 자료(판정 아님). XSS 안전: createElement/textContent. 개요 합산 없음.
+    safe(function(){
+      const sec=$("ruleCheckSec"); if(!sec) return;
+      const rc=d.ruleCheck;
+      if(!rc){ sec.style.display="none"; return; }
+      sec.style.display="";
+      const sum=$("rcSummary"); const list=$("rcList"); if(!list) return; list.replaceChildren();
+      const hostLbl = rc.host==="codex" ? T("구현 Codex","implementer Codex") : "Claude";
+      if(!rc.checklist){ if(sum) sum.textContent=T("체크리스트 옵션 꺼짐 — 점검 없음(","checklist option off — no check (")+hostLbl+")"; list.appendChild(el("div","muted", T("검증 설정 탭의 '체크리스트 강제'를 켜면 이 카드가 채워집니다.","Turn on 'Enforce checklist' in the verify settings to populate this card."))); return; }
+      if(!rc.rules.length){ if(sum) sum.textContent=T("규칙 없음 — 점검 없음","no rules — no check"); list.appendChild(el("div","muted", T("규칙 칸이 비어 있어요.","The rules box is empty."))); return; }
+      if(sum) sum.textContent = hostLbl+" · "+T("최근 ","last ")+rc.summary.turns+T("턴"," turns")+(rc.summary.older?T(" · 이전 규칙 목록 기준 "," · older list: ")+rc.summary.older:"");
+      rc.summary.counts.forEach(function(c9,i){
+        var row=el("div",""); row.style.margin="5px 0"; row.style.fontSize="12px"; row.style.lineHeight="1.5";
+        row.appendChild(el("span","badge b-always", String(c9.n)));
+        row.appendChild(el("span",""," "+(rc.rules[i]||"")));
+        var meta=el("div","muted", T("준수 ","complies ")+c9.complies+T(" · 위반 "," · violated ")+c9.violated+T(" · 해당없음 "," · n/a ")+c9.na+T(" · 미기재 "," · missing ")+c9.missing); meta.style.fontSize="11px"; row.appendChild(meta);
+        list.appendChild(row);
+      });
+      if(rc.summary.lastTs){ var lt=el("div","muted", T("마지막 기록 ","last record ")+rc.summary.lastTs); lt.style.fontSize="11px"; list.appendChild(lt); }
+    });
     // [§7 4-2b] 결정 장부 카드 — 읽기 전용(답은 CLI decisions choose|delegate · 장부 단일 권위). XSS 안전: createElement/textContent.
     safe(function(){
       const sec=$("decisionsSec"); if(!sec) return;

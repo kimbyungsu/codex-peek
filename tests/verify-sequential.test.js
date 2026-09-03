@@ -74,8 +74,7 @@ fs.writeFileSync(CL.campaignFileFor(ws), JSON.stringify({ schema: "vcamp-1", cam
 const capped = JSON.parse(run().stdout).reason;
 ok(capped.includes("실제 회차 5/5") && !capped.includes("ask-start"), "5/5에서는 새 검증 대신 보류·선택지 보고");
 
-// [개선 3] 마감 턴도 쉬운 말 세 칸 제목이 있어야 종료 — 종료 훅 경로 픽스처에 앞붙임(검사기 단위 시험은 무접촉)
-const R3 = "## 무엇이 바뀌었나\n검증 5회 중 마지막 지적을 처리했습니다.\n## 이런 상황이 이렇게 됨\n같은 요청을 다시 보내면 지적 없이 통과합니다.\n## 다음에 할 일\n다음 작업 첫 검증에 도장.\n";
+// (연혁) 2026-09-01 개선 3 세 칸 제목 앞붙임이 여기 있었다 — 2026-09-03 폐지(규칙 자가점검으로 대체·이 픽스처는 규칙 없음=무검사)
 const handoffKo = `[검증 상한 인계]
 [수용·처리]
 없음
@@ -258,15 +257,11 @@ ok(blocked(run()), "CL-C 실제 transcript에서도 filler 인계는 held로 우
 fs.appendFileSync(tx, JSON.stringify({ type: "assistant", sessionId: sid, timestamp: "2026-07-25T01:02:40.000Z", message: { content: [{ type: "text", text: genericEn }] } }) + "\n");
 ok(blocked(run()), "CL-C 실제 transcript에서도 키워드형 일반론은 held로 우회하지 못함");
 writeEvidenceJob("ask-clcloseout-0000000005", campaignId, 5, `[지적 목록 v1]\n{"tag":"blocker","title":"저장한 선택값이 화면 재진입 뒤 사라진다"}\n[지적 목록 끝]\n검증: 실패\n`);
-fs.appendFileSync(tx, JSON.stringify({ type: "assistant", sessionId: sid, timestamp: "2026-07-25T01:03:00.000Z", message: { content: [{ type: "text", text: R3 + evidenceHandoff }] } }) + "\n");
+fs.appendFileSync(tx, JSON.stringify({ type: "assistant", sessionId: sid, timestamp: "2026-07-25T01:03:00.000Z", message: { content: [{ type: "text", text: evidenceHandoff }] } }) + "\n");
 ok(run().stdout === "", "5/5 뒤 완전한 인계문이 있으면 정상 종료");
 const heldPhase = JSON.parse(fs.readFileSync(CL.PHASE_FILE, "utf8"));
 ok(heldPhase.phase === "held" && heldPhase.round === 5, "정상 상한 종결은 미검증이 아니라 사용자 판단 대기");
-// [개선 3 · 1회차 blocker 반례] 앞선 답에 세 칸을 쓰고 마지막 마감 답에서 빼면 마감 미수락(마지막 답만 검사) — 마감문 자체는 맞으므로 세 칸만 요구
-fs.appendFileSync(tx, JSON.stringify({ type: "assistant", sessionId: sid, timestamp: "2026-07-25T01:03:05.000Z", message: { content: [{ type: "text", text: R3 }] } }) + "\n");
-fs.appendFileSync(tx, JSON.stringify({ type: "assistant", sessionId: sid, timestamp: "2026-07-25T01:03:07.000Z", message: { content: [{ type: "text", text: acceptedCloseout }] } }) + "\n");
-{ const rL = run(); ok(blocked(rL) && reasonOf(rL).includes("[보고 양식 · 경비원] 상한 마감 턴") && !reasonOf(rL).includes("[검증 상한 인계]"), "★세 칸이 앞선 답에만 있고 마지막 마감 답에 없으면 미수락(세 칸만 요구)"); }
-fs.appendFileSync(tx, JSON.stringify({ type: "assistant", sessionId: sid, timestamp: "2026-07-25T01:03:10.000Z", message: { content: [{ type: "text", text: R3 + acceptedCloseout }] } }) + "\n");
+fs.appendFileSync(tx, JSON.stringify({ type: "assistant", sessionId: sid, timestamp: "2026-07-25T01:03:10.000Z", message: { content: [{ type: "text", text: acceptedCloseout }] } }) + "\n");
 ok(run().stdout === "" && JSON.parse(fs.readFileSync(CL.PHASE_FILE, "utf8")).phase === "cap-settled", "사용자 판단 항목이 없으면 자동 정리 완료(통과 아님)로 구분");
 ok([run(), run(), run(), run()].every((x) => x.stdout === ""), "인계 뒤 Stop을 반복해도 다시 차단하거나 오경고하지 않음");
 ok(!CL.readIntegrityEvents().some((e) => e.kind === "verify-handoff-missing" || e.kind === "verify-incomplete"), "정상 상한 인계에는 빨간 누락·미검증 경고 0건");
@@ -274,7 +269,7 @@ ok(!CL.readIntegrityEvents().some((e) => e.kind === "verify-handoff-missing" || 
 console.log("[3b] 마감문 '즉시 재검증' 판단=다음 턴 종료 차단 → 그 캠페인 id를 담은 통과 검증이 결속돼야 해소");
 {
   const nowClose = acceptedCloseout.replace("다음 캠페인 도장 — 이유:", "즉시 재검증 — 이유:").replace(/\[권장\]\n[^\n]*/, "[권장]\n이 턴에서 새 검증 캠페인을 바로 시작하기를 권장합니다(경계 수정이 미검증이기 때문).");
-  fs.appendFileSync(tx, JSON.stringify({ type: "assistant", sessionId: sid, timestamp: "2026-07-25T01:03:20.000Z", message: { content: [{ type: "text", text: R3 + nowClose }] } }) + "\n");
+  fs.appendFileSync(tx, JSON.stringify({ type: "assistant", sessionId: sid, timestamp: "2026-07-25T01:03:20.000Z", message: { content: [{ type: "text", text: nowClose }] } }) + "\n");
   const rNow = run();
   const resF = path.join(home, "verify-findings", CL.wsKeyFor(ws) + ".residual-now.json");
   ok(rNow.stdout === "" && fs.existsSync(resF), "즉시 재검증 마감=이 턴은 정상 종결(캠페인=턴이라 같은 턴 재검증 불가)+마커 기록");
@@ -317,11 +312,11 @@ console.log("[3c] 목록형 마커 — 뒤 캠페인 마감이 앞 캠페인 미
   const say = (ts, text) => fs.appendFileSync(tx, JSON.stringify({ type: "assistant", sessionId: sid, timestamp: ts, message: { content: [{ type: "text", text }] } }) + "\n");
   // A: 캠페인3 상한 마감(즉시 재검증) → 마커 [c3]
   const t3 = "2026-07-25T03:00:00.000Z", c3 = "cl:" + sid + ":" + t3;
-  newTurn(t3, c3, 5); writeEvidenceJob("ask-c3-0000000005", c3, 5, failAns); say("2026-07-25T03:00:10.000Z", R3 + nowClose2);
+  newTurn(t3, c3, 5); writeEvidenceJob("ask-c3-0000000005", c3, 5, failAns); say("2026-07-25T03:00:10.000Z", nowClose2);
   ok(run().stdout === "" && JSON.parse(fs.readFileSync(resF, "utf8")).items.map((x) => x.campaignId).join() === c3, "캠페인3 즉시 재검증 마감=마커 [c3]");
   // B: 캠페인3 미이행인 채 캠페인4도 상한 마감(즉시 재검증) → 마커 [c3, c4](덮어쓰기 없음)
   const t4 = "2026-07-25T04:00:00.000Z", c4 = "cl:" + sid + ":" + t4;
-  newTurn(t4, c4, 5); writeEvidenceJob("ask-c4-0000000005", c4, 5, failAns); say("2026-07-25T04:00:10.000Z", R3 + nowClose2);
+  newTurn(t4, c4, 5); writeEvidenceJob("ask-c4-0000000005", c4, 5, failAns); say("2026-07-25T04:00:10.000Z", nowClose2);
   ok(run().stdout === "" && JSON.parse(fs.readFileSync(resF, "utf8")).items.map((x) => x.campaignId).join() === c3 + "," + c4, "★뒤 캠페인 마감이 앞 캠페인 마커를 덮지 않음(목록 누적)");
   // C: 다음 턴 — 차단문에 두 캠페인 id 모두
   const t5 = "2026-07-25T05:00:00.000Z", c5 = "cl:" + sid + ":" + t5;
@@ -349,7 +344,7 @@ console.log("[3c] 목록형 마커 — 뒤 캠페인 마감이 앞 캠페인 미
   ok(run().stdout === "" && !fs.existsSync(resF) && !CL.readIntegrityEvents().some((e) => e.kind === "verify-residual-now" && !e.ack), "전량 소비=종료 허용·마커 소멸·경보 해소");
   // 마커 기록 실패(경로가 디렉터리)=마감 미수락(차단문 '기록 실패')·제거 후 재출력=수락
   const t7 = "2026-07-25T07:00:00.000Z", c7 = "cl:" + sid + ":" + t7;
-  newTurn(t7, c7, 5); writeEvidenceJob("ask-c7-0000000005", c7, 5, failAns); say("2026-07-25T07:00:10.000Z", R3 + nowClose2);
+  newTurn(t7, c7, 5); writeEvidenceJob("ask-c7-0000000005", c7, 5, failAns); say("2026-07-25T07:00:10.000Z", nowClose2);
   fs.mkdirSync(resF, { recursive: true });
   const rFail = run();
   ok(blocked(rFail) && reasonOf(rFail).includes("마커 기록 실패"), "★마커 기록 실패=마감 미수락(fail-closed)");
@@ -358,7 +353,7 @@ console.log("[3c] 목록형 마커 — 뒤 캠페인 마감이 앞 캠페인 미
   fs.rmSync(resF, { force: true });
   // [2회차 blocker①] 노랑 경보 기록 실패(integrity.json이 디렉터리)=마감 미수락·복구 후 수락
   const t8 = "2026-07-25T08:00:00.000Z", c8 = "cl:" + sid + ":" + t8;
-  newTurn(t8, c8, 5); writeEvidenceJob("ask-c8-0000000005", c8, 5, failAns); say("2026-07-25T08:00:10.000Z", R3 + nowClose2);
+  newTurn(t8, c8, 5); writeEvidenceJob("ask-c8-0000000005", c8, 5, failAns); say("2026-07-25T08:00:10.000Z", nowClose2);
   const integF = path.join(home, "integrity.json"); const integBak = integF + ".bak";
   if (fs.existsSync(integF)) fs.renameSync(integF, integBak);
   fs.mkdirSync(integF, { recursive: true });
@@ -405,25 +400,22 @@ const genericPhaseC = JSON.parse(fs.readFileSync(CL.PHASE_FILE, "utf8"));
 ok(genericPhaseC.phase !== "held" && CL.readIntegrityEvents().some((e) => e.workspace && CL.normWs(e.workspace) === CL.normWs(wsC) && e.kind === "verify-handoff-missing"), "C-C 실제 rollout에서도 키워드형 일반론은 held로 우회하거나 누락 빨강을 지우지 못함");
 const dC = CL.openDecision(wsC, { origin: "implementer", kind: "product", campaignId: campC, sourceAsk: "", targetFp: "", question: "저장한 선택값 복원 방식을 영속 저장으로 바꿀까요?", why: "재진입 시 값이 사라짐", noDefault: "저장 방식은 제품 방향이라 구현자가 대신 정할 수 없음", choices: [{ key: "keep", label: "현재 방식 유지", ifChosen: "값이 사라질 수 있음" }, { key: "persist", label: "저장소에 영속", ifChosen: "다음 검증에서 확인" }], recommend: "persist" });
 const decisionKoC = unavailableKo.replace("[사용자 판단 필요]\n없음", "[사용자 판단 필요]\n" + CL.renderDecisionBlock(CL.readDecisions(wsC).latest.get(dC.decisionId), false));
-fs.appendFileSync(rollout, msg("assistant", R3 + decisionKoC) + "\n");
+fs.appendFileSync(rollout, msg("assistant", decisionKoC) + "\n");
 ok(runC().stdout === "", "C-C 실제 rollout에 인계문(결정 장부 블록)이 생기면 정상 종료");
 const heldC = JSON.parse(fs.readFileSync(CL.PHASE_FILE, "utf8"));
 ok(heldC.phase === "held" && heldC.round === 5 && CL.normWs(heldC.workspace) === CL.normWs(wsC), "C-C도 사용자 판단 대기로 표시");
 writeEvidenceJob("ask-cccloseout-0000000005", campC, 5, `[지적 목록 v1]\n{"tag":"blocker","title":"저장한 선택값이 화면 재진입 뒤 사라진다"}\n[지적 목록 끝]\n검증: 실패\n`, "ask-cccloseout-0000000005", wsC);
-fs.appendFileSync(rollout, msg("assistant", R3) + "\n");
 fs.appendFileSync(rollout, msg("assistant", acceptedCloseout) + "\n");
-{ const rLC = runC(); ok(blocked(rLC) && reasonOf(rLC).includes("[보고 양식 · 경비원] 상한 마감 턴"), "★C-C도 세 칸이 앞선 답에만 있으면 마감 미수락(마지막 답만 검사)"); }
-fs.appendFileSync(rollout, msg("assistant", R3 + acceptedCloseout) + "\n");
 ok(runC().stdout === "" && JSON.parse(fs.readFileSync(CL.PHASE_FILE, "utf8")).phase === "cap-settled", "C-C 실제 rollout도 사용자 판단 없는 마감을 자동 정리 완료(통과 아님)로 표시");
 ok(!CL.readIntegrityEvents().some((e) => e.workspace && CL.normWs(e.workspace) === CL.normWs(wsC) && (e.kind === "verify-handoff-missing" || e.kind === "verify-incomplete")), "인계문이 완성되면 누락 빨강이 자동 해소되고 일반 미검증도 없음");
 { // [잔여 재검증 강제] Codex↔Codex Stop도 같은 정본 마커(1회차 [주의]) — 즉시 재검증 마감=마커+노랑 경보
   const nowCloseC = acceptedCloseout.replace("다음 캠페인 도장 — 이유:", "즉시 재검증 — 이유:").replace(/\[권장\]\n[^\n]*/, "[권장]\n이 턴에서 새 검증 캠페인을 바로 시작하기를 권장합니다(경계 수정이 미검증이기 때문).");
-  fs.appendFileSync(rollout, msg("assistant", R3 + nowCloseC) + "\n");
+  fs.appendFileSync(rollout, msg("assistant", nowCloseC) + "\n");
   const resC = path.join(home, "verify-findings", CL.wsKeyFor(wsC) + ".residual-now.json");
   ok(runC().stdout === "" && fs.existsSync(resC) && JSON.parse(fs.readFileSync(resC, "utf8")).items[0].campaignId === campC, "C-C 즉시 재검증 마감=같은 정본 마커(캠페인 id 결속)");
   ok(CL.readIntegrityEvents().some((e) => e.workspace && CL.normWs(e.workspace) === CL.normWs(wsC) && e.kind === "verify-residual-now" && e.severity === "warning"), "C-C 노랑 경보");
   const hookSrc2 = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-hook.js"), "utf8");
-  ok(hookSrc2.includes("if(gate.ok&&residualOk&&judgeOk&&report.ok)") && hookSrc2.includes("residualPending(ws,Number(s.startedAt||0))") && hookSrc2.includes('[잔여 재검증 미이행 · 실제 회차'), "C-C 다음 턴 종료도 잔여 결속 통과 전엔 차단(소스 계약 — 정본 헬퍼 공유)");
+  ok(hookSrc2.includes("if(gate.ok&&residualOk&&judgeOk&&checkOk)") && hookSrc2.includes("residualPending(ws,Number(s.startedAt||0))") && hookSrc2.includes('[잔여 재검증 미이행 · 실제 회차'), "C-C 다음 턴 종료도 잔여 결속 통과 전엔 차단(소스 계약 — 정본 헬퍼 공유)");
   // [2회차 blocker②] 다음 턴이 '검증 불필요'(codexVerifyMode=code·수정 없음)여도 잔여 미소비면 종료 차단 → 결속 통과로 소비
   fs.writeFileSync(CL.contractFileFor(wsC, "ko"), JSON.stringify({ workspace: wsC, harnessMode: "codex-codex", codexVerifyMode: "code", codexVerifyBudget: 5 }));
   const turnN = "turn-next"; const startN = Date.now();

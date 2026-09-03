@@ -305,7 +305,7 @@ t("소스 계약: CLI 스위치·훅 배선(양 경로)·anchor 필드 결속", 
   const clB = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
   assert.ok(clB.includes("VERIFIER_FORMAT_CONSTRAINT_KO") && clB.includes("tail9"), "부품 B: 검증자 서식 범주 규칙 1줄(두 blockMode 공통 — 위임 모드 소실 금지)");
   assert.ok(CL.verifierFormatDirective("ko").includes("[제약 후보 v1]") && CL.verifierFormatDirective("ko", "delegated").includes("[제약 후보 v1]"), "서식 실출력 양 모드에 범주 규칙 실림");
-  assert.ok(ch.includes("writeConstraintTurnSnapshot(ws, turnId, ptxt)") && ch.includes("constraintAnchor: String(turnId)") && ch.includes('heartbeat(j, ws, sid, "UserPromptSubmit", capFields)') && ch.includes("keepCap"), "Codex 훅: turnId 앵커+heartbeat 결속+같은 턴 승계");
+  assert.ok(ch.includes("writeConstraintTurnSnapshot(ws, turnId, ptxt)") && ch.includes("constraintAnchor: String(turnId)") && ch.includes('heartbeat(j, ws, sid, "UserPromptSubmit", Object.assign({}, capFields || {}, { ruleCheck: rcRec9 }))') && ch.includes("keepCap"), "Codex 훅: turnId 앵커+heartbeat 결속+같은 턴 승계");
 });
 
 t("[ab-1 5회차 blocker] 원문 저장소 결속=동결 문맥 권위 — 응답 대기 중 정찰 대상 A→B 전환에도 A 원문 후보는 A 표식·B 화면 미합류; 표식 없는 문맥=거부", () => {

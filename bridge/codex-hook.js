@@ -17,8 +17,9 @@ const {
   verifyCampaignProgress, effectiveVerifyBudget, writeConstraintTurnSnapshot,
   wsKeyFor, previewGateDecision, implementerEnvelopeInject, constraintRepoKeyFor, readResidual, addResidual, removeResidualItems, residualPending, judgeRequiredPending,
   implementerEnvelopeInjectParts, codexStaticParts, codexDeliveryPlan, codexDeliveryStatusLine, readCodexDirectiveReset, recordCodexDirective, applyClaudeTurnBudget, buildVerifyDirectiveSlim, claudeStaticBlock, normCodexVerifyProfile,
+  effectiveRuleCheck, ruleCheckSame, ruleCheckRecord, ruleCheckFp8, ruleCheckVerdict, ruleCheckInstruction, appendRuleCheckRow, writeCodexRuleCheck, latestRuleCheckRow,
 } = require("./contract-lib.js");
-const { validateCapHandoff, capHandoffInstruction, capHandoffContext, codexAssistantText, reportShapeCheck, reportShapeInstruction, lastCodexAssistantText } = require("./verify-cap-handoff.js");
+const { validateCapHandoff, capHandoffInstruction, capHandoffContext, codexAssistantText, lastCodexAssistantText } = require("./verify-cap-handoff.js");
 
 const TURN_DIR = path.join(BRIDGE_DIR, "codex-turns");
 const ATTEMPT_DIR = path.join(BRIDGE_DIR, "codex-verify-attempts");
@@ -124,6 +125,7 @@ function heartbeat(j, ws, sid, eventName, extraFields) {
     effort:effortOf(j, prev.effort),
     ...(prev.directive && typeof prev.directive === "object" ? { directive: prev.directive } : {}), // [§4-B Codex 쪽] 규약 전달 기록·리셋은 도구 이벤트 heartbeat가 지우지 않는다
     ...(prev.directiveReset && typeof prev.directiveReset === "object" ? { directiveReset: prev.directiveReset } : {}),
+    ...(prev.ruleCheck && typeof prev.ruleCheck === "object" && String(prev.ruleCheck.turnId || "") === String(turnId) ? { ruleCheck: prev.ruleCheck } : {}), // [RULE-COMPLIANCE §3 A] 같은 턴의 점검 앵커 보존·새 턴 폐기
     ...keepCap,
     ...(extraFields || {}),
   });
@@ -135,7 +137,8 @@ function implementerContext(j, ws, c, sid, opts) {
   opts = opts || {};
   const parts=[]; const plan=j.permission_mode==="plan";
   const inject=c.codexInjectMode==="always" || (c.codexInjectMode==="plan" && plan);
-  if(inject){ const x=buildInjection(c.codexImplementer,"Codex Implementer",c.codexImplementerChecklist); if(x)parts.push(x); } // 사용자 글 — 예산 밖
+  const rcEff=effectiveRuleCheck(c,"codex",plan?"plan":"normal"); // [RULE-COMPLIANCE §3 A] 유효 설정(주입 훅=종료 훅 같은 함수)
+  if(inject){ const x=buildInjection(c.codexImplementer,"Codex Implementer",c.codexImplementerChecklist,undefined,rcEff.mode==="required"?ruleCheckFp8(rcEff):""); if(x)parts.push(x); } // 사용자 글 — 예산 밖
   const lang=loadLang();
   let provenance=""; try { provenance=String(require("./map-provenance.js").buildProvenanceNotice(ws,c)||""); } catch { provenance=""; } // 설계 경위 안내 — Claude 훅과 동형 결속
   const fixed=[], advisories=[]; let record=null;
@@ -158,6 +161,7 @@ function implementerContext(j, ws, c, sid, opts) {
   } else if(provenance) advisories.push(provenance);
   try { const x=buildScoutDirective(ws,c); if(x)advisories.push(x); } catch { /* advisory */ }
   try { const x=require("./map-bootstrap.js").hookTick(ws); if(x)advisories.push(x); } catch { /* advisory */ }
+  try { const lr=sid?latestRuleCheckRow(ws,"codex",sid):null; if(lr&&lr.closedBy==="attempt-cap"&&opts.prevTurnId&&String(lr.turnAnchor||"")===String(opts.prevTurnId)) advisories.push(lang==="en"?"[Rule self-check] The previous turn ended without the check block (repeat-block cap released) — the omission is on the ledger.":"[규칙 자가점검] 직전 턴이 점검 블록 없이 끝났습니다(반복 차단 상한 해제) — 미기재로 장부에 남았습니다."); } catch { /* advisory */ } // [RULE-COMPLIANCE §3 C]
   const bt=applyClaudeTurnBudget({fixed,advisories},lang);
   for(const f of fixed)parts.push(f); for(const tx of bt.texts)parts.push(tx);
   if(bt.overflow){ try{process.stderr.write("[Codex Bridge] implementer per-turn fixed pieces exceed the budget ("+bt.fixedLen+")\n");}catch{/* 진단 실패 무해 */} }
@@ -434,13 +438,16 @@ function onPrompt(j, ws, sid, c, roleRevision, preface, prePinned) {
       if (snap.ok) capFields = { constraintAnchor: String(turnId), constraintSourceHash: snap.sourceHash, ...(rk9 ? { constraintRepoKey: rk9 } : {}) }; // [ab-1] 원문 시점 정찰 대상 지문
     }
   } catch { /* best-effort — 훅 동작 막지 않음 */ }
-  heartbeat(j, ws, sid, "UserPromptSubmit", capFields);
+  // [RULE-COMPLIANCE §3 A] 규칙 점검 결정을 첫 앵커 쓰기(heartbeat)에 — 출력 없는 의도적 미주입 턴에도 disabled가 남는다
+  const prevTurnId9 = String(((readCodexActive(sid) || {}).turnId) || ""); // 직전 턴 id(미기재 안내 결속 — 최신 장부 행이 아니라 '직전 턴'만)
+  const rcRec9 = ruleCheckRecord(effectiveRuleCheck(c, "codex", j.permission_mode === "plan" ? "plan" : "normal"), turnId);
+  heartbeat(j, ws, sid, "UserPromptSubmit", Object.assign({}, capFields || {}, { ruleCheck: rcRec9 }));
   // 턴 상태 저장 실패를 무시하면 Stop이 turn-missing으로 차단될 때 원인을 알 수 없다 — 1회 재시도 후에도
   // 실패면 주입 컨텍스트에 고지(구현 검증 1차 지적: 상태 기록 실패의 침묵 금지).
   const turnState = { schema:"codex-turn-v1", turnId, workspace:ws, startedAt:Date.now(), lastActionAt:0, modified:false, permissionMode:j.permission_mode||"" };
   const turnSaved = save(stateFile(TURN_DIR,sid), turnState) || save(stateFile(TURN_DIR,sid), turnState);
   try { writePhase("codex-implementing", { round:0, session:sid, workspace:ws }); } catch { /* display only */ }
-  const ic9 = implementerContext(j, ws, c, sid); let ctx = ic9.text;
+  const ic9 = implementerContext(j, ws, c, sid, { prevTurnId: prevTurnId9 }); let ctx = ic9.text;
   // [4b-2 이중 배달 §4] Codex 구현자 주입 — 코어 ab 전문(상시)+턴 결속 선별 캐시/미리보기 안내.
   // Claude 훅(contract-inject)과 '같은 함수'(implementerEnvelopeInject) — 양 훅 공통 계약·advisory(실패=미주입).
   // [§4-B Codex 쪽] 규약 전달이 있는 턴(검증 모드 on)엔 ab 전문은 정적 블록 소속(세대 결속) — 매 턴은 선별 캐시/미리보기 안내(dyn)만. 검증 off=종전 그대로(ab+dyn).
@@ -538,16 +545,23 @@ function onStop(j, ws, sid, c) {
   const planned=j.permission_mode==="plan";
   // [잔여 재검증 강제 2026-08-29] Claude 경로(verify-guard)와 같은 정본 마커 — needed 판정보다 앞(검증 불필요 턴도 잔여 미소비면 종료 불가 · 2회차 blocker②) — 앞 캠페인 마감의 "즉시 재검증"이 결속 통과로 소비되기 전엔 종료 불가.
   const vmCc=c.codexVerifyMode; // C-C 슬롯 스위치(모드별 분리 2026-07-15) — CL-C의 verifyMode와 독립
-  const vmOff=vmCc==="off"; // [개선 3 · 확인 검증 2회차 blocker] off 모드=Claude 경로(verifyOff)와 같은 경계 — 검증·잔여 마커·판단 관문·상한을 보지 않고 보고 양식만 검사
+  const vmOff=vmCc==="off"; // [RULE-COMPLIANCE] off 모드=Claude 경로(verifyOff)와 같은 경계 — 검증·잔여 마커·판단 관문·상한을 보지 않고 자가점검만
   let residual=vmOff?null:readResidual(ws); let residualOk=true;
   if(residual){const rp=residualPending(ws,Number(s.startedAt||0)); if(rp.consumed.length&&!removeResidualItems(ws,rp.consumed.map((x)=>x.campaignId))) residualOk=false; else if(rp.items.length) residualOk=false; if(residualOk){residual=null;try{supersedeIntegrity(sid,"verify-residual-now",ws);}catch{}} else residual={items:rp.items.length?rp.items:residual.items};}
   const needed=vmCc==="always" || ((vmCc==="code"||vmCc==="plancode")&&edited) || (vmCc==="plancode"&&planned);
   const judgePending=vmOff?[]:judgeRequiredPending(ws); const judgeOk=judgePending.length===0; // [판단 관문 — 장치화 2026-08-30] Claude 경로(verify-guard)와 같은 정본 마커
-  // [개선 3 · 보고 양식 경비원] Claude 경로(verify-guard)와 같은 검사 — 파일을 바꾼 턴의 마지막 답에 세 칸 제목(제목 존재만·마지막 답 없는 턴은 대상 아님).
-  // 검증 불필요 턴(codexVerifyMode off 포함)의 조기 종료보다 앞에 둔다 — 종전엔 off면 경비원을 통째로 건너뛰었다(확인 검증 1회차 blocker).
   const lastReply=lastCodexAssistantText(rolloutForSession(j,sid));
-  const report=edited&&lastReply?reportShapeCheck(lastReply):{ok:true,lang:"",missing:[]};
-  if(!needed&&residualOk&&judgeOk&&report.ok){try{writePhase("done",{session:sid,workspace:ws});}catch{} return;} // 잔여 미소비·세 칸 누락이면 검증 불필요 턴이라도 아래 차단 흐름으로
+  // [RULE-COMPLIANCE §3 B·F] Claude 경로(verify-guard)와 동형 — 유효 설정 재계산→앵커(codex-active, Stop 진입 heartbeat가 같은 턴 것을 보존) 대조·교체→블록 구조 검사.
+  const anchorRC=readCodexActive(sid); const prevRC=anchorRC&&anchorRC.ruleCheck&&typeof anchorRC.ruleCheck==="object"?anchorRC.ruleCheck:null;
+  const turnKindRC=s&&typeof s.permissionMode==="string"&&s.permissionMode?(s.permissionMode==="plan"?"plan":"normal"):"unknown";
+  const eff=effectiveRuleCheck(c,"codex",turnKindRC);
+  const turnIdRC=String(j.turn_id||s.turnId||"");
+  let check={ok:true,why:"",verdict:null};
+  if(anchorRC&&!ruleCheckSame(prevRC,eff)){ writeCodexRuleCheck(sid,ws,ruleCheckRecord(eff,turnIdRC)); if(eff.mode==="required"&&lastReply) check={ok:false,why:"rules-changed",verdict:null}; }
+  else if(eff.mode==="required"&&lastReply){ const v=ruleCheckVerdict(lastReply,eff); check=v.ok?{ok:true,why:"",verdict:v}:{ok:false,why:v.reason,verdict:v}; }
+  const checkOk=check.ok;
+  const recordRuleCheck=(closedBy)=>{ if(eff.mode!=="required"||!lastReply) return; try{appendRuleCheckRow(ws,{ts:new Date().toISOString(),host:"codex",session:sid,turnAnchor:turnIdRC,rulesFp:eff.rulesFp,rulesN:eff.rulesN,marks:closedBy==="check"&&check.verdict?check.verdict.marks:[],closedBy});}catch{/* 가시성 채널 */} };
+  if(!needed&&residualOk&&judgeOk&&checkOk){recordRuleCheck("check");try{writePhase("done",{session:sid,workspace:ws});}catch{} return;} // 잔여 미소비·자가점검 누락이면 검증 불필요 턴이라도 아래 차단 흐름으로
   // 신선도에서 lastActionAt 제거(P-6 자기무효화 해소) — 검증 결과를 '회수하는' 도구 호출이 proof를 낡게
   // 만들지 않는다. 실제 파일 변경(dirty mtime)과 턴 시작만 본다. 커밋 은닉·회수 정당성은 durableProofGate의
   // HEAD OID·영수증 결속이 담당한다.
@@ -557,22 +571,22 @@ function onStop(j, ws, sid, c) {
   // '반영중' 고아 잔존(모드 불일치 없이도) ②자동 전환 가드(phaseBusy)가 정상 완료 직후를 활성 턴으로 오인해
   // 다음 Claude 질문을 최대 25분 오차단(구현검증 1차 지적 2)의 원인. 검증 답 회수~Stop 사이의 '반영중'은
   // cmdAsk가 그대로 기록하므로 표시 흐름은 유지된다.
-  if(gate.ok&&residualOk&&judgeOk&&report.ok){try{writePhase("done",{session:sid,workspace:ws});}catch{} return;}
+  if(gate.ok&&residualOk&&judgeOk&&checkOk){recordRuleCheck("check");try{writePhase("done",{session:sid,workspace:ws});}catch{} return;}
   const turnId=String(j.turn_id||s.turnId||"");
   const campaignId=turnId ? "cc:"+sid+":"+turnId : "";
   const progress=verifyCampaignProgress(ws,campaignId,effectiveVerifyBudget(c));
-  const progressEpoch=crypto.createHash("sha1").update(JSON.stringify({campaignId,count:progress.count||0,budget:progress.budget||0,since,edited,planned,reportOk:report.ok,roleRevision:role.revision,residual:residual?residual.items.map((x)=>x.campaignId).join(","):"",judge:judgePending.map((x)=>x.askId).join(",")})).digest("hex");
+  const progressEpoch=crypto.createHash("sha1").update(JSON.stringify({campaignId,count:progress.count||0,budget:progress.budget||0,since,edited,planned,checkOk,ruleCheck:[eff.mode,eff.rulesFp||"",eff.rulesN].join("|"),roleRevision:role.revision,residual:residual?residual.items.map((x)=>x.campaignId).join(","):"",judge:judgePending.map((x)=>x.askId).join(",")})).digest("hex");
   const round=progress.tracked&&progress.budget>=1?`${progress.count}/${progress.budget}`:(progress.budget===0?t("무제한","unlimited"):t("미집계","untracked"));
   const capReached=!vmOff&&progress.tracked&&progress.budget>=1&&progress.count>=progress.budget; // off 모드=상한 마감 흐름 없음
   const handoffCtx=capReached?Object.assign(capHandoffContext(BRIDGE_DIR,ws,campaignId),{roundCount:progress.count,roundBudget:progress.budget}):null; // [P10] 마감문 회차 숫자 대조 재료
   const capCloseout=capReached?validateCapHandoff(codexAssistantText(rolloutForSession(j,sid)),handoffCtx):null;
-  const closeReport=capReached?reportShapeCheck(lastReply):{ok:true,missing:[]}; // [개선 3] 마감문 턴도 쉬운 말 세 칸 필수 — '마지막 답'만(누적 텍스트면 앞선 답의 제목으로 통과 — 1회차 blocker)
   let residualWriteFailed=false;
-  if(capReached&&capCloseout.ok&&closeReport.ok){
+  if(capReached&&capCloseout.ok&&checkOk){ // [RULE-COMPLIANCE] 마감 턴도 규칙 자가점검(규칙이 있을 때만)
     let wroteOk=true;
     if(capCloseout.residualRisk==="now"){ const evLines=(handoffCtx&&Array.isArray(handoffCtx.evidence)?handoffCtx.evidence:[]).map((e)=>`${e.key} ${e.title}`); wroteOk=addResidual(ws,{campaignId,sourceAsk:(handoffCtx&&handoffCtx.source)||"",evidence:evLines,ts:new Date().toISOString()}); }
     if(wroteOk&&capCloseout.residualRisk==="now"){ const ko=`마감문 판단 "즉시 재검증" — 다음 턴 첫 검증이 통과할 때까지 완료 보고가 차단됩니다(요청문에 캠페인 id ${campaignId} 포함).`; const en=`Closeout call "Verify now" — completion reports stay blocked until the next turn's first verification passes (its request must include campaign id ${campaignId}).`; let evOk=false; try{ evOk=appendIntegrityEvent({ts:new Date().toISOString(),session:sid,workspace:ws,kind:"verify-residual-now",severity:"warning",detail:t(ko,en),detailKo:ko,detailEn:en},{supersedeSameKindWs:true})===true; }catch{ evOk=false; } wroteOk=evOk; } // [2회차 blocker①] 노랑 경보 기록도 성공 조건(반환값 검사)
     if(wroteOk){
+      recordRuleCheck("check");
       try{supersedeIntegrity(sid,"verify-handoff-missing",ws);}catch{}
       try{writePhase(capCloseout.needsUserDecision?"held":"cap-settled",{session:sid,workspace:ws,round:progress.count});}catch{}
       return;
@@ -589,6 +603,8 @@ function onStop(j, ws, sid, c) {
     try{writePhase("incomplete",{session:sid,workspace:ws});}catch{} return;
   }
   if(n>MAX_VERIFY_ATTEMPTS){
+    if(eff.mode==="required"&&!checkOk){ recordRuleCheck("attempt-cap"); try{appendIntegrityEvent({ts:new Date().toISOString(),session:sid,workspace:ws,kind:"rule-check-missed",severity:"warning",detail:"이 턴이 규칙 자가점검 블록 없이 끝났습니다(반복 차단 상한 해제) — 장부에 '미기재'로 남았습니다.",detailKo:"이 턴이 규칙 자가점검 블록 없이 끝났습니다(반복 차단 상한 해제) — 장부에 '미기재'로 남았습니다.",detailEn:"This turn ended without the rule self-check block (repeat-block cap released) — recorded as 'missing' on the ledger."},{supersedeSameKindWs:true});}catch{}
+      if((gate.ok||!needed)&&residualOk&&judgeOk&&!capReached&&!residualWriteFailed){ try{writePhase("done",{session:sid,workspace:ws});}catch{} return; } } // [RULE-COMPLIANCE §3 C] 자가점검만 실패=노랑 1건으로 종료(거짓 빨강 금지)
     if((residual&&!residualOk)||residualWriteFailed){ const ids9=residualWriteFailed?campaignId:residual.items.map((x)=>x.campaignId).join(", "); const ko=residualWriteFailed?`"즉시 재검증" 판단(캠페인 ${ids9})의 마커 기록에 실패해 실행 강제를 걸지 못한 채 턴이 끝났습니다 — 디스크 확인 후 마감문을 다시 출력하세요.`:`"즉시 재검증" 판단(캠페인 ${ids9})이 이행되지 않은 채 턴이 끝났습니다 — 다음 턴에도 계속 차단됩니다.`; const en=residualWriteFailed?`The "Verify now" marker for campaign ${ids9} could not be written, so enforcement is not armed — check the disk and re-emit the closeout.`:`The "Verify now" call (campaign ${ids9}) was not carried out before the turn ended — it keeps blocking next turns.`; try{appendIntegrityEvent({ts:new Date().toISOString(),session:sid,workspace:ws,kind:"verify-residual-now",severity:"error",detail:t(ko,en),detailKo:ko,detailEn:en},{supersedeSameKindWs:true});}catch{} try{writePhase("incomplete",{session:sid,workspace:ws});}catch{} return; }
     if(capReached){
       const ko=(handoffCtx&&handoffCtx.passNoFindings)?`검증 상한 ${round} 도달 — 마지막 판정은 통과였고 열린 지적도 없지만, 통과 이후의 수정이 검증되지 않은 채 턴이 끝났습니다(잔여 수정=미검증). 다음 턴 첫 검증이 이 잔여를 닫으면 해소됩니다.`:`검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.`;
@@ -598,8 +614,8 @@ function onStop(j, ws, sid, c) {
     try{writePhase("incomplete",{session:sid,workspace:ws});}catch{} return;
   }
   if(!judgeOk){block(t(`[판단 관문 · 실제 회차 ${round}] 구현자 판단이 기록되지 않은 판정이 ${judgePending.length}건 있어 이 턴을 끝낼 수 없습니다: ${judgePending.map((x)=>`${x.askId} [${x.reason}]`).join(", ")}. 기록: node "${path.join(BRIDGE_DIR,"codex-bridge.js")}" round-judge <askId> <close-oos|re-verify|escalate --decision <id>> --note "근거" — escalate(사용자 방향 질문)는 먼저 decisions raise 로 결정 장부 항목을 만들어야 합니다.`,`[Judgment gate · actual round ${round}] ${judgePending.length} verdict(s) still need the implementer's judgment: ${judgePending.map((x)=>`${x.askId} [${x.reason}]`).join(", ")}. Record: node "${path.join(BRIDGE_DIR,"codex-bridge.js")}" round-judge <askId> <close-oos|re-verify|escalate --decision <id>> --note "..." — escalate needs a decision made first with decisions raise.`));return;}
-  if(capReached&&capCloseout&&capCloseout.ok&&!closeReport.ok){block(reportShapeInstruction(loadLang()==="en"?"en":"ko",closeReport.missing,true));return;} // [개선 3] 마감문은 맞는데 세 칸 없음
-  if(!capReached&&!report.ok&&(gate.ok||!needed)&&residualOk){block(reportShapeInstruction(loadLang()==="en"?"en":"ko",report.missing,false));return;} // [개선 3] 검증은 됐거나 불필요(off)한데 보고 양식만 빠짐
+  if(capReached&&capCloseout&&capCloseout.ok&&!checkOk){block(ruleCheckInstruction(loadLang()==="en"?"en":"ko",eff,check.verdict,check.why));return;} // [RULE-COMPLIANCE] 마감문은 맞는데 자가점검 없음
+  if(!capReached&&!checkOk&&(gate.ok||!needed)&&residualOk){block(ruleCheckInstruction(loadLang()==="en"?"en":"ko",eff,check.verdict,check.why));return;} // [RULE-COMPLIANCE] 검증은 됐거나 불필요한데 자가점검만 없음
   if(residualWriteFailed){block(t(`[잔여 재검증 마커 기록 실패] 마감문의 "즉시 재검증" 판단(마커 또는 노랑 경보)을 저장하지 못했습니다(디스크). 같은 마감문을 다시 출력해 저장을 재시도하세요 — 마커·경보가 남기 전에는 마감이 인정되지 않습니다.`,`[Residual marker/alert write failed] Your closeout called "Verify now" but the marker or the yellow alert could not be written (disk). Re-emit the same closeout to retry; the turn is not settled until both the marker and the alert exist.`));return;}
   if(capReached){block(capHandoffInstruction(loadLang()==="en"?"en":"ko",round,gate.reason,handoffCtx));return;}
   if(residual&&!residualOk){block(t(`[잔여 재검증 미이행 · 실제 회차 ${round}] 직전 캠페인 ${residual.items.map((x)=>x.campaignId).join(", ")} 마감에서 "즉시 재검증"으로 판단한 미검증분이 아직 검증되지 않았습니다. 남은 캠페인 id마다 이번 턴에서 \`node "${path.join(BRIDGE_DIR,"codex-bridge.js")}" ask-start --allow-new "[잔여 재검증 ${residual.items[0].campaignId}] <무엇을 검증할지>"\` 로 시작하세요 — 요청문에 그 캠페인 id 문자열이 그대로 들어가야 통과가 이 판단에 결속됩니다 — 그리고 \`ask-wait <job-id>\` 를 통과까지 반복하세요. 미검증분: ${residual.items.map((x)=>`[${x.campaignId}] ${(x.evidence||[]).join(" / ")||"(마감문 참조)"}`).join(" ‖ ")}`,`[Residual re-verification pending · actual round ${round}] The previous campaign(s) ${residual.items.map((x)=>x.campaignId).join(", ")} closed with the call "Verify now" and those changes are still unverified. For each pending campaign id start \`node "${path.join(BRIDGE_DIR,"codex-bridge.js")}" ask-start --allow-new "[residual re-verification ${residual.items[0].campaignId}] <what to verify>"\` — the request must contain the campaign id verbatim — then repeat \`ask-wait <job-id>\` until it passes. Unverified: ${residual.items.map((x)=>`[${x.campaignId}] ${(x.evidence||[]).join(" / ")||"(see the closeout)"}`).join(" ‖ ")}`));return;}

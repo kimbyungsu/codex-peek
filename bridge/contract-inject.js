@@ -6,7 +6,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { isRealHookInput, folderChangeOf, folderChangeNotice, loadContract, loadLang, buildInjection, buildVerifyDirective, buildVerifyDirectiveSlim, claudeStaticParts, claudeDeliveryPlan, claudeStaticBlock, claudeDeliveryStatusLine, implementerEnvelopeInjectParts, readClaudeDirectiveReset, clearClaudeDirectiveResetMarker, applyClaudeTurnBudget, harnessModeSwitchNotice, buildScoutDirective, verifyCampaignProgress, atomicWrite, BRIDGE_DIR, ACTIVE_DIR, writePhase, patchContractFields, contractReadState, activeAskJobFor, phaseBusy, contractLockIssue, turnAnchorOf, writeConstraintTurnSnapshot, constraintRepoKeyFor } = require("./contract-lib.js");
+const { isRealHookInput, folderChangeOf, folderChangeNotice, effectiveRuleCheck, ruleCheckRecord, ruleCheckFp8, latestRuleCheckRow, loadContract, loadLang, buildInjection, buildVerifyDirective, buildVerifyDirectiveSlim, claudeStaticParts, claudeDeliveryPlan, claudeStaticBlock, claudeDeliveryStatusLine, implementerEnvelopeInjectParts, readClaudeDirectiveReset, clearClaudeDirectiveResetMarker, applyClaudeTurnBudget, harnessModeSwitchNotice, buildScoutDirective, verifyCampaignProgress, atomicWrite, BRIDGE_DIR, ACTIVE_DIR, writePhase, patchContractFields, contractReadState, activeAskJobFor, phaseBusy, contractLockIssue, turnAnchorOf, writeConstraintTurnSnapshot, constraintRepoKeyFor } = require("./contract-lib.js");
 
 // [P7 ⓐ 2026-09-01] 불러오기(require)만 됐을 때는 아무것도 하지 않는다 — stdin도 읽지 않고 앵커도 쓰지 않는다(2026-08-28 로드 시험이 앵커를 덮은 실사고).
 if (require.main !== module) return;
@@ -56,9 +56,13 @@ process.stdin.on("end", () => {
   } catch { prevDirective = null; prevReset = null; }
   // [P7 ⓑ] 이전 앵커의 폴더와 다르면 변경 기록(해제 전까지 승계) — ask-start가 이 기록을 보면 시작하지 않는다(--folder-changed-ok 로만).
   const folderChange = folderChangeOf(prevAnchor0, ws);
+  // [RULE-COMPLIANCE §3 A] 이 턴의 규칙 점검 결정(required|disabled·규칙 목록 지문·개수)을 '첫 앵커 쓰기'에 기록 — 출력이 없는 의도적 미주입 턴에도 남는다.
+  let cRC = null; try { cRC = loadContract(ws); } catch { cRC = null; }
+  const ruleCheck = ruleCheckRecord(effectiveRuleCheck(cRC || {}, "claude", hook.permission_mode === "plan" ? "plan" : "normal"), constraintAnchor || "");
   const anchorBase = {
     workspace: ws,
     claudeSession: sid,
+    ruleCheck,
     ...(folderChange ? { folderChange } : {}),
     // §5.3: 플랜 모드 감지·라이브표시용. Claude Code UserPromptSubmit 입력의 permission_mode
     // ("plan"이면 플랜 모드). 문서 예시는 "default"라 실제 값은 실로그로 확인(빈값=미노출).
@@ -68,8 +72,10 @@ process.stdin.on("end", () => {
   };
   const activePayload = JSON.stringify({ ...anchorBase, ...(prevDirective ? { directive: prevDirective } : {}), ...(prevReset ? { directiveReset: prevReset } : {}) }); // 전달 기록 보존(계획 확정 전 덮어쓰기 손실 방지)
   const writeAnchors = (payload) => {
-    try { atomicWrite(path.join(BRIDGE_DIR, "active.json"), payload); } catch { /* ignore */ }
-    if (sid) { try { const safe = String(sid).replace(/[^a-zA-Z0-9_-]/g, ""); if (safe) atomicWrite(path.join(ACTIVE_DIR, safe + ".json"), payload); } catch { /* ignore */ } }
+    let okG = false, okS = true;
+    try { okG = atomicWrite(path.join(BRIDGE_DIR, "active.json"), payload) === true; } catch { okG = false; }
+    if (sid) { try { const safe = String(sid).replace(/[^a-zA-Z0-9_-]/g, ""); if (safe) okS = atomicWrite(path.join(ACTIVE_DIR, safe + ".json"), payload) === true; } catch { okS = false; } }
+    if (!okG || !okS) { try { process.stderr.write("[Codex Bridge] anchor write failed (session " + String(sid) + ") — the Stop hook will treat the rule check as required\n"); } catch { /* 진단 실패 무해 */ } } // [RULE-COMPLIANCE] 침묵 금지·주입은 계속
   };
   // (1) 레거시 단일 active.json — 확장(activeWorkspace)·세션ID 없는 폴백 경로가 읽음.
   // (2) 세션별 active(active/<claudeSession>.json) — configWs가 1순위로 읽어, 다른 창이 단일 active.json을
@@ -156,7 +162,12 @@ process.stdin.on("end", () => {
   let parts = [];
   let dlvPlan = null; // 전달 계획(try 밖에서도 finalize가 읽는다)
   const advisories = []; // [§4-B ④] 안내(지도 상태·부트스트랩)
-  if (folderChange) advisories.push(folderChangeNotice(folderChange, lang)); // [P7 ⓑ] 구현자에게도 같은 사실을 1줄로(검증 시작 시 거부되는 이유를 미리) — 검증 모드면 매 턴 예산 안에서 순서대로(참고 자료 절단), 아니면 종전대로
+  if (folderChange) advisories.push(folderChangeNotice(folderChange, lang)); // [P7 ⓑ] 구현자에게도 같은 사실을 1줄로(검증 시작 시 거부되는 이유를 미리)
+  try { // [RULE-COMPLIANCE §3 C] 직전 턴이 자가점검 미기재(상한 해제)로 끝났으면 1줄 — 코드 소유 문장·규칙 재동봉 없음(이 턴 머리에 이미 있음)
+    const lastRC = sid ? latestRuleCheckRow(ws, "claude", sid) : null;
+    const prevTurnAnchor = prevAnchor0 ? String(prevAnchor0.constraintAnchor || prevAnchor0.ts || "") : ""; // '직전 턴'에만 결속(최신 행이 옛 턴이면 침묵 — 1회차 보완)
+    if (lastRC && lastRC.closedBy === "attempt-cap" && prevTurnAnchor && String(lastRC.turnAnchor || "") === prevTurnAnchor) advisories.push(lang === "en" ? "[Rule self-check] The previous turn ended without the check block (repeat-block cap released) — the omission is on the ledger." : "[규칙 자가점검] 직전 턴이 점검 블록 없이 끝났습니다(반복 차단 상한 해제) — 미기재로 장부에 남았습니다.");
+  } catch { /* advisory */ }
   if (switchNotice) parts.push(switchNotice); // 자동 전환 고지는 항상 최상단(다른 주입이 없어도 단독 출력)
   try {
     const c = contract || loadContract(ws, lang);
@@ -165,7 +176,7 @@ process.stdin.on("end", () => {
     const planActive = hook.permission_mode === "plan";
     const injectClaude = c.claudeInjectMode === "always" || (c.claudeInjectMode === "plan" && planActive);
     if (injectClaude) {
-      const rules = buildInjection(c.claude, "Claude Code", c.claudeChecklist);
+      const rules = buildInjection(c.claude, "Claude Code", c.claudeChecklist, undefined, ruleCheck.mode === "required" ? ruleCheckFp8(ruleCheck) : "");
       if (rules) parts.push(rules);
     }
     dlvPlan = null; // [§4-B ① Claude 쪽] 정적 지시=세션 1회(첫 턴·리셋·세대 변경에만 전문), 매 턴=명령 줄+진행도+상태 줄
