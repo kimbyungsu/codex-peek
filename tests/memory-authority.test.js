@@ -402,7 +402,7 @@ t("부품 C R3: mark 우회 가드 — draftable adopted=거부·declined 허용
   assert.ok(!gA.ok && gA.reason === "draftable-adopt-via-draft" && gA.kind === "user-constraint", "★draftable 채택 직접 기록=거부(초안 결속 강제 — §3-3b)");
   assert.strictEqual(CL.envelopeMarkGuard(WS10, ue(1), "declined").ok, true, "declined는 mark 허용");
   assert.strictEqual(CL.envelopeMarkGuard(WS10, ue(2), "adopted").ok, true, "비 draftable kind=기존 계약 유지");
-  assert.deepStrictEqual(CL.ENVELOPE_DRAFTABLE_KINDS, ["resolved-blocker", "user-constraint", "rule-manual", "user-direct"], "allowlist 단일 정본(rule-manual·user-direct 편입·legacy 호환 유지)");
+  assert.deepStrictEqual(CL.ENVELOPE_DRAFTABLE_KINDS, ["resolved-blocker", "user-constraint", "rule-manual", "user-direct", "curator"], "allowlist 단일 정본(rule-manual·user-direct·curator 편입·legacy 호환 유지)");
 });
 t("복원형 폐기: candidateId 없는 구형/수동 제안본=복원 없이 폐기만(보수)", () => {
   const cur = JSON.parse(fs.readFileSync(path.join(REPO, "verify-envelope.json"), "utf8"));

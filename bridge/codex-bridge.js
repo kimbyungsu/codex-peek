@@ -2887,6 +2887,43 @@ function cmdEnvelopeCandidate(rest) {
 // [재편 A §2-1] rule-propose <findingId> --why "<왜 관통 지침인지 1줄>" [--campaign <id>]
 // 헌법: 상신 자격은 성격(관통)이지 이력(고쳐졌음)이 아니다 — 마감 판단(a 그자리한정/b 참고/c 관통)에서
 // (c)로 분류한 교훈만 이 명령으로 올린다. 등재 효력은 사용자 도장부터(후보=판정 권위 없음).
+// [CURATION v3] curate [run] [--force] [--json] · curate input [--json] · curate status — 팔=계약 유래(selectorArmForCuration)·잠금·영수증·경보는 curation.js
+async function cmdCurate(rest) {
+  const ws = configWs();
+  const en = loadLang() === "en";
+  const CU = require("./curation.js");
+  const sub = (rest || []).find((a) => !String(a).startsWith("--")) || "run";
+  const json = (rest || []).includes("--json");
+  const force = (rest || []).includes("--force");
+  const c = loadContract(ws);
+  const repo = resolveScoutRepo(ws, c).repo;
+  if (sub === "input") {
+    const inp = CU.curationInput(ws, repo, { computeCandidates: computeEnvelopeCandidatesFor }); // CLI=순환 require라 module.exports가 아직 비어 있음 — 직접 주입(1회차 blocker①)
+    if (json) { console.log(JSON.stringify(inp)); if (!inp.ok) process.exitCode = 2; return; }
+    if (!inp.ok) { console.log((en ? "curation input unavailable: " : "정리 입력을 만들 수 없습니다: ") + inp.reason); process.exitCode = 2; return; }
+    console.log((en ? "[curation input] " : "[정리 입력] ") + `core ${inp.rules.core.length} · archive ${inp.rules.archive.length} · signals ${inp.signalCount} · decisions ${inp.decisions.open.length}/${inp.decisions.answered.length} · key ${CU.curationKeyOf(inp).slice(0, 12)}`);
+    const s = inp.signals;
+    console.log(`  oos-repeat ${s.oosRepeat.length} · lineage ${s.lineage.length} · escalation ${s.escalation.length} · unused-oos ${s.unusedOos.length} · unused-rule ${s.unusedRules.length} · rebut ${s.rebutUsed.length} · selOver ${s.selOver.count}`);
+    return;
+  }
+  if (sub === "status") {
+    const sm = CU.curationSummary(ws);
+    if (json) { console.log(JSON.stringify(sm)); return; }
+    console.log((en ? "[curation] " : "[정리 제안] ") + (sm.lastTs ? `${en ? "last" : "마지막"} ${sm.lastTs} · ${sm.lastOutcome}${sm.lastReason ? "(" + sm.lastReason + ")" : ""}` : (en ? "never run" : "실행 이력 없음")) + ` · ${en ? "runs" : "실행"} ${sm.runs} · ${en ? "proposed" : "제안"} ${sm.proposedTotal} · ${en ? "pending" : "미승인"} ${sm.pending}/${sm.maxPending}`);
+    return;
+  }
+  console.error(en ? "[curation] reading ledgers and asking the independent curator (may take minutes; verification is not affected)..." : "[정리 제안] 장부를 읽고 독립 정리 담당에게 묻는 중(수 분 걸릴 수 있음 · 검증 무영향)...");
+  // [2회차 blocker①] 이 파일은 main() 뒤에 module.exports를 채운다 — Codex 팔의 selector-runner가 require("./codex-bridge.js").resolveCodex()를 조회하므로
+  // 모듈 평가가 끝난 다음 틱에 실행한다(순환 초기화 중 빈 export 조회 차단). 시험 주입점=worker와 같은 CODEX_BRIDGE_SELECTOR_RUNNER.
+  await new Promise((res) => setImmediate(res));
+  let fakeRunner9 = null;
+  if (process.env.CODEX_BRIDGE_SELECTOR_RUNNER) { try { fakeRunner9 = require(process.env.CODEX_BRIDGE_SELECTOR_RUNNER).runSelectorPage; } catch { fakeRunner9 = null; } }
+  const r = await CU.runCuration(ws, { force, lang: loadLang(), contract: c, computeCandidates: computeEnvelopeCandidatesFor, ...(typeof fakeRunner9 === "function" ? { pageRunner: fakeRunner9 } : {}) });
+  if (json) { console.log(JSON.stringify(r)); if (r.st !== "ok" && r.st !== "skipped") process.exitCode = 2; return; }
+  if (r.st === "ok") console.log((en ? "[curation] done — proposals " : "[정리 제안] 완료 — 제안 ") + r.proposed + (en ? " (new " : " (신규 ") + r.candidateIds.length + (en ? ") · deferred " : ") · 보류 ") + r.deferred + (en ? " · held toggles " : " · 전환 보류 ") + r.heldToggles + (en ? " · dropped " : " · 탈락 ") + r.dropped + (en ? " · pending " : " · 미승인 ") + r.pending + "/" + CU.CURATION_MAX_PENDING + (en ? " — approve or drop them in the dashboard proposal box." : " — 대시보드 제안함에서 승인하거나 안 올림으로 처리하세요."));
+  else if (r.st === "skipped") console.log((en ? "[curation] skipped (" : "[정리 제안] 생략(") + r.reason + (en ? ") — no new signal since the last run; pass --force to ask anyway." : ") — 마지막 실행 이후 새 신호가 없습니다. 그래도 묻게 하려면 --force."));
+  else { console.log((en ? "[curation] not run: " : "[정리 제안] 실행되지 않음: ") + r.st + (r.reason ? " (" + r.reason + ")" : "")); process.exitCode = 2; }
+}
 function cmdRulePropose(rest) {
   const ws = configWs();
   const en = loadLang() === "en";
@@ -3645,7 +3682,7 @@ function computeEnvelopeCandidatesFor(ws) {
     // 계산기 산출에 합류해야 대시보드 목록·채택 표면에 나타난다(장부 단독 적재=화면 미표시 공백 봉합).
     // kind·title은 append-only 이력 전체에서 보강 — 상태 전이 행(adopted/declined)이 메타를 안 실어도 유실되지 않게.
     const meta5 = new Map();
-    for (const r of candRows9) if (r && r.candidateId && (r.kind || r.title) && !meta5.has(r.candidateId)) meta5.set(r.candidateId, { kind: r.kind || "", title: r.title || "", findingId: r.findingId || "", why: r.why || "", repoKey: r.repoKey || "" });
+    for (const r of candRows9) if (r && r.candidateId && (r.kind || r.title) && !meta5.has(r.candidateId)) meta5.set(r.candidateId, { kind: r.kind || "", title: r.title || "", findingId: r.findingId || "", why: r.why || "", repoKey: r.repoKey || "", operation: r.operation || "", target: r.target || "", explain: r.explain && typeof r.explain === "object" ? r.explain : null }); // operation/target/explain=curator 표면 필드(초안 뒤 최소 adopted 행에서도 유지 — CURATION 1회차 blocker⑥)
     const seen5 = new Set(cands.map((c) => c.candidateId));
     for (const [, rec] of latest) {
       const m5 = meta5.get(rec && rec.candidateId) || {};
@@ -3658,7 +3695,7 @@ function computeEnvelopeCandidatesFor(ws) {
       { const rk5 = rec.repoKey || m5.repoKey || ""; if (!rk5) { unmarked5++; continue; } if (!repoKey5 || rk5 !== repoKey5) continue; } // [ab-1] fail-closed: 무표기(판정 불가)·현재 대상 판독 불가·다른 저장소 태생=합류 안 함
       if (seen5.has(rec.candidateId)) continue;
       seen5.add(rec.candidateId);
-      cands.push({ candidateId: rec.candidateId, kind: k5, key: rec.findingId || m5.findingId || "", n: 1, titles: [String(rec.title || m5.title || "")].filter(Boolean), ts: String(rec.ts || ""), ...(k5 === "user-constraint" || k5 === "rule-manual" || k5 === "user-direct" ? { why: String(rec.why || m5.why || "") } : {}) }); // ts=제안 시각·why=상신 근거(사람 표면 보조 줄 — rule-manual도 '왜 관통 지침인지' 동봉·재편 A §2-2)
+      cands.push({ candidateId: rec.candidateId, kind: k5, key: rec.findingId || m5.findingId || "", n: 1, titles: [String(rec.title || m5.title || "")].filter(Boolean), ts: String(rec.ts || ""), ...(k5 === "user-constraint" || k5 === "rule-manual" || k5 === "user-direct" || k5 === "curator" ? { why: String(rec.why || m5.why || "") } : {}), ...(k5 === "curator" ? { operation: String(rec.operation || m5.operation || ""), target: String(rec.target || m5.target || ""), explain: rec.explain || m5.explain || null } : {}) }); // ts=제안 시각·why=상신 근거(사람 표면 보조 줄 — rule-manual도 '왜 관통 지침인지' 동봉·재편 A §2-2)
     }
   }
   let skipped = 0;
@@ -3678,8 +3715,8 @@ function envelopeCandidateNoticeFor(ws, lang, res, profile = "core") {
     const en = lang === "en";
     const { live, signals, skipped, overCap, unmarked } = computeEnvelopeCandidatesFor(ws);
     const kindLabel = (k) => en
-      ? (k === "oos-repeat" ? "repeated out-of-scope demotions — reconsider defending this scenario" : k === "escalation" ? "admission-escalated scope expansion — consider formal adoption" : k === "unused-oos" ? "never triggered this approval generation — consider removing/merging" : k === "user-constraint" ? "a promise the user stated directly in chat (no verification lineage) — consider adopting into the rulebook" : k === "resolved-blocker" ? "a blocker caught and fixed in verification — consider an always-block entry" : "repeated blocker lineage — consider an always-block entry")
-      : (k === "oos-repeat" ? "범위 밖 강등 반복 — 이 시나리오를 계속 치워둘지 재검토" : k === "escalation" ? "입장 심사 승격 확장 — 정식 편입 검토" : k === "unused-oos" ? "이 승인 세대에서 한 번도 발동 안 됨 — 빼기/병합 검토" : k === "user-constraint" ? "사용자가 대화에서 직접 말한 약속(검증 계보 아님) — 수칙서 편입 검토" : k === "resolved-blocker" ? "검증에서 잡혀 이미 고친 blocker — 항상 차단 명시 검토" : "같은 계보 blocker 반복 — 항상 차단 명시 검토"); // [주의 수용] user-constraint를 반복 blocker로 오표시하면 미검증 발화에 검증 계보가 있다고 오인시킴
+      ? (k === "curator" ? "curation proposal (independent run — approve/decline)" : k === "oos-repeat" ? "repeated out-of-scope demotions — reconsider defending this scenario" : k === "escalation" ? "admission-escalated scope expansion — consider formal adoption" : k === "unused-oos" ? "never triggered this approval generation — consider removing/merging" : k === "user-constraint" ? "a promise the user stated directly in chat (no verification lineage) — consider adopting into the rulebook" : k === "resolved-blocker" ? "a blocker caught and fixed in verification — consider an always-block entry" : "repeated blocker lineage — consider an always-block entry")
+      : (k === "curator" ? "정리 제안(독립 실행 — 승인/안 올림)" : k === "oos-repeat" ? "범위 밖 강등 반복 — 이 시나리오를 계속 치워둘지 재검토" : k === "escalation" ? "입장 심사 승격 확장 — 정식 편입 검토" : k === "unused-oos" ? "이 승인 세대에서 한 번도 발동 안 됨 — 빼기/병합 검토" : k === "user-constraint" ? "사용자가 대화에서 직접 말한 약속(검증 계보 아님) — 수칙서 편입 검토" : k === "resolved-blocker" ? "검증에서 잡혀 이미 고친 blocker — 항상 차단 명시 검토" : "같은 계보 blocker 반복 — 항상 차단 명시 검토"); // [주의 수용] user-constraint를 반복 blocker로 오표시하면 미검증 발화에 검증 계보가 있다고 오인시킴
     const L = [];
     L.push(en ? "\n[rulebook candidates · this campaign — machine material]" : "\n[수칙서 후보 재료 · 이번 캠페인 — 기계 집계]");
     if (unmarked) L.push(en ? `> ${unmarked} older proposal(s) without a repository mark are hidden from display/approval (cleaned at the next reconcile — re-enter if still needed).` : `> 저장소 표식 없는 이전 제안 ${unmarked}건은 표시·승인 대상에서 제외(다음 조정 때 자동 정리 — 필요하면 다시 넣기).`);
@@ -4624,6 +4661,8 @@ function main() {
     }
     case "rule-propose":
       return cmdRulePropose(rest); // [재편 A §2-1] 마감 판단의 명시 상신 — 관통 지침만 수칙서 후보로
+    case "curate": // [CURATION v3 §3 A①] 독립 큐레이션 수동 실행(검증 무관·유계) — 제안은 대시보드 제안함에 합류(승인은 사용자)
+      return void cmdCurate(rest);
     case "envelope-proposal": { // §7 증분 2 — 제안본(초안) 작성·열람·폐기. 승인(도장)은 대시보드 전용 — CLI에 없음.
       const rc8 = cmdEnvelopeProposal(rest);
       if (rc8) process.exitCode = rc8;

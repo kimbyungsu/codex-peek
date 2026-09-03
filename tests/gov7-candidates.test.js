@@ -384,7 +384,7 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   }
   // 2026-08-22(2) 승인 지문 언어 공유: 직접 승인 도장=양 슬롯·대시보드 자기치유(반대 슬롯 지문=현행 파일 sha 일치 시 표기 정렬)
   // [부품 C 2026-08-23] draftable kinds 공통 표면 — 채택 분기·올림 토글·kind 문구·why 보조줄·mark 가드·소진 안내
-  ok(ext.includes('(m.kind === "resolved-blocker" || m.kind === "user-constraint" || m.kind === "rule-manual" || m.kind === "user-direct") && m.status === "adopted"'), "candMark 채택=draftable kinds 공통(초안 생성 결속 — rule-manual·user-direct 편입)");
+  ok(ext.includes('(m.kind === "resolved-blocker" || m.kind === "user-constraint" || m.kind === "rule-manual" || m.kind === "user-direct" || m.kind === "curator") && m.status === "adopted"'), "candMark 채택=draftable kinds 공통(초안 생성 결속 — rule-manual·user-direct·curator 편입)");
   ok(ext.includes("대화에서 직접 말씀하신 약속이에요") && ext.includes('T("왜: ","why: ")+cd.why'), "UI: user-constraint 문구+왜 보조줄(textContent — 재편 B 어휘)");
   const cb7 = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
   ok(cb7.includes("ENVELOPE_DRAFTABLE_KINDS.includes(k5)"), "계산기 ⑤ 합류 allowlist=draftable kinds 단일 정본");
@@ -411,7 +411,7 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   ok(!ext.includes('type:"ruleAdd"') && !ext.includes('m?.type === "ruleAdd"') && !ext.includes('data-rule-add') && !ext.includes("CLA0.directRuleCandidate("), "입력칸·ruleAdd 핸들러 소멸(수동 입력칸이 자동 체계에 섞이는 혼란 제거)");
   ok(!ext.includes("이번 캠페인 심사: 인정") && !ext.includes('T("기계 강등","demoted")'), "'강등' 기계 용어 비노출(수칙 카드 통계 줄 제거·통계 칩은 '범위 밖이라 메모로 낮춤')");
   ok(!ext.includes('tag.textContent=(r.tag==="always"') && !ext.includes("새 수칙을 넣고 싶으면 대화에서 말씀해 주세요"), "행 태그(항상/관련·축)·채팅 유도 안내 소멸(사용자에겐 수칙과 넣기·빼기만)");
-  ok(ext.includes('m.kind === "user-direct") && m.status === "adopted"') && ext.includes('cd.kind==="user-direct"?T('), "user-direct kind가 채택 분기·제안 문구에 편입");
+  ok(ext.includes('m.kind === "user-direct" || m.kind === "curator") && m.status === "adopted"') && ext.includes('cd.kind==="user-direct"?T(') && ext.includes('cd.kind==="curator"?T('), "user-direct·curator kind가 채택 분기·제안 문구에 편입");
   ok(ext.includes("...({ rules: rules9 })") && ext.includes("if(e9.rules && e9.proposal===undefined){") && ext.includes("대화에서 하신 약속을 시스템이 포착한 것과"), "수칙 0개에도 rules 필드·목록 틀 유지+제안함 안내=포착·상신 두 경로(2026-08-29 입력칸 제거 반영)");
   // [실보고 2026-08-28] 접힘 상태 기억(재렌더가 2초 만에 접던 결함)·승인 대기 라벨·legacy 문구 정직화
   ok(ext.includes("rl9.open=rulesOpenWeb; rl9.addEventListener(\"toggle\"") && ext.includes("sg9.open=signalsOpenWeb; sg9.addEventListener(\"toggle\""), "수칙 목록·참고 신호 접힘 상태를 재렌더 너머로 기억");

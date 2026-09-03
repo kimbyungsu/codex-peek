@@ -1,6 +1,6 @@
 # 독립 큐레이션 설계 (CURATION — HARNESS-REALIGNMENT §7 5번) v3
 
-작성 2026-09-02 · v2=설계 검증 1회차 blocker 3·보완 1 반영 · v3=2회차 blocker 3 반영(문안 필드 title·빼기 후보 종결 결속·빼기 대상 3중 대조) · 상태: **설계(구현 전 — 사용자 지시 "설계만 먼저")** · 선행: HARNESS-REALIGNMENT
+작성 2026-09-02 · v2=설계 검증 1회차 blocker 3·보완 1 반영 · v3=2회차 blocker 3 반영(문안 필드 title·빼기 후보 종결 결속·빼기 대상 3중 대조) · 상태: **§7 1·2단계 구현됨 2026-09-03(입력 집계기·생략 규칙·영수증·제안기·파서·2단 커밋·승인 변환·수동 실행 CLI) — 3·4단계(자동 트리거·detach·대시보드 버튼/카드)는 미구현·다음 캠페인** · 사용자 승인 2026-09-03 "권장대로 진행" · 선행: HARNESS-REALIGNMENT
 §1(누가 넣고 빼나)·§5 C·D, REJUDGE-AUTHORITY §3 C(v6 형태는 폐기·커밋 규약은 재사용), RULEBOOK-SIMPLIFICATION(헌법·§0 사고·2-1 수동 상신·3-1b 합성 신호),
 VERIFY-GOVERNANCE §7·§8.
 
@@ -86,7 +86,7 @@ VERIFY-GOVERNANCE §7·§8.
   envelopeHash(=boundaryGen), archiveHash(=archiveGen), operation, target, axis, index?(=occurrence·제안 시점 번호), itemFp?, expectedTargetHash(=target이 core면
   boundaryGen·archive면 archiveGen), title(문안 — 기존 판독·표시·초안 관문이 요구하는 정본 필드·`text` 별칭 없음), why, refs, recommend, curationKey, ts}`.
   같은 문안에 대한 서로 다른 작업(예: 추가와 빼기)이 같은 id로 충돌하지 않도록 operation·target·axis·occurrence가 id에 들어간다.
-- ① `status:"provisional"`(비노출·latest 판독이 무시) append → read-back(원시 행 대상) → ② 결과 행 `{type:"curation", curationKey, repoKey, resultFp, items}` →
+- ① `status:"provisional"`(비노출·latest 판독이 무시) append → read-back(원시 행 대상) → ② 결과 행(큐레이션 장부 `curation/<wsKey>.jsonl` — `{schema:"curation-v1", type:"result", curationKey, repoKey, boundaryGen, archiveGen, resultFp, items, fresh, …}`; 실행 행은 `type:"run"`) →
   ③ 활성화 행 `status:"proposed"`(같은 필드 전부 재기록) → ④ selectorUsage 영수증(`purpose:"curate"`, `turnAnchor`=curationKey; 2건 이상 resultFp
   상이=fail-closed 경보). 세대 변경 시 구세대 proposed는 rule-manual과 같은 1회 이월(repoKey 동일할 때만).
 - **승인 시 변환(초안 계약 확장 — 소규모)**: draftable allowlist에 `curator` 추가하고, 채택 경로가 후보의 `operation`을 읽어
@@ -95,7 +95,7 @@ VERIFY-GOVERNANCE §7·§8.
   - `remove` → 승인 시점에 **같은 전이 잠금 안에서** 후보의 `{axis, index, itemFp, expectedTargetHash}` 3중 대조(현행 파일의 그 번호에 그 지문의 항목이 있고 대상 세대가
     제안 시점과 같을 것 — 하나라도 다르면 거부·재제안; 같은 문안이 두 줄이어도 사용자가 승인한 그 번호만 빠짐 — ab-2) 뒤 `removeItems=[{axis,index,itemFp}]`로 넘김.
     **원 후보 종결 결속**: `draftEnvelopeRevision`에 `sourceCandidateIds`(이 초안을 낳은 curator 후보 id — remove·oos-add 포함) 인자를 추가해 제안 파일(proposal)의
-    `candidateIds`와 같은 자리에 기록하고, 도장 시 같은 잠금 안에서 그 후보들에 `adopted` 행을 남긴다(폐기·복구 경로도 같은 목록을 따름) — 승인된 빼기가
+    `candidateIds`와 같은 자리에 기록하고, 도장 시 같은 잠금 안에서 그 후보들에 `adopted`+`applied:<newHash>` 종결 행을 남긴다(쓰기 실패=전이 미완·WAL 보존; 폐기·복구 경로도 같은 목록을 따름) — 승인된 빼기가
     미승인 수(상한 6)에 남지 않게(2회차 blocker⑤);
   - `toggle` → **2차**: 연결쌍(`linkId` 공유·add-first) 두 제안으로 전개 — 도착지 추가 승인 뒤에만 출발지 빼기 제안이 활성(수칙이 잠시라도 사라지지 않게).
   기존 관문(후보 repoKey=현재 저장소·세대 일치·중복 거부·`title` 필수)은 완화 없이 그대로. 초안 계약 확장은 세 가지뿐: 추가 축을 후보 `axis`로(oos-add), `removeItems`의
@@ -130,3 +130,25 @@ ab-1 wsKey·repoKey 결속(입력·키·모든 행·영수증) · ab-2 계약 �
 승인 변환(시험: 상한 3·누적 6·중복 거부·손상 fail-closed·멱등·repoKey 불일치=관문 거부·remove 3중 대조[번호 어긋남·지문 어긋남·세대 어긋남 각각 거부·같은 문안 두 줄 중 승인한
 번호만 제거]·sourceCandidateIds로 빼기 후보 adopted 종결·title 필드로 add/oos-add 초안 통과·toggle 보류).
 3. A 트리거+팔 결정+잠금+detach(시험: 동시 1·죽은 잠금 회수·검증 무영향·세션 문맥 없이 팔 결정). 4. E·F 표면. 각 단계 Codex 확인 검증+전체 체인.
+
+## §8 구현 기록 (2026-09-03 — §7 1·2단계)
+- `bridge/curation.js`(신설·설치 목록 편입): `curationInput(ws, repo)`(B — repo 불일치·수칙서 비활성·미승인 변경·도장 없는 서고=정직 실패 / 코어·서고 항목 `axis·index·itemFp` / 신호 ①~④=대시보드
+  참고 신호와 같은 산출(`computeEnvelopeCandidatesFor.signals`·세대 일치 시) ⑤ 미사용 보관 수칙=선별 영수증(미리보기+검증 선별) 합집합·관측 0건이면 주장 안 함·일수 동봉 ⑥ 되받아침 제외 칸 ⑦ 선별 초과
+  ⑧ 결정 장부 / 시각 성분 없는 `inputFp`) · `curationKeyOf` · `curationSkip`(신호 0+같은 세대의 지난 실행=생략 · 같은 입력 표 결과 존재=멱등 생략) · `buildCurationPrompt`(C — 범주 지시·수칙
+  전문에 axis·index·itemFp 병기·refs는 신호 id만) · `parseCurationOutput`(손상=전량 거부 / 의미 거부=항목 탈락 기록 / toggle=보류) · `commitCuration`(D — provisional→결과 행→proposed 2단·
+  read-back·같은 curationKey 다른 결과=fail-closed `result-conflict`·회당 3·미승인 6) · `writeCurationReceipt`(selectorUsage `purpose:"curate"`·`turnAnchor`=curationKey) · `acquireCurateLock`(구조화
+  토큰·죽은/오래된 소유자만 격리 후 회수) · `runCuration`(실패=영수증+경보 `curation-failed`·검증 장부 무접촉) · `selectorArmForCuration(ws, c)`(P4 — 계약 `harnessMode` 유래) · `curationSummary`.
+- `bridge/contract-lib.js`: `ENVELOPE_DRAFTABLE_KINDS`에 `curator` · `draftEnvelopeRevision` 확장 3가지만(추가 축=후보 `axis`[oos-add→outOfScope] · `sourceCandidateIds` 결속[제안 파일 candidateIds
+  한 자리+adopted] · 기존 `removeItems` 3중 대조 그대로) · `draftCuratorCandidate(ws, repo, candidateId, approvedHash)`(승인 시 변환 — add→서고·oos-add→코어 제외 칸·remove→removeItems+
+  expectedTargetHash+sourceCandidateIds·toggle=거부·첫 행 메타 폴백) · 도장 전이 ③에서 결속 후보에 `adopted+applied:<newHash>` 종결 행(같은 잠금 안) · 조정 스캔: `applied` 행=이월·고아 복원 제외,
+  curator 구세대=add/oos-add 1회 이월·remove는 대상 세대 동일(서고)일 때만 이월·그 외 정리(declined·재발급 대상)·빼기 제안 문안은 '이미 등재' 스윕 제외 · 복원형 폐기가 curator 연산 필드를
+  승계(`curatorCarryFields` — 승인→취소→재승인 경로 실측 결함 봉합).
+- `bridge/codex-bridge.js`: CLI `curate [run|input|status] [--force] [--json]`(A① 수동 트리거 — 실행은 동기·검증 무관) · 후보 계산기 ⑤가 curator 행에 `operation·target·explain` 동봉 · 소진 보고 kindLabel.
+- `src/extension.ts`: 제안함 candMark 채택 분기에 `curator`(→`draftCuratorCandidate`) · 후보 행 라벨 "독립 정리 담당이 … 올린 제안" + 작업 종류 + 상황 설명 4칸(textContent) · 상태 타입 `op/explain`.
+- 시험 `tests/curation.test.js`(24묶음 — 1·2회차 blocker 반영분 포함) · 낡은 핀 갱신(gov7-candidates·memory-authority·p8-enrich-wire 배포 33파일·map-cutover EXPECTED_DEPLOY_FILES). 미구현(다음 캠페인): A②③ 자동 트리거(tick 판정·detach)·E 대시보드 버튼 "정리 제안 받기"·수칙 카드 1줄·F 측정.
+- 구현 검증 1회차 blocker 7 반영: ① CLI 순환 require로 신호가 0건이 되던 침묵 → 신호 산출 함수 주입(`computeCandidates`)·부재=입력 실패(`signals-unavailable`) ② 파서=출력 전체가 JSON 객체 하나·why/explain 개행=손상
+  ③ ab-7: 신호 제목·결정 질문은 민감 형태면 생략/표식, explain 4칸도 검사(탈락) ④ 결과 행을 복구 표지로 provisional 후보 재활성화(`recoverCurationProvisional`, 실행 시작 시·잠금 안) ⑤ 도장 순서=applied 종결·제안본 폐기 → WAL 삭제
+  ⑥ 후보 계산기 메타 캐시가 operation/target/explain 보존 ⑦ 시작 단계 실패(계약·저장소·잠금 비정상·입력)도 영수증+경보(잠금 '실행 중'만 영수증만).
+- 구현 검증 2회차 blocker 5 반영: ① CLI `curate run`은 모듈 평가가 끝난 다음 틱에 실행(Codex 팔이 조회하는 `resolveCodex` export가 채워진 뒤)·시험 주입점 `CODEX_BRIDGE_SELECTOR_RUNNER`
+  ② 현재 수칙 원문도 민감 형태면 프롬프트·remove 후보 title에 표식(`[민감 형태 — 문안 생략]`)만·itemFp는 원문 기준 ③④ provisional 복구 쓰기 실패=실행 실패(recover-failed)+영수증+경보(생략으로 위장 금지)
+  ⑤ 도장의 applied 종결 행 쓰기 실패=전이 미완(`applied-write`)·WAL·제안본 보존 → 복구 스캐너 멱등 재실행.

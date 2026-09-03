@@ -1059,7 +1059,7 @@ function envelopeDetailText(evv: any, en9: boolean): string {
 }
 // 거버넌스 증분 1(2차 배치 정정 — 구현검증 1차 blocker①②): 검증 경계는 정찰(3트랙)이 아니라 '검증' 계층이다 —
 // MAP 카드가 아닌 최상위 뷰 필드로 항상 계산(2트랙 기본 프로젝트에서도 승인 가능). lang=렌더 슬롯 결속(도장도 그 슬롯 계약에).
-function readEnvelopeView(ws: string | null): { label: string; btn: string | null; btn2: string | null; btn3?: string; act?: string; driftTarget?: string; repo: string; tone: string; lang: Lang; proposal?: string; candsView?: string; gen?: string; axes?: Record<string, string[]>; wsKey?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string }> } | null {
+function readEnvelopeView(ws: string | null): { label: string; btn: string | null; btn2: string | null; btn3?: string; act?: string; driftTarget?: string; repo: string; tone: string; lang: Lang; proposal?: string; candsView?: string; gen?: string; axes?: Record<string, string[]>; wsKey?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string; why?: string; op?: string; explain?: { happened: string; ifAdopted: string; ifNot: string; recommend: string } | null }> } | null {
   if (!ws) return null;
   try {
     const CL9: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
@@ -1097,7 +1097,7 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
         try { envSignals9 = (cc9.signals || []).map((s: any) => ({ kind: String(s.kind || ""), n: Number(s.n) || 1, title: String((s.titles && s.titles[0]) || "") })); } catch { envSignals9 = []; }
         const lat9 = typeof CL9.readEnvelopeCandidates === "function" ? CL9.readEnvelopeCandidates(ws).latest : new Map();
         // [기억 권위 A-5] 절단 없이 전량 전달(화면 절단은 표시 제한일 뿐)
-        const out9 = (cc9.live || []).map((c: any) => ({ id: c.candidateId, kind: c.kind, n: c.n, title: (c.titles && c.titles[0]) || "", status: (lat9.get(c.candidateId + "@" + String(hash9 || "")) || {}).status || "", gen: cc9.gen || "", wsKey: typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : "", ts: String(c.ts || ""), why: String(c.why || "") })); // wsKey=원본 프로젝트 내구 키(재재검증 ab-1)·why=user-constraint 상신 근거(§1 보조 줄)
+        const out9 = (cc9.live || []).map((c: any) => ({ id: c.candidateId, kind: c.kind, n: c.n, title: (c.titles && c.titles[0]) || "", status: (lat9.get(c.candidateId + "@" + String(hash9 || "")) || {}).status || "", gen: cc9.gen || "", wsKey: typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : "", ts: String(c.ts || ""), why: String(c.why || ""), op: String(c.operation || ""), explain: c.explain && typeof c.explain === "object" ? { happened: String(c.explain.happened || ""), ifAdopted: String(c.explain.ifAdopted || ""), ifNot: String(c.explain.ifNot || ""), recommend: String(c.explain.recommend || "") } : null })); // wsKey=원본 프로젝트 내구 키(재재검증 ab-1)·why=user-constraint 상신 근거(§1 보조 줄)·op/explain=정리 제안(curator) 작업 종류·상황 설명 4칸
         return out9.length ? out9 : undefined;
       } catch { return undefined; }
     };
@@ -4160,12 +4160,13 @@ class Dashboard {
             if ((m.gen || null) !== (genM || null)) { vscode.window.showWarningMessage(enM ? "The rulebook was re-approved while this card was open — the candidate list refreshes; please judge again." : "카드가 떠 있는 사이 수칙서가 재승인됐어요 — 후보 목록이 갱신됩니다. 다시 판단해 주세요."); this.post(); return; }
             // [기억 권위 A-4·구현검증 1차 blocker④] 해소 blocker 후보의 '채택'은 기록이 아니라 병합 초안 생성
             // (draft 명령의 대시보드 표면 — 기존 '기록만' 계약의 의식적 개정. 효력은 여전히 승인 도장부터).
-            if ((m.kind === "resolved-blocker" || m.kind === "user-constraint" || m.kind === "rule-manual" || m.kind === "user-direct") && m.status === "adopted" && typeof CLM.draftEnvelopeRevision === "function") { // [부품 C §3-3] draftable kinds 공통 — 채택=병합 초안 생성과 결속(재편 A: rule-manual 편입)
+            if ((m.kind === "resolved-blocker" || m.kind === "user-constraint" || m.kind === "rule-manual" || m.kind === "user-direct" || m.kind === "curator") && m.status === "adopted" && typeof CLM.draftEnvelopeRevision === "function") { // [부품 C §3-3] draftable kinds 공통 — 채택=병합 초안 생성과 결속(재편 A: rule-manual 편입)
               const repoM = (((bridgeLib() as any) || {}).resolveScoutRepo ? ((bridgeLib() as any).resolveScoutRepo(wsM, loadContract(wsM)) || {}).repo : null) || wsM;
               let dr: any = null;
               // [재편 B 1차 blocker①] 목적지=서고 명시(설계 §3-2) — 코어 전용 draftEnvelopeCandidate는 12칸
               // 상한·전량 주입 코어로 오유입하던 결함. 단건 올림도 revision 경로(target archive)로 통일.
-              try { dr = CLM.draftEnvelopeRevision(wsM, repoM, { addCandidateIds: [m.id], removeItems: [], approvedHash: genM, target: "archive" }); } catch { dr = null; }
+              // [CURATION v3 §3 D] 정리 제안(curator)은 후보 행의 작업 종류(add·oos-add·remove)를 읽어 변환 — 다른 kind는 종전 서고 올림 경로 그대로.
+              try { dr = m.kind === "curator" ? (typeof CLM.draftCuratorCandidate === "function" ? CLM.draftCuratorCandidate(wsM, repoM, m.id, genM) : { ok: false, error: enM ? "this runtime cannot convert curation proposals — run node install.js" : "이 설치본은 정리 제안을 변환할 수 없어요 — node install.js 실행" }) : CLM.draftEnvelopeRevision(wsM, repoM, { addCandidateIds: [m.id], removeItems: [], approvedHash: genM, target: "archive" }); } catch { dr = null; }
               if (dr && dr.ok && m.approve === true) { this.runProposalApprove(scoutTargetFor(wsM).repo, m.lang, true); return; } // [재편 B §3-2] [승인] 1클릭 — 초안 생성 직후 같은 도장 모달로(취소=복원형 폐기)
               if (dr && dr.ok) vscode.window.showInformationMessage((enM ? "Merge draft created — review it via 'View details' and stamp to apply. Nothing changes until you stamp." : "병합 초안을 만들었어요 — '내용 보기'로 확인 후 도장을 찍어야 적용됩니다(그 전까지는 아무것도 바뀌지 않아요).") + (dr.parallelCopied ? (enM ? " Parallel axes were copied verbatim — please edit translations/examples before stamping." : " 병렬 축은 원문 그대로 복제됐어요 — 도장 전에 번역·예시를 다듬어 주세요.") : ""));
               else vscode.window.showWarningMessage((enM ? "Draft failed: " : "초안 생성 실패: ") + ((dr && dr.error) || "unknown"));
@@ -7391,6 +7392,7 @@ class Dashboard {
             var row9=document.createElement("div"); row9.style.cssText="font-size:12px;margin-top:7px;padding:6px 8px;border-radius:5px;background:var(--vscode-editorWidget-background)";
             var when9=""; if(cd.ts){ var dt9=new Date(cd.ts); if(!isNaN(dt9.getTime())) when9=(dt9.getMonth()+1)+"/"+dt9.getDate(); }
             var kl9=cd.kind==="user-constraint"?T((when9?when9+" ":"")+"대화에서 직접 말씀하신 약속이에요","(a promise you stated in chat"+(when9?" on "+when9:"")+")")
+              :cd.kind==="curator"?T("독립 정리 담당이 장부(반복 신호·미사용 수칙·결정)를 읽고 올린 제안이에요 — "+(cd.op==="remove"?"이 수칙 빼기":cd.op==="oos-add"?"제외 칸에 한 줄 추가":"서고에 한 줄 추가"),"proposed by the independent curator from the ledgers — "+(cd.op==="remove"?"remove this rule":cd.op==="oos-add"?"add an out-of-scope line":"add an archive rule"))
               :cd.kind==="rule-manual"?T("구현 담당이 마감 판단에서 '프로젝트를 관통하는 지침'으로 골라 올렸어요","proposed by the implementer at campaign closing as a project-spanning principle")
               :cd.kind==="user-direct"?T("예전 직접 입력 기능으로 올라온 수칙이에요(승인하거나 안 올림)","a rule from the former direct-input feature (approve or drop it)")
               :T((when9?when9+" 검증에서 ":"검증에서 ")+"잡혀 이미 고친 실수예요","caught"+(when9?" in the "+when9+" verification":" in a verification")+" and already fixed");
@@ -7398,6 +7400,9 @@ class Dashboard {
             var sit9=document.createElement("div"); sit9.textContent=(undecided9?"":"["+(cd.status==="adopted"?T("승인 대기 — 위 카드에서 승인하거나 취소하세요","awaiting approval — approve or cancel in the card above"):cd.status)+"] ")+kl9; row9.appendChild(sit9);
             if(cd.title){ var org9=document.createElement("div"); org9.className="muted"; org9.style.cssText="font-size:11px;margin-top:2px"; org9.textContent=T("문안: ","text: ")+cd.title; org9.title=cd.title; row9.appendChild(org9); }
             if(cd.why){ var why9=document.createElement("div"); why9.className="muted"; why9.style.cssText="font-size:11px;margin-top:2px"; why9.textContent=T("왜: ","why: ")+cd.why; row9.appendChild(why9); } // why 표면 — textContent(작문·마크업 없음)
+            if(cd.kind==="curator" && cd.explain){ // [CURATION v3 §3 C] 사용자 표현 4요소(있었던 일·올리면·안 올리면·권장) — textContent
+              [[T("있었던 일: ","what happened: "),cd.explain.happened],[T("올리면: ","if adopted: "),cd.explain.ifAdopted],[T("안 올리면: ","if not: "),cd.explain.ifNot],[T("권장: ","recommendation: "),cd.explain.recommend]].forEach(function(pr9){ if(!pr9[1]) return; var ex9=document.createElement("div"); ex9.className="muted"; ex9.style.cssText="font-size:11px;margin-top:1px"; ex9.textContent=pr9[0]+pr9[1]; row9.appendChild(ex9); });
+            }
             if(undecided9 && !viewOnly9){
               var apb9=document.createElement("button"); apb9.style.cssText="margin-top:5px;margin-right:5px;font-size:12px;font-weight:600"; apb9.textContent=T("승인","Approve");
               apb9.onclick=function(){ vscode.postMessage({type:"candMark", id: cd.id, kind: cd.kind, status: "adopted", approve: true, gen: cd.gen, wsKey: cd.wsKey, lang: e9.lang}); }; // [재편 B §3-2] 1클릭 — 초안 생성+도장 모달(취소=자동 정리)

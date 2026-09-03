@@ -3825,6 +3825,14 @@ function discardEnvelopeProposal(ws) { try { fs.rmSync(envelopeProposedFileFor(w
 // 복원형 폐기(2026-08-21): 초안이 후보 채택에서 왔으면(candidateId 결속) 그 후보를 proposed로 되돌린 뒤
 // 파일을 지운다 — 폐기가 후보를 'adopted 고아'(재초안 불가)로 남기던 결함 봉합. 결속 없는 구형/수동 초안=
 // 기존 동작(복원 없음·보수). 반환 {ok, restored}.
+// [CURATION v3 §3 D] curator 후보의 연산 필드 — 상태 전이 행(adopted/복원/이월)이 메타를 안 실어도 승인 변환이 첫 행에서 회수할 수 있게 하는 공통 목록.
+const CURATOR_CARRY_KEYS = ["origin", "policyVersion", "archiveHash", "operation", "target", "axis", "index", "itemFp", "expectedTargetHash", "why", "refs", "recommend", "explain", "curationKey"];
+function curatorCarryFields(meta) {
+  const out = {};
+  if (!meta || meta.kind !== "curator") return out;
+  for (const k of CURATOR_CARRY_KEYS) if (meta[k] !== undefined) out[k] = meta[k];
+  return out;
+}
 function discardEnvelopeProposalRestoring(ws, expectedHash) {
   // R3 blocker(f-abbe97fd): 폐기(읽기→복원→삭제)를 승인 전이와 같은 잠금으로 직렬화 — 병행 draft가
   // 새 proposal을 쓴 직후 이 함수가 그 파일을 지우고 새 후보를 adopted 고아로 남기던 인터리빙 봉합.
@@ -3859,7 +3867,7 @@ function discardRestoringLocked(ws, expectedHash) {
         if (!rec9 || rec9.status !== "adopted") continue;
         const meta9 = (rows || []).find((r) => r && r.candidateId === cid && String(r.envelopeHash || "") === gen0 && (r.title || r.kind))
           || (rows || []).find((r) => r && r.candidateId === cid && (r.title || r.kind)) || {};
-        recs9.push({ candidateId: cid, envelopeHash: gen0, status: "proposed", ...(meta9.kind ? { kind: meta9.kind } : {}), ...(meta9.title ? { title: meta9.title } : {}), ...(meta9.findingId ? { findingId: meta9.findingId } : {}), ...(meta9.campaignId ? { campaignId: meta9.campaignId } : {}), ...(meta9.askId ? { askId: meta9.askId } : {}), ...(meta9.repoKey ? { repoKey: meta9.repoKey } : {}), note: "초안 폐기 — 판단 대기로 복원", ts: new Date().toISOString() }); // [ab-1] repoKey 승계 — 복원분이 타 저장소 화면에 새지 않게
+        recs9.push({ candidateId: cid, envelopeHash: gen0, status: "proposed", ...(meta9.kind ? { kind: meta9.kind } : {}), ...(meta9.title ? { title: meta9.title } : {}), ...(meta9.findingId ? { findingId: meta9.findingId } : {}), ...(meta9.campaignId ? { campaignId: meta9.campaignId } : {}), ...(meta9.askId ? { askId: meta9.askId } : {}), ...(meta9.repoKey ? { repoKey: meta9.repoKey } : {}), ...curatorCarryFields(meta9), note: "초안 폐기 — 판단 대기로 복원", ts: new Date().toISOString() }); // [ab-1] repoKey 승계 — 복원분이 타 저장소 화면에 새지 않게 · [CURATION v3] 연산 필드 승계(취소 뒤 재승인 가능)
       }
       // 복원 규칙(R2 blocker f-7b7dfbf6 계보): 대상=정확히 '이 초안의 승인 세대'(candidateId@baseHash) —
       // 삽입 순서 첫 adopted를 잡으면 다세대 공존 시 과거 세대를 복원하고 현재 후보가 고아로 남는다.
@@ -3960,11 +3968,26 @@ function applyEnvelopeTransitionLocked(ws, repo, lang, wal) {
     // (f-6c81a2d4), 개정 WAL도 recover-needed 창에서 생성된 '다른' 초안(newHash 불일치)을 소유 확인 없이
     // 삭제하면 채택 후보가 고아가 된다(f-9b7c4e21) — 전문 지문 결속(newHash===wal.newHash·같은 repo·판독 ok)이
     // 확인될 때만 폐기하고, 그 외(다른 초안·corrupt·부재)는 보존.
-    try { fs.rmSync(walFile, { force: true }); } catch { /* 잔존=다음 복구가 멱등 완료 */ }
+    // [CURATION v3 · 1회차 blocker⑤] 순서=결속 후보 종결(applied)·제안본 폐기 → WAL 삭제. WAL을 먼저 지우면 그 직후 종료 시 규칙 파일·계약은 새 값인데
+    // 후보 종결이 없고 재적용도 base-drift로 막힌다. WAL이 남아 있으면 복구 스캐너가 이 함수를 멱등 재실행해(①②는 통과) 종결·폐기를 마친다.
     if (wal.kind !== "stamp") {
       let pOwn = null; try { pOwn = readEnvelopeProposal(ws, repo); } catch { pOwn = null; }
-      if (pOwn && pOwn.st === "ok" && pOwn.newHash === wal.newHash) discardEnvelopeProposal(ws);
+      if (pOwn && pOwn.st === "ok" && pOwn.newHash === wal.newHash) {
+        // [CURATION v3 §3 D] 도장 시 같은 잠금 안에서 결속 후보 종결(applied) — 초안을 낳은 후보(올림·정리 제안의 remove/oos-add 포함)가
+        // 미승인 수에 남거나 고아 복원으로 되살아나지 않게. 세대 축=제안본 candidateGeneration(후보 장부 키). 기록 실패=고아 규칙이 보수 처리.
+        const ids9 = [...new Set([pOwn.candidateId, ...(pOwn.candidateIds || [])].filter(Boolean))];
+        const cg9 = String(pOwn.candidateGeneration || wal.oldHash || "");
+        if (ids9.length && cg9) {
+          let okA9 = false;
+          try { okA9 = appendEnvelopeCandidates(ws, ids9.map((cid) => ({ candidateId: cid, envelopeHash: cg9, status: "adopted", applied: wal.newHash, note: "stamped " + wal.newHash, ts: new Date().toISOString() }))); } catch { okA9 = false; }
+          // [2회차 blocker⑤] 종결 행 쓰기 실패=전이 미완(false 반환을 성공으로 취급 금지) — WAL·제안본을 보존해 복구 스캐너(recoverEnvelopeTransition)가
+          // ①②를 멱등 통과한 뒤 여기서 다시 시도한다. 규칙 파일·계약은 이미 새 값이므로 데이터 손실은 없다.
+          if (!okA9) return { ok: false, reason: "applied-write" };
+        }
+        discardEnvelopeProposal(ws);
+      }
     }
+    try { fs.rmSync(walFile, { force: true }); } catch { /* 잔존=다음 복구가 멱등 완료 */ }
     return { ok: true, newHash: wal.newHash };
   }
 }
@@ -4592,7 +4615,7 @@ const MEMORY_CANDIDATE_PENDING_MAX = 12; // pending 상한 = ab축 상한과 동
 // [재편 A §2-1 2026-08-27] rule-manual=구현모델 마감 판단의 명시 상신(자동 본 스캔 대체 공급).
 // resolved-blocker는 legacy 잔여(진행 중 초안·과거 처분) 호환을 위해 draftable로 유지 — 신규 생성은 없다.
 // user-direct=대시보드 입력칸에서 사용자가 직접 친 수칙(사용자 행위 자체가 권위 — 실보고 2026-08-28 "넣기가 없다").
-const ENVELOPE_DRAFTABLE_KINDS = ["resolved-blocker", "user-constraint", "rule-manual", "user-direct"];
+const ENVELOPE_DRAFTABLE_KINDS = ["resolved-blocker", "user-constraint", "rule-manual", "user-direct", "curator"]; // [CURATION v3 §3 D] curator=독립 큐레이션 제안(연산은 후보 행 필드·변환은 승인 시 draftCuratorCandidate)
 // [부품 C §3-3b mark 우회 봉합] draftable kind의 직접 adopted 기록은 proposal 결속 없는 adopted 고아를
 // 복원 규칙 밖에서 만든다 — 거부하고 draft 경로 안내(declined·failed 기록은 종전대로 허용).
 function envelopeMarkGuard(ws, candidateId, status) {
@@ -4652,6 +4675,24 @@ function reconcileMemoryCandidates(ws, repo, approvedHash) {
         if (!title) continue; // 문안 없는 구형=이월 불가(보수)
         issued9.add(rec.candidateId); // 정리든 이월이든 새 세대 행 1개 확정 — 같은 스캔의 다른 구세대 키는 스킵
         if (!(rec.repoKey || meta.repoKey)) { staleRecs.push({ candidateId: rec.candidateId, envelopeHash: approvedHash, status: "declined", kind: kindR, note: "저장소 표식 없음(정책 v2.1) — 어느 프로젝트의 제안인지 판정 불가라 정리·필요하면 다시 넣기", ...(rec.findingId ? { findingId: rec.findingId } : {}), ts: new Date().toISOString() }); continue; } // [ab-1] 무표기=이월 불가(결정적 정리)
+        if (rec.status === "adopted" && rec.applied) continue; // [CURATION v3 §3 D] 도장 완료 결속(applied)=종결 — 이월 대상 아님(승인된 빼기가 미승인 대기로 되살아나는 경로 차단)
+        if (kindR === "curator") {
+          // [CURATION v3 §3 D] 세대 이월=rule-manual과 동형(1회·repoKey 동일 — 위 무표기 검사 통과분). 단 빼기 제안은 대상 세대에 결속돼 있어
+          // 대상이 바뀌면(코어 재승인·서고 재도장) 3중 대조가 성립할 수 없으므로 정리(declined)하고 다음 큐레이션이 재발급한다. 빼기 후보의 문안은
+          // 수칙서에 '있는' 것이 정상이라 아래 '이미 등재' 대조를 타지 않는다.
+          const op9 = String(rec.operation || meta.operation || "");
+          const tgt9 = String(rec.target || meta.target || "");
+          const exp9 = String(rec.expectedTargetHash || meta.expectedTargetHash || "");
+          let arcNow9 = ""; try { arcNow9 = String((loadContract(ws) || {}).archiveHash || ""); } catch { arcNow9 = ""; }
+          const carry9 = op9 === "add" || op9 === "oos-add" || (op9 === "remove" && tgt9 === "archive" && !!exp9 && exp9 === arcNow9);
+          if (carry9 && (op9 === "add" || op9 === "oos-add") && normSet.has(normBacklogTitle(title))) { staleRecs.push({ candidateId: rec.candidateId, envelopeHash: approvedHash, status: "declined", kind: "curator", note: "이미 수칙서에 등재 — 세대 이월 정리", ts: new Date().toISOString() }); continue; }
+          if (!carry9) { staleRecs.push({ candidateId: rec.candidateId, envelopeHash: approvedHash, status: "declined", kind: "curator", note: "대상 세대 변경 — 정리 제안 재발급 대상(다음 큐레이션)", ts: new Date().toISOString() }); continue; }
+          const src9 = Object.assign({}, meta, rec);
+          const keep9 = {};
+          for (const k of ["kind", "origin", "policyVersion", "repoKey", "archiveHash", "operation", "target", "axis", "index", "itemFp", "expectedTargetHash", "title", "why", "refs", "recommend", "explain", "curationKey"]) if (src9[k] !== undefined) keep9[k] = src9[k];
+          staleRecs.push(Object.assign(keep9, { candidateId: rec.candidateId, envelopeHash: approvedHash, status: "proposed", kind: "curator", title, note: "승인 세대 이월(carry-forward — 사용자 판단 전 소실 금지)", ts: new Date().toISOString() }));
+          continue;
+        }
         if (normSet.has(normBacklogTitle(title))) { staleRecs.push({ candidateId: rec.candidateId, envelopeHash: approvedHash, status: "declined", kind: kindR, note: "이미 수칙서에 등재 — 세대 이월 정리", ts: new Date().toISOString() }); continue; }
         if (kindR === "rule-manual" || kindR === "user-direct") {
           // [재편 A §2-1] rule-manual·user-direct 세대 이월 — user-constraint와 동형(사용자 판단 전 소실 금지·1회 재발급).
@@ -4678,7 +4719,7 @@ function reconcileMemoryCandidates(ws, repo, approvedHash) {
       }
       // [4f] 같은 세대 '대기 중' 중복 스윕 — 이미 코어∪서고에 있는 문안의 proposed는 자동 정리(대기열이
       // 기등재분을 계속 보여줘 사용자가 중복만 고르는 경로 차단). 원문·절단 실물 양쪽 정규화 대조(draft와 동형).
-      if (rec.status === "proposed" && title) {
+      if (rec.status === "proposed" && title && !(kindR === "curator" && String(rec.operation || meta.operation || "") !== "add" && String(rec.operation || meta.operation || "") !== "oos-add")) { // [CURATION v3] 빼기 제안의 문안은 등재돼 있는 것이 정상 — 중복 스윕 제외
         const cut9 = title.length > ENVELOPE_CHAR_MAX ? title.slice(0, ENVELOPE_CHAR_MAX - "…[절단]".length) + "…[절단]" : title;
         if (normSet.has(normBacklogTitle(title)) || normSet.has(normBacklogTitle(cut9))) {
           staleRecs.push({ candidateId: rec.candidateId, envelopeHash: approvedHash, status: "declined", kind: kindR, note: "이미 등재된 문안 — 대기열 자동 정리", ...(rec.findingId ? { findingId: rec.findingId } : {}), ts: new Date().toISOString() });
@@ -4686,6 +4727,7 @@ function reconcileMemoryCandidates(ws, repo, approvedHash) {
         }
       }
       if (rec.status !== "adopted") continue; // ── 같은 세대: adopted 고아 복원
+      if (rec.applied) continue; // [CURATION v3 §3 D] 도장 시 종결 표식(applied)=고아 아님(빼기 제안은 문안이 사라져 아래 등재 대조로는 종결을 알 수 없음)
       if (title && normSet.has(normBacklogTitle(title))) continue; // 도장 완료(문안 등재됨)=고아 아님
       if (boundIds === null) continue; // proposal 손상=소유 판정 불가(보수 — 사용자 처리 후 다음 스캔)
       if (boundIds.has(rec.candidateId)) continue; // 진행 중 초안에 결속 — 고아 아님
@@ -4824,6 +4866,9 @@ function draftEnvelopeRevision(ws, repo, opts) {
   if (!approvedHash) return { ok: false, error: "승인된 수칙서 없음(Envelope 비활성) — 개정 대상 아님" };
   const adds = Array.isArray(o9.addCandidateIds) ? [...new Set(o9.addCandidateIds.filter((x) => typeof x === "string" && /^[0-9a-f]{16}$/.test(x)))] : [];
   const okAxes9 = tgt9.target === "archive" ? ["alwaysBlocker"] : ENVELOPE_AXES; // 서고 v1=ab 전용
+  // [CURATION v3 §3 D] sourceCandidateIds=이 초안을 낳은 curator 후보(remove 등 — adds 경로가 아닌 것). 제안 파일 candidateIds와 같은 자리에 기록해
+  // 도장 시 같은 잠금 안에서 종결(applied)되고, 폐기(복원형)도 같은 목록을 따른다 — 승인된 빼기가 미승인 수(상한 6)에 남지 않게(설계 2회차 blocker⑤).
+  const sources9 = Array.isArray(o9.sourceCandidateIds) ? [...new Set(o9.sourceCandidateIds.filter((x) => typeof x === "string" && /^[0-9a-f]{16}$/.test(x)))] : [];
   const removes = Array.isArray(o9.removeItems) ? o9.removeItems.filter((r) => r && okAxes9.includes(r.axis) && Number.isInteger(r.index) && r.index >= 0) : [];
   // 형식 오류를 '변경 없음'보다 먼저 — 잘못된 축 지정이 필터로 사라져 다른 오류로 위장되는 것 방지(4a).
   if ((Array.isArray(o9.removeItems) && removes.length !== o9.removeItems.length)) return { ok: false, error: tgt9.target === "archive" ? "빼기 지정 형식 오류(서고는 ab축만)" : "빼기 지정 형식 오류(축·번호)" };
@@ -4895,9 +4940,13 @@ function draftEnvelopeRevision(ws, repo, opts) {
     // ② 추가 — 후보별 자격(단건 draft와 동일 게이트: 세대 결속·proposed·title·dedupe·200자 절단 표식·상한).
     // [4a] 상한=목적지별(코어 12·서고 96)·'이미 등재' 중복 판정=코어∪서고 합집합(설계 §1 normSet — 같은 문안이
     // 두 층에 동시 등재되는 것 차단: 합본 주입에서 같은 수칙이 두 번 실리는 경로).
-    const { latest } = readEnvelopeCandidates(ws);
+    const { rows: candRowsAll9, latest } = readEnvelopeCandidates(ws);
     const MARK9 = "…[절단]";
     const capMax9 = tgt9.target === "archive" ? ARCHIVE_ITEM_MAX : ENVELOPE_ITEM_MAX;
+    for (const cid of sources9) { // [CURATION v3] 결속 후보 자격 — 이 세대·이 저장소의 proposed curator 후보만(fail-closed)
+      const sc = latest.get(cid + "@" + approvedHash);
+      if (!sc || sc.kind !== "curator" || sc.status !== "proposed" || sc.repoKey !== repoKeyOf(repo)) return { ok: false, error: "정리 제안 결속 실패(" + cid + ") — 화면을 새로고침한 뒤 다시 시도해 주세요" };
+    }
     // [4a 1차 blocker① 봉합] '이미 등재' 판정 집합: 자기 층=대상 실물(코어=빼기 반영된 3축 전체·서고=ab) ·
     // 상대 층=코어 3축 전체∪서고 ab. 코어는 ab만이 아니라 세 축 전부와 대조 — 같은 문안이 '범위 밖(방어 안 함)'과
     // '절대 차단'에 동시 존재하는 의미 충돌 차단. 비교 기준은 원문과 '저장될 실물(200자 절단 후)' 양쪽 정규화값:
@@ -4928,17 +4977,28 @@ function draftEnvelopeRevision(ws, repo, opts) {
       if (cand.repoKey !== repoKeyOf(repo)) return bail9("다른 프로젝트에서 만들어진 제안이라 이 저장소에는 올릴 수 없어요(정찰 대상 변경: " + cid + ")"); // [ab-1] 후보가 태어난 저장소 결속
       if (cand.status !== "proposed") return bail9("후보 상태가 proposed 아님(" + cid + ": " + cand.status + ")");
       if (typeof cand.title !== "string" || !cand.title) return bail9("후보에 문안 없음(" + cid + ")");
-      if (!Array.isArray(next.alwaysBlocker)) return bail9("수칙서 ab축 형식 이상");
+      // [CURATION v3 §3 D] 추가 축=후보 axis 우선(curator oos-add → 코어 outOfScope). 그 외 kind·axis 없음=현행 ab 고정.
+      // curator는 add(서고)·oos-add(코어 제외 칸)만 adds 경로 — remove는 removeItems+sourceCandidateIds, toggle은 2차.
+      let axK9 = "alwaysBlocker";
+      if (cand.kind === "curator") {
+        const cm9 = candRowsAll9.find((r) => r && r.candidateId === cid && String(r.envelopeHash || "") === approvedHash && r.operation) || candRowsAll9.find((r) => r && r.candidateId === cid && r.operation) || {};
+        const op9 = String(cand.operation || cm9.operation || "");
+        if (cand.axis === undefined && cm9.axis !== undefined) cand.axis = cm9.axis;
+        if (op9 === "oos-add") { if (tgt9.target !== "core" || cand.axis !== "outOfScope") return bail9("정리 제안의 목적지가 맞지 않아요(" + cid + ") — 제외 칸 제안은 코어로만"); axK9 = "outOfScope"; }
+        else if (op9 === "add") { if (tgt9.target !== "archive") return bail9("정리 제안의 목적지가 맞지 않아요(" + cid + ") — 서고 추가 제안은 서고로만"); }
+        else return bail9("이 정리 제안은 올림 경로가 아니에요(" + cid + ": " + op9 + ")");
+      }
+      if (!Array.isArray(next[axK9])) return bail9("수칙서 축 형식 이상(" + axK9 + ")");
       const t9 = String(cand.title);
       const item = t9.length > ENVELOPE_CHAR_MAX ? t9.slice(0, ENVELOPE_CHAR_MAX - MARK9.length) + MARK9 : t9;
       const tnI = normBacklogTitle(item), tnO = normBacklogTitle(t9); // 저장 실물(절단 후)+원문 양쪽 대조(blocker① 반례)
       if (tgtSet9.has(tnI) || tgtSet9.has(tnO) || othSet9.has(tnI) || othSet9.has(tnO)) { skippedDup.push(cid); continue; }
-      if (next.alwaysBlocker.length >= capMax9) return bail9(tgt9.target === "archive" ? "서고 96항 상한 도달 — 정리(빼기·병합) 후 재시도(자동 삭제 금지)" : "ab축 12항 상한 도달 — 먼저 뺄 항목을 정하세요(자동 삭제 금지)");
+      if (next[axK9].length >= capMax9) return bail9(tgt9.target === "archive" ? "서고 96항 상한 도달 — 정리(빼기·병합) 후 재시도(자동 삭제 금지)" : (axK9 === "outOfScope" ? "제외 칸 12항 상한 도달 — 먼저 뺄 항목을 정하세요(자동 삭제 금지)" : "ab축 12항 상한 도달 — 먼저 뺄 항목을 정하세요(자동 삭제 금지)"));
       tgtSet9.add(tnI); tgtSet9.add(tnO); // 이번 초안 누적분도 집합에(다건 올림 내부 중복 차단)
-      const prevLen = next.alwaysBlocker.length;
-      next.alwaysBlocker = [...next.alwaysBlocker, item];
+      const prevLen = next[axK9].length;
+      next[axK9] = [...next[axK9], item];
       for (const sfx of ["En", "Ex"]) {
-        const k = "alwaysBlocker" + sfx;
+        const k = axK9 + sfx;
         if (Array.isArray(next[k]) && next[k].length === prevLen) { next[k] = [...next[k], item]; dup = true; }
       }
     }
@@ -4948,11 +5008,37 @@ function draftEnvelopeRevision(ws, repo, opts) {
     if (!realAdds.length && !removes.length) return { ok: false, skippedDup: skippedDup.length, error: "올림 표시분이 모두 이미 등재된 문안이라 새로 올릴 것이 없어요(중복 " + skippedDup.length + "건은 '이미 등재'로 자동 정리) — 초안은 만들지 않았습니다" };
     const proposalText = JSON.stringify(next, null, 1);
     const note = (tgt9.target === "archive" ? "서고 " : "") + "개정판(올림 " + realAdds.length + "·빼기 " + removes.length + (removedTitles.length ? " — " + removedTitles.join(",") : "") + ")" + (skippedDup.length ? " · 중복 " + skippedDup.length + "건 자동 제외" : "") + (dup ? " · 병렬 축 복제됨 — 사용자 편집 필요(번역·예시)" : "");
-    const w = writeEnvelopeProposal(ws, repo, proposalText, note, { candidateIds: realAdds, target: tgt9.target });
+    const bound9 = [...new Set([...realAdds, ...sources9])]; // [CURATION v3] 결속 목록=올림 후보∪출처 후보(remove 등) — 제안 파일 candidateIds 한 자리
+    const w = writeEnvelopeProposal(ws, repo, proposalText, note, { candidateIds: bound9, target: tgt9.target });
     if (!w.ok) return { ok: false, error: "제안본 저장 거부: " + w.error };
-    if (realAdds.length) { try { appendEnvelopeCandidates(ws, realAdds.map((cid) => ({ candidateId: cid, envelopeHash: approvedHash, status: "adopted", note: "draft " + w.newHash, ts: new Date().toISOString() }))); } catch { /* 상태 기록 실패해도 제안본은 유효 */ } }
+    if (bound9.length) { try { appendEnvelopeCandidates(ws, bound9.map((cid) => ({ candidateId: cid, envelopeHash: approvedHash, status: "adopted", note: "draft " + w.newHash, ts: new Date().toISOString() }))); } catch { /* 상태 기록 실패해도 제안본은 유효 */ } }
     return { ok: true, newHash: w.newHash, parallelCopied: dup, adds: realAdds.length, removes: removes.length, skippedDup: skippedDup.length, target: tgt9.target };
   } finally { releaseEnvelopeTransLock(ws, lk9.token); }
+}
+// [CURATION v3 §3 D 승인 시 변환] curator 후보 1건 → 후보 행의 operation을 읽어 기존 초안 계약(draftEnvelopeRevision)의 연산으로 변환.
+// add(서고 ab)→addCandidateIds · oos-add(코어 제외 칸)→addCandidateIds+후보 axis · remove→removeItems 3중 대조(axis·index·itemFp)+expectedTargetHash(제안 시점 대상 세대)
+// +sourceCandidateIds 종결 결속 · toggle=2차(거부). 기존 관문(repoKey·세대·중복·title) 완화 없음 — 이 함수는 인자만 조립한다.
+function draftCuratorCandidate(ws, repo, candidateId, approvedHash) {
+  if (!approvedHash) return { ok: false, error: "승인된 수칙서 없음(Envelope 비활성) — 초안 대상 아님" };
+  if (typeof candidateId !== "string" || !/^[0-9a-f]{16}$/.test(candidateId)) return { ok: false, error: "후보 id 형식 오류" };
+  const { rows, latest } = readEnvelopeCandidates(ws);
+  const cur = latest.get(candidateId + "@" + approvedHash);
+  if (!cur) return { ok: false, error: "이 승인 세대에 해당 후보 없음(조정 스캔 후 재시도)" };
+  // 메타 폴백: 같은 세대의 연산 필드를 실은 행(provisional/proposed) 우선 → 전 세대 첫 행 — 상태 전이 행(복원·이월)이 필드를 빠뜨려도 변환 가능
+  const meta = rows.find((r) => r && r.candidateId === candidateId && String(r.envelopeHash || "") === approvedHash && r.operation) || rows.find((r) => r && r.candidateId === candidateId && r.operation) || {};
+  const cand = Object.assign({}, meta, cur);
+  if (cand.kind !== "curator") return { ok: false, error: "정리 제안이 아닌 후보(" + String(cand.kind || "") + ")" };
+  if (cand.status !== "proposed") return { ok: false, error: "후보 상태가 proposed 아님(현재: " + cand.status + ")" };
+  if (!cand.repoKey || cand.repoKey !== repoKeyOf(repo)) return { ok: false, error: "다른 프로젝트에서 만들어진 제안이라 이 저장소에는 적용할 수 없어요" }; // ab-1
+  const op = String(cand.operation || "");
+  if (op === "add") return draftEnvelopeRevision(ws, repo, { addCandidateIds: [candidateId], removeItems: [], approvedHash, target: "archive" });
+  if (op === "oos-add") return draftEnvelopeRevision(ws, repo, { addCandidateIds: [candidateId], removeItems: [], approvedHash, target: "core" });
+  if (op === "remove") {
+    if (!Number.isInteger(cand.index) || cand.index < 0 || typeof cand.itemFp !== "string" || !/^[0-9a-f]{40}$/.test(cand.itemFp) || typeof cand.expectedTargetHash !== "string" || !cand.expectedTargetHash) return { ok: false, error: "빼기 제안의 결속 지문이 없어 적용할 수 없어요(다음 정리 제안에서 재발급)" };
+    return draftEnvelopeRevision(ws, repo, { addCandidateIds: [], removeItems: [{ axis: String(cand.axis || ""), index: cand.index, itemFp: cand.itemFp }], approvedHash, target: cand.target === "archive" ? "archive" : "core", expectedTargetHash: cand.expectedTargetHash, sourceCandidateIds: [candidateId] });
+  }
+  if (op === "toggle") return { ok: false, error: "전환(항상↔관련) 제안은 2차 범위라 지금은 적용할 수 없어요 — 보류로 남습니다" };
+  return { ok: false, error: "알 수 없는 정리 작업(" + op + ")" };
 }
 // A-4 병합 초안: 현행 envelope 전문+후보 1건 → ab축 병합 proposalText → 기존 제안 저장(승인 전이는 기존 경로 그대로).
 // 병렬 축(En/Ex) 존재 시 후보 원문 그대로 복제(결정론 — 번역·예시 작문 금지)·note에 '편집 필요' 플래그(설계 v3).
@@ -6698,3 +6784,6 @@ module.exports.ruleCheckSummary = ruleCheckSummary;
 module.exports.readClaudeAnchorFile = readClaudeAnchorFile;
 module.exports.writeClaudeAnchorRuleCheck = writeClaudeAnchorRuleCheck;
 module.exports.writeCodexRuleCheck = writeCodexRuleCheck;
+module.exports.ENVELOPE_AXES = ENVELOPE_AXES;
+module.exports.ENVELOPE_CHAR_MAX = ENVELOPE_CHAR_MAX;
+module.exports.draftCuratorCandidate = draftCuratorCandidate; // [CURATION v3 §3 D] 승인 시 변환
