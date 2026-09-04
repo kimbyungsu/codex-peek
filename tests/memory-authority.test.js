@@ -470,7 +470,7 @@ t("회귀 핀: 지도=참고 라벨·scout 태생 candidate 강제 무변경(§5
 // ── C-1 배선 소스 계약(같은 파일 결속 — 문자열 핀) ───────────────────────────
 t("배선 핀: attach 행 askId+envelope 스냅샷·flagVerdict(askId·carrier)·판정말미 조정 트리거", () => {
   const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
-  assert.ok(src.includes("appendAttachUsage({ ts: new Date().toISOString(), ws: ws || configWs(), askId: askId9"), "attach 행 askId");
+  assert.ok(/appendAttachUsage\(\{ ts: new Date\(\)\.toISOString\(\), ws: ws \|\| configWs\(\),[\s\S]{0,220}?askId: askId9/.test(src), "attach 행 askId(2026-09-04: repoKey 필드가 사이에 추가됨 — CURATION ab-1 결속)");
   assert.ok(src.includes("function flagVerdict(answer, ws, codexSession, modeSnapshot, machine, attempt, providerName, askId, attCarrier)"), "판정 행 결속 시그니처");
   assert.ok(src.includes("reconcileMemoryCandidates(ws, resolveScoutRepo(ws, contractSnap || loadContract(ws)).repo"), "판정 말미 트리거");
   assert.ok(src.includes('sub === "draft"'), "draft CLI");

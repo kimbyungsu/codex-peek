@@ -94,14 +94,16 @@ function curationInput(ws, repo, opts) {
   let cc = null;
   try { cc = computeCandidates(ws); } catch { return { ok: false, reason: "signals-failed" }; }
   signalsGen = cc && cc.gen ? cc.gen : null;
-  if (cc && (cc.gen || null) === gen) for (const s of (cc.signals || [])) {
+  // [ab-1] 현재 캠페인 카운터의 저장소 표식이 이 저장소일 때만 캠페인 신호를 받는다(표식 없음·다른 저장소=0 — 같은 작업 폴더에서 정찰 대상을 오간 경우)
+  const campRepoOk = (() => { try { const o = JSON.parse(fs.readFileSync(CL.campaignFileFor(ws), "utf8")); return !!(o && o.repoKey === repoKey); } catch { return false; } })();
+  if (cc && campRepoOk && (cc.gen || null) === gen) for (const s of (cc.signals || [])) {
     const row = { id: s.kind + ":" + String(s.key || ""), key: String(s.key || ""), n: Number(s.n) || 1, titles: (s.titles || []).map((t) => safeText(t, 120)).filter(Boolean).slice(0, 3) }; // 민감 형태 제목=생략(ab-7)
     if (s.kind === "oos-repeat") sig.oosRepeat.push(row); else if (s.kind === "lineage") sig.lineage.push(row); else if (s.kind === "escalation") sig.escalation.push(row); else if (s.kind === "unused-oos") sig.unusedOos.push(row);
   }
   // ⑤ 미사용 보관 수칙 — 미리보기(purpose:"preview")와 검증 선별(askId 있는 행·purpose 없음) 둘 다 '사용'으로 셈. 관측 0건이면 주장하지 않는다.
   if (arcHash && archive.length) {
     try {
-      const recs = CL.readSelectorUsage().filter((r) => r && r.wsKey === wsKey && r.archiveHash === arcHash && (r.purpose === "preview" || (!r.purpose && typeof r.askId === "string" && r.askId)));
+      const recs = CL.readSelectorUsage().filter((r) => r && r.wsKey === wsKey && r.repoKey === repoKey && r.archiveHash === arcHash && (r.purpose === "preview" || (!r.purpose && typeof r.askId === "string" && r.askId))); // repoKey 결속(표식 없는 옛 영수증=불산입 — ab-1)
       if (recs.length) {
         const used = new Set(); let earliest = null;
         for (const r of recs) { for (const id of (Array.isArray(r.selectedIds) ? r.selectedIds : [])) used.add(String(id)); const t = Date.parse(String(r.ts || "")); if (Number.isFinite(t) && (earliest === null || t < earliest)) earliest = t; }
@@ -110,10 +112,11 @@ function curationInput(ws, repo, opts) {
       }
     } catch { /* 영수증 판독 실패=신호 생략 */ }
   }
-  // ⑥ 되받아침에 쓰인 제외 칸(P12) — 처분 장부 rebut(oosId) 횟수
+  // ⑥ 되받아침에 쓰인 제외 칸(P12) — 처분 장부 rebut(oosId) 횟수 · 이 저장소 캠페인의 처분만(4회차 blocker ab-1: 다른 저장소 처분이 프롬프트·유효 refs로 유입되던 경로 차단)
   try {
+    const mineC = repoCampaignIds(ws, repoKey);
     const byOos = new Map();
-    for (const r of CL.readFindingsLedger(ws)) if (r && r.type === "disposition" && r.choice === "rebut" && typeof r.oosId === "string" && r.oosId) byOos.set(r.oosId, (byOos.get(r.oosId) || 0) + 1);
+    for (const r of CL.readFindingsLedger(ws)) if (r && r.type === "disposition" && r.choice === "rebut" && typeof r.oosId === "string" && r.oosId && mineC.has(r.campaignId)) byOos.set(r.oosId, (byOos.get(r.oosId) || 0) + 1);
     for (const [oosId, n] of byOos) sig.rebutUsed.push({ id: "rebut:" + oosId, oosId, n });
   } catch { /* 장부 판독 실패=생략 */ }
   // ⑦ 선별 정상 범위 초과(attach 장부 selOver — 같은 작업 폴더)
@@ -121,7 +124,7 @@ function curationInput(ws, repo, opts) {
     const wsN = CL.normWs(String(ws));
     for (const l of String(fs.readFileSync(CL.ATTACH_USAGE_FILE, "utf8")).split(/\r?\n/)) {
       if (!l) continue; let o = null; try { o = JSON.parse(l); } catch { continue; }
-      if (o && o.selOver && CL.normWs(String(o.ws || "")) === wsN) { sig.selOver.count++; sig.selOver.lastTs = String(o.ts || sig.selOver.lastTs); }
+      if (o && o.selOver && CL.normWs(String(o.ws || "")) === wsN && o.repoKey === repoKey) { sig.selOver.count++; sig.selOver.lastTs = String(o.ts || sig.selOver.lastTs); } // 저장소 표식 결속(표식 없는 옛 행=불산입 — ab-1)
     }
   } catch { /* 장부 없음=0 */ }
   // ⑧ 결정 장부(방향 힌트 — 제안 근거로만)
@@ -373,9 +376,12 @@ function alarm(ws, kind, ko, en) {
 async function runCuration(ws, opts) {
   const o = opts || {};
   const t0 = Date.now();
+  // [§3 A] 실행 행에 트리거 종류(manual|auto|button)와 tick 지문 — 자동 판정이 '같은 신호 상태'를 두 번 실행하지 않게(tickFp 대조).
+  const trig9 = o.trigger === "auto" || o.trigger === "button" ? o.trigger : "manual";
+  const runRow9 = (row) => appendCurationRow(ws, Object.assign({ type: "run", trigger: trig9 }, typeof o.tickFp === "string" && o.tickFp ? { tickFp: o.tickFp } : {}, row));
   // 실패=영수증+경보(인수조건 6) — 시작 단계 실패도 같은 길(1회차 blocker⑦). 잠금 '실행 중'(running)만 정상 경합이라 영수증만 남기고 경보 없음.
   const failEarly = (st, reason, repoKey9, alarmOn) => {
-    appendCurationRow(ws, { type: "run", repoKey: repoKey9 || "", outcome: st, reason: reason || "", durationMs: Date.now() - t0 });
+    runRow9({ repoKey: repoKey9 || "", outcome: st, reason: reason || "", durationMs: Date.now() - t0 });
     writeCurationReceipt(ws, null, { repoKey: repoKey9 || "", outcome: st + (reason ? ":" + reason : ""), durationMs: Date.now() - t0 });
     if (alarmOn) alarm(ws, "curation-failed", "정리 제안 실행이 시작 단계에서 실패했습니다(" + st + (reason ? ": " + reason : "") + ") — 검증에는 영향이 없습니다.", "Curation run failed before start (" + st + (reason ? ": " + reason : "") + ") — verification is unaffected.");
     return { st, reason: reason || "" };
@@ -388,21 +394,22 @@ async function runCuration(ws, opts) {
   try {
     const rec9 = recoverCurationProvisional(ws); // 중단 복구 먼저(생략 판정이 결과 행만 보고 건너뛰기 전에)
     if (rec9.failed) { // 복구 쓰기 실패=이번 실행 실패(생략으로 위장 금지 — 2회차 blocker③④). 후보는 다음 실행이 다시 복구 시도.
-      appendCurationRow(ws, { type: "run", repoKey: CL.repoKeyOf(repo), outcome: "recover-failed", reason: String(rec9.failed), durationMs: Date.now() - t0 });
+      runRow9({ repoKey: CL.repoKeyOf(repo), outcome: "recover-failed", reason: String(rec9.failed), durationMs: Date.now() - t0 });
       writeCurationReceipt(ws, null, { repoKey: CL.repoKeyOf(repo), outcome: "recover-failed:" + rec9.failed, durationMs: Date.now() - t0 });
       alarm(ws, "curation-failed", "중단된 정리 제안 " + rec9.failed + "건을 다시 살리는 기록에 실패했습니다 — 다음 실행에서 재시도합니다(검증 무영향).", "Failed to re-activate " + rec9.failed + " interrupted curation proposal(s) — retried on the next run (verification unaffected).");
       return { st: "recover-failed", failed: rec9.failed };
     }
+    resetTickK(ws, CL.repoKeyOf(repo)); // 이 시점부터 실행 행이 남는다(입력 실패·생략·실패·완주 전부) — "마지막 큐레이션 이후"의 기준점 갱신(K 리셋)
     const input = curationInput(ws, repo, { computeCandidates: o.computeCandidates });
     if (!input.ok) {
-      appendCurationRow(ws, { type: "run", repoKey: CL.repoKeyOf(repo), outcome: "input-failed", reason: input.reason, durationMs: Date.now() - t0 });
+      runRow9({ repoKey: CL.repoKeyOf(repo), outcome: "input-failed", reason: input.reason, durationMs: Date.now() - t0 });
       writeCurationReceipt(ws, null, { repoKey: CL.repoKeyOf(repo), outcome: "input-failed:" + input.reason, durationMs: Date.now() - t0 });
       alarm(ws, "curation-failed", "정리 제안 입력을 만들 수 없었습니다(" + input.reason + ") — 수칙서·서고 상태를 확인하세요. 검증에는 영향이 없습니다.", "Curation input unavailable (" + input.reason + ") — check the rulebook/archive state; verification is unaffected.");
       return { st: "input-failed", reason: input.reason, recovered: rec9.recovered };
     }
     const skip = curationSkip(ws, input);
     if (skip.skip && !o.force) {
-      appendCurationRow(ws, { type: "run", repoKey: input.repoKey, curationKey: curationKeyOf(input), boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: "skipped", reason: skip.reason, signalCount: input.signalCount, durationMs: Date.now() - t0 });
+      runRow9({ repoKey: input.repoKey, curationKey: curationKeyOf(input), boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: "skipped", reason: skip.reason, signalCount: input.signalCount, durationMs: Date.now() - t0 });
       writeCurationReceipt(ws, input, { outcome: "skipped:" + skip.reason, durationMs: Date.now() - t0 });
       return { st: "skipped", reason: skip.reason, curationKey: curationKeyOf(input), signalCount: input.signalCount, recovered: rec9.recovered };
     }
@@ -413,41 +420,236 @@ async function runCuration(ws, opts) {
     const r = await h.promise;
     if (!r || !r.ok) {
       const key = (r && r.key) || "call-failed";
-      appendCurationRow(ws, { type: "run", repoKey: input.repoKey, curationKey: curationKeyOf(input), boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: "failed", reason: key, arm, signalCount: input.signalCount, durationMs: Date.now() - t0 });
+      runRow9({ repoKey: input.repoKey, curationKey: curationKeyOf(input), boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: "failed", reason: key, arm, signalCount: input.signalCount, durationMs: Date.now() - t0 });
       writeCurationReceipt(ws, input, { arm, pages: 1, outcome: "failed:" + key, durationMs: Date.now() - t0 });
       alarm(ws, "curation-failed", "정리 제안 실행이 실패했습니다(" + key + ") — 검증에는 영향이 없고, 다음 실행에서 다시 시도합니다.", "Curation run failed (" + key + ") — verification is unaffected; it will retry on the next run.");
       return { st: "call-failed", reason: key, arm };
     }
     const parsed = parseCurationOutput(r.output, input);
     if (!parsed.ok) {
-      appendCurationRow(ws, { type: "run", repoKey: input.repoKey, curationKey: curationKeyOf(input), boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: "failed", reason: "parse:" + parsed.reason, arm, signalCount: input.signalCount, durationMs: Date.now() - t0 });
+      runRow9({ repoKey: input.repoKey, curationKey: curationKeyOf(input), boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: "failed", reason: "parse:" + parsed.reason, arm, signalCount: input.signalCount, durationMs: Date.now() - t0 });
       writeCurationReceipt(ws, input, { arm, pages: 1, outcome: "parse-failed:" + parsed.reason, durationMs: Date.now() - t0 });
       alarm(ws, "curation-failed", "정리 제안 답을 읽을 수 없어 전량 거부했습니다(" + parsed.reason + ") — 다음 실행에서 재발급합니다.", "Curation output was unreadable and rejected as a whole (" + parsed.reason + ") — reissued on the next run.");
       return { st: "parse-failed", reason: parsed.reason, arm };
     }
     const cm = commitCuration(ws, input, parsed, { arm, durationMs: Date.now() - t0 });
     if (!cm.ok) {
-      appendCurationRow(ws, { type: "run", repoKey: input.repoKey, curationKey: curationKeyOf(input), boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: "failed", reason: "commit:" + cm.reason, arm, signalCount: input.signalCount, durationMs: Date.now() - t0 });
+      runRow9({ repoKey: input.repoKey, curationKey: curationKeyOf(input), boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: "failed", reason: "commit:" + cm.reason, arm, signalCount: input.signalCount, durationMs: Date.now() - t0 });
       writeCurationReceipt(ws, input, { arm, pages: 1, outcome: "commit-failed:" + cm.reason, durationMs: Date.now() - t0 });
       alarm(ws, "curation-failed", "정리 제안 기록이 중단됐습니다(" + cm.reason + ") — 화면에 반영되지 않았고, 다음 실행이 다시 시도합니다.", "Curation commit aborted (" + cm.reason + ") — nothing shown; the next run retries.");
       return { st: "commit-failed", reason: cm.reason, arm };
     }
-    appendCurationRow(ws, { type: "run", repoKey: input.repoKey, curationKey: cm.curationKey, boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: cm.proposed ? "proposed" : "none", proposed: cm.proposed, fresh: cm.candidateIds.length, deferred: cm.deferred, heldToggles: cm.heldToggles, dropped: cm.dropped, arm, signalCount: input.signalCount, durationMs: Date.now() - t0 });
+    runRow9({ repoKey: input.repoKey, curationKey: cm.curationKey, boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: cm.proposed ? "proposed" : "none", proposed: cm.proposed, fresh: cm.candidateIds.length, deferred: cm.deferred, heldToggles: cm.heldToggles, dropped: cm.dropped, arm, signalCount: input.signalCount, durationMs: Date.now() - t0 });
     const rc = writeCurationReceipt(ws, input, { arm, pages: 1, selectedIds: cm.candidateIds, outcome: cm.proposed ? "proposed:" + cm.proposed : "none", resultFp: cm.resultFp, durationMs: Date.now() - t0 });
     if (!rc.ok) alarm(ws, "curation-failed", "정리 제안 영수증 기록에 실패했습니다 — 제안은 남았지만 실행 기록이 비었습니다.", "Curation receipt write failed — proposals were stored but the run receipt is missing.");
     return Object.assign({ st: "ok", arm, receipt: rc.ok, recovered: rec9.recovered }, cm);
   } finally { releaseCurateLock(ws, lk.token); }
 }
 
-// 대시보드·CLI 요약 — 마지막 실행·제안 n·미승인 m(§3 E 수칙 카드 1줄 재료)
-function curationSummary(ws) {
-  const rows = readCurationRows(ws);
-  const runs = rows.filter((r) => r.type === "run");
+// ── [§3 A 트리거 ②③ · 3단계] 훅 tick — 두 층으로 나눈다(확인검증 1회차 blocker ab-6):
+//  ⓐ 훅 안(curationHookTick): 계약·잠금·tick 상태 파일 3개만 보고(전수 판독 0) 최소 간격이 지났으면 `curate tick`을 detach — 판정 자체를 훅에서 하지 않는다.
+//  ⓑ 자식(curationTickJudge → 필요 시 runCuration): 꼬리 바이트 상한 판독으로 신호를 재계산(현재 세대·열린 지적만)·마감 캠페인 누계는 tick 상태 파일에 누적
+//     (캠페인 이력 60일 절단과 무관 — 1회차 blocker②)·같은 신호 상태(tickFp)는 마지막 실행과 대조해 한 번만.
+const CURATION_TICK_K = 10;
+const CURATION_TICK_MIN_GAP_MS = 10 * 60 * 1000;
+const CURATION_TICK_THRESHOLDS = { oosRepeat: 2, lineage: 3, unusedDays: CURATION_UNUSED_DAYS, selOver: 3 };
+const TICK_TAIL_BYTES = 256 * 1024;      // 장부 꼬리 판독 상한(행 단위로 앞 조각은 버림)
+const TICK_RECEIPTS_MAX = 300;           // 선별 영수증 파일 판독 상한(최신순)
+// [4회차 blocker②] seen 배열 폐기 — 상태 재판독이 배열을 다시 자르면 보존이 무효가 된다. 대신 워터마크 시각(hwm)과 '그 시각의 마감 수'(hwmN) 두 값으로 센다(O(1)·절단 불가).
+// tick 상태=(작업 폴더, 정찰 대상 저장소) 결속(2회차 blocker ab-1): 정찰 대상이 바뀌면 다른 파일=새 기준선 — 이전 저장소의 누계·판정이 새 저장소로 넘어가지 않는다(P6).
+function curationTickFileFor(ws, repoKey) { return path.join(CURATION_DIR, CL.wsKeyFor(ws) + "." + String(repoKey || "norepo") + ".tick.json"); }
+function readTickState(ws, repoKey) {
+  try {
+    const o = JSON.parse(fs.readFileSync(curationTickFileFor(ws, repoKey), "utf8"));
+    if (o && typeof o === "object" && String(o.repoKey || "") === String(repoKey || "")) {
+      const seeded = o.seeded === true && Number.isInteger(o.hwmN); // 구조 이전 상태(hwmN 없음)=재기준선(값 유실 없이 다시 기준만 잡음)
+      return { repoKey: String(repoKey || ""), k: Number.isInteger(o.k) && o.k >= 0 ? o.k : 0, hwm: String(o.hwm || ""), hwmN: Number.isInteger(o.hwmN) && o.hwmN >= 0 ? o.hwmN : 0, judgedAt: String(o.judgedAt || ""), ranAt: String(o.ranAt || ""), tickFp: String(o.tickFp || ""), reason: String(o.reason || ""), seeded };
+    }
+  } catch { /* 없음·손상=초기 */ }
+  return null;
+}
+function writeTickState(ws, repoKey, st) { try { fs.mkdirSync(CURATION_DIR, { recursive: true }); return CL.atomicWrite(curationTickFileFor(ws, repoKey), JSON.stringify(Object.assign({}, st, { repoKey: String(repoKey || "") }))); } catch { return false; } }
+// 꼬리 판독 — 마지막 maxBytes만 읽고 첫 부분 조각(잘린 행)은 버린다. 부재=[].
+function readTailLines(file, maxBytes) {
+  let fd = null;
+  try {
+    const st = fs.statSync(file); if (!st.size) return [];
+    const len = Math.min(st.size, maxBytes); const buf = Buffer.alloc(len);
+    fd = fs.openSync(file, "r"); fs.readSync(fd, buf, 0, len, st.size - len);
+    let s = buf.toString("utf8"); if (len < st.size) { const nl = s.indexOf("\n"); s = nl >= 0 ? s.slice(nl + 1) : ""; }
+    return s.split(/\r?\n/).filter(Boolean);
+  } catch { return []; } finally { if (fd !== null) { try { fs.closeSync(fd); } catch { /* */ } } }
+}
+function readTailJson(file, maxBytes) { return readTailLines(file, maxBytes).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); }
+function lockAlive(ws) {
+  let cur = null; try { cur = JSON.parse(fs.readFileSync(curateLockFileFor(ws), "utf8")); } catch { return false; }
+  const age = cur && cur.ts ? Date.now() - Date.parse(cur.ts) : Infinity;
+  return !!(cur && pidAlive(Number(cur.pid)) && age < CURATE_LOCK_STALE_MS);
+}
+// 최근 선별 영수증(최신 TICK_RECEIPTS_MAX개) — 전체 디렉터리 판독 대신 이름순 꼬리
+function readRecentSelectorUsage(max) {
+  let names; try { names = fs.readdirSync(CL.SELECTOR_USAGE_DIR).filter((x) => x.endsWith(".json")).sort().slice(-max); } catch { return []; }
+  const out = [];
+  for (const nm of names) { try { const o = JSON.parse(fs.readFileSync(path.join(CL.SELECTOR_USAGE_DIR, nm), "utf8")); if (o && typeof o === "object") out.push(o); } catch { /* 손상=무시 */ } }
+  return out;
+}
+// 신호(유계) — ③-a 반복 신호는 대시보드 산출과 같은 규칙을 '현재 세대(envelopeHash)·그 세대의 마지막 캠페인·열린 지적'으로 한정(1회차 blocker①):
+// 강등 반복=같은 oosId의 강등 finding 2+(닫힘이 정상이라 open 조건 없음) · 계보=close 행이 없는 finding의 blocker 등장 고유 라운드 2+(원 등장 포함 3회).
+// 이 저장소에 속한 캠페인 id 집합 — 캠페인 카운터·이력 행의 repoKey(표식 없는 옛 캠페인=불포함 — 다른 저장소 신호의 유입 차단, ab-1)
+function repoCampaignIds(ws, repoKey) {
+  const ids = new Set();
+  try { const o = JSON.parse(fs.readFileSync(CL.campaignFileFor(ws), "utf8")); if (o && o.repoKey === repoKey && typeof o.campaignId === "string") ids.add(o.campaignId); } catch { /* 없음 */ }
+  for (const h of readTailJson(CL.campaignHistoryFileFor(ws), 64 * 1024)) if (h && h.repoKey === repoKey && typeof h.campaignId === "string") ids.add(h.campaignId);
+  return ids;
+}
+function curationTickSignals(ws, wsKey, repoKey, gen, arcHash, archiveN) {
+  const s = { oosRepeat: 0, lineage: 0, unusedDays: 0, unusedCount: 0, selOver: 0 };
+  try {
+    const rows = readTailJson(CL.findingsLedgerFileFor(ws), TICK_TAIL_BYTES);
+    const mine = repoCampaignIds(ws, repoKey);
+    let camp = ""; for (const r of rows) if (r && r.type === "finding" && typeof r.campaignId === "string" && mine.has(r.campaignId) && (r.envelopeHash || null) === (gen || null)) camp = r.campaignId;
+    if (camp) {
+      const inGen = (r) => r && r.campaignId === camp && (r.envelopeHash || null) === (gen || null);
+      const closed = new Set(); for (const r of rows) if (inGen(r) && r.type === "close" && r.findingId) closed.add(r.findingId);
+      const byOos = new Map(), byF = new Map();
+      for (const r of rows) {
+        if (!inGen(r)) continue;
+        if (r.type === "finding" && r.demoted && r.oosId) byOos.set(r.oosId, (byOos.get(r.oosId) || 0) + 1);
+        if (r.type === "occurrence" && r.findingId && r.effectiveTag === "blocker" && !closed.has(r.findingId)) { const st = byF.get(r.findingId) || new Set(); st.add(r.round); byF.set(r.findingId, st); }
+      }
+      for (const n of byOos.values()) s.oosRepeat = Math.max(s.oosRepeat, n);
+      for (const st of byF.values()) s.lineage = Math.max(s.lineage, st.size + 1);
+    }
+  } catch { /* 장부 없음=0 */ }
+  // ③-b 미사용 보관 수칙 — 미리보기+검증 선별 영수증(최신 상한 개) 합집합. 관측 0건이면 주장 안 함(수=0·일수=0).
+  if (arcHash && archiveN > 0) {
+    try {
+      const recs = readRecentSelectorUsage(TICK_RECEIPTS_MAX).filter((r) => r && r.wsKey === wsKey && r.repoKey === repoKey && r.archiveHash === arcHash && (r.purpose === "preview" || (!r.purpose && typeof r.askId === "string" && r.askId))); // repoKey 결속(ab-1)
+      if (recs.length) {
+        const used = new Set(); let earliest = null;
+        for (const r of recs) { for (const id of (Array.isArray(r.selectedIds) ? r.selectedIds : [])) used.add(String(id)); const t = Date.parse(String(r.ts || "")); if (Number.isFinite(t) && (earliest === null || t < earliest)) earliest = t; }
+        for (let i = 1; i <= archiveN; i++) if (!used.has("arc-" + i)) s.unusedCount++;
+        if (s.unusedCount && earliest !== null) s.unusedDays = Math.floor((Date.now() - earliest) / 86400000);
+      }
+    } catch { /* 생략 */ }
+  }
+  // ③-c 선별 정상 범위 초과 횟수(attach 장부는 쓰기 측이 200행으로 절단 — 꼬리 판독) — 같은 작업 폴더 ∧ 그 검증에 실린 수칙서 세대=현재 세대(저장소별 파일 지문 — 전환 뒤 이전 저장소 행 배제·2회차 blocker ab-1)
+  try { const wsN = CL.normWs(String(ws)); for (const o of readTailJson(CL.ATTACH_USAGE_FILE, 64 * 1024)) if (o && o.selOver && CL.normWs(String(o.ws || "")) === wsN && o.repoKey === repoKey) s.selOver++; } catch { /* 0 */ } // 저장소 표식 결속(표식 없는 옛 행=불산입 — ab-1)
+  return s;
+}
+// 마감 캠페인 누계(② K) — tick 상태에 '본 적 있는 캠페인 id'를 기억하고 새 id만 k에 더한다. 첫 tick(상태 없음)은 현재 이력을 기준선으로 삼고 k=0(설치 이전 마감은 세지 않음).
+// 새 마감 = (워터마크보다 나중 시각의 캠페인 전부) + (워터마크와 같은 시각의 캠페인 중 지난번보다 늘어난 만큼).
+// 상태는 hwm(시각)·hwmN(그 시각의 캠페인 수) 둘뿐이라 재판독에서 잘릴 배열이 없다(4회차 blocker②). 이력이 뒤로 짧아져도 워터마크는 되감기지 않는다.
+// 같은 캠페인이 나중에 다시 마감되면(A→B→A) 새 시각의 마감 사건으로 한 번 더 센다 — 정직한 계수.
+function tickCampaignCount(ws, st, repoKey) {
+  const latest = new Map(); // campaignId → 마지막 마감 시각(같은 id 여러 행=최신만)
+  for (const h of readTailJson(CL.campaignHistoryFileFor(ws), 64 * 1024)) {
+    if (!(h && typeof h.campaignId === "string" && h.campaignId && h.repoKey === repoKey)) continue; // 이 저장소의 마감만(표식 없는 옛 행=불산입 — ab-1)
+    const t = Date.parse(String(h.updatedAt || "")); if (!Number.isFinite(t)) continue;
+    const prev = latest.get(h.campaignId); if (prev === undefined || t > prev) latest.set(h.campaignId, t);
+  }
+  let hwmMs = st && st.hwm ? Date.parse(st.hwm) : NaN; if (!Number.isFinite(hwmMs)) hwmMs = -Infinity;
+  const hwmN = st && Number.isInteger(st.hwmN) ? st.hwmN : 0;
+  let maxT = -Infinity; for (const t of latest.values()) if (t > maxT) maxT = t;
+  const newHwmMs = Math.max(Number.isFinite(hwmMs) ? hwmMs : -Infinity, Number.isFinite(maxT) ? maxT : -Infinity); // 되감김 금지(이력 절단으로 최신이 사라져도 유지)
+  let atNew = 0; for (const t of latest.values()) if (t === newHwmMs) atNew++;
+  const out = (k) => ({ k, hwm: Number.isFinite(newHwmMs) ? new Date(newHwmMs).toISOString() : "", hwmN: atNew });
+  if (!st || !st.seeded) return out(0); // 첫 판정=기준선(설치 이전 마감은 세지 않음)
+  let k = st.k;
+  for (const t of latest.values()) if (t > hwmMs) k++;               // 워터마크보다 나중=전부 신규
+  if (Number.isFinite(hwmMs) && newHwmMs === hwmMs) k += Math.max(0, atNew - hwmN); // 같은 시각=늘어난 만큼만(멱등)
+  return out(k);
+}
+function curationTickJudge(ws, c, opts) {
+  const o = opts || {};
+  const cc = c || (() => { try { return CL.loadContract(ws); } catch { return null; } })();
+  if (!cc) return { spawn: false, reason: "contract-unreadable" };
+  const gen = typeof cc.envelopeHash === "string" && cc.envelopeHash ? cc.envelopeHash : null;
+  if (!gen) return { spawn: false, reason: "envelope-inactive" };
+  let repo; try { repo = CL.resolveScoutRepo(ws, cc).repo; } catch { return { spawn: false, reason: "repo-unresolved" }; }
+  const wsKey = CL.wsKeyFor(ws), repoKey = CL.repoKeyOf(repo);
+  if (lockAlive(ws)) return { spawn: false, reason: "running" };
+  const now = Number.isFinite(o.now) ? o.now : Date.now();
+  const st0 = readTickState(ws, repoKey);
+  const runs = readTailJson(curationFileFor(ws), TICK_TAIL_BYTES).filter((r) => r && r.schema === "curation-v1" && r.wsKey === wsKey && r.type === "run" && (!r.repoKey || r.repoKey === repoKey));
   const last = runs.length ? runs[runs.length - 1] : null;
-  let repoKey = null, gen = null;
-  try { const c = CL.loadContract(ws); repoKey = CL.repoKeyOf(CL.resolveScoutRepo(ws, c).repo); gen = c.envelopeHash || null; } catch { /* 요약만 */ }
-  const proposedTotal = rows.filter((r) => r.type === "result").reduce((a, r) => a + (Array.isArray(r.items) ? r.items.length : 0), 0);
-  return { lastTs: last ? last.ts : "", lastOutcome: last ? last.outcome : "", lastReason: last ? (last.reason || "") : "", runs: runs.length, proposedTotal, pending: repoKey && gen ? curationPendingCount(ws, repoKey, gen) : 0, maxPerRun: CURATION_MAX_PER_RUN, maxPending: CURATION_MAX_PENDING };
+  const lastTs = last ? Date.parse(String(last.ts || "")) : NaN;
+  const kc = tickCampaignCount(ws, st0, repoKey);
+  const persist = (extra) => { writeTickState(ws, repoKey, Object.assign({ k: kc.k, hwm: kc.hwm, hwmN: kc.hwmN, seeded: true, judgedAt: new Date(now).toISOString(), ranAt: st0 ? st0.ranAt : "" }, extra || {})); };
+  if (Number.isFinite(lastTs) && now - lastTs < CURATION_TICK_MIN_GAP_MS) { persist({ reason: "recent" }); return { spawn: false, reason: "recent" }; }
+  const arcHash = typeof cc.archiveHash === "string" && cc.archiveHash ? cc.archiveHash : null;
+  let archiveN = 0; if (arcHash) { try { const ar = CL.readVerifyEnvelopeArchive(repo); if (ar.st === "ok" && ar.sha1 === arcHash) archiveN = ar.data.alwaysBlocker.length; } catch { archiveN = 0; } }
+  const s = curationTickSignals(ws, wsKey, repoKey, gen, arcHash, archiveN); s.k = kc.k;
+  const tickFp = sha1(JSON.stringify({ gen, arcHash: arcHash || "", k: s.k, o: s.oosRepeat, l: s.lineage, u: s.unusedDays >= CURATION_TICK_THRESHOLDS.unusedDays, so: s.selOver }));
+  if (last && last.tickFp === tickFp) { persist({ tickFp, reason: "same-tick" }); return { spawn: false, reason: "same-tick", tickFp, signals: s }; }
+  const T = CURATION_TICK_THRESHOLDS;
+  const why = s.k >= CURATION_TICK_K ? "campaigns:" + s.k : s.oosRepeat >= T.oosRepeat ? "oos-repeat:" + s.oosRepeat : s.lineage >= T.lineage ? "lineage:" + s.lineage : s.unusedDays >= T.unusedDays ? "unused-rule:" + s.unusedDays + "d" : s.selOver >= T.selOver ? "selover:" + s.selOver : "";
+  persist({ tickFp, reason: why || "below-threshold" });
+  if (!why) return { spawn: false, reason: "below-threshold", tickFp, signals: s };
+  return { spawn: true, reason: why, tickFp, signals: s };
+}
+// 실행이 끝나면 마감 캠페인 누계를 0으로(마지막 큐레이션 이후만 센다) — 실행 행을 쓰는 모든 경로가 호출
+function resetTickK(ws, repoKey, ranAtIso) {
+  const st = readTickState(ws, repoKey);
+  writeTickState(ws, repoKey, Object.assign({ k: 0, hwm: "", hwmN: 0, seeded: true, judgedAt: "", tickFp: "", reason: "" }, st || {}, { k: 0, ranAt: ranAtIso || new Date().toISOString() }));
+}
+// 훅 진입(ⓐ) — 전수 판독 0: 계약(호출자 전달)·잠금 파일·tick 상태 파일만. 최소 간격이 지났으면 `curate tick`을 detach(판정·실행은 자식). 반환=null(무고지 — 결과는 대시보드 카드).
+function curationHookTick(ws, c, opts) {
+  const o = opts || {};
+  try {
+    const cc = c || (() => { try { return CL.loadContract(ws); } catch { return null; } })();
+    if (!cc || !(typeof cc.envelopeHash === "string" && cc.envelopeHash)) return null;
+    if (lockAlive(ws)) return null;
+    let repoKey; try { repoKey = CL.repoKeyOf(CL.resolveScoutRepo(ws, cc).repo); } catch { return null; } // 경로 결정만(파일 판독 없음·existsSync 1회)
+    const st = readTickState(ws, repoKey);
+    const now = Number.isFinite(o.now) ? o.now : Date.now();
+    const lastAct = st ? Math.max(Date.parse(st.judgedAt || "") || 0, Date.parse(st.ranAt || "") || 0) : 0;
+    if (lastAct && now - lastAct < CURATION_TICK_MIN_GAP_MS) return null;
+    // detach 전에 상태를 먼저 찍어 같은 간격 안의 다음 훅이 또 띄우지 않게(자식이 죽어도 다음 간격에 재시도)
+    writeTickState(ws, repoKey, Object.assign({ k: 0, hwm: "", hwmN: 0, seeded: false, ranAt: "", tickFp: "", reason: "" }, st || {}, { judgedAt: new Date(now).toISOString() }));
+    const args = [path.join(__dirname, "codex-bridge.js"), "curate", "tick"];
+    const env = Object.assign({}, process.env, { CLAUDE_PROJECT_DIR: String(ws) });
+    const sp = typeof o.spawnFn === "function" ? o.spawnFn : require("child_process").spawn;
+    const child = sp(process.execPath, args, { cwd: String(ws), detached: true, stdio: "ignore", windowsHide: true, env });
+    if (child && typeof child.unref === "function") child.unref();
+  } catch { return null; }
+  return null;
+}
+
+// 대시보드·CLI 요약 — 현재 정찰 대상(repoKey) 기준(1회차 blocker④ ab-1): 마지막 실행·제안 n·미승인 m + 측정 4지표(§3 F: 채택률·서고 크기·선별 초과·미사용 수칙 수)
+function curationSummary(ws) {
+  let repoKey = null, gen = null, arcHash = null, repo = null;
+  try { const c = CL.loadContract(ws); repo = CL.resolveScoutRepo(ws, c).repo; repoKey = CL.repoKeyOf(repo); gen = c.envelopeHash || null; arcHash = typeof c.archiveHash === "string" && c.archiveHash ? c.archiveHash : null; } catch { /* 요약만 */ }
+  const rows = readCurationRows(ws).filter((r) => !repoKey || !r.repoKey || r.repoKey === repoKey);
+  const runs = rows.filter((r) => r.type === "run" && (!repoKey || r.repoKey === repoKey));
+  const last = runs.length ? runs[runs.length - 1] : null;
+  const results = rows.filter((r) => r.type === "result" && (!repoKey || r.repoKey === repoKey));
+  const ids = new Set(); for (const r of results) for (const id of (Array.isArray(r.items) ? r.items : [])) ids.add(id);
+  const proposedTotal = ids.size;
+  let adopted = 0, declined = 0;
+  try {
+    const { rows: crows } = CL.readEnvelopeCandidates(ws);
+    const st = new Map();
+    for (const r of crows) if (r && ids.has(r.candidateId) && (r.status === "adopted" || r.status === "declined" || r.status === "proposed")) st.set(r.candidateId, r.status === "adopted" && r.applied ? "applied" : r.status);
+    for (const v of st.values()) { if (v === "applied") adopted++; else if (v === "declined") declined++; }
+  } catch { /* 0 */ }
+  let archiveSize = 0; if (repo && arcHash) { try { const ar = CL.readVerifyEnvelopeArchive(repo); if (ar.st === "ok" && ar.sha1 === arcHash) archiveSize = ar.data.alwaysBlocker.length; } catch { archiveSize = 0; } }
+  const s = repoKey ? curationTickSignals(ws, CL.wsKeyFor(ws), repoKey, gen, arcHash, archiveSize) : { selOver: 0, unusedDays: 0, unusedCount: 0 };
+  const tk = repoKey ? readTickState(ws, repoKey) : null;
+  return { lastTs: last ? last.ts : "", lastOutcome: last ? last.outcome : "", lastReason: last ? (last.reason || "") : "", lastTrigger: last ? (last.trigger || "manual") : "", runs: runs.length, proposedTotal, adopted, declined, adoptRate: proposedTotal ? Math.round((adopted / proposedTotal) * 100) : 0, pending: repoKey && gen ? curationPendingCount(ws, repoKey, gen) : 0, running: lockAlive(ws), archiveSize, selOverCount: s.selOver, unusedCount: s.unusedCount, unusedDays: s.unusedDays, campaignsSince: tk ? tk.k : 0, maxPerRun: CURATION_MAX_PER_RUN, maxPending: CURATION_MAX_PENDING, tickK: CURATION_TICK_K };
 }
 
 module.exports = { RULE_REDACTED, recoverCurationProvisional, resolveComputeCandidates, safeText, CURATION_DIR, CURATION_MAX_PER_RUN, CURATION_MAX_PENDING, CURATION_UNUSED_DAYS, CURATION_OPERATIONS, curationFileFor, curateLockFileFor, itemFpOf, selectorArmForCuration, readCurationRows, appendCurationRow, curationInput, curationKeyOf, curationSkip, buildCurationPrompt, parseCurationOutput, curationPendingCount, commitCuration, writeCurationReceipt, acquireCurateLock, releaseCurateLock, runCuration, curationSummary };
+module.exports.CURATION_TICK_K = CURATION_TICK_K;
+module.exports.CURATION_TICK_MIN_GAP_MS = CURATION_TICK_MIN_GAP_MS;
+module.exports.CURATION_TICK_THRESHOLDS = CURATION_TICK_THRESHOLDS;
+module.exports.curationTickSignals = curationTickSignals;
+module.exports.repoCampaignIds = repoCampaignIds;
+module.exports.tickCampaignCount = tickCampaignCount;
+module.exports.curationTickJudge = curationTickJudge;
+module.exports.curationHookTick = curationHookTick; // [§3 A ②③] 훅=3파일 판독+detach(curate tick) · 판정은 자식
+module.exports.curationTickFileFor = curationTickFileFor;
+module.exports.readTickState = readTickState;
+module.exports.writeTickState = writeTickState;
+module.exports.readTailLines = readTailLines;
+module.exports.resetTickK = resetTickK;

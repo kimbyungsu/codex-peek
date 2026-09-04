@@ -205,6 +205,8 @@ process.stdin.on("end", () => {
     // MAP-V2-DESIGN 1-3). 2트랙 게이트는 hookTick 내부 최선행(scoutMode!=='on'→즉시 null — 파일 0·spawn 0).
     // 구버전 브릿지(map-bootstrap.js 부재)·실패는 advisory(훅을 막지 않음).
     try { const adv = require("./map-bootstrap.js").hookTick(ws); if (adv) advisories.push(adv); } catch { /* advisory */ }
+    // [CURATION v3 §3 A ②③] 독립 큐레이션 tick(훅 층) — 계약·잠금·tick 상태 3파일만 보고 최소 간격이 지났으면 `curate tick`을 detach(판정·실행은 자식)·무고지·실패=null. 검증 경로 무접촉(P1).
+    try { const adv = require("./curation.js").curationHookTick(ws, c); if (adv) advisories.push(adv); } catch { /* advisory */ }
     // [§4-B ④] 안내는 매 턴 예산(하네스 소유분 1,500=slim 700+상태 250+안내 550) 안에서만 — 검증 모드 밖(전달 계획 없음)은 종전 그대로
     if (dlvPlan && dlvPlan.budget) {
       const bt9 = applyClaudeTurnBudget({ fixed: dlvPlan.budget.fixed, advisories }, lang);

@@ -792,7 +792,9 @@ function reserveVerifyCampaign(ws, campaignId, budget, persistFn) {
       historyWarn = h.warn;
     }
     const refunds9 = refunds > 0 ? { refunds } : {}; // [회차 환급] 같은 캠페인의 환급 누계 보존 — 계속·복원 어느 경로든(예약이 카운터를 통째로 다시 쓰므로)
-    if (!atomicWrite(file, JSON.stringify({ schema: "vcamp-1", campaignId, count: next, budget: M, startedAt, updatedAt: nowIso, ...refunds9 })))
+    // [CURATION §3 A · ab-1] 캠페인의 정찰 대상 저장소 지문 — 큐레이션 tick이 "이 저장소의 마감 캠페인"만 세게(이력 행으로 승계). 계속 예약이면 기존 값 보존·판독 실패=미기록(옛 행과 같이 불산입).
+    let repoKey9 = (!switching && cur && typeof cur.repoKey === "string") ? cur.repoKey : ""; if (!repoKey9) { try { repoKey9 = repoKeyOf(resolveScoutRepo(ws, loadContract(ws)).repo); } catch { repoKey9 = ""; } }
+    if (!atomicWrite(file, JSON.stringify({ schema: "vcamp-1", campaignId, count: next, budget: M, startedAt, updatedAt: nowIso, ...refunds9, ...(repoKey9 ? { repoKey: repoKey9 } : {}) })))
       return { tracked: false, untracked: "counter-write-failed", counterFailedAfterReceipt: true, n: next, budget: M, campaignId, quarantined };
     return { tracked: true, n: next, budget: M, campaignId, last: M >= 1 && next === M, quarantined, historyWarn };
   });

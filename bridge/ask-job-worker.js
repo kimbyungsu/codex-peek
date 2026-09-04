@@ -177,7 +177,7 @@ async function runSelectionPhase(jobFile, dir, job, errFile) {
   if (un.over && (un.over.items || un.over.bytes)) selectionNote = "[archive rules] related items " + un.over.count + " · " + un.over.bytesTotal + " bytes — above the normal range (" + CL.SELECTOR_UNION_MAX + " · " + CL.SELECTOR_UNION_BYTES_MAX + "); all included — none omitted\n";
   const selectedIds = un.selected.map((s) => s.id);
   // ④ 영수증 기록+read-back 선행 관문 — 성공 전 프롬프트 조립 금지(§3)
-  const rec = { ts: new Date().toISOString(), wsKey: CL.wsKeyFor(ws), askId: job.id, turnAnchor: String(ctx.turnAnchor || ""), archiveHash: arc.sha1, scopePackageHash: scope.hash, snapshotHash: ctx.sourceHash, itemCount: items.length, pages: pages.length, selectedIds, arm: job.selector.arm, durationMs: Date.now() - t0 }; // turnAnchor=턴 결속(preview 영수증과 동형 — 주입 캐시 자격 대조용)
+  const rec = { ts: new Date().toISOString(), wsKey: CL.wsKeyFor(ws), repoKey: CL.repoKeyOf(target), askId: job.id, turnAnchor: String(ctx.turnAnchor || ""), archiveHash: arc.sha1, scopePackageHash: scope.hash, snapshotHash: ctx.sourceHash, itemCount: items.length, pages: pages.length, selectedIds, arm: job.selector.arm, durationMs: Date.now() - t0 }; // turnAnchor=턴 결속(preview 영수증과 동형 — 주입 캐시 자격 대조용)
   const fname = CL.appendSelectorUsage(rec);
   let back = null;
   try { back = fname ? JSON.parse(fs.readFileSync(path.join(CL.SELECTOR_USAGE_DIR, fname), "utf8")) : null; } catch { back = null; }

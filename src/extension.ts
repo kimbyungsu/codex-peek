@@ -197,6 +197,7 @@ interface BridgeState {
   movedRules: { count: number; items: Array<{ id: string; ko: string; en: string; hooks: string[] }> }; // [§4-B ③] 훅으로 옮긴 하네스 문장 장부(DIRECTIVE_MOVED)
   usedMemory: { ts: string; items: Array<{ path: string; note: string }>; couplings: number; omitted: boolean; selOver: { count: number; bytesTotal: number; itemsMax: number; bytesMax: number } | null } | null; // selOver=[§7 4-2b] 직전 검증의 서고 선별 정상 범위 초과(전량 동봉) — 서고 카드 표기 재료
   decisions: { open: number; items: Array<{ id: string; question: string; kind: string; origin: string; ts: string; block: string }> } | null; // [§7 4-2b] 결정 장부(사용자 답 대기) — 읽기 전용·답은 CLI decisions choose|delegate. null=무폴더/구 런타임
+  curation: { lastTs: string; lastOutcome: string; lastReason: string; lastTrigger: string; runs: number; proposedTotal: number; adopted: number; declined: number; adoptRate: number; pending: number; running: boolean; archiveSize: number; selOverCount: number; unusedCount: number; unusedDays: number; campaignsSince: number; maxPerRun: number; maxPending: number; tickK: number } | null; // [CURATION v3 §3 E·F] 정리 제안 요약·측정(수칙 카드 1줄) — null=무폴더/구 런타임
   ruleCheck: { host: "claude" | "codex"; checklist: boolean; rules: string[]; rulesFp: string; summary: { turns: number; older: number; counts: Array<{ n: number; complies: number; violated: number; na: number; missing: number }>; lastTs: string } } | null; // [RULE-COMPLIANCE §3 D] 규칙 자가점검 장부 요약(관찰 자료 — 판정·합산 아님). null=무폴더/구 런타임 // [UI 개편 2차] 직전 검증에 실린 지도 동봉 스냅샷(브릿지 stats/attach.jsonl 최신 1건). null=기록 없음/구 브릿지
   baseAvailable: boolean;
   permissionMode: string;
@@ -2675,6 +2676,10 @@ function computeState(turnsN: number): BridgeState {
         return { open: open.length, items };
       } catch { return null; }
     })(),
+    curation: (() => {
+      // [CURATION v3 §3 E·F] 정리 제안 요약·측정 — 장부 판독만(실행 없음). 개요 '지금 정할 것'엔 합산하지 않는다(후보 자체는 기존 '수칙서 후보' 항목이 담당).
+      try { if (!ws) return null; const CU9: any = require(path.join(BRIDGE_DIR, "curation.js")); return typeof CU9.curationSummary === "function" ? CU9.curationSummary(ws) : null; } catch { return null; }
+    })(),
     ruleCheck: (() => {
       // [RULE-COMPLIANCE §3 D] 규칙 자가점검 요약 — 현재 운용 모드의 구현자 규칙(사용자 글 그대로)·체크리스트 옵션·최근 30턴 fold 집계. 개요 '지금 정할 것'엔 합산하지 않는다.
       try {
@@ -4294,6 +4299,19 @@ class Dashboard {
           this.post(); return;
         }
         if (m?.type === "proposalApprove" && typeof m.repo === "string" && m.repo) { this.runProposalApprove(m.repo, m.lang, false); return; } // §7 증분 2 — 본문은 runProposalApprove(재편 B: 1클릭 체인과 공유)
+        if (m?.type === "curationRun") { // [CURATION v3 §3 A ①] 대시보드 버튼 "정리 제안 받기" — 검증 무관 detach 실행(curate run --button). 승인은 여전히 제안함(사용자 전용).
+          const wsQ = dashboardWorkspace(); if (!wsQ) return;
+          const enQ = loadLangExt() === "en";
+          try {
+            const cliQ = path.join(BRIDGE_DIR, "codex-bridge.js");
+            const chQ = spawn(process.execPath, [cliQ, "curate", "run", "--button"], { cwd: wsQ, stdio: "ignore", detached: true, windowsHide: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", CLAUDE_PROJECT_DIR: wsQ } });
+            chQ.on("exit", () => { try { this.post(); } catch { /* 갱신 실패 무해 */ } });
+            chQ.on("error", () => { /* 실패는 장부·경보 채널(curation-failed)이 담당 */ });
+            chQ.unref();
+            vscode.window.showInformationMessage(enQ ? "Asking the independent curator in the background (may take minutes; verification is unaffected). Proposals appear in the proposal box for your approval." : "독립 정리 담당에게 백그라운드로 묻는 중이에요(수 분 걸릴 수 있음 · 검증 무영향). 제안은 제안함에 올라오고, 승인은 사용자만 합니다.");
+          } catch { vscode.window.showWarningMessage(enQ ? "Could not start the curation run." : "정리 제안 실행을 시작하지 못했어요."); }
+          return;
+        }
         if (m?.type === "cutoverConfirm" && typeof m.n === "number" && Number.isInteger(m.n) && m.n > 0 && typeof m.repo === "string" && m.repo) { // C-7 원클릭 전환(미이관 N>0 — informed 동의는 이 모달이 담당)
           const wsC7 = dashboardWorkspace();
           const targetC7 = wsC7 ? scoutTargetFor(wsC7).repo : null;
@@ -7374,6 +7392,15 @@ class Dashboard {
         var h9=document.createElement("div"); h9.style.fontWeight="600"; h9.textContent=(d.lang==="en"?"Rules":"수칙"); ec.appendChild(h9); // [재편 B] 어휘 4종 — 정상 흐름 헤더
         var s9=document.createElement("div"); if(e9.tone==="warn"){ s9.style.cssText="color:var(--vscode-editorWarning-foreground,#d9a441)"; } else { s9.className="muted"; } s9.textContent=e9.label; ec.appendChild(s9);
         if(d.usedMemory&&d.usedMemory.selOver){ var so9=d.usedMemory.selOver; var ov9=document.createElement("div"); ov9.style.cssText="color:var(--vscode-editorWarning-foreground,#d9a441);font-size:11px;margin-top:2px"; ov9.textContent=T("관련 수칙이 정상 범위("+so9.itemsMax+"항 · "+so9.bytesMax+"바이트)를 넘음 — 최근 검증 "+so9.count+"항 · "+so9.bytesTotal+"바이트 전량 동봉(누락 없음) · 서고 정리 권장","related rules exceed the normal range ("+so9.itemsMax+" items · "+so9.bytesMax+" bytes) — last verification carried "+so9.count+" items · "+so9.bytesTotal+" bytes, all included · consider tidying the archive"); ec.appendChild(ov9); } // [§7 4-2b] 서고 카드 초과 표기(정보 — 경보 아님)
+        if(d.curation){ // [CURATION v3 §3 E·F] 수칙 카드 1줄 — 마지막 정리 제안·제안 n·미승인 m·측정(채택률·서고 크기·선별 초과) + 버튼 "정리 제안 받기"(승인은 제안함)
+          var cu9=d.curation; var cl9=document.createElement("div"); cl9.className="muted"; cl9.style.cssText="font-size:11px;margin-top:3px";
+          var when9c=""; if(cu9.lastTs){ var dt9c=new Date(cu9.lastTs); if(!isNaN(dt9c.getTime())) when9c=(dt9c.getMonth()+1)+"/"+dt9c.getDate()+" "+String(dt9c.getHours()).padStart(2,"0")+":"+String(dt9c.getMinutes()).padStart(2,"0"); }
+          var trg9=cu9.lastTrigger==="auto"?T("자동","auto"):cu9.lastTrigger==="button"?T("버튼","button"):T("수동","manual");
+          cl9.textContent=(cu9.running?T("정리 제안 실행 중 · ","curation running · "):"")+(cu9.lastTs?T("마지막 정리 제안 "+when9c+"("+trg9+" · "+cu9.lastOutcome+")","last curation "+when9c+" ("+trg9+" · "+cu9.lastOutcome+")"):T("정리 제안 실행 이력 없음","no curation run yet"))+T(" · 제안 "+cu9.proposedTotal+" · 미승인 "+cu9.pending+"/"+cu9.maxPending+" · 채택률 "+cu9.adoptRate+"% · 서고 "+cu9.archiveSize+"항 · 선별 초과 "+cu9.selOverCount+"회 · 미사용 "+cu9.unusedCount+"항"+(cu9.unusedCount?"("+cu9.unusedDays+"일 관측)":"")," · proposed "+cu9.proposedTotal+" · pending "+cu9.pending+"/"+cu9.maxPending+" · adopted "+cu9.adoptRate+"% · archive "+cu9.archiveSize+" · over-range "+cu9.selOverCount+" · unused "+cu9.unusedCount+(cu9.unusedCount?" ("+cu9.unusedDays+"d observed)":""));
+          ec.appendChild(cl9);
+          var cb9=document.createElement("button"); cb9.className="secondary"; cb9.style.cssText="margin-top:4px;font-size:12px"; cb9.textContent=T("정리 제안 받기","Get curation proposals"); cb9.disabled=!!cu9.running; cb9.title=T("장부(반복 신호·미사용 수칙·결정)를 읽는 독립 실행이 수칙 넣기/빼기를 최대 3건 제안해요 — 승인은 여기 제안함에서 사용자만.","An independent run reads the ledgers and proposes up to 3 rulebook changes — only you approve, in this proposal box.");
+          cb9.addEventListener("click", function(){ cb9.disabled=true; vscode.postMessage({type:"curationRun"}); }); ec.appendChild(cb9);
+        }
         var actT=e9.act?e9.act:(e9.proposal==="recover"?"proposalRecover":e9.proposal==="pending"?"proposalApprove":"envelopeApprove"); // §7 증분 2 — 초안·복구는 별도 채널(도장=사용자 전용 표면)·act=카드가 지정한 행동(승인 없이 바뀐 내용 보기)
         var act2T=e9.proposal==="pending"?"proposalShow":"envelopeShow";
         if(e9.btn){ var ab=document.createElement("button"); ab.style.cssText="margin-top:4px;font-weight:700"; ab.textContent=e9.btn; ab.addEventListener("click", function(){ vscode.postMessage({type:actT, repo: e9.repo, lang: e9.lang, target: String(e9.driftTarget||"")}); }); ec.appendChild(ab); }

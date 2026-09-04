@@ -176,7 +176,7 @@ function withContract(prompt, ws, lang, carrier, profile, contractSnap, askId9p)
       // 지도 미동봉(mapMode off 등)이어도 경계(envelope)가 실렸으면 행을 남긴다 — 경계 영수증이 지도에 종속되지 않게.
       const askId9 = askId9p || (typeof process.env.CODEX_BRIDGE_ASK_JOB_ID === "string" && process.env.CODEX_BRIDGE_ASK_JOB_ID ? process.env.CODEX_BRIDGE_ASK_JOB_ID : "");
       const env9 = carrier && carrier.envelope ? { hash: carrier.envelope.hash, sup: carrier.envelope.sup.slice(), ab: carrier.envelope.ab.slice(), oos: carrier.envelope.oos.slice() } : null;
-      appendAttachUsage({ ts: new Date().toISOString(), ws: ws || configWs(), askId: askId9, items: attSnap9 ? attSnap9.items : [], couplings: attSnap9 ? attSnap9.couplings : 0, omitted: attSnap9 ? attSnap9.omitted : false, mapAbsent: !attSnap9, ...(env9 ? { envelope: env9 } : {}), ...(so9 ? { selOver: so9 } : {}) });
+      appendAttachUsage({ ts: new Date().toISOString(), ws: ws || configWs(), repoKey: (() => { try { return repoKeyOf(resolveScoutRepo(ws || configWs(), loadContract(ws || configWs())).repo); } catch { return ""; } })(), askId: askId9, items: attSnap9 ? attSnap9.items : [], couplings: attSnap9 ? attSnap9.couplings : 0, omitted: attSnap9 ? attSnap9.omitted : false, mapAbsent: !attSnap9, ...(env9 ? { envelope: env9 } : {}), ...(so9 ? { selOver: so9 } : {}) });
     } catch { /* best-effort */ }
   }
   const reqLabel = (lang || loadLang()) === "en" ? "[Work Request]" : "[작업 요청]";
@@ -2520,7 +2520,7 @@ async function cmdSelectorPreview() {
   if (!un.ok) die(tB(`⚠️ 선별 합집합 상한 초과(${un.reason}) — 서고 정리(빼기·병합) 후 재시도하세요(절단·요약 없음).`, `⚠️ Selection union over cap (${un.reason}) — organize the archive and retry (no truncation).`), 3);
   const selectedIds = un.selected.map((s) => s.id);
   // 영수증(read-back 관문) — purpose:"preview"가 게이트·ask-start 조건의 자격 표식
-  const rec = { ts: new Date().toISOString(), wsKey: CLx.wsKeyFor(ws), askId: "", purpose: "preview", turnAnchor: ctx.turnAnchor, archiveHash: arc.sha1, scopePackageHash: scope.hash, snapshotHash: ctx.sourceHash, itemCount: items.length, pages: pages.length, selectedIds, arm, durationMs: Date.now() - t0 }; // turnAnchor=턴 결속(1차 blocker① — 재사용 차단 4중 결속의 한 축)
+  const rec = { ts: new Date().toISOString(), wsKey: CLx.wsKeyFor(ws), repoKey: CLx.repoKeyOf(target), askId: "", purpose: "preview", turnAnchor: ctx.turnAnchor, archiveHash: arc.sha1, scopePackageHash: scope.hash, snapshotHash: ctx.sourceHash, itemCount: items.length, pages: pages.length, selectedIds, arm, durationMs: Date.now() - t0 }; // turnAnchor=턴 결속(1차 blocker① — 재사용 차단 4중 결속의 한 축)
   const fname = CLx.appendSelectorUsage(rec);
   let back = null;
   try { back = fname ? JSON.parse(fs.readFileSync(path.join(CLx.SELECTOR_USAGE_DIR, fname), "utf8")) : null; } catch { back = null; }
@@ -2895,6 +2895,8 @@ async function cmdCurate(rest) {
   const sub = (rest || []).find((a) => !String(a).startsWith("--")) || "run";
   const json = (rest || []).includes("--json");
   const force = (rest || []).includes("--force");
+  const trigger = (rest || []).includes("--auto") ? "auto" : (rest || []).includes("--button") ? "button" : "manual"; // [§3 A] 트리거 3갈래 표기(실행 행)
+  const tickI = (rest || []).indexOf("--tick"); const tickFp = tickI >= 0 && rest[tickI + 1] ? String(rest[tickI + 1]) : "";
   const c = loadContract(ws);
   const repo = resolveScoutRepo(ws, c).repo;
   if (sub === "input") {
@@ -2904,6 +2906,16 @@ async function cmdCurate(rest) {
     console.log((en ? "[curation input] " : "[정리 입력] ") + `core ${inp.rules.core.length} · archive ${inp.rules.archive.length} · signals ${inp.signalCount} · decisions ${inp.decisions.open.length}/${inp.decisions.answered.length} · key ${CU.curationKeyOf(inp).slice(0, 12)}`);
     const s = inp.signals;
     console.log(`  oos-repeat ${s.oosRepeat.length} · lineage ${s.lineage.length} · escalation ${s.escalation.length} · unused-oos ${s.unusedOos.length} · unused-rule ${s.unusedRules.length} · rebut ${s.rebutUsed.length} · selOver ${s.selOver.count}`);
+    return;
+  }
+  if (sub === "tick") { // [§3 A ②③ 자식] 판정(꼬리 상한 판독·tick 상태 갱신) → spawn이면 이 프로세스에서 바로 실행(trigger auto·tickFp)
+    const j = CU.curationTickJudge(ws, c);
+    if (!j || !j.spawn) { if (json) console.log(JSON.stringify({ st: "no-run", judge: j })); else console.log((en ? "[curation tick] no run: " : "[정리 제안 tick] 실행 없음: ") + String(j && j.reason)); return; }
+    await new Promise((res) => setImmediate(res));
+    let fk = null; if (process.env.CODEX_BRIDGE_SELECTOR_RUNNER) { try { fk = require(process.env.CODEX_BRIDGE_SELECTOR_RUNNER).runSelectorPage; } catch { fk = null; } }
+    const r = await CU.runCuration(ws, { trigger: "auto", tickFp: j.tickFp, lang: loadLang(), contract: c, computeCandidates: computeEnvelopeCandidatesFor, ...(typeof fk === "function" ? { pageRunner: fk } : {}) });
+    if (json) console.log(JSON.stringify(Object.assign({ judge: j }, r))); else console.log((en ? "[curation tick] " : "[정리 제안 tick] ") + j.reason + " → " + r.st + (r.reason ? "(" + r.reason + ")" : ""));
+    if (r.st !== "ok" && r.st !== "skipped") process.exitCode = 2;
     return;
   }
   if (sub === "status") {
@@ -2918,7 +2930,7 @@ async function cmdCurate(rest) {
   await new Promise((res) => setImmediate(res));
   let fakeRunner9 = null;
   if (process.env.CODEX_BRIDGE_SELECTOR_RUNNER) { try { fakeRunner9 = require(process.env.CODEX_BRIDGE_SELECTOR_RUNNER).runSelectorPage; } catch { fakeRunner9 = null; } }
-  const r = await CU.runCuration(ws, { force, lang: loadLang(), contract: c, computeCandidates: computeEnvelopeCandidatesFor, ...(typeof fakeRunner9 === "function" ? { pageRunner: fakeRunner9 } : {}) });
+  const r = await CU.runCuration(ws, { force, trigger, tickFp, lang: loadLang(), contract: c, computeCandidates: computeEnvelopeCandidatesFor, ...(typeof fakeRunner9 === "function" ? { pageRunner: fakeRunner9 } : {}) });
   if (json) { console.log(JSON.stringify(r)); if (r.st !== "ok" && r.st !== "skipped") process.exitCode = 2; return; }
   if (r.st === "ok") console.log((en ? "[curation] done — proposals " : "[정리 제안] 완료 — 제안 ") + r.proposed + (en ? " (new " : " (신규 ") + r.candidateIds.length + (en ? ") · deferred " : ") · 보류 ") + r.deferred + (en ? " · held toggles " : " · 전환 보류 ") + r.heldToggles + (en ? " · dropped " : " · 탈락 ") + r.dropped + (en ? " · pending " : " · 미승인 ") + r.pending + "/" + CU.CURATION_MAX_PENDING + (en ? " — approve or drop them in the dashboard proposal box." : " — 대시보드 제안함에서 승인하거나 안 올림으로 처리하세요."));
   else if (r.st === "skipped") console.log((en ? "[curation] skipped (" : "[정리 제안] 생략(") + r.reason + (en ? ") — no new signal since the last run; pass --force to ask anyway." : ") — 마지막 실행 이후 새 신호가 없습니다. 그래도 묻게 하려면 --force."));

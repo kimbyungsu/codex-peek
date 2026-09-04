@@ -70,12 +70,18 @@ t("입력 집계기 — 정상: 코어·서고 항목(axis·index·itemFp)·신�
   assert.strictEqual(i0.signals.unusedRules.length, 0, "선별 관측 0건이면 '미사용'을 주장하지 않는다");
   // 선별 영수증 2건(미리보기+검증 선별) — arc-1·arc-3만 선택됨 → arc-2 미사용
   const old = new Date(Date.now() - 40 * 86400000).toISOString();
-  CL.appendSelectorUsage({ ts: old, wsKey: WSKEY, askId: "", purpose: "preview", turnAnchor: "t1", archiveHash: ARC_HASH, selectedIds: ["arc-1"], arm: "self" });
-  CL.appendSelectorUsage({ ts: new Date().toISOString(), wsKey: WSKEY, askId: "ask-1", turnAnchor: "t2", archiveHash: ARC_HASH, selectedIds: ["arc-3"], arm: "self" });
+  CL.appendSelectorUsage({ ts: old, wsKey: WSKEY, repoKey: REPOKEY, askId: "", purpose: "preview", turnAnchor: "t1", archiveHash: ARC_HASH, selectedIds: ["arc-1"], arm: "self" });
+  CL.appendSelectorUsage({ ts: new Date().toISOString(), wsKey: WSKEY, repoKey: REPOKEY, askId: "ask-1", turnAnchor: "t2", archiveHash: ARC_HASH, selectedIds: ["arc-3"], arm: "self" });
+  CL.appendSelectorUsage({ ts: new Date().toISOString(), wsKey: WSKEY, repoKey: "0000000000000000", askId: "ask-9", turnAnchor: "t9", archiveHash: ARC_HASH, selectedIds: ["arc-2"], arm: "self" }); // 같은 서고 지문·다른 저장소의 영수증=불산입(ab-1)
   CL.appendSelectorUsage({ ts: new Date().toISOString(), wsKey: WSKEY, askId: "", purpose: "curate", turnAnchor: "k", archiveHash: ARC_HASH, selectedIds: ["arc-2"], arm: "self" }); // 큐레이션 영수증은 '사용' 아님
-  assert.ok(CL.appendFindingsLedger(WS, [{ type: "disposition", campaignId: "c1", findingId: "f1", choice: "rebut", oosId: "oos-1", asOfRound: 1, ts: new Date().toISOString() }]));
+  fs.mkdirSync(path.dirname(CL.campaignFileFor(WS)), { recursive: true }); fs.writeFileSync(CL.campaignFileFor(WS), JSON.stringify({ schema: "vcamp-1", campaignId: "c1", count: 1, budget: 5, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), repoKey: REPOKEY })); // 현재 캠페인=이 저장소(ab-1)
+  assert.ok(CL.appendFindingsLedger(WS, [
+    { type: "disposition", campaignId: "c1", findingId: "f1", choice: "rebut", oosId: "oos-1", asOfRound: 1, ts: new Date().toISOString() },
+    { type: "disposition", campaignId: "c-other", findingId: "f8", choice: "rebut", oosId: "oos-9", asOfRound: 1, ts: new Date().toISOString() }, // ★다른 저장소 캠페인의 되받아침=불산입(4회차 blocker ab-1)
+  ]));
   fs.mkdirSync(path.dirname(CL.ATTACH_USAGE_FILE), { recursive: true });
-  fs.appendFileSync(CL.ATTACH_USAGE_FILE, JSON.stringify({ ts: new Date().toISOString(), ws: WS, askId: "a", items: [], selOver: { items: true, count: 13 } }) + "\n");
+  fs.appendFileSync(CL.ATTACH_USAGE_FILE, JSON.stringify({ ts: new Date().toISOString(), ws: WS, repoKey: "0000000000000000", askId: "a0", items: [], envelope: { hash: CORE_HASH, sup: [], ab: [], oos: [] }, selOver: { items: true, count: 13 } }) + "\n"); // 같은 세대 지문·다른 저장소의 초과 행=제외(ab-1)
+  fs.appendFileSync(CL.ATTACH_USAGE_FILE, JSON.stringify({ ts: new Date().toISOString(), ws: WS, repoKey: REPOKEY, askId: "a", items: [], envelope: { hash: CORE_HASH, sup: [], ab: [], oos: [] }, selOver: { items: true, count: 13 } }) + "\n");
   const od = CL.openDecision(WS, { origin: "implementer", kind: "boundary", noDefault: "범위표는 구현자가 정할 수 없는 사용자 방향입니다", campaignId: "c1", sourceAsk: "ask-1", targetFp: "fp1", question: "동시 배포를 범위에 넣을까요?", why: "반복 지적", choices: [{ key: "in", label: "넣기" }, { key: "out", label: "빼기" }] });
   assert.ok(od && od.ok, "결정 항목 생성: " + JSON.stringify(od));
   const i1 = CU.curationInput(WS, REPO);
@@ -192,6 +198,7 @@ async function main() {
     CL.appendEnvelopeCandidates(WS5, Array.from({ length: 5 }, (_, i) => ({ candidateId: sha1("seed" + i).slice(0, 16), envelopeHash: CORE_HASH, status: "proposed", kind: "curator", repoKey: rk5, operation: "add", target: "archive", axis: "alwaysBlocker", title: "씨앗 " + i, why: "씨앗 근거 문장입니다", ts: new Date().toISOString() })));
     const r = await CU.runCuration(WS5, { force: true, pageRunner: fake(out([good({ title: "새 1" }), good({ title: "새 2" }), good({ title: "새 3" })])) });
     assert.ok(r.st === "ok" && r.proposed === 1 && r.deferred === 2 && r.pending === 6, JSON.stringify(r));
+    fs.mkdirSync(path.dirname(CL.campaignFileFor(WS5)), { recursive: true }); fs.writeFileSync(CL.campaignFileFor(WS5), JSON.stringify({ schema: "vcamp-1", campaignId: "c1", count: 1, budget: 5, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), repoKey: rk5 })); // 현재 캠페인=이 저장소(되받아침 신호 수용 조건 — ab-1)
     CL.appendFindingsLedger(WS5, [{ type: "disposition", campaignId: "c1", findingId: "f9", choice: "rebut", oosId: "oos-1", asOfRound: 1, ts: new Date().toISOString() }]); // 신호 변화=새 입력 표(같은 표에 다른 답은 충돌 규칙)
     const r2 = await CU.runCuration(WS5, { force: true, pageRunner: fake(out([good({ title: "새 4" })])) });
     assert.ok(r2.st === "ok" && r2.proposed === 0 && r2.deferred === 1 && r2.pending === 6, "상한 도달=제안 0·보류 " + JSON.stringify(r2));
@@ -356,6 +363,7 @@ async function main() {
     assert.strictEqual(CU.safeText("token " + secret + " here", 200), "", "민감 형태=빈 문자열");
     const od = CL.openDecision(WS, { origin: "implementer", kind: "external", noDefault: "외부 키 정책은 구현자가 정할 수 없는 사용자 방향입니다", campaignId: "c2", sourceAsk: "ask-2", targetFp: "fp2", question: "key " + secret + " 를 계속 쓸까요?", why: "x", choices: [{ key: "a", label: "예" }, { key: "b", label: "아니오" }] });
     assert.ok(od && od.ok, JSON.stringify(od));
+    fs.mkdirSync(path.dirname(CL.campaignFileFor(WS)), { recursive: true }); fs.writeFileSync(CL.campaignFileFor(WS), JSON.stringify({ schema: "vcamp-1", campaignId: "c2", count: 1, budget: 5, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), repoKey: REPOKEY })); // 현재 캠페인=이 저장소(ab-1 결속 — 캠페인 신호 수용 조건)
     const inp = CU.curationInput(WS, REPO, { computeCandidates: () => ({ gen: CL.loadContract(WS).envelopeHash, signals: [{ kind: "lineage", key: "f2", n: 3, titles: ["C:\\Users\\Alice\\secret.txt 누출", "정상 제목"] }] }) });
     assert.ok(inp.ok, JSON.stringify(inp));
     const q = inp.decisions.open.find((x) => x.decisionId === od.decisionId);

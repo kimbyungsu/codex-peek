@@ -1,6 +1,6 @@
 # 독립 큐레이션 설계 (CURATION — HARNESS-REALIGNMENT §7 5번) v3
 
-작성 2026-09-02 · v2=설계 검증 1회차 blocker 3·보완 1 반영 · v3=2회차 blocker 3 반영(문안 필드 title·빼기 후보 종결 결속·빼기 대상 3중 대조) · 상태: **§7 1·2단계 구현됨 2026-09-03(입력 집계기·생략 규칙·영수증·제안기·파서·2단 커밋·승인 변환·수동 실행 CLI) — 3·4단계(자동 트리거·detach·대시보드 버튼/카드)는 미구현·다음 캠페인** · 사용자 승인 2026-09-03 "권장대로 진행" · 선행: HARNESS-REALIGNMENT
+작성 2026-09-02 · v2=설계 검증 1회차 blocker 3·보완 1 반영 · v3=2회차 blocker 3 반영(문안 필드 title·빼기 후보 종결 결속·빼기 대상 3중 대조) · 상태: **§7 1~4단계 구현됨 — 1·2단계 2026-09-03(dcbc63a·도장 2026-09-04) · 3·4단계 2026-09-04(자동 트리거 판정·detach·대시보드 버튼/카드 1줄/측정) — 잔여=2차(toggle 연결쌍)** · 사용자 승인 2026-09-03 "권장대로 진행" · 선행: HARNESS-REALIGNMENT
 §1(누가 넣고 빼나)·§5 C·D, REJUDGE-AUTHORITY §3 C(v6 형태는 폐기·커밋 규약은 재사용), RULEBOOK-SIMPLIFICATION(헌법·§0 사고·2-1 수동 상신·3-1b 합성 신호),
 VERIFY-GOVERNANCE §7·§8.
 
@@ -152,3 +152,26 @@ ab-1 wsKey·repoKey 결속(입력·키·모든 행·영수증) · ab-2 계약 �
 - 구현 검증 2회차 blocker 5 반영: ① CLI `curate run`은 모듈 평가가 끝난 다음 틱에 실행(Codex 팔이 조회하는 `resolveCodex` export가 채워진 뒤)·시험 주입점 `CODEX_BRIDGE_SELECTOR_RUNNER`
   ② 현재 수칙 원문도 민감 형태면 프롬프트·remove 후보 title에 표식(`[민감 형태 — 문안 생략]`)만·itemFp는 원문 기준 ③④ provisional 복구 쓰기 실패=실행 실패(recover-failed)+영수증+경보(생략으로 위장 금지)
   ⑤ 도장의 applied 종결 행 쓰기 실패=전이 미완(`applied-write`)·WAL·제안본 보존 → 복구 스캐너 멱등 재실행.
+
+## §9 구현 기록 (2026-09-04 — §7 3·4단계)
+- 3단계 트리거·detach(`bridge/curation.js`): `curationTickJudge(ws, c)` — 판정만(장부 4종 유계 판독: 큐레이션 실행 행·캠페인 이력·지적 장부 마지막 캠페인·선별 영수증·attach)·
+  ② 마지막 실행 이후 마감 캠페인 K=10(`CURATION_TICK_K`) ③ 신호 임계 `CURATION_TICK_THRESHOLDS`(oos-repeat ≥2·lineage ≥3·unused-rule 30일[관측 0건이면 주장 없음]·selOver 3) ·
+  무실행 사유=envelope-inactive·repo-unresolved·running(잠금 산 소유자)·recent(최소 간격 10분)·same-tick(마지막 실행 행 tickFp 동일)·below-threshold.
+  `curationHookTick(ws, c)`(훅 층)=계약·잠금·tick 상태 3파일만 보고 최소 간격(10분)이 지났으면 상태를 찍은 뒤 `node codex-bridge.js curate tick`을 detach(cwd=ws·CLAUDE_PROJECT_DIR=ws)·항상 null(무고지 — 결과는 수칙 카드)·실패=null.
+  자식 `curate tick`=curationTickJudge(꼬리 상한 판독) → spawn이면 같은 프로세스에서 runCuration(trigger auto·tickFp). (초판의 "훅이 curate run --auto를 직접 detach·안내 1줄"은 2회차 확인검증 뒤 폐기.)
+  훅 연결: `contract-inject.js`·`codex-hook.js`의 map-bootstrap `hookTick` 옆(advisory·검증 훅/워커/ask-start 무접촉 — P1 소스 핀). CLI `curate run --auto|--button [--tick <fp>]`가 실행 행에 `trigger`·`tickFp`를 남긴다.
+- 4단계 표면·측정: `curationSummary(ws)`에 lastTrigger·adopted(applied)·declined·adoptRate·archiveSize·selOverCount·unusedDays·running 추가(§3 F 4지표). 대시보드 상태 `curation`(수칙 카드 1줄
+  "마지막 정리 제안 <시각>(트리거·결과) · 제안 n · 미승인 m/6 · 채택률 · 서고 크기 · 선별 초과")+버튼 "정리 제안 받기"(→ `curationRun` 메시지 → detach `curate run --button`·실행 중이면 비활성). 실패·보류는 기존 경보 `curation-failed`. 개요 '지금 정할 것' 미합산.
+- 시험 `tests/curation-trigger.test.js` 8묶음(훅 층·K 누계·tickFp 1회·신호 4종 단독·옛 세대 해소 계보 반례·CLI tick/run·저장소 전환 반례·소스 핀).
+- **구현 검증 1회차 blocker 5 반영(2026-09-04)**: ① 신호는 현재 세대(envelopeHash)의 마지막 캠페인·열린 지적(close 행 없음)만 — 옛 세대 해소 계보 재발동 차단 ② 마감 캠페인 누계는 tick 상태 파일
+  `curation/<wsKey>.<repoKey>.tick.json`(repoKey 결속·seen id ≤64+시각 워터마크 hwm·k·judgedAt·ranAt·tickFp·reason)에 누적 — 캠페인 이력 60일 절단·seen 절단과 무관(워터마크 이전 행은 재계수 없음), 첫 tick은 기준선(k=0), 실행(입력 단계 진입)마다 k=0 ③ 훅 층은
+  계약·잠금·tick 상태 3파일만 보고 `curate tick`을 detach(전수 판독 0·최소 간격 10분·무고지), 판정·실행은 자식(꼬리 256KB·영수증 최신 300개 상한) ④ 요약은 현재 repoKey의 실행·결과·후보만
+  ⑤ 4번째 지표 미사용 수칙 수(unusedCount·관측 일수)를 요약·카드에 표시.
+- **2회차 blocker 2 반영**: ⑥ tick 상태·마감 캠페인 누계=(wsKey, repoKey) 파일로 분리(정찰 대상 전환=새 기준선) · 선별 초과(selOver)는 attach 행의 수칙서 세대(envelope.hash)=현재 세대일 때만(입력 집계기도 동일) ·
+  선별 영수증·지적 장부는 종전대로 archiveHash·envelopeHash(저장소별 파일 지문) 결속 ⑦ 누계는 시각 워터마크+seen 병행으로 seen 상한 절단 뒤 옛 id 재계수 차단.
+- **3회차 blocker 2 반영(미완 수정 봉합)**: ⑧ 기록 지점 4곳에 정찰 대상 저장소 지문 `repoKey`를 싣는다 — 캠페인 카운터(`reserveVerifyCampaign` → 이력 행 승계)·선별 미리보기 영수증·검증 선별 영수증(worker)·첨부(attach) 행.
+  판정·입력 집계는 그 표식으로만 거른다: 마감 캠페인 누계=이력 행 repoKey 일치분 · 지적 장부 신호=이 저장소 캠페인 id(카운터·이력 repoKey)에 속한 행만 · 영수증·첨부=repoKey 일치분. 표식 없는 옛 행은 불산입(보수).
+  같은 내용 지문(수칙서·서고)을 가진 두 저장소도 섞이지 않는다.
+- **4회차 blocker 2 반영**: ⑨ 입력 집계기의 되받아침 신호(rebutUsed)도 이 저장소 캠페인(`repoCampaignIds`)의 처분만 — 마지막 남은 무결속 경로 봉합(ab-1) ⑩ tick 상태에서 캠페인 id 배열(seen)을 폐기하고
+  워터마크 시각(`hwm`)+그 시각의 마감 수(`hwmN`) 두 값으로 센다: 새 마감=워터마크보다 나중 시각 전부+같은 시각에서 늘어난 수. 상태 재판독이 잘라 낼 배열이 없어 같은 시각 마감이 몇 건이든 재계수·누락이 없고,
+  이력이 짧아져도 워터마크는 되감기지 않는다(구조 이전 상태=기준선 재설정).
