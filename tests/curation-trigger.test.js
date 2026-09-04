@@ -59,7 +59,7 @@ t("자식 판정 — 첫 tick은 이력을 기준선으로(k=0·spawn 없음) �
   const F = fixture("k", false);
   hist(F.ws, ["cl:old:1", "cl:old:2", "cl:old:3"]);
   let j = CU.curationTickJudge(F.ws, F.c());
-  assert.ok(!j.spawn && j.reason === "below-threshold" && j.signals.k === 0 && CU.readTickState(F.ws, F.repoKey).seeded === true && CU.readTickState(F.ws, F.repoKey).hwm && CU.readTickState(F.ws, F.repoKey).hwmN >= 1, "기준선 " + JSON.stringify(j));
+  assert.ok(!j.spawn && j.reason === "below-threshold" && j.signals.k === 0 && CU.readTickState(F.ws, F.repoKey).seeded === true && CU.readTickState(F.ws, F.repoKey).hwm && CU.readTickState(F.ws, F.repoKey).hwmIds.length >= 1, "기준선 " + JSON.stringify(j));
   hist(F.ws, Array.from({ length: 9 }, (_, i) => "cl:new:" + i));
   j = CU.curationTickJudge(F.ws, F.c(), { now: Date.now() + 11 * MIN });
   assert.ok(!j.spawn && j.signals.k === 9, "9건=미달 " + JSON.stringify(j));
@@ -99,6 +99,15 @@ t("자식 판정 — 첫 tick은 이력을 기준선으로(k=0·spawn 없음) �
   hist(G.ws, ["cl:ms:x"], 0, undefined, T0);
   jg = CU.curationTickJudge(G.ws, G.c(), { now: Date.now() + 60 * MIN });
   assert.strictEqual(jg.signals.k, 66, "같은 시각 1건 추가=+1");
+  // ★반례(5회차 blocker②) — 같은 시각에서 옛 행 2개가 꼬리에서 사라지고 새 캠페인 1개가 들어오면(개수는 줄어도) 신규 1건을 정확히 센다
+  const keep = fs.readFileSync(CL.campaignHistoryFileFor(G.ws), "utf8").split(/\r?\n/).filter(Boolean);
+  const trimmed = keep.filter((l) => !/cl:ms:0"|cl:ms:1"/.test(l)); // 옛 행 2개 절단
+  fs.writeFileSync(CL.campaignHistoryFileFor(G.ws), trimmed.join("\n") + "\n");
+  hist(G.ws, ["cl:ms:new"], 0, undefined, T0); // 같은 시각 신규 1건
+  jg = CU.curationTickJudge(G.ws, G.c(), { now: Date.now() + 71 * MIN });
+  assert.strictEqual(jg.signals.k, 67, "절단 2 + 신규 1 → 신규만 +1 " + JSON.stringify(jg.signals));
+  jg = CU.curationTickJudge(G.ws, G.c(), { now: Date.now() + 82 * MIN });
+  assert.strictEqual(jg.signals.k, 67, "다음 판정=재계수 없음(사라진 행도 집합에 남음)");
 });
 
 t("자식 판정 — 같은 신호 상태(tickFp)는 마지막 실행 행과 같으면 무실행(same-tick) · 최소 간격 안=recent · 잠금=running · 상태 파일에 판정 사유 기록", () => {

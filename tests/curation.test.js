@@ -90,6 +90,11 @@ t("입력 집계기 — 정상: 코어·서고 항목(axis·index·itemFp)·신�
   assert.ok(i1.signals.unusedRules[0].receipts === 2 && i1.signals.unusedRules[0].days >= 39, JSON.stringify(i1.signals.unusedRules));
   assert.deepStrictEqual(i1.signals.rebutUsed, [{ id: "rebut:oos-1", oosId: "oos-1", n: 1 }]);
   assert.strictEqual(i1.signals.selOver.count, 1);
+  const odOther = CL.openDecision(WS, { origin: "implementer", kind: "product", noDefault: "다른 저장소의 제품 방향은 이 저장소가 정할 수 없습니다", campaignId: "c-other", sourceAsk: "ask-x", targetFp: "fpx", question: "다른 프로젝트 결정입니다", why: "타 저장소", choices: [{ key: "a", label: "가" }, { key: "b", label: "나" }] });
+  assert.ok(odOther && odOther.ok, "다른 저장소 캠페인의 결정 생성");
+  const i1b = CU.curationInput(WS, REPO, { computeCandidates: () => ({ gen: CL.loadContract(WS).envelopeHash, signals: [] }) });
+  assert.ok(i1b.ok && i1b.decisions.open.every((x) => x.decisionId !== odOther.decisionId), "★다른 저장소 캠페인의 결정=입력에서 제외(ab-1)");
+  assert.ok(!CU.buildCurationPrompt(i1b, "ko").includes("다른 프로젝트 결정입니다"), "프롬프트에도 없음");
   assert.ok(i1.decisions.open.length === 1 && /동시 배포/.test(i1.decisions.open[0].question));
   assert.strictEqual(i1.signalCount, 3);
   const i2 = CU.curationInput(WS, REPO);

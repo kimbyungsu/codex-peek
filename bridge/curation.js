@@ -127,11 +127,13 @@ function curationInput(ws, repo, opts) {
       if (o && o.selOver && CL.normWs(String(o.ws || "")) === wsN && o.repoKey === repoKey) { sig.selOver.count++; sig.selOver.lastTs = String(o.ts || sig.selOver.lastTs); } // 저장소 표식 결속(표식 없는 옛 행=불산입 — ab-1)
     }
   } catch { /* 장부 없음=0 */ }
-  // ⑧ 결정 장부(방향 힌트 — 제안 근거로만)
+  // ⑧ 결정 장부(방향 힌트 — 제안 근거로만) · 이 저장소 캠페인의 결정만(5회차 blocker① ab-1: 다른 저장소 결정이 프롬프트·유효 refs로 유입되던 경로 차단)
   const decisions = { open: [], answered: [] };
   try {
+    const mineD = repoCampaignIds(ws, repoKey);
     const d = CL.readDecisions(ws);
     for (const r of d.latest.values()) {
+      if (!mineD.has(String(r.campaignId || ""))) continue; // 표식 없는 옛 캠페인·타 저장소=제외(보수)
       const q9 = safeText(r.question, 200);
       const row = { id: "decision:" + r.decisionId, decisionId: r.decisionId, kind: String(r.kind || ""), question: q9 || RULE_REDACTED }; // ab-7: 질문 원문이 민감 형태면 표식만
       if (r.status === "open") decisions.open.push(row); else decisions.answered.push(Object.assign(row, { choice: String(r.choice || "") }));
@@ -455,15 +457,16 @@ const CURATION_TICK_MIN_GAP_MS = 10 * 60 * 1000;
 const CURATION_TICK_THRESHOLDS = { oosRepeat: 2, lineage: 3, unusedDays: CURATION_UNUSED_DAYS, selOver: 3 };
 const TICK_TAIL_BYTES = 256 * 1024;      // 장부 꼬리 판독 상한(행 단위로 앞 조각은 버림)
 const TICK_RECEIPTS_MAX = 300;           // 선별 영수증 파일 판독 상한(최신순)
-// [4회차 blocker②] seen 배열 폐기 — 상태 재판독이 배열을 다시 자르면 보존이 무효가 된다. 대신 워터마크 시각(hwm)과 '그 시각의 마감 수'(hwmN) 두 값으로 센다(O(1)·절단 불가).
+// [4·5회차 blocker②] 전체 seen 배열(절단됨)도, 그 시각의 '개수'(절단과 추가가 상쇄됨)도 아니다 — 워터마크 시각(hwm)과 **그 시각에 마감된 캠페인 id 집합**(hwmIds)을 보관한다.
+// 같은 밀리초에 마감된 캠페인만 담기므로 실사용에서 1~2개이고(절단 상한 없음·정직), 신규 판정은 집합 차로 한다.
 // tick 상태=(작업 폴더, 정찰 대상 저장소) 결속(2회차 blocker ab-1): 정찰 대상이 바뀌면 다른 파일=새 기준선 — 이전 저장소의 누계·판정이 새 저장소로 넘어가지 않는다(P6).
 function curationTickFileFor(ws, repoKey) { return path.join(CURATION_DIR, CL.wsKeyFor(ws) + "." + String(repoKey || "norepo") + ".tick.json"); }
 function readTickState(ws, repoKey) {
   try {
     const o = JSON.parse(fs.readFileSync(curationTickFileFor(ws, repoKey), "utf8"));
     if (o && typeof o === "object" && String(o.repoKey || "") === String(repoKey || "")) {
-      const seeded = o.seeded === true && Number.isInteger(o.hwmN); // 구조 이전 상태(hwmN 없음)=재기준선(값 유실 없이 다시 기준만 잡음)
-      return { repoKey: String(repoKey || ""), k: Number.isInteger(o.k) && o.k >= 0 ? o.k : 0, hwm: String(o.hwm || ""), hwmN: Number.isInteger(o.hwmN) && o.hwmN >= 0 ? o.hwmN : 0, judgedAt: String(o.judgedAt || ""), ranAt: String(o.ranAt || ""), tickFp: String(o.tickFp || ""), reason: String(o.reason || ""), seeded };
+      const seeded = o.seeded === true && Array.isArray(o.hwmIds); // 구조 이전 상태(hwmIds 없음)=재기준선(값 유실 없이 다시 기준만 잡음)
+      return { repoKey: String(repoKey || ""), k: Number.isInteger(o.k) && o.k >= 0 ? o.k : 0, hwm: String(o.hwm || ""), hwmIds: Array.isArray(o.hwmIds) ? o.hwmIds.map(String) : [], judgedAt: String(o.judgedAt || ""), ranAt: String(o.ranAt || ""), tickFp: String(o.tickFp || ""), reason: String(o.reason || ""), seeded };
     }
   } catch { /* 없음·손상=초기 */ }
   return null;
@@ -538,8 +541,9 @@ function curationTickSignals(ws, wsKey, repoKey, gen, arcHash, archiveN) {
   return s;
 }
 // 마감 캠페인 누계(② K) — tick 상태에 '본 적 있는 캠페인 id'를 기억하고 새 id만 k에 더한다. 첫 tick(상태 없음)은 현재 이력을 기준선으로 삼고 k=0(설치 이전 마감은 세지 않음).
-// 새 마감 = (워터마크보다 나중 시각의 캠페인 전부) + (워터마크와 같은 시각의 캠페인 중 지난번보다 늘어난 만큼).
-// 상태는 hwm(시각)·hwmN(그 시각의 캠페인 수) 둘뿐이라 재판독에서 잘릴 배열이 없다(4회차 blocker②). 이력이 뒤로 짧아져도 워터마크는 되감기지 않는다.
+// 새 마감 = (워터마크보다 나중 시각의 캠페인 전부) + (워터마크와 같은 시각의 캠페인 중 그 시각 집합에 없던 것).
+// 상태는 hwm(시각)·hwmIds(그 시각에 마감된 캠페인 id 집합)이며, 집합은 그 밀리초에 실제로 마감된 수만큼만 자란다(절단 없음).
+// 이력이 뒤로 짧아져도 워터마크는 되감기지 않고(Math.max), 사라진 행이 있어도 집합 차라서 남은 신규만 정확히 센다(5회차 blocker②).
 // 같은 캠페인이 나중에 다시 마감되면(A→B→A) 새 시각의 마감 사건으로 한 번 더 센다 — 정직한 계수.
 function tickCampaignCount(ws, st, repoKey) {
   const latest = new Map(); // campaignId → 마지막 마감 시각(같은 id 여러 행=최신만)
@@ -549,15 +553,17 @@ function tickCampaignCount(ws, st, repoKey) {
     const prev = latest.get(h.campaignId); if (prev === undefined || t > prev) latest.set(h.campaignId, t);
   }
   let hwmMs = st && st.hwm ? Date.parse(st.hwm) : NaN; if (!Number.isFinite(hwmMs)) hwmMs = -Infinity;
-  const hwmN = st && Number.isInteger(st.hwmN) ? st.hwmN : 0;
+  const hwmIds = new Set(st && Array.isArray(st.hwmIds) ? st.hwmIds : []);
   let maxT = -Infinity; for (const t of latest.values()) if (t > maxT) maxT = t;
   const newHwmMs = Math.max(Number.isFinite(hwmMs) ? hwmMs : -Infinity, Number.isFinite(maxT) ? maxT : -Infinity); // 되감김 금지(이력 절단으로 최신이 사라져도 유지)
-  let atNew = 0; for (const t of latest.values()) if (t === newHwmMs) atNew++;
-  const out = (k) => ({ k, hwm: Number.isFinite(newHwmMs) ? new Date(newHwmMs).toISOString() : "", hwmN: atNew });
+  const atNewIds = []; for (const [id, t] of latest) if (t === newHwmMs) atNewIds.push(id);
+  // 워터마크가 그대로면 그 시각의 옛 집합을 잃지 않게 합집합(꼬리에서 사라진 행도 '이미 센 것'으로 남는다)
+  const nextIds = (Number.isFinite(hwmMs) && newHwmMs === hwmMs) ? [...new Set([...hwmIds, ...atNewIds])] : atNewIds;
+  const out = (k) => ({ k, hwm: Number.isFinite(newHwmMs) ? new Date(newHwmMs).toISOString() : "", hwmIds: nextIds });
   if (!st || !st.seeded) return out(0); // 첫 판정=기준선(설치 이전 마감은 세지 않음)
   let k = st.k;
-  for (const t of latest.values()) if (t > hwmMs) k++;               // 워터마크보다 나중=전부 신규
-  if (Number.isFinite(hwmMs) && newHwmMs === hwmMs) k += Math.max(0, atNew - hwmN); // 같은 시각=늘어난 만큼만(멱등)
+  for (const [, t] of latest) if (t > hwmMs) k++;                                     // 워터마크보다 나중=전부 신규
+  if (Number.isFinite(hwmMs) && newHwmMs === hwmMs) for (const id of atNewIds) if (!hwmIds.has(id)) k++; // 같은 시각=집합에 없던 것만(절단과 무관)
   return out(k);
 }
 function curationTickJudge(ws, c, opts) {
@@ -575,7 +581,7 @@ function curationTickJudge(ws, c, opts) {
   const last = runs.length ? runs[runs.length - 1] : null;
   const lastTs = last ? Date.parse(String(last.ts || "")) : NaN;
   const kc = tickCampaignCount(ws, st0, repoKey);
-  const persist = (extra) => { writeTickState(ws, repoKey, Object.assign({ k: kc.k, hwm: kc.hwm, hwmN: kc.hwmN, seeded: true, judgedAt: new Date(now).toISOString(), ranAt: st0 ? st0.ranAt : "" }, extra || {})); };
+  const persist = (extra) => { writeTickState(ws, repoKey, Object.assign({ k: kc.k, hwm: kc.hwm, hwmIds: kc.hwmIds, seeded: true, judgedAt: new Date(now).toISOString(), ranAt: st0 ? st0.ranAt : "" }, extra || {})); };
   if (Number.isFinite(lastTs) && now - lastTs < CURATION_TICK_MIN_GAP_MS) { persist({ reason: "recent" }); return { spawn: false, reason: "recent" }; }
   const arcHash = typeof cc.archiveHash === "string" && cc.archiveHash ? cc.archiveHash : null;
   let archiveN = 0; if (arcHash) { try { const ar = CL.readVerifyEnvelopeArchive(repo); if (ar.st === "ok" && ar.sha1 === arcHash) archiveN = ar.data.alwaysBlocker.length; } catch { archiveN = 0; } }
@@ -591,7 +597,7 @@ function curationTickJudge(ws, c, opts) {
 // 실행이 끝나면 마감 캠페인 누계를 0으로(마지막 큐레이션 이후만 센다) — 실행 행을 쓰는 모든 경로가 호출
 function resetTickK(ws, repoKey, ranAtIso) {
   const st = readTickState(ws, repoKey);
-  writeTickState(ws, repoKey, Object.assign({ k: 0, hwm: "", hwmN: 0, seeded: true, judgedAt: "", tickFp: "", reason: "" }, st || {}, { k: 0, ranAt: ranAtIso || new Date().toISOString() }));
+  writeTickState(ws, repoKey, Object.assign({ k: 0, hwm: "", hwmIds: [], seeded: true, judgedAt: "", tickFp: "", reason: "" }, st || {}, { k: 0, ranAt: ranAtIso || new Date().toISOString() }));
 }
 // 훅 진입(ⓐ) — 전수 판독 0: 계약(호출자 전달)·잠금 파일·tick 상태 파일만. 최소 간격이 지났으면 `curate tick`을 detach(판정·실행은 자식). 반환=null(무고지 — 결과는 대시보드 카드).
 function curationHookTick(ws, c, opts) {
@@ -606,7 +612,7 @@ function curationHookTick(ws, c, opts) {
     const lastAct = st ? Math.max(Date.parse(st.judgedAt || "") || 0, Date.parse(st.ranAt || "") || 0) : 0;
     if (lastAct && now - lastAct < CURATION_TICK_MIN_GAP_MS) return null;
     // detach 전에 상태를 먼저 찍어 같은 간격 안의 다음 훅이 또 띄우지 않게(자식이 죽어도 다음 간격에 재시도)
-    writeTickState(ws, repoKey, Object.assign({ k: 0, hwm: "", hwmN: 0, seeded: false, ranAt: "", tickFp: "", reason: "" }, st || {}, { judgedAt: new Date(now).toISOString() }));
+    writeTickState(ws, repoKey, Object.assign({ k: 0, hwm: "", hwmIds: [], seeded: false, ranAt: "", tickFp: "", reason: "" }, st || {}, { judgedAt: new Date(now).toISOString() }));
     const args = [path.join(__dirname, "codex-bridge.js"), "curate", "tick"];
     const env = Object.assign({}, process.env, { CLAUDE_PROJECT_DIR: String(ws) });
     const sp = typeof o.spawnFn === "function" ? o.spawnFn : require("child_process").spawn;
