@@ -4296,7 +4296,17 @@ async function cmdAsk(rest) {
     const { answer, error, status, stderr } = runCodex(["resume", link.codexSession, ...mArgs, ...(net ? netArgs() : [])], promptText);
     if (error || !answer || (typeof status === "number" && status !== 0)) {
       try { writePhase("claude-working", { session: claudeId(), workspace: ws }); } catch { /* best-effort */ } // ask 실패 → 진행표시 codex-verifying 잔존 방지(Claude로 복귀)
-      die(tB(`Codex resume 실패: `,`Codex resume failed: `) + `${error?.message || ""}\n${stderr.slice(-500)}`);
+      // [회차 환급 2026-09-04] 답이 한 글자도 오지 않은 실패(스폰·네트워크)는 왕복이 아니다 — 방금 예약한 서수를 되돌린다(캠페인당 VERIFY_REFUND_MAX회 유계).
+      // 답이 있는데 status≠0인 판(보류·실패 판정)은 환급하지 않는다. 환급 결과는 job 파일·stderr에 남겨 사용자가 본다.
+      let refundNote9 = "";
+      if (!String(answer || "").trim() && budgetGate.res && budgetGate.res.tracked === true && Number.isInteger(budgetGate.res.n)) {
+        const rf9 = require("./contract-lib.js").refundVerifyCampaignRound(ws, budgetGate.res.campaignId, budgetGate.res.n);
+        try { if (durableEnv && durableEnv.ok && durableEnv.job) patchAskJobFile(durableEnv.job.id, { roundRefunded: !!rf9.ok, roundRefundReason: rf9.ok ? "" : String(rf9.reason || "") }); } catch { /* 가시화 best-effort */ }
+        refundNote9 = rf9.ok
+          ? tB(`\n[회차 환급] 검증자 답 없이 실패한 호출이라 회차 ${budgetGate.res.n}을(를) 돌려받았습니다(이 캠페인 환급 ${rf9.refunds}/${rf9.max}회 · 사용 회차 ${rf9.count}/${rf9.budget}).`, `\n[round refunded] The verifier produced no answer, so round ${budgetGate.res.n} was returned (refunds this campaign ${rf9.refunds}/${rf9.max} · used ${rf9.count}/${rf9.budget}).`)
+          : tB(`\n[회차 미환급] 답 없는 실패지만 회차를 돌려받지 못했습니다(${rf9.reason}) — 상한이 그대로 소모됩니다.`, `\n[round not refunded] No answer, but the round could not be returned (${rf9.reason}) — the cap is consumed as usual.`);
+      }
+      die(tB(`Codex resume 실패: `,`Codex resume failed: `) + `${error?.message || ""}\n${stderr.slice(-500)}` + refundNote9);
     }
     attempt.answered(); // 답 수신(이후 예외=proof-rejected 매핑)
     try { postflightDelivery(link.codexSession, attCarrier, callStartIso9, rolloutFile9); } catch { /* 판독 실패=계획기가 다음 판 재전송 */ } // [§4-B ②] 검증 도중 압축 검사(postflight)

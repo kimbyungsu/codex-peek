@@ -306,6 +306,8 @@ function commitCuration(ws, input, parsed, meta) {
   const { latest } = CL.readEnvelopeCandidates(ws);
   const fresh = rowsCommon.filter((r) => !latest.has(r.candidateId + "@" + gen));
   const ids = fresh.map((r) => r.candidateId);
+  // 결과 지문=후보 id 배열(연산·대상·축·번호·문안 지문의 함수). 같은 curationKey에 '다른 후보 집합'이 오면 result-conflict(첫 결과 권위) —
+  // why·refs·explain만 다른 재응답은 같은 후보라 충돌이 아니다(첫 후보 행이 그대로 남는다 · 확인검증 [보완] f-68d4b93e 범위 명시).
   const resultFp = sha1(JSON.stringify(rowsCommon.map((r) => r.candidateId)));
   // 결과 행 중복 대조(같은 curationKey의 다른 결과=fail-closed)
   const prevRes = readCurationRows(ws).find((r) => r.type === "result" && r.curationKey === curationKey);

@@ -770,13 +770,14 @@ function reserveVerifyCampaign(ws, campaignId, budget, persistFn) {
       }
     }
     const nowIso = new Date().toISOString();
-    let M = M0, count = 0, startedAt = nowIso, historyWarn = 0;
+    let M = M0, count = 0, startedAt = nowIso, historyWarn = 0, refunds = 0;
     const switching = !(cur && cur.campaignId === campaignId);
-    if (!switching) { M = cur.budget; count = cur.count; startedAt = cur.startedAt || nowIso; }
+    if (!switching) { M = cur.budget; count = cur.count; startedAt = cur.startedAt || nowIso; refunds = Number.isInteger(cur.refunds) ? cur.refunds : 0; }
     else {
       const back = findCampaignInHistory(ws, campaignId); // 1차 B1: 교대 복귀 — history에서 count·동결 budget 복원
       if (back && back.readFailed) return { tracked: false, untracked: "history-read-failed" }; // 2차 B4': 복원 불능=미집계(count 0 재시작 금지)
-      if (back) { M = back.budget; count = back.count; startedAt = back.startedAt || nowIso; }
+      // [회차 환급 · 확인검증 blocker f-4f21ad8c] 환급 누계도 count와 같은 자격으로 복원 — A→B→A 교대에서 refunds가 0으로 되돌아가 캠페인당 상한(2)을 우회하던 경로 차단.
+      if (back) { M = back.budget; count = back.count; startedAt = back.startedAt || nowIso; refunds = Number.isInteger(back.refunds) ? back.refunds : 0; }
     }
     // 2차 B1' 순서 재배열: 거부·영수증 실패는 history·current를 '건드리기 전에' 반환 — 거부된 교체 시도가
     // history에 옛 레코드를 남겨 dedupe·복원을 오염시키던 경로 제거(교체는 진행 확정 후에만).
@@ -790,11 +791,35 @@ function reserveVerifyCampaign(ws, campaignId, budget, persistFn) {
       if (h.writeFailed) return { tracked: false, untracked: "history-write-failed", counterFailedAfterReceipt: true, budget: M, campaignId, quarantined }; // 1차 B4: 교체 중단(current 불변)
       historyWarn = h.warn;
     }
-    if (!atomicWrite(file, JSON.stringify({ schema: "vcamp-1", campaignId, count: next, budget: M, startedAt, updatedAt: nowIso })))
+    const refunds9 = refunds > 0 ? { refunds } : {}; // [회차 환급] 같은 캠페인의 환급 누계 보존 — 계속·복원 어느 경로든(예약이 카운터를 통째로 다시 쓰므로)
+    if (!atomicWrite(file, JSON.stringify({ schema: "vcamp-1", campaignId, count: next, budget: M, startedAt, updatedAt: nowIso, ...refunds9 })))
       return { tracked: false, untracked: "counter-write-failed", counterFailedAfterReceipt: true, n: next, budget: M, campaignId, quarantined };
     return { tracked: true, n: next, budget: M, campaignId, last: M >= 1 && next === M, quarantined, historyWarn };
   });
   if (!r.ok) return { tracked: false, untracked: "lock" };
+  return r.result;
+}
+
+// ── [회차 환급 2026-09-04 · 사용자 실보고 "상한 뒤 추가 질문 흔적"] 검증자가 답을 내지 못한 호출(스폰·네트워크 실패 — 답 0자)은 왕복이 아니다.
+// 예약은 호출 직전에 잡히므로 실패한 호출도 count에 남아 있었다(2026-09-03 Codex 백엔드 404 3연속=회차 3·4·5 소모·답 0). 같은 잠금 안에서
+// '방금 예약한 그 서수(count===n)'만 되돌리고, 캠페인당 환급 횟수를 REFUND_MAX로 묶는다(무한 무료 재시도 차단 — 장애가 계속되면 상한이 잡는다).
+// 답이 온 판(보류·실패 판정 포함)은 환급 대상이 아니다 — 판정은 판정이다.
+const VERIFY_REFUND_MAX = 2;
+function refundVerifyCampaignRound(ws, campaignId, n) {
+  if (typeof campaignId !== "string" || !campaignId || !Number.isInteger(n) || n < 1) return { ok: false, reason: "bad-args" };
+  const file = campaignFileFor(ws);
+  const r = withFileLockStrict(file + ".lock", () => {
+    let o = null;
+    try { o = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return { ok: false, reason: "counter-unreadable" }; }
+    if (!(o && typeof o === "object" && o.schema === "vcamp-1" && o.campaignId === campaignId)) return { ok: false, reason: "campaign-mismatch" };
+    if (!(Number.isInteger(o.count) && o.count === n)) return { ok: false, reason: "not-latest", count: o.count };
+    const refunds = Number.isInteger(o.refunds) ? o.refunds : 0;
+    if (refunds >= VERIFY_REFUND_MAX) return { ok: false, reason: "refund-cap", refunds, max: VERIFY_REFUND_MAX };
+    const next = Object.assign({}, o, { count: n - 1, refunds: refunds + 1, updatedAt: new Date().toISOString() });
+    if (!atomicWrite(file, JSON.stringify(next))) return { ok: false, reason: "counter-write-failed" };
+    return { ok: true, count: n - 1, refunds: refunds + 1, max: VERIFY_REFUND_MAX, budget: o.budget };
+  });
+  if (!r.ok) return { ok: false, reason: "lock" };
   return r.result;
 }
 
@@ -6787,3 +6812,5 @@ module.exports.writeCodexRuleCheck = writeCodexRuleCheck;
 module.exports.ENVELOPE_AXES = ENVELOPE_AXES;
 module.exports.ENVELOPE_CHAR_MAX = ENVELOPE_CHAR_MAX;
 module.exports.draftCuratorCandidate = draftCuratorCandidate; // [CURATION v3 §3 D] 승인 시 변환
+module.exports.refundVerifyCampaignRound = refundVerifyCampaignRound; // [회차 환급] 답 없는 실패 호출=왕복 아님(유계)
+module.exports.VERIFY_REFUND_MAX = VERIFY_REFUND_MAX;
