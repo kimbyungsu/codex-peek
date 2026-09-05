@@ -558,6 +558,17 @@ async function main() {
     ]), "표식 없는 행은 관문이 현재 저장소로 심는다");
     const inA = CU.curationInput(WS, REPO, { computeCandidates: CB.computeEnvelopeCandidatesFor });
     assert.ok(inA.ok && inA.signals.oosRepeat.length === 1 && inA.signals.oosRepeat[0].n === 2, "이 저장소 표식 행 2건만 셈(B 행 2건 불산입) " + JSON.stringify(inA.signals.oosRepeat));
+    // ★반례(확인검증 3판 ab-1) — A에서 닫힌 계보 F(등장 2·3 뒤 close)를 B의 같은 id open 행이 되살리면 안 된다(열린 지적 판독도 필터 장부로)
+    assert.ok(CL.appendFindingsLedger(WS, [
+      { type: "finding", campaignId: "cX", envelopeHash: gen9, findingId: "f-same", round: 1, tag: "blocker", titleNorm: "s", status: "open", ts: ts9 },
+      { type: "occurrence", campaignId: "cX", envelopeHash: gen9, findingId: "f-same", round: 2, effectiveTag: "blocker", ts: ts9 },
+      { type: "occurrence", campaignId: "cX", envelopeHash: gen9, findingId: "f-same", round: 3, effectiveTag: "blocker", ts: ts9 },
+      { type: "close", campaignId: "cX", envelopeHash: gen9, findingId: "f-same", closeReason: "resolved", round: 4, ts: ts9 },
+      { type: "finding", campaignId: "cX", envelopeHash: gen9, findingId: "f-same", round: 1, tag: "blocker", titleNorm: "s", status: "open", repoKey: "0000000000000000", ts: ts9 }, // B의 같은 id open 행
+    ]));
+    assert.ok(CB.computeEnvelopeCandidatesFor(WS).signals.some((s) => s.kind === "lineage" && s.key === "f-same"), "무필터(대시보드)는 B open 행 때문에 계보 신호를 만든다(전제)");
+    const inC = CU.curationInput(WS, REPO, { computeCandidates: CB.computeEnvelopeCandidatesFor });
+    assert.ok(inC.ok && !inC.signals.lineage.some((x) => x.key === "f-same"), "★A 기준 닫힌 계보는 B open 행으로 되살아나지 않음 " + JSON.stringify(inC.signals.lineage));
     // 관문 override: 비동기 검증 결과는 '시작 시점' 저장소를 명시로 넘긴다 — 완료 시점 계약과 달라도 그 값이 찍힌다
     assert.ok(CL.appendFindingsLedger(WS, [{ type: "round", campaignId: "cX", round: 9, verdict: "pass", envelopeHash: gen9, ts: ts9 }], { repoKey: "1111111111111111" }));
     const lastRow = CL.readFindingsLedger(WS).filter((r) => r.type === "round" && r.round === 9).pop();

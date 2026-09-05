@@ -182,3 +182,6 @@ ab-1 wsKey·repoKey 결속(입력·키·모든 행·영수증) · ab-2 계약 �
 - **확인검증 2판(2026-09-05) blocker 2 반영**: ⑭ 입력 집계기의 캠페인 신호(oos-repeat·lineage·escalation·unused-oos)도 후보 집계기 `computeEnvelopeCandidatesFor(ws, {rowFilter})`에 행 필터(repoKey===현재 저장소)를 넘겨
   같은 캠페인·같은 세대의 타 저장소 행을 배제한다(대시보드의 무필터 호출은 종전 그대로) ⑮ 비동기 검증 결과 행의 표식=검증 **시작** 스냅샷의 저장소 — `machineFindingsLayer`가 시작 시점 repoKey를 받아 append 관문 override(`opts.repoKey`)로 심고,
   처분·종결 행(finding-judge)은 대상 지적 행의 repoKey를 승계한다(판단 시점 계약이 아님). 완료 시점 계약으로 찍으면 응답 대기 중 대상 전환에 A 결과가 B로 귀속되는 경로(수정 유발 결함)를 닫는다.
+- **확인검증 3판(2026-09-05) blocker 2 반영 — 판독도 같은 저장소로**: ⑯ 집계기의 열린 지적 판독을 필터된 장부(`openFindingsFromRows(ledger9)`)로 바꿔 타 저장소 open 행이 닫힌 계보를 되살리지 못하게 함.
+  ⑰ 검증 결과 처리(`machineFindingsLayer`)의 판 유형(`deriveRoundType(…, rows)`)·라운드 번호·열린 목록·승격 사용·기존 id 판독을 시작 스냅샷 저장소와 '다른' 표식의 행을 제외한 장부로 계산(표식 없는 옛 행은 호환상 포함) — A 판이 B 지적을 닫거나 B 통과로 confirm이 되던 경로 차단.
+  finding-judge의 열린 목록·대상 행 선택도 현재 저장소 우선. 표식 정책 요약: 큐레이션 신호=표식 일치만(옛 행 불산입·보수) / 검증 결과·판단 판독=다른 표식만 제외(옛 행 포함·연속성).

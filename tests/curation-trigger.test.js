@@ -303,4 +303,30 @@ t("소스 핀 — 훅 두 곳이 map-bootstrap tick 옆에서 curationHookTick(a
   for (const f of ["install.js", "src/hook-setup.ts", "bridge/map-cutover.js"]) assert.ok(/"curation\.js"/.test(rd(f)), f + " 배포 목록");
 });
 
+t("★반례(확인검증 3판 ab-1) — 검증 결과 처리: 같은 캠페인·세대에 B의 통과 판·열린 지적이 있어도 A의 첫 판은 discovery·round 1이고 B 지적을 닫지 않는다(판독도 시작 스냅샷 저장소만)", () => {
+  const CB = require("../bridge/codex-bridge.js");
+  const F = fixture("mfl", false);
+  const CAMP = "cl:mfl:1"; const ts = new Date().toISOString();
+  fs.mkdirSync(path.dirname(CL.campaignFileFor(F.ws)), { recursive: true });
+  fs.writeFileSync(CL.campaignFileFor(F.ws), JSON.stringify({ schema: "vcamp-1", campaignId: CAMP, count: 1, budget: 9, startedAt: ts, updatedAt: ts, repoKey: F.repoKey }));
+  const old = process.env.CODEX_BRIDGE_ASK_JOB_ID; process.env.CODEX_BRIDGE_ASK_JOB_ID = "ask-mfl-1";
+  try {
+    assert.strictEqual(CL.writeEnvelopeFreeze(F.ws, CORE_HASH, "ask-mfl-1"), true);
+    // B(다른 저장소 표식)의 통과 판 + 열린 지적 — 같은 캠페인·같은 세대
+    assert.ok(CL.appendFindingsLedger(F.ws, [
+      { type: "round", campaignId: CAMP, round: 1, roundType: "discovery", verdict: "pass", envelopeHash: CORE_HASH, repoKey: "0000000000000000", ts },
+      { type: "finding", campaignId: CAMP, round: 1, findingId: "f-B", tag: "blocker", titleNorm: "b결함", status: "open", envelopeHash: CORE_HASH, repoKey: "0000000000000000", ts },
+    ]));
+    const answer = "본문" + String.fromCharCode(10) + "[지적 목록 v2]" + String.fromCharCode(10) + "[지적 목록 끝]" + String.fromCharCode(10) + String.fromCharCode(10) + "검증: 통과" + String.fromCharCode(10);
+    CB.machineFindingsLayer(answer, F.ws, "ko", "core", "claude-codex", "ask-mfl-1", CAMP, F.repoKey);
+    const rows = CL.readFindingsLedger(F.ws);
+    const myRound = rows.find((r) => r.type === "round" && r.repoKey === F.repoKey);
+    assert.ok(myRound && myRound.round === 1 && myRound.roundType === "discovery", "A 첫 판=discovery·round 1(B 통과 판 미참조) " + JSON.stringify(myRound));
+    assert.ok(!rows.some((r) => r.type === "close" && r.findingId === "f-B"), "★B 지적 f-B는 A 판이 닫지 않는다");
+    assert.ok(rows.filter((r) => r.repoKey === F.repoKey).every((r) => r.type !== "finding" || r.findingId !== "f-B"), "A 표식으로 기록된 행에 B 지적 없음");
+    const stillOpenB = CL.openFindingsFromRows(rows.filter((r) => r.repoKey === "0000000000000000"), CAMP, CORE_HASH);
+    assert.ok(stillOpenB.some((o) => o.id === "f-B"), "B 기준 판독에서 f-B는 여전히 열림");
+  } finally { if (old === undefined) delete process.env.CODEX_BRIDGE_ASK_JOB_ID; else process.env.CODEX_BRIDGE_ASK_JOB_ID = old; }
+});
+
 console.log(`\n결과: ${n} 통과 / 0 실패`);

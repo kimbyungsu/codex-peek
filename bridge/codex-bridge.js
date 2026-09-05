@@ -3122,8 +3122,11 @@ function cmdFindingJudge(rest) {
   const campFlag = flagVal("--campaign");
   const camp = campFlag || currentCampaignIdFor(ws);
   const gen = readFrozenEnvelope(ws);
-  const opens = openFindingsFor(ws, camp, gen);
   const rows = readFindingsLedger(ws);
+  // [CURATION ab-1] 열린 목록은 현재 정찰 대상 저장소의 행만(다른 표식 제외·표식 없는 옛 행 호환 포함) — 같은 작업 폴더 타 저장소의 지적을 판단 대상으로 내밀지 않는다.
+  const rkCurJ = (() => { try { return repoKeyOf(resolveScoutRepo(ws, loadContract(ws)).repo); } catch { return ""; } })();
+  const rowsMine = rows.filter((r) => !r || !rkCurJ || r.repoKey === undefined || r.repoKey === rkCurJ);
+  const opens = require("./contract-lib.js").openFindingsFromRows(rowsMine, camp, gen);
   const disp = dispositionsFor(ws, camp);
   // [개선 1-A 조회 옵션] --list-oos: 이 판에 동결된 제외 칸 전문(번호+제목)과 결속 상태 — 판정 자리의 재료 줄(≤200자)에서 잘린 항목의 원천
   if (rest.includes("--list-oos")) {
@@ -3232,7 +3235,8 @@ function cmdFindingJudge(rest) {
   const ledgerJ = readFindingsLedger(ws);
   const asOfRound = findingActivityRound(ledgerJ, camp, id);
   // [CURATION ab-1] 처분·종결 행의 저장소 표식=대상 지적 행의 repoKey(판단 시점 계약이 아님 — 판단 사이 대상 전환 오귀속 차단). 지적 행에 표식이 없으면(옛 행) 관문 기본(현재 계약).
-  const rkJ = (() => { for (const r of ledgerJ) if (r && r.type === "finding" && r.findingId === id && typeof r.repoKey === "string" && r.repoKey) return r.repoKey; return null; })();
+  const rkJ = (() => { // 대상 지적 행=같은 캠페인의 finding 행 중 현재 저장소 표식 우선(같은 id가 두 저장소에 있으면 이 저장소 것)·없으면 마지막 표식 행
+    let pick = null; for (const r of ledgerJ) if (r && r.type === "finding" && r.findingId === id && r.campaignId === camp && typeof r.repoKey === "string" && r.repoKey) { pick = r.repoKey; if (r.repoKey === rkCurJ) return r.repoKey; } return pick; })();
   // R2 blocker⑤(ab-1): 사건 최상위에 기록 시점 저장소 정체성(repoKey+repoPath) 결속 — 수확기는
   // close 시점의 현재 대상이 아니라 이 값으로 파티션·검증(대상 전환 후에도 A 사건=A 저장소).
   let evRepoTop;
@@ -3652,7 +3656,7 @@ function computeEnvelopeCandidatesFor(ws, opts) {
   // §7 증분 3(실전 첫 발동의 교훈 2026-07-24): '이미 해소된 계보'는 후보에서 제외 — 반복됐어도 이번 캠페인에서
   // 수정 완료된 지적은 "앞으로 지킬 약속" 후보가 아니다. open 판정=현 세대 열린 지적 목록.
   const openIds9 = new Set();
-  try { for (const o of openFindingsFor(ws, camp, gen)) openIds9.add(o.id); } catch { /* 판독 실패=제외 없이 전체(보수) */ }
+  try { for (const o of require("./contract-lib.js").openFindingsFromRows(ledger9, camp, gen)) openIds9.add(o.id); } catch { /* 판독 실패=제외 없이 전체(보수) */ } // 같은 필터 장부로(타 저장소 open 행이 닫힌 계보를 되살리는 경로 차단 — ab-1)
   const cands = [];
   // [재편 B §3-1b] 합성 신호(반복·기계 집계)는 권위 후보와 구조 분리 — 장부 처분·초안·판단 의무 밖의
   // 참고 표시 전용(f-3144cbc9). 아래 ①~④는 signals로만 산출된다.
@@ -3799,6 +3803,9 @@ function integrityReviewLine(ws, lang, profile) {
 function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId, campSnap, repoKeySnap) {
   // [CURATION ab-1 · 확인검증 blocker] 결과 행(지적·등장·종결·승격·판)의 저장소 표식=검증 '시작' 스냅샷(호출자 전달). 응답 대기 중 정찰 대상이 바뀌어도 A의 검증 결과는 A 행으로 남는다.
   const appendL = (rows) => appendFindingsLedger(ws, rows, typeof repoKeySnap === "string" && repoKeySnap ? { repoKey: repoKeySnap } : undefined);
+  // 판독도 같은 저장소 것만(ab-1 — 확인검증 blocker): 시작 스냅샷 repoKey와 '다른' 표식의 행은 제외. 표식 없는 옛 행은 호환상 포함(업그레이드 직후 진행 중 캠페인의 라운드·열린 지적 연속성).
+  const sameRepoM = (r) => !r || !(typeof repoKeySnap === "string" && repoKeySnap) || r.repoKey === undefined || r.repoKey === repoKeySnap;
+  const ledgerM = () => readFindingsLedger(ws).filter(sameRepoM);
   if (profileSnap !== "core") return { machine: null, notice: "" }; // 기계 판독 계약은 core 경로(무결성=문구 준수 감사 — 정본 §2.1 구현 한정)
   const en = langSnap === "en";
   const parse = parseFindingsBlock(answer);
@@ -3838,8 +3845,9 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
   // 스냅 부재(직접 ask 앵커 실패 등)=기존 폴백 유지(정직 한계 — 그 경로는 관문도 미발동이라 결속 불일치 없음).
   const camp = typeof campSnap === "string" && campSnap ? campSnap : currentCampaignIdFor(ws);
   const bg9 = frozenBoundaryGen; // [v7 §2] 이번 판의 판정 경계(legacy 동결·askId 불일치=null → confirm은 envelopeHash 폴백)
-  const roundType = deriveRoundType(ws, camp, frozen, bg9 || undefined); // 1차 blocker④+v7: 같은 동결 세대·같은 경계의 라운드만 confirm
-  const roundNo = readFindingsLedger(ws).filter((r) => r.type === "round" && r.campaignId === camp && (r.envelopeHash || null) === (frozen || null)).length + 1;
+  const ledger0 = ledgerM();
+  const roundType = deriveRoundType(ws, camp, frozen, bg9 || undefined, ledger0); // 1차 blocker④+v7: 같은 동결 세대·같은 경계의 라운드만 confirm · 같은 저장소 판만(ab-1)
+  const roundNo = ledger0.filter((r) => r.type === "round" && r.campaignId === camp && (r.envelopeHash || null) === (frozen || null)).length + 1;
   const blockShaped = parse.present && parse.ok && machine.reasonKey !== "no-verdict-line";
   if (staleFreezeNote) out.push(en ? "[envelope freeze is not bound to this verification job (freeze write likely failed or non-durable path) — admission disabled this round]" : "[경계 동결이 이 검증 잡에 결속되지 않음(동결 기록 실패·비내구 경로로 판단) — 이번 라운드 입장 심사 미발동]");
   let effItems = parse.findings; // 자동 등록 루프가 쓰는 '실효' 목록(강등 반영본)
@@ -3853,7 +3861,7 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
       if (evNow.st === "ok" && evNow.sha1 === frozen && cNow.envelopeHash === frozen) { oosCount = evNow.data.outOfScope.length; abCount = frozenManifest ? frozenManifest.length : evNow.data.alwaysBlocker.length; } // [v7 §2] ab 범위 판독처=동결 합본 manifest(부재=legacy 코어 개수)
       else out.push(en ? "[envelope generation changed — oosId/abId references ignored this round]" : "[경계 세대 변경 — 이번 라운드의 경계 참조(oosId·abId)는 무시됨]");
     } catch { oosCount = null; abCount = null; }
-    const openList = openFindingsFor(ws, camp, frozen); // 2차 미완수정④: 같은 동결 세대의 open만(구세대 id=재지적 인정 금지)
+    const openList = require("./contract-lib.js").openFindingsFromRows(ledgerM(), camp, frozen); // 2차 미완수정④: 같은 동결 세대의 open만(구세대 id=재지적 인정 금지) · 같은 저장소 행만(ab-1 — A 판이 B 지적을 닫지 않게)
     const openIds = new Set(openList.map((o) => o.id));
     const rebutted9 = new Map(); // [개선 1-B] 되받아친 지적 → {oosId, restores}
     try { for (const r9 of implementerRebuttalsFor(ws, camp, frozen)) rebutted9.set(r9.findingId, { oosId: r9.oosId, restores: r9.restores, titleNorm: r9.title }); } catch { /* 장부 판독 실패=되받아침 없음으로 심사(강등 방향 아님·기존 규칙만) */ }
@@ -3902,7 +3910,7 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
     // 증분 3(§4): 범위 확장 승격 — 유효 후보(escalateCandidate)를 캠페인·세대당 1회 blocker로 승격해 '다음
     // 라운드'의 열린 지적으로 등록(이번 판정은 불변 — 기계는 판정을 만들지도 뒤집지도 않는다). 상한 소진=주의 기록.
     try {
-      const escUsed = readFindingsLedger(ws).some((r9) => r9.type === "escalation" && r9.campaignId === camp && (r9.envelopeHash || null) === (frozen || null));
+      const escUsed = ledgerM().some((r9) => r9.type === "escalation" && r9.campaignId === camp && (r9.envelopeHash || null) === (frozen || null));
       let escSeq = 0;
       for (const f of adm.items) {
         if (!f.escalateCandidate) continue;
@@ -3949,7 +3957,7 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
       // 뿌리로 수렴해야 집계가 모인다 — 이 세대 finding들의 prevId 사슬을 유계 순회(순환 방지)로 뿌리 정규화.
       const prevMap = new Map();
       const existIds = new Set(); // 이 세대에 finding으로 실존하는 id — 끊긴 사슬(실존하지 않는 prevId)로 전진 금지(3차 [보완])
-      try { for (const r0 of readFindingsLedger(ws)) if (r0.type === "finding" && r0.campaignId === camp && (r0.envelopeHash || null) === (frozen || null) && r0.findingId) { existIds.add(r0.findingId); if (r0.prevId) prevMap.set(r0.findingId, r0.prevId); } } catch { /* 판독 실패=사슬 없음 취급 */ }
+      try { for (const r0 of ledgerM()) if (r0.type === "finding" && r0.campaignId === camp && (r0.envelopeHash || null) === (frozen || null) && r0.findingId) { existIds.add(r0.findingId); if (r0.prevId) prevMap.set(r0.findingId, r0.prevId); } } catch { /* 판독 실패=사슬 없음 취급 */ }
       const rootOf = (id0) => { const seen0 = new Set(); let cur0 = id0; while (prevMap.has(cur0) && existIds.has(prevMap.get(cur0)) && !seen0.has(cur0) && seen0.size < 50) { seen0.add(cur0); cur0 = prevMap.get(cur0); } return cur0; };
       let seq = 0;
       for (const f of effItems) {

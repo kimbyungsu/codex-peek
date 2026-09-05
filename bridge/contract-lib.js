@@ -5119,8 +5119,9 @@ function draftEnvelopeCandidateLocked(ws, repo, candidateId, approvedHash) {
 // 1차 blocker④ 반영: 유도·회차는 '같은 동결 세대(envelopeHash)'의 round만 본다 — 경계 비활성(null) 기록이
 // 승인 후 첫 활성 라운드를 confirm/fix-verify로 만들어 baseline blocker를 강등하는 오염 차단(활성 행렬
 // '비활성=기록만' 약속 유지). gen 미전달=기존 전체(하위 호환 — 통계 판독 등).
-function deriveRoundType(ws, campaignId, gen, curBoundaryGen) {
-  const all = readFindingsLedger(ws).filter((r) => r.type === "round" && r.campaignId === campaignId);
+function deriveRoundType(ws, campaignId, gen, curBoundaryGen, rowsOpt) {
+  // rowsOpt=호출자가 이미 읽은(저장소 필터된) 장부 — [CURATION ab-1] 같은 작업 폴더의 타 저장소 판(round)이 이 저장소 판 유형(confirm/discovery)을 정하지 않게. 미전달=종전 전체 판독.
+  const all = (Array.isArray(rowsOpt) ? rowsOpt : readFindingsLedger(ws)).filter((r) => r.type === "round" && r.campaignId === campaignId);
   const rounds = gen === undefined ? all : all.filter((r) => (r.envelopeHash || null) === (gen || null));
   if (!rounds.length) return "discovery";
   const last = rounds[rounds.length - 1];
