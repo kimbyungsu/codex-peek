@@ -469,6 +469,25 @@ t("★반례(2차 캠페인 1판 blocker ab-1) — 판단 관문 마커·round-j
   assert.ok(cb.includes('reason: "scope-demoted", repoKey: repoKey || ""') && cb.includes("armScopeDemotedJudge(ws, camp, askId, en, repoKeySnap)"), "전량 강등 마커=시작 스냅샷 키");
   assert.ok(cb.includes("applyPostflightHold(mfl, attCarrier, ws, askId, campSnap, langSnap, repoKeySnap9);") && cb.includes('reason: key, repoKey: repoKey || ""'), "압축 보류 마커=시작 스냅샷 키");
   assert.ok(cb.includes('reason: "dispute:" + String(f.contestOf || ""), repoKey: repoKeySnap || ""'), "분쟁 마커=시작 스냅샷 키");
+  // ★2판 blocker①: 옛 무키 마커(업그레이드 이전) — 현재 계약 B로 찍으면 오귀속. 소속 불명은 표식 없이(이력만) 남기고 마커는 풀린다.
+  fs.writeFileSync(CL.judgeFileFor(F.ws), JSON.stringify({ schema: "judge-required-v1", ws: String(F.ws), items: [{ askId: "ask-legacy-1", campaignId: CAMP, reason: "scope-demoted", ts }] }, null, 1));
+  const rL = CL.resolveJudgeRequired(F.ws, "ask-legacy-1", "re-verify", { note: "옛 마커 해소 — 소속 불명 시험" });
+  assert.ok(rL && rL.ok === true, "옛 무키 마커도 풀린다(턴 종료 차단 장치) " + JSON.stringify(rL));
+  const rowL = CL.readFindingsLedger(F.ws).filter((x) => x.type === "round-judgment" && x.askId === "ask-legacy-1");
+  assert.ok(rowL.length === 1 && !("repoKey" in rowL[0]) && rowL[0].repoUnknown === true, "★옛 마커의 판단 행=표식 없음(현재 계약 B로 찍지 않음·이력만) " + JSON.stringify(rowL));
+  assert.ok(!CL.ledgerRowsForRepo(CL.readFindingsLedger(F.ws), rkB).some((x) => x.askId === "ask-legacy-1"), "B 저장소 활성 판독에 옛 마커 판단이 안 보임");
+  assert.strictEqual(CL.readJudgeRequired(F.ws), null, "옛 마커 제거됨");
+  // ★2판 blocker②: escalate 결정 결속 — B 저장소에서 만든 결정을 A 판정에 묶을 수 없다(같은 저장소 결정만)
+  const specD = (q, rk) => ({ origin: "implementer", kind: "product", campaignId: CAMP, sourceAsk: "ask-judge-3", targetFp: "", question: q, why: "시험용 이유", noDefault: "구현자가 정할 수 없는 제품 방향 문제라서", choices: [{ key: "keep", label: "유지" }, { key: "change", label: "변경" }], recommend: "keep", repoKey: rk });
+  const dB = CL.openDecision(F.ws, specD("B 저장소의 질문입니까?", B)); const dA = CL.openDecision(F.ws, specD("A 저장소의 질문입니까?", F.repoKey));
+  assert.ok(dB.ok && dA.ok && dB.decisionId !== dA.decisionId, "결정 두 건(B·A 표식) " + JSON.stringify([dB, dA]));
+  assert.ok(CL.addJudgeRequired(F.ws, { askId: "ask-judge-3", campaignId: CAMP, reason: "scope-demoted", repoKey: F.repoKey }));
+  const rM = CL.resolveJudgeRequired(F.ws, "ask-judge-3", "escalate", { note: "다른 저장소 결정으로 올리기 시도", decisionId: dB.decisionId });
+  assert.ok(rM && rM.ok === false && rM.reason === "decision-repo-mismatch", "★B 결정을 A 판정에 결속=거부 " + JSON.stringify(rM));
+  assert.ok(CL.readJudgeRequired(F.ws) && CL.readJudgeRequired(F.ws).items.length === 1, "거부 시 마커 유지");
+  const rOk = CL.resolveJudgeRequired(F.ws, "ask-judge-3", "escalate", { note: "같은 저장소 결정으로 올림", decisionId: dA.decisionId });
+  assert.ok(rOk && rOk.ok === true && rOk.decisionId === dA.decisionId, "같은 저장소(A) 결정=기록 " + JSON.stringify(rOk));
+  assert.ok(cb.includes('"decision-repo-mismatch": tB(') && cb.includes("[저장소 분할 단일 규칙 · escalate 결정 결속(2차 캠페인 2판 blocker·ab-1)]"), "finding-judge/round-judge 결정 저장소 대조 소스 핀");
 });
 
 console.log(`\n결과: ${n} 통과 / 0 실패`);

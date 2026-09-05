@@ -233,7 +233,7 @@
 - 결정: 같은 작업 폴더에서 정찰 대상 저장소를 A→B→A로 오가면, 캠페인 번호·수칙서 세대가 같아도 "누구 것인지"를 캠페인 번호로는 가릴 수 없었다(창 두 개가 같은 캠페인을 이어가면 한 캠페인이 두 저장소에 걸친다). 그래서 지적·등장·종결·승격·처분·판단·결정 행에는 기록 시점(검증은 시작 시점)의 저장소 표식을 심고,
   판 유형·라운드 번호·열린 지적·되받아침·시작 관문·검증자 프롬프트 주입·판단 명령(유효성 표시·fix-gap 누계 포함)·결과에 덧붙는 부가 보고(원인 분해·후보 재료·재심 재료)·수칙 상신(rule-propose)·지도 수확기·정리 제안 신호는 **표식이 일치하는 행만** 읽는다. 업그레이드 이전의 표식 없는 행은 어느 저장소 것인지 모르므로 새 판정에서 제외하고 이력으로만 남긴다(고쳐 쓰지 않음).
 - 왜: 확인검증 4판 연속 반례(2026-09-05) — B 저장소의 통과 판이 A의 판 유형을 바꾸고, B의 열린 지적을 A 통과가 닫고, B의 되받아침이 A의 같은 제목 지적을 강등하고, 옛 무표식 행을 포함하면 그 종결이 다시 생기는 것이 실측됐다. "옛 행은 연속성을 위해 포함"은 저장소 오귀속과 양립하지 않았다.
-- 결과: 업그레이드 직후 진행 중이던 캠페인의 옛 열린 지적은 새 통과 판이 자동으로 닫지 않고, 관문도 그 지적으로 시작을 막지 않는다(사용자 흐름 무중단). 저장소 키를 모르는 경로만 종전 전체 판독으로 축퇴한다.
+- 결과: 업그레이드 직후 진행 중이던 캠페인의 옛 열린 지적은 새 통과 판이 자동으로 닫지 않고, 관문도 그 지적으로 시작을 막지 않는다(사용자 흐름 무중단). 저장소 키를 모르는 경로만 종전 전체 판독으로 축퇴한다. 판단 관문 마커도 검증 시작 저장소를 기억하며, 표식 없는 옛 마커의 판단은 현재 저장소로 꾸며 찍지 않고 "소속 불명" 그대로 남긴다(이력만). 사용자 결정(escalate)은 같은 저장소에서 만든 항목만 묶는다.
 - 정본: bridge/contract-lib.js `function ledgerRowsForRepo` · `function repoKeyNow` · `function appendFindingsLedger` · `function fixGapCount` · `function ruleProposeCandidate` · `function resolveJudgeRequired` · bridge/codex-bridge.js `function machineFindingsLayer` · `function implementerRebuttalsFor` · `function v2DynamicData` · `function findingDispositionGate` · `function breakdownNoticeFor` · bridge/map-provenance.js `function harvestFromResolvedFinding` · docs/CURATION-DESIGN.md `## §9 구현 기록`.
 - 찾는말: 저장소 표식, 장부 분할, 옛 행 제외, 캠페인 번호로 못 가른다, 되받아침 격리, 관문 저장소, 주입 저장소, 창 두 개
 

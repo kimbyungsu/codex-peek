@@ -3781,7 +3781,8 @@ function appendFindingsLedger(ws, recs, opts) {
     // 캠페인 id→저장소 대리 매핑은 창 두 개가 저장소를 바꿔 가며 같은 캠페인을 이어갈 때 무너지므로(확인검증 반례) 행 자체가 소속을 말해야 한다. 판독 실패=미기록(옛 행과 같이 불산입).
     // opts.repoKey=호출자가 아는 '사건 시점' 저장소(검증 시작 스냅샷 등 — 확인검증 blocker: 완료 시점 계약으로 찍으면 대기 중 대상 전환에 오귀속). 없으면 현재 계약.
     let rk9 = (opts && typeof opts.repoKey === "string" && opts.repoKey) ? opts.repoKey : null;
-    if (!rk9) { try { rk9 = constraintRepoKeyFor(ws); } catch { rk9 = null; } }
+    // opts.repoKey === null = "소속 불명"을 호출자가 명시(옛 무키 마커의 판단 행 등): 현재 계약으로 찍지 않고 표식 없이 남긴다(단일 규칙상 이력만·활성 판독 제외 — 오귀속 금지).
+    if (!rk9 && !(opts && opts.repoKey === null)) { try { rk9 = constraintRepoKeyFor(ws); } catch { rk9 = null; } }
     const recs9 = rk9 ? recs.map((r) => (r && typeof r === "object" && r.repoKey === undefined) ? Object.assign({}, r, { repoKey: rk9 }) : r) : recs;
     fs.appendFileSync(file, lead + recs9.map((r) => JSON.stringify(r)).join("\n") + "\n");
     return true;
@@ -5693,21 +5694,29 @@ function resolveJudgeRequired(ws, askId, choice, opts) {
   // 재판(re-verify) 또는 방향 질문(escalate)만. 안 그러면 압축 판의 답이 close-oos 한 번으로 통과 도장이 된다.
   const holdReason = /^(compacted-mid-ask|postflight-unreadable)/.test(String(item.reason || ""));
   if (holdReason && choice === "close-oos") return { ok: false, reason: "choice-not-allowed", allowed: ["re-verify", "escalate"] };
+  const rkJ = String(item.repoKey || ""); // [저장소 분할 단일 규칙] 마커의 저장소 표식 — 기존 판단 조회·새 판단 행 스탬프 모두 이 키
   let decisionId = "";
   if (choice === "escalate") {
     decisionId = String(opts.decisionId || "").trim();
     const d = decisionId ? readDecisions(ws).latest.get(decisionId) : null;
     if (!d) return { ok: false, reason: "decision-required" };
+    // [저장소 분할 단일 규칙 · escalate 결정 결속(2차 캠페인 2판 blocker·ab-1)] 결정 항목의 저장소 표식이 마커의 저장소와 다르면 거부 — A 판단을 B의 사용자 결정에 묶지 않는다.
+    // 마커에 키가 없으면(옛 마커) 표식 있는 결정과는 대조 불가라 거부하고, 표식 없는 결정만 받는다.
+    const dk = String((d && d.repoKey) || "");
+    if (rkJ ? dk !== rkJ : !!dk) return { ok: false, reason: "decision-repo-mismatch", decisionRepoKey: dk, repoKey: rkJ };
   }
   // 복구 멱등(구현 검증 1회차 blocker): 판단 행은 적혔는데 마커 제거 전에 종료됐으면 재실행이 새 행을 또 적지 않는다 —
   // 같은 (campaignId, askId)의 기존 판단이 있으면 같은 선택일 때만 마커 제거로 마무리하고, 다른 선택이면 상충 중복을 거부한다.
-  const rkJ = String(item.repoKey || ""); // [저장소 분할 단일 규칙] 마커의 저장소 표식 — 기존 판단 조회·새 판단 행 스탬프 모두 이 키(빈 값=옛 마커·종전 전체 축퇴)
-  const prev = ledgerRowsForRepo(readFindingsLedger(ws), rkJ).filter((r) => r && r.type === "round-judgment" && r.campaignId === item.campaignId && r.askId === askId).pop();
+  // 옛 무키 마커(업그레이드 이전)=소속 불명(2차 캠페인 2판 blocker·ab-1): 현재 계약 저장소로 찍으면 A 판단이 B 장부에 남는다. 그래서 기존 판단은 표식 없는 행에서만 찾고,
+  // 새 판단 행도 표식 없이(이력만·활성 판독 제외) 기록한다. 마커는 풀린다 — 턴 종료를 막는 장치라 반드시 해소돼야 하며, 귀속을 꾸며 내는 대신 "모른다"를 그대로 남긴다.
+  const rowsJ = rkJ ? ledgerRowsForRepo(readFindingsLedger(ws), rkJ) : readFindingsLedger(ws).filter((r) => r && !r.repoKey);
+  const prev = rowsJ.filter((r) => r && r.type === "round-judgment" && r.campaignId === item.campaignId && r.askId === askId).pop();
   if (prev) {
     if (prev.choice !== choice || String(prev.decisionId || "") !== decisionId) return { ok: false, reason: "already-judged", choice: prev.choice, decisionId: String(prev.decisionId || "") };
   } else {
     const row = { type: "round-judgment", campaignId: item.campaignId, askId, choice, note: note.slice(0, 400), decisionId, reason: item.reason || "", ts: new Date().toISOString() };
-    if (!appendFindingsLedger(ws, [row], rkJ ? { repoKey: rkJ } : undefined)) return { ok: false, reason: "ledger-write-failed" };
+    if (!rkJ) row.repoUnknown = true; // 옛 무키 마커=소속 불명 표시(표식 없는 행 — 이력만)
+    if (!appendFindingsLedger(ws, [row], rkJ ? { repoKey: rkJ } : { repoKey: null })) return { ok: false, reason: "ledger-write-failed" };
   }
   const items = cur.items.filter((x) => x.askId !== askId);
   if (!items.length) { try { fs.unlinkSync(judgeFileFor(ws)); } catch (e) { if (!e || e.code !== "ENOENT") return { ok: false, reason: "marker-remove-failed" }; } return { ok: true, decisionId }; }

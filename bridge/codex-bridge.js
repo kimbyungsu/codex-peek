@@ -3015,6 +3015,7 @@ function cmdRoundJudge(rest) {
     "ledger-write-failed": tB("장부 기록 실패 — 판단이 저장되지 않았습니다(디스크 확인).", "Ledger write failed — judgment not saved."),
     "already-judged": tB(`이 판정엔 이미 판단(${r.choice}${r.decisionId ? " · 결정 " + r.decisionId : ""})이 기록돼 있습니다 — 마커만 남은 상태라면 같은 선택으로 다시 실행하면 정리됩니다. 다른 판단으로 바꾸는 중복 기록은 하지 않습니다.`, `Already judged (${r.choice}${r.decisionId ? " · decision " + r.decisionId : ""}) — rerun with the same choice to clear a leftover marker; conflicting duplicates are refused.`),
     "marker-remove-failed": tB("판단은 기록됐지만 마커 제거에 실패했습니다 — 다시 실행하세요.", "Recorded but the marker could not be removed — rerun."),
+    "decision-repo-mismatch": tB(`escalate 결정 ${val("--decision")}은(는) 다른 저장소의 항목입니다(결정 ${r.decisionRepoKey || "표식 없음"} · 이 판정 ${r.repoKey || "표식 없음"}) — 이 판정의 저장소에서 만든 결정(decisions raise)만 결속할 수 있습니다.`, `escalate decision ${val("--decision")} belongs to another repository (decision ${r.decisionRepoKey || "unmarked"} · this verdict ${r.repoKey || "unmarked"}) — only a decision raised for this verdict's repository can be bound.`),
     "choice-not-allowed": tB("이 보류(검증 도중 압축/기록 판독 불가)는 범위 밖 종결(close-oos)로 닫을 수 없습니다 — re-verify(재검증) 또는 escalate --decision <id> 만 가능합니다.", "This hold (compaction / unreadable record during verification) cannot be closed as out-of-scope — use re-verify or escalate --decision <id>."),
   };
   process.stderr.write((M[r.reason] || tB(`실패(${r.reason})`, `Failed (${r.reason})`)) + "\n");
@@ -3237,6 +3238,11 @@ function cmdFindingJudge(rest) {
   // [CURATION ab-1] 처분·종결 행의 저장소 표식=대상 지적 행의 repoKey(판단 시점 계약이 아님 — 판단 사이 대상 전환 오귀속 차단). 지적 행에 표식이 없으면(옛 행) 관문 기본(현재 계약).
   const rkJ = (() => { // 대상 지적 행=같은 캠페인의 finding 행 중 현재 저장소 표식 우선(같은 id가 두 저장소에 있으면 이 저장소 것)·없으면 마지막 표식 행
     let pick = null; for (const r of ledgerJ) if (r && r.type === "finding" && r.findingId === id && r.campaignId === camp && typeof r.repoKey === "string" && r.repoKey) { pick = r.repoKey; if (r.repoKey === rkCurJ) return r.repoKey; } return pick; })();
+  // [저장소 분할 단일 규칙 · escalate 결정 결속(2차 캠페인 2판 blocker·ab-1)] 결정 항목의 저장소가 이 지적의 저장소(대상 행 표식·없으면 현재 계약)와 다르면 기록하지 않는다 — A 처분을 B의 사용자 결정에 묶지 않는다.
+  if (escDecisionId) {
+    const dE = readDecisions(ws).latest.get(escDecisionId); const dk = String((dE && dE.repoKey) || ""); const tk = String(rkJ || rkCurJ || "");
+    if (tk ? dk !== tk : !!dk) die(tB(`escalate 결정 ${escDecisionId}은(는) 다른 저장소의 항목입니다(결정 ${dk || "표식 없음"} · 이 지적 ${tk || "표식 없음"}) — 이 지적의 저장소에서 만든 결정(decisions raise)만 결속할 수 있습니다. 처분을 기록하지 않았습니다.`, `escalate decision ${escDecisionId} belongs to another repository (decision ${dk || "unmarked"} · this finding ${tk || "unmarked"}) — only a decision raised for this finding's repository can be bound. Judgment NOT recorded.`), 1);
+  }
   // R2 blocker⑤(ab-1): 사건 최상위에 기록 시점 저장소 정체성(repoKey+repoPath) 결속 — 수확기는
   // close 시점의 현재 대상이 아니라 이 값으로 파티션·검증(대상 전환 후에도 A 사건=A 저장소).
   let evRepoTop;
