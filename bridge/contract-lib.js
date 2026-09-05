@@ -5222,6 +5222,11 @@ function readFindingsLedgerState(ws) {
     return { rows, readError: false };
   } catch (e) { return { rows: [], readError: !(e && e.code === "ENOENT") }; }
 }
+// ── [저장소 분할 단일 규칙 · 2026-09-05 확인검증] 지적 장부의 '활성' 판독(판 유형·라운드·열린 지적·되받아침·처분·관문·주입·판단)은 행의 repoKey가
+// 현재(또는 시작 스냅샷) 저장소와 '일치'하는 행만 본다. 표식 없는 옛 행(업그레이드 이전)은 소속 불명이라 새 판정에서 제외되고 이력으로만 남는다(재기록 없음 — ab-5).
+// repoKey를 모르면(빈 값) 필터 없이 종전 전체 판독(안전 축퇴). 큐레이션 신호도 같은 규칙(curation.js).
+function ledgerRowsForRepo(rows, repoKey) { const list = Array.isArray(rows) ? rows : []; if (!(typeof repoKey === "string" && repoKey)) return list; return list.filter((r) => r && r.repoKey === repoKey); }
+function repoKeyNow(ws, cSnap) { try { return repoKeyOf(resolveScoutRepo(ws, cSnap || loadContract(ws)).repo); } catch { return ""; } }
 function dispositionsFor(ws, campaignId) { return dispositionsFromRows(readFindingsLedger(ws), campaignId); }
 function dispositionsFromRows(rows, campaignId) {
   const m = new Map(); // 같은 id 재처분=마지막 기록 우선(append-only 장부의 자연 순서)
@@ -6823,3 +6828,5 @@ module.exports.ENVELOPE_CHAR_MAX = ENVELOPE_CHAR_MAX;
 module.exports.draftCuratorCandidate = draftCuratorCandidate; // [CURATION v3 §3 D] 승인 시 변환
 module.exports.refundVerifyCampaignRound = refundVerifyCampaignRound; // [회차 환급] 답 없는 실패 호출=왕복 아님(유계)
 module.exports.VERIFY_REFUND_MAX = VERIFY_REFUND_MAX;
+module.exports.ledgerRowsForRepo = ledgerRowsForRepo; // [저장소 분할 단일 규칙]
+module.exports.repoKeyNow = repoKeyNow;

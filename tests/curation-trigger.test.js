@@ -312,20 +312,60 @@ t("★반례(확인검증 3판 ab-1) — 검증 결과 처리: 같은 캠페인�
   const old = process.env.CODEX_BRIDGE_ASK_JOB_ID; process.env.CODEX_BRIDGE_ASK_JOB_ID = "ask-mfl-1";
   try {
     assert.strictEqual(CL.writeEnvelopeFreeze(F.ws, CORE_HASH, "ask-mfl-1"), true);
-    // B(다른 저장소 표식)의 통과 판 + 열린 지적 — 같은 캠페인·같은 세대
+    // B(다른 저장소 표식)의 통과 판 + 열린 지적 — 같은 캠페인·같은 세대 · ★그리고 업그레이드 이전 무표식(옛) 통과 판·열린 지적(4판 blocker①): 소속 불명=새 판정에서 제외
     assert.ok(CL.appendFindingsLedger(F.ws, [
       { type: "round", campaignId: CAMP, round: 1, roundType: "discovery", verdict: "pass", envelopeHash: CORE_HASH, repoKey: "0000000000000000", ts },
       { type: "finding", campaignId: CAMP, round: 1, findingId: "f-B", tag: "blocker", titleNorm: "b결함", status: "open", envelopeHash: CORE_HASH, repoKey: "0000000000000000", ts },
     ]));
+    const legacyLines = [
+      JSON.stringify({ type: "round", campaignId: CAMP, round: 1, roundType: "discovery", verdict: "pass", envelopeHash: CORE_HASH, ts }),
+      JSON.stringify({ type: "finding", campaignId: CAMP, round: 1, findingId: "f-legacy", tag: "blocker", titleNorm: "옛결함", status: "open", envelopeHash: CORE_HASH, ts }),
+    ].join(String.fromCharCode(10)) + String.fromCharCode(10);
+    fs.appendFileSync(CL.findingsLedgerFileFor(F.ws), legacyLines); // 관문을 거치지 않고 직접 append=표식 없는 옛 행 흉내
     const answer = "본문" + String.fromCharCode(10) + "[지적 목록 v2]" + String.fromCharCode(10) + "[지적 목록 끝]" + String.fromCharCode(10) + String.fromCharCode(10) + "검증: 통과" + String.fromCharCode(10);
     CB.machineFindingsLayer(answer, F.ws, "ko", "core", "claude-codex", "ask-mfl-1", CAMP, F.repoKey);
     const rows = CL.readFindingsLedger(F.ws);
     const myRound = rows.find((r) => r.type === "round" && r.repoKey === F.repoKey);
     assert.ok(myRound && myRound.round === 1 && myRound.roundType === "discovery", "A 첫 판=discovery·round 1(B 통과 판 미참조) " + JSON.stringify(myRound));
     assert.ok(!rows.some((r) => r.type === "close" && r.findingId === "f-B"), "★B 지적 f-B는 A 판이 닫지 않는다");
+    assert.ok(!rows.some((r) => r.type === "close" && r.findingId === "f-legacy"), "★무표식 옛 지적 f-legacy도 A 판이 닫지 않는다(소속 불명=제외)");
+    assert.ok(rows.filter((r) => r.type === "round" && r.repoKey === F.repoKey).length === 1, "A 판 1건만 기록");
     assert.ok(rows.filter((r) => r.repoKey === F.repoKey).every((r) => r.type !== "finding" || r.findingId !== "f-B"), "A 표식으로 기록된 행에 B 지적 없음");
     const stillOpenB = CL.openFindingsFromRows(rows.filter((r) => r.repoKey === "0000000000000000"), CAMP, CORE_HASH);
     assert.ok(stillOpenB.some((o) => o.id === "f-B"), "B 기준 판독에서 f-B는 여전히 열림");
+  } finally { if (old === undefined) delete process.env.CODEX_BRIDGE_ASK_JOB_ID; else process.env.CODEX_BRIDGE_ASK_JOB_ID = old; }
+});
+
+t("★반례(4판 blocker②) — B 표식의 되받아침(implementer-oos)이 A 입장 심사에서 같은 제목 blocker를 강등하지 않는다 · 검증 주입(v2DynamicData)에 B 열린 지적·되받아침 없음 · 관문·판단 명령도 같은 규칙(소스 핀)", () => {
+  const CB = require("../bridge/codex-bridge.js");
+  const F = fixture("rebut", false);
+  const CAMP = "cl:rebut:1"; const ts = new Date().toISOString();
+  fs.mkdirSync(path.dirname(CL.campaignFileFor(F.ws)), { recursive: true });
+  fs.writeFileSync(CL.campaignFileFor(F.ws), JSON.stringify({ schema: "vcamp-1", campaignId: CAMP, count: 1, budget: 9, startedAt: ts, updatedAt: ts, repoKey: F.repoKey }));
+  const old = process.env.CODEX_BRIDGE_ASK_JOB_ID; process.env.CODEX_BRIDGE_ASK_JOB_ID = "ask-rb-1";
+  try {
+    assert.strictEqual(CL.writeEnvelopeFreeze(F.ws, CORE_HASH, "ask-rb-1", { oos: [{ id: "oos-1", title: "다중 서버 동시 배포" }] }), true);
+    const tn = CL.normBacklogTitle("배포 스크립트가 원격에 무승인 전송한다");
+    assert.ok(CL.appendFindingsLedger(F.ws, [
+      { type: "finding", campaignId: CAMP, round: 1, findingId: "f-Bx", tag: "blocker", titleNorm: tn, title: "배포 스크립트가 원격에 무승인 전송한다", status: "open", envelopeHash: CORE_HASH, repoKey: "0000000000000000", ts },
+      { type: "close", campaignId: CAMP, round: 1, findingId: "f-Bx", closeReason: "implementer-oos", oosId: "oos-1", envelopeHash: CORE_HASH, repoKey: "0000000000000000", ts },
+    ]));
+    // 주입: B의 열린 지적·되받아침이 A(현재 저장소) 프롬프트 재료에 실리지 않는다
+    const dyn = String(CB.v2DynamicData(F.ws, "ko") || "");
+    assert.ok(!dyn.includes("f-Bx") && !dyn.includes("배포 스크립트가 원격에"), "★검증 주입에 B 지적·되받아침 없음: " + dyn.slice(0, 200));
+    // 입장 심사: A 검증자가 같은 제목의 blocker를 제출 — B의 되받아침으로 강등되면 안 됨
+    const NL = String.fromCharCode(10);
+    const answer = ["본문", "[지적 목록 v2]", JSON.stringify({ tag: "blocker", title: "배포 스크립트가 원격에 무승인 전송한다", origin: "baseline", supported: true }), "[지적 목록 끝]", "", "검증: 실패"].join(NL) + NL;
+    CB.machineFindingsLayer(answer, F.ws, "ko", "core", "claude-codex", "ask-rb-1", CAMP, F.repoKey);
+    const rows = CL.readFindingsLedger(F.ws);
+    const mine = rows.filter((r) => r.type === "finding" && r.repoKey === F.repoKey && r.titleNorm === tn);
+    assert.ok(mine.length === 1 && mine[0].tag === "blocker" && !mine[0].demoted, "★A blocker 유지(B 되받아침 미적용) " + JSON.stringify(mine));
+    const cb = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
+    assert.ok(cb.includes("implementerRebuttalsFor(ws, camp, frozen, repoKeySnap)") && cb.includes("function implementerRebuttalsFor(ws, camp, gen, repoKey)"), "되받아침 판독 저장소 결속(소스 핀)");
+    assert.ok(cb.includes('undisposedOpenFindingsFromRows(require("./contract-lib.js").ledgerRowsForRepo(st.rows, require("./contract-lib.js").repoKeyNow(ws)), camp, readFrozenEnvelope(ws))'), "시작 관문=현재 저장소 행만(소스 핀)");
+    assert.ok(cb.includes('const rowsMine = require("./contract-lib.js").ledgerRowsForRepo(rows, rkCurJ);') && cb.includes('dispositionsFromRows(rowsMine, camp)') && (cb.match(/undisposedOpenFindingsFromRows\((rowsMine|require\("\.\/contract-lib\.js"\)\.ledgerRowsForRepo\(readFindingsLedger\(ws\), rkCurJ\)), camp, gen\)\.length/g) || []).length === 2, "finding-judge 처분·잔여·열린 목록=현재 저장소 행만(소스 핀)");
+    const sm = cb.slice(cb.indexOf("const sameRepoM = "), cb.indexOf("\n", cb.indexOf("const sameRepoM = ")));
+    assert.ok(!/repoKey === undefined/.test(sm), "결과 처리 필터=표식 일치만(무표식 포함 조항 제거)");
   } finally { if (old === undefined) delete process.env.CODEX_BRIDGE_ASK_JOB_ID; else process.env.CODEX_BRIDGE_ASK_JOB_ID = old; }
 });
 

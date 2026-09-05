@@ -3125,9 +3125,9 @@ function cmdFindingJudge(rest) {
   const rows = readFindingsLedger(ws);
   // [CURATION ab-1] 열린 목록은 현재 정찰 대상 저장소의 행만(다른 표식 제외·표식 없는 옛 행 호환 포함) — 같은 작업 폴더 타 저장소의 지적을 판단 대상으로 내밀지 않는다.
   const rkCurJ = (() => { try { return repoKeyOf(resolveScoutRepo(ws, loadContract(ws)).repo); } catch { return ""; } })();
-  const rowsMine = rows.filter((r) => !r || !rkCurJ || r.repoKey === undefined || r.repoKey === rkCurJ);
+  const rowsMine = require("./contract-lib.js").ledgerRowsForRepo(rows, rkCurJ); // 표식 일치만(단일 규칙)
   const opens = require("./contract-lib.js").openFindingsFromRows(rowsMine, camp, gen);
-  const disp = dispositionsFor(ws, camp);
+  const disp = require("./contract-lib.js").dispositionsFromRows(rowsMine, camp);
   // [개선 1-A 조회 옵션] --list-oos: 이 판에 동결된 제외 칸 전문(번호+제목)과 결속 상태 — 판정 자리의 재료 줄(≤200자)에서 잘린 항목의 원천
   if (rest.includes("--list-oos")) {
     const fzL = readFrozenEnvelopeRec(ws);
@@ -3155,7 +3155,7 @@ function cmdFindingJudge(rest) {
       const suffix = valid ? tB(" → ", " → ") + (CH[d.choice] || d.choice) : d ? tB(" → 재등장으로 재판단 필요(이전: ", " → re-raised, judge again (was: ") + (CH[d.choice] || d.choice) + ")" : "";
       process.stdout.write(`  ${mark} ${o.id} [${o.tag}] ${String(o.titleNorm || "").slice(0, 60)}${suffix}\n`);
     }
-    const remain = undisposedOpenFindings(ws, camp, gen).length;
+    const remain = require("./contract-lib.js").undisposedOpenFindingsFromRows(rowsMine, camp, gen).length;
     process.stdout.write(remain
       ? tB(`미판단 ${remain}건 — 기록: node codex-bridge.js finding-judge <id> <fix-fact|fix-gap|rebut[ --oos oos-n]|park|escalate> --note "근거"${campFlag ? ` --campaign "${camp}"` : ""}\n`, `${remain} unjudged — record: node codex-bridge.js finding-judge <id> <fix-fact|fix-gap|rebut[ --oos oos-n]|park|escalate> --note "evidence"${campFlag ? ` --campaign "${camp}"` : ""}\n`)
       : tB("전부 판단됨 — 다음 검증을 시작할 수 있습니다.\n", "All judged — the next verification can start.\n"));
@@ -3233,7 +3233,7 @@ function cmdFindingJudge(rest) {
   // asOfRound 결속(1차 blocker①): 이 처분은 '지금까지의 마지막 등장'까지만 유효 — 이후 재등장하면
   // undisposedOpenFindings가 낡은 처분으로 판정해 관문이 다시 닫힌다(재판단 강제).
   const ledgerJ = readFindingsLedger(ws);
-  const asOfRound = findingActivityRound(ledgerJ, camp, id);
+  const asOfRound = findingActivityRound(require("./contract-lib.js").ledgerRowsForRepo(ledgerJ, rkCurJ), camp, id);
   // [CURATION ab-1] 처분·종결 행의 저장소 표식=대상 지적 행의 repoKey(판단 시점 계약이 아님 — 판단 사이 대상 전환 오귀속 차단). 지적 행에 표식이 없으면(옛 행) 관문 기본(현재 계약).
   const rkJ = (() => { // 대상 지적 행=같은 캠페인의 finding 행 중 현재 저장소 표식 우선(같은 id가 두 저장소에 있으면 이 저장소 것)·없으면 마지막 표식 행
     let pick = null; for (const r of ledgerJ) if (r && r.type === "finding" && r.findingId === id && r.campaignId === camp && typeof r.repoKey === "string" && r.repoKey) { pick = r.repoKey; if (r.repoKey === rkCurJ) return r.repoKey; } return pick; })();
@@ -3262,7 +3262,7 @@ function cmdFindingJudge(rest) {
   if (rebutOos) { // 되받아침 효력=범위 밖 강등과 동일: 지적을 '구현자 되받아침' 사유로 닫는다(기록 보존·삭제 없음 — 종결 행은 위 한 번의 쓰기에 포함)
     process.stdout.write(tB(`되받아침: ${id} → 제외 ${rebutOos} 전제(범위 밖) — 검증자가 다시 올리려면 반증(contest)이 필요합니다.\n`, `Rebutted: ${id} → out-of-scope ${rebutOos} — the verifier needs contest evidence to re-raise.\n`));
   }
-  const remain = undisposedOpenFindings(ws, camp, gen).length;
+  const remain = require("./contract-lib.js").undisposedOpenFindingsFromRows(require("./contract-lib.js").ledgerRowsForRepo(readFindingsLedger(ws), rkCurJ), camp, gen).length;
   process.stdout.write(tB(`기록됨: ${id} → ${choice}${parkedId ? ` (보관함 영수증 ${parkedId})` : ""}${disp.has(id) ? " (재판단 — 이전 기록 대체)" : ""}\n남은 미판단 ${remain}건${remain ? "" : " — 다음 검증을 시작할 수 있습니다"}\n`,
                           `Recorded: ${id} → ${choice}${parkedId ? ` (backlog receipt ${parkedId})` : ""}${disp.has(id) ? " (re-judged — supersedes previous)" : ""}\n${remain} unjudged remaining${remain ? "" : " — the next verification can start"}\n`));
   const gaps = fixGapCount(ws, camp);
@@ -3414,7 +3414,7 @@ function findingDispositionGate(ws, durableEnv, langSnap, campSnap) {
   // 5회차 확인 blocker(ab-3): 관문 계산은 위에서 한 번 읽은 st.rows 스냅샷만 쓴다(장부 재판독 0회) — 첫 판독 성공 뒤 후속 판독이 실패해
   // '열린 지적 0'으로 위장되는 경합 차단. 계산 자체가 던지면 미발동이 아니라 차단(알 수 없음=시작 안 함).
   let und = [];
-  try { und = undisposedOpenFindingsFromRows(st.rows, camp, readFrozenEnvelope(ws)); } catch {
+  try { und = undisposedOpenFindingsFromRows(require("./contract-lib.js").ledgerRowsForRepo(st.rows, require("./contract-lib.js").repoKeyNow(ws)), camp, readFrozenEnvelope(ws)); } catch { // [저장소 분할] 관문도 이 저장소 행만(B 지적이 A 시작을 막거나 B 처분이 A 관문을 열지 않게)
     return { proceed: false, exitCode: 3, msg: en
       ? "⚠️ Verification NOT started (no round consumed) — the findings ledger could not be evaluated (unexpected ledger shape). Inspect the ledger file, then retry." + "\n"
       : "⚠️ 검증을 시작하지 않았습니다(왕복 미소모) — 지적 장부를 계산하지 못했습니다(예상 밖 장부 형태). 장부 파일을 점검한 뒤 다시 시작하세요." + "\n" };
@@ -3523,8 +3523,9 @@ function currentCampaignIdFor(ws) {
 // 증분 2 §3.1: 경계 활성 시 v2 서식 요구+열린 지적 자동 동봉. 열린 목록은 하네스가 장부에서 직접 뽑아
 // 주입한다(구현모델이 목록을 선별·누락해 기존 결함을 '신규'로 위장 분류시키는 경로 차단 — 설계 2차 blocker①).
 // [개선 1-B] 캠페인·세대 안에서 구현자가 제외 n번으로 되받아쳐 닫은 지적 목록 — restores=그 계보에서 반증으로 복귀한 횟수(두 번째 복귀=분쟁)
-function implementerRebuttalsFor(ws, camp, gen) {
-  const rows = readFindingsLedger(ws).filter((r) => r && r.campaignId === camp && (r.envelopeHash || null) === (gen || null));
+function implementerRebuttalsFor(ws, camp, gen, repoKey) {
+  // repoKey(선택)=같은 저장소 행만 — 타 저장소의 implementer-oos 종결이 이 저장소 입장 심사에서 같은 제목 blocker를 강등하던 경로 차단(ab-1)
+  const rows = require("./contract-lib.js").ledgerRowsForRepo(readFindingsLedger(ws), repoKey).filter((r) => r && r.campaignId === camp && (r.envelopeHash || null) === (gen || null));
   const finding = new Map(); for (const r of rows) if (r.type === "finding") finding.set(r.findingId, r);
   const out = [];
   for (const r of rows) {
@@ -3616,14 +3617,15 @@ function v2DynamicData(ws, lang) {
     // 규약상 '미인용=신규 취급'이라 그 지적의 이력이 끊긴다. 목록을 누가 고르느냐의 문제이기도 하다 —
     // '구현모델 선별 금지'가 이 자리의 계약이다(거버넌스 증분 2, 검증 7왕복). 비대는 제목 60자 절단으로만
     // 완화한다. 2026-07-30에 상한을 넣으려다 tests/verify-admission.test.js가 이 계약으로 막았다.
-    const opens = openFindingsFor(ws, currentCampaignIdFor(ws), readFrozenEnvelope(ws));
+    const rkV9 = require("./contract-lib.js").repoKeyNow(ws); // [저장소 분할] 주입도 이 저장소 행만(타 저장소 열린 지적·되받아침이 검증자 프롬프트에 실리지 않게)
+    const opens = require("./contract-lib.js").openFindingsFromRows(require("./contract-lib.js").ledgerRowsForRepo(readFindingsLedger(ws), rkV9), currentCampaignIdFor(ws), readFrozenEnvelope(ws));
     if (opens.length) {
       L.push(en ? "[Open findings — cite these ids when re-raising or reporting an incomplete fix (uncited = treated as new)]" : "[열린 지적 — 재지적·미완 수정 보고 시 이 id를 인용하라(미인용=신규 취급)]");
       for (const o of opens) L.push("> " + o.id + " [" + o.tag + "] " + String(o.titleNorm || "").slice(0, 60));
     }
     // [개선 1-B] 구현자가 제외 n번으로 되받아쳐 닫은 지적 — 검증자가 다시 올리려면 반증(contest) 필수. 규칙 문장은 이 목록의 머리줄에만
     // (되받아침이 있을 때만 실림 — 고정 산문 예산 밖·tests/verifier-head CAPS.v2Fixed 준수)
-    const rb = implementerRebuttalsFor(ws, currentCampaignIdFor(ws), readFrozenEnvelope(ws));
+    const rb = implementerRebuttalsFor(ws, currentCampaignIdFor(ws), readFrozenEnvelope(ws), rkV9);
     if (rb.length) {
       L.push(en ? '[Rebutted by the implementer as out-of-scope] Re-raise only with "origin":"boundary-contest" + "prevId" + "contest":"one line of evidence that the problem occurs INSIDE the approved boundary" (20-300 chars, single line) — otherwise it is demoted. Re-submitting the same title under a new id/origin is judged as the same finding.' : '[구현자 되받아침(범위 밖)] 다시 올리려면 "origin":"boundary-contest"+"prevId"+"contest":"승인 범위 안에서도 이 문제가 난다는 근거 한 줄"(20~300자·단일행) 필수 — 없으면 강등된다. 같은 제목을 새 id·다른 origin으로 올려도 같은 지적으로 심사한다.');
       for (const r of rb) L.push("> " + r.findingId + " ← " + r.oosId + (r.title ? " [" + String(r.title).slice(0, 60) + "]" : "") + (r.restores ? (en ? " (restored ×" + r.restores + ")" : " (복귀 " + r.restores + "회)") : ""));
@@ -3804,7 +3806,7 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
   // [CURATION ab-1 · 확인검증 blocker] 결과 행(지적·등장·종결·승격·판)의 저장소 표식=검증 '시작' 스냅샷(호출자 전달). 응답 대기 중 정찰 대상이 바뀌어도 A의 검증 결과는 A 행으로 남는다.
   const appendL = (rows) => appendFindingsLedger(ws, rows, typeof repoKeySnap === "string" && repoKeySnap ? { repoKey: repoKeySnap } : undefined);
   // 판독도 같은 저장소 것만(ab-1 — 확인검증 blocker): 시작 스냅샷 repoKey와 '다른' 표식의 행은 제외. 표식 없는 옛 행은 호환상 포함(업그레이드 직후 진행 중 캠페인의 라운드·열린 지적 연속성).
-  const sameRepoM = (r) => !r || !(typeof repoKeySnap === "string" && repoKeySnap) || r.repoKey === undefined || r.repoKey === repoKeySnap;
+  const sameRepoM = (r) => !(typeof repoKeySnap === "string" && repoKeySnap) ? true : !!(r && r.repoKey === repoKeySnap); // 표식 일치만(옛 무표식 행=소속 불명 → 새 판정에서 제외·이력으로만) — 스냅샷을 모르면 종전 전체
   const ledgerM = () => readFindingsLedger(ws).filter(sameRepoM);
   if (profileSnap !== "core") return { machine: null, notice: "" }; // 기계 판독 계약은 core 경로(무결성=문구 준수 감사 — 정본 §2.1 구현 한정)
   const en = langSnap === "en";
@@ -3864,7 +3866,7 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
     const openList = require("./contract-lib.js").openFindingsFromRows(ledgerM(), camp, frozen); // 2차 미완수정④: 같은 동결 세대의 open만(구세대 id=재지적 인정 금지) · 같은 저장소 행만(ab-1 — A 판이 B 지적을 닫지 않게)
     const openIds = new Set(openList.map((o) => o.id));
     const rebutted9 = new Map(); // [개선 1-B] 되받아친 지적 → {oosId, restores}
-    try { for (const r9 of implementerRebuttalsFor(ws, camp, frozen)) rebutted9.set(r9.findingId, { oosId: r9.oosId, restores: r9.restores, titleNorm: r9.title }); } catch { /* 장부 판독 실패=되받아침 없음으로 심사(강등 방향 아님·기존 규칙만) */ }
+    try { for (const r9 of implementerRebuttalsFor(ws, camp, frozen, repoKeySnap)) rebutted9.set(r9.findingId, { oosId: r9.oosId, restores: r9.restores, titleNorm: r9.title }); } catch { /* 장부 판독 실패=되받아침 없음으로 심사(강등 방향 아님·기존 규칙만) */ }
     const adm = judgeAdmission(parse.findings, roundType, openIds, oosCount, abCount, rebutted9);
     machine.admission = { kept: adm.keptBlockers, demoted: adm.demotedBlockers, roundType };
     effItems = adm.items;

@@ -258,7 +258,7 @@ console.log("[6] 배선 소스 단언 — codex-bridge·캐논·정본");
   ok(cb.includes('cNow.envelopeHash === frozen'), "후처리=파일 세대+현재 계약 도장까지 동결과 3자 일치 시에만 참조 유효(재승인·철회 경합 차단)");
   ok(cb.includes('if (profile === "core") { out9.v2Static = v2StaticDirective(lang); out9.v2Data = v2DynamicData(wsIn, lang); out9.envText += ') && cb.includes('out9.v2Attached = true; }'), "v2 서식 지시절=core 한정+구조적 표지(무결성=문구 준수 감사 — 머리 다이어트 위임 판정 결속)");
   ok(!cb.includes("opens.slice(0, 50)") && !cb.includes("열린 지적 미표시") && cb.includes("for (const o of opens) L.push"), "열린 지적=상한 없이 전부 주입(2차 미완수정③ — 구현모델 의존 복귀 금지·제목 60자 절단으로 비대 완화)");
-  ok(cb.includes("openFindingsFor(ws, currentCampaignIdFor(ws), readFrozenEnvelope(ws))") && cb.includes("openFindingsFromRows(ledgerM(), camp, frozen)"), "주입·심사 양쪽 open 조회=동결 세대 필터(2차 미완수정④)");
+  ok(cb.includes("openFindingsFromRows(require(\"./contract-lib.js\").ledgerRowsForRepo(readFindingsLedger(ws), rkV9), currentCampaignIdFor(ws), readFrozenEnvelope(ws))") && cb.includes("openFindingsFromRows(ledgerM(), camp, frozen)"), "주입·심사 양쪽 open 조회=동결 세대 필터(2차 미완수정④)");
   ok(cb.includes("newFindingId(camp, frozen, roundNo, tn, seq)") && cb.includes("newFindingId(camp, null, roundNo, tn, seq)"), "id 생성=세대 결속(3차 미완수정②)");
   ok(cb.includes("const prevTag = (openList.find((o) => o.id === cited) || {}).tag") && cb.includes("else if (f.tag !== prevTag)"), "재제출 종결=태그가 실제로 바뀐 재분류·강등만 — 같은 태그 재제출=open 유지(3차 신규 실행증거 f-63c42134 침묵 소멸 반영)");
   ok(cb.includes("인용 필수(미인용=면제 없음)") && cb.includes("MUST cite \"abId\""), "v2 지시절=abId 인용 필수 계약(2차 미완수정① — 정본 규칙 0 개정과 정합)");
