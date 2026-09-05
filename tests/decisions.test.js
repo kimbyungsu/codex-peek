@@ -211,7 +211,7 @@ t("소스 핀 — 하네스 자동 생산자 없음(openDecision 호출은 CLI r
   assert.ok(!src.includes('origin: "all-oos-demoted"') && !src.includes("recordAllOosDemotedDecision") && !src.includes("scopeDemotedJudgeNotice"));
   const i = src.indexOf('machine.reasonKey = "scope-demoted";');
   assert.ok(i > 0);
-  assert.ok(src.slice(i, i + 900).includes("out.push(armScopeDemotedJudge(ws, camp, askId, en));"));
+  assert.ok(src.slice(i, i + 900).includes("out.push(armScopeDemotedJudge(ws, camp, askId, en, repoKeySnap));"));
   assert.ok(src.includes('case "decisions":'));
   assert.deepStrictEqual(CL.DECISION_ORIGINS, ["implementer"]);
 });

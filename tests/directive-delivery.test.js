@@ -215,7 +215,7 @@ t("소스 계약 — 이어 쓰기/새 세션 배선 순서·판정 하단 상�
   const iP = src.indexOf("postflightDelivery(link.codexSession, attCarrier, callStartIso9, rolloutFile9);");
   assert.ok(iD > 0 && iW > iD && iR > iW && iC > iR && iP > iC, "resume: delivery input → assemble → pending record → call → postflight");
   assert.ok(src.includes('attCarrier.delivery = { session: "", rolloutFile: "", first: true };') && src.includes("recordDeliveryBeforeCall(id, attCarrier, callStartIso9, rfN, askId, ws); postflightDelivery(id, attCarrier, callStartIso9, rfN);"), "new session: first message + record after id known");
-  assert.ok(src.includes("applyPostflightHold(mfl, attCarrier, ws, askId, campSnap, langSnap);") && src.indexOf("applyPostflightHold(mfl, attCarrier") < src.indexOf("flagVerdict(answer, ws, verifierSession, modeSnap, mfl.machine"), "hold applied before the verdict row is written");
+  assert.ok(src.includes("applyPostflightHold(mfl, attCarrier, ws, askId, campSnap, langSnap, repoKeySnap9);") && src.indexOf("applyPostflightHold(mfl, attCarrier") < src.indexOf("flagVerdict(answer, ws, verifierSession, modeSnap, mfl.machine"), "hold applied before the verdict row is written");
   assert.ok(src.includes("const held9 = postflightHeld(attCarrier);") && src.includes("const proofBind = held9 ? {} : (writeProof(verifierSession, answer, ws) || {});") && src.includes("if (!held9) attempt.proofAccepted();"), "held verdict → no success proof (exit guard sees no proof this turn)");
   const lib = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
   assert.ok(lib.includes('if (holdReason && choice === "close-oos") return { ok: false, reason: "choice-not-allowed"'), "hold markers cannot be closed as out-of-scope");

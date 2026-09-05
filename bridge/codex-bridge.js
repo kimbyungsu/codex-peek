@@ -2979,9 +2979,9 @@ function cmdRulePropose(rest) {
 }
 // [개선 2 · 판단 관문 — 장치화 2026-08-30] 전량 강등 보류 = 구현자 판단이 필요한 상태. 촉구 문장 대신 마커를 걸어 종료 훅이 판단 기록(round-judge)
 // 전에는 턴을 못 끝내게 한다. 사용자 결정은 자동으로 만들지 않는다 — escalate를 고르면 그때 결정 장부 항목(decisions raise)이 있어야 기록된다.
-function armScopeDemotedJudge(ws, camp, askId, en) {
+function armScopeDemotedJudge(ws, camp, askId, en, repoKey) {
   const cmd = `node codex-bridge.js round-judge ${askId || "<askId>"} <close-oos|re-verify|escalate --decision <id>> --note "..."`;
-  const ok = askId ? addJudgeRequired(ws, { askId, campaignId: String(camp || ""), reason: "scope-demoted" }) : false;
+  const ok = askId ? addJudgeRequired(ws, { askId, campaignId: String(camp || ""), reason: "scope-demoted", repoKey: repoKey || "" }) : false; // 시작 스냅샷 저장소 표식(ab-1)
   if (!ok) return en
     ? "[judgment gate NOT armed] (" + (askId ? "marker write failed" : "no askId") + ") — record the judgment manually: " + cmd
     : "[판단 관문 미장전] (" + (askId ? "마커 기록 실패" : "askId 없음") + ") — 관문이 걸리지 않았으니 수동으로 판단을 기록하라: " + cmd;
@@ -3123,7 +3123,7 @@ function cmdFindingJudge(rest) {
   const camp = campFlag || currentCampaignIdFor(ws);
   const gen = readFrozenEnvelope(ws);
   const rows = readFindingsLedger(ws);
-  // [CURATION ab-1] 열린 목록은 현재 정찰 대상 저장소의 행만(다른 표식 제외·표식 없는 옛 행 호환 포함) — 같은 작업 폴더 타 저장소의 지적을 판단 대상으로 내밀지 않는다.
+  // [CURATION ab-1 · 저장소 분할 단일 규칙] 열린 목록·처분·잔여·활동 라운드 전부 현재 정찰 대상 저장소 표식과 일치하는 행만(표식 없는 옛 행=이력·제외) — 같은 작업 폴더 타 저장소의 지적을 판단 대상으로 내밀지 않는다.
   const rkCurJ = (() => { try { return repoKeyOf(resolveScoutRepo(ws, loadContract(ws)).repo); } catch { return ""; } })();
   const rowsMine = require("./contract-lib.js").ledgerRowsForRepo(rows, rkCurJ); // 표식 일치만(단일 규칙)
   const opens = require("./contract-lib.js").openFindingsFromRows(rowsMine, camp, gen);
@@ -3580,12 +3580,12 @@ function postflightDelivery(session, carrier, callStartIso, rolloutFile) {
 // 보류 조건=압축 감지 또는 판독 불가(압축 여부 미상) — 둘 다 '권위 없음'. 이 판의 통과 증명(proof)은 기록되지 않으므로(finishVerifyRun) 종료 훅이
 // 재검증 전 종료를 막고, 판단 관문 마커는 re-verify/escalate로만 풀린다(close-oos 불가 — resolveJudgeRequired).
 function postflightHeld(carrier) { const pf = carrier && carrier.postflight; return !!(pf && (pf.compacted === true || pf.st !== "ok")); }
-function applyPostflightHold(mfl, carrier, ws, askId, camp, lang) {
+function applyPostflightHold(mfl, carrier, ws, askId, camp, lang, repoKey) {
   if (!postflightHeld(carrier)) return false;
   const pf = carrier.postflight; const en = lang === "en";
   const key = pf.compacted === true ? "compacted-mid-ask" : "postflight-unreadable";
   mfl.machine = Object.assign({}, mfl.machine || {}, { effective: "inconclusive", demoted: true, reasonKey: key });
-  const okJ = askId ? addJudgeRequired(ws, { askId, campaignId: String(camp || ""), reason: key }) : false;
+  const okJ = askId ? addJudgeRequired(ws, { askId, campaignId: String(camp || ""), reason: key, repoKey: repoKey || "" }) : false; // 시작 스냅샷 저장소 표식(ab-1)
   const why = pf.compacted === true ? (en ? `verifier memory was compacted during this verification (${pf.ts})` : `검증 도중 검증자 기억 압축 감지(${pf.ts})`) : (en ? "verifier thread record unreadable after the call (compaction unknown)" : "답 수신 뒤 검증자 기록 판독 불가(압축 여부 미상)");
   mfl.notice = String(mfl.notice || "") + (en
     ? `\n[directive delivery · HOLD] ${why} — this verdict has no authority and NO success proof was recorded. The next ask resends the full directives; record your judgment first: node codex-bridge.js round-judge ${askId} re-verify --note "..." (close-oos is not accepted for this hold)${okJ ? "" : " (judgment gate NOT armed — marker write failed; the missing proof still blocks the turn)"}`
@@ -3904,7 +3904,7 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
     try {
       for (const f of adm.items) {
         if (!f.dispute) continue;
-        const okD = askId ? addJudgeRequired(ws, { askId, campaignId: String(camp || ""), reason: "dispute:" + String(f.contestOf || "") }) : false;
+        const okD = askId ? addJudgeRequired(ws, { askId, campaignId: String(camp || ""), reason: "dispute:" + String(f.contestOf || ""), repoKey: repoKeySnap || "" }) : false; // 시작 스냅샷 저장소 표식(ab-1)
         out.push(okD
           ? (en ? "[dispute] " + (f.contestOf || "") + " restored twice — this turn cannot end until the implementer records a judgment: node codex-bridge.js round-judge " + askId + " <close-oos|re-verify|escalate --decision <id>> --note \"...\"" : "[분쟁] " + (f.contestOf || "") + " 계보가 두 번 복귀 — 구현자 판단이 기록되기 전에는 이 턴을 끝낼 수 없다: node codex-bridge.js round-judge " + askId + " <close-oos|re-verify|escalate --decision <id>> --note \"근거\"")
           : (en ? "[dispute] judgment gate NOT armed (marker write failed / no askId) — judge manually" : "[분쟁] 판단 관문 미장전(마커 기록 실패/askId 없음) — 수동으로 판단 기록"));
@@ -3940,7 +3940,7 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
         : "[입장 심사] 남은 blocker가 전부 범위 강등되어 판정을 '보류'로 재산출했습니다 — 선택지: ①범위 밖 수용(종결) ②재심 요청");
       // [개선 2 · 판단 관문 — 장치화 2026-08-30] 하네스는 여기서 사용자 결정을 '만들지 않는다'. 대신 마커를 걸어 종료 훅이 구현자 판단
       // (round-judge: 범위 밖 종결·재검증·escalate=결정 장부 항목 필수)이 기록되기 전에는 턴을 못 끝내게 한다 — 촉구 문장이 아니라 관문.
-      out.push(armScopeDemotedJudge(ws, camp, askId, en));
+      out.push(armScopeDemotedJudge(ws, camp, askId, en, repoKeySnap));
     }
     // 장부 기록(§3.2): round 1건+finding(신규만·강등=즉시 closed)+close(통과 계열=round<N 개설분만·재분류)
     try {
@@ -4213,7 +4213,7 @@ async function cmdAsk(rest) {
     collectScoutTargetEvidence(answer, ws, exec);
     const repoKeySnap9 = (() => { try { return repoKeyOf(resolveScoutRepo(ws, contractSnap).repo); } catch { return ""; } })(); // 검증 시작 스냅샷의 저장소(완료 시점 계약 아님)
     const mfl = machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId, campSnap, repoKeySnap9);
-    applyPostflightHold(mfl, attCarrier, ws, askId, campSnap, langSnap); // [§4-B ②] 검증 도중 압축=판정 권위 없음(보류)+판단 관문
+    applyPostflightHold(mfl, attCarrier, ws, askId, campSnap, langSnap, repoKeySnap9); // [§4-B ②] 검증 도중 압축=판정 권위 없음(보류)+판단 관문
     flagVerdict(answer, ws, verifierSession, modeSnap, mfl.machine, attempt, providerName, askId, attCarrier); // [기억 권위 C-2] askId·동봉 실물 결속
     // [약속 발화 포착 부품 B §2] 검증자 답의 [제약 후보 v1] 회수 — 내구 job의 동결 constraintCtx만 권위.
     // 직접 ask(동결 carrier 없음)=블록 전량 무시+direct-ask 영수증(§2 의식적 한정). best-effort — 실패가 판정 흐름을 막지 않음.

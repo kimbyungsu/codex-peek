@@ -5674,7 +5674,8 @@ function readJudgeRequired(ws) {
 function addJudgeRequired(ws, rec) {
   if (!rec || typeof rec.askId !== "string" || !rec.askId) return false;
   const cur = readJudgeRequired(ws); const items = cur ? cur.items.slice() : [];
-  if (!items.some((x) => x.askId === rec.askId)) items.push({ askId: rec.askId, campaignId: String(rec.campaignId || ""), reason: String(rec.reason || ""), ts: String(rec.ts || new Date().toISOString()) });
+  // [저장소 분할 단일 규칙 · 2차 캠페인 blocker(ab-1)] 마커는 검증 시작 저장소 표식을 기억한다 — 판단(round-judge)이 대상 전환 뒤 실행돼도 판단 행은 그 저장소에 남는다(호출자 미전달=관문 기본).
+  if (!items.some((x) => x.askId === rec.askId)) items.push({ askId: rec.askId, campaignId: String(rec.campaignId || ""), reason: String(rec.reason || ""), repoKey: String(rec.repoKey || constraintRepoKeyFor(ws) || ""), ts: String(rec.ts || new Date().toISOString()) });
   try { fs.mkdirSync(VERIFY_FINDINGS_DIR, { recursive: true }); } catch { /* atomicWrite가 판정 */ }
   return atomicWrite(judgeFileFor(ws), JSON.stringify({ schema: "judge-required-v1", ws: String(ws), items }, null, 1));
 }
@@ -5700,12 +5701,13 @@ function resolveJudgeRequired(ws, askId, choice, opts) {
   }
   // 복구 멱등(구현 검증 1회차 blocker): 판단 행은 적혔는데 마커 제거 전에 종료됐으면 재실행이 새 행을 또 적지 않는다 —
   // 같은 (campaignId, askId)의 기존 판단이 있으면 같은 선택일 때만 마커 제거로 마무리하고, 다른 선택이면 상충 중복을 거부한다.
-  const prev = readFindingsLedger(ws).filter((r) => r && r.type === "round-judgment" && r.campaignId === item.campaignId && r.askId === askId).pop();
+  const rkJ = String(item.repoKey || ""); // [저장소 분할 단일 규칙] 마커의 저장소 표식 — 기존 판단 조회·새 판단 행 스탬프 모두 이 키(빈 값=옛 마커·종전 전체 축퇴)
+  const prev = ledgerRowsForRepo(readFindingsLedger(ws), rkJ).filter((r) => r && r.type === "round-judgment" && r.campaignId === item.campaignId && r.askId === askId).pop();
   if (prev) {
     if (prev.choice !== choice || String(prev.decisionId || "") !== decisionId) return { ok: false, reason: "already-judged", choice: prev.choice, decisionId: String(prev.decisionId || "") };
   } else {
     const row = { type: "round-judgment", campaignId: item.campaignId, askId, choice, note: note.slice(0, 400), decisionId, reason: item.reason || "", ts: new Date().toISOString() };
-    if (!appendFindingsLedger(ws, [row])) return { ok: false, reason: "ledger-write-failed" };
+    if (!appendFindingsLedger(ws, [row], rkJ ? { repoKey: rkJ } : undefined)) return { ok: false, reason: "ledger-write-failed" };
   }
   const items = cur.items.filter((x) => x.askId !== askId);
   if (!items.length) { try { fs.unlinkSync(judgeFileFor(ws)); } catch (e) { if (!e || e.code !== "ENOENT") return { ok: false, reason: "marker-remove-failed" }; } return { ok: true, decisionId }; }

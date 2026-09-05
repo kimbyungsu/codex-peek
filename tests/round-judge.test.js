@@ -198,7 +198,7 @@ t("소스 핀 — Codex 종료 훅(codex-hook)에도 같은 관문·전량 강�
   const guard = fs.readFileSync(GUARD, "utf8");
   assert.ok(guard.includes("judgeRequiredPending(ws)") && guard.includes("residualOk && judgeOk"), "verify-guard pass condition must include judgeOk");
   const src = fs.readFileSync(BRIDGE, "utf8");
-  assert.strictEqual((src.match(/out\.push\(armScopeDemotedJudge\(ws, camp, askId, en\)\);/g) || []).length, 1);
+  assert.strictEqual((src.match(/out\.push\(armScopeDemotedJudge\(ws, camp, askId, en, repoKeySnap\)\);/g) || []).length, 1);
   assert.ok(!src.includes("scopeDemotedJudgeNotice"));
   assert.ok(src.includes('case "round-judge":'));
   assert.deepStrictEqual(CL.JUDGE_CHOICES, ["close-oos", "re-verify", "escalate"]);

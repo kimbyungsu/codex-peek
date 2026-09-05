@@ -397,7 +397,7 @@ process.stdin.on("end", () => {
         : residualWriteFailed // 마커 기록 실패는 상한 안내보다 우선(마감문은 이미 맞게 썼고 저장만 실패 — 재출력 요구)
         ? (en ? `[Residual marker/alert write failed] Your closeout called "Verify now" but the marker or the yellow alert could not be written (disk). Re-emit the same closeout so the write is retried; the turn is not settled until both the marker and the alert exist.` : `[잔여 재검증 마커 기록 실패] 마감문의 "즉시 재검증" 판단(마커 또는 노랑 경보)을 저장하지 못했다(디스크). 같은 마감문을 다시 출력해 저장을 재시도하라 — 마커·경보가 남기 전에는 마감이 인정되지 않는다.`)
         : capReached
-        ? capHandoffInstruction(en ? "en" : "ko", round, (handoffCtx && handoffCtx.verdict) || "not-pass", handoffCtx) // 실제 판정 전달(2026-08-05 이중 실패 봉합 — 하드코딩 not-pass 폐기)
+        ? capHandoffInstruction(en ? "en" : "ko", round, (handoffCtx && handoffCtx.verdict) || "not-pass", handoffCtx, capCloseout && capCloseout.detail) // 실제 판정 전달(2026-08-05 이중 실패 봉합 — 하드코딩 not-pass 폐기)
         : (residual && !residualOk)
         ? (en
           ? `[Residual re-verification pending · actual round ${round}] The previous campaign(s) ${residual.items.map((x) => x.campaignId).join(", ")} closed with the call "Verify now", and those unverified changes have not been verified yet. In this turn start \`node "${BRIDGE}" ask-start --allow-new "[residual re-verification ${residual.items[0].campaignId}] <what to verify>"\` for each pending campaign id — the request text must contain that campaign id verbatim (this binds the pass to the call) — then repeat \`ask-wait <job-id>\` until it passes. Unverified items: ${residual.items.map((x) => `[${x.campaignId}] ${(x.evidence || []).join(" / ") || "(see the closeout)"}`).join(" ‖ ")}`

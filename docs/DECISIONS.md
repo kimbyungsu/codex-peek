@@ -234,5 +234,16 @@
   판 유형·라운드 번호·열린 지적·되받아침·시작 관문·검증자 프롬프트 주입·판단 명령(유효성 표시·fix-gap 누계 포함)·결과에 덧붙는 부가 보고(원인 분해·후보 재료·재심 재료)·수칙 상신(rule-propose)·지도 수확기·정리 제안 신호는 **표식이 일치하는 행만** 읽는다. 업그레이드 이전의 표식 없는 행은 어느 저장소 것인지 모르므로 새 판정에서 제외하고 이력으로만 남긴다(고쳐 쓰지 않음).
 - 왜: 확인검증 4판 연속 반례(2026-09-05) — B 저장소의 통과 판이 A의 판 유형을 바꾸고, B의 열린 지적을 A 통과가 닫고, B의 되받아침이 A의 같은 제목 지적을 강등하고, 옛 무표식 행을 포함하면 그 종결이 다시 생기는 것이 실측됐다. "옛 행은 연속성을 위해 포함"은 저장소 오귀속과 양립하지 않았다.
 - 결과: 업그레이드 직후 진행 중이던 캠페인의 옛 열린 지적은 새 통과 판이 자동으로 닫지 않고, 관문도 그 지적으로 시작을 막지 않는다(사용자 흐름 무중단). 저장소 키를 모르는 경로만 종전 전체 판독으로 축퇴한다.
-- 정본: bridge/contract-lib.js `function ledgerRowsForRepo` · `function repoKeyNow` · `function appendFindingsLedger` · `function fixGapCount` · `function ruleProposeCandidate` · bridge/codex-bridge.js `function machineFindingsLayer` · `function implementerRebuttalsFor` · `function v2DynamicData` · `function findingDispositionGate` · `function breakdownNoticeFor` · bridge/map-provenance.js `function harvestFromResolvedFinding` · docs/CURATION-DESIGN.md `## §9 구현 기록`.
+- 정본: bridge/contract-lib.js `function ledgerRowsForRepo` · `function repoKeyNow` · `function appendFindingsLedger` · `function fixGapCount` · `function ruleProposeCandidate` · `function resolveJudgeRequired` · bridge/codex-bridge.js `function machineFindingsLayer` · `function implementerRebuttalsFor` · `function v2DynamicData` · `function findingDispositionGate` · `function breakdownNoticeFor` · bridge/map-provenance.js `function harvestFromResolvedFinding` · docs/CURATION-DESIGN.md `## §9 구현 기록`.
 - 찾는말: 저장소 표식, 장부 분할, 옛 행 제외, 캠페인 번호로 못 가른다, 되받아침 격리, 관문 저장소, 주입 저장소, 창 두 개
+
+## D-2026-09-06-closeout-reject-reason — 마감문이 되돌아오면 "어느 절·몇 번째 줄·어느 칸이 왜"를 관문이 말해 준다
+- 날짜: 2026-09-06 · 종류: 확정 · 상태: 유효
+- 결정: 검증 상한이 다 찬 뒤 쓰는 마감 보고가 종료 관문에서 두 번 되돌아왔는데, 되돌아온 안내는 매번 "회차 숫자를 쓰면 장부 값 그대로"라는 같은
+  첫 줄만 보여 진짜 이유(한 칸에 파일명 같은 확인 가능한 근거가 없었음)를 알 수 없었고, 구현자가 추측으로 고치다가 결국 검사 함수를 손수 돌려 통과시켰다 —
+  사용자가 "구현자가 배우는 게 아니라 하네스가 그 상황을 만든 것 자체가 문제"라고 지적해, 관문 거부문 첫 줄에 실패한 절·줄·칸과 필요한 조건을
+  그대로 적기로 했다. 구현자의 기억이나 사전 검사 습관에 기대지 않는다.
+- 왜: 사용자 지적 2026-09-06(같은 마감 보고가 화면에 3번 남음). 되돌림은 설계대로였지만 이유 없는 되돌림은 재시도만 늘린다.
+- 결과: 검사기가 첫 실패 지점을 문장으로 돌려주고, Claude·Codex 두 종료 훅의 거부문이 그 문장을 첫 줄에 붙인다. 승인·거부 판정 자체는 바뀌지 않는다.
+- 정본: bridge/verify-cap-handoff.js `function validateCapHandoff` · `function capHandoffInstruction` · `function categoryLines` · tests/cap-closeout-detail.test.js.
+- 찾는말: 마감문 거부, 왜 되돌아왔나, 거부 사유, 마감 관문, 형식 검사, 세 칸 근거, 같은 보고 반복

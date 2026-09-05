@@ -442,4 +442,33 @@ t("★반례(5판 blocker①~④ ab-1) — 남은 활성 판독 4곳도 저장�
   } finally { if (old === undefined) delete process.env.CODEX_BRIDGE_ASK_JOB_ID; else process.env.CODEX_BRIDGE_ASK_JOB_ID = old; }
 });
 
+t("★반례(2차 캠페인 1판 blocker ab-1) — 판단 관문 마커·round-judgment의 저장소 결속: A 검증이 건 마커를 대상이 B로 바뀐 뒤 판단해도 A 표식으로 기록·B의 같은 askId 판단과 섞이지 않음", () => {
+  const F = fixture("judge", false);
+  const CAMP = "cl:judge:1"; const ASK = "ask-judge-1"; const B = "0000000000000000"; const ts = new Date().toISOString();
+  // B 표식의 같은 (캠페인, askId) 판단 행이 먼저 있음(다른 선택) — A 마커 해소가 이를 '이미 판단됨' 상충으로 보면 안 된다
+  assert.ok(CL.appendFindingsLedger(F.ws, [{ type: "round-judgment", campaignId: CAMP, askId: ASK, choice: "close-oos", note: "B 저장소의 판단", decisionId: "", reason: "scope-demoted", ts }], { repoKey: B }));
+  assert.ok(CL.addJudgeRequired(F.ws, { askId: ASK, campaignId: CAMP, reason: "compacted-mid-ask", repoKey: F.repoKey }));
+  const mk = CL.readJudgeRequired(F.ws);
+  assert.ok(mk && mk.items.length === 1 && mk.items[0].repoKey === F.repoKey, "마커가 검증 시작 저장소 표식을 기억 " + JSON.stringify(mk));
+  // 정찰 대상을 B 경로로 전환(현재 계약 저장소 ≠ 마커 저장소)
+  const repoB = fs.mkdtempSync(path.join(os.tmpdir(), "curt-judge-repoB-"));
+  assert.ok(CL.updateContractPatch(F.ws, "ko", { scoutRepo: repoB }).ok);
+  const rkB = CL.repoKeyOf(repoB); assert.notStrictEqual(rkB, F.repoKey);
+  const r = CL.resolveJudgeRequired(F.ws, ASK, "re-verify", { note: "A 판정 재판 요청 — 저장소 결속 시험" });
+  assert.ok(r && r.ok === true, "★B가 현재 대상이어도 A 마커 판단이 기록됨(B 행과 상충 오판 없음) " + JSON.stringify(r));
+  const rows = CL.readFindingsLedger(F.ws).filter((x) => x.type === "round-judgment" && x.askId === ASK);
+  const mine = rows.filter((x) => x.repoKey === F.repoKey);
+  assert.ok(mine.length === 1 && mine[0].choice === "re-verify", "★판단 행=마커의 A 표식(현재 계약 B 아님) " + JSON.stringify(rows));
+  assert.ok(!rows.some((x) => x.repoKey === rkB), "현재 계약 B 표식으로 기록된 판단 행 없음");
+  assert.strictEqual(CL.readJudgeRequired(F.ws), null, "마커 제거됨");
+  // 호출자 미전달 축퇴: repoKey 없이 마커를 걸면 관문 기본(현재 계약 저장소)으로 채운다
+  assert.ok(CL.addJudgeRequired(F.ws, { askId: "ask-judge-2", campaignId: CAMP, reason: "scope-demoted" }));
+  assert.strictEqual(CL.readJudgeRequired(F.ws).items[0].repoKey, rkB, "미전달=현재 계약 저장소(관문 스탬프와 동형)");
+  // 소스 핀: 마커를 만드는 세 곳이 검증 시작 스냅샷 키를 넘긴다
+  const cb = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
+  assert.ok(cb.includes('reason: "scope-demoted", repoKey: repoKey || ""') && cb.includes("armScopeDemotedJudge(ws, camp, askId, en, repoKeySnap)"), "전량 강등 마커=시작 스냅샷 키");
+  assert.ok(cb.includes("applyPostflightHold(mfl, attCarrier, ws, askId, campSnap, langSnap, repoKeySnap9);") && cb.includes('reason: key, repoKey: repoKey || ""'), "압축 보류 마커=시작 스냅샷 키");
+  assert.ok(cb.includes('reason: "dispute:" + String(f.contestOf || ""), repoKey: repoKeySnap || ""'), "분쟁 마커=시작 스냅샷 키");
+});
+
 console.log(`\n결과: ${n} 통과 / 0 실패`);

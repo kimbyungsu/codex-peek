@@ -168,77 +168,99 @@ function machineEvidence(value) {
 
 // 첫 네 절은 한 항목=한 줄이다. 최신 집합 밖 키나 키 없는 임의 질문을 덧붙여 held를 만드는 우회를
 // 막고, 수용·반박의 근거 필드 및 보관함 영수증을 해당 지적과 같은 줄에 결속한다.
+// [마감 관문 거부 사유 · 2026-09-06 확인검증 보완(사용자 지적)] 검사기는 첫 실패 지점을 문장으로 남긴다 — 종료 훅 거부문이 어느 절·몇 번째 줄·어느 칸이
+// 왜 실패했는지 그대로 전달해, 구현자가 추측 수정을 반복하거나 검사기를 직접 돌려 보지 않아도 1회로 고칠 수 있게 한다(하네스 몫 — 구현자 기억에 기대지 않음).
+// 단일 스레드 동기 검사라 모듈 변수 하나로 충분하며 validateCapHandoff가 스키마 시도마다 비운다.
+let lastWhy = "";
+function failWhy(msg) { if (!lastWhy) lastWhy = String(msg || ""); return false; }
 function categoryLines(schema, rawBodies, context) {
   const required = requiredEvidence(context);
   const allowed = new Set(required.map((e) => String(e.key).toLowerCase()));
   const byKey = new Map(required.map((e) => [String(e.key).toLowerCase(), e]));
   const seen = new Set();
+  const en = schema.lang === "en";
+  const S = schema.sections;
+  const cellNames = en ? [["Change", "Check", "Evidence"], ["Observation", "Reason", "Evidence"]] : [["변경", "확인", "근거"], ["관측", "이유", "근거"]];
+  const evidenceHint = en
+    ? "needs a self-identifying fact (a file path with extension, a `backtick` identifier, a number with a unit, or a test:/config:/symbol: key)"
+    : "스스로 확인 가능한 근거가 필요(확장자 있는 파일 경로·`백틱` 식별자·숫자+단위·시험:/설정:/심볼: 키 중 하나)";
   for (let lane = 0; lane < 3; lane++) {
     const raw = String(rawBodies[lane] || "").trim();
     if (isNone(schema, raw)) continue;
     const lines = raw.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
-    if (!lines.length) return false;
-    for (const line of lines) {
+    if (!lines.length) return failWhy(en ? `${S[lane]} is empty (write items or "none")` : `${S[lane]} 절이 비었음(항목을 쓰거나 "없음")`);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const where = en ? `${S[lane]} line ${i + 1}` : `${S[lane]} ${i + 1}번째 줄`;
       const m = /^-\s*(EVIDENCE-UNAVAILABLE|R\d+-F\d+)\b/i.exec(line);
-      if (!m) return false;
+      if (!m) return failWhy(en ? `${where}: must start with "- <key>" (R<n>-F<m>)` : `${where}: "- <키>"(R<n>-F<m>)로 시작해야 함`);
       const key = m[1].toLowerCase();
       // 문맥이 '있는데' 허용 목록이 비면(요구 근거 0 — passNoFindings) 어떤 키도 인정하지 않는다
       // (재확인 blocker②: 빈 목록=무사통과가 허구 지적·가짜 사용자 판단을 승인하던 구멍).
       // 문맥 없는 호출(형식 전용 검사)은 종전대로 키 목록을 강제하지 않는다(기존 계약 무회귀).
-      if ((context ? (!allowed.size || !allowed.has(key)) : false) || seen.has(key)) return false;
+      if (context ? (!allowed.size || !allowed.has(key)) : false) return failWhy(en ? `${where}: key ${m[1]} is not in the latest evidence list` : `${where}: 키 ${m[1]}가 이번 근거 목록에 없음`);
+      if (seen.has(key)) return failWhy(en ? `${where}: key ${m[1]} is assigned in more than one place` : `${where}: 키 ${m[1]}가 두 곳 이상에 배정됨`);
       seen.add(key);
       const evidence = byKey.get(key);
-      if (evidence && evidence.title && countNeedle(line, evidence.title) !== 1) return false;
-      if (lane === 0) {
-        const f = schema.lang === "en" ? /\bChange\s*:\s*(.+?)\s*;\s*Check\s*:\s*(.+?)\s*;\s*Evidence\s*:\s*(.+)$/i.exec(line) : /변경\s*:\s*(.+?)\s*;\s*확인\s*:\s*(.+?)\s*;\s*근거\s*:\s*(.+)$/i.exec(line);
-        if (!f || !machineEvidence(f[1]) || !machineEvidence(f[2]) || !machineEvidence(f[3])) return false;
-      } else if (lane === 1) {
-        const f = schema.lang === "en" ? /\bObservation\s*:\s*(.+?)\s*;\s*Reason\s*:\s*(.+?)\s*;\s*Evidence\s*:\s*(.+)$/i.exec(line) : /관측\s*:\s*(.+?)\s*;\s*이유\s*:\s*(.+?)\s*;\s*근거\s*:\s*(.+)$/i.exec(line);
-        if (!f || !machineEvidence(f[1]) || !machineEvidence(f[2]) || !machineEvidence(f[3])) return false;
+      if (evidence && evidence.title && countNeedle(line, evidence.title) !== 1) return failWhy(en ? `${where}: the exact finding title must appear once (${m[1]})` : `${where}: 지적 제목 원문이 정확히 1회 있어야 함(${m[1]})`);
+      if (lane === 0 || lane === 1) {
+        const f = lane === 0
+          ? (en ? /\bChange\s*:\s*(.+?)\s*;\s*Check\s*:\s*(.+?)\s*;\s*Evidence\s*:\s*(.+)$/i.exec(line) : /변경\s*:\s*(.+?)\s*;\s*확인\s*:\s*(.+?)\s*;\s*근거\s*:\s*(.+)$/i.exec(line))
+          : (en ? /\bObservation\s*:\s*(.+?)\s*;\s*Reason\s*:\s*(.+?)\s*;\s*Evidence\s*:\s*(.+)$/i.exec(line) : /관측\s*:\s*(.+?)\s*;\s*이유\s*:\s*(.+?)\s*;\s*근거\s*:\s*(.+)$/i.exec(line));
+        const names = cellNames[lane];
+        if (!f) return failWhy(en ? `${where} (${m[1]}): not in the "${names[0]}: …; ${names[1]}: …; ${names[2]}: …" three-cell form` : `${where}(${m[1]}): "${names[0]}: …; ${names[1]}: …; ${names[2]}: …" 세 칸 형식이 아님`);
+        for (let c = 0; c < 3; c++) if (!machineEvidence(f[c + 1])) return failWhy(en ? `${where} (${m[1]}): cell "${names[c]}" ${evidenceHint}` : `${where}(${m[1]}): '${names[c]}' 칸 — ${evidenceHint}`);
       } else if (lane === 2 && context) {
-        if (!context.backlogHealthy) return false;
+        if (!context.backlogHealthy) return failWhy(en ? `${where}: the backlog ledger is unreadable, so parking cannot be accepted` : `${where}: 보관함 장부를 읽을 수 없어 이관을 인정할 수 없음`);
         const idm = /\b[a-f0-9]{16}\b/i.exec(line);
         const item = idm && Array.isArray(context.backlogItems)
           ? context.backlogItems.find((x) => String(x.id).toLowerCase() === idm[0].toLowerCase()) : null;
-        if (!item || !evidence || normBacklogTitle(item.title).toLowerCase() !== normBacklogTitle(evidence.title).toLowerCase()) return false;
+        if (!item || !evidence || normBacklogTitle(item.title).toLowerCase() !== normBacklogTitle(evidence.title).toLowerCase()) return failWhy(en ? `${where}: needs the real 16-hex receipt id of an open backlog item whose title equals this finding (run backlog add first)` : `${where}: 이 지적과 같은 제목으로 열린 보관함 항목의 실제 16자리 영수증 id가 필요(먼저 backlog add)`);
       }
     }
   }
   // 네 번째 절(결정 블록) 안에 인용된 지적 키 = 그 지적의 행선지(escalate). 최신 집합 밖 키·중복은 거부.
   for (const m of String(rawBodies[3] || "").matchAll(/\b(R\d+-F\d+)\b/g)) {
     const key = m[1].toLowerCase();
-    if ((context ? (!allowed.size || !allowed.has(key)) : false) || seen.has(key)) return false;
+    if (context ? (!allowed.size || !allowed.has(key)) : false) return failWhy(en ? `${S[3]}: key ${m[1]} is not in the latest evidence list` : `${S[3]}: 키 ${m[1]}가 이번 근거 목록에 없음`);
+    if (seen.has(key)) return failWhy(en ? `${S[3]}: key ${m[1]} is already assigned in another section` : `${S[3]}: 키 ${m[1]}가 다른 절에 이미 배정됨`);
     seen.add(key);
   }
-  return !allowed.size || seen.size === allowed.size;
+  if (allowed.size && seen.size !== allowed.size) {
+    const missing = required.filter((e) => !seen.has(String(e.key).toLowerCase())).map((e) => e.key);
+    return failWhy(en ? `every evidence key needs exactly one destination — unassigned: ${missing.join(", ")}` : `모든 지적 키에 행선지가 정해져야 함 — 미배정: ${missing.join(", ")}`);
+  }
+  return true;
 }
 
 function meaningfulSections(schema, rawBodies, context) {
   if (!Array.isArray(rawBodies) || rawBodies.length !== 7) return null;
+  const en = schema.lang === "en";
+  const S = schema.sections;
   const b = rawBodies.map(normBody), joined = b.join("\n").toLowerCase();
   const filler = /^(?:placeholder(?: content)?(?: here)?|lorem ipsum|tbd|todo|fill(?: this)?(?: in)?|내용(?:을)?\s*(?:입력|작성)|여기에\s*내용(?:을)?\s*(?:입력|작성))[.!?]*$/i;
-  if (b.some((x) => !x || filler.test(x))) return null;
-  if (ECHO_MARKERS[schema.lang].some((m) => joined.includes(m))) return null;
+  for (let i = 0; i < b.length; i++) if (!b[i] || filler.test(b[i])) { failWhy(en ? `${S[i]} is empty or placeholder text` : `${S[i]} 절이 비었거나 자리표시자 문구`); return null; }
+  if (ECHO_MARKERS[schema.lang].some((m) => joined.includes(m))) { failWhy(en ? "the closeout repeats the hook's instruction text instead of giving a judgment" : "마감문이 훅 안내문을 되풀이함(판단이 아님)"); return null; }
   if (!categoryLines(schema, rawBodies, context)) return null;
 
   const accepted = !isNone(schema, b[0]);
   const rebutted = !isNone(schema, b[1]);
   const parked = !isNone(schema, b[2]);
   const needsUserDecision = !isNone(schema, b[3]);
-  if (schema.lang === "en") {
-    if (accepted && !(b[0].length >= 28 && /fixed|implemented|changed|removed|completed|handled|tested|confirmed|evidence/i.test(b[0]))) return null;
-    if (rebutted && !(b[1].length >= 36 && /because|reason|rebut|counterexample|measured|reproduced|test|evidence|observed/i.test(b[1]))) return null;
-    if (parked && !(b[2].length >= 30 && /\b[a-f0-9]{16}\b/i.test(b[2]) && /receipt|park|backlog|caution/i.test(b[2]))) return null;
-    if (needsUserDecision && !decisionBlocksOk(schema, rawBodies[3], context).ok) return null;
-    if (!/alert|red|yellow/i.test(b[5]) || !/pass|certif|clear|remain|ignore|acknowledge|later/i.test(b[5])) return null;
-    if (b[6].length < 20 || !/recommend|recommended|because|reason|therefore|no user decision/i.test(b[6])) return null;
+  if (en) {
+    if (accepted && !(b[0].length >= 28 && /fixed|implemented|changed|removed|completed|handled|tested|confirmed|evidence/i.test(b[0]))) { failWhy(`${S[0]}: too short or lacks a completion verb (fixed/changed/tested/confirmed…)`); return null; }
+    if (rebutted && !(b[1].length >= 36 && /because|reason|rebut|counterexample|measured|reproduced|test|evidence|observed/i.test(b[1]))) { failWhy(`${S[1]}: too short or lacks reason/counterexample/measurement wording`); return null; }
+    if (parked && !(b[2].length >= 30 && /\b[a-f0-9]{16}\b/i.test(b[2]) && /receipt|park|backlog|caution/i.test(b[2]))) { failWhy(`${S[2]}: needs a 16-hex receipt id and receipt/backlog wording`); return null; }
+    if (needsUserDecision && !decisionBlocksOk(schema, rawBodies[3], context).ok) { failWhy(`${S[3]}: only rendered decision-ledger blocks are accepted (decisions render output verbatim) — prose questions are refused`); return null; }
+    if (!/alert|red|yellow/i.test(b[5]) || !/pass|certif|clear|remain|ignore|acknowledge|later/i.test(b[5])) { failWhy(`${S[5]}: must mention the alert/colour and whether it is a pass/cleared/remains`); return null; }
+    if (b[6].length < 20 || !/recommend|recommended|because|reason|therefore|no user decision/i.test(b[6])) { failWhy(`${S[6]}: needs a recommendation with a reason (20+ chars)`); return null; }
   } else {
-    if (accepted && !(b[0].length >= 20 && /수정|구현|변경|제거|완료|처리|시험|테스트|확인|근거/i.test(b[0]))) return null;
-    if (rebutted && !(b[1].length >= 24 && /때문|이유|반박|반례|측정|재현|시험|테스트|근거|확인/i.test(b[1]))) return null;
-    if (parked && !(b[2].length >= 22 && /\b[a-f0-9]{16}\b/i.test(b[2]) && /영수증|보관함|백로그|주의|이관/i.test(b[2]))) return null;
-    if (needsUserDecision && !decisionBlocksOk(schema, rawBodies[3], context).ok) return null;
-    if (!/경고|빨강|노랑/i.test(b[5]) || !/통과|인증|해소|남|무시|확인|나중/i.test(b[5])) return null;
-    if (b[6].length < 16 || !/권장|추천|때문|이유|따라서|사용자 판단 없/i.test(b[6])) return null;
+    if (accepted && !(b[0].length >= 20 && /수정|구현|변경|제거|완료|처리|시험|테스트|확인|근거/i.test(b[0]))) { failWhy(`${S[0]}: 20자 이상·처리 동사(수정·변경·시험·확인 등)가 필요`); return null; }
+    if (rebutted && !(b[1].length >= 24 && /때문|이유|반박|반례|측정|재현|시험|테스트|근거|확인/i.test(b[1]))) { failWhy(`${S[1]}: 24자 이상·반례·이유·측정 등 근거 어휘가 필요`); return null; }
+    if (parked && !(b[2].length >= 22 && /\b[a-f0-9]{16}\b/i.test(b[2]) && /영수증|보관함|백로그|주의|이관/i.test(b[2]))) { failWhy(`${S[2]}: 16자리 영수증 id와 영수증/보관함/백로그 어휘가 필요`); return null; }
+    if (needsUserDecision && !decisionBlocksOk(schema, rawBodies[3], context).ok) { failWhy(`${S[3]}: 결정 장부 렌더 블록만 인정(decisions render 출력 그대로) — 산문 질문은 거부`); return null; }
+    if (!/경고|빨강|노랑/i.test(b[5]) || !/통과|인증|해소|남|무시|확인|나중/i.test(b[5])) { failWhy(`${S[5]}: 경고 키·색 언급과 '통과 아님/해소/남음' 표현이 필요`); return null; }
+    if (b[6].length < 16 || !/권장|추천|때문|이유|따라서|사용자 판단 없/i.test(b[6])) { failWhy(`${S[6]}: 16자 이상·권장과 이유 표현이 필요`); return null; }
   }
   // [잔여 위험 판단 2026-08-29] 상한 소진 뒤 "검증자가 못 본 마지막 수정분"을 어떻게 볼지는 구현자가 판단해야 한다(사용자 실보고:
   // 사실 적시만 있고 판단이 없었음 = 하네스 구조 결함). 절은 셋 중 하나로 시작하고 이유를 달아야 한다:
@@ -246,15 +268,15 @@ function meaningfulSections(schema, rawBodies, context) {
   //   다음 캠페인 도장 — 미검증분이 국소·회귀 시험으로 덮여 다음 작업의 첫 검증에 동승
   //   무시 가능 — 미검증 수정이 없거나 문구·주석뿐(이유에 그 사실)
   const rr = b[4];
-  const rrKind = schema.lang === "en"
+  const rrKind = en
     ? (/^verify now\b/i.test(rr) ? "now" : /^next campaign\b/i.test(rr) ? "next" : /^ignorable\b/i.test(rr) ? "ignore" : null)
     : (/^즉시 재검증/.test(rr) ? "now" : /^다음 캠페인 도장/.test(rr) ? "next" : /^무시 가능/.test(rr) ? "ignore" : null);
-  if (!rrKind) return null;
-  if (schema.lang === "en" ? !(rr.length >= 30 && /reason\s*:/i.test(rr)) : !(rr.length >= 20 && /이유\s*:/.test(rr))) return null;
-  if (rrKind === "now" && (schema.lang === "en" ? !/verif/i.test(b[6]) : !/검증/.test(b[6]))) return null; // 즉시 재검증이면 권장도 새 검증을 말해야 한다
+  if (!rrKind) { failWhy(en ? `${S[4]}: must start with "Verify now" / "Next campaign" / "Ignorable"` : `${S[4]}: "즉시 재검증"/"다음 캠페인 도장"/"무시 가능" 중 하나로 시작해야 함`); return null; }
+  if (en ? !(rr.length >= 30 && /reason\s*:/i.test(rr)) : !(rr.length >= 20 && /이유\s*:/.test(rr))) { failWhy(en ? `${S[4]}: needs "reason:" and 30+ chars` : `${S[4]}: "이유:"와 20자 이상이 필요`); return null; }
+  if (rrKind === "now" && (en ? !/verif/i.test(b[6]) : !/검증/.test(b[6]))) { failWhy(en ? `${S[6]}: "Verify now" requires the recommendation to name a new verification` : `${S[6]}: 즉시 재검증이면 권장 절도 새 검증을 말해야 함`); return null; } // 즉시 재검증이면 권장도 새 검증을 말해야 한다
   // 검증자 답을 읽지 못한 마감(P5②): 사용자 판단이 아니라 재검증 판단 — 잔여 위험 절이 그 사실(EVIDENCE-UNAVAILABLE)을 담고 '무시 가능'일 수 없다.
-  if (context && context.unavailable && (rrKind === "ignore" || !/EVIDENCE-UNAVAILABLE/.test(rr))) return null;
-  if (context && context.alertKind && !b[5].toLowerCase().includes(String(context.alertKind).toLowerCase())) return null;
+  if (context && context.unavailable && (rrKind === "ignore" || !/EVIDENCE-UNAVAILABLE/.test(rr))) { failWhy(en ? `${S[4]}: when the verifier answer could not be read, write "Verify now — reason: EVIDENCE-UNAVAILABLE …"` : `${S[4]}: 검증자 답을 읽지 못한 마감은 "즉시 재검증 — 이유: EVIDENCE-UNAVAILABLE …"로 써야 함`); return null; }
+  if (context && context.alertKind && !b[5].toLowerCase().includes(String(context.alertKind).toLowerCase())) { failWhy(en ? `${S[5]}: must contain the current alert key "${context.alertKind}" verbatim` : `${S[5]}: 현재 경고 키 "${context.alertKind}"를 그대로 포함해야 함`); return null; }
   const dcount = needsUserDecision ? (decisionBlocksOk(schema, rawBodies[3], context).count || 0) : 0;
   return { needsUserDecision, decisionCount: dcount, residualRisk: rrKind };
 }
@@ -278,27 +300,36 @@ function roundFigureMismatch(text, context) {
 
 function validateCapHandoff(text, context) {
   const s = String(text || "");
+  let detail = "";
   for (const schema of SCHEMAS) {
     const headAt = s.lastIndexOf(schema.head);
     if (headAt < 0) continue;
     const candidate = s.slice(headAt);
     const marks = [schema.head, ...schema.sections];
     const at = marks.map((m) => candidate.indexOf(m));
-    if (at.some((n) => n < 0) || at.some((n, i) => i > 0 && n <= at[i - 1])) continue;
+    if (at.some((n) => n < 0) || at.some((n, i) => i > 0 && n <= at[i - 1])) {
+      const missing = marks.filter((m, i) => at[i] < 0);
+      if (!detail) detail = schema.lang === "en"
+        ? (missing.length ? `section title missing: ${missing.join(" ")}` : "section titles are out of order")
+        : (missing.length ? `절 제목 누락: ${missing.join(" ")}` : "절 제목 순서가 틀림");
+      continue;
+    }
     const bodies = [];
     for (let i = 1; i < marks.length; i++) {
       const start = at[i] + marks[i].length;
       const end = i + 1 < marks.length ? at[i + 1] : candidate.length;
       bodies.push(candidate.slice(start, end).trim());
     }
+    lastWhy = "";
     const result = meaningfulSections(schema, bodies, context);
-    if (result && roundFigureMismatch(candidate, context)) return { ok: false, lang: schema.lang, missing: ["round-figure-mismatch"], needsUserDecision: false, decisionCount: 0 }; // [P10] 머리 포함 전체
+    if (result && roundFigureMismatch(candidate, context)) return { ok: false, lang: schema.lang, missing: ["round-figure-mismatch"], needsUserDecision: false, decisionCount: 0, detail: schema.lang === "en" ? `a round figure in the closeout differs from the ledger's actual value (${context.roundCount}/${context.roundBudget})` : `마감문의 회차 숫자가 장부 실제값(${context.roundCount}/${context.roundBudget})과 다름` }; // [P10] 머리 포함 전체
     if (result) return { ok: true, lang: schema.lang, missing: [], ...result };
+    if (lastWhy) detail = lastWhy;
   }
-  return { ok: false, lang: null, missing: ["cap-closeout-sections"], needsUserDecision: false, decisionCount: 0 };
+  return { ok: false, lang: null, missing: ["cap-closeout-sections"], needsUserDecision: false, decisionCount: 0, ...(detail ? { detail } : {}) };
 }
 
-function capHandoffInstruction(lang, round, verdict, context) {
+function capHandoffInstruction(lang, round, verdict, context, detail) {
   const ctx = context && typeof context === "object" ? context : { evidence: [], alertKind: "verify-handoff-missing", source: "unavailable", unavailable: true };
   // 실제 판정 우선(2026-08-05 이중 실패 봉합): 호출자가 넘긴 값보다 문맥에 동봉된 판독 결과가 정본 —
   // 하드코딩 "not-pass"가 통과를 덮어쓰던 거짓 전달 차단. 라벨은 판정 표지 어휘 그대로.
@@ -312,9 +343,11 @@ function capHandoffInstruction(lang, round, verdict, context) {
   else if (ctx.unavailable || !evidenceLines.length) evidenceLines.push("- EVIDENCE-UNAVAILABLE (the latest verification findings could not be read completely)");
   const evidence = evidenceLines.join("\n");
   const roundNote = lang === "en" ? ` If you quote a round figure, it must be the ledger's actual value (${round}).` : ` 회차 숫자를 쓰면 장부 실제값(${round}) 그대로여야 합니다.`;
-  if (lang === "en") return roundNote + "\n" + `[Verify mode · actual round ${round}] The verification-call cap is exhausted and there is no pass proof bound to this turn (last verdict: ${vEn}). Do not start another verification job. Re-judge only the latest findings below and write one closeout using the exact headings. Put each evidence item in exactly one of the first four sections. The Stop hook accepts the closeout only when every item has one destination.\nLatest evidence (${ctx.source || "unavailable"}):\n${evidence}\nExpected dashboard alert key: ${ctx.alertKind || "verify-handoff-missing"}\n\n[Verification cap closeout]\n[Accepted and handled]\nOne item per line: - <key> <exact title> — Change: <specific change containing a file, backticked identifier, test/setting key, or measured value>; Check: <specific result with one of those anchors>; Evidence: <one of those anchors again>. Every field needs its own anchor. Write None if empty.\n[Rebutted and closed]\nOne item per line: - <key> <exact title> — Observation: <counterexample with its own anchor>; Reason: <closing reason with its own anchor>; Evidence: <one anchor again>. Every field needs its own anchor. Write None if empty.\n[Parked]\nOne item per line. Park only after backlog add with the exact finding title; include that open item's real 16-hex receipt id. Write None if empty.\n[User decision required]\nOnly open items of the decision ledger, pasted from \`node codex-bridge.js decisions render\` (block: - Decision <id>: <question> / Why: / Why the implementer cannot decide: / Option 1 (key): … — if chosen: … / Option 2 … / Recommended: / Answer: …). Use user decision required only for a boundary, product-direction, risk-acceptance, or external choice the implementer cannot decide — create it first with decisions raise and record it with finding-judge/round-judge escalate --decision <id>; a finding escalated this way is cited inside its block by key. Prose questions are rejected. If the only evidence line above is PASS-NO-FINDINGS, write None in all four sections. Write None if empty; do not invent a user question. EVIDENCE-UNAVAILABLE (the verifier's answer could not be read) is NOT a user decision — put it in [Residual risk call] as "Verify now — Reason: EVIDENCE-UNAVAILABLE …" (request the findings format again).\n[Residual risk call]\nOne line that starts with exactly one of these three, then Reason: — "Verify now" (the unverified edits touch a boundary, integrity, or data: start a new verification campaign in this turn and say so in Recommendation), "Next campaign" (local edits covered by regression tests: stamp them in the next campaign's first verification), "Ignorable" (no unverified code change, wording only).\n[Alert meaning]\nInclude the expected alert key verbatim. Explain whether the remaining red/yellow alert needs user action and that this closeout is not a verification pass.\n[Recommendation]\nRecommend one next action, or explicitly say no user decision is needed. Do not split this into several questions.`;
+  // [거부 사유 명시 · 2026-09-06] 직전 마감문이 검사에서 왜 거부됐는지(절·줄·칸·이유)를 첫 줄에 — 검사기(validateCapHandoff)의 detail 그대로. 없으면 종전과 같은 안내.
+  const whyLine = (typeof detail === "string" && detail.trim()) ? (lang === "en" ? `[Why the previous closeout was rejected] ${detail.trim()}\n` : `[직전 마감문 거부 사유] ${detail.trim()}\n`) : "";
+  if (lang === "en") return whyLine + roundNote + "\n" + `[Verify mode · actual round ${round}] The verification-call cap is exhausted and there is no pass proof bound to this turn (last verdict: ${vEn}). Do not start another verification job. Re-judge only the latest findings below and write one closeout using the exact headings. Put each evidence item in exactly one of the first four sections. The Stop hook accepts the closeout only when every item has one destination.\nLatest evidence (${ctx.source || "unavailable"}):\n${evidence}\nExpected dashboard alert key: ${ctx.alertKind || "verify-handoff-missing"}\n\n[Verification cap closeout]\n[Accepted and handled]\nOne item per line: - <key> <exact title> — Change: <specific change containing a file, backticked identifier, test/setting key, or measured value>; Check: <specific result with one of those anchors>; Evidence: <one of those anchors again>. Every field needs its own anchor. Write None if empty.\n[Rebutted and closed]\nOne item per line: - <key> <exact title> — Observation: <counterexample with its own anchor>; Reason: <closing reason with its own anchor>; Evidence: <one anchor again>. Every field needs its own anchor. Write None if empty.\n[Parked]\nOne item per line. Park only after backlog add with the exact finding title; include that open item's real 16-hex receipt id. Write None if empty.\n[User decision required]\nOnly open items of the decision ledger, pasted from \`node codex-bridge.js decisions render\` (block: - Decision <id>: <question> / Why: / Why the implementer cannot decide: / Option 1 (key): … — if chosen: … / Option 2 … / Recommended: / Answer: …). Use user decision required only for a boundary, product-direction, risk-acceptance, or external choice the implementer cannot decide — create it first with decisions raise and record it with finding-judge/round-judge escalate --decision <id>; a finding escalated this way is cited inside its block by key. Prose questions are rejected. If the only evidence line above is PASS-NO-FINDINGS, write None in all four sections. Write None if empty; do not invent a user question. EVIDENCE-UNAVAILABLE (the verifier's answer could not be read) is NOT a user decision — put it in [Residual risk call] as "Verify now — Reason: EVIDENCE-UNAVAILABLE …" (request the findings format again).\n[Residual risk call]\nOne line that starts with exactly one of these three, then Reason: — "Verify now" (the unverified edits touch a boundary, integrity, or data: start a new verification campaign in this turn and say so in Recommendation), "Next campaign" (local edits covered by regression tests: stamp them in the next campaign's first verification), "Ignorable" (no unverified code change, wording only).\n[Alert meaning]\nInclude the expected alert key verbatim. Explain whether the remaining red/yellow alert needs user action and that this closeout is not a verification pass.\n[Recommendation]\nRecommend one next action, or explicitly say no user decision is needed. Do not split this into several questions.`;
   const evidenceKo = evidence.replace("(the latest verification findings could not be read completely)", "(마지막 검증 지적을 완전하게 읽지 못함)");
-  return roundNote + "\n" + `[검증 모드 · 실제 회차 ${round}] 검증 호출 상한이 소진됐고 결속된 통과 증명이 없습니다(마지막 판정: ${vKo}). 새 검증 작업은 만들지 마세요. 아래 마지막 검증 지적만 다시 판단해 정확한 제목으로 마감문 하나를 쓰세요. 각 근거는 아래 네 절 중 정확히 한 곳에만 들어가야 하며, 모든 항목의 행선지가 정해져야 Stop 훅이 인정합니다.\n마지막 검증 근거(${ctx.source || "판독 불가"}):\n${evidenceKo}\n현재 대시보드 경고 키: ${ctx.alertKind || "verify-handoff-missing"}\n\n[검증 상한 인계]\n[수용·처리]\n한 항목을 한 줄로 씁니다: - <키> <정확한 제목> — 변경: <파일·백틱 식별자·시험/설정 키·측정값 중 하나를 포함한 구체 변경>; 확인: <그런 식별 근거를 자체 포함한 구체 결과>; 근거: <식별 근거 하나>. 세 칸 각각 자기 근거가 필요합니다. 없으면 없음.\n[반박·종결]\n한 항목을 한 줄로 씁니다: - <키> <정확한 제목> — 관측: <자기 식별 근거를 포함한 반례>; 이유: <자기 식별 근거를 포함한 종결 이유>; 근거: <식별 근거 하나>. 세 칸 각각 자기 근거가 필요합니다. 없으면 없음.\n[보관함 이관]\n한 항목을 한 줄로 씁니다. 정확한 지적 제목으로 backlog add를 먼저 실행하고 그 열린 항목의 실제 16자리 영수증 id를 씁니다. 없으면 없음.\n[사용자 판단 필요]\n결정 장부의 열린 항목만, \`node codex-bridge.js decisions render\` 출력을 그대로 붙입니다(블록: - 결정 <id>: <질문> / 왜: / 구현자가 못 정하는 이유: / 선택 1 (키): … — 고르면: … / 선택 2 … / 권장: / 답하기: …). 사용자 판단은 구현자가 대신 정할 수 없는 범위표·제품 방향·위험 수용·외부 결정만 — 먼저 decisions raise 로 항목을 만들고 finding-judge/round-judge escalate --decision <id> 로 기록하며, 그렇게 올린 지적은 블록 안에 키로 인용합니다. 산문 질문은 거부됩니다. 위 근거가 PASS-NO-FINDINGS뿐이면 네 절을 모두 없음으로 쓰면 됩니다. 없으면 없음이라고 쓰고 사용자 질문을 만들지 마세요. EVIDENCE-UNAVAILABLE(검증자 답을 읽지 못함)은 사용자 판단이 아니라 [잔여 위험 판단]에 "즉시 재검증 — 이유: EVIDENCE-UNAVAILABLE …"로 씁니다(서식 재발급 요청).\n[잔여 위험 판단]\n검증자가 못 본 마지막 수정분을 어떻게 볼지 한 줄로 판단합니다. 셋 중 하나로 시작하고 이유를 답니다: "즉시 재검증"(경계·무결성·데이터에 닿는 수정 — 이 턴에서 새 검증 캠페인을 시작하고 권장 절에도 그렇게 씀) / "다음 캠페인 도장"(국소 수정·회귀 시험으로 덮임 — 다음 작업 첫 검증에 동승) / "무시 가능"(미검증 코드 수정 없음·문구뿐). 이유: 를 반드시 포함.\n[경고등 의미]\n현재 경고 키를 그대로 포함하고, 남은 빨강·노랑에 사용자 행동이 필요한지와 이 마감이 검증 통과는 아니라는 점을 밝히세요.\n[권장]\n다음 행동 하나를 권장하거나 사용자 판단이 필요 없다고 명시하세요. 질문을 여러 개로 쪼개지 마세요.`;
+  return whyLine + roundNote + "\n" + `[검증 모드 · 실제 회차 ${round}] 검증 호출 상한이 소진됐고 결속된 통과 증명이 없습니다(마지막 판정: ${vKo}). 새 검증 작업은 만들지 마세요. 아래 마지막 검증 지적만 다시 판단해 정확한 제목으로 마감문 하나를 쓰세요. 각 근거는 아래 네 절 중 정확히 한 곳에만 들어가야 하며, 모든 항목의 행선지가 정해져야 Stop 훅이 인정합니다.\n마지막 검증 근거(${ctx.source || "판독 불가"}):\n${evidenceKo}\n현재 대시보드 경고 키: ${ctx.alertKind || "verify-handoff-missing"}\n\n[검증 상한 인계]\n[수용·처리]\n한 항목을 한 줄로 씁니다: - <키> <정확한 제목> — 변경: <파일·백틱 식별자·시험/설정 키·측정값 중 하나를 포함한 구체 변경>; 확인: <그런 식별 근거를 자체 포함한 구체 결과>; 근거: <식별 근거 하나>. 세 칸 각각 자기 근거가 필요합니다. 없으면 없음.\n[반박·종결]\n한 항목을 한 줄로 씁니다: - <키> <정확한 제목> — 관측: <자기 식별 근거를 포함한 반례>; 이유: <자기 식별 근거를 포함한 종결 이유>; 근거: <식별 근거 하나>. 세 칸 각각 자기 근거가 필요합니다. 없으면 없음.\n[보관함 이관]\n한 항목을 한 줄로 씁니다. 정확한 지적 제목으로 backlog add를 먼저 실행하고 그 열린 항목의 실제 16자리 영수증 id를 씁니다. 없으면 없음.\n[사용자 판단 필요]\n결정 장부의 열린 항목만, \`node codex-bridge.js decisions render\` 출력을 그대로 붙입니다(블록: - 결정 <id>: <질문> / 왜: / 구현자가 못 정하는 이유: / 선택 1 (키): … — 고르면: … / 선택 2 … / 권장: / 답하기: …). 사용자 판단은 구현자가 대신 정할 수 없는 범위표·제품 방향·위험 수용·외부 결정만 — 먼저 decisions raise 로 항목을 만들고 finding-judge/round-judge escalate --decision <id> 로 기록하며, 그렇게 올린 지적은 블록 안에 키로 인용합니다. 산문 질문은 거부됩니다. 위 근거가 PASS-NO-FINDINGS뿐이면 네 절을 모두 없음으로 쓰면 됩니다. 없으면 없음이라고 쓰고 사용자 질문을 만들지 마세요. EVIDENCE-UNAVAILABLE(검증자 답을 읽지 못함)은 사용자 판단이 아니라 [잔여 위험 판단]에 "즉시 재검증 — 이유: EVIDENCE-UNAVAILABLE …"로 씁니다(서식 재발급 요청).\n[잔여 위험 판단]\n검증자가 못 본 마지막 수정분을 어떻게 볼지 한 줄로 판단합니다. 셋 중 하나로 시작하고 이유를 답니다: "즉시 재검증"(경계·무결성·데이터에 닿는 수정 — 이 턴에서 새 검증 캠페인을 시작하고 권장 절에도 그렇게 씀) / "다음 캠페인 도장"(국소 수정·회귀 시험으로 덮임 — 다음 작업 첫 검증에 동승) / "무시 가능"(미검증 코드 수정 없음·문구뿐). 이유: 를 반드시 포함.\n[경고등 의미]\n현재 경고 키를 그대로 포함하고, 남은 빨강·노랑에 사용자 행동이 필요한지와 이 마감이 검증 통과는 아니라는 점을 밝히세요.\n[권장]\n다음 행동 하나를 권장하거나 사용자 판단이 필요 없다고 명시하세요. 질문을 여러 개로 쪼개지 마세요.`;
 }
 
 function textOfContent(content) {
