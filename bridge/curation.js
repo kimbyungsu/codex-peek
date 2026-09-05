@@ -92,7 +92,7 @@ function curationInput(ws, repo, opts) {
   const computeCandidates = resolveComputeCandidates(opts);
   if (!computeCandidates) return { ok: false, reason: "signals-unavailable" }; // 핵심 신호 산출 불가=입력 실패(신호 0으로 위장 금지 — 1회차 blocker①)
   let cc = null;
-  try { cc = computeCandidates(ws); } catch { return { ok: false, reason: "signals-failed" }; }
+  try { cc = computeCandidates(ws, { rowFilter: (r) => r && r.repoKey === repoKey }); } catch { return { ok: false, reason: "signals-failed" }; } // 행의 repoKey===현재 저장소만(ab-1 — 집계기 내부의 캠페인 id·세대 필터로는 창 교대 오귀속을 못 막음)
   signalsGen = cc && cc.gen ? cc.gen : null;
   // [ab-1] 현재 캠페인 카운터의 저장소 표식이 이 저장소일 때만 캠페인 신호를 받는다(표식 없음·다른 저장소=0 — 같은 작업 폴더에서 정찰 대상을 오간 경우)
   const campRepoOk = (() => { try { const o = JSON.parse(fs.readFileSync(CL.campaignFileFor(ws), "utf8")); return !!(o && o.repoKey === repoKey); } catch { return false; } })();

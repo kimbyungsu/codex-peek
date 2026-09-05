@@ -3229,7 +3229,10 @@ function cmdFindingJudge(rest) {
   }
   // asOfRound 결속(1차 blocker①): 이 처분은 '지금까지의 마지막 등장'까지만 유효 — 이후 재등장하면
   // undisposedOpenFindings가 낡은 처분으로 판정해 관문이 다시 닫힌다(재판단 강제).
-  const asOfRound = findingActivityRound(readFindingsLedger(ws), camp, id);
+  const ledgerJ = readFindingsLedger(ws);
+  const asOfRound = findingActivityRound(ledgerJ, camp, id);
+  // [CURATION ab-1] 처분·종결 행의 저장소 표식=대상 지적 행의 repoKey(판단 시점 계약이 아님 — 판단 사이 대상 전환 오귀속 차단). 지적 행에 표식이 없으면(옛 행) 관문 기본(현재 계약).
+  const rkJ = (() => { for (const r of ledgerJ) if (r && r.type === "finding" && r.findingId === id && typeof r.repoKey === "string" && r.repoKey) return r.repoKey; return null; })();
   // R2 blocker⑤(ab-1): 사건 최상위에 기록 시점 저장소 정체성(repoKey+repoPath) 결속 — 수확기는
   // close 시점의 현재 대상이 아니라 이 값으로 파티션·검증(대상 전환 후에도 A 사건=A 저장소).
   let evRepoTop;
@@ -3245,7 +3248,7 @@ function cmdFindingJudge(rest) {
   const tsJ = new Date().toISOString();
   if (rebutOos) rowsJ.unshift({ type: "close", campaignId: camp, findingId: id, closeReason: "implementer-oos", oosId: rebutOos, round: asOfRound, envelopeHash: gen || null, ts: tsJ });
   rowsJ[rowsJ.length - 1].ts = tsJ; // 처분 행도 같은 쓰기 도장(read-back 대조 키)
-  let wrote = appendFindingsLedger(ws, rowsJ);
+  let wrote = appendFindingsLedger(ws, rowsJ, rkJ ? { repoKey: rkJ } : undefined);
   if (wrote) {
     const back = readFindingsLedger(ws);
     const has = (r0) => back.some((r) => r && r.type === r0.type && r.campaignId === r0.campaignId && r.findingId === r0.findingId && r.ts === r0.ts && (r0.type !== "close" || r.closeReason === r0.closeReason));
@@ -3635,10 +3638,13 @@ function v2DirectiveFor(ws, lang) { return [v2StaticDirective(lang), v2DynamicDa
 // 후보 0건=명시(침묵 생략 금지). ④(보류 항목)는 캐논 전용 재료 — 여기서 집계하지 않음(§7 명문).
 // §7 증분 3 — 후보 집계 본체(분리: 소진 보고와 대시보드 후보 카드가 같은 산출을 공유). 반환
 // { live, skipped, overCap } — live=[{candidateId, kind, key, n, titles}].
-function computeEnvelopeCandidatesFor(ws) {
+function computeEnvelopeCandidatesFor(ws, opts) {
   const camp = currentCampaignIdFor(ws);
   const gen = readFrozenEnvelope(ws);
-  const rows = readFindingsLedger(ws).filter((r) => r.campaignId === camp && (r.envelopeHash || null) === (gen || null));
+  // [CURATION ab-1] opts.rowFilter=호출자 결속(예: 행의 repoKey===현재 저장소) — 캠페인 id·세대만으론 창 교대에서 한 캠페인이 두 저장소에 속해 신호가 섞인다(확인검증 반례). 대시보드 호출(무필터)은 종전 그대로.
+  const rf9 = opts && typeof opts.rowFilter === "function" ? opts.rowFilter : null;
+  const ledger9 = rf9 ? readFindingsLedger(ws).filter((r) => { try { return !!rf9(r); } catch { return false; } }) : readFindingsLedger(ws);
+  const rows = ledger9.filter((r) => r.campaignId === camp && (r.envelopeHash || null) === (gen || null));
   const titleOf = new Map();
   // 원문 무절단(2026-08-20 UX 검증 blocker②): 집계 단계 60자 절단은 식별 정보를 영구 소실시킴 —
   // 절단은 표시 지점(ask 재료 절)에서만. 원천 titleNorm은 기록 시 이미 유계.
@@ -3680,7 +3686,7 @@ function computeEnvelopeCandidatesFor(ws) {
     // finding에서 oosId 인용이 0회인 oos-N=빼기/병합 검토 재료. 항상-차단(ab)은 발동 데이터가 심사 면제 축이라
     // 미인용=미발동으로 단정할 수 없어 제외(정직 한정 — 캐논 재료로만).
     try {
-      const usedOos = new Set(readFindingsLedger(ws).filter((r) => r.type === "finding" && (r.envelopeHash || null) === (gen || null) && r.oosId).map((r) => r.oosId));
+      const usedOos = new Set(ledger9.filter((r) => r.type === "finding" && (r.envelopeHash || null) === (gen || null) && r.oosId).map((r) => r.oosId));
       envForCleanup.data.outOfScope.forEach((txt, i) => { const id9 = "oos-" + (i + 1); if (!usedOos.has(id9)) signals.push({ candidateId: envelopeCandidateId("unused-oos", id9 + "@" + envForCleanup.sha1), kind: "unused-oos", key: id9, n: 0, titles: [String(txt)] }); }); // 무절단(수칙서 항목은 승인 절삭 규칙상 이미 200자 유계)
     } catch { /* 원본 판독 실패=빼기 후보 생략(추가 후보는 유지) */ }
   }
@@ -3790,7 +3796,9 @@ function integrityReviewLine(ws, lang, profile) {
       : "\n[경계 재심 재료] 이번 캠페인에서 범위 밖으로 치워진 지적: " + parts.join(" · ") + " — 이제는 방어할 가치가 있어 보이면 항목 번호로 경계 개정을 요청하세요(개정은 사용자 승인)\n";
   } catch { return ""; }
 }
-function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId, campSnap) {
+function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId, campSnap, repoKeySnap) {
+  // [CURATION ab-1 · 확인검증 blocker] 결과 행(지적·등장·종결·승격·판)의 저장소 표식=검증 '시작' 스냅샷(호출자 전달). 응답 대기 중 정찰 대상이 바뀌어도 A의 검증 결과는 A 행으로 남는다.
+  const appendL = (rows) => appendFindingsLedger(ws, rows, typeof repoKeySnap === "string" && repoKeySnap ? { repoKey: repoKeySnap } : undefined);
   if (profileSnap !== "core") return { machine: null, notice: "" }; // 기계 판독 계약은 core 경로(무결성=문구 준수 감사 — 정본 §2.1 구현 한정)
   const en = langSnap === "en";
   const parse = parseFindingsBlock(answer);
@@ -3902,13 +3910,13 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
         const tnE = normBacklogTitle(f.title);
         if (!escUsed && escSeq === 1) {
           const fidE = newFindingId(camp, frozen, roundNo, tnE, "esc" + escSeq);
-          appendFindingsLedger(ws, [
+          appendL([
             { type: "escalation", campaignId: camp, round: roundNo, findingId: fidE, abId: f.abId || "", envelopeHash: frozen, ts: new Date().toISOString() },
             { type: "finding", findingId: fidE, campaignId: camp, round: roundNo, tag: "blocker", titleNorm: tnE, origin: "new-evidence", oosId: "", envelopeHash: frozen, ...(bg9 ? { boundaryGen: bg9 } : {}), demoted: false, status: "open", closeReason: "", ts: new Date().toISOString() },
           ]);
           out.push(en ? "[scope-expansion granted] " + fidE + " — escalated to an open blocker for the next round (once per campaign & approval generation; boundary revision itself stays user-only)" : "[범위 확장 승격] " + fidE + " — 다음 라운드부터 열린 blocker로 추적(캠페인·승인 세대당 1회·경계 개정 자체는 사용자만)");
         } else {
-          appendFindingsLedger(ws, [{ type: "finding", findingId: newFindingId(camp, frozen, roundNo, tnE, "esc" + escSeq), campaignId: camp, round: roundNo, tag: "주의", titleNorm: tnE, origin: "new-evidence", oosId: "", envelopeHash: frozen, ...(bg9 ? { boundaryGen: bg9 } : {}), demoted: false, expansion: true, status: "open", closeReason: "", ts: new Date().toISOString() }]); // expansion 표식 — 원인 분해에서 초기/유발 축 오집계 금지
+          appendL([{ type: "finding", findingId: newFindingId(camp, frozen, roundNo, tnE, "esc" + escSeq), campaignId: camp, round: roundNo, tag: "주의", titleNorm: tnE, origin: "new-evidence", oosId: "", envelopeHash: frozen, ...(bg9 ? { boundaryGen: bg9 } : {}), demoted: false, expansion: true, status: "open", closeReason: "", ts: new Date().toISOString() }]); // expansion 표식 — 원인 분해에서 초기/유발 축 오집계 금지
           out.push(en ? "[scope-expansion cap reached] recorded as [caution] — this campaign & approval generation's single escalation is already used" : "[범위 확장 상한 소진] 캠페인·승인 세대당 1회 승격이 이미 사용됨 — [주의]로 기록(재판단·사용자 보고 경로)");
         }
       }
@@ -3976,7 +3984,7 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
       if (machine.effective === "pass" || machine.effective === "pass-notes") {
         for (const o of openList) if (o.round < roundNo) recs.push({ type: "close", campaignId: camp, findingId: o.id, closeReason: "resolved", round: roundNo, envelopeHash: frozen, askId: askId || "", ts: now }); // 같은 라운드 첫 등장은 open 유지(4차 설계 blocker②)·close도 세대 결속(3차 미완수정②) · [기억 권위 A-2] 마감 askId 결속(후보 근거)
       }
-      appendFindingsLedger(ws, recs);
+      appendL(recs);
       // [경위 v2 수확기 배선] 해소 마감 직후 — 자격(최신 처분 fix-fact+dispositionValid+close.round
       // 게이트+sourceRefs)은 수확기가 판정. advisory(실패가 판정 경로를 막지 않음).
       try {
@@ -3989,10 +3997,10 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
     } catch { /* 장부 실패가 판정 전달을 막지 않음 */ }
   } else if (frozen && blockShaped && parse.ver === "v1") {
     out.push(en ? "[admission not applied — v1 response (the directive requested v2); recorded for statistics]" : "[입장 심사 미적용 — v1 응답(지시문은 v2 요구) · 통계 기록]"); // 활성 행렬 fail-open
-    try { appendFindingsLedger(ws, [{ type: "round", campaignId: camp, round: roundNo, roundType, verdict: machine.effective, envelopeHash: frozen, ...(bg9 ? { boundaryGen: bg9 } : {}), v1: true, ts: new Date().toISOString() }]); } catch { /* 무해 */ }
+    try { appendL([{ type: "round", campaignId: camp, round: roundNo, roundType, verdict: machine.effective, envelopeHash: frozen, ...(bg9 ? { boundaryGen: bg9 } : {}), v1: true, ts: new Date().toISOString() }]); } catch { /* 무해 */ }
   } else if (frozen && !blockShaped) {
     // 판정 추출 실패·블록 손상도 회차 소비 기록(verdict:"error" — 다음 라운드 유형은 fix-verify 유도·4차 설계 보완)
-    try { appendFindingsLedger(ws, [{ type: "round", campaignId: camp, round: roundNo, roundType, verdict: "error", envelopeHash: frozen, ...(bg9 ? { boundaryGen: bg9 } : {}), ts: new Date().toISOString() }]); } catch { /* 무해 */ }
+    try { appendL([{ type: "round", campaignId: camp, round: roundNo, roundType, verdict: "error", envelopeHash: frozen, ...(bg9 ? { boundaryGen: bg9 } : {}), ts: new Date().toISOString() }]); } catch { /* 무해 */ }
   } else if (!frozen && blockShaped && parse.ver === "v2") {
     // 경계 비활성+v2=신필드 파싱·장부 기록만(활성 행렬 — 강등 없음·통계 축적)
     try {
@@ -4000,7 +4008,7 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
       const recs = [{ type: "round", campaignId: camp, round: roundNo, roundType, verdict: machine.effective, envelopeHash: null, ts: now }];
       let seq = 0;
       for (const f of parse.findings) { seq++; const tn = normBacklogTitle(f.title); recs.push({ type: "finding", findingId: newFindingId(camp, null, roundNo, tn, seq), campaignId: camp, round: roundNo, tag: f.tag, titleNorm: tn, origin: f.origin || "", oosId: "", envelopeHash: null, demoted: false, status: "open", closeReason: "", ts: now }); }
-      appendFindingsLedger(ws, recs);
+      appendL(recs);
     } catch { /* 무해 */ }
   }
   // ── 기존 2c: [백로그] 자동 등록 — 강등분(demotedTo=백로그)도 같은 경로(강등된 지적도 보관함·통계에 남김 §3.3) ──
@@ -4192,7 +4200,8 @@ async function cmdAsk(rest) {
     });
     flagLedgerConfirms(answer, ws, verifierSession, exec, { askId, attach: attCarrier });
     collectScoutTargetEvidence(answer, ws, exec);
-    const mfl = machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId, campSnap);
+    const repoKeySnap9 = (() => { try { return repoKeyOf(resolveScoutRepo(ws, contractSnap).repo); } catch { return ""; } })(); // 검증 시작 스냅샷의 저장소(완료 시점 계약 아님)
+    const mfl = machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId, campSnap, repoKeySnap9);
     applyPostflightHold(mfl, attCarrier, ws, askId, campSnap, langSnap); // [§4-B ②] 검증 도중 압축=판정 권위 없음(보류)+판단 관문
     flagVerdict(answer, ws, verifierSession, modeSnap, mfl.machine, attempt, providerName, askId, attCarrier); // [기억 권위 C-2] askId·동봉 실물 결속
     // [약속 발화 포착 부품 B §2] 검증자 답의 [제약 후보 v1] 회수 — 내구 job의 동결 constraintCtx만 권위.

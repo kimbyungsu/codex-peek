@@ -537,6 +537,38 @@ async function main() {
     assert.ok(!fs.existsSync(path.join(CL.BRIDGE_DIR, "envelope-transitions", CL.wsKeyFor(WS12) + ".wal.json")), "WAL 정리");
   });
 
+  await ta("★반례(확인검증 ab-1 ×2) — 집계기 실물 경로: 같은 캠페인·같은 세대라도 행 repoKey가 다른 강등 지적은 신호에 들어오지 않고, 이 저장소 표식 행만 셈 · append 관문 override=검증 시작 스냅샷 표식", async () => {
+    const CB = require("../bridge/codex-bridge.js");
+    const c9 = CL.loadContract(WS); const gen9 = c9.envelopeHash;
+    CL.freezeEnvelopeForAsk(WS, REPO, "ko"); // 집계기의 동결 세대=승인 세대
+    fs.writeFileSync(CL.campaignFileFor(WS), JSON.stringify({ schema: "vcamp-1", campaignId: "cX", count: 1, budget: 5, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), repoKey: REPOKEY }));
+    const ts9 = new Date().toISOString();
+    assert.ok(CL.appendFindingsLedger(WS, [
+      { type: "finding", campaignId: "cX", envelopeHash: gen9, findingId: "xb1", demoted: true, oosId: "oos-7", titleNorm: "b1", repoKey: "0000000000000000", ts: ts9 },
+      { type: "finding", campaignId: "cX", envelopeHash: gen9, findingId: "xb2", demoted: true, oosId: "oos-7", titleNorm: "b2", repoKey: "0000000000000000", ts: ts9 },
+    ]));
+    const raw9 = CB.computeEnvelopeCandidatesFor(WS);
+    assert.ok(raw9.gen === gen9 && raw9.signals.some((s) => s.kind === "oos-repeat" && s.key === "oos-7"), "무필터 집계기(대시보드)는 종전대로 신호를 만든다(전제)");
+    const inB = CU.curationInput(WS, REPO, { computeCandidates: CB.computeEnvelopeCandidatesFor });
+    assert.ok(inB.ok && inB.signals.oosRepeat.length === 0, "★다른 저장소 표식 행=큐레이션 신호 0 " + JSON.stringify(inB.signals.oosRepeat));
+    assert.ok(!CU.buildCurationPrompt(inB, "ko").includes("oos-repeat:oos-7"), "프롬프트에도 없음");
+    assert.ok(CL.appendFindingsLedger(WS, [
+      { type: "finding", campaignId: "cX", envelopeHash: gen9, findingId: "xa1", demoted: true, oosId: "oos-7", titleNorm: "a1", ts: ts9 },
+      { type: "finding", campaignId: "cX", envelopeHash: gen9, findingId: "xa2", demoted: true, oosId: "oos-7", titleNorm: "a2", ts: ts9 },
+    ]), "표식 없는 행은 관문이 현재 저장소로 심는다");
+    const inA = CU.curationInput(WS, REPO, { computeCandidates: CB.computeEnvelopeCandidatesFor });
+    assert.ok(inA.ok && inA.signals.oosRepeat.length === 1 && inA.signals.oosRepeat[0].n === 2, "이 저장소 표식 행 2건만 셈(B 행 2건 불산입) " + JSON.stringify(inA.signals.oosRepeat));
+    // 관문 override: 비동기 검증 결과는 '시작 시점' 저장소를 명시로 넘긴다 — 완료 시점 계약과 달라도 그 값이 찍힌다
+    assert.ok(CL.appendFindingsLedger(WS, [{ type: "round", campaignId: "cX", round: 9, verdict: "pass", envelopeHash: gen9, ts: ts9 }], { repoKey: "1111111111111111" }));
+    const lastRow = CL.readFindingsLedger(WS).filter((r) => r.type === "round" && r.round === 9).pop();
+    assert.strictEqual(lastRow.repoKey, "1111111111111111", "override 표식이 현재 계약을 이긴다");
+    const cb = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
+    assert.ok(cb.includes("function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId, campSnap, repoKeySnap)") && cb.includes("const appendL = (rows) => appendFindingsLedger(ws, rows, typeof repoKeySnap") && cb.includes("machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId, campSnap, repoKeySnap9)") && cb.includes("repoKeyOf(resolveScoutRepo(ws, contractSnap).repo)"), "검증 결과 행=시작 스냅샷 repoKey 전달(소스 핀)");
+    const mflBody = cb.slice(cb.indexOf("function machineFindingsLayer("), cb.indexOf("\nfunction ", cb.indexOf("function machineFindingsLayer(") + 10));
+    assert.strictEqual((mflBody.match(/appendFindingsLedger\(ws, /g) || []).length, 1, "층 안의 append는 appendL 정의 1곳만 관문을 직접 부른다(나머지 전부 스냅샷 경유)");
+    assert.ok(cb.includes("appendFindingsLedger(ws, rowsJ, rkJ ? { repoKey: rkJ } : undefined)"), "처분·종결 행=대상 지적 행의 repoKey 승계");
+  });
+
   console.log(`\n결과: ${n} 통과 / 0 실패`);
 }
 main().catch((e) => { console.error("❌", e && e.stack || e); process.exit(1); });

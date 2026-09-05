@@ -3766,7 +3766,7 @@ function readFindingsLedger(ws) {
     return String(fs.readFileSync(findingsLedgerFileFor(ws), "utf8")).split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
   } catch { return []; }
 }
-function appendFindingsLedger(ws, recs) {
+function appendFindingsLedger(ws, recs, opts) {
   try {
     fs.mkdirSync(VERIFY_FINDINGS_DIR, { recursive: true });
     // 손상 꼬리 격리(3회차 확인 blocker — ab-3): 직전 쓰기가 줄 중간에서 끊겨 개행 없이 끝났으면 새 행을 그 조각에 이어 붙이지 않고
@@ -3779,7 +3779,9 @@ function appendFindingsLedger(ws, recs) {
     } catch (e) { if (!(e && e.code === "ENOENT")) return false; /* 파일 없음=첫 쓰기 · 그 외 꼬리 판독 실패(권한·잠금)=쓰지 않음(fail-closed — 4회차 확인) */ }
     // [CURATION §3 A · ab-1 2026-09-05] 기록 시점 저장소 표식 — 이 장부의 모든 행(지적·등장·종결·승격·처분·판단)에 그 순간의 정찰 대상 repoKey를 심는다(호출자가 이미 넣었으면 보존).
     // 캠페인 id→저장소 대리 매핑은 창 두 개가 저장소를 바꿔 가며 같은 캠페인을 이어갈 때 무너지므로(확인검증 반례) 행 자체가 소속을 말해야 한다. 판독 실패=미기록(옛 행과 같이 불산입).
-    let rk9 = null; try { rk9 = constraintRepoKeyFor(ws); } catch { rk9 = null; }
+    // opts.repoKey=호출자가 아는 '사건 시점' 저장소(검증 시작 스냅샷 등 — 확인검증 blocker: 완료 시점 계약으로 찍으면 대기 중 대상 전환에 오귀속). 없으면 현재 계약.
+    let rk9 = (opts && typeof opts.repoKey === "string" && opts.repoKey) ? opts.repoKey : null;
+    if (!rk9) { try { rk9 = constraintRepoKeyFor(ws); } catch { rk9 = null; } }
     const recs9 = rk9 ? recs.map((r) => (r && typeof r === "object" && r.repoKey === undefined) ? Object.assign({}, r, { repoKey: rk9 }) : r) : recs;
     fs.appendFileSync(file, lead + recs9.map((r) => JSON.stringify(r)).join("\n") + "\n");
     return true;

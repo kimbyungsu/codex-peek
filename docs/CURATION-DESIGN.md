@@ -179,3 +179,6 @@ ab-1 wsKey·repoKey 결속(입력·키·모든 행·영수증) · ab-2 계약 �
 - **확인검증(2026-09-05) blocker 1 반영 — 캠페인 대리 매핑 폐기**: 창 두 개가 저장소를 바꿔 가며 같은 캠페인을 이어가면 한 캠페인 id가 두 저장소 이력에 함께 남아 "캠페인 id→저장소" 매핑이 무너진다.
   그래서 ⑬ 지적 장부 append 관문(`appendFindingsLedger`)이 지적·등장·종결·승격·처분·판단 행 전부에 기록 시점 `repoKey`를 심고(호출자 값 보존), 결정 생성(`openDecision`)도 `repoKey`를 기록한다.
   결정·되받아침·지적 신호는 **행의 repoKey**로만 거른다(표식 없는 옛 행=불산입). 캠페인 id 매핑은 마감 캠페인 수(K) 계수에만 남는다(이력 행 자체가 repoKey를 가짐).
+- **확인검증 2판(2026-09-05) blocker 2 반영**: ⑭ 입력 집계기의 캠페인 신호(oos-repeat·lineage·escalation·unused-oos)도 후보 집계기 `computeEnvelopeCandidatesFor(ws, {rowFilter})`에 행 필터(repoKey===현재 저장소)를 넘겨
+  같은 캠페인·같은 세대의 타 저장소 행을 배제한다(대시보드의 무필터 호출은 종전 그대로) ⑮ 비동기 검증 결과 행의 표식=검증 **시작** 스냅샷의 저장소 — `machineFindingsLayer`가 시작 시점 repoKey를 받아 append 관문 override(`opts.repoKey`)로 심고,
+  처분·종결 행(finding-judge)은 대상 지적 행의 repoKey를 승계한다(판단 시점 계약이 아님). 완료 시점 계약으로 찍으면 응답 대기 중 대상 전환에 A 결과가 B로 귀속되는 경로(수정 유발 결함)를 닫는다.
