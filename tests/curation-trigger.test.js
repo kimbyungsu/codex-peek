@@ -532,6 +532,29 @@ t("★반례(2차 캠페인 3판 blocker ab-1) — 결정 장부의 생성·목�
   assert.ok(vh.includes("readDecisions(ws, rkD ? { repoKey: rkD } : undefined).open"), "마감 동봉=현재 저장소");
   const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
   assert.ok(ext.includes("lib.readDecisions(ws, (typeof lib.repoKeyNow === \"function\" && lib.repoKeyNow(ws)) ? { repoKey: lib.repoKeyNow(ws) } : undefined)"), "대시보드 '지금 정할 것'=현재 저장소");
+  // ★4판 blocker: 업그레이드 이전 두 창 경합으로 같은 id의 open(A)·open(B)가 남고 결과 행이 뒤따르는 옛 상태 — 결과 행은 표식 일치 원항목에만 합성·B는 자기 항목을 종결할 수 있어야 한다
+  const X = "abcdef0123456789"; const tsX = new Date().toISOString();
+  const openRow = (rk) => ({ schema: "decision-v1", decisionId: X, status: "open", wsKey: CL.wsKeyFor(F.ws), repoKey: rk, origin: "implementer", kind: "product", noDefault: "구현자가 정할 수 없는 제품 방향 문제라서", campaignId: CAMP, sourceAsk: "ask-old", targetFp: "", question: "옛 동일 id 질문?", why: "w", choices: [{ key: "keep", label: "유지" }, { key: "change", label: "변경" }], recommend: "keep", ts: tsX });
+  fs.appendFileSync(CL.decisionsFileFor(F.ws), [openRow(F.repoKey), openRow(rkB), { schema: "decision-v1", decisionId: X, status: "chosen", wsKey: CL.wsKeyFor(F.ws), repoKey: F.repoKey, choice: "keep", by: "user", ts: tsX }].map((r) => JSON.stringify(r)).join("\n") + "\n");
+  assert.strictEqual(CL.readDecisions(F.ws, { repoKey: F.repoKey }).latest.get(X).status, "chosen", "A 판독=A 결과 합성");
+  const bView = CL.readDecisions(F.ws, { repoKey: rkB }).latest.get(X);
+  assert.ok(bView && bView.status === "open" && bView.repoKey === rkB, "★B 판독=B 항목 열린 채(A 결과 행 미합성) " + JSON.stringify(bView));
+  const rBX = CL.resolveDecision(F.ws, X, "change", { by: "user", repoKey: rkB });
+  assert.ok(rBX && rBX.ok === true, "★B가 자기 동일 id 항목을 종결(필터 판독에서 대상 조회) " + JSON.stringify(rBX));
+  assert.strictEqual(CL.readDecisions(F.ws, { repoKey: rkB }).latest.get(X).choice, "change", "B 결과=B 선택");
+  assert.strictEqual(CL.readDecisions(F.ws, { repoKey: F.repoKey }).latest.get(X).choice, "keep", "A 결과는 그대로(B 결과 행이 A에 합성되지 않음)");
+  // 무표식 옛 결과 행+동일 id가 두 저장소에 열림=귀속 불명 → 어느 저장소 판독에도 합성하지 않는다(다시 묻는 편이 거짓 종결보다 안전) · 무필터 판독은 종전 동작
+  const Y = "fedcba9876543210";
+  fs.appendFileSync(CL.decisionsFileFor(F.ws), [Object.assign(openRow(F.repoKey), { decisionId: Y }), Object.assign(openRow(rkB), { decisionId: Y }), { schema: "decision-v1", decisionId: Y, status: "chosen", wsKey: CL.wsKeyFor(F.ws), choice: "keep", by: "user", ts: tsX }].map((r) => JSON.stringify(r)).join("\n") + "\n");
+  assert.strictEqual(CL.readDecisions(F.ws, { repoKey: F.repoKey }).latest.get(Y).status, "open", "★무표식 옛 결과 행은 A에 합성 안 함(귀속 불명)");
+  assert.strictEqual(CL.readDecisions(F.ws, { repoKey: rkB }).latest.get(Y).status, "open", "★무표식 옛 결과 행은 B에도 합성 안 함");
+  assert.strictEqual(CL.readDecisions(F.ws).latest.get(Y).status, "chosen", "무필터 판독=종전 합성(축퇴)");
+  // 무표식 옛 결과 행이지만 동일 id가 한 저장소에만 열려 있으면 종전처럼 합성(옛 정상 기록 무회귀)
+  const Z = "0123456789abcdef";
+  fs.appendFileSync(CL.decisionsFileFor(F.ws), [Object.assign(openRow(F.repoKey), { decisionId: Z }), { schema: "decision-v1", decisionId: Z, status: "delegated", wsKey: CL.wsKeyFor(F.ws), choice: "delegate", by: "user", ts: tsX }].map((r) => JSON.stringify(r)).join("\n") + "\n");
+  assert.strictEqual(CL.readDecisions(F.ws, { repoKey: F.repoKey }).latest.get(Z).status, "delegated", "단일 저장소 옛 결과 행=합성(무회귀)");
+  const cu = fs.readFileSync(path.join(__dirname, "..", "bridge", "curation.js"), "utf8");
+  assert.ok(cu.includes("const d = CL.readDecisions(ws, { repoKey });"), "큐레이션 입력도 필터 판독");
 });
 
 console.log(`\n결과: ${n} 통과 / 0 실패`);

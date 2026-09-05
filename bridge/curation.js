@@ -129,7 +129,7 @@ function curationInput(ws, repo, opts) {
   // ⑧ 결정 장부(방향 힌트 — 제안 근거로만) · 행의 기록 시점 저장소 표식(repoKey)이 이 저장소인 결정만(ab-1 — 캠페인 대리 매핑 폐기·표식 없는 옛 결정=제외·보수)
   const decisions = { open: [], answered: [] };
   try {
-    const d = CL.readDecisions(ws);
+    const d = CL.readDecisions(ws, { repoKey }); // 4판 blocker: 필터 판독(같은 id가 두 저장소에 열린 옛 상태에서 무필터 latest는 이 저장소 항목을 먼저 잃음)
     for (const r of d.latest.values()) {
       if (String(r.repoKey || "") !== repoKey) continue;
       const q9 = safeText(r.question, 200);

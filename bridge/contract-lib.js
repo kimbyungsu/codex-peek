@@ -4199,12 +4199,20 @@ function readDecisions(ws, opts) {
   try { rows = String(fs.readFileSync(decisionsFileFor(ws), "utf8")).split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(decisionRowValid); } catch { return empty; }
   const wk = wsKeyFor(ws);
   const rk = (opts && typeof opts.repoKey === "string" && opts.repoKey) ? opts.repoKey : "";
+  const mine = rows.filter((r) => r.wsKey === wk); // ab-1: 다른 프로젝트 행은 이 장부에서 권위 없음
+  // 같은 id의 열린 행이 두 저장소에 남은 옛 상태(업그레이드 이전 두 창 경합 — id 산식에 저장소가 없던 때): 표식 없는 옛 결과 행은 어느 쪽 것인지 알 수 없으므로
+  // 그런 id에는 합성하지 않는다(양쪽 다 열린 채 다시 묻는 편이 거짓 종결보다 안전). 표식 있는 결과 행은 표식이 정확히 일치하는 원항목에만 합성한다(4판 blocker·ab-1).
+  const openKeysById = new Map();
+  for (const r of mine) if (r.status === "open") { const set = openKeysById.get(r.decisionId) || new Set(); set.add(String(r.repoKey || "")); openKeysById.set(r.decisionId, set); }
   const opens = new Map(), latest = new Map();
-  for (const r of rows) {
-    if (r.wsKey !== wk) continue; // ab-1: 다른 프로젝트 행은 이 장부에서 권위 없음
+  for (const r of mine) {
     if (r.status === "open") { if (rk && String(r.repoKey || "") !== rk) continue; if (!opens.has(r.decisionId)) { opens.set(r.decisionId, r); latest.set(r.decisionId, r); } continue; } // 저장소 표식 불일치·무표식 옛 항목=이 저장소 권위 아님
     const o = opens.get(r.decisionId);
-    if (o) latest.set(r.decisionId, Object.assign({}, o, { status: r.status, choice: r.choice, resolvedTs: r.ts, resolvedBy: String(r.by || "") })); // 결과 행이 원항목을 덮지 않고 합성
+    if (!o) continue;
+    const ok9 = String(o.repoKey || ""), rkR = String(r.repoKey || "");
+    if (rkR) { if (rkR !== ok9) continue; } // 표식 있는 결과 행=원항목 표식과 일치할 때만
+    else if (rk && (openKeysById.get(r.decisionId) || new Set()).size > 1) continue; // 무표식 옛 결과 행+동일 id가 여러 저장소에 열림=귀속 불명·저장소 판독에서는 합성 안 함(무필터 판독=종전 합성 축퇴)
+    latest.set(r.decisionId, Object.assign({}, o, { status: r.status, choice: r.choice, resolvedTs: r.ts, resolvedBy: String(r.by || "") })); // 결과 행이 원항목을 덮지 않고 합성
   }
   return { rows, latest, opens, open: [...latest.values()].filter((r) => r.status === "open") };
 }
@@ -4241,11 +4249,17 @@ function openDecision(ws, spec) {
 // 결과 행 — 대상 지문 재대조(opts.currentFp가 주어지고 targetFp와 다르면 거부) · 선택지 밖 키 거부 · delegate=네가 정해라
 function resolveDecision(ws, decisionId, choiceKey, opts) {
   opts = opts || {};
-  const cur = readDecisions(ws);
-  const d = cur.latest.get(String(decisionId || ""));
+  // [저장소 분할 단일 규칙 · 3·4판 blocker(ab-1)] 호출자가 현재 저장소 키를 넘기면 그 저장소로 필터한 판독에서 대상을 찾는다(같은 id의 타 저장소 항목이 먼저 잡혀 내 항목을 가리는 일 없음).
+  // 필터 판독에 없고 전체 판독에 있으면=다른 저장소(또는 표식 없는 옛 항목)의 결정 — 여기서 종결하지 않는다(repo-mismatch).
+  const rkR = typeof opts.repoKey === "string" ? opts.repoKey : null;
+  const cur = readDecisions(ws, rkR ? { repoKey: rkR } : undefined);
+  let d = cur.latest.get(String(decisionId || ""));
+  if (!d && rkR !== null) {
+    const any = readDecisions(ws).latest.get(String(decisionId || ""));
+    if (any) return { ok: false, reason: "repo-mismatch", decisionRepoKey: String(any.repoKey || ""), repoKey: rkR };
+  }
   if (!d) return { ok: false, reason: "not-found" };
-  // [저장소 분할 단일 규칙 · 3판 blocker(ab-1)] 호출자가 현재 저장소 키를 넘기면 결정의 표식과 대조 — 다른 저장소(또는 표식 없는 옛 항목)의 결정을 여기서 종결하지 않는다.
-  if (typeof opts.repoKey === "string") { const dk = String(d.repoKey || ""); if (opts.repoKey ? dk !== opts.repoKey : !!dk) return { ok: false, reason: "repo-mismatch", decisionRepoKey: dk, repoKey: opts.repoKey }; }
+  if (rkR !== null) { const dk = String(d.repoKey || ""); if (rkR ? dk !== rkR : !!dk) return { ok: false, reason: "repo-mismatch", decisionRepoKey: dk, repoKey: rkR }; }
   if (d.status !== "open") return { ok: false, reason: "already-resolved", status: d.status };
   // 대상 지문 재대조는 선택이 아니라 계약이다(fail-closed): 결정이 전제한 지문(targetFp)이 있으면 호출자는 현재 지문을
   // 반드시 넘겨야 하고, 없으면 거부 — 생략 호출로 다른 세대·다른 창의 항목을 종결하는 우회 차단(구현 검증 1회차 blocker).
