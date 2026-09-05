@@ -77,7 +77,7 @@ t("입력 집계기 — 정상: 코어·서고 항목(axis·index·itemFp)·신�
   fs.mkdirSync(path.dirname(CL.campaignFileFor(WS)), { recursive: true }); fs.writeFileSync(CL.campaignFileFor(WS), JSON.stringify({ schema: "vcamp-1", campaignId: "c1", count: 1, budget: 5, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), repoKey: REPOKEY })); // 현재 캠페인=이 저장소(ab-1)
   assert.ok(CL.appendFindingsLedger(WS, [
     { type: "disposition", campaignId: "c1", findingId: "f1", choice: "rebut", oosId: "oos-1", asOfRound: 1, ts: new Date().toISOString() },
-    { type: "disposition", campaignId: "c-other", findingId: "f8", choice: "rebut", oosId: "oos-9", asOfRound: 1, ts: new Date().toISOString() }, // ★다른 저장소 캠페인의 되받아침=불산입(4회차 blocker ab-1)
+    { type: "disposition", campaignId: "c1", findingId: "f8", choice: "rebut", oosId: "oos-9", asOfRound: 1, repoKey: "0000000000000000", ts: new Date().toISOString() }, // ★같은 캠페인 id라도 기록 시점 저장소 표식이 다르면 불산입(ab-1 — 창 교대로 한 캠페인이 두 저장소에 속하는 반례)
   ]));
   fs.mkdirSync(path.dirname(CL.ATTACH_USAGE_FILE), { recursive: true });
   fs.appendFileSync(CL.ATTACH_USAGE_FILE, JSON.stringify({ ts: new Date().toISOString(), ws: WS, repoKey: "0000000000000000", askId: "a0", items: [], envelope: { hash: CORE_HASH, sup: [], ab: [], oos: [] }, selOver: { items: true, count: 13 } }) + "\n"); // 같은 세대 지문·다른 저장소의 초과 행=제외(ab-1)
@@ -90,8 +90,10 @@ t("입력 집계기 — 정상: 코어·서고 항목(axis·index·itemFp)·신�
   assert.ok(i1.signals.unusedRules[0].receipts === 2 && i1.signals.unusedRules[0].days >= 39, JSON.stringify(i1.signals.unusedRules));
   assert.deepStrictEqual(i1.signals.rebutUsed, [{ id: "rebut:oos-1", oosId: "oos-1", n: 1 }]);
   assert.strictEqual(i1.signals.selOver.count, 1);
-  const odOther = CL.openDecision(WS, { origin: "implementer", kind: "product", noDefault: "다른 저장소의 제품 방향은 이 저장소가 정할 수 없습니다", campaignId: "c-other", sourceAsk: "ask-x", targetFp: "fpx", question: "다른 프로젝트 결정입니다", why: "타 저장소", choices: [{ key: "a", label: "가" }, { key: "b", label: "나" }] });
-  assert.ok(odOther && odOther.ok, "다른 저장소 캠페인의 결정 생성");
+  const odOther = CL.openDecision(WS, { origin: "implementer", kind: "product", noDefault: "다른 저장소의 제품 방향은 이 저장소가 정할 수 없습니다", campaignId: "c1", sourceAsk: "ask-x", targetFp: "fpx", question: "다른 프로젝트 결정입니다", why: "타 저장소", choices: [{ key: "a", label: "가" }, { key: "b", label: "나" }], repoKey: "0000000000000000" }); // ★같은 캠페인 id·다른 저장소 표식(창 교대 반례)
+  assert.ok(odOther && odOther.ok, "다른 저장소 표식의 결정 생성");
+  assert.strictEqual(CL.readDecisions(WS).latest.get(od.decisionId).repoKey, REPOKEY, "결정 행에 기록 시점 repoKey가 심긴다");
+  assert.ok(CL.readFindingsLedger(WS).filter((r) => r.type === "disposition" && r.findingId === "f1").every((r) => r.repoKey === REPOKEY), "지적 장부 append 관문이 repoKey를 심는다");
   const i1b = CU.curationInput(WS, REPO, { computeCandidates: () => ({ gen: CL.loadContract(WS).envelopeHash, signals: [] }) });
   assert.ok(i1b.ok && i1b.decisions.open.every((x) => x.decisionId !== odOther.decisionId), "★다른 저장소 캠페인의 결정=입력에서 제외(ab-1)");
   assert.ok(!CU.buildCurationPrompt(i1b, "ko").includes("다른 프로젝트 결정입니다"), "프롬프트에도 없음");

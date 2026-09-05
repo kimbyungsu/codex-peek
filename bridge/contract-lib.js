@@ -3777,7 +3777,11 @@ function appendFindingsLedger(ws, recs) {
       const st = fs.statSync(file);
       if (st.size > 0) { const fd = fs.openSync(file, "r"); try { const b = Buffer.alloc(1); fs.readSync(fd, b, 0, 1, st.size - 1); if (b[0] !== 0x0a) lead = "\n"; } finally { fs.closeSync(fd); } }
     } catch (e) { if (!(e && e.code === "ENOENT")) return false; /* 파일 없음=첫 쓰기 · 그 외 꼬리 판독 실패(권한·잠금)=쓰지 않음(fail-closed — 4회차 확인) */ }
-    fs.appendFileSync(file, lead + recs.map((r) => JSON.stringify(r)).join("\n") + "\n");
+    // [CURATION §3 A · ab-1 2026-09-05] 기록 시점 저장소 표식 — 이 장부의 모든 행(지적·등장·종결·승격·처분·판단)에 그 순간의 정찰 대상 repoKey를 심는다(호출자가 이미 넣었으면 보존).
+    // 캠페인 id→저장소 대리 매핑은 창 두 개가 저장소를 바꿔 가며 같은 캠페인을 이어갈 때 무너지므로(확인검증 반례) 행 자체가 소속을 말해야 한다. 판독 실패=미기록(옛 행과 같이 불산입).
+    let rk9 = null; try { rk9 = constraintRepoKeyFor(ws); } catch { rk9 = null; }
+    const recs9 = rk9 ? recs.map((r) => (r && typeof r === "object" && r.repoKey === undefined) ? Object.assign({}, r, { repoKey: rk9 }) : r) : recs;
+    fs.appendFileSync(file, lead + recs9.map((r) => JSON.stringify(r)).join("\n") + "\n");
     return true;
   } catch { return false; }
 }
@@ -4216,7 +4220,7 @@ function openDecision(ws, spec) {
   const prev = cur.latest.get(id);
   if (prev) return { ok: true, decisionId: id, existed: true, status: prev.status }; // 이미 기록(열림·선택·위임)=재생성 없음·상태 반환
   const row = {
-    schema: "decision-v1", decisionId: id, status: "open", wsKey: wsKeyFor(ws), origin: spec.origin, kind: spec.kind, noDefault: String(spec.noDefault).trim(),
+    schema: "decision-v1", decisionId: id, status: "open", wsKey: wsKeyFor(ws), repoKey: (spec.repoKey !== undefined ? String(spec.repoKey || "") : (constraintRepoKeyFor(ws) || "")), origin: spec.origin, kind: spec.kind, noDefault: String(spec.noDefault).trim(), // repoKey=기록 시점 정찰 대상(큐레이션 ab-1 결속·표식 없는 옛 행=불산입)
     campaignId: String(spec.campaignId || ""), sourceAsk: String(spec.sourceAsk || ""), targetFp: String(spec.targetFp || ""),
     question: String(spec.question || ""), why: String(spec.why || ""), choices: Array.isArray(spec.choices) ? spec.choices : [],
     recommend: String(spec.recommend || ""), ts: new Date().toISOString(),

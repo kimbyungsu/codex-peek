@@ -157,6 +157,15 @@ t("자식 판정 — 신호 임계 각각 단독 실행 사유: 강등 반복 �
   ]);
   j = CU.curationTickJudge(Cx.ws, Cx.c(), later);
   assert.ok(j.spawn && j.reason === "oos-repeat:2", JSON.stringify(j));
+  // ★반례(확인검증 ab-1) — 같은 캠페인 c1의 지적이라도 기록 시점 표식이 다른 저장소면 신호에 들어오지 않는다(캠페인 대리 매핑 폐기)
+  const Cy = fixture("sigCy", false);
+  CU.curationTickJudge(Cy.ws, Cy.c()); camp(Cy, "c1"); hist(Cy.ws, ["c1"], 1000, "0000000000000000"); // c1이 다른 저장소 이력에도 존재
+  CL.appendFindingsLedger(Cy.ws, [
+    { type: "finding", campaignId: "c1", envelopeHash: CORE_HASH, findingId: "g1", demoted: true, oosId: "oos-2", titleNorm: "a", repoKey: "0000000000000000", ts },
+    { type: "finding", campaignId: "c1", envelopeHash: CORE_HASH, findingId: "g2", demoted: true, oosId: "oos-2", titleNorm: "b", repoKey: "0000000000000000", ts },
+  ]);
+  j = CU.curationTickJudge(Cy.ws, Cy.c(), later);
+  assert.ok(!j.spawn && j.signals.oosRepeat === 0, "다른 저장소 표식의 지적=불산입 " + JSON.stringify(j.signals));
   const D = fixture("sigD", false);
   CU.curationTickJudge(D.ws, D.c()); camp(D, "c1");
   CL.appendFindingsLedger(D.ws, [

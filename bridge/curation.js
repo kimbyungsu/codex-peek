@@ -112,11 +112,10 @@ function curationInput(ws, repo, opts) {
       }
     } catch { /* 영수증 판독 실패=신호 생략 */ }
   }
-  // ⑥ 되받아침에 쓰인 제외 칸(P12) — 처분 장부 rebut(oosId) 횟수 · 이 저장소 캠페인의 처분만(4회차 blocker ab-1: 다른 저장소 처분이 프롬프트·유효 refs로 유입되던 경로 차단)
+  // ⑥ 되받아침에 쓰인 제외 칸(P12) — 처분 장부 rebut(oosId) 횟수 · 행의 기록 시점 저장소 표식(repoKey)이 이 저장소인 것만(ab-1: 캠페인 id 대리 매핑은 한 캠페인이 두 저장소에 속하는 창 교대에서 무너짐 — 확인검증 반례)
   try {
-    const mineC = repoCampaignIds(ws, repoKey);
     const byOos = new Map();
-    for (const r of CL.readFindingsLedger(ws)) if (r && r.type === "disposition" && r.choice === "rebut" && typeof r.oosId === "string" && r.oosId && mineC.has(r.campaignId)) byOos.set(r.oosId, (byOos.get(r.oosId) || 0) + 1);
+    for (const r of CL.readFindingsLedger(ws)) if (r && r.type === "disposition" && r.choice === "rebut" && typeof r.oosId === "string" && r.oosId && r.repoKey === repoKey) byOos.set(r.oosId, (byOos.get(r.oosId) || 0) + 1);
     for (const [oosId, n] of byOos) sig.rebutUsed.push({ id: "rebut:" + oosId, oosId, n });
   } catch { /* 장부 판독 실패=생략 */ }
   // ⑦ 선별 정상 범위 초과(attach 장부 selOver — 같은 작업 폴더)
@@ -127,13 +126,12 @@ function curationInput(ws, repo, opts) {
       if (o && o.selOver && CL.normWs(String(o.ws || "")) === wsN && o.repoKey === repoKey) { sig.selOver.count++; sig.selOver.lastTs = String(o.ts || sig.selOver.lastTs); } // 저장소 표식 결속(표식 없는 옛 행=불산입 — ab-1)
     }
   } catch { /* 장부 없음=0 */ }
-  // ⑧ 결정 장부(방향 힌트 — 제안 근거로만) · 이 저장소 캠페인의 결정만(5회차 blocker① ab-1: 다른 저장소 결정이 프롬프트·유효 refs로 유입되던 경로 차단)
+  // ⑧ 결정 장부(방향 힌트 — 제안 근거로만) · 행의 기록 시점 저장소 표식(repoKey)이 이 저장소인 결정만(ab-1 — 캠페인 대리 매핑 폐기·표식 없는 옛 결정=제외·보수)
   const decisions = { open: [], answered: [] };
   try {
-    const mineD = repoCampaignIds(ws, repoKey);
     const d = CL.readDecisions(ws);
     for (const r of d.latest.values()) {
-      if (!mineD.has(String(r.campaignId || ""))) continue; // 표식 없는 옛 캠페인·타 저장소=제외(보수)
+      if (String(r.repoKey || "") !== repoKey) continue;
       const q9 = safeText(r.question, 200);
       const row = { id: "decision:" + r.decisionId, decisionId: r.decisionId, kind: String(r.kind || ""), question: q9 || RULE_REDACTED }; // ab-7: 질문 원문이 민감 형태면 표식만
       if (r.status === "open") decisions.open.push(row); else decisions.answered.push(Object.assign(row, { choice: String(r.choice || "") }));
@@ -508,9 +506,8 @@ function repoCampaignIds(ws, repoKey) {
 function curationTickSignals(ws, wsKey, repoKey, gen, arcHash, archiveN) {
   const s = { oosRepeat: 0, lineage: 0, unusedDays: 0, unusedCount: 0, selOver: 0 };
   try {
-    const rows = readTailJson(CL.findingsLedgerFileFor(ws), TICK_TAIL_BYTES);
-    const mine = repoCampaignIds(ws, repoKey);
-    let camp = ""; for (const r of rows) if (r && r.type === "finding" && typeof r.campaignId === "string" && mine.has(r.campaignId) && (r.envelopeHash || null) === (gen || null)) camp = r.campaignId;
+    const rows = readTailJson(CL.findingsLedgerFileFor(ws), TICK_TAIL_BYTES).filter((r) => r && r.repoKey === repoKey); // 행의 기록 시점 저장소 표식으로만(ab-1 — 캠페인 대리 매핑 폐기·표식 없는 옛 행=불산입)
+    let camp = ""; for (const r of rows) if (r && r.type === "finding" && typeof r.campaignId === "string" && (r.envelopeHash || null) === (gen || null)) camp = r.campaignId;
     if (camp) {
       const inGen = (r) => r && r.campaignId === camp && (r.envelopeHash || null) === (gen || null);
       const closed = new Set(); for (const r of rows) if (inGen(r) && r.type === "close" && r.findingId) closed.add(r.findingId);
