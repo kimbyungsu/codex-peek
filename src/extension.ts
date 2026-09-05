@@ -2666,7 +2666,7 @@ function computeState(turnsN: number): BridgeState {
       try {
         const lib = bridgeLib() as any;
         if (!ws || !lib || typeof lib.readDecisions !== "function") return null;
-        const r = lib.readDecisions(ws);
+        const r = lib.readDecisions(ws, (typeof lib.repoKeyNow === "function" && lib.repoKeyNow(ws)) ? { repoKey: lib.repoKeyNow(ws) } : undefined); // [저장소 분할 단일 규칙] 화면의 '지금 정할 것'=현재 정찰 대상 저장소 항목만(ab-1)
         const open: any[] = Array.isArray(r && r.open) ? r.open : [];
         const en = typeof lib.loadLang === "function" && lib.loadLang() === "en";
         const items = open.map((x: any) => ({ // 전량(장부에 상한이 없으므로 화면도 상한 없음 — 조용한 절단은 31번째부터 CLI 전용으로 되돌리는 결함·1회차 blocker)

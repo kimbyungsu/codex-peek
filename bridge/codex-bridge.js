@@ -3041,9 +3041,11 @@ function cmdDecisions(rest) {
     }
     process.stderr.write(tB("사용법: decisions template [show|set <json>|reset]", "Usage: decisions template [show|set <json>|reset]") + "\n"); return 2;
   }
+  const rkDec = require("./contract-lib.js").repoKeyNow(ws); // [저장소 분할 단일 규칙 · 3판 blocker(ab-1)] 결정 표면(render/list/choose/delegate/metrics)=현재 정찰 대상 저장소 항목만
+  const decOpts = rkDec ? { repoKey: rkDec } : undefined;
   if (sub === "render") { // 마감문·보고용 — 열린 항목(또는 지정 id)을 쉬운 말 블록으로
     const en = loadLang() === "en";
-    const cur = readDecisions(ws);
+    const cur = readDecisions(ws, decOpts);
     const id = String(rest[1] || "").trim();
     const items = id ? [cur.latest.get(id)].filter(Boolean) : cur.open;
     if (!items.length) { process.stdout.write((id ? (en ? "no such decision" : "그 id의 결정이 없습니다") : (en ? "None" : "없음")) + "\n"); return id ? 3 : 0; }
@@ -3074,7 +3076,7 @@ function cmdDecisions(rest) {
     return 0;
   }
   if (!sub || sub === "list") {
-    const cur = readDecisions(ws);
+    const cur = readDecisions(ws, decOpts);
     if (!cur.open.length) { w(tB("열린 결정 없음 — 지금 정할 것이 없습니다.", "No open decisions — nothing to decide now.")); return 0; }
     w(tB(`열린 결정 ${cur.open.length}건`, `Open decisions: ${cur.open.length}`));
     for (const d of cur.open) {
@@ -3092,17 +3094,18 @@ function cmdDecisions(rest) {
     const id = String(rest[1] || "").trim();
     const key = sub === "delegate" ? DECISION_DELEGATE_KEY : String(rest[2] || "").trim();
     if (!id || !key) { process.stderr.write(usage + "\n"); return 2; }
-    const cur = readDecisions(ws);
+    const cur = readDecisions(ws, decOpts);
     const d = cur.latest.get(id);
     let currentFp;
     if (d && d.targetFp) { try { currentFp = String((loadContract(ws) || {}).envelopeHash || ""); } catch { currentFp = ""; } } // 전제(승인 수칙서 지문)가 있는 결정만 재대조
-    const r = resolveDecision(ws, id, key, { currentFp, by: "user" });
+    const r = resolveDecision(ws, id, key, { currentFp, by: "user", repoKey: rkDec }); // 저장소 대조(다른 저장소·옛 무표식 항목은 여기서 종결 불가)
     if (r.ok) { w(tB(`기록됨: ${id} → ${r.status === "delegated" ? "네가 정해라(구현자 결정)" : key}`, `Recorded: ${id} → ${r.status === "delegated" ? "delegated to implementer" : key}`)); return 0; }
     const M = {
       "not-found": tB("그 id의 열린 결정이 없습니다(decisions list로 확인).", "No open decision with that id (see decisions list)."),
       "already-resolved": tB("이미 기록된 결정입니다 — 결과 행은 덮어쓰지 않습니다.", "Already recorded — result rows are never overwritten."),
       "target-drift": tB("이 결정이 전제한 수칙서 세대가 바뀌었습니다 — 항목을 닫지 않았습니다. decisions list로 다시 확인하세요(다른 세대의 항목 종결 금지).", "The rulebook generation this decision assumed has changed — not closed. Re-check with decisions list."),
       "unknown-choice": tB("선택지 밖 키입니다 — decisions list의 key 중 하나 또는 delegate.", "Unknown choice key — use a key from decisions list or delegate."),
+      "repo-mismatch": tB(`이 결정은 다른 저장소(${r.decisionRepoKey || "표식 없음"})의 항목입니다 — 현재 정찰 대상(${rkDec || "표식 없음"})에서는 종결할 수 없습니다. 그 저장소를 대상으로 연 창에서 답하세요.`, `This decision belongs to another repository (${r.decisionRepoKey || "unmarked"}) — it cannot be closed from the current target (${rkDec || "unmarked"}). Answer it from a window targeting that repository.`),
     };
     process.stderr.write((M[r.reason] || tB(`기록 실패(${r.reason})`, `Record failed (${r.reason})`)) + "\n");
     return 3;
@@ -3110,7 +3113,7 @@ function cmdDecisions(rest) {
   if (sub === "metrics") {
     const k = rest.indexOf("--campaign");
     const camp = k >= 0 && rest[k + 1] ? String(rest[k + 1]) : "";
-    w(JSON.stringify(decisionMetrics(ws, camp), null, 1));
+    w(JSON.stringify(decisionMetrics(ws, camp, rkDec), null, 1));
     return 0;
   }
   process.stderr.write(usage + "\n");

@@ -47,7 +47,8 @@ t("멱등 — 같은 ws·캠페인·ask·전제·질문은 같은 id·재생성 
   assert.strictEqual(CL.readDecisions(WS).rows.length, 1);
   const idKey = "envhash-1|" + sha1(spec().question).slice(0, 16);
   assert.strictEqual(CL.decisionIdKeyFor("envhash-1", spec().question), idKey);
-  const vec = sha1("decision:" + CL.wsKeyFor(WS) + "|" + spec().campaignId + "|implementer|ask-a1|" + idKey).slice(0, 16);
+  const rkV = String(CL.readDecisions(WS).latest.get(a.decisionId).repoKey || ""); // [저장소 분할 단일 규칙] 산식에 저장소 표식 포함(빈 키=종전 벡터)
+  const vec = sha1("decision:" + CL.wsKeyFor(WS) + "|" + spec().campaignId + "|implementer|ask-a1|" + idKey + (rkV ? "|repo:" + rkV : "")).slice(0, 16);
   assert.strictEqual(a.decisionId, vec);
   // 질문이 다르면 다른 결정
   const b = CL.openDecision(WS, spec({ question: "다른 질문입니다" }));

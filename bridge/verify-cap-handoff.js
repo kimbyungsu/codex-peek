@@ -2,7 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { extractVerdict, authoritativeVerdict, findingsBlockRange, askJobIdOk, readBacklog, normBacklogTitle, readDecisions, renderDecisionBlock, decisionTemplateLabels } = require("./contract-lib.js");
+const { extractVerdict, authoritativeVerdict, findingsBlockRange, askJobIdOk, readBacklog, normBacklogTitle, readDecisions, renderDecisionBlock, decisionTemplateLabels, repoKeyNow } = require("./contract-lib.js");
 
 // 검증 상한은 검증 호출만 멈춘다. 마지막 검증 지적은 구현자가 먼저 네 갈래로 재판단한다.
 // 처리·반박·보관함 항목은 사용자에게 결정을 떠넘기지 않고, 실제 제품 선택만 한 번에 올린다.
@@ -71,7 +71,8 @@ function capHandoffContext(bridgeDir, ws, campaignId) {
   let backlogItems = [], backlogHealthy = false;
   // [개선 2 · 마감문 사용자 판단 절 2026-08-30] 결정 장부의 열린 항목만 사용자 판단으로 인정 — 구현자 산문 질문 차단(스크립트 출력 강제)
   let decisions = [];
-  try { decisions = readDecisions(ws).open.map((d) => ({ id: String(d.decisionId), question: String(d.question || ""), renderKo: renderDecisionBlock(d, false), renderEn: renderDecisionBlock(d, true) })); } catch { decisions = []; }
+  // [저장소 분할 단일 규칙 · 3판 blocker(ab-1)] 마감문에 동봉·대조하는 결정도 현재 정찰 대상 저장소의 항목만(타 저장소의 사용자 질문이 이 마감문에 나타나지 않게).
+  try { const rkD = (typeof repoKeyNow === "function") ? repoKeyNow(ws) : ""; decisions = readDecisions(ws, rkD ? { repoKey: rkD } : undefined).open.map((d) => ({ id: String(d.decisionId), question: String(d.question || ""), renderKo: renderDecisionBlock(d, false), renderEn: renderDecisionBlock(d, true) })); } catch { decisions = []; }
   try {
     const backlog = readBacklog(ws);
     backlogHealthy = !backlog.readError && Number(backlog.corrupt || 0) === 0;

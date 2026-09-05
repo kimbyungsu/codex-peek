@@ -4164,8 +4164,11 @@ const DECISION_DELEGATE_KEY = "delegate"; // "네가 정해라(구현자가 정�
 function decisionsFileFor(ws) { return path.join(DECISIONS_DIR, wsKeyFor(ws) + ".jsonl"); }
 // id 산식(고정 벡터 — 시험이 잠금): sha1("decision:" + wsKey + "|" + campaignId + "|" + origin + "|" + sourceAsk + "|" + idKey).slice(0,16), idKey=decisionIdKeyFor(targetFp, question)
 // 'decision:' 접두어=이름공간 분리(repoKeyOf의 'repo:'와 같은 규약) — 다른 장부의 같은 재료가 같은 id를 만들지 않게.
-function decisionIdFor(ws, campaignId, origin, sourceAsk, idKey) {
-  return sha1Of("decision:" + wsKeyFor(ws) + "|" + String(campaignId || "") + "|" + String(origin || "") + "|" + String(sourceAsk || "") + "|" + String(idKey || "")).slice(0, 16);
+// [저장소 분할 단일 규칙 · 2차 캠페인 3판 blocker(ab-1)] repoKey가 있으면 산식에 들어간다 — 같은 작업 폴더에서 저장소 A·B가 같은 내용의 결정을 올려도 다른 항목(A의 id 재사용 금지).
+// 빈 repoKey(계약 없음·옛 호출)는 종전 벡터 그대로(기존 id 불변).
+function decisionIdFor(ws, campaignId, origin, sourceAsk, idKey, repoKey) {
+  const rk = String(repoKey || "");
+  return sha1Of("decision:" + wsKeyFor(ws) + "|" + String(campaignId || "") + "|" + String(origin || "") + "|" + String(sourceAsk || "") + "|" + String(idKey || "") + (rk ? "|repo:" + rk : "")).slice(0, 16);
 }
 // idKey = targetFp + "|" + sha1(question)[:16] — 같은 캠페인·같은 ask·같은 전제·같은 질문은 같은 결정(재상신 멱등)
 function decisionIdKeyFor(targetFp, question) { return String(targetFp || "") + "|" + sha1Of(String(question || "")).slice(0, 16); }
@@ -4188,15 +4191,18 @@ function decisionRowValid(r) {
   }
   return typeof r.choice === "string" && !!r.choice;
 }
-function readDecisions(ws) {
+// opts.repoKey(문자열·비어 있지 않음)=저장소 분할 단일 규칙: 그 저장소 표식의 열린 항목만 권위(결과 행은 그 항목에만 합성). 표식 없는 옛 항목은 이력.
+// 빈 키·미지정=종전 전체(계약을 모르는 경로의 안전 축퇴). 활성 표면(list/render/choose/delegate·대시보드·마감 동봉·raise 기존 조회)은 현재 저장소 키를 넘긴다.
+function readDecisions(ws, opts) {
   const empty = { rows: [], latest: new Map(), opens: new Map(), open: [] };
   let rows = [];
   try { rows = String(fs.readFileSync(decisionsFileFor(ws), "utf8")).split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(decisionRowValid); } catch { return empty; }
   const wk = wsKeyFor(ws);
+  const rk = (opts && typeof opts.repoKey === "string" && opts.repoKey) ? opts.repoKey : "";
   const opens = new Map(), latest = new Map();
   for (const r of rows) {
     if (r.wsKey !== wk) continue; // ab-1: 다른 프로젝트 행은 이 장부에서 권위 없음
-    if (r.status === "open") { if (!opens.has(r.decisionId)) { opens.set(r.decisionId, r); latest.set(r.decisionId, r); } continue; }
+    if (r.status === "open") { if (rk && String(r.repoKey || "") !== rk) continue; if (!opens.has(r.decisionId)) { opens.set(r.decisionId, r); latest.set(r.decisionId, r); } continue; } // 저장소 표식 불일치·무표식 옛 항목=이 저장소 권위 아님
     const o = opens.get(r.decisionId);
     if (o) latest.set(r.decisionId, Object.assign({}, o, { status: r.status, choice: r.choice, resolvedTs: r.ts, resolvedBy: String(r.by || "") })); // 결과 행이 원항목을 덮지 않고 합성
   }
@@ -4218,12 +4224,13 @@ function openDecision(ws, spec) {
   if (!DECISION_ORIGINS.includes(spec.origin)) return { ok: false, reason: "origin-not-allowed" };
   if (!DECISION_KINDS.includes(spec.kind)) return { ok: false, reason: "kind-not-allowed" };
   if (typeof spec.noDefault !== "string" || spec.noDefault.trim().length < DECISION_NO_DEFAULT_MIN) return { ok: false, reason: "no-default-reason-required" };
-  const id = decisionIdFor(ws, spec.campaignId, spec.origin, spec.sourceAsk, decisionIdKeyFor(spec.targetFp, spec.question));
-  const cur = readDecisions(ws);
+  const rkD = (spec.repoKey !== undefined ? String(spec.repoKey || "") : (constraintRepoKeyFor(ws) || "")); // 기록 시점 저장소 표식(단일 규칙) — id 산식에도 들어간다
+  const id = decisionIdFor(ws, spec.campaignId, spec.origin, spec.sourceAsk, decisionIdKeyFor(spec.targetFp, spec.question), rkD);
+  const cur = readDecisions(ws, { repoKey: rkD }); // 기존 항목 조회도 같은 저장소에서만(타 저장소의 같은 id 재사용 금지)
   const prev = cur.latest.get(id);
   if (prev) return { ok: true, decisionId: id, existed: true, status: prev.status }; // 이미 기록(열림·선택·위임)=재생성 없음·상태 반환
   const row = {
-    schema: "decision-v1", decisionId: id, status: "open", wsKey: wsKeyFor(ws), repoKey: (spec.repoKey !== undefined ? String(spec.repoKey || "") : (constraintRepoKeyFor(ws) || "")), origin: spec.origin, kind: spec.kind, noDefault: String(spec.noDefault).trim(), // repoKey=기록 시점 정찰 대상(큐레이션 ab-1 결속·표식 없는 옛 행=불산입)
+    schema: "decision-v1", decisionId: id, status: "open", wsKey: wsKeyFor(ws), repoKey: rkD, origin: spec.origin, kind: spec.kind, noDefault: String(spec.noDefault).trim(), // repoKey=기록 시점 정찰 대상(큐레이션 ab-1 결속·표식 없는 옛 행=불산입)
     campaignId: String(spec.campaignId || ""), sourceAsk: String(spec.sourceAsk || ""), targetFp: String(spec.targetFp || ""),
     question: String(spec.question || ""), why: String(spec.why || ""), choices: Array.isArray(spec.choices) ? spec.choices : [],
     recommend: String(spec.recommend || ""), ts: new Date().toISOString(),
@@ -4237,6 +4244,8 @@ function resolveDecision(ws, decisionId, choiceKey, opts) {
   const cur = readDecisions(ws);
   const d = cur.latest.get(String(decisionId || ""));
   if (!d) return { ok: false, reason: "not-found" };
+  // [저장소 분할 단일 규칙 · 3판 blocker(ab-1)] 호출자가 현재 저장소 키를 넘기면 결정의 표식과 대조 — 다른 저장소(또는 표식 없는 옛 항목)의 결정을 여기서 종결하지 않는다.
+  if (typeof opts.repoKey === "string") { const dk = String(d.repoKey || ""); if (opts.repoKey ? dk !== opts.repoKey : !!dk) return { ok: false, reason: "repo-mismatch", decisionRepoKey: dk, repoKey: opts.repoKey }; }
   if (d.status !== "open") return { ok: false, reason: "already-resolved", status: d.status };
   // 대상 지문 재대조는 선택이 아니라 계약이다(fail-closed): 결정이 전제한 지문(targetFp)이 있으면 호출자는 현재 지문을
   // 반드시 넘겨야 하고, 없으면 거부 — 생략 호출로 다른 세대·다른 창의 항목을 종결하는 우회 차단(구현 검증 1회차 blocker).
@@ -4246,7 +4255,7 @@ function resolveDecision(ws, decisionId, choiceKey, opts) {
   }
   const delegate = choiceKey === DECISION_DELEGATE_KEY;
   if (!delegate && !d.choices.some((c) => c.key === choiceKey)) return { ok: false, reason: "unknown-choice" };
-  const row = { schema: "decision-v1", decisionId: d.decisionId, status: delegate ? "delegated" : "chosen", wsKey: wsKeyFor(ws), choice: String(choiceKey), by: String(opts.by || "user"), ts: new Date().toISOString() };
+  const row = { schema: "decision-v1", decisionId: d.decisionId, status: delegate ? "delegated" : "chosen", wsKey: wsKeyFor(ws), repoKey: String(d.repoKey || ""), choice: String(choiceKey), by: String(opts.by || "user"), ts: new Date().toISOString() }; // 결과 행도 원항목의 저장소 표식 승계
   const r = appendDecisionRows(ws, [row]);
   return r.ok ? { ok: true, status: row.status } : { ok: false, reason: r.reason };
 }
@@ -4361,8 +4370,8 @@ function renderDecisionBlock(d, en) {
   return L.join("\n");
 }
 // 지표 재료(§7): 캠페인별·출처별 생성/선택/위임/미처리 수 — "제조된 결정" 신호는 수치로만 남긴다
-function decisionMetrics(ws, campaignId) {
-  const cur = readDecisions(ws);
+function decisionMetrics(ws, campaignId, repoKey) {
+  const cur = readDecisions(ws, (typeof repoKey === "string" && repoKey) ? { repoKey } : undefined); // 지표도 현재 저장소 항목만(호출자가 키를 넘길 때)
   const out = { total: 0, byOrigin: {}, open: 0, chosen: 0, delegated: 0 };
   for (const d of cur.latest.values()) {
     if (campaignId && d.campaignId !== campaignId) continue;

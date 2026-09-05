@@ -490,4 +490,48 @@ t("★반례(2차 캠페인 1판 blocker ab-1) — 판단 관문 마커·round-j
   assert.ok(cb.includes('"decision-repo-mismatch": tB(') && cb.includes("[저장소 분할 단일 규칙 · escalate 결정 결속(2차 캠페인 2판 blocker·ab-1)]"), "finding-judge/round-judge 결정 저장소 대조 소스 핀");
 });
 
+t("★반례(2차 캠페인 3판 blocker ab-1) — 결정 장부의 생성·목록·선택·마감 동봉이 저장소별: A에서 만든 결정은 B 대상에서 안 보이고 종결도 거부, 같은 내용을 B에서 올리면 별도 항목", () => {
+  const F = fixture("dec", false);
+  const CAMP = "cl:dec:1"; const B = "0000000000000000";
+  const spec = (q) => ({ origin: "implementer", kind: "product", campaignId: CAMP, sourceAsk: "ask-dec-1", targetFp: "", question: q, why: "시험", noDefault: "구현자가 정할 수 없는 제품 방향 문제라서", choices: [{ key: "keep", label: "유지" }, { key: "change", label: "변경" }], recommend: "keep" });
+  const dA = CL.openDecision(F.ws, spec("A의 질문입니까?"));
+  assert.ok(dA.ok && !dA.existed, JSON.stringify(dA));
+  const rowA = CL.readDecisions(F.ws).latest.get(dA.decisionId);
+  assert.strictEqual(rowA.repoKey, F.repoKey, "결정 행=현재 계약(A) 표식");
+  // 현재 저장소(A) 기준 표면에는 보임
+  assert.ok(CL.readDecisions(F.ws, { repoKey: F.repoKey }).open.some((d) => d.decisionId === dA.decisionId), "A 기준 목록에 있음");
+  // 대상을 B로 전환 → 목록·마감 동봉에서 사라지고 종결 거부
+  const repoB = fs.mkdtempSync(path.join(os.tmpdir(), "curt-dec-repoB-"));
+  assert.ok(CL.updateContractPatch(F.ws, "ko", { scoutRepo: repoB }).ok);
+  const rkB = CL.repoKeyOf(repoB);
+  assert.ok(!CL.readDecisions(F.ws, { repoKey: rkB }).open.some((d) => d.decisionId === dA.decisionId), "★B 기준 목록에 A 결정 없음");
+  const rB = CL.resolveDecision(F.ws, dA.decisionId, "keep", { by: "user", repoKey: rkB });
+  assert.ok(rB && rB.ok === false && rB.reason === "repo-mismatch", "★B에서 A 결정 종결=거부 " + JSON.stringify(rB));
+  assert.strictEqual(CL.readDecisions(F.ws).latest.get(dA.decisionId).status, "open", "거부 뒤에도 열린 상태 유지");
+  // 같은 내용을 B에서 올리면 A id 재사용 없이 별도 항목(id 산식에 저장소 포함)
+  const dB = CL.openDecision(F.ws, spec("A의 질문입니까?"));
+  assert.ok(dB.ok && !dB.existed && dB.decisionId !== dA.decisionId, "★B에서 같은 내용 raise=별도 항목(existed 아님) " + JSON.stringify([dA.decisionId, dB.decisionId]));
+  assert.strictEqual(CL.readDecisions(F.ws).latest.get(dB.decisionId).repoKey, rkB);
+  // 마감 문맥 동봉도 현재 저장소(B)만
+  const VH = require("../bridge/verify-cap-handoff.js");
+  const ctx = VH.capHandoffContext(process.env.CODEX_BRIDGE_HOME, F.ws, CAMP);
+  const ids = (ctx.decisions || []).map((d) => d.id);
+  assert.ok(ids.includes(dB.decisionId) && !ids.includes(dA.decisionId), "★마감 동봉 결정=B 항목만 " + JSON.stringify(ids));
+  // A로 되돌리면 A 결정만 보이고 A에서 종결 가능
+  assert.ok(CL.updateContractPatch(F.ws, "ko", { scoutRepo: F.repo }).ok);
+  assert.ok(CL.readDecisions(F.ws, { repoKey: F.repoKey }).open.some((d) => d.decisionId === dA.decisionId) && !CL.readDecisions(F.ws, { repoKey: F.repoKey }).open.some((d) => d.decisionId === dB.decisionId), "A 기준=A만");
+  const rA = CL.resolveDecision(F.ws, dA.decisionId, "keep", { by: "user", repoKey: F.repoKey });
+  assert.ok(rA && rA.ok === true, "A에서 A 결정 종결 " + JSON.stringify(rA));
+  assert.strictEqual(CL.readDecisions(F.ws).rows.filter((r) => r.decisionId === dA.decisionId && r.status === "chosen")[0].repoKey, F.repoKey, "결과 행도 저장소 표식 승계");
+  // 키 없는 호출(계약 모름)=종전 전체(축퇴) · 빈 키 결정은 표식 없는 이력
+  assert.ok(CL.readDecisions(F.ws).latest.has(dA.decisionId) && CL.readDecisions(F.ws).latest.has(dB.decisionId), "무필터 판독=전체(축퇴)");
+  // 소스 핀 — 표면 4곳이 현재 저장소 키를 넘긴다
+  const cb = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
+  assert.ok(cb.includes('const rkDec = require("./contract-lib.js").repoKeyNow(ws);') && (cb.match(/readDecisions\(ws, decOpts\)/g) || []).length === 3 && cb.includes('resolveDecision(ws, id, key, { currentFp, by: "user", repoKey: rkDec })') && cb.includes("decisionMetrics(ws, camp, rkDec)"), "decisions CLI 표면=현재 저장소");
+  const vh = fs.readFileSync(path.join(__dirname, "..", "bridge", "verify-cap-handoff.js"), "utf8");
+  assert.ok(vh.includes("readDecisions(ws, rkD ? { repoKey: rkD } : undefined).open"), "마감 동봉=현재 저장소");
+  const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
+  assert.ok(ext.includes("lib.readDecisions(ws, (typeof lib.repoKeyNow === \"function\" && lib.repoKeyNow(ws)) ? { repoKey: lib.repoKeyNow(ws) } : undefined)"), "대시보드 '지금 정할 것'=현재 저장소");
+});
+
 console.log(`\n결과: ${n} 통과 / 0 실패`);
