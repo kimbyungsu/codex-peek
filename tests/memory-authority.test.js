@@ -48,7 +48,7 @@ const led = [
   { type: "close", campaignId: camp, findingId: "f-dddd0004", closeReason: "resolved", round: 4, envelopeHash: HASH, askId: "ask-test-2", ts: "t" },
 ];
 fs.mkdirSync(path.dirname(CL.findingsLedgerFileFor(WS)), { recursive: true });
-fs.writeFileSync(CL.findingsLedgerFileFor(WS), led.map((r) => JSON.stringify(r)).join("\n") + "\n");
+fs.writeFileSync(CL.findingsLedgerFileFor(WS), led.map((r) => JSON.stringify({ ...r, repoKey: CL.repoKeyOf(REPO) })).join("\n") + "\n"); // [저장소 분할 단일 규칙] 현행 기록은 저장소 표식을 가진다(관문 스탬프와 동형) — 표식 없는 행은 이력이라 상신 대상이 아님
 
 // ── [재편 A §2-1] 공급=명시 상신(rule-propose)뿐 — 본 스캔 폐지 반례+자격·결속 ──
 t("본 스캔 폐지: 해소 blocker가 자동으로 후보가 되지 않음(헌법 — 이력≠자격)", () => {
@@ -84,7 +84,7 @@ t("rule-propose 자격 거부: 비blocker=not-blocker·legacy(title 부재)=lega
     fs.appendFileSync(CL.findingsLedgerFileFor(WS), [
       { type: "finding", findingId: "f-supdup1", campaignId: camp, round: 9, tag: "blocker", titleNorm: "sd", title: supT, envelopeHash: HASH, status: "open", ts: "t" },
       { type: "close", campaignId: camp, findingId: "f-supdup1", closeReason: "resolved", round: 9, envelopeHash: HASH, askId: "ask-sd", ts: "t" },
-    ].map((r) => JSON.stringify(r)).join("\n") + "\n");
+    ].map((r) => JSON.stringify({ ...r, repoKey: CL.repoKeyOf(REPO) })).join("\n") + "\n"); // [저장소 분할 단일 규칙] 현행 기록=저장소 표식(무표식 행은 상신 대상 아님)
     assert.strictEqual(CL.ruleProposeCandidate(WS, REPO, { findingId: "f-supdup1", why: "전제 축 중복 반례", campaignId: camp, approvedHash: HASH }).reason, "already-in-envelope", "supportedEnv 기등재 문안=상신 거부");
   }
   assert.strictEqual(CL.ruleProposeCandidate(WS, REPO, { findingId: "f-aaaa0001", why: "이유", campaignId: "cl:other:1", approvedHash: HASH }).reason, "other-campaign");
@@ -114,7 +114,7 @@ t("rule-propose pending 상한=차단이 아니라 경고(수동 판단 산출·
     { type: "finding", findingId: "f-eeee0005", campaignId: camp, round: 5, tag: "blocker", titleNorm: "t5", title: "새 위험 사례", envelopeHash: HASH, status: "open", ts: "t" },
     { type: "close", campaignId: camp, findingId: "f-eeee0005", closeReason: "resolved", round: 6, envelopeHash: HASH, askId: "ask-test-3", ts: "t" },
   ];
-  fs.appendFileSync(CL.findingsLedgerFileFor(WS), extra.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  fs.appendFileSync(CL.findingsLedgerFileFor(WS), extra.map((r) => JSON.stringify({ ...r, repoKey: CL.repoKeyOf(REPO) })).join("\n") + "\n"); // [저장소 분할 단일 규칙] 현행 기록=저장소 표식
   const r4 = CL.ruleProposeCandidate(WS, REPO, { findingId: "f-eeee0005", why: "상한 경고 확인용 관통 이유", campaignId: camp, approvedHash: HASH });
   assert.strictEqual(r4.ok, true, "상한이 수동 상신을 막지 않음");
   assert.strictEqual(r4.warn, "pending-cap", "경고 동봉(침묵 금지)");
@@ -509,7 +509,7 @@ t("B3 실행: 200자 초과 title=절단 표식과 함께 병합(무표식 절�
     { type: "close", campaignId: "cl:b3", findingId: "f-eeee0005", closeReason: "resolved", round: 2, envelopeHash: h3, askId: "ask-b3", ts: "t" },
   ];
   fs.mkdirSync(path.dirname(CL.findingsLedgerFileFor(ws3)), { recursive: true });
-  fs.writeFileSync(CL.findingsLedgerFileFor(ws3), led3.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  fs.writeFileSync(CL.findingsLedgerFileFor(ws3), led3.map((r) => JSON.stringify({ ...r, repoKey: CL.repoKeyOf(rp3) })).join("\n") + "\n"); // [저장소 분할 단일 규칙] 현행 기록=저장소 표식
   CL.setEnvelopeHashAllSlots(ws3, h3); CL.updateContractPatch(ws3, undefined, { scoutRepo: rp3 });
   const rp0 = CL.ruleProposeCandidate(ws3, rp3, { findingId: "f-eeee0005", why: "절단 표식 검사용 관통 이유", campaignId: "cl:b3", approvedHash: h3 });
   assert.strictEqual(rp0.ok, true, "상신 성공: " + (rp0.reason || ""));
@@ -588,7 +588,7 @@ t("A-5 stale 실행: 승인 세대 변경 → 구세대 pending=자동 declined(
     { type: "close", campaignId: "cl:st", findingId: "f-ffff0006", closeReason: "resolved", round: 2, envelopeHash: H1, askId: "ask-st-1", ts: "t" },
   ];
   fs.mkdirSync(path.dirname(CL.findingsLedgerFileFor(wsS)), { recursive: true });
-  fs.writeFileSync(CL.findingsLedgerFileFor(wsS), ledS.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  fs.writeFileSync(CL.findingsLedgerFileFor(wsS), ledS.map((r) => JSON.stringify({ ...r, repoKey: CL.repoKeyOf(rpS) })).join("\n") + "\n"); // [저장소 분할 단일 규칙] 현행 기록=저장소 표식
   CL.setEnvelopeHashAllSlots(wsS, H1); CL.updateContractPatch(wsS, undefined, { scoutRepo: rpS });
   const rp1 = CL.ruleProposeCandidate(wsS, rpS, { findingId: "f-ffff0006", why: "임시 산출물 위치 규율은 파일 하나를 넘는 관통 지침", campaignId: "cl:st", approvedHash: H1 });
   assert.strictEqual(rp1.ok, true, "H1 세대에 rule-manual proposed: " + (rp1.reason || ""));
@@ -616,7 +616,7 @@ t("rule-propose 자격(재검증 blocker① 반례): 인용형 강등 종결(clo
     { type: "finding", findingId: "f-gggg0007", campaignId: camp, round: 7, tag: "blocker", titleNorm: "t7", title: "범위 밖으로 강등된 지적 문안", envelopeHash: HASH, status: "open", ts: "t" },
     { type: "close", campaignId: camp, findingId: "f-gggg0007", closeReason: "demoted", round: 8, envelopeHash: HASH, ts: "t" },
   ];
-  fs.appendFileSync(CL.findingsLedgerFileFor(WS), extra2.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  fs.appendFileSync(CL.findingsLedgerFileFor(WS), extra2.map((r) => JSON.stringify({ ...r, repoKey: CL.repoKeyOf(REPO) })).join("\n") + "\n"); // [저장소 분할 단일 규칙] 현행 기록=저장소 표식
   const r = CL.ruleProposeCandidate(WS, REPO, { findingId: "f-gggg0007", why: "강등돼도 관통 지침 성격이면 상신 가능해야 함", campaignId: camp, approvedHash: HASH });
   assert.strictEqual(r.ok, true, "인용형 강등 종결=자격 인정: " + (r.reason || ""));
   const rec7 = CL.readEnvelopeCandidates(WS).latest.get(r.candidateId + "@" + HASH);

@@ -188,3 +188,5 @@ ab-1 wsKey·repoKey 결속(입력·키·모든 행·영수증) · ab-2 계약 �
 - **확인검증 4판(2026-09-05) blocker 2 반영 — 저장소 분할 단일 규칙**: ⑱ "무표식 옛 행 포함(연속성)" 예외를 폐기하고 활성 판독 전부를 한 규칙으로 통일 — `ledgerRowsForRepo(rows, repoKey)`=행의 repoKey가 일치하는 것만.
   적용 범위: 결과 처리(판 유형·라운드·열린 목록·승격·기존 id·**되받아침**)·검증 주입 `v2DynamicData`(열린 지적·되받아침)·시작 관문 `findingDispositionGate`(미처분 지적)·finding-judge(열린 목록·처분·잔여·활동 라운드)·큐레이션 신호. 표식 없는 옛 행(업그레이드 이전)=소속 불명 → 새 판정에서 제외되고 이력으로만 남는다(재기록 없음·ab-5).
   대가: 업그레이드 직후 진행 중이던 캠페인의 옛 열린 지적은 새 통과 판이 자동 종결하지 않는다(관문도 그 지적을 막지 않으므로 사용자 흐름은 막히지 않음). 저장소 키를 모르는 경로(빈 값)만 종전 전체 판독으로 축퇴.
+- **확인검증 5판(2026-09-05·압축 보류) blocker 4 반영 — 같은 규칙을 남은 활성 경로 4곳에**: ⑲ finding-judge 목록의 유효성 표시·fix-gap 누계(`fixGapCount(ws, camp, repoKey)`)=현재 저장소 행만 · 검증 결과 부가 보고 3종(원인 분해·수칙서 후보 재료·무결성 재심 재료 — `repoKeySnap9` 시작 스냅샷 키; 이 문자열은 근거 재확인 checkpoint에도 저장됨) · `rule-propose`=현재 대상 저장소 표식 행에서만 finding·close 선택(타 저장소 지적=finding-not-found) · Project MAP 수확기 `harvestFromResolvedFinding(…, repoKey)`=종결 판의 저장소 행만(B 처분+A 종결 결합 불가). 반례 시험 tests/curation-trigger.test.js [11].
+  도장 상태: 이 캠페인 5/5 소진 → **미도장** — 다음 캠페인 첫 검증에서 도장 필요.

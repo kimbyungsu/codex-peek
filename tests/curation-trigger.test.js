@@ -369,4 +369,77 @@ t("★반례(4판 blocker②) — B 표식의 되받아침(implementer-oos)이 A
   } finally { if (old === undefined) delete process.env.CODEX_BRIDGE_ASK_JOB_ID; else process.env.CODEX_BRIDGE_ASK_JOB_ID = old; }
 });
 
+t("★반례(5판 blocker①~④ ab-1) — 남은 활성 판독 4곳도 저장소 표식 일치 행만: finding-judge 유효성/fix-gap 누계 · 결과 부가 보고 3종 · rule-propose · MAP 수확기", () => {
+  const CB = require("../bridge/codex-bridge.js");
+  const MPV = require("../bridge/map-provenance.js");
+  const F = fixture("tail", false);
+  const CAMP = "cl:tail:1"; const ts = new Date().toISOString(); const B = "0000000000000000";
+  fs.mkdirSync(path.dirname(CL.campaignFileFor(F.ws)), { recursive: true });
+  fs.writeFileSync(CL.campaignFileFor(F.ws), JSON.stringify({ schema: "vcamp-1", campaignId: CAMP, count: 1, budget: 9, startedAt: ts, updatedAt: ts, repoKey: F.repoKey }));
+  const old = process.env.CODEX_BRIDGE_ASK_JOB_ID; process.env.CODEX_BRIDGE_ASK_JOB_ID = "ask-tail-1";
+  try {
+    assert.strictEqual(CL.writeEnvelopeFreeze(F.ws, CORE_HASH, "ask-tail-1"), true);
+    // ① A: f-x round 1 + fix-gap 처분(asOfRound 1) · B: 같은 id의 round 2 재등장 + B 자신의 fix-gap 처분 2건
+    assert.ok(CL.appendFindingsLedger(F.ws, [
+      { type: "finding", campaignId: CAMP, round: 1, findingId: "f-x", tag: "blocker", title: "A 결함 x", titleNorm: "a결함x", status: "open", envelopeHash: CORE_HASH, ts },
+      { type: "disposition", campaignId: CAMP, findingId: "f-x", choice: "fix-gap", note: "보강", asOfRound: 1, ts },
+    ], { repoKey: F.repoKey }));
+    assert.ok(CL.appendFindingsLedger(F.ws, [
+      { type: "occurrence", campaignId: CAMP, round: 2, findingId: "f-x", ts },
+      { type: "finding", campaignId: CAMP, round: 1, findingId: "f-b1", tag: "blocker", title: "B1", titleNorm: "b1", status: "open", envelopeHash: CORE_HASH, ts },
+      { type: "disposition", campaignId: CAMP, findingId: "f-b1", choice: "fix-gap", note: "보강", asOfRound: 1, ts },
+      { type: "finding", campaignId: CAMP, round: 1, findingId: "f-b2", tag: "blocker", title: "B2", titleNorm: "b2", status: "open", envelopeHash: CORE_HASH, ts },
+      { type: "disposition", campaignId: CAMP, findingId: "f-b2", choice: "fix-gap", note: "보강", asOfRound: 1, ts },
+      // ② B의 범위 밖 강등 2건(같은 세대) — A 결과의 원인 분해·후보 재료·재심 재료에 섞이면 안 됨
+      { type: "finding", campaignId: CAMP, round: 1, findingId: "f-bo1", tag: "blocker", title: "BO1", titleNorm: "bo1", status: "open", demoted: true, oosId: "oos-1", envelopeHash: CORE_HASH, ts },
+      { type: "finding", campaignId: CAMP, round: 1, findingId: "f-bo2", tag: "blocker", title: "BO2", titleNorm: "bo2", status: "open", demoted: true, oosId: "oos-1", envelopeHash: CORE_HASH, ts },
+      // ③ B의 해결된 blocker(rule-propose 자격 형태) · ④ B의 fix-fact 처분(sourceRefs 있음)
+      { type: "finding", campaignId: CAMP, round: 1, findingId: "f-bres", tag: "blocker", title: "B 해결 지적 제목", titleNorm: "b해결지적제목", status: "open", envelopeHash: CORE_HASH, ts },
+      { type: "close", campaignId: CAMP, findingId: "f-bres", closeReason: "resolved", round: 2, askId: "ask-b-9", envelopeHash: CORE_HASH, ts },
+      { type: "finding", campaignId: CAMP, round: 1, findingId: "f-h", tag: "blocker", title: "H", titleNorm: "h", status: "open", envelopeHash: CORE_HASH, ts },
+      { type: "disposition", campaignId: CAMP, findingId: "f-h", choice: "fix-fact", note: "사실", asOfRound: 1, sourceRefs: [{ file: "docs/x.md", anchor: "heading:근거", contentHash: "deadbeef", repoKey: B }], repoPath: F.repo, ts },
+    ], { repoKey: B }));
+    // A: 자기 해결 blocker(양성 대조) + f-h의 A 종결(B 처분과 결합 금지)
+    assert.ok(CL.appendFindingsLedger(F.ws, [
+      { type: "finding", campaignId: CAMP, round: 1, findingId: "f-ares", tag: "blocker", title: "A 해결 지적 제목", titleNorm: "a해결지적제목", status: "open", envelopeHash: CORE_HASH, ts },
+      { type: "close", campaignId: CAMP, findingId: "f-ares", closeReason: "resolved", round: 2, askId: "ask-a-9", envelopeHash: CORE_HASH, ts },
+      { type: "close", campaignId: CAMP, findingId: "f-h", closeReason: "resolved", round: 2, askId: "ask-a-9", envelopeHash: CORE_HASH, ts },
+    ], { repoKey: F.repoKey }));
+    const all = CL.readFindingsLedger(F.ws);
+    const mine = CL.ledgerRowsForRepo(all, F.repoKey);
+    // ① 유효성·fix-gap 누계
+    const dA = CL.dispositionsFromRows(mine, CAMP).get("f-x");
+    assert.strictEqual(CL.dispositionValid(all, CAMP, dA), false, "(전제) 전체 장부로 보면 B의 round 2 재등장이 A 처분을 낡게 만든다");
+    assert.strictEqual(CL.dispositionValid(mine, CAMP, dA), true, "★A 행만 보면 A 처분(asOf 1 ≥ 활동 1) 유효");
+    assert.strictEqual(CL.fixGapCount(F.ws, CAMP, F.repoKey), 1, "★fix-gap 누계=A 행만(B 2건 불산입·A 처분은 유효)");
+    assert.strictEqual(CL.fixGapCount(F.ws, CAMP, B), 2, "B 기준=B 2건");
+    // ② 결과 부가 보고 3종(시작 스냅샷 키)
+    const res = { tracked: true, last: {} };
+    const bd = String(CB.breakdownNoticeFor(F.ws, "ko", res, F.repoKey) || "");
+    assert.ok(/범위 밖 강등 0/.test(bd) && /초기 결함 2/.test(bd), "★원인 분해=A 행만(강등 0·초기 결함 2=f-x·f-ares — f-h의 finding은 B 것) " + JSON.stringify(bd));
+    assert.ok(/범위 밖 강등 2/.test(String(CB.breakdownNoticeFor(F.ws, "ko", res) || "")), "(전제) 키 없음=전체(B 강등 2 포함)");
+    assert.strictEqual(String(CB.integrityReviewLine(F.ws, "ko", "integrity", F.repoKey) || ""), "", "★재심 재료=A 행만(A 강등 0=빈 줄)");
+    assert.ok(/oos-1 ×2/.test(String(CB.integrityReviewLine(F.ws, "ko", "integrity") || "")), "(전제) 키 없음=B 강등 집계");
+    const cand = String(CB.envelopeCandidateNoticeFor(F.ws, "ko", res, "core", F.repoKey) || "");
+    assert.ok(cand && !/oos-repeat/.test(cand), "★후보 재료=A 행만(B의 oos-repeat 없음) " + JSON.stringify(cand));
+    assert.ok(/oos-repeat/.test(String(CB.envelopeCandidateNoticeFor(F.ws, "ko", res, "core") || "")), "(전제) 키 없음=B의 oos-repeat 후보가 보임");
+    // ③ rule-propose: 타 저장소 해결 지적=finding-not-found · 자기 저장소=성립
+    const rp = CL.ruleProposeCandidate(F.ws, F.repo, { findingId: "f-bres", why: "이 상황은 늘 먼저 막아야 하는 관통 지침이다", campaignId: CAMP });
+    assert.ok(rp && rp.ok === false && rp.reason === "finding-not-found", "★B 지적으로 A 후보 생성 거부 " + JSON.stringify(rp));
+    const rpA = CL.ruleProposeCandidate(F.ws, F.repo, { findingId: "f-ares", why: "이 상황은 늘 먼저 막아야 하는 관통 지침이다", campaignId: CAMP });
+    assert.ok(rpA && rpA.ok === true, "A 자기 지적=후보 성립(양성 대조) " + JSON.stringify(rpA));
+    // ④ 수확기: A 종결 판의 저장소 행만 → B 처분이 안 보여 거부
+    const hv = MPV.harvestFromResolvedFinding(F.ws, F.repo, CAMP, "f-h", F.repoKey);
+    assert.ok(hv && hv.ok === false && hv.reason === "disposition", "★A 종결+B 처분 결합 불가(A 행에 처분 없음) " + JSON.stringify(hv));
+    assert.notStrictEqual(MPV.harvestFromResolvedFinding(F.ws, F.repo, CAMP, "f-h").reason, "disposition", "(전제) 키 없음=B 처분이 보여 처분 관문을 통과한다");
+    // 소스 핀 — 호출 지점이 시작 스냅샷/현재 저장소 키를 넘긴다
+    const cb = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
+    assert.ok(cb.includes("const valid = dispositionValid(rowsMine, camp, d);") && cb.includes("const gaps = fixGapCount(ws, camp, rkCurJ);"), "finding-judge 유효성·fix-gap=현재 저장소 행");
+    assert.ok(cb.includes("breakdownNoticeFor(ws, langSnap, budgetGate.res, repoKeySnap9)") && cb.includes("envelopeCandidateNoticeFor(ws, langSnap, budgetGate.res, profileSnap, repoKeySnap9)") && cb.includes("integrityReviewLine(ws, langSnap, profileSnap, repoKeySnap9);"), "부가 보고 3종=시작 스냅샷 키");
+    assert.ok(cb.includes("MPV9.harvestFromResolvedFinding(ws, repo9, camp, r9.findingId, repoKeySnap);"), "수확기 호출=시작 스냅샷 키");
+    const cl = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
+    assert.ok(cl.includes("const rows = ledgerRowsForRepo(readFindingsLedger(ws), repoKeyOf(repo));"), "rule-propose=현재 대상 저장소 행");
+  } finally { if (old === undefined) delete process.env.CODEX_BRIDGE_ASK_JOB_ID; else process.env.CODEX_BRIDGE_ASK_JOB_ID = old; }
+});
+
 console.log(`\n결과: ${n} 통과 / 0 실패`);

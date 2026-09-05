@@ -4800,7 +4800,9 @@ function ruleProposeCandidate(ws, repo, opts) {
   if (/[\r\n\u2028\u2029]/.test(why) || why.length > CONSTRAINT_WHY_MAX) return reject("why-format");
   const wSafe = safeBacklogAutoTitle(why);
   if (!wSafe.ok) return reject("why-sensitive-" + wSafe.reasonKey);
-  const rows = readFindingsLedger(ws);
+  // [저장소 분할 단일 규칙 · 5판 blocker③] finding·close 선택은 현재 대상 저장소 표식의 행에서만 — 같은 작업 폴더 타 저장소의 해결 지적으로
+  // 이 저장소 후보를 만들 수 없다(타 저장소 지적=finding-not-found·표식 없는 옛 행=이력).
+  const rows = ledgerRowsForRepo(readFindingsLedger(ws), repoKeyOf(repo));
   let f = null;
   for (const r of rows) if (r && r.type === "finding" && r.findingId === findingId) { f = r; break; }
   if (!f) return reject("finding-not-found");
@@ -5246,12 +5248,14 @@ function undisposedOpenFindings(ws, campaignId, gen) {
   // asOfRound 미결속(legacy·수동)=미판단 취급 / 재등장이 처분보다 뒤면 낡은 처분=재판단 필요
   return openFindingsFor(ws, campaignId, gen).filter((o) => !dispositionValid(rows, campaignId, d.get(o.id)));
 }
-function fixGapCount(ws, campaignId) {
+function fixGapCount(ws, campaignId, repoKey) {
   // 1차 [보완]+확인 [보완]② 반영: 대체된 과거 레코드·낡은(재등장으로 무효) 처분 집계 금지 —
   // '지금 유효한' fix-gap 처분의 고유 지적 수만(관문과 같은 유효성 계산).
-  const rows = readFindingsLedger(ws);
+  // [저장소 분할 단일 규칙 · 5판 blocker①] repoKey가 오면 그 저장소 표식 행만 — 타 저장소의 재등장이 이 저장소 처분을 낡게 만들거나
+  // 타 저장소 fix-gap 누계가 이 저장소의 운영 경고를 발동하지 않는다(빈 키=종전 전체 축퇴).
+  const rows = ledgerRowsForRepo(readFindingsLedger(ws), repoKey);
   let n = 0;
-  for (const rec of dispositionsFor(ws, campaignId).values()) if (rec.choice === "fix-gap" && dispositionValid(rows, campaignId, rec)) n++;
+  for (const rec of dispositionsFromRows(rows, campaignId).values()) if (rec.choice === "fix-gap" && dispositionValid(rows, campaignId, rec)) n++;
   return n;
 }
 

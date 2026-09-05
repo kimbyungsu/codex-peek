@@ -471,9 +471,11 @@ function mergedEntriesFor(repoRoot) {
 }
 
 // 수확기 (a): 해소 완결 finding(자격=최신 처분 fix-fact+dispositionValid+resolved close.round>=최신 활동)
-function harvestFromResolvedFinding(ws, repoRoot, campaignId, findingId) {
+function harvestFromResolvedFinding(ws, repoRoot, campaignId, findingId, repoKey) {
   try {
-    const rows = CL.readFindingsLedger(ws);
+    // [저장소 분할 단일 규칙 · 5판 blocker④(ab-1)] 처분·종결·활동 라운드는 호출자(종결 판)의 저장소 표식 행에서만 조합 —
+    // B의 fix-fact 처분이 A의 종결과 결합해 B 지도에 자동 항목을 쓰는 경로 차단(빈 키=종전 전체 축퇴 — 구 호출 호환).
+    const rows = CL.ledgerRowsForRepo(CL.readFindingsLedger(ws), repoKey);
     const disps = rows.filter((r) => r.type === "disposition" && r.campaignId === campaignId && r.findingId === findingId);
     const latest = disps[disps.length - 1];
     if (!latest || latest.choice !== "fix-fact") return { ok: false, reason: "disposition" };

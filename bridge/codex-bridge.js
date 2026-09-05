@@ -3150,7 +3150,7 @@ function cmdFindingJudge(rest) {
     // 판단됨' 모순): ✅=지금 유효한 처분만. 재등장으로 낡은 처분은 🔁(재판단 필요)로 구분.
     for (const o of opens) {
       const d = disp.get(o.id);
-      const valid = dispositionValid(rows, camp, d);
+      const valid = dispositionValid(rowsMine, camp, d); // [단일 규칙 · 5판 blocker①] 유효성도 이 저장소 행만(B 재등장이 A 처분을 '재판단 필요'로 보이게 금지)
       const mark = valid ? "✅" : d ? "🔁" : "⬜";
       const suffix = valid ? tB(" → ", " → ") + (CH[d.choice] || d.choice) : d ? tB(" → 재등장으로 재판단 필요(이전: ", " → re-raised, judge again (was: ") + (CH[d.choice] || d.choice) + ")" : "";
       process.stdout.write(`  ${mark} ${o.id} [${o.tag}] ${String(o.titleNorm || "").slice(0, 60)}${suffix}\n`);
@@ -3265,7 +3265,7 @@ function cmdFindingJudge(rest) {
   const remain = require("./contract-lib.js").undisposedOpenFindingsFromRows(require("./contract-lib.js").ledgerRowsForRepo(readFindingsLedger(ws), rkCurJ), camp, gen).length;
   process.stdout.write(tB(`기록됨: ${id} → ${choice}${parkedId ? ` (보관함 영수증 ${parkedId})` : ""}${disp.has(id) ? " (재판단 — 이전 기록 대체)" : ""}\n남은 미판단 ${remain}건${remain ? "" : " — 다음 검증을 시작할 수 있습니다"}\n`,
                           `Recorded: ${id} → ${choice}${parkedId ? ` (backlog receipt ${parkedId})` : ""}${disp.has(id) ? " (re-judged — supersedes previous)" : ""}\n${remain} unjudged remaining${remain ? "" : " — the next verification can start"}\n`));
-  const gaps = fixGapCount(ws, camp);
+  const gaps = fixGapCount(ws, camp, rkCurJ); // [단일 규칙 · 5판 blocker①] fix-gap 누계=이 저장소 행만
   if (gaps >= FIX_GAP_NOTICE_AT) {
     process.stdout.write(tB(
       `📈 이번 묶음에서 '보강 요구 수용(fix-gap)'이 ${gaps}건째입니다 — 산출물이 틀려서가 아니라 "더 자세히"가 반복되는 상태입니다. 글로 정하는 단계가 수확 체감에 들어갔다는 신호이니, 다음 왕복 대신 실제 구현·측정으로 옮길지 사용자에게 이 신호와 함께 보고하세요.\n`,
@@ -3732,12 +3732,13 @@ function computeEnvelopeCandidatesFor(ws, opts) {
   // 있으면 표시·소멸하면 사라짐). 과거에 기록된 합성 처분 행은 판독에서 무시되어 자연 무효.
   return { live, signals, skipped, overCap, unmarked: unmarked5, gen: gen || null }; // gen=산출 세대(동결) — 소비자(대시보드)는 이 값과 현 승인 해시의 일치를 결속해야 함(증분 3 재검증 blocker)
 }
-function envelopeCandidateNoticeFor(ws, lang, res, profile = "core") {
+function envelopeCandidateNoticeFor(ws, lang, res, profile = "core", repoKey) {
   try {
     if (profile !== "core") return ""; // integrity 검증에는 core 전용 수칙서 후보·입장 심사 어휘를 붙이지 않는다.
     if (!res || !res.tracked || !res.last) return "";
     const en = lang === "en";
-    const { live, signals, skipped, overCap, unmarked } = computeEnvelopeCandidatesFor(ws);
+    // [저장소 분할 단일 규칙 · 5판 blocker②] 결과 문자열(checkpoint 저장 포함)에 실리는 후보 재료=시작 스냅샷 저장소 표식 행만(빈 키=종전 전체).
+    const { live, signals, skipped, overCap, unmarked } = computeEnvelopeCandidatesFor(ws, (typeof repoKey === "string" && repoKey) ? { rowFilter: (r) => r && r.repoKey === repoKey } : undefined);
     const kindLabel = (k) => en
       ? (k === "curator" ? "curation proposal (independent run — approve/decline)" : k === "oos-repeat" ? "repeated out-of-scope demotions — reconsider defending this scenario" : k === "escalation" ? "admission-escalated scope expansion — consider formal adoption" : k === "unused-oos" ? "never triggered this approval generation — consider removing/merging" : k === "user-constraint" ? "a promise the user stated directly in chat (no verification lineage) — consider adopting into the rulebook" : k === "resolved-blocker" ? "a blocker caught and fixed in verification — consider an always-block entry" : "repeated blocker lineage — consider an always-block entry")
       : (k === "curator" ? "정리 제안(독립 실행 — 승인/안 올림)" : k === "oos-repeat" ? "범위 밖 강등 반복 — 이 시나리오를 계속 치워둘지 재검토" : k === "escalation" ? "입장 심사 승격 확장 — 정식 편입 검토" : k === "unused-oos" ? "이 승인 세대에서 한 번도 발동 안 됨 — 빼기/병합 검토" : k === "user-constraint" ? "사용자가 대화에서 직접 말한 약속(검증 계보 아님) — 수칙서 편입 검토" : k === "resolved-blocker" ? "검증에서 잡혀 이미 고친 blocker — 항상 차단 명시 검토" : "같은 계보 blocker 반복 — 항상 차단 명시 검토"); // [주의 수용] user-constraint를 반복 blocker로 오표시하면 미검증 발화에 검증 계보가 있다고 오인시킴
@@ -3757,13 +3758,13 @@ function envelopeCandidateNoticeFor(ws, lang, res, profile = "core") {
     return L.join("\n") + "\n";
   } catch { return ""; } // 재료 산출 실패가 판정 전달을 막지 않음
 }
-function breakdownNoticeFor(ws, lang, res) {
+function breakdownNoticeFor(ws, lang, res, repoKey) {
   try {
     if (!res || !res.tracked || !res.last) return "";
     const en = lang === "en";
     const camp = currentCampaignIdFor(ws);
     const gen = readFrozenEnvelope(ws);
-    const rows9 = readFindingsLedger(ws);
+    const rows9 = require("./contract-lib.js").ledgerRowsForRepo(readFindingsLedger(ws), repoKey); // [단일 규칙 · 5판 blocker②] 원인 분해=시작 스냅샷 저장소 행만
     const fs9 = rows9.filter((r) => r.type === "finding" && r.campaignId === camp && (r.envelopeHash || null) === (gen || null));
     if (!fs9.length) return "";
     // 증분 3 1차 blocker② 반영: 승격 유래 finding은 escalation 축에만 — 초기/유발 축과 중복 집계 금지(원인 오보 차단)
@@ -3782,7 +3783,7 @@ function breakdownNoticeFor(ws, lang, res) {
 }
 // 증분 3(§4·프로필 공통 결정): 무결성 검증 결과에 '경계 재심 재료' 병기 — 치워둔(강등) 지적을 oos 항목별로
 // 집계해 재검토 판단 재료로 제공(자동 개정 아님 — 개정은 사용자만). 강등 0건·경계 비활성="".
-function integrityReviewLine(ws, lang, profile) {
+function integrityReviewLine(ws, lang, profile, repoKey) {
   try {
     if (profile !== "integrity") return "";
     const en = lang === "en";
@@ -3790,7 +3791,7 @@ function integrityReviewLine(ws, lang, profile) {
     if (!gen) return "";
     const camp = currentCampaignIdFor(ws);
     const cnt = new Map();
-    for (const r of readFindingsLedger(ws)) {
+    for (const r of require("./contract-lib.js").ledgerRowsForRepo(readFindingsLedger(ws), repoKey)) { // [단일 규칙 · 5판 blocker②] 재심 재료=시작 스냅샷 저장소 행만
       if (r.type !== "finding" || r.campaignId !== camp || !r.demoted || !r.oosId) continue;
       if ((r.envelopeHash || null) !== (gen || null)) continue; // 1차 [주의]① 반영: 세대 필터 — 재승인으로 의미가 바뀐 구세대 oos 번호를 신세대 집계에 합산 금지(개정 대상 오판 차단)
       cnt.set(r.oosId, (cnt.get(r.oosId) || 0) + 1);
@@ -4002,7 +4003,7 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
         // R2 blocker⑤: 수확 대상 저장소는 수확기가 '사건(처분)에 저장된 repoPath·repoKey'로 결정 —
         // 여기서는 현재 대상을 폴백으로만 전달(사건에 저장소 기록이 없는 구행 호환).
         const repo9 = (resolveScoutRepo(ws, loadContract(ws)) || {}).repo || ws;
-        for (const r9 of recs) if (r9.type === "close" && r9.closeReason === "resolved") MPV9.harvestFromResolvedFinding(ws, repo9, camp, r9.findingId);
+        for (const r9 of recs) if (r9.type === "close" && r9.closeReason === "resolved") MPV9.harvestFromResolvedFinding(ws, repo9, camp, r9.findingId, repoKeySnap); // [단일 규칙 · 5판 blocker④] 수확기 판독=이 종결 판의 저장소 행만
       } catch { /* 수확은 참고 계층 — 실패 무해 */ }
     } catch { /* 장부 실패가 판정 전달을 막지 않음 */ }
   } else if (frozen && blockShaped && parse.ver === "v1") {
@@ -4236,9 +4237,9 @@ async function cmdAsk(rest) {
       + (attCarrier && attCarrier.selOver && (attCarrier.selOver.items || attCarrier.selOver.bytes) ? "\n" + (langSnap === "en" ? `[archive rules] related items ${attCarrier.selOver.count} · ${attCarrier.selOver.bytesTotal} bytes — above the normal range, ALL included · consider tidying the archive` : `[서고 수칙] 관련 수칙 ${attCarrier.selOver.count}항 · ${attCarrier.selOver.bytesTotal}바이트 — 정상 범위 초과, 전량 동봉 · 서고 정리 권장`) : "") // [§4-B ④] 정보 행(경보 아님)
       + envelopeWarnLine(ws, langSnap)
       + budgetNoticeLines(budgetGate.res, langSnap, profileSnap)
-      + breakdownNoticeFor(ws, langSnap, budgetGate.res)
-      + envelopeCandidateNoticeFor(ws, langSnap, budgetGate.res, profileSnap)
-      + integrityReviewLine(ws, langSnap, profileSnap);
+      + breakdownNoticeFor(ws, langSnap, budgetGate.res, repoKeySnap9) // [단일 규칙 · 5판 blocker②] 부가 보고 3종=시작 스냅샷 저장소 행만(결과·checkpoint에 타 저장소 신호 결합 금지)
+      + envelopeCandidateNoticeFor(ws, langSnap, budgetGate.res, profileSnap, repoKeySnap9)
+      + integrityReviewLine(ws, langSnap, profileSnap, repoKeySnap9);
     let ckptOk = !durableEnv;
     if (durableEnv && evAlert && evAlert.challengeId) {
       ckptOk = false;

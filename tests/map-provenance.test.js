@@ -340,7 +340,7 @@ console.log("[10] v2 수확 자격 — close 라운드 게이트·dispositionVal
   // 배선 핀: fix-fact --source 생산자·close 수확 호출·승인 사건 선기록
   const cb = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
   ok(cb.includes('=== "--source"') && /resolveAnchor\(repo9, file, anchor\)/.test(cb), "fix-fact --source 생산자 결속(검증 실패=거부)");
-  ok(/harvestFromResolvedFinding\(ws, repo9, camp, r9\.findingId\)/.test(cb), "해소 마감 직후 수확기 호출(advisory)");
+  ok(/harvestFromResolvedFinding\(ws, repo9, camp, r9\.findingId, repoKeySnap\)/.test(cb), "해소 마감 직후 수확기 호출(advisory)");
   // R2 확인 blocker: 승인 사건·도장 '같은 잠금 구간' 원자 결속 — 도장 함수가 잠금 보유 중 실행됨을
   // 실측(잠금 파일 실존)·도장 실패/예외에도 사건 잔존·잠금 정상 해제
   const evF10 = MPV.approvalEventsFileFor(MPV.repoKeyFor(repo10));
