@@ -949,20 +949,25 @@ function arrayBoundIdents(text, arrName, callStart) {
     }
     return -1;
   };
+  // [3판 blocker ab-3] 반복 변수가 호출 '전에' 다시 대입되면(`c = 'Write-Output done'`) 그 이름은 더 이상 배열 원소가 아니다 — 범위 시작~호출 사이 재대입/증감 검사.
+  const reassigned = (ident, from, to) => new RegExp("(?<![\\w$.])" + ident.replace(/\$/g, "\\$") + "\\s*(?:=(?!=)|\\+\\+|--|[-+*/%]=)").test(src.slice(from, to));
   for (const m of src.matchAll(new RegExp("for\\s*\\(\\s*(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s+of\\s+" + esc + "(?![\\w$])[^)]*\\)", "g"))) {
     let i = m.index + m[0].length; while (i < src.length && /\s/.test(src[i])) i++;
     let end = -1;
     if (src[i] === "{") end = balancedEnd(i, "{", "}");
     else { end = src.indexOf(";", i); if (end < 0) end = src.length; }
-    if (end > 0 && callStart > m.index && callStart < end) out.add(m[1]);
+    if (end > 0 && callStart > m.index && callStart < end && !reassigned(m[1], i, callStart)) out.add(m[1]);
   }
-  for (const m of src.matchAll(new RegExp("(?<![\\w$.])" + esc + "\\s*\\.\\s*(?:map|forEach|flatMap|filter|some|every|reduce)\\s*\\(", "g"))) {
+  // reduce는 첫 매개변수가 누산기(원소 아님)라 제외(3판 blocker ab-3).
+  for (const m of src.matchAll(new RegExp("(?<![\\w$.])" + esc + "\\s*\\.\\s*(?:map|forEach|flatMap|filter|some|every)\\s*\\(", "g"))) {
     const open = m.index + m[0].length - 1;
     const end = balancedEnd(open, "(", ")");
     if (end < 0 || !(callStart > open && callStart < end)) continue;
     const head = src.slice(open + 1, Math.min(end, open + 80));
     const pm = head.match(/^\s*(?:async\s*)?(?:\(\s*([A-Za-z_$][\w$]*)|([A-Za-z_$][\w$]*)\s*=>)/);
-    if (pm) out.add(pm[1] || pm[2]);
+    if (!pm) continue;
+    const ident = pm[1] || pm[2];
+    if (!reassigned(ident, open + 1 + pm[0].length, callStart)) out.add(ident);
   }
   return [...out];
 }
@@ -1034,6 +1039,18 @@ function psCommentsToSpaces(text) {
   }
   return out;
 }
+// 따옴표 안 내용을 같은 길이의 공백으로(따옴표 자체는 남김·위치 보존) — 대입·foreach·깊이 스캔이 문자열 속 글자를 코드로 오인하지 않게.
+function psStringsToSpaces(text) {
+  const s = String(text || "");
+  let out = "", quote = "";
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (quote) { if (ch === quote && s[i - 1] !== "`") { quote = ""; out += ch; } else out += (ch === "\n" || ch === "\r") ? ch : " "; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; out += ch; continue; }
+    out += ch;
+  }
+  return out;
+}
 // 각 위치의 중괄호 깊이(따옴표 무시) — 최상위(0)에서만 대입·foreach를 '실행됨'으로 본다.
 function psBraceDepthMap(text) {
   const s = String(text || "");
@@ -1072,7 +1089,9 @@ function psLiteralForeachVariants(text) {
   // [2판 blocker ab-3] 주석 속 대입(`# $files=@(…)`)·미실행 분기(`if($false){ $files=@(…) }`)가 실행된 대입으로 읽혔다 →
   // ⓐ 따옴표 밖 주석(`#…` 줄끝·`<# … #>`)은 공백으로 지운 본문에서만 스캔 ⓑ 중괄호 깊이 0(최상위)의 대입만 '값을 안다'로 보고 블록 안 대입은 값 불명으로
   // 기록(같은 이름의 앞선 리터럴을 무효화) ⓒ foreach도 최상위만 전개. [보완] PowerShell 변수명은 대소문자를 구분하지 않으므로 소문자로 비교.
-  const scan = psCommentsToSpaces(src); // 길이 보존(위치 동일)
+  // [3판 blocker ab-3] 문자열 안의 `$files=@(…)`(예: Write-Output "$files = @('…')")는 대입이 아니다 — 스캔 본문에서는 문자열 내부도 지운다(위치 보존).
+  // 원소 파싱만 같은 위치의 원문(src)에서 한다(리터럴 문자열의 내용이 필요하므로).
+  const scan = psStringsToSpaces(psCommentsToSpaces(src)); // 길이 보존(위치 동일)
   const depthAt = psBraceDepthMap(scan);
   const assigns = [];
   for (const m of scan.matchAll(/\$([A-Za-z_]\w*)\s*=(?!=)\s*/g)) {
@@ -1081,7 +1100,7 @@ function psLiteralForeachVariants(text) {
     if (depthAt[m.index] === 0 && after.startsWith("@(")) {
       const open = m.index + m[0].length + 1;
       const close = psMatchParen(scan, open);
-      const items = close < 0 ? null : psParseArrayItems(scan.slice(open + 1, close));
+      const items = close < 0 ? null : psParseArrayItems(src.slice(open + 1, close)); // 원소 내용은 원문에서(문자열 내부 필요)
       assigns.push({ name, at: m.index, end: close < 0 ? m.index : close, items });
     } else assigns.push({ name, at: m.index, end: m.index, items: null }); // 블록 안·비리터럴=값 불명
   }
@@ -1210,13 +1229,15 @@ function toolReadParts(p) {
       // [2판 blocker ab-3] 인수 어디든 이름이 있으면 인정하던 것(`max_output_tokens:1000+cmds.length`로 위조)을 **데이터 흐름**으로 조인다:
       // 실행 호출의 '명령 값 식'(cmd|command 키의 값 — 단축 속성이면 그 이름)이 ⓐ배열 이름을 직접 참조하거나(cmds[i]) ⓑ그 배열에서 묶인 반복 변수
       // (호출을 감싸는 `for (const X of cmds) {…}` 본문·`cmds.map(X => …)`류 콜백 안)를 참조할 때만 '그 배열의 명령이 실행됐다'로 본다.
+      // [3판 blocker ab-3] '식 안에 이름이 등장'(`false?cmds[0]:'…'`)이 아니라 **명령 값 식이 그 값 자체**여야 한다: `ARR[<첨자>]` 또는 배열에서 묶인
+      // 반복 변수 하나만(조건식·연산·호출·문자열 결합이 섞이면 어느 값이 실행됐는지 글자로는 알 수 없으므로 미인정 — 경보 유지 쪽이 안전).
       let used = false;
       for (const call of execLikeCalls(usageText)) {
         const expr = execCommandExpr(call.args);
         if (!expr) continue;
-        if (new RegExp("\\b" + nameEsc + "\\b").test(expr)) { used = true; break; }
+        if (new RegExp("^" + nameEsc + "\\s*\\[[^\\[\\]]+\\]$").test(expr)) { used = true; break; }
         for (const ident of arrayBoundIdents(usageText, arrName, call.start)) {
-          if (new RegExp("(?<![\\w$])" + ident.replace(/\$/g, "\\$") + "(?![\\w$])").test(expr)) { used = true; break; }
+          if (expr === ident) { used = true; break; }
         }
         if (used) break;
       }
