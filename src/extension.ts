@@ -197,7 +197,7 @@ interface BridgeState {
   movedRules: { count: number; items: Array<{ id: string; ko: string; en: string; hooks: string[] }> }; // [§4-B ③] 훅으로 옮긴 하네스 문장 장부(DIRECTIVE_MOVED)
   usedMemory: { ts: string; items: Array<{ path: string; note: string }>; couplings: number; omitted: boolean; selOver: { count: number; bytesTotal: number; itemsMax: number; bytesMax: number } | null } | null; // selOver=[§7 4-2b] 직전 검증의 서고 선별 정상 범위 초과(전량 동봉) — 서고 카드 표기 재료
   decisions: { open: number; items: Array<{ id: string; question: string; kind: string; origin: string; ts: string; block: string }> } | null; // [§7 4-2b] 결정 장부(사용자 답 대기) — 읽기 전용·답은 CLI decisions choose|delegate. null=무폴더/구 런타임
-  curation: { lastTs: string; lastOutcome: string; lastReason: string; lastTrigger: string; runs: number; proposedTotal: number; adopted: number; declined: number; adoptRate: number; pending: number; running: boolean; archiveSize: number; selOverCount: number; unusedCount: number; unusedDays: number; campaignsSince: number; maxPerRun: number; maxPending: number; tickK: number } | null; // [CURATION v3 §3 E·F] 정리 제안 요약·측정(수칙 카드 1줄) — null=무폴더/구 런타임
+  curation: { lastItems: Array<{ id: string; title: string; op: string; status: string }>; lastTs: string; lastOutcome: string; lastReason: string; lastTrigger: string; runs: number; proposedTotal: number; adopted: number; declined: number; adoptRate: number; pending: number; running: boolean; archiveSize: number; selOverCount: number; unusedCount: number; unusedDays: number; campaignsSince: number; maxPerRun: number; maxPending: number; tickK: number } | null; // [CURATION v3 §3 E·F] 정리 제안 요약·측정(수칙 카드 1줄) — null=무폴더/구 런타임
   ruleCheck: { host: "claude" | "codex"; checklist: boolean; rules: string[]; rulesFp: string; summary: { turns: number; older: number; counts: Array<{ n: number; complies: number; violated: number; na: number; missing: number }>; lastTs: string } } | null; // [RULE-COMPLIANCE §3 D] 규칙 자가점검 장부 요약(관찰 자료 — 판정·합산 아님). null=무폴더/구 런타임 // [UI 개편 2차] 직전 검증에 실린 지도 동봉 스냅샷(브릿지 stats/attach.jsonl 최신 1건). null=기록 없음/구 브릿지
   baseAvailable: boolean;
   permissionMode: string;
@@ -2136,7 +2136,7 @@ ${tE("⚡ 표시가 붙은 단계들입니다 — ①영향지도 생성: 기본
 <b>${tE("Q. AI 정찰(⚡)을 한 번도 실행하지 않으면 어떻게 되나요?", "Q. What if the AI recon (⚡) never runs?")}</b>
 ${tE("①(변경 감지)의 힌트만 동작하고, ②③④는 계속 비어 있습니다 — 이 축의 실질 성과는 AI 정찰 실행에서 나옵니다. 즉 3트랙을 켜기만 하고 정찰을 안 돌리면 얻는 것이 거의 없습니다.", "Only ①'s hints work; ②③④ stay empty — this axis delivers real value through AI recon runs. Turning 3-track on without ever running recon yields very little.")}
 <b>${tE("Q. 데이터는 어디로 가나요?", "Q. Where does data go?")}</b>
-${tE("전부 이 컴퓨터의 브릿지 홈에 남습니다. 외부로 나가는 경로는 네 갈래 — ⑴ Codex 검증을 보낼 때(2트랙의 기본 동작): 검증 요청문과 자동 동봉(지도 조각[지도 있을 때]·결합 확인 문안[일지 후보 있으면 지도 없어도]·하네스 기본 지침)이 쓰시던 codex CLI를 통해 Codex 서비스로 전달 ⑵ DeepSeek 키 등록 시: ① DeepSeek 정찰 '실행 순간'의 증거 꾸러미(민감 범주 파일은 내용도 이름도 가려짐) ② 3트랙을 켤 때 연결 점검 요청 1회(꾸러미 아님) ⑶ 기본 정찰 실행 시: 같은 꾸러미가 쓰시던 Claude CLI를 통해 Claude 서비스로 전달(별도 결제 없음) ⑷ Codex 정찰 선택·실행 시: 같은 꾸러미가 쓰시던 codex CLI를 통해 Codex 서비스로 전달(검증과 분리된 독립 실행 1회·읽기 전용 강제 — 계정 사용량 범위). 상세는 PRIVACY.md.", "Everything stays in the bridge home on this machine. Data leaves via four routes — ⑴ whenever you send a Codex verification (the core of 2-track): the verification request plus its automatic attachments (map slice · coupling check lines · harness base directives) travel through your existing codex CLI to the Codex service ⑵ with a DeepSeek key: ① the evidence package at the moment the DeepSeek scout runs (sensitive-category files excluded by content and by name) ② a single connection check when you switch on 3-track (not a package) ⑶ when the default scout runs: the same package travels through your existing Claude CLI to the Claude service (no separate billing) ⑷ when the Codex scout is selected and runs: the same package travels through your existing codex CLI to the Codex service (one independent run separate from verification, forced read-only — within your account usage). Details in PRIVACY.md.")}
+${tE("전부 이 컴퓨터의 브릿지 홈에 남습니다. 외부로 나가는 경로는 네 갈래 — ⑴ Codex 검증을 보낼 때(2트랙의 기본 동작): 검증 요청문과 자동 동봉(지도 조각[지도 있을 때]·결합 확인 문안[일지 후보 있으면 지도 없어도]·하네스 기본 지침)이 쓰시던 codex CLI를 통해 Codex 서비스로 전달 ⑵ DeepSeek 키 등록 시: ① DeepSeek 정찰 '실행 순간'의 증거 꾸러미(민감 범주 파일은 내용도 이름도 가려짐) ② 3트랙을 켤 때 연결 점검 요청 1회(꾸러미 아님) ③ 탐색 담당이 DeepSeek일 때 정리 담당 실행 순간의 정리 재료(승인 수칙 문안·보관 서고 전체·장부 집계·결정 질문 — 탐색 담당 선택=동의) ⑶ 기본 정찰 실행 시: 같은 꾸러미가 쓰시던 Claude CLI를 통해 Claude 서비스로 전달(별도 결제 없음 · 정리 담당 실행 시 정리 재료도 같은 경로) ⑷ Codex 정찰 선택·실행 시: 같은 꾸러미가 쓰시던 codex CLI를 통해 Codex 서비스로 전달(검증과 분리된 독립 실행 1회·읽기 전용 강제 — 계정 사용량 범위 · 정리 담당 실행 시 정리 재료도 같은 경로). 상세는 PRIVACY.md.", "Everything stays in the bridge home on this machine. Data leaves via four routes — ⑴ whenever you send a Codex verification (the core of 2-track): the verification request plus its automatic attachments (map slice · coupling check lines · harness base directives) travel through your existing codex CLI to the Codex service ⑵ with a DeepSeek key: ① the evidence package at the moment the DeepSeek scout runs (sensitive-category files excluded by content and by name) ② a single connection check when you switch on 3-track (not a package) ③ when the scout is DeepSeek, the curation material at the moment the curator runs (approved rule wording · the whole archive · ledger aggregates · decision questions — choosing the scout is the consent) ⑶ when the default scout runs: the same package travels through your existing Claude CLI to the Claude service (no separate billing · curation material takes the same route when the curator runs) ⑷ when the Codex scout is selected and runs: the same package travels through your existing codex CLI to the Codex service (one independent run separate from verification, forced read-only — within your account usage · curation material takes the same route when the curator runs). Details in PRIVACY.md.")}
 </div>
 </body></html>`;
 }
@@ -4299,17 +4299,25 @@ class Dashboard {
           this.post(); return;
         }
         if (m?.type === "proposalApprove" && typeof m.repo === "string" && m.repo) { this.runProposalApprove(m.repo, m.lang, false); return; } // §7 증분 2 — 본문은 runProposalApprove(재편 B: 1클릭 체인과 공유)
-        if (m?.type === "curationRun") { // [CURATION v3 §3 A ①] 대시보드 버튼 "정리 제안 받기" — 검증 무관 detach 실행(curate run --button). 승인은 여전히 제안함(사용자 전용).
+        if (m?.type === "curationShow") { // [CURATION 2026-09-06] 대시보드 버튼 "마지막 정리 결과 보기" — 실행 없음(실행은 자동 트리거·CLI `curate run`). 장부 요약을 모달로 보여줄 뿐(승인은 제안함).
           const wsQ = dashboardWorkspace(); if (!wsQ) return;
           const enQ = loadLangExt() === "en";
           try {
-            const cliQ = path.join(BRIDGE_DIR, "codex-bridge.js");
-            const chQ = spawn(process.execPath, [cliQ, "curate", "run", "--button"], { cwd: wsQ, stdio: "ignore", detached: true, windowsHide: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", CLAUDE_PROJECT_DIR: wsQ } });
-            chQ.on("exit", () => { try { this.post(); } catch { /* 갱신 실패 무해 */ } });
-            chQ.on("error", () => { /* 실패는 장부·경보 채널(curation-failed)이 담당 */ });
-            chQ.unref();
-            vscode.window.showInformationMessage(enQ ? "Asking the independent curator in the background (may take minutes; verification is unaffected). Proposals appear in the proposal box for your approval." : "독립 정리 담당에게 백그라운드로 묻는 중이에요(수 분 걸릴 수 있음 · 검증 무영향). 제안은 제안함에 올라오고, 승인은 사용자만 합니다.");
-          } catch { vscode.window.showWarningMessage(enQ ? "Could not start the curation run." : "정리 제안 실행을 시작하지 못했어요."); }
+            const CUq: any = require(path.join(BRIDGE_DIR, "curation.js"));
+            const su: any = typeof CUq.curationSummary === "function" ? CUq.curationSummary(wsQ) : null;
+            if (!su || !su.lastTs) { vscode.window.showInformationMessage(enQ ? "No curation run yet — the independent curator runs by itself when ledger material accumulates." : "아직 정리 실행 이력이 없어요 — 독립 정리 담당은 장부 재료가 쌓이면 스스로 돕니다."); return; }
+            const trg = su.lastTrigger === "auto" ? (enQ ? "auto" : "자동") : su.lastTrigger === "button" ? (enQ ? "button" : "버튼") : (enQ ? "manual" : "수동");
+            const outcome = String(su.lastOutcome || "") + (su.lastReason ? " (" + String(su.lastReason) + ")" : "");
+            const items: any[] = Array.isArray(su.lastItems) ? su.lastItems : [];
+            const lines = [
+              (enQ ? "Last run: " : "마지막 실행: ") + String(su.lastTs).replace("T", " ").slice(0, 16) + " · " + trg + " · " + outcome,
+              (enQ ? "Proposals so far " : "누적 제안 ") + String(su.proposedTotal) + (enQ ? " · pending " : "건 · 미승인 ") + String(su.pending) + (enQ ? " · adopted " : "건 · 채택 ") + String(su.adopted) + (enQ ? "" : "건"),
+              items.length ? (enQ ? "Last proposals:" : "마지막 제안:") : (enQ ? "Last run produced no proposals." : "마지막 실행의 제안은 없었어요."),
+              ...items.map((it: any) => "· " + (it.op ? "[" + String(it.op) + "] " : "") + String(it.title || it.id) + (it.status ? " — " + String(it.status) : "")),
+              enQ ? "Approve or decline in the proposal box on the rulebook card." : "승인·안 올림은 수칙 카드의 제안함에서 합니다.",
+            ];
+            vscode.window.showInformationMessage(lines.join("\n"), { modal: true });
+          } catch { vscode.window.showWarningMessage(enQ ? "Could not read the curation ledger." : "정리 장부를 읽지 못했어요."); }
           return;
         }
         if (m?.type === "cutoverConfirm" && typeof m.n === "number" && Number.isInteger(m.n) && m.n > 0 && typeof m.repo === "string" && m.repo) { // C-7 원클릭 전환(미이관 N>0 — informed 동의는 이 모달이 담당)
@@ -7392,14 +7400,14 @@ class Dashboard {
         var h9=document.createElement("div"); h9.style.fontWeight="600"; h9.textContent=(d.lang==="en"?"Rules":"수칙"); ec.appendChild(h9); // [재편 B] 어휘 4종 — 정상 흐름 헤더
         var s9=document.createElement("div"); if(e9.tone==="warn"){ s9.style.cssText="color:var(--vscode-editorWarning-foreground,#d9a441)"; } else { s9.className="muted"; } s9.textContent=e9.label; ec.appendChild(s9);
         if(d.usedMemory&&d.usedMemory.selOver){ var so9=d.usedMemory.selOver; var ov9=document.createElement("div"); ov9.style.cssText="color:var(--vscode-editorWarning-foreground,#d9a441);font-size:11px;margin-top:2px"; ov9.textContent=T("관련 수칙이 정상 범위("+so9.itemsMax+"항 · "+so9.bytesMax+"바이트)를 넘음 — 최근 검증 "+so9.count+"항 · "+so9.bytesTotal+"바이트 전량 동봉(누락 없음) · 서고 정리 권장","related rules exceed the normal range ("+so9.itemsMax+" items · "+so9.bytesMax+" bytes) — last verification carried "+so9.count+" items · "+so9.bytesTotal+" bytes, all included · consider tidying the archive"); ec.appendChild(ov9); } // [§7 4-2b] 서고 카드 초과 표기(정보 — 경보 아님)
-        if(d.curation){ // [CURATION v3 §3 E·F] 수칙 카드 1줄 — 마지막 정리 제안·제안 n·미승인 m·측정(채택률·서고 크기·선별 초과) + 버튼 "정리 제안 받기"(승인은 제안함)
+        if(d.curation){ // [CURATION v3 §3 E·F] 수칙 카드 1줄 — 마지막 정리 제안·제안 n·미승인 m·측정(채택률·서고 크기·선별 초과) + 버튼 "마지막 정리 결과 보기"(2026-09-06: 실행 버튼 폐지 — 실행은 자동 트리거·CLI만, 승인은 제안함)
           var cu9=d.curation; var cl9=document.createElement("div"); cl9.className="muted"; cl9.style.cssText="font-size:11px;margin-top:3px";
           var when9c=""; if(cu9.lastTs){ var dt9c=new Date(cu9.lastTs); if(!isNaN(dt9c.getTime())) when9c=(dt9c.getMonth()+1)+"/"+dt9c.getDate()+" "+String(dt9c.getHours()).padStart(2,"0")+":"+String(dt9c.getMinutes()).padStart(2,"0"); }
           var trg9=cu9.lastTrigger==="auto"?T("자동","auto"):cu9.lastTrigger==="button"?T("버튼","button"):T("수동","manual");
           cl9.textContent=(cu9.running?T("정리 제안 실행 중 · ","curation running · "):"")+(cu9.lastTs?T("마지막 정리 제안 "+when9c+"("+trg9+" · "+cu9.lastOutcome+")","last curation "+when9c+" ("+trg9+" · "+cu9.lastOutcome+")"):T("정리 제안 실행 이력 없음","no curation run yet"))+T(" · 제안 "+cu9.proposedTotal+" · 미승인 "+cu9.pending+"/"+cu9.maxPending+" · 채택률 "+cu9.adoptRate+"% · 서고 "+cu9.archiveSize+"항 · 선별 초과 "+cu9.selOverCount+"회 · 미사용 "+cu9.unusedCount+"항"+(cu9.unusedCount?"("+cu9.unusedDays+"일 관측)":"")," · proposed "+cu9.proposedTotal+" · pending "+cu9.pending+"/"+cu9.maxPending+" · adopted "+cu9.adoptRate+"% · archive "+cu9.archiveSize+" · over-range "+cu9.selOverCount+" · unused "+cu9.unusedCount+(cu9.unusedCount?" ("+cu9.unusedDays+"d observed)":""));
           ec.appendChild(cl9);
-          var cb9=document.createElement("button"); cb9.className="secondary"; cb9.style.cssText="margin-top:4px;font-size:12px"; cb9.textContent=T("정리 제안 받기","Get curation proposals"); cb9.disabled=!!cu9.running; cb9.title=T("장부(반복 신호·미사용 수칙·결정)를 읽는 독립 실행이 수칙 넣기/빼기를 최대 3건 제안해요 — 승인은 여기 제안함에서 사용자만.","An independent run reads the ledgers and proposes up to 3 rulebook changes — only you approve, in this proposal box.");
-          cb9.addEventListener("click", function(){ cb9.disabled=true; vscode.postMessage({type:"curationRun"}); }); ec.appendChild(cb9);
+          var cb9=document.createElement("button"); cb9.className="secondary"; cb9.style.cssText="margin-top:4px;font-size:12px"; cb9.textContent=T("마지막 정리 결과 보기","Show last curation result"); cb9.disabled=!cu9.lastTs; cb9.title=T("독립 정리 담당은 재료(반복 신호·미사용 수칙·결정)가 쌓이면 스스로 돕니다 — 여기서는 마지막 실행의 결과와 제안만 봅니다(승인은 제안함).","The independent curator runs by itself when material accumulates — this only shows the last run's result and proposals (approve in the proposal box).");
+          cb9.addEventListener("click", function(){ vscode.postMessage({type:"curationShow"}); }); ec.appendChild(cb9);
         }
         var actT=e9.act?e9.act:(e9.proposal==="recover"?"proposalRecover":e9.proposal==="pending"?"proposalApprove":"envelopeApprove"); // §7 증분 2 — 초안·복구는 별도 채널(도장=사용자 전용 표면)·act=카드가 지정한 행동(승인 없이 바뀐 내용 보기)
         var act2T=e9.proposal==="pending"?"proposalShow":"envelopeShow";

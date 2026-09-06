@@ -3861,6 +3861,16 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
   const roundType = deriveRoundType(ws, camp, frozen, bg9 || undefined, ledger0); // 1차 blocker④+v7: 같은 동결 세대·같은 경계의 라운드만 confirm · 같은 저장소 판만(ab-1)
   const roundNo = ledger0.filter((r) => r.type === "round" && r.campaignId === camp && (r.envelopeHash || null) === (frozen || null)).length + 1;
   const blockShaped = parse.present && parse.ok && machine.reasonKey !== "no-verdict-line";
+  // [지적 블록 미수용 고지 · 2026-09-06] 블록은 있는데 손상(줄 형식·마커·판정 선언 부재 등)이면 행 전체를 불신해 장부에 등록하지 않는다(부분 수용 금지 — 기존 계약).
+  // 그 사실을 조용히 넘기면 검증자 지적이 사라진 채 다음 판으로 간다(실사고 2026-09-05: 지적 4건이 verdict:error 행만 남기고 소실). 구현자에게 사유와 재발급 요청을 명시한다.
+  if (parse.present && !blockShaped) {
+    const nRows9 = Array.isArray(parse.findings) ? parse.findings.length : 0;
+    const why9 = String((machine && machine.reasonKey) || (parse.ok ? "" : "block-corrupt"));
+    const corrupt9 = parse.corrupt && Array.isArray(parse.corrupt.items) ? parse.corrupt.items.slice(0, 3).map((c) => `${c.lineNo}:${c.reasonKey}`).join(",") : "";
+    out.push(en
+      ? `[findings block NOT accepted — reason ${why9}${corrupt9 ? " (" + corrupt9 + ")" : ""}] ${nRows9} parsed row(s) were NOT recorded in the ledger (no partial acceptance). Ask the verifier to re-issue the block in the exact format ([Format notice] in the next request) — do not treat this verdict as authoritative.`
+      : `[지적 블록 미수용 — 사유 ${why9}${corrupt9 ? " (" + corrupt9 + ")" : ""}] 판독된 ${nRows9}행은 장부에 등록되지 않았다(부분 수용 금지). 다음 요청문 [형식 주의]로 검증자에게 블록 재발급(정확한 서식·블록 뒤 판정 선언 1줄)을 요구하라 — 이 판정을 권위로 삼지 마라.`);
+  }
   if (staleFreezeNote) out.push(en ? "[envelope freeze is not bound to this verification job (freeze write likely failed or non-durable path) — admission disabled this round]" : "[경계 동결이 이 검증 잡에 결속되지 않음(동결 기록 실패·비내구 경로로 판단) — 이번 라운드 입장 심사 미발동]");
   let effItems = parse.findings; // 자동 등록 루프가 쓰는 '실효' 목록(강등 반영본)
   if (frozen && blockShaped && parse.ver === "v2") {

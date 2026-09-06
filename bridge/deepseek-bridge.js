@@ -7,6 +7,8 @@
  * 사용:
  *   node deepseek-bridge.js ping                 — 키·주소·모델이 실제 응답하는지 1회 확인
  *   node deepseek-bridge.js map [--out <파일>]   — stdin으로 꾸러미(MD)를 받아 지도 출력
+ *   node deepseek-bridge.js page                 — stdin으로 페이지 프롬프트(정리 담당)를 받아 답 본문 출력(2026-09-06 · 탐색 담당이 DeepSeek일 때)
+ *   (capability·enrich는 준비 점검·의미 보강 — map-probe.js·enrich-providers.js가 호출)
  *
  * 키 해석(§14 D4): env DEEPSEEK_API_KEY → ~/.codex-bridge/deepseek.json(대시보드 ⚙️고급설정 탭이 쓰는 파일).
  * ⚠ 외부 전송 지점: map은 stdin으로 받은 꾸러미 전문을 DeepSeek API로 보낸다(꾸러미 빌더가 민감 범주
@@ -204,7 +206,20 @@ async function main() {
     if (r.usage) console.error(`[usage] in=${r.usage.prompt_tokens} out=${r.usage.completion_tokens} (${r.model})`); // stderr — 지도 본문(stdout) 오염 방지
     return;
   }
-  console.error("사용: node deepseek-bridge.js <ping|map|capability|enrich> [--out <파일>]");
+  if (cmd === "page") {
+    // [2026-09-06 · 정리 담당=탐색 담당 유효 팔] 페이지 1회: stdin 프롬프트 → 답 본문(stdout). 코드 울타리 처리는 호출자 파서 몫.
+    // 전송 재료=정리 담당 프롬프트(승인 수칙 문안·보관 서고 전체·장부 집계·결정 질문 — PRIVACY.md 고지). 사용량은 전역 장부(flow selector-page).
+    if (!cfg.apiKey) { console.error(NO_KEY_MSG); process.exit(1); }
+    let prompt = "";
+    try { prompt = fs.readFileSync(0, "utf8"); } catch { /* stdin 없음 */ }
+    if (!prompt.trim()) { console.error("stdin으로 페이지 프롬프트를 넣어라(selector-runner가 조립)"); process.exit(2); }
+    const req = { model: cfg.model, messages: [{ role: "user", content: prompt }], max_tokens: 4096, temperature: 0, stream: false };
+    const r = await callChat(cfg, req, 4 * 60 * 1000, { usageContext: inheritedUsageContext("selector-page", prompt.length, "global") });
+    process.stdout.write(String(r.content || "") + "\n");
+    if (r.usage) console.error(`[usage] in=${r.usage.prompt_tokens} out=${r.usage.completion_tokens} (${r.model})`);
+    return;
+  }
+  console.error("사용: node deepseek-bridge.js <ping|map|capability|enrich|page> [--out <파일>]");
   process.exit(2);
 }
 

@@ -4,7 +4,7 @@
  * 계약: 입력 집계기는 장부만 읽고(코드 없음) repoKey·세대 결속으로 실패를 정직 보고한다 · 신호 0+같은 세대=페이지 호출 없이 생략 · 같은 입력=같은 키(멱등) ·
  * 제안기 출력은 JSON 하나·손상=전량 거부·의미 거부=항목 탈락 기록·toggle=보류 · 커밋은 provisional→결과 행→proposed 2단+영수증(purpose curate·turnAnchor=curationKey) ·
  * 회당 ≤3·미승인 ≤6 · 승인 변환(add→서고·oos-add→코어 제외 칸·remove→3중 대조+sourceCandidateIds)·toggle 거부 · 도장 시 applied 종결(고아 복원·세대 이월에서 제외) ·
- * 잠금(산 소유자=거부·죽은 소유자=회수) · 실패=영수증+경보·검증 무영향 · 팔=계약 harnessMode 유래.
+ * 잠금(산 소유자=거부·죽은 소유자=회수) · 실패=영수증+경보·검증 무영향 · 팔=탐색 담당 유효 팔(2026-09-06 개정 — 종전 harnessMode 유래 폐지) · 재료 0=무호출 · refs 필수 · 울타리 1겹 허용.
  */
 const assert = require("assert");
 const fs = require("fs");
@@ -40,13 +40,24 @@ const ARC_HASH = sha1(arcRaw);
 assert.strictEqual(CL.setContractHashAllSlots(WS, "archiveHash", ARC_HASH), 2);
 const WSKEY = CL.wsKeyFor(WS), REPOKEY = CL.repoKeyOf(REPO);
 const explain = { happened: "검증 때마다 같은 항목이 한 번도 선택되지 않았습니다", ifAdopted: "서고에서 빠져 선별 목록이 짧아집니다", ifNot: "선별 때마다 계속 실려 예산을 씁니다", recommend: "빼기를 권장합니다 — 30일간 0회 선택" };
-const good = (over) => Object.assign({ operation: "add", target: "archive", axis: "alwaysBlocker", title: "릴리스 자산은 게시 전에 내부 파일을 실측 확인한다", why: "배포마다 되풀이되는 사고 유형을 막는 관통 지침", refs: [], recommend: "관련", explain }, over || {});
+const good = (over) => Object.assign({ operation: "add", target: "archive", axis: "alwaysBlocker", title: "릴리스 자산은 게시 전에 내부 파일을 실측 확인한다", why: "배포마다 되풀이되는 사고 유형을 막는 관통 지침", refs: ["rebut:oos-1"], recommend: "관련", explain }, over || {}); // refs 기본=신호 1개(2026-09-06: refs 없는 제안은 거부)
 const out = (arr) => JSON.stringify({ proposals: arr });
+// 2026-09-06: refs 필수 — 신호 0인 픽스처에서 제안 파싱·커밋을 시험하려면 되받아침 신호 1건(rebut:oos-1)을 먼저 심는다(현재 캠페인=그 저장소 — ab-1 수용 조건)
+const seedRebutSignal = (ws, repo, tag) => { const rk = CL.repoKeyOf(repo); fs.mkdirSync(path.dirname(CL.campaignFileFor(ws)), { recursive: true }); fs.writeFileSync(CL.campaignFileFor(ws), JSON.stringify({ schema: "vcamp-1", campaignId: "c-" + tag, count: 1, budget: 5, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), repoKey: rk })); CL.appendFindingsLedger(ws, [{ type: "disposition", campaignId: "c-" + tag, findingId: "f-" + tag, choice: "rebut", oosId: "oos-1", asOfRound: 1, ts: new Date().toISOString() }]); };
 
-t("팔 결정=계약 유래: 기본(claude-codex)=self · codex-codex=codex — 환경변수 무관", () => {
-  assert.strictEqual(CU.selectorArmForCuration(WS, { harnessMode: "claude-codex" }), "self");
-  assert.strictEqual(CU.selectorArmForCuration(WS, { harnessMode: "codex-codex" }), "codex");
-  process.env.CODEX_THREAD_ID = "x"; try { assert.strictEqual(CU.selectorArmForCuration(WS, { harnessMode: "claude-codex" }), "self", "환경변수는 팔을 바꾸지 않는다"); } finally { delete process.env.CODEX_THREAD_ID; }
+t("팔 결정=탐색 담당 유효 팔(2026-09-06 개정): 미설정=self · scoutArm codex=codex · deepseek는 키 파일 없으면 self 강등·있으면 deepseek — harnessMode·환경변수 무관", () => {
+  assert.strictEqual(CU.selectorArmForCuration(WS, { harnessMode: "codex-codex" }), "self", "운용 모드는 더 이상 팔을 정하지 않는다(탐색 담당 미설정=self)");
+  const keyFile = path.join(HOME, "deepseek.json");
+  try {
+    assert.ok(CL.updateContractPatch(WS, "ko", { scoutArm: "codex" }).ok);
+    assert.strictEqual(CU.selectorArmForCuration(WS, { harnessMode: "claude-codex" }), "codex", "탐색 담당 codex=정리 담당도 codex(정찰 두뇌 설정 공유)");
+    process.env.CODEX_THREAD_ID = "x"; try { assert.strictEqual(CU.selectorArmForCuration(WS, null), "codex", "환경변수는 팔을 바꾸지 않는다"); } finally { delete process.env.CODEX_THREAD_ID; }
+    assert.ok(CL.updateContractPatch(WS, "ko", { scoutArm: "deepseek" }).ok);
+    fs.rmSync(keyFile, { force: true });
+    assert.strictEqual(CU.selectorArmForCuration(WS, null), "self", "키 없는 DeepSeek=self 강등(scoutArmView eff와 동일)");
+    fs.writeFileSync(keyFile, JSON.stringify({ apiKey: "sk-test-not-real" }));
+    assert.strictEqual(CU.selectorArmForCuration(WS, null), "deepseek", "키 있으면 deepseek");
+  } finally { fs.rmSync(keyFile, { force: true }); assert.ok(CL.updateContractPatch(WS, "ko", { scoutArm: "self" }).ok); }
 });
 
 t("입력 집계기 — 실패 정직 보고: repo 불일치·수칙서 비활성·미승인 변경·도장 없는 서고 파일", () => {
@@ -130,13 +141,24 @@ t("파서 — 손상=전량 거부(JSON 아님·3건 초과·작업 종류·why 
   assert.ok(okp.ok && okp.items.length === 2 && okp.held.length === 1 && okp.items[1].target === "core" && okp.items[1].axis === "outOfScope" && okp.held[0].title === arc2.text, JSON.stringify(okp));
   const rm = CU.parseCurationOutput(out([good({ operation: "remove", target: "archive", index: arc2.index, itemFp: arc2.itemFp, refs: ["unused-rule:arc-2"] })]), input);
   assert.ok(rm.ok && rm.items.length === 1 && rm.items[0].operation === "remove" && rm.items[0].occurrence === "alwaysBlocker#1" && rm.items[0].title === arc2.text, JSON.stringify(rm));
+  // 2026-09-06 개정: 근거 없는 제안 거부 · 코드 울타리 1겹 허용(그 안은 JSON 객체 하나뿐) · 산문 섞임·2겹은 여전히 손상
+  const noref = CU.parseCurationOutput(out([good({ refs: [] })]), input);
+  assert.ok(noref.ok && noref.items.length === 0 && noref.dropped.length === 1 && noref.dropped[0].reason === "no-ref", "refs 빈 배열=항목 탈락(no-ref) " + JSON.stringify(noref));
+  const fenced = CU.parseCurationOutput("```json\n" + out([]) + "\n```", input);
+  assert.ok(fenced.ok && fenced.items.length === 0, "울타리 1겹 안 빈 제안=정상(실측 실패 재현 봉합) " + JSON.stringify(fenced));
+  const fencedCrlf = CU.parseCurationOutput("```json\r\n" + out([good()]) + "\r\n```\r\n", input);
+  assert.ok(fencedCrlf.ok && fencedCrlf.items.length === 1, "CRLF 울타리도 1겹 벗김 " + JSON.stringify(fencedCrlf));
+  assert.ok(CU.parseCurationOutput("```\n" + out([]) + "\n```", input).ok, "언어 표기 없는 울타리도 허용");
+  assert.strictEqual(CU.parseCurationOutput("여기 결과입니다\n```json\n" + out([]) + "\n```", input).reason, "no-json", "울타리 앞 산문=손상");
+  assert.strictEqual(CU.parseCurationOutput("```json\n" + out([]) + "\n```\n끝", input).reason, "no-json", "울타리 뒤 산문=손상");
+  assert.strictEqual(CU.parseCurationOutput("```json\n```json\n" + out([]) + "\n```\n```", input).reason, "no-json", "울타리 2겹=손상(1겹만 허용)");
 });
 
-t("생략 규칙 — 신호 0+같은 세대의 지난 실행=생략 · 신호 있으면 실행 · 같은 입력 표의 결과가 있으면 멱등 생략", () => {
+t("생략 규칙 — 신호 0=항상 생략(첫 실행 포함·2026-09-06 개정) · 신호 있으면 실행 · 같은 입력 표의 결과가 있으면 멱등 생략", () => {
   const WS4 = fs.mkdtempSync(path.join(os.tmpdir(), "cur-ws4-")); const REPO4 = fs.mkdtempSync(path.join(os.tmpdir(), "cur-repo4-"));
   fs.writeFileSync(path.join(REPO4, CL.ENVELOPE_FILE), coreRaw); CL.setEnvelopeHashAllSlots(WS4, CORE_HASH); CL.updateContractPatch(WS4, "ko", { scoutRepo: REPO4 });
   const i4 = CU.curationInput(WS4, REPO4); assert.ok(i4.ok && i4.signalCount === 0);
-  assert.strictEqual(CU.curationSkip(WS4, i4).skip, false, "첫 실행은 생략 없음(지난 실행 기록 없음)");
+  assert.deepStrictEqual(CU.curationSkip(WS4, i4), { skip: true, reason: "no-signal" }, "재료 0=첫 실행이라도 무호출(2026-09-06 개정 — 지난 실행 기록·세대 무관)");
   CU.appendCurationRow(WS4, { type: "run", repoKey: i4.repoKey, boundaryGen: CORE_HASH, archiveGen: "", outcome: "none" });
   assert.deepStrictEqual(CU.curationSkip(WS4, i4), { skip: true, reason: "no-signal" });
   const i1 = CU.curationInput(WS, REPO); assert.strictEqual(CU.curationSkip(WS, i1).skip, false, "신호 3건=실행");
@@ -203,10 +225,12 @@ async function main() {
     fs.writeFileSync(path.join(REPO5, CL.ENVELOPE_FILE), coreRaw); CL.setEnvelopeHashAllSlots(WS5, CORE_HASH); CL.updateContractPatch(WS5, "ko", { scoutRepo: REPO5 });
     const rk5 = CL.repoKeyOf(REPO5);
     CL.appendEnvelopeCandidates(WS5, Array.from({ length: 5 }, (_, i) => ({ candidateId: sha1("seed" + i).slice(0, 16), envelopeHash: CORE_HASH, status: "proposed", kind: "curator", repoKey: rk5, operation: "add", target: "archive", axis: "alwaysBlocker", title: "씨앗 " + i, why: "씨앗 근거 문장입니다", ts: new Date().toISOString() })));
+    // 2026-09-06: refs 필수라 제안이 가리킬 신호(rebut:oos-1)가 먼저 있어야 함 — 현재 캠페인=이 저장소(되받아침 신호 수용 조건 — ab-1)
+    fs.mkdirSync(path.dirname(CL.campaignFileFor(WS5)), { recursive: true }); fs.writeFileSync(CL.campaignFileFor(WS5), JSON.stringify({ schema: "vcamp-1", campaignId: "c1", count: 1, budget: 5, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), repoKey: rk5 }));
+    CL.appendFindingsLedger(WS5, [{ type: "disposition", campaignId: "c1", findingId: "f9", choice: "rebut", oosId: "oos-1", asOfRound: 1, ts: new Date().toISOString() }]);
     const r = await CU.runCuration(WS5, { force: true, pageRunner: fake(out([good({ title: "새 1" }), good({ title: "새 2" }), good({ title: "새 3" })])) });
     assert.ok(r.st === "ok" && r.proposed === 1 && r.deferred === 2 && r.pending === 6, JSON.stringify(r));
-    fs.mkdirSync(path.dirname(CL.campaignFileFor(WS5)), { recursive: true }); fs.writeFileSync(CL.campaignFileFor(WS5), JSON.stringify({ schema: "vcamp-1", campaignId: "c1", count: 1, budget: 5, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), repoKey: rk5 })); // 현재 캠페인=이 저장소(되받아침 신호 수용 조건 — ab-1)
-    CL.appendFindingsLedger(WS5, [{ type: "disposition", campaignId: "c1", findingId: "f9", choice: "rebut", oosId: "oos-1", asOfRound: 1, ts: new Date().toISOString() }]); // 신호 변화=새 입력 표(같은 표에 다른 답은 충돌 규칙)
+    CL.appendFindingsLedger(WS5, [{ type: "disposition", campaignId: "c1", findingId: "f10", choice: "rebut", oosId: "oos-1", asOfRound: 2, ts: new Date().toISOString() }]); // 신호 변화(rebut:oos-1 ×1→×2)=새 입력 표(같은 표에 다른 답은 충돌 규칙)
     const r2 = await CU.runCuration(WS5, { force: true, pageRunner: fake(out([good({ title: "새 4" })])) });
     assert.ok(r2.st === "ok" && r2.proposed === 0 && r2.deferred === 1 && r2.pending === 6, "상한 도달=제안 0·보류 " + JSON.stringify(r2));
     const rc = CL.readSelectorUsage().filter((x) => x.purpose === "curate" && x.wsKey === CL.wsKeyFor(WS5));
@@ -356,10 +380,11 @@ async function main() {
     assert.ok(i9.ok && i9.signals.lineage.length === 0 && i9.signalsGen === "0".repeat(40), "세대 불일치 신호는 싣지 않되 signalsGen으로 드러냄");
   });
 
-  await ta("[1회차 blocker②] 파서 엄격 — JSON 앞뒤 산문=no-json · why/explain 개행=손상(공백 치환 관용 없음)", async () => {
+  await ta("[1회차 blocker②] 파서 엄격 — JSON 앞뒤 산문=no-json · why/explain 개행=손상(공백 치환 관용 없음) · 2026-09-06 개정: 코드 울타리 1겹만 예외(그 안은 여전히 JSON 하나뿐)", async () => {
     const input = CU.curationInput(WS, REPO);
     assert.strictEqual(CU.parseCurationOutput("PREFIX " + out([good()]) + " SUFFIX", input).reason, "no-json");
-    assert.strictEqual(CU.parseCurationOutput("```json\n" + out([good()]) + "\n```", input).reason, "no-json", "코드 울타리도 다른 글");
+    assert.ok(CU.parseCurationOutput("```json\n" + out([good()]) + "\n```", input).ok, "코드 울타리 1겹은 벗겨 읽음(D-2026-09-06-curator-arm-follows-scout — 실측 거짓 실패 봉합)");
+    assert.strictEqual(CU.parseCurationOutput("```json\nPREFIX " + out([good()]) + "\n```", input).reason, "no-json", "울타리 안 산문은 여전히 손상");
     assert.strictEqual(CU.parseCurationOutput(out([good({ why: "project\nwide rule that spans" })]), input).reason, "bad-why");
     assert.strictEqual(CU.parseCurationOutput(out([good({ explain: Object.assign({}, explain, { happened: "line\ntwo" }) })]), input).reason, "bad-explain");
     assert.ok(CU.parseCurationOutput("  " + out([good()]) + "\n", input).ok, "앞뒤 공백만은 허용");
@@ -442,9 +467,9 @@ async function main() {
   });
 
   // ── 확인 검증 2회차 blocker 반영분 ──
-  await ta("[2회차 blocker①] CLI curate run(codex-codex 팔) — 모듈 평가 뒤 실행이라 selector-runner가 조회하는 resolveCodex export가 채워져 있음(주입 실행기로 실측)", async () => {
+  await ta("[2회차 blocker①] CLI curate run(탐색 담당 codex 팔 — 2026-09-06: harnessMode가 아니라 scoutArm) — 모듈 평가 뒤 실행이라 selector-runner가 조회하는 resolveCodex export가 채워져 있음(주입 실행기로 실측)", async () => {
     const WS8 = fs.mkdtempSync(path.join(os.tmpdir(), "cur-ws8-")); const REPO8 = fs.mkdtempSync(path.join(os.tmpdir(), "cur-repo8-"));
-    fs.writeFileSync(path.join(REPO8, CL.ENVELOPE_FILE), coreRaw); CL.setEnvelopeHashAllSlots(WS8, CORE_HASH); CL.updateContractPatch(WS8, "ko", { scoutRepo: REPO8, harnessMode: "codex-codex" }); CL.updateContractPatch(WS8, "en", { harnessMode: "codex-codex" });
+    fs.writeFileSync(path.join(REPO8, CL.ENVELOPE_FILE), coreRaw); CL.setEnvelopeHashAllSlots(WS8, CORE_HASH); CL.updateContractPatch(WS8, "ko", { scoutRepo: REPO8, harnessMode: "codex-codex", scoutArm: "codex" }); CL.updateContractPatch(WS8, "en", { harnessMode: "codex-codex" });
     const marker = path.join(WS8, "runner-seen.json");
     const fixture = path.join(WS8, "fake-runner.js");
     fs.writeFileSync(fixture, [
@@ -465,6 +490,30 @@ async function main() {
     assert.ok(!/resolveCodex is not a function|spawn-prep-failed/.test(rr.stderr + rr.stdout));
   });
 
+  await ta("[2026-09-06 개정] CLI curate run(탐색 담당=DeepSeek·키 파일 있음) — curation.js 전용 실행기(runCurationDeepseekPage)가 브릿지 `page` 명령을 stdin 프롬프트로 부르고(선별 실행기 무접촉) stdout(울타리 답)을 파서에 넘김(스텁 브릿지 실측·네트워크 없음)", async () => {
+    const WS10 = fs.mkdtempSync(path.join(os.tmpdir(), "cur-ws10-")); const REPO10 = fs.mkdtempSync(path.join(os.tmpdir(), "cur-repo10-"));
+    fs.writeFileSync(path.join(REPO10, CL.ENVELOPE_FILE), coreRaw); CL.setEnvelopeHashAllSlots(WS10, CORE_HASH); CL.updateContractPatch(WS10, "ko", { scoutRepo: REPO10, scoutArm: "deepseek" });
+    const keyFile = path.join(HOME, "deepseek.json"); fs.writeFileSync(keyFile, JSON.stringify({ apiKey: "sk-test-not-real" }));
+    const marker = path.join(WS10, "bridge-seen.json");
+    const stub = path.join(WS10, "fake-deepseek-bridge.js");
+    fs.writeFileSync(stub, [
+      '"use strict";',
+      "const fs = require('fs');",
+      "const prompt = fs.readFileSync(0, 'utf8');",
+      "fs.writeFileSync(" + JSON.stringify(marker.replace(/\\/g, "/")) + ", JSON.stringify({ cmd: process.argv[2], hasPrompt: prompt.length > 100, promptHasRefsRule: /refs/.test(prompt) }));",
+      "process.stdout.write('```json\\n' + JSON.stringify({ proposals: [] }) + '\\n```\\n');",
+    ].join("\n"));
+    const env = Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME, CLAUDE_PROJECT_DIR: WS10, CODEX_BRIDGE_DEEPSEEK_BRIDGE: stub });
+    delete env.CODEX_BRIDGE_SELECTOR_RUNNER;
+    try {
+      const rr = cp.spawnSync(process.execPath, [path.join(__dirname, "..", "bridge", "codex-bridge.js"), "curate", "run", "--force", "--json"], { env, encoding: "utf8" });
+      const res = JSON.parse(rr.stdout.trim().split(/\r?\n/).pop());
+      assert.ok(rr.status === 0 && res.st === "ok" && res.arm === "deepseek" && res.proposed === 0, rr.stdout + rr.stderr);
+      const seen = JSON.parse(fs.readFileSync(marker, "utf8"));
+      assert.ok(seen.cmd === "page" && seen.hasPrompt && seen.promptHasRefsRule, "브릿지 page 명령이 stdin 프롬프트를 받음 " + JSON.stringify(seen));
+    } finally { fs.rmSync(keyFile, { force: true }); }
+  });
+
   await ta("[2회차 blocker② ab-7] 현재 수칙 원문이 민감 형태면 프롬프트·remove 후보 title에 표식만 · itemFp는 원문 기준(3중 대조 무변) · 표식 문안 add=거부", async () => {
     const secret = "sk-live-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345";
     const WS9 = fs.mkdtempSync(path.join(os.tmpdir(), "cur-ws9-")); const REPO9 = fs.mkdtempSync(path.join(os.tmpdir(), "cur-repo9-"));
@@ -472,6 +521,7 @@ async function main() {
     fs.writeFileSync(path.join(REPO9, CL.ENVELOPE_FILE), core9); CL.setEnvelopeHashAllSlots(WS9, sha1(core9)); CL.updateContractPatch(WS9, "ko", { scoutRepo: REPO9 });
     const arc9 = JSON.stringify({ schema: "verify-envelope-archive-v1", alwaysBlocker: ["배포 전 백업을 남긴다", "키 " + secret + " 노출 금지"] }, null, 1);
     fs.writeFileSync(path.join(REPO9, CL.ARCHIVE_FILE), arc9); CL.setContractHashAllSlots(WS9, "archiveHash", sha1(arc9));
+    seedRebutSignal(WS9, REPO9, "9");
     const inp = CU.curationInput(WS9, REPO9);
     assert.ok(inp.ok, JSON.stringify(inp));
     const oos2 = inp.rules.core.find((x) => x.axis === "outOfScope" && x.index === 1); const arc2 = inp.rules.archive[1];
@@ -516,6 +566,7 @@ async function main() {
     const WS12 = fs.mkdtempSync(path.join(os.tmpdir(), "cur-ws12-")); const REPO12 = fs.mkdtempSync(path.join(os.tmpdir(), "cur-repo12-"));
     fs.writeFileSync(path.join(REPO12, CL.ENVELOPE_FILE), coreRaw); CL.setEnvelopeHashAllSlots(WS12, CORE_HASH); CL.updateContractPatch(WS12, "ko", { scoutRepo: REPO12 });
     fs.writeFileSync(path.join(REPO12, CL.ARCHIVE_FILE), arcRaw); CL.setContractHashAllSlots(WS12, "archiveHash", ARC_HASH);
+    seedRebutSignal(WS12, REPO12, "12");
     const inp = CU.curationInput(WS12, REPO12); const arc2 = inp.rules.archive[1];
     const pr = CU.parseCurationOutput(out([good({ operation: "remove", target: "archive", index: arc2.index, itemFp: arc2.itemFp })]), inp);
     const cm = CU.commitCuration(WS12, inp, pr, {}); assert.ok(cm.ok && cm.candidateIds.length === 1);

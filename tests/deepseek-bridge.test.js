@@ -47,7 +47,7 @@ ok(/지도 생성이 실행될 때만/.test(extSrc) && /only when map generation
 ok(/연결 점검 1회/.test(extSrc) && /connection check/.test(extSrc) && !/유일한 외부 전송/.test(extSrc), "고급설정·가이드: 연결 점검 예외도 양언어 명시 + '유일한 전송' 잔재 0(예외 둘 체계 — Codex 반례 잠금 2026-07-09)");
 ok(!/실행 시에만\(키 등록=동의\)/.test(extSrc) && !/external transfer only when/.test(extSrc), "세그먼트 힌트: '실행 시에만' 단독 예외 문구 잔재 0(연결 점검 병기 — Codex 2차 반례 잠금)");
 const dsCfg = fs.readFileSync(path.join(__dirname, "..", "src", "deepseek-config.ts"), "utf8");
-ok(!/어떤 전송도 하지 않는다/.test(dsCfg) && /예외 둘/.test(dsCfg), "deepseek-config 주석: 구현 전 낡은 '무전송' 단정 정정(유지보수자 오도 방지)");
+ok(!/어떤 전송도 하지 않는다/.test(dsCfg) && !/예외 둘' 명시/.test(dsCfg) && /다섯 명령/.test(dsCfg) && /page\(/.test(dsCfg), "deepseek-config 주석: 낡은 '무전송'·'ping/map 둘뿐' 단정 정정 — 브릿지 다섯 명령(ping·capability·enrich·map·page) 기준(2026-09-06)");
 const handoff = fs.readFileSync(path.join(__dirname, "..", "docs", "HANDOFF.md"), "utf8");
 const roadmap = fs.readFileSync(path.join(__dirname, "..", "docs", "ROADMAP.md"), "utf8");
 ok(!/어떤 전송도 하지 않음/.test(handoff) && !/예외 1건/.test(roadmap), "내부 문서(HANDOFF·ROADMAP)에도 '무전송·예외 1건' 계열 잔재 0(Codex 3차 반례 잠금)");
@@ -63,6 +63,18 @@ ok(!/예외 1건/.test(readmeKo) && !/실행 시에만\(키 등록=동의/.test(
 ok(/A DeepSeek key adds two flows/.test(readmeEn) && /connection check/.test(readmeEn) && !/Single exception/.test(readmeEn) && !/Two exceptions/.test(readmeEn), "README(en): DeepSeek 2흐름 명시(P6 세 갈래 개정 — 'Two exceptions' 구표현 잔재 0)");
 const privacySrc = fs.readFileSync(path.join(__dirname, "..", "PRIVACY.md"), "utf8");
 ok(/나머지 예외 — DeepSeek 지도 생성/.test(privacySrc) && /안 보내는 것\(자동 제외\)/.test(privacySrc), "PRIVACY: 전송 내용·자동 제외 목록 명시(연결 점검 예외 추가로 '유일한→나머지' 개정 — 2026-07-09)");
+
+console.log("[page 명령 — 2026-09-06 정리 담당 팔=탐색 담당] 소스 계약 + 네트워크 없는 실행 반례(키 없음·빈 stdin=전송 전 중단)");
+ok(/cmd === "page"/.test(src) && /inheritedUsageContext\("selector-page"/.test(src) && /ping\|map\|capability\|enrich\|page/.test(src), "deepseek-bridge: page 명령(stdin 프롬프트→답 본문)+사용량 장부 flow selector-page+사용법 문구 다섯 명령");
+ok(/function runCurationDeepseekPage\(/.test(fs.readFileSync(path.join(__dirname, "..", "bridge", "curation.js"), "utf8")) && !/deepseek/.test(fs.readFileSync(path.join(__dirname, "..", "bridge", "selector-runner.js"), "utf8")), "정리 담당 전용 DeepSeek 페이지 실행기는 curation.js에(선별 실행기 selector-runner는 교차 팔 없음 유지)");
+ok(/정리 담당\(수칙 정리\) 실행 시/.test(privacySrc) && /정리 재료/.test(privacySrc) && /탐색 담당을 고른 것이 이 재료 전송에 대한 동의/.test(privacySrc), "PRIVACY: 정리 담당 실행 시 전송 재료·경로(탐색 담당과 같은 회사)·동의 모델 고지");
+ok(/정리 재료/.test(extSrc) && /curation material/.test(extSrc), "정찰 카드 FAQ: 정리 재료가 탐색 담당 경로로 간다는 고지(양언어)");
+const cpDs = require("child_process");
+const envNoKey = Object.assign({}, process.env); delete envNoKey.DEEPSEEK_API_KEY;
+const rPage1 = cpDs.spawnSync(process.execPath, [path.join(__dirname, "..", "bridge", "deepseek-bridge.js"), "page"], { env: envNoKey, input: "x", encoding: "utf8" });
+ok(rPage1.status === 1 && /DeepSeek 키 없음/.test(rPage1.stderr), "page: 키 없음=exit 1+정직 안내(전송 없음)");
+const rPage2 = cpDs.spawnSync(process.execPath, [path.join(__dirname, "..", "bridge", "deepseek-bridge.js"), "page"], { env: Object.assign({}, envNoKey, { DEEPSEEK_API_KEY: "sk-fromenv0000000000000000" }), input: "", encoding: "utf8" });
+ok(rPage2.status === 2 && /프롬프트/.test(rPage2.stderr), "page: 키 있어도 stdin 비면 exit 2(호출 전 중단 — 전송 없음)");
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

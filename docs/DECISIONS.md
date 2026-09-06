@@ -247,3 +247,16 @@
 - 결과: 검사기가 첫 실패 지점을 문장으로 돌려주고, Claude·Codex 두 종료 훅의 거부문이 그 문장을 첫 줄에 붙인다. 승인·거부 판정 자체는 바뀌지 않는다.
 - 정본: bridge/verify-cap-handoff.js `function validateCapHandoff` · `function capHandoffInstruction` · `function categoryLines` · tests/cap-closeout-detail.test.js.
 - 찾는말: 마감문 거부, 왜 되돌아왔나, 거부 사유, 마감 관문, 형식 검사, 세 칸 근거, 같은 보고 반복
+
+## D-2026-09-06-curator-arm-follows-scout — 정리 담당은 탐색 담당과 같은 회사가 답하고, 재료가 없으면 부르지 않으며, 대시보드 버튼은 결과 보기뿐이다
+- 날짜: 2026-09-06 · 종류: 개정(P4·§3 A·§3 B) · 상태: 유효
+- 결정: 정리 담당(수칙 넣기/빼기 제안)이 "구현 턴과 같은 회사"로 답하던 규칙을 바꿔 **탐색 담당과 같은 회사**가 답하게 한다(기본 정찰=Claude, Codex 정찰=Codex의 정찰 두뇌 설정, DeepSeek 정찰=DeepSeek).
+  이유는 사용자가 정한 것 — Claude 쪽은 추론 강도를 정할 수단이 없고 하네스가 모델도 넘기지 않아 실제로는 명령줄이 고른 모델(sonnet-4-5)이 답하고 있었는데, 두뇌를 정할 수 있는 쪽은 탐색 담당(Codex 두뇌 설정·DeepSeek)뿐이며
+  "도우미 두뇌 설정"을 새로 만드는 것은 설정 파편화라 거부됐다. 정리 담당이 보내는 재료(승인 수칙 문안·보관 서고 전체·장부 집계·결정 질문)는 정찰 꾸러미와 다른 범주이고 결정 질문은 저장소 밖 자료이므로, 이 사실을
+  PRIVACY.md·정찰 카드 FAQ에 명시하고 "탐색 담당 선택=동의"로 둔다(키 등록=동의 모델과 같음). 이는 하네스 작성자의 설계 결정이며 사용자별로 되풀이 승인하는 절차는 만들지 않는다. 함께 정한 것: 재료(신호)가 0이면 첫 실행이라도 담당을 부르지 않는다,
+  근거(refs) 없는 제안은 후보로 받지 않는다, 코드 울타리 한 겹은 벗겨 읽는다(2026-09-03 1회차 검증의 "울타리=손상" 결정을 이 한 겹에 한해 개정), 대시보드 버튼은 "마지막 정리 결과 보기"로 바꾸고 실행은 자동 트리거와 명령줄만 남긴다.
+- 왜: 사용자 실보고·설계 질의 2026-09-05~06 — 버튼 첫 클릭이 재료 0인데 담당을 불러 울타리 답을 거짓 실패로 경보했고, 둘째 클릭은 무알림 생략이었으며, "정리 담당은 원래 탐색자의 추가 역할"이라는 원 설계(HARNESS-REALIGNMENT §1)에서
+  "구현 쪽 같은 회사"로 흘러간 경위가 기록에 없었고, 별도 두뇌 설정 제안은 파편화였다.
+- 결과: 서고 선별 담당은 종전(구현 턴 provider 고정 — 원문 스냅샷 경계) 그대로이고 선별 실행기(selector-runner)에는 손대지 않는다(교차 팔 없음 소스 계약 유지 — DeepSeek 호출은 정리 담당 전용 실행기가 따로). 설정 항목은 하나도 늘지 않는다. 검증 경로 무접촉.
+- 정본: bridge/curation.js `function selectorArmForCuration` · `function curationSkip` · `function parseCurationOutput` · bridge/curation.js `function runCurationDeepseekPage` · bridge/deepseek-bridge.js `page` 명령 · src/extension.ts `curationShow` · PRIVACY.md 정리 담당 실행 시 절 · docs/CURATION-DESIGN.md `## §9 구현 기록` ㉑.
+- 찾는말: 정리 담당 두뇌, 탐색 담당과 같은 회사, 정리 재료 전송, 재료 없으면 안 부름, 울타리 허용, 마지막 정리 결과 보기, 왜 버튼이 사라졌나, 설정 안 늘림

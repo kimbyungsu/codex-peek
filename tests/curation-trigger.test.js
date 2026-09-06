@@ -290,12 +290,12 @@ t("소스 핀 — 훅 두 곳이 map-bootstrap tick 옆에서 curationHookTick(a
   assert.ok(asI > 0 && asJ > asI && !/curation/i.test(cb.slice(asI, asJ)), "ask-start 무접촉(P1)");
   assert.ok(cb.includes('if (sub === "tick") {') && cb.includes('trigger: "auto", tickFp: j.tickFp') && cb.includes('(rest || []).includes("--auto") ? "auto"'), "CLI tick·트리거 플래그");
   const ext = rd("src/extension.ts");
-  assert.ok(ext.includes("curation: { lastTs: string; lastOutcome: string;") && ext.includes("unusedCount: number") && ext.includes("CU9.curationSummary(ws)"), "상태(4지표 포함)");
-  assert.ok(ext.includes('m?.type === "curationRun"') && ext.includes('"curate", "run", "--button"') && ext.includes("CLAUDE_PROJECT_DIR: wsQ"), "버튼 핸들러=detach curate run --button");
+  assert.ok(ext.includes("curation: { lastItems: Array<{ id: string; title: string; op: string; status: string }>; lastTs: string; lastOutcome: string;") && ext.includes("unusedCount: number") && ext.includes("CU9.curationSummary(ws)"), "상태(4지표+마지막 결과 항목 포함)");
+  assert.ok(ext.includes('m?.type === "curationShow"') && !ext.includes('m?.type === "curationRun"') && !ext.includes('"curate", "run", "--button"') && ext.includes("CUq.curationSummary(wsQ)") && ext.includes("su.lastItems") && ext.includes("{ modal: true }"), "버튼 핸들러=마지막 결과 보기 모달(실행 없음 — 2026-09-06 개정: 실행은 자동 트리거·CLI만)");
   const beg = ext.indexOf("if(d.curation){"); const end = ext.indexOf("var actT=e9.act", beg);
   assert.ok(beg > 0 && end > beg, "카드 줄 블록");
   const blk = ext.slice(beg, end);
-  assert.ok(!/innerHTML/.test(blk) && blk.includes("정리 제안 받기") && blk.includes("cu9.adoptRate") && blk.includes("cu9.archiveSize") && blk.includes("cu9.selOverCount") && blk.includes("cu9.unusedCount") && blk.includes('vscode.postMessage({type:"curationRun"})'), "카드 줄 4지표·버튼(textContent)");
+  assert.ok(!/innerHTML/.test(blk) && blk.includes("마지막 정리 결과 보기") && !blk.includes("정리 제안 받기") && blk.includes("cb9.disabled=!cu9.lastTs") && blk.includes("cu9.adoptRate") && blk.includes("cu9.archiveSize") && blk.includes("cu9.selOverCount") && blk.includes("cu9.unusedCount") && blk.includes('vscode.postMessage({type:"curationShow"})'), "카드 줄 4지표·버튼=마지막 결과 보기(textContent·이력 없으면 비활성)");
   const dBeg = ext.indexOf("function decideActs(d){"); const dEnd = ext.indexOf("function renderOverview(d){", dBeg);
   assert.ok(!/curation/.test(ext.slice(dBeg, dEnd)), "개요 '지금 정할 것' 미합산");
   const pk = JSON.parse(rd("package.json"));
@@ -555,6 +555,27 @@ t("★반례(2차 캠페인 3판 blocker ab-1) — 결정 장부의 생성·목�
   assert.strictEqual(CL.readDecisions(F.ws, { repoKey: F.repoKey }).latest.get(Z).status, "delegated", "단일 저장소 옛 결과 행=합성(무회귀)");
   const cu = fs.readFileSync(path.join(__dirname, "..", "bridge", "curation.js"), "utf8");
   assert.ok(cu.includes("const d = CL.readDecisions(ws, { repoKey });"), "큐레이션 입력도 필터 판독");
+});
+
+t("[2026-09-06 사용자 결정 묶음 핀] 정리 담당 팔=탐색 담당 유효 팔 · 재료 0=무호출 · refs 필수·울타리 1겹 · deepseek 팔=브릿지 page · 지적 블록 미수용 고지 · 고지문·결정 기록", () => {
+  const rd2 = (f) => fs.readFileSync(path.join(__dirname, "..", f), "utf8");
+  const cu2 = rd2("bridge/curation.js");
+  const fnBody = (src, sig) => { const i = src.indexOf(sig); assert.ok(i > 0, sig + " 존재"); return src.slice(i, src.indexOf("\n}\n", i)); };
+  const armFn = fnBody(cu2, "function selectorArmForCuration(");
+  assert.ok(armFn.includes("CL.scoutArmView(ws, cc)") && !/harnessMode/.test(armFn), "팔 결정=scoutArmView eff(운용 모드·새 설정 항목 없음)");
+  const skipFn = fnBody(cu2, "function curationSkip(");
+  assert.ok(skipFn.includes('if (input.signalCount === 0) return { skip: true, reason: "no-signal" };') && !/boundaryGen === input\.boundaryGen/.test(skipFn), "재료 0=무조건 생략(지난 실행·세대 비교 폐지)");
+  assert.ok(cu2.includes('if (!refs.length) { drop("no-ref"); continue; }') && cu2.includes("^```[a-zA-Z0-9_-]*"), "refs 필수·울타리 1겹 벗김");
+  assert.ok(/refs는 아래 신호 목록의 id를 최소 1개/.test(cu2) && /at least one id from the signal list/.test(cu2), "프롬프트 규칙 문장도 refs 최소 1개(양언어)");
+  assert.ok(!rd2("bridge/selector-runner.js").includes("deepseek"), "선별 실행기(selector-runner)는 교차 팔 없음 그대로(envelope-selector 소스 계약·ab-7 경계 — 체인 첫 실행이 잡은 반례)");
+  assert.ok(cu2.includes("function runCurationDeepseekPage(") && cu2.includes("CODEX_BRIDGE_DEEPSEEK_BRIDGE") && cu2.includes('[bridge, "page"]') && cu2.includes('arm === "deepseek" ? runCurationDeepseekPage'), "deepseek=정리 담당 전용 실행기(브릿지 page·env 스텁 주입점)·runCuration 분기");
+  const ds = rd2("bridge/deepseek-bridge.js");
+  assert.ok(ds.includes('cmd === "page"') && ds.includes('inheritedUsageContext("selector-page"') && /ping\|map\|capability\|enrich\|page/.test(ds), "deepseek-bridge page 명령+사용량 장부+사용법 문구");
+  const cb2 = rd2("bridge/codex-bridge.js");
+  assert.ok(cb2.includes("if (parse.present && !blockShaped) {") && cb2.includes("[지적 블록 미수용 — 사유 ") && cb2.includes("[findings block NOT accepted — reason "), "손상 지적 블록=미등록 사실 고지(양언어)");
+  assert.ok(/정리 담당\(수칙 정리\) 실행 시/.test(rd2("PRIVACY.md")), "PRIVACY 정리 재료 전송 항목");
+  assert.ok(/정리 재료/.test(rd2("src/extension.ts")) && /curation material/.test(rd2("src/extension.ts")), "정찰 카드 FAQ 고지(양언어)");
+  assert.ok(/D-2026-09-06-curator-arm-follows-scout/.test(rd2("docs/DECISIONS.md")) && /D-2026-09-06-curator-arm-follows-scout/.test(rd2("docs/CURATION-DESIGN.md")) && /다섯 명령/.test(rd2("src/deepseek-config.ts")), "결정 기록·설계 정본·소스 계약 갱신");
 });
 
 console.log(`\n결과: ${n} 통과 / 0 실패`);

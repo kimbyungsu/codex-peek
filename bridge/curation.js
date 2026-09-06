@@ -5,7 +5,8 @@
  * 사용자는 승인·빼기만 한다. 검증 경로는 이 실행을 기다리지도 참조하지도 않는다(P1).
  *
  * 부품 B 입력 집계기 curationInput(ws, repo) — 전부 장부 판독(코드·소스 판독 없음)·개인정보 원문 없음(제목·id·횟수·지문).
- * 부품 C 제안기 — selector-runner 페이지 1회(purpose:"curate")·팔=계약 유래 selectorArmForCuration(ws, c)·출력 JSON·손상=전량 거부.
+ * 부품 C 제안기 — 팔=탐색 담당 유효 팔 selectorArmForCuration(ws, c)(2026-09-06 개정) · self/codex=selector-runner 페이지 1회(purpose:"curate") ·
+ *   deepseek=runCurationDeepseekPage(브릿지 `deepseek-bridge page` — 선별 실행기는 교차 팔 없음이 소스 계약이라 손대지 않음) · 출력 JSON·손상=전량 거부.
  * 부품 D 커밋 — 후보 장부 2단(provisional → 결과 행 → proposed)+selectorUsage 영수증(purpose:"curate"·turnAnchor=curationKey).
  *   승인 시 변환(add·oos-add·remove)은 contract-lib.draftCuratorCandidate — 기존 초안 관문(repoKey·세대·중복·title) 완화 없음.
  * 유계: 회당 제안 ≤ CURATION_MAX_PER_RUN(3)·미승인 누적 ≤ CURATION_MAX_PENDING(6) — 초과=보류·영수증만. "제안 없음"도 영수증.
@@ -36,10 +37,43 @@ function curationFileFor(ws) { return path.join(CURATION_DIR, CL.wsKeyFor(ws) + 
 function curateLockFileFor(ws) { return path.join(CURATION_DIR, CL.wsKeyFor(ws) + ".lock"); }
 function oneLine(s, max) { return String(s || "").replace(/\s+/g, " ").trim().slice(0, max); }
 
-// ── 팔 결정(P4) — 구현 턴 환경변수가 아니라 계약의 운용 모드로: claude-codex→self(claude 격리) · codex-codex→codex(빈 임시 폴더·읽기 전용).
+// ── 팔 결정(P4 개정 2026-09-06 · D-2026-09-06-curator-arm-follows-scout) — 정리 담당은 **탐색 담당의 유효 팔**을 그대로 따른다:
+// self=Claude 1회 호출 · codex=Codex(정찰 두뇌 설정 공유) · deepseek=DeepSeek(키 등록 시). 두뇌 설정을 새로 만들지 않고 기존 '탐색 담당' 설정에 귀속(설정 항목 0 추가).
+// 키 없는 DeepSeek=self 강등은 scoutArmView(eff)가 결정. 전송 범위(정리 재료)는 PRIVACY.md·정찰 카드 FAQ에 고지 — 작성자 결정이며 사용자별 재승인 절차는 없다(탐색 담당 선택=동의).
 function selectorArmForCuration(ws, c) {
   const cc = c || (() => { try { return CL.loadContract(ws); } catch { return null; } })();
-  return cc && cc.harnessMode === "codex-codex" ? "codex" : "self";
+  try { const v = CL.scoutArmView(ws, cc); if (v && (v.eff === "self" || v.eff === "codex" || v.eff === "deepseek")) return v.eff; } catch { /* 판독 실패=self */ }
+  return "self";
+}
+
+// ── DeepSeek 페이지 실행기(정리 담당 전용 · 2026-09-06) — 선별 실행기(selector-runner)는 '교차 팔 없음'이 소스 계약(ENVELOPE-SELECTOR §3 · ab-7 경계)이라 손대지 않고,
+// 탐색 담당이 DeepSeek일 때만 여기서 브릿지 `deepseek-bridge.js page`를 1회 부른다(stdin 프롬프트 → stdout 답). 키 해석·전송·사용량 장부는 브릿지 정본.
+// 반환 형태는 runSelectorPage와 동일({promise, cancel} · {ok, output | key, detail, durationMs, cancelled}). env CODEX_BRIDGE_DEEPSEEK_BRIDGE=격리 시험 스텁 경로.
+function runCurationDeepseekPage({ prompt, timeoutMs }) {
+  const { spawn } = require("child_process");
+  const SR = require("./selector-runner.js");
+  const t0 = Date.now();
+  let child = null, cancelled = false, settled = false;
+  const cancel = () => { cancelled = true; if (child && !settled) SR.killTree(child.pid); };
+  const promise = new Promise((resolve) => {
+    const done = (r) => { if (!settled) { settled = true; resolve({ ...r, durationMs: Date.now() - t0, cancelled }); } };
+    const bridge = process.env.CODEX_BRIDGE_DEEPSEEK_BRIDGE || path.join(__dirname, "deepseek-bridge.js");
+    let out = "", err = "";
+    try { child = spawn(process.execPath, [bridge, "page"], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env } }); }
+    catch (e) { return done({ ok: false, key: "spawn-failed", detail: String((e && e.message) || e) }); }
+    const timer = setTimeout(() => { SR.killTree(child.pid); }, Math.max(1000, Number(timeoutMs) || 1000));
+    child.stdout.on("data", (d) => { out += String(d); });
+    child.stderr.on("data", (d) => { err += String(d); });
+    child.on("error", (e) => { clearTimeout(timer); done({ ok: false, key: "spawn-failed", detail: String((e && e.message) || e) }); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (cancelled) return done({ ok: false, key: "cancelled", detail: "" });
+      if (code !== 0 || !String(out || "").trim()) return done({ ok: false, key: "call-failed", detail: `exit=${code} ` + String(err || "").slice(-200) });
+      done({ ok: true, output: String(out).trim() });
+    });
+    try { child.stdin.end(prompt); } catch { /* close 핸들러가 실패 정착 */ }
+  });
+  return { promise, cancel };
 }
 
 // ── 큐레이션 장부(실행·결과 행 — 후보 행은 후보 장부에) ──
@@ -166,15 +200,13 @@ function recoverCurationProvisional(ws) {
   return { recovered: out.length };
 }
 
-// ── 실행 생략 규칙(§3 B): 모든 신호가 0이고 코어·서고 세대가 마지막 실행과 같으면 페이지 호출 없이 "제안 없음" 영수증. 같은 입력 표(curationKey)의 결과가 이미 있으면 멱등 생략.
+// ── 실행 생략 규칙(§3 B · 2026-09-06 개정): 재료(신호)가 0이면 첫 실행·세대 변경과 무관하게 담당을 부르지 않는다("제안 없음" 영수증만 — 무재료 호출은 실패 체감·근거 없는 제안만 낳음: 사용자 결정).
+// 같은 입력 표(curationKey)의 결과가 이미 있으면 멱등 생략.
 function curationSkip(ws, input) {
   const rows = readCurationRows(ws).filter((r) => r.repoKey === input.repoKey);
   const key = curationKeyOf(input);
   if (rows.some((r) => r.type === "result" && r.curationKey === key)) return { skip: true, reason: "same-input" };
-  if (input.signalCount === 0) {
-    const last = [...rows].reverse().find((r) => r.type === "run" && r.outcome !== "skipped");
-    if (last && last.boundaryGen === input.boundaryGen && String(last.archiveGen || "") === String(input.archiveGen || "")) return { skip: true, reason: "no-signal" };
-  }
+  if (input.signalCount === 0) return { skip: true, reason: "no-signal" }; // 재료 없음=무호출(첫 실행 포함)
   return { skip: false };
 }
 
@@ -188,8 +220,8 @@ function buildCurationPrompt(input, lang) {
     : "헌법: 수칙 자격은 '성격'(프로젝트를 관통하는 지침)이지 이력(고쳐진 결함)이 아닙니다. 약한 제안보다 무제안이 낫습니다.");
   L.push(en ? "Operations: add (new archive rule, target archive/alwaysBlocker) · oos-add (new out-of-scope line, target core/outOfScope) · remove (drop the item you cite by axis+index+itemFp exactly as listed) · toggle (move between core and archive — recorded as held, not acted on)."
     : "작업 종류: add(서고에 새 수칙 — target archive·axis alwaysBlocker) · oos-add(코어 제외 칸에 새 줄 — target core·axis outOfScope) · remove(아래 목록의 axis·index·itemFp를 그대로 인용해 빼기) · toggle(코어↔서고 전환 — 보류로만 기록됨).");
-  L.push(en ? "Rules: why ≤120 chars, one line, no secrets/personal data. refs must be ids from the signal list below (do not invent). Wording that duplicates an existing item is rejected. Do not quote code."
-    : "규칙: why는 한 줄 120자 이내·비밀값·개인정보 금지. refs는 아래 신호 목록의 id만(지어내지 말 것). 기존 항목과 같은 문안은 거부됩니다. 코드 인용 금지.");
+  L.push(en ? "Rules: why ≤120 chars, one line, no secrets/personal data. refs must be at least one id from the signal list below (do not invent — a proposal without refs is rejected). Wording that duplicates an existing item is rejected. Do not quote code."
+    : "규칙: why는 한 줄 120자 이내·비밀값·개인정보 금지. refs는 아래 신호 목록의 id를 최소 1개(지어내지 말 것 — refs 없는 제안은 거부됩니다). 기존 항목과 같은 문안은 거부됩니다. 코드 인용 금지.");
   L.push(en ? "Output exactly one JSON object and nothing else: {\"proposals\":[{\"operation\":\"add|oos-add|remove|toggle\",\"target\":\"core|archive\",\"axis\":\"supportedEnv|alwaysBlocker|outOfScope\",\"title\":\"<rule text, ≤200 chars — required for add/oos-add>\",\"index\":<number — remove/toggle>,\"itemFp\":\"<40 hex — remove/toggle>\",\"why\":\"<nature>\",\"refs\":[\"<signal id>\"],\"recommend\":\"always|related\",\"explain\":{\"happened\":\"…\",\"ifAdopted\":\"…\",\"ifNot\":\"…\",\"recommend\":\"…\"}}]} — use {\"proposals\":[]} for none. explain fields are plain-language situations (no jargon), each ≤200 chars."
     : "출력은 JSON 객체 하나뿐(다른 글 금지): {\"proposals\":[{\"operation\":\"add|oos-add|remove|toggle\",\"target\":\"core|archive\",\"axis\":\"supportedEnv|alwaysBlocker|outOfScope\",\"title\":\"<수칙 문안 200자 이내 — add/oos-add 필수>\",\"index\":<번호 — remove/toggle>,\"itemFp\":\"<40자 hex — remove/toggle>\",\"why\":\"<성격>\",\"refs\":[\"<신호 id>\"],\"recommend\":\"항상|관련\",\"explain\":{\"happened\":\"있었던 일\",\"ifAdopted\":\"올리면 달라지는 것\",\"ifNot\":\"안 올리면 유지되는 것\",\"recommend\":\"권장과 근거\"}}]} — 제안 없음은 {\"proposals\":[]}. explain 4칸은 기술용어 없는 상황 설명(각 200자 이내).");
   L.push("");
@@ -219,8 +251,11 @@ function buildCurationPrompt(input, lang) {
 
 // ── 파서 — 손상(JSON 아님·proposals 배열 아님·3건 초과·작업 종류 밖·필수 필드 형식 위반)=전량 거부(fail-closed). 의미 거부(중복·민감·미지 refs)=항목 탈락+사유 기록.
 function parseCurationOutput(raw, input) {
-  const text = String(raw || "").trim();
-  // "JSON 객체 하나뿐" — 앞뒤 산문·코드 울타리 등 다른 글이 있으면 손상(1회차 blocker②). 첫 글자 '{'·끝 글자 '}'가 아니면 거부.
+  let text = String(raw || "").trim();
+  // 코드 울타리 1겹은 벗긴다(2026-09-06 개정 · D-2026-09-06-curator-arm-follows-scout): 실측에서 담당이 ```json … ``` 로 감싼 정상 답(제안 없음)을 no-json으로 거부해 거짓 실패 경보가 났다.
+  // 울타리 안에 JSON 객체 하나만 있어야 하며(앞뒤 산문은 여전히 손상) — 1회차 blocker②의 "울타리=손상" 결정은 이 한 겹에 한해 개정.
+  { const m = /^```[a-zA-Z0-9_-]*[ \t]*\r?\n?([\s\S]*?)\r?\n?```$/.exec(text); if (m) text = m[1].trim(); }
+  // "JSON 객체 하나뿐" — 첫 글자 '{'·끝 글자 '}'가 아니면 거부.
   if (!text.startsWith("{") || !text.endsWith("}")) return { ok: false, reason: "no-json" };
   let o = null; try { o = JSON.parse(text); } catch { return { ok: false, reason: "bad-json" }; }
   if (!o || typeof o !== "object" || !Array.isArray(o.proposals)) return { ok: false, reason: "no-proposals-array" };
@@ -256,6 +291,7 @@ function parseCurationOutput(raw, input) {
     const drop = (reason) => { dropped.push({ operation: op, target, axis, reason }); };
     const ws9 = CL.safeBacklogAutoTitle(why); if (!ws9.ok) { drop("why-sensitive-" + ws9.reasonKey); continue; }
     { let bad9 = null; for (const k of Object.keys(explain)) { const e9 = CL.safeBacklogAutoTitle(explain[k]); if (!e9.ok) { bad9 = k + "-" + e9.reasonKey; break; } } if (bad9) { drop("explain-sensitive-" + bad9); continue; } } // ab-7: 설명 4칸도 장부에 남는 글
+    if (!refs.length) { drop("no-ref"); continue; } // 근거 없는 제안 금지(2026-09-06 개정) — 신호 목록의 id 최소 1개
     if (refs.some((r) => !known.has(r))) { drop("unknown-ref"); continue; }
     if (op === "add" || op === "oos-add") {
       const title = typeof p.title === "string" ? p.title.replace(/\s+/g, " ").trim() : "";
@@ -415,7 +451,7 @@ async function runCuration(ws, opts) {
     }
     const arm = selectorArmForCuration(ws, c);
     const lang = o.lang || CL.loadLang();
-    const runner = typeof o.pageRunner === "function" ? o.pageRunner : require("./selector-runner.js").runSelectorPage;
+    const runner = typeof o.pageRunner === "function" ? o.pageRunner : arm === "deepseek" ? runCurationDeepseekPage : require("./selector-runner.js").runSelectorPage; // deepseek=정리 담당 전용 실행기(선별 실행기 무변경 — ab-7 소스 계약)
     const h = runner({ arm, prompt: buildCurationPrompt(input, lang), timeoutMs: Number(o.timeoutMs) || CL.SELECTOR_PAGE_TIMEOUT_MS });
     const r = await h.promise;
     if (!r || !r.ok) {
@@ -629,6 +665,15 @@ function curationSummary(ws) {
   const results = rows.filter((r) => r.type === "result" && (!repoKey || r.repoKey === repoKey));
   const ids = new Set(); for (const r of results) for (const id of (Array.isArray(r.items) ? r.items : [])) ids.add(id);
   const proposedTotal = ids.size;
+  // [2026-09-06 · 버튼 "마지막 정리 결과 보기"] 마지막 결과 행의 제안 목록 — 후보 장부에서 제목·작업·상태를 붙인다(승인은 제안함).
+  const lastItems = [];
+  try {
+    const lastRes = results.length ? results[results.length - 1] : null;
+    if (lastRes && Array.isArray(lastRes.items) && lastRes.items.length) {
+      const { rows: crows9 } = CL.readEnvelopeCandidates(ws);
+      for (const id of lastRes.items) { let title = "", op = "", status = ""; for (const r of crows9) if (r && r.candidateId === id) { if (typeof r.title === "string" && r.title) title = r.title; if (typeof r.operation === "string" && r.operation) op = r.operation; if (typeof r.status === "string" && r.status) status = r.status; } lastItems.push({ id: String(id), title: String(title || "").slice(0, 200), op, status }); }
+    }
+  } catch { /* 후보 장부 없음=빈 목록 */ }
   let adopted = 0, declined = 0;
   try {
     const { rows: crows } = CL.readEnvelopeCandidates(ws);
@@ -639,10 +684,10 @@ function curationSummary(ws) {
   let archiveSize = 0; if (repo && arcHash) { try { const ar = CL.readVerifyEnvelopeArchive(repo); if (ar.st === "ok" && ar.sha1 === arcHash) archiveSize = ar.data.alwaysBlocker.length; } catch { archiveSize = 0; } }
   const s = repoKey ? curationTickSignals(ws, CL.wsKeyFor(ws), repoKey, gen, arcHash, archiveSize) : { selOver: 0, unusedDays: 0, unusedCount: 0 };
   const tk = repoKey ? readTickState(ws, repoKey) : null;
-  return { lastTs: last ? last.ts : "", lastOutcome: last ? last.outcome : "", lastReason: last ? (last.reason || "") : "", lastTrigger: last ? (last.trigger || "manual") : "", runs: runs.length, proposedTotal, adopted, declined, adoptRate: proposedTotal ? Math.round((adopted / proposedTotal) * 100) : 0, pending: repoKey && gen ? curationPendingCount(ws, repoKey, gen) : 0, running: lockAlive(ws), archiveSize, selOverCount: s.selOver, unusedCount: s.unusedCount, unusedDays: s.unusedDays, campaignsSince: tk ? tk.k : 0, maxPerRun: CURATION_MAX_PER_RUN, maxPending: CURATION_MAX_PENDING, tickK: CURATION_TICK_K };
+  return { lastItems, lastTs: last ? last.ts : "", lastOutcome: last ? last.outcome : "", lastReason: last ? (last.reason || "") : "", lastTrigger: last ? (last.trigger || "manual") : "", runs: runs.length, proposedTotal, adopted, declined, adoptRate: proposedTotal ? Math.round((adopted / proposedTotal) * 100) : 0, pending: repoKey && gen ? curationPendingCount(ws, repoKey, gen) : 0, running: lockAlive(ws), archiveSize, selOverCount: s.selOver, unusedCount: s.unusedCount, unusedDays: s.unusedDays, campaignsSince: tk ? tk.k : 0, maxPerRun: CURATION_MAX_PER_RUN, maxPending: CURATION_MAX_PENDING, tickK: CURATION_TICK_K };
 }
 
-module.exports = { RULE_REDACTED, recoverCurationProvisional, resolveComputeCandidates, safeText, CURATION_DIR, CURATION_MAX_PER_RUN, CURATION_MAX_PENDING, CURATION_UNUSED_DAYS, CURATION_OPERATIONS, curationFileFor, curateLockFileFor, itemFpOf, selectorArmForCuration, readCurationRows, appendCurationRow, curationInput, curationKeyOf, curationSkip, buildCurationPrompt, parseCurationOutput, curationPendingCount, commitCuration, writeCurationReceipt, acquireCurateLock, releaseCurateLock, runCuration, curationSummary };
+module.exports = { RULE_REDACTED, recoverCurationProvisional, resolveComputeCandidates, safeText, CURATION_DIR, CURATION_MAX_PER_RUN, CURATION_MAX_PENDING, CURATION_UNUSED_DAYS, CURATION_OPERATIONS, curationFileFor, curateLockFileFor, itemFpOf, selectorArmForCuration, readCurationRows, appendCurationRow, curationInput, curationKeyOf, curationSkip, buildCurationPrompt, parseCurationOutput, curationPendingCount, commitCuration, writeCurationReceipt, acquireCurateLock, releaseCurateLock, runCuration, runCurationDeepseekPage, curationSummary };
 module.exports.CURATION_TICK_K = CURATION_TICK_K;
 module.exports.CURATION_TICK_MIN_GAP_MS = CURATION_TICK_MIN_GAP_MS;
 module.exports.CURATION_TICK_THRESHOLDS = CURATION_TICK_THRESHOLDS;

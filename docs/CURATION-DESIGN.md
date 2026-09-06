@@ -47,7 +47,7 @@ VERIFY-GOVERNANCE §7·§8.
 - **P2 소수 강제(코드)**: 실행 1회당 제안 ≤ 3, 미승인 누적 ≤ 6(초과 시 새 제안 보류·영수증만). "제안 없음"도 영수증.
 - **P3 자격=성격**: 후보마다 "왜 프로젝트를 관통하는 지침인가"(120자·민감정보 거부)가 필수이고, 코어·서고 기등재 문안과 중복이면 거부
   (reconcile 억제 집합 재사용). 결함 해소 이력만으로는 자격 없음(헌법).
-- **P4 제안자는 독립 실행·팔은 계약 유래**: selector-runner 페이지 실행(`purpose:"curate"`) 1회. 팔(provider)은 구현 턴 환경변수가 아니라
+- **P4 제안자는 독립 실행·팔은 탐색 담당 유효 팔(2026-09-06 개정 — 아래 원문은 개정 전 기록)**: 정리 담당의 팔은 계약 `scoutArm`의 유효값(`scoutArmView(ws,c).eff`: self/codex/deepseek·키 없는 DeepSeek=self)을 따른다. Codex면 정찰 두뇌 설정(scout-codex.json)을 공유하고 DeepSeek면 curation.js의 `runCurationDeepseekPage`가 `deepseek-bridge page`를 부른다(선별 실행기 selector-runner는 교차 팔 없음 그대로). 두뇌 설정 신설 없음(D-2026-09-06-curator-arm-follows-scout). 서고 선별 담당은 종전(구현 턴 provider 고정) 유지. 개정 전 P4 원문: selector-runner 페이지 실행(`purpose:"curate"`) 1회. 팔(provider)은 구현 턴 환경변수가 아니라
   **계약의 운용 모드**로 정한다 — `harnessMode` claude-codex → self(claude 격리 호출)·codex-codex → codex(빈 임시 폴더·읽기 전용) —
   구현 턴의 `selectorArmForTurn` 규칙과 같은 결과를 세션 문맥 없이 얻는 `selectorArmForCuration(ws, c)` 신설(대시보드 버튼·tick 트리거 공통).
   구현자 세션·검증자 세션과 다른 실행(ab-4). 구현자 rule-propose는 잔존하되 "구현 담당 제안" 표기(REJUDGE §8 ① 기본값 유지).
@@ -61,7 +61,7 @@ VERIFY-GOVERNANCE §7·§8.
 ## §3 설계 (부품 A~F)
 
 ### A. 트리거 (검증 무관·유계)
-- 세 갈래: ① 대시보드 버튼 "정리 제안 받기"(수동·즉시) ② 마지막 큐레이션 이후 **마감된 캠페인 K건**(기본 10) ③ 신호 임계
+- 세 갈래(2026-09-06 개정): ① 수동=`curate run` 명령(대시보드 버튼은 "마지막 정리 결과 보기"로 대체 — 실행 버튼 폐지) ② 마지막 큐레이션 이후 **마감된 캠페인 K건**(기본 10) ③ 신호 임계
   (oos-repeat ≥2·lineage ≥3·unused-rule 30일·selOver 3회 중 하나) — ②③은 Claude/Codex 훅의 기존 tick 자리(map-bootstrap `hookTick` 옆·
   같은 유계 규약: 파일 판독 상한·spawn 1회·실패=advisory)에서 **판정만** 하고 실행은 detach. 실행 중 잠금(`curate.lock` — P8 run-lock
   문법·구조화 토큰·죽은 소유자만 회수)·동시 1개·같은 ws.
@@ -71,7 +71,7 @@ VERIFY-GOVERNANCE §7·§8.
 - `curationInput(ws, repo)` → `{wsKey, repoKey, boundaryGen(envelopeHash), archiveGen(archiveHash), signals:{oosRepeat[], lineage[], escalation[],
   unusedRules[], rebutUsed[], selOver[]}, rules:{core(3축·itemFp), archive(itemFp·태그)}, decisions:{open, answered}}` — 전부 장부 판독·정규화
   (개인정보 원문 없음 — 제목·id·횟수·지문만). `itemFp`=기존 초안 관문과 같은 항목 지문 규칙(정규화 문안 sha1).
-- **실행 생략**: 모든 신호가 0이고 코어·서고 세대가 마지막 실행과 같으면 페이지 호출 없이 "제안 없음" 영수증(대부분의 실행이 여기).
+- **실행 생략(2026-09-06 개정)**: 모든 신호가 0이면 첫 실행·세대 변경과 무관하게 페이지 호출 없이 "제안 없음" 영수증(재료 없는 호출은 실패 체감·근거 없는 제안만 낳음 — 사용자 결정). 같은 입력 표의 결과가 있으면 멱등 생략.
 
 ### C. 제안기 (selector-runner `purpose:"curate"`)
 - 입력=B의 표+현재 수칙 전문(항목마다 `axis·index·itemFp` 병기 — 같은 문안이 두 줄 있으면 두 줄 다 번호가 다르게 실림). 출력=JSON 행 ≤3:
@@ -103,7 +103,7 @@ VERIFY-GOVERNANCE §7·§8.
 
 ### E. 표면
 - 제안함: 기존 카드에 `curator` 항목이 "정리 제안"으로 표기(operation 라벨·why·refs 표시). 수칙 카드 하단 1줄: "마지막 정리 제안 <시각> · 제안 n · 미승인 m".
-- 대시보드 버튼 "정리 제안 받기"(A①). 실패·보류는 기존 경보 채널 1종(`curation-failed`, 확인 가능).
+- 대시보드 버튼 "마지막 정리 결과 보기"(2026-09-06 개정 ㉑ — 옛 "정리 제안 받기" 실행 버튼 폐지: 실행은 A②③ 자동 트리거·`curate run` 명령뿐). 마지막 실행의 시각·트리거·결과·제안 목록(`curationSummary.lastItems`)을 모달로 보여주고 승인은 제안함. 실패·보류는 기존 경보 채널 1종(`curation-failed`, 확인 가능).
 
 ### F. 측정
 - 채택률(승인/제안)·서고 크기·선별 초과 횟수·미사용 수칙 수 — 수칙 카드 1줄(통계 탭 신설 없음).
@@ -161,7 +161,7 @@ ab-1 wsKey·repoKey 결속(입력·키·모든 행·영수증) · ab-2 계약 �
   자식 `curate tick`=curationTickJudge(꼬리 상한 판독) → spawn이면 같은 프로세스에서 runCuration(trigger auto·tickFp). (초판의 "훅이 curate run --auto를 직접 detach·안내 1줄"은 2회차 확인검증 뒤 폐기.)
   훅 연결: `contract-inject.js`·`codex-hook.js`의 map-bootstrap `hookTick` 옆(advisory·검증 훅/워커/ask-start 무접촉 — P1 소스 핀). CLI `curate run --auto|--button [--tick <fp>]`가 실행 행에 `trigger`·`tickFp`를 남긴다.
 - 4단계 표면·측정: `curationSummary(ws)`에 lastTrigger·adopted(applied)·declined·adoptRate·archiveSize·selOverCount·unusedDays·running 추가(§3 F 4지표). 대시보드 상태 `curation`(수칙 카드 1줄
-  "마지막 정리 제안 <시각>(트리거·결과) · 제안 n · 미승인 m/6 · 채택률 · 서고 크기 · 선별 초과")+버튼 "정리 제안 받기"(→ `curationRun` 메시지 → detach `curate run --button`·실행 중이면 비활성). 실패·보류는 기존 경보 `curation-failed`. 개요 '지금 정할 것' 미합산.
+  "마지막 정리 제안 <시각>(트리거·결과) · 제안 n · 미승인 m/6 · 채택률 · 서고 크기 · 선별 초과")+버튼 "정리 제안 받기"(→ `curationRun` 메시지 → detach `curate run --button`·실행 중이면 비활성 — **2026-09-06 ㉑에서 "마지막 정리 결과 보기"(`curationShow`)로 대체**). 실패·보류는 기존 경보 `curation-failed`. 개요 '지금 정할 것' 미합산.
 - 시험 `tests/curation-trigger.test.js` 8묶음(훅 층·K 누계·tickFp 1회·신호 4종 단독·옛 세대 해소 계보 반례·CLI tick/run·저장소 전환 반례·소스 핀).
 - **구현 검증 1회차 blocker 5 반영(2026-09-04)**: ① 신호는 현재 세대(envelopeHash)의 마지막 캠페인·열린 지적(close 행 없음)만 — 옛 세대 해소 계보 재발동 차단 ② 마감 캠페인 누계는 tick 상태 파일
   `curation/<wsKey>.<repoKey>.tick.json`(repoKey 결속·seen id ≤64+시각 워터마크 hwm·k·judgedAt·ranAt·tickFp·reason)에 누적 — 캠페인 이력 60일 절단·seen 절단과 무관(워터마크 이전 행은 재계수 없음), 첫 tick은 기준선(k=0), 실행(입력 단계 진입)마다 k=0 ③ 훅 층은
@@ -190,4 +190,5 @@ ab-1 wsKey·repoKey 결속(입력·키·모든 행·영수증) · ab-2 계약 �
   대가: 업그레이드 직후 진행 중이던 캠페인의 옛 열린 지적은 새 통과 판이 자동 종결하지 않는다(관문도 그 지적을 막지 않으므로 사용자 흐름은 막히지 않음). 저장소 키를 모르는 경로(빈 값)만 종전 전체 판독으로 축퇴.
 - **확인검증 5판(2026-09-05·압축 보류) blocker 4 반영 — 같은 규칙을 남은 활성 경로 4곳에**: ⑲ finding-judge 목록의 유효성 표시·fix-gap 누계(`fixGapCount(ws, camp, repoKey)`)=현재 저장소 행만 · 검증 결과 부가 보고 3종(원인 분해·수칙서 후보 재료·무결성 재심 재료 — `repoKeySnap9` 시작 스냅샷 키; 이 문자열은 근거 재확인 checkpoint에도 저장됨) · `rule-propose`=현재 대상 저장소 표식 행에서만 finding·close 선택(타 저장소 지적=finding-not-found) · Project MAP 수확기 `harvestFromResolvedFinding(…, repoKey)`=종결 판의 저장소 행만(B 처분+A 종결 결합 불가). 반례 시험 tests/curation-trigger.test.js [11].
   도장 상태: 이 캠페인 5/5 소진 → **미도장** — 다음 캠페인 첫 검증에서 도장 필요.
+- **2026-09-06 사용자 결정 묶음(㉑)**: ⓐ 정리 담당 팔=탐색 담당 유효 팔(self/codex/deepseek — `selectorArmForCuration`이 `scoutArmView(...).eff` 판독 · DeepSeek는 curation.js 전용 실행기 `runCurationDeepseekPage`→`deepseek-bridge page` — 선별 실행기 selector-runner는 무변경(교차 팔 없음 소스 계약 유지·체인 핀이 첫 시도를 잡음)) ⓑ 신호 0=무호출(첫 실행 포함 — `curationSkip`) ⓒ 근거(refs) 없는 제안 거부(`no-ref`)·코드 울타리 1겹 허용(`parseCurationOutput`) ⓓ 대시보드 버튼 "정리 제안 받기" 폐지→"마지막 정리 결과 보기"(`curationShow`·`curationSummary.lastItems`) ⓔ 지적 블록 미수용 고지(codex-bridge machineFindingsLayer — 손상 블록의 행이 장부에 안 실린 사실을 구현자에게 명시) ⓕ 고지문(PRIVACY.md·정찰 카드 FAQ·src/deepseek-config.ts)에 정리 재료 전송 명시. 결정 근거=docs/DECISIONS.md D-2026-09-06-curator-arm-follows-scout.
 - **2차 캠페인 1판(2026-09-06·압축 보류) blocker 반영**: ⑳ 판단 관문 마커(`judge-required`)와 `round-judgment` 행의 저장소 결속 — 마커가 검증 시작 저장소 표식을 기억하고(`addJudgeRequired` 호출 3곳=전량 강등·압축 보류·분쟁이 시작 스냅샷 키 전달·미전달=관문 기본), `resolveJudgeRequired`는 기존 판단 조회와 새 판단 행 스탬프를 그 키로 한다(A 검증 마커를 대상이 B로 바뀐 뒤 판단해도 A에 남음). 반례 시험 tests/curation-trigger.test.js [12]. 2판(압축 보류) blocker 2 반영: 옛 무키 마커(업그레이드 이전)는 현재 계약으로 찍지 않고 **표식 없는 판단 행(`repoUnknown`·이력만)**으로 남기며(`appendFindingsLedger(…, { repoKey: null })`=소속 불명 명시) 마커는 풀린다 · `escalate --decision`은 결정 항목의 repoKey가 마커(round-judge)·대상 지적(finding-judge)의 저장소와 같아야 기록(`decision-repo-mismatch`). 3판 blocker 반영: **결정 장부 자체도 저장소별** — `readDecisions(ws, { repoKey })`가 그 저장소 표식의 열린 항목만 권위로 삼고(표면 list/render/choose/delegate/metrics·대시보드 '지금 정할 것'·마감 동봉 `capHandoffContext` 전부 현재 정찰 대상 키), `decisionIdFor(…, repoKey)`로 id 산식에 저장소를 넣어 A·B가 같은 내용을 올려도 별도 항목, `resolveDecision(…, { repoKey })`가 다른 저장소·무표식 옛 항목의 종결을 `repo-mismatch`로 거부(결과 행도 표식 승계). 4판 blocker 반영: 결과 행(chosen/delegated) 합성도 **표식 일치 원항목에만** — 표식 없는 옛 결과 행은 같은 id가 여러 저장소에 열려 있으면 귀속 불명이라 합성하지 않음(양쪽 다 열린 채 다시 묻는 편이 거짓 종결보다 안전·단일 저장소면 종전 합성) · `resolveDecision`은 저장소 필터 판독에서 대상을 찾음(같은 id의 타 저장소 항목이 내 항목을 가리지 않음) · 큐레이션 입력도 필터 판독. 반례 시험 [13]. 같은 판에서 정정된 진단 2건(첫 무신호 실행은 §3 B 원문과 일치·마감문 첫 거부 원인은 '5회차' 인용 칸이 아니라 파일 수 표기·`.out` 경로 칸)은 보고문으로 반영.
