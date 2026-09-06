@@ -882,9 +882,28 @@ console.log("[3-7] 판독 형태 드리프트 봉합(2026-09-06 실측 — D-202
   writeRollout("d7k", [userMsg("검증 요청"), ...exec7('const r = await tools.exec_command({cmd: "git -c safe.directory=D:/x grep -n \\"p q\\" -- foo.ts", workdir: ' + JSON.stringify(ws) + '});')]);
   const wk = citedFilesUnseenExact(answer, ws, "d7k");
   ck("(k) 이스케이프 따옴표가 든 인라인 cmd 판독도 인정(원시 인수에서 추출)", wk.checked === true && !wk.unseenWeak.some((p) => p.endsWith("foo.ts")));
+  // (l) ★1판 blocker ab-3 반례: 명령 키만 있고 도구 이름공간이 아닌 사용자 함수(stash({cmd:cmds}))는 실행 호출이 아니다
+  writeRollout("d7l", [userMsg("검증 요청"), ...exec7('const cmds=[' + GREP_FOO + '];\nfunction stash(x){}\nstash({cmd:cmds});\nawait tools.exec_command({cmd:"Write-Output done",workdir:' + JSON.stringify(ws) + '});')]);
+  const wl = citedFilesUnseenExact(answer, ws, "d7l");
+  ck("(l) ★명령 키를 가진 임의 함수(stash({cmd:cmds}))는 흔적이 아님 — 경보 유지(ab-3 반례)", wl.checked === true && wl.unseenWeak.some((p) => p.endsWith("foo.ts")));
+  // (m) ★1판 blocker ab-3 반례: 리터럴 배열 뒤 재대입($files=$null)은 값 불명 → foreach 전개 없음
+  const ps6 = "$files=@('foo.ts','bar.ts'); $files=$null; foreach($f in $files){}; Get-Content -LiteralPath $f; Write-Output done";
+  writeRollout("d7m", [userMsg("검증 요청"), ...exec7('const r = await tools.exec_command({cmd: ' + JSON.stringify(ps6) + ', workdir: ' + JSON.stringify(ws) + '});')]);
+  const wm = citedFilesUnseenExact(answer, ws, "d7m");
+  ck("(m) ★리터럴 배열 뒤 재대입($null)=값 불명 — 두 파일 모두 경보 유지(ab-3 반례)", wm.checked === true && wm.unseenWeak.some((p) => p.endsWith("foo.ts")) && wm.unseenWeak.some((p) => p.endsWith("bar.ts")));
+  // (n) ★치환은 foreach 본문 안에서만 — 루프 밖 Get-Content $f 는 리터럴로 둔갑하지 않는다
+  const ps7 = "$files=@('foo.ts'); foreach($f in $files){ Write-Output $f }; Get-Content -LiteralPath $f";
+  writeRollout("d7n", [userMsg("검증 요청"), ...exec7('const r = await tools.exec_command({cmd: ' + JSON.stringify(ps7) + ', workdir: ' + JSON.stringify(ws) + '});')]);
+  const wn = citedFilesUnseenExact(answer, ws, "d7n");
+  ck("(n) ★foreach 본문 밖의 $f 는 치환되지 않음 — 경보 유지(ab-3 반례)", wn.checked === true && wn.unseenWeak.some((p) => p.endsWith("foo.ts")));
+  // (o) 본문 안 판독은 여전히 인정(재대입이 foreach 뒤에 오면 무관)
+  const ps8 = "$files=@('foo.ts'); foreach($f in $files){ Get-Content -LiteralPath $f }; $files=$null";
+  writeRollout("d7o", [userMsg("검증 요청"), ...exec7('const r = await tools.exec_command({cmd: ' + JSON.stringify(ps8) + ', workdir: ' + JSON.stringify(ws) + '});')]);
+  const wo = citedFilesUnseenExact(answer, ws, "d7o");
+  ck("(o) foreach 뒤의 재대입은 앞 루프에 영향 없음 — 본문 안 판독 인정", wo.checked === true && !wo.unseenWeak.some((p) => p.endsWith("foo.ts")));
   // (j) 소스 핀: 실행 호출 판정에 고정 함수 이름 없음 · 보조 2종 존재 · 중첩 추출=원시 인수
   const src7 = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
-  ck("(j) 배열-사용 결속이 shell_command 고정 문자열을 쓰지 않음(계약 형태 execLikeCalls)", !/shell_command\\\\s\*\\\\\(/.test(src7) && !/matchAll\(\/shell_command/.test(src7) && /function execLikeCalls\(/.test(src7) && /for \(const call of execLikeCalls\(usageText\)\)/.test(src7));
+  ck("(j) 배열-사용 결속이 shell_command 고정 문자열을 쓰지 않음(계약 형태 execLikeCalls=tools.* 호출+명령 키)", !/shell_command\\\\s\*/.test(src7) && !/matchAll\(\/shell_command/.test(src7) && src7.includes("function execLikeCalls(") && src7.includes("for (const call of execLikeCalls(usageText))") && src7.includes("tools\\s*\\.\\s*([A-Za-z_$][\\w$]*)\\s*\\(") && src7.includes("(?:cmd|command)"));
   ck("(j) PowerShell foreach 전개는 약한 축 결속(weak9 = !!source.weak || variant.expanded)", /function psLiteralForeachVariants\(/.test(src7) && /const weak9 = !!source\.weak \|\| variant\.expanded;/.test(src7));
   ck("(j) 중첩 호출 추출은 원시 인수에서(정규화본 폴백은 원시 문자열 부재 시만)", /const rawArgTexts = \[p && p\.arguments, p && p\.input\]\.filter\(\(v\) => typeof v === "string"\);/.test(src7) && /\(rawArgTexts\.length \? rawArgTexts : values\)\.flatMap\(nestedShellCalls\)/.test(src7));
   ck("(j) 임의 실행기 제외는 불변(node -e 미인정 — 허용목록 그대로)", /^(cat\|type\|more\|less\|head\|tail\|sed\|grep\|rg\|ripgrep\|select-string\|get-content\|gc)/m.test(src7.replace(/\\/g, "")) || /\(cat\|type\|more\|less\|head\|tail\|sed\|grep\|rg\|ripgrep\|select-string\|get-content\|gc\)/.test(src7));

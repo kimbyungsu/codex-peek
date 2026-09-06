@@ -887,14 +887,15 @@ function nestedShellCommands(text) { return nestedShellCalls(text).map((c) => c.
 // ── [2026-09-06 판독 형태 드리프트 봉합 — D-2026-09-06-evidence-read-form-drift] ─────────────────────────────
 // 실측(09-06): 검증자 CLI가 2026-08-20부터 tools.shell_command→tools.exec_command로 이름을 바꿨고, 판독을 ⓐJS 명령 배열+실행 호출
 // ⓑPowerShell 리터럴 배열/해시 + foreach + Get-Content 로 싣는다. 아래 두 보조는 '약한 축(경보용)'에만 쓰인다 — 승격(strong)은 불변.
-// ① 실행 호출을 함수 이름이 아니라 계약 형태로 알아본다: 인수 구간(괄호 균형·600자 창)에 명령 키(cmd|command — "cmd": 표기·{cmd,…} 단축
-//    속성 포함)를 넘기는 호출. 이름 목록(shell_command|exec_command|…)을 두면 다음 개명에 또 통째로 깨진다.
+// ① 실행 호출을 함수 이름이 아니라 계약 형태로 알아본다: **도구 이름공간 호출**(`tools.<함수>(` — 실행기가 도구를 노출하는 유일한 통로)이면서
+//    인수 구간(괄호 균형·600자 창)에 명령 키(cmd|command — "cmd": 표기·{cmd,…} 단축 속성 포함)를 넘기는 호출. 이름 목록(shell_command|exec_command|…)을
+//    두면 다음 개명에 또 통째로 깨지고, 반대로 명령 키만 보면 `stash({cmd:cmds})` 같은 미실행 사용자 함수가 판독 흔적을 위조한다(1판 blocker ab-3) —
+//    그래서 두 조건을 함께 요구한다. `tools.없는함수(`는 실행 시 예외로 스크립트가 실패해(성공 결과 결속 실패) 흔적이 되지 못한다.
 function execLikeCalls(text) {
   const src = String(text || "");
   const out = [];
   const keyRe = /(?:\{|,)\s*["']?(?:cmd|command)["']?\s*(?=[:,}])/;
-  for (const cm of src.matchAll(/([A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*)\s*\(/g)) {
-    if (/^(?:if|for|while|switch|catch|function|return)$/.test(cm[1])) continue; // 키워드 괄호는 호출이 아니다
+  for (const cm of src.matchAll(/(?<![\w$.])tools\s*\.\s*([A-Za-z_$][\w$]*)\s*\(/g)) {
     const from = cm.index + cm[0].length;
     let depth = 1, i2 = from, quote = "";
     const cap = Math.min(src.length, from + 600);
@@ -914,8 +915,8 @@ function execLikeCalls(text) {
   return out;
 }
 // ② PowerShell 리터럴 배열 + foreach 전개 — `$arr = @('a','b')` / `@(@{p='a';a=1},…)` 를 같은 호출 텍스트의 **뒤에 오는** `foreach ($v in $arr)`
-//    에서만 풀어 `$v` / `$v.key` 를 각 원소로 치환한 변형 텍스트를 만든다(리터럴 대입 복원과 같은 원칙: 실행 순서·호출 경계 유지, 비리터럴
-//    원소가 하나라도 있으면 그 배열은 미인정, 변형 수 64 초과=전개 포기). 전개된 변형에서 나온 부품은 항상 약한 축.
+//    의 **본문 `{…}` 안에서만** `$v` / `$v.key` 를 각 원소로 치환한 변형 텍스트를 만든다(리터럴 대입 복원과 같은 원칙: 실행 순서·호출 경계 유지,
+//    foreach 앞의 마지막 대입이 리터럴 배열일 때만·비리터럴 원소가 하나라도 있으면 그 배열은 미인정·변형 수 64 초과=전개 포기). 전개 부품은 항상 약한 축.
 function psMatchParen(src, open) {
   let depth = 0, quote = "";
   for (let i = open; i < src.length; i++) {
@@ -959,31 +960,68 @@ function psParseArrayItems(body) {
   }
   return items.length ? items : null;
 }
-function psSubstituteVar(text, at, v, item) {
-  const head = text.slice(0, at), tail = text.slice(at);
+function psSubstituteVar(text, from, to, v, item) {
+  const head = text.slice(0, from), body = text.slice(from, to), tail = text.slice(to); // 본문 [from,to) 안에서만 치환
   const esc = v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const out = item.map
-    ? tail.replace(new RegExp("\\$" + esc + "\\.([A-Za-z_]\\w*)", "g"), (w, k) => (Object.prototype.hasOwnProperty.call(item.map, k) ? item.map[k] : w))
-    : tail.replace(new RegExp("\\$" + esc + "(?![\\w.])", "g"), () => item.str);
-  return head + out;
+    ? body.replace(new RegExp("\\$" + esc + "\\.([A-Za-z_]\\w*)", "g"), (w, k) => (Object.prototype.hasOwnProperty.call(item.map, k) ? item.map[k] : w))
+    : body.replace(new RegExp("\\$" + esc + "(?![\\w.])", "g"), () => item.str);
+  return head + out + tail;
+}
+// 전개 변형 전용 — foreach 본문 `{ Get-Content … }`처럼 중괄호 바로 뒤에 오는 판독은 `;`/개행 경계가 없어 문장 선두 판정에 걸리지 않는다.
+// 따옴표 밖 중괄호를 문장 구분자로 바꾼다(전개 변형=약한 축에서만 쓴다 — 종전 경로의 문장 분할은 그대로).
+function psBracesToSeparators(text) {
+  const s = String(text || "");
+  let out = "", quote = "";
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (quote) { out += ch; if (ch === quote && s[i - 1] !== "`") quote = ""; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; out += ch; continue; }
+    out += (ch === "{" || ch === "}") ? ";" : ch;
+  }
+  return out;
 }
 function psLiteralForeachVariants(text) {
   const src = String(text || "");
   const plain = [{ text: src, expanded: false }];
   if (!/foreach\s*\(/i.test(src) || src.indexOf("@(") < 0) return plain;
-  const arrays = new Map();
-  for (const m of src.matchAll(/\$([A-Za-z_]\w*)\s*=\s*@\(/g)) {
-    const open = m.index + m[0].length - 1;
-    const close = psMatchParen(src, open);
-    if (close < 0) continue;
-    const items = psParseArrayItems(src.slice(open + 1, close));
-    if (!items) { arrays.delete(m[1]); continue; } // 비리터럴 재대입=값 불명(옛 값 남기지 않음)
-    arrays.set(m[1], { items, end: close });
+  // 모든 대입(`$name =`)을 위치와 함께 모은다 — 리터럴 배열이면 원소를, 그 밖의 대입(`$files=$null`·호출 결과 등)은 '값 불명'으로.
+  // foreach 시점의 값은 **그보다 앞의 마지막 대입**이며 그것이 리터럴 배열일 때만 전개한다(1판 blocker ab-3: 리터럴 뒤 재대입을 무시하면
+  // 읽지 않은 파일의 흔적이 만들어졌다).
+  const assigns = [];
+  for (const m of src.matchAll(/\$([A-Za-z_]\w*)\s*=(?!=)\s*/g)) {
+    const after = src.slice(m.index + m[0].length);
+    if (after.startsWith("@(")) {
+      const open = m.index + m[0].length + 1;
+      const close = psMatchParen(src, open);
+      const items = close < 0 ? null : psParseArrayItems(src.slice(open + 1, close));
+      assigns.push({ name: m[1], at: m.index, end: close < 0 ? m.index : close, items });
+    } else assigns.push({ name: m[1], at: m.index, end: m.index, items: null });
   }
-  if (!arrays.size) return plain;
+  if (!assigns.some((a) => a.items)) return plain;
+  const lastLiteralBefore = (name, idx) => {
+    let last = null;
+    for (const a of assigns) if (a.name === name && a.end < idx) last = a; // 텍스트 순서=실행 순서(같은 호출 텍스트 안)
+    return last && last.items ? last : null;
+  };
+  // foreach 본문 `{ … }`의 범위를 찾는다(따옴표 무시·중괄호 균형) — 치환은 본문 안에서만(1판 blocker ab-3: 헤더 뒤 전체를 치환하면
+  // 루프 밖 `Get-Content $f`가 리터럴로 둔갑). 본문을 못 찾으면 그 루프는 전개하지 않는다.
+  const bodyOf = (from) => {
+    let i = from; while (i < src.length && /\s/.test(src[i])) i++;
+    if (src[i] !== "{") return null;
+    let depth = 0, quote = "";
+    for (let j = i; j < src.length; j++) {
+      const ch = src[j];
+      if (quote) { if (ch === quote && src[j - 1] !== "`") quote = ""; continue; }
+      if (ch === '"' || ch === "'") { quote = ch; continue; }
+      if (ch === "{") depth++;
+      else if (ch === "}") { depth--; if (depth === 0) return { start: i + 1, end: j }; }
+    }
+    return null;
+  };
   const loops = [...src.matchAll(/foreach\s*\(\s*\$([A-Za-z_]\w*)\s+in\s+\$([A-Za-z_]\w*)\s*\)/gi)]
-    .map((m) => ({ v: m[1], arr: arrays.get(m[2]), at: m.index + m[0].length, idx: m.index }))
-    .filter((l) => l.arr && l.arr.end < l.idx) // 배열 대입이 foreach보다 앞에 있을 때만(실행 순서)
+    .map((m) => ({ v: m[1], arr: lastLiteralBefore(m[2], m.index), body: bodyOf(m.index + m[0].length), idx: m.index }))
+    .filter((l) => l.arr && l.body)
     .sort((a, b) => b.idx - a.idx); // 뒤에서부터 치환해 앞쪽 위치가 흔들리지 않게
   if (!loops.length) return plain;
   let variants = [{ text: src, expanded: false }];
@@ -991,7 +1029,7 @@ function psLiteralForeachVariants(text) {
     const next = [];
     for (const variant of variants) for (const item of l.arr.items) {
       if (next.length >= 64) return plain; // 폭발 방지=전개 포기(경보 유지 쪽이 안전)
-      next.push({ text: psSubstituteVar(variant.text, l.at, l.v, item), expanded: true });
+      next.push({ text: psSubstituteVar(variant.text, l.body.start, l.body.end, l.v, item), expanded: true });
     }
     variants = next;
   }
@@ -1024,7 +1062,7 @@ function toolReadParts(p) {
     for (const variant of psLiteralForeachVariants(source.command)) {
       const weak9 = !!source.weak || variant.expanded;
       const vars = new Map();
-      for (const s of splitShellStatements(variant.text)) {
+      for (const s of splitShellStatements(variant.expanded ? psBracesToSeparators(variant.text) : variant.text)) {
         if (toolCallCanReadFile(p, s)) out.push({ text: expandShellVars(stripShellComment(s), vars), workdir: source.workdir || "", weak: weak9 });
         const lit = shellLiteralAssign(s);
         if (lit) { vars.set(lit.name, lit.value); continue; }
@@ -1076,7 +1114,7 @@ function toolReadParts(p) {
       // 미사용 배열이 '사용'으로 둔갑하는 헛점 차단(확인 반례 ①).
       const usageText = rawText.slice(0, am.index) + " ".repeat(am[0].length) + rawText.slice(am.index + am[0].length);
       const nameEsc = arrName.replace(/\$/g, "\\$");
-      // [2026-09-06 ①] '실행 호출'을 함수 이름(shell_command)이 아니라 계약 형태(명령 키 cmd|command를 넘기는 호출)로 알아본다 —
+      // [2026-09-06 ①] '실행 호출'을 함수 이름(shell_command)이 아니라 계약 형태(도구 이름공간 tools.<함수>( + 명령 키 cmd|command)로 알아본다 —
       // 검증자 CLI가 08-20 tools.exec_command로 개명하자 배열 판독이 통째로 미인식돼 검증마다 경보가 났다(실측 09-06: 14회 중 10회).
       // 사용 판정 조임은 그대로(확인 반례 — console.log(이름); 뒤 별개 실행 호출 근접이 '사용'으로 둔갑 금지):
       // ⓐ같은 표현식 연결 — 이름→(세미콜론 없이 120자 안)→실행 호출( (cmds.map(c=>tools.exec_command({cmd:c}) 형·for (const cmd of cmds) { …exec_command({cmd,…}) 형)
