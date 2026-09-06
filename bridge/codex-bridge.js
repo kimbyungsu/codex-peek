@@ -914,6 +914,58 @@ function execLikeCalls(text) {
   }
   return out;
 }
+// ①-b 실행 호출 인수에서 '명령 값 식'을 뽑는다 — `{cmd: <식>, …}` / `{"command": <식>}` 이면 <식>(같은 깊이의 다음 `,`나 끝까지), 단축 속성 `{cmd,…}`면 이름 자체.
+function execCommandExpr(args) {
+  const a = String(args || "");
+  const m = a.match(/(?:\{|,)\s*["']?(cmd|command)["']?\s*(:)?/);
+  if (!m) return "";
+  if (!m[2]) return m[1]; // 단축 속성 — 값은 같은 이름의 변수
+  let i = m.index + m[0].length, depth = 0, quote = "", out = "";
+  for (; i < a.length; i++) {
+    const ch = a[i];
+    if (quote) { out += ch; if (ch === "\\") { out += a[++i] || ""; continue; } if (ch === quote) quote = ""; continue; }
+    if (ch === '"' || ch === "'" || ch === "`") { quote = ch; out += ch; continue; }
+    if (ch === "(" || ch === "[" || ch === "{") depth++;
+    else if (ch === ")" || ch === "]" || ch === "}") { if (depth === 0) break; depth--; }
+    else if (ch === "," && depth === 0) break;
+    out += ch;
+  }
+  return out.trim();
+}
+// ①-c 배열 이름에서 묶인 반복 변수 중 '호출 위치를 감싸는' 것만: `for (const X of ARR) {…}` 본문 안 · `ARR.map|forEach|flatMap|filter|some|every(X => …)`
+// 콜백 괄호 안. 범위 밖(끝난 루프·다른 콜백)의 변수는 묶이지 않는다 — 실행 흐름 밖 이름으로 흔적을 만들 수 없게.
+function arrayBoundIdents(text, arrName, callStart) {
+  const src = String(text || "");
+  const esc = arrName.replace(/\$/g, "\\$");
+  const out = new Set();
+  const balancedEnd = (openIdx, open, close) => { // openIdx=여는 괄호 위치 → 닫는 위치(따옴표 무시)
+    let depth = 0, quote = "";
+    for (let j = openIdx; j < src.length; j++) {
+      const ch = src[j];
+      if (quote) { if (ch === "\\") j++; else if (ch === quote) quote = ""; continue; }
+      if (ch === '"' || ch === "'" || ch === "`") { quote = ch; continue; }
+      if (ch === open) depth++;
+      else if (ch === close) { depth--; if (depth === 0) return j; }
+    }
+    return -1;
+  };
+  for (const m of src.matchAll(new RegExp("for\\s*\\(\\s*(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s+of\\s+" + esc + "(?![\\w$])[^)]*\\)", "g"))) {
+    let i = m.index + m[0].length; while (i < src.length && /\s/.test(src[i])) i++;
+    let end = -1;
+    if (src[i] === "{") end = balancedEnd(i, "{", "}");
+    else { end = src.indexOf(";", i); if (end < 0) end = src.length; }
+    if (end > 0 && callStart > m.index && callStart < end) out.add(m[1]);
+  }
+  for (const m of src.matchAll(new RegExp("(?<![\\w$.])" + esc + "\\s*\\.\\s*(?:map|forEach|flatMap|filter|some|every|reduce)\\s*\\(", "g"))) {
+    const open = m.index + m[0].length - 1;
+    const end = balancedEnd(open, "(", ")");
+    if (end < 0 || !(callStart > open && callStart < end)) continue;
+    const head = src.slice(open + 1, Math.min(end, open + 80));
+    const pm = head.match(/^\s*(?:async\s*)?(?:\(\s*([A-Za-z_$][\w$]*)|([A-Za-z_$][\w$]*)\s*=>)/);
+    if (pm) out.add(pm[1] || pm[2]);
+  }
+  return [...out];
+}
 // ② PowerShell 리터럴 배열 + foreach 전개 — `$arr = @('a','b')` / `@(@{p='a';a=1},…)` 를 같은 호출 텍스트의 **뒤에 오는** `foreach ($v in $arr)`
 //    의 **본문 `{…}` 안에서만** `$v` / `$v.key` 를 각 원소로 치환한 변형 텍스트를 만든다(리터럴 대입 복원과 같은 원칙: 실행 순서·호출 경계 유지,
 //    foreach 앞의 마지막 대입이 리터럴 배열일 때만·비리터럴 원소가 하나라도 있으면 그 배열은 미인정·변형 수 64 초과=전개 포기). 전개 부품은 항상 약한 축.
@@ -964,9 +1016,38 @@ function psSubstituteVar(text, from, to, v, item) {
   const head = text.slice(0, from), body = text.slice(from, to), tail = text.slice(to); // 본문 [from,to) 안에서만 치환
   const esc = v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const out = item.map
-    ? body.replace(new RegExp("\\$" + esc + "\\.([A-Za-z_]\\w*)", "g"), (w, k) => (Object.prototype.hasOwnProperty.call(item.map, k) ? item.map[k] : w))
-    : body.replace(new RegExp("\\$" + esc + "(?![\\w.])", "g"), () => item.str);
+    ? body.replace(new RegExp("\\$" + esc + "\\.([A-Za-z_]\\w*)", "gi"), (w, k) => { const kk = Object.keys(item.map).find((x) => x.toLowerCase() === k.toLowerCase()); return kk !== undefined ? item.map[kk] : w; })
+    : body.replace(new RegExp("\\$" + esc + "(?![\\w.])", "gi"), () => item.str);
   return head + out + tail;
+}
+// 따옴표 밖 주석(`# …` 줄끝·`<# … #>` 블록)을 같은 길이의 공백으로 바꾼다 — 위치 보존(스캔 결과의 인덱스를 원문에 그대로 쓴다).
+function psCommentsToSpaces(text) {
+  const s = String(text || "");
+  let out = "", quote = "";
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (quote) { out += ch; if (ch === quote && s[i - 1] !== "`") quote = ""; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; out += ch; continue; }
+    if (ch === "<" && s[i + 1] === "#") { const e = s.indexOf("#>", i + 2); const end = e < 0 ? s.length : e + 2; out += s.slice(i, end).replace(/[^\r\n]/g, " "); i = end - 1; continue; }
+    if (ch === "#" && (i === 0 || /[\s;{(]/.test(s[i - 1]))) { let e = i; while (e < s.length && s[e] !== "\n" && s[e] !== "\r") e++; out += " ".repeat(e - i); i = e - 1; continue; }
+    out += ch;
+  }
+  return out;
+}
+// 각 위치의 중괄호 깊이(따옴표 무시) — 최상위(0)에서만 대입·foreach를 '실행됨'으로 본다.
+function psBraceDepthMap(text) {
+  const s = String(text || "");
+  const d = new Array(s.length).fill(0);
+  let depth = 0, quote = "";
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    d[i] = depth;
+    if (quote) { if (ch === quote && s[i - 1] !== "`") quote = ""; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (ch === "{") depth++;
+    else if (ch === "}") depth = Math.max(0, depth - 1);
+  }
+  return d;
 }
 // 전개 변형 전용 — foreach 본문 `{ Get-Content … }`처럼 중괄호 바로 뒤에 오는 판독은 `;`/개행 경계가 없어 문장 선두 판정에 걸리지 않는다.
 // 따옴표 밖 중괄호를 문장 구분자로 바꾼다(전개 변형=약한 축에서만 쓴다 — 종전 경로의 문장 분할은 그대로).
@@ -988,15 +1069,21 @@ function psLiteralForeachVariants(text) {
   // 모든 대입(`$name =`)을 위치와 함께 모은다 — 리터럴 배열이면 원소를, 그 밖의 대입(`$files=$null`·호출 결과 등)은 '값 불명'으로.
   // foreach 시점의 값은 **그보다 앞의 마지막 대입**이며 그것이 리터럴 배열일 때만 전개한다(1판 blocker ab-3: 리터럴 뒤 재대입을 무시하면
   // 읽지 않은 파일의 흔적이 만들어졌다).
+  // [2판 blocker ab-3] 주석 속 대입(`# $files=@(…)`)·미실행 분기(`if($false){ $files=@(…) }`)가 실행된 대입으로 읽혔다 →
+  // ⓐ 따옴표 밖 주석(`#…` 줄끝·`<# … #>`)은 공백으로 지운 본문에서만 스캔 ⓑ 중괄호 깊이 0(최상위)의 대입만 '값을 안다'로 보고 블록 안 대입은 값 불명으로
+  // 기록(같은 이름의 앞선 리터럴을 무효화) ⓒ foreach도 최상위만 전개. [보완] PowerShell 변수명은 대소문자를 구분하지 않으므로 소문자로 비교.
+  const scan = psCommentsToSpaces(src); // 길이 보존(위치 동일)
+  const depthAt = psBraceDepthMap(scan);
   const assigns = [];
-  for (const m of src.matchAll(/\$([A-Za-z_]\w*)\s*=(?!=)\s*/g)) {
-    const after = src.slice(m.index + m[0].length);
-    if (after.startsWith("@(")) {
+  for (const m of scan.matchAll(/\$([A-Za-z_]\w*)\s*=(?!=)\s*/g)) {
+    const name = m[1].toLowerCase();
+    const after = scan.slice(m.index + m[0].length);
+    if (depthAt[m.index] === 0 && after.startsWith("@(")) {
       const open = m.index + m[0].length + 1;
-      const close = psMatchParen(src, open);
-      const items = close < 0 ? null : psParseArrayItems(src.slice(open + 1, close));
-      assigns.push({ name: m[1], at: m.index, end: close < 0 ? m.index : close, items });
-    } else assigns.push({ name: m[1], at: m.index, end: m.index, items: null });
+      const close = psMatchParen(scan, open);
+      const items = close < 0 ? null : psParseArrayItems(scan.slice(open + 1, close));
+      assigns.push({ name, at: m.index, end: close < 0 ? m.index : close, items });
+    } else assigns.push({ name, at: m.index, end: m.index, items: null }); // 블록 안·비리터럴=값 불명
   }
   if (!assigns.some((a) => a.items)) return plain;
   const lastLiteralBefore = (name, idx) => {
@@ -1019,8 +1106,9 @@ function psLiteralForeachVariants(text) {
     }
     return null;
   };
-  const loops = [...src.matchAll(/foreach\s*\(\s*\$([A-Za-z_]\w*)\s+in\s+\$([A-Za-z_]\w*)\s*\)/gi)]
-    .map((m) => ({ v: m[1], arr: lastLiteralBefore(m[2], m.index), body: bodyOf(m.index + m[0].length), idx: m.index }))
+  const loops = [...scan.matchAll(/foreach\s*\(\s*\$([A-Za-z_]\w*)\s+in\s+\$([A-Za-z_]\w*)\s*\)/gi)]
+    .filter((m) => depthAt[m.index] === 0) // 최상위 foreach만(블록 안=실행 여부 불명)
+    .map((m) => ({ v: m[1], arr: lastLiteralBefore(m[2].toLowerCase(), m.index), body: bodyOf(m.index + m[0].length), idx: m.index }))
     .filter((l) => l.arr && l.body)
     .sort((a, b) => b.idx - a.idx); // 뒤에서부터 치환해 앞쪽 위치가 흔들리지 않게
   if (!loops.length) return plain;
@@ -1119,13 +1207,20 @@ function toolReadParts(p) {
       // 사용 판정 조임은 그대로(확인 반례 — console.log(이름); 뒤 별개 실행 호출 근접이 '사용'으로 둔갑 금지):
       // ⓐ같은 표현식 연결 — 이름→(세미콜론 없이 120자 안)→실행 호출( (cmds.map(c=>tools.exec_command({cmd:c}) 형·for (const cmd of cmds) { …exec_command({cmd,…}) 형)
       // ⓑ호출 인수 내 참조 — 실행 호출의 괄호 균형 인수 구간(600자 창) 안에 이름 (exec_command({cmd:cmds[i]}) 형). console.log(cmds)는 명령 키가 없어 실행 호출이 아니다.
-      let usedChain = false, usedArg = false;
+      // [2판 blocker ab-3] 인수 어디든 이름이 있으면 인정하던 것(`max_output_tokens:1000+cmds.length`로 위조)을 **데이터 흐름**으로 조인다:
+      // 실행 호출의 '명령 값 식'(cmd|command 키의 값 — 단축 속성이면 그 이름)이 ⓐ배열 이름을 직접 참조하거나(cmds[i]) ⓑ그 배열에서 묶인 반복 변수
+      // (호출을 감싸는 `for (const X of cmds) {…}` 본문·`cmds.map(X => …)`류 콜백 안)를 참조할 때만 '그 배열의 명령이 실행됐다'로 본다.
+      let used = false;
       for (const call of execLikeCalls(usageText)) {
-        if (new RegExp("\\b" + nameEsc + "\\b").test(call.args)) { usedArg = true; break; }
-        const pre = usageText.slice(Math.max(0, call.start - 120), call.start);
-        if (new RegExp("\\b" + nameEsc + "\\b[^;]*$").test(pre)) { usedChain = true; break; }
+        const expr = execCommandExpr(call.args);
+        if (!expr) continue;
+        if (new RegExp("\\b" + nameEsc + "\\b").test(expr)) { used = true; break; }
+        for (const ident of arrayBoundIdents(usageText, arrName, call.start)) {
+          if (new RegExp("(?<![\\w$])" + ident.replace(/\$/g, "\\$") + "(?![\\w$])").test(expr)) { used = true; break; }
+        }
+        if (used) break;
       }
-      if (!usedChain && !usedArg) continue;
+      if (!used) continue;
       for (const m of body.matchAll(/"((?:[^"\\]|\\.)+)"|'((?:[^'\\]|\\.)+)'/g)) {
         const lit2 = normSepWin((m[1] !== undefined ? m[1] : m[2] || "").replace(/\\(["'\\])/g, "$1"));
         if (lit2.length < 4 || lit2.length > 4000) continue;
@@ -4957,4 +5052,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, execLikeCalls, toolReadParts, nestedShellCalls, scriptOwnerScan, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
+module.exports = { rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, execLikeCalls, execCommandExpr, arrayBoundIdents, toolReadParts, nestedShellCalls, scriptOwnerScan, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
