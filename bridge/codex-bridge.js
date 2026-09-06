@@ -884,6 +884,119 @@ function nestedShellCalls(text) {
   });
 }
 function nestedShellCommands(text) { return nestedShellCalls(text).map((c) => c.command); }
+// ── [2026-09-06 판독 형태 드리프트 봉합 — D-2026-09-06-evidence-read-form-drift] ─────────────────────────────
+// 실측(09-06): 검증자 CLI가 2026-08-20부터 tools.shell_command→tools.exec_command로 이름을 바꿨고, 판독을 ⓐJS 명령 배열+실행 호출
+// ⓑPowerShell 리터럴 배열/해시 + foreach + Get-Content 로 싣는다. 아래 두 보조는 '약한 축(경보용)'에만 쓰인다 — 승격(strong)은 불변.
+// ① 실행 호출을 함수 이름이 아니라 계약 형태로 알아본다: 인수 구간(괄호 균형·600자 창)에 명령 키(cmd|command — "cmd": 표기·{cmd,…} 단축
+//    속성 포함)를 넘기는 호출. 이름 목록(shell_command|exec_command|…)을 두면 다음 개명에 또 통째로 깨진다.
+function execLikeCalls(text) {
+  const src = String(text || "");
+  const out = [];
+  const keyRe = /(?:\{|,)\s*["']?(?:cmd|command)["']?\s*(?=[:,}])/;
+  for (const cm of src.matchAll(/([A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*)\s*\(/g)) {
+    if (/^(?:if|for|while|switch|catch|function|return)$/.test(cm[1])) continue; // 키워드 괄호는 호출이 아니다
+    const from = cm.index + cm[0].length;
+    let depth = 1, i2 = from, quote = "";
+    const cap = Math.min(src.length, from + 600);
+    while (i2 < cap && depth > 0) {
+      const ch = src[i2];
+      if (quote) { if (ch === "\\") i2++; else if (ch === quote) quote = ""; }
+      else if (ch === '"' || ch === "'" || ch === "`") quote = ch;
+      else if (ch === "(") depth++;
+      else if (ch === ")") depth--;
+      i2++;
+    }
+    if (depth !== 0) continue; // 인수 구간 미확정=인정하지 않음(종전 규칙)
+    const args = src.slice(from, i2 - 1);
+    if (!keyRe.test(args)) continue;
+    out.push({ start: cm.index, from, to: i2 - 1, args });
+  }
+  return out;
+}
+// ② PowerShell 리터럴 배열 + foreach 전개 — `$arr = @('a','b')` / `@(@{p='a';a=1},…)` 를 같은 호출 텍스트의 **뒤에 오는** `foreach ($v in $arr)`
+//    에서만 풀어 `$v` / `$v.key` 를 각 원소로 치환한 변형 텍스트를 만든다(리터럴 대입 복원과 같은 원칙: 실행 순서·호출 경계 유지, 비리터럴
+//    원소가 하나라도 있으면 그 배열은 미인정, 변형 수 64 초과=전개 포기). 전개된 변형에서 나온 부품은 항상 약한 축.
+function psMatchParen(src, open) {
+  let depth = 0, quote = "";
+  for (let i = open; i < src.length; i++) {
+    const ch = src[i];
+    if (quote) { if (ch === quote && src[i - 1] !== "`") quote = ""; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (ch === "(") depth++;
+    else if (ch === ")") { depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+function psParseArrayItems(body) {
+  const items = [];
+  let i = 0; const n = body.length;
+  const skipWs = () => { while (i < n && /[\s,]/.test(body[i])) i++; };
+  const readStr = () => {
+    const q = body[i]; let j = i + 1, v = "";
+    while (j < n && body[j] !== q) { v += body[j]; j++; }
+    if (j >= n) return null;
+    if (q === '"' && /[$`]/.test(v)) return null; // 보간 문자열=값 불명
+    i = j + 1; return v;
+  };
+  for (;;) {
+    skipWs(); if (i >= n) break;
+    if (body[i] === '"' || body[i] === "'") { const v = readStr(); if (v === null) return null; items.push({ str: v }); continue; }
+    if (body.startsWith("@{", i)) {
+      let j = i + 2, depth = 1, quote = "";
+      while (j < n && depth > 0) { const ch = body[j]; if (quote) { if (ch === quote) quote = ""; } else if (ch === '"' || ch === "'") quote = ch; else if (ch === "{") depth++; else if (ch === "}") depth--; j++; }
+      if (depth !== 0) return null;
+      const inner = body.slice(i + 2, j - 1);
+      const map = {};
+      for (const pair of inner.split(/[;\r\n]+/)) {
+        const t = pair.trim(); if (!t) continue;
+        const m = t.match(/^([A-Za-z_]\w*)\s*=\s*(?:'([^']*)'|"([^"$`]*)"|([-\w./\\:]+))$/);
+        if (!m) return null; // 값이 리터럴이 아니면 배열 전체 미인정
+        map[m[1]] = m[2] !== undefined ? m[2] : m[3] !== undefined ? m[3] : m[4];
+      }
+      items.push({ map }); i = j; continue;
+    }
+    return null; // 변수·호출 등 비리터럴 원소
+  }
+  return items.length ? items : null;
+}
+function psSubstituteVar(text, at, v, item) {
+  const head = text.slice(0, at), tail = text.slice(at);
+  const esc = v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const out = item.map
+    ? tail.replace(new RegExp("\\$" + esc + "\\.([A-Za-z_]\\w*)", "g"), (w, k) => (Object.prototype.hasOwnProperty.call(item.map, k) ? item.map[k] : w))
+    : tail.replace(new RegExp("\\$" + esc + "(?![\\w.])", "g"), () => item.str);
+  return head + out;
+}
+function psLiteralForeachVariants(text) {
+  const src = String(text || "");
+  const plain = [{ text: src, expanded: false }];
+  if (!/foreach\s*\(/i.test(src) || src.indexOf("@(") < 0) return plain;
+  const arrays = new Map();
+  for (const m of src.matchAll(/\$([A-Za-z_]\w*)\s*=\s*@\(/g)) {
+    const open = m.index + m[0].length - 1;
+    const close = psMatchParen(src, open);
+    if (close < 0) continue;
+    const items = psParseArrayItems(src.slice(open + 1, close));
+    if (!items) { arrays.delete(m[1]); continue; } // 비리터럴 재대입=값 불명(옛 값 남기지 않음)
+    arrays.set(m[1], { items, end: close });
+  }
+  if (!arrays.size) return plain;
+  const loops = [...src.matchAll(/foreach\s*\(\s*\$([A-Za-z_]\w*)\s+in\s+\$([A-Za-z_]\w*)\s*\)/gi)]
+    .map((m) => ({ v: m[1], arr: arrays.get(m[2]), at: m.index + m[0].length, idx: m.index }))
+    .filter((l) => l.arr && l.arr.end < l.idx) // 배열 대입이 foreach보다 앞에 있을 때만(실행 순서)
+    .sort((a, b) => b.idx - a.idx); // 뒤에서부터 치환해 앞쪽 위치가 흔들리지 않게
+  if (!loops.length) return plain;
+  let variants = [{ text: src, expanded: false }];
+  for (const l of loops) {
+    const next = [];
+    for (const variant of variants) for (const item of l.arr.items) {
+      if (next.length >= 64) return plain; // 폭발 방지=전개 포기(경보 유지 쪽이 안전)
+      next.push({ text: psSubstituteVar(variant.text, l.at, l.v, item), expanded: true });
+    }
+    variants = next;
+  }
+  return variants;
+}
 function toolReadParts(p) {
   const values = toolArgumentValues(p);
   const name = String((p && (p.name || p.tool_name)) || "").toLowerCase();
@@ -894,7 +1007,11 @@ function toolReadParts(p) {
   // 증명할 수 없다(실행 안 되는 분기·호출 아닌 이름 재사용 등이 계속 새 반례로 나왔다).
   // 그래서 스크립트에서 읽어낸 것은 **약한 증거**로만 쓴다: 경보(다룬 흔적 확인)에는 쓰고,
   // 신뢰 등급 승격에는 쓰지 않는다. 승격은 하네스가 기록한 인수만 인정한다.
-  const nested = values.flatMap(nestedShellCalls);
+  // [2026-09-06 ③] 중첩 호출 추출은 **원시 인수**에서 — toolArgumentValues는 백슬래시를 /로 바꿔 JSON 문자열 안의 이스케이프 따옴표(\")를
+  // 깨뜨리므로(아래 배열 스캔 주석과 같은 함정) 정규화본에서는 `cmd: "rg -n \"패턴\" 파일"` 같은 흔한 인라인 판독이 통째로 사라졌다
+  // (실측 09-06 (e) 반례: PowerShell 스크립트 안 \"@@ \" 문자열 하나로 명령 전체가 미인식). 원시 문자열이 없을 때만 종전 정규화본으로 폴백.
+  const rawArgTexts = [p && p.arguments, p && p.input].filter((v) => typeof v === "string");
+  const nested = (rawArgTexts.length ? rawArgTexts : values).flatMap(nestedShellCalls);
   const sources = nested.length ? nested.map((c) => ({ ...c, weak: true })) : values.map((v) => ({ command: v, workdir: "", weak: false }));
   // 리터럴 대입을 풀어 넣되 **실행 순서를 지키고**(1차 blocker① — 뒤에 나온 대입이 앞 문장에 소급되면,
   // 없는 파일을 읽고 실패한 뒤 이름만 나중에 대입해도 '그 파일을 읽었다'가 된다), **호출 경계를 넘지
@@ -903,13 +1020,17 @@ function toolReadParts(p) {
   // 각 조각은 자기가 나온 호출의 작업 폴더를 달고 나간다(경로 기준이 호출마다 다르기 때문).
   const out = [];
   for (const source of sources) {
-    const vars = new Map();
-    for (const s of splitShellStatements(source.command)) {
-      if (toolCallCanReadFile(p, s)) out.push({ text: expandShellVars(stripShellComment(s), vars), workdir: source.workdir || "", weak: !!source.weak });
-      const lit = shellLiteralAssign(s);
-      if (lit) { vars.set(lit.name, lit.value); continue; }
-      const tgt = shellAssignTarget(s);
-      if (tgt) vars.delete(tgt);
+    // [2026-09-06 ②] PowerShell 리터럴 배열 foreach 전개 — 전개 변형의 부품은 약한 축(psLiteralForeachVariants 주석).
+    for (const variant of psLiteralForeachVariants(source.command)) {
+      const weak9 = !!source.weak || variant.expanded;
+      const vars = new Map();
+      for (const s of splitShellStatements(variant.text)) {
+        if (toolCallCanReadFile(p, s)) out.push({ text: expandShellVars(stripShellComment(s), vars), workdir: source.workdir || "", weak: weak9 });
+        const lit = shellLiteralAssign(s);
+        if (lit) { vars.set(lit.name, lit.value); continue; }
+        const tgt = shellAssignTarget(s);
+        if (tgt) vars.delete(tgt);
+      }
     }
   }
   // [2026-08-03 문맥 보정 — 약한(경보) 축 한정] 검증자가 임의 코드 실행기(exec)에 '명령 문자열 배열'
@@ -955,27 +1076,16 @@ function toolReadParts(p) {
       // 미사용 배열이 '사용'으로 둔갑하는 헛점 차단(확인 반례 ①).
       const usageText = rawText.slice(0, am.index) + " ".repeat(am[0].length) + rawText.slice(am.index + am[0].length);
       const nameEsc = arrName.replace(/\$/g, "\\$");
-      // 사용 판정 조임(확인 반례 — console.log(이름); 뒤 별개 shell_command 근접이 '사용'으로 둔갑):
-      // ⓐ같은 표현식 연결 — 이름→(세미콜론 없이)→shell_command( (cmds.map(c=>tools.shell_command( 형)
-      // ⓑ호출 인수 내 참조 — shell_command( 뒤 300자 인수 구간 안에 이름 (shell_command({command:cmds[i]}) 형)
-      const usedChain = new RegExp("\\b" + nameEsc + "\\b[^;]{0,120}?shell_command\\s*\\(").test(usageText);
-      // 인수 구간은 '괄호 균형'으로 한정한다(확인 반례 2 — 고정 300자 창은 호출이 끝난 뒤의
-      // 로그·주석 속 이름까지 포섭해 미실행 배열을 되살림). 문자열 리터럴 안의 괄호는 건너뛴다.
-      let usedArg = false;
-      for (const cm of usageText.matchAll(/shell_command\s*\(/g)) {
-        const from = cm.index + cm[0].length;
-        let depth = 1, i2 = from, quote = "";
-        const cap = Math.min(usageText.length, from + 600);
-        while (i2 < cap && depth > 0) {
-          const ch = usageText[i2];
-          if (quote) { if (ch === "\\") i2++; else if (ch === quote) quote = ""; }
-          else if (ch === '"' || ch === "'" || ch === "`") quote = ch;
-          else if (ch === "(") depth++;
-          else if (ch === ")") depth--;
-          i2++;
-        }
-        if (depth !== 0) continue; // 괄호가 창 안에서 안 닫히면 인수 구간 미확정 — 인정하지 않음
-        if (new RegExp("\\b" + nameEsc + "\\b").test(usageText.slice(from, i2 - 1))) { usedArg = true; break; }
+      // [2026-09-06 ①] '실행 호출'을 함수 이름(shell_command)이 아니라 계약 형태(명령 키 cmd|command를 넘기는 호출)로 알아본다 —
+      // 검증자 CLI가 08-20 tools.exec_command로 개명하자 배열 판독이 통째로 미인식돼 검증마다 경보가 났다(실측 09-06: 14회 중 10회).
+      // 사용 판정 조임은 그대로(확인 반례 — console.log(이름); 뒤 별개 실행 호출 근접이 '사용'으로 둔갑 금지):
+      // ⓐ같은 표현식 연결 — 이름→(세미콜론 없이 120자 안)→실행 호출( (cmds.map(c=>tools.exec_command({cmd:c}) 형·for (const cmd of cmds) { …exec_command({cmd,…}) 형)
+      // ⓑ호출 인수 내 참조 — 실행 호출의 괄호 균형 인수 구간(600자 창) 안에 이름 (exec_command({cmd:cmds[i]}) 형). console.log(cmds)는 명령 키가 없어 실행 호출이 아니다.
+      let usedChain = false, usedArg = false;
+      for (const call of execLikeCalls(usageText)) {
+        if (new RegExp("\\b" + nameEsc + "\\b").test(call.args)) { usedArg = true; break; }
+        const pre = usageText.slice(Math.max(0, call.start - 120), call.start);
+        if (new RegExp("\\b" + nameEsc + "\\b[^;]*$").test(pre)) { usedChain = true; break; }
       }
       if (!usedChain && !usedArg) continue;
       for (const m of body.matchAll(/"((?:[^"\\]|\\.)+)"|'((?:[^'\\]|\\.)+)'/g)) {
@@ -4809,4 +4919,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
+module.exports = { rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, execLikeCalls, toolReadParts, nestedShellCalls, scriptOwnerScan, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };

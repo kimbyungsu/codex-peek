@@ -260,3 +260,15 @@
 - 결과: 서고 선별 담당은 종전(구현 턴 provider 고정 — 원문 스냅샷 경계) 그대로이고 선별 실행기(selector-runner)에는 손대지 않는다(교차 팔 없음 소스 계약 유지 — DeepSeek 호출은 정리 담당 전용 실행기가 따로). 설정 항목은 하나도 늘지 않는다. 검증 경로 무접촉.
 - 정본: bridge/curation.js `function selectorArmForCuration` · `function curationSkip` · `function parseCurationOutput` · bridge/curation.js `function runCurationDeepseekPage` · bridge/deepseek-bridge.js `page` 명령 · src/extension.ts `curationShow` · PRIVACY.md 정리 담당 실행 시 절 · docs/CURATION-DESIGN.md `## §9 구현 기록` ㉑.
 - 찾는말: 정리 담당 두뇌, 탐색 담당과 같은 회사, 정리 재료 전송, 재료 없으면 안 부름, 울타리 허용, 마지막 정리 결과 보기, 왜 버튼이 사라졌나, 설정 안 늘림
+
+## D-2026-09-06-evidence-read-form-drift — 검증자가 파일을 읽었는지 보는 감시 창구는 함수 이름이 아니라 "명령을 넘기는 호출 모양"과 "리터럴 목록 반복"으로 알아본다
+- 날짜: 2026-09-06 · 종류: 봉합(경보 축 한정) · 상태: 유효
+- 결정: 검증 답이 인용한 파일을 검증자가 그 판에서 실제로 읽었는지 확인하는 탐지기가, 검증자 CLI의 실행 함수 이름(tools.shell_command)만 알아보다가 2026-08-20 개명(tools.exec_command) 뒤 배열 판독을 통째로 놓쳐 검증마다 "근거의심" 경보와 재확인 호출이 났다(실측 09-06: 검증 14회 중 경보 10회·재확인 발송 5회·나머지는 사용자가 확인 클릭으로 지움).
+  ① 실행 호출은 이름 목록이 아니라 계약 형태로 판정한다 — 인수 구간에 명령 키(cmd|command·단축 속성 포함)를 넘기는 호출. 이름 목록을 늘리는 방식은 다음 개명에 또 깨지므로 금지.
+  ② PowerShell 리터럴 배열/해시 + foreach + Get-Content 형태는 같은 호출 텍스트 안에서 배열 대입이 foreach보다 앞에 있을 때만 원소별로 풀어 '약한 흔적'으로 인정한다(비리터럴 원소·순서 위반·64 변형 초과=미인정).
+  ③ 같은 실측에서 드러난 별개 결함: 인라인 명령 문자열에 이스케이프 따옴표(\")가 있으면(rg -n "패턴" 파일 같은 가장 흔한 판독) 정규화본에서 문자열 경계가 깨져 명령 전체가 사라졌다 → 중첩 호출 추출은 원시 인수에서 한다(정규화본 폴백은 원시 문자열이 없을 때만).
+  ④ 임의 코드 실행기(node -e 등) 제외와 신뢰 등급 승격(strong=하네스 기록 인수만) 규칙은 그대로 — 이 봉합은 경보 축만 넓힌다.
+- 왜: 사용자 실보고 "근거의심 경고가 매 턴 여러 건, 여러 번 고쳤는데 계속됨"(2026-09-06). 앞선 세 봉합(08-21 미ack 반복 억제·08-27 지문 억제·no-dispatch 자동 확인)은 '같은 의심의 반복'만 다뤄 근본(판독 형태 미인식)을 손대지 않았다. 재확인 파일 상한 8 때문에 9개 이상 인용은 지문 억제가 시도조차 안 되고, 보류 판 뒤에는 재확인 발송이 없어 억제 근거도 안 남는다.
+- 결과: 검증자가 현재 쓰는 세 판독 형태 중 둘(명령 배열+실행 호출·PowerShell 리터럴 목록 반복)과 따옴표가 든 인라인 명령이 흔적으로 잡힌다. 작은 스크립트(node -e)로만 읽은 파일은 설계대로 여전히 경보 대상(위조 방지 경계).
+- 정본: bridge/codex-bridge.js `function execLikeCalls` · `function psLiteralForeachVariants` · `function toolReadParts`(배열-사용 결속) · tests/evidence-unseen.test.js [3-7].
+- 찾는말: 근거의심 반복, 매 턴 경고, 읽은 흔적 없음, exec_command, shell_command 개명, PowerShell foreach Get-Content, 재확인 호출 비용
