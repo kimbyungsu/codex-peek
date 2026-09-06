@@ -201,12 +201,12 @@ function recoverCurationProvisional(ws) {
 }
 
 // ── 실행 생략 규칙(§3 B · 2026-09-06 개정): 재료(신호)가 0이면 첫 실행·세대 변경과 무관하게 담당을 부르지 않는다("제안 없음" 영수증만 — 무재료 호출은 실패 체감·근거 없는 제안만 낳음: 사용자 결정).
-// 같은 입력 표(curationKey)의 결과가 이미 있으면 멱등 생략.
+// 같은 입력 표(curationKey)의 결과가 이미 있으면 멱등 생략 — 단 사유 순서는 no-signal이 먼저(1판 blocker: --force로 만든 신호 0 결과 행이 있어도 사유는 '재료 없음'이어야 영수증·카드 계약이 맞는다).
 function curationSkip(ws, input) {
+  if (input.signalCount === 0) return { skip: true, reason: "no-signal" }; // 재료 없음=무호출(첫 실행·같은 키 결과 행 존재와 무관)
   const rows = readCurationRows(ws).filter((r) => r.repoKey === input.repoKey);
   const key = curationKeyOf(input);
   if (rows.some((r) => r.type === "result" && r.curationKey === key)) return { skip: true, reason: "same-input" };
-  if (input.signalCount === 0) return { skip: true, reason: "no-signal" }; // 재료 없음=무호출(첫 실행 포함)
   return { skip: false };
 }
 

@@ -161,6 +161,8 @@ t("생략 규칙 — 신호 0=항상 생략(첫 실행 포함·2026-09-06 개정
   assert.deepStrictEqual(CU.curationSkip(WS4, i4), { skip: true, reason: "no-signal" }, "재료 0=첫 실행이라도 무호출(2026-09-06 개정 — 지난 실행 기록·세대 무관)");
   CU.appendCurationRow(WS4, { type: "run", repoKey: i4.repoKey, boundaryGen: CORE_HASH, archiveGen: "", outcome: "none" });
   assert.deepStrictEqual(CU.curationSkip(WS4, i4), { skip: true, reason: "no-signal" });
+  CU.appendCurationRow(WS4, { type: "result", repoKey: i4.repoKey, curationKey: CU.curationKeyOf(i4), boundaryGen: CORE_HASH, archiveGen: "", resultFp: "x", items: [] }); // --force로 만든 같은 키 결과 행
+  assert.deepStrictEqual(CU.curationSkip(WS4, i4), { skip: true, reason: "no-signal" }, "★1판 blocker: 신호 0이면 같은 키 결과 행이 있어도 사유는 no-signal(same-input보다 먼저)");
   const i1 = CU.curationInput(WS, REPO); assert.strictEqual(CU.curationSkip(WS, i1).skip, false, "신호 3건=실행");
   CU.appendCurationRow(WS, { type: "result", repoKey: i1.repoKey, curationKey: CU.curationKeyOf(i1), boundaryGen: CORE_HASH, archiveGen: ARC_HASH, resultFp: "x", items: [] });
   assert.deepStrictEqual(CU.curationSkip(WS, i1), { skip: true, reason: "same-input" });
@@ -421,7 +423,7 @@ async function main() {
     CU.appendCurationRow(WS6, { type: "result", repoKey: rk6, curationKey: key6, boundaryGen: CORE_HASH, archiveGen: ARC_HASH, resultFp: sha1(JSON.stringify([cid6])), items: [cid6], fresh: [cid6], deferred: 0, heldToggles: [], dropped: [] });
     assert.ok(!CL.readEnvelopeCandidates(WS6).latest.has(cid6 + "@" + CORE_HASH), "중단 상태: 활성화 행 없음(latest 미판독)");
     const r = await CU.runCuration(WS6, { pageRunner: fake(out([good()])) });
-    assert.ok(r.st === "skipped" && r.reason === "same-input" && r.recovered === 1, "복구 1건 뒤 같은 입력=생략 " + JSON.stringify(r));
+    assert.ok(r.st === "skipped" && r.reason === "no-signal" && r.recovered === 1, "복구 1건 뒤 같은 입력=생략(이 픽스처는 신호 0이라 사유는 no-signal이 same-input보다 먼저 — 2026-09-06 1판 blocker) " + JSON.stringify(r));
     const rec = CL.readEnvelopeCandidates(WS6).latest.get(cid6 + "@" + CORE_HASH);
     assert.ok(rec && rec.status === "proposed" && rec.operation === "remove" && rec.explain && rec.curationKey === key6, "복구 행=provisional 전 필드 승계 " + JSON.stringify(rec));
     assert.strictEqual(CU.recoverCurationProvisional(WS6).recovered, 0, "멱등(재실행 무해)");

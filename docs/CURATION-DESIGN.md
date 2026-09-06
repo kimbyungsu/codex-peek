@@ -121,7 +121,7 @@ ab-1 wsKey·repoKey 결속(입력·키·모든 행·영수증) · ab-2 계약 �
 |---|---|---|
 | 트리거 K(마감 캠페인 수) | 10 | 제안 채택률·서고 크기 실측 뒤 |
 | 회당 제안 상한 / 미승인 누적 상한 | 3 / 6 | 사용자가 "더 보여 달라" 실보고 |
-| 실행 팔 | 계약 운용 모드 유래(claude-codex=self·codex-codex=codex) | 선별기 팔 정책 재론 때 |
+| 실행 팔 | 탐색 담당 유효 팔(`scoutArmView(ws,c).eff`: self/codex/deepseek · 키 없는 DeepSeek=self — 2026-09-06 개정 ㉑·D-2026-09-06-curator-arm-follows-scout; 개정 전=계약 운용 모드 유래 claude-codex=self·codex-codex=codex) | 탐색 담당 설정 정책 재론 때 |
 | 전환(toggle) | 2차(연결쌍) | 1차 채택률 실측 뒤 |
 | 구현자 rule-propose | 잔존·표기 | 큐레이션 채택률이 안정되면 폐지 재론 |
 
