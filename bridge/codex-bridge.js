@@ -914,6 +914,39 @@ function execLikeCalls(text) {
   }
   return out;
 }
+// ⓐ 코드 전용 본문 — scriptOwnerScan의 inStr/inCmt 자리를 공백으로(길이 보존·개행 유지). 주석/문자열 속 글자는 코드가 아니다.
+function maskNonCode(text, own) {
+  const s = String(text || "");
+  const inStr = (own && own.inStr) || [], inCmt = (own && own.inCmt) || [];
+  // 닫는 따옴표는 남긴다(scriptOwnerScan은 닫는 따옴표까지 inStr로 표시) — 따옴표 짝이 깨지면 뒤의 괄호 균형 판독이 문자열 안으로 빨려 들어간다.
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (!(inStr[i] || inCmt[i]) || ch === "\n" || ch === "\r") { out += ch; continue; }
+    out += (inStr[i] && (ch === '"' || ch === "'" || ch === "`") && !inStr[i + 1]) ? ch : " ";
+  }
+  return out;
+}
+// ⓒ 배열 이름의 모든 등장이 허용 형태(읽기 전용 사용)인지 — 하나라도 아니면 false(fail-closed).
+function arrayUsageAllowed(codeText, arrName) {
+  const src = String(codeText || "");
+  const esc = arrName.replace(/\$/g, "\\$");
+  for (const um of src.matchAll(new RegExp("(?<![\\w$.])" + esc + "(?![\\w$])", "g"))) {
+    const after = src.slice(um.index + arrName.length);
+    const before = src.slice(Math.max(0, um.index - 12), um.index);
+    if (/(?<![\w$])of\s+$/.test(before)) continue;                                   // for (const x of ARR)
+    if (/^\s*\.\s*length(?![\w$])(?!\s*(?:=(?!=)|\+\+|--|[-+*/%]=))/.test(after)) continue; // ARR.length 읽기
+    if (/^\s*\.\s*(?:map|forEach|flatMap|filter|some|every)\s*\(/.test(after)) continue;   // 순회 콜백
+    const bm = after.match(/^\s*\[/);
+    if (bm) {
+      let depth = 0, k = bm[0].length - 1;
+      for (; k < after.length; k++) { if (after[k] === "[") depth++; else if (after[k] === "]") { depth--; if (depth === 0) break; } }
+      if (k < after.length && !/^\s*(?:=(?!=)|\+\+|--|[-+*/%]=)/.test(after.slice(k + 1))) continue; // ARR[식] 읽기
+    }
+    return false; // 재대입·원소 대입·변이 메서드·별칭·다른 함수 인수 등
+  }
+  return true;
+}
 // ①-b 실행 호출 인수에서 '명령 값 식'을 뽑는다 — `{cmd: <식>, …}` / `{"command": <식>}` 이면 <식>(같은 깊이의 다음 `,`나 끝까지), 단축 속성 `{cmd,…}`면 이름 자체.
 function execCommandExpr(args) {
   const a = String(args || "");
@@ -1212,27 +1245,31 @@ function toolReadParts(p) {
     const wdKeyCount = (rawText.match(/["']?workdir["']?\s*[:=]/g) || []).length;
     if (wds.size > 1 || wdKeyCount > wdLitCount) continue;
     const boundWd = wds.size === 1 ? [...wds][0] : "";
-    // 배열-사용 결속: (const|let|var) 이름 = [ ... ] 로 선언된 배열 중, 그 이름이 shell 실행 호출과
-    // 연결된 것만. 연결 판정=이름과 shell_command 가 한 문장 범위(200자) 안에서 함께 등장.
-    for (const am of rawText.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*\[([\s\S]*?)\]\s*;/g)) {
+    // ── 배열-사용 결속(2026-09-06 · 4판 재작성 — fail-closed 허용목록) ──────────────────────────────────────
+    // 원칙: 원문 '글자'로 "배열 값이 선언 리터럴과 다를 수 있다"는 낌새가 하나라도 보이면 그 배열은 통째로 미인정한다(경보 유지 쪽이 안전).
+    //  ⓐ 코드 전용 본문에서만 본다 — scriptOwnerScan으로 주석·문자열 자리를 공백 처리(길이 보존)한 codeText에서 선언·사용·호출을 찾고,
+    //     배열 원소(문자열 리터럴)만 같은 위치의 원문에서 읽는다(4판 blocker: 주석/문자열 속 가짜 선언·호출).
+    //  ⓑ `tools`가 멤버 접근(`tools.x`) 외의 자리에 한 번이라도 나오면(선언·매개변수·대입·인수 전달=그림자 가능) 이 스크립트의 배열 경로 전체 미인정(4판 blocker).
+    //  ⓒ 배열 이름의 모든 등장이 허용 형태여야 한다: 선언 · `ARR[식]` 읽기(뒤에 대입/증감 없음) · `ARR.length` 읽기 · `ARR.map|forEach|flatMap|filter|some|every(` ·
+    //     `of ARR` — 그 밖(재대입·원소 대입·push 등 변이 메서드·별칭 대입·다른 함수 인수)이 하나라도 있으면 미인정(4판 blocker: 재대입·덮어쓰기·별칭).
+    //  ⓓ 실행 호출 인수에 명령 키가 둘 이상이면(중복 속성은 마지막이 실행값) 그 호출 미인정(4판 blocker).
+    //  ⓔ 실행 호출=도구 이름공간 호출+명령 키(1판) · 명령 값 식은 `ARR[식]` 정확 일치 또는 배열에서 묶인 반복 변수 이름 정확 일치(2·3판) ·
+    //     반복 변수는 호출 전 재대입 없음·reduce 제외(3판). 승격(strong)은 불변 — 여기서 나온 부품은 전부 약한 축.
+    const own9 = scriptOwnerScan(rawText);
+    const codeText = maskNonCode(rawText, own9);
+    if (/(?<![\w$.])tools(?![\w$])(?!\s*\.\s*[A-Za-z_$])/.test(codeText) || /(?<![\w$.])tools\s*\.\s*[A-Za-z_$][\w$]*\s*=(?!=)/.test(codeText)) continue; // ⓑ
+    for (const am of codeText.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*\[([\s\S]*?)\]\s*;/g)) {
       const arrName = am[1];
-      const body = am[2];
-      // 사용 판정은 '선언 구간을 지운 텍스트'에서만 — 선언 뒤에 우연히 shell_command가 이어지는
-      // 미사용 배열이 '사용'으로 둔갑하는 헛점 차단(확인 반례 ①).
-      const usageText = rawText.slice(0, am.index) + " ".repeat(am[0].length) + rawText.slice(am.index + am[0].length);
+      const declStart = am.index, declEnd = am.index + am[0].length;
+      const bodyOpen = declStart + am[0].indexOf("["), bodyClose = declStart + am[0].lastIndexOf("]");
+      const body = rawText.slice(bodyOpen + 1, bodyClose); // 원소 문자열은 원문에서(코드 본문은 문자열이 지워져 있음)
+      const usageText = codeText.slice(0, declStart) + " ".repeat(declEnd - declStart) + codeText.slice(declEnd);
       const nameEsc = arrName.replace(/\$/g, "\\$");
-      // [2026-09-06 ①] '실행 호출'을 함수 이름(shell_command)이 아니라 계약 형태(도구 이름공간 tools.<함수>( + 명령 키 cmd|command)로 알아본다 —
-      // 검증자 CLI가 08-20 tools.exec_command로 개명하자 배열 판독이 통째로 미인식돼 검증마다 경보가 났다(실측 09-06: 14회 중 10회).
-      // 사용 판정 조임은 그대로(확인 반례 — console.log(이름); 뒤 별개 실행 호출 근접이 '사용'으로 둔갑 금지):
-      // ⓐ같은 표현식 연결 — 이름→(세미콜론 없이 120자 안)→실행 호출( (cmds.map(c=>tools.exec_command({cmd:c}) 형·for (const cmd of cmds) { …exec_command({cmd,…}) 형)
-      // ⓑ호출 인수 내 참조 — 실행 호출의 괄호 균형 인수 구간(600자 창) 안에 이름 (exec_command({cmd:cmds[i]}) 형). console.log(cmds)는 명령 키가 없어 실행 호출이 아니다.
-      // [2판 blocker ab-3] 인수 어디든 이름이 있으면 인정하던 것(`max_output_tokens:1000+cmds.length`로 위조)을 **데이터 흐름**으로 조인다:
-      // 실행 호출의 '명령 값 식'(cmd|command 키의 값 — 단축 속성이면 그 이름)이 ⓐ배열 이름을 직접 참조하거나(cmds[i]) ⓑ그 배열에서 묶인 반복 변수
-      // (호출을 감싸는 `for (const X of cmds) {…}` 본문·`cmds.map(X => …)`류 콜백 안)를 참조할 때만 '그 배열의 명령이 실행됐다'로 본다.
-      // [3판 blocker ab-3] '식 안에 이름이 등장'(`false?cmds[0]:'…'`)이 아니라 **명령 값 식이 그 값 자체**여야 한다: `ARR[<첨자>]` 또는 배열에서 묶인
-      // 반복 변수 하나만(조건식·연산·호출·문자열 결합이 섞이면 어느 값이 실행됐는지 글자로는 알 수 없으므로 미인정 — 경보 유지 쪽이 안전).
+      if (!arrayUsageAllowed(usageText, arrName)) continue; // ⓒ
       let used = false;
       for (const call of execLikeCalls(usageText)) {
+        const keyCount = (call.args.match(/(?:\{|,)\s*["']?(?:cmd|command)["']?\s*(?=[:,}])/g) || []).length;
+        if (keyCount !== 1) continue; // ⓓ 중복 명령 키=실행값 불명
         const expr = execCommandExpr(call.args);
         if (!expr) continue;
         if (new RegExp("^" + nameEsc + "\\s*\\[[^\\[\\]]+\\]$").test(expr)) { used = true; break; }
@@ -5073,4 +5110,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, execLikeCalls, execCommandExpr, arrayBoundIdents, toolReadParts, nestedShellCalls, scriptOwnerScan, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
+module.exports = { rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, execLikeCalls, execCommandExpr, arrayBoundIdents, arrayUsageAllowed, maskNonCode, toolReadParts, nestedShellCalls, scriptOwnerScan, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };

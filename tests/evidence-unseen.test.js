@@ -949,9 +949,33 @@ console.log("[3-7] 판독 형태 드리프트 봉합(2026-09-06 실측 — D-202
   const ps13 = "$files=@('foo.ts'); Write-Output \"list: $files\"; foreach($f in $files){ Get-Content -LiteralPath $f }";
   writeRollout("d7u2", [userMsg("검증 요청"), ...exec7('const r = await tools.exec_command({cmd: ' + JSON.stringify(ps13) + ', workdir: ' + JSON.stringify(ws) + '});')]);
   ck("(u-2) 문자열 출력이 섞여도 최상위 리터럴 대입은 인정", !citedFilesUnseenExact(answer, ws, "d7u2").unseenWeak.some((p) => p.endsWith("foo.ts")));
+  // (v) ★4판 blocker: 지역 tools 그림자(const tools={exec_command:…})=실행 호출 계약 불성립 — 스크립트의 배열 경로 전체 미인정
+  writeRollout("d7v", [userMsg("검증 요청"), ...exec7('const cmds=[' + GREP_FOO + '];\n{ const tools={exec_command:()=>({})}; tools.exec_command({cmd:cmds[0],workdir:' + JSON.stringify(ws) + '}); }\ntext("done");')]);
+  ck("(v) ★지역 tools 그림자=미인정 — 경보 유지", citedFilesUnseenExact(answer, ws, "d7v").unseenWeak.some((p) => p.endsWith("foo.ts")));
+  // (w) ★4판 blocker: 배열 재대입·원소 덮어쓰기·변이 메서드·별칭이 하나라도 있으면 미인정
+  for (const [tag, code] of [
+    ["w", 'let cmds=[' + GREP_FOO + '];\ncmds=["Write-Output done"];\nawait tools.exec_command({cmd:cmds[0],workdir:' + JSON.stringify(ws) + '});'],
+    ["w2", 'const cmds=[' + GREP_FOO + '];\ncmds[0]="Write-Output done";\nawait tools.exec_command({cmd:cmds[0],workdir:' + JSON.stringify(ws) + '});'],
+    ["w3", 'const cmds=[' + GREP_FOO + '];\nconst a=cmds; a[0]="Write-Output done";\nawait tools.exec_command({cmd:cmds[0],workdir:' + JSON.stringify(ws) + '});'],
+    ["w4", 'const cmds=[' + GREP_FOO + '];\ncmds.push("x"); cmds.shift();\nawait tools.exec_command({cmd:cmds[0],workdir:' + JSON.stringify(ws) + '});'],
+  ]) {
+    writeRollout("d7" + tag, [userMsg("검증 요청"), ...exec7(code)]);
+    ck("(" + tag + ") ★배열 쓰기/별칭/변이=미인정 — 경보 유지", citedFilesUnseenExact(answer, ws, "d7" + tag).unseenWeak.some((p) => p.endsWith("foo.ts")));
+  }
+  // (x) ★4판 blocker: 중복 cmd 키(마지막이 실행값)=그 호출 미인정
+  writeRollout("d7x", [userMsg("검증 요청"), ...exec7('const cmds=[' + GREP_FOO + '];\nawait tools.exec_command({cmd:cmds[0],cmd:"Write-Output done",workdir:' + JSON.stringify(ws) + '});')]);
+  ck("(x) ★중복 cmd 키=미인정 — 경보 유지", citedFilesUnseenExact(answer, ws, "d7x").unseenWeak.some((p) => p.endsWith("foo.ts")));
+  // (y) ★4판 blocker: 주석·문자열 속 가짜 선언은 코드가 아님
+  writeRollout("d7y", [userMsg("검증 요청"), ...exec7('let cmds=["Write-Output done"];\n/* const cmds=[' + GREP_FOO.replace(/"/g, "'") + ']; */\nawait tools.exec_command({cmd:cmds[0],workdir:' + JSON.stringify(ws) + '});')]);
+  ck("(y) ★블록 주석 속 선언=미인정 — 경보 유지", citedFilesUnseenExact(answer, ws, "d7y").unseenWeak.some((p) => p.endsWith("foo.ts")));
+  writeRollout("d7y2", [userMsg("검증 요청"), ...exec7('const cmds=["Write-Output done"];\nconst note = "const cmds=[\\"git -c safe.directory=D:/x grep -n p -- foo.ts\\"];";\nawait tools.exec_command({cmd:cmds[0],workdir:' + JSON.stringify(ws) + '});')]);
+  ck("(y-2) ★문자열 속 선언=미인정 — 경보 유지", citedFilesUnseenExact(answer, ws, "d7y2").unseenWeak.some((p) => p.endsWith("foo.ts")));
+  // (y-3) 정상 형태(실측: const cmds=[…]; for (const cmd of cmds) { … })는 그대로 인정 — 회귀 확인
+  writeRollout("d7y3", [userMsg("검증 요청"), ...exec7('const cmds = [\n  ' + GREP_FOO + '\n];\nfor (const cmd of cmds) {\n  const r=await tools.exec_command({cmd,workdir:' + JSON.stringify(ws) + ',yield_time_ms:10000});\n  text(JSON.stringify(r)); // cmds 처리 로그\n}')]);
+  ck("(y-3) 실측 형태(주석에 이름 등장 포함)는 인정", !citedFilesUnseenExact(answer, ws, "d7y3").unseenWeak.some((p) => p.endsWith("foo.ts")));
   // (j) 소스 핀: 실행 호출 판정에 고정 함수 이름 없음 · 보조 2종 존재 · 중첩 추출=원시 인수
   const src7 = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
-  ck("(j) 배열-사용 결속이 shell_command 고정 문자열을 쓰지 않음(계약 형태 execLikeCalls=tools.* 호출+명령 키)", !/shell_command\\\\s\*/.test(src7) && !/matchAll\(\/shell_command/.test(src7) && src7.includes("function execLikeCalls(") && src7.includes("for (const call of execLikeCalls(usageText))") && src7.includes("tools\\s*\\.\\s*([A-Za-z_$][\\w$]*)\\s*\\(") && src7.includes("(?:cmd|command)") && src7.includes("const expr = execCommandExpr(call.args);") && src7.includes("arrayBoundIdents(usageText, arrName, call.start)") && src7.includes("const scan = psStringsToSpaces(psCommentsToSpaces(src));") && src7.includes("depthAt[m.index] === 0") && src7.includes("if (expr === ident) { used = true; break; }") && !/map\|forEach\|flatMap\|filter\|some\|every\|reduce/.test(src7));
+  ck("(j) 배열-사용 결속이 shell_command 고정 문자열을 쓰지 않음(계약 형태 execLikeCalls=tools.* 호출+명령 키)", !/shell_command\\\\s\*/.test(src7) && !/matchAll\(\/shell_command/.test(src7) && src7.includes("function execLikeCalls(") && src7.includes("for (const call of execLikeCalls(usageText))") && src7.includes("tools\\s*\\.\\s*([A-Za-z_$][\\w$]*)\\s*\\(") && src7.includes("(?:cmd|command)") && src7.includes("const expr = execCommandExpr(call.args);") && src7.includes("arrayBoundIdents(usageText, arrName, call.start)") && src7.includes("const scan = psStringsToSpaces(psCommentsToSpaces(src));") && src7.includes("depthAt[m.index] === 0") && src7.includes("if (expr === ident) { used = true; break; }") && !/map\|forEach\|flatMap\|filter\|some\|every\|reduce/.test(src7) && src7.includes("if (!arrayUsageAllowed(usageText, arrName)) continue;") && src7.includes("const codeText = maskNonCode(rawText, own9);") && src7.includes("if (keyCount !== 1) continue;"));
   ck("(j) PowerShell foreach 전개는 약한 축 결속(weak9 = !!source.weak || variant.expanded)", /function psLiteralForeachVariants\(/.test(src7) && /const weak9 = !!source\.weak \|\| variant\.expanded;/.test(src7));
   ck("(j) 중첩 호출 추출은 원시 인수에서(정규화본 폴백은 원시 문자열 부재 시만)", /const rawArgTexts = \[p && p\.arguments, p && p\.input\]\.filter\(\(v\) => typeof v === "string"\);/.test(src7) && /\(rawArgTexts\.length \? rawArgTexts : values\)\.flatMap\(nestedShellCalls\)/.test(src7));
   ck("(j) 임의 실행기 제외는 불변(node -e 미인정 — 허용목록 그대로)", /^(cat\|type\|more\|less\|head\|tail\|sed\|grep\|rg\|ripgrep\|select-string\|get-content\|gc)/m.test(src7.replace(/\\/g, "")) || /\(cat\|type\|more\|less\|head\|tail\|sed\|grep\|rg\|ripgrep\|select-string\|get-content\|gc\)/.test(src7));
