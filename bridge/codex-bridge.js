@@ -849,7 +849,10 @@ function scriptOwnerScan(s) {
 //      S2  [const R = ]await Promise.all|allSettled(NAME.map(V => tools.<f>({ cmd|command: V | 단축, <옵션>* } | V)));[마무리(R)]
 //      S3  [const R = ]await tools.<f>({ cmd|command: NAME[정수], <옵션>* } | NAME[정수] | NAME);[마무리(R)]   (그 원소만 실행)
 //      S4  [const R = ]await tools.<f>({ cmd|command: "리터럴", <옵션>* });[마무리(R)]
-//    마무리(R) = text(JSON.stringify(R) | R.output | String(R.output) | R) | R.forEach(x => text(x)).
+//      S5  [const R = ]await Promise.all|allSettled([ tools.<f>({ cmd|command: "리터럴", <옵션>* }), … ]);[마무리(R)]   (실측 2026-09-07 · 원소마다 자기 workdir)
+//    마무리 = 출력 전용 문장들(11판: 모양 열거 대신 검증기 emissionOk — tools·await·대입·증감·선언·new/function 없음, 식별자는 내장·결과 변수·반복/화살표 매개변수·`text(`만,
+//    선언 배열은 `NAME[정수]` 읽기만; 예: `text(r.output); text(`EXIT ${r.exit_code}`)` · `for (const r of results) text(JSON.stringify({exit_code:r.exit_code,output:r.output}))` ·
+//    `if (r.session_id) text(…)` · `outputs.forEach((r)=>{…})`). S1 본문의 호출 뒤 문장도 같은 검증기. 문장은 깊이 0의 `;`/개행으로 나눈다.
 //    <옵션> = workdir: "…" | yield_time_ms|max_output_tokens|timeout_ms: 정수 | login: true|false — 같은 키 반복=미인정. 키는 따옴표 표기도 허용.
 //    tools.<f>는 실측 2종(tools.exec_command|shell_command) 고정(7판: `tools.<아무 이름>`은 상속 속성 tools.constructor로 도구 호출 없이 정형을 채움 —
 //    개명되면 정형이 깨져 경보가 남는 쪽이 안전). 문자열 리터럴의 JS 이스케이프는 실행 의미 그대로 복원(\n·\t·\uXXXX·\xHH 포함 — 7판 판독기가 해석하지 않던 결함을
@@ -896,12 +899,16 @@ function templateScriptCommands(rawText) {
   const HEAD_VAR = "(?:" + CMDKEY + "\\s*:\\s*(?<ref>" + ID + ")|(?<short>cmd|command)(?=\\s*[,}]))";
   const HEAD_IDX = CMDKEY + "\\s*:\\s*(?<aname>" + ID + ")\\s*\\[\\s*(?<aidx>\\d+)\\s*\\]";
   const HEAD_LIT = CMDKEY + "\\s*:\\s*(?<lit>" + STR + ")";
-  const TEXT = "(?<txt>\\s*(?:text\\s*\\(\\s*(?:JSON\\s*\\.\\s*stringify\\s*\\(\\s*(?<t1>" + ID + ")\\s*\\)|(?<t2>" + ID + ")\\s*\\.\\s*output|String\\s*\\(\\s*(?<t3>" + ID + ")\\s*\\.\\s*output\\s*\\)|(?<t4>" + ID + "))\\s*\\)|(?<t5>" + ID + ")\\s*\\.\\s*forEach\\s*\\(\\s*\\(?\\s*(?<f1>" + ID + ")\\s*\\)?\\s*=>\\s*text\\s*\\(\\s*(?<f2>" + ID + ")\\s*\\)\\s*\\))\\s*;?)?";
   const R = (src) => new RegExp(src, "dy");
-  const DECL = R("\\s*(?:const|let)\\s+(?<name>" + ID + ")\\s*=\\s*(?:\\[(?<arr>[^\\[\\]]*)\\]|(?<obj>\\{[^{}]*\\}))\\s*;?");
-  const S1 = R("\\s*for\\s*\\(\\s*(?:const|let)\\s+(?<v>" + ID + ")\\s+of\\s+(?<arr>" + ID + ")\\s*\\)\\s*\\{\\s*(?:(?:const|let)\\s+(?<r>" + ID + ")\\s*=\\s*)?await\\s+" + FN + "\\s*\\(\\s*(?:(?<vobj>" + ID + ")|" + ARG(HEAD_VAR) + ")\\s*\\)\\s*;?" + TEXT + "\\s*\\}\\s*;?");
-  const S2 = R("\\s*(?:(?:const|let)\\s+(?<r>" + ID + ")\\s*=\\s*)?await\\s+Promise\\s*\\.\\s*(?:all|allSettled)\\s*\\(\\s*(?<arr>" + ID + ")\\s*\\.\\s*map\\s*\\(\\s*(?:\\(\\s*(?<v1>" + ID + ")\\s*\\)|(?<v2>" + ID + "))\\s*=>\\s*" + FN + "\\s*\\(\\s*(?:(?<vobj>" + ID + ")|" + ARG(HEAD_VAR) + ")\\s*\\)\\s*\\)\\s*\\)\\s*;?" + TEXT);
-  const S3 = R("\\s*(?:(?:const|let)\\s+(?<r>" + ID + ")\\s*=\\s*)?await\\s+" + FN + "\\s*\\(\\s*(?:(?<name>" + ID + ")\\s*(?:\\[\\s*(?<idx>\\d+)\\s*\\])?|" + ARG("(?:" + HEAD_IDX + "|" + HEAD_LIT + ")") + ")\\s*\\)\\s*;?" + TEXT);
+  // 문장 단위 정형(11판 재구성): 스크립트를 깊이 0의 `;`/개행에서 최상위 문장으로 나누고, 각 문장을 선언(D)/호출(S1~S5)/마무리(출력 전용)로 분류한다.
+  // 호출 문장은 정규식이 문장 전체를 소비해야 하고, 그 밖의 문장은 '마무리 검증기'(emissionOk)를 통과해야 한다 — 하나라도 실패하면 통째 미인정.
+  const DECL = R("\\s*(?:const|let)\\s+(?<name>" + ID + ")\\s*=\\s*(?:\\[(?<arr>[^\\[\\]]*)\\]|(?<obj>\\{[^{}]*\\}))\\s*;?\\s*");
+  const S1H = R("\\s*for\\s*\\(\\s*(?:const|let)\\s+(?<v>" + ID + ")\\s+of\\s+(?<arr>" + ID + ")\\s*\\)\\s*\\{\\s*(?:(?:const|let)\\s+(?<r>" + ID + ")\\s*=\\s*)?await\\s+" + FN + "\\s*\\(\\s*(?:(?<vobj>" + ID + ")|" + ARG(HEAD_VAR) + ")\\s*\\)\\s*;?");
+  const S2 = R("\\s*(?:(?:const|let)\\s+(?<r>" + ID + ")\\s*=\\s*)?await\\s+Promise\\s*\\.\\s*(?:all|allSettled)\\s*\\(\\s*(?<arr>" + ID + ")\\s*\\.\\s*map\\s*\\(\\s*(?:\\(\\s*(?<v1>" + ID + ")\\s*\\)|(?<v2>" + ID + "))\\s*=>\\s*" + FN + "\\s*\\(\\s*(?:(?<vobj>" + ID + ")|" + ARG(HEAD_VAR) + ")\\s*\\)\\s*\\)\\s*\\)\\s*;?\\s*");
+  const S3 = R("\\s*(?:(?:const|let)\\s+(?<r>" + ID + ")\\s*=\\s*)?await\\s+" + FN + "\\s*\\(\\s*(?:(?<name>" + ID + ")\\s*(?:\\[\\s*(?<idx>\\d+)\\s*\\])?|" + ARG("(?:" + HEAD_IDX + "|" + HEAD_LIT + ")") + ")\\s*\\)\\s*;?\\s*");
+  // S5: 리터럴 명령 호출들의 배열을 Promise.all|allSettled에 직접 넣는 실측 형태(2026-09-07 실측: 오늘 52건 중 9건) — 원소마다 자기 옵션(workdir)
+  const S5 = R("\\s*(?:(?:const|let)\\s+(?<r>" + ID + ")\\s*=\\s*)?await\\s+Promise\\s*\\.\\s*(?:all|allSettled)\\s*\\(\\s*\\[(?<calls>[^\\[\\]]*)\\]\\s*\\)\\s*;?\\s*");
+  const E_CALL = R("\\s*" + FN + "\\s*\\(\\s*" + ARG(HEAD_LIT) + "\\s*\\)\\s*(?:,|$)");
   const E_STR = R("\\s*(?<lit>" + STR + ")\\s*(?:,|$)");
   const E_OBJ = R("\\s*\\{\\s*" + HEAD_LIT + "(?<opt>" + OPT + ")\\s*,?\\s*\\}\\s*(?:,|$)");
   const O_ONE = new RegExp("^\\{\\s*" + HEAD_LIT + "(?<opt>" + OPT + ")\\s*,?\\s*\\}$", "d");
@@ -944,6 +951,7 @@ function templateScriptCommands(rawText) {
     return decodeJs(raw.slice(openIdx + 1, close));
   };
   // 옵션 구간 [a,b): 같은 키 반복=미인정(실행값은 마지막 것 — 글자로는 어느 것인지 가정 금지) · workdir 리터럴은 원문에서
+  const wdSeen = new Set(); // 스크립트가 밝힌 서로 다른 workdir 리터럴 — 2개 이상이면 통째 미인정(종전 fail-closed 잠금 ③ 승계: 폴더가 갈리는 스크립트는 경보 유지)
   const optInfo = (a, b) => {
     if (a === undefined || b === undefined || b <= a) return { ok: true, workdir: "" };
     const span = code.slice(a, b);
@@ -956,7 +964,6 @@ function templateScriptCommands(rawText) {
     if (v) wdSeen.add(normSepWin(v));
     return { ok: true, workdir: normSepWin(v) };
   };
-  const wdSeen = new Set(); // 스크립트가 밝힌 서로 다른 workdir 리터럴 — 2개 이상이면 통째 미인정(종전 fail-closed 잠금 ③ 승계: 폴더가 갈리는 스크립트는 경보 유지)
   const decls = new Map(); // NAME → { kind: "str"|"obj"|"one", items: [{command, workdir}] }
   const top = new Set();   // 최상위에 묶인 결과 변수 이름 — 재선언·그림자 금지
   const bindOk = (n) => typeof n === "string" && n.length > 0 && !RESERVED.has(n) && !top.has(n) && !decls.has(n);
@@ -989,21 +996,67 @@ function templateScriptCommands(rawText) {
     if (!o.ok) return null;
     return { kind: "one", items: [{ command: v, workdir: o.workdir }] };
   };
-  const textOk = (g, r) => {
-    if (g.txt === undefined || !g.txt.trim()) return true;
-    if (!r) return false;
-    if (g.t5 !== undefined) return g.t5 === r && g.f1 === g.f2 && bindOk(g.f1) && g.f1 !== r;
-    const t = g.t1 !== undefined ? g.t1 : g.t2 !== undefined ? g.t2 : g.t3 !== undefined ? g.t3 : g.t4;
-    return t === r;
+  // ── 마무리(출력 전용) 검증기 — 11판: 실측 마무리 형태가 다양해(`for (const r of results) text(JSON.stringify({exit_code:r.exit_code,output:r.output}))` ·
+  //    `text(r.output); text(`EXIT ${r.exit_code}`)` · `if (r.session_id) text(…)` · `outputs.forEach((r)=>{…})`) 모양을 열거하지 않고 **할 수 없는 일**로 닫는다:
+  //    ① 원문(문자열·템플릿 안까지)에 tools·await 없음=도구 호출 불가 ② 대입·증감·delete·new·function·class·var/let·while/do 없음=선언 배열·결과 변경 불가
+  //    ③ 식별자는 내장(JSON·String·Math…)·결과 변수·반복/화살표 매개변수·`text(` 호출만, 선언 배열 이름은 `NAME[정수]` 읽기로만 ④ `${…}` 안도 같은 규칙
+//    ⑤ 임의 코드 실행 사슬 차단: constructor·__proto__·prototype·call/apply/bind·Function·globalThis·Reflect·Proxy·process 없음, 첨자는 정수·식별자만(문자열 첨자 금지).
+  //    실행 흐름을 바꾸거나 명령 값을 바꿀 길이 글자에 없으면, 마무리는 어떤 모양이든 '인정=실행됨'을 해치지 않는다.
+  const BUILTIN = new Set(["JSON", "String", "Number", "Boolean", "Math", "Array", "Object", "Date", "undefined", "null", "true", "false", "NaN", "Infinity", "typeof", "instanceof", "in", "of", "for", "if", "else", "const", "return", "break", "continue", "try", "catch", "finally", "throw", "switch", "case", "default", "void", "text"]);
+  const checkIds = (text, local) => {
+    const re = /[A-Za-z_$][\w$]*/g;
+    let mm;
+    while ((mm = re.exec(text))) {
+      const i = mm.index, name = mm[0], after = text.slice(i + name.length);
+      const before = text.slice(0, i).replace(/\s+$/, "");
+      if (before.endsWith(".")) continue;                                  // 속성 이름
+      if (/[{,]$/.test(before) && /^\s*:/.test(after)) continue;           // 객체 키
+      if (name === "text") { if (!/^\s*\(/.test(after)) return false; continue; }
+      if (BUILTIN.has(name) || local.has(name) || top.has(name)) continue;
+      if (decls.has(name) && /^\s*\[\s*\d+\s*\]/.test(after)) continue;    // 선언 배열은 상수 첨자 읽기만
+      return false;
+    }
+    return true;
   };
-  const optOf = (m) => { const ix = m.indices.groups.opt; return optInfo(ix ? ix[0] : undefined, ix ? ix[1] : undefined); };
+  const emissionOk = (a, b, extraIds) => {
+    const rawSeg = raw.slice(a, b), seg = code.slice(a, b);
+    if (!seg.trim()) return true;
+    if (/\btools\b|\bawait\b/.test(rawSeg)) return false;
+    if (/\b(?:delete|new|function|class|yield|import|require|eval|this|with|var|let|while|do|async|arguments)\b/.test(seg)) return false;
+    if (/(^|[^=!<>])=(?![=>])/.test(seg) || /\+\+|--/.test(seg)) return false;                      // 대입(복합 대입 포함)·증감 금지 — 비교·화살표만 예외
+    if (/\bconst\b(?!\s+[A-Za-z_$][\w$]*\s+of\b)/.test(seg)) return false;
+    // 임의 코드 실행 통로 차단: constructor/Function/prototype 사슬(`r.constructor.constructor("…")()`)·문자열 첨자(`r["constructor"]`)·전역 접근
+    if (/\b(?:constructor|__proto__|prototype|call|apply|bind|Function|globalThis|Reflect|Proxy|process|setTimeout|setInterval|queueMicrotask)\b/.test(seg)) return false;
+    for (const mm of seg.matchAll(/\[/g)) { if (!/^\[\s*(?:\d+|[A-Za-z_$][\w$]*)\s*\]/.test(seg.slice(mm.index))) return false; } // 첨자는 정수·식별자만(문자열 첨자 금지)
+    const local = new Set(extraIds);
+    for (const mm of seg.matchAll(/\bfor\s*\(\s*const\s+([A-Za-z_$][\w$]*)\s+of\b/g)) local.add(mm[1]);
+    for (const mm of seg.matchAll(/\(\s*([A-Za-z_$][\w$]*(?:\s*,\s*[A-Za-z_$][\w$]*)*)\s*\)\s*=>/g)) for (const x of mm[1].split(",")) local.add(x.trim());
+    for (const mm of seg.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*=>/g)) local.add(mm[1]);
+    for (const nm of local) if (RESERVED.has(nm) || decls.has(nm) || top.has(nm)) return false;
+    if (!checkIds(seg, local)) return false;
+    for (const mm of rawSeg.matchAll(/\$\{([^{}]*)\}/g)) { if (/(^|[^=!<>])=(?![=>])|\+\+|--|\b(?:constructor|__proto__|prototype|call|apply|bind|Function|globalThis|Reflect|Proxy|process)\b|\[\s*["']/.test(mm[1]) || !checkIds(mm[1], local)) return false; }
+    return true;
+  };
+  // ── 최상위 문장 나누기(깊이 0의 `;`·개행) ──
+  const stmts = [];
+  {
+    let depth = 0, st = 0;
+    for (let i = 0; i <= code.length; i++) {
+      const ch = i < code.length ? code[i] : "\n";
+      if (ch === "(" || ch === "[" || ch === "{") depth++;
+      else if (ch === ")" || ch === "]" || ch === "}") { depth--; if (depth < 0) return []; }
+      else if ((ch === ";" || ch === "\n" || ch === "\r") && depth === 0) { if (!/^\s*$/.test(code.slice(st, i))) stmts.push({ start: st, end: i }); st = i + 1; }
+    }
+    if (depth !== 0) return [];
+  }
   const out = [];
   const useAll = (d, wd) => { for (const it of d.items) out.push({ command: it.command, workdir: d.kind === "obj" ? it.workdir : wd }); };
-  let pos = 0, matched = false;
-  const tryAt = (re) => { re.lastIndex = pos; const m = re.exec(code); if (m) pos = re.lastIndex; return m; };
-  for (let guard = 0; guard < 256; guard++) {
+  const optOf = (m) => { const ix = m.indices.groups.opt; return optInfo(ix ? ix[0] : undefined, ix ? ix[1] : undefined); };
+  const full = (re, st) => { re.lastIndex = st.start; const m = re.exec(code); if (!m) return null; if (!/^\s*$/.test(code.slice(re.lastIndex, st.end))) return null; return m; };
+  let matched = false;
+  for (const st of stmts) {
     let m;
-    if ((m = tryAt(DECL))) {
+    if ((m = full(DECL, st))) {
       const g = m.groups;
       if (!bindOk(g.name)) return [];
       const d = g.arr !== undefined ? parseArray(m.indices.groups.arr[0], m.indices.groups.arr[1]) : parseObject(m.indices.groups.obj[0], m.indices.groups.obj[1]);
@@ -1011,29 +1064,31 @@ function templateScriptCommands(rawText) {
       decls.set(g.name, d);
       continue;
     }
-    if ((m = tryAt(S1))) {
+    S1H.lastIndex = st.start;
+    if ((m = S1H.exec(code))) {
+      const rem = code.slice(S1H.lastIndex, st.end);
+      const close = rem.lastIndexOf("}");
+      if (close < 0 || !/^\s*;?\s*$/.test(rem.slice(close + 1))) return [];
       const g = m.groups, d = decls.get(g.arr);
       if (!d || d.kind === "one" || !bindOk(g.v)) return [];
       if (g.r !== undefined && (!bindOk(g.r) || g.r === g.v)) return [];
-      if (!textOk(g, g.r)) return [];
+      if (!emissionOk(S1H.lastIndex, S1H.lastIndex + close, [g.v].concat(g.r !== undefined ? [g.r] : []))) return [];
       if (g.vobj !== undefined) { if (g.vobj !== g.v || d.kind !== "obj") return []; useAll(d, ""); }
       else { if (d.kind !== "str" || !(g.ref === g.v || g.short === g.v)) return []; const o = optOf(m); if (!o.ok) return []; useAll(d, o.workdir); }
       matched = true; continue;
     }
-    if ((m = tryAt(S2))) {
+    if ((m = full(S2, st))) {
       const g = m.groups, d = decls.get(g.arr), v = g.v1 !== undefined ? g.v1 : g.v2;
       if (!d || d.kind === "one" || !bindOk(v)) return [];
       if (g.r !== undefined && (!bindOk(g.r) || g.r === v)) return [];
-      if (!textOk(g, g.r)) return [];
       if (g.vobj !== undefined) { if (g.vobj !== v || d.kind !== "obj") return []; useAll(d, ""); }
       else { if (d.kind !== "str" || !(g.ref === v || g.short === v)) return []; const o = optOf(m); if (!o.ok) return []; useAll(d, o.workdir); }
       if (g.r !== undefined) top.add(g.r);
       matched = true; continue;
     }
-    if ((m = tryAt(S3))) {
+    if ((m = full(S3, st))) {
       const g = m.groups;
       if (g.r !== undefined && !bindOk(g.r)) return [];
-      if (!textOk(g, g.r)) return [];
       if (g.name !== undefined) {
         const d = decls.get(g.name);
         if (!d) return [];
@@ -1048,10 +1103,31 @@ function templateScriptCommands(rawText) {
       if (g.r !== undefined) top.add(g.r);
       matched = true; continue;
     }
-    break;
+    if ((m = full(S5, st))) {
+      const g = m.groups;
+      if (g.r !== undefined && !bindOk(g.r)) return [];
+      const bs = m.indices.groups.calls[0], body = code.slice(bs, m.indices.groups.calls[1]);
+      let at = 0, n = 0;
+      for (let guard2 = 0; guard2 < 256; guard2++) {
+        if (/^\s*$/.test(body.slice(at))) break;
+        E_CALL.lastIndex = at;
+        const mc = E_CALL.exec(body);
+        if (!mc) return [];
+        at = E_CALL.lastIndex;
+        const v = rawLit(bs + mc.indices.groups.lit[0]);
+        if (v === null) return [];
+        const o = optInfo(bs + mc.indices.groups.opt[0], bs + mc.indices.groups.opt[1]);
+        if (!o.ok) return [];
+        out.push({ command: v, workdir: o.workdir }); n++;
+      }
+      if (!n) return [];
+      if (g.r !== undefined) top.add(g.r);
+      matched = true; continue;
+    }
+    // 그 밖의 최상위 문장=마무리(출력 전용)여야 한다 — 아니면 통째 미인정
+    if (!emissionOk(st.start, st.end, [])) return [];
   }
   if (!matched) return [];
-  if (!/^\s*$/.test(code.slice(pos))) return []; // 정형 밖 글자가 하나라도 남으면 통째로 미인정
   if (wdSeen.size > 1) return []; // 서로 다른 workdir 복수=통째 미인정(재검증 blocker 반례 잠금 ③)
   return out.filter((c) => c.command);
 }
@@ -1375,26 +1451,78 @@ function outputContainsCitedContent(output, snippets) {
 // [9판 blocker ab-3 · 2026-09-07] 약한 축(경보) 해제 조건 — 호출 출력이 **그 파일의 실제 줄**을 하나라도 담고 있어야 '다뤘다'.
 // 성공 코드+비어 있지 않은 출력만으로는 `Get-Content foo -TotalCount 0; Write-Output done`처럼 다른 문장의 출력으로 해제된다(파일 내용 0).
 // 대가: 개수·해시만 출력한 판독(2026-07-29 '다룬 흔적' 처방)은 이제 흔적이 아니다 — 모델이 내용을 받지 못한 판독은 인용 근거일 수 없다.
-// 기준 줄 길이=8자(공백 제거) — 짧은 줄뿐인 파일은 가장 긴 줄 길이까지 낮춘다. 출력 줄 단위로 그대로/흔한 접두(경로:번호: · 번호: · cat -n · git blame 머리)를
+// 기준 줄 길이=8자(공백 제거) — 긴 줄이 3개 미만인 작은 파일은 4자 이상까지 내린다. 출력 줄 단위로 그대로/흔한 접두(경로:번호: · 번호: · cat -n · git blame 머리)를
 // 벗겨 대조하고, 출력이 작을 때(2만 자 이하)는 부분 문자열로도 대조한다(낯선 접두/접미 형식 대비 · 파일 2만 줄까지).
-function outputContainsFileLine(output, fileLines) {
+// [10판 blocker ab-3 · 2026-09-07] 출력 소유권 — 한 외부 호출의 출력은 그 안의 여러 판독이 합쳐진 것이라(실측 형태 S5 `outputs.forEach(r=>text(r.output))`는
+// 구분 머리 없이 이어 붙는다) 어느 줄이 어느 파일에서 왔는지 출력만으로는 못 가른다. 그래서 파일 F의 흔적으로 세는 줄은 **같은 호출이 지목한 다른 파일에는 없는 줄**
+// 이어야 한다(opts.exclude = 다른 파일들의 줄 집합). 예외 두 가지는 글자로 소유가 드러나는 경우: ① 출력 줄 자체가 F의 이름을 달고 있음(rg/Select-String의 `경로:번호:`)
+// ② 앞선 구역 표시 줄이 F의 이름을 적음(PowerShell `"@@ $f"` 뒤 본문 — 다른 파일 이름이 나오면 구역이 바뀐다). 대가: 내용이 완전히 같은 두 파일을 한 호출에서 이름 표시 없이
+// 읽으면 둘 다 흔적이 아니다(경계). 같은 호출 밖의 지식(다른 경로로 얻은 줄을 그대로 출력)은 승격 축의 인용 내용 대조와 같은 경계.
+function outputContainsFileLine(output, fileLines, opts) {
   const hay = String(output || "");
   if (!hay) return false;
-  let maxLen = 0; const cand = [];
-  for (const raw of fileLines || []) { const t = String(raw).trim(); if (!t) continue; if (t.length > maxLen) maxLen = t.length; cand.push(t); }
+  const exclude = (opts && opts.exclude) || null;
+  const selfName = (opts && opts.name) ? String(opts.name) : "";
+  const otherNames = ((opts && opts.others) || []).map((x) => String(x)).filter((x) => x && x !== selfName);
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const nameRe = (nm) => new RegExp("(^|[^A-Za-z0-9_.-])" + esc(nm) + "(?=$|[^A-Za-z0-9_-])", process.platform === "win32" ? "i" : "");
+  const selfRe = selfName ? nameRe(selfName) : null;
+  const otherRes = otherNames.map(nameRe);
+  const cand = [];
+  for (const raw of fileLines || []) { const t = String(raw).trim(); if (t) cand.push(t); }
   if (!cand.length) return false;
-  const min = Math.min(8, maxLen);
+  // 기준 줄 길이=8자(공백 제거) — `}`·`done` 같은 흔한 짧은 줄이 근거가 되지 않게. 긴 줄이 3개 미만인 작은 파일은 4자 이상까지 내린다(8자 줄 하나뿐인 파일이 그 줄로만 판별되는 취약 방지).
   const set = new Set();
-  for (const t of cand) if (t.length >= min) set.add(t);
+  for (const t of cand) if (t.length >= 8) set.add(t);
+  if (set.size < 3) for (const t of cand) if (t.length >= 4) set.add(t);
+  if (!set.size) return false;
+  const owned = (c, ownedBySelf) => set.has(c) && (ownedBySelf || !exclude || !exclude.has(c));
+  let section = ""; // "self" | "other" | ""
   for (const ol of hay.split(/\r?\n/)) {
     const t = ol.trim();
     if (!t) continue;
-    if (set.has(t)) return true;
+    const namesSelf = !!(selfRe && selfRe.test(t));
+    const namesOther = otherRes.some((re) => re.test(t));
+    if (namesSelf && !namesOther) section = "self"; else if (namesOther && !namesSelf) section = "other";
+    const bySelf = namesSelf || (!namesOther && section === "self");
+    if (owned(t, bySelf)) return true;
     const stripped = t.replace(/^(?:[^\s:]+:)?\d+[:\-]\s?/, "").replace(/^\d+\s+/, "").replace(/^[0-9a-f^]{6,40}\s+\([^)]*\)\s?/i, "").trim();
-    if (stripped !== t && set.has(stripped)) return true;
+    if (stripped !== t && owned(stripped, bySelf)) return true;
   }
-  if (hay.length <= 20000) { let n = 0; for (const t of set) { if (++n > 20000) break; if (hay.includes(t)) return true; } }
+  if (hay.length <= 20000) { let n = 0; for (const t of set) { if (++n > 20000) break; if (exclude && exclude.has(t)) continue; if (hay.includes(t)) return true; } }
   return false;
+}
+// 같은 호출(스크립트 정형 명령들 또는 함수 호출 인수)이 글자로 지목한 실재 파일들 — 출력 소유권 대조의 제외 집합 재료. 인식된 판독 문장뿐 아니라 명령 글자에
+// 등장하는 경로 토큰 전부(예: `[IO.File]::ReadAllText('bar.ts')`)를 보되, 실재 파일(4MB 이하)만 · 최대 64개 · 한 번만 읽는다.
+function callMentionedFiles(p, ws) {
+  const out = new Map();
+  const script = (p && typeof p.input === "string") ? p.input : null;
+  const cmds = script !== null
+    ? templateScriptCommands(script).map((c) => ({ text: c.command, workdir: c.workdir || "" }))
+    : toolArgumentValues(p).map((v) => ({ text: v, workdir: toolCallWorkdir(p) }));
+  for (const c of cmds) {
+    const roots = [c.workdir || ws || process.cwd()]; // 그 명령의 기준 폴더 하나만(타 폴더 지목이 ws 동명 파일로 되돌아와 제외되는 오류 방지)
+    for (const tok0 of String(c.text || "").split(/[\s;|&(){}\[\]'"`,]+/)) {
+      if (out.size >= 64) return out;
+      const cands = new Set([tok0]);
+      const ci = tok0.lastIndexOf(":");
+      if (ci > 0) cands.add(tok0.slice(ci + 1));
+      for (const cand of cands) {
+        if (!cand || cand.length > 300 || cand.startsWith("-") || !/\.[A-Za-z0-9]+$/.test(cand)) continue;
+        const tries = path.isAbsolute(cand) ? [cand] : roots.map((r) => path.resolve(r, cand));
+        for (const file of tries) {
+          let st; try { st = fs.statSync(file); } catch { continue; }
+          if (!st.isFile() || st.size > 4 * 1024 * 1024) break;
+          const key = canonicalFileKey(file);
+          if (!key || out.has(key)) break;
+          let lines = []; try { lines = fs.readFileSync(file, "utf8").split(/\r?\n/); } catch { break; }
+          out.set(key, lines);
+          break;
+        }
+      }
+    }
+  }
+  return out;
 }
 function citedFilesUnseenExact(answer, ws, sessionId) {
   // 두 갈래로 돌려준다(2026-07-29 결론): unseen=**승격에 쓸 강한 증거**로도 확인 안 된 것,
@@ -1450,13 +1578,24 @@ function citedFilesUnseenExact(answer, ws, sessionId) {
       pending.delete(id);
       const proof = toolResultEvidence(rec.call, p);
       if (!proof.ok || !proof.text) continue;
+      // [10판] 출력 소유권 — 같은 호출이 지목한 다른 파일들의 줄은 이 파일의 흔적이 아니다(outputContainsFileLine 주석)
+      const mentioned = callMentionedFiles(rec.call, ws);
+      const ownershipOpts = (fp) => {
+        const exclude = new Set(); const others = [];
+        for (const [k, lines] of mentioned) {
+          if (k === fp) continue;
+          others.push(path.basename(k));
+          for (const raw of lines) { const t = String(raw).trim(); if (t) exclude.add(t); }
+        }
+        return { exclude, name: path.basename(fp), others };
+      };
       // 성공 코드와 비어 있지 않은 출력만으로도 다른 문장의 출력일 수 있다. 답에서 인용한 실제 줄 내용이
       // 반환물 안에 들어 있는 파일만 이번 턴에 다룬 것으로 인정한다.
       for (const f of rec.files) {
         // 경보 축(약한 증거): 판독 명령이 그 파일을 지목했고 호출이 성공했으며 **출력에 그 파일의 실제 줄이 하나라도 있으면** '다뤘다'로 본다.
         //   2026-07-29 처방('개수·해시만 출력해도 다룬 흔적')은 9판 blocker(ab-3)로 철회 — 성공 코드+비어 있지 않은 출력은 다른 문장의 출력일 수 있어
         //   (`Get-Content foo -TotalCount 0; Write-Output done`) 파일 내용 없이 경보가 해제됐다. 내용을 받지 못한 판독은 인용 근거일 수 없다(outputContainsFileLine 주석).
-        if (outputContainsFileLine(proof.text, (citedDetail.get(f.fp) || {}).lines)) remainingWeak.delete(f.fp);
+        if (outputContainsFileLine(proof.text, (citedDetail.get(f.fp) || {}).lines, ownershipOpts(f.fp))) remainingWeak.delete(f.fp);
         // 승격 축(강한 증거): 종전 그대로 — 하네스가 기록한 인수 + 인용한 줄 내용이 출력에 실재해야 한다.
         if (f.st === "strong" && outputContainsCitedContent(proof.text, citedEvidence.get(f.fp))) remaining.delete(f.fp);
       }
@@ -5117,4 +5256,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, templateScriptCommands, maskNonCode, toolReadParts, scriptOwnerScan, outputContainsFileLine, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
+module.exports = { rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, templateScriptCommands, maskNonCode, toolReadParts, scriptOwnerScan, outputContainsFileLine, callMentionedFiles, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };

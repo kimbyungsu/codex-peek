@@ -9,8 +9,8 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), "ev_unseen_"));
 process.env.CODEX_BRIDGE_HOME = home;
 process.env.CODEX_HOME = home; // findRolloutById는 CODEX_HOME/sessions를 뒤진다
 const ws = fs.mkdtempSync(path.join(os.tmpdir(), "ev_ws_"));
-fs.writeFileSync(path.join(ws, "foo.ts"), "line1\nline2\n", "utf8"); // 인용 대상(실재)
-fs.writeFileSync(path.join(ws, "bar.ts"), "line1\nline2\n", "utf8"); // 인용 대상(실재)
+fs.writeFileSync(path.join(ws, "foo.ts"), "line1\nline2\nfoo-only\n", "utf8"); // 인용 대상(실재) — 10판: 파일마다 고유 줄 하나(출력 소유권 판별)
+fs.writeFileSync(path.join(ws, "bar.ts"), "line1\nline2\nbar-only\n", "utf8"); // 인용 대상(실재)
 
 const { citedFilesUnseen, citedFilesUnseenExact, citedResolvedBasenames } = require("../bridge/codex-bridge.js");
 
@@ -80,7 +80,7 @@ writeRollout("abababab-output", [
 const r31 = citedFilesUnseen(answer, ws, "abababab-output");
 ck("목록 출력·echo에 이름만 등장 → 두 파일 모두 흔적 미확인", r31.checked === true && r31.unseen.includes("foo.ts") && r31.unseen.includes("bar.ts"));
 
-writeRollout("abababab-mixed", [userMsg("검증 요청"), ...pair("cat foo.ts; echo bar.ts", "line1\nbar.ts")]);
+writeRollout("abababab-mixed", [userMsg("검증 요청"), ...pair("cat foo.ts; echo bar.ts", "line1\nline2\nfoo-only\nbar.ts")]);
 const r32 = citedFilesUnseen(answer, ws, "abababab-mixed");
 ck("한 호출의 읽기·이름 출력 혼합 → 읽은 foo만 인정하고 echo의 bar는 미확인", r32.checked === true && !r32.unseen.includes("foo.ts") && r32.unseen.includes("bar.ts"));
 
@@ -484,7 +484,7 @@ console.log("[3-5] 문맥 보정(2026-08-03 실측) — 명령 '문자열 배열
   const id = "cmds-arr-" + (++callSeq);
   // workdir는 실제 인용 파일이 있는 ws로 결속(가짜 폴더면 결속 검사가 정당하게 미인정 — 아래 반례가 그 케이스)
   const input = 'const cmds=[\n  "git -c safe.directory=D:/x grep -n -B 2 -A 4 \\"패턴 A + B\\" -- foo.ts",\n  "node tools/run.js bar.ts"\n];\nconst rs=await Promise.allSettled(cmds.map(command=>tools.shell_command({command,workdir:' + JSON.stringify(ws) + ',timeout_ms:30000})));';
-  const result = [{ type: "input_text", text: "Exit code: 0\nOutput:\nline1\nline2" }];
+  const result = [{ type: "input_text", text: "Exit code: 0\nOutput:\nline1\nfoo-only" }]; // 10판: bar.ts가 같은 호출에 지목돼 공통 줄은 근거가 아님 → foo 고유 줄
   writeRollout("eeeeeeee-cmdsarr", [
     userMsg("검증 요청"),
     { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: id, input } },
@@ -864,11 +864,14 @@ console.log("[3-7] 판독 형태 드리프트 봉합(2026-09-06 실측 — D-202
   const we = citedFilesUnseenExact(answer, ws, "d7e");
   ck("(e) PowerShell 해시 배열 foreach의 Get-Content $t.p=약한 흔적 인정", we.checked === true && !we.unseenWeak.some((p) => p.endsWith("foo.ts")));
   ck("(e) 승격 축 불변(전개 변형은 약한 축)", we.unseen.some((p) => p.endsWith("foo.ts")));
-  // (f) PowerShell 문자열 배열 foreach — 두 파일 모두
-  const ps2 = "$files = @('foo.ts','bar.ts'); foreach ($f in $files) { $n=0; Get-Content -LiteralPath $f | ForEach-Object { $n++ }; Write-Output $n }";
-  writeRollout("d7f", [userMsg("검증 요청"), ...exec7('const r = await tools.exec_command({cmd: ' + JSON.stringify(ps2) + ', workdir: ' + JSON.stringify(ws) + '});')]);
+  // (f) PowerShell 문자열 배열 foreach — 두 파일 모두(구역 표시 줄 `@@ 파일명` 뒤 본문 — 10판 출력 소유권: 내용이 같은 두 파일은 이름 표시로 갈린다)
+  const ps2 = "$files = @('foo.ts','bar.ts'); foreach ($f in $files) { \"@@ $f\"; Get-Content -LiteralPath $f }";
+  writeRollout("d7f", [userMsg("검증 요청"), ...exec7('const r = await tools.exec_command({cmd: ' + JSON.stringify(ps2) + ', workdir: ' + JSON.stringify(ws) + '});\ntext(r.output);', "Exit code: 0\nOutput:\n@@ foo.ts\nline1\nline2\n@@ bar.ts\nline1\nline2")]);
   const wf = citedFilesUnseenExact(answer, ws, "d7f");
-  ck("(f) PowerShell 문자열 배열 foreach=두 파일 모두 약한 흔적 인정", wf.checked === true && wf.unseenWeak.length === 0);
+  ck("(f) PowerShell 문자열 배열 foreach=두 파일 모두 약한 흔적 인정(구역 표시 줄로 소유 판별)", wf.checked === true && wf.unseenWeak.length === 0);
+  writeRollout("d7f2", [userMsg("검증 요청"), ...exec7('const r = await tools.exec_command({cmd: ' + JSON.stringify("$files = @('foo.ts','bar.ts'); foreach ($f in $files) { Get-Content -LiteralPath $f }") + ', workdir: ' + JSON.stringify(ws) + '});\ntext(r.output);', "Exit code: 0\nOutput:\nline1\nline2\nline1\nline2")]);
+  const wf2 = citedFilesUnseenExact(answer, ws, "d7f2");
+  ck("(f2) 이름 표시 없이 한 호출에서 읽고 출력에 공통 줄만 있으면 둘 다 흔적 아님(10판 경계)", wf2.checked === true && wf2.unseenWeak.length === 2);
   // (g) 반례: 비리터럴 배열($files = Get-ChildItem …)은 값 불명 — 미인정
   const ps3 = "$files = Get-ChildItem *.ts; foreach ($f in $files) { Get-Content -LiteralPath $f }";
   writeRollout("d7g", [userMsg("검증 요청"), ...exec7('const r = await tools.exec_command({cmd: ' + JSON.stringify(ps3) + ', workdir: ' + JSON.stringify(ws) + '});')]);
@@ -1058,6 +1061,45 @@ console.log("[3-7] 판독 형태 드리프트 봉합(2026-09-06 실측 — D-202
   writeRollout("d7tp15c", [userMsg("검증 요청"), ...exec7('const r = await tools.exec_command({cmd: "Get-Content -LiteralPath foo.ts | Measure-Object", workdir: ' + JSON.stringify(ws) + '});\ntext(JSON.stringify(r));', "Exit code: 0\nOutput:\nCount : 2")]);
   ck("(tp15c) 개수만 출력(내용 없음)=약한 흔적 미인정 — 9판 경계(모델이 내용을 받지 못한 판독은 인용 근거가 아님)", citedFilesUnseenExact(answer, ws, "d7tp15c").unseenWeak.some((p) => p.endsWith("foo.ts")));
   ck("(tp15u) 출력 줄 대조: 경로:번호: · 번호: · git blame 머리 접두 벗기기 · 부분 문자열 · 내용 없는 출력=거짓", B7.outputContainsFileLine("foo.ts:1:line1", ["line1", "line2"]) && B7.outputContainsFileLine("12:  line2", ["line1", "line2"]) && B7.outputContainsFileLine("abc1234 (me 2026-01-01 00:00:00 +0900 1) line1", ["line1"]) && B7.outputContainsFileLine("[\"@@ line1\"]", ["line1"]) && !B7.outputContainsFileLine("done", ["line1", "line2"]) && !B7.outputContainsFileLine("Count : 2", ["line1"]) && !B7.outputContainsFileLine("x", ["  ", ""]));
+  // (tp16) ★10판 blocker(ab-3): 같은 외부 호출 안 다른 파일의 출력이 대상 파일의 흔적으로 오귀속되지 않는다 — 검증자 재현(foo2: 인용 줄+공통 줄 · bar2: 공통 줄만)
+  const ws2 = fs.mkdtempSync(path.join(os.tmpdir(), "ev_ws2_"));
+  fs.writeFileSync(path.join(ws2, "foo2.ts"), "target-exclusive-cited-line\nconst shared = true;\n", "utf8");
+  fs.writeFileSync(path.join(ws2, "bar2.ts"), "const shared = true;\nbar2-only-line\n", "utf8");
+  const answer2 = "확인. (foo2.ts:1) 과 (bar2.ts:1) 참조.";
+  const wd2 = JSON.stringify(ws2);
+  writeRollout("d7tp16", [userMsg("검증 요청"), ...exec7('const a = await tools.exec_command({cmd: "Get-Content -LiteralPath foo2.ts -TotalCount 0", workdir: ' + wd2 + '});\ntext(a.output);\nconst b = await tools.exec_command({cmd: "Get-Content -LiteralPath bar2.ts", workdir: ' + wd2 + '});\ntext(b.output);', "Exit code: 0\nOutput:\nconst shared = true;\nbar2-only-line")]);
+  const w16 = citedFilesUnseenExact(answer2, ws2, "d7tp16");
+  ck("(tp16) ★두 내부 호출 — foo2는 내용 없음·bar2만 출력(공통 줄) → foo2 약한 축 유지·bar2 인정", w16.unseenWeak.some((p) => p.endsWith("foo2.ts")) && !w16.unseenWeak.some((p) => p.endsWith("bar2.ts")));
+  writeRollout("d7tp16b", [userMsg("검증 요청"), ...exec7('const r = await tools.exec_command({cmd: "Get-Content -LiteralPath foo2.ts -TotalCount 0; Get-Content -LiteralPath bar2.ts", workdir: ' + wd2 + '});\ntext(r.output);', "Exit code: 0\nOutput:\nconst shared = true;\nbar2-only-line")]);
+  const w16b = citedFilesUnseenExact(answer2, ws2, "d7tp16b");
+  ck("(tp16b) 한 명령 문자열 안 두 문장도 동일 — foo2 유지·bar2 인정", w16b.unseenWeak.some((p) => p.endsWith("foo2.ts")) && !w16b.unseenWeak.some((p) => p.endsWith("bar2.ts")));
+  writeRollout("d7tp16c", [userMsg("검증 요청"), ...exec7('const a = await tools.exec_command({cmd: "Get-Content -LiteralPath foo2.ts", workdir: ' + wd2 + '});\ntext(a.output);\nconst b = await tools.exec_command({cmd: "Get-Content -LiteralPath bar2.ts", workdir: ' + wd2 + '});\ntext(b.output);', "Exit code: 0\nOutput:\ntarget-exclusive-cited-line\nconst shared = true;\nconst shared = true;\nbar2-only-line")]);
+  const w16c = citedFilesUnseenExact(answer2, ws2, "d7tp16c");
+  ck("(tp16c) 정직한 두 파일 판독(foo2 고유 줄 출력)=둘 다 인정", w16c.unseenWeak.length === 0);
+  writeRollout("d7tp16d", [userMsg("검증 요청"), ...exec7('const r = await tools.exec_command({cmd: "rg -n shared -- foo2.ts bar2.ts", workdir: ' + wd2 + '});\ntext(r.output);', "Exit code: 0\nOutput:\nfoo2.ts:2:const shared = true;\nbar2.ts:1:const shared = true;")]);
+  const w16d = citedFilesUnseenExact(answer2, ws2, "d7tp16d");
+  ck("(tp16d) 공통 줄이라도 출력 줄에 파일명 접두가 있으면 그 파일 소유=둘 다 인정", w16d.unseenWeak.length === 0);
+  writeRollout("d7tp16e", [userMsg("검증 요청"), ...exec7('const r = await tools.exec_command({cmd: "Get-Content -LiteralPath foo2.ts -TotalCount 0; [IO.File]::ReadAllText((Join-Path (Get-Location) \'bar2.ts\'))", workdir: ' + wd2 + '});\ntext(r.output);', "Exit code: 0\nOutput:\nconst shared = true;")]);
+  const w16e = citedFilesUnseenExact(answer2, ws2, "d7tp16e");
+  ck("(tp16e) 인식 밖 판독 형태로 지목한 파일도 제외 집합에 든다(명령 글자의 경로 토큰) → foo2 유지", w16e.unseenWeak.some((p) => p.endsWith("foo2.ts")));
+  ck("(tp16u) 소유권 단위: 제외 집합의 줄은 근거 아님 · 파일명 접두/구역 표시 줄은 예외", !B7.outputContainsFileLine("const shared = true;", ["x-line-1", "const shared = true;"], { exclude: new Set(["const shared = true;"]), name: "foo2.ts", others: ["bar2.ts"] }) && B7.outputContainsFileLine("foo2.ts:2:const shared = true;", ["const shared = true;"], { exclude: new Set(["const shared = true;"]), name: "foo2.ts", others: ["bar2.ts"] }) && B7.outputContainsFileLine("@@ foo2.ts\nconst shared = true;", ["const shared = true;"], { exclude: new Set(["const shared = true;"]), name: "foo2.ts", others: ["bar2.ts"] }) && !B7.outputContainsFileLine("@@ bar2.ts\nconst shared = true;", ["const shared = true;"], { exclude: new Set(["const shared = true;"]), name: "foo2.ts", others: ["bar2.ts"] }));
+  const men = B7.callMentionedFiles({ type: "custom_tool_call", name: "exec", call_id: "m", input: 'const r = await tools.exec_command({cmd: "Get-Content -LiteralPath foo2.ts -TotalCount 0; [IO.File]::ReadAllText(\'bar2.ts\'); git show HEAD:foo2.ts", workdir: ' + wd2 + '});\ntext(r.output);' }, ws2);
+  ck("(tp16m) 호출이 지목한 실재 파일 열거: foo2·bar2(경로 토큰·rev:경로)", [...men.keys()].some((k) => k.endsWith("foo2.ts")) && [...men.keys()].some((k) => k.endsWith("bar2.ts")) && men.size === 2);
+  // (tp17) ★실측 형태(2026-09-07 오늘 9/52): Promise.all([ tools.exec_command({cmd:"…"}), … ]); outputs.forEach((r)=>text(r.output));
+  writeRollout("d7tp17", [userMsg("검증 요청"), ...exec7('const outputs = await Promise.all([\n  tools.exec_command({cmd:' + GREP_FOO + ',"workdir":' + JSON.stringify(ws) + ',"yield_time_ms":10000,"max_output_tokens":8000}),\n  tools.exec_command({cmd:"git -c safe.directory=D:/x grep -n \\"p\\" -- bar.ts","workdir":' + JSON.stringify(ws) + ',"yield_time_ms":10000,"max_output_tokens":4000})\n]); outputs.forEach((r)=>text(r.output));', "Exit code: 0\nOutput:\nfoo.ts:1:line1\nbar.ts:1:line1")]);
+  const w17 = citedFilesUnseenExact(answer, ws, "d7tp17");
+  ck("(tp17) ★S5 Promise.all([리터럴 호출…])+forEach(r=>text(r.output))=인정(두 파일)", w17.checked === true && w17.unseenWeak.length === 0);
+  ck("(tp17u) S5 원소마다 자기 workdir · 정형 밖 원소(변수 명령)면 통째 미인정", B7.templateScriptCommands('const o = await Promise.all([tools.exec_command({cmd:"cat a.ts",workdir:"D:/a"}), tools.exec_command({cmd:"cat b.ts",workdir:"D:/a"})]); o.forEach((r)=>text(r.output));').length === 2 && B7.templateScriptCommands('const c="cat a.ts"; const o = await Promise.all([tools.exec_command({cmd:c})]);').length === 0);
+  // (tp18) ★11판 실측 마무리 형태(오늘 미인식 11건의 원인) — 출력 전용 마무리는 모양과 무관하게 인정
+  const T18 = (tail) => B7.templateScriptCommands('const r = await tools.exec_command({cmd:"cat a.ts","workdir":"D:\\\\x","yield_time_ms":30000,"max_output_tokens":3000}); ' + tail).length;
+  ck("(tp18a) text(r.output); text(`EXIT ${r.exit_code}`)", T18('text(r.output); text(`EXIT ${r.exit_code}`);') === 1);
+  ck("(tp18b) if (r.session_id) text(`SESSION ${r.session_id}`)", T18('text(r.output); if (r.session_id) text(`SESSION ${r.session_id}`); text(`EXIT ${r.exit_code}`);') === 1);
+  ck("(tp18c) text(JSON.stringify({runtimeCommand:cmds[0],exit_code:r.exit_code,output:r.output})) — 선언 배열 상수 첨자 읽기", B7.templateScriptCommands('const cmds=["cat a.ts"];\nconst r=await tools.exec_command({cmd:cmds[0],workdir:"D:\\\\x"});\ntext(JSON.stringify({runtimeCommand:cmds[0],exit_code:r.exit_code,output:r.output}));').length === 1);
+  ck("(tp18d) for (const r of results) text(JSON.stringify({…})) — S5 뒤 for-of 마무리", B7.templateScriptCommands('const results=await Promise.all([\n  tools.exec_command({cmd:"cat a.ts","workdir":"D:\\\\x"}),\n  tools.exec_command({cmd:"cat b.ts","workdir":"D:\\\\x"})\n]);\nfor(const r of results) text(JSON.stringify({exit_code:r.exit_code,output:r.output}));\n').length === 2);
+  ck("(tp18e) outputs.forEach((r)=>{text(r.output); if(r.exit_code!==undefined)text(`EXIT ${r.exit_code}`)})", B7.templateScriptCommands('const outputs = await Promise.all([\n  tools.exec_command({cmd:"cat a.ts","workdir":"D:\\\\x"})\n]); outputs.forEach((r)=>{text(r.output); if(r.exit_code!==undefined)text(`EXIT ${r.exit_code}`)});').length === 1);
+  ck("(tp18f) ★마무리에 도구 호출·대입·선언 배열 변경이 있으면 통째 미인정", T18('text((await tools.exec_command({cmd:"cat b.ts"})).output);') === 0 && T18('text(r.output); r.output = "x";') === 0 && B7.templateScriptCommands('const cmds=["cat a.ts"];\ntext(cmds.push("cat b.ts"));\nconst r=await tools.exec_command({cmd:cmds[1]});').length === 0 && T18('text(`${tools.exec_command({cmd:"cat b.ts"})}`);') === 0 && T18('text(r.output); const x = 1;') === 0 && T18('text(r.output); helper(r);') === 0);
+  ck("(tp18g) 마무리 안 tools 글자는 문자열이어도 미인정(fail-closed)·화살표 매개변수 그림자 금지", T18('text("tools");') === 0 && T18('text(r.output); [1].forEach((r)=>text(r));') === 0);
+  ck("(tp18h) ★임의 코드 실행 사슬(constructor·Function·문자열 첨자·복합 대입)=미인정", T18('text(r.constructor.constructor("return 1")());') === 0 && T18('text(r["output"]);') === 0 && T18('text(r.output); r.output ??= "x";') === 0 && T18('text(r.output); r.output += "x";') === 0 && T18('text(String.prototype.trim.call(r.output));') === 0 && T18('text(`${r["output"]}`);') === 0 && T18('text(r.output.split("\\n")[0]);') === 1);
   // (j) 소스 핀: 정형 일치기·중첩 추출=원시 인수·임의 실행기 제외
   const src7 = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
   ck("(j) 실행 스크립트=정형 문장 일치기(templateScriptCommands)만 — 옛 결속 헬퍼(execLikeCalls·arrayUsageAllowed·arrayBoundIdents)·인라인 추출기(nestedShellCalls)·templateArrayReads 제거", src7.includes("function templateScriptCommands(") && src7.includes("? templateScriptCommands(script).map((c) => ({ command: c.command, workdir: c.workdir || \"\", weak: true }))") && !src7.includes("function nestedShellCalls(") && !src7.includes("function templateArrayReads(") && !src7.includes("function execLikeCalls(") && !src7.includes("function arrayUsageAllowed(") && !src7.includes("function arrayBoundIdents(") && !/shell_command\\\\s\*/.test(src7));
