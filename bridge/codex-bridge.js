@@ -1494,6 +1494,25 @@ function outputContainsFileLine(output, fileLines, opts) {
 }
 // 같은 호출(스크립트 정형 명령들 또는 함수 호출 인수)이 글자로 지목한 실재 파일들 — 출력 소유권 대조의 제외 집합 재료. 인식된 판독 문장뿐 아니라 명령 글자에
 // 등장하는 경로 토큰 전부(예: `[IO.File]::ReadAllText('bar.ts')`)를 보되, 실재 파일(4MB 이하)만 · 최대 64개 · 한 번만 읽는다.
+// [11판 D blocker ab-3] 스크립트 자신의 문자열 리터럴 안에 든 줄 — text("<파일 실제 줄>")처럼 명령이 아니라 '타이핑'으로 출력에 실린 줄은 판독 근거가 아니다.
+// 정직한 판독은 text(r.output)처럼 결과 변수를 찍지 내용을 리터럴로 적지 않는다. 명령 문자열("cat foo.ts")도 여기 들지만 파일 내용 줄과 겹치는 일은 드물고, 겹쳐도 알람 유지(fail-closed).
+function scriptLiteralLines(p) {
+  const out = new Set();
+  const raw = (p && typeof p.input === "string") ? p.input : "";
+  if (!raw) return out;
+  const own = scriptOwnerScan(raw);
+  let i = 0;
+  while (i < raw.length) {
+    if (own.inStr[i] && !own.inCmt[i]) {
+      let j = i; while (j < raw.length && own.inStr[j] && !own.inCmt[j]) j++;
+      let content = raw.slice(i, j);
+      if (/["'`]$/.test(content)) content = content.slice(0, -1); // 닫는 따옴표는 inStr에 포함됨(scriptOwnerScan) — 뗀다
+      for (const ln of content.replace(/\\[rn]/g, "\n").split("\n")) { const t = ln.trim(); if (t) out.add(t); }
+      i = j + 1;
+    } else i++;
+  }
+  return out;
+}
 function callMentionedFiles(p, ws) {
   const out = new Map();
   const script = (p && typeof p.input === "string") ? p.input : null;
@@ -1580,8 +1599,9 @@ function citedFilesUnseenExact(answer, ws, sessionId) {
       if (!proof.ok || !proof.text) continue;
       // [10판] 출력 소유권 — 같은 호출이 지목한 다른 파일들의 줄은 이 파일의 흔적이 아니다(outputContainsFileLine 주석)
       const mentioned = callMentionedFiles(rec.call, ws);
+      const scriptLits = scriptLiteralLines(rec.call); // 스크립트가 타이핑한 줄(text("…")) — 명령 출력의 근거가 아님(11판 D)
       const ownershipOpts = (fp) => {
-        const exclude = new Set(); const others = [];
+        const exclude = new Set(scriptLits); const others = [];
         for (const [k, lines] of mentioned) {
           if (k === fp) continue;
           others.push(path.basename(k));
@@ -5256,4 +5276,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, templateScriptCommands, maskNonCode, toolReadParts, scriptOwnerScan, outputContainsFileLine, callMentionedFiles, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
+module.exports = { rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, templateScriptCommands, maskNonCode, toolReadParts, scriptOwnerScan, outputContainsFileLine, callMentionedFiles, scriptLiteralLines, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
