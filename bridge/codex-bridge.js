@@ -1034,6 +1034,8 @@ function templateScriptCommands(rawText) {
     if (/\bconst\b(?!\s+[A-Za-z_$][\w$]*\s+of\b)/.test(seg)) return false;
     // 임의 코드 실행 통로 차단: constructor/Function/prototype 사슬(`r.constructor.constructor("…")()`)·문자열 첨자(`r["constructor"]`)·전역 접근
     if (/__/.test(seg)) return false; // dunder(__defineGetter__·__proto__ 등)=변이/원형 접근 통로 — 마무리에 등장 금지
+    if (/\?\./.test(seg)) return false; // 선택적 연쇄/호출(?.)=사슬 호출 우회 통로 — 금지(정직한 마무리는 안 씀)
+    if (/\)\s*\(/.test(seg)) return false; // 괄호로 감싼 값 호출 `)(`=(cmds[0].valueOf)() 같은 우회 — 금지
     if (/\b(?:constructor|prototype|call|apply|bind|Function|globalThis|Reflect|Proxy|process|setTimeout|setInterval|queueMicrotask|Object|Array)\b/.test(seg)) return false; // Object/Array 등 변이 통로 차단(11판 확인검증)
     for (const mm of seg.matchAll(/\[/g)) { if (!/^\[\s*(?:\d+|[A-Za-z_$][\w$]*)\s*\]/.test(seg.slice(mm.index))) return false; } // 첨자는 정수·식별자만(문자열 첨자 금지)
     const local = new Set(extraIds);
@@ -1476,7 +1478,7 @@ function outputContainsFileLine(output, fileLines, opts) {
   const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   // [11판 확인검증 blocker] 파일명 소유 표시는 판독 도구가 붙이는 것만: 줄 시작의 경로 토큰 뒤 콜론(rg/Select-String `경로:번호:`)이나 구역 표시 줄(`@@ 파일명`).
   // 본문 아무 데나 이름이 나온다고 소유로 보면(옛 정규식) 다른 파일의 공통 줄이 이름만 스쳐도 대상 소유로 오인된다.
-  const PFX = "(?:[A-Za-z]:)?(?:[^\\s:]*[\\\\/])?"; // 줄 시작 경로 토큰(상대 또는 Windows 절대 드라이브 접두)
+  const PFX = "(?:[A-Za-z]:)?(?:[^:]*[\\\\/])?"; // 줄 시작 경로 토큰(상대·Windows 절대·공백 포함 — 콜론 앞까지가 경로, 드라이브 콜론은 선두에서 허용)
   const nameRe = (nm) => new RegExp("^(?:@@\\s+" + PFX + esc(nm) + "(?=[\\s:]|$)|" + PFX + esc(nm) + ":)", process.platform === "win32" ? "i" : "");
   const selfRe = selfName ? nameRe(selfName) : null;
   const otherRes = otherNames.map(nameRe);
@@ -1498,7 +1500,7 @@ function outputContainsFileLine(output, fileLines, opts) {
     if (namesSelf && !namesOther) section = "self"; else if (namesOther && !namesSelf) section = "other";
     const bySelf = namesSelf || (!namesOther && section === "self");
     if (owned(t, bySelf)) return true;
-    const stripped = t.replace(/^(?:\S*?:)?\d+[:\-]\s?/, "").replace(/^\d+\s+/, "").replace(/^[0-9a-f^]{6,40}\s+\([^)]*\)\s?/i, "").trim();
+    const stripped = t.replace(/^(?:.*?:)?\d+[:\-]\s?/, "").replace(/^\d+\s+/, "").replace(/^[0-9a-f^]{6,40}\s+\([^)]*\)\s?/i, "").trim();
     if (stripped !== t && owned(stripped, bySelf)) return true;
   }
   if (hay.length <= 20000) { let n = 0; for (const t of set) { if (++n > 20000) break; if (exclude && exclude.has(t)) continue; if (hay.includes(t)) return true; } }
@@ -1533,7 +1535,10 @@ function callMentionedFiles(p, ws) {
     : toolArgumentValues(p).map((v) => ({ text: v, workdir: toolCallWorkdir(p) }));
   for (const c of cmds) {
     const roots = [c.workdir || ws || process.cwd()]; // 그 명령의 기준 폴더 하나만(타 폴더 지목이 ws 동명 파일로 되돌아와 제외되는 오류 방지)
-    for (const tok0 of String(c.text || "").split(/[\s;|&(){}\[\]'"`,]+/)) {
+    const toks = [];
+    for (const qm of String(c.text || "").matchAll(/"([^"]*)"|'([^']*)'/g)) toks.push(qm[1] !== undefined ? qm[1] : qm[2]); // 따옴표로 묶인 경로(공백 포함)를 통째 토큰으로
+    for (const t of String(c.text || "").split(/[\s;|&(){}\[\]'"`,]+/)) toks.push(t);
+    for (const tok0 of toks) {
       if (out.size >= 64) return out;
       const cands = new Set([tok0]);
       const ci = tok0.lastIndexOf(":");
