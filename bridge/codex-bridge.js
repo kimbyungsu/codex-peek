@@ -794,6 +794,8 @@ function splitShellStatements(text) {
   push();
   return out;
 }
+// [2026-09-07 8판] 아래 스캐너(scriptOwnerScan)는 정형 일치기 templateScriptCommands의 재료(주석/문자열 자리·중괄호 소속)다 — 옛 인라인 추출기
+// (nestedShellCalls: '괄호 안 객체·이름에 담긴 뒤 쓰인 객체'=쓰임 판정)는 정형이 거부한 스크립트에서도 흔적을 되살려 폐지했다(아래 정형 주석).
 // functions.exec가 감싼 실제 호출들. 각 호출은 명령과 **자기 작업 폴더**를 같이 들고 있어서, 명령만 뽑고
 // 폴더를 버리면 그 호출이 쓴 상대경로를 풀 기준이 사라진다(사용자 실보고 2026-07-29: 이 형태로 읽은
 // 회차가 전부 '흔적 미확인'으로 남았다). 명령과 폴더를 짝지어 돌려준다.
@@ -830,74 +832,26 @@ function scriptOwnerScan(s) {
   }
   return { owner, inStr, inCmt, closeOf };
 }
-function nestedShellCalls(text) {
-  const s = String(text || "");
-  const { owner, inStr, inCmt, closeOf } = scriptOwnerScan(s);
-  const live = (idx) => !inStr[idx] && !inCmt[idx]; // 주석 안·문자열 안의 글자는 속성이 아니다
-  const collect = (re) => {
-    const out = [];
-    let m;
-    while ((m = re.exec(s))) { if (!live(m.index)) continue; let v; try { v = JSON.parse(m[1]); } catch { continue; } out.push({ value: v, own: owner[m.index] }); }
-    return out;
-  };
-  const cmds = collect(/(?:["'](?:cmd|command)["']|\b(?:cmd|command))\s*:\s*("(?:\\.|[^"\\])*")/g);
-  const wds = collect(/(?:["'](?:workdir|cwd)["']|\b(?:workdir|cwd))\s*:\s*("(?:\\.|[^"\\])*")/g);
-  // 실제로 '쓰인' 객체만 판독 후보로 본다(2차 blocker — 선언만 하고 안 쓴 객체나 정규식 안의 글자가
-  // 도구 호출 증거로 집계되면, 파일을 읽지 않고도 판독 흔적을 만들 수 있다).
-  // 쓰였다고 인정하는 두 가지: ①괄호 바로 안에 놓인 객체(호출 인수) ②이름에 담긴 뒤 그 이름이 나중에
-  // 다시 나오는 경우(실제 형태 `const calls=[{…}]; calls.map(c=>tools.shell_command(c))`).
-  // 둘 다 아니면 미인정한다 — 증명 못 하면 안 세는 쪽이 안전한 실패다.
-  const prevCode = (i, skip) => { let j = i; while (j >= 0 && (!live(j) || skip.includes(s[j]))) j--; return j; };
-  const usedLater = (name, from) => {
-    const re = new RegExp("\\b" + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "g");
-    let m;
-    while ((m = re.exec(s))) if (m.index > from && live(m.index)) return true;
-    return false;
-  };
-  const openOf = new Map();
-  for (const [o, c] of closeOf) openOf.set(c, o);
-  const bound = (b) => {
-    const p = prevCode(b - 1, " \t\r\n");
-    if (p >= 0 && s[p] === "(") return true;                       // 호출 인수 자리
-    // 배열 안 형제 객체를 건너뛰며 '이름에 담는 =' 를 찾는다(`const calls=[{…},{…}]` 형태).
-    let q = prevCode(b - 1, " \t\r\n[,");
-    while (q >= 0 && s[q] === "}" && openOf.has(q)) q = prevCode(openOf.get(q) - 1, " \t\r\n[,");
-    if (q < 0 || s[q] !== "=") return false;                        // 이름에 담기지도 않음
-    const idEnd = prevCode(q - 1, " \t\r\n");
-    if (idEnd < 0) return false;
-    let st = idEnd;
-    while (st >= 0 && /[A-Za-z0-9_$]/.test(s[st]) && live(st)) st--;
-    const name = s.slice(st + 1, idEnd + 1);
-    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) return false;
-    const close = closeOf.has(b) ? closeOf.get(b) : b;
-    return usedLater(name, close);
-  };
-  // 같은 객체 안에서만 짝짓고, 그 객체에 명령이나 폴더가 둘 이상이면 어느 것이 실제인지 알 수 없으므로
-  // 폴더 결속을 통째로 포기한다(1차 blocker② — 중복 속성은 실행 시 마지막 값이 이기지만 우리가 그걸
-  // 안다고 가정하면 안 된다. 모르면 폴더 없음이 안전한 실패).
-  const cnt = (arr, own) => arr.filter((x) => x.own === own).length;
-  const boundCache = new Map();
-  const isBound = (b) => { if (!boundCache.has(b)) boundCache.set(b, bound(b)); return boundCache.get(b); };
-  return cmds.filter((c) => c.own >= 0 && cnt(cmds, c.own) === 1 && isBound(c.own)).map((c) => {
-    const own = cnt(wds, c.own) === 1 ? wds.find((w) => w.own === c.own) : null;
-    return { command: c.value, workdir: own ? normSepWin(String(own.value)) : "" };
-  });
-}
-function nestedShellCommands(text) { return nestedShellCalls(text).map((c) => c.command); }
-// ── [2026-09-06 판독 형태 드리프트 봉합 — D-2026-09-06-evidence-read-form-drift · 사용자 결정 73edb5984bc045e8(2026-09-07) "정형 문장만 인정"] ──
+// ── [2026-09-06 판독 형태 드리프트 봉합 — D-2026-09-06-evidence-read-form-drift · 사용자 결정 73edb5984bc045e8(2026-09-07) "정형 문장만 인정" · 8판: 스크립트 전체로 확대] ──
 // 실측(09-06): 검증자 CLI가 2026-08-20부터 tools.shell_command→tools.exec_command로 이름을 바꿨고, 판독을 ⓐJS 명령 배열+실행 호출
 // ⓑPowerShell 리터럴 배열/해시 + foreach + Get-Content 로 싣는다. 아래 보조는 '약한 축(경보용)'에만 쓰인다 — 승격(strong)은 불변.
-// ① JS 명령 배열 경로는 **정형 문장 일치**로만 인정한다(1~6판에 걸쳐 '글자로 판별 가능한 구조' 반례가 판마다 새로 나와 — 이름 목록·데이터 흐름·허용목록
-//    모두 뚫렸다). 스크립트 전체가 아래 문장들로만 이루어졌을 때만 그 배열의 명령이 실행됐다고 본다(그 밖의 어떤 글자라도 있으면 통째로 미인정 — 경보 유지 쪽이 안전):
-//      S0  const|let NAME = [ "…", '…', … ];                           (원소는 일반 문자열 리터럴만 — 템플릿 문자열·주석·객체·중첩 배열 불가)
-//      S1  for (const V of NAME) { const R = await tools.<f>({ cmd|command: V | 단축, <옵션>* }); [text(JSON.stringify(R)|R.output);] }
-//      S2  [const R = ]await Promise.all|allSettled(NAME.map(V => tools.<f>({ cmd|command: V | 단축, <옵션>* })));[text(…)]
-//      S3  [const R = ]await tools.<f>({ cmd|command: NAME[정수], <옵션>* });[text(…)]      (S3는 여러 번 가능 — 그 정수 원소만 실행)
-//      S4  [const R = ]await tools.<f>({ cmd|command: "리터럴", <옵션>* });[text(…)]       (배열과 무관한 리터럴 명령 — 인라인 경로가 따로 인식)
-//    <옵션> = workdir: "…" | yield_time_ms|max_output_tokens|timeout_ms: 정수 | login: true|false. 키는 따옴표 표기도 허용. 도구 함수 이름은 실측 2종(tools.exec_command|shell_command)으로
-//    고정(7판: `tools.<아무 이름>`은 상속 속성 tools.constructor로 도구 호출 없이 정형을 채움 — 개명되면 정형이 깨져 경보가 남는 쪽이 안전). S0 원소의 JS 이스케이프는 \" \' \\ 만 허용.
-//    정형 안에서는 명령 리터럴이 그대로 실행되므로(다른 문장이 없어 값을 바꿀 길이 없음) '인정=실행됨'이 글자 수준에서 닫힌다. 유니코드 철자·템플릿 문자열·
-//    조기 종료 반복·그림자 선언·중복 키·계산 키는 정형에 없으므로 자동으로 미인정된다(6판 반례 전부).
+// ① 실행 스크립트(custom exec 도구의 JS 입력)는 **정형 문장 일치**로만 읽는다(1~6판에 걸쳐 '글자로 판별 가능한 구조' 반례가 판마다 새로 나와 — 이름 목록·
+//    데이터 흐름·허용목록 모두 뚫렸고, 8판에서는 별도 인라인 추출 경로가 정형의 거부를 우회했다). 스크립트 **전체**가 아래 문장들로만 이루어졌을 때만
+//    그 안의 명령이 실행됐다고 본다(그 밖의 어떤 글자라도 있으면 통째로 미인정 — 인라인 리터럴 포함 · 경보 유지 쪽이 안전):
+//      D   const|let NAME = [ "…", '…', … ];                                   (문자열 배열 — 원소는 일반 문자열 리터럴만)
+//          const|let NAME = [ { cmd|command: "…", <옵션>* }, … ];               (객체 배열 — 원소마다 자기 workdir)
+//          const|let NAME = { cmd|command: "…", <옵션>* };                      (이름 붙은 객체)
+//      S1  for (const V of NAME) { [const R = ]await tools.<f>({ cmd|command: V | 단축, <옵션>* } | V); [마무리(R)] }
+//      S2  [const R = ]await Promise.all|allSettled(NAME.map(V => tools.<f>({ cmd|command: V | 단축, <옵션>* } | V)));[마무리(R)]
+//      S3  [const R = ]await tools.<f>({ cmd|command: NAME[정수], <옵션>* } | NAME[정수] | NAME);[마무리(R)]   (그 원소만 실행)
+//      S4  [const R = ]await tools.<f>({ cmd|command: "리터럴", <옵션>* });[마무리(R)]
+//    마무리(R) = text(JSON.stringify(R) | R.output | String(R.output) | R) | R.forEach(x => text(x)).
+//    <옵션> = workdir: "…" | yield_time_ms|max_output_tokens|timeout_ms: 정수 | login: true|false — 같은 키 반복=미인정. 키는 따옴표 표기도 허용.
+//    tools.<f>는 실측 2종(tools.exec_command|shell_command) 고정(7판: `tools.<아무 이름>`은 상속 속성 tools.constructor로 도구 호출 없이 정형을 채움 —
+//    개명되면 정형이 깨져 경보가 남는 쪽이 안전). 문자열 리터럴의 JS 이스케이프는 실행 의미 그대로 복원(\n·\t·\uXXXX·\xHH 포함 — 7판 판독기가 해석하지 않던 결함을
+//    8판에서 정확 복원으로 정정 · 8진·줄 이음·알 수 없는 이스케이프=미인정). 스크립트가 밝힌 서로 다른 workdir 리터럴이 2개 이상이면 통째 미인정(종전 fail-closed 잠금 승계).
+//    선언·결과 변수 이름은 tools·text·Promise·JSON 등 예약 이름·재선언·그림자 불가. 정형 안에서는 명령 리터럴이 그대로 실행되므로(다른 문장이 없어 값을
+//    바꿀 길이 없음) '인정=실행됨'이 글자 수준에서 닫힌다. 유니코드 철자·템플릿 문자열·조기 종료 반복·그림자 선언·중복 키·계산 키는 정형에 없으므로 자동으로 미인정된다.
 // 코드 전용 본문 — scriptOwnerScan의 inStr/inCmt 자리를 공백으로(길이 보존·개행 유지·닫는 따옴표 유지). 주석/문자열 속 글자는 코드가 아니다.
 function maskNonCode(text, own, keepKeys) {
   const s = String(text || "");
@@ -921,71 +875,181 @@ function maskNonCode(text, own, keepKeys) {
   }
   return out;
 }
-// 정형 일치기 — 반환: 판독 부품 배열(약한 축). 스크립트가 정형이 아니면 [].
-function templateArrayReads(rawText, boundWd, p) {
-  const own = scriptOwnerScan(rawText);
-  const code = maskNonCode(rawText, own, true);
+// 정형 일치기 — 검증자 실행 스크립트 **전체**가 위 정형으로만 이루어졌을 때 그 안의 명령을 돌려준다. 반환: [{command, workdir}](약한 축 재료).
+// 정형이 아니면 [] — 스크립트의 어떤 글자도 판독 흔적이 되지 않는다(인라인 리터럴 포함 · 8판). 문자열 값은 원문에서 읽는다(정규화본은 \" 파괴).
+function templateScriptCommands(rawText) {
+  const raw = String(rawText || "");
+  const own = scriptOwnerScan(raw);
+  const code = maskNonCode(raw, own, true);
   const ID = "[A-Za-z_$][\\w$]*";
   const STR = "(?:\"[^\"\\n]*\"|'[^'\\n]*')"; // 코드 본문의 문자열 = 따옴표+공백(템플릿 문자열 제외)
   const KEY = (k) => "(?:[\"']?" + k + "[\"']?)";
   const OPT = "(?:\\s*,\\s*(?:" + KEY("workdir") + "\\s*:\\s*" + STR + "|" + KEY("(?:yield_time_ms|max_output_tokens|timeout_ms)") + "\\s*:\\s*\\d+|" + KEY("login") + "\\s*:\\s*(?:true|false)))*";
-  // [7판 blocker] `tools.<아무 이름>`은 상속 속성(tools.constructor 등)으로 도구 호출 없이 정형을 채울 수 있다 → 실측 실행 함수 2종으로 고정. 개명되면 정형이 깨져 경보가 남는다(fail-closed) — 그때 목록을 갱신한다.
-  const CALL = (cmdExpr) => "tools\\s*\\.\\s*(?:exec_command|shell_command)\\s*\\(\\s*\\{\\s*" + cmdExpr + OPT + "\\s*,?\\s*\\}\\s*\\)";
-  const TEXT = (r) => "(?:\\s*text\\s*\\(\\s*(?:JSON\\s*\\.\\s*stringify\\s*\\(\\s*" + r + "\\s*\\)|" + r + "\\s*\\.\\s*output|String\\s*\\(\\s*" + r + "\\s*\\.\\s*output\\s*\\))\\s*\\)\\s*;?)?";
-  // S0
-  const m0 = new RegExp("^\\s*(?:const|let)\\s+(" + ID + ")\\s*=\\s*\\[\\s*((?:" + STR + "\\s*,\\s*)*" + STR + "\\s*,?)\\s*\\]\\s*;?", "y");
-  m0.lastIndex = 0;
-  const d = m0.exec(code);
-  if (!d) return [];
-  const name = d[1];
-  const nameEsc = name.replace(/\$/g, "\\$");
-  const bodyOpen = d.index + d[0].indexOf("["), bodyClose = d.index + d[0].lastIndexOf("]");
-  // 원소 = 코드 본문상 문자열 리터럴 자리(inStr && !inCmt)만, 내용은 원문에서
-  const elems = [];
-  for (let q = bodyOpen + 1; q < bodyClose; q++) {
-    if (!own.inStr[q] || own.inCmt[q]) continue;
-    let e = q; while (e < bodyClose && own.inStr[e] && !own.inCmt[e]) e++;
-    const st = (q > bodyOpen && !own.inStr[q - 1] && /["']/.test(rawText[q - 1])) ? q - 1 : q;
-    const lit = rawText.slice(st, e); q = e;
-    const mm = lit.match(/^"((?:[^"\\]|\\.)*)"$|^'((?:[^'\\]|\\.)*)'$/);
-    if (!mm) return []; // 리터럴 경계 불명=정형 아님
-    const rawEl = mm[1] !== undefined ? mm[1] : mm[2];
-    // [7판 blocker] JS 이스케이프 중 따옴표·백슬래시(\" \' \\) 외(\n·\t·\uXXXX·\xHH 등)는 실행 문자열이 원문 글자와 달라진다 → 배열 전체 미인정
-    if (/\\(?!["'\\])/.test(rawEl)) return [];
-    elems.push(rawEl);
-  }
-  if (!elems.length) return [];
-  let pos = d.index + d[0].length;
-  const usedIdx = new Set();
+  // [7판 blocker] 도구 함수명은 실측 2종으로 고정 — `tools.<아무 이름>`은 상속 속성(tools.constructor)으로 도구 호출 없이 정형을 채운다. 개명되면 정형이 깨져 경보가 남는다(fail-closed).
+  const FN = "tools\\s*\\.\\s*(?:exec_command|shell_command)";
+  const CMDKEY = KEY("(?:cmd|command)");
+  const ARG = (head) => "\\{\\s*" + head + "(?<opt>" + OPT + ")\\s*,?\\s*\\}";
+  const HEAD_VAR = "(?:" + CMDKEY + "\\s*:\\s*(?<ref>" + ID + ")|(?<short>cmd|command)(?=\\s*[,}]))";
+  const HEAD_IDX = CMDKEY + "\\s*:\\s*(?<aname>" + ID + ")\\s*\\[\\s*(?<aidx>\\d+)\\s*\\]";
+  const HEAD_LIT = CMDKEY + "\\s*:\\s*(?<lit>" + STR + ")";
+  const TEXT = "(?<txt>\\s*(?:text\\s*\\(\\s*(?:JSON\\s*\\.\\s*stringify\\s*\\(\\s*(?<t1>" + ID + ")\\s*\\)|(?<t2>" + ID + ")\\s*\\.\\s*output|String\\s*\\(\\s*(?<t3>" + ID + ")\\s*\\.\\s*output\\s*\\)|(?<t4>" + ID + "))\\s*\\)|(?<t5>" + ID + ")\\s*\\.\\s*forEach\\s*\\(\\s*\\(?\\s*(?<f1>" + ID + ")\\s*\\)?\\s*=>\\s*text\\s*\\(\\s*(?<f2>" + ID + ")\\s*\\)\\s*\\))\\s*;?)?";
+  const R = (src) => new RegExp(src, "dy");
+  const DECL = R("\\s*(?:const|let)\\s+(?<name>" + ID + ")\\s*=\\s*(?:\\[(?<arr>[^\\[\\]]*)\\]|(?<obj>\\{[^{}]*\\}))\\s*;?");
+  const S1 = R("\\s*for\\s*\\(\\s*(?:const|let)\\s+(?<v>" + ID + ")\\s+of\\s+(?<arr>" + ID + ")\\s*\\)\\s*\\{\\s*(?:(?:const|let)\\s+(?<r>" + ID + ")\\s*=\\s*)?await\\s+" + FN + "\\s*\\(\\s*(?:(?<vobj>" + ID + ")|" + ARG(HEAD_VAR) + ")\\s*\\)\\s*;?" + TEXT + "\\s*\\}\\s*;?");
+  const S2 = R("\\s*(?:(?:const|let)\\s+(?<r>" + ID + ")\\s*=\\s*)?await\\s+Promise\\s*\\.\\s*(?:all|allSettled)\\s*\\(\\s*(?<arr>" + ID + ")\\s*\\.\\s*map\\s*\\(\\s*(?:\\(\\s*(?<v1>" + ID + ")\\s*\\)|(?<v2>" + ID + "))\\s*=>\\s*" + FN + "\\s*\\(\\s*(?:(?<vobj>" + ID + ")|" + ARG(HEAD_VAR) + ")\\s*\\)\\s*\\)\\s*\\)\\s*;?" + TEXT);
+  const S3 = R("\\s*(?:(?:const|let)\\s+(?<r>" + ID + ")\\s*=\\s*)?await\\s+" + FN + "\\s*\\(\\s*(?:(?<name>" + ID + ")\\s*(?:\\[\\s*(?<idx>\\d+)\\s*\\])?|" + ARG("(?:" + HEAD_IDX + "|" + HEAD_LIT + ")") + ")\\s*\\)\\s*;?" + TEXT);
+  const E_STR = R("\\s*(?<lit>" + STR + ")\\s*(?:,|$)");
+  const E_OBJ = R("\\s*\\{\\s*" + HEAD_LIT + "(?<opt>" + OPT + ")\\s*,?\\s*\\}\\s*(?:,|$)");
+  const O_ONE = new RegExp("^\\{\\s*" + HEAD_LIT + "(?<opt>" + OPT + ")\\s*,?\\s*\\}$", "d");
+  const RESERVED = new Set(["tools", "text", "Promise", "JSON", "String", "Object", "Function", "Reflect", "Proxy", "globalThis", "eval", "require", "process", "import", "this", "await", "async", "const", "let", "var", "for", "of", "in", "new", "class", "function", "return", "if", "else", "while", "do", "try", "catch", "throw", "yield"]);
+  // 문자열 리터럴 원문 읽기(여는 따옴표 위치) — 닫는 따옴표까지가 inStr 구간. JS 이스케이프는 **실행 의미 그대로** 복원한다(7판 blocker: 판독기가
+  // \uXXXX·\n을 해석하지 않아 실행 명령과 흔적 명령이 달라짐 → 8판: 정확 복원 — \u0023은 #이 되어 주석 절단, \n은 개행이 되어 문장 경계가 된다).
+  // 7판의 '\" \' \\ 쌍만 허용' 목록은 정상 Windows 경로(`\\`)를 위치별 검사 오류로 거부하고 여러 줄 PowerShell 리터럴(`\n`)까지 거부했다(8판 blocker).
+  // 정확 복원이 안 되는 이스케이프(8진·줄 이음·알 수 없는 \q)=null(미인정 — 경보 유지 쪽이 안전).
+  const decodeJs = (body) => {
+    let out = "";
+    for (let i = 0; i < body.length; i++) {
+      const ch = body[i];
+      if (ch !== "\\") { out += ch; continue; }
+      const nx = body[i + 1];
+      if (nx === undefined) return null;
+      if (nx === "n") { out += "\n"; i++; continue; }
+      if (nx === "r") { out += "\r"; i++; continue; }
+      if (nx === "t") { out += "\t"; i++; continue; }
+      if (nx === "b") { out += "\b"; i++; continue; }
+      if (nx === "f") { out += "\f"; i++; continue; }
+      if (nx === "v") { out += "\v"; i++; continue; }
+      if (nx === "0" && !/[0-9]/.test(body[i + 2] || "")) { out += "\0"; i++; continue; }
+      if (nx === "x") { const h = body.slice(i + 2, i + 4); if (!/^[0-9A-Fa-f]{2}$/.test(h)) return null; out += String.fromCharCode(parseInt(h, 16)); i += 3; continue; }
+      if (nx === "u") {
+        if (body[i + 2] === "{") { const e = body.indexOf("}", i + 3); const h = e > 0 ? body.slice(i + 3, e) : ""; if (!/^[0-9A-Fa-f]{1,6}$/.test(h)) return null; const cp = parseInt(h, 16); if (cp > 0x10FFFF) return null; out += String.fromCodePoint(cp); i = e; continue; }
+        const h = body.slice(i + 2, i + 6); if (!/^[0-9A-Fa-f]{4}$/.test(h)) return null; out += String.fromCharCode(parseInt(h, 16)); i += 5; continue;
+      }
+      if (nx === '"' || nx === "'" || nx === "\\" || nx === "/" || nx === "`") { out += nx; i++; continue; }
+      return null;
+    }
+    return out;
+  };
+  const rawLit = (openIdx) => {
+    const q = raw[openIdx];
+    if (q !== '"' && q !== "'") return null;
+    let j = openIdx + 1;
+    while (j < raw.length && own.inStr[j] && !own.inCmt[j]) j++;
+    const close = j - 1;
+    if (close <= openIdx || raw[close] !== q) return null;
+    return decodeJs(raw.slice(openIdx + 1, close));
+  };
+  // 옵션 구간 [a,b): 같은 키 반복=미인정(실행값은 마지막 것 — 글자로는 어느 것인지 가정 금지) · workdir 리터럴은 원문에서
+  const optInfo = (a, b) => {
+    if (a === undefined || b === undefined || b <= a) return { ok: true, workdir: "" };
+    const span = code.slice(a, b);
+    const keys = [...span.matchAll(/["']?([A-Za-z_]+)["']?\s*:/g)].map((k) => k[1]);
+    if (new Set(keys).size !== keys.length) return { ok: false, workdir: "" };
+    const wm = /["']?workdir["']?\s*:\s*(?=["'])/d.exec(span);
+    if (!wm) return { ok: true, workdir: "" };
+    const v = rawLit(a + wm.indices[0][1]);
+    if (v === null) return { ok: false, workdir: "" };
+    if (v) wdSeen.add(normSepWin(v));
+    return { ok: true, workdir: normSepWin(v) };
+  };
+  const wdSeen = new Set(); // 스크립트가 밝힌 서로 다른 workdir 리터럴 — 2개 이상이면 통째 미인정(종전 fail-closed 잠금 ③ 승계: 폴더가 갈리는 스크립트는 경보 유지)
+  const decls = new Map(); // NAME → { kind: "str"|"obj"|"one", items: [{command, workdir}] }
+  const top = new Set();   // 최상위에 묶인 결과 변수 이름 — 재선언·그림자 금지
+  const bindOk = (n) => typeof n === "string" && n.length > 0 && !RESERVED.has(n) && !top.has(n) && !decls.has(n);
+  const parseArray = (bs, be) => {
+    const body = code.slice(bs, be);
+    let kind = "", at = 0; const items = [];
+    for (let guard = 0; guard < 256; guard++) {
+      if (/^\s*$/.test(body.slice(at))) break;
+      let m = null;
+      if (kind !== "obj") { E_STR.lastIndex = at; m = E_STR.exec(body); if (m) kind = "str"; }
+      if (!m && kind !== "str") { E_OBJ.lastIndex = at; m = E_OBJ.exec(body); if (m) kind = "obj"; }
+      if (!m) return null;
+      at = (kind === "str" ? E_STR : E_OBJ).lastIndex;
+      const v = rawLit(bs + m.indices.groups.lit[0]);
+      if (v === null) return null;
+      if (kind === "str") { items.push({ command: v, workdir: "" }); continue; }
+      const o = optInfo(bs + m.indices.groups.opt[0], bs + m.indices.groups.opt[1]);
+      if (!o.ok) return null;
+      items.push({ command: v, workdir: o.workdir });
+    }
+    if (!items.length) return null;
+    return { kind, items };
+  };
+  const parseObject = (os, oe) => {
+    const m = O_ONE.exec(code.slice(os, oe));
+    if (!m) return null;
+    const v = rawLit(os + m.indices.groups.lit[0]);
+    if (v === null) return null;
+    const o = optInfo(os + m.indices.groups.opt[0], os + m.indices.groups.opt[1]);
+    if (!o.ok) return null;
+    return { kind: "one", items: [{ command: v, workdir: o.workdir }] };
+  };
+  const textOk = (g, r) => {
+    if (g.txt === undefined || !g.txt.trim()) return true;
+    if (!r) return false;
+    if (g.t5 !== undefined) return g.t5 === r && g.f1 === g.f2 && bindOk(g.f1) && g.f1 !== r;
+    const t = g.t1 !== undefined ? g.t1 : g.t2 !== undefined ? g.t2 : g.t3 !== undefined ? g.t3 : g.t4;
+    return t === r;
+  };
+  const optOf = (m) => { const ix = m.indices.groups.opt; return optInfo(ix ? ix[0] : undefined, ix ? ix[1] : undefined); };
+  const out = [];
+  const useAll = (d, wd) => { for (const it of d.items) out.push({ command: it.command, workdir: d.kind === "obj" ? it.workdir : wd }); };
+  let pos = 0, matched = false;
   const tryAt = (re) => { re.lastIndex = pos; const m = re.exec(code); if (m) pos = re.lastIndex; return m; };
-  // 명령 값: 반복 변수 V(정확 일치) 또는 단축 속성(V가 cmd|command일 때만)
-  const cmdOfVar = "(?:" + KEY("(?:cmd|command)") + "\\s*:\\s*(" + ID + ")|(cmd|command)(?=\\s*[,}]))";
-  const S1 = new RegExp("\\s*for\\s*\\(\\s*const\\s+(" + ID + ")\\s+of\\s+" + nameEsc + "(?![\\w$])\\s*\\)\\s*\\{\\s*(?:const|let)\\s+(" + ID + ")\\s*=\\s*await\\s+" + CALL(cmdOfVar) + "\\s*;?" + TEXT("\\2") + "\\s*\\}\\s*;?", "y");
-  const S2 = new RegExp("\\s*(?:(?:const|let)\\s+(" + ID + ")\\s*=\\s*)?await\\s+Promise\\s*\\.\\s*(?:all|allSettled)\\s*\\(\\s*" + nameEsc + "\\s*\\.\\s*map\\s*\\(\\s*(?:\\(\\s*(" + ID + ")\\s*\\)|(" + ID + "))\\s*=>\\s*" + CALL(cmdOfVar) + "\\s*\\)\\s*\\)\\s*;?" + TEXT("\\1") + "", "y");
-  const S3 = new RegExp("\\s*(?:(?:const|let)\\s+(" + ID + ")\\s*=\\s*)?await\\s+" + CALL(KEY("(?:cmd|command)") + "\\s*:\\s*" + nameEsc + "\\s*\\[\\s*(\\d+)\\s*\\]") + "\\s*;?" + TEXT("\\1") + "", "y");
-  // S4: 명령이 문자열 리터럴인 호출 — 배열과 무관하므로 정형의 일부로 허용(그 리터럴은 인라인 경로 nestedShellCalls가 따로 인식)
-  const S4 = new RegExp("\\s*(?:(?:const|let)\\s+(" + ID + ")\\s*=\\s*)?await\\s+" + CALL(KEY("(?:cmd|command)") + "\\s*:\\s*" + STR) + "\\s*;?" + TEXT("\\1") + "", "y");
-  let matched = false;
-  for (let guard = 0; guard < 64; guard++) {
+  for (let guard = 0; guard < 256; guard++) {
     let m;
-    if ((m = tryAt(S1))) { const v = m[1], ref = m[3], short = m[4]; if (!(ref === v || (short && short === v))) return []; for (let k = 0; k < elems.length; k++) usedIdx.add(k); matched = true; continue; }
-    if ((m = tryAt(S2))) { const v = m[2] || m[3], ref = m[4], short = m[5]; if (!(ref === v || (short && short === v))) return []; for (let k = 0; k < elems.length; k++) usedIdx.add(k); matched = true; continue; }
-    if ((m = tryAt(S3))) { usedIdx.add(Number(m[2])); matched = true; continue; }
-    if (tryAt(S4)) continue; // 리터럴 명령 호출=정형 허용(배열 인정 여부와 무관)
+    if ((m = tryAt(DECL))) {
+      const g = m.groups;
+      if (!bindOk(g.name)) return [];
+      const d = g.arr !== undefined ? parseArray(m.indices.groups.arr[0], m.indices.groups.arr[1]) : parseObject(m.indices.groups.obj[0], m.indices.groups.obj[1]);
+      if (!d) return [];
+      decls.set(g.name, d);
+      continue;
+    }
+    if ((m = tryAt(S1))) {
+      const g = m.groups, d = decls.get(g.arr);
+      if (!d || d.kind === "one" || !bindOk(g.v)) return [];
+      if (g.r !== undefined && (!bindOk(g.r) || g.r === g.v)) return [];
+      if (!textOk(g, g.r)) return [];
+      if (g.vobj !== undefined) { if (g.vobj !== g.v || d.kind !== "obj") return []; useAll(d, ""); }
+      else { if (d.kind !== "str" || !(g.ref === g.v || g.short === g.v)) return []; const o = optOf(m); if (!o.ok) return []; useAll(d, o.workdir); }
+      matched = true; continue;
+    }
+    if ((m = tryAt(S2))) {
+      const g = m.groups, d = decls.get(g.arr), v = g.v1 !== undefined ? g.v1 : g.v2;
+      if (!d || d.kind === "one" || !bindOk(v)) return [];
+      if (g.r !== undefined && (!bindOk(g.r) || g.r === v)) return [];
+      if (!textOk(g, g.r)) return [];
+      if (g.vobj !== undefined) { if (g.vobj !== v || d.kind !== "obj") return []; useAll(d, ""); }
+      else { if (d.kind !== "str" || !(g.ref === v || g.short === v)) return []; const o = optOf(m); if (!o.ok) return []; useAll(d, o.workdir); }
+      if (g.r !== undefined) top.add(g.r);
+      matched = true; continue;
+    }
+    if ((m = tryAt(S3))) {
+      const g = m.groups;
+      if (g.r !== undefined && !bindOk(g.r)) return [];
+      if (!textOk(g, g.r)) return [];
+      if (g.name !== undefined) {
+        const d = decls.get(g.name);
+        if (!d) return [];
+        if (g.idx !== undefined) { if (d.kind !== "obj") return []; const it = d.items[Number(g.idx)]; if (!it) return []; out.push({ command: it.command, workdir: it.workdir }); }
+        else { if (d.kind !== "one") return []; out.push({ command: d.items[0].command, workdir: d.items[0].workdir }); }
+      } else {
+        const o = optOf(m);
+        if (!o.ok) return [];
+        if (g.aname !== undefined) { const d = decls.get(g.aname); if (!d || d.kind !== "str") return []; const it = d.items[Number(g.aidx)]; if (!it) return []; out.push({ command: it.command, workdir: o.workdir }); }
+        else { const v = rawLit(m.indices.groups.lit[0]); if (v === null) return []; out.push({ command: v, workdir: o.workdir }); }
+      }
+      if (g.r !== undefined) top.add(g.r);
+      matched = true; continue;
+    }
     break;
   }
   if (!matched) return [];
   if (!/^\s*$/.test(code.slice(pos))) return []; // 정형 밖 글자가 하나라도 남으면 통째로 미인정
-  const out = [];
-  for (const k of usedIdx) {
-    if (k >= elems.length) continue;
-    const lit2 = normSepWin(String(elems[k]).replace(/\\(["'\\])/g, "$1"));
-    if (lit2.length < 4 || lit2.length > 4000) continue;
-    for (const s2 of splitShellStatements(lit2)) {
-      if (toolCallCanReadFile(p, s2)) out.push({ text: stripShellComment(s2), workdir: boundWd, weak: true });
-    }
-  }
-  return out;
+  if (wdSeen.size > 1) return []; // 서로 다른 workdir 복수=통째 미인정(재검증 blocker 반례 잠금 ③)
+  return out.filter((c) => c.command);
 }
 // ② PowerShell 리터럴 배열 + foreach 전개 — `$arr = @('a','b')` / `@(@{p='a';a=1},…)` 를 같은 호출 텍스트의 **뒤에 오는** `foreach ($v in $arr)`
 //    의 **본문 `{…}` 안에서만** `$v` / `$v.key` 를 각 원소로 치환한 변형 텍스트를 만든다(리터럴 대입 복원과 같은 원칙: 실행 순서·호출 경계 유지,
@@ -1174,12 +1238,14 @@ function toolReadParts(p) {
   // 증명할 수 없다(실행 안 되는 분기·호출 아닌 이름 재사용 등이 계속 새 반례로 나왔다).
   // 그래서 스크립트에서 읽어낸 것은 **약한 증거**로만 쓴다: 경보(다룬 흔적 확인)에는 쓰고,
   // 신뢰 등급 승격에는 쓰지 않는다. 승격은 하네스가 기록한 인수만 인정한다.
-  // [2026-09-06 ③] 중첩 호출 추출은 **원시 인수**에서 — toolArgumentValues는 백슬래시를 /로 바꿔 JSON 문자열 안의 이스케이프 따옴표(\")를
-  // 깨뜨리므로(아래 배열 스캔 주석과 같은 함정) 정규화본에서는 `cmd: "rg -n \"패턴\" 파일"` 같은 흔한 인라인 판독이 통째로 사라졌다
-  // (실측 09-06 (e) 반례: PowerShell 스크립트 안 \"@@ \" 문자열 하나로 명령 전체가 미인식). 원시 문자열이 없을 때만 종전 정규화본으로 폴백.
-  const rawArgTexts = [p && p.arguments, p && p.input].filter((v) => typeof v === "string");
-  const nested = (rawArgTexts.length ? rawArgTexts : values).flatMap(nestedShellCalls);
-  const sources = nested.length ? nested.map((c) => ({ ...c, weak: true })) : values.map((v) => ({ command: v, workdir: "", weak: false }));
+  // [2026-09-07 8판] 실행 스크립트(custom 도구의 문자열 입력 — exec의 JS)는 정형 일치기 **하나**로만 읽는다(templateScriptCommands 주석).
+  //   옛 인라인 추출기(nestedShellCalls: 괄호 안 객체·이름에 담긴 뒤 쓰인 객체=쓰임)는 정형이 거부한 스크립트에서도 첫 cmd 리터럴을 흔적으로
+  //   되살려(유니코드 철자 중복 키 `"\u0063md"`·지역 tools 그림자) 정형의 '통째 미인정'을 우회했다(8판 blocker ab-3) → 폐지.
+  //   원시 입력 글자에서 읽는다(정규화본은 백슬래시를 /로 바꿔 \" 경계를 깨뜨림 — 2026-09-06 ③). 하네스가 기록한 함수 호출 인수(JSON)는 종전대로 강한 축.
+  const script = (p && typeof p.input === "string") ? p.input : null;
+  const sources = script !== null
+    ? templateScriptCommands(script).map((c) => ({ command: c.command, workdir: c.workdir || "", weak: true }))
+    : values.map((v) => ({ command: v, workdir: "", weak: false }));
   // 리터럴 대입을 풀어 넣되 **실행 순서를 지키고**(1차 blocker① — 뒤에 나온 대입이 앞 문장에 소급되면,
   // 없는 파일을 읽고 실패한 뒤 이름만 나중에 대입해도 '그 파일을 읽었다'가 된다), **호출 경계를 넘지
   // 않는다**(2차 blocker① — 셸 호출이 다르면 서로 다른 프로세스라 변수가 이어지지 않는다).
@@ -1199,53 +1265,6 @@ function toolReadParts(p) {
         if (tgt) vars.delete(tgt);
       }
     }
-  }
-  // [2026-08-03 문맥 보정 — 약한(경보) 축 한정] 검증자가 임의 코드 실행기(exec)에 '명령 문자열 배열'
-  // (const cmds=["git grep … -- 파일", …])로 판독을 싣는 형태가 상시화되면서, 스크립트 본문이 문장
-  // 선두 판정에 걸리지 않아 정직한 판독 회차마다 '근거 의심'이 붙었다(실측 2026-08-03 — 8/8 미인식).
-  // 스크립트 글자는 기존 원칙대로 강한 증거가 될 수 없지만(어느 줄이 실행됐는지 글자만으론 증명 불가
-  // — 위 3회 확장 철회 기록), '그 자체로 판독 명령 문장'인 따옴표 문자열 리터럴은 스크립트-글자 수준의
-  // 흔적으로는 실재한다 → 약한 축에만 추가한다. 승격(strong)은 불변: 하네스 기록 인수만.
-  // ⚠ 반드시 '원시 인수'에서 스캔한다 — toolArgumentValues는 백슬래시를 /로 바꾸므로 이스케이프 따옴표
-  // (\")가 깨져 리터럴 경계가 무너진다(같은 날 실측: 정규화본에선 추출 0·원시본에선 정상 추출).
-  // ⚠ 무결속 전체 스캔은 금지(재검증 blocker — 미실행 문자열·타 폴더 동명 파일이 경보를 거짓 해제):
-  //   ①배열-사용 결속 — '문자열 배열로 선언된 변수'가 같은 스크립트에서 shell 실행 호출과 연결된
-  //     경우에만 그 배열의 리터럴을 인정(선언만 하고 안 쓴 객체·정규식 표기=기존 미인정 계약 유지)
-  //   ②작업 폴더 결속 — 스크립트가 밝힌 workdir가 하나면 부품에 부착(그 폴더만 기준), 서로 다른
-  //     workdir가 여럿이면 어느 명령이 어느 폴더인지 글자로 못 가르므로 스캔 중단(fail-closed —
-  //     경보가 남는 안전한 방향).
-  const rawStrings = [];
-  for (const raw of [p && p.arguments, p && p.input]) {
-    if (typeof raw === "string") rawStrings.push(raw);
-    else if (raw && typeof raw === "object") { try { rawStrings.push(JSON.stringify(raw)); } catch { /* 무시 */ } }
-  }
-  for (const rawText of rawStrings) {
-    // workdir 결속: 밝혀진 workdir 값들을 수집 — 서로 다른 값이 2개 이상이면 이 스크립트는 건너뛴다
-    const wds = new Set();
-    let wdLitCount = 0; // 리터럴 '매치 수' — 고유값 수(Set)와 분리(같은 폴더 반복 명시는 정상·확인 반례 4)
-    // 키의 따옴표 표기("workdir":)도 유효한 JS — 미인식이면 결속 우회가 된다(확인 반례).
-    for (const wm of rawText.matchAll(/["']?workdir["']?\s*[:=]\s*"((?:[^"\\]|\\.)*)"|["']?workdir["']?\s*[:=]\s*'((?:[^'\\]|\\.)*)'/g)) {
-      wdLitCount++;
-      wds.add(normSepWin(((wm[1] !== undefined ? wm[1] : wm[2]) || "").replace(/\\(["'\\])/g, "$1")));
-    }
-    // 변수형 workdir(리터럴로 안 풀림)이 하나라도 있으면 결속 불가 — 폴백하면 교차 폴더 오인이
-    // 되살아나므로 스캔 중단(fail-closed·확인 반례 2). 비교는 '키 수 vs 리터럴 매치 수' — 고유값
-    // 수와 비교하면 같은 폴더를 두 호출에 반복 명시한 정상 스크립트가 오차단된다(확인 반례 4).
-    const wdKeyCount = (rawText.match(/["']?workdir["']?\s*[:=]/g) || []).length;
-    if (wds.size > 1 || wdKeyCount > wdLitCount) continue;
-    const boundWd = wds.size === 1 ? [...wds][0] : "";
-    // ── 배열-사용 결속(2026-09-06 · 4판 재작성 — fail-closed 허용목록) ──────────────────────────────────────
-    // 원칙: 원문 '글자'로 "배열 값이 선언 리터럴과 다를 수 있다"는 낌새가 하나라도 보이면 그 배열은 통째로 미인정한다(경보 유지 쪽이 안전).
-    //  ⓐ 코드 전용 본문에서만 본다 — scriptOwnerScan으로 주석·문자열 자리를 공백 처리(길이 보존)한 codeText에서 선언·사용·호출을 찾고,
-    //     배열 원소(문자열 리터럴)만 같은 위치의 원문에서 읽는다(4판 blocker: 주석/문자열 속 가짜 선언·호출).
-    //  ⓑ `tools`가 멤버 접근(`tools.x`) 외의 자리에 한 번이라도 나오면(선언·매개변수·대입·인수 전달=그림자 가능) 이 스크립트의 배열 경로 전체 미인정(4판 blocker).
-    //  ⓒ 배열 이름의 모든 등장이 허용 형태여야 한다: 선언 · `ARR[식]` 읽기(뒤에 대입/증감 없음) · `ARR.length` 읽기 · `ARR.map|forEach|flatMap|filter|some|every(` ·
-    //     `of ARR` — 그 밖(재대입·원소 대입·push 등 변이 메서드·별칭 대입·다른 함수 인수)이 하나라도 있으면 미인정(4판 blocker: 재대입·덮어쓰기·별칭).
-    //  ⓓ 실행 호출 인수에 명령 키가 둘 이상이면(중복 속성은 마지막이 실행값) 그 호출 미인정(4판 blocker).
-    //  ⓔ 실행 호출=도구 이름공간 호출+명령 키(1판) · 명령 값 식은 `ARR[식]` 정확 일치 또는 배열에서 묶인 반복 변수 이름 정확 일치(2·3판) ·
-    //     반복 변수는 호출 전 재대입 없음·reduce 제외(3판). 승격(strong)은 불변 — 여기서 나온 부품은 전부 약한 축.
-    // [사용자 결정 73edb5984bc045e8 · 2026-09-07] JS 명령 배열 경로=정형 문장 일치만(templateArrayReads 주석). 그 밖은 통째로 미인정.
-    for (const part of templateArrayReads(rawText, boundWd, p)) out.push(part);
   }
   return out;
 }
@@ -5069,4 +5088,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, templateArrayReads, maskNonCode, toolReadParts, nestedShellCalls, scriptOwnerScan, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
+module.exports = { rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, templateScriptCommands, maskNonCode, toolReadParts, scriptOwnerScan, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
