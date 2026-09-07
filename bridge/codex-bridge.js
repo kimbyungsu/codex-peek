@@ -1014,10 +1014,11 @@ function templateScriptCommands(rawText) {
       if (/[{,]$/.test(before) && /^\s*:/.test(after)) continue;           // 객체 키
       if (name === "text") { if (!/^\s*\(/.test(after)) return false; continue; }
       if (BUILTIN.has(name) || local.has(name) || top.has(name)) continue;
-      if (decls.has(name)) {                                                   // 선언 배열/객체는 상수 첨자 읽기만 — 메서드 호출(변이) 불가
+      if (decls.has(name)) {                                                   // 선언 배열/객체는 값 읽기만 — 사슬 끝에 호출이 오면 미인정(변이/부작용 통로 차단)
         const em = after.match(/^\s*\[\s*\d+\s*\]/);
         if (!em) return false;                                                 // 선언 이름은 NAME[정수] 형태로만 등장
-        if (/^\s*\??\.\s*[A-Za-z_$][\w$]*\s*\(/.test(after.slice(em[0].length))) return false; // NAME[정수].메서드(…)=변이 통로 차단(__defineGetter__·defineProperty 등)
+        const chain = after.slice(em[0].length).match(/^(?:\s*\??\.\s*[A-Za-z_$][\w$]*|\s*\[\s*\d+\s*\])*/)[0]; // .prop·[정수] 접근 사슬을 모두 소비
+        if (/^\s*\(/.test(after.slice(em[0].length + chain.length))) return false; // 사슬 뒤 호출 `(`=선언 데이터에 대한 메서드 호출(cmds[0].cmd.toString() 등) — 미인정
         continue;
       }
       return false;
@@ -1036,6 +1037,7 @@ function templateScriptCommands(rawText) {
     if (/\b(?:constructor|prototype|call|apply|bind|Function|globalThis|Reflect|Proxy|process|setTimeout|setInterval|queueMicrotask|Object|Array)\b/.test(seg)) return false; // Object/Array 등 변이 통로 차단(11판 확인검증)
     for (const mm of seg.matchAll(/\[/g)) { if (!/^\[\s*(?:\d+|[A-Za-z_$][\w$]*)\s*\]/.test(seg.slice(mm.index))) return false; } // 첨자는 정수·식별자만(문자열 첨자 금지)
     const local = new Set(extraIds);
+    for (const mm of seg.matchAll(/\bfor\s*\(/g)) { if (!/^for\s*\(\s*(?:const|let)\s+[A-Za-z_$][\w$]*\s+of\b/.test(seg.slice(mm.index))) return false; } // for는 for-of만(C 스타일 for(;;) 등 미인정)
     for (const mm of seg.matchAll(/\bfor\s*\(\s*const\s+([A-Za-z_$][\w$]*)\s+of\b/g)) local.add(mm[1]);
     for (const mm of seg.matchAll(/\(\s*([A-Za-z_$][\w$]*(?:\s*,\s*[A-Za-z_$][\w$]*)*)\s*\)\s*=>/g)) for (const x of mm[1].split(",")) local.add(x.trim());
     for (const mm of seg.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*=>/g)) local.add(mm[1]);
@@ -1474,7 +1476,8 @@ function outputContainsFileLine(output, fileLines, opts) {
   const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   // [11판 확인검증 blocker] 파일명 소유 표시는 판독 도구가 붙이는 것만: 줄 시작의 경로 토큰 뒤 콜론(rg/Select-String `경로:번호:`)이나 구역 표시 줄(`@@ 파일명`).
   // 본문 아무 데나 이름이 나온다고 소유로 보면(옛 정규식) 다른 파일의 공통 줄이 이름만 스쳐도 대상 소유로 오인된다.
-  const nameRe = (nm) => new RegExp("^(?:@@\\s+(?:[^\\s:]*[\\\\/])?" + esc(nm) + "(?=[\\s:]|$)|(?:[^\\s:]*[\\\\/])?" + esc(nm) + ":)", process.platform === "win32" ? "i" : "");
+  const PFX = "(?:[A-Za-z]:)?(?:[^\\s:]*[\\\\/])?"; // 줄 시작 경로 토큰(상대 또는 Windows 절대 드라이브 접두)
+  const nameRe = (nm) => new RegExp("^(?:@@\\s+" + PFX + esc(nm) + "(?=[\\s:]|$)|" + PFX + esc(nm) + ":)", process.platform === "win32" ? "i" : "");
   const selfRe = selfName ? nameRe(selfName) : null;
   const otherRes = otherNames.map(nameRe);
   const cand = [];
@@ -1495,7 +1498,7 @@ function outputContainsFileLine(output, fileLines, opts) {
     if (namesSelf && !namesOther) section = "self"; else if (namesOther && !namesSelf) section = "other";
     const bySelf = namesSelf || (!namesOther && section === "self");
     if (owned(t, bySelf)) return true;
-    const stripped = t.replace(/^(?:[^\s:]+:)?\d+[:\-]\s?/, "").replace(/^\d+\s+/, "").replace(/^[0-9a-f^]{6,40}\s+\([^)]*\)\s?/i, "").trim();
+    const stripped = t.replace(/^(?:\S*?:)?\d+[:\-]\s?/, "").replace(/^\d+\s+/, "").replace(/^[0-9a-f^]{6,40}\s+\([^)]*\)\s?/i, "").trim();
     if (stripped !== t && owned(stripped, bySelf)) return true;
   }
   if (hay.length <= 20000) { let n = 0; for (const t of set) { if (++n > 20000) break; if (exclude && exclude.has(t)) continue; if (hay.includes(t)) return true; } }
