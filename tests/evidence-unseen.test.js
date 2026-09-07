@@ -95,13 +95,16 @@ writeRollout("abababab-fail", [userMsg("검증 요청"), ...pair("Get-Content fo
 const r35 = citedFilesUnseen(answer, ws, "abababab-fail");
 ck("오류 출력이 있어도 실패 종료면 읽은 증거가 아님", r35.checked === true && r35.unseen.includes("foo.ts"));
 writeRollout("abababab-unrelated", [userMsg("검증 요청"), ...pair("Get-Content foo.ts", "unrelated text", 0)]);
-// 2026-07-29 축 분리: 판독 명령이 그 파일을 지목하고 성공했으면 '다뤘다'(경보 축)로 본다.
-// 검증자가 파일을 읽고도 개수·해시만 출력하는 경우가 흔해서, 내용 대조를 경보 조건으로 쓰면 헛경보가 된다.
-// 반대로 승격 축은 종전대로 인용 줄 내용이 출력에 실재해야 한다 — 여기서 갈린다.
+// 2026-07-29 축 분리 → 2026-09-07 9판(blocker ab-3) 개정: 경보 축도 **출력에 그 파일의 실제 줄이 하나라도** 있어야 '다뤘다'.
+// 07-29에는 '개수·해시만 출력해도 다룬 흔적'으로 봤지만, 성공 코드+비어 있지 않은 출력은 다른 문장의 출력일 수 있어
+// (`Get-Content foo -TotalCount 0; Write-Output done`) 파일 내용 없이 경보가 해제됐다. 승격 축은 종전대로 인용 줄 내용이 실재해야 한다.
 const r36w = citedFilesUnseen(answer, ws, "abababab-unrelated");
 const r36s = citedFilesUnseenExact(answer, ws, "abababab-unrelated");
-ck("반환물이 인용 줄과 달라도 다룬 흔적으로 보아 경보하지 않는다", r36w.checked === true && !r36w.unseen.includes("foo.ts"));
-ck("그러나 승격 축에는 남는다(인용 내용 대조 실패)", r36s.unseen.some((p) => p.endsWith("foo.ts")));
+ck("반환물에 그 파일의 실제 줄이 없으면(unrelated text) 경보 축도 미인정(9판 개정)", r36w.checked === true && r36w.unseen.includes("foo.ts"));
+ck("승격 축에도 남는다(인용 내용 대조 실패)", r36s.unseen.some((p) => p.endsWith("foo.ts")));
+writeRollout("abababab-anyline", [userMsg("검증 요청"), ...pair("Get-Content foo.ts", "line2", 0)]);
+const r36a = citedFilesUnseenExact(answer, ws, "abababab-anyline");
+ck("인용 줄(1)이 아니어도 파일의 실제 줄(line2)이 출력에 있으면 경보 축은 인정·승격 축은 미인정", !r36a.unseenWeak.some((p) => p.endsWith("foo.ts")) && r36a.unseen.some((p) => p.endsWith("foo.ts")));
 writeRollout("abababab-custom", [userMsg("검증 요청"), ...customPair("Get-Content foo.ts", "line1\nline2", 0)]);
 const r37 = citedFilesUnseen(answer, ws, "abababab-custom");
 ck("functions.exec 중첩 명령도 호출 id·성공 출력·인용 내용이 결속되면 실제 읽기로 인정", r37.checked === true && !r37.unseen.includes("foo.ts"));
@@ -671,18 +674,22 @@ console.log("[6-2] 실사용에서 나온 판독 형태(2026-07-29 실측) — �
 {
   // 실측: 검증자가 `$t = (git show <판>:<경로>)` 로 과거 내용을 값으로 받아 개수만 출력했다.
   // 괄호 하나 때문에 같은 git 조회가 통째로 안 보였고, 그 파일이 매번 '흔적 미확인'으로 남았다.
+  // 9판 개정(blocker ab-3): 괄호 판독은 그대로 인식하되, 개수만 출력한 호출은 내용을 받지 못했으므로 흔적이 아니다 — 내용을 출력하면 인정.
   writeRollout("ffffffff-paren", [userMsg("검증 요청"), ...pair("$t = (git -c safe.directory=" + ws + " -C " + ws + " show HEAD:foo.ts); 'hits=' + $t.Length", "hits=12")]);
   const rp = citedFilesUnseen(answer, ws, "ffffffff-paren");
-  ck("괄호로 감싼 이력 조회도 '다룬 흔적'으로 인정(경보 축)", rp.checked === true && !rp.unseen.includes("foo.ts"));
+  ck("괄호로 감싼 이력 조회라도 개수만 출력하면 흔적 아님(9판: 내용 없는 성공 출력=경보 유지)", rp.checked === true && rp.unseen.includes("foo.ts"));
+  writeRollout("ffffffff-paren-out", [userMsg("검증 요청"), ...pair("$t = (git -c safe.directory=" + ws + " -C " + ws + " show HEAD:foo.ts); $t", "line1\nline2")]);
+  const rpo = citedFilesUnseen(answer, ws, "ffffffff-paren-out");
+  ck("괄호로 감싼 이력 조회가 내용을 출력하면 '다룬 흔적'으로 인정(경보 축 — 괄호 인식 무회귀)", rpo.checked === true && !rpo.unseen.includes("foo.ts"));
   // 1차 [보완]: 괄호를 벗기는 자리가 두 곳(판독 판정·기준 폴더 수집)이라 한쪽만 고치면,
   // 실행 폴더가 저장소와 다를 때 -C 로 준 기준이 사라져 경보가 그대로 남는다.
   {
     const other2 = path.join(os.tmpdir(), "no-such-exec-dir");
     const id2 = "call-pc-" + (++callSeq);
-    const call2 = { type: "response_item", payload: { type: "function_call", name: "shell_command", call_id: id2, arguments: JSON.stringify({ command: "$t = (git -C " + ws + " show HEAD:foo.ts); 'len=' + $t.Length", workdir: other2 }) } };
-    writeRollout("ffffffff-paren-c", [userMsg("검증 요청"), call2, fo(id2, "len=12")]);
+    const call2 = { type: "response_item", payload: { type: "function_call", name: "shell_command", call_id: id2, arguments: JSON.stringify({ command: "$t = (git -C " + ws + " show HEAD:foo.ts); $t", workdir: other2 }) } };
+    writeRollout("ffffffff-paren-c", [userMsg("검증 요청"), call2, fo(id2, "line1\nline2")]);
     const rc2 = citedFilesUnseen(answer, ws, "ffffffff-paren-c");
-    ck("괄호 안 git -C 저장소도 경로 기준으로 인정(실행 폴더가 달라도 경보 없음)", rc2.checked === true && !rc2.unseen.includes("foo.ts"));
+    ck("괄호 안 git -C 저장소도 경로 기준으로 인정(실행 폴더가 달라도 경보 없음 — 내용 출력 시)", rc2.checked === true && !rc2.unseen.includes("foo.ts"));
   }
   // 압축 파일 안에서 꺼낸 것은 저장소 파일을 읽은 것이 아니므로 종전대로 미인정이어야 한다.
   writeRollout("ffffffff-tar", [userMsg("검증 요청"), ...pair("tar -xOf bundle.zip 'pkg/foo.ts'", "line1\nline2")]);
@@ -1043,9 +1050,17 @@ console.log("[3-7] 판독 형태 드리프트 봉합(2026-09-06 실측 — D-202
   ck("(tp14u2) JS 이스케이프=실행 의미 그대로 복원(\\n→개행·\\u0023→#·\\x41→A) · 알 수 없는/8진/홀수 백슬래시 이스케이프=미인정", (B7.templateScriptCommands('const cmds=["a\\nb"];\nawait tools.exec_command({cmd:cmds[0]});')[0] || {}).command === "a\nb" && (B7.templateScriptCommands('const cmds=["a\\u0023b \\x41"];\nawait tools.exec_command({cmd:cmds[0]});')[0] || {}).command === "a#b A" && B7.templateScriptCommands('const cmds=["a\\qb"];\nawait tools.exec_command({cmd:cmds[0]});').length === 0 && B7.templateScriptCommands('const cmds=["a\\1b"];\nawait tools.exec_command({cmd:cmds[0]});').length === 0);
   ck("(tp14u4) 서로 다른 workdir 리터럴 2개=통째 미인정(잠금 ③ 승계) · 같은 폴더 반복 명시=정상", B7.templateScriptCommands('const cmds=["cat a.ts"];\nawait tools.exec_command({cmd:cmds[0],workdir:"D:/a"});\nawait tools.exec_command({cmd:"cat b.ts",workdir:"D:/b"});').length === 0 && B7.templateScriptCommands('const cmds=["cat a.ts"];\nawait tools.exec_command({cmd:cmds[0],workdir:"D:/a"});\nawait tools.exec_command({cmd:"cat b.ts",workdir:"D:/a"});').length === 2);
   ck("(tp14u3) 옵션 키 반복(workdir 2회)=미인정 · text(R)·R.forEach(x=>text(x)) 마무리=허용", B7.templateScriptCommands('const r=await tools.exec_command({cmd:"cat a.ts",workdir:"D:/a",workdir:"D:/b"});').length === 0 && B7.templateScriptCommands('const r=await tools.exec_command({cmd:"cat a.ts",workdir:"D:/a"});\ntext(r);').length === 1 && B7.templateScriptCommands('const calls=[{command:"cat a.ts",workdir:"D:/a"}];\nconst rs=await Promise.all(calls.map(c=>tools.shell_command(c)));rs.forEach(x=>text(x));')[0].workdir === "D:/a");
+  // (tp15) ★9판 blocker(ab-3): 정형 S4라도 출력에 그 파일의 실제 줄이 없으면(-TotalCount 0; Write-Output done) 약한 축 유지
+  writeRollout("d7tp15", [userMsg("검증 요청"), ...exec7('const r = await tools.exec_command({cmd: "Get-Content -LiteralPath foo.ts -TotalCount 0; Write-Output done", workdir: ' + JSON.stringify(ws) + '});\ntext(JSON.stringify(r));', "Exit code: 0\nOutput:\ndone")]);
+  ck("(tp15) ★내용 없는 성공 출력(done)=약한 흔적 미인정(경보 유지)", citedFilesUnseenExact(answer, ws, "d7tp15").unseenWeak.some((p) => p.endsWith("foo.ts")));
+  writeRollout("d7tp15b", [userMsg("검증 요청"), ...exec7('const r = await tools.exec_command({cmd: "Get-Content -LiteralPath foo.ts", workdir: ' + JSON.stringify(ws) + '});\ntext(JSON.stringify(r));', "Exit code: 0\nOutput:\nline1\nline2")]);
+  ck("(tp15b) 실제 줄이 출력에 있으면 약한 흔적 인정", !citedFilesUnseenExact(answer, ws, "d7tp15b").unseenWeak.some((p) => p.endsWith("foo.ts")));
+  writeRollout("d7tp15c", [userMsg("검증 요청"), ...exec7('const r = await tools.exec_command({cmd: "Get-Content -LiteralPath foo.ts | Measure-Object", workdir: ' + JSON.stringify(ws) + '});\ntext(JSON.stringify(r));', "Exit code: 0\nOutput:\nCount : 2")]);
+  ck("(tp15c) 개수만 출력(내용 없음)=약한 흔적 미인정 — 9판 경계(모델이 내용을 받지 못한 판독은 인용 근거가 아님)", citedFilesUnseenExact(answer, ws, "d7tp15c").unseenWeak.some((p) => p.endsWith("foo.ts")));
+  ck("(tp15u) 출력 줄 대조: 경로:번호: · 번호: · git blame 머리 접두 벗기기 · 부분 문자열 · 내용 없는 출력=거짓", B7.outputContainsFileLine("foo.ts:1:line1", ["line1", "line2"]) && B7.outputContainsFileLine("12:  line2", ["line1", "line2"]) && B7.outputContainsFileLine("abc1234 (me 2026-01-01 00:00:00 +0900 1) line1", ["line1"]) && B7.outputContainsFileLine("[\"@@ line1\"]", ["line1"]) && !B7.outputContainsFileLine("done", ["line1", "line2"]) && !B7.outputContainsFileLine("Count : 2", ["line1"]) && !B7.outputContainsFileLine("x", ["  ", ""]));
   // (j) 소스 핀: 정형 일치기·중첩 추출=원시 인수·임의 실행기 제외
   const src7 = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
-  ck("(j) JS 배열 경로=정형 문장 일치기(templateArrayReads)만 — 옛 결속 헬퍼(execLikeCalls·arrayUsageAllowed·arrayBoundIdents) 제거", src7.includes("function templateScriptCommands(") && src7.includes("? templateScriptCommands(script).map((c) => ({ command: c.command, workdir: c.workdir || \"\", weak: true }))") && !src7.includes("function nestedShellCalls(") && !src7.includes("function templateArrayReads(") && !src7.includes("function execLikeCalls(") && !src7.includes("function arrayUsageAllowed(") && !src7.includes("function arrayBoundIdents(") && !/shell_command\\\\s\*/.test(src7));
+  ck("(j) 실행 스크립트=정형 문장 일치기(templateScriptCommands)만 — 옛 결속 헬퍼(execLikeCalls·arrayUsageAllowed·arrayBoundIdents)·인라인 추출기(nestedShellCalls)·templateArrayReads 제거", src7.includes("function templateScriptCommands(") && src7.includes("? templateScriptCommands(script).map((c) => ({ command: c.command, workdir: c.workdir || \"\", weak: true }))") && !src7.includes("function nestedShellCalls(") && !src7.includes("function templateArrayReads(") && !src7.includes("function execLikeCalls(") && !src7.includes("function arrayUsageAllowed(") && !src7.includes("function arrayBoundIdents(") && !/shell_command\\\\s\*/.test(src7));
   ck("(j) PowerShell foreach 전개는 약한 축 결속(weak9 = !!source.weak || variant.expanded)", /function psLiteralForeachVariants\(/.test(src7) && /const weak9 = !!source\.weak \|\| variant\.expanded;/.test(src7));
   ck("(j) 스크립트는 원시 입력 글자(p.input)에서만 읽고 정규화본 폴백 없음 — 함수 호출 인수는 강한 축 유지", /const script = \(p && typeof p\.input === "string"\) \? p\.input : null;/.test(src7) && /: values\.map\(\(v\) => \(\{ command: v, workdir: "", weak: false \}\)\);/.test(src7));
   ck("(j) 임의 실행기 제외는 불변(node -e 미인정 — 허용목록 그대로)", /^(cat\|type\|more\|less\|head\|tail\|sed\|grep\|rg\|ripgrep\|select-string\|get-content\|gc)/m.test(src7.replace(/\\/g, "")) || /\(cat\|type\|more\|less\|head\|tail\|sed\|grep\|rg\|ripgrep\|select-string\|get-content\|gc\)/.test(src7));

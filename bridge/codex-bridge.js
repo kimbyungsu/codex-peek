@@ -525,7 +525,8 @@ function canonicalFileKey(file) {
 }
 // 인용된 파일 중 실재하며 줄 번호도 유효하고, 인용 범위에 실제 비어 있지 않은 내용이 있는 파일의 정확한
 // 정규 경로+내용 조각. 읽기 도구의 성공 출력이 이 조각 중 하나를 실제 반환했는지까지 뒤에서 대조한다.
-function citedResolvedEvidence(answer, ws) {
+// 인용 파일 상세 — key(정규 경로) → { snippets: 인용한 줄 내용(승격 축 대조), lines: 파일 전체 줄(약한 축 대조 — 9판) }
+function citedResolvedDetail(answer, ws) {
   const text = String(answer || "");
   const re = /\(([^()\s]+\.[A-Za-z0-9]+):(\d+)(?:-(\d+))?\)/g;
   const out = new Map();
@@ -541,10 +542,13 @@ function citedResolvedEvidence(answer, ws) {
     if (!snippets.length) continue; // 빈 줄 인용은 실제 내용 반환 증거와 결속할 수 없음
     const key = canonicalFileKey(file);
     if (!key) continue;
-    const prev = out.get(key) || [];
-    out.set(key, [...new Set(prev.concat(snippets))]);
+    const prev = out.get(key) || { snippets: [], lines };
+    out.set(key, { snippets: [...new Set(prev.snippets.concat(snippets))], lines: prev.lines });
   }
   return out;
+}
+function citedResolvedEvidence(answer, ws) {
+  return new Map([...citedResolvedDetail(answer, ws)].map(([k, v]) => [k, v.snippets]));
 }
 function citedResolvedPaths(answer, ws) { return new Set(citedResolvedEvidence(answer, ws).keys()); }
 // 기존 공개 API와 무결성 경고 문구 호환 — 화면에는 basename만, 신뢰 판정은 citedResolvedPaths를 사용.
@@ -1368,6 +1372,30 @@ function outputContainsCitedContent(output, snippets) {
   const hay = String(output || "");
   return !!hay && (snippets || []).some((s) => s && hay.includes(s));
 }
+// [9판 blocker ab-3 · 2026-09-07] 약한 축(경보) 해제 조건 — 호출 출력이 **그 파일의 실제 줄**을 하나라도 담고 있어야 '다뤘다'.
+// 성공 코드+비어 있지 않은 출력만으로는 `Get-Content foo -TotalCount 0; Write-Output done`처럼 다른 문장의 출력으로 해제된다(파일 내용 0).
+// 대가: 개수·해시만 출력한 판독(2026-07-29 '다룬 흔적' 처방)은 이제 흔적이 아니다 — 모델이 내용을 받지 못한 판독은 인용 근거일 수 없다.
+// 기준 줄 길이=8자(공백 제거) — 짧은 줄뿐인 파일은 가장 긴 줄 길이까지 낮춘다. 출력 줄 단위로 그대로/흔한 접두(경로:번호: · 번호: · cat -n · git blame 머리)를
+// 벗겨 대조하고, 출력이 작을 때(2만 자 이하)는 부분 문자열로도 대조한다(낯선 접두/접미 형식 대비 · 파일 2만 줄까지).
+function outputContainsFileLine(output, fileLines) {
+  const hay = String(output || "");
+  if (!hay) return false;
+  let maxLen = 0; const cand = [];
+  for (const raw of fileLines || []) { const t = String(raw).trim(); if (!t) continue; if (t.length > maxLen) maxLen = t.length; cand.push(t); }
+  if (!cand.length) return false;
+  const min = Math.min(8, maxLen);
+  const set = new Set();
+  for (const t of cand) if (t.length >= min) set.add(t);
+  for (const ol of hay.split(/\r?\n/)) {
+    const t = ol.trim();
+    if (!t) continue;
+    if (set.has(t)) return true;
+    const stripped = t.replace(/^(?:[^\s:]+:)?\d+[:\-]\s?/, "").replace(/^\d+\s+/, "").replace(/^[0-9a-f^]{6,40}\s+\([^)]*\)\s?/i, "").trim();
+    if (stripped !== t && set.has(stripped)) return true;
+  }
+  if (hay.length <= 20000) { let n = 0; for (const t of set) { if (++n > 20000) break; if (hay.includes(t)) return true; } }
+  return false;
+}
 function citedFilesUnseenExact(answer, ws, sessionId) {
   // 두 갈래로 돌려준다(2026-07-29 결론): unseen=**승격에 쓸 강한 증거**로도 확인 안 된 것,
   // unseenWeak=강한 증거든 스크립트 글자든 아무 흔적도 못 찾은 것(경보용).
@@ -1377,7 +1405,8 @@ function citedFilesUnseenExact(answer, ws, sessionId) {
   let file;
   try { file = findRolloutById(sessionId); } catch { return unknown; }
   if (!file) return unknown;
-  const citedEvidence = citedResolvedEvidence(answer, ws);
+  const citedDetail = citedResolvedDetail(answer, ws);
+  const citedEvidence = new Map([...citedDetail].map(([k, v]) => [k, v.snippets]));
   const remaining = new Set(citedEvidence.keys());
   const remainingWeak = new Set(citedEvidence.keys());
   if (!remaining.size) return { checked: true, unseen: [], unseenWeak: [] };
@@ -1424,10 +1453,10 @@ function citedFilesUnseenExact(answer, ws, sessionId) {
       // 성공 코드와 비어 있지 않은 출력만으로도 다른 문장의 출력일 수 있다. 답에서 인용한 실제 줄 내용이
       // 반환물 안에 들어 있는 파일만 이번 턴에 다룬 것으로 인정한다.
       for (const f of rec.files) {
-        // 경보 축(약한 증거): 판독 명령이 그 파일을 지목했고 호출이 성공했으면 '다뤘다'로 본다.
-        //   실측(2026-07-29): 검증자가 파일을 읽고도 개수·해시만 출력하는 경우가 흔한데, 그때도
-        //   그 파일을 다룬 것은 사실이다. 경보 문구 자체가 '흔적 확인'이지 '내용 대조'가 아니다.
-        remainingWeak.delete(f.fp);
+        // 경보 축(약한 증거): 판독 명령이 그 파일을 지목했고 호출이 성공했으며 **출력에 그 파일의 실제 줄이 하나라도 있으면** '다뤘다'로 본다.
+        //   2026-07-29 처방('개수·해시만 출력해도 다룬 흔적')은 9판 blocker(ab-3)로 철회 — 성공 코드+비어 있지 않은 출력은 다른 문장의 출력일 수 있어
+        //   (`Get-Content foo -TotalCount 0; Write-Output done`) 파일 내용 없이 경보가 해제됐다. 내용을 받지 못한 판독은 인용 근거일 수 없다(outputContainsFileLine 주석).
+        if (outputContainsFileLine(proof.text, (citedDetail.get(f.fp) || {}).lines)) remainingWeak.delete(f.fp);
         // 승격 축(강한 증거): 종전 그대로 — 하네스가 기록한 인수 + 인용한 줄 내용이 출력에 실재해야 한다.
         if (f.st === "strong" && outputContainsCitedContent(proof.text, citedEvidence.get(f.fp))) remaining.delete(f.fp);
       }
@@ -5088,4 +5117,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, templateScriptCommands, maskNonCode, toolReadParts, scriptOwnerScan, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
+module.exports = { rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, templateScriptCommands, maskNonCode, toolReadParts, scriptOwnerScan, outputContainsFileLine, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
