@@ -1002,7 +1002,8 @@ function templateScriptCommands(rawText) {
   //    ③ 식별자는 내장(JSON·String·Math…)·결과 변수·반복/화살표 매개변수·`text(` 호출만, 선언 배열 이름은 `NAME[정수]` 읽기로만 ④ `${…}` 안도 같은 규칙
 //    ⑤ 임의 코드 실행 사슬 차단: constructor·__proto__·prototype·call/apply/bind·Function·globalThis·Reflect·Proxy·process 없음, 첨자는 정수·식별자만(문자열 첨자 금지).
   //    실행 흐름을 바꾸거나 명령 값을 바꿀 길이 글자에 없으면, 마무리는 어떤 모양이든 '인정=실행됨'을 해치지 않는다.
-  const BUILTIN = new Set(["JSON", "String", "Number", "Boolean", "Math", "Array", "Object", "Date", "undefined", "null", "true", "false", "NaN", "Infinity", "typeof", "instanceof", "in", "of", "for", "if", "else", "const", "return", "break", "continue", "try", "catch", "finally", "throw", "switch", "case", "default", "void", "text"]);
+  // 마무리에서 부를 수 있는 것은 순수 판독·출력뿐(변이 불가). Object/Array는 defineProperty/assign 같은 변이 통로라 제외(정직한 마무리는 text·JSON.stringify로 충분 — 11판 확인검증 blocker).
+  const BUILTIN = new Set(["JSON", "String", "Number", "Boolean", "Math", "Date", "undefined", "null", "true", "false", "NaN", "Infinity", "typeof", "instanceof", "in", "of", "for", "if", "else", "const", "return", "break", "continue", "try", "catch", "finally", "throw", "switch", "case", "default", "void", "text"]);
   const checkIds = (text, local) => {
     const re = /[A-Za-z_$][\w$]*/g;
     let mm;
@@ -1026,7 +1027,7 @@ function templateScriptCommands(rawText) {
     if (/(^|[^=!<>])=(?![=>])/.test(seg) || /\+\+|--/.test(seg)) return false;                      // 대입(복합 대입 포함)·증감 금지 — 비교·화살표만 예외
     if (/\bconst\b(?!\s+[A-Za-z_$][\w$]*\s+of\b)/.test(seg)) return false;
     // 임의 코드 실행 통로 차단: constructor/Function/prototype 사슬(`r.constructor.constructor("…")()`)·문자열 첨자(`r["constructor"]`)·전역 접근
-    if (/\b(?:constructor|__proto__|prototype|call|apply|bind|Function|globalThis|Reflect|Proxy|process|setTimeout|setInterval|queueMicrotask)\b/.test(seg)) return false;
+    if (/\b(?:constructor|__proto__|prototype|call|apply|bind|Function|globalThis|Reflect|Proxy|process|setTimeout|setInterval|queueMicrotask|Object|Array)\b/.test(seg)) return false; // Object/Array 변이 통로 차단(11판 확인검증 blocker — Object.defineProperty/assign로 선언 명령 변이)
     for (const mm of seg.matchAll(/\[/g)) { if (!/^\[\s*(?:\d+|[A-Za-z_$][\w$]*)\s*\]/.test(seg.slice(mm.index))) return false; } // 첨자는 정수·식별자만(문자열 첨자 금지)
     const local = new Set(extraIds);
     for (const mm of seg.matchAll(/\bfor\s*\(\s*const\s+([A-Za-z_$][\w$]*)\s+of\b/g)) local.add(mm[1]);
@@ -1034,7 +1035,7 @@ function templateScriptCommands(rawText) {
     for (const mm of seg.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*=>/g)) local.add(mm[1]);
     for (const nm of local) if (RESERVED.has(nm) || decls.has(nm) || top.has(nm)) return false;
     if (!checkIds(seg, local)) return false;
-    for (const mm of rawSeg.matchAll(/\$\{([^{}]*)\}/g)) { if (/(^|[^=!<>])=(?![=>])|\+\+|--|\b(?:constructor|__proto__|prototype|call|apply|bind|Function|globalThis|Reflect|Proxy|process)\b|\[\s*["']/.test(mm[1]) || !checkIds(mm[1], local)) return false; }
+    for (const mm of rawSeg.matchAll(/\$\{([^{}]*)\}/g)) { if (/(^|[^=!<>])=(?![=>])|\+\+|--|\b(?:constructor|__proto__|prototype|call|apply|bind|Function|globalThis|Reflect|Proxy|process|Object|Array)\b|\[\s*["']/.test(mm[1]) || !checkIds(mm[1], local)) return false; }
     return true;
   };
   // ── 최상위 문장 나누기(깊이 0의 `;`·개행) ──
@@ -1465,7 +1466,9 @@ function outputContainsFileLine(output, fileLines, opts) {
   const selfName = (opts && opts.name) ? String(opts.name) : "";
   const otherNames = ((opts && opts.others) || []).map((x) => String(x)).filter((x) => x && x !== selfName);
   const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const nameRe = (nm) => new RegExp("(^|[^A-Za-z0-9_.-])" + esc(nm) + "(?=$|[^A-Za-z0-9_-])", process.platform === "win32" ? "i" : "");
+  // [11판 확인검증 blocker] 파일명 소유 표시는 판독 도구가 붙이는 것만: 줄 시작의 경로 토큰 뒤 콜론(rg/Select-String `경로:번호:`)이나 구역 표시 줄(`@@ 파일명`).
+  // 본문 아무 데나 이름이 나온다고 소유로 보면(옛 정규식) 다른 파일의 공통 줄이 이름만 스쳐도 대상 소유로 오인된다.
+  const nameRe = (nm) => new RegExp("^(?:@@\\s+)?(?:[^\\s:]*[\\\\/])?" + esc(nm) + "(?=:|\\s|$)", process.platform === "win32" ? "i" : "");
   const selfRe = selfName ? nameRe(selfName) : null;
   const otherRes = otherNames.map(nameRe);
   const cand = [];
