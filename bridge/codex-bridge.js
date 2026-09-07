@@ -894,7 +894,8 @@ function nestedShellCommands(text) { return nestedShellCalls(text).map((c) => c.
 //      S2  [const R = ]await Promise.all|allSettled(NAME.map(V => tools.<f>({ cmd|command: V | 단축, <옵션>* })));[text(…)]
 //      S3  [const R = ]await tools.<f>({ cmd|command: NAME[정수], <옵션>* });[text(…)]      (S3는 여러 번 가능 — 그 정수 원소만 실행)
 //      S4  [const R = ]await tools.<f>({ cmd|command: "리터럴", <옵션>* });[text(…)]       (배열과 무관한 리터럴 명령 — 인라인 경로가 따로 인식)
-//    <옵션> = workdir: "…" | yield_time_ms|max_output_tokens|timeout_ms: 정수 | login: true|false. 키는 따옴표 표기도 허용. 도구 함수 이름은 tools.<아무 이름>(개명 무관).
+//    <옵션> = workdir: "…" | yield_time_ms|max_output_tokens|timeout_ms: 정수 | login: true|false. 키는 따옴표 표기도 허용. 도구 함수 이름은 실측 2종(tools.exec_command|shell_command)으로
+//    고정(7판: `tools.<아무 이름>`은 상속 속성 tools.constructor로 도구 호출 없이 정형을 채움 — 개명되면 정형이 깨져 경보가 남는 쪽이 안전). S0 원소의 JS 이스케이프는 \" \' \\ 만 허용.
 //    정형 안에서는 명령 리터럴이 그대로 실행되므로(다른 문장이 없어 값을 바꿀 길이 없음) '인정=실행됨'이 글자 수준에서 닫힌다. 유니코드 철자·템플릿 문자열·
 //    조기 종료 반복·그림자 선언·중복 키·계산 키는 정형에 없으므로 자동으로 미인정된다(6판 반례 전부).
 // 코드 전용 본문 — scriptOwnerScan의 inStr/inCmt 자리를 공백으로(길이 보존·개행 유지·닫는 따옴표 유지). 주석/문자열 속 글자는 코드가 아니다.
@@ -928,7 +929,8 @@ function templateArrayReads(rawText, boundWd, p) {
   const STR = "(?:\"[^\"\\n]*\"|'[^'\\n]*')"; // 코드 본문의 문자열 = 따옴표+공백(템플릿 문자열 제외)
   const KEY = (k) => "(?:[\"']?" + k + "[\"']?)";
   const OPT = "(?:\\s*,\\s*(?:" + KEY("workdir") + "\\s*:\\s*" + STR + "|" + KEY("(?:yield_time_ms|max_output_tokens|timeout_ms)") + "\\s*:\\s*\\d+|" + KEY("login") + "\\s*:\\s*(?:true|false)))*";
-  const CALL = (cmdExpr) => "tools\\s*\\.\\s*" + ID + "\\s*\\(\\s*\\{\\s*" + cmdExpr + OPT + "\\s*,?\\s*\\}\\s*\\)";
+  // [7판 blocker] `tools.<아무 이름>`은 상속 속성(tools.constructor 등)으로 도구 호출 없이 정형을 채울 수 있다 → 실측 실행 함수 2종으로 고정. 개명되면 정형이 깨져 경보가 남는다(fail-closed) — 그때 목록을 갱신한다.
+  const CALL = (cmdExpr) => "tools\\s*\\.\\s*(?:exec_command|shell_command)\\s*\\(\\s*\\{\\s*" + cmdExpr + OPT + "\\s*,?\\s*\\}\\s*\\)";
   const TEXT = (r) => "(?:\\s*text\\s*\\(\\s*(?:JSON\\s*\\.\\s*stringify\\s*\\(\\s*" + r + "\\s*\\)|" + r + "\\s*\\.\\s*output|String\\s*\\(\\s*" + r + "\\s*\\.\\s*output\\s*\\))\\s*\\)\\s*;?)?";
   // S0
   const m0 = new RegExp("^\\s*(?:const|let)\\s+(" + ID + ")\\s*=\\s*\\[\\s*((?:" + STR + "\\s*,\\s*)*" + STR + "\\s*,?)\\s*\\]\\s*;?", "y");
@@ -947,7 +949,10 @@ function templateArrayReads(rawText, boundWd, p) {
     const lit = rawText.slice(st, e); q = e;
     const mm = lit.match(/^"((?:[^"\\]|\\.)*)"$|^'((?:[^'\\]|\\.)*)'$/);
     if (!mm) return []; // 리터럴 경계 불명=정형 아님
-    elems.push(mm[1] !== undefined ? mm[1] : mm[2]);
+    const rawEl = mm[1] !== undefined ? mm[1] : mm[2];
+    // [7판 blocker] JS 이스케이프 중 따옴표·백슬래시(\" \' \\) 외(\n·\t·\uXXXX·\xHH 등)는 실행 문자열이 원문 글자와 달라진다 → 배열 전체 미인정
+    if (/\\(?!["'\\])/.test(rawEl)) return [];
+    elems.push(rawEl);
   }
   if (!elems.length) return [];
   let pos = d.index + d[0].length;

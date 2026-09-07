@@ -1007,6 +1007,14 @@ console.log("[3-7] 판독 형태 드리프트 봉합(2026-09-06 실측 — D-202
     writeRollout("d7" + tag, [userMsg("검증 요청"), ...exec7(code)]);
     ck("(" + tag + ") ★" + why + "=정형 아님 → 미인정(경보 유지)", citedFilesUnseenExact(answer, ws, "d7" + tag).unseenWeak.some((p) => p.endsWith("foo.ts")));
   }
+  // (tp11) ★7판 blocker: 상속 속성 tools.constructor는 도구가 아님 — 정형 함수명 2종 밖
+  writeRollout("d7tp11", [userMsg("검증 요청"), ...exec7('const cmds=[' + GREP_FOO + '];\nconst r=await tools.constructor({cmd:cmds[0],workdir:' + JSON.stringify(ws) + '});\ntext(JSON.stringify(r));')]);
+  ck("(tp11) ★tools.constructor=정형 아님 → 미인정(경보 유지)", citedFilesUnseenExact(answer, ws, "d7tp11").unseenWeak.some((p) => p.endsWith("foo.ts")));
+  // (tp12) ★7판 blocker: S0 원소의 JS 이스케이프(\\u0023·\\n)는 실행값이 달라짐 → 배열 미인정 · 허용 이스케이프(\\")는 그대로 인정
+  writeRollout("d7tp12", [userMsg("검증 요청"), ...exec7('const cmds=["git -c safe.directory=D:/x grep -n \\u0023 p -- foo.ts \\nWrite-Output done"];\nconst r=await tools.exec_command({cmd:cmds[0],workdir:' + JSON.stringify(ws) + '});\ntext(JSON.stringify(r));')]);
+  ck("(tp12) ★JS 이스케이프(\\u0023·\\n) 든 원소=미인정(경보 유지)", citedFilesUnseenExact(answer, ws, "d7tp12").unseenWeak.some((p) => p.endsWith("foo.ts")));
+  writeRollout("d7tp12b", [userMsg("검증 요청"), ...exec7('const cmds=[' + GREP_FOO + '];\nconst r=await tools.exec_command({cmd:cmds[0],workdir:' + JSON.stringify(ws) + '});\ntext(JSON.stringify(r));')]);
+  ck("(tp12b) 허용 이스케이프(\\\")만 든 원소는 인정", !citedFilesUnseenExact(answer, ws, "d7tp12b").unseenWeak.some((p) => p.endsWith("foo.ts")));
   // (tp8) PowerShell '' 이스케이프=한 문자열(6판 blocker) — 존재하지 않는 경로 하나 → 미인정
   const ps14 = "$files=@('bar.ts''foo.ts'); foreach($f in $files){ Get-Content -LiteralPath $f -TotalCount 1 }; Write-Output done";
   writeRollout("d7tp8", [userMsg("검증 요청"), ...exec7('const r = await tools.exec_command({cmd: ' + JSON.stringify(ps14) + ', workdir: ' + JSON.stringify(ws) + '});')]);
