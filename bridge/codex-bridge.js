@@ -852,6 +852,7 @@ function scriptOwnerScan(s) {
 //      S5  [const R = ]await Promise.all|allSettled([ tools.<f>({ cmd|command: "리터럴", <옵션>* }), … ]);[마무리(R)]   (실측 2026-09-07 · 원소마다 자기 workdir)
 //    마무리 = 출력 전용 문장들(11판: 모양 열거 대신 검증기 emissionOk — tools·await·대입·증감·선언·new/function 없음, 식별자는 내장·결과 변수·반복/화살표 매개변수·`text(`만,
 //    선언 배열은 `NAME[정수]` 읽기만; 예: `text(r.output); text(`EXIT ${r.exit_code}`)` · `for (const r of results) text(JSON.stringify({exit_code:r.exit_code,output:r.output}))` ·
+//    `for (let i = 0; i < results.length; i++) text(`RESULT_${i+1}…${results[i].output}`)`(결과 목록 첨자 순회=for-of 동치 · 사용자 결정 8f2908ced14fc9a2) ·
 //    `if (r.session_id) text(…)` · `outputs.forEach((r)=>{…})`). S1 본문의 호출 뒤 문장도 같은 검증기. 문장은 깊이 0의 `;`/개행으로 나눈다.
 //    <옵션> = workdir: "…" | yield_time_ms|max_output_tokens|timeout_ms: 정수 | login: true|false — 같은 키 반복=미인정. 키는 따옴표 표기도 허용.
 //    tools.<f>는 실측 2종(tools.exec_command|shell_command) 고정(7판: `tools.<아무 이름>`은 상속 속성 tools.constructor로 도구 호출 없이 정형을 채움 —
@@ -1026,8 +1027,13 @@ function templateScriptCommands(rawText) {
     return true;
   };
   const emissionOk = (a, b, extraIds) => {
-    const rawSeg = raw.slice(a, b), seg = code.slice(a, b);
+    const rawSeg = raw.slice(a, b);
+    let seg = code.slice(a, b);
     if (!seg.trim()) return true;
+    // [사용자 결정 8f2908ced14fc9a2 · 2026-09-09] 결과 목록 첨자 순회 `for (let i = 0; i < results.length; i++)`(검증자 실측 마무리 — 9/7 정직 6건이 12판 for-of 제한에 걸림)는
+    // for-of와 동치로 본다: 머리를 `for (const i of results)`로 바꿔 아래 검사(let·증감 금지·for-of만)를 그대로 통과시키고 i를 지역 이름으로 등록한다. 그 밖의 C 스타일 for는 계속 미인정.
+    const idxLoop = [];
+    seg = seg.replace(/\bfor\s*\(\s*let\s+([A-Za-z_$][\w$]*)\s*=\s*\d+\s*;\s*\1\s*<\s*([A-Za-z_$][\w$]*)\s*\.\s*length\s*;\s*\1\s*\+\+\s*\)/g, (m, i, arr) => { idxLoop.push(i); return "for (const " + i + " of " + arr + ")"; });
     if (/\btools\b|\bawait\b/.test(rawSeg)) return false;
     if (/\b(?:delete|new|function|class|yield|import|require|eval|this|with|var|let|while|do|async|arguments)\b/.test(seg)) return false;
     if (/(^|[^=!<>])=(?![=>])/.test(seg) || /\+\+|--/.test(seg)) return false;                      // 대입(복합 대입 포함)·증감 금지 — 비교·화살표만 예외
@@ -1039,6 +1045,7 @@ function templateScriptCommands(rawText) {
     if (/\b(?:constructor|prototype|call|apply|bind|Function|globalThis|Reflect|Proxy|process|setTimeout|setInterval|queueMicrotask|Object|Array)\b/.test(seg)) return false; // Object/Array 등 변이 통로 차단(11판 확인검증)
     for (const mm of seg.matchAll(/\[/g)) { if (!/^\[\s*(?:\d+|[A-Za-z_$][\w$]*)\s*\]/.test(seg.slice(mm.index))) return false; } // 첨자는 정수·식별자만(문자열 첨자 금지)
     const local = new Set(extraIds);
+    for (const i of idxLoop) local.add(i);
     for (const mm of seg.matchAll(/\bfor\s*\(/g)) { if (!/^for\s*\(\s*(?:const|let)\s+[A-Za-z_$][\w$]*\s+of\b/.test(seg.slice(mm.index))) return false; } // for는 for-of만(C 스타일 for(;;) 등 미인정)
     for (const mm of seg.matchAll(/\bfor\s*\(\s*const\s+([A-Za-z_$][\w$]*)\s+of\b/g)) local.add(mm[1]);
     for (const mm of seg.matchAll(/\(\s*([A-Za-z_$][\w$]*(?:\s*,\s*[A-Za-z_$][\w$]*)*)\s*\)\s*=>/g)) for (const x of mm[1].split(",")) local.add(x.trim());
