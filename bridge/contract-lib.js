@@ -223,7 +223,9 @@ function appendIntegrityEvent(ev, opts) {
     let events = readIntegrityEvents();
     if (opts && opts.supersedeSameKindWs && ev && ev.kind && ev.workspace) {
       const wsN = normWs(String(ev.workspace));
-      events = events.filter((e) => !(!e.ack && e.kind === ev.kind && e.workspace && normWs(e.workspace) === wsN));
+      // [§B1 · ab-1] repoKey 를 넘기면 같은 종류·같은 프로젝트·같은 저장소 표식의 미확인 경보만 갈아끼운다(다른 저장소 경보 보존).
+      const rkN = opts.repoKey !== undefined ? String(opts.repoKey || "") : null;
+      events = events.filter((e) => !(!e.ack && e.kind === ev.kind && e.workspace && normWs(e.workspace) === wsN && (rkN === null || String(e.repoKey || "") === rkN)));
     }
     // 호출자가 id를 미리 만들어 넘기면 존중한다(재확인 배선 — 이벤트와 challenge 장부를 같은 id로
     // 결속해야 해소 투영(ack)이 정확한 1건을 가리킨다). 없으면 종전대로 생성.
@@ -891,6 +893,9 @@ function parseFindingsBlock(text) {
     if (typeof o.title !== "string" || !o.title.trim() || /[\r\n\u2028\u2029]/.test(o.title)) { bad(i + 1, "bad-title"); continue; } // '1줄' 계약 — JSON \n 디코딩 다행 제목 거부(구현검증 1차 blocker②)
     if (o.file !== undefined && typeof o.file !== "string") { bad(i + 1, "bad-file"); continue; }
     const rec = { tag, title: o.title.trim(), file: typeof o.file === "string" ? o.file : "" };
+    // [HARNESS-STRUCTURE-2026-09-11 §B1] 인용 대조 재료 — line(양의 정수)·detail(한 줄·400자) 보존. 형식 무효=드롭(기존 규칙).
+    if (Number.isInteger(o.line) && o.line > 0 && o.line <= 10000000) rec.line = o.line;
+    if (typeof o.detail === "string" && o.detail.trim()) rec.detail = o.detail.replace(/[\r\n\u2028\u2029]+/g, " ").trim().slice(0, 400);
     if (out.ver === "v2") { // 증분 2 신필드 — 형식 무효=드롭(심사에서 '미기재' 취급 — 표기 실수가 강등·면제를 오발동하지 않게)
       if (FINDING_ORIGINS.includes(o.origin)) rec.origin = o.origin;
       if (o.supported === true || o.supported === false) rec.supported = o.supported;
@@ -1010,11 +1015,11 @@ function appendAttachUsage(ev) {
   } catch { return false; } // best-effort — 기록 실패가 ask 흐름을 막지 않음
 }
 // ids="all"이면 전체, 배열이면 그 id들만 ack 처리(확인함). 확장이 호출.
-function ackIntegrityEvents(ids) {
+function ackIntegrityEvents(ids, extra) { // extra(선택): 확인 사유 필드 병합(예 {autoAcked:"recheck-clean"} — [§B1] 다음 답 재대조 해소)
   return withIntegrityLock(() => {
     const events = readIntegrityEvents();
     const set = ids === "all" || !ids ? null : new Set(ids);
-    for (const e of events) { if (!set || set.has(e.id)) e.ack = true; }
+    for (const e of events) { if (!set || set.has(e.id)) { e.ack = true; if (extra && typeof extra === "object") Object.assign(e, extra); } }
     return atomicWrite(INTEGRITY_FILE, JSON.stringify({ events }));
   });
 }

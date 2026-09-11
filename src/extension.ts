@@ -1871,7 +1871,7 @@ function computeChallengeView(recs: any[], now: number, unacked?: Set<string>): 
 
 // 무결성 신호: 브릿지(verify-guard)가 '검증 미완' 등을 integrity.json에 기록 → 여기서 읽어 상태바/대시보드로 가시화.
 // 단순 게이트(차단)로 끝내지 않고 사람에게 보이게 하는 채널의 소비자 쪽. 포맷은 contract-lib과 공유.
-interface IntegrityEvent { id: string; ts?: string; kind?: string; severity?: string; detail?: string; detailKo?: string; detailEn?: string; ack?: boolean; session?: string; workspace?: string; sig?: string }
+interface IntegrityEvent { id: string; ts?: string; kind?: string; severity?: string; detail?: string; detailKo?: string; detailEn?: string; ack?: boolean; session?: string; workspace?: string; repoKey?: string; sig?: string }
 function readIntegrity(): IntegrityEvent[] {
   try { const d = JSON.parse(fs.readFileSync(INTEGRITY_FILE, "utf8")); return Array.isArray(d.events) ? d.events : []; } catch { return []; }
 }
@@ -1883,8 +1883,12 @@ function readVisibleIntegrity(ws: string | null): IntegrityEvent[] {
   // detail은 '기록 시점 언어'로 저장된 데이터 — 표시 소비자(상태바 툴팁·대시보드 배너)가 모두 이 함수를 거치므로,
   // 여기 한 곳에서 현재 언어로 현지화한 '복사본'을 준다(원본 integrity.json은 안 건드림 — ack는 id로 처리라 무관).
   const en = loadLangExt() === "en";
+  // [HARNESS-STRUCTURE-2026-09-11 §B1 · ab-1] 저장소 결속 경보(citation-mismatch)는 현재 정찰 저장소 표식과 일치할 때만 보인다 —
+  // 같은 폴더에서 정찰 대상이 바뀌면 이전 저장소의 인용 불일치가 새 저장소 화면에 새지 않는다. 표식 계산은 bridge 의 repoKeyOf(단일 산식).
+  const rkNow = (() => { try { const CLr: any = require(path.join(BRIDGE_DIR, "contract-lib.js")); return String(CLr.repoKeyOf(scoutTargetFor(ws).repo) || ""); } catch { return ""; } })();
   return readIntegrity()
     .filter((e) => !e.workspace || normWs(e.workspace) === normWs(ws))
+    .filter((e) => e.kind !== "citation-mismatch" || (!!rkNow && String(e.repoKey || "") === rkNow))
     .map((e) => ({ ...e, detail: localizeIntegrityDetail(e, en) }));
 }
 
@@ -5335,6 +5339,7 @@ class Dashboard {
   .sevdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:middle;flex:none}
   .sevdot.err{background:var(--vscode-charts-red)}
   .sevdot.warn{background:var(--vscode-charts-orange)}
+  .sevdot.info{background:var(--vscode-charts-blue,#4a90d9)}
   .livestrip{border:1px solid var(--vscode-panel-border);border-radius:8px;padding:11px 14px;margin:4px 0 14px;background:var(--vscode-sideBar-background)}
   .lsflow{display:flex;align-items:center;justify-content:center;gap:12px}
   .lsbox{padding:5px 12px;border-radius:6px;border:1px solid var(--vscode-panel-border);font-weight:700;font-size:12px;opacity:.5;transition:all .25s}
@@ -8506,7 +8511,7 @@ class Dashboard {
         const ul = el("ul");
         iev.slice(-6).forEach(function(e){
           const li = el("li");
-          li.appendChild(el("span","sevdot " + (e.severity==="error"?"err":"warn")));
+          li.appendChild(el("span","sevdot " + (e.severity==="error"?"err":e.severity==="info"?"info":"warn"))); // info=정보 등급(읽기 흔적 · 경보 아님)
           li.appendChild(document.createTextNode(e.detail || e.kind || T("무결성 신호","integrity signal")));
           if (e.kind === "evidence-unseen" && e.id && nd9[e.id]) li.appendChild(el("span","muted"," — " + T("재확인 불가 항목(인용 파일이 검증 범위 밖이라 자동 해소 없음 · '확인함'으로 정리)","recheck not possible (cited files outside the verifiable scope — no auto-clear · resolve via 'Acknowledged')")));
           if (e.ts) li.appendChild(el("span","when","  ("+new Date(e.ts).toLocaleString()+")"));

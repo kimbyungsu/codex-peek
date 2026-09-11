@@ -791,6 +791,7 @@ console.log("[8] 발행 정책 실행(2026-08-27 매 턴 반복 경고 봉합) �
   ck("A: 경보 생성(eventId)", !!(rA && rA.eventId));
   const evA = readEvs().find((e) => e.id === (rA && rA.eventId));
   ck("A: 미ack(배너 대상)", !!evA && evA.ack !== true);
+  ck("A: [D3 2026-09-11] 표시 등급=info(배너·상태바 경보 아님 · 재확인 배선은 그대로)", !!evA && evA.severity === "info");
   const shaFoo = crypto.createHash("sha256").update(fs.readFileSync(path.join(ws8, "foo8.ts"))).digest("hex");
   const fpKeys = evA && evA.filesFp ? Object.keys(evA.filesFp) : [];
   const keyFoo = fpKeys.find((k) => /foo8\.ts$/.test(k)), keyBar = fpKeys.find((k) => /bar8\.ts$/.test(k));

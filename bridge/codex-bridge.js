@@ -1693,6 +1693,28 @@ function shouldSuppressUnseenAcked(events, implVal, wsVal, fpMap, resolvedEventI
 }
 // ws=configWs(이벤트 workspace 라벨 — 대시보드 귀속), execCwd=실제 실행 폴더(인용 상대경로 해석 기준).
 // 분리 이유: 코덱스 답의 '(경로:라인)' 인용은 코덱스가 돈 폴더(execCwd) 기준 상대경로라, 라벨용 연 폴더로 해석하면 오탐.
+// [HARNESS-STRUCTURE-2026-09-11 §B1·D3] 답 하단 정보 줄(경보 아님) — 읽기 흔적 확인 k/n(추정·판정 권위 없음)과 인용 대조 요약.
+// 순수 계산(쓰기 없음). 판독 불가(checked:false)·인용 없음이면 빈 문자열.
+function evidenceInfoLine(answer, execCwd, sessionId, roots, lang) {
+  const en = lang === "en";
+  const parts = [];
+  try {
+    const cited = citedResolvedBasenames(answer, execCwd);
+    const total = Array.isArray(cited) ? cited.length : 0;
+    if (total > 0) {
+      const ex = citedFilesUnseenExact(answer, execCwd, sessionId);
+      if (ex && ex.checked) { const seen = Math.max(0, total - (ex.unseen || []).length); parts.push(en ? `[read trace] confirmed ${seen}/${total} (heuristic · no verdict authority)` : `[읽기 흔적] 확인 ${seen}/${total}(추정 · 판정 권위 없음)`); }
+    }
+  } catch { /* 표시 생략 */ }
+  try {
+    const CC9 = require("./citation-check.js");
+    const parsed9 = parseFindingsBlock(answer);
+    const cc9 = CC9.citationCheck({ findings: parsed9.present && parsed9.ok ? parsed9.findings : [], bodyText: answer, roots: (Array.isArray(roots) && roots.length ? roots : [execCwd]), resolvePath: (raw) => resolveCitedPath(raw, execCwd) });
+    const line9 = CC9.summaryLine(cc9, en);
+    if (line9) parts.push(line9);
+  } catch { /* 표시 생략 */ }
+  return parts.length ? "\n" + parts.join(" · ") : "";
+}
 function flagEvidence(answer, ws, sessionId, execCwd, chCtx) {
   // chCtx(재확인 배선·증분 4): {roots, promptText, mode, lang, campaignId, askId} — 있으면 경보 기록
   // '직후'에 challenge를 동결한다(설계 A — 경보 시점 세대 고정. 후처리 뒤에 읽으면 그 사이 편집된
@@ -1714,6 +1736,39 @@ function flagEvidence(answer, ws, sessionId, execCwd, chCtx) {
         detailEn: `${mism.length} cited evidence item(s) do not match real files/lines (nonexistent lines): ${mism.slice(0, 3).join(" / ")}`,
       });
     }
+    // [HARNESS-STRUCTURE-2026-09-11 §B1] 인용 대조 — 지적 행의 file·line·detail 을 실제 파일과 대조(읽기 추정이 아니라 결과 대조).
+    // 경보=지적 행의 file-missing·line-out-of-range·token-not-near-line 만. 루트 밖=흔적·경보 아님(ab-1). 토큰 원문 미기록(ab-7).
+    // 저장소 결속: repoKey(검증 시작 스냅샷)를 싣고 같은 종류 갈아끼우기도 workspace+repoKey 로(저장소 분할 단일 규칙과 동형).
+    try {
+      const CC9 = require("./citation-check.js");
+      const parsed9 = parseFindingsBlock(answer);
+      const roots9 = chCtx && Array.isArray(chCtx.citeRoots) && chCtx.citeRoots.length ? chCtx.citeRoots : (chCtx && Array.isArray(chCtx.roots) && chCtx.roots.length ? chCtx.roots : [pathWs]);
+      const cc9 = CC9.citationCheck({ findings: parsed9.present && parsed9.ok ? parsed9.findings : [], parsedOk: !!(parsed9.present && parsed9.ok), bodyText: answer, roots: roots9, resolvePath: (raw) => resolveCitedPath(raw, pathWs) });
+      const rk9 = chCtx && typeof chCtx.repoKey === "string" ? chCtx.repoKey : "";
+      // [구현 검증 1판 blocker] 이전 미확인 불일치가 이번 답으로 해소됐으면 자동 확인(같은 ws+repoKey · 계보 일치 또는 정상 파싱+불일치 0) — 갈아끼우기는 새 경보가 있을 때만 돌기 때문.
+      try {
+        const wsN9 = normWs(String(ws));
+        const prev9 = readIntegrityEvents().filter((e) => e && !e.ack && e.kind === "citation-mismatch" && e.workspace && normWs(e.workspace) === wsN9 && String(e.repoKey || "") === rk9);
+        const byReason9 = {};
+        for (const e of prev9) { const why9 = CC9.resolvedByNext(e, cc9); if (why9) (byReason9[why9] = byReason9[why9] || []).push(e.id); }
+        for (const why9 of Object.keys(byReason9)) ackIntegrityEvents(byReason9[why9], { autoAcked: why9, autoAckedAt: nowIso() });
+      } catch { /* best-effort — 해소 실패는 경보 잔존(안전 방향) */ }
+      if (cc9.alerts.length) {
+        const en9 = !!(chCtx && chCtx.lang === "en");
+        appendIntegrityEvent({
+          ts: nowIso(),
+          session: claudeId() || ((readActive() || {}).claudeSession) || "",
+          workspace: ws,
+          ...(rk9 ? { repoKey: rk9 } : {}),
+          kind: "citation-mismatch",
+          severity: "warning", // 노랑 — 검증자가 적은 위치가 실제 파일과 다름(사실 대조 결과 · 추정 아님)
+          items: cc9.alerts.map((a) => ({ file: path.basename(String(a.file || "")), line: a.line, kind: a.kind, ...(a.total ? { total: a.total } : {}), ...(a.tokenFp ? { tokenFp: a.tokenFp } : {}), ...(a.findingId ? { findingId: a.findingId } : {}) })),
+          detail: CC9.alertDetail(cc9.alerts, en9),
+          detailKo: CC9.alertDetail(cc9.alerts, false),
+          detailEn: CC9.alertDetail(cc9.alerts, true),
+        }, { supersedeSameKindWs: true, repoKey: rk9 });
+      }
+    } catch { /* best-effort — 대조 실패가 검증 흐름을 막지 않음 */ }
     const seenChk = citedFilesUnseen(answer, pathWs, sessionId);
     const unseen = seenChk.checked ? seenChk.unseen : []; // 판단 보류(checked=false)는 경보 안 함 — 종전과 동일한 보수성
     // [반복 억제 2026-08-21 사용자 실보고] 같은 세션에서 아직 확인 안 된(미ack) 같은 파일 집합의 근거의심이
@@ -1790,7 +1845,7 @@ function flagEvidence(answer, ws, sessionId, execCwd, chCtx) {
         // ① 전량 범위 밖=사전 확인 기록(배너 제외) — 삭제가 아니라 ack 상태로 남는 기록(ab-5).
         ...(noDispatch ? { ack: true, autoAcked: "no-dispatch" } : {}),
         kind: "evidence-unseen",
-        severity: "warning", // 노랑(의심) — '안 읽음' 단정이 아니라 '기록에서 다룬 흔적 미확인'
+        severity: "info", // [D3 · 사용자 결정 2a89097203a7ce9b 2026-09-11] 정보 등급 — 배너·상태바 경보 아님(읽기 추정은 판정 권위 없음). 재확인 신호·동결·발송·해소 규칙은 불변(EVIDENCE-RECONFIRM 정본)
         // detailKo/detailEn 동시 저장(동적 목록 포함) — 표시부가 현재 언어 선택. detail은 구버전 판독 폴백.
         detail: tB(detKo, detEn),
         detailKo: detKo,
@@ -4744,11 +4799,15 @@ async function cmdAsk(rest) {
     const held9 = postflightHeld(attCarrier);
     const proofBind = held9 ? {} : (writeProof(verifierSession, answer, ws) || {}); // 저장 키=구현자 세션(불변) — 이 인자는 proof 안 검증자 메타데이터(설계 blocker③)
     if (!held9) attempt.proofAccepted(); // 증명 실물 확정(이후 예외=postprocess-error — proof-rejected 오분류 차단·6차 blocker)
+    const repoKeySnapE9 = (() => { try { return repoKeyOf(resolveScoutRepo(ws, contractSnap).repo); } catch { return ""; } })(); // [§B1] citation-mismatch 저장소 결속(ab-1) — 검증 시작 스냅샷(재확인 루트 계산과 무관)
+    // [§B1 · 구현 검증 1판 blocker] 인용 대조 루트=repoKey 와 같은 해석(반대 언어 슬롯 상속 포함) — 재확인 루트(chRoots=동결 원시값 규칙)와 분리.
+    const citeRootsE9 = (() => { const r = [exec, ws]; try { const sr = resolveScoutRepo(ws, contractSnap).repo; if (sr && path.isAbsolute(sr)) r.push(sr); } catch { /* 루트 추가 없음 */ } return r; })();
     const chRoots = [exec, ws];
     const chScout = contractSnap && typeof contractSnap.scoutRepo === "string" ? contractSnap.scoutRepo.trim() : "";
     if (chScout && path.isAbsolute(chScout)) chRoots.push(chScout);
     const evAlert = flagEvidence(answer, ws, verifierSession, exec, {
       roots: chRoots, promptText, mode: harnessModeSnap, lang: langSnap,
+      repoKey: repoKeySnapE9, citeRoots: citeRootsE9, // [§B1] citation-mismatch 저장소 결속(ab-1)·대조 루트(상속 저장소 포함)
       campaignId: (durableEnv && durableEnv.ok && durableEnv.job.campaignId) || "direct", askId,
     });
     flagLedgerConfirms(answer, ws, verifierSession, exec, { askId, attach: attCarrier });
@@ -4779,6 +4838,7 @@ async function cmdAsk(rest) {
       + (attCarrier && attCarrier.sessionNote ? "\n" + attCarrier.sessionNote : "") // [§A2] 무효 연결 → 새 방 생성 고지(침묵 생성 금지)
       + (attCarrier && attCarrier.selOver && (attCarrier.selOver.items || attCarrier.selOver.bytes) ? "\n" + (langSnap === "en" ? `[archive rules] related items ${attCarrier.selOver.count} · ${attCarrier.selOver.bytesTotal} bytes — above the normal range, ALL included · consider tidying the archive` : `[서고 수칙] 관련 수칙 ${attCarrier.selOver.count}항 · ${attCarrier.selOver.bytesTotal}바이트 — 정상 범위 초과, 전량 동봉 · 서고 정리 권장`) : "") // [§4-B ④] 정보 행(경보 아님)
       + envelopeWarnLine(ws, langSnap)
+      + evidenceInfoLine(answer, exec, verifierSession, citeRootsE9, langSnap) // [§B1·D3] 읽기 흔적·인용 대조 정보 줄(경보 아님)
       + budgetNoticeLines(budgetGate.res, langSnap, profileSnap)
       + breakdownNoticeFor(ws, langSnap, budgetGate.res, repoKeySnap9) // [단일 규칙 · 5판 blocker②] 부가 보고 3종=시작 스냅샷 저장소 행만(결과·checkpoint에 타 저장소 신호 결합 금지)
       + envelopeCandidateNoticeFor(ws, langSnap, budgetGate.res, profileSnap, repoKeySnap9)
@@ -5335,4 +5395,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, templateScriptCommands, maskNonCode, toolReadParts, scriptOwnerScan, outputContainsFileLine, callMentionedFiles, scriptLiteralLines, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
+module.exports = { evidenceInfoLine, resolveCitedPath, rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, templateScriptCommands, maskNonCode, toolReadParts, scriptOwnerScan, outputContainsFileLine, callMentionedFiles, scriptLiteralLines, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };

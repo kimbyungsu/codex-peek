@@ -294,7 +294,7 @@ console.log("[5] 배포 파일 — 3카피 패리티+실물+deepseek enrich 계�
   const a = require(path.join(ROOT, "install.js")).BRIDGE_SCRIPTS;
   const c = require(path.join(ROOT, "bridge", "map-cutover.js")).EXPECTED_DEPLOY_FILES;
   const h = fs.readFileSync(path.join(ROOT, "src", "hook-setup.ts"), "utf8");
-  ok(a.length === 33 && c.length === 33 && JSON.stringify([...a].sort()) === JSON.stringify([...c].sort()), "33파일(+cap-handoff·router·enrich·intent·providers·retrieval·evidence-challenge·probe-batch·provenance·selector-runner·preview-gate[4b]·session-start[§4-B ①]·curation[CURATION v3]) 집합 일치");
+  ok(a.length === 34 && c.length === 34 && JSON.stringify([...a].sort()) === JSON.stringify([...c].sort()), "34파일(+cap-handoff·router·enrich·intent·providers·retrieval·evidence-challenge·probe-batch·provenance·selector-runner·preview-gate[4b]·session-start[§4-B ①]·curation[CURATION v3]·citation-check[HARNESS-STRUCTURE §B1]) 집합 일치");
   ok(h.includes('"enrich-providers.js"') && a.every((f) => fs.existsSync(path.join(ROOT, "bridge", f))), "hook-setup 포함+전부 실물");
   const db = fs.readFileSync(path.join(ROOT, "bridge", "deepseek-bridge.js"), "utf8");
   ok(db.includes('cmd === "enrich"') && /enrich-result-v1/.test(db) && db.includes("enrich-shape-fail") && db.includes('inheritedUsageContext("map-enrich"'), "deepseek enrich — strict 표지·repair 1회 실패 표지·호출별 v2 usage");
