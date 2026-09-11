@@ -130,7 +130,7 @@ t("재전송 트리거 ② 보낸 시각 뒤 compacted — 검증자 스레드 �
   assert.strictEqual(c9.deliveryOut.mode, "slim", "after resend+confirm the old compaction is before sentAt");
 });
 
-t("재전송 트리거 ③ 검증 도중 compacted(postflight) — 판정 권위 없음(보류)+판단 관문 마커(re-verify)+레코드 pending → 다음 판 전문", () => {
+t("재전송 트리거 ③ 검증 도중 compacted(postflight) — 판정 영향 없음(사용자 결정 압축 무반응 2026-09-11)·레코드 pending → 다음 판 전문·상태 줄 1줄", () => {
   const T3 = "2026-08-31T00:04:00.000Z";
   const c10 = { delivery: { session: SESS, rolloutFile } }; CB.withContract("요청", wsE, "ko", c10, "core", CL.loadContract(wsE, "ko"), "ask-8");
   assert.strictEqual(c10.deliveryOut.mode, "slim");
@@ -139,16 +139,14 @@ t("재전송 트리거 ③ 검증 도중 compacted(postflight) — 판정 권위
   assert.deepStrictEqual(pf, { st: "ok", compacted: true, ts: "2026-08-31T00:04:30.000Z" });
   assert.strictEqual(CL.readDirectiveDelivery(SESS).pending, true); assert.strictEqual(CL.readDirectiveDelivery(SESS).pendingWhy, "compacted-mid-ask");
   const mfl = { machine: { effective: "pass", parse: { ok: true, findings: [] } }, notice: "" };
-  assert.strictEqual(CB.applyPostflightHold(mfl, c10, wsE, "ask-8", "no-campaign", "ko"), true);
-  assert.strictEqual(mfl.machine.effective, "inconclusive"); assert.strictEqual(mfl.machine.demoted, true); assert.strictEqual(mfl.machine.reasonKey, "compacted-mid-ask");
-  assert.ok(mfl.notice.includes("[규약 전달 · 보류]") && mfl.notice.includes("round-judge ask-8 re-verify"), mfl.notice);
-  assert.ok(CL.machineReasonText(mfl.machine, false).includes("검증 도중 검증자 기억 압축"));
-  assert.deepStrictEqual(CL.judgeRequiredPending(wsE).map((x) => [x.askId, x.reason]).filter((x) => x[0] === "ask-8"), [["ask-8", "compacted-mid-ask"]]);
-  // [확인 검증 blocker①(ab-3)] 압축 보류는 close-oos로 닫을 수 없다 — re-verify/escalate만
-  assert.deepStrictEqual(CL.resolveJudgeRequired(wsE, "ask-8", "close-oos", { note: "범위 밖 종결 시도 — 거부돼야 함" }), { ok: false, reason: "choice-not-allowed", allowed: ["re-verify", "escalate"] });
-  assert.deepStrictEqual(CL.judgeRequiredPending(wsE).map((x) => x.askId).filter((x) => x === "ask-8"), ["ask-8"], "marker survives the rejected close-oos");
-  assert.strictEqual(CL.resolveJudgeRequired(wsE, "ask-8", "re-verify", { note: "압축 뒤 판정 — 전문 재전송 재판" }).ok, true);
-  assert.strictEqual(CB.postflightHeld(c10), true, "held → finishVerifyRun skips the success proof");
+  // [압축 무반응 · 결정 5f44378c1c318fe2] 강등·판단 관문 마커·보류 없음 — 판정은 그대로, 상태 줄 1줄만
+  assert.strictEqual(CB.applyPostflightHold(mfl, c10, wsE, "ask-8", "no-campaign", "ko"), false);
+  assert.strictEqual(mfl.machine.effective, "pass"); assert.strictEqual(mfl.machine.demoted, undefined); assert.strictEqual(mfl.machine.reasonKey, undefined);
+  assert.ok(mfl.notice.includes("[규약 전달]") && mfl.notice.includes("판정에 영향 없음") && mfl.notice.includes("2026-08-31T00:04:30.000Z") && !mfl.notice.includes("보류"), mfl.notice);
+  assert.deepStrictEqual(CL.judgeRequiredPending(wsE).map((x) => x.askId).filter((x) => x === "ask-8"), [], "no judgment-gate marker for a compacted verdict");
+  assert.strictEqual(CB.postflightHeld(c10), false, "compacted → not held → finishVerifyRun records the success proof");
+  const mflEn = { machine: { effective: "pass" }, notice: "" };
+  assert.strictEqual(CB.applyPostflightHold(mflEn, c10, wsE, "ask-8", "no-campaign", "en"), false); assert.ok(mflEn.notice.includes("no effect on this verdict"), mflEn.notice);
   // 판독 불가 postflight=압축 여부 미상 → 같은 보류(권위 없음·증명 미기록)
   const cU = { deliveryOut: fullOut, postflight: { st: "unreadable", compacted: false, ts: null } };
   const mflU = { machine: { effective: "pass" }, notice: "" };

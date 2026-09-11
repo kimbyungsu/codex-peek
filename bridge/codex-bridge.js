@@ -2812,15 +2812,26 @@ function die(msg, code = 1) {
 }
 
 const ASK_FLAGS = new Set(["--allow-new", "--force-new", "--net", "--force-resend", "--folder-changed-ok"]); // --folder-changed-ok=[P7 ⓑ] 폴더 변경 기록 확인 후 진행
+// [HARNESS-STRUCTURE-2026-09-11 §A2] 값 플래그(다음 인자가 값): --decision <결정 장부 id> — 강제 새 방 관문. 값은 프롬프트에서 빠지고 flags에 쌍으로 남아
+// ask-start 의 job.flags → 작업자 spawn 인자 → ask 경로가 같은 관문을 본다(값 인자를 구분하지 않으면 id가 프롬프트에 섞이는 반례 — 설계 검증 1판 보완).
+const ASK_VALUE_FLAGS = new Set(["--decision"]);
 function askRequest(rest) {
-  const flags = (rest || []).filter((x) => ASK_FLAGS.has(x));
-  let prompt = (rest || []).filter((x) => !ASK_FLAGS.has(x) && x !== "--job-prompt").join(" ").trim();
+  const arr = rest || [];
+  const flags = [], words = []; let decisionId = "";
+  for (let i = 0; i < arr.length; i++) {
+    const x = arr[i];
+    if (ASK_VALUE_FLAGS.has(x)) { const v = String(arr[i + 1] || "").trim(); i++; if (x === "--decision") decisionId = v; flags.push(x, v); continue; }
+    if (ASK_FLAGS.has(x)) { flags.push(x); continue; }
+    if (x === "--job-prompt") continue;
+    words.push(x);
+  }
+  let prompt = words.join(" ").trim();
   // 내구 작업 worker 전용: 프롬프트를 프로세스 명령줄에 노출하지 않고 job JSON에서 읽는다.
   if ((rest || []).includes("--job-prompt") && process.env.CODEX_BRIDGE_JOB_PROMPT_FILE) {
     try { prompt = String(JSON.parse(fs.readFileSync(process.env.CODEX_BRIDGE_JOB_PROMPT_FILE, "utf8")).prompt || "").trim(); }
     catch { prompt = ""; }
   }
-  return { flags, prompt };
+  return { flags, prompt, decisionId };
 }
 
 function askJobFile(id) {
@@ -4076,17 +4087,26 @@ function postflightDelivery(session, carrier, callStartIso, rolloutFile) {
   writeDirectiveDelivery(session, { ...(prev || { ws: "", gen: p.gen, parts: p.parts, sentAt: callStartIso, askId: "", reason: p.reason }), rolloutFile: rf, pending: true, pendingWhy: rc.st === "ok" ? "compacted-mid-ask" : "rollout-unreadable" });
   return pf;
 }
-// 검증 도중 압축이 잡힌 판정=권위 없음(보류) — 기존 '보류' 강등 경로 그대로(기계 판정 강등+판단 관문 마커: 구현자가 round-judge re-verify로 재판)
-// 보류 조건=압축 감지 또는 판독 불가(압축 여부 미상) — 둘 다 '권위 없음'. 이 판의 통과 증명(proof)은 기록되지 않으므로(finishVerifyRun) 종료 훅이
-// 재검증 전 종료를 막고, 판단 관문 마커는 re-verify/escalate로만 풀린다(close-oos 불가 — resolveJudgeRequired).
-function postflightHeld(carrier) { const pf = carrier && carrier.postflight; return !!(pf && (pf.compacted === true || pf.st !== "ok")); }
+// 보류(권위 없음)=판독 불가(압축 여부 미상)뿐 — 기계 판정 강등+판단 관문 마커(구현자가 round-judge re-verify/escalate로만 해제·close-oos 불가 — resolveJudgeRequired).
+// 그 판의 통과 증명(proof)은 기록되지 않으므로(finishVerifyRun) 종료 훅이 재검증 전 종료를 막는다.
+// [압축 무반응 · 사용자 결정 5f44378c1c318fe2 2026-09-11 · HARNESS-STRUCTURE-2026-09-11 §A1] 검증 도중 압축(compacted)은 판정 권위·통과 증명·회차·판단 관문에
+// 영향을 주지 않는다 — 남는 것은 전달 레코드 pending(다음 판 규약 전문 재전송 · postflightDelivery가 이미 기록)과 상태 줄 1줄뿐. 보류는 하네스 자신의
+// 검증자 기록 판독 실패(st!=="ok" · 압축 여부 미상)에만 남는다(안전 방향). 실측(08-31~09-11): 압축 사유 보류가 매일 2~9건·요청의 30~60%였고 내용은 전부 통과였다.
+function postflightHeld(carrier) { const pf = carrier && carrier.postflight; return !!(pf && pf.st !== "ok"); }
 function applyPostflightHold(mfl, carrier, ws, askId, camp, lang, repoKey) {
-  if (!postflightHeld(carrier)) return false;
-  const pf = carrier.postflight; const en = lang === "en";
-  const key = pf.compacted === true ? "compacted-mid-ask" : "postflight-unreadable";
+  const en = lang === "en";
+  if (!postflightHeld(carrier)) {
+    const pfc = carrier && carrier.postflight;
+    if (pfc && pfc.compacted === true) mfl.notice = String(mfl.notice || "") + (en
+      ? `\n[directive delivery] verifier memory was compacted during this verification (${pfc.ts}) — no effect on this verdict; the full directives are resent on the next ask`
+      : `\n[규약 전달] 검증 도중 검증자 기억 압축 감지(${pfc.ts}) — 판정에 영향 없음 · 다음 판에 규약 전문 재전송`);
+    return false;
+  }
+  const pf = carrier.postflight;
+  const key = "postflight-unreadable";
   mfl.machine = Object.assign({}, mfl.machine || {}, { effective: "inconclusive", demoted: true, reasonKey: key });
   const okJ = askId ? addJudgeRequired(ws, { askId, campaignId: String(camp || ""), reason: key, repoKey: repoKey || "" }) : false; // 시작 스냅샷 저장소 표식(ab-1)
-  const why = pf.compacted === true ? (en ? `verifier memory was compacted during this verification (${pf.ts})` : `검증 도중 검증자 기억 압축 감지(${pf.ts})`) : (en ? "verifier thread record unreadable after the call (compaction unknown)" : "답 수신 뒤 검증자 기록 판독 불가(압축 여부 미상)");
+  const why = en ? "verifier thread record unreadable after the call (compaction unknown)" : "답 수신 뒤 검증자 기록 판독 불가(압축 여부 미상)";
   mfl.notice = String(mfl.notice || "") + (en
     ? `\n[directive delivery · HOLD] ${why} — this verdict has no authority and NO success proof was recorded. The next ask resends the full directives; record your judgment first: node codex-bridge.js round-judge ${askId} re-verify --note "..." (close-oos is not accepted for this hold)${okJ ? "" : " (judgment gate NOT armed — marker write failed; the missing proof still blocks the turn)"}`
     : `\n[규약 전달 · 보류] ${why} — 이 판정은 권위 없음·통과 증명 미기록. 다음 검증에 규약 전문을 다시 보내 재판을 받는다 — 먼저 판단 기록: node codex-bridge.js round-judge ${askId} re-verify --note "근거" (이 보류는 close-oos로 닫을 수 없음)${okJ ? "" : " (판단 관문 미장전 — 마커 기록 실패·증명 미기록이 종료를 막음)"}`);
@@ -4570,7 +4590,8 @@ async function cmdAsk(rest) {
   const allowNew = rest.includes("--allow-new") || forceNew;
   const net = rest.includes("--net"); // 이 1회만 네트워크 허용(파일 읽기전용 유지) — netArgs 주석 참조
   const forceResend = rest.includes("--force-resend"); // 중복 전송 차단(아래 가드)을 의식적으로 우회
-  const prompt = askRequest(rest).prompt;
+  const req0 = askRequest(rest); const prompt = req0.prompt; const decisionId0 = req0.decisionId; // [§A2] 강제 새 방 관문 재료(값 플래그)
+  let attNote9 = ""; // [§A2] 무효 연결 → 새 방 생성 고지(침묵 생성 금지) — 새 세션 경로의 attCarrier.sessionNote 로 출력
   if (!prompt) die('사용법: ask "<프롬프트>"', 2);
   warnAskShape(prompt, "ask"); // 주입 구조화 3단계 — 직접 경로도 같은 기준(경고 단계)
 
@@ -4643,6 +4664,17 @@ async function cmdAsk(rest) {
       3,
     );
   }
+  // [HARNESS-STRUCTURE-2026-09-11 §A2 · 강제 새 방 관문] 연결 기록이 있으면(유효 여부 불문) --force-new 는 결정 장부 실존 항목(--decision <id>)이 있어야 통과.
+  // 연결 기록이 없으면 --allow-new 의 자동 생성이 정상(결정 불요 — 사용자 정정 2026-09-10). 결정 실존·저장소 표식 대조는 escalate 와 같은 함수(requireDecision · ab-1).
+  // 연결이 유효하면 --force-new 여도 그 방을 재개하고(아래 재개 분기), 무효(기록 파일 없음)일 때만 새 방으로 간다 — 그 경우 attNote9 로 고지.
+  if (forceNew && link && providerSnap !== "claude") {
+    const rkA = (() => { try { return repoKeyOf(resolveScoutRepo(ws, contractSnap).repo); } catch { return ""; } })();
+    const rq = require("./contract-lib.js").requireDecision(ws, decisionId0, rkA);
+    if (!rq.ok) die(tB(
+      `⚠️ 이 워크스페이스에는 연결된 검증 세션(${link.codexSession})이 있습니다. --force-new 로 새 방을 강제하려면 결정 장부 항목이 필요합니다(${rq.reason}).\n   node codex-bridge.js decisions raise ... 로 항목을 만든 뒤 --decision <id> 를 붙이세요. 연결이 없을 때는 --allow-new 만으로 새 방이 정상 생성됩니다.`,
+      `⚠️ A verifier session (${link.codexSession}) is linked to this workspace. Forcing a new session with --force-new requires a decisions-ledger item (${rq.reason}).\n   Create one with node codex-bridge.js decisions raise ... then pass --decision <id>. With no link, --allow-new alone creates a session normally.`), 3);
+    console.error(tB(`[세션] 연결 ${link.codexSession} 이 있으나 결정 ${rq.decisionId} 으로 --force-new 허용 — 연결이 유효하면 그 방 재개, 무효면 새 방`, `[session] link ${link.codexSession} exists; --force-new allowed by decision ${rq.decisionId} — a valid link is resumed, an invalid one leads to a new session`));
+  }
   // 같은 요청 중복 전송 차단(2026-07-10 실사고: 첫 호출이 3분29초 만에 원인미상 비정상 종료되자 원인 확인 없이 '전송 실패' 오판 재전송 →
   // 동일 요청 중복 실행 — 실측: rollout 같은 해시 2건). 같은 내용이 살아있는 프로세스에서 진행 중이면 거부 — 답은 rollout/대시보드에서 확인하라.
   const promptHash = crypto.createHash("sha1").update(prompt).digest("hex").slice(0, 16);
@@ -4707,8 +4739,8 @@ async function cmdAsk(rest) {
   // 자연 축퇴(설계 §0·§3): 비-codex 검증자 세션은 rollout이 없어 citedFilesUnseen(Exact)이 checked:false로
   // 스스로 물러난다 — 존재성 검사(evidence-mismatch)는 유지되고, 다룬 흔적·challenge·결합 승격만 비활성.
   const finishVerifyRun = (answer, verifierSession, headText, budgetGate, attempt, askId, attCarrier, promptText, providerName) => {
-    // [§4-B ② · 확인 검증 blocker①(ab-3)] postflight 보류(검증 도중 압축/판독 불가)면 성공 증명을 기록하지 않는다 — 종료 훅이 '이번 턴 통과 증명 없음'으로
-    // 막아, 압축 판의 답이 정상 명령만으로 통과 도장이 되는 경로를 원천 차단(판단 마커 실패와 무관하게 fail-closed).
+    // [§4-B ② · 확인 검증 blocker①(ab-3)] postflight 보류(검증자 기록 판독 불가 — 압축 여부 미상)면 성공 증명을 기록하지 않는다 — 종료 훅이 '이번 턴 통과 증명 없음'으로
+    // 막는다(판단 마커 실패와 무관하게 fail-closed). 검증 도중 압축 자체는 보류 사유가 아니다(2026-09-11 사용자 결정 압축 무반응 — postflightHeld 주석).
     const held9 = postflightHeld(attCarrier);
     const proofBind = held9 ? {} : (writeProof(verifierSession, answer, ws) || {}); // 저장 키=구현자 세션(불변) — 이 인자는 proof 안 검증자 메타데이터(설계 blocker③)
     if (!held9) attempt.proofAccepted(); // 증명 실물 확정(이후 예외=postprocess-error — proof-rejected 오분류 차단·6차 blocker)
@@ -4723,7 +4755,7 @@ async function cmdAsk(rest) {
     collectScoutTargetEvidence(answer, ws, exec);
     const repoKeySnap9 = (() => { try { return repoKeyOf(resolveScoutRepo(ws, contractSnap).repo); } catch { return ""; } })(); // 검증 시작 스냅샷의 저장소(완료 시점 계약 아님)
     const mfl = machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap, askId, campSnap, repoKeySnap9);
-    applyPostflightHold(mfl, attCarrier, ws, askId, campSnap, langSnap, repoKeySnap9); // [§4-B ②] 검증 도중 압축=판정 권위 없음(보류)+판단 관문
+    applyPostflightHold(mfl, attCarrier, ws, askId, campSnap, langSnap, repoKeySnap9); // [§4-B ②] 판독 불가=보류+판단 관문 · 압축=상태 줄만(2026-09-11 압축 무반응)
     flagVerdict(answer, ws, verifierSession, modeSnap, mfl.machine, attempt, providerName, askId, attCarrier); // [기억 권위 C-2] askId·동봉 실물 결속
     // [약속 발화 포착 부품 B §2] 검증자 답의 [제약 후보 v1] 회수 — 내구 job의 동결 constraintCtx만 권위.
     // 직접 ask(동결 carrier 없음)=블록 전량 무시+direct-ask 영수증(§2 의식적 한정). best-effort — 실패가 판정 흐름을 막지 않음.
@@ -4744,6 +4776,7 @@ async function cmdAsk(rest) {
       + memReceiptLine(answer, attCarrier, langSnap) // [기억 권위 C-3] 동봉 경계 처리 영수증(표시 전용 — 기록은 C-2 verdicts 행)
       + (attCarrier && attCarrier.deliveryOut && attCarrier.deliveryOut.statusLine ? "\n" + attCarrier.deliveryOut.statusLine : "")
       + (attCarrier && attCarrier.defaultsNotice ? "\n" + attCarrier.defaultsNotice : "") // [P7 ⓒ] 기본값 고지 — 머리와 같은 문자열의 독립 줄
+      + (attCarrier && attCarrier.sessionNote ? "\n" + attCarrier.sessionNote : "") // [§A2] 무효 연결 → 새 방 생성 고지(침묵 생성 금지)
       + (attCarrier && attCarrier.selOver && (attCarrier.selOver.items || attCarrier.selOver.bytes) ? "\n" + (langSnap === "en" ? `[archive rules] related items ${attCarrier.selOver.count} · ${attCarrier.selOver.bytesTotal} bytes — above the normal range, ALL included · consider tidying the archive` : `[서고 수칙] 관련 수칙 ${attCarrier.selOver.count}항 · ${attCarrier.selOver.bytesTotal}바이트 — 정상 범위 초과, 전량 동봉 · 서고 정리 권장`) : "") // [§4-B ④] 정보 행(경보 아님)
       + envelopeWarnLine(ws, langSnap)
       + budgetNoticeLines(budgetGate.res, langSnap, profileSnap)
@@ -4801,6 +4834,7 @@ async function cmdAsk(rest) {
       if(!findRolloutById(latest.codexSession))die(tB(`동시에 새로 연결된 검증 세션(${latest.codexSession})의 파일을 찾을 수 없어 새 세션을 만들지 않았습니다.`,`The concurrently linked verifier (${latest.codexSession}) has no rollout; no new session was created.`));
       link=latest;
     }else link=null;
+    if (!link) { attNote9 = tB(`[세션] 연결 ${staleId} 무효(기록 파일 없음) → 새 방 생성`, `[session] link ${staleId} invalid (rollout file missing) → creating a new session`); console.error(attNote9); } // [§A2] 침묵 생성 금지
   }
 
   if (link) {
@@ -4913,6 +4947,7 @@ async function cmdAsk(rest) {
   const onDetect = (id) => { if (earlyLinked) return; try { if (recordLink(id)) earlyLinked = id; } catch { /* 다음 폴/최종 단계서 재시도 */ } };
   const askId = require("crypto").randomUUID(); // L1-A: '서로 다른 ask 실행' 판정 재료
   const attCarrier = {};                        // L1-A: 이번 ask에 실제로 실린 동봉 스냅샷
+  if (attNote9) attCarrier.sessionNote = attNote9; // [§A2] 무효 연결 → 새 방 생성 고지(답 상태 줄에도)
   attCarrier.delivery = { session: "", rolloutFile: "", first: true }; // [§4-B ①] 세션을 만드는 첫 메시지=규약 전문 1회
   const promptText = withContract(prompt + (net ? netNote(langSnap) : ""), ws, langSnap, attCarrier, profileSnap, contractSnap, askId); // 프롬프트 조립은 측정 밖(1차 blocker①)
   const callStartIso9 = new Date().toISOString();

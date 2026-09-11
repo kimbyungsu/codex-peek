@@ -5704,6 +5704,16 @@ function addJudgeRequired(ws, rec) {
   return atomicWrite(judgeFileFor(ws), JSON.stringify({ schema: "judge-required-v1", ws: String(ws), items }, null, 1));
 }
 function judgeRequiredPending(ws) { const cur = readJudgeRequired(ws); return cur ? cur.items : []; }
+// [HARNESS-STRUCTURE-2026-09-11 §A2] 결정 장부 실존·저장소 표식 대조 — round-judge escalate 와 ask --force-new 관문이 같은 함수를 쓴다(ab-1: A 저장소 결정으로 B 저장소 동작 금지).
+// 반환 {ok:true, decisionId, decision} | {ok:false, reason:"decision-required"|"decision-repo-mismatch", ...}. repoKey=호출 측 저장소 표식(빈 값=표식 없는 결정만 허용).
+function requireDecision(ws, id, repoKey) {
+  const decisionId = String(id || "").trim();
+  const d = decisionId ? readDecisions(ws).latest.get(decisionId) : null;
+  if (!d) return { ok: false, reason: "decision-required" };
+  const dk = String((d && d.repoKey) || ""), rk = String(repoKey || "");
+  if (rk ? dk !== rk : !!dk) return { ok: false, reason: "decision-repo-mismatch", decisionRepoKey: dk, repoKey: rk };
+  return { ok: true, decisionId, decision: d };
+}
 // 판단 기록 — 장부 행(round-judgment) 추가에 성공한 뒤에만 마커에서 제거(fail-closed). escalate는 결정 장부 항목이 실존해야 한다.
 function resolveJudgeRequired(ws, askId, choice, opts) {
   opts = opts || {};
@@ -5719,14 +5729,10 @@ function resolveJudgeRequired(ws, askId, choice, opts) {
   if (holdReason && choice === "close-oos") return { ok: false, reason: "choice-not-allowed", allowed: ["re-verify", "escalate"] };
   const rkJ = String(item.repoKey || ""); // [저장소 분할 단일 규칙] 마커의 저장소 표식 — 기존 판단 조회·새 판단 행 스탬프 모두 이 키
   let decisionId = "";
-  if (choice === "escalate") {
-    decisionId = String(opts.decisionId || "").trim();
-    const d = decisionId ? readDecisions(ws).latest.get(decisionId) : null;
-    if (!d) return { ok: false, reason: "decision-required" };
-    // [저장소 분할 단일 규칙 · escalate 결정 결속(2차 캠페인 2판 blocker·ab-1)] 결정 항목의 저장소 표식이 마커의 저장소와 다르면 거부 — A 판단을 B의 사용자 결정에 묶지 않는다.
-    // 마커에 키가 없으면(옛 마커) 표식 있는 결정과는 대조 불가라 거부하고, 표식 없는 결정만 받는다.
-    const dk = String((d && d.repoKey) || "");
-    if (rkJ ? dk !== rkJ : !!dk) return { ok: false, reason: "decision-repo-mismatch", decisionRepoKey: dk, repoKey: rkJ };
+  if (choice === "escalate") { // 결정 실존·저장소 표식 대조는 requireDecision(§A2 공유)
+    const rq = requireDecision(ws, opts.decisionId, rkJ);
+    if (!rq.ok) return rq;
+    decisionId = rq.decisionId;
   }
   // 복구 멱등(구현 검증 1회차 blocker): 판단 행은 적혔는데 마커 제거 전에 종료됐으면 재실행이 새 행을 또 적지 않는다 —
   // 같은 (campaignId, askId)의 기존 판단이 있으면 같은 선택일 때만 마커 제거로 마무리하고, 다른 선택이면 상충 중복을 거부한다.
@@ -6866,5 +6872,6 @@ module.exports.ENVELOPE_CHAR_MAX = ENVELOPE_CHAR_MAX;
 module.exports.draftCuratorCandidate = draftCuratorCandidate; // [CURATION v3 §3 D] 승인 시 변환
 module.exports.refundVerifyCampaignRound = refundVerifyCampaignRound; // [회차 환급] 답 없는 실패 호출=왕복 아님(유계)
 module.exports.VERIFY_REFUND_MAX = VERIFY_REFUND_MAX;
+module.exports.requireDecision = requireDecision; // [HARNESS-STRUCTURE-2026-09-11 §A2]
 module.exports.ledgerRowsForRepo = ledgerRowsForRepo; // [저장소 분할 단일 규칙]
 module.exports.repoKeyNow = repoKeyNow;
