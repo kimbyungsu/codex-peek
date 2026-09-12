@@ -117,6 +117,12 @@ function buildEnrichPrompt(ctx) {
   const shownN = nodeLines.length - nCap.dropped, shownE = edgeLines.length - eCap.dropped;
   const truncNote = (t.totalNodes > shownN || t.totalEdges > shownE)
     ? `(지도 일부만 표시: node ${shownN}/${t.totalNodes} · edge ${shownE}/${t.totalEdges} — 이번 변경과 연결된 항목 우선)` : "";
+  // [HARNESS-STRUCTURE-2026-09-11 §B2 (4)] 요청 계획 — 활성 file 노드가 상한이면 add_node 견본을 목록에서 빼고 상태 자료 한 줄만 둔다
+  // (지시문이 아니라 자료 · 정본 상수에서 계산). 회전(§B2 (3))이 켜지면 add_node 를 유지한다 — 회전 미구현 동안은 꺼진 것으로 본다(ctx.rotation).
+  const PMc = require(path.join(BR, "project-map.js"));
+  const activeN = typeof PMc.activeFileNodeCount === "function" ? PMc.activeFileNodeCount(ctx.topo || { nodes: [] }) : ((ctx.topo && ctx.topo.nodes) || []).filter((n) => n && n.entityType === "file").length;
+  const mapFull = Math.max(0, PMc.MAX_FILE_NODES - activeN) === 0 && !(ctx.rotation && ctx.rotation.enabled);
+  const mapFullLine = "(지도 상태: 활성 file 노드 " + activeN + "/" + PMc.MAX_FILE_NODES + " · 빈 칸 0 — add_node 는 이번 라운드 출력 계약에 없음)"; // 상태 자료만(지시문 아님 — 구현 검증 1판 보완)
   const excerpts = files.map((f) => {
     const r = excerptBodyFor(ctx.repo, f); // 관문과 같은 판독 규칙(단일 경로)
     return "### " + f + "\n```\n" + (r.ok ? r.body : "(판독 불가)") + "\n```";
@@ -139,7 +145,7 @@ function buildEnrichPrompt(ctx) {
     '- {"op":"add_edge","payload":{"edge":{"id":"<새 UUID>","from":"<실존 node id>","to":"<실존 node id>","relation":"' + require(path.join(BR, "project-map.js")).RELATIONS.join("|") + '","state":{"lifecycle":"active","implementation":"runtime","confidence":"candidate"}}},"evidence":[...]} — targetId 금지(relation은 이 목록 값만 허용)',
     '- {"op":"rewrite_label","targetId":"<실존 id>","payload":{"to":{"label":"<개선 라벨>"},"expect":{"label":"<현재 라벨>"}},"evidence":[...],"claims":[{"file":"<파일>","quote":"<원문>","stance":"support"}]}',
     // 해상도 설계 v3 §2-4 — file 노드 견본·조건 고지(상한·유형은 정본 상수에서 생성: 복제 드리프트 금지)
-    '- {"op":"add_node","payload":{"node":{"id":"<임시 UUID — 변환기가 결정론 id로 교체>","label":"<파일 역할 한 줄(경로 반복 금지)>","entityType":"file","roles":[],"state":{"lifecycle":"active","implementation":"runtime","confidence":"candidate"},"anchors":[{"kind":"<실제 분류: code|test|config>","path":"<발췌에 실린 판독 가능한 코드 계열 파일>"}]}},"evidence":[...]} — targetId 금지·라운드당 최대 ' + require(path.join(BR, "project-map.js")).ENRICH_ADD_NODE_PER_ROUND + '개·anchors 정확히 1개·문서 파일 금지·confidence는 candidate만. 만든 file 노드의 소속 모듈 owns 엣지를 같은 결과에서 add_node "뒤" 순서로 제안 권장(edge from/to에 그 임시 id 사용 가능).',
+    ...(mapFull ? [mapFullLine] : [    '- {"op":"add_node","payload":{"node":{"id":"<임시 UUID — 변환기가 결정론 id로 교체>","label":"<파일 역할 한 줄(경로 반복 금지)>","entityType":"file","roles":[],"state":{"lifecycle":"active","implementation":"runtime","confidence":"candidate"},"anchors":[{"kind":"<실제 분류: code|test|config>","path":"<발췌에 실린 판독 가능한 코드 계열 파일>"}]}},"evidence":[...]} — targetId 금지·라운드당 최대 ' + require(path.join(BR, "project-map.js")).ENRICH_ADD_NODE_PER_ROUND + '개·anchors 정확히 1개·문서 파일 금지·confidence는 candidate만. 만든 file 노드의 소속 모듈 owns 엣지를 같은 결과에서 add_node "뒤" 순서로 제안 권장(edge from/to에 그 임시 id 사용 가능).']),
     "확실한 근거가 있는 항목만(1~10개 권장). 근거 없는 추측·발췌 밖 인용 금지.",
     // 관문 규칙 고지(2026-08-04 실사고 — 어휘 드리프트와 같은 병: 기계가 강제하는 규칙을 답하는 쪽이
     // 몰라 정답이 불가능했다). 계열 목록은 정본 상수에서 생성 — 문서 파일만 인용한 항목은 전부 거부된다.

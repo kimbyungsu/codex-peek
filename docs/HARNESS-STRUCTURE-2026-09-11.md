@@ -76,7 +76,7 @@ A1·A2 한 묶음 먼저(매 캠페인 왕복을 태우는 마찰·뒤 작업 �
 ## B2. 지도 칸 회전
 
 ### 현재(검증된 사실)
-- 정본 상한: `src/project-map.ts`(정본) `MAX_FILE_NODES=60`, add_node 거부(정본 1608 / bridge 1947)·split 거부(정본 1666 / bridge 2036~2040)는 **lifecycle 무관** 전체 file 노드 수. 보강 사전검사 `validateEnrichResult`(`map-enrich.js` 709~713)도 같은 계수. `applyOperationV2` set_state는 state 병합만(bridge 2292~2313).
+- 정본 상한: `src/project-map.ts`(정본) `MAX_FILE_NODES=60`, add_node 거부(정본 1628 / bridge 1947)·split 거부(정본 1684 / bridge 2036~2040)는 **lifecycle 무관** 전체 file 노드 수. 보강 사전검사 `validateEnrichResult`(`map-enrich.js` 709~713)도 같은 계수. `applyOperationV2` set_state는 state 병합만(bridge 2292~2313).
 - 근거 관문: 정본 `validatePatchV2`(940~944) — topology op는 evidence ≥1이고 그중 `CODE_EVIDENCE_KINDS`(code/test/config) 하나 이상 필수(자기확인 고리 차단). `EVIDENCE_KINDS = ["ledger","ask","test","code","config","doc"]`(bridge 78, 어휘 확장=추가만 허용). patch에 `provider`·`detectedBy` 선택 문자열(1055~1056).
 - 실분류: `map-pipeline.js` `DEFAULT_CLASSIFICATION`(396~417) set_state=auto·supersede=verifier-resolved·tombstone_candidate=needs-investigation. `policyTier`(bridge 543)는 호출자 없음(죽은 코드).
 - 강등 관문: `map-enrich.js` `isDemotion`(1693)·`needVerifier`(1739~1762) — 보강 실행기 `applyOnePatch`(1716, 호출부 1600) 안의 provider 충돌 프레이밍.
@@ -84,14 +84,14 @@ A1·A2 한 묶음 먼저(매 캠페인 왕복을 태우는 마찰·뒤 작업 �
 - 변경 연결: `expandChangedWithConsumedDelta`(`map-enrich.js` 42~60) `git diff --name-only -z` — 삭제·이름변경 구분 없음.
 - 요청: `buildEnrichPrompt`(`enrich-providers.js` 110·124~147) 잔여 칸 미계산·add_node 견본 상시.
 - 전송 예산 `REF_BUDGET.map=1500`(최대치)은 노드 수와 무관. 60은 저장·보강 비용 상한.
-- 화면: job payload `lastFailure` 구조만(`src/extension.ts` 2762~2768)·5996행 일반 문구.
+- 화면: job payload `lastFailure` 구조만(`src/extension.ts` 2762~2768)·6035행 일반 문구.
 - 노드별 검증 인용 이력 기록은 없다.
 
 ### 원칙
 사람은 기준(상한·보호·켜기/끄기), 기계는 노동(계수·사실 반영·교체). 시간 경과만으로 지우지 않는다. 기록은 지우지 않는다(ab-5). 모든 상태 변경은 **정규 패치 파이프라인**(propose→classify→apply)을 지난다.
 
 ### 변경
-**(1) 계수 단일 함수 + 활성 순증분** — 정본에 두 함수 export: `activeFileNodeCount(topo)`(entityType==="file" && lifecycle 부재 또는 "active")와 `activeFileDelta(topo, op)`(add_node: 들어오는 노드가 활성 file이면 +1 / split_node: −(원본이 활성 file이면 1) + 신규 노드 중 활성 file 수 / 그 밖 0). 검사식은 셋 다 `activeFileNodeCount(t) + activeFileDelta(t, op) > MAX_FILE_NODES`: add_node(정본 1608)·split(정본 1666, 현재 `curF − srcF + addF`를 활성 기준으로)·`validateEnrichResult`(709~713, 라운드 add_node 합산). deprecated 원본을 활성 노드들로 분할해도 활성 상한을 넘기지 못한다. `MAX_FILE_NODES`=활성 file 노드 상한으로 문서 갱신. bridge sync.
+**(1) 계수 단일 함수 + 활성 순증분** — 정본에 두 함수 export: `activeFileNodeCount(topo)`(entityType==="file" && lifecycle 부재 또는 "active")와 `activeFileDelta(topo, op)`(add_node: 들어오는 노드가 활성 file이면 +1 / split_node: −(원본이 활성 file이면 1) + 신규 노드 중 활성 file 수 / 그 밖 0). 검사식은 셋 다 `activeFileNodeCount(t) + activeFileDelta(t, op) > MAX_FILE_NODES`: add_node(정본 1628)·split(정본 1684, 현재 `curF − srcF + addF`를 활성 기준으로)·`validateEnrichResult`(709~713, 라운드 add_node 합산). deprecated 원본을 활성 노드들로 분할해도 활성 상한을 넘기지 못한다. `MAX_FILE_NODES`=활성 file 노드 상한으로 문서 갱신. bridge sync.
 
 **(2) 사실 기반 내리기 — 정규 패치 + 사실 근거 규칙** — `expandChangedWithConsumedDelta`에 `git diff --name-status -M -z base..end` 병행 판독 → `facts={deleted:[path], renamed:[{from,to}]}`. 새 함수 `applyFactTransitions(repo, mapId, facts, head)`(보강 실행기 옆·run-lock 안):
 - 패치=`{operation:"set_state", targetId, payload:{to:{lifecycle:"deprecated"}, expect:{lifecycle:"active"}}, rationale:"file-gone@<head7>"|"renamed-to:<to>@<head7>", provider:"harness-git", detectedBy:"git-name-status", evidence:[{kind:"git", ref:"<head>", note:"D <path>"|"R <from> -> <to>"}]}`.
@@ -115,7 +115,7 @@ A1·A2 한 묶음 먼저(매 캠페인 왕복을 태우는 마찰·뒤 작업 �
 **(4) 요청 계획** — `buildEnrichPrompt(ctx)`에서 `remaining = MAX_FILE_NODES − activeFileNodeCount(ctx.topo)`. `remaining===0 && !rotation.enabled`면 add_node 견본을 목록에서 빼고 자료 한 줄 `(지도 가득: 새 파일 칸 요청 불가 — 활성 60/60)`. `rotation.enabled`면 add_node 유지. 사후 검사는 (1)의 계수로.
 - 화면: job payload에 `lastFailure.code`·`lastFailure.detail`(예 `schema-invalid`·`61>60`) 구조화, 5996행 문구 대신 실사유. 자유 문자열 원문(failReason)은 종전대로 비전송(ab-7).
 
-**(5) 정리** — `policyTier`와 주석(정본·bridge sync) 삭제, 의도는 `DEFAULT_CLASSIFICATION` 주석으로 이관.
+**(5) 정리** — `policyTier`는 v1 동결 계층(`src/project-map.ts` 496행(v1 동결 주석))이고 `tests/project-map.test.js`·`tests/map-patch-v2.test.js`가 존재·동작을 잠근 API라 **삭제 대신 표기**로 닫는다(구현 시 판단 2026-09-12): 함수 위에 "v1 동결·실경로 미호출·실분류 정본은 map-pipeline DEFAULT_CLASSIFICATION" 경고 주석, `DEFAULT_CLASSIFICATION` 위에 의도(소멸·대체=사람/검증자, 상태 변경=auto, 강등=관문) 주석 이관.
 
 ### 정본 개정(D2 승인 시)
 MAP-RESOLUTION-DESIGN.md §2-3(100행 "지도 전체 file 노드 60개" → "활성 file 노드 60개"), §6(166행 "파일 삭제 시 file 노드 잔존" → "사실 전이로 deprecated·복귀 규칙"), 근거 관문 절에 "사실 근거(git·detectedBy 결속·커밋 실존 검사)" 추가, 정본 소스 `src/project-map.ts` 변경 항목 명시(137행 규칙).

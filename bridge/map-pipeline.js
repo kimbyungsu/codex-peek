@@ -393,6 +393,9 @@ function proposePatch(repo, patch) {
   return w7.ok ? w7.result : { ok: false, stage: "lock", errors: [w7.error] };
 }
 // 기본 분류(§3 표 — 출발점. P2 실경로: auto만 apply 도달)
+// [HARNESS-STRUCTURE-2026-09-11 §B2 (5)] 이 표가 지도 patch 분류의 '실제' 정책이다(src/project-map.ts policyTier는 v1 동결 계층·미호출).
+// 의도: 소멸·대체 '확정'은 사람/검증자(tombstone_candidate=needs-investigation→사람 결정→파생 set_state, supersede=verifier-resolved),
+// 상태 변경(set_state)은 auto이되 강등(active→deprecated 등)은 map-enrich 실행기의 isDemotion→needVerifier 관문이 provider 충돌만 회부한다.
 const DEFAULT_CLASSIFICATION = {
   add_node: "auto", add_edge: "auto", set_state: "auto", add_anchor: "auto", add_evidence: "auto", add_condition: "auto",
   change_relation: "verifier-resolved", split_node: "verifier-resolved", split_edge: "verifier-resolved",

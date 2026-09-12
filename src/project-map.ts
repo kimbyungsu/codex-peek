@@ -39,6 +39,23 @@ export const CODE_EVIDENCE_KINDS: readonly string[] = ["code", "test", "config"]
 // ENRICH_ADD_NODE_PER_ROUND=보강 결과 1회당 add_node 상한(응답 형태 검증·프롬프트 고지가 같은 값을 봄).
 export const MAX_FILE_NODES = 60;
 export const ENRICH_ADD_NODE_PER_ROUND = 5;
+// [HARNESS-STRUCTURE-2026-09-11 §B2 (1) · 사용자 결정 D2] 상한은 '활성' file 노드만 센다 — 내려간 칸(deprecated·superseded·tombstoned)은
+// 기록으로 남되 자리를 차지하지 않는다(지도 칸 회전의 1단계). lifecycle 부재=active 호환. 세 검사 자리(add_node·split_node·보강 사전검사)가 이 두 함수만 본다.
+export function isActiveFileNode(n: MapNode | null | undefined): boolean {
+  return !!n && n.entityType === "file" && (!n.state || !n.state.lifecycle || n.state.lifecycle === "active");
+}
+export function activeFileNodeCount(t: Topology): number { return (t.nodes || []).filter((x) => isActiveFileNode(x)).length; }
+// 그 연산이 활성 file 노드 수를 얼마나 바꾸는가 — add_node: 들어오는 노드가 활성 file이면 +1 / split_node: −(원본이 활성 file이면 1)+신규 활성 file 수 / 그 밖 0.
+// (2판 blocker: 내려간 원본을 활성 노드들로 분할해도 활성 상한을 넘기지 못하게 순증분으로 계산)
+export function activeFileDelta(t: Topology, operation: string, payload: Record<string, unknown> | null | undefined, targetId?: string): number {
+  if (operation === "add_node") return isActiveFileNode(payload ? (payload.node as MapNode) : null) ? 1 : 0;
+  if (operation === "split_node") {
+    const src = (t.nodes || []).find((x) => x && x.id === targetId);
+    const nn = payload && Array.isArray(payload.newNodes) ? (payload.newNodes as MapNode[]) : [];
+    return nn.filter((x) => isActiveFileNode(x)).length - (isActiveFileNode(src) ? 1 : 0);
+  }
+  return 0;
+}
 
 export type Lifecycle = typeof LIFECYCLES[number];
 export type Implementation = typeof IMPLEMENTATIONS[number];
@@ -473,6 +490,9 @@ export type MapDecision = {
 };
 
 // tier 정책기 — operation 이름만으로 못 정한다(설계검증: 같은 set_state라도 stale 표시는 자동, tombstone은 사람).
+// ⚠ v1 동결 계층 — 실경로(P2 파이프라인)에서는 호출되지 않는다(호출자 0). 실분류 정본=bridge/map-pipeline.js DEFAULT_CLASSIFICATION
+// (set_state=auto · supersede=verifier-resolved · tombstone_candidate=needs-investigation→사람). 이 함수를 정책으로 읽지 말 것(2026-09-10 실사고).
+// HARNESS-STRUCTURE-2026-09-11 §B2 (5): v1 API 동결·시험 계약(project-map.test.js·map-patch-v2.test.js) 때문에 삭제 대신 표기로 닫는다.
 export function policyTier(op: PatchOp, payload: Record<string, unknown>): "auto" | "verified-auto" | "human" {
   if (op === "add_evidence") return "auto";                       // 증거 추가(사실 기록)
   if (op === "add_anchor") return "auto";                         // 탐색 힌트 추가
@@ -1605,8 +1625,8 @@ export function semanticValidateV2(
       // 해상도 설계 v3 §2-3: 전체 file 노드 상한은 '여기(적용 잠금 안의 topology)'가 유일한 권위 —
       // 보강 밖 일반 add_node 패치의 우회와 '각자 59개를 보고 61개까지' 경합을 모두 닫는다.
       // (보강 쪽 검사는 조기 진단·과금 절약용일 뿐 권위가 아니다.)
-      if (n && n.entityType === "file" && (t.nodes || []).filter((x) => x.entityType === "file").length >= MAX_FILE_NODES)
-        errs.push(`add_node: file 노드 전체 상한(${MAX_FILE_NODES}) 도달 — 증분 세밀화 상한(해상도 설계 §2-3)`);
+      if (n && n.entityType === "file" && activeFileNodeCount(t) + activeFileDelta(t, "add_node", pl) > MAX_FILE_NODES)
+        errs.push(`add_node: file 노드 전체 상한(${MAX_FILE_NODES}) 도달(활성 file 노드 ${activeFileNodeCount(t)} — 내려간 칸 제외 · §B2) — 증분 세밀화 상한(해상도 설계 §2-3)`);
       break;
     }
     case "add_edge": {
@@ -1660,11 +1680,10 @@ export function semanticValidateV2(
       // 해상도 설계 v3 §2-3 — 노드를 '만드는' 다른 연산도 같은 상한을 본다(구현검증 1차 blocker:
       // split_node로 file 노드 60→62 적용이 실증됨). 사후 수 = 현재 − (원본이 file이면 1) + 신규 file 수.
       {
-        const curF = (t.nodes || []).filter((x) => x.entityType === "file").length;
-        const srcF = tr.kind === "node" && (tr.ent as MapNode).entityType === "file" ? 1 : 0;
-        const addF = nn.filter((x) => x && x.entityType === "file").length;
-        if (addF && curF - srcF + addF > MAX_FILE_NODES)
-          errs.push(`split_node: file 노드 전체 상한(${MAX_FILE_NODES}) 초과 예정(${curF - srcF + addF}) — 증분 세밀화 상한(해상도 설계 §2-3)`);
+        const curF = activeFileNodeCount(t); // [§B2 (1)] 활성 기준(내려간 칸 제외)
+        const dF = activeFileDelta(t, "split_node", pl, p.targetId as string);
+        if (dF > 0 && curF + dF > MAX_FILE_NODES)
+          errs.push(`split_node: file 노드 전체 상한(${MAX_FILE_NODES}) 초과 예정(${curF + dF}, 활성 기준 — 내려간 원본 분할도 활성 상한을 넘기지 못함 · §B2) — 증분 세밀화 상한(해상도 설계 §2-3)`);
       }
       // edgeReroute 전수성(§C-2): 원본의 모든 인접 edge가 재지향표에 정확히 1회씩.
       const adj = adjacentEdgeIds(t, p.targetId as string);

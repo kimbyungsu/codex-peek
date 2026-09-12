@@ -2769,7 +2769,7 @@ function computeState(turnsN: number): BridgeState {
             // 옛 기록에 위험한 파일 표기가 이미 저장돼 있을 수 있으므로, 화면으로 내보낼 때 한 번 더 거른다
             // (3차 [보완]: 판독 검증은 옛 기록 호환을 위해 느슨한데, 표시는 느슨하면 안 된다).
             lastFailure: last9 && last9.failureCode
-              ? { stage: last9.failureStage || null, code: last9.failureCode, file: safeShowFile(last9.failureFile), provider: last9.provider || null }
+              ? { stage: last9.failureStage || null, code: last9.failureCode, file: safeShowFile(last9.failureFile), provider: last9.provider || null, detail: last9.failureDetail && last9.failureDetail.kind === "file-cap" ? { kind: "file-cap", have: Number(last9.failureDetail.have), cap: Number(last9.failureDetail.cap), active: Number(last9.failureDetail.active) } : null } // [§B2 (4)] 상한 실사유(구조만)
               // 구형 기록(구조 필드 이전): 자유 문자열은 화면에 내보내지 않되 '사유가 기록돼 있음'은 알린다.
               // 접두가 evidence면 단계만 보수적으로 추정(그 외는 미상 — 추측 금지).
               : (last9 && typeof last9.failReason === "string" && last9.failReason.trim()
@@ -6031,6 +6031,8 @@ class Dashboard {
   };
   function failureText(lf){
     if(!lf||!lf.code) return "";
+    // [HARNESS-STRUCTURE-2026-09-11 §B2 (4)] 상한 거부는 일반 문구 대신 실사유(활성 칸 수·상한)를 그대로 보인다
+    if(lf.detail&&lf.detail.kind==="file-cap") return T("지도 칸이 가득 차 새 파일 칸이 거부됐어요(활성 "+lf.detail.have+">"+lf.detail.cap+" — 자리가 나야 새 파일이 들어가요)","the map is full, so new file entries were rejected (active "+lf.detail.have+">"+lf.detail.cap+" — a slot must free up first)")+(lf.file?" ("+lf.file+")":"");
     var hit=FAIL_TEXT[lf.code];
     if(!hit) return T("알 수 없는 실패(","unrecognized failure (")+lf.code+")";
     return T(hit[0],hit[1])+(lf.file?" ("+lf.file+")":"");
@@ -6517,7 +6519,9 @@ class Dashboard {
     var acts9=[];
     // 근거 재확인 카드의 kept는 미확인 evidence-unseen 경보의 부분집합(같은 eventId 결속) — 별도 가산은
     // 한 사건을 두 결정으로 세는 이중 집계다(검증 blocker 2026-08-07). 경보를 종류로 나눠 각 1회만 센다.
-    var integAll9=(d.integrity||[]).filter(function(e){ return e && e.ack!==true; });
+    // [HARNESS-STRUCTURE-2026-09-11 §B1 · D3] 정보 등급(info)은 사람 결정이 아니다 — 읽기 흔적(evidence-unseen=info)은 '지금 정할 것'에 세지 않는다
+    // (배너·상태바와 같은 규칙: severity warning/error 만 경보). 옛 warning 등급 항목만 종전대로 센다.
+    var integAll9=(d.integrity||[]).filter(function(e){ return e && e.ack!==true && e.severity!=="info"; });
     var ev9=integAll9.filter(function(e){ return e.kind==="evidence-unseen"; }).length;
     var ha9=d.enrich?d.enrich.humanAction:null;
     // [이중 집계 금지 — R11 blocker③] 사람 조치 보류 항목이 표시될 때, 같은 상태를 알리는 미확인

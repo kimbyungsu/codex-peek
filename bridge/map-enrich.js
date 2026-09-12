@@ -145,7 +145,7 @@ const ATTEMPT_PHASES = ["running", "applying", "done", "failed", "parked"];
 const JOB_KEYS = ["schema", "jobKey", "mapId", "authorityHash", "decisionContextHash", "mode", "configWs", "slot", "phase", "startedAt", "finishedAt", "parkedReason", "sourceFp", "retryFrom", "attempts"];
 // failureStage/failureCode/failureFile: 실패를 사람이 읽을 수 있게 '구조'로도 남긴다(2026-07-29 설계 상의 결론).
 // failReason 자유 문자열만 남기면 화면이 내부 표현을 그대로 노출하거나, 호출 실패와 결과 거부를 구분하지 못한다.
-const ATTEMPT_KEYS = ["attemptId", "provider", "consentGen", "phase", "startedAt", "sourceFp", "results", "cursor", "resolutions", "failReason", "failureStage", "failureCode", "failureFile", "parkedReason", "finishedAt"];
+const ATTEMPT_KEYS = ["attemptId", "provider", "consentGen", "phase", "startedAt", "sourceFp", "results", "cursor", "resolutions", "failReason", "failureStage", "failureCode", "failureFile", "failureDetail", "parkedReason", "finishedAt"];
 // 단계와 코드는 닫힌 열거다(화면이 이 값만 보고 문구를 고른다 — 모르는 값은 화면이 '알 수 없음'으로 표시).
 const FAILURE_STAGES = ["call", "response", "validation", "conversion"];
 const FAILURE_CODES = ["process-failed", "empty-output", "parse-invalid", "schema-invalid", "evidence-mismatch", "evidence-unreadable", "convert-invalid"];
@@ -225,6 +225,8 @@ function validateJob(d) {
     if (a.failReason !== undefined && typeof a.failReason !== "string") return "attempt failReason";
     if (a.failureStage !== undefined && !FAILURE_STAGES.includes(a.failureStage)) return "attempt failureStage";
     if (a.failureCode !== undefined && !FAILURE_CODES.includes(a.failureCode)) return "attempt failureCode";
+    // [§B2 (4)] 구조화 실패 사유(선택) — 닫힌 모양만(file-cap: have·cap·active 정수). 이형=손상(strict).
+    if (a.failureDetail !== undefined && a.failureDetail !== null && !(a.failureDetail && typeof a.failureDetail === "object" && !Array.isArray(a.failureDetail) && a.failureDetail.kind === "file-cap" && Number.isInteger(a.failureDetail.have) && Number.isInteger(a.failureDetail.cap) && Number.isInteger(a.failureDetail.active) && Object.keys(a.failureDetail).length === 4)) return "attempt failureDetail";
     // 저장소 상대경로만 — 절대경로·상위 탈출은 화면으로 내보낼 값이 아니다.
     if (a.failureFile !== undefined && (typeof a.failureFile !== "string" || !a.failureFile || a.failureFile.length > 260 || /^([a-zA-Z]:|[\\/])/.test(a.failureFile) || a.failureFile.split(/[\\/]/).includes(".."))) return "attempt failureFile";
     if (a.parkedReason !== undefined && typeof a.parkedReason !== "string") return "attempt parkedReason";
@@ -706,14 +708,17 @@ function validateEnrichResult(obj, topo, ctx) {
       existingFilePaths.add(p9); // 같은 결과 안 중복 경로도 차단
     }
   });
+  let capDetail = null; // [§B2 (4)] 상한 거부 사유를 구조로(화면 실사유 표시 — 자유 문자열 원문은 종전대로 비전송)
   { // §2-3 상한 — 라운드당(형태 규칙·fail-closed)+전체(조기 진단 — 권위는 정본 semanticValidateV2의 적용 잠금 안)
     const addN = obj.items.filter((it) => it && it.op === "add_node").length;
     const PM9 = (() => { try { return require(path.join(__dirname, "project-map.js")); } catch { return null; } })();
     if (PM9 && addN > PM9.ENRICH_ADD_NODE_PER_ROUND) errs.push("add_node 라운드 상한 초과(" + addN + ">" + PM9.ENRICH_ADD_NODE_PER_ROUND + ")");
-    const existN = ((topo && topo.nodes) || []).filter((n) => n && n.entityType === "file").length;
-    if (PM9 && addN && existN + addN > PM9.MAX_FILE_NODES) errs.push("file 노드 전체 상한 초과 예정(" + (existN + addN) + ">" + PM9.MAX_FILE_NODES + " — 조기 진단·권위는 적용 잠금 안 정본)");
+    const existN = PM9 && typeof PM9.activeFileNodeCount === "function" ? PM9.activeFileNodeCount(topo || { nodes: [] }) : ((topo && topo.nodes) || []).filter((n) => n && n.entityType === "file").length; // [§B2 (1)] 활성 기준(정본 activeFileNodeCount · 옛 사본 폴백)
+    // [구현 검증 1판 blocker] 상한 합산도 '활성 file 노드가 될' add_node 만(정본 activeFileDelta 와 동형) — 내려간 상태로 들어오는 노드는 자리를 차지하지 않는다.
+    const addActive = PM9 && typeof PM9.isActiveFileNode === "function" ? obj.items.filter((it) => it && it.op === "add_node" && it.payload && PM9.isActiveFileNode(it.payload.node)).length : addN;
+    if (PM9 && addActive && existN + addActive > PM9.MAX_FILE_NODES) { capDetail = { kind: "file-cap", have: existN + addActive, cap: PM9.MAX_FILE_NODES, active: existN }; errs.push("file 노드 전체 상한 초과 예정(" + (existN + addActive) + ">" + PM9.MAX_FILE_NODES + " — 활성 기준 · 조기 진단·권위는 적용 잠금 안 정본)"); }
   }
-  if (errs.length) return { ok: false, kind: idErr && errs.every((e) => /미실존|실존 필수/.test(e)) ? "id" : "schema", errors: errs };
+  if (errs.length) return { ok: false, kind: idErr && errs.every((e) => /미실존|실존 필수/.test(e)) ? "id" : "schema", errors: errs, ...(capDetail ? { detail: capDetail } : {}) };
   return { ok: true, items: obj.items };
 }
 
@@ -1497,7 +1502,7 @@ function runAttempt(repo, o, env, st, provider) {
   if (!vr.ok) {
     const fx1 = vr.kind === "evidence"
       ? { failureStage: "validation", failureCode: vr.code || "evidence-mismatch", ...safeFailureFile(vr.file) }
-      : { failureStage: "validation", failureCode: "schema-invalid" };
+      : { failureStage: "validation", failureCode: "schema-invalid", ...(vr && vr.detail && vr.detail.kind === "file-cap" ? { failureDetail: { kind: "file-cap", have: Number(vr.detail.have), cap: Number(vr.detail.cap), active: Number(vr.detail.active) } } : {}) }; // [§B2 (4)] 상한 사유 구조 보존
     // 쓰기 결과를 확인한다(2차 blocker④: 실패 기록이 거부되면 시도가 running으로 남아, 다음 재개가
     // 이를 '호출 여부 불확실'로 해석해 완료된 결과 거부가 uncertain-call로 변질됐다).
     const w1 = fencedUpdateEnrichJob(repo, env.fence, (j) => {

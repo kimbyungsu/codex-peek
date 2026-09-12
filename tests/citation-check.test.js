@@ -89,6 +89,7 @@ ok(src.includes("repoKey: repoKeySnapE9, citeRoots: citeRootsE9, // [§B1]") && 
 const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
 ok(ext.includes('.filter((e) => e.kind !== "citation-mismatch" || (!!rkNow && String(e.repoKey || "") === rkNow))'), "대시보드: citation-mismatch 는 현재 정찰 저장소 표식 일치만 표시(ab-1)");
 ok(ext.includes('e.severity==="info"?"info":"warn"') && ext.includes(".sevdot.info{"), "대시보드: info 등급 점 표시");
+ok(ext.includes('return e && e.ack!==true && e.severity!=="info"; });'), "대시보드: '지금 정할 것' 합산에서 정보 등급(읽기 흔적) 제외 — 사용자 실보고 2026-09-12");
 
 console.log("[9] 식별자 대조 — 문자열 가림·단어 경계 정확 일치(구현 검증 1판 blocker)");
 { fs.writeFileSync(path.join(root, "src", "b.js"), ["function citationCheck(x) {", "  return noop(\"realpathSafe\") + x;", "}", "const alphaBeta = 2;"].join("\n") + "\n", "utf8");
