@@ -29,7 +29,7 @@ function realpathSafe(p) { try { return fs.realpathSync.native ? fs.realpathSync
 function normKey(p) { return String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase(); }
 // 루트 안 판정 — realpath 기준(심볼릭 링크·8.3 짧은 이름 표기 차이를 흡수). 루트 자체 또는 그 하위만.
 function underRoots(fileReal, roots) {
-  const f = normKey(fileReal);
+  const f = normKey(realpathSafe(fileReal) || fileReal); // 파일 쪽도 realpath — 호출자가 짧은 이름(RUNNER~1)·심볼릭 링크 표기로 넘겨도 루트와 같은 기준(CI Windows 러너 실측 2026-09-12)
   if (!f) return false;
   for (const r of roots || []) {
     if (!r) continue;

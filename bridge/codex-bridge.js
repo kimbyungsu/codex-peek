@@ -1391,7 +1391,10 @@ function toolCallNamesExactFile(p, fileKey, ws) {
       : (s) => String(s).replace(/\/+/g, "/");
     const v = fold(v0);
     const esc = v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const re = new RegExp(`(^|[^a-z0-9_.\\/-])(?:\\./)?${esc}(?=$|[^a-z0-9_.\\/-])`, process.platform === "win32" ? "i" : "");
+    // 경계 문자 집합도 플랫폼 분기: POSIX 에서는 백슬래시가 파일명 문자라 경계가 아니다 — `.\foo.ts` 안의 foo.ts 를 인정하면 다른 파일을 같은 파일로 본다
+    // (CI ubuntu 실측 2026-09-12 · tp14 posix). win32 는 fold 가 이미 \ 를 / 로 접어 이 집합에 백슬래시가 남지 않는다.
+    const bcls = process.platform === "win32" ? "a-z0-9_.\\/-" : "a-z0-9_.\\/\\\\-";
+    const re = new RegExp(`(^|[^${bcls}])(?:\\./)?${esc}(?=$|[^${bcls}])`, process.platform === "win32" ? "i" : "");
     return re.test(fold(part));
   };
   // 기준 폴더는 '실제 경로'로도 한 번 더 시도한다. 윈도는 같은 폴더를 짧은 이름(RUNNER~1)으로도 가리키는데,
