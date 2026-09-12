@@ -199,6 +199,8 @@ EVIDENCE-RECONFIRM-DESIGN.md에 1줄: "evidence-unseen의 표시 등급=정보 �
 ### 사용자 결정 D4
 위치: 개요 패널 카드(추천) / 별도 탭.
 
+**구현 위치(2026-09-12 · D4 개요 패널)**: 자료=새 `bridge/rules-flow.js`(배포 3사본 편입) — `rulesFlow(inp)` 순수 계산(core/archive/proposals/curator) + `rulesFlowFor(ws)`가 장부·상수를 모음(코어 주입 글자 수=`envelopeInjectionFor(...).text.length` 실물 · 선별 상한=`SELECTOR_UNION_MAX/BYTES` · 서고 상한=`ARCHIVE_ITEM_MAX` · 검사 상수=`CURATION_TICK_K/MAX_PENDING/UNUSED_DAYS` · 마지막 선별 영수증=`readSelectorUsage` 중 purpose≠preview·wsKey·repoKey 둘 다 일치하는 마지막 행 · 정리 담당=`curationSummary`+`readTickState`, 4지표 유지). 화면=`src/extension.ts` 개요 패널 '수칙 흐름' 카드(`#ovRulesFlow` 4칸 `rfCore/rfArchive/rfProposals/rfCurator`, `renderRulesFlow` — 항상 그림·빈 상태 문장·정리 담당 마지막 제안은 인라인 접기, '승인·편집으로 이동' 버튼은 `gotoEl` 단일 경로). 검증 설정 탭의 정리 줄·'마지막 정리 결과 보기' 모달은 제거(설정 탭=승인·편집만). 시험 `tests/rules-flow.test.js`.
+
 ---
 
 ## 결정 항목 요약(사용자)

@@ -291,11 +291,13 @@ t("소스 핀 — 훅 두 곳이 map-bootstrap tick 옆에서 curationHookTick(a
   assert.ok(cb.includes('if (sub === "tick") {') && cb.includes('trigger: "auto", tickFp: j.tickFp') && cb.includes('(rest || []).includes("--auto") ? "auto"'), "CLI tick·트리거 플래그");
   const ext = rd("src/extension.ts");
   assert.ok(ext.includes("curation: { lastItems: Array<{ id: string; title: string; op: string; status: string }>; lastTs: string; lastOutcome: string;") && ext.includes("unusedCount: number") && ext.includes("CU9.curationSummary(ws)"), "상태(4지표+마지막 결과 항목 포함)");
-  assert.ok(ext.includes('m?.type === "curationShow"') && !ext.includes('m?.type === "curationRun"') && !ext.includes('"curate", "run", "--button"') && ext.includes("CUq.curationSummary(wsQ)") && ext.includes("su.lastItems") && ext.includes("{ modal: true }"), "버튼 핸들러=마지막 결과 보기 모달(실행 없음 — 2026-09-06 개정: 실행은 자동 트리거·CLI만)");
-  const beg = ext.indexOf("if(d.curation){"); const end = ext.indexOf("var actT=e9.act", beg);
-  assert.ok(beg > 0 && end > beg, "카드 줄 블록");
+  // [§B3 · D4] 모달 버튼 폐지 — 정리 담당 칸은 개요 '수칙 흐름' 카드의 인라인 접기(renderRulesFlow). 실행 버튼(curationRun)·CLI --button 은 여전히 없음.
+  assert.ok(!ext.includes('m?.type === "curationShow"') && !ext.includes('m?.type === "curationRun"') && !ext.includes('"curate", "run", "--button"') && ext.includes("function renderRulesFlow(d)") && ext.includes("u.lastItems") && ext.includes('rfSet("rfCurator"'), "버튼 핸들러=마지막 결과 보기 모달(실행 없음 — 2026-09-06 개정: 실행은 자동 트리거·CLI만)");
+  const beg = ext.indexOf("function renderRulesFlow(d){"); const end = ext.indexOf("function renderOverview(d){", beg);
+  assert.ok(beg > 0 && end > beg, "개요 수칙 흐름 렌더 블록");
   const blk = ext.slice(beg, end);
-  assert.ok(!/innerHTML/.test(blk) && blk.includes("마지막 정리 결과 보기") && !blk.includes("정리 제안 받기") && blk.includes("cb9.disabled=!cu9.lastTs") && blk.includes("cu9.adoptRate") && blk.includes("cu9.archiveSize") && blk.includes("cu9.selOverCount") && blk.includes("cu9.unusedCount") && blk.includes('vscode.postMessage({type:"curationShow"})'), "카드 줄 4지표·버튼=마지막 결과 보기(textContent·이력 없으면 비활성)");
+  assert.ok(!ext.includes("if(d.curation){ // [CURATION v3 §3 E·F] 수칙 카드 1줄"), "설정 탭 정리 줄 제거(승인·편집만)");
+  assert.ok(!/innerHTML/.test(blk) && !blk.includes("정리 제안 받기") && blk.includes("m.adoptRate") && blk.includes("m.archiveSize") && blk.includes("m.selOverCount") && blk.includes("m.unusedCount") && !blk.includes("curationShow") && blk.includes("u.lastItems"), "카드 줄 4지표·버튼=마지막 결과 보기(textContent·이력 없으면 비활성)");
   const dBeg = ext.indexOf("function decideActs(d){"); const dEnd = ext.indexOf("function renderOverview(d){", dBeg);
   assert.ok(!/curation/.test(ext.slice(dBeg, dEnd)), "개요 '지금 정할 것' 미합산");
   const pk = JSON.parse(rd("package.json"));

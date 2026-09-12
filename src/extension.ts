@@ -198,6 +198,8 @@ interface BridgeState {
   usedMemory: { ts: string; items: Array<{ path: string; note: string }>; couplings: number; omitted: boolean; selOver: { count: number; bytesTotal: number; itemsMax: number; bytesMax: number } | null } | null; // selOver=[§7 4-2b] 직전 검증의 서고 선별 정상 범위 초과(전량 동봉) — 서고 카드 표기 재료
   decisions: { open: number; items: Array<{ id: string; question: string; kind: string; origin: string; ts: string; block: string }> } | null; // [§7 4-2b] 결정 장부(사용자 답 대기) — 읽기 전용·답은 CLI decisions choose|delegate. null=무폴더/구 런타임
   curation: { lastItems: Array<{ id: string; title: string; op: string; status: string }>; lastTs: string; lastOutcome: string; lastReason: string; lastTrigger: string; runs: number; proposedTotal: number; adopted: number; declined: number; adoptRate: number; pending: number; running: boolean; archiveSize: number; selOverCount: number; unusedCount: number; unusedDays: number; campaignsSince: number; maxPerRun: number; maxPending: number; tickK: number } | null; // [CURATION v3 §3 E·F] 정리 제안 요약·측정(수칙 카드 1줄) — null=무폴더/구 런타임
+  // [HARNESS-STRUCTURE §B3 · D4] 수칙 흐름 4칸(개요 패널 카드) — bridge/rules-flow.js rulesFlowFor(ws) 그대로(판독 실패=null → 카드가 '자료 없음'으로)
+  rulesFlow: { core: { st: string; count: { supportedEnv: number; alwaysBlocker: number; outOfScope: number; total: number }; injectedChars: number }; archive: { state: string; count: number; max: number; selectCap: { items: number; bytes: number }; lastSelection: { ts: string; selectedCount: number; askId: string } | null }; proposals: { pending: number; max: number; nextCheck: { tickK: number; tickCount: number; unusedDays: number; lastTickTs: string } }; curator: { lastTs: string; lastOutcome: string; lastReason: string; lastTrigger: string; running: boolean; metrics: { adoptRate: number; proposedTotal: number; adopted: number; declined: number; archiveSize: number; selOverCount: number; unusedCount: number }; lastItems: Array<{ id: string; title: string; op: string; status: string }> } } | null;
   ruleCheck: { host: "claude" | "codex"; checklist: boolean; rules: string[]; rulesFp: string; summary: { turns: number; older: number; counts: Array<{ n: number; complies: number; violated: number; na: number; missing: number }>; lastTs: string } } | null; // [RULE-COMPLIANCE §3 D] 규칙 자가점검 장부 요약(관찰 자료 — 판정·합산 아님). null=무폴더/구 런타임 // [UI 개편 2차] 직전 검증에 실린 지도 동봉 스냅샷(브릿지 stats/attach.jsonl 최신 1건). null=기록 없음/구 브릿지
   baseAvailable: boolean;
   permissionMode: string;
@@ -2684,6 +2686,10 @@ function computeState(turnsN: number): BridgeState {
       // [CURATION v3 §3 E·F] 정리 제안 요약·측정 — 장부 판독만(실행 없음). 개요 '지금 정할 것'엔 합산하지 않는다(후보 자체는 기존 '수칙서 후보' 항목이 담당).
       try { if (!ws) return null; const CU9: any = require(path.join(BRIDGE_DIR, "curation.js")); return typeof CU9.curationSummary === "function" ? CU9.curationSummary(ws) : null; } catch { return null; }
     })(),
+    rulesFlow: (() => {
+      // [HARNESS-STRUCTURE §B3 · D4] 수칙 흐름 4칸 — 순수 계산 모듈(bridge/rules-flow.js)이 장부·상수를 모아 준다. 개요 '지금 정할 것'엔 합산하지 않는다.
+      try { if (!ws) return null; const RF9: any = require(path.join(BRIDGE_DIR, "rules-flow.js")); return typeof RF9.rulesFlowFor === "function" ? RF9.rulesFlowFor(ws, { lang: loadLangExt() }) : null; } catch { return null; }
+    })(),
     ruleCheck: (() => {
       // [RULE-COMPLIANCE §3 D] 규칙 자가점검 요약 — 현재 운용 모드의 구현자 규칙(사용자 글 그대로)·체크리스트 옵션·최근 30턴 fold 집계. 개요 '지금 정할 것'엔 합산하지 않는다.
       try {
@@ -4303,27 +4309,6 @@ class Dashboard {
           this.post(); return;
         }
         if (m?.type === "proposalApprove" && typeof m.repo === "string" && m.repo) { this.runProposalApprove(m.repo, m.lang, false); return; } // §7 증분 2 — 본문은 runProposalApprove(재편 B: 1클릭 체인과 공유)
-        if (m?.type === "curationShow") { // [CURATION 2026-09-06] 대시보드 버튼 "마지막 정리 결과 보기" — 실행 없음(실행은 자동 트리거·CLI `curate run`). 장부 요약을 모달로 보여줄 뿐(승인은 제안함).
-          const wsQ = dashboardWorkspace(); if (!wsQ) return;
-          const enQ = loadLangExt() === "en";
-          try {
-            const CUq: any = require(path.join(BRIDGE_DIR, "curation.js"));
-            const su: any = typeof CUq.curationSummary === "function" ? CUq.curationSummary(wsQ) : null;
-            if (!su || !su.lastTs) { vscode.window.showInformationMessage(enQ ? "No curation run yet — the independent curator runs by itself when ledger material accumulates." : "아직 정리 실행 이력이 없어요 — 독립 정리 담당은 장부 재료가 쌓이면 스스로 돕니다."); return; }
-            const trg = su.lastTrigger === "auto" ? (enQ ? "auto" : "자동") : su.lastTrigger === "button" ? (enQ ? "button" : "버튼") : (enQ ? "manual" : "수동");
-            const outcome = String(su.lastOutcome || "") + (su.lastReason ? " (" + String(su.lastReason) + ")" : "");
-            const items: any[] = Array.isArray(su.lastItems) ? su.lastItems : [];
-            const lines = [
-              (enQ ? "Last run: " : "마지막 실행: ") + String(su.lastTs).replace("T", " ").slice(0, 16) + " · " + trg + " · " + outcome,
-              (enQ ? "Proposals so far " : "누적 제안 ") + String(su.proposedTotal) + (enQ ? " · pending " : "건 · 미승인 ") + String(su.pending) + (enQ ? " · adopted " : "건 · 채택 ") + String(su.adopted) + (enQ ? "" : "건"),
-              items.length ? (enQ ? "Last proposals:" : "마지막 제안:") : (enQ ? "Last run produced no proposals." : "마지막 실행의 제안은 없었어요."),
-              ...items.map((it: any) => "· " + (it.op ? "[" + String(it.op) + "] " : "") + String(it.title || it.id) + (it.status ? " — " + String(it.status) : "")),
-              enQ ? "Approve or decline in the proposal box on the rulebook card." : "승인·안 올림은 수칙 카드의 제안함에서 합니다.",
-            ];
-            vscode.window.showInformationMessage(lines.join("\n"), { modal: true });
-          } catch { vscode.window.showWarningMessage(enQ ? "Could not read the curation ledger." : "정리 장부를 읽지 못했어요."); }
-          return;
-        }
         if (m?.type === "cutoverConfirm" && typeof m.n === "number" && Number.isInteger(m.n) && m.n > 0 && typeof m.repo === "string" && m.repo) { // C-7 원클릭 전환(미이관 N>0 — informed 동의는 이 모달이 담당)
           const wsC7 = dashboardWorkspace();
           const targetC7 = wsC7 ? scoutTargetFor(wsC7).repo : null;
@@ -5251,6 +5236,11 @@ class Dashboard {
     .topbar{padding:10px 12px}
     .topbar .modebar{min-width:0;flex:1 1 100%}
   }
+  .rf-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .rf-cell{padding:8px;border-radius:6px;background:var(--vscode-editorWidget-background);min-width:0}
+  .rf-title{font-weight:600;font-size:12px;margin-bottom:3px}
+  .rf-body{font-size:12px;white-space:normal;word-break:break-word}
+  .rf-body .rf-num{font-weight:700}
   .stat-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin:6px 0 14px}
   .stat-card{border:1px solid var(--vscode-panel-border);border-left:5px solid var(--accent,var(--vscode-charts-blue));border-radius:10px;padding:14px 16px;background:color-mix(in srgb,var(--accent,var(--vscode-charts-blue)) 7%,var(--vscode-editor-background))}
   .stat-card.s-blue{--accent:var(--vscode-charts-blue)}
@@ -5591,6 +5581,16 @@ class Dashboard {
   <div class="card"><div id="ovRecent" class="muted">${t("아직 기록 없음", "no records yet")}</div></div>
   <h2 class="sec base">${t("이번 검증에 실린 기억", "Memory attached to the last verification")} <span class="sub2">${t("검증 요청에 자동 동봉된 지도 조각 — 이 폴더 최신 1건", "map slices auto-attached to the verify request — latest in this folder")}</span></h2>
   <div class="card"><div id="ovMemory" class="muted">${t("아직 기록 없음 — 다음 검증부터 쌓여요", "no records yet — starts with the next verification")}</div></div>
+  <h2 class="sec base">${t("수칙 흐름", "Rules flow")} <span class="sub2">${t("항상 4칸 — 항상 적용 · 관련될 때만 · 제안함 · 정리 담당. 승인·편집은 '검증 설정'", "always 4 cells — always-on · when relevant · proposals · curator. Approve/edit in Verify Settings")}</span></h2>
+  <div class="card" id="ovRulesFlow">
+    <div class="rf-grid">
+      <div class="rf-cell" id="rfCore"><div class="rf-title">${t("항상 적용되는 수칙", "Rules always applied")}</div><div class="rf-body muted">–</div></div>
+      <div class="rf-cell" id="rfArchive"><div class="rf-title">${t("관련될 때만 적용되는 수칙", "Rules applied when relevant")}</div><div class="rf-body muted">–</div></div>
+      <div class="rf-cell" id="rfProposals"><div class="rf-title">${t("제안함", "Proposals")}</div><div class="rf-body muted">–</div></div>
+      <div class="rf-cell" id="rfCurator"><div class="rf-title">${t("정리 담당", "Curator")}</div><div class="rf-body muted">–</div></div>
+    </div>
+    <div class="muted" style="font-size:11px;margin-top:6px"><button type="button" class="secondary" id="rfGoSetup" style="font-size:12px">${t("승인·편집으로 이동", "Go to approve / edit")}</button></div>
+  </div>
   </div><!-- /tab-overview -->
   <div id="tab-verify" class="tab-panel">
   <div class="hero">
@@ -6202,6 +6202,7 @@ class Dashboard {
   $("segProfile").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-vp]"); if(b){ curVP=b.getAttribute("data-vp"); segTouched.vp=true; highlightSeg("segProfile","data-vp",curVP); markDirty(); } });
   // P-12 2b: 예산 입력 — cardMachine 편승(저장 중 편집 무시·초안은 markDirty 축에 합류)
   var vbEl=$("vBudget"); if(vbEl) vbEl.addEventListener("input", function(){ if(cardM.saving()) return; curVB=String(vbEl.value||"").trim(); segTouched.vb=true; markDirty(); });
+  try { var rfg=$("rfGoSetup"); if(rfg) rfg.addEventListener("click", function(){ var t0=$("envCard"); if(t0 && t0.style.display!=="none"){ gotoEl(t0); } else { var tb=document.querySelector('.tabbtn[data-tab="setup"]'); if(tb) tb.click(); } }); } catch(e){ /* 무해 */ }
   try { var pr9=$("vbPresets"); if(pr9) pr9.addEventListener("click", function(ev){ var b=ev.target && ev.target.closest ? ev.target.closest("button") : null; if(!b || cardM.saving()) return; var v=b.getAttribute("data-vb"); if(v===null) return; var el=$("vBudget"); if(!el) return; el.value=v; curVB=v; segTouched.vb=true; markDirty(); }); } catch(e9) { /* 버튼 연결 실패는 버튼만 — 초기화 전체를 죽이지 않음 */ } // 상한 추천 버튼(실사고 2026-07-22: safe는 5009행 const라 초기화 구간에서 TDZ ReferenceError → 웹뷰 스크립트 전체 즉사·전 버튼 무반응. 초기화 구간에서는 safe 사용 금지)
   $("segScout").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-sm]"); if(b){ curSM=b.getAttribute("data-sm"); segTouched.sm=true; highlightSeg("segScout","data-sm",curSM); markDirty(); } });
   $("segInject").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-im]"); if(b){ curIM=b.getAttribute("data-im"); segTouched.im=true; highlightSeg("segInject","data-im",curIM); markDirty(); } });
@@ -6518,6 +6519,42 @@ class Dashboard {
   // [UI 개편 2차] 개요 패널 — 전부 기존 상태값 재조립(새 계산·새 메시지 없음). 표시는 textContent만(innerHTML 금지).
   // '사용자 결정 필요'는 사람 판단이 필요한 것만 합산: 미확인 경보·보관함 [주의]·근거 재확인 열린 경고·MAP 대기 선택·수칙서 승인 대기·사람 조치 보강 보류.
   // 합산 구성은 순수 함수 decideActs로 분리 — 테스트가 컴파일 산출물에서 추출해 '합계'까지 실행으로 잠근다(R11 blocker③).
+  // [HARNESS-STRUCTURE §B3 · D4] 수칙 흐름 4칸 — 항상 그린다(빈 상태는 '왜 비었는지' 문장). 자료=d.rulesFlow(브릿지 순수 계산). 교차 패널 이동은 gotoEl 단일 경로.
+  function rfWhen(ts){ var dt=new Date(ts||""); if(isNaN(dt.getTime())) return ""; return (dt.getMonth()+1)+"/"+dt.getDate()+" "+String(dt.getHours()).padStart(2,"0")+":"+String(dt.getMinutes()).padStart(2,"0"); }
+  function rfSet(id, lines, fold){ var c=$(id); if(!c) return; var b=c.querySelector(".rf-body"); if(!b) return; b.replaceChildren(); b.classList.remove("muted");
+    (lines||[]).forEach(function(ln){ var d9=el("div","ovline"); if(typeof ln==="string") d9.textContent=ln; else { var n9=el("span","rf-num",String(ln.num)); d9.appendChild(n9); d9.appendChild(document.createTextNode(" "+ln.text)); } b.appendChild(d9); });
+    if(fold&&fold.items&&fold.items.length){ var dt=document.createElement("details"); var sm=document.createElement("summary"); sm.style.cssText="cursor:pointer;font-size:11px"; sm.textContent=fold.summary; dt.appendChild(sm);
+      fold.items.forEach(function(it){ var li=el("div","ovline muted"); li.style.fontSize="11px"; li.textContent="· "+(it.op?"["+it.op+"] ":"")+(it.title||it.id)+(it.status?" — "+it.status:""); dt.appendChild(li); }); b.appendChild(dt); } }
+  function renderRulesFlow(d){
+    var rf=d.rulesFlow; var card=$("ovRulesFlow"); if(!card) return;
+    if(!rf){ ["rfCore","rfArchive","rfProposals","rfCurator"].forEach(function(id){ rfSet(id,[T("자료 없음 — 브릿지 장부를 읽지 못했어요(설치본 갱신·폴더 확인)","no data — bridge ledgers unreadable (check install / folder)")]); }); return; }
+    var c=rf.core, a=rf.archive, p=rf.proposals, u=rf.curator;
+    var coreL=[];
+    if(c.st==="absent") coreL.push(T("아직 없음 — 검증 설정에서 첫 수칙을 승인하면 생겨요","none yet — approve the first rules in Verify Settings"));
+    else { coreL.push({num:c.count.total, text:T("항 (전제 "+c.count.supportedEnv+" · 금지 "+c.count.alwaysBlocker+" · 제외 "+c.count.outOfScope+")","items (env "+c.count.supportedEnv+" · blockers "+c.count.alwaysBlocker+" · out-of-scope "+c.count.outOfScope+")")});
+      if(c.st==="ok") coreL.push({num:c.injectedChars, text:T("글자가 검증 요청마다 실려요(비용 근거)","chars ride on every verify request (cost basis)")});
+      else coreL.push(T(c.st==="unapproved"?"승인 전이라 아직 실리지 않아요":c.st==="mismatch"?"승인 없이 바뀌어 실리지 않아요 — 검증 설정에서 승인":"파일 손상 — 검증 설정에서 다시 저장", c.st==="unapproved"?"not applied yet — approval pending":c.st==="mismatch"?"changed without approval — not applied; approve in Verify Settings":"file corrupt — re-save in Verify Settings")); }
+    rfSet("rfCore", coreL);
+    var arcL=[];
+    if(a.state==="active"){ if(a.count===0) arcL.push(T("관련될 때만 적용되는 수칙 0항 · 정리 담당이 제안하면 채워집니다","0 items — filled when the curator proposes")); else arcL.push({num:a.count+"/"+a.max, text:T("항 보관 · 검증마다 관련분만 골라 실어요(최대 "+a.selectCap.items+"항 · "+a.selectCap.bytes+"바이트)","stored · only relevant ones ride each verification (max "+a.selectCap.items+" items · "+a.selectCap.bytes+" bytes)")}); }
+    else if(a.state==="none") arcL.push(T("관련될 때만 적용되는 수칙 0항 · 정리 담당이 제안하면 채워집니다","0 items — filled when the curator proposes"));
+    else if(a.state==="broken") arcL.push(T("승인 없이 보관 수칙 파일이 바뀌어 검증이 시작되지 않아요 — 검증 설정에서 확인","stored rules changed without approval — verification blocked; check Verify Settings"));
+    else arcL.push(T("도장 없는 보관 파일 — 검증 설정에서 승인하거나 정리","stored file without approval stamp — approve or clean up in Verify Settings"));
+    if(a.lastSelection) arcL.push(T("마지막 선별 "+rfWhen(a.lastSelection.ts)+" · "+a.lastSelection.selectedCount+"항 실림","last selection "+rfWhen(a.lastSelection.ts)+" · "+a.lastSelection.selectedCount+" items rode"));
+    else if(a.state==="active"&&a.count>0) arcL.push(T("이 저장소의 선별 기록 아직 없음 — 다음 검증부터","no selection record for this repository yet — from the next verification"));
+    rfSet("rfArchive", arcL);
+    var prL=[]; var nc=p.nextCheck;
+    if(p.pending>0) prL.push({num:p.pending+"/"+p.max, text:T("건 승인 대기 — 승인·안 올림은 검증 설정의 제안함","pending — approve / decline in the proposal box (Verify Settings)")});
+    else prL.push(T("지금 제안 없음","no proposals right now"));
+    prL.push(T("다음 검사: 훅 "+nc.tickK+"회마다(지금 "+nc.tickCount+"회) · "+nc.unusedDays+"일 미사용 관측"+(nc.lastTickTs?" · 마지막 검사 "+rfWhen(nc.lastTickTs):" · 아직 검사 없음"),"next check: every "+nc.tickK+" hook ticks (now "+nc.tickCount+") · "+nc.unusedDays+"-day unused watch"+(nc.lastTickTs?" · last check "+rfWhen(nc.lastTickTs):" · no check yet")));
+    rfSet("rfProposals", prL);
+    var cuL=[];
+    if(u.running) cuL.push(T("정리 제안 실행 중","curation running"));
+    if(u.lastTs){ var trg=u.lastTrigger==="auto"?T("자동","auto"):u.lastTrigger==="button"?T("버튼","button"):T("수동","manual"); cuL.push(T("마지막 실행 "+rfWhen(u.lastTs)+" · "+trg+" · "+u.lastOutcome+(u.lastReason?" ("+u.lastReason+")":""),"last run "+rfWhen(u.lastTs)+" · "+trg+" · "+u.lastOutcome+(u.lastReason?" ("+u.lastReason+")":""))); }
+    else cuL.push(T("아직 실행 없음 — 장부 재료가 쌓이면 스스로 돌아요(비용 없음)","no run yet — runs by itself once ledger material accumulates (no cost)"));
+    var m=u.metrics||{}; cuL.push(T("측정: 채택률 "+m.adoptRate+"% (제안 "+m.proposedTotal+" · 채택 "+m.adopted+" · 안 올림 "+m.declined+") · 서고 "+m.archiveSize+"항 · 선별 초과 "+m.selOverCount+"회 · 미사용 "+m.unusedCount+"항","measures: adoption "+m.adoptRate+"% (proposed "+m.proposedTotal+" · adopted "+m.adopted+" · declined "+m.declined+") · stored "+m.archiveSize+" · selection over-range "+m.selOverCount+" · unused "+m.unusedCount));
+    rfSet("rfCurator", cuL, u.lastItems&&u.lastItems.length?{summary:T("마지막 제안 "+u.lastItems.length+"건 보기","show last "+u.lastItems.length+" proposal(s)"), items:u.lastItems}:(u.lastTs?{summary:T("마지막 실행의 제안 없음","last run produced no proposals"), items:[]}:null));
+  }
   function decideActs(d){
     var acts9=[];
     // 근거 재확인 카드의 kept는 미확인 evidence-unseen 경보의 부분집합(같은 eventId 결속) — 별도 가산은
@@ -7412,15 +7449,7 @@ class Dashboard {
         var h9=document.createElement("div"); h9.style.fontWeight="600"; h9.textContent=(d.lang==="en"?"Rules":"수칙"); ec.appendChild(h9); // [재편 B] 어휘 4종 — 정상 흐름 헤더
         var s9=document.createElement("div"); if(e9.tone==="warn"){ s9.style.cssText="color:var(--vscode-editorWarning-foreground,#d9a441)"; } else { s9.className="muted"; } s9.textContent=e9.label; ec.appendChild(s9);
         if(d.usedMemory&&d.usedMemory.selOver){ var so9=d.usedMemory.selOver; var ov9=document.createElement("div"); ov9.style.cssText="color:var(--vscode-editorWarning-foreground,#d9a441);font-size:11px;margin-top:2px"; ov9.textContent=T("관련 수칙이 정상 범위("+so9.itemsMax+"항 · "+so9.bytesMax+"바이트)를 넘음 — 최근 검증 "+so9.count+"항 · "+so9.bytesTotal+"바이트 전량 동봉(누락 없음) · 서고 정리 권장","related rules exceed the normal range ("+so9.itemsMax+" items · "+so9.bytesMax+" bytes) — last verification carried "+so9.count+" items · "+so9.bytesTotal+" bytes, all included · consider tidying the archive"); ec.appendChild(ov9); } // [§7 4-2b] 서고 카드 초과 표기(정보 — 경보 아님)
-        if(d.curation){ // [CURATION v3 §3 E·F] 수칙 카드 1줄 — 마지막 정리 제안·제안 n·미승인 m·측정(채택률·서고 크기·선별 초과) + 버튼 "마지막 정리 결과 보기"(2026-09-06: 실행 버튼 폐지 — 실행은 자동 트리거·CLI만, 승인은 제안함)
-          var cu9=d.curation; var cl9=document.createElement("div"); cl9.className="muted"; cl9.style.cssText="font-size:11px;margin-top:3px";
-          var when9c=""; if(cu9.lastTs){ var dt9c=new Date(cu9.lastTs); if(!isNaN(dt9c.getTime())) when9c=(dt9c.getMonth()+1)+"/"+dt9c.getDate()+" "+String(dt9c.getHours()).padStart(2,"0")+":"+String(dt9c.getMinutes()).padStart(2,"0"); }
-          var trg9=cu9.lastTrigger==="auto"?T("자동","auto"):cu9.lastTrigger==="button"?T("버튼","button"):T("수동","manual");
-          cl9.textContent=(cu9.running?T("정리 제안 실행 중 · ","curation running · "):"")+(cu9.lastTs?T("마지막 정리 제안 "+when9c+"("+trg9+" · "+cu9.lastOutcome+")","last curation "+when9c+" ("+trg9+" · "+cu9.lastOutcome+")"):T("정리 제안 실행 이력 없음","no curation run yet"))+T(" · 제안 "+cu9.proposedTotal+" · 미승인 "+cu9.pending+"/"+cu9.maxPending+" · 채택률 "+cu9.adoptRate+"% · 서고 "+cu9.archiveSize+"항 · 선별 초과 "+cu9.selOverCount+"회 · 미사용 "+cu9.unusedCount+"항"+(cu9.unusedCount?"("+cu9.unusedDays+"일 관측)":"")," · proposed "+cu9.proposedTotal+" · pending "+cu9.pending+"/"+cu9.maxPending+" · adopted "+cu9.adoptRate+"% · archive "+cu9.archiveSize+" · over-range "+cu9.selOverCount+" · unused "+cu9.unusedCount+(cu9.unusedCount?" ("+cu9.unusedDays+"d observed)":""));
-          ec.appendChild(cl9);
-          var cb9=document.createElement("button"); cb9.className="secondary"; cb9.style.cssText="margin-top:4px;font-size:12px"; cb9.textContent=T("마지막 정리 결과 보기","Show last curation result"); cb9.disabled=!cu9.lastTs; cb9.title=T("독립 정리 담당은 재료(반복 신호·미사용 수칙·결정)가 쌓이면 스스로 돕니다 — 여기서는 마지막 실행의 결과와 제안만 봅니다(승인은 제안함).","The independent curator runs by itself when material accumulates — this only shows the last run's result and proposals (approve in the proposal box).");
-          cb9.addEventListener("click", function(){ vscode.postMessage({type:"curationShow"}); }); ec.appendChild(cb9);
-        }
+        // [§B3 · D4] 정리 담당 줄·'마지막 정리 결과 보기' 버튼은 개요 패널 '수칙 흐름' 카드(정리 담당 칸 인라인 접기)로 옮겼다 — 설정 탭은 승인·편집만.
         var actT=e9.act?e9.act:(e9.proposal==="recover"?"proposalRecover":e9.proposal==="pending"?"proposalApprove":"envelopeApprove"); // §7 증분 2 — 초안·복구는 별도 채널(도장=사용자 전용 표면)·act=카드가 지정한 행동(승인 없이 바뀐 내용 보기)
         var act2T=e9.proposal==="pending"?"proposalShow":"envelopeShow";
         if(e9.btn){ var ab=document.createElement("button"); ab.style.cssText="margin-top:4px;font-weight:700"; ab.textContent=e9.btn; ab.addEventListener("click", function(){ vscode.postMessage({type:actT, repo: e9.repo, lang: e9.lang, target: String(e9.driftTarget||"")}); }); ec.appendChild(ab); }
@@ -8663,6 +8692,7 @@ class Dashboard {
     // (scrollIntoView smooth)은 비동기 애니메이션이라 이 동기 복원 뒤에도 제 목표로 진행 — 충돌 없음.
     safe(function(){ if (d.uiTheme && d.uiTheme !== curTheme) applyTheme(d.uiTheme); }); // 다른 창의 테마 변경 동기화(같은 전역 파일)
     safe(function(){ renderOverview(d); }); // [UI 개편 2차] 개요 패널 — 같은 상태 푸시 재조립
+    safe(function(){ renderRulesFlow(d); }); // [§B3 · D4] 수칙 흐름 4칸(개요)
     safe(function(){ if (Math.abs(window.scrollY - keepY) > 1) window.scrollTo(0, keepY); });
   });
   // 부팅 자가 치유(3요원 조사 합의): 이 화면은 원래 스스로 데이터를 요청하지 않아(push 전용), 초기 post가 어떤 이유로든
