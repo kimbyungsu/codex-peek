@@ -97,6 +97,7 @@ item 형태: `{"op":"add_node","payload":{"node":{...}},"evidence":[...]}` — t
 
 ### 2-3. 폭발 방지 상한 — 정본에서 강제(1차 blocker③ 반영)
 
+- **(2026-09-12 개정 · HARNESS-STRUCTURE-2026-09-11 §B2 · 사용자 결정 D2)** 상한은 **활성** file 노드 60개다 — 내려간 칸(deprecated·superseded·tombstoned)은 기록으로 남되 자리를 차지하지 않는다(정본 `activeFileNodeCount`·`activeFileDelta`, 사전검사 동형). 가득 차면 하네스가 덜 관련된 활성 칸 하나를 정규 패치로 내리고 새 칸을 받는다(교체 정책=계약 `mapRotation`). 아래 원문은 개정 전 규정.
 - **지도 전체 file 노드 상한 60개**: 상수(`MAX_FILE_NODES`)와 검사를 **정본 `src/project-map.ts`의
   semanticValidateV2(add_node)에 둔다** — 적용 잠금(withMapLock) 안에서 그때의 topology로 강제되므로
   ①보강 외 일반 add_node 패치의 우회 ②"각자 59개를 보고 61개까지 적용" 경합이 모두 닫힌다.
@@ -163,6 +164,7 @@ buildEnrichPrompt에 add_node 견본 1줄 추가:
   연결 우선이 완화하지만, 관측 후 슬라이스 우선순위(유형 가중)는 후속 판단.
 - 모델이 상한·조건을 무시하면 item 거부→라운드 실패(answer-rejected)가 생길 수 있다 — 자동 재시도
   1회+input 자기치유가 받치고, 고지(§2-4)가 1차 방어다(어휘 드리프트 봉합에서 실증된 접근).
+- **(2026-09-12 개정 · HARNESS-STRUCTURE §B2 (2))** 파일 삭제·이름변경은 하네스 사실 전이가 정규 패치(provider harness-git·git 근거·detectedBy git-name-status)로 deprecated 처리하고(기록 잔존), 파일이 돌아오면 복귀(revived)한다. 아래 원문은 개정 전 규정.
 - 파일 삭제 시 file 노드는 잔존한다(lifecycle 전이는 기존 tombstone/검증 해소·사용자 경로 소관 —
   v3은 생성만 다룬다).
 - 임시 id 매핑은 결과(라운드) 스코프뿐이다 — 라운드를 넘는 참조는 설계상 불가하며, 필요한 엣지는

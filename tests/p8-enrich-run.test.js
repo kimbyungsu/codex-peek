@@ -722,9 +722,9 @@ console.log("[11] 소화 기준점 교체(2026-08-04 사용자 결정) — 커�
   ok(/changed = expandChangedWithConsumedDelta\(repo, changed, srcHead\);/.test(meSrc), "⑦a 배선 — 합류의 끝점=같은 시점에 캡처한 srcHead(경합 창 차단)");
   ok(meSrc.includes('base.head + ".." + endHead') && !meSrc.includes('base.head + "..HEAD"'), "delta 끝점=고정 커밋(자체 HEAD 재조회 잔재 0)");
   ok(!/\.map\(\(s\) => s\.trim\(\)\)\.filter\(Boolean\)/.test(meSrc.slice(meSrc.indexOf("function expandChangedWithConsumedDelta"), meSrc.indexOf("function expandChangedWithConsumedDelta") + 1600)), "NUL 파서 trim 금지(선행 공백 파일명 원문 보존 — 함수 본문 검사)");
-  ok(/if \(st && st\.srcHead\) writeConsumedBaseline\(repo, st\.srcHead, j\.mapId\);/.test(meSrc), "done 도장=입력 시점 srcHead에만 결속");
+  ok(/if \(st && st\.srcHead && st\.factsOk === true\) writeConsumedBaseline\(repo, st\.srcHead, j\.mapId\);/.test(meSrc), "done 도장=입력 시점 srcHead에만 결속(+§B2 사실 전이가 다 붙은 실행에서만 전진·fail-closed)");
   {
-    const doneIdx = meSrc.indexOf("if (st && st.srcHead) writeConsumedBaseline");
+    const doneIdx = meSrc.indexOf("if (st && st.srcHead && st.factsOk === true) writeConsumedBaseline");
     const doneBlk = meSrc.slice(doneIdx - 600, doneIdx + 200);
     ok(!/rev-parse/.test(doneBlk), "done 도장 주변에 완료 시점 HEAD 재판독 부재(실행 중 커밋 소화 오도장 차단)");
   }

@@ -23,16 +23,17 @@ const deferredFileFor = (repo) => path.join(ENRICH_DIR, repoKeyFor(repo) + ".def
 // 보관함 0fb9ce8c). 기준점을 '지도가 마지막으로 소화한 커밋'으로 옮겨, 그 이후의 커밋 변경도 입력에
 // 합류시킨다(자동커밋·수동작업 워크플로 무관 — 특수 분기 아님). git 기반 저장소 전용(historyless는
 // 인벤토리 내용 비교가 이미 전량 커버). 부속 파일=best-effort: 없거나 손상이면 종전 입력(무회귀).
+const OID_RE = /^[0-9a-f]{40}$|^[0-9a-f]{64}$/i; // git 객체 id — sha1(40)·sha256(64) 둘 다(확인 검증 blocker: 40자 고정은 SHA-256 저장소의 기준점을 만들지 못함)
 const consumedFileFor = (repo) => path.join(ENRICH_DIR, repoKeyFor(repo) + ".consumed.json");
 function readConsumedBaseline(repo) {
   try {
     const o = JSON.parse(fs.readFileSync(consumedFileFor(repo), "utf8"));
-    return o && typeof o === "object" && !Array.isArray(o) && /^[0-9a-f]{40}$/.test(String(o.head || "")) ? o : null;
+    return o && typeof o === "object" && !Array.isArray(o) && OID_RE.test(String(o.head || "")) ? o : null; // [§B2] sha1 40 | sha256 64
   } catch { return null; }
 }
 function writeConsumedBaseline(repo, head, mapId) {
   try {
-    if (!/^[0-9a-f]{40}$/.test(String(head || ""))) return false;
+    if (!OID_RE.test(String(head || ""))) return false; // [§B2] sha1 40 | sha256 64
     fs.mkdirSync(ENRICH_DIR, { recursive: true });
     fs.writeFileSync(consumedFileFor(repo), JSON.stringify({ head: String(head), mapId: String(mapId || ""), at: new Date().toISOString() }));
     return true;
@@ -43,7 +44,7 @@ function expandChangedWithConsumedDelta(repo, changed, endHead) {
   if (!Array.isArray(changed)) return changed; // 산출 불가(unknown)는 그대로 — 추측 확장 금지
   // 끝점=호출자가 '한 번' 캡처한 커밋(확인 검증 blocker 재등장): 여기서 HEAD를 다시 조회하면 두 조회
   // 사이에 낀 커밋이 발췌 없이 소화 처리된다. 끝점 부재=확장 안 함(기준점도 그때 안 찍히므로 무손실).
-  if (!/^[0-9a-f]{40}$/.test(String(endHead || ""))) return changed;
+  if (!OID_RE.test(String(endHead || ""))) return changed; // [§B2] sha1 40 | sha256 64
   const base = readConsumedBaseline(repo);
   if (!base) return changed;
   try {
@@ -142,7 +143,7 @@ const ATTEMPT_PHASES = ["running", "applying", "done", "failed", "parked"];
 // 3b가 이 장부를 재개 정본으로 신뢰하므로 이형이 통과하면 item 건너뜀·오재개·잘못된 patch 재투입.
 // retryFrom: 사용자가 명시로 '다시 시도'한 시점의 시도 개수. 그 앞의 실패는 라우팅 판단에서 제외한다
 // (2차 blocker①: 옛 실패 플래그가 남아 명시 재시도가 새 호출 없이 곧바로 같은 보류로 돌아갔다).
-const JOB_KEYS = ["schema", "jobKey", "mapId", "authorityHash", "decisionContextHash", "mode", "configWs", "slot", "phase", "startedAt", "finishedAt", "parkedReason", "sourceFp", "retryFrom", "attempts"];
+const JOB_KEYS = ["schema", "jobKey", "mapId", "authorityHash", "decisionContextHash", "mode", "configWs", "slot", "phase", "startedAt", "finishedAt", "parkedReason", "sourceFp", "retryFrom", "attempts", "rotationPartial"]; // rotationPartial: [§B2 (3)] 교체 부분 상태(선택·null 허용)
 // failureStage/failureCode/failureFile: 실패를 사람이 읽을 수 있게 '구조'로도 남긴다(2026-07-29 설계 상의 결론).
 // failReason 자유 문자열만 남기면 화면이 내부 표현을 그대로 노출하거나, 호출 실패와 결과 거부를 구분하지 못한다.
 const ATTEMPT_KEYS = ["attemptId", "provider", "consentGen", "phase", "startedAt", "sourceFp", "results", "cursor", "resolutions", "failReason", "failureStage", "failureCode", "failureFile", "failureDetail", "parkedReason", "finishedAt"];
@@ -201,6 +202,14 @@ function validateJob(d) {
   for (const k of ["jobKey", "mapId", "authorityHash", "mode", "configWs", "slot", "startedAt"]) if (typeof d[k] !== "string" || !d[k]) return "필드:" + k;
   if (!["self", "economy", "precision", "auto"].includes(d.mode)) return "mode 열거"; // 3차: 미지 열거값 차단
   if (d.slot !== "ko" && d.slot !== "en") return "slot 열거";
+  // [§B2 (3)] rotationPartial — 없음|null|{victimId UUID, objectFormat sha1|sha256, head(형식 결속 40|64hex), at ISO} 정확 4키(이형=손상 · 정본 VerificationBasis 와 같은 규칙)
+  if (d.rotationPartial !== undefined && d.rotationPartial !== null) {
+    const rp = d.rotationPartial;
+    const okRp = rp && typeof rp === "object" && !Array.isArray(rp) && Object.keys(rp).length === 4 && UUID_RE.test(String(rp.victimId || ""))
+      && (rp.objectFormat === "sha1" || rp.objectFormat === "sha256") && typeof rp.head === "string" && (rp.objectFormat === "sha1" ? /^[0-9a-f]{40}$/i.test(rp.head) : /^[0-9a-f]{64}$/i.test(rp.head))
+      && typeof rp.at === "string" && !Number.isNaN(Date.parse(rp.at));
+    if (!okRp) return "rotationPartial";
+  }
   if (!UUID_RE.test(d.mapId)) return "mapId 형식(UUID)"; // 7차 f-b74df6a1
   if (!FP_RE.test(d.authorityHash)) return "authorityHash 형식(sha1)";
   if (d.decisionContextHash !== null && !(typeof d.decisionContextHash === "string" && FP_RE.test(d.decisionContextHash))) return "decisionContextHash";
@@ -1149,6 +1158,20 @@ function runEnrichLocked(repo, o, env) {
   // ③ pipelineBarrier·topology 재대조(잠금 안 캡처만 — 판정·해시는 밖)
   const bar = MR.pipelineBarrier(repo);
   if (bar.blocked) return park(null, "pipeline-wal");
+  // [HARNESS-STRUCTURE-2026-09-11 §B2 (2)(3)] 실행 시작 통과(topology 캡처 '전' — 아래 캡처가 최신을 본다): 이전 실행의 교체 부분 상태 보상 재시도 →
+  // 저장소에서 사라진·이름 바뀐 파일의 칸을 정규 패치로 내림 → 복귀. 실패는 기록만(실행을 막지 않음). git 기준(basis) 큐에서만.
+  let factHead0 = null, factsOk0 = true; // 통과가 본 HEAD(끝점 결속)·전부 적용됐는가(false=완료 시 기준점 전진 금지 → 다음 실행이 다시 먹는다)
+  if (queue.basis && queue.basis.kind === "git") {
+    try {
+      const MRot = require(path.join(__dirname, "map-rotation.js"));
+      const jr0 = readEnrichJob(repo);
+      const base0 = readConsumedBaseline(repo);
+      const fp0 = MRot.factPass(repo, o.ws || repo, { job: jr0.st === "ok" ? jr0.job : null, baselineHead: base0 ? base0.head : null, updateJob: (mut) => fencedUpdateEnrichJob(repo, env.fence, mut), log });
+      factHead0 = fp0 && fp0.head ? fp0.head : null;
+      factsOk0 = !(fp0 && fp0.ok === false);
+      if (!factsOk0) log({ route: "fact-transition", reason: "incomplete", outcome: "kept-baseline", detail: JSON.stringify({ facts: fp0.facts && fp0.facts.failed, revived: fp0.revived && fp0.revived.failed, comp: fp0.compensated && !fp0.compensated.ok ? fp0.compensated.error : null }).slice(0, 200) });
+    } catch (e) { factsOk0 = false; log({ route: "fact-transition", reason: "exception:" + String(e && e.message || e).slice(0, 60), outcome: "skipped" }); }
+  }
   const lk = MR.withMapLock(repo, () => {
     try { return { raw: fs.readFileSync(path.join(repo, "project-map", "topology.json"), "utf8") }; }
     catch (e) { return { err: e && e.code === "ENOENT" ? "absent" : "unreadable" }; }
@@ -1231,13 +1254,13 @@ function runEnrichLocked(repo, o, env) {
   // 입력 계산 시점의 HEAD를 '한 번만' 캡처(검증 blocker 2회차 — 완료 시점 재판독도, 확장 함수의 자체
   // 재조회도 금지): 이 값 하나가 ①커밋 delta의 끝점 ②done의 소화 기준점 기록에 함께 결속된다. 두 조회로
   // 나누면 그 사이에 낀 커밋이 발췌 없이 소화 처리된다.
-  let srcHead = null;
+  let srcHead = factHead0 || null; // [§B2] 실행 시작 통과가 본 HEAD 와 같은 값 — 사실 전이와 소화 기준점의 끝점을 한 판독에 결속
   try {
-    if (queue.basis && queue.basis.kind === "git") {
+    if (!srcHead && queue.basis && queue.basis.kind === "git") { // 실행 시작 통과(factPass)가 HEAD 를 봤으면 재조회하지 않는다 — 판독은 하나(확인 검증 3판 보완)
       const { spawnSync: spH } = require("child_process");
       const ghH = spH("git", ["-c", "safe.directory=*", "-C", repo, "rev-parse", "HEAD"], { encoding: "utf8", timeout: 3000, windowsHide: true });
       const hH = ghH.status === 0 ? String(ghH.stdout || "").trim() : "";
-      if (/^[0-9a-f]{40}$/.test(hH)) srcHead = hH;
+      if (OID_RE.test(hH)) srcHead = hH; // factPass 가 HEAD 를 못 봤을 때(=factsOk0 false)만 — delta 끝점용이며 기준점 전진은 factsOk 관문이 막는다
     }
   } catch { /* 캡처 실패=확장·기준점 기록 모두 생략(보수 — 다음 라운드가 다시 먹는다) */ }
   try {
@@ -1254,7 +1277,7 @@ function runEnrichLocked(repo, o, env) {
   // ⑥ 멱등·복구 우선(수렴은 ⑦b — 설계 v11: authority 단독 결속은 자기 재보강/외부 억제 양쪽 실패라 폐기)
   if (jr.st === "ok") {
     const j = jr.job;
-    if (j.phase === "open") { if (env.p10) env.p10.touch(j.jobKey, jobRunIdOf(j)); return resumeJob(repo, o, env, j, { topo, idx, pol, ah, corridor, changed, srcFp, srcHead }); } // 미완 복구가 신규보다 항상 우선
+    if (j.phase === "open") { if (env.p10) env.p10.touch(j.jobKey, jobRunIdOf(j)); return resumeJob(repo, o, env, j, { topo, idx, pol, ah, corridor, changed, srcFp, srcHead, factsOk: factsOk0 }); } // 미완 복구가 신규보다 항상 우선
     if (j.jobKey === jobKey && j.phase === "parked") {
       // 3차 blocker⑤: consent-stale park는 '새 grant 세대'가 생기면 같은 job의 새 attempt로 자동 재개(v10 P8-2)
       if (j.parkedReason === "consent-stale") {
@@ -1265,7 +1288,7 @@ function runEnrichLocked(repo, o, env) {
         if (cR.st === "ok" && eligible && gR.gen > lastGen) {
           const wRe = fencedUpdateEnrichJob(repo, env.fence, (jj) => { if (!jj || jj.phase !== "parked") return null; const nx = { ...jj, phase: "open" }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
           if (wRe.fenceLost) return { outcome: "busy", reason: "run-lock-lost" };
-          if (wRe.ok && !wRe.unchanged) { if (env.p10) env.p10.touch(wRe.job.jobKey, jobRunIdOf(wRe.job)); return resumeJob(repo, o, env, wRe.job, { topo, idx, pol, ah, corridor, changed, srcFp, srcHead }); }
+          if (wRe.ok && !wRe.unchanged) { if (env.p10) env.p10.touch(wRe.job.jobKey, jobRunIdOf(wRe.job)); return resumeJob(repo, o, env, wRe.job, { topo, idx, pol, ah, corridor, changed, srcFp, srcHead, factsOk: factsOk0 }); }
         }
       }
       // 입력 자기치유(2026-08-04 보류 반복 봉합 — consent-stale 자기 재개와 같은 관용구):
@@ -1281,7 +1304,7 @@ function runEnrichLocked(repo, o, env) {
           if (wIn.ok && !wIn.unchanged) {
             log({ route: "input-heal", reason: "code-changes-arrived", outcome: "resumed", jobKey: j.jobKey });
             if (env.p10) env.p10.touch(wIn.job.jobKey, jobRunIdOf(wIn.job));
-            return resumeJob(repo, o, env, wIn.job, { topo, idx, pol, ah, corridor, changed, srcFp, srcHead });
+            return resumeJob(repo, o, env, wIn.job, { topo, idx, pol, ah, corridor, changed, srcFp, srcHead, factsOk: factsOk0 });
           }
         }
         return { outcome: "noop", reason: "parked", parkedReason: "input-doc-only" };
@@ -1300,7 +1323,7 @@ function runEnrichLocked(repo, o, env) {
           if (wRd.ok && !wRd.unchanged) {
             log({ route: "ready-heal", reason: "readiness-recovered", outcome: "resumed", jobKey: j.jobKey, parkedReason: j.parkedReason || "" });
             if (env.p10) env.p10.touch(wRd.job.jobKey, jobRunIdOf(wRd.job));
-            return resumeJob(repo, o, env, wRd.job, { topo, idx, pol, ah, corridor, changed, srcFp, srcHead });
+            return resumeJob(repo, o, env, wRd.job, { topo, idx, pol, ah, corridor, changed, srcFp, srcHead, factsOk: factsOk0 });
           }
         }
         return { outcome: "noop", reason: "parked", parkedReason: j.parkedReason || "" };
@@ -1339,7 +1362,7 @@ function runEnrichLocked(repo, o, env) {
         if (wAr.ok && !wAr.unchanged) {
           log({ route: "auto-retry", reason: "parked-once", outcome: "resumed", jobKey: j.jobKey, parkedReason: j.parkedReason || "" });
           if (env.p10) env.p10.touch(wAr.job.jobKey, jobRunIdOf(wAr.job));
-          return resumeJob(repo, o, env, wAr.job, { topo, idx, pol, ah, corridor, changed, srcFp, srcHead });
+          return resumeJob(repo, o, env, wAr.job, { topo, idx, pol, ah, corridor, changed, srcFp, srcHead, factsOk: factsOk0 });
         }
       }
       return { outcome: "noop", reason: "parked", parkedReason: j.parkedReason || "" }; // 그 외=명시 재시도 버튼이 해제
@@ -1372,7 +1395,7 @@ function runEnrichLocked(repo, o, env) {
   });
   if (!mk.ok) return park(null, "job-write:" + mk.reason);
   if (env.p10 && mk.job) env.p10.touch(mk.job.jobKey, jobRunIdOf(mk.job));
-  return driveAttempts(repo, o, env, { topo, idx, pol, ah, jobKey, corridor, changed, srcFp, srcHead, grant, consent });
+  return driveAttempts(repo, o, env, { topo, idx, pol, ah, jobKey, corridor, changed, srcFp, srcHead, factsOk: factsOk0, grant, consent });
 }
 
 // 소스 상태 지문(blocker⑤ — 수렴 입력): git=head+변경 파일 현재 내용 sha1 / historyless=inventory 전체
@@ -1560,7 +1583,8 @@ function applyItems(repo, o, env, st, attemptId) {
       // ⚠ 완료 시점 HEAD 재판독 금지(검증 blocker): 기준점은 '입력을 계산한 시점'의 커밋(st.srcHead)에만
       // 결속한다 — 실행 중 생긴 커밋이 발췌 없이 소화 처리되는 시간 창 차단. 캡처 없는 재개(사망 복구
       // 등)는 미기록=기존 기준점 유지(다음 라운드가 다시 먹는다 — 과다 포함이 안전 방향).
-      if (st && st.srcHead) writeConsumedBaseline(repo, st.srcHead, j.mapId);
+      if (st && st.srcHead && st.factsOk === true) writeConsumedBaseline(repo, st.srcHead, j.mapId); // [§B2] 사실 전이가 다 붙은 실행(factsOk===true)에서만 전진 — 값이 없으면(복구 경로 누락 등) 전진하지 않는다(fail-closed)
+      else if (st && st.srcHead) log({ route: "fact-transition", reason: "baseline-held", outcome: "kept-baseline", jobKey: j.jobKey });
       // 멈춤을 알렸으면 풀림도 알려야 한다 — 완주 시 그 프로젝트의 '멈춤' 경보를 해소(대체)한다.
       try { CL.supersedeIntegrity(null, "enrich-parked", String(o.ws || repo)); } catch { /* 무해 */ }
       log({ route: a.provider, reason: applied > 0 ? "enriched" : "settled-no-apply", outcome: applied > 0 ? "applied" : "settled", provider: a.provider, jobKey: j.jobKey, consentGen: a.consentGen, awaitingVerification, rejected, investigationPending });
@@ -1600,9 +1624,39 @@ function applyItems(repo, o, env, st, attemptId) {
       if (!wA.ok) return park(null, "cursor-write:" + wA.reason);
       patch = conv.patch;
     }
-    const topoNow = require(path.join(__dirname, "map-runtime.js")).readTopoExFor(repo);
+    let topoNow = require(path.join(__dirname, "map-runtime.js")).readTopoExFor(repo);
     if (topoNow.st !== "ok") return park(null, "topology-" + topoNow.st);
+    // [§B2 (3)] 교체 — 활성 칸이 상한인데 활성 file add_node 면 먼저 덜 관련된 활성 칸 하나를 정규 패치로 내린다(교체·보상·부분 상태=map-rotation.js).
+    // 방출 뒤 이 add_node 는 base 불일치(cas-stale)로 rev 전진 규약을 타 새 topology 로 재변환된다(기존 장치).
+    let rot9 = { rotated: false };
+    try {
+      const MRot9 = require(path.join(__dirname, "map-rotation.js"));
+      rot9 = MRot9.rotateBeforeAdd(repo, o.ws || repo, { patch, topo: topoNow.topo, head: st && st.srcHead ? st.srcHead : null, updateJob: (mut) => fencedUpdateEnrichJob(repo, env.fence, mut), log });
+    } catch (e) { rot9 = { parkReason: "rotation-failed:exception" }; log({ route: "rotation", reason: "exception:" + String(e && e.message || e).slice(0, 60), outcome: "parked" }); }
+    if (rot9.parkReason) return park((jj) => jj && { ...jj, phase: "parked", parkedReason: rot9.parkReason, finishedAt: nowIso() }, rot9.parkReason, { jobKey: j.jobKey });
+    if (rot9.rotated) { topoNow = require(path.join(__dirname, "map-runtime.js")).readTopoExFor(repo); if (topoNow.st !== "ok") return park(null, "topology-" + topoNow.st); }
     const step = applyOnePatch(repo, o, env, { job: j, attempt: a, attemptId, item, patch, topoNow: topoNow.topo });
+    // 정산 재료=작업에 남은 표식(이번 반복에서 방출했든, 앞 반복의 일시 재시도 뒤 이어진 것이든) — 확인 검증 blocker: 다음 반복은 활성 59라 rot9 만 보면 표식이 남는다.
+    const pendingRot9 = rot9.rotated ? { victimId: rot9.victimId, head: rot9.head, path: rot9.victimPath } : (j.rotationPartial && j.rotationPartial.victimId ? { victimId: j.rotationPartial.victimId, head: j.rotationPartial.head, path: null } : null);
+    if (pendingRot9) { // 교체 완료 조건=방출·추가 둘 다 적용. 추가가 거부·보류면 즉시 보상(되돌림), 보상 실패=rotation-partial(다음 실행 시작이 재시도).
+      const MRotP = require(path.join(__dirname, "map-rotation.js"));
+      const act9 = MRotP.settleRotation(step, pendingRot9);
+      if (act9 === "clear") {
+        const wc = fencedUpdateEnrichJob(repo, env.fence, (jj) => jj && { ...jj, rotationPartial: null });
+        if (!wc.ok) return park(null, "cursor-write:" + wc.reason);
+        log({ route: "rotation", reason: "completed", outcome: "applied", detail: pendingRot9.path || pendingRot9.victimId });
+      } else if (act9 === "compensate") {
+        const comp = MRotP.rotationCompensate(repo, pendingRot9.victimId, pendingRot9.head);
+        if (comp.ok) {
+          const wc = fencedUpdateEnrichJob(repo, env.fence, (jj) => jj && { ...jj, rotationPartial: null });
+          if (!wc.ok) return park(null, "cursor-write:" + wc.reason);
+          log({ route: "rotation", reason: comp.noop ? "settled" : "reverted", outcome: "reverted", detail: pendingRot9.path || pendingRot9.victimId });
+        } else {
+          log({ route: "rotation", reason: "rotation-partial", outcome: "partial", detail: String(comp.error || comp.stage || "") });
+          if (!step.parkReason) return park((jj) => jj && { ...jj, phase: "parked", parkedReason: "rotation-partial", finishedAt: nowIso() }, "rotation-partial", { jobKey: j.jobKey });
+        }
+      } // retry·revUp=일시 — 부분 상태 표식은 유지(적용되면 지움·안 되면 다음 실행 시작이 보상)
+    }
     if (step.done) {
       // ⓑ 전이: nextIndex+1+currentPatch·super 소거+rev=0 — 적용된 경우에만 appliedPatchIds 추가(도장 분리)
       const wB = fencedUpdateEnrichJob(repo, env.fence, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, cursor: { nextIndex: x.cursor.nextIndex + 1, rev: 0, appliedPatchIds: step.applied ? [...x.cursor.appliedPatchIds, patch.patchId] : x.cursor.appliedPatchIds } } : x) });
@@ -1837,7 +1891,7 @@ function resumeJob(repo, oIn, env, j, st2) {
   if (!a) { // 4차 blocker③: attempt 생성 전 park(consent-stale 등)에서 복원된 open — 신규 attempt 경로로
     const d0 = env.MRt.decideRoute({ mode: j.mode, ready: o.readiness, corridor: st2 && st2.corridor ? st2.corridor : "unknown", economyFailed: false, precisionFailed: false, conflict: false });
     if (d0.route === "park" || d0.route === "adjudicate") return park((jj) => jj && { ...jj, phase: "parked", parkedReason: d0.reason, finishedAt: nowIso() }, d0.reason, { jobKey: j.jobKey });
-    return runAttempt(repo, o, env, { topo: st2.topo, idx: st2.idx, pol: st2.pol, ah: st2.ah, jobKey: j.jobKey, corridor: st2 ? st2.corridor : "unknown", changed: st2 ? st2.changed : null, srcFp: st2 ? st2.srcFp : null, srcHead: st2 ? st2.srcHead : null }, d0.route);
+    return runAttempt(repo, o, env, { topo: st2.topo, idx: st2.idx, pol: st2.pol, ah: st2.ah, jobKey: j.jobKey, corridor: st2 ? st2.corridor : "unknown", changed: st2 ? st2.changed : null, srcFp: st2 ? st2.srcFp : null, srcHead: st2 ? st2.srcHead : null, factsOk: st2 ? st2.factsOk : null }, d0.route);
   }
   if (a.phase === "running") {
     if (a.provider !== "self") { // 유료=자동 재호출 금지(호출 여부 확인 불가)
@@ -1879,7 +1933,7 @@ function resumeJob(repo, oIn, env, j, st2) {
     //  · 그렇다고 곧바로 park하면 자동형의 '경제형 실패 → 정밀형 승격'이 막힌다(4차 blocker①).
     // 그래서 driveAttempts와 같은 규칙으로 다음 담당을 정하고, park일 때만 멈춘다.
     let eF2 = eF, pF2 = pF, route2 = d.route, lastP10R = null;
-    const stR = { topo: st2.topo, idx: st2.idx, pol: st2.pol, ah: st2.ah, jobKey: j.jobKey, corridor: cor, changed: st2 ? st2.changed : null, srcFp: st2 ? st2.srcFp : null, srcHead: st2 ? st2.srcHead : null };
+    const stR = { topo: st2.topo, idx: st2.idx, pol: st2.pol, ah: st2.ah, jobKey: j.jobKey, corridor: cor, changed: st2 ? st2.changed : null, srcFp: st2 ? st2.srcFp : null, srcHead: st2 ? st2.srcHead : null, factsOk: st2 ? st2.factsOk : null };
     const parkR = (rn, prov) => {
       if (env.p10 && lastP10R) env.p10.reasonCode = lastP10R; // 성공하면 실패 사유를 남기지 않는다(5차 blocker①)
       return park((jj) => jj && { ...jj, phase: "parked", parkedReason: rn, finishedAt: nowIso() }, rn, { jobKey: j.jobKey, provider: prov });

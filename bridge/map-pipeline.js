@@ -43,6 +43,10 @@ function gitInfo(repo) {
     isAncestor: (old) => { const r = spawnSync("git", ["-c", "safe.directory=*", "-C", repo, "merge-base", "--is-ancestor", old, "HEAD"], { timeout: 3000, windowsHide: true }); return r.status === 0; },
   };
 }
+function gitCommitExists(repo, ref) {
+  if (!/^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(String(ref || ""))) return false;
+  try { const r = spawnSync("git", ["-c", "safe.directory=*", "-C", repo, "cat-file", "-e", ref + "^{commit}"], { timeout: 3000, windowsHide: true }); return r.status === 0; } catch { return false; }
+}
 function canonicalIdentityFor(repo) {
   const phys = realOf(repo);
   const gi = gitInfo(repo);
@@ -774,6 +778,8 @@ function applyPatch(repo, mapId, patchId, opts) {
         if (!now9 || now9 !== c.contentHash) return { fail: "해소 claim 지문 불일치(" + c.file + ") — 근거가 바뀜(재해소 필요)", reasonCode: "decision-conflict" };
       }
     }
+    // [§B2 (2)] git 근거=커밋 실존 검사(하네스 사실 통로의 근거 실증 — 파일 근거의 실존 검사와 같은 자리)
+    for (const e9 of (livePatch.evidence || [])) if (e9 && e9.kind === "git" && !gitCommitExists(repo, e9.ref)) return { fail: "git 근거 커밋 미실존(" + String(e9.ref).slice(0, 12) + ")", terminal: "expired", reasonCode: "hard-reject", expireCode: "hard-reject" };
     // ② ②b(frontier 주입)
     const verdict = PM.semanticValidateV2(topo, livePatch, { frontier: pol.frontier, policyIds: new Set((pol.policies || []).map((x) => x.rec.policyId)), artifactIds: new Set([...(pol.policies || []).map((x) => x.rec.policyId), ...(pol.revocations || []).map((x) => x.rec.revocationId)]), revokedPolicyIds: new Set((pol.revocations || []).map((x) => x.rec.targetPolicyId)) });
     if (verdict.disposition !== "ok") return { fail: "②b " + verdict.disposition + ": " + verdict.errors[0], terminal: verdict.disposition === "hard-reject" ? "expired" : null, reasonCode: verdict.disposition === "hard-reject" ? "hard-reject" : "semantic-reject", ...(verdict.disposition === "hard-reject" ? { expireCode: "hard-reject" } : {}) };

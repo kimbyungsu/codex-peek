@@ -1676,6 +1676,15 @@ function durableProofGate(opts) {
 
 // 프로젝트별 계약을 읽는다. ★전역 상속 없음★ — 계약은 프로젝트 전용(최신성: 비우면 주입 0·바꾸면 그 프로젝트만 유지).
 // 파일 없으면 빈 계약. ws 미지정 시 현재 폴더 기준. (전역 기본값/상속/복원은 별개 층인 base-directive.json만 — §5.3 2공간 분리.)
+// [HARNESS-STRUCTURE-2026-09-11 §B2 (3) · 사용자 결정 D2] 지도 칸 교체 정책 — 사용자 설정(계약 mapRotation). 기본=켜기·보호 14일·허브 간선 3. 이형=기본값.
+function normMapRotation(o) {
+  const r = o && o.mapRotation && typeof o.mapRotation === "object" && !Array.isArray(o.mapRotation) ? o.mapRotation : {};
+  return {
+    enabled: r.enabled === undefined ? true : !!r.enabled,
+    protectDays: Number.isInteger(r.protectDays) && r.protectDays >= 0 ? r.protectDays : 14,
+    hubMinDegree: Number.isInteger(r.hubMinDegree) && r.hubMinDegree >= 1 ? r.hubMinDegree : 3,
+  };
+}
 function loadContract(ws, lang) {
   const read = (p) => {
     try {
@@ -1716,6 +1725,7 @@ function loadContract(ws, lang) {
     // 트랙: off=2트랙(구현↔검증, 기본·무회귀) / on=3트랙(탐색 leg 켬 — 범위 장부 advisory. SCOPE-LEDGER.md).
     // 브릿지는 아직 미사용(확장 대시보드 전용)이나 스키마 정합을 위해 양쪽 normalize(한쪽만 빠지면 동작 갈림 — SCOUT-TRACK 교훈).
     scoutMode: normScoutMode(o),
+    mapRotation: normMapRotation(o), // [§B2 (3)] 지도 칸 교체 정책(단일 정규화 출처)
     scoutGate: normScoutGate(o), // 게이트(⑥ 실험) — off|plan. 확장 saveContract는 이 필드를 보존해야 함(스키마 정합)
     scoutRepo: typeof o?.scoutRepo === "string" ? o.scoutRepo.trim() : "", // 정찰 대상 레포(P1 — cwd≠repo 해소). 빈 값=ws 그대로
     scoutArm: o && SCOUT_ARMS.includes(o.scoutArm) ? o.scoutArm : undefined, // 탐색 담당 raw 보존(1차 blocker② — norm으로 굳히면 상속·미지정 분기가 죽음). 실효는 scoutArmView

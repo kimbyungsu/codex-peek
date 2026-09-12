@@ -12,7 +12,7 @@
  * 생성 뷰(MAP.md)를 분리한다(같은 구조를 두 문서에 사람이 유지하면 한쪽이 반드시 낡는다 — HTML 미러 실증).
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PAYLOAD_KEYS_V2 = exports.READSET_RULES = exports.AUTHZ_KINDS = exports.PATCH_OPS_V2 = exports.POLICY_OPS_V2 = exports.PROPOSAL_ONLY_OPS_V2 = exports.TOPOLOGY_OPS_V2 = exports.FREE_FIELD_MAX_DEPTH = exports.PATCH_OPS = exports.ENRICH_ADD_NODE_PER_ROUND = exports.MAX_FILE_NODES = exports.CODE_EVIDENCE_KINDS = exports.EVIDENCE_KINDS = exports.ANCHOR_KINDS = exports.RELATIONS = exports.ROLES = exports.ENTITY_TYPES = exports.CONFIDENCES = exports.IMPLEMENTATIONS = exports.LIFECYCLES = exports.FRESHNESS_NOTE_V2 = exports.FRESHNESS_NOTE_V1_DEFAULT = exports.MAP_SCHEMA_VERSION = void 0;
+exports.PAYLOAD_KEYS_V2 = exports.READSET_RULES = exports.AUTHZ_KINDS = exports.PATCH_OPS_V2 = exports.POLICY_OPS_V2 = exports.PROPOSAL_ONLY_OPS_V2 = exports.TOPOLOGY_OPS_V2 = exports.FREE_FIELD_MAX_DEPTH = exports.PATCH_OPS = exports.ENRICH_ADD_NODE_PER_ROUND = exports.MAX_FILE_NODES = exports.CODE_EVIDENCE_KINDS = exports.FACT_DETECTED_BY = exports.EVIDENCE_KINDS = exports.ANCHOR_KINDS = exports.RELATIONS = exports.ROLES = exports.ENTITY_TYPES = exports.CONFIDENCES = exports.IMPLEMENTATIONS = exports.LIFECYCLES = exports.FRESHNESS_NOTE_V2 = exports.FRESHNESS_NOTE_V1_DEFAULT = exports.MAP_SCHEMA_VERSION = void 0;
 exports.isActiveFileNode = isActiveFileNode;
 exports.activeFileNodeCount = activeFileNodeCount;
 exports.activeFileDelta = activeFileDelta;
@@ -78,7 +78,10 @@ exports.ROLES = ["producer", "consumer", "gate", "authority", "storage"];
 // 확장 규칙: 추가만 허용(제거·의미 변경은 schemaVersion 상향과 마이그레이션 동반).
 exports.RELATIONS = ["produces", "consumes", "stores", "filters", "calls", "validates", "mutates", "promotes", "mirrors", "owns", "supersedes", "imports"];
 exports.ANCHOR_KINDS = ["code", "test", "config", "doc"];
-exports.EVIDENCE_KINDS = ["ledger", "ask", "test", "code", "config", "doc"];
+exports.EVIDENCE_KINDS = ["ledger", "ask", "test", "code", "config", "doc", "git"]; // git: 하네스 사실 판독(커밋 실존 검사 · §B2 (2)) — 어휘 확장=추가만
+// [HARNESS-STRUCTURE-2026-09-11 §B2 (2)] 하네스 사실 판독 표식 — patch.detectedBy 가 이 값이면 git 근거가 코드 계열 근거 대신 관문을 만족한다.
+// 보강 변환기(map-enrich.js convertItem→toPatchV2)는 detectedBy 를 만들지 않으므로 모델 출력이 이 규칙을 탈 수 없다(시험 고정).
+exports.FACT_DETECTED_BY = ["git-name-status", "rotation", "rotation-revert"];
 // '자기확인 고리 차단' 관문이 요구하는 실증 계열(2026-08-04 단일 출처화): validator 두 곳이 이 목록을
 // 하드코딩하고 있었고, 보강 요청문·발동 판정은 이 규칙을 모른 채 갈라져 있었다 — 넷이 같은 정본을 본다.
 exports.CODE_EVIDENCE_KINDS = ["code", "test", "config"];
@@ -102,6 +105,13 @@ function activeFileDelta(t, operation, payload, targetId) {
         const src = (t.nodes || []).find((x) => x && x.id === targetId);
         const nn = payload && Array.isArray(payload.newNodes) ? payload.newNodes : [];
         return nn.filter((x) => isActiveFileNode(x)).length - (isActiveFileNode(src) ? 1 : 0);
+    }
+    // set_state: 내려간 file 노드를 다시 active 로 올리는 전이=+1 (확인 검증 blocker: 되돌리기·복귀가 잠금 밖 상한 검사만 믿으면 경합으로 61)
+    if (operation === "set_state") {
+        const tr = (t.nodes || []).find((x) => x && x.id === targetId);
+        const to = payload && payload.to;
+        if (tr && tr.entityType === "file" && !isActiveFileNode(tr) && to && to.lifecycle === "active")
+            return 1;
     }
     return 0;
 }
@@ -432,6 +442,8 @@ function validateEvidence(e, who) {
     const errs = [];
     if (!exports.EVIDENCE_KINDS.includes(e.kind) || typeof e.ref !== "string" || !e.ref)
         errs.push(`${who}: evidence 불량`);
+    else if (e.kind === "git" && !/^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(e.ref))
+        errs.push(`${who}: git evidence ref 는 커밋 OID(40|64hex)여야`);
     if (e.note !== undefined && typeof e.note !== "string")
         errs.push(`${who}: evidence.note는 문자열이어야`);
     unknownKeys(e, EVIDENCE_KEYS, who, errs);
@@ -1108,7 +1120,9 @@ function validatePatchV2(p) {
                     errs.push("evidence 항목 불량");
                     break;
                 }
-            if (!p.evidence.some((e) => e && typeof e === "object" && exports.CODE_EVIDENCE_KINDS.includes(e.kind)))
+            // [§B2 (2)] 사실 근거 규칙: 하네스 사실 판독 표식(detectedBy)이면 git 근거(커밋 실존은 적용기가 검사)가 코드 계열 근거를 대신한다 — 보강 항목의 자기확인 고리 차단은 그대로.
+            const factOk = exports.FACT_DETECTED_BY.includes(String(p.detectedBy || "")) && p.evidence.some((e) => e && typeof e === "object" && e.kind === "git");
+            if (!factOk && !p.evidence.some((e) => e && typeof e === "object" && exports.CODE_EVIDENCE_KINDS.includes(e.kind)))
                 errs.push("code/test/config 계열 증거 최소 1개(자기확인 고리 차단)");
         }
     }
@@ -1993,6 +2007,9 @@ function semanticValidateV2(t, p, ctx) {
             }
             if (!stateEq(pl.expect, tr.ent.state))
                 errs.push(`${p.operation}: expect가 현재 상태와 불일치(필드 CAS)`);
+            // 활성 file 노드 상한은 '여기(적용 잠금 안의 topology)'가 유일한 권위 — 내려간 file 노드를 active 로 올리는 set_state 도 +1 로 센다(§B2 되돌리기·복귀 경합 차단).
+            if (p.operation === "set_state" && activeFileNodeCount(t) + activeFileDelta(t, "set_state", pl, p.targetId) > exports.MAX_FILE_NODES)
+                errs.push(`set_state: file 노드 전체 상한(${exports.MAX_FILE_NODES}) 도달(활성 file 노드 ${activeFileNodeCount(t)} — 내려간 칸 제외 · §B2) — active 로 올릴 수 없음`);
             break;
         }
         case "add_anchor": {

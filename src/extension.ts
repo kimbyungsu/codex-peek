@@ -6009,6 +6009,9 @@ class Dashboard {
     "adjudicate-unreachable": ["판정을 맡길 자리가 없어요","there is no adjudication path to take"],
     "resolution-out-of-scope": ["돌아온 결정이 이번 범위를 벗어났어요","the returned decision was outside this scope"],
     "retry-exhausted": ["재시도 횟수를 다 썼어요","retries were exhausted"],
+    // [HARNESS-STRUCTURE §B2 (3)] 지도 칸 교체 — 콜론 뒤는 단계(no-candidate·build·propose·classify·apply·job-write·no-git)
+    "rotation-failed": ["지도가 가득 차 오래된 칸을 내리려 했지만 진행하지 못했어요","the map is full and freeing an old slot did not go through"],
+    "rotation-partial": ["오래된 칸을 내렸는데 새 칸이 안 들어와 되돌리려다 멈췄어요 — 다음 실행이 먼저 되돌립니다","an old slot was freed but the new one was rejected, and the revert did not complete — the next run reverts first"],
     "rev-exhausted": ["세대 재시도를 다 썼어요","generation retries were exhausted"],
     "route-loop-guard": ["같은 자리를 맴돌아 멈췄어요","it looped and was stopped"],
     "uncertain-call": ["호출 결과를 확신할 수 없어 멈췄어요","the call outcome was uncertain, so it stopped"],
