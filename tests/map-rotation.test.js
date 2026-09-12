@@ -131,6 +131,26 @@ function addFileNode(ws, relPath, extra) {
   return node.id;
 }
 const nodeOf = (ws, id) => (MR.readTopoExFor(ws).topo.nodes || []).find((n) => n.id === id);
+// 60칸 지도 템플릿(한 번만 구축 — 블록마다 60번 파이프라인을 돌리면 ~4분) → 블록은 복제본을 쓴다(계약·동의·큐는 새 경로로 다시).
+let FULL_TEMPLATE = null;
+function fullRepo(tag) {
+  if (!FULL_TEMPLATE) {
+    const ws0 = mapRepo("template");
+    const names = Array.from({ length: CAP }, (_, i) => "src/f" + i + ".js");
+    for (const n of names) fs.writeFileSync(path.join(ws0, n), "// " + n + "\n");
+    const envOld = { ...process.env, GIT_COMMITTER_DATE: "2020-01-01T00:00:00", GIT_AUTHOR_DATE: "2020-01-01T00:00:00" };
+    spawnSync("git", ["-c", "safe.directory=*", "-C", ws0, "add", "-A"], { windowsHide: true });
+    spawnSync("git", ["-c", "safe.directory=*", "-C", ws0, "commit", "-q", "-m", "fill", "--date", "2020-01-01T00:00:00"], { env: envOld, windowsHide: true });
+    const ids = names.map((n) => addFileNode(ws0, n));
+    FULL_TEMPLATE = { dir: ws0, names, ids };
+  }
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), "map-rot-git-" + tag + "-"));
+  fs.cpSync(FULL_TEMPLATE.dir, ws, { recursive: true });
+  fs.writeFileSync(CL.contractFileFor(ws, "ko"), JSON.stringify({ scoutMode: "on" }));
+  MB.grantConsent(ws, "test");
+  ok(MB.ensureQueue(ws, PM) === true && PM.activeFileNodeCount(MR.readTopoExFor(ws).topo) === CAP, "(전제 " + tag + ") 60칸 지도 복제·큐 생성");
+  return { ws, names: FULL_TEMPLATE.names.slice(), ids: FULL_TEMPLATE.ids.slice() };
+}
 { const ws = mapRepo("fact"); const idM0 = addFileNode(ws, "src/m0.js"); const idM1 = addFileNode(ws, "src/m1.js");
   ok(nodeOf(ws, idM0).state.lifecycle === "active", "(전제) file 노드 2개 활성");
   const h0 = headOf(ws);
@@ -180,17 +200,9 @@ console.log("[9] 교체 후보(순수) — 보호·점수·결정성");
   ok(MRot.rotationPolicyFor(path.join(HOME, "no-such-ws")).enabled === true && MRot.rotationPolicyFor(path.join(HOME, "no-such-ws")).protectDays === 14, "정책 기본값=켜기·14일·허브 3(계약 없음)"); }
 
 console.log("[10] 교체 실행 — 방출(정규 패치)·부분 상태 표식·보상·재개 보상");
-{ const ws = mapRepo("rot");
-  // 활성 file 노드를 상한까지 채운다(오래된 커밋 시각 확보를 위해 파일들을 먼저 커밋해 둔 뒤 노드 추가)
-  const names = Array.from({ length: CAP }, (_, i) => "src/r" + i + ".js");
-  for (const n of names) fs.writeFileSync(path.join(ws, n), "// " + n + "\n");
-  g(ws, ["add", "-A"]); g(ws, ["commit", "-q", "-m", "fill", "--date", "2020-01-01T00:00:00"]);
-  // 커밋 시각을 과거로(보호 14일 회피) — GIT_COMMITTER_DATE 로 재커밋
-  const env0 = { ...process.env, GIT_COMMITTER_DATE: "2020-01-01T00:00:00", GIT_AUTHOR_DATE: "2020-01-01T00:00:00" };
-  spawnSync("git", ["-c", "safe.directory=*", "-C", ws, "commit", "-q", "--amend", "--no-edit", "--date", "2020-01-01T00:00:00"], { env: env0, windowsHide: true });
+{ const { ws, names, ids } = fullRepo("rot");
   const ages0 = MRot.gitLastCommitEpochs(ws, names.slice(0, 2), 5000);
   ok(ages0.size === 2 && [...ages0.values()].every((v) => v < 1_600_000_000), "마지막 커밋 시각 판독(과거 시각)");
-  const ids = names.map((n) => addFileNode(ws, n));
   const topoFull = MR.readTopoExFor(ws).topo;
   ok(PM.activeFileNodeCount(topoFull) === CAP, "(전제) 활성 file 노드=상한");
   fs.writeFileSync(path.join(ws, "src", "new.js"), "// new\n"); g(ws, ["add", "-A"]); g(ws, ["commit", "-q", "-m", "new"]);
@@ -237,13 +249,7 @@ console.log("[12] 확인 검증 1판 — 표식 정산(순수)·부분 적용 �
 { const pend = { victimId: U(1), head: "a".repeat(40) };
   ok(MRot.settleRotation({ done: true, applied: true }, pend) === "clear" && MRot.settleRotation({ done: true, applied: false, rejected: true }, pend) === "compensate" && MRot.settleRotation({ parkReason: "x" }, pend) === "compensate" && MRot.settleRotation({ retry: true }, pend) === "keep" && MRot.settleRotation({ revUp: true }, pend) === "keep" && MRot.settleRotation({ done: true, applied: true }, null) === "none", "settleRotation: 적용=clear · 거부/보류=compensate · 일시=keep · 표식 없음=none");
   // 부분 적용 실패: 실제로 내려간 뒤 실패를 돌려주는 적용기 → 표식 유지 / 아무것도 안 바꾸고 실패 → 표식 회수
-  const ws = mapRepo("partial");
-  const names = Array.from({ length: CAP }, (_, i) => "src/p" + i + ".js");
-  for (const n of names) fs.writeFileSync(path.join(ws, n), "// " + n + "\n");
-  const envOld = { ...process.env, GIT_COMMITTER_DATE: "2020-01-01T00:00:00", GIT_AUTHOR_DATE: "2020-01-01T00:00:00" };
-  spawnSync("git", ["-c", "safe.directory=*", "-C", ws, "add", "-A"], { windowsHide: true });
-  spawnSync("git", ["-c", "safe.directory=*", "-C", ws, "commit", "-q", "-m", "fill", "--date", "2020-01-01T00:00:00"], { env: envOld, windowsHide: true });
-  const ids = names.map((n) => addFileNode(ws, n));
+  const { ws, names, ids } = fullRepo("partial");
   fs.writeFileSync(path.join(ws, "src", "new2.js"), "// new2\n"); g(ws, ["add", "-A"]); g(ws, ["commit", "-q", "-m", "new2"]);
   const addP = { operation: "add_node", payload: { node: { id: U(9002), label: "new2", entityType: "file", roles: [], state: ST("active"), anchors: [{ kind: "code", path: "src/new2.js" }] } } };
   let jobState = { rotationPartial: null }; const updateJob = (mut) => { jobState = mut(jobState); return { ok: true }; };
@@ -295,13 +301,7 @@ console.log("[13] 확인 검증 2판 — 정본 set_state 상한(잠금 안 권�
   const t59u = mkTopo([...Array.from({ length: CAP - 1 }, (_, i) => fileNode(i, "active")), fileNode(CAP - 1, "deprecated")]);
   ok(!capErr(PM.semanticValidateV2(t59u, { ...upP, mapId: t59u.mapId, targetId: U(1000 + CAP - 1) }, {})), "활성 59 → 올리기 허용(60)");
   // (2) 실행: 활성 60 + 회전으로 내려간 칸 → 파이프라인이 복귀 patch 를 거부하고, 되돌리기는 cap-full 로 정산(실물 재판독)
-  const ws = mapRepo("own");
-  const names = Array.from({ length: CAP }, (_, i) => "src/o" + i + ".js");
-  for (const n of names) fs.writeFileSync(path.join(ws, n), "// " + n + "\n");
-  const envOld = { ...process.env, GIT_COMMITTER_DATE: "2020-01-01T00:00:00", GIT_AUTHOR_DATE: "2020-01-01T00:00:00" };
-  spawnSync("git", ["-c", "safe.directory=*", "-C", ws, "add", "-A"], { windowsHide: true });
-  spawnSync("git", ["-c", "safe.directory=*", "-C", ws, "commit", "-q", "-m", "fill", "--date", "2020-01-01T00:00:00"], { env: envOld, windowsHide: true });
-  const ids = names.map((n) => addFileNode(ws, n));
+  const { ws, names, ids } = fullRepo("own");
   fs.writeFileSync(path.join(ws, "src", "new3.js"), "// new3\n"); g(ws, ["add", "-A"]); g(ws, ["commit", "-q", "-m", "new3"]);
   const addP = { operation: "add_node", payload: { node: { id: U(9003), label: "new3", entityType: "file", roles: [], state: ST("active"), anchors: [{ kind: "code", path: "src/new3.js" }] } } };
   let jobState = { rotationPartial: null }; const updateJob = (mut) => { jobState = mut(jobState); return { ok: true }; };
@@ -345,13 +345,7 @@ console.log("[13] 확인 검증 2판 — 정본 set_state 상한(잠금 안 권�
   ok(pmsrc.includes('if (operation === "set_state") {') && /set_state: file 노드 전체 상한/.test(pmsrc), "bridge 사본(project-map.js)에 set_state 상한 검사 동기"); }
 console.log("[14] 확인 검증 3판 — 강등 결정 조회는 provenance 덮어쓰기에 견딤·기준점 없는 통과의 복귀 실패=전진 금지·HEAD 재조회 없음");
 { // (1) 회전 강등 뒤 같은 노드에 비상태 결정(add_evidence)이 적용돼 provenance 가 바뀌어도 강등 결정은 회전 것으로 판독 → 보상이 되돌린다
-  const ws = mapRepo("prov");
-  const names = Array.from({ length: CAP }, (_, i) => "src/v" + i + ".js");
-  for (const n of names) fs.writeFileSync(path.join(ws, n), "// " + n + "\n");
-  const envOld = { ...process.env, GIT_COMMITTER_DATE: "2020-01-01T00:00:00", GIT_AUTHOR_DATE: "2020-01-01T00:00:00" };
-  spawnSync("git", ["-c", "safe.directory=*", "-C", ws, "add", "-A"], { windowsHide: true });
-  spawnSync("git", ["-c", "safe.directory=*", "-C", ws, "commit", "-q", "-m", "fill", "--date", "2020-01-01T00:00:00"], { env: envOld, windowsHide: true });
-  const ids = names.map((n) => addFileNode(ws, n));
+  const { ws, names, ids } = fullRepo("prov");
   fs.writeFileSync(path.join(ws, "src", "new5.js"), "// new5\n"); g(ws, ["add", "-A"]); g(ws, ["commit", "-q", "-m", "new5"]);
   const addP = { operation: "add_node", payload: { node: { id: U(9005), label: "new5", entityType: "file", roles: [], state: ST("active"), anchors: [{ kind: "code", path: "src/new5.js" }] } } };
   let jobState = { rotationPartial: null }; const updateJob = (mut) => { jobState = mut(jobState); return { ok: true }; };
@@ -409,5 +403,79 @@ console.log("[15] 확인 검증 4판 — 같은 밀리초 강등 결정 둘: 순
   // 사슬 모호(끊김) → null: 현재 topology 해시가 어떤 결정의 결과도 아니게 만들면(임의 복제 topology) 순서 판정 포기
   const fake = JSON.parse(JSON.stringify(tNow)); fake.nodes.push({ ...fake.nodes[0], id: U(777777), label: "ghost" });
   ok(MRot.orderByChain(ws, fake, [{ decisionId: dRot }, { decisionId: dOther }]).ok === false && MRot.demotionDecisionOf(ws, nC0, fake) === null, "사슬 끊김(현재 해시 미등록) → 순서 불명=null"); }
+console.log("[16] 3차 — 꽉 찬 지도에서 내려간 파일이 다시 바뀌면: 되살리기=내보내기 동반 · 후보 없음/교체 꺼짐=미룸(기준점 전진) · 되살리기 실패=즉시 되돌림");
+{ const { ws, names, ids } = fullRepo("revive");
+  let jobState = { rotationPartial: null }; const updateJob = (mut) => { jobState = mut(jobState); return { ok: true }; };
+  // (전제) 새 파일로 한 칸 교체 → 활성 60 + 내려간 칸 1
+  fs.writeFileSync(path.join(ws, "src", "new6.js"), "// new6\n"); g(ws, ["add", "-A"]); g(ws, ["commit", "-q", "-m", "new6"]);
+  const addP = { operation: "add_node", payload: { node: { id: U(9006), label: "new6", entityType: "file", roles: [], state: ST("active"), anchors: [{ kind: "code", path: "src/new6.js" }] } } };
+  const r0 = MRot.rotateBeforeAdd(ws, ws, { patch: addP, topo: MR.readTopoExFor(ws).topo, head: headOf(ws), updateJob, log: null });
+  ok(r0.rotated === true, "(전제) 방출 1");
+  addFileNode(ws, "src/new6.js");
+  const h1 = headOf(ws);
+  ok(PM.activeFileNodeCount(MR.readTopoExFor(ws).topo) === CAP && nodeOf(ws, r0.victimId).state.lifecycle === "deprecated", "(전제) 활성 60 · 내려간 칸 1");
+  // 내려간 파일을 다시 바꿔 커밋 → 실행 시작 통과(기준점 h1) → 되살리기가 다른 칸 하나를 내보내고 들어온다 · ok(기준점 전진 가능)
+  fs.appendFileSync(path.join(ws, r0.victimPath), "// touched again\n"); g(ws, ["add", "-A"]); g(ws, ["commit", "-q", "-m", "touch"]);
+  const h2 = headOf(ws);
+  const logs = [];
+  const fp = MRot.factPass(ws, ws, { job: null, baselineHead: h1, updateJob, log: (e) => logs.push(e) });
+  const rv = fp.revived && fp.revived.applied.find((a) => a.id === r0.victimId);
+  ok(fp.ok === true && rv && rv.evictedId && ids.includes(rv.evictedId) && rv.evictedId !== r0.victimId, "되살리기 적용 + 다른 칸 내보냄(evictedId) · factPass ok=true(기준점 전진)");
+  ok(nodeOf(ws, r0.victimId).state.lifecycle === "active" && nodeOf(ws, rv.evictedId).state.lifecycle === "deprecated" && PM.activeFileNodeCount(MR.readTopoExFor(ws).topo) === CAP, "되살아난 칸 active · 내보낸 칸 deprecated · 활성 60 유지(61 없음)");
+  ok(MRot.rotationOwns(MRot.harnessDeprecationOf(ws, nodeOf(ws, rv.evictedId), MR.readTopoExFor(ws).topo), h2) === true, "내보낸 칸의 강등 결정은 이 통과(head h2)의 회전 소유");
+  ok(logs.some((e) => e.route === "rotation" && e.reason === "rotated-out" && /revive/.test(String(e.detail))) && logs.some((e) => e.route === "fact-transition" && e.reason === "revived"), "route 로그: rotation/rotated-out(revive) + fact-transition/revived");
+  // 미룸 ①: 후보 없음(보호 기간을 크게) — 내보낸 칸(rotated-out)을 다시 바꿔도 되살리지 못하고 '미룸'·ok=true·활성 60·deprecated 유지
+  fs.writeFileSync(CL.contractFileFor(ws, "ko"), JSON.stringify({ scoutMode: "on", mapRotation: { enabled: true, protectDays: 100000, hubMinDegree: 3 } }));
+  fs.appendFileSync(path.join(ws, rv.evictedPath), "// touched\n"); g(ws, ["add", "-A"]); g(ws, ["commit", "-q", "-m", "touch2"]);
+  const logs2 = [];
+  const fp2 = MRot.factPass(ws, ws, { job: null, baselineHead: h2, updateJob, log: (e) => logs2.push(e) });
+  ok(fp2.ok === true && fp2.revived.deferred.length === 1 && fp2.revived.deferred[0].id === rv.evictedId && fp2.revived.deferred[0].reason === "no-candidate" && fp2.revived.failed.length === 0, "후보 없음 → deferred(no-candidate) · failed 0 · ok=true(기준점 정체 없음)");
+  ok(nodeOf(ws, rv.evictedId).state.lifecycle === "deprecated" && PM.activeFileNodeCount(MR.readTopoExFor(ws).topo) === CAP && logs2.some((e) => e.reason === "revive-deferred"), "미룬 칸은 deprecated 유지 · 활성 60 · 로그 revive-deferred");
+  // 미룸 ②: 교체 꺼짐
+  fs.writeFileSync(CL.contractFileFor(ws, "ko"), JSON.stringify({ scoutMode: "on", mapRotation: { enabled: false } }));
+  const h3 = headOf(ws);
+  fs.appendFileSync(path.join(ws, rv.evictedPath), "// touched3\n"); g(ws, ["add", "-A"]); g(ws, ["commit", "-q", "-m", "touch3"]);
+  const fp3 = MRot.factPass(ws, ws, { job: null, baselineHead: h3, updateJob, log: null });
+  ok(fp3.ok === true && fp3.revived.deferred.length === 1 && fp3.revived.deferred[0].reason === "disabled" && nodeOf(ws, rv.evictedId).state.lifecycle === "deprecated", "교체 꺼짐 → deferred(disabled) · 되살리지 않음 · ok=true");
+  // 활성 59 면 내보내기 없이 그냥 되살아남(기존 경로 무회귀)
+  fs.writeFileSync(CL.contractFileFor(ws, "ko"), JSON.stringify({ scoutMode: "on" }));
+  // 먼저 다른 결정으로 칸 하나를 내려 활성 59 를 만든 뒤, 내보낸 칸을 다시 바꾸면 내보내기 없이 되살아난다
+  const tA = MR.readTopoExFor(ws).topo; const some = tA.nodes.find((x) => PM.isActiveFileNode(x) && x.id !== r0.victimId && ids.includes(x.id));
+  const bD = MRot.buildHarnessPatch(ws, tA, { operation: "set_state", targetId: some.id, payload: { to: { lifecycle: "deprecated" }, expect: { lifecycle: "active" } }, rationale: "file-gone@" + headOf(ws).slice(0, 7), detectedBy: "git-name-status", evidence: [{ kind: "git", ref: headOf(ws) }] });
+  ok(bD.ok && MRot.applyHarnessPatch(ws, bD.patch).ok, "(전제) 다른 결정으로 칸 하나 내려감");
+  fs.unlinkSync(path.join(ws, some.anchors[0].path)); g(ws, ["add", "-A"]); g(ws, ["commit", "-q", "-m", "gone"]); // 실제로 지워 복귀(파일 실존) 대상이 되지 않게
+  const before59 = PM.activeFileNodeCount(MR.readTopoExFor(ws).topo);
+  const h4 = headOf(ws);
+  fs.appendFileSync(path.join(ws, rv.evictedPath), "// touched4\n"); g(ws, ["add", "-A"]); g(ws, ["commit", "-q", "-m", "touch4"]);
+  const fp4 = MRot.factPass(ws, ws, { job: null, baselineHead: h4, updateJob, log: null });
+  const rv4 = fp4.revived.applied.find((a) => a.id === rv.evictedId);
+  ok(before59 < CAP && fp4.ok === true && rv4 && !rv4.evictedId && nodeOf(ws, rv.evictedId).state.lifecycle === "active", "자리가 있으면 내보내기 없이 되살아남(무회귀)"); }
+console.log("[17] 3차 확인 — 내보낸 뒤 되살리기 실패 → 즉시 되돌림(피해 칸 복원·활성 60·failed 기록)");
+{ const { ws, ids } = fullRepo("revfail");
+  let jobState = { rotationPartial: null }; const updateJob = (mut) => { jobState = mut(jobState); return { ok: true }; };
+  fs.writeFileSync(path.join(ws, "src", "new7.js"), "// new7\n"); g(ws, ["add", "-A"]); g(ws, ["commit", "-q", "-m", "new7"]);
+  const addP = { operation: "add_node", payload: { node: { id: U(9007), label: "new7", entityType: "file", roles: [], state: ST("active"), anchors: [{ kind: "code", path: "src/new7.js" }] } } };
+  const r0 = MRot.rotateBeforeAdd(ws, ws, { patch: addP, topo: MR.readTopoExFor(ws).topo, head: headOf(ws), updateJob, log: null });
+  ok(r0.rotated === true, "(전제) 방출 1");
+  addFileNode(ws, "src/new7.js");
+  fs.appendFileSync(path.join(ws, r0.victimPath), "// touched\n"); g(ws, ["add", "-A"]); g(ws, ["commit", "-q", "-m", "touch"]);
+  const h = headOf(ws);
+  const activeBefore = (MR.readTopoExFor(ws).topo.nodes || []).filter((x) => PM.isActiveFileNode(x)).map((x) => x.id).sort();
+  const logs = [];
+  const seen = [];
+  const applyRevive = (repo, patch) => { seen.push(patch); return { ok: false, stage: "apply", error: "되살리기 적용 실패(재현)" }; };
+  const rv = MRot.applyRevivals(ws, [r0.victimPath], h, (e) => logs.push(e), ws, { applyRevive });
+  ok(seen.length === 1 && seen[0].operation === "set_state" && seen[0].targetId === r0.victimId, "(전제) 되살리기 patch 1건이 주입 적용기에서 실패");
+  ok(rv.ok === true && rv.applied.length === 0 && rv.deferred.length === 0 && rv.failed.length === 1 && rv.failed[0].id === r0.victimId && rv.failed[0].stage === "apply", "failed 1(되살리기 apply) · applied 0 · deferred 0 → factPass 가 기준점을 잡아 둔다");
+  const activeAfter = (MR.readTopoExFor(ws).topo.nodes || []).filter((x) => PM.isActiveFileNode(x)).map((x) => x.id).sort();
+  ok(JSON.stringify(activeAfter) === JSON.stringify(activeBefore) && activeAfter.length === CAP, "내보냈던 칸이 되돌아와 활성 집합이 되살리기 전과 동일(활성 60 · 빈자리 없음)");
+  ok(nodeOf(ws, r0.victimId).state.lifecycle === "deprecated", "되살리기 대상은 여전히 deprecated(다음 실행이 다시 시도)");
+  const evLog = logs.find((e) => e.route === "rotation" && e.reason === "rotated-out");
+  const rvLog = logs.find((e) => e.route === "rotation" && e.reason === "reverted");
+  ok(!!evLog && !!rvLog, "route 로그: rotated-out(revive) 뒤 reverted");
+  const t = MR.readTopoExFor(ws).topo; const evictedPath = evLog ? String(evLog.detail).split(" -> ")[0] : "";
+  const evictedNode = t.nodes.find((x) => x.anchors && x.anchors[0] && x.anchors[0].path === evictedPath);
+  ok(!!evictedNode && PM.isActiveFileNode(evictedNode) && ids.includes(evictedNode.id), "내보냈던 칸(" + evictedPath + ")이 active 로 되돌아옴");
+  ok(fs.readdirSync(path.join(ws, "project-map", "decisions")).filter((f) => f.endsWith(".json")).length >= 2, "결정 기록은 지워지지 않고 남는다"); }
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

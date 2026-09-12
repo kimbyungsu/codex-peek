@@ -192,12 +192,17 @@ function applyFactTransitions(repo, facts, head, log) {
   return { ok: true, applied, failed };
 }
 // ── 복귀: 하네스 통로로 내려간 노드가 (가) 삭제·이름변경분=파일 실존 (나) 교체분=이번 변경 목록에 포함이면 active 로 ──
-function applyRevivals(repo, changedPaths, head, log) {
+// [§B2 3차] 되살리기도 새 칸 진입이다 — 활성 칸이 상한이면 덜 관련된 활성 칸 하나를 정규 패치로 내보내고 들어온다(rotateBeforeAdd 와 같은 후보 규칙).
+// 내보낼 후보가 없거나(전부 보호) 교체가 꺼져 있으면 이번 실행은 '미룸'(deferred)으로 기록하고 실패로 치지 않는다 — 실패로 치면 소화 기준점이
+// 영구히 멈춰 다음 실행이 같은 구간을 다시 먹고 같은 이유로 또 막힌다(확인 2026-09-12: 꽉 찬 지도+내려간 파일 재변경 = 기준점 정체).
+// 미룬 파일은 다음에 다시 바뀔 때(변경 목록 포함) 다시 시도된다.
+// opts.applyRevive(repo, patch)=시험 주입(되살리기 적용 실패 재현 — 내보낸 뒤 되돌림 분기)
+function applyRevivals(repo, changedPaths, head, log, ws, opts) {
   const pm = PM();
   let topo = readTopo(repo);
-  if (!topo) return { ok: false, error: "topology-unreadable", applied: [], failed: [] };
+  if (!topo) return { ok: false, error: "topology-unreadable", applied: [], failed: [], deferred: [] };
   const changed = new Set((changedPaths || []).map(normP));
-  const applied = [], failed = [];
+  const applied = [], failed = [], deferred = [];
   const cands = (topo.nodes || []).filter((n) => n && n.entityType === "file" && n.state && n.state.lifecycle === "deprecated");
   for (const n of cands) {
     const info = harnessDeprecationOf(repo, n, topo);
@@ -209,17 +214,32 @@ function applyRevivals(repo, changedPaths, head, log) {
     if (info.rationale.startsWith(RATIONALE.gone) || info.rationale.startsWith(RATIONALE.renamed)) revive = exists;
     else if (info.rationale.startsWith(RATIONALE.rotated)) revive = exists && changed.has(p);
     if (!revive) continue;
-    const cur = readTopo(repo); if (!cur) { failed.push({ id: n.id, path: p, stage: "topology", error: "topology-unreadable (remaining revivals skipped)" }); break; }
-    const now = (cur.nodes || []).find((x) => x && x.id === n.id);
+    let cur = readTopo(repo); if (!cur) { failed.push({ id: n.id, path: p, stage: "topology", error: "topology-unreadable (remaining revivals skipped)" }); break; }
+    let now = (cur.nodes || []).find((x) => x && x.id === n.id);
     if (!now || !now.state || now.state.lifecycle !== "deprecated") continue;
+    let evicted = null;
+    if (pm.activeFileNodeCount(cur) >= pm.MAX_FILE_NODES) { // 자리 없음 — 내보내기 동반(후보 없음·교체 꺼짐=미룸)
+      const ev = evictForSlot(repo, ws || repo, cur, head, p, log);
+      if (!ev.ok) {
+        if (ev.reason === "no-candidate" || ev.reason === "disabled") { deferred.push({ id: n.id, path: p, reason: ev.reason }); if (typeof log === "function") log({ route: "fact-transition", reason: "revive-deferred", outcome: "deferred", detail: p + " (" + ev.reason + ")" }); continue; }
+        failed.push({ id: n.id, path: p, stage: "evict:" + ev.reason, error: ev.error || ev.reason }); continue;
+      }
+      evicted = ev;
+      cur = readTopo(repo); if (!cur) { failed.push({ id: n.id, path: p, stage: "topology", error: "topology-unreadable after evict" }); break; }
+      now = (cur.nodes || []).find((x) => x && x.id === n.id);
+      if (!now || !now.state || now.state.lifecycle !== "deprecated") { rotationCompensate(repo, evicted.victimId, head); continue; }
+    }
     const b = lifecyclePatch(repo, cur, now, "active", "deprecated", RATIONALE.revived + short7(head), "git-name-status", head, "revive " + p);
-    if (!b.ok) { failed.push({ id: n.id, path: p, stage: "build", error: b.error }); continue; }
-    const r = applyHarnessPatch(repo, b.patch);
-    if (!r.ok) { failed.push({ id: n.id, path: p, stage: r.stage, error: r.error }); continue; }
-    applied.push({ id: n.id, path: p, decisionId: r.decisionId });
-    if (typeof log === "function") log({ route: "fact-transition", reason: "revived", outcome: "applied", detail: p });
+    const r = b.ok ? (opts && typeof opts.applyRevive === "function" ? opts.applyRevive : applyHarnessPatch)(repo, b.patch) : { ok: false, stage: "build", error: b.error };
+    if (!r.ok) {
+      // 내보내기는 됐는데 되살리기가 실패 — 내보낸 칸을 즉시 되돌린다(소유 결속된 정규 패치 · 실패해도 표식 없는 하네스 강등이라 다음 변경 때 복귀 규칙이 다룬다)
+      if (evicted) { const c = rotationCompensate(repo, evicted.victimId, head); if (typeof log === "function") log({ route: "rotation", reason: c.ok ? "reverted" : "rotation-partial", outcome: c.ok ? "reverted" : "partial", detail: evicted.victimPath }); }
+      failed.push({ id: n.id, path: p, stage: r.stage, error: r.error }); continue;
+    }
+    applied.push({ id: n.id, path: p, decisionId: r.decisionId, ...(evicted ? { evictedId: evicted.victimId, evictedPath: evicted.victimPath } : {}) });
+    if (typeof log === "function") log({ route: "fact-transition", reason: "revived", outcome: "applied", detail: p + (evicted ? " (evicted " + evicted.victimPath + ")" : "") });
   }
-  return { ok: true, applied, failed };
+  return { ok: true, applied, failed, deferred };
 }
 
 // ── (3) 교체 정책·후보 ──
@@ -264,6 +284,27 @@ function rotateCandidate(topo, ages, policy, nowSec) {
 // add_node 직전 교체 — 활성 칸이 상한이고 들어오는 노드가 활성 file 이면 후보 1개를 정규 패치로 내린다.
 // 반환: {rotated:false} | {rotated:true, victimId, head, objectFormat} | {parkReason:"rotation-failed:<단계>"}
 // ctx: { patch, topo, head?, updateJob(mut)->{ok}, log }
+// 현재 topology 에서 방출 후보 1개(git 마지막 커밋 시각 판독 포함) — rotateBeforeAdd·evictForSlot 공용
+function pickVictim(repo, topo, policy) {
+  const pm = PM();
+  const ages = gitLastCommitEpochs(repo, (topo.nodes || []).filter((n) => pm.isActiveFileNode(n)).map(anchorPathOf).filter(Boolean), 5000);
+  return rotateCandidate(topo, ages, policy, Math.floor(Date.now() / 1000));
+}
+// 자리 하나 비우기(되살리기용): 후보 1개를 정규 패치로 내린다 — 표식 없음(되살리기 실패 시 호출자가 즉시 되돌림).
+// 반환 {ok:true, victimId, victimPath, decisionId} | {ok:false, reason: disabled|no-candidate|build|<apply stage>, error?}
+function evictForSlot(repo, ws, topo, head, forPath, log) {
+  const policy = rotationPolicyFor(ws);
+  if (!policy.enabled) return { ok: false, reason: "disabled" };
+  const victim = pickVictim(repo, topo, policy);
+  if (!victim) return { ok: false, reason: "no-candidate" };
+  const node = (topo.nodes || []).find((n) => n && n.id === victim.id);
+  const b = lifecyclePatch(repo, topo, node, "deprecated", "active", RATIONALE.rotated + short7(head) + " for " + forPath, "rotation", head, "rotate-out " + victim.path + " for " + forPath);
+  if (!b.ok) return { ok: false, reason: "build", error: b.error };
+  const r = applyHarnessPatch(repo, b.patch);
+  if (!r.ok) return { ok: false, reason: r.stage || "apply", error: r.error };
+  if (typeof log === "function") log({ route: "rotation", reason: "rotated-out", outcome: "applied", detail: victim.path + " -> " + forPath + " (revive)" });
+  return { ok: true, victimId: victim.id, victimPath: victim.path, decisionId: r.decisionId };
+}
 function rotateBeforeAdd(repo, ws, ctx) {
   const pm = PM();
   const patch = ctx && ctx.patch;
@@ -274,8 +315,7 @@ function rotateBeforeAdd(repo, ws, ctx) {
   if (!topo || pm.activeFileNodeCount(topo) < pm.MAX_FILE_NODES) return { rotated: false };
   const head = OID_RE.test(String(ctx.head || "")) ? ctx.head : headOf(repo);
   if (!head) return { parkReason: "rotation-failed:no-git" };
-  const ages = gitLastCommitEpochs(repo, (topo.nodes || []).filter((n) => pm.isActiveFileNode(n)).map(anchorPathOf).filter(Boolean), 5000);
-  const victim = rotateCandidate(topo, ages, policy, Math.floor(Date.now() / 1000));
+  const victim = pickVictim(repo, topo, policy);
   if (!victim) { if (ctx.log) ctx.log({ route: "rotation", reason: "no-candidate", outcome: "parked" }); return { parkReason: "rotation-failed:no-candidate" }; }
   const node = (topo.nodes || []).find((n) => n && n.id === victim.id);
   const newPath = anchorPathOf(patch.payload.node);
@@ -357,14 +397,14 @@ function factPass(repo, ws, ctx) {
     const facts = gitFactsSince(repo, base, head);
     if (facts) {
       out.facts = applyFactTransitions(repo, facts, head, ctx && ctx.log);
-      out.revived = applyRevivals(repo, facts.changed, head, ctx && ctx.log);
+      out.revived = applyRevivals(repo, facts.changed, head, ctx && ctx.log, ws);
       if (!out.facts.ok || out.facts.failed.length || !out.revived.ok || out.revived.failed.length) out.ok = false; // 일부라도 못 적용=기준점 전진 금지
     } else {
       if (OID_RE.test(String(base || ""))) out.ok = false; // 기준점은 있는데 판독 실패(git 오류)=전진 금지
-      out.revived = applyRevivals(repo, [], head, ctx && ctx.log); // 기준점 없음=삭제·이름변경 판독 불가, 복귀(파일 실존)만
+      out.revived = applyRevivals(repo, [], head, ctx && ctx.log, ws); // 기준점 없음=삭제·이름변경 판독 불가, 복귀(파일 실존)만
       if (!out.revived.ok || out.revived.failed.length) out.ok = false; // (확인 검증 3판 blocker) 이 분기도 복귀 실패=기준점 전진 금지
     }
   } catch (e) { out.ok = false; if (ctx && ctx.log) ctx.log({ route: "fact-transition", reason: "exception:" + String(e && e.message).slice(0, 60), outcome: "skipped" }); }
   return out;
 }
-module.exports = { HARNESS_PROVIDER, RATIONALE, DEFAULT_POLICY, OID_RE, settleRotation, rotationOwns, demotionDecisionOf, orderByChain, gitFactsSince, headOf, objectFormatOf, buildHarnessPatch, applyHarnessPatch, harnessDeprecationOf, applyFactTransitions, applyRevivals, rotationPolicyFor, gitLastCommitEpochs, rotateCandidate, rotateBeforeAdd, rotationCompensate, factPass };
+module.exports = { HARNESS_PROVIDER, RATIONALE, DEFAULT_POLICY, OID_RE, settleRotation, evictForSlot, pickVictim, rotationOwns, demotionDecisionOf, orderByChain, gitFactsSince, headOf, objectFormatOf, buildHarnessPatch, applyHarnessPatch, harnessDeprecationOf, applyFactTransitions, applyRevivals, rotationPolicyFor, gitLastCommitEpochs, rotateCandidate, rotateBeforeAdd, rotationCompensate, factPass };

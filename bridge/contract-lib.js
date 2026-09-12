@@ -6581,6 +6581,47 @@ function isRealHookInput(hook) {
   return !!(hook && typeof hook === "object" && typeof hook.hook_event_name === "string" && hook.hook_event_name.trim()
     && typeof hook.session_id === "string" && hook.session_id.trim());
 }
+// [HARNESS-STRUCTURE §B2 3차 · 2026-09-12] 시스템이 '사용자 프롬프트' 자리에 넣는 비-발화(배경 작업 완료 알림)를 판별한다 —
+// 턴 앵커(캠페인 회차·선별 관문·라이브 라운드)는 사람의 발화에만 새로 찍혀야 한다. 판정 재료는 구조 표식만:
+//   ① 훅 입력에 origin.kind === "task-notification"(transcript 레코드와 같은 표식이 실릴 때)
+//   ② 프롬프트 본문이 <task-notification> 봉투로 '시작'(Claude Code 가 붙이는 봉투 — 사람이 같은 봉투로 발화를 시작할 일은 없다)
+// 본문 중간의 문구 매칭은 하지 않는다(사용자가 알림 원문을 붙여넣어도 앵커는 정상 갱신).
+// 판정 권위(순서): ① 훅 입력의 origin.kind ② transcript 의 같은 원문 user 레코드가 있으면 그 origin.kind(verify-guard 와 같은 구조 표식 —
+// 두 판독 권위가 갈리지 않게) ③ 기록에 없을 때만, 본문이 '<task-notification>…</task-notification> 봉투만'으로 이뤄졌으면 알림. 봉투 밖에 한 글자라도
+// 사람의 글이 있으면(예: "<task-notification> 이 내용을 설명해줘") 발화다(확인 검증 blocker: 선두 태그만 보면 사람 발화를 알림으로 오분류).
+const NOTICE_ENVELOPE_RE = /^\s*(?:<task-notification>[\s\S]*?<\/task-notification>\s*)+$/;
+function isSystemNotificationHook(hook) {
+  if (!hook || typeof hook !== "object") return false;
+  if (hook.origin && hook.origin.kind === "task-notification") return true;
+  const p = typeof hook.prompt === "string" ? hook.prompt : "";
+  if (!NOTICE_ENVELOPE_RE.test(p)) return false;
+  const rec = typeof hook.transcript_path === "string" && hook.transcript_path ? lastTextUserRecordOf(hook.transcript_path) : null;
+  if (rec && rec.text.trim() === p.trim()) return !!(rec.origin && rec.origin.kind === "task-notification"); // 기록이 있으면 구조 표식이 권위(origin 없음·human=발화)
+  return true; // 기록에 없는 봉투만의 본문=시스템 주입(오늘 실측: 알림은 transcript user 레코드로 남지 않는다)
+}
+// transcript 꼬리(기본 2MB)에서 가장 최근 '텍스트 본문 user' 레코드 1건 — 전체 파일 판독 금지(수백 MB 가능·훅 시간 예산).
+function lastTextUserRecordOf(transcriptPath, tailBytes) {
+  let fd = null;
+  try {
+    fd = fs.openSync(transcriptPath, "r");
+    const size = fs.fstatSync(fd).size;
+    const len = Math.min(size, tailBytes || 2 * 1024 * 1024);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    const lines = buf.toString("utf8").split(/\r?\n/);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const l = lines[i];
+      if (!l || l[0] !== "{") continue; // 잘린 첫 줄·빈 줄
+      let o; try { o = JSON.parse(l); } catch { continue; }
+      if (!o || o.type !== "user" || !o.message) continue;
+      const c = o.message.content;
+      const text = typeof c === "string" ? c : Array.isArray(c) ? c.filter((x) => x && x.type === "text" && typeof x.text === "string").map((x) => x.text).join("\n") : "";
+      if (!text) continue; // tool_result 등 본문 없는 user 슬롯
+      return { text, origin: o.origin || null, timestamp: o.timestamp || "" };
+    }
+    return null;
+  } catch { return null; } finally { if (fd !== null) { try { fs.closeSync(fd); } catch { /* 무해 */ } } }
+}
 // [P7 ⓑ] 세션 도중 앵커의 폴더가 바뀐 기록 — 이전 앵커의 workspace와 이번 턴 폴더가 다르면 {from,to,ts}를 앵커에 남기고(해제 전까지 승계),
 // ask-start는 이 기록이 있으면 시작하지 않는다(--folder-changed-ok 로만 진행·그때 해제). 같은 세션에서 폴더가 바뀌는 정상 경로는 없으므로
 // 이 기록은 언제나 '확인이 필요한 이상 신호'다.
@@ -6655,6 +6696,8 @@ function fitDefaultsNotice(statusLine, notice) {
 }
 module.exports.fitDefaultsNotice = fitDefaultsNotice;
 module.exports.isRealHookInput = isRealHookInput;
+module.exports.isSystemNotificationHook = isSystemNotificationHook;
+module.exports.lastTextUserRecordOf = lastTextUserRecordOf;
 module.exports.folderChangeOf = folderChangeOf;
 module.exports.folderChangeNotice = folderChangeNotice;
 module.exports.folderChangeRefusal = folderChangeRefusal;

@@ -6,7 +6,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { isRealHookInput, folderChangeOf, folderChangeNotice, effectiveRuleCheck, ruleCheckRecord, ruleCheckFp8, latestRuleCheckRow, loadContract, loadLang, buildInjection, buildVerifyDirective, buildVerifyDirectiveSlim, claudeStaticParts, claudeDeliveryPlan, claudeStaticBlock, claudeDeliveryStatusLine, implementerEnvelopeInjectParts, readClaudeDirectiveReset, clearClaudeDirectiveResetMarker, applyClaudeTurnBudget, harnessModeSwitchNotice, buildScoutDirective, verifyCampaignProgress, atomicWrite, BRIDGE_DIR, ACTIVE_DIR, writePhase, patchContractFields, contractReadState, activeAskJobFor, phaseBusy, contractLockIssue, turnAnchorOf, writeConstraintTurnSnapshot, constraintRepoKeyFor } = require("./contract-lib.js");
+const { isRealHookInput, isSystemNotificationHook, folderChangeOf, folderChangeNotice, effectiveRuleCheck, ruleCheckRecord, ruleCheckFp8, latestRuleCheckRow, loadContract, loadLang, buildInjection, buildVerifyDirective, buildVerifyDirectiveSlim, claudeStaticParts, claudeDeliveryPlan, claudeStaticBlock, claudeDeliveryStatusLine, implementerEnvelopeInjectParts, readClaudeDirectiveReset, clearClaudeDirectiveResetMarker, applyClaudeTurnBudget, harnessModeSwitchNotice, buildScoutDirective, verifyCampaignProgress, atomicWrite, BRIDGE_DIR, ACTIVE_DIR, writePhase, patchContractFields, contractReadState, activeAskJobFor, phaseBusy, contractLockIssue, turnAnchorOf, writeConstraintTurnSnapshot, constraintRepoKeyFor } = require("./contract-lib.js");
 
 // [P7 ⓐ 2026-09-01] 불러오기(require)만 됐을 때는 아무것도 하지 않는다 — stdin도 읽지 않고 앵커도 쓰지 않는다(2026-08-28 로드 시험이 앵커를 덮은 실사고).
 if (require.main !== module) return;
@@ -27,14 +27,28 @@ process.stdin.on("end", () => {
 
   // 활성 작업 폴더 기록 → 대시보드/configWs가 VS Code 첫 폴더가 아니라 이 폴더(연 폴더)를 따라가게.
   const sid = hook.session_id || process.env.CLAUDE_CODE_SESSION_ID || "";
-  const activeTs = new Date().toISOString();
+  // [§B2 3차] 배경 작업 완료 알림은 사람의 발화가 아니다 — 같은 세션의 직전 앵커(ts·스냅샷 지문)를 그대로 이어 쓴다.
+  // 이유: 앵커 ts 가 캠페인 키(검증 왕복 상한)·선별 관문·라이브 라운드의 원천이라, 알림마다 새로 찍히면 긴 시험을 배경에서 돌리는 턴에서
+  // 상한이 매번 0 으로 되돌아가고(2026-09-12 실측: 같은 세션에 캠페인 6개·전부 1회차) 관문도 알림마다 다시 닫혔다.
+  const sysNotice = isSystemNotificationHook(hook);
+  let carried = null;
+  if (sysNotice && sid) {
+    try {
+      const safe0 = String(sid).replace(/[^a-zA-Z0-9_-]/g, "");
+      const p0 = safe0 ? JSON.parse(fs.readFileSync(path.join(ACTIVE_DIR, safe0 + ".json"), "utf8")) : null;
+      if (p0 && typeof p0 === "object" && p0.claudeSession === sid && typeof p0.ts === "string" && Number.isFinite(Date.parse(p0.ts))) carried = p0;
+    } catch { carried = null; } // 직전 앵커가 없으면(세션 첫 훅이 알림) 보통 턴으로 처리
+  }
+  const activeTs = carried ? carried.ts : new Date().toISOString();
   // [약속 발화 포착 §1] 턴 원문 스냅샷 — `constraint add` CLI의 유일 대조 권위(구현모델 작문·기억 재구성 차단).
   // anchor=sha1(sessionId|active.ts) 앞 16자(캠페인 앵커와 동일 원천·턴마다 유일). 실패=필드 미기록(그 턴 상신 불가
   // — fail-closed)·훅 동작은 막지 않음(best-effort).
   let constraintAnchor = "", constraintSourceHash = "", constraintRepoKey = ""; // [ab-1] 원문 시점 정찰 대상 지문 — 스냅숏과 같은 active 레코드에 기록(ask-start 재계산 금지)
   try {
     const ptxt = (hook && typeof hook.prompt === "string") ? hook.prompt : "";
-    if (ptxt && sid) {
+    if (carried) { // 알림 턴=사용자 원문 아님 — 스냅샷을 새로 쓰지 않고 직전 턴의 결속을 그대로 잇는다(선별 영수증·약속 상신이 같은 턴으로 이어짐)
+      constraintAnchor = String(carried.constraintAnchor || ""); constraintSourceHash = String(carried.constraintSourceHash || ""); constraintRepoKey = String(carried.constraintRepoKey || "");
+    } else if (ptxt && sid) {
       // [검증 2회차 blocker②] 계약 판독은 이 훅에서 한 번(cSnap0) — 스냅숏 기록 뒤 계약을 다시 읽지 않는다
       // (두 판독 사이 다른 창의 정찰 대상 전환=A 원문+B 표식 경합). 표식은 스냅숏 "이전"에 확정하고 같은 레코드에 쓴다.
       let cSnap0 = null; try { cSnap0 = loadContract(ws); } catch { cSnap0 = null; }
@@ -151,7 +165,7 @@ process.stdin.on("end", () => {
   }
 
   // 라이브 진행: 턴 시작 = 'Claude 작업중' + 라운드 0 리셋(이 턴의 ask 횟수는 codex-bridge가 증가시킴).
-  try {
+  if (!carried) try { // 알림 턴은 라이브 라운드를 0 으로 되돌리지 않는다(화면 '준비' 고착·회차 미표시의 원인)
     writePhase("claude-working", {
       round: 0,
       session: hook.session_id || process.env.CLAUDE_CODE_SESSION_ID || "",
