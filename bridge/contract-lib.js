@@ -398,6 +398,7 @@ function parseLockToken(raw) {
   if (m) { const pid = parseInt(m[1], 10); if (pid > 0) return { pid, form: "legacy" }; }
   return null;
 }
+const LOCK_WRITE_SETTLE_MS = 2000; // 잠금 파일 생성→토큰 기록 사이 창의 상한(이 안의 빈/조각 토큰=쓰는 중 · 밖=형식 불명)
 function withContractLockV10(lockPath, fn, maxTries) {
   const mine = JSON.stringify({ v: 1, pid: process.pid, rnd: Math.random().toString(36).slice(2, 10), ts: new Date().toISOString() });
   // 기본 재시도 창 40×15ms(0.6초)는 느린 공용 러너에서 부족했다 — 보유자가 콜드 시작·느린 디스크로 임계구역을
@@ -433,7 +434,16 @@ function withContractLockV10(lockPath, fn, maxTries) {
       return { ok: false, state: "unreadable", lockPath, error: "lock-unreadable: " + lockPath }; // 격리 금지·조사 안내
     }
     const tok = parseLockToken(raw);
-    if (!tok) return { ok: false, state: "invalid", lockPath, error: "lock-invalid: " + lockPath }; // 형식 불명 — 2단 승인 사다리 대상
+    if (!tok) {
+      // 보유자의 잠금 생성은 '파일 만들기(wx)' 뒤 '토큰 쓰기'라 그 사이 찰나에 읽으면 빈 파일·조각이다(CI windows 러너 실측 2026-09-12:
+      // 경쟁자가 lock-invalid 로 즉시 포기해 두 번째 저장이 사라짐). 방금 생긴 파일(LOCK_WRITE_SETTLE_MS 안)은 '쓰는 중'으로 보고 재시도한다 —
+      // 형식 불명 판정(2단 승인 사다리)은 그 창을 지나서도 토큰이 안 읽힐 때만. 재시도는 N 으로 유계(무한 대기 아님).
+      // '쓰는 중'의 실물은 빈 파일이다(토큰 한 번의 write 로 적힘) — 내용이 있는데 형식이 틀린 손상 토큰은 창 안이라도 그대로 invalid(4b 계약 유지).
+      let young = false;
+      if (!String(raw).trim()) { try { young = (Date.now() - fs.statSync(lockPath).mtimeMs) < LOCK_WRITE_SETTLE_MS; } catch (se) { if (se && se.code === "ENOENT") { lastState = "absent"; continue; } } }
+      if (young) { lastState = "alive"; if (N > 1) { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15); } catch { /* 즉시 재시도 */ } } continue; }
+      return { ok: false, state: "invalid", lockPath, error: "lock-invalid: " + lockPath }; // 형식 불명 — 2단 승인 사다리 대상
+    }
     try { process.kill(tok.pid, 0); lastState = "alive"; } // 생존 — 재시도
     catch (ke) {
       if (ke && ke.code === "ESRCH") {
@@ -6265,6 +6275,7 @@ module.exports.contractReadState = contractReadState;
 module.exports.activeAskJobFor = activeAskJobFor;
 module.exports.phaseBusy = phaseBusy;
 module.exports.contractLockIssue = contractLockIssue;
+module.exports.LOCK_WRITE_SETTLE_MS = LOCK_WRITE_SETTLE_MS;
 module.exports.validLinksShape = validLinksShape;
 module.exports.receiptSettled = receiptSettled;
 module.exports.codexRoleRevision = codexRoleRevision;

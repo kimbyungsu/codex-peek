@@ -149,6 +149,23 @@ console.log("[4c] 2차 blocker 반영 — 공백 토큰·복원 무클로버·�
   try { fs.unlinkSync(LOCK); } catch {}
 }
 
+console.log("[4d] 생성→토큰 기록 사이 창(CI windows 실측 2026-09-12) — 방금 생긴 빈 잠금=쓰는 중(재시도) · 오래된 빈 잠금=형식 불명");
+{
+  try { fs.unlinkSync(LOCK); } catch {}
+  fs.writeFileSync(LOCK, ""); // 보유자가 wx 로 만들고 아직 토큰을 못 적은 순간
+  let called = 0;
+  const rY = CL.withContractLockV10(LOCK, () => { called++; return 1; }, 3);
+  ok(!rY.ok && rY.state === "alive" && called === 0 && /lock-timeout/.test(rY.error), "방금 생긴 빈 잠금 → invalid 가 아니라 재시도 끝 timeout(alive) · fn 미실행: " + rY.state);
+  const old = (Date.now() - CL.LOCK_WRITE_SETTLE_MS - 5000) / 1000; fs.utimesSync(LOCK, old, old); // 창을 지난 빈 파일
+  const rO = CL.withContractLockV10(LOCK, () => { called++; return 1; }, 3);
+  ok(!rO.ok && rO.state === "invalid" && called === 0, "창을 지난 빈 잠금 → invalid(2단 승인 사다리 대상 유지)");
+  fs.writeFileSync(LOCK, ""); // 다시 '쓰는 중' 상태 — 보유자가 곧 해제하는 시나리오(자식이 150ms 뒤 잠금 제거)
+  cp.spawn(process.execPath, ["-e", "setTimeout(function(){ try{ require('fs').unlinkSync(" + JSON.stringify(LOCK) + "); }catch(e){} }, 150)"], { windowsHide: true, stdio: "ignore" });
+  const rA = CL.withContractLockV10(LOCK, () => { called++; return 7; }, 200);
+  ok(rA.ok === true && rA.result === 7 && called === 1, "쓰는 중 창 뒤 해제되면 경쟁자가 획득한다(포기 없음)");
+  try { fs.unlinkSync(LOCK); } catch {}
+}
+
 console.log("[5] 2프로세스 동시 patch — 서로 다른 필드 무유실(v10 잠금 직렬화)");
 {
   // 실패 시 사유를 stderr로 — CI 간헐 실패(공용 러너)에서 '잠금 포기(lock-timeout)'인지 '필드 유실'인지 판별 재료
