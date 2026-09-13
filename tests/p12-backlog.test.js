@@ -146,7 +146,25 @@ ok(!/verify-backlog/.test(cl.split("function cleanupOldState")[1].split("functio
     n = runRender({ caution: 1, backlog: 0, corrupt: 0, readError: true, items: [] }, "ko");
     ok(n.backlogSec.style.display === "" && /불러올 수 없음/.test(n.blSummary.textContent) && n.blList.children.length === 0, "RB-5 판독 실패 — '비어 있음' 위장 금지+'불러올 수 없음' 표시([주의] 수용분)");
     n = runRender({ caution: 1, backlog: 0, corrupt: 0, items: [{ id: "a".repeat(16), tag: "주의", title: "t", file: "f", seenCount: 1, ageDays: 1, due: false }] }, "ko");
-    ok(/열림 1건/.test(n.blSummary.textContent) && n.blList.children.length === 1, "RB-6 항목 존재 — 요약·목록 렌더 정상(회귀 앵커)");
+    ok(/열림 1건/.test(n.blSummary.textContent) && n.blList.children.length === 2 && n.blList.children[0].id === "blGroupLater" && /여유/.test(n.blList.children[0].textContent), "RB-6 항목 존재 — 묶음 제목(여유)+항목 렌더(회귀 앵커 · 2026-09-14 묶음 도입)");
+    // [2026-09-14 실보고] 개요의 '검토 기한 n'·'여유 m'·백로그가 카드에서 구별되게 — 세 묶음 제목(개요 어휘)·배지·요약
+    n = runRender({ caution: 3, cautionDue: 1, later: 2, backlog: 1, corrupt: 0, items: [
+      { id: "d".repeat(16), tag: "주의", title: "due1", file: "", seenCount: 3, ageDays: 2, due: true, group: "due" },
+      { id: "l".repeat(16), tag: "주의", title: "later1", file: "", seenCount: 1, ageDays: 2, due: false, group: "later" },
+      { id: "m".repeat(16), tag: "주의", title: "later2", file: "", seenCount: 1, ageDays: 1, due: false, group: "later" },
+      { id: "b".repeat(16), tag: "백로그", title: "bl1", file: "", seenCount: 1, ageDays: 40, due: true, group: "backlog" }] }, "ko");
+    const ch = n.blList.children; const heads = ch.filter((c) => c.className === "blgroup");
+    ok(heads.length === 3 && heads.map((h) => h.id).join(",") === "blGroupDue,blGroupLater,blGroupBacklog", "RB-7 세 묶음 제목이 검토 기한→여유→백로그 순으로 실재(개요 버튼의 이동 목표)");
+    ok(/검토 기한 1 · 여유 2 · 백로그 1/.test(n.blSummary.textContent) && /지금 정할 것'엔 검토 기한만 합산/.test(n.blSummary.textContent), "RB-8 요약=개요 어휘(검토 기한·여유·백로그)+합산 규칙 안내");
+    const idxDue = ch.indexOf(heads[0]), idxLater = ch.indexOf(heads[1]), idxBl = ch.indexOf(heads[2]);
+    ok(idxLater - idxDue === 2 && idxBl - idxLater === 3 && ch.length - idxBl === 2, "RB-9 각 묶음 아래에 그 묶음 항목만(검토 기한 1·여유 2·백로그 1)");
+    const badgeOf = (row) => (row.children[0] && row.children[0].textContent) || "";
+    ok(badgeOf(ch[idxDue + 1]) === "검토 기한" && badgeOf(ch[idxLater + 1]) === "여유" && badgeOf(ch[idxBl + 1]) === "백로그", "RB-10 항목 배지=묶음 이름(검토 기한/여유/백로그)");
+    // 표시 목록이 비어도 전량 집계가 있으면 묶음 제목은 남는다(개요 버튼의 목표 — blocker 반례의 렌더 쪽 방어)
+    n = runRender({ caution: 1, cautionDue: 1, later: 0, backlog: 0, corrupt: 0, items: [] }, "ko");
+    ok(n.blList.children.length === 1 && n.blList.children[0].id === "blGroupDue" && /검토 기한/.test(n.blList.children[0].textContent), "RB-12 집계 1·표시 0 → 묶음 제목만 남음(목표 유지)");
+    n = runRender({ caution: 1, backlog: 0, corrupt: 0, items: [{ id: "z".repeat(16), tag: "주의", title: "t", file: "f", seenCount: 1, ageDays: 1, due: false }] }, "en");
+    ok(n.blList.children[0].id === "blGroupLater" && /Later/.test(n.blList.children[0].textContent), "RB-11 영문 묶음 제목");
   }
   // readBacklog 판독 실패 구분 — ENOENT=빈 상태·그 외=readError(위장 차단의 데이터 원천)
   {
@@ -180,6 +198,15 @@ ok(!/verify-backlog/.test(cl.split("function cleanupOldState")[1].split("functio
     ok(v.items.length === 30 && v.backlog === 35, "CB-V5 표시 30건 절단·집계는 전체(35)");
     v = view([mk({ id: "x", tag: "주의" }), mk({ id: "y" })], now);
     ok(v.caution === 1 && v.backlog === 1, "CB-V6 태그별 집계");
+    v = view([mk({ id: "g1", tag: "주의", seenCount: 3 }), mk({ id: "g2", tag: "주의" }), mk({ id: "g3", tag: "주의" }), mk({ id: "g4", seenCount: 5 })], now);
+    ok(v.items.find((x) => x.id === "g1").group === "due" && v.items.find((x) => x.id === "g2").group === "later" && v.items.find((x) => x.id === "g4").group === "backlog" && v.cautionDue === 1 && v.later === 2 && v.backlog === 1, "CB-V7 묶음=검토 기한(주의+기한)·여유(주의·기한 없음)·백로그(태그) · later 집계(2026-09-14)");
+    // [구현 검증 blocker 2026-09-14] 표시 상한은 묶음마다 — 한 묶음이 30건을 다 써도 다른 묶음의 항목(개요 버튼의 목표)이 목록에서 사라지지 않는다
+    const oldBl = []; for (let i = 0; i < 30; i++) oldBl.push(mk({ id: "o" + i, firstSeen: new Date(now - 60 * DAY).toISOString() }));
+    v = view([...oldBl, mk({ id: "due1", tag: "주의", seenCount: 3 })], now);
+    ok(v.cautionDue === 1 && v.items.some((x) => x.id === "due1") && v.items.filter((x) => x.group === "backlog").length === 30, "CB-V8 오래된 백로그 30+검토 기한 1 → 검토 기한 항목이 표시 목록에 남음(묶음별 상한)");
+    const dues = []; for (let i = 0; i < 31; i++) dues.push(mk({ id: "q" + i, tag: "주의", seenCount: 3 }));
+    v = view([...dues, mk({ id: "later1", tag: "주의" })], now);
+    ok(v.later === 1 && v.items.some((x) => x.id === "later1") && v.items.filter((x) => x.group === "due").length === 30 && v.cautionDue === 31, "CB-V9 검토 기한 31+여유 1 → 여유 항목 표시·검토 기한은 30건 절단·집계는 31");
   }
 }
 

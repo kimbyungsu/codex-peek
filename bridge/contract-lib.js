@@ -4184,7 +4184,9 @@ const DECISIONS_DIR = path.join(BRIDGE_DIR, "decisions");
 const DECISION_ORIGINS = ["implementer"]; // 유일 출처=구현자 판단(기계 상태·검증자 지적은 '판단 촉구'만 하고 행을 만들지 않는다)
 const DECISION_KINDS = ["boundary", "product", "risk", "external"]; // 사용자 방향이 필요한 종류: 범위표·제품·위험 감수·외부 결정
 const DECISION_NO_DEFAULT_MIN = 10; // "기본값이 없는 이유"는 빈말 금지(형식 검사만 — 진위는 구현자 판단)
-const DECISION_STATUSES = ["open", "chosen", "delegated"];
+const DECISION_STATUSES = ["open", "chosen", "delegated", "superseded"]; // superseded=다른 항목으로 대체됨(choice=대체 항목 id · 삭제 아닌 append 행 · ab-5)
+// [2026-09-14 사용자 실보고] 선택지 밖 답이 오면 구현자가 새 항목을 올렸고 원항목은 열린 채 남아 '지금 정할 것'에 낡은 항목이 쌓였다(9-09·9-11 각 1건).
+// 해법=원항목에 '대체됨' 행(대체 항목 id 결속)을 남기는 것 — 열린 목록·합산에서 빠지고 이력은 보존된다. raise --supersedes 로 한 번에 기록.
 const DECISION_DELEGATE_KEY = "delegate"; // "네가 정해라(구현자가 정함)" — 항상 붙는 선택지·지표 재료
 function decisionsFileFor(ws) { return path.join(DECISIONS_DIR, wsKeyFor(ws) + ".jsonl"); }
 // id 산식(고정 벡터 — 시험이 잠금): sha1("decision:" + wsKey + "|" + campaignId + "|" + origin + "|" + sourceAsk + "|" + idKey).slice(0,16), idKey=decisionIdKeyFor(targetFp, question)
@@ -4214,6 +4216,7 @@ function decisionRowValid(r) {
     if (new Set(r.choices.map((c) => c.key)).size !== r.choices.length) return false; // 선택 키 유일 — 같은 키 둘이면 결과 행이 구별 불가
     return true;
   }
+  if (r.status === "superseded") return typeof r.choice === "string" && /^[a-f0-9]{16}$/.test(r.choice) && r.choice !== r.decisionId; // choice=대체 항목 id
   return typeof r.choice === "string" && !!r.choice;
 }
 // opts.repoKey(문자열·비어 있지 않음)=저장소 분할 단일 규칙: 그 저장소 표식의 열린 항목만 권위(결과 행은 그 항목에만 합성). 표식 없는 옛 항목은 이력.
@@ -4237,7 +4240,7 @@ function readDecisions(ws, opts) {
     const ok9 = String(o.repoKey || ""), rkR = String(r.repoKey || "");
     if (rkR) { if (rkR !== ok9) continue; } // 표식 있는 결과 행=원항목 표식과 일치할 때만
     else if (rk && (openKeysById.get(r.decisionId) || new Set()).size > 1) continue; // 무표식 옛 결과 행+동일 id가 여러 저장소에 열림=귀속 불명·저장소 판독에서는 합성 안 함(무필터 판독=종전 합성 축퇴)
-    latest.set(r.decisionId, Object.assign({}, o, { status: r.status, choice: r.choice, resolvedTs: r.ts, resolvedBy: String(r.by || "") })); // 결과 행이 원항목을 덮지 않고 합성
+    latest.set(r.decisionId, Object.assign({}, o, { status: r.status, choice: r.choice, resolvedTs: r.ts, resolvedBy: String(r.by || "") }, r.status === "superseded" ? { supersededBy: r.choice, supersedeNote: String(r.note || "") } : {})); // 결과 행이 원항목을 덮지 않고 합성
   }
   return { rows, latest, opens, open: [...latest.values()].filter((r) => r.status === "open") };
 }
@@ -4269,7 +4272,32 @@ function openDecision(ws, spec) {
     recommend: String(spec.recommend || ""), ts: new Date().toISOString(),
   };
   const r = appendDecisionRows(ws, [row]);
-  return r.ok ? { ok: true, decisionId: id, existed: false } : { ok: false, reason: r.reason };
+  if (!r.ok) return { ok: false, reason: r.reason };
+  const out = { ok: true, decisionId: id, existed: false };
+  if (spec.supersedes) { // 선택지를 바꿔 다시 묻는 경우 — 원항목을 같은 호출에서 '대체됨'으로 닫는다(열린 낡은 항목이 남지 않게)
+    const sr = supersedeDecision(ws, String(spec.supersedes), id, { repoKey: rkD, by: "implementer", note: String(spec.supersedeNote || "") });
+    out.superseded = sr.ok ? String(spec.supersedes) : null; out.supersedeReason = sr.ok ? "" : String(sr.reason || "");
+  }
+  return out;
+}
+// 대체 행 — 원항목(열림)에 '대체됨(대체 항목 id)'을 append. 원항목·대체 항목 모두 이 저장소 항목이어야 하고 대체 항목은 실존해야 한다(자기 자신 금지).
+function supersedeDecision(ws, decisionId, byId, opts) {
+  opts = opts || {};
+  const id = String(decisionId || ""), by9 = String(byId || "");
+  if (!/^[a-f0-9]{16}$/.test(by9)) return { ok: false, reason: "by-invalid" };
+  if (by9 === id) return { ok: false, reason: "self" };
+  const rkR = typeof opts.repoKey === "string" ? opts.repoKey : null;
+  const cur = readDecisions(ws, rkR ? { repoKey: rkR } : undefined);
+  const d = cur.latest.get(id);
+  if (!d && rkR !== null) { const any = readDecisions(ws).latest.get(id); if (any) return { ok: false, reason: "repo-mismatch", decisionRepoKey: String(any.repoKey || ""), repoKey: rkR }; }
+  if (!d) return { ok: false, reason: "not-found" };
+  if (rkR !== null) { const dk = String(d.repoKey || ""); if (rkR ? dk !== rkR : !!dk) return { ok: false, reason: "repo-mismatch", decisionRepoKey: dk, repoKey: rkR }; }
+  if (d.status !== "open") return { ok: false, reason: "already-resolved", status: d.status };
+  const target = cur.latest.get(by9);
+  if (!target) return { ok: false, reason: "by-not-found" }; // 대체 항목은 같은 저장소 장부에 실존해야(상태 무관 — 이미 답한 항목으로 대체하는 것이 보통)
+  const row = { schema: "decision-v1", decisionId: id, status: "superseded", wsKey: wsKeyFor(ws), repoKey: String(d.repoKey || ""), choice: by9, by: String(opts.by || "implementer"), note: String(opts.note || "").slice(0, 300), ts: new Date().toISOString() };
+  const r = appendDecisionRows(ws, [row]);
+  return r.ok ? { ok: true, status: "superseded", supersededBy: by9 } : { ok: false, reason: r.reason };
 }
 // 결과 행 — 대상 지문 재대조(opts.currentFp가 주어지고 targetFp와 다르면 거부) · 선택지 밖 키 거부 · delegate=네가 정해라
 function resolveDecision(ws, decisionId, choiceKey, opts) {
@@ -4411,11 +4439,11 @@ function renderDecisionBlock(d, en) {
 // 지표 재료(§7): 캠페인별·출처별 생성/선택/위임/미처리 수 — "제조된 결정" 신호는 수치로만 남긴다
 function decisionMetrics(ws, campaignId, repoKey) {
   const cur = readDecisions(ws, (typeof repoKey === "string" && repoKey) ? { repoKey } : undefined); // 지표도 현재 저장소 항목만(호출자가 키를 넘길 때)
-  const out = { total: 0, byOrigin: {}, open: 0, chosen: 0, delegated: 0 };
+  const out = { total: 0, byOrigin: {}, open: 0, chosen: 0, delegated: 0, superseded: 0 };
   for (const d of cur.latest.values()) {
     if (campaignId && d.campaignId !== campaignId) continue;
     out.total++; out[d.status] = (out[d.status] || 0) + 1;
-    const o = out.byOrigin[d.origin] || (out.byOrigin[d.origin] = { total: 0, open: 0, chosen: 0, delegated: 0 });
+    const o = out.byOrigin[d.origin] || (out.byOrigin[d.origin] = { total: 0, open: 0, chosen: 0, delegated: 0, superseded: 0 });
     o.total++; o[d.status]++;
   }
   return out;
@@ -6707,6 +6735,8 @@ function fitDefaultsNotice(statusLine, notice) {
 }
 module.exports.fitDefaultsNotice = fitDefaultsNotice;
 module.exports.isRealHookInput = isRealHookInput;
+module.exports.supersedeDecision = supersedeDecision;
+module.exports.decisionRowValid = decisionRowValid;
 module.exports.isSystemNotificationHook = isSystemNotificationHook;
 module.exports.lastTextUserRecordOf = lastTextUserRecordOf;
 module.exports.folderChangeOf = folderChangeOf;

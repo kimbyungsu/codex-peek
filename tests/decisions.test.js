@@ -280,4 +280,44 @@ t("결정 블록 서식 — 사용자 편집(기본지침 파일의 decisionBloc
   assert.ok(CL.loadBaseDirective("ko", "core").verifyBaseline.includes("사용자 추가 원칙"), "reset keeps the other axes");
 });
 
+t("대체(superseded) 행 — 선택지 밖 답을 새 항목으로 기록할 때 원항목을 닫는 유일한 경로(2026-09-14 실보고: 낡은 열린 항목 2건)", () => {
+  const WS7 = fs.mkdtempSync(path.join(os.tmpdir(), "decisions-ws7-"));
+  const run = runIn(WS7);
+  const raise = (q, extra) => run(["decisions", "raise", "--kind", "product", "--question", q, "--why", "w", "--no-default", "사용자 선호라 구현자가 정할 수 없음", "--choice", "a=선택 A", "--choice", "b=선택 B", ...(extra || [])]);
+  const r1 = raise("첫 질문"); assert.strictEqual(r1.status, 0, r1.stderr);
+  const id1 = /([a-f0-9]{16})/.exec(r1.stdout)[1];
+  // 사용자 답이 선택지 밖 → 새 항목을 --supersedes 로 올리면 원항목이 같은 호출에서 대체됨
+  const r2 = raise("첫 질문(선택지 개정)", ["--supersedes", id1, "--supersede-note", "사용자 답이 선택지 밖"]); assert.strictEqual(r2.status, 0, r2.stderr);
+  const id2 = /기록됨: ([a-f0-9]{16})/.exec(r2.stdout)[1];
+  assert.ok(id2 !== id1 && /대체됨: /.test(r2.stdout), r2.stdout);
+  let cur = CL.readDecisions(WS7);
+  assert.strictEqual(cur.open.length, 1); assert.strictEqual(cur.open[0].decisionId, id2);
+  const old = cur.latest.get(id1);
+  assert.strictEqual(old.status, "superseded"); assert.strictEqual(old.supersededBy, id2); assert.strictEqual(old.supersedeNote, "사용자 답이 선택지 밖");
+  assert.ok(cur.rows.length === 3 && cur.rows[2].status === "superseded" && cur.rows[2].choice === id2, "append-only 대체 행(삭제 없음)");
+  // 대체된 항목엔 답을 기록할 수 없고(already-resolved), 목록·집계에서도 열림이 아님
+  const c1 = run(["decisions", "choose", id1, "a"]); assert.strictEqual(c1.status, 3); assert.ok(/이미 기록된 결정/.test(c1.stderr), c1.stderr);
+  const l = run(["decisions", "list"]); assert.ok(l.stdout.includes(id2) && !l.stdout.includes(id1), "list=대체 항목만");
+  const m = JSON.parse(run(["decisions", "metrics"]).stdout); assert.strictEqual(m.superseded, 1); assert.strictEqual(m.open, 1);
+  // 단독 명령: 이미 답한 항목으로 대체(보통 경로) · 오류 4종
+  const r3 = raise("셋째 질문"); const id3 = /([a-f0-9]{16})/.exec(r3.stdout)[1];
+  assert.strictEqual(run(["decisions", "choose", id2, "a"]).status, 0);
+  const s1 = run(["decisions", "supersede", id3, "--by", id2, "--note", "같은 사안"]); assert.strictEqual(s1.status, 0, s1.stderr);
+  cur = CL.readDecisions(WS7); assert.strictEqual(cur.open.length, 0); assert.strictEqual(cur.latest.get(id3).supersededBy, id2);
+  assert.strictEqual(run(["decisions", "supersede", id3, "--by", id2]).status, 3, "이미 대체된 항목=already-resolved");
+  assert.strictEqual(run(["decisions", "supersede", "0123456789abcdef", "--by", id2]).status, 3, "not-found");
+  const r4 = raise("넷째 질문"); const id4 = /([a-f0-9]{16})/.exec(r4.stdout)[1];
+  assert.strictEqual(run(["decisions", "supersede", id4, "--by", id4]).status, 3, "self");
+  assert.strictEqual(run(["decisions", "supersede", id4, "--by", "fedcba9876543210"]).status, 3, "by-not-found");
+  assert.strictEqual(run(["decisions", "supersede", id4]).status, 2, "usage");
+  assert.strictEqual(CL.readDecisions(WS7).open.length, 1, "실패한 대체는 아무 것도 바꾸지 않음");
+  // 행 형식: 대체 행은 choice 가 16자리 id 여야 하고 자기 자신이면 무효(판독기가 버림)
+  assert.strictEqual(CL.decisionRowValid({ schema: "decision-v1", decisionId: id4, status: "superseded", wsKey: CL.wsKeyFor(WS7), choice: "not-an-id", ts: "t" }), false);
+  assert.strictEqual(CL.decisionRowValid({ schema: "decision-v1", decisionId: id4, status: "superseded", wsKey: CL.wsKeyFor(WS7), choice: id4, ts: "t" }), false);
+  assert.strictEqual(CL.decisionRowValid({ schema: "decision-v1", decisionId: id4, status: "superseded", wsKey: CL.wsKeyFor(WS7), choice: id2, ts: "t" }), true);
+  // raise --supersedes 의 대체 실패(원항목 없음)는 새 항목 생성을 막지 않고 사유를 출력한다
+  const r5 = raise("다섯째 질문", ["--supersedes", "0123456789abcdef"]); assert.strictEqual(r5.status, 0); assert.ok(/대체 실패\(not-found\)/.test(r5.stdout), r5.stdout);
+  assert.strictEqual(run(["decisions", "raise", "--kind", "product", "--question", "q", "--why", "w", "--no-default", "사용자 선호라 구현자가 정할 수 없음", "--choice", "a=A", "--choice", "b=B", "--supersedes", "bad"]).status, 2, "--supersedes 형식 검사");
+});
+
 console.log(`\n결과: ${n} 통과 / 0 실패`);

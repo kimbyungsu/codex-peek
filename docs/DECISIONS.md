@@ -275,3 +275,17 @@
 - 결과: 검증자가 현재 쓰는 세 판독 형태 중 둘(명령 배열+실행 호출·PowerShell 리터럴 목록 반복)과 따옴표가 든 인라인 명령이 흔적으로 잡힌다. 작은 스크립트(node -e)로만 읽은 파일은 설계대로 여전히 경보 대상(위조 방지 경계).
 - 정본: bridge/codex-bridge.js `function templateScriptCommands` · `function psLiteralForeachVariants` · `function toolReadParts`(스크립트=정형 일치기 하나 · 함수 호출 인수=강한 축) · `function outputContainsFileLine`·`function callMentionedFiles`(약한 축 해제=출력 내용 대조+출력 소유권) · tests/evidence-unseen.test.js [3-7].
 - 찾는말: 근거의심 반복, 매 턴 경고, 읽은 흔적 없음, exec_command, shell_command 개명, PowerShell foreach Get-Content, 재확인 호출 비용
+
+## D-2026-09-14-decision-supersede — 선택지 밖 답이 오면 새 항목을 올리되 원항목은 '대체됨'으로 닫는다
+- 날짜: 2026-09-14 · 종류: 확정 · 상태: 유효
+- 결정: 사용자가 결정 장부 항목에 선택지 밖의 답을 하면(예: "압축 무반응") 구현자는 그 답을 담은 새 항목을 올리고, 원항목에는 같은 호출로 '대체됨(대체 항목 id)' 행을 남긴다(`decisions raise --supersedes <원항목>` 또는 `decisions supersede <원항목> --by <대체 항목>`). 대체된 항목은 열린 목록·개요 '지금 정할 것'·마감문에서 빠지고 이력으로만 남는다(삭제 없음 · ab-5).
+- 왜: 2026-09-09·09-11에 선택지 밖 답을 새 항목으로만 기록해 원항목 2건이 열린 채 남았고, 사용자가 "결정 장부에 있는 사항을 왜 못 봤나"를 물었다 — 실제로는 둘 다 답한 사안의 낡은 중복이었다. 장부에 철회·대체 행이 없어 구현자가 닫을 길이 없었던 것이 구조 원인.
+- 결과: 낡은 열린 항목이 '지금 정할 것'에 쌓이지 않는다. 대체 행은 원항목·대체 항목이 같은 저장소 장부에 실존할 때만 기록된다(자기 자신·타 저장소·미실존 거부).
+- 정본: bridge/contract-lib.js `function supersedeDecision` · `function openDecision`(spec.supersedes) · bridge/codex-bridge.js `decisions supersede` · tests/decisions.test.js '대체(superseded) 행'.
+- 찾는말: 결정 장부, 열린 결정이 남음, 선택지 밖 답, supersede, 지금 정할 것 낡은 항목, decisions raise --supersedes
+
+## D-2026-09-14-backlog-groups — 보관함 카드는 개요와 같은 세 묶음(검토 기한·여유·백로그)으로 나눠 보이고, 개요 버튼은 그 묶음으로 바로 간다
+- 날짜: 2026-09-14 · 종류: 확정 · 상태: 유효
+- 결정: 개요의 '보관함 검토 기한 n'·'여유 m'을 눌러 보관함 카드로 오면 어느 항목이 검토 기한이고 어느 것이 여유인지 구별되지 않았다(사용자 실보고). 카드는 검토 기한(주의+오래됨/자주 재발견 — 개요 합산)·여유(주의·기한 없음 — 합산 밖)·백로그(범위 밖 제안 — 합산 밖) 세 묶음 제목 아래에 항목을 나열하고, 항목 배지도 묶음 이름으로 통일하며, 요약 줄은 개요와 같은 어휘로 쓴다. 개요 버튼은 카드 전체가 아니라 해당 묶음 제목으로 이동해 비춘다.
+- 정본: src/extension.ts `computeBacklogView`(group·later) · 보관함 카드 렌더(`blGroupDue`·`blGroupLater`·`blGroupBacklog`) · 개요 `decideActs`/여유 줄 이동 · tests/p12-backlog.test.js RB-7~11·CB-V7 · tests/sidebar-shell.test.js.
+- 찾는말: 보관함, 검토 기한, 여유, 백로그, 지금 정할 것 이동, 구별 안 됨

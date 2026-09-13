@@ -75,6 +75,7 @@ console.log("[3b] 개요 패널 — 기존 상태값 재조립·안전 표시 �
   ok(blk.includes("var acts9=decideActs(d);"), "renderOverview는 분리된 합산 함수를 사용");
   // 보관함 긴급/여유 분리(사용자 결정 2026-08-07): 기한(due) 항목만 합산·잔여는 합산 밖 '여유' 줄
   ok(blk.includes("d.backlog.cautionDue") && blk.includes("blRest9=Math.max(0,"), "보관함은 검토 기한 항목만 긴급 합산(잔여=여유)");
+  ok(/el:"#blGroupDue"/.test(blkA) && /querySelector\("#blGroupLater"\)/.test(blk) && /closest\("details"\)/.test(blk), "검토 기한(합산 함수)·여유(개요 렌더) 버튼은 보관함 카드의 해당 묶음 제목으로 이동(부모 상자 열기 · 2026-09-14)");
   ok(!/tot9\+=blRest9|acts9\.push\(\{n:blRest9/.test(blk) && /blRest9\)\{ var rx9=el\("div","ovact relaxed"\)/.test(blk), "여유 줄은 합산·행동 목록 밖 별도 렌더(과장 집계 금지)");
   ok(/cautionDue: items\.filter\(\(x\) => x\.tag === "주의" && x\.due\)\.length/.test(src), "cautionDue는 표시 상한(30) 적용 전 전량 기준");
   ok(/vb9\.textContent=\(d\.live\.round>0 \? T\("회차 ","rd "\)/.test(blk) && blk.includes("cc9 ? d.contract.codexVerifyBudget : d.contract.verifyBudget"), "검증 배지='회차 N/상한' — 상한은 계약 실효 숫자(편집용 appVB 문자열 금지) · [4a] round 0=회차 미표기(선별/준비)");

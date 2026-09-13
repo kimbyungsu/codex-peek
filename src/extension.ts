@@ -192,7 +192,7 @@ interface BridgeState {
   baseReadOk: boolean; // 기본 원칙(+3트랙 정찰) 오버라이드 파일 판독 신뢰(부재=정상) — false면 웹뷰가 canonical fill·잠금 해제 보류(7차 지적 2)
   scoutPrompt: { baseline: string; overridden: boolean; directive: string; notes: string[]; version: string } | null; // §6-11 — 3트랙에서만(null=2트랙/판독 불가)
   // P-12 v2.4: 보관함(범위 밖 제안+판단 대기 [주의]) 읽기 전용 가시화 — 처분은 CLI(backlog done|dismiss). null=무폴더/구 런타임.
-  backlog: { caution: number; cautionDue: number; backlog: number; corrupt: number; readError: boolean; wsKey?: string; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } | null; // readError: 판독 실패(ENOENT 외) — '비어 있음' 위장 금지(2026-07-18 확인 판정 [보완] 소화)
+  backlog: { caution: number; cautionDue: number; later?: number; backlog: number; corrupt: number; readError: boolean; wsKey?: string; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } | null; // readError: 판독 실패(ENOENT 외) — '비어 있음' 위장 금지(2026-07-18 확인 판정 [보완] 소화)
   challenges: { open: number; cleared: number; kept: number; counts: Record<string, number>; items: Array<{ id: string; state: string; files: number; resolvedFiles: number; ageMin: number; cleared: boolean; matchedAll: boolean; warnOpen: boolean; eventId: string }>; ndEventIds: string[] } | null; // 재확인(증분 4b) — cleared=실제 ack 조건(전 파일 일치)·null=구 설치본/부재
   movedRules: { count: number; items: Array<{ id: string; ko: string; en: string; hooks: string[] }> }; // [§4-B ③] 훅으로 옮긴 하네스 문장 장부(DIRECTIVE_MOVED)
   usedMemory: { ts: string; items: Array<{ path: string; note: string }>; couplings: number; omitted: boolean; selOver: { count: number; bytesTotal: number; itemsMax: number; bytesMax: number } | null } | null; // selOver=[§7 4-2b] 직전 검증의 서고 선별 정상 범위 초과(전량 동봉) — 서고 카드 표기 재료
@@ -1823,16 +1823,24 @@ function computeBaseState(ws: string | null, contract: Contract, lang: Lang): { 
 // P-12 v2.4: 보관함 카드 뷰 계산(순수 함수 — 테스트가 컴파일 산출물에서 추출 실행·의존성 없음).
 // ★나이 기준=firstSeen★(구현검증 1차 blocker: lastSeen 기준이면 재발견이 나이를 되감아 40일 묵은 항목이
 // D+1로 표시되며 30일 검토 기한을 회피) — firstSeen 부재·무효 시에만 lastSeen fallback.
-function computeBacklogView(rawItems: any[], now: number): { caution: number; cautionDue: number; backlog: number; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean }> } {
+function computeBacklogView(rawItems: any[], now: number): { caution: number; cautionDue: number; later: number; backlog: number; items: Array<{ id: string; tag: string; title: string; file: string; seenCount: number; ageDays: number; due: boolean; group: "due" | "later" | "backlog" }> } {
   const items = (rawItems || []).filter((i: any) => i && i.status === "open").map((i: any) => {
     const first = Date.parse(String(i.firstSeen || ""));
     const seen = Number.isFinite(first) ? first : Date.parse(String(i.lastSeen || ""));
     const ageDays = Number.isFinite(seen) ? Math.max(0, Math.floor((now - seen) / 86400000)) : 0;
     const seenCount = Number(i.seenCount) || 1;
-    return { id: String(i.id), tag: i.tag === "주의" ? "주의" : "백로그", title: String(i.title || ""), file: String(i.file || ""), seenCount, ageDays, due: ageDays >= 30 || seenCount >= 3 };
+    const tag = i.tag === "주의" ? "주의" : "백로그";
+    const due = ageDays >= 30 || seenCount >= 3;
+    // group=개요 어휘와 같은 세 묶음(2026-09-14 실보고: 개요의 '검토 기한 n'·'여유 m'을 눌러 와도 목록에서 어느 항목인지 구별 불가) —
+    // 검토 기한(주의+기한)·여유(주의·기한 없음)·백로그(범위 밖 제안 — 개요 합산 밖). 카드는 이 묶음별로 제목을 달아 나열한다.
+    const group: "due" | "later" | "backlog" = tag === "주의" ? (due ? "due" : "later") : "backlog";
+    return { id: String(i.id), tag, title: String(i.title || ""), file: String(i.file || ""), seenCount, ageDays, due, group };
   }).sort((a, b) => (a.due === b.due ? b.ageDays - a.ageDays : (a.due ? -1 : 1)));
   // cautionDue: 표시 상한(30) 적용 전 전체 기준 — 개요의 '지금 정할 것' 합산은 잘린 목록이 아니라 전량으로 센다.
-  return { caution: items.filter((x) => x.tag === "주의").length, cautionDue: items.filter((x) => x.tag === "주의" && x.due).length, backlog: items.filter((x) => x.tag === "백로그").length, items: items.slice(0, 30) };
+  // 표시 상한은 묶음마다(각 30) — 한 묶음(예: 오래된 백로그 30건)이 상한을 다 쓰면 다른 묶음(검토 기한 1건)이 목록에서 사라져 개요 버튼의 이동 목표가
+  // 없어지던 반례(구현 검증 blocker 2026-09-14). 집계(cautionDue·later·backlog)는 전량 기준 그대로.
+  const perGroup = (g: "due" | "later" | "backlog") => items.filter((x) => x.group === g).slice(0, 30);
+  return { caution: items.filter((x) => x.tag === "주의").length, cautionDue: items.filter((x) => x.tag === "주의" && x.due).length, later: items.filter((x) => x.group === "later").length, backlog: items.filter((x) => x.tag === "백로그").length, items: [...perGroup("due"), ...perGroup("later"), ...perGroup("backlog")] };
 }
 
 // 재확인(증분 4b): 근거 재확인 장부 카드 뷰(순수 함수 — 테스트가 컴파일 산출물에서 추출 실행·의존성 없음).
@@ -6574,7 +6582,7 @@ class Dashboard {
     // 보관함은 '갚을 의무 없음' 주차장 — 전량을 '지금 정할 것'으로 세면 급한 일이 묻힌다(사용자 결정 2026-08-07).
     // 검토 기한(due=30일+ 경과 또는 3회+ 재발견) 항목만 긴급 합산에 넣고, 나머지는 합산 밖 '여유' 줄로만 안내.
     var blDue9=d.backlog&&d.backlog.cautionDue?d.backlog.cautionDue:0;
-    if(blDue9) acts9.push({n:blDue9, tab:"verify", el:"#backlogSec", label:T("보관함 검토 기한 항목(오래됨·자주 재발견)","parked items due for review (old or often rediscovered)")}); // el=보관함 실위치(사용자 실보고 2026-08-20: 탭 전환만으로는 접힌 하단 상자에 못 닿음)
+    if(blDue9) acts9.push({n:blDue9, tab:"verify", el:"#blGroupDue", label:T("보관함 검토 기한 항목(오래됨·자주 재발견)","parked items due for review (old or often rediscovered)")}); // el=보관함 실위치(사용자 실보고 2026-08-20: 탭 전환만으로는 접힌 하단 상자에 못 닿음)
     var ic9=d.mapCurrent&&d.mapCurrent.intent&&Number.isFinite(d.mapCurrent.intent.choicePending)?d.mapCurrent.intent.choicePending:0;
     if(ic9) acts9.push({n:ic9, tab:"setup", el:"#intentBox", label:T("MAP 대기 선택","MAP choices waiting")}); // el=선택 대기 상자 실위치(이동 전면 점검 2026-08-26)
     // [상시 표출 2026-08-16 사용자 결정] 선택한 보강 담당이 사람 조치로만 재개되는 보류 — 경보 '확인'을
@@ -6621,7 +6629,7 @@ class Dashboard {
         var row9=el("div","ovact"); var btn9=document.createElement("button"); btn9.type="button"; btn9.className="secondary";
         btn9.textContent=a9.n+" · "+a9.label+(a9.tab?" →":"");
         if(a9.tab) btn9.addEventListener("click", function(){
-          if(a9.el){ var t0=document.querySelector(a9.el); if(t0){ if(t0.tagName==="DETAILS") t0.open=true; gotoEl(t0); return; } } // 대상 실존 시 정확 위치로+접힌 상자는 펼침(보관함 실보고) — 부재면 탭 폴백
+          if(a9.el){ var t0=document.querySelector(a9.el); if(t0){ if(t0.tagName==="DETAILS") t0.open=true; var dp0=t0.closest?t0.closest("details"):null; if(dp0) dp0.open=true; gotoEl(t0); flashNode(t0); return; } } // 대상 실존 시 정확 위치로+접힌 상자는 펼침(보관함 실보고) — 묶음 제목이면 부모 상자를 열고 그 묶음을 비춤 · 부재면 탭 폴백
           var b9=document.querySelector('.tabbtn[data-tab="'+a9.tab+'"]'); if(b9) b9.click();
         });
         row9.appendChild(btn9); listBox9.appendChild(row9);
@@ -6629,7 +6637,7 @@ class Dashboard {
       // 기한 없는 보관함 잔여 — 합산 제외 '여유' 줄(눌러서 보관함으로 이동만). 급한 일과 시각적으로 구분.
       if(blRest9){ var rx9=el("div","ovact relaxed"); var rb9=document.createElement("button"); rb9.type="button"; rb9.className="secondary";
         rb9.textContent=T("여유 · ","later · ")+blRest9+T("건 — 보관함 판단 대기(기한 없음 · 위 합산 제외 · 채택할 때만 작업) →"," parked — no deadline · not counted above · work only when adopted →");
-        rb9.addEventListener("click", function(){ var t0=document.querySelector("#backlogSec"); if(t0){ t0.open=true; gotoEl(t0); return; } var b9=document.querySelector('.tabbtn[data-tab="verify"]'); if(b9) b9.click(); }); // 보관함 실위치로(펼침 포함) — 실보고 2026-08-20
+        rb9.addEventListener("click", function(){ var t0=document.querySelector("#blGroupLater")||document.querySelector("#backlogSec"); if(t0){ if(t0.tagName==="DETAILS") t0.open=true; var dp0=t0.closest?t0.closest("details"):null; if(dp0) dp0.open=true; gotoEl(t0); flashNode(t0); return; } var b9=document.querySelector('.tabbtn[data-tab="verify"]'); if(b9) b9.click(); }); // 여유 묶음 제목으로(없으면 상자) · 보관함 실위치로(펼침 포함) — 실보고 2026-08-20
         rx9.appendChild(rb9); listBox9.appendChild(rx9); }
     }
     if(empty9) empty9.style.display=acts9.length?"none":"";
@@ -7593,12 +7601,22 @@ class Dashboard {
       }
       if(sum) sum.textContent = (bl.caution+bl.backlog)===0 && !bl.corrupt
         ? T("비어 있음 — 검증에서 범위 밖 제안·판단 대기 항목이 나오면 여기 쌓입니다","empty — out-of-scope proposals and pending judgments will accumulate here")
-        : T("열림 ","open ")+(bl.caution+bl.backlog)+T("건 — 주의 "," — caution ")+bl.caution+T(" · 백로그 "," · backlog ")+bl.backlog+(bl.corrupt?T(" · 손상 "," · corrupt ")+bl.corrupt+T("줄"," line(s)"):"");
+        : T("열림 ","open ")+(bl.caution+bl.backlog)+T("건 — 검토 기한 "," — review due ")+(bl.cautionDue||0)+T(" · 여유 "," · later ")+(bl.later!==undefined?bl.later:Math.max(0,bl.caution-(bl.cautionDue||0)))+T(" · 백로그 "," · backlog ")+bl.backlog+(bl.corrupt?T(" · 손상 "," · corrupt ")+bl.corrupt+T("줄"," line(s)"):"")+T(" — 개요의 '지금 정할 것'엔 검토 기한만 합산"," — only 'review due' counts in the overview");
       if(!list) return; list.replaceChildren();
-      bl.items.forEach(function(it){
+      // 세 묶음(개요와 같은 어휘): 검토 기한(오래됨·자주 재발견 — 개요 합산) · 여유(기한 없음 — 합산 밖) · 백로그(범위 밖 제안 — 합산 밖). 개요 버튼은 묶음 제목으로 바로 온다.
+      var groups=[
+        {key:"due", id:"blGroupDue", title:T("검토 기한 — 오래됐거나 자주 재발견된 '주의' 항목(개요 '지금 정할 것'에 합산)","Review due — old or often rediscovered 'caution' items (counted in the overview)"), total:(bl.cautionDue||0)},
+        {key:"later", id:"blGroupLater", title:T("여유 — 기한 없는 '주의' 항목(합산 밖 · 채택할 때만 작업)","Later — 'caution' items without a deadline (not counted · work only when adopted)"), total:(bl.later!==undefined?bl.later:Math.max(0,bl.caution-(bl.cautionDue||0)))},
+        {key:"backlog", id:"blGroupBacklog", title:T("백로그 — 범위 밖 제안(합산 밖 · 갚을 의무 없음)","Backlog — out-of-scope proposals (not counted · no obligation)"), total:bl.backlog}
+      ];
+      groups.forEach(function(gp){
+        var its=bl.items.filter(function(it){ return (it.group||(it.tag==="주의"?(it.due?"due":"later"):"backlog"))===gp.key; });
+        if(!its.length && !gp.total) return; // 묶음 제목은 전량 집계가 0일 때만 생략(표시 목록이 비어도 집계가 있으면 제목·건수는 남겨 개요 버튼의 목표가 되게)
+        var hd=el("div","blgroup",""); hd.id=gp.id; hd.style.cssText="margin:8px 0 2px;font-weight:600;font-size:12px"; hd.textContent=gp.title+" · "+its.length+(gp.total>its.length?T("건(표시 상한 — 전체 "+gp.total+"건)"," shown (of "+gp.total+")"):T("건"," item(s)")); list.appendChild(hd);
+        its.forEach(function(it){
         var row=el("div",""); row.style.margin="5px 0"; row.style.fontSize="12px"; row.style.lineHeight="1.5";
-        row.appendChild(el("span","badge "+(it.tag==="주의"?"b-plancode":"b-off"), it.tag==="주의"?T("주의","caution"):T("백로그","backlog")));
-        if(it.due){ var dueB=el("span","badge b-always", T("검토 기한","review due")); dueB.style.marginLeft="4px"; row.appendChild(dueB); }
+        row.appendChild(el("span","badge "+(gp.key==="due"?"b-always":gp.key==="later"?"b-plancode":"b-off"), gp.key==="due"?T("검토 기한","review due"):gp.key==="later"?T("여유","later"):T("백로그","backlog")));
+        if(gp.key==="backlog"&&it.due){ var dueB=el("span","badge b-plancode", T("오래됨","old")); dueB.style.marginLeft="4px"; row.appendChild(dueB); }
         var t1=el("span","", " "+it.title); row.appendChild(t1);
         var meta=el("div","muted", (it.file? it.file+" · ":"")+T("재발견 ","seen ")+it.seenCount+T("회","×")+" · D+"+it.ageDays+" · "+it.id);
         meta.style.fontSize="11px"; row.appendChild(meta);
@@ -7607,6 +7625,7 @@ class Dashboard {
         bm9(T("해결됨(장부 닫기)","Resolved (close)"),T("이미 코드·문서로 해소된 항목의 장부를 닫아요 — 기록은 보존되고 목록·기한 알림에서만 빠집니다.","Closes the ledger row for an item already resolved in code/docs — history preserved, removed from the list and due alerts."),"done");
         bm9(T("안 하기로 종결","Won't do (dismiss)"),T("수용 위험·범위 밖 등 '하지 않기로' 정한 항목을 종결해요 — 기록은 보존됩니다.","Dismisses an item you decided not to act on (accepted risk / out of scope) — history preserved."),"dismissed");
         list.appendChild(row);
+        });
       });
     });
     // 재확인(증분 4b): 근거 재확인 카드 — 읽기 전용 가시화. XSS 안전: 전부 createElement/textContent.
