@@ -26,7 +26,7 @@ const NOTICE = "<task-notification>\n<task-id>bg123</task-id>\n<status>completed
 let n = 0;
 const t = (name, fn) => { n++; fn(); console.log(`  ✅ [${n}] ${name}`); };
 
-t("판별(순수): origin.kind 또는 <task-notification> 봉투로 시작하는 프롬프트만 알림 — 본문 중간 인용은 발화", () => {
+t("판별(순수): origin.kind 또는 본문 전체가 <task-notification> 봉투만인 프롬프트만 알림 — 봉투 앞뒤에 사람의 글이 있으면(중간 인용 포함) 발화", () => {
   assert.strictEqual(CL.isSystemNotificationHook({ prompt: NOTICE }), true);
   assert.strictEqual(CL.isSystemNotificationHook({ prompt: "  \n" + NOTICE }), true);
   assert.strictEqual(CL.isSystemNotificationHook({ prompt: "x", origin: { kind: "task-notification" } }), true);

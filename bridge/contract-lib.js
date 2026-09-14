@@ -6623,7 +6623,7 @@ function isRealHookInput(hook) {
 // [HARNESS-STRUCTURE §B2 3차 · 2026-09-12] 시스템이 '사용자 프롬프트' 자리에 넣는 비-발화(배경 작업 완료 알림)를 판별한다 —
 // 턴 앵커(캠페인 회차·선별 관문·라이브 라운드)는 사람의 발화에만 새로 찍혀야 한다. 판정 재료는 구조 표식만:
 //   ① 훅 입력에 origin.kind === "task-notification"(transcript 레코드와 같은 표식이 실릴 때)
-//   ② 프롬프트 본문이 <task-notification> 봉투로 '시작'(Claude Code 가 붙이는 봉투 — 사람이 같은 봉투로 발화를 시작할 일은 없다)
+//   ② 프롬프트 본문 '전체'가 <task-notification> 봉투만으로 이뤄짐(Claude Code 가 붙이는 봉투 — 봉투 밖에 사람의 글이 한 글자라도 있으면 발화)
 // 본문 중간의 문구 매칭은 하지 않는다(사용자가 알림 원문을 붙여넣어도 앵커는 정상 갱신).
 // 판정 권위(순서): ① 훅 입력의 origin.kind ② transcript 의 같은 원문 user 레코드가 있으면 그 origin.kind(verify-guard 와 같은 구조 표식 —
 // 두 판독 권위가 갈리지 않게) ③ 기록에 없을 때만, 본문이 '<task-notification>…</task-notification> 봉투만'으로 이뤄졌으면 알림. 봉투 밖에 한 글자라도

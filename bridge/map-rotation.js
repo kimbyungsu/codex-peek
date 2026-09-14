@@ -96,8 +96,9 @@ function lifecyclePatch(repo, topo, node, to, expect, rationale, detectedBy, hea
 }
 // 노드가 '하네스 사실 통로'로 내려간 것인지 — provenance.decisionId 의 결정 기록에서 patch.detectedBy·rationale 판독
 // 이 노드를 deprecated 로 만든 결정 기록을 찾는다 — provenance.decisionId 는 '가장 최근 결정'이라 뒤에 add_evidence·add_anchor 같은 비상태 결정이
-// 덮어쓸 수 있다(확인 검증 3판 blocker). 그래서 provenance 가 강등 결정이 아니면 결정 색인에서 이 노드를 겨냥한 set_state(→deprecated) 중
-// 가장 최근 것(audit.ts)을 찾는다 — 노드가 지금 deprecated 인 이상 그 결정이 현재 강등의 원인이다(그 뒤 set_state 가 있었다면 lifecycle 이 달라졌다).
+// 덮어쓸 수 있다(확인 검증 3판 blocker). 그래서 provenance 가 강등 결정이 아니면 결정 색인에서 이 노드를 겨냥한 set_state(→deprecated) 후보를 모으고,
+// 후보가 둘 이상이면 시각(audit.ts)이 아니라 topology 해시 사슬(orderByChain: 현재 지도 해시에서 before←after 로 거슬러 처음 만나는 후보)로 정한다 —
+// 같은 밀리초 기록·시계 흔들림에 순서가 뒤집히지 않고, 사슬이 끊기거나 모호하면 소유 아님(null)으로 닫는다(보관함 9b3def97d28c323a 주석 정정).
 function readDecision(repo, did) { try { return JSON.parse(fs.readFileSync(path.join(repo, "project-map", "decisions", did + ".json"), "utf8")); } catch { return null; } }
 function demotionOf(dec) {
   const p = dec && dec.patch;
