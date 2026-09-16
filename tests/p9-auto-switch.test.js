@@ -431,8 +431,8 @@ setContract("codex-codex"); clearState();
 // scripts(scope-target/scope-gate)=withFileLockStrict+fail-closed(무잠금 keep-병합·{} 축소 덮어쓰기 제거)
 const extSrc2 = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
 ck("교차 작성자 — setScoutTargetFromUi가 관문(재시도+사다리) 경유", /patchContractRetryExt\(ws, lang, \{ scoutRepo: abs \}\)/.test(extSrc2) && !/\.\.\.keep, scoutRepo: abs/.test(extSrc2));
-const st2 = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-target.js"), "utf8");
-const sg2 = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-gate.js"), "utf8");
+const st2 = fs.readFileSync(path.join(__dirname, "..", "bridge", "scope-target.js"), "utf8");
+const sg2 = fs.readFileSync(path.join(__dirname, "..", "bridge", "scope-gate.js"), "utf8");
 ck("교차 작성자 — scope-target 단일 관문 이관(P-8 2단: 잠금·fail-closed=관문 내부)", /updateContractPatch\(ws, loadLang\(\)/.test(st2) && !/withFileLockStrict\(/.test(st2));
 ck("교차 작성자 — scope-gate 단일 관문 이관(P-8 2단)", /updateContractPatch\(repo, lang/.test(sg2) && !/withFileLockStrict\(/.test(sg2));
 // 대시보드 — 복귀(현재 모드≠to)·원복(reverted) 상태에선 자동 전환 안내 숨김(2차 부수 지적)
@@ -465,7 +465,7 @@ console.log("[C] 도구 실행 표식(CODEX_PEEK_TOOL_EXEC) — ephemeral 정찰
   ck("C4 표식 검사는 판정 함수 안에서 rollout 판독보다 앞(소스 계약)", cps > 0 && seg.indexOf("CODEX_PEEK_TOOL_EXEC") > 0 && seg.indexOf("CODEX_PEEK_TOOL_EXEC") < seg.indexOf("rolloutForSession(j, sid)"));
   const clSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
   ck("C5 공용 헬퍼 codexScoutExecEnv 존재·export", /function codexScoutExecEnv\(base, kind\)/.test(clSrc) && clSrc.includes("codexScoutExecEnv, TOOL_EXEC_ENV"));
-  const sp = fs.readFileSync(path.join(__dirname, "..", "scripts", "scout-providers.js"), "utf8");
+  const sp = fs.readFileSync(path.join(__dirname, "..", "bridge", "scout-providers.js"), "utf8");
   const ep = fs.readFileSync(path.join(__dirname, "..", "bridge", "enrich-providers.js"), "utf8");
   const mp = fs.readFileSync(path.join(__dirname, "..", "bridge", "map-probe.js"), "utf8");
   ck("C6 ephemeral 호출 4곳 전부 표식 적용(정찰·보강 2·점검)", /codexScoutExecEnv\(process\.env, "scout"\)/.test(sp) && (ep.match(/codexScoutExecEnv\(process\.env, "enrich"\)/g) || []).length === 2 && /codexScoutExecEnv\(o\.env \|\| process\.env, "probe"\)/.test(mp));

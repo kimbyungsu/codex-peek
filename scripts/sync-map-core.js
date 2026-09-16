@@ -15,6 +15,15 @@ const fs = require("fs");
 const path = require("path");
 const SRC = path.join(__dirname, "..", "out", "project-map.js");
 const DST = path.join(__dirname, "..", "bridge", "project-map.js");
+// 정찰 층 이관(2026-09-16): 정찰 드라이버(bridge/scope-package.js)가 쓰는 컴파일 코어 3종도 같은 규약의 배포 사본 —
+// 드라이버와 이름이 겹치지 않게 *-core.js 로 둔다(같은 폴더 평면 배포에서 하나가 다른 하나를 덮는 사고 방지).
+const PAIRS = [
+  [SRC, DST],
+  [path.join(__dirname, "..", "out", "scope-package.js"), path.join(__dirname, "..", "bridge", "scope-package-core.js")],
+  [path.join(__dirname, "..", "out", "scope-ledger.js"), path.join(__dirname, "..", "bridge", "scope-ledger-core.js")],
+  [path.join(__dirname, "..", "out", "ledger-events.js"), path.join(__dirname, "..", "bridge", "ledger-events-core.js")],
+];
+const rel = (f) => path.relative(path.join(__dirname, ".."), f).replace(/\\/g, "/");
 
 // 1회 동기화 — 결과를 구조로 반환(호출자가 실패를 판단: watch는 fatal, --write는 exit 1).
 function syncOnce(src, dst) {
@@ -77,29 +86,39 @@ function main() {
       spawnChild: () => spawn(process.execPath, [tscBin, "-watch", "-p", "./"], { stdio: "inherit", cwd: path.join(__dirname, "..") }),
       onExit: (code) => process.exit(code),
     });
+    for (const [s2, d2] of PAIRS.slice(1)) { // 코어 사본 3종 — tsc 자식은 위 하나가 띄우고, 여기선 감시+복사만
+      const tick2 = () => { const r = syncOnce(s2, d2); if (r.st === "synced") console.log("sync-map-core: " + rel(d2) + " 갱신(watch, " + r.bytes + " chars)"); else if (r.st === "write-failed" || r.st === "read-failed") { console.error("sync-map-core: 동기화 실패(" + r.st + "): " + r.error); w.stop(); process.exit(1); } };
+      fs.watchFile(s2, { interval: 1000 }, tick2); tick2();
+    }
     const onSig = () => { w.stop(); process.exit(130); };
     process.on("SIGINT", onSig); process.on("SIGTERM", onSig);
     return;
   }
   if (mode === "--check") {
-    // --check는 파일을 절대 고치지 않는다 — syncOnce(불일치 시 쓰기)를 재사용하지 않고 직접 비교만
-    let s = null, d = null;
-    try { s = fs.readFileSync(SRC, "utf8"); } catch { console.error("out/project-map.js 없음 — 먼저 tsc(컴파일)"); process.exit(1); }
-    try { d = fs.readFileSync(DST, "utf8"); } catch { /* 부재 */ }
-    if (d === s) { console.log("sync-map-core: 패리티 OK(bridge/project-map.js == out/project-map.js)"); process.exit(0); }
-    console.error("sync-map-core: 불일치 — bridge/project-map.js가 낡음(src 변경 후 `npm run compile` 미실행 또는 미커밋). --check는 파일을 고치지 않는다.");
-    process.exit(1);
+    // --check는 파일을 절대 고치지 않는다 — syncOnce(불일치 시 쓰기)를 재사용하지 않고 직접 비교만(쌍마다)
+    for (const [s1, d1] of PAIRS) {
+      let s = null, d = null;
+      try { s = fs.readFileSync(s1, "utf8"); } catch { console.error(rel(s1) + " 없음 — 먼저 tsc(컴파일)"); process.exit(1); }
+      try { d = fs.readFileSync(d1, "utf8"); } catch { /* 부재 */ }
+      if (d !== s) { console.error("sync-map-core: 불일치 — " + rel(d1) + "가 낡음(src 변경 후 `npm run compile` 미실행 또는 미커밋). --check는 파일을 고치지 않는다."); process.exit(1); }
+    }
+    console.log("sync-map-core: 패리티 OK(" + PAIRS.map(([a, b]) => rel(b) + " == " + rel(a)).join(" · ") + ")"); process.exit(0);
   }
   if (mode === "--write") {
-    const r = syncOnce(SRC, DST);
-    if (r.st === "same") { console.log("sync-map-core: 이미 동일 — 무기록"); process.exit(0); }
-    if (r.st === "synced") { console.log("sync-map-core: bridge/project-map.js 갱신(" + r.bytes + " chars)"); process.exit(0); }
-    console.error("sync-map-core: " + (r.st === "src-missing" ? "out/project-map.js 없음 — 먼저 tsc(컴파일)" : "실패(" + r.st + "): " + r.error));
-    process.exit(1);
+    let changed = 0;
+    for (const [s1, d1] of PAIRS) {
+      const r = syncOnce(s1, d1);
+      if (r.st === "same") continue;
+      if (r.st === "synced") { console.log("sync-map-core: " + rel(d1) + " 갱신(" + r.bytes + " chars)"); changed++; continue; }
+      console.error("sync-map-core: " + (r.st === "src-missing" ? rel(s1) + " 없음 — 먼저 tsc(컴파일)" : "실패(" + r.st + "): " + r.error));
+      process.exit(1);
+    }
+    if (!changed) console.log("sync-map-core: 이미 동일 — 무기록");
+    process.exit(0);
   }
   console.error("사용: node scripts/sync-map-core.js --write|--check|--watch-with-tsc");
   process.exit(2);
 }
 
 if (require.main === module) main();
-module.exports = { syncOnce, startWatch };
+module.exports = { syncOnce, startWatch, PAIRS };

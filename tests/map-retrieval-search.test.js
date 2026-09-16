@@ -21,7 +21,7 @@ const paths = (r) => r.matches.map((m) => m.path);
 
 console.log("[1] 복사값 잠금 — 상한·민감·스킵·바이너리가 원본과 갈리면 여기서 깨진다");
 {
-  const src = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-package.js"), "utf8");
+  const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "scope-package.js"), "utf8");
   const hlLine = [...src.matchAll(/^const HL = \{.*\};/gm)];
   ok(hlLine.length === 1, "const HL 선언 1곳");
   const pick = (k) => { const m = hlLine.length === 1 ? [...hlLine[0][0].matchAll(new RegExp(k + ":\\s*([\\d* ]+),", "g"))] : []; return m.length === 1 ? eval(m[0][1]) : null; };

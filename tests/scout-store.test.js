@@ -47,9 +47,9 @@ ok(mdCount === store.KEEP_PER_WS, "초과분 자동 삭제(현재 " + mdCount + 
 ok(fs.readdirSync(dir).filter((f) => f.endsWith(".json")).length <= store.KEEP_PER_WS, "메타도 같이 정리(고아 파일 없음)");
 
 console.log("[러너 배선] 생성 직후 보관 호출 — P5: 공통 파이프라인(scout-providers.js) 한 곳 + 러너 2종 위임(소스 계약)");
-const selfSrc = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-scout-self.js"), "utf8");
-const dsSrc = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-scout-deepseek.js"), "utf8");
-const provSrc = fs.readFileSync(path.join(__dirname, "..", "scripts", "scout-providers.js"), "utf8");
+const selfSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "scope-scout-self.js"), "utf8");
+const dsSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "scope-scout-deepseek.js"), "utf8");
+const provSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "scout-providers.js"), "utf8");
 ok(/runScout\(repo, "self"/.test(selfSrc) && /runScout\(repo, "deepseek"/.test(dsSrc), "러너 2종이 runScout 위임(P5 단일 출처 — 한쪽 누락 자체가 불가)");
 ok(/saveMap\(repo, providerId/.test(provSrc) && provSrc.includes("\\[usage\\] in="), "공통 파이프라인이 보관 호출 + 사용량 메타 파싱");
 ok(/지도 보관 실패\(게시판에만 영향\)/.test(selfSrc) && /지도 보관 실패\(게시판에만 영향\)/.test(dsSrc), "보관 실패가 지도 출력 자체를 못 막음(advisory)");
@@ -79,7 +79,7 @@ ok((ext.match(/try \{ render\(\); \} catch/g) || []).length >= 4, "render(상태
 ok(!/\n\s*render\(\);\s*\n\s*dashboard\.post\(\)/.test(ext), "비격리 결합(render(); 직후 dashboard.post())이 소스에 잔존하지 않음 — 재도입 회귀 탐지");
 
 console.log("[seeds 계단] 시간 창 제거 — 작업 신호 기반(소스 계약)");
-const drvSrc3 = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-package.js"), "utf8");
+const drvSrc3 = fs.readFileSync(path.join(__dirname, "..", "bridge", "scope-package.js"), "utf8");
 ok(!/windowMs/.test(drvSrc3), "24h 마법 상수 제거(두뇌설정 15분 사건 교훈의 일반화)");
 ok(/collectSessionEditedFiles/.test(drvSrc3) && /물때표/.test(drvSrc3) && /최근 수정 순 상위\(첫 지도/.test(drvSrc3), "계단 3단(세션 편집→마지막 지도 이후→최근 수정 상위N) 존재");
 ok(/basis: pkg\.basisNote/.test(provSrc) && /seedFiles: pkg\.seeds/.test(provSrc), "지도 메타에 기준·씨앗 기록(물때표·무이력 낡음 배지 재료 — P5: 공통층 한 곳)");

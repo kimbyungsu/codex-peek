@@ -124,9 +124,9 @@ store.markLive(repo, "self");
 ok(fs.existsSync(path.join(store.LIVE_DIR, store.wsKeyFor(repo) + ".json")), "mark → 신호 파일 생성");
 store.clearLive(repo);
 ok(!fs.existsSync(path.join(store.LIVE_DIR, store.wsKeyFor(repo) + ".json")), "clear → 신호 파일 제거");
-const selfSrc = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-scout-self.js"), "utf8");
-const dsSrc = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-scout-deepseek.js"), "utf8");
-const provSrc = fs.readFileSync(path.join(__dirname, "..", "scripts", "scout-providers.js"), "utf8");
+const selfSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "scope-scout-self.js"), "utf8");
+const dsSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "scope-scout-deepseek.js"), "utf8");
+const provSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "scout-providers.js"), "utf8");
 ok(/markLive\(repo, providerId\)/.test(provSrc) && /finally \{ clearLive\(repo\); \}/.test(provSrc), "공통 파이프라인(P5): 호출 직전 mark·finally clear(러너 2종 공통)");
 ok(/runScout\(repo, "self"/.test(selfSrc) && /runScout\(repo, "deepseek"/.test(dsSrc), "러너 2종 runScout 위임(동일 배선은 구조 보장)");
 

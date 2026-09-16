@@ -217,7 +217,7 @@ console.log("[5b] P6 — 자동 지시·어긋남 분기의 codex 러너 반영"
   ok(clSrc.includes('meta.arm === "codex" ? "Codex scout"') && clSrc.includes('meta.arm === "codex" ? "Codex 정찰"'), "소비점⑪ 검증 프롬프트 동봉 머리(지도 attach) 3값 ko/en(2차 blocker①)");
   ok(extSrc.includes("scope-scout-codex.js (Codex 정찰)") && extSrc.includes("scope-scout-codex.js (Codex scout)"), "빈 게시판 안내에 codex 러너 포함");
   ok(extSrc.includes('o.scoutArm === "codex"'), "확장 Contract 정규화(loadContract)·타입 합타입도 codex 허용(보완 수용)");
-  const provSrc9 = fs.readFileSync(path.join(ROOT, "scripts", "scout-providers.js"), "utf8");
+  const provSrc9 = fs.readFileSync(path.join(ROOT, "bridge", "scout-providers.js"), "utf8");
   const clSrc9 = fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8");
   ok(/\.\.\.CL\.codexScoutExecArgs\(outFile\)/.test(provSrc9) && /"--sandbox", "read-only"/.test(clSrc9), "codex 호출 read-only 강제 — 공용 빌더(P7 이동)로 유지(1차 blocker① 계승)");
   ok(/"exec", "--ephemeral"/.test(clSrc9), "codex 호출 --ephemeral(rollout 무잔재 — 오링크 원천 차단·2차 blocker② 계승, 빌더 소재)");

@@ -46,7 +46,7 @@ ok(tgtKo.status === 0 && /정찰 대상:/.test(tgtKo.stdout), "scope-target stat
 
 console.log("[3] 소스 잠금 — tB/loadLang 한/영 쌍 패턴 유지(문구 단일화 회귀 방지)");
 for (const f of ["scope-target.js", "scope-gate.js", "scope-ledger-migrate.js", "scope-ledger-note.js", "scope-reconcile.js", "scope-scout-self.js", "scope-scout-deepseek.js", "scope-scout-codex.js"]) {
-  const s = fs.readFileSync(cli(f), "utf8");
+  const s = fs.readFileSync(fs.existsSync(path.join(ROOT, "bridge", f)) ? path.join(ROOT, "bridge", f) : cli(f), "utf8"); // 이관된 정찰 층(2026-09-16)은 본체가 bridge/ — scripts/는 얇은 래퍼라 CLI 실행(cli(f))만 그 경로로 · 개발 도구(reconcile 등)는 scripts/ 그대로
   ok(/const tB = \(ko, en\) => \(loadLang\(\) === "en" \? en : ko\)/.test(s) && /loadLang/.test(s), `${f}: tB(ko,en) 헬퍼 + loadLang 연동`);
   const badLines = s.split(/\r?\n/).filter((l) => /(console\.(log|error)|process\.std(out|err)\.write)\(/.test(l) && /[가-힣]/.test(l) && !/tB\(/.test(l));
   ok(badLines.length === 0, `${f}: 출력 호출 줄에 tB 없는 한글 없음(연결·삼항·stderr 포함 — Codex 보완)` + (badLines.length ? " ← " + badLines[0].trim().slice(0, 70) : ""));

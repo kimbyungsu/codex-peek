@@ -29,12 +29,12 @@ ok(badType.events.length === 1 && badType.dropped === 1, "type:'nonsense' → dr
 
 console.log("[1c] 배선 계약(소스 검사) — P5: 공통 파이프라인이 saveMap 뒤 proposed 적재 + 러너 2종 위임(한쪽 누락 자체가 불가)");
 {
-  const src = fs.readFileSync(path.join(__dirname, "..", "scripts", "scout-providers.js"), "utf8");
+  const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "scout-providers.js"), "utf8");
   ok(/appendLedgerEvent\([^)]*type:\s*"proposed"/.test(src), "scout-providers.js — proposed 적재 호출 존재");
   ok(src.indexOf("saveMap(repo, providerId") < src.search(/appendLedgerEvent\([^)]*type:\s*"proposed"/), "scout-providers.js — 적재는 saveMap 뒤(보관과 같은 흐름·순서 잠금)");
-  for (const f of ["scope-scout-self.js", "scope-scout-deepseek.js"]) ok(/runScout\(repo, "(self|deepseek)"/.test(fs.readFileSync(path.join(__dirname, "..", "scripts", f), "utf8")), f + " — runScout 위임");
+  for (const f of ["scope-scout-self.js", "scope-scout-deepseek.js"]) ok(/runScout\(repo, "(self|deepseek)"/.test(fs.readFileSync(path.join(__dirname, "..", "bridge", f), "utf8")), f + " — runScout 위임");
 }
-ok(/appendLedgerEvent\([^)]*type:\s*"attached"/.test(fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-package.js"), "utf8")), "scope-package.js — 꾸러미 주입분 attached 적재 호출 존재");
+ok(/appendLedgerEvent\([^)]*type:\s*"attached"/.test(fs.readFileSync(path.join(__dirname, "..", "bridge", "scope-package.js"), "utf8")), "scope-package.js — 꾸러미 주입분 attached 적재 호출 존재");
 
 console.log("[2] 약한 상태 전이 — 우선순위(banned>superseded>tombstone>disputed>verified>inferred)·pinned 차선 오버라이드");
 const D = (lines) => LE.deriveLedger(LE.parseEventsJsonl(lines.join("\n")).events);

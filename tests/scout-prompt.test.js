@@ -56,11 +56,11 @@ ok(/Judged wrong/.test(mdEn) && /Confirmed \(verified or human-pinned/.test(mdEn
 ok(/틀림 판명\(과거에 반박된 결합/.test(mdKo), "ko 각주 무회귀");
 
 console.log("[5] 러너·브릿지 단일 출처(소스 잠금) + ab-retro 고정 사유");
-const selfSrc = fs.readFileSync(path.join(ROOT, "scripts", "scope-scout-self.js"), "utf8");
-const dsSrc = fs.readFileSync(path.join(ROOT, "scripts", "scope-scout-deepseek.js"), "utf8");
+const selfSrc = fs.readFileSync(path.join(ROOT, "bridge", "scope-scout-self.js"), "utf8");
+const dsSrc = fs.readFileSync(path.join(ROOT, "bridge", "scope-scout-deepseek.js"), "utf8");
 const brSrc = fs.readFileSync(path.join(ROOT, "bridge", "deepseek-bridge.js"), "utf8");
 const abSrc = fs.readFileSync(path.join(ROOT, "scripts", "scope-ab-retro.js"), "utf8");
-const provSrc = fs.readFileSync(path.join(ROOT, "scripts", "scout-providers.js"), "utf8");
+const provSrc = fs.readFileSync(path.join(ROOT, "bridge", "scout-providers.js"), "utf8");
 ok(/buildScoutPreface\(providerId, lang\)/.test(provSrc) && !/const preface = "너는 '탐색자'다/.test(provSrc) && !/너는 '탐색자'다/.test(selfSrc), "CLI 팔(self·codex) preface — 하드코딩 폐기·단일 출처(P5 공통층 한 곳·P6 codex 동승)");
 ok(/buildScoutPreface\("deepseek"\)/.test(brSrc), "deepseek-bridge — 같은 슬롯에서 preface(폴백 포함)");
 ok(/scoutPromptSignature\(lang\)/.test(provSrc) && /runScout\(repo, "self"/.test(selfSrc) && /runScout\(repo, "deepseek"/.test(dsSrc), "지도 메타 프롬프트 서명(P4) — 공통층 기록+러너 2종 위임");

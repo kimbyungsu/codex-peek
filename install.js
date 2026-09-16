@@ -76,6 +76,23 @@ const BRIDGE_SCRIPTS = [
   "selector-runner.js", // [Envelope Selector 3a] 선별 실행기 — worker·selector-preview가 require(3a 신설분의 배포 편입 누락을 4b에서 봉합)
   "preview-gate.js", // [4b 이중 배달] PreToolUse 게이트 — 서고 활성 시 preview 영수증까지 변경 도구 차단
   "session-start.js", // [§4-B ① Claude 쪽] SessionStart 훅 — 시작/재개/압축 시 규약 전달 기록 리셋(다음 프롬프트 전문 재전송)
+  // ── 정찰(3트랙) 층 이관(2026-09-16 · 사용자 결정): 마켓 설치본만으로 3트랙이 돌도록 scripts/ 정찰 실행층을 배포 모듈로 —
+  //    scripts/ 원위치는 얇은 래퍼(레포 사용자 명령 무회귀). 컴파일 코어 3종은 드라이버와 이름이 겹치지 않게 *-core.js(sync-map-core 패리티).
+  "scout-providers.js",
+  "scope-package.js",
+  "scout-store.js",
+  "scope-scout-self.js",
+  "scope-scout-deepseek.js",
+  "scope-scout-codex.js",
+  "scope-target.js",
+  "scope-gate.js",
+  "scope-map.js",
+  "scope-ledger-migrate.js",
+  "scope-ledger-backfill.js",
+  "scope-ledger-note.js",
+  "scope-package-core.js", // out/scope-package.js 사본(scripts/sync-map-core.js --write · --check 패리티)
+  "scope-ledger-core.js", // out/scope-ledger.js 사본(scripts/sync-map-core.js --write · --check 패리티)
+  "ledger-events-core.js", // out/ledger-events.js 사본(scripts/sync-map-core.js --write · --check 패리티)
 ];
 
 // 우리가 settings.json에 심는 훅. event → {matcher, script}

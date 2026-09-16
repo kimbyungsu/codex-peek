@@ -37,10 +37,10 @@ const empty = VS.computeScoutCosts("", Date.now(), "D:/proj", (s) => s);
 ok(empty.total === 0 && Object.keys(empty.byArm).length === 0, "기록 없음 → 빈 집계(0 표시용)");
 
 console.log("[3] 생산자 배선(소스 잠금) — 러너 2종·ping이 실제로 장부에 쓴다");
-const selfSrc = fs.readFileSync(path.join(ROOT, "scripts", "scope-scout-self.js"), "utf8");
-const dsSrc = fs.readFileSync(path.join(ROOT, "scripts", "scope-scout-deepseek.js"), "utf8");
+const selfSrc = fs.readFileSync(path.join(ROOT, "bridge", "scope-scout-self.js"), "utf8");
+const dsSrc = fs.readFileSync(path.join(ROOT, "bridge", "scope-scout-deepseek.js"), "utf8");
 const brSrc = fs.readFileSync(path.join(ROOT, "bridge", "deepseek-bridge.js"), "utf8");
-const provSrc = fs.readFileSync(path.join(ROOT, "scripts", "scout-providers.js"), "utf8");
+const provSrc = fs.readFileSync(path.join(ROOT, "bridge", "scout-providers.js"), "utf8");
 ok(/schema: "scout-usage-v2"/.test(provSrc) && /repoKey: CL\.repoKeyForStats\(repo\)/.test(provSrc) && /flow: "map-scout"/.test(provSrc), "공통 파이프라인(P10) — 실제 저장소 키·목적별 v2 호출 기록");
 ok(/tokenIn: both9 \? u9\.in : null/.test(provSrc) && /usage: null/.test(provSrc), "self 어댑터 — 토큰 미제공 시 null 정직(문자수와 분리)");
 ok(/runScout\(repo, "self"/.test(selfSrc) && /runScout\(repo, "deepseek"/.test(dsSrc), "러너 2종은 runScout 위임(장부 배선은 공통층 한 곳)");

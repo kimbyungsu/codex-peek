@@ -77,11 +77,11 @@ SP.runScout(repo, "w2", { outFile: outF2, _providers: { w2: { id: "w2", handlesO
 ok(!fs.existsSync(outF2), "handlesOutFile → 공통층이 안 씀(브릿지 위임 — 이중 쓰기 금지)");
 
 console.log("[5] 어댑터·러너 소스 계약 — 실호출 형태·껍데기·출력 바이트 보존");
-const provSrc = fs.readFileSync(path.join(ROOT, "scripts", "scout-providers.js"), "utf8");
+const provSrc = fs.readFileSync(path.join(ROOT, "bridge", "scout-providers.js"), "utf8");
 ok(/"-p", "--output-format", "text", "--disallowedTools", SELF_DENY/.test(provSrc), "self 어댑터 — claude 1회 호출(도구 전면 차단)");
 ok(/\[bridge, "map"\]/.test(provSrc) && /\[bridge, "ping"\]/.test(provSrc), "deepseek 어댑터 — 브릿지 map 경유·probe=ping(키 없으면 정직 실패 — 게이트 아님)");
-const selfW = fs.readFileSync(path.join(ROOT, "scripts", "scope-scout-self.js"), "utf8");
-const dsW = fs.readFileSync(path.join(ROOT, "scripts", "scope-scout-deepseek.js"), "utf8");
+const selfW = fs.readFileSync(path.join(ROOT, "bridge", "scope-scout-self.js"), "utf8");
+const dsW = fs.readFileSync(path.join(ROOT, "bridge", "scope-scout-deepseek.js"), "utf8");
 ok(/runScout\(repo, "self", \{ outFile \}\)/.test(selfW) && !/spawnSync/.test(selfW), "self 러너=껍데기(직접 spawn 없음)");
 ok(/runScout\(repo, "deepseek", \{ outFile \}\)/.test(dsW) && !/spawnSync/.test(dsW), "deepseek 러너=껍데기");
 ok(/self 탐색 호출 실패:/.test(selfW) && /self scout call failed:/.test(selfW) && /git 저장소가 아니거나 git 실패/.test(selfW), "self 실패 문구 보존(한/영)");
@@ -94,7 +94,7 @@ ok(/\.\.\.CL\.codexScoutExecArgs\(outFile\)/.test(provSrc) && /cwd: tmpCwd/.test
 ok(JSON.stringify(require(path.join(ROOT, "bridge", "contract-lib.js")).codexScoutExecArgs("OUT")).startsWith('["exec","--ephemeral","--sandbox","read-only","--skip-git-repo-check"'), "빌더 내용 — exec·--ephemeral(무잔재)·read-only 강제(구 인라인과 동일·P6 계보 계승)");
 ok(/\[\.\.\.inv\.args, "--version"\]/.test(provSrc), "codex probe=codex --version(가벼운 도달성 — 지도 요청 아님)");
 ok(/read-only는 절대경로 읽기를 물리 차단하진|절대경로 '읽기'를 물리/.test(provSrc + fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8")), "정직 한계 명문(빈 폴더+지시 보강 — 읽기 전면 물리 차단 아님)");
-const cxW = fs.readFileSync(path.join(ROOT, "scripts", "scope-scout-codex.js"), "utf8");
+const cxW = fs.readFileSync(path.join(ROOT, "bridge", "scope-scout-codex.js"), "utf8");
 ok(/runScout\(repo, "codex", \{ outFile \}\)/.test(cxW) && !/spawnSync/.test(cxW), "codex 러너=껍데기(직접 spawn 없음)");
 ok(/Codex 탐색 호출 실패:/.test(cxW) && /Codex scout call failed:/.test(cxW) && /process\.stdout\.write\(res\.map \+ "\\n"\)/.test(cxW), "codex 러너 — 실패 문구 한/영·stdout=지도+개행(self와 동형)");
 
@@ -247,7 +247,7 @@ ok(extP6b.includes("function clickJumpRestore(prevY, nowY, maxY)") && extP6b.inc
   ok(fnJ(30, 0, 2000) === null, "실행 — 원래 상단 근처(30) → 개입 없음(오탐 방지)");
   ok(fnJ(500, 0, -10) === 0, "실행 — 내용이 화면보다 짧음 → 0으로 클램프(음수 좌표 금지)");
 }
-ok(/codexScoutExecArgs/.test(fs.readFileSync(path.join(ROOT, "scripts", "scout-providers.js"), "utf8")) && /scoutCodexArgs\(\)/.test(fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8")), "어댑터→공용 빌더→정찰 전용 슬롯 소비(검증 modelPrefs 재사용 아님 — P7 빌더 이동 반영)");
+ok(/codexScoutExecArgs/.test(fs.readFileSync(path.join(ROOT, "bridge", "scout-providers.js"), "utf8")) && /scoutCodexArgs\(\)/.test(fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8")), "어댑터→공용 빌더→정찰 전용 슬롯 소비(검증 modelPrefs 재사용 아님 — P7 빌더 이동 반영)");
 ok(/scout-codex\.json/.test(fs.readFileSync(path.join(ROOT, "PRIVACY.md"), "utf8")), "PRIVACY 파일 표에 scout-codex.json 행(비밀 아님 명시)");
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);

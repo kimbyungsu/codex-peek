@@ -410,7 +410,7 @@ console.log("[A-2] 소스 계약 — askId·envelope 배선·전역 합집합 ec
   // 러너 끝단 배선(Codex #2 반례: 수집기는 지문을 만드는데 러너가 안 넘기면 판독기 비교가 영영 미실행)
   // P5(2026-07-22): 전달 로직은 공통층(scout-providers.js) 한 곳 — 러너 2종 패리티는 위임으로 구조 보장
   {
-    const src = fs.readFileSync(path.join(__dirname, "..", "scripts", "scout-providers.js"), "utf8");
+    const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "scout-providers.js"), "utf8");
     ok(/seedHashes: pkg\.meta\.seedHashes/.test(src) && /nonGitFiles: pkg\.meta\.nonGitFiles/.test(src), "scout-providers.js — 지문·인벤토리를 지도 메타로 전달(러너 2종 공통)");
   }
   const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");

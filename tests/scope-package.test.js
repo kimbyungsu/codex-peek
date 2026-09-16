@@ -99,7 +99,7 @@ const pFree = buildPackage({
 const freeMd = renderPackageMarkdown(pFree);
 ok(!/\.env\.bak/.test(freeMd) && !/secrets\/prod\.yaml/.test(freeMd), "장부 원문·확정 지식층·실패 상세의 민감 경로도 렌더에서 가림(되돌이 유입 차단)");
 ok(/\[민감 범주 — 이름 생략\] ↔ scripts\/activate\.js/.test(freeMd) && /src\/ok\.ts ↔ docs\/OK\.md/.test(freeMd), "치환은 민감 토큰만 — 문장 구조·일반 경로는 보존");
-const drvSrc = require("fs").readFileSync(path.join(__dirname, "..", "scripts", "scope-package.js"), "utf8");
+const drvSrc = require("fs").readFileSync(path.join(__dirname, "..", "bridge", "scope-package.js"), "utf8");
 ok(/redactSensitiveDiff\(raw\)/.test(drvSrc) && drvSrc.indexOf("redactSensitiveDiff(raw)") < drvSrc.indexOf("extractDiffTokens(diffText)"), "드라이버가 토큰 추출 '전'에 제외(비밀값이 역참조 씨앗으로 새지 않음)");
 
 console.log("[무이력(비-git) 모드] 이력 없는 폴더도 지도를 만든다 — 최근 수정 파일 기준·정직 각주(사용자 결정 2026-07-06)");
@@ -127,10 +127,10 @@ const hpkg = collectPkgHl(tmpNg);
 ok(!!hpkg && hpkg.historyless === true && hpkg.seeds.includes("노트.md") && !hpkg.seeds.includes("참조.md"), "물때표 계단: 마지막 지도 이후 수정된 파일만 seed(시간 창 없음)");
 ok(/물때표/.test(hpkg.basisNote) && /간주 기준: /.test(renderPackageMarkdown(hpkg)), "간주 기준(계단)이 꾸러미 1절에 명시");
 ok(hpkg.tokenHits.some((h) => h.token === "memoAlpha" && h.files.includes("참조.md")), "Node 스캔 역참조가 git grep 자리를 대체(memoAlpha→참조.md)");
-const drvHl = require("fs").readFileSync(path.join(__dirname, "..", "scripts", "scope-package.js"), "utf8");
+const drvHl = require("fs").readFileSync(path.join(__dirname, "..", "bridge", "scope-package.js"), "utf8");
 ok(/if \(lastMapTs\) \{/.test(drvHl) && drvHl.indexOf("if (lastMapTs) {") < drvHl.indexOf("} else if (sessionSet.size) {"), "물때표가 세션 신호보다 우선(옛 편집 파일의 물때표 영구 우회·외부 편집 누락 방지 — Codex 반례 반영)");
 try { require("fs").rmSync(tmpNg, { recursive: true, force: true }); } catch { /* 정리 실패 무해 */ }
-const drvSrc2 = require("fs").readFileSync(path.join(__dirname, "..", "scripts", "scope-package.js"), "utf8");
+const drvSrc2 = require("fs").readFileSync(path.join(__dirname, "..", "bridge", "scope-package.js"), "utf8");
 ok(/파일 탐색이 상한/.test(drvSrc2) && /capped/.test(drvSrc2), "파일 탐색 상한 도달도 절단 고지(침묵 과소보고 방지 — Codex 보완)");
 
 console.log("[pytest 관행 발견] 대형 Python 서비스 실측(tg-chat-engine '테스트 없음' 오보 2026-07-08) 잠금");

@@ -216,8 +216,8 @@ console.log("[6] 격리물 TTL — .lock.stale-*만 청소·활성 .lock 절대 
 
 console.log("[7] 배선 소스 계약 — 전 작성자 관문·사다리·비동기·mode 결속·aria-live·예외 복구");
 {
-  const st = fs.readFileSync(path.join(ROOT, "scripts", "scope-target.js"), "utf8");
-  const sg = fs.readFileSync(path.join(ROOT, "scripts", "scope-gate.js"), "utf8");
+  const st = fs.readFileSync(path.join(ROOT, "bridge", "scope-target.js"), "utf8");
+  const sg = fs.readFileSync(path.join(ROOT, "bridge", "scope-gate.js"), "utf8");
   ok(/updateContractPatch\(ws, loadLang\(\), \(o\) => mutate\(o\)\)/.test(st) && !/withFileLockStrict\(/.test(st), "scope-target — 직접 RMW 폐기·관문 이관");
   ok(/updateContractPatch\(repo, lang, \{ scoutGate: target \}\)/.test(sg) && !/withFileLockStrict\(/.test(sg), "scope-gate — 관문 이관");
   ok(!/\.lock 잔존 시 보유 프로세스 종료 확인 후 삭제/.test(st) && !/verify the owner is gone and delete it/.test(sg), "CLI 안내 — 수동 삭제 유도 문구 제거(사다리 안내로 교체)");

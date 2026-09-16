@@ -72,7 +72,7 @@ console.log("[5] HL 복사값 잠금 — 명세 필수 반례(SPEC :324): 두 �
   // 원본이 바뀌었는데 이 모듈이 안 따라가면 정밀도 보증 영역과 검색 영역이 갈린다 — 원문에서 값을
   // 추출해 잠근다. 추출 실패(구조 변경)도 실패로 드러나게 한다(조용한 통과 금지).
   const fs = require("fs");
-  const src = fs.readFileSync(path.join(__dirname, "..", "scripts", "scope-package.js"), "utf8");
+  const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "scope-package.js"), "utf8");
   // 보관 1980e204 반영: const HL 선언 줄 안에서만 추출 — 주석·다른 객체의 동명 키 오매칭 차단
   const hlLine = [...src.matchAll(/^const HL = \{.*\};/gm)];
   ok(hlLine.length === 1, "const HL 선언 정확히 1곳");

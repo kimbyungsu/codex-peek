@@ -134,7 +134,7 @@ console.log("[5] B-2 — 꾸러미 blocked 정직 표기");
   ok(pkg.blindSpots.some((b) => b.includes("판독 불가") && b.includes("없음과 다르다")), "blindSpot 문구 — blocked≠없음");
   const md = SP.renderPackageMarkdown(pkg, "ko");
   ok(md.includes("판독 불가") && md.includes("확인이 필요한 상태"), "렌더 — 지도 없음으로 위장하지 않음");
-  const drv = fs.readFileSync(path.join(ROOT, "scripts", "scope-package.js"), "utf8");
+  const drv = fs.readFileSync(path.join(ROOT, "bridge", "scope-package.js"), "utf8");
   ok(/mapContentFor\(repo\)/.test(drv) && /mapContentBlocked/.test(drv) && /authority-history/.test(drv), "드라이버 — 어댑터 경유+원시 검사 폴백 배선(정적)");
 }
 
@@ -182,7 +182,7 @@ console.log("[8] 구현검증 1차 반영 — 경합·키·번역 봉합");
   ok(typeof RDx.reasonTextFor === "function" && !/[가-힣]/.test(RDx.reasonTextFor("live-rejected", "국문", true)) && /[가-힣]/.test(RDx.reasonTextFor("live-rejected", null, false)), "reasonTextFor — en 슬롯 영문·ko 슬롯 국문(공용 번역기)");
   const rec2 = fs.readFileSync(path.join(ROOT, "scripts", "scope-reconcile.js"), "utf8");
   ok(/reasonTextFor/.test(rec2) && /enWhy/.test(rec2), "reconcile en 거부 사유=키 번역(한국어 원문 비노출 — 1차 #5)");
-  const drv2 = fs.readFileSync(path.join(ROOT, "scripts", "scope-package.js"), "utf8");
+  const drv2 = fs.readFileSync(path.join(ROOT, "bridge", "scope-package.js"), "utf8");
   ok(/mapContentBlockedKey = mc\.reasonKey/.test(drv2), "꾸러미 드라이버 — 사유 키·원문 분리 보존(1차 #4)");
 }
 
@@ -334,7 +334,8 @@ console.log("[14] require 실패 로컬 폴백 실행(구현검증 4차 #2 — �
   fs.mkdirSync(path.join(stale, "bridge"), { recursive: true });
   fs.mkdirSync(path.join(stale, "scripts"), { recursive: true });
   fs.mkdirSync(path.join(stale, "out"), { recursive: true });
-  for (const f of ["contract-lib.js", "codex-bridge.js"]) fs.copyFileSync(path.join(ROOT, "bridge", f), path.join(stale, "bridge", f));
+  // 정찰 층 이관(2026-09-16): 드라이버 본체·컴파일 코어 사본은 bridge/ 에 배포되고 scripts/scope-package.js 는 얇은 래퍼 — 사본 트리도 같은 배치
+  for (const f of ["contract-lib.js", "codex-bridge.js", "scope-package.js", "scope-package-core.js", "scope-ledger-core.js", "ledger-events-core.js"]) fs.copyFileSync(path.join(ROOT, "bridge", f), path.join(stale, "bridge", f));
   fs.copyFileSync(path.join(ROOT, "scripts", "scope-package.js"), path.join(stale, "scripts", "scope-package.js"));
   for (const f of ["scope-package.js", "scope-ledger.js", "ledger-events.js"]) fs.copyFileSync(path.join(ROOT, "out", f), path.join(stale, "out", f));
   const traced = mkRepo("staletr", { "docs/MAP.md": "# 확정\n- 항목 S\n" });
