@@ -321,3 +321,11 @@
 - 결과: 다음 릴리스는 release.js 완주 뒤 `bash scripts/release-assets.sh` → gh release 순서로 저장소 안 절차만 따른다.
 - 정본: scripts/release-assets.sh · tsconfig.json `"exclude"` · scripts/release.js.
 - 찾는말: 릴리스 자산, 설치 zip 만들기, out/pkg, tsc rootDir 오류, Compress-Archive 백슬래시, bsdtar
+
+## D-2026-09-17-claim-abort-release — 명시 abort 로 끝난 지도 변경의 선점 표시는 그 실행기 pid 가 살아 있어 보여도 풀어 준다
+- 날짜: 2026-09-17 · 종류: 확정 · 상태: 유효
+- 결정: 자동 의미 보강이 지도에 변경을 적용하다가 정본 쓰기가 끝나지 못한 흔적(정본은 859인데 860 임시 파일과 진행 중 장부만 남음 — 형태상 이름 바꾸기 실패로 보이나 반복별 사유는 장부에 남지 않아 확정은 아님)을 남기고 다섯 번 곧바로 되풀이한 끝에 '재시도 횟수를 다 썼어요'로 멈췄다. 복구 명령이 그 진행 중 장부를 '기준이 이미 바뀌어 폐기 권고'로 판정해 폐기(abort)했더니, 그 변경의 선점 표시(어느 실행기가 잡고 있는지)는 그대로 남았고, 그 프로세스 번호가 지금은 다른 프로그램(tsserver)에 붙어 있어 — 번호 재사용 가능성 — '살아 있는 남의 선점'으로 보여 다시 시도해도 곧바로 같은 보류로 돌아갈 상태였다(2026-09-17 사용자 질문·검증자 지적). 그래서 적용기가 선점 표시를 볼 때, 그 선점의 장부가 폐기 폴더(wal-aborted)에 있으면 프로세스 생존과 무관하게 끝난 것으로 보고 다시 잡게 한다(내구 산출물 부재 검사는 그대로 선행).
+- 왜: 프로세스 번호 생존만으로 '진행 중'을 판정하면 번호 재사용에 속는다. 폐기 폴더의 존재는 '그 트랜잭션은 사람이 끝냈다'는 명시 증거라 더 강하다.
+- 결과: 폐기 뒤 '다시 시도'가 같은 변경을 다시 잡아 적용한다(tests/map-pipeline.test.js [claim-abort]). 남은 과제(사용자 판단): 일시 실패 재시도에 대기가 없어 짧은 파일 잠금 창에도 상한이 즉시 소진되는 점, 소스 편집 중 보강이 한 번을 소진하는 점, 실패 반복별 사유가 장부에 남지 않는 점.
+- 정본: bridge/map-pipeline.js `const abortedWal` · tests/map-pipeline.test.js `[claim-abort]` · bridge/map-runtime.js `cmd === "recover"`·`cmd === "abort"`.
+- 찾는말: 자동 보강 보류, 재시도 횟수 소진, retry-exhausted, claim-busy, PID 재사용, wal-aborted, abort 뒤 재시도 안 됨, topology tmp 잔재

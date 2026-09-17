@@ -663,7 +663,10 @@ function applyPatch(repo, mapId, patchId, opts) {
       // 동일하게 재선점 허용 — 같은 프로세스의 동시 apply는 이 nsLock으로 직렬화되므로 활성 진행과의 경합이
       // 없고, 위의 WAL·완료 영수증·durable 잔존 검사를 이미 통과한 상태(pre-WAL)라 안전.
       const dead = !Number.isInteger(pid) || pid === process.pid || (() => { try { process.kill(pid, 0); return false; } catch (e) { return !!(e && e.code === "ESRCH"); } })();
-      if (!dead) return { ok: false, reasonCode: "claim-busy", error: "타 프로세스 claim 보유 중" };
+      // [2026-09-17 실사고] 그 claim 의 WAL 이 명시 abort 로 wal-aborted 에 남아 있으면 그 트랜잭션은 끝난 것이다 — pid 가 살아 있어도
+      // (실사고에서는 그 pid 가 다른 프로그램에 붙어 있었다 — PID 재사용 가능성) 재선점을 허용한다. 위 내구 산출물 부재 검사를 이미 통과한 상태라 안전.
+      const abortedWal = !!(cid && fs.existsSync(path.join(d.walAborted, cid + ".json")));
+      if (!dead && !abortedWal) return { ok: false, reasonCode: "claim-busy", error: "타 프로세스 claim 보유 중" };
     }
     const prevOp = rec.patch ? rec.patch.operation : null;
     const prevPl = rec.patch ? (rec.patch.payload || {}) : {};

@@ -682,6 +682,33 @@ function main() {
     }
   }
 
+  console.log("[claim-abort] claimed 잔존 + PID 재사용 — wal-aborted 가 있으면 재선점 허용(2026-09-17 실사고: abort 뒤 '다시 시도'가 claim-busy 로 다시 소진)");
+  {
+    const ws = mkRepo("claimabort");
+    setScoutOn(ws); MB.grantConsent(ws, "test");
+    const topo0 = initTopo(ws);
+    const nodeId = topo0.nodes[0] ? topo0.nodes[0].id : null;
+    const { patch } = mkLivePatch(ws, "add_condition", { targetId: nodeId, payload: { condition: "claim-abort-cond" } });
+    ok(MP.proposePatch(ws, patch).ok === true && MP.classifyPatch(ws, patch.mapId, patch.patchId).ok === true, "(전제) propose·classify");
+    // 살아 있는 '남의' pid — 잠자는 자식 프로세스(PID 재사용을 재현: 죽은 실행기의 pid 를 다른 프로세스가 쓰는 상황과 동형)
+    const sleeper = require("child_process").spawn(process.execPath, ["-e", "setTimeout(function(){}, 60000)"], { stdio: "ignore" });
+    try {
+      const d = MP.dirsFor(ws, patch.mapId);
+      const pf = path.join(d.pending, patch.patchId + ".json");
+      const rec = JSON.parse(fs.readFileSync(pf, "utf8"));
+      const cid = U(777);
+      fs.writeFileSync(pf, JSON.stringify({ ...rec, lifecycle: "claimed", claim: { pid: sleeper.pid, token: "deadbeefdeadbeef", claimedAt: new Date().toISOString(), decisionId: cid } }, null, 1));
+      const busy = MP.applyPatch(ws, patch.mapId, patch.patchId, { preCutover: true });
+      ok(busy.ok === false && busy.reasonCode === "claim-busy", "살아 있는 pid 의 claim + abort 흔적 없음 = claim-busy(기존 계약 유지)");
+      fs.mkdirSync(d.walAborted, { recursive: true });
+      fs.writeFileSync(path.join(d.walAborted, cid + ".json"), JSON.stringify({ schema: "map-wal-v2", abortedAt: new Date().toISOString() }));
+      const re = MP.applyPatch(ws, patch.mapId, patch.patchId, { preCutover: true });
+      ok(re.ok === true, "같은 claim 의 WAL 이 wal-aborted 에 있으면 pid 생존과 무관하게 재선점·적용 성공" + (re.ok ? "" : " — " + (re.reasonCode || "") + " " + (re.error || "")));
+      const t1 = MR.readTopoExFor(ws).topo;
+      ok(t1.revision === topo0.revision + 1 && t1.nodes.find((n) => n.id === nodeId).conditions.includes("claim-abort-cond"), "topology 반영+revision +1(중복 적용 없음)");
+    } finally { try { sleeper.kill(); } catch { /* 무해 */ } }
+  }
+
   console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
   try { fs.rmSync(process.env.CODEX_BRIDGE_HOME, { recursive: true, force: true }); } catch { /* 무해 */ }
   process.exit(fail ? 1 : 0);
