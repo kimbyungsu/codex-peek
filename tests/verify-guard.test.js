@@ -290,7 +290,9 @@ function gitSetup(name, verifyMode) {
 const NOW = Date.now();
 const T_USER = new Date(NOW - 3600_000).toISOString(); // 1시간 전(이번 턴 시작)
 const T_OLD = new Date(NOW - 7200_000);                 // 2시간 전(이전 턴 변경)
-const T_PROOF_OK = new Date(NOW + 5000).toISOString();  // 변경 직후(검증)
+// 변경 직후(검증)의 proof 시각은 '파일을 쓴 순간' 기준으로 계산한다(모듈 로드 시각 NOW+5s 고정이면 앞선 사례들이 5초를 넘게 걸리는 느린 실행에서
+// 파일 mtime 이 proof 보다 뒤가 되어 [20] 이 헛차단됐다 — 2026-09-18 릴리스 체인 flake)
+const proofOkNow = () => new Date(Date.now() + 5000).toISOString();
 
 if (GIT_OK) {
   // 18) code 모드 + 도구 편집 없음 + Bash로 새 파일(이번 턴) → 차단 (V2 핵심: 옛 코드는 통과시켰음)
@@ -321,7 +323,7 @@ if (GIT_OK) {
     const sb = gitSetup("v2proof", "code");
     putTx(sb, [human(T_USER, sb.session)]);
     fs.writeFileSync(path.join(sb.ws, "f.txt"), "변경");
-    putProof(sb, { ts: T_PROOF_OK });
+    putProof(sb, { ts: proofOkNow() });
     ok(!blocked(runGuard(sb)), "변경 이후 성공 proof면 통과");
     clean(sb);
   })();
