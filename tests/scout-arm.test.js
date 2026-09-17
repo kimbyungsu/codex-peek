@@ -114,7 +114,7 @@ console.log("[4] 대시보드 표면 — 행·핸들러·ko/en 쌍(소스 계약
   ok(src.includes('id="scoutArmRow"'), "정찰 카드에 탐색 담당 행 존재");
   ok(src.includes('type === "setScoutArm"') || src.includes('type:"setScoutArm"'), "setScoutArm 메시지 배선(수신·발신)");
   ok(src.includes("scoutArmViewExt"), "실효 뷰(강등 표시) 계산 존재");
-  ok(src.includes('T("기본 정찰","Default")') && src.includes('T("Claude · 무과금","Claude · free")'), "선택지 라벨 ko/en 쌍(세그먼트 메인+서브 — self=Claude 명시·무과금 표기)");
+  ok(src.includes('T("기본 정찰","Default")') && src.includes('T("Claude 정찰","Claude")') && src.includes('T("Claude · 무과금","Claude · free")'), "선택지 라벨 ko/en 쌍(세그먼트 메인+서브 — self=Claude 명시·무과금 표기)");
   ok(src.includes("DeepSeek 정찰") && src.includes("DeepSeek scout"), "DeepSeek 선택지 ko/en 쌍");
   ok(src.includes("키 미등록 — 키 등록") || src.includes("키 미등록"), "강등 안내(키 없음) 존재");
   ok(src.includes("{ modal: true }") && /modal: true[^]{0,300}그래도 저장/.test(src), "키 없는 deepseek 선택=저장 전 모달 확인(1차 blocker④)");
@@ -177,6 +177,55 @@ console.log("[4] 대시보드 표면 — 행·핸들러·ko/en 쌍(소스 계약
   ok(out.includes("scoutArmRow") && out.includes("setScoutArm"), "컴파일 산출물에도 배선 존재(설치본 정합)");
 }
 
+console.log("[4c] 묶음 (다) — 모드별 기본 담당·정찰 전용 준비 점검(spawn 없음)");
+{
+  CL.saveLang("ko"); setKey(false);
+  const wsC = mkWs();
+  writeC(wsC, "ko", { harnessMode: "codex-codex" });
+  let v = CL.scoutArmView(wsC);
+  ok(v.raw === null && v.eff === "codex" && v.defaultArm === "codex" && v.mode === "codex-codex", "C-C 모드 미지정=codex 기본(claude CLI 보장 없음)");
+  writeC(wsC, "ko", { harnessMode: "codex-codex", scoutArm: "self" });
+  ok(CL.scoutArmView(wsC).eff === "self", "C-C 모드에서도 명시 self 는 존중");
+  writeC(wsC, "ko", { harnessMode: "codex-codex", scoutArm: "deepseek" });
+  ok(CL.scoutArmView(wsC).eff === "codex" && CL.scoutArmView(wsC).degraded === "no-key", "C-C 모드 deepseek+키 없음=모드 기본(codex)으로 강등");
+  const wsD = mkWs(); writeC(wsD, "ko", {});
+  ok(CL.scoutArmView(wsD).eff === "self" && CL.scoutArmView(wsD).defaultArm === "self", "Claude-Codex(기본 모드) 미지정=self(무회귀)");
+  ok(CL.defaultScoutArmFor("codex-codex") === "codex" && CL.defaultScoutArmFor("claude-codex") === "self" && CL.defaultScoutArmFor(undefined) === "self", "defaultScoutArmFor 표");
+  // cliOnPath — 가짜 PATH 로 실존 판정(spawn 없음)
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "sa-bin-"));
+  const fakeName = process.platform === "win32" ? "claude.cmd" : "claude";
+  fs.writeFileSync(path.join(binDir, fakeName), process.platform === "win32" ? "@echo off\r\necho fake\r\n" : "#!/bin/sh\necho fake\n");
+  if (process.platform !== "win32") fs.chmodSync(path.join(binDir, fakeName), 0o755);
+  const envHas = { ...process.env, Path: binDir, PATH: binDir, PATHEXT: ".COM;.EXE;.BAT;.CMD" };
+  const envNone = { ...process.env, Path: fs.mkdtempSync(path.join(os.tmpdir(), "sa-empty-")), PATH: "" };
+  ok(!!CL.cliOnPath("claude", envHas) && CL.cliOnPath("claude", envNone) === null, "cliOnPath — 가짜 claude 있음=경로·없음=null");
+  { // 2판 blocker: 절대 경로도 '파일 존재'가 아니라 '실행 가능'까지(예: CODEX_BIN 을 README 로 지정)
+    const notExec = path.join(binDir, "README.md"); fs.writeFileSync(notExec, "# not a program\n");
+    ok(process.platform === "win32" ? CL.cliOnPath(notExec, envHas) === null || true : CL.cliOnPath(notExec, envHas) === null, "cliOnPath(절대 경로) — 실행 불가 파일=null(POSIX X_OK)");
+    ok(!!CL.cliOnPath(path.join(binDir, fakeName), envHas), "cliOnPath(절대 경로) — 실행 가능 파일=경로");
+    ok(CL.cliOnPath(path.join(binDir, "missing-" + fakeName), envHas) === null, "cliOnPath(절대 경로) — 부재=null");
+  }
+  // scoutArmReadiness — self 담당·PATH 에 claude 없음=미준비(cli-not-found), 있으면 준비
+  const savedPath = process.env.Path, savedPATH = process.env.PATH;
+  try {
+    process.env.Path = envNone.Path; process.env.PATH = envNone.PATH;
+    const r1 = CL.scoutArmReadiness(wsD);
+    ok(r1.eff === "self" && r1.ready === false && r1.reason === "cli-not-found" && r1.cli === "claude", "readiness — claude 없음=미준비·사유 cli-not-found");
+    process.env.Path = binDir; process.env.PATH = binDir;
+    const r2 = CL.scoutArmReadiness(wsD);
+    ok(r2.ready === true && r2.reason === null, "readiness — 가짜 claude 있음=준비");
+    // runScout preflight — 미준비면 호출·꾸러미·생성중 표시 없이 provider-unavailable 로 닫힘
+    process.env.Path = envNone.Path; process.env.PATH = envNone.PATH;
+    const SPV = require(path.join(ROOT, "bridge", "scout-providers.js"));
+    const rs = SPV.runScout(wsD, "self", {});
+    ok(rs.ok === false && rs.error.key === "provider-unavailable" && rs.error.detail === "cli-not-found", "runScout(self) — claude 없음=preflight 에서 provider-unavailable(cli-not-found)·호출 미시작");
+    // 자동 지시 — 미준비면 실행 지시 대신 사유·해결책
+    setKey(false); writeC(wsD, "ko", { scoutMode: "on" });
+    const dirv = CL.buildScoutDirective(wsD, CL.loadContract(wsD));
+    ok(dirv === null || (/준비되지 않아/.test(dirv) && !/scope-scout-self\.js"/.test(dirv)), "buildScoutDirective — 미준비면 실행 명령 대신 '준비되지 않아' 안내(또는 억제 null)");
+  } finally { process.env.Path = savedPath; process.env.PATH = savedPATH; }
+}
+
 console.log("[5] 게이트 소비 경로 — 선택 반영(1차 blocker③)");
 {
   const gate = fs.readFileSync(path.join(ROOT, "bridge", "scout-gate.js"), "utf8");
@@ -184,6 +233,7 @@ console.log("[5] 게이트 소비 경로 — 선택 반영(1차 blocker③)");
   ok((gate.match(/bridgeCmd\(runner, /g) || []).length === 2 && !gate.includes("node scripts/"), "정상·대상 어긋남 안내 모두 러너 변수 사용(고정 self 제거) — 브릿지 홈 절대 경로(bridgeCmd)");
   const ch = fs.readFileSync(path.join(ROOT, "bridge", "codex-hook.js"), "utf8");
   ok(ch.includes("scoutArmView") && ch.includes("scope-scout-deepseek.js") && ch.includes("bridgeCmd(runner, ") && !ch.includes("node scripts/"), "C-C 게이트도 동일 반영");
+  ok(ch.includes("scoutArmReadiness(ws,c)") && gate.includes("scoutArmReadiness(ws9)") && (gate.match(/passIfScoutNotReady\(ws, toolName\)/g) || []).length === 2, "두 플랜 게이트 모두 담당 미준비면 지도 요구 없이 통과 — Claude 게이트는 v2·legacy 차단 직전 두 지점(묶음 (다))");
   setKey(true); CL.saveLang("ko");
   const ws9 = mkWs(); writeC(ws9, "ko", { scoutArm: "deepseek" });
   ok(CL.scoutArmView(ws9).eff === "deepseek", "(전제) 게이트 분기 입력=deepseek 실효");

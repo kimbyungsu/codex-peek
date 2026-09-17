@@ -257,7 +257,7 @@ interface BridgeState {
   mapStatsRead: { usage: "ok" | "absent" | "unreadable"; automation: "ok" | "absent" | "unreadable" } | null; // 원장 부재와 판독 실패를 0건으로 혼동하지 않음
   scoutTarget: { repo: string; differs: boolean; invalid: boolean; configured: boolean; inherited: boolean; drift: { repo: string; sample: number; agree: number } | null } | null; // P1 정찰 대상 + 어긋남 자기진단(2026-07-10). null=2트랙
   scoutGate: { eff: string; raw: string | null } | null; // 실효 플랜 게이트(표시 전용 — 3트랙에서만, 계약에 저장 안 함). null=2트랙/ws 없음
-  scoutArm: { raw: string | null; eff: "self" | "deepseek" | "codex"; hasKey: boolean; slot?: string } | null; // 탐색 담당(2026-07-20·P6 codex 추가) — raw=명시 선택(반대 언어 슬롯 상속·null=미지정), eff=실효(deepseek는 키 없으면 self 강등·codex는 강등 없음), slot=계산 언어. null=2트랙/ws 없음
+  scoutArm: { raw: string | null; eff: "self" | "deepseek" | "codex"; hasKey: boolean; slot?: string; defaultArm?: "self" | "codex"; ready?: boolean; reason?: string | null } | null; // defaultArm/ready/reason=묶음 (다) 모드 기본·정찰 준비 // 탐색 담당(2026-07-20·P6 codex 추가) — raw=명시 선택(반대 언어 슬롯 상속·null=미지정), eff=실효(deepseek는 키 없으면 self 강등·codex는 강등 없음), slot=계산 언어. null=2트랙/ws 없음
   mapLedger: MapLedgerView | null; // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만). null=2트랙
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
   brainActual: { cc: string; cx: string; scout: string }; // 두뇌 '실제 답'(대화 기록 실측) 표시 문구 — 경고 아닌 평시 정보(피커 표시 결함 실사고 2026-07-08). 기록 없으면 '기록 없음' 문구. scout=마지막 정찰 실행(비용 장부 lastTs — 감사 일치 2026-07-10)
@@ -549,7 +549,7 @@ function effectiveScoutGate(ws: string): { eff: "off" | "plan"; raw: "off" | "pl
 // 탐색 담당 실효 뷰(2026-07-20) — ⚠ bridge/contract-lib.js scoutArmView와 동일 규칙(어긋나면 카드와 지시 문구가
 // 다른 답을 말함): raw=현재 슬롯 명시값 우선·부재 시 반대 언어 슬롯 상속(사실 성격 — scoutRepo P1-④ 동형)·
 // 그래도 없으면 null(미지정=기본). eff=deepseek 선택인데 키 없으면 self로 정직 강등.
-function scoutArmViewExt(ws: string, slotIn?: Lang): { raw: string | null; eff: "self" | "deepseek" | "codex"; hasKey: boolean; slot: Lang } {
+function scoutArmViewExt(ws: string, slotIn?: Lang): { raw: string | null; eff: "self" | "deepseek" | "codex"; hasKey: boolean; slot: Lang; defaultArm: "self" | "codex"; ready: boolean; reason: string | null } {
   const slot: Lang = slotIn || loadLangExt(); // 3차 blocker: 언어 판독 '1회 캡처' — 값과 slot 표지가 같은 판독에서 원자 결속(계산 중 전역 전환에도 표지가 실제 계산 슬롯을 말함)
   const ARMS = ["self", "deepseek", "codex"]; // ⚠ bridge/contract-lib.js SCOUT_ARMS와 동일 목록(P6: codex 추가)
   let raw: string | null = null;
@@ -558,8 +558,14 @@ function scoutArmViewExt(ws: string, slotIn?: Lang): { raw: string | null; eff: 
     try { const oo = JSON.parse(fs.readFileSync(contractFileFor(ws, slot === "en" ? "ko" : "en"), "utf8")); if (oo && ARMS.includes(oo.scoutArm)) raw = oo.scoutArm; } catch { /* 반대 슬롯 없음 */ }
   }
   const hasKey = readDeepseekView().hasKey;
-  const want = raw === null ? "self" : raw;
-  return { raw, eff: want === "deepseek" && !hasKey ? "self" : (want as "self" | "deepseek" | "codex"), hasKey, slot };
+  // 모드별 기본(묶음 (다) — bridge/contract-lib.js defaultScoutArmFor 와 같은 규칙): Codex↔Codex 는 codex, 그 외 self
+  const defaultArm: "self" | "codex" = (() => { try { return loadContract(ws).harnessMode === "codex-codex" ? "codex" : "self"; } catch { return "self"; } })();
+  const want = raw === null ? defaultArm : raw;
+  const eff = (want === "deepseek" && !hasKey ? defaultArm : want) as "self" | "deepseek" | "codex";
+  // 정찰 전용 준비 점검은 배포 브릿지의 정본(scoutArmReadiness)에 위임 — 구버전 브릿지면 '준비됨'으로 두어 양치기 경보를 내지 않는다
+  let ready = true, reason: string | null = null;
+  try { const lib: any = bridgeLib(); if (lib && typeof lib.scoutArmReadiness === "function") { const r = lib.scoutArmReadiness(ws, loadContract(ws)); ready = r.ready !== false; reason = r.reason || null; } } catch { ready = true; reason = null; }
+  return { raw, eff, hasKey, slot, defaultArm, ready, reason };
 }
 // ── P7: MAP 의미 보강 모드(mapMode)·readiness(정본 MAP-V2-DESIGN 'P7 상세 설계' v4 — 사용자 승인 확정) ──
 const MAP_MODES_EXT = ["self", "economy", "precision", "auto"]; // ⚠ contract-lib MAP_MODES와 동일 목록
@@ -7740,9 +7746,9 @@ class Dashboard {
             });
             btns[arm]=b; seg.appendChild(b);
           };
-          mk("self", T("기본 정찰","Default"), T("Claude · 무과금","Claude · free"), slotMismatch);
+          mk("self", av.defaultArm==="codex" ? T("Claude 정찰","Claude") : T("기본 정찰","Default"), T("Claude · 무과금","Claude · free"), slotMismatch); // 모드 기본이 codex 면 '기본' 표기는 codex 쪽으로
           mk("deepseek", "DeepSeek", av.hasKey?T("키 등록됨","key set"):T("키 필요","key required"), slotMismatch);
-          mk("codex", "Codex", T("독립 세션","own session"), slotMismatch); // P6(2026-07-22): 구 '예정' 배지의 실체 — 실선택 가능
+          mk("codex", "Codex", av.defaultArm==="codex" ? T("독립 세션 · 모드 기본","own session · mode default") : T("독립 세션","own session"), slotMismatch); // P6(2026-07-22): 구 '예정' 배지의 실체 — 실선택 가능 · 묶음 (다): C-C 모드 기본
           btns.codex.title=T("Codex가 탐색을 맡아요 — 검증 세션과 분리된 독립 실행 1회(쓰시는 Codex 계정 사용량 범위). 선택은 자동 지시의 1순위 러너에 반영돼요.","Codex handles scouting — one independent run, separate from the verification session (uses your existing Codex account). Your choice becomes the auto-directive's first-choice runner.");
           setOn(av.eff);
           row.appendChild(seg);
@@ -7756,6 +7762,13 @@ class Dashboard {
           else if(av.raw===null) note.textContent=T("미지정(기본값) — 선택은 자동 지시의 1순위 러너에 반영돼요","Unset (default) — your choice becomes the auto-directive's first-choice runner");
           else note.textContent="";
           row.appendChild(note);
+          if(av.ready===false){ // 묶음 (다): 정찰 담당 준비 안 됨(명령줄/키 없음) — 게이트·자동 지시는 실행을 요구하지 않는다
+            const rn=document.createElement("div"); rn.className="integrity"; rn.style.cssText="margin-top:4px;font-size:10.5px";
+            rn.textContent = av.reason==="no-key"
+              ? T("정찰 담당 준비 안 됨 — DeepSeek 키가 없어요. 키를 등록하거나 다른 담당을 고르세요.","Scout not ready — no DeepSeek key. Register a key or pick another scout.")
+              : T("정찰 담당 준비 안 됨 — "+(av.eff==="codex"?"codex":"claude")+" 명령줄을 찾을 수 없어요. 설치하거나 다른 담당을 고르세요(플랜 게이트·자동 지시는 실행을 요구하지 않아요).","Scout not ready — the "+(av.eff==="codex"?"codex":"claude")+" CLI was not found. Install it or pick another scout (the plan gate and auto-directive will not demand a run).");
+            row.appendChild(rn);
+          }
         });
         safe(function(){ // P7 — 의미 보강 담당(mapMode)+readiness(scoutArm과 별개 축 — 1-26 부기 통합 금지)
           const row=$("mapModeRow"); if(!row) return;

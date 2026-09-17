@@ -1831,6 +1831,26 @@ const SCOUT_MODES = ["off", "on"];
 // 실행파일에 의존하므로 deepseek류 가용성 강등 게이트를 두지 않는다 — 실행 실패는 러너가 정직 보고).
 // 부재=self(비물질화 — 저장 안 된 계약과 동작 동일). '사실' 성격이라 scoutRepo와 같은 반대 언어 슬롯 폴백 적용.
 const SCOUT_ARMS = ["self", "deepseek", "codex"];
+// [묶음 (다) 2026-09-17 · D-2026-09-17-scout-arm-readiness] 모드별 기본 정찰 담당 — Claude↔Codex 는 self(현재 Claude 겸임·무과금),
+// Codex↔Codex 는 codex(그 모드에서는 claude 명령줄이 있다는 보장이 없다 — 검증자 반례: 마켓 설치만 한 C-C 사용자에게 self 가 cli-not-found).
+function defaultScoutArmFor(harnessMode) { return harnessMode === "codex-codex" ? "codex" : "self"; }
+// 명령줄 실행 파일이 PATH 에 실제로 있는지 — 준비 점검용(spawn 전). resolveExecutableForSpawn 은 POSIX 에서 이름만 돌려주므로 여기선 실존·실행 가능 파일을 본다.
+function cliOnPath(command, env) {
+  const cmd = typeof command === "string" ? command.trim() : "";
+  if (!cmd) return null;
+  const isFile = (q) => { try { return fs.statSync(q).isFile(); } catch { return false; } };
+  const execOk = (q) => isFile(q) && (process.platform === "win32" || (() => { try { fs.accessSync(q, fs.constants.X_OK); return true; } catch { return false; } })()); // 2판 blocker: 절대 경로도 실행 가능 여부까지
+  if (path.isAbsolute(cmd) || /[\\/]/.test(cmd)) return execOk(cmd) ? cmd : null;
+  const e = env || process.env;
+  const dirs = String(e.Path || e.PATH || "").split(path.delimiter).map((x) => x.replace(/^"|"$/g, "")).filter(Boolean);
+  if (process.platform === "win32") {
+    const exts = path.extname(cmd) ? [""] : String(e.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+    for (const dir of dirs) for (const ext of exts) { const cand = path.join(dir, cmd + ext); if (isFile(cand)) return cand; }
+    return null;
+  }
+  for (const dir of dirs) { const cand = path.join(dir, cmd); if (isFile(cand)) { try { fs.accessSync(cand, fs.constants.X_OK); return cand; } catch { /* 실행 불가 */ } } }
+  return null;
+}
 function normScoutArm(o) {
   if (o && SCOUT_ARMS.includes(o.scoutArm)) return o.scoutArm;
   return "self";
@@ -2167,8 +2187,12 @@ function scoutArmView(ws, c) {
   let raw = null;
   // 1차 blocker②: 전달 c(loadContract 요약본)가 필드를 굳혔거나 누락해도 정확하도록, 현재 슬롯은
   // 항상 디스크 원본에서 판독한다(전달 c는 원본 객체일 때만 보조로 인정).
-  try { const own = JSON.parse(fs.readFileSync(ws ? contractFileFor(ws, loadLang()) : CONTRACT_FILE, "utf8")); if (own && SCOUT_ARMS.includes(own.scoutArm)) raw = own.scoutArm; } catch { /* 미지정 */ }
+  let ownObj = null;
+  try { ownObj = JSON.parse(fs.readFileSync(ws ? contractFileFor(ws, loadLang()) : CONTRACT_FILE, "utf8")); if (ownObj && SCOUT_ARMS.includes(ownObj.scoutArm)) raw = ownObj.scoutArm; } catch { /* 미지정 */ }
   if (raw === null && c && typeof c === "object" && SCOUT_ARMS.includes(c.scoutArm)) raw = c.scoutArm;
+  // 모드별 기본값(묶음 (다)): 현재 슬롯 원본의 harnessMode 우선, 없으면 전달 c
+  const mode = normHarnessMode(ownObj && ownObj.harnessMode ? ownObj : (c && typeof c === "object" ? c : null));
+  const defaultArm = defaultScoutArmFor(mode);
   if (raw === null && ws) {
     try {
       const other = loadLang() === "en" ? "ko" : "en";
@@ -2177,9 +2201,23 @@ function scoutArmView(ws, c) {
     } catch { /* 반대 슬롯 없음 */ }
   }
   const hasKey = deepseekKeyPresent();
-  const want = raw === null ? "self" : raw;
-  if (want === "deepseek" && !hasKey) return { raw, eff: "self", hasKey, degraded: "no-key" };
-  return { raw, eff: want, hasKey, degraded: null };
+  const want = raw === null ? defaultArm : raw;
+  if (want === "deepseek" && !hasKey) return { raw, eff: defaultArm, hasKey, degraded: "no-key", defaultArm, mode }; // 키 없는 DeepSeek 은 모드 기본으로 정직 강등
+  return { raw, eff: want, hasKey, degraded: null, defaultArm, mode };
+}
+// 정찰 전용 준비 점검(묶음 (다)) — 실효 담당의 명령줄/키가 실제로 있는지. 의미 보강용 mapReadinessView 와는 별개 축(혼합 금지).
+// spawn 없음(PATH 실존·키 유무만) — 대시보드·게이트·자동 지시가 매 턴 불러도 싸다. 미준비면 호출자는 실행을 요구하지 않는다(fail-open).
+function scoutArmReadiness(ws, c) {
+  const v = scoutArmView(ws, c);
+  let ready = true, reason = null, cli = null;
+  if (v.eff === "self") { cli = "claude"; ready = !!cliOnPath("claude", process.env); reason = ready ? null : "cli-not-found"; }
+  else if (v.eff === "codex") {
+    let inv = null; try { inv = require("./codex-bridge.js").resolveCodex(); } catch { inv = null; }
+    cli = inv && inv.file ? String(inv.file) : "codex";
+    ready = !!(inv && cliOnPath(cli, process.env)); // 절대 경로든 이름이든 같은 규칙(파일+실행 가능)
+    reason = ready ? null : "cli-not-found";
+  } else if (v.eff === "deepseek") { cli = "deepseek"; ready = !!v.hasKey; reason = ready ? null : "no-key"; }
+  return { ...v, ready, reason, cli };
 }
 function normScoutMode(o) {
   if (o && SCOUT_MODES.includes(o.scoutMode)) return o.scoutMode;
@@ -2829,6 +2867,7 @@ function buildScoutDirective(ws, c) {
   if (!claimed.ok || claimed.result !== true) return null; // 잠금/기억 실패나 이미 안내됨 — 중복 발화보다 침묵
   const hasKey = armV.hasKey;
   const en = langSnap === "en"; // 훅 주입문도 이 판정의 언어 스냅샷을 끝까지 준수
+  const rdV = (() => { try { return scoutArmReadiness(ws, c); } catch { return { ready: true, reason: null, cli: null, eff: armV.eff }; } })(); // 묶음 (다): 미준비면 실행 지시를 내지 않는다
   const staleWhyKo = "최신 지도 이후 변경 신호 " + st.staleCount + "건(근거 파일 " + st.seedChanged + " · 새 커밋 " + st.commitsAfter + " · 작업트리 " + st.dirtyChanged + (st.historyLost ? " · 기록 기준 커밋 소실(이력 재작성?) " + st.historyLost : "") + ") — 지도가 낡았다";
   const staleWhyEn = st.staleCount + " change signal(s) since the latest map (basis files " + st.seedChanged + " · new commits " + st.commitsAfter + " · working tree " + st.dirtyChanged + (st.historyLost ? " · recorded base commit missing (history rewritten?) " + st.historyLost : "") + ") — the map is stale";
   const why = st.state === "no-map"
@@ -2842,6 +2881,13 @@ function buildScoutDirective(ws, c) {
     : (en ? staleWhyEn : staleWhyKo);
   // 러너 지시(탐색 담당 반영): 명시 deepseek(키 있음)=DeepSeek 1순위 / 명시 self=기본만(재량 문구 없음) /
   // 미지정=현행 유지(기본 우선·키 있으면 비교 재량). 강등(deepseek 선택·키 없음)=기본으로 진행+사유 고지.
+  if (!rdV.ready) { // 미준비 — 따라 할 수 없는 실행 지시 대신 사유·해결책(지도는 참고용·아무것도 막지 않음)
+    const fixEn = rdV.reason === "no-key" ? "register a DeepSeek key on the dashboard or pick another scout" : "install the " + (rdV.cli || "claude") + " CLI or pick another scout on the dashboard";
+    const fixKo = rdV.reason === "no-key" ? "대시보드에서 DeepSeek 키를 등록하거나 다른 정찰 담당을 고르세요" : (rdV.cli || "claude") + " 명령줄을 설치하거나 대시보드에서 다른 정찰 담당을 고르세요";
+    return en
+      ? "[Recon (3-track) auto-directive · once per state] " + why + ". The scout (" + rdV.eff + ") is not ready (" + rdV.reason + ") — no run is requested this turn; " + fixEn + ". The map is advisory and blocks nothing."
+      : "[탐색(3트랙) 자동 지시 · 이 상태에 1회만] " + why + ". 정찰 담당(" + rdV.eff + ")이 준비되지 않아(" + (rdV.reason === "no-key" ? "키 없음" : "명령줄 없음") + ") 이번 턴엔 실행을 요구하지 않습니다 — " + fixKo + ". 지도는 참고용이며 아무것도 막지 않습니다.";
+  }
   if (en) {
     const runner = armV.eff === "deepseek"
       ? "run `" + bridgeCmd("scope-scout-deepseek.js", "\"" + target + "\"") + "` (scout preference set on the dashboard: DeepSeek — key registration = consent to auto calls · the default scout scope-scout-self.js also remains available)"
@@ -6986,4 +7032,7 @@ module.exports.requireDecision = requireDecision; // [HARNESS-STRUCTURE-2026-09-
 module.exports.ledgerRowsForRepo = ledgerRowsForRepo; // [저장소 분할 단일 규칙]
 module.exports.repoKeyNow = repoKeyNow;
 module.exports.bridgeCmd = bridgeCmd; // [정찰 층 이관] 실행 안내 경로 정본
+module.exports.defaultScoutArmFor = defaultScoutArmFor; // [묶음 (다)] 모드별 기본 정찰 담당
+module.exports.cliOnPath = cliOnPath; // [묶음 (다)] 준비 점검용 PATH 실존 확인
+module.exports.scoutArmReadiness = scoutArmReadiness; // [묶음 (다)] 정찰 전용 준비 점검(의미 보강 readiness 와 별개)
 module.exports.runtimeRepairHint = runtimeRepairHint; // 설치 출처별 런타임 복구 안내(마켓=창 다시 로드 · 레포=install.js)

@@ -16,7 +16,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, scoutMapStatus, wsKeyFor, atomicWrite, resolveScoutRepo, loadLang, scoutHealthLine, readScoutTargetEvidence, detectScoutTargetDrift, scoutArmView, bridgeCmd, runtimeRepairHint } = require("./contract-lib.js");
+const { loadContract, scoutMapStatus, wsKeyFor, atomicWrite, resolveScoutRepo, loadLang, scoutHealthLine, readScoutTargetEvidence, detectScoutTargetDrift, scoutArmView, bridgeCmd, runtimeRepairHint, scoutArmReadiness } = require("./contract-lib.js");
 const tB = (ko, en) => (loadLang() === "en" ? en : ko); // 훅 문구도 한/영 쌍(2026-07-09 사용자 지적)
 
 const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(os.homedir(), ".codex-bridge");
@@ -53,6 +53,16 @@ function main(raw) {
   // loadContract가 normScoutGate로 정규화한 실효값 — 3트랙 기본 plan / 2트랙 무조건 off(명시 plan 잔재도 비활성).
   const gate = contract.scoutGate || "off";
   if (gate !== "plan") process.exit(0);
+  // [묶음 (다) 2026-09-17] 정찰 담당 미준비(명령줄/키 없음)면 '따라 할 수 없는 실행 지시'로 막지 않는다 — 차단 직전(v2·legacy 두 지점)에서만
+  // 판정해 신선한 지도의 정상 통과에는 잡음(관찰 기록)을 남기지 않는다. 세션 차단 상한도 소모하지 않는다(fail-open).
+  const passIfScoutNotReady = (ws9, tool9) => {
+    let rd9 = { ready: true }; try { rd9 = scoutArmReadiness(ws9); } catch { rd9 = { ready: true }; }
+    if (rd9.ready) return;
+    const whyR = rd9.reason === "no-key" ? tB("DeepSeek 키 없음", "no DeepSeek key") : tB((rd9.cli || "claude") + " 명령줄 없음", (rd9.cli || "claude") + " CLI not found");
+    logObservation(ws9, { ts: new Date().toISOString(), tool: tool9, passThrough: true, reason: tB("정찰 담당(" + rd9.eff + ") 미준비 — " + whyR + " — 통과", "scout (" + rd9.eff + ") not ready — " + whyR + " — pass") });
+    process.stderr.write(tB("[탐색 게이트 · plan] 정찰 담당(" + rd9.eff + ")이 준비되지 않아(" + whyR + ") 지도 요구 없이 통과합니다 — 대시보드에서 담당을 바꾸거나 명령줄을 설치하세요.", "[Recon gate · plan] scout (" + rd9.eff + ") is not ready (" + whyR + ") — passing without demanding a map; pick another scout on the dashboard or install the CLI.") + "\n");
+    process.exit(0);
+  };
   // ── P3b B-6: 게이트 3분기 — 결정은 순수 함수 decideGate(아래 수출 — 테스트가 같은 팩토리 실행: 검증 통과
   // 공식)에 위임. main은 IO(권위 판독·trace·상한 파일·로그·exit)만 담당.
   const decision = decideGate({
@@ -68,6 +78,7 @@ function main(raw) {
     process.exit(0);
   }
   if (decision.action === "block") {
+    passIfScoutNotReady(ws, toolName); // [묶음 (다)] v2 경로 — 횟수 증가·차단 전에
     const af2 = path.join(ATTEMPTS_DIR, String(p.session_id || "nosession").replace(/[^0-9A-Za-z._-]/g, "_").slice(0, 32) + ".json");
     try { fs.mkdirSync(ATTEMPTS_DIR, { recursive: true }); const n2 = (() => { try { return (JSON.parse(fs.readFileSync(af2, "utf8")).n | 0) || 0; } catch { return 0; } })(); atomicWrite(af2, JSON.stringify({ n: n2 + 1, ts: new Date().toISOString() })); } catch { /* 기록 실패해도 차단 진행 */ }
     process.stderr.write(tB("[탐색 게이트 · plan] ", "[Recon gate · plan] ") + decision.msg.replace(/<저장소>|<repo>/g, '"' + target + '"') + tB(` (이 게이트는 세션당 ${BLOCKS_PER_SESSION}회까지만 막고 이후 통과 · 끄기: ${bridgeCmd("scope-gate.js", `"${ws}" off`)})\n`, ` (This gate blocks at most ${BLOCKS_PER_SESSION}× per session, then passes · turn off: ${bridgeCmd("scope-gate.js", `"${ws}" off`)})\n`));
@@ -83,6 +94,7 @@ function main(raw) {
     logObservation(ws, { ts: new Date().toISOString(), tool: toolName, passThrough: true, reason: tB("신선도 판정 불가(스캔 상한) — 차단 없이 통과", "freshness unknown (scan cap) — passing without block") });
     process.exit(0);
   }
+  passIfScoutNotReady(ws, toolName); // [묶음 (다)] 차단 직전 — 담당 미준비면 통과(legacy 경로)
   // 세션당 차단 상한
   const session = String(p.session_id || "nosession");
   const af = path.join(ATTEMPTS_DIR, session.replace(/[^0-9A-Za-z._-]/g, "_").slice(0, 32) + ".json"); // 훅 입력을 경로에 쓰므로 정규화(경로 이탈 방지 — Codex 지적)

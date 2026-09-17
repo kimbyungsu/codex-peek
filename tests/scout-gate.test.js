@@ -46,6 +46,11 @@ fs.mkdirSync(path.dirname(ledgerEventsFileFor(ws)), { recursive: true }); // 관
 fs.writeFileSync(ledgerEventsFileFor(ws), JSON.stringify({ ts: "t", type: "proposed", sig: "a", text: "src/a.ts ↔ docs/A.md" }) + "\n");
 r = runHook(undefined, "sess-P1");
 ok(r.status === 2 && /영향지도부터/.test(r.stderr), "3트랙 + 미설정 → 기본 plan으로 차단(승격 동작)");
+{ // 묶음 (다): 정찰 담당 미준비(PATH 에 claude 없음) — 따라 할 수 없는 지도 요구로 막지 않고 통과(세션 상한 미소모)
+  const emptyBin = fs.mkdtempSync(path.join(os.tmpdir(), "sg-empty-"));
+  const rN = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ tool_name: "ExitPlanMode", tool_input: {}, session_id: "sess-noclaude", cwd: ws }), encoding: "utf8", env: { ...process.env, CODEX_BRIDGE_HOME: dir, CLAUDE_PROJECT_DIR: ws, Path: emptyBin, PATH: emptyBin } });
+  ok(rN.status === 0 && /준비되지 않아|not ready/.test(rN.stderr), "담당(self) 미준비 → 통과 + 사유 안내(fail-open)");
+}
 ok(/후보로만/.test(r.stderr), "차단 문구에 이 프로젝트의 관찰 신호 인용('카드와 한 묶음' 사용자 조건 — 표본 부족이면 부족 줄 그대로)");
 fs.writeFileSync(contractFileFor(ws), JSON.stringify({ scoutMode: "on", scoutGate: "off" }));
 ok(runHook(undefined, "sess-P2").status === 0, "3트랙 + 명시 off → 통과(사용자 선택 영원히 존중)");

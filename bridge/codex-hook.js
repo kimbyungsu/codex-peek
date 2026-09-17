@@ -509,6 +509,7 @@ function scoutGate(j, ws, sid, c, s) {
   let target=ws, st=null;
   try { target=resolveScoutRepo(ws,c).repo; st=scoutMapStatus(target); } catch { return false; }
   if(!st || st.state==="fresh") return false;
+  try { const rd9=require("./contract-lib.js").scoutArmReadiness(ws,c); if(rd9 && !rd9.ready) return false; } catch { /* 판독 실패=기존 경로 */ } // [묶음 (다)] 담당 미준비(명령줄/키 없음)=따라 할 수 없는 지시로 막지 않음
   const n=bump(SCOUT_ATTEMPT_DIR,sid,j.turn_id||s.turnId||""); if(n>MAX_SCOUT_ATTEMPTS)return false;
   let health=""; try{health=scoutHealthLine(target,loadLang()==="en")||"";}catch{}
   let runner="scope-scout-self.js"; try{ const e9=scoutArmView(ws).eff; if(e9==="deepseek") runner="scope-scout-deepseek.js"; else if(e9==="codex") runner="scope-scout-codex.js"; }catch{ /* 판독 실패=기본 */ } // 탐색 담당 선택 반영(scoutArm 1차 blocker③·P6: codex 포함)

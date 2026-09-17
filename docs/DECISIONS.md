@@ -329,3 +329,11 @@
 - 결과: 폐기 뒤 '다시 시도'가 같은 변경을 다시 잡아 적용한다(tests/map-pipeline.test.js [claim-abort]). 남은 과제(사용자 판단): 일시 실패 재시도에 대기가 없어 짧은 파일 잠금 창에도 상한이 즉시 소진되는 점, 소스 편집 중 보강이 한 번을 소진하는 점, 실패 반복별 사유가 장부에 남지 않는 점.
 - 정본: bridge/map-pipeline.js `const abortedWal` · tests/map-pipeline.test.js `[claim-abort]` · bridge/map-runtime.js `cmd === "recover"`·`cmd === "abort"`.
 - 찾는말: 자동 보강 보류, 재시도 횟수 소진, retry-exhausted, claim-busy, PID 재사용, wal-aborted, abort 뒤 재시도 안 됨, topology tmp 잔재
+
+## D-2026-09-17-scout-arm-readiness — 정찰 담당의 기본값은 모드를 따르고, 담당의 명령줄이 없으면 '준비 안 됨'으로 닫고 실행을 요구하지 않는다
+- 날짜: 2026-09-17 · 종류: 확정 · 상태: 유효
+- 결정: 코덱스-코덱스 모드로 마켓에서 설치한 사람은 Claude 명령줄이 없을 수 있는데, 정찰 담당의 기본값이 늘 '기본 정찰(Claude)'이라 플랜 게이트가 실행할 수 없는 명령으로 막고 자동 지시가 같은 명령을 요구했다(2026-09-16 검증자 반례). 그래서 ① 담당이 미지정이면 모드 기본을 쓴다 — 클로드-코덱스는 Claude 정찰, 코덱스-코덱스는 Codex 정찰(명시 선택은 그대로, 키 없는 DeepSeek 은 모드 기본으로 강등) ② 정찰 전용 준비 점검을 둔다 — 담당의 명령줄이 PATH 에 실제로 있고 실행 가능한지(또는 DeepSeek 키)만 보고 실행 파일을 띄우지 않는다(의미 보강 준비 점검과는 별개 축) ③ 미준비면 실행기는 호출을 시작하지 않고 '준비 실패'로 닫고, 두 플랜 게이트는 차단 직전에 판정해 지도 요구 없이 통과하며(세션 상한 미소모·신선한 지도의 정상 통과엔 잡음 없음), 자동 지시는 실행 명령 대신 사유와 해결책을 말한다 ④ 대시보드 담당 선택 줄에 '준비 안 됨'과 사유를 표시하고 모드 기본을 표기한다.
+- 왜: 따라 할 수 없는 지시로 막는 것은 안내가 아니라 덫이다(fail-open 원칙). 준비 점검을 spawn 없이 두어야 매 턴 불러도 비용이 없다. 절대 경로로 지정한 실행 파일도 '있다'만으로는 부족해 실행 가능까지 본다.
+- 결과: 마켓 설치본만 가진 코덱스-코덱스 사용자도 3트랙이 돈다(Codex 정찰). Claude 명령줄이 없는 환경에서 플랜 게이트는 통과하고 대시보드가 사유를 보여 준다. 정리 담당은 탐색 담당의 유효 팔을 따르므로(D-2026-09-06-curator-arm-follows-scout) 코덱스-코덱스에서 담당 미지정이면 정리 담당도 Codex 가 된다 — 그 항목의 '미설정=Claude' 예시는 이 결정으로 모드 기본을 따르는 것으로 개정.
+- 정본: bridge/contract-lib.js `function defaultScoutArmFor` · `function cliOnPath` · `function scoutArmReadiness` · bridge/scout-providers.js `preflight` · bridge/scout-gate.js `passIfScoutNotReady` · bridge/codex-hook.js `scoutGate` · src/extension.ts `function scoutArmViewExt` · tests/scout-arm.test.js `[4c]` · tests/scout-gate.test.js · tests/p3b-stage1.test.js.
+- 찾는말: 정찰 담당 기본값, 코덱스-코덱스 정찰, claude 명령줄 없음, 정찰 준비 안 됨, 플랜 게이트 통과, cli-not-found, scoutArmReadiness

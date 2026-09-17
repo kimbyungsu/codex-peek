@@ -45,8 +45,9 @@ const out = (arr) => JSON.stringify({ proposals: arr });
 // 2026-09-06: refs 필수 — 신호 0인 픽스처에서 제안 파싱·커밋을 시험하려면 되받아침 신호 1건(rebut:oos-1)을 먼저 심는다(현재 캠페인=그 저장소 — ab-1 수용 조건)
 const seedRebutSignal = (ws, repo, tag) => { const rk = CL.repoKeyOf(repo); fs.mkdirSync(path.dirname(CL.campaignFileFor(ws)), { recursive: true }); fs.writeFileSync(CL.campaignFileFor(ws), JSON.stringify({ schema: "vcamp-1", campaignId: "c-" + tag, count: 1, budget: 5, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), repoKey: rk })); CL.appendFindingsLedger(ws, [{ type: "disposition", campaignId: "c-" + tag, findingId: "f-" + tag, choice: "rebut", oosId: "oos-1", asOfRound: 1, ts: new Date().toISOString() }]); };
 
-t("팔 결정=탐색 담당 유효 팔(2026-09-06 개정): 미설정=self · scoutArm codex=codex · deepseek는 키 파일 없으면 self 강등·있으면 deepseek — harnessMode·환경변수 무관", () => {
-  assert.strictEqual(CU.selectorArmForCuration(WS, { harnessMode: "codex-codex" }), "self", "운용 모드는 더 이상 팔을 정하지 않는다(탐색 담당 미설정=self)");
+t("팔 결정=탐색 담당 유효 팔(2026-09-06 개정 · 2026-09-17 모드 기본): 미설정=모드 기본(claude-codex=self·codex-codex=codex) · scoutArm codex=codex · deepseek는 키 파일 없으면 self 강등·있으면 deepseek — harnessMode·환경변수 무관", () => {
+  assert.strictEqual(CU.selectorArmForCuration(WS, { harnessMode: "codex-codex" }), "codex", "운용 모드가 팔을 직접 정하진 않되, 탐색 담당 미설정의 기본이 모드 기본을 따른다(2026-09-17 개정: C-C=codex — claude CLI 보장 없음) → 정리 담당도 그 유효 팔");
+  assert.strictEqual(CU.selectorArmForCuration(WS, { harnessMode: "claude-codex" }), "self", "Claude-Codex 미설정=self(무회귀)");
   const keyFile = path.join(HOME, "deepseek.json");
   try {
     assert.ok(CL.updateContractPatch(WS, "ko", { scoutArm: "codex" }).ok);

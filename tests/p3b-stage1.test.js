@@ -245,6 +245,11 @@ console.log("[9] 실행 반례 — applyPatch 권위 전이(잠금 안 재판정
   ok(cGate.status === 0 || cGate.status === 2, "게이트 자식 프로세스 — v2 분기 실행(비정상 종료 없음: " + cGate.status + ")");
   const logB = (() => { try { return fs.readFileSync(path.join(dir, "scout-gate-log", CL.wsKeyFor(wsB) + ".jsonl"), "utf8"); } catch { return ""; } })();
   ok(!/전환된 프로젝트인데 MAP 런타임 판독 불가/.test(logB), "v2 정상 런타임=폴백 경로 미진입(신 판정기 소비)");
+  { // [묶음 (다) 2판 blocker] v2 경로에서도 정찰 담당 미준비(PATH 에 claude 없음)면 차단 대신 통과(+사유) — 상한 미소모
+    const emptyBin = fs.mkdtempSync(path.join(os.tmpdir(), "p3b-nocli-"));
+    const cNR = cp.spawnSync(process.execPath, [path.join(ROOT, "bridge", "scout-gate.js")], { input: JSON.stringify({ tool_name: "ExitPlanMode", session_id: "p3b-v2-nocli", cwd: wsB, tool_input: {} }), encoding: "utf8", env: { ...process.env, CODEX_BRIDGE_HOME: dir, CLAUDE_PROJECT_DIR: wsB, Path: emptyBin, PATH: emptyBin } });
+    ok(cNR.status === 0 && (cGate.status !== 2 || /준비되지 않아|not ready/.test(cNR.stderr)), "v2 경로 — 담당(self) 미준비면 exit 0(차단했을 상황이면 사유 안내 동반): " + cNR.status);
+  }
 }
 
 console.log("[10] 3상태 원시 검사·en 렌더(구현검증 2차 #2·#3·#4)");

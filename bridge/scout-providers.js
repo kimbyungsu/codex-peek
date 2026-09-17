@@ -68,6 +68,7 @@ const PROVIDERS = {
     id: "self",
     billed: false, // 1-26: 무과금(구독 Claude 재사용)
     available: () => true,
+    preflight: () => (CL.cliOnPath("claude", process.env) ? { ok: true } : { ok: false, detail: "cli-not-found" }), // [묶음 (다)] spawn 없이 실존만
     probe: () => {
       const target = CL.resolveExecutableForSpawn("claude", process.env);
       if (!target) return { ok: false, key: "cli-missing", detail: "cli-not-found" };
@@ -119,6 +120,11 @@ const PROVIDERS = {
     id: "codex",
     billed: true, // Codex 플랜 사용량 소모(토큰 단가 청구형은 아님 — 정직 표기. 검증 축과 같은 계정을 쓴다)
     available: () => true, // 검증 축이 이미 codex 실행파일에 의존 — 별도 가용성 게이트 없음(실패=정직 보고)
+    preflight: () => { // [묶음 (다)] 실행 파일 실존만(spawn 없음)
+      let inv; try { inv = require(path.join(__dirname, "codex-bridge.js")).resolveCodex(); } catch { return { ok: false, detail: "bridge-load" }; }
+      const f = inv && inv.file ? String(inv.file) : "codex";
+      return CL.cliOnPath(f, process.env) ? { ok: true } : { ok: false, detail: "cli-not-found" }; // 절대 경로도 파일+실행 가능 검사(2판 blocker)
+    },
     probe: () => {
       let inv;
       try { inv = require(path.join(__dirname, "codex-bridge.js")).resolveCodex(); }
@@ -188,6 +194,10 @@ function runScout(repo, providerId, opts) {
     let det = "";
     try { det = String(((P.probe() || {}).detail) || ""); } catch { det = "probe-threw"; }
     return { ok: false, provider: providerId, error: { key: "provider-unavailable", detail: det } };
+  }
+  if (typeof P.preflight === "function") { // [묶음 (다)] 실행 파일 부재=호출을 시작하지 않고 준비 실패로 닫는다(꾸러미 수집·생성중 표시·장부 기록 없음)
+    let pf = null; try { pf = P.preflight(); } catch { pf = { ok: false, detail: "preflight-threw" }; }
+    if (!pf || pf.ok !== true) return { ok: false, provider: providerId, error: { key: "provider-unavailable", detail: String((pf && pf.detail) || "cli-not-found") } };
   }
   const pkg = collectPackage(repo);
   if (!pkg) return { ok: false, provider: providerId, error: { key: "not-git", detail: "" } };
