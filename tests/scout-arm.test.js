@@ -9,6 +9,7 @@ process.env.CODEX_BRIDGE_HOME = require("fs").mkdtempSync(require("path").join(r
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+require("./_fake-cli.js").installFakeClis(["claude", "codex"]); // 차단·실행 지시를 기대하는 사례=담당 준비됨 환경 명시(CI 엔 claude/codex 없음 — 2026-09-18)
 const ROOT = path.join(__dirname, "..");
 const CL = require(path.join(ROOT, "bridge", "contract-lib.js"));
 

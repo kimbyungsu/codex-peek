@@ -6,6 +6,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+require("./_fake-cli.js").installFakeClis(["claude", "codex"]); // 차단·실행 지시를 기대하는 사례=담당 준비됨 환경 명시(CI 엔 claude/codex 없음 — 2026-09-18)
 let pass = 0, fail = 0;
 function ok(c, m) { if (c) { pass++; console.log("  ✅ " + m); } else { fail++; console.log("  ❌ " + m); } }
 
