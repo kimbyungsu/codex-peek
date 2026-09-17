@@ -56,7 +56,10 @@ function parseArgs(args) {
 function publishGate(doPush, hasPat) { return !!(doPush && hasPat); }
 
 function run(cmd, opts = {}) {
-  const r = spawnSync(cmd, { shell: true, stdio: "inherit", cwd: ROOT, timeout: opts.timeout || 1800000 }); // 기본 30분(2026-08-06: 전체 테스트 체인 성장으로 10분 초과 — pretest+본체가 연속 실행됨)
+  // 기본 90분(2026-09-18: 전체 체인이 30분을 넘겨 timeout 으로 죽고 버전이 원복됐는데, 고아가 된 시험 자식들은 계속 돌아 로그 뒤에
+  // 원복된 버전 기준의 version-lock 실패가 찍혔다 — 원인은 결함이 아니라 상한). CODEX_BRIDGE_RELEASE_STEP_TIMEOUT_MIN 으로 조정.
+  const stepTimeoutMs = (Number(process.env.CODEX_BRIDGE_RELEASE_STEP_TIMEOUT_MIN) > 0 ? Number(process.env.CODEX_BRIDGE_RELEASE_STEP_TIMEOUT_MIN) : 90) * 60000;
+  const r = spawnSync(cmd, { shell: true, stdio: "inherit", cwd: ROOT, timeout: opts.timeout || stepTimeoutMs }); // 기본 30분(2026-08-06: 전체 테스트 체인 성장으로 10분 초과 — pretest+본체가 연속 실행됨)
   if (r.status !== 0) throw new Error(`실패: ${cmd} (exit ${r.status})`);
 }
 function runOut(cmd) {
