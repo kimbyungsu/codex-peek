@@ -1,11 +1,12 @@
 /*
  * P6 'Codex 팔'(2026-07-22) — self·DeepSeek 팔과 **같은 결정론 꾸러미**를 Codex(독립 codex exec 1회)에 먹여
  * 영향범위 지도를 받는다. 검증 세션과 완전히 분리된 새 세션이며(resume 아님), 빈 임시 폴더에서 실행된다.
- * 사용: node scripts/scope-scout-codex.js <repo경로> [--out <파일>]
+ * 사용: node <브릿지 홈>/scope-scout-codex.js <repo경로> [--out <파일>]
  * 파이프라인 본체는 scout-providers.js runScout("codex") — 이 파일은 CLI 껍데기(self 러너와 동형).
  * 통신은 codex CLI 자체의 동작(사용자의 codex 계정·PRIVACY '외부로 나가는 것' 원리 문단 참조).
  */
 const path = require("path");
+const SELF_CMD = 'node "' + String(process.argv[1] || __filename).replace(/\\/g, "/") + '"'; // 실행 안내=실제로 부른 경로(설치본·래퍼 어느 쪽이든 그대로) — 정찰 층 이관 2026-09-16
 const { runScout } = require("./scout-providers.js");
 const { loadLang } = require(path.join(__dirname, "contract-lib.js"));
 
@@ -13,7 +14,7 @@ const repo = process.argv[2];
 const outIdx = process.argv.indexOf("--out");
 const outFile = outIdx > 0 ? process.argv[outIdx + 1] : null;
 const tB = (ko, en) => (loadLang() === "en" ? en : ko); // CLI 출력도 한/영 쌍(EN 자동지시가 이 스크립트 실행을 지시 — 감사 D)
-if (!repo) { console.error(tB("사용: node scripts/scope-scout-codex.js <repo경로> [--out <파일>]","Usage: node scripts/scope-scout-codex.js <repo path> [--out <file>]")); process.exit(2); }
+if (!repo) { console.error(tB("사용: " + SELF_CMD + " <repo경로> [--out <파일>]","Usage: " + SELF_CMD + " <repo path> [--out <file>]")); process.exit(2); }
 
 const res = runScout(repo, "codex", { outFile });
 if (!res.ok) {

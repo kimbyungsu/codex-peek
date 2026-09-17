@@ -5,9 +5,9 @@
  * 게이트를 막지 않는다 — 명확한 오류 메시지 + exit 1로 '지도 못 받음'만 가시화.
  *
  * 사용:
- *   node deepseek-bridge.js ping                 — 키·주소·모델이 실제 응답하는지 1회 확인
- *   node deepseek-bridge.js map [--out <파일>]   — stdin으로 꾸러미(MD)를 받아 지도 출력
- *   node deepseek-bridge.js page                 — stdin으로 페이지 프롬프트(정리 담당)를 받아 답 본문 출력(2026-09-06 · 탐색 담당이 DeepSeek일 때)
+ *   node <브릿지 홈>/deepseek-bridge.js ping                 — 키·주소·모델이 실제 응답하는지 1회 확인
+ *   node <브릿지 홈>/deepseek-bridge.js map [--out <파일>]   — stdin으로 꾸러미(MD)를 받아 지도 출력
+ *   node <브릿지 홈>/deepseek-bridge.js page                 — stdin으로 페이지 프롬프트(정리 담당)를 받아 답 본문 출력(2026-09-06 · 탐색 담당이 DeepSeek일 때)
  *   (capability·enrich는 준비 점검·의미 보강 — map-probe.js·enrich-providers.js가 호출)
  *
  * 키 해석(§14 D4): env DEEPSEEK_API_KEY → ~/.codex-bridge/deepseek.json(대시보드 ⚙️고급설정 탭이 쓰는 파일).
@@ -18,6 +18,7 @@
  */
 const fs = require("fs");
 const path = require("path");
+const SELF_CMD = 'node "' + String(process.argv[1] || __filename).replace(/\\/g, "/") + '"'; // 실행 안내=실제로 불린 경로(2026-09-17 확인검증 blocker)
 const os = require("os");
 const crypto = require("crypto");
 
@@ -134,7 +135,9 @@ function inheritedUsageContext(flow, charsIn, scope) {
   return null;
 }
 
-const NO_KEY_MSG = "DeepSeek 키 없음 — 잠기는 건 'DeepSeek 비교 팔'뿐입니다(기초 탐색과 무료 self 팔 지도는 키 없이 동작: node scripts/scope-scout-self.js <repo>). 키 등록: 대시보드 ⚙️고급설정 탭 또는 DEEPSEEK_API_KEY env";
+// 실행 안내는 브릿지 홈 절대 경로(contract-lib bridgeCmd 정본) — 단독 배포 등 로드 실패 시 자리표시로 폴백
+const BC9 = (f) => { try { return require(path.join(__dirname, "contract-lib.js")).bridgeCmd(f); } catch { return "node <bridge-home>/" + f; } };
+const NO_KEY_MSG = "DeepSeek 키 없음 — 잠기는 건 'DeepSeek 비교 팔'뿐입니다(기초 탐색과 무료 self 팔 지도는 키 없이 동작: " + BC9("scope-scout-self.js") + " <repo>). 키 등록: 대시보드 ⚙️고급설정 탭 또는 DEEPSEEK_API_KEY env";
 
 // P7(1-8) capability 판정(순수 — 테스트가 직접 실행): 정확한 JSON 객체 하나만·크기 상한 2,000자.
 // 코드펜스·설명 문장 동반=실패(strict — typed 경로에 쓸 수 있는지의 실증이므로 관대 파싱 금지).
@@ -197,7 +200,7 @@ async function main() {
     if (!cfg.apiKey) { console.error(NO_KEY_MSG); process.exit(1); }
     let md = "";
     try { md = fs.readFileSync(0, "utf8"); } catch { /* stdin 없음 */ }
-    if (!md.trim()) { console.error("stdin으로 꾸러미(MD)를 넣어라 — 예: node scripts/scope-package.js <repo> | node bridge/deepseek-bridge.js map"); process.exit(2); }
+    if (!md.trim()) { console.error("stdin으로 꾸러미(MD)를 넣어라 — 예: " + BC9("scope-package.js") + " <repo> | " + BC9("deepseek-bridge.js") + " map"); process.exit(2); }
     const mapReq = buildMapRequest(md, cfg.model);
     const r = await callChat(cfg, mapReq, 4 * 60 * 1000, { usageContext: inheritedUsageContext("map-scout", mapReq.messages[0].content.length, "project") });
     const outIdx = process.argv.indexOf("--out");
@@ -219,7 +222,7 @@ async function main() {
     if (r.usage) console.error(`[usage] in=${r.usage.prompt_tokens} out=${r.usage.completion_tokens} (${r.model})`);
     return;
   }
-  console.error("사용: node deepseek-bridge.js <ping|map|capability|enrich|page> [--out <파일>]");
+  console.error("사용: " + SELF_CMD + " <ping|map|capability|enrich|page> [--out <파일>]");
   process.exit(2);
 }
 

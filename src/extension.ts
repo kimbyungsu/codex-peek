@@ -23,6 +23,15 @@ const HOME = os.homedir();
 // 자체 namespace 폴더. CODEX_BRIDGE_HOME으로 override(확장 호스트≠훅 home 환경 대비 — 브릿지·훅과 동일 규칙).
 // ★확장의 모든 자체파일 경로는 이 BRIDGE_DIR 한 곳에서만 파생(override 누락 방지).
 const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(HOME, ".codex-bridge");
+// [정찰 층 이관 2026-09-16] 사용자에게 보이는 실행 안내는 브릿지 홈 절대 경로(bridge/contract-lib.js bridgeCmd 와 같은 규칙) — 마켓 설치본엔 레포가 없다
+const bridgeCmd = (script: string, tail = ""): string => 'node "' + path.join(BRIDGE_DIR, script).replace(/\\/g, "/") + '"' + (tail ? " " + tail : "");
+// 런타임 복구 안내 — 설치 출처별(bridge/contract-lib.js runtimeRepairHint 와 같은 규칙): 마켓 설치본엔 install.js 가 없다(3판 blocker 2026-09-17)
+function runtimeRepairHint(en: boolean): string {
+  let managed = false; try { managed = fs.existsSync(path.join(BRIDGE_DIR, ".bridge-deployed-by.json")); } catch { managed = false; }
+  if (managed) return en ? "this runtime is managed by the extension — reload the VS Code window (Developer: Reload Window) so the extension redeploys the bridge; if it keeps failing, reinstall the extension"
+    : "확장이 관리하는 설치본입니다 — VS Code 창을 다시 로드(Developer: Reload Window)하면 확장이 브릿지를 다시 배치합니다. 계속 실패하면 확장을 재설치하세요";
+  return en ? "this is a repo install — re-run node install.js from the repository" : "레포 설치본입니다 — 저장소에서 node install.js 를 다시 실행하세요";
+}
 // V11: codex가 실제 쓰는 home. env → 확장이 'codex doctor'로 적어둔 codex-home.txt → ~/.codex 폴백.
 // (syncCodexHome이 활성화 때 갱신하므로 let)
 const PINNED_HOME = readTextSafe(path.join(BRIDGE_DIR, "codex-home.txt"));
@@ -1699,8 +1708,8 @@ function mapReasonText(key: string | undefined, raw: string | undefined): string
     const rtx = require(path.join(BRIDGE_DIR, "map-reader.js")).reasonTextFor;
     if (typeof rtx === "function") return rtx(key, raw, loadLangExt() === "en");
   } catch { /* 구 런타임 — 아래 로컬 표 */ }
-  const ko: Record<string, string> = { "history-without-marker": "전환 이력 존재+표식 부재", "authority-unreadable": "전환 표식 판독 불가", "authority-format": "전환 표식 형식 위반", "authority-mapid-mismatch": "전환 표식 세대 불일치", "topology-unreadable": "지도 정본 판독 불가", "topology-invalid": "지도 정본 형식 위반", "receipt-unbound": "전환 영수증 부재/손상", "marker-fp-mismatch": "표식 지문 불일치", "legacy-source-unreadable": "확정층 판독 불가", "bindings-unreadable": "결속 파일 판독 불가", "bindings-stale": "결속 파일 세대 불일치", "map-md-absent": "생성 뷰(MAP.md) 부재", "map-md-unreadable": "생성 뷰(MAP.md) 판독 불가", "entry-text-required": "승격 문구 누락", "active-wal": "적용 중 기록(WAL) 존재", "live-actionref-invalid": "승인 출처 표기 오류", "live-approvedat-invalid": "승인 시각 형식 오류", "live-upsert-failed": "승인 후보 기록 실패", "live-rejected": "승인 후보 기록 거부(상한/손상)", "candidate-lookup-failed": "후보 조회 실패", "binding-target-gone": "결속 대상 소멸(재결속 필요)", "no-evidence": "증거 경로 없음(code/test/config)", "resolved-without-evidence": "종결 제안과 증거 불일치(진단 필요)", "propose-conflict": "제안 충돌", "propose-failed": "제안 기록 실패", "trace-unreadable": "전환 흔적 판독 불가(권한 확인 필요)", "decision-index-unreadable": "결정 색인 판독 불가", "policy-frontier-unreadable": "정책 판독 불가", lock: "잠금 경합", "authority-flap": "권위 세대 변동", "runtime-outdated": "MAP 런타임 낡음(node install.js 필요)" };
-  const en: Record<string, string> = { "history-without-marker": "cutover history exists but marker missing", "authority-unreadable": "authority marker unreadable", "authority-format": "authority marker malformed", "authority-mapid-mismatch": "authority marker generation mismatch", "topology-unreadable": "topology unreadable", "topology-invalid": "topology schema violation", "receipt-unbound": "cutover receipt missing/corrupt", "marker-fp-mismatch": "marker fingerprint mismatch", "legacy-source-unreadable": "stable ledger unreadable", "bindings-unreadable": "bindings file unreadable", "bindings-stale": "bindings file from a previous generation", "map-md-absent": "generated view (MAP.md) missing", "map-md-unreadable": "generated view (MAP.md) unreadable", "entry-text-required": "promotion text missing", "active-wal": "active write-ahead log present", "live-actionref-invalid": "approval action tag invalid", "live-approvedat-invalid": "approval timestamp invalid", "live-upsert-failed": "failed to store the approval candidate", "live-rejected": "approval candidate refused (cap/corruption)", "candidate-lookup-failed": "candidate lookup failed", "binding-target-gone": "binding target gone (rebind needed)", "no-evidence": "no evidence paths (code/test/config)", "resolved-without-evidence": "resolved proposal without target evidence (needs diagnosis)", "propose-conflict": "proposal conflict", "propose-failed": "failed to record the proposal", "trace-unreadable": "cutover trace unreadable (check permissions)", "decision-index-unreadable": "decision index unreadable", "policy-frontier-unreadable": "policy frontier unreadable", lock: "lock contention", "authority-flap": "authority generation flapped", "runtime-outdated": "MAP runtime outdated (run node install.js)" };
+  const ko: Record<string, string> = { "history-without-marker": "전환 이력 존재+표식 부재", "authority-unreadable": "전환 표식 판독 불가", "authority-format": "전환 표식 형식 위반", "authority-mapid-mismatch": "전환 표식 세대 불일치", "topology-unreadable": "지도 정본 판독 불가", "topology-invalid": "지도 정본 형식 위반", "receipt-unbound": "전환 영수증 부재/손상", "marker-fp-mismatch": "표식 지문 불일치", "legacy-source-unreadable": "확정층 판독 불가", "bindings-unreadable": "결속 파일 판독 불가", "bindings-stale": "결속 파일 세대 불일치", "map-md-absent": "생성 뷰(MAP.md) 부재", "map-md-unreadable": "생성 뷰(MAP.md) 판독 불가", "entry-text-required": "승격 문구 누락", "active-wal": "적용 중 기록(WAL) 존재", "live-actionref-invalid": "승인 출처 표기 오류", "live-approvedat-invalid": "승인 시각 형식 오류", "live-upsert-failed": "승인 후보 기록 실패", "live-rejected": "승인 후보 기록 거부(상한/손상)", "candidate-lookup-failed": "후보 조회 실패", "binding-target-gone": "결속 대상 소멸(재결속 필요)", "no-evidence": "증거 경로 없음(code/test/config)", "resolved-without-evidence": "종결 제안과 증거 불일치(진단 필요)", "propose-conflict": "제안 충돌", "propose-failed": "제안 기록 실패", "trace-unreadable": "전환 흔적 판독 불가(권한 확인 필요)", "decision-index-unreadable": "결정 색인 판독 불가", "policy-frontier-unreadable": "정책 판독 불가", lock: "잠금 경합", "authority-flap": "권위 세대 변동", "runtime-outdated": "MAP 런타임 낡음(" + runtimeRepairHint(false) + ")" };
+  const en: Record<string, string> = { "history-without-marker": "cutover history exists but marker missing", "authority-unreadable": "authority marker unreadable", "authority-format": "authority marker malformed", "authority-mapid-mismatch": "authority marker generation mismatch", "topology-unreadable": "topology unreadable", "topology-invalid": "topology schema violation", "receipt-unbound": "cutover receipt missing/corrupt", "marker-fp-mismatch": "marker fingerprint mismatch", "legacy-source-unreadable": "stable ledger unreadable", "bindings-unreadable": "bindings file unreadable", "bindings-stale": "bindings file from a previous generation", "map-md-absent": "generated view (MAP.md) missing", "map-md-unreadable": "generated view (MAP.md) unreadable", "entry-text-required": "promotion text missing", "active-wal": "active write-ahead log present", "live-actionref-invalid": "approval action tag invalid", "live-approvedat-invalid": "approval timestamp invalid", "live-upsert-failed": "failed to store the approval candidate", "live-rejected": "approval candidate refused (cap/corruption)", "candidate-lookup-failed": "candidate lookup failed", "binding-target-gone": "binding target gone (rebind needed)", "no-evidence": "no evidence paths (code/test/config)", "resolved-without-evidence": "resolved proposal without target evidence (needs diagnosis)", "propose-conflict": "proposal conflict", "propose-failed": "failed to record the proposal", "trace-unreadable": "cutover trace unreadable (check permissions)", "decision-index-unreadable": "decision index unreadable", "policy-frontier-unreadable": "policy frontier unreadable", lock: "lock contention", "authority-flap": "authority generation flapped", "runtime-outdated": "MAP runtime outdated (" + runtimeRepairHint(true) + ")" };
   const enMode = loadLangExt() === "en";
   const table = enMode ? en : ko;
   // en 슬롯 폴백=키(영문 식별자) 우선 — raw(한국어 원문)를 절대 노출하지 않는다(구현검증 2차 #4)
@@ -1717,7 +1726,7 @@ function trySpawnMapBootstrap(ws: string): void {
     if (sig && typeof mb.grantConsent === "function") mb.grantConsent(sig.repo, "dashboard-toggle");
     mb.maybeSpawnBootstrap(ws);
   } catch {
-    vscode.window.showWarningMessage(tE("Project MAP 자동 생성 모듈이 아직 배포되지 않았어요(구버전 브릿지) — 브릿지 업데이트 후 다시 켜거나 수동으로: node scripts/scope-map.js <저장소> bootstrap. 그 외 3트랙 기능은 정상 동작합니다.", "The Project MAP auto-creation module is not deployed yet (old bridge runtime) — update the bridge and re-enable, or run manually: node scripts/scope-map.js <repo> bootstrap. All other 3-track features keep working."));
+    vscode.window.showWarningMessage(tE("Project MAP 자동 생성 모듈이 아직 배포되지 않았어요(구버전 브릿지) — 브릿지 업데이트 후 다시 켜거나 수동으로: " + bridgeCmd("scope-map.js") + " <저장소> bootstrap. 그 외 3트랙 기능은 정상 동작합니다.", "The Project MAP auto-creation module is not deployed yet (old bridge runtime) — update the bridge and re-enable, or run manually: " + bridgeCmd("scope-map.js") + " <repo> bootstrap. All other 3-track features keep working."));
   }
 }
 // [구현검증 7차 지적 2 → 8차 지적 3·4 재구성] 기본 원칙/정찰 오버라이드 파일의 strict 판독 — 한 번 읽은 '동일
@@ -2236,7 +2245,7 @@ table{border-collapse:collapse;width:100%;font-size:11.5px} td{border-bottom:1px
 <div class="sub">${tE("전역 임계값 대신 '이 프로젝트의 관찰 일지'가 신뢰 판단 재료입니다(프로젝트별·advisory — 아무것도 자동 강제하지 않음). 닫았다 다시 열면 최신으로 다시 계산돼요.", "Instead of a global threshold, this project's own field journal is the trust evidence (per-project · advisory — nothing is auto-enforced). Close and reopen for a fresh computation.")}</div>
 ${cards}
 <h2>${tE("플랜 게이트", "Plan gate")}</h2>
-<div class="sub">${gateLine} — ${tE("지도가 없거나 낡으면 플랜 확정 전에 먼저 지도를 요청(세션당 2회까지·이후 통과·fail-open). 차단 안내에는 위 관찰 신호가 함께 실립니다 — 전역 수치가 아니라 이 프로젝트의 장부가 근거. 켜고 끄기: node scripts/scope-gate.js &lt;프로젝트&gt; on|off (현재 언어 슬롯에만 저장 — 한/영 모드는 별도 설정)", "if the map is missing/stale, a map is requested before plan confirmation (up to 2×/session, then passes · fail-open). The block notice carries the observation signals above — this project's journal is the evidence, not a global number. Toggle: node scripts/scope-gate.js &lt;repo&gt; on|off (saved to the current language slot only — ko/en modes are configured separately)")}</div>
+<div class="sub">${gateLine} — ${tE("지도가 없거나 낡으면 플랜 확정 전에 먼저 지도를 요청(세션당 2회까지·이후 통과·fail-open). 차단 안내에는 위 관찰 신호가 함께 실립니다 — 전역 수치가 아니라 이 프로젝트의 장부가 근거. 켜고 끄기: " + bridgeCmd("scope-gate.js") + " &lt;프로젝트&gt; on|off (현재 언어 슬롯에만 저장 — 한/영 모드는 별도 설정)", "if the map is missing/stale, a map is requested before plan confirmation (up to 2×/session, then passes · fail-open). The block notice carries the observation signals above — this project's journal is the evidence, not a global number. Toggle: " + bridgeCmd("scope-gate.js") + " &lt;repo&gt; on|off (saved to the current language slot only — ko/en modes are configured separately)")}</div>
 <h2>${tE("이 신호는 어디서 생기고 어디에 반영되나 — 관찰 신호의 역할", "Where these signals come from and where they act — the role of observation signals")}</h2>
 <div class="grid">
 ${stat("⚙", "1. 감지 (자동)", "1. Sensing (automatic)", "#3ca89a", "정찰 제안·지도 재동봉·검증 답변의 확인과 명시 반박 표기·당신의 직접 확인/정정이 사건(제안·동봉·확인·반박)으로 잡혀요 — 근거 조건을 통과한 사건만 상태를 올리거나 내려요 · 추가 AI 호출 0", "recon proposals, map re-attachments, confirms and explicit refute markers in verification replies, and your direct confirms/corrections become events — only events that pass evidence checks promote or demote status · zero extra AI calls")}
@@ -3873,7 +3882,7 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
       let praw = ""; try { praw = fs.readFileSync(pf, "utf8"); } catch { /* 이전 서랍 없음 */ }
       if (praw.trim()) {
         const pd = deriveLedger(parseEventsJsonl(praw).events);
-        if (pd.length) prevDrawer = { entries: pd.length, trusted: pd.filter((e) => e.lane === "trusted").length, migrateCmd: `node scripts/scope-ledger-migrate.js "${ws}" "${scoutTargetFor(ws).repo}" --dry` }; // 실행 가능한 전체 인수(Codex 지적: 인수 없는 안내는 usage 오류로 끝남)
+        if (pd.length) prevDrawer = { entries: pd.length, trusted: pd.filter((e) => e.lane === "trusted").length, migrateCmd: bridgeCmd("scope-ledger-migrate.js", `"${ws}" "${scoutTargetFor(ws).repo}" --dry`) }; // 실행 가능한 전체 인수(Codex 지적: 인수 없는 안내는 usage 오류로 끝남)
       }
     }
   } catch { /* 고지 재료 실패 — 카드 본체 불침 */ }
@@ -4079,7 +4088,7 @@ class Dashboard {
           const wsD = dashboardWorkspace(); const tgtD = wsD ? scoutTargetFor(wsD).repo : null; if (!wsD || !tgtD) return;
           if (normWs(tgtD) !== normWs(m.repo)) { vscode.window.showWarningMessage(enD ? "The scout target changed — the card refreshes. Please open it again." : "정찰 대상이 바뀌었어요 — 카드가 갱신됩니다. 다시 열어 주세요."); this.post(); return; }
           let CLD: any = null; try { CLD = require(path.join(BRIDGE_DIR, "contract-lib.js")); } catch { CLD = null; }
-          if (!CLD || typeof CLD.envelopeDriftView !== "function" || typeof CLD.restoreEnvelopeApproved !== "function") { vscode.window.showWarningMessage(enD ? "This runtime lacks the drift view — run node install.js." : "이 설치본은 바뀐 내용 보기를 지원하지 않아요 — node install.js 후 다시 시도하세요."); return; }
+          if (!CLD || typeof CLD.envelopeDriftView !== "function" || typeof CLD.restoreEnvelopeApproved !== "function") { vscode.window.showWarningMessage(enD ? "This runtime lacks the drift view — " + runtimeRepairHint(true) + "." : "이 설치본은 바뀐 내용 보기를 지원하지 않아요 — " + runtimeRepairHint(false) + " 후 다시 시도하세요."); return; }
           let dv: any = null; try { dv = CLD.envelopeDriftView(wsD, tgtD, tgD); } catch { dv = null; }
           if (!dv || !dv.ok) { vscode.window.showWarningMessage(enD ? "Cannot read the rules state." : "수칙 상태를 읽을 수 없어요."); this.post(); return; }
           if (!dv.drift) { vscode.window.showInformationMessage(enD ? "The rules file matches the approved copy now — nothing to decide." : "수칙 파일이 지금은 승인본과 같아요 — 정할 것이 없습니다."); this.post(); return; }
@@ -4189,7 +4198,7 @@ class Dashboard {
               // [재편 B 1차 blocker①] 목적지=서고 명시(설계 §3-2) — 코어 전용 draftEnvelopeCandidate는 12칸
               // 상한·전량 주입 코어로 오유입하던 결함. 단건 올림도 revision 경로(target archive)로 통일.
               // [CURATION v3 §3 D] 정리 제안(curator)은 후보 행의 작업 종류(add·oos-add·remove)를 읽어 변환 — 다른 kind는 종전 서고 올림 경로 그대로.
-              try { dr = m.kind === "curator" ? (typeof CLM.draftCuratorCandidate === "function" ? CLM.draftCuratorCandidate(wsM, repoM, m.id, genM) : { ok: false, error: enM ? "this runtime cannot convert curation proposals — run node install.js" : "이 설치본은 정리 제안을 변환할 수 없어요 — node install.js 실행" }) : CLM.draftEnvelopeRevision(wsM, repoM, { addCandidateIds: [m.id], removeItems: [], approvedHash: genM, target: "archive" }); } catch { dr = null; }
+              try { dr = m.kind === "curator" ? (typeof CLM.draftCuratorCandidate === "function" ? CLM.draftCuratorCandidate(wsM, repoM, m.id, genM) : { ok: false, error: enM ? "this runtime cannot convert curation proposals — " + runtimeRepairHint(true) : "이 설치본은 정리 제안을 변환할 수 없어요 — " + runtimeRepairHint(false) }) : CLM.draftEnvelopeRevision(wsM, repoM, { addCandidateIds: [m.id], removeItems: [], approvedHash: genM, target: "archive" }); } catch { dr = null; }
               if (dr && dr.ok && m.approve === true) { this.runProposalApprove(scoutTargetFor(wsM).repo, m.lang, true); return; } // [재편 B §3-2] [승인] 1클릭 — 초안 생성 직후 같은 도장 모달로(취소=복원형 폐기)
               if (dr && dr.ok) vscode.window.showInformationMessage((enM ? "Merge draft created — review it via 'View details' and stamp to apply. Nothing changes until you stamp." : "병합 초안을 만들었어요 — '내용 보기'로 확인 후 도장을 찍어야 적용됩니다(그 전까지는 아무것도 바뀌지 않아요).") + (dr.parallelCopied ? (enM ? " Parallel axes were copied verbatim — please edit translations/examples before stamping." : " 병렬 축은 원문 그대로 복제됐어요 — 도장 전에 번역·예시를 다듬어 주세요.") : ""));
               else vscode.window.showWarningMessage((enM ? "Draft failed: " : "초안 생성 실패: ") + ((dr && dr.error) || "unknown"));
@@ -4267,7 +4276,7 @@ class Dashboard {
             if (adds9.length && rem9.length) { vscode.window.showWarningMessage(enR9 ? "Adds go to the archive and removals to the core rulebook — they need separate stamps. Build the adds draft first (removal marks stay), then the removal draft." : "올림(서고행)과 빼기(현행 수칙서)는 도장이 따로 필요해요. 먼저 한 쪽만 담아 주세요 — 올림 초안을 먼저 만들고(빼기 표시는 남아 있어요), 이어서 빼기 초안을 만들면 됩니다."); this.post(); return; }
             const dest9 = adds9.length ? (m.dest === "core" ? "core" : "archive") : (m.dest === "archive" ? "archive" : "core"); // 올림=서고 자동(구 런타임 폴백만 core)·빼기=행 소속 자동 분기(재편 B — 서고 빼기 문 신설)
             let rv9: any = null;
-            try { rv9 = typeof CLR.draftEnvelopeRevision === "function" ? CLR.draftEnvelopeRevision(wsR9, repoR9, { addCandidateIds: adds9, removeItems: rem9, approvedHash: m.gen, target: dest9, ...(typeof m.expectedTargetHash === "string" && m.expectedTargetHash ? { expectedTargetHash: m.expectedTargetHash } : {}) }) : { ok: false, error: "old-runtime(node install.js 필요)" }; } catch { rv9 = { ok: false, error: "exception" }; }
+            try { rv9 = typeof CLR.draftEnvelopeRevision === "function" ? CLR.draftEnvelopeRevision(wsR9, repoR9, { addCandidateIds: adds9, removeItems: rem9, approvedHash: m.gen, target: dest9, ...(typeof m.expectedTargetHash === "string" && m.expectedTargetHash ? { expectedTargetHash: m.expectedTargetHash } : {}) }) : { ok: false, error: "old-runtime(" + runtimeRepairHint(false) + ")" }; } catch { rv9 = { ok: false, error: "exception" }; }
             if (rv9 && rv9.ok && m.approve === true) { this.runProposalApprove(repoR9, m.lang, true); return; } // [재편 B §3-2] [빼기] 1클릭 — 초안 생성 직후 같은 도장 모달로(취소=복원형 폐기)
             if (rv9 && rv9.ok) vscode.window.showInformationMessage((enR9 ? `Revision draft created (${rv9.target === "archive" ? "→ archive" : "→ core"} · add ${rv9.adds} · remove ${rv9.removes}). Existing items stay as-is. Next: press 'Review & approve draft' on the rulebook card — you'll see the change summary, then one stamp applies it.` : `개정판 초안을 만들었어요(${rv9.target === "archive" ? "→서고" : "→코어"} · 올림 ${rv9.adds}·빼기 ${rv9.removes}). 기존 항목은 그대로예요. 다음 할 일: 수칙서 카드의 '초안 확인·승인'을 누르면 바뀌는 것 요약이 보이고, 도장 1번으로 적용됩니다.`) + (rv9.skippedDup ? (enR9 ? ` ${rv9.skippedDup} duplicate(s) of already-registered items were auto-excluded (marked as already registered).` : ` 이미 등재된 문안과 겹친 ${rv9.skippedDup}건은 자동 제외했어요(후보 목록에서도 정리됨).`) : "") + (rv9.parallelCopied ? (enR9 ? " Parallel axes copied verbatim — edit translations before stamping." : " 병렬 축은 원문 그대로 복제됐어요 — 도장 전에 번역·예시를 다듬어 주세요.") : "")); // [4e] 중복 자동 제외 정직 보고
             else vscode.window.showWarningMessage((enR9 ? "Draft failed: " : "개정판 생성 실패: ") + String((rv9 && rv9.error) || "unknown"));
@@ -4682,7 +4691,7 @@ class Dashboard {
           if (!ws) return;
           const act = String(m.act || "");
           const lib = bridgeLib();
-          if (typeof lib?.appendLedgerEvent !== "function") { vscode.window.showErrorMessage(tE("브릿지 런타임이 낡아 장부 개입을 기록할 수 없어요 — 저장소에서 node install.js 실행 후 창을 리로드하세요.","Bridge runtime is outdated for ledger actions — run node install.js in the repo, then reload the window.")); return; }
+          if (typeof lib?.appendLedgerEvent !== "function") { vscode.window.showErrorMessage(tE("브릿지 런타임이 낡아 장부 개입을 기록할 수 없어요 — " + runtimeRepairHint(false) + ".", "Bridge runtime is outdated for ledger actions — " + runtimeRepairHint(true) + ".")); return; }
           const cur = readMapLedgerUncached(ws);
           const item = cur.entries.find((p) => p.sig === String(m.sig));
           if (!item) { vscode.window.showWarningMessage(tE("그 항목을 장부에서 찾지 못했어요 — 목록을 새로고침합니다.","Could not find that entry in the ledger — refreshing.")); mapLedgerBump++; this.post(); return; }
@@ -4726,7 +4735,7 @@ class Dashboard {
             const authSnap = (() => { try { return MAx ? require(path.join(BRIDGE_DIR, "map-bindings.js")).authorityStateFor(targetSnap) : null; } catch { return null; } })();
             const isV2 = !!authSnap && authSnap.st === "v2";
             if (authSnap && authSnap.st === "blocked") { vscode.window.showErrorMessage(tE("권위 판독 차단(" + mapReasonText(authSnap.reasonKey, authSnap.reason) + ") — 내보내기를 기록하지 않았습니다.","Authority blocked (" + mapReasonText(authSnap.reasonKey, authSnap.reason) + ") — nothing was exported.")); return; }
-            if (!authSnap && cutoverTraceState(targetSnap) !== "absent") { vscode.window.showErrorMessage(tE("전환 여부를 확인할 수 없거나 전환된 프로젝트인데 MAP 런타임이 낡았어요 — node install.js 후 창을 리로드하세요(아무것도 기록되지 않았습니다).","Cutover state is present/unreadable but the MAP runtime is outdated — run node install.js and reload (nothing was written).")); return; }
+            if (!authSnap && cutoverTraceState(targetSnap) !== "absent") { vscode.window.showErrorMessage(tE("전환 여부를 확인할 수 없거나 전환된 프로젝트인데 MAP 런타임이 낡았어요 — " + runtimeRepairHint(false) + "(아무것도 기록되지 않았습니다).", "Cutover state is present/unreadable but the MAP runtime is outdated — " + runtimeRepairHint(true) + " (nothing was written).")); return; }
             if (!isV2 && item.inMap) { vscode.window.showInformationMessage(tE("이미 확정 장부에 같은 문구가 있어요 — 중복 기록하지 않았습니다.","The stable ledger already contains this text — no duplicate written.")); return; }
             const modalMsg = isV2
               ? tE(`이 지식을 Project MAP(구조 지도)에 승격할까요? 결속 확인 또는 제안 생성이 진행됩니다.\n\n"${item.text}"`,`Promote this knowledge into the Project MAP? It will be bound or proposed.\n\n"${item.text}"`)
@@ -4755,7 +4764,7 @@ class Dashboard {
               }
               // legacy — 정본 잠금 안 재판정 후 기록(설계검증 1차 #1: cutover와 같은 잠금으로 직렬화)
               const MRt = mapRuntimeLib();
-              if (!MRt || typeof MRt.withMapLock !== "function") { vscode.window.showErrorMessage(tE("MAP 런타임 판독 불가 — 기록을 거부했어요(node install.js 후 재시도).","MAP runtime unreadable — write refused (run node install.js, retry).")); return; }
+              if (!MRt || typeof MRt.withMapLock !== "function") { vscode.window.showErrorMessage(tE("MAP 런타임 판독 불가 — 기록을 거부했어요(" + runtimeRepairHint(false) + " 후 재시도).", "MAP runtime unreadable — write refused (" + runtimeRepairHint(true) + ", then retry).")); return; }
               const lkw = MRt.withMapLock(targetSnap, () => {
                 try {
                   const a2 = require(path.join(BRIDGE_DIR, "map-bindings.js")).authorityStateFor(targetSnap);
@@ -4924,7 +4933,7 @@ class Dashboard {
     const wsS = dashboardWorkspace(); const tgtS = wsS ? scoutTargetFor(wsS).repo : null;
     if (!wsS || !tgtS || normWs(tgtS) !== normWs(repoAt)) { vscode.window.showWarningMessage(en9 ? "The target changed during approval — not approved." : "승인하는 사이 정찰 대상이 바뀌어 승인하지 않았습니다."); this.post(); return; }
     let CLS: any = null; try { CLS = require(path.join(BRIDGE_DIR, "contract-lib.js")); } catch { CLS = null; }
-    if (!CLS || typeof CLS.stampEnvelopeAllSlots !== "function") { vscode.window.showWarningMessage(en9 ? "This runtime cannot stamp — run node install.js." : "이 설치본은 도장을 지원하지 않아요 — node install.js 후 다시 시도하세요."); return; }
+    if (!CLS || typeof CLS.stampEnvelopeAllSlots !== "function") { vscode.window.showWarningMessage(en9 ? "This runtime cannot stamp — " + runtimeRepairHint(true) + "." : "이 설치본은 도장을 지원하지 않아요 — " + runtimeRepairHint(false) + " 후 다시 시도하세요."); return; }
     let ev2: any = null; try { ev2 = target === "archive" ? CLS.readVerifyEnvelopeArchive(tgtS) : CLS.readVerifyEnvelope(tgtS); } catch { ev2 = null; }
     if (!ev2 || ev2.st !== "ok" || String(ev2.sha1) !== shaAt) { vscode.window.showWarningMessage(en9 ? "The rules file changed while approving — not approved. Please review again." : "승인하는 사이 수칙 파일이 바뀌어 승인하지 않았습니다 — 다시 확인해 주세요."); this.post(); return; }
     if (target === "core" && ev2.truncated === true) { vscode.window.showWarningMessage(en9 ? "Some items exceed the caps and are cut off — approval is blocked until the file is trimmed." : "일부 항목이 상한을 넘어 잘려요 — 파일을 줄이기 전에는 승인할 수 없어요."); this.post(); return; }
@@ -5650,7 +5659,7 @@ class Dashboard {
     <div class="card">
       <div class="hint">${t("<b>핵심 프로필 전용</b> — 무결성 프로필 검증에서는 지적이 여기로 유입되지 않아요(자동 등록·기록 규약 모두 핵심 전용 — 직접 명령으로 수동 등록만 가능). 검증이 낸 지적 중 <b>이번 작업 범위를 넘는 제안</b>(새 시나리오 방어·구조 재설계·커버리지 확장 등)이 여기 보관돼요 — 이론적 구멍을 계속 메우는 무한 검증 루프를 끊기 위한 주차장입니다(핵심 프로필 v2.4). <b>보관 항목엔 갚을 의무가 없고</b>, 채택할 때만 작업이 됩니다. 사용자 판단을 기다리도록 승격된 [주의] 항목도 여기에 함께 기록돼요. 즉시 고칠 자명한 보완([보완])은 애초에 여기 들어오지 않아요(그 루프에서 바로 반영). '검토 기한' 표시는 오래됐거나(30일+) 자주 재발견(3회+)된 항목 — 기한이 아니라 '채택 후보로 한번 살펴보라'는 환기예요.", "<b>Core profile only</b> — integrity-profile verifications never feed this parking lot (both auto-record and the recording protocol are core-only; manual CLI registration is the only other way in). Findings that go <b>beyond this work's scope</b> (new scenario hardening, redesign proposals, coverage expansion) are parked here — a parking lot that cuts the endless loop of patching theoretical holes (core profile v2.4). <b>Parked items carry no repayment duty</b>; they become work only when adopted. '[caution]' items escalated to await your judgment are also recorded here. Obvious mechanical notes ([notes]) never land here (they are applied in-loop). 'review due' marks old (30d+) or often-rediscovered (3×+) items — not a deadline, just a nudge to consider adoption.")}</div>
       <div id="blList" style="margin-top:6px"></div>
-      <div class="hint">${t("처분은 CLI: <code>node codex-bridge.js backlog done|dismiss &lt;id&gt;</code> · 목록: <code>backlog list</code> · 이 카드는 읽기 전용(이 PC 로컬 장부)", "Dispose via CLI: <code>node codex-bridge.js backlog done|dismiss &lt;id&gt;</code> · list: <code>backlog list</code> · this card is read-only (local ledger of this PC)")}</div>
+      <div class="hint">${t("처분은 CLI: <code>" + bridgeCmd("codex-bridge.js") + " backlog done|dismiss &lt;id&gt;</code> · 목록: <code>backlog list</code> · 이 카드는 읽기 전용(이 PC 로컬 장부)", "Dispose via CLI: <code>" + bridgeCmd("codex-bridge.js") + " backlog done|dismiss &lt;id&gt;</code> · list: <code>backlog list</code> · this card is read-only (local ledger of this PC)")}</div>
     </div>
   </details>
 
@@ -6133,6 +6142,8 @@ class Dashboard {
   // UI 언어(웹뷰 생성 시 고정 — 전환 시 확장이 HTML을 재생성). 동적 문자열은 T(ko,en)으로 정적 라벨과 같은 언어 유지.
   const UI_EN = ${EN};
   function T(ko, en){ return UI_EN ? en : ko; }
+  // 실행 안내 = 브릿지 홈 절대 경로(확장·브릿지의 bridgeCmd 와 같은 규칙) — 마켓 설치본엔 레포가 없다(2026-09-16)
+  function BC9(f){ return 'node "' + ${JSON.stringify(BRIDGE_DIR.replace(/\\/g, "/"))} + "/" + f + '"'; } // HTML 생성 시 확장이 박는 절대 경로 — 상태·콜백 지역 변수에 의존하지 않음(1판 blocker)
   // P10 화면 계약: Project MAP 운영 카드는 기존 검증 결과·토큰·프로필 뒤에 온다.
   // 템플릿에서는 3트랙 묶음을 한 덩어리로 유지하고, 초기 DOM에서 최종 표시 위치만 확정한다.
   // [UI 개편 2차] scoutImpact 부팅 재배치 제거 — 이제 Project MAP 패널 마크업에 직접 산다(재배치 목적이던 "통계 무기록에도 표시"는 패널 분리로 소멸).
@@ -8060,17 +8071,17 @@ class Dashboard {
         const gl=document.createElement("div"); gl.className="muted"; gl.style.margin="2px 0 6px";
         gl.textContent = g.eff==="plan"
           ? (g.raw==="plan"
-            ? T("🚧 플랜 게이트: 켜짐(직접 설정) — 지도가 없거나 낡으면 플랜 확정 전에 먼저 지도를 요청해요(세션당 2회까지·이후 통과) · 끄기: node scripts/scope-gate.js <이 폴더> off","🚧 Plan gate: on (set by you) — if the map is missing/stale, a map is requested before plan confirmation (up to 2×/session, then passes) · turn off: node scripts/scope-gate.js <this folder> off")
-            : T("🚧 플랜 게이트: 켜짐(3트랙 기본) — 지도가 없거나 낡으면 플랜 확정 전에 먼저 지도를 요청해요(세션당 2회까지·이후 통과 · 안내에는 이 프로젝트의 관찰 신호가 함께 실림) · 끄기: node scripts/scope-gate.js <이 폴더> off","🚧 Plan gate: on (3-track default) — if the map is missing/stale, a map is requested before plan confirmation (up to 2×/session, then passes · the notice carries this project's observation signal) · turn off: node scripts/scope-gate.js <this folder> off"))
-          : T("플랜 게이트: 꺼짐(직접 끄심) — 켜기: node scripts/scope-gate.js <이 폴더> on","Plan gate: off (turned off by you) — turn on: node scripts/scope-gate.js <this folder> on");
+            ? T("🚧 플랜 게이트: 켜짐(직접 설정) — 지도가 없거나 낡으면 플랜 확정 전에 먼저 지도를 요청해요(세션당 2회까지·이후 통과) · 끄기: " + BC9("scope-gate.js") + " <이 폴더> off","🚧 Plan gate: on (set by you) — if the map is missing/stale, a map is requested before plan confirmation (up to 2×/session, then passes) · turn off: " + BC9("scope-gate.js") + " <this folder> off")
+            : T("🚧 플랜 게이트: 켜짐(3트랙 기본) — 지도가 없거나 낡으면 플랜 확정 전에 먼저 지도를 요청해요(세션당 2회까지·이후 통과 · 안내에는 이 프로젝트의 관찰 신호가 함께 실림) · 끄기: " + BC9("scope-gate.js") + " <이 폴더> off","🚧 Plan gate: on (3-track default) — if the map is missing/stale, a map is requested before plan confirmation (up to 2×/session, then passes · the notice carries this project's observation signal) · turn off: " + BC9("scope-gate.js") + " <this folder> off"))
+          : T("플랜 게이트: 꺼짐(직접 끄심) — 켜기: " + BC9("scope-gate.js") + " <이 폴더> on","Plan gate: off (turned off by you) — turn on: " + BC9("scope-gate.js") + " <this folder> on");
         sec.appendChild(gl);
       });
       const sm=d.scoutMaps;
       if(!sm || !sm.count){
         const nonGit = d.scope && d.scope.note==="no-git";
         add(nonGit
-          ? T("AI 정찰 보고서(영향지도)가 아직 없어요 — 변경 기록이 없는 폴더는 '최근 수정 파일 기준'(전후 비교 없음)으로 지도를 만들어요. 생성은 codex-peek 소스 저장소 폴더의 터미널에서: node scripts/scope-scout-self.js <이 폴더 경로>. 생성되면 몇 초 뒤 여기 자동으로 떠요.","No AI recon report (impact map) yet — folders without change history build maps from recently modified files (no before/after diff). Generate from a terminal in the codex-peek source repo: node scripts/scope-scout-self.js <this folder>. New maps appear here a few seconds after generation.")
-          : T("AI 정찰 보고서(영향지도)가 아직 없어요 — 생성은 codex-peek 소스 저장소 폴더의 터미널에서: node scripts/scope-scout-self.js <프로젝트경로> (별도 과금 없음 — 쓰시던 Claude로 실행) 또는 scope-scout-deepseek.js (DeepSeek 정찰) · scope-scout-codex.js (Codex 정찰). 마켓 설치본에는 이 스크립트가 안 들어 있어요(현 단계는 수동·개발자 플로우). 생성되면 몇 초 뒤 여기 자동으로 떠요.","No AI recon report (impact map) yet — generate from a terminal in the codex-peek source repo: node scripts/scope-scout-self.js <repo> (no separate billing — runs on the Claude you already use), scope-scout-deepseek.js (DeepSeek scout), or scope-scout-codex.js (Codex scout). These scripts are not bundled in the marketplace build (manual/developer flow for now). New maps appear here a few seconds after generation."),"muted");
+          ? T("AI 정찰 보고서(영향지도)가 아직 없어요 — 변경 기록이 없는 폴더는 '최근 수정 파일 기준'(전후 비교 없음)으로 지도를 만들어요. 생성은 터미널에서: " + BC9("scope-scout-self.js") + " <이 폴더 경로>. 생성되면 몇 초 뒤 여기 자동으로 떠요.","No AI recon report (impact map) yet — folders without change history build maps from recently modified files (no before/after diff). Generate from a terminal: " + BC9("scope-scout-self.js") + " <this folder>. New maps appear here a few seconds after generation.")
+          : T("AI 정찰 보고서(영향지도)가 아직 없어요 — 생성은 터미널에서: " + BC9("scope-scout-self.js") + " <프로젝트경로> (별도 과금 없음 — 쓰시던 Claude로 실행) 또는 같은 폴더의 scope-scout-deepseek.js (DeepSeek 정찰) · scope-scout-codex.js (Codex 정찰). 마켓 설치본에도 이 실행 파일이 함께 들어 있어요. 생성되면 몇 초 뒤 여기 자동으로 떠요.","No AI recon report (impact map) yet — generate from a terminal: " + BC9("scope-scout-self.js") + " <repo> (no separate billing — runs on the Claude you already use), or scope-scout-deepseek.js (DeepSeek scout) / scope-scout-codex.js (Codex scout) in the same folder. The marketplace build ships these runners too. New maps appear here a few seconds after generation."),"muted");
         return;
       }
       // 낡은 지도 배지(신선도 — 경고 아님): 최신 지도 생성 이후 지금 변경 중인 파일이 더 바뀌었으면 정직 표기.
@@ -8112,7 +8123,7 @@ class Dashboard {
       if(d.scoutTarget){
         const tg=document.createElement("div"); tg.className="muted";
         tg.textContent = d.scoutTarget.invalid
-          ? T("⚠ 계약에 지정된 정찰 대상 폴더를 찾을 수 없어 이 폴더 기준으로 동작 중 — node scripts/scope-target.js로 재지정하세요.","⚠ The configured scout target folder was not found — falling back to this folder. Re-set it via node scripts/scope-target.js.")
+          ? T("⚠ 계약에 지정된 정찰 대상 폴더를 찾을 수 없어 이 폴더 기준으로 동작 중 — " + BC9("scope-target.js") + " 로 재지정하세요.","⚠ The configured scout target folder was not found — falling back to this folder. Re-set it via " + BC9("scope-target.js") + ".")
           : d.scoutTarget.configured
           ? T("정찰 대상: "+d.scoutTarget.repo+(d.scoutTarget.inherited?" (반대 언어 슬롯에서 상속 — 지도·일지·확인신호가 이 레포 기준)":" (계약 지정 — 지도·일지·확인신호가 이 레포 기준으로 쌓임)"),"Scout target: "+d.scoutTarget.repo+(d.scoutTarget.inherited?" (inherited from the other language slot — maps, journal and confirms accrue for this repo)":" (set in contract — maps, journal and confirms accrue for this repo)"))
           : T("정찰 대상: (미지정 — 이 폴더 기준) 실제 개발이 다른 폴더에서 이뤄지면 지도·일지가 그걸 못 봅니다. 어긋남이 감지되면 아래에 설정 카드가 떠요.","Scout target: (not set — this folder) If development actually happens in another folder, maps & journal won't see it. A setup card appears below when a mismatch is detected.");
@@ -9261,7 +9272,7 @@ async function showCodexHookTrustWarning(state:CodexHookTrustSnapshot,extensionR
 async function runCodexHookInstallFlow(extensionRoot: string): Promise<boolean> {
   await codexHomeReady; // 대시보드·명령 팔레트·자동 제안 어느 입구든 실제 CODEX_HOME 확정이 중앙 선행조건이다.
   const market=path.join(extensionRoot,".agents","plugins","marketplace.json");
-  if(!fs.existsSync(market)){void vscode.window.showErrorMessage(tE("Codex 훅 마켓플레이스 파일이 설치본에 없습니다. node install.js로 다시 설치하세요.","The Codex hook marketplace file is missing from this installation. Reinstall with node install.js."));return false;}
+  if(!fs.existsSync(market)){void vscode.window.showErrorMessage(tE("Codex 훅 마켓플레이스 파일이 설치본에 없습니다 — " + runtimeRepairHint(false) + ".", "The Codex hook marketplace file is missing from this installation — " + runtimeRepairHint(true) + "."));return false;}
   // P-5 마이그레이션 최선행(Codex 반례 봉합): 플러그인이 없거나 legacy 훅이 4개 미만(부분)이어도 hooks.json에
   // 옛 형식 우리 훅이 하나라도 있으면 — 일반 설치 모달(소유권 인수+자동 재기입)에 절대 못 떨어지게 여기서 차단.
   // owned/unowned 분기는 offerCodexHookMigration 내부(무표식=수동 안내만).

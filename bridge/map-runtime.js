@@ -3,18 +3,18 @@
  * VSIX는 scripts/**를 제외하므로 마켓 설치본에는 이 bridge/ 사본만 존재한다(MAP-V2-DESIGN.md 1-15).
  * 순수 코어는 같은 폴더의 project-map.js(out/ 컴파일 산출물의 바이트 사본 — scripts/sync-map-core.js가 생성,
  * 패리티는 테스트로 잠금)를 require한다 — 레포·브릿지 홈 어디서든 동일 상대경로.
- * 사용(CLI 래퍼 scripts/scope-map.js 경유):
- *   node scripts/scope-map.js <repo> inventory  — 결정론 인벤토리(LLM 호출 0)
- *   node scripts/scope-map.js <repo> init       — draft topology 신설(v2 — 이미 있으면 실패)
- *   node scripts/scope-map.js <repo> status     — coverage 표시(v1 파일이면 migrate 안내)
- *   node scripts/scope-map.js <repo> render     — MAP.md 생성 뷰 재생성
- *   node scripts/scope-map.js <repo> migrate    — v1 topology를 v2로 결정론 변환(1회·명시 명령만 — 자동 변환 없음)
+ * 사용(CLI 껍데기 bridge/scope-map.js — scripts/scope-map.js 는 얇은 래퍼 — 경유 · 실행 안내는 bridgeCmd 정본):
+ *   node <브릿지 홈>/scope-map.js <repo> inventory  — 결정론 인벤토리(LLM 호출 0)
+ *   node <브릿지 홈>/scope-map.js <repo> init       — draft topology 신설(v2 — 이미 있으면 실패)
+ *   node <브릿지 홈>/scope-map.js <repo> status     — coverage 표시(v1 파일이면 migrate 안내)
+ *   node <브릿지 홈>/scope-map.js <repo> render     — MAP.md 생성 뷰 재생성
+ *   node <브릿지 홈>/scope-map.js <repo> migrate    — v1 topology를 v2로 결정론 변환(1회·명시 명령만 — 자동 변환 없음)
  * 정본 쓰기는 fail-closed 잠금(withFileLockStrict). 편집 제안·적용 배선은 후속(P2).
  */
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { loadLang, withFileLockStrict, wsKeyFor } = require(path.join(__dirname, "contract-lib.js"));
+const { loadLang, withFileLockStrict, wsKeyFor, bridgeCmd } = require(path.join(__dirname, "contract-lib.js"));
 const PM = require(path.join(__dirname, "project-map.js"));
 const tB = (ko, en) => (loadLang() === "en" ? en : ko);
 
@@ -244,9 +244,11 @@ const V1_HINT_KO = "v1 topology 감지 — `migrate`로 v2 전환(1회·결정�
 const V1_HINT_EN = "v1 topology detected — convert with `migrate` (one-shot, deterministic: assigns mapId, drops lastSeenAt). No automatic conversion.";
 
 // CLI 본체 — 종료 코드를 반환(process.exit는 래퍼 몫: 테스트·재사용성).
-function runCli(repoArg, cmdArg, extraArgs) {
+function runCli(repoArg, cmdArg, extraArgs, opts) {
   const cmd = cmdArg || "status";
-  if (!repoArg) { console.error(tB("사용: node scripts/scope-map.js <repo> [inventory|init|status|render|migrate|cutover --confirm-windows-reloaded [--confirm-unmigrated <N>]]", "Usage: node scripts/scope-map.js <repo> [inventory|init|status|render|migrate|cutover --confirm-windows-reloaded [--confirm-unmigrated <N>]]")); return 2; }
+  // 실행 안내의 자기 경로: CLI 껍데기(scope-map.js)가 실제로 불린 경로를 넘기면 그것을, 아니면 브릿지 홈 절대 경로(1판 blocker: 레포 래퍼가 빈 브릿지 홈을 안내하던 반례)
+  const selfCmd = (opts && typeof opts.selfCmd === "string" && opts.selfCmd) || bridgeCmd("scope-map.js");
+  if (!repoArg) { console.error(tB("사용: " + selfCmd + " <repo> [inventory|init|status|render|migrate|cutover --confirm-windows-reloaded [--confirm-unmigrated <N>]]", "Usage: " + selfCmd + " <repo> [inventory|init|status|render|migrate|cutover --confirm-windows-reloaded [--confirm-unmigrated <N>]]")); return 2; }
   const repo = path.resolve(repoArg);
   const ctx = ctxFor(repo); // C-6(P3b): 잠금 구성의 단일 출처 — runCli 자체 LOCK 조립 폐기(별칭 이원 잠금 반례 봉합)
 
@@ -341,7 +343,7 @@ function runCli(repoArg, cmdArg, extraArgs) {
     console.log(tB("bootstrap 결과: ", "bootstrap result: ") + st.state + (st.rs && st.rs.error ? " — " + st.rs.error : ""));
     if (code === 3) {
       if (st.state === "bootstrap-running") return 0; // 진짜 경쟁(타 자식 작업 중)만 정상
-      const fu = "node scripts/scope-map.js \"" + repo + "\" force-unlock";
+      const fu = selfCmd + " \"" + repo + "\" force-unlock";
       if (st.state === "state-lock-blocked" && st.lock) {
         console.error(st.lockState === "unreadable"
           ? tB("잠금 파일을 읽을 수 없음: " + st.lock + " — 일시적일 수 있으니 삭제하지 말고 잠시 후 재시도하라(지속되면 접근 권한 확인).", "Lock file cannot be read: " + st.lock + " — may be transient; do not delete it, retry shortly (check permissions if it persists).")
@@ -372,7 +374,7 @@ function runCli(repoArg, cmdArg, extraArgs) {
       else if (a.needs) { okAll = false; console.error(tB("격리 보류(" + a.state + "): " + a.lock + " — 보유자 사망을 입증할 수 없다. 활성 프로세스가 없음을 직접 확인했다면 " + a.needs + " 를 붙여 재실행하라.", "Held back (" + a.state + "): " + a.lock + " — holder death cannot be proven. If you verified no process is active, re-run with " + a.needs + ".")); }
       else { okAll = false; console.error(tB("격리 거부(" + a.state + "): " + a.lock + " — 보유자가 살아 있거나 판독/판별이 불가하다. 삭제하지 말고 잠시 후 재시도하라.", "Refused (" + a.state + "): " + a.lock + " — the holder may be alive or cannot be read/verified. Do not delete it; retry shortly.")); }
     }
-    if (okAll) console.log(tB("이제 bootstrap을 다시 실행하라: node scripts/scope-map.js \"" + repo + "\" bootstrap", "Now re-run: node scripts/scope-map.js \"" + repo + "\" bootstrap"));
+    if (okAll) console.log(tB("이제 bootstrap을 다시 실행하라: " + selfCmd + " \"" + repo + "\" bootstrap", "Now re-run: " + selfCmd + " \"" + repo + "\" bootstrap"));
     return okAll ? 0 : 1;
   }
   if (["legacy-scan", "binding-confirm", "binding-rebind", "binding-list", "binding-discard"].includes(cmd)) {

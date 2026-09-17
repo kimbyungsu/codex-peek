@@ -6,17 +6,18 @@
  * 언어 슬롯 분리(2026-07-09 사용자 결정): 한글 모드와 영어 모드는 사실상 다른 사용자 — 설정은 '현재 언어
  * 슬롯'에만 저장한다(규칙·기본지침과 동일 원칙 · API 키만 전역). 반대 슬롯에 다른 값이 있으면 고지만 한다.
  *
- * 사용: node scripts/scope-gate.js <repo> [status|on|off]
+ * 사용: node <브릿지 홈>/scope-gate.js <repo> [status|on|off]
  */
 const fs = require("fs");
 const path = require("path");
+const SELF_CMD = 'node "' + String(process.argv[1] || __filename).replace(/\\/g, "/") + '"'; // 실행 안내=실제로 부른 경로(설치본·래퍼 어느 쪽이든 그대로) — 정찰 층 이관 2026-09-16
 const { contractFileFor, loadContract, normScoutGate, normScoutMode, loadLang, updateContractPatch } = require(path.join(__dirname, "contract-lib.js"));
 const tB = (ko, en) => (loadLang() === "en" ? en : ko); // CLI 출력도 한/영 쌍(2026-07-09)
 
 const repoArg = process.argv[2];
 const cmd = process.argv[3] || "status";
 if (!repoArg || !["status", "on", "off"].includes(cmd)) {
-  console.error(tB("사용: node scripts/scope-gate.js <repo> [status|on|off]","Usage: node scripts/scope-gate.js <repo> [status|on|off]"));
+  console.error(tB("사용: " + SELF_CMD + " <repo> [status|on|off]","Usage: " + SELF_CMD + " <repo> [status|on|off]"));
   process.exit(2);
 }
 const repo = path.resolve(repoArg);

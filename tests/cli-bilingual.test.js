@@ -34,7 +34,7 @@ ok(note.status === 0 && /Journal empty/.test(note.stdout), "scope-ledger-note li
 const rec = run(homeEn, [cli("scope-reconcile.js"), ws, "list"]);
 ok(rec.status === 0 && /No pending proposals/.test(rec.stdout), "scope-reconcile list → 영어(No pending proposals)");
 const mig = run(homeEn, [cli("scope-ledger-migrate.js")]);
-ok(mig.status === 2 && /Usage: node scripts\/scope-ledger-migrate\.js/.test(mig.stderr), "scope-ledger-migrate 인자 없음 → 영어 usage");
+ok(mig.status === 2 && /Usage: node ".*scope-ledger-migrate\.js" <fromWs>/.test(mig.stderr), "scope-ledger-migrate 인자 없음 → 영어 usage");
 
 console.log("[2] 실행 — 언어 파일 없으면 ko 기본(기존 사용자 무회귀)");
 const wsKo = path.join(homeKo, "ws");

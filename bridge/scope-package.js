@@ -1,12 +1,13 @@
 /*
  * 자료 패키지 빌더 드라이버(Phase 1, 개발용 CLI) — 결정론 수집만 하고 조립은 정본(out/scope-package.js)에 맡긴다.
- * 사용: node scripts/scope-package.js <repo경로> [--json]
+ * 사용: node <브릿지 홈>/scope-package.js <repo경로> [--json]
  *   기본 출력=탐색자에게 먹일 마크다운(Phase 2 self 팔 실험의 입력). --json이면 구조체 그대로.
  * 수집원(전부 로컬): git status/diff/log(이력) · git grep(바뀐 식별자 역참조, untracked는 제외되므로 diff에 이미 포함) ·
  *   package.json test 체인+tests 글롭 · ~/.codex-bridge/integrity.json 최근 실패 · (있으면) MAP.md/docs/MAP.md.
  */
 const fs = require("fs");
 const path = require("path");
+const SELF_CMD = 'node "' + String(process.argv[1] || __filename).replace(/\\/g, "/") + '"'; // 실행 안내=실제로 부른 경로(설치본·래퍼 어느 쪽이든 그대로) — 정찰 층 이관 2026-09-16
 const os = require("os");
 const { spawnSync } = require("child_process");
 const { extractDiffTokens, buildPackage, renderPackageMarkdown, redactSensitiveDiff, isSensitivePath, PKG_DEFAULTS } = require(path.join(__dirname, "scope-package-core.js"));
@@ -176,7 +177,7 @@ function collectCommon(repo) {
     const trace = (aT === "present" || bT === "present") ? "present" : (aT === "unreadable" || bT === "unreadable") ? "unreadable" : "absent";
     if (trace !== "absent") {
       mapContentBlockedKey = trace === "unreadable" ? "trace-unreadable" : "runtime-outdated";
-      mapContentBlocked = trace === "unreadable" ? "전환 흔적 판독 불가(권한 확인 필요)" : "전환된 프로젝트인데 MAP 런타임 판독 불가(node install.js 필요)"; // legacy 공급 금지(공통 (a))
+      mapContentBlocked = trace === "unreadable" ? "전환 흔적 판독 불가(권한 확인 필요)" : "전환된 프로젝트인데 MAP 런타임 판독 불가(" + require(path.join(__dirname, "contract-lib.js")).runtimeRepairHint(false) + ")"; // legacy 공급 금지(공통 (a))
     } else {
       for (const c of ["docs/MAP.md", "MAP.md"]) {
         try { mapContent = fs.readFileSync(path.join(repo, c), "utf8"); break; } catch { /* 다음 후보 */ }
@@ -342,7 +343,7 @@ module.exports = { collectPackage, captureSeedBaseline, collectCommon, cliMain }
 function cliMain() {
   const repo = process.argv[2];
   const asJson = process.argv.includes("--json");
-  if (!repo) { console.error("사용: node scripts/scope-package.js <repo경로> [--json]"); process.exit(2); }
+  if (!repo) { console.error("사용: " + SELF_CMD + " <repo경로> [--json]"); process.exit(2); }
   const pkg = collectPackage(repo);
   if (!pkg) { console.error("git 저장소가 아니거나 git 실패"); process.exit(1); }
   process.stdout.write(asJson ? JSON.stringify(pkg, null, 2) : renderPackageMarkdown(pkg, loadLang()));

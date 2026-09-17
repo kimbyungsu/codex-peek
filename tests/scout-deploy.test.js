@@ -55,11 +55,40 @@ for (const f of LIB) ok(require(path.join(ROOT, "scripts", f)) === require(path.
   const drvW = require(path.join(ROOT, "scripts", "scope-package.js"));
   ok(typeof drvW.collectPackage === "function" && typeof drvW.cliMain === "function", "scope-package 래퍼 — collectPackage·cliMain 노출");
 }
+// usage 는 실제로 불린 경로(process.argv[1])를 보여 주므로(2026-09-16 · D-2026-09-16-bridge-home-hints) scripts/·bridge/ 폴더 부분만 정규화해 비교
+const normSelf = (t) => String(t).replace(/node "[^"]*[\\/](?:scripts|bridge)[\\/]([^"]+)"/g, 'node "<dir>/$1"').trim();
 for (const f of CLI) { // 인자 없는 호출(usage 경로) — 종료 코드·stderr 가 본체와 같다(argv 는 래퍼가 그대로 통과)
   const env = { ...process.env, CODEX_BRIDGE_HOME: fs.mkdtempSync(path.join(os.tmpdir(), "sdw-")) };
   const w = spawnSync(process.execPath, [path.join(ROOT, "scripts", f)], { encoding: "utf8", env, timeout: 60000 });
   const b = spawnSync(process.execPath, [path.join(ROOT, "bridge", f)], { encoding: "utf8", env, timeout: 60000 });
-  ok(w.status === b.status && String(w.stderr).trim() === String(b.stderr).trim(), f + " — 래퍼/본체 무인자 실행: 종료 " + w.status + "=" + b.status + " · stderr 동일");
+  ok(w.status === b.status && normSelf(w.stderr) === normSelf(b.stderr), f + " — 래퍼/본체 무인자 실행: 종료 " + w.status + "=" + b.status + " · stderr 동일(자기 경로만 다름)");
+  const both = String(w.stderr) + String(b.stderr);
+  ok(!/node scripts\//.test(both) && (!/사용:|Usage:/.test(both) || /node "[^"]+"/.test(both)), f + " — usage 가 저장소 상대 경로가 아니라 실제 경로(usage 를 안 찍는 도구는 상대 경로 부재만)");
+}
+
+console.log("[3b] 배포 파일 전체 — 레포 상대 실행 안내 0(1판 blocker: map-enrich usage) · 웹뷰 BC9 는 HTML 생성 시 주입 · scope-map 은 자기 경로 전달");
+{
+  for (const f of require(path.join(ROOT, "install.js")).BRIDGE_SCRIPTS) {
+    const s = fs.readFileSync(path.join(ROOT, "bridge", f), "utf8");
+    // 주석 줄은 제외 — bare `node <파일>.js` 는 브릿지 홈 밖에서 실행 불가(확인검증 blocker 2026-09-17). `node install.js` 도 마켓 설치본엔 없으므로 설치 출처별 안내(runtimeRepairHint) 본문 밖에는 0(3판 blocker)
+    const helperOnly = f === "contract-lib.js" ? s.replace(/function runtimeRepairHint\(en\) \{[\s\S]*?\n\}/, "") : s;
+    const bare = helperOnly.split(/\r?\n/).filter((ln) => !/^\s*(\/\/|\*|\/\*)/.test(ln) && /node [a-z-]+\.js/.test(ln));
+    ok(!/node scripts\//.test(s) && !/node bridge\//.test(s) && bare.length === 0, f + " — `node scripts/`·`node bridge/`·bare `node <파일>.js` 안내 없음" + (bare.length ? " (발견: " + bare[0].trim().slice(0, 80) + ")" : ""));
+  }
+  const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
+  { // 확장 UI 도 같은 규칙 — 설치 출처별 복구 안내 helper 본문 밖에 bare `node install.js` 0(3판 blocker: 4084·4687·9268)
+    const extNoHelper = ext.replace(/function runtimeRepairHint\(en: boolean\): string \{[\s\S]*?\n\}/, "");
+    const bareExt = extNoHelper.split(/\r?\n/).filter((ln) => !/^\s*(\/\/|\*|\/\*)/.test(ln) && /node install\.js/.test(ln));
+    ok(/function runtimeRepairHint\(en: boolean\)/.test(ext) && bareExt.length === 0, "extension.ts — 복구 안내는 runtimeRepairHint(설치 출처별) 경유·bare `node install.js` 0" + (bareExt.length ? " (발견: " + bareExt[0].trim().slice(0, 80) + ")" : ""));
+    const CLh = require(path.join(ROOT, "bridge", "contract-lib.js"));
+    ok(/Reload Window/.test(CLh.runtimeRepairHint(true)) || /install\.js/.test(CLh.runtimeRepairHint(true)), "contract-lib runtimeRepairHint — 표식 유무에 따라 둘 중 하나(현재 홈 기준)");
+  }
+  ok(/function BC9\(f\)\{ return 'node "' \+ \$\{JSON\.stringify\(BRIDGE_DIR\.replace/.test(ext) && !/d\.bridgeDir/.test(ext), "웹뷰 BC9 — 확장이 HTML 생성 시 브릿지 홈 절대 경로를 박음(콜백 지역 d 비의존)");
+  const sm = fs.readFileSync(path.join(ROOT, "bridge", "scope-map.js"), "utf8");
+  ok(/\{ selfCmd: SELF_CMD \}/.test(sm), "scope-map 껍데기 — 실제로 불린 경로를 runCli 에 전달");
+  const H = fs.mkdtempSync(path.join(os.tmpdir(), "sdm-"));
+  const r = spawnSync(process.execPath, [path.join(ROOT, "scripts", "scope-map.js")], { encoding: "utf8", env: { ...process.env, CODEX_BRIDGE_HOME: H }, timeout: 60000 });
+  ok(r.status === 2 && /scripts[\\/]scope-map\.js"/.test(r.stderr) && !r.stderr.includes(H.replace(/\\/g, "/")), "레포 래퍼 무인자 실행 — usage 가 빈 브릿지 홈이 아니라 실제 호출 경로(1판 반례 재현 차단)");
 }
 
 console.log("[4] 코어 사본 패리티");

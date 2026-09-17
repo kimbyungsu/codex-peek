@@ -16,7 +16,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadContract, scoutMapStatus, wsKeyFor, atomicWrite, resolveScoutRepo, loadLang, scoutHealthLine, readScoutTargetEvidence, detectScoutTargetDrift, scoutArmView } = require("./contract-lib.js");
+const { loadContract, scoutMapStatus, wsKeyFor, atomicWrite, resolveScoutRepo, loadLang, scoutHealthLine, readScoutTargetEvidence, detectScoutTargetDrift, scoutArmView, bridgeCmd, runtimeRepairHint } = require("./contract-lib.js");
 const tB = (ko, en) => (loadLang() === "en" ? en : ko); // 훅 문구도 한/영 쌍(2026-07-09 사용자 지적)
 
 const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(os.homedir(), ".codex-bridge");
@@ -70,7 +70,7 @@ function main(raw) {
   if (decision.action === "block") {
     const af2 = path.join(ATTEMPTS_DIR, String(p.session_id || "nosession").replace(/[^0-9A-Za-z._-]/g, "_").slice(0, 32) + ".json");
     try { fs.mkdirSync(ATTEMPTS_DIR, { recursive: true }); const n2 = (() => { try { return (JSON.parse(fs.readFileSync(af2, "utf8")).n | 0) || 0; } catch { return 0; } })(); atomicWrite(af2, JSON.stringify({ n: n2 + 1, ts: new Date().toISOString() })); } catch { /* 기록 실패해도 차단 진행 */ }
-    process.stderr.write(tB("[탐색 게이트 · plan] ", "[Recon gate · plan] ") + decision.msg.replace(/<저장소>|<repo>/g, '"' + target + '"') + tB(` (이 게이트는 세션당 ${BLOCKS_PER_SESSION}회까지만 막고 이후 통과 · 끄기: node scripts/scope-gate.js "${ws}" off)\n`, ` (This gate blocks at most ${BLOCKS_PER_SESSION}× per session, then passes · turn off: node scripts/scope-gate.js "${ws}" off)\n`));
+    process.stderr.write(tB("[탐색 게이트 · plan] ", "[Recon gate · plan] ") + decision.msg.replace(/<저장소>|<repo>/g, '"' + target + '"') + tB(` (이 게이트는 세션당 ${BLOCKS_PER_SESSION}회까지만 막고 이후 통과 · 끄기: ${bridgeCmd("scope-gate.js", `"${ws}" off`)})\n`, ` (This gate blocks at most ${BLOCKS_PER_SESSION}× per session, then passes · turn off: ${bridgeCmd("scope-gate.js", `"${ws}" off`)})\n`));
     process.exit(2);
   }
   // decision.action === "legacy" → 기존 판정기(아래 무변경 — decideGate가 전환 흔적 재검사까지 마친 뒤에만 도달)
@@ -107,20 +107,20 @@ function main(raw) {
   // 실효 담당의 러너를 안내(deepseek 강등이면 기본 유지 — scoutArmView가 정직 강등. P6: codex 포함).
   let runner = "scope-scout-self.js";
   try { const e9 = scoutArmView(ws).eff; if (e9 === "deepseek") runner = "scope-scout-deepseek.js"; else if (e9 === "codex") runner = "scope-scout-codex.js"; } catch { /* 판독 실패=기본 */ }
-  let cmd = `node scripts/${runner} "${target}"`;
+  let cmd = bridgeCmd(runner, `"${target}"`);
   let driftNote = "";
   try {
     const drift = detectScoutTargetDrift(target, readScoutTargetEvidence(ws));
     if (drift.drift) {
       driftNote = tB(
-        ` ⚠ 대상 어긋남 의심: 최근 검증 인용 다수가 ${drift.repo} 소속 — 먼저 \`node scripts/scope-target.js "${ws}" set "${drift.repo}"\` 로 정찰 대상을 지정하라(현재 언어 슬롯).`,
-        ` ⚠ Target mismatch suspected: recent verification citations mostly live under ${drift.repo} — first run \`node scripts/scope-target.js "${ws}" set "${drift.repo}"\` to set the scout target (current language slot).`);
-      cmd = `node scripts/${runner} "${drift.repo}"`;
+        ` ⚠ 대상 어긋남 의심: 최근 검증 인용 다수가 ${drift.repo} 소속 — 먼저 \`${bridgeCmd("scope-target.js", `"${ws}" set "${drift.repo}"`)}\` 로 정찰 대상을 지정하라(현재 언어 슬롯).`,
+        ` ⚠ Target mismatch suspected: recent verification citations mostly live under ${drift.repo} — first run \`${bridgeCmd("scope-target.js", `"${ws}" set "${drift.repo}"`)}\` to set the scout target (current language slot).`);
+      cmd = bridgeCmd(runner, `"${drift.repo}"`);
     }
   } catch { /* 자기진단 실패 — 기존 안내 유지 */ }
   process.stderr.write(tB(
-    `[탐색 게이트 · plan] 플랜 확정 전에 영향지도부터 — ${why}.${driftNote} codex-peek 소스 저장소에서 \`${cmd}\` 실행 후 다시 플랜을 확정하라. (이 게이트는 세션당 ${BLOCKS_PER_SESSION}회까지만 막고 이후 통과 · 끄기: node scripts/scope-gate.js "${ws}" off)\n`,
-    `[Recon gate · plan] Get an impact map before confirming the plan — ${why}.${driftNote} Run \`${cmd}\` from the codex-peek source repo, then confirm the plan again. (This gate blocks at most ${BLOCKS_PER_SESSION}× per session, then passes · turn off: node scripts/scope-gate.js "${ws}" off)\n`) + healthTail);
+    `[탐색 게이트 · plan] 플랜 확정 전에 영향지도부터 — ${why}.${driftNote} \`${cmd}\` 실행 후 다시 플랜을 확정하라. (이 게이트는 세션당 ${BLOCKS_PER_SESSION}회까지만 막고 이후 통과 · 끄기: ${bridgeCmd("scope-gate.js", `"${ws}" off`)})\n`,
+    `[Recon gate · plan] Get an impact map before confirming the plan — ${why}.${driftNote} Run \`${cmd}\`, then confirm the plan again. (This gate blocks at most ${BLOCKS_PER_SESSION}× per session, then passes · turn off: ${bridgeCmd("scope-gate.js", `"${ws}" off`)})\n`) + healthTail);
   process.exit(2); // 차단 — stderr가 Claude에게 피드백됨(공식 문서 명시)
 }
 
@@ -132,7 +132,7 @@ function main(raw) {
 function decideGate(inp) {
   const t9 = (ko, en9) => (inp.en ? en9 : ko);
   if (inp.auth === null) {
-    if (inp.trace !== "absent") return { action: "pass", log: t9("전환된 프로젝트인데 MAP 런타임 판독 불가 — legacy 판정 공급 금지·통과(node install.js 필요)", "project cut over but MAP runtime unreadable — no legacy verdict, passing (run node install.js)") };
+    if (inp.trace !== "absent") return { action: "pass", log: t9("전환된 프로젝트인데 MAP 런타임 판독 불가 — legacy 판정 공급 금지·통과(" + runtimeRepairHint(false) + ")", "project cut over but MAP runtime unreadable — no legacy verdict, passing (" + runtimeRepairHint(true) + ")") };
     return { action: "legacy" };
   }
   if (inp.auth.st === "blocked") return { action: "pass", log: t9("권위 판독 차단(" + (inp.auth.reasonKey || inp.auth.reason || "") + ") — 무차단 통과(숨김 금지: 로그 기록)", "authority blocked (" + (inp.auth.reasonKey || inp.auth.reason || "") + ") — passing without block (logged)") };

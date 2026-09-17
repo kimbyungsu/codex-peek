@@ -28,6 +28,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const SELF_CMD = 'node "' + String(process.argv[1] || __filename).replace(/\\/g, "/") + '"'; // 실행 안내=실제로 불린 경로(2026-09-17 확인검증 blocker)
 const crypto = require("crypto");
 const { spawn, spawnSync } = require("child_process");
 const CL = require(path.join(__dirname, "contract-lib.js"));
@@ -324,8 +325,8 @@ function maybeNote(ws, r) {
   const prev = readJson3(f);
   if (prev.st === "ok" && prev.data.sig === sig) return null; // 같은 상태 재고지 억제(시간 상수 0)
   try { fs.mkdirSync(RUN_DIR, { recursive: true }); CL.atomicWrite(f, JSON.stringify({ sig, at: new Date().toISOString() })); } catch { /* 고지 실패 무해 */ }
-  const manual = "node scripts/scope-map.js \"" + r.repo + "\" bootstrap";
-  const fu = "node scripts/scope-map.js \"" + r.repo + "\" force-unlock";
+  const manual = CL.bridgeCmd("scope-map.js", "\"" + r.repo + "\" bootstrap");
+  const fu = CL.bridgeCmd("scope-map.js", "\"" + r.repo + "\" force-unlock");
   if (r.spawned && r.mode === "init") return tB("[Project MAP] 구조 지도가 없어 백그라운드 생성을 시작했다(대화 비차단 — 결정론 스캔·LLM 0·전송 없음).", "[Project MAP] No structure map — background creation started (non-blocking; deterministic scan, no LLM, no network).");
   if (r.spawned && r.mode === "ensure") return tB("[Project MAP] 기존 지도에 의미 보강 대기표를 백그라운드로 채운다(소비는 후속 단계).", "[Project MAP] Backfilling the enrichment queue for the existing map in the background (consumed in a later phase).");
   if (r.reason === "pending-consent") return tB("[Project MAP] 3트랙이 켜져 있지만 지도 자동 생성은 사전 동의가 필요하다 — 동의하려면 직접 실행: " + manual + " (실행 자체가 동의로 기록됨. 대시보드에서 3트랙을 껐다 켜며 승인해도 된다.)", "[Project MAP] 3-track is on, but map auto-creation needs prior consent — to consent, run: " + manual + " (running it records consent; re-enabling 3-track in the dashboard also works).");
@@ -339,7 +340,7 @@ function maybeNote(ws, r) {
     if (r.lockState === "dead-valid" && String(r.lock || "").endsWith(".funlock")) return tB("[Project MAP] 죽은 강제 복구 잔재가 남아 자동 경로를 멈췄다(" + r.lock + ") — " + fu + " 를 실행하면 재확인 후 자체 회수한다.", "[Project MAP] A dead force-recovery lock remains (" + r.lock + ") — run " + fu + "; it re-verifies and reclaims it automatically.");
     return tB("[Project MAP] 회수 잠금이 남아 자동 경로를 멈췄다(" + (r.lock || "") + ") — 직접 지우지 말고 " + manual + " 를 실행하라(보유자 사망을 재확인한 뒤 안전하게 회수한다).", "[Project MAP] A stale reclaim lock halted the auto path (" + (r.lock || "") + ") — do not delete it by hand; run " + manual + " (it re-verifies the holder is dead and reclaims safely).");
   }
-  if (r.reason === "pipeline-recovery-pending" || r.reason === "pipeline-wal-unreadable") return tB("[Project MAP] 지도 수정 파이프라인의 복구 대기 장부가 남아 자동 갱신을 보류한다 — 복구: node scripts/scope-map.js \"" + r.repo + "\" recover", "[Project MAP] A pending pipeline recovery journal is holding automatic updates — recover with: node scripts/scope-map.js \"" + r.repo + "\" recover");
+  if (r.reason === "pipeline-recovery-pending" || r.reason === "pipeline-wal-unreadable") return tB("[Project MAP] 지도 수정 파이프라인의 복구 대기 장부가 남아 자동 갱신을 보류한다 — 복구: " + CL.bridgeCmd("scope-map.js", "\"" + r.repo + "\" recover"), "[Project MAP] A pending pipeline recovery journal is holding automatic updates — recover with: " + CL.bridgeCmd("scope-map.js", "\"" + r.repo + "\" recover"));
   if (r.reason === "state-unreadable") return tB("[Project MAP] 진행 상태 파일을 읽을 수 없다 — 일시적일 수 있으니 잠시 후 재시도하라(지속되면 접근 권한 확인). 자동 경로는 그동안 정지한다.", "[Project MAP] The bootstrap state file cannot be read — this may be transient; retry shortly (check file permissions if it persists). The auto path stays halted meanwhile.");
   if (r.reason === "state-invalid") return tB("[Project MAP] 진행 상태 파일이 손상됐다 — 자동 경로 정지. 활성 자동 생성이 없음을 확인한 뒤 강제 복구: " + fu + " --confirm-corrupt, 이후 " + manual + " 로 재생성.", "[Project MAP] The bootstrap state file is corrupted — auto path halted. Confirm no active creation is running, then force-recover: " + fu + " --confirm-corrupt, and re-create with " + manual + ".");
   if (r.changedFrom) return tB("[Project MAP] 정찰 대상이 바뀌었다(이전: " + r.changedFrom + ") — 새 대상 기준으로 지도 상태를 재평가했다.", "[Project MAP] Scout target changed (was: " + r.changedFrom + ") — map state re-evaluated for the new target.");
@@ -652,6 +653,6 @@ if (require.main === module) {
   if (mode === "run" && repo) process.exit(runChild(repo, false));
   if (mode === "run-manual" && repo) process.exit(require(path.join(__dirname, "map-runtime.js")).runCli(repo, "bootstrap")); // 단일 경로(6차 #3) — 종료 코드·잔존 잠금 안내가 진입점마다 갈리면 안 됨
   if (mode === "status" && repo) { const st = bootstrapStatusFor(repo); console.log(st.state + (st.rs && st.rs.error ? " — " + st.rs.error : "")); process.exit(0); }
-  console.error("usage: node map-bootstrap.js run|run-manual|status <repo>");
+  console.error("usage: " + SELF_CMD + " run|run-manual|status <repo>");
   process.exit(2);
 }

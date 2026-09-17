@@ -179,8 +179,8 @@ function buildProvenanceNotice(ws, c) {
     if (!repo || !fs.existsSync(indexFileFor(repo))) return null;
     const en = CL.loadLang() === "en";
     return en
-      ? "[Design provenance] For why/history questions (past decisions, \"why is it like this\"), run `node codex-bridge.js why \"<question>\"` before concluding — the query itself is receipted, even at 0 hits."
-      : "[설계 경위] 경위(왜/결정 이력) 질문이면 결론 전에 `node codex-bridge.js why \"<질문>\"` 선조회 — 0건이어도 조회 자체가 영수증으로 남습니다.";
+      ? "[Design provenance] For why/history questions (past decisions, \"why is it like this\"), run `" + require(path.join(__dirname, "contract-lib.js")).bridgeCmd("codex-bridge.js") + " why \"<question>\"` before concluding — the query itself is receipted, even at 0 hits."
+      : "[설계 경위] 경위(왜/결정 이력) 질문이면 결론 전에 `" + require(path.join(__dirname, "contract-lib.js")).bridgeCmd("codex-bridge.js") + " why \"<질문>\"` 선조회 — 0건이어도 조회 자체가 영수증으로 남습니다.";
   } catch { return null; }
 }
 

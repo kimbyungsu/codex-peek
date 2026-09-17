@@ -55,7 +55,7 @@ console.log("[2] 게이트 on + 지도 없음 → 차단(exit 2) + 지시 문구
 fs.writeFileSync(contractFileFor(ws), JSON.stringify({ scoutMode: "on", scoutGate: "plan" }));
 r = runHook(undefined, "sess-A");
 ok(r.status === 2 && /영향지도부터/.test(r.stderr) && /scope-scout-self/.test(r.stderr), "1회차 → 차단 + 지도 생성 지시");
-ok(/끄기: node scripts\/scope-gate/.test(r.stderr), "우회(끄기) 안내 포함 — 잠금 아님");
+ok(/끄기: node ".*scope-gate\.js" ".*" off/.test(r.stderr), "우회(끄기) 안내 포함 — 잠금 아님");
 r = runHook(undefined, "sess-A");
 ok(r.status === 2, "2회차 → 차단(상한 내)");
 r = runHook(undefined, "sess-A");

@@ -54,8 +54,8 @@ ok(CL.scoutMapStatus(ws).state === "fresh", "전제: 대상(세션 폴더) 지�
 const c3 = { scoutMode: "on" };
 const d1 = CL.buildScoutDirective(ws, c3);
 ok(!!d1 && /대상 어긋남 의심/.test(d1), "fresh인데도 어긋남 지시가 나감(조기 반환보다 우선)");
-ok(d1.includes(`scope-target.js "${ws}" set "${devRepo}"`), "지시 명령이 실제 CLI 문법(set) — 잘못된 문법이면 자기교정 중심 명령이 실패(Codex 반례 잠금)");
-ok(d1.includes(`scope-scout-self.js "${devRepo}"`) && /언어 슬롯/.test(d1), "후속 지도 명령은 '의심 레포' 기준 + 언어 슬롯 저장 효과 명시(무동의 자동 쓰기와 구분)");
+ok(d1.includes(`scope-target.js" "${ws}" set "${devRepo}"`), "지시 명령이 실제 CLI 문법(set) · 브릿지 홈 절대 경로(2026-09-16) — 잘못된 문법이면 자기교정 중심 명령이 실패(Codex 반례 잠금)");
+ok(d1.includes(`scope-scout-self.js" "${devRepo}"`) && /언어 슬롯/.test(d1), "후속 지도 명령은 '의심 레포' 기준 + 언어 슬롯 저장 효과 명시(무동의 자동 쓰기와 구분)");
 ok(CL.buildScoutDirective(ws, c3) === null, "같은 제안 두 번째 → 침묵(1회 규칙 — 스팸 방지)");
 const ev2 = CL.readScoutTargetEvidence(ws);
 ok(ev2.advisedKeys && Object.keys(ev2.advisedKeys).length === 1 && Object.keys(ev2.advisedKeys)[0].split("|").length === 3, "제안 기억 키=언어|현재 대상|제안 대상(언어 슬롯 전환 시 영구 침묵 — Codex 라이브 반례 잠금)");
@@ -129,7 +129,7 @@ const r5 = spawnSync(process.execPath, [HOOK], {
   encoding: "utf8", env: { ...process.env, CODEX_BRIDGE_HOME: dir, CLAUDE_PROJECT_DIR: ws5 },
 });
 ok(r5.status === 2 && /대상 어긋남 의심/.test(r5.stderr) && r5.stderr.includes(`set "${devRepo}"`), "차단 문구에 '대상 지정 먼저'+set 문법");
-ok(r5.stderr.includes(`scope-scout-self.js "${devRepo}"`) && !r5.stderr.includes(`scope-scout-self.js "${ws5}"`), "지도 명령이 의심 레포 기준(엉뚱한 레포 안내 금지 — Codex 반례 잠금)");
+ok(r5.stderr.includes(`scope-scout-self.js" "${devRepo}"`) && !r5.stderr.includes(`scope-scout-self.js" "${ws5}"`), "지도 명령이 의심 레포 기준(엉뚱한 레포 안내 금지 — Codex 반례 잠금)");
 
 console.log("[6] 수집 배선·동형·문서 — 소스 계약");
 const bridgeSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");

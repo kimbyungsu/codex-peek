@@ -3,17 +3,18 @@
  * 원칙(검증모델 합의 2026-07-08): 조용한 병합 금지 — --dry로 원본/대상/이벤트 수/중복을 먼저 보여주고,
  * 실행 시에도 원본은 지우지 않는다(복사·보존 — 감사 추적 유지). 중복(ts+type+sig 동일)은 건너뜀 → 멱등.
  *
- * 사용: node scripts/scope-ledger-migrate.js <fromWs> <toRepo> [--dry]
+ * 사용: node <브릿지 홈>/scope-ledger-migrate.js <fromWs> <toRepo> [--dry]
  */
 const fs = require("fs");
 const path = require("path");
+const SELF_CMD = 'node "' + String(process.argv[1] || __filename).replace(/\\/g, "/") + '"'; // 실행 안내=실제로 부른 경로(설치본·래퍼 어느 쪽이든 그대로) — 정찰 층 이관 2026-09-16
 const { readLedgerEventsText, appendLedgerEvent, ledgerEventsFileFor, loadLang } = require(path.join(__dirname, "contract-lib.js"));
 const tB = (ko, en) => (loadLang() === "en" ? en : ko); // CLI 출력도 한/영 쌍(2026-07-09)
 
 const fromArg = process.argv[2];
 const toArg = process.argv[3];
 const DRY = process.argv.includes("--dry");
-if (!fromArg || !toArg) { console.error(tB("사용: node scripts/scope-ledger-migrate.js <fromWs> <toRepo> [--dry]","Usage: node scripts/scope-ledger-migrate.js <fromWs> <toRepo> [--dry]")); process.exit(2); }
+if (!fromArg || !toArg) { console.error(tB("사용: " + SELF_CMD + " <fromWs> <toRepo> [--dry]","Usage: " + SELF_CMD + " <fromWs> <toRepo> [--dry]")); process.exit(2); }
 const from = path.resolve(fromArg);
 const to = path.resolve(toArg);
 if (!fs.existsSync(to) || !fs.statSync(to).isDirectory()) { console.error(tB(`대상이 존재하지 않거나 폴더가 아님: ${to}`,`Target does not exist or is not a folder: ${to}`)); process.exit(1); }

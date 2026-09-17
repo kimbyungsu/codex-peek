@@ -103,7 +103,7 @@ const decisionBlockKo = `- 결정 0123456789abcdef: 저장한 선택값 복원 �
   선택 1 (keep): 현재 방식 유지 — 고르면: 재진입 시 값이 사라질 수 있음
   선택 2 (persist): 저장소에 영속 — 고르면: 다음 검증에서 영속 방식을 검증
   권장: persist — 저장소에 영속
-  답하기: node codex-bridge.js decisions choose 0123456789abcdef <키> | decisions delegate 0123456789abcdef (네가 정해라)`;
+  답하기: ${CL.bridgeCmd("codex-bridge.js")} decisions choose 0123456789abcdef <키> | decisions delegate 0123456789abcdef (네가 정해라)`; // 답하기 명령=브릿지 홈 절대 경로(2026-09-17 · 정본 렌더와 글자 단위 대조)
 const decisionKo = handoffKo.replace("[사용자 판단 필요]\n없음", "[사용자 판단 필요]\n" + decisionBlockKo);
 { const rD = VH.validateCapHandoff(decisionKo); ok(rD.ok && rD.needsUserDecision && rD.decisionCount === 1, "결정 장부 렌더 블록이 있는 마감=사용자 판단 대기(형식 검사)"); }
 ok(!VH.validateCapHandoff(handoffKo.replace("[사용자 판단 필요]\n없음", "[사용자 판단 필요]\n- 대상: 저장한 선택값. 상황: 사라질 수 있음. 위험: 오해. 선택 1: 유지. 선택 2: 수정.")).ok, "옛 산문 질문 형식은 거부(장부 블록만)");

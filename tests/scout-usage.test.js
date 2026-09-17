@@ -213,9 +213,9 @@ ok(!/ arm runs| arm stays| either arm|comparison arm|self arm|self-arm/.test(ext
 console.log("[8] 실행 — en 홈에서 러너 usage 출력이 영어(끝-끝 · 비-git은 무이력 폴백으로 실제 LLM을 부르므로 usage 경로로 검증)");
 fs.writeFileSync(path.join(dir, "language.json"), JSON.stringify({ lang: "en" }));
 const r = spawnSync(process.execPath, [path.join(ROOT, "scripts", "scope-scout-self.js")], { encoding: "utf8", windowsHide: true, env: { ...process.env, CODEX_BRIDGE_HOME: dir } });
-ok(r.status === 2 && /Usage: node scripts\/scope-scout-self\.js/.test(r.stderr), "self 러너 인자 없음 → 영어 usage(한글 단일 출력 회귀 방지)");
+ok(r.status === 2 && /Usage: node ".*scope-scout-self\.js" <repo path>/.test(r.stderr), "self 러너 인자 없음 → 영어 usage(한글 단일 출력 회귀 방지)");
 const r2 = spawnSync(process.execPath, [path.join(ROOT, "scripts", "scope-scout-deepseek.js")], { encoding: "utf8", windowsHide: true, env: { ...process.env, CODEX_BRIDGE_HOME: dir } });
-ok(r2.status === 2 && /Usage: node scripts\/scope-scout-deepseek\.js/.test(r2.stderr), "deepseek 러너 인자 없음 → 영어 usage");
+ok(r2.status === 2 && /Usage: node ".*scope-scout-deepseek\.js" <repo path>/.test(r2.stderr), "deepseek 러너 인자 없음 → 영어 usage");
 try { fs.unlinkSync(path.join(dir, "language.json")); } catch { /* 무해 */ }
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);

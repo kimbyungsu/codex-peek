@@ -5,10 +5,11 @@
  *   농담·가정법·"맞나? 헷갈리네" 같은 흔들림(wavering)은 기록하지 않는다(tg 정책 — hold).
  * 매칭은 항목 텍스트의 '유일한' 부분 문자열만 허용 — 0개/2개 이상이면 후보를 보여주고 중단(조용한 오기록 방지).
  *
- * 사용: node scripts/scope-ledger-note.js <repo> list
- *       node scripts/scope-ledger-note.js <repo> <dispute|confirm|pin|ban|unpin|unban> "<항목 텍스트 조각>" [--why "<발화 요지>"]
+ * 사용: node <브릿지 홈>/scope-ledger-note.js <repo> list
+ *       node <브릿지 홈>/scope-ledger-note.js <repo> <dispute|confirm|pin|ban|unpin|unban> "<항목 텍스트 조각>" [--why "<발화 요지>"]
  */
 const path = require("path");
+const SELF_CMD = 'node "' + String(process.argv[1] || __filename).replace(/\\/g, "/") + '"'; // 실행 안내=실제로 부른 경로(설치본·래퍼 어느 쪽이든 그대로) — 정찰 층 이관 2026-09-16
 const { appendLedgerEvent, readLedgerEventsText, ledgerSig, loadLang } = require(path.join(__dirname, "contract-lib.js"));
 const tB = (ko, en) => (loadLang() === "en" ? en : ko); // CLI output is ko/en paired (2026-07-09)
 const { parseEventsJsonl, deriveLedger } = require(path.join(__dirname, "ledger-events-core.js"));
@@ -20,7 +21,7 @@ const frag = process.argv[4];
 const whyIdx = process.argv.indexOf("--why");
 const why = whyIdx > 0 ? String(process.argv[whyIdx + 1] || "") : "";
 if (!repoArg || !cmd || (cmd !== "list" && !TYPE_MAP[cmd])) {
-  console.error(tB('사용: node scripts/scope-ledger-note.js <repo> <list|dispute|confirm|pin|ban|unpin|unban> "<항목 텍스트 조각>" [--why "<발화 요지>"]','Usage: node scripts/scope-ledger-note.js <repo> <list|dispute|confirm|pin|ban|unpin|unban> "<entry text fragment>" [--why "<utterance gist>"]'));
+  console.error(tB('사용: ' + SELF_CMD + ' <repo> <list|dispute|confirm|pin|ban|unpin|unban> "<항목 텍스트 조각>" [--why "<발화 요지>"]','Usage: ' + SELF_CMD + ' <repo> <list|dispute|confirm|pin|ban|unpin|unban> "<entry text fragment>" [--why "<utterance gist>"]'));
   process.exit(2);
 }
 const repo = path.resolve(repoArg);

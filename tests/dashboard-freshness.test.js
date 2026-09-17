@@ -40,7 +40,7 @@ ok(costs.byArm.self.lastTs && Date.parse(costs.byArm.self.lastTs) === now - 7200
 ok(ext.includes('id="scoutActualRo"') && /function scoutActualText/.test(ext) && /arm === "ping"\) continue/.test(ext), "탐색자 카드 슬롯+문구 조립(ping 제외)");
 
 console.log("[5] 서랍 전환 고지 — '신뢰 0'이 삭제로 보이던 침묵 전환의 가시화");
-ok(/prevDrawer: \{ entries: number; trusted: number; migrateCmd: string \} \| null/.test(ext) && /이전\(이 폴더\) 서랍에 /.test(ext) && /scope-ledger-migrate\.js "\$\{ws\}" "\$\{scoutTargetFor\(ws\)\.repo\}" --dry/.test(ext), "이전 서랍 요약+상시 안내 — 이관 명령이 실행 가능한 전체 인수(usage 오류 안내 반례 잠금 — Codex)");
+ok(/prevDrawer: \{ entries: number; trusted: number; migrateCmd: string \} \| null/.test(ext) && /이전\(이 폴더\) 서랍에 /.test(ext) && /bridgeCmd\("scope-ledger-migrate\.js", `"\$\{ws\}" "\$\{scoutTargetFor\(ws\)\.repo\}" --dry`\)/.test(ext), "이전 서랍 요약+상시 안내 — 이관 명령이 실행 가능한 전체 인수(usage 오류 안내 반례 잠금 — Codex)");
 ok(ext.includes("기존 일지는 이 폴더 서랍에 보존"), "대상 지정 토스트에도 보존 고지");
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);

@@ -6,10 +6,11 @@
  * 자동 감지는 보수적: 세션 폴더 자신이 git 루트면 지정 불요, 아니면 '바로 아래 1단계'에서 git 루트를 찾아
  * 정확히 1개일 때만 제안한다(복수면 나열만 하고 사용자가 set으로 명시 — 조용한 오지정 방지).
  *
- * 사용: node scripts/scope-target.js <ws> [status|set <repo>|auto|clear]
+ * 사용: node <브릿지 홈>/scope-target.js <ws> [status|set <repo>|auto|clear]
  */
 const fs = require("fs");
 const path = require("path");
+const SELF_CMD = 'node "' + String(process.argv[1] || __filename).replace(/\\/g, "/") + '"'; // 실행 안내=실제로 부른 경로(설치본·래퍼 어느 쪽이든 그대로) — 정찰 층 이관 2026-09-16
 const { spawnSync } = require("child_process");
 const { contractFileFor, loadContract, resolveScoutRepo, loadLang, updateContractPatch } = require(path.join(__dirname, "contract-lib.js"));
 const tB = (ko, en) => (loadLang() === "en" ? en : ko); // CLI 출력도 한/영 쌍(2026-07-09)
@@ -18,7 +19,7 @@ const wsArg = process.argv[2];
 const cmd = process.argv[3] || "status";
 const arg = process.argv[4];
 if (!wsArg || !["status", "set", "auto", "clear"].includes(cmd)) {
-  console.error(tB("사용: node scripts/scope-target.js <ws> [status|set <repo>|auto|clear]","Usage: node scripts/scope-target.js <ws> [status|set <repo>|auto|clear]"));
+  console.error(tB("사용: " + SELF_CMD + " <ws> [status|set <repo>|auto|clear]","Usage: " + SELF_CMD + " <ws> [status|set <repo>|auto|clear]"));
   process.exit(2);
 }
 const ws = path.resolve(wsArg);
@@ -63,7 +64,7 @@ function setTarget(repoAbs) {
   console.log(tB(`scoutRepo=${repoAbs} 저장(${loadLang()} 언어 슬롯). ⓘ 다른 언어 모드는 별도 지정이 없으면 이 값을 상속합니다(자기 슬롯에 set하면 독립).`,`scoutRepo=${repoAbs} saved (${loadLang()} language slot). ⓘ The other language mode inherits this value unless it sets its own (set in that slot to make it independent).`));
   noteOtherSlot();
   if (!usableGit(repoAbs)) console.log(tB("ⓘ 대상: " + gitLabel(repoAbs) + " — 정찰이 전후 비교 없는 축소 꾸러미로 동작합니다(정직 고지).","ⓘ Target: " + gitLabel(repoAbs) + " — recon will run on a reduced pack without before/after diffs (honest note)."));
-  console.log(tB("ⓘ 이관: 기존에 세션 폴더 서랍에 쌓인 관찰 일지가 있으면 node scripts/scope-ledger-migrate.js로 옮길 수 있습니다(--dry 먼저).","ⓘ Migration: if a journal already accumulated under the session folder, move it with node scripts/scope-ledger-migrate.js (--dry first)."));
+  console.log(tB("ⓘ 이관: 기존에 세션 폴더 서랍에 쌓인 관찰 일지가 있으면 " + require(path.join(__dirname, "contract-lib.js")).bridgeCmd("scope-ledger-migrate.js") + "로 옮길 수 있습니다(--dry 먼저).","ⓘ Migration: if a journal already accumulated under the session folder, move it with " + require(path.join(__dirname, "contract-lib.js")).bridgeCmd("scope-ledger-migrate.js") + " (--dry first)."));
 }
 
 if (cmd === "status") {
@@ -83,7 +84,7 @@ if (cmd === "clear") {
   process.exit(0);
 }
 if (cmd === "set") {
-  if (!arg) { console.error(tB("set에는 대상 경로가 필요: node scripts/scope-target.js <ws> set <repo>","set requires a target path: node scripts/scope-target.js <ws> set <repo>")); process.exit(2); }
+  if (!arg) { console.error(tB("set에는 대상 경로가 필요: " + SELF_CMD + " <ws> set <repo>","set requires a target path: " + SELF_CMD + " <ws> set <repo>")); process.exit(2); }
   setTarget(path.resolve(arg));
   process.exit(0);
 }

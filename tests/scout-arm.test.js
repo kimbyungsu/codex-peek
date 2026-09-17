@@ -181,9 +181,9 @@ console.log("[5] 게이트 소비 경로 — 선택 반영(1차 blocker③)");
 {
   const gate = fs.readFileSync(path.join(ROOT, "bridge", "scout-gate.js"), "utf8");
   ok(gate.includes("scoutArmView") && gate.includes("scope-scout-deepseek.js"), "Claude 플랜 게이트 안내 명령이 scoutArm 실효를 반영");
-  ok(gate.includes("scripts/${runner}"), "정상·대상 어긋남 안내 모두 러너 변수 사용(고정 self 제거)");
+  ok((gate.match(/bridgeCmd\(runner, /g) || []).length === 2 && !gate.includes("node scripts/"), "정상·대상 어긋남 안내 모두 러너 변수 사용(고정 self 제거) — 브릿지 홈 절대 경로(bridgeCmd)");
   const ch = fs.readFileSync(path.join(ROOT, "bridge", "codex-hook.js"), "utf8");
-  ok(ch.includes("scoutArmView") && ch.includes("scope-scout-deepseek.js") && ch.includes("scripts/${runner}"), "C-C 게이트도 동일 반영");
+  ok(ch.includes("scoutArmView") && ch.includes("scope-scout-deepseek.js") && ch.includes("bridgeCmd(runner, ") && !ch.includes("node scripts/"), "C-C 게이트도 동일 반영");
   setKey(true); CL.saveLang("ko");
   const ws9 = mkWs(); writeC(ws9, "ko", { scoutArm: "deepseek" });
   ok(CL.scoutArmView(ws9).eff === "deepseek", "(전제) 게이트 분기 입력=deepseek 실효");
@@ -199,7 +199,7 @@ console.log("[5b] P6 — 자동 지시·어긋남 분기의 codex 러너 반영"
   CL.saveLang("ko");
   const clSrc = fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8");
   ok(clSrc.includes('e9 === "codex" ? "scope-scout-codex.js"'), "어긋남 지시(drRunner)도 codex 분기");
-  ok(clSrc.includes("scope-scout-codex.js \\\"\" + target") && clSrc.includes("Codex 정찰 — 검증 세션과 분리된 독립 codex exec 1회"), "자동 지시 ko — codex 1순위 러너 문구");
+  ok(clSrc.includes('bridgeCmd("scope-scout-codex.js", "\\"" + target') && clSrc.includes("Codex 정찰 — 검증 세션과 분리된 독립 codex exec 1회"), "자동 지시 ko — codex 1순위 러너 문구(브릿지 홈 절대 경로 bridgeCmd — 2026-09-16)");
   ok(clSrc.includes("an independent one-shot codex exec, separate from the verification session"), "자동 지시 en 쌍");
   ok(clSrc.includes('SCOUT_ARMS = ["self", "deepseek", "codex"]'), "SCOUT_ARMS에 codex(계약 값 목록)");
   ok(clSrc.includes("빈 작업 폴더·읽기 전용 샌드박스에서 실행된다") && clSrc.includes("This call runs in an empty working folder with a read-only sandbox"), "codex preface 각주 ko/en(사실+탐색 금지 지시)");

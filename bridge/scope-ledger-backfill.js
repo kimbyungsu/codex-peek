@@ -6,7 +6,7 @@
  * 이 스크립트는 러너와 '같은 파서'(bridge/contract-lib.js extractMapPatches — 위생 필터 포함)로 같은 기준의
  * 씨앗을 소급 적재한다(이중 기준 없음). 수동 1회 CLI — 자동 실행 없음(자동은 러너의 기존 경로 그대로).
  *
- * 사용: node scripts/scope-ledger-backfill.js [--dry]
+ * 사용: node <브릿지 홈>/scope-ledger-backfill.js [--dry]
  *   --dry  적재 없이 무엇이 들어갈지 출력만
  * 대상 판정: scouts/<wsKey>/<base>.json 메타의 repo 필드(그 지도가 스스로 기록한 원 프로젝트 경로).
  *   메타나 repo가 없으면 그 지도는 건너뛰고 사유를 보고한다(폴더 키에서 경로 복원은 불가 — 해시라서).
@@ -15,6 +15,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const SELF_CMD = 'node "' + String(process.argv[1] || __filename).replace(/\\/g, "/") + '"'; // 실행 안내=실제로 부른 경로(설치본·래퍼 어느 쪽이든 그대로) — 정찰 층 이관 2026-09-16
 const BRIDGE = process.env.CODEX_BRIDGE_HOME || path.join(os.homedir(), ".codex-bridge");
 const { extractMapPatches, appendLedgerEvent, readLedgerEventsText, ledgerSig } = require(path.join(__dirname, "contract-lib.js"));
 

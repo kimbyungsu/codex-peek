@@ -10,6 +10,17 @@ const crypto = require("crypto");
 const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(os.homedir(), ".codex-bridge");
 const CONTRACT_FILE = path.join(BRIDGE_DIR, "contract.json"); // 레거시 전역 계약 — 더 이상 프로젝트에 상속 안 함(ws=null 저장 폴백/구버전 호환만)
 const CONTRACTS_DIR = path.join(BRIDGE_DIR, "contracts"); // 프로젝트별 계약 파일들
+// [정찰 층 이관 2026-09-16 · D-2026-09-16-bridge-home-hints] 사용자에게 보이는 실행 안내는 브릿지 홈 절대 경로 한 곳에서만 만든다 —
+// 마켓 설치본엔 레포가 없어 레포 상대 경로 안내는 따라 할 수 없었다. tail 은 호출자가 이미 따옴표 처리한 인수 문자열.
+function bridgeCmd(script, tail) { return 'node "' + path.join(BRIDGE_DIR, script).replace(/\\/g, "/") + '"' + (tail ? " " + String(tail) : ""); }
+// [3판 blocker 2026-09-17] 런타임 복구 안내도 설치 출처를 본다 — 마켓 설치본(확장 관리 표식 .bridge-deployed-by.json 있음)에는 install.js 가 없어
+// `node install.js` 를 따라 할 수 없다. 확장 관리본=창 다시 로드로 재배치(계속 실패=확장 재설치) · 레포 설치본=저장소에서 install.js 재실행.
+function runtimeRepairHint(en) {
+  let managed = false; try { managed = fs.existsSync(path.join(BRIDGE_DIR, ".bridge-deployed-by.json")); } catch { managed = false; }
+  if (managed) return en ? "this runtime is managed by the extension — reload the VS Code window (Developer: Reload Window) so the extension redeploys the bridge; if it keeps failing, reinstall the extension"
+    : "확장이 관리하는 설치본입니다 — VS Code 창을 다시 로드(Developer: Reload Window)하면 확장이 브릿지를 다시 배치합니다. 계속 실패하면 확장을 재설치하세요";
+  return en ? "this is a repo install — re-run node install.js from the repository" : "레포 설치본입니다 — 저장소에서 node install.js 를 다시 실행하세요";
+}
 const BRIDGE = path.join(BRIDGE_DIR, "codex-bridge.js");
 const BASE_DIRECTIVE_FILE = path.join(BRIDGE_DIR, "base-directive.json"); // 기본 지침 사용자 오버라이드(없으면 코드 기본값) — 한국어 슬롯(레거시 그대로). 영어는 base-directive.en.json
 const LANG_FILE = path.join(BRIDGE_DIR, "language.json"); // 전역 언어 설정({lang:"ko"|"en"}). 없으면 ko — 기존 사용자 무회귀. 대시보드 토글이 쓰고 확장·브릿지·훅이 읽음.
@@ -2767,8 +2778,8 @@ function buildScoutDirective(ws, c) {
         ? (en2 ? (inh ? "the target inherited from the other language slot: " + target : "the contract-set target " + target) : (inh ? "반대 언어 슬롯에서 상속된 " + target : "계약에 지정된 " + target))
         : (en2 ? "unset, so the session folder (" + target + ") is being used" : "미지정이라 세션 폴더(" + target + ") 기준");
       const drRunner = (() => { try { const e9 = scoutArmView(ws, c).eff; return e9 === "deepseek" ? "scope-scout-deepseek.js" : e9 === "codex" ? "scope-scout-codex.js" : "scope-scout-self.js"; } catch { return "scope-scout-self.js"; } })(); // 2차 blocker①: 어긋남 분기도 탐색 담당 선택 반영(P6: codex 포함)
-      if (en2) return "[Recon (3-track) auto-directive · target mismatch suspected · this suggestion once] In the last " + drift.sample + " verification(s), " + drift.agree + " cited mostly files under " + drift.repo + ", but the scout target is " + cur + ". If " + drift.repo + " is the actual dev repo, run from the codex-peek source repo: `node scripts/scope-target.js \"" + ws + "\" set \"" + drift.repo + "\"` (this writes scoutRepo into this project's contract file for the current language slot — the other language mode inherits it unless it sets its own), then `node scripts/" + drRunner + " \"" + drift.repo + "\"` for a map. If not, ignore this (advisory — nothing is blocked).";
-      return "[탐색(3트랙) 자동 지시 · 대상 어긋남 의심 · 이 제안 1회만] 최근 검증 " + drift.sample + "회 중 " + drift.agree + "회가 " + drift.repo + " 소속 파일을 주로 인용했는데, 정찰 대상은 " + cur + "다. 실제 개발 레포가 " + drift.repo + " 가 맞으면 codex-peek 소스 저장소에서 `node scripts/scope-target.js \"" + ws + "\" set \"" + drift.repo + "\"` 를 실행해 대상을 지정하고(이 프로젝트 계약 파일의 현재 언어 슬롯에 scoutRepo가 저장됨 — 다른 언어 모드는 별도 지정이 없으면 이 값을 상속), 이어서 `node scripts/" + drRunner + " \"" + drift.repo + "\"` 로 지도를 받아라. 아니라면 무시해도 된다(참고용 — 아무것도 막지 않는다).";
+      if (en2) return "[Recon (3-track) auto-directive · target mismatch suspected · this suggestion once] In the last " + drift.sample + " verification(s), " + drift.agree + " cited mostly files under " + drift.repo + ", but the scout target is " + cur + ". If " + drift.repo + " is the actual dev repo, run: `" + bridgeCmd("scope-target.js", "\"" + ws + "\" set \"" + drift.repo + "\"") + "` (this writes scoutRepo into this project's contract file for the current language slot — the other language mode inherits it unless it sets its own), then `" + bridgeCmd(drRunner, "\"" + drift.repo + "\"") + "` for a map. If not, ignore this (advisory — nothing is blocked).";
+      return "[탐색(3트랙) 자동 지시 · 대상 어긋남 의심 · 이 제안 1회만] 최근 검증 " + drift.sample + "회 중 " + drift.agree + "회가 " + drift.repo + " 소속 파일을 주로 인용했는데, 정찰 대상은 " + cur + "다. 실제 개발 레포가 " + drift.repo + " 가 맞으면 `" + bridgeCmd("scope-target.js", "\"" + ws + "\" set \"" + drift.repo + "\"") + "` 를 실행해 대상을 지정하고(이 프로젝트 계약 파일의 현재 언어 슬롯에 scoutRepo가 저장됨 — 다른 언어 모드는 별도 지정이 없으면 이 값을 상속), 이어서 `" + bridgeCmd(drRunner, "\"" + drift.repo + "\"") + "` 로 지도를 받아라. 아니라면 무시해도 된다(참고용 — 아무것도 막지 않는다).";
     }
   } catch { /* 자기진단 실패가 기존 신선도 지시를 못 막음 */ }
   const st = scoutMapStatus(target);
@@ -2833,19 +2844,19 @@ function buildScoutDirective(ws, c) {
   // 미지정=현행 유지(기본 우선·키 있으면 비교 재량). 강등(deepseek 선택·키 없음)=기본으로 진행+사유 고지.
   if (en) {
     const runner = armV.eff === "deepseek"
-      ? "run `node scripts/scope-scout-deepseek.js \"" + target + "\"` from the codex-peek source repo (scout preference set on the dashboard: DeepSeek — key registration = consent to auto calls · the default scout scope-scout-self.js also remains available)"
+      ? "run `" + bridgeCmd("scope-scout-deepseek.js", "\"" + target + "\"") + "` (scout preference set on the dashboard: DeepSeek — key registration = consent to auto calls · the default scout scope-scout-self.js also remains available)"
       : armV.eff === "codex"
-      ? "run `node scripts/scope-scout-codex.js \"" + target + "\"` from the codex-peek source repo (scout preference set on the dashboard: Codex — an independent one-shot codex exec, separate from the verification session · the default scout scope-scout-self.js also remains available)"
-      : "run `node scripts/scope-scout-self.js \"" + target + "\"` from the codex-peek source repo (default scout (Claude) — a separate claude CLI call, no separate billing"
+      ? "run `" + bridgeCmd("scope-scout-codex.js", "\"" + target + "\"") + "` (scout preference set on the dashboard: Codex — an independent one-shot codex exec, separate from the verification session · the default scout scope-scout-self.js also remains available)"
+      : "run `" + bridgeCmd("scope-scout-self.js", "\"" + target + "\"") + "` (default scout (Claude) — a separate claude CLI call, no separate billing"
         + (armV.raw === "self" ? "" : armV.degraded === "no-key" ? " · dashboard preference is DeepSeek but no key is registered — proceeding with the default scout" : hasKey ? " · scope-scout-deepseek.js (DeepSeek scout) available if comparison seems useful — key registration = consent to auto calls" : "")
         + ")";
     return "[Recon (3-track) auto-directive · once per state] " + why + ". If this turn involves file changes, refresh the impact map before concluding — " + runner + ". Trivial turns (a question, a one-line doc edit) may skip — the map is advisory and blocks nothing.";
   }
   const runnerKo = armV.eff === "deepseek"
-    ? "codex-peek 소스 저장소에서 `node scripts/scope-scout-deepseek.js \"" + target + "\"` 실행(대시보드에 설정된 탐색 담당: DeepSeek 정찰 — 키 등록=자동 호출 동의됨 · 기본 정찰 scope-scout-self.js도 병행 가능)"
+    ? "`" + bridgeCmd("scope-scout-deepseek.js", "\"" + target + "\"") + "` 실행(대시보드에 설정된 탐색 담당: DeepSeek 정찰 — 키 등록=자동 호출 동의됨 · 기본 정찰 scope-scout-self.js도 병행 가능)"
     : armV.eff === "codex"
-    ? "codex-peek 소스 저장소에서 `node scripts/scope-scout-codex.js \"" + target + "\"` 실행(대시보드에 설정된 탐색 담당: Codex 정찰 — 검증 세션과 분리된 독립 codex exec 1회 · 기본 정찰 scope-scout-self.js도 병행 가능)"
-    : "codex-peek 소스 저장소에서 `node scripts/scope-scout-self.js \"" + target + "\"` 실행(기본 정찰(Claude) — 구현 대화와 분리된 별도 claude 호출·별도 과금 없음"
+    ? "`" + bridgeCmd("scope-scout-codex.js", "\"" + target + "\"") + "` 실행(대시보드에 설정된 탐색 담당: Codex 정찰 — 검증 세션과 분리된 독립 codex exec 1회 · 기본 정찰 scope-scout-self.js도 병행 가능)"
+    : "`" + bridgeCmd("scope-scout-self.js", "\"" + target + "\"") + "` 실행(기본 정찰(Claude) — 구현 대화와 분리된 별도 claude 호출·별도 과금 없음"
       + (armV.raw === "self" ? "" : armV.degraded === "no-key" ? " · 대시보드 선호는 DeepSeek이나 키 미등록 — 기본 정찰로 진행" : hasKey ? " · 비교가 필요하다고 판단되면 scope-scout-deepseek.js(DeepSeek 정찰) 사용 가능 — 키 등록=자동 호출 동의됨" : "")
       + ")";
   return "[탐색(3트랙) 자동 지시 · 이 상태에 1회만] " + why + ". 이번 턴이 파일 변경을 동반하면 결론 전에 영향지도를 갱신하라 — " + runnerKo + ". 사소한 턴(질문·문서 한 줄)이면 스킵해도 된다 — 지도는 참고용이며 아무것도 막지 않는다.";
@@ -4337,7 +4348,7 @@ const DECISION_TEMPLATE_DEFAULTS = {
     noDefault: "  구현자가 못 정하는 이유: {{noDefault}}",
     choice: "  선택 {{n}} ({{key}}): {{label}} — 고르면: {{ifChosen}}",
     recommend: "  권장: {{recommend}}",
-    answer: "  답하기: node codex-bridge.js decisions choose {{id}} <키> | decisions delegate {{id}} (네가 정해라)",
+    answer: "  답하기: " + bridgeCmd("codex-bridge.js") + " decisions choose {{id}} <키> | decisions delegate {{id}} (네가 정해라)",
     empty: { why: "(없음)", ifChosen: "(설명 없음)", recommend: "없음" },
   },
   en: {
@@ -4346,7 +4357,7 @@ const DECISION_TEMPLATE_DEFAULTS = {
     noDefault: "  Why the implementer cannot decide: {{noDefault}}",
     choice: "  Option {{n}} ({{key}}): {{label}} — if chosen: {{ifChosen}}",
     recommend: "  Recommended: {{recommend}}",
-    answer: "  Answer: node codex-bridge.js decisions choose {{id}} <key> | decisions delegate {{id}} (you decide)",
+    answer: "  Answer: " + bridgeCmd("codex-bridge.js") + " decisions choose {{id}} <key> | decisions delegate {{id}} (you decide)",
     empty: { why: "(none)", ifChosen: "(no description)", recommend: "none" },
   },
 };
@@ -6974,3 +6985,5 @@ module.exports.VERIFY_REFUND_MAX = VERIFY_REFUND_MAX;
 module.exports.requireDecision = requireDecision; // [HARNESS-STRUCTURE-2026-09-11 §A2]
 module.exports.ledgerRowsForRepo = ledgerRowsForRepo; // [저장소 분할 단일 규칙]
 module.exports.repoKeyNow = repoKeyNow;
+module.exports.bridgeCmd = bridgeCmd; // [정찰 층 이관] 실행 안내 경로 정본
+module.exports.runtimeRepairHint = runtimeRepairHint; // 설치 출처별 런타임 복구 안내(마켓=창 다시 로드 · 레포=install.js)

@@ -5,15 +5,15 @@
 // - 정책은 스크립트가 강제하고, raw codex 직접호출은 PreToolUse 후크(codex-guard.js)가 차단한다.
 //
 // 사용:
-//   node codex-bridge.js ask "<프롬프트>"          연결된 세션에 보내고 답 받기 (없으면 보고)
-//   node codex-bridge.js ask --allow-new "<...>"   연결 없을 때 새 세션 생성+연결 후 보내기 (첫 소통)
-//   node codex-bridge.js ask --force-new "<...>"   엉뚱 폴더 방어를 무릅쓰고 '이 폴더'에 새 세션 강제(--allow-new 함의)
-//   node codex-bridge.js ask --force-resend "<...>" 같은 요청 진행 중 차단(중복 전송 가드)을 의식적으로 우회
-//   node codex-bridge.js ask --net "<...>"          이 1회만 검증자 네트워크 허용(파일 읽기전용 유지) — 원격(GitHub 등) 직접 확인용
-//   node codex-bridge.js link <codex-session-id>   현재 Claude 세션을 기존 Codex 세션에 연결
-//   node codex-bridge.js link --last               가장 최근(인덱스된) Codex 세션에 연결
-//   node codex-bridge.js status                    현재 연결 상태
-//   node codex-bridge.js find                       연결 후보(인덱스된 Codex 세션) 목록
+//   node <브릿지 홈>/codex-bridge.js ask "<프롬프트>"          연결된 세션에 보내고 답 받기 (없으면 보고)
+//   node <브릿지 홈>/codex-bridge.js ask --allow-new "<...>"   연결 없을 때 새 세션 생성+연결 후 보내기 (첫 소통)
+//   node <브릿지 홈>/codex-bridge.js ask --force-new "<...>"   엉뚱 폴더 방어를 무릅쓰고 '이 폴더'에 새 세션 강제(--allow-new 함의)
+//   node <브릿지 홈>/codex-bridge.js ask --force-resend "<...>" 같은 요청 진행 중 차단(중복 전송 가드)을 의식적으로 우회
+//   node <브릿지 홈>/codex-bridge.js ask --net "<...>"          이 1회만 검증자 네트워크 허용(파일 읽기전용 유지) — 원격(GitHub 등) 직접 확인용
+//   node <브릿지 홈>/codex-bridge.js link <codex-session-id>   현재 Claude 세션을 기존 Codex 세션에 연결
+//   node <브릿지 홈>/codex-bridge.js link --last               가장 최근(인덱스된) Codex 세션에 연결
+//   node <브릿지 홈>/codex-bridge.js status                    현재 연결 상태
+//   node <브릿지 홈>/codex-bridge.js find                       연결 후보(인덱스된 Codex 세션) 목록
 
 const { spawnSync, spawn } = require("child_process");
 const crypto = require("crypto");
@@ -27,6 +27,8 @@ const { claudeAnchorFolderChange, folderChangeRefusal, clearClaudeFolderChange, 
 // 기본 지침은 contract-lib의 loadBaseDirective()에서 로드 → 대시보드에서 보기/수정/초기화 가능. 코드에 캐논 기본값 상존.
 // 호출 시점 전역 언어의 문자열 선택(무결성 detail·CLI 안내 등). ask 본문 흐름은 langSnap 사용.
 function tB(ko, en) { return loadLang() === "en" ? en : ko; }
+// 실행 안내의 자기 경로 = 실제로 불린 경로(설치본이면 브릿지 홈·레포면 그 경로) — bare `node <브릿지 홈>/codex-bridge.js` 안내는 브릿지 홈 밖에서 실행 불가(2026-09-17 확인검증 blocker · D-2026-09-16-bridge-home-hints)
+const SELF_CMD = 'node "' + String(process.argv[1] || __filename).replace(/\\/g, "/") + '"';
 // 거버넌스 증분 1: 판정문 병기 경고 — 승인된 경계가 '손상/미승인 변경' 상태면 ask-wait 결과에 1줄 병기(위장 금지).
 // 정상·부재·미승인="" (바이트 동일 — 기존 출력 무회귀).
 function envelopeWarnLine(ws, lang) {
@@ -326,7 +328,7 @@ function mapAttachSurface(ws, c, lang, reqText) {
   const en = lang === "en" || (lang !== "ko" && loadLang() === "en");
   return {
     text: trace === "present"
-      ? (en ? "[Project MAP] This project has cut over, but the MAP runtime here is outdated — no map slice attached (run node install.js)." : "[Project MAP] 전환된 프로젝트인데 이 설치본의 MAP 런타임이 낡음 — 지도 조각을 동봉하지 않습니다(node install.js 실행 필요).")
+      ? (en ? "[Project MAP] This project has cut over, but the MAP runtime here is outdated — no map slice attached (" + require("./contract-lib.js").runtimeRepairHint(true) + ")." : "[Project MAP] 전환된 프로젝트인데 이 설치본의 MAP 런타임이 낡음 — 지도 조각을 동봉하지 않습니다(" + require("./contract-lib.js").runtimeRepairHint(false) + ").")
       : (en ? "[Project MAP] Cutover trace unreadable (permissions?) — no map slice attached (not proven legacy)." : "[Project MAP] 전환 흔적 판독 불가(권한?) — 지도 조각을 동봉하지 않습니다(legacy 확인 안 됨)."),
     mapItems: [], couplings: [],
   };
@@ -3117,7 +3119,7 @@ function cmdAskStart(rest) {
     if (st9 === "busy") die(tB("수칙서 승인 전이가 진행 중입니다 — 잠시 후 다시 시작하세요(경계 없는 검증 시작 차단).", "A rulebook approval transition is in progress — retry shortly (starting a boundary-less verification is blocked)."), 3);
     if (st9 === "recover-needed") die(tB("수칙서 승인 전이가 중단된 흔적(WAL)이 있습니다 — 대시보드를 열거나 envelope-transition recover를 실행해 복구한 뒤 시작하세요.", "An interrupted rulebook approval transition (WAL) exists — open the dashboard or run envelope-transition recover, then start."), 3);
   }
-  if (!fs.existsSync(ASK_JOB_WORKER)) die(tB("ask job worker가 없습니다. node install.js로 런타임을 다시 동기화하세요.", "Ask job worker is missing. Re-sync the runtime with node install.js."));
+  if (!fs.existsSync(ASK_JOB_WORKER)) die(tB("ask job worker가 없습니다 — " + require("./contract-lib.js").runtimeRepairHint(false) + ".", "Ask job worker is missing — " + require("./contract-lib.js").runtimeRepairHint(true) + "."));
   let id,timeoutMin,job,file;
   // read-active/read-job/create-queued를 한 임계구역으로 묶는다. 동시 ask-start 둘이 모두 '없음'을 보고
   // 서로 다른 worker를 만드는 검사-쓰기 경합을 원천 차단한다.
@@ -3540,7 +3542,7 @@ function cmdRulePropose(rest) {
 // [개선 2 · 판단 관문 — 장치화 2026-08-30] 전량 강등 보류 = 구현자 판단이 필요한 상태. 촉구 문장 대신 마커를 걸어 종료 훅이 판단 기록(round-judge)
 // 전에는 턴을 못 끝내게 한다. 사용자 결정은 자동으로 만들지 않는다 — escalate를 고르면 그때 결정 장부 항목(decisions raise)이 있어야 기록된다.
 function armScopeDemotedJudge(ws, camp, askId, en, repoKey) {
-  const cmd = `node codex-bridge.js round-judge ${askId || "<askId>"} <close-oos|re-verify|escalate --decision <id>> --note "..."`;
+  const cmd = `${SELF_CMD} round-judge ${askId || "<askId>"} <close-oos|re-verify|escalate --decision <id>> --note "..."`;
   const ok = askId ? addJudgeRequired(ws, { askId, campaignId: String(camp || ""), reason: "scope-demoted", repoKey: repoKey || "" }) : false; // 시작 스냅샷 저장소 표식(ab-1)
   if (!ok) return en
     ? "[judgment gate NOT armed] (" + (askId ? "marker write failed" : "no askId") + ") — record the judgment manually: " + cmd
@@ -3649,7 +3651,7 @@ function cmdDecisions(rest) {
       if (d.recommend) w(tB(`     권장: ${d.recommend}`, `     recommended: ${d.recommend}`));
       for (const c of d.choices) w(`     - ${c.key}: ${c.label}${c.ifChosen ? " — " + c.ifChosen : ""}`);
       w(tB(`     - ${DECISION_DELEGATE_KEY}: 네가 정해라(구현자가 정하고 보고만)`, `     - ${DECISION_DELEGATE_KEY}: you decide (implementer decides and reports)`));
-      w(tB(`     기록: node codex-bridge.js decisions choose ${d.decisionId} <key>`, `     record: node codex-bridge.js decisions choose ${d.decisionId} <key>`));
+      w(tB(`     기록: ${SELF_CMD} decisions choose ${d.decisionId} <key>`, `     record: ${SELF_CMD} decisions choose ${d.decisionId} <key>`));
     }
     return 0;
   }
@@ -3741,7 +3743,7 @@ function cmdFindingJudge(rest) {
     }
     const remain = require("./contract-lib.js").undisposedOpenFindingsFromRows(rowsMine, camp, gen).length;
     process.stdout.write(remain
-      ? tB(`미판단 ${remain}건 — 기록: node codex-bridge.js finding-judge <id> <fix-fact|fix-gap|rebut[ --oos oos-n]|park|escalate> --note "근거"${campFlag ? ` --campaign "${camp}"` : ""}\n`, `${remain} unjudged — record: node codex-bridge.js finding-judge <id> <fix-fact|fix-gap|rebut[ --oos oos-n]|park|escalate> --note "evidence"${campFlag ? ` --campaign "${camp}"` : ""}\n`)
+      ? tB(`미판단 ${remain}건 — 기록: ${SELF_CMD} finding-judge <id> <fix-fact|fix-gap|rebut[ --oos oos-n]|park|escalate> --note "근거"${campFlag ? ` --campaign "${camp}"` : ""}\n`, `${remain} unjudged — record: ${SELF_CMD} finding-judge <id> <fix-fact|fix-gap|rebut[ --oos oos-n]|park|escalate> --note "evidence"${campFlag ? ` --campaign "${camp}"` : ""}\n`)
       : tB("전부 판단됨 — 다음 검증을 시작할 수 있습니다.\n", "All judged — the next verification can start.\n"));
     return;
   }
@@ -3779,7 +3781,7 @@ function cmdFindingJudge(rest) {
     }
   }
   const target = opens.find((o) => o.id === id);
-  if (!target) die(tB(`열린 지적에 ${id}가 없습니다(캠페인 ${camp}·현재 세대 기준). 현황: node codex-bridge.js finding-judge${campFlag ? ` --campaign "${camp}"` : ""}`, `${id} is not an open finding (campaign ${camp}, current generation). Status: node codex-bridge.js finding-judge${campFlag ? ` --campaign "${camp}"` : ""}`), 2);
+  if (!target) die(tB(`열린 지적에 ${id}가 없습니다(캠페인 ${camp}·현재 세대 기준). 현황: ${SELF_CMD} finding-judge${campFlag ? ` --campaign "${camp}"` : ""}`, `${id} is not an open finding (campaign ${camp}, current generation). Status: ${SELF_CMD} finding-judge${campFlag ? ` --campaign "${camp}"` : ""}`), 2);
   // 1차 검증 blocker① 반영: 수용에도 근거 의무 — 수용이 '싼 기본값'이면 판단 강제가 무력화된다(실사고의
   // 원인 그 자체). park만 예외(보관함 영수증이 실물 근거). 12자는 rebut과 같은 최소 기준.
   if (choice !== "park" && note.length < 12) {
@@ -3791,7 +3793,7 @@ function cmdFindingJudge(rest) {
   if (choice === "escalate") {
     escDecisionId = flagVal("--decision");
     const d9 = escDecisionId ? readDecisions(ws).latest.get(escDecisionId) : null;
-    if (!d9) die(tB("escalate 는 결정 장부 항목이 필요합니다 — 먼저 node codex-bridge.js decisions raise ... 로 항목을 만들고 --decision <id> 를 지정하세요.", "escalate requires a decision — create one with decisions raise, then pass --decision <id>."), 2);
+    if (!d9) die(tB("escalate 는 결정 장부 항목이 필요합니다 — 먼저 " + SELF_CMD + " decisions raise ... 로 항목을 만들고 --decision <id> 를 지정하세요.", "escalate requires a decision — create one with decisions raise, then pass --decision <id>."), 2);
   }
   // [개선 1-B · 되받아침 명령] rebut --oos oos-n: 이 판에 동결된 제외 칸 번호로 되받아친다 — 효력=범위 밖 강등과 동일(지적은 '구현자 되받아침'
   // 사유로 닫히고 기록에 남으며, 검증자는 반증 없이는 다시 올릴 수 없다). 번호 판단은 구현자 몫·하네스는 번호 유효성만.
@@ -4012,12 +4014,12 @@ function findingDispositionGate(ws, durableEnv, langSnap, campSnap) {
   const rows = und.map((o) => `   - ${o.id} [${o.tag}] ${String(o.titleNorm || "").slice(0, 60)}`).join("\n");
   // 확인 검증 blocker② 반영: 관문이 본 캠페인 id를 명령에 그대로 결속 — 현재 캠페인 파일과 갈린 상태
   // (미집계 진행 등)에서 '관문은 막는데 해제 명령은 열린 지적 없음'인 교착 차단.
-  const cmd = `   node codex-bridge.js finding-judge <id> <fix-fact|fix-gap|rebut[ --oos oos-n]|park|escalate> --note "..." --campaign "${camp}"   (제외 칸 전문: finding-judge --list-oos)`;
+  const cmd = `   ${SELF_CMD} finding-judge <id> <fix-fact|fix-gap|rebut[ --oos oos-n]|park|escalate> --note "..." --campaign "${camp}"   (제외 칸 전문: finding-judge --list-oos)`;
   return {
     proceed: false, exitCode: 3,
     msg: en
-      ? `⚠️ Verification NOT started (no round consumed) — ${und.length} open finding(s) have no valid judgment for their latest appearance.\nJudge each one first (accepting everything is not the default — even blockers are subject to measured rebuttal; a finding re-raised after your judgment must be judged again):\n${rows}\n${cmd}\n   fix-fact = my output was proven factually wrong → I fix it (evidence note required)\n   fix-gap  = not wrong, but I accept the enrichment request → I fix it (reason note required)\n   rebut    = the finding is wrong → no fix (evidence note required)\n   park     = right, but outside this batch → auto-parked to the backlog\n   Status: node codex-bridge.js finding-judge --campaign "${camp}"`
-      : `⚠️ 검증을 시작하지 않았습니다(왕복 미소모) — 열린 지적 ${und.length}건에 '마지막 등장 기준' 유효한 판단이 없습니다.\n먼저 하나씩 판단해 기록하세요(전부 수용이 기본값이 아닙니다 — blocker도 실측 반박 대상이고, 판단 뒤 재등장한 지적은 다시 판단해야 합니다):\n${rows}\n${cmd}\n   fix-fact = 내 산출물이 사실과 다름이 증명됨 → 고친다(근거 필수)\n   fix-gap  = 틀린 건 아니나 보강 요구를 받아들임 → 고친다(이유 필수)\n   rebut    = 지적이 틀렸다 → 고치지 않는다(근거 필수)\n   park     = 맞지만 이 묶음 밖 → 보관함 자동 등록\n   현황: node codex-bridge.js finding-judge --campaign "${camp}"`,
+      ? `⚠️ Verification NOT started (no round consumed) — ${und.length} open finding(s) have no valid judgment for their latest appearance.\nJudge each one first (accepting everything is not the default — even blockers are subject to measured rebuttal; a finding re-raised after your judgment must be judged again):\n${rows}\n${cmd}\n   fix-fact = my output was proven factually wrong → I fix it (evidence note required)\n   fix-gap  = not wrong, but I accept the enrichment request → I fix it (reason note required)\n   rebut    = the finding is wrong → no fix (evidence note required)\n   park     = right, but outside this batch → auto-parked to the backlog\n   Status: ${SELF_CMD} finding-judge --campaign "${camp}"`
+      : `⚠️ 검증을 시작하지 않았습니다(왕복 미소모) — 열린 지적 ${und.length}건에 '마지막 등장 기준' 유효한 판단이 없습니다.\n먼저 하나씩 판단해 기록하세요(전부 수용이 기본값이 아닙니다 — blocker도 실측 반박 대상이고, 판단 뒤 재등장한 지적은 다시 판단해야 합니다):\n${rows}\n${cmd}\n   fix-fact = 내 산출물이 사실과 다름이 증명됨 → 고친다(근거 필수)\n   fix-gap  = 틀린 건 아니나 보강 요구를 받아들임 → 고친다(이유 필수)\n   rebut    = 지적이 틀렸다 → 고치지 않는다(근거 필수)\n   park     = 맞지만 이 묶음 밖 → 보관함 자동 등록\n   현황: ${SELF_CMD} finding-judge --campaign "${camp}"`,
   };
 }
 function reserveVerifyBudgetGate(ws, durableEnv, contractSnap, harnessModeSnap, langSnap, profileSnap) {
@@ -4186,8 +4188,8 @@ function applyPostflightHold(mfl, carrier, ws, askId, camp, lang, repoKey) {
   const okJ = askId ? addJudgeRequired(ws, { askId, campaignId: String(camp || ""), reason: key, repoKey: repoKey || "" }) : false; // 시작 스냅샷 저장소 표식(ab-1)
   const why = en ? "verifier thread record unreadable after the call (compaction unknown)" : "답 수신 뒤 검증자 기록 판독 불가(압축 여부 미상)";
   mfl.notice = String(mfl.notice || "") + (en
-    ? `\n[directive delivery · HOLD] ${why} — this verdict has no authority and NO success proof was recorded. The next ask resends the full directives; record your judgment first: node codex-bridge.js round-judge ${askId} re-verify --note "..." (close-oos is not accepted for this hold)${okJ ? "" : " (judgment gate NOT armed — marker write failed; the missing proof still blocks the turn)"}`
-    : `\n[규약 전달 · 보류] ${why} — 이 판정은 권위 없음·통과 증명 미기록. 다음 검증에 규약 전문을 다시 보내 재판을 받는다 — 먼저 판단 기록: node codex-bridge.js round-judge ${askId} re-verify --note "근거" (이 보류는 close-oos로 닫을 수 없음)${okJ ? "" : " (판단 관문 미장전 — 마커 기록 실패·증명 미기록이 종료를 막음)"}`);
+    ? `\n[directive delivery · HOLD] ${why} — this verdict has no authority and NO success proof was recorded. The next ask resends the full directives; record your judgment first: ${SELF_CMD} round-judge ${askId} re-verify --note "..." (close-oos is not accepted for this hold)${okJ ? "" : " (judgment gate NOT armed — marker write failed; the missing proof still blocks the turn)"}`
+    : `\n[규약 전달 · 보류] ${why} — 이 판정은 권위 없음·통과 증명 미기록. 다음 검증에 규약 전문을 다시 보내 재판을 받는다 — 먼저 판단 기록: ${SELF_CMD} round-judge ${askId} re-verify --note "근거" (이 보류는 close-oos로 닫을 수 없음)${okJ ? "" : " (판단 관문 미장전 — 마커 기록 실패·증명 미기록이 종료를 막음)"}`);
   return true;
 }
 function v2StaticDirective(lang) {
@@ -4514,7 +4516,7 @@ function machineFindingsLayer(answer, ws, langSnap, profileSnap, harnessModeSnap
         if (!f.dispute) continue;
         const okD = askId ? addJudgeRequired(ws, { askId, campaignId: String(camp || ""), reason: "dispute:" + String(f.contestOf || ""), repoKey: repoKeySnap || "" }) : false; // 시작 스냅샷 저장소 표식(ab-1)
         out.push(okD
-          ? (en ? "[dispute] " + (f.contestOf || "") + " restored twice — this turn cannot end until the implementer records a judgment: node codex-bridge.js round-judge " + askId + " <close-oos|re-verify|escalate --decision <id>> --note \"...\"" : "[분쟁] " + (f.contestOf || "") + " 계보가 두 번 복귀 — 구현자 판단이 기록되기 전에는 이 턴을 끝낼 수 없다: node codex-bridge.js round-judge " + askId + " <close-oos|re-verify|escalate --decision <id>> --note \"근거\"")
+          ? (en ? "[dispute] " + (f.contestOf || "") + " restored twice — this turn cannot end until the implementer records a judgment: " + SELF_CMD + " round-judge " + askId + " <close-oos|re-verify|escalate --decision <id>> --note \"...\"" : "[분쟁] " + (f.contestOf || "") + " 계보가 두 번 복귀 — 구현자 판단이 기록되기 전에는 이 턴을 끝낼 수 없다: " + SELF_CMD + " round-judge " + askId + " <close-oos|re-verify|escalate --decision <id>> --note \"근거\"")
           : (en ? "[dispute] judgment gate NOT armed (marker write failed / no askId) — judge manually" : "[분쟁] 판단 관문 미장전(마커 기록 실패/askId 없음) — 수동으로 판단 기록"));
       }
     } catch { /* 관문 실패가 판정 전달을 막지 않음 */ }
@@ -4749,8 +4751,8 @@ async function cmdAsk(rest) {
     const rkA = (() => { try { return repoKeyOf(resolveScoutRepo(ws, contractSnap).repo); } catch { return ""; } })();
     const rq = require("./contract-lib.js").requireDecision(ws, decisionId0, rkA);
     if (!rq.ok) die(tB(
-      `⚠️ 이 워크스페이스에는 연결된 검증 세션(${link.codexSession})이 있습니다. --force-new 로 새 방을 강제하려면 결정 장부 항목이 필요합니다(${rq.reason}).\n   node codex-bridge.js decisions raise ... 로 항목을 만든 뒤 --decision <id> 를 붙이세요. 연결이 없을 때는 --allow-new 만으로 새 방이 정상 생성됩니다.`,
-      `⚠️ A verifier session (${link.codexSession}) is linked to this workspace. Forcing a new session with --force-new requires a decisions-ledger item (${rq.reason}).\n   Create one with node codex-bridge.js decisions raise ... then pass --decision <id>. With no link, --allow-new alone creates a session normally.`), 3);
+      `⚠️ 이 워크스페이스에는 연결된 검증 세션(${link.codexSession})이 있습니다. --force-new 로 새 방을 강제하려면 결정 장부 항목이 필요합니다(${rq.reason}).\n   ${SELF_CMD} decisions raise ... 로 항목을 만든 뒤 --decision <id> 를 붙이세요. 연결이 없을 때는 --allow-new 만으로 새 방이 정상 생성됩니다.`,
+      `⚠️ A verifier session (${link.codexSession}) is linked to this workspace. Forcing a new session with --force-new requires a decisions-ledger item (${rq.reason}).\n   Create one with ${SELF_CMD} decisions raise ... then pass --decision <id>. With no link, --allow-new alone creates a session normally.`), 3);
     console.error(tB(`[세션] 연결 ${link.codexSession} 이 있으나 결정 ${rq.decisionId} 으로 --force-new 허용 — 연결이 유효하면 그 방 재개, 무효면 새 방`, `[session] link ${link.codexSession} exists; --force-new allowed by decision ${rq.decisionId} — a valid link is resumed, an invalid one leads to a new session`));
   }
   // 같은 요청 중복 전송 차단(2026-07-10 실사고: 첫 호출이 3분29초 만에 원인미상 비정상 종료되자 원인 확인 없이 '전송 실패' 오판 재전송 →
@@ -4765,8 +4767,8 @@ async function cmdAsk(rest) {
     const state = g.reason === "parent-alive" || g.reason === "child-alive"
       ? tB("검증이 실제로 진행 중", "verification is still running")
       : tB("이전 검증의 비정상 종료 표식이 남음(답이 대시보드에 도착했을 수 있음)", "a previous verification left an abnormal-exit marker (the answer may already be in the dashboard)");
-    die(tB(`⚠️ 이 워크스페이스에는 ${state}입니다. 문구가 다른 요청도 재전송하지 마세요. 대시보드 검증 대화/rollout을 먼저 확인하세요.\n   상태: node codex-bridge.js ask-active status\n   부모·자식 종료를 확인하고 사용자가 재시도를 결정한 경우에만: node codex-bridge.js ask-active clear --confirm`,
-             `⚠️ This workspace has ${state}. Do not resend even a differently worded request. Check the dashboard verification chat/rollout first.\n   Status: node codex-bridge.js ask-active status\n   Only after the user decides to retry and both parent/child are gone: node codex-bridge.js ask-active clear --confirm`), 3);
+    die(tB(`⚠️ 이 워크스페이스에는 ${state}입니다. 문구가 다른 요청도 재전송하지 마세요. 대시보드 검증 대화/rollout을 먼저 확인하세요.\n   상태: ${SELF_CMD} ask-active status\n   부모·자식 종료를 확인하고 사용자가 재시도를 결정한 경우에만: ${SELF_CMD} ask-active clear --confirm`,
+             `⚠️ This workspace has ${state}. Do not resend even a differently worded request. Check the dashboard verification chat/rollout first.\n   Status: ${SELF_CMD} ask-active status\n   Only after the user decides to retry and both parent/child are gone: ${SELF_CMD} ask-active clear --confirm`), 3);
   }
   const activeRec = activeClaim.rec;
   process.on("exit", () => clearAskActive(ws, activeRec && activeRec.token));
@@ -4978,8 +4980,8 @@ async function cmdAsk(rest) {
   if (!allowNew) {
     // (나) 정책: 보고만 하고 멈춤. 멋대로 새 세션 안 만듦.
     die(
-      tB(`🔌 이 Claude 세션/워크스페이스에 연결된 Codex 세션이 없습니다.\n   - 기존 세션에 연결:   node codex-bridge.js link <codex-session-id>   (목록: find)\n   - 가장 최근에 연결:   node codex-bridge.js link --last\n   - 새로 시작(첫 소통): node codex-bridge.js ask --allow-new "..."\n※ 새 세션을 임의로 만들지 않았습니다.`,
-         `🔌 No Codex session is linked to this Claude session/workspace.\n   - Link an existing session:  node codex-bridge.js link <codex-session-id>   (list: find)\n   - Link the most recent:      node codex-bridge.js link --last\n   - Start fresh (first contact): node codex-bridge.js ask --allow-new "..."\n※ No new session was created on its own.`),
+      tB(`🔌 이 Claude 세션/워크스페이스에 연결된 Codex 세션이 없습니다.\n   - 기존 세션에 연결:   ${SELF_CMD} link <codex-session-id>   (목록: find)\n   - 가장 최근에 연결:   ${SELF_CMD} link --last\n   - 새로 시작(첫 소통): ${SELF_CMD} ask --allow-new "..."\n※ 새 세션을 임의로 만들지 않았습니다.`,
+         `🔌 No Codex session is linked to this Claude session/workspace.\n   - Link an existing session:  ${SELF_CMD} link <codex-session-id>   (list: find)\n   - Link the most recent:      ${SELF_CMD} link --last\n   - Start fresh (first contact): ${SELF_CMD} ask --allow-new "..."\n※ No new session was created on its own.`),
       3,
     );
   }
@@ -5012,8 +5014,8 @@ async function cmdAsk(rest) {
   const freshAutoFail = (loadLinks() || {}).autoNewFailed;
   if (freshAutoFail && freshAutoFail[wsKey]) {
     die(
-      tB(`⚠️ 직전에 새 Codex 세션을 만들었지만 연결 기록에 실패했습니다(세션id 식별 실패).\n   무한 생성 방지를 위해 자동 생성을 멈춥니다.\n   - 만든 세션 연결: node codex-bridge.js find  →  node codex-bridge.js link <id>\n   - 폴더 탐지 점검: node codex-bridge.js doctor`,
-         `⚠️ A new Codex session was just created but linking failed (session id unresolved).\n   Auto-creation is paused to prevent runaway session creation.\n   - Link the created session: node codex-bridge.js find  →  node codex-bridge.js link <id>\n   - Check folder detection:  node codex-bridge.js doctor`),
+      tB(`⚠️ 직전에 새 Codex 세션을 만들었지만 연결 기록에 실패했습니다(세션id 식별 실패).\n   무한 생성 방지를 위해 자동 생성을 멈춥니다.\n   - 만든 세션 연결: ${SELF_CMD} find  →  ${SELF_CMD} link <id>\n   - 폴더 탐지 점검: ${SELF_CMD} doctor`,
+         `⚠️ A new Codex session was just created but linking failed (session id unresolved).\n   Auto-creation is paused to prevent runaway session creation.\n   - Link the created session: ${SELF_CMD} find  →  ${SELF_CMD} link <id>\n   - Check folder detection:  ${SELF_CMD} doctor`),
       3,
     );
   }
@@ -5183,7 +5185,7 @@ function cmdFind() {
     const when = s.mtime ? new Date(s.mtime).toLocaleString() : "";
     process.stdout.write(`  ${s.id}${mark}\n     ${when} · ${firstUserSnippet(s.file)}\n`);
   }
-  process.stdout.write('\n연결 바꾸기: node codex-bridge.js link <id>\n');
+  process.stdout.write('\n연결 바꾸기: ' + SELF_CMD + ' link <id>\n');
 }
 
 // 진단 전용(doctor에서만 호출): CODEX_HOME 하위에서 '실제 rollout이 떨어진 폴더'를 관찰한다(archived_sessions 제외).
@@ -5253,7 +5255,7 @@ function cmdDoctor() {
     process.stdout.write(
       `\n⚠ 세션 폴더가 없음. 세션 목록/연결/검증/삭제가 안 되면 1차 의심:\n` +
         `  codex 업데이트로 'codex doctor'의 CODEX_HOME 출력 형식이 바뀌어 home 자동탐지가 깨졌을 수 있음.\n` +
-        `  → 'node codex-bridge.js detect-home' 재실행. 그래도 실패면 detectCodexHome()의 파싱 규칙(정규식) 확인.\n`,
+        `  → '${SELF_CMD} detect-home' 재실행. 그래도 실패면 detectCodexHome()의 파싱 규칙(정규식) 확인.\n`,
     );
   }
   // layout 변경 진단: 세션 폴더가 없거나 비었는데 CODEX_HOME 하위 다른 곳에 rollout이 있으면 알린다(자동 전환은 안 함).
@@ -5397,21 +5399,21 @@ function main() {
     default:
       process.stdout.write(
         "codex-bridge: ask-start | ask-wait | ask-job | ask | ask-active | timeout | link | status | find | doctor | detect-home | pref\n" +
-          '  node codex-bridge.js ask-start --allow-new "<프롬프트>"  (내구 작업 시작 — 즉시 job id 반환)\n' +
-          "  node codex-bridge.js ask-wait <job-id>                 (45초씩 결과 대기 — pending이면 반복)\n" +
-          "  node codex-bridge.js ask-job status [job-id] | ask-job clear <job-id> --confirm\n" +
-          '  node codex-bridge.js ask "<프롬프트>"              (Codex-Codex 모드에선 미지원 — ask-start를 사용)\n' +
-          '  node codex-bridge.js ask --allow-new "<프롬프트>"\n' +
-          '  node codex-bridge.js ask --force-new "<프롬프트>"  (엉뚱 폴더 방어 무시, 이 폴더에 새 세션 강제)\n' +
-          '  node codex-bridge.js ask --net "<프롬프트>"        (이 1회만 네트워크 허용 — 파일은 읽기전용 유지, 원격 확인용)\n' +
-          '  node codex-bridge.js ask --force-resend "<프롬프트>" (같은 요청 진행 중 차단을 의식적으로 우회)\n' +
-          "  node codex-bridge.js ask-active status | ask-active clear --confirm\n" +
-          '  node codex-bridge.js finding-judge [<id> <fix-fact|fix-gap|rebut|park> --note "근거(12자+·park 제외)"] [--campaign <id>]  (열린 지적 판단 기록 — 미판단이 남으면 다음 검증이 시작되지 않음)\n' +
-          '  node codex-bridge.js rule-propose <findingId> --why "<왜 관통 지침인지 1줄>"  (마감 판단 (c)관통 지침만 수칙서 후보로 — 효력은 사용자 도장부터)\n' +
-          "  node codex-bridge.js timeout  (대시보드 검증 대기시간과 외부 호출 최소 timeout 확인)\n" +
-          "  node codex-bridge.js link <id> | link --last\n" +
-          "  node codex-bridge.js status | find | doctor | detect-home\n" +
-          "  node codex-bridge.js pref [set model=<m> reasoning=<low|medium|high> | clear]\n",
+          '  ' + SELF_CMD + ' ask-start --allow-new "<프롬프트>"  (내구 작업 시작 — 즉시 job id 반환)\n' +
+          "  " + SELF_CMD + " ask-wait <job-id>                 (45초씩 결과 대기 — pending이면 반복)\n" +
+          "  " + SELF_CMD + " ask-job status [job-id] | ask-job clear <job-id> --confirm\n" +
+          '  ' + SELF_CMD + ' ask "<프롬프트>"              (Codex-Codex 모드에선 미지원 — ask-start를 사용)\n' +
+          '  ' + SELF_CMD + ' ask --allow-new "<프롬프트>"\n' +
+          '  ' + SELF_CMD + ' ask --force-new "<프롬프트>"  (엉뚱 폴더 방어 무시, 이 폴더에 새 세션 강제)\n' +
+          '  ' + SELF_CMD + ' ask --net "<프롬프트>"        (이 1회만 네트워크 허용 — 파일은 읽기전용 유지, 원격 확인용)\n' +
+          '  ' + SELF_CMD + ' ask --force-resend "<프롬프트>" (같은 요청 진행 중 차단을 의식적으로 우회)\n' +
+          "  " + SELF_CMD + " ask-active status | ask-active clear --confirm\n" +
+          '  ' + SELF_CMD + ' finding-judge [<id> <fix-fact|fix-gap|rebut|park> --note "근거(12자+·park 제외)"] [--campaign <id>]  (열린 지적 판단 기록 — 미판단이 남으면 다음 검증이 시작되지 않음)\n' +
+          '  ' + SELF_CMD + ' rule-propose <findingId> --why "<왜 관통 지침인지 1줄>"  (마감 판단 (c)관통 지침만 수칙서 후보로 — 효력은 사용자 도장부터)\n' +
+          "  " + SELF_CMD + " timeout  (대시보드 검증 대기시간과 외부 호출 최소 timeout 확인)\n" +
+          "  " + SELF_CMD + " link <id> | link --last\n" +
+          "  " + SELF_CMD + " status | find | doctor | detect-home\n" +
+          "  " + SELF_CMD + " pref [set model=<m> reasoning=<low|medium|high> | clear]\n",
       );
   }
 }

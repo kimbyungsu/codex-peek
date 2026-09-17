@@ -305,3 +305,19 @@
 - 결과: 묶음 (가)=이관·배포·시험(이 항목), (나)=안내 문구·README 한/영, (다)=모드별 기본 담당·준비 계약. (가) 뒤에는 설치본 평면 폴더만으로 정찰 공급자·보관·꾸러미 수집이 로드된다(tests/scout-deploy.test.js [5]).
 - 정본: bridge/scout-providers.js · bridge/scope-package.js `function cliMain` · bridge/scope-package-core.js · scripts/sync-map-core.js `const PAIRS` · install.js `BRIDGE_SCRIPTS` · src/hook-setup.ts `BRIDGE_SCRIPTS` · bridge/map-cutover.js `EXPECTED_DEPLOY_FILES` · tests/scout-deploy.test.js.
 - 찾는말: 마켓 설치 정찰 안 됨, 3트랙 마켓, scripts 폴더 없음, 정찰 스크립트 이관, 얇은 래퍼, 코어 사본, 세대 어긋남 zip 재설치
+
+## D-2026-09-16-bridge-home-hints — 사용자에게 보이는 실행 안내는 브릿지 홈 절대 경로 한 곳에서 만든다(소스 저장소 전제 문구 폐기)
+- 날짜: 2026-09-16 · 종류: 확정 · 상태: 유효
+- 결정: 플랜 게이트·자동 지시·대시보드·명령줄이 "codex-peek 소스 저장소에서 node scripts/… 를 실행하라"고 안내했는데, 마켓에서 설치한 사람은 그 저장소가 없어 따라 할 수 없었다. 정찰 실행층이 브릿지 홈에 배치된 뒤(D-2026-09-16-scout-layer-deploy)에는 안내가 그 실물을 가리켜야 한다. 그래서 실행 안내 문자열은 브릿지(contract-lib bridgeCmd)와 확장(bridgeCmd·웹뷰 BC9) 각 한 곳에서만 만들고, 저장소 전제 문구는 없앤다. 이관된 명령줄 도구의 usage 는 실제로 불린 경로(설치본이든 래퍼든)를 그대로 보여 준다. 개발용 도구(회고·재조정·동기화·이미지)는 저장소 전용이라 바꾸지 않는다.
+- 왜: 검증자가 `node scripts/` 문자열만 바꾸면 `node bridge/…` 예시와 '소스 저장소에서' 문구가 남아 여전히 따라 할 수 없다고 잡았고, 개발용 도구까지 바꾸면 존재하지 않는 명령을 안내한다고 잡았다(2026-09-16 4판).
+- 결과: 런타임 노출 18파일(브릿지 7·확장 1·이관 도구 10)의 안내가 브릿지 홈 경로로 통일. README 한/영의 설치 절·한계 고지·'수동 설치 존중' 문장을 현 동작(같은 세대면 관리 모드 승격·다음 업데이트부터 자동 동기화)에 맞게 정정.
+- 정본: bridge/contract-lib.js `function bridgeCmd` · src/extension.ts `const bridgeCmd` · src/extension.ts `function BC9` · bridge/scout-gate.js · bridge/codex-hook.js · tests/scout-gate.test.js · tests/scout-arm.test.js · tests/cli-bilingual.test.js.
+- 찾는말: 소스 저장소에서 실행, node scripts 안내, 브릿지 홈 경로, 플랜 게이트 안내, 마켓 설치 정찰 안내, README 한계 문구
+
+## D-2026-09-16-release-assets-record — 릴리스 자산 구성 절차는 저장소 스크립트로 두고, 작업 폴더 잔재가 컴파일을 깨지 못하게 한다
+- 날짜: 2026-09-16 · 종류: 확정 · 상태: 유효
+- 결정: v0.1.101 릴리스 자산(설치 zip·vsix·체크섬)을 임시 폴더의 스크립트로 만들면서 작업 폴더 out/pkg 를 남겼고, 그 안의 소스 사본이 다음 컴파일에 잡혀 전체 시험 체인이 첫 단계에서 멈췄다. 절차를 조수의 기억에 두지 않고 저장소에 남긴다: scripts/release-assets.sh(끝나면 out/pkg 삭제·zip 은 bsdtar 로 만들어 리눅스·맥에서도 바르게 풀림)와 tsconfig.json 의 exclude 에 out 을 추가해 잔재가 있어도 컴파일이 깨지지 않게 한다.
+- 왜: 사용자 지적 — "기억하지 말고 기록을 남겨야 함. 지금 만드는 것이 그걸 기억하기 위한 하네스 그 자체"(2026-09-16).
+- 결과: 다음 릴리스는 release.js 완주 뒤 `bash scripts/release-assets.sh` → gh release 순서로 저장소 안 절차만 따른다.
+- 정본: scripts/release-assets.sh · tsconfig.json `"exclude"` · scripts/release.js.
+- 찾는말: 릴리스 자산, 설치 zip 만들기, out/pkg, tsc rootDir 오류, Compress-Archive 백슬래시, bsdtar

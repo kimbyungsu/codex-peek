@@ -117,7 +117,7 @@ function deployGenerationCheckUnlocked() {
     if (!selfInDeploy) return { ok: false, key: "no-repo", detail: "install.js" };
     let man = null;
     try { man = JSON.parse(fs.readFileSync(path.join(CL.BRIDGE_DIR, "deploy-manifest.json"), "utf8")); } catch { man = null; }
-    if (!man || man.schema !== "deploy-manifest-v1" || !man.files || typeof man.files !== "object") return { ok: false, key: "deploy-manifest-missing", detail: "deploy-manifest.json — node install.js 재실행" };
+    if (!man || man.schema !== "deploy-manifest-v1" || !man.files || typeof man.files !== "object") return { ok: false, key: "deploy-manifest-missing", detail: "deploy-manifest.json — " + CL.runtimeRepairHint(false) };
     { // 3차 blocker②: manifest 키 집합=EXPECTED 정확 일치(누락·잉여 전부 거부 — 축소 목록 혼합 세대 차단)
       const got = Object.keys(man.files).sort().join(",");
       const want = [...EXPECTED_DEPLOY_FILES].sort().join(",");
@@ -230,7 +230,7 @@ function safetyChecks(repo, opts) {
   if (want !== got) return { fail: t("manifest 표면 집합 불일치(누락/잉여): ", "manifest surface set mismatch: ") + got };
   const notReady = (mf.surfaces || []).filter((x) => x.ready !== true).map((x) => x.id);
   if (notReady.length) return { fail: t("manifest ready=false 표면: ", "manifest surfaces not ready: ") + notReady.join(",") };
-  if (!o.skipDeploy) { const dg = deployGenerationCheck(); if (!dg.ok) return { fail: t("배포 사본 세대 검사 실패(", "deployed copy generation check failed (") + dg.key + ": " + dg.detail + t(") — node install.js 실행 후 재시도", ") — run node install.js and retry") }; }
+  if (!o.skipDeploy) { const dg = deployGenerationCheck(); if (!dg.ok) return { fail: t("배포 사본 세대 검사 실패(", "deployed copy generation check failed (") + dg.key + ": " + dg.detail + t(") — " + CL.runtimeRepairHint(false) + " 후 재시도", ") — " + CL.runtimeRepairHint(true) + ", then retry") }; }
   return { ok: true, topo: rt.topo, raw: rt.raw };
 }
 
