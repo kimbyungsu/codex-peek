@@ -3,7 +3,7 @@
  * 배포 부작용(git push 등)은 실행하지 않는다(require.main 가드).
  */
 const path = require("path");
-const { nextVersion, dirtyTracked, parseArgs, publishGate } = require(path.join(__dirname, "..", "scripts", "release.js"));
+const { nextVersion, dirtyTracked, parseArgs, publishGate, stepTimeoutMsFor } = require(path.join(__dirname, "..", "scripts", "release.js"));
 let pass = 0, fail = 0;
 function ok(c, m) { if (c) { pass++; console.log("  ✅ " + m); } else { fail++; console.log("  ❌ " + m); } }
 
@@ -22,6 +22,11 @@ ok(dirtyTracked(" M src/extension.ts\n?? docs/intro.html\n").join(",") === "src/
 ok(dirtyTracked("?? a.txt\n?? b.txt\n").length === 0, "미추적만 있으면 깨끗");
 ok(dirtyTracked("").length === 0, "빈 상태 깨끗");
 ok(dirtyTracked("A  new.ts\nM  old.ts\n").length === 2, "staged 추가/수정도 잡음");
+
+console.log("[stepTimeoutMsFor] 단계 timeout — 기본 90분·env 양수 분만 반영(2026-09-18 timeout 사망 재발 방지)");
+ok(stepTimeoutMsFor({}) === 90 * 60000, "env 없음=90분");
+ok(stepTimeoutMsFor({ CODEX_BRIDGE_RELEASE_STEP_TIMEOUT_MIN: "120" }) === 120 * 60000, "env 120=120분");
+ok(stepTimeoutMsFor({ CODEX_BRIDGE_RELEASE_STEP_TIMEOUT_MIN: "0" }) === 90 * 60000 && stepTimeoutMsFor({ CODEX_BRIDGE_RELEASE_STEP_TIMEOUT_MIN: "abc" }) === 90 * 60000 && stepTimeoutMsFor({ CODEX_BRIDGE_RELEASE_STEP_TIMEOUT_MIN: "-5" }) === 90 * 60000, "0·비수·음수=기본 90분");
 
 console.log("[parseArgs] 플래그 해석(publish-only 경로 유무 포함)");
 let a = parseArgs([]);
