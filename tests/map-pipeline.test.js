@@ -709,6 +709,26 @@ function main() {
     } finally { try { sleeper.kill(); } catch { /* 무해 */ } }
   }
 
+  console.log("[tmp-sweep] 정본 임시 파일 청소 — 죽은 pid 의 것만 지우고 살아 있는 pid 는 나이 상한까지 둔다(2026-09-17 실사고 topology.json.<pid>.tmp 잔존)");
+  {
+    const ws = mkRepo("tmpsweep");
+    const dir = path.join(ws, "project-map"); fs.mkdirSync(dir, { recursive: true });
+    const dead = path.join(dir, "topology.json.999999.tmp"); fs.writeFileSync(dead, "{}");
+    const mine = path.join(dir, "topology.json." + process.pid + ".tmp"); fs.writeFileSync(mine, "{}");
+    const real = path.join(dir, "topology.json"); fs.writeFileSync(real, "{}");
+    const r1 = MP.sweepStaleTmp(ws);
+    ok(r1.removed.length === 1 && r1.removed[0] === "topology.json.999999.tmp" && !fs.existsSync(dead), "죽은 pid 임시 파일 제거");
+    ok(r1.kept.length === 1 && fs.existsSync(mine) && fs.existsSync(real), "살아 있는 pid 임시 파일·정본은 보존");
+    const r2 = MP.sweepStaleTmp(ws, { maxAgeMs: 0 });
+    ok(r2.removed.length === 1 && !fs.existsSync(mine) && fs.existsSync(real), "나이 상한 0=살아 있는 pid 것도 제거(pid 재사용 대비)·정본 보존");
+    ok(MP.sweepStaleTmp(path.join(ws, "nope")).removed.length === 0, "폴더 없음=무동작");
+    const ws2 = mkRepo("tmpsweep2"); setScoutOn(ws2); MB.grantConsent(ws2, "test");
+    const t2 = initTopo(ws2);
+    const stale2 = path.join(ws2, "project-map", "MAP.md.999998.tmp"); fs.writeFileSync(stale2, "x");
+    const rec = MP.recoverWal(ws2, t2.mapId);
+    ok(Array.isArray(rec) && !fs.existsSync(stale2), "recoverWal 이 청소를 동반(정본 잠금 아래)");
+  }
+
   console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
   try { fs.rmSync(process.env.CODEX_BRIDGE_HOME, { recursive: true, force: true }); } catch { /* 무해 */ }
   process.exit(fail ? 1 : 0);

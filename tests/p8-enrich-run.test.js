@@ -1184,5 +1184,81 @@ console.log("[12h] 7차 ab-6 변형 — 오탈취된 원 소유자는 provider �
   }
 }
 
+console.log("[7c] 인용 불일치 진단 — 왜 어긋났는지 구조로 남긴다(보강 후속 묶음 2026-09-18 · 보관함 e60e6229e51842a6)");
+{
+  const { ws, nodeId } = setup("mmdiag");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  const fake = () => ({ ok: true, result: { schema: "enrich-result-v1", items: [
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "n" } }, evidence: [{ file: "src/a.js", quote: "//   a" }] },
+  ] } });
+  const r = ME.runEnrich(ws, base(ws, { adapters: { self: fake } }));
+  ok(r.outcome === "parked" && r.reason === "self-failed", "공백만 다른 인용=여전히 거부(대조 규칙 불변 · ab-3 관문 유지)");
+  const jr = ME.readEnrichJob(ws);
+  const d = jr.st === "ok" ? jr.job.attempts[0].failureDetail : null;
+  ok(!!d && d.kind === "evidence-mismatch" && d.matchAfter === "whitespace" && d.inExcerpt === true && d.fileChanged === false && d.quoteHead === "//   a" && d.quoteLen === 6 && d.quoteLines === 1, "진단: 공백 정규화면 일치·발췌 안·파일 불변·인용 머리 (" + JSON.stringify(d) + ")");
+  ok(jr.st === "ok", "진단이 붙은 장부가 strict 판독을 통과");
+  const dCr = ME.evidenceMismatchDetail("aaaaaaaaaa\r\nTAIL\r\n", "TAIL\n");
+  ok(dCr.matchAfter === "crlf" && dCr.inExcerpt === true, "줄 끝만 다르면 crlf");
+  const dOut = ME.evidenceMismatchDetail("aaaaaaaaaa\r\nTAIL\r\n", "TAIL\n", { excerptMax: 5 });
+  ok(dOut.matchAfter === "crlf" && dOut.inExcerpt === false, "발췌 상한 밖 인용=inExcerpt false");
+  const dNone = ME.evidenceMismatchDetail("abc\n", "zzz");
+  ok(dNone.matchAfter === null && dNone.inExcerpt === false && dNone.quoteHead === "zzz", "어디에도 없으면 null");
+  const dSens = ME.evidenceMismatchDetail("SECRET=1\n", "SECRET", { sensitive: true });
+  ok(dSens.matchAfter === null && dSens.quoteHead === undefined && dSens.inExcerpt === false, "민감 경로=존재 여부 오라클 없음(ab-7)");
+  ok(ME.validFailureDetail(dCr) && ME.validFailureDetail(dSens) && ME.validFailureDetail(undefined) && ME.validFailureDetail({ kind: "file-cap", have: 1, cap: 1, active: 1 })
+    && !ME.validFailureDetail({ kind: "evidence-mismatch", quoteLen: 1, quoteLines: 1, matchAfter: "bogus", inExcerpt: false, fileChanged: false })
+    && !ME.validFailureDetail({ kind: "evidence-mismatch", quoteLen: 1, quoteLines: 1, matchAfter: null, inExcerpt: false, fileChanged: false, extra: 1 })
+    && !ME.validFailureDetail({ kind: "other" }), "failureDetail 합타입 검증(이형 거부)");
+  ok(ME.retryPauseMs(1, {}) === 250 && ME.retryPauseMs(2, {}) === 500 && ME.retryPauseMs(5, {}) === 4000 && ME.retryPauseMs(9, {}) === 4000 && ME.retryPauseMs(3, { retryPauseMs: 0 }) === 0 && ME.retryPauseMs(1, { retryPauseMs: 10 }) === 10, "재시도 간격: 250ms 두 배씩·4초 상한·시험 0");
+}
+
+console.log("[7d] 편집 중 충돌 — 답을 기다리는 사이 파일이 바뀌면 담당 실패로 세지 않고 '소스 변경'으로 멈췄다가 다음 실행에서 스스로 재개(2026-09-17 실사고)");
+{
+  const { ws, nodeId } = setup("srcchg");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  let calls = 0;
+  const editing = () => { calls++; fs.writeFileSync(path.join(ws, "src", "a.js"), "// a\n// edited while waiting\n"); return { ok: true, result: { schema: "enrich-result-v1", items: [
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "n" } }, evidence: [{ file: "src/a.js", quote: "// gone" }] },
+  ] } }; };
+  const r = ME.runEnrich(ws, base(ws, { adapters: { self: editing } }));
+  ok(r.outcome === "parked" && r.reason === "source-changed", "편집 중 충돌=source-changed 로 정지(self-failed 아님) (" + r.outcome + "/" + r.reason + ")");
+  const j1 = ME.readEnrichJob(ws).job;
+  ok(!!j1 && j1.phase === "parked" && j1.parkedReason === "source-changed" && !!j1.attempts[0].failureDetail && j1.attempts[0].failureDetail.fileChanged === true && j1.attempts[0].failureCode === "evidence-mismatch", "장부: parkedReason·failureDetail.fileChanged·failureCode");
+  ok(!Number.isInteger(j1.retryFrom), "자동재시도 예산(retryFrom) 미소모");
+  // 재개 경로에서 또 편집 충돌(검증 1판 blocker): resumeJob 의 자체 루프도 담당 실패(self-failed)로 세지 않고 다시 source-changed
+  const editingAgain = () => { calls++; fs.writeFileSync(path.join(ws, "src", "a.js"), "// a\n// edited again " + calls + "\n"); return { ok: true, result: { schema: "enrich-result-v1", items: [
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "n" } }, evidence: [{ file: "src/a.js", quote: "// gone again" }] },
+  ] } }; };
+  const r1b = ME.runEnrich(ws, base(ws, { adapters: { self: editingAgain } }));
+  ok(r1b.outcome === "parked" && r1b.reason === "source-changed" && calls === 2, "재개 경로에서 반복 편집 충돌=다시 source-changed(self-failed 아님) (" + r1b.outcome + "/" + r1b.reason + ")");
+  const r2 = ME.runEnrich(ws, base(ws, { adapters: { self: goodAdapter(nodeId) } }));
+  ok(r2.outcome === "applied" && calls === 2, "편집이 가라앉은 다음 실행에서 자기 재개→적용·편집 어댑터 재호출 0 (" + r2.outcome + "/" + r2.reason + ")");
+  const rows = fs.readFileSync(ME.ROUTE_LOG, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  ok(rows.some((x) => x.route === "source-heal" && x.outcome === "resumed"), "재개 로그 route=source-heal");
+  ok(rows.some((x) => x.route === "park" && x.reason === "source-changed"), "정지 로그 reason=source-changed");
+}
+
+console.log("[7d-2] attempt 없는 open 작업의 복구 경로에서도 편집 중 충돌=source-changed(확인 검증 2판 blocker)");
+{
+  const { ws, nodeId } = setup("srcchg2");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  // 첫 실행은 답 거부로 보류 → 장부를 'attempt 없는 open'(consent-stale 복원과 동형)으로 되돌린다
+  const bad = () => ({ ok: true, result: { schema: "enrich-result-v1", items: [
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "n" } }, evidence: [{ file: "src/a.js", quote: "// nope" }] },
+  ] } });
+  const r0 = ME.runEnrich(ws, base(ws, { adapters: { self: bad } }));
+  ok(r0.outcome === "parked" && r0.reason === "self-failed", "(전제) 답 거부 보류");
+  ME.updateEnrichJob(ws, (jj) => { if (!jj) return null; const nx = { ...jj, phase: "open", attempts: [] }; delete nx.finishedAt; delete nx.parkedReason; delete nx.retryFrom; return nx; });
+  ok(ME.readEnrichJob(ws).st === "ok" && ME.readEnrichJob(ws).job.attempts.length === 0, "(전제) attempt 없는 open 장부");
+  let calls = 0;
+  const editing = () => { calls++; fs.writeFileSync(path.join(ws, "src", "a.js"), "// a\n// edited in recovery " + calls + "\n"); return bad(); };
+  const r1 = ME.runEnrich(ws, base(ws, { adapters: { self: editing } }));
+  ok(r1.outcome === "parked" && r1.reason === "source-changed" && calls === 1, "복구 경로(attempt 없음)에서 편집 충돌=source-changed (" + r1.outcome + "/" + r1.reason + ")");
+  const j1 = ME.readEnrichJob(ws).job;
+  ok(j1.parkedReason === "source-changed" && j1.attempts.length === 1 && j1.attempts[0].failureDetail && j1.attempts[0].failureDetail.fileChanged === true, "장부: 사유·진단 기록");
+  const r2 = ME.runEnrich(ws, base(ws, { adapters: { self: goodAdapter(nodeId) } }));
+  ok(r2.outcome === "applied", "다음 실행에서 자기 재개→적용 (" + r2.outcome + "/" + r2.reason + ")");
+}
+
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
 process.exit(fail ? 1 : 0);

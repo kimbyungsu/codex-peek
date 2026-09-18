@@ -235,7 +235,7 @@ function validateJob(d) {
     if (a.failureStage !== undefined && !FAILURE_STAGES.includes(a.failureStage)) return "attempt failureStage";
     if (a.failureCode !== undefined && !FAILURE_CODES.includes(a.failureCode)) return "attempt failureCode";
     // [§B2 (4)] 구조화 실패 사유(선택) — 닫힌 모양만(file-cap: have·cap·active 정수). 이형=손상(strict).
-    if (a.failureDetail !== undefined && a.failureDetail !== null && !(a.failureDetail && typeof a.failureDetail === "object" && !Array.isArray(a.failureDetail) && a.failureDetail.kind === "file-cap" && Number.isInteger(a.failureDetail.have) && Number.isInteger(a.failureDetail.cap) && Number.isInteger(a.failureDetail.active) && Object.keys(a.failureDetail).length === 4)) return "attempt failureDetail";
+    if (!validFailureDetail(a.failureDetail)) return "attempt failureDetail";
     // 저장소 상대경로만 — 절대경로·상위 탈출은 화면으로 내보낼 값이 아니다.
     if (a.failureFile !== undefined && (typeof a.failureFile !== "string" || !a.failureFile || a.failureFile.length > 260 || /^([a-zA-Z]:|[\\/])/.test(a.failureFile) || a.failureFile.split(/[\\/]/).includes(".."))) return "attempt failureFile";
     if (a.parkedReason !== undefined && typeof a.parkedReason !== "string") return "attempt parkedReason";
@@ -1328,6 +1328,19 @@ function runEnrichLocked(repo, o, env) {
         }
         return { outcome: "noop", reason: "parked", parkedReason: j.parkedReason || "" };
       }
+      // 소스 변경 자기치유(보강 후속 묶음 2026-09-18): '답을 기다리는 사이 파일이 바뀜'으로 멈춘 job 은 다음 실행에서
+      // 사람 없이 재개한다(그때는 편집이 가라앉았을 가능성이 높다). 실행당 재개 1회·다시 바뀌면 다시 같은 사유로 멈추므로
+      // 실제 편집이 호출 중에 반복될 때만 반복된다(무한 재과금 아님). retryFrom 이동=다른 자기치유와 같은 규칙.
+      if (j.parkedReason === "source-changed") {
+        const wSc = fencedUpdateEnrichJob(repo, env.fence, (jj) => { if (!jj || jj.phase !== "parked" || jj.parkedReason !== "source-changed") return null; const nx = { ...jj, phase: "open", retryFrom: Array.isArray(jj.attempts) ? jj.attempts.length : 0 }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
+        if (wSc.fenceLost) return { outcome: "busy", reason: "run-lock-lost" };
+        if (wSc.ok && !wSc.unchanged) {
+          log({ route: "source-heal", reason: "edit-settled", outcome: "resumed", jobKey: j.jobKey });
+          if (env.p10) env.p10.touch(wSc.job.jobKey, jobRunIdOf(wSc.job));
+          return resumeJob(repo, o, env, wSc.job, { topo, idx, pol, ah, corridor, changed, srcFp, srcHead, factsOk: factsOk0 });
+        }
+        return { outcome: "noop", reason: "parked", parkedReason: "source-changed" };
+      }
       const ANSWER_REJECTED_REASONS = ["precision-failed", "economy-failed", "both-failed", "self-failed"];
       if (ANSWER_REJECTED_REASONS.includes(String(j.parkedReason || "")) && !answerableInput(repo, topo, changed)) {
         const wTr = fencedUpdateEnrichJob(repo, env.fence, (jj) => { if (!jj || jj.phase !== "parked" || jj.parkedReason === "input-doc-only") return null; return { ...jj, parkedReason: "input-doc-only" }; });
@@ -1445,6 +1458,10 @@ function driveAttempts(repo, o, env, st) {
     if (at.outcome === "applied" || at.outcome === "parked" || at.outcome === "noop") return at;
     if (at.outcome === "provider-failed") {
       lastP10Failure = at._p10Reason || "provider-call-failed";
+      if (at._sourceChanged) { // 편집 중 충돌(보강 후속 묶음): 답이 틀린 게 아니라 입력이 바뀐 것 — 담당 실패로 세지 않고 '소스 변경' 사유로 세워 다음 실행이 스스로 재개한다
+        if (env.p10) env.p10.reasonCode = lastP10Failure;
+        return park((j) => j && { ...j, phase: "parked", parkedReason: "source-changed", finishedAt: new Date().toISOString() }, "source-changed", { jobKey: st.jobKey, provider });
+      }
       if (provider === "economy") economyFailed = true;
       else if (provider === "precision") precisionFailed = true;
       else { if (env.p10) env.p10.reasonCode = lastP10Failure; return park(null, "self-failed", { jobKey: st.jobKey }); }
@@ -1477,6 +1494,11 @@ function runAttempt(repo, o, env, st, provider) {
   });
   if (!mk.ok || attemptId < 0) return park(null, "attempt-write");
   // provider 호출(주입 어댑터 — 실 LLM 배선은 3b-2)
+  // 호출 전 발췌 파일 지문(보강 후속 묶음): 답을 기다리는 사이 인용 파일이 바뀌면 '담당 잘못'이 아니라
+  // '편집 중 충돌'이다 — 대조 실패 뒤 이 지문과 비교해 fileChanged 로 구분한다.
+  const preSha = new Map();
+  let EPx = null;
+  try { EPx = require(path.join(__dirname, "enrich-providers.js")); for (const f of EPx.excerptFilesFor(st.topo, st.changed)) { try { preSha.set(f, crypto.createHash("sha1").update(fs.readFileSync(path.join(repo, f))).digest("hex")); } catch { preSha.set(f, null); } } } catch { /* 지문 없음=fileChanged 판정 불가(false) */ }
   let call;
   const jobForUsage = mk.job || (readEnrichJob(repo).job || null);
   const usageContext = env.p10 ? env.p10.usage(st.jobKey, jobRunIdOf(jobForUsage)) : null;
@@ -1515,7 +1537,13 @@ function runAttempt(repo, o, env, st, provider) {
         try { body = fs.readFileSync(path.join(repo, cv.file), "utf8"); } catch { body = null; }
         // 파일을 못 읽은 것과 인용이 안 맞는 것은 사용자가 할 일이 다르다 — 두 코드로 나눈다(설계 상의 결론).
         if (body === null) { vr = { ok: false, kind: "evidence", code: "evidence-unreadable", file: cv.file, errors: ["근거 실패: " + cv.file + " 판독 불가"] }; break; }
-        if (!body.includes(cv.quote)) { vr = { ok: false, kind: "evidence", code: "evidence-mismatch", file: cv.file, errors: ["근거 실패: " + cv.file + " 인용 불일치"] }; break; }
+        if (!body.includes(cv.quote)) {
+          let nowSha = null; try { nowSha = crypto.createHash("sha1").update(fs.readFileSync(path.join(repo, cv.file))).digest("hex"); } catch { nowSha = null; }
+          const fileChanged = preSha.has(cv.file) && preSha.get(cv.file) !== null && preSha.get(cv.file) !== nowSha;
+          const sensitive = !!(EPx && typeof EPx.isSensitiveEnrichPath === "function" && EPx.isSensitiveEnrichPath(cv.file));
+          const detail = evidenceMismatchDetail(body, cv.quote, { fileChanged, sensitive, excerptMax: EPx ? EPx.FILE_EXCERPT_MAX : undefined });
+          vr = { ok: false, kind: "evidence", code: "evidence-mismatch", file: cv.file, detail, errors: ["근거 실패: " + cv.file + " 인용 불일치"] }; break;
+        }
       }
       if (!vr.ok) break;
     }
@@ -1524,7 +1552,7 @@ function runAttempt(repo, o, env, st, provider) {
   if (env.fence && !env.fence()) return { outcome: "busy", reason: "run-lock-lost" };
   if (!vr.ok) {
     const fx1 = vr.kind === "evidence"
-      ? { failureStage: "validation", failureCode: vr.code || "evidence-mismatch", ...safeFailureFile(vr.file) }
+      ? { failureStage: "validation", failureCode: vr.code || "evidence-mismatch", ...safeFailureFile(vr.file), ...(vr.detail && vr.detail.kind === "evidence-mismatch" ? { failureDetail: vr.detail } : {}) }
       : { failureStage: "validation", failureCode: "schema-invalid", ...(vr && vr.detail && vr.detail.kind === "file-cap" ? { failureDetail: { kind: "file-cap", have: Number(vr.detail.have), cap: Number(vr.detail.cap), active: Number(vr.detail.active) } } : {}) }; // [§B2 (4)] 상한 사유 구조 보존
     // 쓰기 결과를 확인한다(2차 blocker④: 실패 기록이 거부되면 시도가 running으로 남아, 다음 재개가
     // 이를 '호출 여부 불확실'로 해석해 완료된 결과 거부가 uncertain-call로 변질됐다).
@@ -1534,7 +1562,7 @@ function runAttempt(repo, o, env, st, provider) {
     if (w1.fenceLost) return { outcome: "busy", reason: "run-lock-lost" };
     if (!w1.ok) return park(null, "attempt-write:" + w1.reason, { provider, jobKey: st.jobKey });
     log({ route: provider, reason: "result-" + vr.kind, outcome: "error", provider, jobKey: st.jobKey, consentGen: g2.gen });
-    return { outcome: "provider-failed", provider, _p10Reason: "provider-result-invalid" };
+    return { outcome: "provider-failed", provider, _p10Reason: "provider-result-invalid", _sourceChanged: !!(vr.detail && vr.detail.kind === "evidence-mismatch" && vr.detail.fileChanged) };
   }
   // results 영속(수신 즉시 — 이후 재개는 provider 재호출 0)
   const wR = fencedUpdateEnrichJob(repo, env.fence, (j) => {
@@ -1598,7 +1626,7 @@ function applyItems(repo, o, env, st, attemptId) {
       const sup = a.cursor.super;
       const ex = MP.expirePendingPatch(repo, j.mapId, sup.fromPatchId, sup.fromOpHash);
       if (ex.reason === "busy") return park(null, "expire-busy");
-      if (ex.reason === "lock") { retries++; if (retries > 5) return park((jj) => jj && { ...jj, phase: "parked", parkedReason: "retry-exhausted", finishedAt: nowIso() }, "retry-exhausted", { jobKey: j.jobKey }); continue; }
+      if (ex.reason === "lock") { retries++; if (retries > 5) return park((jj) => jj && { ...jj, phase: "parked", parkedReason: "retry-exhausted", finishedAt: nowIso() }, "retry-exhausted", { jobKey: j.jobKey }); pauseSync(retryPauseMs(retries, o)); continue; }
       if (ex.reason === "already-applied") { // 그새 적용 완료 — ⓑ 보충(적용 도장 포함)+super 소거
         const wS = fencedUpdateEnrichJob(repo, env.fence, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === attemptId ? { ...x, cursor: { nextIndex: x.cursor.nextIndex + 1, rev: 0, appliedPatchIds: [...x.cursor.appliedPatchIds, sup.fromPatchId], ...(x.cursor.evExtra ? {} : {}) } } : x) });
         if (!wS.ok) return park(null, "cursor-write:" + wS.reason);
@@ -1667,6 +1695,7 @@ function applyItems(repo, o, env, st, attemptId) {
     if (step.retry) { // 일시 실패=같은 rev·같은 저장본 재시도(Verifier 재호출 0 — resolutions 재사용)·상한
       retries++;
       if (retries > 5) return park((jj) => jj && { ...jj, phase: "parked", parkedReason: "retry-exhausted", finishedAt: nowIso() }, "retry-exhausted", { jobKey: j.jobKey });
+      pauseSync(retryPauseMs(retries, o)); // 같은 초의 재시도는 같은 잠금을 만난다(보강 후속 묶음)
       if (step.recoverFirst) { try { MP.recoverWal(repo, j.mapId); } catch { /* 복구 실패=다음 재시도가 판정 */ } } // wal-active=P2 복구 표면 선행
       continue;
     }
@@ -1737,6 +1766,50 @@ function failAttempt(repo, env, attemptId, conv, provider) {
 // 화면으로 나갈 수 있는 파일 표기만 통과시킨다. 저장소 상대경로 형태가 아니면 파일 자체를 생략한다
 // (2차 blocker④: 거부되는 값을 그대로 쓰면 기록 저장이 통째로 실패해 시도가 running으로 남았다.
 //  2차 [보완]: 제어문자·여러 줄 문자열이 파일명 자리에 섞이는 것도 여기서 막는다).
+// ── 시도 실패 세부(failureDetail) — 합타입 검증(보강 후속 묶음 2026-09-18, 보관함 e60e6229e51842a6) ──
+// file-cap(§B2 (4)) 외에 '인용 불일치'도 왜 어긋났는지 구조로 남긴다. 화면·장부는 이 합타입만 받는다.
+const EVIDENCE_MATCH_AFTER = ["crlf", "trim", "whitespace"];
+function validFailureDetail(d) {
+  if (d === undefined || d === null) return true;
+  if (!d || typeof d !== "object" || Array.isArray(d)) return false;
+  if (d.kind === "file-cap") return Number.isInteger(d.have) && Number.isInteger(d.cap) && Number.isInteger(d.active) && Object.keys(d).length === 4;
+  if (d.kind === "evidence-mismatch") {
+    const keys = Object.keys(d).filter((k) => k !== "quoteHead");
+    if (keys.length !== 6) return false;
+    return Number.isInteger(d.quoteLen) && d.quoteLen >= 0 && Number.isInteger(d.quoteLines) && d.quoteLines >= 1
+      && (d.matchAfter === null || EVIDENCE_MATCH_AFTER.includes(d.matchAfter))
+      && typeof d.inExcerpt === "boolean" && typeof d.fileChanged === "boolean"
+      && (d.quoteHead === undefined || (typeof d.quoteHead === "string" && d.quoteHead.length <= 120));
+  }
+  return false;
+}
+// 인용 불일치 진단(2026-09-17 실사고: 두 시도가 '인용 불일치'로만 남아 줄 끝·공백 문제인지, 발췌 밖 인용인지,
+// 답을 기다리는 사이 파일이 바뀐 것인지 알 길이 없었다). 대조 규칙 자체(원문 그대로 포함)는 바꾸지 않는다 —
+// ab-3 근거 위조 관문은 그대로 두고, 실패 '뒤'에 어떤 정규화면 맞았을지·발췌 안인지·파일 변경 여부만 기록한다.
+// 민감 경로(ab-7)는 존재 여부 오라클이 되므로 정규화 대조·인용 머리를 남기지 않는다.
+function evidenceMismatchDetail(body, quote, opts = {}) {
+  const q = String(quote || "");
+  const d = { kind: "evidence-mismatch", quoteLen: q.length, quoteLines: q.split("\n").length, matchAfter: null, inExcerpt: false, fileChanged: !!opts.fileChanged };
+  if (opts.sensitive || typeof body !== "string") return d;
+  d.quoteHead = q.slice(0, 120);
+  const nCrlf = (x) => x.replace(/\r\n?/g, "\n");
+  const nTrim = (x) => nCrlf(x).split("\n").map((l) => l.trim()).join("\n");
+  const nWs = (x) => x.replace(/\s+/g, " ").trim();
+  if (q && nCrlf(body).includes(nCrlf(q))) d.matchAfter = "crlf";
+  else if (q && nTrim(body).includes(nTrim(q))) d.matchAfter = "trim";
+  else if (nWs(q) && nWs(body).includes(nWs(q))) d.matchAfter = "whitespace";
+  const exMax = Number.isInteger(opts.excerptMax) ? opts.excerptMax : 4000;
+  d.inExcerpt = d.matchAfter !== null && !!nWs(q) && nWs(body.slice(0, exMax)).includes(nWs(q));
+  return d;
+}
+// 일시 실패 재시도 간격(2026-09-17 실사고: 잠금·정본 쓰기 실패를 대기 없이 5회 연속 되풀이해 곧장 '재시도 소진'으로
+// 멈췄다 — 같은 초 안의 재시도는 같은 잠금을 만난다). 250ms 부터 두 배씩, 4초 상한. 시험은 o.retryPauseMs=0.
+function retryPauseMs(retries, o) {
+  const base = o && Number.isFinite(o.retryPauseMs) && o.retryPauseMs >= 0 ? o.retryPauseMs : 250;
+  return Math.min(base * Math.pow(2, Math.max(0, retries - 1)), 4000);
+}
+function pauseSync(ms) { if (!(ms > 0)) return; try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* 대기 불가=즉시 재시도 */ } }
+
 function safeFailureFile(v) {
   const s = String(v == null ? "" : v).replace(/\\/g, "/");
   if (!s || s.length > 260) return {};
@@ -1887,11 +1960,18 @@ function resumeJob(repo, oIn, env, j, st2) {
   };
   env = { ...env, log: wrappedLog, park: wrappedPark };
   const { MP, log, park } = env;
+  // 편집 중 충돌 공통 처리(확인 검증 2판 blocker): runAttempt 결과를 그대로 돌려주는 복구 경로도 driveAttempts·재개 루프와 같은 규칙 —
+  // provider-failed 에 _sourceChanged 가 붙어 있으면 담당 실패로 세지 않고 '소스 변경'으로 세운다.
+  const scPark = (r, prov) => {
+    if (!r || r.outcome !== "provider-failed" || !r._sourceChanged) return r;
+    if (env.p10 && r._p10Reason) env.p10.reasonCode = r._p10Reason;
+    return park((jj) => jj && { ...jj, phase: "parked", parkedReason: "source-changed", finishedAt: nowIso() }, "source-changed", { jobKey: j.jobKey, provider: prov });
+  };
   const a = j.attempts[j.attempts.length - 1];
   if (!a) { // 4차 blocker③: attempt 생성 전 park(consent-stale 등)에서 복원된 open — 신규 attempt 경로로
     const d0 = env.MRt.decideRoute({ mode: j.mode, ready: o.readiness, corridor: st2 && st2.corridor ? st2.corridor : "unknown", economyFailed: false, precisionFailed: false, conflict: false });
     if (d0.route === "park" || d0.route === "adjudicate") return park((jj) => jj && { ...jj, phase: "parked", parkedReason: d0.reason, finishedAt: nowIso() }, d0.reason, { jobKey: j.jobKey });
-    return runAttempt(repo, o, env, { topo: st2.topo, idx: st2.idx, pol: st2.pol, ah: st2.ah, jobKey: j.jobKey, corridor: st2 ? st2.corridor : "unknown", changed: st2 ? st2.changed : null, srcFp: st2 ? st2.srcFp : null, srcHead: st2 ? st2.srcHead : null, factsOk: st2 ? st2.factsOk : null }, d0.route);
+    return scPark(runAttempt(repo, o, env, { topo: st2.topo, idx: st2.idx, pol: st2.pol, ah: st2.ah, jobKey: j.jobKey, corridor: st2 ? st2.corridor : "unknown", changed: st2 ? st2.changed : null, srcFp: st2 ? st2.srcFp : null, srcHead: st2 ? st2.srcHead : null, factsOk: st2 ? st2.factsOk : null }, d0.route), d0.route);
   }
   if (a.phase === "running") {
     if (a.provider !== "self") { // 유료=자동 재호출 금지(호출 여부 확인 불가)
@@ -1902,7 +1982,7 @@ function resumeJob(repo, oIn, env, j, st2) {
     const wF = fencedUpdateEnrichJob(repo, env.fence, (jj) => jj && { ...jj, attempts: jj.attempts.map((x) => x.attemptId === a.attemptId ? { ...x, phase: "failed", failReason: "interrupted(self — 재실행 허용)", finishedAt: nowIso() } : x) });
     if (!wF.ok) return park(null, "attempt-write:" + wF.reason);
     log({ route: "self", reason: "self-interrupted-rerun", outcome: "routed", jobKey: j.jobKey });
-    return runAttempt(repo, o, env, { topo: st2.topo, idx: st2.idx, pol: st2.pol, ah: st2.ah, jobKey: j.jobKey, corridor: "mapped", changed: null }, "self");
+    return scPark(runAttempt(repo, o, env, { topo: st2.topo, idx: st2.idx, pol: st2.pol, ah: st2.ah, jobKey: j.jobKey, corridor: "mapped", changed: null }, "self"), "self");
   }
   if (a.phase === "applying") {
     // super 전이 재개=applyItems 위임(3차 blocker① — 여기서 rev만 전진 기록하면 currentPatch·super 부재의
@@ -1944,6 +2024,7 @@ function resumeJob(repo, oIn, env, j, st2) {
       const at2 = runAttempt(repo, o, env, stR, route2);
       if (!at2 || at2.outcome !== "provider-failed") return at2;
       if (at2._p10Reason) lastP10R = at2._p10Reason; // park할 때만 반영
+      if (at2._sourceChanged) return parkR("source-changed", route2); // 편집 중 충돌(보강 후속 묶음 · 검증 1판 blocker): 재개 경로에서도 실패 플래그·승격을 쓰지 않고 소스 변경으로 세운다
       if (route2 === "economy") eF2 = true;
       else if (route2 === "precision") pF2 = true;
       else return parkR("self-failed", route2);
@@ -1990,6 +2071,6 @@ function cliMain(argv) {
   return r.outcome === "applied" || r.outcome === "settled" || r.outcome === "noop" ? 0 : r.outcome === "busy" ? 3 : 1;
 }
 
-module.exports = { ENRICH_DIR, answerableInput, detFileNodeId, enrichTempIdMap, applyEnrichPayloadIds, fileNodePathKey, readConsumedBaseline, writeConsumedBaseline, expandChangedWithConsumedDelta, consumedFileFor, repoKeyFor, consentFileFor, jobFileFor, deferredFileFor, readEnrichConsent, grantEnrichConsent, revokeEnrichConsent, findGrant, readEnrichJob, updateEnrichJob, readDeferred, deferredSummary, enrichOutcomeSummary, recoverDeferredCalls, beginDeferredCall, finishDeferredCall, retryDeferredResolutions, jobKeyOf, jobSeedOf, jobRunIdOf, detPatchId, validateEnrichResult, toPatchV2, evidenceKindOf, appendRouteLog, historylessChanges, computeSourceFp, runEnrich, cliMain, ROUTE_LOG, JOB_PHASES, ATTEMPT_PHASES, ENRICH_TARGET_OPS };
+module.exports = { evidenceMismatchDetail, validFailureDetail, retryPauseMs, ENRICH_DIR, answerableInput, detFileNodeId, enrichTempIdMap, applyEnrichPayloadIds, fileNodePathKey, readConsumedBaseline, writeConsumedBaseline, expandChangedWithConsumedDelta, consumedFileFor, repoKeyFor, consentFileFor, jobFileFor, deferredFileFor, readEnrichConsent, grantEnrichConsent, revokeEnrichConsent, findGrant, readEnrichJob, updateEnrichJob, readDeferred, deferredSummary, enrichOutcomeSummary, recoverDeferredCalls, beginDeferredCall, finishDeferredCall, retryDeferredResolutions, jobKeyOf, jobSeedOf, jobRunIdOf, detPatchId, validateEnrichResult, toPatchV2, evidenceKindOf, appendRouteLog, historylessChanges, computeSourceFp, runEnrich, cliMain, ROUTE_LOG, JOB_PHASES, ATTEMPT_PHASES, ENRICH_TARGET_OPS };
 
 if (require.main === module) process.exit(cliMain(process.argv));

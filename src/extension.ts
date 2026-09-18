@@ -2798,7 +2798,7 @@ function computeState(turnsN: number): BridgeState {
             // 옛 기록에 위험한 파일 표기가 이미 저장돼 있을 수 있으므로, 화면으로 내보낼 때 한 번 더 거른다
             // (3차 [보완]: 판독 검증은 옛 기록 호환을 위해 느슨한데, 표시는 느슨하면 안 된다).
             lastFailure: last9 && last9.failureCode
-              ? { stage: last9.failureStage || null, code: last9.failureCode, file: safeShowFile(last9.failureFile), provider: last9.provider || null, detail: last9.failureDetail && last9.failureDetail.kind === "file-cap" ? { kind: "file-cap", have: Number(last9.failureDetail.have), cap: Number(last9.failureDetail.cap), active: Number(last9.failureDetail.active) } : null } // [§B2 (4)] 상한 실사유(구조만)
+              ? { stage: last9.failureStage || null, code: last9.failureCode, file: safeShowFile(last9.failureFile), provider: last9.provider || null, detail: last9.failureDetail && last9.failureDetail.kind === "file-cap" ? { kind: "file-cap", have: Number(last9.failureDetail.have), cap: Number(last9.failureDetail.cap), active: Number(last9.failureDetail.active) } : (last9.failureDetail && last9.failureDetail.kind === "evidence-mismatch" ? { kind: "evidence-mismatch", matchAfter: last9.failureDetail.matchAfter || null, inExcerpt: last9.failureDetail.inExcerpt === true, fileChanged: last9.failureDetail.fileChanged === true } : null) } // [§B2 (4)] 상한 실사유(구조만)
               // 구형 기록(구조 필드 이전): 자유 문자열은 화면에 내보내지 않되 '사유가 기록돼 있음'은 알린다.
               // 접두가 evidence면 단계만 보수적으로 추정(그 외는 미상 — 추측 금지).
               : (last9 && typeof last9.failReason === "string" && last9.failReason.trim()
@@ -6016,6 +6016,7 @@ class Dashboard {
   // 옮긴 것이다. 모르는 값이 오면 코드를 그대로 보여준다(사라지지 않게).
   // 공급자 이름이 뒤에 붙는 형태(adapter-missing:codex)는 콜론 앞만 보고 옮기고 뒤는 괄호로 남긴다.
   var PARK_REASONS={
+    "source-changed": ["답을 기다리는 사이 소스가 바뀌어 잠시 멈췄어요 — 다음 실행에서 스스로 다시 시도해요","the source changed while waiting for the answer, so it paused — it resumes on its own next run"],
     "precision-not-ready": ["정밀형 담당이 아직 준비되지 않았어요","the Precision provider is not ready yet"],
     "economy-not-ready": ["경제형 담당이 아직 준비되지 않았어요","the Economy provider is not ready yet"],
     "auto-not-ready": ["자동형은 두 담당이 모두 준비돼야 하는데 아직이에요","Auto needs both providers ready, and they are not"],
@@ -6059,6 +6060,14 @@ class Dashboard {
     if(!lf||!lf.code) return "";
     // [HARNESS-STRUCTURE-2026-09-11 §B2 (4)] 상한 거부는 일반 문구 대신 실사유(활성 칸 수·상한)를 그대로 보인다
     if(lf.detail&&lf.detail.kind==="file-cap") return T("지도 칸이 가득 차 새 파일 칸이 거부됐어요(활성 "+lf.detail.have+">"+lf.detail.cap+" — 자리가 나야 새 파일이 들어가요)","the map is full, so new file entries were rejected (active "+lf.detail.have+">"+lf.detail.cap+" — a slot must free up first)")+(lf.file?" ("+lf.file+")":"");
+    // 인용 불일치는 '왜'가 갈린다(보강 후속 묶음 2026-09-18): 편집 중 충돌 / 줄 끝·공백만 다름 / 발췌 밖·지어낸 인용.
+    if(lf.detail&&lf.detail.kind==="evidence-mismatch"){
+      var f9=lf.file?" ("+lf.file+")":"";
+      if(lf.detail.fileChanged) return T("답을 기다리는 사이 인용한 파일이 바뀌어 대조가 어긋났어요 — 편집 중 충돌이라 다음 실행에서 스스로 다시 시도해요","the quoted file changed while waiting for the answer, so the check failed — an edit-in-progress clash; it retries on its own next run")+f9;
+      if(lf.detail.matchAfter&&lf.detail.inExcerpt) return T("답은 돌아왔지만 인용이 줄 끝·공백만 원문과 달라 버렸어요(담당이 원문을 살짝 고쳐 적음)","an answer came back but its quote differed from the file only by line endings or spacing, so it was discarded (the provider altered the text slightly)")+f9;
+      if(lf.detail.matchAfter) return T("답은 돌아왔지만 담당이 본 발췌 밖을 인용해 버렸어요(파일에는 있지만 보낸 범위 밖)","an answer came back but it quoted beyond the excerpt the provider was given, so it was discarded (in the file, but outside the sent range)")+f9;
+      return T("답은 돌아왔지만 인용한 문장이 파일에 없어 버렸어요(지어낸 인용)","an answer came back but the quoted text is not in the file, so it was discarded (fabricated quote)")+f9;
+    }
     var hit=FAIL_TEXT[lf.code];
     if(!hit) return T("알 수 없는 실패(","unrecognized failure (")+lf.code+")";
     return T(hit[0],hit[1])+(lf.file?" ("+lf.file+")":"");

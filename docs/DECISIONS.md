@@ -337,3 +337,11 @@
 - 결과: 마켓 설치본만 가진 코덱스-코덱스 사용자도 3트랙이 돈다(Codex 정찰). Claude 명령줄이 없는 환경에서 플랜 게이트는 통과하고 대시보드가 사유를 보여 준다. 정리 담당은 탐색 담당의 유효 팔을 따르므로(D-2026-09-06-curator-arm-follows-scout) 코덱스-코덱스에서 담당 미지정이면 정리 담당도 Codex 가 된다 — 그 항목의 '미설정=Claude' 예시는 이 결정으로 모드 기본을 따르는 것으로 개정.
 - 정본: bridge/contract-lib.js `function defaultScoutArmFor` · `function cliOnPath` · `function scoutArmReadiness` · bridge/scout-providers.js `preflight` · bridge/scout-gate.js `passIfScoutNotReady` · bridge/codex-hook.js `scoutGate` · src/extension.ts `function scoutArmViewExt` · tests/scout-arm.test.js `[4c]` · tests/scout-gate.test.js · tests/p3b-stage1.test.js.
 - 찾는말: 정찰 담당 기본값, 코덱스-코덱스 정찰, claude 명령줄 없음, 정찰 준비 안 됨, 플랜 게이트 통과, cli-not-found, scoutArmReadiness
+
+## D-2026-09-18-enrich-followup — 자동 보강이 멈출 때는 '왜'를 구조로 남기고, 편집 중 충돌은 담당 실패로 세지 않으며, 같은 잠금을 연달아 두드리지 않는다
+- 날짜: 2026-09-18 · 종류: 확정 · 상태: 유효
+- 결정: (1) 인용 불일치로 답을 버릴 때 어떤 정규화(줄 끝·줄 앞뒤 공백·공백 전체)면 맞았을지, 발췌 안인지, 답을 기다리는 사이 파일이 바뀌었는지를 시도 기록(failureDetail.kind=evidence-mismatch)에 남긴다. 대조 규칙(원문 그대로 포함)은 바꾸지 않는다. (2) 파일이 바뀐 경우는 담당 실패(precision-failed 등)로 세지 않고 '소스 변경(source-changed)'으로 세워 두며, 다음 실행이 사람 없이 재개한다(자동재시도 1회 예산·승격 미소모). (3) 잠금·정본 쓰기의 일시 실패 재시도는 250ms 부터 두 배씩(4초 상한) 쉬고 다시 두드린다. (4) 정본 임시 파일(<이름>.<pid>.tmp)은 복구 때 죽은 pid 의 것만 지우고, 산 pid 는 30분 나이 상한까지 둔다. (5) 대시보드는 인용 불일치의 세 갈래를 따로 말한다.
+- 왜: 2026-09-17 실사고 — 두 시도가 '인용 불일치'로만 남아 원인을 알 수 없었고(진단 호출에서는 30/30 일치 → 간헐), 첫 시도는 구현자가 같은 파일을 고치는 중이라 어긋난 것이 담당 실패로 기록돼 자동재시도 예산을 썼으며, 잠금 실패를 같은 초에 5회 되풀이해 곧장 '재시도 소진'으로 멈췄고, 임시 파일 topology.json.17696.tmp 가 남았다. 정규화 대조로 관문을 느슨하게 하면 근거 위조 차단(ab-3)이 약해지므로 관문은 두고 '실패 뒤 진단'만 더한다. 민감 경로는 존재 여부 오라클이 되므로 진단을 남기지 않는다(ab-7).
+- 결과: 다음에 같은 멈춤이 오면 시도 기록 한 줄로 갈래가 보인다. 편집 중 충돌은 사용자 개입 없이 다음 실행에서 풀린다. 잠금 경합으로 인한 즉시 소진이 사라진다. 임시 파일 잔재가 복구 시 정리된다.
+- 정본: bridge/map-enrich.js `function evidenceMismatchDetail` · `function validFailureDetail` · `function retryPauseMs` · driveAttempts `_sourceChanged` 분기 · 자기치유 `source-changed` 블록 · bridge/map-pipeline.js `function sweepStaleTmp` · src/extension.ts `failureText` evidence-mismatch 분기 · PARK_REASONS `source-changed` · tests/p8-enrich-run.test.js [7c][7d] · tests/map-pipeline.test.js [tmp-sweep]
+- 찾는말: 자동 보강 보류, 인용 불일치, evidence-mismatch, source-changed, 편집 중 충돌, 재시도 소진, retry-exhausted, 재시도 간격, 임시 파일 청소, sweepStaleTmp, failureDetail

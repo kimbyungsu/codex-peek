@@ -1019,6 +1019,31 @@ function validateWalV2(w, fname) {
     return null;
   } catch (e) { return "WAL 검증 중 예외(" + String(e && e.message).slice(0, 80) + ") — conflict"; }
 }
+// ── 임시 파일 청소(보강 후속 묶음 2026-09-18) ────────────────────────────────
+// 정본 쓰기는 project-map/<이름>.<pid>.tmp 에 쓴 뒤 이름을 바꾼다. 그 사이 실행기가 죽거나 이름 바꾸기가 막히면
+// 임시 파일이 남는다(2026-09-17 실사고: topology.json.17696.tmp). 죽은 pid 의 것만 지우고, 살아 있는 pid 는
+// 쓰는 중일 수 있어 두되 나이 상한(기본 30분 — pid 재사용 대비)을 넘기면 지운다. 복구(recoverWal) 때 정본 잠금 아래에서 돈다.
+const STALE_TMP_RE = /\.(\d+)\.tmp$/;
+function sweepStaleTmp(repo, opts = {}) {
+  const dir = path.join(repo, "project-map");
+  const maxAgeMs = Number.isFinite(opts.maxAgeMs) && opts.maxAgeMs >= 0 ? opts.maxAgeMs : 30 * 60000;
+  const now = Date.now();
+  const removed = [], kept = [];
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return { removed, kept }; }
+  for (const n of names) {
+    const m = STALE_TMP_RE.exec(n);
+    if (!m) continue;
+    const pid = Number(m[1]);
+    const f = path.join(dir, n);
+    let age = 0;
+    try { age = now - fs.statSync(f).mtimeMs; } catch { continue; }
+    const alive = pid === process.pid || (() => { try { process.kill(pid, 0); return true; } catch (e) { return !(e && e.code === "ESRCH"); } })();
+    if (alive && age < maxAgeMs) { kept.push(n); continue; }
+    try { fs.rmSync(f, { force: true }); removed.push(n); } catch { kept.push(n); }
+  }
+  return { removed, kept };
+}
 function recoverWal(repo, mapId) {
   const lk = MR.withMapLock(repo, () => recoverWalInLock(repo, mapId));
   if (!lk.ok) return [{ decisionId: "-", verdict: "conflict", reason: "정본 잠금 실패" }];
@@ -1027,6 +1052,7 @@ function recoverWal(repo, mapId) {
 function recoverWalInLock(repo, mapId) {
   const d = ensureDirs(repo, mapId);
   const out = [];
+  try { sweepStaleTmp(repo); } catch { /* 청소 실패는 복구를 막지 않는다 */ }
   for (const f of listJson(d.wal)) {
     const wf = path.join(d.wal, f);
     const wr = readJson3(wf);
@@ -1448,6 +1474,7 @@ function proposeUnique(repo, mapId, semanticKey, buildPatch) {
 }
 
 module.exports = {
+  sweepStaleTmp,
   findPromotions, proposeUnique, expirePendingPatch, persistTerminalExpire, sweepReclassifyNonPolicyIntentChoice, markLegacyReclassMark,
   guardExcludedFor,
   canonicalIdentityFor, localOriginFor, patchBasisFor, pipeRootFor, dirsFor, ensureDirs, baselineUpdatesFor, captureDirRaw, decisionIndexFromCapture, policyStateFromCapture,
