@@ -58,9 +58,15 @@ function publishGate(doPush, hasPat) { return !!(doPush && hasPat); }
 // 단계 timeout(순수 — 테스트 대상): 기본 90분, env CODEX_BRIDGE_RELEASE_STEP_TIMEOUT_MIN(양수 분)로 조정.
 // 2026-09-18: 전체 체인이 옛 상한 30분을 넘겨 timeout 으로 죽고 버전이 원복됐는데, 고아가 된 시험 자식들은 계속 돌아 로그 뒤에
 // 원복된 버전 기준의 version-lock 실패가 찍혔다 — 원인은 결함이 아니라 상한(2026-08-06 의 10분→30분 상향 뒤 체인이 다시 자람).
+// 반환값은 spawnSync 가 받는 '유한한 정수 ms' 로 정규화한다(검증 지적 2026-09-18: 소수 분은 0.06ms 같은 비정수가 되고
+// 아주 큰 분은 곱셈 결과가 Infinity 가 되어 둘 다 ERR_OUT_OF_RANGE 로 즉사했다). 상한은 타이머 최대값(2^31-1 ms ≈ 24.8일).
+const STEP_TIMEOUT_MAX_MS = 2147483647;
 function stepTimeoutMsFor(env) {
   const v = Number((env || process.env).CODEX_BRIDGE_RELEASE_STEP_TIMEOUT_MIN);
-  return (Number.isFinite(v) && v > 0 ? v : 90) * 60000;
+  if (!(Number.isFinite(v) && v > 0)) return 90 * 60000;
+  // 곱하기 전에 분 단위로 먼저 상한을 걸어야 거대값이 Infinity 로 새지 않는다.
+  const ms = Math.round(Math.min(v, STEP_TIMEOUT_MAX_MS / 60000) * 60000);
+  return Math.min(Math.max(ms, 1), STEP_TIMEOUT_MAX_MS);
 }
 
 function run(cmd, opts = {}) {

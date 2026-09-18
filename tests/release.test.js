@@ -27,6 +27,15 @@ console.log("[stepTimeoutMsFor] 단계 timeout — 기본 90분·env 양수 분�
 ok(stepTimeoutMsFor({}) === 90 * 60000, "env 없음=90분");
 ok(stepTimeoutMsFor({ CODEX_BRIDGE_RELEASE_STEP_TIMEOUT_MIN: "120" }) === 120 * 60000, "env 120=120분");
 ok(stepTimeoutMsFor({ CODEX_BRIDGE_RELEASE_STEP_TIMEOUT_MIN: "0" }) === 90 * 60000 && stepTimeoutMsFor({ CODEX_BRIDGE_RELEASE_STEP_TIMEOUT_MIN: "abc" }) === 90 * 60000 && stepTimeoutMsFor({ CODEX_BRIDGE_RELEASE_STEP_TIMEOUT_MIN: "-5" }) === 90 * 60000, "0·비수·음수=기본 90분");
+// 검증 지적(2026-09-18): 유한 양수라도 소수·거대값은 spawnSync 가 거부하는 비정수/Infinity ms 가 됐다 — 정수 ms 로 정규화·상한.
+ok(stepTimeoutMsFor({ CODEX_BRIDGE_RELEASE_STEP_TIMEOUT_MIN: "1.5" }) === 90000, "소수 1.5분=90000ms(정수)");
+ok(stepTimeoutMsFor({ CODEX_BRIDGE_RELEASE_STEP_TIMEOUT_MIN: "0.000001" }) === 1, "극소 양수=최소 1ms(정수·spawnSync 허용)");
+ok(stepTimeoutMsFor({ CODEX_BRIDGE_RELEASE_STEP_TIMEOUT_MIN: "1e308" }) === 2147483647, "거대값=타이머 상한(2^31-1)·Infinity 아님");
+ok(stepTimeoutMsFor({ CODEX_BRIDGE_RELEASE_STEP_TIMEOUT_MIN: "Infinity" }) === 90 * 60000, "Infinity 문자열=기본 90분");
+for (const raw of ["", "abc", "0", "-5", "1.5", "0.000001", "1e308", "120"]) {
+  const r = stepTimeoutMsFor({ CODEX_BRIDGE_RELEASE_STEP_TIMEOUT_MIN: raw });
+  ok(Number.isInteger(r) && r >= 1 && r <= 2147483647, "모든 입력이 유한 정수 ms 범위: " + JSON.stringify(raw) + "→" + r);
+}
 
 console.log("[parseArgs] 플래그 해석(publish-only 경로 유무 포함)");
 let a = parseArgs([]);
