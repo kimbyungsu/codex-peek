@@ -345,3 +345,11 @@
 - 결과: 다음에 같은 멈춤이 오면 시도 기록 한 줄로 갈래가 보인다. 편집 중 충돌은 사용자 개입 없이 다음 실행에서 풀린다. 잠금 경합으로 인한 즉시 소진이 사라진다. 임시 파일 잔재가 복구 시 정리된다.
 - 정본: bridge/map-enrich.js `function evidenceMismatchDetail` · `function validFailureDetail` · `function retryPauseMs` · driveAttempts `_sourceChanged` 분기 · 자기치유 `source-changed` 블록 · bridge/map-pipeline.js `function sweepStaleTmp` · src/extension.ts `failureText` evidence-mismatch 분기 · PARK_REASONS `source-changed` · tests/p8-enrich-run.test.js [7c][7d] · tests/map-pipeline.test.js [tmp-sweep]
 - 찾는말: 자동 보강 보류, 인용 불일치, evidence-mismatch, source-changed, 편집 중 충돌, 재시도 소진, retry-exhausted, 재시도 간격, 임시 파일 청소, sweepStaleTmp, failureDetail
+
+## D-2026-09-18-enrich-item-gate — 자동 보강의 첫 관문은 항목 단위로 거르고, 담당에게 되돌려 달라던 대조값(expect)은 실행기가 호출 스냅샷에서 채운다
+- 날짜: 2026-09-18 · 종류: 확정(사용자 결정) · 상태: 유효
+- 결정: (1) 답이 도착하면 형식·대상 실존·근거 인용 실증을 항목마다 따로 판정해 결함 항목만 사유(색인·단계 shape/id/evidence/cap·진단)와 함께 제외(attempt.droppedItems)하고 정상 항목만 적용 단계로 넘긴다. 전부 결함일 때만 종전처럼 시도 실패(담당 실패)로 기록한다. 변환 단계(패치 형태·변환 시점 재실증)의 결함도 같은 규칙으로 그 항목만 제외(stage convert)하고, 변환에서 전부 제외돼 적용이 0이면 시도 실패로 기록한다. 근거 위조 차단(ab-3)은 항목마다 그대로다. 장부 재판독·시험이 쓰는 strict 검증(validateEnrichResult 기본)은 바꾸지 않고 perItem 옵션으로 분기한다. (2) set_state·rewrite_label 의 expect(현재 값)는 담당의 메아리를 버리고 실행기가 프롬프트 조립 시점 topology(호출 스냅샷)에서 채운다. 적용 시점 CAS 는 그대로 스냅샷 대 현재를 비교한다. (3) 대시보드는 '답 중 결함 항목 N건은 사유와 함께 버리고 나머지만 썼어요'를 보인다.
+- 왜: 2026-09-17~18 실사고 — 파이프라인 정밀 호출 5회 중 4회가 항목 1개의 결함(인용 한 글자 차이·근거 누락)으로 답 전체가 버려져 '보류'가 세대마다 반복됐고 세대마다 자동 2회 과금이 이어졌다. 또 프롬프트가 라벨을 120자로 잘라 보이므로(현 지도 61 노드 중 22) 라벨 수정 제안의 expect 는 맞을 수 없는 값이라 그 항목이 늘 조사 대기로 빠졌다. expect 는 근거가 아니라 대조값이므로 담당이 아니라 실행기가 채우는 것이 맞다.
+- 결과: 결함 1개가 정상 9개를 죽이지 않는다. 사고 유형별 사유가 항목 단위로 장부에 남아 다음 사고는 추정이 아니라 확인이 된다. 라벨 수정 제안이 절단 때문에 조사 대기로 빠지는 일이 사라진다.
+- 정본: bridge/map-enrich.js `validateEnrichResult(obj, topo, ctx, { perItem })` · `fillExpectFromSnapshot` · runAttempt 1단계 관문 블록 · `dropItemAtConvert`(변환 단계 제외 — 교체 표식 보상·원래 색인) · attempt `sourceIdx`(압축 배열→원래 응답 색인) · `DROP_STAGES` · validateJob droppedItems 합타입 · `enrichOutcomeSummary.dropped` · src/extension.ts enrich.dropped 문구 · bridge/enrich-providers.js 프롬프트 expect 안내 · tests/p8-enrich-run.test.js [8][8b][8c][8d]
+- 찾는말: 자동 보강 보류 반복, 항목 단위 관문, droppedItems, perItem, expect 자체 채움, fillExpectFromSnapshot, 라벨 절단, 전체 거부, 부분 채택

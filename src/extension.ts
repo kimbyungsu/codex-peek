@@ -2794,7 +2794,7 @@ function computeState(turnsN: number): BridgeState {
           // 2026-07-29 설계 상의: 화면에 내부 표현이 새면 안 되고, 호출 실패와 결과 거부는 갈라 보여야 한다).
           job: job9 ? {
             phase: job9.phase, parkedReason: job9.parkedReason || null, provider: last9 ? last9.provider : null,
-            applied: applied9, rejected: rejected9, investigation: investigation9,
+            applied: applied9, rejected: rejected9, investigation: investigation9, dropped: (counts9 && counts9.dropped) || 0,
             // 옛 기록에 위험한 파일 표기가 이미 저장돼 있을 수 있으므로, 화면으로 내보낼 때 한 번 더 거른다
             // (3차 [보완]: 판독 검증은 옛 기록 호환을 위해 느슨한데, 표시는 느슨하면 안 된다).
             lastFailure: last9 && last9.failureCode
@@ -7840,6 +7840,7 @@ class Dashboard {
             else if(jp==="done") msg=T("자동 보강: 완료 — 적용 ","Auto-enrich: done — applied ")+String(en9.job.applied||0)+T("건 · 확인 대기 "," · awaiting verification ")+String(en9.awaitingVerification||0)+T("건 · 기각 "," · rejected ")+String(en9.job.rejected||0)+T("건 · 조사 대기 "," · investigation ")+String(en9.job.investigation||0)+T("건"," items");
             else if(jp==="open") msg=T("자동 보강: 진행 중","Auto-enrich: in progress");
             else msg=en9.queuePending?T("자동 보강: 대기 중(다음 관측 때 실행)","Auto-enrich: pending (runs on next observation)"):T("자동 보강: 대기 없음","Auto-enrich: nothing queued");
+            if(en9.job&&(en9.job.dropped||0)>0) msg+=T(" · 답 중 결함 항목 "," · defective items dropped ")+String(en9.job.dropped)+T("건은 사유와 함께 버리고 나머지만 썼어요"," (the rest were used)");
             if((en9.previousRunAwaiting||0)>0) msg+=T(" · 이전 실행 확인 대기 "," · previous-run awaiting ")+String(en9.previousRunAwaiting)+T("건"," items");
             if((en9.unattributedDeferred||0)>0) msg+=T(" · 구형 기록 귀속 확인 필요 "," · legacy records need attribution ")+String(en9.unattributedDeferred)+T("건"," items");
             st9.textContent=msg;

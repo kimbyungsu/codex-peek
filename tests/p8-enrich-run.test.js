@@ -1260,5 +1260,148 @@ console.log("[7d-2] attempt 없는 open 작업의 복구 경로에서도 편집 
   ok(r2.outcome === "applied", "다음 실행에서 자기 재개→적용 (" + r2.outcome + "/" + r2.reason + ")");
 }
 
+console.log("[8] 1단계 관문 항목 단위 — 결함 항목만 사유와 함께 버리고 정상 항목은 적용(결정 D-2026-09-18-enrich-item-gate)");
+{
+  const { ws, nodeId } = setup("itemgate");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  const mixed = () => ({ ok: true, result: { schema: "enrich-result-v1", items: [
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "good" } }, evidence: [{ file: "src/a.js", quote: "// a" }] },
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "badquote" } }, evidence: [{ file: "src/a.js", quote: "// 이 인용은 파일에 없다" }] },
+    { op: "add_evidence", targetId: "00000000-0000-4000-8000-000000000999", payload: { evidence: { kind: "code", ref: "src/a.js", note: "badid" } }, evidence: [{ file: "src/a.js", quote: "// a" }] },
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "noevidence" } }, evidence: [] },
+  ] } });
+  const r = ME.runEnrich(ws, base(ws, { adapters: { self: mixed } }));
+  ok(r.outcome === "applied" && r.applied === 1, "4항목 중 정상 1건만 적용·나머지 3건 제외 (" + r.outcome + "/" + r.applied + ")");
+  const jr = ME.readEnrichJob(ws);
+  const a0 = jr.st === "ok" ? jr.job.attempts[0] : null;
+  ok(!!a0 && a0.results.items.length === 1 && a0.results.items[0].payload.evidence.note === "good", "장부 results 는 정상 항목만");
+  const stages = a0 && Array.isArray(a0.droppedItems) ? a0.droppedItems.map((d) => d.index + ":" + d.stage).sort().join(",") : "";
+  ok(stages === "1:evidence,2:id,3:shape", "제외 기록: 원래 색인·단계(evidence/id/shape) (" + stages + ")");
+  const dEv = a0 && a0.droppedItems.find((d) => d.stage === "evidence");
+  ok(!!dEv && dEv.detail && dEv.detail.kind === "evidence-mismatch" && dEv.detail.matchAfter === null, "근거 제외 항목에 진단 동봉");
+  ok(jr.st === "ok", "droppedItems 가 붙은 장부가 strict 판독을 통과");
+  const sum = ME.enrichOutcomeSummary(jr.job, { st: "ok", awaiting: 0, records: [], terminalRecords: [] });
+  ok(sum.dropped === 3 && sum.applied === 1, "요약: dropped 3 · applied 1");
+  const rows = fs.readFileSync(ME.ROUTE_LOG, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  ok(rows.some((x) => x.reason === "items-screened" && x.dropped === 3 && x.accepted === 1), "라우팅 로그에 항목 선별 행");
+}
+
+console.log("[8b] expect 자체 채움 — 담당이 잘린/틀린 expect 를 보내도 실행기가 스냅샷 값으로 채워 CAS 가 성립");
+{
+  const { ws, topo, nodeId } = setup("expectfill");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  const realLabel = topo.nodes.find((n) => n.id === nodeId).label;
+  const rl = () => ({ ok: true, result: { schema: "enrich-result-v1", items: [
+    { op: "rewrite_label", targetId: nodeId, payload: { to: { label: "새 라벨(자체 채움 시험)" }, expect: { label: realLabel.slice(0, 3) + "…잘림" } }, evidence: [{ file: "src/a.js", quote: "// a" }], claims: [{ file: "src/a.js", quote: "// a", stance: "support" }] },
+  ] } });
+  // rewrite_label 은 설계상 Verifier 해소(verifier-resolved)를 거친다 — support 해소 스텁을 붙여 적용까지 확인
+  const askV = (req) => ({ patchId: req.patch.patchId, opHash: PM.opHashOf(req.patch), baseDecisionContextHash: req.patch.baseDecisionContextHash, verdict: "support", claims: [{ file: "src/a.js", contentHash: sha(fs.readFileSync(path.join(ws, "src", "a.js"), "utf8")), locator: "L1", stance: "support" }] });
+  const r = ME.runEnrich(ws, base(ws, { adapters: { self: rl }, askVerifier: askV }));
+  const j = ME.readEnrichJob(ws).job;
+  const it0 = j.attempts[0].results.items[0];
+  ok(it0.payload.expect.label === realLabel, "장부 항목의 expect.label 이 스냅샷 실제 라벨로 채워짐");
+  const t2 = MR.readTopoExFor(ws).topo;
+  ok(r.outcome === "applied" && r.applied === 1 && t2.nodes.find((n) => n.id === nodeId).label === "새 라벨(자체 채움 시험)", "틀린 expect 를 보냈어도 CAS 통과·적용됨(조사 대기 아님) (" + r.outcome + "/" + r.applied + ")");
+  const decs = fs.readdirSync(path.join(ws, "project-map", "decisions")).map((f) => JSON.parse(fs.readFileSync(path.join(ws, "project-map", "decisions", f), "utf8")));
+  ok(decs.some((d) => d.classification === "verifier-resolved" && d.patch && d.patch.payload && d.patch.payload.expect && d.patch.payload.expect.label === realLabel), "적용된 결정 기록(patch.payload)의 expect 도 스냅샷 라벨");
+  // 순수 함수 경계
+  const f1 = ME.fillExpectFromSnapshot({ op: "set_state", targetId: nodeId, payload: { to: { confidence: "confirmed" }, expect: { confidence: "wrong" } } }, topo);
+  ok(f1.payload.expect.confidence === topo.nodes.find((n) => n.id === nodeId).state.confidence && Object.keys(f1.payload.expect).join(",") === "confidence", "set_state: to 의 키만 현재 상태값으로");
+  const f2 = ME.fillExpectFromSnapshot({ op: "add_evidence", targetId: nodeId, payload: { evidence: {} } }, topo);
+  ok(f2.payload.expect === undefined, "expect 없는 op 는 그대로");
+  const f3 = ME.fillExpectFromSnapshot({ op: "rewrite_label", targetId: "00000000-0000-4000-8000-000000000999", payload: { to: { label: "x" }, expect: { label: "y" } } }, topo);
+  ok(f3.payload.expect.label === "y", "대상 미실존이면 손대지 않음(관문이 따로 제외)");
+}
+
+console.log("[8c] 일부 항목만 편집 충돌 — 그 항목만 제외(fileChanged 진단)하고 나머지 적용·source-changed 아님");
+{
+  const { ws, nodeId } = setup("partialsrc");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  fs.writeFileSync(path.join(ws, "src", "a.js"), "// a\n// will-vanish\n");
+  const editing = () => { fs.writeFileSync(path.join(ws, "src", "a.js"), "// a\n// replaced\n"); return { ok: true, result: { schema: "enrich-result-v1", items: [
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "stable" } }, evidence: [{ file: "src/a.js", quote: "// a" }] },
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "vanished" } }, evidence: [{ file: "src/a.js", quote: "// will-vanish" }] },
+  ] } }; };
+  const r = ME.runEnrich(ws, base(ws, { adapters: { self: editing } }));
+  ok(r.outcome === "applied" && r.applied === 1, "안정 항목 1건 적용 (" + r.outcome + "/" + r.reason + ")");
+  const a0 = ME.readEnrichJob(ws).job.attempts[0];
+  ok(a0.droppedItems && a0.droppedItems.length === 1 && a0.droppedItems[0].detail && a0.droppedItems[0].detail.fileChanged === true, "사라진 인용 항목만 fileChanged 진단으로 제외");
+}
+
+console.log("[8d] strict 검증(옵션 없음)은 종전대로 전체 거부 — 장부 재판독·시험 공용 규칙 불변");
+{
+  const { ws, topo, nodeId } = setup("strictgate");
+  const obj = { schema: "enrich-result-v1", items: [
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "g" } }, evidence: [{ file: "src/a.js", quote: "// a" }] },
+    { op: "add_evidence", targetId: "00000000-0000-4000-8000-000000000999", payload: { evidence: { kind: "code", ref: "src/a.js", note: "b" } }, evidence: [{ file: "src/a.js", quote: "// a" }] },
+  ] };
+  const vs = ME.validateEnrichResult(obj, topo, { repo: ws, changed: [] });
+  ok(vs.ok === false && vs.kind === "id" && vs.dropped === undefined, "strict: 하나라도 결함이면 전체 거부(kind=id)");
+  const vp = ME.validateEnrichResult(obj, topo, { repo: ws, changed: [] }, { perItem: true });
+  ok(vp.ok === true && vp.items.length === 1 && vp.acceptedIdx.join(",") === "0" && vp.dropped.length === 1 && vp.dropped[0].stage === "id" && vp.dropped[0].index === 1, "perItem: 정상 1건 통과·결함 1건 제외(색인 보존)");
+  const vAll = ME.validateEnrichResult({ schema: "enrich-result-v1", items: [obj.items[1]] }, topo, { repo: ws, changed: [] }, { perItem: true });
+  ok(vAll.ok === false && vAll.kind === "id" && vAll.dropped.length === 1, "perItem: 전부 결함이면 종전 분류로 거부");
+}
+
+console.log("[8e] 변환 단계 결함(payload 안쪽 형태)도 항목 단위 — 앞 항목이 변환에서 깨져도 뒤 정상 항목은 적용·원래 응답 색인 보존(구현 검증 blocker 2건)");
+{
+  const { ws, nodeId } = setup("convdrop");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  const mixed = () => ({ ok: true, result: { schema: "enrich-result-v1", items: [
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "no-evidence" } }, evidence: [] },
+    { op: "rewrite_label", targetId: nodeId, payload: { to: "문자열(형태 오류)", expect: { label: "x" } }, evidence: [{ file: "src/a.js", quote: "// a" }], claims: [{ file: "src/a.js", quote: "// a", stance: "support" }] },
+    { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "good-after-bad" } }, evidence: [{ file: "src/a.js", quote: "// a" }] },
+  ] } });
+  const r = ME.runEnrich(ws, base(ws, { adapters: { self: mixed } }));
+  ok(r.outcome === "applied" && r.applied === 1, "관문 제외 1·변환 제외 1 뒤 정상 항목 적용 (" + r.outcome + "/" + r.applied + ")");
+  const jr = ME.readEnrichJob(ws);
+  const a0 = jr.st === "ok" ? jr.job.attempts[0] : null;
+  const stages = a0 && Array.isArray(a0.droppedItems) ? a0.droppedItems.map((d) => d.index + ":" + d.stage).sort().join(",") : "";
+  ok(stages === "0:shape,1:convert", "제외 기록이 원래 응답 색인으로 남음(압축 색인 오귀속 없음) (" + stages + ")");
+  // 관문 제외 항목만 results 에서 빠지고, 변환 제외 항목은 results 에 남은 채 cursor 가 건너뛴다 → results 2건·sourceIdx [1,2]
+  ok(!!a0 && a0.phase === "done" && Array.isArray(a0.sourceIdx) && a0.sourceIdx.join(",") === "1,2" && a0.results.items.length === 2, "sourceIdx 가 압축 배열→원래 색인 매핑을 보존 (" + JSON.stringify(a0 && a0.sourceIdx) + ")");
+  ok(a0.droppedItems.find((d) => d.stage === "convert") && /^convert-invalid:/.test(a0.droppedItems.find((d) => d.stage === "convert").reason), "변환 제외 사유 접두 convert-invalid");
+  ok(jr.st === "ok", "sourceIdx·convert 기록이 붙은 장부가 strict 판독을 통과");
+  const rows = fs.readFileSync(ME.ROUTE_LOG, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  ok(rows.some((x) => x.route === "convert" && x.reason === "item-dropped" && x.index === 1), "라우팅 로그의 변환 제외 색인도 원래 색인(1)");
+  // 장부 합타입 경계: sourceIdx 길이 불일치·비오름차순은 손상으로 거부(strict)
+  const jobF = ME.jobFileFor(ws);
+  const rawJ = JSON.parse(fs.readFileSync(jobF, "utf8"));
+  const withBad = (fix) => { const c = JSON.parse(JSON.stringify(rawJ)); c.attempts[0] = fix(c.attempts[0]); return c; };
+  ok(ME.validateJob(withBad((x) => ({ ...x, sourceIdx: [1] }))) === "attempt sourceIdx 길이" && ME.validateJob(withBad((x) => ({ ...x, sourceIdx: [2, 1] }))) === "attempt sourceIdx" && ME.validateJob(withBad((x) => ({ ...x, sourceIdx: [-1, 2] }))) === "attempt sourceIdx" && ME.validateJob(rawJ) === null, "validateJob: 길이 불일치·비오름차순·음수 거부, 정상 통과");
+}
+
+console.log("[8g] 변환 제외 시 교체 표식(rotationPartial) 보상 — 방출해 둔 피해 노드를 되돌리고 표식을 지운 뒤 넘어간다(구현 검증 blocker)");
+{
+  const { ws, nodeId } = setup("rotdrop");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  const bad = () => ({ ok: true, result: { schema: "enrich-result-v1", items: [
+    { op: "rewrite_label", targetId: nodeId, payload: { to: "문자열(형태 오류)", expect: { label: "x" } }, evidence: [{ file: "src/a.js", quote: "// a" }], claims: [{ file: "src/a.js", quote: "// a", stance: "support" }] },
+  ] } });
+  const r0 = ME.runEnrich(ws, base(ws, { adapters: { self: bad } }));
+  ok(r0.outcome === "parked" && r0.reason === "self-failed", "(전제) 답 거부 보류");
+  // 앞 실행이 남긴 교체 표식이 있는 상태로 되돌린다(피해 노드=현재 활성 노드 → 보상은 noop 정산)
+  ME.updateEnrichJob(ws, (jj) => { if (!jj) return null; const nx = { ...jj, phase: "open", attempts: [], rotationPartial: { victimId: nodeId, objectFormat: "sha1", head: "a".repeat(40), at: new Date().toISOString() } }; delete nx.finishedAt; delete nx.parkedReason; delete nx.retryFrom; return nx; });
+  ok(ME.readEnrichJob(ws).st === "ok" && ME.readEnrichJob(ws).job.rotationPartial.victimId === nodeId, "(전제) 교체 표식 있는 open 장부");
+  const r1 = ME.runEnrich(ws, base(ws, { adapters: { self: bad } }));
+  const j1 = ME.readEnrichJob(ws).job;
+  ok(j1.rotationPartial === null || j1.rotationPartial === undefined, "변환 제외가 교체 표식을 보상·정리 (" + r1.outcome + "/" + r1.reason + ")");
+  const rows = fs.readFileSync(ME.ROUTE_LOG, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  ok(rows.some((x) => x.route === "rotation" && (x.reason === "settled" || x.reason === "reverted") && x.detail === nodeId), "보상 로그(route rotation)");
+}
+
+console.log("[8f] 변환 단계에서 전부 제외·적용 0 = 종전처럼 시도 실패(자동 재시도 대상 유지)");
+{
+  const { ws, nodeId } = setup("convall");
+  ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+  const allBad = () => ({ ok: true, result: { schema: "enrich-result-v1", items: [
+    { op: "rewrite_label", targetId: nodeId, payload: { to: "문자열(형태 오류)", expect: { label: "x" } }, evidence: [{ file: "src/a.js", quote: "// a" }], claims: [{ file: "src/a.js", quote: "// a", stance: "support" }] },
+  ] } });
+  const r = ME.runEnrich(ws, base(ws, { adapters: { self: allBad } }));
+  ok(r.outcome === "parked" && r.reason === "self-failed", "전부 변환 실패=self-failed 보류 (" + r.outcome + "/" + r.reason + ")");
+  const a0 = ME.readEnrichJob(ws).job.attempts[0];
+  ok(a0.phase === "failed" && a0.failureStage === "conversion" && a0.failureCode === "convert-invalid" && a0.droppedItems && a0.droppedItems.length === 1, "시도 기록: conversion/convert-invalid + droppedItems 1");
+}
+
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
 process.exit(fail ? 1 : 0);

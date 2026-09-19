@@ -147,6 +147,7 @@ function buildEnrichPrompt(ctx) {
     // 해상도 설계 v3 §2-4 — file 노드 견본·조건 고지(상한·유형은 정본 상수에서 생성: 복제 드리프트 금지)
     ...(mapFull ? [mapFullLine] : [    '- {"op":"add_node","payload":{"node":{"id":"<임시 UUID — 변환기가 결정론 id로 교체>","label":"<파일 역할 한 줄(경로 반복 금지)>","entityType":"file","roles":[],"state":{"lifecycle":"active","implementation":"runtime","confidence":"candidate"},"anchors":[{"kind":"<실제 분류: code|test|config>","path":"<발췌에 실린 판독 가능한 코드 계열 파일>"}]}},"evidence":[...]} — targetId 금지·라운드당 최대 ' + require(path.join(BR, "project-map.js")).ENRICH_ADD_NODE_PER_ROUND + '개·anchors 정확히 1개·문서 파일 금지·confidence는 candidate만. 만든 file 노드의 소속 모듈 owns 엣지를 같은 결과에서 add_node "뒤" 순서로 제안 권장(edge from/to에 그 임시 id 사용 가능).']),
     "확실한 근거가 있는 항목만(1~10개 권장). 근거 없는 추측·발췌 밖 인용 금지.",
+    "expect(현재 값)는 실행기가 현재 지도에서 다시 채우므로 위 목록의 잘린 값을 그대로 옮겨도 된다 — 다만 키는 to 와 같게 둔다. 결함 항목은 항목 단위로만 버려지고 나머지는 반영된다.",
     // 관문 규칙 고지(2026-08-04 실사고 — 어휘 드리프트와 같은 병: 기계가 강제하는 규칙을 답하는 쪽이
     // 몰라 정답이 불가능했다). 계열 목록은 정본 상수에서 생성 — 문서 파일만 인용한 항목은 전부 거부된다.
     "필수: 각 항목의 evidence에는 코드/테스트/설정 계열 파일(" + require(path.join(BR, "project-map.js")).CODE_EVIDENCE_KINDS.join("/") + " — 확장자 기준 소스·테스트·설정 파일) 최소 1개를 포함하라. 문서(.md/.txt 등)·압축·산출물 파일만 인용한 항목은 자동 거부된다.",

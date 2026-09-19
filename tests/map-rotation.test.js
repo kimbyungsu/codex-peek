@@ -75,7 +75,7 @@ console.log("[4] 요청 계획 — 가득이면 add_node 견본 제외 + 자료 
 
 console.log("[5] job 스키마 — failureDetail 닫힌 모양(strict)");
 { const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "map-enrich.js"), "utf8");
-  ok(src.includes('"failureDetail", "parkedReason"') && src.includes('return "attempt failureDetail"'), "ATTEMPT_KEYS 에 failureDetail · 이형=손상 검사");
+  ok(/const ATTEMPT_KEYS = \[[^\]]*"failureDetail"[^\]]*"parkedReason"[^\]]*\]/.test(src) && src.includes('return "attempt failureDetail"'), "ATTEMPT_KEYS 에 failureDetail · 이형=손상 검사");
   ok(src.includes('{ failureDetail: { kind: "file-cap", have: Number(vr.detail.have), cap: Number(vr.detail.cap), active: Number(vr.detail.active) } }'), "validation 실패 시 상한 사유를 attempt 에 구조로 보존"); }
 
 console.log("[6] 화면 — 상한 실사유 표시·v1 정책 함수 표기·실분류 주석");
