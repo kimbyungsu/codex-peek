@@ -10,6 +10,7 @@ import { localizeIntegrityDetail } from "./integrity-i18n";
 import { parseLastModelCommand, parseLastAssistantModel, parseSessionStartTs, resolveCcIntent, modelFamily, shouldAttributeSettingsChange, pruneIntentMap, ageLabel } from "./brain-intent";
 import { parseGitLog, suggest as scopeSuggest, ScopeSuggestion } from "./scope-ledger";
 import { maskKey, isPlausibleKey, mergeDeepseekConfig } from "./deepseek-config";
+import { observeBridgeStale, FileIdent } from "./bridge-stale";
 import { appendApproved, parseApprovedFromMap, normSig } from "./map-ledger";
 import { parseEventsJsonl, deriveLedger, computeScoutHealth, promotableConfirm, HEALTH_MIN_SAMPLE } from "./ledger-events";
 import { catchUp, TailState, makeRolloutAcc, headFirstUserMessage, Msg, RolloutAcc, TURN_CAP } from "./rollout-scan";
@@ -257,6 +258,7 @@ interface BridgeState {
   mapStatsRead: { usage: "ok" | "absent" | "unreadable"; automation: "ok" | "absent" | "unreadable" } | null; // 원장 부재와 판독 실패를 0건으로 혼동하지 않음
   scoutTarget: { repo: string; differs: boolean; invalid: boolean; configured: boolean; inherited: boolean; drift: { repo: string; sample: number; agree: number } | null } | null; // P1 정찰 대상 + 어긋남 자기진단(2026-07-10). null=2트랙
   scoutGate: { eff: string; raw: string | null } | null; // 실효 플랜 게이트(표시 전용 — 3트랙에서만, 계약에 저장 안 함). null=2트랙/ws 없음
+  bridgeStale: { stale: boolean; changed: string[] } | null; // 이 창이 캐시한 브릿지 모듈이 디스크 판보다 오래됐는가(D-2026-09-19-bridge-stale-banner) — stale 이면 화면 판독은 재로드 전까지 불확실
   scoutArm: { raw: string | null; eff: "self" | "deepseek" | "codex"; hasKey: boolean; slot?: string; defaultArm?: "self" | "codex"; ready?: boolean; reason?: string | null } | null; // defaultArm/ready/reason=묶음 (다) 모드 기본·정찰 준비 // 탐색 담당(2026-07-20·P6 codex 추가) — raw=명시 선택(반대 언어 슬롯 상속·null=미지정), eff=실효(deepseek는 키 없으면 self 강등·codex는 강등 없음), slot=계산 언어. null=2트랙/ws 없음
   mapLedger: MapLedgerView | null; // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만). null=2트랙
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
@@ -1673,6 +1675,22 @@ function toTurns(msgs: Array<{ role: string; text: string }>): Turn[] {
 
 // 런타임 브릿지 라이브러리(단일 출처)를 불러 기본 지침 기본값/오버라이드 로직을 재사용한다.
 // 확장이 자체 복제하지 않고 ~/.codex-bridge/contract-lib.js 를 그대로 쓴다(드리프트 방지).
+// ── 브릿지 판 어긋남(D-2026-09-19-bridge-stale-banner): 이 창이 require 로 캐시한 브릿지 모듈 vs 디스크의 현재 파일 ──
+// 배포(deployBridgeRuntime)는 stamp version·드리프트를 검사하지만, 이미 떠 있는 창의 캐시는 아무도 보지 않았다.
+const bridgeLoadedIdents = new Map<string, FileIdent>(); // 정규화 경로 → 처음 관측한 지문(=로드된 판)
+let bridgeStalePromptedFor = ""; // 같은 변경 묶음에 대해 알림은 1회
+function bridgeStaleView(): { stale: boolean; changed: string[] } {
+  try {
+    const r = observeBridgeStale(Object.keys(require.cache), BRIDGE_DIR, bridgeLoadedIdents, (p) => { try { const s = fs.statSync(p); return { mtimeMs: s.mtimeMs, size: s.size }; } catch { return null; } });
+    if (r.stale) { const key = r.changed.join(","); if (bridgeStalePromptedFor !== key) { bridgeStalePromptedFor = key; void promptBridgeReload(r.changed); } }
+    return { stale: r.stale, changed: r.changed };
+  } catch { return { stale: false, changed: [] }; }
+}
+async function promptBridgeReload(changed: string[]): Promise<void> {
+  const reload = tE("지금 다시 로드", "Reload now");
+  const pick = await vscode.window.showWarningMessage(tE("브릿지 파일이 갱신됐어요 — 이 창은 아직 이전 판으로 읽고 있어요. 창을 다시 로드해야 새 판이 적용돼요 (" + changed.slice(0, 3).join(", ") + ")", "The bridge files were updated — this window is still reading with the previous version. Reload the window to use the new version (" + changed.slice(0, 3).join(", ") + ")"), reload);
+  if (pick === reload) void vscode.commands.executeCommand("workbench.action.reloadWindow");
+}
 function bridgeLib(): any | null {
   try {
     return require(path.join(BRIDGE_DIR,"contract-lib.js"));
@@ -2760,6 +2778,7 @@ function computeState(turnsN: number): BridgeState {
     scoutLive: readScoutLive(ws),       // 지도 생성중 신호(러너 실행 동안만 — 카드 '지금:'과 상태바 라벨)
     scoutTarget: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const r = scoutTargetFor(ws); const dr = detectScoutTargetDriftExt(r.repo, ws); return { repo: r.repo, differs: normWs(r.repo) !== normWs(ws), invalid: r.source === "ws-fallback-invalid", configured: r.source === "contract" || r.source === "contract-other-lang", inherited: r.source === "contract-other-lang", drift: dr.drift ? { repo: dr.repo as string, sample: dr.sample || 0, agree: dr.agree || 0 } : null }; } catch { return null; } })(),
     scoutGate: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; return effectiveScoutGate(ws); } catch { return null; } })(),
+    bridgeStale: bridgeStaleView(), // 브릿지 판 어긋남(창 미로드) — 매 렌더 관측·최초 감지 시 1회 알림
     scoutArm: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; return scoutArmViewExt(ws); } catch { return null; } })(), // slot은 뷰가 계산과 원자 결속해 반환(3차 blocker — 사후 재판독 금지)
     mapMode: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const CLx: any = bridgeLib(); return CLx && CLx.mapModeView ? CLx.mapModeView(ws) : null; } catch { return null; } })(), // P7 — 3트랙에서만
     mapReadiness: (rvSnap = (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const CLx: any = bridgeLib(); const rv9 = CLx && CLx.mapReadinessView ? CLx.mapReadinessView({ precisionFpNow: precisionFpNowExt(), selfFpNow: selfFpNowExt() }) : null; maybeAutoReprobe(ws, rv9); return rv9; } catch { return null; } })()), // P7 — 저장 레코드+현재 지문 재대조(precision·self 지문은 호스트 주입)+지문 변경 자동 재점검(fp당 1회). rvSnap=아래 enrich의 사람 조치 판정이 같은 스냅샷을 쓰도록 보관(재계산 금지)
@@ -4082,6 +4101,7 @@ class Dashboard {
         if (m?.type === "openScoutHealthReport") openScoutHealthReport(dashboardWorkspace()); // 건강 리포트 — 포화 대응 새탭(열 때 베이크·스크립트 없음)
         if (m?.type === "setScoutTarget" && typeof m.repo === "string") setScoutTargetFromUi(dashboardWorkspace(), m.repo, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
         if (m?.type === "setScoutArm" && (m.arm === "self" || m.arm === "deepseek" || m.arm === "codex")) setScoutArmFromUi(dashboardWorkspace(), m.arm, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
+        if (m?.type === "reloadWindow") { void vscode.commands.executeCommand("workbench.action.reloadWindow"); return; } // 브릿지 판 어긋남 배너의 [창 다시 로드]
         if (m?.type === "setMapMode" && typeof m.mode === "string") setMapModeFromUi(dashboardWorkspace(), m.mode, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post()); // P7 — 검증은 setMapModeFromUi의 MAP_MODES 화이트리스트
         if (m?.type === "runMapProbe") { const wsP = dashboardWorkspace(); runMapProbeFromUi(wsP, pendingTargetsFor(wsP)).then(() => this.post()); } // 버튼=선택 담당 중 미준비만 재점검(전부 준비면 전체=명시 재확인)·단일-flight는 함수 내부
         if (m?.type === "grantEnrichSelf") grantEnrichSelfFromUi(dashboardWorkspace()).then(() => this.post()); // P8 — self 자동 보강 동의(1클릭·모달 고지)
@@ -5587,6 +5607,7 @@ class Dashboard {
   <div class="top"><h1><span class="brand"></span>Codex Bridge <span class="sub" id="heroTitle">${t("Claude ⇄ Codex 자동 연결·검증", "Claude ⇄ Codex auto link & verify")}</span></h1><button id="refresh" class="secondary">${t("↻ 새로고침", "↻ Refresh")}</button></div>
 
   <div id="integrityBanner" class="integrity" style="display:none"></div>
+  <div id="bridgeStaleBanner" class="integrity" style="display:none"></div>
 
   <div id="tab-overview" class="tab-panel active">
   <div class="stat-cards">
@@ -6968,7 +6989,9 @@ class Dashboard {
         ? T("이 판정은 자동 보강이 도는 중에만 생겨요. ","This adjudication only happens while auto-enrichment runs. ")
         : "";
       if(!en) return lead+T("자동 보강 상태를 읽지 못했어요.","Auto-enrichment state could not be read.");
-      if(jp==="damaged"||en.consentSt==="damaged") return lead+T("자동 보강 기록이 손상돼 자동 실행이 멈춰 있어요(수동 복구가 필요해요).","The auto-enrichment records are damaged and automation is halted (manual recovery needed).");
+      if(jp==="damaged"||en.consentSt==="damaged") return lead+((d.bridgeStale&&d.bridgeStale.stale)
+        ? T("이 창의 판독기가 이전 판이라 자동 보강 기록을 읽지 못해요 — 창을 다시 로드한 뒤 다시 확인해 주세요.","This window's reader is the previous version and cannot read the auto-enrichment records — reload the window and check again.")
+        : T("자동 보강 기록을 읽지 못했어요(손상 여부 확인이 필요해요).","The auto-enrichment records could not be read (check for damage)."));
       // '시작 전'은 담당을 한 번도 부르지 않았을 때만 쓴다(1차 [보완]: 담당 호출 뒤 보류된 경우도 있다).
       if(jp==="parked"){
         var lf=en.job&&en.job.lastFailure;
@@ -7791,7 +7814,7 @@ class Dashboard {
           const btns={}; let mmCur=mm.raw; // 재클릭 판정=명시 선택 기준(미지정≠명시 self — scoutArmClick 교훈 동형)
           const note=document.createElement("div"); note.className="muted"; note.style.marginTop="3px";
           const rdOf=function(p){ return (rd&&rd[p])?rd[p]:{ok:false,reason:"not-probed"}; };
-          const reasonT=function(r){ if(!r) return ""; const m={"state-damaged":T("상태 파일 손상 — 재점검 필요","state file damaged — re-check"),"not-probed":T("준비 점검 전","not checked yet"),"probe-ver-changed":T("점검 계약 개정 — 재점검 필요","check contract changed — re-check"),"probe-failed":T("점검 실패","check failed"),"config-missing":T("설정 없음","not configured"),"config-changed":T("설정 변경됨 — 재점검 필요","config changed — re-check"),"economy-not-ready":T("경제형 미준비","economy not ready"),"precision-not-ready":T("정밀형 미준비","precision not ready")}; return m[r.reason]||r.reason||""; };
+          const reasonT=function(r){ if(!r) return ""; const m={"state-damaged":((d.bridgeStale&&d.bridgeStale.stale)?T("이 창의 판독기가 이전 판이라 준비 상태를 읽지 못해요 — 창을 다시 로드한 뒤 다시 확인","this window's reader is the previous version and cannot read the readiness state — reload the window and check again"):T("상태 파일을 읽지 못해요 — 손상 여부 확인·재점검 필요","state file could not be read — check for damage and re-check")),"not-probed":T("준비 점검 전","not checked yet"),"probe-ver-changed":T("점검 계약 개정 — 재점검 필요","check contract changed — re-check"),"probe-failed":T("점검 실패","check failed"),"config-missing":T("설정 없음","not configured"),"config-changed":T("설정 변경됨 — 재점검 필요","config changed — re-check"),"economy-not-ready":T("경제형 미준비","economy not ready"),"precision-not-ready":T("정밀형 미준비","precision not ready")}; return m[r.reason]||r.reason||""; };
           const setOn9=function(){ const cur9=(mmCur===null?"self":mmCur); for(const k in btns) btns[k].classList.toggle("on", k===cur9); };
           const mk=function(mode,label,sub,dis,title){ const b=document.createElement("button"); b.type="button"; b.appendChild(document.createTextNode(label)); const sm=document.createElement("small"); sm.textContent=sub; b.appendChild(sm); b.disabled=!!dis; if(dis) b.style.opacity=".55"; if(title) b.title=title;
             b.addEventListener("click", function(){ if(dis) return; if(mmCur===mode){ note.textContent=T("이미 선택돼 있어요 ✓","Already selected ✓"); return; }
@@ -7826,10 +7849,14 @@ class Dashboard {
             const consented=modeNow==="self"?en9.selfAuto:(en9.paidMode===modeNow);
             const jp=en9.job&&en9.job.phase;
             let msg;
-            if(en9.consentSt==="damaged") msg=T("자동 보강: 동의 기록 손상 — 수동 복구 필요","Auto-enrich: consent record damaged — manual recovery");
+            const staleR9=!!(d.bridgeStale&&d.bridgeStale.stale); // 옛 판독기(창 미로드)면 어떤 장부든 '손상' 단정 금지 — 재로드 뒤 확정
+            const staleMsg9=T("자동 보강: 이 창의 판독기가 이전 판이라 기록을 읽지 못해요 — 창을 다시 로드한 뒤 다시 확인해 주세요","Auto-enrich: this window's reader is the previous version and cannot read the records — reload the window and check again");
+            if(en9.consentSt==="damaged") msg=staleR9?staleMsg9:T("자동 보강: 동의 기록을 읽지 못해요 — 손상 여부 확인이 필요해요","Auto-enrich: the consent record could not be read — check for damage");
             else if(!consented) msg=T("자동 보강: 꺼짐(이 담당의 자동 실행 동의 없음)","Auto-enrich: off (no consent for this provider)");
-            else if(jp==="damaged") msg=T("자동 보강: 작업 기록 손상 — 자동 실행 정지","Auto-enrich: job ledger damaged — automation halted");
-            else if(en9.deferredSt==="damaged") msg=T("자동 보강: 확인 대기 기록 손상 — 수동 복구 필요","Auto-enrich: verification queue damaged — manual recovery required");
+            else if(jp==="damaged") msg=(d.bridgeStale&&d.bridgeStale.stale)
+              ? T("자동 보강: 이 창의 판독기가 이전 판이라 작업 기록을 읽지 못해요 — 창을 다시 로드한 뒤 다시 확인해 주세요","Auto-enrich: this window's reader is the previous version and cannot read the job ledger — reload the window and check again")
+              : T("자동 보강: 작업 기록을 읽지 못해요 — 손상 여부 확인이 필요해요(실행기는 자기 판독으로 계속 시도해요)","Auto-enrich: the job ledger could not be read — check for damage (the runner keeps trying with its own reader)"); // 실행기 spawn 은 damaged 로 막히지 않는다 — 옛 '정지' 문구는 사실이 아니었다(2026-09-19 실사고)
+            else if(en9.deferredSt==="damaged") msg=staleR9?staleMsg9:T("자동 보강: 확인 대기 기록을 읽지 못해요 — 손상 여부 확인이 필요해요","Auto-enrich: the verification queue could not be read — check for damage");
             else if(jp==="parked"){ msg=T("자동 보강: 보류됨 — ","Auto-enrich: parked — ")+parkReasonText(en9.job.parkedReason, d.mapReadiness)
               +(en9.job.lastFailure?T(" · 마지막 시도: "," · last attempt: ")+failureText(en9.job.lastFailure)+failureAdvice(en9.job.lastFailure):"");
               // 순서 안내(실사고 2026-08-04): 준비 점검만으로는 이미 보류된 작업이 열리지 않는다 —
@@ -8535,6 +8562,22 @@ class Dashboard {
         ? T("검증 모델·추론강도는 Claude 모드 설정을 상속 중입니다. 여기서 저장하면 Codex↔Codex 전용 설정으로 분리됩니다.","Verifier model and reasoning inherit the Claude-mode settings. Saving here creates a Codex↔Codex-specific override.")
         : T("Codex↔Codex 전용 검증 모델·추론강도를 사용 중입니다.","Using Codex↔Codex-specific verifier model and reasoning settings.");
       if(mr)mr.style.display=cc&&!d.modelPrefInherited?"":"none";}
+    });
+
+    // 브릿지 판 어긋남 배너(D-2026-09-19-bridge-stale-banner): 이 창이 캐시한 브릿지 모듈이 디스크 판보다 오래됐으면
+    // 원인과 조치(창 다시 로드)를 화면이 직접 말한다 — 재로드 전의 '기록을 읽지 못함'은 손상 단정이 아니라 판독 불확실.
+    safe(function(){
+      const bb=$("bridgeStaleBanner"); if(!bb) return;
+      const bs=d.bridgeStale||null;
+      if(!bs||!bs.stale){ bb.style.display="none"; bb.replaceChildren(); return; }
+      bb.replaceChildren(); bb.style.display="";
+      const sp=document.createElement("span");
+      sp.textContent=T("브릿지가 갱신됐어요 — 이 창은 아직 이전 판으로 읽고 있어요. 지금 보이는 상태(특히 '기록을 읽지 못함')는 창을 다시 로드한 뒤에 확정돼요.","The bridge files were updated — this window is still reading with the previous version. What you see now (especially 'could not read records') is only certain after a reload.")+" ("+(bs.changed||[]).slice(0,3).join(", ")+")";
+      bb.appendChild(sp);
+      const rb=document.createElement("button"); rb.type="button"; rb.className="secondary"; rb.style.cssText="margin-left:8px;font-size:11px;padding:2px 8px";
+      rb.textContent=T("창 다시 로드","Reload window");
+      rb.addEventListener("click", function(){ rb.disabled=true; vscode.postMessage({type:"reloadWindow"}); });
+      bb.appendChild(rb);
     });
 
     // 무결성 경보 배너: 미확인 error 이벤트(예: 검증 미완)를 빨강으로 보이고 '확인함'으로 해제.

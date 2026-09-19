@@ -353,3 +353,11 @@
 - 결과: 결함 1개가 정상 9개를 죽이지 않는다. 사고 유형별 사유가 항목 단위로 장부에 남아 다음 사고는 추정이 아니라 확인이 된다. 라벨 수정 제안이 절단 때문에 조사 대기로 빠지는 일이 사라진다.
 - 정본: bridge/map-enrich.js `validateEnrichResult(obj, topo, ctx, { perItem })` · `fillExpectFromSnapshot` · runAttempt 1단계 관문 블록 · `dropItemAtConvert`(변환 단계 제외 — 교체 표식 보상·원래 색인) · attempt `sourceIdx`(압축 배열→원래 응답 색인) · `DROP_STAGES` · validateJob droppedItems 합타입 · `enrichOutcomeSummary.dropped` · src/extension.ts enrich.dropped 문구 · bridge/enrich-providers.js 프롬프트 expect 안내 · tests/p8-enrich-run.test.js [8][8b][8c][8d]
 - 찾는말: 자동 보강 보류 반복, 항목 단위 관문, droppedItems, perItem, expect 자체 채움, fillExpectFromSnapshot, 라벨 절단, 전체 거부, 부분 채택
+
+## D-2026-09-19-bridge-stale-banner — 창이 옛 브릿지 판으로 읽고 있으면 화면이 스스로 그 사실과 조치(창 다시 로드)를 말하고, 그동안은 '손상'이라 단정하지 않는다
+- 날짜: 2026-09-19 · 종류: 확정(사용자 결정 — 범위 ①만) · 상태: 유효
+- 결정: (1) 확장 호스트가 require 로 캐시한 브릿지 모듈(브릿지 홈 바로 아래 .js)마다 처음 관측한 파일 지문(mtime+size)을 기억하고 매 렌더마다 디스크와 비교해, 달라지면 bridgeStale 로 표시한다(src/bridge-stale.ts `observeBridgeStale`, 특정 파일·특정 장부 키에 매이지 않는 일반 규칙). (2) stale 이면 대시보드 첫머리에 배너와 [창 다시 로드] 버튼을 두고 같은 변경 묶음에 대해 경고 알림을 1회 띄운다(Codex 훅 재로드 안내 선례와 같은 방식). (3) stale 동안 브릿지 판독이 'damaged' 로 나오면 '이 창의 판독기가 이전 판이라 읽지 못함 — 재로드 뒤 다시 확인'으로만 말하고, 재로드 뒤에도 못 읽을 때 '손상 여부 확인 필요'로 말한다. (4) '자동 실행 정지' 문구는 폐기한다 — damaged 는 실행기 spawn 을 막지 않으며 실행기는 자기 판독으로 계속 시도한다.
+- 왜: 2026-09-19 실사고 — install.js 로 브릿지를 갱신한 뒤 창을 다시 로드하지 않은 창이 옛 판독기로 새 형식 장부(sourceIdx)를 읽어 '작업 기록 손상 — 자동 실행 정지'를 보였고, 사용자는 원인도 조치도 알 수 없어 구현자에게 물어야 했다. 배포 단계(deployBridgeRuntime)는 stamp version·드리프트를 검사하지만 이미 떠 있는 창의 캐시는 아무도 보지 않았다. 손상 상태 자체에 사용자 행동(복구 버튼)을 두는 것(범위 ②)은 원본 기록 삭제가 얽혀 별도 결정으로 미룬다.
+- 결과: 브릿지 갱신 뒤 사용자는 화면에서 바로 원인과 버튼을 보고 스스로 조치한다. 형식 변경이 또 있어도 같은 안내가 자동으로 나온다. 한계: 로드와 첫 관측 사이에 파일이 바뀐 한 번은 놓칠 수 있다(창이 뜬 직후·매 렌더 관측으로 창은 좁다).
+- 정본: src/bridge-stale.ts `observeBridgeStale` · src/extension.ts `bridgeStaleView`·`promptBridgeReload`·BridgeState.bridgeStale·웹뷰 `bridgeStaleBanner`·메시지 `reloadWindow`·자동 보강 상태 문구(damaged 두 갈래) · tests/bridge-stale.test.js
+- 찾는말: 브릿지 갱신, 창 다시 로드, 옛 판독기, 작업 기록 손상, 자동 실행 정지, bridgeStale, require 캐시, 대시보드 배너
