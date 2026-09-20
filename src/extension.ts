@@ -248,6 +248,7 @@ interface BridgeState {
   // 빈 문자열 = 그 담당의 기본값(우리가 아무것도 지정하지 않음) — 화면에서 '기본값으로 고정'으로 표기한다.
   scoutModelNow: { claude: string; codex: string; deepseek: string };
   mapMode: { raw: string | null; mode: string } | null; // P7 — 의미 보강 담당(3트랙에서만·null=2트랙/ws 없음). raw=명시 선택·mode=표시값(부재=self)
+  mapExcerpt: any | null; // 묶음 3(D3) — 발췌 범위 옵션 뷰(bridge/enrich-excerpt-cfg.js mapExcerptView 산출: raw·eff·source·presetKey + 프리셋·범위 상수). 3트랙에서만·null=2트랙/ws 없음/구 설치본
   mapReadiness: any | null; // P7 — readiness 뷰(contract-lib mapReadinessView 산출·precision 지문은 호스트 주입)
   enrich: any | null; // P8 — 자동 보강 상태(동의·장부 요약 — 표시 전용·정본은 실행기 장부)
   intent: any | null; // P9 — 정책 충돌 선택·조사 정보·손상 복구(3트랙에서만)
@@ -571,6 +572,39 @@ function scoutArmViewExt(ws: string, slotIn?: Lang): { raw: string | null; eff: 
 }
 // ── P7: MAP 의미 보강 모드(mapMode)·readiness(정본 MAP-V2-DESIGN 'P7 상세 설계' v4 — 사용자 승인 확정) ──
 const MAP_MODES_EXT = ["self", "economy", "precision", "auto"]; // ⚠ contract-lib MAP_MODES와 동일 목록
+// 묶음 3(D3): 발췌 범위 옵션 저장 — 프로젝트별 계약(현재 언어 슬롯)의 mapExcerpt 만 exact patch(다른 필드 보존·단일 관문 · ab-2).
+// 값 검증은 설치본 bridge/enrich-excerpt-cfg.js 의 저장 관문(parseExcerptInput)이 한다 — 상한 밖·정수 아님=거부(저장 안 함·안내). reset(null)=권장 기본값을 이 슬롯에 명시 저장.
+// 저장 슬롯(slotLang)=웹뷰가 표시한 데이터의 슬롯(d.mapExcerpt.slot) — 언어 전환 보류 중(dirty 카드가 옛 언어 HTML 을 유지한 채 새 언어 상태를 받는 창)에도 '보던 값'을 '그 슬롯'에만 쓴다(ab-2).
+// 저장 대상 프로젝트=웹뷰가 표시한 프로젝트(상태 mapExcerpt.ws — 확인 검증 2판 blocker ab-1: 멀티루트 창에서 대시보드 대상이 A→B 로 바뀐 뒤 처리 시점의
+// dashboardWorkspace() 에 쓰면 A 화면의 초안이 B 에 저장된다). 이 창의 폴더 중 하나일 때만 인정(아니면 null=저장 안 함·안내) · 표식이 없으면(구 웹뷰) 종전대로 대시보드 대상.
+function displayedProjectWs(wsIn: unknown): string | null {
+  if (typeof wsIn !== "string" || !wsIn) return dashboardWorkspace();
+  const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+  return folders.some((f) => normWs(f) === normWs(wsIn)) ? wsIn : null;
+}
+async function setMapExcerptFromUi(ws: string | null, input: { files: unknown; charsPerFile: unknown } | null, slotLang?: Lang): Promise<void> {
+  if (!ws) { vscode.window.showWarningMessage(tE("표시하던 프로젝트 폴더가 이 창에 없어 발췌 범위를 저장하지 않았어요 — 창을 갱신한 뒤 다시 저장해 주세요.", "The project folder that was displayed is not in this window, so the excerpt scope was not saved — refresh the window and save again.")); return; }
+  const lang: Lang = slotLang || loadLangExt();
+  let EX9: any = null;
+  try { EX9 = require(path.join(BRIDGE_DIR, "enrich-excerpt-cfg.js")); } catch { EX9 = null; }
+  if (!EX9 || typeof EX9.parseExcerptInput !== "function") { vscode.window.showWarningMessage(tE("설치본에 발췌 범위 모듈이 없어요 — 설치를 다시 하고 창을 다시 로드해 주세요.", "The installed bridge lacks the excerpt-scope module — reinstall and reload the window.")); return; }
+  let patch: Record<string, unknown>;
+  if (input === null) patch = { mapExcerpt: { files: EX9.MAP_EXCERPT_DEFAULT.files, charsPerFile: EX9.MAP_EXCERPT_DEFAULT.charsPerFile } }; // 기본값 복원=권장 기본값을 이 슬롯에 '명시' 저장(검증 1판 blocker: 키 삭제면 반대 언어 슬롯 값이 상속돼 버튼의 약속과 실효값이 갈린다)
+  else {
+    const r = EX9.parseExcerptInput(input.files, input.charsPerFile);
+    if (!r.ok) {
+      const why = r.reason === "files-range" ? tE(`파일 수는 ${EX9.EXCERPT_FILES_MIN}~${EX9.EXCERPT_FILES_MAX} 사이여야 해요.`, `File count must be between ${EX9.EXCERPT_FILES_MIN} and ${EX9.EXCERPT_FILES_MAX}.`)
+        : r.reason === "chars-range" ? tE(`파일당 글자는 ${EX9.EXCERPT_CHARS_MIN}~${EX9.EXCERPT_CHARS_MAX} 사이여야 해요.`, `Characters per file must be between ${EX9.EXCERPT_CHARS_MIN} and ${EX9.EXCERPT_CHARS_MAX}.`)
+        : tE("두 값 모두 정수로 적어 주세요.", "Enter both values as whole numbers.");
+      vscode.window.showWarningMessage(tE("발췌 범위를 저장하지 않았어요 — ", "Excerpt scope was not saved — ") + why);
+      return;
+    }
+    patch = { mapExcerpt: r.cfg };
+  }
+  const pr = await patchContractRetryExt(ws, lang, patch);
+  if (!pr.ok) { void offerLockRecoveryExt(pr, () => { void setMapExcerptFromUi(ws, input, lang); }); return; }
+  vscode.commands.executeCommand("codexBridge.refresh");
+}
 async function setMapModeFromUi(ws: string | null, mode: string, slotLang?: Lang): Promise<void> {
   if (!ws) { vscode.window.showWarningMessage(tE("폴더가 열려 있지 않아 설정할 수 없어요.", "No folder is open, so this cannot be set.")); return; }
   if (!MAP_MODES_EXT.includes(mode)) return;
@@ -2200,6 +2234,16 @@ ${tE("전부 이 컴퓨터의 브릿지 홈에 남습니다. 외부로 나가는
 function openMapModeGuide(): void {
   // 묶음 1: 사람 없이 이어지는 호출 규칙은 상수(bridge/enrich-calls.js)에서 문장을 만든다 — 숫자를 안내문에 손으로 적지 않는다(규칙이 바뀌면 문구도 따라오게). 구 설치본이면 문장 생략.
   const unattendedRule = (() => { try { const EC9: any = require(path.join(BRIDGE_DIR, "enrich-calls.js")); return String(EC9.unattendedRuleText(loadLangExt()) || ""); } catch { return ""; } })();
+  // 묶음 3: 발췌 범위 옵션 안내 — 프리셋·기본값·상한은 상수(bridge/enrich-excerpt-cfg.js)에서 문장을 만든다(숫자를 손으로 적지 않는다). 구 설치본이면 생략.
+  const excerptOptionNote = (() => { try {
+    const EX9: any = require(path.join(BRIDGE_DIR, "enrich-excerpt-cfg.js"));
+    const en9 = loadLangExt() === "en";
+    const presets9 = (EX9.MAP_EXCERPT_PRESETS || []).map((p9: any) => (en9 ? p9.en : p9.ko) + " " + p9.files + "/" + Number(p9.charsPerFile).toLocaleString("en-US")).join(" · ");
+    const d9 = EX9.MAP_EXCERPT_DEFAULT;
+    return en9
+      ? `Each project chooses how many files and how many characters per file the provider receives (Verification settings → provider row → Excerpt scope; presets ${presets9}; default ${d9.files} files / ${d9.charsPerFile} chars; hard ceiling ${EX9.EXCERPT_FILES_MAX} files / ${EX9.EXCERPT_CHARS_MAX} chars). Smaller means cheaper calls and a narrower view; larger means the opposite. The numbers are yours to tune by the citation line on the status card — this is not a benchmark result.`
+      : `담당에게 보내는 파일 수와 파일당 글자를 프로젝트마다 고를 수 있어요(검증 설정 → 담당 줄 → 발췌 범위 · 프리셋 ${presets9} · 기본값 ${d9.files}파일/${d9.charsPerFile}자 · 상한 ${EX9.EXCERPT_FILES_MAX}파일/${EX9.EXCERPT_CHARS_MAX}자). 작게 하면 호출이 가볍고 보는 범위가 좁아지고, 크게 하면 그 반대예요. 수치는 벤치 결과가 아니라 현황 카드의 인용 측정을 보고 직접 조정하는 값입니다.`;
+  } catch { return ""; } })();
   const panel = vscode.window.createWebviewPanel("codexBridgeMapModeGuide", tE("Project MAP 의미 보강 모드 안내", "Project MAP enrichment modes"), vscode.ViewColumn.Beside, { enableScripts: false });
   const mode = (color: string, titleKo: string, titleEn: string, provider: string, fitKo: string, fitEn: string, behaviorKo: string, behaviorEn: string, costKo: string, costEn: string) => `
     <section class="mode" style="border-top-color:${color}"><h2>${tE(titleKo, titleEn)}</h2><div class="provider">${provider}</div>
@@ -2223,6 +2267,7 @@ ${mode("#d9a441", "자동형", "Auto", "DeepSeek + Codex", "매번 고르지 않
 <b>${tE("실패", "Failure")}</b><span>${tE("명시 모드는 그대로 보류합니다. 자동형만 DeepSeek 실패를 Codex로 한 번 넘깁니다. 무한 재시도나 무단 대체는 없습니다.", "Explicit modes park. Only Auto escalates a DeepSeek failure once to Codex. There is no infinite retry or unauthorized substitution.")}</span>
 </div></div>
 ${unattendedRule ? `<p class="note">${tE("자동 보강 호출 횟수 —", "Auto-enrich call counts —")} ${unattendedRule} ${tE("실제 횟수는 현황 카드의 '이번 작업' 줄에서 봅니다(요금이 아니라 호출 횟수입니다).", "Actual counts appear on the status card's 'This job' line (call counts, not billing).")}</p>` : ""}
+${excerptOptionNote ? `<p class="note">${tE("발췌 범위 —", "Excerpt scope —")} ${excerptOptionNote}</p>` : ""}
 <p class="note"><span class="warn">${tE("준비 점검은 실제 호출입니다.", "Readiness checking makes real calls.")}</span> ${tE("버튼을 눌렀을 때만 DeepSeek 소형 요청 최대 2회(형식 교정 1회 포함)와 Codex 실행 1회를 사용합니다. 모드 선택은 저장될 수 있어도, 준비되지 않은 담당으로 작업을 조용히 강행하지는 않습니다.", "Only pressing the button uses up to two small DeepSeek requests (including one format repair) and one Codex run. A mode selection may be saved, but work is never silently forced through an unready provider.")}</p>
 </body></html>`;
 }
@@ -2791,6 +2836,7 @@ function computeState(turnsN: number): BridgeState {
     bridgeStale: bridgeStaleView(), // 브릿지 판 어긋남(창 미로드) — 매 렌더 관측·최초 감지 시 1회 알림
     scoutArm: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; return scoutArmViewExt(ws); } catch { return null; } })(), // slot은 뷰가 계산과 원자 결속해 반환(3차 blocker — 사후 재판독 금지)
     mapMode: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const CLx: any = bridgeLib(); return CLx && CLx.mapModeView ? CLx.mapModeView(ws) : null; } catch { return null; } })(), // P7 — 3트랙에서만
+    mapExcerpt: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const EX9: any = require(path.join(BRIDGE_DIR, "enrich-excerpt-cfg.js")); const v9 = EX9.mapExcerptView(ws, loadLangExt(), contractFileFor); return { ws, raw: v9.raw, eff: v9.eff, source: v9.source, slot: v9.slot, presetKey: v9.presetKey, presets: EX9.MAP_EXCERPT_PRESETS, bounds: { filesMin: EX9.EXCERPT_FILES_MIN, filesMax: EX9.EXCERPT_FILES_MAX, charsMin: EX9.EXCERPT_CHARS_MIN, charsMax: EX9.EXCERPT_CHARS_MAX }, text: EX9.excerptCfgText(v9.eff, loadLangExt()) }; } catch { return null; } })(), // 묶음 3 — 발췌 범위 옵션(3트랙에서만 · 설치본 모듈이 없으면 null=줄 숨김)
     mapReadiness: (rvSnap = (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const CLx: any = bridgeLib(); const rv9 = CLx && CLx.mapReadinessView ? CLx.mapReadinessView({ precisionFpNow: precisionFpNowExt(), selfFpNow: selfFpNowExt() }) : null; maybeAutoReprobe(ws, rv9); return rv9; } catch { return null; } })()), // P7 — 저장 레코드+현재 지문 재대조(precision·self 지문은 호스트 주입)+지문 변경 자동 재점검(fp당 1회). rvSnap=아래 enrich의 사람 조치 판정이 같은 스냅샷을 쓰도록 보관(재계산 금지)
     enrich: (() => { // P8 증분 4 — 자동 보강 상태(동의·장부 요약)+ⓒ tick 발동
       if (!ws) return null;
@@ -4115,6 +4161,7 @@ class Dashboard {
         if (m?.type === "setScoutTarget" && typeof m.repo === "string") setScoutTargetFromUi(dashboardWorkspace(), m.repo, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
         if (m?.type === "setScoutArm" && (m.arm === "self" || m.arm === "deepseek" || m.arm === "codex")) setScoutArmFromUi(dashboardWorkspace(), m.arm, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
         if (m?.type === "reloadWindow") { void vscode.commands.executeCommand("workbench.action.reloadWindow"); return; } // 브릿지 판 어긋남 배너의 [창 다시 로드]
+        if (m?.type === "setMapExcerpt") setMapExcerptFromUi(displayedProjectWs(m.ws), m.reset === true ? null : { files: m.files, charsPerFile: m.charsPerFile }, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post()); // 묶음 3 — 발췌 범위 옵션(저장 대상=웹뷰가 표시한 프로젝트(m.ws) · 검증은 setMapExcerptFromUi 의 저장 관문 · reset=권장 기본값 명시 저장)
         if (m?.type === "setMapMode" && typeof m.mode === "string") setMapModeFromUi(dashboardWorkspace(), m.mode, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post()); // P7 — 검증은 setMapModeFromUi의 MAP_MODES 화이트리스트
         if (m?.type === "runMapProbe") { const wsP = dashboardWorkspace(); runMapProbeFromUi(wsP, pendingTargetsFor(wsP)).then(() => this.post()); } // 버튼=선택 담당 중 미준비만 재점검(전부 준비면 전체=명시 재확인)·단일-flight는 함수 내부
         if (m?.type === "grantEnrichSelf") grantEnrichSelfFromUi(dashboardWorkspace()).then(() => this.post()); // P8 — self 자동 보강 동의(1클릭·모달 고지)
@@ -6215,6 +6262,7 @@ class Dashboard {
   let appVM = null, appIM = null, appSM = null, appVP = null;
   let appRulesC = null, appRulesX = null; // P-8 2단 v10: 규칙 텍스트 정본 기준선 — '바뀐 필드만' 저장 판정용(dirty 제한)
   let curVB = "", appVB = null; // P-12 2b: 왕복 예산 초안/저장값(문자열 — ""=무제한, 숫자 문자열=상한)
+  var mxDraft = null; // 묶음 3: 발췌 범위 미저장 초안 {files, chars, slot} — 15초 상태 갱신이 줄을 다시 그려도 입력을 지키고, 저장이 확인되거나(정본=초안) 기본값을 누를 때만 비운다(검증 1판 blocker)
   let appCkC = null, appCkX = null; // 체크박스 '마지막 적용값'(hold 판정용 — 미저장 체크 변경이 언어 전환에 덮이지 않게)
   let curPerm = "";   // 지금 Claude Code 권한 모드(active.json) — plan 게이트 표시용
   let curRS = "";     // 두뇌 설정 폼에서 고른 생각강도("" = 기본). 모델은 입력칸 값 직접 사용.
@@ -7862,6 +7910,44 @@ class Dashboard {
           pb.title=T("담당을 고르면 그 담당은 자동으로 점검돼요. 이 버튼은 그 뒤 상태가 바뀌었을 때(프로그램 경로 변경·키 등록 등) 다시 확인하는 용도예요 — 고른 담당만 실제로 호출합니다(경제형=DeepSeek 소형 요청 최대 2회 과금·정밀형=Codex 계정 사용량 1회).","Choosing a provider checks it automatically. Use this to re-check after something changed (program path moved, key registered, …) — only the chosen provider is actually called (economy = up to 2 small billed DeepSeek requests · precision = 1 Codex run within account usage).");
           pb.addEventListener("click", function(){ pb.disabled=true; pb.textContent=T("점검 중…","Checking…"); vscode.postMessage({type:"runMapProbe"}); });
           row.appendChild(pb);
+          // 묶음 3(D3) — 발췌 범위(담당에게 보내는 파일 수·파일당 글자): 검증 왕복 상한과 같은 문법(프리셋 버튼=자동 입력 · 직접 숫자 · 저장은 명시 버튼).
+          // 값의 정본은 프로젝트별 계약(mapExcerpt) · 표시는 실효값+출처(이 슬롯/반대 언어 슬롯/기본값) · 구 설치본(d.mapExcerpt 없음)이면 줄을 그리지 않는다.
+          safe(function(){
+            const ex=d.mapExcerpt; if(!ex||!ex.eff) return;
+            // 초안 보존(검증 1판 blocker ②): 저장값이 초안과 같아졌으면(저장 확인) 초안을 비우고, 슬롯이 바뀌었으면(다른 슬롯 데이터) 초안을 버린다 — 그 밖엔 갱신이 와도 입력이 유지된다.
+            if(mxDraft && (mxDraft.slot!==ex.slot || mxDraft.ws!==ex.ws)) mxDraft=null; // 슬롯·프로젝트가 바뀌면(멀티루트 창의 대상 전환 포함) 다른 곳의 초안은 버린다(ab-1)
+            if(mxDraft && ex.raw && String(ex.raw.files)===mxDraft.files && String(ex.raw.charsPerFile)===mxDraft.chars) mxDraft=null;
+            const showF = mxDraft ? mxDraft.files : String(ex.eff.files), showC = mxDraft ? mxDraft.chars : String(ex.eff.charsPerFile);
+            const xr=document.createElement("div"); xr.className="muted"; xr.style.cssText="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center";
+            const xl=document.createElement("span"); xl.textContent=T("발췌 범위 — 담당에게 보내는 파일 수와 파일당 글자","Excerpt scope — how many files and how many characters per file go to the provider"); xr.appendChild(xl);
+            const fmtN=function(n){ return Number(n).toLocaleString("en-US"); };
+            const mkNum=function(id,val,min,max,w){ const i=document.createElement("input"); i.type="number"; i.id=id; i.min=String(min); i.max=String(max); i.step="1"; i.value=String(val); i.style.width=w; i.title=T("범위 "+min+"~"+max,"range "+min+"–"+max); return i; };
+            const fi=mkNum("mxFiles", showF, ex.bounds.filesMin, ex.bounds.filesMax, "58px");
+            const ci=mkNum("mxChars", showC, ex.bounds.charsMin, ex.bounds.charsMax, "72px");
+            const noteDraft=function(){ mxDraft={ files: String(fi.value||"").trim(), chars: String(ci.value||"").trim(), slot: ex.slot, ws: ex.ws }; }; // 편집·프리셋=초안(갱신에도 유지 · 표시한 프로젝트·슬롯에 결속)
+            fi.addEventListener("input", noteDraft); ci.addEventListener("input", noteDraft);
+            xr.appendChild(fi); xr.appendChild(document.createTextNode(T("파일 ·","files ·"))); xr.appendChild(ci); xr.appendChild(document.createTextNode(T("자/파일","chars/file")));
+            const sv=document.createElement("button"); sv.type="button"; sv.className="secondary"; sv.style.cssText="font-size:11px;padding:2px 8px"; sv.textContent=T("저장","Save");
+            sv.title=T("이 프로젝트의 표시 중인 언어 슬롯에 저장 — 다음 자동 보강 호출부터 적용돼요. 상한 밖 값은 저장되지 않아요(입력은 남아 있어요).","Saved to this project's displayed language slot — applies from the next auto-enrich call. Out-of-range values are not saved (your input stays).");
+            // 저장 슬롯·프로젝트=표시 데이터의 것(검증 1판 blocker ①·확인 2판 blocker ab-1): 언어 전환 보류 중에도, 멀티루트 창의 대상 전환 뒤에도 보던 값을 그 프로젝트·그 슬롯에만 쓴다 · 초안은 저장이 확인될 때(정본=초안) 위에서 비워진다
+            sv.addEventListener("click", function(){ noteDraft(); sv.disabled=true; sv.textContent=T("저장 중…","Saving…"); vscode.postMessage({type:"setMapExcerpt", files: fi.value, charsPerFile: ci.value, lang: ex.slot, ws: ex.ws}); });
+            xr.appendChild(sv);
+            const rs=document.createElement("button"); rs.type="button"; rs.className="secondary"; rs.style.cssText="font-size:11px;padding:2px 8px"; rs.textContent=T("권장 기본값으로","Recommended default");
+            rs.title=T("권장 기본값(권장 프리셋)을 이 슬롯에 저장해요 — 반대 언어 슬롯에 다른 값이 있어도 이 슬롯은 권장값이 돼요.","Saves the recommended default (recommended preset) to this slot — it applies here even if the other language slot has a different value.");
+            rs.addEventListener("click", function(){ mxDraft=null; rs.disabled=true; vscode.postMessage({type:"setMapExcerpt", reset:true, lang: ex.slot, ws: ex.ws}); });
+            xr.appendChild(rs);
+            row.appendChild(xr);
+            const pr=document.createElement("div"); pr.className="muted"; pr.style.cssText="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap;align-items:center";
+            pr.appendChild(document.createTextNode(T("프리셋:","Presets:")));
+            (ex.presets||[]).forEach(function(p9){ const b=document.createElement("button"); b.type="button"; b.style.cssText="font-size:11px;padding:1px 7px"; b.textContent=(UI_EN?p9.en:p9.ko)+" · "+p9.files+"/"+fmtN(p9.charsPerFile); b.title=UI_EN?p9.noteEn:p9.noteKo; if(ex.presetKey===p9.key) b.classList.add("on");
+              b.addEventListener("click", function(){ fi.value=String(p9.files); ci.value=String(p9.charsPerFile); noteDraft(); }); pr.appendChild(b); });
+            const src=ex.source==="own"?T("저장값(이 프로젝트)","saved (this project)"):ex.source==="other"?T("반대 언어 슬롯의 저장값","saved in the other language slot"):T("기본값 — 저장값 없음","default — nothing saved");
+            const slotNote=(ex.slot===(UI_EN?"en":"ko"))?"":T(" · 저장 대상: "+ex.slot+" 슬롯(다른 창에서 언어가 바뀜)"," · saves to slot "+ex.slot+" (language changed in another window)");
+            const draftNote=mxDraft?T(" · 미저장 입력 있음 — 저장을 눌러야 반영돼요"," · unsaved input — press Save to apply"):"";
+            const nt=document.createElement("span"); nt.textContent=T("지금: ","Now: ")+ex.eff.files+T("파일 · ","files · ")+fmtN(ex.eff.charsPerFile)+T("자/파일 ("," chars/file (")+src+")"+slotNote+draftNote+T(" · 프리셋 클릭=자동 입력. 수치는 현황 카드의 인용 측정을 보고 조정하세요."," · preset click fills the fields. Tune the numbers by the citation line on the status card.");
+            pr.appendChild(nt);
+            row.appendChild(pr);
+          });
           // P8 — 자동 보강 상태 줄(동의·장부 표시+동의/재시도 버튼. 정본=실행기 장부 — 표시 전용)
           const en9=d.enrich||null;
           const st9=document.createElement("div"); st9.className="muted"; st9.style.marginTop="4px";

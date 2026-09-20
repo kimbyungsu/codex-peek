@@ -69,6 +69,7 @@ const BRIDGE_SCRIPTS = [
   "map-intent.js", // P9: 정책 충돌 카드 파생 뷰+사용자 선택 선기록(자동 적용/UI 전 바닥 계층)
   "enrich-providers.js", // P8: 보강 어댑터 3종+Verifier 해소 진입점(설치본 자동 발동에서 실존해야 함)
   "enrich-calls.js", // 묶음 1: 호출 횟수·재시도 이력·인용 측정 요약(순수 계산) — 확장 카드가 require
+  "enrich-excerpt-cfg.js", // 묶음 3: 발췌 범위 옵션(프리셋·기본값·정규화·계약 뷰) — 실행기·프롬프트·확장 카드가 require
   "evidence-challenge.js", // 근거 재확인(증분 4): codex-bridge가 발송·판정에 require — 누락 시 설치본 로드 불능
   "citation-check.js", // [HARNESS-STRUCTURE-2026-09-11 §B1] 인용 대조(순수 계층) — codex-bridge flagEvidence·evidenceInfoLine이 require(try/catch라 누락 시 조용히 비활성 — 배포 편입 필수)
   "map-rotation.js", // [HARNESS-STRUCTURE §B2 (2)(3)] 지도 칸 회전(사실 전이·교체·보상) — map-enrich 가 lazy require(누락 시 조용히 비활성 — 배포 편입 필수)

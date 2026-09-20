@@ -294,7 +294,7 @@ console.log("[5] 배포 파일 — 3카피 패리티+실물+deepseek enrich 계�
   const a = require(path.join(ROOT, "install.js")).BRIDGE_SCRIPTS;
   const c = require(path.join(ROOT, "bridge", "map-cutover.js")).EXPECTED_DEPLOY_FILES;
   const h = fs.readFileSync(path.join(ROOT, "src", "hook-setup.ts"), "utf8");
-  ok(a.length === 52 && c.length === 52 && JSON.stringify([...a].sort()) === JSON.stringify([...c].sort()), "52파일(+enrich-calls[묶음 1 호출 표시]+정찰 층 12·코어 사본 3[2026-09-16 이관]+cap-handoff·router·enrich·intent·providers·retrieval·evidence-challenge·probe-batch·provenance·selector-runner·preview-gate[4b]·session-start[§4-B ①]·curation[CURATION v3]·citation-check[HARNESS-STRUCTURE §B1]·map-rotation[§B2]) 집합 일치");
+  ok(a.length === 53 && c.length === 53 && JSON.stringify([...a].sort()) === JSON.stringify([...c].sort()), "53파일(+enrich-excerpt-cfg[묶음 3 발췌 범위 옵션]+enrich-calls[묶음 1 호출 표시]+정찰 층 12·코어 사본 3[2026-09-16 이관]+cap-handoff·router·enrich·intent·providers·retrieval·evidence-challenge·probe-batch·provenance·selector-runner·preview-gate[4b]·session-start[§4-B ①]·curation[CURATION v3]·citation-check[HARNESS-STRUCTURE §B1]·map-rotation[§B2]) 집합 일치");
   ok(h.includes('"enrich-providers.js"') && a.every((f) => fs.existsSync(path.join(ROOT, "bridge", f))), "hook-setup 포함+전부 실물");
   const db = fs.readFileSync(path.join(ROOT, "bridge", "deepseek-bridge.js"), "utf8");
   ok(db.includes('cmd === "enrich"') && /enrich-result-v1/.test(db) && db.includes("enrich-shape-fail") && db.includes('inheritedUsageContext("map-enrich"'), "deepseek enrich — strict 표지·repair 1회 실패 표지·호출별 v2 usage");

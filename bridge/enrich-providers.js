@@ -16,6 +16,7 @@ const { spawnSync } = require("child_process");
 const crypto = require("crypto");
 const BR = __dirname; // bridge 계층(증분 4 1차 blocker⑤ — 설치본 자동 발동에서 어댑터 실존해야 하므로 배포 대상으로 이동)
 const CL = require(path.join(BR, "contract-lib.js"));
+const EXC = require(path.join(BR, "enrich-excerpt-cfg.js")); // 묶음 3(D3): 발췌 범위 옵션(파일 수·파일당 글자) — 상수·정규화 단일 출처
 
 const SELF_DENY = "Bash,Read,Grep,Glob,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,TodoWrite,KillShell,TaskOutput";
 
@@ -32,8 +33,11 @@ function isSensitiveEnrichPath(p) { return SENSITIVE_PATH_RE.test(String(p || ""
 
 // ── 프롬프트 빌더(전 provider 공용 — 입력 동일 조건) ─────────────────────────────
 // topology slice(노드·엣지 요약)+변경 파일 발췌(각 상한)+enrich-result-v1 스키마 지시.
-const FILE_EXCERPT_MAX = 4000;
+const FILE_EXCERPT_MAX = 4000; // 하드 상한(옵션의 최대치와 같다 — 옵션은 이 안에서만 줄인다)
 const FILES_MAX = 20;
+// 묶음 3(D3): 실제 발췌 범위는 프로젝트별 옵션(cfg={files, charsPerFile} · 저장값 없음=권장 10파일·3,000자 — 그 판정은 실행기 excerptCfgFor 한 곳)이 정한다.
+// 선정·판독·프롬프트·관문·결속이 '같은 cfg' 를 쓴다 — 실행기가 시도에 스냅샷한 값을 넘긴다. cfg 없이 부르면(옛 기록 재검사·직접 호출) 옵션 도입 전 상수(하드 상한 20·4,000).
+const excerptCfgOf = (cfg) => EXC.cfgOrLegacy(cfg);
 // 3차 blocker(topology slice): 전체 지도 직렬화 금지(정본 P8-3 '입력=topology slice' — 대형 지도에서
 // 전송·컨텍스트·과금 팽창). 변경 파일 앵커 연결 node 우선 → 그 인접 node → 잔여 채움 순으로 상한까지만.
 // 작은 지도(상한 이내)는 전체 유지(무회귀). 절단 시 프롬프트에 명시(침묵 상한 금지).
@@ -73,7 +77,8 @@ const EXCERPT_PATH_MAX = 200;
 // 목록'을 보면 실제 발송 발췌(민감·초장 경로 필터+상한 20+slice 앵커 우선 정렬)와 갈라져, 상한 밖
 // 코드·민감 경로 코드·앵커 폴백 같은 반례에서 답 불가능한 호출이 그대로 나간다. 그래서 선정 로직을
 // 이 한 함수로 추출해 프롬프트 조립과 관문이 '같은 함수'를 쓴다(복제 금지 — 정렬·어휘 드리프트와 동형).
-function excerptSelectionFor(topo, changed) {
+function excerptSelectionFor(topo, changed, cfg) {
+  const cfgE = excerptCfgOf(cfg);
   const t = sliceTopology(topo || {}, changed);
   const anchorsOf = (n) => {
     const list = (n.anchors || []).map((a) => a.path).filter((p9) => !isSensitiveEnrichPath(p9));
@@ -93,12 +98,14 @@ function excerptSelectionFor(topo, changed) {
     ? [...changed9.filter((f) => sliceAnchored.has(f)), ...changed9.filter((f) => !sliceAnchored.has(f))]
     : [...sliceAnchored];
   const okPath = (f) => !isSensitiveEnrichPath(f) && String(f).length <= EXCERPT_PATH_MAX; // 민감 경로+초장 경로=목록에서부터 제외(ab-7·f-d1ff694e)
-  const files = ordered.filter(okPath).slice(0, FILES_MAX);
+  const eligible = ordered.filter(okPath);
+  const files = eligible.slice(0, Math.min(FILES_MAX, cfgE.files)); // 파일 수=옵션(하드 상한 20 안)
+  const cappedOut = eligible.length - files.length; // 옵션 상한에 밀려 안 실린 후보 수(침묵 상한 금지 — 프롬프트 자료 줄)
   const longExcluded = ordered.filter((f) => !isSensitiveEnrichPath(f) && String(f).length > EXCERPT_PATH_MAX).length;
-  return { t, nCap, eCap, nodeLines, edgeLines, files, longExcluded };
+  return { t, nCap, eCap, nodeLines, edgeLines, files, longExcluded, cappedOut, cfg: cfgE };
 }
-// 관문용 공개 API: 이 topo·변경 목록으로 '실제로 발송될' 발췌 파일 목록(프롬프트와 같은 계산).
-function excerptFilesFor(topo, changed) { return excerptSelectionFor(topo, changed).files; }
+// 관문용 공개 API: 이 topo·변경 목록으로 '실제로 발송될' 발췌 파일 목록(프롬프트와 같은 계산 · cfg=발췌 범위 옵션).
+function excerptFilesFor(topo, changed, cfg) { return excerptSelectionFor(topo, changed, cfg).files; }
 // 발췌 본문 판독(단일 경로 확장 — 확인 검증 blocker: 삭제된 코드 파일은 이름은 코드지만 본문이
 // "(판독 불가)"라 인용이 원천 불가능한데, 이름만 본 관문이 호출을 허용했다). 프롬프트 조립과 관문이
 // 같은 판독 규칙(utf8·FILE_EXCERPT_MAX 절단)을 쓴다.
@@ -161,22 +168,25 @@ function excerptBodyFor(repo, f, opts) {
   let full;
   try { full = fs.readFileSync(path.join(repo, f), "utf8"); } catch { return { ok: false, body: "", label: "", mode: "head" }; }
   const baseRef = opts && typeof opts.baseRef === "string" && opts.baseRef.trim() ? opts.baseRef.trim() : null;
+  // 파일당 글자=옵션(묶음 3 · opts.charsMax — 실행기가 시도에 스냅샷한 cfg.charsPerFile). 없으면 기본값 · 하드 상한 밖은 상한으로.
+  const charsMax = Number.isInteger(opts && opts.charsMax) && opts.charsMax >= 1 ? Math.min(FILE_EXCERPT_MAX, opts.charsMax) : FILE_EXCERPT_MAX; // 미지정=하드 상한(옵션 도입 전 동작)
   if (baseRef) {
     const cr = changedRangesFor(repo, f, baseRef);
     if (cr.ok && cr.ranges.length) {
-      const w = windowedBody(full, cr.ranges, EXCERPT_PAD_LINES, FILE_EXCERPT_MAX);
+      const w = windowedBody(full, cr.ranges, EXCERPT_PAD_LINES, charsMax);
       if (w.text.trim()) return { ok: true, body: w.text, label: w.label, mode: "changed" };
     }
   }
-  return { ok: true, body: full.slice(0, FILE_EXCERPT_MAX), label: "앞부분", mode: "head" }; // 폴백(git 없음·새 파일·hunk 없음·실패)
+  return { ok: true, body: full.slice(0, charsMax), label: "앞부분", mode: "head" }; // 폴백(git 없음·새 파일·hunk 없음·실패)
 }
 
 function buildEnrichPrompt(ctx) {
-  const sel = excerptSelectionFor(ctx.topo, ctx.changed);
+  const sel = excerptSelectionFor(ctx.topo, ctx.changed, ctx.excerptCfg); // 발췌 범위=실행기가 넘긴 시도 스냅샷 cfg(묶음 3) — 관문과 같은 값
   const t = sel.t;
   // 직렬화·발췌 선정은 전부 excerptSelectionFor 한 곳(위 주석 계보: ab-7 민감 경로·6차 표시 노드
   // 자기완결·4~5차 slice 결속 — 관문과의 단일 경로 계약이 추가됨).
-  const { nCap, eCap, nodeLines, edgeLines, files, longExcluded } = sel;
+  const { nCap, eCap, nodeLines, edgeLines, files, longExcluded, cappedOut } = sel;
+  const cfgP = sel.cfg;
   const nodes = nCap.text, edges = eCap.text;
   const shownN = nodeLines.length - nCap.dropped, shownE = edgeLines.length - eCap.dropped;
   const truncNote = (t.totalNodes > shownN || t.totalEdges > shownE)
@@ -194,7 +204,7 @@ function buildEnrichPrompt(ctx) {
   const excerpts = files.map((f) => {
     const r = snap && snap.has(f)
       ? { ok: typeof snap.get(f) === "string", body: snap.get(f), label: snapLabels && typeof snapLabels.get(f) === "string" ? snapLabels.get(f) : "" }
-      : excerptBodyFor(ctx.repo, f, { baseRef: ctx.excerptBaseRef }); // 관문과 같은 판독 규칙(단일 경로)
+      : excerptBodyFor(ctx.repo, f, { baseRef: ctx.excerptBaseRef, charsMax: cfgP.charsPerFile }); // 관문과 같은 판독 규칙(단일 경로 · 파일당 글자=옵션)
     const title = "### " + f + (r.ok && r.label ? " (" + r.label + ")" : ""); // 위치 표기=자료(지시문 아님) — 어느 부분을 받았는지 모델·사람이 같이 본다
     return title + "\n```\n" + (r.ok ? r.body : "(판독 불가)") + "\n```";
   }).join("\n\n");
@@ -202,7 +212,10 @@ function buildEnrichPrompt(ctx) {
     "당신은 코드 구조 지도의 '의미 보강' 담당이다. 아래 지도 초안과 소스 발췌만 근거로, 지도 항목의 의미를 보강하는 제안을 JSON으로만 출력하라.",
     "",
     "## 지도 초안(노드·엣지)", ...(truncNote ? [truncNote] : []), nodes || "(없음)", edges || "(없음)",
-    "", "## 소스 발췌", ...(longExcluded ? [`(경로 ${EXCERPT_PATH_MAX}자 초과 파일 ${longExcluded}건 제외)`] : []), excerpts || "(없음)",
+    "", "## 소스 발췌", ...(longExcluded ? [`(경로 ${EXCERPT_PATH_MAX}자 초과 파일 ${longExcluded}건 제외)`] : []),
+    // 발췌 범위 자료 줄(묶음 3 — 지시문 아님): 옵션 상한에 밀려 안 실린 파일이 있으면 그 사실을 적는다(침묵 상한 금지). 파일당 글자 절단은 각 제목의 '(일부)'가 말한다.
+    ...(cappedOut > 0 ? [`(발췌 범위 ${cfgP.files}파일·파일당 ${cfgP.charsPerFile}자 — 프로젝트 설정: 후보 ${files.length + cappedOut}건 중 ${files.length}건만 실림)`] : []),
+    excerpts || "(없음)",
     "",
     "## 출력 계약(이 JSON 객체 '만' — 설명·코드펜스 금지)",
     '{"schema":"enrich-result-v1","items":[...]}',
