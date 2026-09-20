@@ -2829,7 +2829,8 @@ function computeState(turnsN: number): BridgeState {
             // 옛 기록에 위험한 파일 표기가 이미 저장돼 있을 수 있으므로, 화면으로 내보낼 때 한 번 더 거른다
             // (3차 [보완]: 판독 검증은 옛 기록 호환을 위해 느슨한데, 표시는 느슨하면 안 된다).
             lastFailure: last9 && last9.failureCode
-              ? { stage: last9.failureStage || null, code: last9.failureCode, file: safeShowFile(last9.failureFile), provider: last9.provider || null, detail: last9.failureDetail && last9.failureDetail.kind === "file-cap" ? { kind: "file-cap", have: Number(last9.failureDetail.have), cap: Number(last9.failureDetail.cap), active: Number(last9.failureDetail.active) } : (last9.failureDetail && last9.failureDetail.kind === "evidence-mismatch" ? { kind: "evidence-mismatch", matchAfter: last9.failureDetail.matchAfter || null, inExcerpt: last9.failureDetail.inExcerpt === true, fileChanged: last9.failureDetail.fileChanged === true } : null) } // [§B2 (4)] 상한 실사유(구조만)
+              ? { stage: last9.failureStage || null, code: last9.failureCode, file: safeShowFile(last9.failureFile), provider: last9.provider || null, detail: last9.failureDetail && last9.failureDetail.kind === "file-cap" ? { kind: "file-cap", have: Number(last9.failureDetail.have), cap: Number(last9.failureDetail.cap), active: Number(last9.failureDetail.active) } : (last9.failureDetail && last9.failureDetail.kind === "evidence-mismatch" ? { kind: "evidence-mismatch", matchAfter: last9.failureDetail.matchAfter || null, inExcerpt: last9.failureDetail.inExcerpt === true, fileChanged: last9.failureDetail.fileChanged === true }
+                : (last9.failureDetail && last9.failureDetail.kind === "evidence-outside" ? { kind: "evidence-outside", sent: last9.failureDetail.sent === true, excerpt: String(last9.failureDetail.excerpt || "").slice(0, 120) } : null)) } // [§B2 (4)] 상한 실사유(구조만) · 묶음 2: 발췌 밖 인용(구조만 — quoteHead 는 화면에 내보내지 않음)
               // 구형 기록(구조 필드 이전): 자유 문자열은 화면에 내보내지 않되 '사유가 기록돼 있음'은 알린다.
               // 접두가 evidence면 단계만 보수적으로 추정(그 외는 미상 — 추측 금지).
               : (last9 && typeof last9.failReason === "string" && last9.failReason.trim()
@@ -6084,6 +6085,8 @@ class Dashboard {
     "schema-invalid": ["답은 돌아왔지만 필요한 결과 형식을 통과하지 못했어요","an answer came back but did not pass the required result shape"],
     "evidence-mismatch": ["답은 돌아왔지만 근거로 든 인용이 실제 파일과 맞지 않아 버렸어요","an answer came back but its quoted evidence did not match the real file, so it was discarded"],
     "evidence-unreadable": ["답은 돌아왔지만 근거 파일을 읽어 확인하지 못했어요","an answer came back but the evidence file could not be read to verify it"],
+    // 묶음 2(사용자 결정 D1): 보낸 발췌 안의 원문만 근거로 인정 — 파일에는 있어도 보낸 범위 밖이거나 보내지 않은 파일이면 그 항목이 빠진다.
+    "evidence-outside-excerpt": ["답은 돌아왔지만 인용이 담당에게 보낸 발췌 밖이라 버렸어요(보낸 범위 안의 원문만 근거로 인정)","an answer came back but its quote was outside the excerpts sent to the provider, so it was discarded (only quotes from the sent excerpts count)"],
     "convert-invalid": ["답은 돌아왔지만 지도 변경으로 바꾸는 데 실패했어요","an answer came back but could not be turned into a map change"],
     // 구조 실패 기록(2026-07-29) 이전에 멈춘 작업 — 사유는 작업 기록 파일에만 남아 있다. 자유 문자열을
     // 화면에 그대로 내보내지 않는 원칙은 유지하되, '사유가 있었다'는 사실까지 지우지는 않는다(실사고 반영).
@@ -6100,6 +6103,12 @@ class Dashboard {
       if(lf.detail.matchAfter&&lf.detail.inExcerpt) return T("답은 돌아왔지만 인용이 줄 끝·공백만 원문과 달라 버렸어요(담당이 원문을 살짝 고쳐 적음)","an answer came back but its quote differed from the file only by line endings or spacing, so it was discarded (the provider altered the text slightly)")+f9;
       if(lf.detail.matchAfter) return T("답은 돌아왔지만 담당이 본 발췌 밖을 인용해 버렸어요(파일에는 있지만 보낸 범위 밖)","an answer came back but it quoted beyond the excerpt the provider was given, so it was discarded (in the file, but outside the sent range)")+f9;
       return T("답은 돌아왔지만 인용한 문장이 파일에 없어 버렸어요(지어낸 인용)","an answer came back but the quoted text is not in the file, so it was discarded (fabricated quote)")+f9;
+    }
+    // 묶음 2: 발췌 밖 인용은 '보낸 파일의 범위 밖'과 '보내지 않은 파일' 두 사유로 나눠 보인다 — 위치 표기(예: 변경 주변 L110–192)를 함께 보인다.
+    if(lf.detail&&lf.detail.kind==="evidence-outside"){
+      var f8=lf.file?" ("+lf.file+")":"";
+      if(lf.detail.sent) return T("답은 돌아왔지만 인용이 보낸 발췌 범위 밖이라 버렸어요(보낸 범위: "+(lf.detail.excerpt||"?")+")","an answer came back but its quote fell outside the excerpt range that was sent (sent range: "+(lf.detail.excerpt||"?")+"), so it was discarded")+f8;
+      return T("답은 돌아왔지만 이번에 보내지 않은 파일을 인용해 버렸어요(보낸 파일 안의 원문만 근거로 인정)","an answer came back but it quoted a file that was not sent this round, so it was discarded (only quotes from sent files count)")+f8;
     }
     var hit=FAIL_TEXT[lf.code];
     if(!hit) return T("알 수 없는 실패(","unrecognized failure (")+lf.code+")";

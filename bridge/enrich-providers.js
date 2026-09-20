@@ -102,9 +102,73 @@ function excerptFilesFor(topo, changed) { return excerptSelectionFor(topo, chang
 // 발췌 본문 판독(단일 경로 확장 — 확인 검증 blocker: 삭제된 코드 파일은 이름은 코드지만 본문이
 // "(판독 불가)"라 인용이 원천 불가능한데, 이름만 본 관문이 호출을 허용했다). 프롬프트 조립과 관문이
 // 같은 판독 규칙(utf8·FILE_EXCERPT_MAX 절단)을 쓴다.
-function excerptBodyFor(repo, f) {
-  try { return { ok: true, body: fs.readFileSync(path.join(repo, f), "utf8").slice(0, FILE_EXCERPT_MAX) }; }
-  catch { return { ok: false, body: "" }; }
+// ── 바뀐 부분 주변 발췌(묶음 2 · 사용자 결정 D2 — docs/ENRICH-NEXT-AXES-PLAN-2026-09-20.md §2-2) ──
+// 발췌는 '파일 첫머리'가 아니라 '이번에 바뀐 부분 주변'이다. 재료=git -U0 hunk 줄 범위(기준점 커밋~작업 트리). git 이 없거나
+// 새 파일·hunk 없음·실패면 종전대로 첫머리 폴백 — 폴백은 침묵하지 않고 제목에 적힌다(모델이 "어느 부분을 받았는지" 알게).
+const EXCERPT_PAD_LINES = 40;
+// hunk 헤더(@@ -a[,b] +c[,d] @@) → 새 파일 기준 줄 범위(1-based·포함). d=0(삭제만)은 그 자리 한 줄을 창의 중심으로.
+function parseHunkRanges(diffText) {
+  const out = [];
+  const re = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm;
+  let m;
+  while ((m = re.exec(String(diffText || ""))) !== null) {
+    const c = parseInt(m[1], 10), d = m[2] === undefined ? 1 : parseInt(m[2], 10);
+    if (!Number.isInteger(c)) continue;
+    const start = Math.max(1, c), end = d > 0 ? c + d - 1 : Math.max(1, c);
+    out.push({ start, end: Math.max(start, end) });
+  }
+  return out;
+}
+// 파일 하나의 변경 줄 범위(기준점 커밋 vs 작업 트리 — 커밋된 변경+미커밋 변경 모두). 실패·미추적=ok:false(호출자 폴백).
+function changedRangesFor(repo, file, baseRef) {
+  try {
+    const { spawnSync } = require("child_process");
+    const g = spawnSync("git", ["-c", "safe.directory=*", "-C", repo, "diff", "-U0", "--no-color", "--no-ext-diff", String(baseRef), "--", String(file)], { encoding: "utf8", timeout: 5000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+    if (g.error || g.status !== 0) return { ok: false, reason: g.error ? "spawn" : "status" };
+    return { ok: true, ranges: parseHunkRanges(g.stdout) };
+  } catch { return { ok: false, reason: "exception" }; }
+}
+// 범위 → 앞뒤 pad 줄 창(겹침 병합·파일 끝 절단) → 글자 상한(charsMax) 안에서 순서대로 실음. 순수.
+function windowedBody(fullText, ranges, pad, charsMax) {
+  const raw = String(fullText || "");
+  const lines = raw.split("\n");
+  const endsWithNl = raw.endsWith("\n");
+  if (lines.length && lines[lines.length - 1] === "") lines.pop(); // 끝 개행은 줄이 아니다(파일 끝 창이 빈 줄 하나를 더 세지 않게)
+  const n = lines.length;
+  const wins = [];
+  for (const r of [...(ranges || [])].sort((a, b) => a.start - b.start)) {
+    const st = Math.max(1, r.start - pad), en = Math.min(n, r.end + pad);
+    if (st > n) continue;
+    const last = wins[wins.length - 1];
+    if (last && st <= last.end + 1) last.end = Math.max(last.end, en); else wins.push({ start: st, end: en });
+  }
+  let used = 0, truncated = false; const parts = [], kept = [];
+  for (const w of wins) {
+    if (used >= charsMax) { truncated = true; break; }
+    // 창의 마지막 줄 뒤 개행은 원문 그대로 둔다(그 줄이 파일 마지막 줄이 아니거나 파일이 개행으로 끝나면) — 인용 결속은 스냅샷 원문 대조라
+    // 개행을 지우면 "const a = 1;\n" 같은 정상 인용이 거부된다(검증 1판 blocker). 줄 수 계산(끝 개행 미계상)과 본문 개행 보존은 별개.
+    let t = lines.slice(w.start - 1, w.end).join("\n") + ((w.end < n || endsWithNl) ? "\n" : "");
+    if (used + t.length > charsMax) { t = t.slice(0, charsMax - used); truncated = true; }
+    parts.push(t); kept.push({ start: w.start, end: w.end }); used += t.length + 1;
+    if (truncated) break;
+  }
+  const label = kept.length ? "변경 주변 " + kept.map((w) => "L" + w.start + "–" + w.end).join(", ") + (truncated ? " (일부)" : "") : "";
+  return { text: parts.join("\n"), label, windows: kept, truncated }; // 창 사이는 빈 줄 하나(각 창 본문이 이미 개행으로 끝난다)
+}
+// 발췌 본문 판독(단일 경로 — 프롬프트·관문·인용 결속·인용 측정이 같은 함수): opts.baseRef 가 있으면 바뀐 부분 주변, 없거나 실패·
+// 새 파일·hunk 없음이면 첫머리 폴백. 반환 {ok, body, label, mode}. label 은 발췌 제목에 그대로 실린다.
+function excerptBodyFor(repo, f, opts) {
+  let full;
+  try { full = fs.readFileSync(path.join(repo, f), "utf8"); } catch { return { ok: false, body: "", label: "", mode: "head" }; }
+  const baseRef = opts && typeof opts.baseRef === "string" && opts.baseRef.trim() ? opts.baseRef.trim() : null;
+  if (baseRef) {
+    const cr = changedRangesFor(repo, f, baseRef);
+    if (cr.ok && cr.ranges.length) {
+      const w = windowedBody(full, cr.ranges, EXCERPT_PAD_LINES, FILE_EXCERPT_MAX);
+      if (w.text.trim()) return { ok: true, body: w.text, label: w.label, mode: "changed" };
+    }
+  }
+  return { ok: true, body: full.slice(0, FILE_EXCERPT_MAX), label: "앞부분", mode: "head" }; // 폴백(git 없음·새 파일·hunk 없음·실패)
 }
 
 function buildEnrichPrompt(ctx) {
@@ -126,9 +190,13 @@ function buildEnrichPrompt(ctx) {
   // 실행기가 호출 직전 스냅샷(ctx.excerptBodies: Map file→body|null)을 넘기면 그 본문을 그대로 싣는다 — 인용 측정과 발송문이 같은 판독을 공유
   // (묶음 1 확인 검증 blocker: 스냅샷과 프롬프트가 따로 읽으면 그 사이의 저장이 측정을 뒤집는다). 없으면(관문·직접 호출) 같은 판독 규칙으로 읽는다.
   const snap = ctx.excerptBodies instanceof Map ? ctx.excerptBodies : null;
+  const snapLabels = ctx.excerptLabels instanceof Map ? ctx.excerptLabels : null; // 스냅샷과 같이 온 위치 표기(묶음 2)
   const excerpts = files.map((f) => {
-    const r = snap && snap.has(f) ? { ok: typeof snap.get(f) === "string", body: snap.get(f) } : excerptBodyFor(ctx.repo, f); // 관문과 같은 판독 규칙(단일 경로)
-    return "### " + f + "\n```\n" + (r.ok ? r.body : "(판독 불가)") + "\n```";
+    const r = snap && snap.has(f)
+      ? { ok: typeof snap.get(f) === "string", body: snap.get(f), label: snapLabels && typeof snapLabels.get(f) === "string" ? snapLabels.get(f) : "" }
+      : excerptBodyFor(ctx.repo, f, { baseRef: ctx.excerptBaseRef }); // 관문과 같은 판독 규칙(단일 경로)
+    const title = "### " + f + (r.ok && r.label ? " (" + r.label + ")" : ""); // 위치 표기=자료(지시문 아님) — 어느 부분을 받았는지 모델·사람이 같이 본다
+    return title + "\n```\n" + (r.ok ? r.body : "(판독 불가)") + "\n```";
   }).join("\n\n");
   return [
     "당신은 코드 구조 지도의 '의미 보강' 담당이다. 아래 지도 초안과 소스 발췌만 근거로, 지도 항목의 의미를 보강하는 제안을 JSON으로만 출력하라.",
@@ -138,7 +206,7 @@ function buildEnrichPrompt(ctx) {
     "",
     "## 출력 계약(이 JSON 객체 '만' — 설명·코드펜스 금지)",
     '{"schema":"enrich-result-v1","items":[...]}',
-    "items의 각 원소는 다음 중 하나(모든 원소에 evidence:[{file,quote}] 필수 — quote는 위 발췌에 '실제로 존재하는' 원문 그대로):",
+    "items의 각 원소는 다음 중 하나(모든 원소에 evidence:[{file,quote}] 필수 — quote는 위 발췌에 '실제로 존재하는' 원문 그대로. 발췌 밖 원문·보내지 않은 파일의 인용은 그 항목이 자동 제외된다):",
     '- {"op":"add_evidence","targetId":"<실존 node/edge id>","payload":{"evidence":{"kind":"code","ref":"<파일>","note":"<근거 설명>"}},"evidence":[...]}',
     '- {"op":"set_state","targetId":"<실존 id>","payload":{"to":{"confidence":"confirmed"},"expect":{"confidence":"<현재 값>"}},"evidence":[...]} — 확신 상향(하향은 확실한 반증이 있을 때만)',
     '- {"op":"add_anchor","targetId":"<실존 node id>","payload":{"anchor":{"kind":"code","path":"<파일>"}},"evidence":[...]}',
@@ -279,4 +347,4 @@ function askVerifierResolution(req) {
   } finally { try { fs.rmSync(tmpCwd, { recursive: true, force: true }); } catch { /* 무해 */ } }
 }
 
-module.exports = { isSensitiveEnrichPath, ENRICH_ADAPTERS, buildEnrichPrompt, excerptFilesFor, excerptBodyFor, parseResult, askVerifierResolution, sliceTopology, SELF_DENY, FILE_EXCERPT_MAX, FILES_MAX, SLICE_NODES_MAX, SLICE_EDGES_MAX, NODE_ANCHORS_MAX, TOPO_CHARS_MAX, EXCERPT_PATH_MAX };
+module.exports = { parseHunkRanges, changedRangesFor, windowedBody, EXCERPT_PAD_LINES, isSensitiveEnrichPath, ENRICH_ADAPTERS, buildEnrichPrompt, excerptFilesFor, excerptBodyFor, parseResult, askVerifierResolution, sliceTopology, SELF_DENY, FILE_EXCERPT_MAX, FILES_MAX, SLICE_NODES_MAX, SLICE_EDGES_MAX, NODE_ANCHORS_MAX, TOPO_CHARS_MAX, EXCERPT_PATH_MAX };

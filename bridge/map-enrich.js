@@ -153,10 +153,10 @@ const ATTEMPT_PHASES = ["running", "applying", "done", "failed", "parked"];
 const JOB_KEYS = ["schema", "jobKey", "mapId", "authorityHash", "decisionContextHash", "mode", "configWs", "slot", "phase", "startedAt", "finishedAt", "parkedReason", "sourceFp", "retryFrom", "resumes", "attempts", "rotationPartial"]; // rotationPartial: [§B2 (3)] 교체 부분 상태(선택·null 허용)
 // failureStage/failureCode/failureFile: 실패를 사람이 읽을 수 있게 '구조'로도 남긴다(2026-07-29 설계 상의 결론).
 // failReason 자유 문자열만 남기면 화면이 내부 표현을 그대로 노출하거나, 호출 실패와 결과 거부를 구분하지 못한다.
-const ATTEMPT_KEYS = ["attemptId", "provider", "consentGen", "phase", "startedAt", "sourceFp", "results", "cursor", "resolutions", "citation", "failReason", "failureStage", "failureCode", "failureFile", "failureDetail", "droppedItems", "sourceIdx", "parkedReason", "finishedAt"]; // sourceIdx: results.items[k] 가 담당 응답의 몇 번째 항목이었는지(관문 제외로 압축된 배열의 원래 색인) // droppedItems: 1단계 관문에서 항목 단위로 제외된 항목(결정 D-2026-09-18-enrich-item-gate)
+const ATTEMPT_KEYS = ["attemptId", "provider", "consentGen", "phase", "startedAt", "excerptBase", "sourceFp", "results", "cursor", "resolutions", "citation", "failReason", "failureStage", "failureCode", "failureFile", "failureDetail", "droppedItems", "sourceIdx", "parkedReason", "finishedAt"]; // sourceIdx: results.items[k] 가 담당 응답의 몇 번째 항목이었는지(관문 제외로 압축된 배열의 원래 색인) // droppedItems: 1단계 관문에서 항목 단위로 제외된 항목(결정 D-2026-09-18-enrich-item-gate)
 // 단계와 코드는 닫힌 열거다(화면이 이 값만 보고 문구를 고른다 — 모르는 값은 화면이 '알 수 없음'으로 표시).
 const FAILURE_STAGES = ["call", "response", "validation", "conversion"];
-const FAILURE_CODES = ["process-failed", "empty-output", "parse-invalid", "schema-invalid", "evidence-mismatch", "evidence-unreadable", "convert-invalid"];
+const FAILURE_CODES = ["process-failed", "empty-output", "parse-invalid", "schema-invalid", "evidence-mismatch", "evidence-unreadable", "evidence-outside-excerpt", "convert-invalid"]; // evidence-outside-excerpt=보낸 발췌 밖(또는 보내지 않은 파일) 인용(묶음 2 · D1)
 // 항목 제외 단계(닫힌 열거): shape=형태 · id=대상 미실존 · evidence=근거 인용 불일치/판독 불가 · cap=노드 상한
 const DROP_STAGES = ["shape", "id", "evidence", "cap", "convert"]; // convert=변환 단계(패치 형태·변환 시점 재실증) 결함
 // 재개 사건(닫힌 열거 — 묶음 1 '호출 횟수 표시', 계획 ENRICH-NEXT-AXES-PLAN §3): retryFrom 을 옮기는 다섯 경로가 같은 잠금 안에서
@@ -255,6 +255,7 @@ function validateJob(d) {
     if (!ATTEMPT_PHASES.includes(a.phase)) return "attempt phase";
     if (typeof a.startedAt !== "string") return "attempt startedAt";
     if (a.sourceFp !== undefined && !FP_RE.test(String(a.sourceFp))) return "attempt sourceFp"; // 호출 시점 소비 지문(5차 — 재개 done이 사후 지문을 도장으로 쓰는 오염 차단)
+    if (a.excerptBase !== undefined && a.excerptBase !== null && !(typeof a.excerptBase === "string" && OID_RE.test(a.excerptBase))) return "attempt excerptBase"; // 발송 시점 발췌 기준 커밋(선택 — 옛 기록 부재 허용 · null=첫머리 판독 · 별칭 "HEAD" 금지)
     if (a.failReason !== undefined && typeof a.failReason !== "string") return "attempt failReason";
     if (a.citation !== undefined) { // 인용 측정(선택·관찰 전용): 정수 5개·inExcerpt+outside=total
       const c = a.citation;
@@ -910,7 +911,7 @@ function validateEnrichResult(obj, topo, ctx, opts) {
       if (excerptSet && !excerptSet.has(p9)) return fail(i, it, "shape", "add_node: anchor가 이번 발췌에 없음(발췌 밖 노드화 금지)");
       if (ctx && ctx.repo) {
         try {
-          const rB = require(path.join(__dirname, "enrich-providers.js")).excerptBodyFor(ctx.repo, n9.anchors[0].path);
+          const rB = require(path.join(__dirname, "enrich-providers.js")).excerptBodyFor(ctx.repo, n9.anchors[0].path, { baseRef: ctx.baseRef || null }); // 프롬프트와 같은 창 판독(검증 1판 blocker)
           if (!rB.ok || !rB.body.trim()) return fail(i, it, "shape", "add_node: anchor 판독 불가·빈 본문(인용 원문 없음)");
         } catch { return fail(i, it, "shape", "add_node: anchor 판독 검사 실패"); }
       }
@@ -985,7 +986,7 @@ function toPatchV2(item, index, ctx) {
   // ctx.items(영속된 결과)의 순수 함수(applyEnrichPayloadIds — cursor 결속 검증과 같은 함수).
   if (item.op === "add_node") {
     const p9 = item.payload && item.payload.node && Array.isArray(item.payload.node.anchors) && item.payload.node.anchors[0] ? item.payload.node.anchors[0].path : null;
-    const rB = p9 ? require(path.join(__dirname, "enrich-providers.js")).excerptBodyFor(ctx.repo, p9) : { ok: false, body: "" };
+    const rB = p9 ? require(path.join(__dirname, "enrich-providers.js")).excerptBodyFor(ctx.repo, p9, { baseRef: ctx.baseRef || null }) : { ok: false, body: "" }; // 변환 시점 재검사도 같은 창 판독
     if (!rB.ok || !rB.body.trim()) return { ok: false, kind: "schema", errors: ["add_node: anchor 판독 불가·빈 본문(변환 시점 재검사 — 인용 원문 없음)"] };
   }
   const payloadEff = Array.isArray(ctx.items) ? applyEnrichPayloadIds(ctx.items, index, ctx.topo.mapId) : item.payload;
@@ -1016,7 +1017,25 @@ function toPatchV2(item, index, ctx) {
 // 변경 목록이 아니라 '실제로 발송될 발췌 파일'(검증 blocker — 필터·상한 20·앵커 폴백까지 프롬프트와
 // 같은 함수 excerptFilesFor로 계산: 상한 밖 코드·민감 경로 코드·문서 앵커 폴백 반례 전부 커버).
 // 발췌 0건=인용 가능한 원문 자체가 없음=불가. 판정 실패(예외)만 '답 가능' 취급(보수 — 억제는 확실할 때만).
-function answerableInput(repo, topo, changed) {
+// 발췌 기준점(묶음 2 · D2): git 기준 큐면 소화 기준점 커밋 — 그 커밋~작업 트리의 변경 줄 범위가 발췌 창이 된다. 그 외=null(첫머리).
+// 기준점이 없으면 별칭 "HEAD" 가 아니라 '한 번 해석한 커밋 id'(확인 검증 2판 blocker): 별칭은 git 호출마다 다시 풀리므로 답을
+// 기다리는 사이 사용자가 커밋하면 응답 뒤 앵커 재검사·변환 재검사가 새 HEAD(=변경 없음)를 봐 첫머리 폴백→빈 본문으로 정상 제안을
+// 제외한다. 호출자가 이미 캡처한 HEAD(opts.head=st.srcHead — 입력 계산의 끝점과 같은 판독)가 있으면 재조회하지 않고, 없을 때만
+// rev-parse 1회. 해석 실패=null(첫머리 판독 — 실행을 멈추지 않는다 ab-6). 반환값은 항상 커밋 id 또는 null(별칭 없음).
+function excerptBaseRefFor(repo, queue, opts) {
+  if (!queue || !queue.basis || queue.basis.kind !== "git") return null;
+  const base = readConsumedBaseline(repo);
+  if (base && base.head) return String(base.head);
+  const h0 = opts && opts.head != null ? String(opts.head) : "";
+  if (OID_RE.test(h0)) return h0;
+  try {
+    const { spawnSync } = require("child_process");
+    const gh = spawnSync("git", ["-c", "safe.directory=*", "-C", repo, "rev-parse", "HEAD"], { encoding: "utf8", timeout: 3000, windowsHide: true });
+    const h = gh.status === 0 ? String(gh.stdout || "").trim() : "";
+    return OID_RE.test(h) ? h : null;
+  } catch { return null; }
+}
+function answerableInput(repo, topo, changed, opts) {
   try {
     const EP = require(path.join(__dirname, "enrich-providers.js"));
     const files = EP.excerptFilesFor(topo, changed);
@@ -1027,7 +1046,7 @@ function answerableInput(repo, topo, changed) {
     // 계열 발췌가 최소 1개일 때만 답 가능. 빈 본문(0바이트)도 인용 불가라 제외.
     return files.some((f) => {
       if (!kinds.includes(evidenceKindOf(f))) return false;
-      const r = EP.excerptBodyFor(repo, f);
+      const r = EP.excerptBodyFor(repo, f, { baseRef: opts && opts.baseRef ? opts.baseRef : null }); // 프롬프트와 같은 판독(창 포함)
       return r.ok && r.body.trim().length > 0;
     });
   } catch { return true; }
@@ -1540,7 +1559,7 @@ function runEnrichLocked(repo, o, env) {
       //    조용히 대기한다(같은 사유 재경보 없음). ⓑ 답 거부로 멈췄는데 지금 입력이 원천 불가능해졌다면
       //    사유를 정확한 것으로 바꿔 단다(재시도·자동재시도가 과금만 하고 또 실패할 상태 — 알림도 교체).
       if (j.parkedReason === "input-doc-only") {
-        if (answerableInput(repo, topo, changed)) {
+        if (answerableInput(repo, topo, changed, { baseRef: excerptBaseRefFor(repo, queue, { head: srcHead }) })) {
           // retryFrom 이동=수동 '다시 시도' 버튼과 같은 규칙 — 과거 실패 플래그가 재개 즉시 같은 park로
           // 되돌리는 것 방지(입력이 바뀌었으니 이전 거부는 이 재개의 근거가 아니다).
           const wIn = fencedUpdateEnrichJob(repo, env.fence, (jj) => { if (!jj || jj.phase !== "parked" || jj.parkedReason !== "input-doc-only") return null; return reopenForRetry(jj, "input-doc-only"); });
@@ -1586,7 +1605,7 @@ function runEnrichLocked(repo, o, env) {
         return { outcome: "noop", reason: "parked", parkedReason: "source-changed" };
       }
       const ANSWER_REJECTED_REASONS = ["precision-failed", "economy-failed", "both-failed", "self-failed"];
-      if (ANSWER_REJECTED_REASONS.includes(String(j.parkedReason || "")) && !answerableInput(repo, topo, changed)) {
+      if (ANSWER_REJECTED_REASONS.includes(String(j.parkedReason || "")) && !answerableInput(repo, topo, changed, { baseRef: excerptBaseRefFor(repo, queue, { head: srcHead }) })) { // 재진단도 호출 직전 관문과 같은 창 판독(검증 1판 blocker)
         const wTr = fencedUpdateEnrichJob(repo, env.fence, (jj) => { if (!jj || jj.phase !== "parked" || jj.parkedReason === "input-doc-only") return null; return { ...jj, parkedReason: "input-doc-only" }; });
         if (wTr.fenceLost) return { outcome: "busy", reason: "run-lock-lost" };
         if (wTr.ok && !wTr.unchanged) {
@@ -1644,7 +1663,7 @@ function runEnrichLocked(repo, o, env) {
   if (jr.st === "ok" && jr.job.phase === "done" && jr.job.jobKey === jobKey && srcFp === null && jr.job.sourceFp === undefined) return { outcome: "noop", reason: "already-enriched" }; // 폴백은 '둘 다' 산출 불가·기록 부재일 때만(AND — 6차: 한쪽이라도 지문이 있으면 대조 불가=보수적으로 재실행 허용)
   // 답이 원천 불가능한 신규 라운드는 job조차 만들지 않는다(호출 0·park 0·경보 0 — 코드 변경이 오면
   // 다음 tick의 새 라운드가 자연 진행. 위 parked/resume 경로보다 뒤라 기존 job 복구는 방해하지 않음).
-  if (!answerableInput(repo, topo, changed)) {
+  if (!answerableInput(repo, topo, changed, { baseRef: excerptBaseRefFor(repo, queue, { head: srcHead }) })) { // 신규 라운드 관문도 같은 창 판독(검증 1판 blocker — 첫머리만 보면 깊은 변경을 건너뛴다)
     log({ route: "skip", reason: "input-doc-only", outcome: "noop", changedCount: Array.isArray(changed) ? changed.length : null });
     return { outcome: "noop", reason: "input-doc-only" };
   }
@@ -1732,27 +1751,29 @@ function runAttempt(repo, o, env, st, provider) {
   if (typeof adapter !== "function") return park((j) => j && { ...j, phase: "parked", parkedReason: "adapter-missing:" + provider, finishedAt: nowIso() }, "adapter-missing", { provider, jobKey: st.jobKey });
   // 호출 직전 최종 관문(수동 '다시 시도'로 재개된 job까지 커버): 답이 원천 불가능한 입력이면 과금
   // 호출 없이 정확한 사유로 세워 둔다 — 코드 변경이 오면 위 parked 자기치유가 사람 없이 재개한다.
-  if (!answerableInput(repo, st.topo, st.changed)) return park((j) => j && { ...j, phase: "parked", parkedReason: "input-doc-only", finishedAt: nowIso() }, "input-doc-only", { provider, jobKey: st.jobKey });
+  const baseRef9 = excerptBaseRefFor(repo, env.queue, { head: st.srcHead }); // 묶음 2: 발췌 창 기준점(관문·스냅샷·프롬프트·재검사·변환이 같은 커밋 id — 별칭 없음·시도에 영속)
+  if (!answerableInput(repo, st.topo, st.changed, { baseRef: baseRef9 })) return park((j) => j && { ...j, phase: "parked", parkedReason: "input-doc-only", finishedAt: nowIso() }, "input-doc-only", { provider, jobKey: st.jobKey });
   // attempt 생성(phase running — 호출 '전' 기록: uncertain-call 감사 재료)
   let attemptId = -1;
   const mk = fencedUpdateEnrichJob(repo, env.fence, (j) => {
     if (!j || j.phase !== "open") return null;
     attemptId = j.attempts.length;
-    return { ...j, attempts: [...j.attempts, { attemptId, provider, consentGen: g2.gen, phase: "running", startedAt: nowIso() }] };
+    return { ...j, attempts: [...j.attempts, { attemptId, provider, consentGen: g2.gen, phase: "running", startedAt: nowIso(), excerptBase: baseRef9 }] }; // excerptBase: 발송 시점 발췌 기준 커밋(null=첫머리 판독) — 변환 재검사가 이 값을 쓴다(확인 검증 2판 blocker)
   });
   if (!mk.ok || attemptId < 0) return park(null, "attempt-write");
   // provider 호출(주입 어댑터 — 실 LLM 배선은 3b-2)
   // 호출 전 발췌 파일 지문(보강 후속 묶음): 답을 기다리는 사이 인용 파일이 바뀌면 '담당 잘못'이 아니라
   // '편집 중 충돌'이다 — 대조 실패 뒤 이 지문과 비교해 fileChanged 로 구분한다.
   const preSha = new Map();
-  const preBody = new Map(); // 호출 직전의 발송 발췌 본문(같은 판독 규칙) — 인용 측정은 응답 뒤 파일이 아니라 이 스냅샷과 대조한다(검증 1판 blocker: 호출 중 편집이 경계를 옮기면 발송 당시와 반대로 기록됐다)
+  const preBody = new Map(); // 호출 직전의 발송 발췌 본문(같은 판독 규칙) — 인용 결속·인용 측정은 응답 뒤 파일이 아니라 이 스냅샷과 대조한다(검증 1판 blocker: 호출 중 편집이 경계를 옮기면 발송 당시와 반대로 기록됐다)
+  const preLabel = new Map(); // 발췌 위치 표기(묶음 2 — 프롬프트 제목·제외 사유에 같이 실림)
   let EPx = null;
-  try { EPx = require(path.join(__dirname, "enrich-providers.js")); for (const f of EPx.excerptFilesFor(st.topo, st.changed)) { try { preSha.set(f, crypto.createHash("sha1").update(fs.readFileSync(path.join(repo, f))).digest("hex")); } catch { preSha.set(f, null); } try { const rb = EPx.excerptBodyFor(repo, f); preBody.set(f, rb && rb.ok ? rb.body : null); } catch { preBody.set(f, null); } } } catch { /* 지문 없음=fileChanged 판정 불가(false) */ }
+  try { EPx = require(path.join(__dirname, "enrich-providers.js")); for (const f of EPx.excerptFilesFor(st.topo, st.changed)) { try { preSha.set(f, crypto.createHash("sha1").update(fs.readFileSync(path.join(repo, f))).digest("hex")); } catch { preSha.set(f, null); } try { const rb = EPx.excerptBodyFor(repo, f, { baseRef: baseRef9 }); preBody.set(f, rb && rb.ok ? rb.body : null); preLabel.set(f, rb && rb.ok ? String(rb.label || "") : ""); } catch { preBody.set(f, null); preLabel.set(f, ""); } } } catch { /* 지문 없음=fileChanged 판정 불가(false) */ }
   let call;
   const jobForUsage = mk.job || (readEnrichJob(repo).job || null);
   const usageContext = env.p10 ? env.p10.usage(st.jobKey, jobRunIdOf(jobForUsage)) : null;
   // excerptBodies: 호출 직전 스냅샷 — 프롬프트 조립과 인용 측정이 '같은' 발췌 본문을 소비한다(확인 검증 blocker: 두 판독 사이의 저장이 측정을 뒤집었다)
-  try { call = adapter({ repo, topo: st.topo, changed: st.changed, provider, usageContext, excerptBodies: preBody }); }
+  try { call = adapter({ repo, topo: st.topo, changed: st.changed, provider, usageContext, excerptBodies: preBody, excerptLabels: preLabel, excerptBaseRef: baseRef9 }); }
   catch (e) { call = { ok: false, detail: "adapter-threw: " + String(e && e.message) }; }
   // provider 반환 직후 소유 재검증(7차 ab-6 변형): 호출 동안 오탈취가 일어나 새 소유자가 이 running
   // 시도를 uncertain-call로 park했다면, 아래 실패·결과 기록이 그 장부를 덮어써 '자동 재시도 대상 밖의
@@ -1781,7 +1802,7 @@ function runAttempt(repo, o, env, st, provider) {
   // 1단계 관문 — 항목 단위(결정 D-2026-09-18-enrich-item-gate): 결함 항목만 사유와 함께 제외하고 정상 항목은 적용 단계로.
   // 근거 실증(3b 1차 blocker④ ab-3: quote 가 실제 파일 내용에 존재하는지 대조)은 항목마다 그대로다 — 허위 인용 항목은
   // 반드시 제외된다. 전부 제외됐을 때만 종전처럼 시도 실패(담당 실패)로 기록한다.
-  let vr = validateEnrichResult(call.result, st.topo, { repo, changed: st.changed }, { perItem: true });
+  let vr = validateEnrichResult(call.result, st.topo, { repo, changed: st.changed, baseRef: baseRef9 }, { perItem: true }); // add_node 앵커 재검사도 같은 창 판독
   const drops = Array.isArray(vr.dropped) ? vr.dropped.slice() : [];
   const acceptedItems = [];
   const acceptedSrc = []; // acceptedItems[k] 의 원래 응답 색인(변환 단계 제외 기록이 이 색인을 쓴다)
@@ -1800,8 +1821,14 @@ function runAttempt(repo, o, env, st, provider) {
           let nowSha = null; try { nowSha = crypto.createHash("sha1").update(fs.readFileSync(path.join(repo, cv.file))).digest("hex"); } catch { nowSha = null; }
           const fileChanged = preSha.has(cv.file) && preSha.get(cv.file) !== null && preSha.get(cv.file) !== nowSha;
           const sensitive = !!(EPx && typeof EPx.isSensitiveEnrichPath === "function" && EPx.isSensitiveEnrichPath(cv.file));
-          const detail = evidenceMismatchDetail(body, cv.quote, { fileChanged, sensitive, excerptMax: EPx ? EPx.FILE_EXCERPT_MAX : undefined });
+          const detail = evidenceMismatchDetail(body, cv.quote, { fileChanged, sensitive, excerptMax: EPx ? EPx.FILE_EXCERPT_MAX : undefined, excerptBody: preBody.has(cv.file) ? preBody.get(cv.file) : undefined }); // 위치 진단=발송 스냅샷 기준(검증 1판 보완)
           bad = { code: "evidence-mismatch", file: cv.file, detail, reason: "evidence-mismatch: " + cv.file + " 인용 불일치" }; break;
+        }
+        // [묶음 2 · 사용자 결정 D1] 인용 결속 — 파일에는 있어도 '보낸 발췌 안'의 원문이어야 근거로 인정한다(보내지 않은 파일 포함 제외).
+        // 담당은 보낸 발췌 밖을 읽을 통로가 없으므로 그 인용은 우연 일치거나 지어낸 것이다. 스냅샷(preBody)=실제 발송 본문(같은 판독).
+        if (EPx && !(preSha.has(cv.file) && quoteInExcerpt(preBody.get(cv.file), cv.quote))) {
+          const sentF = preSha.has(cv.file);
+          bad = { code: "evidence-outside-excerpt", file: cv.file, detail: { kind: "evidence-outside", sent: sentF, quoteHead: String(cv.quote || "").slice(0, 120), excerpt: String(preLabel.get(cv.file) || "").slice(0, 120) }, reason: "evidence-outside-excerpt: " + cv.file + (sentF ? " 보낸 발췌 범위 밖 인용" : " 보내지 않은 파일 인용") }; break;
         }
       }
       if (bad) { drops.push({ index, op: String(it.op || "?").slice(0, 40), stage: "evidence", reason: bad.reason.slice(0, 200), ...(bad.detail ? { detail: bad.detail } : {}) }); if (!firstEv) firstEv = bad; return; }
@@ -1813,7 +1840,7 @@ function runAttempt(repo, o, env, st, provider) {
   if (env.fence && !env.fence()) return { outcome: "busy", reason: "run-lock-lost" };
   if (!vr.ok) {
     const fx1 = vr.kind === "evidence"
-      ? { failureStage: "validation", failureCode: vr.code || "evidence-mismatch", ...safeFailureFile(vr.file), ...(vr.detail && vr.detail.kind === "evidence-mismatch" ? { failureDetail: vr.detail } : {}) }
+      ? { failureStage: "validation", failureCode: vr.code || "evidence-mismatch", ...safeFailureFile(vr.file), ...(vr.detail && (vr.detail.kind === "evidence-mismatch" || vr.detail.kind === "evidence-outside") ? { failureDetail: vr.detail } : {}) }
       : { failureStage: "validation", failureCode: "schema-invalid", ...(vr && vr.detail && vr.detail.kind === "file-cap" ? { failureDetail: { kind: "file-cap", have: Number(vr.detail.have), cap: Number(vr.detail.cap), active: Number(vr.detail.active) } } : {}) }; // [§B2 (4)] 상한 사유 구조 보존
     // 쓰기 결과를 확인한다(2차 blocker④: 실패 기록이 거부되면 시도가 running으로 남아, 다음 재개가
     // 이를 '호출 여부 불확실'로 해석해 완료된 결과 거부가 uncertain-call로 변질됐다).
@@ -2020,7 +2047,7 @@ function convertItem(repo, env, j, a, item, index, rev) {
     }
   }
   const itemEff = evExtra.length ? { ...item, evidence: [...(item.evidence || []), ...evExtra.filter((f) => !(item.evidence || []).some((e) => e.file === f)).map((f) => { const rec = readOnce(f); return { file: f, quote: rec && rec.body ? rec.body.slice(0, 80) : "" }; })] } : item;
-  return toPatchV2(itemEff, index, { repo, topo: topoNow.topo, idx: idxNow, pol: polNow, fileHashOf, jobKey: jobSeedOf(j.jobKey, j.startedAt), attemptId: a.attemptId, rev, provider: a.provider, items: a.results.items }); // items=임시 id 매핑의 순수 입력(해상도 v3)
+  return toPatchV2(itemEff, index, { repo, topo: topoNow.topo, idx: idxNow, pol: polNow, fileHashOf, jobKey: jobSeedOf(j.jobKey, j.startedAt), attemptId: a.attemptId, rev, provider: a.provider, items: a.results.items, baseRef: a.excerptBase !== undefined ? a.excerptBase : null }); // items=임시 id 매핑의 순수 입력(해상도 v3) · baseRef=발송 시점 기준 커밋(시도에 영속 — 재개·호출 중 커밋에도 같은 창) · 옛 기록(필드 부재)=첫머리 판독(그때 보낸 발췌와 같은 규칙)
 }
 // 변환 단계 결함도 항목 단위(구현 검증 1판 blocker — 결정 D-2026-09-18-enrich-item-gate): payload 안쪽 형태 오류·변환 시점
 // 재실증 실패는 그 항목만 사유와 함께 제외하고 cursor 를 다음 항목으로 넘긴다(종전엔 failAttempt 로 뒤 정상 항목까지 버렸다).
@@ -2073,6 +2100,12 @@ function validFailureDetail(d) {
   if (d === undefined || d === null) return true;
   if (!d || typeof d !== "object" || Array.isArray(d)) return false;
   if (d.kind === "file-cap") return Number.isInteger(d.have) && Number.isInteger(d.cap) && Number.isInteger(d.active) && Object.keys(d).length === 4;
+  if (d.kind === "evidence-outside") { // 묶음 2: 보낸 발췌 밖(또는 보내지 않은 파일) 인용 — sent·excerpt(위치 표기)·quoteHead(선택)
+    const keys = Object.keys(d).filter((k) => k !== "quoteHead");
+    if (keys.length !== 3) return false;
+    return typeof d.sent === "boolean" && typeof d.excerpt === "string" && d.excerpt.length <= 120
+      && (d.quoteHead === undefined || (typeof d.quoteHead === "string" && d.quoteHead.length <= 120));
+  }
   if (d.kind === "evidence-mismatch") {
     const keys = Object.keys(d).filter((k) => k !== "quoteHead");
     if (keys.length !== 6) return false;
@@ -2100,6 +2133,12 @@ function quoteMatchAfter(body, quote) {
   if (nWs(q) && nWs(b).includes(nWs(q))) return "whitespace";
   return null;
 }
+// 발췌 안 판정(인용 결속·인용 측정 공통): 줄 구조를 보존하는 단계(exact·crlf·trim)만 인정한다 — 공백 전부 접기(whitespace)는
+// 줄 경계를 지워 "// e line 1" 이 "// e line 160" 안에서 맞는 식의 가짜 일치를 만든다(불일치 '진단'에서는 그대로 쓴다).
+function quoteInExcerpt(body, quote) {
+  const m = quoteMatchAfter(body, quote);
+  return m === "exact" || m === "crlf" || m === "trim";
+}
 function evidenceMismatchDetail(body, quote, opts = {}) {
   const q = String(quote || "");
   const d = { kind: "evidence-mismatch", quoteLen: q.length, quoteLines: q.split("\n").length, matchAfter: null, inExcerpt: false, fileChanged: !!opts.fileChanged };
@@ -2107,8 +2146,9 @@ function evidenceMismatchDetail(body, quote, opts = {}) {
   d.quoteHead = q.slice(0, 120);
   const m = quoteMatchAfter(body, q);
   d.matchAfter = m === "exact" ? null : m; // 호출자는 이미 exact 불일치를 확인한 뒤라 exact 는 여기 오지 않는다(종전 값 유지)
-  const exMax = Number.isInteger(opts.excerptMax) ? opts.excerptMax : 4000;
-  d.inExcerpt = m !== null && quoteMatchAfter(body.slice(0, exMax), q) !== null;
+  // 발췌 위치 진단: 발송 스냅샷(opts.excerptBody — 바뀐 부분 주변 창)이 있으면 그것과, 없으면 종전대로 첫 exMax 자와 대조(옛 호출자 호환).
+  if (typeof opts.excerptBody === "string") d.inExcerpt = m !== null && quoteMatchAfter(opts.excerptBody, q) !== null; // 진단은 정규화 단계 전부(화면 문구 "줄 끝·공백만 다름"의 근거) — 결속(quoteInExcerpt)과 달리 공백 접기도 인정
+  else { const exMax = Number.isInteger(opts.excerptMax) ? opts.excerptMax : 4000; d.inExcerpt = m !== null && quoteMatchAfter(body.slice(0, exMax), q) !== null; }
   return d;
 }
 // 인용 측정(묶음 1 · 관찰 전용): 통과한 항목의 인용마다 '실제로 보낸 발췌(같은 선정·같은 판독 규칙) 안인가'를 센다.
@@ -2123,7 +2163,7 @@ function citationSummaryFor(items, sentFiles, excerptBodyOf) {
     for (const cv of cites) {
       if (!cv || typeof cv.file !== "string") continue;
       total++; cited.add(cv.file);
-      if (sent.has(cv.file) && quoteMatchAfter(bodyOf(cv.file), cv.quote) !== null) inExcerpt++;
+      if (sent.has(cv.file) && quoteInExcerpt(bodyOf(cv.file), cv.quote)) inExcerpt++;
     }
   }
   return { total, inExcerpt, outside: total - inExcerpt, filesCited: cited.size, filesSent: sent.size };
@@ -2420,6 +2460,6 @@ function cliMain(argv) {
   return r.outcome === "applied" || r.outcome === "settled" || r.outcome === "noop" ? 0 : r.outcome === "busy" ? 3 : 1;
 }
 
-module.exports = { quarantineLedger, expireOrphanedVerifierPending, enrichOwnedPatchIds, consentGenFloor, ledgerLockStaleKind, reopenForRetry, RESUME_KINDS, quoteMatchAfter, citationSummaryFor, validateJob, fillExpectFromSnapshot, DROP_STAGES, evidenceMismatchDetail, validFailureDetail, retryPauseMs, ENRICH_DIR, answerableInput, detFileNodeId, enrichTempIdMap, applyEnrichPayloadIds, fileNodePathKey, readConsumedBaseline, writeConsumedBaseline, expandChangedWithConsumedDelta, consumedFileFor, repoKeyFor, consentFileFor, jobFileFor, deferredFileFor, readEnrichConsent, grantEnrichConsent, revokeEnrichConsent, findGrant, readEnrichJob, updateEnrichJob, readDeferred, deferredSummary, enrichOutcomeSummary, recoverDeferredCalls, beginDeferredCall, finishDeferredCall, retryDeferredResolutions, jobKeyOf, jobSeedOf, jobRunIdOf, detPatchId, validateEnrichResult, toPatchV2, evidenceKindOf, appendRouteLog, historylessChanges, computeSourceFp, runEnrich, cliMain, ROUTE_LOG, JOB_PHASES, ATTEMPT_PHASES, ENRICH_TARGET_OPS };
+module.exports = { quarantineLedger, expireOrphanedVerifierPending, enrichOwnedPatchIds, consentGenFloor, ledgerLockStaleKind, reopenForRetry, RESUME_KINDS, quoteMatchAfter, quoteInExcerpt, citationSummaryFor, excerptBaseRefFor, validateJob, fillExpectFromSnapshot, DROP_STAGES, evidenceMismatchDetail, validFailureDetail, retryPauseMs, ENRICH_DIR, answerableInput, detFileNodeId, enrichTempIdMap, applyEnrichPayloadIds, fileNodePathKey, readConsumedBaseline, writeConsumedBaseline, expandChangedWithConsumedDelta, consumedFileFor, repoKeyFor, consentFileFor, jobFileFor, deferredFileFor, readEnrichConsent, grantEnrichConsent, revokeEnrichConsent, findGrant, readEnrichJob, updateEnrichJob, readDeferred, deferredSummary, enrichOutcomeSummary, recoverDeferredCalls, beginDeferredCall, finishDeferredCall, retryDeferredResolutions, jobKeyOf, jobSeedOf, jobRunIdOf, detPatchId, validateEnrichResult, toPatchV2, evidenceKindOf, appendRouteLog, historylessChanges, computeSourceFp, runEnrich, cliMain, ROUTE_LOG, JOB_PHASES, ATTEMPT_PHASES, ENRICH_TARGET_OPS };
 
 if (require.main === module) process.exit(cliMain(process.argv));

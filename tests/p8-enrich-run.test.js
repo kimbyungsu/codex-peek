@@ -36,9 +36,10 @@ function setup(tag, scout) {
   ok(MB.ensureQueue(ws, PM) === true, "(전제 " + tag + ") 큐 생성(v1)");
   return { ws, topo, nodeId: topo.nodes[0].id };
 }
-const goodAdapter = (nodeId) => (ctx) => ({ ok: true, result: { schema: "enrich-result-v1", items: [
-  { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "n1" } }, evidence: [{ file: "src/a.js", quote: "// a" }] },
-  { op: "add_condition" === "x" ? "x" : "add_anchor", targetId: nodeId, payload: { anchor: { kind: "code", path: "src/b.js" } }, evidence: [{ file: "src/a.js", quote: "// a" }] },
+// 묶음 2(D1 인용 결속) 뒤로 인용은 '이번에 보낸 발췌 파일'을 가리켜야 통과한다 — 바뀐 파일이 다른 시험은 file·quote 를 그 파일로 넘긴다.
+const goodAdapter = (nodeId, file = "src/a.js", quote = "// a") => (ctx) => ({ ok: true, result: { schema: "enrich-result-v1", items: [
+  { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: file, note: "n1" } }, evidence: [{ file, quote }] },
+  { op: "add_condition" === "x" ? "x" : "add_anchor", targetId: nodeId, payload: { anchor: { kind: "code", path: "src/b.js" } }, evidence: [{ file, quote }] },
 ] } });
 const base = (ws, over) => ({ ws, slot: "ko", mode: "self", readiness: READY, adapters: {}, trigger: "test", ...over });
 
@@ -611,7 +612,7 @@ console.log("[9c] 준비 자기치유(2026-08-12 사용자 실보고) — 미준
   ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: false, paidMode: "precision" });
   fs.writeFileSync(path.join(ws, "src", "rh.js"), "// rh\n");
   let callsRh = 0;
-  const adPr = () => { callsRh++; return goodAdapter(nodeId)({}); };
+  const adPr = () => { callsRh++; return goodAdapter(nodeId, "src/rh.js", "// rh")({}); }; // 보낸 파일(바뀐 파일) 인용
   const notReady = { selfReady: true, economyReady: true, precisionReady: false, autoReady: false };
   const rP = ME.runEnrich(ws, base(ws, { mode: "precision", readiness: notReady, adapters: { precision: adPr } }));
   ok(rP.outcome === "parked" && rP.reason === "precision-not-ready" && callsRh === 0, "미준비=park(호출 0)");
@@ -632,7 +633,7 @@ console.log("[10] 입력 자기치유(2026-08-04 보류 반복 봉합) — 문�
   fs.writeFileSync(path.join(ws, "RELEASE.txt"), "release notes\n");
   fs.writeFileSync(path.join(ws, "bundle.zip"), "zzz\n");
   let called = 0;
-  const spy = () => { called++; return goodAdapter(nodeId)({}); };
+  const spy = () => { called++; return goodAdapter(nodeId, "src/b.js", "// b")({}); }; // 보낸 파일(바뀐 파일) 인용
   const r1 = ME.runEnrich(ws, base(ws, { adapters: { self: spy } }));
   ok(r1.outcome === "noop" && r1.reason === "input-doc-only", "문서·산출물뿐=noop(input-doc-only)");
   ok(called === 0 && !fs.existsSync(ME.jobFileFor(ws)), "호출 0·job 파일 미생성(과금 0·보류 경보 0)");
@@ -649,7 +650,7 @@ console.log("[10] 입력 자기치유(2026-08-04 보류 반복 봉합) — 문�
   let calls = 0;
   const badThenGood = () => { calls++; return calls === 1
     ? { ok: true, result: { schema: "enrich-result-v1", items: [{ op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "doc", ref: "docs/x.md", note: "n" } }, evidence: [{ file: "RELEASE.txt", quote: "release" }] }] } } // doc 단독 근거=관문 거부(답 거부 park 유도)
-    : goodAdapter(nodeId)({}); };
+    : goodAdapter(nodeId, "src/d.js", "// d")({}); }; // 재개 라운드의 보낸 파일(src/d.js) 인용
   fs.writeFileSync(path.join(ws, "src", "c.js"), "// c\n"); // 첫 라운드는 코드 변경 실재(입력 관문 통과)
   const rA = ME.runEnrich(ws, base(ws, { mode: "economy", adapters: { economy: badThenGood } }));
   ok(rA.outcome === "parked" && rA.reason === "economy-failed" && calls === 1, "답 거부=economy-failed park(1호출)");
@@ -753,10 +754,33 @@ console.log("[10b] 묶음 1(관찰 전용) — 재개 사건(resumes)·인용 �
       { op: "add_anchor", targetId: nodeId, payload: { anchor: { kind: "code", path: "src/b.js" } }, evidence: [{ file: "src/a.js", quote: "// tail marker beyond excerpt" }] },
     ] } });
     const r = ME.runEnrich(ws, base(ws, { adapters: { self: ad } }));
-    ok(r.outcome === "applied", "(전제) 발췌 밖 인용도 지금은 파일 전체 대조로 통과 (" + r.outcome + "/" + r.reason + ")");
-    const c = EC.enrichCallSummary(ME.readEnrichJob(ws).job).citation;
-    ok(c && c.total === 2 && c.inExcerpt === 1 && c.outside === 1, "인용 측정: 앞부분 인용 1·발췌 밖 인용 1 (" + JSON.stringify(c) + ")");
-    ok(/인용 2건 중 보낸 발췌 안 1건/.test(EC.citationText(EC.enrichCallSummary(ME.readEnrichJob(ws).job), "ko")), "인용 문구 ko");
+    ok(r.outcome === "applied", "묶음 2(D1): 발췌 안 인용 항목은 적용·발췌 밖 인용 항목은 그 항목만 제외 (" + r.outcome + "/" + r.reason + ")");
+    const jC = ME.readEnrichJob(ws).job; const aC = jC.attempts[jC.attempts.length - 1];
+    ok(Array.isArray(aC.droppedItems) && aC.droppedItems.length === 1 && aC.droppedItems[0].index === 1 && /evidence-outside-excerpt/.test(aC.droppedItems[0].reason) && aC.droppedItems[0].detail && aC.droppedItems[0].detail.kind === "evidence-outside" && aC.droppedItems[0].detail.sent === true && aC.droppedItems[0].detail.excerpt === "앞부분", "발췌 밖 인용=evidence-outside-excerpt 로 제외(보낸 파일·범위 밖·위치 표기 동봉)");
+    const c = EC.enrichCallSummary(jC).citation;
+    ok(c && c.total === 1 && c.inExcerpt === 1 && c.outside === 0, "인용 측정: 통과 항목만 집계(발췌 안 1) (" + JSON.stringify(c) + ")");
+    ok(/인용 1건 중 보낸 발췌 안 1건/.test(EC.citationText(EC.enrichCallSummary(jC), "ko")), "인용 문구 ko");
+    // 보내지 않은 파일 인용=제외(파일에 원문이 있어도): src/b.js 는 큐 스냅샷 시점에 이미 있어 '변경 없음'=보내지 않는 파일
+    fs.writeFileSync(path.join(ws, "src", "b.js"), "// b\n");
+    ok(MB.ensureQueue(ws, PM) === true, "(전제) 큐 재작성(src/b.js 포함 스냅샷)");
+    fs.writeFileSync(path.join(ws, "src", "g.js"), "// g\n"); // 이번 변경(보낼 파일)
+    const adUnsent = () => ({ ok: true, result: { schema: "enrich-result-v1", items: [
+      { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/b.js", note: "unsent" } }, evidence: [{ file: "src/b.js", quote: "// b" }] },
+      { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/g.js", note: "sent" } }, evidence: [{ file: "src/g.js", quote: "// g" }] },
+    ] } });
+    const rU = ME.runEnrich(ws, base(ws, { adapters: { self: adUnsent } }));
+    const jU = ME.readEnrichJob(ws).job; const aU = jU.attempts[jU.attempts.length - 1];
+    ok(rU.outcome === "applied" && Array.isArray(aU.droppedItems) && aU.droppedItems.length === 1 && aU.droppedItems[0].detail && aU.droppedItems[0].detail.kind === "evidence-outside" && aU.droppedItems[0].detail.sent === false, "보내지 않은 파일(src/b.js) 인용=제외(sent false)·보낸 파일 인용은 적용 (" + rU.outcome + "/" + rU.reason + " · dropped=" + JSON.stringify(aU.droppedItems) + " · citation=" + JSON.stringify(aU.citation) + ")");
+    // 전부 발췌 밖이면 종전처럼 시도 실패(자동 재시도 대상 유지)
+    ok(MB.ensureQueue(ws, PM) === true, "(전제) 큐 재작성");
+    fs.writeFileSync(path.join(ws, "src", "h.js"), "// h\n");
+    const adAllOut = () => ({ ok: true, result: { schema: "enrich-result-v1", items: [
+      { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/b.js", note: "x" } }, evidence: [{ file: "src/b.js", quote: "// b" }] },
+    ] } });
+    const rO = ME.runEnrich(ws, base(ws, { adapters: { self: adAllOut } }));
+    const jO = ME.readEnrichJob(ws).job; const aO = jO.attempts[jO.attempts.length - 1];
+    ok(rO.outcome !== "applied" && aO.phase === "failed" && aO.failureStage === "validation" && aO.failureCode === "evidence-outside-excerpt" && aO.failureDetail && aO.failureDetail.kind === "evidence-outside", "전부 발췌 밖=시도 실패(validation·evidence-outside-excerpt·구조 상세) (" + rO.outcome + "/" + rO.reason + " · last=" + JSON.stringify({ phase: aO.phase, stage: aO.failureStage, code: aO.failureCode, detail: aO.failureDetail, dropped: aO.droppedItems }) + ")");
+    ok(ME.readEnrichJob(ws).st === "ok", "strict: evidence-outside 상세 판독 정상");
     // 호출 중 편집으로 인용문이 경계 안→밖으로 옮겨져도 측정은 '발송 당시' 본문 기준(검증 1판 blocker: 응답 뒤 재판독 금지)
     ok(MB.ensureQueue(ws, PM) === true, "(전제) 큐 재작성");
     fs.writeFileSync(path.join(ws, "src", "a.js"), "// head marker\n" + filler + "// tail marker beyond excerpt\n");
@@ -861,7 +885,7 @@ console.log("[11b] 실행 중 커밋 반례(검증 blocker ①) — 기준점은
   const midAdapter = (ctx) => {
     fs.writeFileSync(path.join(ws, "src", "midrun.js"), "// mid\n");
     g(ws, ["add", "-A"]); g(ws, ["commit", "-qm", "mid"]);
-    return goodAdapter(nodeId)(ctx);
+    return goodAdapter(nodeId, "src/dirty.js", "// dirty")(ctx); // 보낸 파일(작업 트리 변경) 인용
   };
   fs.writeFileSync(path.join(ws, "src", "dirty.js"), "// dirty\n"); // 입력이 될 작업트리 코드 변경
   const r = ME.runEnrich(ws, base(ws, { adapters: { self: midAdapter } }));
