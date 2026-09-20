@@ -94,5 +94,30 @@ console.log("[패키징 제외 2] out/ 에는 컴파일 산출물(src/*.ts→out
   ok(strays.length === 0, "out/ 최상위에 src 짝 없는 js 잔재 없음" + (strays.length ? " — 지우세요: " + strays.join(", ") : ""));
 }
 
-console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
-process.exit(fail ? 1 : 0);
+console.log("[패키징 제외 3] 실제 선별 결과 허용 목록 — vsce listFiles(패키저와 같은 선별)가 고른 파일의 최상위 항목은 확장 런타임 구성물뿐이어야 한다(2026-09-21 확인 검증 blocker: .gitignore 대상 _backups/ 가 vsix 에 실림)");
+(async () => {
+  try {
+    const fs3 = require("fs");
+    const p3 = require("path");
+    const ROOT3 = p3.join(__dirname, "..");
+    const vsce = require("@vscode/vsce");
+    const files = (await vsce.listFiles({ cwd: ROOT3, packageManager: vsce.PackageManager.None })).map((f) => String(f).replace(/\\/g, "/"));
+    const srcNames = new Set(fs3.readdirSync(p3.join(ROOT3, "src")).filter((f) => f.endsWith(".ts")).map((f) => f.replace(/\.ts$/, ".js")));
+    // 허용 목록: 실행 계층(bridge/)·컴파일 산출물(out/*.js — src 짝)·문서 이미지(docs/*.png|svg)·플러그인 매니페스트·수칙서 스냅숏·package.json·LICENSE·readme(--readme-path)
+    const allowed = (f) => {
+      if (/^bridge\/[^/]+\.js$/.test(f)) return true;
+      if (/^out\/[^/]+\.js$/.test(f)) return srcNames.has(f.slice(4));
+      if (/^docs\/[^/]+\.(png|svg)$/.test(f)) return true;
+      if (/^codex-plugin\//.test(f) || /^\.agents\//.test(f)) return true;
+      return ["package.json", "LICENSE", "LICENSE.txt", "verify-envelope.json", "verify-envelope-archive.json", "docs/README.en.md", "README.md"].includes(f);
+    };
+    const bad = files.filter((f) => !allowed(f));
+    ok(files.length >= 70 && files.some((f) => f === "bridge/map-enrich.js") && files.some((f) => f === "out/extension.js"), "선별 결과 " + files.length + "개 — 실행 계층·컴파일 산출물 포함");
+    ok(bad.length === 0, "허용 목록 밖 파일 0" + (bad.length ? " — " + bad.slice(0, 12).join(", ") + (bad.length > 12 ? " …(" + bad.length + "건)" : "") : ""));
+    ok(!files.some((f) => /^_backups\//.test(f) || /^out\/.+\//.test(f) || /\.(txt|cmds|log)$/.test(f)), "_backups·out 하위 폴더·txt/cmds/log 없음");
+  } catch (e) {
+    ok(false, "vsce listFiles 실행 실패: " + String(e && e.message || e).slice(0, 200));
+  }
+  console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
+  process.exit(fail ? 1 : 0);
+})();

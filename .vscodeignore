@@ -17,6 +17,9 @@ out/*.json
 out/*.md
 out/smoke_*.js
 out/*.test.js
+# 저장소 루트의 로컬 보관 폴더(_backups/ — .gitignore 대상)도 패키저는 읽는다: .gitignore 는 vsix 제외를 대신하지 않는다(2026-09-21 확인 검증 blocker: out/ 에서
+# _backups/ 로 옮긴 진단 프롬프트가 vsix 에 그대로 실림). 허용 목록은 tests/release.test.js [패키징 제외 3] 이 실제 선별 결과(vsce listFiles)로 잠근다.
+_backups/**
 *.vsix
 # 릴리스 자산은 저장소 루트에 잠깐 놓였다가 업로드된다 — 그 사이에 확장을 구우면 설치 파일 안에
 # 7MB짜리 설치 묶음이 통째로 들어간다(2026-07-29 실측: 55개 1.98MB → 57개 9.57MB).
