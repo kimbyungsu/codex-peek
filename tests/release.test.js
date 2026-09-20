@@ -72,5 +72,27 @@ console.log("[패키징 제외] 릴리스 자산이 확장 설치 파일 안으�
   ok(ig.includes("docs/*.md"), "런타임과 무관한 내부 작업 문서 제외(패키징 위생)");
 }
 
+console.log("[패키징 제외 2] out/ 에는 컴파일 산출물(src/*.ts→out/*.js)만 — 작업 산출물(스모크·진단 프롬프트/응답·.cmds·하위 폴더)은 vsix 에 안 들어간다(2026-09-21 릴리스 검증 [주의])");
+{
+  const fs2 = require("fs");
+  const p2 = require("path");
+  const ROOT2 = p2.join(__dirname, "..");
+  const lines = fs2.readFileSync(p2.join(ROOT2, ".vscodeignore"), "utf8").split(/\r?\n/).map((s) => s.trim()).filter((s) => s && !s.startsWith("#"));
+  for (const r of ["out/*/**", "out/*.cmds", "out/*.txt", "out/*.json", "out/smoke_*.js", "out/*.test.js"]) ok(lines.includes(r), "제외 규칙 " + r);
+  ok(!lines.some((l) => l.startsWith("!out/")), "out/ 에 부정(!) 패턴 없음 — vsce 는 부정 패턴이 모든 제외를 이기므로 명시 제외만 쓴다");
+  // vsce(package.js collectFiles)와 같은 판정: 제외 패턴에 하나라도 걸리면 빠지되, 부정 패턴에 걸리면 무조건 남는다(minimatch dot:true)
+  const { minimatch } = require("minimatch");
+  const ignore = lines.filter((l) => !l.startsWith("!")), negate = lines.filter((l) => l.startsWith("!")).map((l) => l.slice(1));
+  const kept = (f) => !ignore.some((i) => minimatch(f, i, { dot: true })) || negate.some((i) => minimatch(f, i, { dot: true }));
+  const srcJs = fs2.readdirSync(p2.join(ROOT2, "src")).filter((f) => f.endsWith(".ts")).map((f) => "out/" + f.replace(/\.ts$/, ".js"));
+  ok(srcJs.length >= 10 && srcJs.every(kept), "컴파일 산출물 " + srcJs.length + "개는 전부 실린다");
+  const junk = ["out/smoke_cc_en.js", "out/chain_tail.log.cmds", "out/enrich-diag-2026-09-18/enrich_diag.js", "out/enrich-diag-2026-09-18/diag1.prompt.txt", "out/enrich-diag-2026-09-18/diag1.result.json", "out/pkg/codex-peek-0.1.102/package.json", "out/extension.js.map", "out/notes.txt", "out/x.json", "out/foo.test.js", "out/chain-bundle4.log"];
+  ok(junk.every((f) => !kept(f)), "작업 산출물(스모크·.cmds·진단 폴더·pkg·map·txt·json·시험·로그)은 전부 빠진다");
+  // 로컬 out/ 잔재 감시(fail-visible): 최상위 out/*.js 는 src/*.ts 짝이 있어야 한다 — 짝 없는 js 가 남아 있으면 배포 전에 지우라는 신호(체인은 패키징보다 먼저 돈다)
+  const outDir = p2.join(ROOT2, "out");
+  const strays = fs2.existsSync(outDir) ? fs2.readdirSync(outDir).filter((f) => /\.js$/.test(f) && !fs2.existsSync(p2.join(ROOT2, "src", f.replace(/\.js$/, ".ts")))) : [];
+  ok(strays.length === 0, "out/ 최상위에 src 짝 없는 js 잔재 없음" + (strays.length ? " — 지우세요: " + strays.join(", ") : ""));
+}
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

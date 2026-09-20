@@ -7,6 +7,16 @@ project-map/**
 tsconfig.json
 package-lock.json
 out/**/*.map
+# out/ 에는 컴파일 산출물(src/*.ts → out/*.js)만 싣는다. 스모크 스크립트·진단 프롬프트/응답·명령 파일 같은 작업 산출물이 out/ 에 남아 있으면
+# 공개 설치 파일에 그대로 딸려 들어간다(2026-09-21 릴리스 검증 [주의] 실측: 진단 프롬프트 118KB·응답 9KB·스모크·.cmds 6개가 vsix 에 포함).
+# vsce 규칙은 '제외 패턴에 걸리면 빠지되 !부정 패턴에 걸리면 무조건 남김'이라 부정 패턴을 쓰지 않고 명시 제외만 둔다(tests/release.test.js 가 같은 규칙으로 시뮬레이션).
+out/*/**
+out/*.cmds
+out/*.txt
+out/*.json
+out/*.md
+out/smoke_*.js
+out/*.test.js
 *.vsix
 # 릴리스 자산은 저장소 루트에 잠깐 놓였다가 업로드된다 — 그 사이에 확장을 구우면 설치 파일 안에
 # 7MB짜리 설치 묶음이 통째로 들어간다(2026-07-29 실측: 55개 1.98MB → 57개 9.57MB).
