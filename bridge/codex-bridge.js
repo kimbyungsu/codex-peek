@@ -1890,6 +1890,10 @@ function projectResolvedAcks(ws, ech) {
 function maybeDispatchChallenge(opts) {
   try {
     const { ws, codexSession, challengeId, lang, runCodexFn } = opts || {};
+    // 사용자가 고급설정(코덱스 두뇌 설정)에서 고른 모델·생각강도를 이 재개 호출에도 싣는다(2026-09-20 사용자 실보고: 본 답은 고른 모델로
+    // 돌았는데 이 재확인 턴만 인자 없이 재개돼 config.toml 기본 모델로 돌았고, 두뇌 설정 어긋남 경고가 그 턴을 '최근 답'으로 비교했다).
+    // 값은 호출부가 본 검증과 같은 modelArgs(modelPrefFor) 로 계산해 넘긴다 — 여기서 특정 모델을 정하지 않는다(사용자 옵션 추종).
+    const modelArgs9 = Array.isArray(opts && opts.modelArgs) ? opts.modelArgs.filter((x) => typeof x === "string") : [];
     const ech = require("./evidence-challenge.js");
     ech.convergeStaleChallenges(ws); // §5 강제 종료 잔재 수렴(재발송 없음 — pending·dispatched 공통)
     projectResolvedAcks(ws, ech);    // §5 K 복구 재투영(멱등)
@@ -1899,7 +1903,7 @@ function maybeDispatchChallenge(opts) {
     if (minimumCallerTimeoutMs() < 60_000) return { skipped: "no-time" };   // 마감 임박 — 발송 포기(경보 유지=안전·stale 수렴이 정리)
     if (!ech.markDispatched(ws, challengeId).ok) return { skipped: "dispatch-refused" }; // 호출 전 원자 선기록·시도 1
     const run = runCodexFn || ((args, p) => runCodex(args, p));
-    const r = run(["resume", codexSession], ech.buildChallengePrompt(rec, lang || rec.lang));
+    const r = run(["resume", codexSession, ...modelArgs9], ech.buildChallengePrompt(rec, lang || rec.lang));
     if (!r || r.error || !r.answer || (typeof r.status === "number" && r.status !== 0)) {
       ech.markOutcomeUnknown(ws, challengeId); // 호출 실패=판정 대상 아님(태만 기록 금지 — §4)
       return { challengeId, outcome: "outcome-unknown" };
@@ -4878,7 +4882,7 @@ async function cmdAsk(rest) {
     process.stdout.write(outText);
     try { const echM = require("./evidence-challenge.js"); echM.convergeStaleChallenges(ws); projectResolvedAcks(ws, echM); } catch { /* best-effort */ }
     if (evAlert && evAlert.challengeId && ckptOk) {
-      maybeDispatchChallenge({ ws, codexSession: verifierSession, challengeId: evAlert.challengeId, lang: langSnap });
+      maybeDispatchChallenge({ ws, codexSession: verifierSession, challengeId: evAlert.challengeId, lang: langSnap, modelArgs: mArgs }); // 본 검증과 같은 모델·생각강도 인자(사용자 고급설정 추종)
     }
     if (held9) { // [ab-6 봉합] 보류 판=정직 실패 종결(HOLD_EXIT_CODE) — 출력은 위에서 이미 전달됨
       try { process.stderr.write(langSnap === "en" ? "[directive delivery · HOLD] this run ends as a FAILED verification (no success proof) — record the judgment (round-judge ... re-verify) and start the re-verification with ask-start.\n" : "[규약 전달 · 보류] 이 실행은 검증 실패로 닫힘(통과 증명 없음) — 판단 기록(round-judge … re-verify) 뒤 ask-start로 재검증을 시작하라.\n"); } catch { /* 안내 실패 무해 */ }
@@ -5420,4 +5424,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { evidenceInfoLine, resolveCitedPath, rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, templateScriptCommands, maskNonCode, toolReadParts, scriptOwnerScan, outputContainsFileLine, callMentionedFiles, scriptLiteralLines, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
+module.exports = { modelArgs, evidenceInfoLine, resolveCitedPath, rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, templateScriptCommands, maskNonCode, toolReadParts, scriptOwnerScan, outputContainsFileLine, callMentionedFiles, scriptLiteralLines, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };

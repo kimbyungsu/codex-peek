@@ -133,6 +133,28 @@ console.log("[6] 발송 안 함 경로 — 루트 밖·부적격 전부면 chall
   ck("발송부는 not-pending으로 거부(호출 0회·경보 유지)", r.skipped === "not-pending");
 }
 
+console.log("[6b] 재확인 호출도 사용자가 고른 코덱스 모델·생각강도를 싣는다(2026-09-20 실보고 — 인자 없이 재개하면 config.toml 기본 모델로 돌아 두뇌 설정 어긋남 경고가 떴다)");
+{
+  const a = plantAlertAndFreeze([fA, fB]);
+  let sentArgs = null;
+  const mArgs = cb.modelArgs({ model: "gpt-6-astra", reasoning: "xhigh" }); // 본 검증이 쓰는 같은 계산(modelPrefFor → modelArgs)
+  ck("modelArgs 계산=-c model=·-c model_reasoning_effort=", mArgs.join(" ") === "-c model=gpt-6-astra -c model_reasoning_effort=xhigh");
+  const r = cb.maybeDispatchChallenge({ ...base, challengeId: a.challengeId, modelArgs: mArgs, runCodexFn: (args, p) => { sentArgs = args.slice(); return { answer: respFromRec(a.rec), status: 0 }; } });
+  ck("발송 성공", r.outcome === "resolved");
+  ck("resume 인자에 사용자 선택 모델·생각강도 포함(고정 모델명 없음 — 옵션 추종)", Array.isArray(sentArgs) && sentArgs[0] === "resume" && sentArgs[1] === "vs-disp" && sentArgs.slice(2).join(" ") === "-c model=gpt-6-astra -c model_reasoning_effort=xhigh");
+  const b = plantAlertAndFreeze([fA]);
+  let sentArgs2 = null;
+  cb.maybeDispatchChallenge({ ...base, challengeId: b.challengeId, runCodexFn: (args) => { sentArgs2 = args.slice(); return { answer: respFromRec(b.rec), status: 0 }; } });
+  ck("선택값 없음(옵션 미설정)=인자 없이 재개(config 기본값 — 종전 동작)", Array.isArray(sentArgs2) && sentArgs2.join(" ") === "resume vs-disp");
+  const c9 = plantAlertAndFreeze([fB]);
+  let sentArgs3 = null;
+  cb.maybeDispatchChallenge({ ...base, challengeId: c9.challengeId, modelArgs: ["-c", 7, null, "model=x"], runCodexFn: (args) => { sentArgs3 = args.slice(); return { answer: respFromRec(c9.rec), status: 0 }; } });
+  ck("이형 인자는 문자열만 통과", Array.isArray(sentArgs3) && sentArgs3.join(" ") === "resume vs-disp -c model=x");
+  const src9 = fs.readFileSync(path.resolve(__dirname, "../bridge/codex-bridge.js"), "utf8");
+  ck("호출부가 본 검증과 같은 mArgs 를 넘긴다(소스 잠금)", src9.includes("maybeDispatchChallenge({ ws, codexSession: verifierSession, challengeId: evAlert.challengeId, lang: langSnap, modelArgs: mArgs })"));
+  ck("함수 안에 모델명 하드코딩 없음", !/function maybeDispatchChallenge[\s\S]{0,3000}?model=gpt/.test(src9));
+}
+
 console.log("[7] cmdAsk 배선 순서(소스 잠금) — 경보 시점 동결→후처리→outText→checkpoint 게이트→인쇄→발송");
 {
   const src = fs.readFileSync(path.resolve(__dirname, "../bridge/codex-bridge.js"), "utf8");
