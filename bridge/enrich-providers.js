@@ -17,6 +17,7 @@ const crypto = require("crypto");
 const BR = __dirname; // bridge 계층(증분 4 1차 blocker⑤ — 설치본 자동 발동에서 어댑터 실존해야 하므로 배포 대상으로 이동)
 const CL = require(path.join(BR, "contract-lib.js"));
 const EXC = require(path.join(BR, "enrich-excerpt-cfg.js")); // 묶음 3(D3): 발췌 범위 옵션(파일 수·파일당 글자) — 상수·정규화 단일 출처
+const EC = require(path.join(BR, "enrich-calls.js")); // 묶음 4(D4 B): 지난 답 거부 요약의 프롬프트 자료 절(순수 문자열)
 
 const SELF_DENY = "Bash,Read,Grep,Glob,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,TodoWrite,KillShell,TaskOutput";
 
@@ -212,6 +213,8 @@ function buildEnrichPrompt(ctx) {
     "당신은 코드 구조 지도의 '의미 보강' 담당이다. 아래 지도 초안과 소스 발췌만 근거로, 지도 항목의 의미를 보강하는 제안을 JSON으로만 출력하라.",
     "",
     "## 지도 초안(노드·엣지)", ...(truncNote ? [truncNote] : []), nodes || "(없음)", edges || "(없음)",
+    // 묶음 4(D4 B): 실행기가 넘긴 지난 답 거부 요약(ctx.priorRejection · 기계 분류만)을 자료 절로 — 지시문은 늘리지 않는다(어느 재호출 경로든 같은 절)
+    ...(ctx.priorRejection ? ["", EC.priorRejectionSection(ctx.priorRejection)] : []),
     "", "## 소스 발췌", ...(longExcluded ? [`(경로 ${EXCERPT_PATH_MAX}자 초과 파일 ${longExcluded}건 제외)`] : []),
     // 발췌 범위 자료 줄(묶음 3 — 지시문 아님): 옵션 상한에 밀려 안 실린 파일이 있으면 그 사실을 적는다(침묵 상한 금지). 파일당 글자 절단은 각 제목의 '(일부)'가 말한다.
     ...(cappedOut > 0 ? [`(발췌 범위 ${cfgP.files}파일·파일당 ${cfgP.charsPerFile}자 — 프로젝트 설정: 후보 ${files.length + cappedOut}건 중 ${files.length}건만 실림)`] : []),

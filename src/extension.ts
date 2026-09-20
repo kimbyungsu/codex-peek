@@ -2234,6 +2234,7 @@ ${tE("전부 이 컴퓨터의 브릿지 홈에 남습니다. 외부로 나가는
 function openMapModeGuide(): void {
   // 묶음 1: 사람 없이 이어지는 호출 규칙은 상수(bridge/enrich-calls.js)에서 문장을 만든다 — 숫자를 안내문에 손으로 적지 않는다(규칙이 바뀌면 문구도 따라오게). 구 설치본이면 문장 생략.
   const unattendedRule = (() => { try { const EC9: any = require(path.join(BRIDGE_DIR, "enrich-calls.js")); return String(EC9.unattendedRuleText(loadLangExt()) || ""); } catch { return ""; } })();
+  const priorRule = (() => { try { const EC9: any = require(path.join(BRIDGE_DIR, "enrich-calls.js")); return typeof EC9.priorRejectionRuleText === "function" ? String(EC9.priorRejectionRuleText(loadLangExt()) || "") : ""; } catch { return ""; } })(); // 묶음 4: 되묻기 규칙(상수 문장 · 구 설치본이면 생략)
   // 묶음 3: 발췌 범위 옵션 안내 — 프리셋·기본값·상한은 상수(bridge/enrich-excerpt-cfg.js)에서 문장을 만든다(숫자를 손으로 적지 않는다). 구 설치본이면 생략.
   const excerptOptionNote = (() => { try {
     const EX9: any = require(path.join(BRIDGE_DIR, "enrich-excerpt-cfg.js"));
@@ -2268,6 +2269,7 @@ ${mode("#d9a441", "자동형", "Auto", "DeepSeek + Codex", "매번 고르지 않
 </div></div>
 ${unattendedRule ? `<p class="note">${tE("자동 보강 호출 횟수 —", "Auto-enrich call counts —")} ${unattendedRule} ${tE("실제 횟수는 현황 카드의 '이번 작업' 줄에서 봅니다(요금이 아니라 호출 횟수입니다).", "Actual counts appear on the status card's 'This job' line (call counts, not billing).")}</p>` : ""}
 ${excerptOptionNote ? `<p class="note">${tE("발췌 범위 —", "Excerpt scope —")} ${excerptOptionNote}</p>` : ""}
+${priorRule ? `<p class="note">${tE("다시 묻기 —", "Re-asking —")} ${priorRule}</p>` : ""}
 <p class="note"><span class="warn">${tE("준비 점검은 실제 호출입니다.", "Readiness checking makes real calls.")}</span> ${tE("버튼을 눌렀을 때만 DeepSeek 소형 요청 최대 2회(형식 교정 1회 포함)와 Codex 실행 1회를 사용합니다. 모드 선택은 저장될 수 있어도, 준비되지 않은 담당으로 작업을 조용히 강행하지는 않습니다.", "Only pressing the button uses up to two small DeepSeek requests (including one format repair) and one Codex run. A mode selection may be saved, but work is never silently forced through an unready provider.")}</p>
 </body></html>`;
 }
@@ -7992,6 +7994,8 @@ class Dashboard {
             if(jp==="parked"||(en9.awaitingVerification||0)>0||(en9.previousRunAwaiting||0)>0){
               const rb=document.createElement("button"); rb.type="button"; rb.className="secondary"; rb.style.cssText="margin-left:8px;font-size:11px;padding:2px 8px";
               rb.textContent=((en9.awaitingVerification||0)>0||(en9.previousRunAwaiting||0)>0)?T("확인 대기 다시 시도","Retry verification queue"):T("다시 시도","Retry");
+              // 묶음 4(사용자 결정 D4-2 ㄱ): 사용자 재시도도 지난 답의 제외 이유(기계 분류)를 붙여 다시 묻는다 — 담당이 무엇을 다시 볼지 안내
+              if(jp==="parked"&&en9.job&&en9.job.lastFailure&&["response","validation","conversion"].includes(String(en9.job.lastFailure.stage||""))) rb.title=T("지난 답에서 제외된 항목의 이유(기계 분류)를 붙여 다시 묻습니다 — 파일 내용이나 답의 문장은 다시 보내지 않아요.","Re-asks with the machine classification of what was dropped from the previous answer — no file contents or answer sentences are re-sent.");
               rb.addEventListener("click", function(){ rb.disabled=true; vscode.postMessage({type:"retryEnrich"}); });
               st9.appendChild(rb);
             }

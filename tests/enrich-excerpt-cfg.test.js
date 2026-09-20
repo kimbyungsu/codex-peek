@@ -209,8 +209,8 @@ console.log("[7] 배선(소스 검사) — 실행기 단일 경로·확장·배�
   const me = fs.readFileSync(path.join(ROOT, "bridge", "map-enrich.js"), "utf8");
   const gateCalls = me.split("\n").filter((l) => /answerableInput\(repo, (topo|st\.topo), /.test(l) && !/^function /.test(l));
   ok(gateCalls.length === 4 && gateCalls.every((c) => /cfg: (excerptCfgFor\(|cfg9)/.test(c)), "실행기의 관문 호출 4곳 전부 발췌 범위 cfg 전달(" + gateCalls.length + "곳)");
-  ok(/excerptCfg: \{ files: cfg9\.files, charsPerFile: cfg9\.charsPerFile \}/.test(me) && /excerptFilesFor\(st\.topo, st\.changed, cfg9\)/.test(me) && /excerptBaseRef: baseRef9, excerptCfg: cfg9 \}/.test(me) && /baseRef: baseRef9, excerptCfg: cfg9 \}, \{ perItem: true \}/.test(me), "runAttempt: 시도 영속·스냅샷·어댑터 입력·응답 검증이 같은 cfg9");
-  ok(/excerptCfg: a\.excerptCfg \}/.test(me) && /"excerptCfg", "sourceFp"/.test(me) && /return "attempt excerptCfg"/.test(me), "변환=시도의 excerptCfg · ATTEMPT_KEYS·strict 검사");
+  ok(/excerptCfg: \{ files: cfg9\.files, charsPerFile: cfg9\.charsPerFile \}/.test(me) && /excerptFilesFor\(st\.topo, st\.changed, cfg9\)/.test(me) && /excerptBaseRef: baseRef9, excerptCfg: cfg9(, priorRejection: prior9)? \}/.test(me) && /baseRef: baseRef9, excerptCfg: cfg9 \}, \{ perItem: true \}/.test(me), "runAttempt: 시도 영속·스냅샷·어댑터 입력·응답 검증이 같은 cfg9");
+  ok(/excerptCfg: a\.excerptCfg \}/.test(me) && /"excerptCfg", ("priorAttached", )?"sourceFp"/.test(me) && /return "attempt excerptCfg"/.test(me), "변환=시도의 excerptCfg · ATTEMPT_KEYS·strict 검사");
   const ep = fs.readFileSync(path.join(ROOT, "bridge", "enrich-providers.js"), "utf8");
   ok(/function excerptSelectionFor\(topo, changed, cfg\)/.test(ep) && /function excerptFilesFor\(topo, changed, cfg\)/.test(ep) && /excerptSelectionFor\(ctx\.topo, ctx\.changed, ctx\.excerptCfg\)/.test(ep) && /charsMax: cfgP\.charsPerFile/.test(ep), "프롬프트·선정·판독이 cfg 를 소비");
   const ext = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");

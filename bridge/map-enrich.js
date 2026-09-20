@@ -11,6 +11,7 @@ const path = require("path");
 const crypto = require("crypto");
 const CL = require(path.join(__dirname, "contract-lib.js"));
 const EXC = require(path.join(__dirname, "enrich-excerpt-cfg.js")); // 묶음 3(D3): 발췌 범위 옵션(프로젝트별 계약 mapExcerpt) — 상수·정규화 단일 출처
+const EC = require(path.join(__dirname, "enrich-calls.js")); // 묶음 4(D4 B): 새 시도 바로 앞 시도의 답 거부 요약(기계 분류) — 재호출 프롬프트 자료
 
 const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(os.homedir(), ".codex-bridge");
 const ENRICH_DIR = path.join(BRIDGE_DIR, "map-enrich");
@@ -154,7 +155,7 @@ const ATTEMPT_PHASES = ["running", "applying", "done", "failed", "parked"];
 const JOB_KEYS = ["schema", "jobKey", "mapId", "authorityHash", "decisionContextHash", "mode", "configWs", "slot", "phase", "startedAt", "finishedAt", "parkedReason", "sourceFp", "retryFrom", "resumes", "attempts", "rotationPartial"]; // rotationPartial: [§B2 (3)] 교체 부분 상태(선택·null 허용)
 // failureStage/failureCode/failureFile: 실패를 사람이 읽을 수 있게 '구조'로도 남긴다(2026-07-29 설계 상의 결론).
 // failReason 자유 문자열만 남기면 화면이 내부 표현을 그대로 노출하거나, 호출 실패와 결과 거부를 구분하지 못한다.
-const ATTEMPT_KEYS = ["attemptId", "provider", "consentGen", "phase", "startedAt", "excerptBase", "excerptCfg", "sourceFp", "results", "cursor", "resolutions", "citation", "failReason", "failureStage", "failureCode", "failureFile", "failureDetail", "droppedItems", "sourceIdx", "parkedReason", "finishedAt"]; // sourceIdx: results.items[k] 가 담당 응답의 몇 번째 항목이었는지(관문 제외로 압축된 배열의 원래 색인) // droppedItems: 1단계 관문에서 항목 단위로 제외된 항목(결정 D-2026-09-18-enrich-item-gate)
+const ATTEMPT_KEYS = ["attemptId", "provider", "consentGen", "phase", "startedAt", "excerptBase", "excerptCfg", "priorAttached", "sourceFp", "results", "cursor", "resolutions", "citation", "failReason", "failureStage", "failureCode", "failureFile", "failureDetail", "droppedItems", "sourceIdx", "parkedReason", "finishedAt"]; // sourceIdx: results.items[k] 가 담당 응답의 몇 번째 항목이었는지(관문 제외로 압축된 배열의 원래 색인) // droppedItems: 1단계 관문에서 항목 단위로 제외된 항목(결정 D-2026-09-18-enrich-item-gate)
 // 단계와 코드는 닫힌 열거다(화면이 이 값만 보고 문구를 고른다 — 모르는 값은 화면이 '알 수 없음'으로 표시).
 const FAILURE_STAGES = ["call", "response", "validation", "conversion"];
 const FAILURE_CODES = ["process-failed", "empty-output", "parse-invalid", "schema-invalid", "evidence-mismatch", "evidence-unreadable", "evidence-outside-excerpt", "convert-invalid"]; // evidence-outside-excerpt=보낸 발췌 밖(또는 보내지 않은 파일) 인용(묶음 2 · D1)
@@ -258,6 +259,7 @@ function validateJob(d) {
     if (a.sourceFp !== undefined && !FP_RE.test(String(a.sourceFp))) return "attempt sourceFp"; // 호출 시점 소비 지문(5차 — 재개 done이 사후 지문을 도장으로 쓰는 오염 차단)
     if (a.excerptBase !== undefined && a.excerptBase !== null && !(typeof a.excerptBase === "string" && OID_RE.test(a.excerptBase))) return "attempt excerptBase"; // 발송 시점 발췌 기준 커밋(선택 — 옛 기록 부재 허용 · null=첫머리 판독 · 별칭 "HEAD" 금지)
     if (a.excerptCfg !== undefined && !EXC.validExcerptCfg(a.excerptCfg)) return "attempt excerptCfg"; // 발송 시점 발췌 범위(묶음 3 · 선택 — 옛 기록 부재 허용 · 정확히 {files, charsPerFile} 정수·범위 안)
+    if (a.priorAttached !== undefined && a.priorAttached !== true) return "attempt priorAttached"; // 묶음 4: 이 시도의 호출에 지난 답의 제외 이유를 붙였다는 표식(선택 — true 만 · 부재=붙이지 않음/옛 기록)
     if (a.failReason !== undefined && typeof a.failReason !== "string") return "attempt failReason";
     if (a.citation !== undefined) { // 인용 측정(선택·관찰 전용): 정수 5개·inExcerpt+outside=total
       const c = a.citation;
@@ -1764,10 +1766,15 @@ function runAttempt(repo, o, env, st, provider) {
   if (!answerableInput(repo, st.topo, st.changed, { baseRef: baseRef9, cfg: cfg9 })) return park((j) => j && { ...j, phase: "parked", parkedReason: "input-doc-only", finishedAt: nowIso() }, "input-doc-only", { provider, jobKey: st.jobKey });
   // attempt 생성(phase running — 호출 '전' 기록: uncertain-call 감사 재료)
   let attemptId = -1;
+  // 묶음 4(사용자 결정 D4 B · D4-2 ㄱ): 새 시도 바로 앞 시도(attempts 의 마지막 원소)가 답 거부 단계로 실패했으면 그 기계 분류 요약을 이번 호출에
+  // 동봉한다 — 어느 경로(유료 담당 자동 재시도·기본형 재개 재호출·사용자 '다시 시도')로 왔든 같은 장부 사실을 본다(retryFrom 은 보지 않는다).
+  // 요약은 시도 생성과 같은 잠금 안(같은 j)에서 계산해 '바로 앞'이 정확히 attempts[attemptId-1] 이다. 편집 중 충돌 항목은 요약에서 빠진다.
+  let prior9 = null;
   const mk = fencedUpdateEnrichJob(repo, env.fence, (j) => {
     if (!j || j.phase !== "open") return null;
     attemptId = j.attempts.length;
-    return { ...j, attempts: [...j.attempts, { attemptId, provider, consentGen: g2.gen, phase: "running", startedAt: nowIso(), excerptBase: baseRef9, excerptCfg: { files: cfg9.files, charsPerFile: cfg9.charsPerFile } }] }; // excerptBase: 발송 시점 발췌 기준 커밋(null=첫머리 판독) · excerptCfg: 발송 시점 발췌 범위(묶음 3) — 변환 재검사가 이 값들을 쓴다(확인 검증 2판 blocker)
+    prior9 = EC.priorRejectionFor(j.attempts);
+    return { ...j, attempts: [...j.attempts, { attemptId, provider, consentGen: g2.gen, phase: "running", startedAt: nowIso(), excerptBase: baseRef9, excerptCfg: { files: cfg9.files, charsPerFile: cfg9.charsPerFile }, ...(prior9 ? { priorAttached: true } : {}) }] }; // excerptBase: 발송 시점 발췌 기준 커밋(null=첫머리 판독) · excerptCfg: 발송 시점 발췌 범위(묶음 3) — 변환 재검사가 이 값들을 쓴다(확인 검증 2판 blocker) · priorAttached: 지난 답의 제외 이유를 붙여 물었다는 표식(묶음 4)
   });
   if (!mk.ok || attemptId < 0) return park(null, "attempt-write");
   // provider 호출(주입 어댑터 — 실 LLM 배선은 3b-2)
@@ -1782,7 +1789,7 @@ function runAttempt(repo, o, env, st, provider) {
   const jobForUsage = mk.job || (readEnrichJob(repo).job || null);
   const usageContext = env.p10 ? env.p10.usage(st.jobKey, jobRunIdOf(jobForUsage)) : null;
   // excerptBodies: 호출 직전 스냅샷 — 프롬프트 조립과 인용 측정이 '같은' 발췌 본문을 소비한다(확인 검증 blocker: 두 판독 사이의 저장이 측정을 뒤집었다)
-  try { call = adapter({ repo, topo: st.topo, changed: st.changed, provider, usageContext, excerptBodies: preBody, excerptLabels: preLabel, excerptBaseRef: baseRef9, excerptCfg: cfg9 }); }
+  try { call = adapter({ repo, topo: st.topo, changed: st.changed, provider, usageContext, excerptBodies: preBody, excerptLabels: preLabel, excerptBaseRef: baseRef9, excerptCfg: cfg9, priorRejection: prior9 }); } // priorRejection: 지난 답 거부 요약(묶음 4 · null=없음)
   catch (e) { call = { ok: false, detail: "adapter-threw: " + String(e && e.message) }; }
   // provider 반환 직후 소유 재검증(7차 ab-6 변형): 호출 동안 오탈취가 일어나 새 소유자가 이 running
   // 시도를 uncertain-call로 park했다면, 아래 실패·결과 기록이 그 장부를 덮어써 '자동 재시도 대상 밖의
@@ -1803,7 +1810,7 @@ function runAttempt(repo, o, env, st, provider) {
     });
     if (w0.fenceLost) return { outcome: "busy", reason: "run-lock-lost" };
     if (!w0.ok) return park(null, "attempt-write:" + w0.reason, { provider, jobKey: st.jobKey });
-    log({ route: provider, reason: failureReason, outcome: "error", provider, jobKey: st.jobKey, consentGen: g2.gen });
+    log({ route: provider, reason: failureReason, outcome: "error", provider, jobKey: st.jobKey, consentGen: g2.gen, prior: !!prior9 });
     return { outcome: "provider-failed", provider, _p10Reason: failureReason };
   }
   // results 검증(strict — 실패 분류 3종은 provider 실패 플래그)+근거 실증(3b 1차 blocker④ ab-3:
@@ -1858,10 +1865,10 @@ function runAttempt(repo, o, env, st, provider) {
     });
     if (w1.fenceLost) return { outcome: "busy", reason: "run-lock-lost" };
     if (!w1.ok) return park(null, "attempt-write:" + w1.reason, { provider, jobKey: st.jobKey });
-    log({ route: provider, reason: "result-" + vr.kind, outcome: "error", provider, jobKey: st.jobKey, consentGen: g2.gen, dropped: drops.length });
+    log({ route: provider, reason: "result-" + vr.kind, outcome: "error", provider, jobKey: st.jobKey, consentGen: g2.gen, dropped: drops.length, prior: !!prior9 });
     return { outcome: "provider-failed", provider, _p10Reason: "provider-result-invalid", _sourceChanged: drops.some((d) => d.detail && d.detail.kind === "evidence-mismatch" && d.detail.fileChanged === true) };
   }
-  if (drops.length) log({ route: provider, reason: "items-screened", outcome: "partial", provider, jobKey: st.jobKey, consentGen: g2.gen, accepted: acceptedItems.length, dropped: drops.length });
+  if (drops.length) log({ route: provider, reason: "items-screened", outcome: "partial", provider, jobKey: st.jobKey, consentGen: g2.gen, accepted: acceptedItems.length, dropped: drops.length, prior: !!prior9 });
   // results 영속(수신 즉시 — 이후 재개는 provider 재호출 0) — 정상 항목만·제외 항목은 사유와 함께 별도 기록
   const citation9 = citationSummaryFor(acceptedItems, [...preSha.keys()], (f) => (preBody.has(f) ? preBody.get(f) : null)); // 관찰 전용(묶음 1) — 발송 시점 스냅샷 대조
   const wR = fencedUpdateEnrichJob(repo, env.fence, (j) => {
