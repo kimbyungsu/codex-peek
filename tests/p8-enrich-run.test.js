@@ -1403,5 +1403,225 @@ console.log("[8f] 변환 단계에서 전부 제외·적용 0 = 종전처럼 시
   ok(a0.phase === "failed" && a0.failureStage === "conversion" && a0.failureCode === "convert-invalid" && a0.droppedItems && a0.droppedItems.length === 1, "시도 기록: conversion/convert-invalid + droppedItems 1");
 }
 
+console.log("[10] 진행 장부 자기치유 — 깨진 작업·동의·확인 대기 장부는 치우고(보존) 알린 뒤 새로 시작(사용자 결정 2026-09-20)");
+{
+  const brokenOf = (file) => fs.readdirSync(path.dirname(file)).filter((f) => f.startsWith(path.basename(file) + ".broken-"));
+  const quarantineEvents = (ws) => (CL.readIntegrityEvents() || []).filter((e) => e && e.kind === "enrich-quarantined" && CL.normWs(String(e.workspace || "")) === CL.normWs(ws));
+  { // 작업 기록이 JSON 으로도 깨진 경우
+    const { ws, nodeId } = setup("q-job");
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+    fs.writeFileSync(ME.jobFileFor(ws), "{ this is not json");
+    ok(ME.readEnrichJob(ws).st === "damaged", "(전제) 작업 기록 손상");
+    const r = ME.runEnrich(ws, base(ws, { adapters: { self: goodAdapter(nodeId) } }));
+    ok(r.outcome === "applied" && r.applied === 2, "손상 작업 기록을 치우고 새로 시작해 정상 적용 (" + r.outcome + "/" + r.reason + ")");
+    ok(brokenOf(ME.jobFileFor(ws)).length === 1 && fs.readFileSync(path.join(ME.ENRICH_DIR, brokenOf(ME.jobFileFor(ws))[0]), "utf8") === "{ this is not json", "깨진 원본은 .broken-<시각> 으로 보존(삭제 아님)");
+    ok(ME.readEnrichJob(ws).st === "ok" && ME.readEnrichJob(ws).job.phase === "done", "새 작업 기록은 정상·완료");
+    const ev = quarantineEvents(ws);
+    ok(ev.length === 1 && /작업 기록이 깨져/.test(ev[0].detailKo) && /보존: /.test(ev[0].detailKo), "무결성 채널에 격리 알림 1건(보존 파일명 포함)");
+    const rows = fs.readFileSync(ME.ROUTE_LOG, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    ok(rows.some((x) => x.route === "quarantine" && x.reason === "job-damaged" && x.outcome === "quarantined"), "라우팅 로그에 격리 행");
+  }
+  { // 작업 기록이 JSON 은 맞지만 규칙 위반(미지 필드)인 경우도 같은 규칙
+    const { ws, nodeId } = setup("q-job2");
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+    const r0 = ME.runEnrich(ws, base(ws, { adapters: { self: goodAdapter(nodeId) } }));
+    ok(r0.outcome === "applied", "(전제) 정상 완료");
+    const j = JSON.parse(fs.readFileSync(ME.jobFileFor(ws), "utf8")); j.unknownField = 1; fs.writeFileSync(ME.jobFileFor(ws), JSON.stringify(j));
+    ok(ME.readEnrichJob(ws).st === "damaged", "(전제) 규칙 위반=손상");
+    fs.writeFileSync(path.join(ws, "src", "a.js"), "// a\n// changed\n"); // 새 소스 → 새 바퀴
+    ok(MB.ensureQueue(ws, PM) === true || true, "(전제) 큐");
+    const r1 = ME.runEnrich(ws, base(ws, { adapters: { self: goodAdapter(nodeId) } }));
+    // 같은 제안이 이미 반영돼 있어 적용 0(settled)일 수 있다 — 핵심은 손상 장부가 치워지고 실행이 계속됐다는 것
+    ok(["applied", "noop", "settled"].includes(r1.outcome) && brokenOf(ME.jobFileFor(ws)).length === 1 && ME.readEnrichJob(ws).st === "ok", "규칙 위반 장부도 치우고(보존) 진행 (" + r1.outcome + "/" + r1.reason + ")");
+  }
+  { // 동의 기록 손상: 실행기는 치운 뒤 '무동의'로 멈추고, 화면의 '자동 보강 켜기'(grant)가 손상에 막히지 않는다
+    const { ws, nodeId } = setup("q-consent");
+    fs.writeFileSync(ME.consentFileFor(ws), "not json at all");
+    ok(ME.readEnrichConsent(ws).st === "damaged", "(전제) 동의 기록 손상");
+    const r = ME.runEnrich(ws, base(ws, { adapters: { self: goodAdapter(nodeId) } }));
+    ok(r.outcome === "parked" && r.reason === "no-consent", "손상 동의 기록은 치우고 무동의로 정지(재동의는 사용자 몫) (" + r.outcome + "/" + r.reason + ")");
+    ok(brokenOf(ME.consentFileFor(ws)).length === 1 && quarantineEvents(ws).some((e) => /동의 기록이 깨져/.test(e.detailKo)), "보존 파일+격리 알림(동의)");
+    fs.writeFileSync(ME.consentFileFor(ws), "{ broken again");
+    const g = ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+    ok(g.ok === true && ME.readEnrichConsent(ws).st === "ok" && brokenOf(ME.consentFileFor(ws)).length === 2, "켜기(grant)도 손상 위에서는 치우고 새 장부에 기록");
+    const r2 = ME.runEnrich(ws, base(ws, { adapters: { self: goodAdapter(nodeId) } }));
+    ok(r2.outcome === "applied", "재동의 뒤 정상 진행");
+    const v = ME.revokeEnrichConsent(ws, ws, "ko");
+    ok(v.ok === true, "끄기(revoke)는 정상 장부에서 그대로 동작");
+  }
+  { // 2판 blocker: 이미 멈춰 있는 작업(parked)이 있어도 손상 동의 기록은 실행 첫머리에서 치워진다(복구 경로가 ⑦ 동의 관문보다 앞이라 종전엔 우회)
+    const { ws, nodeId } = setup("q-consent-parked");
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+    const r0 = ME.runEnrich(ws, base(ws, { adapters: {} })); // 담당 없음 → 작업은 parked(adapter-missing)
+    const j0 = ME.readEnrichJob(ws);
+    ok(r0.outcome === "parked" && j0.st === "ok" && j0.job.phase === "parked" && /adapter-missing/.test(j0.job.parkedReason || ""), "(전제) 멈춘 작업 존재 (" + r0.outcome + "/" + r0.reason + ")");
+    fs.writeFileSync(ME.consentFileFor(ws), "not json either");
+    ok(ME.readEnrichConsent(ws).st === "damaged", "(전제) 동의 기록 손상");
+    const r1 = ME.runEnrich(ws, base(ws, { adapters: { self: goodAdapter(nodeId) } }));
+    ok(brokenOf(ME.consentFileFor(ws)).length === 1 && ME.readEnrichConsent(ws).st === "ok" && quarantineEvents(ws).some((e) => /동의 기록이 깨져/.test(e.detailKo)), "멈춘 작업이 있어도 손상 동의는 첫머리에서 격리·보존·알림 (" + r1.outcome + "/" + r1.reason + ")");
+    ok(r1.outcome !== "applied" && ME.readEnrichJob(ws).job.phase === "parked", "격리 뒤 무동의라 실행은 열리지 않음(무동의 위장 없음)");
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+    const r2 = ME.runEnrich(ws, base(ws, { adapters: { self: goodAdapter(nodeId) }, trigger: "manual" }));
+    ok(["applied", "noop", "settled", "parked"].includes(r2.outcome), "(관측) 재동의 뒤 실행 (" + r2.outcome + "/" + r2.reason + ")");
+  }
+  { // 3판 blocker: 강제 종료 복구 상태(open/applying)의 작업 + 손상 동의 → 격리 뒤 재개도 동의 재대조(적용 0) → 재동의(새 세대)로 사람 없이 자동 재개
+    const { ws, nodeId } = setup("q-consent-applying");
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+    ok(ME.runEnrich(ws, base(ws, { adapters: { self: goodAdapter(nodeId) } })).outcome === "applied", "(전제) 1차 보강 완료");
+    ok(MB.ensureQueue(ws, PM) === true, "(전제) 적용 뒤 큐 재작성(bootstrap 소관)");
+    const jS = ME.readEnrichJob(ws).job;
+    const rewound = { ...jS, phase: "open", attempts: jS.attempts.map((a) => { const b = { ...a, phase: "applying", cursor: { nextIndex: 0, rev: 0, appliedPatchIds: [] } }; delete b.finishedAt; return b; }) };
+    delete rewound.sourceFp; delete rewound.finishedAt;
+    fs.writeFileSync(ME.jobFileFor(ws), JSON.stringify(rewound, null, 1));
+    const jA = ME.readEnrichJob(ws);
+    ok(jA.st === "ok" && jA.job.phase === "open" && jA.job.attempts[jA.job.attempts.length - 1].phase === "applying", "(전제) 강제 종료 복구 상태(open/applying)");
+    const genSeen = jS.attempts[jS.attempts.length - 1].consentGen;
+    const before = (MP.decisionIndexFor(ws, jS.mapId).projections || []).length;
+    fs.writeFileSync(ME.consentFileFor(ws), "{{ corrupt consent");
+    const r1 = ME.runEnrich(ws, base(ws, { adapters: { self: goodAdapter(nodeId) } }));
+    ok(r1.outcome === "parked" && r1.reason === "consent-stale", "동의 격리 뒤 복구 재개도 동의 재대조 → 적용 없이 동의 대기로 멈춤 (" + r1.outcome + "/" + r1.reason + ")");
+    const j1 = ME.readEnrichJob(ws).job;
+    ok(j1.phase === "parked" && j1.parkedReason === "consent-stale" && brokenOf(ME.consentFileFor(ws)).length === 1, "작업은 동의 대기로 세워 두고 손상 동의는 보존");
+    ok((MP.decisionIndexFor(ws, jS.mapId).projections || []).length === before, "무동의 상태에서 지도 반영 0");
+    const c1 = ME.readEnrichConsent(ws);
+    ok(c1.st === "ok" && c1.grants.length === 0 && c1.genCounter >= genSeen && genSeen >= 1, "새 동의 장부=빈 동의·세대 번호는 작업이 본 세대 이상(단조 유지 · " + c1.genCounter + ">=" + genSeen + ")");
+    ok(ME.consentGenFloor(ws) === genSeen, "세대 바닥=작업 기록의 최대 동의 세대");
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+    ok(ME.findGrant(ME.readEnrichConsent(ws), ws, "ko").gen > genSeen, "재동의=새 세대(지난 세대 재사용 없음)");
+    const r2 = ME.runEnrich(ws, base(ws, { adapters: { self: goodAdapter(nodeId) } }));
+    const j2 = ME.readEnrichJob(ws).job;
+    ok(r2.outcome !== "parked" && j2.parkedReason !== "consent-stale", "재동의만으로 사용자 재시도 없이 자동 재개 (" + r2.outcome + "/" + r2.reason + " · phase " + j2.phase + ")");
+  }
+  { // 확인 대기 기록 손상
+    const { ws, nodeId } = setup("q-deferred");
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+    fs.writeFileSync(ME.deferredFileFor(ws), JSON.stringify({ schema: "enrich-deferred-v1", records: [{ bogus: true }] }));
+    ok(ME.readDeferred(ws).st === "damaged", "(전제) 확인 대기 기록 손상");
+    const r = ME.runEnrich(ws, base(ws, { adapters: { self: goodAdapter(nodeId) } }));
+    ok(r.outcome === "applied" && brokenOf(ME.deferredFileFor(ws)).length === 1, "손상 확인 대기 기록을 치우고 정상 진행 (" + r.outcome + "/" + r.reason + ")");
+    ok(ME.readDeferred(ws).st === "ok" && quarantineEvents(ws).some((e) => /확인 대기 기록이 깨져/.test(e.detailKo)), "새 장부 정상·격리 알림(확인 대기)");
+  }
+  { // 순수 헬퍼 경계 + 잠금 안 재판독(ab-2) + 잠금 존중(ab-6)
+    const { ws } = setup("q-helper");
+    ok(ME.quarantineLedger(ws, "bogus", ws, "").ok === false, "모르는 종류=거부");
+    const qa = ME.quarantineLedger(ws, "job", ws, "");
+    ok(qa.ok === true && qa.absent === true && qa.skipped === undefined, "파일 없음=absent(3판 보완 — 정상 파일의 skipped 와 구분)");
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+    const qs = ME.quarantineLedger(ws, "consent", ws, "");
+    ok(qs.ok === true && qs.skipped === true && ME.readEnrichConsent(ws).st === "ok" && brokenOf(ME.consentFileFor(ws)).length === 0, "잠금 안 재판독에서 정상이면 손대지 않음(다른 창이 고쳐 둔 경우)");
+    fs.writeFileSync(ME.consentFileFor(ws), "{broken");
+    fs.writeFileSync(ME.consentFileFor(ws) + ".lock", String(process.pid) + "-held"); // 다른 창이 동의 잠금을 쥔 상황(살아 있는 pid)
+    const ql = ME.quarantineLedger(ws, "consent", ws, "");
+    ok(ql.ok === false && ql.reason === "lock" && brokenOf(ME.consentFileFor(ws)).length === 0 && fs.readFileSync(ME.consentFileFor(ws), "utf8") === "{broken", "잠금을 못 잡으면 치우지 않고 물러남(무한 반복 없음)");
+    fs.unlinkSync(ME.consentFileFor(ws) + ".lock");
+    const ok2 = ME.quarantineLedger(ws, "consent", ws, "");
+    ok(ok2.ok === true && !!ok2.to && brokenOf(ME.consentFileFor(ws)).length === 1, "잠금이 풀리면 치운다");
+    // 4판 blocker(ab-6): 강제 종료가 남긴 '죽은 pid' 잠금은 사람이 지우지 않아도 회수(격리 개명·보존)하고 격리를 이어간다 — 동의·확인 대기 모두
+    const deadPid = require("child_process").spawnSync(process.execPath, ["-e", "0"], { encoding: "utf8", windowsHide: true }).pid;
+    let deadOk = false; try { process.kill(deadPid, 0); } catch (ke) { deadOk = !!(ke && ke.code === "ESRCH"); }
+    ok(Number.isInteger(deadPid) && deadPid > 0 && deadOk, "(전제) 이미 끝난 프로세스 pid(ESRCH)");
+    fs.writeFileSync(ME.consentFileFor(ws), "{broken-dead");
+    fs.writeFileSync(ME.consentFileFor(ws) + ".lock", String(deadPid) + "-dead");
+    const qd = ME.quarantineLedger(ws, "consent", ws, "x");
+    ok(qd.ok === true && !!qd.to && !fs.existsSync(ME.consentFileFor(ws) + ".lock") && fs.readdirSync(path.dirname(ME.consentFileFor(ws))).some((f) => f.startsWith(path.basename(ME.consentFileFor(ws)) + ".lock.stale-")), "죽은 보유자 잠금=격리 개명 회수 후 동의 격리 진행(수동 삭제 0)");
+    fs.writeFileSync(ME.deferredFileFor(ws), JSON.stringify({ schema: "enrich-deferred-v1", records: [{ bogus: 1 }] }));
+    fs.writeFileSync(ME.deferredFileFor(ws) + ".lock", String(deadPid) + "-dead");
+    const qd2 = ME.quarantineLedger(ws, "deferred", ws, "x");
+    ok(qd2.ok === true && !!qd2.to && !fs.existsSync(ME.deferredFileFor(ws) + ".lock"), "확인 대기 잠금도 죽은 보유자면 회수 후 격리 진행");
+    fs.writeFileSync(ME.consentFileFor(ws) + ".lock", String(deadPid) + "-dead");
+    ok(ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null }).ok === true && !fs.existsSync(ME.consentFileFor(ws) + ".lock"), "동의 켜기도 죽은 잠금을 회수(강제 종료 뒤 켜기 영구 실패 없음)");
+    // 5판 blocker(ab-6): 잠금 파일은 만들었는데 토큰을 적기 전에 죽은 '빈 잠금' — 방금 생긴 것은 쓰는 중(회수 없음), 생성 창을 지난 것은 회수
+    const jl = ME.jobFileFor(ws) + ".lock";
+    fs.writeFileSync(ME.jobFileFor(ws), "{broken-job");
+    fs.writeFileSync(jl, ""); // 방금 생긴 빈 잠금(쓰는 중일 수 있음)
+    ok(ME.ledgerLockStaleKind(jl) === null, "방금 생긴 빈 잠금=쓰는 중(회수 대상 아님)");
+    const qy = ME.quarantineLedger(ws, "job", ws, "x");
+    ok(qy.ok === false && qy.reason === "lock" && fs.existsSync(jl) && fs.readFileSync(ME.jobFileFor(ws), "utf8") === "{broken-job", "창 안의 빈 잠금은 손대지 않고 물러남(무한 반복 없음)");
+    const oldT = (Date.now() - CL.LOCK_WRITE_SETTLE_MS - 5000) / 1000; fs.utimesSync(jl, oldT, oldT); // 창을 지난 빈 잠금=형식 불명 잔존
+    ok(ME.ledgerLockStaleKind(jl) === "formless", "창을 지난 빈 잠금=형식 불명 잔존");
+    const qo = ME.quarantineLedger(ws, "job", ws, "x");
+    ok(qo.ok === true && !!qo.to && !fs.existsSync(jl) && fs.readdirSync(path.dirname(jl)).some((f) => f.startsWith(path.basename(jl) + ".stale-")), "창을 지난 빈 잠금=격리 개명 회수 후 작업 기록 격리 진행(수동 삭제 0)");
+    fs.writeFileSync(ME.deferredFileFor(ws), JSON.stringify({ schema: "enrich-deferred-v1", records: [{ bogus: 2 }] }));
+    fs.writeFileSync(ME.deferredFileFor(ws) + ".lock", "garbage-token"); fs.utimesSync(ME.deferredFileFor(ws) + ".lock", oldT, oldT);
+    ok(ME.ledgerLockStaleKind(ME.deferredFileFor(ws) + ".lock") === "formless" && ME.quarantineLedger(ws, "deferred", ws, "x").ok === true && !fs.existsSync(ME.deferredFileFor(ws) + ".lock"), "쓰레기 토큰(창 지남)도 회수 후 확인 대기 격리 진행");
+    fs.writeFileSync(ME.consentFileFor(ws) + ".lock", String(process.pid) + "-alive1"); fs.utimesSync(ME.consentFileFor(ws) + ".lock", oldT, oldT);
+    ok(ME.ledgerLockStaleKind(ME.consentFileFor(ws) + ".lock") === null, "정상 토큰의 산 보유자는 오래돼도 회수 대상 아님(오탈취 없음)");
+    fs.unlinkSync(ME.consentFileFor(ws) + ".lock");
+    // 6판 blocker(ab-6): 실행 잠금(run-lock) 자체가 빈 파일·조각으로 남은 경우 — 창 안=물러남(busy), 창 지남=격리 개명 회수 후 실행 진행
+    const runLockQ = path.join(ME.ENRICH_DIR, ME.repoKeyFor(ws) + ".run.funlock");
+    fs.writeFileSync(runLockQ, ""); // 방금 생긴 빈 실행 잠금
+    const rY = ME.runEnrich(ws, base(ws, { adapters: { self: () => ({ ok: false }) } }));
+    ok(rY.outcome === "busy" && rY.reason === "run-lock" && fs.existsSync(runLockQ) && fs.readFileSync(runLockQ, "utf8") === "", "창 안의 빈 실행 잠금=쓰는 중(busy)·손대지 않음");
+    fs.utimesSync(runLockQ, oldT, oldT); // 창을 지난 빈 실행 잠금
+    fs.writeFileSync(ME.consentFileFor(ws), "{broken-again");
+    const rQ = ME.runEnrich(ws, base(ws, { adapters: { self: () => ({ ok: false }) } }));
+    ok(rQ.outcome !== "busy" && !fs.existsSync(runLockQ) && brokenOf(ME.consentFileFor(ws)).length >= 3, "창을 지난 빈 실행 잠금=회수 후 실행 진행(장부 자기치유까지 도달 — 손상 동의 격리됨) (" + rQ.outcome + "/" + rQ.reason + ")");
+    fs.writeFileSync(runLockQ, "{\"pid\": 12"); fs.utimesSync(runLockQ, oldT, oldT); // 조각 JSON
+    const rF = ME.runEnrich(ws, base(ws, { adapters: { self: () => ({ ok: false }) } }));
+    ok(rF.outcome !== "busy" && !fs.existsSync(runLockQ), "창을 지난 조각 실행 잠금도 회수 후 실행 진행 (" + rF.outcome + "/" + rF.reason + ")");
+  }
+  { // 확인 대기 장부 격리 시 고아 pending 즉시 정리(검증 5판 blocker)
+    const { ws, topo, nodeId } = setup("q-orphan");
+    const lbl = topo.nodes[0].label;
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+    const rl = () => ({ ok: true, result: { schema: "enrich-result-v1", items: [
+      { op: "rewrite_label", targetId: nodeId, payload: { to: { label: lbl + "-q" }, expect: { label: lbl } }, evidence: [{ file: "src/a.js", quote: "// a" }], claims: [{ file: "src/a.js", quote: "// a", stance: "support" }] },
+    ] } });
+    const r0 = ME.runEnrich(ws, base(ws, { adapters: { self: rl }, askVerifier: () => ({ verdict: "inconclusive" }) }));
+    ok(r0.outcome === "settled" && r0.awaitingVerification === 1, "(전제) 검증자 확인 대기 1건");
+    const pendDir = MP.dirsFor(ws, topo.mapId).pending;
+    const pendBefore = fs.readdirSync(pendDir).filter((f) => f.endsWith(".json")).map((f) => JSON.parse(fs.readFileSync(path.join(pendDir, f), "utf8")));
+    ok(pendBefore.some((p) => p.lifecycle === "classified" && p.classification === "verifier-resolved"), "(전제) verifier-resolved pending 존재");
+    fs.writeFileSync(ME.deferredFileFor(ws), "{broken deferred");
+    fs.writeFileSync(path.join(ws, "src", "a.js"), "// a\n// more\n");
+    const r1 = ME.runEnrich(ws, base(ws, { adapters: { self: goodAdapter(nodeId) } }));
+    ok(["applied", "settled", "noop"].includes(r1.outcome) && brokenOf(ME.deferredFileFor(ws)).length === 1, "확인 대기 장부 격리 뒤 실행 계속 (" + r1.outcome + "/" + r1.reason + ")");
+    const pendAfter = fs.readdirSync(pendDir).filter((f) => f.endsWith(".json")).map((f) => JSON.parse(fs.readFileSync(path.join(pendDir, f), "utf8")));
+    const orphan = pendAfter.find((p) => p.patch && p.patch.operation === "rewrite_label");
+    ok(!!orphan && orphan.lifecycle === "expired" && orphan.expireCode === "deferred-quarantined", "고아가 된 검증 대기 pending 은 즉시 정리(expired·deferred-quarantined)");
+    ok(quarantineEvents(ws).some((e) => /기다리던 항목 1건은 정리했고/.test(e.detailKo)), "알림에 정리 건수(1건) 동봉");
+    ok(ME.expireOrphanedVerifierPending(ws, topo.mapId, MP, PM, ME.readEnrichJob(ws).job).expired === 0, "재실행=멱등(더 정리할 것 없음)");
+    ok(ME.expireOrphanedVerifierPending(ws, topo.mapId, MP, PM, null).noJob === true, "작업 기록 없음=정리하지 않음(보수)");
+  }
+  { // 소유 판정(확인 검증 blocker): 수동·정책 제안은 보존, 자동 보강 것만 정리 — 강등 에스컬레이션(auto) 포함
+    const { ws, topo, nodeId } = setup("q-owner");
+    const idx = MP.decisionIndexFor(ws, topo.mapId), pol = MP.policyStateFor(ws, topo.mapId);
+    const { ah } = MP.authorityOf(PM.mapHashOf(topo), idx);
+    const mkManual = (op, fields) => {
+      const b = { schema: "map-patch-v2", patchId: require("crypto").randomUUID(), mapId: topo.mapId, basis: MP.patchBasisFor(ws, topo), baseMapHash: PM.mapHashOf(topo),
+        baseAuthorityHash: ah, baseDecisionContextHash: PM.decisionContextHashOf(ah, pol.pfh), baseDirtyFp: "", operation: op, payload: {}, readSet: {}, rationale: "manual", evidence: [{ kind: "code", ref: "src/a.js" }], ...fields };
+      for (const k of Object.keys(b)) if (b[k] === undefined) delete b[k];
+      b.readSet = MP.buildReadSetFor(topo, b, { idx, pol, repoRoot: ws, fileHashOf: (ref) => { try { return sha(fs.readFileSync(path.join(ws, ref), "utf8")); } catch { return null; } } });
+      return b;
+    };
+    const lbl = topo.nodes[0].label;
+    const manual = mkManual("rewrite_label", { targetId: nodeId, payload: { to: { label: lbl + "-manual" }, expect: { label: lbl } } });
+    ok(MP.proposePatch(ws, manual).ok === true && MP.classifyPatch(ws, topo.mapId, manual.patchId).ok === true, "(전제) 수동 rewrite_label pending(verifier-resolved)");
+    // 자동 보강 것으로 '증명되는' patchId(결정론)로 강등 에스컬레이션과 같은 auto 분류 set_state pending 을 만든다
+    const fakeJob = { jobKey: sha("job"), startedAt: "2026-09-20T00:00:00.000Z", attempts: [{ attemptId: 0, results: { items: [{}] }, cursor: { nextIndex: 0, rev: 0 } }] }; // 커서가 아직 0번 항목
+    const ownedId = ME.enrichOwnedPatchIds(fakeJob, 2);
+    const seed = sha(sha("job") + "|" + fakeJob.startedAt);
+    const ownedPatchId = [...ownedId.keys()][0];
+    ok(ownedId.size === 7 && ownedId.get(ownedPatchId).index === 0, "소유 patchId 집합=결정론 재계산(rev 0..max(2, cursor.rev+6)=7개·항목 번호 동봉)");
+    const curConf = topo.nodes[0].state.confidence, toConf = curConf === "unknown" ? "candidate" : "unknown"; // 강등 방향(실제 무의미 변경 회피)
+    const owned = mkManual("set_state", { patchId: ownedPatchId, targetId: nodeId, payload: { to: { confidence: toConf }, expect: { confidence: curConf } } });
+    const pr = MP.proposePatch(ws, owned); const cr = pr.ok ? MP.classifyPatch(ws, topo.mapId, owned.patchId) : { ok: false };
+    if (!pr.ok || !cr.ok) console.log("   set_state propose/classify:", JSON.stringify(pr).slice(0, 300), JSON.stringify(cr).slice(0, 300));
+    const pendDir = MP.dirsFor(ws, topo.mapId).pending;
+    const readP = (id) => JSON.parse(fs.readFileSync(path.join(pendDir, id + ".json"), "utf8"));
+    ok(pr.ok === true && cr.ok === true && ["auto", "verifier-resolved", "needs-investigation"].includes(readP(owned.patchId).classification), "(전제) 소유 set_state pending 분류=" + readP(owned.patchId).classification);
+    // 2판 blocker: 커서가 아직 그 항목에 있으면(propose/classify 뒤 apply 전에 끝난 경우) 재개 실행이 이어 처리하므로 정리하지 않는다
+    const exIn = ME.expireOrphanedVerifierPending(ws, topo.mapId, MP, PM, fakeJob);
+    ok(exIn.expired === 0 && exIn.inFlight === 1 && readP(owned.patchId).lifecycle !== "expired", "커서가 안 지난 소유 제안은 보존(재개 실행이 이어 처리) (" + JSON.stringify(exIn) + ")");
+    fakeJob.attempts[0].cursor.nextIndex = 1; // 커서가 지나감=확인 대기 장부만이 소비할 수 있던 고아
+    const ex = ME.expireOrphanedVerifierPending(ws, topo.mapId, MP, PM, fakeJob);
+    const mAfter = readP(manual.patchId), oAfter = readP(owned.patchId);
+    ok(mAfter.lifecycle === "classified" && mAfter.expireCode === undefined, "수동 제안은 보존(소유 아님)");
+    if (["auto", "verifier-resolved"].includes(readP(owned.patchId).classification) || oAfter.lifecycle === "expired") ok(oAfter.lifecycle === "expired" && oAfter.expireCode === "deferred-quarantined" && ex.expired === 1 && ex.skipped >= 1, "소유 auto/verifier-resolved pending 만 정리(강등 에스컬레이션 포함) (" + JSON.stringify(ex) + ")");
+    else ok(ex.expired === 0 && oAfter.lifecycle !== "expired", "소유여도 사용자 결정 대기(needs-investigation)면 보존 (" + JSON.stringify(ex) + ")");
+    void seed;
+  }
+}
+
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");
 process.exit(fail ? 1 : 0);

@@ -63,7 +63,10 @@ console.log("[1] 동의 세대 — ws×slot upsert·타 레코드 보존(ab-2)·
   ok(ME.readEnrichConsent(repo).st === "damaged", "grant.gen>genCounter=damaged(단조 불변식 fail-closed)");
   fs.writeFileSync(ME.consentFileFor(repo), "{corrupt");
   ok(ME.readEnrichConsent(repo).st === "damaged", "손상=damaged(fail-closed — 무동의 위장 금지)");
-  ok(ME.grantEnrichConsent(repo, { ws: "X", slot: "ko", selfAuto: true, paidMode: null }).ok === false, "손상 위 기록 금지(수동 복구 소관)");
+  // D-2026-09-20-enrich-ledger-quarantine: 손상 위에 덮어쓰지 않는 규칙은 유지하되, 깨진 파일은 옆으로 치우고(보존) 새 장부에 기록한다(자기치유)
+  const gq = ME.grantEnrichConsent(repo, { ws: "X", slot: "ko", selfAuto: true, paidMode: null });
+  const brokenQ = fs.readdirSync(path.dirname(ME.consentFileFor(repo))).filter((f) => f.startsWith(path.basename(ME.consentFileFor(repo)) + ".broken-"));
+  ok(gq.ok === true && ME.readEnrichConsent(repo).st === "ok" && brokenQ.length === 1 && fs.readFileSync(path.join(path.dirname(ME.consentFileFor(repo)), brokenQ[0]), "utf8") === "{corrupt", "손상 위 덮어쓰기 금지 — 치우고(보존) 새 장부에 기록");
 }
 
 console.log("[2] 작업 장부 — strict 판독·RMW·자기 산출 strict·손상 fail-closed");

@@ -693,9 +693,15 @@ function maybeSpawnEnrichExt(ws: string | null, trigger: string): void {
     if (!fs.existsSync(MB9.queueFileFor(repo9))) return; // 큐 없음=발동 대상 아님
     const lang = loadLangExt();
     const mode9 = (bridgeLib() as any).mapModeView(ws).mode;
-    const g9 = ME9.findGrant(ME9.readEnrichConsent(repo9), ws, lang);
-    const eligible = mode9 === "self" ? !!(g9 && g9.selfAuto) : !!(g9 && g9.paidMode === mode9);
-    if (!eligible) return; // 동의 없음=발동 안 함(실행기도 park하지만 spawn 자체를 아낌)
+    // 동의 게이트(spawn 절약)는 '이 창의 판독이 믿을 만할 때'만 — 동의 기록을 못 읽거나(damaged) 이 창이 옛 브릿지 판을 캐시로
+    // 읽고 있으면(bridgeStale) 판단을 실행기(설치본 최신 판)에게 넘긴다. 실행기가 손상 장부를 치우고(자기치유) 무동의면 스스로 park 한다.
+    const c9 = ME9.readEnrichConsent(repo9);
+    const stale9 = bridgeStaleView().stale;
+    if (c9.st === "ok" && !stale9) {
+      const g9 = ME9.findGrant(c9, ws, lang);
+      const eligible = mode9 === "self" ? !!(g9 && g9.selfAuto) : !!(g9 && g9.paidMode === mode9);
+      if (!eligible) return; // 동의 없음=발동 안 함(실행기도 park하지만 spawn 자체를 아낌)
+    }
     const jr9 = ME9.readEnrichJob(repo9);
     if (jr9.st === "ok" && (jr9.job.phase === "parked" || jr9.job.phase === "done")) { /* done=수렴은 실행기 판정·parked=재시도 버튼만 — 단 done은 소스 변경 재보강 판정이 실행기 소관이라 spawn 허용 */ }
     // parked 차단은 '같은 입력'에만 걸려야 한다(사용자 실보고 2026-08-04 — 자동화 철학 위배):
@@ -8597,7 +8603,8 @@ class Dashboard {
         const nMissing = warnEvs.filter(function(e){return e.kind==="verdict-missing";}).length; // 판정 표지 누락(통과 아님과 구분)
         const nDrift = warnEvs.filter(function(e){return e.kind==="brain-drift";}).length; // 두뇌 설정(모델/추론) 어긋남 — 검증과 별개 라벨
         const nMachine = warnEvs.filter(function(e){return e.kind==="machine-verdict";}).length; // P-12 2c 기계 판독 강등·정정 — 판정 계열(근거 의심과 구분)
-        const nEvid = warnEvs.length - nVerdict - nMissing - nDrift - nMachine; // 근거(evidence-*) 계열
+        const nEnrich = warnEvs.filter(function(e){return e.kind==="enrich-parked"||e.kind==="enrich-quarantined";}).length; // 자동 보강 알림(멈춤·장부 격리) — 근거 의심과 구분
+        const nEvid = warnEvs.length - nVerdict - nMissing - nDrift - nMachine - nEnrich; // 근거(evidence-*) 계열
         const errParts = [];
         if (nFail) errParts.push(T("검증 실패 "+nFail+"건","verify failed "+nFail)); // 빨강 — Codex 결론이 통과 아님(실패)
         if (nSession) errParts.push(T("Codex 세션 없음 "+nSession+"건","no Codex session "+nSession)); // 빨강 — 연결된 세션 없음(연결되면 자동 사라짐·확인함으론 안 사라짐)
@@ -8608,6 +8615,7 @@ class Dashboard {
         if (nMissing) warnParts.push(T("판정 표지 없음 "+nMissing+"건","no verdict line "+nMissing)); // 마지막 '검증:' 줄 없음 → 색 표시 빔
         if (nMachine) warnParts.push(T("기계 판독 강등·정정 "+nMachine+"건","machine reading demoted/corrected "+nMachine)); // 지적 블록↔판정 불일치(근거 의심 아님 — 2차 [주의])
         if (nEvid) warnParts.push(T("근거 의심 "+nEvid+"건","evidence doubt "+nEvid)); // 인용 근거가 파일/라인과 안 맞음
+        if (nEnrich) warnParts.push(T("자동 보강 알림 "+nEnrich+"건","auto-enrich notices "+nEnrich)); // 멈춤·장부 격리 등(대시보드 '자동 보강' 줄 참조)
         if (nDrift) warnParts.push(T("두뇌 설정 어긋남 "+nDrift+"건","brain setting drift "+nDrift)); // 모델/추론 계열 불일치(설정 미적용 가능 — 검증과 무관)
         const errStr = errParts.join(" · ");
         const warnStr = warnParts.join(" · ");
@@ -9750,13 +9758,15 @@ export function activate(context: vscode.ExtensionContext): void {
       const nMissing = warns.filter((e) => e.kind === "verdict-missing").length; // 표지 누락 — '통과 아님'과 다름
       const nDrift = warns.filter((e) => e.kind === "brain-drift").length; // 두뇌 설정 어긋남 — 검증 근거와 무관(배너와 동일 분리)
       const nMachine = warns.filter((e) => e.kind === "machine-verdict").length; // P-12 2c 기계 판독 강등·정정 — 판정 계열(근거 의심 오분류 방지 — 2차 [주의])
-      const nEvid = warns.length - nVerdict - nMissing - nDrift - nMachine;
-      const kinds = [nVerdict > 0, nMissing > 0, nEvid > 0, nDrift > 0, nMachine > 0].filter(Boolean).length;
+      const nEnrich = warns.filter((e) => e.kind === "enrich-parked" || e.kind === "enrich-quarantined").length; // 자동 보강 알림 — 근거 의심과 구분(배너와 동일 분리)
+      const nEvid = warns.length - nVerdict - nMissing - nDrift - nMachine - nEnrich;
+      const kinds = [nVerdict > 0, nMissing > 0, nEvid > 0, nDrift > 0, nMachine > 0, nEnrich > 0].filter(Boolean).length;
       const label = kinds > 1 ? tE("Codex 주의","Codex warnings")
                   : nVerdict ? tE("Codex 보류·불가","Codex hold/unable")
                   : nMissing ? tE("Codex 표지 없음","Codex no verdict line")
                   : nMachine ? tE("기계 판독 강등·정정","machine reading demoted/corrected")
                   : nDrift ? tE("두뇌 설정 어긋남","brain setting drift")
+                  : nEnrich ? tE("자동 보강 알림","auto-enrich notice")
                   : tE("Codex 근거 의심","Codex evidence doubt");
       const parts: string[] = [];
       if (nVerdict) parts.push(tE(`보류·불가 ${nVerdict}건`,`hold/unable ${nVerdict}`));

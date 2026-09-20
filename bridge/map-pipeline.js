@@ -501,10 +501,10 @@ function sweepReclassifyNonPolicyIntentChoice(repo, mapId) {
 // (recover-first — 적용 중 pending 불가침·claim~map잠금 사이에 끼어드는 8차 재현 경로 차단) /
 // resolved|resolved-noop=already-applied 거부(적용 완료 불변) / 이미 expired=idempotent 성공 /
 // 부재·opHash 불일치=conflict 거부(다른 주체 관여 — 직접 삭제로 증명 경계를 우회하지 않는다).
-const EXPIRE_REQUEST_CODES = new Set(["superseded", "user-declined", "policy-declined"]);
+const EXPIRE_REQUEST_CODES = new Set(["superseded", "user-declined", "policy-declined", "deferred-quarantined"]); // deferred-quarantined: 자동 보강 확인 대기 장부 격리로 고아가 된 검증 대기 pending 정리(D-2026-09-20)
 function expirePendingPatch(repo, mapId, patchId, expectedOpHash, expireCode) {
   const code = expireCode === undefined ? "superseded" : expireCode;
-  if (!EXPIRE_REQUEST_CODES.has(code)) return { ok: false, reason: "invalid-code", error: "expireCode 허용값 아님(superseded|user-declined|policy-declined)" };
+  if (!EXPIRE_REQUEST_CODES.has(code)) return { ok: false, reason: "invalid-code", error: "expireCode 허용값 아님(superseded|user-declined|policy-declined|deferred-quarantined)" };
   const w = withNsLock(repo, mapId, () => {
     const f = pendingFileFor(repo, mapId, patchId);
     const pr = readJson3(f);
@@ -518,7 +518,8 @@ function expirePendingPatch(repo, mapId, patchId, expectedOpHash, expireCode) {
     if (rec.lifecycle !== "proposed" && rec.lifecycle !== "classified") return { ok: false, reason: "conflict", error: "미지 lifecycle(" + String(rec.lifecycle) + ")" };
     const reason = code === "user-declined" ? "사용자가 이번 제안을 거부함(P9)"
       : code === "policy-declined" ? "사용자가 확정한 정책에 따라 거부함(P9)"
-        : "revision superseded(P8 rev 전진)";
+        : code === "deferred-quarantined" ? "확인 대기 기록 격리로 정리됨(자동 보강 자기치유 — 다음 실행에서 재제안 가능)"
+          : "revision superseded(P8 rev 전진)";
     const next = { ...rec, lifecycle: "expired", expiredAt: new Date().toISOString(), expireReason: reason, expireCode: code };
     return CL.atomicWrite(f, JSON.stringify(next, null, 1)) ? { ok: true, reason: "expired" } : { ok: false, reason: "conflict", error: "쓰기 실패" };
   });

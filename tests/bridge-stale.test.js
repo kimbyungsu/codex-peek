@@ -66,6 +66,9 @@ console.log("[4] 대시보드 배선(소스 검사) — 배너·다시 로드 �
   ok(!/동의 기록 손상 — 수동 복구 필요|확인 대기 기록 손상 — 수동 복구 필요|자동 실행이 멈춰 있어요|상태 파일 손상 — 재점검 필요/.test(src), "재로드 전 단정 문구 잔존 없음");
   // 마지막 판 blocker: 준비 상태(state-damaged)도 stale 이면 손상 단정 금지
   ok(/"state-damaged":\(\(d\.bridgeStale&&d\.bridgeStale\.stale\)\?/.test(src), "준비 상태 state-damaged 도 stale 두 갈래");
+  // 사용자 결정 2026-09-20: 실행기 spawn 게이트는 '판독이 믿을 만할 때'만 동의를 검사하고, damaged·stale 이면 실행기에게 넘긴다
+  ok(/const c9 = ME9\.readEnrichConsent\(repo9\);\s+const stale9 = bridgeStaleView\(\)\.stale;\s+if \(c9\.st === "ok" && !stale9\) \{/.test(src), "spawn 게이트: 동의 판독 ok·비stale 일 때만 동의 검사");
+  ok(src.includes('e.kind==="enrich-quarantined"') && src.includes('e.kind === "enrich-quarantined"'), "배너·상태바가 격리 알림을 자동 보강 알림으로 분류");
 }
 
 console.log("\n결과: " + pass + " 통과 / " + fail + " 실패");

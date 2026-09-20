@@ -86,10 +86,7 @@ function readEnrichConsent(repo) {
   }
   return { st: "ok", genCounter: d.genCounter, grants: d.grants };
 }
-function withConsentLock(repo, fn) {
-  try { fs.mkdirSync(ENRICH_DIR, { recursive: true }); } catch { /* 잠금이 실패 판정 */ }
-  return CL.withFileLockStrict(consentFileFor(repo) + ".lock", fn);
-}
+function withConsentLock(repo, fn) { return withLedgerLock(repo, consentFileFor(repo) + ".lock", fn); }
 // upsert — 반환 {ok, gen} / {ok:false, reason}
 function grantEnrichConsent(repo, opts) {
   const o = opts || {};
@@ -104,8 +101,13 @@ function grantEnrichConsent(repo, opts) {
   const selfAuto = o.selfAuto;
   const paidMode = o.paidMode;
   const w = withConsentLock(repo, () => {
-    const cur = readEnrichConsent(repo);
-    if (cur.st !== "ok") return { ok: false, reason: "consent-damaged" }; // 손상 위 기록 금지(수동 복구 소관)
+    let cur = readEnrichConsent(repo);
+    if (cur.st !== "ok") { // 손상 위 기록 금지 — 대신 치우고(보존) 새 장부에 쓴다(자기치유)
+      const qc = quarantineLedger(repo, "consent", ws, cur.detail, { locked: true });
+      if (!qc.ok) return { ok: false, reason: "consent-damaged" };
+      cur = readEnrichConsent(repo);
+      if (cur.st !== "ok") return { ok: false, reason: "consent-damaged" };
+    }
     const gen = cur.genCounter + 1;
     const grants = cur.grants.filter((g) => !(CL.normWs(g.ws) === ws && g.slot === slot));
     grants.push({ ws, slot, selfAuto, paidMode, gen, grantedAt: new Date().toISOString() });
@@ -120,8 +122,13 @@ function revokeEnrichConsent(repo, wsIn, slotIn) {
   if (slotIn !== "ko" && slotIn !== "en") return { ok: false, reason: "slot-invalid" };
   const slot = slotIn;
   const w = withConsentLock(repo, () => {
-    const cur = readEnrichConsent(repo);
-    if (cur.st !== "ok") return { ok: false, reason: "consent-damaged" };
+    let cur = readEnrichConsent(repo);
+    if (cur.st !== "ok") { // 끄기도 손상 위에서는 치우고 새 장부로(자기치유)
+      const qc = quarantineLedger(repo, "consent", ws, cur.detail, { locked: true });
+      if (!qc.ok) return { ok: false, reason: "consent-damaged" };
+      cur = readEnrichConsent(repo);
+      if (cur.st !== "ok") return { ok: false, reason: "consent-damaged" };
+    }
     const grants = cur.grants.filter((g) => !(CL.normWs(g.ws) === ws && g.slot === slot));
     const next = { schema: "enrich-consent-v1", genCounter: cur.genCounter, grants }; // genCounter 잔존(단조 유지)
     return CL.atomicWrite(consentFileFor(repo), JSON.stringify(next, null, 1)) ? { ok: true } : { ok: false, reason: "write-failed" };
@@ -354,14 +361,31 @@ function acquireEnrichRunLock(repo) {
     // 성공한 단일 복구자만 재취득하고, 이동해 온 파일이 자기가 판독한 그 잔재(pid·token 동일)인지 재검증.
     // 오탈취(그새 교체된 잠금)면 복원. bootstrap 잔재 회수 문법 동형.
     const held = readJson3(runLock);
-    if (!(held.st === "ok" && Number.isInteger(held.data.pid) && typeof held.data.token === "string")) return { ok: false, reason: "run-lock-damaged" }; // 손상=수동 소관(판정 없는 삭제 금지)
-    let dead = false;
-    try { process.kill(held.data.pid, 0); } catch (e) { dead = !!(e && e.code === "ESRCH"); }
-    if (!dead) return { ok: false, reason: "run-lock" };
+    const heldOk = held.st === "ok" && Number.isInteger(held.data.pid) && typeof held.data.token === "string";
+    let rawHeld = null; // 형식 불명 잔존의 판독 원문(이동 뒤 동일성 재검증용)
+    if (!heldOk) {
+      // 형식 불명(빈 파일·조각 JSON — wx 생성과 토큰 기록 사이 강제 종료의 실물 · 확인 검증 6판 blocker ab-6): 장부 잠금과 같은 규칙 —
+      // 생성 창(CL.LOCK_WRITE_SETTLE_MS) 안=쓰는 중(busy 로 물러남), 창을 지난 것만 잔존으로 보고 아래 격리 개명 회수. 판독 불가(권한 등)만 손상=수동 소관.
+      if (held.st === "absent") return { ok: false, reason: "run-lock" }; // 그새 해제됨=다음 획득이 정상 진행
+      if (held.st === "unreadable") return { ok: false, reason: "run-lock-damaged" };
+      let old9 = false;
+      try { old9 = (Date.now() - fs.statSync(runLock).mtimeMs) >= CL.LOCK_WRITE_SETTLE_MS; } catch { return { ok: false, reason: "run-lock" }; }
+      if (!old9) return { ok: false, reason: "run-lock" }; // 쓰는 중일 수 있음 — 회수 없음
+      try { rawHeld = fs.readFileSync(runLock, "utf8"); } catch { return { ok: false, reason: "run-lock" }; }
+    } else {
+      let dead = false;
+      try { process.kill(held.data.pid, 0); } catch (e) { dead = !!(e && e.code === "ESRCH"); }
+      if (!dead) return { ok: false, reason: "run-lock" };
+    }
     const grave = runLock + ".reclaim." + process.pid + "." + tok;
     try { fs.renameSync(runLock, grave); } catch { return { ok: false, reason: "run-lock" }; } // 이동 실패=타 복구자 선점
     const moved = readJson3(grave);
-    if (!(moved.st === "ok" && moved.data.pid === held.data.pid && moved.data.token === held.data.token)) {
+    let movedRaw9 = null;
+    if (!heldOk) { try { movedRaw9 = fs.readFileSync(grave, "utf8"); } catch { movedRaw9 = null; } }
+    const same9 = heldOk
+      ? (moved.st === "ok" && moved.data.pid === held.data.pid && moved.data.token === held.data.token)
+      : (movedRaw9 !== null && movedRaw9 === rawHeld); // 형식 불명=옮겨 온 원문이 판독한 그 잔존과 같은가(그새 산 잠금으로 교체됐으면 오탈취)
+    if (!same9) {
       // 오탈취(그새 교체된 산 잠금을 옮김) — '복원하지 않는다'(6차 재확인 blocker로 종전 복원 폐기):
       // 복원은 원 소유자가 그 사이 release를 끝냈으면 '주인 없는 산 pid 잠금'을 만들어 영구 정지를
       // 낳는다(살아있는 확장 호스트 pid는 사망 회수 불가). 대신 격리물만 남기고 물러난다 — 원 소유자는
@@ -384,15 +408,25 @@ function acquireEnrichRunLock(repo) {
 // 죽은 job-잠금 회수 — 반드시 run-lock '아래'에서만(기계 전역 단일 회수자 보장): runEnrich 안(이미 보유)
 // 이면 그대로, 밖(확장 UI 직접 호출 등)이면 위 검증된 절차로 잠깐 획득 후 회수·해제. 획득 실패=양보
 // (다음 tick의 run-lock 사망 회수가 잔존까지 자동 해소 — '영구 잔존' 계급 소멸).
+// 잔존 잠금 판정(확인 검증 5판 blocker ab-6로 '형식 불명' 추가): 정상 토큰(pid-난수)은 보유자 사망(ESRCH)일 때만 "dead" —
+// 빈 파일·조각·쓰레기(wx 생성→토큰 기록 사이 강제 종료의 실물은 빈 파일)는 생성 창(CL.LOCK_WRITE_SETTLE_MS — 그 안=쓰는 중)을
+// 지난 것만 "formless". 산 보유자·창 안·판독 불가=null(회수 없음). contract 잠금의 '방금 생긴 빈 잠금=재시도·지난 빈 잠금=형식 불명' 규칙과 동형.
+const LEDGER_LOCK_TOKEN_RE = /^\d+-[a-z0-9]+$/;
+function ledgerLockStaleKind(lp) {
+  let tok = null;
+  try { tok = String(fs.readFileSync(lp, "utf8")); } catch { return null; }
+  if (LEDGER_LOCK_TOKEN_RE.test(tok.trim())) {
+    const pid = parseInt(tok, 10);
+    try { process.kill(pid, 0); return null; } catch (ke) { return ke && ke.code === "ESRCH" ? "dead" : null; }
+  }
+  try { return (Date.now() - fs.statSync(lp).mtimeMs) >= CL.LOCK_WRITE_SETTLE_MS ? "formless" : null; } catch { return null; }
+}
 function reclaimDeadJobLock(repo, lp) {
   const rKey = repoKeyFor(repo);
   const doReclaim = () => {
     let tok = null;
     try { tok = fs.readFileSync(lp, "utf8"); } catch { return true; } // 이미 회수됨 → 정상 재획득 루프
-    const pid9 = parseInt(String(tok).split("-")[0], 10);
-    let alive9 = true;
-    try { if (pid9) process.kill(pid9, 0); } catch (ke) { alive9 = !(ke && ke.code === "ESRCH"); }
-    if (!pid9 || alive9) return false; // run-lock 아래 재판독=산 잠금(낡은 지식 오탈취 원천 소거)
+    if (!ledgerLockStaleKind(lp)) return false; // run-lock 아래 재판독=산 잠금·창 안의 빈 잠금(낡은 지식 오탈취 원천 소거)
     const stale9 = lp + ".stale-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
     try { fs.renameSync(lp, stale9); } catch { return false; }
     let moved9 = null;
@@ -404,21 +438,26 @@ function reclaimDeadJobLock(repo, lp) {
   if (!acq.ok) return false;
   try { return doReclaim(); } finally { acq.release(); }
 }
-function withJobLock(repo, fn) {
+// 보강 장부 잠금 공통(작업·동의·확인 대기 — 확인 검증 4판 blocker ab-6로 동의·확인 대기까지 확장):
+// 사망 확정(ESRCH) 잔존 잠금=격리 개명 후 1회 재획득. 커서 영속과 잠금 해제 '사이'에 프로세스가 죽으면
+// 잔존 잠금이 자동 재개를 영구 차단했다. 전역 잠금(withFileLockStrict)의 '죽은 보유자=즉시 실패' 계약은
+// 과거 검증에서 동결(lost-update 차단 — project-map 소관 계약)이라 뒤집지 않고, 자기치유가 계약인
+// '보강 장부' 경계에서만 회수한다 — 실행 잠금(run-lock) 사망 회수와 같은 관용구: 삭제가 아닌 개명(잔존물
+// 보존)·ESRCH 확정만(EPERM 등=보유 중 취급·pid 재사용=보수). 회수는 run-lock 아래 단일 회수자(reclaimDeadJobLock — 경로 인자라 장부 공통).
+function withLedgerLock(repo, lp, fn) {
   try { fs.mkdirSync(ENRICH_DIR, { recursive: true }); } catch { /* 잠금이 실패 판정 */ }
-  const lp = jobFileFor(repo) + ".lock";
-  // 사망 확정(ESRCH) 잔존 잠금=격리 개명 후 1회 재획득(확인 검증 blocker ab-6): 커서 영속과 잠금 해제
-  // '사이'에 프로세스가 죽으면 잔존 잠금이 자동 재개를 영구 차단했다. 전역 잠금(withFileLockStrict)의
-  // '죽은 보유자=즉시 실패' 계약은 과거 검증에서 동결(lost-update 차단 — project-map 소관 계약)이라
-  // 뒤집지 않고, 자기치유가 계약인 '보강 장부' 경계에서만 회수한다 — 실행 잠금(run-lock) 사망 회수와
-  // 같은 관용구: 삭제가 아닌 개명(잔존물 보존)·ESRCH 확정만(EPERM 등=보유 중 취급·pid 재사용=보수).
   for (let i = 0; i < 2; i++) {
     const r = CL.withFileLockStrict(lp, fn);
-    if (r.ok || !String(r.error || "").includes("dead-lock-holder")) return r;
+    if (r.ok) return r;
+    const err9 = String(r.error || "");
+    // 회수 후보: 죽은 보유자(전역 잠금이 ESRCH 로 확정) 또는 형식 불명 잔존(전역 잠금은 pid 를 못 읽어 lock-timeout 만 돌려준다 — 5판 blocker)
+    const reclaimable9 = err9.includes("dead-lock-holder") || (err9.includes("lock-timeout") && ledgerLockStaleKind(lp) === "formless");
+    if (!reclaimable9) return r;
     if (!reclaimDeadJobLock(repo, lp)) return r; // 회수 불가·타 회수자 활동 중=종전 실패 그대로(수동 안내 유지)
   }
   return CL.withFileLockStrict(lp, fn);
 }
+function withJobLock(repo, fn) { return withLedgerLock(repo, jobFileFor(repo) + ".lock", fn); }
 // RMW — mut(job|null)→job'(strict 재검증 후 기록·이형 산출=거부)
 function updateEnrichJob(repo, mut) {
   const w = withJobLock(repo, () => {
@@ -456,6 +495,109 @@ function notifyEnrichParked(wsLabel, reason) {
       detailEn: `Map auto-enrichment stopped (reason: ${reason}) — see the 'Auto-enrich' line in the dashboard for the cause and retry.`,
       detail: `지도 자동 보강이 멈췄습니다(사유: ${reason}) — 대시보드의 '자동 보강' 줄에서 원인과 다시 시도를 확인하세요.`,
     }, { supersedeSameKindWs: true });
+  } catch { /* 알림 실패가 실행기를 막지 않는다 */ }
+}
+// ── 진행 장부 자기치유(사용자 결정 2026-09-20 · D-2026-09-20-enrich-ledger-quarantine) ─────────────────────
+// 작업·동의·확인 대기 장부는 정본(지도)이 아니라 진행 기록이다. 깨져 있으면 사람 손을 기다리며 방치하지 않고 실행기가
+// 발견 즉시 옆으로 치우고(삭제 아님 — <파일>.broken-<시각>, 사고 추적 증거 보존·ab-5) 무결성 채널에 1건 남긴 뒤 새로 시작한다.
+// 실행기는 설치본 최신 판이므로 여기서의 damaged 는 '옛 판독기 오판'이 아니라 실제 판독 불가다(옛 판독기 문제는 확장 화면·게이트 쪽 — bridgeStale).
+const LEDGER_FILE_OF = { job: (repo) => jobFileFor(repo), consent: (repo) => consentFileFor(repo), deferred: (repo) => deferredFileFor(repo) };
+const LEDGER_READ_OF = { job: (repo) => readEnrichJob(repo), consent: (repo) => readEnrichConsent(repo), deferred: (repo) => readDeferred(repo) };
+function withDeferredLock(repo, fn) { return withLedgerLock(repo, deferredFileFor(repo) + ".lock", fn); }
+// opts.locked=true 는 호출자가 이미 그 장부의 잠금을 쥐고 있을 때(grant/revoke). opts.notify=false 는 호출자가 알림을 직접 낼 때(확인 대기 — 정리 건수 동봉).
+// 잠금 안에서 다시 읽어 '여전히 damaged' 일 때만 치운다 — 그 사이 다른 창이 정상 장부를 써 두었으면 손대지 않는다(검증 5판 blocker · ab-2).
+// 작업 기록이 본 동의 세대의 최댓값(없거나 판독 불가=0) — 동의 장부 격리 뒤 새 장부의 세대 바닥.
+function consentGenFloor(repo) {
+  const jr = readEnrichJob(repo);
+  let m = 0;
+  if (jr.st === "ok") for (const a of jr.job.attempts || []) if (a && Number.isInteger(a.consentGen) && a.consentGen > m) m = a.consentGen;
+  return m;
+}
+function quarantineLedger(repo, kind, wsLabel, detail, opts) {
+  const fileOf = LEDGER_FILE_OF[kind];
+  if (!fileOf) return { ok: false, reason: "kind" };
+  const file = fileOf(repo);
+  const body = () => {
+    const st = LEDGER_READ_OF[kind](repo);
+    if (st.st !== "damaged") return fs.existsSync(file) ? { ok: true, skipped: true } : { ok: true, absent: true }; // 정상=손대지 않음 · 없음=할 일 없음
+    const to = file + ".broken-" + new Date().toISOString().replace(/[:.]/g, "-");
+    try { fs.renameSync(file, to); } catch (e) { return { ok: false, reason: "rename-failed:" + String((e && e.code) || e).slice(0, 40) }; }
+    // 동의 장부(확인 검증 3판 후속): 세대 번호 단조 불변식은 장부가 교체돼도 유지한다 — 새 장부의 genCounter 를 작업 기록이 본 세대 이상으로
+    // 심어 재동의가 '새 세대'로 인식되게 한다(0에서 다시 세면 첫 재동의 gen 1 ≤ 지난 세대라 consent-stale 자동 재개 조건이 영원히 닫혀 사용자 재시도만 남는다).
+    let seeded = 0, seedFailed = false;
+    if (kind === "consent") {
+      seeded = consentGenFloor(repo);
+      if (seeded > 0 && !CL.atomicWrite(file, JSON.stringify({ schema: "enrich-consent-v1", genCounter: seeded, grants: [] }, null, 1))) seedFailed = true; // 실패=격리는 유지·재개는 수동 재시도로
+    }
+    if (!(opts && opts.notify === false)) notifyEnrichQuarantined(wsLabel, kind, path.basename(to), detail);
+    return { ok: true, to, ...(seeded > 0 ? { seeded } : {}), ...(seedFailed ? { seedFailed: true } : {}) };
+  };
+  if (opts && opts.locked) return body();
+  const w = kind === "job" ? withJobLock(repo, body) : kind === "consent" ? withConsentLock(repo, body) : withDeferredLock(repo, body);
+  if (!w.ok) return { ok: false, reason: "lock" };
+  return w.result;
+}
+// 확인 대기 장부를 치우면 그 장부만 알던 '검증자 확인 대기' pending 은 아무도 다시 찾지 못한다(스윕 불침·시간 경과로도 정리 안 됨 —
+// 검증 5판 blocker). 그래서 격리 직후 이 지도의 그런 pending(보강이 만드는 op 한정·표식 없는 것)을 즉시 정리한다(expired·deferred-quarantined).
+// 정리된 제안은 다음 실행에서 다시 제안될 수 있다.
+// 소유 판정(확인 검증 blocker): 자동 보강이 만든 pending 의 patchId 는 결정론(detPatchId(jobSeedOf(jobKey,startedAt), attemptId, index, rev))이라
+// 현재 작업 기록만으로 재계산할 수 있다 — 연산명·분류로 추정하면 수동(map-runtime propose/classify)·정책 위임 제안까지 만료시킨다.
+function enrichOwnedPatchIds(job, revMax) {
+  const out = new Map(); // patchId → { attemptId, index, rev }
+  if (!job || !job.jobKey || !job.startedAt || !Array.isArray(job.attempts)) return out;
+  const seed = jobSeedOf(job.jobKey, job.startedAt);
+  const rmax = Number.isInteger(revMax) ? revMax : 12;
+  for (const a of job.attempts) {
+    if (!a) continue;
+    const n = a.results && Array.isArray(a.results.items) ? a.results.items.length : 0;
+    const rTop = Math.max(rmax, (a.cursor && Number.isInteger(a.cursor.rev) ? a.cursor.rev : 0) + 6); // rev 는 재개마다 최대 5씩 오를 수 있어 현재 rev+6 까지 포함
+    for (let i = 0; i < n; i++) for (let rev = 0; rev <= rTop; rev++) out.set(detPatchId(seed, a.attemptId, i, rev), { attemptId: a.attemptId, index: i, rev });
+  }
+  return out;
+}
+// 정리 대상 = 소유가 증명된 pending ∧ lifecycle proposed|classified ∧ classification verifier-resolved|auto(강등 에스컬레이션은 auto 로 남아 있다)
+// ∧ 작업 커서가 이미 지나간 항목(index < cursor.nextIndex). 커서가 아직 그 항목에 있으면(propose/classify 뒤 apply 전 종료 등) 재개 실행이
+// 그 pending 을 그대로 이어 처리하므로 건드리지 않는다(2판 blocker — 검증자 호출이 없는 일반 auto 제안은 확인 대기 장부에 들어간 적이 없다).
+// 커서가 지나갔는데 아직 classified 인 것만 '확인 대기 장부만이 소비할 수 있던' 고아다. needs-investigation·intent-choice 등 사용자 결정 대기는 제외.
+// 작업 기록이 없으면 정리 0(보수).
+function expireOrphanedVerifierPending(repo, mapId, MP, PM, job) {
+  let expired = 0, failed = 0, skipped = 0, inFlight = 0;
+  const owned = enrichOwnedPatchIds(job);
+  if (!owned.size) return { expired, failed, skipped, inFlight, noJob: true };
+  const nextOf = new Map();
+  for (const a of job.attempts) if (a) nextOf.set(a.attemptId, a.cursor && Number.isInteger(a.cursor.nextIndex) ? a.cursor.nextIndex : 0);
+  try {
+    const d = MP.dirsFor(repo, mapId);
+    const names = fs.existsSync(d.pending) ? fs.readdirSync(d.pending).filter((f) => f.endsWith(".json")) : [];
+    for (const f of names) {
+      let rec = null;
+      try { rec = JSON.parse(fs.readFileSync(path.join(d.pending, f), "utf8")); } catch { continue; }
+      const own = rec && rec.patch ? owned.get(String(rec.patch.patchId)) : null;
+      if (!own) { skipped++; continue; }
+      if (rec.lifecycle !== "proposed" && rec.lifecycle !== "classified") continue;
+      if (rec.lifecycle === "classified" && rec.classification !== "verifier-resolved" && rec.classification !== "auto") continue; // 사용자 결정 대기 등 제외
+      if (own.index >= (nextOf.get(own.attemptId) || 0)) { inFlight++; continue; } // 재개 실행이 이어 처리할 항목
+      const r = MP.expirePendingPatch(repo, mapId, rec.patch.patchId, PM.opHashOf(rec.patch), "deferred-quarantined");
+      if (r && r.ok) expired++; else failed++;
+    }
+  } catch { /* 열거 실패=정리 0 — 알림에 그대로 적힌다 */ }
+  return { expired, failed, skipped, inFlight };
+}
+function notifyEnrichQuarantined(wsLabel, kind, keptName, detail, extra) {
+  try {
+    const wsLbl = String(wsLabel || "");
+    if (!wsLbl) return;
+    const ko = kind === "job"
+      ? `자동 보강 작업 기록이 깨져 있어 옆으로 치우고 새로 시작했어요(보존: ${keptName}).`
+      : kind === "consent"
+        ? `자동 보강 동의 기록이 깨져 있어 옆으로 치웠어요 — 대시보드에서 자동 보강을 다시 켜 주세요(보존: ${keptName}).`
+        : `자동 보강 확인 대기 기록이 깨져 있어 옆으로 치웠어요 — ${extra && extra.noJob ? "작업 기록이 없어 어느 제안이 이 장부 것인지 확인할 수 없어 정리하지 않았어요" : `기다리던 항목 ${extra && Number.isInteger(extra.expired) ? extra.expired : 0}건은 정리했고 다음 실행에서 다시 제안될 수 있어요${extra && extra.failed ? `(정리 실패 ${extra.failed}건)` : ""}`}(보존: ${keptName}).`;
+    const en = kind === "job"
+      ? `The auto-enrichment job ledger was corrupt; it was set aside and a fresh one starts (kept: ${keptName}).`
+      : kind === "consent"
+        ? `The auto-enrichment consent record was corrupt and was set aside — re-enable auto-enrichment in the dashboard (kept: ${keptName}).`
+        : `The auto-enrichment verification queue was corrupt and was set aside — ${extra && extra.noJob ? "no job ledger to prove which proposals belonged to it, so nothing was cleared" : `${extra && Number.isInteger(extra.expired) ? extra.expired : 0} waiting item(s) were cleared and may be proposed again on the next run${extra && extra.failed ? ` (${extra.failed} could not be cleared)` : ""}`} (kept: ${keptName}).`;
+    CL.appendIntegrityEvent({ ts: new Date().toISOString(), workspace: wsLbl, kind: "enrich-quarantined", severity: "warning", detailKo: ko, detailEn: en, detail: ko + (detail ? ` [${String(detail).slice(0, 80)}]` : "") }, { supersedeSameKindWs: true });
   } catch { /* 알림 실패가 실행기를 막지 않는다 */ }
 }
 function jobKeyOf(mapId, authorityHash, decisionContextHash) {
@@ -513,8 +655,7 @@ function readDeferred(repo) {
   const e = validateDeferred(r.data); return e ? { st: "damaged", detail: e } : { st: "ok", data: r.data };
 }
 function updateDeferred(repo, mut) {
-  try { fs.mkdirSync(ENRICH_DIR, { recursive: true }); } catch { /* lock reports failure */ }
-  const w = CL.withFileLockStrict(deferredFileFor(repo) + ".lock", () => {
+  const w = withDeferredLock(repo, () => {
     const cur = readDeferred(repo); if (cur.st !== "ok") return { ok: false, reason: "deferred-damaged" };
     const next = mut(cur.data); if (next === null) return { ok: true, unchanged: true, data: cur.data };
     const cutoff = Date.now() - DEFERRED_TERMINAL_KEEP_MS;
@@ -1172,6 +1313,24 @@ function runEnrich(repo, opts) {
   fenceBox.f = fence; // park 경로도 같은 소유 검증을 공유(9차)
   try {
     if (!fence()) return { outcome: "busy", reason: "run-lock-lost" }; // 2차 blocker⑧: 회수 경합 뒤 임계구역 소유 재검증
+    // 진행 장부 자기치유(D-2026-09-20-enrich-ledger-quarantine): 첫 장부 판독보다 먼저 — 작업·확인 대기 장부가 깨져 있으면
+    // 치우고(보존) 알린 뒤 새로 시작한다(사람 손을 기다리며 방치하지 않음). 이 뒤의 판독(startJob·recoverDeferredCalls·본체)은 새 장부를 본다.
+    // 동의 장부도 여기서(2판 blocker): open/parked 작업의 복구 경로(⑥ resumeJob·parked 분기)는 ⑦ 동의 관문보다 먼저 돌아
+    // 그 안의 동의 재대조가 damaged 를 consent-stale park 로만 남겼다 — 첫머리에서 치워야 사용자 동작 없이 자기치유된다.
+    for (const kind9 of ["job", "consent", "deferred"]) {
+      const st9 = LEDGER_READ_OF[kind9](repo);
+      if (st9.st !== "damaged") continue;
+      const q9 = quarantineLedger(repo, kind9, String(o.ws || repo), st9.detail, { notify: kind9 !== "deferred" });
+      if (!q9.ok) return park(null, kind9 + "-damaged", { detail: q9.reason }); // 잠금 실패 등=종전처럼 정지(무한 반복 없음)
+      if (q9.skipped) continue; // 잠금 안 재판독에서 정상=다른 창이 그 사이 고쳐 둔 것
+      log({ route: "quarantine", reason: kind9 + "-damaged", outcome: "quarantined", detail: q9.to ? path.basename(q9.to) : "absent" });
+      if (kind9 === "deferred" && q9.to) {
+        const jobNow9 = readEnrichJob(repo); // 소유 판정 재료(작업 기록이 방금 격리됐으면 absent → 정리 0)
+        const ex9 = expireOrphanedVerifierPending(repo, queue.mapId, MP, PM, jobNow9.st === "ok" ? jobNow9.job : null);
+        notifyEnrichQuarantined(String(o.ws || repo), "deferred", path.basename(q9.to), st9.detail, ex9);
+        log({ route: "quarantine", reason: "orphans-expired", outcome: "quarantined", detail: ex9.expired + "/" + ex9.failed });
+      }
+    }
     const startJob = readEnrichJob(repo);
     const startJobRunId = startJob.st === "ok" ? jobRunIdOf(startJob.job) : null;
     const p10 = {
@@ -1432,8 +1591,14 @@ function runEnrichLocked(repo, o, env) {
     }
   }
   // ⑦ 동의·라우팅
-  const consent = readEnrichConsent(repo);
-  if (consent.st !== "ok") return park(null, "consent-damaged");
+  let consent = readEnrichConsent(repo);
+  if (consent.st !== "ok") { // 동의 기록 손상=치우고 새로(재동의는 사용자 몫 — 화면의 '자동 보강 켜기')
+    const qc = quarantineLedger(repo, "consent", String(o.ws || repo), consent.detail);
+    if (!qc.ok) return park(null, "consent-damaged");
+    log({ route: "quarantine", reason: "consent-damaged", outcome: "quarantined", detail: qc.to ? path.basename(qc.to) : "absent" });
+    consent = readEnrichConsent(repo);
+    if (consent.st !== "ok") return park(null, "consent-damaged");
+  }
   const grant = findGrant(consent, o.ws, o.slot);
   const mode = o.mode;
   if (!["self", "economy", "precision", "auto"].includes(mode)) return park(null, "invalid-mode");
@@ -2074,6 +2239,14 @@ function resumeJob(repo, oIn, env, j, st2) {
   };
   env = { ...env, log: wrappedLog, park: wrappedPark };
   const { MP, log, park } = env;
+  // 재개도 동의 재대조(확인 검증 3판 blocker — 동결 주체 기준): 동의 장부가 격리돼 비었거나 철회됐으면 저장된 결과(applying 재개 등)라도
+  // 지도에 반영하지 않는다(무동의 자동 반영 금지). consent-stale 로 세워 두면 ⑥ parked 분기가 새 동의 세대에서 사람 없이 재개한다.
+  {
+    const cJ = readEnrichConsent(repo);
+    const gJ = findGrant(cJ, j.configWs, j.slot);
+    const okJ = j.mode === "self" ? !!(gJ && gJ.selfAuto) : !!(gJ && gJ.paidMode === j.mode);
+    if (cJ.st !== "ok" || !okJ) return park((jj) => jj && { ...jj, phase: "parked", parkedReason: "consent-stale", finishedAt: nowIso() }, "consent-stale", { jobKey: j.jobKey, stage: "resume" });
+  }
   // 편집 중 충돌 공통 처리(확인 검증 2판 blocker): runAttempt 결과를 그대로 돌려주는 복구 경로도 driveAttempts·재개 루프와 같은 규칙 —
   // provider-failed 에 _sourceChanged 가 붙어 있으면 담당 실패로 세지 않고 '소스 변경'으로 세운다.
   const scPark = (r, prov) => {
@@ -2185,6 +2358,6 @@ function cliMain(argv) {
   return r.outcome === "applied" || r.outcome === "settled" || r.outcome === "noop" ? 0 : r.outcome === "busy" ? 3 : 1;
 }
 
-module.exports = { validateJob, fillExpectFromSnapshot, DROP_STAGES, evidenceMismatchDetail, validFailureDetail, retryPauseMs, ENRICH_DIR, answerableInput, detFileNodeId, enrichTempIdMap, applyEnrichPayloadIds, fileNodePathKey, readConsumedBaseline, writeConsumedBaseline, expandChangedWithConsumedDelta, consumedFileFor, repoKeyFor, consentFileFor, jobFileFor, deferredFileFor, readEnrichConsent, grantEnrichConsent, revokeEnrichConsent, findGrant, readEnrichJob, updateEnrichJob, readDeferred, deferredSummary, enrichOutcomeSummary, recoverDeferredCalls, beginDeferredCall, finishDeferredCall, retryDeferredResolutions, jobKeyOf, jobSeedOf, jobRunIdOf, detPatchId, validateEnrichResult, toPatchV2, evidenceKindOf, appendRouteLog, historylessChanges, computeSourceFp, runEnrich, cliMain, ROUTE_LOG, JOB_PHASES, ATTEMPT_PHASES, ENRICH_TARGET_OPS };
+module.exports = { quarantineLedger, expireOrphanedVerifierPending, enrichOwnedPatchIds, consentGenFloor, ledgerLockStaleKind, validateJob, fillExpectFromSnapshot, DROP_STAGES, evidenceMismatchDetail, validFailureDetail, retryPauseMs, ENRICH_DIR, answerableInput, detFileNodeId, enrichTempIdMap, applyEnrichPayloadIds, fileNodePathKey, readConsumedBaseline, writeConsumedBaseline, expandChangedWithConsumedDelta, consumedFileFor, repoKeyFor, consentFileFor, jobFileFor, deferredFileFor, readEnrichConsent, grantEnrichConsent, revokeEnrichConsent, findGrant, readEnrichJob, updateEnrichJob, readDeferred, deferredSummary, enrichOutcomeSummary, recoverDeferredCalls, beginDeferredCall, finishDeferredCall, retryDeferredResolutions, jobKeyOf, jobSeedOf, jobRunIdOf, detPatchId, validateEnrichResult, toPatchV2, evidenceKindOf, appendRouteLog, historylessChanges, computeSourceFp, runEnrich, cliMain, ROUTE_LOG, JOB_PHASES, ATTEMPT_PHASES, ENRICH_TARGET_OPS };
 
 if (require.main === module) process.exit(cliMain(process.argv));
