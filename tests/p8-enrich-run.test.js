@@ -621,6 +621,7 @@ console.log("[9c] 준비 자기치유(2026-08-12 사용자 실보고) — 미준
   const rP3 = ME.runEnrich(ws, base(ws, { mode: "precision", readiness: ready9, adapters: { precision: adPr } }));
   ok(rP3.outcome === "applied" && callsRh === 1, "준비 회복=자동 재개→적용(사람 클릭 0 — 실사고 소멸)");
   ok(ME.readEnrichJob(ws).job.phase === "done", "장부 done(보류 배지 해소)");
+  { const rs = ME.readEnrichJob(ws).job.resumes; ok(Array.isArray(rs) && rs.length === 1 && rs[0].kind === "not-ready" && rs[0].fromAttempts === 0, "묶음 1: 준비 회복 재개가 재개 사건(not-ready)으로 작업 장부에 남는다"); }
 }
 
 console.log("[10] 입력 자기치유(2026-08-04 보류 반복 봉합) — 문서·산출물뿐=호출 0, 코드 오면 자동 재개");
@@ -675,6 +676,117 @@ console.log("[10] 입력 자기치유(2026-08-04 보류 반복 봉합) — 문�
   const rC = ME.runEnrich(ws, base(ws, { mode: "economy", adapters: { economy: badThenGood } }));
   ok(rC.outcome === "applied" && calls === 2, "코드 변경 도착=자기 재개→적용(총 2호출)");
   ok(ME.readEnrichJob(ws).job.phase === "done", "장부 done(자기치유 완주)");
+  { const rs = ME.readEnrichJob(ws).job.resumes; ok(Array.isArray(rs) && rs.some((r) => r.kind === "input-doc-only"), "묶음 1: 코드 도착 재개가 재개 사건(input-doc-only)으로 남는다"); }
+}
+
+console.log("[10b] 묶음 1(관찰 전용) — 재개 사건(resumes)·인용 측정(citation)·호출 요약(enrich-calls)");
+{
+  const EC = require("../bridge/enrich-calls.js");
+  // 순수 헬퍼: 재개 공통 갱신
+  const jj0 = { phase: "parked", parkedReason: "precision-failed", finishedAt: "T", attempts: [{ attemptId: 0 }, { attemptId: 1 }], resumes: [] };
+  const re0 = ME.reopenForRetry(jj0, "manual", "2026-09-20T00:00:00.000Z");
+  ok(re0.phase === "open" && re0.retryFrom === 2 && re0.finishedAt === undefined && re0.parkedReason === undefined && re0.resumes.length === 1 && re0.resumes[0].kind === "manual" && re0.resumes[0].fromAttempts === 2, "reopenForRetry=retryFrom 이동+재개 사건 한 갱신(원본 불변: " + (jj0.phase === "parked") + ")");
+  ok(ME.reopenForRetry(jj0, "bogus") === null && ME.reopenForRetry(null, "manual") === null, "이형 kind·빈 작업=거부");
+  ok(ME.reopenForRetry(re0, "auto-retry").resumes.length === 2, "재개 사건은 덧붙이기만(추가만)");
+  // 자동 재시도(유료 담당) 실주행: 답 거부 → 보류 → 다음 실행이 스스로 1회 재시도 → resumes auto-retry
+  {
+    const { ws, nodeId } = setup("b1-auto");
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: false, paidMode: "precision" });
+    let calls = 0;
+    const badThenGood = (c) => { calls++; return calls === 1
+      ? { ok: true, result: { schema: "enrich-result-v1", items: [{ op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "n" } }, evidence: [{ file: "src/a.js", quote: "// not in file at all" }] }] } }
+      : goodAdapter(nodeId)(c); };
+    const r1 = ME.runEnrich(ws, base(ws, { mode: "precision", adapters: { precision: badThenGood } }));
+    ok(r1.outcome === "parked" && r1.reason === "precision-failed" && calls === 1, "(전제) 답 거부=precision-failed 보류");
+    const s1 = EC.enrichCallSummary(ME.readEnrichJob(ws).job);
+    ok(s1.answered.codex === 1 && s1.answered.total === 1 && s1.callFailed === 0 && s1.autoRetry === "available" && s1.resumesKnown === true && s1.resumesCoverage === "complete", "보류 중 요약: 답 받은 호출 1(Codex)·자동 재시도 남음·새 작업=이력 완전(빈 배열) (" + JSON.stringify(s1) + ")");
+    const r2 = ME.runEnrich(ws, base(ws, { mode: "precision", adapters: { precision: badThenGood } }));
+    ok(r2.outcome === "applied" && calls === 2, "자동 재시도 1회로 적용 (" + r2.outcome + "/" + r2.reason + ")");
+    const jA = ME.readEnrichJob(ws).job;
+    ok(Array.isArray(jA.resumes) && jA.resumes.length === 1 && jA.resumes[0].kind === "auto-retry" && jA.resumes[0].fromAttempts === 1, "자동 재시도가 재개 사건(auto-retry)으로 남는다");
+    const s2 = EC.enrichCallSummary(jA);
+    ok(s2.answered.codex === 2 && s2.autoRetry === "used" && s2.userRetries === 0 && s2.resumesKnown === true, "완료 후 요약: 답 받은 호출 2·자동 재시도 사용됨 (" + JSON.stringify(s2) + ")");
+    ok(s2.citation && s2.citation.total === 2 && s2.citation.inExcerpt === 2 && s2.citation.outside === 0 && s2.citation.filesCited === 1 && s2.citation.filesSent >= 1, "인용 측정: 마지막 답의 인용 2건 모두 보낸 발췌 안 (" + JSON.stringify(s2.citation) + ")");
+    ok(/답 받은 호출 2회 \(Codex 2\)/.test(EC.callSummaryText(s2, "ko")) && /answered calls 2 \(Codex 2\)/.test(EC.callSummaryText(s2, "en")), "카드 문구 ko/en");
+    // strict: 재개 사건 이형은 손상
+    const jobFile = ME.jobFileFor(ws);
+    const raw = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+    fs.writeFileSync(jobFile, JSON.stringify({ ...raw, resumes: [{ kind: "bogus", at: "2026-09-20T00:00:00.000Z", fromAttempts: 1 }] }));
+    ok(ME.readEnrichJob(ws).st === "damaged", "strict: 모르는 재개 종류=손상");
+    fs.writeFileSync(jobFile, JSON.stringify({ ...raw, resumes: [{ kind: "manual", at: "2026-09-20T00:00:00.000Z", fromAttempts: 2 }, { kind: "manual", at: "2026-09-20T00:00:01.000Z", fromAttempts: 1 }] }));
+    ok(ME.readEnrichJob(ws).st === "damaged", "strict: fromAttempts 비단조=손상");
+    fs.writeFileSync(jobFile, JSON.stringify({ ...raw, resumes: [{ kind: "manual", at: "2026-09-20T00:00:00.000Z", fromAttempts: 1, extra: 1 }] }));
+    ok(ME.readEnrichJob(ws).st === "damaged", "strict: 미지 필드=손상");
+    const rawNoRes = { ...raw }; delete rawNoRes.resumes;
+    fs.writeFileSync(jobFile, JSON.stringify(rawNoRes));
+    ok(ME.readEnrichJob(ws).st === "ok" && EC.enrichCallSummary(ME.readEnrichJob(ws).job).autoRetry === "unknown" && EC.enrichCallSummary(ME.readEnrichJob(ws).job).resumesCoverage === "none", "옛 기록(resumes 없음)=정상 판독·재시도 이력 unknown(0과 구분)");
+    // 옛 작업을 새 판에서 재개하면 '이전 구간 미상' 표식이 앞에 남아 부분 이력임이 유지된다(검증 1판 blocker)
+    const legacyRe = ME.reopenForRetry({ ...rawNoRes, phase: "parked" }, "manual", "2026-09-20T00:00:02.000Z");
+    ok(legacyRe.resumes.length === 2 && legacyRe.resumes[0].kind === "legacy-unknown" && legacyRe.resumes[1].kind === "manual", "옛 작업 재개=legacy-unknown 표식+사건");
+    const sL = EC.enrichCallSummary(legacyRe);
+    ok(sL.resumesCoverage === "partial" && sL.userRetries === 1 && sL.autoRetry === "unknown" && /이전 판 구간 재시도 미상 · 그 뒤: · 자동 재시도 여부 미상 · 사용자 재시도 1회/.test(EC.callSummaryText(sL, "ko")) && /earlier retries unknown \(older record\) · since then: · auto retry unknown · user retries 1/.test(EC.callSummaryText(sL, "en")), "부분 이력 문구 ko/en — 자동 재시도 '없었음' 확정 금지 (" + EC.callSummaryText(sL, "ko") + ")");
+    // 이전 판에서 자동 재시도(retryFrom)까지 거친 옛 작업을 수동 재개해도 '없었음'이 되지 않는다(확인 검증 blocker)
+    const legacyParked = { ...rawNoRes, phase: "parked", parkedReason: "precision-failed", retryFrom: 1, attempts: rawNoRes.attempts.map((a) => ({ attemptId: a.attemptId, provider: a.provider, consentGen: a.consentGen, phase: "failed", failureStage: "validation", startedAt: a.startedAt })) }; // 이전 판: 답 거부→자동 재시도→다시 거부
+    const legacyUsed = ME.reopenForRetry(legacyParked, "manual", "2026-09-20T00:00:03.000Z");
+    ok(EC.enrichCallSummary(legacyParked).autoRetry === "used" && EC.enrichCallSummary(legacyUsed).autoRetry === "unknown", "보류 중 used → 재개 뒤 unknown(미상 구간 보존, unused 아님)");
+    // 길이 상한 없음: 재시도가 많이 쌓여도 재개가 막히지 않는다(ab-6)
+    const many = { ...raw, phase: "parked", resumes: Array.from({ length: 1200 }, (_, i) => ({ kind: "manual", at: "2026-09-20T00:00:00.000Z", fromAttempts: Math.min(i, raw.attempts.length) })) };
+    fs.writeFileSync(jobFile, JSON.stringify(many));
+    ok(ME.readEnrichJob(ws).st === "ok" && ME.updateEnrichJob(ws, (jj) => jj && ME.reopenForRetry(jj, "manual")).ok === true && ME.readEnrichJob(ws).job.resumes.length === 1201, "재개 사건 1,200건 뒤에도 재개 기록 성공(상한 없음)");
+    fs.writeFileSync(jobFile, JSON.stringify({ ...raw, attempts: raw.attempts.map((a, i) => i === 0 ? { ...a, citation: { total: 1, inExcerpt: 1, outside: 1, filesCited: 1, filesSent: 1 } } : a) }));
+    ok(ME.readEnrichJob(ws).st === "damaged", "strict: citation 합 불일치=손상");
+    fs.writeFileSync(jobFile, JSON.stringify(raw));
+    ok(ME.readEnrichJob(ws).st === "ok", "(복원) 원본 정상");
+    // 수동 재시도(확장이 부르는 헬퍼) → resumes manual
+    ME.updateEnrichJob(ws, (jj) => jj && ME.reopenForRetry({ ...jj, phase: "parked" }, "manual"));
+    const s3 = EC.enrichCallSummary(ME.readEnrichJob(ws).job);
+    ok(s3.userRetries === 1 && s3.autoRetry === "used", "수동 재시도=재개 사건(manual)·요약 사용자 재시도 1");
+  }
+  // 인용 측정: 발췌(앞 4,000자) 밖 인용은 파일 전체 대조로는 통과하지만 outside 로 센다(관찰 — 아직 거부하지 않음)
+  {
+    const { ws, nodeId } = setup("b1-cite");
+    ME.grantEnrichConsent(ws, { ws, slot: "ko", selfAuto: true, paidMode: null });
+    const filler = ("// filler line for excerpt cap\n").repeat(200); // > 4,000자
+    fs.writeFileSync(path.join(ws, "src", "a.js"), "// a\n" + filler + "// tail marker beyond excerpt\n");
+    const ad = () => ({ ok: true, result: { schema: "enrich-result-v1", items: [
+      { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "head" } }, evidence: [{ file: "src/a.js", quote: "// a" }] },
+      { op: "add_anchor", targetId: nodeId, payload: { anchor: { kind: "code", path: "src/b.js" } }, evidence: [{ file: "src/a.js", quote: "// tail marker beyond excerpt" }] },
+    ] } });
+    const r = ME.runEnrich(ws, base(ws, { adapters: { self: ad } }));
+    ok(r.outcome === "applied", "(전제) 발췌 밖 인용도 지금은 파일 전체 대조로 통과 (" + r.outcome + "/" + r.reason + ")");
+    const c = EC.enrichCallSummary(ME.readEnrichJob(ws).job).citation;
+    ok(c && c.total === 2 && c.inExcerpt === 1 && c.outside === 1, "인용 측정: 앞부분 인용 1·발췌 밖 인용 1 (" + JSON.stringify(c) + ")");
+    ok(/인용 2건 중 보낸 발췌 안 1건/.test(EC.citationText(EC.enrichCallSummary(ME.readEnrichJob(ws).job), "ko")), "인용 문구 ko");
+    // 호출 중 편집으로 인용문이 경계 안→밖으로 옮겨져도 측정은 '발송 당시' 본문 기준(검증 1판 blocker: 응답 뒤 재판독 금지)
+    ok(MB.ensureQueue(ws, PM) === true, "(전제) 큐 재작성");
+    fs.writeFileSync(path.join(ws, "src", "a.js"), "// head marker\n" + filler + "// tail marker beyond excerpt\n");
+    fs.writeFileSync(path.join(ws, "src", "e.js"), "// e\n"); // 변경 도착
+    const adEdit = () => { fs.writeFileSync(path.join(ws, "src", "a.js"), filler + "// head marker\n" + "// tail marker beyond excerpt\n"); /* 호출 중 편집: head 인용이 앞 4,000자 밖으로 */ return { ok: true, result: { schema: "enrich-result-v1", items: [
+      { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "head2" } }, evidence: [{ file: "src/a.js", quote: "// head marker" }] },
+    ] } }; };
+    const rE = ME.runEnrich(ws, base(ws, { adapters: { self: adEdit } }));
+    const jE = ME.readEnrichJob(ws).job; const lastE = jE.attempts[jE.attempts.length - 1];
+    ok(lastE && lastE.citation && lastE.citation.total === 1 && lastE.citation.inExcerpt === 1, "발송 당시 발췌 안이던 인용은 호출 중 편집으로 밖으로 밀려도 inExcerpt 로 남는다 (" + rE.outcome + "/" + rE.reason + " · " + JSON.stringify(lastE && lastE.citation) + ")");
+    // 프롬프트 조립도 같은 스냅샷을 소비(확인 검증 blocker): 스냅샷 뒤·프롬프트 조립 전에 파일이 바뀌어도 발송문은 스냅샷 본문이다
+    ok(MB.ensureQueue(ws, PM) === true, "(전제) 큐 재작성");
+    const EP = require("../bridge/enrich-providers.js");
+    fs.writeFileSync(path.join(ws, "src", "a.js"), "// snap marker\n" + filler);
+    fs.writeFileSync(path.join(ws, "src", "f.js"), "// f\n");
+    let promptSeen = "";
+    const adSnap = (ctx) => { fs.writeFileSync(path.join(ws, "src", "a.js"), filler + "// snap marker\n"); /* 스냅샷 뒤·조립 전 편집 */ promptSeen = EP.buildEnrichPrompt(ctx); return { ok: true, result: { schema: "enrich-result-v1", items: [
+      { op: "add_evidence", targetId: nodeId, payload: { evidence: { kind: "code", ref: "src/a.js", note: "snap" } }, evidence: [{ file: "src/a.js", quote: "// snap marker" }] },
+    ] } }; };
+    const rS = ME.runEnrich(ws, base(ws, { adapters: { self: adSnap } }));
+    const head = promptSeen.indexOf("### src/a.js"); const body = head >= 0 ? promptSeen.slice(head, head + 400) : "";
+    ok(rS.outcome === "applied" && /\/\/ snap marker\n\/\/ filler/.test(body), "발송문=스냅샷 본문(조립 전 편집 무반영) (" + rS.outcome + ")");
+    const jS2 = ME.readEnrichJob(ws).job; const lastS = jS2.attempts[jS2.attempts.length - 1];
+    ok(lastS && lastS.citation && lastS.citation.inExcerpt === 1 && lastS.citation.outside === 0, "측정도 같은 스냅샷 기준(inExcerpt 1)");
+    ok(/\/\/ snap marker\n\/\/ filler/.test(EP.buildEnrichPrompt({ repo: ws, topo: MR.readTopoExFor(ws).topo, changed: ["src/a.js"], excerptBodies: new Map([["src/a.js", "// snap marker\n// filler x"]]) })) && /\/\/ filler line for excerpt cap/.test(EP.buildEnrichPrompt({ repo: ws, topo: MR.readTopoExFor(ws).topo, changed: ["src/a.js"] })), "buildEnrichPrompt: 스냅샷이 있으면 스냅샷·없으면 파일 판독");
+  }
+  // 순수 대조 정규화(단일 정본)
+  ok(ME.quoteMatchAfter("a\r\nb", "a\nb") === "crlf" && ME.quoteMatchAfter("  a\n  b", "a\nb") === "trim" && ME.quoteMatchAfter("a   b", "a b") === "whitespace" && ME.quoteMatchAfter("xyz", "q") === null && ME.quoteMatchAfter("abc", "b") === "exact", "quoteMatchAfter 단계");
+  const cs = ME.citationSummaryFor([{ evidence: [{ file: "x", quote: "q1" }], claims: [{ file: "y", quote: "q2", stance: "support" }] }], ["x"], (f) => (f === "x" ? "zz q1 zz" : null));
+  ok(cs.total === 2 && cs.inExcerpt === 1 && cs.outside === 1 && cs.filesCited === 2 && cs.filesSent === 1, "citationSummaryFor 순수 계산(claims 포함·미발송 파일=밖)");
 }
 
 console.log("[11] 소화 기준점 교체(2026-08-04 사용자 결정) — 커밋된 변경도 보강 입력에 합류");
@@ -1235,6 +1347,7 @@ console.log("[7d] 편집 중 충돌 — 답을 기다리는 사이 파일이 바
   ok(r2.outcome === "applied" && calls === 2, "편집이 가라앉은 다음 실행에서 자기 재개→적용·편집 어댑터 재호출 0 (" + r2.outcome + "/" + r2.reason + ")");
   const rows = fs.readFileSync(ME.ROUTE_LOG, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
   ok(rows.some((x) => x.route === "source-heal" && x.outcome === "resumed"), "재개 로그 route=source-heal");
+  { const rs = ME.readEnrichJob(ws).job.resumes; ok(Array.isArray(rs) && rs.filter((r) => r.kind === "source-changed").length >= 1, "묶음 1: 편집 중 충돌 재개가 재개 사건(source-changed)으로 남는다(" + JSON.stringify(rs) + ")"); }
   ok(rows.some((x) => x.route === "park" && x.reason === "source-changed"), "정지 로그 reason=source-changed");
 }
 

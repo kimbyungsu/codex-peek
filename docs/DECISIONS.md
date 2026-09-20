@@ -369,3 +369,19 @@
 - 결과: 장부가 깨져도 다음 실행에서 스스로 정리되고 알림이 남는다. 사용자가 손댈 것은 동의 재설정뿐(버튼 기존). 창을 다시 로드하기 전에도 실행기는 시작될 수 있다.
 - 정본: bridge/map-enrich.js `quarantineLedger`·`notifyEnrichQuarantined`·runEnrichLocked 시작 자기치유·동의 판독/grant/revoke 자기치유 · src/extension.ts maybeSpawnEnrichExt 게이트·배너/상태바 nEnrich · tests/p8-enrich-run.test.js [10] · tests/bridge-stale.test.js [4]
 - 찾는말: 장부 손상, job-damaged, consent-damaged, deferred-damaged, 격리, quarantine, broken, 자기치유, 자동 보강 알림, spawn 게이트
+
+## D-2026-09-20-enrich-next-axes — 자동 보강 남은 세 축의 방향(발췌·호출 표시·되묻기) — 사용자 확정
+- 날짜: 2026-09-20 · 종류: 확정(사용자 결정 · 계획 docs/ENRICH-NEXT-AXES-PLAN-2026-09-20.md v1.4 §0) · 상태: 유효
+- 결정: D1 담당 답의 인용문은 '우리가 보낸 발췌 안'에 있어야만 통과(파일 전체 대조 폐기 — 발췌 밖 인용은 그 항목만 제외) · D2 발췌는 파일 첫머리가 아니라 이번에 바뀐 부분 주변(git 없거나 새 파일이면 첫머리 폴백+제목에 표기) · D3 발췌 양은 프로젝트별 옵션(프리셋 가벼움 8·권장 10·대형 15·최대 20파일, 기본값 권장 10 — 수치는 실사용 카드 측정을 보고 사용자가 조정, 벤치 아님) · D4 정밀 담당 되묻기는 새 호출 없이 기존 재호출(자동 재시도·기본형 재개·사용자 재시도 모두)에 지난 답이 버려진 이유를 기계 분류로만 동봉(D4-2 사용자 재시도에도 동봉) · D5 호출 횟수는 카드 한 줄(요금·절대 상한 표시 안 함) · D6 순서=관찰(호출 표시+인용 측정)→읽기 강제→옵션→되묻기.
+- 왜: 사용자 방향(2026-09-20) — '보낸 부분을 읽었다'는 보증이 없던 발췌 검사, 변경과 무관한 파일 머리 발췌, 호출 수·재시도 이력이 화면에 없던 점을 사용자가 정한 철학(읽게 만드는 장치·프로젝트별 옵션·추가 호출 없는 되묻기)으로 해소한다. 전제: 프로젝트별 분리·한/영 쌍·사용자=방향, 구현자=세부.
+- 결과: 묶음 1(관찰)부터 순서대로 구현한다. 프리셋 수치는 임시 출발값이며 옵션 칸에서 언제든 편집된다.
+- 정본: docs/ENRICH-NEXT-AXES-PLAN-2026-09-20.md §0·§2~§4 · 후속 결정 D-2026-09-20-enrich-calls-observe(묶음 1)
+- 찾는말: 발췌, 인용 결속, 바뀐 부분 주변, 발췌 옵션, 프리셋, 호출 횟수, 되묻기, priorRejection, 사용자 결정 D1~D6
+
+## D-2026-09-20-enrich-calls-observe — 호출 횟수·재시도 이력·인용 측정은 작업 장부만 재료로 '관찰'만 한다(묶음 1)
+- 날짜: 2026-09-20 · 종류: 구현(D-2026-09-20-enrich-next-axes 의 묶음 1) · 상태: 유효
+- 결정: (1) 재개 사건 `job.resumes[{kind, at, fromAttempts}]`(kind 닫힌 열거 input-doc-only|not-ready|source-changed|auto-retry|manual)를 retryFrom 을 옮기는 다섯 경로가 같은 잠금 갱신 안에서 덧붙인다(공통 헬퍼 reopenForRetry — 확장의 수동 재시도 포함). 선택 필드·추가만·strict 검사(kind·ISO·fromAttempts 단조·상한). (2) 통과 항목의 인용마다 '실제로 보낸 발췌 안인가'를 세어 `attempt.citation{total,inExcerpt,outside,filesCited,filesSent}` 로 남긴다(정규화 quoteMatchAfter 단일 정본 — 불일치 진단과 공유). 검사·거부는 바꾸지 않는다(관찰 전용). (3) 화면 요약은 순수 모듈 bridge/enrich-calls.js 가 작업 장부만 읽어 계산한다: 답 받은 호출(applying/done 또는 실패 단계 response|validation|conversion)·호출 실패(call)·불확실(running 잔존·parked/uncertain-call)·단계 미상(옛 기록)·자동 재시도 남음/사용됨/없었음/해당 없음/unknown(옛 기록)·사용자 재시도·편집 중 충돌 재개·자동 재개. 비용 장부·경로 로그·실행 사건은 best-effort 라 재료로 쓰지 않는다. 요금·절대 상한은 적지 않고, 모드 안내 패널의 '사람 없이 이어지는 호출' 문구는 상수(UNATTENDED_CALL_RULE)에서 만든다.
+- 왜: 계획 검토(2026-09-20, 5판)에서 확정된 사실 — 비용 장부는 프로세스 기동만 기록해 요금 권위가 아니고, retryFrom 은 다섯 경로가 같은 형태로 옮겨 원인을 구별할 수 없으며, 2·2·4 는 소스 불변 구간에서만 성립한다(편집 중 충돌 자기치유가 다시 부른다). 사용자 결정 D5·D6.
+- 결과: 현황 카드에 '이번 작업: 답 받은 호출 n회(담당별) · 호출 실패 · 자동 재시도 상태 · 사용자 재시도 · 편집 중 충돌로 다시'와 '마지막 답: 인용 n건 중 보낸 발췌 안 m건 · 인용 파일 a / 보낸 파일 b' 두 문구가 보인다. 옛 기록은 '재시도 이력 없음(이전 판 기록)'으로 0과 구분한다. 이 수치가 D3 프리셋과 D1 전환의 기준선이다.
+- 정본: bridge/map-enrich.js RESUME_KINDS·CITATION_KEYS·reopenForRetry·quoteMatchAfter·citationSummaryFor·validateJob(resumes·citation) · bridge/enrich-calls.js · src/extension.ts retryEnrichFromUi·computeState job.calls·웹뷰 상태 줄·openMapModeGuide · 배포 목록 3사본(install.js·hook-setup.ts·map-cutover.js) · tests/enrich-calls.test.js · tests/p8-enrich-run.test.js [10b]
+- 찾는말: 호출 횟수, 재시도 이력, resumes, reopenForRetry, citation, 인용 측정, enrich-calls, 답 받은 호출, 불확실 호출, 자동 재시도 남음

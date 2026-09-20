@@ -123,8 +123,11 @@ function buildEnrichPrompt(ctx) {
   const activeN = typeof PMc.activeFileNodeCount === "function" ? PMc.activeFileNodeCount(ctx.topo || { nodes: [] }) : ((ctx.topo && ctx.topo.nodes) || []).filter((n) => n && n.entityType === "file").length;
   const mapFull = Math.max(0, PMc.MAX_FILE_NODES - activeN) === 0 && !(ctx.rotation && ctx.rotation.enabled);
   const mapFullLine = "(지도 상태: 활성 file 노드 " + activeN + "/" + PMc.MAX_FILE_NODES + " · 빈 칸 0 — add_node 는 이번 라운드 출력 계약에 없음)"; // 상태 자료만(지시문 아님 — 구현 검증 1판 보완)
+  // 실행기가 호출 직전 스냅샷(ctx.excerptBodies: Map file→body|null)을 넘기면 그 본문을 그대로 싣는다 — 인용 측정과 발송문이 같은 판독을 공유
+  // (묶음 1 확인 검증 blocker: 스냅샷과 프롬프트가 따로 읽으면 그 사이의 저장이 측정을 뒤집는다). 없으면(관문·직접 호출) 같은 판독 규칙으로 읽는다.
+  const snap = ctx.excerptBodies instanceof Map ? ctx.excerptBodies : null;
   const excerpts = files.map((f) => {
-    const r = excerptBodyFor(ctx.repo, f); // 관문과 같은 판독 규칙(단일 경로)
+    const r = snap && snap.has(f) ? { ok: typeof snap.get(f) === "string", body: snap.get(f) } : excerptBodyFor(ctx.repo, f); // 관문과 같은 판독 규칙(단일 경로)
     return "### " + f + "\n```\n" + (r.ok ? r.body : "(판독 불가)") + "\n```";
   }).join("\n\n");
   return [

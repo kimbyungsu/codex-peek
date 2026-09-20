@@ -752,7 +752,8 @@ async function retryEnrichFromUi(ws: string | null): Promise<void> {
     // 재시도=park 해제(open 복원 — 감사 attempt 열 보존) 후 동일 진입점(설계 P8-6)
     // retryFrom=지금까지의 시도 수. 이 앞의 실패는 라우팅 판단에서 빼야 새 호출이 실제로 나간다
     // (구현검증 2차 blocker①: 옛 실패 플래그가 남아 '다시 시도'가 곧바로 같은 보류로 되돌아왔다).
-    ME9.updateEnrichJob(repo9, (jj: any) => { if (!jj || jj.phase !== "parked") return null; const nx = { ...jj, phase: "open", retryFrom: Array.isArray(jj.attempts) ? jj.attempts.length : 0 }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
+    // 재개 사건(kind manual)도 같은 갱신 안에 남긴다(묶음 1 — 작업 장부가 재시도 이력의 권위). 구 브릿지(헬퍼 없음)는 종전 형태.
+    ME9.updateEnrichJob(repo9, (jj: any) => { if (!jj || jj.phase !== "parked") return null; if (typeof ME9.reopenForRetry === "function") return ME9.reopenForRetry(jj, "manual"); const nx = { ...jj, phase: "open", retryFrom: Array.isArray(jj.attempts) ? jj.attempts.length : 0 }; delete nx.finishedAt; delete nx.parkedReason; return nx; });
     enrichSpawnLastAt = 0;
     maybeSpawnEnrichExt(ws, "retry");
   } catch { /* 무해 — 상태 행 유지 */ }
@@ -2197,6 +2198,8 @@ ${tE("전부 이 컴퓨터의 브릿지 홈에 남습니다. 외부로 나가는
 // Project MAP 의미 보강 모드 안내 — 모드 행의 짧은 이름만으로 비용·실패·자동 배정 차이를 추측하게 하지 않는다.
 // 정적 설명이므로 정찰 구조 안내와 같은 무스크립트·무전송 새탭이다(열람만으로 준비 점검이나 AI 호출 없음).
 function openMapModeGuide(): void {
+  // 묶음 1: 사람 없이 이어지는 호출 규칙은 상수(bridge/enrich-calls.js)에서 문장을 만든다 — 숫자를 안내문에 손으로 적지 않는다(규칙이 바뀌면 문구도 따라오게). 구 설치본이면 문장 생략.
+  const unattendedRule = (() => { try { const EC9: any = require(path.join(BRIDGE_DIR, "enrich-calls.js")); return String(EC9.unattendedRuleText(loadLangExt()) || ""); } catch { return ""; } })();
   const panel = vscode.window.createWebviewPanel("codexBridgeMapModeGuide", tE("Project MAP 의미 보강 모드 안내", "Project MAP enrichment modes"), vscode.ViewColumn.Beside, { enableScripts: false });
   const mode = (color: string, titleKo: string, titleEn: string, provider: string, fitKo: string, fitEn: string, behaviorKo: string, behaviorEn: string, costKo: string, costEn: string) => `
     <section class="mode" style="border-top-color:${color}"><h2>${tE(titleKo, titleEn)}</h2><div class="provider">${provider}</div>
@@ -2219,6 +2222,7 @@ ${mode("#d9a441", "자동형", "Auto", "DeepSeek + Codex", "매번 고르지 않
 <b>${tE("지도 경계 밖 파일", "File outside map boundary")}</b><span>${tE("예를 들어 지도 앵커가 src/ 안에만 있는데 루트의 infra/ 파일이 바뀌면, 자동형은 기존 앵커의 부모 디렉터리 경계 밖 변화로 보고 Codex를 고릅니다. src/ 아래 새 하위 폴더는 여전히 지도 안쪽이라 DeepSeek 대상입니다. 명시적으로 고른 기본·경제형·정밀형은 몰래 바뀌지 않습니다.", "For example, if map anchors exist only under src/ and a root-level infra/ file changes, Auto sees it outside the existing anchor-parent boundary and chooses Codex. A new subfolder under src/ is still mapped and goes to DeepSeek. Explicit Default, Economy, and Precision choices never change silently.")}</span>
 <b>${tE("실패", "Failure")}</b><span>${tE("명시 모드는 그대로 보류합니다. 자동형만 DeepSeek 실패를 Codex로 한 번 넘깁니다. 무한 재시도나 무단 대체는 없습니다.", "Explicit modes park. Only Auto escalates a DeepSeek failure once to Codex. There is no infinite retry or unauthorized substitution.")}</span>
 </div></div>
+${unattendedRule ? `<p class="note">${tE("자동 보강 호출 횟수 —", "Auto-enrich call counts —")} ${unattendedRule} ${tE("실제 횟수는 현황 카드의 '이번 작업' 줄에서 봅니다(요금이 아니라 호출 횟수입니다).", "Actual counts appear on the status card's 'This job' line (call counts, not billing).")}</p>` : ""}
 <p class="note"><span class="warn">${tE("준비 점검은 실제 호출입니다.", "Readiness checking makes real calls.")}</span> ${tE("버튼을 눌렀을 때만 DeepSeek 소형 요청 최대 2회(형식 교정 1회 포함)와 Codex 실행 1회를 사용합니다. 모드 선택은 저장될 수 있어도, 준비되지 않은 담당으로 작업을 조용히 강행하지는 않습니다.", "Only pressing the button uses up to two small DeepSeek requests (including one format repair) and one Codex run. A mode selection may be saved, but work is never silently forced through an unready provider.")}</p>
 </body></html>`;
 }
@@ -2820,6 +2824,8 @@ function computeState(turnsN: number): BridgeState {
           job: job9 ? {
             phase: job9.phase, parkedReason: job9.parkedReason || null, provider: last9 ? last9.provider : null,
             applied: applied9, rejected: rejected9, investigation: investigation9, dropped: (counts9 && counts9.dropped) || 0,
+            // 묶음 1(관찰 전용): 호출 횟수·재시도 이력·인용 측정 — 작업 장부만 재료(순수 계산, 구 설치본이면 없음)
+            calls: (() => { try { const EC9: any = require(path.join(BRIDGE_DIR, "enrich-calls.js")); const sum9 = EC9.enrichCallSummary(job9); return { line: EC9.callSummaryText(sum9, lang9), citation: EC9.citationText(sum9, lang9) }; } catch { return null; } })(),
             // 옛 기록에 위험한 파일 표기가 이미 저장돼 있을 수 있으므로, 화면으로 내보낼 때 한 번 더 거른다
             // (3차 [보완]: 판독 검증은 옛 기록 호환을 위해 느슨한데, 표시는 느슨하면 안 된다).
             lastFailure: last9 && last9.failureCode
@@ -7876,6 +7882,11 @@ class Dashboard {
             if(en9.job&&(en9.job.dropped||0)>0) msg+=T(" · 답 중 결함 항목 "," · defective items dropped ")+String(en9.job.dropped)+T("건은 사유와 함께 버리고 나머지만 썼어요"," (the rest were used)");
             if((en9.previousRunAwaiting||0)>0) msg+=T(" · 이전 실행 확인 대기 "," · previous-run awaiting ")+String(en9.previousRunAwaiting)+T("건"," items");
             if((en9.unattributedDeferred||0)>0) msg+=T(" · 구형 기록 귀속 확인 필요 "," · legacy records need attribution ")+String(en9.unattributedDeferred)+T("건"," items");
+            // 묶음 1(관찰 전용): 이번 작업의 호출 횟수·재시도 이력 + 마지막 답의 인용 측정(작업 장부 재료 · 요금·상한 표기 없음)
+            if(en9.job&&en9.job.calls&&(jp==="parked"||jp==="done"||jp==="open")){
+              if(en9.job.calls.line) msg+=" · "+en9.job.calls.line;
+              if(en9.job.calls.citation) msg+=" · "+en9.job.calls.citation;
+            }
             st9.textContent=msg;
             if(!consented&&modeNow==="self"&&en9.consentSt!=="damaged"){
               const cb=document.createElement("button"); cb.type="button"; cb.className="secondary"; cb.style.cssText="margin-left:8px;font-size:11px;padding:2px 8px";
