@@ -557,14 +557,17 @@ function effectiveScoutGate(ws: string): { eff: "off" | "plan"; raw: "off" | "pl
 // (contract-lib scoutArmNames — Claude 담당(self)은 모드 기본이면 '기본 정찰(Claude)', 아니면 'Claude 정찰')에서만 받는다.
 // 구 설치본(함수 부재)이면 담당 id 그대로 — 두 곳에서 이름을 짓지 않는다(어긋남 방지).
 type ScoutNameSet = { self: string; deepseek: string; codex: string; selfShort: string; defaultText: string; selfText: string; codexText: string; deepseekText: string }; // *Text=이름+비용 구절(실효 담당 안내용)
-type ScoutNames = { defaultArm: "self" | "codex"; ko: ScoutNameSet; en: ScoutNameSet } | null;
+type ScoutNames = { defaultArm: "self" | "codex"; noKeyArm: "self" | "codex"; noKeyReady: boolean; ko: ScoutNameSet; en: ScoutNameSet } | null; // noKeyArm/noKeyReady=정찰 on/off 무관한 상시 판정(도장 검증 1판 blocker: 2트랙 고급설정 안내가 준비 점검 없이 동작을 단정)
 function scoutNamesExt(ws: string | null): ScoutNames {
   if (!ws) return null;
   let defaultArm: "self" | "codex" = "self";
   try { defaultArm = loadContract(ws).harnessMode === "codex-codex" ? "codex" : "self"; } catch { defaultArm = "self"; }
-  try { const lib: any = bridgeLib(); if (lib && typeof lib.scoutArmNames === "function") { const n = lib.scoutArmNames(defaultArm); if (n && n.ko && n.en) return { defaultArm, ko: n.ko, en: n.en }; } } catch { /* 구 설치본 */ }
+  // 키 없을 때 실행될 담당과 그 준비 상태는 정찰 on/off 와 무관하게 같은 계산(scoutArmViewExt)에서 — 2트랙에서도 열리는 고급설정 안내가 같은 판정을 쓴다
+  let noKeyArm: "self" | "codex" = defaultArm, noKeyReady = true;
+  try { const v = scoutArmViewExt(ws); noKeyArm = v.noKeyArm; noKeyReady = v.noKeyReady; } catch { noKeyArm = defaultArm; noKeyReady = true; }
+  try { const lib: any = bridgeLib(); if (lib && typeof lib.scoutArmNames === "function") { const n = lib.scoutArmNames(defaultArm); if (n && n.ko && n.en) return { defaultArm, noKeyArm, noKeyReady, ko: n.ko, en: n.en }; } } catch { /* 구 설치본 */ }
   const bare = (): ScoutNameSet => ({ self: "self", deepseek: "deepseek", codex: "codex", selfShort: "self", defaultText: defaultArm, selfText: "self", codexText: "codex", deepseekText: "deepseek" });
-  return { defaultArm, ko: bare(), en: bare() };
+  return { defaultArm, noKeyArm, noKeyReady, ko: bare(), en: bare() };
 }
 function scoutArmTextExt(ws: string | null, arm: "self" | "codex" | "deepseek", lang?: Lang): string { return scoutNameExt(ws, arm === "codex" ? "codexText" : arm === "deepseek" ? "deepseekText" : "selfText", lang); }
 function scoutNameExt(ws: string | null, key: keyof ScoutNameSet, lang?: Lang): string {
@@ -6302,8 +6305,8 @@ class Dashboard {
   function scoutName(k){ var m = scoutNames9 ? (UI_EN ? scoutNames9.en : scoutNames9.ko) : null; return (m && m[k]) || (k==="defaultText" ? T("모드 기본 정찰 담당","the mode's default scout") : String(k)); }
   function armName(arm){ return scoutName(arm==="deepseek" ? "deepseek" : arm==="codex" ? "codex" : "self"); }
   function armText(arm){ return scoutName(arm==="deepseek" ? "deepseekText" : arm==="codex" ? "codexText" : "selfText"); } // 이름+비용 구절(안내문용)
-  function noKeyArm9(av){ if(av && (av.noKeyArm==="self"||av.noKeyArm==="codex")) return av.noKeyArm; var d9 = (scoutNames9 && scoutNames9.defaultArm) || (av && av.defaultArm) || "self"; return av && (av.raw==="self"||av.raw==="codex") ? av.raw : d9; } // 키 없을 때 실제 실행될 담당(호스트 계산값 우선 · 4판 blocker)
-  function noKeyReady9(av){ return !(av && av.noKeyReady===false); } // 그 담당의 준비 상태(5판 blocker: 키 있는 DeepSeek 의 ready 를 빌리지 않는다) · 상태에 없으면(구 판) 준비로 간주
+  function noKeyArm9(av){ if(av && (av.noKeyArm==="self"||av.noKeyArm==="codex")) return av.noKeyArm; if(scoutNames9 && (scoutNames9.noKeyArm==="self"||scoutNames9.noKeyArm==="codex")) return scoutNames9.noKeyArm; var d9 = (scoutNames9 && scoutNames9.defaultArm) || (av && av.defaultArm) || "self"; return av && (av.raw==="self"||av.raw==="codex") ? av.raw : d9; } // 키 없을 때 실제 실행될 담당(정찰 카드 상태 → 상시 상태 → 규칙 폴백 · 4판 blocker)
+  function noKeyReady9(av){ if(av && typeof av.noKeyReady==="boolean") return av.noKeyReady; if(scoutNames9 && typeof scoutNames9.noKeyReady==="boolean") return scoutNames9.noKeyReady; return true; } // 그 담당의 준비 상태(5판 blocker: 키 있는 DeepSeek 의 ready 를 빌리지 않음 · 정찰 off 면 상시 상태 · 둘 다 없으면(구 판) 준비로 간주)
   var mxDraft = null; // 묶음 3: 발췌 범위 미저장 초안 {files, chars, slot} — 15초 상태 갱신이 줄을 다시 그려도 입력을 지키고, 저장이 확인되거나(정본=초안) 기본값을 누를 때만 비운다(검증 1판 blocker)
   let appCkC = null, appCkX = null; // 체크박스 '마지막 적용값'(hold 판정용 — 미저장 체크 변경이 언어 전환에 덮이지 않게)
   let curPerm = "";   // 지금 Claude Code 권한 모드(active.json) — plan 게이트 표시용
@@ -8533,7 +8536,7 @@ class Dashboard {
       const st=$("dsState"); if(!st) return;
       st.textContent = d.deepseek && d.deepseek.hasKey
         ? T("등록됨: ","Registered: ") + d.deepseek.masked + T(" · 모델: "," · model: ") + d.deepseek.model
-        : T("등록된 키 없음 — 잠기는 건 DeepSeek 비교 정찰뿐. 변경 감지·지도는 키 없이 동작하며 지도는 "+armText(noKeyArm9(d.scoutArm))+"이 맡아요"+(noKeyReady9(d.scoutArm)?"":"(지금은 준비 안 됨 — 정찰 카드의 사유 참조)")+".","No key registered — only the DeepSeek comparison scout is locked. Change sensing and maps work without it; maps are made by "+armText(noKeyArm9(d.scoutArm))+(noKeyReady9(d.scoutArm)?"":" (not ready now — see the recon card)")+"."); // 키 없을 때 실행될 담당+준비 상태(정찰 off 면 모드 기본 · 4·5판 blocker)
+        : T("등록된 키 없음 — 잠기는 건 DeepSeek 비교 정찰뿐. "+((d.contract&&d.contract.scoutMode==="on")?"":"3트랙을 켜면 ")+"변경 감지·지도는 키 없이 동작하며 지도는 "+armText(noKeyArm9(d.scoutArm))+"이 맡아요"+(noKeyReady9(d.scoutArm)?"":"(지금은 준비 안 됨 — "+((d.contract&&d.contract.scoutMode==="on")?"정찰 카드의 사유 참조":"명령줄 설치 필요")+")")+".","No key registered — only the DeepSeek comparison scout is locked. "+((d.contract&&d.contract.scoutMode==="on")?"":"With 3-track on, ")+"change sensing and maps work without it; maps are made by "+armText(noKeyArm9(d.scoutArm))+(noKeyReady9(d.scoutArm)?"":" (not ready now — "+((d.contract&&d.contract.scoutMode==="on")?"see the recon card":"its CLI is missing")+")")+"."); // 키 없을 때 실행될 담당+그 담당의 준비 상태 — 정찰 off 면 상시 상태(scoutNames)로 같은 판정·'3트랙을 켜면' 조건부(도장 검증 1판 blocker)
     });
     // ⑥-b 고급설정 탭 — Codex 정찰 두뇌 설정(P6b·선택형 개편 2026-07-23): 검증 카드와 같은 계정 캐시로
     // <select>+강도 버튼 재구성. 선충전 WYSIWYG(ab-2)·편집 보존(scDirty — select replaceChildren 리셋 보정
