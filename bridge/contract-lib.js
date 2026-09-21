@@ -1834,6 +1834,39 @@ const SCOUT_ARMS = ["self", "deepseek", "codex"];
 // [묶음 (다) 2026-09-17 · D-2026-09-17-scout-arm-readiness] 모드별 기본 정찰 담당 — Claude↔Codex 는 self(현재 Claude 겸임·무과금),
 // Codex↔Codex 는 codex(그 모드에서는 claude 명령줄이 있다는 보장이 없다 — 검증자 반례: 마켓 설치만 한 C-C 사용자에게 self 가 cli-not-found).
 function defaultScoutArmFor(harnessMode) { return harnessMode === "codex-codex" ? "codex" : "self"; }
+// ── 정찰 담당 표시명 정본(2026-09-21 문구 감사 · D-2026-09-21-scout-wording-mode-default) ──
+// 대시보드·상태바·자동 지시·안내문이 담당 이름을 여기서만 받는다. self 팔의 '기본' 표기는 모드에 달려 있어
+// (Codex↔Codex 는 codex 가 기본) defaultArm 을 받아 정한다: 기본이면 '기본 정찰(Claude)', 아니면 'Claude 정찰'.
+function scoutArmLabel(arm, defaultArm, lang) {
+  const en = lang === "en";
+  if (arm === "deepseek") return en ? "DeepSeek scout" : "DeepSeek 정찰";
+  if (arm === "codex") return en ? "Codex scout" : "Codex 정찰";
+  return defaultArm === "codex" ? (en ? "Claude scout" : "Claude 정찰") : (en ? "default scout (Claude)" : "기본 정찰(Claude)");
+}
+// 담당 한 구절(이름+비용 · '이 모드의 기본'이면 그 사실도) — 키 없음·강등·연결 점검 안내가 '누가 맡는가'를 말할 때 쓴다.
+// 4판 blocker: 안내는 모드 기본이 아니라 '실제 실행될 담당'(실효 eff · 키 없을 때는 명시 선택 또는 모드 기본)을 말해야 한다 — 호출자가 arm 을 고른다.
+function scoutArmText(arm, defaultArm, lang) {
+  const en = lang === "en";
+  const isDef = arm === (defaultArm === "codex" ? "codex" : "self");
+  if (arm === "deepseek") return en ? "the DeepSeek scout (key registered)" : "DeepSeek 정찰(키 등록됨)";
+  if (arm === "codex") return isDef
+    ? (en ? "this mode's default scout, the Codex scout (within your existing Codex account usage)" : "이 모드의 기본 담당인 Codex 정찰(쓰시는 Codex 계정 사용량 범위)")
+    : (en ? "the Codex scout you selected (within your existing Codex account usage)" : "선택하신 Codex 정찰(쓰시는 Codex 계정 사용량 범위)");
+  return isDef
+    ? (en ? "the default scout (Claude · no separate billing)" : "기본 정찰(Claude · 별도 결제 없음)")
+    : (en ? "the Claude scout you selected (no separate billing)" : "선택하신 Claude 정찰(별도 결제 없음)");
+}
+function scoutDefaultArmText(defaultArm, lang) { return scoutArmText(defaultArm === "codex" ? "codex" : "self", defaultArm, lang); }
+// 확장 상태에 실을 이름 묶음(한/영 동시 — 웹뷰가 표시 언어로 고른다). selfShort=선택 버튼용 짧은 이름.
+function scoutArmNames(defaultArm) {
+  const one = (lang) => ({
+    self: scoutArmLabel("self", defaultArm, lang), deepseek: scoutArmLabel("deepseek", defaultArm, lang), codex: scoutArmLabel("codex", defaultArm, lang),
+    selfShort: defaultArm === "codex" ? (lang === "en" ? "Claude" : "Claude 정찰") : (lang === "en" ? "Default" : "기본 정찰"),
+    defaultText: scoutDefaultArmText(defaultArm, lang),
+    selfText: scoutArmText("self", defaultArm, lang), codexText: scoutArmText("codex", defaultArm, lang), deepseekText: scoutArmText("deepseek", defaultArm, lang), // 실효 담당 안내용(4판 blocker)
+  });
+  return { defaultArm: defaultArm === "codex" ? "codex" : "self", ko: one("ko"), en: one("en") };
+}
 // 명령줄 실행 파일이 PATH 에 실제로 있는지 — 준비 점검용(spawn 전). resolveExecutableForSpawn 은 POSIX 에서 이름만 돌려주므로 여기선 실존·실행 가능 파일을 본다.
 function cliOnPath(command, env) {
   const cmd = typeof command === "string" ? command.trim() : "";
@@ -2207,17 +2240,22 @@ function scoutArmView(ws, c) {
 }
 // 정찰 전용 준비 점검(묶음 (다)) — 실효 담당의 명령줄/키가 실제로 있는지. 의미 보강용 mapReadinessView 와는 별개 축(혼합 금지).
 // spawn 없음(PATH 실존·키 유무만) — 대시보드·게이트·자동 지시가 매 턴 불러도 싸다. 미준비면 호출자는 실행을 요구하지 않는다(fail-open).
-function scoutArmReadiness(ws, c) {
-  const v = scoutArmView(ws, c);
+// 담당 하나의 준비 점검(실효 담당뿐 아니라 '키 없을 때 실행될 담당' 같은 가정 담당에도 쓴다 — 구현 검증 5판 blocker:
+// 키 있는 DeepSeek 의 ready 로 키 없는 Codex 의 동작을 보장하던 표시). spawn 없음.
+function scoutArmReadinessOf(arm, hasKey) {
   let ready = true, reason = null, cli = null;
-  if (v.eff === "self") { cli = "claude"; ready = !!cliOnPath("claude", process.env); reason = ready ? null : "cli-not-found"; }
-  else if (v.eff === "codex") {
+  if (arm === "self") { cli = "claude"; ready = !!cliOnPath("claude", process.env); reason = ready ? null : "cli-not-found"; }
+  else if (arm === "codex") {
     let inv = null; try { inv = require("./codex-bridge.js").resolveCodex(); } catch { inv = null; }
     cli = inv && inv.file ? String(inv.file) : "codex";
     ready = !!(inv && cliOnPath(cli, process.env)); // 절대 경로든 이름이든 같은 규칙(파일+실행 가능)
     reason = ready ? null : "cli-not-found";
-  } else if (v.eff === "deepseek") { cli = "deepseek"; ready = !!v.hasKey; reason = ready ? null : "no-key"; }
-  return { ...v, ready, reason, cli };
+  } else if (arm === "deepseek") { cli = "deepseek"; ready = !!hasKey; reason = ready ? null : "no-key"; }
+  return { ready, reason, cli };
+}
+function scoutArmReadiness(ws, c) {
+  const v = scoutArmView(ws, c);
+  return { ...v, ...scoutArmReadinessOf(v.eff, v.hasKey) };
 }
 function normScoutMode(o) {
   if (o && SCOUT_MODES.includes(o.scoutMode)) return o.scoutMode;
@@ -2888,21 +2926,22 @@ function buildScoutDirective(ws, c) {
       ? "[Recon (3-track) auto-directive · once per state] " + why + ". The scout (" + rdV.eff + ") is not ready (" + rdV.reason + ") — no run is requested this turn; " + fixEn + ". The map is advisory and blocks nothing."
       : "[탐색(3트랙) 자동 지시 · 이 상태에 1회만] " + why + ". 정찰 담당(" + rdV.eff + ")이 준비되지 않아(" + (rdV.reason === "no-key" ? "키 없음" : "명령줄 없음") + ") 이번 턴엔 실행을 요구하지 않습니다 — " + fixKo + ". 지도는 참고용이며 아무것도 막지 않습니다.";
   }
+  const selfLabelEn = scoutArmLabel("self", armV.defaultArm, "en"), selfLabelKo = scoutArmLabel("self", armV.defaultArm, "ko"); // 담당 이름 정본(모드 기본 반영)
   if (en) {
     const runner = armV.eff === "deepseek"
-      ? "run `" + bridgeCmd("scope-scout-deepseek.js", "\"" + target + "\"") + "` (scout preference set on the dashboard: DeepSeek — key registration = consent to auto calls · the default scout scope-scout-self.js also remains available)"
+      ? "run `" + bridgeCmd("scope-scout-deepseek.js", "\"" + target + "\"") + "` (scout preference set on the dashboard: DeepSeek — key registration = consent to auto calls · the " + selfLabelEn + " scope-scout-self.js also remains available)"
       : armV.eff === "codex"
-      ? "run `" + bridgeCmd("scope-scout-codex.js", "\"" + target + "\"") + "` (scout preference set on the dashboard: Codex — an independent one-shot codex exec, separate from the verification session · the default scout scope-scout-self.js also remains available)"
-      : "run `" + bridgeCmd("scope-scout-self.js", "\"" + target + "\"") + "` (default scout (Claude) — a separate claude CLI call, no separate billing"
+      ? "run `" + bridgeCmd("scope-scout-codex.js", "\"" + target + "\"") + "` (" + (armV.raw === "codex" ? "scout preference set on the dashboard: Codex" : armV.degraded === "no-key" ? "dashboard preference is DeepSeek but no key is registered — proceeding with this mode's default, the Codex scout" : "this mode's default scout: Codex") + " — an independent one-shot codex exec, separate from the verification session · the " + selfLabelEn + " scope-scout-self.js also remains available)"
+      : "run `" + bridgeCmd("scope-scout-self.js", "\"" + target + "\"") + "` (" + selfLabelEn + " — a separate claude CLI call, no separate billing"
         + (armV.raw === "self" ? "" : armV.degraded === "no-key" ? " · dashboard preference is DeepSeek but no key is registered — proceeding with the default scout" : hasKey ? " · scope-scout-deepseek.js (DeepSeek scout) available if comparison seems useful — key registration = consent to auto calls" : "")
         + ")";
     return "[Recon (3-track) auto-directive · once per state] " + why + ". If this turn involves file changes, refresh the impact map before concluding — " + runner + ". Trivial turns (a question, a one-line doc edit) may skip — the map is advisory and blocks nothing.";
   }
   const runnerKo = armV.eff === "deepseek"
-    ? "`" + bridgeCmd("scope-scout-deepseek.js", "\"" + target + "\"") + "` 실행(대시보드에 설정된 탐색 담당: DeepSeek 정찰 — 키 등록=자동 호출 동의됨 · 기본 정찰 scope-scout-self.js도 병행 가능)"
+    ? "`" + bridgeCmd("scope-scout-deepseek.js", "\"" + target + "\"") + "` 실행(대시보드에 설정된 탐색 담당: DeepSeek 정찰 — 키 등록=자동 호출 동의됨 · " + selfLabelKo + " scope-scout-self.js도 병행 가능)"
     : armV.eff === "codex"
-    ? "`" + bridgeCmd("scope-scout-codex.js", "\"" + target + "\"") + "` 실행(대시보드에 설정된 탐색 담당: Codex 정찰 — 검증 세션과 분리된 독립 codex exec 1회 · 기본 정찰 scope-scout-self.js도 병행 가능)"
-    : "`" + bridgeCmd("scope-scout-self.js", "\"" + target + "\"") + "` 실행(기본 정찰(Claude) — 구현 대화와 분리된 별도 claude 호출·별도 과금 없음"
+    ? "`" + bridgeCmd("scope-scout-codex.js", "\"" + target + "\"") + "` 실행(" + (armV.raw === "codex" ? "대시보드에 설정된 탐색 담당: Codex 정찰" : armV.degraded === "no-key" ? "대시보드 선호는 DeepSeek이나 키 미등록 — 이 모드의 기본 담당인 Codex 정찰로 진행" : "이 모드의 기본 담당: Codex 정찰") + " — 검증 세션과 분리된 독립 codex exec 1회 · " + selfLabelKo + " scope-scout-self.js도 병행 가능)"
+    : "`" + bridgeCmd("scope-scout-self.js", "\"" + target + "\"") + "` 실행(" + selfLabelKo + " — 구현 대화와 분리된 별도 claude 호출·별도 과금 없음"
       + (armV.raw === "self" ? "" : armV.degraded === "no-key" ? " · 대시보드 선호는 DeepSeek이나 키 미등록 — 기본 정찰로 진행" : hasKey ? " · 비교가 필요하다고 판단되면 scope-scout-deepseek.js(DeepSeek 정찰) 사용 가능 — 키 등록=자동 호출 동의됨" : "")
       + ")";
   return "[탐색(3트랙) 자동 지시 · 이 상태에 1회만] " + why + ". 이번 턴이 파일 변경을 동반하면 결론 전에 영향지도를 갱신하라 — " + runnerKo + ". 사소한 턴(질문·문서 한 줄)이면 스킵해도 된다 — 지도는 참고용이며 아무것도 막지 않는다.";
@@ -3303,9 +3342,10 @@ function buildScoutAttach(ws, c, lang) {
     : st.state === "unknown"
     ? (en ? ` · freshness not fully judged (non-git scan cap)` : ` · 신선도 전수 판정 불가(비-git 스캔 상한)`)
     : "";
+  const armLabel9 = scoutArmLabel(meta.arm === "deepseek" ? "deepseek" : meta.arm === "codex" ? "codex" : "self", defaultScoutArmFor(normHarnessMode(c)), en ? "en" : "ko"); // 담당 이름 정본(4판 지적 — Codex↔Codex 에선 'Claude 정찰')
   const head = en
-    ? `[Scout impact map · reference — not a verdict rule] The latest impact map of this project (created ${meta.ts || "?"}, ${meta.arm === "deepseek" ? "DeepSeek scout" : meta.arm === "codex" ? "Codex scout" : "default Claude scout"}${staleNote}) flagged these high-priority paths:`
-    : `[탐색 지도 · 참고 — 판정 기준 아님] 이 프로젝트 최신 영향지도(생성 ${meta.ts || "?"} · ${meta.arm === "deepseek" ? "DeepSeek 정찰" : meta.arm === "codex" ? "Codex 정찰" : "기본 Claude 정찰"}${staleNote})가 꼽은 확인필요도 high 경로:`;
+    ? `[Scout impact map · reference — not a verdict rule] The latest impact map of this project (created ${meta.ts || "?"}, ${armLabel9}${staleNote}) flagged these high-priority paths:`
+    : `[탐색 지도 · 참고 — 판정 기준 아님] 이 프로젝트 최신 영향지도(생성 ${meta.ts || "?"} · ${armLabel9}${staleNote})가 꼽은 확인필요도 high 경로:`;
   // ⚠ 앵커링 방어(2026-07-09 사용자 우려 "검증모델이 탐색 경로를 맹신하면?"): 목록은 시작점일 뿐 한계가 아님을
   // 명시 — 검증 기본원칙 3('범위를 스스로 넓혀 반례를 찾으라')과 같은 문법으로, 동봉이 검증 시야를 좁히지 못하게.
   const tail = en
@@ -7033,6 +7073,11 @@ module.exports.ledgerRowsForRepo = ledgerRowsForRepo; // [저장소 분할 단�
 module.exports.repoKeyNow = repoKeyNow;
 module.exports.bridgeCmd = bridgeCmd; // [정찰 층 이관] 실행 안내 경로 정본
 module.exports.defaultScoutArmFor = defaultScoutArmFor; // [묶음 (다)] 모드별 기본 정찰 담당
+module.exports.scoutArmLabel = scoutArmLabel; // [문구 감사 2026-09-21] 정찰 담당 표시명 정본(모드 기본 반영)
+module.exports.scoutDefaultArmText = scoutDefaultArmText;
+module.exports.scoutArmText = scoutArmText;
+module.exports.scoutArmNames = scoutArmNames;
 module.exports.cliOnPath = cliOnPath; // [묶음 (다)] 준비 점검용 PATH 실존 확인
 module.exports.scoutArmReadiness = scoutArmReadiness; // [묶음 (다)] 정찰 전용 준비 점검(의미 보강 readiness 와 별개)
+module.exports.scoutArmReadinessOf = scoutArmReadinessOf; // 담당 하나의 준비 점검(가정 담당용 · 5판 blocker)
 module.exports.runtimeRepairHint = runtimeRepairHint; // 설치 출처별 런타임 복구 안내(마켓=창 다시 로드 · 레포=install.js)

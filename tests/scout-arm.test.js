@@ -115,7 +115,7 @@ console.log("[4] 대시보드 표면 — 행·핸들러·ko/en 쌍(소스 계약
   ok(src.includes('id="scoutArmRow"'), "정찰 카드에 탐색 담당 행 존재");
   ok(src.includes('type === "setScoutArm"') || src.includes('type:"setScoutArm"'), "setScoutArm 메시지 배선(수신·발신)");
   ok(src.includes("scoutArmViewExt"), "실효 뷰(강등 표시) 계산 존재");
-  ok(src.includes('T("기본 정찰","Default")') && src.includes('T("Claude 정찰","Claude")') && src.includes('T("Claude · 무과금","Claude · free")'), "선택지 라벨 ko/en 쌍(세그먼트 메인+서브 — self=Claude 명시·무과금 표기)");
+  ok(src.includes('mk("self", scoutName("selfShort"), T("Claude · 무과금","Claude · free"), slotMismatch)') && !src.includes('T("기본 정찰","Default")'), "선택지 라벨: self 메인 이름은 정본 selfShort(모드 기본이 codex 면 'Claude 정찰') + 서브 '무과금'(문구 감사 2026-09-21 — 화면이 이름을 짓지 않음)");
   ok(src.includes("DeepSeek 정찰") && src.includes("DeepSeek scout"), "DeepSeek 선택지 ko/en 쌍");
   ok(src.includes("키 미등록 — 키 등록") || src.includes("키 미등록"), "강등 안내(키 없음) 존재");
   ok(src.includes("{ modal: true }") && /modal: true[^]{0,300}그래도 저장/.test(src), "키 없는 deepseek 선택=저장 전 모달 확인(1차 blocker④)");
@@ -250,23 +250,23 @@ console.log("[5b] P6 — 자동 지시·어긋남 분기의 codex 러너 반영"
   CL.saveLang("ko");
   const clSrc = fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8");
   ok(clSrc.includes('e9 === "codex" ? "scope-scout-codex.js"'), "어긋남 지시(drRunner)도 codex 분기");
-  ok(clSrc.includes('bridgeCmd("scope-scout-codex.js", "\\"" + target') && clSrc.includes("Codex 정찰 — 검증 세션과 분리된 독립 codex exec 1회"), "자동 지시 ko — codex 1순위 러너 문구(브릿지 홈 절대 경로 bridgeCmd — 2026-09-16)");
+  ok(clSrc.includes('bridgeCmd("scope-scout-codex.js", "\\"" + target') && clSrc.includes(' — 검증 세션과 분리된 독립 codex exec 1회 · " + selfLabelKo + " scope-scout-self.js도 병행 가능)"') && clSrc.includes("이 모드의 기본 담당: Codex 정찰"), "자동 지시 ko — codex 1순위 러너 문구(브릿지 홈 절대 경로 bridgeCmd — 2026-09-16 · 병행 가능한 Claude 담당 이름은 정본 2026-09-21)");
   ok(clSrc.includes("an independent one-shot codex exec, separate from the verification session"), "자동 지시 en 쌍");
   ok(clSrc.includes('SCOUT_ARMS = ["self", "deepseek", "codex"]'), "SCOUT_ARMS에 codex(계약 값 목록)");
   ok(clSrc.includes("빈 작업 폴더·읽기 전용 샌드박스에서 실행된다") && clSrc.includes("This call runs in an empty working folder with a read-only sandbox"), "codex preface 각주 ko/en(사실+탐색 금지 지시)");
   // 1·2차 검증 blocker 잠금 — arm을 소비하는 각 지점을 '개별' 단언(2차 [보완]: 전역 개수 단언은 특정 지점의
   // 이분법 잔재를 못 잡는다). 지점이 늘면 여기에 개별 단언을 추가하는 것이 계약.
   const extSrc = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
-  ok(extSrc.includes('best.arm === "codex" ? (en ? "Codex scout" : "Codex 정찰")'), "소비점① 최근 실행 요약(scoutActualText) 3값");
-  ok(extSrc.includes('d.scoutLive.arm==="codex"?"Codex 정찰"'), "소비점② 실행중 카드(웹뷰 '지금:') 3값");
-  ok(extSrc.includes('it.arm==="codex"?T("Codex 정찰","Codex scout")'), "소비점③ 지도 목록 행 3값");
-  ok(extSrc.includes('sm.latest.arm==="codex"?"Codex 정찰"'), "소비점④ 최신 지도 펼침 라벨 3값");
-  ok(extSrc.includes('live.arm === "codex" ? "Codex 정찰"'), "소비점⑤ 상태바 정찰 줄 3값");
-  ok((extSrc.match(/scoutLiveNow\.arm === "codex" \? "Codex 정찰"/g) || []).length === 2, "소비점⑥⑦ LLM 호출 줄+flow 진행 툴팁 3값(정확히 2곳)");
+  ok(extSrc.includes('const armLabel = scoutNameExt(ws, best.arm === "deepseek" ? "deepseek" : best.arm === "codex" ? "codex" : "self")'), "소비점① 최근 실행 요약(scoutActualText) 3값 — 이름 정본(scoutNameExt) 경유");
+  ok(extSrc.includes('line=T("지금: 지도 생성 중… ("+armName(d.scoutLive.arm)+'), "소비점② 실행중 카드(웹뷰 '지금:') 3값 — armName 경유");
+  ok(extSrc.includes('add("• ["+when+"] "+armName(it.arm)+'), "소비점③ 지도 목록 행 3값 — armName 경유");
+  ok(extSrc.includes('T("최신 지도 펼쳐보기 ("+armName(sm.latest.arm)+")"'), "소비점④ 최신 지도 펼침 라벨 3값 — armName 경유");
+  ok(extSrc.includes('const armN = scoutNameExt(ws, live.arm === "deepseek" ? "deepseek" : live.arm === "codex" ? "codex" : "self")'), "소비점⑤ 상태바 정찰 줄 3값 — 정본 경유");
+  ok(extSrc.includes('scoutNameExt(ws, scoutLiveNow.arm === "deepseek" ? "deepseek" : scoutLiveNow.arm === "codex" ? "codex" : "self")') && (extSrc.match(/\$\{scoutLiveArmName\}/g) || []).length === 4, "소비점⑥⑦ LLM 호출 줄+flow 진행 툴팁 3값(정본 1회 계산 · ko/en 2곳×2)");
   ok((extSrc.match(/=== "codex" \? "·Codex"/g) || []).length === 3, "소비점⑧⑨⑩′ 상태바 '탐색중' 접미 3곳(연결 상태바+미연결 상태바+flow 화살표) — codex 무표기 잔재 소멸(2·3차 blocker①)");
   ok(extSrc.includes('["codex","Codex"]') && extSrc.includes('addPurpose(T("영향지도 생성","Impact-map generation"),usage.byFlowProvider,"map-scout")'), "소비점⑩ P10 목적별 통계의 Codex 영향지도 행");
-  ok(clSrc.includes('meta.arm === "codex" ? "Codex scout"') && clSrc.includes('meta.arm === "codex" ? "Codex 정찰"'), "소비점⑪ 검증 프롬프트 동봉 머리(지도 attach) 3값 ko/en(2차 blocker①)");
-  ok(extSrc.includes("scope-scout-codex.js (Codex 정찰)") && extSrc.includes("scope-scout-codex.js (Codex scout)"), "빈 게시판 안내에 codex 러너 포함");
+  ok(clSrc.includes('const armLabel9 = scoutArmLabel(meta.arm === "deepseek" ? "deepseek" : meta.arm === "codex" ? "codex" : "self", defaultScoutArmFor(normHarnessMode(c)), en ? "en" : "ko")') && (clSrc.match(/\$\{armLabel9\}\$\{staleNote\}/g) || []).length === 2, "소비점⑪ 검증 프롬프트 동봉 머리(지도 attach) 3값 ko/en — 이름 정본(모드 기본 반영 · 4판 지적)");
+  ok((extSrc.match(/scope-scout-codex\.js \("\+armName\("codex"\)\+"\)/g) || []).length === 2, "빈 게시판 안내에 codex 러너 포함(ko/en · 이름 정본)");
   ok(extSrc.includes('o.scoutArm === "codex"'), "확장 Contract 정규화(loadContract)·타입 합타입도 codex 허용(보완 수용)");
   const provSrc9 = fs.readFileSync(path.join(ROOT, "bridge", "scout-providers.js"), "utf8");
   const clSrc9 = fs.readFileSync(path.join(ROOT, "bridge", "contract-lib.js"), "utf8");

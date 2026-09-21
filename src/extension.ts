@@ -260,7 +260,8 @@ interface BridgeState {
   scoutTarget: { repo: string; differs: boolean; invalid: boolean; configured: boolean; inherited: boolean; drift: { repo: string; sample: number; agree: number } | null } | null; // P1 정찰 대상 + 어긋남 자기진단(2026-07-10). null=2트랙
   scoutGate: { eff: string; raw: string | null } | null; // 실효 플랜 게이트(표시 전용 — 3트랙에서만, 계약에 저장 안 함). null=2트랙/ws 없음
   bridgeStale: { stale: boolean; changed: string[] } | null; // 이 창이 캐시한 브릿지 모듈이 디스크 판보다 오래됐는가(D-2026-09-19-bridge-stale-banner) — stale 이면 화면 판독은 재로드 전까지 불확실
-  scoutArm: { raw: string | null; eff: "self" | "deepseek" | "codex"; hasKey: boolean; slot?: string; defaultArm?: "self" | "codex"; ready?: boolean; reason?: string | null } | null; // defaultArm/ready/reason=묶음 (다) 모드 기본·정찰 준비 // 탐색 담당(2026-07-20·P6 codex 추가) — raw=명시 선택(반대 언어 슬롯 상속·null=미지정), eff=실효(deepseek는 키 없으면 self 강등·codex는 강등 없음), slot=계산 언어. null=2트랙/ws 없음
+  scoutNames: ScoutNames; // 정찰 담당 표시명 묶음(배포 브릿지 scoutArmNames 정본 · 한/영 동시) — 화면은 이름을 짓지 않고 여기서 고른다(문구 감사 2026-09-21)
+  scoutArm: { raw: string | null; eff: "self" | "deepseek" | "codex"; hasKey: boolean; slot?: string; defaultArm?: "self" | "codex"; ready?: boolean; reason?: string | null; noKeyArm?: "self" | "codex"; noKeyReady?: boolean } | null; // noKeyArm/noKeyReady=키 없을 때 실행될 담당과 그 담당의 준비 상태(5판 blocker — 키 있는 DeepSeek 의 ready 로 키 없는 담당을 보장하지 않게) // defaultArm/ready/reason=묶음 (다) 모드 기본·정찰 준비 // 탐색 담당(2026-07-20·P6 codex 추가) — raw=명시 선택(반대 언어 슬롯 상속·null=미지정), eff=실효(deepseek는 키 없으면 self 강등·codex는 강등 없음), slot=계산 언어. null=2트랙/ws 없음
   mapLedger: MapLedgerView | null; // MAP 장부(stable 2층) — 대기 제안·승인/기각 이력·확정층 요약(3트랙에서만). null=2트랙
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
   brainActual: { cc: string; cx: string; scout: string }; // 두뇌 '실제 답'(대화 기록 실측) 표시 문구 — 경고 아닌 평시 정보(피커 표시 결함 실사고 2026-07-08). 기록 없으면 '기록 없음' 문구. scout=마지막 정찰 실행(비용 장부 lastTs — 감사 일치 2026-07-10)
@@ -552,7 +553,26 @@ function effectiveScoutGate(ws: string): { eff: "off" | "plan"; raw: "off" | "pl
 // 탐색 담당 실효 뷰(2026-07-20) — ⚠ bridge/contract-lib.js scoutArmView와 동일 규칙(어긋나면 카드와 지시 문구가
 // 다른 답을 말함): raw=현재 슬롯 명시값 우선·부재 시 반대 언어 슬롯 상속(사실 성격 — scoutRepo P1-④ 동형)·
 // 그래도 없으면 null(미지정=기본). eff=deepseek 선택인데 키 없으면 self로 정직 강등.
-function scoutArmViewExt(ws: string, slotIn?: Lang): { raw: string | null; eff: "self" | "deepseek" | "codex"; hasKey: boolean; slot: Lang; defaultArm: "self" | "codex"; ready: boolean; reason: string | null } {
+// 정찰 담당 표시명(문구 감사 2026-09-21 · D-2026-09-21-scout-wording-mode-default): 이름은 배포 브릿지 정본
+// (contract-lib scoutArmNames — Claude 담당(self)은 모드 기본이면 '기본 정찰(Claude)', 아니면 'Claude 정찰')에서만 받는다.
+// 구 설치본(함수 부재)이면 담당 id 그대로 — 두 곳에서 이름을 짓지 않는다(어긋남 방지).
+type ScoutNameSet = { self: string; deepseek: string; codex: string; selfShort: string; defaultText: string; selfText: string; codexText: string; deepseekText: string }; // *Text=이름+비용 구절(실효 담당 안내용)
+type ScoutNames = { defaultArm: "self" | "codex"; ko: ScoutNameSet; en: ScoutNameSet } | null;
+function scoutNamesExt(ws: string | null): ScoutNames {
+  if (!ws) return null;
+  let defaultArm: "self" | "codex" = "self";
+  try { defaultArm = loadContract(ws).harnessMode === "codex-codex" ? "codex" : "self"; } catch { defaultArm = "self"; }
+  try { const lib: any = bridgeLib(); if (lib && typeof lib.scoutArmNames === "function") { const n = lib.scoutArmNames(defaultArm); if (n && n.ko && n.en) return { defaultArm, ko: n.ko, en: n.en }; } } catch { /* 구 설치본 */ }
+  const bare = (): ScoutNameSet => ({ self: "self", deepseek: "deepseek", codex: "codex", selfShort: "self", defaultText: defaultArm, selfText: "self", codexText: "codex", deepseekText: "deepseek" });
+  return { defaultArm, ko: bare(), en: bare() };
+}
+function scoutArmTextExt(ws: string | null, arm: "self" | "codex" | "deepseek", lang?: Lang): string { return scoutNameExt(ws, arm === "codex" ? "codexText" : arm === "deepseek" ? "deepseekText" : "selfText", lang); }
+function scoutNameExt(ws: string | null, key: keyof ScoutNameSet, lang?: Lang): string {
+  const n = scoutNamesExt(ws);
+  if (!n) return /Text$/.test(key) ? ((lang || loadLangExt()) === "en" ? "the mode's default scout" : "모드 기본 정찰 담당") : String(key); // 대상 폴더 없음(드묾): 중립 구절
+  return ((lang || loadLangExt()) === "en" ? n.en : n.ko)[key];
+}
+function scoutArmViewExt(ws: string, slotIn?: Lang): { raw: string | null; eff: "self" | "deepseek" | "codex"; hasKey: boolean; slot: Lang; defaultArm: "self" | "codex"; ready: boolean; reason: string | null; noKeyArm: "self" | "codex"; noKeyReady: boolean } {
   const slot: Lang = slotIn || loadLangExt(); // 3차 blocker: 언어 판독 '1회 캡처' — 값과 slot 표지가 같은 판독에서 원자 결속(계산 중 전역 전환에도 표지가 실제 계산 슬롯을 말함)
   const ARMS = ["self", "deepseek", "codex"]; // ⚠ bridge/contract-lib.js SCOUT_ARMS와 동일 목록(P6: codex 추가)
   let raw: string | null = null;
@@ -568,7 +588,12 @@ function scoutArmViewExt(ws: string, slotIn?: Lang): { raw: string | null; eff: 
   // 정찰 전용 준비 점검은 배포 브릿지의 정본(scoutArmReadiness)에 위임 — 구버전 브릿지면 '준비됨'으로 두어 양치기 경보를 내지 않는다
   let ready = true, reason: string | null = null;
   try { const lib: any = bridgeLib(); if (lib && typeof lib.scoutArmReadiness === "function") { const r = lib.scoutArmReadiness(ws, loadContract(ws)); ready = r.ready !== false; reason = r.reason || null; } } catch { ready = true; reason = null; }
-  return { raw, eff, hasKey, slot, defaultArm, ready, reason };
+  // 키 없을 때 실행될 담당과 '그 담당'의 준비 상태(5판 blocker): 키가 없으면 실효와 같으니 위 ready 를 그대로, 키가 있으면(실효가 DeepSeek 일 수 있음) 가정 담당을 따로 점검
+  // 규칙=scoutArmView 의 강등 규칙과 동일: 명시 선택이 self/codex 면 그 선택, DeepSeek 선택·미지정이면 모드 기본(키 없는 상태에선 eff 와 같다). 이 함수는 시험이 산출물에서 통째로 추출해 실행하므로 바깥 헬퍼를 부르지 않는다.
+  const noKeyArm: "self" | "codex" = raw === "self" || raw === "codex" ? raw : defaultArm;
+  let noKeyReady = ready;
+  if (hasKey || eff !== noKeyArm) { try { const lib: any = bridgeLib(); noKeyReady = lib && typeof lib.scoutArmReadinessOf === "function" ? lib.scoutArmReadinessOf(noKeyArm, hasKey).ready !== false : true; } catch { noKeyReady = true; } }
+  return { raw, eff, hasKey, slot, defaultArm, ready, reason, noKeyArm, noKeyReady };
 }
 // ── P7: MAP 의미 보강 모드(mapMode)·readiness(정본 MAP-V2-DESIGN 'P7 상세 설계' v4 — 사용자 승인 확정) ──
 const MAP_MODES_EXT = ["self", "economy", "precision", "auto"]; // ⚠ contract-lib MAP_MODES와 동일 목록
@@ -1019,8 +1044,8 @@ async function setScoutArmFromUi(ws: string | null, arm: "self" | "deepseek" | "
   const lang: Lang = slotLang || loadLangExt();
   if (arm === "deepseek" && !readDeepseekView().hasKey) {
     // 1차 blocker④: 저장 '전' 모달 확인(계속/취소) — 저장 성공을 선행 확정하는 문구 금지(잠금 실패면 미저장).
-    const koM = "DeepSeek 키가 아직 없어요. 지금 저장하면 선호만 기록되고, 키를 등록(⚙️ 고급설정)하기 전까지는 기본 정찰(Claude)로 동작해요.";
-    const enM = "No DeepSeek key yet. Saving now records the preference only — the default scout (Claude) runs until you register a key (⚙️ Advanced).";
+    const koM = "DeepSeek 키가 아직 없어요. 지금 저장하면 선호만 기록되고, 키를 등록(⚙️ 고급설정)하기 전까지는 " + scoutNameExt(ws, "defaultText", "ko") + "이 맡아요."; // 모드 기본 담당(문구 감사 2026-09-21 — 'Claude 로 동작' 단정 제거)
+    const enM = "No DeepSeek key yet. Saving now records the preference only — " + scoutNameExt(ws, "defaultText", "en") + " runs until you register a key (⚙️ Advanced).";
     const goOn = await vscode.window.showWarningMessage(
       lang === "en" ? enM : koM, // 2차 blocker②: 모달도 저장 슬롯(lang) 기준 — 전역 tE와 갈리는 창 제거
       { modal: true },
@@ -2169,44 +2194,46 @@ h1{font-size:16px} h2{font-size:13px;margin:6px 0} .sub{color:var(--vscode-descr
 <div class="flow">
 ${card("#3ca89a", "⚙", "변경 감지", "Change sensing", [[tE("무엇", "what"), tE("지금 고치는 파일 + 예전에 같이 바뀌던 파일 힌트", "files you're editing + hints of files that changed together before")],[tE("누가", "who"), tE("기계(확장) — 자동", "machine (extension) — automatic")], [tE("비용", "cost"), tE("0 · LLM 없음 · 전부 로컬", "0 · no LLM · all local")], [tE("저장", "store"), tE("표시만(대시보드)", "display only (dashboard)")]])}
 <div class="arrow">→</div>
-${card("#9a6cdc", "⚡", "영향지도", "Impact map", [[tE("무엇", "what"), tE("이 변경이 어디까지 번질지 미리보기(확인 목록)", "a preview/checklist of how far the change reaches")], [tE("누가", "who"), tE("정찰 LLM — 직접 또는 자동 지시로 실행", "scout LLM — run directly or via auto-directive")], [tE("비용", "cost"), tE("기본 정찰(Claude)=별도 과금 없음(쓰시던 Claude 사용량 범위) · DeepSeek 정찰은 키 등록 시(=동의) · Codex 정찰은 쓰시는 Codex 계정 사용량 범위", "default scout (Claude) = no separate billing (within the Claude usage you already have) · DeepSeek scout only with a key (=consent) · Codex scout within your existing Codex account usage")], [tE("저장", "store"), tE("보관함(최근 30장) → 영향지도 카드", "archive (last 30) → impact-map card")]])}
+${card("#9a6cdc", "⚡", "영향지도", "Impact map", [[tE("무엇", "what"), tE("이 변경이 어디까지 번질지 미리보기(확인 목록)", "a preview/checklist of how far the change reaches")], [tE("누가", "who"), tE("정찰 LLM — 직접 또는 자동 지시로 실행", "scout LLM — run directly or via auto-directive")], [tE("비용", "cost"), tE("Claude 정찰=별도 과금 없음(쓰시던 Claude 사용량 범위) · DeepSeek 정찰은 키 등록 시(=동의) · Codex 정찰은 쓰시는 Codex 계정 사용량 범위 — 기본 담당은 모드 따라(클로드-코덱스=Claude · 코덱스-코덱스=Codex)", "Claude scout = no separate billing (within the Claude usage you already have) · DeepSeek scout only with a key (=consent) · Codex scout within your existing Codex account usage — the default follows the mode (Claude↔Codex = Claude · Codex↔Codex = Codex)")], [tE("저장", "store"), tE("보관함(최근 30장) → 영향지도 카드", "archive (last 30) → impact-map card")]])}
 <div class="arrow">→</div>
 ${card("#3ca89a", "⚙", "관찰 일지", "Field journal", [[tE("무엇", "what"), tE("지도의 제안이 검증을 지나며 맞음/틀림으로 자동 분류", "map suggestions auto-classified right/wrong through verification")], [tE("누가", "who"), tE("자동 — 검증 대화에 편승(추가 LLM 호출 0)", "automatic — rides the verify chat (0 extra LLM calls)")], [tE("신분", "states"), tE("미검증 → 검증됨(다음 정찰 자료에 우선 동봉) / 틀림 판명 — 반박 뒤 재확인(사람 1회·검증 2회)이 쌓이면 복권", "unverified → verified (prioritized in future scout packages) / disputed — rehabilitated if re-confirmed after (1 human / 2 verify)")], [tE("개입", "override"), tE("선택: 직접 확인·정정, 고정·차단, 교범 기록", "optional: confirm/correct, pin/ban, manual export")]])}
 <div class="arrow">→</div>
 ${card("#d9a441", "👤", "확정 교범", "Field manual", [[tE("무엇", "what"), tE("도장 찍은 결합만 저장소 문서(docs/MAP.md)로", "only stamped couplings become repo docs (docs/MAP.md)")], [tE("누가", "who"), tE("사람 — 원할 때만(선택)", "human — only when you want (optional)")], [tE("효과", "effect"), tE("다음 정찰·검증의 확정 지식 입력", "trusted input for future recon & verification")], [tE("없으면?", "if absent"), tE("아무 문제 없음 — ①~③은 그대로 자동", "totally fine — ①–③ keep running automatically")]])}
 </div>
-<div class="vrel">${tE("<b>검증(2트랙)과의 관계</b> — 구현 Claude가 코드를 바꾸면 Codex가 검증합니다(기존 2트랙). 정찰은 그 앞뒤에 붙습니다: 바꾸기 전 ②가 '어디를 확인해야 하나'를 주고, 검증이 끝나면 그 결과가 ③에 자동으로 쌓여 다음 ②가 더 똑똑해집니다.", "<b>Relation to verification (2-track)</b> — Claude implements, Codex verifies (the existing 2 tracks). Recon wraps around it: before a change, ② tells you what to check; after verification, results accrue into ③ so the next ② gets smarter.")}</div>
+<div class="vrel">${tE("<b>검증(2트랙)과의 관계</b> — 구현 담당(모드에 따라 Claude 또는 구현 Codex)이 코드를 바꾸면 검증 Codex가 검증합니다(기존 2트랙). 정찰은 그 앞뒤에 붙습니다: 바꾸기 전 ②가 '어디를 확인해야 하나'를 주고, 검증이 끝나면 그 결과가 ③에 자동으로 쌓여 다음 ②가 더 똑똑해집니다. 검증이 지켜야 할 경계(⑤ 수칙서)는 당신의 승인 도장으로만 바뀌고, 코어는 항상·서고는 관련분만 다음 검증에 실립니다.", "<b>Relation to verification (2-track)</b> — the implementer (Claude, or an implementer Codex, depending on the mode) changes code and a verifier Codex verifies it (the existing 2 tracks). Recon wraps around it: before a change, ② tells you what to check; after verification, results accrue into ③ so the next ② gets smarter. The bounds verification must respect (⑤ rulebook) change only with your approval stamp; the core rides along always, the archive only when relevant.")}</div>
 <h1 style="margin-top:20px">${tE("전체 배선도 — 무엇이 무엇을 만들고, 사람은 어디서 개입하나", "Full wiring diagram — what produces what, and where humans step in")}</h1>
-<div class="sub">${tE("실선=자동 흐름 · 점선=피드백(다음 정찰이 더 똑똑해지는 경로) · ⚙ 자동(AI 없음) · ⚡ AI 호출 · 👤 사람 선택", "solid = automatic flow · dashed = feedback (how the next recon gets smarter) · ⚙ auto (no AI) · ⚡ AI call · 👤 human optional")}</div>
-<svg viewBox="0 0 960 470" style="width:100%;max-width:960px;border:1px solid var(--vscode-panel-border);border-radius:8px;background:var(--vscode-editorWidget-background);margin:8px 0" xmlns="http://www.w3.org/2000/svg">
+<div class="sub">${tE("실선=자동 흐름 · 점선=피드백(다음 정찰·검증이 더 똑똑해지는 경로) · ⚙ 자동(AI 없음) · ⚡ AI 호출 · 👤 사람 선택", "solid = automatic flow · dashed = feedback (how the next recon/verification gets smarter) · ⚙ auto (no AI) · ⚡ AI call · 👤 human optional")}</div>
+<svg viewBox="0 0 960 500" style="width:100%;max-width:960px;border:1px solid var(--vscode-panel-border);border-radius:8px;background:var(--vscode-editorWidget-background);margin:8px 0" xmlns="http://www.w3.org/2000/svg">
   <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker></defs>
   <style>text{font-family:inherit;fill:var(--vscode-foreground)} .bx{fill:var(--vscode-editor-background);stroke-width:1.6;rx:8} .t1{font-size:12px;font-weight:700} .t2{font-size:10px;opacity:.8} .lb{font-size:9.5px;opacity:.75} .ln{stroke:var(--vscode-descriptionForeground);stroke-width:1.4;fill:none;color:var(--vscode-descriptionForeground)} .fb{stroke-dasharray:5 4}</style>
   <rect class="bx" x="14" y="30" width="120" height="52" stroke="#7f8c9b"/><text class="t1" x="26" y="50">${tE("👨‍💻 작업", "👨‍💻 Your work")}</text><text class="t2" x="26" y="66">${tE("파일 수정·플랜", "edits · plans")}</text>
   <rect class="bx" x="170" y="30" width="140" height="52" stroke="#3ca89a"/><text class="t1" x="182" y="50">${tE("⚙ ① 변경 감지", "⚙ ① Sensing")}</text><text class="t2" x="182" y="66">${tE("확장이 자동 관찰", "extension watches")}</text>
   <rect class="bx" x="346" y="18" width="160" height="76" stroke="#3ca89a"/><text class="t1" x="358" y="38">${tE("📦 증거 꾸러미", "📦 Evidence pack")}</text><text class="t2" x="358" y="54">${tE("바뀐 내용·참조·과거 힌트", "diff · refs · history hints")}</text><text class="t2" x="358" y="68">${tE("+ 일지 검증분 + 교범", "+ verified journal + manual")}</text><text class="t2" x="358" y="82">${tE("(자동 조립·민감정보 제외)", "(auto-built · secrets excluded)")}</text>
-  <rect class="bx" x="542" y="30" width="150" height="52" stroke="#9a6cdc"/><text class="t1" x="554" y="50">${tE("⚡ ② 정찰 AI", "⚡ ② Scout AI")}</text><text class="t2" x="554" y="66">${tE("기본=Claude · 키 시 DeepSeek", "default=Claude · DeepSeek w/ key")}</text>
+  <rect class="bx" x="542" y="22" width="160" height="68" stroke="#9a6cdc"/><text class="t1" x="554" y="42">${tE("⚡ ② 정찰 AI", "⚡ ② Scout AI")}</text><text class="t2" x="554" y="58">${tE("기본=모드별(Claude/Codex)", "default: per mode")}</text><text class="t2" x="554" y="72">${tE("셋 중 선택 · DeepSeek=키", "any of 3 · DeepSeek: key")}</text>
   <rect class="bx" x="728" y="30" width="120" height="52" stroke="#9a6cdc"/><text class="t1" x="740" y="50">${tE("🗺 영향지도", "🗺 Impact map")}</text><text class="t2" x="740" y="66">${tE("어디까지 번지나", "how far it reaches")}</text>
-  <line class="ln" x1="134" y1="56" x2="166" y2="56" marker-end="url(#ah)"/><line class="ln" x1="310" y1="56" x2="342" y2="56" marker-end="url(#ah)"/><line class="ln" x1="506" y1="56" x2="538" y2="56" marker-end="url(#ah)"/><line class="ln" x1="692" y1="56" x2="724" y2="56" marker-end="url(#ah)"/>
-  <rect class="bx" x="728" y="120" width="120" height="44" stroke="#7f8c9b"/><text class="t1" x="740" y="138">${tE("👁 게시판", "👁 Board")}</text><text class="t2" x="740" y="153">${tE("사람 열람 전용", "read-only for you")}</text>
-  <line class="ln" x1="788" y1="82" x2="788" y2="116" marker-end="url(#ah)"/>
-  <rect class="bx" x="366" y="150" width="230" height="56" stroke="#2f6fb3"/><text class="t1" x="378" y="170">${tE("🔍 Codex 검증 ⚡ (기존 2트랙)", "🔍 Codex verify ⚡ (2-track)")}</text><text class="t2" x="378" y="186">${tE("요청·변경 관련 항목 우선(없으면 기본 동봉+고지)", "relevant first (else default attach + notice)")}</text><text class="t2" x="378" y="199">${tE("통과+실제 파일 인용 → 지식 '확인' 신호", "pass + real file citations → 'confirm' signal")}</text>
-  <path class="ln" d="M 728 70 C 640 100 620 130 600 150" marker-end="url(#ah)"/><text class="lb" x="618" y="120">${tE("동봉", "attach")}</text>
-  <rect class="bx" x="80" y="150" width="200" height="56" stroke="#d97a7a"/><text class="t1" x="92" y="170">${tE("🚧 플랜 게이트 (3트랙 기본 켜짐·끌 수 있음)", "🚧 Plan gate (on by default in 3-track, can be turned off)")}</text><text class="t2" x="92" y="186">${tE("플랜 확정 전 지도 신선한지 확인", "checks map freshness before plan exit")}</text><text class="t2" x="92" y="199">${tE("낡으면 '지도부터' 안내(세션 2회 상한)", "if stale: 'map first' (max 2/session)")}</text>
-  <path class="ln" d="M 74 82 C 74 110 80 130 110 150" marker-end="url(#ah)"/>
-  <rect class="bx" x="250" y="250" width="420" height="88" stroke="#3ca89a"/><text class="t1" x="262" y="270">${tE("📔 ③ 관찰 일지 — 자동 기억(이 PC)", "📔 ③ Field journal — auto memory (this PC)")}</text>
-  <text class="t2" x="262" y="288">${tE("✚ 제안(지도가 발견) ▶ 동봉(자료에 실림) ✔ 확인(검증이 인정) ✖ 반박(틀림 판명)", "✚ proposed (map finds) ▶ attached (packed) ✔ confirmed (verify agrees) ✖ disputed")}</text>
-  <text class="t2" x="262" y="304">${tE("신분: 미검증(참고) → 검증됨(다음 정찰에 동봉) / 틀림 판명(제외 — 재확인 시 복권)", "states: unverified (reference) → verified (feeds future scout) / disputed (excluded — later evidence can rehabilitate)")}</text>
-  <text class="t2" x="262" y="320">${tE("👤 개입(선택): 직접 확인·정정 / 고정·차단 — 안 눌러도 자동 운용", "👤 optional: confirm/correct / pin/ban — automatic when untouched")}</text>
-  <path class="ln" d="M 800 82 C 860 140 820 220 670 268" marker-end="url(#ah)"/><text class="lb" x="812" y="180">${tE("발견을 제안으로", "findings → proposals")}</text>
-  <path class="ln" d="M 481 206 L 481 246" marker-end="url(#ah)"/><text class="lb" x="489" y="232">${tE("확인/반박", "confirm/refute")}</text>
-  <rect class="bx" x="80" y="266" width="120" height="52" stroke="#7f8c9b"/><text class="t1" x="92" y="286">${tE("🗣 당신의 말", "🗣 Your words")}</text><text class="t2" x="92" y="302">${tE("'그건 아니야' =", "'that's wrong' =")}</text><text class="t2" x="92" y="314">${tE("정정 근거로 기록", "recorded as dispute")}</text>
-  <line class="ln" x1="200" y1="292" x2="246" y2="292" marker-end="url(#ah)"/>
-  <rect class="bx" x="728" y="380" width="200" height="60" stroke="#d9a441"/><text class="t1" x="740" y="400">${tE("📕 ④ 확정 교범 👤", "📕 ④ Field manual 👤")}</text><text class="t2" x="740" y="416">${tE("도장 찍은 항목만 저장소 문서로", "only stamped items → repo doc")}</text><text class="t2" x="740" y="430">${tE("팀·다른 PC 공유 · 자동 주입 없음", "shared via repo · never auto-injected")}</text>
-  <path class="ln" d="M 670 310 C 720 330 740 350 780 376" marker-end="url(#ah)"/><text class="lb" x="700" y="348">${tE("👤 도장(선택)", "👤 stamp (optional)")}</text>
-  <path class="ln fb" d="M 250 300 C 120 340 150 120 342 80" marker-end="url(#ah)"/><text class="lb" x="128" y="238">${tE("검증된 일지가 다음 꾸러미로", "verified journal feeds next pack")}</text>
-  <path class="ln fb" d="M 728 400 C 300 460 240 200 350 96" marker-end="url(#ah)"/><text class="lb" x="300" y="430">${tE("교범도 다음 꾸러미의 확정 사실로", "manual feeds next pack as settled fact")}</text>
+  <rect class="bx" x="868" y="30" width="72" height="52" stroke="#7f8c9b"/><text class="t1" x="878" y="50">${tE("👁 게시판", "👁 Board")}</text><text class="t2" x="878" y="66">${tE("열람 전용", "read-only")}</text>
+  <line class="ln" x1="134" y1="56" x2="166" y2="56" marker-end="url(#ah)"/><line class="ln" x1="310" y1="56" x2="342" y2="56" marker-end="url(#ah)"/><line class="ln" x1="506" y1="56" x2="538" y2="56" marker-end="url(#ah)"/><line class="ln" x1="702" y1="56" x2="724" y2="56" marker-end="url(#ah)"/><line class="ln" x1="848" y1="56" x2="864" y2="56" marker-end="url(#ah)"/>
+  <rect class="bx" x="60" y="150" width="250" height="56" stroke="#d97a7a"/><text class="t1" x="72" y="170">${tE("🚧 플랜 게이트", "🚧 Plan gate")}</text><text class="t2" x="72" y="186">${tE("플랜 확정 전 지도 신선도 확인(3트랙 기본 켜짐)", "map freshness before plan exit (3-track default on)")}</text><text class="t2" x="72" y="199">${tE("낡으면 '지도부터' 안내(2회 상한) · 미준비면 통과", "stale: 'map first' (max 2) · passes if scout not ready")}</text>
+  <path class="ln" d="M 74 82 C 74 110 80 130 100 150" marker-end="url(#ah)"/>
+  <path class="ln fb" d="M 150 150 C 150 122 132 100 120 86" marker-end="url(#ah)"/><text class="lb" x="156" y="120">${tE("낡음 → 정찰 재요청", "stale → re-run recon")}</text>
+  <rect class="bx" x="366" y="150" width="230" height="56" stroke="#2f6fb3"/><text class="t1" x="378" y="170">${tE("🔍 Codex 검증 ⚡ (기존 2트랙)", "🔍 Codex verify ⚡ (2-track)")}</text><text class="t2" x="378" y="186">${tE("관련 항목 우선(없으면 기본 동봉+고지)", "relevant first (else default attach + notice)")}</text><text class="t2" x="378" y="199">${tE("통과+실제 파일 인용 → '확인' 신호", "pass + real file citations → 'confirm' signal")}</text>
+  <path class="ln" d="M 728 76 L 714 76 L 714 100 L 560 100 L 560 148" marker-end="url(#ah)"/><text class="lb" x="566" y="116">${tE("동봉", "attach")}</text>
+  <rect class="bx" x="700" y="116" width="240" height="80" stroke="#c98a2b"/><text class="t1" x="712" y="136">${tE("📜 ⑤ 수칙서(검증 경계) 👤", "📜 ⑤ Rulebook (verify bounds) 👤")}</text><text class="t2" x="712" y="152">${tE("후보: 정정 원문·검증 답·직접 입력·정리 담당", "from corrections·verdicts·manual·curator")}</text><text class="t2" x="712" y="166">${tE("→ 병합 초안 → 👤 승인(코어·서고 두 도장)", "→ merged draft → 👤 approve (2 stamps)")}</text><text class="t2" x="712" y="180">${tE("코어=항상 · 서고=관련분만 → 검증에 동봉", "core: always · archive: relevant → verify")}</text>
+  <line class="ln" x1="696" y1="160" x2="600" y2="160" marker-end="url(#ah)"/><text class="lb" x="612" y="156">${tE("수칙 동봉", "rules attach")}</text>
+  <line class="ln" x1="600" y1="184" x2="696" y2="184" marker-end="url(#ah)"/><text class="lb" x="606" y="197">${tE("답에서 후보 회수", "harvest candidates")}</text>
+  <rect class="bx" x="400" y="226" width="160" height="52" stroke="#7f8c9b"/><text class="t1" x="412" y="246">${tE("🗣 당신의 정정", "🗣 Your correction")}</text><text class="t2" x="412" y="262">${tE("버튼·대행 기록 → 일지", "button · CLI note → journal")}</text><text class="t2" x="412" y="274">${tE("정정 원문 → 수칙서 후보", "quote → rulebook candidate")}</text>
+  <line class="ln" x1="480" y1="278" x2="480" y2="296" marker-end="url(#ah)"/>
+  <line class="ln" x1="580" y1="206" x2="580" y2="296" marker-end="url(#ah)"/><text class="lb" x="588" y="240">${tE("확인/반박", "confirm/refute")}</text>
+  <rect class="bx" x="360" y="300" width="400" height="88" stroke="#3ca89a"/><text class="t1" x="372" y="320">${tE("📔 ③ 관찰 일지 — 자동 기억(이 PC)", "📔 ③ Field journal — auto memory (this PC)")}</text>
+  <text class="t2" x="372" y="338">${tE("✚ 제안(지도가 발견) ▶ 동봉(자료에 실림) ✔ 확인(검증이 인정) ✖ 반박(틀림 판명)", "✚ proposed (map) ▶ attached (pack) ✔ confirmed (verify) ✖ disputed")}</text>
+  <text class="t2" x="372" y="354">${tE("신분: 미검증(참고) → 검증됨(다음 정찰에 동봉) / 틀림 판명(제외 — 재확인 시 복권)", "states: unverified → verified (feeds scout) / disputed (excluded, may return)")}</text>
+  <text class="t2" x="372" y="370">${tE("👤 개입(선택): 직접 확인·정정 / 고정·차단 — 안 눌러도 자동 운용", "👤 optional: confirm/correct / pin/ban — automatic when untouched")}</text>
+  <path class="ln" d="M 840 82 L 840 100 L 952 100 L 952 344 L 764 344" marker-end="url(#ah)"/><text class="lb" text-anchor="end" x="946" y="330">${tE("발견을 제안으로", "findings → proposals")}</text>
+  <rect class="bx" x="728" y="420" width="220" height="60" stroke="#d9a441"/><text class="t1" x="740" y="440">${tE("📕 ④ 확정 교범 👤", "📕 ④ Field manual 👤")}</text><text class="t2" x="740" y="456">${tE("도장 찍은 항목만 저장소 문서로", "only stamped items → repo doc")}</text><text class="t2" x="740" y="470">${tE("1회 도장·저절로 안 쌓임·수칙서와 별개", "one stamp · never piles up · ≠ rulebook")}</text>
+  <path class="ln" d="M 740 388 C 745 400 750 410 760 418" marker-end="url(#ah)"/><text class="lb" x="766" y="404">${tE("👤 도장(선택)", "👤 stamp (optional)")}</text>
+  <path class="ln fb" d="M 728 450 L 336 450 L 336 104 L 380 104 L 380 96" marker-end="url(#ah)"/><path class="ln fb" d="M 360 344 L 336 344"/><text class="lb" text-anchor="end" x="330" y="236">${tE("검증된 일지·확정 교범 → 다음 꾸러미", "verified journal · manual → next pack")}</text>
 </svg>
-<div class="sub">${tE("한눈 요약: 지도(⚡ 1회)가 발견을 내고 → 검증이 그 발견을 채점하고 → 일지가 스스로 기억하고(틀림도 반박 뒤 재확인이 쌓이면 복권) → 확실해진 것만 당신이 도장 찍어 문서로 남깁니다. 사람 개입은 직접 확인·정정, 고정·차단·도장, 게이트 스위치와 원할 때의 정찰 태도 편집뿐이며 전부 선택입니다.", "In one line: the map (one ⚡ call) makes findings → verification grades them → the journal remembers by itself (even 'wrong' entries rehabilitate on later re-confirms) → you stamp only what's proven into a doc. Human touchpoints—confirm/correct, pin/ban/stamp, the gate switch, and optional scout-attitude editing—are all optional.")}</div>
+<div class="sub">${tE("한눈 요약: 지도(⚡ 1회)가 발견을 내고 → 검증이 그 발견을 채점하고 → 일지가 스스로 기억하고(틀림도 반박 뒤 재확인이 쌓이면 복권) → 확실해진 것만 당신이 도장 찍어 문서로 남깁니다. 수칙서(⑤)는 여러 경로의 후보를 모아 당신의 승인 도장으로만 검증 경계가 됩니다. 사람 개입은 직접 확인·정정, 고정·차단·도장, 수칙 승인, 게이트 스위치와 원할 때의 정찰 태도 편집뿐이며 전부 선택입니다.", "In one line: the map (one ⚡ call) makes findings → verification grades them → the journal remembers by itself (even 'wrong' entries rehabilitate on later re-confirms) → you stamp only what's proven into a doc. The rulebook (⑤) gathers candidates from several routes and becomes verification bounds only with your approval stamp. Human touchpoints—confirm/correct, pin/ban/stamp, rule approval, the gate switch, and optional scout-attitude editing—are all optional.")}</div>
 <h1 style="margin-top:20px">${tE("프로젝트 유형별 — 기대할 수 있는 실효성", "By project type — what to realistically expect")}</h1>
 <div class="sub">${tE("유형은 구조로 판단하세요(이름이 아니라). '참고 실측'은 이 도구를 만들며 그 유형에서 실제 운용해 확인한 사례입니다.", "Judge by structure, not by name. 'Reference run' notes where this tool was actually operated on that shape during development.")}</div>
 <div class="types" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;margin:12px 0">
@@ -2220,11 +2247,11 @@ ${card("#d9a441", "🌱", "신생 프로젝트", "Young project", [[tE("구조",
 <b>${tE("Q. 내가 일일이 승인해야 하나요?", "Q. Do I have to approve things one by one?")}</b>
 ${tE("아니요. 적재·승격·강등은 전부 자동입니다. 직접 확인·정정, 확정 교범 내보내기, 고정·차단만 예외적인 선택 개입이고 안 써도 아무것도 멈추지 않습니다.", "No. Accrual, promotion and demotion are fully automatic. Direct confirm/correct, manual export, and pin/ban are exceptional optional controls — skipping them stops nothing.")}
 <b>${tE("Q. 언제 비용(LLM 호출)이 나가나요?", "Q. When does an LLM call (cost) happen?")}</b>
-${tE("⚡ 표시가 붙은 단계들입니다 — ①영향지도 생성: 기본 정찰은 별도 과금 없이 쓰시던 Claude로 실행되고(Claude 사용량 범위), DeepSeek 정찰은 키를 등록했을 때만, Codex 정찰은 쓰시는 Codex 계정 사용량 범위 ②Codex 검증(기존 2트랙의 본체): 검증을 보낼 때마다 쓰시는 Codex 계정 사용량 범위로 호출됩니다. ⚙ 단계들은 LLM 없이 돌고, 상태바 호버에 '지금 실행 중인 LLM 호출' 여부가 항상 표시됩니다.", "The steps marked ⚡ — ① map generation: the default scout adds no separate billing and runs on the Claude you already use (within your Claude usage); the DeepSeek scout only with a registered key; the Codex scout within your existing Codex account usage ② Codex verification (the core of 2-track): every verification you send is a call within your existing Codex account usage. ⚙ steps run without LLM, and the status-bar hover always shows whether an LLM call is running.")}
+${tE("⚡ 표시가 붙은 단계들입니다 — ①영향지도 생성: 담당에 따라 — Claude 정찰은 별도 과금 없이 쓰시던 Claude로 실행되고(Claude 사용량 범위), DeepSeek 정찰은 키를 등록했을 때만, Codex 정찰은 쓰시는 Codex 계정 사용량 범위(기본 담당은 모드 따라 Claude 또는 Codex) ②Codex 검증(기존 2트랙의 본체): 검증을 보낼 때마다 쓰시는 Codex 계정 사용량 범위로 호출됩니다. ⚙ 단계들은 LLM 없이 돌고, 상태바 호버에 '지금 실행 중인 LLM 호출' 여부가 항상 표시됩니다.", "The steps marked ⚡ — ① map generation, by scout: the Claude scout adds no separate billing and runs on the Claude you already use (within your Claude usage); the DeepSeek scout only with a registered key; the Codex scout within your existing Codex account usage (the default scout follows the mode: Claude or Codex) ② Codex verification (the core of 2-track): every verification you send is a call within your existing Codex account usage. ⚙ steps run without LLM, and the status-bar hover always shows whether an LLM call is running.")}
 <b>${tE("Q. AI 정찰(⚡)을 한 번도 실행하지 않으면 어떻게 되나요?", "Q. What if the AI recon (⚡) never runs?")}</b>
 ${tE("①(변경 감지)의 힌트만 동작하고, ②③④는 계속 비어 있습니다 — 이 축의 실질 성과는 AI 정찰 실행에서 나옵니다. 즉 3트랙을 켜기만 하고 정찰을 안 돌리면 얻는 것이 거의 없습니다.", "Only ①'s hints work; ②③④ stay empty — this axis delivers real value through AI recon runs. Turning 3-track on without ever running recon yields very little.")}
 <b>${tE("Q. 데이터는 어디로 가나요?", "Q. Where does data go?")}</b>
-${tE("전부 이 컴퓨터의 브릿지 홈에 남습니다. 외부로 나가는 경로는 네 갈래 — ⑴ Codex 검증을 보낼 때(2트랙의 기본 동작): 검증 요청문과 자동 동봉(지도 조각[지도 있을 때]·결합 확인 문안[일지 후보 있으면 지도 없어도]·하네스 기본 지침)이 쓰시던 codex CLI를 통해 Codex 서비스로 전달 ⑵ DeepSeek 키 등록 시: ① DeepSeek 정찰 '실행 순간'의 증거 꾸러미(민감 범주 파일은 내용도 이름도 가려짐) ② 3트랙을 켤 때 연결 점검 요청 1회(꾸러미 아님) ③ 탐색 담당이 DeepSeek일 때 정리 담당 실행 순간의 정리 재료(승인 수칙 문안·보관 서고 전체·장부 집계·결정 질문 — 탐색 담당 선택=동의) ⑶ 기본 정찰 실행 시: 같은 꾸러미가 쓰시던 Claude CLI를 통해 Claude 서비스로 전달(별도 결제 없음 · 정리 담당 실행 시 정리 재료도 같은 경로) ⑷ Codex 정찰 선택·실행 시: 같은 꾸러미가 쓰시던 codex CLI를 통해 Codex 서비스로 전달(검증과 분리된 독립 실행 1회·읽기 전용 강제 — 계정 사용량 범위 · 정리 담당 실행 시 정리 재료도 같은 경로). 상세는 PRIVACY.md.", "Everything stays in the bridge home on this machine. Data leaves via four routes — ⑴ whenever you send a Codex verification (the core of 2-track): the verification request plus its automatic attachments (map slice · coupling check lines · harness base directives) travel through your existing codex CLI to the Codex service ⑵ with a DeepSeek key: ① the evidence package at the moment the DeepSeek scout runs (sensitive-category files excluded by content and by name) ② a single connection check when you switch on 3-track (not a package) ③ when the scout is DeepSeek, the curation material at the moment the curator runs (approved rule wording · the whole archive · ledger aggregates · decision questions — choosing the scout is the consent) ⑶ when the default scout runs: the same package travels through your existing Claude CLI to the Claude service (no separate billing · curation material takes the same route when the curator runs) ⑷ when the Codex scout is selected and runs: the same package travels through your existing codex CLI to the Codex service (one independent run separate from verification, forced read-only — within your account usage · curation material takes the same route when the curator runs). Details in PRIVACY.md.")}
+${tE("전부 이 컴퓨터의 브릿지 홈에 남습니다. 외부로 나가는 경로는 네 갈래 — ⑴ Codex 검증을 보낼 때(2트랙의 기본 동작): 검증 요청문과 자동 동봉(지도 조각[지도 있을 때]·결합 확인 문안[일지 후보 있으면 지도 없어도]·하네스 기본 지침)이 쓰시던 codex CLI를 통해 Codex 서비스로 전달 ⑵ DeepSeek 키 등록 시: ① DeepSeek 정찰 '실행 순간'의 증거 꾸러미(민감 범주 파일은 내용도 이름도 가려짐) ② 3트랙을 켤 때 연결 점검 요청 1회(꾸러미 아님) ③ 탐색 담당이 DeepSeek일 때 정리 담당 실행 순간의 정리 재료(승인 수칙 문안·보관 서고 전체·장부 집계·결정 질문 — 탐색 담당 선택=동의) ⑶ Claude 정찰 실행 시(클로드-코덱스 모드의 기본 담당): 같은 꾸러미가 쓰시던 Claude CLI를 통해 Claude 서비스로 전달(별도 결제 없음 · 정리 담당 실행 시 정리 재료도 같은 경로) ⑷ Codex 정찰 선택·실행 시: 같은 꾸러미가 쓰시던 codex CLI를 통해 Codex 서비스로 전달(검증과 분리된 독립 실행 1회·읽기 전용 강제 — 계정 사용량 범위 · 정리 담당 실행 시 정리 재료도 같은 경로). 상세는 PRIVACY.md.", "Everything stays in the bridge home on this machine. Data leaves via four routes — ⑴ whenever you send a Codex verification (the core of 2-track): the verification request plus its automatic attachments (map slice · coupling check lines · harness base directives) travel through your existing codex CLI to the Codex service ⑵ with a DeepSeek key: ① the evidence package at the moment the DeepSeek scout runs (sensitive-category files excluded by content and by name) ② a single connection check when you switch on 3-track (not a package) ③ when the scout is DeepSeek, the curation material at the moment the curator runs (approved rule wording · the whole archive · ledger aggregates · decision questions — choosing the scout is the consent) ⑶ when the Claude scout runs (the default in Claude↔Codex mode): the same package travels through your existing Claude CLI to the Claude service (no separate billing · curation material takes the same route when the curator runs) ⑷ when the Codex scout is selected and runs: the same package travels through your existing codex CLI to the Codex service (one independent run separate from verification, forced read-only — within your account usage · curation material takes the same route when the curator runs). Details in PRIVACY.md.")}
 </div>
 </body></html>`;
 }
@@ -2388,7 +2415,7 @@ function scoutActualText(ws: string | null): string {
       if (Number.isFinite(t) && (!best || t > best.ts)) best = { arm, ts: t };
     }
     if (!best) return en ? "no scout run in the last 28 days" : "최근 28일 정찰 실행 없음";
-    const armLabel = best.arm === "deepseek" ? (en ? "DeepSeek scout" : "DeepSeek 정찰") : best.arm === "codex" ? (en ? "Codex scout" : "Codex 정찰") : (en ? "default scout (Claude)" : "기본 정찰(Claude)");
+    const armLabel = scoutNameExt(ws, best.arm === "deepseek" ? "deepseek" : best.arm === "codex" ? "codex" : "self"); // 담당 이름 정본(모드 기본 반영)
     return (en ? "last map: " : "마지막 지도: ") + armLabel + " · " + ageLabel(Date.now() - best.ts, en);
   } catch { return ""; }
 }
@@ -2836,6 +2863,7 @@ function computeState(turnsN: number): BridgeState {
     scoutTarget: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const r = scoutTargetFor(ws); const dr = detectScoutTargetDriftExt(r.repo, ws); return { repo: r.repo, differs: normWs(r.repo) !== normWs(ws), invalid: r.source === "ws-fallback-invalid", configured: r.source === "contract" || r.source === "contract-other-lang", inherited: r.source === "contract-other-lang", drift: dr.drift ? { repo: dr.repo as string, sample: dr.sample || 0, agree: dr.agree || 0 } : null }; } catch { return null; } })(),
     scoutGate: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; return effectiveScoutGate(ws); } catch { return null; } })(),
     bridgeStale: bridgeStaleView(), // 브릿지 판 어긋남(창 미로드) — 매 렌더 관측·최초 감지 시 1회 알림
+    scoutNames: scoutNamesExt(ws), // 담당 표시명(정찰 on/off 무관 — 고급설정 키 안내 등 상시 표면이 쓴다)
     scoutArm: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; return scoutArmViewExt(ws); } catch { return null; } })(), // slot은 뷰가 계산과 원자 결속해 반환(3차 blocker — 사후 재판독 금지)
     mapMode: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const CLx: any = bridgeLib(); return CLx && CLx.mapModeView ? CLx.mapModeView(ws) : null; } catch { return null; } })(), // P7 — 3트랙에서만
     mapExcerpt: (() => { if (!ws) return null; try { if (loadContract(ws).scoutMode !== "on") return null; const EX9: any = require(path.join(BRIDGE_DIR, "enrich-excerpt-cfg.js")); const v9 = EX9.mapExcerptView(ws, loadLangExt(), contractFileFor); return { ws, raw: v9.raw, eff: v9.eff, source: v9.source, slot: v9.slot, presetKey: v9.presetKey, presets: EX9.MAP_EXCERPT_PRESETS, bounds: { filesMin: EX9.EXCERPT_FILES_MIN, filesMax: EX9.EXCERPT_FILES_MAX, charsMin: EX9.EXCERPT_CHARS_MIN, charsMax: EX9.EXCERPT_CHARS_MAX }, text: EX9.excerptCfgText(v9.eff, loadLangExt()) }; } catch { return null; } })(), // 묶음 3 — 발췌 범위 옵션(3트랙에서만 · 설치본 모듈이 없으면 null=줄 숨김)
@@ -4634,11 +4662,17 @@ class Dashboard {
               }
             })().catch(() => { /* 확인 스텝 실패가 저장 흐름을 못 막음 */ });
             { const wsB = dashboardWorkspace(); if (wsB) trySpawnMapBootstrap(wsB); } // P1: consent+대상 확정 후 비차단 기동(2트랙 게이트는 모듈 내부 최선행)
+            // 모드 기본 담당·준비 상태(문구 감사 2026-09-21): 'Claude 가 전부 동작' 단정 대신 이 프로젝트의 기본 담당 이름과 지금 준비 여부를 말한다.
+            const wsK = dashboardWorkspace();
+            const armK = wsK ? scoutArmViewExt(wsK) : null;
+            const armNoKey: "self" | "codex" = armK ? armK.noKeyArm : "self"; // 키 없을 때 실제 실행될 담당(명시 self/codex 우선 · 4판 blocker — 실효 뷰가 계산)
+            const defKo = scoutArmTextExt(wsK, armNoKey, "ko"), defEn = scoutArmTextExt(wsK, armNoKey, "en");
+            const readyKo = armK && !armK.hasKey && armK.ready === false ? "(지금은 준비 안 됨 — 정찰 카드의 사유 참조)" : "", readyEn = armK && !armK.hasKey && armK.ready === false ? " (not ready right now — see the reason on the recon card)" : ""; // 준비 상태는 실효 담당 기준 — 키 없음(실효=armNoKey)일 때만 붙임
             if (!readDeepseekView().hasKey) {
               const go = tE("등록하러 가기", "Register key");
               vscode.window.showWarningMessage(tE(
-                "3트랙(정찰)이 켜졌지만 등록된 DeepSeek API 키가 없어요.\n\n키 없이도 기본 정찰(쓰시던 Claude가 겸임 — 별도 결제 없음)은 전부 동작하지만, '비교용 두 번째 정찰(DeepSeek)'은 잠겨 있어요. 그리고 어느 쪽이든 정찰이 한 번도 실행되지 않으면 3트랙의 효과가 미비할 수 있어요.\n\n상세는 정찰 카드의 '정찰 구조 자세히 보기 (새탭)'에서 확인하세요.",
-                "3-track (recon) is on, but no DeepSeek API key is registered.\n\nWithout a key the default recon (your existing Claude doubles as scout — no separate billing) fully works, but the second comparison scout (DeepSeek) stays locked. And with either scout, if recon never actually runs, 3-track delivers little.\n\nSee 'Recon structure in detail (new tab)' on the recon card."),
+                "3트랙(정찰)이 켜졌지만 등록된 DeepSeek API 키가 없어요.\n\n키 없이도 정찰은 " + defKo + "이 맡아요" + readyKo + " — '비교용 두 번째 정찰(DeepSeek)'만 잠겨 있어요. 그리고 어느 쪽이든 정찰이 한 번도 실행되지 않으면 3트랙의 효과가 미비할 수 있어요.\n\n상세는 정찰 카드의 '정찰 구조 자세히 보기 (새탭)'에서 확인하세요.",
+                "3-track (recon) is on, but no DeepSeek API key is registered.\n\nWithout a key, recon is handled by " + defEn + readyEn + " — only the second comparison scout (DeepSeek) stays locked. And with either scout, if recon never actually runs, 3-track delivers little.\n\nSee 'Recon structure in detail (new tab)' on the recon card."),
                 { modal: true }, go, tE("알겠습니다", "Got it")).then((pick) => {
                 if (pick === go) this.panel?.webview.postMessage({ type: "switchTab", tab: "adv" });
               });
@@ -4647,17 +4681,17 @@ class Dashboard {
               vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: tE("DeepSeek 연결 점검 중…", "Checking DeepSeek connection…") }, () => new Promise<void>((resolve) => {
                 try {
                   const tok = hookSetup.resolveNodeToken(nodeTokenCandidates());
-                  if (!tok) { vscode.window.showWarningMessage(tE("연결 점검을 실행할 node를 찾지 못했어요 — 키는 등록돼 있고, 기본 정찰(Claude 겸임)은 계속 동작합니다.", "Couldn't find node to run the check — the key is registered and default recon (Claude) keeps working.")); resolve(); return; }
+                  if (!tok) { vscode.window.showWarningMessage(tE("연결 점검을 실행할 node를 찾지 못했어요 — 키는 등록돼 있고, " + defKo + "은 영향받지 않아요.", "Couldn't find node to run the check — the key is registered and " + defEn + " is unaffected.")); resolve(); return; }
                   const p = spawn(tok.token + " " + JSON.stringify(path.join(BRIDGE_DIR, "deepseek-bridge.js").replace(/\\/g, "/")) + " ping", { shell: true, timeout: 45000 });
                   let out = "", err = "";
                   p.stdout?.on("data", (d) => { out += d; });
                   p.stderr?.on("data", (d) => { err += d; });
                   p.on("close", (code) => {
                     if (code === 0 && /^ok/m.test(out)) vscode.window.showInformationMessage(tE("API 등록과 정상 연결이 확인되었습니다 — 3트랙이 정상 운용됩니다(DeepSeek 비교 정찰 사용 가능).", "API key verified and connection OK — 3-track is fully operational (DeepSeek comparison scout available)."));
-                    else vscode.window.showWarningMessage(tE("키는 등록돼 있지만 연결 점검에 실패했어요(" + (err || out || "응답 없음").trim().slice(0, 120) + "). 기본 정찰(Claude 겸임)은 계속 동작합니다 — 키/네트워크를 확인하세요(⚙️ 고급설정).", "The key is registered but the connection check failed (" + (err || out || "no response").trim().slice(0, 120) + "). Default recon (Claude) keeps working — check the key/network (⚙️ Advanced)."));
+                    else vscode.window.showWarningMessage(tE("키는 등록돼 있지만 연결 점검에 실패했어요(" + (err || out || "응답 없음").trim().slice(0, 120) + "). " + defKo + "은 영향받지 않아요 — 키/네트워크를 확인하세요(⚙️ 고급설정).", "The key is registered but the connection check failed (" + (err || out || "no response").trim().slice(0, 120) + "). " + defEn + " is unaffected — check the key/network (⚙️ Advanced)."));
                     resolve();
                   });
-                  p.on("error", () => { vscode.window.showWarningMessage(tE("연결 점검 실행 실패 — 키는 등록돼 있고, 기본 정찰은 계속 동작합니다.", "Failed to run the check — the key is registered and default recon keeps working.")); resolve(); });
+                  p.on("error", () => { vscode.window.showWarningMessage(tE("연결 점검 실행 실패 — 키는 등록돼 있고, " + defKo + "은 영향받지 않아요.", "Failed to run the check — the key is registered and " + defEn + " is unaffected.")); resolve(); });
                 } catch { resolve(); }
               }));
             }
@@ -5813,7 +5847,7 @@ class Dashboard {
         <button type="button" data-sm="off">${t("2트랙<small>구현↔검증 (기본)</small>", "2-track<small>implement↔verify (default)</small>")}</button><button type="button" data-sm="on">${t("3트랙<small>+정찰 (관찰)</small>", "3-track<small>+recon (advisory)</small>")}</button>
       </span>
     </label>
-    <div class="hint"><span class="ic" title="${t("정찰(3트랙) = 4단계 흐름 — ①변경 감지(기계·AI 없음): 지금 고치는 파일+예전에 같이 바뀌던 파일 힌트 ②영향지도(정찰 AI 호출): 이 변경이 어디까지 번질지 미리보기 ③관찰 일지(자동·추가 LLM 없음): 검증을 지나며 맞은 것/틀린 것이 저절로 쌓임 ④확정 교범(👤 선택): 원할 때만 도장 찍어 저장소 문서로 — 안 써도 ①~③은 자동. 관찰(advisory) 중심 — 단 하나의 예외는 플랜 게이트(3트랙 기본 켜짐): 지도가 없거나 낡으면 플랜 확정 전에 먼저 지도를 요청(세션당 2회까지·이후 통과·언제든 끌 수 있음), 그 외에는 아무것도 막거나 강제하지 않음. 외부로 나가는 경로는 네 갈래 — Codex 검증 시(요청문+자동 동봉이 쓰시던 codex CLI 경유) / DeepSeek 키 등록 시(②의 꾸러미+연결 점검 1회, 키 등록=동의) / 기본 정찰 실행 시(같은 꾸러미가 쓰시던 Claude CLI 경유 — 별도 결제 없음) / Codex 정찰 선택·실행 시(같은 꾸러미가 쓰시던 codex CLI 경유 — 검증과 분리된 독립 실행·계정 사용량 범위). 이 설정은 프로젝트별 저장.", "Recon (3-track) = a 4-step flow — ① change sensing (machine, no AI): files you're editing + hints of files that changed together before ② impact map (scout AI call): preview how far this change reaches ③ field journal (auto, no extra LLM): right/wrong accrues by itself through verification ④ field manual (👤 optional): stamp items into repo docs only when you want — ①–③ run without it. Advisory-centred — the one exception is the plan gate (on by default in 3-track): if the map is missing/stale it asks for a map before plan confirmation (up to 2×/session, then passes · can be turned off anytime); everything else blocks/forces nothing. Data leaves via four routes — whenever a Codex verification is sent (the request plus automatic attachments through your existing codex CLI) / with a DeepSeek key (②'s package plus one connection check; key registration = consent) / when the default scout runs (the same package via your existing Claude CLI — no separate billing) / when the Codex scout is selected and runs (the same package via your existing codex CLI — one independent run separate from verification, within your account usage). Saved per project.")}">ⓘ ${t("정찰이란? (4단계 흐름)", "What is recon? (the 4-step flow)")}</span></div>
+    <div class="hint"><span class="ic" title="${t("정찰(3트랙) = 4단계 흐름 — ①변경 감지(기계·AI 없음): 지금 고치는 파일+예전에 같이 바뀌던 파일 힌트 ②영향지도(정찰 AI 호출): 이 변경이 어디까지 번질지 미리보기 ③관찰 일지(자동·추가 LLM 없음): 검증을 지나며 맞은 것/틀린 것이 저절로 쌓임 ④확정 교범(👤 선택): 원할 때만 도장 찍어 저장소 문서로 — 안 써도 ①~③은 자동. 관찰(advisory) 중심 — 단 하나의 예외는 플랜 게이트(3트랙 기본 켜짐): 지도가 없거나 낡으면 플랜 확정 전에 먼저 지도를 요청(세션당 2회까지·이후 통과·언제든 끌 수 있음), 그 외에는 아무것도 막거나 강제하지 않음. 외부로 나가는 경로는 네 갈래 — Codex 검증 시(요청문+자동 동봉이 쓰시던 codex CLI 경유) / DeepSeek 키 등록 시(②의 꾸러미+연결 점검 1회, 키 등록=동의) / Claude 정찰 실행 시(같은 꾸러미가 쓰시던 Claude CLI 경유 — 별도 결제 없음 · 클로드-코덱스 모드의 기본 담당) / Codex 정찰 선택·실행 시(같은 꾸러미가 쓰시던 codex CLI 경유 — 검증과 분리된 독립 실행·계정 사용량 범위). 이 설정은 프로젝트별 저장.", "Recon (3-track) = a 4-step flow — ① change sensing (machine, no AI): files you're editing + hints of files that changed together before ② impact map (scout AI call): preview how far this change reaches ③ field journal (auto, no extra LLM): right/wrong accrues by itself through verification ④ field manual (👤 optional): stamp items into repo docs only when you want — ①–③ run without it. Advisory-centred — the one exception is the plan gate (on by default in 3-track): if the map is missing/stale it asks for a map before plan confirmation (up to 2×/session, then passes · can be turned off anytime); everything else blocks/forces nothing. Data leaves via four routes — whenever a Codex verification is sent (the request plus automatic attachments through your existing codex CLI) / with a DeepSeek key (②'s package plus one connection check; key registration = consent) / when the Claude scout runs (the same package via your existing Claude CLI — no separate billing · the default in Claude↔Codex mode) / when the Codex scout is selected and runs (the same package via your existing codex CLI — one independent run separate from verification, within your account usage). Saved per project.")}">ⓘ ${t("정찰이란? (4단계 흐름)", "What is recon? (the 4-step flow)")}</span></div>
     <div id="scoutApiLine" class="muted" style="display:none;font-size:11.5px;margin:4px 0 0 2px"></div>
     <div id="scoutArmRow" style="display:none;font-size:11.5px;margin:6px 0 0 2px"></div>
     <div id="mapModeRow" style="display:none;font-size:11.5px;margin:6px 0 0 2px"></div>
@@ -6001,8 +6035,8 @@ class Dashboard {
     </div>
     <h2 class="sec base accent-yellow">${t("고급설정", "Advanced Settings")} <span class="sub2">${t("정찰(3트랙) 고급 단계용 — 전역 설정(모든 프로젝트 공통)", "for the advanced recon stage (3-track) — global (shared by all projects)")}</span></h2>
     <div class="card">
-      <div class="chead">${t("DeepSeek API 키", "DeepSeek API key")} <span class="muted" style="font-weight:400">${t("· 3트랙의 'DeepSeek 비교 정찰'(두 번째 정찰자)에만 필요 — 키 없이도 변경 감지와 기본 정찰(Claude) 영향지도(별도 과금 없음)는 동작해요", "· only needed for 3-track's DeepSeek comparison scout (the second scout) — change sensing and default-scout (Claude) impact maps (no separate billing) work without it")}</span></div>
-      <div class="hint">${t("키는 이 컴퓨터의 브릿지 홈(<code>~/.codex-bridge/deepseek.json</code>)에만 저장되고 저장소(GitHub)에는 절대 들어가지 않아요. 자료 꾸러미 전송은 <b>지도 생성이 실행될 때만</b> 일어나요 — 당신이 직접 실행하거나, <b>키 등록=동의 모델</b>에 따라 3트랙 자동 지시를 받은 Claude가 실행(조건: 지도가 없거나 낡았을 때 그 상태에 1회 지시 — 확장·훅 자체는 전송하지 않음). 그 외 외부 요청은 3트랙을 켤 때의 <b>연결 점검 1회</b>(꾸러미 아님 — 접속 확인용)뿐이에요. 대시보드를 보는 것만으로는 전송 없음. 발동 조건과 전송·제외 내용은 PRIVACY에 명시돼 있어요.", "The key is stored only in this machine's bridge home (<code>~/.codex-bridge/deepseek.json</code>) and never enters the repo (GitHub). The evidence package is sent <b>only when map generation runs</b> — you run it directly, or under the <b>key-registration=consent model</b> Claude runs it on the 3-track auto-directive (issued once per missing/stale-map state — the extension/hooks themselves never transmit). The only other external request is a single <b>connection check</b> when 3-track is switched on (not a package — reachability only). Viewing the dashboard sends nothing. Trigger conditions and what is sent/excluded are documented in PRIVACY.")}</div>
+      <div class="chead">${t("DeepSeek API 키", "DeepSeek API key")} <span class="muted" style="font-weight:400">${t("· 3트랙의 'DeepSeek 비교 정찰'(두 번째 정찰자)에만 필요 — 키 없이도 변경 감지와 모드 기본 담당(클로드-코덱스=Claude 정찰·별도 과금 없음 / 코덱스-코덱스=Codex 정찰)의 영향지도는 동작해요", "· only needed for 3-track's DeepSeek comparison scout (the second scout) — change sensing and impact maps by the mode's default scout (Claude↔Codex = Claude scout, no separate billing / Codex↔Codex = Codex scout) work without it")}</span></div>
+      <div class="hint">${t("키는 이 컴퓨터의 브릿지 홈(<code>~/.codex-bridge/deepseek.json</code>)에만 저장되고 저장소(GitHub)에는 절대 들어가지 않아요. 자료 꾸러미 전송은 <b>지도 생성이 실행될 때만</b> 일어나요 — 당신이 직접 실행하거나, <b>키 등록=동의 모델</b>에 따라 3트랙 자동 지시를 받은 구현 담당(운용 모드에 따라 Claude 또는 구현 Codex)이 실행(조건: 지도가 없거나 낡았을 때 그 상태에 1회 지시 — 확장·훅 자체는 전송하지 않음). 그 외 외부 요청은 3트랙을 켤 때의 <b>연결 점검 1회</b>(꾸러미 아님 — 접속 확인용)뿐이에요. 대시보드를 보는 것만으로는 전송 없음. 발동 조건과 전송·제외 내용은 PRIVACY에 명시돼 있어요.", "The key is stored only in this machine's bridge home (<code>~/.codex-bridge/deepseek.json</code>) and never enters the repo (GitHub). The evidence package is sent <b>only when map generation runs</b> — you run it directly, or under the <b>key-registration=consent model</b> the implementer of the current mode (Claude, or an implementer Codex) runs it on the 3-track auto-directive (issued once per missing/stale-map state — the extension/hooks themselves never transmit). The only other external request is a single <b>connection check</b> when 3-track is switched on (not a package — reachability only). Viewing the dashboard sends nothing. Trigger conditions and what is sent/excluded are documented in PRIVACY.")}</div>
       <div class="row" style="margin-top:8px">
         <input type="password" id="dsKey" placeholder="sk-..." style="flex:1;min-width:220px" autocomplete="off" />
         <button id="dsSave">${t("저장", "Save")}</button>
@@ -6035,7 +6069,7 @@ class Dashboard {
     <div class="chead" style="margin-top:12px">${t("③ 재판단 원칙", "③ Re-judgment principles")} <span class="muted" id="baseRejudgeTo" style="font-weight:400">${t("→ Claude에게 · Codex 답을 되짚을 때 · 검증 ON일 때만", "→ to Claude · when re-judging Codex's answer · only while verify is ON")}</span></div>
     <textarea id="bRejudge" rows="5"></textarea>
     <div id="bScoutWrap" style="display:none">
-      <div class="chead" style="margin-top:12px">${t("④ 정찰 기본 원칙", "④ Scout baseline")} <span class="muted" style="font-weight:400">${t("→ 정찰 AI에게 · 지도를 그리기 직전 · 3트랙일 때만 (기본 정찰·DeepSeek 정찰·Codex 정찰 공통)", "→ to the scout AI · right before drawing a map · 3-track only (all scouts)")}</span> <span id="bScoutOv" class="muted" style="font-weight:400"></span></div>
+      <div class="chead" style="margin-top:12px">${t("④ 정찰 기본 원칙", "④ Scout baseline")} <span class="muted" style="font-weight:400">${t("→ 정찰 AI에게 · 지도를 그리기 직전 · 3트랙일 때만 (Claude 정찰·DeepSeek 정찰·Codex 정찰 공통)", "→ to the scout AI · right before drawing a map · 3-track only (all scouts)")}</span> <span id="bScoutOv" class="muted" style="font-weight:400"></span></div>
       <textarea id="bScout" rows="3"></textarea>
       <div class="muted" style="margin-top:2px">${t("수정하면 이후 지도 기록에 '기본 프롬프트 아님' 서명이 남아요 — 나중에 명중률을 잴 때 기본 프롬프트 지도와 섞이지 않게 구분하는 표시입니다(자동으로 뭘 빼거나 막지는 않아요).", "Editing marks later map records as 'non-default prompt' — a marker so future hit-rate measurements can keep them apart from default-prompt maps (nothing is auto-excluded or blocked).")}</div>
       <div class="chead" style="margin-top:8px">${t("④-형식 계약", "④ Format contract")} <span class="fixedbadge">${t("잠금", "locked")}</span> <span class="muted" style="font-weight:400">${t("· 지도의 ①~⑥ 구획·high 표기는 기계가 그대로 읽는 배선이라 수정 불가 — 내용은 공개", "· the map's ①~⑥ sections and 'high' tags are machine-read wiring — not editable, shown for transparency")}</span></div>
@@ -6264,6 +6298,12 @@ class Dashboard {
   let appVM = null, appIM = null, appSM = null, appVP = null;
   let appRulesC = null, appRulesX = null; // P-8 2단 v10: 규칙 텍스트 정본 기준선 — '바뀐 필드만' 저장 판정용(dirty 제한)
   let curVB = "", appVB = null; // P-12 2b: 왕복 예산 초안/저장값(문자열 — ""=무제한, 숫자 문자열=상한)
+  var scoutNames9 = null; // 정찰 담당 표시명 묶음(호스트가 브릿지 정본 scoutArmNames 로 계산 — 문구 감사 2026-09-21). 화면은 이름을 짓지 않고 표시 언어로 고른다.
+  function scoutName(k){ var m = scoutNames9 ? (UI_EN ? scoutNames9.en : scoutNames9.ko) : null; return (m && m[k]) || (k==="defaultText" ? T("모드 기본 정찰 담당","the mode's default scout") : String(k)); }
+  function armName(arm){ return scoutName(arm==="deepseek" ? "deepseek" : arm==="codex" ? "codex" : "self"); }
+  function armText(arm){ return scoutName(arm==="deepseek" ? "deepseekText" : arm==="codex" ? "codexText" : "selfText"); } // 이름+비용 구절(안내문용)
+  function noKeyArm9(av){ if(av && (av.noKeyArm==="self"||av.noKeyArm==="codex")) return av.noKeyArm; var d9 = (scoutNames9 && scoutNames9.defaultArm) || (av && av.defaultArm) || "self"; return av && (av.raw==="self"||av.raw==="codex") ? av.raw : d9; } // 키 없을 때 실제 실행될 담당(호스트 계산값 우선 · 4판 blocker)
+  function noKeyReady9(av){ return !(av && av.noKeyReady===false); } // 그 담당의 준비 상태(5판 blocker: 키 있는 DeepSeek 의 ready 를 빌리지 않는다) · 상태에 없으면(구 판) 준비로 간주
   var mxDraft = null; // 묶음 3: 발췌 범위 미저장 초안 {files, chars, slot} — 15초 상태 갱신이 줄을 다시 그려도 입력을 지키고, 저장이 확인되거나(정본=초안) 기본값을 누를 때만 비운다(검증 1판 blocker)
   let appCkC = null, appCkX = null; // 체크박스 '마지막 적용값'(hold 판정용 — 미저장 체크 변경이 언어 전환에 덮이지 않게)
   let curPerm = "";   // 지금 Claude Code 권한 모드(active.json) — plan 게이트 표시용
@@ -7402,6 +7442,7 @@ class Dashboard {
     const keepY = window.scrollY;
     safeTop(function(){
       harnessMode=(d.contract&&d.contract.harnessMode)||"claude-codex"; var cc=harnessMode==="codex-codex";
+      scoutNames9 = d.scoutNames || null; // 담당 이름은 매 상태와 함께 갱신(모드 전환 반영)
       // dirty 자기치유(구현검증 2차 지적 1 — hold 판정보다 먼저): 비교 기준은 '카드가 렌더된 슬롯'(renderedMode)의
       // 디스크 값. 만료 후 지각 저장·외부 저장으로 디스크가 초안을 따라잡으면 dirty의 실체가 없으므로 여기서
       // 해제해야 hold(외부 전환+dirty)가 자연 해소된다(fill 내부에만 두면 hold 중 영구 잠금 — 2차 반례).
@@ -7812,7 +7853,9 @@ class Dashboard {
             api.appendChild(tm);
           } else {
             const hint2=document.createElement("span"); hint2.className="muted"; hint2.style.fontSize="10.5px";
-            hint2.textContent=T("기본 정찰(Claude·무과금)은 전부 동작 — 비교 정찰만 잠김(⚙️ 고급설정에서 등록)","default scout (Claude · free) fully works — only the comparison scout is locked (register in ⚙️ Advanced)");
+            { const nr=(d.scoutArm&&d.scoutArm.ready===false)?T("(지금 준비 안 됨)"," (not ready now)"):""; // 실효 담당·준비 상태(4판 blocker: 키 없음=eff 가 실제 담당)
+            const ea=d.scoutArm?armText(d.scoutArm.eff):scoutName("defaultText");
+            hint2.textContent=T("정찰은 "+ea+"이 맡음"+nr+" — 비교 정찰만 잠김(⚙️ 고급설정에서 등록)","recon by "+ea+nr+" — only the comparison scout is locked (register in ⚙️ Advanced)"); }
             api.appendChild(hint2);
           }
         }
@@ -7849,7 +7892,7 @@ class Dashboard {
             });
             btns[arm]=b; seg.appendChild(b);
           };
-          mk("self", av.defaultArm==="codex" ? T("Claude 정찰","Claude") : T("기본 정찰","Default"), T("Claude · 무과금","Claude · free"), slotMismatch); // 모드 기본이 codex 면 '기본' 표기는 codex 쪽으로
+          mk("self", scoutName("selfShort"), T("Claude · 무과금","Claude · free"), slotMismatch); // 이름은 정본(selfShort — 모드 기본이 codex 면 'Claude 정찰')
           mk("deepseek", "DeepSeek", av.hasKey?T("키 등록됨","key set"):T("키 필요","key required"), slotMismatch);
           mk("codex", "Codex", av.defaultArm==="codex" ? T("독립 세션 · 모드 기본","own session · mode default") : T("독립 세션","own session"), slotMismatch); // P6(2026-07-22): 구 '예정' 배지의 실체 — 실선택 가능 · 묶음 (다): C-C 모드 기본
           btns.codex.title=T("Codex가 탐색을 맡아요 — 검증 세션과 분리된 독립 실행 1회(쓰시는 Codex 계정 사용량 범위). 선택은 자동 지시의 1순위 러너에 반영돼요.","Codex handles scouting — one independent run, separate from the verification session (uses your existing Codex account). Your choice becomes the auto-directive's first-choice runner.");
@@ -7859,7 +7902,7 @@ class Dashboard {
           // 안내와 함께 한 번에 이동하는 버튼 — 경로 설명만 있고 이동 수단이 없던 공백 해소(탭 버튼 로컬 클릭).
           const advBtn=function(){ const b=document.createElement("button"); b.type="button"; b.className="secondary"; b.style.cssText="margin-left:8px;font-size:11px;padding:2px 8px"; b.textContent=T("⚙️ 고급설정 열기","⚙️ Open Advanced"); b.addEventListener("click", function(){ const t=document.querySelector('.tabbtn[data-tab=\"adv\"]'); if(t) t.click(); }); return b; };
           if(slotMismatch) note.textContent=T("언어 전환 반영 중 — 새 화면에서 다시 조작해 주세요","Language switch in progress — reopen controls on the refreshed screen");
-          else if(av.raw==="deepseek"&&!av.hasKey){ note.textContent=T("선호=DeepSeek이나 키 미등록 — 키 등록 전까지 기본 정찰(Claude)로 동작","Preference=DeepSeek but no key — the default scout (Claude) runs until you register one"); note.appendChild(advBtn()); }
+          else if(av.raw==="deepseek"&&!av.hasKey){ note.textContent=T("선호=DeepSeek이나 키 미등록 — 키 등록 전까지 "+armText(av.eff)+"이 맡아요","Preference=DeepSeek but no key — "+armText(av.eff)+" runs until you register one"); note.appendChild(advBtn()); } // 강등 실효(=모드 기본)
           else if(av.raw==="deepseek"){ note.textContent=T("키·모델 옵션은 ⚙️ 고급설정에 있어요(전역)","Key & model options live in ⚙️ Advanced (global)"); note.appendChild(advBtn()); }
           else if(av.raw==="codex"){ note.textContent=T("모델·추론 강도 옵션은 ⚙️ 고급설정에 있어요(전역 — 모든 프로젝트 공통 · '기본'=쓰시는 codex 기본)","Model & reasoning options live in ⚙️ Advanced (global — all projects · 'Default' = your codex defaults)"); note.appendChild(advBtn()); } // P6b: codex 선택 시 고급설정 안내+원클릭 이동
           else if(av.raw===null) note.textContent=T("미지정(기본값) — 선택은 자동 지시의 1순위 러너에 반영돼요","Unset (default) — your choice becomes the auto-directive's first-choice runner");
@@ -8134,13 +8177,13 @@ class Dashboard {
           lines.forEach(function(s){const dv=document.createElement("div"); dv.className="rmini"; dv.textContent=s; bx.appendChild(dv);});
           api.appendChild(bx); return bx;};
         apiBox("#3ca89a",
-          T("지금 이대로(키 없음) = 기본 흐름 전부 동작","As-is (no key) = the entire default flow works"),
-          [T("정찰 AI = 쓰시던 Claude가 겸임(별도 결제 없음)","scout AI = your existing Claude (no separate billing)"),
+          !noKeyReady9(d.scoutArm) ? T("지금 이대로(키 없음) = 정찰 담당 준비 뒤 기본 흐름 동작","As-is (no key) = the default flow works once the scout is ready") : T("지금 이대로(키 없음) = 기본 흐름 전부 동작","As-is (no key) = the entire default flow works"), // 키 없을 때 실행될 담당의 준비 상태 기준(5판 blocker)
+          [T("정찰 AI = "+armText(noKeyArm9(d.scoutArm))+(noKeyReady9(d.scoutArm)?"":"(지금 준비 안 됨)"),"scout AI = "+armText(noKeyArm9(d.scoutArm))+(noKeyReady9(d.scoutArm)?"":" (not ready now)")), // 키 없을 때 실제 실행될 담당+그 담당의 준비 상태(4·5판 blocker)
            T("지도·일지·교범·자동 승격 전부 이 상태로 됩니다","maps, journal, manual, auto-promotion — all included")]);
         apiBox("#9a6cdc",
           T("DeepSeek 키를 넣으면(선택) = 정찰만 분업","Add a DeepSeek key (optional) = split the scouting"),
-          [T("정찰을 다른 AI에게 맡겨 관점 비교·Claude 사용량 절약","a second AI scouts — perspective compare · saves Claude usage"),
-           d.deepseek&&d.deepseek.hasKey?T("현재: 등록됨 — 비교 정찰 사용 가능","now: registered — comparison scout ready"):T("실측(2026-07)에선 기본(Claude)이 더 정확했어요 — 필수 아님","in our 2026-07 test the default (Claude) was more accurate — not required")]);
+          [T("정찰을 다른 AI에게 맡겨 관점 비교·"+armName(noKeyArm9(d.scoutArm))+" 사용량 절약","a second AI scouts — perspective compare · saves "+armName(noKeyArm9(d.scoutArm))+" usage"),
+           d.deepseek&&d.deepseek.hasKey?T("현재: 등록됨 — 비교 정찰 사용 가능","now: registered — comparison scout ready"):T("실측(2026-07)에선 "+armName("self")+"이 더 정확했어요 — 필수 아님","in our 2026-07 test the "+armName("self")+" was more accurate — not required")]);
         box.appendChild(api);
       });
       // (2026-07-09 사용자 지시) '정찰 흐름 펼쳐보기' 접힘 그룹 폐기 — 위 한눈 도해와 내용 중복.
@@ -8156,7 +8199,7 @@ class Dashboard {
         if(d.hasTestsDir===false) envLine += T(" (tests 폴더가 안 보여서 지도의 '확인할 테스트' 칸은 비어 나올 수 있어요.)"," (No tests/ folder found, so the map's 'tests to check' section may come back empty.)");
         const env=add(envLine,"muted"); env.style.margin="0 0 6px";
         // LLM 필수성 — 한 줄로 압축(정직 고지 유지)
-        add(T("⚡ 실질 효과는 '정찰 실행'에서 나와요 — 한 번도 안 돌리면 지도·일지·교범은 비어 있습니다(기본 정찰은 별도 과금 없음).","⚡ Real value comes from recon actually running — if it never runs, maps/journal/manual stay empty (the default scout adds no separate billing)."),"muted");
+        add(T("⚡ 실질 효과는 '정찰 실행'에서 나와요 — 한 번도 안 돌리면 지도·일지·교범은 비어 있습니다.","⚡ Real value comes from recon actually running — if it never runs, maps/journal/manual stay empty."),"muted");
         // 자세히 보기 — 주 버튼 승격(경고 모달·API 박스가 이 버튼을 참조)
         const gb=document.createElement("button"); gb.style.cssText="margin:8px 0 10px;font-weight:700;padding:7px 16px";
         gb.textContent=T("📖 정찰 구조 자세히 보기 (새탭)","📖 Recon structure in detail (new tab)");
@@ -8167,7 +8210,7 @@ class Dashboard {
       // 탐색 상태 요약 1줄(사용자 지적: 침묵을 상태로 번역) — 지금 무엇이 돌고/안 돌고 있고, 다음 행동이 뭔지.
       (function(){
         const sc=d.scope; let line;
-        if(d.scoutLive) line=T("지금: 지도 생성 중… ("+(d.scoutLive.arm==="deepseek"?"DeepSeek 정찰":d.scoutLive.arm==="codex"?"Codex 정찰":"기본 정찰 Claude")+" — 끝나면 아래 게시판에 도착)","Now: generating a map… ("+(d.scoutLive.arm==="deepseek"?"DeepSeek scout":d.scoutLive.arm==="codex"?"Codex scout":"default scout (Claude)")+" — lands on the board below when done)");
+        if(d.scoutLive) line=T("지금: 지도 생성 중… ("+armName(d.scoutLive.arm)+" — 끝나면 아래 게시판에 도착)","Now: generating a map… ("+armName(d.scoutLive.arm)+" — lands on the board below when done)");
         else if(!sc) line=T("지금: 계산 대기 — 3트랙 저장 직후 자동 시작돼요.","Now: pending — starts right after saving 3-track.");
         else if(sc.note==="no-git") line=T("지금: 이 폴더엔 변경 기록(버전 관리)이 없어요 — '같이 바뀌던 파일' 힌트는 계산 불가 · 지도는 최근 수정 파일 기준으로 직접/자동 지시 실행 시 생성돼요.","Now: this folder has no change history (version control) — 'changed-together' hints can't be computed · maps are generated from recent edits on direct/auto-directive runs.");
         else if(sc.note==="error") line=T("지금: 변경 기록을 읽지 못했어요 — 잠시 후 자동 재시도돼요.","Now: couldn't read the change history — retries shortly.");
@@ -8195,7 +8238,7 @@ class Dashboard {
         const det=keyedDetails("senseDetail", T("자세히 — 후보 목록·키 안내·한계","Details — candidates · key note · limits"));
         const addD=(txt,cls)=>{const el=document.createElement("div"); el.className=cls||"sbrow"; el.textContent=txt; det.appendChild(el); return el;};
         if(d.deepseek && !d.deepseek.hasKey){
-          addD(T("ⓘ 키 없이도 변경 감지 + 기본 정찰(Claude) 지도(별도 과금 없음 — 쓰시던 Claude로 실행)까지 가능해요 — DeepSeek API 키는 '비교용 두 번째 정찰'만 엽니다(⚙️ 고급설정 탭).","ⓘ Without any key you get change sensing plus default-scout maps (no separate billing — runs on the Claude you already use) — a DeepSeek API key only unlocks the second, comparison scout (⚙️ Advanced tab)."),"muted");
+          addD(T("ⓘ 키 없이도 변경 감지 + 지도 생성까지 가능해요(지도는 "+armText(noKeyArm9(d.scoutArm))+"이 맡음"+(noKeyReady9(d.scoutArm)?"":" · 지금 준비 안 됨")+") — DeepSeek API 키는 '비교용 두 번째 정찰'만 엽니다(⚙️ 고급설정 탭).","ⓘ Without any key you get change sensing plus map generation (maps by "+armText(noKeyArm9(d.scoutArm))+(noKeyReady9(d.scoutArm)?"":" · not ready now")+") — a DeepSeek API key only unlocks the second, comparison scout (⚙️ Advanced tab)."),"muted"); // 키 없을 때 실행될 담당+준비 상태(4·5판 blocker)
         }
         const sc=d.scope;
         if(!sc){ addD(T("계산 대기 — 3트랙 저장 후 자동 갱신됩니다.","Pending — refreshes automatically after saving 3-track."),"muted"); }
@@ -8247,7 +8290,7 @@ class Dashboard {
         const nonGit = d.scope && d.scope.note==="no-git";
         add(nonGit
           ? T("AI 정찰 보고서(영향지도)가 아직 없어요 — 변경 기록이 없는 폴더는 '최근 수정 파일 기준'(전후 비교 없음)으로 지도를 만들어요. 생성은 터미널에서: " + BC9("scope-scout-self.js") + " <이 폴더 경로>. 생성되면 몇 초 뒤 여기 자동으로 떠요.","No AI recon report (impact map) yet — folders without change history build maps from recently modified files (no before/after diff). Generate from a terminal: " + BC9("scope-scout-self.js") + " <this folder>. New maps appear here a few seconds after generation.")
-          : T("AI 정찰 보고서(영향지도)가 아직 없어요 — 생성은 터미널에서: " + BC9("scope-scout-self.js") + " <프로젝트경로> (별도 과금 없음 — 쓰시던 Claude로 실행) 또는 같은 폴더의 scope-scout-deepseek.js (DeepSeek 정찰) · scope-scout-codex.js (Codex 정찰). 마켓 설치본에도 이 실행 파일이 함께 들어 있어요. 생성되면 몇 초 뒤 여기 자동으로 떠요.","No AI recon report (impact map) yet — generate from a terminal: " + BC9("scope-scout-self.js") + " <repo> (no separate billing — runs on the Claude you already use), or scope-scout-deepseek.js (DeepSeek scout) / scope-scout-codex.js (Codex scout) in the same folder. The marketplace build ships these runners too. New maps appear here a few seconds after generation."),"muted");
+          : T("AI 정찰 보고서(영향지도)가 아직 없어요 — 생성은 터미널에서: " + BC9("scope-scout-self.js") + " <프로젝트경로> ("+armName("self")+" · 별도 과금 없음) 또는 같은 폴더의 scope-scout-deepseek.js ("+armName("deepseek")+") · scope-scout-codex.js ("+armName("codex")+"). 마켓 설치본에도 이 실행 파일이 함께 들어 있어요. 생성되면 몇 초 뒤 여기 자동으로 떠요.","No AI recon report (impact map) yet — generate from a terminal: " + BC9("scope-scout-self.js") + " <repo> ("+armName("self")+" · no separate billing), or scope-scout-deepseek.js ("+armName("deepseek")+") / scope-scout-codex.js ("+armName("codex")+") in the same folder. The marketplace build ships these runners too. New maps appear here a few seconds after generation."),"muted");
         return;
       }
       // 낡은 지도 배지(신선도 — 경고 아님): 최신 지도 생성 이후 지금 변경 중인 파일이 더 바뀌었으면 정직 표기.
@@ -8257,18 +8300,19 @@ class Dashboard {
       sm.items.forEach(it=>{
         const when = it.ts ? new Date(it.ts).toLocaleString() : "?";
         const usage = (it.usageIn!=null && it.usageOut!=null) ? T(" · 보냄 "," · sent ")+it.usageIn+T("·받음 ","·got ")+it.usageOut+T("토큰"," tokens") : "";
-        add("• ["+when+"] "+(it.arm==="deepseek"?T("DeepSeek 정찰","DeepSeek scout"):it.arm==="codex"?T("Codex 정찰","Codex scout"):T("기본 정찰(Claude)","default scout (Claude)"))+(it.model?" ("+it.model+")":"")+usage,"muted");
+        add("• ["+when+"] "+armName(it.arm)+(it.model?" ("+it.model+")":"")+usage,"muted"); // 담당 이름 정본
       });
       if(sm.latest){
         // 펼침 유지 키는 지도 시각 기반 — 새 지도가 오면 기본 접힘(옛 지도에서 연 상태가 새 지도로 새지 않게 — Codex 보완)
-        const det=keyedDetails("map:"+(sm.latest.ts||"?"), T("최신 지도 펼쳐보기 ("+(sm.latest.arm==="deepseek"?"DeepSeek 정찰":sm.latest.arm==="codex"?"Codex 정찰":"기본 정찰")+")","Open latest map ("+(sm.latest.arm==="deepseek"?"DeepSeek scout":sm.latest.arm==="codex"?"Codex scout":"default scout")+")"));
+        const det=keyedDetails("map:"+(sm.latest.ts||"?"), T("최신 지도 펼쳐보기 ("+armName(sm.latest.arm)+")","Open latest map ("+armName(sm.latest.arm)+")"));
         const pre=document.createElement("pre");
         pre.style.cssText="white-space:pre-wrap;max-height:340px;overflow:auto;font-size:11px";
         pre.textContent=sm.latest.text + (sm.latest.truncated?T("\\n… (길어서 접힘 — 전문은 브릿지 홈 scouts 폴더 파일)","\\n… (truncated — full text in the bridge home scouts folder)"):""); // ★백슬래시 두 겹 필수: 이 스크립트는 바깥 템플릿 안이라 한 겹이면 HTML 생성 시 실제 개행으로 변환돼 웹뷰 JS 전체가 문법 오류로 죽는다(2026-07-06 실사고 — tests/webview-syntax가 검출)
         keepInnerScroll(pre, "mapPre:"+(sm.latest.ts||"?")); // 내부 스크롤 보존(새 지도=새 키라 자연 리셋)
         det.appendChild(pre); sec.appendChild(det);
       }
-      add(T("ⓘ 이 게시판은 열람 전용(보는 것만으로는 아무것도 전송 안 됨) — 지도 생성·전송은 명령이 실행될 때만: 당신이 직접, 또는 3트랙 자동 지시를 받은 Claude가(같은 상태엔 1회 지시). 대형·장기 프로젝트를 위해 프로젝트별 최근 30장을 보관.","ⓘ Read-only board (viewing sends nothing) — maps are generated/sent only when the command runs: by you directly, or by Claude on the 3-track auto-directive (issued once per state). The latest 30 are kept per project for large, long-running work."),"muted");
+      { const impl9 = (d.contract&&d.contract.harnessMode==="codex-codex") ? T("구현 Codex","the implementer Codex") : "Claude"; // 자동 지시 수신자=현재 모드의 구현 담당(문구 감사 2026-09-21 — Claude 단정 제거)
+      add(T("ⓘ 이 게시판은 열람 전용(보는 것만으로는 아무것도 전송 안 됨) — 지도 생성·전송은 명령이 실행될 때만: 당신이 직접, 또는 3트랙 자동 지시를 받은 "+impl9+"가(같은 상태엔 1회 지시). 대형·장기 프로젝트를 위해 프로젝트별 최근 30장을 보관.","ⓘ Read-only board (viewing sends nothing) — maps are generated/sent only when the command runs: by you directly, or by "+impl9+" on the 3-track auto-directive (issued once per state). The latest 30 are kept per project for large, long-running work."),"muted"); }
     });
     // ⑤-3 MAP 장부(자동 관측 기억 — 역할 전환 2026-07-07) — 승인 큐가 아니라 관측 패널:
     // 무엇을 봤고(제안)·반영했고(동봉/확인)·정정했는지(반박/차단)를 신분·타임라인으로 보여주고,
@@ -8489,7 +8533,7 @@ class Dashboard {
       const st=$("dsState"); if(!st) return;
       st.textContent = d.deepseek && d.deepseek.hasKey
         ? T("등록됨: ","Registered: ") + d.deepseek.masked + T(" · 모델: "," · model: ") + d.deepseek.model
-        : T("등록된 키 없음 — 잠기는 건 DeepSeek 비교 정찰뿐(변경 감지·기본 정찰 지도[별도 과금 없음]는 키 없이 동작).","No key registered — only the DeepSeek comparison scout is locked (change sensing and default-scout maps [no separate billing] work without it).");
+        : T("등록된 키 없음 — 잠기는 건 DeepSeek 비교 정찰뿐. 변경 감지·지도는 키 없이 동작하며 지도는 "+armText(noKeyArm9(d.scoutArm))+"이 맡아요"+(noKeyReady9(d.scoutArm)?"":"(지금은 준비 안 됨 — 정찰 카드의 사유 참조)")+".","No key registered — only the DeepSeek comparison scout is locked. Change sensing and maps work without it; maps are made by "+armText(noKeyArm9(d.scoutArm))+(noKeyReady9(d.scoutArm)?"":" (not ready now — see the recon card)")+"."); // 키 없을 때 실행될 담당+준비 상태(정찰 off 면 모드 기본 · 4·5판 blocker)
     });
     // ⑥-b 고급설정 탭 — Codex 정찰 두뇌 설정(P6b·선택형 개편 2026-07-23): 검증 카드와 같은 계정 캐시로
     // <select>+강도 버튼 재구성. 선충전 WYSIWYG(ab-2)·편집 보존(scDirty — select replaceChildren 리셋 보정
@@ -9711,7 +9755,7 @@ export function activate(context: vscode.ExtensionContext): void {
       try {
         if (loadContract(ws).scoutMode !== "on") return "";
         const live = readScoutLive(ws);
-        if (live) return tE(`정찰(3트랙): 지도 생성중… (${live.arm === "deepseek" ? "DeepSeek 정찰" : live.arm === "codex" ? "Codex 정찰" : "기본 정찰 Claude"} · ${new Date(live.startedAt).toLocaleTimeString()} 시작)`, `recon (3-track): generating map… (${live.arm === "deepseek" ? "DeepSeek scout" : live.arm === "codex" ? "Codex scout" : "default scout (Claude)"} · started ${new Date(live.startedAt).toLocaleTimeString()})`);
+        if (live) { const armN = scoutNameExt(ws, live.arm === "deepseek" ? "deepseek" : live.arm === "codex" ? "codex" : "self"); return tE(`정찰(3트랙): 지도 생성중… (${armN} · ${new Date(live.startedAt).toLocaleTimeString()} 시작)`, `recon (3-track): generating map… (${armN} · started ${new Date(live.startedAt).toLocaleTimeString()})`); }
         const sc = readScopeState(ws);
         const maps = readScoutMaps(ws);
         const stale = computeScoutMapStale(ws, sc, maps);
@@ -9742,9 +9786,10 @@ export function activate(context: vscode.ExtensionContext): void {
     // 정찰의 '주 실행 경로'인데 그 동안 상태바가 flow 3박스로 바뀌어 표시가 전멸하던 실구멍(감사 B-A) — 3박스 툴팁에 병기.
     const scoutOn = !!ws && (() => { try { return loadContract(ws).scoutMode === "on"; } catch { return false; } })();
     const scoutLiveNow = scoutOn && ws && (mode === "linked" || mode === "unlinked" || mode === "flow") ? readScoutLive(ws) : null;
+    const scoutLiveArmName = scoutLiveNow ? scoutNameExt(ws, scoutLiveNow.arm === "deepseek" ? "deepseek" : scoutLiveNow.arm === "codex" ? "codex" : "self") : ""; // 담당 이름 정본(모드 기본 반영)
     const llmLine = (mode === "linked" || mode === "unlinked")
       ? (scoutLiveNow
-        ? tE(`⚡ LLM 호출 중: 정찰 지도 생성(${scoutLiveNow.arm === "deepseek" ? "DeepSeek 정찰" : scoutLiveNow.arm === "codex" ? "Codex 정찰" : "기본 정찰 Claude"})`, `⚡ LLM call in flight: recon map (${scoutLiveNow.arm === "deepseek" ? "DeepSeek scout" : scoutLiveNow.arm === "codex" ? "Codex scout" : "default scout (Claude)"})`)
+        ? tE(`⚡ LLM 호출 중: 정찰 지도 생성(${scoutLiveArmName})`, `⚡ LLM call in flight: recon map (${scoutLiveArmName})`)
         : scoutOn
         ? tE("지금 실행 중인 LLM 호출 없음 — 변경 감지는 LLM 없이 자동 · 관찰 일지는 추가 LLM 없이 자동 누적", "no LLM call running now — change sensing runs without LLM · the field journal accrues with no extra LLM")
         : tE("지금 실행 중인 LLM 호출 없음", "no LLM call running now")) // 2트랙: 정찰 기능(변경 감지·일지) 설명은 사실이 아니므로 뗌(감사 B-D)
@@ -9820,7 +9865,7 @@ export function activate(context: vscode.ExtensionContext): void {
         ? (hmode === "codex-codex" ? tE(`\n\n구현 Codex가 검증 답을 반영 중`,`\n\nImplementer Codex is applying the verdict`) : tE(`\n\nClaude가 검증 답을 반영 중`,`\n\nClaude is applying the verdict`))
         : (hmode === "codex-codex" ? tE(`\n\n구현 Codex 작업 중`,`\n\nImplementer Codex working`) : tE(`\n\nClaude 작업 중`,`\n\nClaude working`));
       const flowScout = scoutLiveNow
-        ? tE(`\n\n⚡ 정찰 지도 생성 중(${scoutLiveNow.arm === "deepseek" ? "DeepSeek 정찰" : scoutLiveNow.arm === "codex" ? "Codex 정찰" : "기본 정찰 Claude"}) — 이 턴 안에서 실행`,`\n\n⚡ recon map generating (${scoutLiveNow.arm === "deepseek" ? "DeepSeek scout" : scoutLiveNow.arm === "codex" ? "Codex scout" : "default scout (Claude)"}) — running inside this turn`)
+        ? tE(`\n\n⚡ 정찰 지도 생성 중(${scoutLiveArmName}) — 이 턴 안에서 실행`,`\n\n⚡ recon map generating (${scoutLiveArmName}) — running inside this turn`)
         : "";
       fArrow.tooltip = new vscode.MarkdownString(tE(`**검증 진행 — `,`**verify progress — `) + `${live.label}**` + `${live.round ? tE(` (라운드 ${live.round})`,` (round ${live.round})`) : ""}` + flowLlm + flowScout + tE(`\n\n클릭 → 대시보드`,`\n\nclick → dashboard`));
       fClaude.show(); fArrow.show(); fCodex.show();

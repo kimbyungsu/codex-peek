@@ -55,7 +55,7 @@ ok(/className="rlife"/.test(ext) && /신설/.test(ext) && /승격/.test(ext) && 
 ok(/지금 이대로\(키 없음\) = 기본 흐름 전부 동작/.test(ext) && /DeepSeek 키를 넣으면\(선택\) = 정찰만 분업/.test(ext), "API 비교 2박스 — 'DeepSeek 없인 못 쓰나?'에 첫 줄 즉답(과장 없는 문구 — Codex 정정)");
 ok(/className="rlchip"/.test(ext) && (ext.match(/\.rchip\{/g)||[]).length===1, "수명주기 칩은 .rlchip — 기존 .rchip(규칙 메타 칩) 전역 충돌 재발 잠금(정의 1개만)");
 ok(/aria-label/.test(ext), "칩 hover 설명에 aria-label 병기(접근성)");
-ok(/기본\(Claude\)이 더 정확했어요 — 필수 아님/.test(ext), "실측 근거로 '필수 아님' 정직 명시");
+ok(/"\+armName\("self"\)\+"이 더 정확했어요 — 필수 아님/.test(ext) && !/기본\(Claude\)이 더 정확했어요/.test(ext), "실측 근거로 '필수 아님' 정직 명시 — 담당 이름은 정본(armName self: 모드 기본이면 '기본 정찰(Claude)', 아니면 'Claude 정찰')");
 ok(/keyedDetails\("senseDetail"/.test(ext) && /keyedDetails\("mapInfo"/.test(ext), "텍스트 벽(후보 목록·한계·ⓘ 설명) → 접힘 강등(첫 화면=그림 원칙)");
 
 console.log("[3트랙 선택 안내(2026-07-09 지적 1)] 키 없음=경고 모달+이동 버튼 · 키 있음=실제 연결 점검");
@@ -65,15 +65,48 @@ ok(/API 등록과 정상 연결이 확인되었습니다 — 3트랙이 정상 �
 ok(/📖 정찰 구조 자세히 보기/.test(ext) && !/gb\.className="secondary"/.test(ext), "'자세히 보기' 주 버튼 승격(경고가 참조하는 문서 — 눈에 띄게, 지적 3)");
 ok(/className="rsec"/.test(ext), "영향지도 게시판 섹션 카드화(간격·구획 — 지적 4)");
 
-console.log("[전체 배선도(2026-07-09 지적 1)] 새탭 가이드에 개입·생성 지점 SVG — '무엇이 무엇을 만들고 사람은 어디서 개입하나' 인지 우선");
-ok(/viewBox="0 0 960 470"/.test(ext) && /marker id="ah"/.test(ext), "배선도 SVG 골격(960×470 + 화살촉 마커)");
+console.log("[전체 배선도(2026-07-09 지적 1 · 2026-09-21 재배선)] 새탭 가이드에 개입·생성 지점 SVG — '무엇이 무엇을 만들고 사람은 어디서 개입하나' 인지 우선");
+ok(/viewBox="0 0 960 500"/.test(ext) && /marker id="ah"/.test(ext), "배선도 SVG 골격(960×500 + 화살촉 마커)");
 ok(/📦 증거 꾸러미/.test(ext) && /Evidence pack/.test(ext) && /⚡ ② 정찰 AI/.test(ext) && /Scout AI/.test(ext), "생성 지점 노드: 꾸러미·정찰 AI(한/영 쌍)");
+ok(/기본=모드별\(Claude\/Codex\)/.test(ext) && /default: per mode/.test(ext) && !/기본=Claude · 키 시 DeepSeek/.test(ext) && !/default=Claude · DeepSeek w\/ key/.test(ext), "② 정찰 AI 문구=모드 기본(Claude↔Codex=Claude · Codex↔Codex=Codex) — 옛 '기본=Claude' 단정 0(문구 감사 2026-09-21)");
 ok(/📔 ③ 관찰 일지/.test(ext) && /Field journal — auto memory/.test(ext) && /📕 ④ 확정 교범/.test(ext) && /Field manual/.test(ext), "기억 지점 노드: 일지·교범(한/영 쌍)");
-ok(/🚧 플랜 게이트 \(3트랙 기본 켜짐·끌 수 있음\)/.test(ext) && /Plan gate \(on by default in 3-track, can be turned off\)/.test(ext) && /🗣 당신의 말/.test(ext) && /Your words/.test(ext), "개입 지점 노드: 게이트(3트랙 기본 켜짐 정직 표기 — 2026-07-09 승격)·사용자 발화(한/영 쌍)");
+ok(/📜 ⑤ 수칙서\(검증 경계\) 👤/.test(ext) && /Rulebook \(verify bounds\)/.test(ext) && /코어=항상 · 서고=관련분만 → 검증에 동봉/.test(ext) && /후보: 정정 원문·검증 답·직접 입력·정리 담당/.test(ext), "⑤ 수칙서 노드(사용자 결정 2026-09-21): 여러 경로의 후보 → 병합 초안 → 👤 승인 → 코어 항상·서고 관련분만 검증에 동봉(한/영 쌍)");
+ok(/🚧 플랜 게이트/.test(ext) && /플랜 확정 전 지도 신선도 확인\(3트랙 기본 켜짐\)/.test(ext) && /미준비면 통과/.test(ext) && /passes if scout not ready/.test(ext) && /낡음 → 정찰 재요청/.test(ext) && /stale → re-run recon/.test(ext), "개입 지점 노드: 게이트(3트랙 기본 켜짐·담당 미준비면 통과 정직 표기)+낡음→정찰 재요청 점선(한/영 쌍)");
+ok(/🗣 당신의 정정/.test(ext) && /Your correction/.test(ext) && /버튼·대행 기록 → 일지/.test(ext) && /정정 원문 → 수칙서 후보/.test(ext) && !/🗣 당신의 말/.test(ext) && !/'그건 아니야' =/.test(ext), "사용자 정정 노드: 일지엔 버튼·대행 기록, 수칙서엔 원문 상신 후보 — 옛 \"'그건 아니야'=정정 근거로 기록\" 과장 0");
+ok(/1회 도장·저절로 안 쌓임·수칙서와 별개/.test(ext) && /never piles up · ≠ rulebook/.test(ext) && !/자동 주입 없음", "shared via repo · never auto-injected/.test(ext), "④ 확정 교범 문구: '도장은 사람이 1회·저절로 안 쌓임·수칙서와 별개' — 옛 '자동 주입 없음'(같은 그림의 교범→꾸러미 점선과 모순) 0");
 ok(!/기본 꺼짐·관측만/.test(ext) && !/opt-in, off/.test(ext) && !/선택·기본 꺼짐/.test(ext) && !/Advisory — blocks\/forces nothing/.test(ext) && !/아무것도 막거나 강제하지 않고/.test(ext.replace(/그 외에는 아무것도 막거나 강제하지 않고/g, "")), "옛 '기본 꺼짐·무조건 안 막음' 정책 문구 잔재 0 — 승격 후 사용자 표면(새탭 SVG·툴팁·설치 모달·장부 한계문)이 실제 동작과 일치(게이트 예외를 단서로 단 문장만 허용 — Codex 반례 잠금)");
 ok(/✚ 제안\(지도가 발견\) ▶ 동봉\(자료에 실림\) ✔ 확인\(검증이 인정\) ✖ 반박\(틀림 판명\)/.test(ext), "일지 이벤트 4종(✚▶✔✖)을 기술용어 없이 평문 설명");
-ok((ext.match(/class="ln fb"/g) || []).length === 2 && /검증된 일지가 다음 꾸러미로/.test(ext) && /교범도 다음 꾸러미의 확정 사실로/.test(ext), "점선 피드백 경로 2개(검증된 일지→꾸러미·교범→꾸러미) — '다음 정찰이 똑똑해지는 길' 명시");
-ok(/사람 개입은 직접 확인·정정/.test(ext) && /are all optional/.test(ext), "한 줄 요약 — 사람 판단은 예외적 선택이고 자동 흐름이 기본(한/영 쌍)");
+ok((ext.match(/class="ln fb"/g) || []).length === 3 && /검증된 일지·확정 교범 → 다음 꾸러미/.test(ext) && /verified journal · manual → next pack/.test(ext), "점선 피드백 경로 3개(게이트→작업 재요청 · 일지+교범 합류 간선→꾸러미 · 일지 합류 stub) — '다음 정찰이 똑똑해지는 길' 명시");
+ok(/수칙 동봉/.test(ext) && /답에서 후보 회수/.test(ext) && /harvest candidates/.test(ext), "⑤↔검증 양방향(승인 수칙 동봉 · 검증 답에서 후보 회수) 명시");
+// 기하 검사(2026-09-21 재배선 원인): 선이 상자를 관통하거나 선끼리 교차하면 그림이 오독된다(외부 AI 가 게이트→꾸러미 점선으로 오독한 실사고).
+// 상자(rect.bx)·선(line/path .ln) 을 소스에서 뽑아 (1) 표본점이 출발·도착 상자 외의 상자 안에 없고 (2) 서로 다른 선의 선분이 교차하지 않음을 확인.
+{
+  const m = ext.match(/<svg viewBox="0 0 960 500"[^]*?<\/svg>/);
+  ok(!!m, "(전제) 배선도 SVG 추출");
+  const svg = m ? m[0] : "";
+  const rects = []; { const re = /<rect class="bx" x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)"/g; let r; while ((r = re.exec(svg))) rects.push({ x: +r[1], y: +r[2], w: +r[3], h: +r[4] }); }
+  const bez = (p0, p1, p2, p3, t) => { const a = (1 - t) ** 3, b = 3 * (1 - t) ** 2 * t, c = 3 * (1 - t) * t * t, d = t ** 3; return [a * p0[0] + b * p1[0] + c * p2[0] + d * p3[0], a * p0[1] + b * p1[1] + c * p2[1] + d * p3[1]]; };
+  const pathPts = (d) => { const tok = d.trim().split(/\s+/); const pts = []; let i = 0, cur = null; while (i < tok.length) { const c = tok[i++]; if (c === "M" || c === "L") { cur = [+tok[i++], +tok[i++]]; pts.push(cur); } else if (c === "C") { const p1 = [+tok[i++], +tok[i++]], p2 = [+tok[i++], +tok[i++]], p3 = [+tok[i++], +tok[i++]]; for (let k = 1; k <= 40; k++) pts.push(bez(cur, p1, p2, p3, k / 40)); cur = p3; } else throw new Error("path cmd " + c); } return pts; };
+  const lines = []; { let r; const rl = /<line class="ln[^"]*" x1="([\d.]+)" y1="([\d.]+)" x2="([\d.]+)" y2="([\d.]+)"/g; while ((r = rl.exec(svg))) lines.push({ pts: [[+r[1], +r[2]], [+r[3], +r[4]]], src: r[0] }); const rp = /<path class="ln[^"]*" d="([^"]+)"/g; while ((r = rp.exec(svg))) lines.push({ pts: pathPts(r[1]), src: r[0].slice(0, 60) }); }
+  // 관통 검사는 '선분 내부'까지 본다(4판 [보완]: 끝점만 저장한 직선이 상자 한가운데를 지나도 못 잡던 구멍) — 모든 선분을 4px 간격으로 조밀화
+  const dense = (pts) => { const out = []; for (let i = 0; i + 1 < pts.length; i++) { const [a, b] = [pts[i], pts[i + 1]]; const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 4)); for (let k = 0; k < n; k++) out.push([a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n]); } out.push(pts[pts.length - 1]); return out; };
+  for (const L of lines) L.pts = dense(L.pts);
+  const inside = (p, r, pad) => p[0] > r.x + pad && p[0] < r.x + r.w - pad && p[1] > r.y + pad && p[1] < r.y + r.h - pad;
+  const near = (p, r, tol) => p[0] >= r.x - tol && p[0] <= r.x + r.w + tol && p[1] >= r.y - tol && p[1] <= r.y + r.h + tol;
+  const hits = [];
+  for (const L of lines) { const ends = [L.pts[0], L.pts[L.pts.length - 1]]; for (const r of rects) { if (ends.some((e) => near(e, r, 4))) continue; const h = L.pts.find((p) => inside(p, r, 2)); if (h) hits.push(L.src + " @" + h.map(Math.round).join(",")); } }
+  const cross = (a, b, c, d) => { const cr = (p, q, r) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]); const d1 = cr(c, d, a), d2 = cr(c, d, b), d3 = cr(a, b, c), d4 = cr(a, b, d); return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)); };
+  const xs = [];
+  for (let i = 0; i < lines.length; i++) for (let j = i + 1; j < lines.length; j++) { const A = lines[i].pts, B = lines[j].pts; let found = false; for (let a = 0; a + 1 < A.length && !found; a++) for (let b = 0; b + 1 < B.length; b++) if (cross(A[a], A[a + 1], B[b], B[b + 1])) { found = true; break; } if (found) xs.push(lines[i].src + " × " + lines[j].src); }
+  ok(rects.length === 12 && lines.length === 16, "(전제) 상자 12·선 16 추출(작업·감지·꾸러미·정찰AI·지도·게시판·게이트·검증·수칙서·정정·일지·교범)");
+  ok(hits.length === 0, "선이 출발·도착 외의 상자를 관통하지 않음(선분 내부 표본 포함)" + (hits.length ? " — " + hits.join(" | ") : ""));
+  // 검출력 자기 검증(4판 [보완] 반례 재현): 지도→일지 경로의 수직 구간 x=952 를 x=820 으로 바꾸면 ⑤ 수칙서 상자를 관통해야 잡힌다
+  { const bad = svg.replace('d="M 840 82 L 840 100 L 952 100 L 952 344 L 764 344"', 'd="M 840 82 L 840 100 L 820 100 L 820 344 L 764 344"'); ok(bad !== svg, "(전제) 반례 SVG 생성");
+    const pts = dense(pathPts("M 840 82 L 840 100 L 820 100 L 820 344 L 764 344")); const r5 = rects.find((r) => r.x === 700 && r.y === 116); ok(!!r5 && pts.some((p) => inside(p, r5, 2)), "반례(수직 구간을 상자 안으로)는 관통으로 검출됨 — 시험 검출력"); }
+  ok(xs.length === 0, "서로 다른 선이 교차하지 않음" + (xs.length ? " — " + xs.join(" | ") : ""));
+}
+ok(/사람 개입은 직접 확인·정정/.test(ext) && /are all optional/.test(ext) && /수칙서\(⑤\)는 여러 경로의 후보를 모아 당신의 승인 도장으로만 검증 경계가 됩니다/.test(ext), "한 줄 요약 — 사람 판단은 예외적 선택이고 자동 흐름이 기본 + 수칙서 승인도 선택(한/영 쌍)");
+ok(/구현 담당\(모드에 따라 Claude 또는 구현 Codex\)이 코드를 바꾸면 검증 Codex가 검증합니다/.test(ext) && !/구현 Claude가 코드를 바꾸면 Codex가 검증합니다/.test(ext), "검증(2트랙)과의 관계 — 구현 담당은 모드에 따라 Claude 또는 구현 Codex(옛 'Claude 구현' 단정 0)");
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

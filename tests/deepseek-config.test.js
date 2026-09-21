@@ -33,7 +33,7 @@ ok(/const dsView = readDeepseekView\(\)/.test(src) && /\n\s*deepseek: dsView,/.t
 ok(!/apiKey[^\n]*postMessage|postMessage[^\n]*apiKey/.test(src), "postMessage 경로에 apiKey 원문 없음");
 ok(/saveDeepseekKey/.test(src) && /mergeDeepseekConfig\(readDeepseekRaw\(\), key\)/.test(src), "저장 핸들러가 병합 정본 사용");
 ok(/scoutMode: m\.scoutMode \}\) === "on"/.test(src) && /readDeepseekView\(\)\.hasKey/.test(src) && /등록하러 가기/.test(src), "3트랙 저장 시 키 안내 — 키 없음은 경고 모달+[등록하러 가기]/[알겠습니다](2026-07-09 개편·차단 아님)");
-ok(/키 없이도 변경 감지 \+ 기본 정찰\(Claude\) 지도\(별도 과금 없음/.test(src) && !/self 팔/.test(src), "scoutBox 상시 고지 — '팔' 은어 폐기(2026-07-09 사용자: 일반인 이해 불가) · 기본 정찰(Claude) 표기·별도 과금 없음 명시");
+ok(/키 없이도 변경 감지 \+ 지도 생성까지 가능해요\(지도는 "\+armText\(noKeyArm9\(d\.scoutArm\)\)\+"이 맡음"\+\(noKeyReady9\(d\.scoutArm\)\?"":" · 지금 준비 안 됨"\)\+"\)/.test(src) && !/self 팔/.test(src) && !/기본 정찰\(Claude\) 지도/.test(src), "scoutBox 상시 고지 — '팔' 은어 폐기(2026-07-09) · 담당 구절은 정본(armText — 키 없을 때 실제 실행될 담당·비용 포함)에서(문구 감사 2026-09-21 — 'Claude 지도' 단정 0)");
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
