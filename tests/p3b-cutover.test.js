@@ -462,6 +462,43 @@ console.log("[6] C-7 자동화 계층 — auto 모드·deployed-self·배선 계
     ok(runCut(wsNm, ["--confirm-windows-reloaded"]).code === 0 && !fs.existsSync(path.join(wsNm, "project-map", "cutover-notice.json")), "수동 cutover=notice 없음(고지는 CLI 완료 문구가 담당 — auto 전용)");
     ok(CO.autoNoticePendingFor(wsNm).pending === false, "notice 부재=pending 아님(손상/부재=고지 없음 방향)");
   }
+  { // 안 1: 고지에 '전환 당시 옛 장부 파일 유무'를 남긴다 — 상황별 문구의 유일한 재료(새 신호 없음)
+    const wsAb = mkWs("ledgerabsent"); // 새 프로젝트 = 옛 장부 파일 없음
+    ok(runCut(wsAb, ["--auto"]).code === 0, "(전제) 장부 부재 auto 전환 성공");
+    const ntAb = JSON.parse(fs.readFileSync(path.join(wsAb, "project-map", "cutover-notice.json"), "utf8"));
+    ok(ntAb.legacyLedger === "absent", "옛 장부 부재=notice legacyLedger:absent");
+    ok(CO.autoNoticePendingFor(wsAb).legacyLedger === "absent", "판독기도 absent 전달(고지 소비 경로용)");
+    ok(CO.ackAutoCutoverNotice(wsAb) === true && CO.autoNoticePendingFor(wsAb).pending === false && CO.autoNoticeLedgerFor(wsAb) === "absent",
+      "ack 뒤에도 autoNoticeLedgerFor는 상황을 돌려준다(카드 줄은 pending 조건 밖 — 문구 유지)");
+
+    const wsPr = mkWs("ledgerpresent"); // 옛 장부 파일은 있으나 승인 행 0 → 미이관 0 → auto 성립
+    fs.mkdirSync(path.join(wsPr, "docs"), { recursive: true });
+    fs.writeFileSync(path.join(wsPr, "docs", "MAP.md"), "# MAP\n\n(승인 행 없음)\n", "utf8");
+    ok(runCut(wsPr, ["--auto"]).code === 0, "(전제) 장부 존재·미이관 0 auto 전환 성공");
+    ok(JSON.parse(fs.readFileSync(path.join(wsPr, "project-map", "cutover-notice.json"), "utf8")).legacyLedger === "present", "옛 장부 존재=notice legacyLedger:present");
+    ok(CO.autoNoticeLedgerFor(wsPr) === "present", "판독기도 present 전달");
+
+    // 구버전·손상 고지 = unknown(강한 문구 유지 방향 — fail-closed)
+    const npath = path.join(wsAb, "project-map", "cutover-notice.json");
+    const keep = fs.readFileSync(npath, "utf8");
+    fs.writeFileSync(npath, JSON.stringify({ schema: "map-cutover-notice-v1", mode: "auto", pending: false, decisionRef: "x", ts: "t" }), "utf8");
+    ok(CO.autoNoticeLedgerFor(wsAb) === "unknown", "구버전 고지(항목 없음)=unknown");
+    fs.writeFileSync(npath, "{ 깨진", "utf8");
+    ok(CO.autoNoticeLedgerFor(wsAb) === "unknown", "손상 고지=unknown");
+    fs.writeFileSync(npath, keep, "utf8");
+    ok(CO.autoNoticeLedgerFor(mkWs("ledgernone")) === "unknown", "고지 부재=unknown");
+    // 검증 반례: JSON 으로는 읽히지만 형식이 어긋난 고지 — pending 판독기와 같은 문턱을 통과해야 값으로 인정한다
+    for (const bad of [
+      { schema: "invalid", mode: "auto", pending: true, legacyLedger: "absent" },
+      { mode: "auto", legacyLedger: "absent" },
+      { schema: "map-cutover-notice-v1", mode: "manual", legacyLedger: "absent" },
+    ]) {
+      fs.writeFileSync(npath, JSON.stringify(bad), "utf8");
+      ok(CO.autoNoticeLedgerFor(wsAb) === "unknown" && CO.autoNoticePendingFor(wsAb).legacyLedger === "unknown",
+        "형식 위반 고지=unknown(" + (bad.schema || "schema 없음") + "/" + bad.mode + ") — 두 판독기 같은 문턱");
+    }
+    fs.writeFileSync(npath, keep, "utf8");
+  }
   // 배선 계약(소스 단언): bootstrap 완료 훅·확장 자동 시도·원클릭 카드·모달
   const bs = fs.readFileSync(path.join(ROOT, "bridge", "map-bootstrap.js"), "utf8");
   ok(/finishDone[^]{0,3000}runCutover\(repo, \{ auto: true/.test(bs) || /okRs\) \{ try \{ const CO = require[^]{0,200}auto: true/.test(bs), "bootstrap 완결 직후 자동 전환 시도 배선(신규 프로젝트 자연 경로)");
@@ -477,6 +514,15 @@ console.log("[6] C-7 자동화 계층 — auto 모드·deployed-self·배선 계
   ok(/targetNow = dashboardWorkspace\(\)[^]{0,200}normWs\(targetNow\) !== normWs\(targetC7\)/.test(ext) && ext.includes("전환하지 않았습니다"), "모달 callback 시점 대상 재해석 재대조(3차 blocker④)");
   ok(ext.includes("autoCutoverNotified") && ext.includes("자동 전환됨") && ext.includes("switched automatically"), "자동 전환 리로드 고지 — 알림 1회+카드 표시 ko/en(3차 blocker⑤)");
   ok(ext.includes("mapAutoCutoverDone"), "카드 '리로드 필요' 표시 재료 배선");
+  // 안 1 + 버튼 — 알림 경로가 둘(직접 전환·고지 소비)이고 카드 줄은 또 별개라 셋 모두 배선돼야 한다
+  ok(/function notifyAutoCutover\(ledger: string\)/.test(ext) && /ledger === "absent"/.test(ext), "공통 알림기+상황 분기(absent=전환 당시 옛 장부 없음)");
+  ok(/notifyAutoCutover\(mapAutoCutoverLedger\)/.test(ext) && /notifyAutoCutover\(np\.legacyLedger\)/.test(ext), "두 알림 경로 모두 공통 알림기 사용(직접 전환·고지 소비)");
+  ok(!/showInformationMessage\(tE\("Project MAP 자동 전환됨/.test(ext), "옛 단일 문구 직접 호출 잔존 없음(문구는 알림기 한 곳)");
+  ok(/const reload = tE\("지금 리로드", "Reload now"\)[^]{0,400}workbench\.action\.reloadWindow/.test(ext), "알림에 [지금 리로드] 실행 버튼 결속");
+  ok(/autoNoticeLedgerFor\(targetRepo\)/.test(ext) && /mapAutoCutoverLedger/.test(ext), "카드 줄 문구 재료를 뷰로 전달(ack 뒤에도 유지)");
+  ok(/ml\.mapAutoCutoverLedger==="absent"/.test(ext) && /전환 당시 옛 장부 파일 없음/.test(ext) && /no legacy ledger existed/.test(ext), "카드 줄 상황별 문구 ko/en");
+  ok(/rb9\.textContent=T\("지금 리로드","Reload now"\)[^]{0,300}postMessage\(\{type:"reloadWindow"\}\)/.test(ext), "카드 줄에 [지금 리로드] 버튼 배선");
+  ok(!/지금 창을 그대로/.test(ext), "어느 문구도 리로드 면제를 말하지 않음(장부 유무는 리로드 필요 여부를 판정하지 않음)");
   ok(/absent\.length === 0 && stamp\.version === ver && bundleDriftFiles\(src\)\.length === 0/.test(ext), "같은 버전 조기 반환도 번들 전수 대조 통과 시에만 manifest 보충(드리프트=전체 재배치 — 4차 blocker①)");
   ok(ext.includes("if (allOk && writeStamp) writeDeployManifest(src)"), "manifest는 전체 재배치 후에만 — 부분 보충(수동 모드)의 혼합 세대 정본화 금지(4차 blocker①)");
   { // 5차 blocker 실행 반례: install.js 지문=레포 원본 바이트 — '대조 후 설치본 교체' 경합을 재현하면 manifest가 교체본과 불일치=cutover 거부(승인 창 소멸)
@@ -533,8 +579,71 @@ console.log("[6] C-7 자동화 계층 — auto 모드·deployed-self·배선 계
     ok([ins9, ext9, co9].every((t9) => /for \(;;\) \{\s*\n\s*if \(Date\.now\(\) - t0 > timeoutMs\)/.test(t9)), "루프 머리 타임아웃 3카피(무한 busy-loop 봉합 유지)");
     ok([ins9, co9].every((t9) => t9.includes('ke.code === "ESRCH"')), "사망 보유자 분류(ESRCH만 사망 단정) — 검사기·installer 카피");
   }
-  ok(/autoNoticePendingFor\(targetRepo\)\.pending/.test(ext) && ext.includes("ackAutoCutoverNotice"), "v2 관측 시 notice 소비(알림 1회+ack) — bootstrap 침묵 자동 전환 고지 전달(4차 blocker②)");
+  ok(/autoNoticePendingFor\(targetRepo\)/.test(ext) && /np\.pending/.test(ext) && ext.includes("ackAutoCutoverNotice"), "v2 관측 시 notice 소비(알림 1회+ack) — bootstrap 침묵 자동 전환 고지 전달(4차 blocker②)");
   ok(ext.includes("Confirmed — proceed") && ext.includes("Confirm & switch"), "카드·모달 ko/en 쌍");
+}
+
+console.log("[안 1 실행형] 알림기·카드 조각을 메모리에서 실제로 돌려 문구 분기와 버튼 동작을 고정");
+{
+  // 알림기(컴파일본에서 추출 — 소스 문자열 단언은 '선택/취소가 뒤바뀐 구현'도 통과시킨다는 검증 반례 반영)
+  const outSrc = fs.readFileSync(path.join(ROOT, "out", "extension.js"), "utf8").split(/\r?\n/);
+  const a1 = outSrc.findIndex((l) => l.includes("function notifyAutoCutover("));
+  const b1 = outSrc.findIndex((l, i) => i > a1 && l === "}");
+  ok(a1 > 0 && b1 > a1, "(전제) 알림기 추출 " + a1 + "-" + b1);
+  const notifySrc = outSrc.slice(a1, b1 + 1).join("\n");
+  const runNotify = (ledger, pick) => {
+    const calls = [];
+    const shown = [];
+    const vs = {
+      window: { showInformationMessage: (m, btn) => { shown.push({ m, btn }); return { then: (cb) => { cb(pick === "BTN" ? btn : pick); return { catch() {} }; } }; } },
+      commands: { executeCommand: (c) => calls.push(c) },
+    };
+    new Function("vscode", "tE", notifySrc + "\nreturn notifyAutoCutover;")(vs, (ko) => ko)(ledger);
+    return { calls, shown };
+  };
+  const rAb = runNotify("absent", undefined);
+  ok(/전환 당시 옛 장부 파일은 없었습니다/.test(rAb.shown[0].m) && !/동결 감시가 경보/.test(rAb.shown[0].m), "absent=상황 문구(강한 문구 아님)");
+  ok(/리로드하세요/.test(rAb.shown[0].m), "absent 문구도 리로드를 요구한다(면제 없음)");
+  for (const led of ["present", "unknown", "", null]) {
+    const r = runNotify(led, undefined);
+    ok(/동결 감시가 경보/.test(r.shown[0].m), "absent 아님(" + String(led) + ")=강한 문구 유지(fail-closed)");
+  }
+  ok(rAb.shown[0].btn === "지금 리로드" && rAb.calls.length === 0, "버튼 제시 · 취소(선택 없음)=리로드 실행 0");
+  // 버튼 동작은 상황과 무관하게 같아야 한다 — absent 에서만 듣는 구현도 소스 단언은 통과한다(검증 반례)
+  for (const led of ["absent", "present", "unknown"]) {
+    ok(runNotify(led, "BTN").calls.join() === "workbench.action.reloadWindow", "버튼 선택=리로드 실행(" + led + ")");
+    ok(runNotify(led, undefined).calls.length === 0, "취소=실행 0(" + led + ")");
+    ok(runNotify(led, "다른 값").calls.length === 0, "다른 값 선택=실행 0(" + led + ")");
+    ok(runNotify(led, undefined).shown[0].btn === "지금 리로드", "버튼 제시(" + led + ")");
+  }
+
+  // 카드 조각(웹뷰 소스에서 추출)
+  const extLines = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8").split(/\r?\n/);
+  const a2 = extLines.findIndex((l) => l.includes('if(ml.mapSource==="v2" && ml.mapAutoCutoverDone){'));
+  const b2 = extLines.findIndex((l, i) => i > a2 && l.trim() === "}" && extLines[i - 1].includes("card.appendChild(rb9);"));
+  ok(a2 > 0 && b2 > a2, "(전제) 카드 조각 추출 " + a2 + "-" + b2);
+  const mkEl = (tag) => ({ tag, children: [], style: {}, _h: {}, textContent: "", disabled: false, appendChild(c) { this.children.push(c); return c; }, addEventListener(t, f) { (this._h[t] = this._h[t] || []).push(f); }, fire(t) { (this._h[t] || []).forEach((f) => f()); } });
+  const runCard = (ml) => {
+    const posted = [];
+    const card = mkEl("div");
+    new Function("document", "T", "vscode", "return function(ml, card){ " + extLines.slice(a2, b2 + 1).join("\n") + " };")(
+      { createElement: mkEl }, (ko) => ko, { postMessage: (m) => posted.push(m) })(ml, card);
+    return { card, posted };
+  };
+  const cAb = runCard({ mapSource: "v2", mapAutoCutoverDone: true, mapAutoCutoverLedger: "absent" });
+  ok(/전환 당시 옛 장부 파일 없음/.test(cAb.card.children[0].textContent), "카드 absent=상황 문구");
+  const cUn = runCard({ mapSource: "v2", mapAutoCutoverDone: true, mapAutoCutoverLedger: "unknown" });
+  ok(/모든 VS Code 창을 리로드/.test(cUn.card.children[0].textContent), "카드 unknown=강한 문구 유지");
+  // 카드 버튼도 상황과 무관하게 같아야 한다(absent 에만 전송하는 구현 차단)
+  for (const led of ["absent", "present", "unknown"]) {
+    const c9 = runCard({ mapSource: "v2", mapAutoCutoverDone: true, mapAutoCutoverLedger: led });
+    const b9 = c9.card.children[1];
+    ok(b9 && b9.tag === "button" && b9.textContent === "지금 리로드", "카드에 [지금 리로드] 버튼 생성(" + led + ")");
+    b9.fire("click");
+    ok(c9.posted.length === 1 && c9.posted[0].type === "reloadWindow" && b9.disabled === true, "카드 버튼 클릭=reloadWindow 1회·재클릭 차단(" + led + ")");
+  }
+  ok(runCard({ mapSource: "legacy", mapAutoCutoverDone: true, mapAutoCutoverLedger: "absent" }).card.children.length === 0, "v2 아님=줄·버튼 없음");
+  ok(runCard({ mapSource: "v2", mapAutoCutoverDone: false, mapAutoCutoverLedger: "absent" }).card.children.length === 0, "고지 표식 없음=줄·버튼 없음");
 }
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);

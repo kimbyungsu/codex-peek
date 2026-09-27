@@ -416,7 +416,9 @@ function runCutover(repo, flags, _testHooks) { // _testHooks.afterSnapshot: 테�
   if (!lk.ok) { say(t("정본 잠금 실패", "canonical lock failed")); return 1; }
   const r = lk.result;
   if (r.fail) { say(r.fail); return 1; }
-  if (flags && flags.auto) atomicWriteBuf(noticePathFor(repo), JSON.stringify({ schema: "map-cutover-notice-v1", mode: "auto", pending: true, decisionRef: decisionId, ts: r.ts }, null, 1)); // 4차 blocker②: 침묵 자동 전환(bootstrap 포함)의 리로드 고지 재료 — 실패=수용 위험(위 주석)
+  // legacyLedger: '전환 당시 옛 장부 파일이 있었는가'만 뜻한다(프로젝트가 새것인가·승인 항목이 있었는가와 동치 아님).
+  // 출처는 함수 범위 srcSnap — 잠금 안 385행이 현재 장부와 부재/내용/경로를 대조하고 불일치면 여기 도달 전에 중단한다.
+  if (flags && flags.auto) atomicWriteBuf(noticePathFor(repo), JSON.stringify({ schema: "map-cutover-notice-v1", mode: "auto", pending: true, legacyLedger: srcSnap ? "present" : "absent", decisionRef: decisionId, ts: r.ts }, null, 1)); // 4차 blocker②: 침묵 자동 전환(bootstrap 포함)의 리로드 고지 재료 — 실패=수용 위험(위 주석)
   out([
     t("✅ cutover 완결 — mapId " + r.mapId + " · decisionId " + decisionId + " · " + r.ts + (r.draft ? " · DRAFT(지도 품질 선언 아님 — usable 전이는 별개)" : ""), "✅ cutover complete — mapId " + r.mapId + " · decisionId " + decisionId + " · " + r.ts + (r.draft ? " · DRAFT (not a quality claim — usable transition is separate)" : "")),
     t("· 스냅샷/진단 재료: " + sdir, "· snapshot/diagnostics: " + sdir),
@@ -435,9 +437,20 @@ function noticePathFor(repo) { return path.join(repo, "project-map", "cutover-no
 function autoNoticePendingFor(repo) {
   try {
     const n = JSON.parse(fs.readFileSync(noticePathFor(repo), "utf8"));
-    if (n && typeof n === "object" && n.schema === "map-cutover-notice-v1" && n.mode === "auto" && n.pending === true) return { pending: true, decisionRef: String(n.decisionRef || "") };
+    if (n && typeof n === "object" && n.schema === "map-cutover-notice-v1" && n.mode === "auto" && n.pending === true) return { pending: true, decisionRef: String(n.decisionRef || ""), legacyLedger: legacyLedgerOf(n) };
   } catch { /* 부재/손상=고지 없음 */ }
-  return { pending: false };
+  return { pending: false, legacyLedger: "unknown" };
+}
+// 닫힌 어휘 투영 — 모르는 값/구버전 고지는 "unknown"(강한 문구 유지 방향·fail-closed)
+function legacyLedgerOf(n) { return n && (n.legacyLedger === "present" || n.legacyLedger === "absent") ? n.legacyLedger : "unknown"; }
+// 고지 소비 여부와 무관하게 '전환 당시 옛 장부 유무'만 읽는다(직접 전환 경로 — 방금 쓴 고지를 되읽는다).
+// pending 만 무시할 뿐 형식 문턱은 같다 — schema·mode 위반 고지를 값으로 인정하면 안 된다(검증 반례).
+function autoNoticeLedgerFor(repo) {
+  try {
+    const n = JSON.parse(fs.readFileSync(noticePathFor(repo), "utf8"));
+    if (!n || typeof n !== "object" || n.schema !== "map-cutover-notice-v1" || n.mode !== "auto") return "unknown";
+    return legacyLedgerOf(n);
+  } catch { return "unknown"; } // 기록 실패/손상=모름 → 강한 문구
 }
 function ackAutoCutoverNotice(repo) {
   try {
@@ -463,4 +476,4 @@ function autoCutoverAssess(repo) {
   } catch (e) { return { state: "no", reason: String((e && e.message) || e).slice(0, 80) }; }
 }
 
-module.exports = { runCutover, frozenLedgerProbeFor, unmigratedRowsFor, deployGenerationCheck, safetyChecks, autoCutoverAssess, autoNoticePendingFor, ackAutoCutoverNotice, withDeployLock, EXPECTED_DEPLOY_FILES, BANNER, bannerApplied, bannerPresent, snapDirFor, QUIESCENCE_KO, QUIESCENCE_EN, ABSENT_SENTINEL };
+module.exports = { runCutover, frozenLedgerProbeFor, unmigratedRowsFor, deployGenerationCheck, safetyChecks, autoCutoverAssess, autoNoticePendingFor, autoNoticeLedgerFor, ackAutoCutoverNotice, withDeployLock, EXPECTED_DEPLOY_FILES, BANNER, bannerApplied, bannerPresent, snapDirFor, QUIESCENCE_KO, QUIESCENCE_EN, ABSENT_SENTINEL };

@@ -3864,6 +3864,7 @@ type MapLedgerView = {
   mapFrozenProbe: { state: string; unmigratedTotal: number | null } | null; // P3b B-1 — v2에서만(경보 축=동결 지문·배지 축=미이관 수)
   mapCutoverCard: { n: number; rows: Array<{ sig24: string; text: string; why: string }>; repo: string } | null; // C-7 — legacy+미이관 N>0일 때 원클릭 전환 카드 재료(repo=대상 결속 — 2차 blocker④)
   mapAutoCutoverDone: boolean; // C-7 — 이번 세션 자동 전환 관측(카드의 '리로드 필요' 표시 재료)
+  mapAutoCutoverLedger: "present" | "absent" | "unknown"; // 전환 당시 옛 장부 파일 유무 — 카드 문구 분기(모름=강한 문구)
 };
 const MAP_LEDGER_TEXT_CAP = 8000;
 const LEDGER_ENTRIES_CAP_UI = 12;  // 카드에 보이는 항목 상한(전체는 이벤트 파일이 원본)
@@ -3931,6 +3932,7 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
   let mapCutoverCard: { n: number; rows: Array<{ sig24: string; text: string; why: string }>; repo: string } | null = null;
 
   let mapAutoCutoverDone = false; // 3차 blocker⑤: 이번 세션에서 자동 전환 관측 — 카드에 리로드 필요 표시
+  let mapAutoCutoverLedger: "present" | "absent" | "unknown" = "unknown"; // 상황별 문구 재료(모름=강한 문구 유지)
   const MA = mapAdapters();
   if (MA && typeof MA.approvedViewFor === "function") {
     try {
@@ -3956,9 +3958,11 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
                     else if (av2.source === "blocked") { mapBlockedReason = mapReasonText(av2.reasonKey, av2.reason); }
                   } catch { /* blocked 유지 — legacy로 복귀 금지 */ }
                   // 3차 blocker⑤: quiescence 생략 자동 전환의 필수 사후 조치 — 전 창 리로드 고지(ws당 1회 알림+카드 표시 재료)
+                  // 이 경로는 고지 파일을 '읽지 않고' 전환 성공만 보고 띄우던 자리 — 상황별 문구를 위해 방금 쓴 고지를 되읽는다(실패=unknown=강한 문구).
+                  mapAutoCutoverLedger = typeof CO.autoNoticeLedgerFor === "function" ? CO.autoNoticeLedgerFor(targetRepo) : "unknown";
                   if (!autoCutoverNotified.has(normWs(targetRepo))) {
                     autoCutoverNotified.add(normWs(targetRepo));
-                    vscode.window.showInformationMessage(tE("Project MAP 자동 전환됨 — 이 저장소를 여는 모든 VS Code 창을 리로드하세요(리로드 전 창의 옛 방식 기록은 권위에 반영되지 않고 동결 감시가 경보합니다).", "Project MAP switched automatically — reload every VS Code window opening this repository (pre-reload windows' old-style writes are non-authoritative and trigger the freeze probe alert)."));
+                    notifyAutoCutover(mapAutoCutoverLedger);
                     if (typeof CO.ackAutoCutoverNotice === "function") CO.ackAutoCutoverNotice(targetRepo); // 4차 blocker②: 고지 전달됨 — 리로드 후 재고지 방지(세션 내 표시는 Set이 유지)
                   }
                   mapAutoCutoverDone = true;
@@ -3973,12 +3977,17 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
           catch { mapFrozenProbe = { state: "baseline-unknown", unmigratedTotal: null }; }
           try { // 4차 blocker②: bootstrap 침묵 자동 전환(별도 자식)은 확장이 처음부터 v2로 관측 — notice 파일이 고지 전달 재료
             const CO = require(path.join(BRIDGE_DIR, "map-cutover.js"));
-            if (typeof CO.autoNoticePendingFor === "function" && CO.autoNoticePendingFor(targetRepo).pending) {
+            const np = typeof CO.autoNoticePendingFor === "function" ? CO.autoNoticePendingFor(targetRepo) : { pending: false, legacyLedger: "unknown" };
+            if (np.pending) {
               if (!autoCutoverNotified.has(normWs(targetRepo))) {
                 autoCutoverNotified.add(normWs(targetRepo));
-                vscode.window.showInformationMessage(tE("Project MAP 자동 전환됨 — 이 저장소를 여는 모든 VS Code 창을 리로드하세요(리로드 전 창의 옛 방식 기록은 권위에 반영되지 않고 동결 감시가 경보합니다).", "Project MAP switched automatically — reload every VS Code window opening this repository (pre-reload windows' old-style writes are non-authoritative and trigger the freeze probe alert)."));
+                notifyAutoCutover(np.legacyLedger);
               }
+              mapAutoCutoverLedger = np.legacyLedger === "present" || np.legacyLedger === "absent" ? np.legacyLedger : "unknown";
               if (typeof CO.ackAutoCutoverNotice === "function") CO.ackAutoCutoverNotice(targetRepo);
+            } else if (typeof CO.autoNoticeLedgerFor === "function") {
+              // ack 뒤에도 카드 줄은 Set에 따라 남는다(3984는 pending 조건 밖) → 그 줄의 문구도 상황을 유지해야 한다.
+              mapAutoCutoverLedger = CO.autoNoticeLedgerFor(targetRepo);
             }
           } catch { /* 구 런타임 — 고지 생략(수동 CLI 완료 문구가 잔여 수단) */ }
           if (autoCutoverNotified.has(normWs(targetRepo))) mapAutoCutoverDone = true; // 세션 내 리로드 줄 유지(리로드하면 Set·pending 모두 소멸=표시 종료)
@@ -4009,7 +4018,7 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
     mapApproved: mp.approved.length, mapTotalItems: mp.totalItems,
     // P3b B-1: blocked=원문 미리보기 숨김+사유만(정본 §B — 진단 전용 표시는 P9 위임)
     mapText: mapSource === "blocked" ? "" : mapMd.slice(0, MAP_LEDGER_TEXT_CAP), mapTruncated: mapSource !== "blocked" && mapMd.length > MAP_LEDGER_TEXT_CAP,
-    mapSource, mapBlockedReason, mapStale, mapRetired, mapFrozenProbe, mapCutoverCard, mapAutoCutoverDone,
+    mapSource, mapBlockedReason, mapStale, mapRetired, mapFrozenProbe, mapCutoverCard, mapAutoCutoverDone, mapAutoCutoverLedger,
   };
 }
 function readMapLedger(ws: string | null): MapLedgerView | null {
@@ -8501,8 +8510,14 @@ class Dashboard {
       }
       if(ml.mapSource==="v2" && ml.mapAutoCutoverDone){ // C-7: 자동 전환됨 — 필수 리로드 고지(quiescence 생략의 사후 조치)
         const rl=document.createElement("div"); rl.style.cssText="font-size:11px;color:var(--vscode-editorWarning-foreground,#d9a441);font-weight:600";
-        rl.textContent=T("Project MAP 자동 전환됨 — 모든 VS Code 창을 리로드하세요","Project MAP switched automatically — reload every VS Code window");
+        rl.textContent=ml.mapAutoCutoverLedger==="absent"
+          ? T("Project MAP 전환 완료 — 전환 당시 옛 장부 파일 없음 · 반영하려면 창을 리로드하세요","Project MAP cutover complete — no legacy ledger existed · reload the window to apply")
+          : T("Project MAP 자동 전환됨 — 모든 VS Code 창을 리로드하세요","Project MAP switched automatically — reload every VS Code window");
         card.appendChild(rl);
+        const rb9=document.createElement("button"); rb9.style.cssText="margin-top:5px;font-weight:700"; // 안내에 실행 동작을 연결(훅 안내·브릿지 배너와 같은 수준)
+        rb9.textContent=T("지금 리로드","Reload now");
+        rb9.addEventListener("click", function(){ rb9.disabled=true; vscode.postMessage({type:"reloadWindow"}); });
+        card.appendChild(rb9);
       }
       if(ml.mapSource==="v2" && ml.mapFrozenProbe){ // P3b B-1 — 동결 감시(경보 축=지문·정보 배지=미이관)
         const pr=ml.mapFrozenProbe;
@@ -9079,6 +9094,15 @@ function syncCodexHome(onDone: (changed: boolean) => void): void {
 // 확장이 개발자의 최신 수동본을 옛 번들본으로 덮지 않는다. stamp가 있으면 확장 버전이 바뀔 때만 재배치(업그레이드).
 const BRIDGE_STAMP = path.join(BRIDGE_DIR, ".bridge-deployed-by.json");
 const autoCutoverNotified = new Set<string>(); // C-7: 자동 전환 리로드 알림 ws당 1회(세션 메모리 — 리로드하면 초기화되는 게 목적과 정합)
+// 자동 전환 안내 — 상황별 문구 + 실행 버튼. 'absent'는 전환 당시 옛 장부 파일이 없었다는 사실만 말하고,
+// 어느 쪽도 리로드 면제를 말하지 않는다(장부 유무는 리로드 필요 여부를 판정하는 값이 아님). 모름=강한 문구.
+function notifyAutoCutover(ledger: string): void {
+  const msg = ledger === "absent"
+    ? tE("Project MAP 전환 완료 — 전환 당시 옛 장부 파일은 없었습니다. 전환을 반영하려면 이 저장소를 여는 VS Code 창을 리로드하세요.", "Project MAP cutover complete — no legacy ledger file existed at cutover time. Reload every VS Code window opening this repository to apply it.")
+    : tE("Project MAP 자동 전환됨 — 이 저장소를 여는 모든 VS Code 창을 리로드하세요(리로드 전 창의 옛 방식 기록은 권위에 반영되지 않고 동결 감시가 경보합니다).", "Project MAP switched automatically — reload every VS Code window opening this repository (pre-reload windows' old-style writes are non-authoritative and trigger the freeze probe alert).");
+  const reload = tE("지금 리로드", "Reload now");
+  void vscode.window.showInformationMessage(msg, reload).then((pick) => { if (pick === reload) void vscode.commands.executeCommand("workbench.action.reloadWindow"); });
+}
 function withDeployLockSync<T>(fn: () => T): T | null { // C-7 9차: wx 파일 잠금 — 검사기(map-cutover)·install.js와 동일 프로토콜(".deploy.lock"·wx 원자 생성=신원 동시·read-back fence·자동 탈환 없음[contract-lock v10 결론]). null=획득 실패/소유권 상실(다음 활성화 재시도 — 소비 측은 검사기 fail-closed가 방어)
   const lockPath = path.join(BRIDGE_DIR, ".deploy.lock");
   const token = JSON.stringify({ v: 1, pid: process.pid, rnd: crypto.randomBytes(8).toString("hex"), ts: new Date().toISOString() });
