@@ -163,6 +163,8 @@ process.stdin.on("end", () => {
 
   const tp = j.transcript_path;
   if (!tp || !fs.existsSync(tp)) process.exit(0);
+  // [RULE-SUPPLY 묶음 2-나 §3-1] 이번 차례의 선택지 직접 입력 답을 이번 앵커에 결속해 기록(커서 이후만·best-effort — 종료 판정과 무관)
+  try { const sidUW = process.env.CLAUDE_CODE_SESSION_ID || j.session_id || ""; if (sidUW) require("./user-words.js").captureForActiveTurn(ws, sidUW, tp); } catch { /* best-effort */ }
   let lines;
   try {
     lines = fs.readFileSync(tp, "utf8").trim().split(/\r?\n/);

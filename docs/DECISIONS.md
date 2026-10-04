@@ -433,3 +433,11 @@
 - 결과: 제안 목록이 길어질 수 있으나 숨기거나 버리지 않는다. 수칙서 칸 상한(항상 적용 12·관련될 때 96)은 승인할 때 그대로 지킨다. 정리 담당 제안의 미승인 6개 상한은 별도 결정이라 유지.
 - 정본: bridge/contract-lib.js userDeclinedCandidate·candidateBatchPlan·constraintAdd·ruleProposeCandidate·directRuleCandidate · bridge/codex-bridge.js cmdConstraint(--again)·cmdEnvelopeCandidate(mark 사용자 표식) · src/extension.ts candBatch 처리기·후보 카드 고르기 칸 · docs/RULE-SUPPLY-REDESIGN-2026-10-04.md §3-4b·§7 D2.
 - 찾는말: 제안 상한, 대기 12, pending-cap, 한꺼번에 올리기, 전체 선택, 선택 올리기, 안 올림 기억, 거절 기억, 다시 올리기, again, 하루 상한, 분류 상한
+
+## D-2026-10-04-constraint-earlier-quote — 구현 담당이 수칙 후보를 올릴 때 이전 메시지의 사용자 문장도 원문 그대로면 받아 준다('기회만 열어 두기')
+- 날짜: 2026-10-04 · 종류: 사용자 결정+구현(RULE-SUPPLY 묶음 2-나-1) · 상태: 유효
+- 결정: 다른 프로젝트에서 사용자가 "왜 수칙서에 안 올렸냐"고 반문하자, 구현 담당이 사용자가 이전 메시지에 쓴 규칙 문장을 후보로 올리려 했지만 "이번 메시지 문장만 인용할 수 있다"는 규칙에 걸려 거절당했고, 사용자에게 한 줄로 다시 보내 달라고 한 뒤 본래 작업으로 돌아갔다. 이제 약속 상신은 이번 메시지와 같은 차례의 선택지 직접 입력뿐 아니라, 같은 프로젝트·같은 저장소에서 최근 7일간 보관된 사용자 말에서도 원문 그대로의 연속 구절을 받아 준다. 기존 동작은 그대로이고 구현 담당에게 새 지시는 넣지 않는다 — 올리려 할 때 막히지 않게 기회만 열어 둔다(사용자 표현: "적극적이지 않게"). 적극적으로 찾아 올리는 일은 분류 실행이 맡는다.
+- 왜: 사용자 반문(2026-10-04) — 사용자가 이미 한 말을 다시 보내게 하는 것은 사용자 말을 무시하지 않으려는 장치의 취지와 반대.
+- 결과: 작문은 여전히 거부(사용자 원문의 연속 구절·원문 지문 일치만), 다른 저장소의 말은 인용 불가, 보관 기간(7일)이 지난 말은 인용 불가. 후보에는 어느 차례의 말에서 왔는지 기록. 선택지 직접 입력 답의 차례는 훅이 받는 입력 번호(prompt_id)로만 결속하고, 불확실하면 보류.
+- 정본: bridge/contract-lib.js constraintAdd(원문 대조 3단계) · bridge/user-words.js findQuoteInRecentWords·turnForPrompt·recordTurn · bridge/contract-inject.js(차례 기록 prompt_id) · docs/RULE-SUPPLY-REDESIGN-2026-10-04.md §3-1 구현 정정 · docs/CONSTRAINT-CAPTURE-DESIGN.md 2026-10-04 개정.
+- 찾는말: 약속 상신, 이전 메시지, 원문 인용, not-in-prompt, 다시 보내 주세요, 기회만 열어 두기, 사용자 말 무시, 수칙서에 안 올림, prompt_id, 차례 열쇠

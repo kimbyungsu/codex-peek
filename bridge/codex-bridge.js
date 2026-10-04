@@ -3350,6 +3350,7 @@ function cmdConstraint(rest) {
   const quote = flagText("--quote");
   const why = flagText("--why");
   const scope = flagText("--scope");
+  try { const sidUW = process.env.CLAUDE_CODE_SESSION_ID || ""; if (sidUW) require("./user-words.js").captureForActiveTurn(ws, sidUW); } catch { /* best-effort — [묶음 2-나] 같은 차례에 방금 답한 선택지 직접 입력도 원문 대조에 쓰이게 먼저 수집 */ }
   const ctx = constraintTurnContext(); // [ab-1] repoKey=훅이 원문 스냅숏 시점에 기록한 값(ctx.repoKey) — 여기서 재계산하지 않는다
   if (ctx && ctx.ok && rest.includes("--again")) ctx.again = true; // [묶음 2-가] 사용자가 대화로 다시 올려 달라고 한 경우만 — 사용자 거절 기억 해제(도장은 여전히 필요)
   const r = constraintAdd(ws, quote, why, scope, ctx);
@@ -3364,7 +3365,7 @@ function cmdConstraint(rest) {
     "no-turn-anchor": [en ? "no turn anchor — send this in the same turn as the user's words (hook records the anchor at turn start)." : "턴 앵커가 없습니다 — 사용자 발화가 있던 '같은 턴'에서 상신하세요(훅이 턴 시작에 앵커를 기록합니다).", 2],
     "snapshot-missing": [en ? "no prompt snapshot for this turn — the hook could not capture the user's words (old hook or empty prompt). Cannot verify verbatim quoting; not registered." : "이 턴의 원문 스냅샷이 없습니다 — 훅이 사용자 발화를 못 남긴 턴(구훅·빈 프롬프트)이라 원문 대조가 불가능해 상신하지 않았습니다.", 1],
     "snapshot-mismatch": [en ? "snapshot fingerprint mismatch — the turn record and snapshot disagree; not registered (fail-closed)." : "스냅샷 지문 불일치 — 턴 기록과 스냅샷이 어긋나 상신하지 않았습니다(fail-closed).", 1],
-    "not-in-prompt": [en ? "the quote is not a verbatim contiguous passage of this turn's user prompt — copy the user's words exactly (no paraphrase)." : "인용문이 이 턴 사용자 발화의 '연속 구절'이 아닙니다 — 바꿔 쓰지 말고 원문 그대로 옮기세요.", 1],
+    "not-in-prompt": [en ? "the quote is not a verbatim contiguous passage of the user's words (this turn, a free-text choice answer, or the user's recent messages in this project/repository kept for 7 days) — copy the user's words exactly (no paraphrase)." : "인용문이 사용자 말의 '연속 구절'이 아닙니다(이번 차례·선택지 직접 입력·이 프로젝트/저장소에서 최근 7일간 보관된 사용자 말) — 바꿔 쓰지 말고 원문 그대로 옮기세요.", 1],
     "too-short": [en ? `quote too short (min ${CONSTRAINT_QUOTE_MIN} chars).` : `인용문이 너무 짧습니다(최소 ${CONSTRAINT_QUOTE_MIN}자).`, 1],
     "too-long": [en ? `quote over ${CONSTRAINT_QUOTE_MAX} chars — a rulebook item cannot exceed this; ask the user to restate it shorter, then resubmit (no truncated save).` : `인용문이 ${CONSTRAINT_QUOTE_MAX}자를 넘습니다 — 수칙서 항목 상한이라 승격 자체가 불가하니, 줄인 문장으로 다시 말씀받아 재상신하세요(절단 저장은 하지 않습니다).`, 1],
     "multiline": [en ? "quote spans multiple lines — a rulebook item is one line; pick the single decisive sentence." : "인용문에 줄바꿈이 있습니다 — 수칙서 항목은 1줄 계약이라, 핵심이 담긴 한 문장을 고르세요.", 1],

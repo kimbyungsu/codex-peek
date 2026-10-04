@@ -74,6 +74,15 @@ function cleanupOldState(now) {
       try { if (now - fs.statSync(f).mtimeMs > ATTEMPTS_TTL_MS) { fs.unlinkSync(f); removed++; } } catch { /* 잠김/사라짐 */ }
     }
   } catch { /* 폴더 없음 */ }
+  // [RULE-SUPPLY 묶음 2-나] 선택지 직접 입력 원문(.txt) — 턴 원문 스냅샷과 같은 7일(민감 최소화). 장부(user-words/*.jsonl)엔 지문·길이만이라 청소 대상 아님.
+  try {
+    const uwT = path.join(BRIDGE_DIR, "user-words", "text");
+    for (const n of fs.readdirSync(uwT)) {
+      if (!n.endsWith(".txt")) continue;
+      const f = path.join(uwT, n);
+      try { if (now - fs.statSync(f).mtimeMs > ATTEMPTS_TTL_MS) { fs.unlinkSync(f); removed++; } } catch { /* 잠김/사라짐 */ }
+    }
+  } catch { /* 폴더 없음 */ }
   // P-12 2b: 손상 캠페인 카운터 '격리 서랍'만 7일 편입 — verify-campaigns 본체(current .json·history)는
   // 스윕 비대상(current 상시·history는 append 시 60일 자체 trim). 서랍 분리로 current 오삭제 경로 차단.
   sweep(path.join(BRIDGE_DIR, "verify-campaigns", "corrupt"), ATTEMPTS_TTL_MS);
@@ -4823,7 +4832,20 @@ function constraintAdd(ws, quote, why, scope, ctx) {
   try { snap = fs.readFileSync(constraintTurnFileFor(ws, c.turnAnchor), "utf8"); } catch { snap = null; }
   if (snap === null) return reject("snapshot-missing");
   if (sha1Of(snap) !== c.sourceHash) return reject("snapshot-mismatch");
-  if (!snap.includes(q)) return reject("not-in-prompt");
+  // [RULE-SUPPLY 묶음 2-나 §3-1] 원문 대조 확장 — 턴 원문 '또는' 같은 턴의 선택지 직접 입력 기록(지문 결속 판독)에서 연속 구절을 찾는다. 턴 원문 파일은 그대로(동결 지문 보존).
+  // [사용자 결정 2026-10-04 '기회만 열어 두기'] 마지막 단계=같은 작업공간·저장소의 최근 사용자 말(7일 보존·지문 대조) — 이전 메시지라는 이유로 거절하지 않는다(새 지시문 없음).
+  let quoteSrc9 = "prompt", quoteFrom9 = "";
+  if (!snap.includes(q)) {
+    const rkAlt9 = (typeof c.repoKey === "string" && /^[0-9a-f]{16}$/.test(c.repoKey)) ? c.repoKey : null; // 저장소 결속(표식 없으면 직접 입력·이전 말 대조 없음)
+    let UWq = null; try { UWq = require("./user-words.js"); } catch { UWq = null; }
+    let alt9 = []; try { alt9 = rkAlt9 && UWq ? UWq.choiceTextsForTurn(ws, c.turnAnchor, rkAlt9) : []; } catch { alt9 = []; }
+    if (alt9.some((t) => t.includes(q))) quoteSrc9 = "choice";
+    else {
+      let hit9 = null; try { hit9 = rkAlt9 && UWq ? UWq.findQuoteInRecentWords(ws, rkAlt9, q) : null; } catch { hit9 = null; }
+      if (!hit9) return reject("not-in-prompt");
+      quoteSrc9 = "earlier-" + hit9.source; quoteFrom9 = hit9.turnAnchor;
+    }
+  }
   // Envelope 활성 한정(§3-4: 비활성=후보 대신 안내 — A-6 경계와 동형).
   // [RULE-SUPPLY 묶음 1] 수칙서 파일·승인 지문이 모두 없으면 0세대(GEN0)로 접수 — 파일만 있고 미승인·손상=종전 비활성.
   let gen = null, virt = false; try { const g9 = envelopeGenFor(ws); gen = g9.gen; virt = g9.virtual; } catch { gen = null; }
@@ -4857,6 +4879,7 @@ function constraintAdd(ws, quote, why, scope, ctx) {
     provider: c.provider, sessionId: c.sessionId, turnAnchor: c.turnAnchor, sourceHash: c.sourceHash,
     ...(c.via ? { via: String(c.via) } : {}),
     ...(c.again ? { reraised: true } : {}),
+    ...(quoteSrc9 !== "prompt" ? { quoteSource: quoteSrc9 } : {}), ...(quoteFrom9 ? { quoteFromAnchor: quoteFrom9 } : {}), // [묶음 2-나] 직접 입력·이전 말에서 인용(출처 차례 기록)
     ts: new Date().toISOString(),
   };
   if (!appendEnvelopeCandidates(ws, [rec])) return reject("ledger-write");

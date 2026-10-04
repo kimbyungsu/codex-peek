@@ -54,6 +54,15 @@ process.stdin.on("end", () => {
       let cSnap0 = null; try { cSnap0 = loadContract(ws); } catch { cSnap0 = null; }
       const rk0 = cSnap0 ? (constraintRepoKeyFor(ws, cSnap0) || "") : "";
       const anc = turnAnchorOf(sid, activeTs);
+      // [RULE-SUPPLY 묶음 2-나 · 검증 1회차 blocker①] 차례 기록 — 선택지 답은 차례 열쇠(promptId)로 이 기록에서 차례·저장소를 찾는다(수집 시점·시각 결속 금지).
+      // 스냅샷 성공과 무관(앵커·표식은 이미 확정된 값) · best-effort.
+      // 차례 열쇠=훅 입력의 prompt_id(Claude Code 2.1.196+ — 같은 차례의 선택지 답 줄 promptId 와 같은 값). 대화 기록 꼬리 추측 금지(검증 4회차 f-9ee8024b:
+      // 직전 같은 글의 열쇠를 읽어 오결속). 입력에 없으면(옛 버전) 빈 열쇠 → 그 차례의 답은 보류(오귀속 대신).
+      try {
+        const pid9 = (hook && typeof hook.prompt_id === "string") ? hook.prompt_id : "";
+        const UW9 = require("./user-words.js");
+        UW9.recordTurn(sid, { anchor: anc, repoKey: rk0, wsKey: require("./contract-lib.js").wsKeyFor(ws), ts: activeTs, promptId: pid9, promptHash: UW9.promptHashOf(ptxt) });
+      } catch { /* best-effort */ }
       const snap = writeConstraintTurnSnapshot(ws, anc, ptxt);
       if (snap.ok) { constraintAnchor = anc; constraintSourceHash = snap.sourceHash; constraintRepoKey = rk0; }
     }
@@ -68,6 +77,14 @@ process.stdin.on("end", () => {
       prevReset = readClaudeDirectiveReset(safeSid, prev0); // 앵커의 리셋 표시 또는 폴백 마커(세션 시작 훅이 앵커를 못 썼을 때)
     }
   } catch { prevDirective = null; prevReset = null; }
+  // [RULE-SUPPLY 묶음 2-나 §3-1·§3-2] 사용자 말 수집 — ① 직전 차례들의 선택지 직접 입력 답(대화 기록 커서 이후만)을 같은 차례 열쇠(promptId)의 차례에 결속해 기록
+  // ② 이번 입력창 원문을 미분류 대기열에 넣는다(알림 턴=사람 발화 아님 — 제외). 둘 다 best-effort(훅 동작 막지 않음 · 실패=다음 기회에 다시 읽음).
+  try {
+    const UW = require("./user-words.js");
+    const tp0 = (hook && typeof hook.transcript_path === "string") ? hook.transcript_path : "";
+    if (sid && tp0) UW.captureChoiceAnswers(ws, { sessionId: sid, transcriptPath: tp0, provider: "claude" }); // 차례·저장소는 차례 열쇠로 차례 기록에서(열쇠 없음·중복=보류 · 세션 첫 훅=커서만 세움 · 소급 없음)
+    if (!carried && constraintAnchor) UW.enqueuePrompt(ws, { anchor: constraintAnchor, sourceHash: constraintSourceHash, sessionId: sid, repoKey: constraintRepoKey, provider: "claude" });
+  } catch { /* best-effort */ }
   // [P7 ⓑ] 이전 앵커의 폴더와 다르면 변경 기록(해제 전까지 승계) — ask-start가 이 기록을 보면 시작하지 않는다(--folder-changed-ok 로만).
   const folderChange = folderChangeOf(prevAnchor0, ws);
   // [RULE-COMPLIANCE §3 A] 이 턴의 규칙 점검 결정(required|disabled·규칙 목록 지문·개수)을 '첫 앵커 쓰기'에 기록 — 출력이 없는 의도적 미주입 턴에도 남는다.
@@ -82,6 +99,7 @@ process.stdin.on("end", () => {
     // ("plan"이면 플랜 모드). 문서 예시는 "default"라 실제 값은 실로그로 확인(빈값=미노출).
     permissionMode: (hook && typeof hook.permission_mode === "string") ? hook.permission_mode : "",
     ...(constraintAnchor ? { constraintAnchor, constraintSourceHash, ...(constraintRepoKey ? { constraintRepoKey } : {}) } : {}), // 약속 발화 포착 — CLI가 이 턴의 스냅샷을 찾는 열쇠(+저장소 결속 ab-1)
+    ...((hook && typeof hook.transcript_path === "string" && hook.transcript_path) ? { transcriptPath: hook.transcript_path } : {}), // [묶음 2-나] 약속 상신 명령이 같은 차례의 선택지 답을 수집할 대화 기록 위치
     ts: activeTs,
   };
   const activePayload = JSON.stringify({ ...anchorBase, ...(prevDirective ? { directive: prevDirective } : {}), ...(prevReset ? { directiveReset: prevReset } : {}) }); // 전달 기록 보존(계획 확정 전 덮어쓰기 손실 방지)

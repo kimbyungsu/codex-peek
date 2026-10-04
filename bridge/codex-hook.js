@@ -437,6 +437,7 @@ function onPrompt(j, ws, sid, c, roleRevision, preface, prePinned) {
       let rk9 = ""; try { rk9 = constraintRepoKeyFor(ws, c) || ""; } catch { rk9 = ""; }
       const snap = writeConstraintTurnSnapshot(ws, turnId, ptxt);
       if (snap.ok) capFields = { constraintAnchor: String(turnId), constraintSourceHash: snap.sourceHash, ...(rk9 ? { constraintRepoKey: rk9 } : {}) }; // [ab-1] 원문 시점 정찰 대상 지문
+      if (snap.ok) { try { require("./user-words.js").enqueuePrompt(ws, { anchor: String(turnId), sourceHash: snap.sourceHash, sessionId: sid, repoKey: rk9, provider: "codex" }); } catch { /* best-effort */ } } // [묶음 2-나 §3-2] 미분류 대기열(선택지 직접 입력 수집은 Claude 경로만 — Codex 대응물 미확인 §8 Q1)
     }
   } catch { /* best-effort — 훅 동작 막지 않음 */ }
   // [RULE-COMPLIANCE §3 A] 규칙 점검 결정을 첫 앵커 쓰기(heartbeat)에 — 출력 없는 의도적 미주입 턴에도 disabled가 남는다
