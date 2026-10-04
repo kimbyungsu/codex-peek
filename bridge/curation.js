@@ -323,7 +323,7 @@ function parseCurationOutput(raw, input) {
 // ── 부품 D 커밋 — 후보 장부 2단(provisional → 결과 행 → proposed) + 영수증. 반환 {ok, candidateIds, deferred, heldToggles, dropped, pending, reason?}
 function curationPendingCount(ws, repoKey, gen) {
   let n = 0;
-  try { for (const rec of CL.readEnvelopeCandidates(ws).latest.values()) if (rec && rec.kind === "curator" && rec.status === "proposed" && String(rec.envelopeHash || "") === String(gen) && rec.repoKey === repoKey) n++; } catch { n = 0; }
+  try { const st9 = CL.readEnvelopeCandidates(ws); const udecl9 = typeof CL.userDeclinedCandidate === "function" ? (id) => CL.userDeclinedCandidate(st9.rows, id) : () => false; for (const rec of st9.latest.values()) if (rec && rec.kind === "curator" && rec.status === "proposed" && !udecl9(rec.candidateId) && String(rec.envelopeHash || "") === String(gen) && rec.repoKey === repoKey) n++; } catch { n = 0; }
   return n;
 }
 function readCandidateFileRaw(ws) { try { return String(fs.readFileSync(CL.envelopeCandidatesFileFor(ws), "utf8")); } catch { return ""; } }

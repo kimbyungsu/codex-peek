@@ -4389,11 +4389,70 @@ class Dashboard {
               else vscode.window.showWarningMessage((enM ? "Draft failed: " : "초안 생성 실패: ") + ((dr && dr.error) || "unknown"));
               this.post(); return;
             }
-            const okM = typeof CLM.appendEnvelopeCandidates === "function" && CLM.appendEnvelopeCandidates(wsM, [{ candidateId: m.id, envelopeHash: genM, status: m.status, ts: new Date().toISOString(), note: "dashboard-record" }]);
+            const okM = typeof CLM.appendEnvelopeCandidates === "function" && CLM.appendEnvelopeCandidates(wsM, [{ candidateId: m.id, envelopeHash: genM, status: m.status, ...(m.status === "declined" ? { by: "user" } : {}), ts: new Date().toISOString(), note: "dashboard-record" }]); // [묶음 2-가] 안 올림=사용자 결정(세대 무관 거절 기억 재료)
             if (okM) vscode.window.showInformationMessage(enM ? "Recorded. Nothing runs from this click — tell the implementer in chat to apply it (a stamp is still required for effect)." : "기록했어요. 이 클릭으로 실행되는 것은 없습니다 — 반영은 대화에서 지시해 주세요(효력은 도장부터).");
             else vscode.window.showWarningMessage(enM ? "Record failed — please try again." : "기록에 실패했어요 — 다시 시도해 주세요.");
           } catch { vscode.window.showWarningMessage(enM ? "Record failed." : "기록에 실패했어요."); }
           this.post(); return;
+        }
+        // [RULE-SUPPLY 묶음 2-가 · 사용자 결정 2026-10-04] 한꺼번에/골라서 올리기·안 올림 — 고른 제안을 지금 실후보와 재대조한 뒤
+        // 올리기=초안 1개(승인 1번 · 0세대 '관련될 때'는 빈 첫 수칙서 뒤 두 번째 승인) / 안 올림=사용자 거절 기록(by:user — 수칙서가 바뀌어도 기억).
+        if (m?.type === "candBatch" && Array.isArray(m.ids) && (m.action === "adopt" || m.action === "decline") && typeof m.gen === "string" && typeof m.wsKey === "string" && m.wsKey) {
+          const wsB = dashboardWorkspace(); if (!wsB) return;
+          const enB = loadLangExt() === "en";
+          try {
+            const CLB: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
+            const CBB: any = require(path.join(BRIDGE_DIR, "codex-bridge.js"));
+            if (typeof CLB.wsKeyFor !== "function" || String(CLB.wsKeyFor(wsB)) !== m.wsKey) { vscode.window.showWarningMessage(enB ? "The active project changed while this card was open — the list refreshes; please choose again." : "카드가 떠 있는 사이 활성 프로젝트가 바뀌었어요 — 목록이 갱신됩니다. 다시 골라 주세요."); this.post(); return; }
+            if (typeof CLB.candidateBatchPlan !== "function" || typeof CBB.computeEnvelopeCandidatesFor !== "function") { vscode.window.showWarningMessage(enB ? "This runtime cannot process batches — " + runtimeRepairHint(true) : "이 설치본은 한꺼번에 처리할 수 없어요 — " + runtimeRepairHint(false)); this.post(); return; }
+            let g0B: any = null; try { g0B = typeof CLB.envelopeGenFor === "function" ? CLB.envelopeGenFor(wsB) : null; } catch { g0B = null; }
+            const gen0B = !!(g0B && g0B.virtual && g0B.gen);
+            const genB = gen0B ? String(g0B.gen) : ((CLB.loadContract(wsB) || {}).envelopeHash || null);
+            if ((m.gen || null) !== (genB || null)) { vscode.window.showWarningMessage(enB ? "The rulebook was re-approved while this card was open — the list refreshes; please choose again." : "카드가 떠 있는 사이 수칙서가 재승인됐어요 — 목록이 갱신됩니다. 다시 골라 주세요."); this.post(); return; }
+            const optsB = typeof CBB.candidatesGenOptsFor === "function" ? CBB.candidatesGenOptsFor(wsB) : (gen0B ? { gen0: true } : undefined);
+            const nowB = optsB ? CBB.computeEnvelopeCandidatesFor(wsB, optsB) : CBB.computeEnvelopeCandidatesFor(wsB);
+            if ((nowB.gen || null) !== (genB || null)) { vscode.window.showWarningMessage(enB ? "The proposal list is out of date — it refreshes; please choose again." : "제안 목록이 낡았어요 — 갱신됩니다. 다시 골라 주세요."); this.post(); return; }
+            const idsB: string[] = [...new Set((m.ids as unknown[]).filter((x): x is string => typeof x === "string" && /^[0-9a-f]{16}$/.test(x)))];
+            if (!idsB.length) { this.post(); return; }
+            const latB: Map<string, any> = CLB.readEnvelopeCandidates(wsB).latest; // 장부 1회 판독(제안이 제한 없이 쌓이므로 후보마다 재판독 금지)
+            const liveB: any[] = (nowB.live || []).filter((c: any) => { const st9 = ((latB.get(c.candidateId + "@" + String(genB || "")) || {}) as any).status; return !st9 || st9 === "proposed"; });
+            if (m.action === "decline") {
+              const liveIds = new Set(liveB.map((c: any) => c.candidateId));
+              const okIds = idsB.filter((id) => liveIds.has(id));
+              const tsB = new Date().toISOString();
+              const okW = okIds.length && CLB.appendEnvelopeCandidates(wsB, okIds.map((id) => ({ candidateId: id, envelopeHash: genB, status: "declined", by: "user", note: "dashboard-batch", ts: tsB })));
+              if (okW) vscode.window.showInformationMessage((enB ? `Declined ${okIds.length} proposal(s) — they won't come back even if the rulebook changes.` : `${okIds.length}건을 안 올림으로 기록했어요 — 수칙서가 바뀌어도 다시 올라오지 않아요.`) + (idsB.length > okIds.length ? (enB ? ` (${idsB.length - okIds.length} no longer current — skipped)` : ` (${idsB.length - okIds.length}건은 이미 처리돼 건너뜀)`) : ""));
+              else vscode.window.showWarningMessage(enB ? "Nothing was recorded (no current proposal selected or write failed)." : "기록하지 못했어요(지금 유효한 제안이 없거나 기록 실패).");
+              this.post(); return;
+            }
+            const plan: any = CLB.candidateBatchPlan({ live: liveB.map((c: any) => ({ candidateId: c.candidateId, kind: c.kind, operation: c.operation })), ids: idsB, gen0: gen0B, dest: m.dest });
+            const exN = (plan.excluded || []).length;
+            const exNote = exN ? (enB ? `${exN} selected proposal(s) were left out — curation proposals that go to a different place or remove a rule need their own approval; ones no longer current are skipped.` : `고른 것 중 ${exN}건은 이번 묶음에서 빠졌어요 — 다른 칸으로 가거나 수칙을 빼는 정리 제안은 따로 승인하고, 이미 처리된 것은 건너뜁니다.`) : "";
+            if (plan.mode === "none") { vscode.window.showWarningMessage((enB ? "Nothing to approve in this selection. " : "이번 선택에는 올릴 제안이 없어요. ") + exNote); this.post(); return; }
+            const repoB = (((bridgeLib() as any) || {}).resolveScoutRepo ? ((bridgeLib() as any).resolveScoutRepo(wsB, loadContract(wsB)) || {}).repo : null) || wsB;
+            const tgtB = scoutTargetFor(wsB).repo;
+            const takeN = plan.take.length;
+            const headNote = (enB ? `Approving ${takeN} proposal(s) together (one approval).` : `제안 ${takeN}건을 한꺼번에 올립니다(승인 1번).`) + (exNote ? " " + exNote : "");
+            let dB: any = null;
+            if (plan.mode === "archive") { try { dB = CLB.draftEnvelopeRevision(wsB, repoB, { addCandidateIds: plan.take, removeItems: [], approvedHash: genB, target: "archive" }); } catch { dB = null; } }
+            else if (plan.mode === "core-initial") { try { dB = CLB.draftEnvelopeInitial(wsB, repoB, { addCandidateIds: plan.take }); } catch { dB = null; } }
+            else { try { dB = CLB.draftEnvelopeInitial(wsB, repoB, { allowEmpty: true }); } catch { dB = null; } }
+            if (!dB || !dB.ok) { vscode.window.showWarningMessage((enB ? "Draft failed: " : "초안 생성 실패: ") + ((dB && dB.error) || "unknown")); this.post(); return; }
+            if (plan.mode !== "empty-then-archive") { this.runProposalApprove(tgtB, m.lang, true, { stepNote: headNote + (dB.skippedDup ? (enB ? ` ${dB.skippedDup} already-registered duplicate(s) were auto-excluded.` : ` 이미 등재된 문안과 겹친 ${dB.skippedDup}건은 자동 제외했어요.`) : "") }); return; }
+            const takeB = plan.take.slice(), langB = m.lang;
+            this.runProposalApprove(tgtB, m.lang, true, {
+              stepNote: headNote + " " + (enB ? "Step 1 of 2 — the first rulebook is created empty; right after, a second window adds the selected proposals to 'applied when relevant'." : "1/2단계 — 첫 수칙서를 빈 상태로 먼저 만들고, 이어서 고른 제안을 '관련될 때 적용' 목록에 올리는 두 번째 승인 창이 뜹니다."),
+              after: () => {
+                let g1: any = null; try { g1 = CLB.envelopeGenFor(wsB); } catch { g1 = null; }
+                if (!g1 || g1.virtual || !g1.gen) { this.post(); return; }
+                let d1: any = null; try { d1 = CLB.draftEnvelopeRevision(wsB, repoB, { addCandidateIds: takeB, removeItems: [], approvedHash: String(g1.gen), target: "archive" }); } catch { d1 = null; }
+                if (d1 && d1.ok) { this.runProposalApprove(scoutTargetFor(wsB).repo, langB, true); return; }
+                vscode.window.showWarningMessage((enB ? "The first rulebook was created, but drafting step 2 failed: " : "첫 수칙서는 만들어졌지만 2단계 초안을 만들지 못했어요: ") + ((d1 && d1.error) || "unknown") + (enB ? " — the proposals are still waiting in the list." : " — 제안은 목록에 그대로 남아 있어요."));
+                this.post();
+              },
+            });
+          } catch { vscode.window.showWarningMessage(enB ? "Batch processing failed." : "한꺼번에 처리하지 못했어요."); this.post(); }
+          return;
         }
         // [처리 장치 2026-08-21] 보관함 행 처리(기록만 — 장부 상태 변경·작업 발동 없음). wsKey 재대조=오귀속 차단(candMark 계보).
         if (m?.type === "backlogMark" && typeof m.id === "string" && /^[0-9a-f]{16}$/.test(m.id) && (m.status === "done" || m.status === "dismissed") && typeof m.wsKey === "string" && m.wsKey) {
@@ -7722,6 +7781,7 @@ class Dashboard {
             :T("대화에서 하신 약속을 시스템이 포착한 것과, 구현 담당이 '왜 지킬 규칙인지'와 함께 올린 제안만 여기 옵니다. [승인]을 누르면 바뀌는 내용을 확인한 뒤 승인 1번으로 적용돼요.","Only promises captured from the conversation and proposals from the implementer (with a reason) appear here. Press [Approve] to review the change, then one approval applies it."); ec.appendChild(chSub9);
           if(e9.gen0 && !viewOnly9){ var g0n9=document.createElement("div"); g0n9.className="muted"; g0n9.style.cssText="font-size:11px;margin-top:2px"; g0n9.textContent=T("'관련될 때 적용'은 하는 작업과 관련 있을 때만 검증에 실려요(추천). '항상 적용'은 모든 검증에 실려요. 관련될 때를 고르면 빈 수칙서를 먼저 만들고 승인 창이 한 번 더 떠요.","'When relevant' is included only when the task relates to it (recommended). 'Always' is included in every verification. Choosing 'when relevant' first creates an empty rulebook, so a second approval window follows."); ec.appendChild(g0n9); } // [RULE-SUPPLY 묶음 1 · D6] 칸 선택 안내(상황 설명 — 기술어 없음)
           var more9=null; // 8건 초과=접힘 — '더 보기'로 전량 접근
+          var candBatchRefresh9=function(){}; // [묶음 2-가] 고르기 상태 갱신(묶음 막대가 있을 때 아래에서 교체)
           e9.cands.forEach(function(cd, ix9){
             var row9=document.createElement("div"); row9.style.cssText="font-size:12px;margin-top:7px;padding:6px 8px;border-radius:5px;background:var(--vscode-editorWidget-background)";
             var when9=""; if(cd.ts){ var dt9=new Date(cd.ts); if(!isNaN(dt9.getTime())) when9=(dt9.getMonth()+1)+"/"+dt9.getDate(); }
@@ -7732,6 +7792,7 @@ class Dashboard {
               :T((when9?when9+" 검증에서 ":"검증에서 ")+"잡혀 이미 고친 실수예요","caught"+(when9?" in the "+when9+" verification":" in a verification")+" and already fixed");
             var undecided9=!cd.status||cd.status==="proposed";
             var sit9=document.createElement("div"); sit9.textContent=(undecided9?"":"["+(cd.status==="adopted"?T("승인 대기 — 위 카드에서 승인하거나 취소하세요","awaiting approval — approve or cancel in the card above"):cd.status)+"] ")+kl9; row9.appendChild(sit9);
+            if(undecided9 && !viewOnly9){ var ck9=document.createElement("input"); ck9.type="checkbox"; ck9.setAttribute("data-cand-ck", cd.id); ck9.checked=wbAdds.has(cd.id); ck9.style.cssText="margin-right:6px;vertical-align:middle"; ck9.title=T("한꺼번에 올리거나 안 올릴 제안 고르기","select for approving/declining together"); ck9.onchange=function(){ if(ck9.checked) wbAdds.add(cd.id); else wbAdds.delete(cd.id); candBatchRefresh9(); }; sit9.insertBefore(ck9, sit9.firstChild); } // [묶음 2-가] 고르기 칸(선택 기억=wbAdds — 작업공간·세대가 바뀌면 비움)
             if(cd.title){ var org9=document.createElement("div"); org9.className="muted"; org9.style.cssText="font-size:11px;margin-top:2px"; org9.textContent=T("문안: ","text: ")+cd.title; org9.title=cd.title; row9.appendChild(org9); }
             if(cd.why){ var why9=document.createElement("div"); why9.className="muted"; why9.style.cssText="font-size:11px;margin-top:2px"; why9.textContent=T("왜: ","why: ")+cd.why; row9.appendChild(why9); } // why 표면 — textContent(작문·마크업 없음)
             if(cd.kind==="curator" && cd.explain){ // [CURATION v3 §3 C] 사용자 표현 4요소(있었던 일·올리면·안 올리면·권장) — textContent
@@ -7757,6 +7818,21 @@ class Dashboard {
             if(ix9>=8 && !candsMoreOpenWeb){ row9.style.display="none"; row9.setAttribute("data-candmore","1"); more9=more9||0; more9++; }
             ec.appendChild(row9);
           });
+          (function(){ // [RULE-SUPPLY 묶음 2-가 · 사용자 결정 2026-10-04] 한꺼번에/골라서 올리기·안 올림 — 승인 1번(초안 1개)·제한 없이 쌓인 제안을 사용자가 처리
+            var und9=(e9.cands||[]).filter(function(c9){ return !c9.status||c9.status==="proposed"; });
+            if(viewOnly9 || und9.length<2) return;
+            var bb9=document.createElement("div"); bb9.style.cssText="margin-top:8px;display:flex;flex-wrap:wrap;gap:5px;align-items:center";
+            var allL9=document.createElement("label"); allL9.style.cssText="font-size:12px;margin-right:4px;cursor:pointer"; var allCk9=document.createElement("input"); allCk9.type="checkbox"; allCk9.style.cssText="margin-right:4px;vertical-align:middle"; allL9.appendChild(allCk9); allL9.appendChild(document.createTextNode(T("전체 선택 ("+und9.length+")","Select all ("+und9.length+")"))); bb9.appendChild(allL9);
+            var btns9=[];
+            var mk9=function(label, primary, onClick){ var b=document.createElement("button"); b.style.cssText="font-size:12px"+(primary?";font-weight:600":""); if(!primary) b.className="secondary"; b.setAttribute("data-label", label); b.onclick=onClick; bb9.appendChild(b); btns9.push(b); return b; };
+            var send9=function(action, dest){ var ids=und9.filter(function(c9){ return wbAdds.has(c9.id); }).map(function(c9){ return c9.id; }); if(!ids.length) return; vscode.postMessage({type:"candBatch", ids: ids, action: action, dest: dest||"", gen: String(e9.gen||und9[0].gen||""), wsKey: String(e9.wsKey||und9[0].wsKey||""), lang: e9.lang}); };
+            if(e9.gen0){ mk9(T("선택한 것 올리기 — 관련될 때 적용(추천)","Approve selected — when relevant (recommended)"), true, function(){ send9("adopt","archive"); }); mk9(T("선택한 것 올리기 — 항상 적용","Approve selected — always"), false, function(){ send9("adopt","core"); }); }
+            else mk9(T("선택한 것 올리기","Approve selected"), true, function(){ send9("adopt",""); });
+            mk9(T("선택한 것 안 올림","Decline selected"), false, function(){ send9("decline",""); });
+            candBatchRefresh9=function(){ var n9=0; und9.forEach(function(c9){ if(wbAdds.has(c9.id)) n9++; }); btns9.forEach(function(b){ b.textContent=b.getAttribute("data-label")+" ("+n9+")"; b.disabled=!n9; }); allCk9.checked=(n9===und9.length); ec.querySelectorAll("input[data-cand-ck]").forEach(function(x){ x.checked=wbAdds.has(x.getAttribute("data-cand-ck")); }); };
+            allCk9.onchange=function(){ und9.forEach(function(c9){ if(allCk9.checked) wbAdds.add(c9.id); else wbAdds.delete(c9.id); }); candBatchRefresh9(); };
+            ec.appendChild(bb9); candBatchRefresh9();
+          })();
           if(more9){ var mt9=document.createElement("button"); mt9.style.cssText="margin-top:5px;font-size:12px"; mt9.className="secondary"; mt9.textContent=T("더 보기 (+"+more9+")","Show more (+"+more9+")"); mt9.onclick=function(){ candsMoreOpenWeb=true; ec.querySelectorAll("[data-candmore]").forEach(function(el){ el.style.display=""; }); mt9.remove(); }; ec.appendChild(mt9); }
         }
         if(e9.signals && e9.signals.length){ // [재편 B §3-1b] 반복 신호=참고 표시 전용(버튼·처분·판단 의무 없음)

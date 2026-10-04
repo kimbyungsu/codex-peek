@@ -117,7 +117,7 @@ t("rule-propose pending 상한=차단이 아니라 경고(수동 판단 산출·
   fs.appendFileSync(CL.findingsLedgerFileFor(WS), extra.map((r) => JSON.stringify({ ...r, repoKey: CL.repoKeyOf(REPO) })).join("\n") + "\n"); // [저장소 분할 단일 규칙] 현행 기록=저장소 표식
   const r4 = CL.ruleProposeCandidate(WS, REPO, { findingId: "f-eeee0005", why: "상한 경고 확인용 관통 이유", campaignId: camp, approvedHash: HASH });
   assert.strictEqual(r4.ok, true, "상한이 수동 상신을 막지 않음");
-  assert.strictEqual(r4.warn, "pending-cap", "경고 동봉(침묵 금지)");
+  assert.strictEqual(r4.warn, undefined, "[RULE-SUPPLY 묶음 2-가] 대기 수 경고 폐지(제한 없이 쌓임 — 사용자 결정 2026-10-04)");
 });
 
 // ── A-4 draft 병합 ───────────────────────────────────────────────────────────

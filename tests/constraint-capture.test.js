@@ -165,7 +165,8 @@ t("거부 반례 전종 D — 0세대 접수(RULE-SUPPLY 묶음 1)·미승인 �
   for (let i = 0; i < CL.MEMORY_CANDIDATE_PENDING_MAX; i++) pad.push({ candidateId: sha1("pad" + i).slice(0, 16), envelopeHash: GEN, status: "proposed", kind: "resolved-blocker", ts: "T" });
   CL.appendEnvelopeCandidates(WSP, pad);
   const rP = CL.constraintAdd(WSP, QUOTE, "근거근거근거", "", ctxOk);
-  assert.strictEqual(rP.reason, "pending-cap", "A/B 합산 12 상한(kind 무관 — §1-⑦)");
+  // [RULE-SUPPLY 묶음 2-가 · 사용자 결정 2026-10-04] 대기 12칸 거절 폐지 — 후보는 제한 없이 쌓이고 사용자가 한꺼번에/골라서 처리(상한 거절=사용자 말을 버리는 경로)
+  assert.strictEqual(rP.ok, true, "대기 12건이 차 있어도 접수(제한 없이 쌓임) " + JSON.stringify(rP));
 });
 
 t("TTL 스윕: constraint-turns의 7일 지난 .txt만 청소(최근 파일 보존)", () => {

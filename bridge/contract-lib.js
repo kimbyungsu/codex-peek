@@ -4297,6 +4297,19 @@ function readEnvelopeCandidatesState(ws) {
   }
   return { rows, latest, readError: false };
 }
+// [RULE-SUPPLY 묶음 2-가 · 사용자 결정 2026-10-04] 사용자가 '안 올림'한 후보는 수칙서가 바뀌어도(세대 무관) 다시 올리지 않는다.
+// 사용자 거절=by:"user" 표식(대시보드·CLI mark) 또는 옛 대시보드 기록(note "dashboard-record"). 하네스 정리(이미 등재·저장소 표식 없음·정책 개정)의
+// declined 는 사용자 결정이 아니므로 세지 않는다. 거절 기억은 사용자가 대화로 다시 요청해 명시 재상신된 행(reraised:true — --again)이 거절 뒤에 있을 때만
+// 풀린다 — 세대 이월·고아 복원 같은 자동 행은 사용자 재요청이 아니므로 기억을 풀지 않는다(검증 1회차 blocker②).
+function userDeclinedCandidate(rows, candidateId) {
+  let declined = false;
+  for (const r of rows || []) {
+    if (!r || r.candidateId !== candidateId) continue;
+    if (r.status === "declined" && (r.by === "user" || r.note === "dashboard-record")) declined = true;
+    else if (declined && r.status === "proposed" && r.reraised === true) declined = false;
+  }
+  return declined;
+}
 function appendEnvelopeCandidates(ws, recs) {
   try {
     fs.mkdirSync(ENVELOPE_CANDIDATES_DIR, { recursive: true });
@@ -4825,23 +4838,25 @@ function constraintAdd(ws, quote, why, scope, ctx) {
   const candidateId = envelopeCandidateId("user-constraint", wsKeyFor(ws) + "|" + repoKeyC + "|" + sha1Of(qNorm));
   const { rows, latest } = readEnvelopeCandidates(ws);
   const cur = latest.get(candidateId + "@" + gen);
-  if (cur && (cur.status === "proposed" || cur.status === "adopted")) return reject("duplicate");
-  if (cur && (cur.status === "declined" || cur.status === "failed")) return reject("declined-suppressed"); // 거부권=같은 세대 억제(§4)
+  // [묶음 2-가 · 검증 2회차] 사용자 거절 기억이 먼저 — 옛 지문으로 되돌아와 되살아난 proposed 행이 있어도 거절은 거절(again=사용자 재요청만 재상신)
+  const udecl9 = userDeclinedCandidate(rows, candidateId);
+  if (udecl9 && !c.again) return reject("declined-suppressed"); // 사용자 거절=세대 무관 기억(재상신은 사용자가 대화로 다시 요청할 때 --again)
+  if (cur && (cur.status === "proposed" || cur.status === "adopted") && !udecl9) return reject("duplicate");
+  if (cur && (cur.status === "failed" || (cur.status === "declined" && !c.again))) return reject("declined-suppressed"); // 거부권=같은 세대 억제(§4) · 사용자 재요청(again)은 같은 세대 거절도 재상신
   // 턴당 상한(§1-⑦): 같은 turnAnchor로 등록 성공한 distinct 후보 수. 부품 B 회수(via=verifier-block)는
   // 블록 자체가 4행 유계라 비적용(§2 — A 상한과 별개 채널·둘 다 pending 12 합산 상한은 아래에서 공유).
   if (c.via !== "verifier-block") {
     const turnIds = new Set(rows.filter((r) => r && r.kind === "user-constraint" && r.turnAnchor === c.turnAnchor && typeof r.candidateId === "string").map((r) => r.candidateId));
     if (turnIds.size >= CONSTRAINT_TURN_CAP) return reject("turn-cap");
   }
-  // pending 상한: A/B 합산 기존 12 유지(§1-⑦ — kind 무관 proposed 합산·현 승인 세대 기준).
-  let pending = 0;
-  for (const [, rec] of latest) if (rec.status === "proposed" && String(rec.envelopeHash || "") === gen) pending++;
-  if (pending >= MEMORY_CANDIDATE_PENDING_MAX) return reject("pending-cap");
+  // [묶음 2-가 · 사용자 결정 2026-10-04] 대기 12칸 거절 폐지 — 후보는 제한 없이 쌓이고 전부 보이며, 사용자가 한꺼번에/골라서 올리거나 안 올린다
+  // (상한 거절은 사용자 말을 다시 버리는 경로였다). 수칙서 자체의 축별 상한(코어 12·서고 96)은 승인 단계에서 그대로 지킨다.
   const rec = {
     candidateId, envelopeHash: gen, ...(virt ? { virtualGen: true } : {}), status: "proposed", kind: "user-constraint", repoKey: repoKeyC,
     title: q, why: w, ...(scopeNorm ? { scope: scopeNorm } : {}),
     provider: c.provider, sessionId: c.sessionId, turnAnchor: c.turnAnchor, sourceHash: c.sourceHash,
     ...(c.via ? { via: String(c.via) } : {}),
+    ...(c.again ? { reraised: true } : {}),
     ts: new Date().toISOString(),
   };
   if (!appendEnvelopeCandidates(ws, [rec])) return reject("ledger-write");
@@ -4923,6 +4938,7 @@ function reconcileMemoryCandidatesLocked(ws, repo, approvedHash) {
       const title = typeof rec.title === "string" && rec.title ? rec.title : String(meta.title || "");
       if (String(rec.envelopeHash || "") !== approvedHash) { // ── 구세대 처리
         if (rec.status !== "proposed" && rec.status !== "adopted") continue;
+        if (userDeclinedCandidate(candRows, rec.candidateId)) continue; // [묶음 2-가 검증 blocker②] 사용자가 어느 세대에서든 안 올린 후보=이월 금지(옛 세대의 proposed 행이 되살리지 않게)
         if (latest.has(rec.candidateId + "@" + approvedHash)) continue; // 새 세대 행 이미 존재=1회 규칙
         if (issued9.has(rec.candidateId)) continue; // 이번 스캔에서 이미 발급(다중 구세대 공존 반례)
         if (kindR === "resolved-blocker") {
@@ -4986,7 +5002,8 @@ function reconcileMemoryCandidatesLocked(ws, repo, approvedHash) {
         }
       }
       if (rec.status !== "adopted") continue; // ── 같은 세대: adopted 고아 복원
-      if (rec.applied) continue; // [CURATION v3 §3 D] 도장 시 종결 표식(applied)=고아 아님(빼기 제안은 문안이 사라져 아래 등재 대조로는 종결을 알 수 없음)
+      if (rec.applied) continue; // [CURATION v3 §3 D] 도장 시 종결 표식(applied)=고아 아님
+      if (userDeclinedCandidate(candRows, rec.candidateId)) continue; // [묶음 2-가] 사용자 거절 후보=복원 금지(빼기 제안은 문안이 사라져 아래 등재 대조로는 종결을 알 수 없음)
       if (title && normSet.has(normBacklogTitle(title))) continue; // 도장 완료(문안 등재됨)=고아 아님
       if (boundIds === null) continue; // proposal 손상=소유 판정 불가(보수 — 사용자 처리 후 다음 스캔)
       if (boundIds.has(rec.candidateId)) continue; // 진행 중 초안에 결속 — 고아 아님
@@ -5059,21 +5076,22 @@ function ruleProposeCandidate(ws, repo, opts) {
   const cut = title.length > ENVELOPE_CHAR_MAX ? title.slice(0, ENVELOPE_CHAR_MAX - "…[절단]".length) + "…[절단]" : title;
   if (normSet.has(normBacklogTitle(title)) || normSet.has(normBacklogTitle(cut))) return reject("already-in-envelope");
   const candidateId = envelopeCandidateId("rule-manual", wsKeyFor(ws) + "|" + campaignId + "|" + findingId);
-  const { latest } = readEnvelopeCandidates(ws);
+  const { rows: rowsC9, latest } = readEnvelopeCandidates(ws);
   const cur = latest.get(candidateId + "@" + gen);
-  if (cur && (cur.status === "proposed" || cur.status === "adopted")) return reject("duplicate");
-  if (cur && (cur.status === "declined" || cur.status === "failed")) return reject("declined-suppressed"); // 거부권=같은 세대 억제(user-constraint와 동형)
-  let pending = 0;
-  for (const [, rec] of latest) if (rec && rec.status === "proposed" && String(rec.envelopeHash || "") === gen) pending++;
+  const udeclC9 = userDeclinedCandidate(rowsC9, candidateId); // [묶음 2-가] 사용자 거절 기억 우선(constraintAdd 와 동형)
+  if (udeclC9 && !o.again) return reject("declined-suppressed");
+  if (cur && (cur.status === "proposed" || cur.status === "adopted") && !udeclC9) return reject("duplicate");
+  if (cur && (cur.status === "failed" || (cur.status === "declined" && !o.again))) return reject("declined-suppressed"); // 거부권=같은 세대 억제(user-constraint와 동형) · again=사용자 재요청
   const rec = {
     candidateId, envelopeHash: gen, ...(virt ? { virtualGen: true } : {}), status: "proposed", kind: "rule-manual", origin: "manual", policyVersion: 2, repoKey: repoKeyOf(repo),
     title, why, findingId, campaignId,
     ...(closeRec ? { askId: closeRec.askId } : {}),
     ...(!closeRec && f.oosId ? { oosId: f.oosId } : {}), // 인용형 강등은 oos 결속 실물이 없을 수 있음(위 주석)
+    ...(o.again ? { reraised: true } : {}),
     ts: new Date().toISOString(),
   };
   if (!appendEnvelopeCandidates(ws, [rec])) return reject("ledger-write");
-  return { ok: true, candidateId, ...(pending >= MEMORY_CANDIDATE_PENDING_MAX ? { warn: "pending-cap" } : {}) };
+  return { ok: true, candidateId }; // [묶음 2-가] 대기 수 경고 폐지(제한 없이 쌓임 — 사용자 결정 2026-10-04)
 }
 // [넣기 입력칸 2026-08-28] 사용자가 대시보드에서 직접 친 수칙 → 후보(user-direct·proposed). 사용자 행위가 권위이므로
 // 대화 원문 결속(user-constraint)이 필요 없다. 형식 방어는 user-constraint 문안 검사와 동형(12~200자·단일 행·규약 어휘·
@@ -5105,11 +5123,13 @@ function directRuleCandidate(ws, repo, opts) {
   if (normSet.has(normBacklogTitle(q))) return reject("already-in-envelope");
   const repoKey = repoKeyOf(repo); // [ab-1] 정찰 대상 파티션 — 같은 문안이라도 다른 저장소면 다른 후보
   const candidateId = envelopeCandidateId("user-direct", wsKeyFor(ws) + "|" + repoKey + "|" + sha1Of(q));
-  const { latest } = readEnvelopeCandidates(ws);
+  const { rows: rowsD9, latest } = readEnvelopeCandidates(ws);
   const cur = latest.get(candidateId + "@" + gen);
-  if (cur && (cur.status === "proposed" || cur.status === "adopted")) return reject("duplicate");
-  if (cur && (cur.status === "declined" || cur.status === "failed")) return reject("declined-suppressed");
-  const rec = { candidateId, envelopeHash: gen, ...(virt ? { virtualGen: true } : {}), status: "proposed", kind: "user-direct", origin: "dashboard", policyVersion: 2, repoKey, title: q, why: "사용자가 직접 입력한 수칙", sourceHash: sha1Of(q), ts: new Date().toISOString() };
+  const udeclD9 = userDeclinedCandidate(rowsD9, candidateId); // [묶음 2-가] 사용자 거절 기억 우선(constraintAdd 와 동형)
+  if (udeclD9 && !o.again) return reject("declined-suppressed");
+  if (cur && (cur.status === "proposed" || cur.status === "adopted") && !udeclD9) return reject("duplicate");
+  if (cur && (cur.status === "failed" || (cur.status === "declined" && !o.again))) return reject("declined-suppressed"); // again=사용자 재요청(같은 세대 거절도)
+  const rec = { candidateId, envelopeHash: gen, ...(virt ? { virtualGen: true } : {}), ...(o.again ? { reraised: true } : {}), status: "proposed", kind: "user-direct", origin: "dashboard", policyVersion: 2, repoKey, title: q, why: "사용자가 직접 입력한 수칙", sourceHash: sha1Of(q), ts: new Date().toISOString() };
   if (!appendEnvelopeCandidates(ws, [rec])) return reject("ledger-write");
   return { ok: true, candidateId };
 }
@@ -5219,6 +5239,7 @@ function draftEnvelopeRevision(ws, repo, opts) {
     const capMax9 = tgt9.target === "archive" ? ARCHIVE_ITEM_MAX : ENVELOPE_ITEM_MAX;
     for (const cid of sources9) { // [CURATION v3] 결속 후보 자격 — 이 세대·이 저장소의 proposed curator 후보만(fail-closed)
       const sc = latest.get(cid + "@" + approvedHash);
+      if (userDeclinedCandidate(candRowsAll9, cid)) return { ok: false, error: "사용자가 안 올린 제안이에요(" + cid + ") — 다시 올리려면 대화로 요청해 주세요" }; // [묶음 2-가 검증 2회차] 옛 지문으로 되살아난 행 차단
       if (!sc || sc.kind !== "curator" || sc.status !== "proposed" || sc.repoKey !== repoKeyOf(repo)) return { ok: false, error: "정리 제안 결속 실패(" + cid + ") — 화면을 새로고침한 뒤 다시 시도해 주세요" };
     }
     // [4a 1차 blocker① 봉합] '이미 등재' 판정 집합: 자기 층=대상 실물(코어=빼기 반영된 3축 전체·서고=ab) ·
@@ -5247,6 +5268,7 @@ function draftEnvelopeRevision(ws, repo, opts) {
     for (const cid of adds) {
       const cand = latest.get(cid + "@" + approvedHash);
       if (!cand) return bail9("이 승인 세대에 없는 후보(" + cid + ") — 조정 스캔 후 재시도");
+      if (userDeclinedCandidate(candRowsAll9, cid)) return bail9("사용자가 안 올린 제안이에요(" + cid + ") — 다시 올리려면 대화로 요청해 주세요"); // [묶음 2-가 검증 2회차] 사용자 거절 기억=초안 자격 없음
       if (!cand.repoKey) return bail9("저장소 표식이 없는 이전 제안이라 올릴 수 없어요 — 다시 넣어 주세요(" + cid + ")"); // [ab-1] 무표기=판정 불가=거부(fail-closed)
       if (cand.repoKey !== repoKeyOf(repo)) return bail9("다른 프로젝트에서 만들어진 제안이라 이 저장소에는 올릴 수 없어요(정찰 대상 변경: " + cid + ")"); // [ab-1] 후보가 태어난 저장소 결속
       if (cand.status !== "proposed") return bail9("후보 상태가 proposed 아님(" + cid + ": " + cand.status + ")");
@@ -5289,6 +5311,33 @@ function draftEnvelopeRevision(ws, repo, opts) {
     if (bound9.length) { try { appendEnvelopeCandidates(ws, bound9.map((cid) => ({ candidateId: cid, envelopeHash: approvedHash, status: "adopted", note: "draft " + w.newHash, ts: new Date().toISOString() }))); } catch { /* 상태 기록 실패해도 제안본은 유효 */ } }
     return { ok: true, newHash: w.newHash, parallelCopied: dup, adds: realAdds.length, removes: removes.length, skippedDup: skippedDup.length, target: tgt9.target, ...(initial9 ? { initial: true } : {}) };
   } finally { releaseEnvelopeTransLock(ws, lk9.token); }
+}
+// [RULE-SUPPLY 묶음 2-가 · 사용자 결정 2026-10-04] 후보 '한꺼번에 올리기' 계획 — 화면이 고른 후보 id 를 지금 실후보(live) 목록과 대조해
+// 한 초안(도장 1번)에 담을 것과 따로 처리해야 할 것을 가른다. 순수 함수(파일 판독 없음). live=[{candidateId, kind, operation}].
+// 목적지: 승인 세대=관련될 때(서고 — 단건 [승인]과 같은 기본) / 0세대=dest(core=항상·archive=관련될 때 — 빈 첫 수칙서 뒤 두 번째 승인).
+// 정리 제안은 작업 종류가 칸을 정한다(서고 추가=관련될 때·제외 칸 추가=항상·빼기=묶음 대상 아님) — 목적지가 다른 정리 제안은 묶음에서 빼고 따로 승인 안내.
+function candidateBatchPlan(opts) {
+  const o = opts || {};
+  const live = Array.isArray(o.live) ? o.live : [];
+  const byId = new Map(live.map((c) => [String(c.candidateId || ""), c]));
+  const want = [...new Set((Array.isArray(o.ids) ? o.ids : []).filter((x) => typeof x === "string" && /^[0-9a-f]{16}$/.test(x)))];
+  const gen0 = o.gen0 === true;
+  const dest = gen0 ? (o.dest === "core" ? "core" : "archive") : "archive";
+  const take = [], excluded = [];
+  for (const id of want) {
+    const c = byId.get(id);
+    if (!c) { excluded.push({ id, why: "not-current" }); continue; }
+    if (!ENVELOPE_DRAFTABLE_KINDS.includes(String(c.kind || ""))) { excluded.push({ id, why: "not-draftable" }); continue; }
+    if (c.kind === "curator") {
+      const op = String(c.operation || "");
+      const ownDest = op === "add" ? "archive" : op === "oos-add" ? "core" : "";
+      if (!ownDest) { excluded.push({ id, why: "curator-remove" }); continue; }
+      if (ownDest !== dest) { excluded.push({ id, why: "curator-other-dest" }); continue; }
+    }
+    take.push(id);
+  }
+  const mode = !take.length ? "none" : !gen0 ? "archive" : dest === "core" ? "core-initial" : "empty-then-archive";
+  return { mode, dest, take, excluded };
 }
 // [RULE-SUPPLY 묶음 1 §2-3 1] 첫 초안 — 0세대 후보에서 코어 제안본(baseHash=null·candidateGeneration=GEN0)을 만든다. 결속은 코어로 가는
 // 후보만(서고를 고른 후보는 결속하지 않는다 — 결속되면 승인 순간 applied로 종결돼 이월에서 빠지고, 후속 서고 초안은 proposed만 받는다).
@@ -7179,3 +7228,5 @@ module.exports.envelopeGenFor = envelopeGenFor;
 module.exports.draftEnvelopeInitial = draftEnvelopeInitial;
 module.exports.gen0OpenFindingsInfo = gen0OpenFindingsInfo;
 module.exports.readEnvelopeCandidatesState = readEnvelopeCandidatesState; // [RULE-SUPPLY 묶음 1] 판독 1회로 부재/오류 구분
+module.exports.userDeclinedCandidate = userDeclinedCandidate; // [RULE-SUPPLY 묶음 2-가] 사용자 거절=세대 무관 기억
+module.exports.candidateBatchPlan = candidateBatchPlan; // [RULE-SUPPLY 묶음 2-가] 한꺼번에 올리기 계획(순수)

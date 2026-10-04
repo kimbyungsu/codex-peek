@@ -3337,7 +3337,7 @@ function cmdConstraint(rest) {
   const en = loadLang() === "en";
   const ws = configWs();
   if (String(rest[0] || "") !== "add") {
-    console.error(en ? 'usage: constraint add --quote "<verbatim user words>" --why "<one-line reason>" [--scope <file|area>]' : '사용: constraint add --quote "<사용자 발화 원문 연속 구절>" --why "<한 줄 근거>" [--scope <파일|영역>]');
+    console.error(en ? 'usage: constraint add --quote "<verbatim user words>" --why "<one-line reason>" [--scope <file|area>] [--again (only when the user asks again for something they declined)]' : '사용: constraint add --quote "<사용자 발화 원문 연속 구절>" --why "<한 줄 근거>" [--scope <파일|영역>] [--again (사용자가 안 올렸던 것을 대화로 다시 요청했을 때만)]');
     return 2;
   }
   const flagText = (name) => { // 값이 공백 포함 다단 토큰이어도 다음 --플래그 전까지 합류(따옴표 유실 관용)
@@ -3351,6 +3351,7 @@ function cmdConstraint(rest) {
   const why = flagText("--why");
   const scope = flagText("--scope");
   const ctx = constraintTurnContext(); // [ab-1] repoKey=훅이 원문 스냅숏 시점에 기록한 값(ctx.repoKey) — 여기서 재계산하지 않는다
+  if (ctx && ctx.ok && rest.includes("--again")) ctx.again = true; // [묶음 2-가] 사용자가 대화로 다시 올려 달라고 한 경우만 — 사용자 거절 기억 해제(도장은 여전히 필요)
   const r = constraintAdd(ws, quote, why, scope, ctx);
   if (r.ok) {
     console.log((en ? "registered as a rulebook candidate: " : "수칙서 후보로 상신됨: ") + r.candidateId + (en
@@ -3372,9 +3373,9 @@ function cmdConstraint(rest) {
     "why-format": [en ? `--why must be a single line within ${CONSTRAINT_WHY_MAX} chars.` : `--why는 개행 없는 ${CONSTRAINT_WHY_MAX}자 이내 한 줄이어야 합니다.`, 2],
     "envelope-inactive": [en ? "a rulebook file exists here but is not approved (or is unreadable) — approve or restore it in the dashboard first, then candidates can be filed." : "이 작업공간의 수칙서 파일이 승인 전이거나 읽을 수 없습니다 — 대시보드에서 승인·복구한 뒤 올릴 수 있어요.", 1], // [RULE-SUPPLY 묶음 1] 파일·승인 모두 없음=0세대 접수(이 사유 아님)
     "duplicate": [en ? "already filed for this approval generation (same quote fingerprint)." : "이미 이 승인 세대에 같은 원문 지문으로 상신돼 있습니다.", 1],
-    "declined-suppressed": [en ? "the user already declined this in the current approval generation — not re-filed (a new generation resets this)." : "사용자가 현 승인 세대에서 이미 거절한 문안입니다 — 재상신하지 않습니다(새 승인 세대에서 자연 리셋).", 1],
+    "declined-suppressed": [en ? "the user already declined this (remembered across rulebook changes) — not re-filed. Only if the user asks again in chat, resubmit with --again." : "사용자가 이미 '안 올림' 한 문안입니다(수칙서가 바뀌어도 기억) — 재상신하지 않습니다. 사용자가 대화로 다시 올려 달라고 할 때만 --again 으로 다시 올리세요.", 1],
     "turn-cap": [en ? `per-turn cap reached (${CONSTRAINT_TURN_CAP}).` : `턴당 상신 상한(${CONSTRAINT_TURN_CAP}건)에 도달했습니다.`, 1],
-    "pending-cap": [en ? "pending candidate cap reached — ask the user to triage existing candidates first." : "대기 후보 상한에 도달했습니다 — 기존 후보를 먼저 정리(도장/거절)해야 새로 올릴 수 있어요.", 1],
+    "pending-cap": [en ? "pending candidate cap reached (older runtime)." : "대기 후보 상한(옛 설치본 동작)입니다.", 1], // [묶음 2-가] 대기 12칸 거절 폐지 — 옛 장부 호환 문구만
     "ledger-write": [en ? "ledger write failed." : "장부 기록에 실패했습니다.", 1],
   };
   const m = M[r.reason] || (r.reason && r.reason.startsWith("sensitive-") ? [en ? "quote rejected by the sensitive-form guard (paths/emails/tokens) — never quote secrets; pick a different passage." : "인용문이 민감정보 형태 방어(경로·이메일·토큰류)에 걸렸습니다 — 비밀값은 옮기지 말고 다른 구절을 고르세요.", 1]
@@ -3456,7 +3457,7 @@ function cmdEnvelopeCandidate(rest) {
         : "이 후보(" + g9.kind + ")의 채택은 mark로 기록할 수 없어요 — 채택은 초안 생성과 결속돼야 합니다: `envelope-candidate draft " + id + "` 또는 대시보드 '올림 표시 → 개정판 초안 만들기'를 쓰세요(안 올림/실패 기록은 mark 그대로).");
       return 2;
     }
-    const okW = appendEnvelopeCandidates(ws, [{ candidateId: id, envelopeHash: gen, status, ts: new Date().toISOString(), ...(note ? { note: note.slice(0, 200) } : {}) }]);
+    const okW = appendEnvelopeCandidates(ws, [{ candidateId: id, envelopeHash: gen, status, ...(status === "declined" ? { by: "user" } : {}), ts: new Date().toISOString(), ...(note ? { note: note.slice(0, 200) } : {}) }]); // [묶음 2-가] 안 올림=사용자 결정 전달(대화 응답) — 세대 무관 거절 기억 재료
     if (!okW) { console.error(en ? "record failed (ledger write error)" : "기록 실패(장부 쓰기 오류)"); return 1; }
     console.log((en ? "recorded: " : "기록됨: ") + id + " " + status);
     return 0;
@@ -3530,12 +3531,12 @@ function cmdRulePropose(rest) {
   const why = flagVal("--why");
   const camp = flagVal("--campaign") || currentCampaignIdFor(ws);
   const pos = [];
-  for (let i = 0; i < rest.length; i++) { const a = String(rest[i] || ""); if (a === "--why" || a === "--campaign") { i++; continue; } pos.push(a.trim()); }
+  for (let i = 0; i < rest.length; i++) { const a = String(rest[i] || ""); if (a === "--why" || a === "--campaign") { i++; continue; } if (a === "--again") continue; pos.push(a.trim()); }
   const findingId = (pos[0] || "").trim();
-  if (!findingId) { console.log(en ? "usage: rule-propose <findingId> --why \"<one line>\"" : "사용법: rule-propose <findingId> --why \"<왜 관통 지침인지 1줄>\""); process.exitCode = 2; return; }
+  if (!findingId) { console.log(en ? "usage: rule-propose <findingId> --why \"<one line>\" [--again]" : "사용법: rule-propose <findingId> --why \"<왜 관통 지침인지 1줄>\" [--again (사용자가 안 올렸던 것을 다시 요청했을 때만)]"); process.exitCode = 2; return; }
   const repo = resolveScoutRepo(ws, loadContract(ws)).repo;
   const CLany = require("./contract-lib.js");
-  const r = CLany.ruleProposeCandidate(ws, repo, { findingId, why, campaignId: camp });
+  const r = CLany.ruleProposeCandidate(ws, repo, { findingId, why, campaignId: camp, again: rest.includes("--again") }); // --again=사용자가 대화로 다시 올려 달라고 한 경우만(거절 기억 해제)
   if (!r.ok) {
     const msgs = {
       "finding-missing": ["findingId가 비었습니다", "findingId is empty"],
@@ -3552,7 +3553,7 @@ function cmdRulePropose(rest) {
       "envelope-drift": ["수칙서가 승인 세대와 다릅니다(재승인 후 재시도)", "rulebook differs from the approved generation"],
       "already-in-envelope": ["이미 수칙서(코어·서고)에 있는 문안입니다", "already in the rulebook (core/archive)"],
       "duplicate": ["같은 지적이 이미 후보로 올라가 있습니다", "already proposed for this generation"],
-      "declined-suppressed": ["같은 세대에서 이미 '안 올림' 처분된 지적입니다(거부권 존중)", "declined in this generation (veto respected)"],
+      "declined-suppressed": ["사용자가 이미 '안 올림' 한 지적입니다(수칙서가 바뀌어도 기억 — 사용자가 대화로 다시 올려 달라고 하면 --again)", "the user already declined this (remembered across rulebook changes — use --again only if the user asks again)"],
       "ledger-write": ["후보 장부 기록 실패", "candidate ledger write failed"],
     };
     const m = msgs[r.reason] || [r.reason, r.reason];
@@ -3562,7 +3563,7 @@ function cmdRulePropose(rest) {
     return;
   }
   console.log((en ? "proposed: " : "상신됨: ") + r.candidateId + (en ? " — takes effect only after the user stamps it" : " — 효력은 사용자 도장부터(대시보드 '제안'에서 승인/안 올림)"));
-  if (r.warn === "pending-cap") console.log(en ? "note: pending queue is over the guide cap — consider fewer, more general proposals" : "참고: 대기 후보가 안내 상한을 넘었습니다 — 상신은 더 적고 더 일반적인 원칙 위주로");
+  // [묶음 2-가] 대기 수 경고 폐지 — 후보는 제한 없이 쌓이고 사용자가 한꺼번에/골라서 처리(사용자 결정 2026-10-04)
 }
 // [개선 2 · 판단 관문 — 장치화 2026-08-30] 전량 강등 보류 = 구현자 판단이 필요한 상태. 촉구 문장 대신 마커를 걸어 종료 훅이 판단 기록(round-judge)
 // 전에는 턴을 못 끝내게 한다. 사용자 결정은 자동으로 만들지 않는다 — escalate를 고르면 그때 결정 장부 항목(decisions raise)이 있어야 기록된다.
@@ -4365,6 +4366,7 @@ function computeEnvelopeCandidatesFor(ws, opts) {
       if (!rec || !ENVELOPE_DRAFTABLE_KINDS.includes(k5) || String(rec.envelopeHash || "") !== String(gen || "")) continue;
       if (rec.status !== "proposed" && rec.status !== "adopted") continue; // declined/failed는 아래 live 필터와 동일 취급
       if (rec.status === "adopted" && !bound5.has(rec.candidateId)) continue; // 결속 초안 없는 adopted=등재 완료/고아 — 표시 안 함
+      if (rec.status === "proposed" && require("./contract-lib.js").userDeclinedCandidate(candRows9, rec.candidateId)) continue; // [묶음 2-가 검증 2회차] 사용자가 안 올린 후보=목록 제외(옛 지문 재승인으로 되살아난 proposed 행 포함)
       { const rk5 = rec.repoKey || m5.repoKey || ""; if (!rk5) { unmarked5++; continue; } if (!repoKey5 || rk5 !== repoKey5) continue; } // [ab-1] fail-closed: 무표기(판정 불가)·현재 대상 판독 불가·다른 저장소 태생=합류 안 함
       if (seen5.has(rec.candidateId)) continue;
       seen5.add(rec.candidateId);

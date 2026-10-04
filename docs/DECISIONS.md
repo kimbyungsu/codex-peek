@@ -425,3 +425,11 @@
 - 결과: 수칙서 없던 프로젝트는 업데이트 후 첫 검증부터 새 지적 서식·판단 단계가 켜진다(열린 지적마다 한 줄 판단 — 의도된 되받기 마찰). 첫 승인으로 세대가 바뀌면 그 전에 열린 채 남은 지적은 같은 번호로 옮겨지지 않고 승인 창에 목록으로 보인다(장부 기록은 남음). 수칙서 파일이 있는데 승인 전인 프로젝트와 이미 승인된 프로젝트는 변화 없음.
 - 정본: bridge/contract-lib.js GEN0_HASH·GEN0_TEXT·emptyEnvelopeCore·serializeEnvelopeCore·envelopeGenFor·draftEnvelopeInitial·gen0OpenFindingsInfo·reconcileMemoryCandidatesLocked · bridge/codex-bridge.js envelopeSliceFor·v2StaticDirective·machineFindingsLayer·computeEnvelopeCandidatesFor · bridge/curation.js curationInput · src/extension.ts readEnvelopeView·runProposalApprove · docs/RULE-SUPPLY-REDESIGN-2026-10-04.md §2.
 - 찾는말: 0세대, 빈 수칙서, 첫 수칙서, 수칙서 없음, 후보가 안 모임, 후보 접수, envelope-inactive, GEN0, virtualGen, 첫 도장, 관련될 때 적용, 항상 적용
+
+## D-2026-10-04-candidate-queue-policy — 수칙 제안은 제한 없이 쌓이고 전부 보이며, 사용자가 한꺼번에 또는 골라서 올리거나 안 올린다. 안 올린 것은 수칙서가 바뀌어도 기억한다(묶음 2-가)
+- 날짜: 2026-10-04 · 종류: 사용자 결정+구현(RULE-SUPPLY 묶음 2-가) · 상태: 유효
+- 결정: 사용자 말을 후보로 모으는 장치를 만들면서 "대답 안 한 제안이 무한히 쌓여 계속 승인을 요구하면?"이 문제가 됐다. 오래된 제안을 접거나 자동으로 '안 올림' 처리하는 안은 사용자가 기각했다("보관함 방식이 아니야") — 대신 제안은 제한 없이 쌓이고 전부 보이며, 사용자가 고르기 칸으로 전부 또는 일부를 골라 승인 한 번에 올리거나 '안 올림'으로 처리한다. 대기 12개가 차면 새 제안을 거절하던 규칙은 사용자 말을 다시 버리는 길이라 없앴다. 사용자가 '안 올림'한 제안은 수칙서가 바뀌어도 다시 올라오지 않고, 사용자가 대화로 다시 요청할 때만 다시 올린다. 분류 실행에는 하루 상한을 두지 않는다(자동 실행은 검증 묶음이 끝날 때만 돌기 때문에 하루 검증 묶음 수를 넘지 못함 · 사람이 직접 부르는 수동 실행은 별도).
+- 왜: 사용자 반문(2026-10-04) — 승인 뒤 항목별 빼기와 알림 시 항목별 선택이 있으니 기간·보관이 아니라 사용자가 한꺼번에/골라서 결정하는 구조가 맞다. 화면 실측 결과 항목별 승인·안 올림·빼기는 있었지만 '한꺼번에 올리기'는 8월 개편 때 사라져 있었다.
+- 결과: 제안 목록이 길어질 수 있으나 숨기거나 버리지 않는다. 수칙서 칸 상한(항상 적용 12·관련될 때 96)은 승인할 때 그대로 지킨다. 정리 담당 제안의 미승인 6개 상한은 별도 결정이라 유지.
+- 정본: bridge/contract-lib.js userDeclinedCandidate·candidateBatchPlan·constraintAdd·ruleProposeCandidate·directRuleCandidate · bridge/codex-bridge.js cmdConstraint(--again)·cmdEnvelopeCandidate(mark 사용자 표식) · src/extension.ts candBatch 처리기·후보 카드 고르기 칸 · docs/RULE-SUPPLY-REDESIGN-2026-10-04.md §3-4b·§7 D2.
+- 찾는말: 제안 상한, 대기 12, pending-cap, 한꺼번에 올리기, 전체 선택, 선택 올리기, 안 올림 기억, 거절 기억, 다시 올리기, again, 하루 상한, 분류 상한
