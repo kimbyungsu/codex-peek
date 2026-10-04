@@ -214,7 +214,14 @@ t("소스 핀 — 하네스 자동 생산자 없음(openDecision 호출은 CLI r
   assert.ok(i > 0);
   assert.ok(src.slice(i, i + 900).includes("out.push(armScopeDemotedJudge(ws, camp, askId, en, repoKeySnap));"));
   assert.ok(src.includes('case "decisions":'));
-  assert.deepStrictEqual(CL.DECISION_ORIGINS, ["implementer"]);
+  // [RULE-SUPPLY 묶음 2-나-2] user-words=사용자가 직접 말한 결정을 사용자가 도장 찍을 때만(열린 질문 없이 답한 행과 한 묶음) — 자동 생산자 아님:
+  // 분류 실행 모듈에서 결정 행을 쓰는 곳은 도장 함수(approveSeatCandidate) 한 곳뿐이고 실행기(runClassify)는 결정 장부를 건드리지 않는다.
+  assert.deepStrictEqual(CL.DECISION_ORIGINS, ["implementer", "user-words"]);
+  const cfSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "classify.js"), "utf8");
+  const aI = cfSrc.indexOf("function approveSeatCandidate("), dI = cfSrc.indexOf("function declineSeatCandidate(");
+  const wIs = [...cfSrc.matchAll(/appendDecisionRows\(/g)].map((m) => m.index);
+  assert.ok(aI > 0 && wIs.length >= 1 && wIs.every((wI) => wI > aI && wI < dI), "결정 행 기록 호출은 전부 도장 함수 안(부분 기록 복구 포함)");
+  assert.ok(!/openDecision\(/.test(cfSrc), "분류 실행은 열린 질문을 만들지 않음");
 });
 
 t("결정 블록 서식 — 사용자 편집(기본지침 파일의 decisionBlock)이 렌더·마감 검사에 함께 반영, 자리표시자 빠진 서식은 거부·기본 폴백", () => {

@@ -75,6 +75,7 @@ const BRIDGE_SCRIPTS = [
   "map-rotation.js", // [HARNESS-STRUCTURE §B2 (2)(3)] 지도 칸 회전(사실 전이·교체·보상) — map-enrich 가 lazy require(누락 시 조용히 비활성 — 배포 편입 필수)
   "rules-flow.js", // [HARNESS-STRUCTURE §B3 · D4] 수칙 흐름 4칸 자료(순수 계산) — 확장 개요 패널이 require
   "user-words.js", // [RULE-SUPPLY 묶음 2-나] 사용자 말 수집(선택지 직접 입력 원문·미분류 대기열) — 훅·약속 상신이 require
+  "classify.js", // [RULE-SUPPLY 묶음 2-나-2] 사용자 말 분류 실행(독립·세 자리 후보) — classify 명령이 require
   "curation.js", // [CURATION v3] 독립 큐레이션(입력 집계·제안기·2단 커밋·잠금) — codex-bridge curate·확장이 require
   "selector-runner.js", // [Envelope Selector 3a] 선별 실행기 — worker·selector-preview가 require(3a 신설분의 배포 편입 누락을 4b에서 봉합)
   "preview-gate.js", // [4b 이중 배달] PreToolUse 게이트 — 서고 활성 시 preview 영수증까지 변경 도구 차단

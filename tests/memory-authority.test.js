@@ -571,7 +571,10 @@ t("B4·B5 소스 계약: 출력 합류·대시보드 표면(더 보기·draft �
   const ext = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
   assert.ok(!/\(cc9\.live \|\| \[\]\)\.slice\(0, 8\)/.test(ext), "8건 절단 제거(전량 전달)");
   assert.ok(ext.includes("data-candmore"), "웹뷰 더 보기 접힘");
-  assert.ok(ext.includes('m.kind === "resolved-blocker"') && ext.includes('CLM.draftEnvelopeRevision(wsM, repoM, { addCandidateIds: [m.id], removeItems: [], approvedHash: genM, target: "archive" })'), "채택 버튼=서고행 revision 초안 실행 표면(재편 B 1차 blocker① — 코어 오유입 봉합)");
+  // [RULE-SUPPLY 묶음 2-나-2] 목적지 정본=contract-lib.candidateSingleDest — 칸 없는 후보(해소 blocker·관통 지침·사용자 약속 등)는 승인 세대 단건=서고(종전 봉합 유지),
+  // 지원 환경·범위 밖 칸 사용자 약속 후보만 본문(그 칸은 본문에만 있음). 소스 문자열 대신 정본 함수를 실행으로 확인한다.
+  assert.ok(ext.includes('m.kind === "resolved-blocker"') && ext.includes('CLM.draftEnvelopeRevision(wsM, repoM, { addCandidateIds: [m.id], removeItems: [], approvedHash: genM, target: destOf(false) === "core" ? "core" : "archive" })'), "채택 버튼=revision 초안 실행 표면(목적지=정본 함수)");
+  for (const kind of ["resolved-blocker", "rule-manual", "user-direct", "user-constraint"]) assert.strictEqual(CL.candidateSingleDest({ kind, gen0: false, dest: "core" }), "archive", "칸 없는 후보=서고(재편 B 1차 blocker① — 코어 오유입 봉합 유지): " + kind);
   assert.ok(/function draftSummaryDetail[\s\S]{0,1600}pr\.note/.test(ext) && ext.includes("draftSummaryDetail(CLP9, m.repo, prP") && ext.includes("draftSummaryDetail(CLA, tgtA, prA"), "열람·승인 모달 note 노출 — 공용 요약 렌더러 경유(4c UX: 두 모달이 같은 함수로 note+요약+전문)");
   assert.ok(ext.includes("kind: cd.kind"), "candMark에 kind 전달");
 });

@@ -4355,9 +4355,15 @@ class Dashboard {
               // [RULE-SUPPLY 묶음 1 §2-3] 0세대 채택 — 목적지: 정리 제안은 작업 종류가 정함(제외 칸 추가=항상 적용 칸·서고 추가=관련될 때),
               // 그 밖의 제안은 사용자가 고른 칸(m.dest — 기본·추천=관련될 때 · REJUDGE P5). 항상=첫 초안에 결속 / 관련될 때=빈 첫 수칙서부터
               // (후보 비결속 — 승인 뒤 같은 후보로 '관련될 때' 초안을 만들어 두 번째 승인 창을 띄운다 · 취소해도 후보는 대기 유지).
+              // [RULE-SUPPLY 묶음 2-나-2] 사용자 약속 후보 중 지원 환경·범위 밖 칸(분류 실행이 고른 자리)=수칙서 본문에만 있는 칸 — 목적지는 본문(항상)으로 고정.
+              // '관련될 때(서고)'로 보내면 0세대에선 빈 첫 수칙서만 승인되고 2단계가 거부되며, 승인 세대에선 초안 관문이 거부한다. 목적지는 승인 창에 그대로 보인다.
+              // 목적지 계산의 정본=contract-lib.candidateSingleDest(순수 — 시험이 실행으로 고정). 옛 설치본(함수 없음)=종전 규칙.
+              const axM = String((liveM && liveM.axis) || "");
+              const opM = String((liveM && liveM.operation) || "");
+              const destOf = (g0: boolean): string => typeof CLM.candidateSingleDest === "function" ? String(CLM.candidateSingleDest({ kind: m.kind, operation: opM, axis: axM, dest: m.dest, gen0: g0 }) || "")
+                : (m.kind === "curator" ? (opM === "oos-add" ? "core" : opM === "add" ? "archive" : "") : (g0 && m.dest === "core" ? "core" : "archive"));
               if (gen0M) {
-                const op0 = String((liveM && liveM.operation) || "");
-                const dest0: string = m.kind === "curator" ? (op0 === "oos-add" ? "core" : op0 === "add" ? "archive" : "") : (m.dest === "core" ? "core" : "archive");
+                const dest0: string = destOf(true);
                 if (!dest0 || typeof CLM.draftEnvelopeInitial !== "function") { vscode.window.showWarningMessage(enM ? "This proposal cannot be applied before the first rulebook exists." : "이 제안은 첫 수칙서가 생기기 전에는 적용할 수 없어요."); this.post(); return; }
                 let d0: any = null;
                 try { d0 = dest0 === "core" ? CLM.draftEnvelopeInitial(wsM, repoM, { addCandidateIds: [m.id] }) : CLM.draftEnvelopeInitial(wsM, repoM, { allowEmpty: true }); } catch { d0 = null; }
@@ -4383,7 +4389,7 @@ class Dashboard {
               // [재편 B 1차 blocker①] 목적지=서고 명시(설계 §3-2) — 코어 전용 draftEnvelopeCandidate는 12칸
               // 상한·전량 주입 코어로 오유입하던 결함. 단건 올림도 revision 경로(target archive)로 통일.
               // [CURATION v3 §3 D] 정리 제안(curator)은 후보 행의 작업 종류(add·oos-add·remove)를 읽어 변환 — 다른 kind는 종전 서고 올림 경로 그대로.
-              try { dr = m.kind === "curator" ? (typeof CLM.draftCuratorCandidate === "function" ? CLM.draftCuratorCandidate(wsM, repoM, m.id, genM) : { ok: false, error: enM ? "this runtime cannot convert curation proposals — " + runtimeRepairHint(true) : "이 설치본은 정리 제안을 변환할 수 없어요 — " + runtimeRepairHint(false) }) : CLM.draftEnvelopeRevision(wsM, repoM, { addCandidateIds: [m.id], removeItems: [], approvedHash: genM, target: "archive" }); } catch { dr = null; }
+              try { dr = m.kind === "curator" ? (typeof CLM.draftCuratorCandidate === "function" ? CLM.draftCuratorCandidate(wsM, repoM, m.id, genM) : { ok: false, error: enM ? "this runtime cannot convert curation proposals — " + runtimeRepairHint(true) : "이 설치본은 정리 제안을 변환할 수 없어요 — " + runtimeRepairHint(false) }) : CLM.draftEnvelopeRevision(wsM, repoM, { addCandidateIds: [m.id], removeItems: [], approvedHash: genM, target: destOf(false) === "core" ? "core" : "archive" }); } catch { dr = null; } // [묶음 2-나-2] 지원 환경·범위 밖 칸 후보=본문
               if (dr && dr.ok && m.approve === true) { this.runProposalApprove(scoutTargetFor(wsM).repo, m.lang, true); return; } // [재편 B §3-2] [승인] 1클릭 — 초안 생성 직후 같은 도장 모달로(취소=복원형 폐기)
               if (dr && dr.ok) vscode.window.showInformationMessage((enM ? "Merge draft created — review it via 'View details' and stamp to apply. Nothing changes until you stamp." : "병합 초안을 만들었어요 — '내용 보기'로 확인 후 도장을 찍어야 적용됩니다(그 전까지는 아무것도 바뀌지 않아요).") + (dr.parallelCopied ? (enM ? " Parallel axes were copied verbatim — please edit translations/examples before stamping." : " 병렬 축은 원문 그대로 복제됐어요 — 도장 전에 번역·예시를 다듬어 주세요.") : ""));
               else vscode.window.showWarningMessage((enM ? "Draft failed: " : "초안 생성 실패: ") + ((dr && dr.error) || "unknown"));

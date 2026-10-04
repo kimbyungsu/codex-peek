@@ -3525,6 +3525,43 @@ async function cmdCurate(rest) {
   else if (r.st === "skipped") console.log((en ? "[curation] skipped (" : "[정리 제안] 생략(") + r.reason + (en ? ") — no new signal since the last run; pass --force to ask anyway." : ") — 마지막 실행 이후 새 신호가 없습니다. 그래도 묻게 하려면 --force."));
   else { console.log((en ? "[curation] not run: " : "[정리 제안] 실행되지 않음: ") + r.st + (r.reason ? " (" + r.reason + ")" : "")); process.exitCode = 2; }
 }
+// [RULE-SUPPLY 묶음 2-나-2] classify [run] [--json] · classify status [--json] · classify list [--json] — 모아 둔 사용자 말을 독립 실행이 분류(검증 무관·유계).
+// 도장(승인·안 올림)은 이 명령에 없다 — 사용자 화면 몫(구현 담당이 사용자 대신 도장 찍는 경로 금지).
+async function cmdClassify(rest) {
+  const ws = configWs();
+  const en = loadLang() === "en";
+  const CF = require("./classify.js");
+  const sub = (rest || []).find((a) => !String(a).startsWith("--")) || "run";
+  const json = (rest || []).includes("--json");
+  if (sub === "status") {
+    const sm = CF.classifySummary(ws);
+    if (json) { console.log(JSON.stringify(sm)); return; }
+    const n = (v) => (v === null ? (en ? "unreadable" : "판독 불가") : String(v));
+    console.log((en ? "[user words] queued " : "[사용자 말] 분류 대기 ") + n(sm.queued) + (en ? " · could not classify " : " · 분류하지 못한 말 ") + n(sm.held) + (en ? " · waiting for your decision (rule/decision seats) " : " · 사용자 확인 대기(규칙·결정 자리) ") + n(sm.seatsPending) + " · " + (sm.lastTs ? (en ? "last run " : "마지막 실행 ") + sm.lastTs + " " + sm.lastOutcome + (sm.lastReason ? "(" + sm.lastReason + ")" : "") : (en ? "never run" : "실행 이력 없음")));
+    return;
+  }
+  if (sub === "list") {
+    let rk = ""; try { rk = repoKeyOf(resolveScoutRepo(ws, loadContract(ws)).repo); } catch { rk = ""; }
+    const seats = rk ? CF.listSeatCandidates(ws, rk) : null;
+    const held = rk ? require("./user-words.js").heldWords(ws, rk, { unknown: true }) : null;
+    if (json) { console.log(JSON.stringify({ seats, held: held ? held.map((w) => ({ id: w.id, source: w.source, reason: w.heldReason, ts: w.ts })) : null })); return; }
+    if (seats === null) { console.log(en ? "[user words] seat ledger unreadable" : "[사용자 말] 자리 장부 판독 불가"); process.exitCode = 2; return; }
+    const seatLabel = (s) => (s === "rule" ? (en ? "implementer rule" : "구현 담당 규칙") : (en ? "decision record" : "결정 기록"));
+    for (const s of seats) console.log("  " + s.candidateId + " · " + seatLabel(s.seat) + " · " + s.quote + "\n    " + (en ? "why: " : "왜: ") + s.why);
+    console.log((en ? "[user words] waiting for your decision " : "[사용자 말] 사용자 확인 대기 ") + seats.length + (en ? " · could not classify " : " · 분류하지 못한 말 ") + (held ? held.length : "?") + (en ? " — rulebook seats appear in the dashboard proposal box." : " — 수칙서 자리 후보는 대시보드 제안 목록에 있습니다."));
+    return;
+  }
+  if (sub !== "run") { console.log(en ? "usage: classify [run|status|list] [--json]" : "사용법: classify [run|status|list] [--json]"); process.exitCode = 2; return; }
+  console.error(en ? "[user words] asking the independent classifier (may take minutes; verification is not affected)..." : "[사용자 말] 독립 분류 담당에게 묻는 중(수 분 걸릴 수 있음 · 검증 무영향)...");
+  await new Promise((res) => setImmediate(res)); // 순환 초기화 중 빈 export 조회 차단(정리 담당과 같은 이유 — Codex 팔이 resolveCodex 를 조회)
+  let fk = null; if (process.env.CODEX_BRIDGE_SELECTOR_RUNNER) { try { fk = require(process.env.CODEX_BRIDGE_SELECTOR_RUNNER).runSelectorPage; } catch { fk = null; } }
+  const trigger = (rest || []).includes("--auto") ? "auto" : (rest || []).includes("--button") ? "button" : "manual";
+  const r = await CF.runClassify(ws, { trigger, lang: loadLang(), ...(typeof fk === "function" ? { pageRunner: fk } : {}) });
+  if (json) { console.log(JSON.stringify(r)); if (r.st !== "ok" && r.st !== "empty") process.exitCode = 2; return; }
+  if (r.st === "ok") console.log((en ? "[user words] done — words " : "[사용자 말] 완료 — 살펴본 말 ") + r.words + (en ? " · rulebook proposals " : " · 수칙서 자리 후보 ") + r.envIds.length + (en ? " · rule/decision proposals " : " · 규칙·결정 자리 후보 ") + r.seatIds.length + (en ? " · dropped " : " · 탈락 ") + r.dropped.length + (r.unavailable ? (en ? " · unreadable words held " : " · 원문을 못 읽어 보류 ") + r.unavailable : "") + (en ? " — the user approves or declines them." : " — 승인·안 올림은 사용자가 정합니다."));
+  else if (r.st === "empty") console.log(en ? "[user words] nothing waiting to be classified." : "[사용자 말] 분류할 말이 없습니다.");
+  else { console.log((en ? "[user words] not run: " : "[사용자 말] 실행되지 않음: ") + r.st + (r.reason ? " (" + r.reason + ")" : "")); process.exitCode = 2; }
+}
 function cmdRulePropose(rest) {
   const ws = configWs();
   const en = loadLang() === "en";
@@ -4371,7 +4408,7 @@ function computeEnvelopeCandidatesFor(ws, opts) {
       { const rk5 = rec.repoKey || m5.repoKey || ""; if (!rk5) { unmarked5++; continue; } if (!repoKey5 || rk5 !== repoKey5) continue; } // [ab-1] fail-closed: 무표기(판정 불가)·현재 대상 판독 불가·다른 저장소 태생=합류 안 함
       if (seen5.has(rec.candidateId)) continue;
       seen5.add(rec.candidateId);
-      cands.push({ candidateId: rec.candidateId, kind: k5, key: rec.findingId || m5.findingId || "", n: 1, titles: [String(rec.title || m5.title || "")].filter(Boolean), ts: String(rec.ts || ""), ...(k5 === "user-constraint" || k5 === "rule-manual" || k5 === "user-direct" || k5 === "curator" ? { why: String(rec.why || m5.why || "") } : {}), ...(k5 === "curator" ? { operation: String(rec.operation || m5.operation || ""), target: String(rec.target || m5.target || ""), explain: rec.explain || m5.explain || null } : {}) }); // ts=제안 시각·why=상신 근거(사람 표면 보조 줄 — rule-manual도 '왜 관통 지침인지' 동봉·재편 A §2-2)
+      cands.push({ candidateId: rec.candidateId, kind: k5, key: rec.findingId || m5.findingId || "", n: 1, titles: [String(rec.title || m5.title || "")].filter(Boolean), ts: String(rec.ts || ""), ...(k5 === "user-constraint" || k5 === "rule-manual" || k5 === "user-direct" || k5 === "curator" ? { why: String(rec.why || m5.why || "") } : {}), ...(k5 === "curator" ? { operation: String(rec.operation || m5.operation || ""), target: String(rec.target || m5.target || ""), explain: rec.explain || m5.explain || null } : {}), ...(k5 === "user-constraint" ? { axis: String(rec.axis || m5.axis || ""), origin: String(rec.origin || m5.origin || ""), recommend: String(rec.recommend || m5.recommend || ""), quoteSource: String(rec.quoteSource || m5.quoteSource || "") } : {}) }); // ts=제안 시각 · [묶음 2-나-2] 사용자 약속 후보의 칸(axis)·출처(origin classifier=분류 실행) 동봉·why=상신 근거(사람 표면 보조 줄 — rule-manual도 '왜 관통 지침인지' 동봉·재편 A §2-2)
     }
   }
   let skipped = 0;
@@ -5393,6 +5430,8 @@ function main() {
       return cmdRulePropose(rest); // [재편 A §2-1] 마감 판단의 명시 상신 — 관통 지침만 수칙서 후보로
     case "curate": // [CURATION v3 §3 A①] 독립 큐레이션 수동 실행(검증 무관·유계) — 제안은 대시보드 제안함에 합류(승인은 사용자)
       return void cmdCurate(rest);
+    case "classify": // [RULE-SUPPLY 묶음 2-나-2] 모아 둔 사용자 말 분류(독립·검증 무관) — 후보는 사용자 도장 전 효력 없음
+      return void cmdClassify(rest);
     case "envelope-proposal": { // §7 증분 2 — 제안본(초안) 작성·열람·폐기. 승인(도장)은 대시보드 전용 — CLI에 없음.
       const rc8 = cmdEnvelopeProposal(rest);
       if (rc8) process.exitCode = rc8;
@@ -5468,6 +5507,8 @@ function main() {
           "  " + SELF_CMD + " ask-active status | ask-active clear --confirm\n" +
           '  ' + SELF_CMD + ' finding-judge [<id> <fix-fact|fix-gap|rebut|park> --note "근거(12자+·park 제외)"] [--campaign <id>]  (열린 지적 판단 기록 — 미판단이 남으면 다음 검증이 시작되지 않음)\n' +
           '  ' + SELF_CMD + ' rule-propose <findingId> --why "<왜 관통 지침인지 1줄>"  (마감 판단 (c)관통 지침만 수칙서 후보로 — 효력은 사용자 도장부터)\n' +
+          '  ' + SELF_CMD + ' constraint add --quote "<사용자 말 원문 연속 구절>" --why "<한 줄 근거>"  (사용자가 말한 지속 기준을 수칙서 후보로 — 이번·이전 메시지 원문 그대로만 · 효력은 사용자 도장부터)\n' +
+          '  ' + SELF_CMD + ' classify [run|status|list]  (모아 둔 사용자 말을 독립 실행이 분류해 후보로 — 승인은 사용자 화면)\n' +
           "  " + SELF_CMD + " timeout  (대시보드 검증 대기시간과 외부 호출 최소 timeout 확인)\n" +
           "  " + SELF_CMD + " link <id> | link --last\n" +
           "  " + SELF_CMD + " status | find | doctor | detect-home\n" +
