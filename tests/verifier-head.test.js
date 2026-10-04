@@ -38,15 +38,24 @@ for (const lang of ["ko", "en"]) {
   const v2f = CB.v2DirectiveFor(wsEmpty, lang).length;
   ok(v2f <= CAPS.v2Fixed[lang], `${lang} v2 고정 산문 ${v2f}자 ≤ ${CAPS.v2Fixed[lang]}(열린 지적 데이터는 예산 밖 — 상한 금지 계약)`);
   ok(CL.envelopeCoreQualifier(lang).length <= CAPS.baseQual[lang], `${lang} 경계 한정 ${CL.envelopeCoreQualifier(lang).length}자 ≤ ${CAPS.baseQual[lang]}`);
+  const v2g0 = CB.v2StaticDirective(lang, { gen0: true }).length; // [RULE-SUPPLY 묶음 1] 0세대 변형도 같은 고정 산문 예산 안
+  ok(v2g0 <= CAPS.v2Fixed[lang], `${lang} v2 고정 산문(0세대 변형) ${v2g0}자 ≤ ${CAPS.v2Fixed[lang]}`);
 }
 
 console.log("[3] 실전 조립 실증 — withContract가 v2 '실물 동봉'을 보고 위임을 고른다(가정 금지)");
 {
-  // ⓐ 경계 비활성 ws: v1 전문이 실린다(위임 없음)
+  // ⓐ 경계 비활성 ws: v1 전문이 실린다(위임 없음). [RULE-SUPPLY 묶음 1 · 2026-10-04] '비활성'은 이제 수칙서 파일이 있는데 승인 전인 경우만 —
+  // 파일·승인 지문이 모두 없는 ws 는 0세대(아래 ⓐ')로 v2 서식(0세대 변형)을 요구한다.
   fs.mkdirSync(CL.CONTRACTS_DIR, { recursive: true });
+  const wsUnap = path.join(home, "ws-unapproved"); fs.mkdirSync(wsUnap, { recursive: true });
+  fs.writeFileSync(path.join(wsUnap, "verify-envelope.json"), CL.GEN0_TEXT); // 수기 파일·승인 전
+  fs.writeFileSync(CL.contractFileFor(wsUnap, "ko"), JSON.stringify({ verifyProfile: "core" }));
+  const headA = CB.withContract("요청문", wsUnap, "ko", {}, "core", CL.loadContract(wsUnap, "ko"));
+  ok(headA.includes("[지적 목록 v1]") && !headA.includes("[지적 서식 v2"), "경계 비활성(승인 전 수기 파일)=v1 전문(위임 아님 — 서식 무손실)");
+  // ⓐ' 0세대 ws(파일·승인 지문 모두 없음): v2 절(0세대 변형)이 실물로 실리고 v1 블록 설명은 위임
   fs.writeFileSync(CL.contractFileFor(wsEmpty, "ko"), JSON.stringify({ verifyProfile: "core" }));
-  const headA = CB.withContract("요청문", wsEmpty, "ko", {}, "core", CL.loadContract(wsEmpty, "ko"));
-  ok(headA.includes("[지적 목록 v1]") && !headA.includes("[지적 서식 v2"), "경계 비활성=v1 전문(위임 아님 — 서식 무손실)");
+  const headG = CB.withContract("요청문", wsEmpty, "ko", {}, "core", CL.loadContract(wsEmpty, "ko"));
+  ok(headG.includes("[지적 서식 v2 — 수칙서 0세대") && headG.includes("[지적 목록 v2]") && !headG.includes("[지적 목록 v1]") && headG.includes("[지적 서식 v2] 절이 정본") && !headG.includes("[범위 확장 통로]"), "0세대=v2 절(0세대 변형·범위 확장 줄 없음) 실물 동봉+v1 설명 위임");
   // ⓑ 수칙서 승인 ws: v2 절이 실물로 실리고, v1 블록 설명은 사라진다
   const wsEnv = path.join(home, "ws-env"); fs.mkdirSync(wsEnv, { recursive: true });
   const envDoc = { schema: "verify-envelope-v1", supportedEnv: ["단일 사용자 PC"], alwaysBlocker: ["오귀속 기록"], outOfScope: ["악의적 프로세스"] };

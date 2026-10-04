@@ -417,3 +417,11 @@
 - 결과: Codex↔Codex 사용자에게 'Claude 가 기본으로 동작한다'는 잘못된 안내가 사라지고, 담당이 준비 안 됐을 때 '전부 동작' 보장 문구가 나오지 않는다. 자동 지시 러너 문구도 '설정된 담당/모드 기본/강등'을 구분한다. 구 설치본(정본 함수 부재)이면 담당 id 가 그대로 보인다 — 드리프트 배너는 '창이 캐시한 판과 디스크 판의 지문 차이'만 감지하므로 배너가 보장되진 않고, 확장이 관리하는 자동 배치(마켓 설치)에서는 판이 함께 갱신되어 이 경우가 생기지 않는다(수동 설치·수정본에서만 가능).
 - 정본: bridge/contract-lib.js scoutArmLabel·scoutArmText·scoutDefaultArmText·scoutArmNames·scoutArmReadinessOf·buildScoutDirective 러너 문구·buildScoutAttach 머리 · src/extension.ts scoutNamesExt·scoutNameExt·상태 scoutNames·웹뷰 scoutName/armName·openReconGuide SVG(viewBox 960×500) · PRIVACY.md 3·31·96·97·98 · README.md 117·123·163·257·263·276 · docs/README.en.md 17·45·48 · 시험 tests/scout-arm-names.test.js·tests/recon-ui.test.js(기하 검사)
 - 찾는말: 기본 정찰, Claude 정찰, 모드 기본, scoutArmLabel, scoutArmNames, scoutNames, 자동 지시 실행 주체, 구현 담당, 배선도, 수칙서 박스, 문구 감사, 정찰 구조 안내
+
+## D-2026-10-04-rule-supply-gen0 — 수칙서가 없는 새 프로젝트도 '빈 수칙서(0세대)'로 시작해 기준 후보를 모으고, 첫 후보를 승인하면 수칙서가 자동으로 만들어진다(묶음 1)
+- 날짜: 2026-10-04 · 종류: 구현(RULE-SUPPLY-REDESIGN 묶음 1 · 사용자 결정 D1·D6 권장값) · 상태: 유효
+- 결정: 새 프로젝트에서는 누군가 수칙서를 손으로 써서 승인하기 전까지 기준 후보를 모으는 장치가 통째로 꺼져 있었다 — 사용자가 "이번엔 내 폰으로 시험하는 게 목표"처럼 계속 지킬 기준을 여러 번 말해도 올라갈 길이 없었고, 첫 수칙서 승인 화면도 뜨지 않았다. 이제 수칙서 파일도 승인도 없는 프로젝트는 '항목 0개짜리 수칙서'가 있는 것처럼 지적 기록·판단 단계·후보 접수가 켜진다. 검증자 지적을 '범위 밖'으로 내리는 일은 사용자가 처음 승인하기 전에는 하지 않는다. 대시보드 후보마다 '관련될 때 적용(추천)'과 '항상 적용' 중 하나를 골라 승인하면 그 승인으로 수칙서 파일이 처음 만들어진다(관련될 때를 고르면 빈 수칙서를 먼저 세우고 승인 창이 한 번 더 뜬다).
+- 왜: LTE-5G 프로젝트 7일 운용 추적(2026-10-02~04 분석 6건, 각각 검증 통과) — 승인 수칙서가 끝까지 0이라 기록·후보·정리 담당이 모두 꺼져 있었다. 사용자 승인(2026-10-04) "이 방향대로 해보자 — 써 보면서 맞춰 가자".
+- 결과: 수칙서 없던 프로젝트는 업데이트 후 첫 검증부터 새 지적 서식·판단 단계가 켜진다(열린 지적마다 한 줄 판단 — 의도된 되받기 마찰). 첫 승인으로 세대가 바뀌면 그 전에 열린 채 남은 지적은 같은 번호로 옮겨지지 않고 승인 창에 목록으로 보인다(장부 기록은 남음). 수칙서 파일이 있는데 승인 전인 프로젝트와 이미 승인된 프로젝트는 변화 없음.
+- 정본: bridge/contract-lib.js GEN0_HASH·GEN0_TEXT·emptyEnvelopeCore·serializeEnvelopeCore·envelopeGenFor·draftEnvelopeInitial·gen0OpenFindingsInfo·reconcileMemoryCandidatesLocked · bridge/codex-bridge.js envelopeSliceFor·v2StaticDirective·machineFindingsLayer·computeEnvelopeCandidatesFor · bridge/curation.js curationInput · src/extension.ts readEnvelopeView·runProposalApprove · docs/RULE-SUPPLY-REDESIGN-2026-10-04.md §2.
+- 찾는말: 0세대, 빈 수칙서, 첫 수칙서, 수칙서 없음, 후보가 안 모임, 후보 접수, envelope-inactive, GEN0, virtualGen, 첫 도장, 관련될 때 적용, 항상 적용

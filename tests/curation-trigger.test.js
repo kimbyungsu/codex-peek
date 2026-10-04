@@ -40,8 +40,14 @@ const hist = (ws, ids, ageMs, repoKey, fixedTs) => { const hf = CL.campaignHisto
 t("훅 층 — 계약·잠금·tick 상태 3파일만: 수칙서 비활성=무실행 · 활성=`curate tick` detach(인자·cwd·CLAUDE_PROJECT_DIR) · 같은 간격 안 재훅=재spawn 없음 · 잠금 살아 있으면 무실행 · 항상 무고지(null)", () => {
   const F = fixture("hook", true);
   const WS0 = fs.mkdtempSync(path.join(os.tmpdir(), "curt-hook0-"));
+  fs.writeFileSync(path.join(WS0, CL.ENVELOPE_FILE), CL.GEN0_TEXT); // [RULE-SUPPLY 묶음 1] 비활성=수칙서 파일이 있는데 승인 전(파일·승인 모두 없음=0세대 — 아래 별도 확인)
   assert.strictEqual(CU.curationHookTick(WS0, { harnessMode: "claude-codex" }, { spawnFn }), null);
-  assert.strictEqual(spawned.length, 0, "비활성=spawn 없음");
+  assert.strictEqual(spawned.length, 0, "비활성(승인 전 수기 파일)=spawn 없음");
+  { // 0세대(파일·승인 모두 없음)=계기 판정 대상 — 별도 기록 배열(아래 개수 단언 무간섭)
+    const sp0 = []; const WSg = fs.mkdtempSync(path.join(os.tmpdir(), "curt-hookg0-"));
+    assert.strictEqual(CU.curationHookTick(WSg, { harnessMode: "claude-codex" }, { spawnFn: (b, a, o) => { sp0.push(a); return { unref() {} }; } }), null);
+    assert.strictEqual(sp0.length, 1, "0세대=curate tick detach(수칙서 없어도 정리 담당 계기 판정)");
+  }
   assert.strictEqual(CU.curationHookTick(F.ws, F.c(), { spawnFn }), null, "훅은 항상 무고지");
   assert.strictEqual(spawned.length, 1);
   const s = spawned[0];
@@ -364,7 +370,7 @@ t("★반례(4판 blocker②) — B 표식의 되받아침(implementer-oos)이 A
     assert.ok(mine.length === 1 && mine[0].tag === "blocker" && !mine[0].demoted, "★A blocker 유지(B 되받아침 미적용) " + JSON.stringify(mine));
     const cb = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
     assert.ok(cb.includes("implementerRebuttalsFor(ws, camp, frozen, repoKeySnap)") && cb.includes("function implementerRebuttalsFor(ws, camp, gen, repoKey)"), "되받아침 판독 저장소 결속(소스 핀)");
-    assert.ok(cb.includes('undisposedOpenFindingsFromRows(require("./contract-lib.js").ledgerRowsForRepo(st.rows, require("./contract-lib.js").repoKeyNow(ws)), camp, readFrozenEnvelope(ws))'), "시작 관문=현재 저장소 행만(소스 핀)");
+    assert.ok(cb.includes('undisposedOpenFindingsFromRows(require("./contract-lib.js").ledgerRowsForRepo(st.rows, require("./contract-lib.js").repoKeyNow(ws)), camp, judgeGenFor(ws))'), "시작 관문=현재 저장소 행만(소스 핀 · 세대=judgeGenFor — RULE-SUPPLY 묶음 1: 0세대 동결 뒤 첫 승인=새 지문, 그 외 직전 동결)");
     assert.ok(cb.includes('const rowsMine = require("./contract-lib.js").ledgerRowsForRepo(rows, rkCurJ);') && cb.includes('dispositionsFromRows(rowsMine, camp)') && (cb.match(/undisposedOpenFindingsFromRows\((rowsMine|require\("\.\/contract-lib\.js"\)\.ledgerRowsForRepo\(readFindingsLedger\(ws\), rkCurJ\)), camp, gen\)\.length/g) || []).length === 2, "finding-judge 처분·잔여·열린 목록=현재 저장소 행만(소스 핀)");
     const sm = cb.slice(cb.indexOf("const sameRepoM = "), cb.indexOf("\n", cb.indexOf("const sameRepoM = ")));
     assert.ok(!/repoKey === undefined/.test(sm), "결과 처리 필터=표식 일치만(무표식 포함 조항 제거)");

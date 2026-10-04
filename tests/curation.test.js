@@ -64,7 +64,11 @@ t("팔 결정=탐색 담당 유효 팔(2026-09-06 개정 · 2026-09-17 모드 �
 t("입력 집계기 — 실패 정직 보고: repo 불일치·수칙서 비활성·미승인 변경·도장 없는 서고 파일", () => {
   assert.strictEqual(CU.curationInput(WS, WS).reason, "repo-mismatch", "정찰 대상이 아닌 폴더=거부(ab-1)");
   const WS2 = fs.mkdtempSync(path.join(os.tmpdir(), "cur-ws2-"));
+  fs.writeFileSync(path.join(WS2, CL.ENVELOPE_FILE), CL.GEN0_TEXT); // [RULE-SUPPLY 묶음 1] 비활성=파일은 있는데 승인 전(파일·승인 모두 없음=0세대 — 아래)
   assert.strictEqual(CU.curationInput(WS2, WS2).reason, "envelope-inactive");
+  const WS0 = fs.mkdtempSync(path.join(os.tmpdir(), "cur-ws0-"));
+  const in0 = CU.curationInput(WS0, WS0, { computeCandidates: () => ({ gen: null, signals: [] }) });
+  assert.ok(in0.ok && in0.boundaryGen === CL.GEN0_HASH && in0.virtualGen === true && in0.rules.core.length === 0, "0세대=GEN0 세대·빈 수칙서로 입력 구성 " + JSON.stringify({ ok: in0.ok, reason: in0.reason, gen: in0.boundaryGen }));
   fs.writeFileSync(path.join(REPO, CL.ENVELOPE_FILE), coreRaw + "\n");
   assert.strictEqual(CU.curationInput(WS, REPO).reason, "envelope-drift");
   fs.writeFileSync(path.join(REPO, CL.ENVELOPE_FILE), coreRaw);
@@ -449,9 +453,10 @@ async function main() {
 
   await ta("[1회차 blocker⑦] 시작 단계 실패도 영수증+경보 — 계약 없음 · 잠금 '실행 중'은 영수증만(경보 없음)", async () => {
     const WS7 = fs.mkdtempSync(path.join(os.tmpdir(), "cur-ws7-"));
+    fs.writeFileSync(path.join(WS7, CL.ENVELOPE_FILE), CL.GEN0_TEXT); // [RULE-SUPPLY 묶음 1] 파일·승인 모두 없음=0세대(정상 입력)라 '승인 전 파일'로 시작 단계 실패를 재현
     const evBefore = CL.readIntegrityEvents().filter((e) => e.kind === "curation-failed" && !e.ack).length;
     const r = await CU.runCuration(WS7, { pageRunner: fake(out([])) });
-    assert.ok(r.st === "input-failed" && r.reason === "envelope-inactive", "계약 파일 부재=기본 계약(수칙서 비활성)으로 읽힘 " + JSON.stringify(r));
+    assert.ok(r.st === "input-failed" && r.reason === "envelope-inactive", "계약 파일 부재=기본 계약(승인 지문 없음)+승인 전 수칙서 파일=비활성 " + JSON.stringify(r));
     const rc7 = CL.readSelectorUsage().filter((x) => x.purpose === "curate" && x.wsKey === CL.wsKeyFor(WS7));
     assert.ok(rc7.length === 1 && rc7[0].outcome === "input-failed:envelope-inactive", "영수증 " + JSON.stringify(rc7));
     assert.ok(CU.readCurationRows(WS7).some((x) => x.type === "run" && x.outcome === "input-failed"), "실행 행");

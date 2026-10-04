@@ -3760,6 +3760,29 @@ const ENVELOPE_ID_PREFIX = { supportedEnv: "sup", alwaysBlocker: "ab", outOfScop
 const ENVELOPE_ITEM_MAX = 12; // 축별 상한(비대 방지)
 const ENVELOPE_OOS_TITLE_MAX = 60; // [개선 4 (a)] 제외 칸 인라인 제목 길이(초과분은 파일 참조)
 const ENVELOPE_CHAR_MAX = 200; // 항목당 상한
+// ── [RULE-SUPPLY-REDESIGN 묶음 1 §2-1] 0세대(빈 수칙서) — 승인 지문도 수칙서 파일도 없는 작업공간의 파생 세대 ──
+// 계약에 쓰지 않는다(ab-2 — 판독 때마다 파생). GEN0_HASH=첫 초안 작성기가 빈 코어를 저장할 때의 실제 바이트 지문:
+// 작성기(draftEnvelopeRevision)와 같은 직렬화 함수를 쓰고, 시험이 '계산값=빈 코어를 실제로 저장한 파일 지문'을 고정한다.
+// 0세대에서 켜지는 것=v2 서식 요구·지적 장부 전체 기록·판단 관문·후보 접수 / 켜지지 않는 것=입장 심사 강등(사용자 승인 전).
+function emptyEnvelopeCore() { return { schema: "verify-envelope-v1", supportedEnv: [], alwaysBlocker: [], outOfScope: [] }; }
+function serializeEnvelopeCore(obj) { return JSON.stringify(obj, null, 1); }
+const GEN0_TEXT = serializeEnvelopeCore(emptyEnvelopeCore());
+const GEN0_HASH = crypto.createHash("sha1").update(GEN0_TEXT).digest("hex");
+// 실효 세대: 계약 승인 지문 있음=그 지문(approved) / 지문 없음+수칙서 파일 없음=GEN0(virtual) / 그 외(수기 파일 승인 대기·
+// 손상·계약 판독 불가·대상 미상)=null(종전 비활성 — 승인 대기 카드·경고 흐름 그대로). cSnap=호출자가 이미 읽은 계약(선택).
+function envelopeGenFor(ws, repo, cSnap) {
+  for (const lg of LANGS) { try { if (contractReadState(ws, lg) === "corrupt") return { gen: null, virtual: false, st: "contract-corrupt" }; } catch { return { gen: null, virtual: false, st: "contract-corrupt" }; } }
+  let c = cSnap || null;
+  if (!c) { try { c = loadContract(ws); } catch { return { gen: null, virtual: false, st: "contract-corrupt" }; } }
+  const h = c && typeof c.envelopeHash === "string" && c.envelopeHash ? c.envelopeHash : null;
+  if (h) return { gen: h, virtual: false, st: "approved" };
+  let r = repo || null;
+  if (!r) { try { r = resolveScoutRepo(ws, c).repo || null; } catch { r = null; } }
+  if (!r) return { gen: null, virtual: false, st: "repo-unknown" };
+  let ev; try { ev = readVerifyEnvelope(r); } catch { ev = { st: "corrupt" }; }
+  if (ev.st === "absent") return { gen: GEN0_HASH, virtual: true, st: "gen0" };
+  return { gen: null, virtual: false, st: ev.st === "ok" ? "unapproved" : "corrupt" };
+}
 // ── [Envelope Selector v6 §1] 서고(archive) — ab축 확장 전용·v1 상한 96항(무상한 해제는 검색 색인 증분) ──
 // 코어와 달리 절삭 관용 없음: 상한·형식 위반=corrupt(도장 대상이 아닌 전문에 지문이 찍히는 경로 자체 차단).
 const ARCHIVE_FILE = "verify-envelope-archive.json";
@@ -3968,6 +3991,8 @@ function writeEnvelopeProposal(ws, repo, proposalText, note, meta) {
   let baseHash = null;
   try { const raw9 = fs.readFileSync(path.join(repo, tgt9.file), "utf8"); baseHash = sha1Of(raw9); } catch { baseHash = null; }
   let candidateGeneration = null; try { candidateGeneration = loadContract(ws).envelopeHash || null; } catch { candidateGeneration = null; }
+  // [RULE-SUPPLY 묶음 1 §2-3] 첫 초안=0세대 후보 결속 — 계약 지문이 없을 때만 GEN0 지정을 받는다(승인 세대가 있으면 무시·계약 우선)
+  if (!candidateGeneration && meta && meta.candidateGeneration === GEN0_HASH) candidateGeneration = GEN0_HASH;
   // candidateId(2026-08-21 초안 폐기 복원): 초안이 어느 후보의 채택에서 왔는지 구조 결속 — 폐기 시 그 후보를
   // 판단 대기로 복원할 수 있게(고아 봉합·Constraint-Capture 설계 §3 복원 규칙의 선행 구현분).
   const cid9 = meta && typeof meta.candidateId === "string" && /^[0-9a-f]{16}$/.test(meta.candidateId) ? meta.candidateId : null;
@@ -4140,6 +4165,14 @@ function applyEnvelopeTransitionLocked(ws, repo, lang, wal) {
           // ①②를 멱등 통과한 뒤 여기서 다시 시도한다. 규칙 파일·계약은 이미 새 값이므로 데이터 손실은 없다.
           if (!okA9) return { ok: false, reason: "applied-write" };
         }
+        // [RULE-SUPPLY 묶음 1 §2-3 3·4] 첫 도장(0세대 후보 결속 초안 → 첫 세대): 이 초안에 결속되지 않은 0세대 후보(서고 선택분·미처리분)를
+        // 같은 잠금 안에서 새 세대 proposed로 정확히 1회 이월(기존 carry-forward 본체). 빈 코어 승인(newHash===GEN0)=세대 불변이라 이월 없음.
+        // 이월 기록 실패=전이 미완(WAL·제안본 보존 → 복구 스캐너가 ①② 멱등 통과 뒤 여기서 재시도 — 이월은 candidateId별 1회라 재실행 무해).
+        if (tgtW.target === "core" && cg9 === GEN0_HASH && wal.newHash !== GEN0_HASH) {
+          let rc9 = null; try { rc9 = reconcileMemoryCandidatesLocked(ws, repo, wal.newHash); } catch { rc9 = null; }
+          if (!rc9 || rc9.writeFailed) return { ok: false, reason: "carry-write" };
+          if (rc9.readFailed || rc9.scanFailed) return { ok: false, reason: "carry-read" }; // [검증 1회차 blocker④] 판독·계산 실패도 미완(WAL·제안본 보존 → 복구 재시도)
+        }
         discardEnvelopeProposal(ws);
       }
     }
@@ -4250,16 +4283,19 @@ function envelopeCandidateId(kind, key) { return crypto.createHash("sha1").updat
 function repoKeyOf(repo) { return crypto.createHash("sha1").update("repo:" + normWs(String(repo || ""))).digest("hex").slice(0, 16); }
 // [ab-1] 약속 발화 후보의 저장소 결속값 — 훅이 원문 스냅숏을 기록하는 그 시점의 정찰 대상(계약 스냅샷 우선). 판독 불가=null.
 function constraintRepoKeyFor(ws, cSnap) { try { return repoKeyOf(resolveScoutRepo(ws, cSnap || loadContract(ws)).repo); } catch { return null; } }
-function readEnvelopeCandidates(ws) {
+function readEnvelopeCandidates(ws) { const st = readEnvelopeCandidatesState(ws); return { rows: st.rows, latest: st.latest }; } // 종전 형태(판독 오류=빈 결과)
+// [RULE-SUPPLY 묶음 1 · 검증 2회차 f-6eb72df7] 같은 판독 1회로 '부재(ENOENT=빈 장부)'와 '판독 오류'를 구분 — 확인용 사전 읽기와 실제 읽기를 따로 하면
+// 둘 사이에서 실패가 갈려(사전 성공·실제 실패) 오류가 다시 빈 장부로 축소된다. readError=true 면 rows/latest 는 비어 있고 '알 수 없음'이다.
+function readEnvelopeCandidatesState(ws) {
   let rows = [];
-  try { rows = String(fs.readFileSync(envelopeCandidatesFileFor(ws), "utf8")).split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch { return { rows: [], latest: new Map() }; }
+  try { rows = String(fs.readFileSync(envelopeCandidatesFileFor(ws), "utf8")).split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch (e) { return { rows: [], latest: new Map(), readError: !(e && e.code === "ENOENT") }; }
   const latest = new Map(); // (candidateId+"@"+envelopeHash) → 최신 유효 레코드(append 순서=시간 순서)
   for (const r of rows) {
     if (!r || typeof r !== "object" || typeof r.candidateId !== "string" || !r.candidateId) continue;
     if (!ENVELOPE_CANDIDATE_STATUSES.includes(r.status)) continue; // 미지 status=무시(닫힌 열거 — 오염 줄이 판정 권위를 갖지 않음)
     latest.set(r.candidateId + "@" + String(r.envelopeHash || ""), r);
   }
-  return { rows, latest };
+  return { rows, latest, readError: false };
 }
 function appendEnvelopeCandidates(ws, recs) {
   try {
@@ -4776,7 +4812,8 @@ function constraintAdd(ws, quote, why, scope, ctx) {
   if (sha1Of(snap) !== c.sourceHash) return reject("snapshot-mismatch");
   if (!snap.includes(q)) return reject("not-in-prompt");
   // Envelope 활성 한정(§3-4: 비활성=후보 대신 안내 — A-6 경계와 동형).
-  let gen = null; try { gen = loadContract(ws).envelopeHash || null; } catch { gen = null; }
+  // [RULE-SUPPLY 묶음 1] 수칙서 파일·승인 지문이 모두 없으면 0세대(GEN0)로 접수 — 파일만 있고 미승인·손상=종전 비활성.
+  let gen = null, virt = false; try { const g9 = envelopeGenFor(ws); gen = g9.gen; virt = g9.virtual; } catch { gen = null; }
   if (!gen) return reject("envelope-inactive");
   // [ab-1 후보 파티션 · 5회차 blocker] 태어난 정찰 대상 지문은 원문 결속 문맥(ctx.repoKey — 원문 스냅샷과 같은 턴에
   // 동결된 값)에서만 읽는다. 회수 시점의 현재 계약 재판독은 금지 — 검증 응답을 기다리는 사이 정찰 대상을 바꾸면
@@ -4801,7 +4838,7 @@ function constraintAdd(ws, quote, why, scope, ctx) {
   for (const [, rec] of latest) if (rec.status === "proposed" && String(rec.envelopeHash || "") === gen) pending++;
   if (pending >= MEMORY_CANDIDATE_PENDING_MAX) return reject("pending-cap");
   const rec = {
-    candidateId, envelopeHash: gen, status: "proposed", kind: "user-constraint", repoKey: repoKeyC,
+    candidateId, envelopeHash: gen, ...(virt ? { virtualGen: true } : {}), status: "proposed", kind: "user-constraint", repoKey: repoKeyC,
     title: q, why: w, ...(scopeNorm ? { scope: scopeNorm } : {}),
     provider: c.provider, sessionId: c.sessionId, turnAnchor: c.turnAnchor, sourceHash: c.sourceHash,
     ...(c.via ? { via: String(c.via) } : {}),
@@ -4833,17 +4870,31 @@ function envelopeMarkGuard(ws, candidateId, status) {
   return { ok: true, kind };
 }
 function reconcileMemoryCandidates(ws, repo, approvedHash) {
-  const out = { scanned: 0, appended: 0, suppressed: [], legacyUnbound: 0 };
-  if (!approvedHash) return out; // 비활성 — A-6 경계
-  let env; try { env = readVerifyEnvelope(repo); } catch { return out; }
-  if (!env || env.st !== "ok" || env.sha1 !== approvedHash) return out; // 미승인 변경/손상=공급 보류(주입 규칙과 동형)
+  if (!approvedHash) return { scanned: 0, appended: 0, suppressed: [], legacyUnbound: 0 }; // 비활성 — A-6 경계
   // 잠금: 전이 잠금 1회 시도 — 실패=이번 트리거 스킵(멱등이라 다음 트리거가 처리). 전이와의 원자성만 필요.
   const lk = acquireEnvelopeTransLock(ws);
-  if (!lk.ok) return out;
+  if (!lk.ok) return { scanned: 0, appended: 0, suppressed: [], legacyUnbound: 0 };
+  try { return reconcileMemoryCandidatesLocked(ws, repo, approvedHash); } finally { releaseEnvelopeTransLock(ws, lk.token); }
+}
+// 잠금 보유형 본체 — [RULE-SUPPLY 묶음 1 §2-3 4] 첫 도장 전이(applyEnvelopeTransitionLocked)가 같은 잠금 안에서 0세대 후보를 새 세대로
+// 이월할 때도 이 본체를 쓴다(이월 실패=writeFailed → 전이가 WAL 보존·복구 스캐너 재시도). 모듈 밖 공개 금지(잠금 계약).
+function reconcileMemoryCandidatesLocked(ws, repo, approvedHash) {
+  const out = { scanned: 0, appended: 0, suppressed: [], legacyUnbound: 0, writeFailed: false };
+  if (!approvedHash) return out;
+  let env; try { env = readVerifyEnvelope(repo); } catch { return out; }
+  let envData = null;
+  if (env && env.st === "ok" && env.sha1 === approvedHash) envData = env.data;
+  else if (approvedHash === GEN0_HASH && env && env.st === "absent") { try { if (envelopeGenFor(ws, repo).virtual) envData = emptyEnvelopeCore(); } catch { envData = null; } } // 0세대=빈 수칙서가 실물
+  if (!envData) return out; // 미승인 변경/손상=공급 보류(주입 규칙과 동형)
+  // [RULE-SUPPLY 묶음 1 · 검증 1회차 blocker④] 후보 장부 판독 오류(부재 아님)는 '빈 장부'가 아니다 — readEnvelopeCandidates 는 오류를 빈 결과로
+  // 축소하므로 여기서 먼저 구분해 readFailed 로 알린다(첫 도장 전이가 이월을 못 한 채 완료로 확정하지 않게).
+  const cst9 = readEnvelopeCandidatesState(ws); // 판독 1회 — 오류 구분과 집계가 같은 결과를 쓴다(검증 2회차 f-6eb72df7)
+  if (cst9.readError) { out.readFailed = true; return out; }
+  const repoKeyCur9 = repoKeyOf(repo); // [검증 1회차 blocker①] 이 저장소 후보만 처분 — 0세대 지문은 저장소마다 같아 세대 축만으로는 저장소가 갈리지 않는다(ab-1)
   try {
-    const { rows: candRows, latest } = readEnvelopeCandidates(ws); // 지적 장부 판독은 폐지된 본 스캔과 함께 제거(재편 A)
+    const { rows: candRows, latest } = cst9; // 위 1회 판독 결과(재판독 금지) · 지적 장부 판독은 폐지된 본 스캔과 함께 제거(재편 A)
     const normSet = new Set(); // 현행 ab·oos 정규화 문안 — 정확 일치 억제(유사도 판정 없음 — 설계 v3)
-    for (const ax of ["alwaysBlocker", "outOfScope"]) for (const x of env.data[ax] || []) normSet.add(normBacklogTitle(x));
+    for (const ax of ["alwaysBlocker", "outOfScope"]) for (const x of envData[ax] || []) normSet.add(normBacklogTitle(x));
     // [4f 실보고 봉합 2026-08-26] 서고 문안도 억제 집합에 편입 — 코어만 보면 서고 등재분의 후보가 '판단 대기'로
     // 계속 남아 사용자가 중복만 골라 빈 초안 실패를 반복(도장 지문 일치 시에만 — 소실 서고는 보수적으로 제외).
     try { const ah9 = (loadContract(ws) || {}).archiveHash; if (typeof ah9 === "string" && ah9) { const ar9 = readVerifyEnvelopeArchive(repo); if (ar9.st === "ok" && ar9.sha1 === ah9) for (const x of ar9.data.alwaysBlocker) { normSet.add(normBacklogTitle(x)); } } } catch { /* 서고 판독 실패=코어만(보수) */ }
@@ -4868,6 +4919,7 @@ function reconcileMemoryCandidates(ws, repo, approvedHash) {
       const kindR = rec.kind || (metaAll.get(rec.candidateId) || {}).kind || "";
       if (!ENVELOPE_DRAFTABLE_KINDS.includes(kindR)) continue;
       const meta = metaAll.get(rec.candidateId) || {};
+      { const rkR9 = rec.repoKey || meta.repoKey || ""; if (rkR9 && rkR9 !== repoKeyCur9) continue; } // 다른 저장소 태생 후보=무접촉(이월·정리·복원 모두) — 무표기 행은 아래 기존 정책
       const title = typeof rec.title === "string" && rec.title ? rec.title : String(meta.title || "");
       if (String(rec.envelopeHash || "") !== approvedHash) { // ── 구세대 처리
         if (rec.status !== "proposed" && rec.status !== "adopted") continue;
@@ -4941,13 +4993,12 @@ function reconcileMemoryCandidates(ws, repo, approvedHash) {
       if (kindR === "resolved-blocker" && !rec.policyVersion) { staleRecs.push({ candidateId: rec.candidateId, envelopeHash: approvedHash, status: "declined", kind: "resolved-blocker", note: "공급 정책 개정(v2) — 자동 상신 폐지·필요 시 rule-propose로 재상신", ...(rec.findingId || meta.findingId ? { findingId: rec.findingId || meta.findingId } : {}), ts: new Date().toISOString() }); continue; } // [재편 B] legacy 고아는 복원(대기 재노출)이 아니라 정책 정리
       staleRecs.push({ candidateId: rec.candidateId, envelopeHash: approvedHash, status: "proposed", kind: kindR, ...(title ? { title } : {}), ...(rec.why || meta.why ? { why: rec.why || meta.why } : {}), ...(rec.findingId || meta.findingId ? { findingId: rec.findingId || meta.findingId } : {}), note: "채택 고아 복원(진행 초안에 미결속 — 재채택 가능)", ts: new Date().toISOString() });
     }
-    if (staleRecs.length) appendEnvelopeCandidates(ws, staleRecs); // 실패=다음 트리거 재시도(멱등 — 재기록 무해)
+    if (staleRecs.length && !appendEnvelopeCandidates(ws, staleRecs)) out.writeFailed = true; // 실패=다음 트리거 재시도(멱등 — 재기록 무해) · 첫 도장 전이는 writeFailed로 WAL 보존
     // [재편 A §2-1 2026-08-27] 본 스캔(해소 blocker 전원 자동 상신) 폐지 — 헌법: 상신 자격은 성격(관통
     // 지침)이지 이력(고쳐졌음)이 아니다. 공급 경로는 ruleProposeCandidate(구현모델 마감 판단)뿐.
     // 생명주기 정리(위 stale·이월·스윕·고아 복원)는 유지 — out 형태(scanned/appended/suppressed/
     // legacyUnbound)는 호출자 호환으로 보존(신규 공급이 없으므로 항상 0).
-  } catch { /* 스캔 실패=이번 트리거 무공급(멱등 — 다음 트리거 재시도) */ }
-  finally { releaseEnvelopeTransLock(ws, lk.token); }
+  } catch { out.scanFailed = true; /* 스캔 실패=이번 트리거 무공급(멱등 — 다음 트리거 재시도). 첫 도장 전이는 이것도 미완으로 본다(검증 1회차 blocker④ — 이월 없이 완료 확정 금지) */ }
   return out;
 }
 // [재편 A §2-1 2026-08-27] 명시 상신 — 캠페인 마감 판단(관통 지침)만 후보로 올리는 유일한 공급 경로.
@@ -4965,7 +5016,8 @@ function ruleProposeCandidate(ws, repo, opts) {
   if (!campaignId) return reject("campaign-missing");
   // [검증 blocker: 세대 결속 fail-open] 승인 세대는 계약 슬롯이 유일 권위 — 호출자 지문은 "일치 확인"에만 쓴다
   // (부재=비활성·불일치=거부). 시험도 계약 슬롯을 먼저 세팅해야 한다(주입만으로 우회 불가).
-  let gen = null; try { gen = loadContract(ws).envelopeHash || null; } catch { gen = null; }
+  // [RULE-SUPPLY 묶음 1] 0세대(파일·승인 지문 모두 없음)=GEN0 세대로 접수(virtualGen 표식) — 0세대도 지적 장부가 계보·해소를 남긴다.
+  let gen = null, virt = false; try { const g9 = envelopeGenFor(ws, repo); gen = g9.gen; virt = g9.virtual; } catch { gen = null; }
   if (!gen) return reject("envelope-inactive");
   if (typeof o.approvedHash === "string" && o.approvedHash && o.approvedHash !== gen) return reject("gen-mismatch");
   // [확인검증 blocker ab-1] repo 결속 — 전달된 repo가 계약의 현재 정찰 대상과 다르면 거부(대상 변경 구간의 타 프로젝트 오귀속 차단).
@@ -4998,11 +5050,11 @@ function ruleProposeCandidate(ws, repo, opts) {
   } else if (demoteClose) {
     if (f.tag !== "blocker" && !f.demoted) return reject("not-blocker"); // 원 blocker의 강등만(설계 §2-1: '닫힌 blocker')
   } else if (!demotedByCreation) return reject("not-eligible");
-  // 중복 억제 집합 — 승인 세대 실물 결속(reconcile·draft와 동형: 드리프트=거부).
+  // 중복 억제 집합 — 승인 세대 실물 결속(reconcile·draft와 동형: 드리프트=거부). 0세대=파일 부재가 실물(빈 집합).
   let env; try { env = readVerifyEnvelope(repo); } catch { return reject("envelope-read"); }
-  if (!env || env.st !== "ok" || env.sha1 !== gen) return reject("envelope-drift");
+  if (virt ? (!env || env.st !== "absent") : (!env || env.st !== "ok" || env.sha1 !== gen)) return reject("envelope-drift");
   const normSet = new Set(); // 코어 3축 전체∪도장 서고 — 초안 단계 대조와 동형(사실확인 blocker: supportedEnv 누락 봉합)
-  for (const ax of ["supportedEnv", "alwaysBlocker", "outOfScope"]) for (const x of env.data[ax] || []) normSet.add(normBacklogTitle(x));
+  if (!virt) for (const ax of ["supportedEnv", "alwaysBlocker", "outOfScope"]) for (const x of env.data[ax] || []) normSet.add(normBacklogTitle(x));
   try { const ah = (loadContract(ws) || {}).archiveHash; if (typeof ah === "string" && ah) { const ar = readVerifyEnvelopeArchive(repo); if (ar.st === "ok" && ar.sha1 === ah) for (const x of ar.data.alwaysBlocker) normSet.add(normBacklogTitle(x)); } } catch { /* 서고 판독 실패=코어만(보수) */ }
   const cut = title.length > ENVELOPE_CHAR_MAX ? title.slice(0, ENVELOPE_CHAR_MAX - "…[절단]".length) + "…[절단]" : title;
   if (normSet.has(normBacklogTitle(title)) || normSet.has(normBacklogTitle(cut))) return reject("already-in-envelope");
@@ -5014,7 +5066,7 @@ function ruleProposeCandidate(ws, repo, opts) {
   let pending = 0;
   for (const [, rec] of latest) if (rec && rec.status === "proposed" && String(rec.envelopeHash || "") === gen) pending++;
   const rec = {
-    candidateId, envelopeHash: gen, status: "proposed", kind: "rule-manual", origin: "manual", policyVersion: 2, repoKey: repoKeyOf(repo),
+    candidateId, envelopeHash: gen, ...(virt ? { virtualGen: true } : {}), status: "proposed", kind: "rule-manual", origin: "manual", policyVersion: 2, repoKey: repoKeyOf(repo),
     title, why, findingId, campaignId,
     ...(closeRec ? { askId: closeRec.askId } : {}),
     ...(!closeRec && f.oosId ? { oosId: f.oosId } : {}), // 인용형 강등은 oos 결속 실물이 없을 수 있음(위 주석)
@@ -5034,7 +5086,7 @@ function directRuleCandidate(ws, repo, opts) {
   const q = raw0.normalize("NFC").replace(/\s+/g, " ").trim(); // 유니코드 공백 전부 접음(normBacklogTitle과 동형 — NBSP 우회 반례)
   // [검증 blocker: 세대 결속 fail-open] 승인 세대는 계약 슬롯이 유일 권위 — 호출자 지문은 "일치 확인"에만 쓴다
   // (부재=비활성·불일치=거부). 시험도 계약 슬롯을 먼저 세팅해야 한다(주입만으로 우회 불가).
-  let gen = null; try { gen = loadContract(ws).envelopeHash || null; } catch { gen = null; }
+  let gen = null, virt = false; try { const g9 = envelopeGenFor(ws, repo); gen = g9.gen; virt = g9.virtual; } catch { gen = null; } // [RULE-SUPPLY 묶음 1] 0세대 접수
   if (!gen) return reject("envelope-inactive");
   if (typeof o.approvedHash === "string" && o.approvedHash && o.approvedHash !== gen) return reject("gen-mismatch");
   // [확인검증 blocker ab-1] repo 결속 — 전달된 repo가 계약의 현재 정찰 대상과 다르면 거부(대상 변경 구간의 타 프로젝트 오귀속 차단).
@@ -5046,9 +5098,9 @@ function directRuleCandidate(ws, repo, opts) {
   const qs = safeBacklogAutoTitle(q);
   if (!qs.ok) return reject("sensitive-" + qs.reasonKey);
   let env; try { env = readVerifyEnvelope(repo); } catch { return reject("envelope-read"); }
-  if (!env || env.st !== "ok" || env.sha1 !== gen) return reject("envelope-drift");
+  if (virt ? (!env || env.st !== "absent") : (!env || env.st !== "ok" || env.sha1 !== gen)) return reject("envelope-drift");
   const normSet = new Set();
-  for (const ax of ["supportedEnv", "alwaysBlocker", "outOfScope"]) for (const x of env.data[ax] || []) normSet.add(normBacklogTitle(x));
+  if (!virt) for (const ax of ["supportedEnv", "alwaysBlocker", "outOfScope"]) for (const x of env.data[ax] || []) normSet.add(normBacklogTitle(x));
   try { const ah = (loadContract(ws) || {}).archiveHash; if (typeof ah === "string" && ah) { const ar = readVerifyEnvelopeArchive(repo); if (ar.st === "ok" && ar.sha1 === ah) for (const x of ar.data.alwaysBlocker) normSet.add(normBacklogTitle(x)); } } catch { /* 서고 판독 실패=코어만(보수) */ }
   if (normSet.has(normBacklogTitle(q))) return reject("already-in-envelope");
   const repoKey = repoKeyOf(repo); // [ab-1] 정찰 대상 파티션 — 같은 문안이라도 다른 저장소면 다른 후보
@@ -5057,7 +5109,7 @@ function directRuleCandidate(ws, repo, opts) {
   const cur = latest.get(candidateId + "@" + gen);
   if (cur && (cur.status === "proposed" || cur.status === "adopted")) return reject("duplicate");
   if (cur && (cur.status === "declined" || cur.status === "failed")) return reject("declined-suppressed");
-  const rec = { candidateId, envelopeHash: gen, status: "proposed", kind: "user-direct", origin: "dashboard", policyVersion: 2, repoKey, title: q, why: "사용자가 직접 입력한 수칙", sourceHash: sha1Of(q), ts: new Date().toISOString() };
+  const rec = { candidateId, envelopeHash: gen, ...(virt ? { virtualGen: true } : {}), status: "proposed", kind: "user-direct", origin: "dashboard", policyVersion: 2, repoKey, title: q, why: "사용자가 직접 입력한 수칙", sourceHash: sha1Of(q), ts: new Date().toISOString() };
   if (!appendEnvelopeCandidates(ws, [rec])) return reject("ledger-write");
   return { ok: true, candidateId };
 }
@@ -5081,13 +5133,26 @@ function draftEnvelopeRevision(ws, repo, opts) {
   const removes = Array.isArray(o9.removeItems) ? o9.removeItems.filter((r) => r && okAxes9.includes(r.axis) && Number.isInteger(r.index) && r.index >= 0) : [];
   // 형식 오류를 '변경 없음'보다 먼저 — 잘못된 축 지정이 필터로 사라져 다른 오류로 위장되는 것 방지(4a).
   if ((Array.isArray(o9.removeItems) && removes.length !== o9.removeItems.length)) return { ok: false, error: tgt9.target === "archive" ? "빼기 지정 형식 오류(서고는 ab축만)" : "빼기 지정 형식 오류(축·번호)" };
-  if (!adds.length && !removes.length) return { ok: false, error: "선택된 변경이 없음(올림·빼기 0건)" };
+  // [RULE-SUPPLY 묶음 1 §2-3] 빈 첫 초안(allowEmptyInitial)=0세대 전용 — 서고를 고른 후보만 있을 때 먼저 빈 수칙서를 세우는 단계(그 후보는 결속하지 않음)
+  const emptyInit9 = o9.allowEmptyInitial === true && approvedHash === GEN0_HASH && tgt9.target === "core" && !removes.length;
+  if (!adds.length && !removes.length && !emptyInit9) return { ok: false, error: "선택된 변경이 없음(올림·빼기 0건)" };
   const lk9 = acquireEnvelopeTransLock(ws);
   if (!lk9.ok) return { ok: false, error: "수칙서 작업 잠금 경합 — 잠시 후 재시도" };
   try {
     // 코어 원문은 목적지와 무관하게 판독·세대 결속(후보 자격이 core 세대에 묶여 있음+union 중복 판정 재료).
-    let coreRaw9, coreCur9;
-    try { coreRaw9 = fs.readFileSync(path.join(repo, ENVELOPE_FILE), "utf8"); coreCur9 = JSON.parse(coreRaw9); } catch { return { ok: false, error: "현행 수칙서 판독 실패" }; }
+    // [RULE-SUPPLY 묶음 1 §2-3 1] 0세대(GEN0·파일·승인 지문 모두 없음)=첫 초안 — 기준은 파일이 아니라 계산값(GEN0_TEXT). 잠금 안에서 재판정해
+    // 그 사이 파일이 생겼으면(수기 작성·다른 창 도장) 거절하고 기존 개정 경로로 보낸다. 0세대에는 서고 목적지가 없다(서고는 첫 도장 뒤).
+    let coreRaw9, coreCur9, initial9 = false;
+    if (approvedHash === GEN0_HASH) {
+      let g9 = null; try { g9 = envelopeGenFor(ws, repo); } catch { g9 = null; }
+      if (g9 && g9.virtual) {
+        if (tgt9.target !== "core") return { ok: false, error: "아직 첫 수칙서가 없어요 — '관련될 때' 목록은 첫 수칙서 승인 뒤에 올릴 수 있어요" };
+        if (removes.length) return { ok: false, error: "첫 수칙서에는 뺄 항목이 없어요" };
+        coreRaw9 = GEN0_TEXT; coreCur9 = emptyEnvelopeCore(); initial9 = true;
+      } else if (emptyInit9) return { ok: false, error: "이미 수칙서가 있어요 — 화면을 새로고침한 뒤 개정 경로로 진행해 주세요" };
+      else if (!(g9 && g9.st === "approved")) return { ok: false, error: "수칙서 파일이 승인 전이에요 — 대시보드에서 먼저 승인해 주세요" }; // 빈 수칙서와 같은 바이트의 수기 파일(승인 전)을 GEN0 지문으로 개정하는 경로 차단
+    }
+    if (!initial9) { try { coreRaw9 = fs.readFileSync(path.join(repo, ENVELOPE_FILE), "utf8"); coreCur9 = JSON.parse(coreRaw9); } catch { return { ok: false, error: "현행 수칙서 판독 실패" }; } }
     if (crypto.createHash("sha1").update(coreRaw9).digest("hex") !== approvedHash) return { ok: false, error: "수칙서가 승인 세대와 다름(재승인 후 재시도)" };
     // 서고 실물·도장 결속 — archiveHash 활성이면 파일이 도장 시점과 일치해야 어떤 목적지든 진행(소실≠미도입).
     const arcHash9 = (() => { try { const h = loadContract(ws).archiveHash; return typeof h === "string" && h ? h : null; } catch { return null; } })();
@@ -5214,15 +5279,38 @@ function draftEnvelopeRevision(ws, repo, opts) {
     // [4e] 중복 제외분=초안 성패와 무관한 진실 — declined(중복 사유)로 자동 정리(대기열 정돈·재제시 스킵)
     const realAdds = adds.filter((cid) => !skippedDup.includes(cid));
     flushDup9();
-    if (!realAdds.length && !removes.length) return { ok: false, skippedDup: skippedDup.length, error: "올림 표시분이 모두 이미 등재된 문안이라 새로 올릴 것이 없어요(중복 " + skippedDup.length + "건은 '이미 등재'로 자동 정리) — 초안은 만들지 않았습니다" };
-    const proposalText = JSON.stringify(next, null, 1);
-    const note = (tgt9.target === "archive" ? "서고 " : "") + "개정판(올림 " + realAdds.length + "·빼기 " + removes.length + (removedTitles.length ? " — " + removedTitles.join(",") : "") + ")" + (skippedDup.length ? " · 중복 " + skippedDup.length + "건 자동 제외" : "") + (dup ? " · 병렬 축 복제됨 — 사용자 편집 필요(번역·예시)" : "");
+    if (!realAdds.length && !removes.length && !(initial9 && emptyInit9)) return { ok: false, skippedDup: skippedDup.length, error: "올림 표시분이 모두 이미 등재된 문안이라 새로 올릴 것이 없어요(중복 " + skippedDup.length + "건은 '이미 등재'로 자동 정리) — 초안은 만들지 않았습니다" };
+    const proposalText = serializeEnvelopeCore(next); // GEN0_HASH와 같은 직렬화(빈 첫 초안의 지문=GEN0_HASH — 시험 고정)
+    const note = initial9 ? ("첫 수칙서(올림 " + realAdds.length + ")" + (skippedDup.length ? " · 중복 " + skippedDup.length + "건 자동 제외" : ""))
+      : (tgt9.target === "archive" ? "서고 " : "") + "개정판(올림 " + realAdds.length + "·빼기 " + removes.length + (removedTitles.length ? " — " + removedTitles.join(",") : "") + ")" + (skippedDup.length ? " · 중복 " + skippedDup.length + "건 자동 제외" : "") + (dup ? " · 병렬 축 복제됨 — 사용자 편집 필요(번역·예시)" : "");
     const bound9 = [...new Set([...realAdds, ...sources9])]; // [CURATION v3] 결속 목록=올림 후보∪출처 후보(remove 등) — 제안 파일 candidateIds 한 자리
-    const w = writeEnvelopeProposal(ws, repo, proposalText, note, { candidateIds: bound9, target: tgt9.target });
+    const w = writeEnvelopeProposal(ws, repo, proposalText, note, { candidateIds: bound9, target: tgt9.target, ...(initial9 ? { candidateGeneration: GEN0_HASH } : {}) });
     if (!w.ok) return { ok: false, error: "제안본 저장 거부: " + w.error };
     if (bound9.length) { try { appendEnvelopeCandidates(ws, bound9.map((cid) => ({ candidateId: cid, envelopeHash: approvedHash, status: "adopted", note: "draft " + w.newHash, ts: new Date().toISOString() }))); } catch { /* 상태 기록 실패해도 제안본은 유효 */ } }
-    return { ok: true, newHash: w.newHash, parallelCopied: dup, adds: realAdds.length, removes: removes.length, skippedDup: skippedDup.length, target: tgt9.target };
+    return { ok: true, newHash: w.newHash, parallelCopied: dup, adds: realAdds.length, removes: removes.length, skippedDup: skippedDup.length, target: tgt9.target, ...(initial9 ? { initial: true } : {}) };
   } finally { releaseEnvelopeTransLock(ws, lk9.token); }
+}
+// [RULE-SUPPLY 묶음 1 §2-3 1] 첫 초안 — 0세대 후보에서 코어 제안본(baseHash=null·candidateGeneration=GEN0)을 만든다. 결속은 코어로 가는
+// 후보만(서고를 고른 후보는 결속하지 않는다 — 결속되면 승인 순간 applied로 종결돼 이월에서 빠지고, 후속 서고 초안은 proposed만 받는다).
+// allowEmpty=서고 선택분만 있을 때 빈 수칙서부터 세우는 단계(지문=GEN0_HASH → 세대 불변). 0세대가 아니면 거절(기존 개정 경로로).
+function draftEnvelopeInitial(ws, repo, opts) {
+  const o = opts || {};
+  let g = null; try { g = envelopeGenFor(ws, repo); } catch { g = null; }
+  if (!g || !g.virtual) return { ok: false, error: "첫 수칙서 단계가 아니에요(이미 수칙서 파일이나 승인이 있음) — 화면을 새로고침해 주세요" };
+  return draftEnvelopeRevision(ws, repo, { approvedHash: GEN0_HASH, target: "core", addCandidateIds: Array.isArray(o.addCandidateIds) ? o.addCandidateIds : [], removeItems: [], allowEmptyInitial: o.allowEmpty === true });
+}
+// [RULE-SUPPLY 묶음 1 §2-3 4] 첫 도장 확인 창 재료 — 이 저장소·현재 캠페인의 0세대(GEN0) 열린 지적과 판단 여부. 같은 id로 새 세대에 옮기지 않으므로
+// (세대가 바뀌면 새 관문에서 빠짐) 조용히 사라지지 않게 승인 전에 보여 준다. 장부 행은 그대로 남는다(덧붙이기 전용). 판독 실패=null(표시 생략).
+function gen0OpenFindingsInfo(ws, repo) {
+  try {
+    let camp = "no-campaign";
+    try { const co = JSON.parse(fs.readFileSync(campaignFileFor(ws), "utf8")); if (co && typeof co === "object" && (co.campaignId || co.startedAt)) camp = String(co.campaignId || co.startedAt); } catch { /* 미예약 */ }
+    const rows = ledgerRowsForRepo(readFindingsLedger(ws), repoKeyOf(repo));
+    const opens = openFindingsFromRows(rows, camp, GEN0_HASH);
+    const und = new Set(undisposedOpenFindingsFromRows(rows, camp, GEN0_HASH).map((o) => o.id));
+    const items = opens.map((o) => ({ id: o.id, tag: String(o.tag || ""), title: String(o.titleNorm || ""), judged: !und.has(o.id) }));
+    return { campaignId: camp, open: items.length, judged: items.filter((x) => x.judged).length, unjudged: items.filter((x) => !x.judged).length, items };
+  } catch { return null; }
 }
 // [CURATION v3 §3 D 승인 시 변환] curator 후보 1건 → 후보 행의 operation을 읽어 기존 초안 계약(draftEnvelopeRevision)의 연산으로 변환.
 // add(서고 ab)→addCandidateIds · oos-add(코어 제외 칸)→addCandidateIds+후보 axis · remove→removeItems 3중 대조(axis·index·itemFp)+expectedTargetHash(제안 시점 대상 세대)
@@ -5762,7 +5850,7 @@ function writeEnvelopeFreeze(ws, hash, askJobId, extra) {
   // askId 동등 비교로만 이 ask의 동결임을 인정한다(불일치·부재=심사 미발동).
   // [v7 §2] extra={manifest, boundaryGen, appliedArchiveHash} — 부재=legacy 동결(코어만 시절·confirm은 envelopeHash 폴백)
   const ex9 = extra && typeof extra === "object" ? extra : {};
-  return atomicWrite(fzF, JSON.stringify({ schema: "env-freeze-v1", hash, askId: askJobId || null, ...(Array.isArray(ex9.manifest) ? { manifest: ex9.manifest } : {}), ...(Array.isArray(ex9.oos) ? { oos: ex9.oos } : {}), ...(typeof ex9.boundaryGen === "string" ? { boundaryGen: ex9.boundaryGen } : {}), ...(typeof ex9.appliedArchiveHash === "string" ? { appliedArchiveHash: ex9.appliedArchiveHash } : {}), ts: new Date().toISOString() }));
+  return atomicWrite(fzF, JSON.stringify({ schema: "env-freeze-v1", hash, askId: askJobId || null, ...(Array.isArray(ex9.manifest) ? { manifest: ex9.manifest } : {}), ...(Array.isArray(ex9.oos) ? { oos: ex9.oos } : {}), ...(typeof ex9.boundaryGen === "string" ? { boundaryGen: ex9.boundaryGen } : {}), ...(typeof ex9.appliedArchiveHash === "string" ? { appliedArchiveHash: ex9.appliedArchiveHash } : {}), ...(ex9.virtualGen === true && hash === GEN0_HASH ? { virtualGen: true } : {}), ts: new Date().toISOString() })); // [RULE-SUPPLY 묶음 1] virtualGen=0세대 동결(사용자 승인 아님 — 입장 심사 강등 미발동 표식)
 }
 function readFrozenEnvelopeRec(ws) {
   try {
@@ -5775,7 +5863,8 @@ function readFrozenEnvelopeRec(ws) {
       const oosOk = Array.isArray(o.oos) && o.oos.every((x) => x && typeof x.id === "string" && /^oos-[1-9][0-9]{0,2}$/.test(x.id) && typeof x.title === "string");
       return { hash: o.hash, ts: typeof o.ts === "string" ? o.ts : null, askId: typeof o.askId === "string" && o.askId ? o.askId : null,
         manifest: mfOk ? o.manifest : null, boundaryGen: mfOk && bgOk ? o.boundaryGen : null,
-        appliedArchiveHash: typeof o.appliedArchiveHash === "string" ? o.appliedArchiveHash : null, oos: oosOk ? o.oos : null };
+        appliedArchiveHash: typeof o.appliedArchiveHash === "string" ? o.appliedArchiveHash : null, oos: oosOk ? o.oos : null,
+        virtualGen: o.virtualGen === true && o.hash === GEN0_HASH }; // [RULE-SUPPLY 묶음 1] 0세대 동결 표식 — GEN0 지문과 함께일 때만 참(승인 판독은 이 표식을 승인 경계로 쓰지 않음)
     }
   } catch { /* 부재/손상 */ }
   return null;
@@ -7081,3 +7170,12 @@ module.exports.cliOnPath = cliOnPath; // [묶음 (다)] 준비 점검용 PATH �
 module.exports.scoutArmReadiness = scoutArmReadiness; // [묶음 (다)] 정찰 전용 준비 점검(의미 보강 readiness 와 별개)
 module.exports.scoutArmReadinessOf = scoutArmReadinessOf; // 담당 하나의 준비 점검(가정 담당용 · 5판 blocker)
 module.exports.runtimeRepairHint = runtimeRepairHint; // 설치 출처별 런타임 복구 안내(마켓=창 다시 로드 · 레포=install.js)
+// [RULE-SUPPLY-REDESIGN 묶음 1] 0세대(빈 수칙서) 시작·첫 도장
+module.exports.GEN0_HASH = GEN0_HASH;
+module.exports.GEN0_TEXT = GEN0_TEXT;
+module.exports.emptyEnvelopeCore = emptyEnvelopeCore;
+module.exports.serializeEnvelopeCore = serializeEnvelopeCore;
+module.exports.envelopeGenFor = envelopeGenFor;
+module.exports.draftEnvelopeInitial = draftEnvelopeInitial;
+module.exports.gen0OpenFindingsInfo = gen0OpenFindingsInfo;
+module.exports.readEnvelopeCandidatesState = readEnvelopeCandidatesState; // [RULE-SUPPLY 묶음 1] 판독 1회로 부재/오류 구분

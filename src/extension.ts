@@ -266,7 +266,7 @@ interface BridgeState {
   // 두뇌설정(Claude settings.json·Codex pref) drift는 state로 노출하지 않는다 — syncBrainDriftFor가 integrity로 직접 동기화(상태바/배너).
   brainActual: { cc: string; cx: string; scout: string }; // 두뇌 '실제 답'(대화 기록 실측) 표시 문구 — 경고 아닌 평시 정보(피커 표시 결함 실사고 2026-07-08). 기록 없으면 '기록 없음' 문구. scout=마지막 정찰 실행(비용 장부 lastTs — 감사 일치 2026-07-10)
   hasTestsDir: boolean; // 표준 테스트 폴더(tests|test) '감지' 여부 — 성격 프로필용(미감지≠없음, 관행 밖은 못 봄)
-  envelope: { label: string; btn: string | null; btn2: string | null; btn3?: string; repo: string; tone: string; lang: Lang; proposal?: string; gen?: string; axes?: Record<string, string[]>; wsKey?: string; arc?: { state: string; count: number; max: number }; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string }>; rules?: Array<{ target: string; targetHash: string; axis: string; index: number; itemFp: string; text: string; tag: string }>; signals?: Array<{ kind: string; n: number; title: string }>; ride?: string } | null; // 거버넌스 증분 1(2차 배치 정정) — 검증 경계(수칙서). 최상위=2트랙 기본 프로젝트 포함·lang=렌더 슬롯 결속. null=부재/ws 없음. arc=[4a] 서고(2층) 현황
+  envelope: { label: string; btn: string | null; btn2: string | null; btn3?: string; repo: string; tone: string; lang: Lang; proposal?: string; gen?: string; axes?: Record<string, string[]>; wsKey?: string; arc?: { state: string; count: number; max: number }; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string }>; rules?: Array<{ target: string; targetHash: string; axis: string; index: number; itemFp: string; text: string; tag: string }>; signals?: Array<{ kind: string; n: number; title: string }>; ride?: string; gen0?: boolean } | null; // gen0=[RULE-SUPPLY 묶음 1] 수칙서 0세대(파일·승인 모두 없음) 카드 · 거버넌스 증분 1(2차 배치 정정) — 검증 경계(수칙서). 최상위=2트랙 기본 프로젝트 포함·lang=렌더 슬롯 결속. null=부재/ws 없음. arc=[4a] 서고(2층) 현황
 }
 
 function normWs(p: string): string {
@@ -1148,7 +1148,7 @@ function envelopeDetailText(evv: any, en9: boolean): string {
 }
 // 거버넌스 증분 1(2차 배치 정정 — 구현검증 1차 blocker①②): 검증 경계는 정찰(3트랙)이 아니라 '검증' 계층이다 —
 // MAP 카드가 아닌 최상위 뷰 필드로 항상 계산(2트랙 기본 프로젝트에서도 승인 가능). lang=렌더 슬롯 결속(도장도 그 슬롯 계약에).
-function readEnvelopeView(ws: string | null): { label: string; btn: string | null; btn2: string | null; btn3?: string; act?: string; driftTarget?: string; repo: string; tone: string; lang: Lang; proposal?: string; candsView?: string; gen?: string; axes?: Record<string, string[]>; wsKey?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string; why?: string; op?: string; explain?: { happened: string; ifAdopted: string; ifNot: string; recommend: string } | null }> } | null {
+function readEnvelopeView(ws: string | null): { label: string; btn: string | null; btn2: string | null; btn3?: string; act?: string; driftTarget?: string; repo: string; tone: string; lang: Lang; proposal?: string; candsView?: string; gen?: string; gen0?: boolean; axes?: Record<string, string[]>; wsKey?: string; cands?: Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string; why?: string; op?: string; explain?: { happened: string; ifAdopted: string; ifNot: string; recommend: string } | null }> } | null {
   if (!ws) return null;
   try {
     const CL9: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
@@ -1158,6 +1158,51 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
     const evv = CL9.readVerifyEnvelope(repo9);
     let hash9: string | null = null;
     try { hash9 = (CL9.loadContract(ws, slot) || {}).envelopeHash || null; } catch { hash9 = null; }
+    // [후보 목록 계산 — 2026-08-21 사용자 실보고로 헬퍼화] 초안 대기 분기에서도 같은 목록을 열람용으로
+    // 동봉해야 "채택 하나 눌렀더니 14개가 사라짐" 혼란이 없다(초안=한 번에 하나·나머지는 대기 표시).
+    let envSignals9: Array<{ kind: string; n: number; title: string }> = []; // [재편 B §3-1b] 참고 신호(합성) — 후보와 분리 전달
+    // [RULE-SUPPLY 묶음 1] genOv=0세대(GEN0) 산출 — 동결 대신 0세대 축으로 계산·결속(승인 세대가 있으면 인자 없이 종전 그대로).
+    const candsFor9 = (genOv?: string): Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string; why: string }> | undefined => {
+      try { // §7 증분 3 — 소진 보고와 같은 집계(codex-bridge 설치본) 공유. 버튼=기록만(작업 발동 금지 계약)
+        const CB9: any = require(path.join(BRIDGE_DIR, "codex-bridge.js"));
+        // [기억 권위 A-3] 조정 트리거 ②대시보드 로드 — 해소 blocker 계보→후보 멱등 스캔(중단 복구)
+        const genC9: string | null = genOv || hash9 || null;
+        try { if (typeof (CL9 as any).reconcileMemoryCandidates === "function") (CL9 as any).reconcileMemoryCandidates(ws, repo9, genC9); } catch { /* best-effort */ }
+        if (typeof CB9.computeEnvelopeCandidatesFor !== "function") return undefined;
+        // [검증 1회차 blocker③] 산출 세대=브릿지 단일 규칙(candidatesGenOptsFor — 0세대=GEN0 · 첫 승인 직후·검증 이력 없는 빈 코어 승인=현 승인 지문 · 그 외 종전 동결)
+        const opts9 = typeof CB9.candidatesGenOptsFor === "function" ? CB9.candidatesGenOptsFor(ws) : (genOv ? { gen0: true } : undefined);
+        const cc9 = opts9 ? CB9.computeEnvelopeCandidatesFor(ws, opts9) : CB9.computeEnvelopeCandidatesFor(ws);
+        // 증분 3 재검증 blocker: 산출 세대≠현 승인 해시면 미표시(승인 전이 직후 오귀속 창 차단)
+        if ((cc9.gen || null) !== (genC9 || null)) return undefined;
+        try { envSignals9 = (cc9.signals || []).map((s: any) => ({ kind: String(s.kind || ""), n: Number(s.n) || 1, title: String((s.titles && s.titles[0]) || "") })); } catch { envSignals9 = []; }
+        const lat9 = typeof CL9.readEnvelopeCandidates === "function" ? CL9.readEnvelopeCandidates(ws).latest : new Map();
+        // [기억 권위 A-5] 절단 없이 전량 전달(화면 절단은 표시 제한일 뿐)
+        const out9 = (cc9.live || []).map((c: any) => ({ id: c.candidateId, kind: c.kind, n: c.n, title: (c.titles && c.titles[0]) || "", status: (lat9.get(c.candidateId + "@" + String(genC9 || "")) || {}).status || "", gen: cc9.gen || "", wsKey: typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : "", ts: String(c.ts || ""), why: String(c.why || ""), op: String(c.operation || ""), explain: c.explain && typeof c.explain === "object" ? { happened: String(c.explain.happened || ""), ifAdopted: String(c.explain.ifAdopted || ""), ifNot: String(c.explain.ifNot || ""), recommend: String(c.explain.recommend || "") } : null })); // wsKey=원본 프로젝트 내구 키(재재검증 ab-1)·why=user-constraint 상신 근거(§1 보조 줄)·op/explain=정리 제안(curator) 작업 종류·상황 설명 4칸
+        return out9.length ? out9 : undefined;
+      } catch { return undefined; }
+    };
+    // [RULE-SUPPLY 묶음 1 §2-3 2] 0세대(수칙서 파일·승인 지문 모두 없음) — 아래 조기 반환(카드 없음) 전에 ①중단된 전이 ②첫 수칙서 초안 승인 대기
+    // ③0세대 후보 순으로 확인한다. 셋 다 없으면 종전처럼 카드 없음. 판독 실패=카드 없음(부가 표시 — 검증 흐름과 무관).
+    if ((!evv || evv.st === "absent") && !hash9) {
+      let g0: any = null;
+      try { g0 = typeof CL9.envelopeGenFor === "function" ? CL9.envelopeGenFor(ws, repo9) : null; } catch { g0 = null; }
+      if (!g0 || !g0.virtual || !g0.gen) return null;
+      const wsKey0 = (() => { try { return typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : ""; } catch { return ""; } })();
+      try {
+        if (typeof CL9.envelopeTransState === "function" && CL9.envelopeTransState(ws) === "recover-needed")
+          return { label: tE("첫 수칙서 승인이 중간에 멈춘 흔적이 있어요 — '전이 복구'를 누르면 승인한 내용으로 마무리됩니다(그 전까지 새 검증 시작이 막혀요)", "The first-rulebook approval was interrupted — press 'Recover' to finish it with the approved content (new verifications are blocked until then)"), btn: tE("전이 복구", "Recover"), btn2: null, repo: repo9, tone: "warn", lang: slot, proposal: "recover", gen0: true };
+        const pr0 = typeof CL9.readEnvelopeProposal === "function" ? CL9.readEnvelopeProposal(ws, repo9) : null;
+        if (pr0 && pr0.st === "ok") {
+          const cp0 = candsFor9(String(g0.gen));
+          return { label: tE("🔔 첫 수칙서 초안이 승인을 기다려요 — '초안 확인·승인'을 누르면 담길 내용이 보이고, 승인하면 수칙서가 만들어져 다음 검증부터 적용돼요(그 전까지 아무것도 바뀌지 않아요)", "🔔 The first rulebook draft awaits approval — press 'Review & approve' to see what it holds; approving creates the rulebook and it applies from the next verification (nothing changes before that)"), btn: tE("초안 확인·승인", "Review & approve draft"), btn2: tE("초안 보기", "View draft"), btn3: tE("초안 폐기(아무것도 안 바뀜)", "Discard draft (nothing changes)"), repo: repo9, tone: "warn", lang: slot, proposal: "pending", candsView: "pending-draft", gen0: true, ...(cp0 ? { cands: cp0 } : {}) };
+        }
+        if (pr0 && pr0.st === "corrupt")
+          return { label: tE("첫 수칙서 초안 파일이 손상돼 승인 화면에 올릴 수 없어요 — 초안을 다시 만들어 달라고 요청하세요", "The first rulebook draft file is corrupt and cannot be shown for approval — ask for it to be recreated"), btn: null, btn2: null, repo: repo9, tone: "warn", lang: slot, proposal: "corrupt", gen0: true };
+      } catch { /* 초안 표시는 부가 — 아래 후보 카드로 */ }
+      const c0 = candsFor9(String(g0.gen));
+      if (!c0) return null;
+      return { label: tE("아직 수칙서가 없어요 — 아래 제안 중 앞으로도 계속 지킬 기준을 승인하면 첫 수칙서가 만들어지고 다음 검증부터 적용돼요", "No rulebook yet — approve the proposals below that should keep applying; the first rulebook is created and applies from the next verification"), btn: null, btn2: null, repo: repo9, tone: "info", lang: slot, gen: String(g0.gen), gen0: true, wsKey: wsKey0, cands: c0 };
+    }
     // [경계 통일 · 검증 2회차 blocker④] 승인 지문이 있는데 파일이 없거나 깨졌으면 그것도 "승인 없이 바뀐 상태" — 같은 카드·같은 버튼
     // (복구=승인본 사본으로 되살림). 승인 지문도 없고 파일도 없으면 도입 전=카드 없음(무변화).
     if (!evv || evv.st === "absent") { if (!hash9) return null; return { label: tE("승인된 수칙 파일이 사라졌어요 — 검증이 시작되지 않아요. '승인 없이 바뀐 내용 보기'에서 마지막 승인 목록으로 복구하세요", "The approved rules file is missing — verification will not start. Use 'View unapproved changes' to restore the last approved list"), btn: tE("승인 없이 바뀐 내용 보기", "View unapproved changes"), act: "envelopeDriftShow", driftTarget: "core", btn2: null, repo: repo9, tone: "warn", lang: slot }; }
@@ -1171,25 +1216,6 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
         if (oh9 && oh9 === evv.sha1 && typeof CL9.setEnvelopeHashAllSlots === "function" && CL9.setEnvelopeHashAllSlots(ws, oh9) === 2) hash9 = oh9; // 2슬롯 성공만 치유 확정(부분=현 슬롯 미기록인데 화면만 적용 표시되는 오표시 금지 — f-71d4c2a8)
       } catch { /* 치유 실패=종전 표시(승인 대기) */ }
     }
-    // [후보 목록 계산 — 2026-08-21 사용자 실보고로 헬퍼화] 초안 대기 분기에서도 같은 목록을 열람용으로
-    // 동봉해야 "채택 하나 눌렀더니 14개가 사라짐" 혼란이 없다(초안=한 번에 하나·나머지는 대기 표시).
-    let envSignals9: Array<{ kind: string; n: number; title: string }> = []; // [재편 B §3-1b] 참고 신호(합성) — 후보와 분리 전달
-    const candsFor9 = (): Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string; why: string }> | undefined => {
-      try { // §7 증분 3 — 소진 보고와 같은 집계(codex-bridge 설치본) 공유. 버튼=기록만(작업 발동 금지 계약)
-        const CB9: any = require(path.join(BRIDGE_DIR, "codex-bridge.js"));
-        // [기억 권위 A-3] 조정 트리거 ②대시보드 로드 — 해소 blocker 계보→후보 멱등 스캔(중단 복구)
-        try { if (typeof (CL9 as any).reconcileMemoryCandidates === "function") (CL9 as any).reconcileMemoryCandidates(ws, repo9, hash9 || null); } catch { /* best-effort */ }
-        if (typeof CB9.computeEnvelopeCandidatesFor !== "function") return undefined;
-        const cc9 = CB9.computeEnvelopeCandidatesFor(ws);
-        // 증분 3 재검증 blocker: 산출 세대≠현 승인 해시면 미표시(승인 전이 직후 오귀속 창 차단)
-        if ((cc9.gen || null) !== (hash9 || null)) return undefined;
-        try { envSignals9 = (cc9.signals || []).map((s: any) => ({ kind: String(s.kind || ""), n: Number(s.n) || 1, title: String((s.titles && s.titles[0]) || "") })); } catch { envSignals9 = []; }
-        const lat9 = typeof CL9.readEnvelopeCandidates === "function" ? CL9.readEnvelopeCandidates(ws).latest : new Map();
-        // [기억 권위 A-5] 절단 없이 전량 전달(화면 절단은 표시 제한일 뿐)
-        const out9 = (cc9.live || []).map((c: any) => ({ id: c.candidateId, kind: c.kind, n: c.n, title: (c.titles && c.titles[0]) || "", status: (lat9.get(c.candidateId + "@" + String(hash9 || "")) || {}).status || "", gen: cc9.gen || "", wsKey: typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : "", ts: String(c.ts || ""), why: String(c.why || ""), op: String(c.operation || ""), explain: c.explain && typeof c.explain === "object" ? { happened: String(c.explain.happened || ""), ifAdopted: String(c.explain.ifAdopted || ""), ifNot: String(c.explain.ifNot || ""), recommend: String(c.explain.recommend || "") } : null })); // wsKey=원본 프로젝트 내구 키(재재검증 ab-1)·why=user-constraint 상신 근거(§1 보조 줄)·op/explain=정리 제안(curator) 작업 종류·상황 설명 4칸
-        return out9.length ? out9 : undefined;
-      } catch { return undefined; }
-    };
     // §7 증분 2: 개정 초안(제안본) 대기 — 원본·주입은 무변이지만 대시보드만 봐도 알 수 있게 강조(사용자 요구 2026-07-24).
     // 중단된 전이(WAL)는 기동 복구가 수렴시키지만, 잔존하면 최우선 표시(경계 없는 검증 시작이 차단된 상태).
     try {
@@ -4312,9 +4338,13 @@ class Dashboard {
             // 재재검증 blocker(ab-1): 카드 원본 프로젝트의 내구 키와 클릭 시점 워크스페이스 재대조 — 멀티루트
             // 창에서 활성 프로젝트가 바뀐 사이 클릭하면(같은 수칙서 해시라 세대 검사는 통과) 타 장부 오귀속.
             if (typeof CLM.wsKeyFor !== "function" || String(CLM.wsKeyFor(wsM)) !== m.wsKey) { vscode.window.showWarningMessage(enM ? "The active project changed while this card was open — the list refreshes; please judge again." : "카드가 떠 있는 사이 활성 프로젝트가 바뀌었어요 — 목록이 갱신됩니다. 다시 판단해 주세요."); this.post(); return; }
+            // [RULE-SUPPLY 묶음 1] 0세대(수칙서 파일·승인 지문 모두 없음)=GEN0 축으로 재대조 — 카드와 같은 산출(gen0 옵션)
+            let g0M: any = null; try { g0M = typeof CLM.envelopeGenFor === "function" ? CLM.envelopeGenFor(wsM) : null; } catch { g0M = null; }
+            const gen0M = !!(g0M && g0M.virtual && g0M.gen);
             // 후보 실존 재검사 — 지금 이 프로젝트·세대의 실후보 목록에 있는 id만 기록(유령 id·낡은 카드 차단)
-            try { const CBM: any = require(path.join(BRIDGE_DIR, "codex-bridge.js")); const nowC = typeof CBM.computeEnvelopeCandidatesFor === "function" ? CBM.computeEnvelopeCandidatesFor(wsM) : null; if (!nowC || !(nowC.live || []).some((c: any) => c.candidateId === m.id)) { vscode.window.showWarningMessage(enM ? "That candidate is no longer current — the list refreshes." : "그 후보는 더 이상 유효하지 않아요 — 목록이 갱신됩니다."); this.post(); return; } } catch { this.post(); return; }
-            const genM = (CLM.loadContract(wsM) || {}).envelopeHash || null;
+            let liveM: any = null;
+            try { const CBM: any = require(path.join(BRIDGE_DIR, "codex-bridge.js")); const optsM = typeof CBM.candidatesGenOptsFor === "function" ? CBM.candidatesGenOptsFor(wsM) : (gen0M ? { gen0: true } : undefined); const nowC = typeof CBM.computeEnvelopeCandidatesFor === "function" ? CBM.computeEnvelopeCandidatesFor(wsM, optsM) : null; liveM = nowC ? (nowC.live || []).find((c: any) => c.candidateId === m.id) || null : null; if (!liveM) { vscode.window.showWarningMessage(enM ? "That candidate is no longer current — the list refreshes." : "그 후보는 더 이상 유효하지 않아요 — 목록이 갱신됩니다."); this.post(); return; } } catch { this.post(); return; }
+            const genM = gen0M ? String(g0M.gen) : ((CLM.loadContract(wsM) || {}).envelopeHash || null);
             // 재검증 blocker: 클릭 시점 재대조 — 후보를 산출한 세대(m.gen)와 지금 승인 세대가 다르면 기록 거부
             // (카드가 떠 있는 사이 재승인된 경우 구세대 판단의 신세대 오귀속 차단).
             if ((m.gen || null) !== (genM || null)) { vscode.window.showWarningMessage(enM ? "The rulebook was re-approved while this card was open — the candidate list refreshes; please judge again." : "카드가 떠 있는 사이 수칙서가 재승인됐어요 — 후보 목록이 갱신됩니다. 다시 판단해 주세요."); this.post(); return; }
@@ -4322,6 +4352,33 @@ class Dashboard {
             // (draft 명령의 대시보드 표면 — 기존 '기록만' 계약의 의식적 개정. 효력은 여전히 승인 도장부터).
             if ((m.kind === "resolved-blocker" || m.kind === "user-constraint" || m.kind === "rule-manual" || m.kind === "user-direct" || m.kind === "curator") && m.status === "adopted" && typeof CLM.draftEnvelopeRevision === "function") { // [부품 C §3-3] draftable kinds 공통 — 채택=병합 초안 생성과 결속(재편 A: rule-manual 편입)
               const repoM = (((bridgeLib() as any) || {}).resolveScoutRepo ? ((bridgeLib() as any).resolveScoutRepo(wsM, loadContract(wsM)) || {}).repo : null) || wsM;
+              // [RULE-SUPPLY 묶음 1 §2-3] 0세대 채택 — 목적지: 정리 제안은 작업 종류가 정함(제외 칸 추가=항상 적용 칸·서고 추가=관련될 때),
+              // 그 밖의 제안은 사용자가 고른 칸(m.dest — 기본·추천=관련될 때 · REJUDGE P5). 항상=첫 초안에 결속 / 관련될 때=빈 첫 수칙서부터
+              // (후보 비결속 — 승인 뒤 같은 후보로 '관련될 때' 초안을 만들어 두 번째 승인 창을 띄운다 · 취소해도 후보는 대기 유지).
+              if (gen0M) {
+                const op0 = String((liveM && liveM.operation) || "");
+                const dest0: string = m.kind === "curator" ? (op0 === "oos-add" ? "core" : op0 === "add" ? "archive" : "") : (m.dest === "core" ? "core" : "archive");
+                if (!dest0 || typeof CLM.draftEnvelopeInitial !== "function") { vscode.window.showWarningMessage(enM ? "This proposal cannot be applied before the first rulebook exists." : "이 제안은 첫 수칙서가 생기기 전에는 적용할 수 없어요."); this.post(); return; }
+                let d0: any = null;
+                try { d0 = dest0 === "core" ? CLM.draftEnvelopeInitial(wsM, repoM, { addCandidateIds: [m.id] }) : CLM.draftEnvelopeInitial(wsM, repoM, { allowEmpty: true }); } catch { d0 = null; }
+                if (!d0 || !d0.ok) { vscode.window.showWarningMessage((enM ? "Draft failed: " : "초안 생성 실패: ") + ((d0 && d0.error) || "unknown")); this.post(); return; }
+                const repoA0 = scoutTargetFor(wsM).repo;
+                if (dest0 === "core") { this.runProposalApprove(repoA0, m.lang, true); return; }
+                const idA0 = m.id, kindA0 = m.kind, langA0 = m.lang;
+                this.runProposalApprove(repoA0, m.lang, true, {
+                  stepNote: enM ? "Step 1 of 2 — the first rulebook is created empty. Right after, a second window adds the proposal you picked to the 'applied when relevant' list." : "1/2단계 — 첫 수칙서를 빈 상태로 먼저 만듭니다. 이어서 고르신 제안을 '관련될 때 적용' 목록에 올리는 두 번째 승인 창이 뜹니다.",
+                  after: () => {
+                    let g1: any = null; try { g1 = CLM.envelopeGenFor(wsM); } catch { g1 = null; }
+                    if (!g1 || g1.virtual || !g1.gen) { this.post(); return; }
+                    let d1: any = null;
+                    try { d1 = kindA0 === "curator" ? CLM.draftCuratorCandidate(wsM, repoM, idA0, String(g1.gen)) : CLM.draftEnvelopeRevision(wsM, repoM, { addCandidateIds: [idA0], removeItems: [], approvedHash: String(g1.gen), target: "archive" }); } catch { d1 = null; }
+                    if (d1 && d1.ok) { this.runProposalApprove(scoutTargetFor(wsM).repo, langA0, true); return; }
+                    vscode.window.showWarningMessage((enM ? "The first rulebook was created, but drafting step 2 failed: " : "첫 수칙서는 만들어졌지만 2단계 초안을 만들지 못했어요: ") + ((d1 && d1.error) || "unknown") + (enM ? " — the proposal is still waiting in the list." : " — 제안은 목록에 그대로 남아 있어요."));
+                    this.post();
+                  },
+                });
+                return;
+              }
               let dr: any = null;
               // [재편 B 1차 blocker①] 목적지=서고 명시(설계 §3-2) — 코어 전용 draftEnvelopeCandidate는 12칸
               // 상한·전량 주입 코어로 오유입하던 결함. 단건 올림도 revision 경로(target archive)로 통일.
@@ -5078,7 +5135,7 @@ class Dashboard {
     else vscode.window.showWarningMessage(en9 ? "Failed to store the approval — please try again." : "승인 기록 저장에 실패했어요 — 잠시 후 다시 시도해 주세요.");
     this.post();
   }
-  runProposalApprove(repoMsg: string, langMsg: unknown, autoDiscardOnCancel: boolean): void {
+  runProposalApprove(repoMsg: string, langMsg: unknown, autoDiscardOnCancel: boolean, chain?: { stepNote?: string; after?: () => void }): void {
     const m = { repo: repoMsg, lang: langMsg } as { repo: string; lang: unknown };
 
           const wsA = dashboardWorkspace(); if (!wsA) return;
@@ -5092,10 +5149,28 @@ class Dashboard {
           const hashAt = String(prA.newHash);
           const draftTokA = String(prA.draftId || prA.newHash); // [2차 blocker①] 폐기 결속=wrapper 신원(legacy=newHash)
           const okA = enA ? "Reviewed — approve & apply" : "확인했고 승인해 적용합니다"; // [재편 B] 어휘 4종(도장→승인)
-          const msgA = enA
+          // [RULE-SUPPLY 묶음 1 §2-3 4] 첫 도장(0세대 → 첫 수칙서) 판별 — 코어 대상·계약 승인 지문 없음·후보 세대=GEN0
+          let firstA = false; try { firstA = prA.target !== "archive" && !((CLA.loadContract(wsA) || {}).envelopeHash) && typeof CLA.GEN0_HASH === "string" && prA.candidateGeneration === CLA.GEN0_HASH; } catch { firstA = false; }
+          const msgA = firstA
+            ? (enA ? "Approve the first rulebook — it is created with the content below and applies from the next verification (until you approve, nothing changes). Disagree? Cancel — nothing changes." : "첫 수칙서 승인 — 아래 내용으로 수칙서가 새로 만들어지고 다음 검증부터 적용돼요(승인 전까지는 아무것도 바뀌지 않아요). 동의하지 않으면 취소하세요 — 취소해도 아무것도 바뀌지 않아요.")
+            : enA
             ? "Approve this rules change — existing rules stay as they are; only the additions/removals in the summary below apply (until you approve, nothing changes). Disagree? Cancel — nothing changes, and you can tell the implementer what to reword."
             : "수칙 변경 승인 — 기존 수칙은 그대로 있고, 아래 요약의 추가·빼기만 반영됩니다(승인 전까지는 아무것도 바뀌지 않아요). 동의하지 않으면 취소하세요 — 취소해도 아무것도 바뀌지 않고, 바꿀 점은 구현 담당에게 말씀하시면 됩니다."; // [재편 B] 어휘 4종(수칙·승인·빼기 — 도장·초안·서고는 내부어)
-          vscode.window.showInformationMessage(msgA, { modal: true, detail: draftSummaryDetail(CLA, tgtA, prA, enA) }, okA).then((sel) => { // [기억 권위 A-4] note 경고 노출·절단 금지(전문은 요약 아래 감사용으로 유지 — 재검증 blocker②) · [4c UX] 요약 선행
+          // 첫 도장으로 세대가 바뀌면(빈 수칙서가 아니면) 0세대에서 열린 채 남은 지적은 같은 번호로 옮겨지지 않는다 — 조용히 사라지지 않게 승인 전에 보여 준다.
+          let gen0NoteA = "";
+          try {
+            if (firstA && prA.newHash !== CLA.GEN0_HASH && typeof CLA.gen0OpenFindingsInfo === "function") {
+              const gi = CLA.gen0OpenFindingsInfo(wsA, tgtA);
+              if (gi && gi.open) {
+                const L0: string[] = [enA ? `[Findings still open before the first rulebook] ${gi.open} (judged ${gi.judged} · not judged ${gi.unjudged}) — they stay in the record; from the next verification the code is checked again against the new rulebook, so any remaining problem comes back as a new finding.` : `[첫 수칙서 전에 열린 채 남은 지적] ${gi.open}건(판단 완료 ${gi.judged} · 미판단 ${gi.unjudged}) — 기록으로 남고, 다음 검증부터 새 수칙서 기준으로 코드를 다시 보므로 남은 문제는 새 지적으로 다시 나와요.`];
+                for (const it of gi.items.slice(0, 10)) L0.push((it.judged ? "· " : "· (" + (enA ? "not judged" : "미판단") + ") ") + "[" + it.tag + "] " + String(it.title || "").slice(0, 80));
+                if (gi.items.length > 10) L0.push(enA ? `… and ${gi.items.length - 10} more` : `… 외 ${gi.items.length - 10}건`);
+                gen0NoteA = L0.join("\n");
+              }
+            }
+          } catch { gen0NoteA = ""; }
+          const detailA = [chain && chain.stepNote ? chain.stepNote : "", draftSummaryDetail(CLA, tgtA, prA, enA), gen0NoteA].filter(Boolean).join("\n\n");
+          vscode.window.showInformationMessage(msgA, { modal: true, detail: detailA }, okA).then((sel) => { // [기억 권위 A-4] note 경고 노출·절단 금지(전문은 요약 아래 감사용으로 유지 — 재검증 blocker②) · [4c UX] 요약 선행
             if (sel !== okA) {
               // [재편 B §3-4] 1클릭 체인의 취소=복원형 폐기(초안 잔존 금지 — 복원 실패 시엔 초안 보존이 계약이라 재시도 안내)
               if (autoDiscardOnCancel) {
@@ -5163,6 +5238,7 @@ class Dashboard {
             let bindA: any = null; let tr: any = null;
             try { const MPVA: any = require(path.join(BRIDGE_DIR, "map-provenance.js")); bindA = MPVA.recordApprovalWithStamp(tgtNow2, { envelopeHash: hashAt, target: targetA, sourceRefs: [], ...(cRefsA.length ? { candidateRefs: cRefsA } : {}) }, () => { try { tr = CLA.applyEnvelopeTransition(wsA, tgtA, apL, null); } catch { tr = null; } return !!(tr && tr.ok); }); } catch { bindA = null; }
             if (!bindA || !bindA.recorded) { vscode.window.showWarningMessage(enA ? "Failed to record the approval event — stamp aborted (nothing applied)." : "승인 사건 기록에 실패해 도장을 중단했어요(아무것도 적용되지 않음 — 다시 시도해 주세요)."); this.post(); return; }
+            if (tr && tr.ok && chain && typeof chain.after === "function") { try { chain.after(); } catch { this.post(); } return; } // [RULE-SUPPLY 묶음 1] 1/2단계 성공 → 2단계(두 번째 승인 창)
             if (tr && tr.ok) vscode.window.showInformationMessage(enA ? "Approved — the change applies from the next verification." : "승인 완료 — 다음 검증부터 적용됩니다."); // [재편 B] 어휘 4종
             else vscode.window.showWarningMessage((enA ? "Transition failed: " : "전이 실패: ") + ((tr && tr.reason) || "unknown") + (enA ? " — nothing is half-applied (the WAL/lock keeps it recoverable); try again or press Recover." : " — 반쯤 적용된 상태는 없습니다(기록·잠금이 복구를 보장). 다시 시도하거나 '전이 복구'를 눌러 주세요."));
             this.post();
@@ -6708,7 +6784,7 @@ class Dashboard {
     if(!rf){ ["rfCore","rfArchive","rfProposals","rfCurator"].forEach(function(id){ rfSet(id,[T("자료 없음 — 브릿지 장부를 읽지 못했어요(설치본 갱신·폴더 확인)","no data — bridge ledgers unreadable (check install / folder)")]); }); return; }
     var c=rf.core, a=rf.archive, p=rf.proposals, u=rf.curator;
     var coreL=[];
-    if(c.st==="absent") coreL.push(T("아직 없음 — 검증 설정에서 첫 수칙을 승인하면 생겨요","none yet — approve the first rules in Verify Settings"));
+    if(c.st==="absent") coreL.push(T("아직 없음 — 대화에서 생긴 기준 제안이 검증 설정에 올라오면 승인해서 시작해요","none yet — when proposals from the conversation appear in Verify Settings, approve them to start"));
     else { coreL.push({num:c.count.total, text:T("항 (전제 "+c.count.supportedEnv+" · 금지 "+c.count.alwaysBlocker+" · 제외 "+c.count.outOfScope+")","items (env "+c.count.supportedEnv+" · blockers "+c.count.alwaysBlocker+" · out-of-scope "+c.count.outOfScope+")")});
       if(c.st==="ok") coreL.push({num:c.injectedChars, text:T("글자가 검증 요청마다 실려요(비용 근거)","chars ride on every verify request (cost basis)")});
       else coreL.push(T(c.st==="unapproved"?"승인 전이라 아직 실리지 않아요":c.st==="mismatch"?"승인 없이 바뀌어 실리지 않아요 — 검증 설정에서 승인":"파일 손상 — 검증 설정에서 다시 저장", c.st==="unapproved"?"not applied yet — approval pending":c.st==="mismatch"?"changed without approval — not applied; approve in Verify Settings":"file corrupt — re-save in Verify Settings")); }
@@ -7644,6 +7720,7 @@ class Dashboard {
           chSub9.textContent=viewOnly9
             ?T("남은 제안은 사라진 게 아니에요 — 처리 중인 변경(위)을 먼저 승인하거나 취소하면 이 자리에서 이어집니다.","Remaining proposals are not gone — approve or cancel the pending change above first, then continue here.")
             :T("대화에서 하신 약속을 시스템이 포착한 것과, 구현 담당이 '왜 지킬 규칙인지'와 함께 올린 제안만 여기 옵니다. [승인]을 누르면 바뀌는 내용을 확인한 뒤 승인 1번으로 적용돼요.","Only promises captured from the conversation and proposals from the implementer (with a reason) appear here. Press [Approve] to review the change, then one approval applies it."); ec.appendChild(chSub9);
+          if(e9.gen0 && !viewOnly9){ var g0n9=document.createElement("div"); g0n9.className="muted"; g0n9.style.cssText="font-size:11px;margin-top:2px"; g0n9.textContent=T("'관련될 때 적용'은 하는 작업과 관련 있을 때만 검증에 실려요(추천). '항상 적용'은 모든 검증에 실려요. 관련될 때를 고르면 빈 수칙서를 먼저 만들고 승인 창이 한 번 더 떠요.","'When relevant' is included only when the task relates to it (recommended). 'Always' is included in every verification. Choosing 'when relevant' first creates an empty rulebook, so a second approval window follows."); ec.appendChild(g0n9); } // [RULE-SUPPLY 묶음 1 · D6] 칸 선택 안내(상황 설명 — 기술어 없음)
           var more9=null; // 8건 초과=접힘 — '더 보기'로 전량 접근
           e9.cands.forEach(function(cd, ix9){
             var row9=document.createElement("div"); row9.style.cssText="font-size:12px;margin-top:7px;padding:6px 8px;border-radius:5px;background:var(--vscode-editorWidget-background)";
@@ -7661,9 +7738,18 @@ class Dashboard {
               [[T("있었던 일: ","what happened: "),cd.explain.happened],[T("올리면: ","if adopted: "),cd.explain.ifAdopted],[T("안 올리면: ","if not: "),cd.explain.ifNot],[T("권장: ","recommendation: "),cd.explain.recommend]].forEach(function(pr9){ if(!pr9[1]) return; var ex9=document.createElement("div"); ex9.className="muted"; ex9.style.cssText="font-size:11px;margin-top:1px"; ex9.textContent=pr9[0]+pr9[1]; row9.appendChild(ex9); });
             }
             if(undecided9 && !viewOnly9){
+              if(e9.gen0 && cd.kind!=="curator"){ // [RULE-SUPPLY 묶음 1 · D6] 첫 수칙서 단계 — 칸을 고른다(추천=관련될 때 · REJUDGE P5). 정리 제안은 작업 종류가 칸을 정함
+                var apR9=document.createElement("button"); apR9.style.cssText="margin-top:5px;margin-right:5px;font-size:12px;font-weight:600"; apR9.textContent=T("승인 — 관련될 때 적용(추천)","Approve — when relevant (recommended)");
+                apR9.onclick=function(){ vscode.postMessage({type:"candMark", id: cd.id, kind: cd.kind, status: "adopted", approve: true, dest: "archive", gen: cd.gen, wsKey: cd.wsKey, lang: e9.lang}); };
+                row9.appendChild(apR9);
+                var apA9=document.createElement("button"); apA9.style.cssText="margin-top:5px;margin-right:5px;font-size:12px"; apA9.textContent=T("승인 — 항상 적용","Approve — always");
+                apA9.onclick=function(){ vscode.postMessage({type:"candMark", id: cd.id, kind: cd.kind, status: "adopted", approve: true, dest: "core", gen: cd.gen, wsKey: cd.wsKey, lang: e9.lang}); };
+                row9.appendChild(apA9);
+              } else {
               var apb9=document.createElement("button"); apb9.style.cssText="margin-top:5px;margin-right:5px;font-size:12px;font-weight:600"; apb9.textContent=T("승인","Approve");
               apb9.onclick=function(){ vscode.postMessage({type:"candMark", id: cd.id, kind: cd.kind, status: "adopted", approve: true, gen: cd.gen, wsKey: cd.wsKey, lang: e9.lang}); }; // [재편 B §3-2] 1클릭 — 초안 생성+도장 모달(취소=자동 정리)
               row9.appendChild(apb9);
+              }
               var deb9=document.createElement("button"); deb9.className="secondary"; deb9.style.cssText="margin-top:5px;margin-right:5px;font-size:12px"; deb9.textContent=T("안 올림","Not this one");
               deb9.onclick=function(){ vscode.postMessage({type:"candMark", id: cd.id, kind: cd.kind, status: "declined", gen: cd.gen, wsKey: cd.wsKey, lang: e9.lang}); };
               row9.appendChild(deb9);

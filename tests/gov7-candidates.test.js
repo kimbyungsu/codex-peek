@@ -340,10 +340,10 @@ console.log("[11] §7 증분 3 — 해소 계보 제외·빼기 후보·항목 �
   ok((CB.computeEnvelopeCandidatesFor(wsR).gen || null) === GEN, "집계 반환에 산출 세대(gen=동결 해시) 결속");
   {
     const ext2 = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
-    ok(ext2.includes("(cc9.gen || null) !== (hash9 || null)") /* 헬퍼화로 조기 반환 형태(2026-08-21) — 계약 동일 */ && ext2.includes("gen: cc9.gen"), "대시보드=산출 세대≠현 승인 해시면 카드 미표시+DTO에 세대 동봉");
+    ok(ext2.includes("(cc9.gen || null) !== (genC9 || null)") && ext2.includes("const genC9: string | null = genOv || hash9 || null;") /* 헬퍼화로 조기 반환 형태(2026-08-21)·[RULE-SUPPLY 묶음 1] 0세대 인자(genOv=GEN0)만 추가 — 승인 세대는 종전 hash9 그대로 */ && ext2.includes("gen: cc9.gen"), "대시보드=산출 세대≠현 승인 해시(0세대=GEN0)면 카드 미표시+DTO에 세대 동봉");
     ok(ext2.includes('typeof m.gen === "string"') && ext2.includes("(m.gen || null) !== (genM || null)"), "기록 핸들러=클릭 시점 세대 재대조(불일치=기록 거부 — 구세대 판단의 신세대 오귀속 차단)");
     ok(ext2.includes("wsKey: typeof CL9.wsKeyFor") && ext2.includes('String(CLM.wsKeyFor(wsM)) !== m.wsKey'), "DTO에 원본 프로젝트 내구 키 결속+클릭 시 재대조(멀티루트 활성 전환 오귀속 차단 — ab-1)");
-    ok(ext2.includes("computeEnvelopeCandidatesFor(wsM)") && ext2.includes("c.candidateId === m.id"), "기록 전 후보 실존 재검사(유령 id·낡은 카드 차단)");
+    ok(ext2.includes("CBM.computeEnvelopeCandidatesFor(wsM, optsM)") && ext2.includes("CBM.candidatesGenOptsFor(wsM)") && ext2.includes("c.candidateId === m.id"), "기록 전 후보 실존 재검사(유령 id·낡은 카드 차단 · 0세대=GEN0 축 산출)");
   }
 }
 

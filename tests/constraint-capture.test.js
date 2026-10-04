@@ -144,11 +144,20 @@ t("거부 반례 전종 C — 중복 지문·거부권(declined=같은 세대 �
   assert.strictEqual(r3.reason, "turn-cap", "턴당 " + CL.CONSTRAINT_TURN_CAP + "건 상한(남발 억제 §1-⑦)");
 });
 
-t("거부 반례 전종 D — 수칙서 비활성=안내(A-6 경계)·pending 합산 상한 12", () => {
-  const WSI = fs.mkdtempSync(path.join(os.tmpdir(), "ccap-inactive-"));
+t("거부 반례 전종 D — 0세대 접수(RULE-SUPPLY 묶음 1)·미승인 수기 파일=비활성 안내(A-6 경계)·pending 합산 상한 12", () => {
+  // [RULE-SUPPLY-REDESIGN 묶음 1 §2-2] 수칙서 파일·승인 지문이 모두 없는 작업공간=0세대 — 후보를 GEN0 세대로 접수(virtualGen 표식).
+  // 종전 계약(비활성=안내)은 '파일은 있는데 승인 전'인 경우로 좁아졌다(사용자 승인 2026-10-04 · CONSTRAINT-CAPTURE §3-4 개정).
+  const WSI = fs.mkdtempSync(path.join(os.tmpdir(), "ccap-gen0-"));
   CL.writeConstraintTurnSnapshot(WSI, ANCHOR, PROMPT);
   const rI = CL.constraintAdd(WSI, QUOTE, "근거근거근거", "", ctxOk);
-  assert.strictEqual(rI.reason, "envelope-inactive", "승인 지문 없는 작업공간=후보 대신 안내");
+  assert.strictEqual(rI.ok, true, "파일·승인 지문 모두 없음=0세대 후보로 접수 " + JSON.stringify(rI));
+  const recI = CL.readEnvelopeCandidates(WSI).latest.get(rI.candidateId + "@" + CL.GEN0_HASH);
+  assert.ok(recI && recI.status === "proposed" && recI.virtualGen === true, "후보 행=GEN0 세대+virtualGen 표식(사용자 승인과 구분)");
+  const WSU = fs.mkdtempSync(path.join(os.tmpdir(), "ccap-unapproved-"));
+  fs.writeFileSync(path.join(WSU, "verify-envelope.json"), CL.GEN0_TEXT); // 수기로 만든 파일·승인 전
+  CL.writeConstraintTurnSnapshot(WSU, ANCHOR, PROMPT);
+  const rU = CL.constraintAdd(WSU, QUOTE, "근거근거근거", "", ctxOk);
+  assert.strictEqual(rU.reason, "envelope-inactive", "파일만 있고 승인 전=종전 안내(0세대 아님 — 승인 대기 카드 흐름)");
   const WSP = fs.mkdtempSync(path.join(os.tmpdir(), "ccap-pending-"));
   assert.strictEqual(CL.setEnvelopeHashAllSlots(WSP, GEN), 2);
   CL.writeConstraintTurnSnapshot(WSP, ANCHOR, PROMPT);
@@ -185,7 +194,7 @@ t("Codex heartbeat 실행 반례(blocker①): 도구 이벤트가 결속 필드�
     const c1 = CL.constraintTurnContext();
     assert.ok(c1.ok && c1.provider === "codex" && c1.turnAnchor === "turn-cc-1", "도구 이벤트 후에도 문맥 생존");
     const rX = CL.constraintAdd(WSX, "배포 전에는 반드시 백업부터 남겨야 해.", "근거근거근거", "", c1);
-    assert.strictEqual(rX.reason, "envelope-inactive", "수칙서 비활성 ws라 안내 단계까지 도달(=스냅샷 게이트 통과)");
+    assert.ok(rX.ok === true || rX.reason === "repo-unknown", "스냅샷 게이트 통과 — 0세대 ws라 세대 단계 통과(RULE-SUPPLY 묶음 1 이전=envelope-inactive 안내) " + JSON.stringify(rX));
     HB({ turn_id: "turn-cc-2" }, WSX, XS, "UserPromptSubmit"); // 새 턴·스냅샷 실패 가정(extras 없음)
     const c2 = CL.constraintTurnContext();
     assert.ok(!c2.ok && c2.reason === "snapshot-missing" && c2.provider === "codex" && c2.sessionId === XS, "★턴 교체=결속 폐기(옆 턴 원문 오결속 방지)·신원은 동반");

@@ -107,10 +107,13 @@ function curationInput(ws, repo, opts) {
   let cur; try { cur = CL.resolveScoutRepo(ws, c).repo; } catch { return { ok: false, reason: "repo-mismatch" }; }
   if (CL.normWs(String(cur || "")) !== CL.normWs(String(repo || ""))) return { ok: false, reason: "repo-mismatch" }; // P6·ab-1: 정찰 대상 결속
   const wsKey = CL.wsKeyFor(ws), repoKey = CL.repoKeyOf(repo);
-  const gen = typeof c.envelopeHash === "string" && c.envelopeHash ? c.envelopeHash : null;
+  // [RULE-SUPPLY 묶음 1] 실효 세대 — 승인 지문 / 0세대(수칙서 파일·승인 지문 모두 없음)=GEN0(빈 수칙서가 실물) / 미승인 파일·손상=종전 비활성
+  const g9 = typeof CL.envelopeGenFor === "function" ? CL.envelopeGenFor(ws, repo, c) : { gen: typeof c.envelopeHash === "string" && c.envelopeHash ? c.envelopeHash : null, virtual: false };
+  const gen = g9.gen || null;
   if (!gen) return { ok: false, reason: "envelope-inactive" };
   const env = CL.readVerifyEnvelope(repo);
-  if (!env || env.st !== "ok" || env.sha1 !== gen) return { ok: false, reason: "envelope-drift" }; // 미승인 변경=공급 보류(주입 규칙과 동형)
+  if (g9.virtual ? (!env || env.st !== "absent") : (!env || env.st !== "ok" || env.sha1 !== gen)) return { ok: false, reason: "envelope-drift" }; // 미승인 변경=공급 보류(주입 규칙과 동형)
+  const envData9 = g9.virtual ? CL.emptyEnvelopeCore() : env.data;
   const arcHash = typeof c.archiveHash === "string" && c.archiveHash ? c.archiveHash : null;
   const ar = CL.readVerifyEnvelopeArchive(repo);
   if (arcHash) { if (ar.st !== "ok" || ar.sha1 !== arcHash) return { ok: false, reason: "archive-drift" }; }
@@ -118,7 +121,7 @@ function curationInput(ws, repo, opts) {
   // 수칙 원문도 민감 형태면 생략(ab-7 — 2회차 blocker②): 프롬프트·remove 후보 title에는 표식만, itemFp는 원문 기준(3중 대조 무변).
   const ruleItem = (t) => { const v = safeText(t, CURATION_ITEM_MAX); return v ? { text: v, redacted: false } : { text: RULE_REDACTED, redacted: true }; };
   const core = [];
-  for (const ax of ENVELOPE_AXES) (env.data[ax] || []).forEach((t, i) => core.push(Object.assign({ axis: ax, index: i, itemFp: itemFpOf(t) }, ruleItem(t))));
+  for (const ax of ENVELOPE_AXES) (envData9[ax] || []).forEach((t, i) => core.push(Object.assign({ axis: ax, index: i, itemFp: itemFpOf(t) }, ruleItem(t))));
   const archive = arcHash ? ar.data.alwaysBlocker.map((t, i) => Object.assign({ id: "arc-" + (i + 1), axis: "alwaysBlocker", index: i, itemFp: itemFpOf(t) }, ruleItem(t))) : [];
   // 신호 ①~④ — 대시보드 '참고 신호'와 같은 산출(computeEnvelopeCandidatesFor.signals — 캠페인·세대 결속)
   const sig = { oosRepeat: [], lineage: [], escalation: [], unusedOos: [], unusedRules: [], rebutUsed: [], selOver: { count: 0, lastTs: "" } };
@@ -126,7 +129,7 @@ function curationInput(ws, repo, opts) {
   const computeCandidates = resolveComputeCandidates(opts);
   if (!computeCandidates) return { ok: false, reason: "signals-unavailable" }; // 핵심 신호 산출 불가=입력 실패(신호 0으로 위장 금지 — 1회차 blocker①)
   let cc = null;
-  try { cc = computeCandidates(ws, { rowFilter: (r) => r && r.repoKey === repoKey }); } catch { return { ok: false, reason: "signals-failed" }; } // 행의 repoKey===현재 저장소만(ab-1 — 집계기 내부의 캠페인 id·세대 필터로는 창 교대 오귀속을 못 막음)
+  try { cc = computeCandidates(ws, { rowFilter: (r) => r && r.repoKey === repoKey, ...(g9.virtual ? { gen0: true } : {}) }); } catch { return { ok: false, reason: "signals-failed" }; } // 행의 repoKey===현재 저장소만(ab-1 — 집계기 내부의 캠페인 id·세대 필터로는 창 교대 오귀속을 못 막음)
   signalsGen = cc && cc.gen ? cc.gen : null;
   // [ab-1] 현재 캠페인 카운터의 저장소 표식이 이 저장소일 때만 캠페인 신호를 받는다(표식 없음·다른 저장소=0 — 같은 작업 폴더에서 정찰 대상을 오간 경우)
   const campRepoOk = (() => { try { const o = JSON.parse(fs.readFileSync(CL.campaignFileFor(ws), "utf8")); return !!(o && o.repoKey === repoKey); } catch { return false; } })();
@@ -177,7 +180,7 @@ function curationInput(ws, repo, opts) {
   const fpSrc = { repoKey, gen, arcHash, core: core.map((x) => x.axis + ":" + x.itemFp), archive: archive.map((x) => x.itemFp),
     s: { a: sig.oosRepeat.map((x) => x.id + "#" + x.n), b: sig.lineage.map((x) => x.id + "#" + x.n), c: sig.escalation.map((x) => x.id), d: sig.unusedOos.map((x) => x.id), e: sig.unusedRules.map((x) => x.id), f: sig.rebutUsed.map((x) => x.id + "#" + x.n), g: sig.selOver.count },
     dec: decisions.open.map((x) => x.decisionId).concat(decisions.answered.map((x) => x.decisionId + "=" + x.choice)) };
-  return { ok: true, wsKey, repoKey, boundaryGen: gen, archiveGen: arcHash, signalsGen, rules: { core, archive }, signals: sig, decisions, signalCount, inputFp: sha1(JSON.stringify(fpSrc)) };
+  return { ok: true, wsKey, repoKey, boundaryGen: gen, ...(g9.virtual ? { virtualGen: true } : {}), archiveGen: arcHash, signalsGen, rules: { core, archive }, signals: sig, decisions, signalCount, inputFp: sha1(JSON.stringify(fpSrc)) };
 }
 function curationKeyOf(input) { return sha1("curation:" + input.wsKey + "|" + input.repoKey + "|" + input.boundaryGen + "|" + String(input.archiveGen || "") + "|" + input.inputFp); }
 
@@ -336,7 +339,7 @@ function commitCuration(ws, input, parsed, meta) {
   const rowsCommon = take.map((it) => {
     const titleNorm = sha1(CL.normBacklogTitle(it.title));
     const candidateId = CL.envelopeCandidateId("curator", curationKey + "|" + it.operation + "|" + it.target + "|" + it.axis + "|" + it.occurrence + "|" + titleNorm);
-    return { candidateId, envelopeHash: gen, kind: "curator", origin: "curator", policyVersion: 2, repoKey: input.repoKey, archiveHash: input.archiveGen || "",
+    return { candidateId, envelopeHash: gen, ...(input.virtualGen ? { virtualGen: true } : {}), kind: "curator", origin: "curator", policyVersion: 2, repoKey: input.repoKey, archiveHash: input.archiveGen || "",
       operation: it.operation, target: it.target, axis: it.axis, ...(it.operation === "remove" ? { index: it.index, itemFp: it.itemFp } : {}),
       expectedTargetHash: it.target === "archive" ? String(input.archiveGen || "") : gen,
       title: it.title, why: it.why, refs: it.refs, recommend: it.recommend, explain: it.explain, curationKey };
@@ -603,7 +606,7 @@ function curationTickJudge(ws, c, opts) {
   const o = opts || {};
   const cc = c || (() => { try { return CL.loadContract(ws); } catch { return null; } })();
   if (!cc) return { spawn: false, reason: "contract-unreadable" };
-  const gen = typeof cc.envelopeHash === "string" && cc.envelopeHash ? cc.envelopeHash : null;
+  const gen = (() => { try { return typeof CL.envelopeGenFor === "function" ? (CL.envelopeGenFor(ws, null, cc).gen || null) : (typeof cc.envelopeHash === "string" && cc.envelopeHash ? cc.envelopeHash : null); } catch { return null; } })(); // [RULE-SUPPLY 묶음 1] 0세대 포함
   if (!gen) return { spawn: false, reason: "envelope-inactive" };
   let repo; try { repo = CL.resolveScoutRepo(ws, cc).repo; } catch { return { spawn: false, reason: "repo-unresolved" }; }
   const wsKey = CL.wsKeyFor(ws), repoKey = CL.repoKeyOf(repo);
@@ -637,7 +640,8 @@ function curationHookTick(ws, c, opts) {
   const o = opts || {};
   try {
     const cc = c || (() => { try { return CL.loadContract(ws); } catch { return null; } })();
-    if (!cc || !(typeof cc.envelopeHash === "string" && cc.envelopeHash)) return null;
+    if (!cc) return null;
+    if (!(typeof cc.envelopeHash === "string" && cc.envelopeHash) && !(typeof CL.envelopeGenFor === "function" && CL.envelopeGenFor(ws, null, cc).gen)) return null; // [RULE-SUPPLY 묶음 1] 0세대도 계기 판정(수칙서 파일 1회 판독)
     if (lockAlive(ws)) return null;
     let repoKey; try { repoKey = CL.repoKeyOf(CL.resolveScoutRepo(ws, cc).repo); } catch { return null; } // 경로 결정만(파일 판독 없음·existsSync 1회)
     const st = readTickState(ws, repoKey);
@@ -658,7 +662,7 @@ function curationHookTick(ws, c, opts) {
 // 대시보드·CLI 요약 — 현재 정찰 대상(repoKey) 기준(1회차 blocker④ ab-1): 마지막 실행·제안 n·미승인 m + 측정 4지표(§3 F: 채택률·서고 크기·선별 초과·미사용 수칙 수)
 function curationSummary(ws) {
   let repoKey = null, gen = null, arcHash = null, repo = null;
-  try { const c = CL.loadContract(ws); repo = CL.resolveScoutRepo(ws, c).repo; repoKey = CL.repoKeyOf(repo); gen = c.envelopeHash || null; arcHash = typeof c.archiveHash === "string" && c.archiveHash ? c.archiveHash : null; } catch { /* 요약만 */ }
+  try { const c = CL.loadContract(ws); repo = CL.resolveScoutRepo(ws, c).repo; repoKey = CL.repoKeyOf(repo); gen = (typeof CL.envelopeGenFor === "function" ? CL.envelopeGenFor(ws, repo, c).gen : c.envelopeHash) || null; arcHash = typeof c.archiveHash === "string" && c.archiveHash ? c.archiveHash : null; } catch { /* 요약만 */ }
   const rows = readCurationRows(ws).filter((r) => !repoKey || !r.repoKey || r.repoKey === repoKey);
   const runs = rows.filter((r) => r.type === "run" && (!repoKey || r.repoKey === repoKey));
   const last = runs.length ? runs[runs.length - 1] : null;
