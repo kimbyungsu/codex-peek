@@ -3571,6 +3571,79 @@ async function cmdClassify(rest) {
   else if (r.st === "empty") console.log(en ? "[user words] nothing waiting to be classified." : "[사용자 말] 분류할 말이 없습니다.");
   else { console.log((en ? "[user words] not run: " : "[사용자 말] 실행되지 않음: ") + r.st + (r.reason ? " (" + r.reason + ")" : "")); process.exitCode = 2; }
 }
+// [RULE-SUPPLY 묶음 3 §4] 검증 상한 마감 기록 — 답 본문 대신 이 명령으로 제출한다(검사 실패 사유는 명령 결과로만 · 사용자 답은 되풀이되지 않음).
+// submit --file <경로>=제출 시점 현재 문맥으로 검사 후 캠페인에 결속해 저장 · template=양식 다시 보기 · status=이 캠페인의 기록과 지금 검사 결과.
+// 종료 관문은 결속된 기록을 종료 시점 문맥으로 다시 검사한다(제출 뒤 파일 변경·보관함/결정 장부 변경=다시 제출). 기록은 검증 통과 증명이 아니다.
+function cmdClosing(rest) {
+  const ws = configWs();
+  const en = loadLang() === "en";
+  const VH = require("./verify-cap-handoff.js");
+  const args = rest || [];
+  const sub = args.find((a) => !String(a).startsWith("--")) || "status";
+  const json = args.includes("--json");
+  const flagVal = (flag) => { const i = args.indexOf(flag); return i >= 0 && args[i + 1] !== undefined ? String(args[i + 1]) : ""; };
+  const usage = en ? "usage: closing submit --file <path> | closing template | closing status [--json]" : "사용법: closing submit --file <경로> | closing template | closing status [--json]";
+  if (!["submit", "template", "status"].includes(sub)) { console.log(usage); return 2; }
+  let c; try { c = loadContract(ws); } catch { console.log(en ? "[closeout record] could not read this project's settings" : "[마감 기록] 이 프로젝트 설정을 읽지 못했습니다"); return 2; }
+  const tg = VH.closeoutTargetFor(ws, c);
+  const roundOf = (t) => (t && t.progress && t.progress.tracked && t.progress.budget >= 1 ? t.progress.count + "/" + t.progress.budget : (en ? "untracked" : "미집계"));
+  if (!tg.ok) {
+    if (json) console.log(JSON.stringify({ ok: false, reason: "no-campaign", detail: tg.reason || "" }));
+    else if (tg.reason === "caller-not-implementer") console.log(en ? "[closeout record] this conversation is not the implementer conversation currently linked to the project — run it from that conversation." : "[마감 기록] 이 명령을 실행한 대화가 지금 이 프로젝트에 연결된 구현 대화가 아닙니다 — 그 대화에서 실행하세요.");
+    else console.log((en ? "[closeout record] could not find this conversation's current verification campaign (" : "[마감 기록] 이 대화의 현재 검증 캠페인을 찾지 못했습니다(") + (tg.reason || "") + (en ? ") — run it from the implementer conversation." : ") — 구현 대화에서 실행하세요."));
+    return 2;
+  }
+  const notApplicable = tg.off ? (en ? "verification mode is off — no closeout record is needed." : "검증 모드가 꺼져 있어 마감 기록이 필요 없습니다.")
+    : !tg.capReached ? (en ? `this campaign has not reached the verification cap (now ${roundOf(tg)}) — no closeout record is needed.` : `이 캠페인은 검증 상한에 닿지 않았습니다(지금 ${roundOf(tg)}) — 마감 기록이 필요 없습니다.`) : "";
+  if (sub === "template") {
+    if (notApplicable) { console.log((en ? "[closeout record] " : "[마감 기록] ") + notApplicable); return 2; }
+    const ctx = VH.closeoutContextFor(ws, tg.campaignId, tg.progress);
+    console.log(VH.capHandoffInstruction(en ? "en" : "ko", roundOf(tg), ctx.verdict || "not-pass", ctx));
+    return 0;
+  }
+  if (sub === "status") {
+    let rkS = ""; try { rkS = repoKeyOf(resolveScoutRepo(ws, c).repo) || ""; } catch { rkS = ""; }
+    const last = VH.latestCloseoutFor(ws, tg.campaignId, rkS);
+    let now = null;
+    if (last.row && tg.capReached) { const v = VH.validateCapHandoff(last.row.text, VH.closeoutContextFor(ws, tg.campaignId, tg.progress)); now = { ok: !!v.ok, detail: v.detail || "" }; }
+    if (json) { console.log(JSON.stringify({ ok: true, campaignId: tg.campaignId, round: roundOf(tg), capReached: tg.capReached, off: tg.off, readError: last.readError, record: last.row ? { id: last.row.id, ts: last.row.ts, residualRisk: last.row.residualRisk, needsUserDecision: last.row.needsUserDecision } : null, checkNow: now })); return 0; }
+    if (notApplicable) { console.log((en ? "[closeout record] " : "[마감 기록] ") + notApplicable); return 0; }
+    if (last.readError) { console.log(en ? "[closeout record] the record ledger could not be read — check the disk and submit again." : "[마감 기록] 기록 장부를 읽지 못했습니다 — 디스크를 확인하고 다시 제출하세요."); return 1; }
+    if (!last.row) { console.log(en ? `[closeout record] cap ${roundOf(tg)} reached — not submitted yet (form: closing template).` : `[마감 기록] 상한 ${roundOf(tg)} 도달 — 아직 제출되지 않았습니다(양식: closing template).`); return 1; }
+    console.log((en ? "[closeout record] submitted " : "[마감 기록] 제출됨 ") + last.row.id + " · " + last.row.ts + (now && now.ok ? (en ? " · passes the check against the current state" : " · 지금 상태로 검사 통과") : (en ? " · fails the check against the current state now: " : " · 지금 상태로는 검사 불통과: ") + ((now && now.detail) || "")));
+    return now && now.ok ? 0 : 1;
+  }
+  // submit
+  const file = flagVal("--file");
+  if (!file) { console.log(usage); return 2; }
+  if (notApplicable) {
+    if (json) console.log(JSON.stringify({ ok: false, reason: tg.off ? "verify-off" : "not-at-cap" }));
+    else console.log((en ? "[closeout record] not submitted: " : "[마감 기록] 제출하지 않음: ") + notApplicable);
+    return 2;
+  }
+  let text = "";
+  try {
+    const st = fs.statSync(file);
+    if (st.size > VH.CLOSEOUT_TEXT_MAX) { console.log(en ? `[closeout record] refused: the file is larger than ${VH.CLOSEOUT_TEXT_MAX} bytes.` : `[마감 기록] 거부: 파일이 ${VH.CLOSEOUT_TEXT_MAX}바이트보다 큽니다.`); return 1; }
+    text = fs.readFileSync(file, "utf8");
+  } catch { console.log((en ? "[closeout record] could not read the file: " : "[마감 기록] 파일을 읽지 못했습니다: ") + file); return 1; }
+  const r = VH.submitCloseout(ws, { text, target: tg });
+  if (json) { console.log(JSON.stringify(r.ok ? { ok: true, id: r.id, residualRisk: r.row.residualRisk, needsUserDecision: r.row.needsUserDecision } : { ok: false, reason: r.reason, detail: r.detail || "" })); return r.ok ? 0 : (r.reason === "not-at-cap" || r.reason === "verify-off" || r.reason === "no-campaign" ? 2 : 1); }
+  if (!r.ok) {
+    const why = r.reason === "invalid" ? String(r.detail || "")
+      : r.reason === "empty" ? (en ? "the file is empty" : "파일이 비었습니다")
+      : r.reason === "too-large" ? (en ? `larger than ${VH.CLOSEOUT_TEXT_MAX} bytes` : `${VH.CLOSEOUT_TEXT_MAX}바이트 초과`)
+      : r.reason === "repo-unreadable" ? (en ? "the repository state (last commit and changed-file list) could not be read — check git" : "저장소 상태(마지막 커밋·바뀐 파일 목록)를 읽지 못했습니다 — git 상태를 확인하세요")
+      : (en ? "the record could not be saved or read back (" : "기록을 저장하거나 다시 읽어 확인하지 못했습니다(") + r.reason + ")";
+    console.log((en ? "[closeout record refused] " : "[마감 기록 거부] ") + why + "\n" + (en ? "Fix the file and run the same command again (form: closing template). Nothing was saved." : "파일을 고쳐 같은 명령으로 다시 제출하세요(양식: closing template). 저장된 것은 없습니다."));
+    return r.reason === "invalid" || r.reason === "empty" || r.reason === "too-large" ? 1 : 2;
+  }
+  const rrLabel = { now: en ? "verify now" : "즉시 재검증", next: en ? "next campaign" : "다음 캠페인 도장", ignore: en ? "ignorable" : "무시 가능" }[r.row.residualRisk] || r.row.residualRisk;
+  console.log((en ? "[closeout record submitted] " : "[마감 기록 제출됨] ") + r.id + " · " + (en ? "round " : "회차 ") + roundOf(tg) + " · " + (en ? "residual risk: " : "잔여 위험: ") + rrLabel + " · " + (en ? "user decisions: " : "사용자 판단: ") + r.row.decisionCount + "\n"
+    + (en ? "Do not paste this record into the reply the user sees — give a plain summary plus one line \"Closeout record submitted (dashboard)\". When you finish, the record is checked again against the current state (resubmit if you edit files afterwards or the backlog/decision ledger changes). This record is not a verification pass."
+      : "사용자에게 보이는 답에는 이 기록을 붙이지 말고, 평이한 요약과 \"마감 기록 제출됨(대시보드)\" 한 줄만 쓰세요. 응답을 마칠 때 지금 상태로 다시 검사합니다(이후 파일을 고치거나 보관함·결정 장부가 바뀌면 다시 제출). 이 기록은 검증 통과가 아닙니다."));
+  return 0;
+}
 function cmdRulePropose(rest) {
   const ws = configWs();
   const en = loadLang() === "en";
@@ -4163,8 +4236,8 @@ function budgetNoticeLines(res, lang, profile) {
       ? `\n[verify round cap ${res.n}/${res.budget}] This was the last reserved round. Re-judge its findings into accepted-and-handled, evidence-backed rebuttal, receipt-backed parking, or genuine user decision. Ask one combined question only for the last lane; otherwise close triage without inventing options. This is never a verification pass.\n`
       : `\n[검증 왕복 상한 ${res.n}/${res.budget}] 마지막 예약 왕복입니다. 이 판정의 지적을 수용·처리, 근거 있는 반박, 영수증 있는 보관함, 진짜 사용자 결정으로 나누세요. 마지막 갈래가 있을 때만 한 번에 묻고, 없으면 선택지를 만들지 말고 정리하세요. 어느 쪽도 검증 통과는 아닙니다.\n`;
     if (res.last) s += en
-      ? "\n[cap closeout format] If this final verdict is not pass, one response must contain: [Verification cap closeout] [Accepted and handled] [Rebutted and closed] [Parked] [User decision required] [Residual risk call] [Alert meaning] [Recommendation]. Each latest finding belongs to exactly one of the first four sections; the residual risk call starts with Verify now / Next campaign / Ignorable.\n"
-      : "\n[상한 마감 형식] 이 마지막 판정이 통과가 아니라면 한 응답에 다음 제목을 모두 넣으세요: [검증 상한 인계] [수용·처리] [반박·종결] [보관함 이관] [사용자 판단 필요] [잔여 위험 판단] [경고등 의미] [권장]. 마지막 지적마다 앞 네 절 중 정확히 한 곳만 배정하고, 잔여 위험 판단은 즉시 재검증/다음 캠페인 도장/무시 가능 셋 중 하나로 시작합니다.\n";
+      ? "\n[cap closeout format] If this final verdict is not pass, submit a closeout record before finishing: write a file containing all of [Verification cap closeout] [Accepted and handled] [Rebutted and closed] [Parked] [User decision required] [Residual risk call] [Alert meaning] [Recommendation] and run " + require("./contract-lib.js").bridgeCmd("codex-bridge.js") + " closing submit --file <path> (the command checks it and returns the reason if refused; form: closing template). Each latest finding belongs to exactly one of the first four sections; the residual risk call starts with Verify now / Next campaign / Ignorable. The reply the user sees gets a plain summary plus one line \"Closeout record submitted (dashboard)\".\n"
+      : "\n[상한 마감 형식] 이 마지막 판정이 통과가 아니라면 응답을 마치기 전에 마감 기록을 제출하세요: [검증 상한 인계] [수용·처리] [반박·종결] [보관함 이관] [사용자 판단 필요] [잔여 위험 판단] [경고등 의미] [권장] 제목을 모두 넣은 파일을 써서 " + require("./contract-lib.js").bridgeCmd("codex-bridge.js") + " closing submit --file <경로> 로 제출합니다(명령이 바로 검사해 거부 사유를 돌려줌 · 양식: closing template). 마지막 지적마다 앞 네 절 중 정확히 한 곳만 배정하고, 잔여 위험 판단은 즉시 재검증/다음 캠페인 도장/무시 가능 셋 중 하나로 시작합니다. 사용자에게 보이는 답에는 평이한 요약과 \"마감 기록 제출됨(대시보드)\" 한 줄만 씁니다.\n";
     return s;
   }
   const why = String(res.untracked || "unknown");
@@ -5441,6 +5514,11 @@ function main() {
       return void cmdCurate(rest);
     case "classify": // [RULE-SUPPLY 묶음 2-나-2] 모아 둔 사용자 말 분류(독립·검증 무관) — 후보는 사용자 도장 전 효력 없음
       return void cmdClassify(rest);
+    case "closing": { // [RULE-SUPPLY 묶음 3] 검증 상한 마감 기록 제출·양식·상태(답 본문 파싱 대체)
+      const rcC = cmdClosing(rest);
+      if (rcC) process.exitCode = rcC;
+      return;
+    }
     case "envelope-proposal": { // §7 증분 2 — 제안본(초안) 작성·열람·폐기. 승인(도장)은 대시보드 전용 — CLI에 없음.
       const rc8 = cmdEnvelopeProposal(rest);
       if (rc8) process.exitCode = rc8;
@@ -5518,6 +5596,7 @@ function main() {
           '  ' + SELF_CMD + ' rule-propose <findingId> --why "<왜 관통 지침인지 1줄>"  (마감 판단 (c)관통 지침만 수칙서 후보로 — 효력은 사용자 도장부터)\n' +
           '  ' + SELF_CMD + ' constraint add --quote "<사용자 말 원문 연속 구절>" --why "<한 줄 근거>"  (사용자가 말한 지속 기준을 수칙서 후보로 — 이번·이전 메시지 원문 그대로만 · 효력은 사용자 도장부터)\n' +
           '  ' + SELF_CMD + ' classify [run|status|list]  (모아 둔 사용자 말을 독립 실행이 분류해 후보로 — 승인은 사용자 화면)\n' +
+          '  ' + SELF_CMD + ' closing submit --file <경로> | closing template | closing status  (검증 상한 마감 기록 — 답 본문 대신 제출·종료 때 다시 검사)\n' +
           "  " + SELF_CMD + " timeout  (대시보드 검증 대기시간과 외부 호출 최소 timeout 확인)\n" +
           "  " + SELF_CMD + " link <id> | link --last\n" +
           "  " + SELF_CMD + " status | find | doctor | detect-home\n" +

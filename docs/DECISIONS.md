@@ -457,3 +457,11 @@
 - 결과: 첫 자동 판정은 기준선(설치 이전 마감 무시) · 수칙서 승인 전·실행 중·최근 실행이면 말을 소모하지 않고 대기 · 범위 짧은 목록은 검증 모드가 꺼진 매 턴 경로에는 넣지 않음 · 확인 대기 줄은 지시문이 아닌 사실 한 줄 · 하위 담당 보고(agent-message 봉투)는 사람의 말이 아니라 작업 알림처럼 직전 차례를 이음(보고가 사용자 말 대기열·턴 원문·새 검증 캠페인을 만들던 결함 — 실측 2026-10-05).
 - 정본: bridge/classify.js(closeEventsFor·classifyTickJudge·classifyHookTick·pendingNoticeFor·heldWordAction·userWordsView) · bridge/codex-bridge.js(classify tick) · bridge/contract-inject.js·codex-hook.js(훅 결선) · bridge/contract-lib.js(implementerEnvelopeInjectParts scope·정적 전달) · src/extension.ts(uwCard·seatMark·heldMark·후보 칸 표시·한꺼번에 올리기 칸 전달·개요 합산) · docs/RULE-SUPPLY-REDESIGN-2026-10-04.md §3-3·§3-6·§3-7 구현.
 - 찾는말: 자동 분류, classify tick, 캠페인 마감, 상한 소진, 사용자 말에서 나온 제안, 규칙 칸 승인, 결정 기록 승인, 분류하지 못한 사용자 말, 사용자 확인 대기, 범위 밖 짧은 목록, D3
+
+## D-2026-10-05-closeout-record — 검증 상한 마감 글을 답 본문 대신 명령으로 제출하고 종료 때 지금 상태로 다시 검사한다(묶음 3)
+- 날짜: 2026-10-05 · 종류: 구현(RULE-SUPPLY 묶음 3 — 설계 v3 §4) · 상태: 유효
+- 결정: 검증 횟수를 다 쓴 작업의 마감 글(수용·반박·보관함·사용자 판단·잔여 위험·경고등·권장)은 구현 담당이 파일로 써서 closing submit 명령으로 제출한다. 명령이 바로 검사해 거부 사유를 돌려주고, 통과한 기록만 그 캠페인에 묶어 저장한다. 종료 관문은 답 본문을 읽지 않고 그 기록을 종료 시점 상태로 다시 검사한다. 사용자에게 보이는 답에는 평이한 요약과 '마감 기록 제출됨(대시보드)' 한 줄만 둔다.
+- 왜: 종전에는 마감 글이 답 본문 형식 검사를 통과할 때까지 같은 글이 기계 번호(R3-F1)와 함께 사용자 화면에 몇 번씩 되풀이됐다(LTE 7묶음 23개 실측).
+- 결과: 형식이 틀려도 명령 결과로만 되돌아온다 · 제출 뒤 파일을 고치거나 보관함·결정 장부가 바뀌면 다시 제출 · 장부 판독 실패는 미인정 · 기록은 검증 통과가 아니다 · 대시보드 검증 탭에서 기록을 쉬운 말로 본다.
+- 정본: bridge/verify-cap-handoff.js(closeoutTargetFor·submitCloseout·stopCloseoutCheck·closeoutView·splitCloseout) · bridge/verify-guard.js·codex-hook.js(종료 관문) · bridge/codex-bridge.js(closing 명령·마지막 왕복 안내) · src/extension.ts(검증 상한 마감 기록 칸) · docs/RULE-SUPPLY-REDESIGN-2026-10-04.md §4 구현.
+- 찾는말: 마감 기록, closing submit, 마감문 되풀이, 검증 상한 인계, 답 본문 파싱 폐지, 종료 때 다시 검사, 마감 기록 제출됨

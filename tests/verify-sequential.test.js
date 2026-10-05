@@ -131,6 +131,8 @@ const genericEn = `[Verification cap closeout]\n[Accepted and handled]\nNone\n[R
 ok(!VH.validateCapHandoff(genericEn).ok, "문제·상황·위험 키워드만 배치한 대상 없는 일반론 거부");
 const handoffEn = `[Verification cap closeout]\n[Accepted and handled]\nNone\n[Rebutted and closed]\nNone\n[Parked]\nNone\n[User decision required]\nNone\n[Residual risk call]\nNext campaign — Reason: the unverified edit is a single test wording line covered by regression tests.\n[Alert meaning]\nThe red alert remains because there is no pass certification; this closeout does not clear that verdict.\n[Recommendation]\nI recommend keeping the handled state and re-checking it in the next change's normal verification.`;
 ok(VH.validateCapHandoff(handoffEn).ok, "영어 슬롯도 같은 내용의 상한 인계문을 판독");
+// [RULE-SUPPLY 묶음 3] 마감 기록은 답 본문이 아니라 제출 명령으로 — 시험은 같은 정본 함수(대상 해석+검사+저장)로 제출한다
+const submitCO = (text, w = ws, env = { CLAUDE_CODE_SESSION_ID: sid }) => VH.submitCloseout(w, { text, target: VH.closeoutTargetFor(w, CL.loadContract(w), env) });
 const evidenceDir = path.join(home, "ask-jobs"), evidenceId = "ask-evidence-0000000001", evidenceCampaign = "cc:evidence:turn";
 fs.mkdirSync(evidenceDir, { recursive: true });
 const writeEvidenceJob = (id, campaignId, roundNo, answer, innerId = id, jobWs = ws) => {
@@ -252,24 +254,24 @@ const demoteParse = CL.parseFindingsBlock(demoteRaw);
 const demoteMachine = CL.judgeMachineVerdict(CL.extractVerdict(demoteRaw), demoteParse);
 const demoteFormatted = CL.formatForClaude(demoteRaw, "en", "core", demoteMachine);
 ok(demoteMachine.effective === "inconclusive" && VH.verdictFromAnswer(demoteFormatted) === "inconclusive", "실제 formatForClaude pass→기계 보류 강등은 원 선언보다 실효 판정을 우선");
-fs.appendFileSync(tx, JSON.stringify({ type: "assistant", sessionId: sid, timestamp: "2026-07-25T01:02:30.000Z", message: { content: [{ type: "text", text: fillerEn }] } }) + "\n");
-ok(blocked(run()), "CL-C 실제 transcript에서도 filler 인계는 held로 우회하지 못함");
-fs.appendFileSync(tx, JSON.stringify({ type: "assistant", sessionId: sid, timestamp: "2026-07-25T01:02:40.000Z", message: { content: [{ type: "text", text: genericEn }] } }) + "\n");
-ok(blocked(run()), "CL-C 실제 transcript에서도 키워드형 일반론은 held로 우회하지 못함");
+ok(!submitCO(fillerEn).ok && blocked(run()), "CL-C filler 마감 기록은 제출 단계에서 거부·종료 관문도 held로 우회하지 못함");
+ok(!submitCO(genericEn).ok && blocked(run()), "CL-C 키워드형 일반론 마감 기록도 제출 거부·held 우회 불가");
 writeEvidenceJob("ask-clcloseout-0000000005", campaignId, 5, `[지적 목록 v1]\n{"tag":"blocker","title":"저장한 선택값이 화면 재진입 뒤 사라진다"}\n[지적 목록 끝]\n검증: 실패\n`);
 fs.appendFileSync(tx, JSON.stringify({ type: "assistant", sessionId: sid, timestamp: "2026-07-25T01:03:00.000Z", message: { content: [{ type: "text", text: evidenceHandoff }] } }) + "\n");
-ok(run().stdout === "", "5/5 뒤 완전한 인계문이 있으면 정상 종료");
+{ // 반복 차단 상한에 걸리면 차단 대신 '마감 누락' 빨강으로 끝난다 — 어느 쪽이든 '마감 수락(held·cap-settled)'이 아니어야 한다
+  const rAns = run(); const phA = JSON.parse(fs.readFileSync(CL.PHASE_FILE, "utf8")).phase;
+  ok(blocked(rAns) || (phA !== "held" && phA !== "cap-settled"), "★답 본문에 완전한 마감문을 써도 제출 기록이 없으면 마감 수락 없음(답 본문 파싱 폐지) phase=" + phA); }
+ok(submitCO(evidenceHandoff).ok && run().stdout === "", "5/5 뒤 완전한 마감 기록을 제출하면 정상 종료");
 const heldPhase = JSON.parse(fs.readFileSync(CL.PHASE_FILE, "utf8"));
 ok(heldPhase.phase === "held" && heldPhase.round === 5, "정상 상한 종결은 미검증이 아니라 사용자 판단 대기");
-fs.appendFileSync(tx, JSON.stringify({ type: "assistant", sessionId: sid, timestamp: "2026-07-25T01:03:10.000Z", message: { content: [{ type: "text", text: acceptedCloseout }] } }) + "\n");
-ok(run().stdout === "" && JSON.parse(fs.readFileSync(CL.PHASE_FILE, "utf8")).phase === "cap-settled", "사용자 판단 항목이 없으면 자동 정리 완료(통과 아님)로 구분");
+ok(submitCO(acceptedCloseout).ok && run().stdout === "" && JSON.parse(fs.readFileSync(CL.PHASE_FILE, "utf8")).phase === "cap-settled", "사용자 판단 항목이 없으면 자동 정리 완료(통과 아님)로 구분 — 같은 캠페인의 마지막 기록이 권위");
 ok([run(), run(), run(), run()].every((x) => x.stdout === ""), "인계 뒤 Stop을 반복해도 다시 차단하거나 오경고하지 않음");
 ok(!CL.readIntegrityEvents().some((e) => e.kind === "verify-handoff-missing" || e.kind === "verify-incomplete"), "정상 상한 인계에는 빨간 누락·미검증 경고 0건");
 
 console.log("[3b] 마감문 '즉시 재검증' 판단=다음 턴 종료 차단 → 그 캠페인 id를 담은 통과 검증이 결속돼야 해소");
 {
   const nowClose = acceptedCloseout.replace("다음 캠페인 도장 — 이유:", "즉시 재검증 — 이유:").replace(/\[권장\]\n[^\n]*/, "[권장]\n이 턴에서 새 검증 캠페인을 바로 시작하기를 권장합니다(경계 수정이 미검증이기 때문).");
-  fs.appendFileSync(tx, JSON.stringify({ type: "assistant", sessionId: sid, timestamp: "2026-07-25T01:03:20.000Z", message: { content: [{ type: "text", text: nowClose }] } }) + "\n");
+  ok(submitCO(nowClose).ok, "즉시 재검증 마감 기록 제출");
   const rNow = run();
   const resF = path.join(home, "verify-findings", CL.wsKeyFor(ws) + ".residual-now.json");
   ok(rNow.stdout === "" && fs.existsSync(resF), "즉시 재검증 마감=이 턴은 정상 종결(캠페인=턴이라 같은 턴 재검증 불가)+마커 기록");
@@ -309,7 +311,7 @@ console.log("[3c] 목록형 마커 — 뒤 캠페인 마감이 앞 캠페인 미
   const failAns = `[지적 목록 v1]\n{"tag":"blocker","title":"저장한 선택값이 화면 재진입 뒤 사라진다"}\n[지적 목록 끝]\n검증: 실패\n`;
   const passOut = "[지적 목록 v2]\n[지적 목록 끝]\n\n---\n[Claude 처리 안내 — 색 라벨이 아니라 다음 행동]\nCodex 선언: 검증: 통과\n";
   const newTurn = (ts, cid, count) => { fs.writeFileSync(path.join(CL.ACTIVE_DIR, sid + ".json"), JSON.stringify({ workspace: ws, claudeSession: sid, ts })); fs.appendFileSync(tx, JSON.stringify({ type: "user", sessionId: sid, timestamp: ts, message: { content: [{ type: "text", text: "이어서" }] } }) + "\n"); fs.writeFileSync(CL.campaignFileFor(ws), JSON.stringify({ schema: "vcamp-1", campaignId: cid, count, budget: 5, startedAt: ts, updatedAt: new Date().toISOString() })); };
-  const say = (ts, text) => fs.appendFileSync(tx, JSON.stringify({ type: "assistant", sessionId: sid, timestamp: ts, message: { content: [{ type: "text", text }] } }) + "\n");
+  const say = (ts, text) => { const r9 = submitCO(text); if (!r9.ok) throw new Error("submit " + ts + " " + JSON.stringify(r9)); }; // [묶음 3] 마감 기록 제출(이름은 종전 호출부 유지)
   // A: 캠페인3 상한 마감(즉시 재검증) → 마커 [c3]
   const t3 = "2026-07-25T03:00:00.000Z", c3 = "cl:" + sid + ":" + t3;
   newTurn(t3, c3, 5); writeEvidenceJob("ask-c3-0000000005", c3, 5, failAns); say("2026-07-25T03:00:10.000Z", nowClose2);
@@ -390,27 +392,28 @@ ok(capC.stdout.includes("[검증 상한 인계]") && !capC.stdout.includes("ask-
 runC(); runC(); const escapedC = runC();
 const missedC = CL.readIntegrityEvents().filter((e) => e.workspace && CL.normWs(e.workspace) === CL.normWs(wsC));
 ok(escapedC.stdout === "" && missedC.some((e) => e.kind === "verify-handoff-missing") && !missedC.some((e) => e.kind === "verify-incomplete"), "인계문을 끝내 쓰지 못했을 때만 별도 빨강을 남기고 일반 미검증으로 오분류하지 않음");
-fs.appendFileSync(rollout, msg("assistant", fillerEn) + "\n");
+ok(!submitCO(fillerEn, wsC, { CODEX_THREAD_ID: sidC }).ok, "C-C filler 마감 기록 제출 거부");
 runC();
 const fillerPhaseC = JSON.parse(fs.readFileSync(CL.PHASE_FILE, "utf8"));
 ok(fillerPhaseC.phase !== "held" && CL.readIntegrityEvents().some((e) => e.workspace && CL.normWs(e.workspace) === CL.normWs(wsC) && e.kind === "verify-handoff-missing"), "C-C 실제 rollout에서도 filler 인계는 held로 우회하거나 누락 빨강을 지우지 못함");
-fs.appendFileSync(rollout, msg("assistant", genericEn) + "\n");
+ok(!submitCO(genericEn, wsC, { CODEX_THREAD_ID: sidC }).ok, "C-C 일반론 마감 기록 제출 거부");
 runC();
 const genericPhaseC = JSON.parse(fs.readFileSync(CL.PHASE_FILE, "utf8"));
 ok(genericPhaseC.phase !== "held" && CL.readIntegrityEvents().some((e) => e.workspace && CL.normWs(e.workspace) === CL.normWs(wsC) && e.kind === "verify-handoff-missing"), "C-C 실제 rollout에서도 키워드형 일반론은 held로 우회하거나 누락 빨강을 지우지 못함");
 const dC = CL.openDecision(wsC, { origin: "implementer", kind: "product", campaignId: campC, sourceAsk: "", targetFp: "", question: "저장한 선택값 복원 방식을 영속 저장으로 바꿀까요?", why: "재진입 시 값이 사라짐", noDefault: "저장 방식은 제품 방향이라 구현자가 대신 정할 수 없음", choices: [{ key: "keep", label: "현재 방식 유지", ifChosen: "값이 사라질 수 있음" }, { key: "persist", label: "저장소에 영속", ifChosen: "다음 검증에서 확인" }], recommend: "persist" });
 const decisionKoC = unavailableKo.replace("[사용자 판단 필요]\n없음", "[사용자 판단 필요]\n" + CL.renderDecisionBlock(CL.readDecisions(wsC).latest.get(dC.decisionId), false));
 fs.appendFileSync(rollout, msg("assistant", decisionKoC) + "\n");
-ok(runC().stdout === "", "C-C 실제 rollout에 인계문(결정 장부 블록)이 생기면 정상 종료");
+{ const rAnsC = runC(); const phC = JSON.parse(fs.readFileSync(CL.PHASE_FILE, "utf8")).phase;
+  ok(rAnsC.stdout !== "" || (phC !== "held" && phC !== "cap-settled"), "★C-C 답 본문의 마감문만으로는 마감 수락 없음(제출 기록 필요) phase=" + phC); }
+ok(submitCO(decisionKoC, wsC, { CODEX_THREAD_ID: sidC }).ok && runC().stdout === "", "C-C 마감 기록(결정 장부 블록)을 제출하면 정상 종료");
 const heldC = JSON.parse(fs.readFileSync(CL.PHASE_FILE, "utf8"));
 ok(heldC.phase === "held" && heldC.round === 5 && CL.normWs(heldC.workspace) === CL.normWs(wsC), "C-C도 사용자 판단 대기로 표시");
 writeEvidenceJob("ask-cccloseout-0000000005", campC, 5, `[지적 목록 v1]\n{"tag":"blocker","title":"저장한 선택값이 화면 재진입 뒤 사라진다"}\n[지적 목록 끝]\n검증: 실패\n`, "ask-cccloseout-0000000005", wsC);
-fs.appendFileSync(rollout, msg("assistant", acceptedCloseout) + "\n");
-ok(runC().stdout === "" && JSON.parse(fs.readFileSync(CL.PHASE_FILE, "utf8")).phase === "cap-settled", "C-C 실제 rollout도 사용자 판단 없는 마감을 자동 정리 완료(통과 아님)로 표시");
+ok(submitCO(acceptedCloseout, wsC, { CODEX_THREAD_ID: sidC }).ok && runC().stdout === "" && JSON.parse(fs.readFileSync(CL.PHASE_FILE, "utf8")).phase === "cap-settled", "C-C도 사용자 판단 없는 마감 기록을 자동 정리 완료(통과 아님)로 표시");
 ok(!CL.readIntegrityEvents().some((e) => e.workspace && CL.normWs(e.workspace) === CL.normWs(wsC) && (e.kind === "verify-handoff-missing" || e.kind === "verify-incomplete")), "인계문이 완성되면 누락 빨강이 자동 해소되고 일반 미검증도 없음");
 { // [잔여 재검증 강제] Codex↔Codex Stop도 같은 정본 마커(1회차 [주의]) — 즉시 재검증 마감=마커+노랑 경보
   const nowCloseC = acceptedCloseout.replace("다음 캠페인 도장 — 이유:", "즉시 재검증 — 이유:").replace(/\[권장\]\n[^\n]*/, "[권장]\n이 턴에서 새 검증 캠페인을 바로 시작하기를 권장합니다(경계 수정이 미검증이기 때문).");
-  fs.appendFileSync(rollout, msg("assistant", nowCloseC) + "\n");
+  ok(submitCO(nowCloseC, wsC, { CODEX_THREAD_ID: sidC }).ok, "C-C 즉시 재검증 마감 기록 제출");
   const resC = path.join(home, "verify-findings", CL.wsKeyFor(wsC) + ".residual-now.json");
   ok(runC().stdout === "" && fs.existsSync(resC) && JSON.parse(fs.readFileSync(resC, "utf8")).items[0].campaignId === campC, "C-C 즉시 재검증 마감=같은 정본 마커(캠페인 id 결속)");
   ok(CL.readIntegrityEvents().some((e) => e.workspace && CL.normWs(e.workspace) === CL.normWs(wsC) && e.kind === "verify-residual-now" && e.severity === "warning"), "C-C 노랑 경보");

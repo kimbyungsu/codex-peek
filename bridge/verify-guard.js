@@ -9,7 +9,7 @@ const path = require("path");
 const cp = require("child_process");
 const crypto = require("crypto");
 const { loadContract, BRIDGE, BRIDGE_DIR, atomicWrite, appendIntegrityEvent, supersedeIntegrity, writePhase, maybeCleanupState, loadLang, verifyTimeoutMin, claudeCampaignAnchor, verifyCampaignProgress, readResidual, addResidual, removeResidualItems, residualPending, judgeRequiredPending, effectiveRuleCheck, ruleCheckSame, ruleCheckRecord, ruleCheckVerdict, ruleCheckInstruction, appendRuleCheckRow, readClaudeAnchorFile, writeClaudeAnchorRuleCheck } = require("./contract-lib.js");
-const { validateCapHandoff, capHandoffInstruction, capHandoffContext, claudeAssistantText, lastAssistantText } = require("./verify-cap-handoff.js");
+const { capHandoffInstruction, capHandoffContext, lastAssistantText, stopCloseoutCheck } = require("./verify-cap-handoff.js");
 try { maybeCleanupState(); } catch { /* 오래된 상태파일 정리는 best-effort — 검증 흐름 방해 금지 */ } // 매 턴 끝(Stop 훅)에 들르되 실제 청소는 하루 1회
 const PROOFS_DIR = path.join(BRIDGE_DIR, "proofs");
 const ATTEMPTS_DIR = path.join(BRIDGE_DIR, "verify-attempts"); // V4: 한 턴 재검증 강제 횟수(무한정지 방지 바운드)
@@ -301,18 +301,23 @@ process.stdin.on("end", () => {
   const handoffCtx = capReached ? Object.assign(capHandoffContext(BRIDGE_DIR, ws, anchor.campaignId), { roundCount: progress.count, roundBudget: progress.budget }) : null; // [P10] 마감문 회차 숫자 대조 재료
   // 상한에서는 새 검증 대신 마지막 지적의 네 갈래 마감을 요구한다. 사용자 판단 항목이 있을 때만 held,
   // 처리·반박·보관함으로 모두 닫혔으면 cap-settled다. 어느 쪽도 검증 통과로 위장하지 않는다.
-  const capCloseout = capReached ? validateCapHandoff(claudeAssistantText(lines, lastUser), handoffCtx) : null;
+  // [RULE-SUPPLY 묶음 3 §4] 답 본문을 파싱하지 않는다 — 명령(closing submit)으로 제출·결속된 마감 기록을 읽어 ①마지막 변경 뒤 제출인지 ②지금 문맥으로 같은 검사기를 다시 통과하는지 본다.
+  const capCloseout = capReached ? stopCloseoutCheck(ws, anchor.campaignId, handoffCtx, sinceTs, en ? "en" : "ko") : null;
+  const capOpen = capReached && !(capCloseout && capCloseout.ok); // 상한인데 유효한 마감 기록이 없음(누락 경보·제출 안내는 이때만)
   let residualWriteFailed = false;
-  if (capReached && capCloseout.ok && checkOk) { // [RULE-COMPLIANCE] 마감 턴도 규칙 자가점검(규칙이 있을 때만)
+  // [RULE-COMPLIANCE] 마감 턴도 규칙 자가점검 · [묶음 3 · 검증 1회차 f-a812cc41] 판단 관문과 AND(이 턴 안에서 round-judge 로 풀 수 있음).
+  // 앞 캠페인의 '즉시 재검증' 잔여는 AND 하지 않는다 — 상한 턴은 검증 호출이 거부돼 이 턴에 소비할 수 없고, 막으면 이 캠페인 자신의 잔여 마커까지 못 남긴다.
+  // 그 잔여는 목록형 마커로 남아 다음 턴들의 종료를 계속 막는다(종전 계약 — 시험 verify-sequential [3c]).
+  if (capReached && capCloseout.ok && checkOk && judgeOk) {
     let wroteOk = true;
     if (capCloseout.residualRisk === "now") { // 판단을 실행으로 결속: 마커(다음 턴 종료 차단 재료)+노랑 경보 — 기록 실패=마감 미수락(fail-closed·1회차 blocker②)
       const evLines = (handoffCtx && Array.isArray(handoffCtx.evidence) ? handoffCtx.evidence : []).map((e) => `${e.key} ${e.title}`);
       wroteOk = addResidual(ws, { campaignId: String(anchor.campaignId || ""), sourceAsk: (handoffCtx && handoffCtx.source) || "", evidence: evLines, ts: new Date().toISOString() });
       // [2회차 blocker①] 노랑 경보 기록도 성공 조건 — appendIntegrityEvent는 atomicWrite 결과를 반환하므로 반환값을 검사(예외만 잡으면 false를 놓침)
       if (wroteOk) { let evOk = false; try { evOk = appendIntegrityEvent({ ts: new Date().toISOString(), session: claudeSession || "", workspace: ws, kind: "verify-residual-now", severity: "warning",
-        detail: `마감문 판단 "즉시 재검증" — 다음 턴 첫 검증이 통과할 때까지 완료 보고가 차단됩니다(요청문에 캠페인 id ${anchor.campaignId} 포함).`,
-        detailKo: `마감문 판단 "즉시 재검증" — 다음 턴 첫 검증이 통과할 때까지 완료 보고가 차단됩니다(요청문에 캠페인 id ${anchor.campaignId} 포함).`,
-        detailEn: `Closeout call "Verify now" — completion reports stay blocked until the next turn's first verification passes (its request must include campaign id ${anchor.campaignId}).` }, { supersedeSameKindWs: true }) === true; } catch { evOk = false; } wroteOk = evOk; }
+        detail: `마감 기록 판단 "즉시 재검증" — 다음 턴 첫 검증이 통과할 때까지 완료 보고가 차단됩니다(요청문에 캠페인 id ${anchor.campaignId} 포함).`,
+        detailKo: `마감 기록 판단 "즉시 재검증" — 다음 턴 첫 검증이 통과할 때까지 완료 보고가 차단됩니다(요청문에 캠페인 id ${anchor.campaignId} 포함).`,
+        detailEn: `Closeout record call "Verify now" — completion reports stay blocked until the next turn's first verification passes (its request must include campaign id ${anchor.campaignId}).` }, { supersedeSameKindWs: true }) === true; } catch { evOk = false; } wroteOk = evOk; }
     }
     if (wroteOk) {
     recordRuleCheck("check");
@@ -328,9 +333,9 @@ process.stdin.on("end", () => {
     if (j.stop_hook_active) {
       // 상한 인계까지 저장 실패로 조용히 사라지면 사용자는 빨강의 의미도, 다음 선택도 받지 못한다.
       // 무한 차단은 피하되 상한 인계 누락만은 별도 빨강으로 남긴다.
-      if (capReached) {
-        const ko = (handoffCtx && handoffCtx.passNoFindings) ? `검증 상한 ${round} 도달 — 마지막 판정은 통과였고 열린 지적도 없지만, 통과 이후의 수정이 검증되지 않은 채 턴이 끝났습니다(잔여 수정=미검증·안내 횟수 기록도 실패). 다음 턴 첫 검증이 이 잔여를 닫으면 해소됩니다.` : `검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았고, 종료 안내 횟수도 기록하지 못했습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.`;
-        const enMsg = (handoffCtx && handoffCtx.passNoFindings) ? `Verification cap ${round} reached — the last verdict passed with no open findings, but edits made after that pass ended the turn unverified (and the stop-reminder count could not be stored). The next turn's first verification clears this.` : `Verification cap ${round} was reached without the required accept/rebut/park/user-decision closeout, and the stop-reminder count could not be stored. Do not ignore this red alert: complete the four-way closeout before treating the work as closed.`;
+      if (capOpen) {
+        const ko = (handoffCtx && handoffCtx.passNoFindings) ? `검증 상한 ${round} 도달 — 마지막 판정은 통과였고 열린 지적도 없지만, 통과 이후의 수정이 검증되지 않은 채 턴이 끝났습니다(잔여 수정=미검증·안내 횟수 기록도 실패). 다음 턴 첫 검증이 이 잔여를 닫으면 해소됩니다.` : `검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류(마감 기록)가 제출되지 않았고, 종료 안내 횟수도 기록하지 못했습니다. 이 빨강은 그냥 지나치면 안 됩니다. 구현 담당이 마감 기록을 제출한 뒤에만 작업을 닫으세요.`;
+        const enMsg = (handoffCtx && handoffCtx.passNoFindings) ? `Verification cap ${round} reached — the last verdict passed with no open findings, but edits made after that pass ended the turn unverified (and the stop-reminder count could not be stored). The next turn's first verification clears this.` : `Verification cap ${round} was reached without the required accept/rebut/park/user-decision closeout record being submitted, and the stop-reminder count could not be stored. Do not ignore this red alert: treat the work as closed only after the implementer submits the closeout record.`;
         try { appendIntegrityEvent({ ts: new Date().toISOString(), session: claudeSession || "", workspace: ws, kind: (handoffCtx && handoffCtx.passNoFindings) ? "verify-incomplete" : "verify-handoff-missing", severity: "error", detail: en ? enMsg : ko, detailKo: ko, detailEn: enMsg }); } catch { /* best-effort */ }
         try { writePhase("incomplete", { session: claudeSession, workspace: ws }); } catch { /* best-effort */ }
       }
@@ -355,8 +360,8 @@ process.stdin.on("end", () => {
     process.stderr.write(`[verify-guard] 같은 진행 상태에서 종료 차단 안내가 반복됐으나 검증이 완료되지 않음 — 무한정지 방지로 종료를 허용합니다.\n`);
     if ((residual && !residualOk) || residualWriteFailed) {
       const ids9 = residualWriteFailed ? String(anchor.campaignId || "") : residual.items.map((x) => x.campaignId).join(", ");
-      const ko9 = residualWriteFailed ? `"즉시 재검증" 판단(캠페인 ${ids9})의 마커 기록에 실패해 실행 강제를 걸지 못한 채 턴이 끝났습니다 — 디스크 확인 후 마감문을 다시 출력하세요.` : `"즉시 재검증" 판단(캠페인 ${ids9})이 이행되지 않은 채 턴이 끝났습니다 — 다음 턴에도 계속 차단됩니다.`;
-      const en9 = residualWriteFailed ? `The "Verify now" marker for campaign ${ids9} could not be written, so enforcement is not armed — check the disk and re-emit the closeout.` : `The "Verify now" call (campaign ${ids9}) was not carried out before the turn ended — it keeps blocking next turns.`;
+      const ko9 = residualWriteFailed ? `"즉시 재검증" 판단(캠페인 ${ids9})의 마커 기록에 실패해 실행 강제를 걸지 못한 채 턴이 끝났습니다 — 디스크를 확인한 뒤 응답을 다시 마치면 제출된 마감 기록으로 저장을 재시도합니다.` : `"즉시 재검증" 판단(캠페인 ${ids9})이 이행되지 않은 채 턴이 끝났습니다 — 다음 턴에도 계속 차단됩니다.`;
+      const en9 = residualWriteFailed ? `The "Verify now" marker for campaign ${ids9} could not be written, so enforcement is not armed — check the disk; finishing the reply again retries the write with the submitted closeout record.` : `The "Verify now" call (campaign ${ids9}) was not carried out before the turn ended — it keeps blocking next turns.`;
       try { appendIntegrityEvent({ ts: new Date().toISOString(), session: claudeSession || "", workspace: ws, kind: "verify-residual-now", severity: "error", detail: ko9, detailKo: ko9, detailEn: en9 }, { supersedeSameKindWs: true }); } catch { /* best-effort */ }
       try { writePhase("incomplete", { session: claudeSession, workspace: ws }); } catch { /* best-effort */ }
       clearAttempts(attemptKey);
@@ -367,14 +372,14 @@ process.stdin.on("end", () => {
         ts: new Date().toISOString(),
         session: claudeSession || "",
         workspace: ws,
-        kind: capReached ? ((handoffCtx && handoffCtx.passNoFindings) ? "verify-incomplete" : "verify-handoff-missing") : "verify-incomplete", // 통과·지적 0=인계 누락이 아니라 잔여 미검증(보류 계열)
+        kind: capOpen ? ((handoffCtx && handoffCtx.passNoFindings) ? "verify-incomplete" : "verify-handoff-missing") : "verify-incomplete", // 통과·지적 0=인계 누락이 아니라 잔여 미검증(보류 계열)
         severity: "error",
         // detailKo/detailEn 동시 저장 — 확장 표시부가 현재 언어를 고름. detail은 구버전 판독 폴백.
         detail: en
-          ? (capReached ? `${(handoffCtx && handoffCtx.passNoFindings) ? `Verification cap ${round} reached — the last verdict passed with no open findings, but edits made after that pass ended the turn unverified. The next turn's first verification clears this.` : `Verification cap ${round} was reached, but the required accept/rebut/park/user-decision closeout was not shown. Do not ignore this red alert: complete the four-way closeout before treating the work as closed.`}` : `Verify mode:${c.verifyMode} — stop reminders repeated without progress, and this turn ended without completed verification (this turn's result is UNVERIFIED).`)
-          : (capReached ? `${(handoffCtx && handoffCtx.passNoFindings) ? `검증 상한 ${round} 도달 — 마지막 판정은 통과였고 열린 지적도 없지만, 통과 이후의 수정이 검증되지 않은 채 턴이 끝났습니다(잔여 수정=미검증). 다음 턴 첫 검증이 이 잔여를 닫으면 해소됩니다.` : `검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.`}` : `검증 모드:${c.verifyMode} — 진행 변화 없이 종료 차단 안내가 반복된 뒤 검증 미완료 상태로 이 턴이 종료됨(이 턴 결과는 미검증).`),
-        detailKo: capReached ? `${(handoffCtx && handoffCtx.passNoFindings) ? `검증 상한 ${round} 도달 — 마지막 판정은 통과였고 열린 지적도 없지만, 통과 이후의 수정이 검증되지 않은 채 턴이 끝났습니다(잔여 수정=미검증). 다음 턴 첫 검증이 이 잔여를 닫으면 해소됩니다.` : `검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류가 표시되지 않았습니다. 이 빨강은 그냥 지나치면 안 됩니다. 네 갈래 마감문을 작성한 뒤에만 작업을 닫으세요.`}` : `검증 모드:${c.verifyMode} — 진행 변화 없이 종료 차단 안내가 반복된 뒤 검증 미완료 상태로 이 턴이 종료됨(이 턴 결과는 미검증).`,
-        detailEn: capReached ? `${(handoffCtx && handoffCtx.passNoFindings) ? `Verification cap ${round} reached — the last verdict passed with no open findings, but edits made after that pass ended the turn unverified. The next turn's first verification clears this.` : `Verification cap ${round} was reached, but the required accept/rebut/park/user-decision closeout was not shown. Do not ignore this red alert: complete the four-way closeout before treating the work as closed.`}` : `Verify mode:${c.verifyMode} — stop reminders repeated without progress, and this turn ended without completed verification (this turn's result is UNVERIFIED).`,
+          ? (capOpen ? `${(handoffCtx && handoffCtx.passNoFindings) ? `Verification cap ${round} reached — the last verdict passed with no open findings, but edits made after that pass ended the turn unverified. The next turn's first verification clears this.` : `Verification cap ${round} was reached, but the required accept/rebut/park/user-decision closeout record was not submitted. Do not ignore this red alert: treat the work as closed only after the implementer submits the closeout record.`}` : `Verify mode:${c.verifyMode} — stop reminders repeated without progress, and this turn ended without completed verification (this turn's result is UNVERIFIED).`)
+          : (capOpen ? `${(handoffCtx && handoffCtx.passNoFindings) ? `검증 상한 ${round} 도달 — 마지막 판정은 통과였고 열린 지적도 없지만, 통과 이후의 수정이 검증되지 않은 채 턴이 끝났습니다(잔여 수정=미검증). 다음 턴 첫 검증이 이 잔여를 닫으면 해소됩니다.` : `검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류(마감 기록)가 제출되지 않았습니다. 이 빨강은 그냥 지나치면 안 됩니다. 구현 담당이 마감 기록을 제출한 뒤에만 작업을 닫으세요.`}` : `검증 모드:${c.verifyMode} — 진행 변화 없이 종료 차단 안내가 반복된 뒤 검증 미완료 상태로 이 턴이 종료됨(이 턴 결과는 미검증).`),
+        detailKo: capOpen ? `${(handoffCtx && handoffCtx.passNoFindings) ? `검증 상한 ${round} 도달 — 마지막 판정은 통과였고 열린 지적도 없지만, 통과 이후의 수정이 검증되지 않은 채 턴이 끝났습니다(잔여 수정=미검증). 다음 턴 첫 검증이 이 잔여를 닫으면 해소됩니다.` : `검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류(마감 기록)가 제출되지 않았습니다. 이 빨강은 그냥 지나치면 안 됩니다. 구현 담당이 마감 기록을 제출한 뒤에만 작업을 닫으세요.`}` : `검증 모드:${c.verifyMode} — 진행 변화 없이 종료 차단 안내가 반복된 뒤 검증 미완료 상태로 이 턴이 종료됨(이 턴 결과는 미검증).`,
+        detailEn: capOpen ? `${(handoffCtx && handoffCtx.passNoFindings) ? `Verification cap ${round} reached — the last verdict passed with no open findings, but edits made after that pass ended the turn unverified. The next turn's first verification clears this.` : `Verification cap ${round} was reached, but the required accept/rebut/park/user-decision closeout record was not submitted. Do not ignore this red alert: treat the work as closed only after the implementer submits the closeout record.`}` : `Verify mode:${c.verifyMode} — stop reminders repeated without progress, and this turn ended without completed verification (this turn's result is UNVERIFIED).`,
       });
     } catch { /* 이벤트 기록 실패는 종료를 막지 않음 */ }
     try { writePhase("incomplete", { session: claudeSession, workspace: ws }); } catch { /* best-effort */ } // 검증 미완 종료
@@ -392,13 +397,13 @@ process.stdin.on("end", () => {
         ? (en
           ? `[Judgment gate · actual round ${round}] ${judgePending.length} verdict(s) still need the implementer's judgment before this turn can end: ${judgePending.map((x) => `${x.askId} [${x.reason}]`).join(", ")}. Record it: node "${BRIDGE}" round-judge <askId> <close-oos|re-verify|escalate --decision <id>> --note "..." — escalate (a direction question for the user) needs a decision made first with: node "${BRIDGE}" decisions raise --kind ... (decisions list shows it to the user).`
           : `[판단 관문 · 실제 회차 ${round}] 구현자 판단이 기록되지 않은 판정이 ${judgePending.length}건 있어 이 턴을 끝낼 수 없다: ${judgePending.map((x) => `${x.askId} [${x.reason}]`).join(", ")}. 기록: node "${BRIDGE}" round-judge <askId> <close-oos|re-verify|escalate --decision <id>> --note "근거" — escalate(사용자 방향 질문)는 먼저 node "${BRIDGE}" decisions raise --kind ... 로 결정 장부 항목을 만들어야 한다(사용자는 decisions list 로 본다).`)
-        : (capReached && capCloseout && capCloseout.ok && !checkOk) // [RULE-COMPLIANCE] 마감문은 맞는데 규칙 자가점검이 없음 — 그것만 요구
+        : (capReached && capCloseout && capCloseout.ok && !checkOk) // [RULE-COMPLIANCE] 마감 기록은 맞는데 규칙 자가점검이 없음 — 그것만 요구
         ? ruleCheckInstruction(en ? "en" : "ko", eff, check.verdict, check.why)
         : (!capReached && !checkOk && (!needVerify || verified) && residualOk) // [RULE-COMPLIANCE] 검증은 됐거나 불필요한데 자가점검만 없음(검증 재촉 아님)
         ? ruleCheckInstruction(en ? "en" : "ko", eff, check.verdict, check.why)
-        : residualWriteFailed // 마커 기록 실패는 상한 안내보다 우선(마감문은 이미 맞게 썼고 저장만 실패 — 재출력 요구)
-        ? (en ? `[Residual marker/alert write failed] Your closeout called "Verify now" but the marker or the yellow alert could not be written (disk). Re-emit the same closeout so the write is retried; the turn is not settled until both the marker and the alert exist.` : `[잔여 재검증 마커 기록 실패] 마감문의 "즉시 재검증" 판단(마커 또는 노랑 경보)을 저장하지 못했다(디스크). 같은 마감문을 다시 출력해 저장을 재시도하라 — 마커·경보가 남기 전에는 마감이 인정되지 않는다.`)
-        : capReached
+        : residualWriteFailed // 마커 기록 실패는 상한 안내보다 우선(마감 기록은 맞게 제출됐고 저장만 실패 — 다시 마치면 같은 기록으로 재시도)
+        ? (en ? `[Residual marker/alert write failed] Your closeout called "Verify now" but the marker or the yellow alert could not be written (disk). Your submitted closeout record stays valid — check the disk and finish the reply again so the write is retried (no resubmission needed); the turn is not settled until both the marker and the alert exist.` : `[잔여 재검증 마커 기록 실패] 마감문의 "즉시 재검증" 판단(마커 또는 노랑 경보)을 저장하지 못했다(디스크). 제출한 마감 기록은 그대로 유효하다 — 디스크를 확인하고 응답을 다시 마치면 저장을 재시도한다(다시 제출할 필요 없음). 마커·경보가 남기 전에는 마감이 인정되지 않는다.`)
+        : capOpen // 유효한 마감 기록이 있으면 제출 안내 대신 남은 조건(잔여 재검증 등)을 알린다
         ? capHandoffInstruction(en ? "en" : "ko", round, (handoffCtx && handoffCtx.verdict) || "not-pass", handoffCtx, capCloseout && capCloseout.detail) // 실제 판정 전달(2026-08-05 이중 실패 봉합 — 하드코딩 not-pass 폐기)
         : (residual && !residualOk)
         ? (en

@@ -78,12 +78,14 @@ t("회차 숫자 불일치=장부 실제값과 함께 명시", () => {
 });
 t("훅 안내문 첫 줄=거부 사유(있을 때만) · 없으면 종전 안내 그대로", () => {
   const withWhy = VH.capHandoffInstruction("ko", "5/5", "실패", ctx, "[수용·처리] 1번째 줄(R5-F1): '근거' 칸 — 스스로 확인 가능한 근거가 필요");
-  assert.ok(withWhy.startsWith("[직전 마감문 거부 사유] [수용·처리] 1번째 줄(R5-F1): '근거' 칸"), withWhy.split("\n")[0]);
+  assert.ok(withWhy.startsWith("[직전 마감 기록 거부 사유] [수용·처리] 1번째 줄(R5-F1): '근거' 칸"), withWhy.split("\n")[0]); // [묶음 3] 마감 기록 명령으로 이관 — 사유 머리 이름 갱신
   assert.ok(withWhy.includes("[잔여 위험 판단]") && withWhy.includes("[검증 모드 · 실제 회차 5/5]"), "종전 안내 본문 유지");
   const without = VH.capHandoffInstruction("ko", "5/5", "실패", ctx);
-  assert.ok(!without.includes("[직전 마감문 거부 사유]") && without.trimStart().startsWith("회차 숫자를 쓰면"), "detail 없음=종전 첫 줄");
+  assert.ok(!without.includes("[직전 마감 기록 거부 사유]") && without.trimStart().startsWith("회차 숫자를 쓰면"), "detail 없음=종전 첫 줄");
+  assert.ok(without.includes("closing submit --file") && without.includes("마감 기록 제출됨(대시보드)"), "제출 명령·사용자 답 한 줄 안내");
   const en = VH.capHandoffInstruction("en", "5/5", "fail", ctx, "[Accepted and handled] line 1 (R5-F1): cell \"Evidence\" needs a self-identifying fact");
-  assert.ok(en.startsWith("[Why the previous closeout was rejected] [Accepted and handled] line 1"), en.split("\n")[0]);
+  assert.ok(en.startsWith("[Why the closeout record was not accepted] [Accepted and handled] line 1"), en.split("\n")[0]);
+  assert.ok(en.includes("closing submit --file") && en.includes("Closeout record submitted (dashboard)"), "en: submit command · one-line reply note");
 });
 t("영문 스키마도 같은 detail 구조(칸 이름 영문)", () => {
   const goodEn = `[Verification cap closeout]

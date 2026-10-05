@@ -209,6 +209,8 @@ interface BridgeState {
   decisions: { open: number; items: Array<{ id: string; question: string; kind: string; origin: string; ts: string; block: string }> } | null; // [§7 4-2b] 결정 장부(사용자 답 대기) — 읽기 전용·답은 CLI decisions choose|delegate. null=무폴더/구 런타임
   curation: { lastItems: Array<{ id: string; title: string; op: string; status: string }>; lastTs: string; lastOutcome: string; lastReason: string; lastTrigger: string; runs: number; proposedTotal: number; adopted: number; declined: number; adoptRate: number; pending: number; running: boolean; archiveSize: number; selOverCount: number; unusedCount: number; unusedDays: number; campaignsSince: number; maxPerRun: number; maxPending: number; tickK: number } | null; // [CURATION v3 §3 E·F] 정리 제안 요약·측정(수칙 카드 1줄) — null=무폴더/구 런타임
   // [RULE-SUPPLY 묶음 2-나-2 2단계] 사용자 말 분류 — 규칙 칸·결정 기록 자리 제안·분류하지 못한 말·요약(bridge/classify.js userWordsView · 판독 불가 칸=null)
+  // [RULE-SUPPLY 묶음 3 §4] 검증 상한 마감 기록(bridge/verify-cap-handoff.js closeoutView · 판독 불가=readError)
+  closeouts: { readError: boolean; total: number; truncated: boolean; items: Array<{ id: string; ts: string; host: string; round: { count: number; budget: number } | null; residualRisk: string; needsUserDecision: boolean; decisionCount: number; alertKind: string; verdict: string | null; counts: { accepted: number; rebutted: number; parked: number } | null; text: string }> } | null;
   userWords: { wsKey: string; repoKey: string; summary: any; seats: Array<{ id: string; seat: string; quote: string; why: string; provider: string; decisionKind: string; quoteSource: string; ts: string }> | null; held: Array<{ id: string; source: string; reason: string; ts: string; text: string; canRequeue: boolean }> | null } | null;
   // [HARNESS-STRUCTURE §B3 · D4] 수칙 흐름 4칸(개요 패널 카드) — bridge/rules-flow.js rulesFlowFor(ws) 그대로(판독 실패=null → 카드가 '자료 없음'으로)
   rulesFlow: { core: { st: string; count: { supportedEnv: number; alwaysBlocker: number; outOfScope: number; total: number }; injectedChars: number }; archive: { state: string; count: number; max: number; selectCap: { items: number; bytes: number }; lastSelection: { ts: string; selectedCount: number; askId: string } | null }; proposals: { pending: number; max: number; nextCheck: { tickK: number; tickCount: number; unusedDays: number; lastTickTs: string } }; curator: { lastTs: string; lastOutcome: string; lastReason: string; lastTrigger: string; running: boolean; metrics: { adoptRate: number; proposedTotal: number; adopted: number; declined: number; archiveSize: number; selOverCount: number; unusedCount: number }; lastItems: Array<{ id: string; title: string; op: string; status: string }> } } | null;
@@ -2837,6 +2839,10 @@ function computeState(turnsN: number): BridgeState {
         }));
         return { open: open.length, items };
       } catch { return null; }
+    })(),
+    closeouts: (() => {
+      // [RULE-SUPPLY 묶음 3 §4] 검증 상한 마감 기록 — 장부 꼬리 판독만(읽기 전용 · 개요 '지금 정할 것' 합산 없음 — 사용자 판단은 결정 장부가 맡음)
+      try { if (!ws) return null; const VH9: any = require(path.join(BRIDGE_DIR, "verify-cap-handoff.js")); return typeof VH9.closeoutView === "function" ? VH9.closeoutView(ws) : null; } catch { return null; }
     })(),
     curation: (() => {
       // [CURATION v3 §3 E·F] 정리 제안 요약·측정 — 장부 판독만(실행 없음). 개요 '지금 정할 것'엔 합산하지 않는다(후보 자체는 기존 '수칙서 후보' 항목이 담당).
@@ -5970,6 +5976,14 @@ class Dashboard {
     </div>
   </details>
 
+  <details id="closeoutSec" class="backlog-fold" style="display:none">
+    <summary class="sec accent-rose">${t("검증 상한 마감 기록 — 검증 횟수를 다 쓴 작업을 구현 담당이 어떻게 정리했는지", "Verification Cap Closeouts — how the implementer wrapped up work that used every verification round")} · <span class="sub2" id="coSummary"></span></summary>
+    <div class="card">
+      <div class="hint">${t("검증 횟수를 다 쓰면 구현 담당은 마지막 검증 지적을 <b>고친 것 · 반박해 닫은 것 · 보관함으로 옮긴 것 · 사용자 결정이 필요한 것</b>으로 나눠 이 기록으로 제출해요. 답 화면에는 요약 한 줄만 남고 자세한 내용은 여기 있어요. 이 기록은 <b>검증 통과가 아니에요</b> — 응답을 마칠 때 지금 상태로 다시 검사되고, 제출 뒤 파일이 바뀌거나 보관함·결정 목록이 바뀌면 다시 제출해야 끝나요.", "When every verification round is used, the implementer sorts the last findings into <b>fixed · rebutted and closed · moved to the parking lot · needs your decision</b> and submits this record. The reply shows only a one-line summary; the details are here. This record is <b>not a verification pass</b> — it is checked again against the current state when the reply finishes, and must be resubmitted if files change afterwards or the parking lot / decision list changes.")}</div>
+      <div id="coList" style="margin-top:6px"></div>
+    </div>
+  </details>
+
   <details id="decisionsSec" class="backlog-fold" style="display:none">
     <summary class="sec accent-rose">${t("결정 장부 — 사용자가 정할 것", "Decision Ledger — for you to decide")} · <span class="sub2" id="dcSummary"></span></summary>
     <div class="card">
@@ -8027,6 +8041,30 @@ class Dashboard {
         row.appendChild(el("span",""," "+it.question));
         var pre=document.createElement("pre"); pre.style.cssText="white-space:pre-wrap;font-size:11px;margin:4px 0 0;padding:6px;border:1px solid var(--vscode-widget-border,#555);border-radius:6px"; pre.textContent=it.block||""; row.appendChild(pre);
         var meta=el("div","muted", it.id+" · "+(it.origin||"")+" · "+(it.ts||"")); meta.style.fontSize="11px"; row.appendChild(meta);
+        list.appendChild(row);
+      });
+    });
+    // [RULE-SUPPLY 묶음 3 §4] 검증 상한 마감 기록 카드 — 읽기 전용(제출은 구현 담당의 closing submit · 장부 단일 권위). XSS 안전: createElement/textContent. 개요 합산 없음.
+    safe(function(){
+      const sec=$("closeoutSec"); if(!sec) return;
+      const co=d.closeouts;
+      if(!co){ sec.style.display="none"; return; } // 무폴더·구 런타임만 숨김 — 기록 0건은 '아직 없음'으로 표시(기능 발견 가능)
+      sec.style.display="";
+      const sum=$("coSummary"); const list=$("coList"); if(!list) return; list.replaceChildren();
+      if(co.readError){ if(sum) sum.textContent=T("기록을 불러올 수 없음(판독 실패) — 기록 파일의 권한·잠금 상태를 확인하세요","cannot read the records (read failure) — check the record file's permissions/lock state"); return; }
+      if(sum) sum.textContent = co.total ? T("최근 ","latest ")+co.items.length+T("건"," shown")+(co.total>co.items.length?T(" · 전체 "," · total ")+co.total+(co.truncated?"+":""):"") : T("아직 없음 — 검증 횟수를 다 쓴 작업이 생기면 여기 남아요","none yet — appears when a task uses every verification round");
+      var rrText=function(k){ return k==="now" ? T("검증 못 받은 마지막 수정: 지금 다시 검증해야 함(다음 응답은 그 검증이 통과해야 끝나요)","last unverified edit: must be verified again now (the next reply can finish only after that verification passes)")
+        : k==="next" ? T("검증 못 받은 마지막 수정: 다음 작업의 첫 검증에서 함께 확인","last unverified edit: checked together in the next task's first verification")
+        : T("검증 못 받은 마지막 수정: 확인할 코드 수정 없음(문구뿐)","last unverified edit: no code change to check (wording only)"); };
+      co.items.forEach(function(it){
+        var row=el("div",""); row.style.margin="6px 0"; row.style.fontSize="12px"; row.style.lineHeight="1.5";
+        row.appendChild(el("span","badge b-always", it.round ? (it.round.count+"/"+it.round.budget) : "?"));
+        row.appendChild(el("span",""," "+(it.ts||"")+" · "+(it.host==="codex"?T("구현 Codex","implementer Codex"):"Claude")));
+        var c9=it.counts||{accepted:0,rebutted:0,parked:0};
+        var ln=el("div","", T("고친 것 ","fixed ")+c9.accepted+T(" · 반박해 닫은 것 "," · rebutted and closed ")+c9.rebutted+T(" · 보관함으로 옮긴 것 "," · moved to the parking lot ")+c9.parked+T(" · 사용자 결정 필요 "," · needs your decision ")+(it.decisionCount||0)+(it.needsUserDecision?T(" (결정 장부에서 답해 주세요)"," (answer in the decision ledger)"):"")); ln.style.fontSize="11px"; row.appendChild(ln);
+        var rr=el("div","muted", rrText(it.residualRisk)); rr.style.fontSize="11px"; row.appendChild(rr);
+        var fold=document.createElement("details"); var sm=document.createElement("summary"); sm.textContent=T("기록 원문 보기","show the record"); sm.style.fontSize="11px"; fold.appendChild(sm);
+        var pre=document.createElement("pre"); pre.style.cssText="white-space:pre-wrap;font-size:11px;margin:4px 0 0;padding:6px;border:1px solid var(--vscode-widget-border,#555);border-radius:6px"; pre.textContent=it.text||""; fold.appendChild(pre); row.appendChild(fold);
         list.appendChild(row);
       });
     });
@@ -10180,7 +10218,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const nFail = errs.filter((e) => e.kind === "verdict-nonclean").length; // Codex 결론 '실패'(빨강·재검증 통과 시 자동 해소)
       const nSession = errs.filter((e) => e.kind === "session-missing").length; // 연결 세션 없음(빨강·연결되면 자동 해소, ack 아님)
       const nHook = errs.filter((e) => e.kind === "codex-hook-missing").length; // C-C 구현 훅 미작동(heartbeat로만 해소)
-      const nHandoff = errs.filter((e) => e.kind === "verify-handoff-missing").length; // 상한 뒤 네 갈래 마감문 누락
+      const nHandoff = errs.filter((e) => e.kind === "verify-handoff-missing").length; // 상한 뒤 마감 기록 미제출
       const nResidual = errs.filter((e) => e.kind === "verify-residual-now").length; // 마감문 "즉시 재검증" 판단 미이행(다음 턴 종료 차단 중)
       const nIncomplete = errs.length - nFail - nSession - nHook - nHandoff - nResidual; // 검증 미완(검증 자체가 안 일어남·ack 필요)
       const ekinds = [nFail > 0, nSession > 0, nHook > 0, nHandoff > 0, nResidual > 0, nIncomplete > 0].filter(Boolean).length;
@@ -10200,7 +10238,7 @@ export function activate(context: vscode.ExtensionContext): void {
           (nFail ? tE(`\n\n검증 실패: 고쳐서 다시 검증해 통과하면 빨강이 사라집니다.`,`\n\nVerify failed: fix, re-verify to pass, and the red clears.`) : ``) +
           (nSession ? tE(`\n\nCodex 세션 없음: 'Codex 세션 연결'에서 수동 연결하거나, 검증을 계속 진행하면 자동 연결을 시도해요(연결되면 사라짐 · '확인함'으론 안 닫힘).`,`\n\nNo Codex session: link manually under 'Codex Session Link', or keep verifying for auto-link (clears when linked · cannot be dismissed).`) : ``) +
           (nHook ? tE(`\n\nCodex 구현 훅 미작동: 플러그인을 설치·활성화하고 Codex 설정 → Hook에서 훅 전부를 신뢰한 뒤, 사용하려는 Codex 대화를 다시 열거나 프롬프트를 보내 실제 lifecycle heartbeat를 확인하세요. 구현 연결과 초록 표시는 그 대화로 자동 이동합니다. 이 상태에서는 모든 턴 검증이 강제되지 않습니다.`,`\n\nCodex implementer hook inactive: install/enable the plugin, trust all the hooks under Codex Settings → Hooks, then reopen the Codex conversation or send a prompt and confirm a real lifecycle heartbeat. The implementer link and green marker move there automatically. Verify-every-turn is not enforced in this state.`) : ``) +
-          (nHandoff ? tE(`\n\n상한 마감 누락: 마지막 검증 지적이 수용·반박·보관함·사용자 판단 중 어디로 갔는지 정리되지 않았습니다. 그냥 지나치면 안 되며, 구현 대화에서 네 갈래 마감문을 마치면 자동으로 사라집니다.`,`\n\nCap closeout missing: the latest verification findings were not assigned to accepted, rebutted, parked, or user-decision lanes. Do not ignore it; it clears automatically after the implementer conversation completes the four-way closeout.`) : ``) +
+          (nHandoff ? tE(`\n\n상한 마감 누락: 마지막 검증 지적이 수용·반박·보관함·사용자 판단 중 어디로 갔는지 정리되지 않았습니다. 그냥 지나치면 안 되며, 구현 대화에서 마감 기록을 제출하면 자동으로 사라집니다(자세한 내용은 검증 탭 '검증 상한 마감 기록').`,`\n\nCap closeout missing: the latest verification findings were not assigned to accepted, rebutted, parked, or user-decision lanes. Do not ignore it; it clears automatically after the implementer conversation submits the closeout record (details: 'Verification Cap Closeouts' in the Verify tab).`) : ``) +
           (errs.some((e) => e.sig === "session-missing:blocked") ? tE(`\n\n자동 생성이 멈춰 있어요 — 계속되면 `,`\n\nAuto-creation is paused — if it persists, `) + `[${tE("GitHub에 문제 신고","report on GitHub")}](https://github.com/kimbyungsu/codex-peek/issues)` : ``) +
           (nIncomplete ? tE(`\n\n검증 미완: 이 턴이 '검증 없이' 종료됐을 수 있어요(확인 필요).`,`\n\nUnverified: this turn may have ended WITHOUT verification (needs review).`) : ``),
       );
