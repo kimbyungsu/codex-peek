@@ -31,13 +31,17 @@ process.stdin.on("end", () => {
   // 이유: 앵커 ts 가 캠페인 키(검증 왕복 상한)·선별 관문·라이브 라운드의 원천이라, 알림마다 새로 찍히면 긴 시험을 배경에서 돌리는 턴에서
   // 상한이 매번 0 으로 되돌아가고(2026-09-12 실측: 같은 세션에 캠페인 6개·전부 1회차) 관문도 알림마다 다시 닫혔다.
   const sysNotice = isSystemNotificationHook(hook);
-  let carried = null;
+  let carried = null, anchorReadErr = false;
   if (sysNotice && sid) {
     try {
       const safe0 = String(sid).replace(/[^a-zA-Z0-9_-]/g, "");
-      const p0 = safe0 ? JSON.parse(fs.readFileSync(path.join(ACTIVE_DIR, safe0 + ".json"), "utf8")) : null;
+      // [RULE-SUPPLY 묶음 2-나-2 · 검증 새 캠페인 1회차] 직전 앵커 '없음'(ENOENT)과 '못 읽음'(판독·형식 오류)을 구분 — 못 읽은 앵커는 덮어쓰지 않는다(아래 writeAnchors)
+      let raw0 = null; try { raw0 = safe0 ? fs.readFileSync(path.join(ACTIVE_DIR, safe0 + ".json"), "utf8") : null; } catch (e) { if (!(e && e.code === "ENOENT")) anchorReadErr = true; raw0 = null; }
+      let p0 = null; if (raw0 !== null) { try { p0 = JSON.parse(raw0); } catch { anchorReadErr = true; p0 = null; } }
       if (p0 && typeof p0 === "object" && p0.claudeSession === sid && typeof p0.ts === "string" && Number.isFinite(Date.parse(p0.ts))) carried = p0;
-    } catch { carried = null; } // 직전 앵커가 없으면(세션 첫 훅이 알림) 보통 턴으로 처리
+      // [검증 새 캠페인 2회차] 파일은 있는데 올바른 앵커가 아님(JSON null·필수 칸 누락·잘못된 시각·다른 세션)=못 읽음 — 앵커 쓰기는 모두 세션·시각을 담으므로 정상 앵커는 여기 오지 않는다
+      else if (raw0 !== null) anchorReadErr = true;
+    } catch { carried = null; } // 직전 앵커가 없으면(세션 첫 훅이 알림) 새 시각의 앵커만 — 사람 말이 아니므로 원문·차례 기록·대기열은 어떤 경우에도 만들지 않는다(아래)
   }
   const activeTs = carried ? carried.ts : new Date().toISOString();
   // [약속 발화 포착 §1] 턴 원문 스냅샷 — `constraint add` CLI의 유일 대조 권위(구현모델 작문·기억 재구성 차단).
@@ -48,7 +52,7 @@ process.stdin.on("end", () => {
     const ptxt = (hook && typeof hook.prompt === "string") ? hook.prompt : "";
     if (carried) { // 알림 턴=사용자 원문 아님 — 스냅샷을 새로 쓰지 않고 직전 턴의 결속을 그대로 잇는다(선별 영수증·약속 상신이 같은 턴으로 이어짐)
       constraintAnchor = String(carried.constraintAnchor || ""); constraintSourceHash = String(carried.constraintSourceHash || ""); constraintRepoKey = String(carried.constraintRepoKey || "");
-    } else if (ptxt && sid) {
+    } else if (ptxt && sid && !sysNotice) { // 비-발화(알림·하위 담당 보고)는 직전 앵커를 못 이어도 사람 말 경로로 넘어가지 않는다(원문 스냅샷·차례 기록·대기열 없음)
       // [검증 2회차 blocker②] 계약 판독은 이 훅에서 한 번(cSnap0) — 스냅숏 기록 뒤 계약을 다시 읽지 않는다
       // (두 판독 사이 다른 창의 정찰 대상 전환=A 원문+B 표식 경합). 표식은 스냅숏 "이전"에 확정하고 같은 레코드에 쓴다.
       let cSnap0 = null; try { cSnap0 = loadContract(ws); } catch { cSnap0 = null; }
@@ -83,7 +87,7 @@ process.stdin.on("end", () => {
     const UW = require("./user-words.js");
     const tp0 = (hook && typeof hook.transcript_path === "string") ? hook.transcript_path : "";
     if (sid && tp0) UW.captureChoiceAnswers(ws, { sessionId: sid, transcriptPath: tp0, provider: "claude" }); // 차례·저장소는 차례 열쇠로 차례 기록에서(열쇠 없음·중복=보류 · 세션 첫 훅=커서만 세움 · 소급 없음)
-    if (!carried && constraintAnchor) UW.enqueuePrompt(ws, { anchor: constraintAnchor, sourceHash: constraintSourceHash, sessionId: sid, repoKey: constraintRepoKey, provider: "claude" });
+    if (!sysNotice && constraintAnchor) UW.enqueuePrompt(ws, { anchor: constraintAnchor, sourceHash: constraintSourceHash, sessionId: sid, repoKey: constraintRepoKey, provider: "claude" }); // 사람 말만(비-발화는 앵커 복원 성패와 무관하게 제외)
   } catch { /* best-effort */ }
   // [P7 ⓑ] 이전 앵커의 폴더와 다르면 변경 기록(해제 전까지 승계) — ask-start가 이 기록을 보면 시작하지 않는다(--folder-changed-ok 로만).
   const folderChange = folderChangeOf(prevAnchor0, ws);
@@ -104,6 +108,8 @@ process.stdin.on("end", () => {
   };
   const activePayload = JSON.stringify({ ...anchorBase, ...(prevDirective ? { directive: prevDirective } : {}), ...(prevReset ? { directiveReset: prevReset } : {}) }); // 전달 기록 보존(계획 확정 전 덮어쓰기 손실 방지)
   const writeAnchors = (payload) => {
+    // [묶음 2-나-2] 비-발화 차례에서 직전 앵커를 '못 읽었으면' 새 시각으로 덮어쓰지 않는다(덮으면 새 차례·새 검증 캠페인이 시작된 것처럼 됨 · 다음 사람 입력이 다시 씀)
+    if (sysNotice && anchorReadErr) { try { process.stderr.write("[Codex Bridge] previous turn anchor unreadable on a non-human prompt — anchor left as is (session " + String(sid) + ")\n"); } catch { /* 진단 실패 무해 */ } return; }
     let okG = false, okS = true;
     try { okG = atomicWrite(path.join(BRIDGE_DIR, "active.json"), payload) === true; } catch { okG = false; }
     if (sid) { try { const safe = String(sid).replace(/[^a-zA-Z0-9_-]/g, ""); if (safe) okS = atomicWrite(path.join(ACTIVE_DIR, safe + ".json"), payload) === true; } catch { okS = false; } }
@@ -183,7 +189,7 @@ process.stdin.on("end", () => {
   }
 
   // 라이브 진행: 턴 시작 = 'Claude 작업중' + 라운드 0 리셋(이 턴의 ask 횟수는 codex-bridge가 증가시킴).
-  if (!carried) try { // 알림 턴은 라이브 라운드를 0 으로 되돌리지 않는다(화면 '준비' 고착·회차 미표시의 원인)
+  if (!sysNotice) try { // 알림·보고 턴은 라이브 라운드를 0 으로 되돌리지 않는다(화면 '준비' 고착·회차 미표시의 원인 · 직전 앵커 복원 성패와 무관)
     writePhase("claude-working", {
       round: 0,
       session: hook.session_id || process.env.CLAUDE_CODE_SESSION_ID || "",
@@ -229,6 +235,8 @@ process.stdin.on("end", () => {
       dlvPlan.record = { gen: dlvPlan.gen, parts: dlvPlan.parts, sentAt: sentAt9, lastTurnTs: activeTs, reason: dlvPlan.reason };
       provenanceInStatic = true; envelopeDynOnly = true; // 경위 안내·수칙 인지 전문은 정적 블록에 속함(세대 결속)
     }
+    // [RULE-SUPPLY 묶음 2-나-2 §3-7] 사용자 말에서 나온 후보가 도장을 기다리면 사실 1줄(그 상태에 세션당 1회 · 지시문 아님) — 짧아서 안내 앞쪽(예산 절단 회피)
+    try { const pn = require("./classify.js").pendingNoticeFor(ws, c, sid, lang); if (pn) advisories.push(pn); } catch { /* advisory */ }
     // 탐색(3트랙) 자동 지시 — 지도 없음/낡음일 때 그 상태에 1회만(상태 서명 기반·advisory). 실패해도 훅을 막지 않음.
     try { const sd = buildScoutDirective(ws, c); if (sd) advisories.push(sd); } catch { /* advisory */ }
     // 설계 경위 선조회 안내(MAP-PROVENANCE-DESIGN §3) — scoutMode 독립(2트랙에서도 why 동작)·색인 존재 시만 1줄.
@@ -239,6 +247,8 @@ process.stdin.on("end", () => {
     try { const adv = require("./map-bootstrap.js").hookTick(ws); if (adv) advisories.push(adv); } catch { /* advisory */ }
     // [CURATION v3 §3 A ②③] 독립 큐레이션 tick(훅 층) — 계약·잠금·tick 상태 3파일만 보고 최소 간격이 지났으면 `curate tick`을 detach(판정·실행은 자식)·무고지·실패=null. 검증 경로 무접촉(P1).
     try { const adv = require("./curation.js").curationHookTick(ws, c); if (adv) advisories.push(adv); } catch { /* advisory */ }
+    // [RULE-SUPPLY 묶음 2-나-2] 사용자 말 분류 자동 계기(캠페인 마감) — 훅은 간격·잠금·상태 파일만 보고 `classify tick` 을 detach(판정·실행은 자식)·무고지·검증 경로 무접촉
+    try { require("./classify.js").classifyHookTick(ws, c); } catch { /* advisory */ }
     // [§4-B ④] 안내는 매 턴 예산(하네스 소유분 1,500=slim 700+상태 250+안내 550) 안에서만 — 검증 모드 밖(전달 계획 없음)은 종전 그대로
     if (dlvPlan && dlvPlan.budget) {
       const bt9 = applyClaudeTurnBudget({ fixed: dlvPlan.budget.fixed, advisories }, lang);

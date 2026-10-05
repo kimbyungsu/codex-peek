@@ -208,6 +208,8 @@ interface BridgeState {
   usedMemory: { ts: string; items: Array<{ path: string; note: string }>; couplings: number; omitted: boolean; selOver: { count: number; bytesTotal: number; itemsMax: number; bytesMax: number } | null } | null; // selOver=[§7 4-2b] 직전 검증의 서고 선별 정상 범위 초과(전량 동봉) — 서고 카드 표기 재료
   decisions: { open: number; items: Array<{ id: string; question: string; kind: string; origin: string; ts: string; block: string }> } | null; // [§7 4-2b] 결정 장부(사용자 답 대기) — 읽기 전용·답은 CLI decisions choose|delegate. null=무폴더/구 런타임
   curation: { lastItems: Array<{ id: string; title: string; op: string; status: string }>; lastTs: string; lastOutcome: string; lastReason: string; lastTrigger: string; runs: number; proposedTotal: number; adopted: number; declined: number; adoptRate: number; pending: number; running: boolean; archiveSize: number; selOverCount: number; unusedCount: number; unusedDays: number; campaignsSince: number; maxPerRun: number; maxPending: number; tickK: number } | null; // [CURATION v3 §3 E·F] 정리 제안 요약·측정(수칙 카드 1줄) — null=무폴더/구 런타임
+  // [RULE-SUPPLY 묶음 2-나-2 2단계] 사용자 말 분류 — 규칙 칸·결정 기록 자리 제안·분류하지 못한 말·요약(bridge/classify.js userWordsView · 판독 불가 칸=null)
+  userWords: { wsKey: string; repoKey: string; summary: any; seats: Array<{ id: string; seat: string; quote: string; why: string; provider: string; decisionKind: string; quoteSource: string; ts: string }> | null; held: Array<{ id: string; source: string; reason: string; ts: string; text: string; canRequeue: boolean }> | null } | null;
   // [HARNESS-STRUCTURE §B3 · D4] 수칙 흐름 4칸(개요 패널 카드) — bridge/rules-flow.js rulesFlowFor(ws) 그대로(판독 실패=null → 카드가 '자료 없음'으로)
   rulesFlow: { core: { st: string; count: { supportedEnv: number; alwaysBlocker: number; outOfScope: number; total: number }; injectedChars: number }; archive: { state: string; count: number; max: number; selectCap: { items: number; bytes: number }; lastSelection: { ts: string; selectedCount: number; askId: string } | null }; proposals: { pending: number; max: number; nextCheck: { tickK: number; tickCount: number; unusedDays: number; lastTickTs: string } }; curator: { lastTs: string; lastOutcome: string; lastReason: string; lastTrigger: string; running: boolean; metrics: { adoptRate: number; proposedTotal: number; adopted: number; declined: number; archiveSize: number; selOverCount: number; unusedCount: number }; lastItems: Array<{ id: string; title: string; op: string; status: string }> } } | null;
   ruleCheck: { host: "claude" | "codex"; checklist: boolean; rules: string[]; rulesFp: string; summary: { turns: number; older: number; counts: Array<{ n: number; complies: number; violated: number; na: number; missing: number }>; lastTs: string } } | null; // [RULE-COMPLIANCE §3 D] 규칙 자가점검 장부 요약(관찰 자료 — 판정·합산 아님). null=무폴더/구 런타임 // [UI 개편 2차] 직전 검증에 실린 지도 동봉 스냅샷(브릿지 stats/attach.jsonl 최신 1건). null=기록 없음/구 브릿지
@@ -1162,7 +1164,7 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
     // 동봉해야 "채택 하나 눌렀더니 14개가 사라짐" 혼란이 없다(초안=한 번에 하나·나머지는 대기 표시).
     let envSignals9: Array<{ kind: string; n: number; title: string }> = []; // [재편 B §3-1b] 참고 신호(합성) — 후보와 분리 전달
     // [RULE-SUPPLY 묶음 1] genOv=0세대(GEN0) 산출 — 동결 대신 0세대 축으로 계산·결속(승인 세대가 있으면 인자 없이 종전 그대로).
-    const candsFor9 = (genOv?: string): Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string; why: string }> | undefined => {
+    const candsFor9 = (genOv?: string): Array<{ id: string; kind: string; n: number; title: string; status: string; gen: string; wsKey: string; ts: string; why: string; axis?: string; origin?: string; quoteSource?: string }> | undefined => {
       try { // §7 증분 3 — 소진 보고와 같은 집계(codex-bridge 설치본) 공유. 버튼=기록만(작업 발동 금지 계약)
         const CB9: any = require(path.join(BRIDGE_DIR, "codex-bridge.js"));
         // [기억 권위 A-3] 조정 트리거 ②대시보드 로드 — 해소 blocker 계보→후보 멱등 스캔(중단 복구)
@@ -1177,7 +1179,7 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
         try { envSignals9 = (cc9.signals || []).map((s: any) => ({ kind: String(s.kind || ""), n: Number(s.n) || 1, title: String((s.titles && s.titles[0]) || "") })); } catch { envSignals9 = []; }
         const lat9 = typeof CL9.readEnvelopeCandidates === "function" ? CL9.readEnvelopeCandidates(ws).latest : new Map();
         // [기억 권위 A-5] 절단 없이 전량 전달(화면 절단은 표시 제한일 뿐)
-        const out9 = (cc9.live || []).map((c: any) => ({ id: c.candidateId, kind: c.kind, n: c.n, title: (c.titles && c.titles[0]) || "", status: (lat9.get(c.candidateId + "@" + String(genC9 || "")) || {}).status || "", gen: cc9.gen || "", wsKey: typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : "", ts: String(c.ts || ""), why: String(c.why || ""), op: String(c.operation || ""), explain: c.explain && typeof c.explain === "object" ? { happened: String(c.explain.happened || ""), ifAdopted: String(c.explain.ifAdopted || ""), ifNot: String(c.explain.ifNot || ""), recommend: String(c.explain.recommend || "") } : null })); // wsKey=원본 프로젝트 내구 키(재재검증 ab-1)·why=user-constraint 상신 근거(§1 보조 줄)·op/explain=정리 제안(curator) 작업 종류·상황 설명 4칸
+        const out9 = (cc9.live || []).map((c: any) => ({ id: c.candidateId, kind: c.kind, n: c.n, title: (c.titles && c.titles[0]) || "", status: (lat9.get(c.candidateId + "@" + String(genC9 || "")) || {}).status || "", gen: cc9.gen || "", wsKey: typeof CL9.wsKeyFor === "function" ? String(CL9.wsKeyFor(ws)) : "", ts: String(c.ts || ""), why: String(c.why || ""), axis: String(c.axis || ""), origin: String(c.origin || ""), quoteSource: String(c.quoteSource || ""), op: String(c.operation || ""), explain: c.explain && typeof c.explain === "object" ? { happened: String(c.explain.happened || ""), ifAdopted: String(c.explain.ifAdopted || ""), ifNot: String(c.explain.ifNot || ""), recommend: String(c.explain.recommend || "") } : null })); // wsKey=원본 프로젝트 내구 키(재재검증 ab-1)·why=user-constraint 상신 근거(§1 보조 줄)·op/explain=정리 제안(curator) 작업 종류·상황 설명 4칸
         return out9.length ? out9 : undefined;
       } catch { return undefined; }
     };
@@ -2840,6 +2842,10 @@ function computeState(turnsN: number): BridgeState {
       // [CURATION v3 §3 E·F] 정리 제안 요약·측정 — 장부 판독만(실행 없음). 개요 '지금 정할 것'엔 합산하지 않는다(후보 자체는 기존 '수칙서 후보' 항목이 담당).
       try { if (!ws) return null; const CU9: any = require(path.join(BRIDGE_DIR, "curation.js")); return typeof CU9.curationSummary === "function" ? CU9.curationSummary(ws) : null; } catch { return null; }
     })(),
+    userWords: (() => {
+      // [RULE-SUPPLY 묶음 2-나-2 2단계] 사용자 말 분류 화면 자료 — 장부 판독만(실행 없음). 규칙 칸·결정 기록 제안은 개요 '지금 정할 것'에 합산(아래 decideActs).
+      try { if (!ws) return null; const CF9: any = require(path.join(BRIDGE_DIR, "classify.js")); return typeof CF9.userWordsView === "function" ? CF9.userWordsView(ws) : null; } catch { return null; }
+    })(),
     rulesFlow: (() => {
       // [HARNESS-STRUCTURE §B3 · D4] 수칙 흐름 4칸 — 순수 계산 모듈(bridge/rules-flow.js)이 장부·상수를 모아 준다. 개요 '지금 정할 것'엔 합산하지 않는다.
       try { if (!ws) return null; const RF9: any = require(path.join(BRIDGE_DIR, "rules-flow.js")); return typeof RF9.rulesFlowFor === "function" ? RF9.rulesFlowFor(ws, { lang: loadLangExt() }) : null; } catch { return null; }
@@ -4330,6 +4336,47 @@ class Dashboard {
         }
         // [2026-08-29 사용자 결정] 대시보드 직접 입력(넣기 입력칸·ruleAdd)은 제거 — 수칙은 대화에서 한 약속의 포착과 구현 담당의 마감 상신 두 경로로만 제안되고,
         // 사용자는 승인/안 올림/빼기만 한다(자동 적용 체계에 수동 입력칸이 섞이면 "왜 있는지" 설명이 없어 혼란 — 실보고). 브릿지 directRuleCandidate·user-direct kind는 과거 레코드 호환용으로만 남는다.
+        // [RULE-SUPPLY 묶음 2-나-2 2단계] 규칙 칸·결정 기록 제안 — 승인(확인 창에서 무엇이 어디에 적히는지 보여 준 뒤)·안 올림. 정본=classify.approveSeatCandidate/declineSeatCandidate
+        // (현재 저장소 직접 판독·잠금 안 재대조·최종 판독 확인). wsKey 재대조=카드가 떠 있는 사이 활성 프로젝트가 바뀐 경우 차단(candMark 계보).
+        if (m?.type === "seatMark" && typeof m.id === "string" && /^[0-9a-f]{16}$/.test(m.id) && (m.action === "approve" || m.action === "decline") && typeof m.wsKey === "string" && m.wsKey) {
+          const wsS = dashboardWorkspace(); if (!wsS) return;
+          const enS = loadLangExt() === "en";
+          try {
+            const CLS: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
+            const CFS: any = require(path.join(BRIDGE_DIR, "classify.js"));
+            if (typeof CFS.approveSeatCandidate !== "function") { vscode.window.showWarningMessage(enS ? "This runtime cannot handle these proposals — " + runtimeRepairHint(true) : "이 설치본은 이 제안을 처리할 수 없어요 — " + runtimeRepairHint(false)); this.post(); return; }
+            if (String(CLS.wsKeyFor(wsS)) !== m.wsKey) { vscode.window.showWarningMessage(enS ? "The active project changed while this card was open — the list refreshes; please judge again." : "카드가 떠 있는 사이 활성 프로젝트가 바뀌었어요 — 목록이 갱신됩니다. 다시 판단해 주세요."); this.post(); return; }
+            const vS: any = CFS.userWordsView(wsS);
+            const itS: any = ((vS && vS.seats) || []).find((x: any) => x.id === m.id);
+            if (!itS) { vscode.window.showWarningMessage(enS ? "That proposal is no longer current — the list refreshes." : "그 제안은 더 이상 유효하지 않아요 — 목록이 갱신됩니다."); this.post(); return; }
+            const resS = (r: any, okKo: string, okEn: string) => { if (r && r.ok) vscode.window.showInformationMessage(enS ? okEn : okKo); else vscode.window.showWarningMessage((enS ? "Not recorded: " : "기록하지 못했어요: ") + String((r && r.reason) || "unknown") + ((r && r.reason === "repo-mismatch") ? (enS ? " — this proposal came from another project target." : " — 다른 정찰 대상(프로젝트)에서 나온 제안이에요.") : "")); this.post(); };
+            if (m.action === "decline") { resS(CFS.declineSeatCandidate(wsS, m.id), "안 올림으로 기록했어요 — 같은 말은 다시 올라오지 않아요.", "Declined — the same words won't be proposed again."); return; }
+            const who = itS.provider === "codex" ? "Codex" : "Claude";
+            const what = itS.seat === "rule"
+              ? (enS ? `Add this sentence, exactly as you wrote it, to the ${who} implementer's rule list. It is sent to the implementer every turn; you can edit or remove it any time in the setup tab.` : `${who} 구현 담당 규칙 칸에 이 문장을 쓰신 그대로 추가합니다. 매 턴 구현 담당에게 전달되고, 설정 탭에서 언제든 고치거나 뺄 수 있어요.`)
+              : (enS ? "Record this as your decision. The independent curator reads decisions as direction hints (if the curator runs on another company's model, it may be sent there too)." : "이 문장을 사용자 결정으로 기록합니다. 독립 정리 담당이 방향 참고로 읽어요(정리 담당이 다른 회사 모델이면 그쪽에도 전달될 수 있어요).");
+            vscode.window.showInformationMessage(what + "\n\n" + String(itS.quote || ""), { modal: true }, enS ? "Approve" : "승인").then((pick) => {
+              if (!pick) { this.post(); return; }
+              try { resS(CFS.approveSeatCandidate(wsS, m.id), itS.seat === "rule" ? "규칙 칸에 추가했어요 — 다음 턴부터 구현 담당에게 전달돼요." : "결정 기록에 남겼어요.", itS.seat === "rule" ? "Added to the rule list — sent to the implementer from the next turn." : "Recorded as your decision."); }
+              catch { vscode.window.showWarningMessage(enS ? "Not recorded." : "기록하지 못했어요."); this.post(); }
+            });
+          } catch { vscode.window.showWarningMessage(enS ? "Not recorded." : "기록하지 못했어요."); this.post(); }
+          return;
+        }
+        // [RULE-SUPPLY 묶음 2-나-2 2단계] 분류하지 못한 사용자 말 — 다시 분류(대기열로·재시도 0 · 이 프로젝트 말만) / 버리기(분류 대상에서 제외). 정본=classify.heldWordAction.
+        if (m?.type === "heldMark" && typeof m.id === "string" && /^[pc]-[0-9a-f]{16}$/.test(m.id) && (m.action === "requeue" || m.action === "dismiss") && typeof m.wsKey === "string" && m.wsKey) {
+          const wsH = dashboardWorkspace(); if (!wsH) return;
+          const enH = loadLangExt() === "en";
+          try {
+            const CLH: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
+            const CFH: any = require(path.join(BRIDGE_DIR, "classify.js"));
+            if (String(CLH.wsKeyFor(wsH)) !== m.wsKey) { vscode.window.showWarningMessage(enH ? "The active project changed while this card was open — the list refreshes." : "카드가 떠 있는 사이 활성 프로젝트가 바뀌었어요 — 목록이 갱신됩니다."); this.post(); return; }
+            const rH: any = typeof CFH.heldWordAction === "function" ? CFH.heldWordAction(wsH, m.id, m.action) : { ok: false, reason: "runtime" };
+            if (rH && rH.ok) vscode.window.showInformationMessage(m.action === "requeue" ? (enH ? "Back in the queue — it is looked at again at the next campaign close." : "다시 대기열에 넣었어요 — 다음 캠페인 마감 때 다시 살펴봐요.") : (enH ? "Removed from classification." : "분류 대상에서 뺐어요."));
+            else vscode.window.showWarningMessage((enH ? "Not recorded: " : "기록하지 못했어요: ") + String((rH && rH.reason) || "unknown"));
+          } catch { vscode.window.showWarningMessage(enH ? "Not recorded." : "기록하지 못했어요."); }
+          this.post(); return;
+        }
         if (m?.type === "candMark" && typeof m.id === "string" && /^[0-9a-f]{16}$/.test(m.id) && (m.status === "adopted" || m.status === "declined") && typeof m.gen === "string" && typeof m.wsKey === "string" && m.wsKey) { // §7 증분 3 — 후보 선택 '기록만'(작업 발동 금지·반영은 다음 대화 턴)
           const wsM = dashboardWorkspace(); if (!wsM) return;
           const enM = loadLangExt() === "en";
@@ -4431,9 +4478,10 @@ class Dashboard {
               else vscode.window.showWarningMessage(enB ? "Nothing was recorded (no current proposal selected or write failed)." : "기록하지 못했어요(지금 유효한 제안이 없거나 기록 실패).");
               this.post(); return;
             }
-            const plan: any = CLB.candidateBatchPlan({ live: liveB.map((c: any) => ({ candidateId: c.candidateId, kind: c.kind, operation: c.operation })), ids: idsB, gen0: gen0B, dest: m.dest });
+            const plan: any = CLB.candidateBatchPlan({ live: liveB.map((c: any) => ({ candidateId: c.candidateId, kind: c.kind, operation: c.operation, axis: c.axis })), ids: idsB, gen0: gen0B, dest: m.dest }); // [묶음 2-나-2] 칸(axis) 동봉 — 지원 환경·범위 밖 칸 제안은 본문 묶음에만
             const exN = (plan.excluded || []).length;
-            const exNote = exN ? (enB ? `${exN} selected proposal(s) were left out — curation proposals that go to a different place or remove a rule need their own approval; ones no longer current are skipped.` : `고른 것 중 ${exN}건은 이번 묶음에서 빠졌어요 — 다른 칸으로 가거나 수칙을 빼는 정리 제안은 따로 승인하고, 이미 처리된 것은 건너뜁니다.`) : "";
+            const exAx = (plan.excluded || []).filter((x: any) => x && x.why === "axis-core-only").length;
+            const exNote = exN ? (enB ? `${exN} selected proposal(s) were left out — curation proposals that go to a different place or remove a rule need their own approval; ones no longer current are skipped.` : `고른 것 중 ${exN}건은 이번 묶음에서 빠졌어요 — 다른 칸으로 가거나 수칙을 빼는 정리 제안은 따로 승인하고, 이미 처리된 것은 건너뜁니다.`) + (exAx ? (enB ? ` ${exAx} of them belong to the 'supported environment'/'out of scope' sections, which exist only in the main rulebook — approve those one by one (main rulebook).` : ` 그중 ${exAx}건은 '지원 환경·범위 밖' 칸 제안이라 수칙서 본문에만 들어가요 — 하나씩 [승인]해 주세요.`) : "") : "";
             if (plan.mode === "none") { vscode.window.showWarningMessage((enB ? "Nothing to approve in this selection. " : "이번 선택에는 올릴 제안이 없어요. ") + exNote); this.post(); return; }
             const repoB = (((bridgeLib() as any) || {}).resolveScoutRepo ? ((bridgeLib() as any).resolveScoutRepo(wsB, loadContract(wsB)) || {}).repo : null) || wsB;
             const tgtB = scoutTargetFor(wsB).repo;
@@ -5994,6 +6042,7 @@ class Dashboard {
     <div class="hint" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center"><span class="pfm">${t("빈값", "empty")} <b>${t("무제한(기본)", "unlimited (default)")}</b></span><span class="pfm">${t("숫자 n", "number n")} <b>${t("지시당 n회까지", "up to n per instruction")}</b></span><span class="pfm note">${t("마지막 회차", "final round")} <b>${t("예고 부착", "notice attached")}</b></span><span class="pfm bad">${t("초과", "beyond cap")} <b>${t("기계적 거부", "mechanically refused")}</b></span></div>
     <div class="hint" id="vbPresets" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">${t("추천값:", "Suggested:")} <button type="button" data-vb="2">${t("소형 수정 · 2", "small fix · 2")}</button><button type="button" data-vb="3">${t("일상 개발 · 3 (권장)", "daily dev · 3 (recommended)")}</button><button type="button" data-vb="5">${t("대형·복잡 · 5", "large/complex · 5")}</button><button type="button" data-vb="0">${t("무제한 · 0", "unlimited · 0")}</button> <span class="muted">${t("클릭=자동 입력 — 직접 숫자를 적어도 돼요(저장 후 다음 지시부터)", "click to fill — manual entry works too (applies from the next instruction after saving)")}</span></div>
     <div id="envCard" class="hint" style="display:none;margin-top:6px;padding:7px;border:1px solid var(--vscode-widget-border,#555);border-radius:6px"></div>
+    <div id="uwCard" class="hint" style="display:none;margin-top:6px;padding:7px;border:1px solid var(--vscode-widget-border,#555);border-radius:6px"></div>
     <details class="hintfold"><summary>${t("ⓘ 상한에 걸리면 어떻게 되나", "ⓘ What happens at the cap")}</summary><div class="hint">${t("마지막 검증 지적만 수용·처리 / 근거 있는 반박 / 영수증 있는 보관함 / 사용자 판단으로 나눕니다. 앞의 세 갈래는 구현 담당이 정리하고, 구현자가 대신 정할 수 없는 선택이 있을 때만 질문 하나로 묶습니다. 질문이 없어 자동 정리돼도 검증 통과는 아닙니다. 저장한 상한 변경은 다음 지시부터 적용되며, 내부 기록이 실패한 왕복은 '미집계'로 표시됩니다(절대 상한 아님 — 무제한일 땐 세지 않고 표시도 없음).", "Only the latest findings are split into accepted-and-handled, evidence-backed rebuttal, receipt-backed parking, or user decision. The implementer closes the first three and asks one combined question only for a choice it cannot make. Automatic triage is still not a verification pass. Saved cap changes apply from the next instruction; rounds with failed bookkeeping are shown as untracked (not an absolute cap — unlimited mode is not counted or shown).")}</div></details>
     <label class="ck verify">${t("트랙 — 구현·검증 흐름에 <b>정찰(영향 미리보기·관찰 일지)</b>을 더할지", "Track — add <b>recon (impact preview · field journal)</b> to the implement·verify flow")}
       <span class="seg" id="segScout">
@@ -6909,6 +6958,8 @@ class Dashboard {
     // 없었음 — 개요 합산에 편입+해당 위치로 이동(el=교차 패널 스크롤은 gotoEl 경유 규칙).
     var ec0=d.envelope&&d.envelope.cands?d.envelope.cands.filter(function(c9){return !c9.status||c9.status==="proposed";}).length:0; // proposed=장부 유래 후보의 '판단 대기' 상태(R1 blocker①)
     if(ec0) acts9.push({n:ec0, tab:"setup", el:"[data-cands-box]", label:T("수칙서 후보 — 올릴지 판단 대기(효력은 도장부터)","rulebook candidates awaiting your call (effect only after stamp)")});
+    var us0=d.userWords&&d.userWords.seats?d.userWords.seats.length:0; // [RULE-SUPPLY 묶음 2-나-2 2단계] 규칙 칸·결정 기록 제안(사용자 말에서 나온 것)
+    if(us0) acts9.push({n:us0, tab:"setup", el:"[data-seats-box]", label:T("사용자 말에서 나온 규칙·결정 제안 — 승인 대기(효력은 승인부터)","rule/decision proposals from your words — awaiting your call (effect only after approval)")});
     // [§7 4-2b] 결정 장부 — 구현자가 못 정하는 것(제품 방향·위험·범위)만 장부에 오르고, 사용자가 고르거나 "네가 정해라"로 답해야 다음 검증이 이어진다.
     var dc9=d.decisions&&d.decisions.open?d.decisions.open:0;
     if(dc9) acts9.push({n:dc9, tab:"verify", el:"#decisionsSec", label:T("결정 장부 — 사용자 답 대기(고르기 또는 '네가 정해라')","decision ledger — awaiting your answer (choose or delegate)")});
@@ -7791,7 +7842,11 @@ class Dashboard {
           e9.cands.forEach(function(cd, ix9){
             var row9=document.createElement("div"); row9.style.cssText="font-size:12px;margin-top:7px;padding:6px 8px;border-radius:5px;background:var(--vscode-editorWidget-background)";
             var when9=""; if(cd.ts){ var dt9=new Date(cd.ts); if(!isNaN(dt9.getTime())) when9=(dt9.getMonth()+1)+"/"+dt9.getDate(); }
-            var kl9=cd.kind==="user-constraint"?T((when9?when9+" ":"")+"대화에서 직접 말씀하신 약속이에요","(a promise you stated in chat"+(when9?" on "+when9:"")+")")
+            var axN9=cd.axis==="outOfScope"?T("범위 밖","out of scope"):cd.axis==="supportedEnv"?T("지원 환경","supported environment"):cd.axis==="alwaysBlocker"?T("항상 막을 것","always a defect"):"";
+            var coreOnly9=cd.kind==="user-constraint" && (cd.axis==="outOfScope"||cd.axis==="supportedEnv"); // [묶음 2-나-2] 본문에만 있는 칸 — 승인 버튼 하나(본문)
+            var kl9=cd.kind==="user-constraint"?(cd.origin==="classifier"
+                ?T((when9?when9+" ":"")+"대화에서 하신 말을 분류 담당이 골랐어요"+(axN9?" — 수칙서 '"+axN9+"' 칸":""),"(picked by the classifier from what you said in chat"+(when9?" on "+when9:"")+(axN9?" — rulebook section: "+axN9:"")+")")
+                :T((when9?when9+" ":"")+"대화에서 직접 말씀하신 약속이에요","(a promise you stated in chat"+(when9?" on "+when9:"")+")"))
               :cd.kind==="curator"?T("독립 정리 담당이 장부(반복 신호·미사용 수칙·결정)를 읽고 올린 제안이에요 — "+(cd.op==="remove"?"이 수칙 빼기":cd.op==="oos-add"?"제외 칸에 한 줄 추가":"서고에 한 줄 추가"),"proposed by the independent curator from the ledgers — "+(cd.op==="remove"?"remove this rule":cd.op==="oos-add"?"add an out-of-scope line":"add an archive rule"))
               :cd.kind==="rule-manual"?T("구현 담당이 마감 판단에서 '프로젝트를 관통하는 지침'으로 골라 올렸어요","proposed by the implementer at campaign closing as a project-spanning principle")
               :cd.kind==="user-direct"?T("예전 직접 입력 기능으로 올라온 수칙이에요(승인하거나 안 올림)","a rule from the former direct-input feature (approve or drop it)")
@@ -7801,11 +7856,17 @@ class Dashboard {
             if(undecided9 && !viewOnly9){ var ck9=document.createElement("input"); ck9.type="checkbox"; ck9.setAttribute("data-cand-ck", cd.id); ck9.checked=wbAdds.has(cd.id); ck9.style.cssText="margin-right:6px;vertical-align:middle"; ck9.title=T("한꺼번에 올리거나 안 올릴 제안 고르기","select for approving/declining together"); ck9.onchange=function(){ if(ck9.checked) wbAdds.add(cd.id); else wbAdds.delete(cd.id); candBatchRefresh9(); }; sit9.insertBefore(ck9, sit9.firstChild); } // [묶음 2-가] 고르기 칸(선택 기억=wbAdds — 작업공간·세대가 바뀌면 비움)
             if(cd.title){ var org9=document.createElement("div"); org9.className="muted"; org9.style.cssText="font-size:11px;margin-top:2px"; org9.textContent=T("문안: ","text: ")+cd.title; org9.title=cd.title; row9.appendChild(org9); }
             if(cd.why){ var why9=document.createElement("div"); why9.className="muted"; why9.style.cssText="font-size:11px;margin-top:2px"; why9.textContent=T("왜: ","why: ")+cd.why; row9.appendChild(why9); } // why 표면 — textContent(작문·마크업 없음)
+            if(coreOnly9){ var to9=document.createElement("div"); to9.className="muted"; to9.style.cssText="font-size:11px;margin-top:2px"; to9.textContent=T("어디로: 수칙서 본문 '"+axN9+"' 칸 — 검증 담당이 모든 검증에서 이 기준으로 판정해요(이 칸은 본문에만 있어요)","goes to: main rulebook, '"+axN9+"' section — the verifier judges every verification by it (this section exists only in the main rulebook)"); row9.appendChild(to9); } // [§3-4] 전달처 표시
+            else if(cd.kind==="user-constraint" && cd.origin==="classifier" && cd.axis==="alwaysBlocker"){ var tb9=document.createElement("div"); tb9.className="muted"; tb9.style.cssText="font-size:11px;margin-top:2px"; tb9.textContent=e9.gen0?T("어디로: 수칙서 '항상 막을 것' 칸 — '관련될 때'와 '항상' 중 고르신 쪽으로 들어가 검증 담당이 판정에 써요","goes to: the rulebook 'always a defect' section — into whichever you pick ('when relevant' or 'always'); the verifier judges by it"):T("어디로: 수칙서 '관련될 때' 목록('항상 막을 것' 칸) — 하는 작업과 관련 있을 때 검증 담당이 판정에 써요","goes to: the rulebook 'when relevant' list ('always a defect' section) — the verifier judges by it when the task relates"); row9.appendChild(tb9); } // [검증 1회차 보완] 분류 후보 '항상 막을 것' 칸 전달처
             if(cd.kind==="curator" && cd.explain){ // [CURATION v3 §3 C] 사용자 표현 4요소(있었던 일·올리면·안 올리면·권장) — textContent
               [[T("있었던 일: ","what happened: "),cd.explain.happened],[T("올리면: ","if adopted: "),cd.explain.ifAdopted],[T("안 올리면: ","if not: "),cd.explain.ifNot],[T("권장: ","recommendation: "),cd.explain.recommend]].forEach(function(pr9){ if(!pr9[1]) return; var ex9=document.createElement("div"); ex9.className="muted"; ex9.style.cssText="font-size:11px;margin-top:1px"; ex9.textContent=pr9[0]+pr9[1]; row9.appendChild(ex9); });
             }
             if(undecided9 && !viewOnly9){
-              if(e9.gen0 && cd.kind!=="curator"){ // [RULE-SUPPLY 묶음 1 · D6] 첫 수칙서 단계 — 칸을 고른다(추천=관련될 때 · REJUDGE P5). 정리 제안은 작업 종류가 칸을 정함
+              if(coreOnly9){ // [묶음 2-나-2] 지원 환경·범위 밖 칸=본문 고정 — '관련될 때' 버튼 없음(목적지는 승인 창에도 그대로 보임)
+                var apC9=document.createElement("button"); apC9.style.cssText="margin-top:5px;margin-right:5px;font-size:12px;font-weight:600"; apC9.textContent=T("승인 — 수칙서 본문(항상)","Approve — main rulebook (always)");
+                apC9.onclick=function(){ vscode.postMessage({type:"candMark", id: cd.id, kind: cd.kind, status: "adopted", approve: true, dest: "core", gen: cd.gen, wsKey: cd.wsKey, lang: e9.lang}); };
+                row9.appendChild(apC9);
+              } else if(e9.gen0 && cd.kind!=="curator"){ // [RULE-SUPPLY 묶음 1 · D6] 첫 수칙서 단계 — 칸을 고른다(추천=관련될 때 · REJUDGE P5). 정리 제안은 작업 종류가 칸을 정함
                 var apR9=document.createElement("button"); apR9.style.cssText="margin-top:5px;margin-right:5px;font-size:12px;font-weight:600"; apR9.textContent=T("승인 — 관련될 때 적용(추천)","Approve — when relevant (recommended)");
                 apR9.onclick=function(){ vscode.postMessage({type:"candMark", id: cd.id, kind: cd.kind, status: "adopted", approve: true, dest: "archive", gen: cd.gen, wsKey: cd.wsKey, lang: e9.lang}); };
                 row9.appendChild(apR9);
@@ -7865,6 +7926,51 @@ class Dashboard {
           });
           ec.appendChild(rl9);
           if(e9.arc && (e9.arc.state==="broken"||e9.arc.state==="stray")){ var arcWarn=document.createElement("div"); arcWarn.style.cssText="margin-top:8px;font-size:12px;color:var(--vscode-editorWarning-foreground,#d4a017)"; arcWarn.textContent=e9.arc.state==="broken"?T("⚠ 보관 수칙 파일이 승인 없이 바뀌어 새 검증이 시작되지 않아요 — 위 '승인 없이 바뀐 내용 보기'에서 승인하거나 복구","⚠ the stored rules file changed without approval — new verifications will not start; use 'View unapproved changes' above"):T("⚠ 도장 없는 보관 파일이 있어요 — 정리 전까지 올림이 막힙니다","⚠ an unstamped stored-rules file exists — adds are blocked until it is cleaned"); ec.appendChild(arcWarn); }
+        }
+      });
+      safe(function(){ var uc=$("uwCard"); if(!uc) return; var u9=d.userWords; uc.innerHTML=""; // [RULE-SUPPLY 묶음 2-나-2 2단계] 사용자 말에서 나온 규칙 칸·결정 기록 제안 + 분류하지 못한 말
+        var seats9=(u9&&u9.seats)||[], held9=(u9&&u9.held)||[], sm9=(u9&&u9.summary)||null;
+        var readErr9=!!u9 && (u9.seats===null || u9.held===null || !sm9 || sm9.queued===null); // [검증 1회차 주의] 판독 실패≠빈 목록 — 숨기지 않고 알린다
+        if(!u9 || (!readErr9 && !seats9.length && !held9.length && !(sm9&&sm9.queued) && !(sm9&&sm9.lastTs))){ uc.style.display="none"; return; }
+        uc.style.display="block";
+        var uh=document.createElement("div"); uh.style.fontWeight="600"; uh.textContent=T("사용자 말에서 나온 제안","Proposals from your own words"); uc.appendChild(uh);
+        var oLab=function(o,r){ return o==="proposed"?T("제안 냄","proposed"):o==="none"?T("올릴 만한 기준 없음","nothing worth proposing"):o==="empty"?T("살펴볼 말 없음","nothing to look at"):o==="locked"?T("다른 실행 중","another run in progress"):o==="input-failed"?(r==="envelope-inactive"?T("수칙서 승인 전이라 대기","waiting — rulebook not approved yet"):T("시작 못 함("+r+")","could not start ("+r+")")):o==="failed"?T("실패 — 말은 남아 있어 다시 시도("+r+")","failed — the words are kept and retried ("+r+")"):o; };
+        var sl=document.createElement("div"); sl.className="muted"; sl.style.cssText="font-size:11px;margin-top:2px";
+        var lastD9=""; if(sm9&&sm9.lastTs){ var dl9=new Date(sm9.lastTs); if(!isNaN(dl9.getTime())) lastD9=(dl9.getMonth()+1)+"/"+dl9.getDate()+" "+String(dl9.getHours()).padStart(2,"0")+":"+String(dl9.getMinutes()).padStart(2,"0"); }
+        sl.textContent=T("살펴볼 말 "+((sm9&&sm9.queued!=null)?sm9.queued:"?")+"건 · 마지막 분류: "+(lastD9?lastD9+" "+oLab(sm9.lastOutcome,sm9.lastReason):"아직 없음"),"words waiting "+((sm9&&sm9.queued!=null)?sm9.queued:"?")+" · last run: "+(lastD9?lastD9+" "+oLab(sm9.lastOutcome,sm9.lastReason):"none yet")); uc.appendChild(sl);
+        var sn=document.createElement("div"); sn.className="muted"; sn.style.cssText="font-size:11px;margin-top:2px"; sn.textContent=T("검증이 통과하거나 왕복 상한에 닿아 한 작업이 마감될 때, 모인 말을 독립 분류 담당이 살펴봐요. 수칙서 칸 제안은 위 '수칙' 카드에, 규칙 칸·결정 기록 제안은 여기에 나와요.","When a piece of work closes (verification passes or hits the round cap), an independent classifier looks at the collected words. Rulebook proposals appear in the 'Rules' card above; rule-list and decision proposals appear here."); uc.appendChild(sn);
+        if(readErr9){ var se9=document.createElement("div"); se9.style.cssText="font-size:12px;margin-top:6px;color:var(--vscode-editorWarning-foreground,#d9a441)"; se9.textContent=T("사용자 말·제안 기록을 읽지 못했어요 — 처리할 것이 없다는 뜻이 아니에요. 잠시 후 다시 열어 주세요.","Could not read the user-words/proposal record — this does not mean there is nothing to handle. Reopen shortly."); uc.appendChild(se9); }
+        if(seats9.length){
+          var shd=document.createElement("div"); shd.style.cssText="margin-top:8px;font-weight:600"; shd.setAttribute("data-seats-box","1"); shd.textContent=T("제안 — "+seats9.length+"건 (승인해야만 효력이 생겨요)","Proposals — "+seats9.length+" (effective only after you approve)"); uc.appendChild(shd);
+          seats9.forEach(function(it){
+            var r=document.createElement("div"); r.style.cssText="font-size:12px;margin-top:7px;padding:6px 8px;border-radius:5px;background:var(--vscode-editorWidget-background)";
+            var w9=""; if(it.ts){ var dt=new Date(it.ts); if(!isNaN(dt.getTime())) w9=(dt.getMonth()+1)+"/"+dt.getDate(); }
+            var who9=it.provider==="codex"?"Codex":"Claude";
+            var lb=document.createElement("div"); lb.textContent=(w9?w9+" ":"")+(it.seat==="rule"?T("구현 담당 규칙으로 두자는 말이에요","words to keep as an implementer rule"):T("제품·설계 방향에 대한 결정이에요","a decision about product/design direction")); r.appendChild(lb);
+            var q9=document.createElement("div"); q9.className="muted"; q9.style.cssText="font-size:11px;margin-top:2px"; q9.textContent=T("문안: ","text: ")+it.quote; q9.title=it.quote; r.appendChild(q9);
+            if(it.why){ var wy=document.createElement("div"); wy.className="muted"; wy.style.cssText="font-size:11px;margin-top:2px"; wy.textContent=T("왜: ","why: ")+it.why; r.appendChild(wy); }
+            var to=document.createElement("div"); to.className="muted"; to.style.cssText="font-size:11px;margin-top:2px";
+            to.textContent=it.seat==="rule"?T("어디로: "+who9+" 구현 담당 규칙 칸 — 매 턴 구현 담당에게 전달돼요(설정 탭에서 고치거나 뺄 수 있어요)","goes to: the "+who9+" implementer's rule list — sent to the implementer every turn (editable in the setup tab)"):T("어디로: 결정 기록 — 독립 정리 담당이 방향 참고로 읽어요(정리 담당이 다른 회사 모델이면 그쪽에도 전달될 수 있어요)","goes to: the decision record — the independent curator reads it as a direction hint (it may be sent to another company's model if the curator runs there)");
+            r.appendChild(to);
+            var ab=document.createElement("button"); ab.style.cssText="margin-top:5px;margin-right:5px;font-size:12px;font-weight:600"; ab.textContent=T("승인","Approve"); ab.onclick=function(){ vscode.postMessage({type:"seatMark", id: it.id, action:"approve", wsKey: String(u9.wsKey||"")}); }; r.appendChild(ab);
+            var db=document.createElement("button"); db.className="secondary"; db.style.cssText="margin-top:5px;margin-right:5px;font-size:12px"; db.textContent=T("안 올림","Not this one"); db.onclick=function(){ vscode.postMessage({type:"seatMark", id: it.id, action:"decline", wsKey: String(u9.wsKey||"")}); }; r.appendChild(db);
+            uc.appendChild(r);
+          });
+        }
+        if(held9.length){
+          var hd=document.createElement("details"); hd.style.cssText="margin-top:8px;font-size:12px";
+          var hs=document.createElement("summary"); hs.style.cssText="cursor:pointer;color:var(--vscode-editorWarning-foreground,#d9a441)"; hs.textContent=T("분류하지 못한 사용자 말 "+held9.length+"건","Words that could not be classified — "+held9.length); hd.appendChild(hs);
+          var rLab=function(x){ return x==="classify-failed"?T("분류 담당이 세 번 실패했어요","the classifier failed three times"):x==="text-unavailable"?T("원문을 읽을 수 없어요(보관 7일이 지났거나 손상)","the original text is unavailable (kept 7 days, or damaged)"):x==="turn-unknown"?T("어느 대화 차례의 말인지 확인하지 못했어요","could not tell which chat turn it came from"):x==="repo-unknown"?T("어느 프로젝트의 말인지 확인하지 못했어요","could not tell which project it belongs to"):x; };
+          held9.forEach(function(w){
+            var r=document.createElement("div"); r.style.cssText="margin-top:6px;padding:5px 8px;border-radius:5px;background:var(--vscode-editorWidget-background)";
+            var w9=""; if(w.ts){ var dt=new Date(w.ts); if(!isNaN(dt.getTime())) w9=(dt.getMonth()+1)+"/"+dt.getDate(); }
+            var hl=document.createElement("div"); hl.className="muted"; hl.style.cssText="font-size:11px"; hl.textContent=(w9?w9+" · ":"")+(w.source==="choice"?T("선택지에 직접 쓴 답","typed into a choice"):T("입력창에 쓴 말","typed in the chat box"))+" · "+rLab(w.reason); r.appendChild(hl);
+            if(w.text){ var tx=document.createElement("div"); tx.style.cssText="font-size:11px;margin-top:2px;white-space:pre-wrap;max-height:6em;overflow:auto"; tx.textContent=w.text; r.appendChild(tx); }
+            if(w.canRequeue){ var rq=document.createElement("button"); rq.style.cssText="margin-top:4px;margin-right:5px;font-size:11px"; rq.textContent=T("다시 분류","Classify again"); rq.onclick=function(){ vscode.postMessage({type:"heldMark", id: w.id, action:"requeue", wsKey: String(u9.wsKey||"")}); }; r.appendChild(rq); }
+            var dm=document.createElement("button"); dm.className="secondary"; dm.style.cssText="margin-top:4px;margin-right:5px;font-size:11px"; dm.textContent=T("버리기","Drop"); dm.onclick=function(){ vscode.postMessage({type:"heldMark", id: w.id, action:"dismiss", wsKey: String(u9.wsKey||"")}); }; r.appendChild(dm);
+            hd.appendChild(r);
+          });
+          uc.appendChild(hd);
         }
       });
       safe(function(){ var n=$("vBudgetNote"); if(!n) return;

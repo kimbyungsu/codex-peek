@@ -5874,6 +5874,18 @@ function implementerEnvelopeInjectParts(ws, c, lang, snapshotHash, turnAnchor) {
     L.push(en ? "[Rule awareness — core always-blocker (ab) items · DATA · user-approved judging boundary]" : "[수칙 인지 — 코어 절대 차단(ab) 전문 · 데이터 · 사용자 승인 판정 경계]");
     L.push(en ? "Verification judges against these — an implementation that violates one is always a blocker." : "검증이 이 경계로 판정한다 — 구현이 아래를 위반하면 언제나 blocker다.");
     items.forEach((x, i) => L.push("> ab-" + (i + 1) + ": " + x));
+    // [RULE-SUPPLY 묶음 2-나-2 · §3-6 D3(사용자 결정: 포함)] 지원 환경·범위 밖 짧은 목록 — 계획·권장 선택지를 만드는 순간에 승인된 단계 범위가 보이게.
+    // 번호=검증 쪽과 같은 sup-N·oos-N(되받아침 번호 그대로) · 한 줄 60자(전문은 수칙서 파일) · 데이터(지시문 아님 — §4-B) · 세대 결속 정적 블록(세션 1회)에만 —
+    // 별도 칸(scope)으로 돌려줘 정적 전달(claudeStaticParts·codexStaticParts)만 싣는다(검증 모드 꺼짐 경로는 ab 를 매 턴 싣기 때문에 그쪽엔 넣지 않음).
+    const abOnlyEnd = L.length;
+    for (const ax of ["supportedEnv", "outOfScope"]) {
+      const arr = (en && ev.dataEn[ax] ? ev.dataEn[ax] : ev.data[ax]) || [];
+      if (!arr.length) continue;
+      L.push(ax === "supportedEnv"
+        ? (en ? "[Rule awareness — supported environment (short list · DATA · user-approved)] the world verification judges in:" : "[수칙 인지 — 지원 환경 짧은 목록 · 데이터 · 사용자 승인] 검증이 판정하는 세계:")
+        : (en ? "[Rule awareness — out of scope (short list · DATA · user-approved)] verification does not flag these as defects; the number is the formal rebuttal reference:" : "[수칙 인지 — 범위 밖 짧은 목록 · 데이터 · 사용자 승인] 검증이 결함으로 잡지 않는 것 — 번호가 정식 되받아침 근거:"));
+      arr.forEach((x, i) => { const t = String(x); L.push("> " + ENVELOPE_ID_PREFIX[ax] + "-" + (i + 1) + ": " + (t.length > ENVELOPE_OOS_TITLE_MAX ? t.slice(0, ENVELOPE_OOS_TITLE_MAX) + "…" : t)); });
+    }
     const abEnd = L.length; // 여기까지=정적(수칙 인지 전문) · 이하=이번 턴 동적
     const arcActive = typeof c.archiveHash === "string" && !!c.archiveHash;
     if (arcActive && snapshotHash) { // turnAnchor 부재=아래 필터가 자격 0으로 수렴(안내 줄은 유지)
@@ -5901,7 +5913,7 @@ function implementerEnvelopeInjectParts(ws, c, lang, snapshotHash, turnAnchor) {
         L.push("", en ? "[Archive active but unreadable/mismatched — new verifications are blocked until re-approval]" : "[서고 활성인데 판독 불가/도장 불일치 — 재승인 전까지 새 검증이 차단됩니다]");
       }
     }
-    return { ab: L.slice(0, abEnd).join("\n"), dyn: L.slice(abEnd).join("\n") };
+    return { ab: L.slice(0, abOnlyEnd).join("\n"), scope: L.slice(abOnlyEnd, abEnd).join("\n"), dyn: L.slice(abEnd).join("\n") };
   } catch { return null; }
 }
 
@@ -6294,7 +6306,7 @@ function claudeStaticParts(ws, c, lang, extra) {
   const l = LANGS.includes(lang) ? lang : loadLang();
   const mode = String((c && c.verifyMode) || ""), profile = String((c && c.verifyProfile) || "");
   let envelopeAb = "";
-  try { const ep = implementerEnvelopeInjectParts(ws, c, l, "", ""); envelopeAb = ep && ep.ab ? ep.ab : ""; } catch { envelopeAb = ""; }
+  try { const ep = implementerEnvelopeInjectParts(ws, c, l, "", ""); envelopeAb = ep && ep.ab ? ep.ab + (ep.scope ? "\n" + ep.scope : "") : ""; } catch { envelopeAb = ""; } // [묶음 2-나-2 D3] 정적 전달에만 범위 짧은 목록
   return { verifyStatic: buildVerifyDirectiveStatic(mode, l, profile), envelopeAb, provenance: String((extra && extra.provenance) || ""), rejudge: safeLoadRejudge(l, profile), mode, profile, lang: l };
 }
 function claudeStaticGen(parts) {
@@ -6916,7 +6928,10 @@ function isRealHookInput(hook) {
 // 판정 권위(순서): ① 훅 입력의 origin.kind ② transcript 의 같은 원문 user 레코드가 있으면 그 origin.kind(verify-guard 와 같은 구조 표식 —
 // 두 판독 권위가 갈리지 않게) ③ 기록에 없을 때만, 본문이 '<task-notification>…</task-notification> 봉투만'으로 이뤄졌으면 알림. 봉투 밖에 한 글자라도
 // 사람의 글이 있으면(예: "<task-notification> 이 내용을 설명해줘") 발화다(확인 검증 blocker: 선두 태그만 보면 사람 발화를 알림으로 오분류).
-const NOTICE_ENVELOPE_RE = /^\s*(?:<task-notification>[\s\S]*?<\/task-notification>\s*)+$/;
+// 하네스가 사람 자리(입력 제출)에 넣는 비-발화 봉투: 배경 작업 완료 알림(task-notification) · 하위 담당 보고(agent-message — 대화 기록엔 origin peer 의
+// queued_command 첨부로만 남고 사람 user 행이 없다 · RULE-SUPPLY 묶음 2-나-2 실측 2026-10-05: 보고가 사람 차례로 취급돼 새 캠페인이 시작되고 보고 원문이
+// 사용자 말 대기열·턴 원문에 들어갔다). 사람이 같은 모양의 글을 붙여 넣은 경우는 아래 대화 기록 대조(같은 원문의 사람 행)가 발화로 되돌린다.
+const NOTICE_ENVELOPE_RE = /^\s*(?:(?:<task-notification>[\s\S]*?<\/task-notification>|<agent-message\b[^>]*>[\s\S]*?<\/agent-message>)\s*)+$/;
 function isSystemNotificationHook(hook) {
   if (!hook || typeof hook !== "object") return false;
   if (hook.origin && hook.origin.kind === "task-notification") return true;
@@ -7041,7 +7056,7 @@ function codexStaticParts(ws, c, lang, extra) {
   const l = LANGS.includes(lang) ? lang : loadLang();
   const mode = String((c && c.codexVerifyMode) || ""), profile = normCodexVerifyProfile(c || {});
   let envelopeAb = "";
-  try { const ep = implementerEnvelopeInjectParts(ws, c, l, "", ""); envelopeAb = ep && ep.ab ? ep.ab : ""; } catch { envelopeAb = ""; }
+  try { const ep = implementerEnvelopeInjectParts(ws, c, l, "", ""); envelopeAb = ep && ep.ab ? ep.ab + (ep.scope ? "\n" + ep.scope : "") : ""; } catch { envelopeAb = ""; } // [묶음 2-나-2 D3] 정적 전달에만 범위 짧은 목록
   return { verifyStatic: buildVerifyDirectiveStatic(mode, l, profile), envelopeAb, provenance: String((extra && extra.provenance) || ""), rejudge: safeLoadRejudge(l, profile), mode, profile, lang: l };
 }
 // reason ∈ first|reset|gen-changed|compacted|rollout-unreadable|delivered (+호출자 강제 session-start)

@@ -159,9 +159,11 @@ function implementerContext(j, ws, c, sid, opts) {
     fixed.push(codexDeliveryStatusLine(dplan,lang,sentAt));
     record={gen:dplan.gen,parts:dplan.parts,sentAt,lastTurnTs:nowIso,reason:dplan.reason};
   } else if(provenance) advisories.push(provenance);
+  try { const x=require("./classify.js").pendingNoticeFor(ws,c,sid,lang); if(x)advisories.push(x); } catch { /* advisory — [RULE-SUPPLY 묶음 2-나-2 §3-7] 사용자 확인 대기 1줄(그 상태에 세션당 1회 · 짧아서 앞에 — 예산 절단 회피) */ }
   try { const x=buildScoutDirective(ws,c); if(x)advisories.push(x); } catch { /* advisory */ }
   try { const x=require("./map-bootstrap.js").hookTick(ws); if(x)advisories.push(x); } catch { /* advisory */ }
   try { const x=require("./curation.js").curationHookTick(ws,c); if(x)advisories.push(x); } catch { /* advisory — [CURATION v3 §3 A] 판정+detach·검증 무접촉 */ }
+  try { require("./classify.js").classifyHookTick(ws,c); } catch { /* [RULE-SUPPLY 묶음 2-나-2] 사용자 말 분류 자동 계기 — 간격·잠금만 보고 detach(판정·실행은 자식)·무고지 */ }
   try { const lr=sid?latestRuleCheckRow(ws,"codex",sid):null; if(lr&&lr.closedBy==="attempt-cap"&&opts.prevTurnId&&String(lr.turnAnchor||"")===String(opts.prevTurnId)) advisories.push(lang==="en"?"[Rule self-check] The previous turn ended without the check block (repeat-block cap released) — the omission is on the ledger.":"[규칙 자가점검] 직전 턴이 점검 블록 없이 끝났습니다(반복 차단 상한 해제) — 미기재로 장부에 남았습니다."); } catch { /* advisory */ } // [RULE-COMPLIANCE §3 C]
   const bt=applyClaudeTurnBudget({fixed,advisories},lang);
   for(const f of fixed)parts.push(f); for(const tx of bt.texts)parts.push(tx);

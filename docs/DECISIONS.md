@@ -449,3 +449,11 @@
 - 결과: 민감 형태는 분류 입력에서 [생략]으로 바뀜 · 한 실행=한 회사 · 실패=말 보존·3회 뒤 보류 표면 · 사용자가 안 올린 말은 다시 안 올림 · 지원 환경·범위 밖 후보는 수칙서 본문으로만 · 세대 이월이 칸·출처를 보존.
 - 정본: bridge/classify.js · bridge/contract-lib.js(draftEnvelopeRevision 칸 갈래·candidateBatchPlan·ucKeepFields·DECISION_ORIGINS·턴당 상한) · bridge/codex-bridge.js(classify 명령·후보 목록 칸 동봉·도움말) · docs/RULE-SUPPLY-REDESIGN-2026-10-04.md §3-3 구현.
 - 찾는말: 사용자 말 분류, classify run, 분류 실행, 세 자리, 수칙서 자리, 사용자 규칙 칸, 결정 기록, user-words 출처, 범위 밖 칸, 지원 환경 칸, 민감 형태 생략, 분류하지 못한 사용자 말
+
+## D-2026-10-05-classify-auto — 사용자 말 분류를 캠페인 마감 때 자동으로 돌리고, 규칙 칸·결정 기록 제안을 대시보드에서 승인한다(묶음 2-나-2 2단계)
+- 날짜: 2026-10-05 · 종류: 구현(RULE-SUPPLY 묶음 2-나-2 2단계 — 설계 v3 §3-3·§3-6·§3-7 · 사용자 결정 D2·D3) · 상태: 유효
+- 결정: 한 작업(캠페인)이 검증 통과로 끝나거나 왕복 상한에 닿아 끝나면, 모아 둔 사용자 말이 있을 때 분류 실행이 저절로 돈다(10분 간격 · 같은 마감 한 번 · 하루 상한 없음). 규칙 칸·결정 기록 제안은 대시보드 새 카드에서 무엇이 어디로 가는지 보고 승인·안 올림하고, 분류하지 못한 말은 다시 분류하거나 버린다. 구현 담당에게는 승인 대기 후보가 있을 때 사실 한 줄을 세션당 한 번 남기고, 승인된 지원 환경·범위 밖 목록을 세션 1회 정적 블록에 짧게 싣는다.
+- 왜: 1단계는 수동 실행뿐이라 사용자가 구현 담당에게 따로 부탁해야 했고, 규칙·결정 제안은 승인할 화면이 없었다. 계획·권장 선택지를 만드는 순간에 단계 범위가 보이지 않는 문제(D3)도 같이 닫는다.
+- 결과: 첫 자동 판정은 기준선(설치 이전 마감 무시) · 수칙서 승인 전·실행 중·최근 실행이면 말을 소모하지 않고 대기 · 범위 짧은 목록은 검증 모드가 꺼진 매 턴 경로에는 넣지 않음 · 확인 대기 줄은 지시문이 아닌 사실 한 줄 · 하위 담당 보고(agent-message 봉투)는 사람의 말이 아니라 작업 알림처럼 직전 차례를 이음(보고가 사용자 말 대기열·턴 원문·새 검증 캠페인을 만들던 결함 — 실측 2026-10-05).
+- 정본: bridge/classify.js(closeEventsFor·classifyTickJudge·classifyHookTick·pendingNoticeFor·heldWordAction·userWordsView) · bridge/codex-bridge.js(classify tick) · bridge/contract-inject.js·codex-hook.js(훅 결선) · bridge/contract-lib.js(implementerEnvelopeInjectParts scope·정적 전달) · src/extension.ts(uwCard·seatMark·heldMark·후보 칸 표시·한꺼번에 올리기 칸 전달·개요 합산) · docs/RULE-SUPPLY-REDESIGN-2026-10-04.md §3-3·§3-6·§3-7 구현.
+- 찾는말: 자동 분류, classify tick, 캠페인 마감, 상한 소진, 사용자 말에서 나온 제안, 규칙 칸 승인, 결정 기록 승인, 분류하지 못한 사용자 말, 사용자 확인 대기, 범위 밖 짧은 목록, D3

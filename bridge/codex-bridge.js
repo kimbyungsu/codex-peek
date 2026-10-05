@@ -3551,6 +3551,15 @@ async function cmdClassify(rest) {
     console.log((en ? "[user words] waiting for your decision " : "[사용자 말] 사용자 확인 대기 ") + seats.length + (en ? " · could not classify " : " · 분류하지 못한 말 ") + (held ? held.length : "?") + (en ? " — rulebook seats appear in the dashboard proposal box." : " — 수칙서 자리 후보는 대시보드 제안 목록에 있습니다."));
     return;
   }
+  if (sub === "tick") { // [묶음 2-나-2 2단계] 자동 계기 자식 — 분류 실행 잠금 안에서 판정·마감 소비·실행(classify.classifyTick)
+    await new Promise((res) => setImmediate(res)); // 순환 초기화 중 빈 export 조회 차단(Codex 팔 resolveCodex)
+    let fkT = null; if (process.env.CODEX_BRIDGE_SELECTOR_RUNNER) { try { fkT = require(process.env.CODEX_BRIDGE_SELECTOR_RUNNER).runSelectorPage; } catch { fkT = null; } }
+    const rT = await CF.classifyTick(ws, { lang: loadLang(), ...(typeof fkT === "function" ? { pageRunner: fkT } : {}) });
+    const j = rT.judge || {};
+    if (json) console.log(JSON.stringify(rT)); else console.log((en ? "[user words tick] " : "[사용자 말 tick] ") + String(j.reason || "") + " → " + rT.st + (rT.reason ? "(" + rT.reason + ")" : ""));
+    if (rT.st !== "ok" && rT.st !== "empty" && rT.st !== "no-run") process.exitCode = 2;
+    return;
+  }
   if (sub !== "run") { console.log(en ? "usage: classify [run|status|list] [--json]" : "사용법: classify [run|status|list] [--json]"); process.exitCode = 2; return; }
   console.error(en ? "[user words] asking the independent classifier (may take minutes; verification is not affected)..." : "[사용자 말] 독립 분류 담당에게 묻는 중(수 분 걸릴 수 있음 · 검증 무영향)...");
   await new Promise((res) => setImmediate(res)); // 순환 초기화 중 빈 export 조회 차단(정리 담당과 같은 이유 — Codex 팔이 resolveCodex 를 조회)

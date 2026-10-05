@@ -73,7 +73,7 @@ function readClassifyRows(ws) {
 }
 function appendClassifyRow(ws, row) {
   const rec = Object.assign({ schema: "classify-v1", wsKey: CL.wsKeyFor(ws), ts: new Date().toISOString() }, row);
-  try { fs.mkdirSync(CLASSIFY_DIR, { recursive: true }); fs.appendFileSync(classifyFileFor(ws), JSON.stringify(rec) + "\n"); return true; } catch { return false; }
+  try { fs.mkdirSync(CLASSIFY_DIR, { recursive: true }); fs.appendFileSync(classifyFileFor(ws), CL.appendLeadFor(classifyFileFor(ws)) + JSON.stringify(rec) + "\n"); return true; } catch { return false; } // 꼬리 보호(끊긴 마지막 줄과 합쳐지지 않게)
 }
 // ── 자리 장부(사용자 규칙 칸·결정 기록 후보) — 같은 id 의 마지막 유효 행이 이김. 판독 오류=readError(빈 장부로 위장 금지).
 function readSeatsState(ws) {
@@ -323,7 +323,8 @@ async function runClassify(ws, opts) {
   if (!c) { row({ outcome: "contract-unreadable", durationMs: Date.now() - t0 }); alarm(ws, "사용자 말 분류를 시작하지 못했습니다(설정 판독 실패) — 검증에는 영향이 없습니다.", "Classifying the user's words could not start (contract unreadable) — verification is unaffected."); return { st: "contract-unreadable" }; }
   let repo; try { repo = CL.resolveScoutRepo(ws, c).repo; } catch { repo = null; }
   if (!repo) { row({ outcome: "repo-unresolved", durationMs: Date.now() - t0 }); return { st: "repo-unresolved" }; }
-  const lk = acquireClassifyLock(ws);
+  const borrowed = typeof o.lockToken === "string" && lockHeldBy(ws, o.lockToken); // 자동 계기 자식이 잡은 잠금을 이어 씀(판정·소비·실행이 한 잠금 안)
+  const lk = borrowed ? { ok: true, token: o.lockToken } : acquireClassifyLock(ws);
   if (!lk.ok) { row({ repoKey: CL.repoKeyOf(repo), outcome: "locked", reason: lk.reason, durationMs: Date.now() - t0 }); return { st: "locked", reason: lk.reason }; }
   try {
     const input = classifyInput(ws, repo, { contract: c });
@@ -367,7 +368,7 @@ async function runClassify(ws, opts) {
     row(Object.assign({ outcome: proposed ? "proposed" : "none", envIds: cm.envIds, seatIds: cm.seatIds, dropped: cm.dropped, durationMs: Date.now() - t0 }, common));
     const rc = writeClassifyReceipt(ws, input, { arm: input.arm, pages: 1, selectedIds: cm.envIds.concat(cm.seatIds), outcome: proposed ? "proposed:" + proposed : "none", durationMs: Date.now() - t0 });
     return { st: "ok", arm: input.arm, words: input.items.length, unavailable: input.unavailable.length, envIds: cm.envIds, seatIds: cm.seatIds, dropped: cm.dropped, receipt: rc.ok, runId };
-  } finally { releaseClassifyLock(ws, lk.token); }
+  } finally { if (!borrowed) releaseClassifyLock(ws, lk.token); }
 }
 
 function seatStatusNow(ws, id) { const st = readSeatsState(ws); if (st.readError) return ""; const r = st.latest.get(id); return r ? String(r.status || "") : ""; }
@@ -450,7 +451,251 @@ function classifySummary(ws) {
     lastTs: last ? String(last.ts || "") : "", lastOutcome: last ? String(last.outcome || "") : "", lastReason: last ? String(last.reason || "") : "", runs: runs.length };
 }
 
+// ── [묶음 2-나-2 2단계] 자동 계기(설계 §3-3 R4·§7 D2) — 캠페인 마감(검증 통과 마감 또는 상한 소진 마감) 때 대기열에 말이 있으면 실행.
+// 두 층(정리 담당과 같은 구조 — ab-6): ⓐ 훅(classifyHookTick)=계약·잠금·tick 상태 파일만 보고 최소 간격(10분)이 지났으면 `classify tick` 을 detach
+// ⓑ 자식(classifyTick)=분류 실행 잠금을 먼저 잡고(죽은 소유자는 회수) 그 안에서 판정·마감 소비·실행을 차례로 한다 — 두 자식이 같은 상태를 읽고
+//   같은 마감으로 두 번 실행하는 교차를 막는다(구현 검증 1회차 blocker: 판정과 실행권 확보 분리).
+// 마감 사건(검증 1회차 blocker: 회차 번호는 수칙서 세대마다 다시 1부터라 상한과 비교할 수 없음):
+//   · 통과 마감=판정 행(type round · 기록 시점 저장소 표식 일치) 결과 pass·pass-notes — 열쇠 pass:캠페인:세대:회차:시각
+//   · 상한 소진 마감=캠페인 카운터·이력 기록(저장소 표식 일치)의 누적 횟수(count)가 왕복 상한(budget ≥1)에 닿음 — 열쇠 cap:캠페인
+// 새 마감 판별은 시각 크기가 아니라 '본 적 있는 열쇠'로(검증 1회차 blocker: 시계가 조금 뒤로 가면 새 마감을 영구 누락). 본 열쇠=지금 보이는 사건 열쇠 전부(꼬리 판독이라 유계).
+// 하루 상한 없음(D2 확정 — 자동 실행 수 ≤ 마감 수). 첫 판정=기준선(설치 이전 마감은 세지 않음 — 다른 어떤 조건보다 먼저). 같은 마감은 한 번만.
+const CLASSIFY_TICK_MIN_GAP_MS = 10 * 60 * 1000;
+const TICK_TAIL_BYTES = 256 * 1024;
+const SEEN_KEYS_MAX = 2000; // 본 마감 열쇠 기억 상한(마감 1건=1개 — 하루 수~수십 건 기준 수개월분)
+function classifyTickFileFor(ws, repoKey) { return path.join(CLASSIFY_DIR, CL.wsKeyFor(ws) + "." + String(repoKey || "norepo") + ".tick.json"); }
+// 본 마감 기억 판독 — 부재=null(처음) / 판독 오류={unreadable:true}(검증 3회차: 판독 실패를 처음 상태로 보면 기준선을 다시 잡아 새 마감을 실행 없이 소비 —
+// 호출자는 이때 아무것도 쓰지 않는다) / 형식 깨짐·다른 저장소 기록: 기본은 판독 전용({unreadable:true, corrupt:true} — 아무것도 바꾸지 않음),
+// opts.quarantine=true(분류 실행 잠금을 쥔 판정만)일 때만 격리(.corrupt-시각) 후 null(처음 — 그동안의 마감을 건너뛸 수는 있어도 두 번 실행하지는 않는 방향).
+// (검증 4회차: 격리가 판독 함수에 있으면 잠금 없는 훅이 읽기만 해도 파일을 옮겨, 자식이 잠금 안에서 막 복구한 정상 기억까지 치울 수 있었다)
+function readClassifyTick(ws, repoKey, opts) {
+  const f = classifyTickFileFor(ws, repoKey);
+  let raw;
+  try { raw = fs.readFileSync(f, "utf8"); } catch (e) { return e && e.code === "ENOENT" ? null : { unreadable: true, repoKey: String(repoKey || ""), seeded: false, seenKeys: [], judgedAt: "", ranAt: "", reason: "" }; }
+  let o = null; try { o = JSON.parse(raw); } catch { o = null; }
+  if (o && typeof o === "object" && String(o.repoKey || "") === String(repoKey || "")) {
+    const seen = Array.isArray(o.seenKeys) ? o.seenKeys.map(String) : null;
+    return { repoKey: String(repoKey || ""), seeded: o.seeded === true && seen !== null, seenKeys: seen || [], judgedAt: String(o.judgedAt || ""), ranAt: String(o.ranAt || ""), reason: String(o.reason || "") };
+  }
+  if (!(opts && opts.quarantine === true)) return { unreadable: true, corrupt: true, repoKey: String(repoKey || ""), seeded: false, seenKeys: [], judgedAt: "", ranAt: "", reason: "" }; // 판독 전용 — 격리는 잠금 안 판정만
+  try { fs.renameSync(f, f + ".corrupt-" + Date.now()); } catch { return { unreadable: true, repoKey: String(repoKey || ""), seeded: false, seenKeys: [], judgedAt: "", ranAt: "", reason: "" }; } // 격리 실패=판독 오류와 같게(덮어쓰지 않음)
+  return null;
+}
+function writeClassifyTick(ws, repoKey, st) { try { fs.mkdirSync(CLASSIFY_DIR, { recursive: true }); return CL.atomicWrite(classifyTickFileFor(ws, repoKey), JSON.stringify(Object.assign({}, st, { repoKey: String(repoKey || "") }))); } catch { return false; } }
+// 꼬리 판독 — 부재(ENOENT)·빈 파일=[] / 판독 오류=null(검증 2회차: 오류를 빈 목록으로 줄이면 본 마감 기억이 지워져 같은 마감을 다시 실행)
+function readTailJson(file, maxBytes) {
+  let fd = null;
+  try {
+    try { fd = fs.openSync(file, "r"); } catch (e) { return e && e.code === "ENOENT" ? [] : null; }
+    const st = fs.fstatSync(fd); // 연 파일 기준(검증 3회차: 경로로 크기를 잰 뒤 열기 전에 원자 교체로 줄면 이전 크기로 EOF 너머를 읽어 빈 목록이 됨)
+    if (!st.isFile()) return null;
+    if (!st.size) return [];
+    const len = Math.min(st.size, maxBytes); const buf = Buffer.alloc(len);
+    let got = 0; while (got < len) { const n = fs.readSync(fd, buf, got, len - got, st.size - len + got); if (!n) break; got += n; }
+    if (got !== len) return null; // 짧은 읽기=판독 오류(빈 목록으로 확정 금지)
+    let s = buf.toString("utf8"); if (len < st.size) { const nl = s.indexOf("\n"); s = nl >= 0 ? s.slice(nl + 1) : ""; }
+    return s.split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  } catch { return null; } finally { if (fd !== null) { try { fs.closeSync(fd); } catch { /* 무해 */ } } }
+}
+// 이 저장소의 마감 사건 — [{key, ts, campaignId, kind:"pass"|"cap"}] (열쇠 중복 없음) · 어느 출처든 판독 오류면 null(빈 목록으로 줄이지 않음).
+// 저장소 표식 없는 옛 행·기록=불산입(ab-1).
+function closeEventsFor(ws, repoKey) {
+  const out = [], keys = new Set();
+  const add = (e) => { if (!keys.has(e.key)) { keys.add(e.key); out.push(e); } };
+  const led = readTailJson(CL.findingsLedgerFileFor(ws), TICK_TAIL_BYTES);
+  if (led === null) return null;
+  for (const r of led) {
+    if (!(r && r.type === "round" && r.repoKey === repoKey && typeof r.ts === "string")) continue;
+    if (r.verdict === "pass" || r.verdict === "pass-notes") add({ key: "pass:" + String(r.campaignId || "") + ":" + String(r.envelopeHash || "") + ":" + String(r.round) + ":" + r.ts, ts: r.ts, campaignId: String(r.campaignId || ""), kind: "pass" });
+  }
+  const recs = readTailJson(CL.campaignHistoryFileFor(ws), 64 * 1024);
+  if (recs === null) return null;
+  { let raw = null; try { raw = fs.readFileSync(CL.campaignFileFor(ws), "utf8"); } catch (e) { if (!(e && e.code === "ENOENT")) return null; }
+    if (raw !== null) { let o = null; try { o = JSON.parse(raw); } catch { return null; } recs.push(o); } } // 현재 캠페인 기록 판독·형식 오류=알 수 없음(빈 것으로 줄이지 않음)
+  for (const o of recs) {
+    if (!(o && typeof o.campaignId === "string" && o.campaignId && o.repoKey === repoKey)) continue;
+    if (Number.isInteger(o.budget) && o.budget >= 1 && Number.isInteger(o.count) && o.count >= o.budget) add({ key: "cap:" + o.campaignId, ts: String(o.updatedAt || ""), campaignId: o.campaignId, kind: "cap" });
+  }
+  return out;
+}
+function classifyLockAlive(ws) {
+  let cur = null; try { cur = JSON.parse(fs.readFileSync(classifyLockFileFor(ws), "utf8")); } catch { return false; }
+  const age = cur && cur.ts ? Date.now() - Date.parse(cur.ts) : Infinity;
+  return !!(cur && pidAlive(Number(cur.pid)) && age < CLASSIFY_LOCK_STALE_MS);
+}
+function lockHeldBy(ws, token) { try { const cur = JSON.parse(fs.readFileSync(classifyLockFileFor(ws), "utf8")); return !!(cur && token && cur.token === token); } catch { return false; } }
+// 판정 — 반환 {spawn, reason, kind?}. opts.lockToken=호출자가 잡은 분류 실행 잠금(있어야 '실행 중' 판정을 건너뛰고 소비를 확정한다).
+// 마감 소비 기록이 실패하면 실행하지 않는다(state-write — 같은 마감 재실행 방지가 기록에 기대므로).
+function classifyTickJudge(ws, c, opts) {
+  const o = opts || {};
+  const cc = c || (() => { try { return CL.loadContract(ws); } catch { return null; } })();
+  if (!cc) return { spawn: false, reason: "contract-unreadable" };
+  let repo; try { repo = CL.resolveScoutRepo(ws, cc).repo; } catch { return { spawn: false, reason: "repo-unresolved" }; }
+  const repoKey = CL.repoKeyOf(repo);
+  let g = null; try { g = CL.envelopeGenFor(ws, repo, cc); } catch { g = null; }
+  if (!g || !g.gen) return { spawn: false, reason: "envelope-inactive" }; // 승인 전·손상=말 소모 없이 대기(수동 실행과 같은 태도)
+  const held = typeof o.lockToken === "string" && lockHeldBy(ws, o.lockToken);
+  if (!held) return { spawn: false, reason: classifyLockAlive(ws) ? "running" : "lock-required" }; // 판정(=본 마감 기록 갱신)은 분류 실행 잠금을 쥔 경우에만 — 모든 소비 분기 보호(검증 2회차)
+  const now = Number.isFinite(o.now) ? o.now : Date.now();
+  const st0 = readClassifyTick(ws, repoKey, { quarantine: true }); // 잠금 보유 판정만 격리 가능(위 held 확인 뒤)
+  if (st0 && st0.unreadable) return { spawn: false, reason: "state-unreadable" }; // 기억 판독 실패=아무것도 쓰지 않음(검증 3회차 — 처음 상태로 보지 않는다)
+  const persist = (extra) => writeClassifyTick(ws, repoKey, Object.assign({ seeded: true, seenKeys: st0 ? st0.seenKeys : [], ranAt: st0 ? st0.ranAt : "" }, extra || {}, { judgedAt: new Date(now).toISOString() }));
+  const ev = closeEventsFor(ws, repoKey);
+  if (ev === null) { persist({ seeded: !!(st0 && st0.seeded), reason: "events-unreadable" }); return { spawn: false, reason: "events-unreadable" }; } // 판독 오류=본 마감 기억 보존·판정 보류(첫 판정이면 기준선도 미뤄 둠 — 다음 판정 재시도)
+  // 본 마감 기억=이전 기억∪지금 보이는 열쇠(지우지 않고 더함 · 오래된 것부터 상한 밖으로) — 일부만 읽히는 판독이 기억을 줄이지 않게
+  // 순서=지금 안 보이는 옛 기억 → 지금 보이는 열쇠(상한으로 잘릴 때 보이는 열쇠가 먼저 버려져 '새 마감'으로 되살아나지 않게 — 보이는 열쇠 수는 꼬리 판독이라 상한보다 훨씬 작음)
+  const evKeys = ev.map((e) => e.key), evSet = new Set(evKeys);
+  const visible = [...new Set([...(st0 ? st0.seenKeys : []).filter((k) => !evSet.has(k)), ...evKeys])].slice(-SEEN_KEYS_MAX);
+  if (!st0 || !st0.seeded) { persist({ seenKeys: visible, reason: "baseline" }); return { spawn: false, reason: "baseline" }; } // 기준선이 다른 어떤 조건보다 먼저(검증 1회차 blocker)
+  const seen = new Set(st0.seenKeys);
+  const fresh = ev.filter((e) => !seen.has(e.key));
+  // 최근 실행(최소 간격 10분) — 실행 기록 판독 오류는 '이력 없음'이 아니라 알 수 없음(간격 약속을 깨는 실행 금지 · 마감은 소비하지 않고 남김)
+  let runsRaw = null, runsExist = false; try { runsRaw = fs.readFileSync(classifyFileFor(ws), "utf8"); runsExist = true; } catch (e) { if (!(e && e.code === "ENOENT")) { persist({ reason: "runs-unreadable" }); return { spawn: false, reason: "runs-unreadable" }; } runsRaw = ""; }
+  const wk9 = CL.wsKeyFor(ws);
+  const runs = String(runsRaw).split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((r) => r && r.schema === "classify-v1" && r.wsKey === wk9 && r.type === "run" && r.repoKey === repoKey);
+  // 최근 실행 시각=읽힌 마지막 실행 행 시각과 실행 기록 파일의 마지막 변경 시각 중 늦은 쪽 — 실행 기록은 분류 실행만 쓰므로 파일 변경=실행 활동이며,
+  // 마지막 행이 쓰다 끊겨 버려져도 간격 약속(10분)이 지켜진다(검증 5회차: 끊긴 최신 행을 버려 간격 안에서 다시 실행)
+  // 빈 파일도 '있음'으로 변경 시각 반영(만든 직후 첫 글자 전에 끊긴 경우 — 검증 새 캠페인 1회차)
+  let mtime9 = NaN; if (runsExist) { try { mtime9 = fs.statSync(classifyFileFor(ws)).mtimeMs; } catch (e) { if (!(e && e.code === "ENOENT")) { persist({ reason: "runs-unreadable" }); return { spawn: false, reason: "runs-unreadable" }; } } }
+  const lastParsed = runs.length ? Date.parse(String(runs[runs.length - 1].ts || "")) : NaN;
+  const lastRun = Math.max(Number.isFinite(lastParsed) ? lastParsed : -Infinity, Number.isFinite(mtime9) ? mtime9 : -Infinity);
+  if (Number.isFinite(lastRun) && now - lastRun < CLASSIFY_TICK_MIN_GAP_MS) { persist({ reason: "recent" }); return { spawn: false, reason: "recent" }; } // 새 마감은 소비하지 않고 남김
+  if (!fresh.length) { persist({ seenKeys: visible, reason: "no-close" }); return { spawn: false, reason: "no-close" }; }
+  const q = UW.queuedWords(ws, repoKey);
+  if (q === null) { persist({ reason: "queue-unreadable" }); return { spawn: false, reason: "queue-unreadable" }; } // 판독 오류=마감 사건을 소모하지 않음(다음 판정 재시도)
+  if (!q.length) { persist({ seenKeys: visible, reason: "queue-empty" }); return { spawn: false, reason: "queue-empty" }; }
+  const kind = fresh[fresh.length - 1].kind;
+  if (!persist({ seenKeys: visible, reason: "close:" + kind })) return { spawn: false, reason: "state-write" }; // 소비 기록 실패=실행 안 함(같은 마감 재실행 방지가 이 기록에 기댐)
+  return { spawn: true, reason: "close:" + kind, kind };
+}
+function markClassifyRan(ws, repoKey) { const st = readClassifyTick(ws, repoKey); if (st && st.unreadable) return false; return writeClassifyTick(ws, repoKey, Object.assign({ seeded: false, seenKeys: [], judgedAt: "" }, st || {}, { ranAt: new Date().toISOString() })); } // 판독 실패=기억을 덮어쓰지 않음
+// 자식 진입점 — 분류 실행 잠금(죽은 소유자 회수) → 판정(잠금 보유) → 실행(같은 잠금 이어 사용) → 해제. 반환 {st, judge, ...runClassify 결과}
+async function classifyTick(ws, opts) {
+  const o = opts || {};
+  const lk = acquireClassifyLock(ws);
+  if (!lk.ok) return { st: "no-run", judge: { spawn: false, reason: lk.reason === "running" ? "running" : "lock-" + lk.reason } };
+  try {
+    const c = o.contract || (() => { try { return CL.loadContract(ws); } catch { return null; } })();
+    const j = classifyTickJudge(ws, c, { now: o.now, lockToken: lk.token });
+    if (!j.spawn) return { st: "no-run", judge: j };
+    const r = await runClassify(ws, Object.assign({}, o, { trigger: "auto", contract: c, lockToken: lk.token }));
+    try { markClassifyRan(ws, CL.repoKeyOf(CL.resolveScoutRepo(ws, c).repo)); } catch { /* 기록 실패=다음 훅 간격만 짧아짐 */ }
+    return Object.assign({ judge: j }, r);
+  } finally { releaseClassifyLock(ws, lk.token); }
+}
+function hookStampFileFor(ws, repoKey) { return path.join(CLASSIFY_DIR, CL.wsKeyFor(ws) + "." + String(repoKey || "norepo") + ".hook.json"); }
+function readHookStamp(ws, repoKey) { try { const o = JSON.parse(fs.readFileSync(hookStampFileFor(ws, repoKey), "utf8")); return { spawnedAt: String((o && o.spawnedAt) || "") }; } catch { return { spawnedAt: "" }; } }
+function writeHookStamp(ws, repoKey, iso) { try { fs.mkdirSync(CLASSIFY_DIR, { recursive: true }); return CL.atomicWrite(hookStampFileFor(ws, repoKey), JSON.stringify({ spawnedAt: iso, repoKey: String(repoKey || "") })); } catch { return false; } }
+// 훅 층 — 전수 판독 0(계약 전달·잠금 파일·tick 상태 파일·수칙서 지문 1회). 최소 간격이 지났으면 `classify tick` 을 detach. 반환=null(무고지).
+function classifyHookTick(ws, c, opts) {
+  const o = opts || {};
+  try {
+    const cc = c || (() => { try { return CL.loadContract(ws); } catch { return null; } })();
+    if (!cc) return null;
+    let repoKey; try { repoKey = CL.repoKeyOf(CL.resolveScoutRepo(ws, cc).repo); } catch { return null; }
+    const st = readClassifyTick(ws, repoKey);
+    const hs = readHookStamp(ws, repoKey);
+    const now = Number.isFinite(o.now) ? o.now : Date.now();
+    const lastAct = Math.max(st ? (Date.parse(st.judgedAt || "") || 0) : 0, st ? (Date.parse(st.ranAt || "") || 0) : 0, Date.parse(hs.spawnedAt || "") || 0);
+    if (lastAct && now - lastAct < CLASSIFY_TICK_MIN_GAP_MS) return null; // 간격 먼저(가장 싼 판정 — 대부분의 턴은 여기서 끝)
+    if (classifyLockAlive(ws)) return null;
+    let g = null; try { g = CL.envelopeGenFor(ws, null, cc); } catch { g = null; }
+    if (!g || !g.gen) return null;
+    // detach 전에 '띄운 시각'을 훅 전용 파일에 찍어 같은 간격 안의 다음 훅이 또 띄우지 않게 — 자식이 쓰는 판정 상태 파일(본 마감 목록)은 건드리지 않는다
+    // (검증 1회차: 훅이 판정 상태를 다시 쓰면 자식이 방금 기록한 마감 소비를 옛 값으로 덮어 같은 마감을 다시 실행할 틈이 생김)
+    if (!writeHookStamp(ws, repoKey, new Date(now).toISOString())) return null;
+    const args = [path.join(__dirname, "codex-bridge.js"), "classify", "tick"];
+    const env = Object.assign({}, process.env, { CLAUDE_PROJECT_DIR: String(ws) });
+    const sp = typeof o.spawnFn === "function" ? o.spawnFn : require("child_process").spawn;
+    const child = sp(process.execPath, args, { cwd: String(ws), detached: true, stdio: "ignore", windowsHide: true, env });
+    if (child && typeof child.unref === "function") child.unref();
+  } catch { return null; }
+  return null;
+}
+
+// ── [§3-7] 구현 담당에게 남는 글 — 사용자 말에서 나온 후보가 도장을 기다릴 때 상태 줄 1회(그 상태에 세션당 1회 — 목록이 바뀌면 다시).
+// 지시문 아님(사실 한 줄 — R1·§4-B). 센 것=이 저장소의 사용자 약속 후보(현재 세대·대기·사용자 거절 아님)+규칙/결정 자리 대기.
+const NOTICE_SESSIONS_MAX = 30;
+function noticeFileFor(ws) { return path.join(CLASSIFY_DIR, CL.wsKeyFor(ws) + ".notice.json"); }
+function pendingUserWordIds(ws, c) {
+  const cc = c || (() => { try { return CL.loadContract(ws); } catch { return null; } })();
+  if (!cc) return null;
+  let repo; try { repo = CL.resolveScoutRepo(ws, cc).repo; } catch { return null; }
+  const repoKey = CL.repoKeyOf(repo);
+  const ids = [];
+  let g = null; try { g = CL.envelopeGenFor(ws, repo, cc); } catch { g = null; }
+  if (g && g.gen) {
+    const cst = CL.readEnvelopeCandidatesState(ws);
+    if (cst.readError) return null;
+    for (const r of cst.latest.values()) if (r && r.kind === "user-constraint" && r.status === "proposed" && String(r.envelopeHash || "") === g.gen && r.repoKey === repoKey && !CL.userDeclinedCandidate(cst.rows, r.candidateId)) ids.push(r.candidateId);
+  }
+  const seats = listSeatCandidates(ws, repoKey);
+  if (seats === null) return null;
+  for (const s of seats) ids.push(s.candidateId);
+  return [...new Set(ids)].sort();
+}
+function pendingNoticeFor(ws, c, sid, lang) {
+  try {
+    const s = String(sid || "");
+    if (!s) return null;
+    const ids = pendingUserWordIds(ws, c);
+    if (ids === null) return null; // 판독 불가=침묵(다음 턴 재시도)
+    const sig = ids.length ? sha1(ids.join(",")).slice(0, 16) + ":" + ids.length : "";
+    let st = {}; try { const o = JSON.parse(fs.readFileSync(noticeFileFor(ws), "utf8")); if (o && typeof o === "object" && o.sessions && typeof o.sessions === "object") st = o; } catch { st = {}; }
+    const sessions = Object.assign({}, st.sessions || {});
+    if (sessions[s] && sessions[s].sig === sig) return null; // 같은 상태=이 세션에 이미 알림
+    delete sessions[s];
+    sessions[s] = { sig, ts: new Date().toISOString() };
+    const keys = Object.keys(sessions); if (keys.length > NOTICE_SESSIONS_MAX) for (const k of keys.slice(0, keys.length - NOTICE_SESSIONS_MAX)) delete sessions[k];
+    try { fs.mkdirSync(CLASSIFY_DIR, { recursive: true }); } catch { /* atomicWrite 가 판정 */ }
+    if (!CL.atomicWrite(noticeFileFor(ws), JSON.stringify({ sessions }))) return null; // 기억 실패=이번엔 침묵(매 턴 반복 방지)
+    if (!ids.length) return null;
+    return lang === "en"
+      ? "[Waiting for the user] " + ids.length + " standard(s) drawn from the user's own words are waiting for the user's approval — dashboard setup tab (proposal list)."
+      : "[사용자 확인 대기] 사용자 말에서 나온 기준 후보 " + ids.length + "건이 사용자 승인을 기다립니다 — 대시보드 설정 탭(제안 목록).";
+  } catch { return null; }
+}
+
+// ── 분류하지 못한 말 — 사용자 처리(화면): 다시 분류(대기열로 · 재시도 0) / 버리기(분류 대상에서 제외). 이 저장소 말만 다시 분류 가능(출처 불명 말은 버리기만).
+function heldWordAction(ws, id, action) {
+  const st = UW.readUserWordsState(ws);
+  if (st.readError) return { ok: false, reason: "words-unreadable" };
+  const w = st.words.get(String(id || ""));
+  if (!w) return { ok: false, reason: "not-found" };
+  const s = st.status.get(w.id);
+  if (!s || s.status !== "held") return { ok: false, reason: "not-held" };
+  const rk = currentRepoKey(ws);
+  const mine = !!w.repoKey && w.repoKey === rk;
+  if (action === "requeue") {
+    if (!mine) return { ok: false, reason: w.repoKey ? "repo-mismatch" : "origin-unknown" };
+    if (!UW.setWordStatus(ws, [w.id], "queued", { retries: 0, by: "user" })) return { ok: false, reason: "words-write" };
+  } else if (action === "dismiss") {
+    if (w.repoKey && !mine) return { ok: false, reason: "repo-mismatch" };
+    if (!UW.setWordStatus(ws, [w.id], "classified", { dismissed: true, by: "user" })) return { ok: false, reason: "words-write" };
+  } else return { ok: false, reason: "bad-action" };
+  const after = UW.readUserWordsState(ws).status.get(w.id);
+  const want = action === "requeue" ? "queued" : "classified";
+  if (!after || after.status !== want) return { ok: false, reason: "words-unsettled" };
+  return { ok: true };
+}
+
+// ── 화면 자료 — 자리 후보(전달처 표시 재료 포함)·분류하지 못한 말(원문 일부)·요약. 판독 불가=null 칸(화면이 '판독 불가'로 표기).
+const HELD_TEXT_SHOW = 400;
+function userWordsView(ws) {
+  const sm = classifySummary(ws);
+  const rk = sm.repoKey;
+  const seats = rk ? listSeatCandidates(ws, rk) : null;
+  const held = rk ? UW.heldWords(ws, rk, { unknown: true }) : null;
+  return {
+    wsKey: CL.wsKeyFor(ws), repoKey: rk, summary: sm,
+    seats: seats === null ? null : seats.map((s) => ({ id: s.candidateId, seat: s.seat, quote: String(s.quote || ""), why: String(s.why || ""), provider: s.provider === "codex" ? "codex" : "claude", decisionKind: String(s.decisionKind || ""), quoteSource: String(s.quoteSource || ""), ts: String(s.ts || "") })),
+    held: held === null ? null : held.map((w) => { const t = UW.wordText(ws, w); return { id: w.id, source: w.source, reason: String(w.heldReason || ""), ts: String(w.ts || ""), text: t === null ? "" : (t.length > HELD_TEXT_SHOW ? t.slice(0, HELD_TEXT_SHOW) + "…" : t), canRequeue: !!w.repoKey && w.repoKey === rk }; }),
+  };
+}
+
 module.exports = {
+  CLASSIFY_TICK_MIN_GAP_MS, classifyTickFileFor, readClassifyTick, writeClassifyTick, closeEventsFor, classifyTickJudge, markClassifyRan, classifyTick, classifyHookTick, classifyLockAlive, readHookStamp, hookStampFileFor,
+  noticeFileFor, pendingUserWordIds, pendingNoticeFor, heldWordAction, userWordsView,
   CLASSIFY_DIR, CLASSIFY_BATCH_WORDS, CLASSIFY_BATCH_CHARS, CLASSIFY_WORD_SHOW, CLASSIFY_MAX_PER_RUN, CLASSIFY_RETRY_MAX, RULEBOOK_SEATS, SEATS, REDACTED,
   classifyFileFor, seatsFileFor, classifyLockFileFor, armForProvider, rulesFieldFor, redactSensitiveForms,
   readClassifyRows, readSeatsState, appendSeatRows, seatCandidateId, userConstraintIdFor, listSeatCandidates,
