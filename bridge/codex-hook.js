@@ -12,7 +12,7 @@ const HOOK_STARTED_AT = require("perf_hooks").performance.timeOrigin;
 const {
   BRIDGE_DIR, loadContract, loadLang, buildInjection, buildVerifyDirective, buildScoutDirective, appendIntegrityEvent, supersedeIntegrity,
   registerCodexImplementer, codexImplementerSnapshot, codexRoleRevision, writeCodexActive, readCodexActive, atomicWrite, writePhase, resolveScoutRepo, scoutMapStatus,
-  scoutHealthLine, maybeCleanupState, configWs, readImplementerRecordLocked, durableProofGate, readCodexTurnStrict, contractReadState,
+  scoutHealthLine, maybeCleanupState, configWs, normWs, readImplementerRecordLocked, durableProofGate, readCodexTurnStrict, contractReadState,
   patchContractFields, activeAskJobFor, phaseBusy, contractLockIssue, withRoleLock, implementerRecordOf, validLinksShape, scoutArmView,
   verifyCampaignProgress, effectiveVerifyBudget, writeConstraintTurnSnapshot,
   wsKeyFor, previewGateDecision, implementerEnvelopeInject, constraintRepoKeyFor, readResidual, addResidual, removeResidualItems, residualPending, judgeRequiredPending,
@@ -215,6 +215,25 @@ function linkedVerifier(ws, sid) {
   } catch (e) { return !(e && e.code === "ENOENT"); }
 }
 
+// UI에서 연결한 검증자에 exec resume해도 rollout은 vscode/user로 남는다. env 단독은 믿지 않고
+// 같은 프로젝트의 실행 중 job(유효 마감+activeAskJobFor와 같은 60초 여유)과 codexSession 연결을
+// 모두 양성 판독한 경우에만 브릿지 자신의 검증 실행으로 인정한다. 판독 실패는 예외 불인정.
+function isOwnVerificationRun(ws, sid) {
+  const id = process.env.CODEX_BRIDGE_ASK_JOB_ID;
+  if (typeof id !== "string" || !id || /[^0-9a-zA-Z_-]/.test(id)) return false;
+  try {
+    const job = read(path.join(BRIDGE_DIR, "ask-jobs", id + ".json"));
+    if (!job || job.id !== id || job.state !== "running"
+      || typeof job.workspace !== "string" || normWs(job.workspace) !== normWs(ws)) return false;
+    const deadline = typeof job.deadlineAt === "string" ? Date.parse(job.deadlineAt) : NaN;
+    if (!Number.isFinite(deadline) || deadline < Date.now() - 60000) return false;
+    const links = read(path.join(BRIDGE_DIR, "links.json"));
+    if (!validLinksShape(links, ws)) return false;
+    const key = Object.keys(links.byWorkspace || {}).find((k) => normWs(k) === normWs(ws));
+    return key !== undefined && links.byWorkspace[key].codexSession === sid;
+  } catch { return false; }
+}
+
 // [P-9 자동 전환] 세션 출처 4분류(설계 ⑴ 명시 구현 — 구현검증 2차 지적 4): vscode-user만 전환 자격.
 // exec(검증자 실행 — 훅 발화가 실측된 사실)·other(CLI 등 확정 비대상)는 침묵, unknown(rollout 미생성·판독
 // 불가·id 불일치)은 '실사용자일 수도 있는 판정 불가'라 fail-closed(차단) — 침묵으로 합치면 rollout 생성
@@ -287,7 +306,8 @@ function revertSwitchIfRoleUnchanged(ws, lang, sid, expected) {
 // 설계 ⓓ fail-closed. Codex가 프롬프트 block을 지원하지 않아 무시하면 현행(무동작)과 동일해 악화는 없음).
 function autoSwitchToCodex(j, ws, sid, ev, lang, roleRevision) {
   if (ev !== "UserPromptSubmit") return { ok: false, silent: true }; // '질문 시작'만 기준 — SessionStart·도구·Stop은 물러남 유지
-  const source = classifyPromptSource(j, sid);
+  let source = classifyPromptSource(j, sid);
+  if (source === "vscode-user" && isOwnVerificationRun(ws, sid)) source = "exec";
   if (source === "exec" || source === "other") return { ok: false, silent: true }; // 확정 비대상 — 진행 중 검증 실행 보호
   if (source === "unknown") {
     block(t("이 Codex 대화의 정체(사용자 대화/검증 실행)를 판정할 수 없어 운용 모드를 결정하지 못했습니다(세션 기록 파일 미생성/판독 불가). 잠시 후 프롬프트를 다시 보내거나, 대시보드에서 모드를 직접 전환하세요.",
@@ -648,7 +668,8 @@ function main(raw){
     // 손상 분기도 4분류(3차 지적 2): vscode-user뿐 아니라 unknown(판정 불가 — 실사용자일 수 있음)도 차단.
     // exec/other(확정 비대상)만 침묵 — 손상 복구 중 브릿지가 모는 진행 검증 실행을 죽이지 않기 위함.
     else if(ev==="UserPromptSubmit"){
-      const src=classifyPromptSource(j,sid);
+      let src=classifyPromptSource(j,sid);
+      if(src==="vscode-user"&&isOwnVerificationRun(ws,sid))src="exec";
       if(src==="vscode-user"||src==="unknown")block(t("프로젝트 계약 파일이 손상되어 운용 모드·검증 설정을 판정할 수 없습니다. 대시보드에서 계약을 다시 저장한 뒤 프롬프트를 다시 보내세요.","The project contract file is corrupt, so the harness mode and verification settings cannot be judged. Re-save the contract from the dashboard, then resend the prompt."));
     }
     return;

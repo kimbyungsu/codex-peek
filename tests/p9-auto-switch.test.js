@@ -471,6 +471,82 @@ console.log("[C] 도구 실행 표식(CODEX_PEEK_TOOL_EXEC) — ephemeral 정찰
   ck("C6 ephemeral 호출 4곳 전부 표식 적용(정찰·보강 2·점검)", /codexScoutExecEnv\(process\.env, "scout"\)/.test(sp) && (ep.match(/codexScoutExecEnv\(process\.env, "enrich"\)/g) || []).length === 2 && /codexScoutExecEnv\(o\.env \|\| process\.env, "probe"\)/.test(mp));
 }
 
+// [D] 브릿지 자신의 검증 실행 — 대시보드(UI)로 연결한 검증자 대화는 rollout 출처가 vscode/user 그대로라
+// `codex exec resume`으로 들어온 검증 프롬프트가 '사람 질문'으로 분류돼 차단됐다(2026-10-07 실측:
+// UserPromptSubmit Blocked·빈 산출물, 클로드-코덱스 검증 전면 불가). 식별 근거는 env 단독이 아니라
+// 'env의 job id = 이 프로젝트의 running job' + '이 세션 = 연결된 검증자' 둘 다.
+console.log("[D] 브릿지 검증 실행(연결된 vscode-user 검증자) — 자기 프롬프트는 침묵, 사람 질문은 계속 차단");
+{
+  const JOBS = path.join(dir, "ask-jobs");
+  const linkVerifier = (sid) => fs.writeFileSync(path.join(dir, "links.json"), JSON.stringify({ byWorkspace: { [ws]: { codexSession: sid } }, bySession: {} }), "utf8");
+  const putJob = (id, o) => { fs.mkdirSync(JOBS, { recursive: true }); fs.writeFileSync(path.join(JOBS, id + ".json"), JSON.stringify(Object.assign({ id, state: "running", workspace: ws, deadlineAt: futureIso(10 * 60 * 1000) }, o || {})), "utf8"); };
+  const runAs = (jobId, payload) => {
+    const e = { ...env }; delete e.CODEX_BRIDGE_ASK_JOB_ID; if (jobId !== null) e.CODEX_BRIDGE_ASK_JOB_ID = jobId;
+    const r = cp.spawnSync(process.execPath, [CHOOK], { encoding: "utf8", env: e, input: JSON.stringify(payload || cxPayload()), timeout: 30000, windowsHide: true });
+    let o = null; try { o = JSON.parse(r.stdout); } catch { o = null; }
+    return o;
+  };
+  const fresh = () => { setContract("claude-codex"); clearState(); writeRollout("vscode", "user"); linkVerifier(SID_CX); };
+  const unchanged = () => readContract().o.harnessMode === "claude-codex";
+
+  fresh(); putJob("ask-own-1");
+  let o = runAs("ask-own-1");
+  ck("D1 자기 job의 검증 프롬프트 = 침묵(차단·전환 없음)", !o && unchanged());
+
+  fresh(); putJob("ask-own-1");
+  o = runAs(null);
+  ck("D2 표식 없는 검증자 대화 질문(사람) = 계속 차단", !!(o && o.decision === "block") && unchanged());
+
+  fresh(); putJob("ask-own-1", { workspace: path.join(dir, "other-proj") });
+  o = runAs("ask-own-1");
+  ck("D3 다른 프로젝트의 job id = 차단", !!(o && o.decision === "block" && /검증 역할/.test(o.reason || "")) && unchanged());
+
+  for (const st of ["queued", "selecting", "succeeded", "failed"]) {
+    fresh(); putJob("ask-own-1", { state: st });
+    o = runAs("ask-own-1");
+    ck(`D4 job 상태 ${st}(실행 중 아님) = 차단`, !!(o && o.decision === "block") && unchanged());
+  }
+
+  fresh(); putJob("ask-own-1", { deadlineAt: new Date(Date.now() - 5 * 60 * 1000).toISOString() });
+  o = runAs("ask-own-1");
+  ck("D5 마감이 지난 job = 차단", !!(o && o.decision === "block") && unchanged());
+
+  fresh(); putJob("ask-own-1");
+  o = runAs("ask-missing-9");
+  ck("D6 존재하지 않는 job id = 차단", !!(o && o.decision === "block") && unchanged());
+
+  fresh(); putJob("ask-own-1"); fs.writeFileSync(path.join(dir, "evil.json"), JSON.stringify({ id: "../evil", state: "running", workspace: ws, deadlineAt: futureIso(600000) }), "utf8");
+  o = runAs("../evil");
+  ck("D7 경로 문자가 든 job id = 차단(ask-jobs 밖 파일 불신)", !!(o && o.decision === "block") && unchanged());
+
+  fresh(); putJob("ask-own-1", { id: "ask-other-2" });
+  o = runAs("ask-own-1");
+  ck("D8 파일 안 id가 env와 다르면 차단", !!(o && o.decision === "block") && unchanged());
+
+  // 연결된 검증자가 아닌 대화: env·job이 맞아도 예외 없음 → 기존 in-flight job 가드가 그대로 차단
+  fresh(); putJob("ask-own-1"); linkVerifier("019f0000-9999-7222-8333-000000000000");
+  o = runAs("ask-own-1");
+  ck("D9 연결된 검증자가 아닌 대화 = 기존 가드로 차단", !!(o && o.decision === "block" && /검증 작업/.test(o.reason || "")) && unchanged());
+
+  // links 판독 불가: linkedVerifier는 fail-closed(true)지만 예외 판정은 '양성 판독'만 인정
+  fresh(); putJob("ask-own-1"); fs.writeFileSync(path.join(dir, "links.json"), "{broken-links", "utf8");
+  o = runAs("ask-own-1");
+  ck("D10 links 손상 = 예외 불인정(차단)", !!(o && o.decision === "block") && unchanged());
+
+  // 코덱스-코덱스 전용 연결(codexCodexSession)은 클로드-코덱스 검증자가 아님 → 예외 불인정
+  fresh(); putJob("ask-own-1"); fs.writeFileSync(path.join(dir, "links.json"), JSON.stringify({ byWorkspace: { [ws]: { codexCodexSession: SID_CX } }, bySession: {} }), "utf8");
+  o = runAs("ask-own-1");
+  ck("D11 codexCodexSession만 일치 = 예외 불인정(차단)", !!(o && o.decision === "block") && unchanged());
+
+  // 손상 계약: exec 검증 실행과 같은 취급(B8b와 대칭) — 진행 중 검증을 죽이지 않는다. 사람 질문은 차단 유지.
+  fresh(); putJob("ask-own-1");
+  const cfD = readContract().file; fs.writeFileSync(cfD, "{broken-contract", "utf8");
+  o = runAs("ask-own-1");
+  ck("D12 손상 계약+자기 검증 프롬프트 = 침묵", !o && fs.readFileSync(cfD, "utf8") === "{broken-contract");
+  o = runAs(null);
+  ck("D12b 손상 계약+사람 질문 = 차단 유지", !!(o && o.decision === "block" && /손상/.test(o.reason || "")));
+}
+
 console.log(`결과: ${pass} 통과 / ${fail} 실패`);
 try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* Windows 잠금 무해 */ }
 process.exit(fail ? 1 : 0);
