@@ -3537,18 +3537,17 @@ async function cmdClassify(rest) {
     const sm = CF.classifySummary(ws);
     if (json) { console.log(JSON.stringify(sm)); return; }
     const n = (v) => (v === null ? (en ? "unreadable" : "판독 불가") : String(v));
-    console.log((en ? "[user words] queued " : "[사용자 말] 분류 대기 ") + n(sm.queued) + (en ? " · could not classify " : " · 분류하지 못한 말 ") + n(sm.held) + (en ? " · waiting for your decision (rule/decision seats) " : " · 사용자 확인 대기(규칙·결정 자리) ") + n(sm.seatsPending) + " · " + (sm.lastTs ? (en ? "last run " : "마지막 실행 ") + sm.lastTs + " " + sm.lastOutcome + (sm.lastReason ? "(" + sm.lastReason + ")" : "") : (en ? "never run" : "실행 이력 없음")));
+    console.log((en ? "[user words] queued " : "[사용자 말] 분류 대기 ") + n(sm.queued) + (en ? " · could not classify " : " · 분류하지 못한 말 ") + n(sm.held) + " · " + (sm.lastTs ? (en ? "last run " : "마지막 실행 ") + sm.lastTs + " " + sm.lastOutcome + (sm.lastReason ? "(" + sm.lastReason + ")" : "") : (en ? "never run" : "실행 이력 없음")));
     return;
   }
   if (sub === "list") {
     let rk = ""; try { rk = repoKeyOf(resolveScoutRepo(ws, loadContract(ws)).repo); } catch { rk = ""; }
-    const seats = rk ? CF.listSeatCandidates(ws, rk) : null;
+    // [RULE-SUPPLY-CORRECTION 묶음 1] 옛 규칙 칸·결정 기록 자리 목록은 없앰 — 분류 결과는 수칙서 후보뿐이고 그 승인·안 올림은 대시보드 수칙 카드에서만.
     const held = rk ? require("./user-words.js").heldWords(ws, rk, { unknown: true }) : null;
-    if (json) { console.log(JSON.stringify({ seats, held: held ? held.map((w) => ({ id: w.id, source: w.source, reason: w.heldReason, ts: w.ts })) : null })); return; }
-    if (seats === null) { console.log(en ? "[user words] seat ledger unreadable" : "[사용자 말] 자리 장부 판독 불가"); process.exitCode = 2; return; }
-    const seatLabel = (s) => (s === "rule" ? (en ? "implementer rule" : "구현 담당 규칙") : (en ? "decision record" : "결정 기록"));
-    for (const s of seats) console.log("  " + s.candidateId + " · " + seatLabel(s.seat) + " · " + s.quote + "\n    " + (en ? "why: " : "왜: ") + s.why);
-    console.log((en ? "[user words] waiting for your decision " : "[사용자 말] 사용자 확인 대기 ") + seats.length + (en ? " · could not classify " : " · 분류하지 못한 말 ") + (held ? held.length : "?") + (en ? " — rulebook seats appear in the dashboard proposal box." : " — 수칙서 자리 후보는 대시보드 제안 목록에 있습니다."));
+    if (json) { console.log(JSON.stringify({ held: held ? held.map((w) => ({ id: w.id, source: w.source, reason: w.heldReason, ts: w.ts })) : null })); return; }
+    if (held === null) { console.log(en ? "[user words] word ledger unreadable" : "[사용자 말] 말 장부 판독 불가"); process.exitCode = 2; return; }
+    for (const w of held) console.log("  " + w.id + " · " + (w.heldReason || "?") + (w.ts ? " · " + w.ts : ""));
+    console.log((en ? "[user words] could not classify " : "[사용자 말] 분류하지 못한 말 ") + held.length + (en ? " — rulebook candidates from your words appear in the dashboard rulebook card." : " — 사용자 말에서 나온 수칙서 후보는 대시보드 수칙 카드에 있습니다."));
     return;
   }
   if (sub === "tick") { // [묶음 2-나-2 2단계] 자동 계기 자식 — 분류 실행 잠금 안에서 판정·마감 소비·실행(classify.classifyTick)
@@ -3567,7 +3566,7 @@ async function cmdClassify(rest) {
   const trigger = (rest || []).includes("--auto") ? "auto" : (rest || []).includes("--button") ? "button" : "manual";
   const r = await CF.runClassify(ws, { trigger, lang: loadLang(), ...(typeof fk === "function" ? { pageRunner: fk } : {}) });
   if (json) { console.log(JSON.stringify(r)); if (r.st !== "ok" && r.st !== "empty") process.exitCode = 2; return; }
-  if (r.st === "ok") console.log((en ? "[user words] done — words " : "[사용자 말] 완료 — 살펴본 말 ") + r.words + (en ? " · rulebook proposals " : " · 수칙서 자리 후보 ") + r.envIds.length + (en ? " · rule/decision proposals " : " · 규칙·결정 자리 후보 ") + r.seatIds.length + (en ? " · dropped " : " · 탈락 ") + r.dropped.length + (r.unavailable ? (en ? " · unreadable words held " : " · 원문을 못 읽어 보류 ") + r.unavailable : "") + (en ? " — the user approves or declines them." : " — 승인·안 올림은 사용자가 정합니다."));
+  if (r.st === "ok") console.log((en ? "[user words] done — words " : "[사용자 말] 완료 — 살펴본 말 ") + r.words + (en ? " · rulebook proposals " : " · 수칙서 자리 후보 ") + r.envIds.length + (en ? " · dropped " : " · 탈락 ") + r.dropped.length + (r.unavailable ? (en ? " · unreadable words held " : " · 원문을 못 읽어 보류 ") + r.unavailable : "") + (en ? " — the user approves or declines them." : " — 승인·안 올림은 사용자가 정합니다."));
   else if (r.st === "empty") console.log(en ? "[user words] nothing waiting to be classified." : "[사용자 말] 분류할 말이 없습니다.");
   else { console.log((en ? "[user words] not run: " : "[사용자 말] 실행되지 않음: ") + r.st + (r.reason ? " (" + r.reason + ")" : "")); process.exitCode = 2; }
 }

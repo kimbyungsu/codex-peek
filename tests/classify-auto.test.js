@@ -478,7 +478,7 @@ t("명령줄 classify tick — 기준선 뒤 새 마감이면 자동 실행(trig
   round(P, "k0", 1, "pass", "2026-10-05T01:00:00.000Z");
   say(P, Q1);
   const fakeMod = path.join(HOME, "fake-auto-runner.js");
-  fs.writeFileSync(fakeMod, "module.exports = { runSelectorPage: ({ prompt }) => { const f = prompt.indexOf('<<u1 '); const i = prompt.indexOf(" + JSON.stringify(Q1) + ", f); const h = prompt.lastIndexOf('<<u', i); const ref = prompt.slice(h + 2, prompt.indexOf(' ', h)); return { promise: Promise.resolve({ ok: true, output: JSON.stringify({ candidates: [{ ref, seat: 'rule', quote: " + JSON.stringify(Q1) + ", why: '프로젝트 내내 지킬 규칙' }] }) }), cancel() {} }; } };");
+  fs.writeFileSync(fakeMod, "module.exports = { runSelectorPage: ({ prompt }) => { const f = prompt.indexOf('<<u1 '); const i = prompt.indexOf(" + JSON.stringify(Q1) + ", f); const h = prompt.lastIndexOf('<<u', i); const ref = prompt.slice(h + 2, prompt.indexOf(' ', h)); return { promise: Promise.resolve({ ok: true, output: JSON.stringify({ candidates: [{ ref, seat: 'alwaysBlocker', quote: " + JSON.stringify(Q1) + ", why: '프로젝트 내내 지킬 규칙' }] }) }), cancel() {} }; } };");
   const env = Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME, CLAUDE_PROJECT_DIR: P.ws, CODEX_BRIDGE_SELECTOR_RUNNER: fakeMod });
   const cli = path.join(ROOT, "bridge", "codex-bridge.js");
   const tick = () => JSON.parse(cp.spawnSync(process.execPath, [cli, "classify", "tick", "--json"], { env, encoding: "utf8", cwd: P.ws }).stdout.trim().split(/\r?\n/).pop());
@@ -486,7 +486,7 @@ t("명령줄 classify tick — 기준선 뒤 새 마감이면 자동 실행(trig
   assert.ok(a.st === "no-run" && a.judge.reason === "baseline", JSON.stringify(a));
   round(P, "k1", 1, "pass", "2026-10-05T02:00:00.000Z");
   const b = tick();
-  assert.ok(b.st === "ok" && b.judge.spawn && b.seatIds.length === 1, JSON.stringify(b));
+  assert.ok(b.st === "ok" && b.judge.spawn && b.envIds.length === 1, JSON.stringify(b));
   const runs = CF.readClassifyRows(P.ws).filter((r) => r.type === "run");
   assert.strictEqual(runs[runs.length - 1].trigger, "auto");
   assert.ok(CF.readClassifyTick(P.ws, P.rk).ranAt, "실행 시각");
@@ -507,20 +507,23 @@ t("대기 0=침묵 · 대기 생기면 1회 · 같은 상태=침묵 · 목록 �
   assert.ok(!/하라|해라|하세요|올려/.test(n1), "지시문 아님(R1)");
   assert.strictEqual(CF.pendingNoticeFor(P.ws, null, "sess-1", "ko"), null, "같은 상태=침묵");
   assert.ok(CF.pendingNoticeFor(P.ws, null, "sess-2", "en").includes("1 standard"), "다른 세션=1회");
-  const B = "알림 시험용 두 번째 규칙 문장입니다 계속 지켜요";
+  const B = "알림 시험용 두 번째 판정 기준 문장입니다 계속 지켜요";
   say(P, B);
-  const r2 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, B), seat: "rule", quote: B, why: "프로젝트 내내 지킬 소통 방식" }] })) });
-  assert.strictEqual(r2.seatIds.length, 1);
+  const r2 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, B), seat: "alwaysBlocker", quote: B, why: "프로젝트 내내 지킬 판정 기준" }] })) });
+  assert.strictEqual(r2.envIds.length, 1);
   assert.ok(CF.pendingNoticeFor(P.ws, null, "sess-1", "ko").includes("2건"), "목록 바뀜=다시");
-  assert.ok(CF.declineSeatCandidate(P.ws, r2.seatIds[0]).ok);
-  assert.ok(CL.appendEnvelopeCandidates(P.ws, [{ candidateId: r.envIds[0], envelopeHash: CL.GEN0_HASH, status: "declined", by: "user", ts: new Date().toISOString() }]));
+  // [RULE-SUPPLY-CORRECTION 묶음 1] 옛 자리 장부의 대기 제안은 승인 길이 없어 세지 않는다
+  fs.mkdirSync(CF.CLASSIFY_DIR, { recursive: true });
+  fs.writeFileSync(CF.seatsFileFor(P.ws), JSON.stringify({ schema: "user-seat-v1", wsKey: CL.wsKeyFor(P.ws), candidateId: "f".repeat(16), status: "proposed", seat: "rule", repoKey: P.rk, provider: "claude", quote: "옛 규칙 칸 대기 제안 문장입니다", why: "옛 제안", ts: "2026-10-05T00:00:00.000Z" }) + "\n");
+  assert.deepStrictEqual(CF.pendingUserWordIds(P.ws).length, 2, "옛 대기 제안 미합산");
+  assert.ok(CL.appendEnvelopeCandidates(P.ws, [r.envIds[0], r2.envIds[0]].map((id) => ({ candidateId: id, envelopeHash: CL.GEN0_HASH, status: "declined", by: "user", ts: new Date().toISOString() }))));
   assert.strictEqual(CF.pendingNoticeFor(P.ws, null, "sess-1", "ko"), null, "다 처리=침묵");
 });
 t("입력 제출 훅(실제 실행)이 확인 대기 1줄을 싣고 같은 상태의 다음 차례에는 안 싣는다", async () => {
   const P = project("hookline");
   const A = "훅 결선 시험용 지속 기준 문장입니다 계속 지켜요";
   say(P, A);
-  await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, A), seat: "rule", quote: A, why: "프로젝트 내내 지킬 소통 방식" }] })) });
+  await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, A), seat: "alwaysBlocker", quote: A, why: "프로젝트 내내 지킬 판정 기준" }] })) });
   const SID = "ca-hook-session-1";
   const tp = path.join(mk("ca-tx-"), SID + ".jsonl"); fs.writeFileSync(tp, "");
   const env = Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME, CLAUDE_PROJECT_DIR: P.ws, CLAUDE_CODE_SESSION_ID: SID });
@@ -575,20 +578,19 @@ t("승인 수칙서의 sup-N·oos-N 짧은 목록(60자)은 정적 전달(세션
 });
 
 sec("[7] 대시보드 — 개요 합산·한꺼번에 올리기 칸 전달·카드 결선(컴파일 산출물)");
-t("개요 '지금 정할 것'에 규칙·결정 제안 합류(순수 함수 실행) · 한꺼번에 올리기 계획에 칸 전달 · 처리기·카드 결선", () => {
+t("개요 '지금 정할 것'에 옛 규칙·결정 제안이 합류하지 않음(순수 함수 실행) · 한꺼번에 올리기 계획에 칸 전달 · 옛 제안 처리기 없음·남은 처리기·카드 결선", () => {
   const outSrc = fs.readFileSync(path.join(ROOT, "out", "extension.js"), "utf8");
   const b3 = outSrc.indexOf("function decideActs(d){"), e3 = outSrc.indexOf("function renderOverview(d){", b3);
   const acts = new Function("var T=function(a,b){return a;};\n" + outSrc.slice(b3, e3) + "\nreturn decideActs;")();
-  const a = acts({ userWords: { seats: [{ id: "x" }, { id: "y" }], held: [] } });
-  assert.ok(a.length === 1 && a[0].n === 2 && a[0].el === "[data-seats-box]" && a[0].tab === "setup", JSON.stringify(a));
+  const a = acts({ userWords: { seats: [{ id: "x" }, { id: "y" }], held: [] } }); // 옛 실행본이 남긴 모양의 자료가 와도
+  assert.strictEqual(a.length, 0, "옛 제안은 '지금 정할 것'에 없음 " + JSON.stringify(a));
   assert.strictEqual(acts({ userWords: null }).length, 0);
   assert.ok(outSrc.includes("operation: c.operation, axis: c.axis })"), "한꺼번에 올리기 계획에 칸 전달");
-  for (const k of ['m?.type === "seatMark"', 'm?.type === "heldMark"', 'CFS.approveSeatCandidate(wsS, m.id)', 'CFS.declineSeatCandidate(wsS, m.id)', 'CFH.heldWordAction(wsH, m.id, m.action)', 'id="uwCard"', "userWordsView(ws)"]) assert.ok(outSrc.includes(k), "결선: " + k);
-  const ib = outSrc.indexOf('m?.type === "seatMark"');
-  assert.ok(outSrc.slice(ib, ib + 4000).includes("{ modal: true }"), "승인 전 확인 창(무엇이 어디에 적히는지)");
+  for (const k of ['m?.type === "heldMark"', 'CFH.heldWordAction(wsH, m.id, m.action)', 'id="uwCard"', "userWordsView(ws)"]) assert.ok(outSrc.includes(k), "결선: " + k);
+  for (const k of ['m?.type === "seatMark"', "approveSeatCandidate", "declineSeatCandidate", "data-seats-box"]) assert.ok(!outSrc.includes(k), "옛 제안 승인 길 없음: " + k);
 });
 
-t("새 카드 그리기 조각(컴파일 산출물)을 가짜 화면 요소로 실제 실행 — 제안 행(어디로·승인·안 올림)·분류하지 못한 말(다시 분류는 이 프로젝트 말만)·버튼이 보내는 메시지", () => {
+t("사용자 말 카드 그리기 조각(컴파일 산출물)을 가짜 화면 요소로 실제 실행 — 옛 제안 행·승인 버튼 없음 · 분류하지 못한 말(다시 분류는 이 프로젝트 말만)·버튼이 보내는 메시지", () => {
   const outSrc = fs.readFileSync(path.join(ROOT, "out", "extension.js"), "utf8");
   const b = outSrc.indexOf('safe(function(){ var uc=$("uwCard");'), e = outSrc.indexOf('safe(function(){ var n=$("vBudgetNote");', b);
   assert.ok(b > 0 && e > b, "조각 추출");
@@ -601,26 +603,27 @@ t("새 카드 그리기 조각(컴파일 산출물)을 가짜 화면 요소로 �
   };
   const hidden = run({ userWords: null });
   assert.strictEqual(hidden.uc.style.display, "none", "자료 없음=숨김");
-  const empty = run({ userWords: { wsKey: "w", repoKey: "r", summary: { queued: 0, lastTs: "" }, seats: [], held: [] } });
+  const empty = run({ userWords: { wsKey: "w", repoKey: "r", summary: { queued: 0, lastTs: "" }, held: [] } });
   assert.strictEqual(empty.uc.style.display, "none", "정상 빈 목록=숨김");
-  const err = run({ userWords: { wsKey: "w", repoKey: "r", summary: { queued: null, lastTs: "" }, seats: null, held: null } });
+  const legacyOnly = run({ userWords: { wsKey: "w", repoKey: "r", summary: { queued: 0, lastTs: "" }, seats: [{ id: "a".repeat(16), seat: "rule", quote: "옛 제안", why: "", provider: "claude", ts: "" }], held: [] } });
+  assert.strictEqual(legacyOnly.uc.style.display, "none", "옛 실행본 자료의 제안만 있으면 카드 숨김(제안 행 없음)");
+  const err = run({ userWords: { wsKey: "w", repoKey: "r", summary: { queued: null, lastTs: "" }, held: null } });
   assert.ok(err.uc.style.display === "block" && err.text.includes("처리할 것이 없다는 뜻이 아니에요"), "판독 실패=숨기지 않고 알림(검증 1회차 주의)");
   const d = { userWords: { wsKey: "wk1", repoKey: "rk", summary: { queued: 3, lastTs: "2026-10-05T01:02:00.000Z", lastOutcome: "failed", lastReason: "timeout" },
-    seats: [{ id: "a".repeat(16), seat: "rule", quote: "설명은 상황 예시로", why: "소통 방식", provider: "codex", ts: "2026-10-05T00:00:00.000Z" }, { id: "b".repeat(16), seat: "decision", quote: "앱 하나로 간다", why: "제품 방향", provider: "claude", ts: "" }],
+    seats: [{ id: "a".repeat(16), seat: "rule", quote: "설명은 상황 예시로", why: "소통 방식", provider: "codex", ts: "2026-10-05T00:00:00.000Z" }], // 옛 실행본 모양 — 무시돼야 함
     held: [{ id: "p-" + "c".repeat(16), source: "prompt", reason: "classify-failed", ts: "", text: "원문 일부", canRequeue: true }, { id: "c-" + "d".repeat(16), source: "choice", reason: "repo-unknown", ts: "", text: "", canRequeue: false }] } };
   const r = run(d);
   assert.strictEqual(r.uc.style.display, "block");
-  assert.ok(r.text.includes("살펴볼 말 3건") && r.text.includes("실패 — 말은 남아 있어 다시 시도(timeout)"), "요약 줄");
-  assert.ok(r.text.includes("어디로: Codex 구현 담당 규칙 칸") && r.text.includes("어디로: 결정 기록"), "전달처 표시");
+  assert.ok(r.text.includes("사용자 말 분류") && r.text.includes("살펴볼 말 3건") && r.text.includes("실패 — 말은 남아 있어 다시 시도(timeout)"), "요약 줄");
+  assert.ok(!r.text.includes("어디로:") && !r.text.includes("설명은 상황 예시로") && r.text.includes("구현 담당 규칙 칸에 직접 적어 주세요") && !r.text.includes("Claude 규칙 칸"), "옛 제안 행 없음·규칙 칸은 사용자가 직접(구현 담당 회사와 무관한 안내 — 검증 보완)");
   assert.ok(r.text.includes("분류하지 못한 사용자 말 2건") && r.text.includes("분류 담당이 세 번 실패했어요") && r.text.includes("어느 프로젝트의 말인지 확인하지 못했어요"), "보류 사유");
   const btn = r.all.filter((x) => x.tag === "button");
-  assert.strictEqual(btn.filter((x) => x.textContent === "승인").length, 2);
+  assert.strictEqual(btn.filter((x) => x.textContent === "승인" || x.textContent === "안 올림").length, 0, "승인·안 올림 버튼 없음");
   assert.strictEqual(btn.filter((x) => x.textContent === "다시 분류").length, 1, "출처 불명 말엔 다시 분류 없음");
-  btn.find((x) => x.textContent === "승인").onclick();
   btn.find((x) => x.textContent === "다시 분류").onclick();
   btn.filter((x) => x.textContent === "버리기")[1].onclick();
-  assert.deepStrictEqual(r.sent.map((m) => m.type + ":" + m.action + ":" + m.wsKey), ["seatMark:approve:wk1", "heldMark:requeue:wk1", "heldMark:dismiss:wk1"]);
-  assert.strictEqual(r.all.filter((x) => x.attrs && x.attrs["data-seats-box"]).length, 1, "개요 이동 앵커");
+  assert.deepStrictEqual(r.sent.map((m) => m.type + ":" + m.action + ":" + m.wsKey), ["heldMark:requeue:wk1", "heldMark:dismiss:wk1"]);
+  assert.strictEqual(r.all.filter((x) => x.attrs && x.attrs["data-seats-box"]).length, 0, "옛 개요 이동 앵커 없음");
 });
 
 t("'수칙' 카드 그리기 조각 실제 실행 — 분류 담당이 고른 범위 밖 후보: 칸 이름·어디로 줄·버튼 하나(본문) · 0세대·승인 세대 모두 · 칸 없는 후보=종전 버튼", () => {

@@ -208,10 +208,10 @@ interface BridgeState {
   usedMemory: { ts: string; items: Array<{ path: string; note: string }>; couplings: number; omitted: boolean; selOver: { count: number; bytesTotal: number; itemsMax: number; bytesMax: number } | null } | null; // selOver=[§7 4-2b] 직전 검증의 서고 선별 정상 범위 초과(전량 동봉) — 서고 카드 표기 재료
   decisions: { open: number; items: Array<{ id: string; question: string; kind: string; origin: string; ts: string; block: string }> } | null; // [§7 4-2b] 결정 장부(사용자 답 대기) — 읽기 전용·답은 CLI decisions choose|delegate. null=무폴더/구 런타임
   curation: { lastItems: Array<{ id: string; title: string; op: string; status: string }>; lastTs: string; lastOutcome: string; lastReason: string; lastTrigger: string; runs: number; proposedTotal: number; adopted: number; declined: number; adoptRate: number; pending: number; running: boolean; archiveSize: number; selOverCount: number; unusedCount: number; unusedDays: number; campaignsSince: number; maxPerRun: number; maxPending: number; tickK: number } | null; // [CURATION v3 §3 E·F] 정리 제안 요약·측정(수칙 카드 1줄) — null=무폴더/구 런타임
-  // [RULE-SUPPLY 묶음 2-나-2 2단계] 사용자 말 분류 — 규칙 칸·결정 기록 자리 제안·분류하지 못한 말·요약(bridge/classify.js userWordsView · 판독 불가 칸=null)
+  // [RULE-SUPPLY 묶음 2-나-2 2단계] 사용자 말 분류 — 분류하지 못한 말·요약(bridge/classify.js userWordsView · 판독 불가 칸=null) · [RULE-SUPPLY-CORRECTION 묶음 1] 옛 규칙 칸·결정 기록 자리 제안은 없앰
   // [RULE-SUPPLY 묶음 3 §4] 검증 상한 마감 기록(bridge/verify-cap-handoff.js closeoutView · 판독 불가=readError)
   closeouts: { readError: boolean; total: number; truncated: boolean; items: Array<{ id: string; ts: string; host: string; round: { count: number; budget: number } | null; residualRisk: string; needsUserDecision: boolean; decisionCount: number; alertKind: string; verdict: string | null; counts: { accepted: number; rebutted: number; parked: number } | null; text: string }> } | null;
-  userWords: { wsKey: string; repoKey: string; summary: any; seats: Array<{ id: string; seat: string; quote: string; why: string; provider: string; decisionKind: string; quoteSource: string; ts: string }> | null; held: Array<{ id: string; source: string; reason: string; ts: string; text: string; canRequeue: boolean }> | null } | null;
+  userWords: { wsKey: string; repoKey: string; summary: any; held: Array<{ id: string; source: string; reason: string; ts: string; text: string; canRequeue: boolean }> | null } | null;
   // [HARNESS-STRUCTURE §B3 · D4] 수칙 흐름 4칸(개요 패널 카드) — bridge/rules-flow.js rulesFlowFor(ws) 그대로(판독 실패=null → 카드가 '자료 없음'으로)
   rulesFlow: { core: { st: string; count: { supportedEnv: number; alwaysBlocker: number; outOfScope: number; total: number }; injectedChars: number }; archive: { state: string; count: number; max: number; selectCap: { items: number; bytes: number }; lastSelection: { ts: string; selectedCount: number; askId: string } | null }; proposals: { pending: number; max: number; nextCheck: { tickK: number; tickCount: number; unusedDays: number; lastTickTs: string } }; curator: { lastTs: string; lastOutcome: string; lastReason: string; lastTrigger: string; running: boolean; metrics: { adoptRate: number; proposedTotal: number; adopted: number; declined: number; archiveSize: number; selOverCount: number; unusedCount: number }; lastItems: Array<{ id: string; title: string; op: string; status: string }> } } | null;
   ruleCheck: { host: "claude" | "codex"; checklist: boolean; rules: string[]; rulesFp: string; summary: { turns: number; older: number; counts: Array<{ n: number; complies: number; violated: number; na: number; missing: number }>; lastTs: string } } | null; // [RULE-COMPLIANCE §3 D] 규칙 자가점검 장부 요약(관찰 자료 — 판정·합산 아님). null=무폴더/구 런타임 // [UI 개편 2차] 직전 검증에 실린 지도 동봉 스냅샷(브릿지 stats/attach.jsonl 최신 1건). null=기록 없음/구 브릿지
@@ -4342,33 +4342,8 @@ class Dashboard {
         }
         // [2026-08-29 사용자 결정] 대시보드 직접 입력(넣기 입력칸·ruleAdd)은 제거 — 수칙은 대화에서 한 약속의 포착과 구현 담당의 마감 상신 두 경로로만 제안되고,
         // 사용자는 승인/안 올림/빼기만 한다(자동 적용 체계에 수동 입력칸이 섞이면 "왜 있는지" 설명이 없어 혼란 — 실보고). 브릿지 directRuleCandidate·user-direct kind는 과거 레코드 호환용으로만 남는다.
-        // [RULE-SUPPLY 묶음 2-나-2 2단계] 규칙 칸·결정 기록 제안 — 승인(확인 창에서 무엇이 어디에 적히는지 보여 준 뒤)·안 올림. 정본=classify.approveSeatCandidate/declineSeatCandidate
-        // (현재 저장소 직접 판독·잠금 안 재대조·최종 판독 확인). wsKey 재대조=카드가 떠 있는 사이 활성 프로젝트가 바뀐 경우 차단(candMark 계보).
-        if (m?.type === "seatMark" && typeof m.id === "string" && /^[0-9a-f]{16}$/.test(m.id) && (m.action === "approve" || m.action === "decline") && typeof m.wsKey === "string" && m.wsKey) {
-          const wsS = dashboardWorkspace(); if (!wsS) return;
-          const enS = loadLangExt() === "en";
-          try {
-            const CLS: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
-            const CFS: any = require(path.join(BRIDGE_DIR, "classify.js"));
-            if (typeof CFS.approveSeatCandidate !== "function") { vscode.window.showWarningMessage(enS ? "This runtime cannot handle these proposals — " + runtimeRepairHint(true) : "이 설치본은 이 제안을 처리할 수 없어요 — " + runtimeRepairHint(false)); this.post(); return; }
-            if (String(CLS.wsKeyFor(wsS)) !== m.wsKey) { vscode.window.showWarningMessage(enS ? "The active project changed while this card was open — the list refreshes; please judge again." : "카드가 떠 있는 사이 활성 프로젝트가 바뀌었어요 — 목록이 갱신됩니다. 다시 판단해 주세요."); this.post(); return; }
-            const vS: any = CFS.userWordsView(wsS);
-            const itS: any = ((vS && vS.seats) || []).find((x: any) => x.id === m.id);
-            if (!itS) { vscode.window.showWarningMessage(enS ? "That proposal is no longer current — the list refreshes." : "그 제안은 더 이상 유효하지 않아요 — 목록이 갱신됩니다."); this.post(); return; }
-            const resS = (r: any, okKo: string, okEn: string) => { if (r && r.ok) vscode.window.showInformationMessage(enS ? okEn : okKo); else vscode.window.showWarningMessage((enS ? "Not recorded: " : "기록하지 못했어요: ") + String((r && r.reason) || "unknown") + ((r && r.reason === "repo-mismatch") ? (enS ? " — this proposal came from another project target." : " — 다른 정찰 대상(프로젝트)에서 나온 제안이에요.") : "")); this.post(); };
-            if (m.action === "decline") { resS(CFS.declineSeatCandidate(wsS, m.id), "안 올림으로 기록했어요 — 같은 말은 다시 올라오지 않아요.", "Declined — the same words won't be proposed again."); return; }
-            const who = itS.provider === "codex" ? "Codex" : "Claude";
-            const what = itS.seat === "rule"
-              ? (enS ? `Add this sentence, exactly as you wrote it, to the ${who} implementer's rule list. It is sent to the implementer every turn; you can edit or remove it any time in the setup tab.` : `${who} 구현 담당 규칙 칸에 이 문장을 쓰신 그대로 추가합니다. 매 턴 구현 담당에게 전달되고, 설정 탭에서 언제든 고치거나 뺄 수 있어요.`)
-              : (enS ? "Record this as your decision. The independent curator reads decisions as direction hints (if the curator runs on another company's model, it may be sent there too)." : "이 문장을 사용자 결정으로 기록합니다. 독립 정리 담당이 방향 참고로 읽어요(정리 담당이 다른 회사 모델이면 그쪽에도 전달될 수 있어요).");
-            vscode.window.showInformationMessage(what + "\n\n" + String(itS.quote || ""), { modal: true }, enS ? "Approve" : "승인").then((pick) => {
-              if (!pick) { this.post(); return; }
-              try { resS(CFS.approveSeatCandidate(wsS, m.id), itS.seat === "rule" ? "규칙 칸에 추가했어요 — 다음 턴부터 구현 담당에게 전달돼요." : "결정 기록에 남겼어요.", itS.seat === "rule" ? "Added to the rule list — sent to the implementer from the next turn." : "Recorded as your decision."); }
-              catch { vscode.window.showWarningMessage(enS ? "Not recorded." : "기록하지 못했어요."); this.post(); }
-            });
-          } catch { vscode.window.showWarningMessage(enS ? "Not recorded." : "기록하지 못했어요."); this.post(); }
-          return;
-        }
+        // [RULE-SUPPLY-CORRECTION 묶음 1 · §2 D] 옛 규칙 칸·결정 기록 제안의 승인·안 올림 처리기(seatMark)는 없앴다 — 규칙 칸은 사용자가 직접 쓰고,
+        // 결정 장부의 출처는 구현 담당 판단뿐이다. 남아 있는 옛 대기 제안은 승인 길이 없어 효력이 생길 수 없다(장부는 그대로 · D-d).
         // [RULE-SUPPLY 묶음 2-나-2 2단계] 분류하지 못한 사용자 말 — 다시 분류(대기열로·재시도 0 · 이 프로젝트 말만) / 버리기(분류 대상에서 제외). 정본=classify.heldWordAction.
         if (m?.type === "heldMark" && typeof m.id === "string" && /^[pc]-[0-9a-f]{16}$/.test(m.id) && (m.action === "requeue" || m.action === "dismiss") && typeof m.wsKey === "string" && m.wsKey) {
           const wsH = dashboardWorkspace(); if (!wsH) return;
@@ -6972,8 +6947,6 @@ class Dashboard {
     // 없었음 — 개요 합산에 편입+해당 위치로 이동(el=교차 패널 스크롤은 gotoEl 경유 규칙).
     var ec0=d.envelope&&d.envelope.cands?d.envelope.cands.filter(function(c9){return !c9.status||c9.status==="proposed";}).length:0; // proposed=장부 유래 후보의 '판단 대기' 상태(R1 blocker①)
     if(ec0) acts9.push({n:ec0, tab:"setup", el:"[data-cands-box]", label:T("수칙서 후보 — 올릴지 판단 대기(효력은 도장부터)","rulebook candidates awaiting your call (effect only after stamp)")});
-    var us0=d.userWords&&d.userWords.seats?d.userWords.seats.length:0; // [RULE-SUPPLY 묶음 2-나-2 2단계] 규칙 칸·결정 기록 제안(사용자 말에서 나온 것)
-    if(us0) acts9.push({n:us0, tab:"setup", el:"[data-seats-box]", label:T("사용자 말에서 나온 규칙·결정 제안 — 승인 대기(효력은 승인부터)","rule/decision proposals from your words — awaiting your call (effect only after approval)")});
     // [§7 4-2b] 결정 장부 — 구현자가 못 정하는 것(제품 방향·위험·범위)만 장부에 오르고, 사용자가 고르거나 "네가 정해라"로 답해야 다음 검증이 이어진다.
     var dc9=d.decisions&&d.decisions.open?d.decisions.open:0;
     if(dc9) acts9.push({n:dc9, tab:"verify", el:"#decisionsSec", label:T("결정 장부 — 사용자 답 대기(고르기 또는 '네가 정해라')","decision ledger — awaiting your answer (choose or delegate)")});
@@ -7942,35 +7915,18 @@ class Dashboard {
           if(e9.arc && (e9.arc.state==="broken"||e9.arc.state==="stray")){ var arcWarn=document.createElement("div"); arcWarn.style.cssText="margin-top:8px;font-size:12px;color:var(--vscode-editorWarning-foreground,#d4a017)"; arcWarn.textContent=e9.arc.state==="broken"?T("⚠ 보관 수칙 파일이 승인 없이 바뀌어 새 검증이 시작되지 않아요 — 위 '승인 없이 바뀐 내용 보기'에서 승인하거나 복구","⚠ the stored rules file changed without approval — new verifications will not start; use 'View unapproved changes' above"):T("⚠ 도장 없는 보관 파일이 있어요 — 정리 전까지 올림이 막힙니다","⚠ an unstamped stored-rules file exists — adds are blocked until it is cleaned"); ec.appendChild(arcWarn); }
         }
       });
-      safe(function(){ var uc=$("uwCard"); if(!uc) return; var u9=d.userWords; uc.innerHTML=""; // [RULE-SUPPLY 묶음 2-나-2 2단계] 사용자 말에서 나온 규칙 칸·결정 기록 제안 + 분류하지 못한 말
-        var seats9=(u9&&u9.seats)||[], held9=(u9&&u9.held)||[], sm9=(u9&&u9.summary)||null;
-        var readErr9=!!u9 && (u9.seats===null || u9.held===null || !sm9 || sm9.queued===null); // [검증 1회차 주의] 판독 실패≠빈 목록 — 숨기지 않고 알린다
-        if(!u9 || (!readErr9 && !seats9.length && !held9.length && !(sm9&&sm9.queued) && !(sm9&&sm9.lastTs))){ uc.style.display="none"; return; }
+      safe(function(){ var uc=$("uwCard"); if(!uc) return; var u9=d.userWords; uc.innerHTML=""; // [RULE-SUPPLY 묶음 2-나-2 2단계] 사용자 말 분류 요약 + 분류하지 못한 말 · [RULE-SUPPLY-CORRECTION 묶음 1] 옛 규칙 칸·결정 기록 제안 없음
+        var held9=(u9&&u9.held)||[], sm9=(u9&&u9.summary)||null;
+        var readErr9=!!u9 && (u9.held===null || !sm9 || sm9.queued===null); // [검증 1회차 주의] 판독 실패≠빈 목록 — 숨기지 않고 알린다
+        if(!u9 || (!readErr9 && !held9.length && !(sm9&&sm9.queued) && !(sm9&&sm9.lastTs))){ uc.style.display="none"; return; }
         uc.style.display="block";
-        var uh=document.createElement("div"); uh.style.fontWeight="600"; uh.textContent=T("사용자 말에서 나온 제안","Proposals from your own words"); uc.appendChild(uh);
+        var uh=document.createElement("div"); uh.style.fontWeight="600"; uh.textContent=T("사용자 말 분류","Classifying your words"); uc.appendChild(uh);
         var oLab=function(o,r){ return o==="proposed"?T("제안 냄","proposed"):o==="none"?T("올릴 만한 기준 없음","nothing worth proposing"):o==="empty"?T("살펴볼 말 없음","nothing to look at"):o==="locked"?T("다른 실행 중","another run in progress"):o==="input-failed"?(r==="envelope-inactive"?T("수칙서 승인 전이라 대기","waiting — rulebook not approved yet"):T("시작 못 함("+r+")","could not start ("+r+")")):o==="failed"?T("실패 — 말은 남아 있어 다시 시도("+r+")","failed — the words are kept and retried ("+r+")"):o; };
         var sl=document.createElement("div"); sl.className="muted"; sl.style.cssText="font-size:11px;margin-top:2px";
         var lastD9=""; if(sm9&&sm9.lastTs){ var dl9=new Date(sm9.lastTs); if(!isNaN(dl9.getTime())) lastD9=(dl9.getMonth()+1)+"/"+dl9.getDate()+" "+String(dl9.getHours()).padStart(2,"0")+":"+String(dl9.getMinutes()).padStart(2,"0"); }
         sl.textContent=T("살펴볼 말 "+((sm9&&sm9.queued!=null)?sm9.queued:"?")+"건 · 마지막 분류: "+(lastD9?lastD9+" "+oLab(sm9.lastOutcome,sm9.lastReason):"아직 없음"),"words waiting "+((sm9&&sm9.queued!=null)?sm9.queued:"?")+" · last run: "+(lastD9?lastD9+" "+oLab(sm9.lastOutcome,sm9.lastReason):"none yet")); uc.appendChild(sl);
-        var sn=document.createElement("div"); sn.className="muted"; sn.style.cssText="font-size:11px;margin-top:2px"; sn.textContent=T("검증이 통과하거나 왕복 상한에 닿아 한 작업이 마감될 때, 모인 말을 독립 분류 담당이 살펴봐요. 수칙서 칸 제안은 위 '수칙' 카드에, 규칙 칸·결정 기록 제안은 여기에 나와요.","When a piece of work closes (verification passes or hits the round cap), an independent classifier looks at the collected words. Rulebook proposals appear in the 'Rules' card above; rule-list and decision proposals appear here."); uc.appendChild(sn);
-        if(readErr9){ var se9=document.createElement("div"); se9.style.cssText="font-size:12px;margin-top:6px;color:var(--vscode-editorWarning-foreground,#d9a441)"; se9.textContent=T("사용자 말·제안 기록을 읽지 못했어요 — 처리할 것이 없다는 뜻이 아니에요. 잠시 후 다시 열어 주세요.","Could not read the user-words/proposal record — this does not mean there is nothing to handle. Reopen shortly."); uc.appendChild(se9); }
-        if(seats9.length){
-          var shd=document.createElement("div"); shd.style.cssText="margin-top:8px;font-weight:600"; shd.setAttribute("data-seats-box","1"); shd.textContent=T("제안 — "+seats9.length+"건 (승인해야만 효력이 생겨요)","Proposals — "+seats9.length+" (effective only after you approve)"); uc.appendChild(shd);
-          seats9.forEach(function(it){
-            var r=document.createElement("div"); r.style.cssText="font-size:12px;margin-top:7px;padding:6px 8px;border-radius:5px;background:var(--vscode-editorWidget-background)";
-            var w9=""; if(it.ts){ var dt=new Date(it.ts); if(!isNaN(dt.getTime())) w9=(dt.getMonth()+1)+"/"+dt.getDate(); }
-            var who9=it.provider==="codex"?"Codex":"Claude";
-            var lb=document.createElement("div"); lb.textContent=(w9?w9+" ":"")+(it.seat==="rule"?T("구현 담당 규칙으로 두자는 말이에요","words to keep as an implementer rule"):T("제품·설계 방향에 대한 결정이에요","a decision about product/design direction")); r.appendChild(lb);
-            var q9=document.createElement("div"); q9.className="muted"; q9.style.cssText="font-size:11px;margin-top:2px"; q9.textContent=T("문안: ","text: ")+it.quote; q9.title=it.quote; r.appendChild(q9);
-            if(it.why){ var wy=document.createElement("div"); wy.className="muted"; wy.style.cssText="font-size:11px;margin-top:2px"; wy.textContent=T("왜: ","why: ")+it.why; r.appendChild(wy); }
-            var to=document.createElement("div"); to.className="muted"; to.style.cssText="font-size:11px;margin-top:2px";
-            to.textContent=it.seat==="rule"?T("어디로: "+who9+" 구현 담당 규칙 칸 — 매 턴 구현 담당에게 전달돼요(설정 탭에서 고치거나 뺄 수 있어요)","goes to: the "+who9+" implementer's rule list — sent to the implementer every turn (editable in the setup tab)"):T("어디로: 결정 기록 — 독립 정리 담당이 방향 참고로 읽어요(정리 담당이 다른 회사 모델이면 그쪽에도 전달될 수 있어요)","goes to: the decision record — the independent curator reads it as a direction hint (it may be sent to another company's model if the curator runs there)");
-            r.appendChild(to);
-            var ab=document.createElement("button"); ab.style.cssText="margin-top:5px;margin-right:5px;font-size:12px;font-weight:600"; ab.textContent=T("승인","Approve"); ab.onclick=function(){ vscode.postMessage({type:"seatMark", id: it.id, action:"approve", wsKey: String(u9.wsKey||"")}); }; r.appendChild(ab);
-            var db=document.createElement("button"); db.className="secondary"; db.style.cssText="margin-top:5px;margin-right:5px;font-size:12px"; db.textContent=T("안 올림","Not this one"); db.onclick=function(){ vscode.postMessage({type:"seatMark", id: it.id, action:"decline", wsKey: String(u9.wsKey||"")}); }; r.appendChild(db);
-            uc.appendChild(r);
-          });
-        }
+        var sn=document.createElement("div"); sn.className="muted"; sn.style.cssText="font-size:11px;margin-top:2px"; sn.textContent=T("검증이 통과하거나 왕복 상한에 닿아 한 작업이 마감될 때, 모인 말을 독립 분류 담당이 살펴봐요. 수칙서 후보는 위 '수칙' 카드에 나와요. 구현 담당이 일하는 방식에 대한 말은 설정 탭의 구현 담당 규칙 칸에 직접 적어 주세요.","When a piece of work closes (verification passes or hits the round cap), an independent classifier looks at the collected words. Rulebook candidates appear in the 'Rules' card above. Words about how the implementer should work go into the rule box — write them there yourself."); uc.appendChild(sn);
+        if(readErr9){ var se9=document.createElement("div"); se9.style.cssText="font-size:12px;margin-top:6px;color:var(--vscode-editorWarning-foreground,#d9a441)"; se9.textContent=T("사용자 말 기록을 읽지 못했어요 — 처리할 것이 없다는 뜻이 아니에요. 잠시 후 다시 열어 주세요.","Could not read the user-words record — this does not mean there is nothing to handle. Reopen shortly."); uc.appendChild(se9); }
         if(held9.length){
           var hd=document.createElement("details"); hd.style.cssText="margin-top:8px;font-size:12px";
           var hs=document.createElement("summary"); hs.style.cssText="cursor:pointer;color:var(--vscode-editorWarning-foreground,#d9a441)"; hs.textContent=T("분류하지 못한 사용자 말 "+held9.length+"건","Words that could not be classified — "+held9.length); hd.appendChild(hs);

@@ -1,7 +1,8 @@
 "use strict";
 /*
- * [RULE-SUPPLY-REDESIGN 묶음 2-나-2 1단계] 사용자 말 분류 실행 — 입력(민감 형태 생략·회사별 묶음·보존 기간)·답 판독(작문 차단)·세 자리 후보·
- * 실패 보존(재시도→보류)·도장 정본(규칙 칸 덧붙임·결정 기록)·수칙서 칸 갈래(지원 환경·범위 밖=본문 전용)·세대 이월 칸 보존·명령줄 결선.
+ * [RULE-SUPPLY-REDESIGN 묶음 2-나-2 1단계] 사용자 말 분류 실행 — 입력(민감 형태 생략·회사별 묶음·보존 기간)·답 판독(작문 차단)·수칙서 칸 후보·
+ * 실패 보존(재시도→보류)·수칙서 칸 갈래(지원 환경·범위 밖=본문 전용)·세대 이월 칸 보존·명령줄 결선.
+ * [RULE-SUPPLY-CORRECTION 묶음 1] 옛 규칙 칸·결정 기록 자리 제거 — 그 자리 답=전량 거부 · 승인 함수 부재 · 결정 출처 새로 만들기 implementer 만·읽기 호환 · 옛 자리 장부 무변경.
  * 격리: 임시 CODEX_BRIDGE_HOME(파일 실주입). 분류 담당 호출은 페이지 실행기 주입(실제 호출 없음).
  */
 const assert = require("assert");
@@ -109,24 +110,31 @@ t("손상=전량 거부(JSON 아님·상한 초과·자리 밖·근거 형식) �
   const W = "지속 기준이라 계속 지켜야 함";
   const r = CF.parseClassifyOutput(JSON.stringify({ candidates: [
     { ref: "u1", seat: "outOfScope", quote: "실제 기기 확인은 이번 단계 범위 밖이야", why: W, recommend: "항상" },
-    { ref: "u1", seat: "rule", quote: "실제 기기는 이번 단계에서 빼자", why: W },
-    { ref: "u1", seat: "rule", quote: "파일은 [생략] 에 있어", why: W },
-    { ref: "u1", seat: "rule", quote: "파일은 C:\\work\\x.txt 에 있어", why: W },
-    { ref: "u9", seat: "rule", quote: "실제 기기 확인은 이번 단계", why: W },
+    { ref: "u1", seat: "alwaysBlocker", quote: "실제 기기는 이번 단계에서 빼자", why: W },
+    { ref: "u1", seat: "alwaysBlocker", quote: "파일은 [생략] 에 있어", why: W },
+    { ref: "u1", seat: "alwaysBlocker", quote: "파일은 C:\\work\\x.txt 에 있어", why: W },
+    { ref: "u9", seat: "alwaysBlocker", quote: "실제 기기 확인은 이번 단계", why: W },
   ] }), inp);
   assert.ok(r.ok && r.items.length === 1 && r.items[0].seat === "outOfScope" && r.items[0].recommend === "항상", JSON.stringify(r));
   assert.deepStrictEqual(r.dropped.map((x) => x.reason), ["not-in-words", "redacted-span", "sensitive-path", "unknown-ref"]);
   // [검증 1회차 f-25b85198] why 형식(짧음·여러 줄·너무 김)=답 손상 → 전량 거부(말은 재시도 대상으로 남는다)
   for (const bw of ["짧음", "여러 줄\n근거입니다 길게", "가".repeat(CL.CONSTRAINT_WHY_MAX + 1)]) {
-    const r2 = CF.parseClassifyOutput(JSON.stringify({ candidates: [{ ref: "u1", seat: "decision", quote: "실제 기기 확인은 이번 단계 범위 밖이야", why: bw }] }), inp);
+    const r2 = CF.parseClassifyOutput(JSON.stringify({ candidates: [{ ref: "u1", seat: "outOfScope", quote: "실제 기기 확인은 이번 단계 범위 밖이야", why: bw }] }), inp);
     assert.ok(!r2.ok && r2.reason === "bad-why", JSON.stringify(r2));
   }
-  const r3 = CF.parseClassifyOutput(JSON.stringify({ candidates: [{ ref: "u1", seat: "decision", quote: "실제 기기 확인은 이번 단계 범위 밖이야", why: W }] }), inp);
-  assert.strictEqual(r3.items[0].decisionKind, "product", "결정 종류 기본값");
+  // [RULE-SUPPLY-CORRECTION 묶음 1] 옛 규칙 칸·결정 기록 자리=자리 밖 — 수칙서 칸 후보와 섞여 와도 답 전체 거부(항목 탈락이 아님)
+  assert.deepStrictEqual(CF.SEATS, ["supportedEnv", "alwaysBlocker", "outOfScope"]);
+  for (const old of ["rule", "decision"]) {
+    const r3 = CF.parseClassifyOutput(JSON.stringify({ candidates: [{ ref: "u1", seat: "outOfScope", quote: "실제 기기 확인은 이번 단계 범위 밖이야", why: W }, { ref: "u1", seat: old, quote: "실제 기기 확인은 이번 단계 범위 밖이야", why: W, decisionKind: "product" }] }), inp);
+    assert.ok(!r3.ok && r3.reason === "bad-seat", old + " " + JSON.stringify(r3));
+  }
+  const pr = CF.buildClassifyPrompt(inp, "ko"), prEn = CF.buildClassifyPrompt(inp, "en");
+  assert.ok(!/rule\|decision|decisionKind|결정 기록/.test(pr) && !/rule\|decision|decisionKind/.test(prEn), "프롬프트에 옛 자리 없음");
+  assert.ok(pr.includes("[이미 있는 것 — 사용자가 직접 쓰는 규칙 칸]") && !pr.includes("[이미 있는 것 — 결정 기록]"), "결정 장부는 분류 입력에 넣지 않음(§2 A)");
 });
 
-sec("[3] 실행 — 세 자리 후보·말 상태·영수증");
-t("0세대: 수칙서 자리=사용자 약속 후보(칸·출처 classifier·0세대 표식) · 규칙/결정 자리=자리 장부 · 말 전부 classified · 팔=self · 프롬프트에 민감 원문 없음", async () => {
+sec("[3] 실행 — 수칙서 칸 후보·말 상태·영수증");
+t("0세대: 수칙서 칸=사용자 약속 후보(칸·출처 classifier·0세대 표식) · 고르지 않은 말도 전부 classified · 팔=self · 프롬프트에 민감 원문 없음 · 옛 자리 장부 생기지 않음", async () => {
   const P = project("run");
   const A = "화면에 보이는 연결 상태와 실제 연결 상태는 언제나 같아야 해";
   const B = "실제 최신폰 확인은 이번 단계 범위 밖이고 내 폰만 기준이야";
@@ -138,29 +146,34 @@ t("0세대: 수칙서 자리=사용자 약속 후보(칸·출처 classifier·0�
   const ans = (prompt) => ({ candidates: [
     { ref: refOf(prompt, A), seat: "alwaysBlocker", quote: A, why: W, recommend: "항상" },
     { ref: refOf(prompt, "내 폰만 기준이야"), seat: "outOfScope", quote: "실제 최신폰 확인은 이번 단계 범위 밖이고 내 폰만 기준이야", why: W },
-    { ref: refOf(prompt, C), seat: "rule", quote: C, why: W },
-    { ref: refOf(prompt, D), seat: "decision", quote: D, why: W, decisionKind: "product" },
   ] });
   const r = await CF.runClassify(P.ws, { pageRunner: fakeRunner(ans, calls) });
-  assert.ok(r.st === "ok" && r.words === 5 && r.envIds.length === 2 && r.seatIds.length === 2, JSON.stringify(r));
+  assert.ok(r.st === "ok" && r.words === 5 && r.envIds.length === 2 && !("seatIds" in r), JSON.stringify(r));
   assert.ok(calls.length === 1 && calls[0].arm === "self" && !calls[0].prompt.includes("zzzzzzzz") && calls[0].prompt.includes("[생략]"), "팔·민감 생략");
   const cand = CL.readEnvelopeCandidates(P.ws).latest;
   const e1 = cand.get(r.envIds[0] + "@" + CL.GEN0_HASH), e2 = cand.get(r.envIds[1] + "@" + CL.GEN0_HASH);
   assert.ok(e1.kind === "user-constraint" && e1.origin === "classifier" && e1.axis === "alwaysBlocker" && e1.virtualGen === true && e1.repoKey === P.rk && e1.title === A && e1.recommend === "항상" && e1.quoteSource === "prompt", JSON.stringify(e1));
   assert.ok(e2.axis === "outOfScope", "범위 밖 칸");
   assert.strictEqual(r.envIds[0], CF.userConstraintIdFor(P.ws, P.rk, A), "약속 상신과 같은 후보 산식(같은 말=같은 후보)");
-  const seats = CF.listSeatCandidates(P.ws, P.rk);
-  assert.deepStrictEqual(seats.map((s) => s.seat).sort(), ["decision", "rule"]);
-  assert.ok(seats.find((s) => s.seat === "rule").quoteSource === "choice");
+  assert.ok(!fs.existsSync(CF.seatsFileFor(P.ws)), "옛 자리 장부에 쓰지 않음");
+  void C; void D;
   for (const w of ws) assert.strictEqual(statusOf(P, w.id), "classified", "말 상태");
   const runs = CF.readClassifyRows(P.ws).filter((x) => x.type === "run");
   assert.ok(runs.length === 1 && runs[0].outcome === "proposed" && runs[0].trigger === "manual");
   const rc = CL.readSelectorUsage().filter((x) => x.purpose === "classify" && x.wsKey === CL.wsKeyFor(P.ws));
-  assert.ok(rc.length === 1 && rc[0].selectedIds.length === 4 && rc[0].askId === "", "영수증(검증 선별로 오인되지 않는 표식)");
+  assert.ok(rc.length === 1 && rc[0].selectedIds.length === 2 && rc[0].askId === "", "영수증(검증 선별로 오인되지 않는 표식)");
   const again = await CF.runClassify(P.ws, { pageRunner: fakeRunner(ans, []) });
   assert.strictEqual(again.st, "empty", "분류된 말은 다시 넘기지 않음");
+  // 옛 자리로 답이 오면 답 전체 거부 — 말은 분류 완료로 소모되지 않고 재시도 대상 · 후보·자리 장부 어디에도 쓰지 않음
+  const E = "설명할 때는 항상 상황 예시를 먼저 들어 줘 — 계속 지켜";
+  const e = say(P, E);
+  const before = CL.readEnvelopeCandidates(P.ws).rows.length;
+  const bad = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, E), seat: "rule", quote: E, why: W }] })) });
+  assert.ok(bad.st === "parse-failed" && bad.reason === "bad-seat", JSON.stringify(bad));
+  assert.ok(statusOf(P, e.id) === "queued" && UW.queuedWords(P.ws, P.rk)[0].retries === 1, "재시도 대상으로 남음");
+  assert.ok(CL.readEnvelopeCandidates(P.ws).rows.length === before && !fs.existsSync(CF.seatsFileFor(P.ws)), "아무 장부에도 쓰지 않음");
 });
-t("중복·거절 기억: 구현 담당이 이미 올린 같은 말=탈락 · 사용자가 안 올린 말=다시 안 올림(세대 무관) · 자리 후보 재제안 없음 · 이미 규칙 칸에 있는 문장=탈락", async () => {
+t("중복·거절 기억: 구현 담당이 이미 올린 같은 말=탈락 · 사용자가 안 올린 말=다시 안 올림(세대 무관) · 규칙 칸·옛 자리 장부의 안 올림은 '이미 있는 것'으로만(옛 대기 제안은 싣지 않음)", async () => {
   const P = project("dup");
   const A = "검증 단계에서 사용자 원래 설정은 반드시 되돌려 놓아야 해";
   const R = "보고할 때는 설치 위치와 남은 일을 함께 알려 줘";
@@ -171,22 +184,33 @@ t("중복·거절 기억: 구현 담당이 이미 올린 같은 말=탈락 · �
   assert.ok(CL.updateContractPatch(P.ws, CL.loadLang(), { claude: [R2] }, { tries: 3 }).ok);
   say(P, A); say(P, R); say(P, R2);
   const W = "프로젝트 내내 지킬 사용자 기준";
-  const ans = (prompt) => ({ candidates: [{ ref: refOf(prompt, A), seat: "alwaysBlocker", quote: A, why: W }, { ref: refOf(prompt, R), seat: "rule", quote: R, why: W }, { ref: refOf(prompt, R2), seat: "rule", quote: R2, why: W }] });
+  const ans = (prompt) => ({ candidates: [{ ref: refOf(prompt, A), seat: "alwaysBlocker", quote: A, why: W }, { ref: refOf(prompt, R), seat: "alwaysBlocker", quote: R, why: W }] });
   const r = await CF.runClassify(P.ws, { pageRunner: fakeRunner(ans) });
-  assert.ok(r.st === "ok" && r.envIds.length === 0 && r.seatIds.length === 1, JSON.stringify(r));
-  assert.deepStrictEqual(r.dropped.map((x) => x.reason).sort(), ["already-rule", "duplicate"]);
+  assert.ok(r.st === "ok" && r.envIds.length === 1, JSON.stringify(r));
+  assert.deepStrictEqual(r.dropped.map((x) => x.reason), ["duplicate"]);
   // 사용자가 안 올림 → 같은 말이 다시 와도 탈락
-  assert.ok(CF.declineSeatCandidate(P.ws, r.seatIds[0]).ok);
   const cid = CF.userConstraintIdFor(P.ws, P.rk, A);
   assert.ok(CL.appendEnvelopeCandidates(P.ws, [{ candidateId: cid, envelopeHash: CL.GEN0_HASH, status: "declined", by: "user", ts: new Date().toISOString() }]));
-  say(P, A); say(P, R);
-  const r2 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((prompt) => ({ candidates: [{ ref: refOf(prompt, A), seat: "alwaysBlocker", quote: A, why: W }, { ref: refOf(prompt, R), seat: "rule", quote: R, why: W }] })) });
-  assert.deepStrictEqual(r2.dropped.map((x) => x.reason).sort(), ["duplicate", "user-declined"], JSON.stringify(r2));
-  const inp = { existing: null };
+  say(P, A);
+  const r2 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((prompt) => ({ candidates: [{ ref: refOf(prompt, A), seat: "alwaysBlocker", quote: A, why: W }] })) });
+  assert.deepStrictEqual(r2.dropped.map((x) => x.reason), ["user-declined"], JSON.stringify(r2));
+  // 옛 자리 장부(이 정정 전 기록) — 안 올린 문장은 '안 올림'으로 싣고, 승인 길이 없어진 대기 제안은 '확인 대기'로 싣지 않는다 · 장부는 바뀌지 않는다
+  const OLD_DECL = "옛 자리에서 사용자가 안 올린 문장입니다", OLD_PEND = "옛 자리에서 아직 대기 중이던 문장입니다";
+  const legacy = [
+    { schema: "user-seat-v1", wsKey: CL.wsKeyFor(P.ws), candidateId: "a".repeat(16), status: "proposed", seat: "rule", repoKey: P.rk, provider: "claude", quote: OLD_DECL, why: "옛 규칙 칸 제안", ts: "2026-10-05T00:00:00.000Z" },
+    { schema: "user-seat-v1", wsKey: CL.wsKeyFor(P.ws), candidateId: "a".repeat(16), status: "declined", by: "user", ts: "2026-10-05T00:01:00.000Z" },
+    { schema: "user-seat-v1", wsKey: CL.wsKeyFor(P.ws), candidateId: "b".repeat(16), status: "proposed", seat: "decision", repoKey: P.rk, provider: "claude", quote: OLD_PEND, why: "옛 결정 기록 제안", decisionKind: "product", ts: "2026-10-05T00:02:00.000Z" },
+  ];
+  fs.mkdirSync(CF.CLASSIFY_DIR, { recursive: true });
+  fs.writeFileSync(CF.seatsFileFor(P.ws), legacy.map((x) => JSON.stringify(x)).join(NL) + NL);
+  const seatBytes = fs.readFileSync(CF.seatsFileFor(P.ws), "utf8");
   say(P, "다음 분류 입력 확인용 말");
   const in3 = CF.classifyInput(P.ws, P.repo);
-  assert.ok(in3.existing.declined.some((x) => x.includes("반드시 되돌려")) && in3.existing.declined.some((x) => x.includes("설치 위치")) && in3.existing.rules.some((x) => x.includes("선택지 도구")), "안 올린 것·규칙 칸이 '이미 있는 것'으로 동봉");
-  void inp;
+  assert.ok(in3.existing.declined.some((x) => x.includes("반드시 되돌려")) && in3.existing.declined.some((x) => x.includes(OLD_DECL)) && in3.existing.rules.some((x) => x.includes("선택지 도구")), "안 올린 것·규칙 칸이 '이미 있는 것'으로 동봉");
+  assert.ok(!in3.existing.pending.some((x) => x.includes(OLD_PEND)) && !("decisions" in in3.existing), "옛 대기 제안·결정 장부는 싣지 않음");
+  await CF.runClassify(P.ws, { pageRunner: fakeRunner({ candidates: [] }) });
+  assert.strictEqual(fs.readFileSync(CF.seatsFileFor(P.ws), "utf8"), seatBytes, "옛 자리 장부 무변경(ab-5)");
+  void R2;
 });
 
 sec("[4] 실패 보존 — 재시도·보류·경보");
@@ -194,7 +218,7 @@ t("근거 형식 위반 답(짧은 why)=실패 처리 — 말은 분류 완료�
   const P = project("badwhy");
   const Q = "근거 형식 반례용 지속 기준 문장입니다 계속 지켜 주세요";
   const a = say(P, Q);
-  const r = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, Q), seat: "rule", quote: Q, why: "short" }] })) });
+  const r = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, Q), seat: "alwaysBlocker", quote: Q, why: "short" }] })) });
   assert.ok(r.st === "parse-failed" && r.reason === "bad-why", JSON.stringify(r));
   assert.strictEqual(statusOf(P, a.id), "queued");
   assert.strictEqual(UW.queuedWords(P.ws, P.rk)[0].retries, 1);
@@ -246,11 +270,11 @@ t("회사별 팔(R3): Codex 차례의 말=Codex 팔 · 섞인 대기열은 오�
 t("회사 경계(R3)는 '이미 있는 것' 목록에도 — 다른 회사 차례의 확인 대기·안 올림 후보 원문은 이 회사 분류 입력에 실리지 않음(검증 1회차 f-7ccbb34a 반례)", async () => {
   const P = project("r3list");
   const W = "프로젝트 내내 지킬 사용자 기준";
-  const CP = "클로드 차례 대기 후보 문장 비밀스러운 내용 하나", CD = "클로드 차례 거절 후보 문장 비밀스러운 내용 둘", CS = "클로드 차례 규칙 후보 문장 비밀스러운 내용 셋";
+  const CP = "클로드 차례 대기 후보 문장 비밀스러운 내용 하나", CD = "클로드 차례 거절 후보 문장 비밀스러운 내용 둘", CS = "클로드 차례 범위 후보 문장 비밀스러운 내용 셋";
   const XP = "코덱스 차례 대기 후보 문장 공개 가능한 내용";
   say(P, CP); say(P, CD); say(P, CS);
-  const r1 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, CP), seat: "alwaysBlocker", quote: CP, why: W }, { ref: refOf(p, CD), seat: "alwaysBlocker", quote: CD, why: W }, { ref: refOf(p, CS), seat: "rule", quote: CS, why: W }] })) });
-  assert.ok(r1.envIds.length === 2 && r1.seatIds.length === 1, JSON.stringify(r1));
+  const r1 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, CP), seat: "alwaysBlocker", quote: CP, why: W }, { ref: refOf(p, CD), seat: "alwaysBlocker", quote: CD, why: W }, { ref: refOf(p, CS), seat: "outOfScope", quote: CS, why: W }] })) });
+  assert.ok(r1.envIds.length === 3, JSON.stringify(r1));
   assert.ok(CL.appendEnvelopeCandidates(P.ws, [{ candidateId: CF.userConstraintIdFor(P.ws, P.rk, CD), envelopeHash: CL.GEN0_HASH, status: "declined", by: "user", ts: new Date().toISOString() }]));
   say(P, XP, "codex");
   const r2 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, XP), seat: "alwaysBlocker", quote: XP, why: W }] })) });
@@ -267,107 +291,32 @@ t("회사 경계(R3)는 '이미 있는 것' 목록에도 — 다른 회사 차�
   const prC = CF.buildClassifyPrompt(inC, "ko");
   assert.ok(inC.arm === "self" && prC.includes("비밀스러운 내용 하나") && prC.includes("비밀스러운 내용 둘") && prC.includes("비밀스러운 내용 셋") && !prC.includes("공개 가능한"), "회사별 대칭");
 });
-sec("[5] 도장 정본 — 규칙 칸·결정 기록");
-t("규칙 자리 승인=사용자 글 그대로 그 회사 규칙 목록 끝에 덧붙임(같은 문장 있으면 덧붙이지 않음) · 다른 저장소=거부 · 두 번 승인=거부", async () => {
-  const P = project("rule");
-  const R = "결과를 알릴 때는 무엇이 어디에 설치됐는지 함께 알려 줘";
-  const RC = "코덱스 쪽 구현 담당은 변경마다 시험 결과를 붙여 줘";
-  assert.ok(CL.updateContractPatch(P.ws, CL.loadLang(), { claude: ["기존 규칙 한 줄"] }, { tries: 3 }).ok);
-  say(P, R); say(P, RC, "codex");
-  const W = "프로젝트 내내 지킬 소통 방식";
-  const r1 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, R), seat: "rule", quote: R, why: W }] })) });
-  const r2 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, RC), seat: "rule", quote: RC, why: W }] })) });
-  // [검증 1회차 f-aab41e49] 지금 대상 저장소가 다르면 승인·거절 모두 거부 — 호출자가 넘긴 저장소 값은 믿지 않는다
-  const other = mk("cf-repo-other-");
-  assert.ok(CL.updateContractPatch(P.ws, CL.loadLang(), { scoutRepo: other }, { tries: 3 }).ok);
-  assert.strictEqual(CF.approveSeatCandidate(P.ws, r1.seatIds[0], { repoKey: P.rk }).reason, "repo-mismatch", "호출자 값 무시(ab-1)");
-  assert.strictEqual(CF.declineSeatCandidate(P.ws, r1.seatIds[0]).reason, "repo-mismatch", "거절도 대조");
-  assert.ok(!(CL.loadContract(P.ws).claude || []).includes(R));
-  assert.ok(CL.updateContractPatch(P.ws, CL.loadLang(), { scoutRepo: P.repo }, { tries: 3 }).ok);
-  // 경합: 앞선 대조는 통과했는데 규칙을 쓰는 순간(계약 잠금 안) 대상이 바뀐 경우 — 쓰기 중단
-  const realPatch = CL.updateContractPatch;
-  CL.updateContractPatch = (ws9, lang9, patch9, opts9) => { if (typeof patch9 === "function") realPatch(ws9, lang9, { scoutRepo: other }, { tries: 3 }); return realPatch(ws9, lang9, patch9, opts9); };
-  let race;
-  try { race = CF.approveSeatCandidate(P.ws, r1.seatIds[0]); } finally { CL.updateContractPatch = realPatch; }
-  assert.strictEqual(race.reason, "repo-mismatch", "잠금 안 재대조 " + JSON.stringify(race));
-  assert.ok(!(CL.loadContract(P.ws).claude || []).includes(R), "경합에서도 다른 대상 계약에 안 적힘");
-  assert.ok(CL.updateContractPatch(P.ws, CL.loadLang(), { scoutRepo: P.repo }, { tries: 3 }).ok);
-  const a1 = CF.approveSeatCandidate(P.ws, r1.seatIds[0]);
-  assert.ok(a1.ok && a1.applied === "rule-appended:claude", JSON.stringify(a1));
-  assert.deepStrictEqual(CL.loadContract(P.ws).claude, ["기존 규칙 한 줄", R], "끝에 원문 그대로");
-  assert.ok(CF.approveSeatCandidate(P.ws, r2.seatIds[0]).ok);
-  assert.deepStrictEqual(CL.loadContract(P.ws).codexImplementer, [RC], "Codex 말=Codex 구현 담당 칸");
-  assert.strictEqual(CF.approveSeatCandidate(P.ws, r1.seatIds[0]).reason, "not-proposed");
-  assert.strictEqual(CF.listSeatCandidates(P.ws, P.rk).length, 0);
+sec("[5] 옛 자리 정리(RULE-SUPPLY-CORRECTION 묶음 1) — 승인 함수 부재·결정 출처 새로 만들기 implementer 만·읽기 호환");
+t("규칙 칸·결정 기록 승인 함수가 없다 · 분류 실행 모듈은 결정 장부·규칙 칸에 쓰지 않는다(소스)", () => {
+  for (const k of ["approveSeatCandidate", "declineSeatCandidate", "listSeatCandidates", "appendSeatRows", "seatCandidateId"]) assert.strictEqual(typeof CF[k], "undefined", k);
+  const src = fs.readFileSync(path.join(ROOT, "bridge", "classify.js"), "utf8");
+  assert.ok(!/appendDecisionRows\(|openDecision\(|updateContractPatch\(|appendFileSync\(seatsFileFor/.test(src), "결정 장부·규칙 칸·자리 장부 쓰기 호출 없음");
 });
-t("결정 자리 승인=결정 장부에 열린 행+답한 행 한 묶음(출처 user-words · 열린 질문 목록에 안 남음) · 결정 출처 목록 확장", async () => {
-  const P = project("dec");
-  const D = "PC 별도 프로그램은 폐기하고 앱 설치 하나로 해결한다";
-  say(P, D);
-  const r = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, D), seat: "decision", quote: D, why: "제품 방향에 대한 사용자 결정", decisionKind: "product" }] })) });
-  // 지금 대상이 다른 저장소면 결정 자리 승인도 거부(호출자가 후보의 저장소 값을 넘겨도 무시 — 검증 1회차 f-aab41e49)
-  const otherD = mk("cf-repo-otherd-");
-  assert.ok(CL.updateContractPatch(P.ws, CL.loadLang(), { scoutRepo: otherD }, { tries: 3 }).ok);
-  assert.strictEqual(CF.approveSeatCandidate(P.ws, r.seatIds[0], { repoKey: P.rk }).reason, "repo-mismatch");
-  assert.strictEqual(CL.readDecisions(P.ws, { repoKey: P.rk }).latest.size, 0, "거부 시 결정 기록 없음");
-  assert.ok(CL.updateContractPatch(P.ws, CL.loadLang(), { scoutRepo: P.repo }, { tries: 3 }).ok);
-  const a = CF.approveSeatCandidate(P.ws, r.seatIds[0]);
-  assert.ok(a.ok && a.applied.startsWith("decision:"), JSON.stringify(a));
-  const dec = CL.readDecisions(P.ws, { repoKey: P.rk });
-  assert.strictEqual(dec.open.length, 0, "열린 질문 없음");
-  const d = [...dec.latest.values()][0];
-  assert.ok(d.origin === "user-words" && d.status === "chosen" && d.question === D && d.resolvedBy === "user" && d.kind === "product", JSON.stringify(d));
-  assert.ok(CL.DECISION_ORIGINS.includes("user-words") && CL.DECISION_ORIGINS.includes("implementer"));
-  // [검증 1회차 f-717b5498] 부분 기록(열린 행만 남고 실패) 뒤 재시도=빠진 답한 행을 이어 적어 완료 — 열린 질문이 남지 않음
-  const D2 = "설정 화면은 한 장으로 합치고 여러 탭은 쓰지 않는다";
-  say(P, D2);
-  const r2 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, D2), seat: "decision", quote: D2, why: "제품 방향에 대한 사용자 결정" }] })) });
-  const realApp = CL.appendDecisionRows;
-  CL.appendDecisionRows = (ws9, recs9) => { realApp(ws9, [recs9[0]]); return { ok: false, reason: "write-failed" }; };
-  let first;
-  try { first = CF.approveSeatCandidate(P.ws, r2.seatIds[0]); } finally { CL.appendDecisionRows = realApp; }
-  assert.ok(!first.ok && first.reason === "decision-write" && CL.readDecisions(P.ws, { repoKey: P.rk }).open.length === 1, "전제: 열린 행만 남음");
-  const second = CF.approveSeatCandidate(P.ws, r2.seatIds[0]);
-  assert.ok(second.ok, JSON.stringify(second));
-  const dec2 = CL.readDecisions(P.ws, { repoKey: P.rk });
-  assert.strictEqual(dec2.open.length, 0, "복구 뒤 열린 질문 없음");
-  assert.ok([...dec2.latest.values()].filter((x) => x.question === D2).every((x) => x.status === "chosen"));
-  // [검증 2회차 f-717b5498] 줄 중간에서 끊긴 부분 기록(온전한 열린 행 + 답한 행 앞부분 30바이트) 뒤 재시도 — 꼬리 보호로 새 답한 행이 깨진 꼬리에 붙지 않아 완료
-  const D3 = "알림은 앱 안에서만 보여 주고 바깥 메시지는 보내지 않는다";
-  say(P, D3);
-  const r3 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, D3), seat: "decision", quote: D3, why: "제품 방향에 대한 사용자 결정" }] })) });
-  const decFile = CL.decisionsFileFor(P.ws);
-  CL.appendDecisionRows = (ws9, recs9) => { fs.appendFileSync(decFile, JSON.stringify(recs9[0]) + NL + JSON.stringify(recs9[1]).slice(0, 30)); return { ok: false, reason: "write-failed" }; };
-  let f3;
-  try { f3 = CF.approveSeatCandidate(P.ws, r3.seatIds[0]); } finally { CL.appendDecisionRows = realApp; }
-  assert.ok(!f3.ok && !fs.readFileSync(decFile, "utf8").endsWith(NL), "전제: 장부 끝이 줄 중간에서 끊김");
-  const s3 = CF.approveSeatCandidate(P.ws, r3.seatIds[0]);
-  assert.ok(s3.ok, JSON.stringify(s3));
-  const dec3 = CL.readDecisions(P.ws, { repoKey: P.rk });
-  assert.strictEqual(dec3.open.length, 0, "끊긴 꼬리 뒤에도 열린 질문 없음");
-  assert.ok([...dec3.latest.values()].some((x) => x.question === D3 && x.status === "chosen"));
-  // 쓰기가 성공을 보고했지만 판독 결과가 '답함'이 아니면 완료로 치지 않음(후보는 대기 유지)
-  const D4 = "회원 가입 없이 바로 쓰는 방식을 유지한다";
-  say(P, D4);
-  const r4 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, D4), seat: "decision", quote: D4, why: "제품 방향에 대한 사용자 결정" }] })) });
-  CL.appendDecisionRows = () => ({ ok: true });
-  let f4;
-  try { f4 = CF.approveSeatCandidate(P.ws, r4.seatIds[0]); } finally { CL.appendDecisionRows = realApp; }
-  assert.ok(!f4.ok && f4.reason === "decision-unsettled", JSON.stringify(f4));
-  assert.ok(CF.listSeatCandidates(P.ws, P.rk).some((x) => x.candidateId === r4.seatIds[0]), "후보는 대기 유지");
-  // 자리 상태도 판독 결과로 완료 확인 — 기록이 성공을 보고했지만 반영되지 않으면 실패(후보 대기 유지)
-  const realSeat = CF.appendSeatRows;
-  CF.appendSeatRows = () => true;
-  let f5, f6;
-  try { f5 = CF.declineSeatCandidate(P.ws, r4.seatIds[0]); f6 = CF.approveSeatCandidate(P.ws, r4.seatIds[0]); } finally { CF.appendSeatRows = realSeat; }
-  assert.ok(!f5.ok && f5.reason === "seats-unsettled", "거절 " + JSON.stringify(f5));
-  assert.ok(!f6.ok && f6.reason === "seats-unsettled", "승인 " + JSON.stringify(f6));
-  assert.ok(CF.listSeatCandidates(P.ws, P.rk).some((x) => x.candidateId === r4.seatIds[0]), "후보는 대기 유지");
-  // 자리 장부도 꼬리 보호 — 끊긴 꼬리 뒤 거절이 판독 결과로 확인됨
-  fs.appendFileSync(CF.seatsFileFor(P.ws), '{"schema":"user-seat-v1","wsK');
-  const dl = CF.declineSeatCandidate(P.ws, r4.seatIds[0]);
-  assert.ok(dl.ok, JSON.stringify(dl));
-  assert.ok(!CF.listSeatCandidates(P.ws, P.rk).some((x) => x.candidateId === r4.seatIds[0]), "거절 반영");
+t("결정 출처: 새 열린 행은 implementer 만(openDecision·appendDecisionRows 둘 다) · 과거 user-words 열린+답한 행은 계속 판독", () => {
+  const P = project("decorigin");
+  assert.deepStrictEqual(CL.DECISION_CREATE_ORIGINS, ["implementer"]);
+  assert.ok(CL.DECISION_ORIGINS.includes("user-words") && CL.DECISION_ORIGINS.includes("implementer"), "읽기 호환 목록");
+  const spec = { origin: "user-words", kind: "product", noDefault: "사용자가 직접 말한 결정이라 구현자가 정할 항목 아님", campaignId: "", sourceAsk: "", targetFp: "user-words:x", question: "앱 하나로 간다", why: "제품 방향", choices: [{ key: "stated", label: "앱 하나로 간다" }], recommend: "stated", repoKey: P.rk };
+  assert.strictEqual(CL.openDecision(P.ws, spec).reason, "origin-not-allowed", "openDecision 거부");
+  const id = CL.decisionIdFor(P.ws, "", "user-words", "", CL.decisionIdKeyFor("user-words:x", "앱 하나로 간다"), P.rk);
+  const open = { schema: "decision-v1", decisionId: id, status: "open", wsKey: CL.wsKeyFor(P.ws), repoKey: P.rk, origin: "user-words", kind: "product", noDefault: spec.noDefault, campaignId: "", sourceAsk: "", targetFp: "user-words:x", question: "앱 하나로 간다", why: "제품 방향", choices: spec.choices, recommend: "stated", ts: "2026-10-05T00:00:00.000Z" };
+  const done = { schema: "decision-v1", decisionId: id, status: "chosen", wsKey: CL.wsKeyFor(P.ws), repoKey: P.rk, choice: "stated", by: "user", ts: "2026-10-05T00:00:01.000Z" };
+  const r = CL.appendDecisionRows(P.ws, [open, done]);
+  assert.ok(!r.ok && r.reason === "origin-not-allowed", "appendDecisionRows 도 새 user-words 열린 행 거부 " + JSON.stringify(r));
+  assert.strictEqual(CL.readDecisions(P.ws, { repoKey: P.rk }).latest.size, 0, "거부 시 무기록");
+  // 과거에 정상 기록된 user-words 두 행(이 정정 전 도장) — 판독 유지
+  fs.mkdirSync(path.dirname(CL.decisionsFileFor(P.ws)), { recursive: true });
+  fs.appendFileSync(CL.decisionsFileFor(P.ws), JSON.stringify(open) + NL + JSON.stringify(done) + NL);
+  const d = CL.readDecisions(P.ws, { repoKey: P.rk }).latest.get(id);
+  assert.ok(d && d.origin === "user-words" && d.status === "chosen" && d.question === "앱 하나로 간다", "과거 행 판독 " + JSON.stringify(d));
+  // 결과 행(chosen)은 출처와 무관하게 기존 계약 그대로 · implementer 새 열린 행은 그대로 허용
+  const ok = CL.openDecision(P.ws, Object.assign({}, spec, { origin: "implementer", targetFp: "impl:y", question: "구현자가 못 정하는 방향 질문" }));
+  assert.ok(ok.ok && !ok.existed, JSON.stringify(ok));
 });
 
 sec("[6] 수칙서 칸 갈래 — 지원 환경·범위 밖=본문 전용 · 세대 이월·복원 칸 보존");
@@ -483,17 +432,19 @@ t("classify run/status/list --json(가짜 실행기 모듈) · 도움말에 cons
   const Q = "명령줄 시험용 지속 기준 문장은 언제나 지켜야 한다";
   say(P, Q);
   const fakeMod = path.join(HOME, "fake-classify-runner.js");
-  fs.writeFileSync(fakeMod, "module.exports = { runSelectorPage: ({ prompt }) => { const i = prompt.indexOf(" + JSON.stringify(Q) + "); const h = prompt.lastIndexOf('<<u', i); const ref = prompt.slice(h + 2, prompt.indexOf(' ', h)); return { promise: Promise.resolve({ ok: true, output: JSON.stringify({ candidates: [{ ref, seat: 'rule', quote: " + JSON.stringify(Q) + ", why: '프로젝트 내내 지킬 규칙' }] }) }), cancel() {} }; } };");
+  fs.writeFileSync(fakeMod, "module.exports = { runSelectorPage: ({ prompt }) => { const i = prompt.indexOf(" + JSON.stringify(Q) + "); const h = prompt.lastIndexOf('<<u', i); const ref = prompt.slice(h + 2, prompt.indexOf(' ', h)); return { promise: Promise.resolve({ ok: true, output: JSON.stringify({ candidates: [{ ref, seat: 'alwaysBlocker', quote: " + JSON.stringify(Q) + ", why: '프로젝트 내내 지킬 규칙' }] }) }), cancel() {} }; } };");
   const env = Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME, CLAUDE_PROJECT_DIR: P.ws, CODEX_BRIDGE_SELECTOR_RUNNER: fakeMod });
   const cli = path.join(ROOT, "bridge", "codex-bridge.js");
   const r = cp.spawnSync(process.execPath, [cli, "classify", "run", "--json"], { env, encoding: "utf8", cwd: P.ws });
   const o = JSON.parse(r.stdout.trim().split(/\r?\n/).pop());
-  assert.ok(r.status === 0 && o.st === "ok" && o.seatIds.length === 1, r.stdout + r.stderr);
+  assert.ok(r.status === 0 && o.st === "ok" && o.envIds.length === 1 && !("seatIds" in o), r.stdout + r.stderr);
   const st = JSON.parse(cp.spawnSync(process.execPath, [cli, "classify", "status", "--json"], { env, encoding: "utf8", cwd: P.ws }).stdout);
-  assert.ok(st.queued === 0 && st.seatsPending === 1 && st.lastOutcome === "proposed", JSON.stringify(st));
+  assert.ok(st.queued === 0 && !("seatsPending" in st) && st.lastOutcome === "proposed", JSON.stringify(st));
+  const stTxt = cp.spawnSync(process.execPath, [cli, "classify", "status"], { env, encoding: "utf8", cwd: P.ws }).stdout;
+  assert.ok(!/규칙·결정 자리|rule\/decision/.test(stTxt), "상태 줄에 옛 자리 없음 " + stTxt);
   const ls = JSON.parse(cp.spawnSync(process.execPath, [cli, "classify", "list", "--json"], { env, encoding: "utf8", cwd: P.ws }).stdout);
-  assert.ok(ls.seats.length === 1 && ls.seats[0].quote === Q);
-  const bad = cp.spawnSync(process.execPath, [cli, "classify", "approve", ls.seats[0].candidateId], { env, encoding: "utf8", cwd: P.ws });
+  assert.ok(Array.isArray(ls.held) && !("seats" in ls), JSON.stringify(ls));
+  const bad = cp.spawnSync(process.execPath, [cli, "classify", "approve", "a".repeat(16)], { env, encoding: "utf8", cwd: P.ws });
   assert.ok(bad.status === 2 && /사용법|usage/.test(bad.stdout), "도장 명령 없음(사용법 안내)");
   const help = cp.spawnSync(process.execPath, [cli, "no-such-cmd"], { env, encoding: "utf8", cwd: P.ws }).stdout;
   assert.ok(help.includes("classify [run|status|list]") && help.includes("constraint add --quote"), "도움말 목록");
