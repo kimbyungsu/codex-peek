@@ -13,10 +13,14 @@
 //    원문 텍스트는 턴 원문과 같은 7일 보존(민감 최소화 — contract-lib cleanupOldState 가 user-words/text 를 청소). 장부 행에는 지문·길이만.
 //    원문은 자르지 않는다(검증 1회차 blocker④ — 절단 표식 같은 합성 글자가 '사용자 원문'으로 인정되면 안 됨).
 //  · 전송: 이 모듈은 아무 데도 보내지 않는다. 분류 실행(§3-3 — 묶음 2-나-2)만 구현 턴과 같은 회사의 독립 실행에 넘긴다(R3).
+//  · [RULE-SUPPLY-CORRECTION 묶음 5(G) · D-f] 붙여 넣은 글은 사용자 말이 아니다 — 원문 판독(wordText)은 붙여 넣은 구간을 뺀 '사용자가 쓴 부분'을
+//    돌려준다(분류 입력·약속 상신 원문 대조가 모두 이 판독을 쓴다 · 판별=bridge/pasted-text.js 구조 표지). 원문 파일·지문은 그대로(대조 시점 계산).
+//    메시지 전체가 붙여 넣은 글이면 대기열에 넣지 않는다. 원문 그대로가 필요한 곳(거부 사유 구분)만 opts.raw.
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const CL = require("./contract-lib.js");
+const PT = require("./pasted-text.js");
 
 const USER_WORDS_DIR = path.join(CL.BRIDGE_DIR, "user-words");
 const TEXT_DIR = path.join(USER_WORDS_DIR, "text");
@@ -143,6 +147,8 @@ function recordWord(ws, rec, text) { return recordWordKey(CL.wsKeyFor(ws), rec, 
 function enqueuePrompt(ws, o) {
   const a = o || {};
   if (!a.anchor || !a.sourceHash) return { ok: false, reason: "no-anchor" };
+  // [묶음 5(G)] 메시지 전체가 붙여 넣은 글이면(사용자가 쓴 부분이 비면) 대기열에 넣지 않는다. 원문 판독 실패=종전대로 넣는다(뒤 판독이 다시 가른다).
+  try { const t0 = fs.readFileSync(CL.constraintTurnFileFor(ws, String(a.anchor)), "utf8"); if (sha1(t0) === String(a.sourceHash) && !PT.userAuthoredText(t0).trim()) return { ok: true, skipped: "pasted-only" }; } catch { /* 종전 */ }
   const id = "p-" + sha1(CL.wsKeyFor(ws) + "|prompt|" + a.anchor).slice(0, 16);
   return recordWord(ws, { id, source: "prompt", turnAnchor: String(a.anchor), sourceHash: String(a.sourceHash), sessionId: String(a.sessionId || ""), provider: String(a.provider || ""), repoKey: String(a.repoKey || ""), ts: new Date().toISOString() });
 }
@@ -193,6 +199,7 @@ function captureChoiceAnswers(ws, o) {
     const endOffset = size - carryBuf.length; // 미완성 마지막 줄은 다음 수집에서 다시 읽음
     const turns = found.length ? readTurns(sid) : [];
     for (const x of found) {
+      if (!PT.userAuthoredText(x.text).trim()) continue; // [묶음 5(G)] 직접 입력 답 전체가 붙여 넣은 글=사용자 말 아님(기록 안 함)
       const turn = turnForPrompt(turns, x.promptId); // 차례 열쇠 기준(수집 시점·시각·원문 지문 아님)
       const wsKey = turn && turn.wsKey ? turn.wsKey : CL.wsKeyFor(ws);
       const id = "c-" + sha1(wsKey + "|" + sid + "|" + x.toolUseId + "|" + x.question + "|" + x.kind).slice(0, 16);
@@ -217,40 +224,43 @@ function captureForActiveTurn(ws, sessionId, transcriptPath) {
 // ── 원문 판독 ── 단어 1건의 원문(만료·변조=null). prompt=턴 스냅샷(지문 대조) · choice=직접 입력 파일(지문 대조)
 // 보존 기간(7일)은 읽는 시점에 기록 행 시각으로 직접 판정한다 — 청소는 하루 1회라 기간이 지난 파일이 다음 청소까지 남을 수 있음(검증 5회차 blocker:
 // 청소 전 남은 만료 원문이 이전 말 인용으로 접수됨). 시각 판독 불가=만료(fail-closed). now=시험 주입점.
+// [묶음 5(G)] 돌려주는 글=사용자가 쓴 부분(붙여 넣은 구간 제외 — pasted-text.userAuthoredText). opts.raw=원문 그대로(거부 사유 구분용).
 function wordExpired(w, now) {
   const t = Date.parse(String((w && w.ts) || ""));
   return !Number.isFinite(t) || (Number.isFinite(now) ? now : Date.now()) - t > CL.ATTEMPTS_TTL_MS;
 }
-function wordText(ws, w, now) {
+function wordText(ws, w, now, opts) {
   if (!w) return null;
   if (wordExpired(w, now)) return null;
+  const raw = !!(opts && opts.raw);
+  const out = (t) => (raw ? t : PT.userAuthoredText(t));
   try {
-    if (w.source === "prompt") { const t = fs.readFileSync(CL.constraintTurnFileFor(ws, w.turnAnchor), "utf8"); return sha1(t) === w.sourceHash ? t : null; }
-    if (w.source === "choice") { const t = fs.readFileSync(textFileFor(ws, w.id), "utf8"); return sha1(t) === w.textHash ? t : null; }
+    if (w.source === "prompt") { const t = fs.readFileSync(CL.constraintTurnFileFor(ws, w.turnAnchor), "utf8"); return sha1(t) === w.sourceHash ? out(t) : null; }
+    if (w.source === "choice") { const t = fs.readFileSync(textFileFor(ws, w.id), "utf8"); return sha1(t) === w.textHash ? out(t) : null; }
   } catch { return null; }
   return null;
 }
 // 같은 차례의 직접 입력 원문들(약속 상신 원문 대조 확장 — §3-1). 저장소 표식이 주어지면 같은 표식만(차례·저장소 이중 결속).
-function choiceTextsForTurn(ws, turnAnchor, repoKey) {
+function choiceTextsForTurn(ws, turnAnchor, repoKey, opts) {
   if (!turnAnchor) return [];
   const st = readUserWordsState(ws);
   const out = [];
   for (const w of st.words.values()) {
     if (w.source !== "choice" || w.turnAnchor !== turnAnchor) continue;
     if (repoKey && w.repoKey !== repoKey) continue;
-    const t = wordText(ws, w); if (t) out.push(t);
+    const t = wordText(ws, w, undefined, opts); if (t) out.push(t);
   }
   return out;
 }
 // [사용자 결정 2026-10-04 '기회만 열어 두기'] 약속 상신 원문 대조의 마지막 단계 — 같은 작업공간·같은 저장소(표식 정확 일치)의 최근 사용자 말
 // (입력창 원문·직접 입력, 상태 무관 · 원문 보존 7일 안 · 지문 대조로 읽은 원문만)에서 연속 구절을 찾는다. 새 지시문 없음 — 구현 담당이 올리려 할 때
 // 이전 메시지라는 이유로 거절하지 않을 뿐. 반환 {source, turnAnchor} | null.
-function findQuoteInRecentWords(ws, repoKey, quote, now) {
+function findQuoteInRecentWords(ws, repoKey, quote, now, opts) {
   if (!repoKey || !quote) return null;
   const st = readUserWordsState(ws);
   if (st.readError) return null;
   const ws9 = [...st.words.values()].filter((w) => w.repoKey === repoKey).sort((x, y) => String(y.ts).localeCompare(String(x.ts))); // 최근 것부터
-  for (const w of ws9) { const t = wordText(ws, w, now); if (t && t.includes(quote)) return { source: w.source, turnAnchor: String(w.turnAnchor || "") }; } // 보존 기간 밖=wordText 가 null
+  for (const w of ws9) { const t = wordText(ws, w, now, opts); if (t && t.includes(quote)) return { source: w.source, turnAnchor: String(w.turnAnchor || "") }; } // 보존 기간 밖=wordText 가 null
   return null;
 }
 // 미분류 대기열 — 이 저장소(repoKey 정확 일치)의 queued 항목(오래된 것부터). 표식 없는 행은 어떤 저장소에도 안 보임(검증 1회차 blocker②).

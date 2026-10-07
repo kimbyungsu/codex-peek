@@ -4850,14 +4850,22 @@ function constraintAdd(ws, quote, why, scope, ctx) {
   // [RULE-SUPPLY 묶음 2-나 §3-1] 원문 대조 확장 — 턴 원문 '또는' 같은 턴의 선택지 직접 입력 기록(지문 결속 판독)에서 연속 구절을 찾는다. 턴 원문 파일은 그대로(동결 지문 보존).
   // [사용자 결정 2026-10-04 '기회만 열어 두기'] 마지막 단계=같은 작업공간·저장소의 최근 사용자 말(7일 보존·지문 대조) — 이전 메시지라는 이유로 거절하지 않는다(새 지시문 없음).
   let quoteSrc9 = "prompt", quoteFrom9 = "";
-  if (!snap.includes(q)) {
+  // [RULE-SUPPLY-CORRECTION 묶음 5(G) · D-f] 붙여 넣은 글은 사용자 말이 아니다 — 연속 구절은 '사용자가 쓴 부분'에서만 찾는다(턴 원문·직접 입력·최근 말 모두).
+  // 붙여 넣은 구간에만 있는 문장=거부 사유 pasted(무기록). 판별=bridge/pasted-text.js 구조 표지 · 원문 파일·지문은 그대로(위 지문 대조는 원문 전체).
+  let PTq = null; try { PTq = require("./pasted-text.js"); } catch { PTq = null; }
+  if (!PTq) return reject("pasted-check-unavailable"); // 판별 모듈 없음=사용자 말인지 가를 수 없음 → 받지 않음(fail-closed)
+  if (!PTq.userAuthoredText(snap).includes(q)) {
     const rkAlt9 = (typeof c.repoKey === "string" && /^[0-9a-f]{16}$/.test(c.repoKey)) ? c.repoKey : null; // 저장소 결속(표식 없으면 직접 입력·이전 말 대조 없음)
     let UWq = null; try { UWq = require("./user-words.js"); } catch { UWq = null; }
     let alt9 = []; try { alt9 = rkAlt9 && UWq ? UWq.choiceTextsForTurn(ws, c.turnAnchor, rkAlt9) : []; } catch { alt9 = []; }
     if (alt9.some((t) => t.includes(q))) quoteSrc9 = "choice";
     else {
       let hit9 = null; try { hit9 = rkAlt9 && UWq ? UWq.findQuoteInRecentWords(ws, rkAlt9, q) : null; } catch { hit9 = null; }
-      if (!hit9) return reject("not-in-prompt");
+      if (!hit9) {
+        let pasted9 = snap.includes(q); // 원문 전체에는 있다=붙여 넣은 구간에만 있다
+        if (!pasted9 && rkAlt9 && UWq) { try { pasted9 = UWq.choiceTextsForTurn(ws, c.turnAnchor, rkAlt9, { raw: true }).some((t) => t.includes(q)) || !!UWq.findQuoteInRecentWords(ws, rkAlt9, q, undefined, { raw: true }); } catch { pasted9 = false; } }
+        return reject(pasted9 ? "pasted" : "not-in-prompt");
+      }
       quoteSrc9 = "earlier-" + hit9.source; quoteFrom9 = hit9.turnAnchor;
     }
   }

@@ -101,15 +101,16 @@ function classifyInput(ws, repo, opts) {
   const q = UW.queuedWords(ws, repoKey);
   if (q === null) return { ok: false, reason: "queue-unreadable" };
   const base = { ok: true, wsKey, repoKey, gen: g.gen, virtual: !!g.virtual };
-  if (!q.length) return Object.assign(base, { empty: true, items: [], unavailable: [] });
+  if (!q.length) return Object.assign(base, { empty: true, items: [], unavailable: [], pastedOnly: [] });
   const provider = providerOf(q[0]); // 가장 오래된 말의 회사부터(한 실행=한 회사 — R3)
-  const items = [], unavailable = [];
+  const items = [], unavailable = [], pastedOnly = [];
   let chars = 0;
   for (const w of q) {
     if (providerOf(w) !== provider) continue;
     if (items.length >= CLASSIFY_BATCH_WORDS) break;
     const t = UW.wordText(ws, w);
     if (t === null) { unavailable.push(w.id); continue; } // 보존 기간 밖·변조·소실=분류 불가(보류로 표면)
+    if (!t.trim()) { pastedOnly.push(w.id); continue; } // [RULE-SUPPLY-CORRECTION 묶음 5(G)] 사용자가 쓴 부분이 빔(붙여 넣은 글뿐)=분류 담당에게 보내지 않음
     const red = redactSensitiveForms(t);
     const shown = red.length > CLASSIFY_WORD_SHOW ? red.slice(0, CLASSIFY_WORD_SHOW) + "\n" + REDACTED + "(" + (red.length - CLASSIFY_WORD_SHOW) + ")" : red;
     if (items.length && chars + shown.length > CLASSIFY_BATCH_CHARS) break;
@@ -144,7 +145,7 @@ function classifyInput(ws, repo, opts) {
   try { const ss = readSeatsState(ws); if (!ss.readError) for (const r of ss.latest.values()) { if (r.repoKey !== repoKey || !sameCo(r)) continue; if (r.status === "declined") declined.push(r.quote); } } catch { /* 없음 */ }
   const existing = { rulebook: cap(rulebook), rules: cap(rules), pending: cap(pending), declined: cap(declined) };
   const inputFp = sha1(JSON.stringify({ ids: items.map((x) => x.id), existing }));
-  return Object.assign(base, { provider, arm: armForProvider(provider), items, unavailable, existing, inputFp });
+  return Object.assign(base, { provider, arm: armForProvider(provider), items, unavailable, pastedOnly, existing, inputFp });
 }
 
 // ── 프롬프트 — 범주 정의만(구체 예시·키워드 없음 — 경직성 금지) ──
@@ -204,7 +205,7 @@ function parseClassifyOutput(raw, input) {
     if (q.length > CL.CONSTRAINT_QUOTE_MAX) { drop("too-long"); continue; }
     if (/[\r\n\u2028\u2029]/.test(q)) { drop("multiline"); continue; }
     if (q.includes(REDACTED)) { drop("redacted-span"); continue; }
-    if (!it.text.includes(q)) { drop("not-in-words"); continue; } // 원문 대조(작문 차단) — 보여 준 부분이 아니라 원문 전체
+    if (!it.text.includes(q)) { drop("not-in-words"); continue; } // 원문 대조(작문 차단) — 보여 준 부분이 아니라 사용자가 쓴 부분 전체(붙여 넣은 구간 제외 — 묶음 5(G))
     if (vocab.some((v) => q.includes(v))) { drop("protocol-vocab"); continue; }
     const qs = CL.safeBacklogAutoTitle(q); if (!qs.ok) { drop("sensitive-" + qs.reasonKey); continue; }
     const why = p.why.trim();
@@ -307,7 +308,8 @@ async function runClassify(ws, opts) {
       return { st: "input-failed", reason: input.reason };
     }
     if (input.unavailable.length) UW.setWordStatus(ws, input.unavailable, "held", { reason: "text-unavailable" }); // 원문을 읽을 수 없는 말=보류(표면)
-    if (!input.items.length) { row({ repoKey: input.repoKey, outcome: "empty", unavailable: input.unavailable.length, durationMs: Date.now() - t0 }); return { st: "empty", unavailable: input.unavailable.length }; }
+    if (input.pastedOnly && input.pastedOnly.length) UW.setWordStatus(ws, input.pastedOnly, "classified", { skipped: "pasted-only" }); // [묶음 5(G)] 붙여 넣은 글뿐인 말=분류 대상 아님(처리됨)
+    if (!input.items.length) { row({ repoKey: input.repoKey, outcome: "empty", unavailable: input.unavailable.length, pastedOnly: (input.pastedOnly || []).length, durationMs: Date.now() - t0 }); return { st: "empty", unavailable: input.unavailable.length, pastedOnly: (input.pastedOnly || []).length }; }
     const lang = o.lang || CL.loadLang();
     const runner = typeof o.pageRunner === "function" ? o.pageRunner : require("./selector-runner.js").runSelectorPage;
     const h = runner({ arm: input.arm, prompt: buildClassifyPrompt(input, lang), timeoutMs: Number(o.timeoutMs) || CL.SELECTOR_PAGE_TIMEOUT_MS });
