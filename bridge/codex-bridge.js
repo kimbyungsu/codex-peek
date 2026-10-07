@@ -4386,12 +4386,11 @@ function v2DynamicData(ws, lang) {
 function v2DirectiveFor(ws, lang) { return [v2StaticDirective(lang), v2DynamicData(ws, lang)].filter(Boolean).join("\n"); } // 종전 바이트 그대로(무회귀)
 // 증분 3(§4): 상한 소진(마지막 예약 왕복) 시 '구현이 놓쳤나 vs 검증이 올렸나'에 데이터로 답하는 원인 분해 1줄.
 // demote 사유 구분: demoted+oosId=범위 밖 / demoted+oosId 없음=후속 이론(신규성·확인 라운드 심사).
-// §7 수칙서 후보 재료(요구 동결 2026-07-24 — 구현 증분 1): 상한 소진(마지막 예약 왕복) 보고에 기계 재료를
-// 병기하고, 구현모델에게 '수칙서 후보' 절 작성 의무(§8 표현 계약)를 지시한다. 후보 원천(①~③=기계):
-// ①같은 oosId 강등 2회+ ②입장 심사 승격 범위확장(escalation) ③같은 계보(occurrence) 반복 2회+(원 등장 포함 3회).
-// 재제시 스킵: 후보 장부에서 같은 (candidateId, 승인 세대)에 declined|failed → 목록에서 제외하고 스킵 수만 표기.
-// 후보 0건=명시(침묵 생략 금지). ④(보류 항목)는 캐논 전용 재료 — 여기서 집계하지 않음(§7 명문).
-// §7 증분 3 — 후보 집계 본체(분리: 소진 보고와 대시보드 후보 카드가 같은 산출을 공유). 반환
+// §7 수칙서 후보 집계(요구 동결 2026-07-24) — 후보 원천(①~③=기계): ①같은 oosId 강등 2회+ ②입장 심사 승격 범위확장(escalation)
+// ③같은 계보(occurrence) 반복 2회+(원 등장 포함 3회). 재제시 스킵: 후보 장부에서 같은 (candidateId, 승인 세대)에 declined|failed → 제외.
+// [RULE-SUPPLY-CORRECTION 묶음 2(I) · 사용자 결정 D-e 2026-10-07] 상한 소진 판정 끝에 붙이던 '수칙서 후보 재료'와 구현 담당의 '수칙서 후보 절
+// 작성 의무'(대화에 후보를 늘어놓고 권장하게 하던 지시)는 없앴다 — 승인·안 올림은 대시보드 수칙 카드 한 곳에서만.
+// 후보 집계 본체(대시보드 후보 카드가 쓰는 산출). 반환
 // { live, skipped, overCap } — live=[{candidateId, kind, key, n, titles}].
 // [RULE-SUPPLY 묶음 1 · 검증 1회차 blocker②③] 0세대 → 첫 승인 전환 구간의 세대 결정. 직전 검증 동결이 0세대 표식(virtualGen)인데 계약에 정식
 // 승인 지문이 생겼으면(첫 도장) 그 지문이 지금 세대다 — 다음 검증이 새로 동결하기 전에도 판단 관문·지적 판단·대시보드 후보가 새 세대를 본다
@@ -4501,32 +4500,6 @@ function computeEnvelopeCandidatesFor(ws, opts) {
   // [재편 B §3-1b] signals에는 장부 처분 필터를 적용하지 않는다 — 참고는 처분 상태가 없다(신호가 살아
   // 있으면 표시·소멸하면 사라짐). 과거에 기록된 합성 처분 행은 판독에서 무시되어 자연 무효.
   return { live, signals, skipped, overCap, unmarked: unmarked5, gen: gen || null }; // gen=산출 세대(동결) — 소비자(대시보드)는 이 값과 현 승인 해시의 일치를 결속해야 함(증분 3 재검증 blocker)
-}
-function envelopeCandidateNoticeFor(ws, lang, res, profile = "core", repoKey) {
-  try {
-    if (profile !== "core") return ""; // integrity 검증에는 core 전용 수칙서 후보·입장 심사 어휘를 붙이지 않는다.
-    if (!res || !res.tracked || !res.last) return "";
-    const en = lang === "en";
-    // [저장소 분할 단일 규칙 · 5판 blocker②] 결과 문자열(checkpoint 저장 포함)에 실리는 후보 재료=시작 스냅샷 저장소 표식 행만(빈 키=종전 전체).
-    const { live, signals, skipped, overCap, unmarked } = computeEnvelopeCandidatesFor(ws, (typeof repoKey === "string" && repoKey) ? { rowFilter: (r) => r && r.repoKey === repoKey } : undefined);
-    const kindLabel = (k) => en
-      ? (k === "curator" ? "curation proposal (independent run — approve/decline)" : k === "oos-repeat" ? "repeated out-of-scope demotions — reconsider defending this scenario" : k === "escalation" ? "admission-escalated scope expansion — consider formal adoption" : k === "unused-oos" ? "never triggered this approval generation — consider removing/merging" : k === "user-constraint" ? "a promise the user stated directly in chat (no verification lineage) — consider adopting into the rulebook" : k === "resolved-blocker" ? "a blocker caught and fixed in verification — consider an always-block entry" : "repeated blocker lineage — consider an always-block entry")
-      : (k === "curator" ? "정리 제안(독립 실행 — 승인/안 올림)" : k === "oos-repeat" ? "범위 밖 강등 반복 — 이 시나리오를 계속 치워둘지 재검토" : k === "escalation" ? "입장 심사 승격 확장 — 정식 편입 검토" : k === "unused-oos" ? "이 승인 세대에서 한 번도 발동 안 됨 — 빼기/병합 검토" : k === "user-constraint" ? "사용자가 대화에서 직접 말한 약속(검증 계보 아님) — 수칙서 편입 검토" : k === "resolved-blocker" ? "검증에서 잡혀 이미 고친 blocker — 항상 차단 명시 검토" : "같은 계보 blocker 반복 — 항상 차단 명시 검토"); // [주의 수용] user-constraint를 반복 blocker로 오표시하면 미검증 발화에 검증 계보가 있다고 오인시킴
-    const L = [];
-    L.push(en ? "\n[rulebook candidates · this campaign — machine material]" : "\n[수칙서 후보 재료 · 이번 캠페인 — 기계 집계]");
-    if (unmarked) L.push(en ? `> ${unmarked} older proposal(s) without a repository mark are hidden from display/approval (cleaned at the next reconcile — re-enter if still needed).` : `> 저장소 표식 없는 이전 제안 ${unmarked}건은 표시·승인 대상에서 제외(다음 조정 때 자동 정리 — 필요하면 다시 넣기).`);
-    if (overCap) L.push(en ? "> ⚠ the rulebook already holds 30+ items — prioritize removal/merge candidates over additions (§7 growth control)." : "> ⚠ 수칙서가 이미 30항목 이상 — 추가보다 빼기/병합 후보를 우선하라(§7 성장 억제).");
-    if (!live.length) L.push(en ? "> no machine-aggregated candidate from this exhaustion. Any item parked by the implementer must still carry its real receipt in [Parked]." + (skipped ? ` (${skipped} previously declined/failed candidate(s) skipped this generation)` : "") : "> 이번 소진의 기계 집계로는 수칙서로 올릴 후보가 없습니다. 구현 담당이 보류한 항목은 [보관함 이관]에 실제 영수증과 별도로 밝혀야 합니다." + (skipped ? ` (이 승인 세대에서 이미 거절·실패한 후보 ${skipped}건 스킵)` : ""));
-    else {
-      for (const c of live) L.push(`> ${c.candidateId} [${c.kind} ×${c.n}] ${kindLabel(c.kind)}${c.titles.length ? " — " + c.titles.map((t9) => String(t9).slice(0, 60)).join(" / ") : ""}`); // 절단은 이 표시 지점만(집계는 무절단 — 대시보드 원문 보존)
-      if (skipped) L.push(en ? `> (${skipped} previously declined/failed candidate(s) skipped this generation)` : `> (이 승인 세대에서 이미 거절·실패한 후보 ${skipped}건 스킵)`);
-      L.push(en
-        ? "[duty] Write a 'rulebook candidates' section in the exhaustion report from the material above, per the global presentation contract (§8): no jargon · a concrete situation example per candidate · what changes if adopted / what stays if not · one-line recommendation with grounds · include a draft clause the user can approve as-is. Selection is confirmed via chat reply (a dashboard click may only record a selection); adoption still requires the user's stamp. Record outcomes with: adoption via `envelope-candidate draft <id>` (draft-bound; direct mark adopted is refused for these kinds), decline/failure via `envelope-candidate mark <id> <declined|failed>`."
-        : "[의무] 위 재료로 소진 보고에 '수칙서 후보' 절을 §8 전역 표현 계약대로 작성하라: 기술용어 금지 · 후보마다 상황예시 · 채택 시 달라지는 것/미채택 시 유지되는 것 · 권장+근거 1줄 · 사용자가 '이대로 올려'만 하면 되는 문안 초안 포함. 선택 확정=대화 응답(대시보드 클릭은 선택 기록까지만) · 채택돼도 효력은 사용자 도장부터. 결과 기록: 채택은 `envelope-candidate draft <id>`(초안 결속 — 이 후보들은 mark adopted 직접 기록이 거부됨)·안 올림/실패는 `envelope-candidate mark <id> <declined|failed>`.");
-    }
-    if (signals && signals.length) L.push(en ? `> [reference signals - not decisions] ${signals.length} repetition signal(s): ` + signals.map((s) => s.kind + "×" + s.n).join(", ") + " (no ledger disposition - promote only via rule-propose at campaign closing)" : `> [참고 신호 — 판단 대상 아님] 반복 신호 ${signals.length}건: ` + signals.map((s) => s.kind + "×" + s.n).join(", ") + " (장부 처분 없음 — 지침 승격은 마감 rule-propose로만)");
-    return L.join("\n") + "\n";
-  } catch { return ""; } // 재료 산출 실패가 판정 전달을 막지 않음
 }
 function breakdownNoticeFor(ws, lang, res, repoKey) {
   try {
@@ -5042,7 +5015,6 @@ async function cmdAsk(rest) {
       + evidenceInfoLine(answer, exec, verifierSession, citeRootsE9, langSnap) // [§B1·D3] 읽기 흔적·인용 대조 정보 줄(경보 아님)
       + budgetNoticeLines(budgetGate.res, langSnap, profileSnap)
       + breakdownNoticeFor(ws, langSnap, budgetGate.res, repoKeySnap9) // [단일 규칙 · 5판 blocker②] 부가 보고 3종=시작 스냅샷 저장소 행만(결과·checkpoint에 타 저장소 신호 결합 금지)
-      + envelopeCandidateNoticeFor(ws, langSnap, budgetGate.res, profileSnap, repoKeySnap9)
       + integrityReviewLine(ws, langSnap, profileSnap, repoKeySnap9);
     let ckptOk = !durableEnv;
     if (durableEnv && evAlert && evAlert.challengeId) {
@@ -5606,4 +5578,4 @@ function main() {
 
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { modelArgs, evidenceInfoLine, resolveCitedPath, rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, templateScriptCommands, maskNonCode, toolReadParts, scriptOwnerScan, outputContainsFileLine, callMentionedFiles, scriptLiteralLines, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, envelopeCandidateNoticeFor, computeEnvelopeCandidatesFor, candidatesGenOptsFor, judgeGenFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
+module.exports = { modelArgs, evidenceInfoLine, resolveCitedPath, rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, templateScriptCommands, maskNonCode, toolReadParts, scriptOwnerScan, outputContainsFileLine, callMentionedFiles, scriptLiteralLines, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, computeEnvelopeCandidatesFor, candidatesGenOptsFor, judgeGenFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };

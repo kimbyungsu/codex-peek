@@ -428,9 +428,7 @@ t("★반례(5판 blocker①~④ ab-1) — 남은 활성 판독 4곳도 저장�
     assert.ok(/범위 밖 강등 2/.test(String(CB.breakdownNoticeFor(F.ws, "ko", res) || "")), "(전제) 키 없음=전체(B 강등 2 포함)");
     assert.strictEqual(String(CB.integrityReviewLine(F.ws, "ko", "integrity", F.repoKey) || ""), "", "★재심 재료=A 행만(A 강등 0=빈 줄)");
     assert.ok(/oos-1 ×2/.test(String(CB.integrityReviewLine(F.ws, "ko", "integrity") || "")), "(전제) 키 없음=B 강등 집계");
-    const cand = String(CB.envelopeCandidateNoticeFor(F.ws, "ko", res, "core", F.repoKey) || "");
-    assert.ok(cand && !/oos-repeat/.test(cand), "★후보 재료=A 행만(B의 oos-repeat 없음) " + JSON.stringify(cand));
-    assert.ok(/oos-repeat/.test(String(CB.envelopeCandidateNoticeFor(F.ws, "ko", res, "core") || "")), "(전제) 키 없음=B의 oos-repeat 후보가 보임");
+    assert.strictEqual(typeof CB.envelopeCandidateNoticeFor, "undefined", "[RULE-SUPPLY-CORRECTION 묶음 2 · D-e] 결과 문자열에 후보 재료를 싣던 함수 없음(저장소 결합 경로 자체가 사라짐)");
     // ③ rule-propose: 타 저장소 해결 지적=finding-not-found · 자기 저장소=성립
     const rp = CL.ruleProposeCandidate(F.ws, F.repo, { findingId: "f-bres", why: "이 상황은 늘 먼저 막아야 하는 관통 지침이다", campaignId: CAMP });
     assert.ok(rp && rp.ok === false && rp.reason === "finding-not-found", "★B 지적으로 A 후보 생성 거부 " + JSON.stringify(rp));
@@ -443,7 +441,7 @@ t("★반례(5판 blocker①~④ ab-1) — 남은 활성 판독 4곳도 저장�
     // 소스 핀 — 호출 지점이 시작 스냅샷/현재 저장소 키를 넘긴다
     const cb = fs.readFileSync(path.join(__dirname, "..", "bridge", "codex-bridge.js"), "utf8");
     assert.ok(cb.includes("const valid = dispositionValid(rowsMine, camp, d);") && cb.includes("const gaps = fixGapCount(ws, camp, rkCurJ);"), "finding-judge 유효성·fix-gap=현재 저장소 행");
-    assert.ok(cb.includes("breakdownNoticeFor(ws, langSnap, budgetGate.res, repoKeySnap9)") && cb.includes("envelopeCandidateNoticeFor(ws, langSnap, budgetGate.res, profileSnap, repoKeySnap9)") && cb.includes("integrityReviewLine(ws, langSnap, profileSnap, repoKeySnap9);"), "부가 보고 3종=시작 스냅샷 키");
+    assert.ok(cb.includes("breakdownNoticeFor(ws, langSnap, budgetGate.res, repoKeySnap9)") && !cb.includes("envelopeCandidateNoticeFor(") && cb.includes("integrityReviewLine(ws, langSnap, profileSnap, repoKeySnap9);"), "부가 보고 3종=시작 스냅샷 키");
     assert.ok(cb.includes("MPV9.harvestFromResolvedFinding(ws, repo9, camp, r9.findingId, repoKeySnap);"), "수확기 호출=시작 스냅샷 키");
     const cl = fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8");
     assert.ok(cl.includes("const rows = ledgerRowsForRepo(readFindingsLedger(ws), repoKeyOf(repo));"), "rule-propose=현재 대상 저장소 행");

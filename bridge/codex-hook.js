@@ -159,7 +159,7 @@ function implementerContext(j, ws, c, sid, opts) {
     fixed.push(codexDeliveryStatusLine(dplan,lang,sentAt));
     record={gen:dplan.gen,parts:dplan.parts,sentAt,lastTurnTs:nowIso,reason:dplan.reason};
   } else if(provenance) advisories.push(provenance);
-  try { const x=require("./classify.js").pendingNoticeFor(ws,c,sid,lang); if(x)advisories.push(x); } catch { /* advisory — [RULE-SUPPLY 묶음 2-나-2 §3-7] 사용자 확인 대기 1줄(그 상태에 세션당 1회 · 짧아서 앞에 — 예산 절단 회피) */ }
+  // [RULE-SUPPLY-CORRECTION 묶음 2(I) · D-e] 사용자 말 후보 '확인 대기' 1줄 주입은 없앴다(대기 표시는 대시보드에만).
   try { const x=buildScoutDirective(ws,c); if(x)advisories.push(x); } catch { /* advisory */ }
   try { const x=require("./map-bootstrap.js").hookTick(ws); if(x)advisories.push(x); } catch { /* advisory */ }
   try { const x=require("./curation.js").curationHookTick(ws,c); if(x)advisories.push(x); } catch { /* advisory — [CURATION v3 §3 A] 판정+detach·검증 무접촉 */ }

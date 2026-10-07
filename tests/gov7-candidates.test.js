@@ -43,7 +43,7 @@ console.log("[2] occurrence 배선(소스 계약) — 재등장 시 계보 기�
   ok(gov.includes("레코드 5유형") && gov.includes('occurrence[§7 재등장 계보'), "§3 레코드 유형 4→5종 문서 동기");
 }
 
-console.log("[3] 소진 보고 후보 재료 — 집계·스킵·0건 명시·비소진=0바이트");
+console.log("[3] 후보 집계(대시보드 수칙 카드 재료) — 참고 신호 분리·스킵 · [RULE-SUPPLY-CORRECTION 묶음 2] 소진 판정 끝 후보 재료·의무 문구 없음");
 {
   // 계보 장부 픽스처: oos-2 강등 2건·escalation 1건·occurrence(blocker) 2건(f-aaa)·occurrence(보완) 2건(f-bbb — 집계 제외)
   CL.appendFindingsLedger(ws, [
@@ -59,8 +59,7 @@ console.log("[3] 소진 보고 후보 재료 — 집계·스킵·0건 명시·�
     { type: "occurrence", findingId: "f-bbb", campaignId: CAMP, prevId: "f-bbb", round: 3, envelopeHash: GEN, effectiveTag: "보완", ts: "T" },
     { type: "finding", findingId: "f-zzz", campaignId: "other-camp", round: 1, tag: "주의", titleNorm: "딴캠페인", oosId: "oos-2", envelopeHash: GEN, demoted: true, status: "closed", ts: "T" },
   ]);
-  const notice = CB.envelopeCandidateNoticeFor(ws, "ko", { tracked: true, last: true, n: 3, budget: 3 });
-  ok(notice.includes("[수칙서 후보 재료"), "소진(마지막 예약 왕복)=재료 절 출력");
+  ok(typeof CB.envelopeCandidateNoticeFor === "undefined", "[D-e] 소진 판정 끝에 후보 재료·'수칙서 후보 절 작성' 의무를 붙이던 함수 없음");
   const idOos = CL.envelopeCandidateId("oos-repeat", "oos-2");
   const idEsc = CL.envelopeCandidateId("escalation", "f-esc");
   const idLin = CL.envelopeCandidateId("lineage", "f-aaa");
@@ -68,19 +67,16 @@ console.log("[3] 소진 보고 후보 재료 — 집계·스킵·0건 명시·�
     ok(sid3.includes(idEsc) && sid3.includes(idLin), "[재편 B] escalation·계보 반복=참고 신호(signals)로 산출(권위 후보 아님)");
     ok(sid3.includes(idOos), "★처분 필터 비적용 — 과거 declined된 합성 신호도 참고로 계속 표시(참고는 처분 상태가 없음)");
     ok(!(cc3.live || []).some((c) => [idEsc, idLin, idOos].includes(c.candidateId)), "합성은 live(권위 후보)에 미합류(구조 분리)"); }
-  ok(notice.includes("참고 신호"), "소진 보고=참고 신호 병기(판단 의무 아님 표기)");
   ok(!(CB.computeEnvelopeCandidatesFor(ws).signals || []).some((s) => s.candidateId === CL.envelopeCandidateId("lineage", "f-bbb")), "보완 effectiveTag 재등장=blocker 계보로 오집계 안 함(§7 effectiveTag 계약)");
-  ok(!notice.includes("딴캠페인"), "다른 캠페인 기록은 미집계(캠페인 축)");
-  ok(notice.includes("후보가 없습니다"), "장부 후보 0=0건 명시(합성은 의무 대상 아님 — 재편 B: 의무 문구는 장부 후보 있을 때만)");
-  ok(CB.envelopeCandidateNoticeFor(ws, "ko", { tracked: true, last: false, n: 1, budget: 3 }) === "", "비소진=0바이트(무회귀)");
-  ok(CB.envelopeCandidateNoticeFor(ws, "ko", null) === "", "res 부재=0바이트");
+  ok(!(CB.computeEnvelopeCandidatesFor(ws).signals || []).some((s) => (s.titles || []).some((t) => String(t).includes("딴캠페인"))), "다른 캠페인 기록은 미집계(캠페인 축)");
+  ok((CB.computeEnvelopeCandidatesFor(ws).live || []).length === 0, "장부 후보 0(합성은 권위 후보 아님 — 재편 B)");
   // 전 후보 스킵 반례 → 0건 명시 문구
   CL.appendEnvelopeCandidates(ws, [
     { candidateId: idEsc, envelopeHash: GEN, status: "failed", ts: "T4" },
     { candidateId: idLin, envelopeHash: GEN, status: "declined", ts: "T5" },
   ]);
-  const n2 = CB.envelopeCandidateNoticeFor(ws, "ko", { tracked: true, last: true, n: 3, budget: 3 });
-  ok(n2.includes("후보가 없습니다") && n2.includes("참고 신호"), "[재편 B] 합성 처분 기록이 있어도 참고 신호는 계속 표시(장부 개입 소멸·0건 명시 유지)");
+  const cc9 = CB.computeEnvelopeCandidatesFor(ws);
+  ok((cc9.live || []).length === 0 && (cc9.signals || []).some((s) => s.candidateId === idEsc), "[재편 B] 합성 처분 기록이 있어도 참고 신호는 계속 표시(장부 개입 소멸)");
 }
 
 console.log("[4] CLI — list·mark 실행(설치본 동형 소스 직접 호출은 스위치 계약으로)");
@@ -106,7 +102,7 @@ console.log("[4b] [재편 B §3-1b] mark 실행 반례 — 합성(장부 밖) id
 console.log("[5] 출력부 병기 — 두 경로(내구 회수·직결) 모두");
 {
   const src = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
-  ok((src.match(/envelopeCandidateNoticeFor\(ws, langSnap, budgetGate\.res, profileSnap, repoKeySnap9\)/g) || []).length === 1 && (src.match(/finishVerifyRun\(/g) || []).length === 3, "budget 소진 출력=공유 꼬리 1곳이 동결 profile 결속(core에서만 후보 재료 병기 — 세 분기 호출 경유)");
+  ok(!src.includes("envelopeCandidateNoticeFor") && !src.includes("[의무] 위 재료로 소진 보고에") && !src.includes("[duty] Write a 'rulebook candidates' section") && (src.match(/finishVerifyRun\(/g) || []).length === 3, "[D-e] 소진 판정 끝 공유 꼬리에 후보 재료·의무 문구 없음(세 분기 호출 경유)");
 }
 
 console.log("[6] 실경로 반례(재검증 blocker①②) — machineFindingsLayer로 prevId 계보·같은 라운드 중복");
@@ -389,7 +385,7 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   const cb7 = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
   ok(cb7.includes("ENVELOPE_DRAFTABLE_KINDS.includes(k5)"), "계산기 ⑤ 합류 allowlist=draftable kinds 단일 정본");
   ok(cb7.includes("envelopeMarkGuard(ws, id, status)") && cb7.includes("envelope-candidate draft"), "mark 우회 가드 배선+draft 안내(§3-3b)");
-  ok(cb7.includes("사용자가 대화에서 직접 말한 약속(검증 계보 아님)"), "소진 보고 kindLabel: user-constraint 전용 분기(미검증 발화를 blocker 반복으로 오표시 금지 — 주의 수용)");
+  ok(!cb7.includes("사용자가 대화에서 직접 말한 약속(검증 계보 아님)"), "[RULE-SUPPLY-CORRECTION 묶음 2 · D-e] 소진 보고 후보 표기(kindLabel)는 대화 나열 의무와 함께 없앰 — 후보 표시는 대시보드 수칙 카드만");
   ok(ext.includes('if (typeof CLS.stampEnvelopeAllSlots !== "function") return false;') && ext.includes("stampEnvelopeAllSlots(wsE, tgtNow, shaAt)") && ext.includes("rS && rS.ok"), "직접 승인=WAL 경유 트랜잭션 도장(부분 기록 영속 금지)·구세대 브릿지=거부 fail-closed(f-71d4c2a8 연속분)");
   ok(ext.includes("setEnvelopeHashAllSlots(ws, oh9) === 2") && ext.includes("oh9 === evv.sha1"), "자기치유=2슬롯 성공만 표기 정렬(지문 일치 조건부 — 새 권위 부여 아님)");
   ok(/rb9\.addEventListener\("click", function\(\)\{ var t0=document\.querySelector\("#blGroupLater"\)\|\|document\.querySelector\("#backlogSec"\); if\(t0\)\{ if\(t0\.tagName==="DETAILS"\) t0\.open=true; var dp0=t0\.closest\?t0\.closest\("details"\):null; if\(dp0\) dp0\.open=true; gotoEl\(t0\); flashNode\(t0\); return; \}/.test(ext), "'여유' 줄도 보관함 '여유' 묶음 제목(없으면 상자)+펼침(동일 봉합 · 2026-09-14)");
@@ -431,7 +427,7 @@ console.log("[12] 배선 — 대시보드 후보 카드·기록 버튼(기록 �
   ok(ext.includes('m?.type === "candMark"') && ext.includes('note: "dashboard-record"') && !/candMark[\s\S]{0,2400}applyEnvelopeTransition/.test(ext.slice(ext.indexOf('m?.type === "candMark"'))), "채택 경로에 승인 전이 발동 없음(초안 생성까지만 — 효력은 도장부터·§7 개정 계약)");
   ok(ext.includes('m.status === "adopted" || m.status === "declined"') && ext.includes("/^[0-9a-f]{16}$/.test(m.id)"), "기록 인자 strict(16hex·상태 2종만)");
   const src = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
-  ok(src.includes("30항목 이상 — 추가보다 빼기/병합 후보를 우선하라") && src.includes('kind: "unused-oos"'), "임계 문구+빼기 후보 kind 존재");
+  ok(!src.includes("30항목 이상 — 추가보다 빼기/병합 후보를 우선하라") && src.includes('kind: "unused-oos"') && src.includes("if (overCap && envForCleanup)"), "[D-e] 구현 담당용 임계 지시 문구는 없앰 · 빼기 후보(오래 미발동 참고 신호)는 30항목 이상일 때 계속 산출(성장 억제 유지 — 대시보드 표시)");
 }
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);

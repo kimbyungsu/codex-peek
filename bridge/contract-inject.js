@@ -235,8 +235,7 @@ process.stdin.on("end", () => {
       dlvPlan.record = { gen: dlvPlan.gen, parts: dlvPlan.parts, sentAt: sentAt9, lastTurnTs: activeTs, reason: dlvPlan.reason };
       provenanceInStatic = true; envelopeDynOnly = true; // 경위 안내·수칙 인지 전문은 정적 블록에 속함(세대 결속)
     }
-    // [RULE-SUPPLY 묶음 2-나-2 §3-7] 사용자 말에서 나온 후보가 도장을 기다리면 사실 1줄(그 상태에 세션당 1회 · 지시문 아님) — 짧아서 안내 앞쪽(예산 절단 회피)
-    try { const pn = require("./classify.js").pendingNoticeFor(ws, c, sid, lang); if (pn) advisories.push(pn); } catch { /* advisory */ }
+    // [RULE-SUPPLY-CORRECTION 묶음 2(I) · D-e] 사용자 말 후보 '확인 대기' 1줄 주입은 없앴다(대기 표시는 대시보드에만).
     // 탐색(3트랙) 자동 지시 — 지도 없음/낡음일 때 그 상태에 1회만(상태 서명 기반·advisory). 실패해도 훅을 막지 않음.
     try { const sd = buildScoutDirective(ws, c); if (sd) advisories.push(sd); } catch { /* advisory */ }
     // 설계 경위 선조회 안내(MAP-PROVENANCE-DESIGN §3) — scoutMode 독립(2트랙에서도 why 동작)·색인 존재 시만 1줄.

@@ -494,45 +494,40 @@ t("명령줄 classify tick — 기준선 뒤 새 마감이면 자동 실행(trig
   assert.ok(c.st === "no-run", "같은 마감 다시 없음 " + JSON.stringify(c));
 });
 
-sec("[4] 확인 대기 1줄(§3-7) — 그 상태에 세션당 1회 · 사실 한 줄");
-t("대기 0=침묵 · 대기 생기면 1회 · 같은 상태=침묵 · 목록 바뀌면 다시 · 다른 세션=1회 · 지시문 아님", async () => {
-  const P = project("notice");
-  assert.strictEqual(CF.pendingNoticeFor(P.ws, null, "sess-1", "ko"), null);
-  const A = "알림 시험용 첫 번째 지속 기준 문장입니다";
-  say(P, A);
-  const r = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, A), seat: "outOfScope", quote: A, why: "프로젝트 내내 지킬 판정 기준" }] })) });
-  assert.strictEqual(r.envIds.length, 1);
-  const n1 = CF.pendingNoticeFor(P.ws, null, "sess-1", "ko");
-  assert.ok(n1 && n1.includes("1건") && n1.startsWith("[사용자 확인 대기]"), n1);
-  assert.ok(!/하라|해라|하세요|올려/.test(n1), "지시문 아님(R1)");
-  assert.strictEqual(CF.pendingNoticeFor(P.ws, null, "sess-1", "ko"), null, "같은 상태=침묵");
-  assert.ok(CF.pendingNoticeFor(P.ws, null, "sess-2", "en").includes("1 standard"), "다른 세션=1회");
-  const B = "알림 시험용 두 번째 판정 기준 문장입니다 계속 지켜요";
-  say(P, B);
-  const r2 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, B), seat: "alwaysBlocker", quote: B, why: "프로젝트 내내 지킬 판정 기준" }] })) });
-  assert.strictEqual(r2.envIds.length, 1);
-  assert.ok(CF.pendingNoticeFor(P.ws, null, "sess-1", "ko").includes("2건"), "목록 바뀜=다시");
-  // [RULE-SUPPLY-CORRECTION 묶음 1] 옛 자리 장부의 대기 제안은 승인 길이 없어 세지 않는다
-  fs.mkdirSync(CF.CLASSIFY_DIR, { recursive: true });
-  fs.writeFileSync(CF.seatsFileFor(P.ws), JSON.stringify({ schema: "user-seat-v1", wsKey: CL.wsKeyFor(P.ws), candidateId: "f".repeat(16), status: "proposed", seat: "rule", repoKey: P.rk, provider: "claude", quote: "옛 규칙 칸 대기 제안 문장입니다", why: "옛 제안", ts: "2026-10-05T00:00:00.000Z" }) + "\n");
-  assert.deepStrictEqual(CF.pendingUserWordIds(P.ws).length, 2, "옛 대기 제안 미합산");
-  assert.ok(CL.appendEnvelopeCandidates(P.ws, [r.envIds[0], r2.envIds[0]].map((id) => ({ candidateId: id, envelopeHash: CL.GEN0_HASH, status: "declined", by: "user", ts: new Date().toISOString() }))));
-  assert.strictEqual(CF.pendingNoticeFor(P.ws, null, "sess-1", "ko"), null, "다 처리=침묵");
-});
-t("입력 제출 훅(실제 실행)이 확인 대기 1줄을 싣고 같은 상태의 다음 차례에는 안 싣는다", async () => {
+sec("[4] (RULE-SUPPLY-CORRECTION 묶음 2 · D-e) 확인 대기 1줄 없음 — 수칙서 후보 대기 표시는 대시보드에만");
+t("확인 대기 함수가 없다 · 수칙서 후보가 대기 중이어도 Claude 입력 제출 훅·Codex 입력 제출 훅(둘 다 실제 실행)이 '[사용자 확인 대기]' 줄을 싣지 않는다", async () => {
+  for (const k of ["pendingNoticeFor", "pendingUserWordIds", "noticeFileFor"]) assert.strictEqual(typeof CF[k], "undefined", k);
+  for (const f of ["contract-inject.js", "codex-hook.js"]) assert.ok(!fs.readFileSync(path.join(ROOT, "bridge", f), "utf8").includes("pendingNoticeFor"), f + " 호출 없음");
   const P = project("hookline");
   const A = "훅 결선 시험용 지속 기준 문장입니다 계속 지켜요";
   say(P, A);
-  await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, A), seat: "alwaysBlocker", quote: A, why: "프로젝트 내내 지킬 판정 기준" }] })) });
+  const r0 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, A), seat: "alwaysBlocker", quote: A, why: "프로젝트 내내 지킬 판정 기준" }] })) });
+  assert.strictEqual(r0.envIds.length, 1, "(전제) 수칙서 후보 1건 대기");
+  const cand = CL.readEnvelopeCandidates(P.ws).latest.get(r0.envIds[0] + "@" + CL.GEN0_HASH);
+  assert.ok(cand && cand.status === "proposed", "(전제) 대기 상태");
+  const NOTE = /\[사용자 확인 대기\]|\[Waiting for the user\]/;
+  // Claude 입력 제출 훅(검증 모드 always — 훅이 매 차례 주입문을 내는 상태에서 확인)
+  assert.ok(CL.patchContractFields(P.ws, "ko", { verifyMode: "always" }));
   const SID = "ca-hook-session-1";
   const tp = path.join(mk("ca-tx-"), SID + ".jsonl"); fs.writeFileSync(tp, "");
-  const env = Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME, CLAUDE_PROJECT_DIR: P.ws, CLAUDE_CODE_SESSION_ID: SID });
-  const run = (prompt) => cp.spawnSync(process.execPath, [path.join(ROOT, "bridge", "contract-inject.js")], { input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SID, cwd: P.ws, prompt, transcript_path: tp, permission_mode: "default", prompt_id: "pid-" + (++seq) }), encoding: "utf8", env, cwd: P.ws });
-  const o1 = run("첫 차례 요청입니다");
-  assert.strictEqual(o1.status, 0, o1.stderr);
-  assert.ok(o1.stdout.includes("[사용자 확인 대기]"), "첫 차례에 1줄");
-  const o2 = run("둘째 차례 요청입니다");
-  assert.ok(o2.status === 0 && !o2.stdout.includes("[사용자 확인 대기]"), "같은 상태=다음 차례 침묵");
+  const envC = Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME, CLAUDE_PROJECT_DIR: P.ws, CLAUDE_CODE_SESSION_ID: SID });
+  const runC = (prompt) => cp.spawnSync(process.execPath, [path.join(ROOT, "bridge", "contract-inject.js")], { input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SID, cwd: P.ws, prompt, transcript_path: tp, permission_mode: "default", prompt_id: "pid-" + (++seq) }), encoding: "utf8", env: envC, cwd: P.ws });
+  for (const pr of ["첫 차례 요청입니다", "둘째 차례 요청입니다"]) {
+    const o = runC(pr);
+    assert.ok(o.status === 0 && o.stdout.length > 0, "(전제) 훅 실행·출력 " + o.stderr);
+    assert.ok(!NOTE.test(o.stdout), "Claude 주입에 확인 대기 줄 없음: " + pr);
+  }
+  // Codex 입력 제출 훅(구현 담당=Codex 구성)
+  assert.ok(CL.patchContractFields(P.ws, "ko", { harnessMode: "codex-codex", codexVerifyMode: "always", verifyMode: "always" }));
+  const CSID = "019f0000-3333-7333-8444-955566677788";
+  const rollout = path.join(mk("ca-rollout-"), "rollout.jsonl");
+  fs.writeFileSync(rollout, JSON.stringify({ type: "session_meta", timestamp: new Date(Date.now() - 60000).toISOString(), payload: { id: CSID, source: "vscode", thread_source: "user" } }) + "\n", "utf8");
+  const envX = Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME }); delete envX.CLAUDE_PROJECT_DIR;
+  const rx = cp.spawnSync(process.execPath, [path.join(ROOT, "bridge", "codex-hook.js")], { input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: CSID, cwd: P.ws, transcript_path: rollout, turn_id: "t-ca-1", prompt: "구현 시작" }), encoding: "utf8", timeout: 30000, env: envX, windowsHide: true });
+  let ox = null; try { ox = JSON.parse(rx.stdout); } catch { ox = null; }
+  const ctx = (ox && ox.hookSpecificOutput && ox.hookSpecificOutput.additionalContext) || "";
+  assert.ok(rx.status === 0 && ctx.length > 0, "(전제) Codex 훅 실행·주입 " + rx.stderr + " " + rx.stdout.slice(0, 200));
+  assert.ok(!NOTE.test(ctx), "Codex 주입에 확인 대기 줄 없음");
 });
 
 sec("[5] 분류하지 못한 말 — 다시 분류·버리기");

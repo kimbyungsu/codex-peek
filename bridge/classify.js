@@ -519,45 +519,8 @@ function classifyHookTick(ws, c, opts) {
   return null;
 }
 
-// ── [§3-7] 구현 담당에게 남는 글 — 사용자 말에서 나온 후보가 도장을 기다릴 때 상태 줄 1회(그 상태에 세션당 1회 — 목록이 바뀌면 다시).
-// 지시문 아님(사실 한 줄 — R1·§4-B). 센 것=이 저장소의 사용자 약속 후보(현재 세대·대기·사용자 거절 아님)+규칙/결정 자리 대기.
-const NOTICE_SESSIONS_MAX = 30;
-function noticeFileFor(ws) { return path.join(CLASSIFY_DIR, CL.wsKeyFor(ws) + ".notice.json"); }
-function pendingUserWordIds(ws, c) {
-  const cc = c || (() => { try { return CL.loadContract(ws); } catch { return null; } })();
-  if (!cc) return null;
-  let repo; try { repo = CL.resolveScoutRepo(ws, cc).repo; } catch { return null; }
-  const repoKey = CL.repoKeyOf(repo);
-  const ids = [];
-  let g = null; try { g = CL.envelopeGenFor(ws, repo, cc); } catch { g = null; }
-  if (g && g.gen) {
-    const cst = CL.readEnvelopeCandidatesState(ws);
-    if (cst.readError) return null;
-    for (const r of cst.latest.values()) if (r && r.kind === "user-constraint" && r.status === "proposed" && String(r.envelopeHash || "") === g.gen && r.repoKey === repoKey && !CL.userDeclinedCandidate(cst.rows, r.candidateId)) ids.push(r.candidateId);
-  }
-  return [...new Set(ids)].sort();
-}
-function pendingNoticeFor(ws, c, sid, lang) {
-  try {
-    const s = String(sid || "");
-    if (!s) return null;
-    const ids = pendingUserWordIds(ws, c);
-    if (ids === null) return null; // 판독 불가=침묵(다음 턴 재시도)
-    const sig = ids.length ? sha1(ids.join(",")).slice(0, 16) + ":" + ids.length : "";
-    let st = {}; try { const o = JSON.parse(fs.readFileSync(noticeFileFor(ws), "utf8")); if (o && typeof o === "object" && o.sessions && typeof o.sessions === "object") st = o; } catch { st = {}; }
-    const sessions = Object.assign({}, st.sessions || {});
-    if (sessions[s] && sessions[s].sig === sig) return null; // 같은 상태=이 세션에 이미 알림
-    delete sessions[s];
-    sessions[s] = { sig, ts: new Date().toISOString() };
-    const keys = Object.keys(sessions); if (keys.length > NOTICE_SESSIONS_MAX) for (const k of keys.slice(0, keys.length - NOTICE_SESSIONS_MAX)) delete sessions[k];
-    try { fs.mkdirSync(CLASSIFY_DIR, { recursive: true }); } catch { /* atomicWrite 가 판정 */ }
-    if (!CL.atomicWrite(noticeFileFor(ws), JSON.stringify({ sessions }))) return null; // 기억 실패=이번엔 침묵(매 턴 반복 방지)
-    if (!ids.length) return null;
-    return lang === "en"
-      ? "[Waiting for the user] " + ids.length + " standard(s) drawn from the user's own words are waiting for the user's approval — dashboard setup tab (proposal list)."
-      : "[사용자 확인 대기] 사용자 말에서 나온 기준 후보 " + ids.length + "건이 사용자 승인을 기다립니다 — 대시보드 설정 탭(제안 목록).";
-  } catch { return null; }
-}
+// [RULE-SUPPLY-CORRECTION 묶음 2(I) · D-e] 구현 담당 주입문에 넣던 '[사용자 확인 대기] n건' 한 줄(pendingNoticeFor·pendingUserWordIds·noticeFileFor)은 없앴다 —
+// 수칙서 후보의 대기 표시는 대시보드 수칙 카드·개요 '지금 정할 것'에만 있다(대화에 후보 이야기를 끌어들이지 않음).
 
 // ── 분류하지 못한 말 — 사용자 처리(화면): 다시 분류(대기열로 · 재시도 0) / 버리기(분류 대상에서 제외). 이 저장소 말만 다시 분류 가능(출처 불명 말은 버리기만).
 function heldWordAction(ws, id, action) {
@@ -596,7 +559,7 @@ function userWordsView(ws) {
 
 module.exports = {
   CLASSIFY_TICK_MIN_GAP_MS, classifyTickFileFor, readClassifyTick, writeClassifyTick, closeEventsFor, classifyTickJudge, markClassifyRan, classifyTick, classifyHookTick, classifyLockAlive, readHookStamp, hookStampFileFor,
-  noticeFileFor, pendingUserWordIds, pendingNoticeFor, heldWordAction, userWordsView,
+  heldWordAction, userWordsView,
   CLASSIFY_DIR, CLASSIFY_BATCH_WORDS, CLASSIFY_BATCH_CHARS, CLASSIFY_WORD_SHOW, CLASSIFY_MAX_PER_RUN, CLASSIFY_RETRY_MAX, RULEBOOK_SEATS, SEATS, REDACTED,
   classifyFileFor, seatsFileFor, classifyLockFileFor, armForProvider, rulesFieldFor, redactSensitiveForms,
   readClassifyRows, readSeatsState, userConstraintIdFor,
