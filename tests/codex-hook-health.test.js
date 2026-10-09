@@ -4,6 +4,8 @@ const { assessCodexHookHeartbeat, assessCodexHookTrust, CodexHookTrustCache } = 
 assert.deepStrictEqual(assessCodexHookTrust(null),{ready:false,reason:"hooks-unverified"},"최초 hooks/list 조회 전도 준비 완료로 승인하지 않음");
 assert.deepStrictEqual(assessCodexHookTrust({queried:false,ready:false,error:"timeout"}),{ready:false,reason:"hooks-unverified"},"hooks/list 실패도 fail-closed");
 assert.deepStrictEqual(assessCodexHookTrust({queried:true,ready:false}),{ready:false,reason:"hooks-untrusted"},"조회된 미신뢰 훅 차단");
+assert.deepStrictEqual(assessCodexHookTrust({queried:true,ready:false,missingEvents:["preToolUse"]}),{ready:false,reason:"hooks-missing"},"[2026-10-09] 등록이 빠진 훅=신뢰 안 됨이 아니라 등록 안 됨");
+assert.deepStrictEqual(assessCodexHookTrust({queried:true,ready:false,missingEvents:[]}),{ready:false,reason:"hooks-untrusted"},"빠진 훅 없음=종전 판정");
 assert.deepStrictEqual(assessCodexHookTrust({queried:true,ready:true}),{ready:true,reason:"trusted"},"조회된 전체 신뢰만 통과");
 const cache=new CodexHookTrustCache(),qa=Promise.resolve({id:"a"}),qb=Promise.resolve({id:"b"});cache.markStarted("a",100);cache.setSnapshot("a",{id:"a"});cache.setQuery("a",qa);cache.markStarted("b",200);cache.setSnapshot("b",{id:"b"});cache.setQuery("b",qb);assert.deepStrictEqual(cache.getSnapshot("a"),{id:"a"});assert.deepStrictEqual(cache.getSnapshot("b"),{id:"b"},"다른 CWD snapshot을 재사용하지 않음");assert.strictEqual(cache.getQuery("a"),qa);assert.strictEqual(cache.getQuery("b"),qb,"다른 CWD in-flight 요청도 격리");assert.deepStrictEqual(cache.getFresh("a",120,30),{id:"a"});assert.strictEqual(cache.getFresh("a",131,30),undefined,"CWD별 TTL 적용");
 

@@ -3213,6 +3213,12 @@ function unlinkSession(id: string, ws: string): boolean {
 const CODEX_PEEK_HOOK_EVENT_NAMES = ((require("../bridge/codex-plugin-install.js") as { CODEX_PEEK_USER_HOOKS: Array<{ event: string }> }).CODEX_PEEK_USER_HOOKS || []).map((h) => h.event);
 const CODEX_PEEK_HOOK_NAME_LIST = CODEX_PEEK_HOOK_EVENT_NAMES.join("·");
 const CODEX_PEEK_HOOK_COUNT = CODEX_PEEK_HOOK_EVENT_NAMES.length;
+// [2026-10-09] 빠진 훅 이름(쉬운 말+원래 이름) — hooks.json 열쇠(PreToolUse) 또는 조회 이름(preToolUse) 모두 받는다
+function codexHookEventsKo(evs?: string[]): string {
+  const ko: Record<string,string> = { sessionstart: "대화 시작(SessionStart)", userpromptsubmit: "입력 제출(UserPromptSubmit)", pretooluse: "변경 도구 호출 전 관문(PreToolUse)", posttooluse: "변경 도구 호출 뒤(PostToolUse)", stop: "차례 종료(Stop)" };
+  const xs = (evs || []).map((e) => ko[String(e).toLowerCase()] || String(e));
+  return xs.length ? xs.join("·") : "필요한";
+}
 function syncCodexHookHealth(ws: string | null): void {
   if (!ws || !codexHomeIsReady) return; // doctor 전의 기본·옛 home으로 거짓 경보/캐시를 만들지 않는다.
   try {
@@ -3225,6 +3231,8 @@ function syncCodexHookHealth(ws: string | null): void {
       const sig = `codex-hook:${health.reason}`;
       const dKo = health.reason === "hooks-unverified"
         ? "Codex Peek 훅의 신뢰 상태를 확인하지 못했습니다. 조회 전·시간 초과·app-server 오류를 정상으로 승인하지 않습니다. Codex 실행 상태를 확인하고 Codex 설정 → Hook에서 등록된 훅 전부의 신뢰 여부를 검토하세요."
+        : health.reason === "hooks-missing"
+        ? `Codex Peek 사용자 훅(hooks.json)에 ${codexHookEventsKo(health.missingEvents)} 훅이 등록돼 있지 않습니다(이전 판으로 설치돼 빠짐 — 신뢰 문제가 아님). 대시보드에서 Codex 훅 설치(갱신)를 누르면 다시 등록되고, 그 뒤 Codex 설정 → Hook에서 새로 생긴 훅을 신뢰한 뒤 창을 리로드하세요. 그 전까지 승인 서고가 켜진 프로젝트의 Codex 구현 작업은 멈춥니다.`
         : health.reason === "hooks-untrusted"
         ? `Codex Peek 사용자 훅(hooks.json)이 등록돼 있지만 ${CODEX_PEEK_HOOK_NAME_LIST} 훅이 모두 신뢰된 실행 상태가 아닙니다(실행 권위는 플러그인 번들이 아니라 이 사용자 훅). Codex 설정 → Hook에서 실행 내용을 검토·신뢰하고 창을 리로드하세요 — 이후 Codex 대화를 시작·재개할 때 구현 연결이 자동 이동합니다.`
         : health.reason === "heartbeat-stale"
@@ -3236,6 +3244,8 @@ function syncCodexHookHealth(ws: string | null): void {
         : "Codex Peek 훅 전부의 신뢰 상태는 확인됐지만 현재 구현 세션에서 실제 lifecycle 훅 실행 기록이 없습니다. rollout 보조 감지는 초록 구현 연결만 옮기므로 '모든 턴 검증'을 정상으로 승인하지 않습니다. 사용하려는 Codex 대화를 다시 열거나 프롬프트를 보내 실제 훅 신호를 확인하세요.";
       const dEn = health.reason === "hooks-unverified"
         ? "The Codex Peek hook trust state could not be verified. Pre-query, timeout, and app-server errors are not approved as healthy. Check Codex and review all registered hooks under Codex Settings → Hooks."
+        : health.reason === "hooks-missing"
+        ? `The Codex Peek user hooks file (hooks.json) has no ${(health.missingEvents||[]).join("·")||"required"} hook registered (missing from an older install — not a trust issue). Use install (update) Codex hooks in the dashboard to register it, then trust the new hook under Codex Settings → Hooks and reload the window. Until then Codex implementation work halts on projects with an approved archive.`
         : health.reason === "hooks-untrusted"
         ? `The Codex Peek user hooks (hooks.json) are registered, but the ${CODEX_PEEK_HOOK_NAME_LIST} entries are not all trusted and runnable (the runtime authority is these user hooks, not the plugin bundle). Review and trust them under Codex Settings → Hooks and reload the window — afterwards, starting or resuming a Codex conversation automatically moves the implementer link.`
         : health.reason === "heartbeat-stale"
@@ -3438,11 +3448,12 @@ function codexHookTrustCwd(ws:string):string {
 function codexHookTrustForWorkspace(ws:string):CodexHookTrustSnapshot|null {
   return codexHookTrustCache.getSnapshot(normWs(codexHookTrustCwd(ws)))||null;
 }
-type CodexHookHealth = { required: boolean; ready: boolean; reason: "not-required" | "healthy" | "implementer-missing" | "hooks-unverified" | "hooks-untrusted" | "session-missing" | "turn-unverifiable" | "heartbeat-missing" | "heartbeat-stale"; latestTurnId: string; heartbeatTurnId: string };
+type CodexHookHealth = { required: boolean; ready: boolean; missingEvents?: string[]; reason: "not-required" | "healthy" | "implementer-missing" | "hooks-unverified" | "hooks-untrusted" | "hooks-missing" | "session-missing" | "turn-unverifiable" | "heartbeat-missing" | "heartbeat-stale"; latestTurnId: string; heartbeatTurnId: string };
 function codexHookHealth(ws: string | null, rawLink?: any): CodexHookHealth {
   if (!ws || loadContract(ws).harnessMode !== "codex-codex") return { required: false, ready: true, reason: "not-required", latestTurnId: "", heartbeatTurnId: "" };
-  const trust=assessCodexHookTrust(codexHookTrustForWorkspace(ws));
-  if(!trust.ready)return { required:true,ready:false,reason:trust.reason==="hooks-untrusted"?"hooks-untrusted":"hooks-unverified",latestTurnId:"",heartbeatTurnId:"" };
+  const snap9=codexHookTrustForWorkspace(ws);
+  const trust=assessCodexHookTrust(snap9);
+  if(!trust.ready)return { required:true,ready:false,reason:trust.reason==="hooks-untrusted"||trust.reason==="hooks-missing"?trust.reason:"hooks-unverified",...(trust.reason==="hooks-missing"?{missingEvents:Array.isArray((snap9 as any)?.missingEvents)?(snap9 as any).missingEvents.map((x:any)=>String(x)):[]}:{}),latestTurnId:"",heartbeatTurnId:"" };
   const link = rawLink || workspaceLink(loadLinks(), ws);
   const sid = String(link?.implementerSession || "");
   if (!sid) return { required: true, ready: false, reason: "implementer-missing", latestTurnId: "", heartbeatTurnId: "" };
@@ -9047,7 +9058,8 @@ class Dashboard {
         const nEvid = warnEvs.length - nVerdict - nMissing - nDrift - nMachine - nEnrich; // 근거(evidence-*) 계열
         const errParts = [];
         if (nFail) errParts.push(T("검증 실패 "+nFail+"건","verify failed "+nFail)); // 빨강 — Codex 결론이 통과 아님(실패)
-        if (nSession) errParts.push(T("Codex 세션 없음 "+nSession+"건","no Codex session "+nSession)); // 빨강 — 연결된 세션 없음(연결되면 자동 사라짐·확인함으론 안 사라짐)
+        var nSessImpl = errEvs.filter(function(e){return e.kind==="session-missing" && e.sig==="session-missing:implementer";}).length; // [2026-10-09] 구현 세션 고정 전(검증 세션은 있음)을 '세션 없음'으로 뭉뚱그리지 않음
+        if (nSession) errParts.push(nSessImpl===nSession ? T("구현 Codex 세션 고정 전 "+nSession+"건","Codex implementer not pinned yet "+nSession) : T("Codex 세션 없음 "+nSession+"건","no Codex session "+nSession)); // 빨강 — 연결된 세션 없음(연결되면 자동 사라짐·확인함으론 안 사라짐)
         if (nHook) errParts.push(T("Codex 구현 훅 미작동 "+nHook+"건","Codex implementer hook inactive "+nHook));
         if (nIncomplete) errParts.push(T("검증 미완 "+nIncomplete+"건","unverified "+nIncomplete)); // 빨강 — 검증 자체가 안 일어남
         const warnParts = [];
@@ -9707,21 +9719,36 @@ async function promptCodexHookReload():Promise<void>{
   if(pick===reload)void vscode.commands.executeCommand("workbench.action.reloadWindow");
 }
 // ── P-5 ⓓ 마이그레이션: 우리 훅인데 명령이 옛 형식(따옴표 절대경로 시작 — PS 기본 셸에서 즉사)이면 교체 제안.
-function codexHookMigrationStatus():{needed:boolean;count:number}{
-  const pi=require("../bridge/codex-plugin-install.js") as {detectCodexPeekHookMigration:(f:string,b:string)=>{needed:boolean;count:number}};
-  try{return pi.detectCodexPeekHookMigration(codexUserHooksFile(),BRIDGE_DIR);}catch{return{needed:false,count:0};}
+function codexHookMigrationStatus():{needed:boolean;count:number;missingEvents:string[]}{
+  const pi=require("../bridge/codex-plugin-install.js") as {detectCodexPeekHookMigration:(f:string,b:string)=>{needed:boolean;count:number;missingEvents?:string[]}};
+  try{const r=pi.detectCodexPeekHookMigration(codexUserHooksFile(),BRIDGE_DIR);return{needed:!!r.needed,count:Number(r.count)||0,missingEvents:Array.isArray(r.missingEvents)?r.missingEvents:[]};}catch{return{needed:false,count:0,missingEvents:[]};}
 }
-async function offerCodexHookMigration(extensionRoot:string,count:number):Promise<void>{
+async function offerCodexHookMigration(extensionRoot:string,count:number,missingEvents:string[]=[]):Promise<void>{
+  // [2026-10-09 실사고] 이전 판 설치에서 빠진 훅(예: 변경 도구 호출 전 관문)=다시 설치로 추가 — 형식 교체와 같은 소유권·재기입 경로(설치기가 다섯 훅 전부 새로 씀)
+  if(missingEvents.length&&!count){
+    const add=tE("지금 추가","Add now");
+    const pick0=await vscode.window.showWarningMessage(tE(`Codex 훅 파일(hooks.json)에 ${codexHookEventsKo(missingEvents)} 훅이 등록돼 있지 않습니다(이전 판으로 설치돼 빠짐). 이 훅이 없으면 승인 서고가 켜진 프로젝트의 Codex 구현 작업이 멈춥니다. [지금 추가]를 누르면 다시 설치하고, 그 뒤 Codex 설정 → Hook에서 새로 생긴 훅을 신뢰한 뒤 창을 리로드하세요.`,`The Codex hooks file (hooks.json) has no ${missingEvents.join("·")} hook registered (missing from an older install). Without it, Codex implementation work halts on projects with an approved archive. Press [Add now] to reinstall, then trust the new hook under Codex Settings → Hooks and reload the window.`),{modal:true},add);
+    if(pick0!==add)return;
+    if(!codexUserHooksOwned()){void vscode.window.showWarningMessage(tE(`이 훅들은 확장이 설치했다는 소유 표식이 없어 자동으로 바꾸지 않습니다(다른 설치 경로 보호). ${codexUserHooksFile()}에 빠진 훅을 직접 추가하거나 우리 훅을 지운 뒤 다시 설치하세요.`,`These hooks carry no extension ownership marker, so they are not changed automatically (protecting other installs). Add the missing hook to ${codexUserHooksFile()} yourself, or remove our hooks and install again.`));return;}
+    const res0=installCodexUserRuntimeHooks();
+    if(!res0.ok){void vscode.window.showErrorMessage(tE(`Codex 훅 다시 설치 실패: ${res0.reason||"알 수 없는 이유"}`,`Failed to reinstall Codex hooks: ${res0.reason||"unknown reason"}`));return;}
+    void vscode.window.showInformationMessage(tE("Codex 훅을 다시 설치해 빠진 훅을 추가했습니다. Codex 설정 → Hook에서 새로 생긴 훅을 신뢰한 뒤 창을 리로드하세요 — 리로드 전까지 새 훅은 실행되지 않습니다.","Reinstalled the Codex hooks and added the missing one. Trust the new hook under Codex Settings → Hooks and reload the window — it does not run until then."));
+    try{const trust=await refreshCodexPeekHookTrust(extensionRoot,dashboardCodexHookTrustCwd(extensionRoot),true);if(!trust.ready)await showCodexHookTrustWarning(trust,extensionRoot);}catch{/* 대시보드 경보가 fail-closed 유지 */}
+    return;
+  }
   const fix=tE("지금 교체","Update now");
-  const pick=await vscode.window.showWarningMessage(tE(`Codex 훅 ${count}개가 옛 명령 형식(따옴표 절대경로)입니다. Windows 기본 셸이 PowerShell이면 이 형식은 조용히 실행 실패합니다(로그 없음). PowerShell·cmd 양쪽에서 실행되는 형식으로 교체하세요 — 교체 후 Codex 설정 → Hook 재신뢰와 창 리로드가 필요합니다.`,`${count} Codex hook command(s) use the legacy quoted absolute-path form. When Windows' default shell is PowerShell this form silently fails to run (no log). Update them to a form that runs in both PowerShell and cmd — afterwards re-trust the hooks under Codex Settings → Hooks and reload the window.`),fix);
+  // [검증 1회차 보완] 옛 명령 형식과 등록 빠짐이 겹치면 두 원인을 함께 안내(교체=다시 설치라 빠진 훅도 함께 추가됨)
+  const missKo=missingEvents.length?` 또 ${codexHookEventsKo(missingEvents)} 훅이 등록돼 있지 않습니다(이전 판으로 설치돼 빠짐) — 교체하면 함께 추가됩니다.`:"";
+  const missEn=missingEvents.length?` Also, the ${missingEvents.join(", ")} hook(s) are not registered (missing from an older install) — updating adds them too.`:"";
+  const pick=await vscode.window.showWarningMessage(tE(`Codex 훅 ${count}개가 옛 명령 형식(따옴표 절대경로)입니다. Windows 기본 셸이 PowerShell이면 이 형식은 조용히 실행 실패합니다(로그 없음). PowerShell·cmd 양쪽에서 실행되는 형식으로 교체하세요 — 교체 후 Codex 설정 → Hook 재신뢰와 창 리로드가 필요합니다.${missKo}`,`${count} Codex hook command(s) use the legacy quoted absolute-path form. When Windows' default shell is PowerShell this form silently fails to run (no log). Update them to a form that runs in both PowerShell and cmd — afterwards re-trust the hooks under Codex Settings → Hooks and reload the window.${missEn}`),fix);
   if(pick!==fix)return;
   if(!codexUserHooksOwned()){
-    void vscode.window.showWarningMessage(tE(`이 훅들은 확장이 설치했다는 소유 표식이 없어 자동으로 바꾸지 않습니다(다른 설치 경로 보호). ${codexUserHooksFile()}에서 우리 훅 전부의 command·commandWindows를 node "<브릿지 경로>/codex-hook.js" 형식으로 직접 바꾼 뒤 재신뢰·창 리로드하세요.`,`These hooks carry no ownership marker from this extension, so they are not changed automatically (protecting other install paths). In ${codexUserHooksFile()}, change our hooks' command/commandWindows to the form node "<bridge dir>/codex-hook.js", then re-trust and reload the window.`));
+    void vscode.window.showWarningMessage(tE(`이 훅들은 확장이 설치했다는 소유 표식이 없어 자동으로 바꾸지 않습니다(다른 설치 경로 보호). ${codexUserHooksFile()}에서 우리 훅 전부의 command·commandWindows를 node "<브릿지 경로>/codex-hook.js" 형식으로 직접 ${missingEvents.length?`바꾸고, 빠진 ${codexHookEventsKo(missingEvents)} 훅도 같은 형식으로 추가한`:"바꾼"} 뒤 재신뢰·창 리로드하세요.`,`These hooks carry no ownership marker from this extension, so they are not changed automatically (protecting other install paths). In ${codexUserHooksFile()}, change our hooks' command/commandWindows to the form node "<bridge dir>/codex-hook.js"${missingEvents.length?`, add the missing ${missingEvents.join(", ")} hook(s) in the same form`:""}, then re-trust and reload the window.`));
     return;
   }
   const res=installCodexUserRuntimeHooks();
   if(!res.ok){void vscode.window.showErrorMessage(tE(`Codex 훅 명령 교체 실패: ${res.reason||"알 수 없는 이유"}`,`Failed to update Codex hook commands: ${res.reason||"unknown reason"}`));return;}
-  void vscode.window.showInformationMessage(tE("Codex 훅 명령을 교체했습니다. 명령이 바뀌었으므로 Codex 설정 → Hook에서 훅 전부를 다시 신뢰한 뒤 창을 리로드하세요 — 리로드 전까지 훅은 실행되지 않습니다.","Codex hook commands were updated. Because the commands changed, re-trust the hooks under Codex Settings → Hooks, then reload the window — hooks do not execute until the reload."));
+  void vscode.window.showInformationMessage(tE(`Codex 훅 명령을 교체했습니다${missingEvents.length?`(빠진 ${codexHookEventsKo(missingEvents)} 훅도 추가)`:""}. 명령이 바뀌었으므로 Codex 설정 → Hook에서 훅 전부를 다시 신뢰한 뒤 창을 리로드하세요 — 리로드 전까지 훅은 실행되지 않습니다.`,`Codex hook commands were updated${missingEvents.length?` (the missing ${missingEvents.join(", ")} hook(s) were added too)`:""}. Because the commands changed, re-trust the hooks under Codex Settings → Hooks, then reload the window — hooks do not execute until the reload.`));
   try{const trust=await refreshCodexPeekHookTrust(extensionRoot,dashboardCodexHookTrustCwd(extensionRoot),true);if(!trust.ready)await showCodexHookTrustWarning(trust,extensionRoot);}catch{/* 대시보드 경보가 fail-closed 유지 */}
 }
 function queryCodexPeekHookTrust(extensionRoot: string, projectCwd: string): Promise<CodexHookTrustSnapshot> {
@@ -9785,6 +9812,12 @@ async function showCodexHookTrustWarning(state:CodexHookTrustSnapshot,extensionR
     }
     return;
   }
+  if(Array.isArray(state.missingEvents)&&state.missingEvents.length){ // [2026-10-09] 등록이 빠진 훅=신뢰 안내가 아니라 다시 설치 안내
+    const re=tE("다시 설치","Reinstall");
+    const pickM=await vscode.window.showWarningMessage(tE(`Codex 훅 파일(${hooksFile})에 ${codexHookEventsKo(state.missingEvents)} 훅이 등록돼 있지 않습니다(이전 판으로 설치돼 빠짐 — 신뢰 문제가 아님). [다시 설치] 뒤 Codex 설정 → Hook에서 새로 생긴 훅을 신뢰하고 창을 리로드하세요.`,`The Codex hooks file (${hooksFile}) has no ${state.missingEvents.join("·")} hook registered (missing from an older install — not a trust issue). [Reinstall], then trust the new hook under Codex Settings → Hooks and reload the window.`),re);
+    if(pickM===re&&extensionRoot)await runCodexHookInstallFlow(extensionRoot);
+    return;
+  }
   const review=tE("신뢰 방법 보기","Show trust steps");
   const status=state.found
     ? tE(`발견 ${state.required}개 중 신뢰 ${state.trusted}개 · 검토 필요 ${state.untrusted}개`,`found ${state.required}; trusted ${state.trusted}; review required ${state.untrusted}`)
@@ -9799,7 +9832,7 @@ async function runCodexHookInstallFlow(extensionRoot: string): Promise<boolean> 
   // P-5 마이그레이션 최선행(Codex 반례 봉합): 플러그인이 없거나 legacy 훅이 4개 미만(부분)이어도 hooks.json에
   // 옛 형식 우리 훅이 하나라도 있으면 — 일반 설치 모달(소유권 인수+자동 재기입)에 절대 못 떨어지게 여기서 차단.
   // owned/unowned 분기는 offerCodexHookMigration 내부(무표식=수동 안내만).
-  {const mig=codexHookMigrationStatus();if(mig.needed){await offerCodexHookMigration(extensionRoot,mig.count);return false;}}
+  {const mig=codexHookMigrationStatus();if(mig.needed){await offerCodexHookMigration(extensionRoot,mig.count,mig.missingEvents);return false;}}
   const existing=await codexPeekPluginState(extensionRoot);
   // 조회 실패(plugin 하위명령 미지원 등)는 명시 진입에서도 '패키지 없음'이 아니다 — 설치 모달·marketplace
   // add로 직행하면 같은 CLI에서 어차피 실패하는 잘못된 흐름이 열린다(검증 blocker 2026-08-26). 정직 중단.
@@ -9851,7 +9884,7 @@ async function maybeOfferCodexHookSetupBody(extensionRoot:string,auto:boolean):P
   // P-5 마이그레이션 최선행(Codex 반례 봉합): 플러그인 부재·부분 legacy(개수 미달)여도 hooks.json에 옛 형식
   // 우리 훅이 하나라도 있으면 일반 설치 모달(소유권 인수+자동 재기입)보다 먼저 소유권 판정 경로로 보낸다.
   const mig=codexHookMigrationStatus();
-  if(mig.needed){await offerCodexHookMigration(extensionRoot,mig.count);return;}
+  if(mig.needed){await offerCodexHookMigration(extensionRoot,mig.count,mig.missingEvents);return;}
   let state:CodexPeekPluginState={present:false,enabled:false,pluginId:"",queryFailed:true};try{state=await codexPeekPluginState(extensionRoot);}catch{/* 조회 실패=queryFailed 유지 */}
   // 조회 실패는 '패키지 없음'이 아니다 — 자동 진입은 조용히 물러나고(trust 조회 실패와 동일 계약 P-5),
   // 명시 진입은 판정 불가 사실을 정직하게 알린다(설치 흐름도 같은 CLI라 어차피 진행 불가).
@@ -10173,6 +10206,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (errs.length) {
       const nFail = errs.filter((e) => e.kind === "verdict-nonclean").length; // Codex 결론 '실패'(빨강·재검증 통과 시 자동 해소)
       const nSession = errs.filter((e) => e.kind === "session-missing").length; // 연결 세션 없음(빨강·연결되면 자동 해소, ack 아님)
+      const sessImplOnly = nSession > 0 && errs.filter((e: any) => e.kind === "session-missing" && e.sig === "session-missing:implementer").length === nSession; // [2026-10-09] 구현 세션 고정 전만=다른 이름
       const nHook = errs.filter((e) => e.kind === "codex-hook-missing").length; // C-C 구현 훅 미작동(heartbeat로만 해소)
       const nHandoff = errs.filter((e) => e.kind === "verify-handoff-missing").length; // 상한 뒤 마감 기록 미제출
       const nResidual = errs.filter((e) => e.kind === "verify-residual-now").length; // 마감문 "즉시 재검증" 판단 미이행(다음 턴 종료 차단 중)
@@ -10180,7 +10214,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const ekinds = [nFail > 0, nSession > 0, nHook > 0, nHandoff > 0, nResidual > 0, nIncomplete > 0].filter(Boolean).length;
       const label = ekinds > 1 ? tE("Codex 검증 문제","Codex verify issues")
                   : nFail ? tE("Codex 검증 실패","Codex verify failed")
-                  : nSession ? tE("Codex 세션 없음","no Codex session")
+                  : nSession ? (sessImplOnly ? tE("구현 Codex 세션 고정 전","Codex implementer not pinned") : tE("Codex 세션 없음","no Codex session"))
                   : nHook ? tE("Codex 구현 훅 미작동","Codex implementer hook inactive")
                   : nHandoff ? tE("검증 상한 마감 누락","verification cap closeout missing")
                   : nResidual ? tE("즉시 재검증 미이행","re-verification pending")

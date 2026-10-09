@@ -304,9 +304,11 @@ process.stdout.write("체인-검증-응답");`);
   assert.match(hookSrc2, /if\(ev==="Stop"\)\{\s*[\s\S]{0,220}try\{return onStop\(j,ws,sid,c\);\}\s*catch/, "Stop dispatch 전체가 try/catch로 감싸여 미지 예외=block");
   assert.match(hookSrc2, /internal-error/, "미지 예외 사유 코드 노출");
   // 전처리 방벽(최외곽): 소스 계약으로 고정 — Stop이면 전처리 미지 예외도 block으로 변환.
-  // (실측: cwd 비문자열 페이로드는 예외가 아니라 세션 앵커 폴백으로 정상 판정됨 — 현재 페이로드로 도달
-  // 가능한 전처리 throw는 없고, 이 방벽은 sReal류 회귀에 대한 보험이다.)
-  assert.match(hookSrc2, /catch\(e\)\{[\s\S]{0,700}hook_event_name[\s\S]{0,400}"decision":"block"|catch\(e\)\{[\s\S]{0,700}ev==="Stop"[\s\S]{0,500}jsonOut\(\{decision:"block"/, "최외곽 처리기가 Stop 미지 예외를 block으로 변환");
+  // (2026-10-09 재실측: cwd 비문자열 페이로드는 전처리에서 예외(path 인자 형식)를 내 이 방벽에 도달한다 —
+  //  실제 훅 실행 시험은 codex-stop-guard.test.js [5].)
+  // [2026-10-09 사용량 보호] 최외곽 판단은 preDispatchStopBlock(Stop 이면 internal-error 사유 · 같은 차례 반복은 공통 안전장치가 상한)으로 분리 — 동작 시험은 codex-stop-guard.test.js
+  assert.match(hookSrc2, /catch\(e\)\{[\s\S]{0,200}preDispatchStopBlock\(buf,e\)[\s\S]{0,120}jsonOut\(\{decision:"block",reason:m9\}\)/, "최외곽 처리기가 Stop 미지 예외를 block으로 변환");
+  assert.match(hookSrc2, /function preDispatchStopBlock\(buf, e\) \{[\s\S]{0,300}!== "Stop"\) return null;[\s\S]{0,900}internal-error/, "판단 함수=Stop 이면 internal-error 사유");
   // cwd 비문자열 Stop은 침묵 성공(exit 0·무판정)이 아니라 '판정된 결과'(차단 또는 정당 통과)여야 한다.
   sr = runHook({ hook_event_name: "Stop", session_id: sidC, turn_id: "turn-C", cwd: {}, permission_mode: "default" });
   assert.ok(sr.status === 0 && (sr.stdout === "" || /"decision":"block"/.test(sr.stdout)), "비문자열 cwd=앵커 폴백으로 정상 판정(예외 아님)");

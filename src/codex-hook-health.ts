@@ -1,10 +1,13 @@
 export type CodexHookReason = "healthy" | "turn-unverifiable" | "heartbeat-missing" | "heartbeat-stale";
-export type CodexHookTrustReason = "trusted" | "hooks-unverified" | "hooks-untrusted";
+export type CodexHookTrustReason = "trusted" | "hooks-unverified" | "hooks-untrusted" | "hooks-missing";
 
 // 설치·활성화와 실행 신뢰는 별개다. hooks/list가 아직 끝나지 않았거나 실패한 상태도 신뢰 확인 실패이므로
 // heartbeat가 남아 있더라도 준비 완료로 승인하지 않는다(fail-closed).
 export function assessCodexHookTrust(snapshot: any): { ready: boolean; reason: CodexHookTrustReason } {
   if (!snapshot || snapshot.queried !== true) return { ready: false, reason: "hooks-unverified" };
+  // [2026-10-09 실사고] 등록이 빠진 훅(missingEvents)은 '신뢰 안 됨'이 아니라 '등록 안 됨' — 사용자가 Codex 설정에서 '다 신뢰됨'을 보고도
+  // 신뢰하라는 안내를 받던 모순 해소(처방=훅 다시 설치 뒤 새 훅 신뢰).
+  if (Array.isArray(snapshot.missingEvents) && snapshot.missingEvents.length) return { ready: false, reason: "hooks-missing" };
   if (snapshot.ready !== true) return { ready: false, reason: "hooks-untrusted" };
   return { ready: true, reason: "trusted" };
 }

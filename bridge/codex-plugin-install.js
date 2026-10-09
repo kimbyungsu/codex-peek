@@ -104,15 +104,23 @@ function createCodexHookReloadTracker(){
     },
   };
 }
+// 갱신 필요 감지 — ①옛 명령 형식(따옴표 절대경로) ②[2026-10-09 실사고] 우리 훅이 하나라도 있는데 빠진 이벤트가 있음(그 뒤 판에서 훅이 늘어났는데
+// 기존 설치를 갱신하는 길이 없었음 — PreToolUse(8/25 추가)가 8/23 설치본에 빠진 채 '신뢰 안 됨'으로 오진돼 Codex 작업이 멈춤).
+// 반환 missingEvents=빠진 이벤트 이름(hooks.json 열쇠 — 예 "PreToolUse"). 우리 훅이 하나도 없으면 갱신이 아니라 새 설치라 비운다.
 function detectCodexPeekHookMigration(file,bridgeDir){
-  const r=readHookRoot(file);if(!r.ok||r.raw===null)return{needed:false,count:0};
-  let count=0;
+  const r=readHookRoot(file);if(!r.ok||r.raw===null)return{needed:false,count:0,missingEvents:[]};
+  let count=0,anyOurs=false;const missing=[];
   for(const h of CODEX_PEEK_USER_HOOKS){
     const groups=r.root.hooks&&Array.isArray(r.root.hooks[h.event])?r.root.hooks[h.event]:[];
-    for(const g of groups)for(const x of(g&&Array.isArray(g.hooks)?g.hooks:[]))
+    let has=false;
+    for(const g of groups)for(const x of(g&&Array.isArray(g.hooks)?g.hooks:[])){
+      if(x&&isCodexPeekHookCommand(x.commandWindows||x.command,bridgeDir)){has=true;anyOurs=true;}
       if(x&&(codexPeekHookCommandNeedsMigration(x.commandWindows,bridgeDir)||codexPeekHookCommandNeedsMigration(x.command,bridgeDir)))count++;
+    }
+    if(!has)missing.push(h.event);
   }
-  return{needed:count>0,count};
+  const missingEvents=anyOurs?missing:[];
+  return{needed:count>0||missingEvents.length>0,count,missingEvents};
 }
 function exactNodeHookTarget(command){
   const m=/^\s*(?:"([^"\r\n]+)"|([^\s"'`;&|<>]+))\s+"([^"\r\n]+)"\s*$/.exec(String(command||""));

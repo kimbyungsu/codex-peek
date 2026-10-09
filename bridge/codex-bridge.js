@@ -3516,8 +3516,8 @@ async function cmdCurate(rest) {
     return;
   }
   console.error(en ? "[curation] reading ledgers and asking the independent curator (may take minutes; verification is not affected)..." : "[정리 제안] 장부를 읽고 독립 정리 담당에게 묻는 중(수 분 걸릴 수 있음 · 검증 무영향)...");
-  // [2회차 blocker①] 이 파일은 main() 뒤에 module.exports를 채운다 — Codex 팔의 selector-runner가 require("./codex-bridge.js").resolveCodex()를 조회하므로
-  // 모듈 평가가 끝난 다음 틱에 실행한다(순환 초기화 중 빈 export 조회 차단). 시험 주입점=worker와 같은 CODEX_BRIDGE_SELECTOR_RUNNER.
+  // [2회차 blocker①] Codex 팔의 selector-runner가 require("./codex-bridge.js").resolveCodex()를 조회한다 — 내보내기는 이제 main() 전에 채워지지만(2026-10-09)
+  // 다음 틱 실행은 이중 안전망으로 남긴다(순환 초기화 중 빈 export 조회 차단). 시험 주입점=worker와 같은 CODEX_BRIDGE_SELECTOR_RUNNER.
   await new Promise((res) => setImmediate(res));
   let fakeRunner9 = null;
   if (process.env.CODEX_BRIDGE_SELECTOR_RUNNER) { try { fakeRunner9 = require(process.env.CODEX_BRIDGE_SELECTOR_RUNNER).runSelectorPage; } catch { fakeRunner9 = null; } }
@@ -5578,6 +5578,8 @@ function main() {
   }
 }
 
-if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
 module.exports = { modelArgs, evidenceInfoLine, resolveCitedPath, rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, templateScriptCommands, maskNonCode, toolReadParts, scriptOwnerScan, outputContainsFileLine, callMentionedFiles, scriptLiteralLines, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, computeEnvelopeCandidatesFor, candidatesGenOptsFor, judgeGenFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
+// [2026-10-09 실사고] 내보내기를 실행보다 먼저 채운다 — 실행 도중 이 파일을 다시 불러오는 모듈(선별 실행기의 Codex 팔 resolveCodex 등)이
+// 빈 내보내기를 받아 '선별 실패'로 끝나던 순서 결함(Codex↔Codex 에서 selector-preview 가 늘 실패) 봉합. 개별 명령의 setImmediate 대기는 이중 안전망으로 남긴다.
+if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.

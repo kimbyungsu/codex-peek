@@ -10,7 +10,7 @@ const crypto = require("crypto");
 // I/O) runs. It closes ordering gaps even if an older process is delayed during module startup.
 const HOOK_STARTED_AT = require("perf_hooks").performance.timeOrigin;
 const {
-  BRIDGE_DIR, loadContract, loadLang, buildInjection, buildVerifyDirective, buildScoutDirective, appendIntegrityEvent, supersedeIntegrity,
+  BRIDGE_DIR, loadContract, loadLang, buildInjection, buildVerifyDirective, buildScoutDirective, appendIntegrityEvent, readIntegrityEvents, supersedeIntegrity,
   registerCodexImplementer, codexImplementerSnapshot, codexRoleRevision, writeCodexActive, readCodexActive, atomicWrite, writePhase, resolveScoutRepo, scoutMapStatus,
   scoutHealthLine, maybeCleanupState, configWs, readImplementerRecordLocked, durableProofGate, readCodexTurnStrict, contractReadState,
   patchContractFields, activeAskJobFor, phaseBusy, contractLockIssue, withRoleLock, implementerRecordOf, validLinksShape, scoutArmView,
@@ -27,6 +27,7 @@ const ATTEMPT_DIR = path.join(BRIDGE_DIR, "codex-verify-attempts");
 // marker=세션별(PreToolUse가 실제 발화했다는 증거) / distrust=ws별(사후 훅이 사전 표식 없이 관측된 실측 —
 // Codex가 새 훅(PreToolUse)을 신뢰 미승인 등으로 안 부르는 상태). distrust는 PreToolUse 실측 시 자동 해제.
 const PRETOOL_DIR = path.join(BRIDGE_DIR, "codex-pretool");
+const PRETOOL_ATTEMPT_DIR = path.join(BRIDGE_DIR, "codex-pretool-attempts"); // [작업 전 관문 미호출 중단 · 2026-10-09 실사고] 차례당 중단 안내 횟수(무한 반복 차단)
 // 표식=호출별 파일(sid+tool_use_id — 2차 확인검증 blocker: 턴 결속만으로는 같은 턴의 두 번째 호출에서 사전
 // 관문 누락이 가려짐). id 미제공 플랫폼=세션 공용 파일로 축퇴하되 아래 '소비' 규칙이 호출 짝(사전 1회=사후
 // 1회)을 여전히 강제한다.
@@ -42,7 +43,7 @@ function pretoolObserveMarker(sid, j) {
   return true;
 }
 const SCOUT_ATTEMPT_DIR = path.join(BRIDGE_DIR, "codex-scout-attempts");
-const MAX_VERIFY_ATTEMPTS = 3, MAX_SCOUT_ATTEMPTS = 2;
+const MAX_VERIFY_ATTEMPTS = 3, MAX_SCOUT_ATTEMPTS = 2, MAX_PRETOOL_HALT_BLOCKS = 1;
 function safe(s) { return String(s || "").replace(/[^0-9a-zA-Z._-]/g, "_"); }
 function stateFile(dir, sid) { return path.join(dir, safe(sid) + ".json"); }
 function read(file) { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; } }
@@ -55,7 +56,76 @@ function contextThen(eventName, text, after) {
   if (!text) return;
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, additionalContext: text } }), (err) => { if (!err && typeof after === "function") { try { after(); } catch { /* 기록 실패=다음 턴 전문 */ } } });
 }
-function block(reason) { jsonOut({ decision: "block", reason }); }
+// [2026-10-09 실사고 — 사용량 보호] 종료를 막으면 모델이 한 번 더 응답한다(매번 대화 전체를 다시 읽는 비용). 관문마다 따로 상한을 두면
+// 새 관문·오류 경로가 생길 때마다 빠진다(실사고=상한 없는 중단 안내 126회) — 종료 막기 출구(block) 하나에 공통 안전장치를 둔다:
+// 같은 차례에서 '그 사이 작업 없이 같은 사유'로 막는 반복은 MAX_IDLE_STOP_REPEATS 번까지만(첫 막기 포함 최대 1+그 수),
+// 차례당 막기 총수는 MAX_STOP_BLOCKS_PER_TURN 번까지만. 상한에서는 막지 않고 이 차례를 미완으로 기록하고 빨간 경보를 남긴다
+// (검증 통과로 바꾸지 않음 — 검증 관문의 기존 반복 상한과 같은 처리). '작업'=사후 훅이 기록한 마지막 도구 사용 시각(종료 때는 안 바뀜).
+// 기록 실패는 막기를 유지한다(정상 저장장치 전제 — 일시적 쓰기 실패가 검증 없는 종료로 새지 않게): 횟수를 못 적었거나, 상한인데 경보를 못 남겼으면 이번엔 막고
+// 다음 종료에서 다시 판단한다. 순서가 핵심(검증 2회차 blocker): '상한 도달'은 경보가 남은 뒤에만 함께 확정하고(capped·alerted 동시), 막기를 푸는 것도 그 뒤뿐이다 —
+// 그래서 '경보 없이 종료가 풀린 상태'가 생기지 않아 앞 차례 경보를 다음 차례에 되살릴 장치가 필요 없다(훅 프로세스가 도중에 죽어 풀린 종료는 이 안전장치가 푼 것이 아니다).
+// 경보 중복 방지: 차례 결속 식별자(세션·차례·첫 막기 시각)를 경보 장부(최근 50건만 보존)와 별도의 '보낸 경보' 표식 파일(식별자당 1개 · 절삭 없음) 양쪽에서 확인한다.
+// 드문 예외: 경보를 장부에 쓴 직후 보낸 경보 표식을 쓰기 전에 훅이 중단되고, 같은 차례의 다음 종료 전에 다른 경보 50건이 쌓이면 같은 경보가 한 번 더 보일 수 있다 — 이미 확인한 사건이 새 경보로 다시 보이는 표시 문제이며 사용량·검증 판정·기록 귀속에는 영향 없음(검증 3회차 [주의] 수용).
+const STOP_GUARD_DIR = path.join(BRIDGE_DIR, "codex-stop-guard");
+const STOP_ALARM_SENT_DIR = path.join(BRIDGE_DIR, "codex-stop-alarms"); // 보낸 경보 표식(식별자당 파일 1개 — 장부 절삭과 무관한 중복 판정 근거)
+const MAX_IDLE_STOP_REPEATS = 2, MAX_STOP_BLOCKS_PER_TURN = 40, STOP_GUARD_NO_TURN_RESET_MS = 30 * 60 * 1000;
+let stopGuardCtx = null; // Stop 처리 중에만 { sid, ws, turnKey }
+function stopActionStamp(sid) { const s = read(stateFile(TURN_DIR, sid)); return s && typeof s === "object" ? String(Number(s.lastActionAt) || 0) + ":" + String(s.turnId || "") : null; }
+function stopCapAlarmId(sid, rec) { return "stop-block-loop-cap:" + crypto.createHash("sha1").update([String(sid), String(rec.turnKey || ""), String(rec.firstAt || 0)].join("|")).digest("hex").slice(0, 20); }
+function stopAlarmSentFile(id) { return path.join(STOP_ALARM_SENT_DIR, safe(id) + ".json"); }
+// 반환 true=경보가 남아 있음(이번에 남겼거나 이미 보냄)
+function stopCapAlarm(sid, rec) {
+  const id = stopCapAlarmId(sid, rec);
+  if (fs.existsSync(stopAlarmSentFile(id))) return true;
+  try { if (readIntegrityEvents().some((e) => e && e.id === id)) { try { fs.mkdirSync(STOP_ALARM_SENT_DIR, { recursive: true }); save(stopAlarmSentFile(id), { id, ts: new Date().toISOString() }); } catch { /* 표식 실패=장부가 근거 */ } return true; } } catch { /* 판독 실패=기록 시도 */ }
+  let ok = false;
+  try { ok = appendIntegrityEvent({ id, ts: new Date().toISOString(), session: sid, workspace: typeof rec.ws === "string" ? rec.ws : "", kind: "stop-block-loop-cap", severity: "error", detail: t(rec.capKo, rec.capEn || rec.capKo), detailKo: rec.capKo, detailEn: rec.capEn || rec.capKo }) === true; } catch { ok = false; }
+  if (ok) { try { fs.mkdirSync(STOP_ALARM_SENT_DIR, { recursive: true }); save(stopAlarmSentFile(id), { id, ts: new Date().toISOString() }); } catch { /* 표식 실패=차례 기록(alerted)·장부가 근거 */ } }
+  return ok;
+}
+function stopGuardAllows(g, reason) {
+  const f = stateFile(STOP_GUARD_DIR, g.sid);
+  const now = Date.now(), key = String(g.turnKey || "");
+  let o = read(f);
+  if (!o || typeof o !== "object" || o.turnKey !== key || (!key && now - (Number(o.at) || 0) > STOP_GUARD_NO_TURN_RESET_MS)) o = { turnKey: key, firstAt: now, ws: typeof g.ws === "string" ? g.ws : "", total: 0, idle: 0, lastAct: null, lastReason: "", capped: false, alerted: false };
+  const act = stopActionStamp(g.sid);
+  const rh = crypto.createHash("sha1").update(String(reason)).digest("hex");
+  o.idle = (Number(o.total) > 0 && o.lastAct === act && o.lastReason === rh) ? (Number(o.idle) || 0) + 1 : 0;
+  o.total = (Number(o.total) || 0) + 1; o.lastAct = act; o.lastReason = rh; o.at = now;
+  const over = o.idle > MAX_IDLE_STOP_REPEATS || o.total > MAX_STOP_BLOCKS_PER_TURN;
+  let saved = false;
+  try { fs.mkdirSync(STOP_GUARD_DIR, { recursive: true }); saved = save(f, o) === true; } catch { saved = false; }
+  if (!saved) return true; // 횟수 기록 실패=막기 유지
+  if (!over) return true;
+  if (!o.alerted) {
+    const whyKo = o.total > MAX_STOP_BLOCKS_PER_TURN ? `이 차례 종료 막기 ${MAX_STOP_BLOCKS_PER_TURN}회 초과` : `그 사이 작업 없이 같은 사유로 ${o.idle + 1}회 연속`;
+    const whyEn = o.total > MAX_STOP_BLOCKS_PER_TURN ? `more than ${MAX_STOP_BLOCKS_PER_TURN} stop blocks this turn` : `${o.idle + 1} in a row with the same reason and no work in between`;
+    const last = String(reason).replace(/\s+/g, " ").slice(0, 160);
+    const capKo = `종료 막기 반복 상한(${whyKo}) — 사용량 보호를 위해 이번 종료부터는 막지 않았습니다. 이 차례 결과는 미완입니다(검증 통과 아님). 마지막으로 막은 사유: ${last}`;
+    const capEn = `Stop-block repeat limit (${whyEn}) — to protect usage, stops are no longer blocked this turn. This turn's result is incomplete (not a verification pass). Last block reason: ${last}`;
+    if (!stopCapAlarm(g.sid, { turnKey: o.turnKey, firstAt: o.firstAt, ws: o.ws, capKo, capEn })) return true; // 경보를 못 남김=막기 유지(상한 미확정 — 다음 종료가 다시 판단)
+    o.capped = true; o.alerted = true;
+    try { save(f, o); } catch { /* 표식 저장 실패=다음 판단이 보낸 경보 표식·장부로 중복 없이 확인 */ }
+  }
+  try { writePhase("incomplete", { session: g.sid, workspace: g.ws }); } catch { /* 표시 전용 */ }
+  return false;
+}
+// 최외곽 처리부 판단(전처리 미지 예외) — Stop 이면 막기 사유(internal-error)를, 아니면 null. 같은 차례 반복은 공통 안전장치가 상한(안전장치 자체 실패=막기 유지).
+// 시험이 직접 부르도록 함수로 분리(훅 실행 경로에서만 쓰임).
+function preDispatchStopBlock(buf, e) {
+  let p9 = {}; try { p9 = JSON.parse(buf) || {}; } catch { p9 = {}; }
+  if (String((p9 && p9.hook_event_name) || "") !== "Stop") return null;
+  try { process.stderr.write("codex-hook Stop pre-dispatch error: " + String((e && e.stack) || e) + "\n"); } catch { /* 진단 실패 무해 */ }
+  let msg = "Stop 판정 내부 오류(internal-error) — 잠시 후 종료를 다시 시도하세요.";
+  try { msg = t("Stop 판정 내부 오류(internal-error) — 잠시 후 종료를 다시 시도하세요.", "Internal error while judging Stop (internal-error) — retry stopping shortly."); } catch { /* 언어 판독 실패=ko 고정 */ }
+  let allow = true;
+  try { const sid9 = String(p9.session_id || process.env.CODEX_THREAD_ID || ""); if (sid9) allow = stopGuardAllows({ sid: sid9, ws: typeof p9.cwd === "string" ? p9.cwd : "", turnKey: String(p9.turn_id || "") }, msg); } catch { allow = true; }
+  return allow ? msg : null;
+}
+function block(reason) {
+  if (stopGuardCtx) { let ok = true; try { ok = stopGuardAllows(stopGuardCtx, reason); } catch { ok = true; } if (!ok) return; }
+  jsonOut({ decision: "block", reason });
+}
 
 function readFirstJsonLine(file, maxBytes = 1024 * 1024) {
   let fd = null;
@@ -186,6 +256,27 @@ function gitChangedMaxMtime(ws) {
     }
     return max;
   } catch { return 0; }
+}
+// [작업 전 관문 미호출 중단 · 2026-10-09 실사고] 원인 구분 — 사용자 훅 파일(hooks.json)에 Codex Peek PreToolUse 훅이 '등록조차 안 됨'(이전 판 설치에서 빠짐)인지,
+// '등록은 됐는데 이 세션에서 불리지 않음'(신뢰 미승인·Codex 쪽 사정)인지. 판독 실패=모름(등록 여부를 단정하지 않는 문구).
+// 실사고: 등록이 빠진 상태를 '신뢰 승인하라'로 안내해, 승인할 대상이 없는데 모델이 사용자에게 승인했는지 묻고 종료 차단이 126회 반복됐다.
+function pretoolRegistration() {
+  try {
+    const st = require("./codex-plugin-install.js").detectCodexPeekUserHooks(path.join(codexHome(), "hooks.json"), BRIDGE_DIR);
+    if (!st || st.unreadable) return "unknown";
+    return Array.isArray(st.missing) && st.missing.includes("preToolUse") ? "missing" : "registered";
+  } catch { return "unknown"; }
+}
+// 중단 안내 문구(원인별) — 모델에게 '사용자에게 한 번 알리고 이번 차례를 마치라·승인했는지 되묻지 말라'를 함께 준다(재개는 관문 호출 관측으로 자동).
+function pretoolHaltText(reg, forStop) {
+  const tailKo = forStop ? " 이 내용을 사용자에게 한 번 알리고 이번 차례를 마치세요 — 승인·설치를 했는지 되묻지 마세요(관문 호출이 관측되면 하네스가 알아서 다시 엽니다)." : "";
+  const tailEn = forStop ? " Tell the user this once and end this turn — do not ask whether they approved or installed anything (the harness reopens automatically once the gate is observed firing)." : "";
+  if (reg === "missing") return t(
+    "⛔ 이 프로젝트는 승인 서고가 켜져 있는데, Codex 훅 파일(hooks.json)에 '변경 도구 호출 전 관문(PreToolUse)' 훅이 등록돼 있지 않습니다(이전 판으로 설치돼 빠짐 — 신뢰 승인 문제가 아님). 변경 도구를 실행하기 전 확인을 할 수 없어 이 프로젝트의 Codex 구현 작업을 멈춥니다. 사용자가 할 일: Codex Peek 대시보드에서 Codex 훅 설치(갱신) → Codex 설정 → Hook에서 새로 생긴 PreToolUse 훅 신뢰 → 창 리로드." + tailKo,
+    "⛔ The approved archive is active for this project, but the 'pre-tool gate (PreToolUse)' hook is not registered in the Codex hooks file (hooks.json) — it was missing from an older install; this is not a trust-approval issue. Changes cannot be checked before tools run, so Codex implementation work on this project is halted. What the user does: Codex Peek dashboard → install (update) Codex hooks → Codex Settings → Hooks → trust the new PreToolUse hook → reload the window." + tailEn);
+  return t(
+    "⛔ 승인 서고가 켜져 있는데 변경 도구 호출 전 관문(PreToolUse)이 이 세션에서 불리지 않는 것이 실측됐습니다" + (reg === "registered" ? "(훅 파일에는 등록돼 있음)" : "") + ". 이 프로젝트의 Codex 구현 작업을 멈춥니다. 사용자가 할 일: Codex 설정 → Hook에서 Codex Peek의 PreToolUse 훅이 신뢰 상태인지 확인 → 창 리로드." + tailKo,
+    "⛔ The approved archive is active but the pre-tool gate (PreToolUse) was measured as not firing in this session" + (reg === "registered" ? " (it is registered in the hooks file)" : "") + ". Codex implementation work on this project is halted. What the user does: Codex Settings → Hooks → confirm Codex Peek's PreToolUse hook is trusted → reload the window." + tailEn);
 }
 function bump(dir, sid, turnId, progressEpoch) {
   const f = stateFile(dir, sid); let o = read(f) || { turnId:"", n:0 };
@@ -457,7 +548,7 @@ function onPrompt(j, ws, sid, c, roleRevision, preface, prePinned) {
   // [§4-B Codex 쪽] 규약 전달이 있는 턴(검증 모드 on)엔 ab 전문은 정적 블록 소속(세대 결속) — 매 턴은 선별 캐시/미리보기 안내(dyn)만. 검증 off=종전 그대로(ab+dyn).
   try { const ep9 = implementerEnvelopeInjectParts(ws, c, loadLang(), capFields ? capFields.constraintSourceHash : "", capFields ? capFields.constraintAnchor : ""); if (ep9) { const ei9 = ic9.record ? String(ep9.dyn || "").replace(/^\n+/, "") : (ep9.dyn ? ep9.ab + "\n" + ep9.dyn : ep9.ab); if (ei9) ctx += (ctx ? "\n\n" : "") + ei9; } } catch { /* advisory */ }
   try { // [미호출=중단] 턴 시작 시점 고지(강제는 Stop 차단이 담당 — 사람이 이유를 먼저 보게)
-    if (typeof c.archiveHash === "string" && c.archiveHash && fs.existsSync(pretoolDistrustFileFor(ws))) ctx += (ctx ? "\n\n" : "") + t("[서고 관문 중단] 변경 도구 호출 전 관문(PreToolUse)이 불리지 않는 상태가 실측돼 이 프로젝트의 Codex 구현 작업이 중단 상태입니다 — Codex 훅 신뢰(/hooks)에서 승인하면 관문 호출 관측 시 자동 재개됩니다.", "[Archive gate halted] The pre-tool gate (PreToolUse) was measured as not firing — Codex implementation work is halted for this project. Approve it in Codex hook trust (/hooks); work resumes when the gate is observed firing.");
+    if (typeof c.archiveHash === "string" && c.archiveHash && fs.existsSync(pretoolDistrustFileFor(ws))) ctx += (ctx ? "\n\n" : "") + "[" + t("서고 관문 중단", "archive gate halt") + "] " + pretoolHaltText(pretoolRegistration(), false).replace(/^⛔ /, ""); // [2026-10-09] 원인별 문구(등록 빠짐 vs 불리지 않음)
   } catch { /* 고지 실패 무해 */ }
   const body = turnSaved ? ctx : t("[Codex Bridge] 턴 상태 기록에 실패했습니다 — 이 턴 종료 시 검증 게이트가 턴 상태 재기록을 요구할 수 있습니다.\n\n","[Codex Bridge] Failed to record the turn state — the verification gate may ask to rewrite it when this turn stops.\n\n") + ctx;
   contextThen("UserPromptSubmit", preface ? preface + body : body, () => recordCodexDirective(sid, ws, ic9.record)); // [P-9] body가 비어도 전환 고지는 단독 출력 · 전달 기록은 출력 뒤
@@ -541,9 +632,13 @@ function onStop(j, ws, sid, c) {
   // 재개 조건=Codex 훅 신뢰 승인 후 PreToolUse가 실제 관측되면(onPreTool이 플래그 자동 해제) 재개.
   if (typeof c.archiveHash === "string" && c.archiveHash) {
     let dis9 = false; try { dis9 = fs.existsSync(pretoolDistrustFileFor(ws)); } catch { dis9 = false; }
-    if (dis9) { block(t(
-      "⛔ 승인 서고 활성인데 변경 도구 호출 전 관문(PreToolUse)이 불리지 않는 상태가 실측됐습니다 — 이 프로젝트의 Codex 구현 작업을 중단합니다. Codex의 훅 신뢰 승인(/hooks)에서 codex-hook의 PreToolUse를 승인하세요. 관문 호출이 다시 관측되면 자동으로 재개됩니다.",
-      "⛔ The approved archive is active but the pre-tool gate (PreToolUse) was measured as not firing — Codex implementation work on this project is halted. Approve codex-hook's PreToolUse in Codex hook trust (/hooks). Work resumes automatically once the gate is observed firing again.")); return; }
+    // [2026-10-09 실사고 — 같은 차례 종료 차단 126회] 중단 안내는 차례당 MAX_PRETOOL_HALT_BLOCKS 번만 막는다. 그 뒤로는 막지 않고 아래 일반 종료 관문(검증 등)을
+    // 그대로 판정한다 — 작업 전 관문이 없으면 도구 실행 자체는 어차피 막을 수 없어, 반복 차단은 모델이 같은 말을 되풀이하며 사용자에게 떠넘기는 일만 만든다.
+    // 원인(등록 빠짐 vs 불리지 않음)은 대시보드 Codex 훅 상태 경보가 계속 보여 준다.
+    if (dis9) {
+      const nP9 = bump(PRETOOL_ATTEMPT_DIR, sid, String(j.turn_id || s.turnId || (s.startedAt ? "t" + s.startedAt : ""))); // 차례 열쇠가 없으면 차례 시작 시각으로(빈 열쇠면 첫 차단 뒤 영영 안 막히는 일 방지)
+      if (nP9 !== null && nP9 <= MAX_PRETOOL_HALT_BLOCKS) { block(pretoolHaltText(pretoolRegistration(), true)); return; }
+    }
   }
   if(scoutGate(j,ws,sid,c,s)) return;
   const gitTs=gitChangedMaxMtime(ws); const edited=!!s.modified || gitTs>Number(s.startedAt||0);
@@ -643,6 +738,7 @@ function main(raw){
   // 달라져도 같은 세션은 그 앵커를 우선한다(Claude configWs와 동일한 프로젝트 추적 불변조건).
   const ws=configWs({codexSessionId:sid,cwd:j.cwd||process.cwd()});
   const ev=j.hook_event_name||"";
+  if(ev==="Stop") stopGuardCtx={ sid, ws:typeof ws==="string"?ws:"", turnKey:String(j.turn_id||"") }; // 종료 막기 공통 안전장치(사용량 보호) — 이 아래 모든 Stop 막기가 거친다
   // [P-9 자동 전환] 언어 슬롯 1회 스냅샷 — 손상 판정·계약 판독·(전환 시) 패치가 같은 슬롯에 결속(설계 ⓖ,
   // 구현검증 1차 지적 5: 한 슬롯의 손상을 보고 다른 슬롯을 전환하는 어긋남 차단).
   const lang=loadLang();
@@ -685,17 +781,12 @@ function main(raw){
 // [P-9 4차] 테스트 주입구: 훅 실행(require.main)일 때만 stdin을 구동 — 테스트는 require로 내부 결정 함수
 // (역할 세대 CAS 원복 등)를 실행 반례로 검증한다(두 프로세스 경합을 단일 프로세스에서 결정론 재현).
 if (require.main !== module) {
-  module.exports = { classifyPromptSource, revertOnPinFailure, revertSwitchIfRoleUnchanged, heartbeat, implementerContext, onPreTool, pretoolMarkerFile, pretoolDistrustFileFor, pretoolObserveMarker, PRETOOL_DIR };
+  module.exports = { classifyPromptSource, revertOnPinFailure, revertSwitchIfRoleUnchanged, heartbeat, implementerContext, onPreTool, pretoolMarkerFile, pretoolDistrustFileFor, pretoolObserveMarker, PRETOOL_DIR, PRETOOL_ATTEMPT_DIR, MAX_PRETOOL_HALT_BLOCKS, pretoolRegistration, pretoolHaltText, STOP_GUARD_DIR, MAX_IDLE_STOP_REPEATS, MAX_STOP_BLOCKS_PER_TURN, stopGuardAllows, stopCapAlarmId, stopAlarmSentFile, STOP_ALARM_SENT_DIR, preDispatchStopBlock, onStop };
 } else {
 let buf="";process.stdin.on("data",d=>buf+=d);process.stdin.on("end",()=>{try{main(buf);}catch(e){
   try{
-    let ev="";try{ev=String((JSON.parse(buf)||{}).hook_event_name||"");}catch{/* 파싱 불가면 이벤트 미상 */}
-    if(ev==="Stop"){
-      try{process.stderr.write("codex-hook Stop pre-dispatch error: "+String(e&&e.stack||e)+"\n");}catch{/* 진단 실패 무해 */}
-      let msg="Stop 판정 내부 오류(internal-error) — 잠시 후 종료를 다시 시도하세요.";
-      try{msg=t("Stop 판정 내부 오류(internal-error) — 잠시 후 종료를 다시 시도하세요.","Internal error while judging Stop (internal-error) — retry stopping shortly.");}catch{/* 언어 판독 실패=ko 고정 */}
-      jsonOut({decision:"block",reason:msg});
-    }
+    const m9=preDispatchStopBlock(buf,e);
+    if(m9!==null)jsonOut({decision:"block",reason:m9});
   }catch{/* 마지막 방벽 — 어떤 실패도 훅 프로세스를 비정상 종료시키지 않음 */}
   process.exit(0);
 }});process.stdin.on("error",()=>process.exit(0));
