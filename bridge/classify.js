@@ -2,8 +2,10 @@
 /*
  * [RULE-SUPPLY-REDESIGN 묶음 2-나-2 §3-3·§3-4 — 2026-10-05] 사용자 말 분류 실행(독립).
  * 미분류 대기열(user-words)의 사용자 말을 구현 턴과 같은 회사의 독립 실행(selector-runner 페이지 1회 — 도구·MCP 전면 차단)에 넘겨
- * '앞으로도 계속 지킬 기준'을 사용자가 직접 말한 문장만 골라 수칙서 칸(지원 환경·항상 막을 것·범위 밖)을 붙인다
- * → 기존 후보 장부의 사용자 약속 후보(kind user-constraint · origin classifier · axis) — 도장 경로 그대로.
+ * 말의 성격만 가른다. [RULE-SUPPLY-CORRECTION 묶음 2(⑤) §2 A — 2026-10-10] 성격 3종: boundary(판정 경계 — 수칙서 칸 제안+판정에 주는 영향 bounds 한 줄 필수)
+ * · emphasis(이미 있는 항목을 다시 강조 — 항목 번호) · style(구현 담당의 일하는 방식 — 수칙서 아님 · 대시보드 알림만, D-a). 결과는 분류 결과 장부
+ * (classify/<ws>.results.jsonl)에만 쓴다 — 수칙서 후보 장부·규칙 칸·결정 장부에 쓰지 않는다(수칙서로 올릴지는 구현 담당이 정함 — §2 B).
+ * (정정 전에는 수칙서 칸 후보를 후보 장부에 직접 썼다 — 사용자 지적 2026-10-09 '수칙 노이즈': 일하는 방식 말이 수칙서 후보로 올라옴.)
  * [RULE-SUPPLY-CORRECTION 묶음 1 · §2 D] 옛 '사용자 규칙 칸 자리'·'결정 기록 자리'는 없앴다 — 규칙 칸은 사용자가 직접 쓰는 칸이고(체크박스 대상),
  * 결정 장부의 출처는 구현 담당 판단 하나뿐이다. 그 자리로 답이 오면 답 전체를 거부한다(자리 밖). 옛 자리 장부(classify/<ws>.seats.jsonl)는
  * 지우지도 바꾸지도 않고(덧붙이기 전용·ab-5) 판독만 한다 — 사용자가 안 올린 문장을 '이미 있는 것'으로 싣는 데에만 쓴다(새 행을 쓰는 곳 없음).
@@ -31,12 +33,17 @@ const CLASSIFY_LOCK_STALE_MS = 15 * 60 * 1000;
 const RULEBOOK_SEATS = ["supportedEnv", "alwaysBlocker", "outOfScope"];
 const SEATS = [...RULEBOOK_SEATS]; // [RULE-SUPPLY-CORRECTION 묶음 1] 수칙서 칸만 — 옛 rule·decision 자리는 자리 밖(답 전체 거부)
 const SEAT_STATUSES = ["proposed", "approved", "declined"];
+const CLASSIFY_KINDS = ["boundary", "emphasis", "style"]; // [묶음 2(⑤)] 성격 3종(나머지=출력 없음)
+const CLASSIFY_BOUNDS_MIN = 8, CLASSIFY_BOUNDS_MAX = 200; // boundary 의 '판정에 주는 영향' 한 줄(§3-1 1항 — 못 적으면 판정 경계가 아님)
+const RESULT_STATUSES = ["new"]; // 분류 결과 상태(이 묶음=new 만 · 전달·판단 상태는 다음 묶음)
+const RESULTS_VIEW_MAX = 20; // 화면 목록 상한(종류별 최근순)
 const REDACTED = "[생략]";
 const sha1 = (s) => crypto.createHash("sha1").update(String(s), "utf8").digest("hex");
 const oneLine = (s, max) => String(s || "").replace(/\s+/g, " ").trim().slice(0, max);
 const qNormOf = (q) => String(q).normalize("NFC").replace(/\s+/g, " ").trim();
 function classifyFileFor(ws) { return path.join(CLASSIFY_DIR, CL.wsKeyFor(ws) + ".jsonl"); }
 function seatsFileFor(ws) { return path.join(CLASSIFY_DIR, CL.wsKeyFor(ws) + ".seats.jsonl"); }
+function resultsFileFor(ws) { return path.join(CLASSIFY_DIR, CL.wsKeyFor(ws) + ".results.jsonl"); } // [묶음 2(⑤)] 분류 결과 장부(덧붙이기 전용)
 function classifyLockFileFor(ws) { return path.join(CLASSIFY_DIR, CL.wsKeyFor(ws) + ".lock"); }
 // 팔=그 말이 나온 구현 턴의 회사(R3) — 설정·교차 없음
 function armForProvider(provider) { return provider === "codex" ? "codex" : "self"; }
@@ -88,6 +95,24 @@ function readSeatsState(ws) {
   for (const [id, r] of latest) latest.set(id, Object.assign({}, meta.get(id) || {}, r)); // 상태 행이 문안을 안 실어도 첫 행에서 회수
   return { rows, latest, readError: false };
 }
+// ── [묶음 2(⑤)] 분류 결과 장부 — 같은 resultId 의 마지막 유효 행이 이김(상태 행이 문안을 안 실어도 첫 행에서 회수). 판독 오류=readError(빈 장부로 위장 금지).
+function readClassifyResults(ws) {
+  let raw;
+  try { raw = String(fs.readFileSync(resultsFileFor(ws), "utf8")); } catch (e) { return { rows: [], latest: new Map(), readError: !(e && e.code === "ENOENT") }; }
+  const wk = CL.wsKeyFor(ws);
+  const rows = raw.split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    .filter((r) => r && r.schema === "classify-result-v1" && r.wsKey === wk && typeof r.resultId === "string" && /^[0-9a-f]{16}$/.test(r.resultId) && CLASSIFY_KINDS.includes(r.kind) && RESULT_STATUSES.includes(r.status));
+  const meta = new Map(), latest = new Map();
+  for (const r of rows) { if (!meta.has(r.resultId) && r.quote) meta.set(r.resultId, r); latest.set(r.resultId, r); }
+  for (const [id, r] of latest) latest.set(id, Object.assign({}, meta.get(id) || {}, r));
+  return { rows, latest, readError: false };
+}
+function appendClassifyResults(ws, rows) {
+  if (!rows.length) return true;
+  const f = resultsFileFor(ws);
+  try { fs.mkdirSync(CLASSIFY_DIR, { recursive: true }); fs.appendFileSync(f, CL.appendLeadFor(f) + rows.map((r) => JSON.stringify(r)).join("\n") + "\n"); return true; } catch { return false; } // 꼬리 보호
+}
+function classifyResultIdFor(ws, repoKey, kind, quote, wordId) { return sha1(CL.wsKeyFor(ws) + "|" + repoKey + "|" + kind + "|" + qNormOf(quote) + "|" + String(wordId || "")).slice(0, 16); }
 function userConstraintIdFor(ws, repoKey, quote) { return CL.envelopeCandidateId("user-constraint", CL.wsKeyFor(ws) + "|" + repoKey + "|" + sha1(qNormOf(quote))); } // constraintAdd 와 같은 산식(같은 말=같은 후보)
 
 // ── 입력 집계 ── 반환 {ok, empty?, wsKey, repoKey, gen, virtual, provider, arm, items[], unavailable[], existing{...}, inputFp} | {ok:false, reason}
@@ -143,30 +168,40 @@ function classifyInput(ws, repo, opts) {
   } catch { /* 없음 */ }
   // 옛 자리 장부: 사용자가 안 올린 문장만 '안 올림'으로 싣는다(같은 말을 수칙서 후보로 다시 올리지 않게) · 대기 중이던 옛 자리 제안은 승인 길이 없어 싣지 않음(D-d)
   try { const ss = readSeatsState(ws); if (!ss.readError) for (const r of ss.latest.values()) { if (r.repoKey !== repoKey || !sameCo(r)) continue; if (r.status === "declined") declined.push(r.quote); } } catch { /* 없음 */ }
-  const existing = { rulebook: cap(rulebook), rules: cap(rules), pending: cap(pending), declined: cap(declined) };
+  // [묶음 2(⑤)] 구현 담당 판단을 기다리는 판정 경계 결과(같은 회사·같은 저장소 — 승인 전 원문이라 R3) — 같은 뜻 반복을 다시 판정 경계로 내지 않게
+  const waiting = [];
+  const rs = readClassifyResults(ws);
+  if (rs.readError) return { ok: false, reason: "results-unreadable" }; // 판독 오류=빈 목록으로 줄이지 않음(같은 뜻 결과 중복 생성 방지 — 대기열 보존)
+  for (const r of rs.latest.values()) if (r.kind === "boundary" && r.status === "new" && r.repoKey === repoKey && sameCo(r)) waiting.push(r.quote);
+  const existing = { rulebook: cap(rulebook), rules: cap(rules), pending: cap(pending), declined: cap(declined), waiting: cap(waiting) };
+  // 항목 번호(다시 강조의 itemRef 대상) — 종류별 머리글자+순번. 결과에는 번호와 그 문장을 함께 남긴다(번호는 실행마다 바뀔 수 있음).
+  const refs = {};
+  const lab = (pre, arr) => arr.map((x, i) => { refs[pre + (i + 1)] = x; return pre + (i + 1); });
+  const labels = { rulebook: lab("B", existing.rulebook), rules: lab("R", existing.rules), pending: lab("P", existing.pending), declined: lab("N", existing.declined), waiting: lab("W", existing.waiting) };
   const inputFp = sha1(JSON.stringify({ ids: items.map((x) => x.id), existing }));
-  return Object.assign(base, { provider, arm: armForProvider(provider), items, unavailable, pastedOnly, existing, inputFp });
+  return Object.assign(base, { provider, arm: armForProvider(provider), items, unavailable, pastedOnly, existing, labels, refs, inputFp });
 }
 
 // ── 프롬프트 — 범주 정의만(구체 예시·키워드 없음 — 경직성 금지) ──
 function buildClassifyPrompt(input, lang) {
   const en = lang === "en";
   const L = [];
-  L.push(en ? "You are an independent classifier of a user's words. Below are things the user said to an AI implementer in one project. Pick ONLY sentences in which the user states a standard for judging this project that should keep applying from now on, and decide which rulebook seat each belongs to. Most messages are one-off requests, questions, confirmations or reactions and belong nowhere — no candidate is better than a weak one. At most " + CLASSIFY_MAX_PER_RUN + "."
-    : "당신은 독립 '사용자 말 분류' 담당입니다. 아래는 한 프로젝트에서 사용자가 구현 담당(AI)에게 한 말입니다. 그중 '이 프로젝트를 판정할 때 앞으로도 계속 지켜야 할 기준'을 사용자가 직접 말한 문장만 골라 수칙서의 어느 칸에 둘지 정합니다. 대부분의 말은 이번 작업 요청·질문·확인·감상이라 어디에도 해당하지 않습니다 — 약한 후보보다 무후보가 낫습니다. 최대 " + CLASSIFY_MAX_PER_RUN + "건.");
-  L.push(en ? "Seats: supportedEnv (rulebook — the environment/target/range this project is judged against) · alwaysBlocker (rulebook — something that is always a defect when violated) · outOfScope (rulebook — something this stage/project does not cover, so it must not be flagged as a defect). How the implementer should work or talk is not a seat — the user writes that into the rule boxes directly."
-    : "자리: supportedEnv(수칙서 — 이 프로젝트의 판정 기준이 되는 실행 환경·대상·범위) · alwaysBlocker(수칙서 — 어기면 언제나 결함인 기준) · outOfScope(수칙서 — 지금 단계나 이 프로젝트에서 다루지 않아 결함으로 잡지 말아야 할 것). 구현 담당이 일하거나 말하는 방식은 자리가 아닙니다 — 그런 말은 사용자가 규칙 칸에 직접 씁니다.");
-  L.push(en ? "Rules: quote = an UNCHANGED contiguous passage of that message (12–200 chars, one line) — no summary, translation or stitching; a single changed character is rejected. Never quote a passage containing " + REDACTED + ". why = one line (8–120 chars) on why it should keep applying; no secrets/personal data. Do not propose anything that means the same as an item in the 'already present' lists (including ones the user chose not to adopt). One-off instructions for the current task, questions and feelings are not candidates."
-    : "규칙: quote=그 말 원문에서 바꾸지 않은 연속 구절(12~200자·한 줄) — 요약·번역·이어 붙이기 금지, 한 글자라도 다르면 거부됩니다. " + REDACTED + " 표시가 들어간 구절은 쓰지 마세요. why=왜 계속 지킬 기준인지 한 줄(8~120자)·비밀값·개인정보 금지. 아래 '이미 있는 것' 목록과 같은 뜻이면 올리지 마세요(사용자가 안 올린 것 포함). 이번 작업에만 해당하는 지시·질문·감정 표현은 후보가 아닙니다.");
-  L.push(en ? "Output exactly one JSON object and nothing else: {\"candidates\":[{\"ref\":\"u1\",\"quote\":\"…\",\"seat\":\"supportedEnv|alwaysBlocker|outOfScope\",\"why\":\"…\",\"recommend\":\"always|related\"}]} — none: {\"candidates\":[]}."
-    : "출력은 JSON 객체 하나뿐(다른 글 금지): {\"candidates\":[{\"ref\":\"u1\",\"quote\":\"…\",\"seat\":\"supportedEnv|alwaysBlocker|outOfScope\",\"why\":\"…\",\"recommend\":\"항상|관련\"}]} — 없음은 {\"candidates\":[]}.");
+  L.push(en ? "You are an independent classifier of a user's words. Below are things the user said to an AI implementer in one project. You only decide what KIND of statement each relevant sentence is — you do not write anything anywhere. Most messages are one-off requests, questions, confirmations or reactions and are none of the kinds below — no result is better than a weak one. At most " + CLASSIFY_MAX_PER_RUN + "."
+    : "당신은 독립 '사용자 말 분류' 담당입니다. 아래는 한 프로젝트에서 사용자가 구현 담당(AI)에게 한 말입니다. 당신은 관련 문장이 어떤 '성격'인지만 가릅니다 — 어디에도 직접 쓰지 않습니다. 대부분의 말은 이번 작업 요청·질문·확인·감상이라 아래 어느 성격도 아닙니다 — 약한 결과보다 무결과가 낫습니다. 최대 " + CLASSIFY_MAX_PER_RUN + "건.");
+  L.push(en ? "Kinds: boundary = a standard for JUDGING this project that keeps applying to the whole of the following work; it decides what a verifier must treat as out of scope or as always a defect. You must be able to state in one line (bounds) how it changes a verdict — if you cannot, it is not a boundary. seat = supportedEnv (environment/target/range the project is judged against) | alwaysBlocker (always a defect when violated) | outOfScope (not covered now, must not be flagged). emphasis = the user says again what an item in the 'already present' lists already says — itemRef = that item's label. style = a lasting request about HOW the implementer works or talks (order of steps, reporting format, what to do directly instead of handing to the user, wording, etc.) — this is not a rulebook item; the user decides whether to write it into their own rule box."
+    : "성격: boundary(판정 경계) = 이 프로젝트를 검증할 때 이후 작업 전체에 계속 적용되는 판정 기준 — 검증 담당이 무엇을 범위 밖으로 돌려야 하는지 또는 무엇을 언제나 결함으로 봐야 하는지를 정하는 말. 그것이 판정을 어떻게 바꾸는지 한 줄(bounds)로 적을 수 있어야 하며, 적을 수 없으면 판정 경계가 아닙니다. seat=supportedEnv(판정 기준이 되는 실행 환경·대상·범위) | alwaysBlocker(어기면 언제나 결함) | outOfScope(지금 다루지 않아 결함으로 잡지 말 것). emphasis(다시 강조) = 아래 '이미 있는 것' 목록의 한 항목과 같은 뜻을 사용자가 다시 말함 — itemRef=그 항목 번호. style(일하는 방식) = 구현 담당이 일하거나 말하는 방식에 대한 지속 요구(진행 순서·보고 형식·사용자에게 넘기지 않고 직접 할 일·말투 등) — 수칙서 항목이 아니며, 규칙 칸에 적을지는 사용자가 정합니다.");
+  L.push(en ? "Rules: quote = an UNCHANGED contiguous passage of that message (12–200 chars, one line) — no summary, translation or stitching; a single changed character is rejected. Never quote a passage containing " + REDACTED + ". why = one line (8–120 chars) on why it has this kind. bounds (boundary only) = one line (8–200 chars) on how it changes a verdict. No secrets/personal data. A sentence that means the same as an 'already present' item is emphasis, never a new boundary. One-off instructions for the current task, questions and feelings are none of the kinds."
+    : "규칙: quote=그 말 원문에서 바꾸지 않은 연속 구절(12~200자·한 줄) — 요약·번역·이어 붙이기 금지, 한 글자라도 다르면 거부됩니다. " + REDACTED + " 표시가 들어간 구절은 쓰지 마세요. why=왜 그 성격인지 한 줄(8~120자). bounds(boundary 만)=판정을 어떻게 바꾸는지 한 줄(8~200자). 비밀값·개인정보 금지. '이미 있는 것'의 한 항목과 같은 뜻이면 새 판정 경계가 아니라 emphasis 입니다. 이번 작업에만 해당하는 지시·질문·감정 표현은 어느 성격도 아닙니다.");
+  L.push(en ? "Output exactly one JSON object and nothing else: {\"results\":[{\"ref\":\"u1\",\"kind\":\"boundary\",\"quote\":\"…\",\"seat\":\"supportedEnv|alwaysBlocker|outOfScope\",\"why\":\"…\",\"bounds\":\"…\"},{\"ref\":\"u2\",\"kind\":\"emphasis\",\"quote\":\"…\",\"itemRef\":\"B1\",\"why\":\"…\"},{\"ref\":\"u3\",\"kind\":\"style\",\"quote\":\"…\",\"why\":\"…\"}]} — none: {\"results\":[]}."
+    : "출력은 JSON 객체 하나뿐(다른 글 금지): {\"results\":[{\"ref\":\"u1\",\"kind\":\"boundary\",\"quote\":\"…\",\"seat\":\"supportedEnv|alwaysBlocker|outOfScope\",\"why\":\"…\",\"bounds\":\"…\"},{\"ref\":\"u2\",\"kind\":\"emphasis\",\"quote\":\"…\",\"itemRef\":\"B1\",\"why\":\"…\"},{\"ref\":\"u3\",\"kind\":\"style\",\"quote\":\"…\",\"why\":\"…\"}]} — 없음은 {\"results\":[]}.");
   L.push("");
-  const ex = input.existing;
-  const dump = (label, arr) => { L.push(label + (arr.length ? "" : (en ? " (none)" : " (없음)"))); for (const x of arr) L.push("- " + x); };
-  dump(en ? "[Already present — rulebook]" : "[이미 있는 것 — 수칙서]", ex.rulebook);
-  dump(en ? "[Already present — rule box the user writes]" : "[이미 있는 것 — 사용자가 직접 쓰는 규칙 칸]", ex.rules);
-  dump(en ? "[Already present — waiting for the user]" : "[이미 있는 것 — 사용자 확인 대기]", ex.pending);
-  dump(en ? "[Already present — the user chose not to adopt]" : "[이미 있는 것 — 사용자가 안 올림]", ex.declined);
+  const ex = input.existing, lb = input.labels || {};
+  const dump = (label, key) => { const arr = ex[key] || [], ids = lb[key] || []; L.push(label + (arr.length ? "" : (en ? " (none)" : " (없음)"))); arr.forEach((x, i) => L.push("- " + (ids[i] ? ids[i] + ": " : "") + x)); };
+  dump(en ? "[Already present — rulebook]" : "[이미 있는 것 — 수칙서]", "rulebook");
+  dump(en ? "[Already present — rule box the user writes]" : "[이미 있는 것 — 사용자가 직접 쓰는 규칙 칸]", "rules");
+  dump(en ? "[Already present — waiting for the user]" : "[이미 있는 것 — 사용자 확인 대기]", "pending");
+  dump(en ? "[Already present — the user chose not to adopt]" : "[이미 있는 것 — 사용자가 안 올림]", "declined");
+  dump(en ? "[Already present — earlier results waiting for the implementer]" : "[이미 있는 것 — 구현 담당 판단을 기다리는 앞선 결과]", "waiting");
   L.push("");
   L.push(en ? "[User's words — oldest first]" : "[사용자 말 — 오래된 것부터]");
   for (const it of input.items) {
@@ -184,20 +219,33 @@ function parseClassifyOutput(raw, input) {
   { const m = /^```[a-zA-Z0-9_-]*[ \t]*\r?\n?([\s\S]*?)\r?\n?```$/.exec(text); if (m) text = m[1].trim(); } // 코드 울타리 1겹(정리 담당과 같은 관용)
   if (!text.startsWith("{") || !text.endsWith("}")) return { ok: false, reason: "no-json" };
   let o = null; try { o = JSON.parse(text); } catch { return { ok: false, reason: "bad-json" }; }
-  if (!o || typeof o !== "object" || !Array.isArray(o.candidates)) return { ok: false, reason: "no-candidates-array" };
-  if (o.candidates.length > CLASSIFY_MAX_PER_RUN) return { ok: false, reason: "too-many" };
+  if (!o || typeof o !== "object" || !Array.isArray(o.results)) return { ok: false, reason: "no-results-array" };
+  if (Object.keys(o).some((k) => k !== "results")) return { ok: false, reason: "unknown-top-key" }; // [검증 1회차 blocker] 옛 담기 이름(candidates) 등이 섞인 답=전량 거부(받아들이면 그 안의 결과가 버려진 채 말이 분류 완료로 소모됨)
+  if (o.results.length > CLASSIFY_MAX_PER_RUN) return { ok: false, reason: "too-many" };
   const byRef = new Map(input.items.map((it) => [it.ref, it]));
+  const refs = (input && input.refs) || {};
   const vocab = [CL.FINDINGS_MARKERS.ko, CL.FINDINGS_MARKERS.en, CL.FINDINGS_MARKERS_V2.ko, CL.FINDINGS_MARKERS_V2.en].flatMap((m) => [m.start, m.end]);
+  const oneLineOk = (v, min, max) => typeof v === "string" && !/[\r\n\u2028\u2029]/.test(v) && v.trim().length >= min && v.trim().length <= max;
   const items = [], dropped = [];
   const seen = new Set();
-  for (const p of o.candidates) {
+  for (const p of o.results) {
     if (!p || typeof p !== "object") return { ok: false, reason: "row-not-object" };
-    const seat = String(p.seat || "");
-    if (!SEATS.includes(seat)) return { ok: false, reason: "bad-seat" };
+    const kind = String(p.kind || "");
+    if (!CLASSIFY_KINDS.includes(kind)) return { ok: false, reason: "bad-kind" }; // 성격 밖(옛 자리 이름 포함)=답 손상 — 전량 거부
     if (typeof p.quote !== "string" || typeof p.why !== "string" || typeof p.ref !== "string") return { ok: false, reason: "bad-row" };
-    // [검증 1회차 f-25b85198] why 형식(한 줄·8~120자) 위반=답 손상 — 전량 거부(항목 탈락으로 처리하면 말이 재시도 없이 분류 완료로 소모된다)
-    if (/[\r\n\u2028\u2029]/.test(p.why) || p.why.trim().length < 8 || p.why.trim().length > CL.CONSTRAINT_WHY_MAX) return { ok: false, reason: "bad-why" };
-    const drop = (reason) => { dropped.push({ ref: p.ref, seat, reason }); };
+    // 형식(한 줄·길이) 위반=답 손상 — 전량 거부(항목 탈락으로 처리하면 말이 재시도 없이 분류 완료로 소모된다 — 검증 1회차 f-25b85198)
+    if (!oneLineOk(p.why, 8, CL.CONSTRAINT_WHY_MAX)) return { ok: false, reason: "bad-why" };
+    let seat = "", bounds = "", itemRef = "";
+    if (kind === "boundary") {
+      seat = String(p.seat || "");
+      if (!SEATS.includes(seat)) return { ok: false, reason: "bad-seat" };
+      if (!oneLineOk(p.bounds, CLASSIFY_BOUNDS_MIN, CLASSIFY_BOUNDS_MAX)) return { ok: false, reason: "bad-bounds" }; // §3-1 1항 — 판정 영향을 못 적으면 판정 경계가 아님
+      bounds = p.bounds.trim();
+    } else if (kind === "emphasis") {
+      itemRef = String(p.itemRef || "");
+      if (!Object.prototype.hasOwnProperty.call(refs, itemRef)) return { ok: false, reason: "bad-itemref" }; // 목록에 없는 번호=답 손상
+    }
+    const drop = (reason) => { dropped.push({ ref: p.ref, kind, ...(seat ? { seat } : {}), reason }); };
     const it = byRef.get(p.ref);
     if (!it) { drop("unknown-ref"); continue; }
     const q = p.quote;
@@ -210,37 +258,50 @@ function parseClassifyOutput(raw, input) {
     const qs = CL.safeBacklogAutoTitle(q); if (!qs.ok) { drop("sensitive-" + qs.reasonKey); continue; }
     const why = p.why.trim();
     const ws9 = CL.safeBacklogAutoTitle(why); if (!ws9.ok) { drop("why-sensitive-" + ws9.reasonKey); continue; }
-    const dk = seat + "|" + qNormOf(q); if (seen.has(dk)) { drop("duplicate-in-run"); continue; } seen.add(dk);
-    const rec = (p.recommend === "always" || p.recommend === "항상") ? "항상" : (p.recommend === "related" || p.recommend === "관련") ? "관련" : "";
-    items.push({ ref: p.ref, wordId: it.id, seat, quote: q, why, ...(rec ? { recommend: rec } : {}) });
+    if (bounds) { const bs9 = CL.safeBacklogAutoTitle(bounds); if (!bs9.ok) { drop("bounds-sensitive-" + bs9.reasonKey); continue; } }
+    const dk = kind + "|" + qNormOf(q); if (seen.has(dk)) { drop("duplicate-in-run"); continue; } seen.add(dk);
+    items.push({ ref: p.ref, wordId: it.id, kind, quote: q, why, ...(seat ? { seat } : {}), ...(bounds ? { bounds } : {}), ...(itemRef ? { itemRef, itemText: String(refs[itemRef]) } : {}) });
   }
   return { ok: true, items, dropped };
 }
 
-// ── 커밋 — 후보(후보 장부) 먼저, 그다음 말 상태(classified). 중간 중단=말이 queued 로 남아 다음 실행이 다시
-// 분류하고 후보는 같은 id 라 중복 없이 건너뛴다(멱등). 반환 {ok, envIds, dropped, reason?}
+// ── 커밋 — [묶음 2(⑤)] 분류 결과 장부에만 쓴다(수칙서 후보 장부·규칙 칸·결정 장부 무접촉), 그다음 말 상태(classified). 중간 중단=말이 queued 로 남아
+// 다음 실행이 다시 분류하고, 같은 결과 id(작업공간·저장소·성격·인용·말 id)는 건너뛴다(멱등). 반환 {ok, resultIds, counts, dropped, reason?}
 function commitClassify(ws, input, parsed, meta) {
   const m = meta || {};
   const runId = String(m.runId || "");
   const byWord = new Map(input.items.map((it) => [it.id, it]));
-  const cst = CL.readEnvelopeCandidatesState(ws);
+  const rs = readClassifyResults(ws);
+  if (rs.readError) return { ok: false, reason: "results-unreadable" };
+  const cst = CL.readEnvelopeCandidatesState(ws); // 판정 경계의 거절 기억·이미 있는 후보 확인용(읽기만)
   if (cst.readError) return { ok: false, reason: "candidates-unreadable" };
-  const env = [], dropped = parsed.dropped.slice();
+  const sameQuote = new Set(); for (const r of rs.latest.values()) if (r.kind === "boundary" && r.repoKey === input.repoKey) sameQuote.add(qNormOf(r.quote));
+  const out = [], dropped = parsed.dropped.slice();
+  const counts = { boundary: 0, emphasis: 0, style: 0 };
   const ts = new Date().toISOString();
   for (const it of parsed.items) {
     const w = byWord.get(it.wordId);
-    if (!RULEBOOK_SEATS.includes(it.seat)) { dropped.push({ ref: it.ref, seat: it.seat, reason: "bad-seat" }); continue; } // 판독기가 이미 막지만 직접 호출 방어
-    const cid = userConstraintIdFor(ws, input.repoKey, it.quote);
-    if (CL.userDeclinedCandidate(cst.rows, cid)) { dropped.push({ ref: it.ref, seat: it.seat, reason: "user-declined" }); continue; } // 사용자 거절=세대 무관 기억(2-가)
-    const cur = cst.latest.get(cid + "@" + input.gen);
-    if (cur) { dropped.push({ ref: it.ref, seat: it.seat, reason: "duplicate" }); continue; } // 이 세대에 이미 있음(대기·채택·정리)
-    env.push({ candidateId: cid, envelopeHash: input.gen, ...(input.virtual ? { virtualGen: true } : {}), status: "proposed", kind: "user-constraint", origin: "classifier", axis: it.seat, repoKey: input.repoKey,
-      title: it.quote, why: it.why, ...(it.recommend ? { recommend: it.recommend } : {}), provider: input.provider, sessionId: w.sessionId, turnAnchor: w.turnAnchor, sourceHash: w.sourceHash,
+    const dr = (reason) => dropped.push({ ref: it.ref, kind: it.kind, ...(it.seat ? { seat: it.seat } : {}), reason });
+    if (!CLASSIFY_KINDS.includes(it.kind)) { dr("bad-kind"); continue; } // 판독기가 이미 막지만 직접 호출 방어
+    if (it.kind === "boundary") {
+      if (!RULEBOOK_SEATS.includes(it.seat) || !it.bounds) { dr("bad-seat"); continue; }
+      const cid = userConstraintIdFor(ws, input.repoKey, it.quote);
+      if (CL.userDeclinedCandidate(cst.rows, cid)) { dr("user-declined"); continue; } // 사용자 거절=세대 무관 기억(2-가)
+      if (cst.latest.get(cid + "@" + input.gen)) { dr("duplicate"); continue; } // 이 세대에 이미 후보로 있음(대기·채택·정리)
+      if (sameQuote.has(qNormOf(it.quote))) { dr("duplicate-result"); continue; } // 같은 인용의 판정 경계 결과가 이미 있음(구현 담당 판단은 그 결과로)
+      sameQuote.add(qNormOf(it.quote));
+    }
+    const resultId = classifyResultIdFor(ws, input.repoKey, it.kind, it.quote, it.wordId);
+    if (rs.latest.has(resultId)) { dr("duplicate-result"); continue; } // 같은 말·같은 인용·같은 성격=이미 기록(재실행 멱등)
+    out.push({ schema: "classify-result-v1", wsKey: CL.wsKeyFor(ws), repoKey: input.repoKey, resultId, status: "new", kind: it.kind, quote: it.quote, why: it.why,
+      ...(it.seat ? { seat: it.seat } : {}), ...(it.bounds ? { bounds: it.bounds } : {}), ...(it.itemRef ? { itemRef: it.itemRef, itemText: it.itemText } : {}),
+      gen: input.gen, ...(input.virtual ? { virtualGen: true } : {}), provider: input.provider, sessionId: w.sessionId, turnAnchor: w.turnAnchor, sourceHash: w.sourceHash,
       quoteSource: w.source, wordId: w.id, ...(runId ? { runId } : {}), ts });
+    counts[it.kind]++;
   }
-  if (env.length && !CL.appendEnvelopeCandidates(ws, env)) return { ok: false, reason: "candidates-write" };
+  if (out.length && !appendClassifyResults(ws, out)) return { ok: false, reason: "results-write" };
   if (!UW.setWordStatus(ws, input.items.map((x) => x.id), "classified", runId ? { runId } : {})) return { ok: false, reason: "words-write" };
-  return { ok: true, envIds: env.map((r) => r.candidateId), dropped };
+  return { ok: true, resultIds: out.map((r) => r.resultId), counts, dropped };
 }
 
 // 실패 처리 — 이번 묶음의 말은 queued 로 남기고 재시도 횟수만 올린다. 상한 도달=보류(classify-failed · 화면 '분류하지 못한 사용자 말').
@@ -339,10 +400,10 @@ async function runClassify(ws, opts) {
       alarm(ws, "사용자 말 분류 기록이 중단됐습니다(" + cm.reason + ") — 다음 실행이 다시 시도합니다.", "Classification commit aborted (" + cm.reason + ") — the next run retries.");
       return { st: "commit-failed", reason: cm.reason, arm: input.arm };
     }
-    const proposed = cm.envIds.length;
-    row(Object.assign({ outcome: proposed ? "proposed" : "none", envIds: cm.envIds, dropped: cm.dropped, durationMs: Date.now() - t0 }, common));
-    const rc = writeClassifyReceipt(ws, input, { arm: input.arm, pages: 1, selectedIds: cm.envIds.slice(), outcome: proposed ? "proposed:" + proposed : "none", durationMs: Date.now() - t0 });
-    return { st: "ok", arm: input.arm, words: input.items.length, unavailable: input.unavailable.length, envIds: cm.envIds, dropped: cm.dropped, receipt: rc.ok, runId };
+    const nRes = cm.resultIds.length;
+    row(Object.assign({ outcome: nRes ? "results" : "none", resultIds: cm.resultIds, counts: cm.counts, dropped: cm.dropped, durationMs: Date.now() - t0 }, common));
+    const rc = writeClassifyReceipt(ws, input, { arm: input.arm, pages: 1, selectedIds: cm.resultIds.slice(), outcome: nRes ? "results:" + nRes : "none", durationMs: Date.now() - t0 });
+    return { st: "ok", arm: input.arm, words: input.items.length, unavailable: input.unavailable.length, resultIds: cm.resultIds, counts: cm.counts, dropped: cm.dropped, receipt: rc.ok, runId };
   } finally { if (!borrowed) releaseClassifyLock(ws, lk.token); }
 }
 
@@ -355,8 +416,11 @@ function classifySummary(ws) {
   const held = repoKey ? UW.heldWords(ws, repoKey, { unknown: true }) : null;
   const runs = readClassifyRows(ws).filter((r) => r.type === "run" && (!repoKey || !r.repoKey || r.repoKey === repoKey));
   const last = runs.length ? runs[runs.length - 1] : null;
+  // [묶음 2(⑤)] 분류 결과 수(이 저장소) — 판독 오류=null(0 으로 위장 금지)
+  let results = null;
+  if (repoKey) { const rs = readClassifyResults(ws); if (!rs.readError) { results = { boundary: 0, emphasis: 0, style: 0 }; for (const r of rs.latest.values()) if (r.repoKey === repoKey) results[r.kind]++; } }
   return { repoKey, queued: q ? q.length : null, held: held ? held.length : null, heldReasons: held ? held.reduce((a, w) => { const k = w.heldReason || "?"; a[k] = (a[k] || 0) + 1; return a; }, {}) : {},
-    lastTs: last ? String(last.ts || "") : "", lastOutcome: last ? String(last.outcome || "") : "", lastReason: last ? String(last.reason || "") : "", runs: runs.length };
+    lastTs: last ? String(last.ts || "") : "", lastOutcome: last ? String(last.outcome || "") : "", lastReason: last ? String(last.reason || "") : "", runs: runs.length, results };
 }
 
 // ── [묶음 2-나-2 2단계] 자동 계기(설계 §3-3 R4·§7 D2) — 캠페인 마감(검증 통과 마감 또는 상한 소진 마감) 때 대기열에 말이 있으면 실행.
@@ -553,8 +617,18 @@ function userWordsView(ws) {
   const sm = classifySummary(ws);
   const rk = sm.repoKey;
   const held = rk ? UW.heldWords(ws, rk, { unknown: true }) : null;
+  // [묶음 2(⑤)] 분류 결과 — 판정 경계(구현 담당 판단 재료) · 일하는 방식(D-a 알림만 — 쓰기·승인 버튼 없음). 최근순·종류별 상한. 판독 오류=null.
+  let results = null;
+  if (rk) {
+    const rs = readClassifyResults(ws);
+    if (!rs.readError) {
+      const mine = [...rs.latest.values()].filter((r) => r.repoKey === rk).sort((a, b) => String(b.ts || "").localeCompare(String(a.ts || "")));
+      const pick = (k) => mine.filter((r) => r.kind === k).slice(0, RESULTS_VIEW_MAX).map((r) => ({ id: r.resultId, status: r.status, quote: r.quote, why: r.why, ts: String(r.ts || ""), ...(r.seat ? { seat: r.seat } : {}), ...(r.bounds ? { bounds: r.bounds } : {}), ...(r.itemRef ? { itemText: String(r.itemText || "") } : {}) }));
+      results = { boundary: pick("boundary"), emphasis: pick("emphasis"), style: pick("style") };
+    }
+  }
   return {
-    wsKey: CL.wsKeyFor(ws), repoKey: rk, summary: sm,
+    wsKey: CL.wsKeyFor(ws), repoKey: rk, summary: sm, results,
     held: held === null ? null : held.map((w) => { const t = UW.wordText(ws, w); return { id: w.id, source: w.source, reason: String(w.heldReason || ""), ts: String(w.ts || ""), text: t === null ? "" : (t.length > HELD_TEXT_SHOW ? t.slice(0, HELD_TEXT_SHOW) + "…" : t), canRequeue: !!w.repoKey && w.repoKey === rk }; }),
   };
 }
@@ -563,8 +637,9 @@ module.exports = {
   CLASSIFY_TICK_MIN_GAP_MS, classifyTickFileFor, readClassifyTick, writeClassifyTick, closeEventsFor, classifyTickJudge, markClassifyRan, classifyTick, classifyHookTick, classifyLockAlive, readHookStamp, hookStampFileFor,
   heldWordAction, userWordsView,
   CLASSIFY_DIR, CLASSIFY_BATCH_WORDS, CLASSIFY_BATCH_CHARS, CLASSIFY_WORD_SHOW, CLASSIFY_MAX_PER_RUN, CLASSIFY_RETRY_MAX, RULEBOOK_SEATS, SEATS, REDACTED,
-  classifyFileFor, seatsFileFor, classifyLockFileFor, armForProvider, rulesFieldFor, redactSensitiveForms,
-  readClassifyRows, readSeatsState, userConstraintIdFor,
+  CLASSIFY_KINDS, CLASSIFY_BOUNDS_MIN, CLASSIFY_BOUNDS_MAX, RESULT_STATUSES,
+  classifyFileFor, seatsFileFor, resultsFileFor, classifyLockFileFor, armForProvider, rulesFieldFor, redactSensitiveForms,
+  readClassifyRows, readSeatsState, readClassifyResults, appendClassifyResults, classifyResultIdFor, userConstraintIdFor,
   classifyInput, buildClassifyPrompt, parseClassifyOutput, commitClassify, bumpRetries, acquireClassifyLock, releaseClassifyLock,
   runClassify, classifySummary,
 };

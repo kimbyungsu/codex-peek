@@ -84,7 +84,7 @@ t("첫 판정=기준선(실행 없음) · 새 마감+대기열=실행 · 같은 
   assert.ok(j1.spawn && j1.kind === "pass", JSON.stringify(j1));
   assert.strictEqual(judgeHeld(P).reason, "no-close", "같은 마감은 한 번만");
   // 최근 실행 10분 안
-  await CF.runClassify(P.ws, { pageRunner: fakeRunner({ candidates: [] }) });
+  await CF.runClassify(P.ws, { pageRunner: fakeRunner({ results: [] }) });
   round(P, "c3", 1, "pass", "2026-10-05T03:00:00.000Z");
   assert.strictEqual(judgeHeld(P).reason, "recent");
   const j2 = judgeHeld(P, { now: Date.now() + 11 * MIN });
@@ -101,7 +101,7 @@ t("반례 고정(검증 1회차): 첫 판정 직전 수동 실행이어도 기�
   const A = project("j-recent");
   round(A, "old", 1, "pass", "2026-10-04T01:00:00.000Z");
   say(A, "최근 실행 반례용 말입니다 기준 아님");
-  await CF.runClassify(A.ws, { pageRunner: fakeRunner({ candidates: [] }) });
+  await CF.runClassify(A.ws, { pageRunner: fakeRunner({ results: [] }) });
   say(A, "다음 말입니다 기준 아님");
   assert.strictEqual(judgeHeld(A).reason, "baseline", "첫 판정=기준선(최근 실행보다 먼저)");
   assert.strictEqual(judgeHeld(A, { now: Date.now() + 11 * MIN }).reason, "no-close", "설치 이전 마감으로 실행하지 않음");
@@ -131,7 +131,7 @@ t("반례 고정(검증 1회차): 첫 판정 직전 수동 실행이어도 기�
   assert.strictEqual(judgeHeld(D).reason, "baseline");
   round(D, "r2", 1, "pass", "2026-10-05T02:00:00.000Z");
   let calls = 0;
-  const slow = () => { calls++; return { promise: new Promise((res) => setTimeout(() => res({ ok: true, output: JSON.stringify({ candidates: [] }) }), 300)), cancel() {} }; };
+  const slow = () => { calls++; return { promise: new Promise((res) => setTimeout(() => res({ ok: true, output: JSON.stringify({ results: [] }) }), 300)), cancel() {} }; };
   const [x, y] = await Promise.all([CF.classifyTick(D.ws, { pageRunner: slow }), CF.classifyTick(D.ws, { pageRunner: slow })]);
   assert.strictEqual(calls, 1, "분류 호출 1회 " + JSON.stringify([x.st, x.judge && x.judge.reason, y.st, y.judge && y.judge.reason]));
   assert.ok([x, y].filter((r) => r.st === "ok").length === 1 && [x, y].some((r) => r.st === "no-run"), "하나만 실행");
@@ -159,7 +159,7 @@ t("반례 고정(검증 2회차): 판정 장부 판독 오류=본 마감 기억 
   assert.strictEqual(judgeHeld(A).reason, "baseline");
   round(A, "e1", 1, "pass", "2026-10-05T02:00:00.000Z");
   let calls = 0;
-  const pr = () => { calls++; return { promise: Promise.resolve({ ok: true, output: JSON.stringify({ candidates: [] }) }), cancel() {} }; };
+  const pr = () => { calls++; return { promise: Promise.resolve({ ok: true, output: JSON.stringify({ results: [] }) }), cancel() {} }; };
   assert.strictEqual((await CF.classifyTick(A.ws, { pageRunner: pr })).st, "ok");
   const seen1 = CF.readClassifyTick(A.ws, A.rk).seenKeys.slice();
   say(A, "다음 마감을 기다리는 말입니다 기준 아님");
@@ -285,7 +285,7 @@ t("실행 기록 판독 오류는 '이력 없음'이 아님 — 최소 간격(10
   round(P, "g0", 1, "pass", "2026-10-05T01:00:00.000Z");
   say(P, "실행 기록 반례용 말입니다 기준 아님");
   assert.strictEqual(judgeHeld(P).reason, "baseline");
-  await CF.runClassify(P.ws, { pageRunner: fakeRunner({ candidates: [] }) }); // 방금 실행(간격 안)
+  await CF.runClassify(P.ws, { pageRunner: fakeRunner({ results: [] }) }); // 방금 실행(간격 안)
   say(P, "다음 말입니다 기준 아님");
   round(P, "g1", 1, "pass", "2026-10-05T02:00:00.000Z");
   const rf = CF.classifyFileFor(P.ws);
@@ -302,7 +302,7 @@ t("반례 고정(검증 5회차): 실행 기록의 최신 행이 쓰다 끊겨�
   say(P, "끊긴 실행 기록 반례용 말입니다 기준 아님");
   assert.strictEqual(judgeHeld(P, { now: Date.now() - 60 * MIN }).reason, "baseline");
   let calls = 0;
-  const pr = () => { calls++; return { promise: Promise.resolve({ ok: true, output: JSON.stringify({ candidates: [] }) }), cancel() {} }; };
+  const pr = () => { calls++; return { promise: Promise.resolve({ ok: true, output: JSON.stringify({ results: [] }) }), cancel() {} }; };
   await CF.runClassify(P.ws, { pageRunner: pr }); // 수동 실행
   const rf = CF.classifyFileFor(P.ws);
   const raw = fs.readFileSync(rf, "utf8");
@@ -478,7 +478,7 @@ t("명령줄 classify tick — 기준선 뒤 새 마감이면 자동 실행(trig
   round(P, "k0", 1, "pass", "2026-10-05T01:00:00.000Z");
   say(P, Q1);
   const fakeMod = path.join(HOME, "fake-auto-runner.js");
-  fs.writeFileSync(fakeMod, "module.exports = { runSelectorPage: ({ prompt }) => { const f = prompt.indexOf('<<u1 '); const i = prompt.indexOf(" + JSON.stringify(Q1) + ", f); const h = prompt.lastIndexOf('<<u', i); const ref = prompt.slice(h + 2, prompt.indexOf(' ', h)); return { promise: Promise.resolve({ ok: true, output: JSON.stringify({ candidates: [{ ref, seat: 'alwaysBlocker', quote: " + JSON.stringify(Q1) + ", why: '프로젝트 내내 지킬 규칙' }] }) }), cancel() {} }; } };");
+  fs.writeFileSync(fakeMod, "module.exports = { runSelectorPage: ({ prompt }) => { const f = prompt.indexOf('<<u1 '); const i = prompt.indexOf(" + JSON.stringify(Q1) + ", f); const h = prompt.lastIndexOf('<<u', i); const ref = prompt.slice(h + 2, prompt.indexOf(' ', h)); return { promise: Promise.resolve({ ok: true, output: JSON.stringify({ results: [{ ref, kind: 'boundary', seat: 'alwaysBlocker', quote: " + JSON.stringify(Q1) + ", why: '프로젝트 내내 지킬 규칙', bounds: '어기면 언제나 결함으로 본다' }] }) }), cancel() {} }; } };");
   const env = Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME, CLAUDE_PROJECT_DIR: P.ws, CODEX_BRIDGE_SELECTOR_RUNNER: fakeMod });
   const cli = path.join(ROOT, "bridge", "codex-bridge.js");
   const tick = () => JSON.parse(cp.spawnSync(process.execPath, [cli, "classify", "tick", "--json"], { env, encoding: "utf8", cwd: P.ws }).stdout.trim().split(/\r?\n/).pop());
@@ -486,7 +486,7 @@ t("명령줄 classify tick — 기준선 뒤 새 마감이면 자동 실행(trig
   assert.ok(a.st === "no-run" && a.judge.reason === "baseline", JSON.stringify(a));
   round(P, "k1", 1, "pass", "2026-10-05T02:00:00.000Z");
   const b = tick();
-  assert.ok(b.st === "ok" && b.judge.spawn && b.envIds.length === 1, JSON.stringify(b));
+  assert.ok(b.st === "ok" && b.judge.spawn && b.resultIds.length === 1, JSON.stringify(b));
   const runs = CF.readClassifyRows(P.ws).filter((r) => r.type === "run");
   assert.strictEqual(runs[runs.length - 1].trigger, "auto");
   assert.ok(CF.readClassifyTick(P.ws, P.rk).ranAt, "실행 시각");
@@ -501,9 +501,10 @@ t("확인 대기 함수가 없다 · 수칙서 후보가 대기 중이어도 Cla
   const P = project("hookline");
   const A = "훅 결선 시험용 지속 기준 문장입니다 계속 지켜요";
   say(P, A);
-  const r0 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, A), seat: "alwaysBlocker", quote: A, why: "프로젝트 내내 지킬 판정 기준" }] })) });
-  assert.strictEqual(r0.envIds.length, 1, "(전제) 수칙서 후보 1건 대기");
-  const cand = CL.readEnvelopeCandidates(P.ws).latest.get(r0.envIds[0] + "@" + CL.GEN0_HASH);
+  // (전제) 수칙서 후보 1건 대기 — [⑤] 분류 담당은 후보를 쓰지 않으므로 후보 장부에 대기 행을 직접(구현 담당 상신·옛 분류 행과 같은 모양)
+  const cid0 = CF.userConstraintIdFor(P.ws, P.rk, A);
+  assert.ok(CL.appendEnvelopeCandidates(P.ws, [{ candidateId: cid0, envelopeHash: CL.GEN0_HASH, virtualGen: true, status: "proposed", kind: "user-constraint", origin: "classifier", axis: "alwaysBlocker", repoKey: P.rk, title: A, why: "프로젝트 내내 지킬 판정 기준", provider: "claude", ts: new Date().toISOString() }]));
+  const cand = CL.readEnvelopeCandidates(P.ws).latest.get(cid0 + "@" + CL.GEN0_HASH);
   assert.ok(cand && cand.status === "proposed", "(전제) 대기 상태");
   const NOTE = /\[사용자 확인 대기\]|\[Waiting for the user\]/;
   // Claude 입력 제출 훅(검증 모드 always — 훅이 매 차례 주입문을 내는 상태에서 확인)
@@ -610,7 +611,8 @@ t("사용자 말 카드 그리기 조각(컴파일 산출물)을 가짜 화면 �
   const r = run(d);
   assert.strictEqual(r.uc.style.display, "block");
   assert.ok(r.text.includes("사용자 말 분류") && r.text.includes("살펴볼 말 3건") && r.text.includes("실패 — 말은 남아 있어 다시 시도(timeout)"), "요약 줄");
-  assert.ok(!r.text.includes("어디로:") && !r.text.includes("설명은 상황 예시로") && r.text.includes("구현 담당 규칙 칸에 직접 적어 주세요") && !r.text.includes("Claude 규칙 칸"), "옛 제안 행 없음·규칙 칸은 사용자가 직접(구현 담당 회사와 무관한 안내 — 검증 보완)");
+  assert.ok(!r.text.includes("어디로:") && !r.text.includes("설명은 상황 예시로") && r.text.includes("구현 담당 규칙 칸에 직접 쓰세요") && !r.text.includes("Claude 규칙 칸"), "옛 제안 행 없음·규칙 칸은 사용자가 직접(구현 담당 회사와 무관한 안내 — 검증 보완)");
+  assert.ok(r.text.includes("성격만 나눠요") && r.text.includes("구현 담당의 판단을 거쳐야"), "[⑤] 분류 담당은 쓰지 않음·판정 경계는 구현 담당 판단을 거침");
   assert.ok(r.text.includes("분류하지 못한 사용자 말 2건") && r.text.includes("분류 담당이 세 번 실패했어요") && r.text.includes("어느 프로젝트의 말인지 확인하지 못했어요"), "보류 사유");
   const btn = r.all.filter((x) => x.tag === "button");
   assert.strictEqual(btn.filter((x) => x.textContent === "승인" || x.textContent === "안 올림").length, 0, "승인·안 올림 버튼 없음");
@@ -619,6 +621,24 @@ t("사용자 말 카드 그리기 조각(컴파일 산출물)을 가짜 화면 �
   btn.filter((x) => x.textContent === "버리기")[1].onclick();
   assert.deepStrictEqual(r.sent.map((m) => m.type + ":" + m.action + ":" + m.wsKey), ["heldMark:requeue:wk1", "heldMark:dismiss:wk1"]);
   assert.strictEqual(r.all.filter((x) => x.attrs && x.attrs["data-seats-box"]).length, 0, "옛 개요 이동 앵커 없음");
+  // [⑤] 분류 결과 표시 — 읽기 전용(버튼 없음) · 판정 경계=제안 칸·판정 영향 · 일하는 방식=알림만 · 다시 강조=같은 뜻 항목
+  const res = { boundary: [{ id: "1".repeat(16), status: "new", quote: "실기기 확인은 이번 단계 범위 밖", why: "지속 판정 기준", seat: "outOfScope", bounds: "실기기 미확인을 결함으로 잡지 않는다", ts: "2026-10-09T00:00:00.000Z" }],
+    style: [{ id: "2".repeat(16), status: "new", quote: "화면을 띄우고 단계를 밟아 진행해 줘", why: "진행 방식에 대한 요구", ts: "2026-10-09T00:00:00.000Z" }],
+    emphasis: [{ id: "3".repeat(16), status: "new", quote: "요구사항 낮추지 마", why: "다시 강조", itemText: "요구사항을 낮추지 않는다", ts: "" }] };
+  const rr = run({ userWords: { wsKey: "wk2", repoKey: "rk", summary: { queued: 0, lastTs: "2026-10-09T01:00:00.000Z", lastOutcome: "results" }, results: res, held: [] } });
+  assert.strictEqual(rr.uc.style.display, "block");
+  assert.ok(rr.text.includes("결과 냄") && rr.text.includes("분류 결과: 판정 경계 1건(구현 담당 판단 재료) · 다시 강조 1건 · 일하는 방식 1건"), "결과 요약 " + rr.text.slice(0, 300));
+  assert.ok(rr.text.includes("판정 경계로 고른 말 1건") && rr.text.includes("제안 칸: 범위 밖") && rr.text.includes("판정에 주는 영향: 실기기 미확인을 결함으로 잡지 않는다"), "판정 경계 줄");
+  assert.ok(rr.text.includes("일하는 방식에 관한 말 1건 — 알림만") && rr.text.includes("화면을 띄우고 단계를 밟아 진행해 줘"), "일하는 방식=알림만");
+  assert.ok(rr.text.includes("같은 뜻: 요구사항을 낮추지 않는다"), "다시 강조=같은 뜻 항목");
+  assert.strictEqual(rr.all.filter((x) => x.tag === "button").length, 0, "★결과에는 승인·쓰기 버튼 없음(D-a)");
+  const onlyRes = run({ userWords: { wsKey: "wk3", repoKey: "rk", summary: { queued: 0, lastTs: "" }, results: { boundary: [], emphasis: [], style: res.style }, held: [] } });
+  assert.strictEqual(onlyRes.uc.style.display, "block", "결과만 있어도 카드 보임");
+  // [검증 1회차 보완] 전체 건수=요약 집계 · 목록이 최근 상한으로 잘렸으면 '최근 n건 표시'
+  const many = run({ userWords: { wsKey: "wk5", repoKey: "rk", summary: { queued: 0, lastTs: "", repoKey: "rk", results: { boundary: 21, emphasis: 1, style: 1 } }, results: { boundary: Array.from({ length: 20 }, (_, i) => Object.assign({}, res.boundary[0], { id: String(i).padStart(16, "0") })), emphasis: res.emphasis, style: res.style }, held: [] } });
+  assert.ok(many.text.includes("분류 결과: 판정 경계 21건") && many.text.includes("판정 경계로 고른 말 21건 (최근 20건 표시)") && !many.text.includes("일하는 방식에 관한 말 1건 (최근"), "전체 21·표시 20 구분 " + many.text.slice(0, 400));
+  const resErr = run({ userWords: { wsKey: "wk4", repoKey: "rk", summary: { queued: 0, lastTs: "", repoKey: "rk" }, results: null, held: [] } });
+  assert.ok(resErr.uc.style.display === "block" && resErr.text.includes("처리할 것이 없다는 뜻이 아니에요"), "결과 판독 실패=숨기지 않고 알림");
 });
 
 t("'수칙' 카드 그리기 조각 실제 실행 — 분류 담당이 고른 범위 밖 후보: 칸 이름·어디로 줄·버튼 하나(본문) · 0세대·승인 세대 모두 · 칸 없는 후보=종전 버튼", () => {

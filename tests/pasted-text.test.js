@@ -127,7 +127,7 @@ t("분류 입력 — 섞인 메시지는 사용자 줄만 분류 담당에게 ·
   assert.ok(inp.ok && inp.items.length === 1 && inp.items[0].id === m.id);
   const pr = CF.buildClassifyPrompt(inp, "ko");
   assert.ok(pr.includes("이 분석을 토대로 재분석해봐") && !pr.includes("에이전트에게는") && !pr.includes("pasted_content"), "프롬프트에 붙여 넣은 글 없음");
-  const parsed = CF.parseClassifyOutput(JSON.stringify({ candidates: [{ ref: "u1", seat: "alwaysBlocker", quote: "새 후보를 발견해도 구현하지 말 것", why: "붙여 넣은 글을 인용한 답" }] }), inp);
+  const parsed = CF.parseClassifyOutput(JSON.stringify({ results: [{ ref: "u1", kind: "boundary", seat: "alwaysBlocker", quote: "새 후보를 발견해도 구현하지 말 것", why: "붙여 넣은 글을 인용한 답", bounds: "구현하면 언제나 결함으로 본다" }] }), inp);
   assert.ok(parsed.ok && parsed.items.length === 0 && parsed.dropped[0].reason === "not-in-words", JSON.stringify(parsed));
   // 이 정정 전에 대기열에 들어간 '붙여 넣은 글뿐' 말(대기열 등록 판정 이전 기록) — 분류 담당 호출 없이 처리됨
   const Q = project("legacy");
@@ -137,7 +137,7 @@ t("분류 입력 — 섞인 메시지는 사용자 줄만 분류 담당에게 ·
   assert.ok(UW.recordWord(Q.ws, { id: lid, source: "prompt", turnAnchor: anc, sourceHash: s.sourceHash, sessionId: "pt-legacy", provider: "claude", repoKey: Q.rk, ts: new Date().toISOString() }).ok);
   assert.strictEqual(statusOf(Q, lid), "queued", "(전제) 옛 대기 말");
   const calls = [];
-  const r = await CF.runClassify(Q.ws, { pageRunner: fakeRunner({ candidates: [] }, calls) });
+  const r = await CF.runClassify(Q.ws, { pageRunner: fakeRunner({ results: [] }, calls) });
   assert.ok(r.st === "empty" && r.pastedOnly === 1 && calls.length === 0, JSON.stringify(r));
   assert.strictEqual(statusOf(Q, lid), "classified", "처리됨");
   const row = UW.readUserWordsState(Q.ws).status.get(lid);

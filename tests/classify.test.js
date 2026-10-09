@@ -3,6 +3,8 @@
  * [RULE-SUPPLY-REDESIGN 묶음 2-나-2 1단계] 사용자 말 분류 실행 — 입력(민감 형태 생략·회사별 묶음·보존 기간)·답 판독(작문 차단)·수칙서 칸 후보·
  * 실패 보존(재시도→보류)·수칙서 칸 갈래(지원 환경·범위 밖=본문 전용)·세대 이월 칸 보존·명령줄 결선.
  * [RULE-SUPPLY-CORRECTION 묶음 1] 옛 규칙 칸·결정 기록 자리 제거 — 그 자리 답=전량 거부 · 승인 함수 부재 · 결정 출처 새로 만들기 implementer 만·읽기 호환 · 옛 자리 장부 무변경.
+ * [RULE-SUPPLY-CORRECTION ⑤ 1단계 — 2026-10-10] 분류 담당=성격 판단만(판정 경계·다시 강조·일하는 방식) · 결과는 분류 결과 장부에만(수칙서 후보 장부 무접촉) ·
+ *   판정 경계는 판정 영향(bounds) 한 줄 필수 · 다시 강조는 목록 번호 · [6] 은 이 정정 전에 분류 담당이 남긴 옛 후보 행(origin classifier)의 칸 처리 — 그 자료는 계속 다룬다.
  * 격리: 임시 CODEX_BRIDGE_HOME(파일 실주입). 분류 담당 호출은 페이지 실행기 주입(실제 호출 없음).
  */
 const assert = require("assert");
@@ -92,107 +94,143 @@ t("수칙서 파일이 승인 전이면 입력 거절(envelope-inactive) — 실
   fs.writeFileSync(path.join(P.repo, CL.ENVELOPE_FILE), CL.GEN0_TEXT);
   assert.strictEqual(CF.classifyInput(P.ws, P.repo).reason, "envelope-inactive");
   const calls = [];
-  const r = await CF.runClassify(P.ws, { pageRunner: fakeRunner({ candidates: [] }, calls) });
+  const r = await CF.runClassify(P.ws, { pageRunner: fakeRunner({ results: [] }, calls) });
   assert.ok(r.st === "input-failed" && r.reason === "envelope-inactive" && !calls.length, JSON.stringify(r));
   assert.strictEqual(statusOf(P, a.id), "queued");
 });
 
-sec("[2] 답 판독 — 작문 차단·형식 거부");
-t("손상=전량 거부(JSON 아님·상한 초과·자리 밖·근거 형식) · 울타리 1겹 관용 · 의미 거부=항목 탈락(원문 아님·생략 걸침·민감·모르는 번호)", () => {
+sec("[2] 답 판독 — 작문 차단·형식 거부·성격 3종");
+t("손상=전량 거부(JSON 아님·옛 담기 이름·상한 초과·성격 밖·옛 자리·근거·판정 영향·항목 번호 형식) · 울타리 1겹 관용 · 의미 거부=항목 탈락(원문 아님·생략 걸침·민감·모르는 번호)", () => {
   const P = project("parse");
-  say(P, "검증할 때 실제 기기 확인은 이번 단계 범위 밖이야. 파일은 C:\\work\\x.txt 에 있어");
+  say(P, "검증할 때 실제 기기 확인은 이번 단계 범위 밖이야. 파일은 C:\\work\\x.txt 에 있어. 보고는 항상 표로 정리해 줘");
   const inp = CF.classifyInput(P.ws, P.repo);
+  const W = "지속 기준이라 계속 지켜야 함", BD = "실기기 확인 누락을 결함으로 잡지 않는다";
+  const Q = "실제 기기 확인은 이번 단계 범위 밖이야";
+  const one = (row) => CF.parseClassifyOutput(JSON.stringify({ results: [row] }), inp);
   assert.strictEqual(CF.parseClassifyOutput("설명 {}", inp).reason, "no-json");
-  assert.strictEqual(CF.parseClassifyOutput(JSON.stringify({ candidates: Array.from({ length: CF.CLASSIFY_MAX_PER_RUN + 1 }, () => ({ ref: "u1", seat: "rule", quote: "x", why: "y" })) }), inp).reason, "too-many");
-  assert.strictEqual(CF.parseClassifyOutput(JSON.stringify({ candidates: [{ ref: "u1", seat: "core", quote: "x", why: "y" }] }), inp).reason, "bad-seat");
-  const ok = CF.parseClassifyOutput("```json\n" + JSON.stringify({ candidates: [] }) + "\n```", inp);
+  assert.strictEqual(CF.parseClassifyOutput(JSON.stringify({ candidates: [] }), inp).reason, "no-results-array", "옛 담기 이름(candidates)=전량 거부");
+  assert.strictEqual(CF.parseClassifyOutput(JSON.stringify({ results: [], candidates: [{ ref: "u1", seat: "alwaysBlocker", quote: Q, why: W }] }), inp).reason, "unknown-top-key", "★새·옛 담기 이름 혼합=전량 거부(검증 1회차 blocker)");
+  assert.strictEqual(CF.parseClassifyOutput(JSON.stringify({ results: [], note: "x" }), inp).reason, "unknown-top-key", "다른 최상위 키=전량 거부");
+  assert.strictEqual(CF.parseClassifyOutput(JSON.stringify({ results: Array.from({ length: CF.CLASSIFY_MAX_PER_RUN + 1 }, () => ({ ref: "u1", kind: "style", quote: "x", why: W })) }), inp).reason, "too-many");
+  assert.strictEqual(one({ ref: "u1", kind: "rule", quote: Q, why: W }).reason, "bad-kind", "성격 밖");
+  assert.strictEqual(one({ ref: "u1", seat: "outOfScope", quote: Q, why: W, bounds: BD }).reason, "bad-kind", "성격 없는 옛 행");
+  assert.strictEqual(one({ ref: "u1", kind: "boundary", seat: "core", quote: Q, why: W, bounds: BD }).reason, "bad-seat");
+  for (const old of ["rule", "decision"]) assert.strictEqual(one({ ref: "u1", kind: "boundary", seat: old, quote: Q, why: W, bounds: BD }).reason, "bad-seat", "옛 자리=" + old);
+  for (const bb of [undefined, "짧음", "여러 줄\n영향입니다 길게", "가".repeat(CF.CLASSIFY_BOUNDS_MAX + 1)]) assert.strictEqual(one({ ref: "u1", kind: "boundary", seat: "outOfScope", quote: Q, why: W, ...(bb === undefined ? {} : { bounds: bb }) }).reason, "bad-bounds", "★판정 영향 한 줄 필수(§3-1 1항) " + bb);
+  assert.strictEqual(one({ ref: "u1", kind: "emphasis", quote: Q, why: W, itemRef: "B9" }).reason, "bad-itemref", "목록에 없는 번호");
+  for (const bw of ["짧음", "여러 줄\n근거입니다 길게", "가".repeat(CL.CONSTRAINT_WHY_MAX + 1)]) assert.strictEqual(one({ ref: "u1", kind: "style", quote: "보고는 항상 표로 정리해 줘", why: bw }).reason, "bad-why", "근거 형식(검증 1회차 f-25b85198)");
+  const ok = CF.parseClassifyOutput("```json\n" + JSON.stringify({ results: [] }) + "\n```", inp);
   assert.ok(ok.ok && ok.items.length === 0);
-  const W = "지속 기준이라 계속 지켜야 함";
-  const r = CF.parseClassifyOutput(JSON.stringify({ candidates: [
-    { ref: "u1", seat: "outOfScope", quote: "실제 기기 확인은 이번 단계 범위 밖이야", why: W, recommend: "항상" },
-    { ref: "u1", seat: "alwaysBlocker", quote: "실제 기기는 이번 단계에서 빼자", why: W },
-    { ref: "u1", seat: "alwaysBlocker", quote: "파일은 [생략] 에 있어", why: W },
-    { ref: "u1", seat: "alwaysBlocker", quote: "파일은 C:\\work\\x.txt 에 있어", why: W },
-    { ref: "u9", seat: "alwaysBlocker", quote: "실제 기기 확인은 이번 단계", why: W },
+  const r = CF.parseClassifyOutput(JSON.stringify({ results: [
+    { ref: "u1", kind: "boundary", seat: "outOfScope", quote: Q, why: W, bounds: BD },
+    { ref: "u1", kind: "style", quote: "보고는 항상 표로 정리해 줘", why: "보고 형식에 대한 지속 요구" },
+    { ref: "u1", kind: "boundary", seat: "alwaysBlocker", quote: "실제 기기는 이번 단계에서 빼자", why: W, bounds: BD },
+    { ref: "u1", kind: "boundary", seat: "alwaysBlocker", quote: "파일은 [생략] 에 있어", why: W, bounds: BD },
+    { ref: "u1", kind: "style", quote: "파일은 C:\\work\\x.txt 에 있어", why: W },
   ] }), inp);
-  assert.ok(r.ok && r.items.length === 1 && r.items[0].seat === "outOfScope" && r.items[0].recommend === "항상", JSON.stringify(r));
-  assert.deepStrictEqual(r.dropped.map((x) => x.reason), ["not-in-words", "redacted-span", "sensitive-path", "unknown-ref"]);
-  // [검증 1회차 f-25b85198] why 형식(짧음·여러 줄·너무 김)=답 손상 → 전량 거부(말은 재시도 대상으로 남는다)
-  for (const bw of ["짧음", "여러 줄\n근거입니다 길게", "가".repeat(CL.CONSTRAINT_WHY_MAX + 1)]) {
-    const r2 = CF.parseClassifyOutput(JSON.stringify({ candidates: [{ ref: "u1", seat: "outOfScope", quote: "실제 기기 확인은 이번 단계 범위 밖이야", why: bw }] }), inp);
-    assert.ok(!r2.ok && r2.reason === "bad-why", JSON.stringify(r2));
-  }
-  // [RULE-SUPPLY-CORRECTION 묶음 1] 옛 규칙 칸·결정 기록 자리=자리 밖 — 수칙서 칸 후보와 섞여 와도 답 전체 거부(항목 탈락이 아님)
-  assert.deepStrictEqual(CF.SEATS, ["supportedEnv", "alwaysBlocker", "outOfScope"]);
-  for (const old of ["rule", "decision"]) {
-    const r3 = CF.parseClassifyOutput(JSON.stringify({ candidates: [{ ref: "u1", seat: "outOfScope", quote: "실제 기기 확인은 이번 단계 범위 밖이야", why: W }, { ref: "u1", seat: old, quote: "실제 기기 확인은 이번 단계 범위 밖이야", why: W, decisionKind: "product" }] }), inp);
-    assert.ok(!r3.ok && r3.reason === "bad-seat", old + " " + JSON.stringify(r3));
-  }
-  const pr = CF.buildClassifyPrompt(inp, "ko"), prEn = CF.buildClassifyPrompt(inp, "en");
-  assert.ok(!/rule\|decision|decisionKind|결정 기록/.test(pr) && !/rule\|decision|decisionKind/.test(prEn), "프롬프트에 옛 자리 없음");
-  assert.ok(pr.includes("[이미 있는 것 — 사용자가 직접 쓰는 규칙 칸]") && !pr.includes("[이미 있는 것 — 결정 기록]"), "결정 장부는 분류 입력에 넣지 않음(§2 A)");
+  assert.ok(r.ok && r.items.length === 2 && r.items[0].kind === "boundary" && r.items[0].seat === "outOfScope" && r.items[0].bounds === BD && r.items[1].kind === "style" && !("seat" in r.items[1]), JSON.stringify(r));
+  assert.deepStrictEqual(r.dropped.map((x) => x.reason), ["not-in-words", "redacted-span", "sensitive-path"]);
+  const ru = one({ ref: "u9", kind: "style", quote: "실제 기기 확인은 이번 단계", why: W });
+  assert.ok(ru.ok && !ru.items.length && ru.dropped[0].reason === "unknown-ref", "모르는 번호=항목 탈락 " + JSON.stringify(ru));
+  const prk = CF.buildClassifyPrompt(inp, "ko"), pre = CF.buildClassifyPrompt(inp, "en");
+  assert.ok(!/rule\|decision|decisionKind|결정 기록/.test(prk) && !/rule\|decision|decisionKind/.test(pre), "프롬프트에 옛 자리 없음");
+  assert.ok(prk.includes("boundary") && prk.includes("emphasis") && prk.includes("style") && prk.includes("bounds") && prk.includes("{\"results\":"), "성격 3종·판정 영향·담기 이름");
+  assert.ok(prk.includes("[이미 있는 것 — 사용자가 직접 쓰는 규칙 칸]") && prk.includes("[이미 있는 것 — 구현 담당 판단을 기다리는 앞선 결과]") && !prk.includes("[이미 있는 것 — 결정 기록]"), "결정 장부는 분류 입력에 넣지 않음(§2 A)");
+});
+t("다시 강조 — '이미 있는 것' 항목에 번호(B·R·P·N·W) · itemRef 는 그 번호만 · 결과에 번호와 그 문장을 함께", () => {
+  const P = project("emph");
+  const R2 = "질문은 항상 선택지 도구로 한 번에 물어봐 줘";
+  assert.ok(CL.updateContractPatch(P.ws, CL.loadLang(), { claude: [R2] }, { tries: 3 }).ok);
+  say(P, "다시 말하지만 질문은 항상 선택지 도구로 한 번에 물어봐 줘");
+  const inp = CF.classifyInput(P.ws, P.repo);
+  assert.ok(inp.labels.rules[0] === "R1" && inp.refs.R1.includes("선택지 도구"), JSON.stringify(inp.labels));
+  assert.ok(CF.buildClassifyPrompt(inp, "ko").includes("- R1: " + R2), "번호가 붙은 목록");
+  const r = CF.parseClassifyOutput(JSON.stringify({ results: [{ ref: "u1", kind: "emphasis", quote: "질문은 항상 선택지 도구로 한 번에 물어봐 줘", itemRef: "R1", why: "이미 있는 규칙 칸 항목을 다시 강조함" }] }), inp);
+  assert.ok(r.ok && r.items[0].itemRef === "R1" && r.items[0].itemText.includes("선택지 도구"), JSON.stringify(r));
 });
 
-sec("[3] 실행 — 수칙서 칸 후보·말 상태·영수증");
-t("0세대: 수칙서 칸=사용자 약속 후보(칸·출처 classifier·0세대 표식) · 고르지 않은 말도 전부 classified · 팔=self · 프롬프트에 민감 원문 없음 · 옛 자리 장부 생기지 않음", async () => {
+sec("[3] 실행 — 분류 결과 장부만 · 말 상태·영수증");
+t("★결과는 분류 결과 장부에만 — 수칙서 후보 장부·옛 자리 장부 무접촉 · 성격별 필드 · 고르지 않은 말도 전부 classified · 팔=self · 민감 생략 · 영수증", async () => {
   const P = project("run");
   const A = "화면에 보이는 연결 상태와 실제 연결 상태는 언제나 같아야 해";
   const B = "실제 최신폰 확인은 이번 단계 범위 밖이고 내 폰만 기준이야";
   const C = "설명할 때는 기술용어 대신 상황 예시로 말해 줘";
-  const D = "PC 별도 프로그램은 버리고 앱 설치 하나로 해결하자";
+  const D = "화면을 띄우고 단계를 밟아 한 단계씩 진행해 줘";
   const ws = [say(P, "먼저 이거 고쳐 줘. " + A), say(P, B + " 토큰 " + "z".repeat(40)), typed(P, C), say(P, D), say(P, "고마워 잘 됐네")];
   const calls = [];
   const W = "프로젝트 내내 지킬 사용자 기준";
-  const ans = (prompt) => ({ candidates: [
-    { ref: refOf(prompt, A), seat: "alwaysBlocker", quote: A, why: W, recommend: "항상" },
-    { ref: refOf(prompt, "내 폰만 기준이야"), seat: "outOfScope", quote: "실제 최신폰 확인은 이번 단계 범위 밖이고 내 폰만 기준이야", why: W },
+  const ans = (prompt) => ({ results: [
+    { ref: refOf(prompt, A), kind: "boundary", seat: "alwaysBlocker", quote: A, why: W, bounds: "화면과 실제 연결 상태가 다르면 언제나 결함으로 본다" },
+    { ref: refOf(prompt, "내 폰만 기준이야"), kind: "boundary", seat: "outOfScope", quote: B, why: W, bounds: "최신폰 미확인을 결함으로 잡지 않는다" },
+    { ref: refOf(prompt, C), kind: "style", quote: C, why: "설명 방식에 대한 지속 요구" },
+    { ref: refOf(prompt, D), kind: "style", quote: D, why: "진행 방식에 대한 요구" },
   ] });
+  const candBefore = CL.readEnvelopeCandidates(P.ws).rows.length;
   const r = await CF.runClassify(P.ws, { pageRunner: fakeRunner(ans, calls) });
-  assert.ok(r.st === "ok" && r.words === 5 && r.envIds.length === 2 && !("seatIds" in r), JSON.stringify(r));
+  assert.ok(r.st === "ok" && r.words === 5 && r.resultIds.length === 4 && r.counts.boundary === 2 && r.counts.style === 2 && r.counts.emphasis === 0 && !("envIds" in r), JSON.stringify(r));
   assert.ok(calls.length === 1 && calls[0].arm === "self" && !calls[0].prompt.includes("zzzzzzzz") && calls[0].prompt.includes("[생략]"), "팔·민감 생략");
-  const cand = CL.readEnvelopeCandidates(P.ws).latest;
-  const e1 = cand.get(r.envIds[0] + "@" + CL.GEN0_HASH), e2 = cand.get(r.envIds[1] + "@" + CL.GEN0_HASH);
-  assert.ok(e1.kind === "user-constraint" && e1.origin === "classifier" && e1.axis === "alwaysBlocker" && e1.virtualGen === true && e1.repoKey === P.rk && e1.title === A && e1.recommend === "항상" && e1.quoteSource === "prompt", JSON.stringify(e1));
-  assert.ok(e2.axis === "outOfScope", "범위 밖 칸");
-  assert.strictEqual(r.envIds[0], CF.userConstraintIdFor(P.ws, P.rk, A), "약속 상신과 같은 후보 산식(같은 말=같은 후보)");
+  assert.strictEqual(CL.readEnvelopeCandidates(P.ws).rows.length, candBefore, "★수칙서 후보 장부 무접촉(일하는 방식 말이 수칙서 후보로 가던 길 차단)");
   assert.ok(!fs.existsSync(CF.seatsFileFor(P.ws)), "옛 자리 장부에 쓰지 않음");
-  void C; void D;
+  const rs = CF.readClassifyResults(P.ws);
+  assert.ok(!rs.readError && rs.latest.size === 4);
+  const b1 = rs.latest.get(r.resultIds[0]);
+  assert.ok(b1.kind === "boundary" && b1.seat === "alwaysBlocker" && b1.bounds.includes("언제나 결함") && b1.status === "new" && b1.repoKey === P.rk && b1.provider === "claude" && b1.quoteSource === "prompt" && b1.wordId === ws[0].id && b1.gen === CL.GEN0_HASH, JSON.stringify(b1));
+  const st1 = [...rs.latest.values()].find((x) => x.quote === D);
+  assert.ok(st1 && st1.kind === "style" && !("seat" in st1) && !("bounds" in st1), "일하는 방식=칸·영향 없음 " + JSON.stringify(st1));
+  assert.strictEqual(r.resultIds[2], CF.classifyResultIdFor(P.ws, P.rk, "style", C, ws[2].id), "결과 id 산식");
   for (const w of ws) assert.strictEqual(statusOf(P, w.id), "classified", "말 상태");
   const runs = CF.readClassifyRows(P.ws).filter((x) => x.type === "run");
-  assert.ok(runs.length === 1 && runs[0].outcome === "proposed" && runs[0].trigger === "manual");
+  assert.ok(runs.length === 1 && runs[0].outcome === "results" && runs[0].trigger === "manual" && runs[0].counts.boundary === 2, JSON.stringify(runs[0]));
   const rc = CL.readSelectorUsage().filter((x) => x.purpose === "classify" && x.wsKey === CL.wsKeyFor(P.ws));
-  assert.ok(rc.length === 1 && rc[0].selectedIds.length === 2 && rc[0].askId === "", "영수증(검증 선별로 오인되지 않는 표식)");
+  assert.ok(rc.length === 1 && rc[0].selectedIds.length === 4 && rc[0].askId === "", "영수증(검증 선별로 오인되지 않는 표식)");
   const again = await CF.runClassify(P.ws, { pageRunner: fakeRunner(ans, []) });
   assert.strictEqual(again.st, "empty", "분류된 말은 다시 넘기지 않음");
-  // 옛 자리로 답이 오면 답 전체 거부 — 말은 분류 완료로 소모되지 않고 재시도 대상 · 후보·자리 장부 어디에도 쓰지 않음
+  // 요약·화면 자료
+  const sm = CF.classifySummary(P.ws);
+  assert.deepStrictEqual(sm.results, { boundary: 2, emphasis: 0, style: 2 });
+  const v = CF.userWordsView(P.ws);
+  assert.ok(v.results && v.results.boundary.length === 2 && v.results.style.length === 2 && v.results.boundary.every((x) => x.seat && x.bounds) && v.results.style.every((x) => !x.seat), JSON.stringify(v.results));
+  // [검증 1회차 blocker] 새·옛 담기 이름이 섞인 답=답 전체 거부 — 말은 분류 완료로 소모되지 않고 재시도 · 결과 장부 무변
+  const M = "혼합 담기 이름 반례용 지속 기준 문장은 언제나 지켜야 해";
+  const mw = say(P, M);
+  const resB0 = fs.readFileSync(CF.resultsFileFor(P.ws), "utf8");
+  const mix = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ results: [], candidates: [{ ref: refOf(p, M), seat: "alwaysBlocker", quote: M, why: W }] })) });
+  assert.ok(mix.st === "parse-failed" && mix.reason === "unknown-top-key", JSON.stringify(mix));
+  assert.ok(statusOf(P, mw.id) === "queued" && UW.queuedWords(P.ws, P.rk)[0].retries === 1 && fs.readFileSync(CF.resultsFileFor(P.ws), "utf8") === resB0, "말 재시도·결과 장부 무변");
+  assert.ok((await CF.runClassify(P.ws, { pageRunner: fakeRunner({ results: [] }) })).st === "ok" && statusOf(P, mw.id) === "classified", "(정리) 다음 실행에서 처리");
+  // 옛 자리·성격 밖 답=답 전체 거부 — 말은 재시도 대상 · 어떤 장부에도 쓰지 않음
   const E = "설명할 때는 항상 상황 예시를 먼저 들어 줘 — 계속 지켜";
   const e = say(P, E);
-  const before = CL.readEnvelopeCandidates(P.ws).rows.length;
-  const bad = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, E), seat: "rule", quote: E, why: W }] })) });
-  assert.ok(bad.st === "parse-failed" && bad.reason === "bad-seat", JSON.stringify(bad));
+  const resBytes = fs.readFileSync(CF.resultsFileFor(P.ws), "utf8");
+  const bad = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ results: [{ ref: refOf(p, E), kind: "rule", quote: E, why: W }] })) });
+  assert.ok(bad.st === "parse-failed" && bad.reason === "bad-kind", JSON.stringify(bad));
   assert.ok(statusOf(P, e.id) === "queued" && UW.queuedWords(P.ws, P.rk)[0].retries === 1, "재시도 대상으로 남음");
-  assert.ok(CL.readEnvelopeCandidates(P.ws).rows.length === before && !fs.existsSync(CF.seatsFileFor(P.ws)), "아무 장부에도 쓰지 않음");
+  assert.ok(CL.readEnvelopeCandidates(P.ws).rows.length === candBefore && fs.readFileSync(CF.resultsFileFor(P.ws), "utf8") === resBytes && !fs.existsSync(CF.seatsFileFor(P.ws)), "아무 장부에도 쓰지 않음");
 });
-t("중복·거절 기억: 구현 담당이 이미 올린 같은 말=탈락 · 사용자가 안 올린 말=다시 안 올림(세대 무관) · 규칙 칸·옛 자리 장부의 안 올림은 '이미 있는 것'으로만(옛 대기 제안은 싣지 않음)", async () => {
+t("중복·거절 기억: 이미 후보로 있는 같은 말=탈락 · 사용자가 안 올린 말=탈락(세대 무관) · 같은 인용의 판정 경계 결과가 있으면 탈락 · 재실행 멱등 · '이미 있는 것' 목록(안 올림·규칙 칸·옛 자리 안 올림·판단 대기 결과)", async () => {
   const P = project("dup");
   const A = "검증 단계에서 사용자 원래 설정은 반드시 되돌려 놓아야 해";
   const R = "보고할 때는 설치 위치와 남은 일을 함께 알려 줘";
   const R2 = "질문은 항상 선택지 도구로 한 번에 물어봐 줘";
   const anc = CL.turnAnchorOf("cf-dup", "2026-10-05T01:00:00.000Z");
-  const s = CL.writeConstraintTurnSnapshot(P.ws, anc, A);
-  assert.ok(CL.constraintAdd(P.ws, A, "사용자 기준", "", { ok: true, provider: "claude", sessionId: "cf-dup", turnAnchor: anc, sourceHash: s.sourceHash, repoKey: P.rk }).ok);
+  const s0 = CL.writeConstraintTurnSnapshot(P.ws, anc, A);
+  assert.ok(CL.constraintAdd(P.ws, A, "사용자 기준", "", { ok: true, provider: "claude", sessionId: "cf-dup", turnAnchor: anc, sourceHash: s0.sourceHash, repoKey: P.rk }).ok);
   assert.ok(CL.updateContractPatch(P.ws, CL.loadLang(), { claude: [R2] }, { tries: 3 }).ok);
   say(P, A); say(P, R); say(P, R2);
-  const W = "프로젝트 내내 지킬 사용자 기준";
-  const ans = (prompt) => ({ candidates: [{ ref: refOf(prompt, A), seat: "alwaysBlocker", quote: A, why: W }, { ref: refOf(prompt, R), seat: "alwaysBlocker", quote: R, why: W }] });
-  const r = await CF.runClassify(P.ws, { pageRunner: fakeRunner(ans) });
-  assert.ok(r.st === "ok" && r.envIds.length === 1, JSON.stringify(r));
-  assert.deepStrictEqual(r.dropped.map((x) => x.reason), ["duplicate"]);
+  const W = "프로젝트 내내 지킬 사용자 기준", BD = "이 기준을 어기면 언제나 결함으로 본다";
+  const bnd = (prompt, q) => ({ ref: refOf(prompt, q), kind: "boundary", seat: "alwaysBlocker", quote: q, why: W, bounds: BD });
+  const r = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ results: [bnd(p, A), bnd(p, R)] })) });
+  assert.ok(r.st === "ok" && r.resultIds.length === 1, JSON.stringify(r));
+  assert.deepStrictEqual(r.dropped.map((x) => x.reason), ["duplicate"], "이미 후보로 있는 말");
+  // 같은 인용을 다른 말에서 또 판정 경계로 냄=탈락(판단 대기 결과가 있음)
+  say(P, "다시: " + R);
+  const r1 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ results: [{ ref: refOf(p, "다시: " + R), kind: "boundary", seat: "alwaysBlocker", quote: R, why: W, bounds: BD }] })) });
+  assert.deepStrictEqual(r1.dropped.map((x) => x.reason), ["duplicate-result"], JSON.stringify(r1));
   // 사용자가 안 올림 → 같은 말이 다시 와도 탈락
   const cid = CF.userConstraintIdFor(P.ws, P.rk, A);
   assert.ok(CL.appendEnvelopeCandidates(P.ws, [{ candidateId: cid, envelopeHash: CL.GEN0_HASH, status: "declined", by: "user", ts: new Date().toISOString() }]));
   say(P, A);
-  const r2 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((prompt) => ({ candidates: [{ ref: refOf(prompt, A), seat: "alwaysBlocker", quote: A, why: W }] })) });
+  const r2 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((prompt) => ({ results: [bnd(prompt, A)] })) });
   assert.deepStrictEqual(r2.dropped.map((x) => x.reason), ["user-declined"], JSON.stringify(r2));
   // 옛 자리 장부(이 정정 전 기록) — 안 올린 문장은 '안 올림'으로 싣고, 승인 길이 없어진 대기 제안은 '확인 대기'로 싣지 않는다 · 장부는 바뀌지 않는다
   const OLD_DECL = "옛 자리에서 사용자가 안 올린 문장입니다", OLD_PEND = "옛 자리에서 아직 대기 중이던 문장입니다";
@@ -207,10 +245,29 @@ t("중복·거절 기억: 구현 담당이 이미 올린 같은 말=탈락 · �
   say(P, "다음 분류 입력 확인용 말");
   const in3 = CF.classifyInput(P.ws, P.repo);
   assert.ok(in3.existing.declined.some((x) => x.includes("반드시 되돌려")) && in3.existing.declined.some((x) => x.includes(OLD_DECL)) && in3.existing.rules.some((x) => x.includes("선택지 도구")), "안 올린 것·규칙 칸이 '이미 있는 것'으로 동봉");
+  assert.ok(in3.existing.waiting.some((x) => x.includes("설치 위치")), "판단 대기 결과가 '이미 있는 것'으로 동봉");
   assert.ok(!in3.existing.pending.some((x) => x.includes(OLD_PEND)) && !("decisions" in in3.existing), "옛 대기 제안·결정 장부는 싣지 않음");
-  await CF.runClassify(P.ws, { pageRunner: fakeRunner({ candidates: [] }) });
+  await CF.runClassify(P.ws, { pageRunner: fakeRunner({ results: [] }) });
   assert.strictEqual(fs.readFileSync(CF.seatsFileFor(P.ws), "utf8"), seatBytes, "옛 자리 장부 무변경(ab-5)");
-  void R2;
+  // 재실행 멱등 — 같은 말 묶음의 커밋을 두 번 해도 결과 행이 늘지 않음
+  say(P, "멱등 확인용 일하는 방식 말은 항상 짧게 보고해 줘");
+  const inI = CF.classifyInput(P.ws, P.repo);
+  const pI = CF.parseClassifyOutput(JSON.stringify({ results: [{ ref: "u1", kind: "style", quote: "일하는 방식 말은 항상 짧게 보고해 줘", why: "보고 방식에 대한 지속 요구" }] }), inI);
+  const c1 = CF.commitClassify(P.ws, inI, pI, {}), c2 = CF.commitClassify(P.ws, inI, pI, {});
+  assert.ok(c1.ok && c1.resultIds.length === 1 && c2.ok && c2.resultIds.length === 0 && c2.dropped.some((x) => x.reason === "duplicate-result"), JSON.stringify([c1, c2]));
+});
+t("결과 장부 판독 오류=입력 거절·말 보존(빈 목록으로 줄이지 않음 — 같은 뜻 결과 중복 생성 방지) · 커밋도 거절", async () => {
+  const P = project("resbad");
+  const a = say(P, "결과 장부 판독 오류 시험용 지속 기준 문장입니다");
+  fs.mkdirSync(CF.resultsFileFor(P.ws), { recursive: true }); // 파일 자리에 폴더=판독 오류
+  assert.strictEqual(CF.classifyInput(P.ws, P.repo).reason, "results-unreadable");
+  const calls = [];
+  const r = await CF.runClassify(P.ws, { pageRunner: fakeRunner({ results: [] }, calls) });
+  assert.ok(r.st === "input-failed" && r.reason === "results-unreadable" && !calls.length, JSON.stringify(r));
+  assert.strictEqual(statusOf(P, a.id), "queued");
+  assert.strictEqual(CF.commitClassify(P.ws, { items: [], repoKey: P.rk, gen: CL.GEN0_HASH }, { items: [], dropped: [] }, {}).reason, "results-unreadable");
+  assert.strictEqual(CF.userWordsView(P.ws).results, null, "화면 자료=판독 불가(null)");
+  fs.rmSync(CF.resultsFileFor(P.ws), { recursive: true, force: true });
 });
 
 sec("[4] 실패 보존 — 재시도·보류·경보");
@@ -218,7 +275,7 @@ t("근거 형식 위반 답(짧은 why)=실패 처리 — 말은 분류 완료�
   const P = project("badwhy");
   const Q = "근거 형식 반례용 지속 기준 문장입니다 계속 지켜 주세요";
   const a = say(P, Q);
-  const r = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, Q), seat: "alwaysBlocker", quote: Q, why: "short" }] })) });
+  const r = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ results: [{ ref: refOf(p, Q), kind: "boundary", seat: "alwaysBlocker", quote: Q, why: "short", bounds: "어기면 언제나 결함으로 본다" }] })) });
   assert.ok(r.st === "parse-failed" && r.reason === "bad-why", JSON.stringify(r));
   assert.strictEqual(statusOf(P, a.id), "queued");
   assert.strictEqual(UW.queuedWords(P.ws, P.rk)[0].retries, 1);
@@ -245,14 +302,14 @@ t("원문 못 읽는 말=보류(text-unavailable)로 표면 · 나머지만 분�
   const d = say(P, "곧 원문이 지워질 말입니다 지속 기준 아님");
   const e = say(P, "남아 있는 말입니다 이것도 기준 아님");
   fs.rmSync(CL.constraintTurnFileFor(P.ws, d.anchor));
-  const r = await CF.runClassify(P.ws, { pageRunner: fakeRunner({ candidates: [] }) });
+  const r = await CF.runClassify(P.ws, { pageRunner: fakeRunner({ results: [] }) });
   assert.ok(r.st === "ok" && r.words === 1 && r.unavailable === 1, JSON.stringify(r));
   assert.ok(statusOf(P, d.id) === "held" && UW.heldWords(P.ws, P.rk).find((w) => w.id === d.id).heldReason === "text-unavailable");
   assert.strictEqual(statusOf(P, e.id), "classified");
   say(P, "잠금 시험 말입니다 기준 아님");
   const lk = CF.acquireClassifyLock(P.ws);
   assert.ok(lk.ok);
-  const r2 = await CF.runClassify(P.ws, { pageRunner: fakeRunner({ candidates: [] }) });
+  const r2 = await CF.runClassify(P.ws, { pageRunner: fakeRunner({ results: [] }) });
   assert.ok(r2.st === "locked" && r2.reason === "running");
   CF.releaseClassifyLock(P.ws, lk.token);
 });
@@ -261,32 +318,32 @@ t("회사별 팔(R3): Codex 차례의 말=Codex 팔 · 섞인 대기열은 오�
   say(P, "코덱스 차례에서 한 말입니다 기준 아님", "codex");
   say(P, "클로드 차례에서 한 말입니다 기준 아님", "claude");
   const calls = [];
-  await CF.runClassify(P.ws, { pageRunner: fakeRunner({ candidates: [] }, calls) });
-  await CF.runClassify(P.ws, { pageRunner: fakeRunner({ candidates: [] }, calls) });
+  await CF.runClassify(P.ws, { pageRunner: fakeRunner({ results: [] }, calls) });
+  await CF.runClassify(P.ws, { pageRunner: fakeRunner({ results: [] }, calls) });
   assert.deepStrictEqual(calls.map((c) => c.arm), ["codex", "self"]);
   assert.ok(calls[0].prompt.includes("코덱스 차례") && !calls[0].prompt.includes("클로드 차례"), "다른 회사 말은 같은 묶음에 없음");
 });
 
-t("회사 경계(R3)는 '이미 있는 것' 목록에도 — 다른 회사 차례의 확인 대기·안 올림 후보 원문은 이 회사 분류 입력에 실리지 않음(검증 1회차 f-7ccbb34a 반례)", async () => {
+t("회사 경계(R3)는 '이미 있는 것' 목록에도 — 다른 회사 차례의 확인 대기·안 올림 후보와 판단 대기 결과 원문은 이 회사 분류 입력에 실리지 않음(검증 1회차 f-7ccbb34a 반례)", async () => {
   const P = project("r3list");
-  const W = "프로젝트 내내 지킬 사용자 기준";
-  const CP = "클로드 차례 대기 후보 문장 비밀스러운 내용 하나", CD = "클로드 차례 거절 후보 문장 비밀스러운 내용 둘", CS = "클로드 차례 범위 후보 문장 비밀스러운 내용 셋";
-  const XP = "코덱스 차례 대기 후보 문장 공개 가능한 내용";
-  say(P, CP); say(P, CD); say(P, CS);
-  const r1 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, CP), seat: "alwaysBlocker", quote: CP, why: W }, { ref: refOf(p, CD), seat: "alwaysBlocker", quote: CD, why: W }, { ref: refOf(p, CS), seat: "outOfScope", quote: CS, why: W }] })) });
-  assert.ok(r1.envIds.length === 3, JSON.stringify(r1));
+  const W = "프로젝트 내내 지킬 사용자 기준", BD = "이 기준을 어기면 언제나 결함으로 본다";
+  const CP = "클로드 차례 대기 후보 문장 비밀스러운 내용 하나", CD = "클로드 차례 거절 후보 문장 비밀스러운 내용 둘", CS = "클로드 차례 판단 대기 결과 비밀스러운 내용 셋";
+  const XP = "코덱스 차례 대기 후보 문장 공개 가능한 내용", XW = "코덱스 차례 판단 대기 결과 공개 가능한 내용";
+  const cand = (q, provider) => ({ candidateId: CF.userConstraintIdFor(P.ws, P.rk, q), envelopeHash: CL.GEN0_HASH, virtualGen: true, status: "proposed", kind: "user-constraint", repoKey: P.rk, title: q, why: W, provider, ts: new Date().toISOString() });
+  assert.ok(CL.appendEnvelopeCandidates(P.ws, [cand(CP, "claude"), cand(CD, "claude"), cand(XP, "codex")]));
   assert.ok(CL.appendEnvelopeCandidates(P.ws, [{ candidateId: CF.userConstraintIdFor(P.ws, P.rk, CD), envelopeHash: CL.GEN0_HASH, status: "declined", by: "user", ts: new Date().toISOString() }]));
-  say(P, XP, "codex");
-  const r2 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, XP), seat: "alwaysBlocker", quote: XP, why: W }] })) });
-  assert.ok(r2.arm === "codex" && r2.envIds.length === 1);
+  say(P, CS); say(P, XW, "codex");
+  const r1 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ results: [{ ref: refOf(p, CS), kind: "boundary", seat: "outOfScope", quote: CS, why: W, bounds: BD }] })) });
+  assert.ok(r1.arm === "self" && r1.resultIds.length === 1, JSON.stringify(r1));
+  const r2 = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ results: [{ ref: refOf(p, XW), kind: "boundary", seat: "outOfScope", quote: XW, why: W, bounds: BD }] })) });
+  assert.ok(r2.arm === "codex" && r2.resultIds.length === 1, JSON.stringify(r2));
   say(P, "코덱스 차례 다음 말 기준 아님", "codex");
   const inX = CF.classifyInput(P.ws, P.repo);
   const prX = CF.buildClassifyPrompt(inX, "ko");
-  assert.ok(inX.arm === "codex" && !prX.includes("비밀스러운"), "Claude 승인 전 원문 미동봉");
-  assert.ok(inX.existing.pending.some((x) => x.includes("공개 가능한")), "같은 회사 대기 후보는 동봉");
+  assert.ok(inX.arm === "codex" && !prX.includes("비밀스러운"), "Claude 승인 전 원문 미동봉(대기·안 올림·판단 대기 결과 모두)");
+  assert.ok(inX.existing.pending.some((x) => x.includes("공개 가능한")) && inX.existing.waiting.some((x) => x.includes("판단 대기 결과 공개")), "같은 회사 것은 동봉");
+  await CF.runClassify(P.ws, { pageRunner: fakeRunner({ results: [] }) });
   say(P, "클로드 차례 다음 말 기준 아님", "claude");
-  // Claude 실행 입력에는 Claude 것만(오래된 코덱스 말을 먼저 소진)
-  await CF.runClassify(P.ws, { pageRunner: fakeRunner({ candidates: [] }) });
   const inC = CF.classifyInput(P.ws, P.repo);
   const prC = CF.buildClassifyPrompt(inC, "ko");
   assert.ok(inC.arm === "self" && prC.includes("비밀스러운 내용 하나") && prC.includes("비밀스러운 내용 둘") && prC.includes("비밀스러운 내용 셋") && !prC.includes("공개 가능한"), "회사별 대칭");
@@ -296,6 +353,7 @@ t("규칙 칸·결정 기록 승인 함수가 없다 · 분류 실행 모듈은 
   for (const k of ["approveSeatCandidate", "declineSeatCandidate", "listSeatCandidates", "appendSeatRows", "seatCandidateId"]) assert.strictEqual(typeof CF[k], "undefined", k);
   const src = fs.readFileSync(path.join(ROOT, "bridge", "classify.js"), "utf8");
   assert.ok(!/appendDecisionRows\(|openDecision\(|updateContractPatch\(|appendFileSync\(seatsFileFor/.test(src), "결정 장부·규칙 칸·자리 장부 쓰기 호출 없음");
+  assert.ok(!/appendEnvelopeCandidates\(/.test(src), "★[⑤] 수칙서 후보 장부 쓰기 호출 없음(결과 장부만)");
 });
 t("결정 출처: 새 열린 행은 implementer 만(openDecision·appendDecisionRows 둘 다) · 과거 user-words 열린+답한 행은 계속 판독", () => {
   const P = project("decorigin");
@@ -320,11 +378,13 @@ t("결정 출처: 새 열린 행은 implementer 만(openDecision·appendDecision
 });
 
 sec("[6] 수칙서 칸 갈래 — 지원 환경·범위 밖=본문 전용 · 세대 이월·복원 칸 보존");
+// 이 정정 전 분류 담당이 후보 장부에 직접 남긴 옛 후보 행(origin classifier · 칸) — 그 자료는 계속 다룬다(사용자가 처리)
 async function classified(P, axis, quote) {
-  say(P, quote);
-  const r = await CF.runClassify(P.ws, { pageRunner: fakeRunner((p) => ({ candidates: [{ ref: refOf(p, quote), seat: axis, quote, why: "프로젝트 내내 지킬 판정 기준" }] })) });
-  assert.ok(r.st === "ok" && r.envIds.length === 1, JSON.stringify(r));
-  return r.envIds[0];
+  const w = say(P, quote);
+  let gen = CL.GEN0_HASH, virt = true; try { const g = CL.envelopeGenFor(P.ws, P.repo, CL.loadContract(P.ws)); if (g && g.gen) { gen = g.gen; virt = !!g.virtual; } } catch { /* 0세대 */ }
+  const id = CF.userConstraintIdFor(P.ws, P.rk, quote);
+  assert.ok(CL.appendEnvelopeCandidates(P.ws, [{ candidateId: id, envelopeHash: gen, ...(virt ? { virtualGen: true } : {}), status: "proposed", kind: "user-constraint", origin: "classifier", axis, repoKey: P.rk, title: quote, why: "프로젝트 내내 지킬 판정 기준", provider: "claude", quoteSource: "prompt", wordId: w.id, ts: new Date().toISOString() }]));
+  return id;
 }
 t("0세대 첫 초안: 범위 밖 후보를 본문(항상)으로 → 제외 칸에 들어감 · 관련될 때(서고)로는 거부 · 한꺼번에 올리기는 본문일 때만 묶음", async () => {
   const P = project("g0ax");
@@ -432,14 +492,16 @@ t("classify run/status/list --json(가짜 실행기 모듈) · 도움말에 cons
   const Q = "명령줄 시험용 지속 기준 문장은 언제나 지켜야 한다";
   say(P, Q);
   const fakeMod = path.join(HOME, "fake-classify-runner.js");
-  fs.writeFileSync(fakeMod, "module.exports = { runSelectorPage: ({ prompt }) => { const i = prompt.indexOf(" + JSON.stringify(Q) + "); const h = prompt.lastIndexOf('<<u', i); const ref = prompt.slice(h + 2, prompt.indexOf(' ', h)); return { promise: Promise.resolve({ ok: true, output: JSON.stringify({ candidates: [{ ref, seat: 'alwaysBlocker', quote: " + JSON.stringify(Q) + ", why: '프로젝트 내내 지킬 규칙' }] }) }), cancel() {} }; } };");
+  fs.writeFileSync(fakeMod, "module.exports = { runSelectorPage: ({ prompt }) => { const i = prompt.indexOf(" + JSON.stringify(Q) + "); const h = prompt.lastIndexOf('<<u', i); const ref = prompt.slice(h + 2, prompt.indexOf(' ', h)); return { promise: Promise.resolve({ ok: true, output: JSON.stringify({ results: [{ ref, kind: 'boundary', seat: 'alwaysBlocker', quote: " + JSON.stringify(Q) + ", why: '프로젝트 내내 지킬 규칙', bounds: '어기면 언제나 결함으로 본다' }] }) }), cancel() {} }; } };");
   const env = Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME, CLAUDE_PROJECT_DIR: P.ws, CODEX_BRIDGE_SELECTOR_RUNNER: fakeMod });
   const cli = path.join(ROOT, "bridge", "codex-bridge.js");
   const r = cp.spawnSync(process.execPath, [cli, "classify", "run", "--json"], { env, encoding: "utf8", cwd: P.ws });
   const o = JSON.parse(r.stdout.trim().split(/\r?\n/).pop());
-  assert.ok(r.status === 0 && o.st === "ok" && o.envIds.length === 1 && !("seatIds" in o), r.stdout + r.stderr);
+  assert.ok(r.status === 0 && o.st === "ok" && o.resultIds.length === 1 && o.counts.boundary === 1 && !("seatIds" in o) && !("envIds" in o), r.stdout + r.stderr);
   const st = JSON.parse(cp.spawnSync(process.execPath, [cli, "classify", "status", "--json"], { env, encoding: "utf8", cwd: P.ws }).stdout);
-  assert.ok(st.queued === 0 && !("seatsPending" in st) && st.lastOutcome === "proposed", JSON.stringify(st));
+  assert.ok(st.queued === 0 && !("seatsPending" in st) && st.lastOutcome === "results" && st.results && st.results.boundary === 1, JSON.stringify(st));
+  const rTxt = cp.spawnSync(process.execPath, [cli, "classify", "run"], { env, encoding: "utf8", cwd: P.ws }).stdout;
+  assert.ok(/분류할 말이 없습니다|nothing waiting/.test(rTxt), "두 번째 실행=대기 없음 " + rTxt);
   const stTxt = cp.spawnSync(process.execPath, [cli, "classify", "status"], { env, encoding: "utf8", cwd: P.ws }).stdout;
   assert.ok(!/규칙·결정 자리|rule\/decision/.test(stTxt), "상태 줄에 옛 자리 없음 " + stTxt);
   const ls = JSON.parse(cp.spawnSync(process.execPath, [cli, "classify", "list", "--json"], { env, encoding: "utf8", cwd: P.ws }).stdout);
