@@ -353,7 +353,11 @@ t("규칙 칸·결정 기록 승인 함수가 없다 · 분류 실행 모듈은 
   for (const k of ["approveSeatCandidate", "declineSeatCandidate", "listSeatCandidates", "appendSeatRows", "seatCandidateId"]) assert.strictEqual(typeof CF[k], "undefined", k);
   const src = fs.readFileSync(path.join(ROOT, "bridge", "classify.js"), "utf8");
   assert.ok(!/appendDecisionRows\(|openDecision\(|updateContractPatch\(|appendFileSync\(seatsFileFor/.test(src), "결정 장부·규칙 칸·자리 장부 쓰기 호출 없음");
-  assert.ok(!/appendEnvelopeCandidates\(/.test(src), "★[⑤] 수칙서 후보 장부 쓰기 호출 없음(결과 장부만)");
+  // ★[⑤] 분류 담당(분류 실행·결과 기록 경로)은 수칙서 후보 장부에 쓰지 않는다 — 이 모듈의 유일한 후보 쓰기는 '구현 담당이 올림으로 판단한 표식'의 빠진 기록 채우기(repairClaims) 하나뿐
+  const fnBody = (name) => { const i = src.indexOf("function " + name + "("); const j = src.indexOf("\nfunction ", i + 10); const k = src.indexOf("\nasync function ", i + 10); const e = [j, k].filter((x) => x > i).sort((a, b) => a - b)[0] || src.length; return src.slice(i, e); };
+  for (const fn of ["commitClassify", "runClassify", "classifyInput", "parseClassifyOutput", "classifyTick"]) assert.ok(!/appendEnvelopeCandidates\(/.test(fnBody(fn)), "★[⑤] 분류 실행 경로에 후보 장부 쓰기 없음: " + fn);
+  const uses = src.split("appendEnvelopeCandidates(").length - 1;
+  assert.ok(uses === 1 && /if \(claim\.decision === "raised" && claim\.candidateRow && !cst\.rows\.some\(\(r\) => r && r\.fromResult === resultId\)\) \{ if \(CL\.appendEnvelopeCandidates\(ws, \[Object\.assign\(\{\}, claim\.candidateRow, \{ repaired: true/.test(fnBody("repairClaims")), "★[⑤] 유일한 후보 쓰기=구현 담당 올림 표식의 빠진 기록 채우기 " + uses);
 });
 t("결정 출처: 새 열린 행은 implementer 만(openDecision·appendDecisionRows 둘 다) · 과거 user-words 열린+답한 행은 계속 판독", () => {
   const P = project("decorigin");
@@ -509,7 +513,7 @@ t("classify run/status/list --json(가짜 실행기 모듈) · 도움말에 cons
   const bad = cp.spawnSync(process.execPath, [cli, "classify", "approve", "a".repeat(16)], { env, encoding: "utf8", cwd: P.ws });
   assert.ok(bad.status === 2 && /사용법|usage/.test(bad.stdout), "도장 명령 없음(사용법 안내)");
   const help = cp.spawnSync(process.execPath, [cli, "no-such-cmd"], { env, encoding: "utf8", cwd: P.ws }).stdout;
-  assert.ok(help.includes("classify [run|status|list]") && help.includes("constraint add --quote"), "도움말 목록");
+  assert.ok(help.includes("classify [run|status|list|skip <결과 id> --note") && help.includes("constraint add --quote") && help.includes("[--axis <칸>] [--from <분류 결과 id>]"), "도움말 목록([⑤ 2단계] 안 올림·칸·분류 결과)");
   const lists = [fs.readFileSync(path.join(ROOT, "install.js"), "utf8"), fs.readFileSync(path.join(ROOT, "src", "hook-setup.ts"), "utf8"), fs.readFileSync(path.join(ROOT, "bridge", "map-cutover.js"), "utf8")];
   assert.ok(lists.every((s) => s.includes('"classify.js"')), "배포 목록 3곳");
 });

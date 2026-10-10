@@ -35,7 +35,10 @@ const SEATS = [...RULEBOOK_SEATS]; // [RULE-SUPPLY-CORRECTION 묶음 1] 수칙�
 const SEAT_STATUSES = ["proposed", "approved", "declined"];
 const CLASSIFY_KINDS = ["boundary", "emphasis", "style"]; // [묶음 2(⑤)] 성격 3종(나머지=출력 없음)
 const CLASSIFY_BOUNDS_MIN = 8, CLASSIFY_BOUNDS_MAX = 200; // boundary 의 '판정에 주는 영향' 한 줄(§3-1 1항 — 못 적으면 판정 경계가 아님)
-const RESULT_STATUSES = ["new"]; // 분류 결과 상태(이 묶음=new 만 · 전달·판단 상태는 다음 묶음)
+// 분류 결과 상태: new(전달 전) · delivered(그 차례 구현 담당에게 전달됨 — deliveredTurn) · raised(구현 담당이 올림 — 후보 장부 fromResult 로도 판정) ·
+// skipped(구현 담당이 안 올림 — 이유) · unhandled(두 번 전달받고도 판단 없음 — 종결) · expired(원문 만료 — 대시보드에만)
+const RESULT_STATUSES = ["new", "delivered", "raised", "skipped", "unhandled", "expired"];
+const SKIP_NOTE_MIN = 8; // 안 올림 이유 한 줄 하한(상한=CL.CONSTRAINT_WHY_MAX)
 const RESULTS_VIEW_MAX = 20; // 화면 목록 상한(종류별 최근순)
 const REDACTED = "[생략]";
 const sha1 = (s) => crypto.createHash("sha1").update(String(s), "utf8").digest("hex");
@@ -113,6 +116,121 @@ function appendClassifyResults(ws, rows) {
   try { fs.mkdirSync(CLASSIFY_DIR, { recursive: true }); fs.appendFileSync(f, CL.appendLeadFor(f) + rows.map((r) => JSON.stringify(r)).join("\n") + "\n"); return true; } catch { return false; } // 꼬리 보호
 }
 function classifyResultIdFor(ws, repoKey, kind, quote, wordId) { return sha1(CL.wsKeyFor(ws) + "|" + repoKey + "|" + kind + "|" + qNormOf(quote) + "|" + String(wordId || "")).slice(0, 16); }
+// ── [⑤ 2단계] 판단 — 올림(constraint add --from)·안 올림(classify skip). 대상=그 차례에 전달됐고 아직 판단하지 않은, 같은 회사·같은 저장소의 판정 경계 결과만.
+// '올림'은 결과 장부의 raised 행 또는 후보 장부의 fromResult 둘 중 하나로 판정(한쪽 기록 실패에도 같은 결과를 두 번 올리지 않게). 판독 오류=null(빈 목록 위장 금지).
+function raisedResultIds(ws) {
+  const cst = CL.readEnvelopeCandidatesState(ws);
+  if (cst.readError) return null;
+  const out = new Set(); for (const r of cst.rows) if (r && typeof r.fromResult === "string") out.add(r.fromResult);
+  for (const [id, cl] of claimDecisions(ws)) if (cl.decision === "raised") out.add(id); // 표식만 있고 기록이 아직 빠진 올림도 올림
+  return out;
+}
+function deliveredUndecided(ws, ctx) {
+  const c = ctx || {};
+  const rk = typeof c.repoKey === "string" && /^[0-9a-f]{16}$/.test(c.repoKey) ? c.repoKey : null;
+  if (!rk || !c.turnAnchor) return [];
+  const rs = readClassifyResults(ws); if (rs.readError) return null;
+  const raised = raisedResultIds(ws); if (raised === null) return null;
+  return [...rs.latest.values()].filter((r) => r.kind === "boundary" && r.status === "delivered" && r.deliveredTurn === c.turnAnchor && r.repoKey === rk && String(r.provider || "") === String(c.provider || "") && !raised.has(r.resultId) && !hasClaim(ws, r.resultId));
+}
+// [⑤ 2단계-가 · 검증 1~3회차 blocker] 결과 판단 표식(claim) — 한 결과의 판단(올림·안 올림)은 결과마다 하나인 표식 파일을 '없을 때만 만들기(wx)'로
+// 만든 쪽만 기록한다. 운영체제가 단 한 번만 성공시키는 동작이라 동시 실행·잠금 회수 경합과 무관하게 한 결과=한 판단이다(잠금·회수 없음 — 판단은 한 번
+// 내려지면 끝이라 회수할 것이 없다). 표식 안에 남길 기록(후보 행·결과 행)을 담아 두고, 표식만 만들고 기록 전에 꺼진 경우는 다음 판단·전달 기록 때
+// repairClaims 가 빠진 기록을 채운다(sup-5 — 읽기 함수에는 부작용 없음). 표식 판독 불가=판단된 것으로 본다(fail-closed).
+const CLAIMS_DIR = path.join(CLASSIFY_DIR, "claims");
+function claimDirFor(ws) { return path.join(CLAIMS_DIR, CL.wsKeyFor(ws)); }
+function claimFileFor(ws, resultId) { return path.join(claimDirFor(ws), String(resultId || "").replace(/[^0-9a-f]/g, "") + ".json"); }
+function hasClaim(ws, resultId) { try { fs.statSync(claimFileFor(ws, resultId)); return true; } catch (e) { return !(e && e.code === "ENOENT"); } }
+// 반환 "claimed"(내가 판단) | "taken"(이미 판단됨) | "io"(표식을 만들 수 없음)
+// [검증 4회차 blocker] 표식 자리에 바로 쓰면 '파일 생성 → 내용 쓰기' 사이에 꺼질 때 빈 표식이 남아(판단됨으로 막히는데 채울 내용 없음) 결과가 영구히 소비된다 —
+// 내용을 임시 파일에 다 쓴 뒤 '없을 때만 연결하기(link — 이미 있으면 EEXIST, 덮어쓰기 없음)'로 표식 자리에 붙인다. 연결 전 꺼짐=임시 파일만 남음(판단 안 됨 ·
+// 쓰레기는 repairClaims 가 치움) · 연결 뒤 꺼짐=완성된 표식.
+function claimResult(ws, resultId, claim) {
+  try { fs.mkdirSync(claimDirFor(ws), { recursive: true }); } catch { /* 아래가 판정 */ }
+  const fin = claimFileFor(ws, resultId);
+  const tmp = fin + "." + process.pid + "." + crypto.randomBytes(6).toString("hex") + ".tmp";
+  try { fs.writeFileSync(tmp, JSON.stringify(claim), { flag: "wx" }); } catch { try { fs.rmSync(tmp, { force: true }); } catch { /* 무해 */ } return "io"; }
+  try { fs.linkSync(tmp, fin); return "claimed"; }
+  catch (e) { return e && e.code === "EEXIST" ? "taken" : "io"; }
+  finally { try { fs.rmSync(tmp, { force: true }); } catch { /* 남은 임시 파일=다음 채우기 때 정리 */ } }
+}
+// 표식 목록(판독 불가 표식=claim null — 판단된 것으로 셈)
+// [검증 6회차 blocker] 부재와 판독 불가를 구분 — 폴더 없음=표식 없음 · 폴더·파일 판독 오류=readError(일시적일 수 있으니 '없음'으로 줄이지 않음 — 회복 뒤
+// 채워질 판단을 놓친다) · 내용 형식 불량=claim null(표식은 완성된 내용으로만 연결되고 다시 쓰이지 않으므로 형식 불량은 영구 — 채울 내용이 없어 늦게 덧붙지도 않음).
+function readClaimsState(ws) {
+  const out = []; let names = [];
+  try { names = fs.readdirSync(claimDirFor(ws)); } catch (e) { return { claims: out, readError: !(e && e.code === "ENOENT") }; }
+  let readError = false;
+  for (const n of names) {
+    if (!/^[0-9a-f]{16}\.json$/.test(n)) continue;
+    let raw; try { raw = fs.readFileSync(path.join(claimDirFor(ws), n), "utf8"); } catch { readError = true; out.push({ resultId: n.slice(0, 16), claim: null, readFailed: true }); continue; }
+    let o = null; try { o = JSON.parse(raw); } catch { o = null; }
+    out.push({ resultId: n.slice(0, 16), claim: o && typeof o === "object" ? o : null });
+  }
+  return { claims: out, readError };
+}
+function readClaims(ws) { return readClaimsState(ws).claims; }
+function claimDecisions(ws) { const m = new Map(); for (const c of readClaims(ws)) m.set(c.resultId, c.claim ? c.claim : { decision: "unknown" }); return m; }
+// 표식은 있는데 기록이 빠진 판단을 채운다(이미 있으면 건너뜀). 쓰기 경로(판단·전달)에서만 부른다.
+// [검증 4회차 blocker] 채우기가 겹치거나 원래 작성자가 늦게 깨어나 같은 결과 행이 두 번 붙어도, 장부 판독은 같은 결과의 첫 상신 행만 쓴다(contract-lib
+// readEnvelopeCandidatesState) — 늦은 덧붙임은 그 사이의 거절·재상신을 되돌리지 못한다. 채운 행에는 감사용 표지(repaired)만 단다(권위 차이 없음).
+// 결과 장부의 판단 행(올림·안 올림)은 끝 상태라 늦게 붙어도 상태가 같다.
+const CLAIM_TMP_STALE_MS = 60 * 60 * 1000;
+function repairClaims(ws) {
+  try { for (const n of fs.readdirSync(claimDirFor(ws))) { if (!n.endsWith(".tmp")) continue; const fp = path.join(claimDirFor(ws), n); try { if (Date.now() - fs.statSync(fp).mtimeMs > CLAIM_TMP_STALE_MS) fs.rmSync(fp, { force: true }); } catch { /* 무해 */ } } } catch { /* 폴더 없음 */ }
+  const cl = readClaims(ws).filter((c) => c.claim);
+  if (!cl.length) return { repaired: 0 };
+  const cst = CL.readEnvelopeCandidatesState(ws), rs = readClassifyResults(ws);
+  if (cst.readError || rs.readError) return { repaired: 0, readError: true };
+  let n = 0;
+  for (const { resultId, claim } of cl) {
+    if (claim.decision === "raised" && claim.candidateRow && !cst.rows.some((r) => r && r.fromResult === resultId)) { if (CL.appendEnvelopeCandidates(ws, [Object.assign({}, claim.candidateRow, { repaired: true, repairedAt: new Date().toISOString() })])) n++; }
+    const lr = rs.latest.get(resultId);
+    if (claim.resultRow && !(lr && lr.status === claim.decision)) { if (appendClassifyResults(ws, [claim.resultRow])) n++; }
+  }
+  return { repaired: n };
+}
+// [검증 5회차 blocker] 그 후보의 '올림' 표식 가운데 후보 장부에 아직 반영되지 않은 것(결과 id 목록) — 장부 판독 오류=null(알 수 없음).
+// 채우기가 실패한 채 같은 후보의 새 상신을 받으면, 나중에 채워지는 옛 판단 행이 그 결과의 첫 행이라 새 상신 칸을 덮는다 — 상신 쪽이 이것으로 막는다.
+// 표식 폴더·파일을 읽지 못하면(일시적일 수 있음) null — 놓친 표식이 회복 뒤 채워질 수 있으므로 '없음'으로 보지 않는다. 내용 형식이 불량한 표식은 채울 내용이
+// 없어 늦게 덧붙을 수 없으므로 세지 않는다(영구 불량 표식 하나가 모든 상신을 막지 않게).
+function unfilledRaisedClaims(ws, candidateId) {
+  const st = readClaimsState(ws);
+  if (st.readError) return null;
+  const mine = st.claims.filter((c) => c.claim && c.claim.decision === "raised" && c.claim.candidateId === candidateId);
+  if (!mine.length) return [];
+  const cst = CL.readEnvelopeCandidatesState(ws);
+  if (cst.readError) return null;
+  return mine.filter((c) => !cst.rows.some((r) => r && r.fromResult === c.resultId)).map((c) => c.resultId);
+}
+function resultStatusRow(ws, res, status, extra) { return Object.assign({ schema: "classify-result-v1", wsKey: CL.wsKeyFor(ws), repoKey: res.repoKey, resultId: res.resultId, kind: res.kind, status, ts: new Date().toISOString() }, extra || {}); }
+function markResultRaised(ws, res, candidateId, ctx) { return appendClassifyResults(ws, [resultStatusRow(ws, res, "raised", { candidateId: String(candidateId || ""), by: "implementer", turnAnchor: String((ctx && ctx.turnAnchor) || "") })]); }
+// 안 올림 — 이유 한 줄(8자~·민감 형태 금지) · 자체 상신 한도와 무관 · 거부=무기록
+function skipResult(ws, resultId, note, ctx, testHooks) {
+  const n = typeof note === "string" ? note.trim() : "";
+  if (!ctx || !ctx.ok) return { ok: false, reason: (ctx && ctx.reason) || "no-turn-anchor" };
+  if (n.length < SKIP_NOTE_MIN || n.length > CL.CONSTRAINT_WHY_MAX || /[\r\n\u2028\u2029]/.test(note)) return { ok: false, reason: "note-format" };
+  const ns = CL.safeBacklogAutoTitle(n); if (!ns.ok) return { ok: false, reason: "note-sensitive-" + ns.reasonKey };
+  try { repairClaims(ws); } catch { /* 최선 노력 */ }
+  const du = deliveredUndecided(ws, ctx);
+  if (du === null) return { ok: false, reason: "results-unreadable" };
+  const res = du.find((r) => r.resultId === String(resultId || ""));
+  if (!res) return { ok: false, reason: "not-delivered" };
+  const row = resultStatusRow(ws, res, "skipped", { note: n, by: "implementer", turnAnchor: String(ctx.turnAnchor) });
+  if (testHooks && typeof testHooks.beforeClaim === "function") testHooks.beforeClaim(); // 시험 전용 — 미판단 확인~표식 사이 끼어들기 재현
+  const cr = claimResult(ws, res.resultId, { schema: "classify-claim-v1", resultId: res.resultId, decision: "skipped", resultRow: row, by: "implementer", turnAnchor: String(ctx.turnAnchor), ts: row.ts });
+  if (cr === "taken") return { ok: false, reason: "not-delivered" }; // 그 사이 다른 판단이 먼저(무기록)
+  if (cr !== "claimed") return { ok: false, reason: "claim-io" };
+  if (!appendClassifyResults(ws, [row])) return { ok: true, resultId: res.resultId, pendingRepair: true }; // 판단은 표식에 남음 — 다음 판단 때 기록을 채움
+  return { ok: true, resultId: res.resultId };
+}
+// 전달 기록(전달 횟수 누적) — 다음 묶음(전달)이 부른다. 반환=쓰기 성공 여부.
+function markResultsDelivered(ws, results, ctx) {
+  const c = ctx || {};
+  try { repairClaims(ws); } catch { /* 최선 노력 */ }
+  if (!results || !results.length) return true;
+  return appendClassifyResults(ws, results.map((r) => resultStatusRow(ws, r, "delivered", { deliveredTurn: String(c.turnAnchor || ""), deliveries: (Number(r.deliveries) || 0) + 1, provider: String(c.provider || r.provider || ""), sessionId: String(c.sessionId || "") })));
+}
 function userConstraintIdFor(ws, repoKey, quote) { return CL.envelopeCandidateId("user-constraint", CL.wsKeyFor(ws) + "|" + repoKey + "|" + sha1(qNormOf(quote))); } // constraintAdd 와 같은 산식(같은 말=같은 후보)
 
 // ── 입력 집계 ── 반환 {ok, empty?, wsKey, repoKey, gen, virtual, provider, arm, items[], unavailable[], existing{...}, inputFp} | {ok:false, reason}
@@ -172,7 +290,9 @@ function classifyInput(ws, repo, opts) {
   const waiting = [];
   const rs = readClassifyResults(ws);
   if (rs.readError) return { ok: false, reason: "results-unreadable" }; // 판독 오류=빈 목록으로 줄이지 않음(같은 뜻 결과 중복 생성 방지 — 대기열 보존)
-  for (const r of rs.latest.values()) if (r.kind === "boundary" && r.status === "new" && r.repoKey === repoKey && sameCo(r)) waiting.push(r.quote);
+  const raised9 = raisedResultIds(ws);
+  if (raised9 === null) return { ok: false, reason: "candidates-unreadable" };
+  for (const r of rs.latest.values()) if (r.kind === "boundary" && (r.status === "new" || r.status === "delivered") && !raised9.has(r.resultId) && r.repoKey === repoKey && sameCo(r)) waiting.push(r.quote);
   const existing = { rulebook: cap(rulebook), rules: cap(rules), pending: cap(pending), declined: cap(declined), waiting: cap(waiting) };
   // 항목 번호(다시 강조의 itemRef 대상) — 종류별 머리글자+순번. 결과에는 번호와 그 문장을 함께 남긴다(번호는 실행마다 바뀔 수 있음).
   const refs = {};
@@ -418,9 +538,12 @@ function classifySummary(ws) {
   const last = runs.length ? runs[runs.length - 1] : null;
   // [묶음 2(⑤)] 분류 결과 수(이 저장소) — 판독 오류=null(0 으로 위장 금지)
   let results = null;
-  if (repoKey) { const rs = readClassifyResults(ws); if (!rs.readError) { results = { boundary: 0, emphasis: 0, style: 0 }; for (const r of rs.latest.values()) if (r.repoKey === repoKey) results[r.kind]++; } }
+  let boundaryStatus = null;
+  if (repoKey) { const rs = readClassifyResults(ws); const raisedS = raisedResultIds(ws); if (!rs.readError && raisedS !== null) { results = { boundary: 0, emphasis: 0, style: 0 }; boundaryStatus = { waiting: 0, raised: 0, skipped: 0, unhandled: 0, expired: 0 };
+    const claimsS = claimDecisions(ws);
+    for (const r of rs.latest.values()) { if (r.repoKey !== repoKey) continue; results[r.kind]++; if (r.kind !== "boundary") continue; const cS = claimsS.get(r.resultId); const st = raisedS.has(r.resultId) ? "raised" : (cS && cS.decision === "skipped" ? "skipped" : r.status); if (st === "new" || st === "delivered") boundaryStatus.waiting++; else if (boundaryStatus[st] !== undefined) boundaryStatus[st]++; } } }
   return { repoKey, queued: q ? q.length : null, held: held ? held.length : null, heldReasons: held ? held.reduce((a, w) => { const k = w.heldReason || "?"; a[k] = (a[k] || 0) + 1; return a; }, {}) : {},
-    lastTs: last ? String(last.ts || "") : "", lastOutcome: last ? String(last.outcome || "") : "", lastReason: last ? String(last.reason || "") : "", runs: runs.length, results };
+    lastTs: last ? String(last.ts || "") : "", lastOutcome: last ? String(last.outcome || "") : "", lastReason: last ? String(last.reason || "") : "", runs: runs.length, results, boundaryStatus };
 }
 
 // ── [묶음 2-나-2 2단계] 자동 계기(설계 §3-3 R4·§7 D2) — 캠페인 마감(검증 통과 마감 또는 상한 소진 마감) 때 대기열에 말이 있으면 실행.
@@ -622,8 +745,13 @@ function userWordsView(ws) {
   if (rk) {
     const rs = readClassifyResults(ws);
     if (!rs.readError) {
-      const mine = [...rs.latest.values()].filter((r) => r.repoKey === rk).sort((a, b) => String(b.ts || "").localeCompare(String(a.ts || "")));
-      const pick = (k) => mine.filter((r) => r.kind === k).slice(0, RESULTS_VIEW_MAX).map((r) => ({ id: r.resultId, status: r.status, quote: r.quote, why: r.why, ts: String(r.ts || ""), ...(r.seat ? { seat: r.seat } : {}), ...(r.bounds ? { bounds: r.bounds } : {}), ...(r.itemRef ? { itemText: String(r.itemText || "") } : {}) }));
+      const raisedV = raisedResultIds(ws) || new Set(); // 판독 실패=후보 장부 표시만 빠짐(결과 장부 상태는 그대로)
+      const claimsV = claimDecisions(ws); // 표식만 있고 기록이 빠진 판단도 화면에 그 판단으로
+      const firstTs = new Map(); for (const r of rs.rows) if (!firstTs.has(r.resultId)) firstTs.set(r.resultId, String(r.ts || ""));
+      const mine = [...rs.latest.values()].filter((r) => r.repoKey === rk).sort((a, b) => String(firstTs.get(b.resultId) || "").localeCompare(String(firstTs.get(a.resultId) || "")));
+      const st9 = (r) => { if (r.status !== "raised" && raisedV.has(r.resultId)) return "raised"; const cv = claimsV.get(r.resultId); if (cv && cv.decision === "skipped" && r.status !== "skipped") return "skipped"; return r.status; };
+      const note9 = (r) => (r.status === "skipped" && r.note) ? String(r.note) : (() => { const cv = claimsV.get(r.resultId); return cv && cv.decision === "skipped" && cv.resultRow && cv.resultRow.note ? String(cv.resultRow.note) : ""; })();
+      const pick = (k) => mine.filter((r) => r.kind === k).slice(0, RESULTS_VIEW_MAX).map((r) => ({ id: r.resultId, status: st9(r), quote: r.quote, why: r.why, ts: String(firstTs.get(r.resultId) || r.ts || ""), ...(r.seat ? { seat: r.seat } : {}), ...(r.bounds ? { bounds: r.bounds } : {}), ...(r.itemRef ? { itemText: String(r.itemText || "") } : {}), ...(note9(r) ? { note: note9(r) } : {}) }));
       results = { boundary: pick("boundary"), emphasis: pick("emphasis"), style: pick("style") };
     }
   }
@@ -640,6 +768,8 @@ module.exports = {
   CLASSIFY_KINDS, CLASSIFY_BOUNDS_MIN, CLASSIFY_BOUNDS_MAX, RESULT_STATUSES,
   classifyFileFor, seatsFileFor, resultsFileFor, classifyLockFileFor, armForProvider, rulesFieldFor, redactSensitiveForms,
   readClassifyRows, readSeatsState, readClassifyResults, appendClassifyResults, classifyResultIdFor, userConstraintIdFor,
+  raisedResultIds, deliveredUndecided, markResultRaised, skipResult, markResultsDelivered, SKIP_NOTE_MIN, resultStatusRow,
+  CLAIMS_DIR, claimFileFor, hasClaim, claimResult, readClaims, readClaimsState, claimDecisions, repairClaims, unfilledRaisedClaims,
   classifyInput, buildClassifyPrompt, parseClassifyOutput, commitClassify, bumpRetries, acquireClassifyLock, releaseClassifyLock,
   runClassify, classifySummary,
 };
