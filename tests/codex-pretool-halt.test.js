@@ -138,5 +138,62 @@ t("배선 — 종료 분기가 차례당 상한 뒤 일반 관문으로 이어�
   const onlyMiss = await run(0, ["PreToolUse"], true, true);
   assert.ok(onlyMiss.shown[0].msg.includes("등록돼 있지 않습니다") && !onlyMiss.shown[0].msg.includes("옛 명령 형식") && onlyMiss.installed === 1, "빠짐만=다시 설치 안내 " + onlyMiss.shown[0].msg);
   console.log(`  ✅ [${n}] 대시보드 갱신 제안(컴파일 산출물 실제 실행) — 옛 형식+등록 빠짐 겹침=두 원인 함께(경고·수동 안내·완료) · 형식만/빠짐만은 각자 문구`);
+  // [2026-10-10 사용자 실보고] 설치·갱신 흐름이 플러그인 조회 없이 사용자 훅 파일 상태만 본다 — 컴파일 산출물의 두 흐름을 가짜 함수로 실제 실행
+  {
+    const cutF = (head) => { const b = outSrc.indexOf(head); const e = outSrc.indexOf("\n}\n", b); assert.ok(b > 0 && e > b, "조각 추출 " + head); return outSrc.slice(b, e + 2); };
+    const flowBody = cutF("async function runCodexHookInstallFlow(") + cutF("async function maybeOfferCodexHookSetupBody(") + "\nreturn { runCodexHookInstallFlow, maybeOfferCodexHookSetupBody };";
+    const mk = (st) => {
+      const log = { shown: [], installed: 0, migration: 0, trustWarn: 0, silent: 0, pluginCalls: 0 };
+      const vscode = { window: {
+        showWarningMessage: async (msg, ...rest) => { log.shown.push({ kind: "warn", msg }); return undefined; },
+        showInformationMessage: async (msg, ...rest) => { const o = rest.find((x) => x && typeof x === "object"); log.shown.push({ kind: "info", msg: msg + (o && o.detail ? " | " + o.detail : "") }); const b = rest.filter((x) => typeof x === "string"); return st.pick && b.includes(st.pick) ? st.pick : undefined; }, // 확인 창 상세(detail)도 기록
+        showErrorMessage: async (msg) => { log.shown.push({ kind: "error", msg }); return undefined; },
+      } };
+      const fns = new Function("vscode", "tE", "codexHomeReady", "codexHookMigrationStatus", "offerCodexHookMigration", "codexUserHookStatus", "codexUserHooksFile", "refreshCodexPeekHookTrust", "dashboardCodexHookTrustCwd", "showCodexHookTrustWarning", "installCodexUserRuntimeHooks", "codexHookOfferGate", "dashboardWorkspace", "loadContract", "runCodexPluginCommand", "codexPeekPluginState", flowBody)(
+        vscode, (ko) => ko, Promise.resolve(),
+        () => ({ needed: !!st.migNeeded, count: 0, missingEvents: st.migNeeded ? ["PreToolUse"] : [] }),
+        async () => { log.migration++; },
+        () => ({ installed: !!st.installed, missing: st.installed ? [] : ["PreToolUse"], unreadable: st.unreadable || null }),
+        () => "C:/x/hooks.json",
+        async () => ({ queried: st.queried !== false, ready: !!st.ready }),
+        () => "",
+        async () => { log.trustWarn++; },
+        () => { log.installed++; return { ok: true }; },
+        { silentAutoFail() { log.silent++; } },
+        () => "C:/ws", () => ({ harnessMode: "codex-codex" }),
+        () => { log.pluginCalls++; return Promise.resolve({ code: 1, out: "", err: "stale marketplace" }); },
+        () => { log.pluginCalls++; return Promise.resolve({ present: false, enabled: false, pluginId: "", queryFailed: true }); });
+      return { fns, log };
+    };
+    const txt = (l) => l.shown.map((x) => x.msg).join(" || ");
+    // ① 실사고 모양: 훅은 등록됐고(추가 완료) 새 훅 미신뢰 · 플러그인 등록은 사라진 폴더를 가리킴 → 명시 진입이 플러그인 조회 실패로 멈추지 않고 신뢰 안내
+    let e = mk({ installed: true, ready: false });
+    assert.strictEqual(await e.fns.runCodexHookInstallFlow("ROOT"), false);
+    assert.ok(e.log.pluginCalls === 0 && e.log.trustWarn === 1 && !/플러그인 상태를 확인하지 못했습니다/.test(txt(e.log)), "★명시 설치 흐름=플러그인 조회 없음·신뢰 안내 " + JSON.stringify(e.log));
+    e = mk({ installed: true, ready: false });
+    await e.fns.maybeOfferCodexHookSetupBody("ROOT", false);
+    assert.ok(e.log.pluginCalls === 0 && e.log.trustWarn === 1, "★제안 흐름(명시)=플러그인 조회 없음·신뢰 안내 " + JSON.stringify(e.log));
+    // ② 훅 없음 → 설치 확인 창 → 설치(플러그인 명령 없음)
+    e = mk({ installed: false, pick: "설치" });
+    assert.strictEqual(await e.fns.runCodexHookInstallFlow("ROOT"), true);
+    assert.ok(e.log.installed === 1 && e.log.pluginCalls === 0 && /실행 훅 파일: C:\/x\/hooks\.json/.test(txt(e.log)) && !/마켓플레이스|codex-peek@/.test(txt(e.log)), "설치 창·설치 " + txt(e.log));
+    e = mk({ installed: false });
+    assert.ok((await e.fns.runCodexHookInstallFlow("ROOT")) === false && e.log.installed === 0, "취소=설치 안 함");
+    // ③ 훅 파일 판독 불가=파일을 바꾸지 않음(명시=알림 · 자동=조용 후퇴)
+    e = mk({ unreadable: "parse" });
+    assert.ok((await e.fns.runCodexHookInstallFlow("ROOT")) === false && e.log.installed === 0 && /설치 여부를 판정할 수 없어 파일을 바꾸지 않습니다/.test(txt(e.log)), "판독 불가=명시 안내");
+    e = mk({ unreadable: "read" });
+    await e.fns.maybeOfferCodexHookSetupBody("ROOT", true);
+    assert.ok(e.log.silent === 1 && e.log.shown.length === 0 && e.log.installed === 0, "자동 진입 판독 불가=조용 후퇴");
+    // ④ 빠진 훅·옛 형식=마이그레이션 안내 먼저(두 입구)
+    e = mk({ migNeeded: true });
+    await e.fns.runCodexHookInstallFlow("ROOT"); await e.fns.maybeOfferCodexHookSetupBody("ROOT", false);
+    assert.ok(e.log.migration === 2 && e.log.installed === 0 && e.log.pluginCalls === 0, "마이그레이션 최선행");
+    // ⑤ 자동 진입의 신뢰 조회 실패=팝업 없이 게이트만 되돌림
+    e = mk({ installed: true, ready: false, queried: false });
+    await e.fns.maybeOfferCodexHookSetupBody("ROOT", true);
+    assert.ok(e.log.silent === 1 && e.log.trustWarn === 0, "자동 진입 조회 실패=조용 후퇴");
+    n++; console.log(`  ✅ [${n}] [2026-10-10] 설치·갱신 흐름(컴파일 산출물 실제 실행) — 플러그인 조회 없이 사용자 훅 파일만: 등록됨+미신뢰=신뢰 안내 · 없음=설치 · 판독 불가=무변경 · 빠진 훅=마이그레이션 먼저 · 자동 조회 실패=조용`);
+  }
   console.log(`\n결과: ${n}/${n} 통과`);
 })().catch((e) => { console.error(e); process.exit(1); });
