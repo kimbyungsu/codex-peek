@@ -103,22 +103,73 @@ setInterval(() => {}, 1000);`);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-t("첫 확인이 진행 중이면 경보를 띄우지 않음(준비 완료 승인도 아님) · 확인 실패로 끝나면 경보 · 확인 전·진행 중 아님=경보 — 컴파일 산출물 실행", () => {
+t("첫 확인이 진행 중이면 노랑 '확인 중' 경보(빨강 아님·준비 완료 승인 아님) · 확인 실패로 끝나면 빨강으로 바뀜 · 정상이면 사라짐 — 컴파일 산출물 실행", () => {
   const body = slice("function syncCodexHookHealth(", "\n// 대시보드 프로젝트와 실제 작업 저장소가 다를 수 있다");
-  const cases = [];
-  const runSync = (snapshot, inflight) => {
+  const chk = slice("function codexHookTrustChecking(", "\nfunction codexHookHealth(");
+  const runSync = (snapshot, inflight, health, existing) => {
     const cache = new H.CodexHookTrustCache();
     if (inflight) cache.setQuery("C:/ws", Promise.resolve({}));
     let written = null;
     const fn = new Function("codexHomeIsReady", "withIntegrityLockExt", "readIntegrity", "normWs", "codexHookHealth", "tE", "codexHookEventsKo", "CODEX_PEEK_HOOK_NAME_LIST", "atomicWrite", "INTEGRITY_FILE", "codexHookTrustForWorkspace", "codexHookTrustCache", "codexHookTrustCwd",
-      body + "\nreturn syncCodexHookHealth;")(true, (f) => f(), () => [], (x) => x, () => ({ required: true, ready: false, reason: "hooks-unverified" }), (ko) => ko, () => "", "", (f, data) => { written = JSON.parse(data); }, "INTEG", () => snapshot, cache, (x) => x);
+      chk + "\n" + body + "\nreturn syncCodexHookHealth;")(true, (f) => f(), () => (existing || []).slice(), (x) => x, () => health || ({ required: true, ready: false, reason: "hooks-unverified" }), (ko) => ko, () => "", "", (f, data) => { written = JSON.parse(data); }, "INTEG", () => snapshot, cache, (x) => x);
     fn("C:/ws");
-    return written ? written.events.filter((e) => e.kind === "codex-hook-missing").length : 0;
+    return written ? written.events.filter((e) => e.kind === "codex-hook-missing") : (existing || []).filter((e) => e.kind === "codex-hook-missing");
   };
-  assert.strictEqual(runSync(null, true), 0, "★첫 확인 진행 중=경보 없음");
-  assert.strictEqual(runSync(null, false), 1, "확인 전·진행 중 아님=경보(종전)");
-  assert.strictEqual(runSync({ queried: false, ready: false, error: "timeout" }, true), 1, "이미 실패로 끝난 확인이 있으면 다시 확인 중이어도 경보 유지");
-  assert.strictEqual(runSync({ queried: false, ready: false, error: "timeout" }, false), 1, "확인 실패=경보");
+  const c1 = runSync(null, true);
+  assert.ok(c1.length === 1 && c1[0].severity === "warning" && c1[0].sig === "codex-hook:checking" && /확인 중/.test(c1[0].detailKo) && /보장되지 않습니다/.test(c1[0].detailKo), "★첫 확인 진행 중=노랑 '확인 중' " + JSON.stringify(c1));
+  const c2 = runSync(null, false);
+  assert.ok(c2.length === 1 && c2[0].severity === "error" && c2[0].sig === "codex-hook:hooks-unverified", "확인 전·진행 중 아님=빨강(종전)");
+  const c3 = runSync({ queried: false, ready: false, error: "timeout" }, true);
+  assert.ok(c3.length === 1 && c3[0].severity === "error", "이미 실패로 끝난 확인이 있으면 다시 확인 중이어도 빨강 유지");
+  // 바뀌는 순서: 확인 중(노랑) → 확인 실패 → 노랑은 빠지고 빨강 · 확인 중(노랑) → 정상 → 사라짐
+  const c4 = runSync({ queried: false, ready: false, error: "timeout" }, false, null, c1);
+  assert.ok(c4.length === 1 && c4[0].severity === "error" && c4[0].sig === "codex-hook:hooks-unverified", "★확인 실패=노랑이 빨강으로 바뀜 " + JSON.stringify(c4));
+  const c5 = runSync({ queried: true, ready: true }, false, { required: true, ready: true, reason: "healthy" }, c1);
+  assert.strictEqual(c5.length, 0, "★정상=노랑도 사라짐");
+  // 미신뢰로 확인됨(답 있음) → 빨강(신뢰 안 됨) — 노랑에서 바뀜
+  const c6 = runSync({ queried: true, ready: false }, false, { required: true, ready: false, reason: "hooks-untrusted" }, c1);
+  assert.ok(c6.length === 1 && c6[0].severity === "error" && c6[0].sig === "codex-hook:hooks-untrusted", "미신뢰=빨강");
+});
+
+const mkEl = (tag) => { const o = { tag, children: [], style: {}, attrs: {}, textContent: "", className: "", title: "", innerHTML: "", disabled: false, appendChild(c) { this.children.push(c); return c; }, setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k]; }, insertBefore(c) { this.children.unshift(c); }, replaceChildren() { this.children = []; }, addEventListener() {}, remove() {} }; return o; };
+const walkText = (root) => { const out = []; const w = (x) => { out.push(x.textContent || ""); out.push(x.innerHTML || ""); (x.children || []).forEach(w); }; w(root); return out.join(" | "); };
+
+t("대시보드 경보 줄 — 노랑 '훅 확인 중'은 근거 의심으로 세지 않고 '확인 중 — 끝나기 전엔 보장 안 됨'으로 보임 · 확인함 버튼 없음 — 컴파일 산출물(화면 스크립트) 실행", () => {
+  const i = src.indexOf('    safe(function(){\n    const ib = $("integrityBanner");');
+  const j = src.indexOf("\n    safe(function(){", i + 20);
+  assert.ok(i > 0 && j > i, "경보 줄 조각");
+  const ib = mkEl("div");
+  const el = (tag, cls, text) => { const e = mkEl(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const ev = { id: "x1", ack: false, severity: "warning", kind: "codex-hook-missing", sig: "codex-hook:checking", workspace: "C:/ws", detail: "확인 중" };
+  new Function("document", "$", "T", "d", "el", "vscode", "safe", src.slice(i, j))({ createElement: mkEl, createTextNode: (t) => Object.assign(mkEl("#text"), { textContent: String(t) }) }, (id) => (id === "integrityBanner" ? ib : null), (ko) => ko, { integrity: [ev] }, el, { postMessage() {} }, (f) => f());
+  const txt = walkText(ib);
+  assert.ok(/Codex 훅 확인 중 — 끝나기 전엔 모든 턴 검증이 보장되지 않음/.test(txt) && !/근거 의심/.test(txt), "경보 줄 " + txt.slice(0, 300));
+  assert.ok(/warn/.test(ib.className) && !/err/.test(ib.className), "노랑 테두리");
+  assert.ok(!/확인함/.test(txt) && /원인을 복구하면 사라져요/.test(txt), "상태형 — 확인함으로 닫지 않음");
+});
+
+t("대시보드 단계표 — 확인 중이면 '강제 훅 확인 중(최대 90초) — 끝나기 전엔 보장 안 됨 · 기다린 뒤 질문', 확인 안 됨이면 종전 '미확인' — 컴파일 산출물 실행", () => {
+  const i = src.indexOf('    safe(function(){\n      const ob=$("onboard");');
+  const j = src.indexOf("\n    // 기본지침도 언어 전환 hold", i);
+  assert.ok(i > 0 && j > i, "단계표 조각");
+  const run = (checking) => {
+    const els = {};
+    const $ = (id) => (els[id] = els[id] || mkEl("div"));
+    const d = { contract: { harnessMode: "codex-codex", codexVerifyMode: "always" }, codexReady: true, linkedId: "v", implementerId: "i", codexHookReady: false, codexHookChecking: checking, onboardDismissed: true };
+    new Function("document", "$", "T", "d", "safe", src.slice(i, j))({ createElement: mkEl }, $, (ko) => ko, d, (f) => f());
+    return els.ob4 ? els.ob4.innerHTML : "";
+  };
+  const a = run(true), b = run(false);
+  assert.ok(/Codex 강제 훅 확인 중\(최대 90초\) — 끝나기 전엔 모든 턴 검증이 보장되지 않음 · 기다린 뒤 질문을 시작하세요/.test(a), "확인 중 문구 " + a);
+  assert.ok(/Codex 강제 훅 미확인 — 이 상태에선 모든 턴 검증이 강제되지 않음/.test(b) && !/확인 중/.test(b), "미확인 문구 " + b);
+});
+
+t("상태 표시줄 — 노랑 분기가 '훅 확인 중'을 근거 의심과 따로 세고 이름을 붙임(소스 고정)", () => {
+  const ts = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
+  assert.ok(/const nHookChk = warns\.filter\(\(e\) => e\.kind === "codex-hook-missing"\)\.length;/.test(ts), "노랑 훅 건수");
+  assert.ok(/const nEvid = warns\.length - nVerdict - nMissing - nDrift - nMachine - nEnrich - nHookChk;/.test(ts), "근거 의심에서 제외");
+  assert.ok(/: nHookChk \? tE\("Codex 훅 확인 중","Checking Codex hooks"\)/.test(ts), "상태 표시줄 이름");
+  assert.ok(/codexHookChecking: codexHookTrustChecking\(ws, hookHealth\),/.test(ts), "화면 자료에 확인 중 판정");
 });
 
 (async () => {

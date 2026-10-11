@@ -470,8 +470,9 @@
 - 날짜: 2026-10-11 · 종류: 결함 수정(사용자 실보고) · 상태: 유효
 - 사고: Codex↔Codex 모드에서 'Codex 훅 신뢰 상태를 확인하지 못했습니다(hooks/list 응답 시간 초과)' 경보가 계속 유지되고, Codex 확장이 뜨는 데 수십 분이 걸림.
 - 실측: ① Codex 기록(~/.codex/logs_2.sqlite) — 확인용 실행 코어가 시작 뒤 첫 응답까지 4~6초, 훅 목록 요청을 처리하기 시작할 때까지 다시 16~23초 → 10초 상한으로는 하루 400회 가까이(밤새 포함 약 80초마다) 전부 시간 초과, 그때마다 실행 코어를 새로 띄움(원격 목록 받기 포함). ② VS Code 기록 — 두 창의 확장 실행 공간이 19:20부터 몇 초 간격으로 '응답 없음'. 주원인은 별도 확장(Codex 사용량 모니터, 사용자 프로젝트 D:\codex-usage-monitor)이 1분마다 지난 Codex 대화 1.6GB 를 처음부터 다시 읽어 창마다 15~22초 멈춤(실측) — 그 사이 우리 확인의 답도 처리되지 못함. 사용량 모니터는 사용자 결정으로 같이 고침(새로 붙은 부분만 읽기·읽는 동안 양보 — 그 저장소에 기록).
-- 결정: 기다리는 시간 10초→90초(답이 오면 바로 끝나는 상한) · 화면 갱신 경로의 다시 확인은 신뢰 기록 파일(~/.codex/config.toml — [hooks.state] trusted_hash)·훅 파일(hooks.json)의 크기·수정 시각이 바뀌면 바로, 그 밖은 전부 신뢰됨 30분·확인됐지만 미신뢰 5분·확인 실패 2→5→15→30분 · 사용자 확인·설치 흐름(강제)은 규칙과 무관하게 바로 · 첫 확인이 진행 중(답 기록 없음)일 때는 경보를 새로 띄우지 않음(준비 완료로 승인하지도 않음 — fail-closed 유지).
-- 정본: src/codex-hook-health.ts(codexHookTrustRecheckDue·캐시 지문·실패 횟수) · src/extension.ts(CODEX_HOOK_TRUST_QUERY_TIMEOUT_MS·codexHookTrustFingerprint·refreshCodexPeekHookTrust·syncCodexHookHealth 확인 중) · tests/codex-hook-trust-recheck.test.js(컴파일 산출물 실제 실행·가짜 실행 코어 12초 응답).
+- 결정: 기다리는 시간 10초→90초(답이 오면 바로 끝나는 상한) · 화면 갱신 경로의 다시 확인은 신뢰 기록 파일(~/.codex/config.toml — [hooks.state] trusted_hash)·훅 파일(hooks.json)의 크기·수정 시각이 바뀌면 바로, 그 밖은 전부 신뢰됨 30분·확인됐지만 미신뢰 5분·확인 실패 2→5→15→30분 · 사용자 확인·설치 흐름(강제)은 규칙과 무관하게 바로 · 첫 확인이 진행 중(답 기록 없음)일 때는 빨강 대신 노랑 '확인 중 — 끝나기 전엔 모든 턴 검증이 보장되지 않음'을 상태 표시줄·대시보드 경보 줄·단계표에 띄움(준비 완료로 승인하지 않음 — fail-closed 유지 · 확인이 끝나면 정상=사라짐, 문제=빨강으로 바뀜).
+- 사용자 결정(2026-10-11 '확인 중 표시'): 처음엔 확인 중 경보를 아예 띄우지 않게 했으나, 사용자 지적 '딜레이가 길면 정상이라고 판단하고 질문을 시작할 수 있다' — 대시보드를 안 열어 두면 상태 표시줄이 정상처럼 보이는 틈(창을 연 직후 20~30초·최대 90초)이 실제로 있어 노랑 '확인 중'으로 바꿈. 실제 검증 실행 여부는 이 확인이 아니라 Codex 의 훅 신뢰가 정한다(신뢰돼 있으면 첫 질문부터 검증이 돈다 — 이 확인은 알려 주는 장치).
+- 정본: src/codex-hook-health.ts(codexHookTrustRecheckDue·캐시 지문·실패 횟수) · src/extension.ts(CODEX_HOOK_TRUST_QUERY_TIMEOUT_MS·codexHookTrustFingerprint·refreshCodexPeekHookTrust·syncCodexHookHealth 확인 중) · tests/codex-hook-trust-recheck.test.js(컴파일 산출물 실제 실행·가짜 실행 코어 12초 응답·확인 중 노랑/실패 빨강/정상 사라짐·경보 줄·단계표 화면 스크립트 실행).
 - 찾는말: 훅 신뢰 확인 시간 초과, hooks/list 응답 시간 초과, 실행 코어 반복 실행, 확장 실행 공간 응답 없음, Codex 확장 늦게 뜸, 사용량 모니터
 
 ## D-2026-10-10-codex-hooks-no-plugin — Codex 훅 설치·갱신 흐름은 플러그인을 조회·설치하지 않는다(사용자 훅 파일만)

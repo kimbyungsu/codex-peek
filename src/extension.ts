@@ -226,6 +226,7 @@ interface BridgeState {
   implementerActualAge: string;
   codexHookReady: boolean;
   codexHookReason: CodexHookHealth["reason"];
+  codexHookChecking: boolean; // 첫 신뢰 확인 진행 중(단계표 '확인 중' 문구)
   modelPref: string;      // 저장된 선택 모델 ("" = 코덱스 기본값)
   reasoningPref: string;  // 저장된 선택 생각강도 ("" = 기본)
   modelPrefInherited: boolean; // C↔C 전용 pref가 없어 Claude 모드 검증 두뇌 설정을 상속 중
@@ -2881,6 +2882,7 @@ function computeState(turnsN: number): BridgeState {
     implementerActualAge,
     codexHookReady: hookHealth.ready,
     codexHookReason: hookHealth.reason,
+    codexHookChecking: codexHookTrustChecking(ws, hookHealth),
     modelPref: typeof pref.model === "string" ? pref.model : "",
     reasoningPref: typeof pref.reasoning === "string" ? pref.reasoning : "",
     modelPrefInherited: prefState.inherited,
@@ -3227,12 +3229,15 @@ function syncCodexHookHealth(ws: string | null): void {
       const events = readIntegrity() as any[];
       const wsMatch = (e: any) => !e.workspace || normWs(e.workspace) === normWs(ws);
       const health = codexHookHealth(ws);
-      // [2026-10-10] 첫 신뢰 확인이 아직 진행 중(답 없음)=확인 중 — 실패가 아니므로 경보를 새로 띄우지 않는다(준비 완료로 승인하지도 않음 ·
-      // 첫 확인은 이 PC 실측 30초 가까이 걸린다). 확인이 실패로 끝나면(답 기록이 생김) 종전대로 경보.
-      const checking = health.reason === "hooks-unverified" && !codexHookTrustForWorkspace(ws) && !!codexHookTrustCache.getQuery(normWs(codexHookTrustCwd(ws)));
-      const problem = health.required && !health.ready && health.reason !== "implementer-missing" && !checking;
-      const sig = `codex-hook:${health.reason}`;
-      const dKo = health.reason === "hooks-unverified"
+      // [2026-10-11 사용자 결정 '확인 중 표시'] 첫 신뢰 확인이 아직 진행 중(답 없음)=확인 중 — 실패가 아니므로 빨강 대신 노랑으로 띄운다.
+      // 아무것도 안 띄우면 상태 표시줄이 정상처럼 보여 사용자가 그 사이 질문을 시작할 수 있다(준비 완료로 승인하지도 않음 · 첫 확인은
+      // 이 PC 실측 20~30초·최대 90초). 확인이 끝나면 정상=사라짐, 문제=빨강 경보로 바뀜(같은 종류·다른 표지라 노랑은 자동으로 빠짐).
+      const checking = codexHookTrustChecking(ws, health);
+      const problem = health.required && !health.ready && health.reason !== "implementer-missing";
+      const sig = checking ? "codex-hook:checking" : `codex-hook:${health.reason}`;
+      const dKo = checking
+        ? "Codex Peek 훅 신뢰 확인 중입니다(창을 연 직후 20~30초, 최대 90초). 확인이 끝나기 전에는 모든 턴 검증이 보장되지 않습니다 — 끝날 때까지 기다린 뒤 질문을 시작하세요. 정상이면 이 표시는 사라지고, 문제가 있으면 빨간 경보로 바뀝니다."
+        : health.reason === "hooks-unverified"
         ? "Codex Peek 훅의 신뢰 상태를 확인하지 못했습니다. 조회 전·시간 초과·app-server 오류를 정상으로 승인하지 않습니다. Codex 실행 상태를 확인하고 Codex 설정 → Hook에서 등록된 훅 전부의 신뢰 여부를 검토하세요."
         : health.reason === "hooks-missing"
         ? `Codex Peek 사용자 훅(hooks.json)에 ${codexHookEventsKo(health.missingEvents)} 훅이 등록돼 있지 않습니다(이전 판으로 설치돼 빠짐 — 신뢰 문제가 아님). 대시보드에서 Codex 훅 설치(갱신)를 누르면 다시 등록되고, 그 뒤 Codex 설정 → Hook에서 새로 생긴 훅을 신뢰한 뒤 창을 리로드하세요. 그 전까지 승인 서고가 켜진 프로젝트의 Codex 구현 작업은 멈춥니다.`
@@ -3245,7 +3250,9 @@ function syncCodexHookHealth(ws: string | null): void {
         : health.reason === "session-missing"
         ? "Codex↔Codex 구현 세션 파일을 찾을 수 없어 훅 생존을 확인할 수 없습니다. 사용하려는 Codex 대화를 시작·재개하거나 프롬프트를 보내면 그 세션으로 구현 연결을 다시 고정합니다. 하네스가 새 세션을 임의 생성하지는 않습니다."
         : "Codex Peek 훅 전부의 신뢰 상태는 확인됐지만 현재 구현 세션에서 실제 lifecycle 훅 실행 기록이 없습니다. rollout 보조 감지는 초록 구현 연결만 옮기므로 '모든 턴 검증'을 정상으로 승인하지 않습니다. 사용하려는 Codex 대화를 다시 열거나 프롬프트를 보내 실제 훅 신호를 확인하세요.";
-      const dEn = health.reason === "hooks-unverified"
+      const dEn = checking
+        ? "Checking the Codex Peek hook trust state (20–30 s right after the window opens, up to 90 s). Until it finishes, verify-every-turn is not guaranteed — wait for it before starting a prompt. If all is well this notice disappears; if not, it turns into a red alert."
+        : health.reason === "hooks-unverified"
         ? "The Codex Peek hook trust state could not be verified. Pre-query, timeout, and app-server errors are not approved as healthy. Check Codex and review all registered hooks under Codex Settings → Hooks."
         : health.reason === "hooks-missing"
         ? `The Codex Peek user hooks file (hooks.json) has no ${(health.missingEvents||[]).join("·")||"required"} hook registered (missing from an older install — not a trust issue). Use install (update) Codex hooks in the dashboard to register it, then trust the new hook under Codex Settings → Hooks and reload the window. Until then Codex implementation work halts on projects with an approved archive.`
@@ -3260,7 +3267,7 @@ function syncCodexHookHealth(ws: string | null): void {
         : "All Codex Peek hooks are trusted, but no lifecycle execution exists for the current implementer session. The rollout fallback moves only the green implementer link and does not approve 'verify every turn' as enforced. Reopen the Codex conversation or send a prompt to obtain a real hook signal.";
       const kept = events.filter((e) => e.kind !== KIND || !wsMatch(e) || (problem && e.sig === sig && !e.ack));
       const present = kept.some((e) => e.kind === KIND && wsMatch(e));
-      if (problem && !present) kept.push({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, ack: false, ts: new Date().toISOString(), session: "", workspace: ws, kind: KIND, severity: "error", detail: tE(dKo, dEn), detailKo: dKo, detailEn: dEn, sig });
+      if (problem && !present) kept.push({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, ack: false, ts: new Date().toISOString(), session: "", workspace: ws, kind: KIND, severity: checking ? "warning" : "error", detail: tE(dKo, dEn), detailKo: dKo, detailEn: dEn, sig });
       if (kept.length !== events.length || kept.some((e, i) => e !== events[i])) atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: kept.slice(-50) }));
     });
   } catch { /* best-effort */ }
@@ -3452,6 +3459,12 @@ function codexHookTrustForWorkspace(ws:string):CodexHookTrustSnapshot|null {
   return codexHookTrustCache.getSnapshot(normWs(codexHookTrustCwd(ws)))||null;
 }
 type CodexHookHealth = { required: boolean; ready: boolean; missingEvents?: string[]; reason: "not-required" | "healthy" | "implementer-missing" | "hooks-unverified" | "hooks-untrusted" | "hooks-missing" | "session-missing" | "turn-unverifiable" | "heartbeat-missing" | "heartbeat-stale"; latestTurnId: string; heartbeatTurnId: string };
+// 첫 신뢰 확인이 진행 중인가(답 기록 없음+조회 진행 중) — 경보 색(노랑)과 대시보드 단계표 문구가 같은 판정을 쓴다. 준비 판정과는 무관(승인 아님).
+function codexHookTrustChecking(ws: string | null, health?: CodexHookHealth): boolean {
+  if (!ws) return false;
+  const h = health || codexHookHealth(ws);
+  return h.reason === "hooks-unverified" && !codexHookTrustForWorkspace(ws) && !!codexHookTrustCache.getQuery(normWs(codexHookTrustCwd(ws)));
+}
 function codexHookHealth(ws: string | null, rawLink?: any): CodexHookHealth {
   if (!ws || loadContract(ws).harnessMode !== "codex-codex") return { required: false, ready: true, reason: "not-required", latestTurnId: "", heartbeatTurnId: "" };
   const snap9=codexHookTrustForWorkspace(ws);
@@ -8912,7 +8925,7 @@ class Dashboard {
         step("ob1", codexReady, codexReady?T("Codex 준비됨","Codex ready"):T("Codex 경로 미고정 — PATH의 codex로 시도","Codex path not pinned — trying codex on PATH"), {cmd:"openSettings"}, codexReady?"":T("openai.chatgpt 확장이 있으면 보통 자동 · standalone CLI면 PATH로 동작(안 뜨면 codexBridge.codexPath 지정)","usually automatic with the openai.chatgpt extension · standalone CLI works via PATH (set codexBridge.codexPath if not detected)"));
         step("ob2", linked, linked?T("Codex 세션 연결됨","Codex session linked"):T("Codex 세션 미연결","No Codex session linked"), {go:"cands"}, linked?"":T("연결할 세션 고르기","pick a session to link"));
         step("ob3", vOn, vOn?(T("검증 켜짐 (","verify on (")+(vmEffOb||"off")+")"):T("검증 꺼짐","verify off"), {go:"segVerify"}, vOn?"":T("검증 모드 켜고 저장","turn on a verify mode and save"));
-        const ob4=$("ob4"); if(ob4){ ob4.style.display=ccMode?"":"none"; if(ccMode)step("ob4",hookReady,hookReady?T("현재 구현 세션에서 Codex 강제 훅 확인됨","Codex enforcement hook confirmed in the current implementer session"):T("Codex 강제 훅 미확인 — 이 상태에선 모든 턴 검증이 강제되지 않음","Codex enforcement hook not confirmed — verify-every-turn is not enforced"),{cmd:"installCodexHooks"},hookReady?"":T("Codex 훅 설치·훅 전부 신뢰·창 리로드 → 사용할 대화 시작·재개 시 자동 고정","install the Codex hooks, trust all of them, reload the window → starting or resuming a conversation auto-pins it")); }
+        const ob4=$("ob4"); if(ob4){ ob4.style.display=ccMode?"":"none"; if(ccMode)step("ob4",hookReady,hookReady?T("현재 구현 세션에서 Codex 강제 훅 확인됨","Codex enforcement hook confirmed in the current implementer session"):(d.codexHookChecking?T("Codex 강제 훅 확인 중(최대 90초) — 끝나기 전엔 모든 턴 검증이 보장되지 않음 · 기다린 뒤 질문을 시작하세요","Checking the Codex enforcement hook (up to 90 s) — verify-every-turn is not guaranteed until it finishes · wait before starting a prompt"):T("Codex 강제 훅 미확인 — 이 상태에선 모든 턴 검증이 강제되지 않음","Codex enforcement hook not confirmed — verify-every-turn is not enforced")),{cmd:"installCodexHooks"},hookReady?"":T("Codex 훅 설치·훅 전부 신뢰·창 리로드 → 사용할 대화 시작·재개 시 자동 고정","install the Codex hooks, trust all of them, reload the window → starting or resuming a conversation auto-pins it")); }
       }
     });
     // 기본지침도 언어 전환 hold(계약 카드와 동일 원리) — 편집 중 언어가 바뀌면 보던 언어 화면 유지, 저장은 보던 슬롯으로.
@@ -9076,7 +9089,8 @@ class Dashboard {
         const nDrift = warnEvs.filter(function(e){return e.kind==="brain-drift";}).length; // 두뇌 설정(모델/추론) 어긋남 — 검증과 별개 라벨
         const nMachine = warnEvs.filter(function(e){return e.kind==="machine-verdict";}).length; // P-12 2c 기계 판독 강등·정정 — 판정 계열(근거 의심과 구분)
         const nEnrich = warnEvs.filter(function(e){return e.kind==="enrich-parked"||e.kind==="enrich-quarantined";}).length; // 자동 보강 알림(멈춤·장부 격리) — 근거 의심과 구분
-        const nEvid = warnEvs.length - nVerdict - nMissing - nDrift - nMachine - nEnrich; // 근거(evidence-*) 계열
+        const nHookChk = warnEvs.filter(function(e){return e.kind==="codex-hook-missing";}).length; // [2026-10-11] 훅 신뢰 첫 확인 중(노랑) — 근거 의심과 구분
+        const nEvid = warnEvs.length - nVerdict - nMissing - nDrift - nMachine - nEnrich - nHookChk; // 근거(evidence-*) 계열
         const errParts = [];
         if (nFail) errParts.push(T("검증 실패 "+nFail+"건","verify failed "+nFail)); // 빨강 — Codex 결론이 통과 아님(실패)
         var nSessImpl = errEvs.filter(function(e){return e.kind==="session-missing" && e.sig==="session-missing:implementer";}).length; // [2026-10-09] 구현 세션 고정 전(검증 세션은 있음)을 '세션 없음'으로 뭉뚱그리지 않음
@@ -9084,6 +9098,7 @@ class Dashboard {
         if (nHook) errParts.push(T("Codex 구현 훅 미작동 "+nHook+"건","Codex implementer hook inactive "+nHook));
         if (nIncomplete) errParts.push(T("검증 미완 "+nIncomplete+"건","unverified "+nIncomplete)); // 빨강 — 검증 자체가 안 일어남
         const warnParts = [];
+        if (nHookChk) warnParts.push(T("Codex 훅 확인 중 — 끝나기 전엔 모든 턴 검증이 보장되지 않음","Checking Codex hooks — verify-every-turn not guaranteed until done")); // 노랑 — 확인이 끝나면 사라지거나 빨강으로 바뀜
         if (nVerdict) warnParts.push(T("Codex 보류·불가 "+nVerdict+"건","Codex hold/unable "+nVerdict)); // 노랑 — 통과도 실패도 아닌 보류/불가/정보부족
         if (nMissing) warnParts.push(T("판정 표지 없음 "+nMissing+"건","no verdict line "+nMissing)); // 마지막 '검증:' 줄 없음 → 색 표시 빔
         if (nMachine) warnParts.push(T("기계 판독 강등·정정 "+nMachine+"건","machine reading demoted/corrected "+nMachine)); // 지적 블록↔판정 불일치(근거 의심 아님 — 2차 [주의])
@@ -10254,9 +10269,11 @@ export function activate(context: vscode.ExtensionContext): void {
       const nDrift = warns.filter((e) => e.kind === "brain-drift").length; // 두뇌 설정 어긋남 — 검증 근거와 무관(배너와 동일 분리)
       const nMachine = warns.filter((e) => e.kind === "machine-verdict").length; // P-12 2c 기계 판독 강등·정정 — 판정 계열(근거 의심 오분류 방지 — 2차 [주의])
       const nEnrich = warns.filter((e) => e.kind === "enrich-parked" || e.kind === "enrich-quarantined").length; // 자동 보강 알림 — 근거 의심과 구분(배너와 동일 분리)
-      const nEvid = warns.length - nVerdict - nMissing - nDrift - nMachine - nEnrich;
-      const kinds = [nVerdict > 0, nMissing > 0, nEvid > 0, nDrift > 0, nMachine > 0, nEnrich > 0].filter(Boolean).length;
+      const nHookChk = warns.filter((e) => e.kind === "codex-hook-missing").length; // [2026-10-11] 훅 신뢰 첫 확인 중 — 근거 의심과 구분(배너와 동일 분리)
+      const nEvid = warns.length - nVerdict - nMissing - nDrift - nMachine - nEnrich - nHookChk;
+      const kinds = [nVerdict > 0, nMissing > 0, nEvid > 0, nDrift > 0, nMachine > 0, nEnrich > 0, nHookChk > 0].filter(Boolean).length;
       const label = kinds > 1 ? tE("Codex 주의","Codex warnings")
+                  : nHookChk ? tE("Codex 훅 확인 중","Checking Codex hooks")
                   : nVerdict ? tE("Codex 보류·불가","Codex hold/unable")
                   : nMissing ? tE("Codex 표지 없음","Codex no verdict line")
                   : nMachine ? tE("기계 판독 강등·정정","machine reading demoted/corrected")
@@ -10264,6 +10281,7 @@ export function activate(context: vscode.ExtensionContext): void {
                   : nEnrich ? tE("자동 보강 알림","auto-enrich notice")
                   : tE("Codex 근거 의심","Codex evidence doubt");
       const parts: string[] = [];
+      if (nHookChk) parts.push(tE(`훅 확인 중 — 끝나기 전엔 모든 턴 검증 보장 안 됨`,`checking hooks — verify-every-turn not guaranteed yet`));
       if (nVerdict) parts.push(tE(`보류·불가 ${nVerdict}건`,`hold/unable ${nVerdict}`));
       if (nMissing) parts.push(tE(`판정 표지 없음 ${nMissing}건`,`no verdict line ${nMissing}`));
       if (nMachine) parts.push(tE(`기계 판독 강등·정정 ${nMachine}건`,`machine demoted/corrected ${nMachine}`));
