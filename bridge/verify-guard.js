@@ -281,9 +281,16 @@ process.stdin.on("end", () => {
   }
   const checkOk = check.ok;
   const rcTurnAnchor = (anchorObj && (anchorObj.constraintAnchor || anchorObj.ts)) || String(lastUserTs || "");
+  // [RULE-SUPPLY-CORRECTION ⑤ 3단계] 분류 결과 판단 관문 — 다른 종료 조건이 모두 통과한 자리에서만(검증 안내가 먼저). 반복 상한·경보는 classify.js 가 소유.
+  const classifyGate = () => {
+    if (!anchorObj || !anchorObj.constraintAnchor) return null;
+    try { return require("./classify.js").classifyStopGate(ws, { turnAnchor: String(anchorObj.constraintAnchor), repoKey: String(anchorObj.constraintRepoKey || ""), provider: "claude", sessionId: claudeSession || "" }, { lang: loadLang() }); } catch { return null; }
+  };
+  const blockClassify = (cg) => { process.stdout.write(JSON.stringify({ decision: "block", reason: cg.block })); process.exit(0); };
   const recordRuleCheck = (closedBy) => { if (eff.mode !== "required" || !lastReply) return; try { appendRuleCheckRow(ws, { ts: new Date().toISOString(), host: "claude", session: claudeSession || "", turnAnchor: String(rcTurnAnchor), rulesFp: eff.rulesFp, rulesN: eff.rulesN, marks: closedBy === "check" && check.verdict ? check.verdict.marks : [], closedBy }); } catch { /* 가시성 채널 — 종료를 막지 않음 */ } };
   // 검증 불필요 또는 검증됨 → 통과 + 이번 턴 재검증 카운터 리셋.
   if ((!needVerify || verified) && residualOk && judgeOk && checkOk) {
+    { const cg = classifyGate(); if (cg) blockClassify(cg); }
     recordRuleCheck("check");
     clearAttempts(attemptKey);
     try { writePhase("done", { session: claudeSession, workspace: ws }); } catch { /* 진행표시 best-effort */ } // 턴 정상 종료(완료)
@@ -309,6 +316,7 @@ process.stdin.on("end", () => {
   // 앞 캠페인의 '즉시 재검증' 잔여는 AND 하지 않는다 — 상한 턴은 검증 호출이 거부돼 이 턴에 소비할 수 없고, 막으면 이 캠페인 자신의 잔여 마커까지 못 남긴다.
   // 그 잔여는 목록형 마커로 남아 다음 턴들의 종료를 계속 막는다(종전 계약 — 시험 verify-sequential [3c]).
   if (capReached && capCloseout.ok && checkOk && judgeOk) {
+    { const cg = classifyGate(); if (cg) blockClassify(cg); } // 마감 수락(잔여 마커 기록 등) 전에 — 막히면 다음 종료에서 같은 마감을 다시 수락
     let wroteOk = true;
     if (capCloseout.residualRisk === "now") { // 판단을 실행으로 결속: 마커(다음 턴 종료 차단 재료)+노랑 경보 — 기록 실패=마감 미수락(fail-closed·1회차 blocker②)
       const evLines = (handoffCtx && Array.isArray(handoffCtx.evidence) ? handoffCtx.evidence : []).map((e) => `${e.key} ${e.title}`);
@@ -350,6 +358,7 @@ process.stdin.on("end", () => {
         detailEn: "This turn ended without the rule self-check block (repeat-block cap released) — recorded as 'missing' on the ledger." }, { supersedeSameKindWs: true }); } catch { /* best-effort */ }
       // 자가점검만 실패한 턴(검증·잔여·판단·상한은 모두 정상)은 노랑 1건으로 끝난다 — 거짓 verify-incomplete 빨강 금지(1회차 blocker③)
       if ((!needVerify || verified) && residualOk && judgeOk && !capReached && !residualWriteFailed) {
+        { const cg = classifyGate(); if (cg) blockClassify(cg); }
         clearAttempts(attemptKey);
         try { writePhase("done", { session: claudeSession, workspace: ws }); } catch { /* best-effort */ }
         process.exit(0);

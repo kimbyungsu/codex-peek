@@ -167,7 +167,7 @@ t("대시보드 단계표 — 확인 중이면 '강제 훅 확인 중(최대 90�
 t("상태 표시줄 — 노랑 분기가 '훅 확인 중'을 근거 의심과 따로 세고 이름을 붙임(소스 고정)", () => {
   const ts = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
   assert.ok(/const nHookChk = warns\.filter\(\(e\) => e\.kind === "codex-hook-missing"\)\.length;/.test(ts), "노랑 훅 건수");
-  assert.ok(/const nEvid = warns\.length - nVerdict - nMissing - nDrift - nMachine - nEnrich - nHookChk;/.test(ts), "근거 의심에서 제외");
+  assert.ok(/const nEvid = warns\.length - nVerdict - nMissing - nDrift - nMachine - nEnrich - nHookChk(?: - \w+)*;/.test(ts), "근거 의심에서 제외"); // 뒤에 다른 노랑 종류가 더해져도(⑤ 3단계 nClsUnd 등) 훅 확인 중은 빠짐
   assert.ok(/: nHookChk \? tE\("Codex 훅 확인 중","Checking Codex hooks"\)/.test(ts), "상태 표시줄 이름");
   assert.ok(/codexHookChecking: codexHookTrustChecking\(ws, hookHealth\),/.test(ts), "화면 자료에 확인 중 판정");
 });

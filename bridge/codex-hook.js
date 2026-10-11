@@ -656,6 +656,8 @@ function onStop(j, ws, sid, c) {
   const sRes = readCodexTurnStrict(sid, ws);
   if (!sRes.ok) { block(t(`이번 턴 상태를 읽을 수 없습니다(${sRes.reason}). 구현 대화에서 새 프롬프트를 한 번 보내 턴 상태를 재기록한 뒤 이어가세요.`, `Cannot read this turn's state (${sRes.reason}). Send one new prompt in the implementer conversation to rewrite the turn state, then continue.`)); return; }
   const s = sRes.turn;
+  // [RULE-SUPPLY-CORRECTION ⑤ 3단계] 분류 결과 판단 관문 — 다른 종료 조건이 모두 통과한 자리에서만(검증 안내가 먼저). 반복 상한·경보는 classify.js 가 소유.
+  const clsGate9 = () => { try { return require("./classify.js").classifyStopGate(ws, { turnAnchor: String(j.turn_id || s.turnId || ""), repoKey: String((readCodexActive(sid) || {}).constraintRepoKey || ""), provider: "codex", sessionId: sid }, { lang: loadLang() }); } catch { return null; } };
   // [4b-2 §4-③ 미호출=중단] 서고 활성+불신 플래그=이 프로젝트의 Codex 구현 작업 중단(후퇴 금지) —
   // 재개 조건=Codex 훅 신뢰 승인 후 PreToolUse가 실제 관측되면(onPreTool이 플래그 자동 해제) 재개.
   if (typeof c.archiveHash === "string" && c.archiveHash) {
@@ -689,7 +691,7 @@ function onStop(j, ws, sid, c) {
   else if(eff.mode==="required"&&lastReply){ const v=ruleCheckVerdict(lastReply,eff); check=v.ok?{ok:true,why:"",verdict:v}:{ok:false,why:v.reason,verdict:v}; }
   const checkOk=check.ok;
   const recordRuleCheck=(closedBy)=>{ if(eff.mode!=="required"||!lastReply) return; try{appendRuleCheckRow(ws,{ts:new Date().toISOString(),host:"codex",session:sid,turnAnchor:turnIdRC,rulesFp:eff.rulesFp,rulesN:eff.rulesN,marks:closedBy==="check"&&check.verdict?check.verdict.marks:[],closedBy});}catch{/* 가시성 채널 */} };
-  if(!needed&&residualOk&&judgeOk&&checkOk){recordRuleCheck("check");try{writePhase("done",{session:sid,workspace:ws});}catch{} return;} // 잔여 미소비·자가점검 누락이면 검증 불필요 턴이라도 아래 차단 흐름으로
+  if(!needed&&residualOk&&judgeOk&&checkOk){ const cg9=clsGate9(); if(cg9){block(cg9.block);return;} recordRuleCheck("check");try{writePhase("done",{session:sid,workspace:ws});}catch{} return;} // 잔여 미소비·자가점검 누락이면 검증 불필요 턴이라도 아래 차단 흐름으로
   // 신선도에서 lastActionAt 제거(P-6 자기무효화 해소) — 검증 결과를 '회수하는' 도구 호출이 proof를 낡게
   // 만들지 않는다. 실제 파일 변경(dirty mtime)과 턴 시작만 본다. 커밋 은닉·회수 정당성은 durableProofGate의
   // HEAD OID·영수증 결속이 담당한다.
@@ -699,7 +701,7 @@ function onStop(j, ws, sid, c) {
   // '반영중' 고아 잔존(모드 불일치 없이도) ②자동 전환 가드(phaseBusy)가 정상 완료 직후를 활성 턴으로 오인해
   // 다음 Claude 질문을 최대 25분 오차단(구현검증 1차 지적 2)의 원인. 검증 답 회수~Stop 사이의 '반영중'은
   // cmdAsk가 그대로 기록하므로 표시 흐름은 유지된다.
-  if(gate.ok&&residualOk&&judgeOk&&checkOk){recordRuleCheck("check");try{writePhase("done",{session:sid,workspace:ws});}catch{} return;}
+  if(gate.ok&&residualOk&&judgeOk&&checkOk){ const cg9=clsGate9(); if(cg9){block(cg9.block);return;} recordRuleCheck("check");try{writePhase("done",{session:sid,workspace:ws});}catch{} return;}
   const turnId=String(j.turn_id||s.turnId||"");
   const campaignId=turnId ? "cc:"+sid+":"+turnId : "";
   const progress=verifyCampaignProgress(ws,campaignId,effectiveVerifyBudget(c));
@@ -710,7 +712,7 @@ function onStop(j, ws, sid, c) {
   const capCloseout=capReached?stopCloseoutCheck(ws,campaignId,handoffCtx,since,loadLang()==="en"?"en":"ko"):null; // [RULE-SUPPLY 묶음 3 §4] 답 본문 파싱 대신 제출·결속된 마감 기록(마지막 변경 뒤 제출+지금 문맥 재검사)
   const capOpen=capReached&&!(capCloseout&&capCloseout.ok); // 상한인데 유효한 마감 기록이 없음(누락 경보·제출 안내는 이때만)
   let residualWriteFailed=false;
-  if(capReached&&capCloseout.ok&&checkOk&&judgeOk){ // [RULE-COMPLIANCE] 마감 턴도 규칙 자가점검 · [묶음 3 · 검증 1회차 f-a812cc41] 판단 관문과 AND — 앞 캠페인 잔여 재검증은 상한 턴에 소비 불가라 다음 턴으로 이어짐(Claude 경로 주석 참조)
+  if(capReached&&capCloseout.ok&&checkOk&&judgeOk){ { const cg9=clsGate9(); if(cg9){block(cg9.block);return;} } // [⑤ 3단계] 마감 수락 전에 · [RULE-COMPLIANCE] 마감 턴도 규칙 자가점검 · [묶음 3 · 검증 1회차 f-a812cc41] 판단 관문과 AND — 앞 캠페인 잔여 재검증은 상한 턴에 소비 불가라 다음 턴으로 이어짐(Claude 경로 주석 참조)
     let wroteOk=true;
     if(capCloseout.residualRisk==="now"){ const evLines=(handoffCtx&&Array.isArray(handoffCtx.evidence)?handoffCtx.evidence:[]).map((e)=>`${e.key} ${e.title}`); wroteOk=addResidual(ws,{campaignId,sourceAsk:(handoffCtx&&handoffCtx.source)||"",evidence:evLines,ts:new Date().toISOString()}); }
     if(wroteOk&&capCloseout.residualRisk==="now"){ const ko=`마감 기록 판단 "즉시 재검증" — 다음 턴 첫 검증이 통과할 때까지 완료 보고가 차단됩니다(요청문에 캠페인 id ${campaignId} 포함).`; const en=`Closeout record call "Verify now" — completion reports stay blocked until the next turn's first verification passes (its request must include campaign id ${campaignId}).`; let evOk=false; try{ evOk=appendIntegrityEvent({ts:new Date().toISOString(),session:sid,workspace:ws,kind:"verify-residual-now",severity:"warning",detail:t(ko,en),detailKo:ko,detailEn:en},{supersedeSameKindWs:true})===true; }catch{ evOk=false; } wroteOk=evOk; } // [2회차 blocker①] 노랑 경보 기록도 성공 조건(반환값 검사)
@@ -733,7 +735,7 @@ function onStop(j, ws, sid, c) {
   }
   if(n>MAX_VERIFY_ATTEMPTS){
     if(eff.mode==="required"&&!checkOk){ recordRuleCheck("attempt-cap"); try{appendIntegrityEvent({ts:new Date().toISOString(),session:sid,workspace:ws,kind:"rule-check-missed",severity:"warning",detail:"이 턴이 규칙 자가점검 블록 없이 끝났습니다(반복 차단 상한 해제) — 장부에 '미기재'로 남았습니다.",detailKo:"이 턴이 규칙 자가점검 블록 없이 끝났습니다(반복 차단 상한 해제) — 장부에 '미기재'로 남았습니다.",detailEn:"This turn ended without the rule self-check block (repeat-block cap released) — recorded as 'missing' on the ledger."},{supersedeSameKindWs:true});}catch{}
-      if((gate.ok||!needed)&&residualOk&&judgeOk&&!capReached&&!residualWriteFailed){ try{writePhase("done",{session:sid,workspace:ws});}catch{} return; } } // [RULE-COMPLIANCE §3 C] 자가점검만 실패=노랑 1건으로 종료(거짓 빨강 금지)
+      if((gate.ok||!needed)&&residualOk&&judgeOk&&!capReached&&!residualWriteFailed){ const cg9=clsGate9(); if(cg9){block(cg9.block);return;} try{writePhase("done",{session:sid,workspace:ws});}catch{} return; } } // [RULE-COMPLIANCE §3 C] 자가점검만 실패=노랑 1건으로 종료(거짓 빨강 금지)
     if((residual&&!residualOk)||residualWriteFailed){ const ids9=residualWriteFailed?campaignId:residual.items.map((x)=>x.campaignId).join(", "); const ko=residualWriteFailed?`"즉시 재검증" 판단(캠페인 ${ids9})의 마커 기록에 실패해 실행 강제를 걸지 못한 채 턴이 끝났습니다 — 디스크를 확인한 뒤 응답을 다시 마치면 제출된 마감 기록으로 저장을 재시도합니다.`:`"즉시 재검증" 판단(캠페인 ${ids9})이 이행되지 않은 채 턴이 끝났습니다 — 다음 턴에도 계속 차단됩니다.`; const en=residualWriteFailed?`The "Verify now" marker for campaign ${ids9} could not be written, so enforcement is not armed — check the disk; finishing the reply again retries the write with the submitted closeout record.`:`The "Verify now" call (campaign ${ids9}) was not carried out before the turn ended — it keeps blocking next turns.`; try{appendIntegrityEvent({ts:new Date().toISOString(),session:sid,workspace:ws,kind:"verify-residual-now",severity:"error",detail:t(ko,en),detailKo:ko,detailEn:en},{supersedeSameKindWs:true});}catch{} try{writePhase("incomplete",{session:sid,workspace:ws});}catch{} return; }
     if(capOpen){
       const ko=(handoffCtx&&handoffCtx.passNoFindings)?`검증 상한 ${round} 도달 — 마지막 판정은 통과였고 열린 지적도 없지만, 통과 이후의 수정이 검증되지 않은 채 턴이 끝났습니다(잔여 수정=미검증). 다음 턴 첫 검증이 이 잔여를 닫으면 해소됩니다.`:`검증 상한 ${round}에 도달했지만 마지막 지적의 수용·반박·보관함·사용자 판단 분류(마감 기록)가 제출되지 않았습니다. 이 빨강은 그냥 지나치면 안 됩니다. 구현 담당이 마감 기록을 제출한 뒤에만 작업을 닫으세요.`;

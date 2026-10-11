@@ -9090,7 +9090,8 @@ class Dashboard {
         const nMachine = warnEvs.filter(function(e){return e.kind==="machine-verdict";}).length; // P-12 2c 기계 판독 강등·정정 — 판정 계열(근거 의심과 구분)
         const nEnrich = warnEvs.filter(function(e){return e.kind==="enrich-parked"||e.kind==="enrich-quarantined";}).length; // 자동 보강 알림(멈춤·장부 격리) — 근거 의심과 구분
         const nHookChk = warnEvs.filter(function(e){return e.kind==="codex-hook-missing";}).length; // [2026-10-11] 훅 신뢰 첫 확인 중(노랑) — 근거 의심과 구분
-        const nEvid = warnEvs.length - nVerdict - nMissing - nDrift - nMachine - nEnrich - nHookChk; // 근거(evidence-*) 계열
+        const nClsUnd = warnEvs.filter(function(e){return e.kind==="classify-undecided";}).length; // [⑤ 3단계] 넘겨받은 분류 결과를 판단하지 않은 채 끝난 차례 — 근거 의심과 구분
+        const nEvid = warnEvs.length - nVerdict - nMissing - nDrift - nMachine - nEnrich - nHookChk - nClsUnd; // 근거(evidence-*) 계열
         const errParts = [];
         if (nFail) errParts.push(T("검증 실패 "+nFail+"건","verify failed "+nFail)); // 빨강 — Codex 결론이 통과 아님(실패)
         var nSessImpl = errEvs.filter(function(e){return e.kind==="session-missing" && e.sig==="session-missing:implementer";}).length; // [2026-10-09] 구현 세션 고정 전(검증 세션은 있음)을 '세션 없음'으로 뭉뚱그리지 않음
@@ -9099,6 +9100,7 @@ class Dashboard {
         if (nIncomplete) errParts.push(T("검증 미완 "+nIncomplete+"건","unverified "+nIncomplete)); // 빨강 — 검증 자체가 안 일어남
         const warnParts = [];
         if (nHookChk) warnParts.push(T("Codex 훅 확인 중 — 끝나기 전엔 모든 턴 검증이 보장되지 않음","Checking Codex hooks — verify-every-turn not guaranteed until done")); // 노랑 — 확인이 끝나면 사라지거나 빨강으로 바뀜
+        if (nClsUnd) warnParts.push(T("사용자 말 분류 결과 판단 없이 끝난 차례 "+nClsUnd+"건","turn(s) ended without deciding user-words results "+nClsUnd)); // 노랑 — 다음 사람의 차례에 한 번 더 넘어감
         if (nVerdict) warnParts.push(T("Codex 보류·불가 "+nVerdict+"건","Codex hold/unable "+nVerdict)); // 노랑 — 통과도 실패도 아닌 보류/불가/정보부족
         if (nMissing) warnParts.push(T("판정 표지 없음 "+nMissing+"건","no verdict line "+nMissing)); // 마지막 '검증:' 줄 없음 → 색 표시 빔
         if (nMachine) warnParts.push(T("기계 판독 강등·정정 "+nMachine+"건","machine reading demoted/corrected "+nMachine)); // 지적 블록↔판정 불일치(근거 의심 아님 — 2차 [주의])
@@ -10270,10 +10272,12 @@ export function activate(context: vscode.ExtensionContext): void {
       const nMachine = warns.filter((e) => e.kind === "machine-verdict").length; // P-12 2c 기계 판독 강등·정정 — 판정 계열(근거 의심 오분류 방지 — 2차 [주의])
       const nEnrich = warns.filter((e) => e.kind === "enrich-parked" || e.kind === "enrich-quarantined").length; // 자동 보강 알림 — 근거 의심과 구분(배너와 동일 분리)
       const nHookChk = warns.filter((e) => e.kind === "codex-hook-missing").length; // [2026-10-11] 훅 신뢰 첫 확인 중 — 근거 의심과 구분(배너와 동일 분리)
-      const nEvid = warns.length - nVerdict - nMissing - nDrift - nMachine - nEnrich - nHookChk;
-      const kinds = [nVerdict > 0, nMissing > 0, nEvid > 0, nDrift > 0, nMachine > 0, nEnrich > 0, nHookChk > 0].filter(Boolean).length;
+      const nClsUnd = warns.filter((e) => e.kind === "classify-undecided").length; // [⑤ 3단계] 분류 결과 판단 없이 끝난 차례 — 근거 의심과 구분(배너와 동일 분리)
+      const nEvid = warns.length - nVerdict - nMissing - nDrift - nMachine - nEnrich - nHookChk - nClsUnd;
+      const kinds = [nVerdict > 0, nMissing > 0, nEvid > 0, nDrift > 0, nMachine > 0, nEnrich > 0, nHookChk > 0, nClsUnd > 0].filter(Boolean).length;
       const label = kinds > 1 ? tE("Codex 주의","Codex warnings")
                   : nHookChk ? tE("Codex 훅 확인 중","Checking Codex hooks")
+                  : nClsUnd ? tE("분류 결과 판단 누락","User-words results undecided")
                   : nVerdict ? tE("Codex 보류·불가","Codex hold/unable")
                   : nMissing ? tE("Codex 표지 없음","Codex no verdict line")
                   : nMachine ? tE("기계 판독 강등·정정","machine reading demoted/corrected")
@@ -10282,6 +10286,7 @@ export function activate(context: vscode.ExtensionContext): void {
                   : tE("Codex 근거 의심","Codex evidence doubt");
       const parts: string[] = [];
       if (nHookChk) parts.push(tE(`훅 확인 중 — 끝나기 전엔 모든 턴 검증 보장 안 됨`,`checking hooks — verify-every-turn not guaranteed yet`));
+      if (nClsUnd) parts.push(tE(`분류 결과 판단 없이 끝난 차례 ${nClsUnd}건`,`turns ended without deciding results ${nClsUnd}`));
       if (nVerdict) parts.push(tE(`보류·불가 ${nVerdict}건`,`hold/unable ${nVerdict}`));
       if (nMissing) parts.push(tE(`판정 표지 없음 ${nMissing}건`,`no verdict line ${nMissing}`));
       if (nMachine) parts.push(tE(`기계 판독 강등·정정 ${nMachine}건`,`machine demoted/corrected ${nMachine}`));

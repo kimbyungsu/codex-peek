@@ -295,6 +295,69 @@ function deliveryBlock(results, lang) {
     : `올림: ${raise} · 안 올림: ${skip} — 대화에 늘어놓거나 사용자에게 묻지 않고 이 명령으로만(승인은 사용자가 대시보드에서).`;
   return [head, ...items, cmd].join("\n");
 }
+// ── [⑤ 3단계] 종료 관문(판단 강제 · §3-1 6) — 이번 차례에 넘겨받고 아직 판단하지 않은 결과가 있으면 그 차례를 끝내지 못한다.
+// 다른 종료 조건(검증·판단 관문·규칙 자가점검·상한 마감)이 모두 통과한 뒤에만 부른다 — 검증 안내가 먼저 보이게(두 Stop 훅 공통).
+// 반복 상한: 같은 상태(같은 차례·같은 미판단 목록)로 STOP_GATE_MAX 번 막은 뒤에는 막지 않고 노랑 경보 1건으로 끝낸다(무한 종료 막기 방지 —
+// 사용량 보호 · 그 결과들은 다음 사람의 차례에 한 번 더 넘어가고 그때도 미판단이면 '구현 담당 미처리'). 하나라도 판단하면 상태가 바뀌어 다시 셈.
+// 판독 오류(장부)=관문 없음(판단 강제는 검증 위조 방지 장치가 아니라 공급 흐름 — 못 읽는 장부로 턴 종료를 막지 않음) · 단 관문 기록은 그대로 둔다
+// (못 읽음≠없음 — [검증 1회차 blocker] 지우면 회복 뒤 같은 상태를 1부터 다시 막고 경보를 또 씀). 관문 기록 자체를 못 읽으면(없음과 구분) 저장 실패와 같이
+// 막지 않고 경보 — [검증 1회차 blocker] 못 읽는 횟수를 매번 1로 세면 끝없이 막는다. 경보는 같은 상태(회사·세션·상태 지문)당 1건만(gateKey — 닫은 경보를 되살리지 않음).
+const STOP_GATE_MAX = 3;
+const STOP_GATE_DIR = path.join(CLASSIFY_DIR, "stop-gate");
+function stopGateFileFor(provider, sessionId) { return path.join(STOP_GATE_DIR, String(provider || "x") + "-" + String(sessionId || "nosession").replace(/[^0-9a-zA-Z._-]/g, "_") + ".json"); }
+function stopGateText(pending, lang) {
+  const en = lang === "en";
+  const list = pending.map((r) => r.resultId + ' "' + oneLineOf(r.quote, 60) + '"').join(", ");
+  const raise = CL.bridgeCmd("codex-bridge.js", 'constraint add --quote "' + (en ? "<a phrase inside those words>" : "<그 말 안의 구절>") + '" --why "' + (en ? "<one-line reason>" : "<근거 한 줄>") + '" --from <id> [--axis supportedEnv|alwaysBlocker|outOfScope]');
+  const skip = CL.bridgeCmd("codex-bridge.js", 'classify skip <id> --note "' + (en ? "<one-line reason>" : "<이유 한 줄>") + '"');
+  return en
+    ? `[User-words classification gate] ${pending.length} classification result(s) handed to you this turn are still undecided, so this turn cannot end: ${list}. Raise: ${raise} · Not raise: ${skip} — commands only, without listing these in the conversation or asking the user.`
+    : `[분류 결과 판단 관문] 이번 차례에 넘겨받은 사용자 말 분류 결과 ${pending.length}건을 아직 판단하지 않아 이 턴을 끝낼 수 없다: ${list}. 올림: ${raise} · 안 올림: ${skip} — 대화에 늘어놓거나 사용자에게 묻지 않고 이 명령으로만.`;
+}
+// [검증 1회차 보완] 경보 문구는 남은 전달 횟수에 맞춘다 — 이미 두 번째로 넘겨받은 결과는 다음 차례에 더 넘어가지 않고 '구현 담당 미처리'로 끝난다(planDelivery).
+function stopGateWarnText(pending, why, lang) {
+  const ids = pending.map((r) => r.resultId).join(", ");
+  const last = pending.filter((r) => (Number(r.deliveries) || 0) >= DELIVERY_MAX).length, again = pending.length - last;
+  if (lang === "en") {
+    const tail = [again ? `${again} can be handed over once more on the next human turn (if still undecided then, 'not handled by the implementer')` : "", last ? `${last} were already on their second hand-over and remain as 'not handled by the implementer' on the next human turn` : ""].filter(Boolean).join("; ");
+    return `The implementer ended this turn without deciding ${pending.length} user-words classification result(s) handed over in it (${ids}) (${why}) — ${tail}.`;
+  }
+  const tail = [again ? `${again}건은 다음 사람의 차례에 한 번 더 넘어갈 수 있고(그때도 판단이 없으면 '구현 담당 미처리')` : "", last ? `${last}건은 이미 두 번째로 넘겨받은 것이라 다음 사람의 차례에 '구현 담당 미처리'로 남습니다` : ""].filter(Boolean).join(" · ");
+  return `이번 차례에 넘겨받은 사용자 말 분류 결과 ${pending.length}건(${ids})을 구현 담당이 판단하지 않은 채 턴이 끝났습니다(${why}) — ${tail}.`;
+}
+function stopGateWarnOnce(ws, c, pending, epoch, whyKo, whyEn, lang) {
+  const gateKey = sha1(String(c.provider || "") + "|" + String(c.sessionId || "") + "|" + epoch);
+  try { if (CL.readIntegrityEvents().some((e) => e && e.kind === "classify-undecided" && e.gateKey === gateKey)) return; } catch { /* 못 읽음=아래에서 씀(경보 누락보다 중복이 낫다) */ }
+  const ko = stopGateWarnText(pending, whyKo, "ko"), en = stopGateWarnText(pending, whyEn, "en");
+  try { CL.appendIntegrityEvent({ ts: new Date().toISOString(), session: String(c.sessionId || ""), workspace: ws, kind: "classify-undecided", severity: "warning", gateKey, detail: lang === "en" ? en : ko, detailKo: ko, detailEn: en }, { supersedeSameKindWs: true }); } catch { /* 경보 실패=종료는 그대로 */ }
+}
+// 반환 { block: 안내문 } | null(막지 않음). ctx={turnAnchor, repoKey, provider, sessionId}. opts={lang}
+function classifyStopGate(ws, ctx, opts) {
+  const c = ctx || {}, o = opts || {};
+  let pending = null;
+  try { pending = deliveredUndecided(ws, c); } catch { pending = null; }
+  const f = stopGateFileFor(c.provider, c.sessionId);
+  if (pending === null) return null; // 장부 판독 오류=관문 없음 · 관문 기록 보존(못 읽음≠없음)
+  if (!pending.length) { try { fs.rmSync(f, { force: true }); } catch { /* 무해 */ } return null; } // 넘겨받은 미판단이 실제로 없음을 확인했을 때만 정리
+  const epoch = sha1(JSON.stringify({ turn: String(c.turnAnchor || ""), ids: pending.map((r) => r.resultId).sort() }));
+  let prev = null, unreadable = false;
+  try { const v = JSON.parse(fs.readFileSync(f, "utf8")); if (v && typeof v === "object" && !Array.isArray(v)) prev = v; else unreadable = true; }
+  catch (e) { if (!(e && (e.code === "ENOENT" || e.code === "ENOTDIR"))) unreadable = true; } // 없음(경로 중간이 폴더가 아님 포함 — 운영체제마다 다르게 알림)
+  if (unreadable) { // 횟수를 확인할 수 없음=막지 않음(저장 실패와 같은 처리) · 읽을 수 있는 기록으로 갈아 두어 다음 종료부터는 '놓아줌'으로 조용히 통과
+    stopGateWarnOnce(ws, c, pending, epoch, "횟수 기록 판독 실패", "count read failed", o.lang);
+    try { CL.atomicWrite(f, JSON.stringify({ epoch, n: STOP_GATE_MAX + 1, gaveUp: true, ts: new Date().toISOString() })); } catch { /* 무해 — 다음 종료도 막지 않음 */ }
+    return null;
+  }
+  if (prev && prev.epoch === epoch && prev.gaveUp === true) return null; // 이 상태는 이미 상한으로 놓아줌(경보 기록됨) — 같은 상태로 다시 막기를 시작하지 않음
+  const n = prev && prev.epoch === epoch ? (Number(prev.n) || 0) + 1 : 1;
+  let saved = false; try { fs.mkdirSync(STOP_GATE_DIR, { recursive: true }); saved = CL.atomicWrite(f, JSON.stringify({ epoch, n, ts: new Date().toISOString() })) === true; } catch { saved = false; }
+  if (!saved || n > STOP_GATE_MAX) { // 횟수를 못 세면(저장 실패) 막지 않는다 — 셀 수 없는 차단은 끝없는 차단이 될 수 있음
+    stopGateWarnOnce(ws, c, pending, epoch, saved ? "반복 종료 막기 상한" : "횟수 기록 실패", saved ? "repeat stop-block limit" : "count write failed", o.lang);
+    if (saved) { try { CL.atomicWrite(f, JSON.stringify({ epoch, n, gaveUp: true, ts: new Date().toISOString() })); } catch { /* 기록 실패=다음 종료에서 다시 셈(유한) */ } } // 같은 상태로 막기→놓아주기가 되풀이되지 않게
+    return null;
+  }
+  return { block: stopGateText(pending, o.lang), n, pending: pending.map((r) => r.resultId) };
+}
 function userConstraintIdFor(ws, repoKey, quote) { return CL.envelopeCandidateId("user-constraint", CL.wsKeyFor(ws) + "|" + repoKey + "|" + sha1(qNormOf(quote))); } // constraintAdd 와 같은 산식(같은 말=같은 후보)
 
 // ── 입력 집계 ── 반환 {ok, empty?, wsKey, repoKey, gen, virtual, provider, arm, items[], unavailable[], existing{...}, inputFp} | {ok:false, reason}
@@ -825,14 +888,14 @@ function userWordsView(ws) {
   };
 }
 
-module.exports = {
+module.exports = { stopGateWarnText,
   CLASSIFY_TICK_MIN_GAP_MS, classifyTickFileFor, readClassifyTick, writeClassifyTick, closeEventsFor, classifyTickJudge, markClassifyRan, classifyTick, classifyHookTick, classifyLockAlive, readHookStamp, hookStampFileFor,
   heldWordAction, userWordsView,
   CLASSIFY_DIR, CLASSIFY_BATCH_WORDS, CLASSIFY_BATCH_CHARS, CLASSIFY_WORD_SHOW, CLASSIFY_MAX_PER_RUN, CLASSIFY_RETRY_MAX, RULEBOOK_SEATS, SEATS, REDACTED,
   CLASSIFY_KINDS, CLASSIFY_BOUNDS_MIN, CLASSIFY_BOUNDS_MAX, RESULT_STATUSES,
   classifyFileFor, seatsFileFor, resultsFileFor, classifyLockFileFor, armForProvider, rulesFieldFor, redactSensitiveForms,
   readClassifyRows, readSeatsState, readClassifyResults, appendClassifyResults, classifyResultIdFor, userConstraintIdFor,
-  raisedResultIds, deliveredUndecided, markResultRaised, skipResult, markResultsDelivered, planDelivery, deliveryBlock, DELIVERY_MAX, DELIVER_PER_TURN, SKIP_NOTE_MIN, resultStatusRow,
+  raisedResultIds, deliveredUndecided, markResultRaised, skipResult, markResultsDelivered, planDelivery, deliveryBlock, DELIVERY_MAX, DELIVER_PER_TURN, classifyStopGate, stopGateText, STOP_GATE_MAX, stopGateFileFor, SKIP_NOTE_MIN, resultStatusRow,
   CLAIMS_DIR, claimFileFor, hasClaim, claimResult, readClaims, readClaimsState, claimDecisions, repairClaims, unfilledRaisedClaims,
   classifyInput, buildClassifyPrompt, parseClassifyOutput, commitClassify, bumpRetries, acquireClassifyLock, releaseClassifyLock,
   runClassify, classifySummary,
