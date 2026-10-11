@@ -105,7 +105,8 @@ t("실행 — 규약 세대가 바뀌면(프로필 변경) 전문(사유: 규약
   assert.ok(!r6.ctx.includes("[규약 전달"), r6.ctx.slice(0, 300));
   assert.deepStrictEqual(anchor().directive, before, "no record change when verification is off");
   const hook = fs.readFileSync(CHOOK, "utf8");
-  assert.ok(hook.includes('contextThen("UserPromptSubmit", preface ? preface + body : body, () => recordCodexDirective(sid, ws, ic9.record))') && hook.includes('contextThen("SessionStart", ic0.text, () => recordCodexDirective(sid, ws, ic0.record))'), "record after output");
+  // [⑤ 2단계-나] 출력 뒤 콜백에 분류 결과 전달 기록이 함께 들어감 — 규약 전달 기록은 그 콜백 안에서 먼저(출력 뒤 기록 계약 그대로)
+  assert.ok(/contextThen\("UserPromptSubmit", preface \? preface \+ body : body, \(\) => \{\s*recordCodexDirective\(sid, ws, ic9\.record\);/.test(hook) && hook.includes('contextThen("SessionStart", ic0.text, () => recordCodexDirective(sid, ws, ic0.record))'), "record after output");
 });
 
 console.log(`\n결과: ${n} 통과 / 0 실패`);

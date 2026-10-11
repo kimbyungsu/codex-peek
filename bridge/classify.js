@@ -231,6 +231,70 @@ function markResultsDelivered(ws, results, ctx) {
   if (!results || !results.length) return true;
   return appendClassifyResults(ws, results.map((r) => resultStatusRow(ws, r, "delivered", { deliveredTurn: String(c.turnAnchor || ""), deliveries: (Number(r.deliveries) || 0) + 1, provider: String(c.provider || r.provider || ""), sessionId: String(c.sessionId || "") })));
 }
+// ── [⑤ 2단계-나] 전달 — 판정 경계 결과를 분류가 끝난 다음 '사람의 차례'에 그 회사의 구현 담당에게 넘긴다(§2 B · §3-1 2·6·7).
+// 한 차례에 한 번만 · 미판단이면 다음 사람의 차례에 한 번 더(전달 2회) · 2회째에도 미판단=종결 '구현 담당 미처리'(더 넘기지 않음 · 안 올림 아님) ·
+// 원문 만료=종결 '원문 만료'(넘기지 않음 · 대시보드에만) · 만료 전인데 원문을 못 읽음=읽기 보류(이번 차례엔 넘기지 않고 상태도 그대로 — 다음 차례에 다시 읽음).
+// 전달 기록(markResultsDelivered)은 주입문이 실제로 나간 뒤에만 훅이 남긴다 — 이 함수는 넘길 목록과 종결 전이만 정한다(종결 전이는 출력과 무관한 사실이라 여기서 기록).
+// 판독 오류(결과 장부·후보 장부)=null(아무것도 넘기지 않음 · 빈 목록 위장 금지). 사용자 말 장부 판독 오류=전부 읽기 보류.
+const DELIVERY_MAX = 2;
+const DELIVER_PER_TURN = CLASSIFY_MAX_PER_RUN; // 한 차례 전달 상한(나머지는 '새 결과'로 남아 다음 사람의 차례에 — 전달 횟수 미소비)
+function planDelivery(ws, ctx) {
+  const c = ctx || {};
+  const rk = /^[0-9a-f]{16}$/.test(String(c.repoKey || "")) ? String(c.repoKey) : null;
+  const prov = c.provider === "codex" || c.provider === "claude" ? c.provider : null;
+  if (!rk || !prov || !c.turnAnchor) return { deliver: [], transitions: 0, held: 0 };
+  try { repairClaims(ws); } catch { /* 최선 노력 — 표식만 남은 판단의 기록 채우기 */ }
+  const rs = readClassifyResults(ws); if (rs.readError) return null;
+  const raised = raisedResultIds(ws); if (raised === null) return null;
+  const firstTs = new Map(); for (const r of rs.rows) if (!firstTs.has(r.resultId)) firstTs.set(r.resultId, String(r.ts || ""));
+  const cands = [...rs.latest.values()]
+    .filter((r) => r.kind === "boundary" && r.repoKey === rk && String(r.provider || "") === prov && (r.status === "new" || r.status === "delivered") && !raised.has(r.resultId) && !hasClaim(ws, r.resultId))
+    .sort((a, b) => String(firstTs.get(a.resultId) || "").localeCompare(String(firstTs.get(b.resultId) || "")));
+  if (!cands.length) return { deliver: [], transitions: 0, held: 0 };
+  const uw = UW.readUserWordsState(ws);
+  const now = Date.now();
+  // [검증 1회차 blocker] 한 차례 상한은 이번 호출이 아니라 '이번 차례에 이미 넘긴 결과 수'(장부의 전달 행 — 그 뒤 판단돼 상태가 바뀐 결과도 셈)를 뺀 나머지
+  const thisTurn = new Set(); for (const r of rs.rows) if (r.status === "delivered" && String(r.deliveredTurn || "") === String(c.turnAnchor)) thisTurn.add(r.resultId);
+  const room = Math.max(0, DELIVER_PER_TURN - thisTurn.size);
+  const deliver = [], trans = []; let held = 0;
+  for (const r of cands) {
+    if (r.status === "delivered" && r.deliveredTurn === String(c.turnAnchor)) continue; // 이번 차례에 이미 넘김(같은 글을 같은 차례에 되풀이하지 않음)
+    const n = r.status === "delivered" ? (Number(r.deliveries) || 0) : 0;
+    if (n >= DELIVERY_MAX) { trans.push(resultStatusRow(ws, r, "unhandled", { deliveries: n, by: "harness", reason: "delivered-twice-undecided", turnAnchor: String(c.turnAnchor) })); continue; }
+    if (uw.readError) { held++; continue; }
+    const w = uw.words.get(String(r.wordId || ""));
+    const tRes = Date.parse(String(firstTs.get(r.resultId) || r.ts || ""));
+    const expired = w ? UW.wordExpired(w, now) : (!Number.isFinite(tRes) || now - tRes > CL.ATTEMPTS_TTL_MS); // 말 기록이 없으면 결과가 생긴 시각으로(말은 그보다 먼저)
+    if (expired) { trans.push(resultStatusRow(ws, r, "expired", { by: "harness", reason: "word-expired", deliveries: n })); continue; }
+    if (!w || UW.wordText(ws, w, now) === null) { held++; continue; } // 읽기 보류
+    if (deliver.length < room) deliver.push(Object.assign({}, r, { deliveries: n }));
+  }
+  if (trans.length) { try { appendClassifyResults(ws, trans); } catch { /* 기록 실패=다음 사람의 차례에 같은 판정을 다시 */ } }
+  return { deliver, transitions: trans.length, held };
+}
+// 전달 블록(구현 담당 주입문) — 자료+명령 한 줄. 매 턴 고정 조각이 아니라 전달이 있는 차례에만 붙는다(분류 실행 뒤 많아야 두 차례).
+const DELIVER_QUOTE_SHOW = 200, DELIVER_NOTE_SHOW = 140;
+function oneLineOf(s, max) { const t = String(s || "").replace(/[\r\n\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim(); return t.length > max ? t.slice(0, max) + "…" : t; }
+function deliveryBlock(results, lang) {
+  if (!results || !results.length) return "";
+  const en = lang === "en";
+  const seatKo = { supportedEnv: "지원 환경", alwaysBlocker: "항상 막을 것", outOfScope: "범위 밖" };
+  const seatEn = { supportedEnv: "supported environment", alwaysBlocker: "always block", outOfScope: "out of scope" };
+  const head = en ? `[User-words classification — decide ${results.length} this turn]` : `[사용자 말 분류 결과 — 이번 차례 판단 ${results.length}건]`;
+  const items = results.map((r) => {
+    const k = (Number(r.deliveries) || 0) + 1;
+    const seat = r.seat ? (en ? seatEn[r.seat] || r.seat : seatKo[r.seat] || r.seat) + "(" + r.seat + ")" : "";
+    return en
+      ? `- ${r.resultId} · suggested section ${seat} · delivery ${k}/${DELIVERY_MAX}\n  words: "${oneLineOf(r.quote, DELIVER_QUOTE_SHOW)}"\n  effect on judging: ${oneLineOf(r.bounds, DELIVER_NOTE_SHOW)} · why: ${oneLineOf(r.why, DELIVER_NOTE_SHOW)}`
+      : `- ${r.resultId} · 제안 칸 ${seat} · 전달 ${k}/${DELIVERY_MAX}회째\n  말: "${oneLineOf(r.quote, DELIVER_QUOTE_SHOW)}"\n  판정 영향: ${oneLineOf(r.bounds, DELIVER_NOTE_SHOW)} · 이유: ${oneLineOf(r.why, DELIVER_NOTE_SHOW)}`;
+  });
+  const raise = CL.bridgeCmd("codex-bridge.js", 'constraint add --quote "' + (en ? "<a phrase inside the words above>" : "<위 말 안의 구절>") + '" --why "' + (en ? "<one-line reason>" : "<근거 한 줄>") + '" --from <id> [--axis supportedEnv|alwaysBlocker|outOfScope]');
+  const skip = CL.bridgeCmd("codex-bridge.js", 'classify skip <id> --note "' + (en ? "<one-line reason>" : "<이유 한 줄>") + '"');
+  const cmd = en
+    ? `Raise: ${raise} · Not raise: ${skip} — commands only, without listing these in the conversation or asking the user (the user approves on the dashboard).`
+    : `올림: ${raise} · 안 올림: ${skip} — 대화에 늘어놓거나 사용자에게 묻지 않고 이 명령으로만(승인은 사용자가 대시보드에서).`;
+  return [head, ...items, cmd].join("\n");
+}
 function userConstraintIdFor(ws, repoKey, quote) { return CL.envelopeCandidateId("user-constraint", CL.wsKeyFor(ws) + "|" + repoKey + "|" + sha1(qNormOf(quote))); } // constraintAdd 와 같은 산식(같은 말=같은 후보)
 
 // ── 입력 집계 ── 반환 {ok, empty?, wsKey, repoKey, gen, virtual, provider, arm, items[], unavailable[], existing{...}, inputFp} | {ok:false, reason}
@@ -768,7 +832,7 @@ module.exports = {
   CLASSIFY_KINDS, CLASSIFY_BOUNDS_MIN, CLASSIFY_BOUNDS_MAX, RESULT_STATUSES,
   classifyFileFor, seatsFileFor, resultsFileFor, classifyLockFileFor, armForProvider, rulesFieldFor, redactSensitiveForms,
   readClassifyRows, readSeatsState, readClassifyResults, appendClassifyResults, classifyResultIdFor, userConstraintIdFor,
-  raisedResultIds, deliveredUndecided, markResultRaised, skipResult, markResultsDelivered, SKIP_NOTE_MIN, resultStatusRow,
+  raisedResultIds, deliveredUndecided, markResultRaised, skipResult, markResultsDelivered, planDelivery, deliveryBlock, DELIVERY_MAX, DELIVER_PER_TURN, SKIP_NOTE_MIN, resultStatusRow,
   CLAIMS_DIR, claimFileFor, hasClaim, claimResult, readClaims, readClaimsState, claimDecisions, repairClaims, unfilledRaisedClaims,
   classifyInput, buildClassifyPrompt, parseClassifyOutput, commitClassify, bumpRetries, acquireClassifyLock, releaseClassifyLock,
   runClassify, classifySummary,

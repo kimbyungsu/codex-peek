@@ -6955,6 +6955,17 @@ function isSystemNotificationHook(hook) {
   if (rec && rec.text.trim() === p.trim()) return !!(rec.origin && rec.origin.kind === "task-notification"); // 기록이 있으면 구조 표식이 권위(origin 없음·human=발화)
   return true; // 기록에 없는 봉투만의 본문=시스템 주입(오늘 실측: 알림은 transcript user 레코드로 남지 않는다)
 }
+// [RULE-SUPPLY-CORRECTION ⑤ 2단계-나 · §2 B] Codex 입력의 비-발화 판별 — Claude 봉투 규칙을 그대로 쓰고(대화 기록 대조 없이 봉투만 — Codex 기록은
+// 형식이 다름), Codex 고유 형태는 실제 기록에서 확인한 것만 더한다(추측으로 목록을 늘리지 않음): 하위 담당 완료 알림
+// '<subagent_notification>…</subagent_notification>'(2026-06-13 Codex 대화 기록에서 사용자 자리 입력으로 실측). 사람이 그 봉투만 정확히 써 보낼 일은
+// 없어 사람 말을 비-발화로 잘못 거르는 일은 사실상 없다. 질문에 대한 사용자 답(<send_user_message_question_reply>)은 사람의 차례라 넣지 않는다.
+const CODEX_NOTICE_ENVELOPE_RE = /^\s*(?:<subagent_notification>[\s\S]*?<\/subagent_notification>\s*)+$/;
+function isCodexNonUtterancePrompt(j) {
+  if (!j || typeof j !== "object") return false;
+  const p = typeof j.prompt === "string" ? j.prompt : "";
+  if (CODEX_NOTICE_ENVELOPE_RE.test(p)) return true;
+  return isSystemNotificationHook({ prompt: p });
+}
 // transcript 꼬리(기본 2MB)에서 가장 최근 '텍스트 본문 user' 레코드 1건 — 전체 파일 판독 금지(수백 MB 가능·훅 시간 예산).
 function lastTextUserRecordOf(transcriptPath, tailBytes) {
   let fd = null;
@@ -7055,6 +7066,7 @@ module.exports.isRealHookInput = isRealHookInput;
 module.exports.supersedeDecision = supersedeDecision;
 module.exports.decisionRowValid = decisionRowValid;
 module.exports.isSystemNotificationHook = isSystemNotificationHook;
+module.exports.isCodexNonUtterancePrompt = isCodexNonUtterancePrompt; // [⑤ 2단계-나] Codex 입력 비-발화 판별
 module.exports.lastTextUserRecordOf = lastTextUserRecordOf;
 module.exports.folderChangeOf = folderChangeOf;
 module.exports.folderChangeNotice = folderChangeNotice;

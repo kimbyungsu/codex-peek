@@ -522,15 +522,22 @@ function onPrompt(j, ws, sid, c, roleRevision, preface, prePinned) {
   const turnId = pinned.turnId;
   // [약속 발화 포착 §1] Codex 경로 turnAnchor=훅이 이미 가진 turnId. 스냅샷 성공 시에만 anchor 필드 기록(fail-closed).
   let capFields = null;
+  // [RULE-SUPPLY-CORRECTION ⑤ 2단계-나 · §2 B] 입력 단위 비-발화 판별(하위 담당 완료 알림 등) — 비-발화면 사용자 말 대기열·분류 결과 전달 없음
+  let nonUtter9 = false; try { nonUtter9 = require("./contract-lib.js").isCodexNonUtterancePrompt(j) === true; } catch { nonUtter9 = false; }
   try {
     const ptxt = typeof j.prompt === "string" ? j.prompt : "";
-    if (ptxt && turnId) {
+    if (ptxt && turnId && nonUtter9) {
+      // [⑤ 2단계-나 · 검증 1회차 blocker] 비-발화(하위 담당 완료 알림)=사람 말 아님 — 원문 스냅샷을 새로 쓰지 않고(같은 턴이면 사람 말 원문을 덮어
+      // 지문 대조가 깨짐) 직전 사람 차례의 결속을 그대로 잇는다(Claude 알림 차례와 같음 · 직전 결속이 없으면 결속 없음).
+      const prevA9 = readCodexActive(sid) || {};
+      if (prevA9.constraintAnchor && prevA9.constraintSourceHash) capFields = { constraintAnchor: String(prevA9.constraintAnchor), constraintSourceHash: String(prevA9.constraintSourceHash), ...(prevA9.constraintRepoKey ? { constraintRepoKey: String(prevA9.constraintRepoKey) } : {}) };
+    } else if (ptxt && turnId) {
       // [검증 2·3회차 blocker②] 표식(정찰 대상 지문)은 스냅숏 "이전"에 이 훅의 계약 스냅샷(c)으로 확정 — 스냅숏 뒤에는 계약(반대 언어
       // 슬롯 폴백 포함)을 읽지 않는다. Claude 훅(contract-inject)과 같은 순서.
       let rk9 = ""; try { rk9 = constraintRepoKeyFor(ws, c) || ""; } catch { rk9 = ""; }
       const snap = writeConstraintTurnSnapshot(ws, turnId, ptxt);
       if (snap.ok) capFields = { constraintAnchor: String(turnId), constraintSourceHash: snap.sourceHash, ...(rk9 ? { constraintRepoKey: rk9 } : {}) }; // [ab-1] 원문 시점 정찰 대상 지문
-      if (snap.ok) { try { require("./user-words.js").enqueuePrompt(ws, { anchor: String(turnId), sourceHash: snap.sourceHash, sessionId: sid, repoKey: rk9, provider: "codex" }); } catch { /* best-effort */ } } // [묶음 2-나 §3-2] 미분류 대기열(선택지 직접 입력 수집은 Claude 경로만 — Codex 대응물 미확인 §8 Q1)
+      if (snap.ok && !nonUtter9) { try { require("./user-words.js").enqueuePrompt(ws, { anchor: String(turnId), sourceHash: snap.sourceHash, sessionId: sid, repoKey: rk9, provider: "codex" }); } catch { /* best-effort */ } } // [묶음 2-나 §3-2] 미분류 대기열(선택지 직접 입력 수집은 Claude 경로만 — Codex 대응물 미확인 §8 Q1)
     }
   } catch { /* best-effort — 훅 동작 막지 않음 */ }
   // [RULE-COMPLIANCE §3 A] 규칙 점검 결정을 첫 앵커 쓰기(heartbeat)에 — 출력 없는 의도적 미주입 턴에도 disabled가 남는다
@@ -539,9 +546,17 @@ function onPrompt(j, ws, sid, c, roleRevision, preface, prePinned) {
   heartbeat(j, ws, sid, "UserPromptSubmit", Object.assign({}, capFields || {}, { ruleCheck: rcRec9 }));
   // 턴 상태 저장 실패를 무시하면 Stop이 turn-missing으로 차단될 때 원인을 알 수 없다 — 1회 재시도 후에도
   // 실패면 주입 컨텍스트에 고지(구현 검증 1차 지적: 상태 기록 실패의 침묵 금지).
-  const turnState = { schema:"codex-turn-v1", turnId, workspace:ws, startedAt:Date.now(), lastActionAt:0, modified:false, permissionMode:j.permission_mode||"" };
+  // [⑤ 2단계-나 · 검증 1회차 blocker] 같은 턴에 입력이 다시 들어오면(하위 담당 완료 알림·작업 중 덧붙인 말) 그 턴의 변경 기록·시작 시각을 지우지 않는다 —
+  // 지우면 앞서 바꾼 파일이 '변경 없음'으로 보여 종료 관문의 검증 요구를 건너뛴다. 새 턴이면 종전대로 새로 시작(앞 턴의 종료 관문은 이미 지났다).
+  // 같은 턴인데 앞 기록을 못 읽으면 변경이 있었던 것으로 본다(fail-closed).
+  const prevTurn9 = read(stateFile(TURN_DIR, sid));
+  const prevOk9 = !!(prevTurn9 && typeof prevTurn9 === "object" && prevTurn9.schema === "codex-turn-v1" && String(prevTurn9.turnId || "") === String(turnId) && String(prevTurn9.workspace || "") === String(ws) && Number(prevTurn9.startedAt) > 0 && typeof prevTurn9.modified === "boolean");
+  const sameTurnUnread9 = !prevOk9 && prevTurnId9 === String(turnId);
+  const turnState = prevOk9
+    ? { schema:"codex-turn-v1", turnId, workspace:ws, startedAt:Number(prevTurn9.startedAt), lastActionAt:Number(prevTurn9.lastActionAt)||0, modified:prevTurn9.modified, permissionMode:j.permission_mode||String(prevTurn9.permissionMode||"") }
+    : { schema:"codex-turn-v1", turnId, workspace:ws, startedAt:Date.now(), lastActionAt:0, modified:sameTurnUnread9, permissionMode:j.permission_mode||"" };
   const turnSaved = save(stateFile(TURN_DIR,sid), turnState) || save(stateFile(TURN_DIR,sid), turnState);
-  try { writePhase("codex-implementing", { round:0, session:sid, workspace:ws }); } catch { /* display only */ }
+  if (!nonUtter9) { try { writePhase("codex-implementing", { round:0, session:sid, workspace:ws }); } catch { /* display only */ } } // 알림 차례는 진행 표시를 0 으로 되돌리지 않음(Claude 와 같음)
   const ic9 = implementerContext(j, ws, c, sid, { prevTurnId: prevTurnId9 }); let ctx = ic9.text;
   // [4b-2 이중 배달 §4] Codex 구현자 주입 — 코어 ab 전문(상시)+턴 결속 선별 캐시/미리보기 안내.
   // Claude 훅(contract-inject)과 '같은 함수'(implementerEnvelopeInject) — 양 훅 공통 계약·advisory(실패=미주입).
@@ -550,8 +565,21 @@ function onPrompt(j, ws, sid, c, roleRevision, preface, prePinned) {
   try { // [미호출=중단] 턴 시작 시점 고지(강제는 Stop 차단이 담당 — 사람이 이유를 먼저 보게)
     if (typeof c.archiveHash === "string" && c.archiveHash && fs.existsSync(pretoolDistrustFileFor(ws))) ctx += (ctx ? "\n\n" : "") + "[" + t("서고 관문 중단", "archive gate halt") + "] " + pretoolHaltText(pretoolRegistration(), false).replace(/^⛔ /, ""); // [2026-10-09] 원인별 문구(등록 빠짐 vs 불리지 않음)
   } catch { /* 고지 실패 무해 */ }
+  // [RULE-SUPPLY-CORRECTION ⑤ 2단계-나] 사용자 말 분류 결과 전달 — 사람의 차례·이 회사(Codex) 결과만 · 전달 기록은 출력 뒤(contextThen)
+  let deliverPlan9 = null;
+  if (!nonUtter9 && capFields && capFields.constraintRepoKey) {
+    try {
+      const CF9 = require("./classify.js");
+      const dctx9 = { turnAnchor: String(turnId), repoKey: capFields.constraintRepoKey, provider: "codex", sessionId: sid };
+      const pl9 = CF9.planDelivery(ws, dctx9);
+      if (pl9 && pl9.deliver.length) { const blk9 = CF9.deliveryBlock(pl9.deliver, loadLang()); if (blk9) { ctx += (ctx ? "\n\n" : "") + blk9; deliverPlan9 = { results: pl9.deliver, ctx: dctx9 }; } }
+    } catch { deliverPlan9 = null; /* advisory — 다음 사람의 차례에 다시 */ }
+  }
   const body = turnSaved ? ctx : t("[Codex Bridge] 턴 상태 기록에 실패했습니다 — 이 턴 종료 시 검증 게이트가 턴 상태 재기록을 요구할 수 있습니다.\n\n","[Codex Bridge] Failed to record the turn state — the verification gate may ask to rewrite it when this turn stops.\n\n") + ctx;
-  contextThen("UserPromptSubmit", preface ? preface + body : body, () => recordCodexDirective(sid, ws, ic9.record)); // [P-9] body가 비어도 전환 고지는 단독 출력 · 전달 기록은 출력 뒤
+  contextThen("UserPromptSubmit", preface ? preface + body : body, () => {
+    recordCodexDirective(sid, ws, ic9.record);
+    if (deliverPlan9) { try { require("./classify.js").markResultsDelivered(ws, deliverPlan9.results, deliverPlan9.ctx); } catch { /* 기록 실패=다음 사람의 차례에 다시 */ } }
+  }); // [P-9] body가 비어도 전환 고지는 단독 출력 · 전달 기록은 출력 뒤
 }
 // [4b-2 §4-③] Codex PreToolUse — ①실측 표식 기록+불신 플래그 자동 해제(신뢰 회복=실측) ②Claude와 '같은'
 // 게이트 판정(previewGateDecision 공용 — 서고 활성 시 preview 영수증까지 변경 도구 지속 차단·예외=미리보기

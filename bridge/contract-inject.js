@@ -199,6 +199,7 @@ process.stdin.on("end", () => {
 
   let parts = [];
   let dlvPlan = null; // 전달 계획(try 밖에서도 finalize가 읽는다)
+  let deliverPlan = null; // [⑤ 2단계-나] 분류 결과 전달 — 출력이 실제로 나간 뒤(finalize)에만 전달 기록
   const advisories = []; // [§4-B ④] 안내(지도 상태·부트스트랩)
   if (folderChange) advisories.push(folderChangeNotice(folderChange, lang)); // [P7 ⓑ] 구현자에게도 같은 사실을 1줄로(검증 시작 시 거부되는 이유를 미리)
   try { // [RULE-COMPLIANCE §3 C] 직전 턴이 자가점검 미기재(상한 해제)로 끝났으면 1줄 — 코드 소유 문장·규칙 재동봉 없음(이 턴 머리에 이미 있음)
@@ -255,6 +256,16 @@ process.stdin.on("end", () => {
       if (bt9.overflow) { try { process.stderr.write((lang === "en" ? "[Codex Bridge] per-turn fixed pieces exceed the budget (" : "[Codex Bridge] 매 턴 고정 조각이 예산을 넘음(") + bt9.fixedLen + "/" + require("./contract-lib.js").claudeTurnBudgetTotal() + (lang === "en" ? ") — code-defect signal; advisories omitted\n" : ") — 코드 결함 신호·안내 전량 생략\n")); } catch { /* 안내 실패 무해 */ } }
     }
     else for (const tx of advisories) parts.push(tx);
+    // [RULE-SUPPLY-CORRECTION ⑤ 2단계-나] 사용자 말 분류 결과 전달 — 사람의 차례(알림·하위 담당 보고 제외)·이 회사(Claude) 결과만.
+    // 매 턴 고정 조각이 아니라 전달이 있는 차례에만 붙는다(분류 실행 뒤 많아야 두 차례) — 안내 예산 밖(잘리면 일부만 전달된 채 '전달됨'이 되므로).
+    if (!sysNotice && constraintAnchor && sid) {
+      try {
+        const CF9 = require("./classify.js");
+        const dctx9 = { turnAnchor: constraintAnchor, repoKey: constraintRepoKey, provider: "claude", sessionId: sid };
+        const pl9 = CF9.planDelivery(ws, dctx9);
+        if (pl9 && pl9.deliver.length) { const blk9 = CF9.deliveryBlock(pl9.deliver, lang); if (blk9) { parts.push(blk9); deliverPlan = { results: pl9.deliver, ctx: dctx9 }; } }
+      } catch { deliverPlan = null; /* advisory — 전달 실패=다음 사람의 차례에 다시 */ }
+    }
     // [4b 이중 배달 §4] 구현자 인지 — 코어 ab 전문(수칙서 활성 시 상시)+이번 턴 결속 선별 캐시/미리보기 안내.
     // LLM 호출 없음(파일 판독뿐)·실패=advisory(훅을 막지 않음).
     try {
@@ -264,12 +275,14 @@ process.stdin.on("end", () => {
   } catch {
     parts = switchNotice ? [switchNotice] : []; // 주입 조립 실패에도 전환 고지는 유지(사용자 인지 채널)
     dlvPlan = null; // 조립 실패=전달 기록 갱신 없음(다음 턴 전문 — 안전 방향)
+    deliverPlan = null; // 분류 결과 블록도 빠짐=전달 기록 없음
   }
   if (!parts.length) process.exit(0);
   // 전달 기록 확정은 '출력이 실제로 전달된 뒤'(stdout write 콜백) — 출력 전 종료·파이프 실패면 기록하지 않아 다음 턴이 전문을 다시 보낸다
   // (확인 검증 1회차 blocker②: 기록 선행이면 '기록 있음=전문 수신'이 성립하지 않는다). 리셋 마커도 그때 소거.
   const outJson = JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: parts.join("\n\n") } });
   const finalize = (err) => {
+    if (!err && deliverPlan) { try { require("./classify.js").markResultsDelivered(ws, deliverPlan.results, deliverPlan.ctx); } catch { /* 기록 실패=다음 사람의 차례에 같은 전달 횟수로 다시 */ } } // [⑤ 2단계-나] 출력 뒤에만
     if (!err && dlvPlan && dlvPlan.record) {
       try { writeAnchors(JSON.stringify({ ...anchorBase, directive: dlvPlan.record })); if (safeSid) clearClaudeDirectiveResetMarker(safeSid); } catch { /* 기록 실패=다음 턴 전문 */ }
     }
