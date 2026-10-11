@@ -466,6 +466,14 @@
 - 정본: bridge/verify-cap-handoff.js(closeoutTargetFor·submitCloseout·stopCloseoutCheck·closeoutView·splitCloseout) · bridge/verify-guard.js·codex-hook.js(종료 관문) · bridge/codex-bridge.js(closing 명령·마지막 왕복 안내) · src/extension.ts(검증 상한 마감 기록 칸) · docs/RULE-SUPPLY-REDESIGN-2026-10-04.md §4 구현.
 - 찾는말: 마감 기록, closing submit, 마감문 되풀이, 검증 상한 인계, 답 본문 파싱 폐지, 종료 때 다시 검사, 마감 기록 제출됨
 
+## D-2026-10-11-codex-hook-trust-recheck — Codex 훅 신뢰 확인: 기다리는 시간 90초 · 다시 확인은 파일이 바뀔 때만 · 첫 확인 중에는 경보 없음
+- 날짜: 2026-10-11 · 종류: 결함 수정(사용자 실보고) · 상태: 유효
+- 사고: Codex↔Codex 모드에서 'Codex 훅 신뢰 상태를 확인하지 못했습니다(hooks/list 응답 시간 초과)' 경보가 계속 유지되고, Codex 확장이 뜨는 데 수십 분이 걸림.
+- 실측: ① Codex 기록(~/.codex/logs_2.sqlite) — 확인용 실행 코어가 시작 뒤 첫 응답까지 4~6초, 훅 목록 요청을 처리하기 시작할 때까지 다시 16~23초 → 10초 상한으로는 하루 400회 가까이(밤새 포함 약 80초마다) 전부 시간 초과, 그때마다 실행 코어를 새로 띄움(원격 목록 받기 포함). ② VS Code 기록 — 두 창의 확장 실행 공간이 19:20부터 몇 초 간격으로 '응답 없음'. 주원인은 별도 확장(Codex 사용량 모니터, 사용자 프로젝트 D:\codex-usage-monitor)이 1분마다 지난 Codex 대화 1.6GB 를 처음부터 다시 읽어 창마다 15~22초 멈춤(실측) — 그 사이 우리 확인의 답도 처리되지 못함. 사용량 모니터는 사용자 결정으로 같이 고침(새로 붙은 부분만 읽기·읽는 동안 양보 — 그 저장소에 기록).
+- 결정: 기다리는 시간 10초→90초(답이 오면 바로 끝나는 상한) · 화면 갱신 경로의 다시 확인은 신뢰 기록 파일(~/.codex/config.toml — [hooks.state] trusted_hash)·훅 파일(hooks.json)의 크기·수정 시각이 바뀌면 바로, 그 밖은 전부 신뢰됨 30분·확인됐지만 미신뢰 5분·확인 실패 2→5→15→30분 · 사용자 확인·설치 흐름(강제)은 규칙과 무관하게 바로 · 첫 확인이 진행 중(답 기록 없음)일 때는 경보를 새로 띄우지 않음(준비 완료로 승인하지도 않음 — fail-closed 유지).
+- 정본: src/codex-hook-health.ts(codexHookTrustRecheckDue·캐시 지문·실패 횟수) · src/extension.ts(CODEX_HOOK_TRUST_QUERY_TIMEOUT_MS·codexHookTrustFingerprint·refreshCodexPeekHookTrust·syncCodexHookHealth 확인 중) · tests/codex-hook-trust-recheck.test.js(컴파일 산출물 실제 실행·가짜 실행 코어 12초 응답).
+- 찾는말: 훅 신뢰 확인 시간 초과, hooks/list 응답 시간 초과, 실행 코어 반복 실행, 확장 실행 공간 응답 없음, Codex 확장 늦게 뜸, 사용량 모니터
+
 ## D-2026-10-10-codex-hooks-no-plugin — Codex 훅 설치·갱신 흐름은 플러그인을 조회·설치하지 않는다(사용자 훅 파일만)
 - 날짜: 2026-10-10 · 종류: 결함 수정(사용자 실보고) · 상태: 유효
 - 사고: LTE 프로젝트에서 갱신 안내의 '지금 추가'로 빠진 작업 전 관문 훅은 실제로 추가됐지만(08:19 백업 뒤 다섯 훅), 이어진 설치·갱신 흐름이 'Codex CLI에서 플러그인 상태를 확인하지 못했습니다 … 설치를 진행하지 않습니다'로 멈췄다. Codex 설정의 Codex Peek 플러그인 출처(로컬 마켓플레이스)가 확장 업데이트로 사라진 옛 확장 폴더(버전별 폴더 0.1.100)를 가리키고 있어 플러그인 조회가 실패한 것으로 판단(설정 경로 실재 여부로 확인 · 조회 명령 자체는 하네스 보호 장치 때문에 직접 실행하지 않음).

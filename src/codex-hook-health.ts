@@ -18,14 +18,44 @@ export class CodexHookTrustCache<T> {
   private readonly snapshots = new Map<string,T>();
   private readonly queries = new Map<string,Promise<T>>();
   private readonly lastChecks = new Map<string,number>();
+  private readonly fingerprints = new Map<string,string>();
+  private readonly failures = new Map<string,number>();
   getSnapshot(key:string):T|undefined{return this.snapshots.get(key);}
   getFresh(key:string,now:number,ttlMs:number):T|undefined{const v=this.snapshots.get(key),at=this.lastChecks.get(key)||0;return v&&now-at<ttlMs?v:undefined;}
   getQuery(key:string):Promise<T>|undefined{return this.queries.get(key);}
-  markStarted(key:string,at:number):void{this.lastChecks.set(key,at);}
+  markStarted(key:string,at:number,fingerprint?:string):void{this.lastChecks.set(key,at);if(fingerprint!==undefined)this.fingerprints.set(key,fingerprint);}
+  lastCheckAt(key:string):number{return this.lastChecks.get(key)||0;}
+  getFingerprint(key:string):string{return this.fingerprints.get(key)??"";}
+  failureCount(key:string):number{return this.failures.get(key)||0;}
+  // 조회 결과 기록 — 확인 성공(신뢰 여부와 무관하게 답을 받음)=실패 횟수 0, 확인 실패(시간 초과·오류)=1 증가(다음 확인 간격이 길어짐)
+  noteResult(key:string,queried:boolean):void{this.failures.set(key,queried?0:this.failureCount(key)+1);}
   setQuery(key:string,query:Promise<T>):void{this.queries.set(key,query);}
   setSnapshot(key:string,value:T):void{this.snapshots.set(key,value);}
   clearQuery(key:string):void{this.queries.delete(key);}
-  reset():void{this.snapshots.clear();this.queries.clear();this.lastChecks.clear();}
+  reset():void{this.snapshots.clear();this.queries.clear();this.lastChecks.clear();this.fingerprints.clear();this.failures.clear();}
+}
+
+// [2026-10-10 실사고] 다시 확인할 때 — 신뢰 상태는 Codex 설정 파일(신뢰 기록)과 훅 파일이 바뀔 때만 바뀐다. 화면을 다시 그릴 때마다(30초)
+// 새 Codex 실행 코어를 띄워 묻던 것이 하루 400회 가까이 실행 코어를 띄우고 전부 시간 초과로 끝났다. 이제:
+// 두 파일 지문이 바뀌면 바로 · 전부 신뢰 확인됨=30분 · 확인됐지만 아직 신뢰 안 됨=5분(사용자가 고치는 중일 수 있음) ·
+// 확인 실패=2→5→15→30분으로 점점 길게. 사용자가 누른 확인·설치 흐름은 이 규칙과 무관하게 바로 확인한다(force).
+export const CODEX_HOOK_TRUST_READY_TTL_MS = 30 * 60 * 1000;
+export const CODEX_HOOK_TRUST_UNREADY_TTL_MS = 5 * 60 * 1000;
+export const CODEX_HOOK_TRUST_FAIL_BACKOFF_MS = [2, 5, 15, 30].map((m) => m * 60 * 1000);
+export function codexHookTrustRecheckDue(o: {
+  snapshot: { queried?: boolean; ready?: boolean } | undefined | null;
+  lastCheckAt: number;
+  now: number;
+  fingerprint: string;
+  lastFingerprint: string;
+  failures: number;
+}): boolean {
+  if (!o.snapshot) return true;
+  if (o.fingerprint !== o.lastFingerprint) return true;
+  const age = o.now - o.lastCheckAt;
+  if (o.snapshot.queried === true) return age >= (o.snapshot.ready === true ? CODEX_HOOK_TRUST_READY_TTL_MS : CODEX_HOOK_TRUST_UNREADY_TTL_MS);
+  const i = Math.min(Math.max(o.failures, 1), CODEX_HOOK_TRUST_FAIL_BACKOFF_MS.length) - 1;
+  return age >= CODEX_HOOK_TRUST_FAIL_BACKOFF_MS[i];
 }
 
 // Codex 플러그인 설치 여부만으로는 현재 대화에 lifecycle 훅이 붙었다고 볼 수 없다.

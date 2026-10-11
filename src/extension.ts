@@ -17,7 +17,7 @@ import { catchUp, TailState, makeRolloutAcc, headFirstUserMessage, Msg, RolloutA
 import { applyAutoPinUpdate, autoPinReplacementReady, autoPinWriteAllowed, chooseImplementerAutoPin, clearImplementerLinkFields, hookActiveTsForGate, resolvePromptProject } from "./implementer-auto-pin";
 import { scoutDirectiveText, scoutLedgerNotes } from "./scope-package";
 import { firstImplementerMetaFromHistory } from "./implementer-baseline";
-import { assessCodexHookHeartbeat, assessCodexHookTrust, CodexHookTrustCache } from "./codex-hook-health";
+import { assessCodexHookHeartbeat, assessCodexHookTrust, CodexHookTrustCache, codexHookTrustRecheckDue } from "./codex-hook-health";
 import { collectCurrentMapState, collectMapHistoryState, CurrentMapState, MapAutomationStats, MapUsageStats, RunLockObservation } from "./map-stats";
 
 const HOME = os.homedir();
@@ -3227,7 +3227,10 @@ function syncCodexHookHealth(ws: string | null): void {
       const events = readIntegrity() as any[];
       const wsMatch = (e: any) => !e.workspace || normWs(e.workspace) === normWs(ws);
       const health = codexHookHealth(ws);
-      const problem = health.required && !health.ready && health.reason !== "implementer-missing";
+      // [2026-10-10] 첫 신뢰 확인이 아직 진행 중(답 없음)=확인 중 — 실패가 아니므로 경보를 새로 띄우지 않는다(준비 완료로 승인하지도 않음 ·
+      // 첫 확인은 이 PC 실측 30초 가까이 걸린다). 확인이 실패로 끝나면(답 기록이 생김) 종전대로 경보.
+      const checking = health.reason === "hooks-unverified" && !codexHookTrustForWorkspace(ws) && !!codexHookTrustCache.getQuery(normWs(codexHookTrustCwd(ws)));
+      const problem = health.required && !health.ready && health.reason !== "implementer-missing" && !checking;
       const sig = `codex-hook:${health.reason}`;
       const dKo = health.reason === "hooks-unverified"
         ? "Codex Peek 훅의 신뢰 상태를 확인하지 못했습니다. 조회 전·시간 초과·app-server 오류를 정상으로 승인하지 않습니다. Codex 실행 상태를 확인하고 Codex 설정 → Hook에서 등록된 훅 전부의 신뢰 여부를 검토하세요."
@@ -9759,6 +9762,10 @@ async function offerCodexHookMigration(extensionRoot:string,count:number,missing
   void vscode.window.showInformationMessage(tE(`Codex 훅 명령을 교체했습니다${missingEvents.length?`(빠진 ${codexHookEventsKo(missingEvents)} 훅도 추가)`:""}. 명령이 바뀌었으므로 Codex 설정 → Hook에서 훅 전부를 다시 신뢰한 뒤 창을 리로드하세요 — 리로드 전까지 훅은 실행되지 않습니다.`,`Codex hook commands were updated${missingEvents.length?` (the missing ${missingEvents.join(", ")} hook(s) were added too)`:""}. Because the commands changed, re-trust the hooks under Codex Settings → Hooks, then reload the window — hooks do not execute until the reload.`));
   try{const trust=await refreshCodexPeekHookTrust(extensionRoot,dashboardCodexHookTrustCwd(extensionRoot),true);if(!trust.ready)await showCodexHookTrustWarning(trust,extensionRoot);}catch{/* 대시보드 경보가 fail-closed 유지 */}
 }
+// [2026-10-10 실사고] 기다리는 시간 10초→90초. 이 PC 실측(Codex 기록 판독): 새 Codex 실행 코어는 시작 뒤 첫 응답까지 4~6초, 그 뒤 훅 목록 요청을
+// 처리하기 시작할 때까지 다시 16~23초가 걸렸다(시작 때 원격 플러그인 목록 등을 받아 옴) — 10초로는 날마다 수백 번 전부 시간 초과였다.
+// 90초는 '그 안에 답하면 바로 끝나는 상한'이다(답이 오면 즉시 끝남 · 확인 주기는 codexHookTrustRecheckDue 가 따로 줄임).
+const CODEX_HOOK_TRUST_QUERY_TIMEOUT_MS = 90000;
 function queryCodexPeekHookTrust(extensionRoot: string, projectCwd: string): Promise<CodexHookTrustSnapshot> {
   const codex=resolveCodexPathForBridge()||"codex";
   const pi=require("../bridge/codex-plugin-install.js") as {
@@ -9772,7 +9779,7 @@ function queryCodexPeekHookTrust(extensionRoot: string, projectCwd: string): Pro
     const inv=pi.buildCodexPluginSpawn(codex,["app-server","--stdio"]);
     let c:ReturnType<typeof spawn>;
     const finish=(v:CodexHookTrustSnapshot)=>{if(done)return;done=true;clearTimeout(timer);try{c.stdin?.end();}catch{}try{c.kill();}catch{}resolve(v);};
-    const timer=setTimeout(()=>finish(fallback(tE("Codex hooks/list 응답 시간 초과","Codex hooks/list timed out"))),10000);
+    const timer=setTimeout(()=>finish(fallback(tE(`Codex hooks/list 응답 시간 초과(${CODEX_HOOK_TRUST_QUERY_TIMEOUT_MS/1000}초)`,`Codex hooks/list timed out (${CODEX_HOOK_TRUST_QUERY_TIMEOUT_MS/1000}s)`))),CODEX_HOOK_TRUST_QUERY_TIMEOUT_MS);
     const send=(o:any)=>{try{c.stdin?.write(JSON.stringify(o)+"\n");}catch(e){finish(fallback(String(e)));}};
     try{c=spawn(inv.file,inv.args,{cwd:extensionRoot,windowsHide:true,shell:false,windowsVerbatimArguments:inv.windowsVerbatimArguments,env:{...process.env,...inv.env}});}catch(e){clearTimeout(timer);resolve(fallback(String(e)));return;}
     c.stderr?.on("data",d=>{if(err.length<32768)err+=d.toString();});
@@ -9797,12 +9804,21 @@ function queryCodexPeekHookTrust(extensionRoot: string, projectCwd: string): Pro
   });
 }
 function contextVersionSafe():string { try{return String(require("../package.json").version||"0.0.0");}catch{return"0.0.0";} }
+// 신뢰 상태를 바꾸는 두 파일(Codex 설정 파일=신뢰 기록 · 훅 파일)의 지문 — 바뀌었을 때만 바로 다시 확인한다(크기·수정 시각 · 없음='-').
+function codexHookTrustFingerprint():string{
+  const one=(f:string)=>{try{const st=fs.statSync(f);return st.size+":"+st.mtimeMs;}catch{return"-";}};
+  return one(path.join(CODEX_HOME,"config.toml"))+"|"+one(codexUserHooksFile());
+}
 function refreshCodexPeekHookTrust(extensionRoot:string,projectCwd:string,force=false):Promise<CodexHookTrustSnapshot>{
   const key=normWs(projectCwd);
   const running=codexHookTrustCache.getQuery(key);if(running)return running;
-  const cached=!force?codexHookTrustCache.getFresh(key,Date.now(),30000):undefined;if(cached)return Promise.resolve(cached);
-  codexHookTrustCache.markStarted(key,Date.now());
-  const query=queryCodexPeekHookTrust(extensionRoot,projectCwd).then(s=>{codexHookTrustCache.setSnapshot(key,s);observeCodexHookTrustForReload(s);return s;}).finally(()=>{codexHookTrustCache.clearQuery(key);});
+  const fp=codexHookTrustFingerprint();
+  if(!force){
+    const snap=codexHookTrustCache.getSnapshot(key);
+    if(snap&&!codexHookTrustRecheckDue({snapshot:snap,lastCheckAt:codexHookTrustCache.lastCheckAt(key),now:Date.now(),fingerprint:fp,lastFingerprint:codexHookTrustCache.getFingerprint(key),failures:codexHookTrustCache.failureCount(key)}))return Promise.resolve(snap);
+  }
+  codexHookTrustCache.markStarted(key,Date.now(),fp);
+  const query=queryCodexPeekHookTrust(extensionRoot,projectCwd).then(s=>{codexHookTrustCache.setSnapshot(key,s);codexHookTrustCache.noteResult(key,s.queried===true);observeCodexHookTrustForReload(s);return s;}).finally(()=>{codexHookTrustCache.clearQuery(key);});
   codexHookTrustCache.setQuery(key,query);return query;
 }
 function dashboardCodexHookTrustCwd(extensionRoot:string):string { const ws=dashboardWorkspace();return ws?codexHookTrustCwd(ws):extensionRoot; }
