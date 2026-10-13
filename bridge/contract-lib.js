@@ -5,6 +5,9 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
+// [RULE-SUPPLY-CORRECTION ⑦ 묶음 4(E) · D-c] 이 모듈이 읽힌 순간의 자기 파일 지문 — 오래 떠 있는 창(대시보드)이 설치 전에 읽은 옛 코드로 수칙서·후보 장부에
+// 쓰는 일을 막는 대조 재료(확장이 쓰기 직전 디스크 지문과 비교). 처음 관측 시점이 아니라 읽힌 시점이라 '읽기와 첫 관측 사이' 빈틈이 없다. 판독 실패=null(관측 기반 대조만).
+const LOADED_IDENT = (() => { try { const s = fs.statSync(__filename); return { mtimeMs: s.mtimeMs, size: s.size }; } catch { return null; } })();
 
 // CODEX_BRIDGE_HOME override(확장 호스트≠훅 home 환경 대비). 미설정이면 ~/.codex-bridge. 확장·codex-bridge.js와 동일 규칙.
 const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(os.homedir(), ".codex-bridge");
@@ -7389,5 +7392,6 @@ module.exports.readEnvelopeCandidatesState = readEnvelopeCandidatesState; // [RU
 module.exports.userDeclinedCandidate = userDeclinedCandidate; // [RULE-SUPPLY 묶음 2-가] 사용자 거절=세대 무관 기억
 module.exports.candidateBatchPlan = candidateBatchPlan; // [RULE-SUPPLY 묶음 2-가] 한꺼번에 올리기 계획(순수)
 Object.assign(module.exports, { RULE_FMT, RULE_TEXT_MAX, BOUNDS_TEXT_MAX, RULE_FIELDS, ruleOneLineOk, effectiveCandidateRule, candidateBodyText, ruleCarryFields }); // [④ 묶음 6(H)] 수칙 문안 칸
+module.exports.LOADED_IDENT = LOADED_IDENT; // [⑦ 묶음 4(E)] 읽힌 순간의 자기 파일 지문
 module.exports.candidateSingleDest = candidateSingleDest;
 module.exports.appendLeadFor = appendLeadFor; // [RULE-SUPPLY 묶음 2-나-2] 덧붙이기 장부 꼬리 보호(분류 자리 장부도 사용) // [RULE-SUPPLY 묶음 2-나-2] 단건 승인 목적지(순수)

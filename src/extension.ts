@@ -10,7 +10,7 @@ import { localizeIntegrityDetail } from "./integrity-i18n";
 import { parseLastModelCommand, parseLastAssistantModel, parseSessionStartTs, resolveCcIntent, modelFamily, shouldAttributeSettingsChange, pruneIntentMap, ageLabel } from "./brain-intent";
 import { parseGitLog, suggest as scopeSuggest, ScopeSuggestion } from "./scope-ledger";
 import { maskKey, isPlausibleKey, mergeDeepseekConfig } from "./deepseek-config";
-import { observeBridgeStale, FileIdent } from "./bridge-stale";
+import { observeBridgeStale, bridgeWriteStale, FileIdent } from "./bridge-stale";
 import { appendApproved, parseApprovedFromMap, normSig } from "./map-ledger";
 import { parseEventsJsonl, deriveLedger, computeScoutHealth, promotableConfirm, HEALTH_MIN_SAMPLE } from "./ledger-events";
 import { catchUp, TailState, makeRolloutAcc, headFirstUserMessage, Msg, RolloutAcc, TURN_CAP } from "./rollout-scan";
@@ -1172,7 +1172,7 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
         const CB9: any = require(path.join(BRIDGE_DIR, "codex-bridge.js"));
         // [기억 권위 A-3] 조정 트리거 ②대시보드 로드 — 해소 blocker 계보→후보 멱등 스캔(중단 복구)
         const genC9: string | null = genOv || hash9 || null;
-        try { if (typeof (CL9 as any).reconcileMemoryCandidates === "function") (CL9 as any).reconcileMemoryCandidates(ws, repo9, genC9); } catch { /* best-effort */ }
+        try { if (typeof (CL9 as any).reconcileMemoryCandidates === "function" && !bridgeWriteGuard().stale) (CL9 as any).reconcileMemoryCandidates(ws, repo9, genC9); } catch { /* best-effort */ }
         if (typeof CB9.computeEnvelopeCandidatesFor !== "function") return undefined;
         // [검증 1회차 blocker③] 산출 세대=브릿지 단일 규칙(candidatesGenOptsFor — 0세대=GEN0 · 첫 승인 직후·검증 이력 없는 빈 코어 승인=현 승인 지문 · 그 외 종전 동결)
         const opts9 = typeof CB9.candidatesGenOptsFor === "function" ? CB9.candidatesGenOptsFor(ws) : (genOv ? { gen0: true } : undefined);
@@ -1218,7 +1218,7 @@ function readEnvelopeView(ws: string | null): { label: string; btn: string | nul
       try {
         const other9: Lang = slot === "ko" ? "en" : "ko";
         const oh9 = (CL9.loadContract(ws, other9) || {}).envelopeHash || null;
-        if (oh9 && oh9 === evv.sha1 && typeof CL9.setEnvelopeHashAllSlots === "function" && CL9.setEnvelopeHashAllSlots(ws, oh9) === 2) hash9 = oh9; // 2슬롯 성공만 치유 확정(부분=현 슬롯 미기록인데 화면만 적용 표시되는 오표시 금지 — f-71d4c2a8)
+        if (oh9 && oh9 === evv.sha1 && typeof CL9.setEnvelopeHashAllSlots === "function" && !bridgeWriteGuard().stale && CL9.setEnvelopeHashAllSlots(ws, oh9) === 2) hash9 = oh9; // 2슬롯 성공만 치유 확정(부분=현 슬롯 미기록인데 화면만 적용 표시되는 오표시 금지 — f-71d4c2a8)
       } catch { /* 치유 실패=종전 표시(승인 대기) */ }
     }
     // §7 증분 2: 개정 초안(제안본) 대기 — 원본·주입은 무변이지만 대시보드만 봐도 알 수 있게 강조(사용자 요구 2026-07-24).
@@ -1790,6 +1790,28 @@ function bridgeStaleView(): { stale: boolean; changed: string[] } {
     if (r.stale) { const key = r.changed.join(","); if (bridgeStalePromptedFor !== key) { bridgeStalePromptedFor = key; void promptBridgeReload(r.changed); } }
     return { stale: r.stale, changed: r.changed };
   } catch { return { stale: false, changed: [] }; }
+}
+// [RULE-SUPPLY-CORRECTION ⑦ 묶음 4(E) · D-c] 옛 코드 쓰기 차단 — 수칙서·후보 장부에 쓰는 화면 동작(승인·한꺼번에 처리·빼기·초안 승인/취소/복구) 직전에
+// 이 창이 읽어 둔 브릿지가 설치본과 같은지 대조한다. 다르면 쓰지 않고 창 다시 불러오기를 요구한다(배너·1회 알림만으로는 옛 코드가 계속 쓸 수 있었음).
+// 대조=관측 기반(처음 관측 지문) + 모듈이 내보낸 읽힌 순간의 지문(LOADED_IDENT). 판정 자체가 실패하면 막는다(쓰기 안전 우선 — 다시 불러오면 풀림).
+// [검증 1회차] 버튼 동작뿐 아니라 화면 갱신 중 쓰기(후보 장부 정리·승인 지문 칸 맞추기)도 옛 판이면 생략한다(읽기만) · 확인 창 뒤의 취소 정리·복구도 쓰기 직전에 다시 대조.
+function bridgeWriteGuard(): { stale: boolean; changed: string[] } {
+  try {
+    const statOf = (p: string): FileIdent | null => { try { const st = fs.statSync(p); return { mtimeMs: st.mtimeMs, size: st.size }; } catch { return null; } };
+    const identOf = (p: string): FileIdent | null => { try { const ex: any = (require.cache[p] as any)?.exports; const id = ex && ex.LOADED_IDENT; return id && typeof id.mtimeMs === "number" && typeof id.size === "number" ? { mtimeMs: id.mtimeMs, size: id.size } : null; } catch { return null; } };
+    const r = bridgeWriteStale(Object.keys(require.cache), BRIDGE_DIR, bridgeLoadedIdents, statOf, identOf);
+    return { stale: r.stale, changed: r.changed };
+  } catch { return { stale: true, changed: ["?"] }; }
+}
+// 쓰기 동작 직전 공통 관문 — 막히면 true(호출자는 아무것도 쓰지 않고 돌아간다) · 안내=다시 불러오기 버튼
+function staleWriteBlocked(en: boolean): boolean {
+  const g = bridgeWriteGuard();
+  if (!g.stale) return false;
+  const reload = en ? "Reload now" : "지금 다시 로드";
+  void Promise.resolve(vscode.window.showWarningMessage(en
+    ? "Not applied — this window is still running an older bridge than the one installed (" + g.changed.slice(0, 3).join(", ") + "). Writing the rulebook or proposals with old code could put items in the wrong place. Reload the window, then try again."
+    : "적용하지 않았어요 — 이 창이 설치된 것보다 이전 판의 브릿지 코드를 쓰고 있어요(" + g.changed.slice(0, 3).join(", ") + "). 이전 코드로 수칙서·제안을 쓰면 잘못된 칸에 들어갈 수 있어요. 창을 다시 로드한 뒤 다시 해 주세요.", reload)).then((pick: any) => { if (pick === reload) void vscode.commands.executeCommand("workbench.action.reloadWindow"); }, () => { /* 무해 */ });
+  return true;
 }
 async function promptBridgeReload(changed: string[]): Promise<void> {
   const reload = tE("지금 다시 로드", "Reload now");
@@ -4303,6 +4325,7 @@ class Dashboard {
           vscode.window.showInformationMessage(msgD, { modal: true, detail: lines.join("\n") }, ...btns).then((sel) => {
             if (sel === okA) { this.stampEnvelopeCurrent(tgtD, tgD, langD, shaD); return; }
             if (sel !== okR) return;
+            if (staleWriteBlocked(enD)) { this.post(); return; } // [⑦ 묶음 4(E) · 검증 1회차] 수칙서 파일 복구 쓰기 직전 옛 코드 대조
             const wsR = dashboardWorkspace(); const tgtR = wsR ? scoutTargetFor(wsR).repo : null;
             if (!wsR || !tgtR || normWs(tgtR) !== normWs(tgtD)) { vscode.window.showWarningMessage(enD ? "The target changed meanwhile — nothing restored." : "그 사이 정찰 대상이 바뀌어 복구하지 않았어요."); this.post(); return; }
             let r: any = null; try { r = CLD.restoreEnvelopeApproved(wsR, tgtR, tgD); } catch { r = null; }
@@ -4331,6 +4354,7 @@ class Dashboard {
         if (m?.type === "envelopeApprove" && typeof m.repo === "string" && m.repo) { // 거버넌스 증분 1 — 수칙서 승인(지문 도장). 2차 정정: 렌더 언어 슬롯 결속(1차 blocker②)+항목 전문 모달(1차 blocker③)
           if (m.lang !== "en" && m.lang !== "ko") return; // 2차 [보완]: 무효 언어값=기록 없이 거부(ko 강제 금지 — 검증값 계약)
           const apLang: Lang = m.lang; // 카드가 렌더된 슬롯 — 도장도 이 슬롯 계약에(모달 사이 전역 언어 전환 경합 차단)
+          if (staleWriteBlocked(apLang === "en")) { this.post(); return; } // [⑦ 묶음 4(E)] 옛 코드 쓰기 차단
           const en9 = apLang === "en";
           const wsE = dashboardWorkspace();
           const tgtE = wsE ? scoutTargetFor(wsE).repo : null;
@@ -4362,6 +4386,7 @@ class Dashboard {
             // 결속 — 잠금 밖 인터리빙으로 사건·도장이 갈라지는 창 제거). 선기록 실패=도장 진행 금지,
             // 도장 실패=사건 잔존(계약의 도장 지문 불일치=수확 미자격이 미완 표지). sourceRefs는 현재
             // 비어 후보 대기(자동 등재는 sourceRefs 결속 사건만 — 점진 보급 구조).
+            if (staleWriteBlocked(en9)) { this.post(); return; } // [⑦ 묶음 4(E)] 확인 창 사이 설치가 바뀌었을 수 있음 — 도장 직전 다시 대조
             let bind9: any = null;
             // 도장=양 슬롯 기록(언어 공유 — 2026-08-22 실보고: 슬롯별 지문 분리로 en이 미승인 취급되던 비의도 분리 봉합)
             try { const MPV9: any = require(path.join(BRIDGE_DIR, "map-provenance.js")); bind9 = MPV9.recordApprovalWithStamp(tgtNow, { envelopeHash: shaAt, sourceRefs: [] }, () => { try { const CLS: any = require(path.join(BRIDGE_DIR, "contract-lib.js")); if (typeof CLS.stampEnvelopeAllSlots !== "function") return false; const rS = CLS.stampEnvelopeAllSlots(wsE, tgtNow, shaAt); return !!(rS && rS.ok); } catch { return false; } }); } catch { bind9 = null; } // 도장=WAL 경유 양 슬롯 트랜잭션(부분 기록 영속 금지)·구세대 브릿지=거부 fail-closed(자동 동기화가 세대를 맞춘다)
@@ -4393,6 +4418,7 @@ class Dashboard {
         if (m?.type === "candMark" && typeof m.id === "string" && /^[0-9a-f]{16}$/.test(m.id) && (m.status === "adopted" || m.status === "declined") && typeof m.gen === "string" && typeof m.wsKey === "string" && m.wsKey) { // §7 증분 3 — 후보 선택 '기록만'(작업 발동 금지·반영은 다음 대화 턴)
           const wsM = dashboardWorkspace(); if (!wsM) return;
           const enM = loadLangExt() === "en";
+          if (staleWriteBlocked(enM)) { this.post(); return; } // [⑦ 묶음 4(E)] 옛 코드 쓰기 차단
           try {
             const CLM: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
             // 재재검증 blocker(ab-1): 카드 원본 프로젝트의 내구 키와 클릭 시점 워크스페이스 재대조 — 멀티루트
@@ -4466,6 +4492,7 @@ class Dashboard {
         if (m?.type === "candBatch" && Array.isArray(m.ids) && (m.action === "adopt" || m.action === "decline") && typeof m.gen === "string" && typeof m.wsKey === "string" && m.wsKey) {
           const wsB = dashboardWorkspace(); if (!wsB) return;
           const enB = loadLangExt() === "en";
+          if (staleWriteBlocked(enB)) { this.post(); return; } // [⑦ 묶음 4(E)] 옛 코드 쓰기 차단
           try {
             const CLB: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
             const CBB: any = require(path.join(BRIDGE_DIR, "codex-bridge.js"));
@@ -4569,6 +4596,7 @@ class Dashboard {
         if (m?.type === "envelopeRevise" && Array.isArray(m.adds) && Array.isArray(m.removes) && typeof m.gen === "string" && m.gen && typeof m.wsKey === "string" && m.wsKey) {
           const wsR9 = dashboardWorkspace(); if (!wsR9) return;
           const enR9 = loadLangExt() === "en";
+          if (staleWriteBlocked(enR9)) { this.post(); return; } // [⑦ 묶음 4(E)] 옛 코드 쓰기 차단
           try {
             const CLR: any = require(path.join(BRIDGE_DIR, "contract-lib.js"));
             if (typeof CLR.wsKeyFor !== "function" || String(CLR.wsKeyFor(wsR9)) !== m.wsKey) { vscode.window.showWarningMessage(enR9 ? "The active project changed — the card refreshes; please mark again." : "화면이 떠 있는 사이 활성 프로젝트가 바뀌었어요 — 카드가 갱신됩니다. 다시 표시해 주세요."); this.post(); return; }
@@ -4597,6 +4625,7 @@ class Dashboard {
         if (m?.type === "proposalDiscard" && typeof m.repo === "string" && m.repo) { // 초안 폐기(2026-08-21 실보고) — 수칙서 무변·채택 후보 복원
           const wsD = dashboardWorkspace(); if (!wsD) return;
           const enD = loadLangExt() === "en";
+          if (staleWriteBlocked(enD)) { this.post(); return; } // [⑦ 묶음 4(E)] 옛 코드 쓰기 차단
           const tgtD = scoutTargetFor(wsD).repo;
           if (normWs(tgtD) !== normWs(m.repo)) { vscode.window.showWarningMessage(enD ? "The target changed — the card refreshes." : "정찰 대상이 바뀌었어요 — 카드가 갱신됩니다."); this.post(); return; }
           // [1차 blocker②] 클릭 시점 초안 지문 포착 — 모달이 떠 있는 사이 초안이 바뀌면 무접촉(오폐기 차단)
@@ -4608,6 +4637,7 @@ class Dashboard {
             enD ? "Discard this revision draft? The active rulebook was never touched and stays as-is. The adopted candidate returns to 'awaiting your call' so you can judge it again later." : "이 개정 초안을 폐기할까요? 적용 중인 수칙서는 애초에 건드린 적이 없어 그대로입니다. 채택했던 후보는 '판단 대기'로 되돌아가 나중에 다시 판단할 수 있어요.",
             { modal: true }, okD).then((sel) => {
             if (sel !== okD) return;
+            if (staleWriteBlocked(enD)) { this.post(); return; } // [⑦ 묶음 4(E) · 검증 1회차] 확인 창 사이 설치가 바뀌었을 수 있음 — 초안은 그대로
             let rD: any = null;
             try { const CLD: any = require(path.join(BRIDGE_DIR, "contract-lib.js")); rD = typeof CLD.discardEnvelopeProposalRestoring === "function" ? CLD.discardEnvelopeProposalRestoring(wsD, hashD) : { ok: false, restored: false, reason: "old-runtime" }; } catch { rD = { ok: false, restored: false }; }
             if (rD && rD.ok) vscode.window.showInformationMessage((enD ? "Draft discarded — rulebook unchanged." : "초안을 폐기했어요 — 수칙서는 그대로입니다.") + (rD.restored ? (enD ? " The candidate is back to awaiting your call." : " 후보는 판단 대기로 복원됐어요.") : ""));
@@ -4629,6 +4659,7 @@ class Dashboard {
         if (m?.type === "proposalRecover") { // §7 증분 2 — 중단 전이 복구(승인 순간의 내용으로 수렴 — 새 도장 아님)
           const wsR = dashboardWorkspace(); if (!wsR) return;
           const enR = loadLangExt() === "en";
+          if (staleWriteBlocked(enR)) { this.post(); return; } // [⑦ 묶음 4(E)] 옛 코드 쓰기 차단
           let rr: any = null;
           try { const CL9: any = require(path.join(BRIDGE_DIR, "contract-lib.js")); rr = typeof CL9.recoverEnvelopeTransition === "function" ? CL9.recoverEnvelopeTransition(wsR) : null; } catch { rr = null; }
           if (rr && rr.st === "recovered") vscode.window.showInformationMessage(enR ? "Transition completed with the stamped content." : "중단됐던 승인 전이를 도장 시점 내용으로 마무리했어요.");
@@ -5254,6 +5285,7 @@ class Dashboard {
     let ev2: any = null; try { ev2 = target === "archive" ? CLS.readVerifyEnvelopeArchive(tgtS) : CLS.readVerifyEnvelope(tgtS); } catch { ev2 = null; }
     if (!ev2 || ev2.st !== "ok" || String(ev2.sha1) !== shaAt) { vscode.window.showWarningMessage(en9 ? "The rules file changed while approving — not approved. Please review again." : "승인하는 사이 수칙 파일이 바뀌어 승인하지 않았습니다 — 다시 확인해 주세요."); this.post(); return; }
     if (target === "core" && ev2.truncated === true) { vscode.window.showWarningMessage(en9 ? "Some items exceed the caps and are cut off — approval is blocked until the file is trimmed." : "일부 항목이 상한을 넘어 잘려요 — 파일을 줄이기 전에는 승인할 수 없어요."); this.post(); return; }
+    if (staleWriteBlocked(en9)) { this.post(); return; } // [⑦ 묶음 4(E)] 도장 직전 옛 코드 대조
     let bind9: any = null;
     try { const MPV9: any = require(path.join(BRIDGE_DIR, "map-provenance.js")); bind9 = MPV9.recordApprovalWithStamp(tgtS, { envelopeHash: shaAt, target, sourceRefs: [] }, () => { try { const rS = CLS.stampEnvelopeAllSlots(wsS, tgtS, shaAt, target); return !!(rS && rS.ok); } catch { return false; } }); } catch { bind9 = null; }
     if (!bind9 || !bind9.recorded) { vscode.window.showWarningMessage(en9 ? "Failed to record the approval event — approval aborted (no stamp written)." : "승인 사건 기록에 실패해 승인을 중단했어요(도장 미기록 — 다시 시도해 주세요)."); this.post(); return; }
@@ -5266,6 +5298,7 @@ class Dashboard {
 
           const wsA = dashboardWorkspace(); if (!wsA) return;
           const enA = (m.lang === "en");
+          if (staleWriteBlocked(enA)) { this.post(); return; } // [⑦ 묶음 4(E)] 옛 코드 쓰기 차단
           const apL: Lang = (m.lang === "en" || m.lang === "ko") ? m.lang : loadLangExt();
           const tgtA = scoutTargetFor(wsA).repo;
           if (normWs(tgtA) !== normWs(m.repo)) { vscode.window.showWarningMessage(enA ? "The scout target changed — the card refreshes. Please open it again." : "정찰 대상이 바뀌었어요 — 카드가 갱신됩니다. 다시 열어 주세요."); this.post(); return; }
@@ -5300,6 +5333,7 @@ class Dashboard {
             if (sel !== okA) {
               // [재편 B §3-4] 1클릭 체인의 취소=복원형 폐기(초안 잔존 금지 — 복원 실패 시엔 초안 보존이 계약이라 재시도 안내)
               if (autoDiscardOnCancel) {
+                if (staleWriteBlocked(enA)) { this.post(); return; } // [⑦ 묶음 4(E) · 검증 1회차] 취소 뒤 자동 정리도 쓰기 — 옛 코드면 초안을 남김(다시 불러온 뒤 정리)
                 try { const dR = typeof CLA.discardEnvelopeProposalRestoring === "function" ? CLA.discardEnvelopeProposalRestoring(wsA, draftTokA) : null; // [1차 blocker②→2차] 내가 연 초안 신원(draftId) 결속 — 다른 초안이면 무접촉
                   if (dR && dR.ok) vscode.window.showInformationMessage(enA ? "Cancelled — nothing changed (the proposal went back to the list)." : "취소했어요 — 아무것도 바뀌지 않았고, 제안은 목록으로 돌아갔습니다.");
                   else vscode.window.showWarningMessage(enA ? "Cancel could not fully clean up (" + ((dR && dR.reason) || "unknown") + ") — the draft is kept; use the draft card to retry." : "취소 정리가 완료되지 않았어요(" + ((dR && dR.reason) || "unknown") + ") — 초안은 보존됐고, 초안 카드에서 이어서 처리할 수 있어요."); } catch { /* 보존 우선 — 초안 카드가 복구 표면 */ }
@@ -5307,6 +5341,7 @@ class Dashboard {
               }
               return;
             }
+            if (staleWriteBlocked(enA)) { this.post(); return; } // [⑦ 묶음 4(E)] 확인 창 사이 설치가 바뀌었을 수 있음 — 도장 직전 다시 대조(초안은 그대로 — 다시 불러온 뒤 승인·취소)
             const wsNow2 = dashboardWorkspace(); // 재검증 blocker④(ab-1): 모달 사이 대상 변경=중단(직접 승인 경로 동형)
             const tgtNow2 = wsNow2 ? scoutTargetFor(wsNow2).repo : null;
             if (!tgtNow2 || normWs(tgtNow2) !== normWs(tgtA)) { vscode.window.showWarningMessage(enA ? "The target changed during approval — not applied." : "승인하는 사이 정찰 대상이 바뀌어 적용하지 않았습니다."); this.post(); return; }
