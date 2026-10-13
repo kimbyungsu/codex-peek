@@ -288,7 +288,7 @@ function deliveryBlock(results, lang) {
       ? `- ${r.resultId} · suggested section ${seat} · delivery ${k}/${DELIVERY_MAX}\n  words: "${oneLineOf(r.quote, DELIVER_QUOTE_SHOW)}"\n  effect on judging: ${oneLineOf(r.bounds, DELIVER_NOTE_SHOW)} · why: ${oneLineOf(r.why, DELIVER_NOTE_SHOW)}`
       : `- ${r.resultId} · 제안 칸 ${seat} · 전달 ${k}/${DELIVERY_MAX}회째\n  말: "${oneLineOf(r.quote, DELIVER_QUOTE_SHOW)}"\n  판정 영향: ${oneLineOf(r.bounds, DELIVER_NOTE_SHOW)} · 이유: ${oneLineOf(r.why, DELIVER_NOTE_SHOW)}`;
   });
-  const raise = CL.bridgeCmd("codex-bridge.js", 'constraint add --quote "' + (en ? "<a phrase inside the words above>" : "<위 말 안의 구절>") + '" --why "' + (en ? "<one-line reason>" : "<근거 한 줄>") + '" --from <id> [--axis supportedEnv|alwaysBlocker|outOfScope]');
+  const raise = CL.bridgeCmd("codex-bridge.js", 'constraint add --quote "' + (en ? "<a phrase inside the words above>" : "<위 말 안의 구절>") + '" --rule "' + (en ? "<the rulebook line in plain words: who/what, when>" : "<수칙서에 들어갈 문안 — 쉬운 말·누가/무엇에·언제>") + '" --bounds "' + (en ? "<how it changes judging, one line>" : "<판정에 미치는 영향 한 줄>") + '" --why "' + (en ? "<one-line reason>" : "<근거 한 줄>") + '" --from <id> [--axis supportedEnv|alwaysBlocker|outOfScope]'); // [④ 묶음 6(H)] 올림에는 문안·영향 칸 필수
   const skip = CL.bridgeCmd("codex-bridge.js", 'classify skip <id> --note "' + (en ? "<one-line reason>" : "<이유 한 줄>") + '"');
   const cmd = en
     ? `Raise: ${raise} · Not raise: ${skip} — commands only, without listing these in the conversation or asking the user (the user approves on the dashboard).`
@@ -308,7 +308,7 @@ function stopGateFileFor(provider, sessionId) { return path.join(STOP_GATE_DIR, 
 function stopGateText(pending, lang) {
   const en = lang === "en";
   const list = pending.map((r) => r.resultId + ' "' + oneLineOf(r.quote, 60) + '"').join(", ");
-  const raise = CL.bridgeCmd("codex-bridge.js", 'constraint add --quote "' + (en ? "<a phrase inside those words>" : "<그 말 안의 구절>") + '" --why "' + (en ? "<one-line reason>" : "<근거 한 줄>") + '" --from <id> [--axis supportedEnv|alwaysBlocker|outOfScope]');
+  const raise = CL.bridgeCmd("codex-bridge.js", 'constraint add --quote "' + (en ? "<a phrase inside those words>" : "<그 말 안의 구절>") + '" --rule "' + (en ? "<the rulebook line in plain words: who/what, when>" : "<수칙서에 들어갈 문안 — 쉬운 말·누가/무엇에·언제>") + '" --bounds "' + (en ? "<how it changes judging, one line>" : "<판정에 미치는 영향 한 줄>") + '" --why "' + (en ? "<one-line reason>" : "<근거 한 줄>") + '" --from <id> [--axis supportedEnv|alwaysBlocker|outOfScope]'); // [④ 묶음 6(H)]
   const skip = CL.bridgeCmd("codex-bridge.js", 'classify skip <id> --note "' + (en ? "<one-line reason>" : "<이유 한 줄>") + '"');
   return en
     ? `[User-words classification gate] ${pending.length} classification result(s) handed to you this turn are still undecided, so this turn cannot end: ${list}. Raise: ${raise} · Not raise: ${skip} — commands only, without listing these in the conversation or asking the user.`

@@ -3331,13 +3331,13 @@ function cmdEnvelopeTransition(rest) {
 // 거버넌스 §7 증분 1 — 수칙서 후보 장부 CLI: list=현 승인 세대 기준 후보 상태 조회 / mark=결과 기록(append 전용).
 // 기록 세대=현 승인 세대(계약 envelopeHash) — 소진 재료의 스킵 판정과 같은 축.
 // ── constraint — 약속 발화 포착 부품 A(설계 §1): 구현자가 사용자 발화 원문을 같은 턴에 상신 ────────────
-// 사용: constraint add --quote "<사용자 발화 원문 연속 구절>" --why "<한 줄 근거>" [--scope <파일|영역>]
+// 사용: constraint add --quote "<사용자 발화 원문 연속 구절>" --rule "<수칙 문안>" --bounds "<판정에 미치는 영향>" --why "<한 줄 근거>" [--redraft-of <안 올린 후보 id>] [--scope <파일|영역>]
 // 대조 권위=훅 턴 스냅샷(작문·재구성 fail-closed). 성공해도 '후보'일 뿐 — 판정 경계 반영은 사용자 도장 후.
 function cmdConstraint(rest) {
   const en = loadLang() === "en";
   const ws = configWs();
   if (String(rest[0] || "") !== "add") {
-    console.error(en ? 'usage: constraint add --quote "<verbatim user words>" --why "<one-line reason>" [--axis supportedEnv|alwaysBlocker|outOfScope] [--from <classification result id delivered this turn>] [--scope <file|area>] [--again (only when the user asks again for something they declined)]' : '사용: constraint add --quote "<사용자 발화 원문 연속 구절>" --why "<한 줄 근거>" [--axis supportedEnv|alwaysBlocker|outOfScope] [--from <이번 차례에 전달받은 분류 결과 id>] [--scope <파일|영역>] [--again (사용자가 안 올렸던 것을 대화로 다시 요청했을 때만)]');
+    console.error(en ? 'usage: constraint add --quote "<verbatim user words>" --rule "<the rulebook line in plain words: who/what it applies to and when>" --bounds "<how it changes the verifier\'s judgment, one line>" --why "<one-line reason>" [--axis supportedEnv|alwaysBlocker|outOfScope] [--from <classification result id delivered this turn>] [--redraft-of <id of a candidate the user declined> (only when the user asked to rewrite it; --quote = that request)] [--scope <file|area>] [--again (only when the user asks again for something they declined)]' : '사용: constraint add --quote "<사용자 말 원문 연속 구절>" --rule "<수칙서에 들어갈 문안 — 쉬운 말·누가/무엇에·언제 적용되는지>" --bounds "<이 수칙이 검증 판정을 어떻게 바꾸는지 한 줄>" --why "<한 줄 근거>" [--axis supportedEnv|alwaysBlocker|outOfScope] [--from <이번 차례에 전달받은 분류 결과 id>] [--redraft-of <사용자가 안 올린 후보 id>(사용자가 고쳐 다시 올리라고 했을 때만 · --quote=그 요청 문장)] [--scope <파일|영역>] [--again (사용자가 안 올렸던 것을 대화로 다시 요청했을 때만)]');
     return 2;
   }
   const flagText = (name) => { // 값이 공백 포함 다단 토큰이어도 다음 --플래그 전까지 합류(따옴표 유실 관용)
@@ -3352,16 +3352,17 @@ function cmdConstraint(rest) {
   const scope = flagText("--scope");
   const axis = flagText("--axis").trim(); // [⑤ 2단계] 최종 칸(닫힌 목록 — 그 밖=거부)
   const fromId = flagText("--from").trim(); // [⑤ 2단계] 이 차례에 전달받은 분류 결과 id(자체 상신 한도 밖 · 결과 인용 안의 구절만)
+  const rule = flagText("--rule"), bounds = flagText("--bounds"), redraftOf = flagText("--redraft-of").trim(); // [④ 묶음 6(H) · D-g] 수칙 문안·판정 영향(필수) · 다시 쓰기 대상
   try { const sidUW = process.env.CLAUDE_CODE_SESSION_ID || ""; if (sidUW) require("./user-words.js").captureForActiveTurn(ws, sidUW); } catch { /* best-effort — [묶음 2-나] 같은 차례에 방금 답한 선택지 직접 입력도 원문 대조에 쓰이게 먼저 수집 */ }
   const ctx = constraintTurnContext(); // [ab-1] repoKey=훅이 원문 스냅숏 시점에 기록한 값(ctx.repoKey) — 여기서 재계산하지 않는다
   if (ctx && ctx.ok && rest.includes("--again")) ctx.again = true; // [묶음 2-가] 사용자가 대화로 다시 올려 달라고 한 경우만 — 사용자 거절 기억 해제(도장은 여전히 필요)
-  const r = constraintAdd(ws, quote, why, scope, ctx, { ...(axis ? { axis } : {}), ...(rest.includes("--from") ? { from: fromId } : {}) });
+  const r = constraintAdd(ws, quote, why, scope, ctx, { ...(axis ? { axis } : {}), ...(rest.includes("--from") ? { from: fromId } : {}), rule, bounds, ...(rest.includes("--redraft-of") ? { redraftOf } : {}), requireRule: true });
   if (r.ok && r.pendingRepair) { // [검증 4회차 보완] 후보 장부 기록 실패 — 판단은 표식에 저장됨(장부 반영은 다음 판단 때 채움)
     console.log((en ? "decision saved (mark only): " : "판단 저장됨(표식만): ") + r.candidateId + (r.axis ? (en ? " · section " : " · 칸 ") + r.axis : "") + (en ? " · from classification result " : " · 분류 결과 ") + r.fromResult + (en ? " — writing the candidate ledger failed; the decision is kept in its mark and the ledger entry is filled in at the next decision. It becomes judging authority only after the user stamps it." : " — 후보 장부 기록에 실패해 판단은 표식에만 저장됐습니다. 장부 반영은 다음 판단 때 채워집니다. 사용자가 도장을 찍어야만 판정 경계에 반영됩니다."));
     return 0;
   }
   if (r.ok) {
-    console.log((en ? "registered as a rulebook candidate: " : "수칙서 후보로 상신됨: ") + r.candidateId + (r.axis ? (en ? " · section " : " · 칸 ") + r.axis : "") + (r.fromResult ? (en ? " · from classification result " : " · 분류 결과 ") + r.fromResult + (r.resultMarked === false ? (en ? " (result status row not written — the decision mark and candidate ledger still record it)" : "(결과 상태 기록 실패 — 판단 표식·후보 장부가 판단 근거로 남음)") : "") : "") + (en
+    console.log((en ? "registered as a rulebook candidate: " : "수칙서 후보로 상신됨: ") + r.candidateId + (r.axis ? (en ? " · section " : " · 칸 ") + r.axis : "") + (r.redraftOf ? (en ? " · rewrite of " + r.redraftOf + " (that declined candidate stays as it was)" : " · " + r.redraftOf + " 를 고쳐 쓴 새 후보(안 올린 옛 후보는 그대로)") : "") + (r.fromResult ? (en ? " · from classification result " : " · 분류 결과 ") + r.fromResult + (r.resultMarked === false ? (en ? " (result status row not written — the decision mark and candidate ledger still record it)" : "(결과 상태 기록 실패 — 판단 표식·후보 장부가 판단 근거로 남음)") : "") : "") + (en
       ? " — recorded in the candidate ledger; it becomes judging authority ONLY after the user stamps it."
       : " — 후보 장부에 기록됐습니다. 사용자가 도장을 찍어야만 판정 경계에 반영됩니다."));
     return 0;
@@ -3381,7 +3382,13 @@ function cmdConstraint(rest) {
     "why-missing": [en ? "--why is required (one-line non-authoritative reason)." : "--why는 필수입니다(비권위 판단 근거 한 줄).", 2],
     "why-format": [en ? `--why must be a single line within ${CONSTRAINT_WHY_MAX} chars.` : `--why는 개행 없는 ${CONSTRAINT_WHY_MAX}자 이내 한 줄이어야 합니다.`, 2],
     "envelope-inactive": [en ? "a rulebook file exists here but is not approved (or is unreadable) — approve or restore it in the dashboard first, then candidates can be filed." : "이 작업공간의 수칙서 파일이 승인 전이거나 읽을 수 없습니다 — 대시보드에서 승인·복구한 뒤 올릴 수 있어요.", 1], // [RULE-SUPPLY 묶음 1] 파일·승인 모두 없음=0세대 접수(이 사유 아님)
-    "duplicate": [en ? "already filed for this approval generation (same quote fingerprint)." : "이미 이 승인 세대에 같은 원문 지문으로 상신돼 있습니다.", 1],
+    "duplicate": [en ? "already filed for this approval generation (same quote fingerprint — for a rewrite, the same request sentence and the same target)." : "이미 이 승인 세대에 같은 원문 지문으로 상신돼 있습니다(다시 쓰기는 같은 요청 문장·같은 대상이면 같은 후보).", 1],
+    "rule-missing": [en ? "--rule is required: write the rulebook line yourself in plain words (who/what it applies to and when). The user stamps this line; --quote only proves the user said it." : "--rule 이 필요합니다: 수칙서에 들어갈 문안을 쉬운 말로(누구·무엇에·언제 적용되는지) 직접 쓰세요. 사용자는 이 문안에 도장을 찍고, --quote 는 사용자가 그 말을 했다는 근거로만 붙습니다.", 2], // [④ 묶음 6(H)]
+    "rule-format": [en ? `--rule must be one line within 200 chars and must not contain harness protocol markers.` : `--rule 은 줄바꿈 없는 200자 이내 한 줄이어야 하고 하네스 규약 어휘를 담을 수 없습니다.`, 2],
+    "bounds-missing": [en ? "--bounds is required: one line on how this rule changes the verifier's judgment (which findings it puts out of scope, or what it makes always a defect)." : "--bounds 가 필요합니다: 이 수칙이 검증 판정을 어떻게 바꾸는지 한 줄(어떤 지적을 범위 밖으로 돌리는지, 또는 무엇을 언제나 결함으로 만드는지).", 2],
+    "bounds-format": [en ? "--bounds must be one line within 200 chars and must not contain harness protocol markers." : "--bounds 는 줄바꿈 없는 200자 이내 한 줄이어야 하고 하네스 규약 어휘를 담을 수 없습니다.", 2],
+    "redraft-target": [en ? "--redraft-of must name a user-promise candidate in this workspace and repository that the user declined — nothing was filed and that candidate is untouched." : "--redraft-of 에는 이 작업공간·저장소에서 사용자가 안 올린 사용자 약속 후보 id 만 쓸 수 있습니다 — 아무것도 올리지 않았고 그 후보도 그대로입니다.", 2],
+    "redraft-with-from": [en ? "--redraft-of and --from cannot be combined: a rewrite is backed by the user's request to rewrite, not by a classification result." : "--redraft-of 와 --from 은 함께 쓸 수 없습니다: 다시 쓰기의 근거는 사용자의 '고쳐 다시' 요청 문장이지 분류 결과가 아닙니다.", 2],
     "declined-suppressed": [en ? "the user already declined this (remembered across rulebook changes) — not re-filed. Only if the user asks again in chat, resubmit with --again." : "사용자가 이미 '안 올림' 한 문안입니다(수칙서가 바뀌어도 기억) — 재상신하지 않습니다. 사용자가 대화로 다시 올려 달라고 할 때만 --again 으로 다시 올리세요.", 1],
     "turn-cap": [en ? `per-turn cap reached (${CONSTRAINT_TURN_CAP}).` : `턴당 상신 상한(${CONSTRAINT_TURN_CAP}건)에 도달했습니다.`, 1],
     "pending-cap": [en ? "pending candidate cap reached (older runtime)." : "대기 후보 상한(옛 설치본 동작)입니다.", 1], // [묶음 2-가] 대기 12칸 거절 폐지 — 옛 장부 호환 문구만
@@ -3398,6 +3405,8 @@ function cmdConstraint(rest) {
   };
   const m = M[r.reason] || (r.reason && r.reason.startsWith("sensitive-") ? [en ? "quote rejected by the sensitive-form guard (paths/emails/tokens) — never quote secrets; pick a different passage." : "인용문이 민감정보 형태 방어(경로·이메일·토큰류)에 걸렸습니다 — 비밀값은 옮기지 말고 다른 구절을 고르세요.", 1]
     : r.reason && r.reason.startsWith("why-sensitive-") ? [en ? "--why rejected by the sensitive-form guard." : "--why가 민감정보 형태 방어에 걸렸습니다.", 2]
+    : r.reason && r.reason.startsWith("rule-sensitive-") ? [en ? "--rule rejected by the sensitive-form guard." : "--rule 이 민감정보 형태 방어에 걸렸습니다.", 2]
+    : r.reason && r.reason.startsWith("bounds-sensitive-") ? [en ? "--bounds rejected by the sensitive-form guard." : "--bounds 가 민감정보 형태 방어에 걸렸습니다.", 2]
     : r.reason && r.reason.startsWith("scope-sensitive-") ? [en ? "--scope rejected by the sensitive-form guard." : "--scope가 민감정보 형태 방어에 걸렸습니다.", 2]
     : [en ? "rejected: " + r.reason : "거부됨: " + r.reason, 1]);
   console.error((en ? "not registered (" : "상신 안 됨(") + r.reason + ") — " + m[0] + (en ? " A durable receipt was recorded either way." : " 성공·거부 모두 내구 영수증으로 남았습니다."));
@@ -3416,10 +3425,11 @@ function cmdEnvelopeCandidate(rest) {
     console.error((en ? "[memory candidates] " : "[기억 후보 조정] ") + `+${recon9.appended}` + (recon9.suppressed.length ? ` · ${en ? "suppressed" : "억제"} ${recon9.suppressed.length}(${recon9.suppressed.map((s) => s.why).join(",")})` : "") + (recon9.legacyUnbound ? ` · legacy-unbound ${recon9.legacyUnbound}` : "")); // 침묵 누락 금지(설계 A-5)
   }
   if (sub === "list") {
-    const { latest } = readEnvelopeCandidates(ws);
+    const { rows: rowsL9, latest } = readEnvelopeCandidates(ws);
     const rows = [...latest.entries()].filter(([k]) => k.endsWith("@" + String(gen || "")));
     if (!rows.length) { console.log(en ? "(no candidate records for the current approval generation)" : "(현 승인 세대의 후보 기록 없음)"); return 0; }
-    for (const [, r] of rows) console.log(`${r.candidateId} ${r.status} ${r.ts || ""}${r.title ? " — " + String(r.title).slice(0, 80) : r.note ? " — " + r.note : ""}`);
+    const bodyOf9 = (r) => { const b = require("./contract-lib.js").candidateBodyText(rowsL9, r.candidateId, String(r.title || "")); return b === null ? (en ? "(rule text field broken)" : "(문안 칸 이상)") : b; }; // [④ 묶음 6(H)] 새 형식=수칙 문안 · 옛 형식=원문
+    for (const [, r] of rows) { const b9 = r.title ? bodyOf9(r) : ""; console.log(`${r.candidateId} ${r.status} ${r.ts || ""}${b9 ? " — " + String(b9).slice(0, 80) : r.note ? " — " + r.note : ""}`); }
     return 0;
   }
   if (sub === "draft") { // [기억 권위 A-4] 후보 1건 → 현행 수칙서 병합 proposalText 초안(승인은 기존 도장 경로)
@@ -4516,7 +4526,14 @@ function computeEnvelopeCandidatesFor(ws, opts) {
       { const rk5 = rec.repoKey || m5.repoKey || ""; if (!rk5) { unmarked5++; continue; } if (!repoKey5 || rk5 !== repoKey5) continue; } // [ab-1] fail-closed: 무표기(판정 불가)·현재 대상 판독 불가·다른 저장소 태생=합류 안 함
       if (seen5.has(rec.candidateId)) continue;
       seen5.add(rec.candidateId);
-      cands.push({ candidateId: rec.candidateId, kind: k5, key: rec.findingId || m5.findingId || "", n: 1, titles: [String(rec.title || m5.title || "")].filter(Boolean), ts: String(rec.ts || ""), ...(k5 === "user-constraint" || k5 === "rule-manual" || k5 === "user-direct" || k5 === "curator" ? { why: String(rec.why || m5.why || "") } : {}), ...(k5 === "curator" ? { operation: String(rec.operation || m5.operation || ""), target: String(rec.target || m5.target || ""), explain: rec.explain || m5.explain || null } : {}), ...(k5 === "user-constraint" ? { axis: require("./contract-lib.js").effectiveCandidateAxis(candRows9, rec.candidateId), ...(require("./contract-lib.js").effectiveSubmittedRow(candRows9, rec.candidateId) || {}).fromResult ? { fromResult: true } : {}, origin: String(rec.origin || m5.origin || ""), recommend: String(rec.recommend || m5.recommend || ""), quoteSource: String(rec.quoteSource || m5.quoteSource || "") } : {}) }); // ts=제안 시각 · [묶음 2-나-2] 사용자 약속 후보의 칸(axis)·출처(origin classifier=분류 실행) 동봉·why=상신 근거(사람 표면 보조 줄 — rule-manual도 '왜 관통 지침인지' 동봉·재편 A §2-2)
+      // [④ 묶음 6(H)] 카드 문안=후보 문안 단일 함수(새 형식=수칙 문안 · 옛 형식=원문) · 새 형식은 근거 원문(quote)·판정 영향(bounds)을 따로 싣는다 · 문안 칸 이상=ruleBroken(승인은 초안이 거부)
+      const CLv5 = require("./contract-lib.js");
+      const effR5 = k5 === "user-constraint" ? CLv5.effectiveCandidateRule(candRows9, rec.candidateId) : null;
+      const new5 = !!(effR5 && effR5.fmt !== undefined);
+      const body5 = new5 ? CLv5.candidateBodyText(candRows9, rec.candidateId, String(rec.title || m5.title || "")) : String(rec.title || m5.title || "");
+      // [검증 1회차 blocker] '새 형식 후보인지'는 형식 표식 값의 참·거짓이 아니라 표식의 존재로(ruleFmt) — 빈 표식("")·모르는 형식도 새 형식(문안 칸 이상)으로 화면까지 간다
+      const ruleView5 = new5 ? { ruleFmt: true, fmt: String(effR5.fmt === undefined || effR5.fmt === null ? "" : effR5.fmt), quote: String(rec.title || m5.title || ""), bounds: String(effR5.bounds || ""), ...(effR5.redraftOf ? { redraftOf: String(effR5.redraftOf) } : {}), ...(body5 === null ? { ruleBroken: true } : {}) } : {};
+      cands.push({ candidateId: rec.candidateId, kind: k5, key: rec.findingId || m5.findingId || "", n: 1, titles: [String(body5 === null ? "" : body5)].filter(Boolean), ...ruleView5, ts: String(rec.ts || ""), ...(k5 === "user-constraint" || k5 === "rule-manual" || k5 === "user-direct" || k5 === "curator" ? { why: String(rec.why || m5.why || "") } : {}), ...(k5 === "curator" ? { operation: String(rec.operation || m5.operation || ""), target: String(rec.target || m5.target || ""), explain: rec.explain || m5.explain || null } : {}), ...(k5 === "user-constraint" ? { axis: require("./contract-lib.js").effectiveCandidateAxis(candRows9, rec.candidateId), ...(require("./contract-lib.js").effectiveSubmittedRow(candRows9, rec.candidateId) || {}).fromResult ? { fromResult: true } : {}, origin: String(rec.origin || m5.origin || ""), recommend: String(rec.recommend || m5.recommend || ""), quoteSource: String(rec.quoteSource || m5.quoteSource || "") } : {}) }); // ts=제안 시각 · [묶음 2-나-2] 사용자 약속 후보의 칸(axis)·출처(origin classifier=분류 실행) 동봉·why=상신 근거(사람 표면 보조 줄 — rule-manual도 '왜 관통 지침인지' 동봉·재편 A §2-2)
     }
   }
   let skipped = 0;
@@ -5587,7 +5604,7 @@ function main() {
           "  " + SELF_CMD + " ask-active status | ask-active clear --confirm\n" +
           '  ' + SELF_CMD + ' finding-judge [<id> <fix-fact|fix-gap|rebut|park> --note "근거(12자+·park 제외)"] [--campaign <id>]  (열린 지적 판단 기록 — 미판단이 남으면 다음 검증이 시작되지 않음)\n' +
           '  ' + SELF_CMD + ' rule-propose <findingId> --why "<왜 관통 지침인지 1줄>"  (마감 판단 (c)관통 지침만 수칙서 후보로 — 효력은 사용자 도장부터)\n' +
-          '  ' + SELF_CMD + ' constraint add --quote "<사용자 말 원문 연속 구절>" --why "<한 줄 근거>" [--axis <칸>] [--from <분류 결과 id>]  (사용자가 말한 지속 기준을 수칙서 후보로 — 이번·이전 메시지 원문 그대로만 · 효력은 사용자 도장부터)\n' +
+          '  ' + SELF_CMD + ' constraint add --quote "<사용자 말 원문 연속 구절>" --rule "<쉬운 말 수칙 문안>" --bounds "<판정에 미치는 영향 한 줄>" --why "<한 줄 근거>" [--axis <칸>] [--from <분류 결과 id>] [--redraft-of <안 올린 후보 id>]  (사용자가 말한 지속 기준을 수칙서 후보로 — 이번·이전 메시지 원문 그대로만 · 효력은 사용자 도장부터)\n' +
           '  ' + SELF_CMD + ' classify [run|status|list|skip <결과 id> --note "<이유>"]  (모아 둔 사용자 말의 성격 분류 · 전달받은 판정 경계 결과 안 올림 — 승인은 사용자 화면)\n' +
           '  ' + SELF_CMD + ' closing submit --file <경로> | closing template | closing status  (검증 상한 마감 기록 — 답 본문 대신 제출·종료 때 다시 검사)\n' +
           "  " + SELF_CMD + " timeout  (대시보드 검증 대기시간과 외부 호출 최소 timeout 확인)\n" +

@@ -240,9 +240,9 @@ t("⑤ 명령줄 — constraint add --axis --from · classify skip --note (실�
   const env = Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME, CLAUDE_PROJECT_DIR: P.ws, CLAUDE_CODE_SESSION_ID: SESS });
   const cli = path.join(ROOT, "bridge", "codex-bridge.js");
   const run = (args) => cp.spawnSync(process.execPath, [cli, ...args], { env, encoding: "utf8", cwd: P.ws });
-  const bad = run(["constraint", "add", "--quote", A, "--why", "분류 결과를 보고 판단", "--axis", "nowhere"]);
+  const bad = run(["constraint", "add", "--quote", A, "--rule", "실기기 최신폰 확인은 이번 단계 검증 범위에서 뺀다", "--bounds", "실기기 최신폰 미확인 지적은 범위 밖으로 돌린다", "--why", "분류 결과를 보고 판단", "--axis", "nowhere"]);
   assert.ok(bad.status === 2 && /axis-invalid/.test(bad.stderr), bad.stderr);
-  const ok = run(["constraint", "add", "--quote", A, "--why", "분류 결과를 보고 판단", "--from", rA.resultId]);
+  const ok = run(["constraint", "add", "--quote", A, "--rule", "실기기 최신폰 확인은 이번 단계 검증 범위에서 뺀다", "--bounds", "실기기 최신폰 미확인 지적은 범위 밖으로 돌린다", "--why", "분류 결과를 보고 판단", "--from", rA.resultId]);
   assert.ok(ok.status === 0 && /칸 outOfScope/.test(ok.stdout) && new RegExp("분류 결과 " + rA.resultId).test(ok.stdout), ok.stdout + ok.stderr);
   const sk0 = run(["classify", "skip", rB.resultId, "--note", "짧음"]);
   assert.ok(sk0.status === 2 && /note-format/.test(sk0.stderr), sk0.stderr);
@@ -293,7 +293,7 @@ t("★결과 판단 표식(검증 1~3회차) — 같은 결과로 여러 상신�
   const env = Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME, CLAUDE_PROJECT_DIR: P.ws, CLAUDE_CODE_SESSION_ID: SESS });
   const cli = path.join(ROOT, "bridge", "codex-bridge.js");
   const quotes = [A, "실기기 최신폰 확인은 이번 단계 범위 밖이라고", "최신폰 확인은 이번 단계 범위 밖이라고 계속 보자", "이번 단계 범위 밖이라고 계속 보자 그렇게"];
-  const runs = await Promise.all(quotes.map((q) => new Promise((res) => { const ch = cp.spawn(process.execPath, [cli, "constraint", "add", "--quote", q, "--why", "분류 결과를 보고 판단", "--from", rA.resultId], { env, cwd: P.ws, windowsHide: true }); let so = "", se = ""; ch.stdout.on("data", (d) => { so += d; }); ch.stderr.on("data", (d) => { se += d; }); ch.on("close", (code) => res({ code, so, se })); })));
+  const runs = await Promise.all(quotes.map((q) => new Promise((res) => { const ch = cp.spawn(process.execPath, [cli, "constraint", "add", "--quote", q, "--rule", "실기기 최신폰 확인은 이번 단계 검증 범위에서 뺀다", "--bounds", "실기기 최신폰 미확인 지적은 범위 밖으로 돌린다", "--why", "분류 결과를 보고 판단", "--from", rA.resultId], { env, cwd: P.ws, windowsHide: true }); let so = "", se = ""; ch.stdout.on("data", (d) => { so += d; }); ch.stderr.on("data", (d) => { se += d; }); ch.on("close", (code) => res({ code, so, se })); })));
   const okN = runs.filter((r) => r.code === 0).length;
   const withFrom = rowsOf(P).filter((x) => x.fromResult === rA.resultId);
   assert.ok(okN === 1 && new Set(withFrom.map((x) => x.candidateId)).size === 1, "★결과 하나=후보 하나 " + JSON.stringify(runs.map((r) => [r.code, (r.so + r.se).slice(0, 90)])));
@@ -356,7 +356,7 @@ t("★값 없는 --from=거부(일반 상신으로 바꾸지 않음 · 무기록
   fs.mkdirSync(CL.ACTIVE_DIR, { recursive: true });
   fs.writeFileSync(path.join(CL.ACTIVE_DIR, SESS + ".json"), JSON.stringify({ workspace: P.ws, claudeSession: SESS, ts: new Date().toISOString(), constraintAnchor: now2.turnAnchor, constraintSourceHash: now2.sourceHash, constraintRepoKey: P.rk }));
   const env = Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME, CLAUDE_PROJECT_DIR: P.ws, CLAUDE_CODE_SESSION_ID: SESS });
-  const r = cp.spawnSync(process.execPath, [path.join(ROOT, "bridge", "codex-bridge.js"), "constraint", "add", "--quote", "명령줄 확인용 기준 문장은 이것으로 한다", "--why", "판단", "--from"], { env, encoding: "utf8", cwd: P.ws });
+  const r = cp.spawnSync(process.execPath, [path.join(ROOT, "bridge", "codex-bridge.js"), "constraint", "add", "--quote", "명령줄 확인용 기준 문장은 이것으로 한다", "--rule", "실기기 최신폰 확인은 이번 단계 검증 범위에서 뺀다", "--bounds", "실기기 최신폰 미확인 지적은 범위 밖으로 돌린다", "--why", "판단", "--from"], { env, encoding: "utf8", cwd: P.ws });
   assert.ok(r.status === 2 && /from-missing/.test(r.stderr), r.stdout + r.stderr);
   assert.strictEqual(rowsOf(P).length, before + 2, "명령줄도 무기록");
 });
@@ -434,7 +434,7 @@ t("★표식은 내용을 다 쓴 뒤에만 생김(쓰는 도중 꺼져도 빈 �
   const cli = path.join(ROOT, "bridge", "codex-bridge.js");
   let out;
   fs.chmodSync(candF, 0o444);
-  try { out = cp.spawnSync(process.execPath, [cli, "constraint", "add", "--quote", B, "--why", "분류 결과를 보고 판단", "--from", rB.resultId], { env, encoding: "utf8", cwd: P.ws }); } finally { fs.chmodSync(candF, 0o666); }
+  try { out = cp.spawnSync(process.execPath, [cli, "constraint", "add", "--quote", B, "--rule", "실기기 최신폰 확인은 이번 단계 검증 범위에서 뺀다", "--bounds", "실기기 최신폰 미확인 지적은 범위 밖으로 돌린다", "--why", "분류 결과를 보고 판단", "--from", rB.resultId], { env, encoding: "utf8", cwd: P.ws }); } finally { fs.chmodSync(candF, 0o666); }
   assert.ok(out.status === 0 && /판단 저장됨\(표식만\)/.test(out.stdout) && /장부 반영은 다음 판단 때 채워집니다/.test(out.stdout) && !/후보 장부에 기록됐습니다/.test(out.stdout), "★표식만 저장 안내 " + out.stdout + out.stderr);
   const claimB = JSON.parse(fs.readFileSync(CF.claimFileFor(P.ws, rB.resultId), "utf8"));
   const cid = claimB.candidateId;
@@ -544,7 +544,7 @@ t("★채우기가 실패해 같은 문장의 지난 판단이 장부에 없으�
   const env = Object.assign({}, process.env, { CODEX_BRIDGE_HOME: HOME, CLAUDE_PROJECT_DIR: P.ws, CLAUDE_CODE_SESSION_ID: SESS });
   let o;
   fs.chmodSync(candF, 0o444);
-  try { o = cp.spawnSync(process.execPath, [path.join(ROOT, "bridge", "codex-bridge.js"), "constraint", "add", "--quote", F, "--why", "같은 말 일반 상신"], { env, encoding: "utf8", cwd: P.ws }); } finally { fs.chmodSync(candF, 0o666); }
+  try { o = cp.spawnSync(process.execPath, [path.join(ROOT, "bridge", "codex-bridge.js"), "constraint", "add", "--quote", F, "--rule", "실기기 최신폰 확인은 이번 단계 검증 범위에서 뺀다", "--bounds", "실기기 최신폰 미확인 지적은 범위 밖으로 돌린다", "--why", "같은 말 일반 상신"], { env, encoding: "utf8", cwd: P.ws }); } finally { fs.chmodSync(candF, 0o666); }
   assert.ok(o.status !== 0 && /prior-decision-pending/.test(o.stderr) && /지난 판단부터 채운 뒤 판정/.test(o.stderr), "★명령줄 거부 안내 " + o.stdout + o.stderr);
 });
 

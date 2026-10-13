@@ -729,6 +729,6 @@ t("[ab-1 후보 파티션] 직접 입력 후보는 태어난 저장소(정찰 �
   assert.strictEqual(recL.status, "declined", "조정기=무표기 대기 행 정책 정리"); assert.ok(/저장소 표식 없음/.test(String(recL.note || "")), recL.note);
   assert.strictEqual(CL.readEnvelopeCandidates(wsP).latest.get(b1.candidateId + "@" + HP).status, "proposed", "표식 있는 B 후보는 조정 후에도 대기 유지");
   // user-constraint(대화 포착)도 repoKey 결속·ID 파티션 — 생산 3경로 전부 표식
-  assert.ok(String(fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8")).includes('envelopeCandidateId("user-constraint", wsKeyFor(ws) + "|" + repoKeyC + "|" + sha1Of(qNorm))'), "constraintAdd ID 파티션 핀(실행 반례는 constraint-capture)");
+  assert.ok(String(fs.readFileSync(path.join(__dirname, "..", "bridge", "contract-lib.js"), "utf8")).includes('envelopeCandidateId("user-constraint", wsKeyFor(ws) + "|" + repoKeyC + "|" + sha1Of(qNorm) + (redraftOf ? "|redraft:" + redraftOf : ""))'), "constraintAdd ID 파티션 핀(실행 반례는 constraint-capture) — [④ 묶음 6(H)] 다시 쓰기만 대상 꼬리(그 밖은 종전 식 그대로)");
 });
 console.log(`\n결과: ${n}/${n} 통과`);

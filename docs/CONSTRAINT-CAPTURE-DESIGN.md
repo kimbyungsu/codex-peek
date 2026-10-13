@@ -41,7 +41,10 @@
   ab축 문안은 전역 목록이라 scope별 적용 의미론이 없고, ID에만 scope를 넣으면 같은 문장의 두
   scope 후보가 같은 문안으로 draft 중복 충돌한다(2차 실측 반례). 범위가 본질인 약속은 사용자
   문장 자체에 범위가 들어가게 안내한다("~에서는 …" — 인용 원문이 곧 권위 문안이므로 범위도
-  문안에 실린다). scope 인자 경로 표기는 `normBacklogFile` 최소화+`safeBacklogAutoFile` 형태
+  문안에 실린다). **[개정 2026-10-12 · RULE-SUPPLY-CORRECTION §6 H · 사용자 결정 D-g] 새 형식 후보
+  (상신 행 `fmt: "rule-v1"`)에 한해 권위 문안=구현 담당이 쓴 `rule`(쉬운 말·누가/무엇에·적용 범위 —
+  범위는 이 문안에 쓴다)이고, 인용 원문은 출처 증명이다. 그대로 유지: 원문 대조(구현모델 작문 차단 §1)·
+  도장 후에만 권위·판정 입력은 도장 후에만(§0)·옛 형식 후보는 종전(원문=문안).** scope 인자 경로 표기는 `normBacklogFile` 최소화+`safeBacklogAutoFile` 형태
   방어(canonicalization과 형태 방어는 별개 함수 — 2차 지적 반영).
 - **남발 억제(1차 blocker⑦ 반영)**: ①턴당 상신 상한 2건(같은 turnAnchor 결속 카운트 — 초과=거부)
   ②`--why` 필수(비권위 — 판단 근거 한 줄) ③pending cap은 A/B 합산 기존 12 유지 ④모든 거부가
@@ -104,7 +107,8 @@
   3. draft allowlist: candMark의 병합 초안 분기를 draftable kinds(`resolved-blocker`,
      `user-constraint`) 목록으로 — user-constraint 채택=ab축 병합 초안 생성(A-4 재사용·문안=
      인용 원문 그대로 — scope는 문안에 넣지 않는다: §1 scope 지위 참조·범위가 본질이면 인용
-     문장 안에 있어야 함).
+     문장 안에 있어야 함). **[개정 2026-10-12 · D-g] 새 형식 후보는 문안=유효 `rule`(후보 문안 단일
+     함수 `candidateBodyText`) — 문안 칸이 비었거나 형식 이상이면 초안 거부(원문으로 대신 쓰지 않음).**
   3b. **mark 우회 봉합(3차 blocker② 반영 — 기존 계약의 의식적 개정)**: `envelope-candidate mark
      <id> adopted`가 proposal 결속 없이 상태만 기록하는 기존 경로는 draftable kind에서
      adopted-but-unstamped 고아를 복원 규칙 밖에서 만든다 → **draftable kind의 직접 adopted

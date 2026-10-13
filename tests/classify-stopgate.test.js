@@ -59,7 +59,7 @@ t("① 관문 판정 — 이번 차례 미판단만 · 같은 상태 3번 막고
   const evBefore = events("classify-undecided").length;
   for (let i = 1; i <= CF.STOP_GATE_MAX; i++) {
     const g = CF.classifyStopGate(P.ws, ctx, { lang: "ko" });
-    assert.ok(g && g.n === i && g.block.includes("[분류 결과 판단 관문]") && g.block.includes(a) && g.block.includes(b) && g.block.includes("classify skip <id> --note") && g.block.includes("--from <id>") && g.block.includes("대화에 늘어놓거나 사용자에게 묻지 않고"), "막음 " + i + " " + (g && g.block));
+    assert.ok(g && g.n === i && g.block.includes("[분류 결과 판단 관문]") && g.block.includes(a) && g.block.includes(b) && g.block.includes("classify skip <id> --note") && g.block.includes("--from <id>") && g.block.includes('--rule "') && g.block.includes('--bounds "') && g.block.includes("대화에 늘어놓거나 사용자에게 묻지 않고"), "막음 " + i + " " + (g && g.block));
   }
   assert.strictEqual(CF.classifyStopGate(P.ws, ctx, { lang: "ko" }), null, "★같은 상태 4번째=놓아줌");
   const ev = events("classify-undecided");

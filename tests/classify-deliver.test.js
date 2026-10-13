@@ -142,7 +142,7 @@ t("⑤ 전달 블록 — 자료(번호·제안 칸·전달 회차·말·판정 �
   const [a] = await classify(P, [{ quote: "실기기 최신폰 확인은 이번 단계 범위 밖으로 계속 본다", seat: "outOfScope" }]);
   const pl = CF.planDelivery(P.ws, ctxFor(P, "claude"));
   const ko = CF.deliveryBlock(pl.deliver, "ko");
-  for (const k of ["[사용자 말 분류 결과 — 이번 차례 판단 1건]", a.resultId, "제안 칸 범위 밖(outOfScope)", "전달 1/2회째", "실기기 최신폰 확인은", "판정 영향: 이 기준으로", "constraint add --quote", "--from <id>", "classify skip <id> --note", "codex-bridge.js", "대화에 늘어놓거나 사용자에게 묻지 않고"]) assert.ok(ko.includes(k), "블록에 " + k + "\n" + ko);
+  for (const k of ["[사용자 말 분류 결과 — 이번 차례 판단 1건]", a.resultId, "제안 칸 범위 밖(outOfScope)", "전달 1/2회째", "실기기 최신폰 확인은", "판정 영향: 이 기준으로", "constraint add --quote", '--rule "', '--bounds "', "--from <id>", "classify skip <id> --note", "codex-bridge.js", "대화에 늘어놓거나 사용자에게 묻지 않고"]) assert.ok(ko.includes(k), "블록에 " + k + "\n" + ko);
   const en = CF.deliveryBlock(pl.deliver, "en");
   assert.ok(en.includes("decide 1 this turn") && en.includes("delivery 1/2") && en.includes("without listing these in the conversation"), en);
   assert.strictEqual(CF.deliveryBlock([], "ko"), "");
@@ -178,7 +178,7 @@ t("⑥ Claude 훅 실제 실행 — 사람의 차례에 블록+전달 기록(이
   const on3 = run("<task-notification>\n<task-id>z</task-id>\n<status>completed</status>\n</task-notification>", "pid-n2");
   assert.ok(!ctxOf(on3).includes(b.resultId) && status(P, b.resultId) === "new", "★차례 도중 새 결과=알림 차례에 안 넘김");
   // 그 차례에 --from 올림(명령줄)
-  const cli = cp.spawnSync(process.execPath, [path.join(ROOT, "bridge", "codex-bridge.js"), "constraint", "add", "--quote", "실기기 최신폰 확인은 이번 단계 범위 밖", "--why", "분류 결과를 보고 판단", "--from", a.resultId], { env, encoding: "utf8", cwd: P.ws });
+  const cli = cp.spawnSync(process.execPath, [path.join(ROOT, "bridge", "codex-bridge.js"), "constraint", "add", "--quote", "실기기 최신폰 확인은 이번 단계 범위 밖", "--rule", "실기기 최신폰 확인은 이번 단계 검증 범위에서 뺀다", "--bounds", "실기기 최신폰 미확인 지적은 범위 밖으로 돌린다", "--why", "분류 결과를 보고 판단", "--from", a.resultId], { env, encoding: "utf8", cwd: P.ws });
   assert.ok(cli.status === 0 && /분류 결과/.test(cli.stdout), "★전달받은 차례에 올림 " + cli.stdout + cli.stderr);
   // 다음 사람의 차례 — 판단된 a 는 없고 차례 도중 생긴 b 만
   const o2 = run("그다음 진행해 주세요", "pid-2");

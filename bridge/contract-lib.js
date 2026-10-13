@@ -4053,7 +4053,7 @@ function discardRestoringLocked(ws, expectedHash) {
         if (!rec9 || rec9.status !== "adopted") continue;
         const meta9 = (rows || []).find((r) => r && r.candidateId === cid && String(r.envelopeHash || "") === gen0 && (r.title || r.kind))
           || (rows || []).find((r) => r && r.candidateId === cid && (r.title || r.kind)) || {};
-        recs9.push({ candidateId: cid, envelopeHash: gen0, status: "proposed", ...(meta9.kind ? { kind: meta9.kind } : {}), ...(meta9.title ? { title: meta9.title } : {}), ...(meta9.findingId ? { findingId: meta9.findingId } : {}), ...(meta9.campaignId ? { campaignId: meta9.campaignId } : {}), ...(meta9.askId ? { askId: meta9.askId } : {}), ...(meta9.repoKey ? { repoKey: meta9.repoKey } : {}), ...curatorCarryFields(meta9), note: "초안 폐기 — 판단 대기로 복원", ts: new Date().toISOString() }); // [ab-1] repoKey 승계 — 복원분이 타 저장소 화면에 새지 않게 · [CURATION v3] 연산 필드 승계(취소 뒤 재승인 가능)
+        recs9.push({ candidateId: cid, envelopeHash: gen0, status: "proposed", ...(meta9.kind ? { kind: meta9.kind } : {}), ...(meta9.title ? { title: meta9.title } : {}), ...(meta9.kind === "user-constraint" ? ruleCarryFields(rows, cid) : {}), /* [④ 묶음 6(H)] 문안 칸(표시용 — 권위는 유효 문안 함수) */ ...(meta9.findingId ? { findingId: meta9.findingId } : {}), ...(meta9.campaignId ? { campaignId: meta9.campaignId } : {}), ...(meta9.askId ? { askId: meta9.askId } : {}), ...(meta9.repoKey ? { repoKey: meta9.repoKey } : {}), ...curatorCarryFields(meta9), note: "초안 폐기 — 판단 대기로 복원", ts: new Date().toISOString() }); // [ab-1] repoKey 승계 — 복원분이 타 저장소 화면에 새지 않게 · [CURATION v3] 연산 필드 승계(취소 뒤 재승인 가능)
       }
       // 복원 규칙(R2 blocker f-7b7dfbf6 계보): 대상=정확히 '이 초안의 승인 세대'(candidateId@baseHash) —
       // 삽입 순서 첫 adopted를 잡으면 다세대 공존 시 과거 세대를 복원하고 현재 후보가 고아로 남는다.
@@ -4322,7 +4322,13 @@ function userDeclinedCandidate(rows, candidateId) {
 }
 // [RULE-SUPPLY 묶음 2-나-2] 사용자 약속 후보의 부가 필드(칸·출처) — 세대 이월·고아 복원 행이 빠뜨리면 칸이 '항상 막을 것'으로 바뀌고 출처가 사라진다.
 // 거절 기억 해제 표식(reraised)·0세대 표식(virtualGen)은 옮기지 않는다(새 행의 의미가 아님).
-const UC_KEEP_FIELDS = ["origin", "axis", "recommend", "scope", "via", "quoteSource", "quoteFromAnchor", "wordId", "runId", "fromResult"];
+// [RULE-SUPPLY-CORRECTION ④ 묶음 6(H) · D-g] 수칙 문안 칸 — 구현 담당이 쉬운 말·주어·적용 범위로 다시 쓴 문안(rule)과 판정에 미치는 영향(bounds)을 실제 상신 행에
+// 싣는다(fmt "rule-v1"). 사용자는 이 문안에 도장을 찍고, 사용자 원문(title)은 그 말을 했다는 출처 증명으로만 붙는다(원문 대조는 그대로 — 사용자 말을 지어내지 못함).
+const RULE_FMT = "rule-v1";
+const RULE_TEXT_MAX = 200;   // 수칙서 항목 한 줄 상한과 같은 값(문안이 그대로 항목이 된다)
+const BOUNDS_TEXT_MAX = 200; // 판정에 미치는 영향 한 줄
+const RULE_FIELDS = ["fmt", "rule", "bounds", "redraftOf"];
+const UC_KEEP_FIELDS = ["origin", "axis", "recommend", "scope", "via", "quoteSource", "quoteFromAnchor", "wordId", "runId", "fromResult", ...RULE_FIELDS];
 // [RULE-SUPPLY-CORRECTION ⑤ 2단계 §2 B 칸 계약 (a)(b)] 실제 상신 행=구현 담당 constraint add(--again 재상신 포함)가 쓴 submitted:true 행.
 // 자동 상태 전이 행(초안 결속·폐기 복원·세대 이월·고아 복원·안 올림·중복 정리)은 이 표식을 싣지 않는다. 유효 칸=그 후보의 실제 상신 행 가운데
 // 장부에 마지막으로 덧붙은 행의 칸(시각이 아니라 덧붙인 순서 — 같은 시각·시계 보정에도 나중 상신이 이김). 실제 상신 행이 없는 옛 후보(정정 전
@@ -4335,10 +4341,32 @@ function effectiveCandidateAxis(rows, candidateId) {
   for (const r of rows || []) if (r && r.candidateId === candidateId && typeof r.axis === "string") return r.axis;
   return "";
 }
+// [④ 묶음 6(H)] 유효 문안 칸=유효 칸과 같은 규칙 — 그 후보의 실제 상신 행 가운데 장부에 마지막으로 덧붙은 행의 {fmt, rule, bounds, redraftOf}. 자동 상태 전이 행(세대 이월·
+// 고아 복원·초안 폐기 복원)은 이 칸을 표시용으로 옮겨 싣기만 한다(권위 아님). 실제 상신 행이 없거나 그 행에 fmt 가 없으면 옛 형식(원문이 곧 문안).
+function ruleOneLineOk(s, max) { return typeof s === "string" && s.trim().length > 0 && s.length <= max && !/[\r\n\u2028\u2029]/.test(s); }
+function effectiveCandidateRule(rows, candidateId) {
+  const sub = effectiveSubmittedRow(rows, candidateId);
+  if (!sub) return null;
+  const out = {}; for (const k of RULE_FIELDS) if (sub[k] !== undefined) out[k] = sub[k];
+  return out;
+}
+// 후보 '문안' 단일 함수 — 후보의 문안을 읽는 모든 곳(초안 두 함수·대기열 정리의 등재/중복/고아 판정·대시보드 카드·후보 목록)이 이것만 쓴다. 새 형식=유효 rule ·
+// 옛 형식=fallbackTitle(원문). 새 형식인데 rule 이 비었거나 형식 이상·모르는 형식=null(호출자는 원문으로 대신 쓰지 않는다 — fail-closed). title 은 출처 표시에만.
+function candidateBodyText(rows, candidateId, fallbackTitle) {
+  const eff = effectiveCandidateRule(rows, candidateId);
+  if (eff && eff.fmt === RULE_FMT) return ruleOneLineOk(eff.rule, RULE_TEXT_MAX) ? eff.rule : null;
+  if (eff && eff.fmt !== undefined) return null;
+  return typeof fallbackTitle === "string" ? fallbackTitle : "";
+}
+// 자동 상태 전이 행이 함께 실을 문안 칸(표시용). submitted 표식은 옮기지 않는다(새 상신이 아님).
+function ruleCarryFields(rows, candidateId) { const eff = effectiveCandidateRule(rows, candidateId); return eff && eff.fmt !== undefined ? eff : {}; }
 // (d) 자동 상태 전이 행이 칸·출처를 실을 때 칸은 처음 행이 아니라 유효 칸 함수의 값(표시용 — 권위는 함수). rows 를 넘기지 않는 옛 호출=종전.
 function ucKeepFields(rec, meta, rows) {
   const out = {}; for (const k of UC_KEEP_FIELDS) { const v = rec && rec[k] !== undefined ? rec[k] : (meta ? meta[k] : undefined); if (v !== undefined) out[k] = v; }
-  if (rows && rec && rec.candidateId) { const ax = effectiveCandidateAxis(rows, rec.candidateId); if (ax) out.axis = ax; else delete out.axis; }
+  if (rows && rec && rec.candidateId) {
+    const ax = effectiveCandidateAxis(rows, rec.candidateId); if (ax) out.axis = ax; else delete out.axis;
+    const rf = ruleCarryFields(rows, rec.candidateId); for (const k of RULE_FIELDS) { if (rf[k] !== undefined) out[k] = rf[k]; else delete out[k]; } // [④ 묶음 6(H)] 문안 칸도 유효 함수의 값(표시용)
+  }
   return out;
 }
 function appendEnvelopeCandidates(ws, recs) {
@@ -4759,8 +4787,16 @@ function jsonTopLevelKeys(ln) {
 // [RULE-SUPPLY-CORRECTION ⑤ 2단계 §2 B·§3-1] opts={axis, from}: axis=구현 담당이 고른 최종 칸(닫힌 목록) · from=그 차례에 전달받아 아직 판단하지 않은
 // 분류 결과 id — 그 결과의 인용 안 연속 구절만 받고(결과·문장 결속), 자체 상신 한도(CONSTRAINT_TURN_CAP)에 세지 않으며, --axis 가 없으면 결과의 제안 칸.
 // --from 도 원문 대조를 면제하지 않는다. 거부=무기록·결과 미소비·한도 미소비. 모든 성공 행=실제 상신 행(submitted:true).
+// [④ 묶음 6(H) · D-g] opts={rule, bounds, redraftOf, requireRule}: rule=수칙서에 들어갈 문안(구현 담당이 쉬운 말·누가/무엇에·적용 범위로 씀 · 사용자가 이 문안에 도장) ·
+// bounds=판정에 미치는 영향 한 줄 · quote 는 출처 증명(원문 대조 그대로). 검사는 형식만(쉬운 말인지·주어·관통 여부는 구현 담당 판단과 사용자 도장 — 문구 목록 없음).
+// requireRule=명령줄 상신(자체·--from 모두 두 칸 필수 — 구현 담당의 유일한 상신 길). redraftOf=사용자가 고쳐 다시 올리라고 한 '안 올린' 후보(같은 작업공간·저장소의
+// 사용자 약속 후보만) — 새 후보 id 에 대상을 넣어 한 요청 문장으로 여러 후보를 각각 고칠 수 있고, 같은 (요청 문장, 대상) 재시도=같은 id(중복 거부). 옛 후보 상태는 그대로.
 function constraintAdd(ws, quote, why, scope, ctx, opts) {
   const o9 = opts || {};
+  const ruleRaw9 = typeof o9.rule === "string" ? o9.rule : "", boundsRaw9 = typeof o9.bounds === "string" ? o9.bounds : "";
+  const ruleIn = ruleRaw9.trim(), boundsIn = boundsRaw9.trim();
+  const hasRedraft9 = Object.prototype.hasOwnProperty.call(o9, "redraftOf");
+  const redraftOf = hasRedraft9 ? String(o9.redraftOf === undefined || o9.redraftOf === null ? "" : o9.redraftOf).trim() : "";
   const q = typeof quote === "string" ? quote : "";
   const w = typeof why === "string" ? why.trim() : "";
   const sRaw = typeof scope === "string" ? scope.trim() : "";
@@ -4788,6 +4824,18 @@ function constraintAdd(ws, quote, why, scope, ctx, opts) {
   if (/[\r\n\u2028\u2029]/.test(why) || w.length > CONSTRAINT_WHY_MAX) return reject("why-format");
   const ws9 = safeBacklogAutoTitle(w);
   if (!ws9.ok) return reject("why-sensitive-" + ws9.reasonKey);
+  // [④ 묶음 6(H)] 수칙 문안·판정 영향 칸(형식만) · 다시 쓰기 대상 형식
+  const wantRule = !!(o9.requireRule || ruleIn || boundsIn || hasRedraft9);
+  if (wantRule) {
+    if (!ruleIn) return reject("rule-missing");
+    if (!ruleOneLineOk(ruleRaw9, RULE_TEXT_MAX) || vocab.some((v) => ruleRaw9.includes(v))) return reject("rule-format");
+    const rs9 = safeBacklogAutoTitle(ruleIn); if (!rs9.ok) return reject("rule-sensitive-" + rs9.reasonKey);
+    if (!boundsIn) return reject("bounds-missing");
+    if (!ruleOneLineOk(boundsRaw9, BOUNDS_TEXT_MAX) || vocab.some((v) => boundsRaw9.includes(v))) return reject("bounds-format");
+    const bs9 = safeBacklogAutoTitle(boundsIn); if (!bs9.ok) return reject("bounds-sensitive-" + bs9.reasonKey);
+  }
+  if (hasRedraft9 && !/^[0-9a-f]{16}$/.test(redraftOf)) return reject("redraft-target");
+  if (hasRedraft9 && Object.prototype.hasOwnProperty.call(o9, "from")) return reject("redraft-with-from"); // 다시 쓰기의 근거=사용자의 '고쳐 다시' 요청 문장 — 분류 결과 판단과 섞지 않음
   // [⑤ 2단계] 칸(닫힌 목록 — 그 밖=거부) · 분류 결과(--from) 결속
   const axisIn = typeof o9.axis === "string" ? o9.axis.trim() : "";
   if (axisIn && !ENVELOPE_AXES.includes(axisIn)) return reject("axis-invalid");
@@ -4849,7 +4897,8 @@ function constraintAdd(ws, quote, why, scope, ctx, opts) {
   if (!repoKeyC) return reject("repo-unknown");
   // candidateId=전체 원문 지문(200자 절단 정규화 아님 — §1·2차 blocker③: scope는 ID에 넣지 않는다)+저장소 파티션.
   const qNorm = q.normalize("NFC").replace(/\s+/g, " ").trim();
-  const candidateId = envelopeCandidateId("user-constraint", wsKeyFor(ws) + "|" + repoKeyC + "|" + sha1Of(qNorm));
+  // [④ 묶음 6(H) · 설계 검증 1회차 blocker] 다시 쓰기 후보 id=대상 후보를 넣은 지문 — 한 요청 문장으로 여러 후보를 각각 고칠 수 있고, 같은 (요청 문장, 대상) 재시도=같은 id
+  const candidateId = envelopeCandidateId("user-constraint", wsKeyFor(ws) + "|" + repoKeyC + "|" + sha1Of(qNorm) + (redraftOf ? "|redraft:" + redraftOf : ""));
   // [검증 4회차 blocker] 모든 상신(일반·--from)은 장부를 읽기 전에 표식만 남은 지난 판단의 빠진 기록부터 채운다 — 지난 판단이 장부에 반영된 뒤에 새 상신의
   // 중복·거절·한도를 판정하도록(늦게 채워진 지난 판단이 새 상신을 덮지 않게). 형식·원문 대조에서 거부된 요청은 여기까지 오지 않아 아무것도 쓰지 않는다.
   // [검증 5회차 blocker] 채우기가 실패해 같은 후보의 옛 판단이 아직 장부에 없으면 새 상신을 받지 않는다(무기록 — 다시 시도하면 채운 뒤 판정) — 나중에 채워질
@@ -4863,6 +4912,11 @@ function constraintAdd(ws, quote, why, scope, ctx, opts) {
     if (pend9.length) return reject("prior-decision-pending");
   }
   const { rows, latest } = readEnvelopeCandidates(ws);
+  if (redraftOf) { // [④ 묶음 6(H)] 대상=이 작업공간 장부의 사용자 약속 후보 · 같은 저장소 표식 · 사용자가 안 올린 것만(그 밖=거부·무기록 — 옛 후보 상태는 건드리지 않음)
+    const tRows9 = rows.filter((r) => r && r.candidateId === redraftOf);
+    const tKind9 = (tRows9.find((r) => r.kind) || {}).kind || "", tRepo9 = (tRows9.find((r) => r.repoKey) || {}).repoKey || "";
+    if (!tRows9.length || tKind9 !== "user-constraint" || tRepo9 !== repoKeyC || !userDeclinedCandidate(rows, redraftOf)) return reject("redraft-target");
+  }
   const cur = latest.get(candidateId + "@" + gen);
   // [묶음 2-가 · 검증 2회차] 사용자 거절 기억이 먼저 — 옛 지문으로 되돌아와 되살아난 proposed 행이 있어도 거절은 거절(again=사용자 재요청만 재상신)
   const udecl9 = userDeclinedCandidate(rows, candidateId);
@@ -4882,6 +4936,7 @@ function constraintAdd(ws, quote, why, scope, ctx, opts) {
     candidateId, envelopeHash: gen, ...(virt ? { virtualGen: true } : {}), status: "proposed", kind: "user-constraint", repoKey: repoKeyC,
     title: q, why: w, ...(scopeNorm ? { scope: scopeNorm } : {}),
     submitted: true, submittedAt: ts9, // [⑤ 2단계 칸 계약 (a)] 실제 상신 행
+    ...(wantRule ? { fmt: RULE_FMT, rule: ruleIn, bounds: boundsIn, ...(redraftOf ? { redraftOf } : {}) } : {}), // [④ 묶음 6(H)] 수칙 문안 칸(유효 문안=이 표식 행 가운데 장부상 마지막)
     ...(axisFinal ? { axis: axisFinal } : {}), ...(fromRes ? { fromResult: fromRes.resultId, ...(fromRes.seat && fromRes.seat !== axisFinal ? { axisSuggested: fromRes.seat } : {}) } : {}),
     provider: c.provider, sessionId: c.sessionId, turnAnchor: c.turnAnchor, sourceHash: c.sourceHash,
     ...(c.via ? { via: String(c.via) } : {}),
@@ -4910,7 +4965,7 @@ function constraintAdd(ws, quote, why, scope, ctx, opts) {
   // [⑤ 2단계] 분류 결과에 '올림' 상태 행 — 기록 실패여도 표식·후보 장부 fromResult 가 판단 근거(다음 판단 때 채움)
   let resultMarked = true;
   if (fromRes) { try { resultMarked = CFc.appendClassifyResults(ws, [resultRow9]) === true; } catch { resultMarked = false; } }
-  return { ok: true, candidateId, ...(axisFinal ? { axis: axisFinal } : {}), ...(fromRes ? { fromResult: fromRes.resultId, resultMarked } : {}) };
+  return { ok: true, candidateId, ...(axisFinal ? { axis: axisFinal } : {}), ...(fromRes ? { fromResult: fromRes.resultId, resultMarked } : {}), ...(redraftOf ? { redraftOf } : {}) };
 }
 
 // ── [기억 권위 §2 A] 공급 파이프라인 — 해소된 blocker 계보 → envelope 후보 (MEMORY-AUTHORITY-DESIGN v3) ──
@@ -4985,6 +5040,9 @@ function reconcileMemoryCandidatesLocked(ws, repo, approvedHash) {
       const meta = metaAll.get(rec.candidateId) || {};
       { const rkR9 = rec.repoKey || meta.repoKey || ""; if (rkR9 && rkR9 !== repoKeyCur9) continue; } // 다른 저장소 태생 후보=무접촉(이월·정리·복원 모두) — 무표기 행은 아래 기존 정책
       const title = typeof rec.title === "string" && rec.title ? rec.title : String(meta.title || "");
+      // [④ 묶음 6(H) · 설계 재검증 2회차 blocker] 등재·중복·고아 판정은 후보 '문안'으로 — 새 형식=유효 rule(근거 원문 title 이 아님 · 원문이 이미 등재돼 있어도 아직
+      // 등재 안 된 새 문안 후보를 떨어뜨리지 않게) · 옛 형식·그 밖의 종류=title · 새 형식인데 문안 칸이 깨짐=빈 문안(등재 정리 대상 아님 — 초안 단계가 거부).
+      const body9 = kindR === "user-constraint" ? (candidateBodyText(candRows, rec.candidateId, title) || "") : title;
       if (String(rec.envelopeHash || "") !== approvedHash) { // ── 구세대 처리
         if (rec.status !== "proposed" && rec.status !== "adopted") continue;
         if (userDeclinedCandidate(candRows, rec.candidateId)) continue; // [묶음 2-가 검증 blocker②] 사용자가 어느 세대에서든 안 올린 후보=이월 금지(옛 세대의 proposed 행이 되살리지 않게)
@@ -5017,7 +5075,7 @@ function reconcileMemoryCandidatesLocked(ws, repo, approvedHash) {
           staleRecs.push(Object.assign(keep9, { candidateId: rec.candidateId, envelopeHash: approvedHash, status: "proposed", kind: "curator", title, note: "승인 세대 이월(carry-forward — 사용자 판단 전 소실 금지)", ts: new Date().toISOString() }));
           continue;
         }
-        if (normSet.has(normBacklogTitle(title))) { staleRecs.push({ candidateId: rec.candidateId, envelopeHash: approvedHash, status: "declined", kind: kindR, note: "이미 수칙서에 등재 — 세대 이월 정리", ts: new Date().toISOString() }); continue; }
+        if (body9 && normSet.has(normBacklogTitle(body9))) { staleRecs.push({ candidateId: rec.candidateId, envelopeHash: approvedHash, status: "declined", kind: kindR, note: "이미 수칙서에 등재 — 세대 이월 정리", ts: new Date().toISOString() }); continue; }
         if (kindR === "rule-manual" || kindR === "user-direct") {
           // [재편 A §2-1] rule-manual·user-direct 세대 이월 — user-constraint와 동형(사용자 판단 전 소실 금지·1회 재발급).
           staleRecs.push({ candidateId: rec.candidateId, envelopeHash: approvedHash, status: "proposed", kind: kindR, origin: rec.origin || meta.origin || (kindR === "user-direct" ? "dashboard" : "manual"), policyVersion: 2, ...(rec.repoKey || meta.repoKey ? { repoKey: rec.repoKey || meta.repoKey } : {}), title, why: rec.why || meta.why || "", findingId: rec.findingId || meta.findingId || "", campaignId: rec.campaignId || meta.campaignId || "", ...(rec.askId || meta.askId ? { askId: rec.askId || meta.askId } : {}), ...(rec.oosId || meta.oosId ? { oosId: rec.oosId || meta.oosId } : {}), note: "승인 세대 이월(carry-forward — 사용자 판단 전 소실 금지)", ts: new Date().toISOString() });
@@ -5043,9 +5101,9 @@ function reconcileMemoryCandidatesLocked(ws, repo, approvedHash) {
       }
       // [4f] 같은 세대 '대기 중' 중복 스윕 — 이미 코어∪서고에 있는 문안의 proposed는 자동 정리(대기열이
       // 기등재분을 계속 보여줘 사용자가 중복만 고르는 경로 차단). 원문·절단 실물 양쪽 정규화 대조(draft와 동형).
-      if (rec.status === "proposed" && title && !(kindR === "curator" && String(rec.operation || meta.operation || "") !== "add" && String(rec.operation || meta.operation || "") !== "oos-add")) { // [CURATION v3] 빼기 제안의 문안은 등재돼 있는 것이 정상 — 중복 스윕 제외
-        const cut9 = title.length > ENVELOPE_CHAR_MAX ? title.slice(0, ENVELOPE_CHAR_MAX - "…[절단]".length) + "…[절단]" : title;
-        if (normSet.has(normBacklogTitle(title)) || normSet.has(normBacklogTitle(cut9))) {
+      if (rec.status === "proposed" && body9 && !(kindR === "curator" && String(rec.operation || meta.operation || "") !== "add" && String(rec.operation || meta.operation || "") !== "oos-add")) { // [CURATION v3] 빼기 제안의 문안은 등재돼 있는 것이 정상 — 중복 스윕 제외
+        const cut9 = body9.length > ENVELOPE_CHAR_MAX ? body9.slice(0, ENVELOPE_CHAR_MAX - "…[절단]".length) + "…[절단]" : body9;
+        if (normSet.has(normBacklogTitle(body9)) || normSet.has(normBacklogTitle(cut9))) {
           staleRecs.push({ candidateId: rec.candidateId, envelopeHash: approvedHash, status: "declined", kind: kindR, note: "이미 등재된 문안 — 대기열 자동 정리", ...(rec.findingId ? { findingId: rec.findingId } : {}), ts: new Date().toISOString() });
           continue;
         }
@@ -5053,7 +5111,7 @@ function reconcileMemoryCandidatesLocked(ws, repo, approvedHash) {
       if (rec.status !== "adopted") continue; // ── 같은 세대: adopted 고아 복원
       if (rec.applied) continue; // [CURATION v3 §3 D] 도장 시 종결 표식(applied)=고아 아님
       if (userDeclinedCandidate(candRows, rec.candidateId)) continue; // [묶음 2-가] 사용자 거절 후보=복원 금지(빼기 제안은 문안이 사라져 아래 등재 대조로는 종결을 알 수 없음)
-      if (title && normSet.has(normBacklogTitle(title))) continue; // 도장 완료(문안 등재됨)=고아 아님
+      if (body9 && normSet.has(normBacklogTitle(body9))) continue; // 도장 완료(문안 등재됨)=고아 아님 — [④ 묶음 6(H)] 새 형식은 rule 로 판정
       if (boundIds === null) continue; // proposal 손상=소유 판정 불가(보수 — 사용자 처리 후 다음 스캔)
       if (boundIds.has(rec.candidateId)) continue; // 진행 중 초안에 결속 — 고아 아님
       if (kindR === "resolved-blocker" && !rec.policyVersion) { staleRecs.push({ candidateId: rec.candidateId, envelopeHash: approvedHash, status: "declined", kind: "resolved-blocker", note: "공급 정책 개정(v2) — 자동 상신 폐지·필요 시 rule-propose로 재상신", ...(rec.findingId || meta.findingId ? { findingId: rec.findingId || meta.findingId } : {}), ts: new Date().toISOString() }); continue; } // [재편 B] legacy 고아는 복원(대기 재노출)이 아니라 정책 정리
@@ -5322,6 +5380,9 @@ function draftEnvelopeRevision(ws, repo, opts) {
       if (cand.repoKey !== repoKeyOf(repo)) return bail9("다른 프로젝트에서 만들어진 제안이라 이 저장소에는 올릴 수 없어요(정찰 대상 변경: " + cid + ")"); // [ab-1] 후보가 태어난 저장소 결속
       if (cand.status !== "proposed") return bail9("후보 상태가 proposed 아님(" + cid + ": " + cand.status + ")");
       if (typeof cand.title !== "string" || !cand.title) return bail9("후보에 문안 없음(" + cid + ")");
+      // [④ 묶음 6(H)] 수칙서에 넣는 글=후보 문안(새 형식=유효 rule · 옛 형식=title). 새 형식인데 문안 칸이 비었거나 깨졌으면 원문으로 대신 쓰지 않고 거부(fail-closed).
+      const body9 = candidateBodyText(candRowsAll9, cid, cand.title);
+      if (typeof body9 !== "string" || !body9) return bail9("이 제안의 수칙 문안 칸이 비었거나 형식이 맞지 않아요(" + cid + ") — 원문으로 대신 올리지 않았어요");
       // [CURATION v3 §3 D] 추가 축=후보 axis 우선(curator oos-add → 코어 outOfScope). 그 외 kind·axis 없음=현행 ab 고정.
       // curator는 add(서고)·oos-add(코어 제외 칸)만 adds 경로 — remove는 removeItems+sourceCandidateIds, toggle은 2차.
       let axK9 = "alwaysBlocker";
@@ -5341,7 +5402,7 @@ function draftEnvelopeRevision(ws, repo, opts) {
         if (ax9 && ax9 !== "alwaysBlocker") { if (tgt9.target !== "core") return bail9("이 후보는 '" + (ax9 === "outOfScope" ? "범위 밖" : "지원 환경") + "' 칸이라 수칙서 본문(항상)으로만 올릴 수 있어요(" + cid + ")"); axK9 = ax9; }
       }
       if (!Array.isArray(next[axK9])) return bail9("수칙서 축 형식 이상(" + axK9 + ")");
-      const t9 = String(cand.title);
+      const t9 = String(body9);
       const item = t9.length > ENVELOPE_CHAR_MAX ? t9.slice(0, ENVELOPE_CHAR_MAX - MARK9.length) + MARK9 : t9;
       const tnI = normBacklogTitle(item), tnO = normBacklogTitle(t9); // 저장 실물(절단 후)+원문 양쪽 대조(blocker① 반례)
       if (tgtSet9.has(tnI) || tgtSet9.has(tnO) || othSet9.has(tnI) || othSet9.has(tnO)) { skippedDup.push(cid); continue; }
@@ -5464,22 +5525,25 @@ function draftEnvelopeCandidate(ws, repo, candidateId, approvedHash) {
 }
 function draftEnvelopeCandidateLocked(ws, repo, candidateId, approvedHash) {
   const fail = (error) => { try { appendEnvelopeCandidates(ws, [{ candidateId, envelopeHash: approvedHash || "", status: "failed", note: String(error).slice(0, 200), ts: new Date().toISOString() }]); } catch { /* 기록 실패=반환 오류가 정본 */ } return { ok: false, error }; };
-  const { latest } = readEnvelopeCandidates(ws);
+  const { rows: rowsDC9, latest } = readEnvelopeCandidates(ws);
   const cand = latest.get(candidateId + "@" + approvedHash);
   if (!cand) return { ok: false, error: "이 승인 세대에 해당 후보 없음(조정 스캔 후 재시도)" };
   if (cand.status !== "proposed") return { ok: false, error: "후보 상태가 proposed 아님(현재: " + cand.status + ")" };
   if (typeof cand.title !== "string" || !cand.title) return fail("후보에 문안(title) 없음");
+  // [④ 묶음 6(H)] 수칙서에 넣는 글=후보 문안(새 형식=유효 rule · 옛 형식=title) — 새 형식인데 문안 칸이 깨졌으면 거부(원문 대체 없음)
+  const body9 = candidateBodyText(rowsDC9, candidateId, cand.title);
+  if (typeof body9 !== "string" || !body9) return fail("후보의 수칙 문안 칸이 비었거나 형식이 맞지 않음(원문으로 대신 쓰지 않음)");
   let raw, o;
   try { raw = fs.readFileSync(path.join(repo, ENVELOPE_FILE), "utf8"); o = JSON.parse(raw); } catch { return fail("현행 수칙서 판독 실패"); }
   if (crypto.createHash("sha1").update(raw).digest("hex") !== approvedHash) return fail("수칙서가 승인 세대와 다름(재승인 후 재시도)"); // baseHash 결속(설계 A-4)
   if (!Array.isArray(o.alwaysBlocker)) return fail("수칙서 ab축 형식 이상");
   if (o.alwaysBlocker.length >= ENVELOPE_ITEM_MAX) return fail("ab축 12항 상한 — 어떤 항목을 뺄지는 사용자 결정(자동 삭제 금지)");
-  const tn = normBacklogTitle(cand.title);
+  const tn = normBacklogTitle(body9);
   if (o.alwaysBlocker.some((x) => normBacklogTitle(x) === tn)) return fail("동일 정규화 문안이 이미 ab축에 존재");
   // [기억 권위 A-2·구현검증 1차 blocker③] 200자 초과=절단 '표식과 함께' 보존 — 사용자가 문장이 잘린 사실을
   // 모른 채 의미 끊긴 제약을 승인하는 경로 차단. 표식 포함 총장은 상한 준수(표식이 상한을 뚫지 않음).
   const MARK9 = "…[절단]";
-  const t9 = String(cand.title);
+  const t9 = String(body9);
   const item = t9.length > ENVELOPE_CHAR_MAX ? t9.slice(0, ENVELOPE_CHAR_MAX - MARK9.length) + MARK9 : t9;
   const next = { ...o, alwaysBlocker: [...o.alwaysBlocker, item] };
   let dup = false; // 병렬 축 결정론 복제 — 길이 일치 정본 검사(writeEnvelopeProposal) 충족
@@ -7324,5 +7388,6 @@ module.exports.gen0OpenFindingsInfo = gen0OpenFindingsInfo;
 module.exports.readEnvelopeCandidatesState = readEnvelopeCandidatesState; // [RULE-SUPPLY 묶음 1] 판독 1회로 부재/오류 구분
 module.exports.userDeclinedCandidate = userDeclinedCandidate; // [RULE-SUPPLY 묶음 2-가] 사용자 거절=세대 무관 기억
 module.exports.candidateBatchPlan = candidateBatchPlan; // [RULE-SUPPLY 묶음 2-가] 한꺼번에 올리기 계획(순수)
+Object.assign(module.exports, { RULE_FMT, RULE_TEXT_MAX, BOUNDS_TEXT_MAX, RULE_FIELDS, ruleOneLineOk, effectiveCandidateRule, candidateBodyText, ruleCarryFields }); // [④ 묶음 6(H)] 수칙 문안 칸
 module.exports.candidateSingleDest = candidateSingleDest;
 module.exports.appendLeadFor = appendLeadFor; // [RULE-SUPPLY 묶음 2-나-2] 덧붙이기 장부 꼬리 보호(분류 자리 장부도 사용) // [RULE-SUPPLY 묶음 2-나-2] 단건 승인 목적지(순수)
