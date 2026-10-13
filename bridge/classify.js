@@ -171,6 +171,15 @@ function readClaimsState(ws) {
 }
 function readClaims(ws) { return readClaimsState(ws).claims; }
 function claimDecisions(ws) { const m = new Map(); for (const c of readClaims(ws)) m.set(c.resultId, c.claim ? c.claim : { decision: "unknown" }); return m; }
+// [⑥ 묶음 3(C) · 검증 1회차 blocker] 판정 경계 결과의 유효 상태 — 장부 상태에 판단 표식을 반영(안 올림·올림이 표식에만 남고 장부 기록이 아직 빠진 경우 포함).
+// 올림(후보 장부 fromResult·결과 raised)=raised · 표식 안 올림=skipped · 표식 올림=raised · 표식이 있는데 내용을 못 읽음=decided-unknown(판단됨 — 다시 넘기지 않음) · 그 밖=장부 상태.
+function effectiveResultStatus(r, raised, claims) {
+  if (!r) return "";
+  if (raised && raised.has(r.resultId)) return "raised";
+  const cv = claims && claims.get(r.resultId);
+  if (cv) return cv.decision === "skipped" ? "skipped" : cv.decision === "raised" ? "raised" : "decided-unknown";
+  return String(r.status || "");
+}
 // 표식은 있는데 기록이 빠진 판단을 채운다(이미 있으면 건너뜀). 쓰기 경로(판단·전달)에서만 부른다.
 // [검증 4회차 blocker] 채우기가 겹치거나 원래 작성자가 늦게 깨어나 같은 결과 행이 두 번 붙어도, 장부 판독은 같은 결과의 첫 상신 행만 쓴다(contract-lib
 // readEnvelopeCandidatesState) — 늦은 덧붙임은 그 사이의 거절·재상신을 되돌리지 못한다. 채운 행에는 감사용 표지(repaired)만 단다(권위 차이 없음).
@@ -238,6 +247,27 @@ function markResultsDelivered(ws, results, ctx) {
 // 판독 오류(결과 장부·후보 장부)=null(아무것도 넘기지 않음 · 빈 목록 위장 금지). 사용자 말 장부 판독 오류=전부 읽기 보류.
 const DELIVERY_MAX = 2;
 const DELIVER_PER_TURN = CLASSIFY_MAX_PER_RUN; // 한 차례 전달 상한(나머지는 '새 결과'로 남아 다음 사람의 차례에 — 전달 횟수 미소비)
+// [⑥ 묶음 3(C)] 다시 강조=자료 줄(판단할 것 없음 · 종료 관문 대상 아님 · 한 번만 — 전달되면 delivered) · 판정 경계 전달 한도와 따로 센다.
+const EMPHASIS_PER_TURN = CLASSIFY_MAX_PER_RUN;
+// 같은 대상 열쇠 — 수칙서 항목(본문·관련될 때)은 문안 지문 하나로(같은 문장이 자리를 옮겨도 같은 항목) · 제안=후보 id · 결과=결과 id · 그 밖=문안 지문.
+function emphasisKeyOf(r) {
+  const t = (r && r.target) || {};
+  if ((t.type === "core" || t.type === "archive") && t.fp) return "rb:" + t.fp;
+  if ((t.type === "candidate" || t.type === "declined-candidate") && t.candidateId) return "cand:" + t.candidateId;
+  if (t.type === "result" && t.resultId) return "res:" + t.resultId;
+  if (t.fp) return String(t.type || "x") + ":" + t.fp;
+  return "text:" + sha1(CL.normBacklogTitle(String((r && r.itemText) || "")));
+}
+// 다시 강조 몇 번째인지 — 같은 저장소의 다시 강조 결과를 장부에 처음 나타난 순서로 대상별로 센다.
+function emphasisOrdinals(rs, repoKey) {
+  const seen = new Set(), cnt = new Map(), nth = new Map();
+  for (const r of rs.rows) {
+    if (!r || r.kind !== "emphasis" || r.repoKey !== repoKey || seen.has(r.resultId)) continue;
+    seen.add(r.resultId);
+    const k = emphasisKeyOf(r); const n = (cnt.get(k) || 0) + 1; cnt.set(k, n); nth.set(r.resultId, n);
+  }
+  return nth;
+}
 function planDelivery(ws, ctx) {
   const c = ctx || {};
   const rk = /^[0-9a-f]{16}$/.test(String(c.repoKey || "")) ? String(c.repoKey) : null;
@@ -247,14 +277,24 @@ function planDelivery(ws, ctx) {
   const rs = readClassifyResults(ws); if (rs.readError) return null;
   const raised = raisedResultIds(ws); if (raised === null) return null;
   const firstTs = new Map(); for (const r of rs.rows) if (!firstTs.has(r.resultId)) firstTs.set(r.resultId, String(r.ts || ""));
+  // [⑥ 묶음 3(C)] 다시 강조 자료 — 같은 회사·같은 저장소의 아직 넘기지 않은 결과만(R3) · 원문을 다시 읽지 않음(결과에 남은 인용만) · 다시 넘긴 판정 경계가 있으면 표시
+  const nth9 = emphasisOrdinals(rs, rk);
+  const resumedBy9 = new Set(); for (const r of rs.latest.values()) if (r.kind === "boundary" && r.emphasisOf) resumedBy9.add(String(r.emphasisOf));
+  // [검증 1회차 blocker] 차례당 한도는 이번 호출이 아니라 그 차례에 이미 넘긴 다시 강조 수를 뺀 나머지(같은 차례에 계획이 다시 돌아도 누적 5건)
+  const emphTurn9 = new Set(); for (const r of rs.rows) if (r.kind === "emphasis" && r.status === "delivered" && String(r.deliveredTurn || "") === String(c.turnAnchor)) emphTurn9.add(r.resultId);
+  const emph = [...rs.latest.values()]
+    .filter((r) => r.kind === "emphasis" && r.repoKey === rk && String(r.provider || "") === prov && r.status === "new")
+    .sort((a, b) => String(firstTs.get(a.resultId) || "").localeCompare(String(firstTs.get(b.resultId) || "")))
+    .slice(0, Math.max(0, EMPHASIS_PER_TURN - emphTurn9.size))
+    .map((r) => Object.assign({}, r, { nth: nth9.get(r.resultId) || 1, ...(resumedBy9.has(r.resultId) ? { resumed: true } : {}) }));
   const cands = [...rs.latest.values()]
     .filter((r) => r.kind === "boundary" && r.repoKey === rk && String(r.provider || "") === prov && (r.status === "new" || r.status === "delivered") && !raised.has(r.resultId) && !hasClaim(ws, r.resultId))
     .sort((a, b) => String(firstTs.get(a.resultId) || "").localeCompare(String(firstTs.get(b.resultId) || "")));
-  if (!cands.length) return { deliver: [], transitions: 0, held: 0 };
+  if (!cands.length) return { deliver: emph, transitions: 0, held: 0 };
   const uw = UW.readUserWordsState(ws);
   const now = Date.now();
   // [검증 1회차 blocker] 한 차례 상한은 이번 호출이 아니라 '이번 차례에 이미 넘긴 결과 수'(장부의 전달 행 — 그 뒤 판단돼 상태가 바뀐 결과도 셈)를 뺀 나머지
-  const thisTurn = new Set(); for (const r of rs.rows) if (r.status === "delivered" && String(r.deliveredTurn || "") === String(c.turnAnchor)) thisTurn.add(r.resultId);
+  const thisTurn = new Set(); for (const r of rs.rows) if (r.kind === "boundary" && r.status === "delivered" && String(r.deliveredTurn || "") === String(c.turnAnchor)) thisTurn.add(r.resultId); // [⑥] 다시 강조 자료는 판정 경계 한도에 세지 않음
   const room = Math.max(0, DELIVER_PER_TURN - thisTurn.size);
   const deliver = [], trans = []; let held = 0;
   for (const r of cands) {
@@ -270,14 +310,32 @@ function planDelivery(ws, ctx) {
     if (deliver.length < room) deliver.push(Object.assign({}, r, { deliveries: n }));
   }
   if (trans.length) { try { appendClassifyResults(ws, trans); } catch { /* 기록 실패=다음 사람의 차례에 같은 판정을 다시 */ } }
-  return { deliver, transitions: trans.length, held };
+  return { deliver: deliver.concat(emph), transitions: trans.length, held };
 }
 // 전달 블록(구현 담당 주입문) — 자료+명령 한 줄. 매 턴 고정 조각이 아니라 전달이 있는 차례에만 붙는다(분류 실행 뒤 많아야 두 차례).
 const DELIVER_QUOTE_SHOW = 200, DELIVER_NOTE_SHOW = 140;
 function oneLineOf(s, max) { const t = String(s || "").replace(/[\r\n\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim(); return t.length > max ? t.slice(0, max) + "…" : t; }
+// [⑥ 묶음 3(C)] 다시 강조 자료 줄 — 판단할 것 없음(명령 없음) · '사용자가 ○○를 다시 강조함(n번째)'.
+function emphasisBlock(items, en) {
+  const tyKo = { core: "수칙서 본문 항목을", archive: "수칙서(관련될 때) 항목을", rule: "규칙 칸을", candidate: "사용자 확인 대기 중인 제안을", "declined-candidate": "사용자가 안 올린 제안을", "declined-seat": "사용자가 안 올린 제안을", result: "앞선 판정 경계 결과를" }; // 조사까지(받침에 맞춤)
+  const tyEn = { core: "rulebook item", archive: "rulebook item (when relevant)", rule: "rule box", candidate: "proposal awaiting the user's approval", "declined-candidate": "proposal the user declined", "declined-seat": "proposal the user declined", result: "earlier judgement-boundary result" };
+  const head = en ? `[User-words classification — re-emphasis ${items.length} · for information, nothing to decide]` : `[사용자 말 분류 결과 — 다시 강조 ${items.length}건 · 자료(판단할 것 없음)]`;
+  const lines = items.map((r) => {
+    const ty = String((r.target && r.target.type) || "");
+    const lab = en ? (tyEn[ty] || "item already present") : (tyKo[ty] || "이미 있는 항목을");
+    const res = r.resumed ? (en ? " — passed to you again with the new words (a judgement result above/next)" : " — 새로 하신 말로 다시 넘김(판단 대상)") : "";
+    return en
+      ? `- the user re-emphasised ${lab} (time #${r.nth || 1}): "${oneLineOf(r.itemText, 100)}"${res}\n  words: "${oneLineOf(r.quote, DELIVER_QUOTE_SHOW)}"`
+      : `- 사용자가 ${lab} 다시 강조함(${r.nth || 1}번째): "${oneLineOf(r.itemText, 100)}"${res}\n  하신 말: "${oneLineOf(r.quote, DELIVER_QUOTE_SHOW)}"`;
+  });
+  return [head, ...lines].join("\n");
+}
 function deliveryBlock(results, lang) {
   if (!results || !results.length) return "";
   const en = lang === "en";
+  const emp = results.filter((r) => r.kind === "emphasis"); // [⑥] 다시 강조=자료 줄(아래) · 그 밖=판정 경계(판단 대상)
+  results = results.filter((r) => r.kind !== "emphasis");
+  if (!results.length) return emphasisBlock(emp, en);
   const seatKo = { supportedEnv: "지원 환경", alwaysBlocker: "항상 막을 것", outOfScope: "범위 밖" };
   const seatEn = { supportedEnv: "supported environment", alwaysBlocker: "always block", outOfScope: "out of scope" };
   const head = en ? `[User-words classification — decide ${results.length} this turn]` : `[사용자 말 분류 결과 — 이번 차례 판단 ${results.length}건]`;
@@ -293,7 +351,7 @@ function deliveryBlock(results, lang) {
   const cmd = en
     ? `Raise: ${raise} · Not raise: ${skip} — commands only, without listing these in the conversation or asking the user (the user approves on the dashboard).`
     : `올림: ${raise} · 안 올림: ${skip} — 대화에 늘어놓거나 사용자에게 묻지 않고 이 명령으로만(승인은 사용자가 대시보드에서).`;
-  return [head, ...items, cmd].join("\n");
+  return [head, ...items, cmd].join("\n") + (emp.length ? "\n" + emphasisBlock(emp, en) : "");
 }
 // ── [⑤ 3단계] 종료 관문(판단 강제 · §3-1 6) — 이번 차례에 넘겨받고 아직 판단하지 않은 결과가 있으면 그 차례를 끝내지 못한다.
 // 다른 종료 조건(검증·판단 관문·규칙 자가점검·상한 마감)이 모두 통과한 뒤에만 부른다 — 검증 안내가 먼저 보이게(두 Stop 훅 공통).
@@ -388,11 +446,14 @@ function classifyInput(ws, repo, opts) {
     items.push({ ref: "u" + (items.length + 1), id: w.id, source: w.source, text: t, shown, retries: Number(w.retries) || 0, turnAnchor: String(w.turnAnchor || ""), sessionId: String(w.sessionId || ""), sourceHash: String(w.sourceHash || ""), kind: String(w.kind || "") });
   }
   // '이미 있는 것' — 같은 뜻 재상신 방지 재료(판단은 LLM — 문구 대조 금지 · §3-4b)
-  const cap = (arr) => arr.filter(Boolean).slice(0, CLASSIFY_LIST_MAX).map((x) => oneLine(redactSensitiveForms(x), 200));
+  // [⑥ 묶음 3(C)] 목록 항목마다 '가리키는 대상'(refMeta)을 함께 둔다 — 항목 번호는 실행마다 바뀌므로 다시 강조 결과에는 번호가 아니라 이 대상을 남긴다.
+  //  수칙서 항목=정규화 문안 지문(대시보드 수칙 줄·빼기 결속과 같은 식 — 수칙서가 바뀌어도 같은 문장에만 따라가고 같은 자리의 다른 문장에는 붙지 않음) +
+  //  그때의 축·번호·세대(감사용) · 대기/안 올린 제안=후보 id · 앞선 판정 경계 결과=결과 id · 규칙 칸·옛 자리=문안 지문.
+  const fpOf = (x) => sha1(CL.normBacklogTitle(String(x)));
   const rulebook = [];
-  try { const ev = CL.readVerifyEnvelope(repo); if (ev && ev.st === "ok") for (const ax of RULEBOOK_SEATS) for (const x of (ev.data[ax] || [])) rulebook.push(ax + ": " + x); } catch { /* 0세대·판독 실패=빈 목록 */ }
-  try { const ah = typeof c.archiveHash === "string" && c.archiveHash ? c.archiveHash : ""; if (ah) { const ar = CL.readVerifyEnvelopeArchive(repo); if (ar.st === "ok" && ar.sha1 === ah) for (const x of ar.data.alwaysBlocker) rulebook.push("alwaysBlocker(관련될 때): " + x); } } catch { /* 서고 없음 */ }
-  const rules = normRuleList(c[rulesFieldFor(provider)]);
+  try { const ev = CL.readVerifyEnvelope(repo); if (ev && ev.st === "ok") for (const ax of RULEBOOK_SEATS) (ev.data[ax] || []).forEach((x, i) => rulebook.push({ t: ax + ": " + x, m: { type: "core", axis: ax, index: i, fp: fpOf(x), gen: String(ev.sha1 || "") } })); } catch { /* 0세대·판독 실패=빈 목록 */ }
+  try { const ah = typeof c.archiveHash === "string" && c.archiveHash ? c.archiveHash : ""; if (ah) { const ar = CL.readVerifyEnvelopeArchive(repo); if (ar.st === "ok" && ar.sha1 === ah) ar.data.alwaysBlocker.forEach((x, i) => rulebook.push({ t: "alwaysBlocker(관련될 때): " + x, m: { type: "archive", axis: "alwaysBlocker", index: i, fp: fpOf(x), gen: String(ar.sha1 || "") } })); } } catch { /* 서고 없음 */ }
+  const rules = normRuleList(c[rulesFieldFor(provider)]).map((x) => ({ t: x, m: { type: "rule", provider, fp: fpOf(x) } }));
   // [검증 1회차 f-7ccbb34a · R3] 확인 대기·안 올림 목록의 문장도 '승인 전 사용자 원문'이다 — 이번 실행 회사의 말만 싣는다(회사 표기 없는 옛 행=제외).
   // 승인된 수칙서 문안·결정 기록·그 회사 규칙 칸은 승인 뒤 문장이라 그대로. 다른 회사 거절분의 같은 말은 커밋 단계의 후보 id 거절 기억이 여전히 막는다.
   const sameCo = (r) => String((r && r.provider) || "") === provider;
@@ -406,27 +467,39 @@ function classifyInput(ws, repo, opts) {
         if (!r || r.kind !== "user-constraint" || r.repoKey !== repoKey || seen.has(r.candidateId)) continue;
         if (!sameCo(firstOf.get(r.candidateId))) continue;
         seen.add(r.candidateId);
-        if (CL.userDeclinedCandidate(cst.rows, r.candidateId)) declined.push(r.title);
-        else { const cur = cst.latest.get(r.candidateId + "@" + g.gen); if (cur && cur.status === "proposed") pending.push(r.title); }
+        if (CL.userDeclinedCandidate(cst.rows, r.candidateId)) declined.push({ t: r.title, m: { type: "declined-candidate", candidateId: r.candidateId } });
+        else { const cur = cst.latest.get(r.candidateId + "@" + g.gen); if (cur && cur.status === "proposed") pending.push({ t: r.title, m: { type: "candidate", candidateId: r.candidateId } }); }
       }
     }
   } catch { /* 없음 */ }
   // 옛 자리 장부: 사용자가 안 올린 문장만 '안 올림'으로 싣는다(같은 말을 수칙서 후보로 다시 올리지 않게) · 대기 중이던 옛 자리 제안은 승인 길이 없어 싣지 않음(D-d)
-  try { const ss = readSeatsState(ws); if (!ss.readError) for (const r of ss.latest.values()) { if (r.repoKey !== repoKey || !sameCo(r)) continue; if (r.status === "declined") declined.push(r.quote); } } catch { /* 없음 */ }
+  try { const ss = readSeatsState(ws); if (!ss.readError) for (const r of ss.latest.values()) { if (r.repoKey !== repoKey || !sameCo(r)) continue; if (r.status === "declined") declined.push({ t: r.quote, m: { type: "declined-seat", fp: fpOf(r.quote) } }); } } catch { /* 없음 */ }
   // [묶음 2(⑤)] 구현 담당 판단을 기다리는 판정 경계 결과(같은 회사·같은 저장소 — 승인 전 원문이라 R3) — 같은 뜻 반복을 다시 판정 경계로 내지 않게
-  const waiting = [];
+  const waiting = [], skippedL = [];
   const rs = readClassifyResults(ws);
   if (rs.readError) return { ok: false, reason: "results-unreadable" }; // 판독 오류=빈 목록으로 줄이지 않음(같은 뜻 결과 중복 생성 방지 — 대기열 보존)
   const raised9 = raisedResultIds(ws);
   if (raised9 === null) return { ok: false, reason: "candidates-unreadable" };
-  for (const r of rs.latest.values()) if (r.kind === "boundary" && (r.status === "new" || r.status === "delivered") && !raised9.has(r.resultId) && r.repoKey === repoKey && sameCo(r)) waiting.push(r.quote);
-  const existing = { rulebook: cap(rulebook), rules: cap(rules), pending: cap(pending), declined: cap(declined), waiting: cap(waiting) };
-  // 항목 번호(다시 강조의 itemRef 대상) — 종류별 머리글자+순번. 결과에는 번호와 그 문장을 함께 남긴다(번호는 실행마다 바뀔 수 있음).
-  const refs = {};
-  const lab = (pre, arr) => arr.map((x, i) => { refs[pre + (i + 1)] = x; return pre + (i + 1); });
-  const labels = { rulebook: lab("B", existing.rulebook), rules: lab("R", existing.rules), pending: lab("P", existing.pending), declined: lab("N", existing.declined), waiting: lab("W", existing.waiting) };
+  // [⑥ 묶음 3(C) · §3-1 5·6] '구현 담당 미처리'(두 번 넘겨받고도 판단 없음)도 판단을 기다리는 것으로 · 구현 담당이 안 올린 판정 경계는 따로(S) — 사용자가 같은 뜻을
+  //  다시 말하면(다시 강조) 새 전달 주기로 다시 넘기는 재료(commitClassify).
+  const clS9 = readClaimsState(ws);
+  if (clS9.readError) return { ok: false, reason: "claims-unreadable" }; // [검증 1회차 blocker] 판단 표식을 못 읽음=유효 상태를 모름 — 빈 것으로 줄이지 않고 입력 거절(말 보존)
+  const claims9 = new Map(); for (const cl of clS9.claims) claims9.set(cl.resultId, cl.claim ? cl.claim : { decision: "unknown" });
+  for (const r of rs.latest.values()) {
+    if (r.kind !== "boundary" || r.repoKey !== repoKey || !sameCo(r)) continue;
+    const st = effectiveResultStatus(r, raised9, claims9); // 판단 표식 반영(표식에만 남은 안 올림=S)
+    if (st === "new" || st === "delivered" || st === "unhandled") waiting.push({ t: r.quote, m: { type: "result", resultId: r.resultId } });
+    else if (st === "skipped") skippedL.push({ t: r.quote, m: { type: "result", resultId: r.resultId } });
+  }
+  const capM = (arr) => arr.filter((x) => x && x.t).slice(0, CLASSIFY_LIST_MAX);
+  const lists = { rulebook: capM(rulebook), rules: capM(rules), pending: capM(pending), declined: capM(declined), waiting: capM(waiting), skipped: capM(skippedL) };
+  const existing = {}; for (const k of Object.keys(lists)) existing[k] = lists[k].map((x) => oneLine(redactSensitiveForms(x.t), 200));
+  // 항목 번호(다시 강조의 itemRef 대상) — 종류별 머리글자+순번. 결과에는 번호·그 문장·가리키는 대상(refMeta)을 함께 남긴다(번호는 실행마다 바뀔 수 있음).
+  const refs = {}, refMeta = {};
+  const lab = (pre, k) => lists[k].map((x, i) => { const id = pre + (i + 1); refs[id] = existing[k][i]; refMeta[id] = x.m; return id; });
+  const labels = { rulebook: lab("B", "rulebook"), rules: lab("R", "rules"), pending: lab("P", "pending"), declined: lab("N", "declined"), waiting: lab("W", "waiting"), skipped: lab("S", "skipped") };
   const inputFp = sha1(JSON.stringify({ ids: items.map((x) => x.id), existing }));
-  return Object.assign(base, { provider, arm: armForProvider(provider), items, unavailable, pastedOnly, existing, labels, refs, inputFp });
+  return Object.assign(base, { provider, arm: armForProvider(provider), items, unavailable, pastedOnly, existing, labels, refs, refMeta, inputFp });
 }
 
 // ── 프롬프트 — 범주 정의만(구체 예시·키워드 없음 — 경직성 금지) ──
@@ -435,8 +508,8 @@ function buildClassifyPrompt(input, lang) {
   const L = [];
   L.push(en ? "You are an independent classifier of a user's words. Below are things the user said to an AI implementer in one project. You only decide what KIND of statement each relevant sentence is — you do not write anything anywhere. Most messages are one-off requests, questions, confirmations or reactions and are none of the kinds below — no result is better than a weak one. At most " + CLASSIFY_MAX_PER_RUN + "."
     : "당신은 독립 '사용자 말 분류' 담당입니다. 아래는 한 프로젝트에서 사용자가 구현 담당(AI)에게 한 말입니다. 당신은 관련 문장이 어떤 '성격'인지만 가릅니다 — 어디에도 직접 쓰지 않습니다. 대부분의 말은 이번 작업 요청·질문·확인·감상이라 아래 어느 성격도 아닙니다 — 약한 결과보다 무결과가 낫습니다. 최대 " + CLASSIFY_MAX_PER_RUN + "건.");
-  L.push(en ? "Kinds: boundary = a standard for JUDGING this project that keeps applying to the whole of the following work; it decides what a verifier must treat as out of scope or as always a defect. You must be able to state in one line (bounds) how it changes a verdict — if you cannot, it is not a boundary. seat = supportedEnv (environment/target/range the project is judged against) | alwaysBlocker (always a defect when violated) | outOfScope (not covered now, must not be flagged). emphasis = the user says again what an item in the 'already present' lists already says — itemRef = that item's label. style = a lasting request about HOW the implementer works or talks (order of steps, reporting format, what to do directly instead of handing to the user, wording, etc.) — this is not a rulebook item; the user decides whether to write it into their own rule box."
-    : "성격: boundary(판정 경계) = 이 프로젝트를 검증할 때 이후 작업 전체에 계속 적용되는 판정 기준 — 검증 담당이 무엇을 범위 밖으로 돌려야 하는지 또는 무엇을 언제나 결함으로 봐야 하는지를 정하는 말. 그것이 판정을 어떻게 바꾸는지 한 줄(bounds)로 적을 수 있어야 하며, 적을 수 없으면 판정 경계가 아닙니다. seat=supportedEnv(판정 기준이 되는 실행 환경·대상·범위) | alwaysBlocker(어기면 언제나 결함) | outOfScope(지금 다루지 않아 결함으로 잡지 말 것). emphasis(다시 강조) = 아래 '이미 있는 것' 목록의 한 항목과 같은 뜻을 사용자가 다시 말함 — itemRef=그 항목 번호. style(일하는 방식) = 구현 담당이 일하거나 말하는 방식에 대한 지속 요구(진행 순서·보고 형식·사용자에게 넘기지 않고 직접 할 일·말투 등) — 수칙서 항목이 아니며, 규칙 칸에 적을지는 사용자가 정합니다.");
+  L.push(en ? "Kinds: boundary = a standard for JUDGING this project that keeps applying to the whole of the following work; it decides what a verifier must treat as out of scope or as always a defect. You must be able to state in one line (bounds) how it changes a verdict — if you cannot, it is not a boundary. seat = supportedEnv (environment/target/range the project is judged against) | alwaysBlocker (always a defect when violated) | outOfScope (not covered now, must not be flagged). emphasis = the user says again what an item in the 'already present' lists already says — itemRef = that item's label; if the repeat also adds a NEW condition that item does not have (a new target, range or exception), output the emphasis AND a separate boundary that quotes only the new-condition passage (do not merge them). style = a lasting request about HOW the implementer works or talks (order of steps, reporting format, what to do directly instead of handing to the user, wording, etc.) — this is not a rulebook item; the user decides whether to write it into their own rule box."
+    : "성격: boundary(판정 경계) = 이 프로젝트를 검증할 때 이후 작업 전체에 계속 적용되는 판정 기준 — 검증 담당이 무엇을 범위 밖으로 돌려야 하는지 또는 무엇을 언제나 결함으로 봐야 하는지를 정하는 말. 그것이 판정을 어떻게 바꾸는지 한 줄(bounds)로 적을 수 있어야 하며, 적을 수 없으면 판정 경계가 아닙니다. seat=supportedEnv(판정 기준이 되는 실행 환경·대상·범위) | alwaysBlocker(어기면 언제나 결함) | outOfScope(지금 다루지 않아 결함으로 잡지 말 것). emphasis(다시 강조) = 아래 '이미 있는 것' 목록의 한 항목과 같은 뜻을 사용자가 다시 말함 — itemRef=그 항목 번호. 다시 말하면서 그 항목에 없던 새 조건(새 대상·범위·예외)을 더했으면 emphasis 하나와, 새 조건 구절만 인용한 boundary 하나를 따로 냅니다(섞지 않음). style(일하는 방식) = 구현 담당이 일하거나 말하는 방식에 대한 지속 요구(진행 순서·보고 형식·사용자에게 넘기지 않고 직접 할 일·말투 등) — 수칙서 항목이 아니며, 규칙 칸에 적을지는 사용자가 정합니다.");
   L.push(en ? "Rules: quote = an UNCHANGED contiguous passage of that message (12–200 chars, one line) — no summary, translation or stitching; a single changed character is rejected. Never quote a passage containing " + REDACTED + ". why = one line (8–120 chars) on why it has this kind. bounds (boundary only) = one line (8–200 chars) on how it changes a verdict. No secrets/personal data. A sentence that means the same as an 'already present' item is emphasis, never a new boundary. One-off instructions for the current task, questions and feelings are none of the kinds."
     : "규칙: quote=그 말 원문에서 바꾸지 않은 연속 구절(12~200자·한 줄) — 요약·번역·이어 붙이기 금지, 한 글자라도 다르면 거부됩니다. " + REDACTED + " 표시가 들어간 구절은 쓰지 마세요. why=왜 그 성격인지 한 줄(8~120자). bounds(boundary 만)=판정을 어떻게 바꾸는지 한 줄(8~200자). 비밀값·개인정보 금지. '이미 있는 것'의 한 항목과 같은 뜻이면 새 판정 경계가 아니라 emphasis 입니다. 이번 작업에만 해당하는 지시·질문·감정 표현은 어느 성격도 아닙니다.");
   L.push(en ? "Output exactly one JSON object and nothing else: {\"results\":[{\"ref\":\"u1\",\"kind\":\"boundary\",\"quote\":\"…\",\"seat\":\"supportedEnv|alwaysBlocker|outOfScope\",\"why\":\"…\",\"bounds\":\"…\"},{\"ref\":\"u2\",\"kind\":\"emphasis\",\"quote\":\"…\",\"itemRef\":\"B1\",\"why\":\"…\"},{\"ref\":\"u3\",\"kind\":\"style\",\"quote\":\"…\",\"why\":\"…\"}]} — none: {\"results\":[]}."
@@ -449,6 +522,7 @@ function buildClassifyPrompt(input, lang) {
   dump(en ? "[Already present — waiting for the user]" : "[이미 있는 것 — 사용자 확인 대기]", "pending");
   dump(en ? "[Already present — the user chose not to adopt]" : "[이미 있는 것 — 사용자가 안 올림]", "declined");
   dump(en ? "[Already present — earlier results waiting for the implementer]" : "[이미 있는 것 — 구현 담당 판단을 기다리는 앞선 결과]", "waiting");
+  dump(en ? "[Already present — earlier results the implementer chose not to raise]" : "[이미 있는 것 — 구현 담당이 올리지 않은 앞선 결과]", "skipped"); // [⑥ 묶음 3(C)]
   L.push("");
   L.push(en ? "[User's words — oldest first]" : "[사용자 말 — 오래된 것부터]");
   for (const it of input.items) {
@@ -507,7 +581,7 @@ function parseClassifyOutput(raw, input) {
     const ws9 = CL.safeBacklogAutoTitle(why); if (!ws9.ok) { drop("why-sensitive-" + ws9.reasonKey); continue; }
     if (bounds) { const bs9 = CL.safeBacklogAutoTitle(bounds); if (!bs9.ok) { drop("bounds-sensitive-" + bs9.reasonKey); continue; } }
     const dk = kind + "|" + qNormOf(q); if (seen.has(dk)) { drop("duplicate-in-run"); continue; } seen.add(dk);
-    items.push({ ref: p.ref, wordId: it.id, kind, quote: q, why, ...(seat ? { seat } : {}), ...(bounds ? { bounds } : {}), ...(itemRef ? { itemRef, itemText: String(refs[itemRef]) } : {}) });
+    items.push({ ref: p.ref, wordId: it.id, kind, quote: q, why, ...(seat ? { seat } : {}), ...(bounds ? { bounds } : {}), ...(itemRef ? { itemRef, itemText: String(refs[itemRef]), ...(input.refMeta && input.refMeta[itemRef] ? { target: Object.assign({}, input.refMeta[itemRef]) } : {}) } : {}) });
   }
   return { ok: true, items, dropped };
 }
@@ -541,10 +615,40 @@ function commitClassify(ws, input, parsed, meta) {
     const resultId = classifyResultIdFor(ws, input.repoKey, it.kind, it.quote, it.wordId);
     if (rs.latest.has(resultId)) { dr("duplicate-result"); continue; } // 같은 말·같은 인용·같은 성격=이미 기록(재실행 멱등)
     out.push({ schema: "classify-result-v1", wsKey: CL.wsKeyFor(ws), repoKey: input.repoKey, resultId, status: "new", kind: it.kind, quote: it.quote, why: it.why,
-      ...(it.seat ? { seat: it.seat } : {}), ...(it.bounds ? { bounds: it.bounds } : {}), ...(it.itemRef ? { itemRef: it.itemRef, itemText: it.itemText } : {}),
+      ...(it.seat ? { seat: it.seat } : {}), ...(it.bounds ? { bounds: it.bounds } : {}), ...(it.itemRef ? { itemRef: it.itemRef, itemText: it.itemText } : {}), ...(it.target ? { target: it.target } : {}),
       gen: input.gen, ...(input.virtual ? { virtualGen: true } : {}), provider: input.provider, sessionId: w.sessionId, turnAnchor: w.turnAnchor, sourceHash: w.sourceHash,
       quoteSource: w.source, wordId: w.id, ...(runId ? { runId } : {}), ts });
     counts[it.kind]++;
+  }
+  // [⑥ 묶음 3(C) · §3-1 5·6] 다시 강조가 '구현 담당 미처리'·'구현 담당이 안 올림' 판정 경계 결과를 가리키면 새 전달 주기 — 새로 하신 말(다시 강조 인용)로
+  //  새 판정 경계 결과를 만든다(칸·판정 영향 승계 · resumedFrom · 전달 횟수 0부터). 옛 결과는 그대로(판단 표식·이력 보존 — 한 결과=한 판단).
+  //  대기·전달 중·올림 결과=횟수만(이미 흐름 안). 같은 인용의 후보·거절 기억·판정 경계 결과가 있으면 만들지 않음(일반 판정 경계와 같은 탈락 규칙).
+  //  [검증 1회차 blocker] 판정은 장부 상태가 아니라 유효 상태(판단 표식 반영 — 표식에만 남은 안 올림도 다시 넘김 · 표식 내용을 못 읽으면 판단된 것으로 보고 넘기지 않음).
+  //  표식·후보 장부를 못 읽으면 커밋 거절(말 보존 — 다음 실행이 다시 분류) — 다시 넘길 기회를 판독 오류로 잃지 않게.
+  let raisedC9 = null, claimsC9 = null;
+  if (out.some((e) => e.kind === "emphasis" && e.target && e.target.type === "result")) {
+    raisedC9 = raisedResultIds(ws);
+    if (raisedC9 === null) return { ok: false, reason: "candidates-unreadable" };
+    const clC9 = readClaimsState(ws);
+    if (clC9.readError) return { ok: false, reason: "claims-unreadable" };
+    claimsC9 = new Map(); for (const cl of clC9.claims) claimsC9.set(cl.resultId, cl.claim ? cl.claim : { decision: "unknown" });
+  }
+  for (const e of out.slice()) {
+    if (e.kind !== "emphasis" || !e.target || e.target.type !== "result") continue;
+    const old = rs.latest.get(String(e.target.resultId || ""));
+    if (!old || old.kind !== "boundary" || old.repoKey !== input.repoKey) continue;
+    const stOld = effectiveResultStatus(old, raisedC9, claimsC9);
+    if (stOld !== "unhandled" && stOld !== "skipped") continue;
+    if (!RULEBOOK_SEATS.includes(old.seat) || !old.bounds) continue;
+    const cid = userConstraintIdFor(ws, input.repoKey, e.quote);
+    if (CL.userDeclinedCandidate(cst.rows, cid) || cst.latest.get(cid + "@" + input.gen) || sameQuote.has(qNormOf(e.quote))) continue;
+    const rid = classifyResultIdFor(ws, input.repoKey, "boundary", e.quote, e.wordId);
+    if (rs.latest.has(rid) || out.some((x) => x.resultId === rid)) continue;
+    sameQuote.add(qNormOf(e.quote));
+    out.push({ schema: "classify-result-v1", wsKey: e.wsKey, repoKey: input.repoKey, resultId: rid, status: "new", kind: "boundary", quote: e.quote, why: old.why, seat: old.seat, bounds: old.bounds,
+      resumedFrom: old.resultId, emphasisOf: e.resultId, gen: input.gen, ...(input.virtual ? { virtualGen: true } : {}), provider: e.provider, sessionId: e.sessionId, turnAnchor: e.turnAnchor, sourceHash: e.sourceHash,
+      quoteSource: e.quoteSource, wordId: e.wordId, ...(runId ? { runId } : {}), ts });
+    counts.boundary++;
   }
   if (out.length && !appendClassifyResults(ws, out)) return { ok: false, reason: "results-write" };
   if (!UW.setWordStatus(ws, input.items.map((x) => x.id), "classified", runId ? { runId } : {})) return { ok: false, reason: "words-write" };
@@ -863,6 +967,23 @@ function heldWordAction(ws, id, action) {
 
 // ── 화면 자료 — 자리 후보(전달처 표시 재료 포함)·분류하지 못한 말(원문 일부)·요약. 판독 불가=null 칸(화면이 '판독 불가'로 표기).
 const HELD_TEXT_SHOW = 400;
+// [⑥ 묶음 3(C)] 다시 강조 집계(화면) — 같은 저장소의 다시 강조 결과를 대상별로: 수칙서 항목=문안 지문(byFp — 대시보드 수칙 줄의 itemFp 와 같은 식) ·
+//  제안=후보 id · 앞선 결과=결과 id. 두 회사 결과 모두(사용자의 반복 횟수 — 원문은 싣지 않음). 판독 오류=null.
+function emphasisTally(ws, repoKey) {
+  const rs = readClassifyResults(ws); if (rs.readError) return null;
+  const out = { byFp: {}, byCandidate: {}, byResult: {} };
+  const seen = new Set();
+  for (const r of rs.rows) {
+    if (!r || r.kind !== "emphasis" || r.repoKey !== repoKey || seen.has(r.resultId)) continue;
+    seen.add(r.resultId);
+    const t = r.target || {}, ts = String(r.ts || "");
+    const bump = (m, k) => { const e = m[k] || (m[k] = { n: 0, last: "" }); e.n++; if (ts > e.last) e.last = ts; };
+    if ((t.type === "core" || t.type === "archive") && t.fp) bump(out.byFp, t.fp);
+    else if ((t.type === "candidate" || t.type === "declined-candidate") && t.candidateId) bump(out.byCandidate, t.candidateId);
+    else if (t.type === "result" && t.resultId) bump(out.byResult, t.resultId);
+  }
+  return out;
+}
 function userWordsView(ws) {
   const sm = classifySummary(ws);
   const rk = sm.repoKey;
@@ -878,7 +999,7 @@ function userWordsView(ws) {
       const mine = [...rs.latest.values()].filter((r) => r.repoKey === rk).sort((a, b) => String(firstTs.get(b.resultId) || "").localeCompare(String(firstTs.get(a.resultId) || "")));
       const st9 = (r) => { if (r.status !== "raised" && raisedV.has(r.resultId)) return "raised"; const cv = claimsV.get(r.resultId); if (cv && cv.decision === "skipped" && r.status !== "skipped") return "skipped"; return r.status; };
       const note9 = (r) => (r.status === "skipped" && r.note) ? String(r.note) : (() => { const cv = claimsV.get(r.resultId); return cv && cv.decision === "skipped" && cv.resultRow && cv.resultRow.note ? String(cv.resultRow.note) : ""; })();
-      const pick = (k) => mine.filter((r) => r.kind === k).slice(0, RESULTS_VIEW_MAX).map((r) => ({ id: r.resultId, status: st9(r), quote: r.quote, why: r.why, ts: String(firstTs.get(r.resultId) || r.ts || ""), ...(r.seat ? { seat: r.seat } : {}), ...(r.bounds ? { bounds: r.bounds } : {}), ...(r.itemRef ? { itemText: String(r.itemText || "") } : {}), ...(note9(r) ? { note: note9(r) } : {}) }));
+      const pick = (k) => mine.filter((r) => r.kind === k).slice(0, RESULTS_VIEW_MAX).map((r) => ({ id: r.resultId, status: st9(r), quote: r.quote, why: r.why, ts: String(firstTs.get(r.resultId) || r.ts || ""), ...(r.seat ? { seat: r.seat } : {}), ...(r.bounds ? { bounds: r.bounds } : {}), ...(r.itemRef ? { itemText: String(r.itemText || "") } : {}), ...(r.target && r.target.type ? { targetType: String(r.target.type) } : {}), ...(r.resumedFrom ? { resumed: true } : {}), ...(note9(r) ? { note: note9(r) } : {}) }));
       results = { boundary: pick("boundary"), emphasis: pick("emphasis"), style: pick("style") };
     }
   }
@@ -895,8 +1016,8 @@ module.exports = { stopGateWarnText,
   CLASSIFY_KINDS, CLASSIFY_BOUNDS_MIN, CLASSIFY_BOUNDS_MAX, RESULT_STATUSES,
   classifyFileFor, seatsFileFor, resultsFileFor, classifyLockFileFor, armForProvider, rulesFieldFor, redactSensitiveForms,
   readClassifyRows, readSeatsState, readClassifyResults, appendClassifyResults, classifyResultIdFor, userConstraintIdFor,
-  raisedResultIds, deliveredUndecided, markResultRaised, skipResult, markResultsDelivered, planDelivery, deliveryBlock, DELIVERY_MAX, DELIVER_PER_TURN, classifyStopGate, stopGateText, STOP_GATE_MAX, stopGateFileFor, SKIP_NOTE_MIN, resultStatusRow,
-  CLAIMS_DIR, claimFileFor, hasClaim, claimResult, readClaims, readClaimsState, claimDecisions, repairClaims, unfilledRaisedClaims,
+  raisedResultIds, deliveredUndecided, markResultRaised, skipResult, markResultsDelivered, planDelivery, deliveryBlock, DELIVERY_MAX, DELIVER_PER_TURN, EMPHASIS_PER_TURN, emphasisKeyOf, emphasisOrdinals, emphasisBlock, emphasisTally, classifyStopGate, stopGateText, STOP_GATE_MAX, stopGateFileFor, SKIP_NOTE_MIN, resultStatusRow,
+  CLAIMS_DIR, claimFileFor, hasClaim, claimResult, readClaims, readClaimsState, claimDecisions, effectiveResultStatus, repairClaims, unfilledRaisedClaims,
   classifyInput, buildClassifyPrompt, parseClassifyOutput, commitClassify, bumpRetries, acquireClassifyLock, releaseClassifyLock,
   runClassify, classifySummary,
 };
