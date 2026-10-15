@@ -22,6 +22,8 @@ process.stdin.on("end", () => {
   // [P7 ⓐ] 진짜 훅 입력(stdin에 이벤트 이름·세션 id)일 때만 진행 — 빈/부분 입력(수동 실행·로드 시험)은 무동작 종료(앵커 없이 주입만 하면 이후 ask-start가
   // 엉뚱 폴더를 읽으므로 주입도 하지 않는다). 환경변수의 세션 id는 판정 근거가 아니다.
   if (!isRealHookInput(hook)) process.exit(0);
+  // [AFTER-0.1.104-FIXES 설계 A-1 · A1-2] 이 대화를 돌리는 Claude Code 위치를 기록(바뀌었을 때만) — 그 값을 물려받지 못하는 도우미 실행이 같은 실행 파일을 쓰게.
+  try { require("./claude-helper.js").recordExecPath(process.env); } catch { /* 기록 실패=도우미가 다음 후보로 */ }
   // 이 턴의 작업 폴더 — active.json 기록과 계약 로드에 '동일하게' 적용해 둘의 키가 어긋나지 않게 한다.
   const ws = process.env.CLAUDE_PROJECT_DIR || hook.cwd || process.cwd();
 

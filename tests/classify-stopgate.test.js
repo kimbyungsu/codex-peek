@@ -213,7 +213,7 @@ t("④ 대시보드 경보 줄 — '분류 결과 판단 없이 끝난 차례'(�
   const txt = all.join(" | ");
   assert.ok(txt.includes("사용자 말 분류 결과 판단 없이 끝난 차례 1건") && !txt.includes("근거 의심") && /확인함/.test(txt), "경보 줄 " + txt.slice(0, 200));
   const ts = fs.readFileSync(path.join(ROOT, "src", "extension.ts"), "utf8");
-  assert.ok(/const nClsUnd = warns\.filter\(\(e\) => e\.kind === "classify-undecided"\)\.length;/.test(ts) && /: nClsUnd \? tE\("분류 결과 판단 누락","User-words results undecided"\)/.test(ts) && /nEnrich - nHookChk - nClsUnd;/.test(ts), "상태 표시줄 분리");
+  assert.ok(/const nClsUnd = warns\.filter\(\(e\) => e\.kind === "classify-undecided"\)\.length;/.test(ts) && /: nClsUnd \? tE\("분류 결과 판단 누락","User-words results undecided"\)/.test(ts) && /nEnrich - nHookChk - nClsUnd(?: - \w+)*;/.test(ts), "상태 표시줄 분리"); // [설계 A-1] 뒤에 다른 분리 항목(nHelper 등)이 붙어도 됨
 });
 
 (async () => {

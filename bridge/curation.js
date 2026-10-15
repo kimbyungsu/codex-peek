@@ -253,6 +253,20 @@ function buildCurationPrompt(input, lang) {
 }
 
 // ── 파서 — 손상(JSON 아님·proposals 배열 아님·3건 초과·작업 종류 밖·필수 필드 형식 위반)=전량 거부(fail-closed). 의미 거부(중복·민감·미지 refs)=항목 탈락+사유 기록.
+// [AFTER-0.1.104-FIXES 설계 A-1 · A3] 정해진 틀 — Claude 도우미가 이 모양으로만 답하게 한다(판독기는 그대로 엄격 · 의미 검사·길이·번호 대조는 판독기 몫).
+function curationSchema() {
+  const str = { type: "string" };
+  const proposal = { type: "object", additionalProperties: false, required: ["operation", "why", "refs", "explain"], properties: {
+    operation: { type: "string", enum: CURATION_OPERATIONS.slice() },
+    target: { type: "string", enum: ["core", "archive"] },
+    axis: { type: "string", enum: ENVELOPE_AXES.slice() },
+    title: str, index: { type: "integer" }, itemFp: str, why: str,
+    refs: { type: "array", items: str },
+    recommend: { type: "string", enum: ["항상", "관련", "always", "related"] },
+    explain: { type: "object", additionalProperties: false, required: ["happened", "ifAdopted", "ifNot", "recommend"], properties: { happened: str, ifAdopted: str, ifNot: str, recommend: str } },
+  } };
+  return { type: "object", additionalProperties: false, required: ["proposals"], properties: { proposals: { type: "array", maxItems: CURATION_MAX_PER_RUN, items: proposal } } };
+}
 function parseCurationOutput(raw, input) {
   let text = String(raw || "").trim();
   // 코드 울타리 1겹은 벗긴다(2026-09-06 개정 · D-2026-09-06-curator-arm-follows-scout): 실측에서 담당이 ```json … ``` 로 감싼 정상 답(제안 없음)을 no-json으로 거부해 거짓 실패 경보가 났다.
@@ -455,31 +469,35 @@ async function runCuration(ws, opts) {
     const arm = selectorArmForCuration(ws, c);
     const lang = o.lang || CL.loadLang();
     const runner = typeof o.pageRunner === "function" ? o.pageRunner : arm === "deepseek" ? runCurationDeepseekPage : require("./selector-runner.js").runSelectorPage; // deepseek=정리 담당 전용 실행기(선별 실행기 무변경 — ab-7 소스 계약)
-    const h = runner({ arm, prompt: buildCurationPrompt(input, lang), timeoutMs: Number(o.timeoutMs) || CL.SELECTOR_PAGE_TIMEOUT_MS });
+    const h = runner({ arm, prompt: buildCurationPrompt(input, lang), timeoutMs: Number(o.timeoutMs) || CL.SELECTOR_PAGE_TIMEOUT_MS, schema: curationSchema() });
     const r = await h.promise;
+    // [AFTER-0.1.104-FIXES 설계 A-1 · A5] 도우미 실행 방식(새/옛)·Claude Code 판을 실행 기록·영수증에 — Claude 담당이면 옛 방식·너무 오래됨 경보(새 방식이면 지움)
+    const runnerMeta = r && r.runner && typeof r.runner === "object" ? { tier: String(r.runner.tier || ""), version: String(r.runner.version || ""), how: String(r.runner.how || "") } : null;
+    if (arm === "self" && r) { try { require("./claude-helper.js").reportHelperTier(ws, r); } catch { /* 경보 실패=실행 결과 무영향 */ } }
+    const runRowR = (x) => runRow9(runnerMeta ? Object.assign(x, { runner: runnerMeta }) : x);
     if (!r || !r.ok) {
       const key = (r && r.key) || "call-failed";
-      runRow9({ repoKey: input.repoKey, curationKey: curationKeyOf(input), boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: "failed", reason: key, arm, signalCount: input.signalCount, durationMs: Date.now() - t0 });
-      writeCurationReceipt(ws, input, { arm, pages: 1, outcome: "failed:" + key, durationMs: Date.now() - t0 });
+      runRowR({ repoKey: input.repoKey, curationKey: curationKeyOf(input), boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: "failed", reason: key, arm, signalCount: input.signalCount, durationMs: Date.now() - t0 });
+      writeCurationReceipt(ws, input, { arm, ...(runnerMeta ? { runner: runnerMeta } : {}), pages: 1, outcome: "failed:" + key, durationMs: Date.now() - t0 });
       alarm(ws, "curation-failed", "정리 제안 실행이 실패했습니다(" + key + ") — 검증에는 영향이 없고, 다음 실행에서 다시 시도합니다.", "Curation run failed (" + key + ") — verification is unaffected; it will retry on the next run.");
       return { st: "call-failed", reason: key, arm };
     }
     const parsed = parseCurationOutput(r.output, input);
     if (!parsed.ok) {
-      runRow9({ repoKey: input.repoKey, curationKey: curationKeyOf(input), boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: "failed", reason: "parse:" + parsed.reason, arm, signalCount: input.signalCount, durationMs: Date.now() - t0 });
-      writeCurationReceipt(ws, input, { arm, pages: 1, outcome: "parse-failed:" + parsed.reason, durationMs: Date.now() - t0 });
+      runRowR({ repoKey: input.repoKey, curationKey: curationKeyOf(input), boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: "failed", reason: "parse:" + parsed.reason, arm, signalCount: input.signalCount, durationMs: Date.now() - t0 });
+      writeCurationReceipt(ws, input, { arm, ...(runnerMeta ? { runner: runnerMeta } : {}), pages: 1, outcome: "parse-failed:" + parsed.reason, durationMs: Date.now() - t0 });
       alarm(ws, "curation-failed", "정리 제안 답을 읽을 수 없어 전량 거부했습니다(" + parsed.reason + ") — 다음 실행에서 재발급합니다.", "Curation output was unreadable and rejected as a whole (" + parsed.reason + ") — reissued on the next run.");
       return { st: "parse-failed", reason: parsed.reason, arm };
     }
     const cm = commitCuration(ws, input, parsed, { arm, durationMs: Date.now() - t0 });
     if (!cm.ok) {
-      runRow9({ repoKey: input.repoKey, curationKey: curationKeyOf(input), boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: "failed", reason: "commit:" + cm.reason, arm, signalCount: input.signalCount, durationMs: Date.now() - t0 });
-      writeCurationReceipt(ws, input, { arm, pages: 1, outcome: "commit-failed:" + cm.reason, durationMs: Date.now() - t0 });
+      runRowR({ repoKey: input.repoKey, curationKey: curationKeyOf(input), boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: "failed", reason: "commit:" + cm.reason, arm, signalCount: input.signalCount, durationMs: Date.now() - t0 });
+      writeCurationReceipt(ws, input, { arm, ...(runnerMeta ? { runner: runnerMeta } : {}), pages: 1, outcome: "commit-failed:" + cm.reason, durationMs: Date.now() - t0 });
       alarm(ws, "curation-failed", "정리 제안 기록이 중단됐습니다(" + cm.reason + ") — 화면에 반영되지 않았고, 다음 실행이 다시 시도합니다.", "Curation commit aborted (" + cm.reason + ") — nothing shown; the next run retries.");
       return { st: "commit-failed", reason: cm.reason, arm };
     }
-    runRow9({ repoKey: input.repoKey, curationKey: cm.curationKey, boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: cm.proposed ? "proposed" : "none", proposed: cm.proposed, fresh: cm.candidateIds.length, deferred: cm.deferred, heldToggles: cm.heldToggles, dropped: cm.dropped, arm, signalCount: input.signalCount, durationMs: Date.now() - t0 });
-    const rc = writeCurationReceipt(ws, input, { arm, pages: 1, selectedIds: cm.candidateIds, outcome: cm.proposed ? "proposed:" + cm.proposed : "none", resultFp: cm.resultFp, durationMs: Date.now() - t0 });
+    runRowR({ repoKey: input.repoKey, curationKey: cm.curationKey, boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: cm.proposed ? "proposed" : "none", proposed: cm.proposed, fresh: cm.candidateIds.length, deferred: cm.deferred, heldToggles: cm.heldToggles, dropped: cm.dropped, arm, signalCount: input.signalCount, durationMs: Date.now() - t0 });
+    const rc = writeCurationReceipt(ws, input, { arm, ...(runnerMeta ? { runner: runnerMeta } : {}), pages: 1, selectedIds: cm.candidateIds, outcome: cm.proposed ? "proposed:" + cm.proposed : "none", resultFp: cm.resultFp, durationMs: Date.now() - t0 });
     if (!rc.ok) alarm(ws, "curation-failed", "정리 제안 영수증 기록에 실패했습니다 — 제안은 남았지만 실행 기록이 비었습니다.", "Curation receipt write failed — proposals were stored but the run receipt is missing.");
     return Object.assign({ st: "ok", arm, receipt: rc.ok, recovered: rec9.recovered }, cm);
   } finally { releaseCurateLock(ws, lk.token); }
@@ -691,7 +709,7 @@ function curationSummary(ws) {
   return { lastItems, lastTs: last ? last.ts : "", lastOutcome: last ? last.outcome : "", lastReason: last ? (last.reason || "") : "", lastTrigger: last ? (last.trigger || "manual") : "", runs: runs.length, proposedTotal, adopted, declined, adoptRate: proposedTotal ? Math.round((adopted / proposedTotal) * 100) : 0, pending: repoKey && gen ? curationPendingCount(ws, repoKey, gen) : 0, running: lockAlive(ws), archiveSize, selOverCount: s.selOver, unusedCount: s.unusedCount, unusedDays: s.unusedDays, campaignsSince: tk ? tk.k : 0, maxPerRun: CURATION_MAX_PER_RUN, maxPending: CURATION_MAX_PENDING, tickK: CURATION_TICK_K };
 }
 
-module.exports = { RULE_REDACTED, recoverCurationProvisional, resolveComputeCandidates, safeText, CURATION_DIR, CURATION_MAX_PER_RUN, CURATION_MAX_PENDING, CURATION_UNUSED_DAYS, CURATION_OPERATIONS, curationFileFor, curateLockFileFor, itemFpOf, selectorArmForCuration, readCurationRows, appendCurationRow, curationInput, curationKeyOf, curationSkip, buildCurationPrompt, parseCurationOutput, curationPendingCount, commitCuration, writeCurationReceipt, acquireCurateLock, releaseCurateLock, runCuration, runCurationDeepseekPage, curationSummary };
+module.exports = { RULE_REDACTED, curationSchema, recoverCurationProvisional, resolveComputeCandidates, safeText, CURATION_DIR, CURATION_MAX_PER_RUN, CURATION_MAX_PENDING, CURATION_UNUSED_DAYS, CURATION_OPERATIONS, curationFileFor, curateLockFileFor, itemFpOf, selectorArmForCuration, readCurationRows, appendCurationRow, curationInput, curationKeyOf, curationSkip, buildCurationPrompt, parseCurationOutput, curationPendingCount, commitCuration, writeCurationReceipt, acquireCurateLock, releaseCurateLock, runCuration, runCurationDeepseekPage, curationSummary };
 module.exports.CURATION_TICK_K = CURATION_TICK_K;
 module.exports.CURATION_TICK_MIN_GAP_MS = CURATION_TICK_MIN_GAP_MS;
 module.exports.CURATION_TICK_THRESHOLDS = CURATION_TICK_THRESHOLDS;

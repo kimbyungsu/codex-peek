@@ -3078,10 +3078,14 @@ async function cmdSelectorPreview() {
   const run = await SRp.runSelectorPages({
     arm, pages,
     buildPrompt: (pg) => CLx.buildSelectorPagePrompt({ snapshotText: snapText, changedFiles: scope.files, diffText: scope.diffText, pageItems: pg }),
+    buildSchema: (pg) => CLx.selectorPageSchema(pg), // [AFTER-0.1.104-FIXES 설계 A-1] Claude 도우미=정해진 틀 답(Codex 팔은 무시)
     timeoutMs: CLx.SELECTOR_PAGE_TIMEOUT_MS, parallel: CLx.SELECTOR_PARALLEL,
     deadlineAt: t0 + selectorDeadlineMsFor(pages.length),
     ...(fakePage ? { pageRunner: fakePage } : {}),
   });
+  // [설계 A-1 · A5] 도우미 실행 방식(새/옛)·판 — 영수증에 남기고, Claude 담당이면 옛 방식·너무 오래됨 경보(새 방식이면 지움)
+  const runnerP = (() => { const x = (run.results || []).find((it) => it && it.r && it.r.runner); return x ? { tier: String(x.r.runner.tier || ""), version: String(x.r.runner.version || ""), how: String(x.r.runner.how || "") } : null; })();
+  if (arm === "self") { const x = (run.results || []).find((it) => it && it.r && (it.r.key === "claude-too-old" || it.r.runner)); if (x) { try { require(path.join(__dirname, "claude-helper.js")).reportHelperTier(ws, x.r); } catch { /* 경보 실패=선별 결과 무영향 */ } } }
   if (run.st !== "ok") die(tB(`⚠️ 선별 실패(${run.st}${run.msg ? ": " + run.msg : ""}) — 재시도하거나 서고 상태를 확인하세요.`, `⚠️ Selection failed (${run.st}${run.msg ? ": " + run.msg : ""}) — retry or inspect the archive.`), 3);
   const idLists = [];
   for (const it of run.results) {
@@ -3094,7 +3098,7 @@ async function cmdSelectorPreview() {
   if (!un.ok) die(tB(`⚠️ 선별 합집합 상한 초과(${un.reason}) — 서고 정리(빼기·병합) 후 재시도하세요(절단·요약 없음).`, `⚠️ Selection union over cap (${un.reason}) — organize the archive and retry (no truncation).`), 3);
   const selectedIds = un.selected.map((s) => s.id);
   // 영수증(read-back 관문) — purpose:"preview"가 게이트·ask-start 조건의 자격 표식
-  const rec = { ts: new Date().toISOString(), wsKey: CLx.wsKeyFor(ws), repoKey: CLx.repoKeyOf(target), askId: "", purpose: "preview", turnAnchor: ctx.turnAnchor, archiveHash: arc.sha1, scopePackageHash: scope.hash, snapshotHash: ctx.sourceHash, itemCount: items.length, pages: pages.length, selectedIds, arm, durationMs: Date.now() - t0 }; // turnAnchor=턴 결속(1차 blocker① — 재사용 차단 4중 결속의 한 축)
+  const rec = { ts: new Date().toISOString(), wsKey: CLx.wsKeyFor(ws), repoKey: CLx.repoKeyOf(target), askId: "", purpose: "preview", turnAnchor: ctx.turnAnchor, archiveHash: arc.sha1, scopePackageHash: scope.hash, snapshotHash: ctx.sourceHash, itemCount: items.length, pages: pages.length, selectedIds, arm, ...(runnerP ? { runner: runnerP } : {}), durationMs: Date.now() - t0 }; // turnAnchor=턴 결속(1차 blocker① — 재사용 차단 4중 결속의 한 축)
   const fname = CLx.appendSelectorUsage(rec);
   let back = null;
   try { back = fname ? JSON.parse(fs.readFileSync(path.join(CLx.SELECTOR_USAGE_DIR, fname), "utf8")) : null; } catch { back = null; }

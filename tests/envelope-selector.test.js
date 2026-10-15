@@ -99,7 +99,11 @@ t("runner 팔 고정: 구현 턴 provider 자동 결정·설정 인자 없음·�
   const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "selector-runner.js"), "utf8");
   assert.ok(!src.includes("deepseek") && !src.includes("loadContract") && !src.includes("saveScoutCodexPrefs"), "★deepseek 팔·설정 판독 경로 자체가 없음 — 팔은 턴 env로만 결정(교차 불가 소스 계약·ab-7 경계)");
   assert.ok(!src.includes("scope-package") && !src.includes("project-map") && !src.includes("map-ledger"), "무부작용(scope 수집·MAP 기록 require 부재 — 1차 보완)");
-  assert.ok(src.includes('"--strict-mcp-config"'), "self 팔=사용자 MCP 전면 무효(--strict-mcp-config·--mcp-config 미전달)");
+  // [AFTER-0.1.104-FIXES 설계 A-1] self 팔=도우미 실행기(claude-helper.js)가 맡는다 — 새 방식·옛 방식 인자 모두 사용자 MCP 전면 무효를 포함(옛 방식도 최소 격리 필수)
+  const chSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "claude-helper.js"), "utf8");
+  assert.ok(src.includes('if (arm === "self") return CH.runClaudeHelper({ prompt, timeoutMs, schema })'), "self 팔=도우미 실행기 위임");
+  assert.ok((chSrc.match(/"--strict-mcp-config"/g) || []).length >= 3 && chSrc.includes('"--safe-mode"') && chSrc.includes('"--setting-sources", "project"'), "self 팔=사용자 MCP 전면 무효(새·옛 방식 인자 모두 --strict-mcp-config · 새=안전 모드 · 옛=사용자 설정 안 읽음)");
+  assert.ok(!chSrc.includes("deepseek") && !chSrc.includes("loadContract"), "도우미 실행기도 교차 팔·설정 판독 경로 없음(팔은 턴 env로만 결정)");
   assert.ok(src.includes("CODEX_HOME: tmpHome") && src.includes('copyFileSync(path.join(realHome, "auth.json")') && src.includes("__tmpHome"), "★codex 팔=격리 홈(인증만 복사·config.toml 부재=MCP 0)+홈째 삭제 — 빈 표 병합(-c mcp_servers={})은 기존 서버가 남는 실측으로 폐기(재확인 blocker ab-7)");
   assert.ok(!src.includes("mcp_servers={}"), "무효했던 병합 오버라이드 잔존 금지");
 });
@@ -112,7 +116,9 @@ async function asyncTests() {
   assert.strictEqual(rb.key, "bad-arm");
   const src = fs.readFileSync(path.join(__dirname, "..", "bridge", "selector-runner.js"), "utf8");
   assert.ok(!src.includes("spawnSync(target"), "★페이지 실행에 spawnSync 없음(비동기 — 실행 중 intent 관측 가능·3차 blocker④)");
-  assert.ok(src.includes('taskkill', 0) && src.includes('"/T", "/F"'), "Windows 프로세스 트리 종료");
+  const chSrc2 = fs.readFileSync(path.join(__dirname, "..", "bridge", "claude-helper.js"), "utf8"); // [설계 A-1] 트리 종료 정본=claude-helper(selector-runner 가 다시 내보냄)
+  assert.ok(chSrc2.includes('taskkill', 0) && chSrc2.includes('"/T", "/F"') && src.includes("const killTree = CH.killTree;"), "Windows 프로세스 트리 종료");
+  assert.ok(!chSrc2.includes("spawnSync(rz.inv.file"), "★도우미 페이지 실행도 spawnSync 없음(비동기 — 실행 중 취소 가능)");
   // 실프로세스 취소: node 자식(장기 sleep 동형)을 self 팔 대신 직접 스폰하는 대신 — killTree 실측
   const { spawn } = require("child_process");
   const child = spawn(process.execPath, ["-e", "setTimeout(()=>{}, 60000)"], { windowsHide: true });

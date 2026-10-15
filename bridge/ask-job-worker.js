@@ -154,12 +154,16 @@ async function runSelectionPhase(jobFile, dir, job, errFile) {
     arm: job.selector.arm === "codex" ? "codex" : "self",
     pages,
     buildPrompt: (pg) => CL.buildSelectorPagePrompt({ snapshotText: snapText, changedFiles: scope.files, diffText: scope.diffText, pageItems: pg }),
+    ...(typeof CL.selectorPageSchema === "function" ? { buildSchema: (pg) => CL.selectorPageSchema(pg) } : {}), // [AFTER-0.1.104-FIXES 설계 A-1] Claude 도우미=정해진 틀 답(Codex 팔은 무시)
     timeoutMs: CL.SELECTOR_PAGE_TIMEOUT_MS,
     parallel: CL.SELECTOR_PARALLEL,
     deadlineAt: selDeadline,
     shouldCancel: () => fs.existsSync(intentFile),
     ...(fakePage ? { pageRunner: fakePage } : {}),
   });
+  // [설계 A-1 · A5] 도우미 실행 방식(새/옛)·판 — 영수증에 남기고, Claude 담당이면 옛 방식·너무 오래됨 경보(새 방식이면 지움)
+  const runner9 = (() => { const x = (run9.results || []).find((it) => it && it.r && it.r.runner); return x ? { tier: String(x.r.runner.tier || ""), version: String(x.r.runner.version || ""), how: String(x.r.runner.how || "") } : null; })();
+  if (job.selector.arm !== "codex") { const x = (run9.results || []).find((it) => it && it.r && (it.r.key === "claude-too-old" || it.r.runner)); if (x) { try { require(path.join(__dirname, "claude-helper.js")).reportHelperTier(ws, x.r); } catch { /* 경보 실패=선별 결과 무영향 */ } } }
   if (run9.st === "cancelled") { failJob(jobFile, errFile, "cancelled", { selectorOutcome: "cancelled" }); return { ok: false }; }
   if (run9.st !== "ok") { failJob(jobFile, errFile, String(run9.msg || run9.st), { selectorOutcome: run9.st }); return { ok: false }; }
   const results = run9.results;
@@ -177,7 +181,7 @@ async function runSelectionPhase(jobFile, dir, job, errFile) {
   if (un.over && (un.over.items || un.over.bytes)) selectionNote = "[archive rules] related items " + un.over.count + " · " + un.over.bytesTotal + " bytes — above the normal range (" + CL.SELECTOR_UNION_MAX + " · " + CL.SELECTOR_UNION_BYTES_MAX + "); all included — none omitted\n";
   const selectedIds = un.selected.map((s) => s.id);
   // ④ 영수증 기록+read-back 선행 관문 — 성공 전 프롬프트 조립 금지(§3)
-  const rec = { ts: new Date().toISOString(), wsKey: CL.wsKeyFor(ws), repoKey: CL.repoKeyOf(target), askId: job.id, turnAnchor: String(ctx.turnAnchor || ""), archiveHash: arc.sha1, scopePackageHash: scope.hash, snapshotHash: ctx.sourceHash, itemCount: items.length, pages: pages.length, selectedIds, arm: job.selector.arm, durationMs: Date.now() - t0 }; // turnAnchor=턴 결속(preview 영수증과 동형 — 주입 캐시 자격 대조용)
+  const rec = { ts: new Date().toISOString(), wsKey: CL.wsKeyFor(ws), repoKey: CL.repoKeyOf(target), askId: job.id, turnAnchor: String(ctx.turnAnchor || ""), archiveHash: arc.sha1, scopePackageHash: scope.hash, snapshotHash: ctx.sourceHash, itemCount: items.length, pages: pages.length, selectedIds, arm: job.selector.arm, ...(runner9 ? { runner: runner9 } : {}), durationMs: Date.now() - t0 }; // turnAnchor=턴 결속(preview 영수증과 동형 — 주입 캐시 자격 대조용)
   const fname = CL.appendSelectorUsage(rec);
   let back = null;
   try { back = fname ? JSON.parse(fs.readFileSync(path.join(CL.SELECTOR_USAGE_DIR, fname), "utf8")) : null; } catch { back = null; }

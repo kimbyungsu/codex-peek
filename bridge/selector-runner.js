@@ -5,11 +5,14 @@
 // 없음(교차·외부 API 팔은 v1 제외: 원문이 이미 가 있는 서비스 밖으로 원문 불전송이 경계 그 자체).
 // 실행 형태(3차 blocker④): 비동기 spawn — 호출자(worker)가 실행 '중'에도 cancel-intent를 관측하고
 // cancel()로 프로세스 트리를 종료할 수 있다(spawnSync 5~8분 블록 금지).
-const { spawn, spawnSync } = require("child_process");
+const { spawn } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const CL = require("./contract-lib.js");
+// [AFTER-0.1.104-FIXES 설계 A-1] self 팔(Claude)은 도우미 실행기(claude-helper.js)가 맡는다 — 실행 파일 고르기·격리(안전 모드·도구 0·실행 기록
+// 안 남김·빈 작업 폴더)·정해진 틀 답. 이 파일은 팔 고정·Codex 팔·페이지 루프만.
+const CH = require("./claude-helper.js");
 
 // 팔 결정 — 구현 턴 provider 판독(constraintTurnContext와 같은 env 계보). 교차를 만들 설정 인자는 없다(소스 계약).
 function selectorArmForTurn(env) {
@@ -19,21 +22,14 @@ function selectorArmForTurn(env) {
   return null; // 판독 불가=선별 불가(호출자가 fail-closed)
 }
 
-const SELF_DENY = "Bash,Read,Grep,Glob,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,TodoWrite,KillShell,TaskOutput";
+const SELF_DENY = CH.SELF_DENY;
+// Windows 포함 프로세스 트리 종료 — 자식(셔틀 경유 손자 포함)까지. 종료 확인은 호출자 promise 정착으로(정본=claude-helper).
+const killTree = CH.killTree;
 
-// Windows 포함 프로세스 트리 종료 — 자식(셔틀 경유 손자 포함)까지. 종료 확인은 호출자 promise 정착으로.
-function killTree(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return;
-  if (process.platform === "win32") {
-    try { spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, timeout: 15000 }); } catch { /* 종료 실패=promise가 timeout으로 정착 */ }
-  } else {
-    try { process.kill(-pid, "SIGKILL"); } catch { try { process.kill(pid, "SIGKILL"); } catch { /* 이미 종료 */ } }
-  }
-}
-
-// 페이지 1회 실행 — 반환 {promise, cancel}. promise는 {ok, output, key, detail, durationMs, cancelled}로 정착.
-// 격리: self=도구 전면 차단 stdin 1회 호출 / codex=빈 임시 폴더·read-only·ephemeral(정찰 exec 인자 재사용).
-function runSelectorPage({ arm, prompt, timeoutMs }) {
+// 페이지 1회 실행 — 반환 {promise, cancel}. promise는 {ok, output, key, detail, durationMs, cancelled[, runner]}로 정착.
+// 격리: self=도우미 실행기(안전 모드·도구 0·기록 안 남김·빈 작업 폴더 · schema 가 있으면 정해진 틀 답) / codex=빈 임시 폴더·read-only·ephemeral(정찰 exec 인자 재사용 · schema 무시).
+function runSelectorPage({ arm, prompt, timeoutMs, schema }) {
+  if (arm === "self") return CH.runClaudeHelper({ prompt, timeoutMs, schema });
   const t0 = Date.now();
   let child = null, cancelled = false, settled = false;
   const cancel = () => { cancelled = true; if (child && !settled) killTree(child.pid); };
@@ -41,14 +37,7 @@ function runSelectorPage({ arm, prompt, timeoutMs }) {
     const done = (r) => { if (!settled) { settled = true; resolve({ ...r, durationMs: Date.now() - t0, cancelled }); } };
     let target, args, opts, tmpCwd = null, outFile = null;
     try {
-      if (arm === "self") {
-        target = CL.resolveExecutableForSpawn("claude", process.env);
-        if (!target) return done({ ok: false, key: "cli-missing", detail: "claude-not-found" });
-        // --strict-mcp-config(+--mcp-config 미전달)=사용자 설정 MCP 전면 무효(3a 재검증 blocker ab-7 —
-        // 내장 도구 차단만으로는 사용자 MCP로 원문·diff가 외부 전송될 수 있음).
-        args = ["-p", "--output-format", "text", "--disallowedTools", SELF_DENY, "--strict-mcp-config"];
-        opts = { windowsHide: true, shell: process.platform === "win32", stdio: ["pipe", "pipe", "pipe"] };
-      } else if (arm === "codex") {
+      if (arm === "codex") {
         const inv = require("./codex-bridge.js").resolveCodex();
         target = CL.resolveExecutableForSpawn(inv.file, process.env);
         if (!target) return done({ ok: false, key: "cli-missing", detail: "codex-not-found" });
@@ -108,7 +97,7 @@ async function runSelectorPages(opts) {
     while (next < pages.length && running.size < parallel) {
       const idx = next++;
       const pg = pages[idx];
-      const h = pageRunner({ arm: opts.arm, prompt: opts.buildPrompt(pg), timeoutMs: opts.timeoutMs });
+      const h = pageRunner({ arm: opts.arm, prompt: opts.buildPrompt(pg), timeoutMs: opts.timeoutMs, ...(typeof opts.buildSchema === "function" ? { schema: opts.buildSchema(pg) } : {}) });
       running.set(idx, h);
       h.promise.then((r) => { running.delete(idx); results[idx] = { r, ids: pg.map((it) => it.id) }; });
     }

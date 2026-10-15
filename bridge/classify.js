@@ -534,6 +534,23 @@ function buildClassifyPrompt(input, lang) {
   return L.join("\n");
 }
 
+// ── 정해진 틀(AFTER-0.1.104-FIXES 설계 A-1 · A3) — Claude 도우미가 이 모양으로만 답하게 한다. 판독기(아래)는 그대로 엄격 — 틀은 판독기 앞에서
+// 모양만 강제하고, 길이·원문 대조·민감 형식 같은 의미 검사는 판독기 몫(틀로 옮기지 않음). 목록이 비면 열거를 두지 않는다(빈 열거=틀 손상).
+function classifySchema(input) {
+  const refs = Object.keys((input && input.refs) || {});
+  const words = ((input && input.items) || []).map((it) => String(it.ref));
+  const props = {
+    ref: words.length ? { type: "string", enum: words } : { type: "string" },
+    kind: { type: "string", enum: CLASSIFY_KINDS.slice() },
+    quote: { type: "string" },
+    why: { type: "string" },
+    seat: { type: "string", enum: SEATS.slice() },
+    bounds: { type: "string" },
+    itemRef: refs.length ? { type: "string", enum: refs } : { type: "string" },
+  };
+  return { type: "object", additionalProperties: false, required: ["results"], properties: { results: { type: "array", maxItems: CLASSIFY_MAX_PER_RUN, items: { type: "object", additionalProperties: false, required: ["ref", "kind", "quote", "why"], properties: props } } } };
+}
+
 // ── 파서 — 손상(JSON 아님·배열 아님·상한 초과·자리 밖·필수 형식 위반)=전량 거부(fail-closed). 의미 거부(원문 불일치·민감·형식)=항목 탈락+사유.
 function parseClassifyOutput(raw, input) {
   let text = String(raw || "").trim();
@@ -724,14 +741,17 @@ async function runClassify(ws, opts) {
     if (!input.items.length) { row({ repoKey: input.repoKey, outcome: "empty", unavailable: input.unavailable.length, pastedOnly: (input.pastedOnly || []).length, durationMs: Date.now() - t0 }); return { st: "empty", unavailable: input.unavailable.length, pastedOnly: (input.pastedOnly || []).length }; }
     const lang = o.lang || CL.loadLang();
     const runner = typeof o.pageRunner === "function" ? o.pageRunner : require("./selector-runner.js").runSelectorPage;
-    const h = runner({ arm: input.arm, prompt: buildClassifyPrompt(input, lang), timeoutMs: Number(o.timeoutMs) || CL.SELECTOR_PAGE_TIMEOUT_MS });
+    const h = runner({ arm: input.arm, prompt: buildClassifyPrompt(input, lang), timeoutMs: Number(o.timeoutMs) || CL.SELECTOR_PAGE_TIMEOUT_MS, schema: classifySchema(input) });
     const r = await h.promise;
-    const common = { repoKey: input.repoKey, gen: input.gen, arm: input.arm, words: input.items.length, inputFp: input.inputFp };
+    // [설계 A-1 · A5] 도우미 실행 방식(새/옛)·Claude Code 판을 실행 기록에 남기고, 옛 방식·너무 오래됨이면 대시보드 경보(새 방식이면 지움)
+    const runnerMeta = r && r.runner && typeof r.runner === "object" ? { tier: String(r.runner.tier || ""), version: String(r.runner.version || ""), how: String(r.runner.how || "") } : null;
+    if (input.arm === "self" && r) { try { require("./claude-helper.js").reportHelperTier(ws, r); } catch { /* 경보 실패=실행 결과 무영향 */ } }
+    const common = Object.assign({ repoKey: input.repoKey, gen: input.gen, arm: input.arm, words: input.items.length, inputFp: input.inputFp }, runnerMeta ? { runner: runnerMeta } : {});
     if (!r || !r.ok) {
       const key = (r && r.key) || "call-failed";
       const b = bumpRetries(ws, input.items, key);
       row(Object.assign({ outcome: "failed", reason: key, retried: b.retried, held: b.held, durationMs: Date.now() - t0 }, common));
-      writeClassifyReceipt(ws, input, { arm: input.arm, pages: 1, outcome: "failed:" + key, durationMs: Date.now() - t0 });
+      writeClassifyReceipt(ws, input, { arm: input.arm, ...(runnerMeta ? { runner: runnerMeta } : {}), pages: 1, outcome: "failed:" + key, durationMs: Date.now() - t0 });
       alarm(ws, "사용자 말 분류 실행이 실패했습니다(" + key + ") — 모아 둔 말은 남아 있고 다음 실행에서 다시 시도합니다(검증 무영향).", "Classifying the user's words failed (" + key + ") — the words are kept and retried next time (verification unaffected).");
       return { st: "call-failed", reason: key, arm: input.arm, retried: b.retried, held: b.held };
     }
@@ -739,7 +759,7 @@ async function runClassify(ws, opts) {
     if (!parsed.ok) {
       const b = bumpRetries(ws, input.items, "parse:" + parsed.reason);
       row(Object.assign({ outcome: "failed", reason: "parse:" + parsed.reason, retried: b.retried, held: b.held, durationMs: Date.now() - t0 }, common));
-      writeClassifyReceipt(ws, input, { arm: input.arm, pages: 1, outcome: "parse-failed:" + parsed.reason, durationMs: Date.now() - t0 });
+      writeClassifyReceipt(ws, input, { arm: input.arm, ...(runnerMeta ? { runner: runnerMeta } : {}), pages: 1, outcome: "parse-failed:" + parsed.reason, durationMs: Date.now() - t0 });
       alarm(ws, "사용자 말 분류 답을 읽을 수 없어 전량 거부했습니다(" + parsed.reason + ") — 다음 실행에서 다시 분류합니다.", "The classification answer was unreadable and rejected as a whole (" + parsed.reason + ") — reclassified next time.");
       return { st: "parse-failed", reason: parsed.reason, arm: input.arm };
     }
@@ -747,13 +767,13 @@ async function runClassify(ws, opts) {
     if (!cm.ok) {
       const b = bumpRetries(ws, input.items, "commit:" + cm.reason);
       row(Object.assign({ outcome: "failed", reason: "commit:" + cm.reason, retried: b.retried, held: b.held, durationMs: Date.now() - t0 }, common));
-      writeClassifyReceipt(ws, input, { arm: input.arm, pages: 1, outcome: "commit-failed:" + cm.reason, durationMs: Date.now() - t0 });
+      writeClassifyReceipt(ws, input, { arm: input.arm, ...(runnerMeta ? { runner: runnerMeta } : {}), pages: 1, outcome: "commit-failed:" + cm.reason, durationMs: Date.now() - t0 });
       alarm(ws, "사용자 말 분류 기록이 중단됐습니다(" + cm.reason + ") — 다음 실행이 다시 시도합니다.", "Classification commit aborted (" + cm.reason + ") — the next run retries.");
       return { st: "commit-failed", reason: cm.reason, arm: input.arm };
     }
     const nRes = cm.resultIds.length;
     row(Object.assign({ outcome: nRes ? "results" : "none", resultIds: cm.resultIds, counts: cm.counts, dropped: cm.dropped, durationMs: Date.now() - t0 }, common));
-    const rc = writeClassifyReceipt(ws, input, { arm: input.arm, pages: 1, selectedIds: cm.resultIds.slice(), outcome: nRes ? "results:" + nRes : "none", durationMs: Date.now() - t0 });
+    const rc = writeClassifyReceipt(ws, input, { arm: input.arm, ...(runnerMeta ? { runner: runnerMeta } : {}), pages: 1, selectedIds: cm.resultIds.slice(), outcome: nRes ? "results:" + nRes : "none", durationMs: Date.now() - t0 });
     return { st: "ok", arm: input.arm, words: input.items.length, unavailable: input.unavailable.length, resultIds: cm.resultIds, counts: cm.counts, dropped: cm.dropped, receipt: rc.ok, runId };
   } finally { if (!borrowed) releaseClassifyLock(ws, lk.token); }
 }
@@ -1018,6 +1038,6 @@ module.exports = { stopGateWarnText,
   readClassifyRows, readSeatsState, readClassifyResults, appendClassifyResults, classifyResultIdFor, userConstraintIdFor,
   raisedResultIds, deliveredUndecided, markResultRaised, skipResult, markResultsDelivered, planDelivery, deliveryBlock, DELIVERY_MAX, DELIVER_PER_TURN, EMPHASIS_PER_TURN, emphasisKeyOf, emphasisOrdinals, emphasisBlock, emphasisTally, classifyStopGate, stopGateText, STOP_GATE_MAX, stopGateFileFor, SKIP_NOTE_MIN, resultStatusRow,
   CLAIMS_DIR, claimFileFor, hasClaim, claimResult, readClaims, readClaimsState, claimDecisions, effectiveResultStatus, repairClaims, unfilledRaisedClaims,
-  classifyInput, buildClassifyPrompt, parseClassifyOutput, commitClassify, bumpRetries, acquireClassifyLock, releaseClassifyLock,
+  classifyInput, buildClassifyPrompt, classifySchema, parseClassifyOutput, commitClassify, bumpRetries, acquireClassifyLock, releaseClassifyLock,
   runClassify, classifySummary,
 };
