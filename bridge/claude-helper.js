@@ -119,22 +119,49 @@ function runQuick(inv, args, env, ctl) {
     ch.on("close", (code) => { clearTimeout(timer); if (ctl && ctl.child === ch) ctl.child = null; resolve({ status: code, stdout: out, stderr: err, timedOut }); });
   });
 }
-async function capabilitiesOf(p, inv, env, ctl) {
-  const key = capKeyOf(p, inv); if (!key) return null;
+// 캐시 판독·기능 계산·캐시 기록 — 비동기·동기 경로 공용(같은 규칙)
+function cachedCaps(key) {
   if (capMem.has(key)) return capMem.get(key);
   const file = readCapCache();
   if (file[key] && Array.isArray(file[key].flags)) { capMem.set(key, file[key]); return file[key]; }
-  const help = await runQuick(inv, ["--help"], env, ctl);
-  if (help.timedOut || (ctl && ctl.cancelled)) return { interrupted: true };
-  if (help.error || help.status !== 0) return null;
+  return null;
+}
+function capsFrom(help, ver) {
   const flags = [...new Set((String(help.stdout || "") + "\n" + String(help.stderr || "")).match(/--[A-Za-z][A-Za-z0-9-]*/g) || [])];
-  const ver = await runQuick(inv, ["--version"], env, ctl);
-  if (ver.timedOut || (ctl && ctl.cancelled)) return { interrupted: true };
-  const vm = !ver.error ? /(\d+\.\d+\.\d+)/.exec(String(ver.stdout || "")) : null;
-  const caps = { flags, version: vm ? vm[1] : "", at: new Date().toISOString() };
+  const vm = ver && !ver.error ? /(\d+\.\d+\.\d+)/.exec(String(ver.stdout || "")) : null;
+  return { flags, version: vm ? vm[1] : "", at: new Date().toISOString() };
+}
+function storeCaps(key, caps) {
   capMem.set(key, caps);
   try { const f2 = readCapCache(); f2[key] = caps; const keys = Object.keys(f2); if (keys.length > 20) for (const k of keys.slice(0, keys.length - 20)) delete f2[k]; fs.mkdirSync(CL.BRIDGE_DIR, { recursive: true }); CL.atomicWrite(CAP_CACHE_FILE, JSON.stringify(f2)); } catch { /* 캐시 실패=다음에 다시 확인 */ }
   return caps;
+}
+async function capabilitiesOf(p, inv, env, ctl) {
+  const key = capKeyOf(p, inv); if (!key) return null;
+  const hit = cachedCaps(key); if (hit) return hit;
+  const help = await runQuick(inv, ["--help"], env, ctl);
+  if (help.timedOut || (ctl && ctl.cancelled)) return { interrupted: true };
+  if (help.error || help.status !== 0) return null;
+  const ver = await runQuick(inv, ["--version"], env, ctl);
+  if (ver.timedOut || (ctl && ctl.cancelled)) return { interrupted: true };
+  return storeCaps(key, capsFrom(help, ver));
+}
+// [묶음 A-2] 동기 형태 — 지금 spawnSync 로 부르는 호출자(정찰·자동 보강·Claude 검증 담당)용. 남은 시간과 20초 중 짧은 쪽에서 끊는다(취소 개념 없음).
+function runQuickSync(inv, args, env, deadline) {
+  const limit = Math.min(HELP_TIMEOUT_MS, Number.isFinite(deadline) ? deadline - Date.now() : HELP_TIMEOUT_MS);
+  if (limit <= 0) return { status: null, stdout: "", stderr: "", timedOut: true };
+  let r; try { r = spawnSync(inv.file, [...inv.args, ...args], { encoding: "utf8", timeout: limit, windowsHide: true, shell: inv.viaShell, env: spawnEnvFor(inv, env), stdio: ["ignore", "pipe", "pipe"] }); } catch (e) { return { status: null, error: e, stdout: "", stderr: "" }; }
+  return { status: r.status, error: r.error, stdout: r.stdout || "", stderr: r.stderr || "", timedOut: !!(r.error && r.error.code === "ETIMEDOUT") };
+}
+function capabilitiesOfSync(p, inv, env, deadline) {
+  const key = capKeyOf(p, inv); if (!key) return null;
+  const hit = cachedCaps(key); if (hit) return hit;
+  const help = runQuickSync(inv, ["--help"], env, deadline);
+  if (help.timedOut) return { interrupted: true };
+  if (help.error || help.status !== 0) return null;
+  const ver = runQuickSync(inv, ["--version"], env, deadline);
+  if (ver.timedOut) return { interrupted: true };
+  return storeCaps(key, capsFrom(help, ver));
 }
 function tierOf(caps, inv) {
   if (!caps || caps.interrupted) return "";
@@ -165,6 +192,28 @@ async function resolveClaudeHelper(env, ctl) {
   if (old) return { ok: true, tier: "old", path: old.path, how: old.how, inv: old.inv, version: (old.caps && old.caps.version) || "" };
   if (!seen.length) return { ok: false, key: "cli-missing", detail: "claude-not-found" };
   return { ok: false, key: "claude-too-old", detail: seen.map((c) => c.how + "=" + ((c.caps && c.caps.version) || "?")).join(" "), versions: seen.map((c) => (c.caps && c.caps.version) || "") };
+}
+// [묶음 A-2] 동기 고르기 — 비동기 고르기와 같은 순서·같은 판정(deadline=절대 시각 · 없으면 후보마다 20초 상한만).
+// 단 셸을 거쳐야만 실행되는 후보(진입점을 못 찾은 .cmd/.bat)는 쓰지 않는다 — 동기 실행은 시간 초과 때 셸만 끝내고 그 아래 실제 Claude 를
+// 회수할 수 없다(구현 검증 A-2 1회차 blocker · 비동기 형태는 트리 종료로 회수하므로 그대로 씀). 그런 후보뿐이면 claude-shell-only.
+function resolveClaudeHelperSync(env, deadline) {
+  const e = env || process.env;
+  try { recordExecPath(e); } catch { /* 기록 실패=다음 실행에서 다시 */ }
+  const list = candidateList(e), seen = [];
+  let old = null, shellOnly = 0;
+  for (const c of list) {
+    if (Number.isFinite(deadline) && deadline - Date.now() <= 0) return { ok: false, key: "call-failed", detail: "capability-timeout" };
+    const inv = invocationFor(c.path);
+    if (inv.viaShell) { shellOnly++; continue; } // 기능 확인(도움말)도 셸 경유라 실행하지 않음
+    const caps = capabilitiesOfSync(c.path, inv, e, deadline);
+    if (caps && caps.interrupted) return { ok: false, key: "call-failed", detail: "capability-timeout" };
+    const it = Object.assign({}, c, { inv, caps, tier: tierOf(caps, inv) }); seen.push(it);
+    if (it.tier === "new") return { ok: true, tier: "new", path: it.path, how: it.how, inv, version: (caps && caps.version) || "" };
+    if (it.tier === "old" && !old) old = it;
+  }
+  if (old) return { ok: true, tier: "old", path: old.path, how: old.how, inv: old.inv, version: (old.caps && old.caps.version) || "" };
+  if (!seen.length) return shellOnly ? { ok: false, key: "claude-shell-only", detail: "only shell-wrapped claude found (" + shellOnly + ")" } : { ok: false, key: "cli-missing", detail: "claude-not-found" };
+  return { ok: false, key: "claude-too-old", detail: seen.map((c) => c.how + "=" + ((c.caps && c.caps.version) || "?")).join(" ") + (shellOnly ? " · shell-only " + shellOnly : ""), versions: seen.map((c) => (c.caps && c.caps.version) || "") };
 }
 function helperArgs(tier, schema) {
   if (tier === "new") return ["-p", "--output-format", "json", "--safe-mode", "--tools", "", "--strict-mcp-config", "--no-session-persistence", ...(schema ? ["--json-schema", JSON.stringify(schema)] : [])];
@@ -235,6 +284,50 @@ function runClaudeHelper({ prompt, timeoutMs, schema, env }) {
   })();
   return { promise, cancel };
 }
+// [묶음 A-2] 동기 실행 — 정찰·자동 보강처럼 지금 spawnSync 로 부르는 호출자용. 같은 고르기·같은 인자·같은 답 꺼내기.
+// 시간 상한(timeoutMs)은 기능 확인과 모델 실행을 합친 전체. beforeSpawn=모델 실행 직전(호출 기록 시작) · afterSpawn(pid)=실제로 시작됐을 때.
+// 반환 {ok, output, key, detail, durationMs, runner, started}.
+function runClaudeHelperSync({ prompt, timeoutMs, schema, env, beforeSpawn, afterSpawn }) {
+  const t0 = Date.now();
+  const deadline = t0 + Math.max(1000, Number(timeoutMs) || 1000);
+  const base = env || process.env;
+  let runner = { tier: "", version: "", how: "" }, started = false;
+  const fin = (r) => Object.assign({}, r, { durationMs: Date.now() - t0, runner, started });
+  let rz;
+  try { rz = resolveClaudeHelperSync(base, deadline); } catch (e) { return fin({ ok: false, key: "spawn-prep-failed", detail: String((e && e.message) || e) }); }
+  if (!rz.ok) { runner = { tier: "", version: (rz.versions || []).filter(Boolean).join(","), how: "" }; return fin({ ok: false, key: rz.key, detail: rz.detail }); }
+  runner = { tier: rz.tier, version: rz.version, how: rz.how };
+  const left = deadline - Date.now();
+  if (left <= 0) return fin({ ok: false, key: "call-failed", detail: "timeout before model run" });
+  let tmpCwd = null;
+  try { tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), "claude-helper-")); } catch (e) { return fin({ ok: false, key: "spawn-prep-failed", detail: "tmp " + String((e && e.message) || e) }); }
+  const args = [...rz.inv.args, ...helperArgs(rz.tier, rz.tier === "new" ? schema : null)];
+  if (typeof beforeSpawn === "function") { try { beforeSpawn(); } catch { /* 기록 실패=실행 무영향 */ } }
+  let r;
+  try { r = spawnSync(rz.inv.file, args, { input: String(prompt || ""), encoding: "utf8", timeout: left, windowsHide: true, shell: rz.inv.viaShell, cwd: tmpCwd, env: spawnEnvFor(rz.inv, base), maxBuffer: 1024 * 1024 * 64 }); }
+  catch (e) { try { fs.rmSync(tmpCwd, { recursive: true, force: true }); } catch {} return fin({ ok: false, key: "spawn-failed", detail: String((e && e.message) || e) }); }
+  try { fs.rmSync(tmpCwd, { recursive: true, force: true }); } catch { /* 임시 잔재 무해 */ }
+  started = Number.isSafeInteger(r.pid) && r.pid > 0;
+  if (started && typeof afterSpawn === "function") { try { afterSpawn(r.pid); } catch { /* 기록 실패=실행 무영향 */ } }
+  if (r.error) return fin({ ok: false, key: "call-failed", detail: (r.error.code === "ETIMEDOUT" ? "timeout" : String(r.error.code || r.error.message || r.error)) + " " + String(r.stderr || "").slice(-200) });
+  if (r.status !== 0) {
+    let sub = ""; if (rz.tier === "new") { try { const o = JSON.parse(String(r.stdout || "").trim()); sub = String((o && o.subtype) || ""); } catch { sub = ""; } }
+    return fin({ ok: false, key: "call-failed", detail: `exit=${r.status} ` + (sub ? sub + " " : "") + String(r.stderr || "").slice(-200) });
+  }
+  const a = extractAnswer(rz.tier, r.stdout, rz.tier === "new" ? schema : null);
+  return fin(a.ok ? { ok: true, output: a.output } : { ok: false, key: a.key, detail: a.detail });
+}
+
+// [묶음 A-2 · A5] 정찰·자동 보강의 실행 방식·판 기록 — 사용량 장부(stats/scout-usage.jsonl · 칸이 정확히 정해진 통계 계약)는 그대로 두고,
+// 같은 호출 번호(callId)로 이어지는 별도 기록(stats/claude-helper-runs.jsonl · 60일 보관)에 남긴다. 실패도 남긴다(너무 오래됨·셸 경유뿐 포함).
+const HELPER_RUNS_FILE = path.join(CL.STATS_DIR, "claude-helper-runs.jsonl");
+function recordHelperRun({ callId, flow, repoKey, r }) {
+  const runner = (r && r.runner) || {};
+  const row = { schema: "claude-helper-run-v1", ts: new Date().toISOString(), callId: String(callId || ""), flow: String(flow || ""), repoKey: repoKey ? String(repoKey) : null,
+    tier: String(runner.tier || ""), version: String(runner.version || ""), how: String(runner.how || ""), ok: !!(r && r.ok), key: r && !r.ok ? String(r.key || "") : "", started: !!(r && r.started) };
+  try { return CL.appendStatsLocked(HELPER_RUNS_FILE, row); } catch { return false; }
+}
+
 // 대시보드 한 줄(A4) — 옛 방식으로 돌았거나 너무 오래돼 못 돌았으면 경고(같은 판·같은 이유는 한 번만), 새 방식으로 돌면 지운다.
 function reportHelperTier(ws, r) {
   if (!ws || !r) return;
@@ -257,4 +350,4 @@ function reportHelperTier(ws, r) {
   } catch { /* best-effort — 경보 실패가 실행 결과를 바꾸지 않음 */ }
 }
 
-module.exports = { SELF_DENY, NEW_FLAGS, OLD_FLAGS, SESSION_BOUND_ENV, CLAUDE_BIN_FILE, CAP_CACHE_FILE, ALARM_KIND, helperEnv, killTree, recordExecPath, candidateList, invocationFor, capabilitiesOf, tierOf, resolveClaudeHelper, helperArgs, extractAnswer, runClaudeHelper, reportHelperTier };
+module.exports = { SELF_DENY, NEW_FLAGS, OLD_FLAGS, SESSION_BOUND_ENV, CLAUDE_BIN_FILE, CAP_CACHE_FILE, ALARM_KIND, helperEnv, killTree, recordExecPath, candidateList, invocationFor, capabilitiesOf, capabilitiesOfSync, tierOf, resolveClaudeHelper, resolveClaudeHelperSync, helperArgs, extractAnswer, runClaudeHelper, runClaudeHelperSync, reportHelperTier, recordHelperRun, HELPER_RUNS_FILE };

@@ -78,7 +78,8 @@ ok(!fs.existsSync(outF2), "handlesOutFile → 공통층이 안 씀(브릿지 위
 
 console.log("[5] 어댑터·러너 소스 계약 — 실호출 형태·껍데기·출력 바이트 보존");
 const provSrc = fs.readFileSync(path.join(ROOT, "bridge", "scout-providers.js"), "utf8");
-ok(/"-p", "--output-format", "text", "--disallowedTools", SELF_DENY/.test(provSrc), "self 어댑터 — claude 1회 호출(도구 전면 차단)");
+// [AFTER-0.1.104-FIXES 설계 A-2] self 어댑터=Claude 도우미 실행기 동기 형태 1회 호출(실행 파일 고르기·안전 모드/최소 격리·도구 전면 차단은 실행기 정본 — tests/claude-helper.test.js)
+ok(/CH\.runClaudeHelperSync\(\{ prompt: preface \+ md, timeoutMs: 8 \* 60 \* 1000, env: process\.env,/.test(provSrc) && !/resolveExecutableForSpawn\("claude"/.test(provSrc) && /const SELF_DENY = CH\.SELF_DENY;/.test(provSrc), "self 어댑터 — 도우미 실행기 1회 호출(직접 claude 실행 없음 · 도구 차단 목록 정본 공유)");
 ok(/\[bridge, "map"\]/.test(provSrc) && /\[bridge, "ping"\]/.test(provSrc), "deepseek 어댑터 — 브릿지 map 경유·probe=ping(키 없으면 정직 실패 — 게이트 아님)");
 const selfW = fs.readFileSync(path.join(ROOT, "bridge", "scope-scout-self.js"), "utf8");
 const dsW = fs.readFileSync(path.join(ROOT, "bridge", "scope-scout-deepseek.js"), "utf8");

@@ -4,6 +4,8 @@
  * claude/codex 가 없는 CI 러너에서 플랜 게이트·자동 지시가 fail-open 으로 통과해 '차단을 기대하는' 시험 8건이 깨졌다.
  * 개발 PC 에는 실물이 있어 국소 실행만으로는 안 보이던 환경 의존 — 차단을 기대하는 시험은 이 헬퍼로 '담당 준비됨' 환경을 명시한다.
  * 미준비를 시험하는 사례는 PATH 를 빈 폴더로 덮어써야 한다(scout-arm [4c]·scout-gate·p3b-stage1 참조).
+ * [AFTER-0.1.104-FIXES 설계 A-2] self(Claude) 준비=도우미 실행기 후보(지금 대화의 Claude Code 위치 CLAUDE_CODE_EXECPATH·기록 파일 claude-bin.txt·PATH)라,
+ *   미준비 시험은 CLAUDE_CODE_EXECPATH 도 비우고 격리 홈(기록 파일 없음)을 써야 한다 — 시험을 Claude Code 안에서 돌리면 그 값이 들어 있다.
  * 실행 파일은 즉시 종료하는 껍데기다 — 실제 호출이 일어나면 실패가 보이게 stderr 에 표식을 남긴다.
  */
 const fs = require("fs");

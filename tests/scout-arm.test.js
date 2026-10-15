@@ -208,6 +208,8 @@ console.log("[4c] 묶음 (다) — 모드별 기본 담당·정찰 전용 준비
   }
   // scoutArmReadiness — self 담당·PATH 에 claude 없음=미준비(cli-not-found), 있으면 준비
   const savedPath = process.env.Path, savedPATH = process.env.PATH;
+  // [AFTER-0.1.104-FIXES 설계 A-2] self 준비=도우미 실행기 후보(지금 대화의 Claude Code 위치·기록 파일·PATH) — 'claude 없음'을 흉내 낼 때 위치 값도 비운다(이 시험을 돌리는 대화의 값이 새지 않게 · 기록 파일은 격리 홈이라 없음)
+  const savedExec = process.env.CLAUDE_CODE_EXECPATH; delete process.env.CLAUDE_CODE_EXECPATH;
   try {
     process.env.Path = envNone.Path; process.env.PATH = envNone.PATH;
     const r1 = CL.scoutArmReadiness(wsD);
@@ -224,7 +226,7 @@ console.log("[4c] 묶음 (다) — 모드별 기본 담당·정찰 전용 준비
     setKey(false); writeC(wsD, "ko", { scoutMode: "on" });
     const dirv = CL.buildScoutDirective(wsD, CL.loadContract(wsD));
     ok(dirv === null || (/준비되지 않아/.test(dirv) && !/scope-scout-self\.js"/.test(dirv)), "buildScoutDirective — 미준비면 실행 명령 대신 '준비되지 않아' 안내(또는 억제 null)");
-  } finally { process.env.Path = savedPath; process.env.PATH = savedPATH; }
+  } finally { process.env.Path = savedPath; process.env.PATH = savedPATH; if (savedExec === undefined) delete process.env.CLAUDE_CODE_EXECPATH; else process.env.CLAUDE_CODE_EXECPATH = savedExec; }
 }
 
 console.log("[5] 게이트 소비 경로 — 선택 반영(1차 blocker③)");

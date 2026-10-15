@@ -118,7 +118,8 @@ async function asyncTests() {
   assert.ok(!src.includes("spawnSync(target"), "★페이지 실행에 spawnSync 없음(비동기 — 실행 중 intent 관측 가능·3차 blocker④)");
   const chSrc2 = fs.readFileSync(path.join(__dirname, "..", "bridge", "claude-helper.js"), "utf8"); // [설계 A-1] 트리 종료 정본=claude-helper(selector-runner 가 다시 내보냄)
   assert.ok(chSrc2.includes('taskkill', 0) && chSrc2.includes('"/T", "/F"') && src.includes("const killTree = CH.killTree;"), "Windows 프로세스 트리 종료");
-  assert.ok(!chSrc2.includes("spawnSync(rz.inv.file"), "★도우미 페이지 실행도 spawnSync 없음(비동기 — 실행 중 취소 가능)");
+  const asyncBody = chSrc2.slice(chSrc2.indexOf("function runClaudeHelper("), chSrc2.indexOf("// [묶음 A-2] 동기 실행")); // [설계 A-2] 동기 형태(정찰·자동 보강용)는 따로 있음 — 선별 페이지 실행(비동기 형태)만 검사
+  assert.ok(asyncBody.length > 100 && !asyncBody.includes("spawnSync") && chSrc2.includes("function runQuick(") && !chSrc2.slice(chSrc2.indexOf("function runQuick("), chSrc2.indexOf("async function capabilitiesOf(")).includes("spawnSync"), "★도우미 페이지 실행(비동기 형태)과 그 기능 확인도 spawnSync 없음 — 실행 중 취소 가능");
   // 실프로세스 취소: node 자식(장기 sleep 동형)을 self 팔 대신 직접 스폰하는 대신 — killTree 실측
   const { spawn } = require("child_process");
   const child = spawn(process.execPath, ["-e", "setTimeout(()=>{}, 60000)"], { windowsHide: true });

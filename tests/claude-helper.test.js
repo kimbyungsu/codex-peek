@@ -354,6 +354,216 @@ t("[구현 검증 1회차 보완] 대시보드 요약·상태 표시줄이 도�
   assert.strictEqual(CH.ALARM_KIND, "claude-helper-old");
 });
 
+
+// ── 묶음 A-2 ─────────────────────────────────────────────────────────────
+const withEnv = (vars, fn) => { const keep = {}; for (const k of Object.keys(vars)) { keep[k] = process.env[k]; if (vars[k] === undefined) delete process.env[k]; else process.env[k] = vars[k]; } try { return fn(); } finally { for (const k of Object.keys(keep)) { if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k]; } } };
+
+t("[A-2] 동기 형태 — 새 방식 인자·빈 임시 작업 폴더·환경값 정리 · 모델 실행 직전/시작 뒤 알림 순서 · 결과 봉투 글/틀 답", () => {
+  clearLog();
+  const order = [];
+  const r = CH.runClaudeHelperSync({ prompt: "hi", timeoutMs: 20000, env: baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW, FAKE_RESULT: "보고서 본문", CLAUDECODE: "1", CLAUDE_CODE_SESSION_ID: "parent", CLAUDE_CONFIG_DIR: "C:/cfg" }), beforeSpawn: () => order.push("before"), afterSpawn: (pid) => order.push(pid > 0 ? "after" : "after-bad") });
+  assert.ok(r.ok && r.output === "보고서 본문" && r.started && r.runner.tier === "new" && r.runner.version === "2.1.296", JSON.stringify(r).slice(0, 200));
+  assert.deepStrictEqual(order, ["before", "after"]);
+  const call = readLog().find((x) => x.args.includes("-p"));
+  for (const fl of ["--safe-mode", "--strict-mcp-config", "--no-session-persistence"]) assert.ok(call.args.includes(fl), fl);
+  assert.strictEqual(call.args[call.args.indexOf("--tools") + 1], "");
+  assert.ok(!call.args.includes("--json-schema"), "틀 없이 부르면 틀 인자 없음");
+  assert.ok(path.basename(call.cwd).startsWith("claude-helper-") && call.files.length === 0 && !fs.existsSync(call.cwd), "빈 임시 폴더·끝나면 삭제");
+  assert.deepStrictEqual(call.env, { CLAUDE_CONFIG_DIR: "C:/cfg" }, "세션 값 제거·로그인 위치 유지");
+  const r2 = CH.runClaudeHelperSync({ prompt: "hi", timeoutMs: 20000, schema: { type: "object" }, env: baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW, FAKE_SO: '{"relevant":[]}' }) });
+  assert.ok(r2.ok && r2.output === '{"relevant":[]}', "틀 답");
+});
+
+t("[A-2] 동기 형태 — 옛 방식=최소 격리 인자 · 너무 오래된 판=실행 안 함(알림도 없음) · 후보 없음 · 실패(오류 봉투·종료 코드·시간 초과)", () => {
+  clearLog();
+  const o = CH.runClaudeHelperSync({ prompt: "x", timeoutMs: 20000, env: baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_OLD, FAKE_TEXT: "옛 판 글" }) });
+  assert.ok(o.ok && o.output === "옛 판 글" && o.runner.tier === "old");
+  assert.deepStrictEqual(readLog().find((x) => x.args.includes("-p")).args, ["-p", "--output-format", "text", "--setting-sources", "project", "--disallowedTools", CH.SELF_DENY, "--strict-mcp-config"]);
+  clearLog(); let called = 0;
+  const z = CH.runClaudeHelperSync({ prompt: "x", timeoutMs: 20000, env: baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_ANCIENT }), beforeSpawn: () => called++, afterSpawn: () => called++ });
+  assert.ok(!z.ok && z.key === "claude-too-old" && !z.started && called === 0 && !readLog().some((x) => x.args.includes("-p")), "★실행 안 함·알림 없음");
+  setRecorded(null);
+  const nn = CH.runClaudeHelperSync({ prompt: "x", timeoutMs: 20000, env: baseEnv({}) });
+  assert.ok(!nn.ok && nn.key === "cli-missing");
+  const e = (mode) => baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW, FAKE_MODE: mode });
+  const a = CH.runClaudeHelperSync({ prompt: "x", timeoutMs: 20000, env: e("iserror") }); assert.ok(!a.ok && /is-error/.test(a.detail));
+  const b = CH.runClaudeHelperSync({ prompt: "x", timeoutMs: 20000, env: e("exit1") }); assert.ok(!b.ok && /exit=1/.test(b.detail) && /error_max_turns/.test(b.detail));
+  const t0 = Date.now();
+  const c = CH.runClaudeHelperSync({ prompt: "x", timeoutMs: 1500, env: e("sleep") }); assert.ok(!c.ok && c.key === "call-failed" && /timeout/.test(c.detail) && Date.now() - t0 < 8000, "시간 초과: " + c.detail);
+});
+
+t("[A-2] 동기 형태도 기능 확인을 호출 시간 상한 안에서 — 도움말 5초 지연·상한 1초 → 확인 단계에서 끝남·캐시 없음", () => {
+  const slowS = path.join(FIX, "slow-help-sync.js"); fs.writeFileSync(slowS, fakeSrc("slowsync", NEW_HELP, "2.1.296"));
+  const t0 = Date.now(); let called = 0;
+  const r = CH.runClaudeHelperSync({ prompt: "x", timeoutMs: 1000, env: baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: slowS, FAKE_HELP_SLEEP: "5000" }), beforeSpawn: () => called++ });
+  const el = Date.now() - t0;
+  assert.ok(!r.ok && r.key === "call-failed" && /capability-timeout/.test(r.detail) && called === 0, JSON.stringify(r).slice(0, 160));
+  assert.ok(el < 3500, "상한 근처에서 끝남: " + el + "ms");
+  const cache = (() => { try { return JSON.parse(fs.readFileSync(CH.CAP_CACHE_FILE, "utf8")); } catch { return {}; } })();
+  assert.ok(!Object.keys(cache).some((k) => k.startsWith(path.resolve(slowS).toLowerCase() + "|")), "끊긴 확인은 캐시하지 않음");
+});
+
+t("[A-2] 정찰 self 담당 — 준비 확인·판 보고·실제 호출이 도우미 실행기를 쓰고(호출 기록 알림 순서 유지) · 너무 오래된 판이면 호출 기록 없이 실패", () => {
+  const SP = require("../bridge/scout-providers.js");
+  withEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW, FAKE_RESULT: "## 지도 본문", FAKE_MODE: undefined }, () => {
+    assert.deepStrictEqual(SP.PROVIDERS.self.preflight(), { ok: true });
+    const pr = SP.PROVIDERS.self.probe(); assert.ok(pr.ok && pr.detail === "2.1.296 (new)", JSON.stringify(pr));
+    const ev = [];
+    const r = SP.PROVIDERS.self.invoke({ preface: "P\n\n", md: "M", onCallStart: () => ev.push("start"), onCallStarted: () => ev.push("started") });
+    assert.ok(r.ok && r.map === "## 지도 본문" && r.usage === null && r.stderrPass === "", JSON.stringify(r));
+    assert.deepStrictEqual(ev, ["start", "started"]);
+  });
+  withEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_ANCIENT }, () => {
+    const pr = SP.PROVIDERS.self.probe(); assert.ok(!pr.ok && /claude-too-old/.test(pr.detail));
+    const ev = [];
+    const r = SP.PROVIDERS.self.invoke({ preface: "", md: "M", onCallStart: () => ev.push("start"), onCallStarted: () => ev.push("started") });
+    assert.ok(!r.ok && r.key === "call-failed" && /^claude-too-old/.test(r.detail) && ev.length === 0, "호출 기록 없음");
+  });
+  assert.strictEqual(SP.SELF_DENY, CH.SELF_DENY);
+});
+
+t("[A-2] 자동 보강 self 담당 — 너무 오래된 판이면 실행 안 함(호출 기록 없음) · 실행기 원본에서 직접 claude 실행 없음", () => {
+  const EP = require("../bridge/enrich-providers.js");
+  const usageDir = path.join(HOME, "stats");
+  const countUsage = () => { try { return fs.readdirSync(usageDir).filter((x) => /scout-usage/.test(x)).map((x) => fs.readFileSync(path.join(usageDir, x), "utf8").split("\n").filter((l) => l.includes('"flow":"map-enrich"')).length).reduce((a, b) => a + b, 0); } catch { return 0; } };
+  const before = countUsage();
+  const ctx = { repo: FIX, topo: { nodes: [], edges: [] }, changed: [], provider: "test", usageContext: { repoKey: CL.repoKeyForStats(FIX) } }; // 형식에 맞는 저장소 표식(맞지 않으면 기록 장부가 줄을 거부해 "기록 없음" 확인이 무의미해진다)
+  const r = withEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_ANCIENT }, () => EP.ENRICH_ADAPTERS.self(ctx));
+  assert.ok(!r.ok && /^claude-too-old/.test(r.detail), JSON.stringify(r));
+  assert.strictEqual(countUsage(), before, "실행 안 했으면 호출 기록 없음");
+  const ok9 = withEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW, FAKE_RESULT: JSON.stringify({ schema: "enrich-result-v1", items: [] }) }, () => EP.ENRICH_ADAPTERS.self(ctx));
+  assert.ok(ok9.ok && ok9.result.schema === "enrich-result-v1", "대조: 새 방식 실행=결과 판독");
+  assert.strictEqual(countUsage(), before + 1, "대조: 실제로 실행하면 호출 기록 1건(위 '기록 없음' 확인이 실제 기록 위치를 본다는 증거)");
+  const src = fs.readFileSync(path.join(ROOT, "bridge", "enrich-providers.js"), "utf8");
+  assert.ok(src.includes("CH.runClaudeHelperSync({ prompt, timeoutMs: 8 * 60 * 1000, env: process.env })") && !/resolveExecutableForSpawn\("claude"/.test(src), "도우미 실행기 경유");
+  assert.strictEqual(EP.SELF_DENY === undefined || EP.SELF_DENY === CH.SELF_DENY, true);
+});
+
+t("[A-2] Claude 검증 담당 — 덮어쓰기는 그대로 · 아니면 도우미와 같은 실행 파일 고르기(새 방식 판이면 실행 기록만 끔 · 안전 모드·도구·작업 폴더 무변경) · 고를 수 없으면 종전 PATH", () => {
+  const CB = require("../bridge/codex-bridge.js");
+  const ov = withEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW }, () => CB.resolveClaudeVerifier());
+  assert.deepStrictEqual(ov, { file: process.execPath, args: [FAKE_NEW], shell: false, how: "env:CODEX_BRIDGE_CLAUDE_BIN(node)" }, "덮어쓰기=종전 그대로(시험 주입 경로 무변경)");
+  setRecorded(null);
+  const nw = withEnv({ CODEX_BRIDGE_CLAUDE_BIN: undefined, CLAUDE_CODE_EXECPATH: FAKE_NEW, PATH: EMPTY_PATH_DIR, Path: EMPTY_PATH_DIR }, () => CB.resolveClaudeVerifier());
+  assert.ok(nw.file === process.execPath && nw.args[0] === FAKE_NEW && nw.noPersist === true && nw.node === true && /^execpath\(new 2\.1\.296\)$/.test(nw.how), JSON.stringify(nw));
+  setRecorded(null);
+  const od = withEnv({ CODEX_BRIDGE_CLAUDE_BIN: undefined, CLAUDE_CODE_EXECPATH: FAKE_OLD, PATH: EMPTY_PATH_DIR, Path: EMPTY_PATH_DIR }, () => CB.resolveClaudeVerifier());
+  assert.ok(od.args[0] === FAKE_OLD && !od.noPersist, "옛 판=기록 끄기 옵션 없음(종전 인자)");
+  setRecorded(null);
+  const an = withEnv({ CODEX_BRIDGE_CLAUDE_BIN: undefined, CLAUDE_CODE_EXECPATH: FAKE_ANCIENT, PATH: EMPTY_PATH_DIR, Path: EMPTY_PATH_DIR }, () => CB.resolveClaudeVerifier());
+  assert.deepStrictEqual(an, { file: "claude", args: [], shell: process.platform === "win32", how: "PATH" }, "고를 수 없으면 종전 PATH 경로(검증 담당 무회귀)");
+  setRecorded(null);
+  const src = fs.readFileSync(path.join(ROOT, "bridge", "codex-bridge.js"), "utf8");
+  const body = src.slice(src.indexOf("function runClaudeVerifier("), src.indexOf("function runCodex("));
+  assert.ok(body.includes('"-p", "--output-format", "json", ...(inv.noPersist ? ["--no-session-persistence"] : [])') && !body.includes("--safe-mode") && !body.includes("--tools") && !/cwd:/.test(body), "검증 담당=기록 끄기만(안전 모드·도구 0·빈 폴더 없음)");
+  assert.ok(body.includes('if (inv.node) env9.ELECTRON_RUN_AS_NODE = "1";'), "셔틀 안 스크립트를 node 로");
+  assert.ok(body.includes("const inv = resolveClaudeVerifier(t09 + Math.min(45000, budget9));") && body.includes("timeout: Math.max(1, budget9 - (Date.now() - t09)),"), "실행 파일 고르기도 검증 시간 예산 안(고르기 마감=min(예산,45초) · 모델 실행=남은 예산)");
+  const dl = withEnv({ CODEX_BRIDGE_CLAUDE_BIN: undefined, CLAUDE_CODE_EXECPATH: path.join(FIX, "slow-help-sync.js"), PATH: EMPTY_PATH_DIR, Path: EMPTY_PATH_DIR, FAKE_HELP_SLEEP: "5000" }, () => { const t0 = Date.now(); const v = CB.resolveClaudeVerifier(Date.now() + 800); return { v, ms: Date.now() - t0 }; });
+  assert.ok(dl.ms < 3500 && dl.v.how === "PATH", "마감이 지나면 고르기를 멈추고 종전 경로로: " + dl.ms + "ms " + dl.v.how);
+  setRecorded(null);
+});
+
+t("[A-2] 정찰 self 준비 판정=실제 호출과 같은 후보 — PATH 에 claude 가 없어도 지금 대화의 Claude Code 위치나 기록 파일이 있으면 준비 · 모두 없으면 미준비", () => {
+  setRecorded(null);
+  const r1 = withEnv({ CLAUDE_CODE_EXECPATH: FAKE_NEW, PATH: EMPTY_PATH_DIR, Path: EMPTY_PATH_DIR }, () => CL.scoutArmReadinessOf("self", false));
+  assert.ok(r1.ready === true && r1.reason === null && r1.cli === "claude", "위치 값만 있어도 준비");
+  setRecorded(FAKE_NEW);
+  const r2 = withEnv({ CLAUDE_CODE_EXECPATH: undefined, PATH: EMPTY_PATH_DIR, Path: EMPTY_PATH_DIR }, () => CL.scoutArmReadinessOf("self", false));
+  assert.ok(r2.ready === true, "기록 파일만 있어도 준비(확장이 띄우는 정찰)");
+  setRecorded(null);
+  const r3 = withEnv({ CLAUDE_CODE_EXECPATH: undefined, PATH: EMPTY_PATH_DIR, Path: EMPTY_PATH_DIR }, () => CL.scoutArmReadinessOf("self", false));
+  assert.ok(r3.ready === false && r3.reason === "cli-not-found", "모두 없으면 미준비");
+  const SP = require("../bridge/scout-providers.js");
+  const pf = withEnv({ CLAUDE_CODE_EXECPATH: undefined, CODEX_BRIDGE_CLAUDE_BIN: undefined, PATH: EMPTY_PATH_DIR, Path: EMPTY_PATH_DIR }, () => SP.PROVIDERS.self.preflight());
+  assert.deepStrictEqual(pf, { ok: false, detail: "cli-not-found" }, "실제 호출 준비 확인도 같은 판정");
+});
+
+
+t("[A-2 구현 검증 1회차 blocker①] 동기 형태는 셸을 거쳐야만 실행되는 후보를 쓰지 않는다(시간 초과 때 셸 아래 실제 Claude 를 회수 못 함) · 비동기 형태는 그대로 고려", () => {
+  if (process.platform !== "win32") { assert.strictEqual(CH.invocationFor(FAKE_NEW).viaShell, false); return; } // 셸 경유는 Windows 셔틀에서만 생김
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chelp-shell-"));
+  const shim = path.join(dir, "claude.cmd"); fs.writeFileSync(shim, "@echo off\r\nsome-native-claude.exe %*\r\n");
+  assert.ok(CH.invocationFor(shim).viaShell, "(전제) 진입점을 못 찾는 셔틀=셸 경유");
+  setRecorded(null);
+  const r = CH.resolveClaudeHelperSync(baseEnv({ PATH: dir, Path: dir }), Date.now() + 20000);
+  assert.ok(!r.ok && r.key === "claude-shell-only", "셸 경유 후보뿐=claude-shell-only: " + JSON.stringify(r));
+  const r2 = CH.resolveClaudeHelperSync(baseEnv({ CLAUDE_CODE_EXECPATH: FAKE_OLD, PATH: dir, Path: dir }), Date.now() + 20000);
+  assert.ok(r2.ok && r2.tier === "old" && r2.how === "execpath", "다른 후보가 있으면 그것을 씀");
+  setRecorded(null);
+  const run9 = CH.runClaudeHelperSync({ prompt: "x", timeoutMs: 20000, env: baseEnv({ PATH: dir, Path: dir }) });
+  assert.ok(!run9.ok && run9.key === "claude-shell-only" && !run9.started, "실행하지 않음");
+  const src = fs.readFileSync(path.join(ROOT, "bridge", "claude-helper.js"), "utf8");
+  const syncResolve = src.slice(src.indexOf("function resolveClaudeHelperSync("), src.indexOf("function helperArgs("));
+  assert.ok(syncResolve.includes("if (inv.viaShell) { shellOnly++; continue; }") && syncResolve.indexOf("if (inv.viaShell)") < syncResolve.indexOf("capabilitiesOfSync("), "셸 경유 후보는 도움말 확인도 하지 않음(확인도 셸 경유라)");
+  setRecorded(null);
+});
+
+t("[A-2 구현 검증 1회차 blocker②] 정찰·자동 보강도 실행 방식·판을 남기고(같은 호출 번호) 옛 방식·너무 오래됨이면 그 프로젝트에 경보", () => {
+  const runsF = CH.HELPER_RUNS_FILE;
+  const rows = () => { try { return fs.readFileSync(runsF, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
+  const alarms = (ws) => CL.readIntegrityEvents().filter((e) => e.kind === CH.ALARM_KIND && e.workspace === ws && !e.ack);
+  // 자동 보강 — 작업의 프로젝트(ctx.ws)에 경보 · 호출 번호로 사용량 행과 이어짐
+  const EP = require("../bridge/enrich-providers.js");
+  const WSE = "D:/proj-enrich-a2";
+  const ctx = { repo: FIX, ws: WSE, topo: { nodes: [], edges: [] }, changed: [], provider: "test", usageContext: { repoKey: CL.repoKeyForStats(FIX) } };
+  const n0 = rows().length;
+  const e1 = withEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_OLD, FAKE_TEXT: JSON.stringify({ schema: "enrich-result-v1", items: [] }) }, () => EP.ENRICH_ADAPTERS.self(ctx));
+  assert.ok(e1.ok, "옛 방식으로 실행·판독");
+  const er = rows().slice(n0);
+  assert.ok(er.length === 1 && er[0].flow === "map-enrich" && er[0].tier === "old" && er[0].version === "2.0.22" && er[0].ok === true && er[0].started === true && er[0].repoKey === ctx.usageContext.repoKey, JSON.stringify(er));
+  const usage = fs.readFileSync(path.join(HOME, "stats", "scout-usage.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  assert.ok(usage.some((u) => u.callId === er[0].callId && u.flow === "map-enrich"), "같은 호출 번호의 사용량 행과 이어짐");
+  assert.strictEqual(alarms(WSE).length, 1, "작업의 프로젝트에 옛 방식 경보");
+  const e2 = withEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_ANCIENT }, () => EP.ENRICH_ADAPTERS.self(Object.assign({}, ctx, { ws: "D:/proj-enrich-a2b" })));
+  assert.ok(!e2.ok && rows().slice(-1)[0].key === "claude-too-old" && rows().slice(-1)[0].started === false, "실행하지 않은 실패도 기록");
+  assert.strictEqual(alarms("D:/proj-enrich-a2b").length, 1, "너무 오래됨 경보");
+  const e3 = withEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW, FAKE_RESULT: JSON.stringify({ schema: "enrich-result-v1", items: [] }) }, () => EP.ENRICH_ADAPTERS.self(ctx));
+  assert.ok(e3.ok && alarms(WSE).length === 0 && rows().slice(-1)[0].tier === "new", "새 방식이면 경보 지움·기록은 new");
+  const me = fs.readFileSync(path.join(ROOT, "bridge", "map-enrich.js"), "utf8");
+  assert.ok(me.includes("call = adapter({ repo, ws: (jobForUsage && typeof jobForUsage.configWs === \"string\" && jobForUsage.configWs) || null,"), "실행기가 작업의 프로젝트를 어댑터에 넘김");
+  // 정찰 — Claude 대화 안(그 대화의 프로젝트를 앎)이면 경보 · runScout 가 호출 번호로 기록
+  const SP = require("../bridge/scout-providers.js");
+  const WSS = "D:/proj-scout-a2";
+  withEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_OLD, FAKE_TEXT: "## 지도", CLAUDE_PROJECT_DIR: WSS, CLAUDE_CODE_SESSION_ID: undefined }, () => {
+    const r = SP.PROVIDERS.self.invoke({ preface: "", md: "M", onCallStart() {}, onCallStarted() {} });
+    assert.ok(r.ok && r.helper && r.helper.runner.tier === "old" && r.helper.started === true, JSON.stringify(r).slice(0, 160));
+  });
+  assert.strictEqual(alarms(WSS).length, 1, "정찰 — 그 대화의 프로젝트에 옛 방식 경보");
+  const noWs = withEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_OLD, FAKE_TEXT: "## 지도", CLAUDE_PROJECT_DIR: undefined, CLAUDE_CODE_SESSION_ID: undefined }, () => { const before = CL.readIntegrityEvents().length; SP.PROVIDERS.self.invoke({ preface: "", md: "M" }); return CL.readIntegrityEvents().length - before; });
+  assert.strictEqual(noWs, 0, "프로젝트를 모르면(대화 밖) 경보 건너뜀");
+  // [확인 판 blocker ab-1] 세션 id 만 있고 그 세션의 앵커가 없으면(작업 폴더가 다른 프로젝트여도) 경보 없음 · 앵커가 있으면 그 프로젝트로
+  const otherWs = fs.mkdtempSync(path.join(os.tmpdir(), "chelp-cwdB-"));
+  const sidA = "sess-a2-anchor-test";
+  const cwd0 = process.cwd();
+  try {
+    process.chdir(otherWs);
+    const leak = withEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_OLD, FAKE_TEXT: "## 지도", CLAUDE_PROJECT_DIR: undefined, CLAUDE_CODE_SESSION_ID: sidA }, () => { const before = CL.readIntegrityEvents().length; SP.PROVIDERS.self.invoke({ preface: "", md: "M" }); return CL.readIntegrityEvents().length - before; });
+    assert.strictEqual(leak, 0, "★앵커 없는 세션=작업 폴더로 넘어가지 않고 경보 건너뜀");
+    assert.strictEqual(alarms(otherWs).length, 0);
+    fs.mkdirSync(path.join(HOME, "active"), { recursive: true });
+    const WSA = "D:/proj-scout-anchor-a";
+    fs.writeFileSync(path.join(HOME, "active", sidA + ".json"), JSON.stringify({ claudeSession: sidA, workspace: WSA, ts: new Date().toISOString() }));
+    withEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_OLD, FAKE_TEXT: "## 지도", CLAUDE_PROJECT_DIR: undefined, CLAUDE_CODE_SESSION_ID: sidA }, () => { SP.PROVIDERS.self.invoke({ preface: "", md: "M" }); });
+    assert.strictEqual(alarms(WSA).length, 1, "앵커가 있으면 그 프로젝트에 경보");
+    assert.strictEqual(alarms(otherWs).length, 0, "작업 폴더 프로젝트에는 여전히 없음");
+    assert.strictEqual(withEnv({ CLAUDE_PROJECT_DIR: undefined, CLAUDE_CODE_SESSION_ID: "sess-none" }, () => CL.anchoredClaudeWs()), "", "확인 불가=빈 값(작업 폴더 폴백 없음)");
+  } finally { process.chdir(cwd0); }
+  const spSrc = fs.readFileSync(path.join(ROOT, "bridge", "scout-providers.js"), "utf8");
+  assert.ok(spSrc.includes("const ws9 = CL.anchoredClaudeWs(); if (ws9) CH.reportHelperTier(ws9, r);") && !/CL\.configWs\(\)/.test(spSrc), "정찰 경보는 configWs(작업 폴더 폴백)를 쓰지 않음");
+  // runScout 기록 — git 저장소 하나를 만들어 꾸러미를 거친 뒤 주입한 self 담당 결과로
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "chelp-repo-"));
+  const g = (...a) => require("child_process").spawnSync("git", ["-C", repo, ...a], { encoding: "utf8", windowsHide: true });
+  g("init", "-q"); g("config", "user.email", "t@t"); g("config", "user.name", "t"); fs.writeFileSync(path.join(repo, "a.js"), "x\n"); g("add", "."); g("commit", "-qm", "i"); fs.writeFileSync(path.join(repo, "a.js"), "y\n");
+  const n1 = rows().length;
+  const fakeSelf = { id: "self", available: () => true, probe: () => ({ ok: true }), invoke: ({ onCallStart, onCallStarted }) => { onCallStart(); onCallStarted(); return { ok: true, map: "## 지도", usage: null, stderrPass: "", helper: { runner: { tier: "old", version: "2.0.22", how: "PATH" }, ok: true, key: "", started: true } }; } };
+  const rs = SP.runScout(repo, "self", { _providers: { self: fakeSelf } });
+  assert.ok(rs.ok, "정찰 성공: " + JSON.stringify(rs.error || {}));
+  const sr = rows().slice(n1);
+  assert.ok(sr.length === 1 && sr[0].flow === "map-scout" && sr[0].tier === "old" && sr[0].version === "2.0.22" && sr[0].repoKey === CL.repoKeyForStats(repo), JSON.stringify(sr));
+  const usage2 = fs.readFileSync(path.join(HOME, "stats", "scout-usage.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  assert.ok(usage2.some((u) => u.callId === sr[0].callId && u.flow === "map-scout"), "정찰도 같은 호출 번호의 사용량 행과 이어짐");
+});
+
 (async () => {
   for (const [name, fn] of pending) { n++; await fn(); console.log(`  ✅ [${n}] ${name}`); }
   console.log(`\n결과: ${n}/${pending.length} 통과`);

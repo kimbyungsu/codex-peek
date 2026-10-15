@@ -198,22 +198,31 @@ console.log("[2b] 어댑터 3종 — stubbed spawn 직접 호출(2차 blocker④
   // precision — 가짜 CODEX_BIN(-o 파일에 enrich-result 기록) 실행
   const rP = withStub(ENRICH_JSON, () => EP.ENRICH_ADAPTERS.precision(ctx));
   ok(rP && rP.ok === true && rP.result.schema === "enrich-result-v1", "precision — 가짜 CODEX_BIN 스텁으로 조립·실행·파싱");
-  // self — PATH 맨 앞에 가짜 claude(win=.cmd·posix=sh 스크립트)를 두고 실행
+  // self — [AFTER-0.1.104-FIXES 설계 A-2] Claude 도우미 실행기 경유: 덮어쓰기(CODEX_BRIDGE_CLAUDE_BIN)로 가짜 Claude(node 스크립트 — 도움말에 새 방식 옵션·
+  // 판 · -p 면 결과 봉투)를 지정해 실행(시험을 돌리는 대화의 실제 Claude Code 위치가 쓰이지 않게 — 덮어쓰기는 그것만 후보)
   const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), "p8ew_self_"));
   const SELF_OUT = JSON.stringify(ENRICH_JSON);
-  if (process.platform === "win32") fs.writeFileSync(path.join(stubDir, "claude.cmd"), "@echo " + SELF_OUT + "\r\n");
-  else { const p9 = path.join(stubDir, "claude"); fs.writeFileSync(p9, "#!/bin/sh\nprintf '%s' '" + SELF_OUT + "'\n"); fs.chmodSync(p9, 0o755); }
-  const oldPath = process.env.PATH;
-  process.env.PATH = stubDir + path.delimiter + oldPath;
+  const fakeClaude = path.join(stubDir, "fake-claude.js");
+  fs.writeFileSync(fakeClaude, [
+    "const a = process.argv.slice(2);",
+    "if (a.includes('--help')) { process.stdout.write(['--output-format','--safe-mode','--tools','--strict-mcp-config','--no-session-persistence','--json-schema','--setting-sources','--disallowedTools'].map((x) => '  ' + x).join('\\n')); process.exit(0); }",
+    "if (a.includes('--version')) { process.stdout.write('2.1.296 (Claude Code)'); process.exit(0); }",
+    "let i = ''; process.stdin.on('data', (d) => { i += d; }); process.stdin.on('end', () => { process.stdout.write(JSON.stringify({ type: 'result', is_error: false, result: process.env.P8EW_FAKE_OUT })); });",
+  ].join("\n"));
+  const keep9 = { bin: process.env.CODEX_BRIDGE_CLAUDE_BIN, out: process.env.P8EW_FAKE_OUT };
+  process.env.CODEX_BRIDGE_CLAUDE_BIN = fakeClaude;
   let rS = null;
   let rSBad = null;
   try {
+    process.env.P8EW_FAKE_OUT = SELF_OUT;
     rS = EP.ENRICH_ADAPTERS.self(ctx);
-    if (process.platform === "win32") fs.writeFileSync(path.join(stubDir, "claude.cmd"), "@echo not-json\r\n");
-    else { const p9 = path.join(stubDir, "claude"); fs.writeFileSync(p9, "#!/bin/sh\nprintf '%s' 'not-json'\n"); fs.chmodSync(p9, 0o755); }
+    process.env.P8EW_FAKE_OUT = "not-json";
     rSBad = EP.ENRICH_ADAPTERS.self(ctx);
-  } finally { process.env.PATH = oldPath; }
-  ok(rS && rS.ok === true && rS.result.schema === "enrich-result-v1", "self — PATH 스텁 claude로 조립·실행·파싱");
+  } finally {
+    if (keep9.bin === undefined) delete process.env.CODEX_BRIDGE_CLAUDE_BIN; else process.env.CODEX_BRIDGE_CLAUDE_BIN = keep9.bin;
+    if (keep9.out === undefined) delete process.env.P8EW_FAKE_OUT; else process.env.P8EW_FAKE_OUT = keep9.out;
+  }
+  ok(rS && rS.ok === true && rS.result.schema === "enrich-result-v1", "self — 도우미 실행기(가짜 Claude 새 방식)로 조립·실행·결과 봉투의 글을 기존 판독으로 파싱");
   ok(rSBad && rSBad.ok === false && rSBad.failureKind === "result-invalid", "self — 실제 CLI 비JSON 응답은 호출 실패가 아닌 결과 형식 실패");
   // economy — 스텁 HTTP 서버(별도 프로세스)+deepseek.json baseUrl로 deepseek-bridge enrich 실체인 실행
   const srvJs = path.join(stubDir, "srv.js");

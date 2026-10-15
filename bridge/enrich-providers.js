@@ -17,9 +17,10 @@ const crypto = require("crypto");
 const BR = __dirname; // bridge 계층(증분 4 1차 blocker⑤ — 설치본 자동 발동에서 어댑터 실존해야 하므로 배포 대상으로 이동)
 const CL = require(path.join(BR, "contract-lib.js"));
 const EXC = require(path.join(BR, "enrich-excerpt-cfg.js")); // 묶음 3(D3): 발췌 범위 옵션(파일 수·파일당 글자) — 상수·정규화 단일 출처
-const EC = require(path.join(BR, "enrich-calls.js")); // 묶음 4(D4 B): 지난 답 거부 요약의 프롬프트 자료 절(순수 문자열)
+const EC = require(path.join(BR, "enrich-calls.js"));
+const CH = require(path.join(BR, "claude-helper.js")); // [AFTER-0.1.104-FIXES 설계 A-2] self 어댑터=Claude 도우미 실행기(동기 형태) // 묶음 4(D4 B): 지난 답 거부 요약의 프롬프트 자료 절(순수 문자열)
 
-const SELF_DENY = "Bash,Read,Grep,Glob,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,TodoWrite,KillShell,TaskOutput";
+const SELF_DENY = CH.SELF_DENY; // [설계 A-2] 도구 차단 목록 정본=claude-helper(옛 방식 인자에서 씀)
 
 function recordCliUsage(provider, flow, callId, usageContext, charsIn, charsOut) {
   const c = usageContext || {};
@@ -251,16 +252,16 @@ function parseResult(txt) {
 // ── 어댑터 3종 ────────────────────────────────────────────────────────────────
 const ENRICH_ADAPTERS = {
   self: (ctx) => {
-    const prompt = buildEnrichPrompt(ctx), target = CL.resolveExecutableForSpawn("claude", process.env);
-    if (!target) return { ok: false, detail: "cli-not-found" };
+    // [설계 A-2] 도우미 실행기 동기 형태(지금 쓰는 Claude Code·안전 모드·도구 0·기록 안 남김·빈 임시 폴더 · 옛 판=최소 격리일 때만) · 답 판독(parseResult) 그대로
+    const prompt = buildEnrichPrompt(ctx);
     const callId = crypto.randomUUID();
-    const r = spawnSync(target, ["-p", "--output-format", "text", "--disallowedTools", SELF_DENY], {
-      input: prompt, encoding: "utf8", timeout: 8 * 60 * 1000, windowsHide: true,
-      shell: process.platform === "win32", // npm 전역 셔틀(claude.cmd) 대응
-    });
-    if (Number.isSafeInteger(r.pid) && r.pid > 0) recordCliUsage("claude", "map-enrich", callId, ctx.usageContext, prompt.length, String(r.stdout || "").length);
-    if (r.error || r.status !== 0 || !String(r.stdout || "").trim()) return { ok: false, detail: ((r.error && r.error.message) || `exit=${r.status}`) + " " + String(r.stderr || "").slice(-200) };
-    return parseResult(r.stdout);
+    const r = CH.runClaudeHelperSync({ prompt, timeoutMs: 8 * 60 * 1000, env: process.env });
+    if (r.started) recordCliUsage("claude", "map-enrich", callId, ctx.usageContext, prompt.length, String(r.output || "").length);
+    // [A-2 · A4·A5] 실행 방식·판 기록(같은 호출 번호 — 시작하지 않은 실패도) · 작업의 프로젝트(configWs)에 옛 방식·너무 오래됨 경보
+    try { CH.recordHelperRun({ callId, flow: "map-enrich", repoKey: ctx.usageContext && ctx.usageContext.repoKey, r }); } catch { /* 비차단 */ }
+    if (ctx.ws) { try { CH.reportHelperTier(ctx.ws, r); } catch { /* 경보 실패=호출 결과 무영향 */ } }
+    if (!r.ok) return { ok: false, detail: (r.key === "cli-missing" ? "cli-not-found" : r.key === "claude-too-old" ? "claude-too-old" : String(r.key || "call-failed")) + " " + String(r.detail || "") };
+    return parseResult(r.output);
   },
   economy: (ctx) => {
     const bridge = path.join(BR, "deepseek-bridge.js"); // 브릿지가 bounded repair(원격 1회)+usage(arm enrich) 기록

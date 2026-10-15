@@ -467,11 +467,12 @@
 - 찾는말: 마감 기록, closing submit, 마감문 되풀이, 검증 상한 인계, 답 본문 파싱 폐지, 종료 때 다시 검사, 마감 기록 제출됨
 
 ## D-2026-10-15-helper-claude-call — 하네스가 Claude 를 도우미로 부를 때는 지금 쓰시는 Claude Code 를 안전 모드로, 정해진 틀로 부른다(설계 A-1)
-- 날짜: 2026-10-15 · 종류: 설계 채택·구현(AFTER-0.1.104-FIXES v2.1 §1 묶음 A-1 · 사용자 승인 2026-10-15) · 상태: 유효(정찰·자동 보강 옮기기 A-2, 훅 경보 설계 B, 정정 효과 확인 C 는 다음)
+- 날짜: 2026-10-15 · 종류: 설계 채택·구현(AFTER-0.1.104-FIXES v2.1 §1 묶음 A-1·A-2 · 사용자 승인 2026-10-15) · 상태: 유효(훅 경보 설계 B, 정정 효과 확인 C 는 다음)
 - 결정: 사용자 말 분류·서고 선별·정리 담당이 Claude 를 부를 때, 명령줄에 남은 옛 판이 아니라 지금 대화를 돌리는 Claude Code 를 쓰고, 사용자 지침·훅·연결 도구를 끈 채(로그인은 그대로, 로그인 파일 복사 없음) 빈 임시 폴더에서 대화 기록을 남기지 않고 돌린다. 기계가 읽는 답은 정해진 틀로만 받고, 답을 읽는 규칙은 느슨하게 하지 않는다. 새 기능이 없는 옛 판뿐이면 연결 도구와 사용자 설정을 끈 최소 격리를 갖출 때만 돌리고, 못 갖추면 돌리지 않으며 대시보드에 업데이트 안내를 한 줄 띄운다.
 - 왜: 이 작업공간에서 사용자 말 분류가 23번 중 17번 통째로 버려졌다(답 뒤에 설명 글이 붙어서). 살펴보니 하네스가 부르던 Claude 는 명령줄의 옛 판(2.0.22)이었고, 사용자 지침을 읽고 사용자 훅까지 돌렸으며, 실행할 때마다 대화 기록이 하나씩 남았다(10월 5일 뒤 집계 122건). 선별은 답이 한 줄이라 버텼을 뿐 같은 결함을 안고 있었다.
 - 결과: 실제 확인에서 실패하던 분류 입력·판정 기준 입력·선별 한 장·정리 담당 한 번이 모두 정해진 틀 답으로 읽혔고, 대화 기록 폴더·훅 기록 폴더에 새 파일이 생기지 않았다. 실행 기록과 영수증에 어느 방식·어느 판으로 돌았는지 남는다. 표본이 작아 일반 정확도는 이후 실측(확인 C)으로 잰다.
-- 정본: bridge/claude-helper.js · bridge/selector-runner.js(self 팔 위임) · bridge/classify.js(classifySchema) · bridge/curation.js(curationSchema) · bridge/contract-lib.js(selectorPageSchema) · bridge/codex-bridge.js·bridge/ask-job-worker.js(buildSchema) · bridge/contract-inject.js(recordExecPath) · docs/AFTER-0.1.104-FIXES-2026-10-14.md
+- 결과(A-2 — 2026-10-16): 정찰·자동 보강이 Claude 를 맡을 때도 같은 실행기(동기 형태)로 돈다 — 실제 정찰 1회가 새 방식으로 같은 구획의 보고서를 냈고 기록이 남지 않았다. Claude 검증 담당은 파일을 읽어야 하므로 실행 파일 고르기와 실행 기록 끄기만 적용했다(안전 모드 적용 여부는 따로 결정).
+- 정본: bridge/claude-helper.js(runClaudeHelperSync) · bridge/scout-providers.js·bridge/enrich-providers.js(self) · bridge/codex-bridge.js(resolveClaudeVerifier) · bridge/selector-runner.js(self 팔 위임) · bridge/classify.js(classifySchema) · bridge/curation.js(curationSchema) · bridge/contract-lib.js(selectorPageSchema) · bridge/codex-bridge.js·bridge/ask-job-worker.js(buildSchema) · bridge/contract-inject.js(recordExecPath) · docs/AFTER-0.1.104-FIXES-2026-10-14.md
 - 찾는말: 도우미 Claude, 안전 모드, 정해진 틀, 옛 판, 사용자 훅, 대화 기록 남김, 실행 파일 위치 기록, 최소 격리, 분류 답 버려짐
 
 ## D-2026-10-11-codex-hook-trust-recheck — Codex 훅 신뢰 확인: 기다리는 시간 90초 · 다시 확인은 파일이 바뀔 때만 · 첫 확인 중에는 경보 없음

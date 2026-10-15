@@ -1789,7 +1789,7 @@ function runAttempt(repo, o, env, st, provider) {
   const jobForUsage = mk.job || (readEnrichJob(repo).job || null);
   const usageContext = env.p10 ? env.p10.usage(st.jobKey, jobRunIdOf(jobForUsage)) : null;
   // excerptBodies: 호출 직전 스냅샷 — 프롬프트 조립과 인용 측정이 '같은' 발췌 본문을 소비한다(확인 검증 blocker: 두 판독 사이의 저장이 측정을 뒤집었다)
-  try { call = adapter({ repo, topo: st.topo, changed: st.changed, provider, usageContext, excerptBodies: preBody, excerptLabels: preLabel, excerptBaseRef: baseRef9, excerptCfg: cfg9, priorRejection: prior9 }); } // priorRejection: 지난 답 거부 요약(묶음 4 · null=없음)
+  try { call = adapter({ repo, ws: (jobForUsage && typeof jobForUsage.configWs === "string" && jobForUsage.configWs) || null, topo: st.topo, changed: st.changed, provider, usageContext, excerptBodies: preBody, excerptLabels: preLabel, excerptBaseRef: baseRef9, excerptCfg: cfg9, priorRejection: prior9 }); } // priorRejection: 지난 답 거부 요약(묶음 4 · null=없음)
   catch (e) { call = { ok: false, detail: "adapter-threw: " + String(e && e.message) }; }
   // provider 반환 직후 소유 재검증(7차 ab-6 변형): 호출 동안 오탈취가 일어나 새 소유자가 이 running
   // 시도를 uncertain-call로 park했다면, 아래 실패·결과 기록이 그 장부를 덮어써 '자동 재시도 대상 밖의

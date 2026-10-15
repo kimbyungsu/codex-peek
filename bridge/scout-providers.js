@@ -21,6 +21,7 @@ const { spawnSync } = require("child_process");
 const { collectPackage } = require("./scope-package.js");
 const { saveMap, markLive, clearLive } = require("./scout-store.js");
 const CL = require(path.join(__dirname, "contract-lib.js"));
+const CH = require(path.join(__dirname, "claude-helper.js")); // [AFTER-0.1.104-FIXES 설계 A-2] self 팔=Claude 도우미 실행기(지금 쓰는 Claude Code·안전 모드·도구 0·기록 안 남김)
 const { renderPackageMarkdown } = require(path.join(__dirname, "scope-package-core.js"));
 
 /**
@@ -60,7 +61,7 @@ const { renderPackageMarkdown } = require(path.join(__dirname, "scope-package-co
 
 // 자기 팔(1-26): 사용자의 Claude Code 기본 모델 1회 호출 — 추가 과금 없음. 꾸러미'만' 근거(도구 전면 차단 —
 // DeepSeek 팔과 같은 입력 조건: 공정성 계약 D2).
-const SELF_DENY = "Bash,Read,Grep,Glob,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,TodoWrite,KillShell,TaskOutput";
+const SELF_DENY = CH.SELF_DENY; // [설계 A-2] 도구 차단 목록 정본=claude-helper(옛 방식 인자에서 씀)
 
 /** @type {Record<string, ScoutProvider>} */
 const PROVIDERS = {
@@ -68,28 +69,24 @@ const PROVIDERS = {
     id: "self",
     billed: false, // 1-26: 무과금(구독 Claude 재사용)
     available: () => true,
-    preflight: () => (CL.cliOnPath("claude", process.env) ? { ok: true } : { ok: false, detail: "cli-not-found" }), // [묶음 (다)] spawn 없이 실존만
-    probe: () => {
-      const target = CL.resolveExecutableForSpawn("claude", process.env);
-      if (!target) return { ok: false, key: "cli-missing", detail: "cli-not-found" };
-      const r = spawnSync(target, ["--version"], { encoding: "utf8", timeout: 20000, windowsHide: true, shell: process.platform === "win32" });
-      return r.error || r.status !== 0 ? { ok: false, key: "cli-missing", detail: (r.error && r.error.message) || `exit=${r.status}` } : { ok: true, detail: String(r.stdout || "").trim().slice(0, 60) };
+    preflight: () => (CH.candidateList(process.env).length ? { ok: true } : { ok: false, detail: "cli-not-found" }), // [묶음 (다)] spawn 없이 실존만 · [설계 A-2] 후보=지금 대화의 Claude Code·기록 파일·PATH
+    probe: () => { // [설계 A-2] 도우미 실행기와 같은 고르기 — 판·방식(새/옛)을 보고 · 최소 격리도 못 갖추면 준비 안 됨
+      const rz = CH.resolveClaudeHelperSync(process.env, Date.now() + 45000);
+      if (!rz.ok) return { ok: false, key: "cli-missing", detail: rz.key === "claude-too-old" ? "claude-too-old " + String(rz.detail || "") : String(rz.detail || rz.key) };
+      return { ok: true, detail: (rz.version || "?") + " (" + rz.tier + ")" };
     },
     invoke: ({ preface, md, onCallStart, onCallStarted }) => {
-      const target = CL.resolveExecutableForSpawn("claude", process.env);
-      if (!target) return { ok: false, key: "call-failed", detail: "cli-not-found", charsOut: 0 };
-      if (typeof onCallStart === "function") onCallStart();
-      const r = spawnSync(target, ["-p", "--output-format", "text", "--disallowedTools", SELF_DENY], {
-        input: preface + md,
-        encoding: "utf8",
-        timeout: 8 * 60 * 1000,
-        windowsHide: true,
-        shell: process.platform === "win32", // npm 전역 셔틀(claude.cmd) 대응
-      });
-      if (Number.isSafeInteger(r.pid) && r.pid > 0 && typeof onCallStarted === "function") onCallStarted();
-      if (r.error || r.status !== 0 || !String(r.stdout || "").trim()) return { ok: false, key: "call-failed", detail: ((r.error && r.error.message) || `exit=${r.status}`) + " " + String(r.stderr || "").slice(-300), charsOut: String(r.stdout || "").length };
-      // self 팔(claude -p text)은 토큰을 안 알려줘 usage=null(정직: 문자수만 추정 재료 — §6-12 후속 유지)
-      return { ok: true, map: r.stdout.trim(), usage: null, stderrPass: "" };
+      // [설계 A-2] 도우미 실행기 동기 형태 — 지금 쓰는 Claude Code·안전 모드(사용자 지침·훅·MCP 끔)·도구 0·실행 기록 안 남김·빈 임시 폴더 ·
+      // 옛 판뿐이면 최소 격리(MCP 끔·사용자 설정 안 읽음)일 때만 · 정찰 보고서(글)는 그대로 받는다(틀 없음 · 판독 무변경).
+      const r = CH.runClaudeHelperSync({ prompt: preface + md, timeoutMs: 8 * 60 * 1000, env: process.env,
+        beforeSpawn: () => { if (typeof onCallStart === "function") onCallStart(); },
+        afterSpawn: () => { if (typeof onCallStarted === "function") onCallStarted(); } });
+      // [A-2 · A4] 옛 방식·너무 오래됨 경보 — 세션 앵커로 확인된 프로젝트에만(anchoredClaudeWs — 작업 폴더 폴백 없음 · 구현 검증 A-2 확인 판 ab-1). 확인 불가면 건너뜀.
+      try { const ws9 = CL.anchoredClaudeWs(); if (ws9) CH.reportHelperTier(ws9, r); } catch { /* 경보 실패=호출 결과 무영향 */ }
+      const helper = { runner: r.runner, ok: !!r.ok, key: r.ok ? "" : String(r.key || ""), started: !!r.started }; // runScout 가 호출 번호로 실행 방식 기록(A5)
+      if (!r.ok) return { ok: false, key: "call-failed", detail: (r.key === "claude-too-old" || r.key === "cli-missing" || r.key === "claude-shell-only" ? r.key + " " : "") + String(r.detail || ""), charsOut: 0, helper };
+      // usage=null 유지(결과 봉투의 토큰 수는 아직 읽지 않음 — §6-12 후속)
+      return { ok: true, map: String(r.output).trim(), usage: null, stderrPass: "", helper };
     },
   },
   deepseek: {
@@ -222,6 +219,10 @@ function runScout(repo, providerId, opts) {
     const both9 = u9 && Number.isSafeInteger(u9.in) && u9.in >= 0 && Number.isSafeInteger(u9.out) && u9.out >= 0;
     const out9 = call && typeof call.rawStdout === "string" ? call.rawStdout.length : call && typeof call.map === "string" ? call.map.length : call && Number.isSafeInteger(call.charsOut) ? call.charsOut : 0;
     try { CL.appendScoutUsage({ schema: "scout-usage-v2", ts: new Date().toISOString(), callId, scope: "project", repoKey: CL.repoKeyForStats(repo), flow: "map-scout", provider: providerId === "self" ? "claude" : "codex", model: u9 && typeof u9.model === "string" ? u9.model : null, tokenIn: both9 ? u9.in : null, tokenOut: both9 ? u9.out : null, charsIn: (preface + md).length, charsOut: out9, runId: null, jobKey: null, jobRunId: null }); } catch { /* 비차단 */ }
+  }
+  // [A-2 · A5] self 담당의 실행 방식·판 — 호출을 시작하지 않은 실패(너무 오래됨 등)도 남긴다(사용량 행이 없을 때는 이 기록만)
+  if (providerId === "self" && call && call.helper && typeof call.helper === "object") {
+    try { CH.recordHelperRun({ callId: callId || require("crypto").randomUUID(), flow: "map-scout", repoKey: CL.repoKeyForStats(repo), r: { ok: call.helper.ok, key: call.helper.key, started: call.helper.started, runner: call.helper.runner } }); } catch { /* 기록 실패=비차단 */ }
   }
   const sp = call && typeof call.stderrPass === "string" ? call.stderrPass : "";
   if (!call || call.ok !== true) {

@@ -2744,24 +2744,33 @@ function minimumCallerTimeoutMs() {
 }
 // [VerifierProvider Phase1 · 설계 §2] Claude 검증자 실행기(무상태 answer-only).
 // 스모크 실측(2026-08-05): 성공={type:"result",is_error:false,result,session_id}·exit 0 / 오류=is_error:true·exit 1.
-function resolveClaudeVerifier() {
+function resolveClaudeVerifier(deadline) {
   const envBin = String(process.env.CODEX_BRIDGE_CLAUDE_BIN || "").trim();
   if (envBin) {
     // 시험/오버라이드: .js면 node로 실행(가짜 검증자 주입 — worker fake와 같은 관용구), 그 외=실행파일 그대로.
     if (/\.js$/i.test(envBin)) return { file: process.execPath, args: [envBin], shell: false, how: "env:CODEX_BRIDGE_CLAUDE_BIN(node)" };
     return { file: envBin, args: [], shell: /\.(cmd|bat)$/i.test(envBin), how: "env:CODEX_BRIDGE_CLAUDE_BIN" };
   }
+  // [AFTER-0.1.104-FIXES 설계 A-2 ⑥] 도우미 실행기와 같은 실행 파일 고르기(지금 쓰는 Claude Code > 기록 파일 > PATH) — 새 방식 판이면 실행 기록만 끈다.
+  // 검증 담당은 파일을 읽어야 하므로 도구·작업 폴더·사용자 설정은 그대로(안전 모드 적용 여부는 별도 결정). 고를 수 없으면 종전대로 PATH 의 claude.
+  try {
+    const rz = require(path.join(__dirname, "claude-helper.js")).resolveClaudeHelperSync(process.env, Number.isFinite(deadline) ? deadline : Date.now() + 45000);
+    if (rz.ok) return { file: rz.inv.file, args: rz.inv.args.slice(), shell: !!rz.inv.viaShell, how: rz.how + "(" + rz.tier + (rz.version ? " " + rz.version : "") + ")", noPersist: rz.tier === "new", node: !!rz.inv.node };
+  } catch { /* 고르기 실패=종전 경로 */ }
   // PATH의 claude(Windows=npm shim이라 shell 경유가 견고).
   return { file: "claude", args: [], shell: process.platform === "win32", how: "PATH" };
 }
 function runClaudeVerifier(promptText) {
-  const inv = resolveClaudeVerifier();
+  // [설계 A-2 ⑥] 실행 파일 고르기(첫 회 기능 확인)도 검증 시간 예산 안 — 고르기 마감=min(남은 예산, 45초) · 모델 실행=예산에서 그만큼 뺀 나머지
+  const budget9 = minimumCallerTimeoutMs(), t09 = Date.now();
+  const inv = resolveClaudeVerifier(t09 + Math.min(45000, budget9));
   // 환경 격리(설계 §2): 구현 세션(Claude Code)의 훅·세션 변수가 검증자 프로세스로 새는 역할 오염 차단.
   // CLAUDE_CONFIG_DIR은 보존(로그인 자격이 그 안에 있다) — 세션·훅 문맥 변수만 제거.
   const env9 = { ...process.env };
   for (const k of Object.keys(env9)) if (/^CLAUDE_CODE_|^CLAUDECODE$|^CLAUDE_PROJECT_DIR$/.test(k)) delete env9[k];
-  const r = spawnSync(inv.file, [...inv.args, "-p", "--output-format", "json"], {
-    input: promptText, stdio: ["pipe", "pipe", "pipe"], timeout: minimumCallerTimeoutMs(),
+  if (inv.node) env9.ELECTRON_RUN_AS_NODE = "1"; // [설계 A-2] npm 셔틀 안 스크립트를 node 로 직접 실행할 때(확장 프로세스에서도 node 로 돌게)
+  const r = spawnSync(inv.file, [...inv.args, "-p", "--output-format", "json", ...(inv.noPersist ? ["--no-session-persistence"] : [])], {
+    input: promptText, stdio: ["pipe", "pipe", "pipe"], timeout: Math.max(1, budget9 - (Date.now() - t09)),
     windowsHide: true, encoding: "utf8", shell: !!inv.shell, maxBuffer: 1024 * 1024 * 256, env: env9,
   });
   let parsed = null;
@@ -5621,7 +5630,7 @@ function main() {
 }
 
 // saveLinks는 export하지 않는다 — links 기록은 updateLinks(CAS+P-1 손상 거부) 단일 관문만(검증 지적: 우회 통로 봉인).
-module.exports = { modelArgs, evidenceInfoLine, resolveCitedPath, rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, templateScriptCommands, maskNonCode, toolReadParts, scriptOwnerScan, outputContainsFileLine, callMentionedFiles, scriptLiteralLines, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, computeEnvelopeCandidatesFor, candidatesGenOptsFor, judgeGenFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
+module.exports = { resolveClaudeVerifier, modelArgs, evidenceInfoLine, resolveCitedPath, rejudgeTailFor, HOLD_EXIT_CODE, v2StaticDirective, v2DynamicData, recordDeliveryBeforeCall, postflightDelivery, applyPostflightHold, postflightHeld, implementerRebuttalsFor, latestAskJobIdFor, armScopeDemotedJudge, cmdRoundJudge, cmdDecisions, readCanonicalEnvJob, corruptAskJobFiles, withContract, assertContractInjectionFits, checkCitedEvidence, resolveCitedPath, flagEvidence, flagVerdict, flagLedgerConfirms, updateLinks, loadLinks, recordLink, clearStaleVerifier, verifierLinkForMode, resolveLink, modelPrefFor, threadIdFromJsonLine, LINKS_FILE, ASK_JOBS_DIR, verifyTimeoutMin, minimumCallerTimeoutMs, askRequest, askJobFile, readAskJob, activeAskJob, citedResolvedBasenames, citedFilesUnseen, citedFilesUnseenExact, psLiteralForeachVariants, templateScriptCommands, maskNonCode, toolReadParts, scriptOwnerScan, outputContainsFileLine, callMentionedFiles, scriptLiteralLines, shouldSuppressUnseenRepeat, shouldSuppressUnseenAcked, maybeDispatchChallenge, newestRolloutSinceForWs, readFirstJsonLine, parseLastTurn, netArgs, netNote, writeProof, unretrievedSameTurnJob, linksFileState, reserveVerifyBudgetGate, budgetNoticeLines, patchAskJobFile, beginVerifyAttempt, mapAttachSurface, machineFindingsLayer, findingDispositionGate, cmdFindingJudge, campaignSnapFor, v2DirectiveFor, projectResolvedAcks, currentCampaignIdFor, breakdownNoticeFor, computeEnvelopeCandidatesFor, candidatesGenOptsFor, judgeGenFor, envelopeSliceFor, integrityReviewLine, resolveCodex, parseConstraintHandling, memReceiptLine, acquireAskJobLock, releaseAskJobLock, askJobCancelIntentFile };
 // [2026-10-09 실사고] 내보내기를 실행보다 먼저 채운다 — 실행 도중 이 파일을 다시 불러오는 모듈(선별 실행기의 Codex 팔 resolveCodex 등)이
 // 빈 내보내기를 받아 '선별 실패'로 끝나던 순서 결함(Codex↔Codex 에서 selector-preview 가 늘 실패) 봉합. 개별 명령의 setImmediate 대기는 이중 안전망으로 남긴다.
 if (require.main === module) main(); // CLI로 직접 실행할 때만. require 시엔 테스트용 export만.
