@@ -678,7 +678,12 @@ export function dirtyFpFilter(paths: string[]): string[] {
 }
 
 // ── 생성 뷰(MAP.md) — 정본에서 자동 생성·직접 수정 금지(hash 머리말로 수동 수정 탐지) ──────────
-export function renderMapMd(t: Topology): string {
+// [RULE-SUPPLY-REDESIGN 묶음 4-나 · E10] 인벤토리 수치는 지도를 처음 만들 때 한 번 센 값이고 그 뒤 갱신되지 않는다 — '생성 당시(날짜) 기준'으로 표기.
+// 정본(topology.json·지문)은 그대로(표시 정정만 — D4). 옛 표기 판(renderMapMdLegacy)은 이미 있는 MAP.md 와 표기 변경 전에 준비된 지도 거래 기록의 기대 지문을 맞추는 데만 쓴다.
+export function renderMapMd(t: Topology): string { return renderMapMdWith(t, false); }
+export function renderMapMdLegacy(t: Topology): string { return renderMapMdWith(t, true); }
+function inventoryAsOf(t: Topology): string { const s = String((t as { createdAt?: unknown }).createdAt || ""); return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : "날짜 미상"; }
+function renderMapMdWith(t: Topology, legacyInventory: boolean): string {
   const hash = mapHashOf(t);
   const gc = graphCoverage(t);
   // 표시 번호는 저장하지 않고 렌더 시 안정 정렬로 파생(설계검증 — 저장하면 재배치·중복 불변식이 필요해짐)
@@ -692,7 +697,7 @@ export function renderMapMd(t: Topology): string {
   lines.push("");
   lines.push(`## Coverage`);
   lines.push(`- 그래프: 노드 confirmed ${gc.nodes.confirmed} / candidate ${gc.nodes.candidate} / unknown ${gc.nodes.unknown} · 엣지 confirmed ${gc.edges.confirmed} / candidate ${gc.edges.candidate} / unknown ${gc.edges.unknown}`);
-  lines.push(`- 인벤토리: 파일 ${t.inventory.filesSeen}개 순회 ${t.inventory.scanComplete ? "완료" : "미완"} · regex 스캔 ${t.inventory.semantic.scannedSupportedFiles}/${t.inventory.semantic.scannedSupportedFiles + t.inventory.semantic.unsupportedFiles}(지원 언어: ${t.inventory.semantic.supportedLangs.join(", ")} — 파싱 보장 아님) · 동적 참조 미상 ${t.inventory.semantic.dynamicUnknowns}건 · 외부/별칭 ${t.inventory.semantic.externalOrAliasSkipped}건`);
+  lines.push(`- ${legacyInventory ? "인벤토리" : `인벤토리(생성 당시 ${inventoryAsOf(t)} 기준 — 이후 갱신 안 됨)`}: 파일 ${t.inventory.filesSeen}개 순회 ${t.inventory.scanComplete ? "완료" : "미완"} · regex 스캔 ${t.inventory.semantic.scannedSupportedFiles}/${t.inventory.semantic.scannedSupportedFiles + t.inventory.semantic.unsupportedFiles}(지원 언어: ${t.inventory.semantic.supportedLangs.join(", ")} — 파싱 보장 아님) · 동적 참조 미상 ${t.inventory.semantic.dynamicUnknowns}건 · 외부/별칭 ${t.inventory.semantic.externalOrAliasSkipped}건`);
   lines.push(`- 한계: ${t.inventory.semantic.parserNote}${t.inventory.depthCapped.length ? ` · 깊이 상한으로 못 본 구역 ${t.inventory.depthCapped.length}곳` : ""}${t.inventory.unreadable.length ? ` · 판독 실패 ${t.inventory.unreadable.length}건` : ""}`);
   lines.push("");
   lines.push(`## Nodes`);
@@ -721,7 +726,13 @@ export function renderMapMd(t: Topology): string {
 }
 // 생성 뷰 수동 수정 탐지 — '전문' 비교(머리말 지문만 보면 본문 낙서를 놓침: 검증 반례).
 export function mapMdMatches(md: string, t: Topology): boolean {
-  return String(md || "") === renderMapMd(t);
+  const s = String(md || "");
+  return s === renderMapMd(t) || s === renderMapMdLegacy(t); // [E10] 옛 표기로 렌더된 그대로인 문서는 수동 수정이 아님
+}
+// [E10] 옛 표기로 렌더된 그대로인가(정본과는 맞음 — 다음 지도 갱신·render 때 새 표기로 바뀜)
+export function mapMdIsLegacy(md: string, t: Topology): boolean {
+  const s = String(md || ""); const legacy = renderMapMdLegacy(t);
+  return s === legacy && legacy !== renderMapMd(t);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

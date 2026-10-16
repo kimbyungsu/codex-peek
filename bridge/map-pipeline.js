@@ -15,6 +15,14 @@ const PM = MR.PM;
 
 const BRIDGE_DIR = process.env.CODEX_BRIDGE_HOME || path.join(require("os").homedir(), ".codex-bridge");
 const sha1 = (s) => crypto.createHash("sha1").update(s).digest("hex");
+// [RULE-SUPPLY-REDESIGN 묶음 4-나 · E10] 지도 거래 기록이 기대하는 MAP.md 지문과 맞는 판으로 렌더 — MAP.md 표기를 바꾼 판으로 업데이트되기 전에
+// 준비된 거래를 업데이트 뒤 복구·재적용해도 지문이 맞게(새 표기 우선 · 기대 지문이 옛 표기 것이면 옛 표기 · 둘 다 아니면 새 표기=종전처럼 불일치로 드러남).
+function renderMapMdForExpected(topo, expectedHash) {
+  const a = PM.renderMapMd(topo);
+  if (!expectedHash || sha1(a) === expectedHash || typeof PM.renderMapMdLegacy !== "function") return a;
+  const b = PM.renderMapMdLegacy(topo);
+  return sha1(b) === expectedHash ? b : a;
+}
 const realOf = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
 const NUL = "\u0000";
 
@@ -1109,7 +1117,7 @@ function recoverWalInLock(repo, mapId) {
     const writeD = () => { fs.mkdirSync(path.dirname(decFile), { recursive: true }); const t7 = decFile + "." + process.pid + ".tmp"; fs.writeFileSync(t7, JSON.stringify(w.decision, null, 1), "utf8"); fs.renameSync(t7, decFile); };
     const writeP = () => { if (w.policyArtifact) { const pd = path.join(repo, "project-map", "policies"); fs.mkdirSync(pd, { recursive: true }); const t8 = polFile + "." + process.pid + ".tmp"; fs.writeFileSync(t8, JSON.stringify(w.policyArtifact.copy, null, 1), "utf8"); fs.renameSync(t8, polFile); } };
     const writeK = () => { if (!CL.atomicWrite(path.join(d.markers, did + ".json"), JSON.stringify(w.expectedMarker, null, 1))) throw new Error("marker 기록 실패"); };
-    const writeM = () => { const t2 = path.join(repo, "project-map", "MAP.md." + process.pid + ".tmp"); const txt = PM.renderMapMd(rt.topo); fs.writeFileSync(t2, txt, "utf8"); fs.renameSync(t2, path.join(repo, "project-map", "MAP.md")); };
+    const writeM = () => { const t2 = path.join(repo, "project-map", "MAP.md." + process.pid + ".tmp"); const txt = renderMapMdForExpected(rt.topo, w.expectedMapMdAfterHash); fs.writeFileSync(t2, txt, "utf8"); fs.renameSync(t2, path.join(repo, "project-map", "MAP.md")); };
     if (w.transactionKind === "policy") {
       // 정책 표(p0~p8)
       if (T !== w.topologyHashInvariant) { out.push({ decisionId: did, verdict: "conflict", reason: "p0: topology 불변 조건 위반" }); continue; }
@@ -1162,7 +1170,7 @@ function recoverWalInLock(repo, mapId) {
         const topoText5 = PM.canonicalSerialize(ap5.topo);
         const tmp5 = path.join(repo, "project-map", "topology.json." + process.pid + ".tmp");
         fs.writeFileSync(tmp5, topoText5, "utf8"); fs.renameSync(tmp5, path.join(repo, "project-map", "topology.json"));
-        const md5 = PM.renderMapMd(ap5.topo);
+        const md5 = renderMapMdForExpected(ap5.topo, w.expectedMapMdAfterHash); // [E10]
         const tmp6 = path.join(repo, "project-map", "MAP.md." + process.pid + ".tmp");
         fs.writeFileSync(tmp6, md5, "utf8"); fs.renameSync(tmp6, path.join(repo, "project-map", "MAP.md"));
         finish([writeD, writeP, writeK]); continue;

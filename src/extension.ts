@@ -12,7 +12,7 @@ import { parseGitLog, suggest as scopeSuggest, ScopeSuggestion } from "./scope-l
 import { maskKey, isPlausibleKey, mergeDeepseekConfig } from "./deepseek-config";
 import { observeBridgeStale, bridgeWriteStale, FileIdent } from "./bridge-stale";
 import { appendApproved, parseApprovedFromMap, normSig } from "./map-ledger";
-import { parseEventsJsonl, deriveLedger, computeScoutHealth, promotableConfirm, HEALTH_MIN_SAMPLE } from "./ledger-events";
+import { parseEventsJsonl, deriveLedger, computeScoutHealth, promotableConfirm, HEALTH_MIN_SAMPLE, computeAliasCandidates } from "./ledger-events";
 import { catchUp, TailState, makeRolloutAcc, headFirstUserMessage, Msg, RolloutAcc, TURN_CAP } from "./rollout-scan";
 import { applyAutoPinUpdate, autoPinReplacementReady, autoPinWriteAllowed, chooseImplementerAutoPin, clearImplementerLinkFields, hookActiveTsForGate, resolvePromptProject } from "./implementer-auto-pin";
 import { scoutDirectiveText, scoutLedgerNotes } from "./scope-package";
@@ -2397,6 +2397,11 @@ ${h.reinterpreted > 0 ? stat(h.reinterpreted, "재해석 강등", "reinterpreted
     const when = it.ts ? new Date(it.ts).toLocaleString() : "?";
     return `<tr><td class="ts">${esc(when)}</td><td class="ty">${esc(it.type)}</td><td>${esc(it.text)}</td></tr>`;
   }).join("");
+  // [묶음 4-나 · E11] 갈라진 묶음 목록(최대 20묶음 · 묶음당 앞 4문장) — 자동 병합 없음(설계 불변)
+  const ag = Array.isArray(ml.aliasGroups) ? ml.aliasGroups : [];
+  const aliasBlock = ag.length
+    ? `<div class="sub">${tE(`같은 두 파일 사이의 연결(같은 끝점·같은 방향)이 서로 다른 문장으로 따로 쌓인 묶음 ${ag.length}개 — 문장마다 확인·반박이 나뉘어 쌓여 신호가 약하게 보일 수 있어요. 자동으로 합치지 않습니다.`, `${ag.length} group(s) where the same link between two files (same endpoints, same direction) is recorded as different sentences — confirms and refutes accrue per sentence, so the signal can look weaker. They are not merged automatically.`)}</div><table>${ag.slice(0, 20).map((g) => `<tr><td class="ty">${esc(g.n)}${tE("건", "")}</td><td>${g.texts.map((x) => esc(x)).join("<br>")}${g.n > g.texts.length ? `<br><span class="ts">${tE(`… 외 ${g.n - g.texts.length}건`, `… ${g.n - g.texts.length} more`)}</span>` : ""}</td></tr>`).join("")}</table>${ag.length > 20 ? `<div class="sub">${tE(`… 외 ${ag.length - 20}묶음`, `… ${ag.length - 20} more group(s)`)}</div>` : ""}`
+    : `<div class="sub">${tE("없음 — 같은 연결이 다른 문장으로 따로 쌓인 묶음이 없어요.", "None — no link is recorded under more than one sentence.")}</div>`;
   panel.webview.html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
 <style>
@@ -2424,6 +2429,8 @@ ${stat("🩺", "3. 해석 (관찰 신호)", "3. Interpretation (observation sign
 ${stat("📤", "4. 반영 (4곳)", "4. Application (4 places)", "#d9a441", "정찰 AI에게 보내는 지도 자료 꼬리 · 플랜 게이트 차단 안내 · 이 리포트(셋은 그 순간 장부에서 새로 계산) · 대시보드 관찰 일지 카드 1줄(몇 초 안의 짧은 캐시로 따라잡음)", "the tail of map material sent to the scout AI · the plan-gate block notice · this report (these three recompute from the journal at that moment) · the one-line dashboard signal (catches up within a few seconds via a short cache)")}
 </div>
 <div class="notice">${tE("<b>차별점 — 고정값이 아니라 자동으로 따라가는 값</b>: 어떤 프로젝트는 파일이 촘촘히 얽혀 있고 어떤 프로젝트는 독립적이라, 하나의 합격 숫자를 박아두면 어딘가에선 반드시 틀립니다. 그래서 정찰 제안과 검증 답변의 확인·명시 반박 표지가 사건으로 자동 기록되고, 근거 조건을 통과한 사건을 바탕으로 이 프로젝트의 상태와 수치가 다시 계산됩니다. 검증된 항목은 다음 정찰 자료에 자동으로 우선 동봉됩니다. 다만 이 관측치가 스스로 합격선을 바꾸거나 코드·Project MAP을 고치지는 않으며, 플랜 게이트도 숫자 하나로 통과·실패를 정하지 않고 상황 근거로 함께 보여줍니다. 사람의 맞음 확인·틀림 정정·고정·차단은 실제 사정을 더 잘 아는 때에만 쓰는 선택적 예외입니다.", "<b>What makes this different — an automatically tracking value, not a fixed one</b>: some projects are tightly coupled, others independent, so any single hard-coded pass number is wrong somewhere. Recon proposals, confirmations, and explicit refute markers in verification replies are recorded automatically; this project's states and figures are then recomputed from events that pass the relevant evidence checks. Verified items are automatically prioritized in future scout packages. These observations do not tune their own pass threshold or edit code or the Project MAP, and the plan gate presents them as contextual evidence rather than deciding pass/fail from one number. Human confirm/correct/pin/ban actions are optional exceptions for when you know the real situation better.")}</div>
+<h2>${tE("갈라진 묶음 — 같은 연결이 다른 문장으로 따로 쌓임", "Split groups — the same link recorded as different sentences")}</h2>
+${aliasBlock}
 <h2>${tE("최근 사건 흐름(최신 12건)", "Recent events (latest 12)")}</h2>
 ${tl ? `<table>${tl}</table>` : `<div class="sub">${tE("아직 기록된 사건이 없어요 — 정찰 지도가 결합을 제안하면 자동으로 쌓입니다.", "No events recorded yet — they accrue automatically once scout maps propose couplings.")}</div>`}
 ${ml.dropped ? `<div class="sub">${tE(`ⓘ 판독 불가 기록 ${ml.dropped}줄은 건너뜀(집계에 안 섞임)`, `ⓘ ${ml.dropped} unreadable record line(s) skipped (not counted)`)}</div>` : ""}
@@ -4028,6 +4035,9 @@ type MapLedgerView = {
   mapCutoverCard: { n: number; rows: Array<{ sig24: string; text: string; why: string }>; repo: string } | null; // C-7 — legacy+미이관 N>0일 때 원클릭 전환 카드 재료(repo=대상 결속 — 2차 blocker④)
   mapAutoCutoverDone: boolean; // C-7 — 이번 세션 자동 전환 관측(카드의 '리로드 필요' 표시 재료)
   mapAutoCutoverLedger: "present" | "absent" | "unknown"; // 전환 당시 옛 장부 파일 유무 — 카드 문구 분기(모름=강한 문구)
+  // [RULE-SUPPLY-REDESIGN 묶음 4-나 · E11] 일지 갈라짐 — 같은 두 파일 사이 연결(같은 끝점·같은 방향)이 서로 다른 문장으로 따로 쌓인 묶음(computeAliasCandidates).
+  // 자동 병합은 하지 않는다(설계 불변 — 표면만). n=그 묶음의 항목 수 · texts=앞 4개 문장(160자).
+  aliasGroups: Array<{ n: number; texts: string[] }>;
 };
 const MAP_LEDGER_TEXT_CAP = 8000;
 const LEDGER_ENTRIES_CAP_UI = 12;  // 카드에 보이는 항목 상한(전체는 이벤트 파일이 원본)
@@ -4182,6 +4192,7 @@ function readMapLedgerUncached(ws: string): MapLedgerView {
     // P3b B-1: blocked=원문 미리보기 숨김+사유만(정본 §B — 진단 전용 표시는 P9 위임)
     mapText: mapSource === "blocked" ? "" : mapMd.slice(0, MAP_LEDGER_TEXT_CAP), mapTruncated: mapSource !== "blocked" && mapMd.length > MAP_LEDGER_TEXT_CAP,
     mapSource, mapBlockedReason, mapStale, mapRetired, mapFrozenProbe, mapCutoverCard, mapAutoCutoverDone, mapAutoCutoverLedger,
+    aliasGroups: computeAliasCandidates(derived).map((g) => ({ n: g.texts.length, texts: g.texts.slice(0, 4).map((x) => String(x || "").slice(0, 160)) })), // [E11]
   };
 }
 function readMapLedger(ws: string | null): MapLedgerView | null {
@@ -8864,6 +8875,11 @@ class Dashboard {
           const bi=document.createElement("span"); bi.className="muted"; bi.style.cssText="font-size:10px;cursor:help"; bi.textContent="ⓘ";
           bi.title=lb9.title; line.appendChild(bi);
         }
+        // [묶음 4-나 · E11] 갈라진 묶음 수 — 같은 연결이 다른 문장으로 따로 쌓여 확인·반박이 나뉘어 쌓이는 묶음(자동 병합 없음 · 목록은 건강 리포트)
+        const ag9=Array.isArray(ml.aliasGroups)?ml.aliasGroups.length:0;
+        if(ag9){ const sp9=document.createElement("span"); sp9.className="pfm warn"; const b9=document.createElement("b"); b9.textContent=String(ag9); sp9.appendChild(document.createTextNode(T("갈라진 묶음","split groups")+" ")); sp9.appendChild(b9);
+          sp9.title=T("같은 두 파일 사이의 연결이 서로 다른 문장으로 따로 쌓인 묶음 수 — 확인·반박 기록이 문장마다 나뉘어 쌓여요. 자동으로 합치지 않습니다(목록은 건강 리포트).","Groups where the same link between two files is recorded as different sentences — confirms and refutes accrue separately per sentence. They are not merged automatically (list in the health report).");
+          line.appendChild(document.createTextNode(" ")); line.appendChild(sp9); }
         card.appendChild(line);
       });
       // 건강 리포트 새탭 — 현황이 포화라 확장판(수치 뜻·게이트·타임라인)은 대시보드에 더 얹지 않고 새탭으로(2026-07-09).
