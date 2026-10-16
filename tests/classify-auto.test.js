@@ -120,9 +120,19 @@ t("반례 고정(검증 1회차): 첫 판정 직전 수동 실행이어도 기�
   assert.strictEqual(judgeHeld(C).reason, "baseline");
   round(C, "w2", 1, "pass", "2026-10-05T02:00:00.000Z");
   const tf = CF.classifyTickFileFor(C.ws, C.rk);
-  fs.chmodSync(tf, 0o444); // 읽기는 되고 교체 쓰기만 실패(읽기 전용 파일 위로 원자적 교체 불가)
-  let jc; try { jc = judgeHeld(C); } finally { fs.chmodSync(tf, 0o644); }
-  assert.ok(!jc.spawn && jc.reason === "state-write", "소비 기록 실패=실행 안 함 " + JSON.stringify(jc));
+  // 읽기는 되고 교체 쓰기만 실패 — Windows: 읽기 전용 파일 위로는 원자적 교체 불가 · POSIX: 교체 가능 여부는 파일이 아니라 폴더 쓰기 권한이 정함
+  // (v0.1.105 CI ubuntu 에서 발견 — 파일만 읽기 전용이면 교체가 성공) → 잠금을 먼저 잡고 폴더를 읽기 전용으로. root 는 권한이 무시돼 재현 불가=생략.
+  const posix = process.platform !== "win32";
+  const asRoot = posix && typeof process.getuid === "function" && process.getuid() === 0;
+  if (!asRoot) {
+    const lk = CF.acquireClassifyLock(C.ws); assert.ok(lk.ok, "잠금");
+    const dir = path.dirname(tf);
+    if (posix) fs.chmodSync(dir, 0o555); else fs.chmodSync(tf, 0o444);
+    let jc;
+    try { jc = CF.classifyTickJudge(C.ws, null, { lockToken: lk.token }); }
+    finally { if (posix) fs.chmodSync(dir, 0o755); else fs.chmodSync(tf, 0o644); CF.releaseClassifyLock(C.ws, lk.token); }
+    assert.ok(!jc.spawn && jc.reason === "state-write", "소비 기록 실패=실행 안 함 " + JSON.stringify(jc));
+  } else console.log("  (root 실행 — 권한으로 쓰기 실패를 만들 수 없어 ③ 기록 실패 반례 생략)");
   assert.ok(judgeHeld(C).spawn, "기록이 되면 그 마감으로 실행(실패 때 소비되지 않았음)");
   // ④ 동시 두 자식 — 같은 마감으로 실행은 한 번
   const D = project("j-race");
