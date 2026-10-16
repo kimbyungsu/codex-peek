@@ -12,6 +12,8 @@
 *.js text eol=lf
 *.json text eol=lf
 *.md text eol=lf
+# TypeScript 원본도 LF — Windows 체크아웃에서 CRLF 로 바뀌면 화면 스크립트(템플릿 글자)가 CRLF 로 컴파일돼 산출물 조각을 줄 기준으로 읽는 시험이 Windows 에서만 깨짐(v0.1.105 CI 에서 발견)
+*.ts text eol=lf
 
 # 바이너리(확장 패키지)는 정규화 금지
 *.vsix binary
