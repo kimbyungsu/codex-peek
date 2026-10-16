@@ -466,6 +466,14 @@
 - 정본: bridge/verify-cap-handoff.js(closeoutTargetFor·submitCloseout·stopCloseoutCheck·closeoutView·splitCloseout) · bridge/verify-guard.js·codex-hook.js(종료 관문) · bridge/codex-bridge.js(closing 명령·마지막 왕복 안내) · src/extension.ts(검증 상한 마감 기록 칸) · docs/RULE-SUPPLY-REDESIGN-2026-10-04.md §4 구현.
 - 찾는말: 마감 기록, closing submit, 마감문 되풀이, 검증 상한 인계, 답 본문 파싱 폐지, 종료 때 다시 검사, 마감 기록 제출됨
 
+## D-2026-10-16-codex-hook-alarm-stage — Codex 훅 경보: 훅 설치 뒤 아직 안 쓴 상태는 빨강 대신 '확인 전' 정보 한 줄, 설치 뒤 차례에 훅이 안 돌았으면 빨강(설계 B)
+- 날짜: 2026-10-16 · 종류: 설계 구현(AFTER-0.1.104-FIXES v2.1 §2 · 설계 검증 3왕복 통과 · 사용자 승인 2026-10-15) · 상태: 유효
+- 상황: Codex↔Codex 모드에서 훅을 설치·신뢰했지만 아직 Codex 구현 대화를 쓰지 않은 상태도 '실패'와 같은 빨간 경보였고, 연결된 대화가 몇 달 전 대화일 수 있었으며, 풀리는 길이 사용자 행동뿐이었다.
+- 결정: 기준 시각 T=설치기가 훅 항목을 훅 파일에 쓰기 직전 시각(이른 쪽으로만 틀림 · 옛 기록은 같은 설치의 백업 이름 시각). 훅 기록이 없거나 옛 차례 것뿐일 때 마지막 차례 시각이 T 이상이면 실패(빨강 · 시각과 흔한 원인), T 보다 이르거나 차례가 없으면 확인 전(정보 한 줄 · 행동 요구 없음 · 온보딩 완료 아님), T 를 정할 수 없거나 차례 시각을 못 읽으면 지금 규칙 그대로(빨강 + 구분 못 하는 이유).
+- 안 바꾸는 것: 화면 전용(막는 것 없음) · 신뢰 조회 판정과 확인 중 노랑 · Codex↔Codex 가 아닐 때 판정 안 함 · 구현 대화 자동 연결 규칙.
+- 정본: bridge/codex-plugin-install.js(installCodexPeekUserHooks·codexPeekEntryFp·codexPeekHookWriteTime) · src/codex-hook-health.ts(stageCodexHookMiss) · src/extension.ts(codexHookHealth·syncCodexHookHealth·온보딩 4단계) · tests/codex-hook-stage.test.js
+- 찾는말: 훅 경보, 확인 전, 아직 안 쓴 상태, heartbeat-missing, heartbeat-stale, hook-pending, 쓰기 시작 시각, 훅 설치 시각, 백업 이름 시각
+
 ## D-2026-10-16-helper-refusal-retry — 도우미 모델이 안전상 이유로 답을 거절하면 그 말만 다른 모델로 한 번 더 묻고, 다음 호출은 원래 모델로 돌아온다(묶음 A-3)
 - 날짜: 2026-10-16 · 종류: 사용자 결정·구현(AFTER-0.1.104-FIXES §1-10 묶음 A-3 · 확인 C 에서 발견) · 상태: 유효
 - 상황: 정정 효과 확인(확인 C)에서 LTE 옛 수칙 후보 문장 중 '루팅 권한·Shizuku·통신 제한'이 든 것이 분류되지 않았다. 따로 돌려 보니 도우미 Claude(모델 지정 없음 → 계정 기본 모델)가 안전상 이유로 답을 거절했다 — 같은 다섯 문장에서 기본 모델 4개 거절·Sonnet 계열 최신 1개·옛 Sonnet 0개(대신 느림). 같은 문장도 시도마다 달랐고, 기록에는 '호출 실패'로만 남아 거절인지 알 수 없었다.

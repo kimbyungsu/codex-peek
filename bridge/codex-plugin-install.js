@@ -1,6 +1,7 @@
 "use strict";
 const fs=require("fs");
 const path=require("path");
+const crypto=require("crypto");
 
 function cmdQuote(s){return '"'+String(s).replace(/"/g,'""')+'"';}
 function buildCodexPluginSpawn(raw,args,platform=process.platform,nodeBin=process.execPath,comspec=process.env.ComSpec||"cmd.exe"){
@@ -176,8 +177,10 @@ function installCodexPeekUserHooks(file,bridgeDir,nodeToken="node"){
   if(!tokenStr||/^"/.test(tokenStr))return{ok:false,reason:"node token must not be empty or a quoted path (quoted paths fail under a PowerShell default shell)"};
   const r=readHookRoot(file);if(!r.ok)return{ok:false,reason:r.reason};
   const problem=hookShapeProblem(r.root);if(problem)return{ok:false,reason:problem};
+  // [AFTER-0.1.104-FIXES 설계 B] 쓰기 시작 시각=훅 파일(과 그 백업)을 쓰기 전에 잡는다 — 새 훅이 보이기 시작한 순간보다 늦지 않게(경보의 기준 시각 T)
+  const writeStartedAt=new Date().toISOString();
   let backup="";
-  if(r.raw!==null){backup=file+".bak."+new Date().toISOString().replace(/[:.]/g,"-");try{fs.writeFileSync(backup,r.raw,"utf8");}catch{return{ok:false,reason:"could not back up hooks.json"};}}
+  if(r.raw!==null){backup=file+".bak."+writeStartedAt.replace(/[:.]/g,"-");try{fs.writeFileSync(backup,r.raw,"utf8");}catch{return{ok:false,reason:"could not back up hooks.json"};}}
   const root=r.root;stripCodexPeekHooks(root,bridgeDir);root.hooks=root.hooks||{};
   const command=codexPeekHookCommand(nodeToken,bridgeDir);
   for(const h of CODEX_PEEK_USER_HOOKS){
@@ -186,7 +189,14 @@ function installCodexPeekUserHooks(file,bridgeDir,nodeToken="node"){
     const arr=Array.isArray(root.hooks[h.event])?root.hooks[h.event]:[];arr.push(group);root.hooks[h.event]=arr;
   }
   if(!atomicWrite(file,JSON.stringify(root,null,2)+"\n"))return{ok:false,reason:"could not write hooks.json",backup};
-  return{ok:true,backup};
+  return{ok:true,backup,writeStartedAt,entryFp:codexPeekEntryFp(root,bridgeDir)};
+}
+// [설계 B] 훅 파일 안 Codex Peek 항목의 지문 — 설치기가 쓴 항목이 그 뒤 다른 방법으로 바뀌었는지 판별(바뀌면 기준 시각을 믿지 않음)
+function codexPeekEntryFp(root,bridgeDir){
+  const hooks=root&&root.hooks&&typeof root.hooks==="object"&&!Array.isArray(root.hooks)?root.hooks:{},items=[];
+  for(const h of CODEX_PEEK_USER_HOOKS){const groups=Array.isArray(hooks[h.event])?hooks[h.event]:[];
+    for(const g of groups){if(!g||!Array.isArray(g.hooks))continue;for(const x of g.hooks)if(x&&isCodexPeekHookCommand(x.commandWindows||x.command,bridgeDir))items.push([h.event,String(g.matcher||""),String(x.type||""),String(x.command||""),String(x.commandWindows||""),Number(x.timeout||0),String(x.statusMessage||"")]);}}
+  return crypto.createHash("sha1").update(JSON.stringify(items)).digest("hex");
 }
 const CODEX_PEEK_HOOK_OWNER_SCHEMA="codex-peek-user-hooks-v1";
 function readCodexPeekHookOwner(markerFile,expectedBridgeDir=""){
@@ -196,8 +206,39 @@ function readCodexPeekHookOwner(markerFile,expectedBridgeDir=""){
     if(!o||o.schema!==CODEX_PEEK_HOOK_OWNER_SCHEMA||typeof o.bridgeDir!=="string"||!o.bridgeDir||!files.length||files.some(x=>typeof x!=="string"||!path.isAbsolute(x)||path.basename(x).toLowerCase()!=="hooks.json"))return{ok:false,present:true,hookFiles:[],bridgeDir:"",reason:"invalid hook ownership marker"};
     if(expectedBridgeDir&&normRoot(o.bridgeDir)!==normRoot(expectedBridgeDir))return{ok:false,present:true,hookFiles:[],bridgeDir:o.bridgeDir,reason:"hook ownership marker belongs to another bridge directory"};
     const unique=[];for(const file of files)if(!unique.some(x=>normRoot(x)===normRoot(file)))unique.push(file);
-    return{ok:true,present:true,hookFiles:unique,bridgeDir:o.bridgeDir,installedAt:String(o.installedAt||"")};
+    const writes=Array.isArray(o.writes)?o.writes.filter(w=>w&&typeof w.file==="string"&&path.isAbsolute(w.file)&&typeof w.writeStartedAt==="string"&&typeof w.entryFp==="string"&&w.entryFp).map(w=>({file:w.file,writeStartedAt:w.writeStartedAt,entryFp:w.entryFp})):[];
+    return{ok:true,present:true,hookFiles:unique,bridgeDir:o.bridgeDir,installedAt:String(o.installedAt||""),writes};
   }catch{return{ok:false,present:true,hookFiles:[],bridgeDir:"",reason:"invalid hook ownership marker"};}
+}
+// [AFTER-0.1.104-FIXES 설계 B] 훅 경보의 기준 시각 T — 설치기가 지금의 Codex Peek 훅 항목을 이 훅 파일에 쓰기 직전에 잡은 시각.
+// 틀리더라도 이른 쪽으로(이르면 '실패'가 더 보일 뿐 숨지 않음). 정할 수 없으면 ok:false(호출자는 지금 규칙 그대로 — 낮추지 않음).
+//  · 새 기록: writes 의 쓰기 시작 시각 — 단 지금 훅 파일의 우리 항목 지문이 기록과 같을 때만(다른 방법으로 바뀌었으면 믿지 않음)
+//  · 옛 기록(writes 없음): 같은 설치가 쓰기 직전에 이름을 정한 백업(<훅 파일>.bak.<시각>) 중 installedAt 이하인 가장 늦은 것 —
+//    항목이 빠짐없이 등록돼 있을 때만 · 그런 백업이 없으면(처음 설치) 정할 수 없음. 관측 시각·파일 수정 시각으로 대신하지 않는다.
+function parseHookBackupStamp(name,base){
+  const pre=base+".bak.";if(name.slice(0,pre.length)!==pre)return NaN;
+  const m=/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/.exec(name.slice(pre.length));
+  return m?Date.parse(m[1]+"T"+m[2]+":"+m[3]+":"+m[4]+"."+m[5]+"Z"):NaN;
+}
+function codexPeekHookWriteTime(markerFile,hookFile,bridgeDir){
+  const owner=readCodexPeekHookOwner(markerFile,bridgeDir);
+  if(!owner.ok)return{ok:false,reason:"owner-unreadable"};
+  if(!owner.present)return{ok:false,reason:"owner-missing"};
+  if(!owner.hookFiles.some(x=>normRoot(x)===normRoot(hookFile)))return{ok:false,reason:"file-not-owned"};
+  const r=readHookRoot(hookFile);if(!r.ok||r.raw===null)return{ok:false,reason:"hooks-unreadable"};
+  const w=(owner.writes||[]).find(x=>normRoot(x.file)===normRoot(hookFile));
+  if(w){
+    const t=Date.parse(w.writeStartedAt);if(!Number.isFinite(t))return{ok:false,reason:"time-invalid"};
+    if(codexPeekEntryFp(r.root,bridgeDir)!==w.entryFp)return{ok:false,reason:"entries-changed"};
+    return{ok:true,t,iso:new Date(t).toISOString(),how:"recorded"};
+  }
+  const inst=Date.parse(owner.installedAt||"");if(!Number.isFinite(inst))return{ok:false,reason:"time-invalid"};
+  if(!detectCodexPeekUserHooks(hookFile,bridgeDir).installed)return{ok:false,reason:"entries-incomplete"};
+  let names=[];try{names=fs.readdirSync(path.dirname(hookFile));}catch{return{ok:false,reason:"backup-unreadable"};}
+  const base=path.basename(hookFile);let best=NaN;
+  for(const nm of names){const t=parseHookBackupStamp(nm,base);if(Number.isFinite(t)&&t<=inst&&(!Number.isFinite(best)||t>best))best=t;}
+  if(!Number.isFinite(best))return{ok:false,reason:"no-backup"};
+  return{ok:true,t:best,iso:new Date(best).toISOString(),how:"backup"};
 }
 function restoreFileSnapshot(file,raw){
   if(raw===null){try{fs.unlinkSync(file);}catch(e){if(!e||e.code!=="ENOENT")return false;}return true;}
@@ -221,7 +262,8 @@ function installCodexPeekOwnedUserHooksUnlocked(file,bridgeDir,nodeToken="node",
   let before=null;try{before=fs.readFileSync(file,"utf8");}catch(e){if(!e||e.code!=="ENOENT")return{ok:false,reason:"could not snapshot hooks.json"};}
   const installed=installCodexPeekUserHooks(file,bridgeDir,nodeToken);if(!installed.ok)return installed;
   const hookFiles=owner.present?owner.hookFiles.slice():[];if(!hookFiles.some(x=>normRoot(x)===normRoot(file)))hookFiles.push(path.resolve(file));
-  const marker={schema:CODEX_PEEK_HOOK_OWNER_SCHEMA,bridgeDir:path.resolve(bridgeDir),hookFiles,installedAt:new Date().toISOString()};
+  const writes=(owner.present&&Array.isArray(owner.writes)?owner.writes:[]).filter(w=>normRoot(w.file)!==normRoot(file));writes.push({file:path.resolve(file),writeStartedAt:installed.writeStartedAt,entryFp:installed.entryFp}); // [설계 B]
+  const marker={schema:CODEX_PEEK_HOOK_OWNER_SCHEMA,bridgeDir:path.resolve(bridgeDir),hookFiles,installedAt:new Date().toISOString(),writes};
   if(!atomicWrite(markerFile,JSON.stringify(marker,null,2)+"\n")){
     const restored=restoreFileSnapshot(file,before);
     return{ok:false,reason:restored?"could not write hook ownership marker; hooks.json was restored":"could not write hook ownership marker and could not restore hooks.json",backup:installed.backup};
@@ -286,4 +328,4 @@ function codexPeekHookTrustState(input,expectedHooksFile="",bridgeDir=""){
     pluginIds:[...new Set(hooks.map(h=>String(h.pluginId||"")).filter(Boolean))],
   };
 }
-module.exports={buildCodexPluginSpawn,nodeTokenRunsInShell,nodeTokenDualShellOk,codexPeekHookCommandNeedsMigration,detectCodexPeekHookMigration,createCodexHookOfferGate,createCodexHookReloadTracker,marketplaceRootMatches,marketplaceStepOk,codexPeekPluginState,codexPeekHookTrustState,installCodexPeekUserHooks,installCodexPeekOwnedUserHooks,installCodexPeekOwnedUserHooksUnlocked,removeCodexPeekUserHooks,removeCodexPeekOwnedUserHooks,removeCodexPeekOwnedUserHooksUnlocked,withCodexPeekHookOwnerLock,readCodexPeekHookOwner,detectCodexPeekUserHooks,codexPeekHookCommand,isCodexPeekHookCommand,CODEX_PEEK_HOOK_OWNER_SCHEMA,CODEX_PEEK_USER_HOOKS,CODEX_PEEK_HOOK_EVENTS,CODEX_PEEK_PLUGIN_IDS,isCodexPeekPluginId,normRoot,cmdQuote};
+module.exports={codexPeekHookWriteTime,codexPeekEntryFp,parseHookBackupStamp,buildCodexPluginSpawn,nodeTokenRunsInShell,nodeTokenDualShellOk,codexPeekHookCommandNeedsMigration,detectCodexPeekHookMigration,createCodexHookOfferGate,createCodexHookReloadTracker,marketplaceRootMatches,marketplaceStepOk,codexPeekPluginState,codexPeekHookTrustState,installCodexPeekUserHooks,installCodexPeekOwnedUserHooks,installCodexPeekOwnedUserHooksUnlocked,removeCodexPeekUserHooks,removeCodexPeekOwnedUserHooks,removeCodexPeekOwnedUserHooksUnlocked,withCodexPeekHookOwnerLock,readCodexPeekHookOwner,detectCodexPeekUserHooks,codexPeekHookCommand,isCodexPeekHookCommand,CODEX_PEEK_HOOK_OWNER_SCHEMA,CODEX_PEEK_USER_HOOKS,CODEX_PEEK_HOOK_EVENTS,CODEX_PEEK_PLUGIN_IDS,isCodexPeekPluginId,normRoot,cmdQuote};

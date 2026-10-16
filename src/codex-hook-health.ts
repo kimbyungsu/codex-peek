@@ -58,6 +58,20 @@ export function codexHookTrustRecheckDue(o: {
   return age >= CODEX_HOOK_TRUST_FAIL_BACKOFF_MS[i];
 }
 
+// [AFTER-0.1.104-FIXES 설계 B] 훅 기록이 없거나 옛 차례 것뿐일 때(heartbeat-missing·stale) — 실패인지, 훅 설치 뒤 아직 쓴 적이 없는지 구분.
+// 기준 시각 T(writeTimeMs)=설치기가 지금 훅 항목을 훅 파일에 쓰기 직전 시각(이른 쪽으로만 틀림). 경계(마지막 차례 시각=T)는 실패 쪽.
+//  · failed: 마지막 차례 시각 ≥ T(그 차례에 훅이 돌았어야 함 — 기록이 전무해도)
+//  · pending(확인 전): 이 프로젝트에 차례가 아직 없거나 마지막 차례가 T 보다 이름
+//  · install-time-unknown / turn-time-unreadable: 구분할 근거가 없음 → 호출자는 지금 규칙 그대로(낮추지 않음)
+export type CodexHookMissStage = "failed" | "pending" | "install-time-unknown" | "turn-time-unreadable";
+export function stageCodexHookMiss(o: { writeTimeMs: number | null; turnExists: boolean; latestTurnTs: string }): CodexHookMissStage {
+  if (o.writeTimeMs === null || !Number.isFinite(o.writeTimeMs)) return "install-time-unknown";
+  if (!o.turnExists) return "pending";
+  const at = Date.parse(String(o.latestTurnTs || ""));
+  if (!Number.isFinite(at)) return "turn-time-unreadable";
+  return at >= o.writeTimeMs ? "failed" : "pending";
+}
+
 // Codex 플러그인 설치 여부만으로는 현재 대화에 lifecycle 훅이 붙었다고 볼 수 없다.
 // UserPromptSubmit이 남긴 출처+turn id를 현재 rollout turn id와 대조해 실제 생존만 인정한다.
 export function assessCodexHookHeartbeat(

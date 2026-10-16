@@ -106,12 +106,13 @@ setInterval(() => {}, 1000);`);
 t("첫 확인이 진행 중이면 노랑 '확인 중' 경보(빨강 아님·준비 완료 승인 아님) · 확인 실패로 끝나면 빨강으로 바뀜 · 정상이면 사라짐 — 컴파일 산출물 실행", () => {
   const body = slice("function syncCodexHookHealth(", "\n// 대시보드 프로젝트와 실제 작업 저장소가 다를 수 있다");
   const chk = slice("function codexHookTrustChecking(", "\nfunction codexHookHealth(");
+  const hookText = slice("function codexHookAt(", "\nfunction verifierLinkForMode("); // [설계 B] 경보 함수가 쓰는 공용 문구 함수
   const runSync = (snapshot, inflight, health, existing) => {
     const cache = new H.CodexHookTrustCache();
     if (inflight) cache.setQuery("C:/ws", Promise.resolve({}));
     let written = null;
     const fn = new Function("codexHomeIsReady", "withIntegrityLockExt", "readIntegrity", "normWs", "codexHookHealth", "tE", "codexHookEventsKo", "CODEX_PEEK_HOOK_NAME_LIST", "atomicWrite", "INTEGRITY_FILE", "codexHookTrustForWorkspace", "codexHookTrustCache", "codexHookTrustCwd",
-      chk + "\n" + body + "\nreturn syncCodexHookHealth;")(true, (f) => f(), () => (existing || []).slice(), (x) => x, () => health || ({ required: true, ready: false, reason: "hooks-unverified" }), (ko) => ko, () => "", "", (f, data) => { written = JSON.parse(data); }, "INTEG", () => snapshot, cache, (x) => x);
+      chk + "\n" + hookText + "\n" + body + "\nreturn syncCodexHookHealth;")(true, (f) => f(), () => (existing || []).slice(), (x) => x, () => health || ({ required: true, ready: false, reason: "hooks-unverified" }), (ko) => ko, () => "", "", (f, data) => { written = JSON.parse(data); }, "INTEG", () => snapshot, cache, (x) => x);
     fn("C:/ws");
     return written ? written.events.filter((e) => e.kind === "codex-hook-missing") : (existing || []).filter((e) => e.kind === "codex-hook-missing");
   };

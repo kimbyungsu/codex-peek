@@ -17,7 +17,7 @@ import { catchUp, TailState, makeRolloutAcc, headFirstUserMessage, Msg, RolloutA
 import { applyAutoPinUpdate, autoPinReplacementReady, autoPinWriteAllowed, chooseImplementerAutoPin, clearImplementerLinkFields, hookActiveTsForGate, resolvePromptProject } from "./implementer-auto-pin";
 import { scoutDirectiveText, scoutLedgerNotes } from "./scope-package";
 import { firstImplementerMetaFromHistory } from "./implementer-baseline";
-import { assessCodexHookHeartbeat, assessCodexHookTrust, CodexHookTrustCache, codexHookTrustRecheckDue } from "./codex-hook-health";
+import { assessCodexHookHeartbeat, assessCodexHookTrust, CodexHookTrustCache, codexHookTrustRecheckDue, stageCodexHookMiss, CodexHookMissStage } from "./codex-hook-health";
 import { collectCurrentMapState, collectMapHistoryState, CurrentMapState, MapAutomationStats, MapUsageStats, RunLockObservation } from "./map-stats";
 
 const HOME = os.homedir();
@@ -227,6 +227,7 @@ interface BridgeState {
   codexHookReady: boolean;
   codexHookReason: CodexHookHealth["reason"];
   codexHookChecking: boolean; // 첫 신뢰 확인 진행 중(단계표 '확인 중' 문구)
+  codexHookNote: { ko: string; en: string } | null; // [설계 B] 확인 전 한 줄(온보딩 4단계)
   modelPref: string;      // 저장된 선택 모델 ("" = 코덱스 기본값)
   reasoningPref: string;  // 저장된 선택 생각강도 ("" = 기본)
   modelPrefInherited: boolean; // C↔C 전용 pref가 없어 Claude 모드 검증 두뇌 설정을 상속 중
@@ -2910,6 +2911,7 @@ function computeState(turnsN: number): BridgeState {
     codexHookReady: hookHealth.ready,
     codexHookReason: hookHealth.reason,
     codexHookChecking: codexHookTrustChecking(ws, hookHealth),
+    codexHookNote: hookHealth.reason === "hook-pending" ? codexHookPendingLine(hookHealth) : null, // [설계 B] 온보딩 4단계의 '확인 전' 한 줄(설치 시각·연결된 대화 날짜)
     modelPref: typeof pref.model === "string" ? pref.model : "",
     reasoningPref: typeof pref.reasoning === "string" ? pref.reasoning : "",
     modelPrefInherited: prefState.inherited,
@@ -3260,8 +3262,17 @@ function syncCodexHookHealth(ws: string | null): void {
       // 아무것도 안 띄우면 상태 표시줄이 정상처럼 보여 사용자가 그 사이 질문을 시작할 수 있다(준비 완료로 승인하지도 않음 · 첫 확인은
       // 이 PC 실측 20~30초·최대 90초). 확인이 끝나면 정상=사라짐, 문제=빨강 경보로 바뀜(같은 종류·다른 표지라 노랑은 자동으로 빠짐).
       const checking = codexHookTrustChecking(ws, health);
-      const problem = health.required && !health.ready && health.reason !== "implementer-missing";
-      const sig = checking ? "codex-hook:checking" : `codex-hook:${health.reason}`;
+      const problem = health.required && !health.ready && health.reason !== "implementer-missing" && health.reason !== "hook-pending"; // [설계 B] 확인 전=경보 아님(온보딩 4단계에 한 줄)
+      const sig = checking ? "codex-hook:checking" : `codex-hook:${health.reason}` + (health.stage ? `:${health.stage}` : "");
+      // [AFTER-0.1.104-FIXES 설계 B] 날짜 문구(이 PC 시각) · 확인 전=정보 한 줄(행동 요구 없음) · 실패=시각과 흔한 원인 · 구분 불가=지금 문구+이유
+      const at9 = codexHookAt;
+      const sessKo9 = at9(health.sessionStartedAt, false, false), sessEn9 = at9(health.sessionStartedAt, true, false);
+      const pend9 = codexHookPendingLine(health), pendKo9 = pend9.ko, pendEn9 = pend9.en; // (확인 전은 경보 줄을 만들지 않음 — 문구는 문구 사슬 일관성용)
+      const failKo9 = `Codex Peek 훅은 모두 신뢰돼 있지만, 연결된 Codex 구현 대화${sessKo9 ? `(${sessKo9} 시작)` : ""}의 마지막 차례(${at9(health.lastTurnAt, false, true) || "시각 미상"})가 훅 설치(${at9(health.hookWriteAt, false, true) || "시각 미상"}) 뒤인데 그 차례에 훅 실행 기록이 없습니다${health.reason === "heartbeat-stale" ? "(이전 차례 기록만 있음)" : ""}. 흔한 원인: ① 훅을 신뢰하기 전에 진행된 차례 ② 설치·신뢰 뒤 창을 다시 불러오기 전이라 Codex가 새 훅을 아직 모름 ③ 그 밖이면 훅 실행 실패. 이 상태에선 모든 턴 검증이 강제되지 않습니다.`;
+      const failEn9 = `All Codex Peek hooks are trusted, but the latest turn (${at9(health.lastTurnAt, true, true) || "time unknown"}) of the linked Codex implementer conversation${sessEn9 ? ` (started ${sessEn9})` : ""} came after the hooks were installed (${at9(health.hookWriteAt, true, true) || "time unknown"}) and has no hook run on record${health.reason === "heartbeat-stale" ? " (only an earlier turn has one)" : ""}. Common causes: (1) the turn ran before the hooks were trusted (2) the window was not reloaded after install/trust, so Codex does not know the new hooks yet (3) otherwise the hook failed to run. Verify-every-turn is not enforced in this state.`;
+      const whyKo9 = health.stage === "install-time-unknown" ? " 훅 설치 시각을 확인할 수 없어 아직 안 쓴 상태인지 구분하지 못합니다 — 훅 설치(갱신)를 다시 하면 구분됩니다." : health.stage === "turn-time-unreadable" ? " 마지막 차례 시각을 읽지 못해 아직 안 쓴 상태인지 구분하지 못합니다." : "";
+      const whyEn9 = health.stage === "install-time-unknown" ? " The hook install time cannot be confirmed, so a not-yet-used state cannot be told apart — reinstalling (updating) the hooks makes it distinguishable." : health.stage === "turn-time-unreadable" ? " The latest turn time cannot be read, so a not-yet-used state cannot be told apart." : "";
+      const missFailed9 = (health.reason === "heartbeat-stale" || health.reason === "heartbeat-missing") && health.stage === "failed";
       const dKo = checking
         ? "Codex Peek 훅 신뢰 확인 중입니다(창을 연 직후 20~30초, 최대 90초). 확인이 끝나기 전에는 모든 턴 검증이 보장되지 않습니다 — 끝날 때까지 기다린 뒤 질문을 시작하세요. 정상이면 이 표시는 사라지고, 문제가 있으면 빨간 경보로 바뀝니다."
         : health.reason === "hooks-unverified"
@@ -3270,13 +3281,17 @@ function syncCodexHookHealth(ws: string | null): void {
         ? `Codex Peek 사용자 훅(hooks.json)에 ${codexHookEventsKo(health.missingEvents)} 훅이 등록돼 있지 않습니다(이전 판으로 설치돼 빠짐 — 신뢰 문제가 아님). 대시보드에서 Codex 훅 설치(갱신)를 누르면 다시 등록되고, 그 뒤 Codex 설정 → Hook에서 새로 생긴 훅을 신뢰한 뒤 창을 리로드하세요. 그 전까지 승인 서고가 켜진 프로젝트의 Codex 구현 작업은 멈춥니다.`
         : health.reason === "hooks-untrusted"
         ? `Codex Peek 사용자 훅(hooks.json)이 등록돼 있지만 ${CODEX_PEEK_HOOK_NAME_LIST} 훅이 모두 신뢰된 실행 상태가 아닙니다(실행 권위는 플러그인 번들이 아니라 이 사용자 훅). Codex 설정 → Hook에서 실행 내용을 검토·신뢰하고 창을 리로드하세요 — 이후 Codex 대화를 시작·재개할 때 구현 연결이 자동 이동합니다.`
+        : health.reason === "hook-pending"
+        ? pendKo9
+        : missFailed9
+        ? failKo9
         : health.reason === "heartbeat-stale"
-        ? "Codex Peek 훅 전부의 신뢰 상태는 확인됐지만 현재 구현 세션의 최신 턴에서 lifecycle 훅 실행이 확인되지 않았습니다. rollout 보조 감지는 초록 구현 연결만 옮기므로 '모든 턴 검증'을 정상으로 승인하지 않습니다. 사용하려는 Codex 대화를 다시 열거나 프롬프트를 보내 실제 훅 신호를 확인하세요."
+        ? "Codex Peek 훅 전부의 신뢰 상태는 확인됐지만 현재 구현 세션의 최신 턴에서 lifecycle 훅 실행이 확인되지 않았습니다. rollout 보조 감지는 초록 구현 연결만 옮기므로 '모든 턴 검증'을 정상으로 승인하지 않습니다. 사용하려는 Codex 대화를 다시 열거나 프롬프트를 보내 실제 훅 신호를 확인하세요." + whyKo9
         : health.reason === "turn-unverifiable"
         ? "Codex↔Codex 구현 세션의 최신 turn id를 읽지 못해 훅 생존을 검증할 수 없습니다. 비교 불능 상태를 정상으로 승인하지 않습니다. 플러그인·Codex 버전과 Codex 설정 → Hook의 신뢰 상태를 확인하세요."
         : health.reason === "session-missing"
         ? "Codex↔Codex 구현 세션 파일을 찾을 수 없어 훅 생존을 확인할 수 없습니다. 사용하려는 Codex 대화를 시작·재개하거나 프롬프트를 보내면 그 세션으로 구현 연결을 다시 고정합니다. 하네스가 새 세션을 임의 생성하지는 않습니다."
-        : "Codex Peek 훅 전부의 신뢰 상태는 확인됐지만 현재 구현 세션에서 실제 lifecycle 훅 실행 기록이 없습니다. rollout 보조 감지는 초록 구현 연결만 옮기므로 '모든 턴 검증'을 정상으로 승인하지 않습니다. 사용하려는 Codex 대화를 다시 열거나 프롬프트를 보내 실제 훅 신호를 확인하세요.";
+        : "Codex Peek 훅 전부의 신뢰 상태는 확인됐지만 현재 구현 세션에서 실제 lifecycle 훅 실행 기록이 없습니다. rollout 보조 감지는 초록 구현 연결만 옮기므로 '모든 턴 검증'을 정상으로 승인하지 않습니다. 사용하려는 Codex 대화를 다시 열거나 프롬프트를 보내 실제 훅 신호를 확인하세요." + whyKo9;
       const dEn = checking
         ? "Checking the Codex Peek hook trust state (20–30 s right after the window opens, up to 90 s). Until it finishes, verify-every-turn is not guaranteed — wait for it before starting a prompt. If all is well this notice disappears; if not, it turns into a red alert."
         : health.reason === "hooks-unverified"
@@ -3285,14 +3300,18 @@ function syncCodexHookHealth(ws: string | null): void {
         ? `The Codex Peek user hooks file (hooks.json) has no ${(health.missingEvents||[]).join("·")||"required"} hook registered (missing from an older install — not a trust issue). Use install (update) Codex hooks in the dashboard to register it, then trust the new hook under Codex Settings → Hooks and reload the window. Until then Codex implementation work halts on projects with an approved archive.`
         : health.reason === "hooks-untrusted"
         ? `The Codex Peek user hooks (hooks.json) are registered, but the ${CODEX_PEEK_HOOK_NAME_LIST} entries are not all trusted and runnable (the runtime authority is these user hooks, not the plugin bundle). Review and trust them under Codex Settings → Hooks and reload the window — afterwards, starting or resuming a Codex conversation automatically moves the implementer link.`
+        : health.reason === "hook-pending"
+        ? pendEn9
+        : missFailed9
+        ? failEn9
         : health.reason === "heartbeat-stale"
-        ? "All Codex Peek hooks are trusted, but no lifecycle hook ran for the latest turn in the current implementer session. The rollout fallback moves only the green implementer link and does not approve 'verify every turn' as enforced. Reopen the Codex conversation or send a prompt to obtain a real hook signal."
+        ? "All Codex Peek hooks are trusted, but no lifecycle hook ran for the latest turn in the current implementer session. The rollout fallback moves only the green implementer link and does not approve 'verify every turn' as enforced. Reopen the Codex conversation or send a prompt to obtain a real hook signal." + whyEn9
         : health.reason === "turn-unverifiable"
         ? "The latest rollout turn id cannot be read, so implementer-hook liveness is unverifiable and is not approved as healthy. Check the plugin/Codex version and the trust state under Codex Settings → Hooks."
         : health.reason === "session-missing"
         ? "The Codex↔Codex implementer session file is missing, so hook liveness cannot be verified. Send a prompt in the Codex conversation you want to use to pin that session again. The harness does not create a new session on its own."
-        : "All Codex Peek hooks are trusted, but no lifecycle execution exists for the current implementer session. The rollout fallback moves only the green implementer link and does not approve 'verify every turn' as enforced. Reopen the Codex conversation or send a prompt to obtain a real hook signal.";
-      const kept = events.filter((e) => e.kind !== KIND || !wsMatch(e) || (problem && e.sig === sig && !e.ack));
+        : "All Codex Peek hooks are trusted, but no lifecycle execution exists for the current implementer session. The rollout fallback moves only the green implementer link and does not approve 'verify every turn' as enforced. Reopen the Codex conversation or send a prompt to obtain a real hook signal." + whyEn9;
+      const kept = events.filter((e) => e.kind !== KIND || !wsMatch(e) || (problem && e.sig === sig && e.detailKo === dKo && !e.ack)); // [설계 B] 문구(시각)가 바뀌면 새 줄로
       const present = kept.some((e) => e.kind === KIND && wsMatch(e));
       if (problem && !present) kept.push({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, ack: false, ts: new Date().toISOString(), session: "", workspace: ws, kind: KIND, severity: checking ? "warning" : "error", detail: tE(dKo, dEn), detailKo: dKo, detailEn: dEn, sig });
       if (kept.length !== events.length || kept.some((e, i) => e !== events[i])) atomicWrite(INTEGRITY_FILE, JSON.stringify({ events: kept.slice(-50) }));
@@ -3485,7 +3504,9 @@ function codexHookTrustCwd(ws:string):string {
 function codexHookTrustForWorkspace(ws:string):CodexHookTrustSnapshot|null {
   return codexHookTrustCache.getSnapshot(normWs(codexHookTrustCwd(ws)))||null;
 }
-type CodexHookHealth = { required: boolean; ready: boolean; missingEvents?: string[]; reason: "not-required" | "healthy" | "implementer-missing" | "hooks-unverified" | "hooks-untrusted" | "hooks-missing" | "session-missing" | "turn-unverifiable" | "heartbeat-missing" | "heartbeat-stale"; latestTurnId: string; heartbeatTurnId: string };
+type CodexHookHealth = { required: boolean; ready: boolean; missingEvents?: string[]; reason: "not-required" | "healthy" | "implementer-missing" | "hooks-unverified" | "hooks-untrusted" | "hooks-missing" | "session-missing" | "turn-unverifiable" | "heartbeat-missing" | "heartbeat-stale" | "hook-pending"; latestTurnId: string; heartbeatTurnId: string;
+  // [설계 B] 훅 기록 없음·옛 기록일 때만 — 갈래(실패/확인 전/구분 불가)·훅 설치(쓰기 시작) 시각·이 프로젝트 마지막 차례 시각·연결된 대화 시작 시각
+  stage?: CodexHookMissStage; hookWriteAt?: string; lastTurnAt?: string; sessionStartedAt?: string };
 // 첫 신뢰 확인이 진행 중인가(답 기록 없음+조회 진행 중) — 경보 색(노랑)과 대시보드 단계표 문구가 같은 판정을 쓴다. 준비 판정과는 무관(승인 아님).
 function codexHookTrustChecking(ws: string | null, health?: CodexHookHealth): boolean {
   if (!ws) return false;
@@ -3505,7 +3526,57 @@ function codexHookHealth(ws: string | null, rawLink?: any): CodexHookHealth {
   const active = readCodexActiveRecord(sid);
   const latest = sessionTurnSignalForProject(file, ws);
   const assessed = assessCodexHookHeartbeat(active, latest.turnId, latest.ts);
+  // [AFTER-0.1.104-FIXES 설계 B] 훅 기록이 없거나 옛 차례 것뿐이면 — 훅 설치(쓰기 시작) 시각 T 와 이 프로젝트의 마지막 차례 시각으로 실패/확인 전을 나눈다.
+  // T 를 정할 수 없거나 차례 시각을 못 읽으면 지금 규칙 그대로(빨강). 차례 번호를 못 읽는 경우(turn-unverifiable)는 손대지 않는다.
+  if (!assessed.ready && (assessed.reason === "heartbeat-missing" || assessed.reason === "heartbeat-stale")) {
+    const wt = codexHookWriteTime();
+    const any = sessionAnyTurnForProject(file, ws);
+    const stage = stageCodexHookMiss({ writeTimeMs: wt.ok && typeof wt.t === "number" ? wt.t : null, turnExists: any.exists, latestTurnTs: any.ts });
+    const extra = { stage, hookWriteAt: wt.ok ? wt.iso : "", lastTurnAt: any.ts, sessionStartedAt: rolloutStartedAt(file) };
+    return { required: true, ready: false, reason: stage === "pending" ? "hook-pending" : assessed.reason, latestTurnId: latest.turnId, heartbeatTurnId: assessed.heartbeatTurnId, ...extra };
+  }
   return { required: true, ready: assessed.ready, reason: assessed.reason, latestTurnId: latest.turnId, heartbeatTurnId: assessed.heartbeatTurnId };
+}
+// [설계 B] 훅 경보 기준 시각 — 설치기가 지금 훅 항목을 이 Codex 훅 파일에 쓰기 직전 시각(소유 기록 · 옛 기록은 같은 설치의 백업 이름 시각)
+function codexHookWriteTime(): { ok: boolean; t?: number; iso?: string } {
+  try { return (require("../bridge/codex-plugin-install.js") as { codexPeekHookWriteTime: (m: string, f: string, b: string) => { ok: boolean; t?: number; iso?: string } }).codexPeekHookWriteTime(codexUserHooksOwnerFile(), codexUserHooksFile(), BRIDGE_DIR); }
+  catch { return { ok: false }; }
+}
+// [설계 B] 이 프로젝트에 차례가 있었는가·마지막 차례 시각 — 차례 번호 유무와 무관하게, 앞 차례 시각을 승계하지 않은 기록(turnAtByCwd)으로.
+// 어느 후보(프로젝트·매핑 저장소)든 마지막 차례 시각을 못 읽으면 ts=""(판독 불가 — 낮추지 않음 · 구현 검증 B 1회차 blocker).
+function sessionAnyTurnForProject(file: string, ws: string | null): { exists: boolean; ts: string } {
+  if (!ws) return { exists: false, ts: "" };
+  const acc = rolloutAccFor(file);
+  let exists = false, unreadable = false, ts = "", best = -Infinity;
+  for (const candidate of projectWorkspaceCandidates(ws)) {
+    const v = acc.turnAtByCwd.get(normWs(candidate)); if (!v) continue;
+    exists = true; const at = Date.parse(v.ts || "");
+    if (!Number.isFinite(at)) { unreadable = true; continue; }
+    if (at > best) { best = at; ts = v.ts; }
+  }
+  return { exists, ts: unreadable ? "" : ts };
+}
+// [설계 B] '확인 전' 한 줄(이 PC 시각) — 온보딩 4단계에 그대로 보인다(경보 줄·집계에는 넣지 않음 · 구현 검증 B 1회차 blocker: 정보 등급 경보는 화면에 안 보임)
+function codexHookAt(iso: string | undefined, en: boolean, withTime: boolean): string {
+  const x = new Date(String(iso || "")); if (isNaN(x.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const day = en ? `${x.getMonth() + 1}/${x.getDate()}` : `${x.getMonth() + 1}월 ${x.getDate()}일`;
+  return withTime ? `${day} ${pad(x.getHours())}:${pad(x.getMinutes())}` : day;
+}
+function codexHookPendingLine(h: { hookWriteAt?: string; sessionStartedAt?: string }): { ko: string; en: string } {
+  const wKo = codexHookAt(h.hookWriteAt, false, true), wEn = codexHookAt(h.hookWriteAt, true, true);
+  const sKo = codexHookAt(h.sessionStartedAt, false, false), sEn = codexHookAt(h.sessionStartedAt, true, false);
+  return {
+    ko: `훅 설치${wKo ? `(${wKo})` : ""} 뒤 아직 Codex 구현 차례가 없습니다(연결된 대화${sKo ? `: ${sKo} 시작` : ""}) — 첫 Codex 대화 시작·재개나 질문 때 자동으로 확인합니다.`,
+    en: `No Codex implementer turn yet since the hooks were installed${wEn ? ` (${wEn})` : ""} (linked conversation${sEn ? `: started ${sEn}` : ""}) — it is checked automatically when a Codex conversation starts, resumes or gets a prompt.`,
+  };
+}
+// [설계 B] 연결된 대화 시작 시각 — 대화 기록 파일 이름(rollout-YYYY-MM-DDTHH-MM-SS-…, 이 PC 시각)에서. 못 읽으면 "".
+function rolloutStartedAt(file: string): string {
+  const m = /rollout-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})/.exec(path.basename(String(file || "")));
+  if (!m) return "";
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
+  return isNaN(d.getTime()) ? "" : d.toISOString();
 }
 
 function verifierLinkForMode(raw: any, mode: HarnessMode): any | null {
@@ -8972,7 +9043,7 @@ class Dashboard {
         step("ob1", codexReady, codexReady?T("Codex 준비됨","Codex ready"):T("Codex 경로 미고정 — PATH의 codex로 시도","Codex path not pinned — trying codex on PATH"), {cmd:"openSettings"}, codexReady?"":T("openai.chatgpt 확장이 있으면 보통 자동 · standalone CLI면 PATH로 동작(안 뜨면 codexBridge.codexPath 지정)","usually automatic with the openai.chatgpt extension · standalone CLI works via PATH (set codexBridge.codexPath if not detected)"));
         step("ob2", linked, linked?T("Codex 세션 연결됨","Codex session linked"):T("Codex 세션 미연결","No Codex session linked"), {go:"cands"}, linked?"":T("연결할 세션 고르기","pick a session to link"));
         step("ob3", vOn, vOn?(T("검증 켜짐 (","verify on (")+(vmEffOb||"off")+")"):T("검증 꺼짐","verify off"), {go:"segVerify"}, vOn?"":T("검증 모드 켜고 저장","turn on a verify mode and save"));
-        const ob4=$("ob4"); if(ob4){ ob4.style.display=ccMode?"":"none"; if(ccMode)step("ob4",hookReady,hookReady?T("현재 구현 세션에서 Codex 강제 훅 확인됨","Codex enforcement hook confirmed in the current implementer session"):(d.codexHookChecking?T("Codex 강제 훅 확인 중(최대 90초) — 끝나기 전엔 모든 턴 검증이 보장되지 않음 · 기다린 뒤 질문을 시작하세요","Checking the Codex enforcement hook (up to 90 s) — verify-every-turn is not guaranteed until it finishes · wait before starting a prompt"):T("Codex 강제 훅 미확인 — 이 상태에선 모든 턴 검증이 강제되지 않음","Codex enforcement hook not confirmed — verify-every-turn is not enforced")),{cmd:"installCodexHooks"},hookReady?"":T("Codex 훅 설치·훅 전부 신뢰·창 리로드 → 사용할 대화 시작·재개 시 자동 고정","install the Codex hooks, trust all of them, reload the window → starting or resuming a conversation auto-pins it")); }
+        const ob4=$("ob4"); if(ob4){ ob4.style.display=ccMode?"":"none"; if(ccMode)step("ob4",hookReady,hookReady?T("현재 구현 세션에서 Codex 강제 훅 확인됨","Codex enforcement hook confirmed in the current implementer session"):(d.codexHookChecking?T("Codex 강제 훅 확인 중(최대 90초) — 끝나기 전엔 모든 턴 검증이 보장되지 않음 · 기다린 뒤 질문을 시작하세요","Checking the Codex enforcement hook (up to 90 s) — verify-every-turn is not guaranteed until it finishes · wait before starting a prompt"):(d.codexHookReason==="hook-pending"?T("Codex 강제 훅 설치됨 — 확인 전 · ","Codex enforcement hook installed — not checked yet · ")+String(d.codexHookNote?T(d.codexHookNote.ko,d.codexHookNote.en):T("설치 뒤 아직 Codex 구현 차례 없음 · 첫 대화 시작·재개나 질문 때 자동 확인","no implementer turn since install · checked automatically on the first conversation start, resume or prompt")).replace(/[<>&]/g,""):T("Codex 강제 훅 미확인 — 이 상태에선 모든 턴 검증이 강제되지 않음","Codex enforcement hook not confirmed — verify-every-turn is not enforced"))),d.codexHookReason==="hook-pending"?null:{cmd:"installCodexHooks"},(hookReady||d.codexHookReason==="hook-pending")?"":T("Codex 훅 설치·훅 전부 신뢰·창 리로드 → 사용할 대화 시작·재개 시 자동 고정","install the Codex hooks, trust all of them, reload the window → starting or resuming a conversation auto-pins it")); }
       }
     });
     // 기본지침도 언어 전환 hold(계약 카드와 동일 원리) — 편집 중 언어가 바뀌면 보던 언어 화면 유지, 저장은 보던 슬롯으로.

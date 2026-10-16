@@ -137,6 +137,7 @@ export type RolloutAcc = {
   selectedByCwd: Map<string, MetaVal>; // Codex 모델 피커가 즉시 남기는 thread_settings_applied 현재 선택값
   selectedLast: MetaVal;             // cwd 필터 없는 마지막 선택값
   turnByCwd: Map<string, TurnSignal>; // 현재 구현 턴이 실제 훅 heartbeat와 같은 turn인지 판정
+  turnAtByCwd: Map<string, TurnSignal>; // [AFTER-0.1.104-FIXES 설계 B] 폴더별 마지막 차례 기록 그대로 — 차례 번호 유무 무관 · 시각이 없으면 ""(앞 차례 시각을 승계하지 않음 — 훅 경보의 '마지막 차례 시각')
   lastTurn: TurnSignal;
   promptByCwd: Map<string, PromptSignal>; // 실제(비주입) 사용자 프롬프트가 제출된 프로젝트별 최신 신호
   lastPrompt: PromptSignal;
@@ -162,7 +163,7 @@ function dropOldestTurn(acc: RolloutAcc): void {
 }
 export function makeRolloutAcc(isInjected: (t: string) => boolean, normWs: (p: string) => string): { init: () => RolloutAcc; merge: (acc: RolloutAcc, line: string) => void } {
   return {
-    init: () => ({ msgs: [], userTurns: 0, firstUser: null, turnsDropped: false, firstTurnInnerDropped: false, models: new Set(), byCwd: new Map(), metaHistory: [], last: { model: "", effort: "", ts: "" }, selectedByCwd: new Map(), selectedLast: { model: "", effort: "", ts: "" }, turnByCwd: new Map(), lastTurn: { turnId: "", ts: "" }, promptByCwd: new Map(), lastPrompt: { turnId: "", ts: "", model: "", effort: "" }, activeTurn: null, sessionSource: "", threadSource: "" }),
+    init: () => ({ msgs: [], userTurns: 0, firstUser: null, turnsDropped: false, firstTurnInnerDropped: false, models: new Set(), byCwd: new Map(), metaHistory: [], last: { model: "", effort: "", ts: "" }, selectedByCwd: new Map(), selectedLast: { model: "", effort: "", ts: "" }, turnByCwd: new Map(), turnAtByCwd: new Map(), lastTurn: { turnId: "", ts: "" }, promptByCwd: new Map(), lastPrompt: { turnId: "", ts: "", model: "", effort: "" }, activeTurn: null, sessionSource: "", threadSource: "" }),
     merge: (acc, line) => {
       let o: any;
       try { o = JSON.parse(line); } catch { return; }
@@ -216,6 +217,7 @@ export function makeRolloutAcc(isInjected: (t: string) => boolean, normWs: (p: s
         acc.byCwd.set(key, upd(acc.byCwd.get(key) || { model: "", effort: "", ts: "" }));
         acc.metaHistory.push({ cwd: key, model, effort, ts });
         const turnId = String(p.turn_id || p.turnId || "");
+        acc.turnAtByCwd.set(key, { turnId, ts }); // [설계 B] 이 차례의 시각 그대로(없으면 "")
         if (turnId) {
           const signal = { turnId, ts };
           acc.turnByCwd.set(key, signal);
