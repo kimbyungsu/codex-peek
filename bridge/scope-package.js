@@ -37,7 +37,8 @@ function collectPackage(repo) {
   // safe.directory: 저장소 소유자가 실행 계정과 다른 환경(검증 샌드박스·CI·공유 폴더)에서 git이 'dubious ownership'으로
   // 거부하면 수집기 전체가 죽는다(Codex 실패 재현) → 이 저장소에 한해 신뢰 지시(전역 설정은 안 건드림).
   const safe = "safe.directory=" + String(repo).replace(/\\/g, "/");
-  const git = (args) => { const r = spawnSync("git", ["-c", safe, "-C", repo, ...args], { encoding: "utf8", timeout: 30000, windowsHide: true }); return r.status === 0 && !r.error ? String(r.stdout || "") : null; };
+  // [묶음 4 · E8] 출력 버퍼 64MiB — 기본 1MiB 를 넘는 출력(긴 범위 diff 등)이 오류로 통째 null 이 되던 것(실제 확인: 154커밋 범위 diff 0자). 꾸러미 크기는 아래 기존 상한이 자름.
+  const git = (args) => { const r = spawnSync("git", ["-c", safe, "-C", repo, ...args], { encoding: "utf8", timeout: 30000, windowsHide: true, maxBuffer: 64 * 1024 * 1024 }); return r.status === 0 && !r.error ? String(r.stdout || "") : null; };
   const head = (git(["rev-parse", "HEAD"]) || "").trim();
   if (!head) return collectPackageHistoryless(repo); // 이력(git) 없음 → 무이력 모드 폴백(최근 수정 파일 기준 축소 꾸러미)
 
@@ -50,6 +51,11 @@ for (let i = 0; i < toks.length; i++) {
   if (/[RC]/.test(status)) i++;
   if (p && !/\/$/.test(p)) seeds.push(p);
 }
+// [RULE-SUPPLY-REDESIGN 묶음 4 · E8] 직전 지도 이후 커밋된 변경도 본다 — 씨앗=직전 지도 기준 커밋..HEAD 변경 파일 ∪ 작업트리 변경,
+// diff=기준 커밋 대비(작업트리 포함). 기준 커밋이 없어졌거나 지금 이력의 조상이 아니면(이력 재작성·브랜치 전환) 지금 방식으로 떨어지고
+// 그 사실을 꾸러미(간주 기준 줄)·지도 메타에 적는다. 직전 지도가 없거나 무이력 지도면 지금 방식 그대로(적을 것 없음). 크기는 기존 상한(diff 글자 수 등) 안.
+const range = seedRangeFor(git, repo, head, seeds);
+for (const p of range.committed) if (!seeds.includes(p)) seeds.push(p);
 // 신선도 기준선 — seed '확정 직후' 캡처(러너가 AI 응답 뒤 재조사하면 diff 수집~응답 사이 삭제/복원이 오분류 —
 // Codex 반례 2026-07-10). basisTs=이 시점(이후 mtime 변경은 전부 신호), seedMissing='없음'을 ENOENT만으로 판정
 // (접근 오류를 없음으로 확정 금지 — 그 외 오류면 seedMissing만 생략·basisTs는 유지[삭제 판정만 불가]).
@@ -58,7 +64,11 @@ const baseline = captureSeedBaseline(repo, seeds);
 // diff: unstaged+staged 합본(untracked 새 파일 내용은 diff에 안 나오나 seed 목록에는 있음 — 정직 한계로 꾸러미 각주가 커버)
 // 민감 범주(env/키/토큰류) 파일 섹션은 여기서 제외 — 꾸러미는 외부 탐색자(API)까지 가므로, 토큰 추출 '전'에 잘라
 // 비밀값 파편이 역참조 씨앗으로도 새지 않게 한다(§3.2). 제외 목록은 꾸러미에 정직 표기.
-const raw = (git(["diff"]) || "") + "\n" + (git(["diff", "--cached"]) || "");
+// [E8] 기준 커밋 대비 — 작업트리 부분(지금 고치는 것 · 종전과 같은 두 호출)을 먼저, 직전 지도 이후 커밋된 부분(기준..HEAD)을 뒤에 붙인다:
+// 글자 상한(maxDiffChars)으로 잘릴 때 지금 작업이 먼저 남게. 커밋된 부분을 못 읽으면(시간·판독 실패) 그 사실을 꾸러미에 적는다.
+const wtDiff = (git(["diff"]) || "") + "\n" + (git(["diff", "--cached"]) || "");
+const committedDiff = range.base ? git(["diff", range.base, "HEAD"]) : "";
+const raw = wtDiff + (committedDiff ? "\n" + committedDiff : "");
 const { text: diffText, excluded: sensitiveExcluded } = redactSensitiveDiff(raw);
 
 // 바뀐 식별자 → 저장소 역참조(git grep -l, tracked 한정) — seed 파일 자신은 제외
@@ -82,9 +92,32 @@ for (const { token } of tokens) {
 const logOut = git(["log", "--no-merges", "--first-parent", "--pretty=format:%H|%ct|%s", "--name-only", "-n", "300"]);
 const coChange = logOut ? suggest(parseGitLog(logOut), seeds) : null;
 
-  const pkg = buildPackage({ repo, head, seeds, diffText, tokenHits, droppedTokens, coChange, ...collectCommon(repo), ledger: ledgerForPackage(repo, seeds), sensitiveExcluded });
-  if (pkg && pkg.meta) Object.assign(pkg.meta, baseline); // 러너가 지도 메타로 그대로 저장(scoutMapStatus의 신선도 기준)
+  const pkg = buildPackage({ repo, head, seeds, diffText, tokenHits, droppedTokens, coChange, ...collectCommon(repo), ledger: ledgerForPackage(repo, seeds), sensitiveExcluded, basisNote: range.note });
+  if (pkg && pkg.meta) Object.assign(pkg.meta, baseline, { seedRange: range.meta }); // 러너가 지도 메타로 그대로 저장(scoutMapStatus의 신선도 기준) · [E8] 씨앗 범위 기록
+  if (pkg && pkg.meta && range.base && committedDiff === null) { pkg.meta.truncations.push("직전 지도 이후 커밋된 변경의 diff 를 읽지 못함 — 작업트리 diff·씨앗 목록만"); pkg.meta.seedRange.committedDiff = "unreadable"; }
   return pkg;
+}
+
+// [묶음 4 · E8] 씨앗 범위 — 직전 지도(이 저장소의 가장 최근 저장 지도) 메타의 기준 커밋(head)부터.
+// 반환 { base(쓸 수 있는 기준 커밋 · 아니면 ""), committed(기준..HEAD 변경 파일), note(꾸러미 간주 기준 줄 · 지금 방식이면 ""), meta(지도 메타 seedRange) }.
+// 기준 커밋 검사: 지도 신선도 판정(scoutMapStatus)의 형식(7~40 hex·0만은 무이력)·존재(cat-file -e) 검사에, 여기서 지금 HEAD 의 조상 검사(merge-base --is-ancestor)를 더한다(신선도 판정에는 조상 검사가 없다).
+function seedRangeFor(git, repo, head, wtSeeds) {
+  const none = { base: "", committed: [], note: "", meta: { mode: "worktree" } };
+  // 지도 보관 모듈은 쓸 때만 읽는다 — 일부 파일이 빠진 낡은 배포에서도 꾸러미 수집이 죽지 않고 지금 방식으로(부분 배포 실물 시험 p3b-stage1 [14])
+  let prev = null; try { prev = require(path.join(__dirname, "scout-store.js")).latestMapMeta(repo); } catch { prev = null; }
+  const b = prev && typeof prev.head === "string" ? prev.head.trim() : "";
+  if (!/^[0-9a-f]{7,40}$/i.test(b) || /^0+$/.test(b)) return none; // 직전 지도 없음·무이력 지도·옛 메타
+  const short = b.slice(0, 7);
+  const fallback = (why) => ({ base: "", committed: [], note: "직전 지도 기준 커밋 " + short + " 을(를) 지금 이력에서 찾을 수 없어(" + why + ") 작업트리 변경만 봤다", meta: { mode: "worktree", fallback: why, prevHead: b } });
+  if (git(["cat-file", "-e", b + "^{commit}"]) === null) return fallback("기준 커밋 없음 — 이력 재작성 등");
+  if (b === head || (head && head.startsWith(b))) return { base: "", committed: [], note: "", meta: { mode: "worktree", prevHead: b, sameHead: true } }; // 직전 지도 뒤 커밋 없음=지금 방식과 같음
+  if (git(["merge-base", "--is-ancestor", b, "HEAD"]) === null) return fallback("지금 HEAD 의 조상이 아님 — 이력 재작성·브랜치 전환 등");
+  const out = git(["diff", "--name-only", "-z", b, "HEAD"]);
+  if (out === null) return fallback("변경 목록 판독 실패");
+  const committed = out.split("\0").filter((p) => p && !/\/$/.test(p));
+  const wtSet = new Set((wtSeeds || []).map((p) => p.replace(/\\/g, "/").toLowerCase()));
+  const nNew = committed.filter((p) => !wtSet.has(p.replace(/\\/g, "/").toLowerCase())).length;
+  return { base: b, committed, note: "직전 지도(기준 커밋 " + short + ") 이후 커밋된 변경 " + committed.length + "개(작업트리와 겹치지 않는 것 " + nNew + "개) + 작업트리 변경 " + (wtSeeds || []).length + "개 · diff 는 기준 커밋 대비(작업트리 포함)", meta: { mode: "since-map", base: b, committed: committed.length } };
 }
 
 // 신선도 기준선 캡처 — seed 확정 직후 1회. 기준 시각(basisTs)은 stat 순회 '전' 확보해 항상 반환 —

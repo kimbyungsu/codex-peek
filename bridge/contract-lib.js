@@ -3021,15 +3021,8 @@ function extractMapHighlights(mapText, limit) {
   const sectioned = lines.some((l) => /[①②③④⑤⑥⑦⑧⑨⑩]/.test(l));
   const out = []; const seen = new Set();
   let allowed = !sectioned;
-  for (const raw of lines) {
-    const line = raw.replace(/`/g, "").trim().slice(0, 500); // 줄 상한 — 초장문 줄의 파서 비용 상수화(모든 ask 앞단 급소)
-    if (!line) continue;
-    if (sectioned) {
-      // 제외 표기 우선 — 한 줄에 ①과 ⑤가 같이 오는 기형에서도 제외가 이긴다(Codex 반례 잠금). 제외 구획 줄 자체도 건너뜀.
-      if (/[⑤⑥⑦⑧⑨⑩]/.test(line) || /범위 *밖|MAP\s*patch|out\s*of\s*scope/i.test(line)) { allowed = false; continue; }
-      if (/[①②③④]/.test(line)) allowed = true;
-    } else if (/범위 *밖|MAP\s*patch|out\s*of\s*scope/i.test(line)) continue; // 자유서식: 그 줄만 제외(전체 허용 폴백 유지 — 비활성 고착 없음)
-    if (!allowed || !/\bhigh\b/i.test(line)) continue;
+  // 경로 토큰 수집(한 줄) — 상한에 닿으면 true
+  const take = (line, note) => {
     // 경로 토큰: 공백류 분할 후 토큰별 검사 — 백트래킹 정규식 제거(긴 줄 초선형 지연 실측 → 토큰 상한 200자로 비용 고정).
     for (const tok of line.split(/[\s,;|"'<>{}()[\]—·↔]+/)) {
       // 한글 조사 등 비경로 문자를 양끝에서 제거("src/a.ts를 확인" → "src/a.ts") + 끝 문장부호 제거
@@ -3041,9 +3034,34 @@ function extractMapHighlights(mapText, limit) {
       const key = t.replace(/\\/g, "/").toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ path: t, note: line.replace(/^[-*#\s①②③④]+/, "").slice(0, 120) });
-      if (out.length >= LIM) return out; // 지시 스펙(high 최대 5)+여유 — 상한은 호출부 목적별(동봉 재랭킹은 24: 조기 컷이 재랭킹을 무효화하던 Codex 반례)
+      out.push({ path: t, note });
+      if (out.length >= LIM) return true; // 지시 스펙(high 최대 5)+여유 — 상한은 호출부 목적별(동봉 재랭킹은 24: 조기 컷이 재랭킹을 무효화하던 Codex 반례)
     }
+    return false;
+  };
+  // [RULE-SUPPLY-REDESIGN 묶음 4 · E9] 항목 단위로 읽는다 — 'high' 표기가 있는 목록 머리 줄(번호·불릿)과, 그보다 깊게 들여쓴
+  // 이어지는 줄(하위 불릿·연속 문장)이 한 항목("1. **[high] 제목**" 아래 "   - 경로: …" 같은 하위 불릿의 경로도 그 항목 것).
+  // 항목은 같거나 얕은 들여쓰기의 다음 줄(다음 목록 머리 포함)·제목·구획 표기·빈 줄에서 끝난다. 줄 글자 상한·구획 규칙(①~④만)은 그대로.
+  const LIST_HEAD = /^[ \t]*(?:\d+[.)]|[-*+•])[ \t]+/;
+  const indentOf = (raw) => /^[ \t]*/.exec(raw)[0].replace(/\t/g, "    ").length;
+  let item = null; // { indent, note } — 지금 읽는 high 항목
+  for (const raw of lines) {
+    const line = raw.replace(/`/g, "").trim().slice(0, 500); // 줄 상한 — 초장문 줄의 파서 비용 상수화(모든 ask 앞단 급소)
+    if (!line) { item = null; continue; }
+    if (sectioned) {
+      // 제외 표기 우선 — 한 줄에 ①과 ⑤가 같이 오는 기형에서도 제외가 이긴다(Codex 반례 잠금). 제외 구획 줄 자체도 건너뜀.
+      if (/[⑤⑥⑦⑧⑨⑩]/.test(line) || /범위 *밖|MAP\s*patch|out\s*of\s*scope/i.test(line)) { allowed = false; item = null; continue; }
+      if (/[①②③④]/.test(line)) { allowed = true; item = null; }
+    } else if (/범위 *밖|MAP\s*patch|out\s*of\s*scope/i.test(line)) { item = null; continue; } // 자유서식: 그 줄만 제외(전체 허용 폴백 유지 — 비활성 고착 없음)
+    if (!allowed) { item = null; continue; }
+    const ind = indentOf(raw);
+    const heading = /^#{1,6}\s/.test(line);
+    if (item && !heading && ind > item.indent) { if (take(line, item.note)) return out; continue; } // 항목 안(하위 불릿·연속 문장)
+    item = null; // 같거나 얕은 들여쓰기·제목 → 앞 항목 끝
+    if (!/\bhigh\b/i.test(line)) continue;
+    const note = line.replace(/^[-*#\s①②③④]+/, "").slice(0, 120);
+    if (LIST_HEAD.test(raw) && !heading) item = { indent: ind, note }; // 목록 머리만 항목을 연다(그 밖의 high 줄은 그 줄만 — 종전과 같음)
+    if (take(line, note)) return out;
   }
   return out;
 }

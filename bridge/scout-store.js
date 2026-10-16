@@ -56,6 +56,15 @@ function listMaps(repo, limit) {
   });
 }
 
+// [RULE-SUPPLY-REDESIGN 묶음 4 · E8] 가장 최근 지도의 메타(기준 커밋 head 등) — 없거나 깨졌으면 null(호출자는 지금 방식으로).
+function latestMapMeta(repo) {
+  const dir = path.join(SCOUTS_DIR, wsKeyFor(repo));
+  let bases;
+  try { bases = fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)).sort().reverse(); } catch { return null; }
+  if (!bases.length) return null;
+  try { const m = JSON.parse(fs.readFileSync(path.join(dir, bases[0] + ".json"), "utf8")); return m && typeof m === "object" && !Array.isArray(m) ? m : null; } catch { return null; }
+}
+
 // ── '지도 생성중' 라이브 신호 — 상태바가 실제 도는 동안만 '생성중'을 표시(거짓 신호 방지: 평시엔 파일 없음).
 // 러너가 탐색자 호출 직전 mark, finally에서 clear. 비정상 종료로 잔존해도 읽는 쪽 TTL이 걸러낸다.
 const LIVE_DIR = path.join(BRIDGE_DIR, "scout-live");
@@ -66,4 +75,4 @@ function clearLive(repo) {
   try { fs.unlinkSync(path.join(LIVE_DIR, wsKeyFor(repo) + ".json")); } catch { /* 이미 없음 */ }
 }
 
-module.exports = { normWs, wsKeyFor, saveMap, listMaps, pruneDir, markLive, clearLive, LIVE_DIR, SCOUTS_DIR, KEEP_PER_WS };
+module.exports = { normWs, wsKeyFor, saveMap, listMaps, latestMapMeta, pruneDir, markLive, clearLive, LIVE_DIR, SCOUTS_DIR, KEEP_PER_WS };

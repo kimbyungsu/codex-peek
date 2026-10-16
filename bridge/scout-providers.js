@@ -254,7 +254,7 @@ function runScout(repo, providerId, opts) {
   // 게시판 보관 — 실패는 게시판에만 영향(기존 계약)
   let savedNote = "", saveErr = "";
   try {
-    const meta = { ...(usage ? { usageIn: usage.in, usageOut: usage.out, model: usage.model } : {}), ...CL.scoutPromptSignature(lang), highlights: CL.extractMapHighlights(exSrc), mapPatches: CL.extractMapPatches(exSrc), basis: pkg.basisNote || (pkg.historyless ? "" : "git-status"), seedFiles: pkg.seeds, ...baseline, head: (pkg.meta && pkg.meta.head) || "" };
+    const meta = { ...(usage ? { usageIn: usage.in, usageOut: usage.out, model: usage.model } : {}), ...CL.scoutPromptSignature(lang), highlights: CL.extractMapHighlights(exSrc), mapPatches: CL.extractMapPatches(exSrc), basis: pkg.basisNote || (pkg.historyless ? "" : "git-status"), seedFiles: pkg.seeds, ...baseline, head: (pkg.meta && pkg.meta.head) || "", ...(pkg.meta && pkg.meta.seedRange && typeof pkg.meta.seedRange === "object" ? { seedRange: pkg.meta.seedRange } : {}) }; // [묶음 4 · E8] 씨앗 범위(직전 지도 이후 커밋 포함 여부·폴백 사유)
     savedNote = saveMap(repo, providerId, map, meta);
   } catch (e) { saveErr = (e && e.message) || "save-failed"; }
   // 관측 장부: ⑥(MAP patch) 제안 적재 — 실패가 지도 출력 흐름을 막지 않되(기존 계약), 결과 보고는 실제
