@@ -744,15 +744,18 @@ async function runClassify(ws, opts) {
     const h = runner({ arm: input.arm, prompt: buildClassifyPrompt(input, lang), timeoutMs: Number(o.timeoutMs) || CL.SELECTOR_PAGE_TIMEOUT_MS, schema: classifySchema(input) });
     const r = await h.promise;
     // [설계 A-1 · A5] 도우미 실행 방식(새/옛)·Claude Code 판을 실행 기록에 남기고, 옛 방식·너무 오래됨이면 대시보드 경보(새 방식이면 지움)
-    const runnerMeta = r && r.runner && typeof r.runner === "object" ? { tier: String(r.runner.tier || ""), version: String(r.runner.version || ""), how: String(r.runner.how || "") } : null;
-    if (input.arm === "self" && r) { try { require("./claude-helper.js").reportHelperTier(ws, r); } catch { /* 경보 실패=실행 결과 무영향 */ } }
+    // [묶음 A-3] 실행 방식 기록에 거절 칸(거절이 있었을 때만 — 다른 모델 재시도 결과 포함)
+    const CHx = require("./claude-helper.js");
+    const runnerMeta = CHx.runnerMetaOf(r);
+    if (input.arm === "self" && r) { try { CHx.reportHelperTier(ws, r); } catch { /* 경보 실패=실행 결과 무영향 */ } }
     const common = Object.assign({ repoKey: input.repoKey, gen: input.gen, arm: input.arm, words: input.items.length, inputFp: input.inputFp }, runnerMeta ? { runner: runnerMeta } : {});
     if (!r || !r.ok) {
       const key = (r && r.key) || "call-failed";
       const b = bumpRetries(ws, input.items, key);
       row(Object.assign({ outcome: "failed", reason: key, retried: b.retried, held: b.held, durationMs: Date.now() - t0 }, common));
       writeClassifyReceipt(ws, input, { arm: input.arm, ...(runnerMeta ? { runner: runnerMeta } : {}), pages: 1, outcome: "failed:" + key, durationMs: Date.now() - t0 });
-      alarm(ws, "사용자 말 분류 실행이 실패했습니다(" + key + ") — 모아 둔 말은 남아 있고 다음 실행에서 다시 시도합니다(검증 무영향).", "Classifying the user's words failed (" + key + ") — the words are kept and retried next time (verification unaffected).");
+      if (key === "refused") { const nt = CHx.refusalNote(r); alarm(ws, "사용자 말 분류 중 도우미 모델이 안전상 이유로 답을 거절했고, " + nt.ko + " — 모아 둔 말은 남아 있고 다음 실행에서 다시 시도합니다(검증 무영향).", "While classifying the user's words the helper model declined to answer for safety reasons, and " + nt.en + " — the words are kept and retried next time (verification unaffected)."); }
+      else alarm(ws, "사용자 말 분류 실행이 실패했습니다(" + key + ") — 모아 둔 말은 남아 있고 다음 실행에서 다시 시도합니다(검증 무영향).", "Classifying the user's words failed (" + key + ") — the words are kept and retried next time (verification unaffected).");
       return { st: "call-failed", reason: key, arm: input.arm, retried: b.retried, held: b.held };
     }
     const parsed = parseClassifyOutput(r.output, input);

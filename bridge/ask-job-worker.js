@@ -162,7 +162,7 @@ async function runSelectionPhase(jobFile, dir, job, errFile) {
     ...(fakePage ? { pageRunner: fakePage } : {}),
   });
   // [설계 A-1 · A5] 도우미 실행 방식(새/옛)·판 — 영수증에 남기고, Claude 담당이면 옛 방식·너무 오래됨 경보(새 방식이면 지움)
-  const runner9 = (() => { const x = (run9.results || []).find((it) => it && it.r && it.r.runner); return x ? { tier: String(x.r.runner.tier || ""), version: String(x.r.runner.version || ""), how: String(x.r.runner.how || "") } : null; })();
+  const runner9 = (() => { try { return require(path.join(__dirname, "claude-helper.js")).runnerMetaOfPages(run9.results); } catch { return null; } })(); // [묶음 A-3] 거절이 있었던 페이지를 먼저
   if (job.selector.arm !== "codex") { const x = (run9.results || []).find((it) => it && it.r && (it.r.key === "claude-too-old" || it.r.runner)); if (x) { try { require(path.join(__dirname, "claude-helper.js")).reportHelperTier(ws, x.r); } catch { /* 경보 실패=선별 결과 무영향 */ } } }
   if (run9.st === "cancelled") { failJob(jobFile, errFile, "cancelled", { selectorOutcome: "cancelled" }); return { ok: false }; }
   if (run9.st !== "ok") { failJob(jobFile, errFile, String(run9.msg || run9.st), { selectorOutcome: run9.st }); return { ok: false }; }

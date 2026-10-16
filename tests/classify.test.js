@@ -297,6 +297,25 @@ t("호출 실패·답 손상=말은 대기열에 남고 재시도 횟수만 증�
   const ev = CL.readIntegrityEvents().filter((e) => e.kind === "classify-failed" && e.workspace === P.ws);
   assert.ok(ev.length >= 1, "경보");
 });
+t("[AFTER-0.1.104-FIXES 묶음 A-3] 도우미 모델이 거절하고 다른 모델 재시도로도 못 풀면 — 실패 이유 refused·말은 대기열에 남음·실행 기록과 영수증에 거절 칸·경보는 '안전상 이유로 거절'로 풀어 씀", async () => {
+  const P = project("refused");
+  const a = say(P, "거절 시험용 지속 기준 문장입니다 계속 지켜 주세요");
+  const refusal = { by: "model-a", retryModel: "model-b", retryHow: "default", retry: "refused", used: "model-b" };
+  const r = await CF.runClassify(P.ws, { pageRunner: fakeRunner({ ok: false, key: "refused", detail: "by=model-a retry=model-b:refused", runner: { tier: "new", version: "9.9.9", how: "t", refusal } }) });
+  assert.ok(r.st === "call-failed" && r.reason === "refused", JSON.stringify(r));
+  assert.strictEqual(statusOf(P, a.id), "queued", "말은 대기열에 남음");
+  const run = CF.readClassifyRows(P.ws).filter((x) => x.type === "run").slice(-1)[0];
+  assert.ok(run.reason === "refused" && run.runner && JSON.stringify(run.runner.refusal) === JSON.stringify(refusal), JSON.stringify(run));
+  const rc = CL.readSelectorUsage().filter((x) => x.purpose === "classify" && x.wsKey === CL.wsKeyFor(P.ws)).slice(-1)[0];
+  assert.ok(rc && rc.outcome === "failed:refused" && rc.runner.refusal.retry === "refused", JSON.stringify(rc));
+  const ev = CL.readIntegrityEvents().filter((e) => e.kind === "classify-failed" && e.workspace === P.ws).slice(-1)[0];
+  assert.ok(ev && /안전상 이유로 답을 거절/.test(ev.detail) && /그 모델도 거절/.test(ev.detail) && !/\(refused\)/.test(ev.detail), ev && ev.detail);
+  // 평소 실패는 종전 문구 그대로
+  const r2 = await CF.runClassify(P.ws, { pageRunner: fakeRunner({ ok: false, key: "call-failed" }) });
+  assert.ok(r2.st === "call-failed" && r2.reason === "call-failed");
+  const ev2 = CL.readIntegrityEvents().filter((e) => e.kind === "classify-failed" && e.workspace === P.ws).slice(-1)[0];
+  assert.ok(/분류 실행이 실패했습니다\(call-failed\)/.test(ev2.detail), ev2.detail);
+});
 t("원문 못 읽는 말=보류(text-unavailable)로 표면 · 나머지만 분류 · 잠금 경합=실행 안 함", async () => {
   const P = project("unav");
   const d = say(P, "곧 원문이 지워질 말입니다 지속 기준 아님");

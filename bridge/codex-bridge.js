@@ -3093,7 +3093,7 @@ async function cmdSelectorPreview() {
     ...(fakePage ? { pageRunner: fakePage } : {}),
   });
   // [설계 A-1 · A5] 도우미 실행 방식(새/옛)·판 — 영수증에 남기고, Claude 담당이면 옛 방식·너무 오래됨 경보(새 방식이면 지움)
-  const runnerP = (() => { const x = (run.results || []).find((it) => it && it.r && it.r.runner); return x ? { tier: String(x.r.runner.tier || ""), version: String(x.r.runner.version || ""), how: String(x.r.runner.how || "") } : null; })();
+  const runnerP = (() => { try { return require(path.join(__dirname, "claude-helper.js")).runnerMetaOfPages(run.results); } catch { return null; } })(); // [묶음 A-3] 거절이 있었던 페이지를 먼저
   if (arm === "self") { const x = (run.results || []).find((it) => it && it.r && (it.r.key === "claude-too-old" || it.r.runner)); if (x) { try { require(path.join(__dirname, "claude-helper.js")).reportHelperTier(ws, x.r); } catch { /* 경보 실패=선별 결과 무영향 */ } } }
   if (run.st !== "ok") die(tB(`⚠️ 선별 실패(${run.st}${run.msg ? ": " + run.msg : ""}) — 재시도하거나 서고 상태를 확인하세요.`, `⚠️ Selection failed (${run.st}${run.msg ? ": " + run.msg : ""}) — retry or inspect the archive.`), 3);
   const idLists = [];

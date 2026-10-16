@@ -84,7 +84,7 @@ const PROVIDERS = {
       // [A-2 · A4] 옛 방식·너무 오래됨 경보 — 세션 앵커로 확인된 프로젝트에만(anchoredClaudeWs — 작업 폴더 폴백 없음 · 구현 검증 A-2 확인 판 ab-1). 확인 불가면 건너뜀.
       try { const ws9 = CL.anchoredClaudeWs(); if (ws9) CH.reportHelperTier(ws9, r); } catch { /* 경보 실패=호출 결과 무영향 */ }
       const helper = { runner: r.runner, ok: !!r.ok, key: r.ok ? "" : String(r.key || ""), started: !!r.started }; // runScout 가 호출 번호로 실행 방식 기록(A5)
-      if (!r.ok) return { ok: false, key: "call-failed", detail: (r.key === "claude-too-old" || r.key === "cli-missing" || r.key === "claude-shell-only" ? r.key + " " : "") + String(r.detail || ""), charsOut: 0, helper };
+      if (!r.ok) return { ok: false, key: "call-failed", detail: (r.key === "claude-too-old" || r.key === "cli-missing" || r.key === "claude-shell-only" || r.key === "refused" ? r.key + " " : "") + String(r.detail || ""), charsOut: 0, helper };
       // usage=null 유지(결과 봉투의 토큰 수는 아직 읽지 않음 — §6-12 후속)
       return { ok: true, map: String(r.output).trim(), usage: null, stderrPass: "", helper };
     },

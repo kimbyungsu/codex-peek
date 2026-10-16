@@ -472,14 +472,17 @@ async function runCuration(ws, opts) {
     const h = runner({ arm, prompt: buildCurationPrompt(input, lang), timeoutMs: Number(o.timeoutMs) || CL.SELECTOR_PAGE_TIMEOUT_MS, schema: curationSchema() });
     const r = await h.promise;
     // [AFTER-0.1.104-FIXES 설계 A-1 · A5] 도우미 실행 방식(새/옛)·Claude Code 판을 실행 기록·영수증에 — Claude 담당이면 옛 방식·너무 오래됨 경보(새 방식이면 지움)
-    const runnerMeta = r && r.runner && typeof r.runner === "object" ? { tier: String(r.runner.tier || ""), version: String(r.runner.version || ""), how: String(r.runner.how || "") } : null;
-    if (arm === "self" && r) { try { require("./claude-helper.js").reportHelperTier(ws, r); } catch { /* 경보 실패=실행 결과 무영향 */ } }
+    // [묶음 A-3] 실행 방식 기록에 거절 칸(거절이 있었을 때만 — 다른 모델 재시도 결과 포함)
+    const CHx = require("./claude-helper.js");
+    const runnerMeta = CHx.runnerMetaOf(r);
+    if (arm === "self" && r) { try { CHx.reportHelperTier(ws, r); } catch { /* 경보 실패=실행 결과 무영향 */ } }
     const runRowR = (x) => runRow9(runnerMeta ? Object.assign(x, { runner: runnerMeta }) : x);
     if (!r || !r.ok) {
       const key = (r && r.key) || "call-failed";
       runRowR({ repoKey: input.repoKey, curationKey: curationKeyOf(input), boundaryGen: input.boundaryGen, archiveGen: input.archiveGen || "", outcome: "failed", reason: key, arm, signalCount: input.signalCount, durationMs: Date.now() - t0 });
       writeCurationReceipt(ws, input, { arm, ...(runnerMeta ? { runner: runnerMeta } : {}), pages: 1, outcome: "failed:" + key, durationMs: Date.now() - t0 });
-      alarm(ws, "curation-failed", "정리 제안 실행이 실패했습니다(" + key + ") — 검증에는 영향이 없고, 다음 실행에서 다시 시도합니다.", "Curation run failed (" + key + ") — verification is unaffected; it will retry on the next run.");
+      if (key === "refused") { const nt = CHx.refusalNote(r); alarm(ws, "curation-failed", "정리 제안 중 도우미 모델이 안전상 이유로 답을 거절했고, " + nt.ko + " — 검증에는 영향이 없고, 다음 실행에서 다시 시도합니다.", "During curation the helper model declined to answer for safety reasons, and " + nt.en + " — verification is unaffected; it will retry on the next run."); }
+      else alarm(ws, "curation-failed", "정리 제안 실행이 실패했습니다(" + key + ") — 검증에는 영향이 없고, 다음 실행에서 다시 시도합니다.", "Curation run failed (" + key + ") — verification is unaffected; it will retry on the next run.");
       return { st: "call-failed", reason: key, arm };
     }
     const parsed = parseCurationOutput(r.output, input);

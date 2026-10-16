@@ -5,6 +5,7 @@
  * 새 방식 인자(안전 모드·도구 0·MCP 끔·기록 안 남김·정해진 틀)·빈 임시 작업 폴더·환경값 정리(로그인 위치·인증 값 유지)·로그인 파일 무복사 ·
  * 답 꺼내기(틀 답·오류 봉투·깨진 봉투·틀 답 없음·종료 코드·시간 초과·취소) · 옛 방식=최소 격리 인자 · 너무 오래된 판=실행 안 함 ·
  * 실행 파일 위치 기록 · 대시보드 경보(옛 방식·너무 오래됨=한 번만 · 새 방식=지움) · 호출자별 틀과 엄격 판독기 왕복 · 배선.
+ * [묶음 A-3] 안전장치 거절 → 다른 모델로 한 번(첫 실행은 언제나 모델 지정 없음 · 다음 호출은 원래 모델 · 재시도 모델은 저장 안 함 · refused).
  * 격리: 임시 CODEX_BRIDGE_HOME · 가짜 Claude(node 스크립트) — 실제 모델 호출 없음.
  */
 const assert = require("assert");
@@ -12,6 +13,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
+const PATH0 = process.env.PATH; // [묶음 A-3] 시험 도중 PATH 가 원래대로 돌아오는지 확인용
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "chelp-home-"));
 process.env.CODEX_BRIDGE_HOME = HOME;
 const ROOT = path.join(__dirname, "..");
@@ -43,10 +45,17 @@ function fakeSrc(variant, help, version) {
     "  if (mode === 'sleep') { setTimeout(() => {}, 60000); return; }",
     "  if (mode === 'exit1') { process.stdout.write(JSON.stringify({ type: 'result', is_error: true, subtype: 'error_max_turns' })); process.exit(1); }",
     "  const fmt = args[args.indexOf('--output-format') + 1];",
+    // [묶음 A-3] 안전장치 거절 흉내 — 봉투 stop_reason=refusal·종료 코드 1(실측 봉투 모양) · 모델 지정이 없으면 'fake-default'
+    "  const mi = args.indexOf('--model'); const model = mi >= 0 ? args[mi + 1] : '';",
+    "  const refusal = () => { if (fmt !== 'json') { process.stdout.write('API Error: safeguards flagged'); process.exit(1); } process.stdout.write(JSON.stringify({ type: 'result', is_error: true, subtype: 'success', stop_reason: 'refusal', modelUsage: { [model || 'fake-default']: {} }, result: 'API Error: safeguards flagged' })); process.exit(1); };",
+    "  if (mode === 'refuse-all') return refusal();",
+    "  if (mode === 'refuse-nomodel' && !model) return refusal();",
+    "  if (mode === 'refuse-then-sleep') { if (!model) return refusal(); setTimeout(() => {}, 60000); return; }",
+    "  if (mode === 'refuse-slow') { if (!model) { setTimeout(refusal, Number(pick('FAKE_SLEEP_MS') || 1000)); return; } setTimeout(() => {}, 60000); return; }",
     "  if (fmt === 'json') {",
     "    if (mode === 'broken') { process.stdout.write('not json'); return; }",
     "    if (mode === 'iserror') { process.stdout.write(JSON.stringify({ type: 'result', is_error: true, subtype: 'error_during_execution' })); return; }",
-    "    const env = { type: 'result', is_error: false, result: pick('FAKE_RESULT') || 'free text answer' };",
+    "    const env = { type: 'result', is_error: false, result: pick('FAKE_RESULT') || 'free text answer', modelUsage: { [model || 'fake-default']: {} } };",
     "    if (args.includes('--json-schema') && mode !== 'noso') env.structured_output = JSON.parse(pick('FAKE_SO') || '{\"results\":[]}');",
     "    process.stdout.write(JSON.stringify(env)); return;",
     "  }",
@@ -356,7 +365,9 @@ t("[구현 검증 1회차 보완] 대시보드 요약·상태 표시줄이 도�
 
 
 // ── 묶음 A-2 ─────────────────────────────────────────────────────────────
-const withEnv = (vars, fn) => { const keep = {}; for (const k of Object.keys(vars)) { keep[k] = process.env[k]; if (vars[k] === undefined) delete process.env[k]; else process.env[k] = vars[k]; } try { return fn(); } finally { for (const k of Object.keys(keep)) { if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k]; } } };
+// 원래 값을 모두 먼저 기억한 뒤 바꾼다 — Windows 는 PATH 와 Path 가 같은 값이라, 하나씩 기억·변경하면 두 번째 이름이 이미 바뀐 값을
+// 기억해 복원 뒤에도 PATH 가 빈 폴더로 남는다(그 뒤 시험들이 taskkill 을 못 찾아 시간 초과 종료가 조용히 실패 — 묶음 A-3 시험에서 발견).
+const withEnv = (vars, fn) => { const keys = Object.keys(vars); const keep = {}; for (const k of keys) keep[k] = process.env[k]; for (const k of keys) { if (vars[k] === undefined) delete process.env[k]; else process.env[k] = vars[k]; } try { return fn(); } finally { for (const k of keys) { if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k]; } } };
 
 t("[A-2] 동기 형태 — 새 방식 인자·빈 임시 작업 폴더·환경값 정리 · 모델 실행 직전/시작 뒤 알림 순서 · 결과 봉투 글/틀 답", () => {
   clearLog();
@@ -562,6 +573,147 @@ t("[A-2 구현 검증 1회차 blocker②] 정찰·자동 보강도 실행 방식
   assert.ok(sr.length === 1 && sr[0].flow === "map-scout" && sr[0].tier === "old" && sr[0].version === "2.0.22" && sr[0].repoKey === CL.repoKeyForStats(repo), JSON.stringify(sr));
   const usage2 = fs.readFileSync(path.join(HOME, "stats", "scout-usage.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
   assert.ok(usage2.some((u) => u.callId === sr[0].callId && u.flow === "map-scout"), "정찰도 같은 호출 번호의 사용량 행과 이어짐");
+});
+
+// ── [묶음 A-3 · §1-10] 안전장치 거절 → 다른 모델로 한 번 · 다음 호출은 원래 모델 ──────────────────────────────
+const callsP = () => readLog().filter((x) => x.args.includes("-p"));
+const FAKE_NOMODEL = path.join(FIX, "fake-nomodel.js");
+fs.writeFileSync(FAKE_NOMODEL, fakeSrc("nomodel", NEW_HELP.filter((f) => f !== "--model"), "2.1.200"));
+const noRetryFile = () => { try { fs.unlinkSync(CH.RETRY_MODEL_FILE); } catch { /* 없음 */ } };
+
+t("[A-3] 거절이면 다른 모델로 한 번 더 — 첫 실행엔 모델 지정 없음 · 재시도에만 --model · 성공 답·거절 기록 · ★다음 호출은 다시 원래 모델(지정 없음)", async () => {
+  noRetryFile(); clearLog();
+  const schema = { type: "object" };
+  const env = baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW, FAKE_MODE: "refuse-nomodel", FAKE_SO: '{"results":[]}' });
+  const r = await run(env, schema);
+  assert.ok(r.ok && r.output === '{"results":[]}', JSON.stringify(r));
+  assert.deepStrictEqual(r.runner.refusal, { by: "fake-default", retryModel: CH.RETRY_MODEL_DEFAULT, retryHow: "default", retry: "ok", used: CH.RETRY_MODEL_DEFAULT });
+  const calls = callsP();
+  assert.strictEqual(calls.length, 2, "두 번 실행");
+  assert.ok(!calls[0].args.includes("--model"), "첫 실행=모델 지정 없음");
+  assert.deepStrictEqual(calls[1].args.slice(-2), ["--model", CH.RETRY_MODEL_DEFAULT], "재시도에만 --model");
+  assert.deepStrictEqual(calls[1].args.slice(0, -2), calls[0].args, "재시도=같은 인자+모델만");
+  assert.ok(calls[0].cwd !== calls[1].cwd && calls.every((c) => c.files.length === 0 && !fs.existsSync(c.cwd)), "실행마다 새 빈 임시 폴더·끝나면 삭제");
+  // ★ 원래 모델 복귀 — 이어지는 호출(평소 말·다시 거절되는 말) 모두 첫 실행은 모델 지정 없음
+  clearLog();
+  const n1 = await run(baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW, FAKE_SO: '{"results":[]}' }), schema);
+  assert.ok(n1.ok, JSON.stringify(n1));
+  assert.deepStrictEqual(n1.runner, { tier: "new", version: "2.1.296", how: "env:CODEX_BRIDGE_CLAUDE_BIN" }, "평소 호출=거절 칸 없음·기록 모양 그대로");
+  const n2 = await run(env, schema);
+  assert.ok(n2.ok && n2.runner.refusal.retry === "ok");
+  const c2 = callsP();
+  assert.strictEqual(c2.length, 3);
+  assert.ok(!c2[0].args.includes("--model") && !c2[1].args.includes("--model"), "★다음 호출들의 첫 실행=모델 지정 없음(원래 모델)");
+  assert.ok(c2[2].args.includes("--model"), "거절된 말만 다시 재시도");
+});
+
+t("[A-3] 재시도도 거절=refused(call-failed 와 구분) · 재시도는 한 번만 · 같은 이름·--model 없는 판·옛 방식(판별 근거 없음)=재시도 안 함", async () => {
+  noRetryFile();
+  const schema = { type: "object" };
+  clearLog();
+  const a = await run(baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW, FAKE_MODE: "refuse-all" }), schema);
+  assert.ok(!a.ok && a.key === "refused" && a.detail.startsWith("by=fake-default retry=" + CH.RETRY_MODEL_DEFAULT + ":refused"), a.detail);
+  assert.ok(a.runner.refusal.retry === "refused" && a.runner.refusal.used === CH.RETRY_MODEL_DEFAULT);
+  assert.strictEqual(callsP().length, 2, "재시도는 한 번만");
+  clearLog();
+  const s = await run(baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW, FAKE_MODE: "refuse-all", CODEX_BRIDGE_CLAUDE_RETRY_MODEL: "fake-default" }), schema);
+  assert.ok(!s.ok && s.key === "refused" && s.runner.refusal.retry === "skipped-same-model", JSON.stringify(s));
+  assert.strictEqual(callsP().length, 1, "거절한 모델과 같은 이름=재시도 안 함");
+  clearLog();
+  const m = await run(baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NOMODEL, FAKE_MODE: "refuse-nomodel" }), schema);
+  assert.ok(!m.ok && m.key === "refused" && m.runner.refusal.retry === "skipped-no-model-option", JSON.stringify(m));
+  assert.strictEqual(callsP().length, 1, "--model 없는 판=재시도 안 함");
+  clearLog();
+  const o = await run(baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_OLD, FAKE_MODE: "refuse-all" }), schema);
+  assert.ok(!o.ok && o.key === "call-failed" && !o.runner.refusal, "옛 방식=글 출력이라 거절 판별 없음(종전 그대로)");
+  assert.strictEqual(callsP().length, 1);
+  assert.strictEqual(CH.refusalOf("new", JSON.stringify({ stop_reason: "end_turn", result: "API Error: safeguards flagged" })), null, "★안내 문구가 아니라 봉투의 거절 표지로만 판별");
+});
+
+t("[A-3] 시간 상한은 재시도까지 합친 전체 · 재시도 중 취소하면 바로 끊김", async () => {
+  noRetryFile();
+  const schema = { type: "object" };
+  clearLog();
+  const t1 = Date.now();
+  const sl = await run(baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW, FAKE_MODE: "refuse-slow", FAKE_SLEEP_MS: "1200" }), schema, 2500);
+  assert.ok(!sl.ok && sl.key === "refused" && ["no-time", "failed"].includes(sl.runner.refusal.retry), JSON.stringify(sl));
+  const took = Date.now() - t1;
+  assert.ok(took < 2500 + 5000, "재시도가 상한을 늘리지 않음(종료 처리 여유만) took=" + took + " " + JSON.stringify(sl) + " " + JSON.stringify(callsP().map((x) => x.args.filter((a) => a.startsWith("--")))));
+  clearLog();
+  const h = CH.runClaudeHelper({ prompt: "x", timeoutMs: 30000, schema, env: baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW, FAKE_MODE: "refuse-then-sleep" }) });
+  const tC = Date.now();
+  while (!callsP().some((x) => x.args.includes("--model")) && Date.now() - tC < 15000) await new Promise((res) => setTimeout(res, 50));
+  assert.ok(callsP().some((x) => x.args.includes("--model")), "재시도 시작됨");
+  h.cancel();
+  const cc = await h.promise;
+  assert.ok(!cc.ok && cc.key === "cancelled" && cc.cancelled && cc.runner.refusal.retry === "cancelled", JSON.stringify(cc));
+  assert.ok(Date.now() - tC < 15000, "취소=바로 끝남");
+});
+
+t("[A-3] 재시도 모델 — 덮어쓰기 환경값 > 설정 파일 첫 줄 > 기본 계열 별칭 · 이상한 값=기본값 · ★실행기는 그 파일을 읽기만(어디에도 저장하지 않음)", async () => {
+  noRetryFile();
+  assert.deepStrictEqual(CH.retryModelOf(baseEnv({})), { model: CH.RETRY_MODEL_DEFAULT, how: "default" });
+  fs.writeFileSync(CH.RETRY_MODEL_FILE, "claude-x-test\nignored\n");
+  assert.deepStrictEqual(CH.retryModelOf(baseEnv({})), { model: "claude-x-test", how: "file" });
+  assert.deepStrictEqual(CH.retryModelOf(baseEnv({ CODEX_BRIDGE_CLAUDE_RETRY_MODEL: "opus" })), { model: "opus", how: "env" });
+  assert.deepStrictEqual(CH.retryModelOf(baseEnv({ CODEX_BRIDGE_CLAUDE_RETRY_MODEL: "bad model;x" })), { model: CH.RETRY_MODEL_DEFAULT, how: "default-invalid-env" });
+  fs.writeFileSync(CH.RETRY_MODEL_FILE, "--dangerous");
+  assert.deepStrictEqual(CH.retryModelOf(baseEnv({})), { model: CH.RETRY_MODEL_DEFAULT, how: "default-invalid-file" }, "옵션처럼 보이는 값=기본값");
+  fs.writeFileSync(CH.RETRY_MODEL_FILE, "claude-x-test");
+  const before = fs.readFileSync(CH.RETRY_MODEL_FILE, "utf8"), mt = fs.statSync(CH.RETRY_MODEL_FILE).mtimeMs;
+  clearLog();
+  const r = await run(baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW, FAKE_MODE: "refuse-nomodel" }), { type: "object" });
+  assert.ok(r.ok && r.runner.refusal.retryModel === "claude-x-test" && r.runner.refusal.retryHow === "file", JSON.stringify(r));
+  assert.deepStrictEqual(callsP()[1].args.slice(-2), ["--model", "claude-x-test"]);
+  assert.ok(fs.readFileSync(CH.RETRY_MODEL_FILE, "utf8") === before && fs.statSync(CH.RETRY_MODEL_FILE).mtimeMs === mt, "설정 파일 그대로");
+  const src = fs.readFileSync(path.join(ROOT, "bridge", "claude-helper.js"), "utf8");
+  assert.ok(!/(writeFileSync|atomicWrite|appendFileSync|renameSync)\(\s*RETRY_MODEL_FILE/.test(src), "★실행기 원본에 재시도 모델 파일 쓰기 없음");
+  assert.ok(!fs.readFileSync(CH.CAP_CACHE_FILE, "utf8").includes("claude-x-test"), "기능 캐시에 모델 기록 없음");
+  // ★ 파일을 지우면 다음 호출은 기본값 — 실행기 안에 기억해 둔 값 없음
+  noRetryFile(); clearLog();
+  const r2 = await run(baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW, FAKE_MODE: "refuse-nomodel" }), { type: "object" });
+  assert.ok(r2.ok && r2.runner.refusal.retryModel === CH.RETRY_MODEL_DEFAULT && r2.runner.refusal.retryHow === "default");
+});
+
+t("[A-3] 동기 형태도 같은 규칙 — 거절→다른 모델 한 번 · 호출 기록 알림은 첫 실행에만 · 다음 호출은 원래 모델 · 재시도도 거절=refused · 실행 기록에 거절 칸(거절 때만)", () => {
+  noRetryFile(); clearLog();
+  const ev = [];
+  const r = CH.runClaudeHelperSync({ prompt: "x", timeoutMs: 20000, env: baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW, FAKE_MODE: "refuse-nomodel", FAKE_RESULT: "지도 본문" }), beforeSpawn: () => ev.push("before"), afterSpawn: () => ev.push("after") });
+  assert.ok(r.ok && r.output === "지도 본문" && r.started && r.runner.refusal.retry === "ok", JSON.stringify(r).slice(0, 300));
+  assert.deepStrictEqual(ev, ["before", "after"], "알림은 첫 실행에만(논리 호출 1건)");
+  const c = callsP();
+  assert.ok(c.length === 2 && !c[0].args.includes("--model") && c[1].args.includes("--model"));
+  clearLog();
+  const n = CH.runClaudeHelperSync({ prompt: "x", timeoutMs: 20000, env: baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW, FAKE_RESULT: "평소" }) });
+  assert.ok(n.ok && !n.runner.refusal && !callsP()[0].args.includes("--model"), "★다음 호출=원래 모델");
+  const a = CH.runClaudeHelperSync({ prompt: "x", timeoutMs: 20000, env: baseEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW, FAKE_MODE: "refuse-all" }) });
+  assert.ok(!a.ok && a.key === "refused" && a.runner.refusal.retry === "refused" && a.started, JSON.stringify(a).slice(0, 300));
+  const rowsOf = () => fs.readFileSync(CH.HELPER_RUNS_FILE, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  CH.recordHelperRun({ callId: "c-a3-ref", flow: "map-scout", repoKey: null, r: a });
+  const ra = rowsOf().slice(-1)[0];
+  assert.ok(ra.callId === "c-a3-ref" && ra.key === "refused" && ra.refusal && ra.refusal.retry === "refused" && ra.refusal.by === "fake-default", JSON.stringify(ra));
+  CH.recordHelperRun({ callId: "c-a3-ok", flow: "map-scout", repoKey: null, r: n });
+  assert.ok(!("refusal" in rowsOf().slice(-1)[0]), "평소 호출 기록=거절 칸 없음");
+});
+
+t("[A-3] 기록 모양·배선 — 평소 3칸·거절 때만 refusal 칸 · 여러 페이지면 거절 페이지 먼저 · 서고 선별 두 곳·분류·정리 담당이 같은 함수 · 정찰 실패 사유에 refused", () => {
+  assert.strictEqual(process.env.PATH, PATH0, "앞 시험들이 PATH 를 원래대로 돌려놓음(withEnv — PATH·Path 동시 지정)");
+  const plain = { tier: "new", version: "1", how: "h" };
+  const ref = { tier: "new", version: "1", how: "h", refusal: { by: "m", retryModel: "s", retryHow: "default", retry: "ok", used: "s" } };
+  assert.deepStrictEqual(CH.runnerMetaOf({ runner: plain }), plain);
+  assert.strictEqual(CH.runnerMetaOf({ ok: false, key: "x" }), null);
+  assert.deepStrictEqual(CH.runnerMetaOf({ runner: ref }), ref);
+  assert.deepStrictEqual(CH.runnerMetaOfPages([{ r: { runner: plain } }, { r: { runner: ref } }]), ref, "거절 페이지 먼저");
+  assert.deepStrictEqual(CH.runnerMetaOfPages([{ r: { runner: plain } }, { r: {} }]), plain);
+  assert.strictEqual(CH.runnerMetaOfPages([]), null);
+  const rd = (f) => fs.readFileSync(path.join(ROOT, "bridge", f), "utf8");
+  assert.ok(rd("codex-bridge.js").includes(".runnerMetaOfPages(run.results)") && rd("ask-job-worker.js").includes(".runnerMetaOfPages(run9.results)"), "서고 선별 두 곳");
+  assert.ok(rd("classify.js").includes("CHx.runnerMetaOf(r)") && rd("curation.js").includes("CHx.runnerMetaOf(r)"), "분류·정리 담당");
+  assert.ok(/다른 모델로 다시 시도했지만 그 모델도 거절/.test(CH.refusalNote({ runner: { refusal: { retry: "refused" } } }).ko));
+  const SP = require("../bridge/scout-providers.js");
+  noRetryFile();
+  const r = withEnv({ CODEX_BRIDGE_CLAUDE_BIN: FAKE_NEW, FAKE_MODE: "refuse-all", CLAUDE_PROJECT_DIR: undefined, CLAUDE_CODE_SESSION_ID: undefined, CODEX_BRIDGE_CLAUDE_RETRY_MODEL: undefined }, () => SP.PROVIDERS.self.invoke({ preface: "", md: "M" }));
+  assert.ok(!r.ok && r.key === "call-failed" && /^refused by=fake-default/.test(r.detail) && r.helper.key === "refused" && r.helper.runner.refusal.retry === "refused", JSON.stringify(r).slice(0, 300));
 });
 
 (async () => {

@@ -7,6 +7,8 @@
 //      빈 임시 작업 폴더+현재 대화에 묶는 환경값 제거. 새 기능이 없는 판뿐이면 옛 방식=밖으로 나가는 길을 막는 최소 격리(MCP 끔·사용자 설정
 //      안 읽음 → 사용자 훅 꺼짐·도구 끔·빈 작업 폴더)를 갖출 때만 실행하고, 그것도 못 갖추면 실행하지 않는다(claude-too-old).
 //   ③ 답 꺼내기: 새 방식은 결과 봉투(JSON)의 정해진 틀 답(structured_output)을 한 줄 JSON 으로 — 호출자의 엄격 판독기는 그대로 둔다(판독 완화 없음).
+//   ④ [묶음 A-3 · §1-10] 안전장치 거절(봉투 stop_reason=refusal)이면 다른 모델로 한 번 더 — 그 모델은 재시도 실행의 인자에만 붙고 어디에도
+//      저장하지 않는다(매 호출의 첫 실행은 언제나 모델 지정 없이 → 다음 호출은 반드시 원래 모델). 재시도까지 못 풀면 실패 이유 'refused'.
 // 담당 결정(Claude 차례→Claude)·프롬프트 문장은 이 모듈이 바꾸지 않는다.
 const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
@@ -20,6 +22,11 @@ const OLD_FLAGS = ["--output-format", "--strict-mcp-config", "--setting-sources"
 const CLAUDE_BIN_FILE = path.join(CL.BRIDGE_DIR, "claude-bin.txt");
 const CAP_CACHE_FILE = path.join(CL.BRIDGE_DIR, "claude-helper-cap.json");
 const ALARM_KIND = "claude-helper-old";
+// [묶음 A-3] 거절 재시도 모델 — 시험·사용자 덮어쓰기(환경값) > 설정 파일 첫 줄 > 기본값. 기본값은 Claude Code 가 받는 계열 별칭(그 계열의
+// 최신 모델로 풀린다 · 판 번호 고정 아님). 이 모듈은 이 파일을 읽기만 한다.
+const RETRY_MODEL_FILE = path.join(CL.BRIDGE_DIR, "claude-retry-model.txt");
+const RETRY_MODEL_DEFAULT = "sonnet";
+const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,79}$/;
 // 현재 대화에 묶는 값 — 도우미가 부모 대화의 세션·연결 통로·진입점으로 붙지 않게 뺀다. 로그인 위치(CLAUDE_CONFIG_DIR)·API 키·프록시·
 // Windows 셸 경로 같은 사용자 환경은 남긴다(접두어 일괄 삭제는 CLAUDE_CODE_OAUTH_TOKEN·CLAUDE_CODE_GIT_BASH_PATH 같은 인증·실행 환경까지 지운다).
 const SESSION_BOUND_ENV = ["CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT", "CLAUDE_PROJECT_DIR", "AI_AGENT", "CLAUDE_AGENT_SDK_VERSION",
@@ -186,7 +193,7 @@ async function resolveClaudeHelper(env, ctl) {
     if (ctl && ctl.cancelled) return { ok: false, key: "cancelled", detail: "" };
     if (caps && caps.interrupted) return { ok: false, key: "call-failed", detail: "capability-timeout" };
     const it = Object.assign({}, c, { inv, caps, tier: tierOf(caps, inv) }); seen.push(it);
-    if (it.tier === "new") return { ok: true, tier: "new", path: it.path, how: it.how, inv, version: (caps && caps.version) || "" };
+    if (it.tier === "new") return { ok: true, tier: "new", path: it.path, how: it.how, inv, version: (caps && caps.version) || "", canModel: caps.flags.includes("--model") };
     if (it.tier === "old" && !old) old = it;
   }
   if (old) return { ok: true, tier: "old", path: old.path, how: old.how, inv: old.inv, version: (old.caps && old.caps.version) || "" };
@@ -208,7 +215,7 @@ function resolveClaudeHelperSync(env, deadline) {
     const caps = capabilitiesOfSync(c.path, inv, e, deadline);
     if (caps && caps.interrupted) return { ok: false, key: "call-failed", detail: "capability-timeout" };
     const it = Object.assign({}, c, { inv, caps, tier: tierOf(caps, inv) }); seen.push(it);
-    if (it.tier === "new") return { ok: true, tier: "new", path: it.path, how: it.how, inv, version: (caps && caps.version) || "" };
+    if (it.tier === "new") return { ok: true, tier: "new", path: it.path, how: it.how, inv, version: (caps && caps.version) || "", canModel: caps.flags.includes("--model") };
     if (it.tier === "old" && !old) old = it;
   }
   if (old) return { ok: true, tier: "old", path: old.path, how: old.how, inv: old.inv, version: (old.caps && old.caps.version) || "" };
@@ -237,8 +244,61 @@ function extractAnswer(tier, stdout, schema) {
   return txt ? { ok: true, output: txt } : { ok: false, key: "call-failed", detail: "empty" };
 }
 
+// 실행 1회의 종료 판정(종전 규칙 그대로) — 종료 코드≠0=실패(봉투의 subtype 만 덧붙임) · 0=답 꺼내기
+function judgeExit(tier, code, out, err, schema) {
+  if (code !== 0) {
+    const o = tier === "new" ? envelopeOf(out) : null; const sub = String((o && o.subtype) || "");
+    return { ok: false, key: "call-failed", detail: `exit=${code} ` + (sub ? sub + " " : "") + String(err || "").slice(-200) };
+  }
+  const a = extractAnswer(tier, out, schema);
+  return a.ok ? { ok: true, output: a.output } : { ok: false, key: a.key, detail: a.detail };
+}
+
+// ── [묶음 A-3 · §1-10] 안전장치 거절 → 다른 모델로 한 번 ──────────────────────────────────────────────
+function retryModelOf(env) {
+  const e = env || process.env;
+  let v = String(e.CODEX_BRIDGE_CLAUDE_RETRY_MODEL || "").trim(), how = "env";
+  if (!v) { how = "file"; try { v = String(fs.readFileSync(RETRY_MODEL_FILE, "utf8")).split(/\r?\n/)[0].trim(); } catch { v = ""; } }
+  if (!v) return { model: RETRY_MODEL_DEFAULT, how: "default" };
+  if (!MODEL_NAME_RE.test(v)) return { model: RETRY_MODEL_DEFAULT, how: "default-invalid-" + how }; // 이상한 값=기본값(인자로 넘기지 않음)
+  return { model: v, how };
+}
+function envelopeOf(stdout) { try { const o = JSON.parse(String(stdout || "").trim()); return o && typeof o === "object" && !Array.isArray(o) ? o : null; } catch { return null; } }
+function modelsOf(o) { const mu = o && o.modelUsage; return mu && typeof mu === "object" && !Array.isArray(mu) ? Object.keys(mu).map((k) => String(k).slice(0, 80)) : []; }
+// 거절 판별 — 새 방식 봉투의 stop_reason=refusal 만(안내 문구 맞추기 없음). 옛 방식(글 출력)은 판별 근거가 없어 null(종전 그대로 실패 처리).
+function refusalOf(tier, stdout) {
+  if (tier !== "new") return null;
+  const o = envelopeOf(stdout);
+  return o && o.stop_reason === "refusal" ? { by: modelsOf(o) } : null;
+}
+// 재시도 계획 — 건너뜀: no-model-option(실행 파일 도움말에 --model 없음) · same-model(거절한 모델과 정확히 같은 이름)
+function retryPlanOf(rz, ref, env) {
+  const rm = retryModelOf(env);
+  if (!rz.canModel) return { skip: "no-model-option", model: rm.model, how: rm.how };
+  if (ref.by.includes(rm.model)) return { skip: "same-model", model: rm.model, how: rm.how };
+  return { model: rm.model, how: rm.how };
+}
+function refusalMark(ref, plan, retry, used) {
+  return Object.assign({ by: ref.by.join("+"), retryModel: plan.model, retryHow: plan.how, retry }, used ? { used } : {});
+}
+function refusedResult(ref, plan, retry, more) {
+  return { ok: false, key: "refused", detail: "by=" + (ref.by.join("+") || "?") + " retry=" + plan.model + ":" + retry + (more ? " " + String(more).slice(0, 200) : "") };
+}
+// 두 번째 실행(raw2) 판정 — 공용. 반환 {res, mark}
+function judgeRetry(rz, ref, plan, raw2, schema) {
+  if (raw2.noTime) return { res: refusedResult(ref, plan, "no-time"), mark: refusalMark(ref, plan, "no-time") };
+  const bad = raw2.prepError || raw2.spawnError || raw2.runError;
+  if (bad) return { res: refusedResult(ref, plan, "failed", bad), mark: refusalMark(ref, plan, "failed") };
+  const ref2 = refusalOf(rz.tier, raw2.out);
+  if (ref2) return { res: refusedResult(ref, plan, "refused"), mark: refusalMark(ref, plan, "refused", ref2.by.join("+")) };
+  const used = modelsOf(envelopeOf(raw2.out)).join("+");
+  const j = judgeExit(rz.tier, raw2.code, raw2.out, raw2.err, schema);
+  if (!j.ok) return { res: refusedResult(ref, plan, "failed", j.key + " " + (j.detail || "")), mark: refusalMark(ref, plan, "failed", used) };
+  return { res: j, mark: refusalMark(ref, plan, "ok", used) };
+}
+
 // 페이지 1회 실행 — 반환 {promise, cancel}(즉시 반환). promise 는 {ok, output, key, detail, durationMs, cancelled, runner}로 정착(selector-runner 와 같은 모양).
-// 시간 상한(timeoutMs)은 기능 확인과 모델 실행을 합친 전체에 걸리고, 취소는 어느 단계에서든 지금 도는 자식 프로세스를 끊는다.
+// 시간 상한(timeoutMs)은 기능 확인과 모델 실행(거절 재시도 포함)을 합친 전체에 걸리고, 취소는 어느 단계에서든 지금 도는 자식 프로세스를 끊는다.
 function runClaudeHelper({ prompt, timeoutMs, schema, env }) {
   const t0 = Date.now();
   const ctl = { deadline: t0 + Math.max(1000, Number(timeoutMs) || 1000), cancelled: false, child: null };
@@ -253,34 +313,41 @@ function runClaudeHelper({ prompt, timeoutMs, schema, env }) {
     if (!rz.ok) { runner = { tier: "", version: (rz.versions || []).filter(Boolean).join(","), how: "" }; return fin({ ok: false, key: rz.key, detail: rz.detail }); }
     runner = { tier: rz.tier, version: rz.version, how: rz.how };
     if (ctl.cancelled) return fin({ ok: false, key: "cancelled", detail: "" });
-    const left = remainingMs(ctl);
-    if (left <= 0) return fin({ ok: false, key: "call-failed", detail: "timeout before model run" });
-    let tmpCwd = null;
-    try { tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), "claude-helper-")); } catch (e) { return fin({ ok: false, key: "spawn-prep-failed", detail: "tmp " + String((e && e.message) || e) }); }
-    const cleanup = () => { try { fs.rmSync(tmpCwd, { recursive: true, force: true }); } catch { /* 임시 잔재 무해 */ } };
-    const args = [...rz.inv.args, ...helperArgs(rz.tier, rz.tier === "new" ? schema : null)];
-    return await new Promise((resolve) => {
-      let out = "", err = "", child;
-      try { child = spawn(rz.inv.file, args, { cwd: tmpCwd, env: spawnEnvFor(rz.inv, base), windowsHide: true, shell: rz.inv.viaShell, stdio: ["pipe", "pipe", "pipe"] }); }
-      catch (e) { cleanup(); return resolve(fin({ ok: false, key: "spawn-failed", detail: String((e && e.message) || e) })); }
+    const sch = rz.tier === "new" ? schema : null;
+    // 실행 1회 — 새 빈 임시 작업 폴더 · 남은 시간 안 · 취소되면 끊김. extra=이 실행에만 붙는 인자(재시도 모델) — 기본 인자 배열은 매번 새로 만든다.
+    const once = (extra) => new Promise((resolve) => {
+      const left = remainingMs(ctl);
+      if (left <= 0) return resolve({ noTime: true });
+      let tmpCwd = null;
+      try { tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), "claude-helper-")); } catch (e) { return resolve({ prepError: "tmp " + String((e && e.message) || e) }); }
+      const cleanup = () => { try { fs.rmSync(tmpCwd, { recursive: true, force: true }); } catch { /* 임시 잔재 무해 */ } };
+      let out = "", err = "", child, done = false;
+      const end = (x) => { if (done) return; done = true; resolve(x); };
+      try { child = spawn(rz.inv.file, [...rz.inv.args, ...helperArgs(rz.tier, sch), ...extra], { cwd: tmpCwd, env: spawnEnvFor(rz.inv, base), windowsHide: true, shell: rz.inv.viaShell, stdio: ["pipe", "pipe", "pipe"] }); }
+      catch (e) { cleanup(); return end({ spawnError: String((e && e.message) || e) }); }
       ctl.child = child;
-      if (ctl.cancelled) killTree(child.pid); // 확인과 실행 사이에 취소된 경우
+      if (ctl.cancelled) killTree(child.pid); // 확인과 실행 사이(또는 두 실행 사이)에 취소된 경우
       const timer = setTimeout(() => { killTree(child.pid); }, left);
       child.stdout.on("data", (d) => { out += String(d); });
       child.stderr.on("data", (d) => { err += String(d); });
-      child.on("error", (e) => { clearTimeout(timer); cleanup(); resolve(fin({ ok: false, key: "spawn-failed", detail: String((e && e.message) || e) })); });
-      child.on("close", (code) => {
-        clearTimeout(timer); cleanup();
-        if (ctl.cancelled) return resolve(fin({ ok: false, key: "cancelled", detail: "" }));
-        if (code !== 0) {
-          let sub = ""; if (rz.tier === "new") { try { const o = JSON.parse(String(out).trim()); sub = String((o && o.subtype) || ""); } catch { sub = ""; } }
-          return resolve(fin({ ok: false, key: "call-failed", detail: `exit=${code} ` + (sub ? sub + " " : "") + String(err || "").slice(-200) }));
-        }
-        const a = extractAnswer(rz.tier, out, rz.tier === "new" ? schema : null);
-        resolve(fin(a.ok ? { ok: true, output: a.output } : { ok: false, key: a.key, detail: a.detail }));
-      });
+      child.on("error", (e) => { clearTimeout(timer); cleanup(); end({ spawnError: String((e && e.message) || e) }); });
+      child.on("close", (code) => { clearTimeout(timer); cleanup(); end({ code, out, err }); });
       try { child.stdin.end(String(prompt || "")); } catch { /* close 핸들러가 실패 정착 */ }
     });
+    const r1 = await once([]); // 첫 실행=언제나 모델 지정 없음(원래 모델)
+    if (r1.noTime) return fin({ ok: false, key: "call-failed", detail: "timeout before model run" });
+    if (r1.prepError) return fin({ ok: false, key: "spawn-prep-failed", detail: r1.prepError });
+    if (r1.spawnError) return fin({ ok: false, key: "spawn-failed", detail: r1.spawnError });
+    if (ctl.cancelled) return fin({ ok: false, key: "cancelled", detail: "" });
+    const ref = refusalOf(rz.tier, r1.out);
+    if (!ref) return fin(judgeExit(rz.tier, r1.code, r1.out, r1.err, sch));
+    const plan = retryPlanOf(rz, ref, base);
+    if (plan.skip) { runner = Object.assign({}, runner, { refusal: refusalMark(ref, plan, "skipped-" + plan.skip) }); return fin(refusedResult(ref, plan, "skipped-" + plan.skip)); }
+    const r2 = await once(["--model", plan.model]); // 이 실행에만 — 저장하지 않음
+    if (ctl.cancelled) { runner = Object.assign({}, runner, { refusal: refusalMark(ref, plan, "cancelled") }); return fin({ ok: false, key: "cancelled", detail: "" }); }
+    const jr = judgeRetry(rz, ref, plan, r2, sch);
+    runner = Object.assign({}, runner, { refusal: jr.mark });
+    return fin(jr.res);
   })();
   return { promise, cancel };
 }
@@ -297,25 +364,35 @@ function runClaudeHelperSync({ prompt, timeoutMs, schema, env, beforeSpawn, afte
   try { rz = resolveClaudeHelperSync(base, deadline); } catch (e) { return fin({ ok: false, key: "spawn-prep-failed", detail: String((e && e.message) || e) }); }
   if (!rz.ok) { runner = { tier: "", version: (rz.versions || []).filter(Boolean).join(","), how: "" }; return fin({ ok: false, key: rz.key, detail: rz.detail }); }
   runner = { tier: rz.tier, version: rz.version, how: rz.how };
-  const left = deadline - Date.now();
-  if (left <= 0) return fin({ ok: false, key: "call-failed", detail: "timeout before model run" });
-  let tmpCwd = null;
-  try { tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), "claude-helper-")); } catch (e) { return fin({ ok: false, key: "spawn-prep-failed", detail: "tmp " + String((e && e.message) || e) }); }
-  const args = [...rz.inv.args, ...helperArgs(rz.tier, rz.tier === "new" ? schema : null)];
-  if (typeof beforeSpawn === "function") { try { beforeSpawn(); } catch { /* 기록 실패=실행 무영향 */ } }
-  let r;
-  try { r = spawnSync(rz.inv.file, args, { input: String(prompt || ""), encoding: "utf8", timeout: left, windowsHide: true, shell: rz.inv.viaShell, cwd: tmpCwd, env: spawnEnvFor(rz.inv, base), maxBuffer: 1024 * 1024 * 64 }); }
-  catch (e) { try { fs.rmSync(tmpCwd, { recursive: true, force: true }); } catch {} return fin({ ok: false, key: "spawn-failed", detail: String((e && e.message) || e) }); }
-  try { fs.rmSync(tmpCwd, { recursive: true, force: true }); } catch { /* 임시 잔재 무해 */ }
-  started = Number.isSafeInteger(r.pid) && r.pid > 0;
-  if (started && typeof afterSpawn === "function") { try { afterSpawn(r.pid); } catch { /* 기록 실패=실행 무영향 */ } }
-  if (r.error) return fin({ ok: false, key: "call-failed", detail: (r.error.code === "ETIMEDOUT" ? "timeout" : String(r.error.code || r.error.message || r.error)) + " " + String(r.stderr || "").slice(-200) });
-  if (r.status !== 0) {
-    let sub = ""; if (rz.tier === "new") { try { const o = JSON.parse(String(r.stdout || "").trim()); sub = String((o && o.subtype) || ""); } catch { sub = ""; } }
-    return fin({ ok: false, key: "call-failed", detail: `exit=${r.status} ` + (sub ? sub + " " : "") + String(r.stderr || "").slice(-200) });
-  }
-  const a = extractAnswer(rz.tier, r.stdout, rz.tier === "new" ? schema : null);
-  return fin(a.ok ? { ok: true, output: a.output } : { ok: false, key: a.key, detail: a.detail });
+  const sch = rz.tier === "new" ? schema : null;
+  // 실행 1회(동기) — 새 빈 임시 작업 폴더 · 남은 시간 안. 호출 기록 알림은 첫 실행에만(논리 호출 1건=기록 1건 · 재시도는 같은 호출).
+  const onceSync = (extra, first) => {
+    const left = deadline - Date.now();
+    if (left <= 0) return { noTime: true };
+    let tmpCwd = null;
+    try { tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), "claude-helper-")); } catch (e) { return { prepError: "tmp " + String((e && e.message) || e) }; }
+    if (first && typeof beforeSpawn === "function") { try { beforeSpawn(); } catch { /* 기록 실패=실행 무영향 */ } }
+    let r;
+    try { r = spawnSync(rz.inv.file, [...rz.inv.args, ...helperArgs(rz.tier, sch), ...extra], { input: String(prompt || ""), encoding: "utf8", timeout: left, windowsHide: true, shell: rz.inv.viaShell, cwd: tmpCwd, env: spawnEnvFor(rz.inv, base), maxBuffer: 1024 * 1024 * 64 }); }
+    catch (e) { try { fs.rmSync(tmpCwd, { recursive: true, force: true }); } catch {} return { spawnError: String((e && e.message) || e) }; }
+    try { fs.rmSync(tmpCwd, { recursive: true, force: true }); } catch { /* 임시 잔재 무해 */ }
+    const st = Number.isSafeInteger(r.pid) && r.pid > 0;
+    if (first) { started = st; if (st && typeof afterSpawn === "function") { try { afterSpawn(r.pid); } catch { /* 기록 실패=실행 무영향 */ } } }
+    if (r.error) return { runError: (r.error.code === "ETIMEDOUT" ? "timeout" : String(r.error.code || r.error.message || r.error)) + " " + String(r.stderr || "").slice(-200) };
+    return { code: r.status, out: r.stdout || "", err: r.stderr || "" };
+  };
+  const r1 = onceSync([], true); // 첫 실행=언제나 모델 지정 없음(원래 모델)
+  if (r1.noTime) return fin({ ok: false, key: "call-failed", detail: "timeout before model run" });
+  if (r1.prepError) return fin({ ok: false, key: "spawn-prep-failed", detail: r1.prepError });
+  if (r1.spawnError) return fin({ ok: false, key: "spawn-failed", detail: r1.spawnError });
+  if (r1.runError) return fin({ ok: false, key: "call-failed", detail: r1.runError });
+  const ref = refusalOf(rz.tier, r1.out);
+  if (!ref) return fin(judgeExit(rz.tier, r1.code, r1.out, r1.err, sch));
+  const plan = retryPlanOf(rz, ref, base);
+  if (plan.skip) { runner = Object.assign({}, runner, { refusal: refusalMark(ref, plan, "skipped-" + plan.skip) }); return fin(refusedResult(ref, plan, "skipped-" + plan.skip)); }
+  const jr = judgeRetry(rz, ref, plan, onceSync(["--model", plan.model], false), sch); // 이 실행에만 — 저장하지 않음
+  runner = Object.assign({}, runner, { refusal: jr.mark });
+  return fin(jr.res);
 }
 
 // [묶음 A-2 · A5] 정찰·자동 보강의 실행 방식·판 기록 — 사용량 장부(stats/scout-usage.jsonl · 칸이 정확히 정해진 통계 계약)는 그대로 두고,
@@ -324,8 +401,32 @@ const HELPER_RUNS_FILE = path.join(CL.STATS_DIR, "claude-helper-runs.jsonl");
 function recordHelperRun({ callId, flow, repoKey, r }) {
   const runner = (r && r.runner) || {};
   const row = { schema: "claude-helper-run-v1", ts: new Date().toISOString(), callId: String(callId || ""), flow: String(flow || ""), repoKey: repoKey ? String(repoKey) : null,
-    tier: String(runner.tier || ""), version: String(runner.version || ""), how: String(runner.how || ""), ok: !!(r && r.ok), key: r && !r.ok ? String(r.key || "") : "", started: !!(r && r.started) };
+    tier: String(runner.tier || ""), version: String(runner.version || ""), how: String(runner.how || ""), ok: !!(r && r.ok), key: r && !r.ok ? String(r.key || "") : "", started: !!(r && r.started),
+    ...(runner.refusal && typeof runner.refusal === "object" ? { refusal: Object.assign({}, runner.refusal) } : {}) }; // [묶음 A-3] 거절이 있었을 때만
   try { return CL.appendStatsLocked(HELPER_RUNS_FILE, row); } catch { return false; }
+}
+
+// [묶음 A-3] 실행 기록·영수증에 남기는 실행 방식 — 평소 {tier, version, how} 그대로 · 거절이 있었을 때만 refusal 칸
+function runnerMetaOf(r) {
+  const x = r && r.runner && typeof r.runner === "object" ? r.runner : null;
+  if (!x) return null;
+  const m = { tier: String(x.tier || ""), version: String(x.version || ""), how: String(x.how || "") };
+  if (x.refusal && typeof x.refusal === "object") m.refusal = Object.assign({}, x.refusal);
+  return m;
+}
+// 여러 페이지(서고 선별) — 거절이 있었던 페이지를 먼저(없으면 첫 페이지)
+function runnerMetaOfPages(results) {
+  const list = (results || []).filter((it) => it && it.r && it.r.runner);
+  const x = list.find((it) => it.r.runner.refusal) || list[0];
+  return x ? runnerMetaOf(x.r) : null;
+}
+// 'refused' 실패의 경보 문구 조각 — 다른 모델 재시도가 어떻게 끝났는지 일상어로
+function refusalNote(r) {
+  const rt = r && r.runner && r.runner.refusal ? String(r.runner.refusal.retry || "") : "";
+  if (rt === "refused") return { ko: "다른 모델로 다시 시도했지만 그 모델도 거절했습니다", en: "a retry with another model was refused as well" };
+  if (rt === "no-time") return { ko: "시간이 모자라 다른 모델로 다시 시도하지 못했습니다", en: "there was no time left to retry with another model" };
+  if (rt.startsWith("skipped")) return { ko: "다른 모델로 다시 시도할 수 없었습니다", en: "a retry with another model was not possible" };
+  return { ko: "다른 모델로 다시 시도했지만 실패했습니다", en: "a retry with another model failed" };
 }
 
 // 대시보드 한 줄(A4) — 옛 방식으로 돌았거나 너무 오래돼 못 돌았으면 경고(같은 판·같은 이유는 한 번만), 새 방식으로 돌면 지운다.
@@ -350,4 +451,4 @@ function reportHelperTier(ws, r) {
   } catch { /* best-effort — 경보 실패가 실행 결과를 바꾸지 않음 */ }
 }
 
-module.exports = { SELF_DENY, NEW_FLAGS, OLD_FLAGS, SESSION_BOUND_ENV, CLAUDE_BIN_FILE, CAP_CACHE_FILE, ALARM_KIND, helperEnv, killTree, recordExecPath, candidateList, invocationFor, capabilitiesOf, capabilitiesOfSync, tierOf, resolveClaudeHelper, resolveClaudeHelperSync, helperArgs, extractAnswer, runClaudeHelper, runClaudeHelperSync, reportHelperTier, recordHelperRun, HELPER_RUNS_FILE };
+module.exports = { SELF_DENY, NEW_FLAGS, OLD_FLAGS, SESSION_BOUND_ENV, CLAUDE_BIN_FILE, CAP_CACHE_FILE, ALARM_KIND, RETRY_MODEL_FILE, RETRY_MODEL_DEFAULT, helperEnv, killTree, recordExecPath, candidateList, invocationFor, capabilitiesOf, capabilitiesOfSync, tierOf, resolveClaudeHelper, resolveClaudeHelperSync, helperArgs, extractAnswer, retryModelOf, refusalOf, runClaudeHelper, runClaudeHelperSync, reportHelperTier, recordHelperRun, HELPER_RUNS_FILE, runnerMetaOf, runnerMetaOfPages, refusalNote };

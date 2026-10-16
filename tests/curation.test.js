@@ -259,6 +259,19 @@ async function main() {
     assert.strictEqual(CL.readFindingsLedger(WS).filter((x) => x.type !== "disposition").length, 0, "검증 장부 무접촉");
   });
 
+  await ta("[AFTER-0.1.104-FIXES 묶음 A-3] 도우미 모델 거절(다른 모델 재시도로도 못 풂)=실패 이유 refused·실행 기록과 영수증에 거절 칸·경보는 '안전상 이유로 거절'로 풀어 씀", async () => {
+    const refusal = { by: "model-a", retryModel: "model-b", retryHow: "file", retry: "no-time" };
+    const pr = () => ({ promise: Promise.resolve({ ok: false, key: "refused", detail: "by=model-a retry=model-b:no-time", runner: { tier: "new", version: "9.9.9", how: "t", refusal } }), cancel() {} });
+    const r = await CU.runCuration(WS, { force: true, pageRunner: pr });
+    assert.ok(r.st === "call-failed" && r.reason === "refused", JSON.stringify(r));
+    const ev = CL.readIntegrityEvents().filter((e) => e.kind === "curation-failed" && !e.ack).slice(-1)[0];
+    assert.ok(ev && /안전상 이유로 답을 거절/.test(ev.detail) && /시간이 모자라/.test(ev.detail), ev && ev.detail);
+    const rc = CL.readSelectorUsage().filter((x) => x.purpose === "curate" && x.wsKey === WSKEY).slice(-1)[0];
+    assert.ok(rc.outcome === "failed:refused" && rc.runner.refusal.retry === "no-time", JSON.stringify(rc));
+    const run = CU.readCurationRows(WS).filter((x) => x.type === "run").slice(-1)[0];
+    assert.ok(run.reason === "refused" && run.runner.refusal.by === "model-a", JSON.stringify(run));
+  });
+
   await ta("잠금 — 산 소유자=거부(running) · 죽은 소유자=회수 후 실행 · 정상 종료 시 해제", async () => {
     const lf = CU.curateLockFileFor(WS);
     fs.mkdirSync(path.dirname(lf), { recursive: true });
