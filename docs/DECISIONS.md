@@ -466,6 +466,14 @@
 - 정본: bridge/verify-cap-handoff.js(closeoutTargetFor·submitCloseout·stopCloseoutCheck·closeoutView·splitCloseout) · bridge/verify-guard.js·codex-hook.js(종료 관문) · bridge/codex-bridge.js(closing 명령·마지막 왕복 안내) · src/extension.ts(검증 상한 마감 기록 칸) · docs/RULE-SUPPLY-REDESIGN-2026-10-04.md §4 구현.
 - 찾는말: 마감 기록, closing submit, 마감문 되풀이, 검증 상한 인계, 답 본문 파싱 폐지, 종료 때 다시 검사, 마감 기록 제출됨
 
+## D-2026-10-17-helper-follow-claude — 도우미 Claude 는 특정 판으로 고정하지 않고, 확장이 이 창에 올라온 Claude Code 위치를 기록해 업데이트·되돌리기를 따라간다
+- 날짜: 2026-10-17 · 종류: 사용자 질문·결정·구현(AFTER-0.1.104-FIXES §1-11) · 상태: 유효
+- 상황: 사용자 질문 — 원래 사고(사용자 2.1.296 · 도우미 PATH 의 2.0.22)를 보면 도우미를 지금 설치된 판으로 고정해야 하지 않나, 업데이트가 반복되고 문제 판이면 되돌릴 수도 있다. 확인해 보니 따라가기가 실제로 고장: 업데이트(2.1.296→2.1.301) 직후와 되돌리기(2.1.301→2.1.295) 뒤 모두 자동 분류가 옛 기록의 판을 썼고, 그 기록 폴더가 지워지면 PATH 의 2.0.22 로 떨어질 상태였다(훅 쪽 기록이 갱신되지 않음 — 훅 환경에 위치 값이 없는 쪽이 유력).
+- 결정(Codex 판단 검증 2회 통과 · 사용자 선택 '고쳐서 구현'): 판 번호·경로 고정은 기본 정책으로 쓰지 않는다(기록 경로 고정=폴더가 지워지면 옛 판으로 · 명시 지정=파일이 사라지면 실행 실패 · 둘 다 되돌리기 무시). 대신 확장이 활성화·확장 목록 변경 때 이 창에 올라온 확장 가운데 Claude Code 실행 파일을 품은 것을 폴더 모양으로 알아보고(Claude 확장이 스스로 찾는 순서) 그 위치를 기록 파일에 쓴다(다를 때만 · 못 찾으면 그대로) — codex 위치 기록과 같은 방식. 도우미 실행기의 고르기 순서·기능 확인·옛 판 알림은 그대로.
+- 한계: 확장이 알려 주는 위치 ≠ Claude 확장이 실제로 띄우는 실행 파일일 수 있음(감싸기 설정) · 마지막 기록자 기준 · 창을 다시 불러오기 전에는 이전 판 기준. 도우미만 특정 판에 묶는 수동 지정 칸은 만들지 않음.
+- 정본: src/claude-bundle.ts(bundledClaudeIn·pickClaudeBundle·syncClaudeBinFrom) · src/extension.ts(syncClaudeBin · 활성화 호출 · extensions.onDidChange 구독) · tests/claude-bundle.test.js
+- 찾는말: 도우미 판 고정, Claude Code 판 따라가기, 되돌리기, 다운그레이드, claude-bin.txt, CLAUDE_CODE_EXECPATH 훅 환경, 2.0.22, native-binary
+
 ## D-2026-10-16-codex-hook-alarm-stage — Codex 훅 경보: 훅 설치 뒤 아직 안 쓴 상태는 빨강 대신 '확인 전' 정보 한 줄, 설치 뒤 차례에 훅이 안 돌았으면 빨강(설계 B)
 - 날짜: 2026-10-16 · 종류: 설계 구현(AFTER-0.1.104-FIXES v2.1 §2 · 설계 검증 3왕복 통과 · 사용자 승인 2026-10-15) · 상태: 유효
 - 상황: Codex↔Codex 모드에서 훅을 설치·신뢰했지만 아직 Codex 구현 대화를 쓰지 않은 상태도 '실패'와 같은 빨간 경보였고, 연결된 대화가 몇 달 전 대화일 수 있었으며, 풀리는 길이 사용자 행동뿐이었다.

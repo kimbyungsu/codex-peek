@@ -19,6 +19,7 @@ import { scoutDirectiveText, scoutLedgerNotes } from "./scope-package";
 import { firstImplementerMetaFromHistory } from "./implementer-baseline";
 import { assessCodexHookHeartbeat, assessCodexHookTrust, CodexHookTrustCache, codexHookTrustRecheckDue, stageCodexHookMiss, CodexHookMissStage } from "./codex-hook-health";
 import { collectCurrentMapState, collectMapHistoryState, CurrentMapState, MapAutomationStats, MapUsageStats, RunLockObservation } from "./map-stats";
+import { syncClaudeBinFrom } from "./claude-bundle";
 
 const HOME = os.homedir();
 // 자체 namespace 폴더. CODEX_BRIDGE_HOME으로 override(확장 호스트≠훅 home 환경 대비 — 브릿지·훅과 동일 규칙).
@@ -9489,6 +9490,18 @@ function syncCodexBin(): void {
   }
 }
 
+// [도우미 판 따라가기 · 2026-10-17] 이 창에 올라온 Claude Code 확장의 실행 파일 위치를 ~/.codex-bridge/claude-bin.txt 에 기록(도우미 실행기가 읽음).
+// 훅 쪽 기록이 판 전환을 따라가지 못해(src/claude-bundle.ts 머리말) 업데이트·되돌리기 뒤 창을 다시 불러오면 여기서 새 위치로 맞춘다.
+// 확장 활성화·확장 목록 변경마다. 못 찾으면 기존 기록을 그대로 둔다.
+function syncClaudeBin(selfId: string): void {
+  try {
+    const exts = vscode.extensions.all.map((e) => ({ id: e.id, extensionPath: e.extensionPath, isActive: e.isActive }));
+    syncClaudeBinFrom(exts, { file: path.join(BRIDGE_DIR, "claude-bin.txt"), selfId, platform: process.platform, arch: process.arch, exists: (p) => fs.existsSync(p), io: { read: readTextSafe, write: atomicWrite } });
+  } catch {
+    /* 기록 실패=도우미가 기존 기록·다음 후보로 */
+  }
+}
+
 // V11: codex가 실제 쓰는 home을 'codex doctor'로 1회 탐지 → codex-home.txt 기록 + 메모리 SESSIONS_DIR 갱신.
 // 브릿지(codex-home.txt 읽음)와 대시보드가 같은 세션 폴더를 보게 한다. 못 찾으면(또는 PATH-only codex) 스킵·폴백.
 function syncCodexHome(onDone: (changed: boolean) => void): void {
@@ -10141,6 +10154,8 @@ export function activate(context: vscode.ExtensionContext): void {
   codexHomeReady=new Promise<void>((resolve)=>{markCodexHomeReady=resolve;});
   deployBridgeRuntime(context); // 마켓 설치: 번들 브릿지를 ~/.codex-bridge에 자동 배치(레포 수동 설치는 stamp 없음 → 존중)
   syncCodexBin(); // 브릿지가 쓸 codex 경로를 최신 확장 기준으로 기록
+  syncClaudeBin(context.extension.id); // 도우미가 쓸 Claude Code 위치를 이 창에 올라온 확장 기준으로 기록
+  context.subscriptions.push(vscode.extensions.onDidChange(() => syncClaudeBin(context.extension.id)));
   ensureLangInitialized(); // 첫 실행: language.json 없으면 VS Code UI 언어로 초기값 저장(이후엔 대시보드 토글이 정본)
   // ★포커스 귀속 초기화: 지금 포커스 상태와 현재 설정 모델을 관찰값으로만 기록(활성화 시점 값 자체는 귀속하지 않음 —
   //   '변경' 이벤트에서만 귀속). 이후 포커스 변화를 추적해 '설정 변경이 내 포커스 구간에서 일어났나'를 판정한다.
