@@ -16,18 +16,37 @@ function recordReadiness(provider, callId, charsIn, charsOut) {
   try { CL.appendScoutUsage({ schema: "scout-usage-v2", ts: new Date().toISOString(), callId, scope: "global", repoKey: null, flow: "readiness", provider, model: null, tokenIn: null, tokenOut: null, charsIn, charsOut, runId: null, jobKey: null, jobRunId: null }); } catch { /* 비차단 */ }
 }
 
+// [도우미 판 따라가기 · 2026-10-17] self 점검이 실행할 Claude — 호출자가 명령을 넘기면(시험의 가짜 CLI) 종전대로 그 이름을 PATH 에서 해석.
+// 넘기지 않으면 실제 자기 보강(enrich-providers → claude-helper)과 같은 공통 고르기(덮어쓰기 > 지금 대화 위치 > 확장이 기록한 위치 > PATH ·
+// 기능 확인)로 고른 실행 파일. 종전엔 PATH 의 'claude' 를 직접 실행해, 준비 표시가 실제 보강과 다른(명령줄에 남은 옛) 판을 근거로 삼았다
+// (2026-10-17 실측: 보강은 2.1.x 를 쓰는데 준비 기록은 '2.0.22'). 고르기 실패=실행하지 않고 그 이유를 실패 사유로(보강과 같은 이름).
+// 도우미 실행기를 읽지 못하는 옛 부분 배포면 종전 PATH 경로.
+function selfTarget(o) {
+  const env = o.env || process.env;
+  const viaPath = (cmd, pre, sh) => ({ target: CL.resolveExecutableForSpawn(cmd, env), args: [...(pre || []), "--version"], shell: sh !== undefined ? sh : process.platform === "win32", env, why: "cli-not-found" });
+  if (o.claudeCmd) return viaPath(o.claudeCmd, o.claudeArgs, o.shell); // claudeArgs=테스트 주입 프리픽스(가짜 CLI 스크립트 실행용)
+  let CH = null; try { CH = require(path.join(__dirname, "claude-helper.js")); } catch { CH = null; }
+  if (!CH || typeof CH.resolveClaudeHelperSync !== "function") return viaPath("claude");
+  let rz = null;
+  try { rz = CH.resolveClaudeHelperSync(env, Date.now() + 45000); } catch (e) { rz = { ok: false, key: "call-failed", detail: String((e && e.message) || e) }; }
+  if (!rz || !rz.ok || !rz.inv) {
+    const key = rz && rz.key ? String(rz.key) : "cli-missing";
+    return { target: null, args: [], shell: false, env, why: (key === "cli-missing" ? "cli-not-found" : key) + (rz && rz.detail ? ": " + String(rz.detail).slice(0, 80) : "") };
+  }
+  const e2 = CH.helperEnv(env); if (rz.inv.node) e2.ELECTRON_RUN_AS_NODE = "1"; // 스크립트 진입점은 node 로(확장 호스트=Electron)
+  return { target: rz.inv.file, args: [...(rz.inv.args || []), "--version"], shell: !!rz.inv.viaShell, env: e2, why: "" };
+}
+
 // self — claude --version+어댑터 지문 결속. 반환 ver=null이면 호출자는 버전 캐시를 반드시 null로 리셋
 // (2차 blocker②: 실패 후 이전 캐시가 살아 있으면 view 재대조가 옛 성공을 '준비됨'으로 되살린다).
 function probeSelf(opts) {
   const o = opts || {};
   const startedAt = new Date().toISOString(); // 늦은-패자 규칙 입력(4차 [주의] — 실행 전 캡처)
-  const cmd = o.claudeCmd || "claude";
-  const args = [...(o.claudeArgs || []), "--version"];
-  const target = CL.resolveExecutableForSpawn(cmd, o.env || process.env);
-  const callId = target ? crypto.randomUUID() : null;
-  const rv = target
-    ? spawnSync(target, args, { encoding: "utf8", timeout: 20000, windowsHide: true, shell: o.shell !== undefined ? o.shell : process.platform === "win32", env: o.env || process.env }) // claudeArgs=테스트 주입 프리픽스(가짜 CLI 스크립트 실행용 — 실경로는 빈 배열)
-    : { error: new Error("cli-not-found"), status: null, stdout: "", stderr: "", pid: null };
+  const t = selfTarget(o);
+  const callId = t.target ? crypto.randomUUID() : null;
+  const rv = t.target
+    ? spawnSync(t.target, t.args, { encoding: "utf8", timeout: 20000, windowsHide: true, shell: t.shell, env: t.env })
+    : { error: new Error(t.why || "cli-not-found"), status: null, stdout: "", stderr: "", pid: null };
   if (Number.isSafeInteger(rv.pid) && rv.pid > 0) recordReadiness("claude", callId, 0, String(rv.stdout || "").length);
   const ver = !rv.error && rv.status === 0 ? String(rv.stdout || "").trim().slice(0, 60) : null;
   const fp = ver ? CL.selfExecFp(ver, o.adapterHint) : null;
@@ -86,4 +105,4 @@ function probePrecision(opts) {
   return { rec, write: w };
 }
 
-module.exports = { probeSelf, probeEconomy, probePrecision };
+module.exports = { probeSelf, probeEconomy, probePrecision, selfTarget };

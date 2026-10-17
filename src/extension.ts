@@ -10155,7 +10155,8 @@ export function activate(context: vscode.ExtensionContext): void {
   deployBridgeRuntime(context); // 마켓 설치: 번들 브릿지를 ~/.codex-bridge에 자동 배치(레포 수동 설치는 stamp 없음 → 존중)
   syncCodexBin(); // 브릿지가 쓸 codex 경로를 최신 확장 기준으로 기록
   syncClaudeBin(context.extension.id); // 도우미가 쓸 Claude Code 위치를 이 창에 올라온 확장 기준으로 기록
-  context.subscriptions.push(vscode.extensions.onDidChange(() => syncClaudeBin(context.extension.id)));
+  // 확장 목록이 바뀌면(설치·업데이트·되돌리기) Codex·Claude 위치 기록을 함께 다시 맞춘다(Codex 는 종전 활성화·설정 변경 때만)
+  context.subscriptions.push(vscode.extensions.onDidChange(() => { syncCodexBin(); syncClaudeBin(context.extension.id); }));
   ensureLangInitialized(); // 첫 실행: language.json 없으면 VS Code UI 언어로 초기값 저장(이후엔 대시보드 토글이 정본)
   // ★포커스 귀속 초기화: 지금 포커스 상태와 현재 설정 모델을 관찰값으로만 기록(활성화 시점 값 자체는 귀속하지 않음 —
   //   '변경' 이벤트에서만 귀속). 이후 포커스 변화를 추적해 '설정 변경이 내 포커스 구간에서 일어났나'를 판정한다.

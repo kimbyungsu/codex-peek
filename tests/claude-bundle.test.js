@@ -126,8 +126,8 @@ t("활성화 때 호출하고 확장 목록 변경(설치·업데이트·되돌�
   // 줄 첫머리(공백 뒤)에서 시작하는 실제 문장만 — 주석으로 막아 둔 줄은 호출로 치지 않는다
   const at = (re) => { const m = re.exec(act); return m ? m.index : -1; };
   const i = at(/^[ \t]*syncCodexBin\(\);/m), j = at(/^[ \t]*syncClaudeBin\(context\.extension\.id\);/m);
-  const k = at(/^[ \t]*context\.subscriptions\.push\(vscode\.extensions\.onDidChange\(\(\) => syncClaudeBin\(context\.extension\.id\)\)\);/m);
-  assert.ok(i >= 0 && j > i && k > j, "활성화 순서 syncCodexBin → syncClaudeBin → 구독(구독 해제 등록 포함)");
+  const k = at(/^[ \t]*context\.subscriptions\.push\(vscode\.extensions\.onDidChange\(\(\) => \{ syncCodexBin\(\); syncClaudeBin\(context\.extension\.id\); \}\)\);/m);
+  assert.ok(i >= 0 && j > i && k > j, "활성화 순서 syncCodexBin → syncClaudeBin → 목록 변경 구독(Codex·Claude 둘 다 · 구독 해제 등록 포함)");
 });
 
 console.log("[5] 도우미 실행기가 그 기록을 실제 후보로 집음 — 지금 대화 위치 값이 없는 실행(훅·확장이 띄운 실행)과 같은 조건 · 별도 프로세스");
@@ -148,6 +148,56 @@ t("되돌리기 뒤 확장 기록 → 도우미 첫 후보가 지금 올라온 �
   assert.strictEqual(r.state, "written");
   assert.deepStrictEqual(probe("후"), [{ path: path.join(extDir("a"), "resources", "native-binary", "claude.exe"), how: "recorded" }]);
 });
+
+console.log("[6] 지도 준비 점검(self)도 같은 고르기 — 종전엔 PATH 의 claude 를 직접 실행해 실제 보강과 다른(옛) 판을 근거로 삼았다 · 별도 프로세스");
+{
+  const FAKE = path.join(TMP, "fakes"); fs.mkdirSync(FAKE, { recursive: true });
+  const NEW_HELP = "Options:\n  --output-format\n  --safe-mode\n  --tools\n  --strict-mcp-config\n  --no-session-persistence\n  --json-schema\n  --model\n  --setting-sources\n  --disallowedTools\n";
+  const OLD_HELP = "Options:\n  --output-format\n  --strict-mcp-config\n  --setting-sources\n  --disallowedTools\n";
+  const fakeJs = (name, ver, help) => { const f = path.join(FAKE, name); fs.writeFileSync(f, "const a=process.argv.slice(2);if(a.includes('--version')){console.log(" + JSON.stringify(ver + " (Claude Code)") + ");process.exit(0)}if(a.includes('--help')){process.stdout.write(" + JSON.stringify(help) + ");process.exit(0)}process.exit(3);\n"); return f; };
+  const fNew = fakeJs("cc-new.js", "7.7.7", NEW_HELP), fNew2 = fakeJs("cc-new2.js", "8.8.8", NEW_HELP), fOld = fakeJs("cc-old.js", "1.0.0", OLD_HELP);
+  const binOld = path.join(TMP, "bin-old"); fs.mkdirSync(binOld, { recursive: true }); // PATH 의 옛 판(명령줄에 남은 npm 판 흉내)
+  if (process.platform === "win32") fs.writeFileSync(path.join(binOld, "claude.cmd"), "@\"" + process.execPath + "\" \"%~dp0\\..\\fakes\\cc-old.js\" %*\r\n");
+  else { const f = path.join(binOld, "claude"); fs.writeFileSync(f, "#!/bin/sh\nexec \"" + process.execPath + "\" \"" + fOld + "\" \"$@\"\n"); fs.chmodSync(f, 0o755); }
+  const binEmpty = path.join(TMP, "bin-empty"); fs.mkdirSync(binEmpty, { recursive: true });
+  const ADAPTER = path.join(ROOT, "bridge", "enrich-providers.js");
+  const probe = (label, home, pathDir, extra) => {
+    fs.mkdirSync(home, { recursive: true });
+    const env = Object.assign({}, process.env, { CODEX_BRIDGE_HOME: home, PATH: pathDir, Path: pathDir }, extra || {});
+    if (!extra || !("CLAUDE_CODE_EXECPATH" in extra)) delete env.CLAUDE_CODE_EXECPATH;
+    delete env.CODEX_BRIDGE_CLAUDE_BIN;
+    const code = "const MP=require(" + JSON.stringify(path.join(ROOT, "bridge", "map-probe.js")) + ");const r=MP.probeSelf({adapterHint:" + JSON.stringify(ADAPTER) + "});console.log(JSON.stringify({ver:r.ver,ok:r.rec.ok,detail:r.rec.detail,cliVer:r.rec.cliVer,wrote:r.write.ok}));";
+    const r = spawnSync(process.execPath, ["-e", code], { env, encoding: "utf8", timeout: 120000 });
+    assert.strictEqual(r.status, 0, label + " " + r.stderr);
+    return JSON.parse(r.stdout.trim().split("\n").pop());
+  };
+  t("기록된 위치(확장이 적은 지금 판)가 있으면 PATH 의 옛 판 대신 그 판으로 점검 — 준비 기록 판도 같음", () => {
+    const home = path.join(TMP, "p-home1"); fs.mkdirSync(home, { recursive: true }); fs.writeFileSync(path.join(home, "claude-bin.txt"), fNew);
+    const r = probe("기록", home, binOld);
+    assert.strictEqual(r.ver, "7.7.7 (Claude Code)"); assert.strictEqual(r.ok, true); assert.strictEqual(r.wrote, true);
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(home, "map-readiness.json"), "utf8")).self.cliVer, "7.7.7 (Claude Code)");
+  });
+  t("(대조) 기록이 없으면 PATH 의 판 — 고르기 순서 그대로(옛 판도 옛 방식으로 실행 가능하면 준비)", () => {
+    const r = probe("PATH", path.join(TMP, "p-home2"), binOld);
+    assert.strictEqual(r.ver, "1.0.0 (Claude Code)"); assert.strictEqual(r.ok, true);
+  });
+  t("지금 대화 위치 값이 있으면 그것이 기록보다 먼저(도우미와 같은 순서)", () => {
+    const home = path.join(TMP, "p-home3"); fs.mkdirSync(home, { recursive: true }); fs.writeFileSync(path.join(home, "claude-bin.txt"), fNew);
+    const r = probe("execpath", home, binOld, { CLAUDE_CODE_EXECPATH: fNew2 });
+    assert.strictEqual(r.ver, "8.8.8 (Claude Code)");
+  });
+  t("PATH 에 없어도 기록이 있으면 준비(종전엔 '명령줄 없음'으로 실패) · 아무것도 없으면 실행 없이 cli-not-found", () => {
+    const home = path.join(TMP, "p-home4"); fs.mkdirSync(home, { recursive: true }); fs.writeFileSync(path.join(home, "claude-bin.txt"), fNew);
+    assert.strictEqual(probe("기록만", home, binEmpty).ver, "7.7.7 (Claude Code)");
+    const r = probe("없음", path.join(TMP, "p-home5"), binEmpty);
+    assert.strictEqual(r.ver, null); assert.strictEqual(r.ok, false); assert.ok(/^cli-not-found/.test(r.detail), r.detail);
+  });
+  t("시험·호출자가 명령을 직접 넘기면 종전 경로(이름을 PATH 에서 해석) 그대로", () => {
+    const MP = require("../bridge/map-probe.js");
+    const tt = MP.selfTarget({ claudeCmd: process.execPath, claudeArgs: [fOld], shell: false });
+    assert.deepStrictEqual(tt.args, [fOld, "--version"]); assert.strictEqual(tt.shell, false); assert.ok(tt.target);
+  });
+}
 
 fs.rmSync(TMP, { recursive: true, force: true });
 console.log("\nclaude-bundle 결과: " + n + " 통과");

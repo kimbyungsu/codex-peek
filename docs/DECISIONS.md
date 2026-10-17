@@ -471,7 +471,8 @@
 - 상황: 사용자 질문 — 원래 사고(사용자 2.1.296 · 도우미 PATH 의 2.0.22)를 보면 도우미를 지금 설치된 판으로 고정해야 하지 않나, 업데이트가 반복되고 문제 판이면 되돌릴 수도 있다. 확인해 보니 따라가기가 실제로 고장: 업데이트(2.1.296→2.1.301) 직후와 되돌리기(2.1.301→2.1.295) 뒤 모두 자동 분류가 옛 기록의 판을 썼고, 그 기록 폴더가 지워지면 PATH 의 2.0.22 로 떨어질 상태였다(훅 쪽 기록이 갱신되지 않음 — 훅 환경에 위치 값이 없는 쪽이 유력).
 - 결정(Codex 판단 검증 2회 통과 · 사용자 선택 '고쳐서 구현'): 판 번호·경로 고정은 기본 정책으로 쓰지 않는다(기록 경로 고정=폴더가 지워지면 옛 판으로 · 명시 지정=파일이 사라지면 실행 실패 · 둘 다 되돌리기 무시). 대신 확장이 활성화·확장 목록 변경 때 이 창에 올라온 확장 가운데 Claude Code 실행 파일을 품은 것을 폴더 모양으로 알아보고(Claude 확장이 스스로 찾는 순서) 그 위치를 기록 파일에 쓴다(다를 때만 · 못 찾으면 그대로) — codex 위치 기록과 같은 방식. 도우미 실행기의 고르기 순서·기능 확인·옛 판 알림은 그대로.
 - 한계: 확장이 알려 주는 위치 ≠ Claude 확장이 실제로 띄우는 실행 파일일 수 있음(감싸기 설정) · 마지막 기록자 기준 · 창을 다시 불러오기 전에는 이전 판 기준. 도우미만 특정 판에 묶는 수동 지정 칸은 만들지 않음.
-- 정본: src/claude-bundle.ts(bundledClaudeIn·pickClaudeBundle·syncClaudeBinFrom) · src/extension.ts(syncClaudeBin · 활성화 호출 · extensions.onDidChange 구독) · tests/claude-bundle.test.js
+- 추가(같은 날 사용자 반문 '다른 기능도 확인했나' → 기능별 확인 · 사용자 선택 '함께 고쳐서 배포'): 지도 준비 점검(self)이 PATH 의 claude 를 직접 실행하던 누락을 공통 고르기로 맞춤(실제 준비 기록이 명령줄의 옛 판 2.0.22 를 근거로 하고 있었음) · Codex 위치 기록도 확장 목록 변경 때 다시 맞춤.
+- 정본: src/claude-bundle.ts(bundledClaudeIn·pickClaudeBundle·syncClaudeBinFrom) · src/extension.ts(syncClaudeBin · 활성화 호출 · extensions.onDidChange 구독 — Codex·Claude 둘 다) · bridge/map-probe.js(selfTarget·probeSelf) · tests/claude-bundle.test.js
 - 찾는말: 도우미 판 고정, Claude Code 판 따라가기, 되돌리기, 다운그레이드, claude-bin.txt, CLAUDE_CODE_EXECPATH 훅 환경, 2.0.22, native-binary
 
 ## D-2026-10-16-codex-hook-alarm-stage — Codex 훅 경보: 훅 설치 뒤 아직 안 쓴 상태는 빨강 대신 '확인 전' 정보 한 줄, 설치 뒤 차례에 훅이 안 돌았으면 빨강(설계 B)
