@@ -178,9 +178,16 @@ t("[구현 검증 2판 반례] 새 대상 R 을 골랐는데 저장과 재판독
   gr = [A];
   l = await runTarget({ newRepo: "D:/R", readBack: path.resolve("D:/w"), newConsented: false, grantRepos: gr });
   assert.deepStrictEqual(gr, [A], "저장 실패로 옛 대상이 남은 경우도 추가 없음");
+  // 같은 경로 판정(normWs) — 끝 구분자 차이는 모든 운영체제에서 같은 저장소(입력은 그 운영체제의 구분자로 만든다)
+  const Rabs = path.resolve("D:/R");
   gr = [A];
-  l = await runTarget({ newRepo: "d:\\R\\", readBack: path.resolve("D:/R"), newConsented: false, grantRepos: gr });
-  assert.deepStrictEqual(gr, [A, path.resolve("D:/R")], "대소문자·끝 구분자만 다른 같은 경로는 같은 저장소(normWs)");
+  l = await runTarget({ newRepo: "D:/R", readBack: Rabs + path.sep, newConsented: false, grantRepos: gr });
+  assert.deepStrictEqual(gr, [A, Rabs + path.sep], "끝 구분자만 다른 같은 경로는 같은 저장소(normWs)");
+  if (process.platform === "win32") { // 역슬래시·대소문자 표기 차이는 Windows 경로에서만 같은 경로(리눅스에서는 역슬래시가 구분자가 아님 — 확인 검증 3판 보완)
+    gr = [A];
+    l = await runTarget({ newRepo: "d:\\R\\", readBack: Rabs, newConsented: false, grantRepos: gr });
+    assert.deepStrictEqual(gr, [A, Rabs], "Windows: 대소문자·역슬래시·끝 구분자만 다른 같은 경로는 같은 저장소(normWs)");
+  }
 });
 t("배선: 저장 뒤 지도 생성 시작은 이번 흐름의 동의 저장소 목록을 넘긴다 · 다시 해석한 저장소에 무조건 기록하던 옛 코드 없음", () => {
   assert.ok(OUT.includes("trySpawnMapBootstrap(wsB, grantRepos);"), "호출부");
