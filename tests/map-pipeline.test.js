@@ -719,6 +719,9 @@ function main() {
     const r1 = MP.sweepStaleTmp(ws);
     ok(r1.removed.length === 1 && r1.removed[0] === "topology.json.999999.tmp" && !fs.existsSync(dead), "죽은 pid 임시 파일 제거");
     ok(r1.kept.length === 1 && fs.existsSync(mine) && fs.existsSync(real), "살아 있는 pid 임시 파일·정본은 보존");
+    // 2026-10-19: 파일 시각이 Date.now() 보다 1~2ms 앞서 기록되는 PC 가 있어(실측 3,000회 중 2,700회 이상 음수) 방금 만든 파일의 나이가 음수 → '나이 상한 0'에도 남는 간헐 실패.
+    // 시험의 뜻(상한 0=살아 있는 pid 것도 제거)은 그대로 두고 시계 차이만 없앤다 — 수정 시각을 1초 전으로(보관함 0cb2da250777a6d3).
+    { const past = (Date.now() - 1000) / 1000; fs.utimesSync(mine, past, past); }
     const r2 = MP.sweepStaleTmp(ws, { maxAgeMs: 0 });
     ok(r2.removed.length === 1 && !fs.existsSync(mine) && fs.existsSync(real), "나이 상한 0=살아 있는 pid 것도 제거(pid 재사용 대비)·정본 보존");
     ok(MP.sweepStaleTmp(path.join(ws, "nope")).removed.length === 0, "폴더 없음=무동작");

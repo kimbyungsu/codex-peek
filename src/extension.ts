@@ -1898,15 +1898,53 @@ function mapReasonText(key: string | undefined, raw: string | undefined): string
   // en 슬롯 폴백=키(영문 식별자) 우선 — raw(한국어 원문)를 절대 노출하지 않는다(구현검증 2차 #4)
   return (key && table[key]) || (enMode ? (key || "unknown") : (raw || key || "미상"));
 }
+// [2026-10-19 사용자 실보고] 3트랙을 켤 때마다 '지도 폴더(project-map/)가 만들어집니다' 동의 창이 다시 떴다 — 이 저장소에 이미 영속 동의 표식
+// (map-bootstrap consent-<repoKey>.json · 처음 '켜고 계속' 때 기록)이 있으면 다시 묻지 않는다. 판정은 지도 자동 생성 관문과 같은 열쇠 —
+// 표식 판독기(hasConsent)와 저장소 해석기(resolveScoutRepo)를 브릿지 정본에서 그대로 쓴다. 판독 실패·구 브릿지·표식 없음=묻는다(안전 쪽).
+// 반환 repo=저장하는 언어 칸의 정찰 대상(해석 실패=null) — 창에 보여 주고, 동의하면 바로 이 저장소에만 기록한다(구현 검증 1판 blocker: 결속).
+function mapConsentTargetExt(ws: string | null, lang?: Lang): { repo: string | null; consented: boolean } {
+  try {
+    if (!ws) return { repo: null, consented: false };
+    const mb: any = require(path.join(BRIDGE_DIR, "map-bootstrap.js"));
+    const cl: any = bridgeLib();
+    if (!mb || typeof mb.hasConsent !== "function" || !cl || typeof cl.resolveScoutRepo !== "function") return { repo: null, consented: false };
+    const repo = String((cl.resolveScoutRepo(ws, loadContract(ws, lang)) || {}).repo || ws);
+    return { repo, consented: mb.hasConsent(repo) === true };
+  } catch { return { repo: null, consented: false }; }
+}
+// 동의 창(MAP-V2 1-23 — 레포에 지도를 만든다는 사전 고지·동의). 지도 폴더가 만들어질 저장소 경로를 보여 준다(무엇에 동의하는지 명확히).
+// stage "before-save"=3트랙을 켜는 저장 직전 — 취소=설정 미저장(호출자가 처리) · "after-target"=정찰 대상 확인 단계에서 새로 고른 저장소 —
+// '나중에'=3트랙은 켜진 채 그 저장소의 지도 자동 생성만 보류(자동 생성 관문이 동의 없음으로 막고, 다음에 켤 때 다시 묻는다).
+async function askMapConsentExt(repo: string | null, stage: "before-save" | "after-target"): Promise<boolean> {
+  const where = repo ? tE("(" + repo + ")", "(" + repo + ")") : "";
+  if (stage === "before-save") {
+    const goBtn = tE("켜고 계속", "Turn on & continue");
+    const pick = await vscode.window.showWarningMessage(tE(
+      "3트랙(정찰)을 켭니다 — 켜면 이 컴퓨터 안에서 다음이 자동으로 일어납니다:\n\n• 정찰 대상 저장소" + where + " 안에 구조 지도 폴더(project-map/)가 만들어집니다(결정론 파일 스캔 — AI 호출·외부 전송 없음).\n• 지도가 없으면 대화를 막지 않고 백그라운드에서 생성됩니다.\n\n한 번 동의하면 이 저장소에서는 다시 묻지 않아요(정찰 대상을 다른 저장소로 바꾸면 그 저장소에 대해 한 번 더 물어요).\n\n취소하면 설정은 저장되지 않습니다.",
+      "Turning on 3-track (recon) — with it on, the following happens on this machine automatically:\n\n• A structure-map folder (project-map/) is created inside the scout target repository" + where + " (deterministic file scan — no AI calls, no network).\n• If no map exists, it is created in the background without blocking your conversation.\n\nOnce you agree, you are not asked again for this repository (if you change the scout target to another repository, you are asked once for that one).\n\nCancel and nothing is saved."),
+      { modal: true }, goBtn);
+    return pick === goBtn;
+  }
+  const mkBtn = tE("지도 만들기", "Create the map");
+  const pick = await vscode.window.showWarningMessage(tE(
+    "새로 고른 정찰 대상 저장소" + where + "에는 아직 지도 폴더 동의가 없어요.\n\n동의하면 이 저장소 안에 구조 지도 폴더(project-map/)가 만들어집니다(결정론 파일 스캔 — AI 호출·외부 전송 없음). 한 번 동의하면 이 저장소에서는 다시 묻지 않아요.\n\n'나중에'를 고르면 3트랙은 켜진 채 이 저장소의 지도 자동 생성만 보류돼요.",
+    "The newly chosen scout target repository" + where + " has no map-folder consent yet.\n\nIf you agree, a structure-map folder (project-map/) is created inside this repository (deterministic file scan — no AI calls, no network). Once you agree, you are not asked again for this repository.\n\nChoose 'Later' to keep 3-track on and only hold automatic map creation for this repository."),
+    { modal: true }, mkBtn, tE("나중에", "Later"));
+  return pick === mkBtn;
+}
 // P1: Project MAP 비차단 bootstrap 기동 — 배포 런타임(map-bootstrap.js) 경유. 2트랙 게이트는 모듈 내부
 // 최선행(scoutMode!=="on"→무동작)이라 여기선 존재·버전만 가드. 부재/구버전=정직한 degraded 고지(조용한 무시 금지).
-function trySpawnMapBootstrap(ws: string): void {
+// 동의 기록(1-23)은 grantRepos — 이번 흐름에서 사용자가 창으로 동의한 저장소 — 에만 남긴다(구현 검증 1판 blocker 2026-10-19: 종전엔 여기서 다시
+// 해석한 저장소에 무조건 기록해, 다른 저장소의 옛 동의로 창을 건너뛴 뒤 동의한 적 없는 저장소에 기록이 생길 수 있었다). 빈 문자열=창 승인 당시 저장소를
+// 해석하지 못한 경우(구 브릿지 등)라 기동이 해석한 저장소에 기록(종전 동작). 기록이 없는 저장소는 자동 생성 관문(pending-consent)이 그대로 막는다.
+function trySpawnMapBootstrap(ws: string, grantRepos: string[]): void {
   try {
     const mb = require(path.join(BRIDGE_DIR, "map-bootstrap.js"));
     if (typeof mb.maybeSpawnBootstrap !== "function") throw new Error("old-runtime");
-    // 동의 영속(1차 검증 #1): 모달 승인 경로에서만 이 함수가 호출되므로 여기서 표식 기록 — 이후 훅 자동 경로가 열린다.
-    const sig = typeof mb.parentSignals === "function" ? mb.parentSignals(ws) : null;
-    if (sig && typeof mb.grantConsent === "function") mb.grantConsent(sig.repo, "dashboard-toggle");
+    if (grantRepos.length && typeof mb.grantConsent === "function") {
+      const sig = grantRepos.includes("") && typeof mb.parentSignals === "function" ? mb.parentSignals(ws) : null;
+      for (const r of grantRepos) { const target = r || (sig && sig.repo) || ""; if (target) mb.grantConsent(target, "dashboard-toggle"); }
+    }
     mb.maybeSpawnBootstrap(ws);
   } catch {
     vscode.window.showWarningMessage(tE("Project MAP 자동 생성 모듈이 아직 배포되지 않았어요(구버전 브릿지) — 브릿지 업데이트 후 다시 켜거나 수동으로: " + bridgeCmd("scope-map.js") + " <저장소> bootstrap. 그 외 3트랙 기능은 정상 동작합니다.", "The Project MAP auto-creation module is not deployed yet (old bridge runtime) — update the bridge and re-enable, or run manually: " + bridgeCmd("scope-map.js") + " <repo> bootstrap. All other 3-track features keep working."));
@@ -5040,17 +5078,18 @@ class Dashboard {
           void (async () => {
           // P1 informed consent(MAP-V2-DESIGN 1-23 — 설계검증: 동의가 자동 생성보다 앞서야 함): off→on 전환은
           // 저장 전에 계속/취소 모달. 취소=설정 미저장+기동 0(사후 토스트는 동의가 아님).
-          if (wantScoutOn && !prevScoutOn) {
-            const goBtn = tE("켜고 계속", "Turn on & continue");
-            const pick0 = await vscode.window.showWarningMessage(tE(
-              "3트랙(정찰)을 켭니다 — 켜면 이 컴퓨터 안에서 다음이 자동으로 일어납니다:\n\n• 정찰 대상 저장소 안에 구조 지도 폴더(project-map/)가 만들어집니다(결정론 파일 스캔 — AI 호출·외부 전송 없음).\n• 지도가 없으면 대화를 막지 않고 백그라운드에서 생성됩니다.\n\n취소하면 설정은 저장되지 않습니다.",
-              "Turning on 3-track (recon) — with it on, the following happens on this machine automatically:\n\n• A structure-map folder (project-map/) is created inside the scout target repository (deterministic file scan — no AI calls, no network).\n• If no map exists, it is created in the background without blocking your conversation.\n\nCancel and nothing is saved."),
-              { modal: true }, goBtn);
-            if (pick0 !== goBtn) {
+          // [2026-10-19] 동의 창은 이 저장소의 첫 동의에만(표식이 있으면 다시 묻지 않음 — mapConsentTargetExt). 다른 저장소로 바꾸면 그 저장소는 새로 묻는다.
+          // grantRepos=이번 흐름에서 사용자가 창으로 동의한 저장소 — 지도 생성 시작 때 이 저장소들에만 동의를 기록한다(구현 검증 1판 blocker: 결속).
+          const grantRepos: string[] = [];
+          const consentT = wantScoutOn && !prevScoutOn ? mapConsentTargetExt(dashboardWorkspace(), slotLang) : null;
+          if (consentT && !consentT.consented) {
+            const okConsent = await askMapConsentExt(consentT.repo, "before-save");
+            if (!okConsent) {
               vscode.window.showInformationMessage(tE("취소됨 — 설정은 저장되지 않았습니다.", "Cancelled — settings were not saved."));
               this.panel?.webview.postMessage({ type: "saveResult", target: "contract", ok: false, reqId: typeof m.reqId === "string" ? m.reqId : null });
               return;
             }
+            grantRepos.push(consentT.repo || ""); // 빈 문자열=저장소 해석 실패(구 브릿지 등) — 기동 쪽이 해석한 저장소에 기록(종전 동작)
           }
           // 물질화 계약(2026-07-15): 일반 저장도 '보던 모드(m.harnessMode=웹뷰 renderedMode)'의 슬롯 필드만
           // exact patch — harnessMode는 포함하지 않는다(외부/자동 전환을 되돌리지 않음 · 전환은 setHarnessMode 전용).
@@ -5111,10 +5150,22 @@ class Dashboard {
                 { modal: true }, pickBtn, tE("이 폴더 그대로", "Keep this folder"));
               if (pick === pickBtn) {
                 const sel = await vscode.window.showOpenDialog({ canSelectFiles: false, canSelectFolders: true, canSelectMany: false, openLabel: tE("정찰 대상으로 지정", "Set as scout target") });
-                if (sel && sel[0]) { await setScoutTargetFromUi(ws2, sel[0].fsPath, modalLang); this.post(); }
+                if (sel && sel[0]) {
+                  const chosen = path.resolve(String(sel[0].fsPath || "").trim()); // setScoutTargetFromUi 가 저장하는 값과 같은 형태
+                  await setScoutTargetFromUi(ws2, chosen, modalLang); this.post();
+                  // [구현 검증 1판 blocker] 새로 고른 대상의 지도 폴더 동의 — 이번 흐름에서 이미 창으로 동의했으면 그 동의는 '정찰 대상 저장소'에 대한 것이고
+                  // 사용자가 지금 대상을 직접 골랐으므로 새 대상에도 기록(종전 동작). 다른 저장소의 옛 동의로 창을 건너뛰었으면 새 대상에 대해 따로 묻는다.
+                  // [구현 검증 2판 blocker] 다시 읽은 대상이 사용자가 직접 고른 경로와 같을 때만 — 저장과 재판독 사이 다른 창이 대상을 바꿨거나 저장이 실패했으면
+                  // 아무것도 넣지 않는다(그 저장소는 자동 생성 관문이 동의 없음으로 막는다).
+                  const nt = mapConsentTargetExt(ws2, modalLang);
+                  if (nt.repo && normWs(nt.repo) === normWs(chosen) && !nt.consented) {
+                    if (grantRepos.length) grantRepos.push(nt.repo);
+                    else if (await askMapConsentExt(nt.repo, "after-target")) grantRepos.push(nt.repo);
+                  }
+                }
               }
             })().catch(() => { /* 확인 스텝 실패가 저장 흐름을 못 막음 */ });
-            { const wsB = dashboardWorkspace(); if (wsB) trySpawnMapBootstrap(wsB); } // P1: consent+대상 확정 후 비차단 기동(2트랙 게이트는 모듈 내부 최선행)
+            { const wsB = dashboardWorkspace(); if (wsB) trySpawnMapBootstrap(wsB, grantRepos); } // P1: consent+대상 확정 후 비차단 기동(2트랙 게이트는 모듈 내부 최선행) · 동의 기록=이번 흐름에서 동의한 저장소만
             // [2026-10-18 사용자 결정 '고를 때로 옮기기'] 켤 때의 DeepSeek 연결 점검(키 있을 때 ping)과 '비교용 두 번째 정찰만 잠김' 모달을 없앴다 —
             // 3트랙 초기(2026-07-09 5ed5321)의 'DeepSeek 비교 정찰(두 번째 정찰자)' 개념이 남은 것으로, DeepSeek 을 탐색 담당·의미 보강 담당에서
             // '고르면 쓰는' 지금 구조(07-20 f016212 · 07-23 07b4fba·a9a21e2 · 08-04 3a9ae24)에서는 담당 선택과 무관하게 DeepSeek 을 불렀다.
