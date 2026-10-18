@@ -5,7 +5,7 @@
  * 사용자는 승인·빼기만 한다. 검증 경로는 이 실행을 기다리지도 참조하지도 않는다(P1).
  *
  * 부품 B 입력 집계기 curationInput(ws, repo) — 전부 장부 판독(코드·소스 판독 없음)·개인정보 원문 없음(제목·id·횟수·지문).
- * 부품 C 제안기 — 팔=탐색 담당 유효 팔 selectorArmForCuration(ws, c)(2026-09-06 개정) · self/codex=selector-runner 페이지 1회(purpose:"curate") ·
+ * 부품 C 제안기 — 팔=curatorArmView(ws, c): 3트랙=탐색 담당 유효 팔(2026-09-06 개정) · 2트랙=운용 모드의 구현 담당 회사(2026-10-18 개정) · self/codex=selector-runner 페이지 1회(purpose:"curate") ·
  *   deepseek=runCurationDeepseekPage(브릿지 `deepseek-bridge page` — 선별 실행기는 교차 팔 없음이 소스 계약이라 손대지 않음) · 출력 JSON·손상=전량 거부.
  * 부품 D 커밋 — 후보 장부 2단(provisional → 결과 행 → proposed)+selectorUsage 영수증(purpose:"curate"·turnAnchor=curationKey).
  *   승인 시 변환(add·oos-add·remove)은 contract-lib.draftCuratorCandidate — 기존 초안 관문(repoKey·세대·중복·title) 완화 없음.
@@ -40,9 +40,19 @@ function oneLine(s, max) { return String(s || "").replace(/\s+/g, " ").trim().sl
 // ── 팔 결정(P4 개정 2026-09-06 · D-2026-09-06-curator-arm-follows-scout) — 정리 담당은 **탐색 담당의 유효 팔**을 그대로 따른다:
 // self=Claude 1회 호출 · codex=Codex(정찰 두뇌 설정 공유) · deepseek=DeepSeek(키 등록 시). 두뇌 설정을 새로 만들지 않고 기존 '탐색 담당' 설정에 귀속(설정 항목 0 추가).
 // 키 없는 DeepSeek=self 강등은 scoutArmView(eff)가 결정. 전송 범위(정리 재료)는 PRIVACY.md·정찰 카드 FAQ에 고지 — 작성자 결정이며 사용자별 재승인 절차는 없다(탐색 담당 선택=동의).
-function selectorArmForCuration(ws, c) {
+// [2026-10-18 사용자 결정 · D-2026-10-18-curator-2track-follows-mode — 위 결정의 2트랙 부분 개정] 2트랙에는 탐색 담당 줄이 화면에 없다 —
+// 숨은 저장값이 답할 회사를 정하지 않도록, 2트랙은 운용 모드의 구현 담당 회사(클로드-코덱스=Claude 도우미 · 코덱스-코덱스=Codex 도우미)로 고정한다(고를 수 없음).
+// 3트랙은 종전 그대로 탐색 담당의 실효 선택. 대시보드(rules-flow.js)도 이 함수 하나로 '누가 답하나'를 그린다 — 실행과 표시가 갈라지지 않게.
+// 반환: { arm, source:"mode"|"scout", track:2|3, mode, raw, degraded } · 트랙 판독=다른 2트랙 관문과 같은 계약 필드(scoutMode — 부재=2트랙).
+function curatorArmView(ws, c) {
   const cc = c || (() => { try { return CL.loadContract(ws); } catch { return null; } })();
-  try { const v = CL.scoutArmView(ws, cc); if (v && (v.eff === "self" || v.eff === "codex" || v.eff === "deepseek")) return v.eff; } catch { /* 판독 실패=self */ }
+  const v = CL.scoutArmView(ws, cc); // mode·defaultArm=현재 슬롯 원본 우선(scoutArmView 계약 그대로)
+  const on = CL.normScoutMode(cc) === "on";
+  if (!on) return { arm: v.defaultArm, source: "mode", track: 2, mode: v.mode, raw: null, degraded: null };
+  return { arm: v.eff, source: "scout", track: 3, mode: v.mode, raw: v.raw, degraded: v.degraded };
+}
+function selectorArmForCuration(ws, c) {
+  try { const v = curatorArmView(ws, c); if (v && (v.arm === "self" || v.arm === "codex" || v.arm === "deepseek")) return v.arm; } catch { /* 판독 실패=self */ }
   return "self";
 }
 
@@ -712,7 +722,7 @@ function curationSummary(ws) {
   return { lastItems, lastTs: last ? last.ts : "", lastOutcome: last ? last.outcome : "", lastReason: last ? (last.reason || "") : "", lastTrigger: last ? (last.trigger || "manual") : "", runs: runs.length, proposedTotal, adopted, declined, adoptRate: proposedTotal ? Math.round((adopted / proposedTotal) * 100) : 0, pending: repoKey && gen ? curationPendingCount(ws, repoKey, gen) : 0, running: lockAlive(ws), archiveSize, selOverCount: s.selOver, unusedCount: s.unusedCount, unusedDays: s.unusedDays, campaignsSince: tk ? tk.k : 0, maxPerRun: CURATION_MAX_PER_RUN, maxPending: CURATION_MAX_PENDING, tickK: CURATION_TICK_K };
 }
 
-module.exports = { RULE_REDACTED, curationSchema, recoverCurationProvisional, resolveComputeCandidates, safeText, CURATION_DIR, CURATION_MAX_PER_RUN, CURATION_MAX_PENDING, CURATION_UNUSED_DAYS, CURATION_OPERATIONS, curationFileFor, curateLockFileFor, itemFpOf, selectorArmForCuration, readCurationRows, appendCurationRow, curationInput, curationKeyOf, curationSkip, buildCurationPrompt, parseCurationOutput, curationPendingCount, commitCuration, writeCurationReceipt, acquireCurateLock, releaseCurateLock, runCuration, runCurationDeepseekPage, curationSummary };
+module.exports = { RULE_REDACTED, curatorArmView, curationSchema, recoverCurationProvisional, resolveComputeCandidates, safeText, CURATION_DIR, CURATION_MAX_PER_RUN, CURATION_MAX_PENDING, CURATION_UNUSED_DAYS, CURATION_OPERATIONS, curationFileFor, curateLockFileFor, itemFpOf, selectorArmForCuration, readCurationRows, appendCurationRow, curationInput, curationKeyOf, curationSkip, buildCurationPrompt, parseCurationOutput, curationPendingCount, commitCuration, writeCurationReceipt, acquireCurateLock, releaseCurateLock, runCuration, runCurationDeepseekPage, curationSummary };
 module.exports.CURATION_TICK_K = CURATION_TICK_K;
 module.exports.CURATION_TICK_MIN_GAP_MS = CURATION_TICK_MIN_GAP_MS;
 module.exports.CURATION_TICK_THRESHOLDS = CURATION_TICK_THRESHOLDS;

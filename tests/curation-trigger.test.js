@@ -568,7 +568,8 @@ t("[2026-09-06 사용자 결정 묶음 핀] 정리 담당 팔=탐색 담당 유�
   const cu2 = rd2("bridge/curation.js");
   const fnBody = (src, sig) => { const i = src.indexOf(sig); assert.ok(i > 0, sig + " 존재"); return src.slice(i, src.indexOf("\n}\n", i)); };
   const armFn = fnBody(cu2, "function selectorArmForCuration(");
-  assert.ok(armFn.includes("CL.scoutArmView(ws, cc)") && !/harnessMode/.test(armFn), "팔 결정=scoutArmView eff(운용 모드·새 설정 항목 없음)");
+  const viewFn = fnBody(cu2, "function curatorArmView(");
+  assert.ok(armFn.includes("curatorArmView(ws, c)") && viewFn.includes("CL.scoutArmView(ws, cc)") && viewFn.includes('CL.normScoutMode(cc) === "on"') && viewFn.includes("v.defaultArm") && viewFn.includes("v.eff") && !/curatorArm"|curatorArm:/.test(cu2), "팔 결정=curatorArmView — 3트랙 scoutArmView eff · 2트랙 모드 기본(2026-10-18) · 새 설정 항목 없음");
   const skipFn = fnBody(cu2, "function curationSkip(");
   assert.ok(skipFn.includes('if (input.signalCount === 0) return { skip: true, reason: "no-signal" };') && !/boundaryGen === input\.boundaryGen/.test(skipFn), "재료 0=무조건 생략(지난 실행·세대 비교 폐지)");
   assert.ok(cu2.includes('if (!refs.length) { drop("no-ref"); continue; }') && cu2.includes("^```[a-zA-Z0-9_-]*"), "refs 필수·울타리 1겹 벗김");
@@ -581,6 +582,7 @@ t("[2026-09-06 사용자 결정 묶음 핀] 정리 담당 팔=탐색 담당 유�
   assert.ok(cb2.includes("if (parse.present && !blockShaped) {") && cb2.includes("[지적 블록 미수용 — 사유 ") && cb2.includes("[findings block NOT accepted — reason "), "손상 지적 블록=미등록 사실 고지(양언어)");
   assert.ok(/정리 담당\(수칙 정리\) 실행 시/.test(rd2("PRIVACY.md")), "PRIVACY 정리 재료 전송 항목");
   assert.ok(/정리 재료/.test(rd2("src/extension.ts")) && /curation material/.test(rd2("src/extension.ts")), "정찰 카드 FAQ 고지(양언어)");
+  assert.ok(/D-2026-10-18-curator-2track-follows-mode/.test(rd2("docs/DECISIONS.md")), "2트랙 개정 결정 기록");
   assert.ok(/D-2026-09-06-curator-arm-follows-scout/.test(rd2("docs/DECISIONS.md")) && /D-2026-09-06-curator-arm-follows-scout/.test(rd2("docs/CURATION-DESIGN.md")) && /다섯 명령/.test(rd2("src/deepseek-config.ts")), "결정 기록·설계 정본·소스 계약 갱신");
 });
 

@@ -4,6 +4,8 @@
 //   archive   : 관련될 때만 적용되는 수칙(서고) 몇 항/상한 · 선별 상한(항수·바이트) · 마지막 선별 영수증(시각·항수·askId)
 //   proposals : 제안함 미승인 몇 건/상한 · 다음 검사 조건(훅 K회마다·지금 n회·N일 미사용 관측·마지막 검사 시각)
 //   curator   : 정리 담당 마지막 실행(시각·결과·사유·트리거·제안 목록)
+//   helpers   : [2026-10-18] 수칙 도우미(사용자 말 분류·서고 선별·정리 담당)가 어느 회사의 별도 1회 실행인지 — 트랙·운용 모드·정리 담당 회사와 그 출처(mode|scout).
+//               정리 담당 회사는 실행 경로와 같은 함수(curation.curatorArmView)에서 받는다(표시와 실행이 갈라지지 않게). 판독 실패=null(화면은 줄을 숨김).
 // 계산은 순수 함수(rulesFlow) — 판독기 결과를 인자로 받아 시험 가능. rulesFlowFor(ws) 가 브릿지 장부에서 재료를 모은다.
 // 영수증 채택 규칙(ab-1·CURATION P6 동형): purpose!=="preview" 이고 wsKey 와 repoKey(현재 정찰 저장소) 가 '모두' 일치하는 마지막 행만.
 const path = require("path");
@@ -50,7 +52,8 @@ function proposalsFlow(cu, tick, consts) {
   return {
     pending: cu ? Number(cu.pending) || 0 : 0,
     max: Number(c.maxPending) || (cu ? Number(cu.maxPending) || 0 : 0),
-    nextCheck: { tickK: Number(c.tickK) || 0, tickCount: tick ? Number(tick.k) || 0 : (cu ? Number(cu.campaignsSince) || 0 : 0), unusedDays: Number(c.unusedDays) || 0, lastTickTs: tick ? String(tick.judgedAt || tick.ranAt || "") : "" },
+    // tickK·tickCount=마감된 검증 묶음(캠페인) 누계와 그 문턱 — 훅 횟수가 아니다(2026-10-18 정정: 옛 화면 문구 '훅 K회마다'는 틀린 설명이었다). th=다른 계기 문턱(반복 강등·열린 지적 계보·선별 초과 — 구 설치본이면 null).
+    nextCheck: { tickK: Number(c.tickK) || 0, tickCount: tick ? Number(tick.k) || 0 : (cu ? Number(cu.campaignsSince) || 0 : 0), unusedDays: Number(c.unusedDays) || 0, lastTickTs: tick ? String(tick.judgedAt || tick.ranAt || "") : "", th: c.thresholds && typeof c.thresholds === "object" ? { oosRepeat: Number(c.thresholds.oosRepeat) || 0, lineage: Number(c.thresholds.lineage) || 0, selOver: Number(c.thresholds.selOver) || 0 } : null },
   };
 }
 function curatorFlow(cu) {
@@ -58,10 +61,19 @@ function curatorFlow(cu) {
   if (!cu) return { lastTs: "", lastOutcome: "", lastReason: "", lastTrigger: "", running: false, lastItems: [], metrics };
   return { lastTs: String(cu.lastTs || ""), lastOutcome: String(cu.lastOutcome || ""), lastReason: String(cu.lastReason || ""), lastTrigger: String(cu.lastTrigger || ""), running: cu.running === true, metrics, lastItems: Array.isArray(cu.lastItems) ? cu.lastItems.map((it) => ({ id: String(it.id || ""), title: String(it.title || ""), op: String(it.op || ""), status: String(it.status || "") })) : [] };
 }
-// 순수: inp={ envelope, injection, archive, archiveHash, archiveMax, selectCap, usage, wsKey, repoKey, curation, tick, consts }
+// 수칙 도우미 회사 — impl=운용 모드의 구현 담당 회사(클로드-코덱스=self · 코덱스-코덱스=codex): 사용자 말 분류는 그 말이 나온 대화의 회사, 서고 선별은 그 차례 구현 담당의 회사라
+// 모드대로 쓰면 impl 과 같다(다른 회사 대화에서 나온 말은 그 회사가 맡는다 — 화면은 이 예외를 안내문으로만 말한다). curator=curatorArmView 그대로.
+function helpersFlow(cv) {
+  if (!cv || typeof cv !== "object") return null;
+  const okArm = (a) => a === "self" || a === "codex" || a === "deepseek";
+  if (!okArm(cv.arm)) return null;
+  const mode = cv.mode === "codex-codex" ? "codex-codex" : "claude-codex";
+  return { mode, track: cv.track === 3 ? 3 : 2, impl: mode === "codex-codex" ? "codex" : "self", curator: { arm: cv.arm, source: cv.source === "scout" ? "scout" : "mode", raw: okArm(cv.raw) ? cv.raw : null, degraded: cv.degraded ? String(cv.degraded) : null } };
+}
+// 순수: inp={ envelope, injection, archive, archiveHash, archiveMax, selectCap, usage, wsKey, repoKey, curation, tick, consts, curatorView }
 function rulesFlow(inp) {
   const i = inp || {};
-  return { core: coreFlow(i.envelope, i.injection), archive: archiveFlow(i), proposals: proposalsFlow(i.curation, i.tick, i.consts), curator: curatorFlow(i.curation) };
+  return { core: coreFlow(i.envelope, i.injection), archive: archiveFlow(i), proposals: proposalsFlow(i.curation, i.tick, i.consts), curator: curatorFlow(i.curation), helpers: helpersFlow(i.curatorView) };
 }
 // 브릿지 장부에서 재료 수집(판독 실패=그 칸만 비움·전체를 막지 않음)
 function rulesFlowFor(ws, opts) {
@@ -76,10 +88,11 @@ function rulesFlowFor(ws, opts) {
   let curation = null; try { curation = cu.curationSummary(ws); } catch { curation = null; }
   let repoKey = ""; try { repoKey = cl.repoKeyOf(repo); } catch { repoKey = ""; }
   let tick = null; try { tick = repoKey ? cu.readTickState(ws, repoKey) : null; } catch { tick = null; }
+  let curatorView = null; try { curatorView = typeof cu.curatorArmView === "function" ? cu.curatorArmView(ws, c) : null; } catch { curatorView = null; }
   return rulesFlow({
     envelope, injection, archive, archiveHash: c && typeof c.archiveHash === "string" ? c.archiveHash : null, archiveMax: cl.ARCHIVE_ITEM_MAX,
     selectCap: { items: cl.SELECTOR_UNION_MAX, bytes: cl.SELECTOR_UNION_BYTES_MAX }, usage, wsKey: cl.wsKeyFor(ws), repoKey, curation, tick,
-    consts: { tickK: cu.CURATION_TICK_K, maxPending: cu.CURATION_MAX_PENDING, unusedDays: cu.CURATION_UNUSED_DAYS },
+    consts: { tickK: cu.CURATION_TICK_K, maxPending: cu.CURATION_MAX_PENDING, unusedDays: cu.CURATION_UNUSED_DAYS, thresholds: cu.CURATION_TICK_THRESHOLDS || null }, curatorView,
   });
 }
-module.exports = { AXES, coreFlow, isVerifySelectionRow, lastSelectionOf, archiveFlow, proposalsFlow, curatorFlow, rulesFlow, rulesFlowFor };
+module.exports = { AXES, helpersFlow, coreFlow, isVerifySelectionRow, lastSelectionOf, archiveFlow, proposalsFlow, curatorFlow, rulesFlow, rulesFlowFor };

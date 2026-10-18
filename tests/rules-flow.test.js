@@ -71,7 +71,8 @@ console.log("[4] 개요 카드 소스 계약 — 항상 4칸·빈 상태 문장�
   const b = ext.indexOf("function rfWhen(ts){"); const e = ext.indexOf("function decideActs(d){", b); // rfWhen·rfSet·renderRulesFlow 세 함수 블록
   ok(b > 0 && e > b, "렌더 함수 블록");
   const blk = ext.slice(b, e);
-  ok(blk.includes("지금 제안 없음") && blk.includes("다음 검사: 훅 ") && blk.includes("일 미사용 관측") && blk.includes("관련될 때만 적용되는 수칙 0항 · 정리 담당이 제안하면 채워집니다"), "빈 상태 문장(제안 0=왜 비었는지·서고 0)");
+  ok(blk.includes("지금 제안 없음") && blk.includes("들어오는 곳: 사용자 말") && blk.includes("일간 한 번도 안 골라짐") && blk.includes("관련될 때만 적용되는 수칙 0항 · 정리 담당이 제안하면 채워집니다"), "빈 상태 문장(제안 0=왜 비었는지·서고 0)");
+  ok(!blk.includes("다음 검사: 훅") && !blk.includes("hook ticks"), "[2026-10-18] 옛 틀린 설명 '훅 K회마다' 제거(K=검증 묶음 마감 누계)");
   ok(blk.includes("글자가 검증 요청마다 실려요(비용 근거)") && blk.includes("a.selectCap.items") && blk.includes("a.count+\"/\"+a.max"), "비용 근거 숫자(주입 글자 수·선별 상한·서고 상한)");
   ok(!/innerHTML/.test(blk) && blk.includes("document.createElement(\"details\")") && blk.includes("u.lastItems"), "정리 담당 마지막 제안=인라인 접기(details)·innerHTML 없음");
   ok(blk.includes("자료 없음 — 브릿지 장부를 읽지 못했어요"), "자료 없음(null)도 4칸 문장");
@@ -86,6 +87,29 @@ console.log("[4] 개요 카드 소스 계약 — 항상 4칸·빈 상태 문장�
 console.log("[5] 배포 편입 — 3사본에 rules-flow.js");
 { const inst = fs.readFileSync(path.join(ROOT, "install.js"), "utf8"), hs = fs.readFileSync(path.join(ROOT, "src", "hook-setup.ts"), "utf8"), mc = fs.readFileSync(path.join(ROOT, "bridge", "map-cutover.js"), "utf8");
   ok(inst.includes('"rules-flow.js"') && hs.includes('"rules-flow.js"') && mc.includes('"rules-flow.js"'), "install.js·hook-setup.ts·map-cutover.js"); }
+
+console.log("[6] [2026-10-18] 수칙 도우미 회사 — 정리 담당은 실행 경로와 같은 함수(curatorArmView) · 2트랙=운용 모드 고정 · 3트랙=탐색 담당 선택");
+{ ok(RF.rulesFlow({}).helpers === null && RF.helpersFlow({ arm: "x" }) === null, "자료 없음·이상한 회사=null(화면은 '확인 불가')");
+  const h1 = RF.helpersFlow({ arm: "codex", source: "mode", track: 2, mode: "codex-codex", raw: null, degraded: null });
+  ok(h1.impl === "codex" && h1.track === 2 && h1.curator.arm === "codex" && h1.curator.source === "mode", "코덱스-코덱스 2트랙=구현 담당 codex · 정리 담당 codex(모드)");
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), "rf-h-"));
+  fs.mkdirSync(CL.CONTRACTS_DIR, { recursive: true });
+  const put = (o) => fs.writeFileSync(CL.contractFileFor(ws, "ko"), JSON.stringify(o));
+  const keyFile = path.join(HOME, "deepseek.json");
+  put({ scoutArm: "codex" });
+  let f = RF.rulesFlowFor(ws, { lang: "ko" });
+  ok(f.helpers && f.helpers.track === 2 && f.helpers.impl === "self" && f.helpers.curator.arm === "self" && f.helpers.curator.source === "mode", "2트랙(scoutMode 없음)·클로드-코덱스 — 숨은 탐색 담당 codex 저장값이 있어도 정리 담당=Claude(모드)");
+  ok(CU.selectorArmForCuration(ws, CL.loadContract(ws, "ko")) === f.helpers.curator.arm, "화면 자료와 실제 실행이 같은 회사(같은 함수)");
+  put({ scoutArm: "deepseek", harnessMode: "codex-codex" }); fs.writeFileSync(keyFile, JSON.stringify({ apiKey: "sk-test-not-real" }));
+  f = RF.rulesFlowFor(ws, { lang: "ko" });
+  ok(f.helpers.track === 2 && f.helpers.impl === "codex" && f.helpers.curator.arm === "codex", "2트랙·코덱스-코덱스 — 키 있는 DeepSeek 저장값이 있어도 정리 담당=Codex(2트랙엔 DeepSeek 안 씀)");
+  put({ scoutMode: "on", scoutArm: "deepseek" });
+  f = RF.rulesFlowFor(ws, { lang: "ko" });
+  ok(f.helpers.track === 3 && f.helpers.curator.arm === "deepseek" && f.helpers.curator.source === "scout", "3트랙 — 탐색 담당 DeepSeek(키 있음)=정리 담당 DeepSeek");
+  fs.rmSync(keyFile, { force: true });
+  f = RF.rulesFlowFor(ws, { lang: "ko" });
+  ok(f.helpers.curator.arm === "self" && f.helpers.curator.degraded === "no-key", "3트랙 — 키 없는 DeepSeek=모드 기본으로 강등(표시에도 사유)");
+  ok(f.proposals.nextCheck.th && f.proposals.nextCheck.th.oosRepeat === CU.CURATION_TICK_THRESHOLDS.oosRepeat && f.proposals.nextCheck.th.lineage === CU.CURATION_TICK_THRESHOLDS.lineage && f.proposals.nextCheck.th.selOver === CU.CURATION_TICK_THRESHOLDS.selOver, "정리 담당 계기 문턱=브릿지 상수(화면 숫자를 손으로 적지 않음)"); }
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

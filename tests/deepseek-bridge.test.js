@@ -67,7 +67,7 @@ ok(/나머지 예외 — DeepSeek 지도 생성/.test(privacySrc) && /안 보내
 console.log("[page 명령 — 2026-09-06 정리 담당 팔=탐색 담당] 소스 계약 + 네트워크 없는 실행 반례(키 없음·빈 stdin=전송 전 중단)");
 ok(/cmd === "page"/.test(src) && /inheritedUsageContext\("selector-page"/.test(src) && /ping\|map\|capability\|enrich\|page/.test(src), "deepseek-bridge: page 명령(stdin 프롬프트→답 본문)+사용량 장부 flow selector-page+사용법 문구 다섯 명령");
 ok(/function runCurationDeepseekPage\(/.test(fs.readFileSync(path.join(__dirname, "..", "bridge", "curation.js"), "utf8")) && !/deepseek/.test(fs.readFileSync(path.join(__dirname, "..", "bridge", "selector-runner.js"), "utf8")), "정리 담당 전용 DeepSeek 페이지 실행기는 curation.js에(선별 실행기 selector-runner는 교차 팔 없음 유지)");
-ok(/정리 담당\(수칙 정리\) 실행 시/.test(privacySrc) && /정리 재료/.test(privacySrc) && /탐색 담당을 고른 것이 이 재료 전송에 대한 동의/.test(privacySrc), "PRIVACY: 정리 담당 실행 시 전송 재료·경로(탐색 담당과 같은 회사)·동의 모델 고지");
+ok(/정리 담당\(수칙 정리\) 실행 시/.test(privacySrc) && /정리 재료/.test(privacySrc) && /탐색 담당을 고른 것이 이 재료 전송에 대한 동의/.test(privacySrc) && /2트랙이면 운용 모드의 구현 담당 회사/.test(privacySrc) && /2트랙에서는 DeepSeek 으로 보내지 않습니다/.test(privacySrc), "PRIVACY: 정리 담당 실행 시 전송 재료·경로(3트랙=탐색 담당과 같은 회사 · 2트랙=운용 모드의 구현 담당 회사·DeepSeek 없음 — 2026-10-18)·동의 모델 고지");
 ok(/정리 재료/.test(extSrc) && /curation material/.test(extSrc), "정찰 카드 FAQ: 정리 재료가 탐색 담당 경로로 간다는 고지(양언어)");
 const cpDs = require("child_process");
 const envNoKey = Object.assign({}, process.env); delete envNoKey.DEEPSEEK_API_KEY;

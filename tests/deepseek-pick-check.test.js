@@ -134,7 +134,7 @@ t("3트랙 저장 처리(켤 때 포함)에 DeepSeek 연결 점검·ping 호출�
 t("옛 '비교 정찰(두 번째 정찰자)' 문구가 화면 문자열에 남지 않음(경위 주석만 허용)", () => {
   const code = SRC.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
   for (const re of [/비교 정찰/, /두 번째 정찰/, /comparison scout/i, /second scout/i, /정찰만 분업/]) assert.ok(!re.test(code), String(re));
-  assert.ok(/탐색 담당·의미 보강 담당에서 DeepSeek 을 고를 때만 필요/.test(code));
+  assert.ok(/3트랙에서 탐색 담당·의미 보강 담당을 DeepSeek 으로 고를 때만 필요/.test(code) && /2트랙에서는 쓰이지 않음/.test(code)); // 2026-10-18: 2트랙 정리 담당은 DeepSeek 을 안 씀
 });
 
 // ── 의미 보강 담당 줄: 고른 방식이 쓰는 모델 표시(실제 화면 조각 실행 · DOM 대역) ──
@@ -149,8 +149,10 @@ function renderLine(mode, d, en) {
 }
 t("의미 보강 줄 '쓰는 모델' — Claude=지정 없음 · DeepSeek=설정 모델 · Codex=정찰 설정 공유 · 자동=둘 다", () => {
   const d = { scoutCodex: { model: "gpt-x", reasoning: "high" }, deepseek: { hasKey: true, model: "deepseek-v9" } };
-  assert.ok(/Claude Code 기본 모델 — 따로 지정하지 않음/.test(renderLine("self", d)));
-  assert.ok(/DeepSeek deepseek-v9/.test(renderLine("economy", d)) && !/Codex gpt-x/.test(renderLine("economy", d)));
+  const s9 = renderLine("self", d), e9 = renderLine("economy", d);
+  assert.ok(/Claude Code 기본 모델 — 따로 지정하지 않음/.test(s9) && /결과가 부딪치거나 판정이 필요하면 Codex gpt-x · high 가 해소 판정$/.test(s9), s9); // 2026-10-18 구현 검증 1판 blocker: 방식과 무관한 Codex 해소 판정
+  assert.ok(/^쓰는 모델 — DeepSeek deepseek-v9/.test(e9) && /결과가 부딪치거나 판정이 필요하면 Codex gpt-x · high 가 해소 판정$/.test(e9) && !/정밀이 필요하면/.test(e9), e9);
+  assert.ok(!/해소 판정/.test(renderLine("precision", d)), "정밀형=Codex 가 원래 담당(해소 문구 중복 없음)");
   const p = renderLine("precision", d);
   assert.ok(/Codex gpt-x · 추론 강도 high/.test(p) && /'Codex 정찰 모델·추론 강도'를 정찰과 함께 씀/.test(p), p);
   const a = renderLine("auto", d);
@@ -179,8 +181,9 @@ t("안내 새 탭 — 지금 설정 값으로 모델 출처를 보여 주고(이
   assert.ok(/Which model runs —/.test(he) && /now codex default model · codex default effort/.test(he) && /Checks run when you pick a mode/.test(he) && !/Only pressing the button/.test(he));
 });
 t("Codex 정찰 설정 칸이 실제 적용 범위(정찰·의미 보강·정리 담당)를 말함 · 저장 알림도", () => {
-  assert.ok(/Codex 가 맡는 정찰\(탐색 담당=Codex\)·의미 보강\(정밀형·자동형의 Codex 쪽/.test(SRC) && !/탐색 담당을 Codex로 선택했을 때의 정찰 실행에만 적용/.test(SRC));
-  assert.ok(/저장됨 ✓ \(다음 Codex 정찰·의미 보강부터 적용\)/.test(SRC));
+  // 2026-10-18: 수칙 쪽 Codex 도우미(분류·서고 선별·정리 담당)까지 열거 — 실제 소비 경로(selector-runner codexScoutExecArgs)와 일치
+  assert.ok(/Codex 가 맡는 별도 1회 실행 전부에 함께 적용 — 수칙 쪽\(2·3트랙\): Codex 대화에서 나온 말의 분류 · Codex 차례의 서고 선별 · 정리 담당/.test(SRC) && /3트랙 쪽: 정찰\(탐색 담당=Codex\) · 의미 보강\(정밀형·자동형의 Codex 쪽/.test(SRC) && !/탐색 담당을 Codex로 선택했을 때의 정찰 실행에만 적용/.test(SRC));
+  assert.ok(/저장됨 ✓ \(다음 Codex 도우미 실행부터 적용 — 분류·서고 선별·정리 담당·정찰·의미 보강 중 Codex 가 맡는 것\)/.test(SRC) && !/다음 Codex 정찰·의미 보강부터 적용/.test(SRC));
 });
 
 (async () => {

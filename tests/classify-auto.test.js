@@ -603,7 +603,7 @@ t("사용자 말 카드 그리기 조각(컴파일 산출물)을 가짜 화면 �
   const mkEl = (tag) => { const o = { tag, children: [], style: {}, attrs: {}, textContent: "", className: "", title: "", appendChild(c) { this.children.push(c); return c; }, setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k]; }, insertBefore(c) { this.children.unshift(c); }, remove() {} }; Object.defineProperty(o, "innerHTML", { set() { o.children = []; }, get() { return ""; } }); return o; };
   const run = (d) => {
     const uc = mkEl("div"); const sent = [];
-    new Function("document", "$", "T", "d", "vscode", "safe", outSrc.slice(b, e))({ createElement: mkEl }, (id) => (id === "uwCard" ? uc : null), (a) => a, d, { postMessage: (m) => sent.push(m) }, (f) => f());
+    new Function("document", "$", "T", "d", "vscode", "safe", require("./_rf-prelude.js").RFP + outSrc.slice(b, e))({ createElement: mkEl }, (id) => (id === "uwCard" ? uc : null), (a) => a, d, { postMessage: (m) => sent.push(m) }, (f) => f());
     const all = []; const walk = (x) => { all.push(x); (x.children || []).forEach(walk); }; walk(uc);
     return { uc, all, sent, text: all.map((x) => x.textContent).join(" | ") };
   };
@@ -622,7 +622,7 @@ t("사용자 말 카드 그리기 조각(컴파일 산출물)을 가짜 화면 �
   assert.strictEqual(r.uc.style.display, "block");
   assert.ok(r.text.includes("사용자 말 분류") && r.text.includes("살펴볼 말 3건") && r.text.includes("실패 — 말은 남아 있어 다시 시도(timeout)"), "요약 줄");
   assert.ok(!r.text.includes("어디로:") && !r.text.includes("설명은 상황 예시로") && r.text.includes("구현 담당 규칙 칸에 직접 쓰세요") && !r.text.includes("Claude 규칙 칸"), "옛 제안 행 없음·규칙 칸은 사용자가 직접(구현 담당 회사와 무관한 안내 — 검증 보완)");
-  assert.ok(r.text.includes("성격만 나눠요") && r.text.includes("구현 담당의 판단을 거쳐야"), "[⑤] 분류 담당은 쓰지 않음·판정 경계는 구현 담당 판단을 거침");
+  assert.ok(r.text.includes("성격만 나눠요") && r.text.includes("구현 대화가 올림/안 올림") && r.text.includes("승인"), "[⑤] 분류 담당은 쓰지 않음·판정 경계는 구현 담당 판단을 거침(2026-10-18 표식: 거름=구현 대화가 올림/안 올림 → 결정=사용자 승인)");
   assert.ok(r.text.includes("분류하지 못한 사용자 말 2건") && r.text.includes("분류 담당이 세 번 실패했어요") && r.text.includes("어느 프로젝트의 말인지 확인하지 못했어요"), "보류 사유");
   const btn = r.all.filter((x) => x.tag === "button");
   assert.strictEqual(btn.filter((x) => x.textContent === "승인" || x.textContent === "안 올림").length, 0, "승인·안 올림 버튼 없음");
@@ -659,7 +659,7 @@ t("'수칙' 카드 그리기 조각 실제 실행 — 분류 담당이 고른 �
   const run = (e9) => {
     const ec = mkEl("div"); const sent = [];
     const body = "var wbGen='', wbAdds=new Set(), wbRemoves=new Set(), candsMoreOpenWeb=false, signalsOpenWeb=false, rulesOpenWeb=false;\n" + outSrc.slice(b, e);
-    new Function("document", "$", "T", "d", "vscode", "safe", body)({ createElement: mkEl }, (id) => (id === "envCard" ? ec : null), (a) => a, { envelope: e9, lang: "ko" }, { postMessage: (m) => sent.push(m) }, (f) => f());
+    new Function("document", "$", "T", "d", "vscode", "safe", require("./_rf-prelude.js").RFP + body)({ createElement: mkEl }, (id) => (id === "envCard" ? ec : null), (a) => a, { envelope: e9, lang: "ko" }, { postMessage: (m) => sent.push(m) }, (f) => f());
     const all = []; const walk = (x) => { all.push(x); (x.children || []).forEach(walk); }; walk(ec);
     return { all, sent, text: all.map((x) => x.textContent).join(" | ") };
   };

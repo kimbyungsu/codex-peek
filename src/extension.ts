@@ -2344,7 +2344,7 @@ ${tE("⚡ 표시가 붙은 단계들입니다 — ①영향지도 생성: 담당
 <b>${tE("Q. AI 정찰(⚡)을 한 번도 실행하지 않으면 어떻게 되나요?", "Q. What if the AI recon (⚡) never runs?")}</b>
 ${tE("①(변경 감지)의 힌트만 동작하고, ②③④는 계속 비어 있습니다 — 이 축의 실질 성과는 AI 정찰 실행에서 나옵니다. 즉 3트랙을 켜기만 하고 정찰을 안 돌리면 얻는 것이 거의 없습니다.", "Only ①'s hints work; ②③④ stay empty — this axis delivers real value through AI recon runs. Turning 3-track on without ever running recon yields very little.")}
 <b>${tE("Q. 데이터는 어디로 가나요?", "Q. Where does data go?")}</b>
-${tE("전부 이 컴퓨터의 브릿지 홈에 남습니다. 외부로 나가는 경로는 네 갈래 — ⑴ Codex 검증을 보낼 때(2트랙의 기본 동작): 검증 요청문과 자동 동봉(지도 조각[지도 있을 때]·결합 확인 문안[일지 후보 있으면 지도 없어도]·하네스 기본 지침)이 쓰시던 codex CLI를 통해 Codex 서비스로 전달 ⑵ DeepSeek 키 등록 시: ① DeepSeek 정찰 '실행 순간'의 증거 꾸러미(민감 범주 파일은 내용도 이름도 가려짐) ② 탐색 담당을 DeepSeek 으로 새로 고를 때 연결 점검 요청 1회(꾸러미 아님) ③ 탐색 담당이 DeepSeek일 때 정리 담당 실행 순간의 정리 재료(승인 수칙 문안·보관 서고 전체·장부 집계·결정 질문 — 탐색 담당 선택=동의) ⑶ Claude 정찰 실행 시(클로드-코덱스 모드의 기본 담당): 같은 꾸러미가 쓰시던 Claude CLI를 통해 Claude 서비스로 전달(별도 결제 없음 · 정리 담당 실행 시 정리 재료도 같은 경로) ⑷ Codex 정찰 선택·실행 시: 같은 꾸러미가 쓰시던 codex CLI를 통해 Codex 서비스로 전달(검증과 분리된 독립 실행 1회·읽기 전용 강제 — 계정 사용량 범위 · 정리 담당 실행 시 정리 재료도 같은 경로). 상세는 PRIVACY.md.", "Everything stays in the bridge home on this machine. Data leaves via four routes — ⑴ whenever you send a Codex verification (the core of 2-track): the verification request plus its automatic attachments (map slice · coupling check lines · harness base directives) travel through your existing codex CLI to the Codex service ⑵ with a DeepSeek key: ① the evidence package at the moment the DeepSeek scout runs (sensitive-category files excluded by content and by name) ② a single connection check when you newly pick DeepSeek as the scout (not a package) ③ when the scout is DeepSeek, the curation material at the moment the curator runs (approved rule wording · the whole archive · ledger aggregates · decision questions — choosing the scout is the consent) ⑶ when the Claude scout runs (the default in Claude↔Codex mode): the same package travels through your existing Claude CLI to the Claude service (no separate billing · curation material takes the same route when the curator runs) ⑷ when the Codex scout is selected and runs: the same package travels through your existing codex CLI to the Codex service (one independent run separate from verification, forced read-only — within your account usage · curation material takes the same route when the curator runs). Details in PRIVACY.md.")}
+${tE("전부 이 컴퓨터의 브릿지 홈에 남습니다. 외부로 나가는 경로는 네 갈래 — ⑴ Codex 검증을 보낼 때(2트랙의 기본 동작): 검증 요청문과 자동 동봉(지도 조각[지도 있을 때]·결합 확인 문안[일지 후보 있으면 지도 없어도]·하네스 기본 지침)이 쓰시던 codex CLI를 통해 Codex 서비스로 전달 ⑵ DeepSeek 키 등록 시: ① DeepSeek 정찰 '실행 순간'의 증거 꾸러미(민감 범주 파일은 내용도 이름도 가려짐) ② 탐색 담당을 DeepSeek 으로 새로 고를 때 연결 점검 요청 1회(꾸러미 아님) ③ 3트랙에서 탐색 담당이 DeepSeek일 때 정리 담당 실행 순간의 정리 재료(승인 수칙 문안·보관 서고 전체·장부 집계·결정 질문 — 탐색 담당 선택=동의) ⑶ Claude 정찰 실행 시(클로드-코덱스 모드의 기본 담당): 같은 꾸러미가 쓰시던 Claude CLI를 통해 Claude 서비스로 전달(별도 결제 없음 · Claude 가 정리 담당일 때 — 클로드-코덱스 모드의 2트랙, 또는 3트랙 탐색 담당=Claude — 정리 재료도 같은 경로) ⑷ Codex 정찰 선택·실행 시: 같은 꾸러미가 쓰시던 codex CLI를 통해 Codex 서비스로 전달(검증과 분리된 독립 실행 1회·읽기 전용 강제 — 계정 사용량 범위 · Codex 가 정리 담당일 때 — 코덱스-코덱스 모드의 2트랙, 또는 3트랙 탐색 담당=Codex — 정리 재료도 같은 경로). 상세는 PRIVACY.md.", "Everything stays in the bridge home on this machine. Data leaves via four routes — ⑴ whenever you send a Codex verification (the core of 2-track): the verification request plus its automatic attachments (map slice · coupling check lines · harness base directives) travel through your existing codex CLI to the Codex service ⑵ with a DeepSeek key: ① the evidence package at the moment the DeepSeek scout runs (sensitive-category files excluded by content and by name) ② a single connection check when you newly pick DeepSeek as the scout (not a package) ③ in 3-track when the scout is DeepSeek, the curation material at the moment the curator runs (approved rule wording · the whole archive · ledger aggregates · decision questions — choosing the scout is the consent) ⑶ when the Claude scout runs (the default in Claude↔Codex mode): the same package travels through your existing Claude CLI to the Claude service (no separate billing · when Claude is the curator — 2-track in Claude↔Codex mode, or 3-track with scout = Claude — the curation material takes the same route) ⑷ when the Codex scout is selected and runs: the same package travels through your existing codex CLI to the Codex service (one independent run separate from verification, forced read-only — within your account usage · when Codex is the curator — 2-track in Codex↔Codex mode, or 3-track with scout = Codex — the curation material takes the same route). Details in PRIVACY.md.")}
 </div>
 </body></html>`;
 }
@@ -2369,8 +2369,8 @@ function openMapModeGuide(): void {
   const escG = (v: unknown): string => String(v ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch] as string));
   const scG = readScoutCodexPrefsExt(), dsG = readDeepseekView();
   const modelNoteG = tE(
-    `기본(Claude)=모델·추론 강도를 따로 지정하지 않아요 — Claude Code 가 고르는 기본 모델(안전상 거절이면 정해 둔 재시도 모델로 한 번 더) · 경제형(DeepSeek)=DeepSeek 설정의 모델(지금 ${escG(dsG.model)}) · 정밀형(Codex)=고급설정 'Codex 정찰 모델·추론 강도'를 정찰과 함께 써요(지금 ${escG(scG.model || "codex 기본 모델")} · ${escG(scG.reasoning || "codex 기본 추론 강도")} — 여기를 낮추면 Codex 의미 보강도 같이 낮아져요) · 자동형=두 담당이 각자 위 설정을 써요. 의미 보강 전용 모델 설정은 따로 없어요.`,
-    `Default (Claude) = no model or effort is set — Claude Code's default model (one retry with the configured retry model on a safety refusal) · Economy (DeepSeek) = the model in the DeepSeek settings (now ${escG(dsG.model)}) · Precision (Codex) = shares Advanced 'Codex scout model · reasoning effort' with scouting (now ${escG(scG.model || "codex default model")} · ${escG(scG.reasoning || "codex default effort")} — lowering it also lowers Codex enrichment) · Auto = each provider uses its setting above. There is no separate enrichment model setting.`);
+    `기본(Claude)=모델·추론 강도를 따로 지정하지 않아요 — Claude Code 가 고르는 기본 모델(안전상 거절이면 정해 둔 재시도 모델로 한 번 더) · 경제형(DeepSeek)=DeepSeek 설정의 모델(지금 ${escG(dsG.model)}) · 정밀형(Codex)=고급설정 'Codex 정찰 모델·추론 강도'를 정찰과 함께 써요(지금 ${escG(scG.model || "codex 기본 모델")} · ${escG(scG.reasoning || "codex 기본 추론 강도")} — 여기를 낮추면 Codex 의미 보강도 같이 낮아져요) · 자동형=두 담당이 각자 위 설정을 써요. 어느 방식이든 결과가 부딪치거나 판정이 필요한 항목은 Codex 가 같은 정찰 설정으로 해소 판정해요. 의미 보강 전용 모델 설정은 따로 없어요.`,
+    `Default (Claude) = no model or effort is set — Claude Code's default model (one retry with the configured retry model on a safety refusal) · Economy (DeepSeek) = the model in the DeepSeek settings (now ${escG(dsG.model)}) · Precision (Codex) = shares Advanced 'Codex scout model · reasoning effort' with scouting (now ${escG(scG.model || "codex default model")} · ${escG(scG.reasoning || "codex default effort")} — lowering it also lowers Codex enrichment) · Auto = each provider uses its setting above. Whatever the mode, Codex adjudicates conflicting results or items needing a ruling with the same scout setting. There is no separate enrichment model setting.`);
   const panel = vscode.window.createWebviewPanel("codexBridgeMapModeGuide", tE("Project MAP 의미 보강 모드 안내", "Project MAP enrichment modes"), vscode.ViewColumn.Beside, { enableScripts: false });
   const mode = (color: string, titleKo: string, titleEn: string, provider: string, fitKo: string, fitEn: string, behaviorKo: string, behaviorEn: string, costKo: string, costEn: string) => `
     <section class="mode" style="border-top-color:${color}"><h2>${tE(titleKo, titleEn)}</h2><div class="provider">${provider}</div>
@@ -2398,6 +2398,113 @@ ${excerptOptionNote ? `<p class="note">${tE("발췌 범위 —", "Excerpt scope 
 ${priorRule ? `<p class="note">${tE("다시 묻기 —", "Re-asking —")} ${priorRule}</p>` : ""}
 <p class="note">${tE("어떤 모델로 도나 —", "Which model runs —")} ${modelNoteG}</p>
 <p class="note"><span class="warn">${tE("준비 점검은 실제 호출입니다.", "Readiness checking makes real calls.")}</span> ${tE("모드를 고를 때(확인 창 뒤 · 고른 담당 중 아직 준비 안 된 것만), '🔎 다시 점검'을 누를 때, 고른 담당의 설정이 바뀌어 다시 확인이 필요할 때(자동 · 결과는 알림) DeepSeek 소형 요청 최대 2회(형식 교정 1회 포함)와 Codex 실행 1회를 사용합니다. 모드 선택은 저장될 수 있어도, 준비되지 않은 담당으로 작업을 조용히 강행하지는 않습니다.", "Checks run when you pick a mode (after a confirm dialog · only providers not yet ready), when you press '🔎 Re-check', and automatically when a chosen provider's settings change (result shown as a notification) — up to two small DeepSeek requests (including one format repair) and one Codex run. A mode selection may be saved, but work is never silently forced through an unready provider.")}</p>
+</body></html>`;
+}
+
+// [2026-10-18 사용자 요청] 수칙 흐름 안내 — '누가 · 어디서(구현 대화/검증 대화/별도 1회 실행/사용자) · 어떤 모델로 판단하고 누가 정하나'와 2·3트랙 차이.
+// 정찰 구조 안내와 같은 무스크립트 새탭(enableScripts:false · default-src 'none' — 열람만으로 호출 없음). 지금 이 프로젝트의 회사·모델은 열 때 읽어 굽는다(esc 필수).
+// 회사 자료=브릿지 rules-flow.js(정리 담당=실행과 같은 curatorArmView) · 문턱 숫자=같은 자료(손으로 적지 않음 — 구 설치본이면 숫자 생략).
+function openRulesFlowGuide(): void {
+  const escR = (v: unknown): string => String(v ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch] as string));
+  const ws = dashboardWorkspace();
+  const rf: any = (() => { try { if (!ws) return null; const RF9: any = require(path.join(BRIDGE_DIR, "rules-flow.js")); return typeof RF9.rulesFlowFor === "function" ? RF9.rulesFlowFor(ws, { lang: loadLangExt() }) : null; } catch { return null; } })();
+  const h: any = rf && rf.helpers ? rf.helpers : null;
+  const nc: any = rf && rf.proposals ? rf.proposals.nextCheck : null;
+  const sc = readScoutCodexPrefsExt(), ds = readDeepseekView();
+  const co = (a: string): string => a === "codex" ? "Codex" : a === "deepseek" ? "DeepSeek" : "Claude";
+  const model = (a: string): string => a === "codex" ? `${escR(sc.model || tE("codex 기본 모델", "codex default model"))} · ${escR(sc.reasoning || tE("기본 추론 강도", "default effort"))}` : a === "deepseek" ? escR(ds.model) : tE("Claude Code 기본 모델", "Claude Code default model");
+  const modeName = (m: string): string => m === "codex-codex" ? tE("코덱스-코덱스", "Codex↔Codex") : tE("클로드-코덱스", "Claude↔Codex");
+  const nowLine = h
+    ? tE(`지금 이 프로젝트: <b>${h.track === 3 ? "3트랙" : "2트랙"} · ${modeName(h.mode)}</b> — 사용자 말 분류 = <b>말이 나온 대화의 회사</b> · 서고 선별 = <b>그 차례 구현 담당의 회사</b>(이 모드의 구현 담당 = ${co(h.impl)} · Claude → ${model("self")} · Codex → ${model("codex")}) · 정리 담당 = <b>${co(h.curator.arm)}</b>(${model(h.curator.arm)} · ${h.curator.source === "scout" ? "3트랙 탐색 담당 선택을 따름" : "운용 모드를 따름 · 고를 수 없음"})`,
+         `This project now: <b>${h.track === 3 ? "3-track" : "2-track"} · ${modeName(h.mode)}</b> — classifying words = <b>the company of the chat the words came from</b> · rule selection = <b>that turn's implementer company</b> (this mode's implementer = ${co(h.impl)} · Claude → ${model("self")} · Codex → ${model("codex")}) · curator = <b>${co(h.curator.arm)}</b> (${model(h.curator.arm)} · ${h.curator.source === "scout" ? "follows the 3-track scout choice" : "follows the run mode · not selectable"})`)
+    : tE("지금 이 프로젝트의 회사·모델을 읽지 못했어요 — 대시보드가 열린 프로젝트에서 다시 열거나 창을 다시 로드해 주세요.", "Could not read this project's companies and models — reopen from a dashboard with a project, or reload the window.");
+  const th: any = nc && nc.th ? nc.th : null;
+  const when2 = nc
+    ? tE(`아래 중 하나가 차면 — 검증 묶음 마감 ${escR(nc.tickK)}회(지금 ${escR(nc.tickCount)}회) · ${th ? `같은 범위 밖 항목으로 지적이 ${escR(th.oosRepeat)}번 넘겨짐 · 같은 결함 지적이 ${escR(th.lineage)}회차까지 이어짐 · ` : ""}보관 수칙이 ${escR(nc.unusedDays)}일간 한 번도 안 골라짐${th ? ` · 관련 수칙이 정상 범위를 ${escR(th.selOver)}번 넘음` : ""}. 신호가 없거나 지난번과 같은 신호면 부르지 않아요.`,
+         `When any one is met — verify bundles closed ${escR(nc.tickK)} times (now ${escR(nc.tickCount)}) · ${th ? `a finding passed to the same out-of-scope item ${escR(th.oosRepeat)}× · the same defect finding lasting ${escR(th.lineage)} rounds · ` : ""}a stored rule not picked for ${escR(nc.unusedDays)} days${th ? ` · related rules over the normal range ${escR(th.selOver)}×` : ""}. Not called without a signal or with the same signal as last time.`)
+    : tE("장부 신호(검증 묶음 마감 누계·반복 지적·안 쓰이는 수칙 등) 중 하나가 차면. 신호가 없거나 지난번과 같은 신호면 부르지 않아요.", "When a ledger signal is met (closed verify bundles, repeated findings, unused rules, …). Not called without a signal or with the same signal as last time.");
+  const place = (color: string, icon: string, nameKo: string, nameEn: string, bodyKo: string, bodyEn: string) =>
+    `<div class="card" style="border-top:3px solid ${color}"><div class="ic">${icon}</div><h3>${tE(nameKo, nameEn)}</h3><div>${tE(bodyKo, bodyEn)}</div></div>`;
+  const row = (cells: string[]) => `<tr>${cells.map((c) => `<td>${c}</td>`).join("")}</tr>`;
+  const panel = vscode.window.createWebviewPanel("codexBridgeRulesFlowGuide", tE("수칙 흐름 안내", "Rules Flow Guide"), vscode.ViewColumn.Beside, { enableScripts: false });
+  panel.webview.html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
+<style>
+body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);padding:18px;max-width:980px;line-height:1.5}
+h1{font-size:16px;margin-bottom:4px} h2{font-size:13.5px;margin:20px 0 6px} h3{font-size:12.5px;margin:4px 0}
+.sub{color:var(--vscode-descriptionForeground);font-size:12px}
+.now{margin:12px 0;padding:9px 11px;border:1px solid var(--vscode-charts-blue);border-radius:6px;font-size:12px}
+.places{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px}
+.card{background:var(--vscode-editorWidget-background);border:1px solid var(--vscode-panel-border);border-radius:6px;padding:10px;font-size:12px}
+.card .ic{font-size:16px} .card ul{margin:4px 0 0 16px;padding:0}
+table{border-collapse:collapse;width:100%;font-size:11.5px;margin-top:6px}
+th,td{border:1px solid var(--vscode-panel-border);padding:6px 7px;vertical-align:top;text-align:left}
+th{background:var(--vscode-editorWidget-background)}
+ol{font-size:12px;padding-left:20px} .note{font-size:12px;color:var(--vscode-descriptionForeground);margin-top:10px}
+</style></head><body>
+<h1>${tE("수칙 흐름 — 누가 · 어디서 · 어떤 모델로 판단하고, 누가 정하나", "Rules flow — who judges, where, with which model, and who decides")}</h1>
+<div class="sub">${tE("수칙서는 검증 대화가 '실패/통과'를 가르는 기준이에요. 기준을 바꾸는 것은 사용자 도장뿐이고, 그 앞의 일(말 분류 · 정리 제안 · 관련분 고르기)은 대화가 아닌 별도 1회 실행이 맡아요. 이 화면은 열기만 해서는 아무것도 호출하지 않아요.", "The rulebook is what the verifier chat uses to decide fail/pass. Only your stamp changes it; the work before that (sorting words · curation proposals · picking relevant rules) is done by separate one-off runs, not chats. Opening this page calls nothing.")}</div>
+<div class="now">${nowLine}</div>
+
+<h2>${tE("판단하는 곳은 네 군데", "Four places where judging happens")}</h2>
+<div class="places">
+${place("#5b8dd9", "🧑", "구현 대화", "Implementer chat",
+  "사용자와 함께 일하는 Claude Code 대화(코덱스-코덱스 모드면 구현 Codex 대화). 수칙 쪽에서 <b>직접 하는 판단은 하나</b> — 분류가 넘긴 '판정 기준 후보'를 올릴지/안 올릴지(이유 필수). 승인된 수칙은 알림으로 받을 뿐 판정하지 않아요.",
+  "The Claude Code chat you work with (the implementer Codex chat in Codex↔Codex mode). On the rules side it makes <b>one judgment</b> — whether to raise or skip a boundary candidate handed over by the classifier (a reason is required). It receives approved rules as a notice and does not judge with them.")}
+${place("#3ca89a", "🔍", "검증 대화", "Verifier chat",
+  "대시보드에서 연결한 Codex 검증 세션 — 모델·추론 강도는 검증 두뇌 설정. 승인된 수칙을 판정 기준으로 '실패/통과'를 가려요. 수칙 자체는 바꾸지 않아요.",
+  "The Codex verification session linked in the dashboard — model and effort come from the verify brain settings. It decides fail/pass using approved rules as the boundary. It never changes the rules.")}
+${place("#9a6cdc", "⚙", "별도 1회 실행", "Separate one-off run",
+  `대화가 아닌 한 번짜리 실행이에요. 구현·검증 대화에 끼어들지 않고 그 대화 기록에도 남지 않아요. 실행은 끝나면 사라지고 결과와 사용 기록만 장부에 남아요.<ul><li><b>Claude</b>: 이 PC의 Claude Code 실행 파일을 따로 한 번 부름 — 사용자 지침·훅·연결 도구를 끈 안전 모드 · 도구 없음 · 빈 임시 폴더 · 대화 목록에 안 남김. 모델은 따로 정하지 않아 <b>Claude Code 기본 모델</b>(안전상 거절이면 정해 둔 재시도 모델로 한 번 더). 오래된 Claude Code 판이면 이 장치 일부가 없어 최소한으로만 격리되고 대화 기록이 남을 수 있어요.</li><li><b>Codex</b>: codex 를 읽기 전용 · 기록 안 남김 · 빈 임시 폴더 · 로그인 정보만 옮긴 임시 설정으로 한 번 실행. 모델·추론 강도 = ⚙️ 고급설정 'Codex 정찰 모델·추론 강도'.</li><li><b>DeepSeek</b>(3트랙 정리 담당만): DeepSeek 설정의 모델로 요청 한 번.</li></ul>`,
+  `A single run, not a chat. It never joins the implementer/verifier chats and leaves nothing in their history. The run ends and only its result and usage record stay in the ledgers.<ul><li><b>Claude</b>: calls this PC's Claude Code program once more, separately — safe mode with your instructions, hooks and connected tools off · no tools · an empty temp folder · not saved in the chat list. No model is set, so <b>Claude Code's default model</b> answers (one retry with the configured retry model on a safety refusal). With an old Claude Code version some of these guards are missing, so it runs with minimal isolation and a chat record may remain.</li><li><b>Codex</b>: runs codex once — read-only · no session record · an empty temp folder · a temporary setup holding only your sign-in. Model and effort = ⚙️ Advanced 'Codex scout model · reasoning effort'.</li><li><b>DeepSeek</b> (3-track curator only): one request with the model in the DeepSeek settings.</li></ul>`)}
+${place("#d9a441", "👤", "사용자", "You",
+  "대시보드 제안함에서 승인 또는 안 올림. 수칙서는 이 도장으로만 바뀌어요 — 위 셋 중 누구도 수칙서를 직접 고치지 않아요.",
+  "Approve or decline in the dashboard's proposal box. The rulebook changes only with this stamp — none of the three above edits it directly.")}
+</div>
+
+<h2>${tE("단계별 — 언제 · 어디서 · 어떤 모델 · 결과는 어디로 · 최종 결정", "Step by step — when · where · which model · where results go · final say")}</h2>
+<table>
+<tr><th>${tE("단계", "Step")}</th><th>${tE("언제", "When")}</th><th>${tE("누가 · 어디서", "Who · where")}</th><th>${tE("모델", "Model")}</th><th>${tE("결과는 어디로", "Result goes to")}</th><th>${tE("최종 결정", "Final say")}</th></tr>
+${row([tE("사용자 말 분류", "Classifying your words"),
+  tE("검증 묶음(한 작업의 검증 왕복)이 통과나 상한으로 끝날 때 · 최소 10분 간격", "when a verify bundle (one task's verify round-trips) closes by pass or cap · at least 10 minutes apart"),
+  tE("⚙ 별도 1회 실행 — 그 말이 나온 대화와 같은 회사(Claude 대화의 말=Claude · Codex 대화의 말=Codex)", "⚙ separate one-off run — same company as the chat the words came from (Claude chat = Claude · Codex chat = Codex)"),
+  tE("Claude=Claude Code 기본 / Codex=고급설정 정찰 모델", "Claude = Claude Code default / Codex = Advanced scout model"),
+  tE("판정 기준 후보 → 같은 프로젝트·같은 회사 구현 대화의 다음 차례(원래 대화로만 가지 않음) · 다시 강조 → 구현 대화에 자료로 · 일하는 방식 → 대시보드 알림", "boundary candidates → the next turn of an implementer chat of the same company in this project (not necessarily the original chat) · re-emphasis → material for the implementer · working style → dashboard notice"),
+  tE("🧑 구현 대화가 올림/안 올림(두 번 받고도 정하지 않으면 '구현 담당 미처리'로 끝) → 👤 도장", "🧑 implementer raises/skips (two hand-overs without a decision end as 'left undecided') → 👤 stamp")])}
+${row([tE("정리 담당", "Curator"), when2,
+  tE("⚙ 별도 1회 실행 — <b>2트랙</b>: 운용 모드의 구현 담당 회사(클로드-코덱스=Claude · 코덱스-코덱스=Codex · 고를 수 없음) / <b>3트랙</b>: 탐색 담당 선택(Claude·Codex·DeepSeek)", "⚙ separate one-off run — <b>2-track</b>: the run mode's implementer company (Claude↔Codex = Claude · Codex↔Codex = Codex · not selectable) / <b>3-track</b>: the scout choice (Claude · Codex · DeepSeek)"),
+  tE("위와 같음 + DeepSeek=DeepSeek 설정", "as above + DeepSeek = DeepSeek settings"),
+  tE("수칙 넣기·빼기 제안 → 제안함(장부만 읽음 · 수칙서는 안 고침)", "add/remove proposals → proposal box (reads ledgers only · never edits the rulebook)"),
+  tE("👤 도장", "👤 stamp")])}
+${row([tE("서고 선별", "Rule selection"),
+  tE("검증 요청마다('관련될 때만 적용되는 수칙' 칸이 비어 있으면 실행 안 함)", "every verify request (not run when the 'apply when relevant' box is empty)"),
+  tE("⚙ 별도 1회 실행 — 그 차례 구현 담당과 같은 회사", "⚙ separate one-off run — same company as that turn's implementer"),
+  tE("위와 같음", "as above"),
+  tE("관련된 수칙만 검증 요청에 함께 보냄(항상 적용분은 고르지 않고 그대로)", "only relevant rules ride the verify request (always-on rules ride as is, unpicked)"),
+  tE("판정은 🔍 검증 대화", "🔍 verifier chat judges")])}
+${row([tE("판정", "Judging"), tE("검증 요청마다", "every verify request"), tE("🔍 검증 대화", "🔍 verifier chat"), tE("검증 두뇌 설정", "verify brain settings"), tE("실패/통과 → 구현 대화가 지적을 재판단", "fail/pass → the implementer re-judges findings"), tE("수칙은 그대로", "rules unchanged")])}
+${row([tE("승인", "Approval"), tE("언제든", "any time"), tE("👤 대시보드 제안함", "👤 dashboard proposal box"), "—", tE("수칙서", "rulebook"), tE("👤 사용자", "👤 you")])}
+</table>
+
+<h2>${tE("상황 예시 — 클로드-코덱스 · 2트랙에서 '이건 항상 막아야 해'라고 말했을 때", "Example — saying 'this must always be blocked' in Claude↔Codex · 2-track")}</h2>
+<ol>
+<li>${tE("말한 순간에는 아무 일도 일어나지 않아요 — 말이 '살펴볼 말'로 모여요.", "Nothing happens at that moment — the words are queued to be looked at.")}</li>
+<li>${tE("그 작업의 검증이 통과해 묶음이 끝나면, Claude 대화에서 한 말이므로 Claude Code 를 따로 한 번 부른 별도 실행이 이 말을 '판정 기준 후보'로 분류해요. 지금 대화하던 Claude 대화가 하는 게 아니에요.", "When that task's verification passes and the bundle closes, since the words came from a Claude chat, a separate run that calls Claude Code once more sorts them as a boundary candidate. It is not the Claude chat you were talking to.")}</li>
+<li>${tE("다음에 말씀을 보내면, 그 차례의 Claude 구현 대화가 후보를 받아 '올림' 또는 '안 올림(이유)'을 정해요.", "On your next message, that turn's Claude implementer chat receives the candidate and decides raise or skip (with a reason).")}</li>
+<li>${tE("올리면 대시보드 제안함에 생기고, 승인을 누르면 수칙서에 들어가요.", "If raised, it appears in the dashboard's proposal box; approving puts it in the rulebook.")}</li>
+<li>${tE("그 뒤 검증 요청마다 이 수칙이 검증 대화에 판정 기준으로 실려요.", "From then on it rides every verify request as a judging boundary for the verifier chat.")}</li>
+</ol>
+
+<h2>${tE("2트랙과 3트랙 — 무엇이 달라지나", "2-track vs 3-track — what changes")}</h2>
+<table>
+<tr><th>${tE("항목", "Item")}</th><th>${tE("2트랙", "2-track")}</th><th>${tE("3트랙", "3-track")}</th></tr>
+${row([tE("수칙(분류 · 서고 선별 · 승인 · 판정)", "Rules (classify · select · approve · judge)"), tE("돈다", "runs"), tE("똑같이 돈다", "runs the same")])}
+${row([tE("정리 담당 회사", "Curator company"), tE("운용 모드의 구현 담당 회사 · 고를 수 없음", "the run mode's implementer company · not selectable"), tE("탐색 담당 선택을 따름(Claude · Codex · DeepSeek)", "follows the scout choice (Claude · Codex · DeepSeek)")])}
+${row([tE("지도 · 정찰 · 의미 보강", "Map · recon · enrichment"), tE("자동으로 돌지 않음(화면에도 줄이 없음)", "not run automatically (no rows on screen)"), tE("돈다", "runs")])}
+${row([tE("DeepSeek", "DeepSeek"), tE("쓰이지 않음", "not used"), tE("탐색 담당 · 의미 보강에서 고를 때만", "only when picked for scout or enrichment")])}
+${row([tE("고급설정 'Codex 정찰 모델·추론 강도'", "Advanced 'Codex scout model · reasoning effort'"), tE("Codex 쪽 수칙 도우미(분류 · 선별 · 정리 담당)가 씀", "used by Codex-side rule helpers (classify · select · curator)"), tE("+ 정찰 · 의미 보강(어느 방식이든 결과가 부딪치거나 판정이 필요하면 Codex 가 해소 판정)", "+ recon · enrichment (whatever the mode, Codex adjudicates conflicting results or items needing a ruling)")])}
+</table>
+<p class="note">${tE("왜 정리 담당만 트랙에 따라 회사가 바뀌나 — 3트랙에서 정리 담당은 원래 '탐색 담당의 추가 역할'이라 탐색 담당과 같은 회사가 맡아요(고른 Codex 두뇌 설정이나 DeepSeek 을 그대로 씀). 2트랙에는 탐색 담당 줄이 없으므로, 숨은 선택이 답할 회사를 정하지 않게 운용 모드의 구현 담당 회사가 맡아요. Claude 가 맡을 때는 모델·추론 강도를 따로 정할 수 없어요(Claude Code 기본 모델).", "Why only the curator's company depends on the track — in 3-track the curator is originally an extra role of the scout, so the scout's company handles it (reusing the Codex brain settings or DeepSeek you chose). 2-track has no scout row, so the run mode's implementer company handles it instead of a hidden choice. When Claude handles it, model and effort cannot be set separately (Claude Code's default model).")}</p>
 </body></html>`;
 }
 
@@ -4411,6 +4518,7 @@ class Dashboard {
         }
         if (m?.type === "openReconGuide") openReconGuide(); // 정찰 구조 안내 — 대시보드와 별개의 정적 새탭(스크립트 없음)
         if (m?.type === "openMapModeGuide") openMapModeGuide(); // 의미 보강 모드 안내 — 비용·라우팅·실패 차이를 설명하는 정적 새탭
+        if (m?.type === "openRulesFlowGuide") openRulesFlowGuide(); // [2026-10-18] 수칙 흐름 안내 — 누가·어디서·어떤 모델로 판단하나(정적 새탭·호출 없음)
         if (m?.type === "openScoutHealthReport") openScoutHealthReport(dashboardWorkspace()); // 건강 리포트 — 포화 대응 새탭(열 때 베이크·스크립트 없음)
         if (m?.type === "setScoutTarget" && typeof m.repo === "string") setScoutTargetFromUi(dashboardWorkspace(), m.repo, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
         if (m?.type === "setScoutArm" && (m.arm === "self" || m.arm === "deepseek" || m.arm === "codex")) setScoutArmFromUi(dashboardWorkspace(), m.arm, m.lang === "ko" || m.lang === "en" ? m.lang : undefined).then(() => this.post());
@@ -5986,6 +6094,18 @@ class Dashboard {
   .farrow.off .ln::after{color:var(--vscode-panel-border)}
   /* 흐름 지도를 다른 섹션과 같은 카드로 통일 */
   .flowmap.card{margin:0 0 14px;padding:15px 16px}
+  /* [2026-10-18] 한눈에 보기 — 줄 머리표(어느 트랙에서 도는 줄인가) + 수칙 줄(누가·어디서·어떤 모델) */
+  .fmlane{flex-basis:100%;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;font-weight:600;color:var(--vscode-descriptionForeground);margin:0 0 6px}
+  .fmlane .tag{font-weight:400;padding:0 7px;border-radius:999px;border:1px solid var(--vscode-panel-border)}
+  .rfmap{margin-top:9px;border-top:1px dashed var(--vscode-panel-border);padding-top:9px;overflow-x:auto}
+  .rfgrid{display:grid;grid-template-columns:auto minmax(70px,1fr) auto minmax(70px,1fr) auto minmax(56px,1fr) auto;row-gap:8px;align-items:stretch;min-width:600px}
+  .fnode.helper{border-style:dashed;border-color:var(--vscode-charts-purple)}
+  .fnode.src{font-weight:400}
+  .fnode.box{border-color:var(--vscode-charts-yellow,#d7ba7d)}
+  .fnode .who{color:var(--vscode-foreground);font-size:10px}
+  .rfstack{display:flex;flex-direction:column;align-items:stretch;justify-content:center;gap:3px}
+  .rfdown{font-size:10px;text-align:center;color:var(--vscode-charts-yellow,#d7ba7d)}
+  .rflegend{font-size:10.5px;line-height:1.5;color:var(--vscode-descriptionForeground);margin-top:8px}
   /* 단계별 기본 원칙 = 사용자 규칙과 구별되는 '고정 기준'(좌측 강조 + 옅은 배경 + 배지) */
   .card.baseline{border-left:3px solid var(--vscode-charts-purple);background:var(--vscode-textBlockQuote-background,var(--vscode-sideBar-background))}
   .fixedbadge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;border:1px solid var(--vscode-charts-purple);color:var(--vscode-charts-purple);margin-left:2px;white-space:nowrap}
@@ -6226,6 +6346,7 @@ class Dashboard {
 
   <h2 class="sec accent-teal">${t("한눈에 보기", "At a Glance")} <span class="sub2">${t("누구에게 · 뭐가 · 언제 들어가나 — 지금 저장된 설정 기준 (저장하면 바뀐 곳이 깜빡여요)", "who gets what, and when — based on saved settings (changes flash on save)")}</span></h2>
   <section class="flowmap card" id="fmSection">
+    <div class="fmlane">${t("구현·검증", "Implement · verify")} <span class="tag">${t("2·3트랙 공통", "2- and 3-track")}</span></div>
     <div class="flow">
       <div class="fnode rule" id="flowImplRules">${t("Claude<br>규칙", "Claude<br>rules")}</div>
       <div class="farrow" id="faInject"><span class="lbl">${t("넣는 시점", "inject when")}<br><b id="faInjectVal">${t("항상", "always")}</b></span><span class="ln"></span></div>
@@ -6235,7 +6356,36 @@ class Dashboard {
     </div>
     <!-- 탐색(3트랙) 줄 — 검증 흐름과 별개 축이라 둘째 줄로 분리(일렬로 붙이면 '검증 후 탐색'으로 오독 — 사용자 지적).
          실제 흐름: Claude(하네스)가 증거 봉투를 꾸려 탐색자에게 보내고, 지도가 게시판(과 Claude)으로 돌아온다. -->
+    <!-- [2026-10-18 사용자 요청] 수칙 줄 — 2·3트랙 공통. 누가(어느 회사)·어디서(대화/별도 1회 실행/사용자)·어떤 모델로 판단하고 결과가 어디로 가는지.
+         회사·모델 글자는 renderRulesMap(d)가 채운다(정리 담당 회사=브릿지 curatorArmView — 실행과 같은 함수). -->
+    <div class="rfmap" id="rulesMap">
+      <div class="fmlane">${t("수칙", "Rules")} <span class="tag">${t("2·3트랙 공통", "2- and 3-track")}</span> <span class="muted" style="font-weight:400">${t("누가 · 어디서 판단하고 누가 정하나", "who judges where, and who decides")}</span> <button type="button" class="secondary" id="rfmGuide" style="margin-left:auto;font-size:11px;padding:2px 8px">${t("📖 수칙 흐름 자세히 보기 (새탭)", "📖 Rules flow in detail (new tab)")}</button></div>
+      <div class="rfgrid">
+        <div class="fnode src" style="grid-column:1;grid-row:1">${t("🗣 사용자 말", "🗣 Your words")}<small>${t("대화에서 하신 말", "said in the chat")}</small></div>
+        <div class="farrow" style="grid-column:2;grid-row:1" title="${t("검증이 통과하거나 왕복 상한에 닿아 한 묶음이 끝날 때(최소 10분 간격) 모아 둔 말을 살펴봐요.", "When a verification bundle closes (pass or round cap; at least 10 minutes apart) the collected words are looked at.")}"><span class="lbl">${t("검증 묶음이<br><b>끝날 때</b>", "when a verify bundle<br><b>closes</b>")}</span><span class="ln"></span></div>
+        <div class="fnode helper" style="grid-column:3;grid-row:1" id="rfmCls" title="${t("구현 대화가 직접 하지 않아요 — 그 말이 나온 대화와 같은 회사의 별도 1회 실행이 성격만 나눠요(어디에도 직접 쓰지 않음).", "Not done by the implementer chat itself — a separate one-off run of the same company as the chat the words came from only sorts them (writes nothing anywhere).")}">${t("⚙ 분류", "⚙ Classify")}<small class="who" id="rfmClsWho">–</small><small id="rfmClsModel"></small></div>
+        <div class="farrow" style="grid-column:4;grid-row:1" title="${t("같은 프로젝트에서 같은 회사의 구현 대화가 다음 사용자 차례에 받아요(원래 대화로만 가는 것은 아니에요). 두 번 받고도 판단하지 않으면 '구현 담당 미처리'로 끝나요. '일하는 방식'에 관한 말은 대시보드 알림만, '다시 강조'는 자료로만 가요.", "The implementer chat of the same company in this project receives it on the next user turn (not necessarily the original chat). If it receives it twice without deciding, it ends as 'left undecided'. Words about working style only become a dashboard notice; re-emphasis goes as material only.")}"><span class="lbl">${t("판정 기준 후보만<br><b>다음 차례에</b>", "boundary candidates<br><b>next turn</b>")}</span><span class="ln"></span></div>
+        <div class="fnode actor claude" style="grid-column:5;grid-row:1" id="rfmImpl">${t("🧑 구현 대화", "🧑 Implementer chat")}<small>${t("올림 / 안 올림", "raise / skip")}</small><small class="who" id="rfmImplWho">–</small></div>
+        <div class="farrow" style="grid-column:6;grid-row:1"><span class="lbl">${t("올린 것만", "raised only")}</span><span class="ln"></span></div>
+        <div class="fnode src" style="grid-column:1;grid-row:2">${t("📒 검증 장부", "📒 Verify ledgers")}<small>${t("반복 지적·미사용 수칙", "repeats · unused rules")}</small></div>
+        <div class="farrow" style="grid-column:2;grid-row:2" id="rfmCurWhen"><span class="lbl">${t("조건이<br><b>차면</b>", "when conditions<br><b>are met</b>")}</span><span class="ln"></span></div>
+        <div class="fnode helper" style="grid-column:3;grid-row:2" id="rfmCur" title="${t("구현 대화·검증 대화가 아니라 별도 1회 실행이에요. 장부만 읽고 수칙 넣기·빼기를 제안할 뿐, 수칙서를 바꾸지 않아요. 신호가 없거나 같은 입력이면 부르지 않아요.", "Not the implementer or verifier chat — a separate one-off run. It reads ledgers only and proposes adding/removing rules; it never changes the rulebook. No signal or the same input = not called.")}">${t("⚙ 정리 담당", "⚙ Curator")}<small class="who" id="rfmCurWho">–</small><small id="rfmCurSrc"></small></div>
+        <div class="farrow" style="grid-column:4 / span 3;grid-row:2"><span class="lbl">${t("넣기·빼기<br><b>제안</b>", "add / remove<br><b>proposals</b>")}</span><span class="ln"></span></div>
+        <div class="rfstack" style="grid-column:7;grid-row:1 / span 2">
+          <div class="fnode box">${t("📥 제안함", "📥 Proposals")}<small>${t("승인 대기", "awaiting you")}</small></div>
+          <div class="rfdown">${t("↓ 👤 사용자 도장", "↓ 👤 your stamp")}</div>
+          <div class="fnode rule">${t("📘 수칙서", "📘 Rulebook")}<small>${t("사용자만 바꿈", "only you change it")}</small></div>
+        </div>
+        <div class="fnode rule" style="grid-column:1;grid-row:3">${t("📘 승인된 수칙", "📘 Approved rules")}<small>${t("항상 적용분은 그대로", "always-on ones as is")}</small></div>
+        <div class="farrow" style="grid-column:2;grid-row:3"><span class="lbl">${t("검증<br><b>요청마다</b>", "every verify<br><b>request</b>")}</span><span class="ln"></span></div>
+        <div class="fnode helper" style="grid-column:3;grid-row:3" id="rfmSel" title="${t("'관련될 때만 적용되는 수칙' 중 이번 작업에 맞는 것만 골라요 — 그 차례 구현 담당과 같은 회사의 별도 1회 실행. 그 칸이 비어 있으면 실행하지 않아요.", "Picks only the 'apply when relevant' rules that fit this work — a separate one-off run of the same company as that turn's implementer. Not run when that box is empty.")}">${t("⚙ 서고 선별", "⚙ Rule selection")}<small class="who" id="rfmSelWho">–</small><small id="rfmSelModel"></small></div>
+        <div class="farrow" style="grid-column:4;grid-row:3"><span class="lbl">${t("관련분만<br><b>함께 보냄</b>", "relevant ones<br><b>attached</b>")}</span><span class="ln"></span></div>
+        <div class="fnode actor codex" style="grid-column:5;grid-row:3">${t("🔍 검증 대화", "🔍 Verifier chat")}<small>${t("이 기준으로 판정", "judges by them")}</small><small class="who">${t("Codex · 검증 두뇌 설정", "Codex · verify brain")}</small></div>
+      </div>
+      <div class="rflegend">${t("🧑 대화 = 사람과 주고받는 세션(구현 담당·검증 담당) · ⚙ 별도 1회 실행 = 대화가 아닌 한 번짜리 실행 — 구현·검증 대화에 끼어들지 않고 결과만 장부에 남겨요 · 👤 수칙서는 사용자 도장으로만 바뀌어요 · 구현 대화에도 승인된 수칙이 '알림'으로 가지만 판정은 검증 대화가 해요", "🧑 chat = a session you talk with (implementer, verifier) · ⚙ separate one-off run = not a chat; a single run that never joins the implementer/verifier chats and only leaves results in the ledgers · 👤 the rulebook changes only with your stamp · the implementer chat also receives approved rules as a notice, but the verifier chat does the judging")}</div>
+    </div>
     <div class="flow" id="scoutFlow" style="display:none;margin-top:9px;border-top:1px dashed var(--vscode-panel-border);padding-top:9px">
+      <div class="fmlane">${t("정찰", "Recon")} <span class="tag">${t("3트랙만", "3-track only")}</span></div>
       <div class="fnode actor claude"><span class="mono c">C</span><span id="scoutImplName">Claude</span><small>${t("증거 봉투 꾸림", "packs evidence")}</small></div>
       <div class="farrow" id="faScout"><span class="lbl">${t("정찰(3트랙)", "recon (3-track)")}<br><b id="faScoutVal">${t("직접/자동 지시 실행 시", "on direct/auto-directive runs")}</b></span><span class="ln"></span></div>
       <div class="fnode actor scout" id="fnScout"><span class="mono s">S</span>${t("정찰자", "Scout")}<small>${t("영향지도 ⚡LLM", "impact map ⚡LLM")}</small></div>
@@ -6392,9 +6542,9 @@ class Dashboard {
       <div class="hint">${t("기본은 다크 그레이 2색이에요. 파스텔 10종은 서로 어울리는 두 색이 사이드바와 본문에서 교차하고, '컬러풀'은 지금까지의 여러 색 조합 그대로예요. 누르면 바로 적용·저장됩니다.", "Default is two dark grays. The 10 pastels pair two matching colors across the sidebar and body; 'Colorful' keeps the classic multi-color look. Click to apply & save instantly.")}</div>
       <div id="themeGrid" class="theme-grid">${UI_THEMES.map((th) => `<button type="button" class="thbtn" data-theme="${th.id}" title="${EN ? th.en : th.ko}"><span class="thsw" style="background:${th.id === "colorful" ? "linear-gradient(105deg,#4fc1ff 0 25%,#89d185 25% 50%,#d18fb0 50% 75%,#e2c08d 75% 100%)" : `linear-gradient(105deg,${th.a} 0 50%,${th.b} 50% 100%)`}"></span><span class="thname">${EN ? th.en : th.ko}</span></button>`).join("")}</div>
     </div>
-    <h2 class="sec base accent-yellow">${t("고급설정", "Advanced Settings")} <span class="sub2">${t("정찰(3트랙) 고급 단계용 — 전역 설정(모든 프로젝트 공통)", "for the advanced recon stage (3-track) — global (shared by all projects)")}</span></h2>
+    <h2 class="sec base accent-yellow">${t("고급설정", "Advanced Settings")} <span class="sub2">${t("별도 1회 실행 도우미(수칙 분류·서고 선별·정리 담당 · 3트랙의 정찰·의미 보강)가 쓰는 키·모델 — 전역 설정(모든 프로젝트 공통)", "keys & models used by the separate one-off helper runs (rule classification · rule selection · curator · 3-track recon & enrichment) — global (shared by all projects)")}</span></h2>
     <div class="card">
-      <div class="chead">${t("DeepSeek API 키", "DeepSeek API key")} <span class="muted" style="font-weight:400">${t("· 탐색 담당·의미 보강 담당에서 DeepSeek 을 고를 때만 필요(정리 담당은 탐색 담당을 따름) — 키 없이도 변경 감지와 모드 기본 담당(클로드-코덱스=Claude 정찰·별도 과금 없음 / 코덱스-코덱스=Codex 정찰)의 영향지도는 동작해요", "· only needed when you pick DeepSeek as the scout or the enrichment provider (the curator follows the scout) — change sensing and impact maps by the mode's default scout (Claude↔Codex = Claude scout, no separate billing / Codex↔Codex = Codex scout) work without it")}</span></div>
+      <div class="chead">${t("DeepSeek API 키", "DeepSeek API key")} <span class="muted" style="font-weight:400">${t("· 3트랙에서 탐색 담당·의미 보강 담당을 DeepSeek 으로 고를 때만 필요(3트랙에서는 정리 담당도 탐색 담당을 따름 · 2트랙에서는 쓰이지 않음) — 키 없이도 변경 감지와 모드 기본 담당(클로드-코덱스=Claude 정찰·별도 과금 없음 / 코덱스-코덱스=Codex 정찰)의 영향지도는 동작해요", "· only needed when you pick DeepSeek as the scout or the enrichment provider in 3-track (in 3-track the curator follows the scout too · never used in 2-track) — change sensing and impact maps by the mode's default scout (Claude↔Codex = Claude scout, no separate billing / Codex↔Codex = Codex scout) work without it")}</span></div>
       <div class="hint">${t("키는 이 컴퓨터의 브릿지 홈(<code>~/.codex-bridge/deepseek.json</code>)에만 저장되고 저장소(GitHub)에는 절대 들어가지 않아요. 자료 꾸러미 전송은 <b>지도 생성이 실행될 때만</b> 일어나요 — 당신이 직접 실행하거나, <b>키 등록=동의 모델</b>에 따라 3트랙 자동 지시를 받은 구현 담당(운용 모드에 따라 Claude 또는 구현 Codex)이 실행(조건: 지도가 없거나 낡았을 때 그 상태에 1회 지시 — 확장·훅 자체는 전송하지 않음). <b>연결 점검</b>(꾸러미 아님 — 접속 확인용 요청 1회)은 탐색 담당을 DeepSeek 으로 새로 고를 때만 보내요. 의미 보강·정리 담당을 DeepSeek 이 맡을 때 보내는 것은 PRIVACY 에 따로 적혀 있어요. 대시보드를 보는 것만으로는 전송 없음. 발동 조건과 전송·제외 내용은 PRIVACY에 명시돼 있어요.", "The key is stored only in this machine's bridge home (<code>~/.codex-bridge/deepseek.json</code>) and never enters the repo (GitHub). The evidence package is sent <b>only when map generation runs</b> — you run it directly, or under the <b>key-registration=consent model</b> the implementer of the current mode (Claude, or an implementer Codex) runs it on the 3-track auto-directive (issued once per missing/stale-map state — the extension/hooks themselves never transmit). The <b>connection check</b> (not a package — a single reachability request) is sent only when you newly pick DeepSeek as the scout. What is sent when DeepSeek handles enrichment or curation is listed separately in PRIVACY. Viewing the dashboard sends nothing. Trigger conditions and what is sent/excluded are documented in PRIVACY.")}</div>
       <div class="row" style="margin-top:8px">
         <input type="password" id="dsKey" placeholder="sk-..." style="flex:1;min-width:220px" autocomplete="off" />
@@ -6402,9 +6552,10 @@ class Dashboard {
         <button id="dsClear" class="secondary">${t("키 삭제", "Remove key")}</button>
       </div>
       <div class="hint" id="dsState" style="margin-top:6px"></div>
+      <div class="hint" id="dsUse" style="margin-top:4px"></div>
     </div>
     <div class="card">
-      <div class="chead">${t("Codex 정찰 모델·추론 강도", "Codex scout model · reasoning effort")} <span class="muted" style="font-weight:400">${t("· Codex 가 맡는 정찰(탐색 담당=Codex)·의미 보강(정밀형·자동형의 Codex 쪽 — 판정 단계와 준비 점검 포함)·정리 담당(탐색 담당=Codex 일 때)에 함께 적용 — 의미 보강 전용 설정은 따로 없어요. 검증(2트랙)의 두뇌 설정과는 별개예요(정찰은 싸게, 검증은 강하게 조합 가능 · 단 여기를 낮추면 Codex 의미 보강도 같이 낮아져요)", "· shared by everything Codex does on the 3-track side: scouting (scout = Codex), enrichment (Precision and the Codex side of Auto — incl. the adjudication step and readiness check) and the curator (when the scout is Codex) — there is no separate enrichment setting. Separate from the verification brain settings (cheap scout + strong verifier is a valid combo — but lowering this also lowers Codex enrichment)")}</span></div>
+      <div class="chead">${t("Codex 정찰 모델·추론 강도", "Codex scout model · reasoning effort")} <span class="muted" style="font-weight:400">${t("· Codex 가 맡는 별도 1회 실행 전부에 함께 적용 — 수칙 쪽(2·3트랙): Codex 대화에서 나온 말의 분류 · Codex 차례의 서고 선별 · 정리 담당(코덱스-코덱스 모드의 2트랙, 또는 3트랙에서 탐색 담당=Codex) / 3트랙 쪽: 정찰(탐색 담당=Codex) · 의미 보강(정밀형·자동형의 Codex 쪽 — 판정 단계와 준비 점검 포함 · 기본형·경제형이어도 결과가 부딪치거나 판정이 필요한 항목은 Codex 가 해소 판정). 따로 나뉜 설정은 없어요. 검증 대화의 두뇌 설정과는 별개예요(도우미는 싸게, 검증은 강하게 조합 가능 · 단 여기를 낮추면 위 Codex 도우미가 모두 같이 낮아져요)", "· shared by every separate one-off run Codex does — rules side (2- and 3-track): classifying words from a Codex chat · rule selection on a Codex turn · the curator (2-track in Codex↔Codex mode, or 3-track with scout = Codex) / 3-track side: scouting (scout = Codex) · enrichment (Precision and the Codex side of Auto — incl. the adjudication step and readiness check · even in Default/Economy, Codex adjudicates conflicting results or items needing a ruling). There are no separate settings. Separate from the verifier chat's brain settings (cheap helpers + strong verifier is a valid combo — but lowering this lowers every Codex helper above)")}</span></div>
       <div class="hint">${t("전역 설정(모든 프로젝트 공통)이고 이 컴퓨터의 브릿지 홈(<code>~/.codex-bridge/scout-codex.json</code>)에만 저장돼요 — 비밀값이 아니라 모델 이름과 추론 강도뿐이에요. <b>'기본'=쓰시는 codex 기본값 그대로</b>(아무것도 안 바꿈). 목록은 검증 두뇌 설정과 같은 계정 캐시에서 와요 — 저장해 둔 값이 목록에서 사라져도 '저장된 값' 항목으로 보존돼 조용히 바뀌지 않아요.", "Global (shared by all projects), stored only in this machine's bridge home (<code>~/.codex-bridge/scout-codex.json</code>) — not a secret: just a model name and a reasoning effort. <b>'Default' = your codex defaults as-is</b> (changes nothing). The list comes from the same account cache as the verification brain settings — a saved value missing from the list is kept as a 'saved value' entry, never silently changed.")}</div>
       <div class="mrow" style="margin-top:8px"><span class="mlbl">${t("모델", "Model")}</span>
         <select id="scModel" title="${t("Codex 정찰이 쓸 모델 — 계정에서 받은 목록(비우면 codex 기본값)", "Model the Codex scout uses — list from your account (empty = codex default)")}"></select>
@@ -6417,6 +6568,7 @@ class Dashboard {
         <button id="scClear" class="secondary">${t("초기화", "Reset")}</button>
       </div>
       <div class="hint" id="scState" style="margin-top:6px"></div>
+      <div class="hint" id="scUse" style="margin-top:4px"></div>
     </div>
   <details class="card baseline" id="baseDetails" style="margin-top:10px">
     <summary style="cursor:pointer;font-weight:600;font-size:13px">${t("단계별 기본 원칙", "Stage Baselines")} <span class="fixedbadge">${t("고정 기준 · 기본값 내장", "fixed baseline · defaults built-in")}</span> <span class="muted" style="font-weight:400">${t("· 검증 흐름 3단계의 기본값 (필요할 때만 편집)", "· defaults for the 3 verification stages (edit only if needed)")}</span> <span id="baseOv" class="muted" style="font-weight:400"></span></summary>
@@ -6727,6 +6879,7 @@ class Dashboard {
   $("segProfile").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-vp]"); if(b){ curVP=b.getAttribute("data-vp"); segTouched.vp=true; highlightSeg("segProfile","data-vp",curVP); markDirty(); } });
   // P-12 2b: 예산 입력 — cardMachine 편승(저장 중 편집 무시·초안은 markDirty 축에 합류)
   var vbEl=$("vBudget"); if(vbEl) vbEl.addEventListener("input", function(){ if(cardM.saving()) return; curVB=String(vbEl.value||"").trim(); segTouched.vb=true; markDirty(); });
+  try { var rmg=$("rfmGuide"); if(rmg) rmg.addEventListener("click", function(){ vscode.postMessage({type:"openRulesFlowGuide"}); }); } catch(e){ /* 무해 */ }
   try { var rfg=$("rfGoSetup"); if(rfg) rfg.addEventListener("click", function(){ var t0=$("envCard"); if(t0 && t0.style.display!=="none"){ gotoEl(t0); } else { var tb=document.querySelector('.tabbtn[data-tab="setup"]'); if(tb) tb.click(); } }); } catch(e){ /* 무해 */ }
   try { var pr9=$("vbPresets"); if(pr9) pr9.addEventListener("click", function(ev){ var b=ev.target && ev.target.closest ? ev.target.closest("button") : null; if(!b || cardM.saving()) return; var v=b.getAttribute("data-vb"); if(v===null) return; var el=$("vBudget"); if(!el) return; el.value=v; curVB=v; segTouched.vb=true; markDirty(); }); } catch(e9) { /* 버튼 연결 실패는 버튼만 — 초기화 전체를 죽이지 않음 */ } // 상한 추천 버튼(실사고 2026-07-22: safe는 5009행 const라 초기화 구간에서 TDZ ReferenceError → 웹뷰 스크립트 전체 즉사·전 버튼 무반응. 초기화 구간에서는 safe 사용 금지)
   $("segScout").addEventListener("click", (ev)=>{ if(cardM.saving()) return; const b=ev.target.closest("[data-sm]"); if(b){ curSM=b.getAttribute("data-sm"); segTouched.sm=true; highlightSeg("segScout","data-sm",curSM); markDirty(); } });
@@ -7050,6 +7203,46 @@ class Dashboard {
     (lines||[]).forEach(function(ln){ var d9=el("div","ovline"); if(typeof ln==="string") d9.textContent=ln; else { var n9=el("span","rf-num",String(ln.num)); d9.appendChild(n9); d9.appendChild(document.createTextNode(" "+ln.text)); } b.appendChild(d9); });
     if(fold&&fold.items&&fold.items.length){ var dt=document.createElement("details"); var sm=document.createElement("summary"); sm.style.cssText="cursor:pointer;font-size:11px"; sm.textContent=fold.summary; dt.appendChild(sm);
       fold.items.forEach(function(it){ var li=el("div","ovline muted"); li.style.fontSize="11px"; li.textContent="· "+(it.op?"["+it.op+"] ":"")+(it.title||it.id)+(it.status?" — "+it.status:""); dt.appendChild(li); }); b.appendChild(dt); } }
+  // [2026-10-18 사용자 요청] 수칙 도우미(분류·서고 선별·정리 담당)의 '어느 회사의 별도 1회 실행 · 어떤 모델'을 한 곳에서 짓는다.
+  // 회사 자료=d.rulesFlow.helpers(브릿지 — 정리 담당은 실행과 같은 curatorArmView) · 모델=Claude 는 지정 없음(Claude Code 기본) / Codex 는 고급설정 정찰 모델 공유 / DeepSeek 은 DeepSeek 설정.
+  function rfMarks(host, pairs){ var w=document.createElement("div"); w.style.cssText="margin-top:3px;display:flex;flex-wrap:wrap;gap:2px"; pairs.forEach(function(pr){ var c=document.createElement("span"); c.className="pfm"; c.style.whiteSpace="normal"; var l=document.createElement("span"); l.textContent=pr[0]+" "; c.appendChild(l); var b=document.createElement("b"); b.textContent=pr[1]; c.appendChild(b); w.appendChild(c); }); host.appendChild(w); }
+  function rfArmCo(a){ return a==="codex"?"Codex":a==="deepseek"?"DeepSeek":"Claude"; }
+  function rfArmModel(a, d){ var sc=d.scoutCodex||{}; if(a==="codex") return (sc.model||T("codex 기본 모델","codex default model"))+" · "+(sc.reasoning||T("기본 추론 강도","default effort")); if(a==="deepseek") return (d.deepseek&&d.deepseek.model)||"DeepSeek"; return T("Claude Code 기본 모델","Claude Code default model"); }
+  function rfBothModels(d){ return "Claude → "+rfArmModel("self",d)+" · Codex → "+rfArmModel("codex",d); }
+  function rfHelpers(d){ var h=d.rulesFlow&&d.rulesFlow.helpers; if(h) return h; var cc=!!(d.contract&&d.contract.harnessMode==="codex-codex"); return { mode: cc?"codex-codex":"claude-codex", track: (d.contract&&d.contract.scoutMode==="on")?3:2, impl: cc?"codex":"self", curator: null }; } // 구 브릿지=정리 담당 회사 모름(null)
+  function rfCuratorSrc(h){ if(!h||!h.curator) return T("어느 회사가 맡는지 읽지 못했어요(창을 다시 로드)","could not read which company handles it (reload the window)");
+    if(h.curator.source==="scout") return T("3트랙의 탐색 담당 선택을 따름","follows the 3-track scout choice")+(h.curator.degraded==="no-key"?T(" — DeepSeek 키가 없어 모드 기본이 대신 맡음"," — no DeepSeek key, so the mode default handles it"):"");
+    return T("운용 모드("+(h.mode==="codex-codex"?"코덱스-코덱스":"클로드-코덱스")+")를 따름 · 고를 수 없음","follows the run mode ("+(h.mode==="codex-codex"?"Codex↔Codex":"Claude↔Codex")+") · not selectable"); }
+  function rfCuratorWho(d){ var h=rfHelpers(d); if(!h.curator) return "⚙ "+T("별도 1회 실행","separate one-off run")+" · "+rfCuratorSrc(h); var a=h.curator.arm; return "⚙ "+T("별도 1회 실행","separate one-off run")+" · "+rfArmCo(a)+" · "+rfArmModel(a,d)+" — "+rfCuratorSrc(h); }
+  function rfCuratorWhen(nc){ var th=nc&&nc.th; var parts=[T("검증 묶음 마감 "+nc.tickCount+"/"+nc.tickK+"회","verify bundles closed "+nc.tickCount+"/"+nc.tickK)];
+    if(th){ parts.push(T("같은 범위 밖 항목으로 지적이 "+th.oosRepeat+"번 넘겨짐","a finding passed to the same out-of-scope item "+th.oosRepeat+"×")); parts.push(T("같은 결함 지적이 "+th.lineage+"회차까지 이어짐","the same defect finding lasting "+th.lineage+" rounds")); }
+    parts.push(T("보관 수칙이 "+nc.unusedDays+"일간 한 번도 안 골라짐","a stored rule not picked for "+nc.unusedDays+" days"));
+    if(th) parts.push(T("관련 수칙이 정상 범위를 "+th.selOver+"번 넘음","related rules over the normal range "+th.selOver+"×"));
+    return T("언제 도나: ","when it runs: ")+parts.join(T(" · "," · "))+T(" 중 하나(같은 신호면 다시 안 부름)"," — any one (same signal = not called again)")+(nc.lastTickTs?T(" · 마지막 검사 "," · last check ")+rfWhen(nc.lastTickTs):T(" · 아직 검사 없음"," · no check yet")); }
+  function renderRulesMap(d){
+    var h=rfHelpers(d); var setT=function(id,txt){ var e=$(id); if(e) e.textContent=txt; };
+    // [구현 검증 1판 blocker f-6dade34f] 분류 회사=대기 중인 말이 나온 대화의 회사(classify providerOf) · 선별 회사=그 차례 구현 담당 회사 — 운용 모드 값으로 단정하지 않는다
+    // (Codex 대화에서 모인 말이 남은 채 클로드-코덱스로 바꾸면 실제 분류는 Codex). 두 회사의 모델을 함께 보인다.
+    var bothM=rfBothModels(d);
+    setT("rfmClsWho", T("말이 나온 대화와 같은 회사","same company as the chat the words came from")); setT("rfmClsModel", bothM);
+    setT("rfmSelWho", T("그 차례 구현 담당과 같은 회사","same company as that turn's implementer")); setT("rfmSelModel", bothM);
+    var im=$("rfmImpl"); if(im) im.className="fnode actor "+(h.impl==="codex"?"codex":"claude");
+    setT("rfmImplWho", h.impl==="codex"?T("Codex 구현 대화","Codex implementer"):T("Claude 구현 대화","Claude implementer"));
+    if(h.curator){ setT("rfmCurWho", rfArmCo(h.curator.arm)+" · "+rfArmModel(h.curator.arm,d)); } else setT("rfmCurWho", T("회사 확인 불가","company unknown"));
+    setT("rfmCurSrc", rfCuratorSrc(h));
+    var nc=d.rulesFlow&&d.rulesFlow.proposals&&d.rulesFlow.proposals.nextCheck; var cw=$("rfmCurWhen"); if(cw&&nc) cw.title=rfCuratorWhen(nc);
+    // 고급설정 두 칸 — '이 프로젝트에서 지금 이 설정을 쓰는 곳'(전역 설정이라 다른 프로젝트는 다를 수 있음)
+    var on3=h.track===3, se=(on3&&d.scoutArm)?d.scoutArm.eff:null, mm=(on3&&d.mapMode)?d.mapMode.mode:null, ca=h.curator?h.curator.arm:null;
+    var cxU=[], dsU=[];
+    if(h.impl==="codex"){ cxU.push(T("사용자 말 분류","classifying your words")); cxU.push(T("서고 선별","rule selection")); }
+    else cxU.push(T("Codex 대화가 있을 때의 사용자 말 분류·서고 선별","classification & rule selection for Codex chats, if any")); // 1판 blocker f-6dade34f — Claude 모드여도 Codex 대화의 말·차례면 Codex
+    if(ca==="codex") cxU.push(T("정리 담당","curator")); if(ca==="deepseek") dsU.push(T("정리 담당","curator"));
+    if(se==="codex") cxU.push(T("정찰(영향지도)","recon (impact map)")); if(se==="deepseek") dsU.push(T("정찰(영향지도)","recon (impact map)"));
+    if(mm==="precision"||mm==="auto") cxU.push(T("의미 보강","enrichment")); else if(mm) cxU.push(T("의미 보강 결과의 충돌·해소 판정(필요할 때)","adjudicating conflicting enrichment results (when needed)")); // 1판 blocker f-2e2d7712 — 기본형·경제형이어도 해소 판정은 Codex(map-enrich needVerifier → askVerifierResolution)
+    if(mm==="economy"||mm==="auto") dsU.push(T("의미 보강","enrichment"));
+    var useTxt=function(arr){ return T("이 프로젝트("+(on3?"3트랙":"2트랙")+" · "+(h.mode==="codex-codex"?"코덱스-코덱스":"클로드-코덱스")+")에서 지금 쓰는 곳: ","Used now in this project ("+(on3?"3-track":"2-track")+" · "+(h.mode==="codex-codex"?"Codex↔Codex":"Claude↔Codex")+"): ")+(arr.length?arr.join(" · "):T("없음 — 다른 프로젝트 설정에 따라 쓰일 수 있어요(전역 설정)","none — other projects may use it (global setting)")); };
+    setT("scUse", useTxt(cxU)); setT("dsUse", useTxt(dsU));
+  }
   function renderRulesFlow(d){
     var rf=d.rulesFlow; var card=$("ovRulesFlow"); if(!card) return;
     if(!rf){ ["rfCore","rfArchive","rfProposals","rfCurator"].forEach(function(id){ rfSet(id,[T("자료 없음 — 브릿지 장부를 읽지 못했어요(설치본 갱신·폴더 확인)","no data — bridge ledgers unreadable (check install / folder)")]); }); return; }
@@ -7071,12 +7264,15 @@ class Dashboard {
     var prL=[]; var nc=p.nextCheck;
     if(p.pending>0) prL.push({num:p.pending+"/"+p.max, text:T("건 승인 대기 — 승인·안 올림은 검증 설정의 제안함","pending — approve / decline in the proposal box (Verify Settings)")});
     else prL.push(T("지금 제안 없음","no proposals right now"));
-    prL.push(T("다음 검사: 훅 "+nc.tickK+"회마다(지금 "+nc.tickCount+"회) · "+nc.unusedDays+"일 미사용 관측"+(nc.lastTickTs?" · 마지막 검사 "+rfWhen(nc.lastTickTs):" · 아직 검사 없음"),"next check: every "+nc.tickK+" hook ticks (now "+nc.tickCount+") · "+nc.unusedDays+"-day unused watch"+(nc.lastTickTs?" · last check "+rfWhen(nc.lastTickTs):" · no check yet")));
+    // [2026-10-18] 옛 줄은 K 를 '훅 횟수'로 설명했지만 실제 K=검증 묶음 마감 누계였다(틀린 설명) — 조건 설명은 정리 담당 칸으로 옮기고, 여기는 '어디서 들어오고 누가 넣나'만.
+    prL.push(T("들어오는 곳: 사용자 말(구현 대화가 올린 것) · 정리 담당 제안 — 수칙서에 넣는 것은 👤 사용자 도장만","comes from: your words (raised by the implementer chat) · curator proposals — only 👤 your stamp puts them into the rulebook"));
     rfSet("rfProposals", prL);
     var cuL=[];
+    cuL.push(rfCuratorWho(d));
+    cuL.push(rfCuratorWhen(nc));
     if(u.running) cuL.push(T("정리 제안 실행 중","curation running"));
     if(u.lastTs){ var trg=u.lastTrigger==="auto"?T("자동","auto"):u.lastTrigger==="button"?T("버튼","button"):T("수동","manual"); cuL.push(T("마지막 실행 "+rfWhen(u.lastTs)+" · "+trg+" · "+u.lastOutcome+(u.lastReason?" ("+u.lastReason+")":""),"last run "+rfWhen(u.lastTs)+" · "+trg+" · "+u.lastOutcome+(u.lastReason?" ("+u.lastReason+")":""))); }
-    else cuL.push(T("아직 실행 없음 — 장부 재료가 쌓이면 스스로 돌아요(비용 없음)","no run yet — runs by itself once ledger material accumulates (no cost)"));
+    else cuL.push(T("아직 실행 없음 — 위 조건이 차면 스스로 돌아요(신호가 없으면 부르지 않아요)","no run yet — runs by itself when a condition above is met (not called without a signal)"));
     var m=u.metrics||{}; cuL.push(T("측정: 채택률 "+m.adoptRate+"% (제안 "+m.proposedTotal+" · 채택 "+m.adopted+" · 안 올림 "+m.declined+") · 서고 "+m.archiveSize+"항 · 선별 초과 "+m.selOverCount+"회 · 미사용 "+m.unusedCount+"항","measures: adoption "+m.adoptRate+"% (proposed "+m.proposedTotal+" · adopted "+m.adopted+" · declined "+m.declined+") · stored "+m.archiveSize+" · selection over-range "+m.selOverCount+" · unused "+m.unusedCount));
     rfSet("rfCurator", cuL, u.lastItems&&u.lastItems.length?{summary:T("마지막 제안 "+u.lastItems.length+"건 보기","show last "+u.lastItems.length+" proposal(s)"), items:u.lastItems}:(u.lastTs?{summary:T("마지막 실행의 제안 없음","last run produced no proposals"), items:[]}:null));
   }
@@ -7242,7 +7438,7 @@ class Dashboard {
   }
   $("scSeg").addEventListener("click", function(ev){ const b=ev.target.closest("[data-rs]"); if(b){ scCurRS=b.getAttribute("data-rs"); highlightSeg("scSeg","data-rs",scCurRS); scMark(); } });
   $("scModel").addEventListener("change", function(){ scMark(); renderScSeg($("scModel").value.trim()); });
-  $("scSave").addEventListener("click", ()=>{ if(scBusy) return; pendingSave={target:"scoutCodex", msg:T("저장됨 ✓ (다음 Codex 정찰·의미 보강부터 적용)","Saved ✓ (applies from the next Codex scout / enrichment run)")}; scLock(true); scSavedGen=scGen; vscode.postMessage({type:"saveScoutCodexPrefs", model:$("scModel").value.trim(), reasoning:scCurRS}); });
+  $("scSave").addEventListener("click", ()=>{ if(scBusy) return; pendingSave={target:"scoutCodex", msg:T("저장됨 ✓ (다음 Codex 도우미 실행부터 적용 — 분류·서고 선별·정리 담당·정찰·의미 보강 중 Codex 가 맡는 것)","Saved ✓ (applies from the next Codex helper run — whichever of classification · rule selection · curator · scouting · enrichment Codex handles)")}; scLock(true); scSavedGen=scGen; vscode.postMessage({type:"saveScoutCodexPrefs", model:$("scModel").value.trim(), reasoning:scCurRS}); });
   $("scClear").addEventListener("click", ()=>{ if(scBusy) return; pendingSave={target:"scoutCodex", msg:T("초기화됨 ✓ (codex 기본값으로)","Reset ✓ (back to codex defaults)")}; $("scModel").value=""; scCurRS=""; highlightSeg("scSeg","data-rs",""); scLock(true); scSavedGen=scGen; vscode.postMessage({type:"saveScoutCodexPrefs", model:"", reasoning:""}); });
   // 언어 토글(전역 ko/en) — 저장은 확장이 language.json에(모든 창이 파일 watch로 따라옴). 표시는 state로 되돌아와 확정.
   // 전환 잠금(구현검증 1차 지적 2): 언어 전환은 확장이 webview HTML을 통째로 재생성해 메모리의 초안(contractDirty·
@@ -7975,6 +8171,7 @@ class Dashboard {
         var wbKey0=String(e9.wsKey||"")+"|"+String(e9.gen||""); // 작업공간+세대 복합 결속(R2 blocker ab-1)
         if(e9.gen!==undefined && wbGen!==wbKey0){ wbGen=wbKey0; wbAdds.clear(); wbRemoves.clear(); } // 어느 축이 바뀌어도 초기화
         var h9=document.createElement("div"); h9.style.fontWeight="600"; h9.textContent=(d.lang==="en"?"Rules":"수칙"); ec.appendChild(h9); // [재편 B] 어휘 4종 — 정상 흐름 헤더
+        rfMarks(ec, [[T("판정","judged by"), T("🔍 검증 대화","🔍 verifier chat")], [T("바꾸기","changed by"), T("👤 사용자 도장만","👤 your stamp only")], [T("구현 대화엔","to the implementer"), T("알림으로","as a notice")]]); // [2026-10-18] 누가·어디서(긴 설명 대신 표식 — 전체 흐름은 '한눈에 보기' 수칙 줄)
         var s9=document.createElement("div"); if(e9.tone==="warn"){ s9.style.cssText="color:var(--vscode-editorWarning-foreground,#d9a441)"; } else { s9.className="muted"; } s9.textContent=e9.label; ec.appendChild(s9);
         if(d.usedMemory&&d.usedMemory.selOver){ var so9=d.usedMemory.selOver; var ov9=document.createElement("div"); ov9.style.cssText="color:var(--vscode-editorWarning-foreground,#d9a441);font-size:11px;margin-top:2px"; ov9.textContent=T("관련 수칙이 정상 범위("+so9.itemsMax+"항 · "+so9.bytesMax+"바이트)를 넘음 — 최근 검증 "+so9.count+"항 · "+so9.bytesTotal+"바이트 전량 동봉(누락 없음) · 서고 정리 권장","related rules exceed the normal range ("+so9.itemsMax+" items · "+so9.bytesMax+" bytes) — last verification carried "+so9.count+" items · "+so9.bytesTotal+" bytes, all included · consider tidying the archive"); ec.appendChild(ov9); } // [§7 4-2b] 서고 카드 초과 표기(정보 — 경보 아님)
         // [§B3 · D4] 정리 담당 줄·'마지막 정리 결과 보기' 버튼은 개요 패널 '수칙 흐름' 카드(정리 담당 칸 인라인 접기)로 옮겼다 — 설정 탭은 승인·편집만.
@@ -8103,7 +8300,8 @@ class Dashboard {
         var sl=document.createElement("div"); sl.className="muted"; sl.style.cssText="font-size:11px;margin-top:2px";
         var lastD9=""; if(sm9&&sm9.lastTs){ var dl9=new Date(sm9.lastTs); if(!isNaN(dl9.getTime())) lastD9=(dl9.getMonth()+1)+"/"+dl9.getDate()+" "+String(dl9.getHours()).padStart(2,"0")+":"+String(dl9.getMinutes()).padStart(2,"0"); }
         sl.textContent=T("살펴볼 말 "+((sm9&&sm9.queued!=null)?sm9.queued:"?")+"건 · 마지막 분류: "+(lastD9?lastD9+" "+oLab(sm9.lastOutcome,sm9.lastReason):"아직 없음"),"words waiting "+((sm9&&sm9.queued!=null)?sm9.queued:"?")+" · last run: "+(lastD9?lastD9+" "+oLab(sm9.lastOutcome,sm9.lastReason):"none yet")); uc.appendChild(sl);
-        var sn=document.createElement("div"); sn.className="muted"; sn.style.cssText="font-size:11px;margin-top:2px"; sn.textContent=T("검증이 통과하거나 왕복 상한에 닿아 한 작업이 마감될 때, 모인 말을 독립 분류 담당이 살펴보고 성격만 나눠요(어디에도 직접 쓰지 않아요). 판정 경계로 고른 말은 구현 담당의 판단을 거쳐야 위 '수칙' 카드에 올라가요. 구현 담당이 일하는 방식에 대한 말은 아래에 알려 드릴 뿐이에요 — 적어 두려면 설정 탭의 구현 담당 규칙 칸에 직접 쓰세요.","When a piece of work closes (verification passes or hits the round cap), an independent classifier looks at the collected words and only sorts them by kind (it writes nothing anywhere). Words picked as judgement boundaries reach the 'Rules' card above only after the implementer decides. Words about how the implementer should work are only listed below — to keep one, write it into the rule box in the Settings tab yourself."); uc.appendChild(sn);
+        { rfMarks(uc, [[T("언제","when"), T("검증 묶음이 끝날 때","when a verify bundle closes")], [T("분류","classified by"), T("⚙ 별도 1회 실행 · 말이 나온 대화와 같은 회사(","⚙ separate one-off run · same company as the chat the words came from (")+rfBothModels(d)+T(") — 성격만 나눠요(어디에도 쓰지 않음)",") — only sorts by kind (writes nothing)")], [T("거름","filtered by"), T("🧑 구현 대화가 올림/안 올림","🧑 implementer chat raises/skips")], [T("결정","decided by"), T("👤 위 '수칙' 카드에서 승인","👤 approve in the 'Rules' card above")]]); } // [2026-10-18] 긴 설명 → 흐름 표식(분류 회사=그 말이 나온 대화의 회사 — 모드대로면 구현 담당 회사)
+        var sn=document.createElement("div"); sn.className="muted"; sn.style.cssText="font-size:11px;margin-top:2px"; sn.textContent=T("구현 담당이 일하는 방식에 관한 말은 아래에 알리기만 해요 — 적어 두려면 설정 탭의 구현 담당 규칙 칸에 직접 쓰세요.","Words about how the implementer works are only listed below — to keep one, write it into the rule box in the Settings tab yourself."); uc.appendChild(sn);
         if(res9 && resN9){ // [⑤] 분류 결과 — 읽기 전용(승인·쓰기 버튼 없음 · D-a)
           var mkD=function(ts){ if(!ts) return ""; var dd=new Date(ts); return isNaN(dd.getTime())?"":(dd.getMonth()+1)+"/"+dd.getDate(); };
           var tot9=function(k){ var a=(res9[k]||[]).length, c=(sm9&&sm9.results&&typeof sm9.results[k]==="number")?sm9.results[k]:a; return c<a?a:c; }; // [검증 1회차 보완] 전체 건수=요약 집계(목록은 최근 상한까지만)
@@ -8310,6 +8508,9 @@ class Dashboard {
       // 세그먼트 바로 아래 DeepSeek 연결 줄(사용자 요청) — 키 등록 여부 + '실제로 동작했다'는 증거(마지막 DeepSeek 정찰 성공 기록).
       // 확장이 직접 신호를 쏘지 않는 원칙 유지 — 표시 근거는 게시판 메타(그 시점 통신 성공의 증거)뿐.
       (function(){
+        // [2026-10-18 2트랙 잔류 결함] 연결 상태 줄은 자기 블록 안에서만 끝낸다 — 예전엔 2트랙이면 여기서 함수 전체가 끝나 아래 두 담당 줄(탐색·의미 보강)의
+        // 숨김 코드에 닿지 못했다(3트랙에서 보이던 두 줄이 2트랙 저장 뒤에도 남음). 두 담당 줄은 각자 on 을 보고 숨는다.
+        safe(function(){
         const api=$("scoutApiLine"); if(!api) return;
         if(!on){ api.style.display="none"; return; }
         api.style.display="";
@@ -8337,6 +8538,7 @@ class Dashboard {
           ng.textContent=T("ⓘ 비-git 폴더 — '같이 바뀌던 파일' 힌트만 불가·지도는 최근 수정 기준","ⓘ non-git folder — only 'changed-together' hints unavailable · maps use recent edits");
           ng.title=T("이 폴더는 변경 기록(버전 관리)이 없어요. 통계 힌트만 제한되고 지도 생성은 정상 동작해요.","This folder has no version-control history. Only the stats hint is limited — map creation works normally.");
           api.appendChild(ng); }
+        });
         safe(function(){ // 탐색 담당 선택(2026-07-20 사용자 요청) — .seg 세그먼트(기존 디자인 언어)로 시각화(UX 교훈 3: 말 대신 구조)
           const row=$("scoutArmRow"); if(!row) return;
           const av=d.scoutArm;
@@ -8526,7 +8728,8 @@ class Dashboard {
             const ds9=T("DeepSeek "+dsM9+" — ⚙️ 고급설정의 DeepSeek 설정","DeepSeek "+dsM9+" — ⚙️ Advanced DeepSeek settings");
             const cl9=T("Claude Code 기본 모델 — 따로 지정하지 않음(안전상 거절이면 정해 둔 재시도 모델로 한 번)","Claude Code's default model — not set separately (one retry with the configured retry model on a safety refusal)");
             const m9=mm.mode;
-            mdl.textContent=T("쓰는 모델 — ","Model used — ")+(m9==="economy"?ds9:m9==="precision"?cx9:m9==="auto"?ds9+T(" · 정밀이 필요하면 "," · when precision is needed: ")+cx9:cl9);
+            const adj9=T(" · 결과가 부딪치거나 판정이 필요하면 Codex "+(sc9.model||"codex 기본 모델")+" · "+(sc9.reasoning||"codex 기본값")+" 가 해소 판정"," · when results conflict or need a ruling, Codex "+(sc9.model||"codex default model")+" · "+(sc9.reasoning||"codex default")+" adjudicates"); // 1판 blocker f-2e2d7712
+            mdl.textContent=T("쓰는 모델 — ","Model used — ")+(m9==="economy"?ds9+adj9:m9==="precision"?cx9:m9==="auto"?ds9+T(" · 정밀이 필요하면 "," · when precision is needed: ")+cx9:cl9+adj9);
             row.appendChild(mdl);
           });
           // degraded 배지: 선택한 담당의 readiness가 미성립이면 저장값은 유지한 채 사유만 표시(조용한 전환 금지 — 1-34)
@@ -9454,6 +9657,7 @@ class Dashboard {
     safe(function(){ if (d.uiTheme && d.uiTheme !== curTheme) applyTheme(d.uiTheme); }); // 다른 창의 테마 변경 동기화(같은 전역 파일)
     safe(function(){ renderOverview(d); }); // [UI 개편 2차] 개요 패널 — 같은 상태 푸시 재조립
     safe(function(){ renderRulesFlow(d); }); // [§B3 · D4] 수칙 흐름 4칸(개요)
+    safe(function(){ renderRulesMap(d); }); // [2026-10-18] 한눈에 보기 수칙 줄 + 고급설정 '이 프로젝트에서 쓰는 곳'
     safe(function(){ if (Math.abs(window.scrollY - keepY) > 1) window.scrollTo(0, keepY); });
   });
   // 부팅 자가 치유(3요원 조사 합의): 이 화면은 원래 스스로 데이터를 요청하지 않아(push 전용), 초기 post가 어떤 이유로든

@@ -309,7 +309,7 @@ t("⑦ 대시보드 — 후보 집계 → 자료 변환(컴파일 산출물) →
   const b2 = outSrc.indexOf('safe(function(){ var ec=$("envCard");'), e2 = outSrc.indexOf('safe(function(){ var uc=$("uwCard");', b2);
   assert.ok(b2 > 0 && e2 > b2);
   const ec = mkEl("div");
-  new Function("document", "$", "T", "d", "vscode", "safe", "var wbGen='', wbAdds=new Set(), wbRemoves=new Set(), candsMoreOpenWeb=false, signalsOpenWeb=false, rulesOpenWeb=false;\n" + outSrc.slice(b2, e2))({ createElement: mkEl, createTextNode: (tx) => ({ tag: "#text", textContent: String(tx), children: [] }) }, (x) => (x === "envCard" ? ec : null), (a) => a, { envelope: { label: "x", gen: P.H, wsKey: cv(rid).wsKey, lang: "ko", gen0: false, cands: conv }, lang: "ko" }, { postMessage() {} }, (f) => f());
+  new Function("document", "$", "T", "d", "vscode", "safe", require("./_rf-prelude.js").RFP + "var wbGen='', wbAdds=new Set(), wbRemoves=new Set(), candsMoreOpenWeb=false, signalsOpenWeb=false, rulesOpenWeb=false;\n" + outSrc.slice(b2, e2))({ createElement: mkEl, createTextNode: (tx) => ({ tag: "#text", textContent: String(tx), children: [] }) }, (x) => (x === "envCard" ? ec : null), (a) => a, { envelope: { label: "x", gen: P.H, wsKey: cv(rid).wsKey, lang: "ko", gen0: false, cands: conv }, lang: "ko" }, { postMessage() {} }, (f) => f());
   const all = []; const w = (x) => { all.push(x); (x.children || []).forEach(w); }; w(ec);
   const rowOf = (text) => all.find((x) => (x.children || []).some((c) => c.textContent === text));
   const lines = (row) => row.children.map((c) => c.textContent);

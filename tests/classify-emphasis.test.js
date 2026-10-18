@@ -252,7 +252,7 @@ t("⑤ 화면 — 집계(지문·제안·결과) · 수칙서 세대가 바뀌�
   const b2 = outSrc.indexOf('safe(function(){ var ec=$("envCard");'), e2 = outSrc.indexOf('safe(function(){ var uc=$("uwCard");', b2);
   const ec = mkEl("div");
   const rulesData = [RB1, RB2].map((x, k) => ({ target: "core", targetHash: P.H, axis: "alwaysBlocker", index: k, itemFp: fpOf(x), text: x, tag: "always", ...(tal.byFp[fpOf(x)] ? { emph: tal.byFp[fpOf(x)] } : {}) }));
-  new Function("document", "$", "T", "d", "vscode", "safe", "var wbGen='', wbAdds=new Set(), wbRemoves=new Set(), candsMoreOpenWeb=false, signalsOpenWeb=false, rulesOpenWeb=false;\n" + outSrc.slice(b2, e2))({ createElement: mkEl, createTextNode: (tx) => ({ tag: "#text", textContent: String(tx), children: [] }) }, (x) => (x === "envCard" ? ec : null), (a) => a, { envelope: { label: "x", gen: P.H, wsKey: cv.wsKey, lang: "ko", gen0: false, cands: conv, rules: rulesData }, lang: "ko" }, { postMessage() {} }, (f) => f());
+  new Function("document", "$", "T", "d", "vscode", "safe", require("./_rf-prelude.js").RFP + "var wbGen='', wbAdds=new Set(), wbRemoves=new Set(), candsMoreOpenWeb=false, signalsOpenWeb=false, rulesOpenWeb=false;\n" + outSrc.slice(b2, e2))({ createElement: mkEl, createTextNode: (tx) => ({ tag: "#text", textContent: String(tx), children: [] }) }, (x) => (x === "envCard" ? ec : null), (a) => a, { envelope: { label: "x", gen: P.H, wsKey: cv.wsKey, lang: "ko", gen0: false, cands: conv, rules: rulesData }, lang: "ko" }, { postMessage() {} }, (f) => f());
   const all = []; const w = (x) => { all.push(x); (x.children || []).forEach(w); }; w(ec);
   const emphs = all.filter((x) => x.attrs && x.attrs["data-emph"] === "1").map((x) => x.textContent);
   assert.ok(emphs.some((s) => /^다시 강조됨 2회\(\d+\/\d+\)$/.test(s)), "★수칙 줄 '다시 강조됨 2회(날짜)' " + JSON.stringify(emphs));
@@ -292,7 +292,7 @@ t("⑦ 사용자 말 카드 — 다시 강조 줄에 대상 종류 · 다시 넘
   assert.ok(b > 0 && e > b);
   const mkEl = (tag) => { const o = { tag, children: [], style: {}, attrs: {}, textContent: "", className: "", title: "", appendChild(c) { this.children.push(c); return c; }, setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k]; }, insertBefore(c) { this.children.unshift(c); }, remove() {}, querySelectorAll() { return []; }, querySelector() { return null; }, addEventListener() {} }; Object.defineProperty(o, "innerHTML", { set() { o.children = []; }, get() { return ""; } }); return o; };
   const uc = mkEl("div");
-  new Function("document", "$", "T", "d", "vscode", "safe", outSrc.slice(b, e))({ createElement: mkEl, createTextNode: (tx) => ({ tag: "#text", textContent: String(tx), children: [] }) }, (id) => (id === "uwCard" ? uc : null), (a) => a, { userWords: view }, { postMessage() {} }, (f) => f());
+  new Function("document", "$", "T", "d", "vscode", "safe", require("./_rf-prelude.js").RFP + outSrc.slice(b, e))({ createElement: mkEl, createTextNode: (tx) => ({ tag: "#text", textContent: String(tx), children: [] }) }, (id) => (id === "uwCard" ? uc : null), (a) => a, { userWords: view }, { postMessage() {} }, (f) => f());
   const all = []; const w = (x) => { all.push(x); (x.children || []).forEach(w); }; w(uc);
   const txt = all.map((x) => x.textContent).join(" | ");
   assert.ok(txt.includes("같은 뜻 (수칙서 본문 항목): alwaysBlocker: " + RB1) && txt.includes("같은 뜻 (앞선 판정 경계 결과): "), "★다시 강조 대상 종류 " + txt.slice(0, 600));

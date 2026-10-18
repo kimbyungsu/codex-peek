@@ -264,7 +264,7 @@ t("⑤ 대시보드 — 후보 카드 출처 줄(분류 결과에서 올림·칸
   const item = (id, status, extra) => Object.assign({ id: id.repeat(16), status, quote: "인용 " + id, why: "근거", seat: "outOfScope", bounds: "영향", ts: "2026-10-10T00:00:00.000Z" }, extra || {});
   const d = { userWords: { wsKey: "w", repoKey: "rk", summary: { queued: 0, lastTs: "", repoKey: "rk", results: { boundary: 5, emphasis: 0, style: 0 }, boundaryStatus: { waiting: 1, raised: 1, skipped: 1, unhandled: 1, expired: 1 } },
     results: { boundary: [item("1", "delivered"), item("2", "raised"), item("3", "skipped", { note: "보고 형식 요구라 판정 경계 아님" }), item("4", "unhandled"), item("5", "expired")], emphasis: [], style: [] }, held: [] } };
-  new Function("document", "$", "T", "d", "vscode", "safe", outSrc.slice(b, e))({ createElement: mkEl }, (id) => (id === "uwCard" ? uc : null), (a) => a, d, { postMessage() {} }, (f) => f());
+  new Function("document", "$", "T", "d", "vscode", "safe", require("./_rf-prelude.js").RFP + outSrc.slice(b, e))({ createElement: mkEl }, (id) => (id === "uwCard" ? uc : null), (a) => a, d, { postMessage() {} }, (f) => f());
   const txt = walk(uc).map((x) => x.textContent).join(" | ");
   assert.ok(txt.includes("판정 경계 — 구현 담당 판단 대기 1 · 올림 1 · 안 올림 1 · 구현 담당 미처리 1 · 원문 만료 1"), "상태 요약 " + txt.slice(0, 300));
   for (const k of ["구현 담당 판단 대기", "구현 담당이 올림 — 위 '수칙' 카드에서 승인", "구현 담당이 안 올림 — 이유: 보고 형식 요구라 판정 경계 아님", "두 번 넘겨받고도 판단하지 않았어요", "원문 보관 기간(7일)이 지나"]) assert.ok(txt.includes(k), "상태 줄: " + k);
@@ -275,7 +275,7 @@ t("⑤ 대시보드 — 후보 카드 출처 줄(분류 결과에서 올림·칸
   const ec = mkEl("div");
   const body = "var wbGen='', wbAdds=new Set(), wbRemoves=new Set(), candsMoreOpenWeb=false, signalsOpenWeb=false, rulesOpenWeb=false;\n" + outSrc.slice(b2, e2);
   const cand = { id: "a".repeat(16), kind: "user-constraint", n: 1, title: "실기기 확인은 범위 밖", status: "proposed", gen: "g", wsKey: "wk", ts: "2026-10-10T00:00:00.000Z", axis: "outOfScope", fromResult: true, why: "분류 결과를 보고 판단" };
-  new Function("document", "$", "T", "d", "vscode", "safe", body)({ createElement: mkEl }, (id) => (id === "envCard" ? ec : null), (a) => a, { envelope: { label: "x", gen: "g", wsKey: "wk", lang: "ko", gen0: false, cands: [cand] }, lang: "ko" }, { postMessage() {} }, (f) => f());
+  new Function("document", "$", "T", "d", "vscode", "safe", require("./_rf-prelude.js").RFP + body)({ createElement: mkEl }, (id) => (id === "envCard" ? ec : null), (a) => a, { envelope: { label: "x", gen: "g", wsKey: "wk", lang: "ko", gen0: false, cands: [cand] }, lang: "ko" }, { postMessage() {} }, (f) => f());
   const t2 = walk(ec).map((x) => x.textContent).join(" | ");
   assert.ok(t2.includes("분류 담당이 판정 경계로 고르고, 구현 담당이 판단해 올렸어요 — 수칙서 '범위 밖' 칸") && t2.includes("어디로: 수칙서 본문 '범위 밖' 칸"), "출처 줄 " + t2.slice(0, 400));
 });
@@ -381,7 +381,7 @@ t("★화면 자료 변환까지 — 실제 후보 집계(computeEnvelopeCandida
   const mkEl = (tag) => { const o = { tag, children: [], style: {}, attrs: {}, textContent: "", className: "", title: "", appendChild(c) { this.children.push(c); return c; }, setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k]; }, insertBefore(c) { this.children.unshift(c); }, remove() {} }; Object.defineProperty(o, "innerHTML", { set() { o.children = []; }, get() { return ""; } }); return o; };
   const b2 = outSrc.indexOf('safe(function(){ var ec=$("envCard");'), e2 = outSrc.indexOf('safe(function(){ var uc=$("uwCard");', b2);
   const ec = mkEl("div");
-  new Function("document", "$", "T", "d", "vscode", "safe", "var wbGen='', wbAdds=new Set(), wbRemoves=new Set(), candsMoreOpenWeb=false, signalsOpenWeb=false, rulesOpenWeb=false;\n" + outSrc.slice(b2, e2))({ createElement: mkEl }, (x) => (x === "envCard" ? ec : null), (a) => a, { envelope: { label: "x", gen: CL.GEN0_HASH, wsKey: mine.wsKey, lang: "ko", gen0: true, cands: conv }, lang: "ko" }, { postMessage() {} }, (f) => f());
+  new Function("document", "$", "T", "d", "vscode", "safe", require("./_rf-prelude.js").RFP + "var wbGen='', wbAdds=new Set(), wbRemoves=new Set(), candsMoreOpenWeb=false, signalsOpenWeb=false, rulesOpenWeb=false;\n" + outSrc.slice(b2, e2))({ createElement: mkEl }, (x) => (x === "envCard" ? ec : null), (a) => a, { envelope: { label: "x", gen: CL.GEN0_HASH, wsKey: mine.wsKey, lang: "ko", gen0: true, cands: conv }, lang: "ko" }, { postMessage() {} }, (f) => f());
   const all = []; const w = (x) => { all.push(x); (x.children || []).forEach(w); }; w(ec);
   assert.ok(all.map((x) => x.textContent).join(" | ").includes("구현 담당이 판단해 올렸어요 — 수칙서 '범위 밖' 칸"), "카드 출처 줄");
 });

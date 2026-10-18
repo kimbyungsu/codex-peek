@@ -4,7 +4,7 @@
  * 계약: 입력 집계기는 장부만 읽고(코드 없음) repoKey·세대 결속으로 실패를 정직 보고한다 · 신호 0+같은 세대=페이지 호출 없이 생략 · 같은 입력=같은 키(멱등) ·
  * 제안기 출력은 JSON 하나·손상=전량 거부·의미 거부=항목 탈락 기록·toggle=보류 · 커밋은 provisional→결과 행→proposed 2단+영수증(purpose curate·turnAnchor=curationKey) ·
  * 회당 ≤3·미승인 ≤6 · 승인 변환(add→서고·oos-add→코어 제외 칸·remove→3중 대조+sourceCandidateIds)·toggle 거부 · 도장 시 applied 종결(고아 복원·세대 이월에서 제외) ·
- * 잠금(산 소유자=거부·죽은 소유자=회수) · 실패=영수증+경보·검증 무영향 · 팔=탐색 담당 유효 팔(2026-09-06 개정 — 종전 harnessMode 유래 폐지) · 재료 0=무호출 · refs 필수 · 울타리 1겹 허용.
+ * 잠금(산 소유자=거부·죽은 소유자=회수) · 실패=영수증+경보·검증 무영향 · 팔=3트랙은 탐색 담당 유효 팔(2026-09-06 개정)·2트랙은 운용 모드의 구현 담당 회사(2026-10-18 개정) · 재료 0=무호출 · refs 필수 · 울타리 1겹 허용.
  */
 const assert = require("assert");
 const fs = require("fs");
@@ -45,19 +45,30 @@ const out = (arr) => JSON.stringify({ proposals: arr });
 // 2026-09-06: refs 필수 — 신호 0인 픽스처에서 제안 파싱·커밋을 시험하려면 되받아침 신호 1건(rebut:oos-1)을 먼저 심는다(현재 캠페인=그 저장소 — ab-1 수용 조건)
 const seedRebutSignal = (ws, repo, tag) => { const rk = CL.repoKeyOf(repo); fs.mkdirSync(path.dirname(CL.campaignFileFor(ws)), { recursive: true }); fs.writeFileSync(CL.campaignFileFor(ws), JSON.stringify({ schema: "vcamp-1", campaignId: "c-" + tag, count: 1, budget: 5, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), repoKey: rk })); CL.appendFindingsLedger(ws, [{ type: "disposition", campaignId: "c-" + tag, findingId: "f-" + tag, choice: "rebut", oosId: "oos-1", asOfRound: 1, ts: new Date().toISOString() }]); };
 
-t("팔 결정=탐색 담당 유효 팔(2026-09-06 개정 · 2026-09-17 모드 기본): 미설정=모드 기본(claude-codex=self·codex-codex=codex) · scoutArm codex=codex · deepseek는 키 파일 없으면 self 강등·있으면 deepseek — harnessMode·환경변수 무관", () => {
-  assert.strictEqual(CU.selectorArmForCuration(WS, { harnessMode: "codex-codex" }), "codex", "운용 모드가 팔을 직접 정하진 않되, 탐색 담당 미설정의 기본이 모드 기본을 따른다(2026-09-17 개정: C-C=codex — claude CLI 보장 없음) → 정리 담당도 그 유효 팔");
-  assert.strictEqual(CU.selectorArmForCuration(WS, { harnessMode: "claude-codex" }), "self", "Claude-Codex 미설정=self(무회귀)");
+t("팔 결정(2026-10-18 개정 — curatorArmView): 2트랙=운용 모드의 구현 담당 회사(클로드-코덱스=self·코덱스-코덱스=codex — 숨은 탐색 담당 저장값 무시·고를 수 없음) · 3트랙=탐색 담당 유효 팔(codex=codex · deepseek 는 키 없으면 모드 기본 강등·있으면 deepseek) — 환경변수 무관", () => {
+  // 2트랙(scoutMode 없음=off)
+  assert.strictEqual(CU.selectorArmForCuration(WS, { harnessMode: "codex-codex" }), "codex", "2트랙 코덱스-코덱스=Codex(구현 담당 회사)");
+  assert.strictEqual(CU.selectorArmForCuration(WS, { harnessMode: "claude-codex" }), "self", "2트랙 클로드-코덱스=Claude(무회귀)");
   const keyFile = path.join(HOME, "deepseek.json");
+  const on = (o) => Object.assign({ scoutMode: "on" }, o || {});
   try {
     assert.ok(CL.updateContractPatch(WS, "ko", { scoutArm: "codex" }).ok);
-    assert.strictEqual(CU.selectorArmForCuration(WS, { harnessMode: "claude-codex" }), "codex", "탐색 담당 codex=정리 담당도 codex(정찰 두뇌 설정 공유)");
-    process.env.CODEX_THREAD_ID = "x"; try { assert.strictEqual(CU.selectorArmForCuration(WS, null), "codex", "환경변수는 팔을 바꾸지 않는다"); } finally { delete process.env.CODEX_THREAD_ID; }
+    assert.strictEqual(CU.selectorArmForCuration(WS, { harnessMode: "claude-codex" }), "self", "2트랙: 화면에 없는 탐색 담당 codex 저장값이 있어도 클로드-코덱스=Claude(2026-10-18 사용자 결정)");
+    const v2 = CU.curatorArmView(WS, { harnessMode: "claude-codex" });
+    assert.ok(v2.source === "mode" && v2.track === 2 && v2.raw === null, "2트랙 출처=모드(화면 표시용)");
+    assert.strictEqual(CU.selectorArmForCuration(WS, null), "self", "c 없음=계약 판독(scoutMode 없음=2트랙)");
+    // 3트랙
+    assert.strictEqual(CU.selectorArmForCuration(WS, on({ harnessMode: "claude-codex" })), "codex", "3트랙 탐색 담당 codex=정리 담당도 codex(정찰 두뇌 설정 공유)");
+    assert.strictEqual(CU.curatorArmView(WS, on()).source, "scout", "3트랙 출처=탐색 담당");
+    process.env.CODEX_THREAD_ID = "x"; try { assert.strictEqual(CU.selectorArmForCuration(WS, on()), "codex", "환경변수는 팔을 바꾸지 않는다"); } finally { delete process.env.CODEX_THREAD_ID; }
     assert.ok(CL.updateContractPatch(WS, "ko", { scoutArm: "deepseek" }).ok);
     fs.rmSync(keyFile, { force: true });
-    assert.strictEqual(CU.selectorArmForCuration(WS, null), "self", "키 없는 DeepSeek=self 강등(scoutArmView eff와 동일)");
+    assert.strictEqual(CU.selectorArmForCuration(WS, on()), "self", "3트랙 키 없는 DeepSeek=모드 기본 강등(scoutArmView eff와 동일)");
+    assert.strictEqual(CU.curatorArmView(WS, on()).degraded, "no-key", "강등 사유 표시");
     fs.writeFileSync(keyFile, JSON.stringify({ apiKey: "sk-test-not-real" }));
-    assert.strictEqual(CU.selectorArmForCuration(WS, null), "deepseek", "키 있으면 deepseek");
+    assert.strictEqual(CU.selectorArmForCuration(WS, on()), "deepseek", "3트랙 키 있으면 deepseek");
+    assert.strictEqual(CU.selectorArmForCuration(WS, { harnessMode: "claude-codex" }), "self", "2트랙은 키 있는 DeepSeek 저장값이어도 DeepSeek 을 부르지 않는다");
+    assert.strictEqual(CU.selectorArmForCuration(WS, { harnessMode: "codex-codex" }), "codex", "2트랙 코덱스-코덱스=Codex");
   } finally { fs.rmSync(keyFile, { force: true }); assert.ok(CL.updateContractPatch(WS, "ko", { scoutArm: "self" }).ok); }
 });
 
@@ -511,9 +522,9 @@ async function main() {
     assert.ok(!/resolveCodex is not a function|spawn-prep-failed/.test(rr.stderr + rr.stdout));
   });
 
-  await ta("[2026-09-06 개정] CLI curate run(탐색 담당=DeepSeek·키 파일 있음) — curation.js 전용 실행기(runCurationDeepseekPage)가 브릿지 `page` 명령을 stdin 프롬프트로 부르고(선별 실행기 무접촉) stdout(울타리 답)을 파서에 넘김(스텁 브릿지 실측·네트워크 없음)", async () => {
+  await ta("[2026-09-06 개정] CLI curate run(3트랙·탐색 담당=DeepSeek·키 파일 있음) — curation.js 전용 실행기(runCurationDeepseekPage)가 브릿지 `page` 명령을 stdin 프롬프트로 부르고(선별 실행기 무접촉) stdout(울타리 답)을 파서에 넘김(스텁 브릿지 실측·네트워크 없음)", async () => {
     const WS10 = fs.mkdtempSync(path.join(os.tmpdir(), "cur-ws10-")); const REPO10 = fs.mkdtempSync(path.join(os.tmpdir(), "cur-repo10-"));
-    fs.writeFileSync(path.join(REPO10, CL.ENVELOPE_FILE), coreRaw); CL.setEnvelopeHashAllSlots(WS10, CORE_HASH); CL.updateContractPatch(WS10, "ko", { scoutRepo: REPO10, scoutArm: "deepseek" });
+    fs.writeFileSync(path.join(REPO10, CL.ENVELOPE_FILE), coreRaw); CL.setEnvelopeHashAllSlots(WS10, CORE_HASH); CL.updateContractPatch(WS10, "ko", { scoutRepo: REPO10, scoutArm: "deepseek", scoutMode: "on" }); // 2026-10-18: DeepSeek 정리 담당은 3트랙에서만(2트랙=운용 모드 회사)
     const keyFile = path.join(HOME, "deepseek.json"); fs.writeFileSync(keyFile, JSON.stringify({ apiKey: "sk-test-not-real" }));
     const marker = path.join(WS10, "bridge-seen.json");
     const stub = path.join(WS10, "fake-deepseek-bridge.js");
