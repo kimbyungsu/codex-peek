@@ -466,6 +466,14 @@
 - 정본: bridge/verify-cap-handoff.js(closeoutTargetFor·submitCloseout·stopCloseoutCheck·closeoutView·splitCloseout) · bridge/verify-guard.js·codex-hook.js(종료 관문) · bridge/codex-bridge.js(closing 명령·마지막 왕복 안내) · src/extension.ts(검증 상한 마감 기록 칸) · docs/RULE-SUPPLY-REDESIGN-2026-10-04.md §4 구현.
 - 찾는말: 마감 기록, closing submit, 마감문 되풀이, 검증 상한 인계, 답 본문 파싱 폐지, 종료 때 다시 검사, 마감 기록 제출됨
 
+## D-2026-10-18-deepseek-check-on-pick — DeepSeek 연결 점검은 3트랙을 켤 때가 아니라 탐색 담당에서 DeepSeek 을 새로 고를 때 · 의미 보강은 전용 모델 설정 없이 공유하되 쓰는 모델을 화면에 표시
+- 날짜: 2026-10-18 · 종류: 사용자 질문·결정·구현 · 상태: 유효
+- 상황: 사용자 질문 ① 3트랙을 처음 켜면(담당이 기본값인데도) DeepSeek 테스트가 바로 돈다 — 고를 때 테스트돼야 하지 않나 ② 의미 보강 담당(Project MAP)은 어떤 모델·추론강도로 도는가 — 고를 옵션이 없다. 확인 결과(Codex 판단 검증 2회 통과): ① 3트랙을 꺼짐→켜짐으로 저장하면 키가 있을 때 담당 선택과 무관하게 DeepSeek 연결 점검(ping)을 보냈다 — 2026-07-09(5ed5321) 'Claude 정찰+DeepSeek 비교 정찰(두 번째 정찰자)' 시절의 흔적으로, 그 뒤 탐색 담당 선택(07-20 f016212·07-23 07b4fba)·의미 보강 담당과 고를 때 점검(07-23 a9a21e2·08-04 3a9ae24)이 생겨 DeepSeek 이 '고르면 쓰는' 선택지가 됐는데 남아 있었다(안내·키 칸 문구도 '두 번째 정찰자'). 탐색 담당에서 DeepSeek 을 고를 때는 점검이 없었다. ② 의미 보강 전용 설정은 없고 Codex 방식은 'Codex 정찰 모델·추론 강도'를 공유(판정·준비 점검 포함), DeepSeek 은 DeepSeek 설정 모델(기본 deepseek-v4-flash), Claude 는 지정 없음 — 그런데 Codex 설정 칸은 '탐색 담당이 Codex 일 때의 정찰에만 적용'이라고 적고 있었다.
+- 사용자 결정(선택지): ① '고를 때로 옮기기' ② '지금처럼 공유 + 화면에 표시'.
+- 결정: ① 3트랙을 켤 때는 아무것도 호출하지 않고 정찰 담당·준비 상태만 알린다(DeepSeek 을 골라 뒀는데 키가 없을 때만 [등록하러 가기]). DeepSeek 연결 점검은 탐색 담당에서 DeepSeek 을 새로 고를 때(이미 DeepSeek 이면 안 보냄 · 키 있을 때 · 저장 성공 뒤) 1회. 의미 보강의 DeepSeek 은 종전대로 고를 때 준비 점검. '비교 정찰·두 번째 정찰자' 화면 문구와 PRIVACY 전송 지점 설명을 지금 구조로 고침. ② 의미 보강 전용 모델 칸은 만들지 않는다(정리 담당 때의 '설정 파편화' 판단과 같은 방향) — Codex 정찰 설정 칸에 실제 적용 범위(정찰·의미 보강·정리 담당·준비 점검)를 적고, 의미 보강 담당 줄과 안내 새 탭에 고른 방식이 실제로 쓰는 모델을 표시. 안내 새 탭의 '버튼을 눌렀을 때만 점검' 문장도 실제 점검 시점(고를 때·다시 점검·설정 변경 자동)으로 정정.
+- 정본: src/extension.ts(setScoutArmFromUi · runDeepseekConnectionCheck · saveContract 3트랙 켤 때 안내 · mapModeRow '쓰는 모델' 줄 · openMapModeGuide modelNoteG) · PRIVACY.md 연결 점검 항목 · tests/deepseek-pick-check.test.js · tests/recon-ui.test.js
+- 찾는말: DeepSeek 연결 점검, ping, 3트랙 켤 때, 비교 정찰, 두 번째 정찰자, 탐색 담당 DeepSeek, 의미 보강 모델, 추론 강도, scout-codex.json 공유
+
 ## D-2026-10-17-helper-follow-claude — 도우미 Claude 는 특정 판으로 고정하지 않고, 확장이 이 창에 올라온 Claude Code 위치를 기록해 업데이트·되돌리기를 따라간다
 - 날짜: 2026-10-17 · 종류: 사용자 질문·결정·구현(AFTER-0.1.104-FIXES §1-11) · 상태: 유효
 - 상황: 사용자 질문 — 원래 사고(사용자 2.1.296 · 도우미 PATH 의 2.0.22)를 보면 도우미를 지금 설치된 판으로 고정해야 하지 않나, 업데이트가 반복되고 문제 판이면 되돌릴 수도 있다. 확인해 보니 따라가기가 실제로 고장: 업데이트(2.1.296→2.1.301) 직후와 되돌리기(2.1.301→2.1.295) 뒤 모두 자동 분류가 옛 기록의 판을 썼고, 그 기록 폴더가 지워지면 PATH 의 2.0.22 로 떨어질 상태였다(훅 쪽 기록이 갱신되지 않음 — 훅 환경에 위치 값이 없는 쪽이 유력).

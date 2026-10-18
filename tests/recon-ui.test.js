@@ -52,16 +52,16 @@ console.log("[한눈 도해(2026-07-08 2차 — 커뮤니티 피드백: 구조�
 ok(/className="rflow"/.test(ext) && /className="rnode"/.test(ext) && /className="rarw"/.test(ext), "정찰 4단계 도해(색 박스+화살표 — 검증 파이프라인과 같은 시각 문법) 항상 노출");
 ok(/파일이 바뀌면/.test(ext) && /검증을 지나며/.test(ext) && /원할 때만/.test(ext), "화살표에 '언제 넘어가는지' 라벨");
 ok(/className="rlife"/.test(ext) && /신설/.test(ext) && /승격/.test(ext) && /교체/.test(ext) && /폐기/.test(ext), "지식 수명주기 한 줄(신설→승격→교체→폐기) — '언제 뭘 반영하나' 즉답");
-ok(/지금 이대로\(키 없음\) = 기본 흐름 전부 동작/.test(ext) && /DeepSeek 키를 넣으면\(선택\) = 정찰만 분업/.test(ext), "API 비교 2박스 — 'DeepSeek 없인 못 쓰나?'에 첫 줄 즉답(과장 없는 문구 — Codex 정정)");
+ok(/지금 이대로\(키 없음\) = 기본 흐름 전부 동작/.test(ext) && /DeepSeek 키를 넣으면\(선택\) = DeepSeek 을 담당으로 고를 수 있음/.test(ext), "API 비교 2박스 — 'DeepSeek 없인 못 쓰나?'에 첫 줄 즉답(과장 없는 문구 — Codex 정정 · 2026-10-18 '비교 정찰' 개념 폐기 반영)");
 ok(/className="rlchip"/.test(ext) && (ext.match(/\.rchip\{/g)||[]).length===1, "수명주기 칩은 .rlchip — 기존 .rchip(규칙 메타 칩) 전역 충돌 재발 잠금(정의 1개만)");
 ok(/aria-label/.test(ext), "칩 hover 설명에 aria-label 병기(접근성)");
 ok(/"\+armName\("self"\)\+"이 더 정확했어요 — 필수 아님/.test(ext) && !/기본\(Claude\)이 더 정확했어요/.test(ext), "실측 근거로 '필수 아님' 정직 명시 — 담당 이름은 정본(armName self: 모드 기본이면 '기본 정찰(Claude)', 아니면 'Claude 정찰')");
 ok(/keyedDetails\("senseDetail"/.test(ext) && /keyedDetails\("mapInfo"/.test(ext), "텍스트 벽(후보 목록·한계·ⓘ 설명) → 접힘 강등(첫 화면=그림 원칙)");
 
-console.log("[3트랙 선택 안내(2026-07-09 지적 1)] 키 없음=경고 모달+이동 버튼 · 키 있음=실제 연결 점검");
-ok(/등록된 DeepSeek API 키가 없어요/.test(ext) && /3트랙의 효과가 미비할 수 있어요/.test(ext) && /등록하러 가기/.test(ext) && /알겠습니다/.test(ext), "키 없음 → 모달(효과 미비 경고는 '정찰 미실행' 사실 기준으로 정직화)+[등록하러 가기]/[알겠습니다]");
+console.log("[3트랙 켤 때 안내(2026-07-09 지적 1 → 2026-10-18 개정)] 호출 없이 정찰 담당·준비 안내 · DeepSeek 연결 점검은 탐색 담당에서 DeepSeek 을 고를 때(실제 실행 확인=tests/deepseek-pick-check.test.js)");
+ok(/3트랙\(정찰\)이 켜졌어요 — 정찰은 /.test(ext) && /3트랙의 효과가 미비할 수 있어요/.test(ext) && /등록하러 가기/.test(ext), "켤 때 안내: 정찰 담당·준비 상태 + 효과 미비는 '정찰 미실행' 사실 기준 + (DeepSeek 을 골라 뒀는데 키가 없을 때만) [등록하러 가기]");
 ok(/switchTab/.test(ext) && /data-tab="'\+ev\.data\.tab/.test(ext), "'등록하러 가기' → 고급설정 탭 전환 배선(확장→웹뷰)");
-ok(/API 등록과 정상 연결이 확인되었습니다 — 3트랙이 정상 운용됩니다/.test(ext) && /deepseek-bridge\.js/.test(ext) && /연결 점검에 실패했어요/.test(ext), "키 있음 → 실제 ping 점검 후 정상/실패를 사실대로");
+ok(/DeepSeek 연결이 확인됐어요/.test(ext) && /deepseek-bridge\.js/.test(ext) && /연결 점검에 실패했어요/.test(ext) && !/API 등록과 정상 연결이 확인되었습니다 — 3트랙이 정상 운용됩니다/.test(ext), "탐색 담당에서 DeepSeek 을 고를 때 실제 ping 점검 후 정상/실패를 사실대로(켤 때 점검 문구는 없음)");
 ok(/📖 정찰 구조 자세히 보기/.test(ext) && !/gb\.className="secondary"/.test(ext), "'자세히 보기' 주 버튼 승격(경고가 참조하는 문서 — 눈에 띄게, 지적 3)");
 ok(/className="rsec"/.test(ext), "영향지도 게시판 섹션 카드화(간격·구획 — 지적 4)");
 

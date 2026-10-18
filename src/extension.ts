@@ -1062,9 +1062,39 @@ async function setScoutArmFromUi(ws: string | null, arm: "self" | "deepseek" | "
       lang === "en" ? "Save anyway" : "그래도 저장");
     if (!goOn) return;
   }
+  const prevArm = (() => { try { return scoutArmViewExt(ws, lang).raw; } catch { return null; } })(); // 저장 전 명시 선택(연결 점검은 '새로 고를 때'만)
   const pr = await patchContractRetryExt(ws, lang, { scoutArm: arm });
   if (!pr.ok) { void offerLockRecoveryExt(pr, () => { void setScoutArmFromUi(ws, arm, lang); }); return; }
   vscode.commands.executeCommand("codexBridge.refresh"); // 저장 성공 후 즉시 재렌더(1차 [보완] — 복구 재시도 경유 포함)
+  // [2026-10-18 사용자 결정 '고를 때로 옮기기'] DeepSeek 을 새로 고른 순간, 키가 있으면 연결 점검 1회(이미 DeepSeek 이었으면 다시 보내지 않음).
+  if (arm === "deepseek" && prevArm !== "deepseek" && readDeepseekView().hasKey) await runDeepseekConnectionCheck();
+}
+
+// [2026-10-18 사용자 결정 '고를 때로 옮기기'] DeepSeek 연결 점검 — 배포된 브릿지의 ping 을 실제 실행(전송 1회 · 키 원문은 헤더로만 ·
+// PRIVACY 전송 지점). 종전엔 3트랙을 켤 때 담당 선택과 무관하게 돌았다 — 3트랙 초기(2026-07-09 5ed5321)의 'DeepSeek 비교 정찰
+// (두 번째 정찰자)' 개념의 흔적이었고, 지금은 탐색 담당에서 DeepSeek 을 고를 때만 부른다. 의미 보강의 DeepSeek 은 고를 때 별도 준비
+// 점검(runMapProbeFromUi)이 돈다. 결과는 사실대로 알림 — 성공/실패/실행 불가(선택 저장은 되돌리지 않음).
+function runDeepseekConnectionCheck(): Promise<"ok" | "failed" | "no-node" | "error"> {
+  return new Promise((done) => {
+    let settled = false;
+    void vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: tE("DeepSeek 연결 점검 중…", "Checking DeepSeek connection…") }, () => new Promise<void>((resolve) => {
+      const fin = (r: "ok" | "failed" | "no-node" | "error", show: () => void) => { if (settled) return; settled = true; try { show(); } catch { /* 알림 실패=결과 무영향 */ } resolve(); done(r); };
+      const keptKo = " 키는 등록돼 있고 선택은 저장됐어요 — 첫 DeepSeek 정찰 때 실제로 확인됩니다.", keptEn = " The key is registered and the choice is saved — the first DeepSeek scout run will exercise it.";
+      try {
+        const tok = hookSetup.resolveNodeToken(nodeTokenCandidates());
+        if (!tok) { fin("no-node", () => vscode.window.showWarningMessage(tE("연결 점검을 실행할 node를 찾지 못했어요." + keptKo, "Couldn't find node to run the check." + keptEn))); return; }
+        const p = spawn(tok.token + " " + JSON.stringify(path.join(BRIDGE_DIR, "deepseek-bridge.js").replace(/\\/g, "/")) + " ping", { shell: true, timeout: 45000 });
+        let out = "", err = "";
+        p.stdout?.on("data", (d) => { out += d; });
+        p.stderr?.on("data", (d) => { err += d; });
+        p.on("close", (code) => {
+          if (code === 0 && /^ok/m.test(out)) fin("ok", () => vscode.window.showInformationMessage(tE("DeepSeek 연결이 확인됐어요 — 탐색 담당 DeepSeek 이 정상 동작합니다.", "DeepSeek connection verified — the DeepSeek scout is ready.")));
+          else fin("failed", () => vscode.window.showWarningMessage(tE("키는 등록돼 있지만 DeepSeek 연결 점검에 실패했어요(" + (err || out || "응답 없음").trim().slice(0, 120) + "). 이대로면 DeepSeek 정찰이 실패할 수 있어요 — 키/네트워크를 확인하거나(⚙️ 고급설정) 다른 탐색 담당을 고르세요.", "The key is registered but the DeepSeek connection check failed (" + (err || out || "no response").trim().slice(0, 120) + "). DeepSeek scout runs may fail as is — check the key/network (⚙️ Advanced) or pick another scout.")));
+        });
+        p.on("error", () => fin("error", () => vscode.window.showWarningMessage(tE("연결 점검 실행 실패." + keptKo, "Failed to run the check." + keptEn))));
+      } catch { fin("error", () => vscode.window.showWarningMessage(tE("연결 점검 실행 실패." + keptKo, "Failed to run the check." + keptEn))); } // 실행 직후 예외도 결과 알림 한 번(1회차 검증 blocker)
+    }));
+  });
 }
 
 async function setScoutTargetFromUi(ws: string | null, repo: string, slotLang?: Lang): Promise<void> {
@@ -2314,7 +2344,7 @@ ${tE("⚡ 표시가 붙은 단계들입니다 — ①영향지도 생성: 담당
 <b>${tE("Q. AI 정찰(⚡)을 한 번도 실행하지 않으면 어떻게 되나요?", "Q. What if the AI recon (⚡) never runs?")}</b>
 ${tE("①(변경 감지)의 힌트만 동작하고, ②③④는 계속 비어 있습니다 — 이 축의 실질 성과는 AI 정찰 실행에서 나옵니다. 즉 3트랙을 켜기만 하고 정찰을 안 돌리면 얻는 것이 거의 없습니다.", "Only ①'s hints work; ②③④ stay empty — this axis delivers real value through AI recon runs. Turning 3-track on without ever running recon yields very little.")}
 <b>${tE("Q. 데이터는 어디로 가나요?", "Q. Where does data go?")}</b>
-${tE("전부 이 컴퓨터의 브릿지 홈에 남습니다. 외부로 나가는 경로는 네 갈래 — ⑴ Codex 검증을 보낼 때(2트랙의 기본 동작): 검증 요청문과 자동 동봉(지도 조각[지도 있을 때]·결합 확인 문안[일지 후보 있으면 지도 없어도]·하네스 기본 지침)이 쓰시던 codex CLI를 통해 Codex 서비스로 전달 ⑵ DeepSeek 키 등록 시: ① DeepSeek 정찰 '실행 순간'의 증거 꾸러미(민감 범주 파일은 내용도 이름도 가려짐) ② 3트랙을 켤 때 연결 점검 요청 1회(꾸러미 아님) ③ 탐색 담당이 DeepSeek일 때 정리 담당 실행 순간의 정리 재료(승인 수칙 문안·보관 서고 전체·장부 집계·결정 질문 — 탐색 담당 선택=동의) ⑶ Claude 정찰 실행 시(클로드-코덱스 모드의 기본 담당): 같은 꾸러미가 쓰시던 Claude CLI를 통해 Claude 서비스로 전달(별도 결제 없음 · 정리 담당 실행 시 정리 재료도 같은 경로) ⑷ Codex 정찰 선택·실행 시: 같은 꾸러미가 쓰시던 codex CLI를 통해 Codex 서비스로 전달(검증과 분리된 독립 실행 1회·읽기 전용 강제 — 계정 사용량 범위 · 정리 담당 실행 시 정리 재료도 같은 경로). 상세는 PRIVACY.md.", "Everything stays in the bridge home on this machine. Data leaves via four routes — ⑴ whenever you send a Codex verification (the core of 2-track): the verification request plus its automatic attachments (map slice · coupling check lines · harness base directives) travel through your existing codex CLI to the Codex service ⑵ with a DeepSeek key: ① the evidence package at the moment the DeepSeek scout runs (sensitive-category files excluded by content and by name) ② a single connection check when you switch on 3-track (not a package) ③ when the scout is DeepSeek, the curation material at the moment the curator runs (approved rule wording · the whole archive · ledger aggregates · decision questions — choosing the scout is the consent) ⑶ when the Claude scout runs (the default in Claude↔Codex mode): the same package travels through your existing Claude CLI to the Claude service (no separate billing · curation material takes the same route when the curator runs) ⑷ when the Codex scout is selected and runs: the same package travels through your existing codex CLI to the Codex service (one independent run separate from verification, forced read-only — within your account usage · curation material takes the same route when the curator runs). Details in PRIVACY.md.")}
+${tE("전부 이 컴퓨터의 브릿지 홈에 남습니다. 외부로 나가는 경로는 네 갈래 — ⑴ Codex 검증을 보낼 때(2트랙의 기본 동작): 검증 요청문과 자동 동봉(지도 조각[지도 있을 때]·결합 확인 문안[일지 후보 있으면 지도 없어도]·하네스 기본 지침)이 쓰시던 codex CLI를 통해 Codex 서비스로 전달 ⑵ DeepSeek 키 등록 시: ① DeepSeek 정찰 '실행 순간'의 증거 꾸러미(민감 범주 파일은 내용도 이름도 가려짐) ② 탐색 담당을 DeepSeek 으로 새로 고를 때 연결 점검 요청 1회(꾸러미 아님) ③ 탐색 담당이 DeepSeek일 때 정리 담당 실행 순간의 정리 재료(승인 수칙 문안·보관 서고 전체·장부 집계·결정 질문 — 탐색 담당 선택=동의) ⑶ Claude 정찰 실행 시(클로드-코덱스 모드의 기본 담당): 같은 꾸러미가 쓰시던 Claude CLI를 통해 Claude 서비스로 전달(별도 결제 없음 · 정리 담당 실행 시 정리 재료도 같은 경로) ⑷ Codex 정찰 선택·실행 시: 같은 꾸러미가 쓰시던 codex CLI를 통해 Codex 서비스로 전달(검증과 분리된 독립 실행 1회·읽기 전용 강제 — 계정 사용량 범위 · 정리 담당 실행 시 정리 재료도 같은 경로). 상세는 PRIVACY.md.", "Everything stays in the bridge home on this machine. Data leaves via four routes — ⑴ whenever you send a Codex verification (the core of 2-track): the verification request plus its automatic attachments (map slice · coupling check lines · harness base directives) travel through your existing codex CLI to the Codex service ⑵ with a DeepSeek key: ① the evidence package at the moment the DeepSeek scout runs (sensitive-category files excluded by content and by name) ② a single connection check when you newly pick DeepSeek as the scout (not a package) ③ when the scout is DeepSeek, the curation material at the moment the curator runs (approved rule wording · the whole archive · ledger aggregates · decision questions — choosing the scout is the consent) ⑶ when the Claude scout runs (the default in Claude↔Codex mode): the same package travels through your existing Claude CLI to the Claude service (no separate billing · curation material takes the same route when the curator runs) ⑷ when the Codex scout is selected and runs: the same package travels through your existing codex CLI to the Codex service (one independent run separate from verification, forced read-only — within your account usage · curation material takes the same route when the curator runs). Details in PRIVACY.md.")}
 </div>
 </body></html>`;
 }
@@ -2335,6 +2365,12 @@ function openMapModeGuide(): void {
       ? `Each project chooses how many files and how many characters per file the provider receives (Verification settings → provider row → Excerpt scope; presets ${presets9}; default ${d9.files} files / ${d9.charsPerFile} chars; hard ceiling ${EX9.EXCERPT_FILES_MAX} files / ${EX9.EXCERPT_CHARS_MAX} chars). Smaller means cheaper calls and a narrower view; larger means the opposite. The numbers are yours to tune by the citation line on the status card — this is not a benchmark result.`
       : `담당에게 보내는 파일 수와 파일당 글자를 프로젝트마다 고를 수 있어요(검증 설정 → 담당 줄 → 발췌 범위 · 프리셋 ${presets9} · 기본값 ${d9.files}파일/${d9.charsPerFile}자 · 상한 ${EX9.EXCERPT_FILES_MAX}파일/${EX9.EXCERPT_CHARS_MAX}자). 작게 하면 호출이 가볍고 보는 범위가 좁아지고, 크게 하면 그 반대예요. 수치는 벤치 결과가 아니라 현황 카드의 인용 측정을 보고 직접 조정하는 값입니다.`;
   } catch { return ""; } })();
+  // [2026-10-18 사용자 결정 '공유+화면 표시'] 모드별로 실제 쓰는 모델의 출처 — 의미 보강 전용 모델 설정은 없다. 열 때 지금 설정 값을 읽어 보여 준다(호출 없음).
+  const escG = (v: unknown): string => String(v ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch] as string));
+  const scG = readScoutCodexPrefsExt(), dsG = readDeepseekView();
+  const modelNoteG = tE(
+    `기본(Claude)=모델·추론 강도를 따로 지정하지 않아요 — Claude Code 가 고르는 기본 모델(안전상 거절이면 정해 둔 재시도 모델로 한 번 더) · 경제형(DeepSeek)=DeepSeek 설정의 모델(지금 ${escG(dsG.model)}) · 정밀형(Codex)=고급설정 'Codex 정찰 모델·추론 강도'를 정찰과 함께 써요(지금 ${escG(scG.model || "codex 기본 모델")} · ${escG(scG.reasoning || "codex 기본 추론 강도")} — 여기를 낮추면 Codex 의미 보강도 같이 낮아져요) · 자동형=두 담당이 각자 위 설정을 써요. 의미 보강 전용 모델 설정은 따로 없어요.`,
+    `Default (Claude) = no model or effort is set — Claude Code's default model (one retry with the configured retry model on a safety refusal) · Economy (DeepSeek) = the model in the DeepSeek settings (now ${escG(dsG.model)}) · Precision (Codex) = shares Advanced 'Codex scout model · reasoning effort' with scouting (now ${escG(scG.model || "codex default model")} · ${escG(scG.reasoning || "codex default effort")} — lowering it also lowers Codex enrichment) · Auto = each provider uses its setting above. There is no separate enrichment model setting.`);
   const panel = vscode.window.createWebviewPanel("codexBridgeMapModeGuide", tE("Project MAP 의미 보강 모드 안내", "Project MAP enrichment modes"), vscode.ViewColumn.Beside, { enableScripts: false });
   const mode = (color: string, titleKo: string, titleEn: string, provider: string, fitKo: string, fitEn: string, behaviorKo: string, behaviorEn: string, costKo: string, costEn: string) => `
     <section class="mode" style="border-top-color:${color}"><h2>${tE(titleKo, titleEn)}</h2><div class="provider">${provider}</div>
@@ -2360,7 +2396,8 @@ ${mode("#d9a441", "자동형", "Auto", "DeepSeek + Codex", "매번 고르지 않
 ${unattendedRule ? `<p class="note">${tE("자동 보강 호출 횟수 —", "Auto-enrich call counts —")} ${unattendedRule} ${tE("실제 횟수는 현황 카드의 '이번 작업' 줄에서 봅니다(요금이 아니라 호출 횟수입니다).", "Actual counts appear on the status card's 'This job' line (call counts, not billing).")}</p>` : ""}
 ${excerptOptionNote ? `<p class="note">${tE("발췌 범위 —", "Excerpt scope —")} ${excerptOptionNote}</p>` : ""}
 ${priorRule ? `<p class="note">${tE("다시 묻기 —", "Re-asking —")} ${priorRule}</p>` : ""}
-<p class="note"><span class="warn">${tE("준비 점검은 실제 호출입니다.", "Readiness checking makes real calls.")}</span> ${tE("버튼을 눌렀을 때만 DeepSeek 소형 요청 최대 2회(형식 교정 1회 포함)와 Codex 실행 1회를 사용합니다. 모드 선택은 저장될 수 있어도, 준비되지 않은 담당으로 작업을 조용히 강행하지는 않습니다.", "Only pressing the button uses up to two small DeepSeek requests (including one format repair) and one Codex run. A mode selection may be saved, but work is never silently forced through an unready provider.")}</p>
+<p class="note">${tE("어떤 모델로 도나 —", "Which model runs —")} ${modelNoteG}</p>
+<p class="note"><span class="warn">${tE("준비 점검은 실제 호출입니다.", "Readiness checking makes real calls.")}</span> ${tE("모드를 고를 때(확인 창 뒤 · 고른 담당 중 아직 준비 안 된 것만), '🔎 다시 점검'을 누를 때, 고른 담당의 설정이 바뀌어 다시 확인이 필요할 때(자동 · 결과는 알림) DeepSeek 소형 요청 최대 2회(형식 교정 1회 포함)와 Codex 실행 1회를 사용합니다. 모드 선택은 저장될 수 있어도, 준비되지 않은 담당으로 작업을 조용히 강행하지는 않습니다.", "Checks run when you pick a mode (after a confirm dialog · only providers not yet ready), when you press '🔎 Re-check', and automatically when a chosen provider's settings change (result shown as a notification) — up to two small DeepSeek requests (including one format repair) and one Codex run. A mode selection may be saved, but work is never silently forced through an unready provider.")}</p>
 </body></html>`;
 }
 
@@ -4888,8 +4925,8 @@ class Dashboard {
         if (m?.type === "saveContract") {
           // lang = 웹뷰가 '화면에 렌더했던 언어'(보던 슬롯) — 저장 도중 전역 언어가 바뀌었어도 보던 슬롯에 저장(오염 방지).
           const slotLang: Lang | undefined = m.lang === "ko" || m.lang === "en" ? m.lang : undefined;
-          // 저장 전 상태 — 3트랙 안내·연결 점검(ping)은 '꺼짐→켜짐 전환'에만(라벨 '켤 때 1회'와 실동작 일치.
-          // 2026-07-09 실측: 켜진 상태의 매 저장마다 ping이 나가 장부에 중복 기록 — 전환 게이트로 교정).
+          // 저장 전 상태 — 3트랙 동의·안내는 '꺼짐→켜짐 전환'에만(2026-07-09 실측: 켜진 상태의 매 저장마다 안내·점검이 나가
+          // 장부에 중복 기록 — 전환 게이트로 교정 · 켤 때의 DeepSeek 연결 점검은 2026-10-18 탐색 담당 선택으로 옮김).
           const prevScoutOn = (() => { try { return loadContract(dashboardWorkspace(), slotLang).scoutMode === "on"; } catch { return false; } })();
           const wantScoutOn = m.scoutModeTouched ? normScoutMode({ scoutMode: m.scoutMode }) === "on" : prevScoutOn; // v10 dirty 제한 — 미변경이면 전환 아님(동의 모달·ping 미발동)
           void (async () => {
@@ -4943,10 +4980,9 @@ class Dashboard {
             vscode.window.showErrorMessage(tE("설정 저장 실패 — 기존 설정은 그대로 유지됩니다.","Failed to save settings — existing settings are kept."));
             void offerLockRecoveryExt(okRes, () => { void patchContractRetryExt(dashboardWorkspace(), slotLang, patch).then((r2) => { if (r2.ok) { this.post(); vscode.commands.executeCommand("codexBridge.refresh"); } }); });
           }
-          // 3트랙 선택 시 API 안내(2026-07-09 사용자 요청 — 기본원칙 경고와 같은 모달 형태):
-          //  키 없음 → 경고 모달 + [등록하러 가기(고급설정 이동)] / [알겠습니다]
-          //  키 있음 → 실제 연결 점검(ping 1회 — PRIVACY에 전송 지점으로 명시) 후 정상/실패를 사실대로.
-          // ⚠ 문구 정직성: 실측(D5)상 '키 없음=효과 미비'가 아니라 '정찰 미실행=효과 미비'가 사실 — 경고문은 그 사실 기준.
+          // 3트랙을 켠 직후 안내(2026-07-09 사용자 요청에서 시작 · 2026-10-18 개정): 정찰 담당·준비 상태만 알리고 아무것도 호출하지 않는다.
+          //  DeepSeek 연결 점검은 탐색 담당에서 DeepSeek 을 고를 때로 옮겼다(아래 블록 머리말).
+          // ⚠ 문구 정직성: 실측(D5)상 '키 없음=효과 미비'가 아니라 '정찰 미실행=효과 미비'가 사실 — 안내문은 그 사실 기준.
           if (ok && wantScoutOn && !prevScoutOn) {
             // 대상 확인 스텝(2026-07-10 구조 해법 — 발원지 차단): 세션 폴더가 git이 아니고 대상 미지정이면,
             // '정찰이 이 폴더만 본다'는 사실을 켜는 순간에 확인시키고 원클릭 지정 경로를 준다(고지-only 아님).
@@ -4971,39 +5007,21 @@ class Dashboard {
               }
             })().catch(() => { /* 확인 스텝 실패가 저장 흐름을 못 막음 */ });
             { const wsB = dashboardWorkspace(); if (wsB) trySpawnMapBootstrap(wsB); } // P1: consent+대상 확정 후 비차단 기동(2트랙 게이트는 모듈 내부 최선행)
-            // 모드 기본 담당·준비 상태(문구 감사 2026-09-21): 'Claude 가 전부 동작' 단정 대신 이 프로젝트의 기본 담당 이름과 지금 준비 여부를 말한다.
+            // [2026-10-18 사용자 결정 '고를 때로 옮기기'] 켤 때의 DeepSeek 연결 점검(키 있을 때 ping)과 '비교용 두 번째 정찰만 잠김' 모달을 없앴다 —
+            // 3트랙 초기(2026-07-09 5ed5321)의 'DeepSeek 비교 정찰(두 번째 정찰자)' 개념이 남은 것으로, DeepSeek 을 탐색 담당·의미 보강 담당에서
+            // '고르면 쓰는' 지금 구조(07-20 f016212 · 07-23 07b4fba·a9a21e2 · 08-04 3a9ae24)에서는 담당 선택과 무관하게 DeepSeek 을 불렀다.
+            // 연결 점검은 탐색 담당에서 DeepSeek 을 고를 때(runDeepseekConnectionCheck)로 옮겼다. 켤 때는 호출 없이 정찰 담당·준비 상태만 알린다
+            // (모드 기본 담당 이름·실효 담당 — 문구 감사 2026-09-21 규칙 유지).
             const wsK = dashboardWorkspace();
             const armK = wsK ? scoutArmViewExt(wsK) : null;
-            const armNoKey: "self" | "codex" = armK ? armK.noKeyArm : "self"; // 키 없을 때 실제 실행될 담당(명시 self/codex 우선 · 4판 blocker — 실효 뷰가 계산)
-            const defKo = scoutArmTextExt(wsK, armNoKey, "ko"), defEn = scoutArmTextExt(wsK, armNoKey, "en");
-            const readyKo = armK && !armK.hasKey && armK.ready === false ? "(지금은 준비 안 됨 — 정찰 카드의 사유 참조)" : "", readyEn = armK && !armK.hasKey && armK.ready === false ? " (not ready right now — see the reason on the recon card)" : ""; // 준비 상태는 실효 담당 기준 — 키 없음(실효=armNoKey)일 때만 붙임
-            if (!readDeepseekView().hasKey) {
-              const go = tE("등록하러 가기", "Register key");
-              vscode.window.showWarningMessage(tE(
-                "3트랙(정찰)이 켜졌지만 등록된 DeepSeek API 키가 없어요.\n\n키 없이도 정찰은 " + defKo + "이 맡아요" + readyKo + " — '비교용 두 번째 정찰(DeepSeek)'만 잠겨 있어요. 그리고 어느 쪽이든 정찰이 한 번도 실행되지 않으면 3트랙의 효과가 미비할 수 있어요.\n\n상세는 정찰 카드의 '정찰 구조 자세히 보기 (새탭)'에서 확인하세요.",
-                "3-track (recon) is on, but no DeepSeek API key is registered.\n\nWithout a key, recon is handled by " + defEn + readyEn + " — only the second comparison scout (DeepSeek) stays locked. And with either scout, if recon never actually runs, 3-track delivers little.\n\nSee 'Recon structure in detail (new tab)' on the recon card."),
-                { modal: true }, go, tE("알겠습니다", "Got it")).then((pick) => {
-                if (pick === go) this.panel?.webview.postMessage({ type: "switchTab", tab: "adv" });
-              });
-            } else {
-              // 연결 점검 — 배포된 브릿지의 ping을 실제 실행(전송 1회·키 원문은 헤더로만). 결과는 사실대로.
-              vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: tE("DeepSeek 연결 점검 중…", "Checking DeepSeek connection…") }, () => new Promise<void>((resolve) => {
-                try {
-                  const tok = hookSetup.resolveNodeToken(nodeTokenCandidates());
-                  if (!tok) { vscode.window.showWarningMessage(tE("연결 점검을 실행할 node를 찾지 못했어요 — 키는 등록돼 있고, " + defKo + "은 영향받지 않아요.", "Couldn't find node to run the check — the key is registered and " + defEn + " is unaffected.")); resolve(); return; }
-                  const p = spawn(tok.token + " " + JSON.stringify(path.join(BRIDGE_DIR, "deepseek-bridge.js").replace(/\\/g, "/")) + " ping", { shell: true, timeout: 45000 });
-                  let out = "", err = "";
-                  p.stdout?.on("data", (d) => { out += d; });
-                  p.stderr?.on("data", (d) => { err += d; });
-                  p.on("close", (code) => {
-                    if (code === 0 && /^ok/m.test(out)) vscode.window.showInformationMessage(tE("API 등록과 정상 연결이 확인되었습니다 — 3트랙이 정상 운용됩니다(DeepSeek 비교 정찰 사용 가능).", "API key verified and connection OK — 3-track is fully operational (DeepSeek comparison scout available)."));
-                    else vscode.window.showWarningMessage(tE("키는 등록돼 있지만 연결 점검에 실패했어요(" + (err || out || "응답 없음").trim().slice(0, 120) + "). " + defKo + "은 영향받지 않아요 — 키/네트워크를 확인하세요(⚙️ 고급설정).", "The key is registered but the connection check failed (" + (err || out || "no response").trim().slice(0, 120) + "). " + defEn + " is unaffected — check the key/network (⚙️ Advanced)."));
-                    resolve();
-                  });
-                  p.on("error", () => { vscode.window.showWarningMessage(tE("연결 점검 실행 실패 — 키는 등록돼 있고, " + defKo + "은 영향받지 않아요.", "Failed to run the check — the key is registered and " + defEn + " is unaffected.")); resolve(); });
-                } catch { resolve(); }
-              }));
-            }
+            const effK: "self" | "deepseek" | "codex" = armK ? armK.eff : "self"; // 실제로 정찰을 맡을 담당(DeepSeek 을 골랐어도 키가 없으면 모드 기본)
+            const nrKo = armK && armK.ready === false ? "(지금은 준비 안 됨 — 정찰 카드의 사유 참조)" : "", nrEn = armK && armK.ready === false ? " (not ready right now — see the reason on the recon card)" : "";
+            const dsNoKey = !!(armK && armK.raw === "deepseek" && !armK.hasKey); // DeepSeek 을 골라 뒀는데 키가 없는 경우만 키 안내
+            const goK = tE("등록하러 가기", "Register key");
+            void vscode.window.showInformationMessage(tE(
+              "3트랙(정찰)이 켜졌어요 — 정찰은 " + scoutArmTextExt(wsK, effK, "ko") + "이 맡아요" + nrKo + "." + (dsNoKey ? " 탐색 담당이 DeepSeek 으로 골라져 있지만 키가 없어 대신 맡고 있어요(⚙️ 고급설정에서 등록)." : "") + " 정찰이 한 번도 실행되지 않으면 3트랙의 효과가 미비할 수 있어요 — 상세는 정찰 카드의 '정찰 구조 자세히 보기 (새탭)'.",
+              "3-track (recon) is on — recon is handled by " + scoutArmTextExt(wsK, effK, "en") + nrEn + "." + (dsNoKey ? " DeepSeek is selected as the scout but no key is registered, so it stands in (register in ⚙️ Advanced)." : "") + " If recon never actually runs, 3-track delivers little — see 'Recon structure in detail (new tab)' on the recon card."),
+              ...(dsNoKey ? [goK] : [])).then((pick) => { if (pick === goK) this.panel?.webview.postMessage({ type: "switchTab", tab: "adv" }); });
           }
           this.post();
           // reqId 결속(2026-07-15): 계약 저장 응답만 웹뷰 cardMachine의 pending을 끝낸다(타 저장 응답의 조기 해제 차단).
@@ -6376,8 +6394,8 @@ class Dashboard {
     </div>
     <h2 class="sec base accent-yellow">${t("고급설정", "Advanced Settings")} <span class="sub2">${t("정찰(3트랙) 고급 단계용 — 전역 설정(모든 프로젝트 공통)", "for the advanced recon stage (3-track) — global (shared by all projects)")}</span></h2>
     <div class="card">
-      <div class="chead">${t("DeepSeek API 키", "DeepSeek API key")} <span class="muted" style="font-weight:400">${t("· 3트랙의 'DeepSeek 비교 정찰'(두 번째 정찰자)에만 필요 — 키 없이도 변경 감지와 모드 기본 담당(클로드-코덱스=Claude 정찰·별도 과금 없음 / 코덱스-코덱스=Codex 정찰)의 영향지도는 동작해요", "· only needed for 3-track's DeepSeek comparison scout (the second scout) — change sensing and impact maps by the mode's default scout (Claude↔Codex = Claude scout, no separate billing / Codex↔Codex = Codex scout) work without it")}</span></div>
-      <div class="hint">${t("키는 이 컴퓨터의 브릿지 홈(<code>~/.codex-bridge/deepseek.json</code>)에만 저장되고 저장소(GitHub)에는 절대 들어가지 않아요. 자료 꾸러미 전송은 <b>지도 생성이 실행될 때만</b> 일어나요 — 당신이 직접 실행하거나, <b>키 등록=동의 모델</b>에 따라 3트랙 자동 지시를 받은 구현 담당(운용 모드에 따라 Claude 또는 구현 Codex)이 실행(조건: 지도가 없거나 낡았을 때 그 상태에 1회 지시 — 확장·훅 자체는 전송하지 않음). 그 외 외부 요청은 3트랙을 켤 때의 <b>연결 점검 1회</b>(꾸러미 아님 — 접속 확인용)뿐이에요. 대시보드를 보는 것만으로는 전송 없음. 발동 조건과 전송·제외 내용은 PRIVACY에 명시돼 있어요.", "The key is stored only in this machine's bridge home (<code>~/.codex-bridge/deepseek.json</code>) and never enters the repo (GitHub). The evidence package is sent <b>only when map generation runs</b> — you run it directly, or under the <b>key-registration=consent model</b> the implementer of the current mode (Claude, or an implementer Codex) runs it on the 3-track auto-directive (issued once per missing/stale-map state — the extension/hooks themselves never transmit). The only other external request is a single <b>connection check</b> when 3-track is switched on (not a package — reachability only). Viewing the dashboard sends nothing. Trigger conditions and what is sent/excluded are documented in PRIVACY.")}</div>
+      <div class="chead">${t("DeepSeek API 키", "DeepSeek API key")} <span class="muted" style="font-weight:400">${t("· 탐색 담당·의미 보강 담당에서 DeepSeek 을 고를 때만 필요(정리 담당은 탐색 담당을 따름) — 키 없이도 변경 감지와 모드 기본 담당(클로드-코덱스=Claude 정찰·별도 과금 없음 / 코덱스-코덱스=Codex 정찰)의 영향지도는 동작해요", "· only needed when you pick DeepSeek as the scout or the enrichment provider (the curator follows the scout) — change sensing and impact maps by the mode's default scout (Claude↔Codex = Claude scout, no separate billing / Codex↔Codex = Codex scout) work without it")}</span></div>
+      <div class="hint">${t("키는 이 컴퓨터의 브릿지 홈(<code>~/.codex-bridge/deepseek.json</code>)에만 저장되고 저장소(GitHub)에는 절대 들어가지 않아요. 자료 꾸러미 전송은 <b>지도 생성이 실행될 때만</b> 일어나요 — 당신이 직접 실행하거나, <b>키 등록=동의 모델</b>에 따라 3트랙 자동 지시를 받은 구현 담당(운용 모드에 따라 Claude 또는 구현 Codex)이 실행(조건: 지도가 없거나 낡았을 때 그 상태에 1회 지시 — 확장·훅 자체는 전송하지 않음). <b>연결 점검</b>(꾸러미 아님 — 접속 확인용 요청 1회)은 탐색 담당을 DeepSeek 으로 새로 고를 때만 보내요. 의미 보강·정리 담당을 DeepSeek 이 맡을 때 보내는 것은 PRIVACY 에 따로 적혀 있어요. 대시보드를 보는 것만으로는 전송 없음. 발동 조건과 전송·제외 내용은 PRIVACY에 명시돼 있어요.", "The key is stored only in this machine's bridge home (<code>~/.codex-bridge/deepseek.json</code>) and never enters the repo (GitHub). The evidence package is sent <b>only when map generation runs</b> — you run it directly, or under the <b>key-registration=consent model</b> the implementer of the current mode (Claude, or an implementer Codex) runs it on the 3-track auto-directive (issued once per missing/stale-map state — the extension/hooks themselves never transmit). The <b>connection check</b> (not a package — a single reachability request) is sent only when you newly pick DeepSeek as the scout. What is sent when DeepSeek handles enrichment or curation is listed separately in PRIVACY. Viewing the dashboard sends nothing. Trigger conditions and what is sent/excluded are documented in PRIVACY.")}</div>
       <div class="row" style="margin-top:8px">
         <input type="password" id="dsKey" placeholder="sk-..." style="flex:1;min-width:220px" autocomplete="off" />
         <button id="dsSave">${t("저장", "Save")}</button>
@@ -6386,7 +6404,7 @@ class Dashboard {
       <div class="hint" id="dsState" style="margin-top:6px"></div>
     </div>
     <div class="card">
-      <div class="chead">${t("Codex 정찰 모델·추론 강도", "Codex scout model · reasoning effort")} <span class="muted" style="font-weight:400">${t("· 탐색 담당을 Codex로 선택했을 때의 정찰 실행에만 적용 — 검증(2트랙)의 두뇌 설정과는 별개예요(정찰은 싸게, 검증은 강하게 조합 가능)", "· applies only to scout runs when Codex is the selected scout — separate from the verification brain settings (cheap scout + strong verifier is a valid combo)")}</span></div>
+      <div class="chead">${t("Codex 정찰 모델·추론 강도", "Codex scout model · reasoning effort")} <span class="muted" style="font-weight:400">${t("· Codex 가 맡는 정찰(탐색 담당=Codex)·의미 보강(정밀형·자동형의 Codex 쪽 — 판정 단계와 준비 점검 포함)·정리 담당(탐색 담당=Codex 일 때)에 함께 적용 — 의미 보강 전용 설정은 따로 없어요. 검증(2트랙)의 두뇌 설정과는 별개예요(정찰은 싸게, 검증은 강하게 조합 가능 · 단 여기를 낮추면 Codex 의미 보강도 같이 낮아져요)", "· shared by everything Codex does on the 3-track side: scouting (scout = Codex), enrichment (Precision and the Codex side of Auto — incl. the adjudication step and readiness check) and the curator (when the scout is Codex) — there is no separate enrichment setting. Separate from the verification brain settings (cheap scout + strong verifier is a valid combo — but lowering this also lowers Codex enrichment)")}</span></div>
       <div class="hint">${t("전역 설정(모든 프로젝트 공통)이고 이 컴퓨터의 브릿지 홈(<code>~/.codex-bridge/scout-codex.json</code>)에만 저장돼요 — 비밀값이 아니라 모델 이름과 추론 강도뿐이에요. <b>'기본'=쓰시는 codex 기본값 그대로</b>(아무것도 안 바꿈). 목록은 검증 두뇌 설정과 같은 계정 캐시에서 와요 — 저장해 둔 값이 목록에서 사라져도 '저장된 값' 항목으로 보존돼 조용히 바뀌지 않아요.", "Global (shared by all projects), stored only in this machine's bridge home (<code>~/.codex-bridge/scout-codex.json</code>) — not a secret: just a model name and a reasoning effort. <b>'Default' = your codex defaults as-is</b> (changes nothing). The list comes from the same account cache as the verification brain settings — a saved value missing from the list is kept as a 'saved value' entry, never silently changed.")}</div>
       <div class="mrow" style="margin-top:8px"><span class="mlbl">${t("모델", "Model")}</span>
         <select id="scModel" title="${t("Codex 정찰이 쓸 모델 — 계정에서 받은 목록(비우면 codex 기본값)", "Model the Codex scout uses — list from your account (empty = codex default)")}"></select>
@@ -7224,7 +7242,7 @@ class Dashboard {
   }
   $("scSeg").addEventListener("click", function(ev){ const b=ev.target.closest("[data-rs]"); if(b){ scCurRS=b.getAttribute("data-rs"); highlightSeg("scSeg","data-rs",scCurRS); scMark(); } });
   $("scModel").addEventListener("change", function(){ scMark(); renderScSeg($("scModel").value.trim()); });
-  $("scSave").addEventListener("click", ()=>{ if(scBusy) return; pendingSave={target:"scoutCodex", msg:T("저장됨 ✓ (다음 정찰부터 적용)","Saved ✓ (applies from the next scout run)")}; scLock(true); scSavedGen=scGen; vscode.postMessage({type:"saveScoutCodexPrefs", model:$("scModel").value.trim(), reasoning:scCurRS}); });
+  $("scSave").addEventListener("click", ()=>{ if(scBusy) return; pendingSave={target:"scoutCodex", msg:T("저장됨 ✓ (다음 Codex 정찰·의미 보강부터 적용)","Saved ✓ (applies from the next Codex scout / enrichment run)")}; scLock(true); scSavedGen=scGen; vscode.postMessage({type:"saveScoutCodexPrefs", model:$("scModel").value.trim(), reasoning:scCurRS}); });
   $("scClear").addEventListener("click", ()=>{ if(scBusy) return; pendingSave={target:"scoutCodex", msg:T("초기화됨 ✓ (codex 기본값으로)","Reset ✓ (back to codex defaults)")}; $("scModel").value=""; scCurRS=""; highlightSeg("scSeg","data-rs",""); scLock(true); scSavedGen=scGen; vscode.postMessage({type:"saveScoutCodexPrefs", model:"", reasoning:""}); });
   // 언어 토글(전역 ko/en) — 저장은 확장이 language.json에(모든 창이 파일 watch로 따라옴). 표시는 state로 되돌아와 확정.
   // 전환 잠금(구현검증 1차 지적 2): 언어 전환은 확장이 webview HTML을 통째로 재생성해 메모리의 초안(contractDirty·
@@ -8310,7 +8328,7 @@ class Dashboard {
             const hint2=document.createElement("span"); hint2.className="muted"; hint2.style.fontSize="10.5px";
             { const nr=(d.scoutArm&&d.scoutArm.ready===false)?T("(지금 준비 안 됨)"," (not ready now)"):""; // 실효 담당·준비 상태(4판 blocker: 키 없음=eff 가 실제 담당)
             const ea=d.scoutArm?armText(d.scoutArm.eff):scoutName("defaultText");
-            hint2.textContent=T("정찰은 "+ea+"이 맡음"+nr+" — 비교 정찰만 잠김(⚙️ 고급설정에서 등록)","recon by "+ea+nr+" — only the comparison scout is locked (register in ⚙️ Advanced)"); }
+            hint2.textContent=T("정찰은 "+ea+"이 맡음"+nr+" — DeepSeek 은 키를 등록하면 담당으로 고를 수 있어요(⚙️ 고급설정)","recon by "+ea+nr+" — register a key to make DeepSeek selectable as a provider (⚙️ Advanced)"); }
             api.appendChild(hint2);
           }
         }
@@ -8499,6 +8517,18 @@ class Dashboard {
             }
             row.appendChild(st9);
           }
+          // [2026-10-18 사용자 결정 '공유+화면 표시'] 의미 보강 전용 모델 설정은 없다 — 지금 고른 방식이 실제로 쓰는 모델을 보여 준다.
+          // Codex=고급설정 'Codex 정찰 모델·추론 강도'(scout-codex.json — 정찰과 공유) · DeepSeek=DeepSeek 설정의 모델 · Claude=모델 지정 없음(Claude Code 기본).
+          safe(function(){
+            const mdl=document.createElement("div"); mdl.className="muted"; mdl.id="mapModelLine"; mdl.style.marginTop="3px";
+            const sc9=d.scoutCodex||{model:"",reasoning:""}; const dsM9=(d.deepseek&&d.deepseek.model)||"deepseek-v4-flash";
+            const cx9=T("Codex "+(sc9.model||"codex 기본 모델")+" · 추론 강도 "+(sc9.reasoning||"codex 기본값")+" — ⚙️ 고급설정 'Codex 정찰 모델·추론 강도'를 정찰과 함께 씀","Codex "+(sc9.model||"codex default model")+" · effort "+(sc9.reasoning||"codex default")+" — shares ⚙️ Advanced 'Codex scout model · reasoning effort' with scouting");
+            const ds9=T("DeepSeek "+dsM9+" — ⚙️ 고급설정의 DeepSeek 설정","DeepSeek "+dsM9+" — ⚙️ Advanced DeepSeek settings");
+            const cl9=T("Claude Code 기본 모델 — 따로 지정하지 않음(안전상 거절이면 정해 둔 재시도 모델로 한 번)","Claude Code's default model — not set separately (one retry with the configured retry model on a safety refusal)");
+            const m9=mm.mode;
+            mdl.textContent=T("쓰는 모델 — ","Model used — ")+(m9==="economy"?ds9:m9==="precision"?cx9:m9==="auto"?ds9+T(" · 정밀이 필요하면 "," · when precision is needed: ")+cx9:cl9);
+            row.appendChild(mdl);
+          });
           // degraded 배지: 선택한 담당의 readiness가 미성립이면 저장값은 유지한 채 사유만 표시(조용한 전환 금지 — 1-34)
           const cur=mm.mode; const curRd= cur==="auto" ? (autoRd||{ok:false,reason:"not-probed"}) : rdOf(cur);
           if(!curRd.ok && cur!=="self") note.textContent=T("⚠ 선택된 담당("+cur+")이 아직 준비되지 않았어요 — ","⚠ Selected provider ("+cur+") is not ready — ")+reasonT(curRd)+T(" (선택은 그대로 유지·자동 전환 없음)"," (selection kept · no silent switching)");
@@ -8636,9 +8666,9 @@ class Dashboard {
           [T("정찰 AI = "+armText(noKeyArm9(d.scoutArm))+(noKeyReady9(d.scoutArm)?"":"(지금 준비 안 됨)"),"scout AI = "+armText(noKeyArm9(d.scoutArm))+(noKeyReady9(d.scoutArm)?"":" (not ready now)")), // 키 없을 때 실제 실행될 담당+그 담당의 준비 상태(4·5판 blocker)
            T("지도·일지·교범·자동 승격 전부 이 상태로 됩니다","maps, journal, manual, auto-promotion — all included")]);
         apiBox("#9a6cdc",
-          T("DeepSeek 키를 넣으면(선택) = 정찰만 분업","Add a DeepSeek key (optional) = split the scouting"),
-          [T("정찰을 다른 AI에게 맡겨 관점 비교·"+armName(noKeyArm9(d.scoutArm))+" 사용량 절약","a second AI scouts — perspective compare · saves "+armName(noKeyArm9(d.scoutArm))+" usage"),
-           d.deepseek&&d.deepseek.hasKey?T("현재: 등록됨 — 비교 정찰 사용 가능","now: registered — comparison scout ready"):T("실측(2026-07)에선 "+armName("self")+"이 더 정확했어요 — 필수 아님","in our 2026-07 test the "+armName("self")+" was more accurate — not required")]);
+          T("DeepSeek 키를 넣으면(선택) = DeepSeek 을 담당으로 고를 수 있음","Add a DeepSeek key (optional) = DeepSeek becomes selectable"),
+          [T("탐색 담당·의미 보강 담당을 DeepSeek 에 맡겨 "+armName(noKeyArm9(d.scoutArm))+" 사용량 절약(키 과금)","hand the scout or enrichment to DeepSeek · saves "+armName(noKeyArm9(d.scoutArm))+" usage (billed to the key)"),
+           d.deepseek&&d.deepseek.hasKey?T("현재: 등록됨 — 담당으로 고를 수 있어요","now: registered — selectable as a provider"):T("실측(2026-07)에선 "+armName("self")+"이 더 정확했어요 — 필수 아님","in our 2026-07 test the "+armName("self")+" was more accurate — not required")]);
         box.appendChild(api);
       });
       // (2026-07-09 사용자 지시) '정찰 흐름 펼쳐보기' 접힘 그룹 폐기 — 위 한눈 도해와 내용 중복.
@@ -8693,7 +8723,7 @@ class Dashboard {
         const det=keyedDetails("senseDetail", T("자세히 — 후보 목록·키 안내·한계","Details — candidates · key note · limits"));
         const addD=(txt,cls)=>{const el=document.createElement("div"); el.className=cls||"sbrow"; el.textContent=txt; det.appendChild(el); return el;};
         if(d.deepseek && !d.deepseek.hasKey){
-          addD(T("ⓘ 키 없이도 변경 감지 + 지도 생성까지 가능해요(지도는 "+armText(noKeyArm9(d.scoutArm))+"이 맡음"+(noKeyReady9(d.scoutArm)?"":" · 지금 준비 안 됨")+") — DeepSeek API 키는 '비교용 두 번째 정찰'만 엽니다(⚙️ 고급설정 탭).","ⓘ Without any key you get change sensing plus map generation (maps by "+armText(noKeyArm9(d.scoutArm))+(noKeyReady9(d.scoutArm)?"":" · not ready now")+") — a DeepSeek API key only unlocks the second, comparison scout (⚙️ Advanced tab)."),"muted"); // 키 없을 때 실행될 담당+준비 상태(4·5판 blocker)
+          addD(T("ⓘ 키 없이도 변경 감지 + 지도 생성까지 가능해요(지도는 "+armText(noKeyArm9(d.scoutArm))+"이 맡음"+(noKeyReady9(d.scoutArm)?"":" · 지금 준비 안 됨")+") — DeepSeek API 키는 탐색 담당·의미 보강 담당에서 DeepSeek 을 고를 수 있게 할 뿐이에요(⚙️ 고급설정 탭).","ⓘ Without any key you get change sensing plus map generation (maps by "+armText(noKeyArm9(d.scoutArm))+(noKeyReady9(d.scoutArm)?"":" · not ready now")+") — a DeepSeek API key only makes DeepSeek selectable as the scout or enrichment provider (⚙️ Advanced tab)."),"muted"); // 키 없을 때 실행될 담당+준비 상태(4·5판 blocker)
         }
         const sc=d.scope;
         if(!sc){ addD(T("계산 대기 — 3트랙 저장 후 자동 갱신됩니다.","Pending — refreshes automatically after saving 3-track."),"muted"); }
@@ -8999,7 +9029,7 @@ class Dashboard {
       const st=$("dsState"); if(!st) return;
       st.textContent = d.deepseek && d.deepseek.hasKey
         ? T("등록됨: ","Registered: ") + d.deepseek.masked + T(" · 모델: "," · model: ") + d.deepseek.model
-        : T("등록된 키 없음 — 잠기는 건 DeepSeek 비교 정찰뿐. "+((d.contract&&d.contract.scoutMode==="on")?"":"3트랙을 켜면 ")+"변경 감지·지도는 키 없이 동작하며 지도는 "+armText(noKeyArm9(d.scoutArm))+"이 맡아요"+(noKeyReady9(d.scoutArm)?"":"(지금은 준비 안 됨 — "+((d.contract&&d.contract.scoutMode==="on")?"정찰 카드의 사유 참조":"명령줄 설치 필요")+")")+".","No key registered — only the DeepSeek comparison scout is locked. "+((d.contract&&d.contract.scoutMode==="on")?"":"With 3-track on, ")+"change sensing and maps work without it; maps are made by "+armText(noKeyArm9(d.scoutArm))+(noKeyReady9(d.scoutArm)?"":" (not ready now — "+((d.contract&&d.contract.scoutMode==="on")?"see the recon card":"its CLI is missing")+")")+"."); // 키 없을 때 실행될 담당+그 담당의 준비 상태 — 정찰 off 면 상시 상태(scoutNames)로 같은 판정·'3트랙을 켜면' 조건부(도장 검증 1판 blocker)
+        : T("등록된 키 없음 — 탐색 담당·의미 보강 담당에서 DeepSeek 을 고를 수 없을 뿐이에요. "+((d.contract&&d.contract.scoutMode==="on")?"":"3트랙을 켜면 ")+"변경 감지·지도는 키 없이 동작하며 지도는 "+armText(noKeyArm9(d.scoutArm))+"이 맡아요"+(noKeyReady9(d.scoutArm)?"":"(지금은 준비 안 됨 — "+((d.contract&&d.contract.scoutMode==="on")?"정찰 카드의 사유 참조":"명령줄 설치 필요")+")")+".","No key registered — DeepSeek just can not be picked as the scout or enrichment provider. "+((d.contract&&d.contract.scoutMode==="on")?"":"With 3-track on, ")+"change sensing and maps work without it; maps are made by "+armText(noKeyArm9(d.scoutArm))+(noKeyReady9(d.scoutArm)?"":" (not ready now — "+((d.contract&&d.contract.scoutMode==="on")?"see the recon card":"its CLI is missing")+")")+"."); // 키 없을 때 실행될 담당+그 담당의 준비 상태 — 정찰 off 면 상시 상태(scoutNames)로 같은 판정·'3트랙을 켜면' 조건부(도장 검증 1판 blocker)
     });
     // ⑥-b 고급설정 탭 — Codex 정찰 두뇌 설정(P6b·선택형 개편 2026-07-23): 검증 카드와 같은 계정 캐시로
     // <select>+강도 버튼 재구성. 선충전 WYSIWYG(ab-2)·편집 보존(scDirty — select replaceChildren 리셋 보정
